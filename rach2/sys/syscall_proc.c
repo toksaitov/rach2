@@ -263,12 +263,19 @@ void release_fd_table(fd_table_t *table)
         return;
     }
     for (fdi = 0; fdi < fd_table_cap(table); fdi++) {
-        fd_entry_t *e = &table->entries[fdi];
-        if (e->type == FD_TYPE_NONE) {
+        fd_entry_t *e = fd_slot(table, fdi);
+        uint32_t flags = fd_table_lock(table);
+        int open = e->type != FD_TYPE_NONE && !(e->flags & FD_FLAG_RELEASING);
+
+        if (open) {
+            e->flags |= FD_FLAG_CLOSING | FD_FLAG_RELEASING;
+        }
+        fd_table_unlock(table, flags);
+        if (!open) {
             continue;
         }
         fd_release_backing(e);
-        fd_free(table, fdi);
+        fd_free_after(table, fdi);
     }
 }
 
@@ -276,16 +283,11 @@ void proc_files_put(process_t *p)
 {
     fd_table_t *table = p->fds;
 
-    if (!table) {
-        return;
-    }
-    if (table->refs == 1) {
+    if (table && fd_table_put(p)) {
         release_fd_table(table);
         fd_table_delete(table);
-    } else {
-        table->refs--;
+        p->fds = NULL;
     }
-    p->fds = NULL;
 }
 
 void proc_fs_put(process_t *p)
@@ -307,29 +309,23 @@ void proc_fs_put(process_t *p)
 }
 
 /**
- * Make `table`, whose entries were copied from another table, a table of its
- * own: each descriptor names the same open file description, which gains a
- * reference, so a seek in one process is seen by the other, as POSIX says,
- * and a socket gains one too, so that the two release it independently. A
- * descriptor a sharer closed, which a call of another still holds, is
- * dropped from the copy, and so is a slot a sharer's call has reserved and
- * not yet given a type, whose description the copy has no reference to, as
- * Linux's `dup_fd` frees a descriptor not yet installed.
+ * Make `table`, a copy `fd_table_copy` or `fd_table_take` made of another
+ * table, a table of its own: each descriptor names the same open file
+ * description, which the copy gave a reference, so a seek in one process is
+ * seen by the other, as POSIX says, and a socket gains one here, so that
+ * the two release it independently. The copy has dropped a descriptor a
+ * sharer closed, which a call of another still holds, and a slot a sharer's
+ * call has reserved and not yet published. The sockets are taken under the
+ * big lock, which a socket's release takes (`fd_release_unlocked`), with no
+ * sleep since the copy.
  */
 static void files_take(fd_table_t *table)
 {
     int fdi;
 
     for (fdi = 0; fdi < table->cap; fdi++) {
-        fd_entry_t *e = &table->entries[fdi];
+        fd_entry_t *e = fd_slot(table, fdi);
 
-        if ((e->flags & FD_FLAG_CLOSING) || (e->type == FD_TYPE_NONE && e->ofd != NULL)) {
-            k_memset(e, 0, sizeof(*e));
-        }
-        if (e->type == FD_TYPE_NONE) {
-            continue;
-        }
-        fd_ofd_ref(e->ofd);
         if (e->type == FD_TYPE_SOCKET && e->sock) {
             socket_ref(e->sock);
         }
@@ -338,9 +334,9 @@ static void files_take(fd_table_t *table)
 
 /** A copy of the descriptor table `src` for a child that does not share it,
  * as `files_take` makes one; NULL when the heap has no room. */
-static fd_table_t *files_copy(const fd_table_t *src)
+static fd_table_t *files_copy(fd_table_t *src)
 {
-    fd_table_t *table = fd_table_dup(src);
+    fd_table_t *table = fd_table_copy(src);
 
     if (table) {
         files_take(table);
@@ -648,11 +644,13 @@ static void close_cloexec_fds(void)
 
     for (fd = 0; fd < fd_table_cap(current_proc->fds); fd++) {
         fd_entry_t *entry = fd_get(current_proc->fds, fd);
-        if (!entry || !(entry->flags & FD_FLAG_CLOEXEC)) {
+
+        if (!entry || !(entry->flags & FD_FLAG_CLOEXEC) ||
+            fd_close_claim(current_proc->fds, fd) != 1) {
             continue;
         }
         fd_release_backing(entry);
-        fd_free(current_proc->fds, fd);
+        fd_free_after(current_proc->fds, fd);
     }
 }
 
@@ -2174,7 +2172,9 @@ static int32_t exec_one_thread(void)
  * The entries copied into it now name descriptions it holds no references
  * to, and the commit writes over them. A table never shrinks, but another
  * sharer may grow it while the exec sleeps, so `exec_files_fit` widens the
- * storage again after the last sleep. 0, or -ENOMEM.
+ * storage again after the last sleep, and the commit's copy grows it once
+ * more if a sharer that runs without the big lock grew the table since.
+ * 0, or -ENOMEM.
  */
 static int32_t exec_files_stage(struct exec_state *s)
 {
@@ -2186,9 +2186,7 @@ static int32_t exec_files_stage(struct exec_state *s)
 }
 
 /** Widen the storage `exec_files_stage` set aside to the shared table as it
- * is now, after `exec_one_thread`, the exec's last sleep; nothing between
- * here and the commit sleeps, so no sharer grows the table again. 0, or
- * -ENOMEM. */
+ * is now, after `exec_one_thread`, the exec's last sleep. 0, or -ENOMEM. */
 static int32_t exec_files_fit(struct exec_state *s)
 {
     if (s->files == NULL || current_proc->fds->refs == 1) {
@@ -2204,22 +2202,22 @@ static int32_t exec_files_fit(struct exec_state *s)
  * makes one, so the close-on-exec descriptors are closed for the new image
  * alone and the other sharers keep the table. A caller whose other sharers
  * have all gone keeps the table, and the storage goes back with the
- * workspace.
+ * workspace; so does a caller whose sharer grew the table since the storage
+ * was fitted, when the heap has no room for the growth, which keeps the
+ * shared table, since the exec can no longer fail.
  */
 static void exec_files(struct exec_state *s)
 {
     fd_table_t *shared = current_proc->fds;
     fd_table_t *own = s->files;
 
-    if (own == NULL || shared->refs == 1) {
+    if (own == NULL || shared->refs == 1 || fd_table_take(own, shared) != 0) {
         return;
     }
-    k_memcpy(own->entries, shared->entries, sizeof(fd_entry_t) * (size_t)shared->cap);
-    own->next_free = 0;
     files_take(own);
     s->files = NULL;
     proc_files_put(current_proc);
-    current_proc->fds = own;
+    fd_table_join(own, current_proc);
 }
 
 /**
@@ -2374,7 +2372,7 @@ int32_t proc_files_unshare(void)
         return -ENOMEM;
     }
     proc_files_put(current_proc);
-    current_proc->fds = own;
+    fd_table_join(own, current_proc);
     return 0;
 }
 
@@ -3000,15 +2998,17 @@ static int32_t fork_pidfd(process_t *child, uintptr_t at, struct pidfd **pf)
  * CLONE_FILES, a copy otherwise. 0, or -ENOMEM. */
 static int32_t fork_files(process_t *child, process_t *parent, uint32_t flags)
 {
+    fd_table_t *own;
+
     if (flags & CLONE_FILES) {
-        if (fd_table_share(parent->fds, child) != 0) {
-            return -ENOMEM;
-        }
-        child->fds = parent->fds;
-        return 0;
+        return fd_table_share(parent->fds, child) != 0 ? -ENOMEM : 0;
     }
-    child->fds = files_copy(parent->fds);
-    return child->fds ? 0 : -ENOMEM;
+    own = files_copy(parent->fds);
+    if (!own) {
+        return -ENOMEM;
+    }
+    fd_table_join(own, child);
+    return 0;
 }
 
 /** Give `child` the directories and the descriptor table of `parent`, each
@@ -6417,7 +6417,7 @@ static void sigfd_close(fd_entry_t *e)
 }
 
 static const struct file_ops sigfd_ops = {sigfd_read,  NULL, sigfd_poll, NULL,
-                                          sigfd_close, NULL, NULL};
+                                          sigfd_close, NULL, NULL,       0};
 
 /**
  * signalfd and signalfd4 take -1 for a new signalfd or the descriptor of one to
@@ -6463,7 +6463,7 @@ static int32_t signalfd_common(isr_params_t *params, uint32_t flags)
         kfree(sf);
         return fd;
     }
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_ANON;
     e->ops = &sigfd_ops;
     e->priv = sf;
@@ -6471,6 +6471,7 @@ static int32_t signalfd_common(isr_params_t *params, uint32_t flags)
     if (flags & SFD_NONBLOCK) {
         e->ofd->status_flags |= OFD_NONBLOCK;
     }
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 

@@ -381,7 +381,7 @@ static void inotify_close(fd_entry_t *e)
 }
 
 static const struct file_ops inotify_ops = {inotify_read,  NULL, inotify_poll, inotify_ioctl,
-                                            inotify_close, NULL, NULL};
+                                            inotify_close, NULL, NULL,         0};
 
 int inotify_is(int fd)
 {
@@ -515,7 +515,7 @@ static int32_t inotify_open(uint32_t flags)
         kfree(in);
         return fd;
     }
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_ANON;
     e->ops = &inotify_ops;
     e->priv = in;
@@ -525,6 +525,7 @@ static int32_t inotify_open(uint32_t flags)
     }
     in->next = instances;
     instances = in;
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 

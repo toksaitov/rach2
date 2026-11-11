@@ -230,7 +230,7 @@ static void eventfd_close(fd_entry_t *e)
 }
 
 static const struct file_ops eventfd_ops = {eventfd_read,  eventfd_write, eventfd_poll, NULL,
-                                            eventfd_close, NULL,          NULL};
+                                            eventfd_close, NULL,          NULL,         0};
 
 /** A new eventfd with the counter `count` and the flags `flags`, and a
  * descriptor of the caller's on it: the descriptor, -EINVAL for another
@@ -259,7 +259,7 @@ static int32_t eventfd_open(uint32_t count, uint32_t flags)
         kfree(ev);
         return fd;
     }
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_ANON;
     e->ops = &eventfd_ops;
     e->priv = ev;
@@ -267,6 +267,7 @@ static int32_t eventfd_open(uint32_t count, uint32_t flags)
     if (flags & EFD_NONBLOCK) {
         e->ofd->status_flags |= OFD_NONBLOCK;
     }
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 

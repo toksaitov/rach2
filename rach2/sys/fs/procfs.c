@@ -716,17 +716,20 @@ int procfs_fd_count(int pid)
 {
     process_t *p = pid < 0 ? NULL : procfs_proc(pid);
     int fd, n = 0;
+    uint32_t flags;
 
-    if (!p) {
-        return -ENOENT;
+    if (!p || !p->fds) {
+        return p ? 0 : -ENOENT;
     }
-    for (fd = 0; fd < fd_table_cap(p->fds); fd++) {
-        const fd_entry_t *e = &p->fds->entries[fd];
+    flags = fd_table_lock(p->fds);
+    for (fd = 0; fd < p->fds->cap; fd++) {
+        const fd_entry_t *e = fd_slot(p->fds, fd);
 
         if ((e->type != FD_TYPE_NONE || e->ofd != NULL) && !(e->flags & FD_FLAG_CLOSING)) {
             n++;
         }
     }
+    fd_table_unlock(p->fds, flags);
     return n;
 }
 
@@ -1077,7 +1080,10 @@ int procfs_link_target(const struct vpath *vp, struct vfs_ref *out, char *buf, i
 {
     int pid = procfs_resolve_id(vp);
     process_t *p = pid < 0 ? NULL : procfs_proc(pid);
-    fd_entry_t *e;
+    const fd_entry_t *e;
+    struct synth_dir sd;
+    uint32_t flags;
+    int rc = -ENOTDIR;
 
     if (!p || !p->fs || !p->fds) {
         return -ENOENT;
@@ -1098,26 +1104,29 @@ int procfs_link_target(const struct vpath *vp, struct vfs_ref *out, char *buf, i
         out->node = p->fs->cwd_node;
         return 0;
     }
-    if (vp->procfd < 0 || vp->procfd >= fd_table_cap(p->fds)) {
+    if (vp->procfd < 0) {
         return -ENOENT;
     }
-    e = &p->fds->entries[vp->procfd];
-    if (e->type == FD_TYPE_NONE || (e->flags & FD_FLAG_CLOSING)) {
-        return -ENOENT;
-    }
-    if ((e->type == FD_TYPE_FILE || e->type == FD_TYPE_DIR) && e->ofd && e->ofd->vmnt) {
+    flags = fd_table_lock(p->fds);
+    e = vp->procfd < p->fds->cap ? fd_slot(p->fds, vp->procfd) : NULL;
+    if (!e || !fd_entry_open(e)) {
+        rc = -ENOENT;
+    } else if ((e->type == FD_TYPE_FILE || e->type == FD_TYPE_DIR) && e->ofd && e->ofd->vmnt) {
         out->mnt = e->ofd->vmnt;
         out->node = e->ofd->vnode;
-        return 0;
+        rc = 0;
+    } else if (e->type == FD_TYPE_SYNTH_DIR && e->priv) {
+        sd = *(const struct synth_dir *)e->priv;
+        rc = 1;
     }
-    if (e->type == FD_TYPE_SYNTH_DIR && e->priv) {
-        const struct synth_dir *sd = e->priv;
+    fd_table_unlock(p->fds, flags);
+    if (rc == 1) {
         char path[64];
 
-        synth_dir_path(sd->kind, sd->pid, sd->tid, path, (int)sizeof(path));
+        synth_dir_path(sd.kind, sd.pid, sd.tid, path, (int)sizeof(path));
         return exe_put(buf, cap, 0, path);
     }
-    return -ENOTDIR;
+    return rc;
 }
 
 /**
@@ -2696,27 +2705,22 @@ static void proc_file_target(struct procfs_text *t, const fd_entry_t *e)
  * framebuffer and the mouse have no name, and show "anon_inode:[device]". A
  * descriptor that is closed, whose release waits for another thread's call
  * or is under way, has no link, as it has no entry in the directory's
- * listing and no lookup finds it.
+ * listing and no lookup finds it. The entry is copied under its table's
+ * lock, and what it names is read under the big lock, which its release
+ * takes.
  */
 int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
 {
     struct procfs_text text;
     struct procfs_text *t = &text;
     process_t *p;
-    fd_entry_t *e;
+    fd_entry_t copy, *e = &copy;
     int n;
 
     procfs_text_init(t);
 
     p = get_process((uint32_t)pid);
-    if (!p || p->state == PROC_UNUSED) {
-        return -ENOENT;
-    }
-    if (fd < 0 || fd >= fd_table_cap(p->fds)) {
-        return -ENOENT;
-    }
-    e = &p->fds->entries[fd];
-    if (e->type == FD_TYPE_NONE || (e->flags & FD_FLAG_CLOSING)) {
+    if (!p || p->state == PROC_UNUSED || fd_peek(p->fds, fd, &copy, 0) != 0) {
         return -ENOENT;
     }
 
@@ -7157,7 +7161,7 @@ static void procfs_close(fd_entry_t *e)
 }
 
 static const struct file_ops procfs_file_ops = {
-    procfs_read, procfs_write, procfs_poll, procfs_ioctl, procfs_close, NULL, NULL};
+    procfs_read, procfs_write, procfs_poll, procfs_ioctl, procfs_close, NULL, NULL, 0};
 
 /** Read the PCI config file afresh at every offset, including pread. */
 static int32_t procfs_pciconfig_read(fd_entry_t *e, char __user *buf, uint32_t count)
@@ -7252,7 +7256,8 @@ static const struct file_ops procfs_pciconfig_ops = {procfs_pciconfig_read,
                                                      procfs_ioctl,
                                                      procfs_close,
                                                      NULL,
-                                                     NULL};
+                                                     NULL,
+                                                     0};
 
 /**
  * Whether the caller may open a PCI function's file, root's with the mode
@@ -7307,7 +7312,7 @@ static int procfs_open_pciconfig(const struct vpath *vp, int flags)
         kfree(f);
         return fd;
     }
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_PROC;
     e->ops = &procfs_pciconfig_ops;
     e->priv = f;
@@ -7315,6 +7320,7 @@ static int procfs_open_pciconfig(const struct vpath *vp, int flags)
     if (flags & PROCFS_O_CLOEXEC) {
         e->flags |= FD_FLAG_CLOEXEC;
     }
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 
@@ -7531,7 +7537,7 @@ static int32_t procfs_pcibar_mmap(fd_entry_t *e, struct vma *vma)
 
 static const struct file_ops procfs_pcibar_ops = {
     procfs_pcibar_read, procfs_pcibar_write, procfs_poll, procfs_ioctl,
-    procfs_close,       procfs_pcibar_mmap,  NULL};
+    procfs_close,       procfs_pcibar_mmap,  NULL,        0};
 
 /** Open a resourceN or resourceN_wc file, root's with mode 0600 as
  * Linux's, for the access `pci_file_may` allows. -EACCES for another caller,
@@ -7561,7 +7567,7 @@ static int procfs_open_pcibar(const struct vpath *vp, int flags)
         kfree(f);
         return fd;
     }
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_PROC;
     e->ops = &procfs_pcibar_ops;
     e->priv = f;
@@ -7569,6 +7575,7 @@ static int procfs_open_pcibar(const struct vpath *vp, int flags)
     if (flags & PROCFS_O_CLOEXEC) {
         e->flags |= FD_FLAG_CLOEXEC;
     }
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 
@@ -7660,7 +7667,7 @@ static int32_t procfs_mem_write(fd_entry_t *e, const char __user *buf, uint32_t 
 }
 
 static const struct file_ops procfs_mem_ops = {
-    procfs_mem_read, procfs_mem_write, procfs_poll, procfs_ioctl, procfs_close, NULL, NULL};
+    procfs_mem_read, procfs_mem_write, procfs_poll, procfs_ioctl, procfs_close, NULL, NULL, 0};
 
 int procfs_is_mem(const fd_entry_t *e)
 {
@@ -7710,7 +7717,7 @@ static int procfs_open_mem(const struct vpath *vp, int pid, int flags)
     }
     mm_hold(p->mm);
     f->mm = p->mm;
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_PROC;
     e->node = NULL;
     e->sock = NULL;
@@ -7722,6 +7729,7 @@ static int procfs_open_mem(const struct vpath *vp, int pid, int flags)
     if (flags & PROCFS_O_CLOEXEC) {
         e->flags |= FD_FLAG_CLOEXEC;
     }
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 
@@ -8101,7 +8109,7 @@ static int32_t procfs_oom_write(fd_entry_t *e, const char __user *buf, uint32_t 
 }
 
 static const struct file_ops procfs_oom_ops = {
-    procfs_oom_read, procfs_oom_write, procfs_poll, procfs_ioctl, procfs_close, NULL, NULL};
+    procfs_oom_read, procfs_oom_write, procfs_poll, procfs_ioctl, procfs_close, NULL, NULL, 0};
 
 /** Which of the user namespace's files `file` is, NS_MAP_ (proc/ns.h). */
 static int idmap_which(int file)
@@ -8195,7 +8203,7 @@ static int32_t procfs_idmap_write(fd_entry_t *e, const char __user *buf, uint32_
 }
 
 static const struct file_ops procfs_idmap_ops = {
-    procfs_idmap_read, procfs_idmap_write, procfs_poll, procfs_ioctl, procfs_close, NULL, NULL};
+    procfs_idmap_read, procfs_idmap_write, procfs_poll, procfs_ioctl, procfs_close, NULL, NULL, 0};
 
 /**
  * Write /proc/<pid>/comm or /proc/<pid>/task/<tid>/comm as Linux's
@@ -8228,7 +8236,7 @@ static int32_t procfs_comm_write(fd_entry_t *e, const char __user *buf, uint32_t
 }
 
 static const struct file_ops procfs_comm_ops = {
-    procfs_idmap_read, procfs_comm_write, procfs_poll, procfs_ioctl, procfs_close, NULL, NULL};
+    procfs_idmap_read, procfs_comm_write, procfs_poll, procfs_ioctl, procfs_close, NULL, NULL, 0};
 
 /**
  * Open /proc/<pid>/uid_map, gid_map, setgroups or comm, `file` of the path
@@ -8267,7 +8275,7 @@ static int procfs_open_idmap(const struct vpath *vp, int file, int pid, int flag
         kfree(f);
         return fd;
     }
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_PROC;
     e->node = NULL;
     e->sock = NULL;
@@ -8279,6 +8287,7 @@ static int procfs_open_idmap(const struct vpath *vp, int file, int pid, int flag
     if (flags & PROCFS_O_CLOEXEC) {
         e->flags |= FD_FLAG_CLOEXEC;
     }
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 
@@ -8320,7 +8329,7 @@ static int procfs_open_oom(const struct vpath *vp, int pid, int flags)
         kfree(f);
         return fd;
     }
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_PROC;
     e->node = NULL;
     e->sock = NULL;
@@ -8332,6 +8341,7 @@ static int procfs_open_oom(const struct vpath *vp, int pid, int flags)
     if (flags & PROCFS_O_CLOEXEC) {
         e->flags |= FD_FLAG_CLOEXEC;
     }
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 
@@ -8779,8 +8789,14 @@ static int32_t procfs_sysctl_write(fd_entry_t *e, const char __user *buf, uint32
     return sysctl_int_write(f->origin_pid, v, count);
 }
 
-static const struct file_ops procfs_sysctl_ops = {
-    procfs_sysctl_read, procfs_sysctl_write, procfs_poll, procfs_ioctl, procfs_close, NULL, NULL};
+static const struct file_ops procfs_sysctl_ops = {procfs_sysctl_read,
+                                                  procfs_sysctl_write,
+                                                  procfs_poll,
+                                                  procfs_ioctl,
+                                                  procfs_close,
+                                                  NULL,
+                                                  NULL,
+                                                  0};
 
 /** Read a writable /sys attribute opened for writing as well: its value at
  * this read, from the description's offset. */
@@ -9019,8 +9035,14 @@ static int32_t procfs_sysattr_write(fd_entry_t *e, const char __user *buf, uint3
     return rc;
 }
 
-static const struct file_ops procfs_sysattr_ops = {
-    procfs_sysattr_read, procfs_sysattr_write, procfs_poll, procfs_ioctl, procfs_close, NULL, NULL};
+static const struct file_ops procfs_sysattr_ops = {procfs_sysattr_read,
+                                                   procfs_sysattr_write,
+                                                   procfs_poll,
+                                                   procfs_ioctl,
+                                                   procfs_close,
+                                                   NULL,
+                                                   NULL,
+                                                   0};
 
 /**
  * Open the writable attribute `attr` of the /sys directory `node` of the
@@ -9052,7 +9074,7 @@ static int procfs_open_sysattr(int node, int key, int attr, int flags)
         kfree(f);
         return fd;
     }
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_PROC;
     e->node = NULL;
     e->sock = NULL;
@@ -9063,6 +9085,7 @@ static int procfs_open_sysattr(int node, int key, int attr, int flags)
     if (flags & PROCFS_O_CLOEXEC) {
         e->flags |= FD_FLAG_CLOEXEC;
     }
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 
@@ -9112,7 +9135,8 @@ static const struct file_ops procfs_acpicall_ops = {procfs_acpicall_read,
                                                     procfs_ioctl,
                                                     procfs_close,
                                                     NULL,
-                                                    NULL};
+                                                    NULL,
+                                                    0};
 
 /**
  * Open /proc/acpi/call, which needs a privileged caller, as its mode, 0600
@@ -9140,7 +9164,7 @@ static int procfs_open_acpicall(int flags)
         kfree(f);
         return fd;
     }
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_PROC;
     e->node = NULL;
     e->sock = NULL;
@@ -9151,6 +9175,7 @@ static int procfs_open_acpicall(int flags)
     if (flags & PROCFS_O_CLOEXEC) {
         e->flags |= FD_FLAG_CLOEXEC;
     }
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 
@@ -9189,7 +9214,7 @@ static int procfs_open_sysctl(int entry, int flags)
         kfree(f);
         return fd;
     }
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_PROC;
     e->node = NULL;
     e->sock = NULL;
@@ -9200,6 +9225,7 @@ static int procfs_open_sysctl(int entry, int flags)
     if (flags & PROCFS_O_CLOEXEC) {
         e->flags |= FD_FLAG_CLOEXEC;
     }
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 
@@ -9248,12 +9274,15 @@ static void procfs_kvm_irqs(struct procfs_text *t, void *vm)
  * its inode number, the four lines Linux gives first. Its length, or
  * -ENOENT for a descriptor that is not open. A dma-buf also gives its
  * supplied name, copied before appending text or the stat can sleep, and a
- * KVM VM its interrupt counts, from a reference taken then.
+ * KVM VM its interrupt counts, from a reference taken then. The entry is
+ * copied under its table's lock, and what it names is read under the big
+ * lock, which its release takes.
  */
 static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
 {
     process_t *p = get_process((uint32_t)pid);
-    const fd_entry_t *e;
+    fd_entry_t copy;
+    const fd_entry_t *e = &copy;
     char pos[24], name[DMA_BUF_NAME_LEN];
     uint32_t rw, flags, mnt_id;
     uint64_t ino;
@@ -9262,11 +9291,7 @@ static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
     void *vm;
 #endif
 
-    if (!p || p->state == PROC_UNUSED || fd < 0 || fd >= fd_table_cap(p->fds)) {
-        return -ENOENT;
-    }
-    e = &p->fds->entries[fd];
-    if (e->type == FD_TYPE_NONE || (e->flags & FD_FLAG_CLOSING)) {
+    if (!p || p->state == PROC_UNUSED || fd_peek(p->fds, fd, &copy, 0) != 0) {
         return -ENOENT;
     }
     if (is_dma_buf_file(e)) {
@@ -9674,7 +9699,7 @@ int procfs_open(const struct vpath *vp, int flags)
         kfree(f);
         return fd;
     }
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_PROC;
     e->node = NULL;
     e->sock = NULL;
@@ -9686,5 +9711,6 @@ int procfs_open(const struct vpath *vp, int flags)
     if (flags & PROCFS_O_CLOEXEC) {
         e->flags |= FD_FLAG_CLOEXEC;
     }
+    fd_install(current_proc->fds, fd);
     return fd;
 }

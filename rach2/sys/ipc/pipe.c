@@ -1300,7 +1300,7 @@ static void pipe_close(fd_entry_t *e)
 }
 
 static const struct file_ops pipe_ops = {pipe_read,  pipe_write, pipe_poll, pipe_ioctl,
-                                         pipe_close, NULL,       NULL};
+                                         pipe_close, NULL,       NULL,      0};
 
 int pipe_is(const fd_entry_t *e)
 {
@@ -1738,7 +1738,7 @@ int32_t pipe_tee(fd_entry_t *in, fd_entry_t *out, uint32_t len, int nonblock, in
  * `access`, close-on-exec and O_NONBLOCK as pipe2's `flags` ask. */
 static void pipe_setup_end(int fd, pipe_t *p, uint32_t access, int flags)
 {
-    fd_entry_t *e = &current_proc->fds->entries[fd];
+    fd_entry_t *e = fd_slot(current_proc->fds, fd);
 
     e->type = FD_TYPE_PIPE;
     e->node = NULL;
@@ -1752,6 +1752,7 @@ static void pipe_setup_end(int fd, pipe_t *p, uint32_t access, int flags)
     if ((flags & O_NONBLOCK_FLAG) && e->ofd) {
         e->ofd->status_flags |= OFD_NONBLOCK;
     }
+    fd_install(current_proc->fds, fd);
 }
 
 /* An open of a FIFO waiting for the other end: the pipe, whether it waits
@@ -1843,7 +1844,6 @@ int32_t fifo_attach(fd_entry_t *e, const void *mnt, uint64_t ino, int flags)
             fifo_unopen(p, reads, writes);
             return -EINTR;
         }
-        e = fd_entry_now(current_proc->fds, e); /* another sharer may have grown the table */
     }
     if (acc == 2) {
         p->rdwr_open++;

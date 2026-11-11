@@ -14,6 +14,7 @@
 
 #include "../lib/kint.h"
 #include "../lib/kdef.h"
+#include "../lib/spinlock.h"
 
 /*
  * A table starts with FD_TABLE_FIRST entries and doubles as it fills, up to
@@ -115,7 +116,10 @@ struct vfs_name;
  * every other kind.
  */
 struct open_file {
-    uint32_t refcount;     /* References: descriptors and the holders above */
+    /* References: descriptors and the holders above. Changed only by an
+     * atomic step (`fd_ofd_ref`, `fd_ofd_unref`), since descriptors of one
+     * description in different tables close without a common lock. */
+    uint32_t refcount;
     uint64_t offset;       /* Shared read/write offset */
     uint64_t raw_offset;   /* Shared offset of a raw disk window */
     uint32_t status_flags; /* Shared O_APPEND/O_NONBLOCK (OFD_* above) */
@@ -213,84 +217,130 @@ typedef struct fd_entry {
     void *priv;                    /* The object `ops` work on, such as a pipe end */
     const struct devfs_entry *dev; /* The device table row, for a DEVICE */
     uint32_t flags;                /* FD_FLAG_* */
+    /* 1 from the reservation of the slot until `fd_install` publishes what
+     * its caller wrote, and again while `fd_free` lets the description go:
+     * no lookup finds the slot and no copy of the table keeps it. */
+    uint32_t pending;
 } fd_entry_t;
+
+/* The most chunks a table has (fd.c), enough for FD_NR_OPEN_MAX. */
+#define FD_CHUNKS 22
 
 /*
  * File descriptor table, which each process's record points to: `cap`
- * entries in the heap, every one FD_TYPE_NONE unless open. Threads and the
- * processes clone makes with CLONE_FILES share one table, `refs` counting
- * them. A table grows by moving its entries to a larger array, with no sleep
- * between, so a lookup by number always finds the entry where it is now. A
- * call of one sharer may sleep with the address of an entry while another
- * grows the table; the old array then stays on `retired`, unchanged, until
- * no sharer's call holds a descriptor (`fd_table_reap`), so such an address
- * reads what it read before. A call that writes an entry after a sleep, or
- * reads what another thread may have changed in it since, takes the entry
- * as it is now first (`fd_entry_now`). The table has no limit of its own below
- * `fd_nr_open`: each sharer is held to its own RLIMIT_NOFILE (`fd_limit`).
- * The table is the owner of its sharers' POSIX record locks (`lock.h`),
- * which its release drops as it closes the descriptors.
+ * entries in chunks from the heap, every one FD_TYPE_NONE unless open.
+ * Threads and the processes clone makes with CLONE_FILES share one table,
+ * `refs` counting them and `sharers` listing them. A table grows by adding
+ * a chunk as large as all before it, and an entry never moves, so its
+ * address (`fd_slot`) is its slot's for the table's life: a call may sleep
+ * with it while another sharer grows the table, and finds the slot as it is
+ * now. The table has no limit of its own below `fd_nr_open`: each sharer is
+ * held to its own RLIMIT_NOFILE (`fd_limit`). The table is the owner of its
+ * sharers' POSIX record locks (`lock.h`), which its release drops as it
+ * closes the descriptors.
+ *
+ * `lock` guards the entries, `cap`, `next_free`, the sharer list and every
+ * sharer's map of held descriptors (`fd_held` in process.h), as Linux's
+ * `files->file_lock` (include/linux/fdtable.h:51). It is a spinlock, taken
+ * with interrupts off and held for no sleep, below the big lock and the
+ * sleeping locks and above the scheduler's locks and the heap's, which a
+ * growth under it takes. Every lookup, reservation, publication, change of
+ * a descriptor's flags, release of a slot and growth takes it, so a call
+ * that runs without the big lock may use the table while another sharer
+ * runs with it, and another process's table is read only under it
+ * (`fd_peek`). A slot that a call has looked up or reserved is held by the
+ * call (`fd_get`), so that no other sharer releases what it names until
+ * the call ends.
  */
-struct fd_retired;
+struct process;
 
 typedef struct fd_table {
-    fd_entry_t *entries;
+    fd_entry_t *chunks[FD_CHUNKS]; /* NULL past the last */
     int cap;
     int refs;
     /* No slot below it is free: where a search for the lowest free
      * descriptor begins, as Linux's `next_fd`. */
     int next_free;
-    struct fd_retired *retired; /* Arrays a growth replaced, newest first */
+    struct spinlock lock;
+    /* The processes whose `fds` is this table, through their
+     * `fd_sharer_next`; a table the kernel fills for nobody has none. */
+    struct process *sharers;
 } fd_table_t;
-
-struct process;
 
 /** Release every descriptor of `table`, its object and then its slot, when
  * the last process that shares the table lets it go; a second call finds
  * nothing to release (syscall_proc.c). May sleep. */
 void release_fd_table(fd_table_t *table);
 
-/** Give a new table its first FD_TABLE_FIRST entries, all free, and no
- * retired arrays, whatever `table` held; it frees no old entries and leaves
- * `refs` to the caller. 0, or -1 when `table` is NULL or the heap has no
- * room. */
+/** Give a new table its first FD_TABLE_FIRST entries, all free, no
+ * sharers and a free lock, whatever `table` held; it frees no old entries
+ * and leaves `refs` to the caller. 0, or -1 when `table` is NULL or the heap
+ * has no room. */
 int fd_table_init(fd_table_t *table);
 
 /** Free the entries; the descriptors must have been released first. */
 void fd_table_free(fd_table_t *table);
 
-/** A table from the heap with its first entries and one reference; NULL
- * when the heap has no room. */
+/** A table from the heap with its first entries, one reference and no
+ * sharer, which `fd_table_join` adds; NULL when the heap has no room. */
 fd_table_t *fd_table_new(void);
 
-/** A table from the heap with a copy of `src`'s entries and one reference,
- * for fork; the references the copies share are the caller's to add, and a
- * slot an unfinished open has reserved is free in the copy. NULL when the
- * heap has no room. */
-fd_table_t *fd_table_dup(const fd_table_t *src);
+/** A table from the heap with a copy of `src`'s entries, taken under its
+ * lock, one reference and no sharer: storage as large as `src` for an exec
+ * that may unshare it (`fd_table_take`), whose entries name descriptions
+ * without references. A slot an unfinished open has reserved is free in the
+ * copy. NULL when the heap has no room. */
+fd_table_t *fd_table_dup(fd_table_t *src);
+
+/** `fd_table_dup` for fork: the copy also takes a reference to each
+ * description it names, and drops each slot of `src` that is closing or
+ * not yet published, as Linux's `dup_fd` drops a descriptor not yet
+ * installed. Sockets' references are the caller's to add. */
+fd_table_t *fd_table_copy(fd_table_t *src);
+
+/** Make `dst`, storage from `fd_table_dup`, a copy of `src` as it is now,
+ * as `fd_table_copy` makes one, growing it under `src`'s lock if `src` grew
+ * since; 0, or -ENOMEM. */
+int fd_table_take(fd_table_t *dst, fd_table_t *src);
 
 /** Free a table `fd_table_new` or `fd_table_dup` made, entries and all;
  * the descriptors must have been released first. */
 void fd_table_delete(fd_table_t *table);
 
+/** Make `table` the table of `p`, which shares no other, and list `p` among
+ * its sharers; the reference is the caller's, the one a new table has. */
+void fd_table_join(fd_table_t *table, struct process *p);
+
+/** Give up `p`'s reference to its table: 1 when it is the last, which the
+ * caller then releases and deletes, `p` still its sharer; 0 when other
+ * sharers keep it, with `p` taken off its list and its `fds` cleared, and
+ * when `p` has no table. */
+int fd_table_put(struct process *p);
+
 /** Take another reference to `table` for the CLONE_FILES child `child`,
- * first giving `child`, and on the table's first share its owner, a map of
- * the descriptors its calls hold as wide as the table (`fd_held` in
+ * make it `child`'s table and list `child` among its sharers, first giving
+ * `child`, and on the table's first share its owner, a map of the
+ * descriptors its calls hold as wide as the table (`fd_held` in
  * `process.h`); 0, or -1 when the heap has no room for them. */
 int fd_table_share(fd_table_t *table, struct process *child);
 
-/** Grow the array of `table` to at least `cap` entries, whatever the
- * limits, for an exec's staged copy of a shared table that grew since it
- * was made; 0, or -ENOMEM. */
+/** Grow `table` to at least `cap` entries, whatever the limits; 0, or
+ * -ENOMEM. */
 int fd_table_fit(fd_table_t *table, int cap);
-
-/** Free the arrays a growth of `table` replaced, unless a call of a sharer
- * other than the caller holds a descriptor and may have the address of an
- * entry in one; the dispatcher calls it as each call ends. */
-void fd_table_reap(fd_table_t *table);
 
 /** How many entries the table has now: the bound of a walk over it. */
 int fd_table_cap(const fd_table_t *table);
+
+/** The slot of descriptor `fd`, 0 <= `fd` < `fd_table_cap`: an address
+ * that stays the slot's for the table's life. Reading what it holds, unless
+ * the caller's call holds the slot or the table is the caller's own and
+ * unshared, takes the lock. */
+fd_entry_t *fd_slot(const fd_table_t *table, int fd);
+
+/** Take and give back `table`'s lock, for a walk over its slots; the walk
+ * does not sleep. */
+uint32_t fd_table_lock(fd_table_t *table);
+void fd_table_unlock(fd_table_t *table, uint32_t flags);
 
 /**
  * One more than the highest descriptor the caller may be given in `table`:
@@ -323,9 +373,10 @@ int fd_init_stdio(fd_table_t *table, uint32_t hangups);
 
 /**
  * Reserve the lowest free descriptor, growing the table up to the caller's
- * limit. The slot gets a new description and stays FD_TYPE_NONE until the
- * caller sets its type and object; `fd_free` returns it. In a shared table
- * the slot is held by the call, as `fd_get` holds one. Returns the
+ * limit. The slot gets a new description and stays hidden from lookups
+ * until the caller sets its type and object and publishes it with
+ * `fd_install`; `fd_free` returns it. In a shared table the slot is held by
+ * the call, as `fd_get` holds one. Returns the
  * descriptor; -EMFILE when no slot is free below the limit; -ENFILE when the
  * machine has `fd_file_max` descriptions and the caller is not privileged;
  * or -ENOMEM, with the slot left free, when the heap has no room for the
@@ -337,11 +388,16 @@ int fd_alloc(fd_table_t *table);
 /** 1 when `fd_alloc` would find or make a slot, for a call that must know
  * before it creates or truncates anything; a heap with no room for the
  * growth is not foreseen here. */
-int fd_can_alloc(const fd_table_t *table);
+int fd_can_alloc(fd_table_t *table);
 
 /** Reserve the lowest free descriptor >= minfd (the fcntl(F_DUPFD)
  * contract), with `fd_alloc`'s results. */
 int fd_alloc_from(fd_table_t *table, int minfd);
+
+/** Publish slot `fd` of `table`, which the caller reserved and has filled
+ * with its type and object: from here lookups find it. Linux's
+ * `fd_install` (fs/file.c:595). */
+void fd_install(fd_table_t *table, int fd);
 
 /** Clear a descriptor's slot and drop its reference to its description,
  * also for a slot reserved and given no type. The object of the descriptor
@@ -350,19 +406,99 @@ int fd_alloc_from(fd_table_t *table, int minfd);
  * a mounted file system, which may sleep. */
 int fd_free(fd_table_t *table, int fd);
 
-/** The entry for fd, or NULL if fd is out of range, free or closing. A
- * lookup in the calling thread's shared table marks the descriptor held by
- * the call until it ends. */
-fd_entry_t *fd_get(fd_table_t *table, int fd);
+/** Clear a descriptor's slot whose reference to its description the caller
+ * has already given up (`fd_ofd_unref_unless_last`). */
+void fd_free_after(fd_table_t *table, int fd);
 
 /**
- * Add or drop a reference to an open file description. The last unref drops
- * the description's record locks, reports its close to inotify, unpins an
- * O_PATH node, closes a description of a mounted file system and frees the
- * description; it may sleep. NULL is ignored.
+ * The entry for fd, or NULL if fd is out of range, free, not yet published
+ * or closing, looked up under the table's lock. A lookup in the calling
+ * thread's shared table marks the descriptor held by the call until it ends,
+ * as Linux's `__fget_files` (fs/file.c:1006) takes a reference: a close by
+ * another sharer then leaves the slot and what it names in place until the
+ * call ends (`fd_holds_claim`), so the entry may be read through the
+ * address for the length of the call, sleeps included, and only its flags
+ * change meanwhile, under the lock (`fd_set_flags`). The entry is not
+ * copied, since a copy would not be one of the table's (`fd_in_table`).
+ */
+fd_entry_t *fd_get(fd_table_t *table, int fd);
+
+/** `fd_peek`'s `ref`: a reference to the description always, or only to
+ * one on a mount, a file or a directory with `vmnt`, whose last release
+ * does no more than end the description. */
+#define FD_PEEK_REF     1
+#define FD_PEEK_MOUNTED 2
+
+/** A copy of the entry for `fd` in `table`, another process's or the
+ * caller's own, into `*out`, taken under the lock, with a reference to its
+ * description as `ref` asks (0 for none), which the caller gives back as a
+ * descriptor in flight is released or, for FD_PEEK_MOUNTED, with
+ * `fd_ofd_unref`; 0, or -EBADF when `fd_get` would find nothing. */
+int fd_peek(fd_table_t *table, int fd, fd_entry_t *out, int ref);
+
+/** Whether `e`, an entry of a table whose lock the caller holds, is open:
+ * published and not closing, as `fd_get` and `fd_peek` find it. Its
+ * description and objects stay while the lock is held. */
+int fd_entry_open(const fd_entry_t *e);
+
+/** The lowest open descriptor (`fd_entry_open`) of `table` at or above
+ * `from`, or -1 for none; the table's lock is taken. */
+int fd_next_open(fd_table_t *table, int from);
+
+/** Change the flags of `e`, a slot of `table`: clear `clear`, then set
+ * `set`, under the lock, so that no close's mark is lost. */
+void fd_set_flags(fd_table_t *table, fd_entry_t *e, uint32_t clear, uint32_t set);
+
+/** Whether a call of a thread other than the caller that shares `table`
+ * holds descriptor `fd`: has looked it up since the call began. The caller
+ * holds the table's lock. */
+int fd_held_elsewhere(fd_table_t *table, int fd);
+
+/**
+ * Begin the close of descriptor `fd` of `table` under its lock: -EBADF when
+ * it is not open; 0 when a call of another sharer holds it, with the slot
+ * marked closing, which the last call to hold it releases as it ends
+ * (`fd_holds_claim`); 1 when the caller is to release it now, with the slot
+ * marked closing and releasing.
+ */
+int fd_close_claim(fd_table_t *table, int fd);
+
+/**
+ * Take slot `fd` of `table` for dup2 under its lock: 0 when it was free,
+ * now reserved and held by the call, for the caller to fill and publish
+ * (`fd_install`); 1 when it is open and no other sharer's call holds it,
+ * marked closing and releasing for the caller to release and clear before
+ * it asks again; -EBUSY when an open has reserved it, or it is closing or
+ * held by another sharer's call; -EBADF when it is outside the table.
+ */
+int fd_dup_target(fd_table_t *table, int fd);
+
+/**
+ * Let go of the calling thread's holds from descriptor `from` up, and
+ * return the first of them that is closing, held by no other sharer and not
+ * yet being released, marked releasing for the caller to release, or -1
+ * once none is left, when the thread holds nothing more. The dispatcher
+ * calls it from 0, and again past each descriptor it releases, as each call
+ * ends (`fd_holds_release`).
+ */
+int fd_holds_claim(int from);
+
+/**
+ * Add or drop a reference to an open file description, each in one atomic
+ * step. The last unref drops the description's record locks, reports its
+ * close to inotify, unpins an O_PATH node, closes a description of a
+ * mounted file system and frees the description, under the big lock when
+ * any of that has work to do; it may sleep. NULL is ignored.
  */
 void fd_ofd_ref(struct open_file *ofd);
 void fd_ofd_unref(struct open_file *ofd);
+
+/** Drop a reference to `ofd` and return 1 when it is not the last; return
+ * 0, dropping nothing, when it is, so that its holder may release what the
+ * description's last descriptor releases before `fd_ofd_unref` ends it. One
+ * atomic step decides, so of two descriptors of one description closed at
+ * once in two tables exactly one is the last. */
+int fd_ofd_unref_unless_last(struct open_file *ofd);
 
 /**
  * A new open file description with one reference and no descriptor pointing
@@ -424,26 +560,15 @@ int fd_ofd_holders(const struct vfs_mount *mnt, const void *node, const struct o
 int fd_is_valid(fd_table_t *table, int fd);
 
 /**
- * Whether `e` is one of `table`'s entries, in its array or in one a growth
- * replaced, and not a copy of one that a file mapping or a message in
- * flight keeps: a close of a descriptor of the table drops the table's
- * record locks, and the release of such a copy does not.
+ * Whether `e` is one of `table`'s slots, and not a copy of one that a file
+ * mapping or a message in flight keeps: a close of a descriptor of the
+ * table drops the table's record locks, and the release of such a copy
+ * does not.
  */
 int fd_in_table(const fd_table_t *table, const fd_entry_t *e);
 
-/**
- * The entry `e` is now: the same slot in `table`'s array when `e` is the
- * address of an entry in an array a growth replaced, else `e` itself, which
- * may be a copy no table has. A call that took the address of an entry and
- * then slept, and so may have let another sharer grow the table, reads it
- * again through this before it writes the entry, reads what another thread
- * may have changed in it, or compares it by address.
- */
-fd_entry_t *fd_entry_now(fd_table_t *table, fd_entry_t *e);
-
 /** Repoint the `node` of every entry of `table` that names `from` at `to`,
- * in its array and in those a growth replaced, after a growing write moved
- * a KRFFS node (`vfs_repoint`). */
+ * after a growing write moved a KRFFS node (`vfs_repoint`). */
 void fd_table_repoint(fd_table_t *table, const void *from, void *to);
 
 #endif /* _FD_H_ */

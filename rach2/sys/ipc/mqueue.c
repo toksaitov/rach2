@@ -193,7 +193,7 @@ static int32_t mq_read(fd_entry_t *e, char __user *buf, uint32_t count);
 static short mq_poll(fd_entry_t *e, short events, struct wait_queue **wq);
 static void mq_close(fd_entry_t *e);
 
-static const struct file_ops mq_ops = {mq_read, NULL, mq_poll, NULL, mq_close, NULL, NULL};
+static const struct file_ops mq_ops = {mq_read, NULL, mq_poll, NULL, mq_close, NULL, NULL, 0};
 
 /** The queue the caller's descriptor `fd` is open on, with the descriptor
  * in `*ep`, or NULL when `fd` is no queue's. */
@@ -467,7 +467,7 @@ static int32_t mq_install(struct mqueue *q, uint32_t oflag)
     f->anon.name = "mqueue";
     f->q = q;
     q->refs++;
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_ANON;
     e->ops = &mq_ops;
     e->priv = f;
@@ -476,6 +476,7 @@ static int32_t mq_install(struct mqueue *q, uint32_t oflag)
     if (oflag & O_NONBLOCK) {
         e->ofd->status_flags |= OFD_NONBLOCK;
     }
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 

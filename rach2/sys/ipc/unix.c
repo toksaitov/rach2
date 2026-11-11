@@ -221,7 +221,7 @@ static int32_t unix_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg);
 static void unix_close(fd_entry_t *e);
 
 static const struct file_ops unix_ops = {unix_read,  unix_write, unix_poll, unix_ioctl,
-                                         unix_close, NULL,       NULL};
+                                         unix_close, NULL,       NULL,      0};
 
 /* Every socket not yet freed. */
 static struct unix_sock *socks;
@@ -424,7 +424,6 @@ static void flight_drop(fd_entry_t *slot, uint32_t *count)
     }
     flight_sync(&e);
     fd_release_backing(&e);
-    fd_ofd_unref(e.ofd);
     if (locked) {
         vfs_ns_unlock(locked);
     }
@@ -811,7 +810,7 @@ static int reserve(void)
  * SOCK_NONBLOCK. */
 static void publish(int fd, struct unix_sock *s, int flags)
 {
-    fd_entry_t *e = &table()->entries[fd];
+    fd_entry_t *e = fd_slot(table(), fd);
 
     e->node = NULL;
     e->sock = NULL;
@@ -825,6 +824,7 @@ static void publish(int fd, struct unix_sock *s, int flags)
         e->ofd->status_flags |= OFD_NONBLOCK;
     }
     e->type = FD_TYPE_UNIX;
+    fd_install(table(), fd);
 }
 
 /** Check the type `*type` and the protocol of a new socket: 0, or
@@ -2445,14 +2445,16 @@ static uint32_t put_rights(uintptr_t at, uint32_t room, struct unix_in *in, int 
             fd_free(table(), fd);
             break;
         }
-        slot = &table()->entries[fd];
+        slot = fd_slot(table(), fd);
         fd_ofd_unref(slot->ofd);
         *slot = in->fds[given];
+        slot->pending = 1;
         in->fds[given++].type = FD_TYPE_NONE;
         flight_sync(slot);
         if (flags & MSG_CMSG_CLOEXEC) {
             slot->flags |= FD_FLAG_CLOEXEC;
         }
+        fd_install(table(), fd);
     }
     if (given < in->nfds) {
         in->flags |= MSG_CTRUNC;

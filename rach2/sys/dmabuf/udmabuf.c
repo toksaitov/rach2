@@ -176,7 +176,7 @@ static int32_t udma_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     return rc;
 }
 
-static const struct file_ops udma_file_ops = {NULL, NULL, NULL, udma_ioctl, NULL, NULL, NULL};
+static const struct file_ops udma_file_ops = {NULL, NULL, NULL, udma_ioctl, NULL, NULL, NULL, 0};
 static struct devfs_node udma_node = {"udmabuf", 10, 126, 0666, &udma_file_ops, NULL, NULL};
 
 /** Publish the udmabuf misc device during DRM startup. */

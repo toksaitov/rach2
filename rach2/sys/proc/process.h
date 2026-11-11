@@ -552,6 +552,9 @@ struct process {
     uint32_t *fd_held;
     int fd_held_words;
     int fd_holding;
+    /* The next sharer of its descriptor table (`fd_table_t.sharers`). The
+     * map, this link and `fd_holding` change under the table's lock. */
+    struct process *fd_sharer_next;
     /* While the thread sleeps in `poll_wait` (io/poll.c), the queues it has
      * records on and the records, `poll_n` of each, which a close by
      * another thread may take off their queues (`close_fd`); NULL and 0 at

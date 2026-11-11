@@ -292,7 +292,7 @@ static void buf_close(fd_entry_t *e)
 }
 
 static const struct file_ops buf_ops = {NULL,      NULL,     buf_poll, buf_ioctl,
-                                        buf_close, buf_mmap, buf_seek};
+                                        buf_close, buf_mmap, buf_seek, 0};
 
 /** Identify dma-bufs by their operations, including duplicated descriptors. */
 int is_dma_buf_file(const fd_entry_t *e)
@@ -317,10 +317,11 @@ int32_t dma_buf_fd(struct dma_buf *b, uint32_t flags)
     fd = fd_alloc(current_proc->fds);
     if (fd < 0)
         return fd;
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_ANON;
     e->ops = &buf_ops;
     e->priv = dma_buf_ref(b);
     e->flags = FD_FLAG_READ | (b->read_only ? 0 : FD_FLAG_WRITE) | (flags ? FD_FLAG_CLOEXEC : 0);
+    fd_install(current_proc->fds, fd);
     return fd;
 }

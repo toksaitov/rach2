@@ -254,7 +254,7 @@ static void ev_close(fd_entry_t *e)
 {
     eventfd_put(e->priv);
 }
-static const struct file_ops ev_ops = {NULL, NULL, NULL, NULL, ev_close, NULL, NULL};
+static const struct file_ops ev_ops = {NULL, NULL, NULL, NULL, ev_close, NULL, NULL, 0};
 /** Take a reference to the eventfd of a descriptor, as eventfd_ctx_fdget. */
 struct eventfd *eventfd_get(int fd, int32_t *err)
 {

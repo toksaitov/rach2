@@ -246,7 +246,7 @@ static void tree_cases(struct vfs_mount *m)
     dfs_put(m, sync);
 }
 
-static const struct file_ops none_ops = {NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+static const struct file_ops none_ops = {NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0};
 static int binds;
 
 /** An open hook that counts and refuses its second call. */

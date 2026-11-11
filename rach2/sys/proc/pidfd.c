@@ -87,7 +87,7 @@ static void pidfd_close(fd_entry_t *e)
 }
 
 static const struct file_ops pidfd_ops = {pidfd_read,  pidfd_write, pidfd_poll, NULL,
-                                          pidfd_close, NULL,        NULL};
+                                          pidfd_close, NULL,        NULL,       0};
 
 struct pidfd *pidfd_new(process_t *p)
 {
@@ -104,7 +104,7 @@ struct pidfd *pidfd_new(process_t *p)
 
 void pidfd_install(struct pidfd *pf, int fd, int nonblock)
 {
-    fd_entry_t *e = &current_proc->fds->entries[fd];
+    fd_entry_t *e = fd_slot(current_proc->fds, fd);
 
     e->type = FD_TYPE_ANON;
     e->ops = &pidfd_ops;
@@ -113,6 +113,7 @@ void pidfd_install(struct pidfd *pf, int fd, int nonblock)
     if (nonblock) {
         e->ofd->status_flags |= OFD_NONBLOCK;
     }
+    fd_install(current_proc->fds, fd);
 }
 
 void pidfd_free(struct pidfd *pf)
@@ -187,7 +188,7 @@ static int may_take_fds(const process_t *t)
 long sys_pidfd_getfd(struct isr_params *params)
 {
     int targetfd = (int)SC_ARG(params, 1);
-    fd_entry_t *src;
+    fd_entry_t src;
     fd_entry_t *dst;
     process_t *t;
     int32_t rc;
@@ -206,32 +207,32 @@ long sys_pidfd_getfd(struct isr_params *params)
     if (!may_take_fds(t)) {
         return -EPERM;
     }
-    if (!t->fds || !fd_get(t->fds, targetfd)) {
+    if (!t->fds || fd_peek(t->fds, targetfd, &src, 0) != 0) {
         return -EBADF;
     }
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         return fd;
     }
-    /* The allocation may have grown a table the two processes share. */
-    src = t->fds ? fd_get(t->fds, targetfd) : NULL;
-    dst = &current_proc->fds->entries[fd];
-    if (!src) {
+    /* The descriptor is taken again, with its description, under its
+     * table's lock, since its owner may have closed it meanwhile. */
+    if (!t->fds || fd_peek(t->fds, targetfd, &src, FD_PEEK_REF) != 0) {
         fd_free(current_proc->fds, fd);
         return -EBADF;
     }
+    dst = fd_slot(current_proc->fds, fd);
     fd_ofd_unref(dst->ofd);
-    dst->type = src->type;
-    dst->node = src->node;
-    dst->sock = src->sock;
-    dst->ops = src->ops;
-    dst->priv = src->priv;
-    dst->dev = src->dev;
-    dst->ofd = src->ofd;
-    fd_ofd_ref(dst->ofd);
-    dst->flags = (src->flags & (FD_FLAG_READ | FD_FLAG_WRITE | FD_FLAG_PATH)) | FD_FLAG_CLOEXEC;
-    if (src->type == FD_TYPE_SOCKET && src->sock) {
-        socket_ref(src->sock);
+    dst->type = src.type;
+    dst->node = src.node;
+    dst->sock = src.sock;
+    dst->ops = src.ops;
+    dst->priv = src.priv;
+    dst->dev = src.dev;
+    dst->ofd = src.ofd;
+    dst->flags = (src.flags & (FD_FLAG_READ | FD_FLAG_WRITE | FD_FLAG_PATH)) | FD_FLAG_CLOEXEC;
+    if (src.type == FD_TYPE_SOCKET && src.sock) {
+        socket_ref(src.sock);
     }
+    fd_install(current_proc->fds, fd);
     return fd;
 }

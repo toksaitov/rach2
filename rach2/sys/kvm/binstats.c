@@ -240,8 +240,8 @@ static void stats_close(fd_entry_t *e)
     kfree(f);
 }
 
-static const struct file_ops stats_ops = {stats_read,  NULL, NULL,        NULL,
-                                          stats_close, NULL, stats_llseek};
+static const struct file_ops stats_ops = {stats_read,  NULL, NULL,         NULL,
+                                          stats_close, NULL, stats_llseek, 0};
 
 int32_t kvm_stats_fd(struct kvm_vm *vm, struct kvm_vcpu *v)
 {
@@ -276,10 +276,11 @@ int32_t kvm_stats_fd(struct kvm_vm *vm, struct kvm_vcpu *v)
     }
     f->anon.name = f->name;
     kvm_vm_get(vm);
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_ANON;
     e->ops = &stats_ops;
     e->priv = f;
     e->flags = FD_FLAG_READ | FD_FLAG_CLOEXEC;
+    fd_install(current_proc->fds, fd);
     return fd;
 }

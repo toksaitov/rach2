@@ -736,7 +736,7 @@ static int32_t do_socket(int domain, int type, int protocol)
         return fd;
     }
 
-    entry = &current_proc->fds->entries[fd];
+    entry = fd_slot(current_proc->fds, fd);
     entry->type = FD_TYPE_SOCKET;
     entry->sock = sock;
     entry->node = NULL;
@@ -761,7 +761,8 @@ static int32_t socket_with_flags(int domain, int type, int protocol)
     }
     fd = do_socket(domain, type & SOCK_TYPE_MASK, protocol);
     if (fd >= 0) {
-        sock_fd_flags(&current_proc->fds->entries[fd], flags);
+        sock_fd_flags(fd_slot(current_proc->fds, fd), flags);
+        fd_install(current_proc->fds, fd);
     }
     return fd;
 }
@@ -1992,13 +1993,14 @@ static int32_t do_accept(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr, uint32_t
         socket_unref(conn_sock);
         return -EFAULT;
     }
-    new_entry = &current_proc->fds->entries[new_fd];
+    new_entry = fd_slot(current_proc->fds, new_fd);
     new_entry->sock = conn_sock;
     new_entry->node = NULL;
     new_entry->ofd->offset = 0;
     new_entry->flags = FD_FLAG_READ | FD_FLAG_WRITE;
     sock_fd_flags(new_entry, flags);
     new_entry->type = FD_TYPE_SOCKET;
+    fd_install(current_proc->fds, new_fd);
     return new_fd;
 }
 

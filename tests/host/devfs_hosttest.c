@@ -356,7 +356,7 @@ static int32_t node_open(struct devfs_node *node, fd_entry_t *e, int flags)
     return 0;
 }
 
-static const struct file_ops node_ops = {NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+static const struct file_ops node_ops = {NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0};
 
 /** Whether the listing of the directory `dir` of /dev ("" for /dev itself)
  * has `name` with the inode `ino`. */

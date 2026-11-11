@@ -1604,7 +1604,7 @@ static void vshm_close(fd_entry_t *e)
     e->priv = NULL;
 }
 
-static const struct file_ops vshm_fops = {NULL, NULL, NULL, vshm_ioctl, vshm_close, NULL, NULL};
+static const struct file_ops vshm_fops = {NULL, NULL, NULL, vshm_ioctl, vshm_close, NULL, NULL, 0};
 static struct devfs_node vshm_node = {"vgpu-shm", 10, 243, 0600, &vshm_fops, NULL, NULL};
 
 int32_t vgpu_shm_start(void)

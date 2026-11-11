@@ -30,7 +30,7 @@ static int32_t container_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg);
 static void container_close(fd_entry_t *e);
 
 const struct file_ops vfio_container_ops = {NULL, NULL, NULL, container_ioctl, container_close,
-                                            NULL, NULL};
+                                            NULL, NULL, 0};
 
 /** An open of /dev/vfio/vfio: a new container with no group and no IOMMU
  * driver set, the descriptor's object. */
