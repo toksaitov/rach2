@@ -8738,10 +8738,10 @@ static int32_t synth_stat_node(const struct vpath *vp, struct kstat *kst, int fo
 /**
  * Fill `kst` for the node `vp` as a lookup of its path finds it
  * (`synth_stat_node`). A lookup that finds a file of /proc/<pid>, an fdinfo
- * file or a process's fd, fdinfo or task directory gives the descriptors
- * open on it the owner it reports, as Linux's walk sets the owner of the
- * inode they share (`procfs_lookup_owner`); the fstat of a descriptor takes
- * `synth_stat_node`, which sets nothing.
+ * file, a process's fd, fdinfo or task directory, or one of its links gives
+ * the descriptors open on it the owner it reports, as Linux's walk sets
+ * the owner of the inode they share (`procfs_lookup_owner`); the fstat of a
+ * descriptor takes `synth_stat_node`, which sets nothing.
  */
 static int32_t synth_stat(const struct vpath *vp, struct kstat *kst, int follow)
 {
@@ -10006,8 +10006,8 @@ static void fstat_synth(fd_entry_t *entry, struct kstat *kst)
  * descriptor on a synthetic leaf, or on a /proc link under O_NOFOLLOW,
  * reports what an lstat of its path gives while the node is there, and a
  * bare device or file once it is gone. Either kind of descriptor on a
- * process's fd, fdinfo or task directory, a file of /proc/<pid> or an fdinfo
- * file reports the owner the last lookup of its node gave
+ * process's fd, fdinfo or task directory, a file of /proc/<pid>, an fdinfo
+ * file or a process's link reports the owner the last lookup of its node gave
  * (`procfs_owner_keep`), as Linux's fstat reads the inode's owner
  * (fs/stat.c:229), which only a lookup sets. A pty slave reports what a stat
  * of /dev/pts/N gives, which the /proc/self/fd link names, or a character
