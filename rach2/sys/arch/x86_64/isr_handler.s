@@ -23,7 +23,7 @@
 # paranoid entry, which asks the GS base MSR itself whose base is loaded,
 # swaps only when it is the user's, and swaps back only if it swapped. The
 # debug exception makes the same GS check in debug_entry, which moves a
-# user frame to the thread's stack or defers a kernel exception.
+# user frame to the thread's stack or drops a kernel exception.
 #
 # Vectors with an error code from the processor (8, 10 to 14, 17, 21, 29 and
 # 30) push only their vector; the others push a zero first, so the frame has
