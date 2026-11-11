@@ -341,7 +341,8 @@ static int resolve_file(struct bootslot *bs, uint32_t first, uint32_t size,
 
 /**
  * The BPB bounds admit the FAT32 boot partitions `tools/image/mkdisk_grub.sh`
- * builds, 16 MiB to 64 MiB at one or eight sectors per cluster, and are
+ * builds, 40 MiB to 64 MiB at one or eight sectors per cluster, and still
+ * admit the smaller volumes of an older disk, down to 16 MiB. They are
  * stated as bounds and not as a FAT-type threshold: a 16 MiB FAT32 volume
  * has fewer than the 65525 clusters that conventionally mark FAT32. The FATs
  * are compared sector by sector as the first is kept. The scan marks every
