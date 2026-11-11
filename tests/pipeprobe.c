@@ -64,8 +64,15 @@
  *       4096 written to it; two writes of a byte share one, and the shrink
  *       to 4096 succeeds; a byte tee copied is a buffer no write joins; a
  *       byte a splice moved whole from another pipe's write is one a write
- *       joins, and the shrink succeeds; and two bytes vmsplice took from
- *       the two sides of a page boundary are two buffers.
+ *       joins, and the shrink succeeds; two bytes vmsplice took from the
+ *       two sides of a page boundary are two buffers; a splice of 32769
+ *       bytes from offset 1 of a memfd, longer than the kernel's copy
+ *       chunk, makes one buffer of each page of the file, so after a read
+ *       of 28671 the 4098 bytes left are two buffers, and a shrink to 8192
+ *       succeeds where one to 4096 is refused; and a vmsplice of 128 KiB of
+ *       page-aligned memory into an empty pipe that may wait takes the
+ *       64 KiB that fit and returns, as Linux waits only before the first
+ *       byte.
  *
  * Given `machine=native` (probe_args.h), the probe leaves out the heap's
  * comparison of (e), since the kernel's heap is shared with every process of
@@ -111,6 +118,12 @@
 #define SA_RESTORER       0x04000000
 
 #define PIPE_BUF_SIZE 65536
+
+#if defined __x86_64__
+#define SYS_MEMFD_CREATE 319
+#else
+#define SYS_MEMFD_CREATE 356
+#endif
 
 /** exit(2) with `status`; does not return. */
 static void sys_exit(int status)
@@ -255,6 +268,8 @@ enum {
     PAGES_TEE,
     PAGES_SPLICE,
     PAGES_VMSPLICE,
+    PAGES_FILE,
+    PAGES_VMSPLICE_WAIT,
     MAX_ROUND,
     MAX_EINVAL,
     SYSCTL_PLUS,
@@ -332,6 +347,9 @@ static const struct {
     {"pages-splice", "a byte a splice moved whole takes a later write: a shrink to 4096 succeeds"},
     {"pages-vmsplice",
      "two bytes vmspliced across a page boundary hold two pages: a shrink to 4096 -> -EBUSY"},
+    {"pages-file", "a splice of 32769 bytes from a memfd's offset 1 and a read of 28671 leave two "
+                   "pages: a shrink to 8192 succeeds and to 4096 -> -EBUSY"},
+    {"pages-vmsplice-wait", "a vmsplice of 128 KiB into an empty pipe that may wait returns 65536"},
     {"max-round", "pipe-max-size takes 600000 as 1048576, 1 as 4096 and 2^31 as written"},
     {"max-einval", "pipe-max-size refuses 2^31 + 1 with EINVAL"},
     {"sysctl-plus", "pipe-user-pages-soft and -hard refuse +64 with EINVAL and keep their values"},
@@ -883,22 +901,22 @@ static void case_wrap(void)
     close_pair(q);
 }
 
-/** vmsplice(2) of the `n` bytes at `addr` into `fd`, without waiting: the
+/** vmsplice(2) of the `n` bytes at `addr` into `fd` with `flags`: the
  * bytes taken, or a negated errno. */
-static long vmsplice_one(int fd, long addr, long n)
+static long vmsplice_one(int fd, long addr, long n, int flags)
 {
     long iov[2];
 
     iov[0] = addr;
     iov[1] = n;
-    return syscall4(SYS_VMSPLICE, fd, (long)iov, 1, SPLICE_F_NONBLOCK);
+    return syscall4(SYS_VMSPLICE, fd, (long)iov, 1, flags);
 }
 
 /**
- * The rows of case (l) that splice into the empty pipes `p` and `q`, which
- * the earlier rows left: a byte a splice moved whole from a write takes a
- * later write, and two bytes vmsplice read from two pages are two buffers.
- * `p` still holds the byte tee copied.
+ * The rows of case (l) that splice into the pipes `p` and `q`, which the
+ * earlier rows left: `q` empty and `p` holding the byte tee copied. A byte
+ * a splice moved whole from a write takes a later write, and two bytes
+ * vmsplice read from two pages are two buffers.
  */
 static void pages_splices(const int p[2], const int q[2])
 {
@@ -915,11 +933,46 @@ static void pages_splices(const int p[2], const int q[2])
         ((char *)map)[4096] = 'b';
     }
     check(PAGES_VMSPLICE, mapped && set_size(p[1], 65536) == 65536 &&
-                              vmsplice_one(p[1], map + 4095, 2) == 2 &&
+                              vmsplice_one(p[1], map + 4095, 2, SPLICE_F_NONBLOCK) == 2 &&
                               set_size(p[1], 4096) == -EBUSY && rd(p[0], back, 2) == 2 &&
                               back[0] == 'a' && back[1] == 'b');
     if (mapped) {
         syscall2(SYS_MUNMAP, map, 8192);
+    }
+}
+
+/**
+ * The rows of case (l) that splice a file's pages into `q`, empty and 4096
+ * bytes after the earlier rows, and wait in vmsplice. The kernel copies a
+ * file to a pipe 32 KiB at a time, so the splice's page at 32768 spans two
+ * of its chunks; Linux links each of the nine pages once, and so the 4098
+ * bytes left after the read are the last two pages' buffers. The vmsplice
+ * may wait for room before its first byte only, so it returns the 64 KiB
+ * that fit; a kernel that waits for the rest leaves the probe asleep, and
+ * the harness times the row out.
+ */
+static void pages_file(const int q[2])
+{
+    long long off = 1;
+    long fd = syscall2(SYS_MEMFD_CREATE, (long)"pipeprobe", 0);
+    long map = mmap_anon(2 * PIPE_BUF_SIZE);
+    int w[2] = {-1, -1};
+
+    check(PAGES_FILE, !sys_failed(fd) && wr((int)fd, big, 40000) == 40000 &&
+                          set_size(q[1], PIPE_BUF_SIZE) == PIPE_BUF_SIZE &&
+                          syscall6(SYS_SPLICE, fd, (long)&off, q[1], 0, 32769, 0) == 32769 &&
+                          rd(q[0], back, 28671) == 28671 && set_size(q[1], 8192) == 8192 &&
+                          set_size(q[1], 4096) == -EBUSY && rd(q[0], back, 8192) == 4098 &&
+                          back[0] == big[28672] && back[4097] == big[32769]);
+    if (!sys_failed(fd)) {
+        syscall1(SYS_CLOSE, fd);
+    }
+    check(PAGES_VMSPLICE_WAIT, map != 0 && !sys_failed(map) && do_pipe(w) == 0 &&
+                                   vmsplice_one(w[1], map, 2 * PIPE_BUF_SIZE, 0) == PIPE_BUF_SIZE &&
+                                   rd(w[0], back, PIPE_BUF_SIZE) == PIPE_BUF_SIZE);
+    close_pair(w);
+    if (map != 0 && !sys_failed(map)) {
+        syscall2(SYS_MUNMAP, map, 2 * PIPE_BUF_SIZE);
     }
 }
 
@@ -954,6 +1007,7 @@ static void case_pages(void)
                          wr(q[1], two + 1, 1) == 1 && set_size(q[1], 4096) == -EBUSY &&
                          rd(q[0], back, 2) == 2 && back[0] == 'a' && back[1] == 'b');
     pages_splices(p, q);
+    pages_file(q);
     close_pair(p);
     close_pair(q);
 }
