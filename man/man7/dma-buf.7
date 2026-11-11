@@ -53,8 +53,9 @@ in
 Read a
 .Vt struct dma_buf_sync .
 The flags contain READ, WRITE or RW, optionally with END.
-START, the default, waits for the previous writer, and for previous
-readers when access includes WRITE, then begins CPU access.
+START, the default, begins CPU access in the exporter, then waits for
+the previous writer, and for previous readers when access includes WRITE.
+An error from the exporter returns before the wait.
 END finishes CPU access.
 An invalid flag set is
 .Er EINVAL ;
