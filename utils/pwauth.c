@@ -451,11 +451,12 @@ static void pwauth_tstp_handler(int sig)
  *
  * A continue does not by itself return the terminal: a shell's `bg` is exactly
  * this signal without it. Taking echo away and reprinting from the background
- * would silence a terminal that now belongs to the shell, and this kernel
- * raises no `SIGTTOU` for `TCSETS` to stop it. So the terminal work is skipped
- * unless this process is still the foreground group; the read that follows
- * stops on `SIGTTIN` instead, and the `fg` that continues it runs this handler
- * again with the terminal back.
+ * would silence a terminal that now belongs to the shell, and no `SIGTTOU`
+ * stops it, since `pwauth_echo_off` blocks the job-control signals around its
+ * `tcsetattr` and a blocked `SIGTTOU` lets the call go ahead, on Linux as here.
+ * So the terminal work is skipped unless this process is still the foreground
+ * group; the read that follows stops on `SIGTTIN` instead, and the `fg` that
+ * continues it runs this handler again with the terminal back.
  */
 static void pwauth_cont_handler(int sig)
 {

@@ -1823,10 +1823,11 @@ static void go_give(int go[2])
  * It runs the whole case itself because the reader is its child and not the
  * probe's, and reports one line on `report`: the state of `ECHO` on the
  * terminal a second after the continue. A `bg` gives the terminal back to the
- * shell and only then continues the job. `TIOCSPGRP` raises no `SIGTTOU` on
- * this kernel, so taking the terminal back from a background group needs none
- * of the signal handling a shell puts around it. Exits 0 after reporting, and
- * 51 to 59 when a step fails before the report.
+ * shell and only then continues the job. The leader leads its session, so its
+ * group is orphaned, and its `TIOCSPGRP` from the background fails with
+ * `ENOTTY`, as on Linux, unless it ignores `SIGTTOU`; it ignores the signal
+ * once the reader is forked, as a shell does. Exits 0 after reporting, and 51
+ * to 59 when a step fails before the report.
  */
 static void prompt_bg_leader(const char *name, int master, int report)
 {
@@ -1876,6 +1877,7 @@ static void prompt_bg_leader(const char *name, int master, int report)
     }
 
     /* `bg`: the terminal goes back to the shell before the continue. */
+    signal(SIGTTOU, SIG_IGN);
     if (tcsetpgrp(0, getpid()) != 0) {
         _exit(57);
     }
@@ -2093,7 +2095,9 @@ static int check_prompt_stop_before_read(void)
 /**
  * The session leader for the stop-during-acquisition case: it hands the reader
  * the terminal, waits for the stub to stop it, takes the terminal back, and
- * continues it in the background.
+ * continues it in the background. Its group is orphaned, as
+ * `prompt_bg_leader`'s is, so it ignores `SIGTTOU` before it takes the
+ * terminal back.
  */
 static void prompt_stale_leader(const char *name, int master, int report)
 {
@@ -2144,6 +2148,7 @@ static void prompt_stale_leader(const char *name, int master, int report)
         _exit(56);
     }
     /* The shell takes its terminal back and puts the job in the background. */
+    signal(SIGTTOU, SIG_IGN);
     if (tcsetpgrp(0, getpgrp()) != 0) {
         _exit(57);
     }
@@ -2391,17 +2396,18 @@ static void prompt_unowned_leader(const char *name, int master, int report)
 /**
  * A reader that never owns the terminal must not take echo from it.
  *
- * `su &` is one keystroke, and this kernel raises nothing for a `tcsetattr`
- * from a background process group: only the read is guarded, by `SIGTTIN`. A
- * reader that silenced the terminal before reading would leave the shell that
- * started it echoing nothing, with no program running that knows how to put it
- * back, and killing the stopped job would not undo it because the modes belong
- * to the terminal.
+ * `su &` is one keystroke. The reader blocks the job-control signals around
+ * its `tcsetattr` (`pwauth_echo_off`), and a blocked `SIGTTOU` lets a
+ * background `tcsetattr` go ahead, on Linux as on this kernel, so only the
+ * reader's own check of the foreground group keeps the modes; the read is
+ * guarded by `SIGTTIN`. A reader that silenced the terminal before reading
+ * would leave the shell that started it echoing nothing, with no program
+ * running that knows how to put it back, and killing the stopped job would not
+ * undo it because the modes belong to the terminal.
  *
- * The host test cannot ask this question, since Darwin stops a background
- * `tcsetattr` with `SIGTTOU` before it takes effect and this kernel does not.
- * So it is asked here. Both halves are asserted: the reader stopped on
- * `SIGTTIN` instead of being handed a byte, and the terminal still echoes.
+ * The host test does not ask this question, so it is asked here, on this
+ * kernel's terminal. Both halves are asserted: the reader stopped on `SIGTTIN`
+ * instead of being handed a byte, and the terminal still echoes.
  */
 static int check_prompt_never_owned(void)
 {
@@ -2460,7 +2466,8 @@ static int check_prompt_never_owned(void)
  * A continue does not carry the terminal with it. A reader that re-applies
  * echo-off and reprints its prompt on every `SIGCONT` therefore silences a
  * terminal that now belongs to the shell and prints into the shell's session,
- * and no `SIGTTOU` stops it, since this kernel raises none for `TCSETS`. So the
+ * and no `SIGTTOU` stops it, since the reader blocks the job-control signals
+ * around its `tcsetattr` and a blocked `SIGTTOU` lets the call go ahead. So the
  * two assertions are what the shell must still have afterwards: its prompt not
  * overwritten, and a terminal that still echoes.
  *
