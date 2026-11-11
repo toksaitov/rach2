@@ -136,17 +136,23 @@ is open on.
 Return the capacity of the pipe or FIFO
 .Fa fd
 is an end of, 65536 bytes for a new pipe, as on Linux.
+A new pipe made by a caller without privilege has at most
+.Pa /proc/sys/fs/pipe-max-size ,
+and 8192 bytes once the pipes of the caller's real user hold 16384 pages,
+Linux's
+.Pa pipe-user-pages-soft .
 .It Dv F_SETPIPE_SZ
 Give the pipe or FIFO
 .Fa fd
 is an end of a capacity of at least
 .Fa arg
 bytes, rounded up to a power of two of a page or more, keeping the bytes
-it holds, and return the capacity given.
+it holds in a new buffer allocated now, and return the capacity given.
 A caller without privilege may not grow a pipe past
 .Pa /proc/sys/fs/pipe-max-size ,
-1048576 bytes, nor take the pipes grown past 65536 bytes over 64 MiB in
-all, which Linux counts for each user and this kernel for all of them.
+1048576 bytes, nor take the pages of the pipes of the real user that made
+it past 16384, 64 MiB, each pipe's whole capacity counted, as on Linux.
+A shrink is taken even from a user past that.
 GNU cat asks for 524288 bytes before it copies through
 .Xr splice 2 .
 .El
@@ -427,7 +433,7 @@ the limit.
 The kernel heap has no room for a lock.
 .It Bq Er ENOMEM
 .Dv F_SETPIPE_SZ
-found the kernel heap with no room for the new ring.
+found the kernel heap with no room for the new buffer.
 A duplication command found the kernel heap with no room for a larger
 descriptor table, as on Linux, or for the open file description it makes
 for the new descriptor and drops at once to share the old one's, which

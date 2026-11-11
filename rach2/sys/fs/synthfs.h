@@ -280,57 +280,61 @@ int synth_dev_dir_find(const char *name, int len);
 int synth_sys_count(void);
 /* The entries of kernel/hostname and domainname, whose texts are the names
  * of the moment, which procfs reads, and not the table's. */
-#define SYNTH_SYS_HOSTNAME           11
-#define SYNTH_SYS_DOMAINNAME         12
+#define SYNTH_SYS_HOSTNAME             11
+#define SYNTH_SYS_DOMAINNAME           12
 /* The entry of net/ipv4/ip_forward, which takes a write of 0. */
-#define SYNTH_SYS_IP_FORWARD         22
+#define SYNTH_SYS_IP_FORWARD           22
 /* The entries of fs/inotify's max_queued_events, max_user_instances and
  * max_user_watches, of vm/max_map_count, of kernel/overflowgid and
  * overflowuid, and of kernel/random's boot_id and uuid, whose values procfs
  * reads from the variables of their owners or makes. */
-#define SYNTH_SYS_INOTIFY_QUEUED     3
-#define SYNTH_SYS_INOTIFY_INSTANCES  4
-#define SYNTH_SYS_INOTIFY_WATCHES    5
-#define SYNTH_SYS_MAX_MAP_COUNT      32
-#define SYNTH_SYS_OVERFLOWGID        33
-#define SYNTH_SYS_OVERFLOWUID        34
-#define SYNTH_SYS_BOOT_ID            36
-#define SYNTH_SYS_UUID               37
+#define SYNTH_SYS_INOTIFY_QUEUED       3
+#define SYNTH_SYS_INOTIFY_INSTANCES    4
+#define SYNTH_SYS_INOTIFY_WATCHES      5
+#define SYNTH_SYS_MAX_MAP_COUNT        32
+#define SYNTH_SYS_OVERFLOWGID          33
+#define SYNTH_SYS_OVERFLOWUID          34
+#define SYNTH_SYS_BOOT_ID              36
+#define SYNTH_SYS_UUID                 37
 /* The entries of fs/nr_open, fs/file-max and fs/file-nr, and of
  * kernel/randomize_va_space, whose values procfs reads from fs/fd.h's and
  * mm/vm.h's variables; file-nr alone takes no write. */
-#define SYNTH_SYS_NR_OPEN            38
-#define SYNTH_SYS_FILE_MAX           39
-#define SYNTH_SYS_FILE_NR            40
-#define SYNTH_SYS_RANDOMIZE_VA_SPACE 41
+#define SYNTH_SYS_NR_OPEN              38
+#define SYNTH_SYS_FILE_MAX             39
+#define SYNTH_SYS_FILE_NR              40
+#define SYNTH_SYS_RANDOMIZE_VA_SPACE   41
 /* net/ipv6/conf, the directory of IPv6's settings, which holds those of
  * all interfaces, of the default for a new one, and of each interface the
  * caller sees, `lo`, the cards' and the radios', one directory for each of
  * the SYNTH_IPV6_IFACES slots an interface holds while it is there
  * (`netdev_slot`, NETDEV_MAX + 1 of them); and the files of each, in this
  * order, which procfs reads and writes through nd6.h. */
-#define SYNTH_SYS_IPV6_CONF          43
-#define SYNTH_IPV6_IFACES            5
-#define SYNTH_IPV6_DIRS              (2 + SYNTH_IPV6_IFACES)
-#define SYNTH_IPV6_ACCEPT_RA         0
-#define SYNTH_IPV6_AUTOCONF          1
-#define SYNTH_IPV6_DISABLE           2
-#define SYNTH_IPV6_FORWARDING        3
-#define SYNTH_IPV6_RA_DEFRTR_METRIC  4
-#define SYNTH_IPV6_STABLE_SECRET     5
-#define SYNTH_IPV6_USE_TEMPADDR      6
-#define SYNTH_IPV6_KEYS              7
+#define SYNTH_SYS_IPV6_CONF            43
+#define SYNTH_IPV6_IFACES              5
+#define SYNTH_IPV6_DIRS                (2 + SYNTH_IPV6_IFACES)
+#define SYNTH_IPV6_ACCEPT_RA           0
+#define SYNTH_IPV6_AUTOCONF            1
+#define SYNTH_IPV6_DISABLE             2
+#define SYNTH_IPV6_FORWARDING          3
+#define SYNTH_IPV6_RA_DEFRTR_METRIC    4
+#define SYNTH_IPV6_STABLE_SECRET       5
+#define SYNTH_IPV6_USE_TEMPADDR        6
+#define SYNTH_IPV6_KEYS                7
 /* The entries of net/ipv4's tcp_keepalive_time, tcp_keepalive_intvl,
  * tcp_keepalive_probes, tcp_mtu_probing and tcp_retries2, in that order,
  * whose values procfs reads from tcp.h's variables. */
-#define SYNTH_SYS_TCP_KEEPALIVE_TIME 44
-#define SYNTH_SYS_TCP_RETRIES2       48
+#define SYNTH_SYS_TCP_KEEPALIVE_TIME   44
+#define SYNTH_SYS_TCP_RETRIES2         48
 /* The entry of user/max_mnt_namespaces, whose value is the limit of the
  * reader's user namespace, which procfs reads and writes through ns.h. */
-#define SYNTH_SYS_MAX_MNT_NAMESPACES 53
+#define SYNTH_SYS_MAX_MNT_NAMESPACES   53
 /* The entry of fs/pipe-max-size, whose value procfs reads from and writes
  * to ipc/pipe.h's `pipe_max_size`. */
-#define SYNTH_SYS_PIPE_MAX_SIZE      54
+#define SYNTH_SYS_PIPE_MAX_SIZE        54
+/* The entries of fs/pipe-user-pages-hard and fs/pipe-user-pages-soft, whose
+ * values are ipc/pipe.h's `pipe_user_pages_hard` and `_soft`. */
+#define SYNTH_SYS_PIPE_USER_PAGES_HARD 55
+#define SYNTH_SYS_PIPE_USER_PAGES_SOFT 56
 /**
  * Whether `entry` is under net/ipv6/conf: 1 with the name of its directory
  * in `*dir`, `all`, `default` or an interface's, and in `*key` the

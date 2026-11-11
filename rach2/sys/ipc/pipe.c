@@ -26,11 +26,9 @@
  * both ends are closed. */
 static pipe_t *pipes;
 
-int pipe_max_size = PIPE_MAX_SIZE;
-
-/* The bytes the live pipes' rings hold past PIPE_BUF_SIZE each, counted for
- * PIPE_GROWN_MAX whether or not a ring is allocated yet. */
-static uint32_t pipe_grown;
+uint32_t pipe_max_size = PIPE_MAX_SIZE;
+unsigned long pipe_user_pages_soft = PIPE_USER_PAGES_SOFT;
+unsigned long pipe_user_pages_hard;
 
 void pipe_init_pool(void)
 {
@@ -67,17 +65,79 @@ static uint32_t pipe_next_inode(void)
     }
 }
 
-/** A new pipe on the live list, with one end of each kind counted open and
- * no ring yet; NULL when the heap has no room. */
+/**
+ * The pages the live pipes of the real user `user` hold, Linux's
+ * `user->pipe_bufs`: each pipe's ring size in pages, whether or not the ring
+ * is allocated yet.
+ */
+static uint32_t pipe_user_pages(uint32_t user)
+{
+    const pipe_t *p;
+    uint32_t pages = 0;
+
+    for (p = pipes; p; p = p->next) {
+        if (p->user == user) {
+            pages += p->size / PAGE_SIZE;
+        }
+    }
+    return pages;
+}
+
+uint32_t pipe_round_size(uint32_t size)
+{
+    uint32_t want = PAGE_SIZE;
+
+    if (size > 0x80000000u) {
+        return 0;
+    }
+    while (want < size) {
+        want <<= 1;
+    }
+    return want;
+}
+
+/** Whether `pages` passes the limit `limit` of a user's pipe pages, 0
+ * being none, as Linux's `too_many_pipe_buffers_soft` and `_hard` judge. */
+static int pipe_pages_over(unsigned long pages, unsigned long limit)
+{
+    return limit != 0 && pages > limit;
+}
+
+/**
+ * A new pipe on the live list, with one end of each kind counted open and
+ * no ring yet; NULL when the heap has no room or, for an unprivileged
+ * caller, when its user's pipes would pass `pipe_user_pages_hard`. It is
+ * charged to the caller's real user, and its size is Linux's
+ * `alloc_pipe_info`'s: PIPE_BUF_SIZE, but for an unprivileged caller at
+ * most `pipe_max_size`, and PIPE_MIN_PAGES once the user's pipes would pass
+ * `pipe_user_pages_soft`.
+ */
 static pipe_t *pipe_alloc(void)
 {
-    pipe_t *p = kzalloc(sizeof(*p));
+    uint32_t user = current_proc ? current_proc->ruid : 0;
+    int privileged = !current_proc || proc_privileged(current_proc);
+    uint32_t size = PIPE_BUF_SIZE, held;
+    pipe_t *p;
 
+    if (!privileged) {
+        held = pipe_user_pages(user);
+        if (size > pipe_max_size) {
+            size = pipe_max_size;
+        }
+        if (pipe_pages_over((unsigned long)held + size / PAGE_SIZE, pipe_user_pages_soft)) {
+            size = PIPE_MIN_PAGES * PAGE_SIZE;
+        }
+        if (pipe_pages_over((unsigned long)held + size / PAGE_SIZE, pipe_user_pages_hard)) {
+            return NULL;
+        }
+    }
+    p = kzalloc(sizeof(*p));
     if (!p) {
         return NULL;
     }
     p->in_use = 1;
-    p->size = PIPE_BUF_SIZE;
+    p->size = size;
+    p->user = user;
     p->inode = pipe_next_inode();
     p->read_open = 1;
     p->write_open = 1;
@@ -101,9 +161,6 @@ static void pipe_free(pipe_t *p)
     }
     if (*link) {
         *link = p->next;
-    }
-    if (p->size > PIPE_BUF_SIZE) {
-        pipe_grown -= p->size - PIPE_BUF_SIZE;
     }
     kfree(p->buf);
     kfree(p);
@@ -563,59 +620,61 @@ int32_t pipe_get_size(const fd_entry_t *e)
 }
 
 /**
- * A new ring is allocated and the bytes buffered copied to the slots their
- * counters name in it, so `head` and `tail` keep counting as they did. A
- * growth wakes the writers, which may now have room. The new size is
- * checked against the bytes buffered in bytes, where Linux checks it in
- * pages, each write of less than a page taking one, so a shrink Linux
- * refuses with EBUSY for a pipe of many small writes may succeed here.
+ * A new ring is allocated, whether or not the pipe had one, as Linux's
+ * `pipe_resize_ring` allocates its slots, so that a size the heap cannot
+ * give fails here and not at every write; the bytes buffered are copied to
+ * the slots their counters name in it, so `head` and `tail` keep counting
+ * as they did. A growth wakes the writers, which may now have room. The
+ * limits are Linux's `pipe_set_size`'s, and a shrink passes them even for a
+ * user over the soft limit. The new size is checked against the bytes
+ * buffered in bytes, where Linux checks it in pages, each write of less
+ * than a page taking one, so a shrink Linux refuses with EBUSY for a pipe
+ * of many small writes may succeed here.
  */
 int32_t pipe_set_size(fd_entry_t *e, uint32_t size, int privileged)
 {
     pipe_t *p = (pipe_t *)e->priv;
-    uint32_t want = PAGE_SIZE, grown, done = 0, n = pipe_available(p);
+    uint32_t want = pipe_round_size(size), done = 0, n = pipe_available(p);
     uint8_t *ring;
 
-    if (size > 0x80000000u) {
+    if (want == 0) {
         return -EINVAL;
     }
-    while (want < size) {
-        want <<= 1;
-    }
-    grown = pipe_grown - (p->size > PIPE_BUF_SIZE ? p->size - PIPE_BUF_SIZE : 0) +
-            (want > PIPE_BUF_SIZE ? want - PIPE_BUF_SIZE : 0);
-    if (want > p->size && !privileged &&
-        (want > (uint32_t)pipe_max_size || grown > PIPE_GROWN_MAX)) {
-        return -EPERM;
-    }
-    if (n > want) {
-        return -EBUSY;
+    if (want > p->size && !privileged) {
+        unsigned long pages =
+            (unsigned long)pipe_user_pages(p->user) - p->size / PAGE_SIZE + want / PAGE_SIZE;
+
+        if (want > pipe_max_size || pipe_pages_over(pages, pipe_user_pages_soft) ||
+            pipe_pages_over(pages, pipe_user_pages_hard)) {
+            return -EPERM;
+        }
     }
     if (want == p->size) {
         return (int32_t)want;
     }
-    if (p->buf) {
-        ring = kmalloc(want);
-        if (!ring) {
-            return -ENOMEM;
-        }
-        while (done < n) {
-            uint32_t s = (p->head + done) & (p->size - 1), t = (p->head + done) & (want - 1);
-            uint32_t chunk = p->size - s;
-
-            if (chunk > want - t) {
-                chunk = want - t;
-            }
-            if (chunk > n - done) {
-                chunk = n - done;
-            }
-            k_memcpy(&ring[t], &p->buf[s], chunk);
-            done += chunk;
-        }
-        kfree(p->buf);
-        p->buf = ring;
+    ring = kmalloc(want);
+    if (!ring) {
+        return -ENOMEM;
     }
-    pipe_grown = grown;
+    if (n > want) {
+        kfree(ring);
+        return -EBUSY;
+    }
+    while (done < n) {
+        uint32_t s = (p->head + done) & (p->size - 1), t = (p->head + done) & (want - 1);
+        uint32_t chunk = p->size - s;
+
+        if (chunk > want - t) {
+            chunk = want - t;
+        }
+        if (chunk > n - done) {
+            chunk = n - done;
+        }
+        k_memcpy(&ring[t], &p->buf[s], chunk);
+        done += chunk;
+    }
+    kfree(p->buf);
+    p->buf = ring;
     if (want > p->size) {
         pipe_wake(p, &p->write_wq, WQ_ROOM);
     }
@@ -805,7 +864,7 @@ int32_t fifo_attach(fd_entry_t *e, const void *mnt, uint64_t ino, int flags)
     if (!p) {
         p = pipe_alloc();
         if (!p) {
-            return -ENFILE;
+            return -ENOMEM;
         }
         p->read_open = 0;
         p->write_open = 0;
@@ -862,8 +921,9 @@ int32_t fifo_attach(fd_entry_t *e, const void *mnt, uint64_t ino, int flags)
  * read end's descriptor stored first and the write end's second, each with
  * O_CLOEXEC and O_NONBLOCK as `flags` ask. Returns 0, or -ESRCH with no
  * current process, -EINVAL for any other flag, -ENFILE when the heap has no
- * room for a pipe, -EMFILE or -ENOMEM from the descriptor table, or -EFAULT
- * for a bad array.
+ * room for a pipe or the caller's user is at `pipe_user_pages_hard`, as on
+ * Linux, -EMFILE or -ENOMEM from the descriptor table, or -EFAULT for a bad
+ * array.
  *
  * Both descriptors are reserved, their numbers copied to the caller, and
  * only then given their ends, as Linux's do_pipe2 does: the copy can sleep,

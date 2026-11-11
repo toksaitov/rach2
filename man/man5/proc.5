@@ -969,8 +969,20 @@ separated by tabs;
 .Dv F_SETPIPE_SZ
 of
 .Xr fcntl 2
-gives a caller without privilege, which a write of 4096 or more sets
-as written, where Linux rounds it up to a power of two;
+gives a caller without privilege and the most a new pipe of one has,
+which a write of a number up to 2147483648 sets, rounded up to a power of
+two of 4096 or more, as Linux rounds it;
+.Pa fs/pipe-user-pages-soft ,
+16384, the pages the pipes of one real user may hold, each pipe's whole
+capacity counted, before a new pipe of a caller without privilege gets
+8192 bytes and
+.Dv F_SETPIPE_SZ
+refuses it a growth with
+.Er EPERM ;
+.Pa fs/pipe-user-pages-hard ,
+0, the pages past which such a caller's new pipe fails and its growth is
+refused, none while 0;
+both take any unsigned long, as on Linux;
 .Pa fs/mqueue/msg_default
 and
 .Pa msg_max ,

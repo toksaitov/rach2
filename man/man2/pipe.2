@@ -133,7 +133,9 @@ or
 .It Bq Er EMFILE
 Two descriptors are not free below the process's descriptor limit.
 .It Bq Er ENFILE
-The kernel heap cannot allocate the pipe.
+The kernel heap cannot allocate the pipe, or the caller has no privilege
+and the pipes of its real user would pass
+.Pa /proc/sys/fs/pipe-user-pages-hard .
 .It Bq Er ENOMEM
 The kernel heap has no room for a larger descriptor table or for an
 open file description.
