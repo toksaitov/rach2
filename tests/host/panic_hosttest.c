@@ -91,6 +91,10 @@ void netconsole_putc(char c)
     (void)c;
 }
 
+/** Netconsole has no send to forget here. */
+void netconsole_panic(void)
+{}
+
 /** No ramoops region here: the console zone takes nothing. */
 void pstore_console_write(const char *text, uint32_t n)
 {
