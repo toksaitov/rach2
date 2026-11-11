@@ -3,6 +3,7 @@
  * code.
  *
  * host-deps: tests/host/compat/kheap_host.c
+ * host-deps: tests/host/compat/fd_flat.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
  * `io/epoll.c` and `proc/wait_queue.c` are included whole. A descriptor is an
@@ -114,10 +115,10 @@ void kirq_restore(uint32_t flags)
 /** The entry of `fd` while it is open. */
 fd_entry_t *fd_get(fd_table_t *t, int fd)
 {
-    if (!t || fd < 0 || fd >= t->cap || t->entries[fd].type == FD_TYPE_NONE) {
+    if (!t || fd < 0 || fd >= t->cap || t->chunks[0][fd].type == FD_TYPE_NONE) {
         return NULL;
     }
-    return &t->entries[fd];
+    return &t->chunks[0][fd];
 }
 
 /** Put `ofd` on the list of live descriptions, or with `gone` take it off. */
@@ -140,7 +141,7 @@ int fd_alloc(fd_table_t *t)
     int fd;
 
     for (fd = 3; fd < t->cap; fd++) {
-        if (t->entries[fd].type == FD_TYPE_NONE) {
+        if (t->chunks[0][fd].type == FD_TYPE_NONE) {
             struct open_file *ofd = kzalloc(sizeof(*ofd));
 
             if (!ofd) {
@@ -149,7 +150,7 @@ int fd_alloc(fd_table_t *t)
             ofd->refcount = 1;
             ofd->serial = ++serials;
             list_live(ofd, 0);
-            t->entries[fd].ofd = ofd;
+            t->chunks[0][fd].ofd = ofd;
             return fd;
         }
     }
@@ -282,7 +283,7 @@ static int create(void)
 /** The entry of `fd` in the calling process's table. */
 static fd_entry_t *slot(int fd)
 {
-    return &current_proc->fds->entries[fd];
+    return &current_proc->fds->chunks[0][fd];
 }
 
 /** A model object's number. */
@@ -687,11 +688,11 @@ int main(void)
         entries[i].type = FD_TYPE_NONE;
     }
     entries[0].type = entries[1].type = entries[2].type = FD_TYPE_CONSOLE;
-    table.entries = entries;
+    table.chunks[0] = entries;
     table.cap = SLOTS;
     table.refs = 1;
     proc.fds = &table;
-    child_table.entries = child_entries;
+    child_table.chunks[0] = child_entries;
     child_table.cap = SLOTS;
     child_table.refs = 1;
     child.fds = &child_table;

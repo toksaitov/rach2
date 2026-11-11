@@ -1,5 +1,6 @@
 /* Check the KVM VFIO bridge's descriptor ownership and DMA cache policy.
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
+ * host-deps: tests/host/compat/fd_flat.c
  */
 #include "kvm/vfio.c"
 
@@ -11,7 +12,7 @@ static int failures, live, fail_alloc, fail_fd, fail_out, caller_ok = 1;
 static int releases, coherency_on, coherency_off, waits;
 static fd_entry_t entries[16];
 static struct open_file descriptions[16];
-static fd_table_t table = {entries, 16, 1, 0, NULL};
+static fd_table_t table = {{entries}, 16, 1, 0, SPINLOCK_INIT, NULL};
 static process_t caller;
 struct percpu cpu_table[NR_CPUS] = {{.current = &caller}};
 unsigned int host_cpu;
@@ -90,10 +91,10 @@ int fd_alloc(fd_table_t *t)
         return -EMFILE;
     }
     for (i = 0; i < t->cap; i++) {
-        if (!t->entries[i].ofd) {
+        if (!t->chunks[0][i].ofd) {
             zero(&descriptions[i], sizeof(descriptions[i]));
             descriptions[i].refcount = 1;
-            t->entries[i].ofd = &descriptions[i];
+            t->chunks[0][i].ofd = &descriptions[i];
             return i;
         }
     }
@@ -103,7 +104,8 @@ int fd_alloc(fd_table_t *t)
 /** Look up a published descriptor. */
 fd_entry_t *fd_get(fd_table_t *t, int fd)
 {
-    return fd >= 0 && fd < t->cap && t->entries[fd].type != FD_TYPE_NONE ? &t->entries[fd] : NULL;
+    return fd >= 0 && fd < t->cap && t->chunks[0][fd].type != FD_TYPE_NONE ? &t->chunks[0][fd]
+                                                                           : NULL;
 }
 
 /** Hold one file description. */
@@ -122,8 +124,8 @@ void fd_ofd_unref(struct open_file *f)
 /** Release the slot after the caller has released its backing object. */
 int fd_free(fd_table_t *t, int fd)
 {
-    fd_ofd_unref(t->entries[fd].ofd);
-    zero(&t->entries[fd], sizeof(t->entries[fd]));
+    fd_ofd_unref(t->chunks[0][fd].ofd);
+    zero(&t->chunks[0][fd], sizeof(t->chunks[0][fd]));
     return 0;
 }
 

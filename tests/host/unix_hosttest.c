@@ -6,6 +6,7 @@
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  * host-deps: rach2/sys/tick.c
  * host-deps: rach2/sys/fs/sleeplock.c
+ * host-deps: tests/host/compat/fd_flat.c
  *
  * `ipc/unix.c`, `ipc/pipe.c` and the checked user copy are the kernel's,
  * included whole to reach their static state. The descriptor table the
@@ -648,7 +649,7 @@ int fd_alloc(fd_table_t *table)
     int i;
 
     for (i = 0; i < table->cap; i++) {
-        fd_entry_t *e = &table->entries[i];
+        fd_entry_t *e = &table->chunks[0][i];
 
         if (e->type == FD_TYPE_NONE && !e->ofd) {
             e->ofd = kzalloc(sizeof(*e->ofd));
@@ -674,7 +675,7 @@ int fd_free(fd_table_t *table, int fd)
     if (fd < 0 || fd >= table->cap) {
         return -1;
     }
-    e = &table->entries[fd];
+    e = &table->chunks[0][fd];
     if (e->type == FD_TYPE_NONE && !e->ofd) {
         return -1;
     }
@@ -700,7 +701,7 @@ fd_entry_t *fd_get(fd_table_t *table, int fd)
     if (fd < 0 || fd >= table->cap) {
         return NULL;
     }
-    e = &table->entries[fd];
+    e = &table->chunks[0][fd];
     return e->type == FD_TYPE_NONE || (e->flags & FD_FLAG_CLOSING) ? NULL : e;
 }
 
@@ -718,7 +719,7 @@ static int holders(const krffs_node_t *node, const fd_entry_t *except)
     int i;
 
     for (i = 0; i < shared.cap; i++) {
-        const fd_entry_t *e = &shared.entries[i];
+        const fd_entry_t *e = &shared.chunks[0][i];
 
         if (e != except && e->type == FD_TYPE_FILE && e->node == node) {
             n++;
@@ -943,13 +944,13 @@ static uint32_t path_at(uint32_t addr, const char *path)
 /** Slot `fd` of the shared table, whatever its state. */
 static fd_entry_t *fd_at(int fd)
 {
-    return &shared.entries[fd];
+    return &shared.chunks[0][fd];
 }
 
 /** The socket of slot `fd` of the shared table. */
 static struct unix_sock *sock_at(int fd)
 {
-    return (struct unix_sock *)shared.entries[fd].priv;
+    return (struct unix_sock *)shared.chunks[0][fd].priv;
 }
 
 /** close(2) in the shared table, as `close_fd` closes a descriptor no other
@@ -978,7 +979,7 @@ static int open_orphan(int n)
     if (fd < 0) {
         return fd;
     }
-    e = &shared.entries[fd];
+    e = &shared.chunks[0][fd];
     e->node = &nodes[n];
     e->ofd->vnode = &nodes[n];
     e->flags = FD_FLAG_READ | FD_FLAG_WRITE;
@@ -1763,7 +1764,7 @@ int main(void)
 {
     unix_init();
     pipe_init_pool();
-    shared.entries = slots;
+    shared.chunks[0] = slots;
     shared.cap = SLOTS;
     shared.refs = 2;
     dirs.umask = 022;

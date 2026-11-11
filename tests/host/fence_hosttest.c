@@ -1,6 +1,7 @@
 /* Fence completion, reservations, sync files and software timeline lifetimes.
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
+ * host-deps: tests/host/compat/fd_flat.c
  */
 #include "dmabuf/fence.c"
 #include "dmabuf/dmabuf.c"
@@ -136,9 +137,9 @@ int fd_alloc(fd_table_t *t)
 {
     int i;
     for (i = 0; i < 64; i++)
-        if (t->entries[i].type == FD_TYPE_NONE && !t->entries[i].ofd) {
+        if (t->chunks[0][i].type == FD_TYPE_NONE && !t->chunks[0][i].ofd) {
             k_memset(&descriptions[i], 0, sizeof(descriptions[i]));
-            t->entries[i].ofd = &descriptions[i];
+            t->chunks[0][i].ofd = &descriptions[i];
             return i;
         }
     return -EMFILE;
@@ -146,15 +147,15 @@ int fd_alloc(fd_table_t *t)
 /** Find a live model descriptor. */
 fd_entry_t *fd_get(fd_table_t *t, int fd)
 {
-    return fd >= 0 && fd < 64 && t->entries[fd].type != FD_TYPE_NONE ? &t->entries[fd] : NULL;
+    return fd >= 0 && fd < 64 && t->chunks[0][fd].type != FD_TYPE_NONE ? &t->chunks[0][fd] : NULL;
 }
 /** Clear a model descriptor's slot, reserved or not, without closing its
  * object, as the kernel's fd_free does. */
 int fd_free(fd_table_t *t, int fd)
 {
-    if (fd < 0 || fd >= 64 || (t->entries[fd].type == FD_TYPE_NONE && !t->entries[fd].ofd))
+    if (fd < 0 || fd >= 64 || (t->chunks[0][fd].type == FD_TYPE_NONE && !t->chunks[0][fd].ofd))
         return -1;
-    k_memset(&t->entries[fd], 0, sizeof(t->entries[fd]));
+    k_memset(&t->chunks[0][fd], 0, sizeof(t->chunks[0][fd]));
     return 0;
 }
 /** Close a model descriptor: its object's close, then its slot. */
@@ -750,7 +751,7 @@ int main(int argc, char **argv)
 {
     int i;
     current_proc = &self;
-    table.entries = slots;
+    table.chunks[0] = slots;
     table.cap = 64;
     self.fds = &table;
     if (argc == 2 && same(argv[1], "--interrupt-only")) {

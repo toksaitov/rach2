@@ -144,8 +144,8 @@ static void lifecycle_failed_close_row(void)
     if (fd < 0) {
         return;
     }
-    table.entries[fd].type = FD_TYPE_FILE;
-    ofd = table.entries[fd].ofd;
+    fd_slot(&table, fd)->type = FD_TYPE_FILE;
+    ofd = fd_slot(&table, fd)->ofd;
     ofd->vmnt = &mnt;
     ofd->vnode = node;
     ofd->fhandle = handle;

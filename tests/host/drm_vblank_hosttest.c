@@ -5,6 +5,7 @@
  * drm_vblank64_hosttest.c runs the same rows with x86-64's structures.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/fd_flat.c
  * host-deps: tests/host/compat/spinlock_host.c
  *
  * The fake driver has two CRTCs, each with a primary plane, an encoder and
@@ -105,9 +106,9 @@ int fd_alloc(fd_table_t *t)
     int i;
 
     for (i = 0; i < 64; i++) {
-        if (t->entries[i].type == FD_TYPE_NONE) {
+        if (t->chunks[0][i].type == FD_TYPE_NONE) {
             k_memset(&descriptions[i], 0, sizeof(descriptions[i]));
-            t->entries[i].ofd = &descriptions[i];
+            t->chunks[0][i].ofd = &descriptions[i];
             return i;
         }
     }
@@ -117,7 +118,7 @@ int fd_alloc(fd_table_t *t)
 /** A live descriptor of the model's table, or NULL. */
 fd_entry_t *fd_get(fd_table_t *t, int fd)
 {
-    return fd >= 0 && fd < 64 && t->entries[fd].type != FD_TYPE_NONE ? &t->entries[fd] : NULL;
+    return fd >= 0 && fd < 64 && t->chunks[0][fd].type != FD_TYPE_NONE ? &t->chunks[0][fd] : NULL;
 }
 
 /** Close a descriptor, releasing its object. */
@@ -349,7 +350,7 @@ static void device_init(void)
     fa.atomic = fa.universal_planes = 1;
     dev.master = &fa;
     fa.is_master = 1;
-    table.entries = slots;
+    table.chunks[0] = slots;
     table.cap = 64;
     kms_self.fds = &table;
     model_wait = wait_hook;

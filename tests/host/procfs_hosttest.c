@@ -16,6 +16,7 @@
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/lib/kstd.c
  * host-deps: rach2/sys/tick.c
+ * host-deps: tests/host/compat/fd_flat.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
  *
  * The test includes the source whole, with its exports declared static
@@ -637,7 +638,7 @@ int fd_is_valid(fd_table_t *t, int fd)
     if (!t || fd < 0 || fd >= t->cap) {
         return 0;
     }
-    return t->entries[fd].type != FD_TYPE_NONE && !(t->entries[fd].flags & FD_FLAG_CLOSING);
+    return t->chunks[0][fd].type != FD_TYPE_NONE && !(t->chunks[0][fd].flags & FD_FLAG_CLOSING);
 }
 
 /** The link rows use a pipe end, which names no device, terminal, socket,
@@ -1613,7 +1614,7 @@ static void descriptor_links(void)
     char buf[32];
 
     process.fds = &table;
-    table.entries = entries;
+    table.chunks[0] = entries;
     table.cap = 1;
     entries[0].type = FD_TYPE_PIPE;
     entries[0].flags = FD_FLAG_READ;
@@ -1645,7 +1646,7 @@ static void mem_descriptor(void)
     space.dumpable = 1;
     process.mm = &space;
     process.fds = &table;
-    table.entries = entries;
+    table.chunks[0] = entries;
     table.cap = 1;
     k_memset(&entries[0], 0, sizeof(entries[0]));
     entries[0].ofd = &mem_ofd;
@@ -2887,7 +2888,7 @@ static void pci_config_rows(void)
     vp.procfile = SYSFS_PCI_CONFIG;
     vp.syskey = 0x20;
     process.fds = &table;
-    table.entries = entries;
+    table.chunks[0] = entries;
     table.cap = 1;
     k_memset(e, 0, sizeof(*e));
     k_memset(&mem_ofd, 0, sizeof(mem_ofd));
@@ -2958,7 +2959,7 @@ static int bar_file_open(int attr, int flags)
     vp.procfile = attr;
     vp.syskey = 0x20;
     process.fds = &table;
-    table.entries = entries;
+    table.chunks[0] = entries;
     table.cap = 1;
     k_memset(e, 0, sizeof(*e));
     k_memset(&mem_ofd, 0, sizeof(mem_ofd));

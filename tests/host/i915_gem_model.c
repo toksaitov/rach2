@@ -788,9 +788,9 @@ int fd_alloc(fd_table_t *t)
     int i;
 
     for (i = 0; i < 64; i++) {
-        if (t->entries[i].type == FD_TYPE_NONE) {
+        if (t->chunks[0][i].type == FD_TYPE_NONE) {
             k_memset(&descriptions[i], 0, sizeof(descriptions[i]));
-            t->entries[i].ofd = &descriptions[i];
+            t->chunks[0][i].ofd = &descriptions[i];
             return i;
         }
     }
@@ -799,7 +799,7 @@ int fd_alloc(fd_table_t *t)
 
 fd_entry_t *fd_get(fd_table_t *t, int fd)
 {
-    return fd >= 0 && fd < 64 && t->entries[fd].type != FD_TYPE_NONE ? &t->entries[fd] : NULL;
+    return fd >= 0 && fd < 64 && t->chunks[0][fd].type != FD_TYPE_NONE ? &t->chunks[0][fd] : NULL;
 }
 
 int fd_free(fd_table_t *t, int fd)
@@ -857,7 +857,7 @@ void drm_dev_put(struct drm_device *dev)
 /** Give the test's process its descriptors and its address space. */
 static void model_start(void)
 {
-    table.entries = slots;
+    table.chunks[0] = slots;
     table.cap = 64;
     self.fds = &table;
     self.mm = &user_mm;

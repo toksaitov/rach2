@@ -3,6 +3,7 @@
  * proc/wait_queue.c, over the kernel's line discipline.
  *
  * host-deps: rach2/sys/tty/n_tty.c rach2/sys/wcwidth.c
+ * host-deps: tests/host/compat/fd_flat.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
  * The test's `schedule` runs a producer only after the consumer has blocked,

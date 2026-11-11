@@ -3,6 +3,7 @@
  * user page is resolved.
  *
  * host-deps:
+ * host-deps: tests/host/compat/fd_flat.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
  * Pipe, ring and checked-copy code are the kernel's. User addresses refer to
