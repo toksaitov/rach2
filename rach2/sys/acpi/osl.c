@@ -279,6 +279,7 @@ ACPI_STATUS AcpiOsCreateLock(ACPI_SPINLOCK *out)
     if (!lock) {
         return AE_NO_MEMORY;
     }
+    spin_lock_init(lock, "acpi_lock");
     *out = lock;
     return AE_OK;
 }
