@@ -1,0 +1,12 @@
+<6>[383.194000] shutdown: root: unmounted
+<6>[383.194000] shutdown: Stopping the system. Goodbye!
+<6>[9.060000] net: eth0: IPv4 192.168.0.106/24
+<6>[9.292000] net: wlan0: IPv6 fe80::baee:65ff:fe32:8915/64 added
+<6>[9.484000] net: eth0: IPv6 fd91:381e:e667:4a0c:ed8a:e65:4c38:4f64/64 added
+<6>[9.484000] net: eth0: IPv6 fd91:381e:e667:4a0c:5312:1a87:29b9:274f/64 added
+<6>[10.766000] wlan: wlan0: key: pairwise: last pn 0, decrypt errors 0, duplicates 0, replays 0
+<6>[10.848000] net: wlan0: IPv4 192.168.0.105/24
+<6>[12.393000] net: wlan0: IPv6 fd91:381e:e667:4a0c:a1e:e4b1:d013:473b/64 added
+<6>[12.393000] net: wlan0: IPv6 fd91:381e:e667:4a0c:fe:625:29f4:cb48/64 added
+<6>[262.024000] wlan: wlan0: beacon: 60:a4:b7:a4:eb:63: on channel 10, not 4
+<6>[263.035000] wlan: wlan0: switched: 60:a4:b7:a4:eb:63: to channel 10
