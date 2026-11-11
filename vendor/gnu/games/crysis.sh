@@ -12,7 +12,8 @@ die()
 # Print the commands, whose game files and state all live under /data.
 usage()
 {
-    echo 'usage: crysis.sh install SETUP.exe | verify | run [--umu] [--32] [ARGUMENT...]'
+    echo 'usage: crysis.sh install SETUP.exe | verify |' \
+        'run [--umu] [--32] [--prefix DIR] [ARGUMENT...]'
 }
 
 action=${1:-}
@@ -86,10 +87,16 @@ export STEAM_COMPAT_CLIENT_INSTALL_PATH
 mkdir -p "$base/saves" "$MESA_SHADER_CACHE_DIR" "$PROTON_LOG_DIR"
 route=
 bin=Bin64
+compat=$base/compat
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --umu) route=--umu; shift ;;
         --32) bin=Bin32; shift ;;
+        --prefix)
+            [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+            case "$2" in /data/*) compat=$2 ;; *) die "the prefix must be under /data: $2" ;; esac
+            shift 2
+            ;;
         *) break ;;
     esac
 done
@@ -102,5 +109,5 @@ if [ -n "$route" ]; then
     export STEAM_COMPAT_INSTALL_PATH PRESSURE_VESSEL_FILESYSTEMS_RW
 fi
 cd "$base/game/$bin"
-exec rach2-game ${route:+"$route"} --id 17300 --prefix "$base/compat" "$PWD/Crysis.exe" \
+exec rach2-game ${route:+"$route"} --id 17300 --prefix "$compat" "$PWD/Crysis.exe" \
     -dx9 -userpath 'Z:\data\crysis\saves' "$@"
