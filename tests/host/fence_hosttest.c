@@ -243,8 +243,9 @@ static void drop_point(struct dma_fence *f, struct dma_fence_cb *cb)
 
 /**
  * An interrupt that frees the owner of a callback already taken off the
- * list but not yet called: point c2 on f2 follows point c1 on f1, and c2's
- * waiter holds the only reference to c2, which holds the only one to c1.
+ * list but not yet called: point c2 on f2 follows point c1 on f1, both
+ * asked for their signal, and c2's waiter holds the only reference to c2,
+ * which holds the only one to c1.
  * While f1 signals, after a callback that raises f2's interrupt and before
  * c1's callback, the interrupt completes c2 and its waiter frees both
  * points. dma_fence_signal runs f1's callbacks with interrupts masked, so
@@ -261,8 +262,11 @@ static void interrupt_cases(void)
     irq_f2 = new_fence(context + 1, 1);
     dma_fence_chain_init(c1, NULL, dma_fence_get(irq_f1), 1);
     dma_fence_chain_init(c2, &c1->base, dma_fence_get(irq_f2), 2);
-    CHECK(!dma_fence_is_signaled(&c1->base) && !dma_fence_is_signaled(&c2->base),
-          "both points wait on their fences");
+    CHECK(!dma_fence_is_signaled(&c1->base) && !dma_fence_is_signaled(&c2->base) && !irq_f1->cbs &&
+              !irq_f2->cbs,
+          "a query of both points waits on neither fence, as Linux's");
+    dma_fence_enable_sw_signaling(&c1->base);
+    CHECK(irq_f1->cbs && irq_f1->listened, "the first point, enabled, waits on its fence");
     CHECK(!dma_fence_add_callback(&c2->base, &waiter, drop_point), "the second point's waiter");
     CHECK(!dma_fence_add_callback(irq_f1, &raise, raise_f2), "the interrupt's trigger");
     dma_fence_signal(irq_f1);
@@ -286,6 +290,8 @@ static void merge_cases(void)
     inputs[2] = d;
     f = dma_fence_merge(inputs, 3);
     CHECK(f && dma_fence_count(f) == 2, "merge keeps latest timeline point");
+    CHECK(!b->cbs && !d->cbs && !b->listened && !d->listened,
+          "a merge asks its fences for nothing until it is waited for, as Linux's array");
     inputs[0] = f;
     inputs[1] = d;
     g = dma_fence_merge(inputs, 2);

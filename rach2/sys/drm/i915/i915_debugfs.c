@@ -1090,9 +1090,9 @@ static void engine_request(struct emit *e, struct i915_engine *en, struct i915_r
           i915_engine_passed(en, rq->seqno) ? "!"
           : started                         ? "*"
                                             : "",
-          f->signaled            ? "+"
-          : f->signaling_enabled ? "-"
-                                 : "",
+          f->signaled   ? "+"
+          : f->listened ? "-"
+                        : "",
           ticks_ms(rtc_ticks_now() - rq->emitted), f->ops->get_timeline_name(f));
     emitf(e, "\t\tring->start:  0x%08x\n\t\tring->head:   0x%08x\n", en->ring_ggtt, en->head);
     emitf(e, "\t\tring->tail:   0x%08x\n\t\tring->emit:   0x%08x\n", en->hw_tail, en->tail);

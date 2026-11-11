@@ -19,7 +19,7 @@
  * host-deps: rach2/sys/drm/i915/i915_gtt.c rach2/sys/drm/i915/i915_hw.c
  * host-deps: rach2/sys/dmabuf/fence.c rach2/sys/tick.c
  * host-deps: tests/host/i915_model.c rach2/sys/lib/kstring.c
- * host-deps: rach2/sys/lib/kctypes.c tests/host/compat/spinlock_host.c
+ * host-deps: rach2/sys/lib/kctypes.c
  *
  * A row makes a fresh model and a device record over it, brought up as
  * the bind does up to the rings, and a file opened on it. The kernel
@@ -27,7 +27,8 @@
  * with physical addresses spread apart, which the model's rings reach back
  * through the test; the processor taking the device's messages whenever
  * the model's clock moves while its interrupts are on; a sleep moving the
- * clock a millisecond at a time; and the clock in nanoseconds for fences.
+ * clock a millisecond at a time; the clock in nanoseconds for fences; and
+ * spinlocks whose release a row can follow with an interrupt.
  * A user address below 4096 faults. The GTT's allocator for the context
  * images is the test's, which counts what is held.
  *
@@ -42,7 +43,9 @@
  * the unplug); 80-47's parking, when Linux's retirement would let the GT
  * park and not between a client's requests, with 80-50's signal of an
  * older request while a newer one is built and its listener that left
- * before the signal; GETPARAM and I915_QUERY row
+ * before the signal, a signal just after the retire worker takes its
+ * notice, and 80-55's merge and timeline point that ask for no signal;
+ * GETPARAM and I915_QUERY row
  * by row; GET_RESET_STATS; 78-5c's THROTTLE, which IGT calls at each open;
  * and 78-11a.2's REG_READ of the render ring's timestamp, which the model
  * counts on at each read of a half.
@@ -467,11 +470,56 @@ void i915_vma_revoke_mmap(struct i915_vma *vma)
 }
 
 /* The driver's fences, i915_gem.c's. */
-const struct dma_fence_ops i915_fence_ops = {0, 0, 0, 0};
+const struct dma_fence_ops i915_fence_ops = {0, 0, 0, 0, 0, 0};
 
 /* The id table: the Lenovo's chip alone. */
 static const struct i915_platform hsw = {"HASWELL", 7, 50, 7, 2, 0xf, 1, 1, 1, 0, 1, 31, 40};
 static const struct i915_id lenovo_id = {0x0A16, 1, 0, &hsw};
+
+/* An interrupt the row arms at a lock's release: at the first release of
+ * any lock after which `unlock_when` returns 1, the model's clock moves a
+ * millisecond, taking the messages due as an interrupt there would;
+ * `unlock_fired` counts those moves. */
+static int (*unlock_when)(void);
+static int unlock_fired;
+
+/** Take `lock`; trap if it is already held, which on one processor is the
+ * same path taking it twice, which on the machine spins for ever. */
+void spin_lock(struct spinlock *lock)
+{
+    if (lock->locked) {
+        __builtin_trap();
+    }
+    lock->locked = 1;
+}
+
+/** Release `lock`. */
+void spin_unlock(struct spinlock *lock)
+{
+    lock->locked = 0;
+}
+
+/** Save the interrupt flag, take `lock`, and return the flag. */
+uint32_t spin_lock_irqsave(struct spinlock *lock)
+{
+    uint32_t flags = kirq_save();
+
+    spin_lock(lock);
+    return flags;
+}
+
+/** Release `lock`, restore the interrupt flag `flags`, and take the
+ * interrupt the row armed when its condition now holds. */
+void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
+{
+    spin_unlock(lock);
+    kirq_restore(flags);
+    if (unlock_when && unlock_when()) {
+        unlock_when = 0;
+        unlock_fired++;
+        i915_delay_us(&dev.hw, 1000);
+    }
+}
 
 /* A fault the row arms: the submission that fails after `submit_after`
  * more pass, when it is not negative. `inject_after`, when not negative,
@@ -569,6 +617,8 @@ static struct drm_i915_private *fresh(struct i915_model *m)
     ranges_held = ranges_refuse = 0;
     submit_after = inject_after = -1;
     injected = intr_next = 0;
+    unlock_when = 0;
+    unlock_fired = 0;
     unstick = 0;
     parks = unparks = 0;
     memset(&caller, 0, sizeof(caller));
@@ -1654,6 +1704,54 @@ static void row_park_spin(void)
     done(&m);
 }
 
+/**
+ * 80-55: a merge of two engines' last requests, which a reservation's
+ * snapshot makes, and a timeline point on a request, which SYNCOBJ_QUERY
+ * asks after, ask neither request for its signal until someone waits, as
+ * Linux's dma_fence_array and dma_fence_chain add their callbacks only
+ * from enable_signaling; both requests, done, keep the GT awake to the
+ * worker's pass.
+ */
+static void row_park_merge_query(void)
+{
+    struct i915_model m;
+    struct drm_i915_private *i915 = fresh(&m);
+    struct i915_engine *rcs = &i915->gt.engine[I915_RCS0], *bcs = &i915->gt.engine[I915_BCS0];
+    struct intel_context *r = engine_of(&file_a, 0, I915_RCS0);
+    struct intel_context *b = engine_of(&file_a, 0, I915_BCS0);
+    struct i915_request *rq, *rq2;
+    struct dma_fence *both[2], *f;
+    struct dma_fence_chain *c = dma_fence_chain_alloc();
+    int p;
+
+    rq = submit(r, 0, 0);
+    rq2 = submit(b, 0, 0);
+    p = parks;
+    both[0] = rq ? &rq->fence.base : 0;
+    both[1] = rq2 ? &rq2->fence.base : 0;
+    f = rq && rq2 ? dma_fence_merge(both, 2) : 0;
+    CHECK("merge: a merge of two engines' requests, queried, asks neither for its signal",
+          f && !dma_fence_is_signaled(f) && !rq->fence.base.listened && !rq2->fence.base.listened);
+    dma_fence_put(f);
+    if (c && rq) {
+        dma_fence_chain_init(c, 0, dma_fence_get(&rq->fence.base), 1);
+    }
+    CHECK("merge: nor does a query of a timeline point on one",
+          c && rq && !dma_fence_is_signaled(&c->base) && !rq->fence.base.listened);
+    dma_fence_put(c ? &c->base : 0);
+    run_ms(1);
+    (void)i915_submit_work();
+    i915_retire_requests(i915);
+    CHECK("merge: both, done, keep the GT awake to the worker's pass",
+          rq && rq2 && rq->fence.base.signaled && rq2->fence.base.signaled && rcs->unretired &&
+              bcs->unretired && i915->gt.awake && parks == p);
+    i915_request_put(rq);
+    i915_request_put(rq2);
+    intel_context_put(r);
+    intel_context_put(b);
+    done(&m);
+}
+
 /** 80-47: a request being built holds the GT awake past the retire
  * worker's pass, as Linux's request holds its engine from its creation. */
 static void row_park_building(void)
@@ -1682,12 +1780,23 @@ static void row_park_building(void)
     done(&m);
 }
 
+/** The release that ends the render ring's lock in request_new, whose
+ * request is being built and has no room kept yet for its breadcrumb. */
+static int creating_unlocked(void)
+{
+    struct i915_engine *rcs = &dev.gt.engine[I915_RCS0];
+
+    return rcs->building && rcs->reserved == 0;
+}
+
 /**
  * 80-50: an older request that signals to a listener while the engine's
- * next request is being created leaves the engine held, as on Linux, where
- * the next request is on the timeline from its creation under the
- * timeline's mutex, and the older one is no longer its last; the next,
- * done with no listener, then keeps the GT awake to the worker's pass.
+ * next request is being created, at once after request_new puts it on the
+ * engine and before its breadcrumb's room is kept, leaves the engine held,
+ * as on Linux, where the next request is on the timeline from its creation
+ * under the timeline's mutex, and the older one is no longer its last; the
+ * next, done with no listener, then keeps the GT awake to the worker's
+ * pass.
  */
 static void row_park_signal_creating(void)
 {
@@ -1704,10 +1813,10 @@ static void row_park_signal_creating(void)
     CHECK("creating: a callback on the engine's last request",
           old && dma_fence_add_callback(&old->fence.base, &cb, park_listener) == 0);
     p = parks;
-    inject_after = 0; /* the invalidation, the creation's first commands */
+    unlock_when = creating_unlocked;
     err = i915_request_create(r, &rq);
     CHECK("creating: its signal while the next is created leaves the engine held",
-          err == 0 && injected == 1 && old && old->fence.base.signaled && rcs->unretired);
+          err == 0 && unlock_fired == 1 && old && old->fence.base.signaled && rcs->unretired);
     CHECK("creating: the next is added", rq && i915_request_add(rq) == 0);
     run_ms(1);
     (void)i915_submit_work();
@@ -1716,6 +1825,52 @@ static void row_park_signal_creating(void)
           rq && rq->fence.base.signaled && !rcs->requests && rcs->unretired && i915->gt.awake &&
               parks == p);
     i915_request_put(old);
+    i915_request_put(rq);
+    intel_context_put(r);
+    done(&m);
+}
+
+/* The releases of the submission's lock left before the one that ends the
+ * retire worker's taking of its notice, in i915_submit_work. */
+static int unlocks_left;
+
+/** The release `unlocks_left` counts down to. */
+static int notice_taken(void)
+{
+    return --unlocks_left == 0;
+}
+
+/**
+ * 80-50: a last request that signals to a listener just after the retire
+ * worker has taken and cleared its notice kicks the next pass, which
+ * retires the engine at once and parks the GT, as Linux's
+ * intel_engine_add_retire queues the work again after its xchg.
+ */
+static void row_park_kick_after_notice(void)
+{
+    struct i915_model m;
+    struct drm_i915_private *i915 = fresh(&m);
+    struct i915_engine *rcs = &i915->gt.engine[I915_RCS0];
+    struct intel_context *r = engine_of(&file_a, 0, I915_RCS0);
+    struct i915_request *rq;
+    struct dma_fence_cb cb;
+    int p;
+
+    rq = submit(r, 0, 0);
+    CHECK("kick: a callback on the engine's last request",
+          rq && dma_fence_add_callback(&rq->fence.base, &cb, park_listener) == 0);
+    p = parks;
+    /* One release for each engine's submission notice, then the retire
+     * worker's. */
+    unlocks_left = I915_NUM_ENGINES + 1;
+    unlock_when = notice_taken;
+    (void)i915_submit_work();
+    CHECK("kick: its signal just after the worker took its notice leaves this pass alone",
+          unlock_fired == 1 && rq && rq->fence.base.signaled && !rcs->unretired && rcs->requests &&
+              i915->gt.awake && parks == p);
+    (void)i915_submit_work();
+    CHECK("kick: and the next pass retires the engine at once and parks the GT",
+          !rcs->requests && !i915->gt.awake && parks == p + 1);
     i915_request_put(rq);
     intel_context_put(r);
     done(&m);
@@ -2233,8 +2388,10 @@ int main(void)
     row_park_watched();
     row_park_building();
     row_park_spin();
+    row_park_merge_query();
     row_park_signal_creating();
     row_park_signal_adding();
+    row_park_kick_after_notice();
     row_park_listener_left();
     row_ring_room();
     row_getparam();

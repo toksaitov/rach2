@@ -55,8 +55,8 @@ static const char *vgem_fence_timeline_name(struct dma_fence *fence)
     return "unbound";
 }
 
-static const struct dma_fence_ops vgem_fence_ops = {vgem_fence_driver_name,
-                                                    vgem_fence_timeline_name, NULL, NULL};
+static const struct dma_fence_ops vgem_fence_ops = {
+    vgem_fence_driver_name, vgem_fence_timeline_name, NULL, NULL, NULL, NULL};
 
 /** The fence's time is up: it signals, as Linux's vgem_fence_timeout, and
  * the work's reference goes. Run by the commit worker. */

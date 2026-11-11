@@ -37,7 +37,25 @@ static const char *i915_fence_timeline(struct dma_fence *fence)
     return c < 4 ? names[c] : "unknown";
 }
 
-const struct dma_fence_ops i915_fence_ops = {i915_fence_driver, i915_fence_timeline, 0, 0};
+/**
+ * Wait for a request's fence until the CLOCK_MONOTONIC `deadline_ns`, or
+ * for ever when it is negative, through `i915_request_wait`, as Linux's
+ * i915_fence_wait, so that every wait on the driver's fence spins first.
+ * 0, -ETIME or -EINTR; sleeps.
+ */
+static int32_t i915_fence_wait(struct dma_fence *fence, int intr, int64_t deadline_ns)
+{
+    int64_t timeout = -1, now;
+
+    if (deadline_ns >= 0) {
+        now = dma_fence_now();
+        timeout = deadline_ns > now ? deadline_ns - now : 0;
+    }
+    return i915_request_wait((struct i915_request *)fence, intr, timeout);
+}
+
+const struct dma_fence_ops i915_fence_ops = {i915_fence_driver, i915_fence_timeline, 0, 0, 0,
+                                             i915_fence_wait};
 
 /* ------------------------------------------------------------------------
  * Pages
@@ -156,6 +174,47 @@ int i915_gem_object_is_active(const struct drm_i915_gem_object *obj)
     return 0;
 }
 
+/**
+ * Wait for a fence of a reservation until `deadline`, or for ever when it
+ * is negative, as Linux's i915_gem_object_wait_fence: a request of the
+ * driver through `i915_request_wait`, which spins before it asks for the
+ * signal, and any other fence through `dma_fence_wait_until`. Each fence of
+ * a merge is waited for alone, so that the merge, which a wait would arm,
+ * asks for no signal. 0, -ETIME or -EINTR; sleeps.
+ */
+static int32_t object_fence_wait(struct dma_fence *f, int intr, int64_t deadline)
+{
+    struct dma_fence *leaf;
+    uint32_t i, n;
+    int32_t err;
+
+    while (!dma_fence_is_signaled(f)) {
+        n = dma_fence_count(f);
+        leaf = 0;
+        for (i = 0; i < n && !leaf; i++) {
+            leaf = dma_fence_at(f, i);
+            if (dma_fence_is_signaled(leaf)) {
+                leaf = 0;
+            }
+        }
+        if (!leaf) {
+            return 0;
+        }
+        /* A reference of its own, since a chain may drop it meanwhile. */
+        (void)dma_fence_get(leaf);
+        if (leaf->ops == &i915_fence_ops) {
+            err = i915_fence_wait(leaf, intr, deadline);
+        } else {
+            err = dma_fence_wait_until(leaf, intr, deadline);
+        }
+        dma_fence_put(leaf);
+        if (err != 0) {
+            return err;
+        }
+    }
+    return 0;
+}
+
 int32_t i915_gem_object_wait_idle(struct drm_i915_gem_object *obj, int intr)
 {
     struct dma_resv *r = obj->base.resv;
@@ -176,7 +235,7 @@ int32_t i915_gem_object_wait_idle(struct drm_i915_gem_object *obj, int intr)
         /* A reference of its own, since the reservation may change while
          * the wait sleeps. */
         (void)dma_fence_get(f);
-        err = dma_fence_wait_until(f, intr, -1);
+        err = object_fence_wait(f, intr, -1);
         dma_fence_put(f);
         if (err == -EINTR) {
             return err;
@@ -400,25 +459,50 @@ static void object_boost(struct drm_i915_gem_object *obj, int all)
 
 int32_t i915_gem_object_wait(struct drm_i915_gem_object *obj, int all, int64_t timeout_ns)
 {
-    struct dma_fence *f = dma_resv_snapshot(obj->base.resv, all);
+    struct dma_resv *r = obj->base.resv;
+    struct dma_fence **fences;
     int64_t deadline = -1;
-    int32_t err;
+    uint32_t i, n = all ? r->nreads : 0;
+    int32_t err = 0;
 
-    if (!f) {
-        return -ENOMEM;
-    }
     object_boost(obj, all);
     if (timeout_ns == 0) {
-        err = dma_fence_is_signaled(f) ? 0 : -ETIME;
-    } else {
-        if (timeout_ns > 0) {
-            int64_t now = dma_fence_now();
-
-            deadline = timeout_ns > (int64_t)0x7fffffffffffffffLL - now ? -1 : now + timeout_ns;
+        /* A test, which asks for no signal. */
+        if (fence_busy(r->write)) {
+            return -ETIME;
         }
-        err = dma_fence_wait_until(f, 1, deadline);
+        for (i = 0; i < n; i++) {
+            if (fence_busy(r->reads[i])) {
+                return -ETIME;
+            }
+        }
+        return 0;
     }
-    dma_fence_put(f);
+    if (timeout_ns > 0) {
+        int64_t now = dma_fence_now();
+
+        deadline = timeout_ns > (int64_t)0x7fffffffffffffffLL - now ? -1 : now + timeout_ns;
+    }
+    /* The fences of now, each with a reference, since the reservation may
+     * change while a wait sleeps, as Linux's iterator walks a snapshot. */
+    if (n == 0xffffffffu || ((size_t)n + 1) * sizeof(*fences) / sizeof(*fences) != (size_t)n + 1) {
+        return -ENOMEM;
+    }
+    fences = (struct dma_fence **)kmalloc(((size_t)n + 1) * sizeof(*fences));
+    if (!fences) {
+        return -ENOMEM;
+    }
+    fences[0] = dma_fence_get(r->write);
+    for (i = 0; i < n; i++) {
+        fences[i + 1] = dma_fence_get(r->reads[i]);
+    }
+    for (i = 0; i <= n; i++) {
+        if (err == 0 && fences[i]) {
+            err = object_fence_wait(fences[i], 1, deadline);
+        }
+        dma_fence_put(fences[i]);
+    }
+    kfree(fences);
     return err;
 }
 

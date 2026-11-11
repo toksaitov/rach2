@@ -771,7 +771,8 @@ void drm_dev_unplug(struct drm_device *d)
 }
 #endif
 
-static const struct dma_fence_ops model_fence_ops = {fence_driver, fence_timeline, NULL, NULL};
+static const struct dma_fence_ops model_fence_ops = {fence_driver, fence_timeline, NULL,
+                                                     NULL,         NULL,           NULL};
 
 /** The first unsignalled fence of `resv`, held, or a signalled one. */
 struct dma_fence *dma_resv_snapshot(struct dma_resv *resv, int write)
