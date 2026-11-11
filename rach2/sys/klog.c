@@ -27,7 +27,9 @@
  * that takes records from any processor without a lock, and a processor
  * that may write the rest moves it on at its next record, console write or
  * tick, or at the panic (`klog_flush`), as Linux's printk defers the legacy
- * consoles in an NMI.
+ * consoles in an NMI. When the holder of the big lock is locked up, another
+ * processor writes them out instead (`klog_flush_stuck`), and the two keep
+ * out of each other's way (`klog_enter`).
  *
  * The console calls are the other half of this file. The debug shell's
  * prompts and command output are a user interface, not a diagnostic: they are
@@ -47,6 +49,7 @@
 #include "lib/kirq.h"
 #include "lib/kdef.h"
 #include "network/netconsole.h"
+#include "panic.h"
 #include "proc/percpu.h"
 #include "proc/smp.h"
 #include "pstore/pstore.h"
@@ -217,6 +220,37 @@ static uint32_t ring_oldest; /* where the oldest byte held is */
  * first, and the oldest byte held is this less `ring_used`. */
 static uint32_t ring_written;
 
+/* Held, with interrupts off, by a processor that reads or writes the ring:
+ * the one that writes the kept records out for a locked-up holder of the
+ * big lock (`klog_flush_stuck`) appends while the holder, should it come
+ * back, may read. */
+static volatile unsigned int ring_lock;
+
+/**
+ * Take `ring_lock`, with interrupts off. 1 when taken; 0 when a panic on
+ * this processor found it held, by a processor the panic has stopped,
+ * which will never let it go, and goes on without it.
+ */
+static int ring_get(void)
+{
+    while (arch_atomic_xchg(&ring_lock, 1u) != 0u) {
+        if (k_panicking()) {
+            return 0;
+        }
+        arch_relax();
+    }
+    return 1;
+}
+
+/** Let `ring_lock` go when `ring_get` returned 1 in `took`. */
+static void ring_put(int took)
+{
+    if (took) {
+        k_barrier();
+        ring_lock = 0;
+    }
+}
+
 /**
  * Drop whole records from the oldest end until `want` bytes are free.
  *
@@ -260,10 +294,12 @@ static void ring_evict(uint32_t want)
 static void ring_append(const char *text, uint32_t n)
 {
     uint32_t i;
+    int took;
 
     if (n > KLOG_RING_SIZE) {
         return;
     }
+    took = ring_get();
     ring_evict(n);
     for (i = 0; i < n; i++) {
         ring[ring_head] = text[i];
@@ -274,6 +310,7 @@ static void ring_append(const char *text, uint32_t n)
     }
     ring_used += n;
     ring_written += n;
+    ring_put(took);
 }
 
 /** Put the record in the ring and in ramoops's console zone, with
@@ -300,11 +337,13 @@ uint32_t klog_written(void)
 uint32_t klog_clamp(uint32_t at)
 {
     uint32_t flags = kirq_save();
+    int took = ring_get();
     uint32_t first = ring_written - ring_used;
 
     if ((int32_t)(at - first) < 0 || (int32_t)(ring_written - at) < 0) {
         at = first;
     }
+    ring_put(took);
     kirq_restore(flags);
     return at;
 }
@@ -312,6 +351,7 @@ uint32_t klog_clamp(uint32_t at)
 uint32_t klog_read_from(char *buf, uint32_t cap, uint32_t *at)
 {
     uint32_t flags = kirq_save();
+    int took = ring_get();
     uint32_t first = ring_written - ring_used;
     uint32_t n = 0;
 
@@ -327,6 +367,7 @@ uint32_t klog_read_from(char *buf, uint32_t cap, uint32_t *at)
         buf[n++] = ring[i];
     }
     *at += n;
+    ring_put(took);
     kirq_restore(flags);
     return n;
 }
@@ -334,9 +375,11 @@ uint32_t klog_read_from(char *buf, uint32_t cap, uint32_t *at)
 uint32_t klog_read(char *buf, uint32_t cap, uint32_t offset)
 {
     uint32_t flags = kirq_save();
+    int took = ring_get();
     uint32_t n = 0;
 
     if (buf == 0 || cap == 0 || offset >= ring_used) {
+        ring_put(took);
         kirq_restore(flags);
         return 0;
     }
@@ -349,6 +392,7 @@ uint32_t klog_read(char *buf, uint32_t cap, uint32_t offset)
         buf[n] = ring[i];
         n++;
     }
+    ring_put(took);
     kirq_restore(flags);
     return n;
 }
@@ -645,9 +689,50 @@ static volatile unsigned int defer_lost;
  * them left part built is skipped, since it will never be whole. */
 static int defer_skip;
 
-/* Set while a processor writes the kept records out for a holder of the big
- * lock that is locked up (`klog_flush_stuck`). */
+/* The number, plus one, of the processor that writes the kept records out
+ * for a holder of the big lock that is locked up (`klog_flush_stuck`), or 0. */
 static volatile unsigned int defer_taking;
+
+/* How deep the processor that may write klog's shared state (`klog_enter`)
+ * is in doing so, its interrupt handlers' records counted: only that one
+ * writes it, and it is 0 again before that processor lets the big lock go. */
+static volatile unsigned int klog_users;
+
+/**
+ * Begin writing klog's shared state, the ring, the queue, the kept records'
+ * head and the delivery flags, with interrupts off; `klog_leave` ends it.
+ * 1 when this processor may: it may write what the big lock guards
+ * (`smp_serialized`) and no other is writing the kept records out for it
+ * (`defer_taking`), or it has begun a panic, which stopped the others. 0
+ * otherwise, and the caller keeps its record for later.
+ *
+ * A holder of the big lock and `klog_flush_stuck` exclude each other as
+ * Dekker's algorithm has two processors do: each writes its own word by a
+ * locked exchange, a full barrier, and then reads the other's, so at least
+ * one of them sees the other and stands back. A holder already in, as an
+ * interrupt handler's record finds it, stays in.
+ */
+static int klog_enter(void)
+{
+    unsigned int taking;
+
+    if (!smp_serialized()) {
+        return 0;
+    }
+    (void)arch_atomic_xchg(&klog_users, klog_users + 1u);
+    taking = defer_taking;
+    if (taking != 0u && taking != arch_cpu_id() + 1u && !k_panicking()) {
+        klog_users--;
+        return 0;
+    }
+    return 1;
+}
+
+/** End what a `klog_enter` that returned 1 began. */
+static void klog_leave(void)
+{
+    klog_users--;
+}
 
 /**
  * Keep a record made where klog's shared state may not be written, built
@@ -710,10 +795,16 @@ int klog_kept(void)
 
 void klog_flush_stuck(void)
 {
+    unsigned int end = defer_tail;
     uint32_t flags;
     int moved;
 
-    if (defer_head == defer_tail || arch_atomic_xchg(&defer_taking, 1u) != 0u) {
+    if (defer_head == end ||
+        arch_atomic_xchg(&defer_taking, (unsigned int)arch_cpu_id() + 1u) != 0u) {
+        return;
+    }
+    if (klog_users != 0u) {
+        defer_taking = 0; /* the holder is writing klog; it writes them */
         return;
     }
     do {
@@ -722,23 +813,39 @@ void klog_flush_stuck(void)
         klog_delivering = 1;
         kirq_restore(flags);
         klog_drain();
-    } while (moved > 0 && defer_head != defer_tail);
+    } while (moved > 0 && (int)(end - defer_head) > 0);
+    k_barrier();
     defer_taking = 0;
 }
 
+/**
+ * Nested inside a delivery or a console write, the kept records join the
+ * ring and the queue at once, ahead of the record being made, and the
+ * delivery or write under way writes them out when it ends; only the drain
+ * waits for it.
+ */
 void klog_flush(void)
 {
     uint32_t flags;
+    int nested, moved;
 
     while (defer_head != defer_tail) {
         flags = kirq_save();
-        if (!smp_serialized() || klog_delivering || console_writing || defer_collect() == 0) {
+        if (!klog_enter()) {
+            kirq_restore(flags);
+            return;
+        }
+        nested = klog_delivering || console_writing;
+        moved = defer_collect();
+        if (nested || moved == 0) {
+            klog_leave();
             kirq_restore(flags);
             return;
         }
         klog_delivering = 1;
         kirq_restore(flags);
         klog_drain();
+        klog_leave();
     }
 }
 
@@ -773,7 +880,7 @@ void klog_v(int level, const char *subsystem, const char *format, va_list ap)
     }
     klog_flush();
     flags = kirq_save();
-    if (!smp_serialized()) {
+    if (!klog_enter()) {
         defer_put(level, subsystem, format, ap);
         kirq_restore(flags);
         return;
@@ -801,6 +908,7 @@ void klog_v(int level, const char *subsystem, const char *format, va_list ap)
         klog_drain();
         klog_flush();
     }
+    klog_leave();
 }
 
 void klog(int level, const char *subsystem, const char *format, ...)
@@ -843,11 +951,17 @@ void console_write_end(void)
     uint32_t flags = kirq_save();
 
     textcon_release();
-    if (--console_writing > 0 || klog_delivering) {
+    if (--console_writing > 0 || !klog_enter()) {
+        kirq_restore(flags);
+        return;
+    }
+    if (klog_delivering) {
+        klog_leave();
         kirq_restore(flags);
         return;
     }
     if (pending_count == 0) {
+        klog_leave();
         kirq_restore(flags);
         klog_flush();
         return;
@@ -855,6 +969,7 @@ void console_write_end(void)
     klog_delivering = 1;
     kirq_restore(flags);
     klog_drain();
+    klog_leave();
     klog_flush();
 }
 
@@ -870,6 +985,8 @@ void klog_deliver_directly(void)
 
     klog_delivering = 0;
     console_writing = 0;
+    klog_users = 0;
+    defer_taking = 0;
     defer_skip = 1;
     kirq_restore(flags);
 }
