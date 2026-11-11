@@ -1209,7 +1209,10 @@ static struct tcb *zero_window_flight(struct socket *sock, uint16_t port, uint32
  * silent ends it once no acknowledgement has been received for 240 s before
  * a timeout's deadline, at the first timeout after that. With
  * TCP_USER_TIMEOUT 5000, an answering peer's connection is given up just
- * past five seconds after the first probe.
+ * past five seconds after the first probe. An acknowledgement of snd_una in
+ * a segment that starts past the window offered, or ends before the data
+ * this side has acknowledged, renews no `rcv_stamp`, as Linux's
+ * tcp_sequence drops it before tcp_ack; one in a segment at rcv_nxt does.
  */
 static void zero_window_flight_rows(void)
 {
@@ -1247,6 +1250,18 @@ static void zero_window_flight_rows(void)
     CHECK("TCP_USER_TIMEOUT ends an answered probing just past five seconds from the first probe",
           conn->state == TCP_CLOSED && conn->so_error == ETIMEDOUT &&
               kernel_ticks - first > TCP_MS(5000) && kernel_ticks - first <= TCP_MS(5000) + 2u);
+
+    conn = zero_window_flight(&sock, 111, &peer_seq, &lport);
+    last = conn->rcv_stamp;
+    kernel_ticks += 100;
+    rx(111, lport, conn->rcv_adv + 1u, conn->snd_una, F_ACK, 0, (const char *)0, 0);
+    CHECK("an acknowledgement in a segment past the window offered renews no stamp",
+          conn->rcv_stamp == last);
+    rx(111, lport, peer_seq - 1u, conn->snd_una, F_ACK, 0, (const char *)0, 0);
+    CHECK("nor one in a segment that ends before the data acknowledged", conn->rcv_stamp == last);
+    rx(111, lport, peer_seq, conn->snd_una, F_ACK, 0, "x", 1);
+    CHECK("one in a segment at rcv_nxt renews it",
+          conn->rcv_stamp == (uint32_t)kernel_ticks && conn->state == TCP_ESTABLISHED);
 }
 
 /**
@@ -1304,7 +1319,9 @@ static void closed_window_rx_rows(void)
  * connection when Linux's tcp_retries2 of 15 would, 924.6 s after the first
  * timeout and not before, at the first timeout after that, counted in
  * TCPAbortOnTimeout; TCP_USER_TIMEOUT 5000 ends one five seconds after the
- * first timeout. While the card reports its link down, a
+ * first timeout, or, when three duplicate acknowledgements sent a segment
+ * again before it, five seconds after that fast retransmission, as Linux
+ * counts from its retrans_stamp. While the card reports its link down, a
  * driver that refuses every frame for a minute ends nothing, and the data
  * goes when the link comes back.
  */
@@ -1312,9 +1329,10 @@ static void giveup_rows(void)
 {
     struct socket sock;
     struct tcb *conn;
-    uint32_t peer_seq = 23000, first, aborts = net_mib.tcp_abort_on_timeout;
+    uint32_t peer_seq = 23000, first, hole, aborts = net_mib.tcp_abort_on_timeout;
     uint16_t lport;
     static uint8_t bytes[100];
+    static uint8_t burst[4 * TCP_MSS];
     unsigned j;
 
     reset_all();
@@ -1348,6 +1366,29 @@ static void giveup_rows(void)
     CHECK("TCP_USER_TIMEOUT ends it five seconds after the first timeout",
           conn->state == TCP_CLOSED && kernel_ticks - first >= TCP_MS(5000) &&
               kernel_ticks - first <= TCP_MS(5000) + 1);
+
+    reset_all();
+    conn = open_conn(&sock, 105, &peer_seq, &lport);
+    sock.user_timeout = 5000;
+    CHECK("four segments go under a user timeout",
+          tcp_send(&sock, burst, (int)sizeof(burst)) == (int)sizeof(burst) && n_segs == 4);
+    hole = read32be(segs[1].data + 4);
+    rx(105, lport, peer_seq, hole, F_ACK, 65535, (const char *)0, 0);
+    n_segs = 0;
+    for (j = 0; j < 3; j++) {
+        rx(105, lport, peer_seq, hole, F_ACK, 65535, (const char *)0, 0);
+    }
+    first = (uint32_t)kernel_ticks;
+    CHECK("three duplicates send the hole again before any timeout",
+          n_segs == 1 && read32be(segs[0].data + 4) == hole &&
+              conn->recovering == TCP_RECOVER_FAST && conn->rto_backoff == 0);
+    while (conn->state == TCP_ESTABLISHED && kernel_ticks - first < 60u * TICK_HZ) {
+        kernel_ticks++;
+        tcp_tick();
+    }
+    CHECK("a peer gone silent after them is given up five seconds after the fast retransmission",
+          conn->state == TCP_CLOSED && conn->so_error == ETIMEDOUT &&
+              kernel_ticks - first >= TCP_MS(5000) && kernel_ticks - first <= TCP_MS(5000) + 1);
 
     reset_all();
     conn = open_conn(&sock, 100, &peer_seq, &lport);

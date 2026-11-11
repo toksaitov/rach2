@@ -269,9 +269,10 @@ static uint32_t tcp_rcv_window(const struct tcb *tcb)
  * The window field of a segment of `flags` about to be sent: the window
  * shifted by the connection's scale, except in a SYN, whose field is never
  * scaled (RFC 7323). The right edge the field offers moves `rcv_adv`
- * forward, never back, in a segment that carries an ACK, since only those
- * follow the peer's SYN, which `rcv_nxt` is taken from: the SYN of an
- * active open records nothing, as Linux takes rcv_wup from the peer's SYN.
+ * forward, never back, and `rcv_wup` to `rcv_nxt`, in a segment that
+ * carries an ACK, since only those follow the peer's SYN, which `rcv_nxt`
+ * is taken from: the SYN of an active open records nothing, as Linux takes
+ * rcv_wup from the peer's SYN.
  */
 static uint16_t tcp_wnd_field(struct tcb *tcb, uint8_t flags)
 {
@@ -286,6 +287,9 @@ static uint16_t tcp_wnd_field(struct tcb *tcb, uint8_t flags)
     if ((flags & TCP_ACK) && (!tcb->rcv_adv_set || (int32_t)(edge - tcb->rcv_adv) > 0)) {
         tcb->rcv_adv = edge;
         tcb->rcv_adv_set = 1;
+    }
+    if (flags & TCP_ACK) {
+        tcb->rcv_wup = tcb->rcv_nxt;
     }
     return (uint16_t)field;
 }
@@ -1037,6 +1041,11 @@ static int tcp_output(struct tcb *tcb)
  * therefore still satisfies the (ack_num <= snd_nxt) window test and
  * advances the connection instead of being rejected.
  *
+ * The first attempt since the last recovery ended, a fast retransmission's,
+ * a timeout's or a probe's, sent or refused, stamps `retx_stamp`, as
+ * Linux's tcp_retransmit_skb stamps retrans_stamp; an acknowledgement that
+ * ends the recovery clears it (`tcp_take_ack`).
+ *
  * Returns the bytes sent; 0 when `seq` is at or past the data sent or `most`
  * is 0; -1 when the driver refused the segment, counted as tcp_output counts
  * a refusal so that the tick's pump sends it later.
@@ -1050,6 +1059,9 @@ static int tcp_resend(struct tcb *tcb, uint32_t seq, uint32_t most)
 
     if ((int32_t)(sent_end - seq) <= 0 || most == 0) {
         return 0;
+    }
+    if (tcb->retx_stamp == 0) {
+        tcb->retx_stamp = tcp_due(1); /* this tick + 1 */
     }
     tcp_mss_clamp(tcb);
     send_len = sent_end - seq;
@@ -1789,11 +1801,13 @@ static int tcp_zwp_in_flight(const struct tcb *tcb)
  * Whether the probing of a closed window over data in flight, which the
  * retransmission timer due at `due` does, has run out, as Linux's
  * tcp_rtx_probe0_timed_out says: with TCP_USER_TIMEOUT set, once that long
- * has passed since `retx_stamp`, the first probe's tick, or at the first
- * probe, the oldest data's send; otherwise only once no acceptable
- * acknowledgement (`rcv_stamp`) was received for twice TCP_PROBE_MAX before
- * the timer's deadline and the probes have lasted that long, or the user
- * timeout if shorter. A peer that answers the probes keeps the connection.
+ * has passed since `retx_stamp`, the loss's first retransmission or the
+ * first probe's tick, or at a first probe that no retransmission came
+ * before, the timer's last arming (`tcp_rto_expire`); otherwise only once
+ * no acceptable acknowledgement (`rcv_stamp`) was received for twice
+ * TCP_PROBE_MAX before the timer's deadline and the probes have lasted that
+ * long, or the user timeout if shorter. A peer that answers the probes
+ * keeps the connection.
  */
 static int tcp_zwp_rtx_expired(const struct tcb *tcb, uint32_t due)
 {
@@ -1874,14 +1888,20 @@ static int tcp_zwp_expire(struct tcb *tcb)
 }
 
 /**
- * Run the retransmission timer of `tcb`, which has expired. The first of
- * the timeouts in a row sets `retx_stamp`, which the give-up counts from:
- * in a synchronized state its own tick, as Linux's retrans_stamp is the
- * first retransmission's, so that the first timeout never gives up; in the
- * handshake, and for the first probe of a closed window, the send of what
- * it found unacknowledged, and the first probe then stamps its own tick.
- * The connection is given up when `tcp_retx_expired` says so, and
- * otherwise the timeout doubles, up to TCP_RTO_MAX, and no further
+ * Run the retransmission timer of `tcb`, which has expired. The give-up
+ * counts from `retx_stamp`, as Linux's from retrans_stamp. In a
+ * synchronized state that is the loss's first retransmission, which a fast
+ * retransmission may have made before the timeout (`tcp_resend`), or else
+ * this timeout's tick; and the first timeout since an acknowledgement of
+ * new data never gives up, as Linux's retransmits_timed_out waits for
+ * icsk_retransmits. In the handshake, and for the first probe of a closed
+ * window when no retransmission came before it, it is the timer's last
+ * arming, the timeout before `due`: the send of what the timer found
+ * unacknowledged, or for a probe an acknowledgement of new data since
+ * then, which is later than Linux's origin, the oldest data's send, since
+ * no send time is kept for each segment; the first probe then stamps its
+ * own tick. The connection is given up when `tcp_retx_expired` says so,
+ * and otherwise the timeout doubles, up to TCP_RTO_MAX, and no further
  * than TCP_USER_TIMEOUT allows. Data sent and unacknowledged may lower the
  * segment size (`tcp_blackhole`) and starts a timeout's recovery from the
  * oldest byte, even with a FIN sent behind it, since otherwise a lost data
@@ -1902,27 +1922,29 @@ static int tcp_zwp_expire(struct tcb *tcb)
 static int tcp_rto_expire(struct tcb *tcb)
 {
     uint32_t due = tcb->rto_due;
-    int zwp = tcp_zwp_in_flight(tcb), first = tcb->rto_backoff == 0, n;
+    int zwp = tcp_zwp_in_flight(tcb), sync = tcb->state >= TCP_ESTABLISHED;
+    int first = tcb->rto_backoff == 0, probe0 = 0, n;
 
     tcb->rto_due = 0;
-    if (first) {
-        if (tcb->state >= TCP_ESTABLISHED && !zwp) {
+    if (tcb->retx_stamp == 0) {
+        if (sync && !zwp) {
             tcb->retx_stamp = tcp_due(1); /* this tick + 1 */
         } else {
-            tcb->retx_stamp = due + 1 - tcb->rto; /* the send's tick + 1 */
+            tcb->retx_stamp = due + 1 - tcb->rto; /* the arming's tick + 1 */
             if (tcb->retx_stamp == 0)
                 tcb->retx_stamp = 1;
+            probe0 = zwp;
         }
     }
     if (tcb->rto_backoff < 255)
         tcb->rto_backoff++;
-    if (zwp ? tcp_zwp_rtx_expired(tcb, due) : tcp_retx_expired(tcb)) {
-        if (tcb->state >= TCP_ESTABLISHED)
+    if (zwp ? tcp_zwp_rtx_expired(tcb, due) : (!sync || !first) && tcp_retx_expired(tcb)) {
+        if (sync)
             net_mib.tcp_abort_on_timeout++;
         tcp_giveup(tcb);
         return 1;
     }
-    if (first && zwp)
+    if (probe0)
         tcb->retx_stamp = tcp_due(1); /* the first probe's tick + 1 */
     if (!zwp)
         net_mib.tcp_timeouts++;
@@ -2483,7 +2505,11 @@ static void tcp_rtt_us(struct tcb *tcb, uint32_t us)
  * Take an acknowledgement of new data, in any state where sent data awaits
  * one: the round-trip sample it ends, the ring and the sequence space, the
  * peer's window, the congestion window's growth or the recovery's next step,
- * the timer, a detached block's limit, and then whatever can be sent. In a
+ * the timer, a detached block's limit, and then whatever can be sent. The
+ * timeouts in a row start again (`rto_backoff`), but their give-up keeps
+ * counting from the loss's first retransmission (`retx_stamp`) until the
+ * recovery ends, as Linux keeps retrans_stamp while data sent again is
+ * unacknowledged. In a
  * fast recovery that the acknowledgement does not end, the next hole is sent
  * at once and the congestion window is deflated by the bytes acknowledged,
  * plus one segment (RFC 6582). The acknowledgement of a probe of a larger
@@ -2522,7 +2548,9 @@ static void tcp_take_ack(struct tcb *tcb, uint32_t ack_num, uint32_t window)
     tcp_ack_data(tcb, ack_num);
     tcb->snd_wnd = window;
     tcb->rto_backoff = 0;
-    tcb->retx_stamp = 0;
+    if (!tcb->recovering) {
+        tcb->retx_stamp = 0;
+    }
     if (tcb->probe_size != 0 && (int32_t)(ack_num - (tcb->probe_seq + tcb->probe_size)) >= 0) {
         tcb->snd_mss = tcb->probe_size;
         tcb->probe_size = 0;
@@ -2870,21 +2898,53 @@ static uint16_t tcp_seg_check(net_addr_t src_ip, net_addr_t dst_ip, const uint8_
 }
 
 /**
- * Note what a segment of `flags` acknowledging `ack_num` answers on the
- * connection `tcb`, which is not a listener's: any segment answers the
- * keepalive's probes (`tcp_keepalive`), and an acknowledgement inside
- * [snd_una, snd_nxt], a duplicate among them, is stamped in `rcv_stamp`
- * and answers the zero-window probes, as Linux's tcp_ack sets rcv_tstamp
- * and clears icsk_probes_out only past its checks of the acknowledgement
+ * Whether a segment of `flags` that starts at `seq` with `len` bytes of
+ * data is acceptable to the synchronized connection `tcb`, as Linux's
+ * tcp_validate_incoming and tcp_sequence judge it: it carries no SYN, does
+ * not end before `rcv_wup`, and does not start past the right edge of the
+ * windows offered (`rcv_adv`), or past `rcv_nxt` when that is later. Its
+ * data need not fit, so a probe of a closed window, a byte at rcv_nxt, is
+ * acceptable.
+ */
+static int tcp_seq_ok(const struct tcb *tcb, uint8_t flags, uint32_t seq, uint32_t len)
+{
+    uint32_t end = seq + len + ((flags & TCP_FIN) != 0), edge = tcb->rcv_nxt;
+
+    if (flags & TCP_SYN) {
+        return 0;
+    }
+    if (!tcb->rcv_adv_set) {
+        return 1;
+    }
+    if ((int32_t)(tcb->rcv_adv - edge) > 0) {
+        edge = tcb->rcv_adv;
+    }
+    return (int32_t)(end - tcb->rcv_wup) >= 0 && (int32_t)(seq - edge) <= 0;
+}
+
+/**
+ * Note what a segment of `flags` that starts at `seq` with `len` bytes of
+ * data and acknowledges `ack_num` answers on the connection `tcb`, which is
+ * not a listener's: any segment answers the keepalive's probes
+ * (`tcp_keepalive`), and an acknowledgement inside [snd_una, snd_nxt], a
+ * duplicate among them, on a segment that a synchronized connection finds
+ * acceptable (`tcp_seq_ok`), is stamped in `rcv_stamp` and answers the
+ * zero-window probes, as Linux's tcp_ack sets rcv_tstamp and clears
+ * icsk_probes_out only for a segment that has passed
+ * tcp_validate_incoming, and only past its checks of the acknowledgement
  * (`tcp_zwp_expire`, `tcp_zwp_rtx_expired`).
  */
-static void tcp_rx_answers(struct tcb *tcb, uint8_t flags, uint32_t ack_num)
+static void tcp_rx_answers(struct tcb *tcb, uint8_t flags, uint32_t seq, uint32_t len,
+                           uint32_t ack_num)
 {
     if (tcb->state == TCP_LISTEN) {
         return;
     }
     tcb->ka_since = TCP_NOW();
     tcb->ka_probes = 0;
+    if (tcb->state >= TCP_ESTABLISHED && !tcp_seq_ok(tcb, flags, seq, len)) {
+        return;
+    }
     if ((flags & TCP_ACK) && (int32_t)(ack_num - tcb->snd_una) >= 0 &&
         (int32_t)(ack_num - tcb->snd_nxt) <= 0) {
         tcb->rcv_stamp = tcb->ka_since;
@@ -2972,8 +3032,8 @@ static void tcp_rx_answers(struct tcb *tcb, uint8_t flags, uint32_t ack_num)
  * peer sent again because its acknowledgement was lost, and restarts its
  * 2MSL wait.
  *
- * Every segment that reaches a connection answers its probes first
- * (`tcp_rx_answers`).
+ * Every segment that reaches a connection answers its keepalive probes
+ * first, and an acceptable one its zero-window probes (`tcp_rx_answers`).
  */
 static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *data, uint16_t len)
 {
@@ -3019,7 +3079,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
         return;
     }
     window = (flags & TCP_SYN) ? field : (uint32_t)field << tcb->snd_wscale;
-    tcp_rx_answers(tcb, flags, ack_num);
+    tcp_rx_answers(tcb, flags, seq, (uint32_t)(len - hdr_len), ack_num);
     if (tcb->state >= TCP_ESTABLISHED && tcb->state != TCP_TIME_WAIT && len == hdr_len &&
         !(flags & (TCP_SYN | TCP_FIN)) && (int32_t)(seq - tcb->rcv_nxt) < 0) {
         tcp_send_flags(tcb, TCP_ACK);
