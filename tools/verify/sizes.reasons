@@ -218,7 +218,6 @@ rach2/sys/network/socket/netlink.c:neigh_dump complexity 26 a dump, one test for
 rach2/sys/network/socket/netlink.c:watch_compare complexity 27 a comparison of two states, one test for each kind of change
 
 rach2/sys/network/tcp/tcp.c:tcp_send_rst_unmatched params 8 the parameters are the fields of one packet or descriptor; a struct for them would be filled and unpacked once
-rach2/sys/network/tcp/tcp.c:tcp_tick complexity 28 a state machine, one arm per state, read as a table
 rach2/sys/network/tcp/tcp.c:tcp_rx_addr lines 361 a state machine, one arm per state, read as a table
 rach2/sys/network/tcp/tcp.c:tcp_rx_addr nesting 6 a state machine, one arm per state, read as a table
 rach2/sys/network/tcp/tcp.c:tcp_rx_addr complexity 91 a state machine, one arm per state, read as a table
@@ -570,7 +569,7 @@ tests/host/syscall_hosttest.c:clock_sleeps lines 104 a test's rows, each a case,
 tests/host/tables_hosttest.c:main complexity 32 a test's rows, each a case, read as one table
 
 tests/host/tcp_hosttest.c:main complexity 141 a test's rows, each a case, read as one table
-tests/host/tcp_hosttest.c:main lines 695 a test's rows, each a case, read as one table
+tests/host/tcp_hosttest.c:main lines 697 a test's rows, each a case, read as one table
 tests/host/tcp_hosttest.c:main nesting 5 a test's rows, each a case, read as one table
 tests/host/tcp_hosttest.c:rx params 8 a test's rows, each a case, read as one table
 
