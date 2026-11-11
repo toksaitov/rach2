@@ -32,6 +32,10 @@ The number is read as Linux reads it: in decimal, in hexadecimal after
 .Ql 0x ,
 or in octal after another leading 0, and of several the last valid one
 counts.
+A value that is no such number, or above 4294967295, and a bare
+.Sy netpoll.carrier_timeout
+with no value, change nothing and are logged as
+.Ql netconsole: refused: .
 When the wait finds the link up with records held, at once or later,
 those records and every one written in the next two seconds are sent
 when the two seconds end, in order, since frames sent the moment a link
