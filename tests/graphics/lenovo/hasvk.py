@@ -147,8 +147,12 @@ def main():
         command = user_command(user, ["env", "LIBSEAT_BACKEND=seatd", "weston", "--no-config",
             "--debug", "--backend=drm", "--renderer=gl", "--shell=kiosk", "--xwayland",
             "--idle-time=0", "--socket=wayland-hasvk", "--log=" + str(out / "weston.log")])
+        # Weston keeps its own shader cache, which the clients' clearing
+        # below would otherwise race with as Weston writes it.
+        weston_env = dict(env, MESA_SHADER_CACHE_DIR=str(work / "weston-cache"))
         with (out / "weston.out").open("w") as log:
-            weston = subprocess.Popen(command, env=env, stdout=log, stderr=log, start_new_session=True)
+            weston = subprocess.Popen(command, env=weston_env, stdout=log, stderr=log,
+                                      start_new_session=True)
         for _ in range(600):
             assert weston.poll() is None, "Weston ended; read weston.log"
             if (runtime / "wayland-hasvk").is_socket():
@@ -158,9 +162,11 @@ def main():
             raise RuntimeError("Weston made no socket")
         log = (out / "weston.log").read_text()
         assert "HD Graphics 4400" in log, "Weston did not name Crocus"
-        # The first pair has an empty shader cache, as in guest-env.sh.
+        # The first pair starts from the empty shader cache guest-env.sh makes.
         setup = ". " + shlex.quote(str(GRAPHICS / "guest-env.sh"))
         run(user_command(user, ["sh", "-c", setup + " && graphics_env"]), out / "environment.log", env)
+        assert "env MESA_SHADER_CACHE_FILES=0\n" in (out / "environment.log").read_text(), \
+            "the shader cache is not empty; read environment.log"
         env["GRAPHICS_DONE"] = "0"
         timings = []
         for index, count in enumerate((300, 900, 300, 900)):
