@@ -191,6 +191,13 @@ void kfree(void *ptr)
     __builtin_free(ptr);
 }
 
+/** The hard-lockup detector can run on the model, so nmi_watchdog is
+ * writable. */
+int watchdog_hardlockup_available(void)
+{
+    return 1;
+}
+
 /** No uevent is sent here. */
 void netlink_uevent(const uint8_t *msg, uint32_t len)
 {

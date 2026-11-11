@@ -381,7 +381,10 @@ int synth_sys_count(void);
  * or listed.
  */
 int synth_sys_ipv6(int entry, const char **dir, int *key);
-/** Whether a privileged caller may write the file entry `entry`. */
+/** Whether a privileged caller may write the file entry `entry`: not
+ * nmi_watchdog where the hard-lockup detector cannot run, whose file Linux
+ * makes 0444 (kernel/watchdog.c:1162 and :1173-1174), so that an open for
+ * writing fails with EACCES. */
 int synth_sys_writable(int entry);
 
 /** The name of the entry `entry`, the last component of its path. */
