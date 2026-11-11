@@ -52,12 +52,24 @@ static void log_putc(char c);
    its subsystem and a newline standing for the whole record. */
 static int klog_feeds;
 
-/** Discard a kernel log record, or with `klog_feeds` give its subsystem and
- * a newline to netconsole; no row reads netconsole's own report. */
+static unsigned klog_refusals; /* records whose format begins "refused:" */
+
+/** Count a record of a refusal, then discard it, or with `klog_feeds` give
+ * its subsystem and a newline to netconsole; no row reads the rest of
+ * netconsole's own report. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
+    const char *want = "refused:";
+    const char *f = format;
+
     (void)level;
-    (void)format;
+    while (*want && *f == *want) {
+        f++;
+        want++;
+    }
+    if (*want == '\0') {
+        klog_refusals++;
+    }
     if (klog_feeds) {
         while (*subsystem) {
             log_putc(*subsystem++);
@@ -161,6 +173,7 @@ int k_panicking(void)
    none unless a row sets them. */
 static const char *host_carrier[4];
 static int host_ncarrier;
+static int host_carrier_bare; /* bare `netpoll.carrier_timeout` tokens */
 
 /** Whether `key` is the one option the model's boot line has. */
 static int host_carrier_key(const char *key)
@@ -178,6 +191,12 @@ static int host_carrier_key(const char *key)
 int kcmdline_count(const char *key)
 {
     return host_carrier_key(key) ? host_ncarrier : 0;
+}
+
+/** Count the tokens of the model's boot line that are `flag` whole. */
+int kcmdline_bare_count(const char *flag)
+{
+    return host_carrier_key(flag) ? host_carrier_bare : 0;
 }
 
 /** Copy the `nth` value of `key=` into `out`, 0 when there is none or it
@@ -395,7 +414,9 @@ static void nc_reset(void)
     nc_setup_done = 0;
     nc_attached = 0;
     klog_feeds = 0;
+    klog_refusals = 0;
     host_ncarrier = 0;
+    host_carrier_bare = 0;
     pool_used = 0;
     the_iface.ip = 0;
     host_ticks = 0;
@@ -790,23 +811,29 @@ static void setup_gap_row(void)
 
 /**
  * Check that `netpoll.carrier_timeout=` is read as Linux reads a uint module
- * parameter: kstrtouint with base 0, each occurrence in order, a value it
- * refuses changing nothing.
+ * parameter: kstrtouint with base 0, at any length, each occurrence in order,
+ * a value it refuses changing nothing and logged, as parse_args logs it, and
+ * so each bare key.
  */
 static void carrier_option_rows(void)
 {
     static const struct {
         const char *values[2];
         int n;
+        int bare;
         unsigned seconds;
+        unsigned refusals;
         const char *what;
     } rows[] = {
-        {{"010", 0}, 1, 8, "a leading 0 is octal"},
-        {{"0x10", "bad"}, 2, 16, "0x is hexadecimal, and a later bad value changes nothing"},
-        {{"x", "+3"}, 2, 3, "a bad first value does not hide a valid later one"},
-        {{"7", "4294967296"}, 2, 7, "a value past 32 bits is refused"},
-        {{"5", "2"}, 2, 2, "the last valid value counts"},
-        {{"-1", 0}, 1, 4, "a negative value leaves Linux's default"},
+        {{"010", 0}, 1, 0, 8, 0, "a leading 0 is octal"},
+        {{"0x10", "bad"}, 2, 0, 16, 1, "0x is hexadecimal, and a later bad value changes nothing"},
+        {{"x", "+3"}, 2, 0, 3, 1, "a bad first value does not hide a valid later one"},
+        {{"7", "4294967296"}, 2, 0, 7, 1, "a value past 32 bits is refused"},
+        {{"5", "2"}, 2, 0, 2, 0, "the last valid value counts"},
+        {{"-1", 0}, 1, 0, 4, 1, "a negative value leaves Linux's default"},
+        {{"0000000000000000000000000012", 0}, 1, 0, 10, 0, "a value of 28 digits is read"},
+        {{"6", 0}, 1, 2, 6, 2, "each bare key is refused and leaves the value"},
+        {{"", 0}, 1, 0, 4, 1, "an empty value is refused"},
     };
     unsigned i;
 
@@ -815,8 +842,10 @@ static void carrier_option_rows(void)
         host_carrier[0] = rows[i].values[0];
         host_carrier[1] = rows[i].values[1];
         host_ncarrier = rows[i].n;
+        host_carrier_bare = rows[i].bare;
         netconsole_enable();
         CHECK(nc_carrier_ticks == (uint64_t)rows[i].seconds * TICK_HZ, rows[i].what);
+        CHECK(klog_refusals == rows[i].refusals, rows[i].what);
     }
     nc_reset();
 }
