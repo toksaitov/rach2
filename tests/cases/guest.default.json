@@ -3948,7 +3948,7 @@
         {"assertion_id": "realtime-past", "checks": "FUTEX_WAIT_BITSET with FUTEX_CLOCK_REALTIME until the real time just read times out", "source": "program"},
         {"assertion_id": "zero-bitset", "checks": "FUTEX_WAIT_BITSET with a zero bitset fails with EINVAL", "source": "program"},
         {"assertion_id": "unaligned", "checks": "FUTEX_WAKE on an unaligned address fails with EINVAL", "source": "program"},
-        {"assertion_id": "requeue-enosys", "checks": "FUTEX_REQUEUE fails with ENOSYS", "source": "program"},
+        {"assertion_id": "requeue-empty", "checks": "FUTEX_REQUEUE from a word with no waiter to another, for one wake and one move, returns 0", "source": "program"},
         {"assertion_id": "realtime-wait-enosys", "checks": "FUTEX_WAIT with FUTEX_CLOCK_REALTIME fails with ENOSYS", "source": "program"},
         {"assertion_id": "eintr", "checks": "a timed wait interrupted by a handler installed with SA_RESTART ends with EINTR and is not restarted", "source": "program"},
         {"assertion_id": "wake-one-asleep", "checks": "sixteen threads are seen asleep in FUTEX_WAIT on one word", "source": "program"},
