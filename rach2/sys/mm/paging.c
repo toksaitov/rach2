@@ -1098,12 +1098,20 @@ int vm_ready_held(uintptr_t addr, uintptr_t len, int write)
 }
 
 /** `vm_prefault_range`'s resolution of [addr, end) of `mm`, the current
- * process's, whose regions' lock the caller holds to read. */
+ * process's, whose regions' lock the caller holds to read. A range whose
+ * pages are all present and allow the access, as a copy's almost always
+ * are, is answered by one check, since resolving a present page changes
+ * nothing; Linux's copy_user_generic touches the range with no check at
+ * all and resolves only a page that faults (arch/x86/include/asm/
+ * uaccess_64.h:119-131). */
 static int prefault_locked(struct mm *mm, uintptr_t addr, uintptr_t end, int write)
 {
     uintptr_t page;
     int ok = 1;
 
+    if (range_ready(mm, addr, end, write)) {
+        return 1;
+    }
     do {
         for (page = addr & ~(PAGE_SIZE - 1); ok && page < end; page += PAGE_SIZE) {
             ok = vm_resolve(page, write);
