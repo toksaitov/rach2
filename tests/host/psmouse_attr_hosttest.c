@@ -1724,7 +1724,8 @@ static void guest_switch_rows(void)
 
 /** A guest that fails its reconnect loses its device and files but not
  * serio2, as Linux's serio core keeps the port; one that answers again is
- * bound there anew. A pad whose guest never answers still has serio2. */
+ * bound there anew. A pad whose guest never answers still has serio2, and
+ * so does one in relative mode, where no guest is probed. */
 static void guest_reconnect_rows(void)
 {
     pt_present = 0;
@@ -1749,6 +1750,11 @@ static void guest_reconnect_rows(void)
           init_mouse() == 0 && touchpad == TOUCHPAD_SYNAPTICS && !guest.dev);
     CHECK("with serio2 and no files on it",
           port_made[EVDEV_SERIO_PASS_THROUGH] && !file_of(EVDEV_SERIO_PASS_THROUGH, "protocol"));
+    pt_present = 1;
+    pt_mouse.n_took = 0;
+    CHECK("synaptics-relative keeps serio2 without probing a guest there",
+          store(1, "protocol", "synaptics-relative") == 18 && protocol == PROTO_SYNREL &&
+              port_made[EVDEV_SERIO_PASS_THROUGH] && !guest.dev && pt_mouse.n_took == 0);
 }
 
 /* A write of the guest's rate that waits for the command lock, and what it
