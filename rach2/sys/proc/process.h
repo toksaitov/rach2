@@ -202,6 +202,10 @@ struct process {
      * it waits with its set unblocked, as Linux's real_blocked; 0 otherwise.
      * A signal it holds is not fatal at its post (`sig_fatal_now`). */
     uint64_t sig_real_blocked;
+    /* Set once the thread has begun to end, after its exit event, as Linux's
+     * PF_EXITING: no signal sent to its process picks it to take it, and no
+     * signal sent to it alone begins its process's end (`sig_wants`). */
+    uint32_t exit_begun;
     /* Program name (basename of the execve'd path, truncated, padded with
      * NULs to the end): the "comm" /proc/<pid>/stat reports and ps shows.
      * Set at execve and by prctl's PR_SET_NAME. */
@@ -898,11 +902,20 @@ void signal_post_info(process_t *target, int signo, const struct k_siginfo *info
  * nothing. */
 void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info);
 
+/** Mark the current thread as ending (`exit_begun`), and wake another
+ * thread to take a signal pending for the process that this one could have
+ * taken, as Linux 6.12.115's `exit_signals` does (kernel/signal.c:
+ * 3027-3067). The exit paths call it after the thread's exit event. */
+void signal_exit_begin(void);
+
 /** Post to the thread `target` the signal `signo` a processor exception
  * raised, with `info`. A handler that is ignored or blocked could not run,
  * so the disposition then goes back to the default and the signal is
  * unblocked: the process ends unless a handler is installed and not
- * blocked. */
+ * blocked. An init that is not traced loses its protection from a signal
+ * at its default then, so that it ends rather than fault again, as Linux
+ * 6.12.115's `force_sig_info_to_task` clears SIGNAL_UNKILLABLE
+ * (kernel/signal.c:1348-1354). */
 void signal_force(process_t *target, int signo, const struct k_siginfo *info);
 
 /** Make `mask`, less SIGKILL and SIGSTOP, the current thread's blocked mask,

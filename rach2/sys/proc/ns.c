@@ -1167,8 +1167,10 @@ fail:
 
 /** Give `child` its numbers in each PID namespace from `ns` up to the
  * first's child, making it the init of `ns` when it is the namespace's
- * first process. 0, or -ENOMEM when one of them is full or has lost its
- * init. */
+ * first process, which a signal left at its default then does not end
+ * (`unkillable`), as Linux 6.12.115's `copy_process` marks it
+ * (kernel/fork.c:2601-2604). 0, or -ENOMEM when one of them is full or has
+ * lost its init. */
 static int32_t ns_number(process_t *child, struct pidns *ns)
 {
     int first = ns != &init_pidns && ns->last == 0;
@@ -1185,6 +1187,7 @@ static int32_t ns_number(process_t *child, struct pidns *ns)
     }
     if (first) {
         ns->reaper = child->pid;
+        child->tg->unkillable = 1;
     }
     return 0;
 }

@@ -44,6 +44,7 @@
 #include "sys/evdev.h"
 #include "sys/proc/elf.h"
 #include "sys/proc/uimage.h"
+#include "sys/lib/kirq.h"
 #include "sys/lib/krandom.h"
 #include "sys/lib/ksignal.h"
 #include "sys/rtc.h"
@@ -361,7 +362,9 @@ uint32_t timer_late_passes(void)
  * current process is not inside a system call, and at the call's exit when
  * it is, since timer IRQs stay enabled during a call so HDA streaming keeps
  * running, yet a switch in the middle of one is unsafe. Kernel threads (no
- * current_proc, or one not in_syscall) are switched at once.
+ * current_proc, or one not in_syscall) are switched at once, but for one
+ * inside klog (`klog_inside`), in a record, a console write or a console
+ * byte, which gives way at a later tick.
  */
 static void timer_handler(isr_params_t *params)
 {
@@ -440,7 +443,11 @@ static void shell_lockup(const char *args)
  * Write the core file of the current process, which the signal `signo`
  * ends, and let the threads parked for it go (`core_release`). Returns the
  * status the process ends with: `signo` with WCOREFLAG, which WCOREDUMP
- * reads, only when the whole file was written, and `signo` otherwise. The
+ * reads, only when the whole file was written and no SIGKILL came during
+ * the dump, and `signo` otherwise. A SIGKILL to the process during the dump
+ * stops the file and makes the process's status SIGKILL's (`sig_complete`),
+ * which WCOREFLAG then is not added to, as Linux 6.12.115's
+ * `coredump_finish` leaves out 0x80 (fs/coredump.c:473-474). The
  * caller has set `in_syscall` and enabled interrupts, as a system call
  * writing the file would: the timer does not switch away in the middle of
  * the file system's work, and a disk that answers only by interrupt, as a
@@ -449,12 +456,16 @@ static void shell_lockup(const char *args)
 static int32_t terminate_core(int32_t signo)
 {
     int32_t rc = fs_core_file(signo, current_proc->rlim[RLIM_CORE].cur);
+    uint32_t flags = kirq_save();
+    int dumped = rc == 0 && !(current_proc->sig_pending & KSIG_BIT(SIGKILL));
 
-    if (rc == 0) {
+    if (dumped) {
         current_proc->tg->exit_code = signo | WCOREFLAG;
     }
+    current_proc->tg->core_dumping = 0;
+    kirq_restore(flags);
     core_release();
-    return rc == 0 ? signo | WCOREFLAG : signo;
+    return dumped ? signo | WCOREFLAG : signo;
 }
 
 /**
@@ -494,6 +505,11 @@ static void init_end_line(uint32_t pid, int32_t status)
  * (`proc_group_exit`), and whichever thread ends last publishes the death,
  * posts SIGCHLD and wakes a parent blocked in waitpid. The exit code is the
  * wait status of a death by a signal, the signal in its low seven bits.
+ * The thread's exit event comes once its process's end has begun and its
+ * core is written, and reports the process's status, as Linux 6.12.115's
+ * `do_exit` reports the code `do_group_exit` gives it (kernel/exit.c:898,
+ * 1070-1098): the status that began the end, with WCOREFLAG once the core
+ * is written, or 0 when another thread's execve ends this one.
  *
  * A core file is written (`terminate_core`) only when no other thread has
  * begun to end the process: the group's `core_dumping` is set before the
@@ -540,7 +556,6 @@ void terminate_current_process(int32_t signo)
         return;
     }
 
-    ptrace_event(PTRACE_EVENT_EXIT, (uint32_t)(signo & 0x7F));
     pid = current_proc->tgid;
     is_init = (pid == init_pid && init_pid != 0);
     current_proc->in_syscall = 1;
@@ -558,6 +573,9 @@ void terminate_current_process(int32_t signo)
     } else if (current_proc->tg->core_dumping) {
         core_park();
     }
+    ptrace_event(PTRACE_EVENT_EXIT,
+                 (uint32_t)(current_proc->tg->exiting ? current_proc->tg->exit_code : 0));
+    signal_exit_begin();
     alone = current_proc->tg->live == 1;
 
     if (alone) {
@@ -1428,6 +1446,7 @@ static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uint
 
     if (init_pid == 0) {
         init_pid = user_proc->pid;
+        user_proc->tg->unkillable = !debug_shell_is_home;
         platform_threads_start();
         evdev_sysfs_start();
     }

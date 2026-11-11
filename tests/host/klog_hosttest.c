@@ -36,6 +36,8 @@
  * from the host's stdint may be included alongside them. */
 extern int printf(const char *fmt, ...);
 
+#include <setjmp.h>
+
 #include "../../rach2/sys/klog.h"
 
 static int fails;
@@ -79,6 +81,8 @@ static int panicking;            /* what `k_panicking` says */
 static int relax_frees;          /* the other writer finishes at a wait's turn */
 static unsigned relax_turns;     /* the turns of a wait for the other writer */
 static unsigned serial_at_relax; /* the port's bytes when the other finished */
+static int stop_at_serial;       /* the panic stops this processor at this byte */
+static jmp_buf stopped;          /* where a processor the panic stopped goes */
 
 unsigned int host_cpu;
 
@@ -160,6 +164,9 @@ void serial_out(char c)
     }
     if (serial_len < CAP) {
         serial[serial_len++] = c;
+    }
+    if (stop_at_serial > 0 && --stop_at_serial == 0) {
+        longjmp(stopped, 1);
     }
 }
 
@@ -336,7 +343,8 @@ static void reset(void)
     reenter_from_screen = 0;
     reenter_times = 0;
     reenter_after = 0;
-    pending_head = pending_count = pending_lost = 0;
+    pending_first = pending_next = 0;
+    pending_lost = 0;
     irq_depth = irq_pairs = irq_unbalanced = 0;
     kernel_ticks = 0;
     ring_st[0].head = ring_st[0].used = ring_st[0].oldest = ring_st[0].written = 0;
@@ -351,6 +359,7 @@ static void reset(void)
     }
     host_cpu = 0;
     kept_then_nested = holder_at_serial = kept_at_serial = panicking = 0;
+    stop_at_serial = 0;
     relax_frees = 0;
     relax_turns = serial_at_relax = 0;
     defer_head = defer_tail = defer_lost = 0;
@@ -484,7 +493,7 @@ static void console_write_rows(void)
     CHECK("the write's bytes reach the port together and the record after them",
           streq(serial, "AB\r\n<4>[0.000000] block: completion dropped: stale generation\r\n"));
     CHECK("and nothing waits or is held once the write has ended",
-          pending_count == 0 && klog_delivering == 0 && console_writing == 0);
+          pending_count() == 0 && klog_delivering == 0 && console_writing == 0);
 
     /* A record raised in the middle of a line the debug shell prints. */
     reset();
@@ -498,7 +507,7 @@ static void console_write_rows(void)
     CHECK("and on the screen", streq(screen, "Type 'help' for available commands.\n"
                                              "usbdisk: ready: device 4: lun 0\n"));
     CHECK("and nothing waits or is held once the line is out",
-          pending_count == 0 && klog_delivering == 0 && console_writing == 0);
+          pending_count() == 0 && klog_delivering == 0 && console_writing == 0);
     reset();
     reenter_after = 3;
     console_printf("%s %d\n", "USBDISKPROBE", 5);
@@ -507,7 +516,7 @@ static void console_write_rows(void)
           streq(serial, "USBDISKPROBE 5\r\n"
                         "<6>[0.000000] usbdisk: ready: device 4: lun 0\r\n"));
     CHECK("and nothing waits or is held once the formatted line is out",
-          pending_count == 0 && klog_delivering == 0 && console_writing == 0);
+          pending_count() == 0 && klog_delivering == 0 && console_writing == 0);
 }
 
 /** The brackets of the interrupts a record takes, and a read of the ring. */
@@ -526,10 +535,13 @@ static void bracket_rows(void)
 /**
  * The panic's first record, made with the queue full of records a console
  * write held back: the queue goes out first, and the record after it, not
- * dropped behind it.
+ * dropped behind it; a record kept behind the full queue goes out between
+ * the two; and a record a drain the panic stopped was part way through goes
+ * out again whole.
  */
 static void panic_queue_rows(void)
 {
+    char text[CAP];
     int i;
 
     reset();
@@ -537,14 +549,58 @@ static void panic_queue_rows(void)
     for (i = 0; i < KLOG_PENDING_MAX; i++) {
         klog(KLOG_INFO, "usb", "gone: device %d", i);
     }
-    CHECK("the console write holds the queue full", pending_count == KLOG_PENDING_MAX);
+    CHECK("the console write holds the queue full", pending_count() == KLOG_PENDING_MAX);
     klog_deliver_directly();
     klog(KLOG_CRIT, "panic", "stopped: with the queue full");
     serial[serial_len] = '\0';
     CHECK("the panic's record reaches the port after the queue",
           has(serial, "usb: gone: device 63\r\n"
                       "<2>[0.000000] panic: stopped: with the queue full\r\n"));
-    CHECK("and nothing is dropped or waits", pending_count == 0 && pending_lost == 0);
+    CHECK("and nothing is dropped or waits", pending_count() == 0 && pending_lost == 0);
+
+    /* A record kept while the full queue waits. */
+    reset();
+    console_write_begin();
+    for (i = 0; i < KLOG_PENDING_MAX; i++) {
+        klog(KLOG_INFO, "usb", "gone: device %d", i);
+    }
+    host_cpu = 1;
+    klog(KLOG_ERR, "nmi", "kept: before the panic");
+    host_cpu = 0;
+    klog_deliver_directly();
+    klog(KLOG_CRIT, "panic", "stopped: after a kept record");
+    ring_text(text, sizeof(text));
+    CHECK("a record kept behind the full queue reaches the ring ahead of the panic's",
+          has(text, "usb: gone: device 63\n"
+                    "<3>[0.000000] nmi: kept: before the panic\n"
+                    "<2>[0.000000] panic: stopped: after a kept record\n"));
+    serial[serial_len] = '\0';
+    CHECK("and the port, after the queue",
+          has(serial, "usb: gone: device 63\r\n"
+                      "<3>[0.000000] nmi: kept: before the panic\r\n"
+                      "<2>[0.000000] panic: stopped: after a kept record\r\n"));
+    CHECK("and nothing is kept, waits or is dropped",
+          !klog_kept() && pending_count() == 0 && pending_lost == 0);
+
+    /* A drain stopped at the fifth byte of its first record. */
+    reset();
+    console_write_begin();
+    klog(KLOG_INFO, "usb", "gone: device 0");
+    klog(KLOG_INFO, "usb", "gone: device 1");
+    stop_at_serial = 5;
+    if (setjmp(stopped) == 0) {
+        console_write_end();
+    }
+    panicking = 1;
+    klog_deliver_directly();
+    klog(KLOG_CRIT, "panic", "stopped: inside a drain");
+    serial[serial_len] = '\0';
+    CHECK("a record a stopped drain was writing goes out again whole, the rest once",
+          streq(serial, "<6>[0"
+                        "<6>[0.000000] usb: gone: device 0\r\n"
+                        "<6>[0.000000] usb: gone: device 1\r\n"
+                        "<2>[0.000000] panic: stopped: inside a drain\r\n"));
+    CHECK("and nothing waits after", pending_count() == 0);
 }
 
 /**
@@ -577,7 +633,7 @@ static void kept_rows(void)
           streq(serial, "<3>[0.000000] watchdog: first: kept\r\n"
                         "<3>[0.000000] watchdog: second: kept\r\n"
                         "<6>[0.000000] holder: next: a record of the holder's\r\n"));
-    CHECK("and none is kept or waits after", !klog_kept() && pending_count == 0);
+    CHECK("and none is kept or waits after", !klog_kept() && pending_count() == 0);
 
     /* Kept, then a record made, both inside another record's delivery. */
     reset();
@@ -668,7 +724,7 @@ static void kept_stuck_rows(void)
     CHECK("and the port has only the report",
           streq(serial, "<3>[0.000000] watchdog: report: of the holder\r\n"));
     CHECK("and lets the state go when done",
-          defer_taking == 0 && klog_delivering == 0 && pending_count == 0);
+          defer_taking == 0 && klog_delivering == 0 && pending_count() == 0);
     host_cpu = 0;
     klog(KLOG_INFO, "holder", "next: after the writer is done");
     ring_text(text, sizeof(text));
@@ -683,11 +739,13 @@ static void kept_stuck_rows(void)
  * Two processors that find the holder locked up: the second leaves the
  * first's number in `defer_taking`; a nested record of the holder's stays
  * in while a writer has exchanged it but not yet stood back; and the
- * writer takes only the records kept when it began.
+ * writer takes only the records kept when it began, over the second pass
+ * that more than the queue holds takes.
  */
 static void flusher_rows(void)
 {
     char text[CAP];
+    int i;
 
     /* A second writer while processor 1 writes them out. */
     reset();
@@ -711,15 +769,19 @@ static void flusher_rows(void)
           klog_len() > 0 && !klog_kept() && klog_users == 1);
     klog_users = 0;
 
-    /* A record kept while the writer writes waits for the next. */
+    /* One more kept than the queue holds, and one kept while the writer
+     * writes the first pass, which the second pass leaves for the next. */
     reset();
     host_cpu = 1;
-    klog(KLOG_ERR, "watchdog", "report: of the holder");
+    for (i = 0; i <= KLOG_PENDING_MAX; i++) {
+        klog(KLOG_ERR, "watchdog", "report: line %d", i);
+    }
     kept_at_serial = 1;
     klog_flush_stuck();
     ring_text(text, sizeof(text));
     CHECK("the writer takes only the records kept when it began",
-          streq(text, "<3>[0.000000] watchdog: report: of the holder\n") && klog_kept());
+          has(text, "watchdog: report: line 64\n") && !has(text, "nmi: kept") &&
+              count_lines(text) == KLOG_PENDING_MAX + 1 && klog_kept());
     host_cpu = 0;
     klog(KLOG_INFO, "holder", "next: after the writer");
     ring_text(text, sizeof(text));
@@ -869,7 +931,7 @@ static void nested_order_rows(void)
                                              "<3>[0.000000] nmi: kept: behind the full queue\r\n"
                                              "<3>[0.000000] irq: landed: after the kept one\r\n"));
     CHECK("and nothing is kept, waits or is dropped",
-          !klog_kept() && pending_count == 0 && pending_lost == 0);
+          !klog_kept() && pending_count() == 0 && pending_lost == 0);
 }
 
 /** The rows of klog's exclusion, its ring's commit and its kept order. */
