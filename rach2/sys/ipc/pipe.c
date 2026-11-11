@@ -7,6 +7,7 @@
 #include "../irq.h"
 #include "../fs/fd.h"
 #include "../fs/file.h"
+#include "../fs/krffs.h"
 #include "../proc/process.h"
 #include "../mm/usercopy.h"
 #include "../mm/paging.h"
@@ -15,6 +16,7 @@
 #include "../lib/kstring.h"
 #include "../lib/kerrno.h"
 #include "../lib/ksignal.h"
+#include "../syscall_internal.h"
 
 /* Linux ioctls a pipe answers. */
 #define FIONREAD 0x541B /* bytes available to read */
@@ -663,17 +665,44 @@ static int32_t pipe_put_copy(uint8_t *at, const char __user *from, uint32_t n, u
     return copy_from_user(at, (const void __user *)from, n) != 0 ? -EFAULT : 0;
 }
 
+/** Whether every range of the `n` elements of `iov` passes `user_range_ok`. */
+static int pipe_iov_ok(const struct kernel_iovec *iov, int n)
+{
+    int i;
+
+    for (i = 0; i < n; i++) {
+        if (!user_range_ok(iov[i].iov_base, iov[i].iov_len)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/** The address of the next byte of `iov` for a `pipe_put`, `*off` bytes
+ * into element `*k`, which moves past the elements used up or empty, and in
+ * `*left` the bytes left in that element. A byte must remain. */
+static uintptr_t pipe_iov_at(const struct kernel_iovec *iov, int *k, uint32_t *off, uint32_t *left)
+{
+    while (*off == iov[*k].iov_len) {
+        (*k)++;
+        *off = 0;
+    }
+    *left = (uint32_t)iov[*k].iov_len - *off;
+    return iov[*k].iov_base + *off;
+}
+
 /**
- * The write of a pipe end: up to `count` bytes, all of them for a write,
- * PUT_MERGE, which waits whenever the ring is full until the last is in
- * unless `how` has PUT_NONBLOCK, and what fits for a splice, which waits
- * only before its first byte. Returns the bytes written, or, before a
- * transfer, -EBADF for a descriptor not open for writing, -EFAULT for a bad
- * buffer, -EAGAIN for a full pipe with PUT_NONBLOCK, -EINTR when a signal
- * ends a wait, or -ENOMEM when the heap has no room for the ring; each of
- * these after a transfer returns the count written instead. With no reader
- * left the write raises SIGPIPE in the calling thread, as Linux sends it,
- * and returns -EPIPE or the count written. Readers are woken for data at
+ * The write of a pipe end: the `n` elements of the vector `iov`, whose
+ * ranges iov_import or the caller has cut, `count` bytes in all, all of them
+ * for a write, PUT_MERGE, which waits whenever the ring is full until the
+ * last is in unless `how` has PUT_NONBLOCK, and what fits for a splice,
+ * which waits only before its first byte. Returns the bytes written, or,
+ * before a transfer, -EBADF for a descriptor not open for writing, -EFAULT
+ * for a bad buffer, -EAGAIN for a full pipe with PUT_NONBLOCK, -EINTR when a
+ * signal ends a wait, or -ENOMEM when the heap has no room for the ring;
+ * each of these after a transfer returns the count written instead. With no
+ * reader left the write raises SIGPIPE in the calling thread, as Linux sends
+ * it, and returns -EPIPE or the count written. Readers are woken for data at
  * every transfer, the ring empty before it or not, so an edge-triggered
  * epoll registration of the read end is told of each write, as Linux tells
  * one of a pipe.
@@ -684,26 +713,30 @@ static int32_t pipe_put_copy(uint8_t *at, const char __user *from, uint32_t n, u
  * A write fills Linux's page buffers as `pipe_buf_add` does, opens one only
  * while a slot is free, as Linux's `pipe_write` opens one only while
  * `pipe_full` is false, and waits in `pipe_write` as Linux's does, for a
- * slot when its next byte opens a buffer. A splice's bytes take a buffer
- * for each page of the source they come from, whose first byte lies `src`
- * bytes into its page (`pipe_buf_add_pages`), and a transfer stays within
- * one such page. The splice stops where Linux's ring of a buffer for each
- * page of the pipe's size is full (`pipe_put_room`), however few bytes its
- * buffers hold, and waits for room only before its first byte, in
- * `pipe_wait_writable`, returning what fitted once the ring fills, as
- * Linux's `wait_for_space` and `iter_to_pipe` do. With PUT_PINNED, a source
- * page that Linux's get_user_pages refuses, such as `[vvar]`, ends the copy
- * with -EFAULT or the count written, judged before the page is brought in,
- * since a page of a mapping without PROT_READ passes only when it was
- * there already, and again after the last sleep before its copy.
+ * slot when its next byte opens a buffer. A vector is one write, as Linux
+ * runs a writev through one `pipe_write`: the newest buffer takes the
+ * vector's first `count` mod 4096 bytes (`pipe_buf_merge_room`), and each
+ * page buffer after it fills across the elements. A splice's bytes, from one
+ * element, take a buffer for each page of the source they come from, whose
+ * first byte lies `src` bytes into its page (`pipe_buf_add_pages`), and a
+ * transfer stays within one such page. The splice stops where Linux's ring
+ * of a buffer for each page of the pipe's size is full (`pipe_put_room`),
+ * however few bytes its buffers hold, and waits for room only before its
+ * first byte, in `pipe_wait_writable`, returning what fitted once the ring
+ * fills, as Linux's `wait_for_space` and `iter_to_pipe` do. With PUT_PINNED,
+ * a source page that Linux's get_user_pages refuses, such as `[vvar]`, ends
+ * the copy with -EFAULT or the count written, judged before the page is
+ * brought in, since a page of a mapping without PROT_READ passes only when
+ * it was there already, and again after the last sleep before its copy.
  */
-static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, uint32_t how,
-                        uint32_t src)
+static int32_t pipe_put(fd_entry_t *e, const struct kernel_iovec *iov, int n, uint32_t count,
+                        uint32_t how, uint32_t src)
 {
     pipe_t *p = (pipe_t *)e->priv;
     int merge = (how & PUT_MERGE) != 0;
     uint32_t done = 0, fill = merge ? pipe_buf_merge_room(p, count) : 0, last = p->tail;
-    int fresh = 1, opens;
+    uint32_t off = 0;
+    int fresh = 1, opens, k = 0;
 
     if (!(e->flags & FD_FLAG_WRITE)) {
         return -EBADF;
@@ -711,14 +744,14 @@ static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, u
     if (count == 0) {
         return 0;
     }
-    if (!user_range_ok((__force uintptr_t)buf, count)) {
+    if (!pipe_iov_ok(iov, n)) {
         return -EFAULT;
     }
 
     while (done < count) {
-        uint32_t chunk;
+        uint32_t chunk, left;
         int32_t rc;
-        uintptr_t addr = (__force uintptr_t)(buf + done);
+        uintptr_t addr = pipe_iov_at(iov, &k, &off, &left);
 
         if (!p->read_open) {
             pipe_sigpipe();
@@ -734,7 +767,7 @@ static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, u
             continue;
         }
 
-        if (!pipe_put_fault(addr, count - done, how)) {
+        if (!pipe_put_fault(addr, left, how)) {
             return (done > 0) ? (int32_t)done : -EFAULT;
         }
         if (!p->read_open) {
@@ -757,12 +790,12 @@ static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, u
             if (chunk == 0) {
                 continue;
             }
-            if (chunk > count - done) {
-                chunk = count - done;
+            if (chunk > left) {
+                chunk = left;
             }
             chunk = page_piece(addr, chunk);
             chunk = merge ? pipe_merge_cap(p, chunk, fill) : page_piece(src + done, chunk);
-            rc = pipe_put_copy(at, buf + done, chunk, how);
+            rc = pipe_put_copy(at, (const char __user *)addr, chunk, how);
             if (rc < 0) {
                 return (done > 0) ? (int32_t)done : rc;
             }
@@ -775,6 +808,7 @@ static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, u
             pipe_ring_produce(p, chunk);
             last = p->tail;
             done += chunk;
+            off += chunk;
             pipe_wake(p, &p->read_wq, WQ_DATA);
         }
     }
@@ -782,11 +816,22 @@ static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, u
     return (int32_t)done;
 }
 
+/** `pipe_put` of the `count` bytes of the one buffer `buf`. */
+static int32_t pipe_put_one(fd_entry_t *e, const char __user *buf, uint32_t count, uint32_t how,
+                            uint32_t src)
+{
+    struct kernel_iovec one;
+
+    one.iov_base = (__force uintptr_t)buf;
+    one.iov_len = count;
+    return pipe_put(e, &one, 1, count, how, src);
+}
+
 /** The write of a pipe end (`pipe_put`), waiting for room unless the
  * description has O_NONBLOCK. */
 static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
-    return pipe_put(e, buf, count, PUT_MERGE | (fd_is_nonblock(e) ? PUT_NONBLOCK : 0u), 0);
+    return pipe_put_one(e, buf, count, PUT_MERGE | (fd_is_nonblock(e) ? PUT_NONBLOCK : 0u), 0);
 }
 
 /* poll(2) event bits, the Linux values. */
@@ -904,13 +949,24 @@ int pipe_is(const fd_entry_t *e)
 int32_t pipe_splice_write(fd_entry_t *e, const char __user *buf, uint32_t count, int nonblock,
                           uint32_t src)
 {
-    return pipe_put(e, buf, count, nonblock ? PUT_NONBLOCK : 0u, src);
+    return pipe_put_one(e, buf, count, nonblock ? PUT_NONBLOCK : 0u, src);
+}
+
+int32_t pipe_writev(fd_entry_t *e, const struct kernel_iovec *iov, int count)
+{
+    uint32_t total = 0;
+    int i;
+
+    for (i = 0; i < count; i++) {
+        total += (uint32_t)iov[i].iov_len;
+    }
+    return pipe_put(e, iov, count, total, PUT_MERGE | (fd_is_nonblock(e) ? PUT_NONBLOCK : 0u), 0);
 }
 
 int32_t pipe_vmsplice_write(fd_entry_t *e, const char __user *buf, uint32_t count, int nonblock)
 {
-    return pipe_put(e, buf, count, PUT_PINNED | (nonblock ? PUT_NONBLOCK : 0u),
-                    (uint32_t)((__force uintptr_t)buf & (PAGE_SIZE - 1)));
+    return pipe_put_one(e, buf, count, PUT_PINNED | (nonblock ? PUT_NONBLOCK : 0u),
+                        (uint32_t)((__force uintptr_t)buf & (PAGE_SIZE - 1)));
 }
 
 int32_t pipe_splice_room(fd_entry_t *e, int nonblock, uint32_t src)

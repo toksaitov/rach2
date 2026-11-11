@@ -1431,10 +1431,11 @@ static int iov_append_file(const fd_entry_t *entry)
 /** Write a copied user vector under the file's lock, as defined below. */
 static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long long pos, int append);
 
-/** Import the master's vector once before writing it under the pair's
- * lock. `entry` is held and open for writing, and `count` is in range.
- * Return the bytes written or an import, allocation or write error. */
-static long writev_master(fd_entry_t *entry, uintptr_t addr, int count)
+/** Import the vector once and write it whole to a pty master, under the
+ * pair's lock (`pty_master_writev`), or to a pipe end as one write
+ * (`pipe_writev`). `entry` is held and open for writing, and `count` is in
+ * range. Return the bytes written or an import, allocation or write error. */
+static long writev_whole(fd_entry_t *entry, uintptr_t addr, int count)
 {
     struct kernel_iovec local[8], *iov = local;
     long rc;
@@ -1447,7 +1448,8 @@ static long writev_master(fd_entry_t *entry, uintptr_t addr, int count)
     }
     rc = iov_import(iov, addr, count, -1);
     if (rc > 0) {
-        rc = pty_master_writev(entry, iov, count);
+        rc = entry->type == FD_TYPE_PTM ? pty_master_writev(entry, iov, count)
+                                        : pipe_writev(entry, iov, count);
     }
     if (iov != local) {
         kfree(iov);
@@ -1458,7 +1460,8 @@ static long writev_master(fd_entry_t *entry, uintptr_t addr, int count)
 /**
  * writev(2) takes fd, the vector and its count. An O_APPEND mounted file uses
  * iov_file_write's lock across the vector. A pty master imports the vector
- * once and holds its write lock across it (`writev_master`). Otherwise
+ * once and holds its write lock across it, and a pipe end takes it as one
+ * write, as Linux's `pipe_write` takes it (`writev_whole`). Otherwise
  * elements are written in order (`writev_elements`); on a tmpfs file the
  * mount's lock is held across them, and a vector that would grow a sealed
  * file is cut to the whole 2 MiB
@@ -1491,8 +1494,8 @@ static long writev(int fd, uintptr_t iov_user, int iovcnt)
         return -EINVAL;
     }
     entry = fd_get(current_proc->fds, fd);
-    if (entry && entry->type == FD_TYPE_PTM) {
-        return writev_master(entry, iov_user, iovcnt);
+    if (entry && (entry->type == FD_TYPE_PTM || pipe_is(entry))) {
+        return writev_whole(entry, iov_user, iovcnt);
     }
     wanted = iov_import(NULL, iov_user, iovcnt, -1);
     if (wanted < 0) {
