@@ -9,6 +9,8 @@
 #include "intel_dp.h"
 
 #include "../../klog.h"
+#include "../../rtc.h"
+#include "../../timer.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
 
@@ -171,25 +173,35 @@ static void gmbus_reset(struct drm_i915_private *i915)
 
 /**
  * Wait up to `bound_us` until `done` says so, as Linux's wait_for: GMBUS
- * waits sleep (intel_gmbus.c:391-395 in 6.12.115, wait_for's usleep_range
- * at i915_utils.h:237), so that a transfer that stalls for its whole bound
+ * waits sleep (intel_gmbus.c:394 in 6.12.115, wait_for's usleep_range at
+ * i915_utils.h:237), so that a transfer that stalls for its whole bound
  * keeps no processor. The first GMBUS_SPIN_US are spun, since a sleep is
  * at least a tick here where Linux's first are 10 us; then `done` is read
  * after each sleep of a millisecond, the transfer kept whole meanwhile by
- * the controller's lock (gmbus_lock). 0, or -ETIMEDOUT, counted and logged
- * as `what`, as i915_wait_until does.
+ * the controller's lock (gmbus_lock). The wait ends at a deadline on the
+ * monotonic clock, as wait_for's `end__` (i915_utils.h:220), since a sleep
+ * lasts two ticks or more; it ends sooner only when the time it counted,
+ * which is never more than the time that passed, reaches the bound, as on
+ * a clock that does not move while the scheduler is off. Whether the wait
+ * has expired is read before `done`, so that a last read always follows
+ * the deadline (i915_utils.h:225-236). 0, or -ETIMEDOUT, counted and
+ * logged as `what`, as i915_wait_until does.
  */
 static int32_t gmbus_poll(struct intel_gmbus *bus, const char *what,
                           int (*done)(struct i915_hw *, void *), void *arg, uint32_t bound_us)
 {
     struct i915_hw *hw = &bus->i915->hw;
+    uint64_t due =
+        rtc_ticks_now() + drm_div64((uint64_t)bound_us * TICK_HZ + 999999u, 1000000u) + 1u;
     uint32_t waited = 0, step = 1;
+    int expired;
 
     for (;;) {
+        expired = waited >= bound_us || rtc_ticks_now() >= due;
         if (done(hw, arg)) {
             return 0;
         }
-        if (waited >= bound_us) {
+        if (expired) {
             hw->timeouts++;
             hw->last_timeout = what;
             klog(KLOG_ERR, "i915", "%s: timeout after %u us", what, (unsigned)bound_us);
@@ -743,32 +755,23 @@ bailout:
  * The buses
  */
 
-/** Whether the controller's lock of `arg`, a device, is free. */
-static int gmbus_is_free(void *arg)
-{
-    return !((struct drm_i915_private *)arg)->display.gmbus_held;
-}
-
 /**
  * Take the GMBUS controller and the pins' modes for a transfer, Linux's
- * gmbus_lock_bus (intel_gmbus.c:842-849 in 6.12.115): a sleeping lock,
- * since the transfer's waits sleep and another probe, a system call's or
- * a worker's, may run meanwhile. Taken under the commit lock where the
- * caller holds it, never the other way round. Process context or boot.
+ * gmbus_lock_bus, which takes gmbus.mutex (intel_gmbus.c:842-849 and :972 in
+ * 6.12.115, made at :895): a mutex, since the transfer's waits sleep and
+ * another probe, a system call's or a worker's, may run meanwhile. Taken under
+ * the commit lock where the caller holds it, never the other way round. Process
+ * context or boot.
  */
 static void gmbus_lock(struct drm_i915_private *i915)
 {
-    while (i915->display.gmbus_held) {
-        (void)wq_wait_event_nointr(&i915->display.gmbus_free, gmbus_is_free, i915);
-    }
-    i915->display.gmbus_held = 1;
+    mutex_lock(&i915->display.gmbus_mutex);
 }
 
 /** Let the controller go, Linux's gmbus_unlock_bus. */
 static void gmbus_unlock(struct drm_i915_private *i915)
 {
-    i915->display.gmbus_held = 0;
-    wq_wake_all(&i915->display.gmbus_free);
+    mutex_unlock(&i915->display.gmbus_mutex);
 }
 
 /**
@@ -829,8 +832,7 @@ void intel_gmbus_setup(struct drm_i915_private *i915)
         bus->bus.ctx = bus;
         bus->bus.name = bus->name;
     }
-    i915->display.gmbus_held = 0;
-    wait_queue_init(&i915->display.gmbus_free);
+    mutex_init(&i915->display.gmbus_mutex, "gmbus");
     gmbus_reset(i915);
 }
 

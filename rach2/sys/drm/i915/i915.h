@@ -1353,10 +1353,9 @@ struct intel_crtc {
 /*
  * The device's display. `crtc` are the pipes A to C, `encoder` DDI A and
  * `connector` its eDP panel, `dp` the panel, and `ddi` DDI B to D, by port less
- * one. `gmbus` are the PCH's GMBUS pins, by pin; `gmbus_held` says a
- * transfer on one of them, which may sleep, holds the controller and the
- * pins' modes, as Linux's gmbus.mutex, and `gmbus_free` is where another
- * waits for it (intel_gmbus.c). `dpll` are the PLLs, by
+ * one. `gmbus` are the PCH's GMBUS pins, by pin; `gmbus_mutex` keeps the
+ * controller and the pins' modes for a transfer on one of them, which may
+ * sleep, as Linux's gmbus.mutex (intel_gmbus.c). `dpll` are the PLLs, by
  * DPLL_ID_, with `dpll_nssc` the non-SSC reference in kHz of a non-ULT part, 24
  * or 135 MHz as FUSE_STRAP3 says. `hotplug` is the ports' hotplug. `pps` is the
  * sequencer's readout. `cdclk` is the CD clock in kHz and `max_cdclk` the most
@@ -1395,8 +1394,7 @@ struct intel_display {
     struct intel_dp dp;
     struct intel_ddi_port ddi[3];
     struct intel_gmbus gmbus[GMBUS_NUM_PINS];
-    int gmbus_held;
-    wait_queue_t gmbus_free;
+    struct mutex gmbus_mutex;
     struct intel_dpll dpll[INTEL_NUM_DPLLS];
     uint32_t dpll_nssc;
     struct intel_hotplug hotplug;
