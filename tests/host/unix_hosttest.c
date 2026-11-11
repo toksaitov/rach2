@@ -343,8 +343,15 @@ int iov_fetch(struct kernel_iovec *iov, uintptr_t uvec, uint32_t i)
                : 0;
 }
 
-/* syscall_fs.c's iov_import for a native call: every length checked as a
- * signed one, then each range, the total cut at USER_RW_MAX. */
+/** Whether the call is an i386 program's on the x86-64 kernel: never, since
+ * every call of the test is native. */
+int in_compat_syscall(void)
+{
+    return 0;
+}
+
+/* syscall_fs.c's iov_import, line for line: every length checked as the
+ * caller's ssize_t, then each range, the total cut at USER_RW_MAX. */
 long iov_import(struct kernel_iovec *iov, uintptr_t uvec, int count, int prefault)
 {
     struct kernel_iovec one;
@@ -359,7 +366,7 @@ long iov_import(struct kernel_iovec *iov, uintptr_t uvec, int count, int prefaul
             if ((pass == 0 || !iov) && iov_fetch(e, uvec, (uint32_t)i) != 0) {
                 return -EFAULT;
             }
-            if ((long)e->iov_len < 0) {
+            if ((long)e->iov_len < 0 || (in_compat_syscall() && e->iov_len > 0x7FFFFFFFu)) {
                 return -EINVAL;
             }
             if (pass == 0) {
@@ -1593,6 +1600,58 @@ static void flight_lock_row(void)
     end_row("flight lock");
 }
 
+/** Write at `vec` two elements of 1 GiB each, whose total passes
+ * USER_RW_MAX, the first at `base`, and at `msg` a header that names them.
+ * Only the bytes a call moves need to be in the model's pages. */
+static void set_big_vector(uint32_t msg, uint32_t vec, uint32_t base)
+{
+    struct kernel_msghdr m;
+    struct kernel_iovec v[2];
+
+    v[0].iov_base = base;
+    v[0].iov_len = 0x40000000u;
+    v[1].iov_base = USER_BASE + 0x10000000u;
+    v[1].iov_len = 0x40000000u;
+    k_memcpy(user(vec), v, sizeof(v));
+    k_memset(&m, 0, sizeof(m));
+    m.msg_iov = vec;
+    m.msg_iovlen = 2;
+    k_memcpy(user(msg), &m, sizeof(m));
+}
+
+/**
+ * A vector whose lengths pass MAX_RW_COUNT together, USER_RW_MAX here, is
+ * cut there, as Linux's import_iovec cuts it, not refused: the second
+ * element keeps what the first leaves, the datagram send then fails as one
+ * larger than the send buffer, and the stream receive takes what is queued.
+ */
+static void vector_row(void)
+{
+    struct kernel_iovec *iov;
+    uint32_t total;
+
+    setup();
+    set_big_vector(AT(6, 0), AT(6, 64), AT(6, 256));
+    check(get_iov(AT(6, 64), 2, &iov, &total) == 0 && total == USER_RW_MAX &&
+              iov[0].iov_len == 0x40000000u && iov[1].iov_len == USER_RW_MAX - 0x40000000u,
+          "a vector whose total passes MAX_RW_COUNT is cut there, its last element shortened");
+    kfree(iov);
+    check(pair(SOCK_DGRAM) == 0, "vector: a datagram pair");
+    check(unix_sendmsg(fd_at(0), AT(6, 0), MSG_DONTWAIT) == -EMSGSIZE,
+          "a datagram sendmsg of a vector past MAX_RW_COUNT is too large for the send buffer, "
+          "not EINVAL");
+    end_row("vector send");
+
+    setup();
+    check(pair(SOCK_STREAM) == 0, "vector: a stream pair");
+    check(send_text(1, "abc") == 3, "vector: three bytes sent");
+    set_big_vector(AT(6, 0), AT(6, 64), AT(6, 256));
+    check(unix_recvmsg(fd_at(0), AT(6, 0), MSG_DONTWAIT) == 3 && user(AT(6, 256))[0] == 'a' &&
+              user(AT(6, 256))[2] == 'c',
+          "a stream recvmsg into a vector past MAX_RW_COUNT takes the bytes queued, not EINVAL");
+    end_row("vector receive");
+}
+
 /** `m` itself: no row makes a bind mount, so a mount is its own base. */
 const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
 {
@@ -1632,6 +1691,7 @@ int main(void)
     transit_row();
     moved_row();
     flight_lock_row();
+    vector_row();
     dprintf(1, "unix-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
     return failures ? 1 : 0;
 }
