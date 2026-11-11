@@ -26,6 +26,7 @@
 
 extern int printf(const char *fmt, ...);
 extern void *malloc(unsigned long n);
+extern unsigned long kheap_host_largest; /* kheap_host.c: the largest kmalloc granted */
 
 /* The kernel headers define the fixed-width types themselves. */
 #include "../../rach2/sys/lib/kerrno.h"
@@ -1636,13 +1637,17 @@ static void sent_history_rows(void)
  * stops at 0xFFFFFFFF, so after a stream that went round the sequence
  * space, with snd_una 16 past iss, one 32 below snd_una is taken. On a
  * passive connection the SYN is not counted, and an acknowledgement of
- * iss in the first data draws a challenge.
+ * iss in the first data draws a challenge. The bound is judged only below
+ * snd_una, as Linux's tcp_ack judges it inside before(ack, snd_una): after
+ * an active handshake, with one byte acknowledged, an acknowledgement
+ * 0x7fffffff past snd_una is past snd_nxt and dropped unanswered in
+ * ESTABLISHED, its data with it, and spends no answer of the rate limit.
  */
 static void old_ack_bound_rows(void)
 {
     struct socket sock, lsock;
     struct tcb *conn;
-    uint32_t peer_seq = 32500, iss, challenges;
+    uint32_t peer_seq = 32500, iss, challenges, stamp;
     uint16_t lport;
     static uint8_t bytes[1000];
 
@@ -1655,6 +1660,14 @@ static void old_ack_bound_rows(void)
     lport = read16be(segs[0].data + 0);
     rx(119, lport, peer_seq, iss + 1u, (uint8_t)(F_SYN | F_ACK), 1000, (const char *)0, 0);
     peer_seq++;
+    n_segs = 0;
+    challenges = net_mib.tcp_challenge_ack;
+    stamp = conn->oow_stamp;
+    rx(119, lport, peer_seq, conn->snd_una + 0x7fffffffu, F_ACK, 1000, "ijkl", 4);
+    CHECK("an acknowledgement 0x7fffffff past snd_una is dropped unanswered, as one past snd_nxt",
+          conn->snd_acked == 1u && conn->snd_una == conn->snd_nxt && n_segs == 0 &&
+              net_mib.tcp_challenge_ack == challenges && conn->oow_stamp == stamp &&
+              conn->rcv_nxt == peer_seq);
     CHECK("1000 bytes go into a window of 1000", tcp_send(&sock, bytes, 1000) == 1000);
     rx(119, lport, peer_seq, conn->snd_nxt, F_ACK, 1000, (const char *)0, 0);
     CHECK("and 1000 more", tcp_send(&sock, bytes, 1000) == 1000);
@@ -1699,9 +1712,127 @@ static void old_ack_bound_rows(void)
 }
 
 /**
+ * Check that new data waits in the send ring while the heap refuses the
+ * send history a larger array, so that each byte keeps its own send's
+ * tick: with TCP_USER_TIMEOUT 5000, fifteen sends 50 ms apart from 0 take
+ * fifteen of the block's sixteen runs, the last kept for the FIN; a
+ * sixteenth at 0.75 s, with the heap refusing, sends nothing until the
+ * heap gives the array at 2 s, and goes then as a run of its own. An
+ * acknowledgement at 4.9 s of the first fourteen closes the window over
+ * the last two runs, and the first probe, at 5.9 s, gives the connection
+ * up, counting from the fifteenth send, at 0.7 s, as Linux counts from the
+ * head segment's own stamp. A history that took the sixteenth send into
+ * the fifteenth's run, at its tick, would count from 0.75 s or later and
+ * keep a connection the oldest bytes' age has ended.
+ */
+static void sent_refused_rows(void)
+{
+    struct socket sock;
+    struct tcb *conn;
+    uint32_t peer_seq = 33800, first;
+    uint16_t lport;
+    static uint8_t bytes[5];
+    unsigned k;
+    int ok = 1;
+
+    reset_all();
+    conn = open_conn(&sock, 123, &peer_seq, &lport);
+    sock.user_timeout = 5000;
+    conn->rto = TCP_MS(6000);
+    first = (uint32_t)kernel_ticks;
+    for (k = 0; k < 15; k++) {
+        while (kernel_ticks - first < TCP_MS(50) * k) {
+            kernel_ticks++;
+            tcp_tick();
+        }
+        ok &= tcp_send(&sock, bytes, 5) == 5;
+    }
+    CHECK("refused history: fifteen sends keep fifteen runs in the block",
+          ok && n_segs == 15 && conn->sent_runs == 15 && conn->sent_more == 0);
+    while (kernel_ticks - first < TCP_MS(750)) {
+        kernel_ticks++;
+        tcp_tick();
+    }
+    kheap_host_largest = 1;
+    CHECK("a sixteenth send, with the heap refusing the history, is queued and not sent",
+          tcp_send(&sock, bytes, 5) == 5 && n_segs == 15 && conn->sent_runs == 15);
+    while (kernel_ticks - first < TCP_MS(2000)) {
+        kernel_ticks++;
+        tcp_tick();
+    }
+    CHECK("and waits while the heap refuses", n_segs == 15 && conn->snd_nxt - conn->snd_una == 75u);
+    kheap_host_largest = 0;
+    kernel_ticks++;
+    tcp_tick();
+    CHECK("it goes at the next tick once the heap gives the array, as a run of its own",
+          n_segs == 16 && conn->sent_runs == 16 && conn->sent_more != 0 &&
+              conn->snd_nxt - conn->snd_una == 80u);
+    while (kernel_ticks - first < TCP_MS(4900)) {
+        kernel_ticks++;
+        tcp_tick();
+    }
+    conn->rto = TCP_MS(1000);
+    conn->rtt_start = 0; /* no round-trip sample, so the timeout stays 1 s */
+    rx(123, lport, peer_seq, conn->snd_una + 70u, F_ACK, 0, (const char *)0, 0);
+    CHECK("an acknowledgement of the first fourteen at 4.9 s closes the window over two runs",
+          conn->snd_wnd == 0 && conn->snd_nxt - conn->snd_una == 10u && conn->sent_runs == 2);
+    n_segs = 0;
+    while (conn->state == TCP_ESTABLISHED && n_segs == 0 && kernel_ticks - first < TCP_MS(7000)) {
+        kernel_ticks++;
+        tcp_tick();
+    }
+    CHECK("the first probe, at 5.9 s, gives the connection up, counting from the send at 0.7 s",
+          conn->state == TCP_CLOSED && conn->so_error == ETIMEDOUT &&
+              kernel_ticks - first == TCP_MS(5900));
+}
+
+/**
+ * Check the data clock of a segment whose data was taken before and whose
+ * FIN is new, as Linux's tcp_data_queue queues it and tcp_event_data_recv
+ * stamps lrcvtime: after a keepalive probe, a byte with an old
+ * acknowledgement and, 500 ms later, the same byte again with the peer's
+ * FIN each move the idle clock and keep the probes' count, and the FIN
+ * leads to CLOSE_WAIT.
+ */
+static void overlap_fin_rows(void)
+{
+    struct socket sock;
+    struct tcb *conn;
+    uint32_t peer_seq = 34500, una;
+    uint16_t lport;
+    static uint8_t bytes[100];
+
+    reset_all();
+    conn = open_conn(&sock, 124, &peer_seq, &lport);
+    CHECK("overlap and FIN: 100 bytes go", tcp_send(&sock, bytes, 100) == 100);
+    rx(124, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, (const char *)0, 0);
+    una = conn->snd_una;
+    sock.keepalive = 1;
+    sock.keepidle = 2;
+    sock.keepintvl = 1;
+    sock.keepcnt = 3;
+    kernel_ticks++;
+    tcp_tick();
+    n_segs = 0;
+    (void)tick_until_sent(0, 3 * TICK_HZ);
+    CHECK("the first probe goes", n_segs == 1 && conn->ka_probes == 1);
+    rx(124, lport, peer_seq, una - 1u, F_ACK, 65535, "a", 1);
+    CHECK("a byte with an old acknowledgement moves the idle clock and keeps the count",
+          conn->rcv_nxt == peer_seq + 1u && conn->ka_since == (uint32_t)kernel_ticks &&
+              conn->ka_probes == 1);
+    kernel_ticks += TCP_MS(500);
+    rx(124, lport, peer_seq, una - 1u, (uint8_t)(F_ACK | F_FIN), 65535, "a", 1);
+    CHECK("the byte again with the peer's FIN moves it too and leads to CLOSE_WAIT",
+          conn->state == TCP_CLOSE_WAIT && conn->rcv_nxt == peer_seq + 2u &&
+              conn->ka_since == (uint32_t)kernel_ticks && conn->ka_probes == 1);
+    reset_all();
+}
+
+/**
  * Run the rows of what a connection refuses and what it takes from a
  * segment it lets on: refused_ack_rows, keepalive_refused_rows,
- * resent_rows, sent_history_rows and old_ack_bound_rows.
+ * resent_rows, sent_history_rows, sent_refused_rows, old_ack_bound_rows
+ * and overlap_fin_rows.
  */
 static void judged_segment_rows(void)
 {
@@ -1709,7 +1840,9 @@ static void judged_segment_rows(void)
     keepalive_refused_rows();
     resent_rows();
     sent_history_rows();
+    sent_refused_rows();
     old_ack_bound_rows();
+    overlap_fin_rows();
 }
 
 /**

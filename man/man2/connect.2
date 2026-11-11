@@ -93,13 +93,16 @@ After the peer's own SYN, and after establishment, a reset at the next
 expected sequence number records
 .Er ECONNRESET ,
 and so does one at the right edge of the rightmost block of out-of-order
-data this side acknowledges selectively; after the peer's FIN, in the
-close-wait state, the reset records
-.Er EPIPE
-instead, and one at the number before the next expected is taken too, as
+data this side acknowledges selectively.
+After the peer's FIN, in the close-wait, closing and last-ack states, one
+at the number before the next expected, the FIN's own, is taken too, as
 Linux's
 .Fn tcp_reset_check
-takes it and
+takes it; in the close-wait state a reset records
+.Er EPIPE
+in place of
+.Er ECONNRESET ,
+as Linux's
 .Fn tcp_reset
 records it.
 A reset elsewhere in the receive window, with data or without, is

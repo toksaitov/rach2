@@ -334,14 +334,14 @@ struct tcb {
     uint32_t retx_stamp;
     /* The send tick of the data in flight, as Linux stamps each segment it
      * sends: `sent_runs` runs (`struct tcp_sent_run`), the oldest first,
-     * held in `sent_first` and, once more than TCP_SENT_RUNS are in flight,
-     * in `sent_more`, a heap array of `sent_cap` runs that doubles when it
-     * fills and is freed when the history empties. An acknowledgement
-     * drops the runs it covers. Only when the heap refuses a larger array
-     * does the newest run take in the bytes sent after it and their tick,
-     * so that a stamp is never earlier than its bytes' send. The FIN counts
-     * as a byte. Only `tcp_rto_expire` reads it, for a closed window's
-     * first probe. */
+     * held in `sent_first` and, once its TCP_SENT_RUNS are not enough, in
+     * `sent_more`, a heap array of `sent_cap` runs that doubles when it
+     * would fill and is freed when the history empties. An acknowledgement
+     * drops the runs it covers. New data takes a run only when one stays
+     * free after it for the FIN, and waits in the send ring while the heap
+     * refuses a larger array, so that each byte keeps its own send's tick
+     * (`tcp_sent_room`). The FIN counts as a byte. Only `tcp_rto_expire`
+     * reads it, for a closed window's first probe. */
     uint32_t sent_runs;
     uint32_t sent_cap;
     struct tcp_sent_run *sent_more;
