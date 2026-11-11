@@ -220,6 +220,23 @@ struct vpath {
 int synth_classify(const char *path, struct vpath *vp);
 
 /*
+ * The owner the last lookup gave a node of /proc whose Linux inode keeps
+ * it, held by each descriptor open on that node (`procfs_owner_keep`): a
+ * file of /proc/<pid> outside its net directory, a descriptor's fdinfo
+ * file, or a process's fd, fdinfo or task directory. Linux sets the owner
+ * when a lookup makes or revalidates the inode, and the inode's getattr and
+ * permission read it as it is.
+ */
+struct synth_owner {
+    int kept;     /* 1 while on procfs's list of kept owners */
+    int node[4];  /* kind, file or descriptor, process or
+                     thread, and a thread's process or 0 */
+    uint32_t uid; /* the owner the last lookup gave the node */
+    uint32_t gid;
+    struct synth_owner *next; /* the next kept owner */
+};
+
+/*
  * The record from the heap that the `priv` of a descriptor open on a
  * synthetic directory points at, since its coordinates do not fit in the
  * pointer: the directory's kind, its process's pid and, for a thread's
@@ -233,8 +250,8 @@ struct synth_dir {
     int pid;
     int used; /* 1 from its allocation; nothing reads it */
     int tid;
-    uint32_t uid; /* a /proc/PID/fd directory's owner at its open, which */
-    uint32_t gid; /* fchdir judges by once the process has ended */
+    struct synth_owner own; /* a /proc/PID/fd, fdinfo or task directory's
+                               owner, which fstat and fchdir read */
 };
 
 /**

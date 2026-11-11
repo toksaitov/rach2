@@ -381,23 +381,19 @@ struct procfs_file {
     int fresh;
     int stale;
     uint32_t gen;
-    /* A file of /proc/<pid> or a descriptor's fdinfo file: `owned`, the node
-     * as `procfs_node_of` names it, the owner the last lookup of that node
-     * gave (`procfs_lookup_owner`), and the next such open file. */
-    int owned;
-    int node[4];
-    uint32_t uid;
-    uint32_t gid;
-    struct procfs_file *owned_next;
+    /* The owner the last lookup of a file of /proc/<pid> or of a
+     * descriptor's fdinfo file gave it (`procfs_lookup_owner`). */
+    struct synth_owner own;
 };
 
-/* The open files whose owner is their node's at its last lookup, as a
- * Linux inode of /proc/<pid> keeps the owner `pid_revalidate` and
- * `tid_fd_revalidate` set (fs/proc/base.c:2053, fs/proc/fd.c:145) and has
- * no getattr to work it out again (base.c:776, fd.c:103). */
-static struct procfs_file *procfs_owned;
+/* The kept owners of the open descriptors, as a Linux inode of /proc/<pid>
+ * keeps the owner `pid_revalidate` and `tid_fd_revalidate` set
+ * (fs/proc/base.c:2066, fs/proc/fd.c:161) where no getattr works it out
+ * again (base.c:776-778, fd.c:103-106, fd.c:350-366, fd.c:411-415,
+ * base.c:3945-3958). */
+static struct synth_owner *procfs_owned;
 
-static void procfs_own(struct procfs_file *f, const struct vpath *vp, int id);
+static void procfs_own(struct synth_owner *o, const struct vpath *vp, int id);
 
 /**
  * Drop a user's count of `mm` that a read of /proc took for its length,
@@ -7092,21 +7088,14 @@ static int32_t procfs_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     return -ENOTTY;
 }
 
-/** Free the descriptor's record and its text, take it off `procfs_owned`,
- * and drop a mem descriptor's hold on its address space; at the
- * description's last close. */
+/** Free the descriptor's record and its text, drop its kept owner
+ * (`procfs_owner_drop`), and drop a mem descriptor's hold on its address
+ * space; at the description's last close. */
 static void procfs_close(fd_entry_t *e)
 {
     struct procfs_file *f = (struct procfs_file *)e->priv;
     if (f) {
-        struct procfs_file **pp = &procfs_owned;
-
-        while (f->owned && *pp && *pp != f) {
-            pp = &(*pp)->owned_next;
-        }
-        if (f->owned && *pp == f) {
-            *pp = f->owned_next;
-        }
+        procfs_owner_drop(&f->own);
         e->priv = NULL;
         mm_unhold(f->mm);
         kfree(f->data);
@@ -7674,7 +7663,7 @@ static int procfs_open_mem(const struct vpath *vp, int pid, int flags)
     e->sock = NULL;
     e->ops = &procfs_mem_ops;
     e->priv = f;
-    procfs_own(f, vp, pid);
+    procfs_own(&f->own, vp, pid);
     e->ofd->offset = 0;
     e->flags = acc == 0 ? FD_FLAG_READ : acc == 1 ? FD_FLAG_WRITE : (FD_FLAG_READ | FD_FLAG_WRITE);
     if (flags & PROCFS_O_CLOEXEC) {
@@ -7735,64 +7724,108 @@ int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid)
 }
 
 /**
- * Name in `node` the file `vp` names whose owner its lookup sets, a file of
- * /proc/<pid> other than one of its net directory, or a descriptor's fdinfo
- * file: its kind, its file or descriptor, the process or thread `id` that
- * `procfs_resolve_id` gave, and for a thread's file its process. Returns 1,
- * or 0 for any other node.
+ * Name in `node` the node `vp` names whose inode keeps the owner its lookup
+ * set (struct synth_owner): its kind, its file or descriptor, the process or
+ * thread `id` that `procfs_resolve_id` gave, and for a thread's node its
+ * process. Returns 1, or 0 for any other node, /proc/<pid> and its ns
+ * directory among them, whose getattr works the owner out again
+ * (`pid_getattr`, fs/proc/base.c:2007, 3436 and 3767, and
+ * fs/proc/namespaces.c:195).
  */
 static int procfs_node_of(const struct vpath *vp, int id, int node[4])
 {
-    if (vp->kind == VNODE_PROC_FILE ? synth_net_name(vp->procfile) != NULL
-                                    : vp->kind != VNODE_PROC_FDINFO) {
+    switch (vp->kind) {
+    case VNODE_PROC_FILE:
+        if (synth_net_name(vp->procfile) != NULL) {
+            return 0;
+        }
+        node[1] = vp->procfile;
+        break;
+    case VNODE_PROC_FDINFO:
+        node[1] = vp->procfd;
+        break;
+    case VNODE_PROC_FD_DIR:
+    case VNODE_PROC_FDINFO_DIR:
+    case VNODE_PROC_TASK_DIR:
+        node[1] = 0;
+        break;
+    default:
         return 0;
     }
     node[0] = vp->kind;
-    node[1] = vp->kind == VNODE_PROC_FDINFO ? vp->procfd : vp->procfile;
     node[2] = id;
     node[3] = vp->tid != 0 ? procfs_resolve_pid(vp->pid) : 0;
     return 1;
 }
 
 /**
- * Give every open file of the node `node` (`procfs_node_of`) the owner
- * Linux's lookup gives its inode, task_dump_owner's for a file: the
- * effective IDs of the process or thread `node[2]` while it is dumpable,
- * and root otherwise (`procfs_oom_owner`). Linux sets it when the lookup
- * makes the inode and again at each walk that finds the dentry
- * (fs/proc/base.c:2693 and 2066, fs/proc/fd.c:393 and 161).
+ * Give every kept owner of the node `node` (`procfs_node_of`) the owner
+ * Linux's lookup gives its inode, task_dump_owner's for the inode's mode:
+ * the effective IDs of the process or thread `node[2]` for the fdinfo and
+ * task directories, mode 0555, and for the fd directory and the files while
+ * it is dumpable, and root otherwise (`procfs_pid_owner`). Linux sets it
+ * when the lookup makes the inode and again at each walk that finds the
+ * dentry (fs/proc/base.c:1895, 2693 and 2066, fs/proc/fd.c:393 and 161).
  */
 static void procfs_set_owner(const int node[4])
 {
-    struct procfs_file *f;
+    struct synth_owner *o;
+    uint32_t mode = node[0] == VNODE_PROC_FD_DIR                                         ? 0040500u
+                    : node[0] == VNODE_PROC_FDINFO_DIR || node[0] == VNODE_PROC_TASK_DIR ? 0040555u
+                                                                                         : 0100644u;
     uint32_t uid = 0, gid = 0;
 
-    if (procfs_oom_owner(node[2], &uid, &gid) != 0) {
+    if (procfs_pid_owner(node[2], mode, &uid, &gid) != 0) {
         return;
     }
-    for (f = procfs_owned; f; f = f->owned_next) {
-        if (f->node[0] == node[0] && f->node[1] == node[1] && f->node[2] == node[2] &&
-            f->node[3] == node[3]) {
-            f->uid = uid;
-            f->gid = gid;
+    for (o = procfs_owned; o; o = o->next) {
+        if (o->node[0] == node[0] && o->node[1] == node[1] && o->node[2] == node[2] &&
+            o->node[3] == node[3]) {
+            o->uid = uid;
+            o->gid = gid;
         }
     }
 }
 
 /**
- * Put the record `f` of a descriptor just opened on `vp`, for the process
- * or thread `id`, on `procfs_owned` when its node's lookup sets its owner,
- * and give it and the node's other open files the owner of this lookup.
+ * Put `o`, the record of a descriptor just opened on `vp` for the process
+ * or thread `id`, on `procfs_owned` when its node's inode keeps its owner,
+ * and give it and the node's other kept owners the owner of this lookup.
  */
-static void procfs_own(struct procfs_file *f, const struct vpath *vp, int id)
+static void procfs_own(struct synth_owner *o, const struct vpath *vp, int id)
 {
-    if (!procfs_node_of(vp, id, f->node)) {
+    if (o->kept || !procfs_node_of(vp, id, o->node)) {
         return;
     }
-    f->owned = 1;
-    f->owned_next = procfs_owned;
-    procfs_owned = f;
-    procfs_set_owner(f->node);
+    o->kept = 1;
+    o->next = procfs_owned;
+    procfs_owned = o;
+    procfs_set_owner(o->node);
+}
+
+void procfs_owner_keep(struct synth_owner *o, const struct vpath *vp)
+{
+    int id = procfs_resolve_id(vp);
+
+    if (id >= 0) {
+        procfs_own(o, vp, id);
+    }
+}
+
+void procfs_owner_drop(struct synth_owner *o)
+{
+    struct synth_owner **pp = &procfs_owned;
+
+    if (!o->kept) {
+        return;
+    }
+    while (*pp && *pp != o) {
+        pp = &(*pp)->next;
+    }
+    if (*pp == o) {
+        *pp = o->next;
+    }
+    o->kept = 0;
 }
 
 void procfs_lookup_owner(const struct vpath *vp)
@@ -7813,11 +7846,11 @@ int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
         return -1;
     }
     f = (const struct procfs_file *)e->priv;
-    if (!f->owned) {
+    if (!f->own.kept) {
         return -1;
     }
-    *uid = f->uid;
-    *gid = f->gid;
+    *uid = f->own.uid;
+    *gid = f->own.gid;
     return f->origin_file == SYNTH_PROC_OOM_ADJ || f->origin_file == SYNTH_PROC_COMM ||
            procfs_is_idmap(f->origin_file);
 }
@@ -8175,7 +8208,7 @@ static int procfs_open_idmap(const struct vpath *vp, int file, int pid, int flag
     e->sock = NULL;
     e->ops = file == SYNTH_PROC_COMM ? &procfs_comm_ops : &procfs_idmap_ops;
     e->priv = f;
-    procfs_own(f, vp, pid);
+    procfs_own(&f->own, vp, pid);
     e->ofd->offset = 0;
     e->flags = acc == 1 ? FD_FLAG_WRITE : (FD_FLAG_READ | FD_FLAG_WRITE);
     if (flags & PROCFS_O_CLOEXEC) {
@@ -8228,7 +8261,7 @@ static int procfs_open_oom(const struct vpath *vp, int pid, int flags)
     e->sock = NULL;
     e->ops = &procfs_oom_ops;
     e->priv = f;
-    procfs_own(f, vp, pid);
+    procfs_own(&f->own, vp, pid);
     e->ofd->offset = 0;
     e->flags = acc == 0 ? FD_FLAG_READ : acc == 1 ? FD_FLAG_WRITE : (FD_FLAG_READ | FD_FLAG_WRITE);
     if (flags & PROCFS_O_CLOEXEC) {
@@ -9490,7 +9523,7 @@ int procfs_open(const struct vpath *vp, int flags)
     e->sock = NULL;
     e->ops = &procfs_file_ops;
     e->priv = f;
-    procfs_own(f, vp, pid);
+    procfs_own(&f->own, vp, pid);
     e->ofd->offset = 0;
     e->flags = FD_FLAG_READ;
     if (flags & PROCFS_O_CLOEXEC) {

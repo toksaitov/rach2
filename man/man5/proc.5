@@ -1504,17 +1504,33 @@ and
 read a process's user from the directory's owner.
 A
 .Xr stat 2
-of a path works the owner out afresh, while a file, or a descriptor's
+of a path works the owner out afresh, while a file, a descriptor's
 .Pa fdinfo
-file, keeps the owner the last lookup of its path gave it, as a Linux
-inode does: an
+file, and the
+.Pa fd ,
+.Pa fdinfo
+and
+.Pa task
+directories keep the owner the last lookup of their path gave them, as a
+Linux inode does: an
 .Xr fstat 2
-of a descriptor open on one reports the owner its open found, or a later
+of a descriptor open on one, an
+.Dv O_PATH
+one among them, reports the owner its open found, or a later
 .Xr stat 2
 of the same path, so a descriptor opened before
 .Dv PR_SET_DUMPABLE
-reports root until a path reaches the file again, and it keeps that owner
-after the process exits.
+reports root until a path reaches the node again, and it keeps that owner
+after the process exits or changes its IDs.
+An
+.Xr fchdir 2
+into
+.Pa fd
+is judged by that owner.
+The process's directory and its
+.Pa ns
+directory work their owner out at each
+.Xr fstat 2 .
 The directories of
 .Pa /proc
 are the processes the reader's PID namespace has, named by their numbers
