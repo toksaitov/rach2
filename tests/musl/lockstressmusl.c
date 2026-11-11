@@ -1047,15 +1047,13 @@ static void *fl_faulter(void *arg)
     pin(i + 1);
     guard_jb = &jb;
     while (!fl_stop) {
-        if (++c == 0) {
-            c = 1;
-        }
+        c = c % 0xFFFFFFFEu + 1;
         if (sigsetjmp(jb, 1)) {
             __atomic_add_fetch(&fl_faults, 1, __ATOMIC_RELAXED);
             continue;
         }
-        *w = c;
-        v = *w;
+        __atomic_store_n(w, c, __ATOMIC_RELAXED);
+        v = __atomic_load_n(w, __ATOMIC_RELAXED);
         if (v != c && v != 0) {
             fail("faulter %d wrote %u and read %u", i, c, v);
             break;
@@ -1689,16 +1687,16 @@ static int raw_fstatat(int at, const char *name, struct kstat *k)
     k->st_mode = st.st_mode;
 #else
     unsigned char st[96];
-    uint32_t mode;
+    uint32_t raw_mode;
 
     if (syscall(FSTATAT_NR, at, name, st, 0) != 0) {
         return -1;
     }
     /* struct stat64: st_mode at 16, st_size at 44, st_ino at 88. */
-    memcpy(&mode, st + 16, 4);
+    memcpy(&raw_mode, st + 16, 4);
     memcpy(&k->st_size, st + 44, 8);
     memcpy(&k->st_ino, st + 88, 8);
-    k->st_mode = mode;
+    k->st_mode = raw_mode;
 #endif
     return 0;
 }
