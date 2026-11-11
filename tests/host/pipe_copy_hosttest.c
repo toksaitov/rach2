@@ -639,7 +639,9 @@ static void write_with_data(void)
  * read returns the whole buffer, the peer waiting for the lock. A read of a
  * vector whose first buffer faults, through `pipe_readv`, is -EAGAIN from an
  * empty pipe and 0 from an ended one, which Linux's pipe_read answers
- * before any copy. A write of fewer bytes
+ * before any copy, and so is a read(2) into NULL, which Linux's vfs_read
+ * passes to the pipe, since access_ok passes it; with bytes queued, NULL
+ * faults in the copy and keeps them. A write of fewer bytes
  * than a page is one group, which a write commits whole, as Linux's
  * pipe_write commits a page: when its second page faults it is -EFAULT
  * with no byte added, and it leaves the group's buffer empty in the ring,
@@ -672,6 +674,16 @@ static void later_page(void)
     ring.write_open = 0;
     CHECK(pipe_readv(&reader, iov, 2) == 0,
           "an ended pipe is 0 before a vector's bad first buffer faults");
+
+    setup(0);
+    CHECK(pipe_read(&reader, NULL, 1) == -EAGAIN,
+          "an empty nonblocking pipe is eagain before a null buffer faults");
+    ring.write_open = 0;
+    CHECK(pipe_read(&reader, NULL, 1) == 0, "an ended pipe is 0 before a null buffer faults");
+    setup(0);
+    pipe_ring_put(&ring, memory, 2);
+    CHECK(pipe_read(&reader, NULL, 1) == -EFAULT && pipe_available(&ring) == 2,
+          "a null buffer faults in the copy with every byte kept");
 
     setup(0);
     ring.buf_pages = ring_pages;
