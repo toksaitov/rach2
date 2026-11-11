@@ -192,10 +192,18 @@ void smp_space_release(const struct page_dir *dir);
 
 /**
  * Stop every other processor for good, for a panic and a power off, and
- * wait, a second at most for each, until each has taken the stop, so that
- * none is still writing the log or the screen when the caller does.
+ * wait, a second at most and 10 ms more for a processor sent an NMI, until
+ * each has taken the stop, so that none is still writing the log or the
+ * screen when the caller does.
  */
 void smp_stop_others(void);
+
+/**
+ * Take a stop `smp_stop_others` asked of this processor, from its NMI
+ * handler: it does not return when one was asked. 0 when none was, and the
+ * NMI is some other one.
+ */
+int smp_stop_nmi(void);
 
 /** Make the boot processor's idle task and start the others the firmware
  * lists, as many as `maxcpus=` allows, the boot one counted; a panic when

@@ -66,6 +66,16 @@ static unsigned long waited_us;
 void arch_sync_core(void)
 {}
 
+/* The NMIs sent to each processor. */
+static int nmis[NR_CPUS];
+
+/** Count an NMI sent to `cpu`, which a processor that did not take its
+ * stop does not take either: it stays stuck. */
+void platform_cpu_nmi(int cpu)
+{
+    nmis[cpu]++;
+}
+
 /** Count an interrupt sent to `cpu` and answer its requests at once, as
  * `smp_service` would: a stop when `takes_stop` says so, a page to drop,
  * and a directory to give up for the kernel's. */
@@ -363,8 +373,10 @@ int main(void)
     check(cpu_table[1].stop_request && cpu_table[2].stop_request && cpu_table[3].stop_request &&
               !cpu_table[0].stop_request,
           "a stop asks every other processor");
-    check(waited_us == 1000000ul,
-          "and waits a second for the one that does not take it, none for those that do");
+    check(waited_us == 1010000ul,
+          "and waits a second for the one that does not take it and 10 ms after its NMI");
+    check(nmis[2] == 1 && nmis[1] == 0 && nmis[3] == 0 && nmis[0] == 0,
+          "an NMI goes to the processor that did not take the stop, and to no other");
 
     k_memset(cpu_table, 0, sizeof(cpu_table));
     cpus_online = 1;

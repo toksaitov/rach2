@@ -69,6 +69,10 @@ void lapic_init_ap(void);
  */
 void lapic_send_ipi(uint32_t target, uint8_t vector);
 
+/** Send that processor a non-maskable interrupt, which reaches it with its
+ * interrupts off. */
+void lapic_send_nmi(uint32_t target);
+
 /** Send that processor INIT, which holds it waiting for a startup message. */
 void lapic_send_init(uint32_t target);
 

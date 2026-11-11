@@ -309,9 +309,16 @@ static void _exception_handler(isr_params_t *params)
  * may be posted here, and the panic begins before the record is written,
  * so that the console's lock, which the interrupted code may hold, is not
  * taken (`k_panic_begin`).
+ *
+ * An NMI that another processor's stop sent, to a processor that did not
+ * take the interprocessor interrupt, is the stop, and this processor halts
+ * (`smp_stop_nmi`), as Linux's `smp_stop_nmi_callback` halts it.
  */
 static void _hardware_fault_handler(isr_params_t *params)
 {
+    if (params->vector == 2 && smp_stop_nmi()) {
+        return;
+    }
     k_panic_begin();
     klog_deliver_directly();
     klog(KLOG_CRIT, "isr", "hardware fault: %s (vector %d, pc 0x%lx)",
