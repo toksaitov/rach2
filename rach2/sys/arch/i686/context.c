@@ -8,6 +8,7 @@
 
 #include "../../mm/paging.h"
 #include "../../proc/process.h"
+#include "../../proc/smp.h"
 
 #include "../../lib/kstring.h"
 
@@ -47,17 +48,18 @@ int arch_context_check(void)
 void switch_space(const process_t *next);
 
 /**
- * Load the page directory `next` runs in, unless it is the one this
- * processor has loaded and no shootdown has marked it stale; switch.s calls
- * it. A
- * record with none, an idle task or a kernel thread, runs in whatever is
- * loaded, whose kernel half is every directory's, so a process that blocks
- * and wakes again on this processor finds its directory still loaded
+ * Load the page directory `next` runs in, unless it is the one this processor
+ * has loaded and no shootdown has marked it stale, and drop every translation
+ * if a kernel mapping changed since this processor last did, so that a thread
+ * that slept holding a temporary slot and wakes here never reads it through a
+ * translation from before the slot's last sweep (`kmap_temp`); switch.s calls
+ * it. A record with none, an idle task or a kernel thread, runs in whatever is
+ * loaded, whose kernel half is every directory's, so a process that blocks and
+ * wakes again on this processor finds its directory still loaded
  * (`smp_space_release` takes it back before it is freed, and
- * `smp_tlb_shootdown` marks it stale meanwhile). The comparison is with
- * what the processor has, never with the outgoing record: a thread that
- * gave up its address space at its end still runs in it until it switches
- * away.
+ * `smp_tlb_shootdown` marks it stale meanwhile). The comparison is with what
+ * the processor has, never with the outgoing record: a thread that gave up its
+ * address space at its end still runs in it until it switches away.
  */
 void switch_space(const process_t *next)
 {
@@ -68,6 +70,7 @@ void switch_space(const process_t *next)
         cpu->space_stale = 0;
         arch_space_load(next->space_root);
     }
+    smp_kernel_flush();
 }
 
 /**

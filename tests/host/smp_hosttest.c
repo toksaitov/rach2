@@ -179,6 +179,12 @@ int platform_cpu_count(int limit)
     return cpu_count;
 }
 
+/** Nothing: the test maps no temporary slot. */
+void paging_temp_split(unsigned int cpus)
+{
+    (void)cpus;
+}
+
 /** Keep `entry` in `late_entry` for the row to call after the wait; 0. */
 int platform_cpu_start(int cpu, uintptr_t stack_top, void (*entry)(int cpu))
 {

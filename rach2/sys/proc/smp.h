@@ -227,9 +227,17 @@ void smp_barrier(uint64_t cpus, int sync_core);
  * Note that a kernel mapping changed, after the caller dropped its own
  * translation of it: every other processor drops all of its translations
  * before it next takes the big lock, the one place it reads kernel memory
- * that was not mapped when it last held it.
+ * that was not mapped when it last held it, and, on i686, before it next
+ * switches to a thread, which may hold a temporary slot mapped on another
+ * processor since (mm/paging.h). Any context; needs no lock.
  */
 void smp_kernel_mapping_changed(void);
+
+/**
+ * Drop every translation of this processor if a kernel mapping changed
+ * since it last did (`smp_kernel_mapping_changed`). Interrupts are off.
+ */
+void smp_kernel_flush(void);
 
 /**
  * Have every other processor that still translates through `dir`, which no
