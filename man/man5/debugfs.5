@@ -134,6 +134,13 @@ of
 count them;
 .Ar wait_us
 is the time those holds waited for the lock first.
+The line
+.Ql vector 0
+counts, beside the divide error, the holds of kernel threads and of the
+lock taken again after the kernel gave it up, for an idle halt, a run of a
+.Xr kvm 4
+guest, another processor's claim or a processor's start, which have no
+calls.
 A system call numbered 512 or more counts as 512, a call of the i386 ABI
 under its own number.
 The times are microseconds, and 0 without an invariant time-stamp counter.
