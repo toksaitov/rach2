@@ -13525,16 +13525,18 @@ static void copy_buf_put(char *buf)
 
 /**
  * Write `n` bytes of a copy's buffer `buf` to `out`, the caller's descriptor
- * `out_fd`: to a pipe without waiting, since the caller waited for its room;
- * to a regular file at `*at` when `at` is not NULL, as pwrite64 writes; and
+ * `out_fd`: to a pipe without waiting, since the caller waited for its room,
+ * in a page buffer for each page of the source the bytes come from, whose
+ * first byte lies `src` bytes into its page (`pipe_splice_write`); to a
+ * regular file at `*at` when `at` is not NULL, as pwrite64 writes; and
  * otherwise as write(2) writes, at the description's offset and by its
  * O_NONBLOCK. Returns the bytes written or a negative errno.
  */
 static int32_t copy_put(fd_entry_t *out, int out_fd, const char *buf, uint32_t n,
-                        const uint64_t *at)
+                        const uint64_t *at, uint32_t src)
 {
     if (pipe_is(out)) {
-        return pipe_splice_write(out, (const char __force __user *)buf, n, 1);
+        return pipe_splice_write(out, (const char __force __user *)buf, n, 1, src);
     }
     if (at) {
         return file_write(out, (const char __force __user *)buf, n, at);
@@ -13563,6 +13565,7 @@ static int32_t copy_from_file(fd_entry_t *in, uint64_t *pos, fd_entry_t *out, in
 
     while (done < count) {
         uint32_t want = count - done;
+        uint32_t src;
         int32_t got, put;
 
         if (want > COPY_CHUNK) {
@@ -13578,11 +13581,12 @@ static int32_t copy_from_file(fd_entry_t *in, uint64_t *pos, fd_entry_t *out, in
                 want = (uint32_t)room;
             }
         }
+        src = (uint32_t)(*pos & (PAGE_SIZE - 1));
         got = file_read(in, (char __force __user *)buf, want, pos);
         if (got <= 0) {
             return done > 0 ? (int32_t)done : got;
         }
-        put = copy_put(out, out_fd, buf, (uint32_t)got, out_at);
+        put = copy_put(out, out_fd, buf, (uint32_t)got, out_at, src);
         if (put == -EAGAIN && pipe_is(out) && !nonblock && done == 0) {
             continue; /* another writer took the room while the read slept */
         }
@@ -13628,7 +13632,7 @@ static int32_t copy_from_pipe(fd_entry_t *in, fd_entry_t *out, int out_fd, uint6
         if (got <= 0) {
             return done > 0 ? (int32_t)done : got;
         }
-        put = copy_put(out, out_fd, buf, (uint32_t)got, out_at);
+        put = copy_put(out, out_fd, buf, (uint32_t)got, out_at, 0);
         pipe_splice_consume(in, put > 0 ? (uint32_t)put : 0);
         if (put < 0) {
             return done > 0 ? (int32_t)done : put;
@@ -13878,8 +13882,8 @@ static long vmsplice_write(fd_entry_t *e, uintptr_t uiov, int iovcnt, uint32_t w
         if (iov.iov_len == 0) {
             continue;
         }
-        r = pipe_splice_write(e, (const char __user *)iov.iov_base, (uint32_t)iov.iov_len,
-                              nonblock);
+        r = pipe_splice_write(e, (const char __user *)iov.iov_base, (uint32_t)iov.iov_len, nonblock,
+                              (uint32_t)(iov.iov_base & (PAGE_SIZE - 1)));
         if (r < 0) {
             return total > 0 ? total : r;
         }

@@ -60,7 +60,10 @@
  *       counts buffers: a write of 4096, a read of 4095 and a write of 1
  *       leave two, since the byte does not fit in the first page after the
  *       4096 written to it; two writes of a byte share one, and the shrink
- *       to 4096 succeeds; and a byte tee copied is a buffer no write joins.
+ *       to 4096 succeeds; a byte tee copied is a buffer no write joins; a
+ *       byte a splice moved whole from another pipe's write is one a write
+ *       joins, and the shrink succeeds; and two bytes vmsplice took from
+ *       the two sides of a page boundary are two buffers.
  *
  * Given `machine=native` (probe_args.h), the probe leaves out the heap's
  * comparison of (e), since the kernel's heap is shared with every process of
@@ -248,6 +251,8 @@ enum {
     PAGES_BUSY,
     PAGES_MERGE,
     PAGES_TEE,
+    PAGES_SPLICE,
+    PAGES_VMSPLICE,
     MAX_ROUND,
     MAX_EINVAL,
     LIMIT_FORK,
@@ -321,6 +326,9 @@ static const struct {
      "a write of 4096, a read of 4095 and a write of 1 hold two pages: a shrink to 4096 -> -EBUSY"},
     {"pages-merge", "two writes of 1 share a page: a shrink to 4096 succeeds"},
     {"pages-tee", "a byte tee copied takes no later write: a shrink to 4096 -> -EBUSY"},
+    {"pages-splice", "a byte a splice moved whole takes a later write: a shrink to 4096 succeeds"},
+    {"pages-vmsplice",
+     "two bytes vmspliced across a page boundary hold two pages: a shrink to 4096 -> -EBUSY"},
     {"max-round", "pipe-max-size takes 600000 as 1048576, 1 as 4096 and 2^31 as written"},
     {"max-einval", "pipe-max-size refuses 2^31 + 1 with EINVAL"},
     {"limit-fork", "fork for the limits' child"},
@@ -831,6 +839,17 @@ static int set_size(int fd, long size)
     return (int)syscall3(SYS_FCNTL, fd, F_SETPIPE_SZ, size);
 }
 
+/** Close the ends of `fds` that are open, those not -1. */
+static void close_pair(const int fds[2])
+{
+    if (fds[0] >= 0) {
+        syscall1(SYS_CLOSE, fds[0]);
+    }
+    if (fds[1] >= 0) {
+        syscall1(SYS_CLOSE, fds[1]);
+    }
+}
+
 /**
  * Case (j): bytes that wrap the ring survive a growth and two shrinks, each
  * of which copies them across the end of one ring or both, and tee copies
@@ -838,9 +857,15 @@ static int set_size(int fd, long size)
  */
 static void case_wrap(void)
 {
-    int p[2], q[2];
+    int p[2] = {-1, -1}, q[2] = {-1, -1};
+    int made = do_pipe2(p, O_NONBLOCK) == 0 && do_pipe2(q, O_NONBLOCK) == 0;
 
-    check(WRAP_PIPES, do_pipe2(p, O_NONBLOCK) == 0 && do_pipe2(q, O_NONBLOCK) == 0);
+    check(WRAP_PIPES, made);
+    if (!made) {
+        close_pair(p);
+        close_pair(q);
+        return;
+    }
     check(WRAP_HELD,
           wrap_put(p[1], 0, 60000) && wrap_get(p[0], 0, 50000) && wrap_put(p[1], 60000, 30000));
     check(WRAP_GROW, set_size(p[1], 131072) == 131072);
@@ -850,24 +875,70 @@ static void case_wrap(void)
                         syscall4(SYS_TEE, p[0], q[1], 30000, SPLICE_F_NONBLOCK) == 30000 &&
                         wrap_get(q[0], 60000, 30000));
     check(WRAP_ORDER, wrap_get(p[0], 60000, 30000));
-    syscall1(SYS_CLOSE, p[0]);
-    syscall1(SYS_CLOSE, p[1]);
-    syscall1(SYS_CLOSE, q[0]);
-    syscall1(SYS_CLOSE, q[1]);
+    close_pair(p);
+    close_pair(q);
+}
+
+/** vmsplice(2) of the `n` bytes at `addr` into `fd`, without waiting: the
+ * bytes taken, or a negated errno. */
+static long vmsplice_one(int fd, long addr, long n)
+{
+    long iov[2];
+
+    iov[0] = addr;
+    iov[1] = n;
+    return syscall4(SYS_VMSPLICE, fd, (long)iov, 1, SPLICE_F_NONBLOCK);
+}
+
+/**
+ * The rows of case (l) that splice into the empty pipes `p` and `q`, which
+ * the earlier rows left: a byte a splice moved whole from a write takes a
+ * later write, and two bytes vmsplice read from two pages are two buffers.
+ * `p` still holds the byte tee copied.
+ */
+static void pages_splices(const int p[2], const int q[2])
+{
+    const char two[2] = {'a', 'b'};
+    long map = mmap_anon(8192);
+    int mapped = map != 0 && !sys_failed(map);
+
+    check(PAGES_SPLICE, rd(p[0], back, 1) == 1 && wr(p[1], two, 1) == 1 &&
+                            syscall6(SYS_SPLICE, p[0], 0, q[1], 0, 1, SPLICE_F_NONBLOCK) == 1 &&
+                            wr(q[1], two + 1, 1) == 1 && set_size(q[1], 4096) == 4096 &&
+                            rd(q[0], back, 2) == 2 && back[0] == 'a' && back[1] == 'b');
+    if (mapped) {
+        ((char *)map)[4095] = 'a';
+        ((char *)map)[4096] = 'b';
+    }
+    check(PAGES_VMSPLICE, mapped && set_size(p[1], 65536) == 65536 &&
+                              vmsplice_one(p[1], map + 4095, 2) == 2 &&
+                              set_size(p[1], 4096) == -EBUSY && rd(p[0], back, 2) == 2 &&
+                              back[0] == 'a' && back[1] == 'b');
+    if (mapped) {
+        syscall2(SYS_MUNMAP, map, 8192);
+    }
 }
 
 /**
  * Case (l): a shrink is refused below the page buffers that hold bytes, as
- * Linux counts them, however few bytes they hold. A write's last part of a
- * page joins the newest buffer only when it fits in that page after the
- * bytes written to it, and a buffer tee made takes no write.
+ * Linux counts them, however few bytes they hold. A write's first `count`
+ * mod 4096 bytes join the newest buffer only when they fit in its page after
+ * the bytes written to it and it came from a write; a buffer tee made takes
+ * no write, one splice moved whole from a write takes one, and vmsplice
+ * makes a buffer of each page of the caller's it reads.
  */
 static void case_pages(void)
 {
-    int p[2], q[2];
+    int p[2] = {-1, -1}, q[2] = {-1, -1};
     const char two[2] = {'a', 'b'};
+    int made = do_pipe2(p, O_NONBLOCK) == 0 && do_pipe2(q, O_NONBLOCK) == 0;
 
-    check(PAGES_PIPES, do_pipe2(p, O_NONBLOCK) == 0 && do_pipe2(q, O_NONBLOCK) == 0);
+    check(PAGES_PIPES, made);
+    if (!made) {
+        close_pair(p);
+        close_pair(q);
+        return;
+    }
     check(PAGES_BUSY, wr(p[1], big, 4096) == 4096 && rd(p[0], back, 4095) == 4095 &&
                           wr(p[1], two, 1) == 1 && set_size(p[1], 4096) == -EBUSY &&
                           rd(p[0], back, 2) == 2);
@@ -878,10 +949,9 @@ static void case_pages(void)
                          syscall4(SYS_TEE, p[0], q[1], 1, SPLICE_F_NONBLOCK) == 1 &&
                          wr(q[1], two + 1, 1) == 1 && set_size(q[1], 4096) == -EBUSY &&
                          rd(q[0], back, 2) == 2 && back[0] == 'a' && back[1] == 'b');
-    syscall1(SYS_CLOSE, p[0]);
-    syscall1(SYS_CLOSE, p[1]);
-    syscall1(SYS_CLOSE, q[0]);
-    syscall1(SYS_CLOSE, q[1]);
+    pages_splices(p, q);
+    close_pair(p);
+    close_pair(q);
 }
 
 #define PIPE_MAX_FILE  "/proc/sys/fs/pipe-max-size"
@@ -953,7 +1023,10 @@ static void limits_child(int become, int soft)
         sys_exit(LIMIT_BAD_USER);
     }
     if (!soft) {
-        if (do_pipe(a) != 0 || set_size(a[1], 2097152) != -EPERM) {
+        if (do_pipe(a) != 0) {
+            sys_exit(LIMIT_BAD_PAST | LIMIT_BAD_TO);
+        }
+        if (set_size(a[1], 2097152) != -EPERM) {
             bad |= LIMIT_BAD_PAST;
         }
         if (set_size(a[1], 600000) != 1048576) {
@@ -961,8 +1034,10 @@ static void limits_child(int become, int soft)
         }
         sys_exit(bad);
     }
-    if (do_pipe(a) != 0 || do_pipe(b) != 0 || set_size(a[1], 131072) != 131072 ||
-        set_size(b[1], 131072) != 131072) {
+    if (do_pipe(a) != 0 || do_pipe(b) != 0) {
+        sys_exit(SOFT_BAD_OWN | SOFT_BAD_PAST | SOFT_BAD_NEW | SOFT_BAD_SHR);
+    }
+    if (set_size(a[1], 131072) != 131072 || set_size(b[1], 131072) != 131072) {
         bad |= SOFT_BAD_OWN;
     }
     if (set_size(b[1], 262144) != -EPERM) {
@@ -1025,8 +1100,7 @@ static void case_limits(void)
     check(SOFT_NEW_SMALL, (bits & (LIMIT_BAD_USER | SOFT_BAD_NEW)) == 0);
     check(SOFT_SHRINK, (bits & (LIMIT_BAD_USER | SOFT_BAD_SHR)) == 0);
     sysctl_put(PIPE_SOFT_FILE, "16384\n");
-    syscall1(SYS_CLOSE, r[0]);
-    syscall1(SYS_CLOSE, r[1]);
+    close_pair(r);
 }
 
 /** Report each check: held, failed with its text, or not run, since a check

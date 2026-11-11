@@ -138,9 +138,12 @@ Return the capacity of the pipe or FIFO
 is an end of, 65536 bytes for a new pipe, as on Linux.
 A new pipe made by a caller without privilege has at most
 .Pa /proc/sys/fs/pipe-max-size ,
-and 8192 bytes once the pipes of the caller's real user hold 16384 pages,
-Linux's
-.Pa pipe-user-pages-soft .
+and 8192 bytes once the pages of the pipes of the caller's real user, with
+the new pipe's, would pass
+.Pa /proc/sys/fs/pipe-user-pages-soft ,
+16384 at boot; none at all once they would pass
+.Pa /proc/sys/fs/pipe-user-pages-hard ,
+0 at boot, which is no limit, as on Linux.
 .It Dv F_SETPIPE_SZ
 Give the pipe or FIFO
 .Fa fd
@@ -150,9 +153,13 @@ bytes, rounded up to a power of two of a page or more, keeping the bytes
 it holds in a new buffer allocated now, and return the capacity given.
 A caller without privilege may not grow a pipe past
 .Pa /proc/sys/fs/pipe-max-size ,
-1048576 bytes, nor take the pages of the pipes of the real user that made
-it past 16384, 64 MiB, each pipe's whole capacity counted, as on Linux.
-A shrink is taken even from a user past that.
+1048576 bytes at boot, nor so that the pages of the pipes of the real user
+that made it, each pipe's whole capacity counted, would pass
+.Pa /proc/sys/fs/pipe-user-pages-soft ,
+16384 at boot, or
+.Pa /proc/sys/fs/pipe-user-pages-hard ,
+0 at boot, which is no limit, as on Linux.
+A shrink is taken even from a user past either.
 GNU cat asks for 524288 bytes before it copies through
 .Xr splice 2 .
 .El
@@ -378,10 +385,17 @@ A set lock command met a conflicting lock.
 .It Bq Er EBUSY
 .Dv F_SETPIPE_SZ
 asked for fewer pages than the page buffers that hold the pipe's bytes,
-however few bytes they hold, as Linux counts them: a write's last part of
-a page joins the newest buffer when it fits in that page after the bytes
-written to it, and otherwise takes a page of its own, as each page of a
-tee or a splice into the pipe does.
+however few bytes they hold, as Linux counts them: a write's first
+.Fa count
+mod 4096 bytes join the newest buffer when it takes writes and they fit in
+its page after the bytes it holds, and the rest take a page each;
+.Xr vmsplice 2
+and a
+.Xr splice 2
+from a file take a buffer for each page of the source, a splice or a
+.Xr tee 2
+from a pipe one for each of its buffers, and a write joins only a buffer
+a splice moved whole from another pipe's writes.
 .It Bq Er EBADF
 .Fa fd
 is not an open descriptor, was opened with
@@ -449,7 +463,8 @@ would change
 .Dv O_APPEND
 of an append-only file; or
 .Dv F_SETPIPE_SZ
-would grow a pipe past either limit for a caller without privilege.
+would grow a pipe past one of the three limits its entry names, for a
+caller without privilege.
 .It Bq Er EOVERFLOW
 A lock's range passes the largest offset, or
 .Dv F_GETLK
