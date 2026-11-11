@@ -1033,13 +1033,14 @@ build/tests/cases/gnu/sed.tar.xz: vendor/gnu/fetch.sh vendor/gnu/sources.txt
 # and page judged against the Debian reference guest's stored result; and the
 # reset of the virtio-gpu device under GL programs and Weston, as the Debian
 # guest sees it, as the cases of tests/cases/machine.virgl.json.
-# `tests/run games-native`: SuperTuxKart's profile race and 0 A.D.'s visual
-# replay, the fixed replays the games layer installs, in a small form of
-# 640x400, a race of 10 s to its end and the match for 10 s after its loading
-# screen, on llvmpipe under a headless Weston on the GNU root under the
-# virtio-vga profile, with every frame's time recorded, as the cases of
-# tests/cases/machine.games-native.json; their reference is Linux's run of
-# the same replays on the Lenovo, not the Debian guest's.
+# `tests/run games-native`: SuperTuxKart's profile race, in the 64-bit game
+# and the i386 one, and 0 A.D.'s visual replay, the fixed replays the games
+# layer installs, in a small form of 640x400, a race of 10 s to its end and
+# the match for 10 s after its loading screen, on llvmpipe under a headless
+# Weston on the GNU root under the virtio-vga profile, with every frame's time
+# recorded, as the cases of tests/cases/machine.games-native.json; their
+# reference is Linux's run of the same replays on the Lenovo, not the Debian
+# guest's.
 # Etude runs them all with graphics_scenario (tests/graphics/Readme.md). Each
 # machine has graphics.ext2, the runners, the IGT list, the piglit and dEQP
 # lists, the guest's environment and the references, as a read-only data
