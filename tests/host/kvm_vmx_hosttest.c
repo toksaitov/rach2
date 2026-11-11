@@ -4118,6 +4118,83 @@ static void tsc_scale_rows(int vm)
     caps.proc2 = had;
 }
 
+/** A vCPU of id `id` on `vm` as `make_vcpu` makes it, with XSAVE in its
+ * CPUID's leaf 1 only when `xsave`, and XSAVES in leaf 0xD's subleaf 1
+ * only when `xsaves`. */
+static int xsaves_vcpu(int vm, uint32_t id, int xsave, int xsaves)
+{
+    struct kvm_cpuid_entry2 *e = (struct kvm_cpuid_entry2 *)(buf.bytes + sizeof(buf.cpuid));
+    struct kvm_sregs s;
+    uint32_t i;
+    int fd = fdio(vm, KVM_CREATE_VCPU, id);
+
+    CHECK(fd > vm, "KVM_CREATE_VCPU");
+    buf.cpuid.nent = 256;
+    CHECK(dev(KVM_GET_SUPPORTED_CPUID, (uintptr_t)&buf) == 0, "KVM_GET_SUPPORTED_CPUID");
+    for (i = 0; i < buf.cpuid.nent; i++) {
+        if (e[i].function == 1) {
+            e[i].ecx = xsave ? e[i].ecx | (1u << 26) : e[i].ecx & ~(1u << 26);
+        } else if (e[i].function == 0xD && e[i].index == 1) {
+            e[i].eax = xsaves ? e[i].eax | (1u << 3) : e[i].eax & ~(1u << 3);
+        }
+    }
+    CHECK(fdio(fd, KVM_SET_CPUID2, (uintptr_t)&buf) == 0, "KVM_SET_CPUID2 of XSAVE and XSAVES");
+    s = sregs_of(fd);
+    s.cs.base = 0;
+    s.cs.selector = 0;
+    CHECK(fdio(fd, KVM_SET_SREGS, (uintptr_t)&s) == 0, "KVM_SET_SREGS");
+    set_regs(fd, 0x1000, 0, 0, 0);
+    return fd;
+}
+
+/** Leaf 0xD subleaf 1's EBX in the CPUID of the vCPU on `fd`, or ~0. */
+static uint32_t d1_ebx(int fd)
+{
+    const struct kvm_cpuid_entry2 *e = kvm_cpuid_find(vcpu_of(fd), 0xD, 1);
+
+    return e ? e->ebx : ~0u;
+}
+
+/** XSAVES on a model whose secondary controls have it, on vCPUs of their
+ * own on `vm`: KVM offers it; the control is on only for a vCPU whose
+ * CPUID has XSAVE and XSAVES, as Linux's vmx_secondary_exec_control; and
+ * subleaf 1's compacted size follows the guest's XCR0 through XSETBV. */
+static void xsaves_rows(int vm)
+{
+    uint32_t had = caps.proc2;
+    uint64_t model = m.proc2;
+    int fd;
+
+    m.proc2 |= (uint64_t)PROC2_XSAVES << 32;
+    caps.proc2 |= PROC2_XSAVES;
+    CHECK(vmx_xsaves(), "with the control the backend lets a guest run XSAVES");
+    fd = xsaves_vcpu(vm, 9, 1, 1);
+    CHECK(d1_ebx(fd) == 576, "subleaf 1's compacted size is x87's and SSE's at the reset's XCR0");
+    CHECK(exits(fd, EXIT_CPUID, 0, 2) == 0 &&
+              (fields(fd)[SECONDARY_VM_EXEC_CONTROL] & PROC2_XSAVES) &&
+              fields(fd)[XSS_EXIT_BITMAP] == 0,
+          "a vCPU whose CPUID has XSAVE and XSAVES runs with the control and no XSS exit");
+    set_regs(fd, 0x1000, 7, 0, 0);
+    CHECK(exits(fd, EXIT_XSETBV, 0, 3) == 0 && vcpu_of(fd)->xcr0 == 7 && d1_ebx(fd) == 832,
+          "XSETBV of AVX makes subleaf 1's compacted size 832");
+    set_regs(fd, 0x1000, 3, 0, 0);
+    CHECK(exits(fd, EXIT_XSETBV, 0, 3) == 0 && vcpu_of(fd)->xcr0 == 3 && d1_ebx(fd) == 576,
+          "and XSETBV of x87 and SSE 576 again");
+    fdclose(fd);
+    fd = xsaves_vcpu(vm, 10, 1, 0);
+    CHECK(exits(fd, EXIT_CPUID, 0, 2) == 0 &&
+              !(fields(fd)[SECONDARY_VM_EXEC_CONTROL] & PROC2_XSAVES),
+          "a vCPU whose CPUID lacks XSAVES runs without the control");
+    fdclose(fd);
+    fd = xsaves_vcpu(vm, 11, 0, 1);
+    CHECK(exits(fd, EXIT_CPUID, 0, 2) == 0 &&
+              !(fields(fd)[SECONDARY_VM_EXEC_CONTROL] & PROC2_XSAVES),
+          "and one whose CPUID has XSAVES without XSAVE");
+    fdclose(fd);
+    m.proc2 = model;
+    caps.proc2 = had;
+}
+
 /** What Linux's selftests ask of the guest's side, on a vCPU of its own
  * on `vm` in protected mode. The rows change the VM's capabilities, so
  * they come last. */
@@ -4133,6 +4210,7 @@ static void selftest_rows(int vm)
     user_msr_rows(vm, fd);
     fdclose(fd);
     tsc_scale_rows(vm);
+    xsaves_rows(vm);
 }
 
 /** Run the rows; 0 when every check passed, 1 otherwise. */

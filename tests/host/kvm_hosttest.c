@@ -435,6 +435,10 @@ int vm_device_map(vma_t *vma, const struct vm_device_ops *ops, void *obj, uint32
     return 0;
 }
 
+/* Whether the model has XSAVEC and XSAVES, which the Haswell lacks, and
+ * the fake backend lets a guest run XSAVES. */
+static int model_xsaves;
+
 /* The processor: a model of the Lenovo's Haswell, i7-4xxx. */
 void kcpu_id_sub(uint32_t leaf, uint32_t sub, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
 {
@@ -475,7 +479,7 @@ void kcpu_id_sub(uint32_t leaf, uint32_t sub, uint32_t *a, uint32_t *b, uint32_t
             r[0] = 0x7;
             r[1] = r[2] = 832;
         } else if (sub == 1) {
-            r[0] = 0x1;
+            r[0] = model_xsaves ? 0xF : 0x1; /* XSAVEOPT, and XSAVEC, XGETBV1, XSAVES */
         } else if (sub == 2) {
             r[0] = 256;
             r[1] = 576;
@@ -584,6 +588,12 @@ static void fake_msr_filter_changed(struct kvm_vcpu *v)
     filter_changes++;
 }
 
+/** The backend's xsaves: `model_xsaves`. */
+static int fake_xsaves(void)
+{
+    return model_xsaves;
+}
+
 /** The capabilities a backend makes true: single-stepping and guest
  * debugging. */
 static int32_t fake_backend_cap(long cap)
@@ -617,7 +627,7 @@ const struct kvm_backend kvm_vmx = {"vmx",
                                     NULL,
                                     fake_tsc_scaling,
                                     fake_msr_filter_changed,
-                                    NULL};
+                                    fake_xsaves};
 const struct kvm_backend kvm_svm = {"svm", fake_probe, NULL, NULL, NULL, NULL, NULL,
                                     NULL,  NULL,       NULL, NULL, NULL, NULL};
 
@@ -3151,6 +3161,98 @@ static void user_msr_rows(void)
     CHECK(live == 0, "the VM frees its filter");
 }
 
+/** The entry of `buf`'s first `n` CPUID entries for `function` and
+ * `index`, or NULL. */
+static struct kvm_cpuid_entry2 *buf_entry(uint32_t n, uint32_t function, uint32_t index)
+{
+    uint32_t i;
+
+    for (i = 0; i < n; i++) {
+        if (CPUID_ENTRIES[i].function == function && CPUID_ENTRIES[i].index == index) {
+            return &CPUID_ENTRIES[i];
+        }
+    }
+    return NULL;
+}
+
+/** Leaf 0xD subleaf `index`'s EBX in `v`'s CPUID, or ~0. */
+static uint32_t vcpu_d_ebx(const struct kvm_vcpu *v, uint32_t index)
+{
+    const struct kvm_cpuid_entry2 *e = kvm_cpuid_find(v, 0xD, index);
+
+    return e ? e->ebx : ~0u;
+}
+
+/** IA32_XSS on `v`, as Linux 6.12's: the caller reads 0 and writes 0
+ * alone; a guest whose CPUID has XSAVES, `xsaves`, does the same and its
+ * nonzero write is #GP, and to one without it every access is #GP. */
+static void xss_rows(struct kvm_vcpu *v, int xsaves)
+{
+    uint64_t value = 1;
+
+    CHECK(kvm_msr_get(v, 0xDA0, &value, 1) == 0 && value == 0 && kvm_msr_set(v, 0xDA0, 0, 1) == 0 &&
+              kvm_msr_set(v, 0xDA0, 1, 1) == KVM_MSR_INVAL,
+          "the caller reads IA32_XSS as 0 and writes 0 to it, and nothing else");
+    value = 1;
+    if (xsaves) {
+        CHECK(kvm_msr_get(v, 0xDA0, &value, 0) == 0 && value == 0 &&
+                  kvm_msr_set(v, 0xDA0, 0, 0) == 0 && kvm_msr_set(v, 0xDA0, 1, 0) == KVM_MSR_INVAL,
+              "a guest whose CPUID has XSAVES reads 0 and writes 0, and a nonzero write is #GP");
+    } else {
+        CHECK(kvm_msr_get(v, 0xDA0, &value, 0) == KVM_MSR_INVAL &&
+                  kvm_msr_set(v, 0xDA0, 0, 0) == KVM_MSR_INVAL,
+              "IA32_XSS is #GP to a guest whose CPUID lacks XSAVES");
+    }
+}
+
+/**
+ * XSAVES as KVM offers it, as Linux 6.12: without XSAVES and XSAVEC
+ * subleaf 1 offers XSAVEOPT alone with EBX 0; with both and a backend
+ * that lets a guest run XSAVES it offers both, with EBX the compacted size
+ * of the XCR0 KVM supports. A vCPU's subleaf 1 EBX follows its XCR0 from
+ * the reset through KVM_SET_CPUID2 and KVM_SET_XCRS; and IA32_XSS's
+ * rules (`xss_rows`) before and after its CPUID has XSAVES.
+ */
+static void xsaves_rows(void)
+{
+    struct kvm_cpuid_entry2 *d1;
+    struct kvm_xcrs xcrs;
+    struct kvm_vcpu *v;
+    int vm, fd;
+    uint32_t n;
+
+    model_xsaves = 0;
+    n = pv_cpuid();
+    d1 = buf_entry(n, 0xD, 1);
+    CHECK(d1 && d1->eax == 0x1 && d1->ebx == 0,
+          "without XSAVES subleaf 1 offers XSAVEOPT alone, with EBX 0");
+    model_xsaves = 1;
+    n = pv_cpuid();
+    d1 = buf_entry(n, 0xD, 1);
+    CHECK(d1 && d1->eax == 0xF && d1->ebx == 832,
+          "with XSAVEC and XSAVES subleaf 1 offers both, with EBX 832 for x87, SSE and AVX");
+    vm = dev(KVM_CREATE_VM, 0);
+    fd = fdio(vm, KVM_CREATE_VCPU, 0);
+    v = (struct kvm_vcpu *)entries[fd].priv;
+    xss_rows(v, 0);
+    CHECK(fdio(fd, KVM_SET_CPUID2, (uintptr_t)&buf) == 0 && vcpu_d_ebx(v, 0) == 576 &&
+              vcpu_d_ebx(v, 1) == 576,
+          "KVM_SET_CPUID2 gives leaf 0xD the sizes of the reset's XCR0, x87's 576");
+    xss_rows(v, 1);
+    CHECK(fdio(fd, KVM_GET_XCRS, (uintptr_t)&xcrs) == 0, "KVM_GET_XCRS");
+    xcrs.xcrs[0].value = 7;
+    CHECK(fdio(fd, KVM_SET_XCRS, (uintptr_t)&xcrs) == 0 && vcpu_d_ebx(v, 0) == 832 &&
+              vcpu_d_ebx(v, 1) == 832,
+          "KVM_SET_XCRS of x87, SSE and AVX makes both sizes 832");
+    xcrs.xcrs[0].value = 3;
+    CHECK(fdio(fd, KVM_SET_XCRS, (uintptr_t)&xcrs) == 0 && vcpu_d_ebx(v, 0) == 576 &&
+              vcpu_d_ebx(v, 1) == 576,
+          "and of x87 and SSE 576 again");
+    fdclose(fd);
+    fdclose(vm);
+    model_xsaves = 0;
+}
+
 /** The capabilities and bounds Linux's selftests ask for, each in VMs of
  * its own. */
 static void selftest_rows(void)
@@ -3163,6 +3265,7 @@ static void selftest_rows(void)
     vm_cap_rows();
     feature_msr_rows();
     mce_hwcr_rows();
+    xsaves_rows();
     user_msr_rows();
     attr_rows();
     sync_rows();
