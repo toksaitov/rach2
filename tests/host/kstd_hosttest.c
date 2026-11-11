@@ -1,5 +1,6 @@
 /**
- * kstd_hosttest.c: k_itoa, the kernel's integer formatter (`lib/kstd.c`).
+ * kstd_hosttest.c: k_itoa, the kernel's integer formatter, and k_strtoul,
+ * its reader of a number written to /sys (`lib/kstd.c`).
  *
  * host-deps: rach2/sys/lib/kstd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
@@ -10,10 +11,14 @@
  * `int` overflows, which is undefined, and UBSan reports it here. The
  * rejections of a buffer too small and of a radix out of range, the count
  * returned, and the plus sign `force_sign` writes are covered too. It
- * depends on k_strreverse and k_strtoupper, compiled in. Exits with the count
- * of failed checks, at most 120.
+ * depends on k_strreverse and k_strtoupper, compiled in. k_strtoul is
+ * checked against what Linux's kstrtoul takes with base 0: the bases, the
+ * plus sign, one newline, leading zeros past 31 bytes, the end of the text
+ * at a NUL, junk, and a number past an unsigned long, with `*out` left
+ * alone on an error. Exits with the count of failed checks, at most 120.
  */
 
+#include "kerrno.h"
 #include "kstd.h"
 
 static int fails;
@@ -25,6 +30,16 @@ static int fails;
             fails++;   \
         }              \
     } while (0)
+
+/** Whether k_strtoul reads the text `s` as `want`, an error code or 0,
+ * with the value `value` on success and `*out` untouched on an error. */
+static int reads(const char *s, int want, unsigned long value)
+{
+    unsigned long out = 12345;
+    int rc = k_strtoul(s, k_strlen(s), &out);
+
+    return rc == want && out == (want == 0 ? value : 12345ul);
+}
 
 /** Whether the strings `a` and `b` are equal. */
 static int streq(const char *a, const char *b)
@@ -87,6 +102,36 @@ int main(void)
     CHECK(streq(b, "0"));
     CHECK(k_itoa(-7, b, sizeof(b), 'd', true) == 3);
     CHECK(streq(b, "-7"));
+
+    /* k_strtoul, as Linux's kstrtoul with base 0. */
+    CHECK(reads("42", 0, 42));
+    CHECK(reads("42\n", 0, 42));
+    CHECK(reads("+7", 0, 7));
+    CHECK(reads("010", 0, 8));
+    CHECK(reads("0", 0, 0));
+    CHECK(reads("0x1F", 0, 31));
+    CHECK(reads("+0X1f\n", 0, 31));
+    CHECK(reads("0xffffffff", 0, 0xfffffffful));
+    CHECK(reads("000000000000000000000000000000000005", 0, 5));
+    CHECK(reads("", -EINVAL, 0));
+    CHECK(reads("+", -EINVAL, 0));
+    CHECK(reads("\n", -EINVAL, 0));
+    CHECK(reads("-1", -EINVAL, 0));
+    CHECK(reads("0x", -EINVAL, 0));
+    CHECK(reads("0xg", -EINVAL, 0));
+    CHECK(reads("08", -EINVAL, 0));
+    CHECK(reads("1a", -EINVAL, 0));
+    CHECK(reads("1 ", -EINVAL, 0));
+    CHECK(reads("1\n\n", -EINVAL, 0));
+    CHECK(reads("0x10000000000000000", -ERANGE, 0));
+    {
+        unsigned long out = 0;
+
+        /* The text ends at a NUL before `len`, as Linux's string does. */
+        CHECK(k_strtoul("9\0junk", 6, &out) == 0 && out == 9);
+        /* And at `len` before a NUL. */
+        CHECK(k_strtoul("123", 2, &out) == 0 && out == 12);
+    }
 
     return (fails > 120) ? 120 : fails;
 }

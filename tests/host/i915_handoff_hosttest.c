@@ -7,6 +7,7 @@
  * host-deps: rach2/sys/drm/i915/i915_reset.c rach2/sys/drm/i915/i915_irq.c
  * host-deps: tests/host/i915_model.c rach2/sys/display/backlight.c
  * host-deps: rach2/sys/display/intelbl.c rach2/sys/lib/kstring.c
+ * host-deps: rach2/sys/lib/kstd.c
  * host-deps: rach2/sys/lib/kctypes.c tests/host/compat/spinlock_host.c
  * host-deps: rach2/sys/drm/i915/intel_bios.c rach2/sys/drm/i915/i915_power.c
  * host-deps: rach2/sys/drm/i915/i915_uncore.c rach2/sys/drm/i915/i915_stolen.c

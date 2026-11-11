@@ -7,6 +7,7 @@
 
 #include "../lib/kdef.h"
 #include "../lib/kerrno.h"
+#include "../lib/kstd.h"
 #include "../lib/spinlock.h"
 
 /* A registered backlight: its driver, its highest level, the level root set
@@ -196,42 +197,26 @@ int backlight_show(int i, int attr, char *out, int cap)
     return pos;
 }
 
-/** The decimal number in the `len` bytes at `text`, with an optional
- * newline after it, or -1 for anything else or a number of seven digits. */
-static int parse_level(const char *text, int len)
-{
-    int i, v = 0;
-
-    if (len > 0 && text[len - 1] == '\n') {
-        len--;
-    }
-    if (len == 0) {
-        return -1;
-    }
-    for (i = 0; i < len; i++) {
-        if (text[i] < '0' || text[i] > '9' || v > 99999) {
-            return -1;
-        }
-        v = v * 10 + (text[i] - '0');
-    }
-    return v;
-}
-
 int backlight_store(int i, int attr, const char *text, int len)
 {
     struct backlight *b;
+    unsigned long n;
     uint32_t flags;
-    int v;
+    int v, rc;
 
     if (i < 0 || i >= nlights || (attr != BACKLIGHT_BRIGHTNESS && attr != BACKLIGHT_POWER)) {
         return -ENODEV;
     }
     b = &lights[i];
-    v = parse_level(text, len);
-    if (attr == BACKLIGHT_BRIGHTNESS ? v < 0 || v > b->max
-                                     : v != BACKLIGHT_ON && v != BACKLIGHT_OFF) {
+    rc = k_strtoul(text, len < 0 ? 0 : (size_t)len, &n);
+    if (rc != 0) {
+        return rc;
+    }
+    if (attr == BACKLIGHT_BRIGHTNESS ? n > (unsigned long)b->max
+                                     : n != BACKLIGHT_ON && n != BACKLIGHT_OFF) {
         return -EINVAL;
     }
+    v = (int)n;
     flags = spin_lock_irqsave(&lock);
     if (attr == BACKLIGHT_BRIGHTNESS) {
         b->level = v;

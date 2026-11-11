@@ -111,10 +111,11 @@ int backlight_show(int i, int attr, char *out, int cap);
 
 /**
  * Set attribute `attr` of backlight `i`, brightness or bl_power, from the
- * `len` bytes at `text`, a decimal number with an optional newline after
- * it; the caller has checked that the writer is privileged. brightness
- * takes 0 to max_brightness, and bl_power BACKLIGHT_ON or BACKLIGHT_OFF.
- * Returns 0, -EINVAL for text that is no such value, or -ENODEV for no such
+ * `len` bytes at `text`, a number as Linux's kstrtoul reads it with base 0
+ * (`k_strtoul`); the caller has checked that the writer is privileged.
+ * brightness takes 0 to max_brightness, and bl_power BACKLIGHT_ON or
+ * BACKLIGHT_OFF. Returns 0, -EINVAL for text that is no such value,
+ * -ERANGE for a number past an unsigned long, or -ENODEV for no such
  * backlight or a read-only attribute.
  */
 int backlight_store(int i, int attr, const char *text, int len);

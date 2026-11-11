@@ -1,7 +1,7 @@
 #ifndef _KSTD_H_
 #define _KSTD_H_
 
-/* The kernel's conversion of an integer to text. */
+/* The kernel's conversions between integers and text. */
 
 #include "kdef.h"
 #include "kstring.h"
@@ -29,5 +29,15 @@ size_t k_itoa(int input, char *buffer, size_t buffer_size, int radix, bool force
  * returns the count and writes nothing.
  */
 size_t k_ltoa(long input, char *buffer, size_t buffer_size, int radix, bool force_sign);
+
+/**
+ * Read the unsigned number that is the text at `s`, as Linux's kstrtoul
+ * with base 0 reads a sysfs write: an optional `+`, then hexadecimal after
+ * `0x` or `0X`, octal after another leading 0, or decimal, and at most one
+ * newline after it. The text ends at `len` bytes or at a NUL. 0 with the
+ * value in `*out`, -EINVAL for text that is not such a number, or -ERANGE
+ * for one an unsigned long cannot hold; `*out` is left alone on an error.
+ */
+int k_strtoul(const char *s, size_t len, unsigned long *out);
 
 #endif
