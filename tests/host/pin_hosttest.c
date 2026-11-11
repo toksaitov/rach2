@@ -29,7 +29,9 @@
  * shared copy-on-write makes it the parent's own first; an unmap of a
  * pinned page and the end of the address space tell the holder once and
  * drop the frames and the charge, while a pin charged to no one stays;
- * a pin of RAM whose holder keeps it past the end loses only its charge.
+ * a pin of RAM whose holder keeps it past the end loses only its charge,
+ * and holds each shared mapping of a disk file its range meets until
+ * unpin.
  * Device pages accepted by VFIO carry no RAM charge; mixed ranges,
  * protection, revocation and cleanup preserve that distinction.
  * mlock's regions split and merge, count in VmLck, lose their lock in a
@@ -386,6 +388,88 @@ static void keep_rows(void)
     unpin(p);
     check(frame_word(f) == 0 && mm_b.pinned == 0 && released == before,
           "unpin frees the frame and charges no one");
+}
+
+/* A shared mapping of a disk file, as filemap_disk_shared makes one: the
+ * file's two pages in memory are its own while a reference to it lasts, and
+ * its release frees them. */
+static struct {
+    struct vm_file vf;
+    uintptr_t page[2];
+    int releases;
+} disk;
+
+/** Lend page `pgoff` of the file in memory. */
+static int disk_share(struct vm_file *f, uint32_t pgoff, uintptr_t *phys)
+{
+    (void)f;
+    frame_ref(disk.page[pgoff]);
+    *phys = disk.page[pgoff];
+    return 0;
+}
+
+/** The last reference went: the file's pages in memory go with it. */
+static void disk_release(struct vm_file *f)
+{
+    (void)f;
+    disk.releases++;
+    free_frame(disk.page[0]);
+    free_frame(disk.page[1]);
+}
+
+/** The model's mapping is the one shared mapping of a disk file. */
+int filemap_disk_pages(const struct vm_file *f)
+{
+    return f == &disk.vf;
+}
+
+/** A keeping pin holds each shared mapping of a disk file its range meets,
+ * once, so that the file's pages, the frames pinned among them, stay the
+ * file's after the end of the address space and its regions; an unmap or
+ * unpin lets the mapping go, and unpin releases it last. */
+static void file_keep_rows(void)
+{
+    uintptr_t addr = VA + 40 * P;
+    struct pin *p, *q;
+    uint32_t before = released;
+
+    memlock(0xFFFFFFFFu);
+    disk.vf.refs = 1;
+    disk.vf.share = disk_share;
+    disk.vf.release = disk_release;
+    disk.page[0] = alloc_user_frame();
+    disk.page[1] = alloc_user_frame();
+    check(disk.page[0] && disk.page[1] &&
+              vm_insert_file(&mm_b.vm, addr, addr + P, RW, VM_SHARED, &disk.vf, 0) == 0 &&
+              vm_insert_file(&mm_b.vm, addr + P, addr + 2 * P, VM_PROT_READ, VM_SHARED, &disk.vf,
+                             1) == 0,
+          "two regions of B map the file's two pages");
+    vm_file_put(&disk.vf);
+    check(pin_user(&mm_b, addr, P, PIN_IO, &holder, &q) == 0 && disk.vf.refs == 2,
+          "a pin that does not keep holds no mapping");
+    unpin(q);
+    check(pin_user(&mm_b, addr, P, PIN_IO, &keeper, &q) == 0 && disk.vf.refs == 3,
+          "a keeping pin holds the mapping");
+    mmn_notify(&mm_b, MMN_UNMAP, addr, addr + P);
+    check(!pin_live(q) && disk.vf.refs == 2 && released == before + 1,
+          "an unmap takes the pin back and lets the mapping go");
+    unpin(q);
+    check(pin_user(&mm_b, addr, 2 * P, PIN_IO, &keeper, &p) == 0 && disk.vf.refs == 3 &&
+              pin_phys(p, 0) == disk.page[0] && pin_phys(p, 1) == disk.page[1],
+          "a keeping pin of both regions holds the mapping once");
+    mmn_release(&mm_b);
+    check(pin_live(p) && disk.vf.refs == 3 && released == before + 1,
+          "the end of B leaves the keeping pin live with the mapping held");
+    vm_remove(&mm_b.vm, addr, addr + 2 * P);
+    unmap_user_range(&dir_b, addr, addr + 2 * P);
+    vm_file_reap();
+    check(disk.releases == 0 && disk.vf.refs == 1 &&
+              frame_word(disk.page[0]) == 1 + FRAME_PIN_BIAS &&
+              frame_word(disk.page[1]) == 1 + FRAME_PIN_BIAS,
+          "the file's pages stay the file's and pinned once B's regions go");
+    unpin(p);
+    check(disk.releases == 1 && frame_word(disk.page[0]) == 0 && frame_word(disk.page[1]) == 0,
+          "unpin releases the mapping and frees its pages");
 }
 
 /* A BAR mapped into user space; no RAM frame backs its normal address. */
@@ -756,6 +840,7 @@ int main(void)
     fork_rows();
     release_rows();
     keep_rows();
+    file_keep_rows();
     io_rows();
     lock_rows();
     stack_rows();

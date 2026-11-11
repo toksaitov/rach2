@@ -61,6 +61,12 @@ int filemap_in_memory(const struct vm_file *f);
  */
 struct vm_file *filemap_disk_shared(const fd_entry_t *e);
 
+/** Whether `f` is a shared mapping of a file on a disk, as
+ * `filemap_disk_shared` made it, whose reference keeps the file's pages in
+ * memory and the copy of its descriptor; 0 for NULL and any other file.
+ * A long-term pin holds it so (mm/pin.c). */
+int filemap_disk_pages(const struct vm_file *f);
+
 /** Whether the file `ino` of `mnt` has resident pages for any private or
  * shared mapping, which descriptor writes must update. */
 int filemap_disk_mapped(const struct vfs_mount *mnt, uint64_t ino);

@@ -152,6 +152,13 @@ uint32_t fpu_pkru(void)
     return 0;
 }
 
+/** No region here maps a disk file, whose mapping a pin would hold. */
+int filemap_disk_pages(const struct vm_file *f)
+{
+    (void)f;
+    return 0;
+}
+
 /** Run every row; 0 when each passes, 1 otherwise. */
 int main(void)
 {
