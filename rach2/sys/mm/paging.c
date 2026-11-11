@@ -789,13 +789,15 @@ int vm_populate(uintptr_t start, uintptr_t end)
 }
 
 /** Whether the region allows the access and, with `io`, device memory; a
- * region of memfd_secret never does, as Linux's get_user_pages refuses one. */
+ * region of memfd_secret and the vDSO's data page never do, as Linux's
+ * get_user_pages refuses both. */
 static int pin_allows(struct mm *mm, uintptr_t page, int write, int io)
 {
     const vma_t *vma = vm_find(&mm->vm, page);
 
-    return vma && (io || !(vma->prot & VM_PROT_IO)) && !(vma->prot & VM_PROT_SECRET) &&
-           region_allows(vma, write) && pkey_allows(mm, vma, write);
+    return vma && (io || !(vma->prot & VM_PROT_IO)) &&
+           !(vma->prot & (VM_PROT_SECRET | VM_PROT_VVAR)) && region_allows(vma, write) &&
+           pkey_allows(mm, vma, write);
 }
 
 /** Resolve a pin's page, preserving the caller's pending SIGBUS detail. */
@@ -1023,10 +1025,11 @@ static int access_device(const vma_t *vma, uintptr_t addr, uint8_t *p, uint32_t 
 /** One page's part of `paging_access`: `len` bytes at `addr`, within one
  * page, to or from `p`; 0, -EIO or -ENOMEM as `paging_access` says. A
  * device region's bytes go through `access_device`, and a region of
- * memfd_secret is -EIO, as Linux's get_user_pages refuses one. The
- * resolution and, for a write, the balance of memory before a copy may
- * sleep, so the region is looked up again after them, and the page must
- * still be present in a region that allows some access. */
+ * memfd_secret and the vDSO's data page are -EIO, as Linux's
+ * get_user_pages refuses both. The resolution and, for a write, the
+ * balance of memory before a copy may sleep, so the region is looked up
+ * again after them, and the page must still be present in a region that
+ * allows some access. */
 static int access_page(struct mm *mm, uintptr_t addr, uint8_t *p, uint32_t len, int write)
 {
     const vma_t *vma = vm_find(&mm->vm, addr);
@@ -1034,7 +1037,7 @@ static int access_page(struct mm *mm, uintptr_t addr, uint8_t *p, uint32_t len, 
 
     if (addr < USER_ADDR_MIN || addr >= USER_ADDR_MAX || vma == NULL ||
         !(vma->prot & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC)) ||
-        (vma->prot & (VM_PROT_GUARD | VM_PROT_SECRET))) {
+        (vma->prot & (VM_PROT_GUARD | VM_PROT_SECRET | VM_PROT_VVAR))) {
         return -EIO;
     }
     if (vm_device_object(vma->file)) {
@@ -1051,7 +1054,7 @@ static int access_page(struct mm *mm, uintptr_t addr, uint8_t *p, uint32_t len, 
     }
     vma = vm_find(&mm->vm, addr);
     if (vma == NULL || !(vma->prot & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC)) ||
-        (vma->prot & (VM_PROT_IO | VM_PROT_GUARD | VM_PROT_SECRET)) ||
+        (vma->prot & (VM_PROT_IO | VM_PROT_GUARD | VM_PROT_SECRET | VM_PROT_VVAR)) ||
         !pte_present(mm->dir, addr)) {
         return -EIO;
     }

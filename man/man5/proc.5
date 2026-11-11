@@ -2339,7 +2339,9 @@ is the address, as GDB uses it through
 .Xr pread 2
 and
 .Xr pwrite 2 .
-An address no region allows is
+An address no region allows, or one in the vDSO's data page,
+.Li [vvar] ,
+is
 .Er EIO ,
 and a write reaches read-only program text, as a tracer's does.
 A transfer that runs into such an address returns the bytes it did

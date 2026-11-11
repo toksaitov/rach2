@@ -76,9 +76,11 @@ uintptr_t vdso_span(int abi)
 }
 
 /**
- * The data page, [vvar], is of the kind VM_SHARED with VM_PROT_NOWRITE, as
- * Linux maps it without VM_MAYWRITE: mprotect cannot make it writable, and
- * neither ptrace nor /proc/PID/mem can write the kernel's clock. The image,
+ * The data page, [vvar], is of the kind VM_SHARED with VM_PROT_NOWRITE and
+ * VM_PROT_VVAR, as Linux maps it VM_IO | VM_PFNMAP and without VM_MAYWRITE
+ * or VM_MAYEXEC: mprotect can make it neither writable nor executable, and
+ * ptrace, /proc/PID/mem, process_vm_readv and pins can neither read nor
+ * write it, since Linux's get_user_pages refuses the region. The image,
  * [vdso], is a private mapping, VM_FILE, as Linux maps it with VM_MAYWRITE
  * so that a debugger may set a breakpoint there: a fault maps the kernel's
  * frame copy-on-write through `share`, and a write after mprotect, or one
@@ -94,8 +96,8 @@ intptr_t vdso_map(struct vm_space *vm, uintptr_t at, int abi)
     if (vdso_image_pages(abi) == 0) {
         return 0;
     }
-    if (vm_insert_file(vm, at, image, VM_PROT_READ | VM_PROT_NOWRITE, VM_SHARED, &vdso_data_file,
-                       0) != 0) {
+    if (vm_insert_file(vm, at, image, VM_PROT_READ | VM_PROT_NOWRITE | VM_PROT_VVAR, VM_SHARED,
+                       &vdso_data_file, 0) != 0) {
         return -1;
     }
     if (vm_insert_file(vm, image, at + vdso_span(abi), VM_PROT_READ | VM_PROT_EXEC, VM_FILE, file,
