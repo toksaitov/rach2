@@ -73,23 +73,22 @@ struct vshm_rev {
 };
 
 /*
- * The transport's record of one attached region. `refs` counts the attach
- * and each bind of virtio-gpu until that bind's virtio_put, each map of
- * the VM's pages until its map_free, and the interrupt thread's reap while
- * it runs, and changes only with interrupts off (vs_get, vs_put), as
- * kref's count is atomic. Every thread that takes or drops one, a system
- * call or a kernel thread such as ki915 freeing an imported buffer, runs
- * unswitched by the tick (`no_tick_switch`); the count stays whole even
- * without that rule. The record is freed with the last; the
- * detach gives back the region's pages and window, and the driver's and
- * maps' remaining references keep the record until they let go. A record
- * detached while objects still hold pages of its heap, as a buffer whose
- * dma-buf exists does through a reset, keeps its heap's map and table of
- * frames on `vshm_kept` until they give the last back, and a later region
- * over the same memory leaves those frames out of its heap meanwhile;
- * `vshm_lock` is over that list and those tables. `me` is the driver's
- * block as last stored and `dev` the device's as last read; both are this
- * file's own copies.
+ * The transport's record of one attached region. `refs` counts the attach and
+ * each bind of virtio-gpu until that bind's virtio_put, each map of the VM's
+ * pages until its map_free, and the interrupt thread's reap while it runs, and
+ * changes only with interrupts off (vs_get, vs_put), as kref's count is atomic.
+ * Every thread that takes or drops one, a system call or a kernel thread such
+ * as ki915 freeing an imported buffer, runs unswitched by the tick
+ * (`no_tick_switch`); the count stays whole even without that rule. The record
+ * is freed with the last; the detach gives back the region's pages and window,
+ * and the driver's and maps' remaining references keep the record until they
+ * let go. A record detached while objects still hold pages of its heap, as a
+ * buffer whose dma-buf exists does through a reset, keeps its heap's map and
+ * table of frames on `vshm_kept` until they give the last back, and a later
+ * region over the same memory leaves those frames out of its heap meanwhile;
+ * `vshm_lock` is over that list and those tables. `me` is the driver's block as
+ * last stored and `dev` the device's as last read; both are this file's own
+ * copies.
  */
 struct vshm {
     struct virtio_dev vdev; /* first, so that the device is the record */
@@ -157,16 +156,15 @@ static volatile int vshm_irq_rang;    /* the queue's doorbell rang since the
                                          interrupt thread looked */
 static wait_queue_t vshm_irq_wq;      /* the interrupt thread sleeps here */
 /*
- * The lock over `vshm_kept`, each kept record's `gone`, `gone_next`, heap
- * map and tables, and `vshm_marked`, from its attach's marks to its
- * detach. Pages come back from system calls and from the kernel threads
- * that free a buffer, ki915, kvkms and DRM's and virtio-gpu's workers, so
- * a walk of the list, a give-back to two heaps or a record's leaving it
- * runs whole under one lock, and not by the rule that the tick switches
- * none of them (`no_tick_switch`), as KVM
- * keeps its irqfds under irqfds.lock (virt/kvm/eventfd.c:596-605 in
- * 6.12.115). Taken before a record's `heap_lock`, with interrupts off;
- * what leaves under it is freed after it is let go (vshm_tables_free), as
+ * The lock over `vshm_kept`, each kept record's `gone`, `gone_next`, heap map
+ * and tables, and `vshm_marked`, from its attach's marks to its detach. Pages
+ * come back from system calls and from the kernel threads that free a buffer,
+ * ki915, kvkms and DRM's and virtio-gpu's workers, so a walk of the list, a
+ * give-back to two heaps or a record's leaving it runs whole under one lock,
+ * and not by the rule that the tick switches none of them (`no_tick_switch`),
+ * as KVM keeps its irqfds under irqfds.lock (virt/kvm/eventfd.c:596-605 in
+ * 6.12.115). Taken before a record's `heap_lock`, with interrupts off; what
+ * leaves under it is freed after it is let go (vshm_tables_free), as
  * irqfd_shutdown frees an irqfd outside the lock (eventfd.c:157).
  */
 static struct spinlock vshm_lock = SPINLOCK_INIT_NAMED("vshm_kept");

@@ -1667,17 +1667,16 @@ static int work_pending(void *arg)
 }
 
 #ifndef RACH2_HOSTTEST
-/** The worker: serve each device's display change, then free what its
- * queues answered, and sleep in an idle wait until the next change. Like
- * every kernel thread, it is not switched by the tick (`no_tick_switch`,
- * which `setup_process_stack` sets), so the driver's and its
- * transport's state, which the big lock guards, holds through each pass,
- * as in a system call; it gives way where it sleeps and between passes.
- * A display query sleeps, and an unplug meanwhile may drop every other
- * reference, so the worker holds one on the device from its table to the
- * pass's end, as Linux's virtio_gpu_deinit flushes config_changed_work
- * before the device goes (drivers/gpu/drm/virtio/virtgpu_kms.c:283-290 in
- * 6.12.115). */
+/** The worker: serve each device's display change, then free what its queues
+ * answered, and sleep in an idle wait until the next change. Like every kernel
+ * thread, it is not switched by the tick (`no_tick_switch`, which
+ * `setup_process_stack` sets), so the driver's and its transport's state, which
+ * the big lock guards, holds through each pass, as in a system call; it gives
+ * way where it sleeps and between passes. A display query sleeps, and an unplug
+ * meanwhile may drop every other reference, so the worker holds one on the
+ * device from its table to the pass's end, as Linux's virtio_gpu_deinit flushes
+ * config_changed_work before the device goes
+ * (drivers/gpu/drm/virtio/virtgpu_kms.c:283-290 in 6.12.115). */
 static void vgpu_worker(void)
 {
     struct virtio_gpu_device *vg;
