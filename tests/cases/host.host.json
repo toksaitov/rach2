@@ -326,6 +326,16 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "drmcon",
+          "checks": "tests/host/drmcon_hosttest.c runs the console as a DRM client over the master role and mode setting, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "drmcon64",
+          "checks": "tests/host/drmcon64_hosttest.c runs the console's DRM client rows with x86-64 kernel structures under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "ia32_fs",
           "checks": "tests/host/ia32_fs_hosttest.c checks the i386 stat, statfs, dirent, flock, iovec, time, sigevent and select structures of the x86-64 kernel's compat calls and the joining of split 64-bit arguments against Linux 6.12 under ASan and UBSan",
           "source": "scenario"
@@ -826,6 +836,21 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "kvm_svm",
+          "checks": "tests/host/kvm_svm_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "kvm_vfio",
+          "checks": "tests/host/kvm_vfio_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "kvm_vmx",
+          "checks": "tests/host/kvm_vmx_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "lag",
           "checks": "tests/host/lag_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
@@ -1281,6 +1306,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "cycleus",
+          "checks": "tests/host/cycleus_hosttest.c converts the lock counters' cycles to microseconds as native division does, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "timerfd",
           "checks": "tests/host/timerfd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
@@ -1386,6 +1416,16 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "vgpublob",
+          "checks": "tests/host/vgpublob_hosttest.c runs virtio-gpu's blob, context-init and ring rows over the 3D model under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "vgpublob64",
+          "checks": "tests/host/vgpublob64_hosttest.c runs the blob, context-init and ring rows with x86-64 kernel structures under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "vgpushm",
           "checks": "tests/host/vgpushm_hosttest.c runs the virtio transport over a shared region against a model of the VM's device through the virtio core and checks the layout, the handshake, the queues in the ring area and their bounds, a round trip, merged and refused chains, a full region that gives ENOMEM, backing from the heap, the doorbells' hooks, the control node's report, a lost device, a refused setup and the detach under ASan and UBSan",
           "source": "scenario"
@@ -1398,6 +1438,11 @@
         {
           "assertion_id": "virtio_gpu64",
           "checks": "tests/host/virtio_gpu64_hosttest.c runs the virtio GPU rows with x86-64 kernel structures under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "virtio_pci_shm",
+          "checks": "tests/host/virtio_pci_shm_hosttest.c reads virtio-pci's shared memory capabilities from a model of two functions under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {
