@@ -50,10 +50,12 @@ void pstore_console_write(const char *text, uint32_t n);
  * Write the tail of the log, as many of its newest whole records as fit,
  * into the next dmesg zone with Linux's headers, as kmsg_dump does with
  * KMSG_DUMP_PANIC (kernel/panic.c:440) through pstore_dump and ramoops.
- * From a panic, after its record is in the log: it allocates nothing,
- * takes no lock and waits for nothing. A second call writes nothing.
+ * From `k_panic` through `k_panic_dump`, which `ramoops_init` sets, after
+ * the panic's record is in the log: it allocates nothing, takes no lock and
+ * waits for nothing. Returns 1 when it wrote the record, 0 when there is no
+ * region, no dmesg zone or a record was already written.
  */
-void pstore_panic_dump(void);
+int pstore_panic_dump(void);
 
 /**
  * Erase record `id` of `type` from its zone, for an unlink of its file, as

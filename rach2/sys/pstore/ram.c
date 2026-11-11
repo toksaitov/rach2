@@ -17,6 +17,7 @@
 #include "../mm/frame.h"
 #include "../mm/kheap.h"
 #include "../mm/paging.h"
+#include "../panic.h"
 #include "../rtc.h"
 #include "../timer.h"
 
@@ -356,6 +357,7 @@ void ramoops_init(void)
         prz_free_old(&cprz);
     }
     ready = 1;
+    k_panic_dump = pstore_panic_dump;
     if (console_size != 0) {
         console_start();
     }
@@ -396,7 +398,7 @@ static void put_dec(char *buf, uint32_t *at, uint64_t v, int width)
     }
 }
 
-void pstore_panic_dump(void)
+int pstore_panic_dump(void)
 {
     char hdr[40], chunk[128];
     struct prz *z;
@@ -405,7 +407,7 @@ void pstore_panic_dump(void)
     uint32_t hl = 0, room, off, len, n;
 
     if (!ready || max_dump_cnt == 0 || dumped) {
-        return;
+        return 0;
     }
     dumped = 1;
     z = &dprzs[dump_write_cnt];
@@ -449,6 +451,7 @@ void pstore_panic_dump(void)
     }
     dump_write_cnt = (dump_write_cnt + 1) % max_dump_cnt;
     arch_dma_fence();
+    return 1;
 }
 
 void ramoops_erase(int type, uint32_t id)

@@ -15,7 +15,7 @@ After a panic and a reset, `/sys/fs/pstore/dmesg-ramoops-0` holds the end of the
 
 ## Interfaces
 
-* `pstore.h`: `ramoops_reserve`, called by `kernel_main` before `init_paging`, reads the options and takes the region out of the frame map; `ramoops_init`, once paging and the heap are up, maps it, lays out its zones and keeps their old contents; `pstore_start`, once `/sys` is mounted, makes `/sys/fs/pstore` and mounts the records there; `pstore_console_write`, from `klog`'s ring with interrupts off; and `pstore_panic_dump`, from `k_panic` after its record.
+* `pstore.h`: `ramoops_reserve`, called by `kernel_main` before `init_paging`, reads the options and takes the region out of the frame map; `ramoops_init`, once paging and the heap are up, maps it, lays out its zones and keeps their old contents; `pstore_start`, once `/sys` is mounted, makes `/sys/fs/pstore` and mounts the records there; `pstore_console_write`, from `klog`'s ring with interrupts off; and `pstore_panic_dump`, which `ramoops_init` sets as `k_panic_dump`, so that `k_panic` calls it after its record and its report says "crash record saved" when it returns 1.
 * `ram_core.h`: a persistent RAM zone, `struct prz`, and the Reed-Solomon code that guards it.
 * `vfs_pstore_type`: the file system, which `mount(2)` also takes as `pstore`.
 

@@ -88,10 +88,6 @@ void pstore_console_write(const char *text, uint32_t n)
     (void)n;
 }
 
-/** No ramoops region here: the panic leaves no record. */
-void pstore_panic_dump(void)
-{}
-
 /** Nothing here is off yet. */
 void arch_irq_disable(void)
 {}
