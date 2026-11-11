@@ -73,6 +73,7 @@ static uint8_t pad_mode;
 static uint8_t dev_res;
 static uint8_t dev_rate;
 static int reporting;
+static int refuse_mode; /* leave the mode's rate byte 0x14 unanswered */
 #define TOOK_MAX 512
 static uint8_t took[TOOK_MAX];
 static int n_took;
@@ -151,6 +152,11 @@ static void dev_take(uint8_t b)
     n_took++;
     if ((ctl_config & 0x20) != 0) {
         return; /* its clock is off */
+    }
+    if (refuse_mode && b == 0x14) {
+        arg_for = 0;
+        res_count = 0;
+        return;
     }
     if (arg_for) {
         cmd = arg_for;
