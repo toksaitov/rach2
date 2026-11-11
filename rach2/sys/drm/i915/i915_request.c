@@ -376,7 +376,14 @@ static int submit_ready(void *arg)
  * request waited for signals or the next heartbeat of an unparked GT is
  * due, then give the chip what is ready and beat, holding the big lock as
  * kernel code does. The heartbeat is the driver's hang detection, as
- * Linux's heartbeat worker is (i915_hangcheck.c).
+ * Linux's heartbeat worker is (i915_hangcheck.c). Like every kernel thread,
+ * it is not switched by the tick (`no_tick_switch`, which
+ * `setup_process_stack` sets): a retire's last put of an imported buffer runs
+ * the exporter's free, virtio-gpu's among them, whose state and its
+ * transport's the big lock alone guards, so the worker gives way only
+ * where it sleeps and between passes, as a kworker of Linux without full
+ * preemption gives way only between works (process_one_work's
+ * cond_resched, kernel/workqueue.c:3298-3299 in 6.12.115).
  */
 static void submit_thread_main(void)
 {
@@ -384,6 +391,7 @@ static void submit_thread_main(void)
 
     arch_irq_enable();
     for (;;) {
+        sched_service_point();
         submit_deadline = hangcheck_deadline();
         current_proc->wakeup_tick = submit_deadline;
         (void)wq_wait_event_idle(&submit_wait, submit_ready, 0);
