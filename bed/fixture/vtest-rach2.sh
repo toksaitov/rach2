@@ -298,7 +298,7 @@ while :; do
         qemu='' gpu=''
         fail "QEMU${bdf:+ under gpu.sh} exited with $status before the server was ready"
     fi
-    size=$(wc -c < "$console" 2>/dev/null || echo 0)
+    size=$({ wc -c < "$console"; } 2>/dev/null || echo 0)
     if [ "$size" != "$last" ]; then
         last=$size quiet=0
     else
