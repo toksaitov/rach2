@@ -361,9 +361,10 @@ if [ -n "$user" ] && [ "$(id -u)" = 0 ]; then
     cp "$here/measure.sh" "$here/piglit.txt" "$here/webgl.html" "$out/harness/"
     cp -R "$runners/." "$out/harness/runners/"
     [ ! -d "$replays" ] || cp -R "$replays/." "$out/harness/replays/"
-    # root's files exist before USER may write OUT, and the rest is USER's;
-    # -h, so that a link an earlier run left is changed, never its target.
-    for f in $mine; do [ -e "$out/$f" ] || : > "$out/$f"; done
+    # The files root writes from here on exist before USER may write OUT,
+    # and the rest is USER's; -h, so that a link an earlier run left is
+    # changed, never its target.
+    for f in counts line scene.log; do : > "$out/$f"; done
     for e in "$out"/*; do
         case " $mine " in *" ${e##*/} "*) continue ;; esac
         [ ! -e "$e" ] && [ ! -h "$e" ] || chown -hR "$user" "$e"
