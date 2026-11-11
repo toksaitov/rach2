@@ -24,25 +24,41 @@ struct sysfs_pci_ident;
  * rach2/sys/drm/Readme.md tells the design; this header is its contract.
  * The rules every file of sys/drm/ and sys/dmabuf/ keeps:
  *
- * Locking. Everything here runs under the big kernel lock, which a system
- * call, an interrupt and a fault take on entry, and which a sleep lets go.
- * So what changes between two sleeps is atomic, and the only rule is what
- * may change across a sleep. A function that may sleep says so: the waits
- * on fences and vblanks, a blocking atomic commit, the copies to and from
- * user memory and a driver's commands to its device. Before sleeping, a
- * caller takes a reference on every object it uses after the sleep; an
+ * Locking. A row runs under the big kernel lock unless it is marked to run
+ * without it (DRM_UNLOCKED, below); so does an interrupt handler unless it
+ * is registered ISR_UNLOCKED, the i915's and virtio-gpu's are. The big
+ * lock goes at every sleep, so a function that may sleep says so: the
+ * waits on fences and vblanks, a blocking atomic commit, the copies to and
+ * from user memory and a driver's commands to its device. Before sleeping,
+ * a caller takes a reference on every object it uses after the sleep; an
  * object it found by ID or handle is found again or held, never assumed.
- * A device's `commit_lock`, a sleeping lock, orders commits on one device:
- * a commit takes it before it reads the state it replaces and keeps it
- * until the new state is the device's. An interrupt handler takes no
- * sleeping lock and may only signal fences, count vblanks and queue
- * events. The order, outermost first, is a device's `commit_lock`, then
- * any lock a driver keeps for its own hardware.
+ *
+ * A device's `mode_lock`, the commit lock, a mutex its holder may take again
+ * (`drm_modeset_lock`), keeps the mode state: the mode objects and their
+ * table, the framebuffers' and blobs' references, the committed states,
+ * the connectors' probes, modes and EDIDs, and the leases, as Linux's
+ * mode_config.mutex and modeset locks do. Each KMS row holds it
+ * (DRM_MODESET_LOCK), as do the commit worker, the console client, the
+ * probes of hotplug, sysfs and debugfs, a file's release of its
+ * framebuffers and blobs, and the unplug's mark. A commit takes it before
+ * it reads the state it replaces and keeps it until the new state is the
+ * device's. ATOMIC and PAGE_FLIP hold it without the big lock on a device
+ * whose driver declares DRIVER_KMS_UNLOCKED (DRM_KMS), whose display hooks
+ * then take only their own locks. WAIT_VBLANK holds none of it: the
+ * vblanks are under the two locks below, as Linux's drm_wait_vblank_ioctl
+ * takes no modeset lock (drm_vblank.c:1733-1873). User memory is copied
+ * under it, so it comes before an address space's `mmap_lock`, as Linux's
+ * modeset locks do; nothing takes it under `mmap_lock`.
+ *
+ * An interrupt handler takes no sleeping lock and may only signal fences,
+ * count vblanks and queue events. The order, outermost first, is a
+ * device's `mode_lock`, the locks of a driver's buffers (the i915 GEM lock),
+ * then the spinlocks below and those a driver keeps for its own hardware.
  *
  * Spinlocks, as Linux's, keep the structures that DRM_UNLOCKED ioctls and
  * other processors reach whole without the big lock. Each is taken with
  * interrupts off, for a region that neither sleeps nor allocates, and no
- * two of them nest:
+ * two of the first three nest:
  *   * a handle table's `lock` (`struct drm_handles`) over its slots, its
  *     PRIME hash and each handle's PRIME cache, Linux's `table_lock` and
  *     `syncobj_table_lock` (include/drm/drm_file.h:309-315);
@@ -51,7 +67,17 @@ struct sysfs_pci_ident;
  *     and the device's mmap space, Linux's `object_name_lock` and the
  *     offset manager's `vm_lock`;
  *   * a device's `event_lock` over each file's queued and reserved events
- *     and its event space, Linux's `event_lock` (drm_device.h:276);
+ *     and its event space, Linux's `event_lock` (drm_device.h:276), and
+ *     over each CRTC's queued vblank events and pending flip and a
+ *     driver's per-pipe events; a fence's lock may be taken under it, and
+ *     a device's `vbl_lock` after it, over each CRTC's vblank holds,
+ *     counts, times and the driver's vblank hooks, Linux's `vbl_lock`
+ *     (drm_device.h:242), then the driver's interrupt locks;
+ *   * a CRTC's CRC `lock` (`struct drm_crtc_crc`) over its entries,
+ *     alone or after `event_lock`, Linux's `crc->lock`;
+ *   * the commit worker's `work_lock` over its queues of commits, device
+ *     work and hotplug events, under which no fence is called and no
+ *     sleeper woken (drm_atomic.c);
  *   * a syncobj's `lock` over its fence and its lists of waits and
  *     eventfds, Linux's (drm_syncobj.c:266-396), under which a fence's lock
  *     and the chain lock of dmabuf/fence.c may be taken, as Linux's are.
@@ -124,6 +150,10 @@ struct sysfs_pci_ident;
 #define DRIVER_COMPUTE_ACCEL    (1u << 7)
 #define DRIVER_GEM_GPUVA        (1u << 8)
 #define DRIVER_CURSOR_HOTSPOT   (1u << 9)
+/* Rach2's: the driver's display hooks take only their own locks and the
+ * device's `mode_lock`, so the KMS rows marked DRM_UNLOCKED run without the
+ * big lock on its device (DRM_KMS). Linux has no big lock to leave. */
+#define DRIVER_KMS_UNLOCKED     (1u << 31)
 
 /* The bus of a device, by libdrm's DRM_BUS_* numbers. virtio-gpu is on the
  * virtio bus under its PCI function, which libdrm follows to the PCI
@@ -157,7 +187,7 @@ struct drm_ident {
      6,                                                                             \
      0,                                                                             \
      DRIVER_GEM | DRIVER_RENDER | DRIVER_MODESET | DRIVER_ATOMIC | DRIVER_SYNCOBJ | \
-         DRIVER_SYNCOBJ_TIMELINE,                                                   \
+         DRIVER_SYNCOBJ_TIMELINE | DRIVER_KMS_UNLOCKED,                             \
      DRM_BUS_PCI}
 #define DRM_IDENT_VIRTIO_GPU                                                        \
     {"virtio_gpu",                                                                  \
@@ -216,12 +246,21 @@ typedef int32_t (*drm_ioctl_t)(struct drm_device *dev, void *data, struct drm_fi
  * dispatcher takes the big lock around every other handler. Linux 6.12
  * runs every row unlocked (drm_ioctl.c:728-746) and has dropped the flag,
  * which once marked such a row against drm_global_mutex; Rach2 keeps it,
- * at its old value, while its rows leave the big lock one at a time. */
+ * at its old value, while its rows leave the big lock one at a time.
+ *
+ * Rach2's own two: DRM_MODESET_LOCK has the dispatcher hold the device's
+ * `mode_lock` across the handler, for a row that reads or changes the mode
+ * objects, their table or their committed states, as Linux's handlers take
+ * mode_config.mutex and the modeset locks themselves; DRM_KMS marks a row
+ * that reaches the driver's display hooks, whose DRM_UNLOCKED holds only on
+ * a device with DRIVER_KMS_UNLOCKED. */
 #define DRM_AUTH         (1u << 0)
 #define DRM_MASTER       (1u << 1)
 #define DRM_ROOT_ONLY    (1u << 2)
 #define DRM_UNLOCKED     (1u << 4)
 #define DRM_RENDER_ALLOW (1u << 5)
+#define DRM_MODESET_LOCK (1u << 8)
+#define DRM_KMS          (1u << 9)
 
 /* An ioctl of the core's table or a driver's own (numbers DRM_COMMAND_BASE
  * to DRM_COMMAND_END - 1). `cmd` is the full number, whose size is the most

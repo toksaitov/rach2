@@ -394,12 +394,15 @@ static void flush_damage(const struct drm_plane_state *ps)
     const struct drm_framebuffer *fb = ps->fb;
     const struct drm_mode_rect *r;
     uint32_t i, n;
+    int taken;
 
     if (!ps->fb_damage_clips || fb->obj[0]->funcs != &i915_gem_object_funcs) {
         return;
     }
     r = (const struct drm_mode_rect *)ps->fb_damage_clips->data;
     n = ps->fb_damage_clips->length / (uint32_t)sizeof(*r);
+    /* The object's pages are the GEM lock's. */
+    taken = i915_gem_lock(to_i915(fb->dev));
     for (i = 0; i < n; i++) {
         if (r[i].y2 <= r[i].y1 || r[i].y1 < 0) {
             continue;
@@ -408,6 +411,7 @@ static void flush_damage(const struct drm_plane_state *ps)
                                     fb->offsets[0] + (uint64_t)r[i].y1 * fb->pitches[0],
                                     fb->offsets[0] + (uint64_t)r[i].y2 * fb->pitches[0]);
     }
+    i915_gem_unlock(to_i915(fb->dev), taken);
 }
 
 /* ------------------------------------------------------------------------

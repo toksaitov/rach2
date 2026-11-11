@@ -103,6 +103,29 @@ int32_t drm_atomic_worker_start(void)
     return 0;
 }
 
+/** The commit lock, which the dispatcher takes for a KMS row and the
+ * unplug for its mark: counted, so that a row sees it held and let go. */
+static int mode_lock_depth;
+
+int32_t drm_modeset_lock(struct drm_device *dev)
+{
+    (void)dev;
+    mode_lock_depth++;
+    return 0;
+}
+
+void drm_modeset_lock_nointr(struct drm_device *dev)
+{
+    (void)dev;
+    mode_lock_depth++;
+}
+
+void drm_modeset_unlock(struct drm_device *dev)
+{
+    (void)dev;
+    mode_lock_depth--;
+}
+
 /** No region is shared with a VM here. */
 int32_t vgpu_shm_start(void)
 {
