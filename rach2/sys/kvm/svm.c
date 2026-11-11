@@ -937,6 +937,7 @@ static void after_run(struct kvm_vcpu *v)
     uint64_t rflags = g->rflags;
 
     s->ex.code = c->exit_code;
+    v->hw_exit = (uint32_t)c->exit_code;
     s->ex.info1 = c->exit_info_1;
     s->ex.info2 = c->exit_info_2;
     s->ex.int_info = c->exit_int_info;

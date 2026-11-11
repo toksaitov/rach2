@@ -1616,12 +1616,14 @@ static void after_run(struct kvm_vcpu *v)
 
     x->fresh = 0;
     if (x->ex.failed != VMX_OK) {
+        v->hw_exit = EXIT_FAILED_ENTRY;
         x->ex.insn_error =
             x->ex.failed == VMX_FAIL_VALID ? (uint32_t)vmcs_read(VM_INSTRUCTION_ERROR) : 0;
         return;
     }
     x->inj_info = 0;
     read_exit(x);
+    v->hw_exit = x->ex.reason;
     v->regs.rsp = vmcs_read(GUEST_RSP);
     v->regs.rip = vmcs_read(GUEST_RIP);
     v->regs.rflags = vmcs_read(GUEST_RFLAGS);

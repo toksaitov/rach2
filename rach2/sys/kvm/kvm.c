@@ -924,5 +924,6 @@ void kvm_start(void)
     if (r < 0) {
         klog(KLOG_WARN, "kvm", "failed: /sys/module/kvm not made: %d", r);
     }
+    kvm_exitstat_start();
     klog(KLOG_INFO, "kvm", "ready: %s", kvm_backend->name);
 }

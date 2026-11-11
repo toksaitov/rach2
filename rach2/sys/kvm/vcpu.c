@@ -424,6 +424,7 @@ int32_t kvm_vcpu_create(struct kvm_vm *vm, uint32_t id)
     v->index = vm->nr_vcpus;
     v->cpu = -1;
     v->clock_cpu = -1;
+    v->xs_row = -1;
     v->hlt_in_guest = (vm->disable_exits & KVM_X86_DISABLE_EXITS_HLT) != 0;
     k_memcpy(v->name, "kvm-vcpu:", 9);
     kvm_decimal(v->name + 9, id);
@@ -691,9 +692,11 @@ static int32_t run_exit(struct kvm_vcpu *v)
 static int32_t run_enter(struct kvm_vcpu *v)
 {
     uint32_t flags = kirq_save();
+    uint64_t left;
     int depth;
     int32_t r;
 
+    kvm_exitstat_done(v, 0);
     v->cpu = (int32_t)arch_cpu_id();
     v->mode = KVM_MODE_IN_GUEST;
     if (v->requests & (KVM_REQ_EXIT | KVM_REQ_TRIPLE_FAULT)) {
@@ -705,7 +708,11 @@ static int32_t run_enter(struct kvm_vcpu *v)
     depth = bkl_drop();
     r = kvm_backend->enter(v);
     v->mode = KVM_MODE_OUTSIDE;
+    left = arch_cycles();
     bkl_take(depth);
+    if (r == 0) {
+        kvm_exitstat_exit(v, left, arch_cycles());
+    }
     kirq_restore(flags);
     return r;
 }
@@ -917,6 +924,7 @@ static int32_t vcpu_run(struct kvm_vcpu *v, uintptr_t arg)
             current_proc->sched_out = NULL;
         }
     }
+    kvm_exitstat_done(v, 1);
     if (v->has_sigmask) {
         signal_set_blocked(old);
     }

@@ -4,7 +4,7 @@
  * host-deps: rach2/sys/kvm/kvm.c rach2/sys/kvm/vcpu.c rach2/sys/kvm/cpuid.c
  * host-deps: rach2/sys/kvm/msr.c rach2/sys/kvm/emulate.c rach2/sys/kvm/decode.c
  * host-deps: rach2/sys/kvm/hyperv.c rach2/sys/kvm/pvclock.c
- * host-deps: rach2/sys/kvm/binstats.c
+ * host-deps: rach2/sys/kvm/binstats.c rach2/sys/kvm/exitstat.c
  * host-deps: tests/host/compat/fd_flat.c
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
  *
@@ -242,6 +242,20 @@ int sysfs_add_dir(int parent, const char *name)
     (void)parent;
     (void)name;
     return ++sysfs_handles;
+}
+
+/* exitstat.c's debug file, which no test reads. */
+struct debugfs_text_ops;
+int32_t debugfs_create_text(const char *path, uint32_t mode, const struct debugfs_text_ops *ops,
+                            void *data);
+int32_t debugfs_create_text(const char *path, uint32_t mode, const struct debugfs_text_ops *ops,
+                            void *data)
+{
+    (void)path;
+    (void)mode;
+    (void)ops;
+    (void)data;
+    return 0;
 }
 
 int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg)

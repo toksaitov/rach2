@@ -574,6 +574,14 @@ struct kvm_vcpu {
      * two instructions, so its record may say it was preempted. */
     int at_boundary;
 
+    /* The processor's code for the last run's exit, which the backend's
+     * `enter` writes: SVM's EXITCODE, low 32 bits, or VMX's exit reason. */
+    uint32_t hw_exit;
+    /* exitstat.c's account of the exit the kernel handles now: its row, or
+     * -1 for none, and the TSC count since which its handling is timed. */
+    int32_t xs_row;
+    uint64_t xs_mark;
+
     /* The steps each vector's interrupts reached, by enum kvm_vec_step,
      * which the VM's fdinfo shows; written by the vCPU's thread and by a
      * delivery from another processor without a lock, so a count read
@@ -598,6 +606,24 @@ struct kvm_vcpu {
 
 /** Register /dev/kvm when a backend probes; at boot, once. */
 void kvm_start(void);
+
+/* exitstat.c */
+
+/** Register the debug file `kvm/exit_stats`; from `kvm_start`, once a
+ * backend has probed. */
+void kvm_exitstat_start(void);
+
+/**
+ * Count the exit of the run that just ended on `v`, by `v->hw_exit`: the
+ * TSC count `left`, read as the guest's run ended, and `held`, read once
+ * the big lock was taken back, time the wait for the lock. Under the big
+ * lock, with interrupts off.
+ */
+void kvm_exitstat_exit(struct kvm_vcpu *v, uint64_t left, uint64_t held);
+
+/** End the account of `v`'s exit, if one is open: the kernel enters the
+ * guest again (`to_user` 0) or KVM_RUN returns (1). Under the big lock. */
+void kvm_exitstat_done(struct kvm_vcpu *v, int to_user);
 
 /** Whether the caller runs in the address space that made `vm`; Linux
  * answers EIO to an ioctl of a VM or its vCPUs from any other. */
