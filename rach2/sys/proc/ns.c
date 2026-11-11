@@ -858,8 +858,9 @@ process_t *proc_named(uint32_t pid)
 }
 
 /** The next free number of the PID namespace `ns`: 1 for its first
- * process, then upward, past the numbers its processes have, from 2 again
- * after NS_PID_MAX; 0 when every number is held. */
+ * process, then upward, past the numbers its records have, forks still
+ * being built included, from 2 again after NS_PID_MAX; 0 when every number
+ * is held. */
 static uint32_t pidns_alloc(struct pidns *ns)
 {
     uint32_t tries;
@@ -872,7 +873,7 @@ static uint32_t pidns_alloc(struct pidns *ns)
 
         ns->last = n;
         for (p = proc_list; p; p = p->next) {
-            if (p->state != PROC_UNUSED && p->pidns && pid_in(p, ns) == n) {
+            if (p->pidns && pid_in(p, ns) == n) {
                 break;
             }
         }
@@ -1166,11 +1167,9 @@ fail:
 }
 
 /** Give `child` its numbers in each PID namespace from `ns` up to the
- * first's child, making it the init of `ns` when it is the namespace's
- * first process, which a signal left at its default then does not end
- * (`unkillable`), as Linux 6.12.115's `copy_process` marks it
- * (kernel/fork.c:2601-2604). 0, or -ENOMEM when one of them is full or has
- * lost its init. */
+ * first's child, reserving number 1 for the first process without making
+ * it the reaper yet (`ns_fork_commit`). 0, or -ENOMEM when a namespace is
+ * full or has no init and this child is not its first process. */
 static int32_t ns_number(process_t *child, struct pidns *ns)
 {
     int first = ns != &init_pidns && ns->last == 0;
@@ -1185,11 +1184,34 @@ static int32_t ns_number(process_t *child, struct pidns *ns)
             return -ENOMEM;
         }
     }
+    return 0;
+}
+
+int32_t ns_fork_commit(process_t *child)
+{
+    struct pidns *ns = proc_pidns(child);
+    struct pidns *at;
+    int first = ns != &init_pidns && child->nspid[ns->level] == 1;
+
+    for (at = ns; at != &init_pidns; at = at->parent) {
+        if (!(first && at == ns) && at->reaper == 0) {
+            return -ENOMEM;
+        }
+    }
     if (first) {
         ns->reaper = child->pid;
         child->tg->unkillable = 1;
     }
     return 0;
+}
+
+void ns_fork_abort(process_t *child)
+{
+    struct pidns *ns = proc_pidns(child);
+
+    if (ns != &init_pidns && ns->reaper == 0 && child->nspid[ns->level] == 1) {
+        ns->last = 0;
+    }
 }
 
 int32_t ns_fork(process_t *child, const process_t *parent, uint32_t flags)

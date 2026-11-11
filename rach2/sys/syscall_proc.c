@@ -3009,6 +3009,78 @@ static void fork_frame(process_t *child, const isr_params_t *params, const struc
 #endif
 }
 
+/** Give back every part of a child whose fork failed, with the big lock
+ * held. The child has not run; the last steps undo its reserved PID 1, if
+ * any, and free its record without an intervening sleep. */
+static void fork_discard(process_t *child)
+{
+    proc_files_put(child);
+    proc_fs_put(child);
+    kstack_free(child->kernel_stack);
+    mm_drop(child);
+    ns_fork_abort(child);
+    free_process(child);
+}
+
+/** Build the memory, stack, identities, namespaces and shared or copied
+ * files of a child of `parent`, as `req` asks, without starting it. The
+ * caller holds the big lock and may sleep. Return the child, or NULL with
+ * negative errno in `*error` and every partial allocation released. */
+static process_t *fork_build(process_t *parent, const struct fork_req *req, int32_t *error)
+{
+    process_t *child;
+    uintptr_t child_kstack_base;
+    int32_t rc;
+
+    child =
+        alloc_process_fork(parent, (req->flags & CLONE_THREAD) != 0, (req->flags & CLONE_FS) != 0);
+    if (!child) {
+        *error = -ENOMEM;
+        return NULL;
+    }
+
+    child->mm = fork_mm(parent->mm, req->flags);
+    if (!child->mm) {
+        free_process(child);
+        *error = -ENOMEM;
+        return NULL;
+    }
+    child->space_root = child->mm->space_root;
+    child->page_dir = child->mm->dir;
+
+    child_kstack_base = kstack_alloc();
+    if (!child_kstack_base) {
+        mm_drop(child);
+        free_process(child);
+        *error = -ENOMEM;
+        return NULL;
+    }
+    child->kernel_stack = child_kstack_base + KERNEL_STACK_SIZE;
+    /* A thread's or a CLONE_PARENT child's parent is the caller's parent. */
+    child->parent_pid =
+        (req->flags & (CLONE_THREAD | CLONE_PARENT)) ? parent->parent_pid : parent->tgid;
+    fork_ids(child, parent);
+    rseq_fork(child, parent, (req->flags & CLONE_VM) != 0);
+    rc = ns_fork(child, parent, req->flags);
+    if (rc != 0) {
+        goto fail;
+    }
+    child->tls_base = (req->flags & CLONE_SETTLS) && !req->tls_desc_set ? req->tls : arch_tls_get();
+    fpu_save(child->fpu);
+
+    rc = fork_shares(child, parent, req->flags);
+    if (rc != 0) {
+        goto fail;
+    }
+    fork_store_ids(child, req);
+    return child;
+
+fail:
+    fork_discard(child);
+    *error = rc;
+    return NULL;
+}
+
 /**
  * Create a child process: fork(2), vfork(2), and the part of clone(2) this
  * kernel has.
@@ -3049,7 +3121,6 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
     struct pidfd *pf = NULL;
     int32_t pidfd = -1;
     uint32_t pid, kid;
-    uintptr_t child_kstack_base;
     int32_t rc;
     int event;
 
@@ -3061,44 +3132,10 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
     if (rc != 0) {
         return rc;
     }
-    child =
-        alloc_process_fork(parent, (req->flags & CLONE_THREAD) != 0, (req->flags & CLONE_FS) != 0);
+    child = fork_build(parent, req, &rc);
     if (!child) {
-        return -ENOMEM;
+        return rc;
     }
-
-    child->mm = fork_mm(parent->mm, req->flags);
-    if (!child->mm) {
-        free_process(child);
-        return -ENOMEM;
-    }
-    child->space_root = child->mm->space_root;
-    child->page_dir = child->mm->dir;
-
-    child_kstack_base = kstack_alloc();
-    if (!child_kstack_base) {
-        mm_drop(child);
-        free_process(child);
-        return -ENOMEM;
-    }
-    child->kernel_stack = child_kstack_base + KERNEL_STACK_SIZE;
-    /* A thread's or a CLONE_PARENT child's parent is the caller's parent. */
-    child->parent_pid =
-        (req->flags & (CLONE_THREAD | CLONE_PARENT)) ? parent->parent_pid : parent->tgid;
-    fork_ids(child, parent);
-    rseq_fork(child, parent, (req->flags & CLONE_VM) != 0);
-    rc = ns_fork(child, parent, req->flags);
-    if (rc != 0) {
-        goto fail_built;
-    }
-    child->tls_base = (req->flags & CLONE_SETTLS) && !req->tls_desc_set ? req->tls : arch_tls_get();
-    fpu_save(child->fpu);
-
-    rc = fork_shares(child, parent, req->flags);
-    if (rc != 0) {
-        goto fail_built;
-    }
-    fork_store_ids(child, req);
     if (req->flags & CLONE_PIDFD) {
         pidfd = fork_pidfd(child, req->pidfd, &pf);
         if (pidfd < 0) {
@@ -3109,6 +3146,10 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
     if (((parent->sig_pending | parent->tg->pending) & KSIG_BIT(SIGKILL)) || parent->tg->exiting ||
         parent->tg->exec_task) {
         rc = -EINTR;
+        goto fail_pidfd;
+    }
+    rc = ns_fork_commit(child);
+    if (rc != 0) {
         goto fail_pidfd;
     }
     if (pf) {
@@ -3145,11 +3186,7 @@ fail_pidfd:
         pidfd_free(pf);
     }
 fail_built:
-    proc_files_put(child);
-    proc_fs_put(child);
-    kstack_free(child->kernel_stack);
-    mm_drop(child);
-    free_process(child);
+    fork_discard(child);
     return rc;
 }
 

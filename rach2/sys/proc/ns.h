@@ -277,6 +277,20 @@ uint32_t pid_seen_by(const process_t *viewer, uint32_t kid);
  */
 int32_t ns_fork(process_t *child, const process_t *parent, uint32_t flags);
 
+/** Commit `child`'s PID namespace numbers after fork's other failure
+ * points, with the big lock held and no sleep before the child starts.
+ * Recheck that no enclosing init died during the build, then publish the
+ * first child as reaper and unkillable, as Linux 6.12.115's copy_process
+ * does (kernel/fork.c:2571-2583, 2601-2604). 0, or -ENOMEM with nothing
+ * committed when a namespace lost its init. */
+int32_t ns_fork_commit(process_t *child);
+
+/** Undo a failed first fork's reservation of PID 1 just before freeing
+ * `child`, with the big lock held and no intervening sleep. The namespace
+ * has no reaper yet, as in Linux 6.12.115's free_pid failure case
+ * (kernel/pid.c:152-159); the next fork can take PID 1 again. */
+void ns_fork_abort(process_t *child);
+
 /** Drop `p`'s references to its namespaces, at the end of its record. */
 void ns_release(process_t *p);
 

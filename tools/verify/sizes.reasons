@@ -275,7 +275,6 @@ rach2/sys/syscall_net.c:do_setsockopt lines 133 a dispatcher, one arm per comman
 rach2/sys/syscall_net.c:put_cmsg params 8 the parameters are the fields of one message; a struct for them would be filled and unpacked once
 
 rach2/sys/syscall_proc.c:exec_shebang complexity 30 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_proc.c:do_fork lines 107 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_proc.c:clone_with params 8 the parameters are the arguments of clone or clone3, passed through
 
 rach2/sys/usb/core.c:step_device complexity 78 a state machine, one arm per state, read as a table
