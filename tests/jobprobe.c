@@ -368,6 +368,64 @@ static void group_numbers(void)
 }
 
 /**
+ * The reader of `background_read`: in a group of its own, a read of the
+ * terminal stops it with SIGTTIN. It does not return.
+ */
+static void background_reader(void)
+{
+    char b[4];
+
+    setpgid(0, 0);              /* background: not the fg group */
+    read(0, b, (int)sizeof(b)); /* background read -> SIGTTIN stop */
+    sys_exit(0);
+}
+
+/**
+ * Check that a background read of the controlling terminal stops with
+ * SIGTTIN. The reader's group must not be orphaned, or the read is EIO, as
+ * Linux's __tty_check_change has it; a member whose parent is init does not
+ * keep a group from being orphaned (will_become_orphaned_pgrp), and the probe
+ * is init in the default suite. So a helper in the probe's group forks the
+ * reader, whose parent is then in another group of the session, and reports
+ * through its status: 0 for the stop, 1 for no stop, 2 for a failed fork.
+ * The probe's group is made the foreground first, and the terminal is given
+ * up after.
+ */
+static void background_read(void)
+{
+    int hpid, st;
+
+    ioctl(0, TIOCSCTTY, 0);
+    hpid = fork();
+    if (hpid == 0) {
+        int cpid, r, ok;
+
+        cpid = fork();
+        if (cpid == 0) {
+            background_reader();
+        }
+        if (cpid < 0) {
+            sys_exit(2);
+        }
+        setpgid(cpid, cpid);
+        r = waitpid(cpid, &st, WUNTRACED);
+        ok = r == cpid && WIFSTOPPED(st) && WSTOPSIG(st) == SIGTTIN;
+        kill(cpid, SIGKILL);
+        waitpid(cpid, &st, 0);
+        sys_exit(ok ? 0 : 1);
+    }
+    if (hpid > 0) {
+        st = -1;
+        check(waitpid(hpid, &st, 0) == hpid && WIFEXITED(st) && WEXITSTATUS(st) != 2,
+              "fork for SIGTTIN");
+        check(WIFEXITED(st) && WEXITSTATUS(st) == 0, "background read -> SIGTTIN stop");
+    } else {
+        check(0, "fork for SIGTTIN");
+    }
+    ioctl(0, TIOCNOTTY, 0);
+}
+
+/**
  * The probe: the rows of the opening comment in order, each counted by
  * `check`.
  *
@@ -480,29 +538,7 @@ PROBE_START void _start(void)
         }
     }
 
-    /* A background read of the controlling terminal stops with SIGTTIN. */
-    {
-        int cpid, st, r;
-
-        ioctl(0, TIOCSCTTY, 0); /* the probe's group is the foreground again */
-        cpid = fork();
-        if (cpid == 0) {
-            char b[4];
-            setpgid(0, 0);              /* background: not the fg group */
-            read(0, b, (int)sizeof(b)); /* background read -> SIGTTIN stop */
-            sys_exit(0);
-        }
-        if (cpid > 0) {
-            r = waitpid(cpid, &st, WUNTRACED);
-            check(r == cpid && WIFSTOPPED(st) && WSTOPSIG(st) == SIGTTIN,
-                  "background read -> SIGTTIN stop");
-            kill(cpid, SIGKILL);
-            waitpid(cpid, &st, 0);
-        } else {
-            check(0, "fork for SIGTTIN");
-        }
-        ioctl(0, TIOCNOTTY, 0);
-    }
+    background_read();
 
     /* Error contract. */
     check(setsid() == -EPERM, "setsid by a group leader -> -EPERM");
