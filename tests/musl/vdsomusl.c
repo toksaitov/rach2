@@ -40,6 +40,13 @@
  * one processor, and two thousand taken on each processor in turn, are each
  * no earlier than the one before.
  *
+ * `write`: as on Linux, which maps the vDSO private and may-write so that a
+ * debugger can set a breakpoint there, a child's mprotect makes it rwxp, a
+ * byte written there reads back and its clock_gettime still works, and
+ * another child's write through /proc/self/mem, as a tracer writes, reads
+ * back with the page still read-only; the parent's vDSO, which shared the
+ * kernel's page with both, is unchanged.
+ *
  * On the i686 kernel, which has no vDSO, `absent`: there is no
  * AT_SYSINFO_EHDR, and maps names neither region; then `source`.
  *
@@ -58,14 +65,17 @@
 #define _GNU_SOURCE
 #include <elf.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <sched.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/auxv.h>
+#include <sys/mman.h>
 #include <sys/syscall.h>
 #include <sys/time.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -604,11 +614,97 @@ static int ordered(void)
     return 0;
 }
 
+/**
+ * In a child, write `value` over the image's byte EI_PAD, which a valid
+ * header leaves 0: after mprotect makes the page writable, or with
+ * `through_mem` through /proc/self/mem with the page read-only, as a tracer
+ * sets a breakpoint. The status the child exits with: 0 when the byte reads
+ * back and, after mprotect, maps says rwxp and the vDSO's clock_gettime
+ * still works; 1 when the mprotect or the write is refused; 2 otherwise.
+ */
+static int patch(int through_mem, unsigned char value)
+{
+    volatile unsigned char *at = (volatile unsigned char *)image + EI_PAD;
+    struct timespec ts;
+    unsigned long lo;
+    unsigned long hi;
+    char perm[5];
+    int fd;
+
+    if (through_mem) {
+        fd = open("/proc/self/mem", O_RDWR);
+        if (fd < 0 || pwrite(fd, &value, 1, (off_t)(uintptr_t)at) != 1) {
+            return 1;
+        }
+        close(fd);
+        return *at == value && maps_region("[vdso]", &lo, &hi, perm) == 0 &&
+                       strcmp(perm, "r-xp") == 0
+                   ? 0
+                   : 2;
+    }
+    if (mprotect((void *)image, 4096, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) {
+        return 1;
+    }
+    *at = value;
+    return *at == value && maps_region("[vdso]", &lo, &hi, perm) == 0 &&
+                   strcmp(perm, "rwxp") == 0 && vdso_clock_gettime(CLOCK_MONOTONIC, &ts) == 0
+               ? 0
+               : 2;
+}
+
+/** Run `patch` in a child; its exit status, or -1 when it could not be run
+ * or did not exit. */
+static int patch_in_child(int through_mem, unsigned char value)
+{
+    int status;
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        _exit(patch(through_mem, value));
+    }
+    if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status)) {
+        return -1;
+    }
+    return WEXITSTATUS(status);
+}
+
+/** Check that a child may write its vDSO, as Linux lets mprotect and a
+ * tracer write it, and that the write copies the page. */
+static int write_row(void)
+{
+    unsigned char was = image[EI_PAD];
+    unsigned long lo;
+    unsigned long hi;
+    char perm[5];
+    int rc;
+
+    rc = patch_in_child(0, (unsigned char)(was ^ 0x5a));
+    if (rc == 1) {
+        return fail("mprotect refused to make the vDSO writable, or a write to it faulted");
+    }
+    if (rc != 0) {
+        return fail("the vDSO after mprotect is not rwxp, lost the byte or its clock");
+    }
+    rc = patch_in_child(1, (unsigned char)(was ^ 0xa5));
+    if (rc == 1) {
+        return fail("a write to the vDSO through /proc/self/mem was refused");
+    }
+    if (rc != 0) {
+        return fail("the vDSO after a write through /proc/self/mem lost the byte or is not r-xp");
+    }
+    if (image[EI_PAD] != was || maps_region("[vdso]", &lo, &hi, perm) != 0 ||
+        strcmp(perm, "r-xp") != 0) {
+        return fail("a child's write to its vDSO changed the parent's");
+    }
+    report_held();
+    return 0;
+}
+
 /** The rows of the x86-64 kernel's vDSO, up to `source`. */
 static int vdso_rows(void)
 {
     if (auxv() != 0 || maps() != 0 || symbols() != 0 || source() != 0 || agree() != 0 ||
-        resolution() != 0 || getcpu_row() != 0 || ordered() != 0) {
+        resolution() != 0 || getcpu_row() != 0 || ordered() != 0 || write_row() != 0) {
         return 1;
     }
     return 0;
@@ -634,7 +730,7 @@ static int absent_rows(void)
 static void plan(void)
 {
     static const char *const with[] = {"auxv",       "maps",   "symbols", "source", "agree",
-                                       "resolution", "getcpu", "ordered", "calls"};
+                                       "resolution", "getcpu", "ordered", "write",  "calls"};
     static const char *const without[] = {"absent", "source", "calls"};
     const char *const *ids = kernel_x86_64 ? with : without;
     unsigned n =
