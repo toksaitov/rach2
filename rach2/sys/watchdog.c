@@ -97,7 +97,7 @@ static struct wd_cpu wd[NR_CPUS];
 
 /* Whether `watchdog_init` has run, and whether the counter raises the NMI;
  * without it the buddy check is the hard-lockup detector. */
-static int wd_ready;
+static volatile int wd_ready;
 static int wd_perf;
 
 /* The guards of kernel/watchdog.c:109 and :325, which keep one processor at
@@ -114,15 +114,15 @@ static volatile unsigned int backtrace_mask[NR_CPUS];
 static volatile unsigned int sync_owner;
 static int sync_depth;
 
-/** The detectors on now: none while `watchdog` or the threshold is 0, the
- * soft one unless `soft_watchdog` is 0, the hard one unless `nmi_watchdog`
- * is 0 or it cannot run here (kernel/watchdog.c,
+/** The detectors the settings ask for: none while `watchdog` or the
+ * threshold is 0, the soft one unless `soft_watchdog` is 0, the hard one
+ * unless `nmi_watchdog` is 0 or it cannot run here (kernel/watchdog.c,
  * `lockup_detector_update_enable`). */
-static unsigned int watchdog_enabled(void)
+static unsigned int watchdog_wanted(void)
 {
     unsigned int e = 0;
 
-    if (!wd_ready || !watchdog_user_enabled || watchdog_thresh <= 0) {
+    if (!watchdog_user_enabled || watchdog_thresh <= 0) {
         return 0;
     }
     if (watchdog_softlockup_user_enabled) {
@@ -132,6 +132,13 @@ static unsigned int watchdog_enabled(void)
         e |= WD_HARD;
     }
     return e;
+}
+
+/** The detectors on now: those `watchdog_wanted` gives, none before
+ * `watchdog_init` has set every processor's record up. */
+static unsigned int watchdog_enabled(void)
+{
+    return wd_ready ? watchdog_wanted() : 0;
 }
 
 int watchdog_hardlockup_available(void)
@@ -1071,15 +1078,19 @@ void watchdog_init(void)
 
     read_options();
     wd_perf = platform_pmu_probe();
-    wd_ready = 1;
     for (c = 0; c < NR_CPUS; c++) {
-        if (cpu_table[c].online && watchdog_enabled()) {
+        if (cpu_table[c].online && watchdog_wanted()) {
             wd[c].touch_ts = get_timestamp();
             wd[c].hardlockup_touched = 1;
             wd[c].enabled = 1;
         }
         wd[c].report_ts = DELAY_REPORT;
     }
+    /* The other processors take ticks already: none may read a record
+     * before it is set up, as Linux's watchdog_enable sets the timestamps
+     * before it starts the timer (kernel/watchdog.c). */
+    k_barrier();
+    wd_ready = 1;
     if (watchdog_hardlockup_user_enabled && watchdog_user_enabled) {
         if (wd_perf) {
             klog(KLOG_INFO, "nmi_watchdog", "enabled: permanently consumes one hw-PMU counter");
