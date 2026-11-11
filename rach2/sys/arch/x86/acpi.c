@@ -991,7 +991,7 @@ int acpi_gas_read(const struct acpi_gas *g, uint32_t *value)
         uint16_t off = (uint16_t)(g->address & 0xFFFFu);
         uint32_t dword;
 
-        if (off > 0xFFFu) {
+        if (off > 0xFFFu || (off > 0xFFu && !pci_config_ext_reaches(0))) {
             return -1;
         }
         if (off > 0xFFu) {
@@ -1052,7 +1052,7 @@ int acpi_gas_write(const struct acpi_gas *g, uint32_t value)
         uint8_t fn = (uint8_t)((g->address >> 16) & 0x7u);
         uint16_t off = (uint16_t)(g->address & 0xFFFFu);
 
-        if (off > 0xFFFu) {
+        if (off > 0xFFFu || (off > 0xFFu && !pci_config_ext_reaches(0))) {
             return -1;
         }
         if (bytes == 1) {

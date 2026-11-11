@@ -54,6 +54,11 @@ static uintptr_t ecam_at(uint8_t bus, uint8_t device, uint8_t function, uint32_t
                    ((uint32_t)(function & 0x07) << 12) | (offset & 0xFFFu));
 }
 
+int pci_config_ext_reaches(uint8_t bus)
+{
+    return ecam && bus >= ecam_first && bus <= ecam_last;
+}
+
 /**
  * Pack a bus/device/function/offset tuple into a CONFIG_ADDRESS word.
  *

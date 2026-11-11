@@ -132,6 +132,10 @@ void pci_write_config16_ext(uint8_t bus, uint8_t device, uint8_t function, uint1
 void pci_write_config8_ext(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset,
                            uint8_t value);
 
+/** Whether the `_ext` accessors reach offsets of 256 or more on `bus`,
+ * which only an ECAM window covering it gives. */
+int pci_config_ext_reaches(uint8_t bus);
+
 /**
  * Read or write a byte, a word or a dword at `port` of the bus's I/O space,
  * where a device's I/O base address register points: the architecture's
