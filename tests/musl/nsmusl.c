@@ -9,8 +9,10 @@
  * the namespace, both; get_robust_list of pid 1 gives that process's own
  * list, and get_robust_list and kill of a number the namespace has not given
  * fail with ESRCH; the link of its descriptor of a /proc file names it 1, and
- * its entry in a listing of /proc has the inode of /proc/1; and a name
- * relative to its descriptor of /proc/self/fd reaches its own descriptor. The
+ * its entry in a listing of /proc has the inode of /proc/1; a name relative
+ * to its descriptor of /proc/self/fd reaches its own descriptor; and a group
+ * whose leader it has reaped keeps the leader's number there, which getpgid
+ * of a member reads and kill of its negation reaches. The
  * caller of unshare keeps its own pid. When it ends, its namespace's init
  * adopts its children, including the init of a namespace below it and that
  * init's sibling. In a new network namespace a
@@ -106,6 +108,7 @@ enum row {
     R_PID_LINK,
     R_PID_INODE,
     R_PID_FD,
+    R_PID_GROUP,
     R_ORPHAN_PARENT,
     R_ORPHAN_ADOPT,
     R_PID_BOTH,
@@ -161,6 +164,7 @@ static const char *const assertion_id[ROWS] = {"segment",
                                                "pid-proc-link",
                                                "pid-proc-inode",
                                                "pid-own-fd-dir",
+                                               "pid-reaped-leader-group",
                                                "orphans-parent-exits",
                                                "orphans-adopted",
                                                "pid-status-both-numbers",
@@ -552,12 +556,62 @@ out:
 }
 
 /**
+ * Check, as the first process of a PID namespace, that a group keeps its
+ * number there once its leader is reaped, as Linux's struct pid lasts while
+ * a member has it: the leader makes its group, forks a member, which waits
+ * for EOF on `go`, and ends, and this process reaps it; getpgid of the
+ * member, now this process's child, reads the leader's number, and kill of
+ * its negation reaches the group. Returns 0, or 1 after printing the
+ * failure.
+ */
+static int pid_group_reaped(void)
+{
+    int go[2], rep[2], status, rc = 0;
+    pid_t leader, member = -1;
+
+    if (pipe(go) != 0 || pipe(rep) != 0) {
+        return fail(R_PID_GROUP, "pipes for a reaped leader's group");
+    }
+    leader = fork();
+    if (leader == 0) {
+        pid_t m;
+        char c;
+
+        close(rep[0]);
+        close(go[1]);
+        if (setpgid(0, 0) != 0) {
+            _exit(1);
+        }
+        m = fork();
+        if (m == 0) {
+            close(rep[1]);
+            _exit(read(go[0], &c, 1) == 0 ? 0 : 1);
+        }
+        _exit(m > 0 && write(rep[1], &m, sizeof(m)) == (ssize_t)sizeof(m) ? 0 : 1);
+    }
+    close(rep[1]);
+    close(go[0]);
+    if (leader < 0 || read(rep[0], &member, sizeof(member)) != (ssize_t)sizeof(member) ||
+        waitpid(leader, &status, 0) != leader || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        rc = fail(R_PID_GROUP, "a leader that made its group and forked a member is reaped");
+    } else if (getpgid(member) != leader || kill(-leader, 0) != 0) {
+        rc = fail(R_PID_GROUP, "its group keeps the leader's number once the leader is reaped");
+    }
+    close(go[1]);
+    close(rep[0]);
+    if (member > 0) {
+        waitpid(member, &status, 0);
+    }
+    return rc;
+}
+
+/**
  * Check, as the first process of a new PID namespace, that it is pid 1 with
  * parent 0, that its child is 2, that its NSpid line has the one number, that
  * get_robust_list of pid 1 gives the head it set, that get_robust_list and
  * kill of pid 99, which the namespace has not given, fail with ESRCH, and
- * then `proc_own_number` and `own_fd_dir`. Returns 0, or 1 after printing
- * the failure.
+ * then `proc_own_number`, `own_fd_dir` and `pid_group_reaped`. Returns 0, or
+ * 1 after printing the failure.
  */
 static int pid_first(void)
 {
@@ -595,7 +649,7 @@ static int pid_first(void)
     if (kill(99, 0) != -1 || errno != ESRCH) {
         return fail(R_PID_KILL_ESRCH, "kill of a pid the namespace has not given is ESRCH");
     }
-    return proc_own_number() || own_fd_dir() || pid_orphans();
+    return proc_own_number() || own_fd_dir() || pid_group_reaped() || pid_orphans();
 }
 
 /**
