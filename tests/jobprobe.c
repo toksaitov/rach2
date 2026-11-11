@@ -295,7 +295,7 @@ static int run_child(int (*body)(void))
  * job. The probe waits until a child that does nothing but exit has done
  * so, leaving it unreaped, claims the terminal for the child's group, and
  * only then reaps it; once it is reaped, the group is gone and the same
- * claim is -EPERM.
+ * claim is -ESRCH.
  *
  * Once the zombie's group is in front, the probe is a background process,
  * and its own group is orphaned: the probe leads its session, so no member's
@@ -323,10 +323,45 @@ static void zombie_group(void)
     check(signal_set(SIGTTOU, SIG_IGN) == 0, "ignore SIGTTOU");
     check(waitpid(child, &status, 0) == child, "the zombie is reaped");
     /* Once reaped, the group is gone and the same claim is refused. */
-    check(ioctl(0, TIOCSPGRP, &child) == -EPERM,
-          "TIOCSPGRP to a group whose zombie was reaped -> -EPERM");
+    check(ioctl(0, TIOCSPGRP, &child) == -ESRCH,
+          "TIOCSPGRP to a group whose zombie was reaped -> -ESRCH");
     check(ioctl(0, TIOCSPGRP, &pgrp) == 0, "the terminal comes back to us");
     check(signal_set(SIGTTOU, SIG_DFL) == 0, "SIGTTOU back to its default");
+}
+
+/**
+ * A PID in this session is accepted even when it names no group, as Linux's
+ * session_of_pgrp falls back to the thread; an existing group in another
+ * session is EPERM. Keep both children unreaped through the lookup, then
+ * reclaim the foreground and reap them before restoring SIGTTOU.
+ */
+static void group_numbers(void)
+{
+    int other, child, status, pgrp = getpgrp();
+
+    check(signal_set(SIGTTOU, SIG_IGN) == 0, "ignore SIGTTOU for PID foreground claims");
+    for (other = 0; other <= 1; other++) {
+        child = fork();
+        if (child == 0) {
+            if (other && setsid() < 0) {
+                sys_exit(1);
+            }
+            sys_exit(0);
+        }
+        check(child > 0, "fork for foreground number lookup");
+        if (child <= 0) {
+            continue;
+        }
+        check(wait_exited(child), "keep the foreground number's child unreaped");
+        check(ioctl(0, TIOCSPGRP, &child) == (other ? -EPERM : 0),
+              other ? "TIOCSPGRP existing foreign group -> -EPERM"
+                    : "TIOCSPGRP PID in this session without a group succeeds");
+        check(ioctl(0, TIOCSPGRP, &pgrp) == 0, "restore the probe's foreground group");
+        status = -1;
+        check(waitpid(child, &status, 0) == child && status == 0,
+              "reap the foreground number's child after its lookup");
+    }
+    check(signal_set(SIGTTOU, SIG_DFL) == 0, "restore SIGTTOU after PID foreground claims");
 }
 
 /**
@@ -368,13 +403,16 @@ PROBE_START void _start(void)
         /* The probe's own group, in its session, may be the foreground. */
         pgrp = getpgrp();
         check(ioctl(0, TIOCSPGRP, &pgrp) == 0, "TIOCSPGRP to our own group");
-        /* A group not in the session is rejected; a bad pgrp is -EINVAL. */
+        /* A missing number is ESRCH; a negative number is EINVAL. */
         {
             int bad = 0x6ffffff0;
-            check(ioctl(0, TIOCSPGRP, &bad) == -EPERM, "TIOCSPGRP foreign group -> -EPERM");
+            check(ioctl(0, TIOCSPGRP, &bad) == -ESRCH, "TIOCSPGRP missing group -> -ESRCH");
+            bad = 0;
+            check(ioctl(0, TIOCSPGRP, &bad) == -ESRCH, "TIOCSPGRP zero pgrp -> -ESRCH");
             bad = -7;
             check(ioctl(0, TIOCSPGRP, &bad) == -EINVAL, "TIOCSPGRP negative pgrp -> -EINVAL");
         }
+        group_numbers();
         zombie_group();
 
         /* Detach, then a foreground query finds no controlling session. */

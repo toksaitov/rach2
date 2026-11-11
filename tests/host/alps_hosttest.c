@@ -568,13 +568,13 @@ static int warned(const char *text)
     return 0;
 }
 
-/** The Synaptics probe, which runs before ALPS's: the row's answer. */
 /** The relative-mode probe sees the same modeled device. */
 int synaptics_init_relative(void)
 {
     return synaptics_init();
 }
 
+/** The Synaptics probe, which runs before ALPS's: the row's answer. */
 int synaptics_init(void)
 {
     return synaptics_answer;
@@ -1909,8 +1909,7 @@ static void v1_packet_rows(void)
     CHECK("the pad reports after reconnect", state == STATE_ACTIVE);
 
     send(paused, 6);
-    CHECK("a packet a pause cuts is dropped, and the next read",
-          reads(&n_pad, paused_ev, NEV(paused_ev)));
+    CHECK("the packet after the reconnect is read", reads(&n_pad, paused_ev, NEV(paused_ev)));
 
     send(ps2, 3);
     CHECK("a mouse's packet on the external port registers PS/2 ALPS Mouse",
