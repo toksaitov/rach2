@@ -730,6 +730,48 @@ static void run_delay(void)
     clock_ns = 0;
 }
 
+/**
+ * `sched_preempt_due` follows selection's rules: with a switch asked, an
+ * ordinary queued thread makes one due for an ordinary caller and none for
+ * a SCHED_FIFO caller, which the call's exit then keeps; a queued thread of
+ * a higher real-time priority makes one due, one of an equal priority only
+ * for a SCHED_RR caller; records of threads that blocked make none.
+ */
+static void preempt_due(void)
+{
+    unsigned i;
+
+    setup();
+    current_proc->in_syscall = 1;
+    CHECK(!sched_preempt_due(), "no switch asked: none due");
+    current_proc->need_resched = 1;
+    CHECK(sched_preempt_due(), "ordinary caller, ordinary thread queued: switch due");
+    current_proc->sched_policy = SCHED_FIFO;
+    current_proc->rt_priority = 10;
+    CHECK(!sched_preempt_due(), "real-time caller, ordinary threads queued: none due");
+    irq_flags = 0;
+    sched_take_preempt();
+    CHECK(current_proc == &procs[0] && !switches, "the call's exit keeps the real-time caller");
+    current_proc->need_resched = 1;
+    procs[3].sched_policy = SCHED_FIFO;
+    procs[3].rt_priority = 20;
+    sched_priority_changed(&procs[3]);
+    CHECK(sched_preempt_due(), "higher real-time thread queued: switch due");
+    procs[3].rt_priority = 10;
+    sched_priority_changed(&procs[3]);
+    CHECK(!sched_preempt_due(), "equal real-time thread, SCHED_FIFO caller: none due");
+    current_proc->sched_policy = SCHED_RR;
+    CHECK(sched_preempt_due(), "equal real-time thread, SCHED_RR caller: switch due");
+    current_proc->sched_policy = SCHED_OTHER;
+    current_proc->rt_priority = 0;
+    for (i = 1; i < 7; i++) {
+        procs[i].state = PROC_BLOCKED;
+    }
+    CHECK(!sched_preempt_due(), "only blocked threads' records queued: none due");
+    current_proc->need_resched = 0;
+    current_proc->in_syscall = 0;
+}
+
 /** Run every row; 0 when each passes, 1 otherwise. */
 int main(int argc, char **argv)
 {
@@ -743,6 +785,7 @@ int main(int argc, char **argv)
     fairness();
     states();
     lifecycle();
+    preempt_due();
     accounting();
     load_phase();
     all_idle();
@@ -753,7 +796,8 @@ int main(int argc, char **argv)
     if (failures) {
         return 1;
     }
-    dprintf(1, "sched-hosttest: result: pass: priority, fairness, states, lifecycle, accounting, "
+    dprintf(1, "sched-hosttest: result: pass: priority, fairness, states, lifecycle, preempt due, "
+               "accounting, "
                "load phase, "
                "idle machine, ready lists, migration, run delay\n");
     return 0;
