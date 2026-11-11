@@ -3295,6 +3295,27 @@ static void syscall_loop_drain(void)
 }
 
 /**
+ * Mark the mmap family to run without the big lock, native and i386: each
+ * holds its address space's regions' lock to write across its change and
+ * takes the big lock inside it (`regions_begin`, syscall_proc.c), and its
+ * balance and populate run with neither. The i386 table's own mmap and
+ * mmap2 are marked as it is filled (`ia32_syscall_init`).
+ */
+static void syscall_mm_unlock(void)
+{
+    static syscall_fn_t const calls[] = {
+        sys_brk,      sys_mmap,          sys_mmap2,  sys_munmap,
+        sys_mprotect, sys_pkey_mprotect, sys_mremap, sys_madvise,
+    };
+    uint32_t i;
+
+    for (i = 0; i < sizeof(calls) / sizeof(calls[0]); i++) {
+        syscall_unlock(SYSCALL_ABI_NATIVE, calls[i]);
+        syscall_unlock(SYSCALL_ABI_IA32, calls[i]);
+    }
+}
+
+/**
  * The system call entry's handler: dispatch on the call's number.
  *
  * Looks up the number in _syscall_table, or for a call SC_COMPAT marks in
@@ -3475,6 +3496,7 @@ void init_syscall(void)
     syscall_unlock(SYSCALL_ABI_NATIVE, sys_sched_yield);
     syscall_unlock(SYSCALL_ABI_IA32, sys_sched_yield);
     unlock_file_calls();
+    syscall_mm_unlock();
 
     _trace_enosys = kcmdline_has("rach2.trace=enosys");
 }

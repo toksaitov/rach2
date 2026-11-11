@@ -764,7 +764,7 @@ static void exec_file_close(struct exec_file *f)
     if (f->map) {
         vm_file_put(f->map);
         f->map = NULL;
-        vm_file_reap();
+        mm_reap();
     }
     if (f->ref.mnt) {
         vfs_release(f->ref.mnt, f->handle);
@@ -873,7 +873,7 @@ static void exec_release(void)
     mm_put(s->mm);
     vm_file_put(s->img.file);
     vm_file_put(s->iimg.file);
-    vm_file_reap();
+    mm_reap();
     if (s->files != NULL) {
         fd_table_delete(s->files);
     }
@@ -2709,27 +2709,33 @@ void proc_vfork_release(process_t *p)
  * The address space of the child `do_fork` makes: `mm` itself, with one
  * more reference, under CLONE_VM, and otherwise a copy-on-write copy of its
  * pages and regions; an empty one for a kernel thread's child. NULL when no
- * memory was left for a copy.
+ * memory was left for a copy. The copy holds `mm`'s regions' lock to write,
+ * as Linux's dup_mmap holds the parent's (kernel/fork.c:644), so that no
+ * other thread changes the regions or faults a page in between the two.
  */
 static struct mm *fork_mm(struct mm *mm, uint32_t flags)
 {
     struct mm *copy;
+    int failed;
 
     if ((flags & CLONE_VM) && mm) {
         mm_get(mm);
         return mm;
     }
     copy = mm_new();
-    if (copy && mm && (paging_fork_copy(mm, copy->dir) != 0 || vm_copy(&copy->vm, &mm->vm) != 0)) {
+    if (!copy || !mm) {
+        return copy;
+    }
+    mmap_write_lock(mm);
+    failed = paging_fork_copy(mm, copy->dir) != 0 || vm_copy(&copy->vm, &mm->vm) != 0;
+    if (!failed) {
+        mm_copy_info(copy, mm);
+        failed = arch_mm_copy(copy, mm) != 0;
+    }
+    mmap_unlock(mm);
+    if (failed) {
         mm_put(copy);
         return NULL;
-    }
-    if (copy && mm) {
-        mm_copy_info(copy, mm);
-        if (arch_mm_copy(copy, mm) != 0) {
-            mm_put(copy);
-            return NULL;
-        }
     }
     return copy;
 }
@@ -3032,10 +3038,14 @@ static void fork_store_ids(process_t *child, const struct fork_req *req)
 {
     uint32_t pid = pid_seen_by(child, child->pid);
     const vma_t *r;
+    int writable;
 
     if (req->settid) {
+        mmap_read_lock(child->mm);
         r = vm_find(&child->mm->vm, req->settid);
-        if (r && (r->prot & VM_PROT_WRITE)) {
+        writable = r && (r->prot & VM_PROT_WRITE);
+        mmap_unlock(child->mm);
+        if (writable) {
             (void)paging_access(child->mm, req->settid, &pid, sizeof(pid), 1);
         }
     }
@@ -7449,6 +7459,92 @@ static int mlock_allowed(void)
 }
 
 /**
+ * Begin a change of the current address space's regions, by a call of the
+ * mmap family, which runs without the big lock: the regions' lock to
+ * write, as Linux's mmap family takes mmap_lock (mm/mmap.c), and then the
+ * big lock, which the files, the counts of committed and locked memory and
+ * the code that reads user memory under it still need. The space, for
+ * `regions_end`.
+ */
+static struct mm *regions_begin(void)
+{
+    struct mm *mm = current_proc->mm;
+
+    mmap_write_lock(mm);
+    bkl_enter();
+    return mm;
+}
+
+/** End what `regions_begin` began, and let go of the files whose last
+ * region the change removed (`mm_reap`). */
+static void regions_end(struct mm *mm)
+{
+    bkl_exit();
+    mmap_unlock(mm);
+    mm_reap();
+}
+
+/** Have the caches give frames back before a call maps memory, under the
+ * big lock, which they need, and before the regions' lock is taken, since
+ * a write back may wait for a file (`mem_balance`). */
+static void regions_balance(void)
+{
+    bkl_enter();
+    mem_balance();
+    bkl_exit();
+}
+
+/**
+ * The change of `sys_brk` to the break `req` of the regions `vm`, under
+ * the regions' lock held to write: the break the call returns, with
+ * `*populate` set when [*old_top, *new_top) is to be brought in once the
+ * lock is let go.
+ */
+static long brk_change(vm_space_t *vm, uintptr_t req, uintptr_t *old_top_out,
+                       uintptr_t *new_top_out, int *populate)
+{
+    uintptr_t old_top, new_top;
+
+    if (req < vm->heap_start || req > vm->stack_limit) {
+        return (long)vm->brk;
+    }
+
+    old_top = PAGE_UP(vm->brk);
+    new_top = PAGE_UP(req);
+    *old_top_out = old_top;
+    *new_top_out = new_top;
+
+    if (new_top > old_top) {
+        if (vm_overlaps(vm, old_top, new_top)) {
+            return (long)vm->brk;
+        }
+        if (vm_total(vm) + (new_top - old_top) > current_proc->rlim[RLIM_AS].cur) {
+            return (long)vm->brk; /* RLIMIT_AS: brk reports the break unchanged */
+        }
+        if ((vm->def_prot & VM_PROT_LOCKED) &&
+            !mem_lock_room(vm_locked(vm) / PAGE_SIZE, (new_top - old_top) / PAGE_SIZE)) {
+            return (long)vm->brk;
+        }
+        if (vm_insert(vm, old_top, new_top,
+                      VM_PROT_READ | VM_PROT_WRITE | VM_PROT_ACCOUNT | vm->def_prot,
+                      VM_HEAP) != 0) {
+            return (long)vm->brk;
+        }
+        *populate = (vm->def_prot & VM_PROT_LOCKS) == VM_PROT_LOCKED;
+    } else if (new_top < old_top) {
+        mm_note_anon(current_proc->mm, new_top, old_top);
+        if (vm_sealed_at(vm, new_top, old_top) < old_top || vm_remove(vm, new_top, old_top) != 0) {
+            return (long)vm->brk;
+        }
+        mmn_notify(current_proc->mm, MMN_UNMAP, new_top, old_top);
+        unmap_user_range(_curr_dir, new_top, old_top);
+    }
+
+    vm->brk = req;
+    return (long)req;
+}
+
+/**
  * Set the program break, the heap's top (brk(2)). Its argument is the
  * requested break. Returns the resulting break: the new value on success, or
  * the unchanged current break if the request is below the heap's start or into
@@ -7467,55 +7563,22 @@ static int mlock_allowed(void)
 long sys_brk(isr_params_t *params)
 {
     uintptr_t req = SC_ARG(params, 0);
-    vm_space_t *vm;
+    struct mm *mm;
+    long rc;
+    int populate = 0;
     uintptr_t old_top, new_top;
 
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
-    mem_balance();
-    vm = &current_proc->mm->vm;
-
-    if (req < vm->heap_start || req > vm->stack_limit) {
-        return (long)vm->brk;
+    regions_balance();
+    mm = regions_begin();
+    rc = brk_change(&mm->vm, req, &old_top, &new_top, &populate);
+    regions_end(mm);
+    if (populate) {
+        (void)vm_populate(old_top, new_top);
     }
-
-    old_top = PAGE_UP(vm->brk);
-    new_top = PAGE_UP(req);
-
-    if (new_top > old_top) {
-        if (vm_overlaps(vm, old_top, new_top)) {
-            return (long)vm->brk;
-        }
-        if (vm_total(vm) + (new_top - old_top) > current_proc->rlim[RLIM_AS].cur) {
-            return (long)vm->brk; /* RLIMIT_AS: brk reports the break unchanged */
-        }
-        if ((vm->def_prot & VM_PROT_LOCKED) &&
-            !mem_lock_room(vm_locked(vm) / PAGE_SIZE, (new_top - old_top) / PAGE_SIZE)) {
-            return (long)vm->brk;
-        }
-        if (vm_insert(vm, old_top, new_top,
-                      VM_PROT_READ | VM_PROT_WRITE | VM_PROT_ACCOUNT | vm->def_prot,
-                      VM_HEAP) != 0) {
-            return (long)vm->brk;
-        }
-        if ((vm->def_prot & VM_PROT_LOCKS) == VM_PROT_LOCKED) {
-            vm->brk = req;
-            (void)vm_populate(old_top, new_top);
-            return (long)req;
-        }
-    } else if (new_top < old_top) {
-        mm_note_anon(current_proc->mm, new_top, old_top);
-        if (vm_sealed_at(vm, new_top, old_top) < old_top || vm_remove(vm, new_top, old_top) != 0) {
-            return (long)vm->brk;
-        }
-        mmn_notify(current_proc->mm, MMN_UNMAP, new_top, old_top);
-        unmap_user_range(_curr_dir, new_top, old_top);
-    }
-
-    vm->brk = req;
-    vm_file_reap();
-    return (long)req;
+    return rc;
 }
 
 /**
@@ -7941,15 +8004,17 @@ static int32_t mmap_place(vm_space_t *vm, uintptr_t addr, uintptr_t len, uint32_
  * Put the region `src` describes, `len` bytes, where `mmap_place` finds for
  * `addr` and `flags`, replacing what a MAP_FIXED range held, or failing with
  * EPERM when a region of that range is sealed (mseal). The region takes its
- * own reference to the file, and the caller's is put here. Returns the
- * address, or -errno.
+ * own reference to the file, and the caller's is put here.
+ * The regions' lock is held to write across the placing and the insertion
+ * (`regions_begin`). Returns the address, or -errno.
  * Under MAP_FIXED the two entries that a split in the removal and the new
  * region take are reserved before the old mapping is removed, so that a
  * failure leaves the old mapping in place.
  */
 static long mmap_install(uintptr_t addr, uintptr_t len, uint32_t flags, struct map_source *src)
 {
-    vm_space_t *vm = &current_proc->mm->vm;
+    struct mm *mm = regions_begin();
+    vm_space_t *vm = &mm->vm;
     uintptr_t base = 0;
     int32_t rc = mmap_place(vm, addr, len, flags, &base);
 
@@ -7973,7 +8038,7 @@ static long mmap_install(uintptr_t addr, uintptr_t len, uint32_t flags, struct m
         vma_exhausted("mmap");
     }
     vm_file_put(src->file);
-    vm_file_reap();
+    regions_end(mm);
     return rc == 0 ? (long)base : rc;
 }
 
@@ -8064,14 +8129,23 @@ long ksys_mmap_pgoff(uintptr_t addr, uintptr_t length, uint32_t prot, uint32_t f
         }
         locks = VM_PROT_LOCKED;
     }
-    if ((locks & VM_PROT_LOCKED) &&
-        !mem_lock_room(vm_locked(&current_proc->mm->vm) / PAGE_SIZE, len / PAGE_SIZE)) {
-        return -EAGAIN;
+    if (locks & VM_PROT_LOCKED) {
+        struct mm *mm = current_proc->mm;
+        int room;
+
+        mmap_read_lock(mm);
+        room = mem_lock_room(vm_locked(&mm->vm) / PAGE_SIZE, len / PAGE_SIZE);
+        mmap_unlock(mm);
+        if (!room) {
+            return -EAGAIN;
+        }
     }
-    mem_balance();
+    regions_balance();
     src.prot = vm_prot_of(prot) | mmap_key(prot);
     src.pgoff = (uint32_t)pgoff;
+    bkl_enter();
     rc = mmap_backing(flags, fd, len, &src);
+    bkl_exit();
     if (rc != 0) {
         return rc;
     }
@@ -8168,9 +8242,11 @@ long mmap_device(uintptr_t len, uint32_t prot, int32_t (*map)(vma_t *vma, void *
     return mmap_install(0, PAGE_UP(len), MAP_SHARED, &src);
 }
 
-int32_t munmap_shm(uintptr_t addr, const struct shmem *sh, size_t size)
+/** The unmap of `munmap_shm` in the regions `vm`, whose lock the caller
+ * holds to write. */
+static int32_t munmap_shm_locked(vm_space_t *vm, uintptr_t addr, const struct shmem *sh,
+                                 size_t size)
 {
-    vm_space_t *vm = &current_proc->mm->vm;
     vma_t *r = vm_find(vm, addr);
     uintptr_t end = addr;
     int32_t rc = -EPERM;
@@ -8199,7 +8275,15 @@ int32_t munmap_shm(uintptr_t addr, const struct shmem *sh, size_t size)
         rc = 0;
         addr = next;
     }
-    vm_file_reap();
+    return rc;
+}
+
+int32_t munmap_shm(uintptr_t addr, const struct shmem *sh, size_t size)
+{
+    struct mm *mm = regions_begin();
+    int32_t rc = munmap_shm_locked(&mm->vm, addr, sh, size);
+
+    regions_end(mm);
     return rc;
 }
 
@@ -8235,8 +8319,10 @@ long sys_munmap(isr_params_t *params)
 {
     uintptr_t addr = SC_ARG(params, 0);
     uintptr_t length = SC_ARG(params, 1);
+    struct mm *mm;
     vm_space_t *vm;
     uintptr_t start, end;
+    long rc;
 
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
@@ -8253,18 +8339,22 @@ long sys_munmap(isr_params_t *params)
     start = addr;
     end = PAGE_UP(addr + length);
 
+    mm = regions_begin();
+    rc = 0;
     if (vm_sealed_at(vm, start, end) < end) {
-        return -EPERM;
+        rc = -EPERM;
+    } else {
+        mm_note_anon(mm, start, end);
+        if (vm_remove(vm, start, end) != 0) {
+            vma_exhausted("munmap");
+            rc = -ENOMEM;
+        } else {
+            mmn_notify(mm, MMN_UNMAP, start, end);
+            unmap_user_range(_curr_dir, start, end);
+        }
     }
-    mm_note_anon(current_proc->mm, start, end);
-    if (vm_remove(vm, start, end) != 0) {
-        vma_exhausted("munmap");
-        return -ENOMEM;
-    }
-    mmn_notify(current_proc->mm, MMN_UNMAP, start, end);
-    unmap_user_range(_curr_dir, start, end);
-    vm_file_reap();
-    return 0;
+    regions_end(mm);
+    return rc;
 }
 
 /** Bring the resident pages of [start, end) to their regions' protection,
@@ -8339,9 +8429,10 @@ static long mprotect_refused(const struct mm *mm, uintptr_t addr, uintptr_t leng
  * key where the keys are on (`pkey_exec_only`), once the range is known to
  * begin in a region, any other protection moves a region of that key back
  * to key 0, and every other region keeps its own, as Linux's
- * arch_override_mprotect_pkey chooses.
+ * arch_override_mprotect_pkey chooses. The caller holds the regions' lock
+ * to write.
  */
-static long mprotect_key(isr_params_t *params, int key)
+static long mprotect_key_locked(isr_params_t *params, int key)
 {
     uintptr_t addr = SC_ARG(params, 0);
     uintptr_t length = SC_ARG(params, 1);
@@ -8399,6 +8490,22 @@ static long mprotect_key(isr_params_t *params, int key)
         protect_resident(addr, stop, vmprot);
     }
     return why == -1 ? -ENOMEM : why == -3 ? -EACCES : why == -4 ? -EPERM : 0;
+}
+
+/** `mprotect_key_locked` under the regions' lock held to write
+ * (`regions_begin`). */
+static long mprotect_key(isr_params_t *params, int key)
+{
+    struct mm *mm;
+    long rc;
+
+    if (!current_proc || !current_proc->mm) {
+        return -ESRCH;
+    }
+    mm = regions_begin();
+    rc = mprotect_key_locked(params, key);
+    regions_end(mm);
+    return rc;
 }
 
 /** Change the protection of a range (mprotect(2)): `mprotect_key` with no
@@ -8555,39 +8662,19 @@ static long remap_resize(vma_t *r, uintptr_t addr, uintptr_t old_len, uintptr_t 
     return remap_move(vm, r, addr, old_len, to, new_len);
 }
 
-/**
- * Resize a mapping, or move it (mremap(2)). Its arguments are old address, old
- * length, new length, flags and new address with MREMAP_FIXED. The old range
- * must lie in one region. With MREMAP_FIXED the mapping moves, pages and all,
- * to the new address, whatever was there going first (`remap_fixed`). Otherwise
- * a shrink cuts its end, and a growth takes the range after it when that is
- * free, or with MREMAP_MAYMOVE moves the whole mapping to a free range of the
- * new length. Returns the mapping's address, or -errno: EINVAL for arguments
- * that fail `remap_args_valid`, and for a mapping of a file whose last page at
- * the new length would not fit in 32 bits; EFAULT for a range not in one
- * region, or for a growth of device memory; EPERM when the region at the old
- * address is sealed (mseal), or under MREMAP_FIXED a region of the new range
- * is; ENOMEM when it cannot grow in place and may not move, when no range is
- * free, or past RLIMIT_AS; EAGAIN when the growth of a locked mapping would
- * take the locked pages past RLIMIT_MEMLOCK. The growth of a locked mapping is
- * locked and brought in, unless it was locked on fault, as on Linux.
- * MREMAP_DONTUNMAP is not implemented, and is EINVAL.
- */
-long sys_mremap(isr_params_t *params)
+/** The change of `sys_mremap` in the regions `vm`, under their lock held
+ * to write: the call's answer, with `*populate` set when the grown part of
+ * a locked region is to be brought in once the lock is let go. */
+static long mremap_locked(isr_params_t *params, vm_space_t *vm, int *populate)
 {
     uintptr_t addr = SC_ARG(params, 0);
     uint32_t flags = (uint32_t)SC_ARG(params, 3);
     uintptr_t to = SC_ARG(params, 4);
     uintptr_t old_len, new_len;
-    vm_space_t *vm;
     vma_t *r;
     int locked;
     long rc;
 
-    if (!current_proc || !current_proc->mm) {
-        return -ESRCH;
-    }
-    vm = &current_proc->mm->vm;
     if (!remap_args_valid(addr, SC_ARG(params, 1), SC_ARG(params, 2), flags)) {
         return -EINVAL;
     }
@@ -8615,8 +8702,43 @@ long sys_mremap(isr_params_t *params)
         return -EAGAIN;
     }
     rc = remap_resize(r, addr, old_len, new_len, flags, to);
-    vm_file_reap();
-    if (locked && new_len > old_len && (unsigned long)rc < (unsigned long)-4095L) {
+    *populate = locked && new_len > old_len;
+    return rc;
+}
+
+/**
+ * Resize a mapping, or move it (mremap(2)). Its arguments are old address, old
+ * length, new length, flags and new address with MREMAP_FIXED. The old range
+ * must lie in one region. With MREMAP_FIXED the mapping moves, pages and all,
+ * to the new address, whatever was there going first (`remap_fixed`). Otherwise
+ * a shrink cuts its end, and a growth takes the range after it when that is
+ * free, or with MREMAP_MAYMOVE moves the whole mapping to a free range of the
+ * new length. Returns the mapping's address, or -errno: EINVAL for arguments
+ * that fail `remap_args_valid`, and for a mapping of a file whose last page at
+ * the new length would not fit in 32 bits; EFAULT for a range not in one
+ * region, or for a growth of device memory; EPERM when the region at the old
+ * address is sealed (mseal), or under MREMAP_FIXED a region of the new range
+ * is; ENOMEM when it cannot grow in place and may not move, when no range is
+ * free, or past RLIMIT_AS; EAGAIN when the growth of a locked mapping would
+ * take the locked pages past RLIMIT_MEMLOCK. The growth of a locked mapping is
+ * locked and brought in, unless it was locked on fault, as on Linux.
+ * MREMAP_DONTUNMAP is not implemented, and is EINVAL.
+ */
+long sys_mremap(isr_params_t *params)
+{
+    uintptr_t old_len = PAGE_UP(SC_ARG(params, 1));
+    uintptr_t new_len = PAGE_UP(SC_ARG(params, 2));
+    struct mm *mm;
+    int populate = 0;
+    long rc;
+
+    if (!current_proc || !current_proc->mm) {
+        return -ESRCH;
+    }
+    mm = regions_begin();
+    rc = mremap_locked(params, &mm->vm, &populate);
+    regions_end(mm);
+    if (populate && (unsigned long)rc < (unsigned long)-4095L) {
         (void)vm_populate((uintptr_t)rc + old_len, (uintptr_t)rc + new_len);
     }
     return rc;
@@ -8735,50 +8857,14 @@ static uint32_t madvise_mark_bit(uint32_t advice)
     }
 }
 
-/**
- * Advice about a range (madvise(2)). Its arguments are address, length and
- * advice. MADV_DONTNEED, MADV_DONTNEED_LOCKED and MADV_FREE let the resident
- * pages go: a private anonymous page reads as zeros again, a private page of a
- * file reads the file again, and a shared page reads what the shared memory
- * holds. Those three are EINVAL over device memory, which has no pages to read
- * again, as on Linux for VM_PFNMAP, and MADV_DONTNEED and MADV_FREE are EINVAL
- * over a locked region, whose pages MADV_DONTNEED_LOCKED alone drops, as on
- * Linux for VM_LOCKED; MADV_COLD and MADV_PAGEOUT, which change nothing here,
- * are EINVAL over either, as Linux's can_madv_lru_vma refuses them. Over a
- * sealed region of anonymous memory without write (mseal) the advice that
- * discards pages stops with EPERM, the regions below it in the range advised
- * first, as Linux advises region by region. MADV_DONTFORK marks the regions so
- * that a fork's child does not get them, and MADV_DOFORK clears the mark;
- * DOFORK is EINVAL over device memory, as on Linux for VM_IO, and either is
- * ENOMEM when a region cannot be split. MADV_WIPEONFORK marks the regions so
- * that a fork's child gets them without their pages, reading zeros, and
- * MADV_KEEPONFORK clears the mark (VM_PROT_WIPEONFORK, vm.h); WIPEONFORK is
- * EINVAL over a region that is not private anonymous memory, as on Linux,
- * and either is ENOMEM when a region cannot be split. MADV_GUARD_INSTALL
- * makes the range a guard (VM_PROT_GUARD, vm.h), whose pages go and whose every
- * access is SIGSEGV with SEGV_MAPERR, and MADV_GUARD_REMOVE ends the guard,
- * leaving pages that read as zeros; both are EINVAL over a region that may not
- * hold a guard (`madvise_guard_allowed`) and ENOMEM when a region cannot be
- * split. Linux marks a guard's pages in its page tables and splits no region,
- * so a guard shows in /proc/PID/maps here as a region of its own, with the
- * protection of the region it was cut from. Any other advice `madvise_known`
- * takes changes nothing, and the rest is EINVAL, as Linux refuses an advice it
- * does not define. A range with a page in no region is ENOMEM, as in Linux. A
- * range that runs past user space is EINVAL, judged by the length as given: a
- * length within a page of 4 GiB rounds up to 0, which would pass for an empty
- * range.
- */
-long sys_madvise(isr_params_t *params)
+/** The change of `sys_madvise` in the regions `vm`, under their lock held
+ * to write. */
+static long madvise_locked(isr_params_t *params, vm_space_t *vm)
 {
     uintptr_t addr = SC_ARG(params, 0);
     uint32_t advice = (uint32_t)SC_ARG(params, 2);
-    vm_space_t *vm;
     uintptr_t len, end;
 
-    if (!current_proc || !current_proc->mm) {
-        return -ESRCH;
-    }
-    vm = &current_proc->mm->vm;
     if ((addr & (PAGE_SIZE - 1)) != 0 || addr > USER_ADDR_MAX ||
         SC_ARG(params, 1) > USER_ADDR_MAX - addr || !madvise_known(advice)) {
         return -EINVAL;
@@ -8817,6 +8903,53 @@ long sys_madvise(isr_params_t *params)
 }
 
 /**
+ * Advice about a range (madvise(2)). Its arguments are address, length and
+ * advice. MADV_DONTNEED, MADV_DONTNEED_LOCKED and MADV_FREE let the resident
+ * pages go: a private anonymous page reads as zeros again, a private page of a
+ * file reads the file again, and a shared page reads what the shared memory
+ * holds. Those three are EINVAL over device memory, which has no pages to read
+ * again, as on Linux for VM_PFNMAP, and MADV_DONTNEED and MADV_FREE are EINVAL
+ * over a locked region, whose pages MADV_DONTNEED_LOCKED alone drops, as on
+ * Linux for VM_LOCKED; MADV_COLD and MADV_PAGEOUT, which change nothing here,
+ * are EINVAL over either, as Linux's can_madv_lru_vma refuses them. Over a
+ * sealed region of anonymous memory without write (mseal) the advice that
+ * discards pages stops with EPERM, the regions below it in the range advised
+ * first, as Linux advises region by region. MADV_DONTFORK marks the regions so
+ * that a fork's child does not get them, and MADV_DOFORK clears the mark;
+ * DOFORK is EINVAL over device memory, as on Linux for VM_IO, and either is
+ * ENOMEM when a region cannot be split. MADV_WIPEONFORK marks the regions so
+ * that a fork's child gets them without their pages, reading zeros, and
+ * MADV_KEEPONFORK clears the mark (VM_PROT_WIPEONFORK, vm.h); WIPEONFORK is
+ * EINVAL over a region that is not private anonymous memory, as on Linux,
+ * and either is ENOMEM when a region cannot be split. MADV_GUARD_INSTALL
+ * makes the range a guard (VM_PROT_GUARD, vm.h), whose pages go and whose every
+ * access is SIGSEGV with SEGV_MAPERR, and MADV_GUARD_REMOVE ends the guard,
+ * leaving pages that read as zeros; both are EINVAL over a region that may not
+ * hold a guard (`madvise_guard_allowed`) and ENOMEM when a region cannot be
+ * split. Linux marks a guard's pages in its page tables and splits no region,
+ * so a guard shows in /proc/PID/maps here as a region of its own, with the
+ * protection of the region it was cut from. Any other advice `madvise_known`
+ * takes changes nothing, and the rest is EINVAL, as Linux refuses an advice it
+ * does not define. A range with a page in no region is ENOMEM, as in Linux. A
+ * range that runs past user space is EINVAL, judged by the length as given: a
+ * length within a page of 4 GiB rounds up to 0, which would pass for an empty
+ * range.
+ */
+long sys_madvise(isr_params_t *params)
+{
+    struct mm *mm;
+    long rc;
+
+    if (!current_proc || !current_proc->mm) {
+        return -ESRCH;
+    }
+    mm = regions_begin();
+    rc = madvise_locked(params, &mm->vm);
+    regions_end(mm);
+    return rc;
+}
+
+/**
  * Seal a range (mseal(2)), as Linux 6.12's mm/mseal.c does. Its arguments are
  * address, length and flags. Each region of the range takes VM_PROT_SEALED
  * (vm.h), split at the range's ends; sealing a sealed region again is no
@@ -8831,8 +8964,10 @@ long sys_mseal(isr_params_t *params)
 {
     uintptr_t start = SC_ARG(params, 0);
     uintptr_t len_in = SC_ARG(params, 1);
+    struct mm *mm;
     vm_space_t *vm;
     uintptr_t len;
+    long rc;
 
     if (sizeof(uintptr_t) < 8u) {
         return -EPERM;
@@ -8851,15 +8986,19 @@ long sys_mseal(isr_params_t *params)
     if (len == 0) {
         return 0;
     }
+    mm = regions_begin();
+    rc = 0;
     if (vm_covered(vm, start, start + len) != len) {
-        return -ENOMEM;
+        rc = -ENOMEM;
+    } else {
+        mm_note_anon(mm, start, start + len);
+        if (vm_advise(vm, start, start + len, VM_PROT_SEALED, 0u) != 0) {
+            vma_exhausted("mseal");
+            rc = -ENOMEM;
+        }
     }
-    mm_note_anon(current_proc->mm, start, start + len);
-    if (vm_advise(vm, start, start + len, VM_PROT_SEALED, 0u) != 0) {
-        vma_exhausted("mseal");
-        return -ENOMEM;
-    }
-    return 0;
+    regions_end(mm);
+    return rc;
 }
 
 /**
@@ -8890,6 +9029,7 @@ long sys_pkey_mprotect(isr_params_t *params)
 long sys_pkey_alloc(isr_params_t *params)
 {
     uintptr_t rights = SC_ARG(params, 1);
+    struct mm *mm;
     int key;
 
     if (SC_ARG(params, 0) != 0 || (rights & ~(uintptr_t)PKEY_ACCESS_MASK) != 0) {
@@ -8898,7 +9038,9 @@ long sys_pkey_alloc(isr_params_t *params)
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
-    key = pkey_take(current_proc->mm);
+    mm = regions_begin();
+    key = pkey_take(mm);
+    regions_end(mm);
     if (key < 0) {
         return -ENOSPC;
     }
@@ -8915,15 +9057,20 @@ long sys_pkey_alloc(isr_params_t *params)
 long sys_pkey_free(isr_params_t *params)
 {
     int key = (int32_t)SC_ARG(params, 0);
+    struct mm *mm;
+    long rc = 0;
 
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
-    if (!pkey_named(current_proc->mm, key)) {
-        return -EINVAL;
+    mm = regions_begin();
+    if (!pkey_named(mm, key)) {
+        rc = -EINVAL;
+    } else {
+        mm->pkeys &= ~(1u << key);
     }
-    current_proc->mm->pkeys &= ~(1u << key);
-    return 0;
+    regions_end(mm);
+    return rc;
 }
 
 /**
@@ -8944,31 +9091,41 @@ long sys_map_shadow_stack(isr_params_t *params)
  * Write back the shared mappings of disk files among the regions of
  * [addr, end), which the caller found covered: each region's file whole
  * (`filemap_msync`), and with `flush` the file system's fsync of it after.
- * The writes sleep, so each region is found again by address and its file
- * held across its write. 0, or -EIO when a write failed.
+ * The writes sleep and may wait for a file's lock, which comes before the
+ * regions' lock, so each region is found again by address under the
+ * regions' lock held to read and its file held across its write, with the
+ * lock let go. 0, or -EIO when a write failed.
  */
 static int32_t msync_range(uintptr_t addr, uintptr_t end, int flush)
 {
+    struct mm *mm = current_proc->mm;
     int32_t rc = 0;
 
     while (addr < end) {
-        const vma_t *r = vm_find(&current_proc->mm->vm, addr);
+        const vma_t *r;
         struct vm_file *f;
 
+        mmap_read_lock(mm);
+        r = vm_find(&mm->vm, addr);
+        f = r && r->type == VM_SHARED ? r->file : NULL;
+        if (r) {
+            addr = r->end;
+        }
+        if (f) {
+            vm_file_get(f);
+        }
+        mmap_unlock(mm);
         if (!r) {
             break;
         }
-        addr = r->end;
-        f = r->type == VM_SHARED ? r->file : NULL;
         if (f) {
-            vm_file_get(f);
             if (filemap_msync(f, flush) != 0) {
                 rc = -EIO;
             }
             vm_file_put(f);
         }
     }
-    vm_file_reap();
+    mm_reap();
     return rc;
 }
 
@@ -8987,7 +9144,7 @@ long sys_msync(isr_params_t *params)
 {
     uintptr_t addr = SC_ARG(params, 0);
     uint32_t flags = (uint32_t)SC_ARG(params, 2);
-    uintptr_t len;
+    uintptr_t len, covered;
 
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
@@ -8997,7 +9154,10 @@ long sys_msync(isr_params_t *params)
         return -EINVAL;
     }
     len = PAGE_UP(SC_ARG(params, 1));
-    if (vm_covered(&current_proc->mm->vm, addr, addr + len) != len) {
+    mmap_read_lock(current_proc->mm);
+    covered = vm_covered(&current_proc->mm->vm, addr, addr + len);
+    mmap_unlock(current_proc->mm);
+    if (covered != len) {
         return -ENOMEM;
     }
     return msync_range(addr, addr + len, (flags & 4u) != 0); /* MS_SYNC */
@@ -9969,24 +10129,31 @@ static int32_t lock_range(uintptr_t addr, uintptr_t len, uintptr_t *start, uintp
  */
 static int lock_populate(uintptr_t start, uintptr_t end, int go_on)
 {
+    struct mm *mm = current_proc->mm;
     uintptr_t at = start;
     int rc = 0;
 
     while (at < end) {
-        const vma_t *r = vm_lower(&current_proc->mm->vm, at);
+        const vma_t *r;
         uintptr_t stop;
+        uint32_t prot;
         int got = 0;
 
+        mmap_read_lock(mm);
+        r = vm_lower(&mm->vm, at);
         if (!r || r->start >= end) {
+            mmap_unlock(mm);
             break;
         }
         if (r->start > at) {
             at = r->start;
         }
         stop = r->end < end ? r->end : end;
-        if ((r->prot & VM_PROT_SECRET) && !(r->prot & VM_PROT_LOCKONFAULT)) {
+        prot = r->prot;
+        mmap_unlock(mm);
+        if ((prot & VM_PROT_SECRET) && !(prot & VM_PROT_LOCKONFAULT)) {
             got = -2;
-        } else if ((r->prot & VM_PROT_LOCKS) == VM_PROT_LOCKED && vm_populate(at, stop) != 0) {
+        } else if ((prot & VM_PROT_LOCKS) == VM_PROT_LOCKED && vm_populate(at, stop) != 0) {
             got = -1;
         }
         if (got != 0 && rc == 0) {
@@ -9998,6 +10165,32 @@ static int lock_populate(uintptr_t start, uintptr_t end, int go_on)
         at = stop;
     }
     return rc;
+}
+
+/** The change of `do_mlock` in the regions `vm`, under their lock held to
+ * write: 0 or -errno, with the range, page-aligned, in `*start` and
+ * `*end`. */
+static int32_t mlock_change(vm_space_t *vm, uintptr_t addr, uintptr_t len, uint32_t bits,
+                            uintptr_t *start, uintptr_t *end)
+{
+    uintptr_t have;
+    int32_t rc = lock_range(addr, len, start, end);
+
+    if (rc != 0 || *start == *end) {
+        return rc;
+    }
+    if (bits) {
+        have = (vm_locked(vm) - vm_locked_in(vm, *start, *end)) / PAGE_SIZE;
+        if (!mem_lock_room(have, (*end - *start) / PAGE_SIZE)) {
+            return -ENOMEM;
+        }
+    }
+    mm_note_anon(current_proc->mm, *start, *end);
+    rc = vm_lock(vm, *start, *end, bits);
+    if (rc == -2) {
+        vma_exhausted("mlock");
+    }
+    return rc != 0 ? -ENOMEM : 0;
 }
 
 /**
@@ -10015,40 +10208,27 @@ static int lock_populate(uintptr_t start, uintptr_t end, int go_on)
  */
 static long do_mlock(uintptr_t addr, uintptr_t len, uint32_t bits)
 {
-    vm_space_t *vm;
-    uintptr_t start, end, have;
+    uintptr_t start = 0, end = 0;
+    struct mm *mm;
     int32_t rc;
 
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
-    vm = &current_proc->mm->vm;
     if (bits && !mlock_allowed()) {
         return -EPERM;
     }
-    rc = lock_range(addr, len, &start, &end);
-    if (rc != 0 || start == end) {
+    mm = current_proc->mm;
+    mmap_write_lock(mm);
+    rc = mlock_change(&mm->vm, addr, len, bits, &start, &end);
+    mmap_unlock(mm);
+    mm_reap();
+    if (rc != 0 || start == end || !bits) {
         return rc;
     }
-    if (bits) {
-        have = (vm_locked(vm) - vm_locked_in(vm, start, end)) / PAGE_SIZE;
-        if (!mem_lock_room(have, (end - start) / PAGE_SIZE)) {
-            return -ENOMEM;
-        }
-    }
-    mm_note_anon(current_proc->mm, start, end);
-    rc = vm_lock(vm, start, end, bits);
-    if (rc == -2) {
-        vma_exhausted("mlock");
-    }
+    rc = lock_populate(start, end, 0);
     if (rc != 0) {
-        return -ENOMEM;
-    }
-    if (bits) {
-        rc = lock_populate(start, end, 0);
-        if (rc != 0) {
-            return rc == -2 ? -ENOMEM : -EAGAIN;
-        }
+        return rc == -2 ? -ENOMEM : -EAGAIN;
     }
     return 0;
 }
@@ -10099,6 +10279,7 @@ long sys_mlockall(isr_params_t *params)
 {
     uint32_t flags = (uint32_t)SC_ARG(params, 0);
     uint32_t bits = VM_PROT_LOCKED | ((flags & 4u) ? VM_PROT_LOCKONFAULT : 0u);
+    struct mm *mm;
     vm_space_t *vm;
 
     if (!current_proc || !current_proc->mm) {
@@ -10110,16 +10291,20 @@ long sys_mlockall(isr_params_t *params)
     if (!mlock_allowed()) {
         return -EPERM;
     }
-    vm = &current_proc->mm->vm;
+    mm = current_proc->mm;
+    vm = &mm->vm;
+    mmap_write_lock(mm);
     if ((flags & 1u) && !mem_lock_room(0, vm_total(vm) / PAGE_SIZE)) {
+        mmap_unlock(mm);
         return -ENOMEM;
     }
     vm->def_prot = (flags & 2u) ? bits : 0u;
     if (flags & 1u) {
         vm_lock_all(vm, bits);
-        if (!(flags & 4u)) {
-            (void)lock_populate(USER_ADDR_MIN, USER_ADDR_MAX, 1);
-        }
+    }
+    mmap_unlock(mm);
+    if ((flags & 1u) && !(flags & 4u)) {
+        (void)lock_populate(USER_ADDR_MIN, USER_ADDR_MAX, 1);
     }
     return 0;
 }
@@ -10131,8 +10316,10 @@ long sys_munlockall(isr_params_t *params)
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
+    mmap_write_lock(current_proc->mm);
     current_proc->mm->vm.def_prot = 0;
     vm_lock_all(&current_proc->mm->vm, 0);
+    mmap_unlock(current_proc->mm);
     return 0;
 }
 
@@ -10146,7 +10333,7 @@ long sys_mincore(isr_params_t *params)
 {
     uintptr_t addr = SC_ARG(params, 0);
     uintptr_t pages;
-    uintptr_t i, start, end;
+    uintptr_t i, start, end, covered;
     int32_t rc;
 
     if (!current_proc || !current_proc->mm) {
@@ -10159,7 +10346,10 @@ long sys_mincore(isr_params_t *params)
     if (rc != 0) {
         return rc;
     }
-    if (vm_covered(&current_proc->mm->vm, start, end) != end - start) {
+    mmap_read_lock(current_proc->mm);
+    covered = vm_covered(&current_proc->mm->vm, start, end);
+    mmap_unlock(current_proc->mm);
+    if (covered != end - start) {
         return -ENOMEM;
     }
     pages = (SC_ARG(params, 1) + PAGE_SIZE - 1) / PAGE_SIZE;

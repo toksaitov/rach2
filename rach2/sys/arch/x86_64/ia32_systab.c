@@ -111,6 +111,14 @@ static void ia32_unlock_file_calls(void)
     syscall_unlock(SYSCALL_ABI_IA32, compat_sys_ppoll_time64);
 }
 
+/** Mark the i386 mmap calls to run without the big lock, as the native
+ * mmap family does (syscall.c). */
+static void ia32_unlock_mm_calls(void)
+{
+    syscall_unlock(SYSCALL_ABI_IA32, compat_sys_ia32_mmap);
+    syscall_unlock(SYSCALL_ABI_IA32, compat_sys_mmap_pgoff);
+}
+
 /** The rows, one for each i386 number Linux has; `init_syscall` cleared
  * the table first, so a NULL row only says so. */
 void ia32_syscall_init(syscall_fn_t *table)
@@ -568,6 +576,7 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_LSM_LIST_MODULES] = NULL;
     table[SYS_MSEAL] = sys_mseal;
     ia32_unlock_file_calls();
+    ia32_unlock_mm_calls();
 }
 
 #endif /* RACH2_IA32 */
