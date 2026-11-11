@@ -118,18 +118,27 @@ static int fence_busy(struct dma_fence *f)
     return f && !dma_fence_is_signaled(f);
 }
 
-int i915_gem_object_is_active(const struct drm_i915_gem_object *obj)
+int i915_gem_object_is_active_locked(const struct drm_i915_gem_object *obj)
 {
     struct dma_resv *r = obj->base.resv;
     uint32_t i;
     int busy;
 
-    dma_resv_lock(r);
+    lockdep_assert_held(&r->lock);
     busy = fence_busy(r->write);
     for (i = 0; !busy && i < r->nreads; i++) {
         busy = fence_busy(r->reads[i]);
     }
-    dma_resv_unlock(r);
+    return busy;
+}
+
+int i915_gem_object_is_active(const struct drm_i915_gem_object *obj)
+{
+    int busy;
+
+    dma_resv_lock(obj->base.resv);
+    busy = i915_gem_object_is_active_locked(obj);
+    dma_resv_unlock(obj->base.resv);
     return busy;
 }
 
@@ -1535,9 +1544,10 @@ int32_t i915_gem_get_aperture_ioctl(struct drm_device *dev, void *data, struct d
 int32_t i915_gem_madvise_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
     struct drm_i915_gem_madvise *args = (struct drm_i915_gem_madvise *)data;
+    struct drm_i915_private *i915 = to_i915(dev);
     struct drm_i915_gem_object *obj;
+    int purge, taken;
 
-    (void)dev;
     if (args->madv != I915_MADV_DONTNEED && args->madv != I915_MADV_WILLNEED) {
         return -EINVAL;
     }
@@ -1545,12 +1555,24 @@ int32_t i915_gem_madvise_ioctl(struct drm_device *dev, void *data, struct drm_fi
     if (!obj) {
         return -ENOENT;
     }
+    /* Under the object's lock, its reservation's, as Linux's
+     * (i915_gem.c:1049-1099), which the shrinker tries before it purges. */
+    dma_resv_lock(obj->base.resv);
     if (obj->madv != __I915_MADV_PURGED) {
         obj->madv = (uint8_t)args->madv;
     }
-    if (obj->madv == I915_MADV_DONTNEED && !i915_gem_object_has_pages(obj) && !obj->base.import &&
-        !i915_gem_object_is_userptr(obj)) {
-        (void)i915_gem_object_truncate(obj);
+    purge = obj->madv == I915_MADV_DONTNEED && !i915_gem_object_has_pages(obj) &&
+            !obj->base.import && !i915_gem_object_is_userptr(obj);
+    dma_resv_unlock(obj->base.resv);
+    if (purge) {
+        /* The purge changes the pages, the GEM lock's, which comes first. */
+        taken = i915_gem_lock(i915);
+        dma_resv_lock(obj->base.resv);
+        if (obj->madv == I915_MADV_DONTNEED && !i915_gem_object_has_pages(obj)) {
+            (void)i915_gem_object_truncate(obj);
+        }
+        dma_resv_unlock(obj->base.resv);
+        i915_gem_unlock(i915, taken);
     }
     args->retained = obj->madv != __I915_MADV_PURGED;
     i915_gem_object_put(obj);
@@ -1659,31 +1681,34 @@ I915_GEM_LOCKED(i915_gem_wait_ioctl)
 I915_GEM_LOCKED(i915_gem_set_caching_ioctl)
 I915_GEM_LOCKED(i915_gem_get_caching_ioctl)
 I915_GEM_LOCKED(i915_gem_get_aperture_ioctl)
-I915_GEM_LOCKED(i915_gem_madvise_ioctl)
 I915_GEM_LOCKED(i915_gem_userptr_ioctl)
 
 /* The driver's own ioctls, with Linux's flags: a render node may call each
  * but GET_PIPE_FROM_CRTC_ID. Each row of the buffers runs under the GEM
  * lock; EXECBUFFER2 takes it itself between its copies, and THROTTLE, which
  * takes a file's context list lock, which comes before it, and waits,
- * takes none. */
+ * takes none. DRM_UNLOCKED marks the rows that need no big lock: BUSY,
+ * under the handle table's and the reservation's locks, MADVISE, under the
+ * reservation's and then the GEM lock, EXECBUFFER2, and the context calls,
+ * under the file's context list lock. */
 const struct drm_ioctl_desc i915_ioctls[I915_NUM_IOCTLS] = {
     {DRM_IOCTL_I915_GETPARAM, DRM_RENDER_ALLOW, i915_getparam_ioctl, "I915_GETPARAM"},
     {DRM_IOCTL_I915_GET_PIPE_FROM_CRTC_ID, 0, intel_get_pipe_from_crtc_id_ioctl,
      "I915_GET_PIPE_FROM_CRTC_ID"},
-    {DRM_IOCTL_I915_GEM_CONTEXT_CREATE_EXT, DRM_RENDER_ALLOW, i915_gem_context_create_ioctl,
-     "I915_GEM_CONTEXT_CREATE"},
-    {DRM_IOCTL_I915_GEM_CONTEXT_DESTROY, DRM_RENDER_ALLOW, i915_gem_context_destroy_ioctl,
-     "I915_GEM_CONTEXT_DESTROY"},
+    {DRM_IOCTL_I915_GEM_CONTEXT_CREATE_EXT, DRM_RENDER_ALLOW | DRM_UNLOCKED,
+     i915_gem_context_create_ioctl, "I915_GEM_CONTEXT_CREATE"},
+    {DRM_IOCTL_I915_GEM_CONTEXT_DESTROY, DRM_RENDER_ALLOW | DRM_UNLOCKED,
+     i915_gem_context_destroy_ioctl, "I915_GEM_CONTEXT_DESTROY"},
     {DRM_IOCTL_I915_REG_READ, DRM_RENDER_ALLOW, i915_reg_read_ioctl, "I915_REG_READ"},
-    {DRM_IOCTL_I915_GET_RESET_STATS, DRM_RENDER_ALLOW, i915_gem_context_reset_stats_ioctl,
-     "I915_GET_RESET_STATS"},
-    {DRM_IOCTL_I915_GEM_CONTEXT_GETPARAM, DRM_RENDER_ALLOW, i915_gem_context_getparam_ioctl,
-     "I915_GEM_CONTEXT_GETPARAM"},
-    {DRM_IOCTL_I915_GEM_CONTEXT_SETPARAM, DRM_RENDER_ALLOW, i915_gem_context_setparam_ioctl,
-     "I915_GEM_CONTEXT_SETPARAM"},
+    {DRM_IOCTL_I915_GET_RESET_STATS, DRM_RENDER_ALLOW | DRM_UNLOCKED,
+     i915_gem_context_reset_stats_ioctl, "I915_GET_RESET_STATS"},
+    {DRM_IOCTL_I915_GEM_CONTEXT_GETPARAM, DRM_RENDER_ALLOW | DRM_UNLOCKED,
+     i915_gem_context_getparam_ioctl, "I915_GEM_CONTEXT_GETPARAM"},
+    {DRM_IOCTL_I915_GEM_CONTEXT_SETPARAM, DRM_RENDER_ALLOW | DRM_UNLOCKED,
+     i915_gem_context_setparam_ioctl, "I915_GEM_CONTEXT_SETPARAM"},
     {DRM_IOCTL_I915_QUERY, DRM_RENDER_ALLOW, i915_query_ioctl, "I915_QUERY"},
-    {DRM_IOCTL_I915_GEM_BUSY, DRM_RENDER_ALLOW, i915_gem_busy_ioctl, "I915_GEM_BUSY"},
+    {DRM_IOCTL_I915_GEM_BUSY, DRM_RENDER_ALLOW | DRM_UNLOCKED, i915_gem_busy_ioctl,
+     "I915_GEM_BUSY"},
     {DRM_IOCTL_I915_GEM_THROTTLE, DRM_RENDER_ALLOW, i915_gem_throttle_ioctl, "I915_GEM_THROTTLE"},
     {DRM_IOCTL_I915_GEM_CREATE, DRM_RENDER_ALLOW, i915_gem_create_ioctl_gem, "I915_GEM_CREATE"},
     {DRM_IOCTL_I915_GEM_CREATE_EXT, DRM_RENDER_ALLOW, i915_gem_create_ext_ioctl_gem,
@@ -1697,7 +1722,7 @@ const struct drm_ioctl_desc i915_ioctls[I915_NUM_IOCTLS] = {
      "I915_GEM_SET_DOMAIN"},
     {DRM_IOCTL_I915_GEM_SW_FINISH, DRM_RENDER_ALLOW, i915_gem_sw_finish_ioctl_gem,
      "I915_GEM_SW_FINISH"},
-    {DRM_IOCTL_I915_GEM_EXECBUFFER2_WR, DRM_RENDER_ALLOW, i915_gem_execbuffer2_ioctl,
+    {DRM_IOCTL_I915_GEM_EXECBUFFER2_WR, DRM_RENDER_ALLOW | DRM_UNLOCKED, i915_gem_execbuffer2_ioctl,
      "I915_GEM_EXECBUFFER2"},
     {DRM_IOCTL_I915_GEM_SET_TILING, DRM_RENDER_ALLOW, i915_gem_set_tiling_ioctl_gem,
      "I915_GEM_SET_TILING"},
@@ -1710,5 +1735,6 @@ const struct drm_ioctl_desc i915_ioctls[I915_NUM_IOCTLS] = {
      "I915_GEM_GET_CACHING"},
     {DRM_IOCTL_I915_GEM_GET_APERTURE, DRM_RENDER_ALLOW, i915_gem_get_aperture_ioctl_gem,
      "I915_GEM_GET_APERTURE"},
-    {DRM_IOCTL_I915_GEM_MADVISE, DRM_RENDER_ALLOW, i915_gem_madvise_ioctl_gem, "I915_GEM_MADVISE"},
+    {DRM_IOCTL_I915_GEM_MADVISE, DRM_RENDER_ALLOW | DRM_UNLOCKED, i915_gem_madvise_ioctl,
+     "I915_GEM_MADVISE"},
     {DRM_IOCTL_I915_GEM_USERPTR, DRM_RENDER_ALLOW, i915_gem_userptr_ioctl_gem, "I915_GEM_USERPTR"}};

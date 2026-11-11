@@ -19,6 +19,11 @@ void dma_resv_lock(struct dma_resv *r)
     mutex_lock(&r->lock);
 }
 
+int dma_resv_trylock(struct dma_resv *r)
+{
+    return mutex_trylock(&r->lock);
+}
+
 /** Give the reservation's lock back. */
 void dma_resv_unlock(struct dma_resv *r)
 {

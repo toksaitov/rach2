@@ -24,6 +24,7 @@
 #include "../../arch/arch.h"
 #include "../../proc/process.h"
 #include "../../proc/sched.h"
+#include "../../proc/smp.h"
 #endif
 
 /* The dwords of the commands a request takes: the render ring's flush
@@ -397,7 +398,31 @@ static void submit_thread_main(void)
 
 /** Start the worker the first time a request waits for a fence: 0, or
  * -ENOMEM. */
+static int32_t submit_worker_spawn(void);
+
+/* The process list is the big lock's, which EXECBUFFER2, under the GEM lock
+ * alone, takes for the spawn. */
 static int32_t submit_worker_start(void)
+{
+    int32_t rc;
+    int big;
+
+    if (submit_thread) {
+        return 0;
+    }
+    big = !bkl_held();
+    if (big) {
+        bkl_enter();
+    }
+    rc = submit_worker_spawn();
+    if (big) {
+        bkl_exit();
+    }
+    return rc;
+}
+
+/** Make and start the worker unless it runs: 0, or -ENOMEM. */
+static int32_t submit_worker_spawn(void)
 {
     process_t *p;
     uintptr_t base;

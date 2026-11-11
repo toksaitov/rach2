@@ -58,6 +58,9 @@ void dma_resv_init(struct dma_resv *resv);
  * may sleep. */
 void dma_resv_lock(struct dma_resv *resv);
 void dma_resv_unlock(struct dma_resv *resv);
+/** Take a reservation's lock only if it is free, for a caller that may not
+ * sleep, as Linux's dma_resv_trylock: 1 when taken. */
+int dma_resv_trylock(struct dma_resv *resv);
 /** Release every reservation slot and its storage, for its last user. */
 void dma_resv_fini(struct dma_resv *resv);
 /** Add a read fence, or join outstanding writers. 0 or -ENOMEM. The
