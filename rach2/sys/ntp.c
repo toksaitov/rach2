@@ -21,9 +21,10 @@
 #define MAXTC               10
 #define PPM_SCALE           ((int64_t)1000 << 16)
 #define PPM_SCALE_INV_SHIFT 19
-/* (1 << (PPM_SCALE_INV_SHIFT + NTP_SCALE_SHIFT)) / PPM_SCALE, Linux's
- * PPM_SCALE_INV, which turns the frequency back into adjtimex's units. */
-#define PPM_SCALE_INV       34359738LL
+/* (1 << (PPM_SCALE_INV_SHIFT + NTP_SCALE_SHIFT)) / PPM_SCALE + 1, Linux's
+ * PPM_SCALE_INV (linux/timex.h:131-133), which turns the frequency back
+ * into adjtimex's units. */
+#define PPM_SCALE_INV       34359739LL
 #define MAXPHASE            500000000L /* nanoseconds */
 #define MAXFREQ             500000L    /* nanoseconds a second */
 #define MAXFREQ_SCALED      ((int64_t)MAXFREQ << NTP_SCALE_SHIFT)
