@@ -384,7 +384,7 @@ The pinned [Debian desktop layer](../vendor/gnu/debian/Readme.md) stages these c
 
 ### Games packages
 
-The pinned [games layer](../vendor/gnu/games/Readme.md) stages these commands from its own Debian closure: innoextract on both architectures, and SuperTuxKart and 0 A.D. on x86-64 alone. On x86-64 it also stages `/usr/bin/rach2-game` ([rach2-game(1)](man1/rach2-game.1)), which runs a Windows game through Proton with WoW64, WineD3D on OpenGL and fsync, directly or in the Steam Linux Runtime, and umu-launcher as `/usr/bin/umu-run` ([umu-run(1)](man1/umu-run.1)), with the runtime's archive under `/opt/umu`.
+The pinned [games layer](../vendor/gnu/games/Readme.md) stages these commands from its own Debian closure: innoextract on both architectures, and SuperTuxKart and 0 A.D. on x86-64 alone, where the i386 layer adds the i386 SuperTuxKart as `supertuxkart.i386-linux-gnu`. On x86-64 it also stages `/usr/bin/rach2-game` ([rach2-game(1)](man1/rach2-game.1)), which runs a Windows game through Proton with WoW64, WineD3D on OpenGL and fsync, directly or in the Steam Linux Runtime, and umu-launcher as `/usr/bin/umu-run` ([umu-run(1)](man1/umu-run.1)), with the runtime's archive under `/opt/umu`.
 
 | Program | Package | Path | Page |
 | --- | --- | --- | --- |
@@ -392,6 +392,7 @@ The pinned [games layer](../vendor/gnu/games/Readme.md) stages these commands fr
 | `innoextract` | `innoextract` | `/usr/bin/innoextract` | [innoextract(1)](man1/innoextract.1) |
 | `pyrogenesis` | `0ad` | `/usr/games/pyrogenesis` | [0ad(1)](man1/0ad.1) |
 | `supertuxkart` | `supertuxkart` | `/usr/games/supertuxkart` | [supertuxkart(1)](man1/supertuxkart.1) |
+| `supertuxkart.i386-linux-gnu` | `supertuxkart` | `/usr/games/supertuxkart.i386-linux-gnu` | [supertuxkart(1)](man1/supertuxkart.1) |
 
 ### Video packages
 

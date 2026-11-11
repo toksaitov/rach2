@@ -3,6 +3,7 @@
 # their SHA-256-pinned packages. Usage: fetch_debs.sh LAYER [STEP...].
 # GNU_DEBIAN_LISTS names lists relative to vendor/gnu. A list has one package
 # per line, optionally =VERSION, and optionally an amd64 or i386 selector.
+# GNU_DEBIAN_UNFOLLOWED names packages whose dependencies end the search.
 # With no steps, run index, resolve, fetch, unpack and check. Each layer has
 # its own stage and closure; download caches are shared within this clone.
 
@@ -42,8 +43,9 @@ for list in $LISTS; do
     }
     ROOTS="$ROOTS $selected"
 done
-# Accounts and the base runtime come from the Rach2 manifest and GNU ports.
-UNFOLLOWED="adduser"
+# Accounts and the base runtime come from the Rach2 manifest and GNU ports;
+# GNU_DEBIAN_UNFOLLOWED names packages that another layer supplies.
+UNFOLLOWED="adduser ${GNU_DEBIAN_UNFOLLOWED:-}"
 
 SNAPSHOT=20261108T000000Z
 

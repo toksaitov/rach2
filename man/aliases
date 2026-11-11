@@ -446,6 +446,7 @@ stime 2 gettimeofday
 strings 1 busybox-miscutils
 stty 1 busybox-coreutils
 sum 1 busybox-coreutils
+supertuxkart.i386-linux-gnu 1 supertuxkart
 sv 8 busybox-runit
 svc 8 busybox-runit
 svlogd 8 busybox-runit
@@ -516,6 +517,7 @@ vconfig 1 busybox-networking
 vfork 2 fork
 vi 1 busybox-editors
 volname 1 busybox-miscutils
+vulkaninfo.i386-linux-gnu 1 vulkaninfo
 w 1 busybox-coreutils
 wait4 2 wait
 waitid 2 wait
