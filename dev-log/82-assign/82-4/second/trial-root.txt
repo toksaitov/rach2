@@ -1,0 +1,59 @@
+rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/t2666/root-3b6ef0e0aef61a54.img rach2.slot=trialroot rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.disk=ahci rach2.netconsole rach2.ip=none rach2.console=term rach2.i915
+bootctl: candidate: first sector 11848, 8192 sectors in 8192 clusters, 4194304 bytes
+bootctl: fallback: first sector 2053, 8192 sectors in 8192 clusters, 4194304 bytes
+bootctl: fallback: runs: 2053+4096 20040+4096
+bootctl: grubenv: first sector 10275, 2 sectors in 2 clusters, 1024 bytes
+bootctl: boot.cfg: first sector 10259, 16 sectors in 16 clusters, 8192 bytes
+bootctl: saved_entry: fallback
+bootctl: next_entry: empty (a trial was consumed)
+bootctl: trial root: GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/t2666/root-3b6ef0e0aef61a54.img
+bootctl: booted: trialroot, the candidate's kernel on a root image
+/dev/loop0 / ext2 rw,relatime 0 0
+/dev/disk0p6 /data ext2 rw 0 0
+QEMU emulator version 10.0.13 (Debian 1:10.0.13+ds-0+deb13u1)
+crw-rw---- 1 root root 10, 232 Nov 11 07:18 /dev/kvm
+
+/dev/vfio:
+total 0
+crw------- 1 root root 242,   0 Nov 11 07:18 0
+crw------- 1 root root 242,   1 Nov 11 07:18 1
+crw------- 1 root root 242,  10 Nov 11 07:18 10
+crw------- 1 root root 242,  11 Nov 11 07:18 11
+crw------- 1 root root 242,   2 Nov 11 07:18 2
+crw------- 1 root root 242,   3 Nov 11 07:18 3
+crw------- 1 root root 242,   4 Nov 11 07:18 4
+crw------- 1 root root 242,   5 Nov 11 07:18 5
+crw------- 1 root root 242,   6 Nov 11 07:18 6
+crw------- 1 root root 242,   7 Nov 11 07:18 7
+crw------- 1 root root 242,   8 Nov 11 07:18 8
+crw------- 1 root root 242,   9 Nov 11 07:18 9
+crw-rw-rw- 1 root root  10, 196 Nov 11 07:18 vfio
+12
+../../../bus/pci/drivers/i915
+../../../kernel/iommu_groups/0
+OVMF_CODE_4M.fd
+OVMF_CODE_4M.ms.fd
+OVMF_CODE_4M.secboot.fd
+OVMF_CODE_4M.secboot.strictnx.fd
+OVMF_CODE_4M.snakeoil.fd
+OVMF_VARS_4M.fd
+OVMF_VARS_4M.ms.fd
+OVMF_VARS_4M.snakeoil.fd
+kvm_vms 0
+kvm_vcpus 0
+kvm_slots 0
+kvm_tdp_pages 0
+kvm_run_mappings 0
+kvm_gpa_maps 0
+kvm_gpa_map_pages 0
+kvm_ioeventfd_signals 0
+kvm_irqfd_raises 0
+vfio_groups 0
+vfio_devices 0
+vfio_dma_mappings 0
+vfio_dma_pages 0
+vfio_dma_io_pages 0
+kvm_exits 0
+iommu_dma_faults 0
+iommu_irq_faults 0
+msi_vectors_free 184
