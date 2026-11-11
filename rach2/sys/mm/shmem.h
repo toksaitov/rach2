@@ -117,8 +117,17 @@ int shmem_allocate(struct shmem *sh, uint64_t off, uint64_t len);
  * walk passes over a leaf the table does not have whole. */
 void shmem_punch(struct shmem *sh, uint64_t off, uint64_t len);
 
-/** Free every page and the policies of the pages; the size is 0 after. */
+/** Free every page and the policies of the pages; the size is 0 after.
+ * Nothing here sleeps. */
 void shmem_free(struct shmem *sh);
+
+/**
+ * Free as `shmem_free` does, giving way to the big lock's waiters and the
+ * tick's switch after each leaf of SHMEM_LEAF pages (`sched_give_way`), for
+ * a caller that may sleep and whose `sh` no other thread reaches: a file in
+ * memory that has lost its last name and its last hold.
+ */
+void shmem_free_yielding(struct shmem *sh);
 
 /* The largest size a file in memory may have, the last page a 32-bit page
  * index reaches, as Linux's tmpfs has it on i386: 16 TiB less a page. */
