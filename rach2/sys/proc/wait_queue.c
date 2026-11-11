@@ -7,8 +7,8 @@
 #include "../lib/kerrno.h"
 
 /* The kinds of wait: one a signal ends, one it does not, one it does not
- * that /proc counts as idle rather than blocked, and one it does not whose
- * condition SIGKILL ends, which the hung-task detector skips. */
+ * that /proc counts as idle rather than blocked, and one whose caller's
+ * condition must accept SIGKILL, which the hung-task detector skips. */
 #define WQ_SIGNAL   0
 #define WQ_NOSIGNAL 1
 #define WQ_IDLE     2
