@@ -90,9 +90,15 @@
  *       total mod 4096 bytes and fills each page across the elements; and
  *       a writev of a page and then of 10 bytes at address 0 into an empty
  *       pipe returns 4096, the page written before the fault, as Linux's
- *       does. vmsplice without SPLICE_F_NONBLOCK waits on an empty
- *       pipe whose read end has O_NONBLOCK, until a child that saw the probe
- *       asleep writes a byte.
+ *       does. A page buffer or the merged first bytes are committed whole
+ *       or not at all: with 100 bytes more before the fault the writev
+ *       still returns 4096 and 4096 read back, and after a write of a byte
+ *       a writev of a byte and one at address 0, two bytes to merge, is
+ *       EFAULT with the one byte left, while a writev of a byte, a page and
+ *       one at address 0 keeps its two merged bytes and returns 2.
+ *       vmsplice without SPLICE_F_NONBLOCK waits on an empty pipe whose
+ *       read end has O_NONBLOCK, until a child that saw the probe asleep
+ *       writes a byte.
  *
  * Given `machine=native` (probe_args.h), the probe leaves out the heap's
  * comparison of (e), since the kernel's heap is shared with every process of
@@ -299,6 +305,9 @@ enum {
     PAGES_WRITE_PAGES,
     PAGES_WRITEV_FILL,
     PAGES_WRITEV_PREFIX,
+    PAGES_WRITEV_SUBPAGE,
+    PAGES_WRITEV_MERGE_FAULT,
+    PAGES_WRITEV_MERGE_KEPT,
     VMSPLICE_WAIT_FORK,
     VMSPLICE_WAIT_NONBLOCK,
     MAX_ROUND,
@@ -392,6 +401,12 @@ static const struct {
     {"pages-writev-fill",
      "writevs of 1 and 4096 bytes take 45066 bytes of a nonblocking pipe of 64 KiB"},
     {"pages-writev-prefix", "a writev of 4096 bytes and 10 at address 0 returns 4096"},
+    {"pages-writev-subpage",
+     "a writev of 4096 and 100 bytes and 10 at address 0 returns 4096, and 4096 read back"},
+    {"pages-writev-merge-fault",
+     "after a write of a byte, a writev of a byte and 1 at address 0 -> -EFAULT, 1 byte left"},
+    {"pages-writev-merge-kept",
+     "after a write of a byte, a writev of 1, 4096 and 1 at address 0 returns 2, 3 bytes left"},
     {"vmsplice-wait-fork", "fork for the vmsplice wait"},
     {"vmsplice-wait-nonblock",
      "vmsplice without SPLICE_F_NONBLOCK from an empty O_NONBLOCK pipe waits for the child's byte"},
@@ -1125,11 +1140,15 @@ static void pages_write_slots(void)
  * buffer, until the eleventh takes the sixteenth buffer's page and the
  * twelfth is EAGAIN; and a writev whose second element lies at address 0
  * returns the page of the first, as Linux's pipe_write keeps the page it
- * filled before the fault.
+ * filled before the fault. Linux commits a page, and the bytes it merges
+ * into the newest buffer, only whole: the 100 bytes of a page left
+ * unfinished by a fault are not read, a merge that faults is EFAULT with
+ * nothing added, and a merge that completed is kept when the page after it
+ * faults.
  */
 static void pages_writev(void)
 {
-    long iov[4];
+    long iov[6];
     int w[2] = {-1, -1};
     int made = do_pipe2(w, O_NONBLOCK) == 0;
     long n = 0, total = 0;
@@ -1156,6 +1175,39 @@ static void pages_writev(void)
     iov[3] = 10;
     check(PAGES_WRITEV_PREFIX, made && syscall3(SYS_WRITEV, w[1], (long)iov, 2) == 4096 &&
                                    rd(w[0], back, PIPE_BUF_SIZE) == 4096 && eqn(back, big, 4096));
+    close_pair(w);
+
+    made = do_pipe2(w, O_NONBLOCK) == 0;
+    iov[0] = (long)big;
+    iov[1] = 4096;
+    iov[2] = (long)(big + 4096);
+    iov[3] = 100;
+    iov[4] = 0;
+    iov[5] = 10;
+    check(PAGES_WRITEV_SUBPAGE, made && syscall3(SYS_WRITEV, w[1], (long)iov, 3) == 4096 &&
+                                    rd(w[0], back, PIPE_BUF_SIZE) == 4096 && eqn(back, big, 4096) &&
+                                    rd(w[0], back, 1) == -EAGAIN);
+    close_pair(w);
+
+    made = do_pipe2(w, O_NONBLOCK) == 0 && wr(w[1], "m", 1) == 1;
+    iov[0] = (long)big;
+    iov[1] = 1;
+    iov[2] = 0;
+    iov[3] = 1;
+    check(PAGES_WRITEV_MERGE_FAULT, made && syscall3(SYS_WRITEV, w[1], (long)iov, 2) == -EFAULT &&
+                                        rd(w[0], back, PIPE_BUF_SIZE) == 1 && back[0] == 'm');
+    close_pair(w);
+
+    made = do_pipe2(w, O_NONBLOCK) == 0 && wr(w[1], "m", 1) == 1;
+    iov[0] = (long)big;
+    iov[1] = 1;
+    iov[2] = (long)(big + 1);
+    iov[3] = 4096;
+    iov[4] = 0;
+    iov[5] = 1;
+    check(PAGES_WRITEV_MERGE_KEPT, made && syscall3(SYS_WRITEV, w[1], (long)iov, 3) == 2 &&
+                                       rd(w[0], back, PIPE_BUF_SIZE) == 3 && back[0] == 'm' &&
+                                       eqn(back + 1, big, 2));
     close_pair(w);
 }
 

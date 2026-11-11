@@ -91,10 +91,14 @@ A
 to a pipe is one such write of the whole vector, as on Linux: its first
 bytes are its total modulo 4096, and each buffer it opens fills across
 the elements.
-An element the caller cannot read, one below the lowest user address
-among them, ends it with the bytes before it, or
+Each of these groups, the first bytes and each page, is committed whole
+once it is full or the write is spent, as on Linux.
+A byte the caller cannot read, one below the lowest user address among
+them, ends the write with the bytes of the groups before its own, or
 .Er EFAULT
-when there are none.
+when there are none; no byte of its own group can be read.
+A write of 4096 bytes or fewer is one group, so another writer's bytes
+never come between its own.
 A pipe write waits when the pipe is full and its next byte would open a
 buffer.
 With
