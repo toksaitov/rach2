@@ -1,0 +1,14 @@
+window 406 7098
+seconds 90.058
+frames 6692
+fps 74.31
+median 12.65
+p90 17.18
+p99 25.83
+p99.9 40.17
+max 93.71
+over16.7 880
+over33.3 16
+over50 2
+over100 0
+end profile
