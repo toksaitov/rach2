@@ -447,16 +447,14 @@ static int composer_ready(void *arg)
     return ((struct vkms_device *)arg)->crc_pending;
 }
 
-/** The composer thread, kvkms: sleep in an idle wait until a vblank asks
- * for a frame, then compose it, holding the big lock as kernel code does.
- * Like every kernel thread, it is not switched by the tick
- * (`no_tick_switch`, which `setup_process_stack` sets), since a frame's
- * last put
- * of a framebuffer may free an imported buffer through its exporter,
- * virtio-gpu's among them; it gives way where it sleeps and between
- * frames, as Linux's vkms_composer_worker runs on a workqueue whose
- * kworker gives way only between works (kernel/workqueue.c:3298-3299 in
- * 6.12.115). */
+/** The composer thread, kvkms: sleep in an idle wait until a vblank asks for a
+ * frame, then compose it, holding the big lock as kernel code does. Like every
+ * kernel thread, it is not switched by the tick (`no_tick_switch`, which
+ * `setup_process_stack` sets), since a frame's last put of a framebuffer may
+ * free an imported buffer through its exporter, virtio-gpu's among them; it
+ * gives way where it sleeps and between frames, as Linux's vkms_composer_worker
+ * runs on a workqueue whose kworker gives way only between works
+ * (kernel/workqueue.c:3298-3299 in 6.12.115). */
 static void composer_main(void)
 {
     struct vkms_device *v = vkms_dev;

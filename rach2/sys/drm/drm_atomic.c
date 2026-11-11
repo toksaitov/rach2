@@ -1844,14 +1844,13 @@ static int work_ready(void *arg)
     return ready || work_next_ready(NULL) != NULL;
 }
 
-/** The worker, kdrm: sleep in an idle wait until a queued commit may run,
- * then finish what is ready, holding the big lock as kernel code does. Like
- * every kernel thread, it is not switched by the tick (`no_tick_switch`,
- * which `setup_process_stack` sets): a commit's tail and a
- * driver's work run here as they run inline in a system call, and give way
- * only where they sleep, so a driver's state, such as the transport a
- * virtio-gpu card sits on, never changes under them; the worker also gives
- * way between passes. */
+/** The worker, kdrm: sleep in an idle wait until a queued commit may run, then
+ * finish what is ready, holding the big lock as kernel code does. Like every
+ * kernel thread, it is not switched by the tick (`no_tick_switch`, which
+ * `setup_process_stack` sets): a commit's tail and a driver's work run here as
+ * they run inline in a system call, and give way only where they sleep, so a
+ * driver's state, such as the transport a virtio-gpu card sits on, never
+ * changes under them; the worker also gives way between passes. */
 static void commit_thread_main(void)
 {
     const struct drm_work *dw;

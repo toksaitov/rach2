@@ -618,12 +618,12 @@ static int con_flush_ready(void *arg)
 #ifndef RACH2_HOSTTEST
 static process_t *con_thread;
 
-/** The worker, kdrmcon: while a shadow is in use, flush it every
- * CON_FLUSH_MS; otherwise sleep in an idle wait until one is. Like every
- * kernel thread, it is not switched by the tick (`no_tick_switch`, which
- * `setup_process_stack` sets), so a flush runs a driver's dirty
- * path as the DIRTYFB call does, with the driver's state holding through
- * it; it gives way where it sleeps and between flushes. */
+/** The worker, kdrmcon: while a shadow is in use, flush it every CON_FLUSH_MS;
+ * otherwise sleep in an idle wait until one is. Like every kernel thread, it is
+ * not switched by the tick (`no_tick_switch`, which `setup_process_stack`
+ * sets), so a flush runs a driver's dirty path as the DIRTYFB call does, with
+ * the driver's state holding through it; it gives way where it sleeps and
+ * between flushes. */
 static void con_thread_main(void)
 {
     arch_irq_enable();
