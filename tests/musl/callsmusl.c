@@ -490,9 +490,12 @@ static int setgids(void)
  * and fd directory and read a link in that directory, which fail with EACCES,
  * open the caller's own maps, and check the owners of its /proc entries
  * before and after PR_SET_DUMPABLE: the 0555 directory is the effective
- * user's throughout, while status and the open maps are root's until the
- * process is dumpable again, as Linux's task_dump_owner gives them. Returns
- * 0, or the number of the first step that went wrong.
+ * user's throughout, and status is root's until the process is dumpable
+ * again, as Linux's task_dump_owner gives them at each stat. The open maps
+ * stays root's after it, since Linux sets a file's owner at the lookup of
+ * its path (fs/proc/base.c:2693, 2066) and its inode has no getattr to set
+ * it again (base.c:776-778), and no path has reached maps since. Returns 0,
+ * or the number of the first step that went wrong.
  */
 static int privacies_child(pid_t parent)
 {
@@ -526,7 +529,7 @@ static int privacies_child(pid_t parent)
         st.st_uid != 0 || fstat(fd, &st) != 0 || st.st_uid != 0 ||
         prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0 || stat("/proc/self/", &st) != 0 ||
         st.st_uid != user || stat("/proc/self/status", &st) != 0 || st.st_uid != user ||
-        fstat(fd, &st) != 0 || st.st_uid != user) {
+        fstat(fd, &st) != 0 || st.st_uid != 0) {
         return 5;
     }
     return 0;
@@ -557,7 +560,8 @@ static int privacies(void)
     }
     if (WEXITSTATUS(status) == 5) {
         held_to(base + 2);
-        return fail("the /proc directory of a dumpable process of user 4243 was not its own");
+        return fail("a /proc entry of a process of user 4243 had an owner Linux does not give, "
+                    "before or after PR_SET_DUMPABLE");
     }
     if (WEXITSTATUS(status) != 0) {
         held_to(base + (WEXITSTATUS(status) == 4 ? 1 : 0));
