@@ -59,13 +59,24 @@ uint32_t i915_hangcheck(struct drm_i915_private *i915)
     uint64_t now = rtc_ticks_now();
     int i, taken;
 
-    if (!gt->awake || gt->wedged || i915->params.hangcheck_off || now < gt->hc_next) {
+    if (!gt->awake || gt->wedged || gt->hc_next == 0 || now < gt->hc_next) {
         return 0;
     }
     /* One beat at a time, under the GEM lock that its reset needs, since
      * the worker and every waiter call it; the test again under it. */
     taken = i915_gem_lock(i915);
-    if (!gt->awake || gt->wedged || now < gt->hc_next) {
+    if (!gt->awake || gt->wedged || gt->hc_next == 0 || now < gt->hc_next) {
+        i915_gem_unlock(i915, taken);
+        return 0;
+    }
+    if (i915->params.hangcheck_off) {
+        /* Linux's beat with enable_hangcheck off drops its heartbeat and
+         * queues no other until the next unpark (gt/intel_engine_heartbeat.c
+         * :234-238 and :242-248 in 6.12.115). */
+        gt->hc_next = 0;
+        for (i = 0; i < I915_NUM_ENGINES; i++) {
+            gt->engine[i].hc_armed = 0;
+        }
         i915_gem_unlock(i915, taken);
         return 0;
     }
