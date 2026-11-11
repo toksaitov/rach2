@@ -3,7 +3,7 @@
  *
  * QEMU's filter-dump object writes every frame the guest sends to a libpcap
  * file, so what a machine put on the wire can be judged afterwards, outside
- * the guest, where nothing in the guest can change it. Three checks share
+ * the guest, where nothing in the guest can change it. Four checks share
  * this one reader:
  *
  * `pcapcheck bcast CAPTURE ...` finds evidence of datagram behavior. Its
@@ -24,6 +24,14 @@
  * broadcast destination. It then requires each `--expect` string in the
  * reassembled log, so that a suite can show that the output buffered before
  * the device existed was sent, and refuses each `--reject` string.
+ *
+ * `pcapcheck netconsole-udp CAPTURE --port N [--expect TEXT]...
+ * [--reject TEXT]... [--min-datagrams N]` holds the datagrams the kernel
+ * sends from port 6665 to UDP port N for a target of `netconsole=` to what a
+ * receiver needs: IP and UDP checksums that sum to zero, one source address,
+ * identifications that count up by one, so that the datagrams of a machine
+ * with one IPv4 target are all there and in order, and one whole line in
+ * each. It checks the log they carry as `netconsole` does.
  *
  * `pcapcheck rawwire CAPTURE` checks the two raw-socket facts invisible
  * from inside the machine: the probe's six sends must leave with the hop
@@ -676,6 +684,147 @@ static int cmd_netconsole(int argc, char **argv)
     return 0;
 }
 
+/* ---- netconsole-udp ---- */
+
+/* What `pcapcheck netconsole-udp` gathers from the datagrams to its port. */
+struct nu_log {
+    unsigned char *text; /* the payloads, one after another */
+    size_t len, cap;
+    long datagrams;
+    unsigned char src[4]; /* the first datagram's source address */
+    unsigned next_id;     /* the identification the next datagram must have */
+};
+
+/** Add the `len` bytes at `p` to `log`'s text; 0 when memory ran out. */
+static int nu_append(struct nu_log *log, const unsigned char *p, size_t len)
+{
+    if (log->len + len + 1 > log->cap) {
+        unsigned char *grown;
+
+        log->cap = (log->len + len + 1) * 2;
+        grown = realloc(log->text, log->cap);
+        if (grown == NULL)
+            return 0;
+        log->text = grown;
+    }
+    memcpy(log->text + log->len, p, len);
+    log->len += len;
+    log->text[log->len] = '\0';
+    return 1;
+}
+
+/**
+ * Check one IPv4 frame `f` of `n` bytes, the datagram `index` to the port,
+ * and add its payload to `log`: a header and a UDP checksum that sum to
+ * zero, the UDP field not 0, one source address throughout, an
+ * identification one past the last one's, and a payload that is one record,
+ * a line that ends in its only newline. Returns 0 when memory ran out.
+ */
+static int nu_datagram(struct nu_log *log, const unsigned char *f, uint32_t n, long index)
+{
+    const unsigned char *ip = f + 14, *udp = ip + 20;
+    unsigned char pseudo[12 + 1500];
+    uint32_t total = r16be(ip + 2), ulen = r16be(udp + 4), i;
+
+    if (total + 14 > n || ulen < 8 || ulen + 20 > total || ulen > 1500) {
+        nc_fail("datagram %ld is cut short", index);
+        return 1;
+    }
+    if (ones_complement_sum(ip, 20) != 0)
+        nc_fail("datagram %ld fails its IP header checksum", index);
+    memcpy(pseudo, ip + 12, 8);
+    pseudo[8] = 0;
+    pseudo[9] = IPPROTO_UDP;
+    pseudo[10] = (unsigned char)(ulen >> 8);
+    pseudo[11] = (unsigned char)ulen;
+    memcpy(pseudo + 12, udp, ulen);
+    if (r16be(udp + 6) == 0 || ones_complement_sum(pseudo, 12 + ulen) != 0)
+        nc_fail("datagram %ld fails its UDP checksum", index);
+    if (index == 0)
+        memcpy(log->src, ip + 12, 4);
+    else if (memcmp(log->src, ip + 12, 4) != 0)
+        nc_fail("datagram %ld comes from another address", index);
+    if (index > 0 && r16be(ip + 4) != (log->next_id & 0xFFFF))
+        nc_fail("datagram %ld is not the one after datagram %ld", index, index - 1);
+    log->next_id = r16be(ip + 4) + 1;
+    for (i = 8; i + 1 < ulen && udp[i] != '\n'; i++) {
+        /* find the first newline */
+    }
+    if (ulen == 8 || i + 1 != ulen || udp[i] != '\n')
+        nc_fail("datagram %ld is not one line", index);
+    return nu_append(log, udp + 8, ulen - 8);
+}
+
+/** Fail for each `--expect` text `log` lacks and each `--reject` text it has,
+ * the texts in `argv` as the command took them. */
+static void nu_search(const struct nu_log *log, int argc, char **argv)
+{
+    int i;
+
+    for (i = 0; i + 1 < argc; i++) {
+        int want = strcmp(argv[i], "--expect") == 0;
+
+        if (!want && strcmp(argv[i], "--reject") != 0)
+            continue;
+        if ((strstr((const char *)log->text, argv[i + 1]) != NULL) != want)
+            nc_fail(want ? "the log does not contain '%s'" : "the log contains '%s'", argv[i + 1]);
+        i++;
+    }
+}
+
+/**
+ * `pcapcheck netconsole-udp CAPTURE --port N [--expect TEXT]...
+ * [--reject TEXT]... [--min-datagrams N]`: check the datagrams the kernel
+ * sends from port 6665 to UDP port N for a target of `netconsole=` (see
+ * rach2/sys/network/netconsole.c), each as `nu_datagram` says, and the log
+ * they carry in the order sent, as `netconsole` checks the frames'.
+ */
+static int cmd_netconsole_udp(int argc, char **argv)
+{
+    struct nu_log log = {NULL, 0, 0, 0, {0, 0, 0, 0}, 0};
+    struct pcap pc;
+    const unsigned char *f;
+    uint32_t n;
+    long port = -1, min = 1;
+    int i;
+
+    for (i = 1; i + 1 < argc; i += 2) {
+        if (strcmp(argv[i], "--port") == 0)
+            port = atol(argv[i + 1]);
+        else if (strcmp(argv[i], "--min-datagrams") == 0)
+            min = atol(argv[i + 1]);
+        else if (strcmp(argv[i], "--expect") != 0 && strcmp(argv[i], "--reject") != 0)
+            break;
+    }
+    if (argc < 1 || port < 0 || i != argc) {
+        fprintf(stderr, "usage: pcapcheck netconsole-udp CAPTURE --port N "
+                        "[--expect TEXT ...] [--reject TEXT ...] [--min-datagrams N]\n");
+        return 2;
+    }
+    pcap_open(&pc, argv[0], "pcapcheck: netconsole-udp");
+    nc_fails = 0;
+    if (!nu_append(&log, (const unsigned char *)"", 0))
+        return 2;
+    while ((f = pcap_next(&pc, &n)) != NULL) {
+        if (n < 42 || r16be(f + 12) != ETHERTYPE_IP || f[14] != 0x45 || f[23] != IPPROTO_UDP ||
+            r16be(f + 34) != 6665 || r16be(f + 36) != (uint32_t)port)
+            continue;
+        if (!nu_datagram(&log, f, n, log.datagrams++)) {
+            fprintf(stderr, "pcapcheck: netconsole-udp: out of memory\n");
+            return 2;
+        }
+    }
+    if (log.datagrams < min)
+        nc_fail("only %ld datagrams to port %ld, wanted %ld", log.datagrams, port, min);
+    nu_search(&log, argc - 1, argv + 1);
+    free(log.text);
+    if (nc_fails)
+        return 1;
+    fprintf(stderr, "pcapcheck: netconsole-udp: ok: %ld datagrams, %lu bytes, from %u.%u.%u.%u\n",
+            log.datagrams, (unsigned long)log.len, log.src[0], log.src[1], log.src[2], log.src[3]);
+    return 0;
+}
+
 /* ---- rawwire ---- */
 
 /** `pcapcheck rawwire`: check the hop limits and the kept checksum of the
@@ -756,9 +905,11 @@ int main(int argc, char **argv)
         return cmd_bcast(argc - 2, argv + 2);
     if (argc >= 2 && strcmp(argv[1], "netconsole") == 0)
         return cmd_netconsole(argc - 2, argv + 2);
+    if (argc >= 2 && strcmp(argv[1], "netconsole-udp") == 0)
+        return cmd_netconsole_udp(argc - 2, argv + 2);
     if (argc >= 2 && strcmp(argv[1], "rawwire") == 0)
         return cmd_rawwire(argc - 2, argv + 2);
-    fprintf(stderr, "usage: pcapcheck {bcast|netconsole|rawwire} "
+    fprintf(stderr, "usage: pcapcheck {bcast|netconsole|netconsole-udp|rawwire} "
                     "CAPTURE ...\n");
     return 2;
 }
