@@ -36,49 +36,51 @@ enum vnode_kind {
     VNODE_PROC_MEMINFO,  /* /proc/meminfo: the physical frame pool */
     VNODE_PROC_MOUNTS,   /* /proc/mounts: what was mounted, and how */
     VNODE_PROC_AUDIO,
-    VNODE_PROC_USB,          /* /proc/usb: the USB devices this kernel enumerated */
-    VNODE_PROC_NET_ROUTE,    /* /proc/net/route: the on-link subnet and gateway */
-    VNODE_PROC_NET_ARP,      /* /proc/net/arp: the address cache */
-    VNODE_PROC_NET_TCP,      /* /proc/net/tcp: the connection pool */
-    VNODE_PROC_FILESYSTEMS,  /* /proc/filesystems: what mount(2) accepts */
-    VNODE_PROC_LOOP,         /* /proc/loop: the files attached to devices */
-    VNODE_PROC_INTERRUPTS,   /* /proc/interrupts: the count on each vector */
-    VNODE_PROC_CONSOLE,      /* /proc/console: the serial receive path's counters */
-    VNODE_PROC_EXE,          /* /proc/<pid>/exe: a link to the program's file */
-    VNODE_PROC_TASK_DIR,     /* /proc/<pid>/task: the directory of the threads */
-    VNODE_PROC_CPUINFO,      /* /proc/cpuinfo: what cpuid says of the processor */
-    VNODE_PROC_SYS_DIR,      /* /proc/sys and a directory of its tree */
-    VNODE_PROC_SYS_FILE,     /* a file of /proc/sys: a limit or a name */
-    VNODE_PROC_LOADAVG,      /* /proc/loadavg: the load averages and task counts */
-    VNODE_PROC_NET_FILE,     /* /proc/net's other files, by `procfile` */
-    VNODE_SYS_DIR,           /* /sys and a directory of its tree, by `sysent` and `syskey` */
-    VNODE_SYS_LINK,          /* /sys/bus/{pci,usb}/devices/NAME, a link to the device */
-    VNODE_SYS_FILE,          /* a device's uevent, by `sysent` and `syskey` */
-    VNODE_PROC_CWD,          /* /proc/<pid>/cwd: a link to the working directory */
-    VNODE_PROC_ROOT,         /* /proc/<pid>/root: a link to the root directory */
-    VNODE_PROC_DISKSTATS,    /* /proc/diskstats: the transfers of each disk node */
-    VNODE_PROC_VERSION,      /* /proc/version: the kernel's name and release */
-    VNODE_PROC_PARTITIONS,   /* /proc/partitions: the size of each disk node */
-    VNODE_PROC_VMSTAT,       /* /proc/vmstat: the memory and paging counters */
-    VNODE_PROC_SLABINFO,     /* /proc/slabinfo: the kernel heap's size classes */
-    VNODE_PROC_SWAPS,        /* /proc/swaps: the swap areas, of which there are none */
-    VNODE_PROC_LOCKS,        /* /proc/locks: the advisory file locks held */
-    VNODE_DEV_LINK,          /* /dev/log: a link to the syslog daemon's socket */
-    VNODE_PROC_SYSVIPC_DIR,  /* /proc/sysvipc: the System V objects' directory */
-    VNODE_PROC_SYSVIPC,      /* /proc/sysvipc/{shm,sem,msg}, by `procfile` */
-    VNODE_PROC_NET_STAT_DIR, /* /proc/net/stat: the route and ARP counters' directory */
-    VNODE_PROC_NS_DIR,       /* /proc/<pid>/ns: the links to its namespaces */
-    VNODE_PROC_NS_LINK,      /* /proc/<pid>/ns/<kind>, by `procfd` (proc/ns.h's NS_) */
-    VNODE_PROC_FDINFO_DIR,   /* /proc/<pid>/fdinfo: a file for each descriptor */
-    VNODE_PROC_FDINFO,       /* /proc/<pid>/fdinfo/<n>: its offset and flags, by `procfd` */
-    VNODE_DEV_SUBDIR,        /* /dev/input, /dev/dri: a row of /dev's directories, by `devdir` */
-    VNODE_PROC_ACPI_DIR,     /* /proc/acpi: the directory of call */
-    VNODE_PROC_ACPI_CALL,    /* /proc/acpi/call: an ACPI method evaluated by its path */
-    VNODE_PROC_FS_DIR,       /* /proc/fs: the directory of lockwait */
-    VNODE_PROC_FS_LOCKWAIT,  /* /proc/fs/lockwait: each kind of lock's longest disk wait */
-    VNODE_DEV_MADE,          /* a directory or link root made under /dev, by `syskey` (devtree.h) */
-    VNODE_ENOENT,            /* under a synthetic mount, but no such entry */
-    VNODE_ENOTDIR            /* under a synthetic mount, a non-dir used as a directory */
+    VNODE_PROC_USB,           /* /proc/usb: the USB devices this kernel enumerated */
+    VNODE_PROC_NET_ROUTE,     /* /proc/net/route: the on-link subnet and gateway */
+    VNODE_PROC_NET_ARP,       /* /proc/net/arp: the address cache */
+    VNODE_PROC_NET_TCP,       /* /proc/net/tcp: the connection pool */
+    VNODE_PROC_FILESYSTEMS,   /* /proc/filesystems: what mount(2) accepts */
+    VNODE_PROC_LOOP,          /* /proc/loop: the files attached to devices */
+    VNODE_PROC_INTERRUPTS,    /* /proc/interrupts: the count on each vector */
+    VNODE_PROC_CONSOLE,       /* /proc/console: the serial receive path's counters */
+    VNODE_PROC_EXE,           /* /proc/<pid>/exe: a link to the program's file */
+    VNODE_PROC_TASK_DIR,      /* /proc/<pid>/task: the directory of the threads */
+    VNODE_PROC_CPUINFO,       /* /proc/cpuinfo: what cpuid says of the processor */
+    VNODE_PROC_SYS_DIR,       /* /proc/sys and a directory of its tree */
+    VNODE_PROC_SYS_FILE,      /* a file of /proc/sys: a limit or a name */
+    VNODE_PROC_LOADAVG,       /* /proc/loadavg: the load averages and task counts */
+    VNODE_PROC_NET_FILE,      /* /proc/net's other files, by `procfile` */
+    VNODE_SYS_DIR,            /* /sys and a directory of its tree, by `sysent` and `syskey` */
+    VNODE_SYS_LINK,           /* /sys/bus/{pci,usb}/devices/NAME, a link to the device */
+    VNODE_SYS_FILE,           /* a device's uevent, by `sysent` and `syskey` */
+    VNODE_PROC_CWD,           /* /proc/<pid>/cwd: a link to the working directory */
+    VNODE_PROC_ROOT,          /* /proc/<pid>/root: a link to the root directory */
+    VNODE_PROC_DISKSTATS,     /* /proc/diskstats: the transfers of each disk node */
+    VNODE_PROC_VERSION,       /* /proc/version: the kernel's name and release */
+    VNODE_PROC_PARTITIONS,    /* /proc/partitions: the size of each disk node */
+    VNODE_PROC_VMSTAT,        /* /proc/vmstat: the memory and paging counters */
+    VNODE_PROC_SLABINFO,      /* /proc/slabinfo: the kernel heap's size classes */
+    VNODE_PROC_SWAPS,         /* /proc/swaps: the swap areas, of which there are none */
+    VNODE_PROC_LOCKS,         /* /proc/locks: the advisory file locks held */
+    VNODE_DEV_LINK,           /* /dev/log: a link to the syslog daemon's socket */
+    VNODE_PROC_SYSVIPC_DIR,   /* /proc/sysvipc: the System V objects' directory */
+    VNODE_PROC_SYSVIPC,       /* /proc/sysvipc/{shm,sem,msg}, by `procfile` */
+    VNODE_PROC_NET_STAT_DIR,  /* /proc/net/stat: the route and ARP counters' directory */
+    VNODE_PROC_NS_DIR,        /* /proc/<pid>/ns: the links to its namespaces */
+    VNODE_PROC_NS_LINK,       /* /proc/<pid>/ns/<kind>, by `procfd` (proc/ns.h's NS_) */
+    VNODE_PROC_FDINFO_DIR,    /* /proc/<pid>/fdinfo: a file for each descriptor */
+    VNODE_PROC_FDINFO,        /* /proc/<pid>/fdinfo/<n>: its offset and flags, by `procfd` */
+    VNODE_DEV_SUBDIR,         /* /dev/input, /dev/dri: a row of /dev's directories, by `devdir` */
+    VNODE_PROC_ACPI_DIR,      /* /proc/acpi: the directory of call */
+    VNODE_PROC_ACPI_CALL,     /* /proc/acpi/call: an ACPI method evaluated by its path */
+    VNODE_PROC_FS_DIR,        /* /proc/fs: the directory of lockwait */
+    VNODE_PROC_FS_LOCKWAIT,   /* /proc/fs/lockwait: each kind of lock's longest disk wait */
+    VNODE_PROC_LOCKDEP,       /* /proc/lockdep: the lock-order checker's classes */
+    VNODE_PROC_LOCKDEP_STATS, /* /proc/lockdep_stats: its pools and reports */
+    VNODE_DEV_MADE, /* a directory or link root made under /dev, by `syskey` (devtree.h) */
+    VNODE_ENOENT,   /* under a synthetic mount, but no such entry */
+    VNODE_ENOTDIR   /* under a synthetic mount, a non-dir used as a directory */
 };
 
 /** The name of /proc/<pid>/ns's link of the namespace kind `kind`, NULL
@@ -87,93 +89,97 @@ const char *synth_ns_name(int kind);
 
 /* The files of /proc by their origin: the `procfile` of a classified path,
  * and the origin of the text procfs takes of it at an open. */
-#define SYNTH_PROC_STAT        1
-#define SYNTH_PROC_CMDLINE     2
-#define SYNTH_PROC_BOOTLINE    3
-#define SYNTH_PROC_DISKINFO    4
-#define SYNTH_PROC_NETDEV      5
-#define SYNTH_PROC_UPTIME      6
-#define SYNTH_PROC_STATSYS     7
-#define SYNTH_PROC_MEMINFO     8
-#define SYNTH_PROC_MOUNTS      9
-#define SYNTH_PROC_NETROUTE    10
-#define SYNTH_PROC_NETARP      11
-#define SYNTH_PROC_NETTCP      12
-#define SYNTH_PROC_USB         13
-#define SYNTH_PROC_FILESYSTEMS 14
-#define SYNTH_PROC_LOOP        15
-#define SYNTH_PROC_INTERRUPTS  16
-#define SYNTH_PROC_CONSOLE     17
-#define SYNTH_PROC_AUDIO       18
-#define SYNTH_PROC_MAPS        19
-#define SYNTH_PROC_STATUS      20
-#define SYNTH_PROC_STATM       21
-#define SYNTH_PROC_AUXV        22
-#define SYNTH_PROC_ENVIRON     23
-#define SYNTH_PROC_COMM        24
-#define SYNTH_PROC_MEM         25
-#define SYNTH_PROC_OOM_ADJ     26
-#define SYNTH_PROC_CPUINFO     27
-#define SYNTH_PROC_SYSCTL      28
-#define SYNTH_PROC_PIDMOUNTS   29
-#define SYNTH_PROC_LOADAVG     30
+#define SYNTH_PROC_STAT          1
+#define SYNTH_PROC_CMDLINE       2
+#define SYNTH_PROC_BOOTLINE      3
+#define SYNTH_PROC_DISKINFO      4
+#define SYNTH_PROC_NETDEV        5
+#define SYNTH_PROC_UPTIME        6
+#define SYNTH_PROC_STATSYS       7
+#define SYNTH_PROC_MEMINFO       8
+#define SYNTH_PROC_MOUNTS        9
+#define SYNTH_PROC_NETROUTE      10
+#define SYNTH_PROC_NETARP        11
+#define SYNTH_PROC_NETTCP        12
+#define SYNTH_PROC_USB           13
+#define SYNTH_PROC_FILESYSTEMS   14
+#define SYNTH_PROC_LOOP          15
+#define SYNTH_PROC_INTERRUPTS    16
+#define SYNTH_PROC_CONSOLE       17
+#define SYNTH_PROC_AUDIO         18
+#define SYNTH_PROC_MAPS          19
+#define SYNTH_PROC_STATUS        20
+#define SYNTH_PROC_STATM         21
+#define SYNTH_PROC_AUXV          22
+#define SYNTH_PROC_ENVIRON       23
+#define SYNTH_PROC_COMM          24
+#define SYNTH_PROC_MEM           25
+#define SYNTH_PROC_OOM_ADJ       26
+#define SYNTH_PROC_CPUINFO       27
+#define SYNTH_PROC_SYSCTL        28
+#define SYNTH_PROC_PIDMOUNTS     29
+#define SYNTH_PROC_LOADAVG       30
 /* The files of /proc/net after the first four, SYNTH_PROC_NETUDP to
  * SYNTH_PROC_NETSNMP, SYNTH_PROC_NETPACKET and SYNTH_PROC_NETSNMP6, in the
  * order they are listed (`synth_net_file`). */
-#define SYNTH_PROC_NETUDP      31
-#define SYNTH_PROC_NETRAW      32
-#define SYNTH_PROC_NETUNIX     33
-#define SYNTH_PROC_NETSOCKSTAT 34
-#define SYNTH_PROC_NETSNMP     35
+#define SYNTH_PROC_NETUDP        31
+#define SYNTH_PROC_NETRAW        32
+#define SYNTH_PROC_NETUNIX       33
+#define SYNTH_PROC_NETSOCKSTAT   34
+#define SYNTH_PROC_NETSNMP       35
 /* A device's uevent under /sys, as the origin of its snapshot. */
-#define SYNTH_SYS_UEVENT       36
-#define SYNTH_PROC_SMAPS       37
-#define SYNTH_PROC_DISKSTATS   38
-#define SYNTH_PROC_VERSION     39
-#define SYNTH_PROC_PARTITIONS  40
-#define SYNTH_PROC_LIMITS      41
-#define SYNTH_PROC_MOUNTINFO   42
+#define SYNTH_SYS_UEVENT         36
+#define SYNTH_PROC_SMAPS         37
+#define SYNTH_PROC_DISKSTATS     38
+#define SYNTH_PROC_VERSION       39
+#define SYNTH_PROC_PARTITIONS    40
+#define SYNTH_PROC_LIMITS        41
+#define SYNTH_PROC_MOUNTINFO     42
 /* /proc/sysvipc/shm, sem and msg, in that order (ipc/sysv.h's kinds). */
-#define SYNTH_PROC_SYSVIPC     43
+#define SYNTH_PROC_SYSVIPC       43
 /* /proc/net/stat/rt_cache and arp_cache, two more files of /proc/net by
  * their origin (`synth_net_name`). */
-#define SYNTH_PROC_NETSTAT_RT  46
-#define SYNTH_PROC_NETSTAT_ARP 47
-#define SYNTH_PROC_VMSTAT      48
+#define SYNTH_PROC_NETSTAT_RT    46
+#define SYNTH_PROC_NETSTAT_ARP   47
+#define SYNTH_PROC_VMSTAT        48
 /* /proc/<pid>/uid_map, gid_map and setgroups, of its user namespace. */
-#define SYNTH_PROC_UID_MAP     49
-#define SYNTH_PROC_GID_MAP     50
-#define SYNTH_PROC_SETGROUPS   51
-#define SYNTH_PROC_SLABINFO    52
-#define SYNTH_PROC_SWAPS       53
-#define SYNTH_PROC_LOCKS       54
+#define SYNTH_PROC_UID_MAP       49
+#define SYNTH_PROC_GID_MAP       50
+#define SYNTH_PROC_SETGROUPS     51
+#define SYNTH_PROC_SLABINFO      52
+#define SYNTH_PROC_SWAPS         53
+#define SYNTH_PROC_LOCKS         54
 /* /proc/<pid>/task/<tid>/children, which a thread's directory alone has. */
-#define SYNTH_PROC_CHILDREN    55
-#define SYNTH_PROC_NETPACKET   56
+#define SYNTH_PROC_CHILDREN      55
+#define SYNTH_PROC_NETPACKET     56
 /* /proc/acpi/call, read and written as the ACPI method calls it makes. */
-#define SYNTH_PROC_ACPI_CALL   57
-#define SYNTH_PROC_NETSNMP6    58
+#define SYNTH_PROC_ACPI_CALL     57
+#define SYNTH_PROC_NETSNMP6      58
 /* /proc/net/if_inet6 and ipv6_route, two more of `synth_net_file`'s. */
-#define SYNTH_PROC_NETIFINET6  59
-#define SYNTH_PROC_NETIPV6RT   60
+#define SYNTH_PROC_NETIFINET6    59
+#define SYNTH_PROC_NETIPV6RT     60
 /* /proc/net/tcp6, udp6 and raw6, three more of `synth_net_file`'s. */
-#define SYNTH_PROC_NETTCP6     61
-#define SYNTH_PROC_NETUDP6     62
-#define SYNTH_PROC_NETRAW6     63
+#define SYNTH_PROC_NETTCP6       61
+#define SYNTH_PROC_NETUDP6       62
+#define SYNTH_PROC_NETRAW6       63
 /* /proc/net/netstat, the last of `synth_net_file`'s. */
-#define SYNTH_PROC_NETNETSTAT  64
-#define SYNTH_PROC_NETWIRELESS 65
+#define SYNTH_PROC_NETNETSTAT    64
+#define SYNTH_PROC_NETWIRELESS   65
 /* /proc/fs/lockwait, the record of the sleeping locks (fs/sleeplock.h). */
-#define SYNTH_PROC_LOCKWAIT    66
+#define SYNTH_PROC_LOCKWAIT      66
 /* /proc/<pid>/numa_maps, each region's memory policy and pages by node. */
-#define SYNTH_PROC_NUMA_MAPS   67
+#define SYNTH_PROC_NUMA_MAPS     67
 /* /proc/<pid>/syscall and wchan, the call and the function a thread sleeps
  * in. */
-#define SYNTH_PROC_SYSCALL     68
-#define SYNTH_PROC_WCHAN       69
+#define SYNTH_PROC_SYSCALL       68
+#define SYNTH_PROC_WCHAN         69
 /* /proc/<pid>/schedstat, the thread's run time, its wait for a processor
  * and its switches onto one. */
-#define SYNTH_PROC_SCHEDSTAT   70
+#define SYNTH_PROC_SCHEDSTAT     70
+/* /proc/lockdep and /proc/lockdep_stats, in the lock-order checker's build
+ * alone (lib/lockdep.h). */
+#define SYNTH_PROC_LOCKDEP       71
+#define SYNTH_PROC_LOCKDEP_STATS 72
 
 /* The pid of /proc/self and /dev/fd, which procfs takes as the caller's
  * (`procfs_resolve_pid`). */

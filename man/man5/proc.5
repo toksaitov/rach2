@@ -391,6 +391,38 @@ A wait for a lock has no line.
 util-linux's
 .Xr lslocks 8
 reads it.
+.It Pa /proc/lockdep
+In the kernel built with the lock-order checker,
+.Ql make rach2-lockdep ,
+alone: each lock class the checker has seen, in Linux's form:
+.Bd -literal -offset indent
+all lock classes:
+0xKEY FD: 2 BD: 1 +.: NAME
+ -> NAME2
+.Ed
+.Pp
+KEY is the address that keys the class, the lock's own for a static lock
+and its init site's for a lock in an allocated record;
+FD and BD count the orders from and to it;
+.Ql +
+in the first mark says it was taken in an interrupt and
+.Ql \-
+in the second that it was held with interrupts on;
+NAME is the lock's name, with
+.Ql / Ns Ar N
+after it for subclass N.
+A line
+.Ql -> NAME2
+follows for each class taken while it was held.
+The text stops at 128 KiB.
+.It Pa /proc/lockdep_stats
+In the same kernel alone: the classes, orders and chains the checker holds
+against the size of each pool, the reports made and those not made because
+none more could be kept, and
+.Ql checking: on ,
+or
+.Ql checking: off:
+and the pool whose filling stopped the checker.
 .It Pa /proc/swaps
 Linux's header line and no line under it, since the kernel swaps nothing
 and has no

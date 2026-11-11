@@ -778,6 +778,10 @@ static int synth_global_file(struct comp name)
                  {"audio", VNODE_PROC_AUDIO},
                  {"usb", VNODE_PROC_USB},
                  {"filesystems", VNODE_PROC_FILESYSTEMS},
+#ifdef RACH2_LOCKDEP
+                 {"lockdep", VNODE_PROC_LOCKDEP},
+                 {"lockdep_stats", VNODE_PROC_LOCKDEP_STATS},
+#endif
                  {"loop", VNODE_PROC_LOOP}};
     unsigned i;
 

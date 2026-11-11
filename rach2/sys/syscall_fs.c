@@ -3023,7 +3023,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
         return procfs_resolve_id(vp) < 0 ? -ENOENT
                                          : procfs_open_ns(procfs_resolve_id(vp), vp->procfd, flags);
     default:
-        return -ENOENT;
+        return procfs_ino_global(vp->kind) ? procfs_open(vp, flags) : -ENOENT;
     }
 }
 
@@ -8657,8 +8657,6 @@ static int32_t synth_stat_node(const struct vpath *vp, struct kstat *kst, int fo
         kst->st_mode = S_IFDIR | 0555;
         kst->st_ino = procfs_ino_fsdir();
         return 0;
-    case VNODE_PROC_FS_LOCKWAIT:
-        return synth_proc_stat(kst, procfs_ino_lockwait());
     case VNODE_SYS_DIR:
     case VNODE_SYS_LINK:
     case VNODE_SYS_FILE:
@@ -8789,7 +8787,8 @@ static int32_t synth_stat_node(const struct vpath *vp, struct kstat *kst, int fo
     case VNODE_ENOTDIR:
         return -ENOTDIR;
     default:
-        return -ENOENT;
+        return procfs_ino_global(vp->kind) ? synth_proc_stat(kst, procfs_ino_global(vp->kind))
+                                           : -ENOENT;
     }
 }
 
@@ -17815,6 +17814,43 @@ static int synth_dev_any_dirent(int row, int made, int n, char *name, uint64_t *
     return 1;
 }
 
+/* The entries of /proc before its processes: name, inode and type. */
+static const struct {
+    const char *name;
+    uint32_t (*inode)(void);
+    uint8_t type;
+} synth_proc_globals[] = {{"cmdline", procfs_ino_cmdline, DT_REG},
+                          {"disk", procfs_ino_disk, DT_REG},
+                          {"uptime", procfs_ino_uptime, DT_REG},
+                          {"stat", procfs_ino_statsys, DT_REG},
+                          {"meminfo", procfs_ino_meminfo, DT_REG},
+                          {"cpuinfo", procfs_ino_cpuinfo, DT_REG},
+                          {"loadavg", procfs_ino_loadavg, DT_REG},
+                          {"diskstats", procfs_ino_diskstats, DT_REG},
+                          {"version", procfs_ino_version, DT_REG},
+                          {"partitions", procfs_ino_partitions, DT_REG},
+                          {"vmstat", procfs_ino_vmstat, DT_REG},
+                          {"slabinfo", procfs_ino_slabinfo, DT_REG},
+                          {"swaps", procfs_ino_swaps, DT_REG},
+                          {"locks", procfs_ino_locks, DT_REG},
+#ifdef RACH2_LOCKDEP
+                          {"lockdep", procfs_ino_lockdep, DT_REG},
+                          {"lockdep_stats", procfs_ino_lockdep_stats, DT_REG},
+#endif
+                          {"mounts", procfs_ino_mounts, DT_REG},
+                          {"net", procfs_ino_netdir, DT_DIR},
+                          {"sysvipc", procfs_ino_sysvipcdir, DT_DIR},
+                          {"acpi", procfs_ino_acpidir, DT_DIR},
+                          {"fs", procfs_ino_fsdir, DT_DIR},
+                          {"sys", procfs_ino_sysdir, DT_DIR},
+                          {"self", procfs_ino_dir, DT_LNK},
+                          {"usb", procfs_ino_usb, DT_REG},
+                          {"loop", procfs_ino_loop, DT_REG},
+                          {"console", procfs_ino_console, DT_REG},
+                          {"audio", procfs_ino_audio, DT_REG},
+                          {"interrupts", procfs_ino_interrupts, DT_REG},
+                          {"filesystems", procfs_ino_filesystems, DT_REG}};
+
 /**
  * The entry at position `*pos` of a synthetic directory, from the directory
  * descriptor's record `sd`, its kind, pid and tid: fills name/ino/dtype and
@@ -17924,46 +17960,15 @@ static int synth_dirent_at(const struct synth_dir *sd, int *pos, char *name, uin
         return synth_net_dirent(kind == VNODE_PROC_NET_STAT_DIR, n, name, ino, dtype);
     }
     if (kind == VNODE_PROC_DIR) {
-        static const struct {
-            const char *name;
-            uint32_t (*inode)(void);
-            uint8_t type;
-        } globals[] = {{"cmdline", procfs_ino_cmdline, DT_REG},
-                       {"disk", procfs_ino_disk, DT_REG},
-                       {"uptime", procfs_ino_uptime, DT_REG},
-                       {"stat", procfs_ino_statsys, DT_REG},
-                       {"meminfo", procfs_ino_meminfo, DT_REG},
-                       {"cpuinfo", procfs_ino_cpuinfo, DT_REG},
-                       {"loadavg", procfs_ino_loadavg, DT_REG},
-                       {"diskstats", procfs_ino_diskstats, DT_REG},
-                       {"version", procfs_ino_version, DT_REG},
-                       {"partitions", procfs_ino_partitions, DT_REG},
-                       {"vmstat", procfs_ino_vmstat, DT_REG},
-                       {"slabinfo", procfs_ino_slabinfo, DT_REG},
-                       {"swaps", procfs_ino_swaps, DT_REG},
-                       {"locks", procfs_ino_locks, DT_REG},
-                       {"mounts", procfs_ino_mounts, DT_REG},
-                       {"net", procfs_ino_netdir, DT_DIR},
-                       {"sysvipc", procfs_ino_sysvipcdir, DT_DIR},
-                       {"acpi", procfs_ino_acpidir, DT_DIR},
-                       {"fs", procfs_ino_fsdir, DT_DIR},
-                       {"sys", procfs_ino_sysdir, DT_DIR},
-                       {"self", procfs_ino_dir, DT_LNK},
-                       {"usb", procfs_ino_usb, DT_REG},
-                       {"loop", procfs_ino_loop, DT_REG},
-                       {"console", procfs_ino_console, DT_REG},
-                       {"audio", procfs_ino_audio, DT_REG},
-                       {"interrupts", procfs_ino_interrupts, DT_REG},
-                       {"filesystems", procfs_ino_filesystems, DT_REG}};
-        int count = (int)(sizeof(globals) / sizeof(globals[0]));
+        int count = (int)(sizeof(synth_proc_globals) / sizeof(synth_proc_globals[0]));
 
         if (n < count) {
             int i;
-            for (i = 0; globals[n].name[i] != '\0'; i++)
-                name[i] = globals[n].name[i];
+            for (i = 0; synth_proc_globals[n].name[i] != '\0'; i++)
+                name[i] = synth_proc_globals[n].name[i];
             name[i] = '\0';
-            *dtype = globals[n].type;
-            *ino = globals[n].inode();
+            *dtype = synth_proc_globals[n].type;
+            *ino = synth_proc_globals[n].inode();
             return 1;
         }
         {
