@@ -101,19 +101,30 @@ static unsigned slurp(const char *path)
     return got;
 }
 
+/** The `struct timespec` of nanosleep(2). */
+struct timespec_probe {
+    long tv_sec;
+    long tv_nsec;
+};
+
 /** Sleep `seconds` with the watchdog left to the kernel. */
 static void fed(const char *seconds)
 {
-    struct {
-        long sec, nsec;
-    } ts = {0, 0};
+    struct timespec_probe ts;
     unsigned char st[KSTAT_SIZE];
     const char *p;
+    unsigned i;
 
-    for (p = seconds; *p >= '0' && *p <= '9'; p++) {
-        ts.sec = ts.sec * 10 + (*p - '0');
+    for (i = 0; i < sizeof(st); i++) {
+        st[i] = 0;
     }
-    if (syscall2(SYS_STAT, (long)"/sys/fs/pstore", (long)st) != 0) {
+    ts.tv_sec = 0;
+    ts.tv_nsec = 0;
+    for (p = seconds; *p >= '0' && *p <= '9'; p++) {
+        ts.tv_sec = ts.tv_sec * 10 + (*p - '0');
+    }
+    if (syscall2(SYS_STAT, (long)"/sys/fs/pstore", (long)st) != 0 ||
+        (st[KSTAT_MODE + 1] & 0xf0) != 0x40) {
         fail("no /sys/fs/pstore");
     }
     /* interval: the kernel alone feeds the TCO for three heartbeats */

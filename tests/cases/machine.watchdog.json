@@ -325,7 +325,7 @@
       "timing": [
         {
           "kind": "injected_delay",
-          "where": "tests/pstoreprobe.c:120",
+          "where": "tests/pstoreprobe.c:131",
           "assumes": "the guest sleeps 15 s by its own clock, three heartbeats of 5 s, so a kernel that did not feed the TCO would be reset first; the result depends on the guest's clock and the TCO's count, never on the host's",
           "uncertainty_us": null
         }

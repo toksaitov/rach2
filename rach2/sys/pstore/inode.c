@@ -239,7 +239,8 @@ static int ps_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, str
         (*cursor)++;
         return 1;
     }
-    for (f = files, i = 2; f && i < *cursor; f = f->next) {
+    i = 2;
+    for (f = files; f && i < *cursor; f = f->next) {
         i++;
     }
     if (!f) {
