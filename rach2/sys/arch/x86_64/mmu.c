@@ -22,6 +22,7 @@
 #include "../../mm/heap.h"
 #include "../../mm/paging.h"
 #include "../../lib/kstring.h"
+#include "../../proc/sched.h"
 
 pte_t mmu_nx;
 
@@ -535,7 +536,10 @@ static pte_t *entry_table(pte_t e)
  * reference and its entry; a PROT_NONE page counts, though it has no user
  * bit. An entry naming frame 0 is corrupt and is cleared without touching a
  * frame. No other processor translates through `dir` (`smp_space_release`),
- * so the pages are flushed once, at the end. The tables stay, for
+ * so the pages are flushed once, at the end. The walk gives way after each
+ * leaf table, 512 pages, as Linux's zap_pmd_range calls cond_resched after
+ * each PMD entry (mm/memory.c:1740); `dir` is unreachable then (paging.h),
+ * so the pointers into it stay valid. The tables stay, for
  * `free_page_directory`.
  */
 void free_user_pages(page_dir_t *dir)
@@ -579,6 +583,7 @@ void free_user_pages(page_dir_t *dir)
                     pt[i1] = 0;
                     changed = 1;
                 }
+                sched_give_way();
             }
         }
     }
@@ -590,7 +595,9 @@ void free_user_pages(page_dir_t *dir)
 /**
  * The PML4 and its lower half's tables go back to the allocator; the upper
  * half's tables are the kernel's and stay. The kernel's directory and the
- * one in use are left in place: a caller switches to another first.
+ * one in use are left in place: a caller switches to another first. The
+ * walk gives way after each page directory's tables, at most 512, as
+ * `free_user_pages` does after each table.
  */
 void free_page_directory(page_dir_t *dir)
 {
@@ -619,6 +626,7 @@ void free_page_directory(page_dir_t *dir)
                 }
             }
             frame_unref(PTE_ADDR(pdpt[i3]));
+            sched_give_way();
         }
         frame_unref(PTE_ADDR(dir->entries[i4]));
         dir->entries[i4] = 0;

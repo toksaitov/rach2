@@ -936,6 +936,10 @@ uint32_t fpu_pkru(void)
     return 0;
 }
 
+/** Nothing: one thread has no one to give way to. */
+void sched_give_way(void)
+{}
+
 /** Run every row; 0 when each passes, 1 otherwise. */
 int main(void)
 {
