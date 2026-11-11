@@ -385,9 +385,9 @@ void platform_pmu_handled(void)
  * overflow, and on AMD the overflow is seen late, which Linux allows for by
  * claiming every NMI of no known source for 100 ms after a handled overflow
  * (arch/x86/events/amd/core.c:856-889, 1420, `perf_nmi_window`), which
- * `platform_pmu_handled` opens. The same
- * window here follows each arming and stop of the counter, on Intel too,
- * whose global status the arming clears.
+ * `platform_pmu_handled` opens. The same window here follows each arming
+ * and stop of the counter, on Intel too, whose global status the arming
+ * clears.
  */
 int platform_pmu_late(void)
 {
