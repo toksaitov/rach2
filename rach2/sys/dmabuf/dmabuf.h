@@ -52,15 +52,33 @@ void dma_buf_put(struct dma_buf *buf);
 int32_t dma_buf_fd(struct dma_buf *buf, uint32_t flags);
 /** Get a referenced buffer from the caller's descriptor, or NULL. */
 struct dma_buf *dma_buf_get(int32_t fd);
-/** Release every reservation slot and its storage; big kernel lock held. */
+/** Make an empty reservation with its lock; for a record made zeroed too. */
+void dma_resv_init(struct dma_resv *resv);
+/** Take and give back a reservation's lock (`struct dma_resv`); the take
+ * may sleep. */
+void dma_resv_lock(struct dma_resv *resv);
+void dma_resv_unlock(struct dma_resv *resv);
+/** Release every reservation slot and its storage, for its last user. */
 void dma_resv_fini(struct dma_resv *resv);
-/** Add a read fence, or join outstanding writers. 0 or -ENOMEM.
- * The reservation takes its own reference; does not sleep. */
+/** Add a read fence, or join outstanding writers. 0 or -ENOMEM. The
+ * reservation takes its own reference. The `_locked` form is called with
+ * the lock held, the other takes it. */
 int32_t dma_resv_add_fence(struct dma_resv *resv, struct dma_fence *fence, int write);
+int32_t dma_resv_add_fence_locked(struct dma_resv *resv, struct dma_fence *fence, int write);
 /** Snapshot the write fence and, for write access, the readers too.
  * Return a referenced fence (signalled for no work), or NULL on allocation
- * failure. Does not sleep; the caller holds the big kernel lock. */
+ * failure. The `_locked` form is called with the lock held, the other
+ * takes it. */
 struct dma_fence *dma_resv_snapshot(struct dma_resv *resv, int write);
+struct dma_fence *dma_resv_snapshot_locked(struct dma_resv *resv, int write);
+/** The fences of the reservation, each with a reference, in an array the
+ * caller gives to `dma_resv_put_fences`: the write fence or NULL first,
+ * then with `all` every read fence; 0 or -ENOMEM. Takes the lock. */
+int32_t dma_resv_get_fences(struct dma_resv *resv, int all, struct dma_fence ***fences,
+                            uint32_t *count);
+void dma_resv_put_fences(struct dma_fence **fences, uint32_t count);
+/** The write fence with a reference, or NULL. Takes the lock. */
+struct dma_fence *dma_resv_get_write(struct dma_resv *resv);
 /** Merge fences into one referenced all-of fence, or NULL on allocation
  * failure. Inputs are borrowed; nested arrays are flattened. */
 struct dma_fence *dma_fence_merge(struct dma_fence **fences, uint32_t count);

@@ -9,6 +9,7 @@
 #include "i915_drm.h"
 #include "i915_reg.h"
 
+#include "../../dmabuf/dmabuf.h"
 #include "../../klog.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/kirq.h"
@@ -415,17 +416,18 @@ static void scanout_rotate(struct intel_crtc *c, int slot, struct intel_scanout 
 static void flip_boost(struct intel_crtc *c, const struct drm_plane_state *ps)
 {
     struct drm_framebuffer *fb = ps->fb;
-    struct dma_fence *f = ps->fence;
+    struct dma_fence *f = dma_fence_get(ps->fence);
 
     if (!f) {
         if (fb_is_firmware(fb) || fb->obj[0]->funcs != &i915_gem_object_funcs) {
             return;
         }
-        f = fb->obj[0]->resv->write;
+        f = dma_resv_get_write(fb->obj[0]->resv);
     }
     if (f && !dma_fence_is_signaled(f)) {
         intel_crtc_boost_after_vblank(c, f);
     }
+    dma_fence_put(f);
 }
 
 /**

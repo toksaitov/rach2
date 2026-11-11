@@ -2085,18 +2085,26 @@ static int32_t implicit_fences(struct drm_atomic_state *state)
         n = 0;
         for (j = 0; j < 4; j++) {
             struct drm_gem_object *obj = ps->fb->obj[j];
-            struct dma_fence *f = obj ? obj->resv->write : NULL;
+            struct dma_fence *f = obj ? dma_resv_get_write(obj->resv) : NULL;
 
             for (k = 0; f && k < n && w[k] != f; k++) {
             }
             if (f && k == n) {
                 w[n++] = f;
+            } else {
+                dma_fence_put(f);
             }
         }
         if (n == 1) {
-            ps->fence = dma_fence_get(w[0]);
-        } else if (n > 1 && !(ps->fence = dma_fence_merge(w, (uint32_t)n))) {
-            return -ENOMEM;
+            ps->fence = w[0];
+        } else if (n > 1) {
+            ps->fence = dma_fence_merge(w, (uint32_t)n);
+            for (k = 0; k < n; k++) {
+                dma_fence_put(w[k]);
+            }
+            if (!ps->fence) {
+                return -ENOMEM;
+            }
         }
     }
     return 0;
