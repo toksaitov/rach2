@@ -4459,7 +4459,7 @@
       "behavior": "the x86-64 kernel built with IA32=0 links and has none of the i386 ABI's symbols that the default kernel has, and both keep the x86-64 calls of the descriptor tables and the entry that refuses a `syscall` from 32-bit code",
       "units": [
         "host",
-        "`tests/cases/host/pure64check.c`: the symbol tables of build/x86_64/rach2-pure64/kernel and build/x86_64/rach2/kernel"
+        "`tests/cases/host/pure64check.c`: the symbol tables of build/x86_64/rach2-pure64/kernel.debug and build/x86_64/rach2/kernel.debug"
       ],
       "domain": "host",
       "architectures": [
@@ -4542,12 +4542,12 @@
         },
         {
           "name": "pure64-kernel",
-          "node": "rach2-pure64/kernel",
+          "node": "rach2-pure64/kernel.debug",
           "per_architecture": true
         },
         {
           "name": "kernel",
-          "node": "rach2/kernel",
+          "node": "rach2/kernel.debug",
           "per_architecture": true
         }
       ],
