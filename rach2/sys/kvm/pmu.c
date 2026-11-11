@@ -1242,7 +1242,7 @@ static uint64_t all_counters(void)
 
 /**
  * The physical counters Intel's event `select` may run on, as Linux's
- * `x86_get_event_constraints` (arch/x86/events/intel/core.c:3424-3441)
+ * `x86_get_event_constraints` (arch/x86/events/intel/core.c:3425-3442)
  * reads the model's table, with a fixed row widened to the general
  * counters unless its code is a pseudo-encoding
  * (arch/x86/events/intel/core.c:6343-6361), and the TSX-checkpoint rule of
