@@ -175,9 +175,11 @@ void platform_pmu_disable(void);
 
 /**
  * In the NMI handler: 1 when this processor's counter raised the NMI, which
- * it acknowledges, loads again and unmasks; 0 otherwise, for an NMI of
- * another source. `*due` is set to 1 when the whole period passed, 0 when a
- * part of a wide one did.
+ * it acknowledges and loads again; 0 otherwise, for an NMI of another
+ * source or a late one. `*due` is set to 1 when the whole period passed, 0
+ * when a part of a wide one did. The counter's APIC entry is unmasked on
+ * every call while the counter runs, overflow or not, since a late NMI
+ * masked it too.
  */
 int platform_pmu_overflow(int *due);
 
