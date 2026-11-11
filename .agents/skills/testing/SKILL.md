@@ -25,7 +25,7 @@ When each check runs, and in what order with the reviews, is in the Testing sect
 
 * KVM works in WSL, nested under Hyper-V: kvm_amd has `nested=1` and the accounts are in the `kvm` group. A guest inside a KVM guest is slow on every exit (Linux boots in 60 to 71 s there against 2.9 s under TCG), so a third-level guest runs under TCG.
 * Rach2's own suites run under TCG there, which `RACH2_QEMU_ACCEL=tcg` in each account's `.bashrc` and in `tools/dev/testing.sh run` chooses. A graphics suite runs under KVM: put `RACH2_QEMU_ACCEL=kvm` in its run's own command, since under TCG llvmpipe and lavapipe run some 30 times slower and Wine's rows lose their desktop.
-* The accounts are in the `render` group. WSL's kernel has no `CONFIG_UDMABUF`, so Venus over lavapipe in a guest there stops at Vulkan 1.2 with no swapchain.
+* The accounts are in the `render` group. WSL's kernel has no `CONFIG_UDMABUF`, so Venus over lavapipe in a guest there stops at Vulkan 1.2 with no swapchain unless root has loaded the module with `tools/setup/wsl-udmabuf/load.sh` since WSL last started (tools/Readme.md). Before a run with a Venus row, check that `/dev/udmabuf` exists.
 * `vm.compaction_proactiveness` must read 20, as `/etc/sysctl.d/60-rach2-compaction.conf` sets; after WSL restarts, read it, since a boot with Docker Desktop has left it at 0.
 
 ## Running
