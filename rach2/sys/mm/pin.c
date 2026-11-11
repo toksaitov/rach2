@@ -73,12 +73,11 @@ static int pin_file_listed(struct vm_file *const *files, uint32_t n, const struc
  * once, in `pin`, as Linux's pin holds a page cache folio: the file's pages
  * in memory, among them the frames pinned, go with its last mapping
  * (`filemap_disk_shared`), and a pin kept past the end of `mm` would then
- * hold frames that a later write(2) of the file no longer reaches and
- * whose device writes no write-back takes to the file. Held, the mapping
- * keeps its pages, the file's descriptor writes reach them, and its release
- * at `unpin` writes them back. The ranges of the regions met cannot change
- * without an unmap, which takes the pin back. Does not sleep. 0, or -ENOMEM
- * with nothing held.
+ * hold frames that a later write(2) of the file no longer reaches. Held,
+ * the mapping keeps its pages, the file's descriptor writes reach them, and
+ * its release after `unpin` writes back what the process stored in them.
+ * The ranges of the regions met cannot change without an unmap, which
+ * takes the pin back. Does not sleep. 0, or -ENOMEM with nothing held.
  */
 static int pin_keep_files(struct pin *pin, struct mm *mm, uintptr_t start, uintptr_t end)
 {
@@ -99,6 +98,23 @@ static int pin_keep_files(struct pin *pin, struct mm *mm, uintptr_t start, uintp
         if (filemap_disk_pages(r->file) && !pin_file_listed(pin->files, pin->nfiles, r->file)) {
             vm_file_get(r->file);
             pin->files[pin->nfiles++] = r->file;
+        }
+    }
+    return 0;
+}
+
+/** Whether [start, end) of `mm` meets a writable shared mapping of a disk
+ * file, whose pages writeback finds dirty by their table entries, so that
+ * a device's stores through a long-term pin would never reach the file:
+ * Linux's writable_file_mapping_allowed refuses such a pin. Does not
+ * sleep. */
+static int pin_meets_tracked_file(struct mm *mm, uintptr_t start, uintptr_t end)
+{
+    const vma_t *r;
+
+    for (r = vm_lower(&mm->vm, start); r && r->start < end; r = vm_next(r)) {
+        if ((r->prot & VM_PROT_WRITE) && filemap_disk_pages(r->file)) {
+            return 1;
         }
     }
     return 0;
@@ -175,8 +191,9 @@ static void pin_start(struct pin *pin, struct mm *mm, uintptr_t start, uintptr_t
 }
 
 /** The record is made before the pages are brought in, which may sleep, and
- * the charge is checked again after, since another thread of the address
- * space may have pinned meanwhile. */
+ * the charge and the regions a long-term write pin refuses are checked
+ * again after, since another thread of the address space may have pinned
+ * or mapped meanwhile. */
 int pin_user(struct mm *mm, uintptr_t addr, uintptr_t len, uint32_t flags,
              const struct pin_holder *holder, struct pin **out)
 {
@@ -200,6 +217,10 @@ int pin_user(struct mm *mm, uintptr_t addr, uintptr_t len, uint32_t flags,
     if (pages != (uint32_t)pages) {
         return -ENOMEM; /* more than a record counts */
     }
+    if ((flags & (PIN_LONGTERM | PIN_WRITE)) == (PIN_LONGTERM | PIN_WRITE) &&
+        pin_meets_tracked_file(mm, start, end)) {
+        return -EFAULT;
+    }
     rc = pin_new((flags & PIN_IO) ? NULL : mm, (uint32_t)pages, holder, &pin);
     if (rc != 0) {
         return rc;
@@ -210,15 +231,22 @@ int pin_user(struct mm *mm, uintptr_t addr, uintptr_t len, uint32_t flags,
     } else {
         rc = paging_pin_range(mm, start, end, flags & (PIN_WRITE | PIN_SLOW), pin->frames);
     }
-    if (rc == 0 && ((pin->ram_pages != 0 && !mem_lock_room(mm->pinned, pin->ram_pages)) ||
-                    (holder && (holder->flags & PIN_KEEP_PAST_END) &&
-                     pin_keep_files(pin, mm, start, end) != 0))) {
-        uint32_t i;
-
-        for (i = 0; i < pin->count; i++) {
-            frame_unpin(pin->frames[i]);
+    if (rc == 0) {
+        if ((flags & (PIN_LONGTERM | PIN_WRITE)) == (PIN_LONGTERM | PIN_WRITE) &&
+            pin_meets_tracked_file(mm, start, end)) {
+            rc = -EFAULT;
+        } else if ((pin->ram_pages != 0 && !mem_lock_room(mm->pinned, pin->ram_pages)) ||
+                   (holder && (holder->flags & PIN_KEEP_PAST_END) &&
+                    pin_keep_files(pin, mm, start, end) != 0)) {
+            rc = -ENOMEM;
         }
-        rc = -ENOMEM;
+        if (rc != 0) {
+            uint32_t i;
+
+            for (i = 0; i < pin->count; i++) {
+                frame_unpin(pin->frames[i]);
+            }
+        }
     }
     if (rc != 0) {
         kfree(pin->frames);
@@ -262,18 +290,12 @@ int pin_frames(struct mm *mm, const uintptr_t *frames, uint32_t count,
 
 void unpin(struct pin *pin)
 {
-    int held;
-
     if (!pin) {
         return;
     }
-    held = pin->nfiles != 0;
     pin_drop(pin);
     kfree(pin->frames);
     kfree(pin);
-    if (held) {
-        vm_file_reap();
-    }
 }
 
 int pin_live(const struct pin *pin)

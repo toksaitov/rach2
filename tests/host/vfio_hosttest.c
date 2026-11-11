@@ -625,6 +625,7 @@ int pin_user(struct mm *mm, uintptr_t addr, uintptr_t len, uint32_t flags,
     CHECK((flags & PIN_IO) != 0, "VFIO accepts device pages beside pinned RAM");
     CHECK(holder->flags == PIN_KEEP_PAST_END,
           "VFIO keeps a mapping of RAM past the end of the address space");
+    CHECK((flags & PIN_LONGTERM) != 0, "VFIO's pin is long-term, as FOLL_LONGTERM");
     if (addr == 0) {
         return -EFAULT;
     }
@@ -643,6 +644,10 @@ void unpin(struct pin *pin)
     free(pin);
     pins--;
 }
+
+/** The model's pins hold no file, so there is none to release. */
+void vm_file_reap(void)
+{}
 
 int pin_live(const struct pin *pin)
 {

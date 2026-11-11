@@ -14,6 +14,7 @@
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
+#include "../mm/vm.h"
 #include "../mm/usercopy.h"
 
 #define PAGE_4K 0x1000ull
@@ -93,7 +94,10 @@ static int group_attach_devices(struct vfio_container *c, struct vfio_group *g)
 }
 
 /** Remove the mapping `dma` from the domain and from `c`'s list, unpin
- * its pages and free it. */
+ * its pages and free it. Does not sleep, so that a walk of the list or a
+ * release of the container stays whole under the big kernel lock, as
+ * Linux's Type1 holds iommu->lock across its unpin: a mapping file the pin
+ * held waits for `vm_file_reap`, which the operation runs at its end. */
 static void dma_remove(struct vfio_container *c, struct vfio_dma *dma)
 {
     struct vfio_dma **pp;
@@ -157,7 +161,9 @@ int vfio_container_attach(struct vfio_container *c, struct vfio_group *g)
 }
 
 /** Take `g` out of its container. The last group out releases the driver,
- * as on Linux, and frees a container whose descriptor is closed. */
+ * as on Linux, and frees a container whose descriptor is closed. The
+ * mapped files the pins held are released last, once nothing here uses
+ * the container. */
 void vfio_container_detach(struct vfio_group *g)
 {
     struct vfio_container *c = g->container;
@@ -179,6 +185,7 @@ void vfio_container_detach(struct vfio_group *g)
         type1_release(c);
     }
     container_maybe_free(c);
+    vm_file_reap();
 }
 
 /** The last close of a container's descriptor; the groups in it keep it. */
@@ -190,6 +197,7 @@ static void container_close(fd_entry_t *e)
     if (c != NULL) {
         c->fd_open = 0;
         container_maybe_free(c);
+        vm_file_reap();
     }
 }
 
@@ -461,7 +469,10 @@ static int32_t map_check(const struct vfio_container *c, const struct vfio_iommu
 }
 
 /** VFIO_IOMMU_MAP_DMA: pin the caller's [vaddr, vaddr + size) and map it at
- * [iova, iova + size) with the access the flags give. */
+ * [iova, iova + size) with the access the flags give. The pin may sleep,
+ * and another thread may meanwhile map the same IOVA or take the last
+ * group out, which releases the driver, so the checks run again after it,
+ * as Linux's Type1 makes them all under iommu->lock. */
 static int32_t map_dma(struct vfio_container *c, uintptr_t arg)
 {
     struct vfio_iommu_type1_dma_map m;
@@ -492,16 +503,21 @@ static int32_t map_dma(struct vfio_container *c, uintptr_t arg)
     dma->holder.owner = dma;
     dma->holder.flags = PIN_KEEP_PAST_END;
     r = pin_user(vfio_hw_mm(), (uintptr_t)m.vaddr, (uintptr_t)m.size,
-                 PIN_IO | PIN_SLOW | ((m.flags & VFIO_DMA_MAP_FLAG_WRITE) ? PIN_WRITE : 0u),
+                 PIN_IO | PIN_SLOW | PIN_LONGTERM |
+                     ((m.flags & VFIO_DMA_MAP_FLAG_WRITE) ? PIN_WRITE : 0u),
                  &dma->holder, &dma->pin);
     if (r == 0) {
-        r = dma_map_pages(c, dma);
+        r = c->iommu_type == 0 ? -EINVAL : map_check(c, &m);
+        if (r == 0) {
+            r = dma_map_pages(c, dma);
+        }
         if (r != 0) {
             unpin(dma->pin);
         }
     }
     if (r != 0) {
         kfree(dma);
+        vm_file_reap();
         return r;
     }
     for (pp = &c->dmas; *pp != NULL && (*pp)->iova < dma->iova; pp = &(*pp)->next) {
@@ -554,6 +570,7 @@ static int32_t unmap_dma(struct vfio_container *c, uintptr_t arg)
             dma_remove(c, dma);
         }
     }
+    vm_file_reap();
     u.size = done;
     return copy_to_user((void __user *)arg, &u, sizeof(u)) != 0 ? -EFAULT : 0;
 }
