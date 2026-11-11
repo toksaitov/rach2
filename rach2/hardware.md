@@ -39,7 +39,7 @@ The interrupt controllers are the 8259 pair and, where the MADT lists one, the I
 
 | Watchdog | Chipsets | Interface |
 | --- | --- | --- |
-| Intel TCO, version 2 | ICH9 and Lynx Point-LP above | [watchdog(4)](../man/man4/watchdog.4), armed by an open of `/dev/watchdog`, or at boot by `rach2.itco.arm` and then fed from the tick until opened; 0.6-second ticks, 3 to 614 seconds per programmed countdown |
+| Intel TCO, version 2 | ICH9 and Lynx Point-LP above | [watchdog(4)](../man/man4/watchdog.4), armed by an open of `/dev/watchdog`, or at boot by `rach2.itco.arm` and then fed by the kernel thread `watchdogd` until opened; 0.6-second ticks, 3 to 614 seconds per programmed countdown |
 
 ## Storage
 

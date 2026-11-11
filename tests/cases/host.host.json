@@ -1091,6 +1091,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "pmu",
+          "checks": "tests/host/pmu_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "power",
           "checks": "tests/host/power_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"

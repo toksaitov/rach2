@@ -10,6 +10,8 @@
 #include "klog.h"
 #include "lib/kstd.h"
 #include "lib/kstring.h"
+#include "network/netconsole.h"
+#include "platform.h"
 #include "power.h"
 #include "proc/percpu.h"
 #include "proc/process.h"
@@ -220,6 +222,13 @@ void k_panic_note_address(uintptr_t address)
  * NMI that no masking keeps out can panic the owner again between any two of
  * its steps: the nested panic finds itself the owner, and stops the others
  * if the first has not yet.
+ *
+ * The watchdog's counter is stopped first, on the owner as on any other
+ * that panics, as Linux's `native_stop_other_cpus` masks the caller's
+ * counter entry (arch/x86/kernel/smp.c:232-235): the panicked processor
+ * takes no ticks, and the counter's next NMI would report it as a hard
+ * lockup, and with `nmi_watchdog=panic` panic it again under another
+ * reason.
  */
 void k_panic_begin(void)
 {
@@ -227,6 +236,7 @@ void k_panic_begin(void)
     unsigned int owner;
 
     arch_irq_disable();
+    platform_pmu_disable();
     if (k_panic_hook) {
         k_panic_hook();
     }
@@ -613,7 +623,8 @@ static void draw_report(void)
  * with interrupts off here, so that nothing changes the screen or the state
  * the record describes (`k_panic_begin`). Nothing after the record runs to
  * write out klog's queue, so the record goes out directly
- * (`klog_deliver_directly`). The crash record, ramoops's when the line gives
+ * (`klog_deliver_directly`), and netconsole forgets a send the panic stopped
+ * (`netconsole_panic`). The crash record, ramoops's when the line gives
  * a region, is saved before the wait, as Linux's kmsg_dump comes before its
  * wait (kernel/panic.c:440).
  *
@@ -655,6 +666,7 @@ void k_panic(const char *str)
     k_terminal_restart();
     klog_screen_stop();
     klog_deliver_directly();
+    netconsole_panic();
     klog(KLOG_CRIT, "panic", "stopped: %s", str);
     str = panic_reason;
 

@@ -63,9 +63,10 @@ int procfs_resolve_id(const struct vpath *vp);
  * its live threads. */
 uint32_t procfs_task_links(int pid);
 
-/** The number of descriptors process `pid` has open, the size Linux's
- * getattr gives its /proc/<pid>/fd directory: 0 for a process with no
- * descriptor table, a zombie's, and -ENOENT once the process is gone. */
+/** The number of descriptors process `pid` has open or an unfinished open
+ * has reserved, the size Linux's getattr gives its /proc/<pid>/fd directory:
+ * 0 for a process with no descriptor table, a zombie's, and -ENOENT once the
+ * process is gone. */
 int procfs_fd_count(int pid);
 
 /**

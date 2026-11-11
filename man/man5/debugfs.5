@@ -101,6 +101,99 @@ NAME: VALUE
 fences:
 --------------
 .Ed
+.It Pa bkl/calls
+Mode 0644.
+The kernel's own counts of its entries and the big lock, a Rach2
+file with no Linux counterpart: a header, then a line for each system call
+by its number, each entry vector by its number and each
+.Xr ioctl 2
+request by its number in hex, with any count:
+.Bd -literal -offset indent
+kind number calls wall_us holds held_us wait_us
+syscall 16 1200 5400 1200 3100 900
+vector 32 800 0 800 120 40
+ioctl 0xc0406469 600 4100 600 2500 700
+ioctl_lost 0
+.Ed
+.Pp
+.Ar calls
+counts a system call at its return and an interrupt or exception at its
+entry from user mode or an idle wait;
+.Ar wall_us
+is a system call's time from before its entry took the lock to its
+return, its waits for the lock and its sleeps included;
+.Ar holds
+and
+.Ar held_us
+are the holds of the lock that the entry began, from the take to the
+give-back, which a call keeps while it sleeps and the processor runs
+others, as the lines
+.Ql bkl_hold_entry
+of
+.Pa /proc/stat
+count them;
+.Ar wait_us
+is the time those holds waited for the lock first.
+The line
+.Ql vector 0
+counts, beside the divide error, the holds of kernel threads and of the
+lock taken again after the kernel gave it up, for an idle halt, a run of a
+.Xr kvm 4
+guest, another processor's claim or a processor's start, which have no
+calls.
+A system call numbered 512 or more counts as 512, a call of the i386 ABI
+under its own number.
+The times are microseconds, and 0 without an invariant time-stamp counter.
+An
+.Xr ioctl 2
+request counts beside its system call, in 256 slots; the calls of a
+request for which none of the 32 slots its hash names is free or its own
+count in
+.Ql ioctl_lost ,
+which can count while most slots are free.
+A write of anything zeroes the counts.
+.It Pa bkl/profile
+Mode 0644.
+A profile of the kernel under the big lock, a Rach2 file: each processor's
+tick that finds the processor holding the lock, at 1000 Hz, takes a
+sample of the instruction it stopped and that function's caller, from the
+frame chain, 0 when there is none.
+Code that runs with interrupts off is not sampled.
+The text is the samples; those lost, whose instruction and caller found
+none of the 32 slots their hash names among the 2048 free or their own,
+which can happen while most slots are free; and a line for each
+instruction and caller sampled, with its count, in no order:
+.Bd -literal -offset indent
+samples 5120
+lost 0
+0xffffffff8012a3c4 0xffffffff80131f08 37
+.Ed
+.Pp
+The kernel's symbol table names the functions.
+A write of anything zeroes the profile.
+.It Pa test_lockup
+Mode 0600.
+Reads
+.Ql soft hard hung ,
+the kinds a write takes.
+A write of
+.Ql soft SECONDS
+or
+.Ql hard SECONDS
+spins in the write with interrupts on or off, and
+.Ql hung SECONDS
+sleeps in it in the state D, for 1 to 600 seconds, so that the lockup
+detectors of
+.Xr lockup 7
+report it; the write returns when the lockup ends.
+Another text fails with
+.Er EINVAL ,
+and a second
+.Ql hung
+while one sleeps with
+.Er EBUSY .
+Linux has no such file; its lib/test_lockup.c is a module that takes the
+same choices as parameters.
 .It Pa dri
 The display devices' files, one directory for each device registered with
 the DRM core, as Linux 6.12 makes them.
@@ -438,4 +531,5 @@ bochs-drm dev=0000:00:02.0 unique=0000:00:02.0
 .Xr sysfs 5 ,
 .Xr dma-buf 7 ,
 .Xr drm-kms 7 ,
+.Xr lockup 7 ,
 .Xr mount 8

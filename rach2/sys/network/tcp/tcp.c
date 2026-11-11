@@ -1439,7 +1439,8 @@ int tcp_send(struct socket *sock, const uint8_t *buf, int len)
     }
     tcb = sock->tcb;
 
-    if ((tcb->state != TCP_ESTABLISHED && tcb->state != TCP_CLOSE_WAIT) || tcb->fin_pending) {
+    if ((tcb->state != TCP_ESTABLISHED && tcb->state != TCP_CLOSE_WAIT) || tcb->fin_pending ||
+        (sock->shutdown & SOCK_SEND_SHUTDOWN)) {
         int rc =
             tcb->state == TCP_SYN_SENT || tcb->state == TCP_SYN_RCVD ? TCP_SEND_CONNECTING : -1;
 
@@ -2447,19 +2448,6 @@ static void tcp_closed_or_free(struct tcb *tcb)
     tcb->zwp_due = 0;
 }
 
-void tcp_shutdown_send(struct socket *sock)
-{
-    struct tcb *tcb;
-    uint32_t flags = net_lock();
-
-    tcb = sock ? sock->tcb : NULL;
-    if (tcb && (tcb->state == TCP_ESTABLISHED || tcb->state == TCP_CLOSE_WAIT)) {
-        tcb->fin_pending = 1;
-        tcp_pump(tcb);
-    }
-    net_unlock(flags);
-}
-
 /**
  * Disconnect `sock`, whose connection is in SYN_SENT, as Linux's
  * inet_shutdown has tcp_disconnect do for a shutdown in SYN_SENT
@@ -2484,43 +2472,110 @@ static void tcp_disconnect(struct socket *sock)
 }
 
 /**
- * Linux's inet_shutdown sets the flags on a connected socket and has
- * tcp_shutdown send the FIN for SEND_SHUTDOWN from ESTABLISHED and
- * CLOSE_WAIT (net/ipv4/af_inet.c:915-924, net/ipv4/tcp.c:2997-3013); the
- * later states have sent theirs. A SYN_RCVD here is an active open's,
- * whose shutdown is refused.
+ * shutdown(2) judges the state as Linux's inet_shutdown does
+ * (net/ipv4/af_inet.c:915-937 in 6.12.115). A listener shut for receiving
+ * stops listening, as tcp_disconnect has inet_csk_listen_stop stop it
+ * (net/ipv4/tcp.c:3302-3303): its block and its half-open connections are
+ * freed, each queued connection is reset (`socket_tcp_forget_queue`), the
+ * socket's accept is woken to fail with EINVAL, and the socket may listen
+ * again; SHUT_WR alone leaves a listener as it is. A connection in SYN_SENT
+ * is disconnected (`tcp_disconnect`). A socket with no block, never
+ * connected or disconnected, is Linux's TCP_CLOSE, and so is a block that is
+ * CLOSED, or in TIME_WAIT with its socket attached, which Linux's full
+ * socket has left for TCP_CLOSE already (tcp_time_wait calls tcp_done,
+ * net/ipv4/tcp_minisocks.c:364): the flags are set and the call is
+ * ENOTCONN, as Linux's TCP_CLOSE case falls through to set them, and a
+ * later read and poll honour them (`socket_tcp_recv`, `socket_poll`). They
+ * stay set if the socket then connects, as Linux's connect leaves
+ * sk_shutdown as it is. Any other
+ * state takes the flags, and a send shutdown from ESTABLISHED or CLOSE_WAIT
+ * queues the FIN after the data, as tcp_shutdown sends it from those states
+ * (net/ipv4/tcp.c:3006-3012); SYN_RCVD, a simultaneous open's, sends none,
+ * and a later send there fails with EPIPE once the handshake ends
+ * (`tcp_send`). Linux's SYN_SENT is in tcp_shutdown's mask too, but
+ * inet_shutdown never reaches it from there.
  */
 int tcp_shutdown(struct socket *sock, int rd, int wr)
 {
     struct tcb *tcb;
     uint32_t flags = net_lock();
+    int rc = 0;
 
     tcb = sock->tcb;
-    if (!tcb || sock->listening) {
+    if (sock->listening) {
+        if (rd) {
+            tcp_close(sock);
+            socket_tcp_forget_queue(sock);
+            sock->listening = 0;
+        }
         net_unlock(flags);
-        return -ENOTCONN;
+        return 0;
     }
-    if (tcb->state == TCP_SYN_SENT) {
+    if (tcb && tcb->state == TCP_SYN_SENT) {
         tcp_disconnect(sock);
         net_unlock(flags);
         return 0;
     }
-    if (tcb->state < TCP_ESTABLISHED) {
-        net_unlock(flags);
-        return -ENOTCONN;
+    if (!tcb || tcb->state == TCP_CLOSED || tcb->state == TCP_TIME_WAIT) {
+        rc = -ENOTCONN;
     }
     if (rd) {
         sock->shutdown |= SOCK_RCV_SHUTDOWN;
     }
     if (wr) {
         sock->shutdown |= SOCK_SEND_SHUTDOWN;
-        if (tcb->state == TCP_ESTABLISHED || tcb->state == TCP_CLOSE_WAIT) {
+        if (tcb && (tcb->state == TCP_ESTABLISHED || tcb->state == TCP_CLOSE_WAIT)) {
             tcb->fin_pending = 1;
             tcp_pump(tcb);
         }
     }
     net_unlock(flags);
-    return 0;
+    return rc;
+}
+
+/**
+ * Linux's tcp_disconnect, which inet_child_forget calls for each queued
+ * connection (net/ipv4/inet_connection_sock.c:1388-1391), sends
+ * tcp_send_active_reset from the states tcp_need_reset names, ESTABLISHED,
+ * CLOSE_WAIT, FIN_WAIT_1, FIN_WAIT_2 and SYN_RCVD (net/ipv4/tcp.c:3249-3254,
+ * 3306-3308), and its move to TCP_CLOSE counts EstabResets from
+ * ESTABLISHED and CLOSE_WAIT. CLOSING and LAST_ACK, which follow a FIN of
+ * this side, are not reached by a connection nobody accepted.
+ */
+void tcp_forget_queued(struct socket *sock)
+{
+    struct tcb *tcb;
+    uint32_t flags = net_lock();
+
+    tcb = sock->tcb;
+    if (!tcb) {
+        net_unlock(flags);
+        return;
+    }
+    sock->tcb = NULL;
+    tcb->sock = NULL;
+    switch (tcb->state) {
+    case TCP_ESTABLISHED:
+    case TCP_CLOSE_WAIT:
+        net_mib.tcp_estab_resets++;
+        (void)tcp_emit_flags(tcb, TCP_RST | TCP_ACK, tcb->snd_nxt);
+        break;
+    case TCP_FIN_WAIT_1:
+    case TCP_FIN_WAIT_2:
+    case TCP_SYN_RCVD:
+        (void)tcp_emit_flags(tcb, TCP_RST | TCP_ACK, tcb->snd_nxt);
+        break;
+    case TCP_CLOSED:
+    case TCP_LISTEN:
+    case TCP_SYN_SENT:
+    case TCP_CLOSING:
+    case TCP_LAST_ACK:
+    case TCP_TIME_WAIT:
+    default:
+        break;
+    }
+    tcb_free(tcb);
+    net_unlock(flags);
 }
 
 /**
@@ -3838,7 +3893,7 @@ static int tcp_rx_syn_rcvd(struct tcb *tcb, uint8_t flags, uint32_t seq, uint32_
  * FIN, the peer's FIN leads to CLOSING instead of CLOSE_WAIT, the state that
  * expects the ACK of this side's FIN.
  *
- * The FIN_WAIT states follow `tcp_close` or `tcp_shutdown_send`. After a
+ * The FIN_WAIT states follow `tcp_close` or `tcp_shutdown`. After a
  * close, which detaches the socket, or a shutdown of the receiving half
  * too, data or a FIN past rcv_nxt, which no program will read, ends the
  * connection with a reset (`tcp_rx_closed_data`), in ESTABLISHED too while

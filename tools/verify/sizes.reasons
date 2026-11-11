@@ -153,7 +153,6 @@ rach2/sys/fs/krffs.c:krffs_resize_at complexity 27 one file system operation ove
 rach2/sys/fs/krffs.c:krffs_walk_err complexity 27 one file system operation over the on-disk format, each step a rule of the format
 
 rach2/sys/fs/procfs.c:procfs_kind_name complexity 32 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/procfs.c:procfs_sysctl_write complexity 29 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_gen_text complexity 35 a dispatcher, one arm per command, read as a table
 
 rach2/sys/fs/synthfs.c:synth_classify_pid complexity 26 a dispatcher, one arm per command, read as a table
@@ -643,7 +642,7 @@ tests/musl/audioclientsmusl.c:clients complexity 26 a test's rows, each a case, 
 tests/musl/authmusl.c:main complexity 34 a test's rows, each a case, read as one table
 
 tests/musl/callsmusl.c:copies complexity 49 a test's rows, each a case, read as one table
-tests/musl/callsmusl.c:main complexity 26 a test's rows, each a case, read as one table
+tests/musl/callsmusl.c:main complexity 27 a test's rows, each a case, read as one table
 
 tests/musl/catfile.c:main complexity 30 a test's rows, each a case, read as one table
 tests/musl/catfile.c:main lines 130 a test's rows, each a case, read as one table

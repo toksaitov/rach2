@@ -2,7 +2,8 @@
  * netconsole_hosttest.c: drive the kernel log's network console, netconsole.c,
  * on the host, with the Ethernet layer replaced by a recorder.
  *
- * host-deps:
+ * host-deps: rach2/sys/lib/kstd.c rach2/sys/lib/kstring.c
+ * host-deps: rach2/sys/lib/kctypes.c
  *
  * netconsole.c is compiled natively and driven through the same entry points
  * the kernel uses. This covers the cases the QEMU capture (`tests/run
@@ -47,19 +48,30 @@ static unsigned tx_max_depth; /* the most transmits under way at once */
 
 static void log_putc(char c);
 
-/** Discard a kernel log record; no row reads netconsole's own report. */
+/* When set, a kernel log record reaches netconsole as `klog` delivers one,
+   its subsystem and a newline standing for the whole record. */
+static int klog_feeds;
+
+/** Discard a kernel log record, or with `klog_feeds` give its subsystem and
+ * a newline to netconsole; no row reads netconsole's own report. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
-    (void)subsystem;
     (void)format;
+    if (klog_feeds) {
+        while (*subsystem) {
+            log_putc(*subsystem++);
+        }
+        log_putc('\n');
+    }
 }
 
 /* The interface a frame leaves by, which this model does not look
  * inside. */
 struct netdev;
 
-/* The one interface netdev_first gives; nothing here reads its fields. */
+/* The one interface netdev_first gives, `eth0`; the target rows set its
+ * IPv4 address, the only field netconsole.c reads here. */
 static struct netdev the_iface;
 
 /* Whether the card says its link is up, and the frame after which it goes
@@ -129,22 +141,70 @@ int ethernet_tx(struct netdev *out, const unsigned char *dst, unsigned short typ
 static int lock_depth;
 static int lock_ever_negative;
 
-/** Take the network lock: count it and return 0 as the saved flags, since no
- * interrupt runs on the host. */
-/* The tick, which the settle rows move, and whether the kernel panics. */
+/* The tick, which the start rows move, and whether the kernel panics. */
 static uint64_t host_ticks;
 static int host_panicking;
 
+/** Return the tick the rows have set. */
 uint64_t tick_count(void)
 {
     return host_ticks;
 }
 
+/** Report a panic once a row has set `host_panicking`. */
 int k_panicking(void)
 {
     return host_panicking;
 }
 
+/* The values of `netpoll.carrier_timeout=` the boot line gives, in order;
+   none unless a row sets them. */
+static const char *host_carrier[4];
+static int host_ncarrier;
+
+/** Whether `key` is the one option the model's boot line has. */
+static int host_carrier_key(const char *key)
+{
+    const char *want = "netpoll.carrier_timeout";
+
+    while (*key && *key == *want) {
+        key++;
+        want++;
+    }
+    return *key == '\0' && *want == '\0';
+}
+
+/** Count the `key=` tokens of the model's boot line. */
+int kcmdline_count(const char *key)
+{
+    return host_carrier_key(key) ? host_ncarrier : 0;
+}
+
+/** Copy the `nth` value of `key=` into `out`, 0 when there is none or it
+ * does not fit, as the kernel's lookup does. */
+int kcmdline_value_nth(const char *key, int nth, char *out, unsigned int outlen)
+{
+    unsigned int i;
+
+    if (outlen > 0) {
+        out[0] = '\0';
+    }
+    if (!host_carrier_key(key) || nth < 0 || nth >= host_ncarrier) {
+        return 0;
+    }
+    for (i = 0; host_carrier[nth][i] != '\0'; i++) {
+        if (i + 1 >= outlen) {
+            out[0] = '\0';
+            return 0;
+        }
+        out[i] = host_carrier[nth][i];
+    }
+    out[i] = '\0';
+    return 1;
+}
+
+/** Take the network lock: count it and return 0 as the saved flags, since no
+ * interrupt runs on the host. */
 unsigned int net_lock(void)
 {
     lock_depth++;
@@ -223,28 +283,50 @@ uint16_t ip_checksum(const uint8_t *buf, uint16_t len)
     return (uint16_t)(~sum & 0xFFFF);
 }
 
-/* The targets of netconsole= are left to the QEMU runs, which put a real
- * card and a host socket at the two ends; these rows drive the frames, and
- * these stubs only satisfy the target code's links. */
+/* The datagrams of netconsole= are left to the QEMU runs, which put a real
+ * card and a host socket at the two ends; the target rows here drive what
+ * the ring does for a target, through `eth0`, which is `the_iface`. */
 
-/** Allocate nothing: no row reads a netconsole= value. */
+/* The memory kzalloc gives, a few targets' worth, and how much is given. */
+static union {
+    void *align;
+    unsigned char bytes[4096];
+} pool;
+static size_t pool_used;
+
+/** Give `size` zeroed bytes from `pool`, or NULL when it has no more. */
 void *kzalloc(size_t size)
 {
-    (void)size;
-    return 0;
+    unsigned char *p = pool.bytes + pool_used;
+    size_t i;
+
+    size = (size + 15u) & ~(size_t)15u;
+    if (size > sizeof(pool.bytes) - pool_used) {
+        return 0;
+    }
+    for (i = 0; i < size; i++) {
+        p[i] = 0;
+    }
+    pool_used += size;
+    return p;
 }
 
-/** Free nothing, since kzalloc gave nothing. */
+/** Free nothing; `nc_reset` takes the whole pool back. */
 void kfree(void *p)
 {
     (void)p;
 }
 
-/** No interface has a name here. */
+/** Return `the_iface` for `eth0`, and nothing for any other name. */
 struct netdev *netdev_by_name(const char *name)
 {
-    (void)name;
-    return 0;
+    const char *eth0 = "eth0";
+    int i;
+
+    for (i = 0; eth0[i] != '\0' && name[i] == eth0[i]; i++) {
+        /* compare each character */
+    }
+    return (eth0[i] == '\0' && name[i] == '\0') ? &the_iface : 0;
 }
 
 /** No interface is listed here. */
@@ -300,7 +382,22 @@ static void nc_reset(void)
     nc_line_start = 0;
     nc_skip = 0;
     nc_settle_ticks = 0;
-    nc_frames_up = 0;
+    nc_carrier_ticks = (uint64_t)NC_CARRIER_TIMEOUT * TICK_HZ;
+    nc_tick_next = 0;
+    nc_frames_start.begun = 0;
+    nc_frames_start.up = 0;
+    nc_frames_skipped = 0;
+    nc_final = 0;
+    nc_gap_first = 0;
+    nc_gap_end = 0;
+    nc_lost = 0;
+    nc_targets = 0;
+    nc_setup_done = 0;
+    nc_attached = 0;
+    klog_feeds = 0;
+    host_ncarrier = 0;
+    pool_used = 0;
+    the_iface.ip = 0;
     host_ticks = 0;
     host_panicking = 0;
     nc_boot_id = 0;
@@ -347,10 +444,12 @@ static unsigned frame_be16(unsigned f, unsigned off)
 }
 
 /**
- * Check that a link that has just come up is sent nothing until it has been
- * up for the settle time, and the held lines go out with the first newline
- * after it; that a link that goes down starts the time again; and that a
- * panicking kernel sends at once.
+ * Check a sender's start: a link that has just come up is sent nothing until
+ * it has been up for the settle time, and the tick then sends what was held
+ * with no record after it; after the start a link that comes back is sent at
+ * once; a link up with nothing held ends the start at once; the carrier
+ * timeout ends a start whose link never came up; and a panic, shutdown and a
+ * panic in the middle of a send each send what is held.
  */
 static void settle_rows(void)
 {
@@ -365,21 +464,111 @@ static void settle_rows(void)
     CHECK(frame_count == 0 && nc_pending() == 8, "a link just up is sent nothing");
     host_ticks = 100 + nc_settle_ticks - 1;
     put_string("a\n");
-    CHECK(frame_count == 0, "nor a tick before the settle time");
+    CHECK(frame_count == 0, "nor a line a tick before the settle time");
     host_ticks = 100 + nc_settle_ticks;
-    put_string("b\n");
-    CHECK(frame_count == 1 && frame_len[0] == NETCONSOLE_HDR_LEN + 12 && nc_pending() == 0,
-          "the first line after the settle time sends what was held with it");
+    netconsole_tick();
+    CHECK(frame_count == 1 && frame_len[0] == NETCONSOLE_HDR_LEN + 10 && nc_pending() == 0,
+          "the tick at the settle time sends what was held, with no later record");
 
     link_down = 1;
     put_string("down\n");
+    CHECK(frame_count == 1 && nc_pending() == 5, "after the start a link down holds the line");
     link_down = 0;
-    host_ticks += nc_settle_ticks * 4;
     put_string("again\n");
-    CHECK(frame_count == 1, "a link that came back starts the settle time again");
+    CHECK(frame_count == 2 && nc_pending() == 0,
+          "and a link that comes back is sent at once, with no settle");
+    netconsole_tick();
+    CHECK(frame_count == 2, "and the tick sends nothing once the start is over");
+
+    nc_reset();
+    nc_settle_ticks = MS_TO_TICKS(NC_LINK_SETTLE_MS);
+    netconsole_enable();
+    put_string("live\n");
+    CHECK(frame_count == 1 && nc_pending() == 0,
+          "a link up with nothing held is sent at once, with no settle");
+
+    nc_reset();
+    nc_settle_ticks = MS_TO_TICKS(NC_LINK_SETTLE_MS);
+    link_down = 1;
+    netconsole_enable();
+    put_string("x\n");
+    host_ticks = nc_carrier_ticks - 2 * NC_START_POLL_MS;
+    netconsole_tick();
+    CHECK(nc_frames_start.begun != 0, "the start waits for carrier until its timeout");
+    host_ticks = nc_carrier_ticks;
+    netconsole_tick();
+    CHECK(nc_frames_start.begun == 0 && frame_count == 0,
+          "and ends at the timeout, with the link still down");
+    link_down = 0;
+    put_string("y\n");
+    CHECK(frame_count == 1 && frame_len[0] == NETCONSOLE_HDR_LEN + 4,
+          "after the timeout a link that comes up is sent at once");
+
+    nc_reset();
+    nc_settle_ticks = MS_TO_TICKS(NC_LINK_SETTLE_MS);
+    put_string("pre\n");
+    netconsole_enable();
+    put_string("settling\n");
+    CHECK(frame_count == 0, "the boot log waits for the settle");
     host_panicking = 1;
     put_string("panic\n");
-    CHECK(frame_count == 2 && nc_pending() == 0, "a panicking kernel sends at once");
+    CHECK(frame_count == 1 && nc_pending() == 0, "a panicking kernel sends at once");
+
+    nc_reset();
+    nc_settle_ticks = MS_TO_TICKS(NC_LINK_SETTLE_MS);
+    put_string("pre\n");
+    netconsole_enable();
+    put_string("Goodbye!\n");
+    CHECK(frame_count == 0, "the goodbye waits for the settle");
+    netconsole_shutdown();
+    CHECK(frame_count == 1 && frame_len[0] == NETCONSOLE_HDR_LEN + 13 && nc_pending() == 0,
+          "and shutdown sends it with what was held");
+
+    nc_reset();
+    netconsole_enable();
+    nc_sending = 1;
+    host_panicking = 1;
+    put_string("stopped\n");
+    CHECK(frame_count == 0, "a record during a send only joins the ring");
+    netconsole_panic();
+    put_string("panic\n");
+    CHECK(frame_count == 1 && nc_pending() == 0,
+          "and the panic forgets the stopped send, so its record goes out");
+    CHECK(lock_depth == 0 && !lock_ever_negative, "the start rows released every lock");
+}
+
+/**
+ * Check that held records go out with no record after them: the tick sends
+ * them when the carrier comes back during the start, and, with a settle, when
+ * the settle ends. Before the tick drove the start, both waited for the next
+ * newline.
+ */
+static void carrier_rows(void)
+{
+    nc_reset();
+    link_down = 1;
+    netconsole_enable();
+    put_string("boot\n");
+    CHECK(frame_count == 0, "a link down at the start holds the boot log");
+    link_down = 0;
+    host_ticks = 50;
+    netconsole_tick();
+    CHECK(frame_count == 1 && nc_pending() == 0,
+          "the tick sends it when the carrier comes back, with no later record");
+
+    nc_reset();
+    nc_settle_ticks = MS_TO_TICKS(NC_LINK_SETTLE_MS);
+    link_down = 1;
+    netconsole_enable();
+    put_string("boot\n");
+    link_down = 0;
+    host_ticks = 50;
+    netconsole_tick();
+    CHECK(frame_count == 0, "with a settle, the tick that sees the carrier sends nothing yet");
+    host_ticks = 50 + nc_settle_ticks;
+    netconsole_tick();
+    CHECK(frame_count == 1 && nc_pending() == 0,
+          "and the tick at the settle's end sends it, with no later record");
 }
 
 /**
@@ -388,7 +577,7 @@ static void settle_rows(void)
  * the middle of a drain, where the drain held back goes out with the next
  * newline. A card that drops every frame is offered one frame by a long line
  * and one by its newline, and gets all of it once it takes frames. The
- * settle rows follow.
+ * start rows and the carrier rows follow.
  */
 static void link_rows(void)
 {
@@ -412,14 +601,15 @@ static void link_rows(void)
         for (i = 0; i < NETCONSOLE_RING + 10; i++) {
             netconsole_putc(i % 64 == 63 ? '\n' : 'f');
         }
-        /* The ring fills at the newline of its 512th line, whose 63 other
-           characters go back out with it; the 10 after it fit again. */
-        CHECK(frame_count == 0 && nc_pending() == NETCONSOLE_RING - 64 + 10 && nc_dropped == 64,
-              "a ring that fills while the link is down holds what it can, in whole lines");
+        /* The ring fills at the newline of its 512th line, and the frames,
+           held for the link, lose their oldest line to make room. */
+        CHECK(frame_count == 0 && nc_pending() == NETCONSOLE_RING - 64 + 10 && nc_dropped == 0 &&
+                  nc_frames_skipped == 64,
+              "a ring that fills while the link is down keeps the newest, in whole lines");
         link_down = 0;
         netconsole_putc('\n');
         CHECK(frame_count > 0 && nc_pending() == 0,
-              "and the next line, which it has no room for, still drains it");
+              "and the next line drains it once the link is up");
     }
 
     {
@@ -464,17 +654,193 @@ static void link_rows(void)
     }
 
     settle_rows();
+    carrier_rows();
+}
+
+/** Whether the payload of datagram `f`, after its IPv4 and UDP headers, is
+ * `want` and no more. */
+static int datagram_is(unsigned f, const char *want)
+{
+    unsigned i;
+
+    for (i = 0; want[i] != '\0'; i++) {
+        if (NC_IP4_HDR + NC_UDP_HDR + i >= frame_len[f] ||
+            frame_data[f][NC_IP4_HDR + NC_UDP_HDR + i] != (unsigned char)want[i]) {
+            return 0;
+        }
+    }
+    return frame_len[f] == NC_IP4_HDR + NC_UDP_HDR + i;
+}
+
+/** Whether the payload of datagram `f` begins with `want`. */
+static int datagram_begins(unsigned f, const char *want)
+{
+    unsigned i;
+
+    for (i = 0; want[i] != '\0'; i++) {
+        if (NC_IP4_HDR + NC_UDP_HDR + i >= frame_len[f] ||
+            frame_data[f][NC_IP4_HDR + NC_UDP_HDR + i] != (unsigned char)want[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/** Write `lines` lines of 63 `f`s and a newline. */
+static void put_lines(unsigned lines)
+{
+    unsigned i;
+
+    for (i = 0; i < 64 * lines; i++) {
+        netconsole_putc(i % 64 == 63 ? '\n' : 'f');
+    }
+}
+
+/**
+ * Check a target of netconsole= beside the frames: a target with no source
+ * address loses its own oldest records when the ring fills, and the frames
+ * none, and is then told of them by Linux's dropped line in the plain form
+ * and by a gap in `seq` in the extended form; and records the full ring
+ * dropped before setup reach a target as the dropped line at their place.
+ */
+static void target_rows(void)
+{
+    static char plain[] = "@/,@10.0.0.1/";
+    static char extended[] = "+@/,@10.0.0.1/";
+    static char alone[] = "@/,@10.0.0.1/";
+
+    nc_reset();
+    CHECK(netconsole_setup(plain, 1) == 1 && nc_targets && nc_targets->held,
+          "a target with no source address is held");
+    put_lines(600);
+    /* The target's place is the ring's whole 32767 at the 32768th
+       character and at each 64 after it: 89 lines. */
+    CHECK(nc_frames == 600 && nc_dropped == 0 && nc_frames_skipped == 0,
+          "the frames are sent every line while the target is held");
+    CHECK(nc_targets->lost == 89 && nc_targets->skipped == 89 * 64,
+          "the held target loses its own oldest lines");
+    the_iface.ip = 0x0A000002u;
+    frame_count = 0;
+    put_string("next\n");
+    CHECK(frame_count > 3 && frame_type[0] == NETCONSOLE_ETHERTYPE && frame_type[1] == ETH_TYPE_IP,
+          "the frames' line goes first, then the target's datagrams");
+    CHECK(datagram_begins(1, "** 89 printk messages dropped **\nfff") &&
+              frame_len[1] == NC_IP4_HDR + NC_UDP_HDR + 33 + 64,
+          "the target is told what it lost, as Linux's line in its next record's datagram");
+    CHECK(frame_len[2] == NC_IP4_HDR + NC_UDP_HDR + 64 && nc_targets->lost == 0 &&
+              nc_targets->datagrams == 511 + 1,
+          "and is then sent every line it kept, and the new one");
+
+    nc_reset();
+    (void)netconsole_setup(extended, 1);
+    put_lines(600);
+    the_iface.ip = 0x0A000002u;
+    frame_count = 0;
+    put_string("next\n");
+    CHECK(datagram_begins(1, "0,89,0,c;fff") && datagram_begins(2, "0,90,0,c;fff"),
+          "an extended target's seq goes past the 89 records it lost");
+
+    nc_reset();
+    put_lines(513);
+    put_string("tail");
+    /* The ring is full at the 512th line's newline: that line and the next
+       are dropped whole, newest first, since no sender exists yet. */
+    CHECK(nc_dropped == 128 && nc_gap_end == 2, "a full ring with no sender drops the newest");
+    the_iface.ip = 0x0A000002u;
+    (void)netconsole_setup(alone, 0);
+    CHECK(nc_targets && nc_targets->lost == 2 && nc_targets->datagrams == 511,
+          "a new target is sent the lines before the gap, and counts it");
+    frame_count = 0;
+    put_string("\n");
+    CHECK(frame_count == 1 && datagram_is(0, "** 2 printk messages dropped **\ntail\n"),
+          "and is told of it in the next line's datagram");
+    CHECK(lock_depth == 0 && !lock_ever_negative, "the target rows released every lock");
+}
+
+/**
+ * Check that the records `netconsole_setup` logs before it attaches its
+ * targets, which reach the ring as `klog` delivers them, keep every run of
+ * drops counted before setup for those targets.
+ */
+static void setup_gap_row(void)
+{
+    static char alone[] = "@/,@10.0.0.1/";
+
+    /* 511 lines fill all but 63 places, the 512th is taken back out at its
+       newline, and "x" then notes that run before setup. The next line is
+       taken back out at its 62nd character, which leaves a run the record
+       setup logs notes during setup, before the targets are attached. */
+    nc_reset();
+    put_lines(512);
+    put_string("x\n");
+    put_lines(1);
+    CHECK(nc_gap_end == 1 && nc_lost == 1, "two runs of drops are counted before setup");
+    klog_feeds = 1;
+    (void)netconsole_setup(alone, 0);
+    klog_feeds = 0;
+    CHECK(nc_targets && nc_gap_end == 2 && nc_gap_first == 0 && nc_targets->gap == 0,
+          "a record setup logs keeps the runs counted before it for the new target");
+    the_iface.ip = 0x0A000002u;
+    put_string("y\n");
+    CHECK(nc_targets && nc_targets->gap == 2 && nc_targets->lost == 0 &&
+              nc_targets->datagrams == 511 + 1 + 2 + 1,
+          "and the target counts both runs as it passes them");
+    CHECK(lock_depth == 0 && !lock_ever_negative, "the setup row released every lock");
+}
+
+/**
+ * Check that `netpoll.carrier_timeout=` is read as Linux reads a uint module
+ * parameter: kstrtouint with base 0, each occurrence in order, a value it
+ * refuses changing nothing.
+ */
+static void carrier_option_rows(void)
+{
+    static const struct {
+        const char *values[2];
+        int n;
+        unsigned seconds;
+        const char *what;
+    } rows[] = {
+        {{"010", 0}, 1, 8, "a leading 0 is octal"},
+        {{"0x10", "bad"}, 2, 16, "0x is hexadecimal, and a later bad value changes nothing"},
+        {{"x", "+3"}, 2, 3, "a bad first value does not hide a valid later one"},
+        {{"7", "4294967296"}, 2, 7, "a value past 32 bits is refused"},
+        {{"5", "2"}, 2, 2, "the last valid value counts"},
+        {{"-1", 0}, 1, 4, "a negative value leaves Linux's default"},
+    };
+    unsigned i;
+
+    for (i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
+        nc_reset();
+        host_carrier[0] = rows[i].values[0];
+        host_carrier[1] = rows[i].values[1];
+        host_ncarrier = rows[i].n;
+        netconsole_enable();
+        CHECK(nc_carrier_ticks == (uint64_t)rows[i].seconds * TICK_HZ, rows[i].what);
+    }
+    nc_reset();
+}
+
+/** Check that a zero random draw does not become a zero boot id. */
+static void boot_id_row(void)
+{
+    nc_reset();
+    krandom_value = 0;
+    netconsole_enable();
+    put_string("x\n");
+    CHECK(frame_count == 1 && frame_be32(0, 4) != 0, "a zero draw does not become a zero boot id");
+    krandom_value = 0x1234abcdu;
 }
 
 /**
  * Run the rows: lines printed before netconsole_enable are held and sent in
  * one frame whose header, boot id, length and checksum are checked; the link
- * rows; a zero random draw does not become a zero boot id; each line is a
- * frame numbered in order; an unterminated line waits; a full payload goes
- * without a newline; the ring is bounded and counts what it drops; a full
- * ring drains in order; a driver printing from inside a transmit does not
- * recurse, and its message waits for the next flush; and a console never
- * enabled sends nothing.
+ * rows, with the start's; the target rows; a zero random draw does not
+ * become a zero boot id; each line is a frame numbered in order; an
+ * unterminated line waits; a full payload goes without a newline; the ring
+ * is bounded and counts what it drops; a full ring drains in order; a driver
+ * printing from inside a transmit does not recurse, and its message waits
+ * for the next flush; and a console never enabled sends nothing.
  *
  * Returns the number of failed checks, at most 255.
  */
@@ -503,13 +869,10 @@ int main(void)
     CHECK(lock_depth == 0 && !lock_ever_negative, "every lock taken was released");
 
     link_rows();
-
-    nc_reset();
-    krandom_value = 0;
-    netconsole_enable();
-    put_string("x\n");
-    CHECK(frame_count == 1 && frame_be32(0, 4) != 0, "a zero draw does not become a zero boot id");
-    krandom_value = 0x1234abcdu;
+    target_rows();
+    setup_gap_row();
+    carrier_option_rows();
+    boot_id_row();
 
     nc_reset();
     netconsole_enable();

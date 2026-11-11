@@ -873,6 +873,67 @@ set_update_console() { # set_update_console BOOT
     say "console: $1 boots the installed root with term"
 }
 
+# Give a menu on BOOT written before the recordfail lines what
+# tools/image/mkdisk_grub.sh now writes: `set recordfail=1` and
+# `save_env recordfail` at the top of each entry that boots the candidate
+# slot, and after the saved default's candidate line the test that boots the
+# fallback while recordfail stays set. An update writes only the root and no
+# bootctl verb rewrites the fixed menu, so without this a committed
+# candidate that panics at boot resets into itself for ever. A menu that has
+# the test, or that lacks the line it follows, is left as it is. Written
+# beside the menu, synced and renamed, then bootctl reads the partition, as
+# for the console.
+set_update_recordfail() { # set_update_recordfail BOOT
+    mkdir -p "$BOOT_MNT" || die "the boot mount directory could not be made"
+    mount -t vfat "$1" "$BOOT_MNT" || die "$1 would not mount to add its recordfail lines"
+    mounted_boot=$BOOT_MNT
+    console_menu="$BOOT_MNT/boot/grub/grub.cfg"
+    console_new="$console_menu.new"
+    if grep -q 'recordfail}" = "1"' "$console_menu"; then
+        rf_said="$1 has its recordfail lines"
+    elif awk '
+        function flush(   i, n) {
+            n = split(entry, line, "\n")
+            print line[1]
+            if (entry ~ /[ \t]rach2\.slot=candidate([ \t]|\n|$)/ &&
+                entry !~ /\n[ \t]*set recordfail=1/) {
+                print "    set recordfail=1"
+                print "    save_env recordfail"
+                entries++
+            }
+            for (i = 2; i <= n; i++)
+                print line[i]
+            entry = ""
+            inside = 0
+        }
+        inside { entry = entry "\n" $0; if ($0 ~ /^}/) flush(); next }
+        /^menuentry[ \t]/ { entry = $0; inside = 1; next }
+        $0 == "if [ \"${saved_entry}\" = \"candidate\" ]; then set default=candidate; fi" {
+            print
+            print "if [ \"${default}\" = \"candidate\" ]; then"
+            print "    if [ \"${recordfail}\" = \"1\" ]; then set default=fallback; fi"
+            print "fi"
+            tests++
+            next
+        }
+        { print }
+        END { if (inside) printf "%s\n", entry; if (entries == 0 || tests != 1) exit 1 }
+    ' "$console_menu" > "$console_new"; then
+        { sync && mv -f "$console_new" "$console_menu" && sync; } ||
+            die "the menu with its recordfail lines could not be put in place"
+        rf_said="recordfail: $1 boots the previous kernel after a candidate that never reaches user space"
+    else
+        rm -f "$console_new" || die "the spare menu could not be removed"
+        rf_said="$1's menu has no candidate entry or saved default line to give recordfail lines; it is left as it was"
+    fi
+    console_new=""
+    umount "$BOOT_MNT" || die "$1 would not unmount after adding its recordfail lines"
+    mounted_boot=""
+    bootctl --target "$1" status > /dev/null ||
+        die "$1, its recordfail lines added, is not a boot partition bootctl reads"
+    say "$rf_said"
+}
+
 # Convert the MBR disk being updated, $update_disk, to boot by UEFI as well,
 # with the bootx64.efi beside $update_image; a bootx64.efi.sha256 beside that
 # must agree with it. A disk that cannot be converted is left to boot by BIOS
@@ -1075,15 +1136,20 @@ if [ -n "$slots_disk" ]; then
     finish_slots "$slots_boot"
     slots_status=$(bootctl --target "$slots_boot" status) ||
         die "$slots_boot is not a boot partition bootctl reads"
+    slots_saved=$(echo "$slots_status" | sed -n 's/^bootctl: saved_entry: //p')
     if ! echo "$slots_status" | grep -q '^bootctl: slot size: the kernel slots are smaller'; then
-        say "$slots_boot has the slots of this version already"
+        # A stop after both slots grew, before the default was put back.
+        if [ "$slots_saved" = recovery ]; then
+            say "$slots_boot has the slots of this version already; the saved entry is recovery, and bootctl --target $slots_boot env saved_entry candidate starts the installed system"
+        else
+            say "$slots_boot has the slots of this version already"
+        fi
         exit 0
     fi
     case "$(echo "$slots_status" | sed -n 's/^bootctl: next_entry: //p')" in
         empty* | absent) ;;
         *) die "a trial is armed on $slots_boot; boot it, or cancel it with bootctl --target $slots_boot cancel, and run this again" ;;
     esac
-    slots_saved=$(echo "$slots_status" | sed -n 's/^bootctl: saved_entry: //p')
     if [ "$slots_saved" != recovery ]; then
         bootctl --target "$slots_boot" env saved_entry recovery > /dev/null ||
             die "the saved boot entry could not be moved to recovery; nothing was written"
@@ -1461,6 +1527,7 @@ root is written and its archive still says an update is in progress; run the upd
     fi
     rm -rf "$keep"
 
+    set_update_recordfail "${update_disk}p1"
     if [ -n "$update_console" ]; then
         set_update_console "${update_disk}p1"
     fi

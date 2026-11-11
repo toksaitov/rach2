@@ -8,7 +8,8 @@
  * Find ResetSystem through the system table the loader passed and make
  * what a call needs, once, at boot, after the heap: on x86-64 a PML4 whose
  * lower half maps each of the EFI map's runtime ranges at its physical
- * address, since the loader never called SetVirtualAddressMap. Leaves the
+ * address, uncached where the range lacks EFI_MEMORY_WB, since the loader
+ * never called SetVirtualAddressMap. Leaves the
  * service uncallable, and says why in `efirt_absent`, when the machine did
  * not boot by UEFI, the firmware's word size is not the kernel's, a table
  * is not what it should be, ResetSystem lies outside every runtime range or

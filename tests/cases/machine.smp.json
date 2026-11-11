@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "family_id": "machine.smp",
-  "summary": "The kernel on one processor, on four and on two of four, each finding its processors, counting user work on each and passing smpmusl's stress across them, the debug shell's preemption test and ring-3 payload on two, an NMI on two that stops the machine as a fault of the machine, an invalid opcode in the kernel that stops it as an exception, each read on the screen after the panic, and a parallel build on the installed system that runs on every one of four",
+  "summary": "The kernel on one processor, on four and on two of four, each finding its processors, counting user work on each and passing smpmusl's stress across them, the debug shell's preemption test and ring-3 payload on two, an NMI on two that stops the machine as a fault of the machine, an invalid opcode in the kernel that stops it as an exception, each read on the screen after the panic, a parallel build on the installed system that runs on every one of four, and the soft-lockup, hard-lockup and hung-task detectors reporting the debug shell's lockups on two, each ending in its panic when its option is set",
   "cases": [
     {
       "case_id": "machine.smp.smpmusl-1",
@@ -299,6 +299,160 @@
       ],
       "timing": [],
       "native": {"plan": "none", "class": "disk", "reason": "the case boots a private copy of the installed system's disk on exactly four processors"}
+    },
+    {
+      "case_id": "machine.smp.softlockup",
+      "behavior": "With softlockup_panic=1 on the boot line, the debug shell's lockup soft on two processors, a loop in the kernel with interrupts on, is reported as Linux reports it, with a call trace, and ends in the panic softlockup: hung tasks, after which both processors halt with panic=0",
+      "units": ["watchdog", "panic"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"processors": 2, "memory_mib": 128}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "smp_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "softlockup", "stage": "execute", "machine": "fixture", "does": "boot the test image on two processors with watchdog_thresh=2, sysctl.kernel.hung_task_timeout_secs=3, softlockup_panic=1 and panic=0, type lockup soft 30 at the debug shell, wait for the report, its call trace and the panic, look at the processors and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue", "watchdog_thresh=2", "sysctl.kernel.hung_task_timeout_secs=3", "softlockup_panic=1", "panic=0"]}, "console": "serial", "qmp": true, "helper": false, "fault": {"end": "panic", "records": ["watchdog: BUG: soft lockup - CPU#", "softlockup: hung tasks"]}}
+      ],
+      "assertions": [
+        {"assertion_id": "online", "checks": "the kernel says smp: processors: 2 online of 2", "source": "scenario"},
+        {"assertion_id": "reported", "checks": "the kernel says watchdog: BUG: soft lockup - CPU#", "source": "scenario"},
+        {"assertion_id": "traced", "checks": "a line Call Trace: follows the report", "source": "scenario"},
+        {"assertion_id": "panicked", "checks": "the kernel panics saying softlockup: hung tasks, which the scenario records as the boot's end", "source": "scenario"},
+        {"assertion_id": "halted", "checks": "QEMU says that the machine runs, and both processors have halted with interrupts off", "source": "scenario"},
+        {"assertion_id": "one-panic", "checks": "no second record of a panic follows the first", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 1800000000}, "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 1200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 600000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "smp_scenario", "node": "tests/cases/machine/smp_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "QEMU", "reason": "the lockup is held at the debug shell, and the panic stops the machine"}
+    },
+    {
+      "case_id": "machine.smp.hardlockup",
+      "behavior": "With nmi_watchdog=panic on the boot line, the debug shell's lockup hard on two processors, a loop in the kernel with interrupts off, is reported as Linux reports it, with a call trace, and ends in the panic Hard LOCKUP, after which both processors halt with panic=0",
+      "units": ["watchdog", "panic"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"processors": 2, "memory_mib": 128}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "smp_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "hardlockup", "stage": "execute", "machine": "fixture", "does": "boot the test image on two processors with watchdog_thresh=2, sysctl.kernel.hung_task_timeout_secs=3, nmi_watchdog=panic and panic=0, type lockup hard 30 at the debug shell, wait for the report, its call trace and the panic, look at the processors and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue", "watchdog_thresh=2", "sysctl.kernel.hung_task_timeout_secs=3", "nmi_watchdog=panic", "panic=0"]}, "console": "serial", "qmp": true, "helper": false, "fault": {"end": "panic", "records": ["watchdog: watchdog detected hard LOCKUP on cpu", "Hard LOCKUP"]}}
+      ],
+      "assertions": [
+        {"assertion_id": "online", "checks": "the kernel says smp: processors: 2 online of 2", "source": "scenario"},
+        {"assertion_id": "reported", "checks": "the kernel says watchdog: watchdog detected hard LOCKUP on cpu", "source": "scenario"},
+        {"assertion_id": "traced", "checks": "a line Call Trace: follows the report", "source": "scenario"},
+        {"assertion_id": "panicked", "checks": "the kernel panics saying Hard LOCKUP, which the scenario records as the boot's end", "source": "scenario"},
+        {"assertion_id": "halted", "checks": "QEMU says that the machine runs, and both processors have halted with interrupts off", "source": "scenario"},
+        {"assertion_id": "one-panic", "checks": "no second record of a panic follows the first", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 1800000000}, "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 1200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 600000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "smp_scenario", "node": "tests/cases/machine/smp_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "QEMU", "reason": "the lockup is held at the debug shell, and the panic stops the machine"}
+    },
+    {
+      "case_id": "machine.smp.hungtask",
+      "behavior": "With hung_task_panic=1 on the boot line, the debug shell's lockup hung on two processors, a kernel thread asleep in the state D, is reported as Linux reports it, with a call trace, and ends in the panic hung_task: blocked tasks, after which both processors halt with panic=0",
+      "units": ["watchdog", "panic"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"processors": 2, "memory_mib": 128}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "smp_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "hungtask", "stage": "execute", "machine": "fixture", "does": "boot the test image on two processors with watchdog_thresh=2, sysctl.kernel.hung_task_timeout_secs=3, hung_task_panic=1 and panic=0, type lockup hung 30 at the debug shell, wait for the report, its call trace and the panic, look at the processors and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue", "watchdog_thresh=2", "sysctl.kernel.hung_task_timeout_secs=3", "hung_task_panic=1", "panic=0"]}, "console": "serial", "qmp": true, "helper": false, "fault": {"end": "panic", "records": ["hung_task: INFO: task test_lockup:", "hung_task: blocked tasks"]}}
+      ],
+      "assertions": [
+        {"assertion_id": "online", "checks": "the kernel says smp: processors: 2 online of 2", "source": "scenario"},
+        {"assertion_id": "reported", "checks": "the kernel says hung_task: INFO: task test_lockup:", "source": "scenario"},
+        {"assertion_id": "traced", "checks": "a line Call Trace: follows the report", "source": "scenario"},
+        {"assertion_id": "panicked", "checks": "the kernel panics saying hung_task: blocked tasks, which the scenario records as the boot's end", "source": "scenario"},
+        {"assertion_id": "halted", "checks": "QEMU says that the machine runs, and both processors have halted with interrupts off", "source": "scenario"},
+        {"assertion_id": "one-panic", "checks": "no second record of a panic follows the first", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 1800000000}, "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 1200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 600000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "smp_scenario", "node": "tests/cases/machine/smp_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "QEMU", "reason": "the lockup is held at the debug shell, and the panic stops the machine"}
+    },
+    {
+      "case_id": "machine.smp.lockups",
+      "behavior": "With no panic option, the debug shell's lockup soft, hard and hung on two processors are each reported as Linux reports them, the shell comes back after each, and the machine does not panic",
+      "units": ["watchdog"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"processors": 2, "memory_mib": 128}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "smp_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "lockups", "stage": "execute", "machine": "fixture", "does": "boot the test image on two processors with watchdog_thresh=2 and sysctl.kernel.hung_task_timeout_secs=3, type lockup soft 30, lockup hard 30 and lockup hung 30 at the debug shell in turn, wait for each report and the shell's lockup: done, and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue", "watchdog_thresh=2", "sysctl.kernel.hung_task_timeout_secs=3"]}, "console": "serial", "qmp": true, "helper": false, "critical": "] watchdog: "}
+      ],
+      "assertions": [
+        {"assertion_id": "online", "checks": "the kernel says smp: processors: 2 online of 2", "source": "scenario"},
+        {"assertion_id": "soft", "checks": "the kernel says watchdog: BUG: soft lockup - CPU# during lockup soft", "source": "scenario"},
+        {"assertion_id": "soft-done", "checks": "the shell says lockup: done after it", "source": "scenario"},
+        {"assertion_id": "hard", "checks": "the kernel says watchdog: watchdog detected hard LOCKUP on cpu during lockup hard", "source": "scenario"},
+        {"assertion_id": "hard-done", "checks": "the shell says lockup: done after it", "source": "scenario"},
+        {"assertion_id": "hung", "checks": "the kernel says hung_task: INFO: task test_lockup: during lockup hung", "source": "scenario"},
+        {"assertion_id": "hung-done", "checks": "the shell says lockup: done after it", "source": "scenario"},
+        {"assertion_id": "no-panic", "checks": "no record of a panic follows the shell's prompt", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 600000000, "ceiling_us": 1800000000}, "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 1200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 600000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "smp_scenario", "node": "tests/cases/machine/smp_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "QEMU", "reason": "the lockups are held at the debug shell of a machine under QEMU"}
     }
   ]
 }

@@ -150,20 +150,25 @@ static void map_clear(struct boot_info *boot, struct boot_store *st)
     boot->mmap_len = 0;
 }
 
-/** Add the runtime range of `size` bytes at `base` to `boot`'s, joined to
- * the last when it follows it, or note that the record has no room. */
-static void runtime_add(struct boot_info *boot, uint64_t base, uint64_t size)
+/** Add the runtime range of `size` bytes at `base`, with the descriptor's
+ * attributes `attr`, to `boot`'s, joined to the last when it follows it
+ * with the same attributes, or note that the record has no room. Ranges of
+ * other attributes stay apart, so that the identity map can give each its
+ * own cache type (efirt.c). */
+static void runtime_add(struct boot_info *boot, uint64_t base, uint64_t size, uint64_t attr)
 {
     uint32_t n = boot->efi_runtime_count;
 
     if (size == 0) {
         return;
     }
-    if (n > 0 && boot->efi_runtime[n - 1].base + boot->efi_runtime[n - 1].size == base) {
+    if (n > 0 && boot->efi_runtime[n - 1].base + boot->efi_runtime[n - 1].size == base &&
+        boot->efi_runtime[n - 1].attr == attr) {
         boot->efi_runtime[n - 1].size += size;
     } else if (boot->efi_runtime_count < BOOT_EFI_RUNTIME_MAX) {
         boot->efi_runtime[boot->efi_runtime_count].base = base;
         boot->efi_runtime[boot->efi_runtime_count].size = size;
+        boot->efi_runtime[boot->efi_runtime_count].attr = attr;
         boot->efi_runtime_count++;
     } else {
         boot->efi_runtime_lost = 1;
@@ -394,7 +399,7 @@ static void mb2_tag(const uint8_t *t, uint32_t size, struct boot_info *boot, str
             }
             map_add(boot, st, le64(t + i + 8), pages * 4096, efi_type(le32(t + i)));
             if (le64(t + i + 32) & EFI_MEMORY_RUNTIME) {
-                runtime_add(boot, le64(t + i + 8), pages * 4096);
+                runtime_add(boot, le64(t + i + 8), pages * 4096, le64(t + i + 32));
             }
         }
         break;

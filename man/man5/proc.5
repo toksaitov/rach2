@@ -1037,6 +1037,33 @@ from 1;
 the name a core file always has here, as
 .Xr core 5
 says;
+the lockup detectors' settings, which a write within each one's range
+sets:
+.Pa kernel/watchdog ,
+.Pa kernel/soft_watchdog
+and
+.Pa kernel/nmi_watchdog ,
+1,
+.Pa kernel/watchdog_thresh ,
+10,
+.Pa kernel/softlockup_panic ,
+.Pa kernel/hardlockup_panic ,
+.Pa kernel/hung_task_panic
+and the three
+.Pa kernel/*_all_cpu_backtrace ,
+0,
+.Pa kernel/hung_task_timeout_secs ,
+120,
+.Pa kernel/hung_task_check_interval_secs ,
+0,
+.Pa kernel/hung_task_check_count ,
+32768 on i686 and 4194304 on x86-64, Linux's
+.Dv PID_MAX_LIMIT ,
+and
+.Pa kernel/hung_task_warnings ,
+10, as
+.Xr lockup 7
+describes;
 .Pa kernel/hostname
 and
 .Pa kernel/domainname ,
@@ -1075,10 +1102,6 @@ on the boot line sets it, 30 without, and a write of any int sets it;
 on the boot line and 0 without, which a write of any int sets; an
 exception the kernel takes in its own code panics whatever the value, as
 Linux's oops does with it set;
-.Pa kernel/nmi_watchdog ,
-0 and read-only, as on a Linux built without the hard lockup detector,
-since no NMI watchdog takes the performance counters, which KVM's guests
-have; kvm-unit-tests' PMU tests run only where it reads 0;
 .Pa crypto/fips_enabled ,
 0, since the kernel is not in FIPS mode, which libgcrypt and OpenSSL read;
 .Pa user/max_mnt_namespaces ,
@@ -1532,13 +1555,24 @@ An
 into
 .Pa fd
 is judged by that owner.
-A walk through
+Every such node a path reaches updates its retained owner, as Linux's
+walk revalidates each component: one passed on the way, as
 .Pa fd ,
 .Pa fdinfo
 or
 .Pa task
-updates that directory's retained owner before looking up the next
-component, even when that next component is missing.
+is before the next component is looked up, even when that next component
+is missing, and the last, so that
+.Xr readlink 2
+of a link, and a
+.Xr stat 2
+or
+.Xr open 2
+that follows it, update the link's owner.
+A name relative to a directory descriptor or to the working directory is
+walked from the root through the path of that directory, so it updates the
+starting directory's retained owner too, where Linux starts the walk at
+the directory and leaves its owner alone.
 Listing
 .Pa /dev
 does not update the owner of
@@ -1634,8 +1668,9 @@ Its size, as
 .Xr stat 2
 and
 .Xr fstat 2
-report it, is the number of descriptors the process has open, 0 for a
-zombie, and an
+report it, is the number of descriptors the process has open, those an
+open still under way has reserved among them, as a FIFO's open that waits
+for its other end, 0 for a zombie, and an
 .Xr fstat 2
 or
 .Xr statx 2
@@ -2280,6 +2315,8 @@ for
 .Ql futex_wait_multiple ,
 .Ql futex_lock_pi ,
 .Ql do_wait ,
+.Ql wait_for_vfork_done ,
+.Ql de_thread ,
 .Ql hrtimer_nanosleep ,
 .Ql do_cpu_nanosleep ,
 for a sleep resumed after a stop

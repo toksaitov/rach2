@@ -1578,8 +1578,8 @@ void pipe_splice_consume(fd_entry_t *e, uint32_t n)
  * forbids, -EPIPE with SIGPIPE raised for a `b` with no reader, or -EINTR.
  * A `b` with no reader is -EPIPE before an `a` with neither bytes nor writer
  * is 0, as Linux's `link_pipe` and `splice_pipe_to_pipe` check
- * `opipe->readers` first in their loops (fs/splice.c:1765-1770 and
- * 1916-1922 in 6.12), which `ipipe_prep` reaches with 0 for such an `a`.
+ * `opipe->readers` first in their loops (fs/splice.c:1778-1783 and
+ * 1902-1907 in 6.12), which `ipipe_prep` reaches with 0 for such an `a`.
  */
 static int32_t pipe_link_ready(pipe_t *a, pipe_t *b, int nonblock)
 {

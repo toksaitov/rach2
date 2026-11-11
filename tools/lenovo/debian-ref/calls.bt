@@ -1,0 +1,45 @@
+// calls.bt PID: the system calls and ioctl requests of process PID, each
+// with its count and its time from entry to exit, and the samples of its
+// threads at 999 Hz by kernel function and caller, an empty stack for user
+// mode; printed when bpftrace ends on SIGINT. 80-41's reference beside
+// Rach2's debugfs bkl/calls and bkl/profile.
+tracepoint:raw_syscalls:sys_enter /pid == $1/
+{
+	@start[tid] = nsecs;
+	@nr[tid] = args->id;
+}
+
+tracepoint:raw_syscalls:sys_exit /pid == $1 && @start[tid]/
+{
+	@calls[@nr[tid]] = count();
+	@ns[@nr[tid]] = sum(nsecs - @start[tid]);
+	delete(@start[tid]);
+	delete(@nr[tid]);
+}
+
+tracepoint:syscalls:sys_enter_ioctl /pid == $1/
+{
+	@istart[tid] = nsecs;
+	@cmd[tid] = args->cmd;
+}
+
+tracepoint:syscalls:sys_exit_ioctl /pid == $1 && @istart[tid]/
+{
+	@icalls[@cmd[tid]] = count();
+	@ins[@cmd[tid]] = sum(nsecs - @istart[tid]);
+	delete(@istart[tid]);
+	delete(@cmd[tid]);
+}
+
+profile:hz:999 /pid == $1/
+{
+	@prof[kstack(2)] = count();
+}
+
+END
+{
+	clear(@start);
+	clear(@nr);
+	clear(@istart);
+	clear(@cmd);
+}

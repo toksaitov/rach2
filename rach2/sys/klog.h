@@ -51,17 +51,46 @@
  * A record longer than `KLOG_RECORD_MAX` is cut and marked with `...`. Exactly
  * one newline ends every record, however the format was written.
  *
- * Any context may call it, an interrupt handler included: the record is built
- * and put in the ring with interrupts off, and neither step sleeps. A record
- * raised while another is being written out, or inside a console write
- * (`console_write_begin`), waits in a queue of sixty-four for the rest of its
- * destinations and goes out when that write ends; one raised when the queue
- * is full is dropped, and a later record says how many were.
+ * Any context may call it, an interrupt handler and an NMI included: the
+ * record is built and put in the ring with interrupts off, and neither step
+ * sleeps. A record raised while another is being written out, or inside a
+ * console write (`console_write_begin`), waits in a queue of sixty-four for
+ * the rest of its destinations and goes out when that write ends; one
+ * raised when the queue is full is dropped, and a later record says how
+ * many were. A record made in an NMI, or by a processor without the big
+ * lock (`smp_serialized`), is kept whole, in a queue of 128 that any
+ * processor may add to, until a processor that holds the big lock makes a
+ * record, writes the console or takes the boot processor's tick, or the
+ * panic writes its own (`klog_flush`); it then reaches the ring and the
+ * destinations, in the order the records were made.
  */
 void klog(int level, const char *subsystem, const char *format, ...);
 
 /** As `klog`, with the arguments in `ap`, which the call consumes. */
 void klog_v(int level, const char *subsystem, const char *format, va_list ap);
+
+/** Write out the records kept for later, oldest first, when this processor
+ * may (`smp_serialized`) and no other is writing them out for it
+ * (`klog_flush_stuck`); inside another record's delivery or a console
+ * write, put them in the ring and the queue, ahead of what comes next, for
+ * that delivery or write to write out when it ends. Nothing otherwise, and
+ * nothing, with no interrupt bracket, while none is kept. */
+void klog_flush(void);
+
+/** Whether records are kept for later. */
+int klog_kept(void);
+
+/**
+ * Write out the records kept for later from a processor that may not write
+ * klog's shared state, outside an NMI, once the hard-lockup detector has
+ * reported the holder of the big lock locked up: that one would never
+ * write them, and Linux writes such a report from the processor that found
+ * it. One processor at a time does, and only the records kept when it
+ * began. It does nothing while the holder is writing klog's state itself,
+ * a record or the end of a console write, and the holder, should it come
+ * back meanwhile, keeps its records for later until this is done.
+ */
+void klog_flush_stuck(void);
 
 /**
  * Read out of the ring, oldest byte first.
@@ -104,7 +133,8 @@ uint32_t klog_read_from(char *buf, uint32_t cap, uint32_t *at);
  * record's delivery or a console write, where it would otherwise wait in the
  * queue: for a machine about to stop, which never comes back to write the
  * queue out. It clears what would have queued the record, which is safe only
- * because nothing after it is expected to run.
+ * because nothing after it is expected to run. The records it leaves in the
+ * queue go out ahead of the next record, which a full queue cannot drop.
  */
 void klog_deliver_directly(void);
 

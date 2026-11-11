@@ -21,6 +21,7 @@
 #define _SMP_H_
 
 #include "percpu.h"
+#include "../lib/kuser.h"
 
 struct page_dir;
 
@@ -61,6 +62,14 @@ void bkl_take(int depth);
 
 /** The processors started and taking work, the boot processor counted. */
 int smp_cpu_count(void);
+
+/**
+ * Whether this processor may write what the big lock guards from where it
+ * runs: it has begun a panic, which stopped the others; or it is not in an
+ * NMI and holds the big lock or is the only processor started. klog keeps
+ * a record made elsewhere for a processor that may (klog.c).
+ */
+int smp_serialized(void);
 
 /** Read the sum and longest big-lock acquisition in microseconds
  * elapsed since boot, and the outer holds completed during that longest
@@ -125,6 +134,48 @@ void smp_hold_sample(uint64_t *age_us, uintptr_t pc[BKL_SAMPLE_PCS]);
  * its age in microseconds and its instruction with callers, all 0 when no
  * interrupt came that late. The caller holds the big lock. */
 void smp_hold_early(int mark, uint64_t *age_us, uintptr_t pc[BKL_SAMPLE_PCS]);
+
+/* The ioctl requests the call counts (`smp_calls_show`) keep apart, and the
+ * slots of the profile of kernel time under the big lock. */
+#define BKL_IOCTL_SLOTS   256
+#define BKL_PROFILE_SLOTS 2048
+
+/** Charge the hold under way on this processor, the outermost entry's, to
+ * ioctl request `cmd` as well as to the call, and return the request's slot
+ * plus one for `smp_call_end`, 0 when every slot holds another request.
+ * The caller holds the big lock. */
+int bkl_note_ioctl(uint32_t cmd);
+
+/** Count the system call `nr` that ends now: its time from `start`, the
+ * cycle count before its entry took the big lock, to now, which includes
+ * its wait for the lock and its sleeps, and, for `ioctl` above 0, the same
+ * under that request's slot. The caller holds the big lock. */
+void smp_call_end(uint32_t nr, int ioctl, uint64_t start);
+
+/** Count a sample of the kernel's time under the big lock: the tick found
+ * this processor holding it at `pc`, with the frame pointer `fp`, which
+ * gives its caller. Nothing when this processor took the lock for the tick
+ * itself, from user mode or an idle wait. */
+void bkl_profile_sample(uintptr_t pc, uintptr_t fp);
+
+/** Write the call counts as debugfs's `bkl/calls` shows them, as far as `cap`
+ * bytes at `buf` go, and return the whole text's length: for each system call,
+ * entry vector and ioctl request with any count, the calls, their time from
+ * entry to return, the holds of the big lock charged to it, and their time
+ * and their waits for the lock, in microseconds. The caller holds the big
+ * lock. */
+int32_t smp_calls_show(void *data, char *buf, uint32_t cap);
+
+/** Zero the call counts, keeping the requests in their slots; `len`. */
+int32_t smp_calls_store(void *data, const char __user *buf, uint32_t len);
+
+/** Write the profile as debugfs's `bkl/profile` shows it: the samples, those
+ * a full table lost, and each sampled instruction with its caller and its
+ * count. The caller holds the big lock. */
+int32_t smp_profile_show(void *data, char *buf, uint32_t cap);
+
+/** Zero the profile; `len`. */
+int32_t smp_profile_store(void *data, const char __user *buf, uint32_t len);
 
 /** Answer the requests other processors left this one: stop for good, drop
  * a translation or every one, or give up a page directory for the
@@ -194,7 +245,8 @@ void smp_space_release(const struct page_dir *dir);
  * Stop every other processor for good, for a panic and a power off, and
  * wait, a second at most and 10 ms more for a processor sent an NMI, until
  * each has taken the stop, so that none is still writing the log or the
- * screen when the caller does.
+ * screen when the caller does. A processor sent the NMI takes the stop in
+ * the NMI's handler (`watchdog_nmi`, `smp_stop_nmi`).
  */
 void smp_stop_others(void);
 

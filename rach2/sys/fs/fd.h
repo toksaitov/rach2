@@ -373,11 +373,19 @@ void fd_ofd_unref(struct open_file *ofd);
 struct open_file *fd_ofd_new(void);
 
 struct vfs_ref;
-/** Reserve `ref` for writing (1) or execution (2) in `ofd`. Opposite
- * reservations on the same file give -ETXTBSY. Does not sleep; the caller
- * holds the node, and transfers that hold to the description or releases
- * the description before the node. The big kernel lock is required. */
+/** Reserve `ref` for writing (1) or execution (2) in `ofd`, in place of
+ * any reservation `ofd` held: 0, or -ETXTBSY for an opposite reservation on
+ * the same file, found from a count of each file's reservations as Linux's
+ * i_writecount, which leaves `ofd`'s own as it was. Needs no memory, since
+ * the description brought the count's record when it was made, and does
+ * not sleep; the caller holds the node, and transfers that hold to the
+ * description or releases the description before the node. The big kernel
+ * lock is required. */
 int fd_ofd_access(struct open_file *ofd, const struct vfs_ref *ref, int access);
+
+/** Give back the reservation `ofd` holds, if any. The big kernel lock is
+ * required. */
+void fd_ofd_access_drop(struct open_file *ofd);
 
 /** Take or release the description lock (see `busy` above), and with it,
  * taken first and released last, the namespace lock of the description's
@@ -387,8 +395,9 @@ void fd_ofd_lock(struct open_file *ofd);
 void fd_ofd_unlock(struct open_file *ofd);
 
 /** Repoint the node of every description of `mnt` that names `from` at
- * `to`, and the handle too on a mounted KRFFS volume, after a growing write
- * moved a KRFFS node. Called by `vfs_repoint`, which sweeps every holder. */
+ * `to`, with its reservation, and the handle too on a mounted KRFFS volume,
+ * after a growing write moved a KRFFS node. Called by `vfs_repoint`, which
+ * sweeps every holder. */
 void fd_ofd_repoint(struct vfs_mount *mnt, const void *from, void *to);
 
 /** Whether a description of (`mnt`, `node`) is inside an operation now, as

@@ -147,7 +147,7 @@ static void check_ecc(void)
 
     k_memset(mem, 0, sizeof(mem));
     CHECK(prz_init(&z, mem, sizeof(mem), 0, 16, 0) == 0);
-    /* ram_core.c:212: DIV_ROUND_UP(4084 - 16, 144) blocks and one more
+    /* ram_core.c:204: DIV_ROUND_UP(4084 - 16, 144) blocks and one more
      * parity for the header. */
     CHECK(z.ecc_blocks == 29 && z.buffer_size == 4084 - 30 * 16);
     CHECK(prz_ecc_string(&z, notice, sizeof(notice)) == 25);

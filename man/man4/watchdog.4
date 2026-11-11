@@ -12,32 +12,52 @@ machine when an armed timer is left unfed through both expiry stages.
 The kernel identifies the chipset before accessing PMBASE plus 0x60
 and the NO_REBOOT bit of RCBA plus 0x3410.
 Other chipsets have no device node.
-The timer is halted at boot, unless the firmware left it counting toward
-a reset or the kernel's command line has
-.Cm rach2.itco.arm ,
-and it is halted at an orderly shutdown.
+At boot the kernel clears NO_REBOOT, as Linux's iTCO_wdt does; a chipset
+whose firmware keeps NO_REBOOT set has no device node.
+The timer is then halted, with NO_REBOOT set again, unless the firmware
+left it counting or the kernel's command line has
+.Cm rach2.itco.arm ;
+a timer the firmware left counting is kept counting, now toward a reset,
+whether or not the firmware had set NO_REBOOT.
+The timer is halted at an orderly shutdown.
 .Pp
-A timer running at boot is fed by the kernel every half timeout, from the
-boot processor's tick, until a program opens the device, as Linux's
-watchdog core feeds a watchdog that runs before user space takes it over.
-The tick stops with the kernel, at a panic or when the boot processor
-hangs with its interrupts off, and the chipset then resets the machine
-after both stages of the timer, twice the timeout after the last feed.
+A timer running at boot is fed by the kernel every half timeout until a
+program opens the device, as Linux's watchdog core feeds a watchdog that
+runs before user space takes it over.
+The boot processor's tick counts the time and leaves each feed to the
+kernel thread
+.Ql watchdogd ,
+which runs at SCHED_FIFO priority 50, as Linux's does.
+The feed therefore stops when the tick stops, at a panic or when the boot
+processor hangs with its interrupts off, and also when watchdogd no longer
+runs, as when a kernel path loops or deadlocks holding the big lock with
+interrupts on.
+The chipset then resets the machine after both stages of the timer,
+twice the timeout after the last feed.
+Before the first program starts, and in the kernel debug shell, the
+scheduler runs no thread, and the tick feeds the timer itself.
 .Cm rach2.itco.arm
 starts the timer at boot for that purpose, as firmware that leaves it
 running would.
-These options of Linux's are read from the command line:
+These options of Linux's are read from the command line as Linux reads
+module parameters: when one is given more than once, each value is taken
+in order, so the last valid one counts, and a value that is not valid is
+logged and leaves the option as it was.
+A boolean option given bare, with no value, is true, and a number option
+given bare is not valid.
 .Bl -tag -width Ds
 .It Cm iTCO_wdt.heartbeat Ns = Ns Ar SECONDS
-The timeout at boot, 3 through 614 seconds; 30 when not given or out of
-range.
+The timeout at boot, 3 through 614 seconds; 30 when not given, or when
+out of range, which is logged.
 .It Cm iTCO_wdt.nowayout Ns = Ns Ar BOOL
 With a true value, the timer cannot be stopped once a program has
-started it: a magic close and
+started it, as on Linux:
 .Dv WDIOS_DISABLECARD
-fail with
-.Er EBUSY
-and leave it running, as on Linux.
+fails with
+.Er EBUSY ,
+and a magic close leaves the timer running, feeds it once and logs
+.Ql watchdog: close: did not stop: nowayout ;
+the close itself does not fail.
 The kernel feeds it no more, so a program that stops feeding it lets the
 machine reset.
 .It Cm iTCO_wdt.turn_SMI_watchdog_clear_off Ns = Ns Ar N
@@ -125,8 +145,11 @@ an invalid timeout, or a timer register that refuses it, with
 .Er EINVAL ;
 a halt or NO_REBOOT bit that refuses a change with
 .Er EIO ;
-and a stop under nowayout with
+and
+.Dv WDIOS_DISABLECARD
+under nowayout with
 .Er EBUSY .
+A close never fails.
 There are no unbounded waits in the driver.
 .Sh FILES
 .Pa /dev/watchdog

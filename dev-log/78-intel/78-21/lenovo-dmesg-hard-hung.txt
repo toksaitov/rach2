@@ -1,0 +1,275 @@
+[    5.163000] pci: msi: 1:0.0 on vector 52, remapped
+[    5.163000] rtl8168: interrupts: messages on vector 52
+[    5.170000] net: eth0: IPv6 fe80::2ad2:44ff:fe7e:e0af/64 added
+[    5.177000] net: ready: RTL8168GU
+[    5.183000] net: eth0: RTL8168GU, station 28:D2:44:7E:E0:AF
+[    5.190000] rtl8168: RTL8168GU: xid 0x509, MMIO 0x48A000, MAC 28:D2:44:7E:E0:AF
+[    5.190000] rtl8168: no link yet
+[    5.197000] rtl8168: messages on vector 52: none yet, 0 by the tick
+[    5.203000] net: eth0: no address
+[    5.210000] netconsole: broadcast, ethertype 0x88b5, boot id 0xb5ff639e, 0 frames, 6590 characters dropped
+[    5.235000] vtd: irte: dmar1 index 9: msi of 2:0.0, vector 56 to apic 0, edge, sid 0x0200 svt 1
+[    5.235000] pci: msi: 2:0.0 on vector 56, remapped
+[    5.235000] ath9k: interrupts: messages on vector 56
+[    5.242000] ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac b8:ee:65:32:89:15 subsys 17aa:4026
+[    5.253000] drm: start
+[    5.260000] i915: 00:02.0: 0a16 left to the firmware's framebuffer; rach2.i915 binds it
+[    5.268000] drm: simpledrm: card0
+[    5.275000] console: card0: the firmware's framebuffer
+[    5.282000] fbdrm: registered: simpledrm 1366x768, XR24, pitch 5504, at 0xb0000000, card 0
+[    5.289000] kvm: ready: vmx
+[    5.297000] vfio: ready: 12 groups of 14 functions
+[    5.635000] timing: tick 1000 Hz, 200 ms delay measured 201 ms, 2000 us wait measured 2012 us
+[    5.643000] clock: reference: the hpet; a tick the timer misses or delays is counted
+[    5.662000] smp: cpu1: tsc: synchronized with cpu0
+[    5.686000] smp: cpu2: tsc: synchronized with cpu0
+[    5.709000] smp: cpu3: tsc: synchronized with cpu0
+[    5.720000] smp: processors: 4 online of 4
+[    5.730000] nmi_watchdog: counter: intel arch version 3, 48 bits, 1895 MHz
+[    5.741000] nmi_watchdog: enabled: permanently consumes one hw-PMU counter
+[    5.752000] vdso: clock: the tsc, 1895609 counts a tick
+[    5.766000] boot: starting /sbin/init
+[    5.769000] acpi: thread: kacpid is pid 3
+[    5.769000] wlan: worker: kwlan is pid 4
+[    5.769000] mouse: worker: kpsmoused is pid 5
+[    5.773000] input: sysfs: worker: kinputd is pid 6
+[    8.297000] rtl8168: link 1000 Mb/s, full duplex, pause both ways
+[    9.072000] net: eth0: IPv4 192.168.0.106/24
+[    9.299000] net: wlan0: IPv6 fe80::baee:65ff:fe32:8915/64 added
+[   10.265000] net: eth0: IPv6 fd91:381e:e667:4a0c:ed8a:e65:4c38:4f64/64 added
+[   10.265000] net: eth0: IPv6 fd91:381e:e667:4a0c:6815:3304:6b17:b26c/64 added
+[   10.763000] wlan: wlan0: key: pairwise: last pn 0, decrypt errors 0, duplicates 0, replays 0
+[   10.833000] net: wlan0: IPv4 192.168.0.105/24
+[   12.178000] net: wlan0: IPv6 fd91:381e:e667:4a0c:a1e:e4b1:d013:473b/64 added
+[   12.178000] net: wlan0: IPv6 fd91:381e:e667:4a0c:9a75:e4f3:ca26:ebce/64 added
+[   90.563000] watchdog: BUG: soft lockup - CPU#3 stuck for 5s! [sh:119]
+[   90.563000] watchdog: CPU: 3 PID: 119 Comm: sh Not tainted 6.18.0-rach2
+[   90.563000] watchdog: RIP: 0010:0xffffffff8039ebf6
+[   90.563000] watchdog: RSP: 0018:ffffc0000149cc68 EFLAGS: 00000282
+[   90.563000] watchdog: RAX: 0000000000000282 RBX: 00007ebdf7b0b740 RCX: 0000000000000005
+[   90.563000] watchdog: RDX: 0000000000000040 RSI: 0000000000000000 RDI: 0000000000000282
+[   90.563000] watchdog: RBP: ffffc0000149cc80 R08: 0000000000000006 R09: 0000000000000000
+[   90.563000] watchdog: R10: 0000000000000000 R11: 0000000000000202 R12: 0000000000000008
+[   90.563000] watchdog: R13: 0000000000af5fe0 R14: 0000000000af5c00 R15: 0000000000000000
+[   90.563000] watchdog: Call Trace:
+[   90.563000] watchdog:  0xffffffff8039cb3c
+[   90.563000] watchdog:  0xffffffff8039cb74
+[   90.563000] watchdog:  0xffffffff8039cc28
+[   90.563000] watchdog:  0xffffffff8039cc7c
+[   90.563000] watchdog:  0xffffffff80175615
+[   90.563000] watchdog:  0xffffffff8017597b
+[   90.563000] watchdog:  0xffffffff8025a6b1
+[   90.563000] watchdog:  0xffffffff80131262
+[   90.563000] watchdog:  0xffffffff80131ffa
+[   90.563000] watchdog:  0xffffffff8013268e
+[   90.563000] watchdog:  0xffffffff8011863f
+[   90.563000] watchdog:  0xffffffff8037b72b
+[   90.563000] watchdog:  0xffffffff8037b81f
+[   90.563000] watchdog:  0xffffffff8037b7d2
+[   90.563000] watchdog:  0xffffffff80100615
+[   95.363000] watchdog: BUG: soft lockup - CPU#3 stuck for 10s! [sh:119]
+[   95.363000] watchdog: CPU: 3 PID: 119 Comm: sh Not tainted 6.18.0-rach2
+[   95.363000] watchdog: RIP: 0010:0xffffffff8039ebf6
+[   95.363000] watchdog: RSP: 0018:ffffc0000149cc68 EFLAGS: 00000282
+[   95.363000] watchdog: RAX: 0000000000000282 RBX: 00007ebdf7b0b740 RCX: 0000000000000009
+[   95.363000] watchdog: RDX: 0000000000000040 RSI: 0000000000000000 RDI: 0000000000000282
+[   95.363000] watchdog: RBP: ffffc0000149cc80 R08: 0000000000000006 R09: 0000000000000000
+[   95.363000] watchdog: R10: 0000000000000000 R11: 0000000000000202 R12: 0000000000000008
+[   95.363000] watchdog: R13: 0000000000af5fe0 R14: 0000000000af5c00 R15: 0000000000000000
+[   95.363000] watchdog: Call Trace:
+[   95.363000] watchdog:  0xffffffff8039cb3c
+[   95.363000] watchdog:  0xffffffff8039cb74
+[   95.363000] watchdog:  0xffffffff8039cc28
+[   95.363000] watchdog:  0xffffffff8039cc7c
+[   95.363000] watchdog:  0xffffffff80175615
+[   95.363000] watchdog:  0xffffffff8017597b
+[   95.363000] watchdog:  0xffffffff8025a6b1
+[   95.363000] watchdog:  0xffffffff80131262
+[   95.363000] watchdog:  0xffffffff80131ffa
+[   95.363000] watchdog:  0xffffffff8013268e
+[   95.363000] watchdog:  0xffffffff8011863f
+[   95.363000] watchdog:  0xffffffff8037b72b
+[   95.363000] watchdog:  0xffffffff8037b81f
+[   95.363000] watchdog:  0xffffffff8037b7d2
+[   95.363000] watchdog:  0xffffffff80100615
+[  100.163000] watchdog: BUG: soft lockup - CPU#3 stuck for 15s! [sh:119]
+[  100.163000] watchdog: CPU: 3 PID: 119 Comm: sh Not tainted 6.18.0-rach2
+[  100.163000] watchdog: RIP: 0010:0xffffffff8039ebf6
+[  100.163000] watchdog: RSP: 0018:ffffc0000149cc68 EFLAGS: 00000282
+[  100.163000] watchdog: RAX: 0000000000000282 RBX: 00007ebdf7b0b740 RCX: 0000000000000009
+[  100.163000] watchdog: RDX: 0000000000000040 RSI: 0000000000000000 RDI: 0000000000000282
+[  100.163000] watchdog: RBP: ffffc0000149cc80 R08: 0000000000000006 R09: 0000000000000000
+[  100.163000] watchdog: R10: 0000000000000000 R11: 0000000000000202 R12: 0000000000000008
+[  100.163000] watchdog: R13: 0000000000af5fe0 R14: 0000000000af5c00 R15: 0000000000000000
+[  100.163000] watchdog: Call Trace:
+[  100.163000] watchdog:  0xffffffff8039cb3c
+[  100.163000] watchdog:  0xffffffff8039cb74
+[  100.163000] watchdog:  0xffffffff8039cc28
+[  100.163000] watchdog:  0xffffffff8039cc7c
+[  100.163000] watchdog:  0xffffffff80175615
+[  100.163000] watchdog:  0xffffffff8017597b
+[  100.163000] watchdog:  0xffffffff8025a6b1
+[  100.163000] watchdog:  0xffffffff80131262
+[  100.163000] watchdog:  0xffffffff80131ffa
+[  100.163000] watchdog:  0xffffffff8013268e
+[  100.163000] watchdog:  0xffffffff8011863f
+[  100.163000] watchdog:  0xffffffff8037b72b
+[  100.163000] watchdog:  0xffffffff8037b81f
+[  100.163000] watchdog:  0xffffffff8037b7d2
+[  100.163000] watchdog:  0xffffffff80100615
+[  107.479000] watchdog: watchdog detected hard LOCKUP on cpu 3
+[  107.479000] watchdog: CPU: 3 PID: 139 Comm: sh Not tainted 6.18.0-rach2
+[  107.479000] watchdog: RIP: 0010:0xffffffff80377901
+[  107.479000] watchdog: RSP: 0018:ffffc0000149cc78 EFLAGS: 00000096
+[  107.479000] watchdog: RAX: 0000000000000000 RBX: 00007ef05e514740 RCX: 0000000000000009
+[  107.479000] watchdog: RDX: 0000000000000043 RSI: 0000000000000000 RDI: 0000000000000043
+[  107.479000] watchdog: RBP: ffffc0000149cc80 R08: 0000000000000006 R09: 0000000000000000
+[  107.479000] watchdog: R10: 0000000000000000 R11: 0000000000000202 R12: 0000000000000008
+[  107.479000] watchdog: R13: 000000000059efe0 R14: 000000000059ec00 R15: 0000000000000000
+[  107.479000] watchdog: Call Trace:
+[  107.479000] watchdog:  0xffffffff8039cb18
+[  107.479000] watchdog:  0xffffffff8039cb74
+[  107.479000] watchdog:  0xffffffff8039cc28
+[  107.479000] watchdog:  0xffffffff8039cc7c
+[  107.479000] watchdog:  0xffffffff80175615
+[  107.479000] watchdog:  0xffffffff8017597b
+[  107.479000] watchdog:  0xffffffff8025a6b1
+[  107.479000] watchdog:  0xffffffff80131262
+[  107.479000] watchdog:  0xffffffff80131ffa
+[  107.479000] watchdog:  0xffffffff8013268e
+[  107.479000] watchdog:  0xffffffff8011863f
+[  107.479000] watchdog:  0xffffffff8037b72b
+[  107.479000] watchdog:  0xffffffff8037b81f
+[  107.479000] watchdog:  0xffffffff8037b7d2
+[  107.479000] watchdog:  0xffffffff80100615
+[  107.479000] nmi_backtrace: sending NMI from CPU 3 to CPUs 0-2:
+[  107.479000] nmi_backtrace: NMI backtrace for cpu 0
+[  107.479000] nmi_backtrace: CPU: 0 PID: 0 Comm: idle Not tainted 6.18.0-rach2
+[  107.479000] nmi_backtrace: RIP: 0010:0xffffffff8010ad29
+[  107.479000] nmi_backtrace: RSP: 0018:ffffc00000c4de88 EFLAGS: 00000006
+[  107.479000] nmi_backtrace: RAX: 000000000000c220 RBX: 0000000070fcb2a8 RCX: 0000000000000000
+[  107.479000] nmi_backtrace: RDX: 0000000000000000 RSI: 00000000000003e8 RDI: 0000016115ae4d00
+[  107.479000] nmi_backtrace: RBP: ffffc00000c4dec0 R08: ffffc00000dd9ca0 R09: 0000000000000000
+[  107.479000] nmi_backtrace: R10: 00007ffe13484d60 R11: 0000000000000202 R12: 0000000000000000
+[  107.479000] nmi_backtrace: R13: 0000000000000000 R14: 0000000000000000 R15: 0000000000000000
+[  107.479000] nmi_backtrace: Call Trace:
+[  107.479000] nmi_backtrace:  0xffffffff80174099
+[  107.479000] nmi_backtrace:  0xffffffff8017465a
+[  107.479000] nmi_backtrace:  0xffffffff801ef7ad
+[  107.479000] nmi_backtrace:  0xffffffff801eec3c
+[  107.479000] nmi_backtrace:  0xffffffff801ef6fd
+[  107.479000] nmi_backtrace:  0xffffffff801ee542
+[  107.479000] nmi_backtrace:  0xffffffff801edb1b
+[  107.479000] nmi_backtrace: NMI backtrace for cpu 1
+[  107.479000] nmi_backtrace: CPU: 1 PID: 0 Comm: idle Not tainted 6.18.0-rach2
+[  107.479000] nmi_backtrace: RIP: 0010:0xffffffff801ef79e
+[  107.479000] nmi_backtrace: RSP: 0018:ffffc00000c54ec0 EFLAGS: 00000006
+[  107.479000] nmi_backtrace: RAX: 00000000000000b8 RBX: 00000000000003e8 RCX: 0000000000000000
+[  107.479000] nmi_backtrace: RDX: 00000000151dc1e8 RSI: 00000000000003e8 RDI: 0000016115ae4d00
+[  107.479000] nmi_backtrace: RBP: ffffc00000c54ed0 R08: ffffffff80204635 R09: 0000000000000000
+[  107.479000] nmi_backtrace: R10: 00007ffe96c36100 R11: 0000000000000202 R12: 0000000000000000
+[  107.479000] nmi_backtrace: R13: 0000000000000000 R14: 0000000000000000 R15: 0000000000000000
+[  107.479000] nmi_backtrace: Call Trace:
+[  107.479000] nmi_backtrace:  0xffffffff801eec3c
+[  107.479000] nmi_backtrace:  0xffffffff801ef6fd
+[  107.479000] nmi_backtrace:  0xffffffff801ee542
+[  107.479000] nmi_backtrace:  0xffffffff801edb1b
+[  107.479000] nmi_backtrace:  0xffffffff801f00ac
+[  107.479000] nmi_backtrace:  0xffffffff8039c364
+[  107.479000] nmi_backtrace:  0x807c
+[  107.479000] nmi_backtrace: NMI backtrace for cpu 2
+[  107.479000] nmi_backtrace: CPU: 2 PID: 0 Comm: idle Not tainted 6.18.0-rach2
+[  107.479000] nmi_backtrace: RIP: 0010:0xffffffff80377a45
+[  107.479000] nmi_backtrace: RSP: 0018:ffffc00000c5bed8 EFLAGS: 00000046
+[  107.479000] nmi_backtrace: RAX: 0000000000000000 RBX: 00000000000003e8 RCX: 0000000000000000
+[  107.479000] nmi_backtrace: RDX: 000000001a24d5b5 RSI: 00000000000003e8 RDI: 0000016115ae4d00
+[  107.479000] nmi_backtrace: RBP: ffffc00000c5bf30 R08: ffffffff80449920 R09: 0000000000000000
+[  107.479000] nmi_backtrace: R10: 0000000000000000 R11: 0000000000000202 R12: 0000000000000000
+[  107.479000] nmi_backtrace: R13: 0000000000000000 R14: 0000000000000000 R15: 0000000000000000
+[  107.479000] nmi_backtrace: Call Trace:
+[  107.479000] nmi_backtrace:  0xffffffff801ef6fd
+[  107.479000] nmi_backtrace:  0xffffffff801ee542
+[  107.479000] nmi_backtrace:  0xffffffff801edb1b
+[  107.479000] nmi_backtrace:  0xffffffff801f00ac
+[  107.479000] nmi_backtrace:  0xffffffff8039c364
+[  107.479000] nmi_backtrace:  0x807c
+[  137.614000] hung_task: INFO: task sh:153 blocked for more than 3 seconds.
+[  137.614000] hung_task:       Not tainted 6.18.0-rach2 #1
+[  137.614000] hung_task: "echo 0 > /proc/sys/kernel/hung_task_timeout_secs" disables this message.
+[  137.614000] hung_task: task:sh state:D pid:153 tgid:153 ppid:152 wchan:wq_wait_event_nointr
+[  137.614000] hung_task:  0xffffffff8031b196
+[  137.614000] hung_task: Call Trace:
+[  137.614000] hung_task:  0xffffffff801edae8
+[  137.614000] hung_task:  0xffffffff801f0834
+[  137.614000] hung_task:  0xffffffff801f0c17
+[  137.614000] hung_task:  0xffffffff80175789
+[  137.614000] hung_task:  0xffffffff8017595a
+[  137.614000] hung_task:  0xffffffff8025a6b1
+[  137.614000] hung_task:  0xffffffff80131262
+[  137.614000] hung_task:  0xffffffff80131ffa
+[  137.614000] hung_task:  0xffffffff8013268e
+[  137.614000] hung_task:  0xffffffff8011863f
+[  137.614000] hung_task:  0xffffffff8037b72b
+[  137.614000] hung_task:  0xffffffff8037b81f
+[  137.614000] hung_task:  0xffffffff8037b7d2
+[  137.614000] hung_task:  0xffffffff80100615
+[  140.614000] hung_task: INFO: task sh:153 blocked for more than 6 seconds.
+[  140.614000] hung_task:       Not tainted 6.18.0-rach2 #1
+[  140.614000] hung_task: "echo 0 > /proc/sys/kernel/hung_task_timeout_secs" disables this message.
+[  140.614000] hung_task: task:sh state:D pid:153 tgid:153 ppid:152 wchan:wq_wait_event_nointr
+[  140.614000] hung_task:  0xffffffff8031b196
+[  140.614000] hung_task: Call Trace:
+[  140.614000] hung_task:  0xffffffff801edae8
+[  140.614000] hung_task:  0xffffffff801f0834
+[  140.614000] hung_task:  0xffffffff801f0c17
+[  140.614000] hung_task:  0xffffffff80175789
+[  140.614000] hung_task:  0xffffffff8017595a
+[  140.614000] hung_task:  0xffffffff8025a6b1
+[  140.614000] hung_task:  0xffffffff80131262
+[  140.614000] hung_task:  0xffffffff80131ffa
+[  140.614000] hung_task:  0xffffffff8013268e
+[  140.614000] hung_task:  0xffffffff8011863f
+[  140.614000] hung_task:  0xffffffff8037b72b
+[  140.614000] hung_task:  0xffffffff8037b81f
+[  140.614000] hung_task:  0xffffffff8037b7d2
+[  140.614000] hung_task:  0xffffffff80100615
+[  143.614000] hung_task: INFO: task sh:153 blocked for more than 9 seconds.
+[  143.614000] hung_task:       Not tainted 6.18.0-rach2 #1
+[  143.614000] hung_task: "echo 0 > /proc/sys/kernel/hung_task_timeout_secs" disables this message.
+[  143.614000] hung_task: task:sh state:D pid:153 tgid:153 ppid:152 wchan:wq_wait_event_nointr
+[  143.614000] hung_task:  0xffffffff8031b196
+[  143.614000] hung_task: Call Trace:
+[  143.614000] hung_task:  0xffffffff801edae8
+[  143.614000] hung_task:  0xffffffff801f0834
+[  143.614000] hung_task:  0xffffffff801f0c17
+[  143.614000] hung_task:  0xffffffff80175789
+[  143.614000] hung_task:  0xffffffff8017595a
+[  143.614000] hung_task:  0xffffffff8025a6b1
+[  143.614000] hung_task:  0xffffffff80131262
+[  143.614000] hung_task:  0xffffffff80131ffa
+[  143.614000] hung_task:  0xffffffff8013268e
+[  143.614000] hung_task:  0xffffffff8011863f
+[  143.614000] hung_task:  0xffffffff8037b72b
+[  143.614000] hung_task:  0xffffffff8037b81f
+[  143.614000] hung_task:  0xffffffff8037b7d2
+[  143.614000] hung_task:  0xffffffff80100615
+[  146.614000] hung_task: INFO: task sh:153 blocked for more than 12 seconds.
+[  146.614000] hung_task:       Not tainted 6.18.0-rach2 #1
+[  146.614000] hung_task: "echo 0 > /proc/sys/kernel/hung_task_timeout_secs" disables this message.
+[  146.614000] hung_task: task:sh state:D pid:153 tgid:153 ppid:152 wchan:wq_wait_event_nointr
+[  146.614000] hung_task:  0xffffffff8031b196
+[  146.614000] hung_task: Call Trace:
+[  146.614000] hung_task:  0xffffffff801edae8
+[  146.614000] hung_task:  0xffffffff801f0834
+[  146.614000] hung_task:  0xffffffff801f0c17
+[  146.614000] hung_task:  0xffffffff80175789
+[  146.614000] hung_task:  0xffffffff8017595a
+[  146.614000] hung_task:  0xffffffff8025a6b1
+[  146.614000] hung_task:  0xffffffff80131262
+[  146.614000] hung_task:  0xffffffff80131ffa
+[  146.614000] hung_task:  0xffffffff8013268e
+[  146.614000] hung_task:  0xffffffff8011863f
+[  146.614000] hung_task:  0xffffffff8037b72b
+[  146.614000] hung_task:  0xffffffff8037b81f
+[  146.614000] hung_task:  0xffffffff8037b7d2
+[  146.614000] hung_task:  0xffffffff80100615

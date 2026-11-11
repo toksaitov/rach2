@@ -15,9 +15,21 @@
  * interrupted. It waits in a queue instead, and the delivery it interrupted
  * writes it out when its own record is finished.
  *
- * The formatter writes through a sink with state of its own, which is the one
- * thing here that two callers cannot share, so the formatting and the ring
- * append each run with interrupts off. Both are short and neither sleeps.
+ * The formatter writes through a sink with state of its own, one for each
+ * processor, which two callers on one processor cannot share, so the
+ * formatting and the ring append each run with interrupts off. Both are
+ * short and neither sleeps.
+ *
+ * The ring, the queue and the destinations are shared by every processor,
+ * and the big lock is what keeps two of them out at once. A record made
+ * where that does not hold, in an NMI or by a processor without the big
+ * lock, as the lockup detectors' are, is kept whole in a queue of its own
+ * that takes records from any processor without a lock, and a processor
+ * that may write the rest moves it on at its next record, console write or
+ * tick, or at the panic (`klog_flush`), as Linux's printk defers the legacy
+ * consoles in an NMI. When the holder of the big lock is locked up, another
+ * processor writes them out instead (`klog_flush_stuck`), and the two keep
+ * out of each other's way (`klog_enter`).
  *
  * The console calls are the other half of this file. The debug shell's
  * prompts and command output are a user interface, not a diagnostic: they are
@@ -31,10 +43,15 @@
 
 #include "kio.h"
 #include "serial.h"
+#include "arch/arch.h"
 #include "display/textcon.h"
 #include "lib/kfmt.h"
 #include "lib/kirq.h"
+#include "lib/kdef.h"
 #include "network/netconsole.h"
+#include "panic.h"
+#include "proc/percpu.h"
+#include "proc/smp.h"
 #include "pstore/pstore.h"
 #include "timer.h"
 
@@ -53,12 +70,15 @@ struct klog_record {
     int level;
 };
 
-/* Where the formatter's sink is writing. It is file-static because
+/* Where each processor's formatter is writing: the next byte, the room
+   left and whether a byte did not fit. It is file-static because
    `k_vprintf` takes a function and not a context, and it is why the build
    below runs with interrupts off. */
-static char *build_at;
-static uint32_t build_left;
-static uint32_t build_over;
+static struct {
+    char *at;
+    uint32_t left;
+    uint32_t over;
+} sinks[NR_CPUS];
 
 /**
  * Take one byte of the record being built.
@@ -74,14 +94,16 @@ static uint32_t build_over;
  */
 static void build_putc(char c)
 {
+    unsigned int me = arch_cpu_id();
+
     if (c == '\n') {
         c = ' ';
     }
-    if (build_left > 0) {
-        *build_at++ = c;
-        build_left--;
+    if (sinks[me].left > 0) {
+        *sinks[me].at++ = c;
+        sinks[me].left--;
     } else {
-        build_over = 1;
+        sinks[me].over = 1;
     }
 }
 
@@ -132,18 +154,25 @@ static void build_u32(uint32_t v)
  * spaces are dropped first, which is where a format written with a newline of
  * its own goes: `build_putc` has already turned it into one. The record's
  * newline is written past the sink, which would turn it into a space too.
+ *
+ * The sink's place is put back as it was at the end, since an NMI that logs,
+ * as the watchdog's does, can come in the middle of another record's build
+ * on the same processor, whose interrupts are off.
  */
 static void klog_build(struct klog_record *r, int level, const char *subsystem, const char *format,
                        va_list ap)
 {
+    unsigned int me = arch_cpu_id();
     uint32_t rest;
     uint32_t seconds = (uint32_t)tick_div(kernel_ticks, TICK_HZ, &rest);
     uint32_t us = rest * KLOG_TICK_US;
     uint32_t place;
+    char *was_at = sinks[me].at;
+    uint32_t was_left = sinks[me].left, was_over = sinks[me].over;
 
-    build_at = r->text;
-    build_left = KLOG_RECORD_MAX - 4;
-    build_over = 0;
+    sinks[me].at = r->text;
+    sinks[me].left = KLOG_RECORD_MAX - 4;
+    sinks[me].over = 0;
 
     r->level = level;
     build_putc('<');
@@ -157,25 +186,28 @@ static void klog_build(struct klog_record *r, int level, const char *subsystem, 
     }
     build_putc(']');
     build_putc(' ');
-    r->body = (uint32_t)(build_at - r->text);
+    r->body = (uint32_t)(sinks[me].at - r->text);
 
     build_str(subsystem);
     build_putc(':');
     build_putc(' ');
     k_vprintf(build_putc, format, ap);
 
-    while (build_at > r->text && build_at[-1] == ' ') {
-        build_at--;
-        build_left++;
+    while (sinks[me].at > r->text && sinks[me].at[-1] == ' ') {
+        sinks[me].at--;
+        sinks[me].left++;
     }
-    build_left += 4;
-    if (build_over) {
+    sinks[me].left += 4;
+    if (sinks[me].over) {
         build_putc('.');
         build_putc('.');
         build_putc('.');
     }
-    *build_at++ = '\n';
-    r->len = (uint32_t)(build_at - r->text);
+    *sinks[me].at++ = '\n';
+    r->len = (uint32_t)(sinks[me].at - r->text);
+    sinks[me].at = was_at;
+    sinks[me].left = was_left;
+    sinks[me].over = was_over;
 }
 
 /* ---- destination 1: the ring ---- */
@@ -187,6 +219,37 @@ static uint32_t ring_oldest; /* where the oldest byte held is */
 /* Bytes ever put in the ring: a reader that keeps its place counts from the
  * first, and the oldest byte held is this less `ring_used`. */
 static uint32_t ring_written;
+
+/* Held, with interrupts off, by a processor that reads or writes the ring:
+ * the one that writes the kept records out for a locked-up holder of the
+ * big lock (`klog_flush_stuck`) appends while the holder, should it come
+ * back, may read. */
+static volatile unsigned int ring_lock;
+
+/**
+ * Take `ring_lock`, with interrupts off. 1 when taken; 0 when a panic on
+ * this processor found it held, by a processor the panic has stopped,
+ * which will never let it go, and goes on without it.
+ */
+static int ring_get(void)
+{
+    while (arch_atomic_xchg(&ring_lock, 1u) != 0u) {
+        if (k_panicking()) {
+            return 0;
+        }
+        arch_relax();
+    }
+    return 1;
+}
+
+/** Let `ring_lock` go when `ring_get` returned 1 in `took`. */
+static void ring_put(int took)
+{
+    if (took) {
+        k_barrier();
+        ring_lock = 0;
+    }
+}
 
 /**
  * Drop whole records from the oldest end until `want` bytes are free.
@@ -231,10 +294,12 @@ static void ring_evict(uint32_t want)
 static void ring_append(const char *text, uint32_t n)
 {
     uint32_t i;
+    int took;
 
     if (n > KLOG_RING_SIZE) {
         return;
     }
+    took = ring_get();
     ring_evict(n);
     for (i = 0; i < n; i++) {
         ring[ring_head] = text[i];
@@ -245,6 +310,7 @@ static void ring_append(const char *text, uint32_t n)
     }
     ring_used += n;
     ring_written += n;
+    ring_put(took);
 }
 
 /** Put the record in the ring and in ramoops's console zone, with
@@ -271,11 +337,13 @@ uint32_t klog_written(void)
 uint32_t klog_clamp(uint32_t at)
 {
     uint32_t flags = kirq_save();
+    int took = ring_get();
     uint32_t first = ring_written - ring_used;
 
     if ((int32_t)(at - first) < 0 || (int32_t)(ring_written - at) < 0) {
         at = first;
     }
+    ring_put(took);
     kirq_restore(flags);
     return at;
 }
@@ -283,6 +351,7 @@ uint32_t klog_clamp(uint32_t at)
 uint32_t klog_read_from(char *buf, uint32_t cap, uint32_t *at)
 {
     uint32_t flags = kirq_save();
+    int took = ring_get();
     uint32_t first = ring_written - ring_used;
     uint32_t n = 0;
 
@@ -298,6 +367,7 @@ uint32_t klog_read_from(char *buf, uint32_t cap, uint32_t *at)
         buf[n++] = ring[i];
     }
     *at += n;
+    ring_put(took);
     kirq_restore(flags);
     return n;
 }
@@ -305,9 +375,11 @@ uint32_t klog_read_from(char *buf, uint32_t cap, uint32_t *at)
 uint32_t klog_read(char *buf, uint32_t cap, uint32_t offset)
 {
     uint32_t flags = kirq_save();
+    int took = ring_get();
     uint32_t n = 0;
 
     if (buf == 0 || cap == 0 || offset >= ring_used) {
+        ring_put(took);
         kirq_restore(flags);
         return 0;
     }
@@ -320,6 +392,7 @@ uint32_t klog_read(char *buf, uint32_t cap, uint32_t offset)
         buf[n] = ring[i];
         n++;
     }
+    ring_put(took);
     kirq_restore(flags);
     return n;
 }
@@ -338,6 +411,10 @@ uint32_t klog_read(char *buf, uint32_t cap, uint32_t offset)
  * line and never reaches the screen, and a single flag cleared for both would
  * let the next screen record continue the prompt.
  */
+/* Set when the screen gave up on the console's lock, which the next record
+ * then tries once, without the wait. */
+static int screen_contended;
+
 static int screen_line_open;
 
 /*
@@ -397,15 +474,23 @@ static display_color_t screen_color(int level)
  *
  * Those two are for a reader with a capture and a scrollback; a person
  * watching a boot has neither, and every line would begin with the same eight
- * characters of noise.
+ * characters of noise. A record whose console lock another processor has
+ * held for a second is left off the screen (`console_lock_bounded`), since
+ * that processor may be the one locked up, and so is each after it while
+ * the lock is still held, without the wait.
  */
 static void dest_screen(const struct klog_record *r)
 {
-    uint32_t i;
+    uint32_t i, flags;
 
     if (r->level > screen_level || screen_stopped) {
         return;
     }
+    if (!console_lock_bounded(&flags, screen_contended ? 0u : 1000000u)) {
+        screen_contended = 1;
+        return; /* the holder is stuck; the ring and the port have it */
+    }
+    screen_contended = 0;
     if (screen_line_open) {
         k_putc('\n');
         screen_line_open = 0;
@@ -417,6 +502,7 @@ static void dest_screen(const struct klog_record *r)
     }
     textcon_release();
     set_fore_color(DEFAULT_FORECOLOR);
+    console_unlock(flags);
 }
 
 /* ---- destination 3: the serial port ---- */
@@ -578,6 +664,191 @@ static void klog_drain(void)
     }
 }
 
+/* ---- the records kept for later ---- */
+
+/*
+ * The records made in an NMI or by a processor without the big lock
+ * (`smp_serialized`), oldest first. A writer takes the next slot by a
+ * compare-and-exchange of `defer_tail`, which an NMI on the same processor
+ * may also do, builds the record in it and then marks it whole in
+ * `defer_whole`, with its sequence number plus one; the processor that
+ * moves the records on takes them from `defer_head` while they are whole
+ * and frees each slot by moving `defer_head` past it. A record that finds
+ * the queue full is counted and dropped. A hard-lockup report with a
+ * backtrace of each of a few other processors is some fifty records.
+ */
+#define KLOG_DEFER_MAX 128
+
+static struct klog_record deferred[KLOG_DEFER_MAX];
+static volatile uint32_t defer_whole[KLOG_DEFER_MAX];
+static volatile unsigned int defer_tail;
+static volatile unsigned int defer_head;
+static volatile unsigned int defer_lost;
+
+/* Set by the panic, which has stopped the other processors: a slot one of
+ * them left part built is skipped, since it will never be whole. */
+static int defer_skip;
+
+/* The number, plus one, of the processor that writes the kept records out
+ * for a holder of the big lock that is locked up (`klog_flush_stuck`), or 0. */
+static volatile unsigned int defer_taking;
+
+/* How deep the processor that may write klog's shared state (`klog_enter`)
+ * is in doing so, its interrupt handlers' records counted: only that one
+ * writes it, and it is 0 again before that processor lets the big lock go. */
+static volatile unsigned int klog_users;
+
+/**
+ * Begin writing klog's shared state, the ring, the queue, the kept records'
+ * head and the delivery flags, with interrupts off; `klog_leave` ends it.
+ * 1 when this processor may: it may write what the big lock guards
+ * (`smp_serialized`) and no other is writing the kept records out for it
+ * (`defer_taking`), or it has begun a panic, which stopped the others. 0
+ * otherwise, and the caller keeps its record for later.
+ *
+ * A holder of the big lock and `klog_flush_stuck` exclude each other as
+ * Dekker's algorithm has two processors do: each writes its own word by a
+ * locked exchange, a full barrier, and then reads the other's, so at least
+ * one of them sees the other and stands back. A holder already in, as an
+ * interrupt handler's record finds it, stays in.
+ */
+static int klog_enter(void)
+{
+    unsigned int taking;
+
+    if (!smp_serialized()) {
+        return 0;
+    }
+    (void)arch_atomic_xchg(&klog_users, klog_users + 1u);
+    taking = defer_taking;
+    if (taking != 0u && taking != arch_cpu_id() + 1u && !k_panicking()) {
+        klog_users--;
+        return 0;
+    }
+    return 1;
+}
+
+/** End what a `klog_enter` that returned 1 began. */
+static void klog_leave(void)
+{
+    klog_users--;
+}
+
+/**
+ * Keep a record made where klog's shared state may not be written, built
+ * from `level`, `subsystem`, `format` and `ap` in the next free slot. The
+ * caller has interrupts off; an NMI may come in.
+ */
+static void defer_put(int level, const char *subsystem, const char *format, va_list ap)
+{
+    unsigned int t, lost;
+
+    do {
+        t = defer_tail;
+        if (t - defer_head >= KLOG_DEFER_MAX) {
+            do {
+                lost = defer_lost;
+            } while (arch_atomic_cmpxchg(&defer_lost, lost, lost + 1u) != lost);
+            return;
+        }
+    } while (arch_atomic_cmpxchg(&defer_tail, t, t + 1u) != t);
+    klog_build(&deferred[t % KLOG_DEFER_MAX], level, subsystem, format, ap);
+    k_barrier();
+    defer_whole[t % KLOG_DEFER_MAX] = t + 1u;
+}
+
+/**
+ * Move the kept records, oldest first, into the ring and the queue of
+ * records waiting for the other destinations, while that queue has room
+ * and the oldest is whole. The caller may write klog's shared state and
+ * has interrupts off. The number moved.
+ */
+static int defer_collect(void)
+{
+    unsigned int h, slot;
+    int moved = 0;
+
+    while (defer_head != defer_tail && pending_count < KLOG_PENDING_MAX) {
+        h = defer_head;
+        slot = h % KLOG_DEFER_MAX;
+        if (defer_whole[slot] == h + 1u) {
+            ring_append(deferred[slot].text, deferred[slot].len);
+            pstore_console_write(deferred[slot].text, deferred[slot].len);
+            pending_put(&deferred[slot]);
+            moved++;
+        } else if (!defer_skip) {
+            break;
+        }
+        k_barrier();
+        defer_head = h + 1u;
+    }
+    if (defer_lost != 0) {
+        pending_lost += (int)arch_atomic_xchg(&defer_lost, 0u);
+    }
+    return moved;
+}
+
+int klog_kept(void)
+{
+    return defer_head != defer_tail;
+}
+
+void klog_flush_stuck(void)
+{
+    unsigned int end = defer_tail;
+    uint32_t flags;
+    int moved;
+
+    if (defer_head == end ||
+        arch_atomic_xchg(&defer_taking, (unsigned int)arch_cpu_id() + 1u) != 0u) {
+        return;
+    }
+    if (klog_users != 0u) {
+        defer_taking = 0; /* the holder is writing klog; it writes them */
+        return;
+    }
+    do {
+        flags = kirq_save();
+        moved = defer_collect();
+        klog_delivering = 1;
+        kirq_restore(flags);
+        klog_drain();
+    } while (moved > 0 && (int)(end - defer_head) > 0);
+    k_barrier();
+    defer_taking = 0;
+}
+
+/**
+ * Nested inside a delivery or a console write, the kept records join the
+ * ring and the queue at once, ahead of the record being made, and the
+ * delivery or write under way writes them out when it ends; only the drain
+ * waits for it.
+ */
+void klog_flush(void)
+{
+    uint32_t flags;
+    int nested, moved;
+
+    while (defer_head != defer_tail) {
+        flags = kirq_save();
+        if (!klog_enter()) {
+            kirq_restore(flags);
+            return;
+        }
+        nested = klog_delivering || console_writing;
+        moved = defer_collect();
+        if (nested || moved == 0) {
+            klog_leave();
+            kirq_restore(flags);
+            return;
+        }
+        klog_delivering = 1;
+        kirq_restore(flags);
+        klog_drain();
+        klog_leave();
+    }
+}
+
 /**
  * The build runs with interrupts off because the formatter writes through
  * sink state that two callers cannot share. The destinations then run with
@@ -587,12 +858,22 @@ static void klog_drain(void)
  * inside another record's line, or inside a terminal escape the shell is part
  * way through, would be worse than the wait. The delivery that interrupted it
  * writes it out when its own record is finished.
+ *
+ * A record made where klog's shared state may not be written is kept for
+ * later (`defer_put`); one made where it may comes after those kept before
+ * it, which go out first (`klog_flush`), and those kept while it was being
+ * written go out after it. A record that finds others queued and no
+ * delivery under way, as the panic's first does after it has let the
+ * queue go (`klog_deliver_directly`), writes them out first and then goes
+ * out itself, since behind a full queue it would be dropped, as Linux's
+ * panic writes out every record the consoles have not had
+ * (`console_flush_on_panic`, kernel/printk/printk.c:3449-3482).
  */
 void klog_v(int level, const char *subsystem, const char *format, va_list ap)
 {
     struct klog_record r;
     uint32_t flags;
-    int nested, i;
+    int nested, queued, i;
 
     if (level < KLOG_CRIT) {
         level = KLOG_CRIT;
@@ -600,18 +881,32 @@ void klog_v(int level, const char *subsystem, const char *format, va_list ap)
     if (level > KLOG_DEBUG) {
         level = KLOG_DEBUG;
     }
+    klog_flush();
     flags = kirq_save();
+    if (!klog_enter()) {
+        defer_put(level, subsystem, format, ap);
+        kirq_restore(flags);
+        return;
+    }
+    if (!klog_delivering && !console_writing && pending_count > 0) {
+        klog_delivering = 1;
+        kirq_restore(flags);
+        klog_drain();
+        flags = kirq_save();
+    }
     klog_build(&r, level, subsystem, format, ap);
     nested = klog_delivering || console_writing;
-    if (nested) {
+    queued = nested || pending_count > 0;
+    if (queued) {
         pending_put(&r);
-    } else {
+    }
+    if (!nested) {
         klog_delivering = 1;
     }
     kirq_restore(flags);
 
     for (i = 0; i < KLOG_N_DESTS; i++) {
-        if (nested && DESTS[i].write != dest_ring) {
+        if (queued && DESTS[i].write != dest_ring) {
             continue;
         }
         if (level <= DESTS[i].takes_down_to) {
@@ -620,7 +915,9 @@ void klog_v(int level, const char *subsystem, const char *format, va_list ap)
     }
     if (!nested) {
         klog_drain();
+        klog_flush();
     }
+    klog_leave();
 }
 
 void klog(int level, const char *subsystem, const char *format, ...)
@@ -648,7 +945,10 @@ void klog(int level, const char *subsystem, const char *format, ...)
  */
 void console_write_begin(void)
 {
-    uint32_t flags = kirq_save();
+    uint32_t flags;
+
+    klog_flush();
+    flags = kirq_save();
 
     console_writing++;
     textcon_hold();
@@ -660,18 +960,33 @@ void console_write_end(void)
     uint32_t flags = kirq_save();
 
     textcon_release();
-    if (--console_writing > 0 || klog_delivering || pending_count == 0) {
+    if (--console_writing > 0 || !klog_enter()) {
         kirq_restore(flags);
+        return;
+    }
+    if (klog_delivering) {
+        klog_leave();
+        kirq_restore(flags);
+        return;
+    }
+    if (pending_count == 0) {
+        klog_leave();
+        kirq_restore(flags);
+        klog_flush();
         return;
     }
     klog_delivering = 1;
     kirq_restore(flags);
     klog_drain();
+    klog_leave();
+    klog_flush();
 }
 
 /**
  * A panic never comes back to drain the queue, so a record of its that
- * joined the queue would reach the ring and nothing else.
+ * joined the queue would reach the ring and nothing else. The panic has
+ * stopped the other processors, so a kept record one of them left part
+ * built is skipped.
  */
 void klog_deliver_directly(void)
 {
@@ -679,6 +994,9 @@ void klog_deliver_directly(void)
 
     klog_delivering = 0;
     console_writing = 0;
+    klog_users = 0;
+    defer_taking = 0;
+    defer_skip = 1;
     kirq_restore(flags);
 }
 

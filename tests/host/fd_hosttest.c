@@ -298,7 +298,8 @@ static void stdio_allocations(void)
 
     check(fd_init_stdio(0, 0) == -1, "stdio rejects a missing table");
     check(fd_init_stdio(&table, 0) == -1, "stdio rejects an unallocated table");
-    for (fail = 0; fail < 3; fail++) {
+    /* Each description and its count record. */
+    for (fail = 0; fail < 6; fail++) {
         check(fd_table_init(&table) == 0, "stdio table allocation");
         fail_after = fail;
         check(fd_init_stdio(&table, 0) == -1, "stdio reports allocation failure");
@@ -312,7 +313,7 @@ static void stdio_allocations(void)
             fd_free(&table, i);
         }
         check(fd_init_stdio(&table, 0) == 0, "stdio retry succeeds");
-        check(allocations == 4, "stdio allocates three descriptions");
+        check(allocations == 7, "stdio allocates three descriptions and their count records");
         for (i = FD_STDIN; i <= FD_STDERR; i++) {
             fd_entry_t *e = &table.entries[i];
 
@@ -395,7 +396,7 @@ static void process_allocations(void)
     uint32_t forks = process_forks_since_boot();
 
     check(keeper != NULL, "initial process allocation");
-    for (fail = 0; fail < 9; fail++) {
+    for (fail = 0; fail < 12; fail++) {
         process_t *p;
 
         fail_after = fail;

@@ -58,6 +58,15 @@ struct boot_range {
     uint64_t size;
 };
 
+/* One range of the EFI memory map that the runtime services use, with its
+ * descriptor's Attribute (UEFI 2.10, 7.2), whose EFI_MEMORY_WB says
+ * whether the range may be cached write-back. */
+struct boot_efi_range {
+    uint64_t base;
+    uint64_t size;
+    uint64_t attr;
+};
+
 /* One boot module: where the loader put it, and its command line. */
 struct boot_module {
     uint64_t start; /* physical address of the first byte */
@@ -93,11 +102,12 @@ struct boot_info {
     uint64_t efi_systab;
     int efi_systab_64;
     /* The EFI memory map's ranges that carry EFI_MEMORY_RUNTIME, which the
-     * firmware's runtime services run in and touch, adjacent ones merged:
-     * `efi_runtime_count` of them, and `efi_runtime_lost` set when the map
-     * had more than BOOT_EFI_RUNTIME_MAX, since a call that reached one left
-     * out would fault. */
-    struct boot_range efi_runtime[BOOT_EFI_RUNTIME_MAX];
+     * firmware's runtime services run in and touch, adjacent ones with the
+     * same attributes merged: `efi_runtime_count` of them, and
+     * `efi_runtime_lost` set when the map had more than
+     * BOOT_EFI_RUNTIME_MAX, since a call that reached one left out would
+     * fault. */
+    struct boot_efi_range efi_runtime[BOOT_EFI_RUNTIME_MAX];
     uint32_t efi_runtime_count;
     int efi_runtime_lost;
     /* The screen. */

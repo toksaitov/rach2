@@ -1,0 +1,3 @@
+dump 6584 frames; window frames 339..6584, 90.4 s
+mean 69.05 FPS, median 14.16 ms, p90 16.50, p99 18.53, p99.9 19.23, max 21.6
+frames over 16.7 ms 538, over 33.3 ms 0, over 50 ms 0, over 100 ms 0

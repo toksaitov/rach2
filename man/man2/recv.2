@@ -234,9 +234,14 @@ at once; a new one joins the last only when the kernel's table of them
 would take more memory than the connection's receive ring, as Linux joins
 its buffers once their overhead passes the receive buffer.
 A receive holds the socket's receive lock while it brings in a
-destination, and gives it up only to wait for data, as Linux does, so the
-bytes one call returns are adjacent in the stream even when another thread
-reads the same socket.
+destination, and gives it up only to wait for data, as Linux's
+tcp_recvmsg holds the socket lock and sk_wait_data gives it up, so the
+bytes one call returns are adjacent in the stream, even when another
+thread reads the same socket, as long as the call does not wait after
+its first bytes; one with
+.Dv MSG_WAITALL
+that waits for more gives the lock up while it waits, and another
+reader may take the bytes between its two parts, on Linux as here.
 Linux joins an in-order segment to the last buffer of its queue whenever
 its tcp_try_coalesce can, which depends on how the two buffers are laid
 out and shared, so it may keep fewer: where Rach2 returns the buffers

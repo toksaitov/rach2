@@ -28,6 +28,7 @@
 #include "sys/mm/modlayout.h"
 #include "sys/block/mbr.h"
 #include "sys/block/loop.h"
+#include "sys/fs/debugfs.h"
 #include "sys/fs/devfs.h"
 #include "sys/fs/procfs.h"
 #include "sys/fs/vfs.h"
@@ -78,8 +79,10 @@
 #include "sys/network/wireless/wiphy.h"
 #include "sys/network/driver/ath9k/ath9k.h"
 #include "sys/lib/kint.h"
+#include "sys/lib/kstd.h"
 #include "sys/lib/kstring.h"
 #include "sys/vdso.h"
+#include "sys/watchdog.h"
 #include "sys/drm/drm.h"
 #if defined(__x86_64__)
 #include "sys/kvm/kvm.h"
@@ -383,6 +386,7 @@ static void timer_handler(isr_params_t *params)
 
     hda_tick();
     netdev_poll();
+    netconsole_tick();
     ath9k_poll();
     tcp_tick();
     ip_frag_tick();
@@ -397,8 +401,39 @@ static void timer_handler(isr_params_t *params)
     vkms_tick();
     speaker_tick();
     tty_console_poll();
+    klog_flush();
 
     sched_preempt();
+}
+
+/**
+ * The shell's `lockup KIND SECONDS`, the lockup detectors' test
+ * (`watchdog_test`): `soft` holds this processor in the kernel with
+ * interrupts on, `hard` with them off, and `hung` has a kernel thread sleep
+ * uninterruptibly, each for SECONDS, and the shell waits for the end.
+ */
+static void shell_lockup(const char *args)
+{
+    char kind[8];
+    unsigned long secs = 0;
+    int n = 0;
+
+    while (args[n] && args[n] != ' ' && n < (int)sizeof(kind) - 1) {
+        kind[n] = args[n];
+        n++;
+    }
+    kind[n] = '\0';
+    if (args[n] != ' ' || k_strtoul(args + n + 1, k_strlen(args + n + 1), &secs) != 0 ||
+        secs == 0 || secs > 3600) {
+        console_puts("usage: lockup soft|hard|hung SECONDS (1 to 3600)");
+        return;
+    }
+    console_printf("lockup: %s: %u s\n", kind, (unsigned int)secs);
+    if (watchdog_test(kind, (unsigned int)secs) != 0) {
+        console_puts("lockup: refused");
+        return;
+    }
+    console_puts("lockup: done");
 }
 
 /**
@@ -2004,7 +2039,9 @@ static int shutdown_never(void *arg)
  * The goodbye line is a log record and not a console line, so that it reaches
  * the serial port, the ring and netconsole, and the screen too on a boot that
  * did not give the screen to init: a machine read over netconsole has no
- * screen, and this is the last line it sends. The USB controller and then
+ * screen, and this is the last line it sends. `netconsole_shutdown` then sends
+ * it with what a sender still held for its link's start, which no later
+ * record would send (`netconsole_flush`). The USB controller and then
  * every network card are stopped after it, so that no device writes into its
  * rings while the machine stops; a card sends what it was given before it is
  * silenced, so the goodbye line is sent and not only queued, and the records
@@ -2053,6 +2090,7 @@ void kernel_shutdown(int how)
         klog(KLOG_INFO, "shutdown", "root: not on a disk; nothing to unmount");
     }
     klog(KLOG_INFO, "shutdown", "Stopping the system. Goodbye!");
+    netconsole_shutdown();
     usb_stop();
     {
         int i;
@@ -3379,7 +3417,8 @@ static void show_mmio_display(void)
  * `mv` and `write` end their first argument at the first space, and `exec`
  * splits its line at spaces and tabs into at most fifteen arguments.
  * `netbad` pings 10.0.2.99, an address on QEMU's user network that does not
- * answer, to show the timeout.
+ * answer, to show the timeout. `lockup` holds a lockup for the detectors
+ * to report (`shell_lockup`).
  *
  * `ahci` probes the controller again. `ahci_init` clears `block0` and the
  * controller's state before its reset, so the boot partition, GRUB's core and
@@ -3421,6 +3460,7 @@ static void process_command(const char *cmd)
         console_puts("  netbad              - Ping an unreachable host (timeout demo)");
         console_puts("  fault               - Trigger page fault (panic)");
         console_puts("  badop               - Run an invalid opcode (panic)");
+        console_puts("  lockup <k> <secs>   - Hold a soft, hard or hung lockup");
         console_puts("  halt                - Halt the CPU");
         console_puts("  poweroff            - Power the machine off");
         console_puts("  reboot              - Restart the machine");
@@ -3756,6 +3796,8 @@ static void process_command(const char *cmd)
         *bad_ptr = 0xDEADBEEF;
     } else if (str_equal(cmd, "badop")) {
         arch_invalid_opcode();
+    } else if (str_starts_with(cmd, "lockup ")) {
+        shell_lockup(cmd + 7);
     } else if (str_equal(cmd, "halt")) {
         kernel_shutdown(POWER_HALT);
     } else if (str_equal(cmd, "poweroff")) {
@@ -3966,6 +4008,25 @@ static void start_network(void)
         klog(KLOG_INFO, "wsim", "ready: %d radios", radios);
     }
     (void)ath9k_probe();
+}
+
+/* debugfs's bkl/calls and bkl/profile, the counts of system calls and
+ * entries with their holds of the big lock, and the samples of the kernel
+ * under it, which a write zeroes (proc/smp.c). */
+static const struct debugfs_text_ops bkl_calls_ops = {smp_calls_show, smp_calls_store};
+static const struct debugfs_text_ops bkl_profile_ops = {smp_profile_show, smp_profile_store};
+
+/** Start the processors past the first (`smp_start`) and the lockup
+ * detectors on all of them (`watchdog_init`), then register bkl/calls and
+ * bkl/profile in debugfs; a failure there is logged. */
+static void start_processors(void)
+{
+    smp_start();
+    watchdog_init();
+    if (debugfs_create_text("bkl/calls", 0644u, &bkl_calls_ops, NULL) != 0 ||
+        debugfs_create_text("bkl/profile", 0644u, &bkl_profile_ops, NULL) != 0) {
+        klog(KLOG_WARN, "bkl", "debugfs: files not registered");
+    }
 }
 
 /**
@@ -4356,7 +4417,7 @@ void kernel_main(const struct boot_info *boot)
         platform_report_hold();
     }
 
-    smp_start();
+    start_processors();
     vclock_start();
 
     rescue_mode = kcmdline_has("rach2.rescue") || kcmdline_has("init=rescue");

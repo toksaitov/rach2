@@ -393,7 +393,7 @@ int prz_init(struct prz *z, volatile void *mem, uint32_t size, uint32_t sig, uin
     }
     z->buffer_size = size - PRZ_HEADER;
     if (ecc_size) {
-        /* ram_core.c:212: the blocks that fit with their parity, and one
+        /* ram_core.c:204: the blocks that fit with their parity, and one
          * more parity for the header. */
         if (z->buffer_size <= ecc_size) {
             return -EINVAL;

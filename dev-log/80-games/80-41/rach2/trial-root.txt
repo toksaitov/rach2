@@ -1,0 +1,35 @@
+rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial/root-09dbe9d11782f154.img rach2.slot=trialroot rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.disk=ahci rach2.netconsole rach2.ip=none rach2.console=term rach2.i915 intel_iommu=off intremap=off rach2.trace=enosys
+Linux rach2 6.18.0-rach2 #1 Rach2 1.0.0 x86_64 GNU/Linux
+bootctl: candidate: first sector 11848, 8192 sectors in 8192 clusters, 4194304 bytes
+bootctl: fallback: first sector 2053, 8192 sectors in 8192 clusters, 4194304 bytes
+bootctl: fallback: runs: 2053+4096 20040+4096
+bootctl: grubenv: first sector 10275, 2 sectors in 2 clusters, 1024 bytes
+bootctl: boot.cfg: first sector 10259, 16 sectors in 16 clusters, 8192 bytes
+bootctl: saved_entry: fallback
+bootctl: next_entry: empty (a trial was consumed)
+bootctl: trial root: GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial/root-09dbe9d11782f154.img
+bootctl: booted: trialroot, the candidate's kernel on a root image
+/dev/loop0 / ext2 rw,relatime 0 0
+/dev/disk0p6 /data ext2 rw 0 0
+total 0
+drwxr-xr-x 2 0   0        0 Nov 11 11:53 by-path
+crw-rw---- 1 0  44 226,   0 Nov 11 11:53 card0
+crw-rw---- 1 0 104 226, 128 Nov 11 11:53 renderD128
+uid=1001(desktop) gid=1001(desktop) groups=1001(desktop),200(seat),44(video),104(render),105(input),29(audio)
+srwxr-xr-x 1 desktop desktop 0 Nov 11 11:53 /run/user/1001/wayland-0
+[11:53:39.787] Output repaint window is 7 ms maximum.
+[11:53:41.105] GL renderer: Mesa Intel(R) HD Graphics 4400 (HSW GT2)
+[11:53:41.176] Using GL renderer
+[11:53:41.297] Output 'eDP-1' attempts EOTF mode SDR and colorimetry mode default.
+[11:53:41.297] Output 'eDP-1' using color profile: stock sRGB color profile
+[11:53:41.298] Output eDP-1 (crtc 44) video modes:
+[11:53:41.299] Output 'eDP-1' enabled with head(s) eDP-1
+[11:53:41.300] Loading module '/usr/lib/x86_64-linux-gnu/weston/kiosk-shell.so'
+/usr/games/supertuxkart
+/usr/games/pyrogenesis
+/usr/games/0ad
+200
+total 0
+-rw-r--r-- 1 root root 0 Nov 11 11:53 calls
+-rw-r--r-- 1 root root 0 Nov 11 11:53 profile
+vol 1:1

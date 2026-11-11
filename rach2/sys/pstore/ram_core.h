@@ -18,12 +18,15 @@
  * struct persistent_ram_buffer (ram_core.c:33). */
 #define PRZ_HEADER 12u
 
-/* The bytes of data one parity block covers, ram_core.c:209. */
+/* The bytes of data one parity block covers, ram_core.c:199. */
 #define PRZ_ECC_BLOCK 128u
 
-/* The most parity bytes a block may have: a code of 255 symbols, less the
- * one data byte a block must keep. */
-#define PRZ_ECC_MAX 254u
+/* The most parity bytes a block may have: a code of 255 symbols, less a
+ * whole block of data. With more, a block's word is longer than the code,
+ * two of its positions share a root and the decoder cannot tell them apart;
+ * Linux's encode_rs8 refuses such a length with -ERANGE and decode_rs8
+ * stops at a BUG_ON (lib/reed_solomon/encode_rs.c:24, decode_rs.c:43). */
+#define PRZ_ECC_MAX (255u - PRZ_ECC_BLOCK)
 
 /*
  * A zone. `mem` is its mapping, `size` bytes: the header, then
@@ -77,7 +80,7 @@ void prz_free_old(struct prz *z);
 
 /**
  * Write the notice Linux appends to a record read from a zone with ECC,
- * persistent_ram_ecc_string (ram_core.c:258), into `buf` of `cap` bytes
+ * persistent_ram_ecc_string (ram_core.c:256), into `buf` of `cap` bytes
  * with a NUL, cut to fit; return its length, uncut, or 0 without ECC.
  */
 uint32_t prz_ecc_string(const struct prz *z, char *buf, uint32_t cap);
@@ -86,7 +89,7 @@ uint32_t prz_ecc_string(const struct prz *z, char *buf, uint32_t cap);
  * Mend the `len` bytes at `data`, followed by the `nroots` parity bytes at
  * `par`, by the Reed-Solomon code of Linux's ramoops: symbols of 8 bits,
  * the field polynomial 0x11d, the first root 1 and the generator 1
- * (ram_core.c:230). Returns the symbols corrected, data and parity both, or
+ * (ram_core.c:224). Returns the symbols corrected, data and parity both, or
  * -EBADMSG when there are more errors than the code mends, leaving the
  * bytes as they were. `len` + `nroots` is at most 255.
  */

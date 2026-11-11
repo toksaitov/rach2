@@ -175,6 +175,15 @@ void socket_tcp_accept(struct socket *listen_sock, struct socket *conn_sock)
     cb_accept++;
 }
 
+static int forget_queues; /* the accept queues emptied */
+
+/** Count an accept queue emptied by a listener's stop. */
+void socket_tcp_forget_queue(struct socket *listen_sock)
+{
+    (void)listen_sock;
+    forget_queues++;
+}
+
 /** Release a socket: a no-op. */
 void socket_unref(struct socket *sock)
 {
@@ -902,8 +911,10 @@ static void sack_rows(void)
 }
 
 /**
- * Check that a window reopened by a reader that shut down its writing half is
- * announced in FIN_WAIT_1 and FIN_WAIT_2, as in ESTABLISHED: such a reader goes
+ * Check that shutdown(SHUT_WR) through `tcp_shutdown`, the path shutdown(2)
+ * takes, sends the FIN and marks the socket, and that a window reopened by a
+ * reader that shut down its writing half is announced in FIN_WAIT_1 and
+ * FIN_WAIT_2, as in ESTABLISHED: such a reader goes
  * on reading, and without the announcement the peer waits for its persist
  * timer.
  */
@@ -916,9 +927,9 @@ static void half_close_rows(void)
 
     reset_all();
     conn = open_conn(&sock, 91, &peer_seq, &lport);
-    tcp_shutdown_send(&sock);
     CHECK("shutting down the writing half sends the FIN",
-          n_segs == 1 && (last_flags() & F_FIN) != 0 && conn->state == TCP_FIN_WAIT_1);
+          tcp_shutdown(&sock, 0, 1) == 0 && sock.shutdown == SOCK_SEND_SHUTDOWN && n_segs == 1 &&
+              (last_flags() & F_FIN) != 0 && conn->state == TCP_FIN_WAIT_1);
     fin_seq = read32be(segs[0].data + 4);
     conn->rcv_wnd = 0;
     n_segs = 0;

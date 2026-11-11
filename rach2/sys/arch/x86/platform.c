@@ -454,6 +454,7 @@ void platform_threads_start(void)
     acpica_thread_start();
     wlan_work_threads_start();
     ps2mouse_thread_start();
+    itco_thread_start();
 }
 
 /**

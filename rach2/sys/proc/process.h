@@ -318,6 +318,9 @@ struct process {
      * which /proc reports as the state D and counts as blocked; a kernel
      * thread's idle wait (`wq_wait_event_idle`) is not marked. */
     uint32_t uninterruptible;
+    /* Whether that sleep ends on SIGKILL (`wq_wait_event_killable`), which
+     * the hung-task detector does not report. */
+    uint32_t killable;
     /* The frame allocator refused this thread a user page since its last
      * page fault began: the fault is one of memory, not of the address. */
     uint32_t frame_refused;
@@ -524,7 +527,6 @@ struct process {
     int32_t orig_nr;
     uint32_t ptrace_exit_seen;
     uintptr_t debugreg[8];
-    unsigned long debug_pending; /* DR6 deferred from a kernel debug exception */
     /* The execution domain and its flags personality(2) keeps; fork passes
      * it on and exec keeps it. */
     uint32_t persona;
@@ -603,6 +605,11 @@ struct process {
      * set before each block: /proc/PID/wchan gives it while the thread is
      * PROC_BLOCKED, and reads nothing from it in any other state. */
     const char *wchan;
+    /* The switches the hung-task detector last saw, `nvcsw` + `nivcsw`,
+     * and the tick it saw them change at (watchdog.c), as Linux's
+     * last_switch_count and last_switch_time. */
+    unsigned long last_switch_count;
+    uint64_t last_switch_time;
 };
 
 typedef struct process process_t;
@@ -876,8 +883,9 @@ void signal_post(process_t *target, int signo);
  * `target`. Job control acts at once: SIGCONT ends a stop and cancels the
  * pending stop signals, SIGKILL makes the stopped threads ready, and a stop
  * signal cancels a pending SIGCONT. A process whose threads have all ended
- * takes nothing. An interrupt handler may call it. The signal is delivered
- * at a return to user mode (`deliver_signals`).
+ * takes nothing. SIGKILL also wakes a thread in execve's wait for the other
+ * threads. An interrupt handler may call it. The signal is delivered at a
+ * return to user mode (`deliver_signals`).
  */
 void signal_post_info(process_t *target, int signo, const struct k_siginfo *info);
 
@@ -919,11 +927,8 @@ uint64_t proc_alarm_at(uint64_t now, uint64_t ticks);
  * Non-zero if the current thread, or its process, has a pending signal that
  * is neither blocked nor ignored: one that is caught, or whose default
  * action terminates or stops the process; or a stop its tracer asked for
- * with PTRACE_INTERRUPT. A deferred hardware debug hit counts as a pending
- * SIGTRAP. Blocking system call loops call it so that the signal or stop is
- * acted on. A deferred kernel debug hit is posted first, which may make
- * the thread ready and clear its `wakeup_tick`, so a caller that waits on
- * arms its deadline again. Called on the thread's stack with the big lock
+ * with PTRACE_INTERRUPT. Blocking system call loops call it so that the
+ * signal or stop is acted on. Called on the thread's stack with the big lock
  * held. Defined in syscall_proc.c.
  */
 int signal_pending(void);

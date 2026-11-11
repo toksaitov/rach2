@@ -1388,12 +1388,12 @@ static void commit_tail(struct drm_atomic_state *state)
  * A nonblocking commit whose in-fences had not all signalled, which the
  * worker, or a blocking commit of the same objects, finishes once they
  * have: the commit's states, moved from the caller's after the swap, a
- * callback on each plane's fence, how many have yet to signal, the plane
- * whose fence Linux's tail would be waiting for (`waited`,
- * DRM_MAX_PLANES for none), the tick at which that wait times out under
- * the driver's `commit_fence_timeout_ms` (`deadline`, 0 for none), whether
- * its tail has begun, and a hold on the device. The queue is in the order
- * the commits were made, and a work stays on it until its tail ends.
+ * callback on the current plane's fence, whether it has yet to signal,
+ * the last plane reached (`waited`, -1 before the first wait and
+ * DRM_MAX_PLANES after the last), the tick at which that wait times out
+ * under the driver's `commit_fence_timeout_ms` (`deadline`, 0 for none),
+ * whether its tail has begun, and a hold on the device. The queue keeps
+ * commit order, and a work stays on it until its tail ends.
  */
 struct commit_work;
 struct commit_fence_cb {
@@ -1406,6 +1406,7 @@ struct commit_work {
     uint32_t waiting;
     int waited;
     uint64_t deadline;
+    int timed_out; /* once set, no later plane is waited for */
     int running;
     struct commit_work *next;
 };
@@ -1418,39 +1419,50 @@ static wait_queue_t work_wait;
  * empty. */
 static wait_queue_t work_done_wait;
 
+static void work_fence_done(struct dma_fence *fence, struct dma_fence_cb *cb);
+
 /**
  * Move `w`'s tail to the first plane after `from` whose fence has not
- * signalled, hand that fence to the driver's `commit_fence_wait` and start
- * its timeout, as Linux's intel_atomic_commit_fence_wait
- * (intel_display.c:7262-7280) waits for each plane's fence in turn, at
- * the start of the tail that Linux queues at once. Interrupts masked.
+ * signalled, arm only that fence's callback, hand it to the driver's
+ * `commit_fence_wait` and start its timeout, as Linux's
+ * intel_atomic_commit_fence_wait (intel_display.c:7262-7280) waits for
+ * each plane's fence in turn, at the start of the tail that Linux queues
+ * at once. Process context without driver locks, interrupts masked; the
+ * previous callback is no longer armed.
  */
 static void work_fence_next(struct commit_work *w, int from)
 {
     const struct drm_mode_config *mc = &w->state.dev->mode_config;
     int i;
 
+    w->waiting = 0;
+    w->waited = DRM_MAX_PLANES;
+    w->deadline = 0;
     for (i = from + 1; i < DRM_MAX_PLANES; i++) {
         struct drm_plane_state *ps = w->state.planes_new[i];
 
-        if (ps && ps->fence && !ps->fence->signaled) {
-            break;
+        if (!ps || !ps->fence) {
+            continue;
         }
-    }
-    w->waited = i;
-    w->deadline = 0;
-    if (i < DRM_MAX_PLANES && mc->commit_fence_timeout_ms) {
-        w->deadline = rtc_ticks_now() + MS_TO_TICKS(mc->commit_fence_timeout_ms) + 1u;
-    }
-    if (i < DRM_MAX_PLANES && mc->commit_fence_wait) {
-        mc->commit_fence_wait(w->state.dev, w->state.planes_new[i]->fence);
+        w->cbs[i].work = w;
+        if (dma_fence_add_callback(ps->fence, &w->cbs[i].cb, work_fence_done) != 0) {
+            continue;
+        }
+        w->waiting = 1;
+        w->waited = i;
+        if (mc->commit_fence_timeout_ms) {
+            w->deadline = rtc_ticks_now() + MS_TO_TICKS(mc->commit_fence_timeout_ms) + 1u;
+        }
+        if (mc->commit_fence_wait) {
+            mc->commit_fence_wait(w->state.dev, ps->fence);
+        }
+        return;
     }
 }
 
-/** Whether the tail of `w`, a queued commit, may run at tick `now`: it has
- * not begun, and every fence has signalled or the wait for the plane the
- * tail waits for has timed out, after which Linux's tail waits for no
- * other. */
+/** Whether `w` may advance its waits or run its tail at tick `now`: it has
+ * not begun the tail, and no callback is armed or the current wait timed
+ * out, after which Linux's tail waits for no other plane. */
 static int work_due(const struct commit_work *w, uint64_t now)
 {
     uint32_t flags = kirq_save();
@@ -1460,23 +1472,40 @@ static int work_due(const struct commit_work *w, uint64_t now)
     return due;
 }
 
-/** A fence of a queued commit signalled: one fewer to wait for, and, for
- * the fence the tail would wait for, the next plane's. In the signaller's
- * context, which may be an interrupt; dma_fence_signal runs it with
- * interrupts masked, so that its decrement cannot fall inside another's. */
+/** Record completion and whether it missed the deadline, then wake the
+ * worker to advance in process context without the signaller's locks.
+ * dma_fence_signal runs this with interrupts masked and the big lock held. */
 static void work_fence_done(struct dma_fence *fence, struct dma_fence_cb *cb)
 {
     struct commit_fence_cb *fcb = (struct commit_fence_cb *)cb;
     struct commit_work *w = fcb->work;
 
     (void)fence;
-    if (fcb - w->cbs == w->waited) {
+    w->timed_out = w->deadline && rtc_ticks_now() >= w->deadline;
+    w->deadline = 0;
+    w->waiting = 0;
+    wq_wake_all(&work_wait);
+    wq_wake_all(&work_done_wait);
+}
+
+/** Advance a runnable commit's waits in process context, without driver
+ * locks. Return 1 once every wait is over or one timed out, 0 while the
+ * current callback is armed. The big lock and interrupt mask exclude a
+ * completion during each change of the current wait. */
+static int work_fence_progress(struct commit_work *w)
+{
+    uint32_t flags = kirq_save();
+    int done;
+
+    if (w->deadline && rtc_ticks_now() >= w->deadline) {
+        w->timed_out = 1;
+    }
+    while (!w->timed_out && !w->waiting && w->waited < DRM_MAX_PLANES) {
         work_fence_next(w, w->waited);
     }
-    if (--w->waiting == 0) {
-        wq_wake_all(&work_wait);
-        wq_wake_all(&work_done_wait);
-    }
+    done = w->timed_out || w->waited == DRM_MAX_PLANES;
+    kirq_restore(flags);
+    return done;
 }
 
 /* The connectors whose hotplug event waits for the worker, each with a
@@ -1685,8 +1714,9 @@ static void work_finish(struct commit_work *w)
     wq_wake_all(&work_done_wait);
 }
 
-/** The first queued commit whose tail may run now (`work_due`), or
- * NULL. */
+/** The first queued commit whose waits may advance or whose tail may run
+ * now (`work_due`), or NULL. This only reads state; a wait predicate may
+ * call it from interrupt context. */
 static struct commit_work *work_next_ready(void)
 {
     struct commit_work *w;
@@ -1704,8 +1734,10 @@ int drm_atomic_commit_work(void)
 
     n += hotplug_work();
     while ((w = work_next_ready()) != NULL) {
-        work_finish(w);
-        n++;
+        if (work_fence_progress(w)) {
+            work_finish(w);
+            n++;
+        }
     }
     return n;
 }
@@ -1817,13 +1849,11 @@ static int32_t commit_worker_start(void)
 #endif
 
 /** Queue the commit `state`, swapped in, for the worker: its states move
- * to `w`, which takes a callback on each in-fence not yet signalled, and
- * the driver is told of the first fence its tail would wait for. */
+ * to `w`, and the worker begins its fence waits in process context. */
 static void work_queue(struct commit_work *w, struct drm_atomic_state *state)
 {
     struct commit_work **link;
     uint32_t flags;
-    int i;
 
     w->state = *state;
     k_memset(state->planes_old, 0, sizeof(state->planes_old));
@@ -1832,32 +1862,9 @@ static void work_queue(struct commit_work *w, struct drm_atomic_state *state)
     k_memset(state->crtcs_new, 0, sizeof(state->crtcs_new));
     k_memset(state->connectors_old, 0, sizeof(state->connectors_old));
     k_memset(state->connectors_new, 0, sizeof(state->connectors_new));
-    /* One count of its own while the callbacks go on, so that a fence
-     * signalled meanwhile cannot make it ready early; no plane is waited
-     * for until they are all on. */
-    w->waiting = 1;
-    w->waited = DRM_MAX_PLANES;
-    for (i = 0; i < DRM_MAX_PLANES; i++) {
-        struct drm_plane_state *ps = w->state.planes_new[i];
-
-        if (!ps || !ps->fence) {
-            continue;
-        }
-        w->cbs[i].work = w;
-        /* A callback already added may decrement it from an interrupt. */
-        flags = kirq_save();
-        w->waiting++;
-        kirq_restore(flags);
-        if (dma_fence_add_callback(ps->fence, &w->cbs[i].cb, work_fence_done) != 0) {
-            flags = kirq_save();
-            w->waiting--;
-            kirq_restore(flags);
-        }
-    }
+    w->waited = -1;
     flags = kirq_save();
-    work_fence_next(w, -1);
-    w->waiting--;
-    /* The worker's sleep looks again, for this work's fence timeout. */
+    /* The worker's sleep looks again, to begin this commit's waits. */
     dev_works_gen++;
     kirq_restore(flags);
     drm_dev_get(w->state.dev);
@@ -1996,7 +2003,9 @@ static int32_t stall_on_works(struct drm_atomic_state *state, int nonblock)
             return -EBUSY;
         }
         if (work_due(w, rtc_ticks_now())) {
-            work_finish(w);
+            if (work_fence_progress(w)) {
+                work_finish(w);
+            }
             continue;
         }
         ow.state = state;

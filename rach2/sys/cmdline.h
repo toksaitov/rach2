@@ -66,8 +66,26 @@ int kcmdline_value_nth(const char *key, int nth, char *out, unsigned int outlen)
  */
 int kcmdline_bool(const char *key, int dflt);
 
+/**
+ * The boolean module parameter `key`, read as `kcmdline_bool` reads it,
+ * except that a bare `key` token is true, as Linux's param_set_bool takes
+ * it: "No equals means set" (Linux 6.12, kernel/params.c:312 to 319).
+ */
+int kcmdline_param_bool(const char *key, int dflt);
+
+/**
+ * Read the text `text` as Linux's `kstrtobool` reads it, as `kcmdline_bool`
+ * reads each value, and set `*out` to 1 or 0.
+ *
+ * @return 0, or -1 for a text that is no boolean, which leaves `*out` alone.
+ */
+int kcmdline_parse_bool(const char *text, int *out);
+
 /** How many `key=` tokens the line has. */
 int kcmdline_count(const char *key);
+
+/** How many tokens of the line are `flag` whole, with no `=`. */
+int kcmdline_bare_count(const char *flag);
 
 /** The captured command line, a NUL-terminated string (empty if none). */
 const char *kcmdline_get(void);

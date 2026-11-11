@@ -31,8 +31,11 @@
 #define EFI_RESET_COLD 0u
 #define EFI_RESET_WARM 1u
 
-/* A large page's span, by which the identity map is made. */
+/* A large page's span, which the identity map uses where a range covers
+ * one whole; and the attribute that a range may be cached write-back
+ * (UEFI 2.10, 7.2). */
 #define EFI_LARGE_PAGE 0x200000ULL
+#define EFI_MEMORY_WB  0x8ULL
 
 /* ResetSystem's physical address, 0 while it cannot be called, and why. */
 static uintptr_t reset_system;
@@ -93,7 +96,7 @@ static int in_runtime(const struct boot_info *boot, uint64_t at, uint64_t len)
     uint32_t i;
 
     for (i = 0; i < boot->efi_runtime_count; i++) {
-        const struct boot_range *r = &boot->efi_runtime[i];
+        const struct boot_efi_range *r = &boot->efi_runtime[i];
 
         if (at >= r->base && at + len <= r->base + r->size) {
             return 1;
@@ -123,16 +126,59 @@ static pte_t *table_below(pte_t *upper, unsigned int i)
 }
 
 /**
+ * Map the range of `boot` at index `i` at its physical address in the PML4
+ * `efi_pml4`, writable and executable: by a 2 MiB page where the range
+ * covers one whole, else by 4 KiB pages, so that no page reaches another
+ * range, whose cache type may differ. A range without EFI_MEMORY_WB, such
+ * as the memory-mapped I/O of a flash part or the I/O APIC, is mapped
+ * uncached, as Linux's `__map_region` sets _PAGE_PCD for one
+ * (arch/x86/platform/efi/efi_64.c:270-302), whatever the firmware's MTRRs
+ * say. 0, or -1 when a page for the tables could not be had.
+ */
+static int map_runtime(const struct boot_info *boot, uint32_t i)
+{
+    const struct boot_efi_range *r = &boot->efi_runtime[i];
+    pte_t flags = PTE_P | PTE_W | ((r->attr & EFI_MEMORY_WB) ? 0 : PTE_NOCACHE);
+    uint64_t a = r->base & ~(uint64_t)(PAGE_SIZE - 1);
+    uint64_t end = (r->base + r->size + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
+    pte_t *pdpt, *pd, *pt;
+    unsigned int j;
+
+    while (a < end) {
+        pdpt = table_below(efi_pml4, (unsigned int)((a >> 39) & 0x1FFu));
+        pd = pdpt ? table_below(pdpt, (unsigned int)((a >> 30) & 0x1FFu)) : 0;
+        if (!pd) {
+            return -1;
+        }
+        j = (unsigned int)((a >> 21) & 0x1FFu);
+        if (pd[j] & PTE_PS) {
+            /* only a range that covers the whole span takes one */
+            a = (a | (EFI_LARGE_PAGE - 1)) + 1;
+            continue;
+        }
+        if ((a & (EFI_LARGE_PAGE - 1)) == 0 && end - a >= EFI_LARGE_PAGE && !(pd[j] & PTE_P)) {
+            pd[j] = (pte_t)a | flags | PTE_PS;
+            a += EFI_LARGE_PAGE;
+            continue;
+        }
+        pt = table_below(pd, j);
+        if (!pt) {
+            return -1;
+        }
+        pt[(a >> 12) & 0x1FFu] = (pte_t)a | flags;
+        a += PAGE_SIZE;
+    }
+    return 0;
+}
+
+/**
  * Map every runtime range of `boot` at its physical address in a PML4 of
- * its own, by 2 MiB pages, writable and executable: the firmware runs its
- * code and data where the map says they are. 0, or -1 when a page for the
- * tables could not be had.
+ * its own (`map_runtime`): the firmware runs its code and data where the
+ * map says they are. 0, or -1 when a page for the tables could not be had.
  */
 static int build_identity(const struct boot_info *boot)
 {
     uint32_t i;
-    uint64_t a, end;
-    pte_t *pdpt, *pd;
 
     efi_pml4 = (pte_t *)kalloc_pages(1, &efi_pml4_phys);
     if (!efi_pml4) {
@@ -140,15 +186,8 @@ static int build_identity(const struct boot_info *boot)
     }
     k_memset(efi_pml4, 0, PAGE_SIZE);
     for (i = 0; i < boot->efi_runtime_count; i++) {
-        a = boot->efi_runtime[i].base & ~(EFI_LARGE_PAGE - 1);
-        end = boot->efi_runtime[i].base + boot->efi_runtime[i].size;
-        for (; a < end; a += EFI_LARGE_PAGE) {
-            pdpt = table_below(efi_pml4, (unsigned int)((a >> 39) & 0x1FFu));
-            pd = pdpt ? table_below(pdpt, (unsigned int)((a >> 30) & 0x1FFu)) : 0;
-            if (!pd) {
-                return -1;
-            }
-            pd[(a >> 21) & 0x1FFu] = (pte_t)a | PTE_P | PTE_W | PTE_PS;
+        if (map_runtime(boot, i) != 0) {
+            return -1;
         }
     }
     return 0;
@@ -241,7 +280,9 @@ static void efi_call(uint32_t type)
  * before SetVirtualAddressMap: the kernel's code and `efi_stack` are at
  * their physical addresses, so the instructions around the switch run on.
  * The four arguments go on the stack, cdecl, the type first; EBX keeps the
- * stack pointer and ESI CR0, both preserved by the firmware.
+ * stack pointer and ESI CR0, both preserved by the firmware. With paging
+ * off no page table gives a cache type, and the firmware's MTRRs alone
+ * decide it, as in the firmware's own boot-time mode.
  */
 static void efi_call(uint32_t type)
 {

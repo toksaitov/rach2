@@ -62,18 +62,21 @@ static int next_token(const char **p, const char **start, size_t *len)
     return 1;
 }
 
-/** Whether `tok` of length `len` is `key` followed by `=`. */
-static int token_has_key(const char *tok, size_t len, const char *key, size_t klen)
+/** Whether the first `klen` bytes of `tok` are `key`'s. */
+static int token_is(const char *tok, const char *key, size_t klen)
 {
     size_t i;
 
-    if (len < klen + 1 || tok[klen] != '=') {
-        return 0;
-    }
     for (i = 0; i < klen && tok[i] == key[i]; i++) {
         /* match each byte of the token against the key */
     }
     return i == klen;
+}
+
+/** Whether `tok` of length `len` is `key` followed by `=`. */
+static int token_has_key(const char *tok, size_t len, const char *key, size_t klen)
+{
+    return len >= klen + 1 && tok[klen] == '=' && token_is(tok, key, klen);
 }
 
 int kcmdline_value(const char *key, char *out, unsigned int outlen)
@@ -115,7 +118,54 @@ int kcmdline_value_nth(const char *key, int nth, char *out, unsigned int outlen)
     return 0;
 }
 
-int kcmdline_bool(const char *key, int dflt)
+/**
+ * Set `*out` from the first two bytes of a boolean value, `c0` and `c1`, the
+ * second 0 when the value is shorter, as Linux's kstrtobool reads them
+ * (Linux 6.12.115, lib/kstrtox.c:348-388). Returns 0, or -1 for no boolean.
+ */
+static int bool_text(char c0, char c1, int *out)
+{
+    switch (c0) {
+    case 'y':
+    case 'Y':
+    case 't':
+    case 'T':
+    case '1':
+        *out = 1;
+        return 0;
+    case 'n':
+    case 'N':
+    case 'f':
+    case 'F':
+    case '0':
+        *out = 0;
+        return 0;
+    case 'o':
+    case 'O':
+        if (c1 == 'n' || c1 == 'N') {
+            *out = 1;
+            return 0;
+        }
+        if (c1 == 'f' || c1 == 'F') {
+            *out = 0;
+            return 0;
+        }
+        return -1;
+    default:
+        return -1;
+    }
+}
+
+int kcmdline_parse_bool(const char *text, int *out)
+{
+    return bool_text(text[0], text[0] != '\0' ? text[1] : '\0', out);
+}
+
+/**
+ * The boolean option `key`, as `kcmdline_bool` reads it; a bare `key` token
+ * is true when `bare` is nonzero, and is ignored otherwise.
+ */
+static int cmdline_bool(const char *key, int dflt, int bare)
 {
     size_t klen = k_strlen(key);
     const char *p = kcmdline;
@@ -124,41 +174,27 @@ int kcmdline_bool(const char *key, int dflt)
     int value = dflt;
 
     while (next_token(&p, &tok, &len)) {
-        char c0, c1;
-
+        if (bare && len == klen && token_is(tok, key, klen)) {
+            value = 1;
+            continue;
+        }
         if (!token_has_key(tok, len, key, klen)) {
             continue;
         }
-        c0 = len > klen + 1 ? tok[klen + 1] : '\0';
-        c1 = len > klen + 2 ? tok[klen + 2] : '\0';
-        switch (c0) {
-        case 'y':
-        case 'Y':
-        case 't':
-        case 'T':
-        case '1':
-            value = 1;
-            break;
-        case 'n':
-        case 'N':
-        case 'f':
-        case 'F':
-        case '0':
-            value = 0;
-            break;
-        case 'o':
-        case 'O':
-            if (c1 == 'n' || c1 == 'N') {
-                value = 1;
-            } else if (c1 == 'f' || c1 == 'F') {
-                value = 0;
-            }
-            break;
-        default:
-            break;
-        }
+        (void)bool_text(len > klen + 1 ? tok[klen + 1] : '\0',
+                        len > klen + 2 ? tok[klen + 2] : '\0', &value);
     }
     return value;
+}
+
+int kcmdline_bool(const char *key, int dflt)
+{
+    return cmdline_bool(key, dflt, 0);
+}
+
+int kcmdline_param_bool(const char *key, int dflt)
+{
+    return cmdline_bool(key, dflt, 1);
 }
 
 int kcmdline_count(const char *key)
@@ -177,32 +213,23 @@ int kcmdline_count(const char *key)
     return n;
 }
 
-int kcmdline_has(const char *flag)
+int kcmdline_bare_count(const char *flag)
 {
     size_t flen = k_strlen(flag);
     const char *p = kcmdline;
+    const char *tok;
+    size_t len;
+    int n = 0;
 
-    while (*p != '\0') {
-        const char *start;
-        size_t n, i;
-
-        if (*p == ' ' || *p == '\t') {
-            p++;
-            continue;
-        }
-        start = p;
-        while (*p != '\0' && *p != ' ' && *p != '\t') {
-            p++;
-        }
-        n = (size_t)(p - start);
-        if (n == flen) {
-            for (i = 0; i < flen && start[i] == flag[i]; i++) {
-                /* match each byte of the token against the flag */
-            }
-            if (i == flen) {
-                return 1;
-            }
+    while (next_token(&p, &tok, &len)) {
+        if (len == flen && token_is(tok, flag, flen)) {
+            n++;
         }
     }
-    return 0;
+    return n;
+}
+
+int kcmdline_has(const char *flag)
+{
+    return kcmdline_bare_count(flag) > 0;
 }

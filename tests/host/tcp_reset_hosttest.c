@@ -153,6 +153,15 @@ void socket_tcp_accept(struct socket *listen_sock, struct socket *conn_sock)
     cb_accept++;
 }
 
+static int forget_queues; /* the accept queues emptied */
+
+/** Count an accept queue emptied by a listener's stop. */
+void socket_tcp_forget_queue(struct socket *listen_sock)
+{
+    (void)listen_sock;
+    forget_queues++;
+}
+
 /* The sockets a passive open asks for, from a pool the cases reuse, so that
  * nothing here is left for the leak checker. */
 static struct socket pool[2];
@@ -313,7 +322,7 @@ static void reset_all(void)
         tcb_free(tcbs);
     }
     n_segs = 0;
-    cb_connected = cb_fin = cb_accept = unrefs = 0;
+    cb_connected = cb_fin = cb_accept = unrefs = forget_queues = 0;
     pooled = 0;
     kernel_ticks = 1000;
 }
@@ -685,8 +694,9 @@ static void test_shut_rd(void)
  * shutdown(2) in SYN_SENT disconnects the socket, as Linux's inet_shutdown
  * has tcp_disconnect do: the block is freed, nothing is sent, the socket
  * records ECONNRESET, gives back the port the open chose and may connect
- * again, and a bound port stays. A socket with no block is refused with
- * ENOTCONN.
+ * again, and a bound port stays. A socket with no block takes the flags
+ * and is refused with ENOTCONN, as Linux's TCP_CLOSE case, and keeps them
+ * when it connects again.
  */
 static void test_shutdown_syn_sent(void)
 {
@@ -702,10 +712,14 @@ static void test_shutdown_syn_sent(void)
           tcp_shutdown(&sock, 0, 1) == 0 && sock.tcb == 0 && tcbs == 0 && n_segs == 0);
     CHECK("the socket records ECONNRESET and gives back the ephemeral port",
           sock.so_error == ECONNRESET && sock.local_port == 0 && sock.shutdown == 0);
-    CHECK("a shutdown of a socket with no block is refused with ENOTCONN",
-          tcp_shutdown(&sock, 1, 1) == -ENOTCONN);
-    CHECK("and the socket can connect again", tcp_connect(&sock, net_addr4(PEER), PEER_PORT) == 0 &&
-                                                  sock.tcb != 0 && sock.tcb->state == TCP_SYN_SENT);
+    CHECK("a shutdown of a socket with no block takes the flags and is ENOTCONN",
+          tcp_shutdown(&sock, 1, 0) == -ENOTCONN && sock.shutdown == SOCK_RCV_SHUTDOWN &&
+              tcp_shutdown(&sock, 0, 1) == -ENOTCONN &&
+              sock.shutdown == (SOCK_RCV_SHUTDOWN | SOCK_SEND_SHUTDOWN) && n_segs == 0);
+    CHECK("and the socket can connect again, keeping them",
+          tcp_connect(&sock, net_addr4(PEER), PEER_PORT) == 0 && sock.tcb != 0 &&
+              sock.tcb->state == TCP_SYN_SENT &&
+              sock.shutdown == (SOCK_RCV_SHUTDOWN | SOCK_SEND_SHUTDOWN));
     tcp_close(&sock);
 
     reset_all();
@@ -717,6 +731,145 @@ static void test_shutdown_syn_sent(void)
     CHECK("a shutdown in SYN_SENT keeps the bound port", tcp_shutdown(&sock, 1, 0) == 0 &&
                                                              sock.tcb == 0 && tcbs == 0 &&
                                                              sock.local_port == SELF_PORT);
+    reset_all();
+}
+
+/**
+ * shutdown(2) judges the other states as Linux's inet_shutdown: after a
+ * simultaneous open, in SYN_RCVD, it takes the flags and sends nothing, as
+ * Linux's tcp_shutdown sends no FIN from SYN_RECV, a send waits for the
+ * handshake and then fails, and the handshake's end sends no FIN; a block
+ * in TIME_WAIT with its socket attached, and one CLOSED by the peer's
+ * reset, are Linux's TCP_CLOSE, so the call takes the flags and fails with
+ * ENOTCONN, sending nothing.
+ */
+static void test_shutdown_states(void)
+{
+    static uint8_t bytes[4];
+    struct socket sock;
+    struct tcb *conn;
+    uint32_t iss, nxt;
+
+    reset_all();
+    k_memset(&sock, 0, sizeof(sock));
+    sock.type = SOCK_STREAM;
+    sock.local_port = SELF_PORT;
+    CHECK("an open can be started", tcp_connect(&sock, net_addr4(PEER), PEER_PORT) == 0);
+    conn = sock.tcb;
+    iss = segs[0].seq;
+    rx(SELF_PORT, 7000, 0, F_SYN);
+    CHECK("the peer's SYN leads to SYN_RCVD", conn->state == TCP_SYN_RCVD);
+    n_segs = 0;
+    CHECK("a shutdown in SYN_RCVD takes the flags and sends nothing",
+          tcp_shutdown(&sock, 1, 1) == 0 &&
+              sock.shutdown == (SOCK_RCV_SHUTDOWN | SOCK_SEND_SHUTDOWN) &&
+              conn->state == TCP_SYN_RCVD && conn->fin_pending == 0 && n_segs == 0);
+    CHECK("a send there waits for the handshake",
+          tcp_send(&sock, bytes, sizeof(bytes)) == TCP_SEND_CONNECTING);
+    rx(SELF_PORT, 7001, iss + 1, F_ACK);
+    CHECK("whose end sends no FIN", conn->state == TCP_ESTABLISHED && conn->fin_pending == 0 &&
+                                        (n_segs == 0 || !(segs[0].flags & F_FIN)));
+    CHECK("and the send then fails", tcp_send(&sock, bytes, sizeof(bytes)) == -1);
+    tcp_close(&sock);
+
+    reset_all();
+    conn = open_conn(&sock, 7300);
+    nxt = conn->rcv_nxt;
+    CHECK("SHUT_WR sends the FIN", tcp_shutdown(&sock, 0, 1) == 0 && conn->state == TCP_FIN_WAIT_1);
+    rx(SELF_PORT, nxt, conn->snd_nxt, F_ACK);
+    rx(SELF_PORT, nxt, conn->snd_nxt, (uint8_t)(F_FIN | F_ACK));
+    CHECK("the peer's FIN after the acknowledgement leads to TIME_WAIT with the socket attached",
+          conn->state == TCP_TIME_WAIT && sock.tcb == conn);
+    n_segs = 0;
+    CHECK("a shutdown there takes the flags and fails with ENOTCONN",
+          tcp_shutdown(&sock, 1, 0) == -ENOTCONN &&
+              sock.shutdown == (SOCK_RCV_SHUTDOWN | SOCK_SEND_SHUTDOWN) && n_segs == 0);
+    tcp_close(&sock);
+
+    reset_all();
+    conn = open_conn(&sock, 7400);
+    rx(SELF_PORT, conn->rcv_nxt, 0, F_RST);
+    CHECK("a reset leaves the block CLOSED with the socket attached",
+          conn->state == TCP_CLOSED && sock.tcb == conn);
+    n_segs = 0;
+    CHECK("a shutdown there fails with ENOTCONN and sends nothing",
+          tcp_shutdown(&sock, 0, 1) == -ENOTCONN && sock.shutdown == SOCK_SEND_SHUTDOWN &&
+              n_segs == 0);
+    tcp_close(&sock);
+    reset_all();
+}
+
+/**
+ * shutdown(2) of a listener, as Linux's inet_shutdown: SHUT_WR alone leaves
+ * it listening; SHUT_RD stops it, as tcp_disconnect has
+ * inet_csk_listen_stop do, freeing its block and its handshakes in
+ * progress with their sockets and emptying its accept queue, and the socket
+ * may listen again.
+ */
+static void test_shutdown_listener(void)
+{
+    struct socket lsock;
+
+    reset_all();
+    k_memset(&lsock, 0, sizeof(lsock));
+    lsock.type = SOCK_STREAM;
+    CHECK("a listener can be opened", tcp_listen(&lsock, SELF_PORT) == 0);
+    lsock.listening = 1;
+    rx(SELF_PORT, 9100, 0, F_SYN);
+    CHECK("a handshake starts on it", tcbs != 0 && tcbs->next != 0);
+    CHECK("SHUT_WR leaves a listener listening", tcp_shutdown(&lsock, 0, 1) == 0 &&
+                                                     lsock.listening == 1 && lsock.tcb != 0 &&
+                                                     lsock.shutdown == 0 && forget_queues == 0);
+    CHECK("SHUT_RD stops it", tcp_shutdown(&lsock, 1, 0) == 0 && lsock.listening == 0 &&
+                                  lsock.tcb == 0 && lsock.shutdown == 0);
+    CHECK("freeing its block and its handshake with the socket, and emptying its queue",
+          tcbs == 0 && unrefs == 1 && forget_queues == 1);
+    CHECK("and it may listen again", tcp_listen(&lsock, SELF_PORT) == 0 && lsock.tcb != 0);
+    tcp_close(&lsock);
+    reset_all();
+}
+
+/**
+ * A connection nobody accepted, on a listener that closes or stops, ends as
+ * Linux's tcp_disconnect ends it for inet_child_forget: from ESTABLISHED
+ * and from CLOSE_WAIT with an RST and ACK at snd_nxt, counted in
+ * EstabResets, whether or not data was read, and freed; one CLOSED by the
+ * peer's reset is freed with nothing sent.
+ */
+static void test_forget_queued(void)
+{
+    struct socket sock;
+    struct tcb *conn;
+    uint32_t nxt, snd, resets = net_mib.tcp_estab_resets;
+
+    reset_all();
+    conn = open_conn(&sock, 7500);
+    nxt = conn->rcv_nxt;
+    snd = conn->snd_nxt;
+    tcp_forget_queued(&sock);
+    CHECK("a queued connection in ESTABLISHED is reset at snd_nxt and freed",
+          tcbs == 0 && sock.tcb == 0 && n_segs == 1 && segs[0].flags == (F_RST | F_ACK) &&
+              segs[0].seq == snd && segs[0].ack == nxt);
+    CHECK("counted in EstabResets", net_mib.tcp_estab_resets == resets + 1);
+
+    reset_all();
+    conn = open_conn(&sock, 7600);
+    nxt = conn->rcv_nxt;
+    rx(SELF_PORT, nxt, conn->snd_nxt, (uint8_t)(F_FIN | F_ACK));
+    CHECK("the peer's FIN leads to CLOSE_WAIT", conn->state == TCP_CLOSE_WAIT);
+    n_segs = 0;
+    snd = conn->snd_nxt;
+    tcp_forget_queued(&sock);
+    CHECK("there it is reset, not given a FIN, counted in EstabResets",
+          tcbs == 0 && n_segs == 1 && segs[0].flags == (F_RST | F_ACK) && segs[0].seq == snd &&
+              segs[0].ack == nxt + 1 && net_mib.tcp_estab_resets == resets + 2);
+
+    reset_all();
+    conn = open_conn(&sock, 7700);
+    rx(SELF_PORT, conn->rcv_nxt, 0, F_RST);
+    n_segs = 0;
+    tcp_forget_queued(&sock);
+    CHECK("one the peer reset is freed with nothing sent", tcbs == 0 && n_segs == 0);
     reset_all();
 }
 
@@ -1122,6 +1275,9 @@ int main(void)
     test_close_unread();
     test_shut_rd();
     test_shutdown_syn_sent();
+    test_shutdown_states();
+    test_shutdown_listener();
+    test_forget_queued();
     test_syn_sent();
     test_syn_rcvd();
     test_syn_rcvd_segments();

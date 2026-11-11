@@ -431,8 +431,9 @@ struct drm_gem_object {
     struct dma_resv *resv;
     struct dma_resv resv_own;
     const struct drm_gem_object_funcs *funcs;
-    int map_wc;            /* PRIME mappings use write-combining */
-    uint32_t handle_count; /* handles any file has to it */
+    int map_wc;                 /* PRIME mappings use write-combining */
+    uint32_t handle_count;      /* handles any file has to it */
+    struct drm_handle *handles; /* those handles, through `obj_next` */
     uint8_t no_export;
     struct drm_gem_object *dev_next;  /* the device's objects */
     struct drm_gem_object *mmap_next; /* the device's objects with an offset, by offset */
@@ -571,23 +572,59 @@ struct drm_pending_event {
     } event;
 };
 
-/* A handle of a file's table: to a buffer object or to a syncobj. A table
- * is a list in the order of the ids. */
+/*
+ * A handle of a file's table: to a buffer object or to a syncobj. A buffer
+ * object's handle is also on the object's list of handles, with the file
+ * that holds it, which is what mmap asks, as Linux's vm_files of the
+ * object's drm_vma_offset_node.
+ */
 struct drm_handle {
     uint32_t id;
     void *object;
-    struct dma_buf *prime; /* held export/import cache, NULL for other handles */
-    struct drm_handle *next;
+    struct dma_buf *prime;         /* held export/import cache, NULL for other handles */
+    struct drm_handle *prime_next; /* the table's PRIME bucket */
+    struct drm_file *file;         /* the holder, for a buffer object's handle */
+    struct drm_handle *obj_next;   /* the object's handles */
 };
 
-/** Add `object` to the table `list` under the lowest free id from 1, as
+/* A file's table of handles, indexed by id as Linux's idr is, so that a
+ * lookup costs one load whatever the handles a client holds. Its handles
+ * with a PRIME cache are also hashed by their dma-buf, as Linux's
+ * prime_fpriv->dmabufs, so that an import finds its handle without a walk
+ * over the table. */
+struct drm_handles {
+    struct drm_handle **slot;  /* slot[id], NULL where the id is free; slot[0] unused */
+    uint32_t cap;              /* the slots allocated, 0 for none */
+    uint32_t free;             /* no id below it is free */
+    struct drm_handle **prime; /* buckets of the PRIME caches, NULL before the first */
+    uint32_t prime_buckets;    /* a power of two, 0 before the first */
+    uint32_t prime_count;      /* handles with a PRIME cache */
+};
+
+/** Add `object` to the table `t` under the lowest free id from 1, as
  * Linux's idr gives handles, into `*id`: 0, or -ENOMEM. */
-int32_t drm_handle_insert(struct drm_handle **list, void *object, uint32_t *id);
-/** The object of `id` in `list`, or NULL. */
-void *drm_handle_find(struct drm_handle *list, uint32_t id);
-/** Take `id` out of `list`, drop its PRIME cache reference and return its
+int32_t drm_handle_insert(struct drm_handles *t, void *object, uint32_t *id);
+/** The object of `id` in `t`, or NULL. */
+void *drm_handle_find(const struct drm_handles *t, uint32_t id);
+/** The handle of `id` in `t`, or NULL. */
+struct drm_handle *drm_handle_get(const struct drm_handles *t, uint32_t id);
+/** Take `id` out of `t`, drop its PRIME cache reference and return its
  * object, or NULL for none. */
-void *drm_handle_remove(struct drm_handle **list, uint32_t id);
+void *drm_handle_remove(struct drm_handles *t, uint32_t id);
+/** Make `buf` the PRIME cache of `t`'s handle `h`, which has none, with the
+ * caller's reference: 0, or -ENOMEM, which leaves the reference with the
+ * caller, as Linux's drm_prime_add_buf_handle. */
+int32_t drm_handle_set_prime(struct drm_handles *t, struct drm_handle *h, struct dma_buf *buf);
+/** The lowest id of `t` whose PRIME cache is `buf`, or 0 for none, as
+ * Linux's drm_prime_lookup_buf_handle. */
+uint32_t drm_handle_prime_find(const struct drm_handles *t, const struct dma_buf *buf);
+/** The lowest id from `id` that is in use in `t`, or 0 when none is: a
+ * walk over the table is `for (i = drm_handle_next(t, 1); i;
+ * i = drm_handle_next(t, i + 1))`. */
+uint32_t drm_handle_next(const struct drm_handles *t, uint32_t id);
+/** Free the slots and PRIME buckets of `t`, whose handles have all been
+ * removed. */
+void drm_handles_fini(struct drm_handles *t);
 
 /*
  * An open of a card or render node, one per open file description. The
@@ -622,8 +659,8 @@ struct drm_file {
     int set_busid; /* its master record has the bus name: SET_VERSION 1.1 or later */
     int universal_planes, atomic, aspect_ratio, writeback_connectors, stereo_allowed,
         supports_virtualized_cursor_plane;
-    struct drm_handle *objects;  /* buffer object handles */
-    struct drm_handle *syncobjs; /* syncobj handles */
+    struct drm_handles objects;  /* buffer object handles */
+    struct drm_handles syncobjs; /* syncobj handles */
     struct drm_framebuffer *fbs; /* framebuffers it made, through `file_next` */
     struct drm_pending_event *events, *events_tail;
     struct drm_pending_event *pending; /* reserved, not yet sent */
@@ -1123,15 +1160,13 @@ struct drm_atomic_state {
  * fb_create does: it may give a legacy framebuffer its object's modifier,
  * and an error refuses it; `fb_destroy` lets go what it took, before the
  * last put of the framebuffer drops its objects. `commit_fence_wait`, when
- * set, is told of each plane fence a nonblocking commit deferred to the
- * worker would wait for in Linux's commit tail, which Linux queues at
- * once: the first plane's not yet signalled as the commit is queued, and
- * each next one's as the one before signals, so that the driver can do
- * what its wait would, as i915's boosts the request. With interrupts
- * masked, maybe in an interrupt; it may not sleep, and the fence is
- * borrowed. `commit_fence_timeout_ms`, when nonzero, bounds the commit's
- * wait for each plane's fence in turn, uninterruptible, at that many
- * milliseconds from the moment the wait reaches it, and on a timeout the
+ * set, is called for each pending plane fence when the commit worker
+ * reaches it, in Linux's wait order, so the driver can do what its wait
+ * would, as i915's boosts the request. Called in process context without
+ * the driver's interrupt or engine locks, with interrupts masked. It may
+ * not sleep, and the fence is borrowed.
+ * `commit_fence_timeout_ms`, when nonzero, bounds each plane's wait to that
+ * many milliseconds from when it begins, uninterruptibly. On timeout the
  * commit stops waiting for the rest and programs the planes, as Linux's
  * intel_atomic_commit_fence_wait with i915_fence_timeout
  * (intel_display.c:7262-7280); 0 waits as Linux's
@@ -1555,11 +1590,10 @@ int32_t drm_atomic_helper_set_config(struct drm_mode_set *set);
  * no flush (`fb_dirty` unset), or the commit's error. May sleep. */
 int32_t drm_framebuffer_dirty(struct drm_device *dev, struct drm_framebuffer *fb,
                               const struct drm_mode_rect *rect);
-/** Send the queued hotplug events, then run every nonblocking commit
- * whose in-fences have all signalled, in the order they were made: its
- * planes and CRTCs programmed and its events armed for the next vblank. The
- * commit worker's body, and the host tests' stand-in for it; returns how
- * many events and commits ran. May sleep in the drivers' hooks. */
+/** Run the queued device work and hotplug events, then advance each
+ * nonblocking commit's plane waits in order and finish those whose waits
+ * ended. Process context under the big lock, without driver locks; returns
+ * how many works, events and commit tails ran. May sleep in driver hooks. */
 int drm_atomic_commit_work(void);
 /** Have the commit worker send `connector`'s hotplug event, to user space
  * and the console, as Linux's modeset retry work does after a link failed

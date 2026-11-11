@@ -39,7 +39,11 @@
  * missing child, refreshes the directories it crosses; listing /dev does
  * not. O_PATH descriptors on unfollowed links keep each link's owner until
  * lstat reaches it. An inherited fd directory's owner governs fchdir from
- * another process before and after a walk updates it. mlock,
+ * another process before and after a walk updates it. readlink, a followed
+ * stat and a walk through a link each update that link's owner, as Linux's
+ * walk revalidates every component it reaches. The size of a process's fd
+ * directory counts the descriptor an open of a FIFO has reserved while it
+ * waits for a writer, as Linux counts its open-descriptor bitmap. mlock,
  * mlock2, munlock, mlockall and munlockall accept a mapped range and count
  * in VmLck, a mapping made under MCL_FUTURE is locked, an
  * unprivileged mlock past RLIMIT_MEMLOCK fails with ENOMEM and with a limit
@@ -126,8 +130,9 @@
  * `readahead-fadvise`, `fadvise-espipe`, `noctty-session`, `maxrss-self`,
  * `maxrss-child`, `udp-refused`, `setgid-file`, `setgid-dir`,
  * `privacy-other-root`, `privacy-own-maps`, `privacy-kept-dirs`,
- * `privacy-dumpable`, `privacy-kept-files`, `privacy-dev-list`,
- * `privacy-kept-links`, `privacy-fchdir-owner`, `privacy-fd-walk`,
+ * `privacy-kept-opens`, `privacy-dumpable`, `privacy-kept-files`,
+ * `privacy-dev-list`, `privacy-kept-links`, `privacy-fchdir-owner`,
+ * `privacy-fd-walk`, `privacy-link-walks`, `fd-size-reserved`,
  * `timer-si-timer`, `timer-overrun`, `timer-delete`, `sigqueue`,
  * `rt-sigqueueinfo`, `pty-nonblock-eagain`, `pty-writer-sleeps`, `pty-64k`,
  * `pty-whole-lines`, `signalfd-eagain`, `signalfd-read`, `itimer-interval`,
@@ -788,6 +793,42 @@ static int privacy_fd_walk(struct privacy_fds *p)
 }
 
 /**
+ * With the process not dumpable again and each link's kept owner the user's
+ * since privacy_links_kept, reach five links by a path other than lstat:
+ * readlink of exe and of a descriptor link, a stat that follows a
+ * descriptor link and a namespace link, and a stat of a name past root,
+ * which walks through it. Each must give the O_PATH descriptor kept on that
+ * link root's owner, as Linux's walk revalidates the component before it
+ * reads or follows the link (fs/namei.c:1694-1706). Returns 0, or 1.
+ */
+static int privacy_link_walks(struct privacy_fds *p)
+{
+    char link[256];
+    struct stat st;
+    int i;
+
+    for (i = 0; i < 7; i++) {
+        if (fstat(p->links[i], &st) != 0 || st.st_uid != p->user || st.st_gid != p->group) {
+            return 1;
+        }
+    }
+    if (readlink(p->link_path[0], link, sizeof link) <= 0 ||
+        readlink(p->link_path[6], link, sizeof link) <= 0 || stat(p->link_path[5], &st) != 0 ||
+        stat(p->link_path[3], &st) != 0 || stat("/proc/self/root/dev", &st) != 0) {
+        return 1;
+    }
+    for (i = 0; i < 7; i++) {
+        int walked = i == 0 || i == 2 || i == 3 || i == 5 || i == 6;
+
+        if (fstat(p->links[i], &st) != 0 || st.st_uid != (walked ? 0 : p->user) ||
+            st.st_gid != (walked ? 0 : p->group)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
  * Run the privacy rows in a child of root, changing both IDs to the test's
  * user and group. All descriptors and the changed credentials die with the
  * child. Returns 0, or the step that failed, which privacies maps to a row.
@@ -824,37 +865,45 @@ static int privacies_child(pid_t parent)
     if (privacy_dirs_kept(&p)) {
         return 5;
     }
-    if (privacy_leaves_open(&p) || privacy_dumpable(&p)) {
+    if (privacy_leaves_open(&p)) {
         return 6;
     }
-    if (privacy_files_kept(&p)) {
+    if (privacy_dumpable(&p)) {
         return 7;
     }
-    if (privacy_dev_list(&p)) {
+    if (privacy_files_kept(&p)) {
         return 8;
     }
-    if (privacy_links_kept(&p)) {
+    if (privacy_dev_list(&p)) {
         return 9;
     }
-    if (privacy_chdir_kept(&p)) {
+    if (privacy_links_kept(&p)) {
         return 10;
     }
-    return privacy_fd_walk(&p) ? 11 : 0;
+    if (privacy_chdir_kept(&p)) {
+        return 11;
+    }
+    if (privacy_fd_walk(&p)) {
+        return 12;
+    }
+    return privacy_link_walks(&p) ? 13 : 0;
 }
 
-/** Run the privacy child and report its nine rows in order; 0, or 1. */
+/** Run the privacy child and report its eleven rows in order; 0, or 1. */
 static int privacies(void)
 {
     static const char *const failures[] = {
         "privacy setup or another user's access to a root process",
         "a child of user 4243 could not read its own maps",
         "retained /proc directory owners across changed IDs and failed walks",
+        "an O_PATH open of maps or of an unfollowed link, or an open of fdinfo",
         "/proc directory mode or owner across PR_SET_DUMPABLE",
         "retained /proc file owners or fdinfo mode",
         "listing /dev changed a retained /proc owner",
         "retained /proc link owners or their separate lookup updates",
         "fchdir ignored a retained root owner",
-        "a walk through fd did not update its owner, or fchdir lost that owner"};
+        "a walk through fd did not update its owner, or fchdir lost that owner",
+        "readlink, a followed stat or a walk through a link kept its old owner"};
     int status, row;
     int base = rows_reported;
     pid_t pid, waited, parent = getpid();
@@ -926,6 +975,74 @@ static int seen_asleep(pid_t pid)
         /* interval: a process's state is looked at again every 10 ms */
         usleep(10000);
     }
+}
+
+/**
+ * Check that the size of a process's /proc fd directory counts the
+ * descriptor an open has reserved before it blocks, as Linux's
+ * proc_readfd_count weighs the open-descriptor bitmap (Linux 6.12
+ * fs/proc/fd.c:299), whose bit the open sets (fs/file.c:531) before it waits
+ * in a FIFO's open (fs/open.c:1419). A child writes the size of its own fd
+ * directory and opens a FIFO for reading with no writer; once it is seen
+ * asleep, stat and fstat of its fd directory give one more, and an open for
+ * writing lets it go. Returns 0, or 1.
+ */
+static int reserved_fds(void)
+{
+    static const char fifo[] = "/tmp/callsmusl.fifo";
+    char path[64];
+    struct stat st, fst;
+    int res[2], dir = -1, w = -1, n = -1, status = 0, ok;
+    pid_t pid, waited;
+
+    unlink(fifo);
+    if (mkfifo(fifo, 0600) != 0 || pipe(res) != 0) {
+        unlink(fifo);
+        return fail("mkfifo and a pipe for the reserved descriptor");
+    }
+    pid = fork();
+    if (pid == 0) {
+        close(res[0]);
+        if (stat("/proc/self/fd", &st) != 0) {
+            _exit(1);
+        }
+        n = (int)st.st_size;
+        if (write(res[1], &n, sizeof n) != (ssize_t)sizeof n) {
+            _exit(1);
+        }
+        _exit(open(fifo, O_RDONLY) < 0);
+    }
+    close(res[1]);
+    ok = pid > 0 && read(res[0], &n, sizeof n) == (ssize_t)sizeof n && seen_asleep(pid);
+    if (ok) {
+        snprintf(path, sizeof path, "/proc/%d/fd", (int)pid);
+        dir = open(path, O_RDONLY | O_DIRECTORY);
+        ok = stat(path, &st) == 0 && dir >= 0 && fstat(dir, &fst) == 0 && st.st_size == n + 1 &&
+             fst.st_size == n + 1;
+    }
+    if (pid > 0) {
+        w = open(fifo, O_WRONLY | O_NONBLOCK);
+        if (w < 0) {
+            kill(pid, SIGKILL);
+        }
+        do {
+            waited = waitpid(pid, &status, 0);
+        } while (waited < 0 && errno == EINTR);
+        ok = ok && w >= 0 && waited == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    }
+    if (dir >= 0) {
+        close(dir);
+    }
+    if (w >= 0) {
+        close(w);
+    }
+    close(res[0]);
+    unlink(fifo);
+    if (!ok) {
+        return fail("the size of /proc/PID/fd left out a descriptor a FIFO's open reserved");
+    }
+    held();
+    return 0;
 }
 
 /**
@@ -2687,59 +2804,34 @@ static void plan_rows(const char *const *ids, unsigned n)
 #define PLAN(ids) plan_rows(ids, sizeof(ids) / sizeof(ids[0]))
 
 /* The rows checked after `adjtimex`, in their order. */
-static const char *const after_rows[] = {"clock-adjtime",
-                                         "listxattr",
-                                         "getxattr-absent",
-                                         "lsetxattr-enoent",
-                                         "readahead-fadvise",
-                                         "fadvise-espipe",
-                                         "noctty-session",
-                                         "maxrss-self",
-                                         "maxrss-child",
-                                         "udp-refused",
-                                         "setgid-file",
-                                         "setgid-dir",
-                                         "privacy-other-root",
-                                         "privacy-own-maps",
-                                         "privacy-kept-dirs",
-                                         "privacy-dumpable",
-                                         "privacy-kept-files",
-                                         "privacy-dev-list",
-                                         "privacy-kept-links",
-                                         "privacy-fchdir-owner",
-                                         "privacy-fd-walk",
-                                         "timer-si-timer",
-                                         "timer-overrun",
-                                         "timer-delete",
-                                         "sigqueue",
-                                         "rt-sigqueueinfo",
-                                         "pty-nonblock-eagain",
-                                         "pty-writer-sleeps",
-                                         "pty-64k",
-                                         "pty-whole-lines",
-                                         "signalfd-eagain",
-                                         "signalfd-read",
-                                         "itimer-interval",
-                                         "itimer-signals",
-                                         "ptimer-gettime",
-                                         "ptimer-signals",
-                                         "devmem-low",
-                                         "devmem-ram-eperm",
-                                         "devmem-private-einval",
-                                         "devmem-apic",
-                                         "klog-size",
-                                         "klog-records",
-                                         "klog-clear",
-                                         "dev-log-link",
-                                         "rtc-alarm-range",
-                                         "rtc-aie-on-past",
-                                         "rtc-alarm-readback",
-                                         "rtc-alarm-invalid",
-                                         "rtc-read-af",
-                                         "rtc-wakealarm-empty",
-                                         "rtc-wakeup-enabled",
-                                         "power-state-mode",
-                                         "freeze-wakes",
+static const char *const after_rows[] = {"clock-adjtime",        "listxattr",
+                                         "getxattr-absent",      "lsetxattr-enoent",
+                                         "readahead-fadvise",    "fadvise-espipe",
+                                         "noctty-session",       "maxrss-self",
+                                         "maxrss-child",         "udp-refused",
+                                         "setgid-file",          "setgid-dir",
+                                         "privacy-other-root",   "privacy-own-maps",
+                                         "privacy-kept-dirs",    "privacy-kept-opens",
+                                         "privacy-dumpable",     "privacy-kept-files",
+                                         "privacy-dev-list",     "privacy-kept-links",
+                                         "privacy-fchdir-owner", "privacy-fd-walk",
+                                         "privacy-link-walks",   "fd-size-reserved",
+                                         "timer-si-timer",       "timer-overrun",
+                                         "timer-delete",         "sigqueue",
+                                         "rt-sigqueueinfo",      "pty-nonblock-eagain",
+                                         "pty-writer-sleeps",    "pty-64k",
+                                         "pty-whole-lines",      "signalfd-eagain",
+                                         "signalfd-read",        "itimer-interval",
+                                         "itimer-signals",       "ptimer-gettime",
+                                         "ptimer-signals",       "devmem-low",
+                                         "devmem-ram-eperm",     "devmem-private-einval",
+                                         "devmem-apic",          "klog-size",
+                                         "klog-records",         "klog-clear",
+                                         "dev-log-link",         "rtc-alarm-range",
+                                         "rtc-aie-on-past",      "rtc-alarm-readback",
+                                         "rtc-alarm-invalid",    "rtc-read-af",
+                                         "rtc-wakealarm-empty",  "rtc-wakeup-enabled",
+                                         "power-state-mode",     "freeze-wakes",
                                          "freeze-holds"};
 
 /**
@@ -2827,8 +2919,8 @@ int main(int argc, char **argv)
     plan();
     if (signals() || memory() || identity() || messages() || clocks() || ranges() || copies() ||
         overlaps() || hangups() || reserves() || adjusts() || advises() || terminals() || peaks() ||
-        refusals() || setgids() || privacies() || timers() || queues() || flows() || signalfds() ||
-        cputimers() || devmems() || klogs() || rtcs()) {
+        refusals() || setgids() || privacies() || reserved_fds() || timers() || queues() ||
+        flows() || signalfds() || cputimers() || devmems() || klogs() || rtcs()) {
         return 1;
     }
     report_end();

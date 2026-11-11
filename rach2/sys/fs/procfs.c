@@ -103,6 +103,7 @@
 #include "../ipc/unix.h"
 #include "../acpicall.h"
 #include "../display/backlight.h"
+#include "../watchdog.h"
 
 /* O_CLOEXEC, Linux's value on i386 and x86-64. */
 #define PROCFS_O_CLOEXEC 02000000
@@ -770,9 +771,12 @@ uint32_t procfs_task_links(int pid)
 }
 
 /**
- * The count is Linux's `proc_readfd_count` (fs/proc/fd.c:286-308): the
- * weight of the open-descriptor bitmap, which a close clears at once, so
- * that a descriptor whose release is still under way is not counted.
+ * The count is Linux's `proc_readfd_count` (Linux 6.12 fs/proc/fd.c:299):
+ * the weight of the open-descriptor bitmap. An open sets its bit when it
+ * reserves the number (fs/file.c:531), before an open that may block, such
+ * as a FIFO's (fs/open.c:1419), so a slot reserved and not yet given its
+ * object counts; a close clears the bit at once, so a descriptor whose
+ * release is still under way does not.
  */
 int procfs_fd_count(int pid)
 {
@@ -783,7 +787,9 @@ int procfs_fd_count(int pid)
         return -ENOENT;
     }
     for (fd = 0; fd < fd_table_cap(p->fds); fd++) {
-        if (fd_is_valid(p->fds, fd)) {
+        const fd_entry_t *e = &p->fds->entries[fd];
+
+        if ((e->type != FD_TYPE_NONE || e->ofd != NULL) && !(e->flags & FD_FLAG_CLOSING)) {
             n++;
         }
     }
@@ -8319,21 +8325,36 @@ static const struct {
     int *var;
     int min;
     int max;
-} sysctl_ints[] = {{SYNTH_SYS_INOTIFY_QUEUED, &inotify_max_queued_events, 0, 0x7FFFFFFF},
-                   {SYNTH_SYS_INOTIFY_INSTANCES, &inotify_max_user_instances, 0, 0x7FFFFFFF},
-                   {SYNTH_SYS_INOTIFY_WATCHES, &inotify_max_user_watches, 0, 0x7FFFFFFF},
-                   {SYNTH_SYS_MAX_MAP_COUNT, &vm_max_map_count, 0, 0x7FFFFFFF},
-                   {SYNTH_SYS_OVERFLOWGID, &ns_overflowgid, 0, 65535},
-                   {SYNTH_SYS_OVERFLOWUID, &ns_overflowuid, 0, 65535},
-                   {SYNTH_SYS_NR_OPEN, &fd_nr_open, FD_NR_OPEN_MIN, FD_NR_OPEN_MAX},
-                   {SYNTH_SYS_RANDOMIZE_VA_SPACE, &randomize_va_space, 0, 2},
-                   {SYNTH_SYS_TCP_KEEPALIVE_TIME, &tcp_keepalive_time, 1, SYSCTL_SECONDS_MAX},
-                   {SYNTH_SYS_TCP_KEEPALIVE_TIME + 1, &tcp_keepalive_intvl, 1, SYSCTL_SECONDS_MAX},
-                   {SYNTH_SYS_TCP_KEEPALIVE_TIME + 2, &tcp_keepalive_probes, 0, 255},
-                   {SYNTH_SYS_TCP_KEEPALIVE_TIME + 3, &tcp_mtu_probing, 0, 2},
-                   {SYNTH_SYS_TCP_RETRIES2, &tcp_retries2, 0, 255},
-                   {SYNTH_SYS_PANIC, &panic_timeout, -0x7FFFFFFF - 1, 0x7FFFFFFF},
-                   {SYNTH_SYS_PANIC_ON_OOPS, &panic_on_oops, -0x7FFFFFFF - 1, 0x7FFFFFFF}};
+} sysctl_ints[] = {
+    {SYNTH_SYS_INOTIFY_QUEUED, &inotify_max_queued_events, 0, 0x7FFFFFFF},
+    {SYNTH_SYS_INOTIFY_INSTANCES, &inotify_max_user_instances, 0, 0x7FFFFFFF},
+    {SYNTH_SYS_INOTIFY_WATCHES, &inotify_max_user_watches, 0, 0x7FFFFFFF},
+    {SYNTH_SYS_MAX_MAP_COUNT, &vm_max_map_count, 0, 0x7FFFFFFF},
+    {SYNTH_SYS_OVERFLOWGID, &ns_overflowgid, 0, 65535},
+    {SYNTH_SYS_OVERFLOWUID, &ns_overflowuid, 0, 65535},
+    {SYNTH_SYS_NR_OPEN, &fd_nr_open, FD_NR_OPEN_MIN, FD_NR_OPEN_MAX},
+    {SYNTH_SYS_RANDOMIZE_VA_SPACE, &randomize_va_space, 0, 2},
+    {SYNTH_SYS_TCP_KEEPALIVE_TIME, &tcp_keepalive_time, 1, SYSCTL_SECONDS_MAX},
+    {SYNTH_SYS_TCP_KEEPALIVE_TIME + 1, &tcp_keepalive_intvl, 1, SYSCTL_SECONDS_MAX},
+    {SYNTH_SYS_TCP_KEEPALIVE_TIME + 2, &tcp_keepalive_probes, 0, 255},
+    {SYNTH_SYS_TCP_KEEPALIVE_TIME + 3, &tcp_mtu_probing, 0, 2},
+    {SYNTH_SYS_TCP_RETRIES2, &tcp_retries2, 0, 255},
+    {SYNTH_SYS_PANIC, &panic_timeout, -0x7FFFFFFF - 1, 0x7FFFFFFF},
+    {SYNTH_SYS_PANIC_ON_OOPS, &panic_on_oops, -0x7FFFFFFF - 1, 0x7FFFFFFF},
+    {SYNTH_SYS_WATCHDOG, &watchdog_user_enabled, 0, 1},
+    {SYNTH_SYS_WATCHDOG + 1, &watchdog_softlockup_user_enabled, 0, 1},
+    {SYNTH_SYS_NMI_WATCHDOG, &watchdog_hardlockup_user_enabled, 0, 1},
+    {SYNTH_SYS_WATCHDOG + 3, &watchdog_thresh, 0, 60},
+    {SYNTH_SYS_WATCHDOG + 4, &softlockup_panic, 0, 1},
+    {SYNTH_SYS_WATCHDOG + 5, &hardlockup_panic, 0, 1},
+    {SYNTH_SYS_WATCHDOG + 6, &sysctl_softlockup_all_cpu_backtrace, 0, 1},
+    {SYNTH_SYS_WATCHDOG + 7, &sysctl_hardlockup_all_cpu_backtrace, 0, 1},
+    {SYNTH_SYS_WATCHDOG + 8, &sysctl_hung_task_all_cpu_backtrace, 0, 1},
+    {SYNTH_SYS_WATCHDOG + 9, &sysctl_hung_task_panic, 0, 1},
+    {SYNTH_SYS_WATCHDOG + 10, &sysctl_hung_task_check_count, 0, 0x7FFFFFFF},
+    {SYNTH_SYS_HUNG_TASK_TIMEOUT, &sysctl_hung_task_timeout_secs, 0, SYSCTL_SECONDS_MAX},
+    {SYNTH_SYS_HUNG_TASK_INTERVAL, &sysctl_hung_task_check_interval_secs, 0, SYSCTL_SECONDS_MAX},
+    {SYNTH_SYS_HUNG_TASK_WARNINGS, &sysctl_hung_task_warnings, -1, 0x7FFFFFFF}};
 
 /** The index in `sysctl_ints` of the /proc/sys file `entry`, or -1. */
 static int sysctl_int(int entry)
@@ -8346,6 +8367,45 @@ static int sysctl_int(int entry)
         }
     }
     return -1;
+}
+
+/**
+ * Store `v`, written to the /proc/sys file `entry`, in the variable of its
+ * row of `sysctl_ints`: -EINVAL out of the row's range, and for a file
+ * without a row, 0, its only value, is taken and any other is -EINVAL. A
+ * write that changes `watchdog`, `soft_watchdog`, `nmi_watchdog` or
+ * `watchdog_thresh` restarts the lockup detectors, as Linux's
+ * `proc_watchdog_common` and `proc_watchdog_thresh` do (kernel/watchdog.c,
+ * :1034-1050): before the store as well as after it, so that a tick in
+ * between reads the new value against timestamps touched at the first
+ * restart, as Linux stores the threshold only once the timers have stopped
+ * (:873-880); and a write of the hung-task detector's timeout or interval
+ * wakes it. `count` on success.
+ */
+static int32_t sysctl_int_write(int entry, int32_t v, uint32_t count)
+{
+    int i, old, restart;
+
+    i = sysctl_int(entry);
+    if (i < 0) {
+        return v == 0 ? (int32_t)count : -EINVAL;
+    }
+    if (v < sysctl_ints[i].min || v > sysctl_ints[i].max) {
+        return -EINVAL;
+    }
+    old = *sysctl_ints[i].var;
+    restart = entry >= SYNTH_SYS_WATCHDOG && entry <= SYNTH_SYS_WATCHDOG + 3 && old != (int)v;
+    if (restart) {
+        watchdog_reconfigure();
+    }
+    *sysctl_ints[i].var = (int)v;
+    if (restart) {
+        watchdog_reconfigure();
+    }
+    if (entry == SYNTH_SYS_HUNG_TASK_TIMEOUT || entry == SYNTH_SYS_HUNG_TASK_INTERVAL) {
+        watchdog_sysctl_changed();
+    }
+    return (int32_t)count;
 }
 
 /** Append a random UUID of version 4 as Linux's kernel/random files give
@@ -8456,6 +8516,9 @@ static int procfs_sysctl_text(struct procfs_text *t, int entry)
         ap_ch(t, '\n');
     } else if (entry == SYNTH_SYS_MAX_MNT_NAMESPACES) {
         ap_int(t, ns_max_mnt(proc_userns(current_proc)));
+        ap_ch(t, '\n');
+    } else if (entry >= SYNTH_SYS_WATCHDOG && entry <= SYNTH_SYS_NMI_WATCHDOG) {
+        ap_int(t, watchdog_sysctl_value(entry - SYNTH_SYS_WATCHDOG));
         ap_ch(t, '\n');
     } else if (i >= 0) {
         ap_int(t, *sysctl_ints[i].var);
@@ -8633,7 +8696,6 @@ static int32_t procfs_sysctl_write(fd_entry_t *e, const char __user *buf, uint32
     uint32_t len = 0;
     int32_t v;
     int rc;
-    int i;
     const char *dir;
     int key;
 
@@ -8685,15 +8747,7 @@ static int32_t procfs_sysctl_write(fd_entry_t *e, const char __user *buf, uint32
     if (f->origin_pid == SYNTH_SYS_MAX_MNT_NAMESPACES) {
         return sysctl_max_mnt_write(v, count);
     }
-    i = sysctl_int(f->origin_pid);
-    if (i >= 0) {
-        if (v < sysctl_ints[i].min || v > sysctl_ints[i].max) {
-            return -EINVAL;
-        }
-        *sysctl_ints[i].var = (int)v;
-        return (int32_t)count;
-    }
-    return v == 0 ? (int32_t)count : -EINVAL;
+    return sysctl_int_write(f->origin_pid, v, count);
 }
 
 static const struct file_ops procfs_sysctl_ops = {

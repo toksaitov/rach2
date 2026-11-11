@@ -38,7 +38,13 @@ each number may be decimal, octal with a leading 0, or hexadecimal with
 a leading 0x:
 .Bl -tag -width Ds
 .It Cm ramoops.mem_address , Cm ramoops.mem_size
-The region's physical address and size, which must be under 4 GiB.
+The region's physical address and size.
+The size must be under 4 GiB, and the region must end within what the
+kernel reaches: 4 GiB on i686, and on x86-64 the end of the direct map,
+64 TiB, or 64 GiB on a processor without 1 GiB pages.
+The region is mapped in the kernel's 128 MiB window for device memory,
+which it shares with the devices' registers; one that does not fit there
+is reserved but not used.
 The kernel takes the region out of its memory before it gives any of it
 out, as Linux's
 .Cm memmap=
@@ -62,12 +68,17 @@ How the region is mapped: 0, the default, write-combining, with the
 write buffers drained after each write; 1 uncached; 2 cached.
 .It Cm ramoops.ecc
 The Reed-Solomon parity bytes of each 128-byte block, and of each zone's
-header: 0, the default, for none, 1 for 16, or 2 to 254.
+header: 0, the default, for none, 1 for 16, or 2 to 127.
+A larger value is refused, since a 128-byte block and its parity must fit
+in the code's 255 symbols; Linux does not handle one either.
 The code is Linux's for ramoops, so a region written by either kernel
 reads in the other.
 .El
 .Pp
-Each size is rounded down to a power of two.
+The record, console, ftrace and pmsg sizes are each rounded down to a
+power of two, as Linux rounds them;
+.Cm ramoops.mem_size
+is used as given.
 Each zone has Linux's header of 12 bytes: the signature 0x43474244, the
 offset of the next byte to write and the bytes held, each 32 bits.
 .Pp
@@ -101,9 +112,11 @@ empties the console zone, this boot's log in it too, as on Linux.
 .Pp
 The root directory is root's with mode 0750, and each file root's with
 mode 0444, as Linux makes them.
-A file's size is its record's, and its times the time in its header, or
-the time of the first mount for the console's, as Linux makes the files at
-mount.
+A file's size is its record's.
+Its access time is the time of the first mount, when the file is made, as
+Linux makes the files at mount; its modification and change times are the
+time in its record's header, or the time of the first mount for the
+console's, which has none.
 Nothing else makes, writes or renames a file.
 .Xr statfs 2
 reports

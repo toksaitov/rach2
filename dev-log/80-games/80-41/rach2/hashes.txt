@@ -1,0 +1,3 @@
+05175c678ea7b75efe48457049c6518cffd2d69582d9ca6962acf5aba524cc19  build/worktrees/t3540/build/x86_64/rach2/kernel
+d0d8391db2ec705bd21ac7cbcf5f4e7f8b485832502396037565e39f92c808ce  build/worktrees/t3540/build/x86_64/utils/sbin/bootctl
+c8539f188917966590a0443bbfc486cd43648ba4971644939cc2612592d8ca0d  build/runs/t3540/payload.tar

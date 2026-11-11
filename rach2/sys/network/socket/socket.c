@@ -237,9 +237,9 @@ void socket_ref(struct socket *sock)
 
 /**
  * The reference count and the list are shared with the receive path, so
- * they change under `net_lock`. A listener's queued connections are released
- * with the same call; each is a socket that is not listening, so the
- * recursion is one level deep, and `net_lock` nests.
+ * they change under `net_lock`. A listener's queued connections are reset
+ * and released (`socket_tcp_forget_queue`); each is a socket that is not
+ * listening, so the recursion is one level deep, and `net_lock` nests.
  */
 void socket_unref(struct socket *sock)
 {
@@ -273,11 +273,7 @@ void socket_unref(struct socket *sock)
     }
 
     if (sock->type == SOCK_STREAM && sock->listening) {
-        while (sock->accept_head != sock->accept_tail) {
-            struct socket *conn = sock->accept_queue[sock->accept_head];
-            sock->accept_head = (sock->accept_head + 1) & (SOCK_ACCEPT_BACKLOG - 1);
-            socket_unref(conn);
-        }
+        socket_tcp_forget_queue(sock);
     }
 
     {
@@ -294,6 +290,26 @@ void socket_unref(struct socket *sock)
     sock_dgq_flush(&sock->rq);
     net_unlock(flags);
     kfree(sock);
+}
+
+/**
+ * Linux's inet_csk_listen_stop gives each connection of the accept queue
+ * to inet_child_forget, whose tcp_disconnect resets it
+ * (net/ipv4/inet_connection_sock.c:1388-1391, 1537 in 6.12.115), so
+ * the peer reads ECONNRESET, not the end of input a FIN would give.
+ */
+void socket_tcp_forget_queue(struct socket *listen_sock)
+{
+    uint32_t flags = net_lock();
+
+    while (listen_sock->accept_head != listen_sock->accept_tail) {
+        struct socket *conn = listen_sock->accept_queue[listen_sock->accept_head];
+
+        listen_sock->accept_head = (listen_sock->accept_head + 1) & (SOCK_ACCEPT_BACKLOG - 1);
+        tcp_forget_queued(conn);
+        socket_unref(conn);
+    }
+    net_unlock(flags);
 }
 
 void socket_leave_groups6(struct socket *sock)
@@ -350,7 +366,8 @@ void socket_udp_deliver_info(struct socket *sock, net_addr_t src_ip, uint16_t sr
 }
 
 /** The wait predicate of a datagram receive: a datagram waits, whatever the
- * family, or a UDP socket has an error pending. */
+ * family, a UDP socket has an error pending, or the socket was shut for
+ * receiving. */
 static int udp_recv_ready(void *arg)
 {
     socket_t *sock = (socket_t *)arg;
@@ -358,7 +375,7 @@ static int udp_recv_ready(void *arg)
     if (sock->family == AF_NETLINK) {
         return netlink_ready(sock) || sock->so_error != 0;
     }
-    return sock->rq.count != 0 || sock->so_error != 0;
+    return sock->rq.count != 0 || sock->so_error != 0 || (sock->shutdown & SOCK_RCV_SHUTDOWN);
 }
 
 /** The wait predicate of a stream receive: bytes are buffered, the FIN
@@ -396,7 +413,10 @@ int socket_dgram_nowait(struct socket *sock)
 }
 
 /** An error pending goes before any datagram, as Linux's receive reports
- * it first, and is looked for again after the wait. */
+ * it first, and is looked for again after the wait. A socket shut for
+ * receiving with nothing queued ends the wait, as Linux's
+ * __skb_wait_for_more_packets ends it with no error at RCV_SHUTDOWN
+ * (net/core/datagram.c:103-105, 130-133 in 6.12.115). */
 int socket_dgram_wait(struct socket *sock)
 {
     int rc = socket_dgram_error(sock);
@@ -406,6 +426,9 @@ int socket_dgram_wait(struct socket *sock)
     }
     if (rc == 0) {
         rc = socket_dgram_error(sock);
+    }
+    if (rc == 0 && (sock->shutdown & SOCK_RCV_SHUTDOWN) && socket_dgram_pending(sock) < 0) {
+        rc = SOCK_RECV_SHUT;
     }
     return rc;
 }
@@ -572,6 +595,9 @@ int socket_recv(struct socket *sock, uint8_t *buf, int len, net_addr_t *src_ip, 
         if (rc < 0) {
             return rc;
         }
+        if (rc == SOCK_RECV_SHUT) {
+            return 0;
+        }
         if (!vm_prefault_range((uintptr_t)buf, (uintptr_t)len, 1)) {
             return -EFAULT;
         }
@@ -688,15 +714,19 @@ static int send_connect_ready(void *arg)
 
 /**
  * What a read of the stream socket `sock`, which has no block, answers:
- * the error a shutdown in SYN_SENT recorded, ECONNRESET, once, and then
- * -ENOTCONN, as Linux's tcp_recvmsg gives sk_err before TCP_CLOSE's
- * ENOTCONN (net/ipv4/tcp.c:2687-2700).
+ * the error a shutdown in SYN_SENT recorded, ECONNRESET, once, then 0, the
+ * end of input, when the socket was shut for receiving, and otherwise
+ * -ENOTCONN, as Linux's tcp_recvmsg tests sk_err, then RCV_SHUTDOWN, then
+ * TCP_CLOSE (net/ipv4/tcp.c:2687-2700 in 6.12.115).
  */
 static int tcp_unconnected_error(struct socket *sock)
 {
     int err = socket_dgram_error(sock);
 
-    return err != 0 ? err : -ENOTCONN;
+    if (err != 0) {
+        return err;
+    }
+    return (sock->shutdown & SOCK_RCV_SHUTDOWN) ? 0 : -ENOTCONN;
 }
 
 /**
@@ -730,7 +760,12 @@ static int tcp_dead_error(struct tcb *tcb, int fallback)
  * pending error if it has one, and otherwise with EAGAIN when nonblocking,
  * or sleeps until the handshake ends and sends then, as Linux's
  * tcp_sendmsg_locked (net/ipv4/tcp.c:1106-1111) has sk_stream_wait_connect
- * (net/core/stream.c:62-82) do; EPIPE comes only from the other states. The
+ * (net/core/stream.c:62-82) do; EPIPE comes only from the other states. A
+ * socket left with no block, by a shutdown in SYN_SENT before the send or
+ * during its wait, fails with the error it recorded, ECONNRESET, once, and
+ * EPIPE after, as sk_stream_wait_connect returns sock_error before EPIPE
+ * (net/core/stream.c:63-67), and tcp_sendmsg_locked waits there in every
+ * state but ESTABLISHED and CLOSE_WAIT (net/ipv4/tcp.c:1106-1111). The
  * buffer is brought in again after each sleep, since `tcp_send` reads it
  * with interrupts off and another thread may have unmapped it.
  */
@@ -758,7 +793,13 @@ int socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblo
             continue;
         }
         if (sent == -1) {
-            return tcp_dead_error(sock->tcb, -EPIPE);
+            struct tcb *tcb = sock->tcb;
+
+            if (!tcb) {
+                rc = socket_dgram_error(sock);
+                return rc != 0 ? rc : -EPIPE;
+            }
+            return tcp_dead_error(tcb, -EPIPE);
         }
         if (sent != 0 || len == 0) {
             return sent;
@@ -1023,7 +1064,12 @@ int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len, int peek)
 /**
  * Read queued stream bytes without waiting, leaving them queued for a peek.
  * Return SOCK_EAGAIN without input, 0 at the end of input or when shut for
- * receiving, or -ENOTCONN on a listener.
+ * receiving, or -ENOTCONN on a listener. With nothing queued the peer's FIN
+ * comes first, then an error the connection recorded, then the receive
+ * shutdown, as Linux's tcp_recvmsg_locked tests SOCK_DONE, sk_err and
+ * RCV_SHUTDOWN in that order (net/ipv4/tcp.c:2684-2693 in 6.12.115): a
+ * socket shut for receiving whose connection is then reset reads
+ * ECONNRESET once, then 0.
  */
 int socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len, int peek)
 {
@@ -1040,7 +1086,11 @@ int socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len, int peek)
 
     avail = tcb->recv_tail - tcb->recv_head;
     if (avail == 0) {
-        if (tcb->fin_received || (sock->shutdown & SOCK_RCV_SHUTDOWN))
+        if (tcb->fin_received)
+            return 0;
+        if (tcb->so_error != 0)
+            return tcp_dead_error(tcb, -ECONNRESET);
+        if (sock->shutdown & SOCK_RCV_SHUTDOWN)
             return 0;
         if (tcb->state == TCP_CLOSED)
             return tcp_dead_error(tcb, -ECONNRESET);
@@ -1167,22 +1217,50 @@ void socket_tcp_fin(struct socket *sock)
 }
 
 /**
+ * The poll answer of the datagram, raw, packet or netlink socket `sock` for
+ * the `events` asked, as `socket_poll` describes it.
+ */
+static short socket_dgram_poll(struct socket *sock, short events)
+{
+    short revents = 0;
+
+    if (sock->family == AF_NETLINK ? netlink_ready(sock) : sock->rq.count != 0) {
+        revents |= (short)(events & POLLIN);
+    }
+    if (sock->shutdown & SOCK_RCV_SHUTDOWN) {
+        revents |= (short)(events & (POLLIN | POLLRDHUP));
+    }
+    if (sock->shutdown == (SOCK_RCV_SHUTDOWN | SOCK_SEND_SHUTDOWN)) {
+        revents |= POLLHUP;
+    }
+    revents |= (short)(events & POLLOUT);
+    if (sock->so_error != 0) {
+        revents |= POLLERR;
+    }
+    return revents;
+}
+
+/**
  * The query descriptor, a raw socket with no protocol, has only ioctls: it
  * answers POLLERR at once, so a poller does not wait on it forever. A raw,
  * packet or netlink socket polls like a datagram socket, on its own queue,
  * which is what a DHCP client and `ping` poll before they read, and a
- * datagram socket can always send.
+ * datagram socket can always send. A datagram socket shut for receiving
+ * adds POLLIN and POLLRDHUP, and shut both ways POLLHUP, as Linux's
+ * datagram_poll (net/core/datagram.c:913-916 in 6.12.115).
  *
  * A listener is ready for input when a connection waits to be accepted. A
  * stream with no block, never connected or disconnected by a shutdown in
- * SYN_SENT, is Linux's TCP_CLOSE: POLLHUP and POLLOUT, and POLLERR while
- * an error waits. A connected stream answers as Linux's tcp_poll does
- * (net/ipv4/tcp.c:559-596), with the halves shut counted as its
- * sk_shutdown counts them: the receiving half by SHUT_RD or the peer's
- * FIN, both by a closed or reset connection. A receiving half shut adds
+ * SYN_SENT, is Linux's TCP_CLOSE: POLLHUP and POLLOUT, POLLIN and
+ * POLLRDHUP once shut for receiving, and POLLERR while an error waits, as
+ * tcp_poll judges TCP_CLOSE. A connected stream answers as Linux's tcp_poll
+ * does (net/ipv4/tcp.c:559-596 in 6.12.115), with the halves shut counted
+ * as its sk_shutdown counts them: the receiving half by SHUT_RD or the
+ * peer's FIN, both by a closed or reset connection. A receiving half shut adds
  * POLLIN and POLLRDHUP, since a receive answers at once, and both halves
  * shut, or a closed connection, add POLLHUP. Bytes buffered add POLLIN. A
- * sending half shut adds POLLOUT, since a send fails at once; otherwise
+ * sending half shut adds POLLOUT past the handshake, since a send fails at
+ * once, and nothing in SYN_RCVD, whose send waits; otherwise
  * POLLOUT comes only in a sending state with send-ring room free, so a
  * poll-then-send loop blocks instead of spinning on a full ring. A
  * recorded error adds POLLERR and POLLOUT, so a non-blocking connect
@@ -1204,14 +1282,7 @@ short socket_poll(struct socket *sock, short events, struct wait_queue **wq)
     }
 
     if (sock->type == SOCK_DGRAM || sock->type == SOCK_RAW) {
-        if (sock->family == AF_NETLINK ? netlink_ready(sock) : sock->rq.count != 0) {
-            revents |= (short)(events & POLLIN);
-        }
-        revents |= (short)(events & POLLOUT);
-        if (sock->so_error != 0) {
-            revents |= POLLERR;
-        }
-        return revents;
+        return socket_dgram_poll(sock, events);
     }
 
     if (sock->listening) {
@@ -1222,6 +1293,9 @@ short socket_poll(struct socket *sock, short events, struct wait_queue **wq)
     }
     if (!sock->tcb) {
         revents = (short)(POLLHUP | (events & POLLOUT));
+        if (sock->shutdown & SOCK_RCV_SHUTDOWN) {
+            revents |= (short)(events & (POLLIN | POLLRDHUP));
+        }
         if (sock->so_error != 0) {
             revents |= POLLERR;
         }
@@ -1247,7 +1321,9 @@ short socket_poll(struct socket *sock, short events, struct wait_queue **wq)
             revents |= (short)(events & POLLIN);
         }
         if (shut & SOCK_SEND_SHUTDOWN) {
-            revents |= (short)(events & POLLOUT);
+            if (tcb->state != TCP_SYN_SENT && tcb->state != TCP_SYN_RCVD) {
+                revents |= (short)(events & POLLOUT);
+            }
         } else if ((tcb->state == TCP_ESTABLISHED || tcb->state == TCP_CLOSE_WAIT) &&
                    (TCP_RING_SIZE - (tcb->send_tail - tcb->send_ack)) > 0) {
             revents |= (short)(events & POLLOUT);

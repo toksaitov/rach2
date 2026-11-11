@@ -118,6 +118,16 @@ static int service(void)
     return 0;
 }
 
+/** No processor has begun a panic here. */
+int k_panicking(void)
+{
+    return 0;
+}
+
+/** No performance counter here: a stopped processor has none to stop. */
+void platform_pmu_disable(void)
+{}
+
 /** Count an NMI sent to `cpu` and, when `takes_nmi` says it takes one, run
  * the real stop handler there; one that does not stays stuck. */
 void platform_cpu_nmi(int cpu)
@@ -152,6 +162,10 @@ void platform_cpu_ipi(int cpu)
         c->space_drop = NULL;
     }
 }
+
+/** The host model has no watchdog. */
+void watchdog_wait(void)
+{}
 
 /* The processors the platform has, and the entry of the one the late row
  * starts, which reaches its first C only after the boot's wait. */
