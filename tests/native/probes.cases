@@ -102,7 +102,7 @@ case loopdevprobe.vfat image:loopdev-fat,loopdev-ext2,loopdev-krffs \
 # transfer and that no round trip waited for the timer, which count every
 # loopback datagram of the machine.
 case loopprobe \
-    ports:7100,7101,7102,7200,7203,7205,7206,7207,7300,7301,7310,7311,7312,7313,7314,7315,7316,7317,7318,7319,7320,7321,7322,7323,7324,7325 -- \
+    ports:7100,7101,7102,7200,7203,7205,7206,7207,7300,7301,7310 -- \
     loopprobe machine=native
 case lstest -- lstest
 case membarrierprobe -- membarrierprobe
