@@ -576,10 +576,9 @@ static int rows_held(long fd)
 }
 
 /**
- * Run the rows in a child and report them. The child leads no session, so
- * reading the slave does not make it a controlling terminal, as Rach2 lets
- * a session leader's read claim an unowned slave and etude-guest starts the
- * probe as one. The parent began the report and alone writes it: the rows
+ * Run the rows in a child and report them. The child leads no session, and
+ * opens the slave with O_NOCTTY, so the pair never becomes a controlling
+ * terminal. The parent began the report and alone writes it: the rows
  * that held, from the child's count, then the child's failure, by its row's
  * reason or by the signal that ended it. `_start` calls it with the initial
  * stack.
