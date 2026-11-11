@@ -2105,6 +2105,16 @@ or
 from the reader's root, as Linux's
 .Fn d_path
 builds it.
+A device, a DRM buffer, a dma-buf or a PCI resource file of
+.Pa /sys ,
+which maps itself, is named by its
+.Pa fd
+link's target when it was mapped:
+.Pa /dev/ Ns Ar name ,
+.Ql anon_inode: Ns Ar name
+or the file's path in
+.Pa /sys ,
+which is the same from every root.
 It and
 .Pa smaps
 need what
