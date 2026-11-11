@@ -8240,7 +8240,7 @@ static void krffs_fill_stat64(struct kstat *kst, krffs_node_t *node)
 }
 
 /* The stat of a descriptor, for `synth_fd_stat`; defined with sys_fstat64. */
-static int32_t fstat_fill(fd_entry_t *e, struct kstat *kst);
+static int32_t fstat_getattr(fd_entry_t *e, struct kstat *kst);
 
 /**
  * What a followed /proc/PID/fd/N link reports: the stat of descriptor `fd`
@@ -8267,7 +8267,7 @@ static int32_t synth_fd_stat(int pid, int fd, struct kstat *kst)
     if (held) {
         fd_ofd_ref(e.ofd);
     }
-    rc = fstat_fill(&e, kst);
+    rc = fstat_getattr(&e, kst);
     if (held) {
         fd_ofd_unref(e.ofd);
     }
@@ -8406,6 +8406,44 @@ static int synth_proc_writable(int procfile)
 }
 
 /**
+ * Fill `kst`, as `synth_stat_node` has begun it, for the directory of a
+ * process or thread that `vp` names, or for /proc/self unfollowed, a link.
+ * A task directory has the links `procfs_task_links` counts, and an fd
+ * directory the number of descriptors open as its size (`procfs_fd_count`),
+ * as Linux's `proc_fd_getattr` gives it (fs/proc/fd.c:350-366). Returns 0,
+ * or -ENOENT once the process or thread is gone.
+ */
+static int32_t synth_stat_pid_dir(const struct vpath *vp, struct kstat *kst, int follow)
+{
+    int id = procfs_resolve_id(vp);
+
+    if (id < 0) {
+        return -ENOENT;
+    }
+    kst->st_dev = PROCFS_FSID;
+    if (vp->kind == VNODE_PROC_PID && vp->pid == SYNTH_PID_SELF && vp->tid == 0 && !follow) {
+        kst->st_mode = 0120777; /* S_IFLNK | 0777 */
+        kst->st_ino = procfs_ino_dir();
+        return 0;
+    }
+    kst->st_mode = synth_pid_dir_mode(vp);
+    kst->st_ino = procfs_ino_pid(id);
+    synth_pid_owner(id, kst);
+    if (vp->kind == VNODE_PROC_TASK_DIR) {
+        kst->st_nlink = procfs_task_links(id);
+    }
+    if (vp->kind == VNODE_PROC_FD_DIR) {
+        int n = procfs_fd_count(id);
+
+        if (n < 0) {
+            return n;
+        }
+        kst->st_size = n;
+    }
+    return 0;
+}
+
+/**
  * Fill `kst` with the attributes stat gives the /dev, /proc or /sys node
  * `vp`, a /proc link followed to what it names when `follow`. Returns 0, or
  * -ENOENT for a node that is not there, a process that has exited, a device
@@ -8424,7 +8462,9 @@ static int synth_proc_writable(int procfile)
  * on Linux, and so is a /proc/sys file that can be written. A
  * descriptor's fdinfo file is 0444 (fs/proc/fd.c:383); /proc/disk is 0400,
  * as are a process's syscall, environ and auxv files; its mem file is 0600
- * and its fd directory 0500.
+ * and its fd directory 0500, whose size is the number of descriptors the
+ * process has open (`procfs_fd_count`), as Linux's `proc_fd_getattr` gives
+ * it (fs/proc/fd.c:350-366).
  *
  * The /proc links, /proc/self, a process's cwd, root and exe, its namespace
  * links and its descriptors' links, are links of mode 0777 when not
@@ -8614,23 +8654,7 @@ static int32_t synth_stat_node(const struct vpath *vp, struct kstat *kst, int fo
     case VNODE_PROC_FDINFO_DIR:
     case VNODE_PROC_TASK_DIR:
     case VNODE_PROC_NS_DIR:
-        if (procfs_resolve_id(vp) < 0) {
-            return -ENOENT;
-        }
-        if (vp->kind == VNODE_PROC_PID && vp->pid == SYNTH_PID_SELF && vp->tid == 0 && !follow) {
-            kst->st_dev = PROCFS_FSID;
-            kst->st_mode = 0120777; /* S_IFLNK | 0777 */
-            kst->st_ino = procfs_ino_dir();
-            return 0;
-        }
-        kst->st_dev = PROCFS_FSID;
-        kst->st_mode = synth_pid_dir_mode(vp);
-        kst->st_ino = procfs_ino_pid(procfs_resolve_id(vp));
-        synth_pid_owner(procfs_resolve_id(vp), kst);
-        if (vp->kind == VNODE_PROC_TASK_DIR) {
-            kst->st_nlink = procfs_task_links(procfs_resolve_id(vp));
-        }
-        return 0;
+        return synth_stat_pid_dir(vp, kst, follow);
     case VNODE_PROC_FILE:
         if (procfs_resolve_id(vp) < 0) {
             return -ENOENT;
@@ -9975,18 +9999,20 @@ static void fstat_synth(fd_entry_t *entry, struct kstat *kst)
  * and a /sys file is on sysfs with a size of 4096.
  *
  * A /dev, /proc or /sys directory reports what a stat of its path gives,
- * from the descriptor's record of its kind, process and thread, or a bare
- * directory once its process has exited. An O_PATH descriptor on a
- * synthetic leaf, or on a /proc link under O_NOFOLLOW, reports what an
- * lstat of its path gives while the node is there, and a bare device or
- * file once it is gone. Either kind of descriptor on a process's fd, fdinfo
- * or task directory, a file of /proc/<pid> or an fdinfo file reports the
- * owner the last lookup of its node gave (`procfs_owner_keep`), as Linux's
- * fstat reads the inode's owner (fs/stat.c:229), which only a lookup sets.
- * A pty slave reports what a stat of /dev/pts/N gives, which the
- * /proc/self/fd link names, or a character device of mode 0620 once its
- * pty is gone. Anything else, a pty master, the framebuffer
- * or the mouse, is a character device of mode 0666 and size 0.
+ * from the descriptor's record of its kind, process and thread, a process's
+ * fd directory the number of descriptors open as its size, or a bare
+ * directory once its process has exited, which for an fd directory only the
+ * callers of `fstat_fill` see, since `fstat_getattr` fails then. An O_PATH
+ * descriptor on a synthetic leaf, or on a /proc link under O_NOFOLLOW,
+ * reports what an lstat of its path gives while the node is there, and a
+ * bare device or file once it is gone. Either kind of descriptor on a
+ * process's fd, fdinfo or task directory, a file of /proc/<pid> or an fdinfo
+ * file reports the owner the last lookup of its node gave
+ * (`procfs_owner_keep`), as Linux's fstat reads the inode's owner
+ * (fs/stat.c:229), which only a lookup sets. A pty slave reports what a stat
+ * of /dev/pts/N gives, which the /proc/self/fd link names, or a character
+ * device of mode 0620 once its pty is gone. Anything else, a pty master, the
+ * framebuffer or the mouse, is a character device of mode 0666 and size 0.
  */
 static int32_t fstat_fill_attrs(fd_entry_t *entry, struct kstat *kst)
 {
@@ -10114,6 +10140,34 @@ static int32_t fstat_fill(fd_entry_t *entry, struct kstat *kst)
 }
 
 /**
+ * Fill `kst` for a stat of the descriptor `entry`, fstat64's, fstatat64's
+ * and statx's with AT_EMPTY_PATH and a followed /proc/PID/fd link's, as
+ * `fstat_fill` does; but -ENOENT for a descriptor on a process's fd
+ * directory once the process is gone, as Linux's `proc_fd_getattr` fails
+ * when `proc_readfd_count` finds no task (fs/proc/fd.c:291-292, 362-364).
+ * Access checks, sync_file_range and cachestat read the inode without its
+ * getattr on Linux, and call `fstat_fill` directly.
+ */
+static int32_t fstat_getattr(fd_entry_t *entry, struct kstat *kst)
+{
+    if (entry->type == FD_TYPE_SYNTH_DIR || entry->type == FD_TYPE_SYNTH_PATH) {
+        struct vpath vp;
+
+        if (entry->type == FD_TYPE_SYNTH_DIR) {
+            synth_dir_vpath((const struct synth_dir *)entry->priv, &vp);
+        } else if (entry->priv) {
+            vp = ((const struct synth_path *)entry->priv)->vp;
+        } else {
+            vp.kind = VNODE_ENOENT;
+        }
+        if (vp.kind == VNODE_PROC_FD_DIR && procfs_resolve_id(&vp) < 0) {
+            return -ENOENT;
+        }
+    }
+    return fstat_fill(entry, kst);
+}
+
+/**
  * Validate sync_file_range's descriptor, range and inode kind, in Linux's
  * order, then flush the file's data for WRITE (bit 1) as fdatasync does
  * (`sync_entry`). All writes here finish synchronously, so the WAIT_BEFORE
@@ -10183,7 +10237,7 @@ long sys_fstat64(isr_params_t *params)
     if (!entry) {
         return -EBADF;
     }
-    rc = fstat_fill(entry, &kst);
+    rc = fstat_getattr(entry, &kst);
     if (rc != 0) {
         return rc;
     }
@@ -10286,7 +10340,7 @@ static int32_t stat_at(int dirfd, const char __user *upath, int flags, struct ks
     if (empty && dirfd != AT_FDCWD) {
         fd_entry_t *entry = fd_get(current_proc->fds, dirfd);
 
-        return entry ? fstat_fill(entry, kst) : -EBADF;
+        return entry ? fstat_getattr(entry, kst) : -EBADF;
     }
     if (empty) {
         pathbuf = path_buf_get();

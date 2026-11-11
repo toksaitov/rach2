@@ -770,6 +770,27 @@ uint32_t procfs_task_links(int pid)
 }
 
 /**
+ * The count is Linux's `proc_readfd_count` (fs/proc/fd.c:286-308): the
+ * weight of the open-descriptor bitmap, which a close clears at once, so
+ * that a descriptor whose release is still under way is not counted.
+ */
+int procfs_fd_count(int pid)
+{
+    process_t *p = pid < 0 ? NULL : procfs_proc(pid);
+    int fd, n = 0;
+
+    if (!p) {
+        return -ENOENT;
+    }
+    for (fd = 0; fd < fd_table_cap(p->fds); fd++) {
+        if (fd_is_valid(p->fds, fd)) {
+            n++;
+        }
+    }
+    return n;
+}
+
+/**
  * Whether the caller may see what /proc shows of `p` behind Linux's ptrace
  * check with PTRACE_MODE_FSCREDS, `__ptrace_may_access`: a thread of `p`'s
  * own process; a privileged caller, which stands for CAP_SYS_PTRACE; or a
