@@ -341,11 +341,13 @@ writes one, each at the place the ones before it reached, from
 .Fa offset ;
 the offset and the descriptor are checked first, as
 .Fn pwrite
-checks them, then the vector whole before a byte is written, and a short
-write ends the call.
-On an O_APPEND file the whole vector goes to the end under one lock,
-leaving the shared offset alone, and a bad data page returns the bytes
-written before it, as an append through writev does.
+checks them, then the vector, and a short write ends the call.
+A file of a mounted file system takes the whole vector under one lock,
+as
+.Fn writev
+does, leaving the shared offset alone, and a bad data page returns the
+bytes written before it; on an O_APPEND file the vector goes to the end.
+Anything else has the vector checked whole before a byte is written.
 .Pp
 The x86-64 kernel runs, for a program that enters it by
 .Ql int $0x80 ,
