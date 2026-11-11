@@ -820,6 +820,17 @@ static void row_lengths(void)
           parse(&p_vecs, invalid, 2) == V_ERROR && last_ret == -EINVAL);
 }
 
+/** Nothing: one thread has no one to give way to. */
+void sched_give_way(void)
+{}
+
+/** No thread holds a lock here: a clear of the GTT gives no way. */
+int mutex_held(const struct mutex *m)
+{
+    (void)m;
+    return 0;
+}
+
 int main(void)
 {
     p_vcs.name = "vcs0";

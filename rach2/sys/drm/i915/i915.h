@@ -1694,7 +1694,9 @@ int32_t i915_ggtt_insert(struct drm_i915_private *i915, uint64_t offset, const u
                          uint32_t n, int cache);
 
 /** Point the entries of [offset, offset + size) at the scratch page and
- * flush the GTT's cache: 0, or `i915_ggtt_insert`'s errors. */
+ * flush the GTT's cache once, after the last: 0, or `i915_ggtt_insert`'s
+ * errors. A caller that holds the GEM lock and keeps the range reserved
+ * until the clear returns lets the big lock go every 512 entries. */
 int32_t i915_ggtt_clear_range(struct drm_i915_private *i915, uint64_t offset, uint64_t size);
 
 /** The entry that maps the GTT offset `offset`; all ones past the GTT. */

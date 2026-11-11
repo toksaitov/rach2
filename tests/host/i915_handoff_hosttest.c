@@ -2106,6 +2106,10 @@ int i915_request_started(const struct i915_request *rq)
     return rq->fence.base.signaled;
 }
 
+/** Nothing: one thread has no one to give way to. */
+void sched_give_way(void)
+{}
+
 int main(void)
 {
     int base;

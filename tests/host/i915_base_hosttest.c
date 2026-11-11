@@ -994,6 +994,17 @@ static void row_mmio_gtt(void)
     wc = 1;
 }
 
+/** Nothing: one thread has no one to give way to. */
+void sched_give_way(void)
+{}
+
+/** No thread holds a lock here: a clear of the GTT gives no way. */
+int mutex_held(const struct mutex *m)
+{
+    (void)m;
+    return 0;
+}
+
 /** Run every row; 0 when all pass. */
 int main(void)
 {
