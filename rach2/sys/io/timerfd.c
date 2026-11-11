@@ -418,17 +418,21 @@ static uint64_t forward_end(struct ktimer *t, int64_t clock)
 }
 
 /** Set `t->due` to the first tick at or after `t->end`, counted from the
- * reading `r` (`read_now`), as `sleep_for` ends a sleep, or the tick in
- * progress when the clock has reached `t->end`; and at least the tick after
- * `now`, a tick the caller has handled, so that the tick's walk ends even
- * for a timer held at END_MAX by a clock past it. The end is armed between
- * ticks (`arm_between`), and the reading kept as the time it was counted
- * at (`set_at`). */
+ * reading `r` (`read_now`), as `sleep_for` ends a sleep, at real time's
+ * present rate for a timer of CLOCK_REALTIME (`rtc_real_to_mono_ns`), or
+ * the tick in progress when the clock has reached `t->end`; and at least
+ * the tick after `now`, a tick the caller has handled, so that the tick's
+ * walk ends even for a timer held at END_MAX by a clock past it. The end is
+ * armed between ticks (`arm_between`), and the reading kept as the time it
+ * was counted at (`set_at`). */
 static void set_due(struct ktimer *t, const struct reading *r, uint64_t now)
 {
     int64_t left = t->end - r->clock;
 
     t->set_at = r->clock;
+    if (t->base == CLOCK_REALTIME) {
+        left = rtc_real_to_mono_ns(left);
+    }
     t->due = r->tick;
     if (left > 0) {
         t->due += div64((uint64_t)left + r->phase + NS_PER_TICK - 1u, NS_PER_TICK, NULL);
@@ -805,11 +809,11 @@ void timerfd_due(void)
  * each timerfd on `cancelable` is marked canceled and stepped, which makes
  * it readable as Linux's tick for the step does,
  * and its readers woken, so that its next read or setting fails with
- * ECANCELED. Without `cancel`, for a step that stands for adjtimex's
- * ADJ_OFFSET, the timers are counted again and none is canceled, since
- * Linux slews that offset and calls clock_was_set only for ADJ_SETOFFSET, a
- * change of TAI or a leap second (kernel/time/ntp.c:754-755,
- * kernel/time/timekeeping.c:2490-2532).
+ * ECANCELED. Without `cancel`, for a change of the rate adjtimex's slew
+ * runs the clock at, the timers are counted again at the new rate and none
+ * is canceled, since Linux slews adjtimex's offsets and calls clock_was_set
+ * only for ADJ_SETOFFSET, a change of TAI or a leap second
+ * (kernel/time/ntp.c:754-755, kernel/time/timekeeping.c:2490-2532).
  */
 void timerfd_clock_was_set(int cancel)
 {
