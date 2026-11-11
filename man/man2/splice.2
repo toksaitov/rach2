@@ -132,12 +132,11 @@ untouched page is and an anonymous page read but never written is, a region of
 device memory or a page the caller cannot read ends the call, with the
 bytes before it or
 .Er EFAULT .
-Into a read end's buffers the vector is checked whole first, as
+For a read end the vector is checked whole first, as
 .Xr readv 2
-checks it.
-From a write end's only the lengths, and that each range lies in user
-space, are checked first, and each page is judged as it is copied, so a
-buffer that is not mapped ends the call with the bytes before it, as on
+checks it; for a write end only the lengths and that each range lies in
+user space are checked first, and each page is judged as it is copied, so
+a buffer that is not mapped ends the call with the bytes before it, as on
 Linux.
 .Pp
 .Fn sendfile
