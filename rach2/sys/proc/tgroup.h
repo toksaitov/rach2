@@ -63,6 +63,10 @@ struct tgroup {
     uint64_t stime;
     wait_queue_t chld; /* threads waiting for a child to change state */
     wait_queue_t gone; /* an execve or a core waiting on the other threads */
+    /* The signalfd readers and pollers of every thread, woken by each signal
+     * sent to the process or to one of its threads, as Linux's
+     * sighand->signalfd_wqh (`sig_notify_fd`). */
+    wait_queue_t sigfd;
     /* The CPU time of the children the process has reaped, each with the
      * children it reaped, which a reap adds and wait4, times and getrusage
      * report. The group keeps it, not the leader, since a traced thread's
