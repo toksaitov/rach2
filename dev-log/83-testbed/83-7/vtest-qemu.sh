@@ -9,8 +9,8 @@
 # (83-2.md): with -x, the harness's
 # glmark2 and piglit through the relay on the guest's llvmpipe, and with
 # -g, the fake chip's function given to the guest through gpu.sh and given
-# back. OUT receives the serial log, run.txt, the runs' lines, and out/,
-# the measurements.
+# back. RUNS, `x g` by default, names the runs to make. OUT receives the
+# serial log, run.txt, the runs' lines, and out/, the measurements.
 set -eu
 
 [ $# -eq 4 ] || { echo 'usage: vtest-qemu.sh DISK KERNEL VTEST OUT' >&2; exit 2; }
@@ -69,10 +69,14 @@ L 'mkdir -p /tmp/vtest /tmp/run && mount -t ext2 -o ro /dev/disk1 /tmp/vtest && 
    cat /proc/cmdline; readlink /sys/bus/pci/devices/0000:00:07.0/driver; ls /sys/bus/pci/devices/0000:00:07.0/drm;
    grep -E "^(iommu_|vfio_|msi_vectors_free|kvm_)" /proc/stat; df -k /tmp/run' | tee "$out/boot.txt"
 status=0
-L 'cd /tmp/run && TMPDIR=/tmp/run/tmp && mkdir -p $TMPDIR && export TMPDIR MEASURE_RUNNERS=/tmp/run/runners &&
-   sh vtest-rach2.sh -a tcg -x /tmp/run/measure/measure.sh -o /tmp/run/out/x -t 5 /tmp/vtest; echo "vtest-qemu: -x: exit $?";
-   sh vtest-rach2.sh -a tcg -g 0000:00:07.0 /tmp/vtest; echo "vtest-qemu: -g: exit $?"' \
-    > "$out/run.txt" 2>&1 || status=$?
+L "cd /tmp/run && TMPDIR=/tmp/run/tmp && mkdir -p \$TMPDIR && export TMPDIR MEASURE_RUNNERS=/tmp/run/runners &&
+   for r in ${RUNS:-x g}; do
+       case \$r in
+       x) sh vtest-rach2.sh -a tcg -x /tmp/run/measure/measure.sh -o /tmp/run/out/x -t 5 /tmp/vtest ;;
+       g) sh vtest-rach2.sh -a tcg -g 0000:00:07.0 /tmp/vtest ;;
+       esac
+       echo \"vtest-qemu: -\$r: exit \$?\"
+   done" > "$out/run.txt" 2>&1 || status=$?
 grep -E '^vtest-(rach2: (result|measure|handoff|record)|qemu)' "$out/run.txt" || true
 L 'dmesg' > "$out/dmesg.txt" || true
 L 'grep -E "^(iommu_|vfio_|msi_vectors_free|kvm_)" /proc/stat' > "$out/after.txt" || true
