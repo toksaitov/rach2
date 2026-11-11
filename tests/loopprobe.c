@@ -998,10 +998,12 @@ static int recvmsg_vec(int s, struct iovec_probe *iov, size_t count, int flags)
 /** A receive that overwrites its second vector must still use its original
  * destination, for blocking, nonblocking and peeking reads on `cs` from
  * `as`. The replacement is writable too, so the unfixed kernel fails the
- * contents check without faulting. */
+ * contents check without faulting. The nonblocking read first waits on a
+ * peek for the bytes, since the loopback ring delivers a lone segment from
+ * the tick or a wait, after the write has returned. */
 static void tcp_recvmsg_overlap(int cs, int as)
 {
-    struct iovec_probe iov[2], replacement;
+    struct iovec_probe iov[2], replacement, whole;
     unsigned char wire[sizeof(replacement) + 1], got[sizeof(wire)];
     char original, other;
     int mode, flags, j;
@@ -1018,7 +1020,10 @@ static void tcp_recvmsg_overlap(int cs, int as)
         iov[0].iov_len = sizeof(iov[1]);
         iov[1].iov_base = &original;
         iov[1].iov_len = 1;
+        whole.iov_base = got;
+        whole.iov_len = sizeof(got);
         if (sys_write(as, wire, sizeof(wire)) != (int)sizeof(wire) ||
+            (flags == MSG_DONTWAIT && recvmsg_vec(cs, &whole, 1, MSG_PEEK) != (int)sizeof(wire)) ||
             recvmsg_vec(cs, iov, 2, flags) != (int)sizeof(wire) || original != 'x' || other != 0)
             fail("tcp recvmsg changed a copied vector");
         if (flags == MSG_PEEK && (sys_read(cs, got, sizeof(got)) != (int)sizeof(got) ||
