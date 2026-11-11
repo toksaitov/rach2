@@ -80,7 +80,7 @@ The PMU rows follow the host's counters. With them, the selftest `pmu_event_filt
 
 | List | Pass | Skip | Fail | Excluded | By the processor |
 | --- | --- | --- | --- | --- | --- |
-| `unit-tests.list` | 48 | 9 | 1 | 27 | 2 |
+| `unit-tests.list` | 48 | 8 | 1 | 27 | 3 |
 | `selftests.list` | 46 | 14 | 0 | 19 | 6 |
 
 The Debian guest, which [`guests/mkdebian.sh`](guests/mkdebian.sh) makes, is trixie's cloud kernel, 6.12.107, and an initramfs of Debian's static BusyBox 1.37.0 whose [`/init`](guests/debian-init) prints the kernel's version, the processor count, the first processor's flags and the clock source its kernel chose, `kvm-clock` under KVM, then `KVMGUEST OK`, and powers off. Both packages are pinned in [`guests/debian.txt`](guests/debian.txt) by the SHA-256 that the Debian layer's signed snapshot index gives. The guest boots in seconds even under TCG inside Rach2 and needs no disk, so a failure to reach its token is the hypervisor's. Make writes it to `build/kvm/guests/debian`, and puts it with the runners and the lists into `build/tests/cases/kvm/kvm.ext2`, which every case mounts read-only and copies to `/tmp/kvm`.
