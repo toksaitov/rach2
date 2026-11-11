@@ -13,12 +13,13 @@
  * The ring keeps what the log writes before a card is up: the memory layout,
  * the module ranges, the device probes, which the first frames carry. Each
  * sender starts as Linux's `netpoll_setup` starts one, by waiting for its
- * card's carrier, at most `netpoll.carrier_timeout` seconds; when the link
- * comes up in that wait with records held, they wait a further settle time
- * (`nc_link_ready`). The timer's tick drives the start (`netconsole_tick`),
- * so the held records go out when it ends and not with a later record, and
- * `kernel_shutdown` sends what is left before it stops the cards. After the
- * start a record goes out when it is written. A frame the card refuses,
+ * card's carrier, at most `netpoll.carrier_timeout` seconds; when the start
+ * finds the link up with records held, at once or later, they and every
+ * record written meanwhile wait a further settle time (`nc_link_ready`). The
+ * timer's tick drives the start (`netconsole_tick`), so the held records go
+ * out when it ends and not with a later record, and `kernel_shutdown` sends
+ * what is left before it stops the cards. After the start a record goes out
+ * when it is written. A frame the card refuses,
  * because the link is down or its transmit ring is full, stays in the ring,
  * and the drain stops until the next line: characters leave the ring only
  * once their frame is sent, which also keeps a character that arrives during
@@ -58,11 +59,12 @@
  * a console behind Linux's log buffer loses the oldest. The ring drops the
  * newest only before any sender exists, which keeps the boot log, or while a
  * drain runs. A target is told what it lost as Linux tells a console: a gap
- * in the extended form's `seq`, or `** N printk messages dropped **` before
- * the next plain record (kernel/printk/printk.c:2904-2906, 3049-3060). A
- * target is sent whole lines, which are whole records,
- * since a record is one line: one datagram a record, as Linux's `write_msg`
- * sends one a message (drivers/net/netconsole.c). The datagram is built as
+ * in the extended form's `seq`, or `** N printk messages dropped **` in front
+ * of the next plain record, in that record's datagram
+ * (kernel/printk/printk.c:2893-2895, 3036-3049). A target is sent whole
+ * lines, which are whole records, since a record is one line: one datagram a
+ * record, as Linux's `write_msg` sends one a message
+ * (drivers/net/netconsole.c:1236-1241). The datagram is built as
  * Linux's `netpoll_send_udp` builds it (net/core/netpoll.c): IPv4 with TTL 64
  * and an identification that counts, or IPv6 with hop limit 32, and a UDP
  * checksum over the pseudo-header, 0xffff in place of 0.
@@ -79,6 +81,7 @@
 #include "driver/netdev.h"
 #include "ip/ip.h"
 #include "../lib/krandom.h"
+#include "../lib/kstd.h"
 #include "../mm/kheap.h"
 #include "../syscall.h"
 #include "ip6/ip6.h"
@@ -121,14 +124,15 @@ static const uint8_t nc_broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
  * Mac, while every record sent from 0.85 s later on did, and the same drain
  * sent 2 s after the link came up arrived whole: what is sent at once is
  * lost past the card, where no driver can see it. Linux 6.12 waits for
- * carrier and no longer (`netpoll_setup`, net/core/netpoll.c:694-716), and
+ * carrier and no longer (`netpoll_wait_carrier`, net/core/netpoll.c:711-723,
+ * which `netpoll_setup` calls at 842-853), and
  * would lose it too; the settle is Rach2's own. */
 #define NC_LINK_SETTLE_MS 2000
 static uint32_t nc_settle_ticks = MS_TO_TICKS(NC_LINK_SETTLE_MS);
 
 /* The longest a sender's start waits for carrier, in seconds: Linux's
  * `carrier_timeout`, the boot option `netpoll.carrier_timeout=`
- * (net/core/netpoll.c:61-62). */
+ * (net/core/netpoll.c:58-59). */
 #define NC_CARRIER_TIMEOUT 4
 static uint64_t nc_carrier_ticks = (uint64_t)NC_CARRIER_TIMEOUT * TICK_HZ;
 
@@ -207,7 +211,8 @@ struct nc_target {
 };
 
 static struct nc_target *nc_targets;
-static int nc_setup_done;
+static int nc_setup_done; /* `netconsole_setup` has begun: it runs once */
+static int nc_attached;   /* and has attached its targets, perhaps none */
 static uint16_t nc_ip_id; /* the last IPv4 identification sent */
 
 /* The line being sent, its extended form, and the datagram, IPv6 header the
@@ -281,7 +286,9 @@ static void nc_follow(void)
 }
 
 /** Forget the runs of `nc_gaps` that every target has counted, and all of
- * them once setup has given no target. Under `net_lock`. */
+ * them once setup has attached no target. Before then, which includes the
+ * records setup itself logs, every run is kept for the targets to come.
+ * Under `net_lock`. */
 static void nc_retire_gaps(void)
 {
     uint32_t most = 0;
@@ -292,7 +299,7 @@ static void nc_retire_gaps(void)
             most = nc_gap_end - t->gap;
         }
     }
-    if (nc_targets || nc_setup_done) {
+    if (nc_targets || nc_attached) {
         nc_gap_first = nc_gap_end - most;
     }
 }
@@ -354,10 +361,11 @@ static uint32_t nc_skip_record(uint32_t *place)
  * oldest record, which that sender loses, when each such sender is held: one
  * that cannot send then costs the others nothing, as one console that falls
  * behind Linux's log buffer loses its own oldest records and no other's
- * (`console_emit_next_record`, kernel/printk/printk.c:3049). Does nothing,
- * leaving the newest to be dropped for all, before any sender exists, which
- * keeps the boot log, while a drain runs, whose sender's place must not move,
- * or when a sender furthest behind is not held. Under `net_lock`.
+ * (`console_emit_next_record`, kernel/printk/printk.c:3036-3049). Does
+ * nothing, leaving the newest to be dropped for all, before any sender
+ * exists, which keeps the boot log, while a drain runs, whose sender's place
+ * must not move, or when a sender furthest behind is not held. Under
+ * `net_lock`.
  */
 static void nc_make_room(void)
 {
@@ -400,8 +408,9 @@ static void nc_make_room(void)
  * when it does. A full ring first takes the oldest record from held senders
  * (`nc_make_room`); when that frees nothing, it drops the newest records
  * whole, so that a sender is given only whole ones, as Linux's consoles are
- * given whole records and lose whole ones (kernel/printk/printk.c:2967). The
- * start of the record it fills in on is taken back out when no sender has
+ * given whole records and lose whole ones, the dropped count being the
+ * records `printk_get_next_message` passes (kernel/printk/printk.c:2955-2956).
+ * The start of the record it fills in on is taken back out when no sender has
  * any of it yet and it is no longer than a datagram; when one has, the record
  * is cut and ended with the next newline that finds room, so a cut record is
  * never joined to a later one. Each newline dropped is a record lost
@@ -484,15 +493,18 @@ static void nc_begin(struct nc_start *s)
  *
  * After the start, whenever the link is up (`netdev_running`); ethernet.c
  * sends nothing on a link that is down. Linux's `write_msg` asks only
- * `netif_running` (drivers/net/netconsole.c:1214) and `__netpoll_send_skb`
- * no more (net/core/netpoll.c:332), never the carrier.
+ * `netif_running` (drivers/net/netconsole.c:1228) and `__netpoll_send_skb`
+ * no more (net/core/netpoll.c:334), never the carrier.
  *
  * In the start, not while the link is down, as `netpoll_setup` waits for
- * carrier (net/core/netpoll.c:706-714), until `nc_carrier_ticks` from its
- * beginning, when the start ends as Linux's "timeout waiting for carrier"
- * does. The link seen up ends it at once when nothing is held; otherwise the
- * held records wait until the link has been up for `nc_settle_ticks`, and a
- * link that goes down meanwhile starts that time again. A panic and
+ * carrier (`netpoll_wait_carrier`, net/core/netpoll.c:711-723), until
+ * `nc_carrier_ticks` from its beginning, when the start ends as Linux's
+ * "timeout waiting for carrier" does. The link seen up ends it at once when
+ * nothing is held. Otherwise the settle begins at the first check that finds
+ * the link up, whether it was ever down or not, and every record held then
+ * or written before the link has been up for `nc_settle_ticks` waits, so the
+ * records go out in order; a link that goes down meanwhile starts that time
+ * again. A panic and
  * `netconsole_shutdown` end the start, since there is no later. Under
  * `net_lock`.
  */
@@ -632,9 +644,10 @@ static int nc_linklocal(const uint8_t *a)
  * Write the address `t` sends from to `src`: the one it gave, or the
  * interface's first IPv4 address, or for IPv6 its first address whose
  * link-local scope matches the target's, as Linux's `netpoll_setup` chooses
- * (net/core/netpoll.c:719-756). Rach2 also passes over an address that is
- * tentative or failed duplicate detection, which Linux does not, since
- * nothing on the link would answer it yet. Returns 0 while there is none.
+ * (net/core/netpoll.c:857-867, `netpoll_take_ipv6` at 729-765). Rach2 also
+ * passes over an address that is tentative or failed duplicate detection,
+ * which Linux does not, since nothing on the link would answer it yet.
+ * Returns 0 while there is none.
  * Under `net_lock`.
  */
 static int nc_source(const struct nc_target *t, uint8_t *src)
@@ -938,15 +951,13 @@ static int nc_send_ext(struct nc_target *t, const uint8_t *src, uint32_t len)
 }
 
 /**
- * Send `t` from `src` the line Linux puts before a plain console's next record
+ * Write at `out` the line Linux puts in front of a plain console's next record
  * when it lost `t->lost` (`console_prepend_dropped`, kernel/printk/
- * printk.c:2904-2906), in a datagram of its own. Returns what `nc_udp_tx`
- * returns. Under `net_lock`.
+ * printk.c:2893-2895), and return its length, at most 41.
  */
-static int nc_send_dropped(struct nc_target *t, const uint8_t *src)
+static uint32_t nc_put_dropped(const struct nc_target *t, char *out)
 {
     static const char before[] = "** ", after[] = " printk messages dropped **\n";
-    char *out = (char *)nc_pkt + nc_payload_at(t);
     uint32_t p = 0, i;
 
     for (i = 0; before[i] != '\0'; i++) {
@@ -956,23 +967,27 @@ static int nc_send_dropped(struct nc_target *t, const uint8_t *src)
     for (i = 0; after[i] != '\0'; i++) {
         out[p++] = after[i];
     }
-    return nc_udp_tx(t, src, p);
+    return p;
 }
 
 /**
  * Send `t` its next line before the place `end`, after what it lost: the
  * count added to the extended form's `seq`, which is then the record's own
  * number among those written since the target began, as Linux's is
- * (`info_print_ext_header`, kernel/printk/printk.c:662-680), or the plain
- * form's line from `nc_send_dropped`. Returns 1 when the line was sent, or
- * dropped as too long for the interface, which no later attempt would
+ * (`info_print_ext_header`, kernel/printk/printk.c:635-653), or the plain
+ * form's line from `nc_put_dropped` in front of the line in its datagram, as
+ * `console_prepend_message` puts it in the same buffer (printk.c:2879-2881)
+ * and `write_msg` sends that whole; the line is then cut so that both fit
+ * NETCONSOLE_CHUNK_MAX, as a longer line is. Returns 1 when the line was
+ * sent, or dropped as too long for the interface, which no later attempt would
  * change; 0 when there is none whole yet, or the drain must wait, with
  * `t->held` set. Under `net_lock`.
  */
 static int nc_send_line(struct nc_target *t, uint32_t end)
 {
     uint8_t src[16];
-    uint32_t n, i, from;
+    char *out = (char *)nc_pkt + nc_payload_at(t);
+    uint32_t n, i, from, pre = 0;
     int r;
 
     if (!nc_link_ready(t->nd, &t->start, nc_behind(t->tail)) || !nc_source(t, src)) {
@@ -980,20 +995,12 @@ static int nc_send_line(struct nc_target *t, uint32_t end)
         return 0;
     }
     nc_pass_gaps(t);
-    n = nc_take(t->tail, end, t->extended ? NC_EXT_LINE : NETCONSOLE_CHUNK_MAX);
+    if (t->lost != 0 && !t->extended) {
+        pre = nc_put_dropped(t, out);
+    }
+    n = nc_take(t->tail, end, t->extended ? NC_EXT_LINE : NETCONSOLE_CHUNK_MAX - pre);
     if (n == 0) {
         return 0;
-    }
-    if (t->lost != 0 && !t->extended) {
-        r = nc_send_dropped(t, src);
-        if (r == NETDEV_TX_DROPPED) {
-            t->held = 1;
-            return 0;
-        }
-        if (r == NETDEV_TX_OK) {
-            t->datagrams++;
-        }
-        t->lost = 0;
     }
     if (t->extended) {
         t->seq += t->lost;
@@ -1001,14 +1008,15 @@ static int nc_send_line(struct nc_target *t, uint32_t end)
         r = nc_send_ext(t, src, nc_extend(t, n));
     } else {
         for (i = 0; i < n; i++) {
-            nc_pkt[nc_payload_at(t) + i] = (uint8_t)nc_line[i];
+            out[pre + i] = nc_line[i];
         }
-        r = nc_udp_tx(t, src, n);
+        r = nc_udp_tx(t, src, pre + n);
     }
     if (r == NETDEV_TX_DROPPED) {
         t->held = 1;
         return 0;
     }
+    t->lost = 0;
     from = t->tail + n;
     t->tail = from >= NETCONSOLE_RING ? from - NETCONSOLE_RING : from;
     t->held = 0;
@@ -1399,28 +1407,26 @@ static void nc_choose_boot_id(void)
     }
 }
 
-/** Read `netpoll.carrier_timeout=`, in seconds, into `nc_carrier_ticks`, as
- * Linux's parameter of that name is read; a value that is not a decimal
- * number of seconds leaves Linux's default of 4. */
+/**
+ * Read `netpoll.carrier_timeout=`, in seconds, into `nc_carrier_ticks`, as
+ * Linux reads that uint module parameter: each occurrence in order, as
+ * `parse_args` applies them (kernel/params.c:161-186), each value read by
+ * `param_set_uint`, which is `kstrtouint` with base 0 (kernel/params.c:238),
+ * so `0x10` is 16 and `010` is 8. A value it refuses changes nothing, and the
+ * last one it takes counts; with none, Linux's default of 4 stays.
+ */
 static void nc_read_carrier_timeout(void)
 {
-    char value[16];
-    uint32_t v = 0, i, d;
+    char value[24];
+    unsigned long v;
+    int n = kcmdline_count("netpoll.carrier_timeout"), i;
 
-    if (!kcmdline_value("netpoll.carrier_timeout", value, sizeof(value)) || value[0] == '\0') {
-        return;
-    }
-    for (i = 0; value[i] != '\0'; i++) {
-        if (value[i] < '0' || value[i] > '9') {
-            return;
+    for (i = 0; i < n; i++) {
+        if (kcmdline_value_nth("netpoll.carrier_timeout", i, value, sizeof(value)) &&
+            k_strtoul(value, sizeof(value), &v) == 0 && v <= 0xFFFFFFFFul) {
+            nc_carrier_ticks = (uint64_t)v * TICK_HZ;
         }
-        d = (uint32_t)(value[i] - '0');
-        if (v > (0xFFFFFFFFu - d) / 10u) {
-            return;
-        }
-        v = v * 10u + d;
     }
-    nc_carrier_ticks = (uint64_t)v * TICK_HZ;
 }
 
 /**
@@ -1487,6 +1493,7 @@ int netconsole_setup(const char *config, int frames)
         nc_begin(&t->start);
     }
     nc_targets = first;
+    nc_attached = 1;
     if (frames && !nc_enabled) {
         nc_begin(&nc_frames_start);
         nc_enabled = 1;
