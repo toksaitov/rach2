@@ -1277,6 +1277,11 @@ int tmpfs_memfd(struct vfs_mount *mnt, const char *name, uint32_t mode, uint32_t
     return 0;
 }
 
+uint64_t tmpfs_new_ino(struct vfs_mount *mnt)
+{
+    return ++((struct tmpfs_mount *)mnt->priv)->next_ino;
+}
+
 int tmpfs_secret_file(struct vfs_mount *mnt, void **node)
 {
     struct tmpfs_node *n = new_node(mnt, NULL, T_IFREG | 0600u);

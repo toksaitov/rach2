@@ -94,4 +94,13 @@ int tmpfs_secret(void *node);
  * made in a directory. */
 const char *tmpfs_label(void *node);
 
+/**
+ * A new inode number of `mnt`, which no node of it is given, for an object
+ * of the mount that has no node: shared anonymous memory takes one of the
+ * mount `vfs_memfd_mount` has, as Linux's shmem_zero_setup makes its file's
+ * inode on shm_mnt (mm/shmem.c:5383-5389). The caller holds the big lock,
+ * as the callers of `tmpfs_memfd` do.
+ */
+uint64_t tmpfs_new_ino(struct vfs_mount *mnt);
+
 #endif /* _TMPFS_H_ */

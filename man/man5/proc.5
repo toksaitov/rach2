@@ -2093,7 +2093,9 @@ gives the file, and read
 .Ql 00:00 0
 for a region of no file; a segment of the program or of the linker that
 was loaded and not mapped, as the debug shell loads its program, has those
-of the file it names.
+of the file it names, and shared anonymous memory has the device of the
+internal tmpfs mount that holds memfds and System V segments and an inode
+number of its own there, as Linux gives it those of its shmem file.
 A region with no path ends at the space after the inode, as on Linux.
 A mapped file's path is the target of its
 .Pa fd

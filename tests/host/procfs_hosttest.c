@@ -1998,6 +1998,27 @@ const struct open_file *filemap_ofd(const struct vm_file *f)
     return NULL;
 }
 
+/* The mount of memfds and shared anonymous memory, which the mount table
+ * of these rows does not hold, so that its device reads 00:00. */
+static struct vfs_mount memfd_mount;
+
+/** The mount of memfds and shared anonymous memory. */
+struct vfs_mount *vfs_memfd_mount(void)
+{
+    return &memfd_mount;
+}
+
+/* Shared anonymous memory for the identity row, with inode 7. */
+static char anon_shared_path[] = "/dev/zero (deleted)";
+static struct vm_file anon_shared_file = {1, 0, 0, 0, anon_shared_path, 0, 0};
+
+/** Inode 7 for the identity row's shared anonymous memory; 0 for any
+ * other file. */
+uint64_t filemap_anon_ino(const struct vm_file *f)
+{
+    return f == &anon_shared_file ? 7u : 0u;
+}
+
 /* The mapped files of the naming row: one an mmap made and one of the
  * program's image, both open on the same description, whose mount's type
  * keeps no path, so that its link target is the path it was opened by. */
@@ -2028,17 +2049,20 @@ void vm_file_put(struct vm_file *f)
     file_refs--;
 }
 
-/** The mount table the identity of a maps line searches, empty here. */
+/* Whether the mount table holds the mount of memfds, in place 4, where
+ * vfs.c puts it; empty otherwise. */
+static int memfd_mounted;
+
+/** The places of the mount table the identity of a maps line searches. */
 int vfs_mount_slots(void)
 {
-    return 0;
+    return memfd_mounted ? 5 : 0;
 }
 
-/** No entry of the empty mount table. */
+/** The mount of memfds in place 4 while `memfd_mounted`; none elsewhere. */
 struct vfs_mount *vfs_mount_at(int idx)
 {
-    (void)idx;
-    return NULL;
+    return memfd_mounted && idx == 4 ? &memfd_mount : NULL;
 }
 
 /** Compare the first 22 bytes of the maps line of a region of `type` and
@@ -2078,17 +2102,30 @@ static int text_has(const char *text, int len, const char *want)
 /** A reading of maps names a mapped file by its link's target, from the
  * reader's root, as Linux's d_path at each reading, and keeps the name in
  * no file, so that a reader with another root builds its own; the
- * segments of the program keep the path exec recorded, though their file
- * has an entry too; a shared region with no entry, shared anonymous
- * memory's, is named by no target; and every reference taken goes back. */
+ * segments of the program are named by the present path of the program's
+ * file, and once its name is gone by the path exec recorded with
+ * " (deleted)", as the exe link reads, though their file has an entry too;
+ * a shared region with no entry and no inode is named by no target; and
+ * every reference taken, to a file or to the address space, goes back. */
 static void maps_names_row(void)
 {
     struct mm *saved_mm = process.mm;
+    struct open_file saved_ofd = exe_ofd;
     struct procfs_text t;
     vma_t code, file, shared;
     static struct vm_file shared_file;
 
     k_memset(&space, 0, sizeof(space));
+    krffs_fs = &root_fs;
+    root_fs.node = &root_dir;
+    root_mount.type = &vfs_krffs_type;
+    k_memset(&exe_ofd, 0, sizeof(exe_ofd));
+    exe_ofd.vmnt = &root_mount;
+    exe_ofd.vnode = &program;
+    k_strncpy((char *)program.name, "b", sizeof(program.name));
+    program_path = "/tmp/b";
+    space.exe_file = &exe_ofd;
+    space.holds = 1;
     k_memset(&code, 0, sizeof(code));
     k_memset(&file, 0, sizeof(file));
     k_memset(&shared, 0, sizeof(shared));
@@ -2122,15 +2159,58 @@ static void maps_names_row(void)
     check(text_has(t.buf, t.len, "40000000-40001000 r--p 00000000 00:00 0") &&
               text_has(t.buf, t.len, " /srv/named\n40001000"),
           "a mapped file is named by its link's target at the reading");
-    check(text_has(t.buf, t.len, " /tmp/a\n40000000"),
-          "the program's segment keeps the path exec recorded");
+    check(text_has(t.buf, t.len, " /tmp/b\n40000000"),
+          "the program's segment is named by its file's present path at the reading");
     check(text_has(t.buf, t.len, "40001000-40002000 rw-s 00000000 00:00 0 \n"),
           "shared memory with no entry has no name");
     check(named_file.path == NULL && image_file.path == NULL, "and no file keeps the name");
-    check(file_refs == 0, "and every reference taken goes back");
+    check(file_refs == 0 && space.holds == 1 && file_holds == 0 && mount_locks == 0,
+          "and every reference taken goes back");
     kfree(t.buf);
+    program.name[0] = '\0';
+    program_path = NULL;
+    procfs_text_init(&t);
+    check(procfs_gen_maps(&t, 7) > 0 && !t.nomem &&
+              text_has(t.buf, t.len, " /tmp/a (deleted)\n40000000"),
+          "a program whose name is gone is named by its exec's path, deleted");
+    check(space.holds == 1 && file_holds == 0 && mount_locks == 0,
+          "and the second reading gives back what it took");
+    kfree(t.buf);
+    exe_ofd = saved_ofd;
+    krffs_fs = NULL;
     process.mm = saved_mm;
     k_memset(&space, 0, sizeof(space));
+}
+
+/** Shared anonymous memory reads the device of the mount of memfds, in
+ * place 4 of the mount table, 0x14 by `procfs_mount_dev`'s count, and its
+ * own inode, as Linux's line shows the shmem file's of shm_mnt; with the
+ * mount not in the table, its device reads 00:00 and the inode stays. */
+static void maps_anon_identity_rows(void)
+{
+    struct procfs_text t;
+    vma_t r;
+
+    k_memset(&space, 0, sizeof(space));
+    k_memset(&r, 0, sizeof(r));
+    r.start = 0x40000000u;
+    r.end = 0x40001000u;
+    r.type = VM_SHARED;
+    r.prot = VM_PROT_READ | VM_PROT_WRITE;
+    r.file = &anon_shared_file;
+    memfd_mounted = 1;
+    procfs_text_init(&t);
+    ap_maps_line(&t, &space, &r, NULL);
+    check(!t.nomem && t.len > 0 && text_has(t.buf, t.len, "rw-s 00000000 00:14 7 ") &&
+              text_has(t.buf, t.len, "/dev/zero (deleted)\n"),
+          "shared anonymous memory reads the memfd mount's device and its inode");
+    kfree(t.buf);
+    memfd_mounted = 0;
+    procfs_text_init(&t);
+    ap_maps_line(&t, &space, &r, NULL);
+    check(!t.nomem && t.len > 0 && text_has(t.buf, t.len, "rw-s 00000000 00:00 7 "),
+          "with the mount not in the table its device reads 00:00");
+    kfree(t.buf);
 }
 
 /** The maps line's s column is Linux's VM_MAYSHARE: s for a shared region
@@ -4042,6 +4122,7 @@ int main(int argc, char **argv)
     smaps_flags_rows();
     maps_shared_rows();
     maps_names_row();
+    maps_anon_identity_rows();
     reaped_during_read();
     system_rows();
     oom_values();

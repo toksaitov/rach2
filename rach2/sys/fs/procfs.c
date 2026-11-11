@@ -1663,22 +1663,29 @@ static void maps_names_free(struct maps_names *mn)
  * and the inode in decimal, or "00:00 0" for a region of no file. A segment
  * of the program or the dynamic linker that was loaded and not mapped, as
  * the debug shell loads its program, has the identity of the file whose
- * path `maps_path` gives it. */
+ * path `maps_path` gives it. Shared anonymous memory has the device of the
+ * mount `vfs_memfd_mount` has and its own inode number there, as Linux's
+ * line shows the shmem file's (fs/proc/task_mmu.c:338-339). */
 static void ap_maps_identity(struct procfs_text *t, const struct mm *mm, const vma_t *r)
 {
     const struct open_file *ofd = filemap_ofd(r->file);
     const struct vfs_mount *base;
+    uint64_t ino = filemap_anon_ino(r->file);
     uint32_t dev = 0;
     int i;
 
     if (!r->file && (r->type == VM_CODE || r->type == VM_DATA)) {
         ofd = r->end <= mm->vm.heap_start ? mm->exe_file : mm->interp_file;
     }
-    if (!ofd || !ofd->vmnt) {
+    if (ofd && ofd->vmnt) {
+        base = vfs_mount_base(ofd->vmnt);
+        ino = ofd->ino;
+    } else if (ino != 0) {
+        base = vfs_memfd_mount();
+    } else {
         ap_str(t, "00:00 0");
         return;
     }
-    base = vfs_mount_base(ofd->vmnt);
     for (i = 0; i < vfs_mount_slots(); i++) {
         if (vfs_mount_at(i) == base) {
             dev = procfs_mount_dev(i, base);
@@ -1688,7 +1695,7 @@ static void ap_maps_identity(struct procfs_text *t, const struct mm *mm, const v
     ap_ch(t, ':');
     ap_xlow(t, (dev & 0xffu) | ((dev >> 12) & 0xfff00u), 2);
     ap_ch(t, ' ');
-    ap_u64(t, ofd->ino);
+    ap_u64(t, ino);
 }
 
 /** Whether region `r` is a shared mapping, Linux's VM_MAYSHARE: a VM_SHARED
