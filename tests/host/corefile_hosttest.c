@@ -50,8 +50,8 @@ static void fd_holds_release(void);
 static long sys_ftruncate(isr_params_t *params);
 static long ksys_ftruncate(int fd, long long length);
 static long ksys_truncate(const char __user *upath, long long length);
-static long ksys_pread64(int fd, char __user *buf, uint32_t count, long long pos);
-static long ksys_pwrite64(int fd, const char __user *buf, uint32_t count, long long pos);
+static long ksys_pread64(int fd, char __user *buf, size_t count, long long pos);
+static long ksys_pwrite64(int fd, const char __user *buf, size_t count, long long pos);
 static long ksys_fadvise64(int fd, long long len, uint32_t advice);
 static long ksys_fallocate(int fd, uint32_t mode, uint64_t offset, uint64_t len);
 static long sys_write(isr_params_t *params);
@@ -821,6 +821,27 @@ int devfs_fd_log_size(struct fd_entry *e, uint32_t *size)
 
 /** No row's descriptor is a device whose transfers move the offset: 0. */
 int devfs_fd_moves_offset(struct fd_entry *e)
+{
+    (void)e;
+    return 0;
+}
+
+/** No row's descriptor is /dev/mem: 0. */
+int devfs_fd_is_mem(struct fd_entry *e)
+{
+    (void)e;
+    return 0;
+}
+
+/** No row's descriptor is a device that seeks to 0: 0. */
+int devfs_lseek_zero(struct fd_entry *e)
+{
+    (void)e;
+    return 0;
+}
+
+/** No row opens a /proc/PID/mem: 0. */
+int procfs_is_mem(const struct fd_entry *e)
 {
     (void)e;
     return 0;
