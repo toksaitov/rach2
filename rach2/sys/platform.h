@@ -183,11 +183,17 @@ void platform_pmu_disable(void);
  */
 int platform_pmu_overflow(int *due);
 
+/** In the NMI handler, after the callback of an overflow that
+ * `platform_pmu_overflow` took has run: on AMD, open the window for a late
+ * NMI (`platform_pmu_late`) from now. */
+void platform_pmu_handled(void);
+
 /**
  * In the NMI handler, for an NMI no source claimed: 1 while this
  * processor's counter may still raise one late, for 100 ms of TSC after it
- * was armed or stopped and, on AMD, after an overflow it handled, which the
- * handler then claims; 0 otherwise, and always without a counter.
+ * was armed or stopped and, on AMD, after the handler finished with an
+ * overflow (`platform_pmu_handled`), which the handler then claims; 0
+ * otherwise, and always without a counter.
  */
 int platform_pmu_late(void);
 
