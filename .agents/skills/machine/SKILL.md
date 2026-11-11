@@ -17,8 +17,8 @@ The Hardware section of `AGENTS.md` says what may be written and when the owner 
 
 ## Reaching the Lenovo
 
-* The Lenovo is on the Mac's network, not the testing host's, so sittings and stick writes run from the Mac. The Mac reaches it over Wi-Fi: `en1` is the Mac's Wi-Fi port, on 5 GHz, and `en0` has no link. The Lenovo's 192.168.0.106 is wired only on the Lenovo's side, and the testing host's 192.168.0.1 is a separate network.
-* The committed development key reaches every machine built from this tree, as `tools/Readme.md` says under Working an installed machine from the host. When Linux runs on the Lenovo and IPv4 cannot reach it, it answers SSH on its link-local address, `fe80::2ad2:44ff:fe7e:e0af%en1`.
+* The Lenovo is on the Mac's network, not the testing host's, so sittings and stick writes run from the Mac. The Mac reaches it over its wired port, `en0`, at 1000baseT; its Wi-Fi port, `en1`, is down. The Lenovo's 192.168.0.106 is wired only on the Lenovo's side, and the testing host's 192.168.0.1 is a separate network.
+* The committed development key reaches every machine built from this tree, as `tools/Readme.md` says under Working an installed machine from the host. When Linux runs on the Lenovo and IPv4 cannot reach it, it answers SSH on its link-local address, `fe80::2ad2:44ff:fe7e:e0af%en0`.
 * A program built on the Mac and started from a Claude Code session there is charged to Claude Code by macOS's Local Network privacy, and its UDP or TCP to the Lenovo fails with EHOSTUNREACH until Claude Code has that permission (System Settings, Privacy & Security, Local Network). Apple's own `ssh` and `nc` are exempt, so they still work from the same shell. The release's native datagram cases need the permission.
 * Its disk stays in its bay, since removing and refitting it is an hour of physical work. A machine left unbootable is reinstalled from the flash drive, which stays plugged into it.
 * The machine's own offsets are in `dev-log/43-machine/hardware.md`. Take a path from there or from `tools/Readme.md`; do not derive one.
