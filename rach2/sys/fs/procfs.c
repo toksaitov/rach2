@@ -1272,6 +1272,98 @@ static void ap_xlow(struct procfs_text *t, unsigned long v, int width)
     }
 }
 
+/**
+ * /proc/<pid>/syscall, in the forms of Linux's `proc_pid_syscall`:
+ * "running" for a thread that is ready or on a processor, other than the
+ * caller; otherwise, from the frame of the thread's entry to the kernel,
+ * "NR A0 A1 A2 A3 A4 A5 SP PC" when that entry was a system call, with the
+ * number as a tracer left it (`orig_nr`) and the arguments of the call's
+ * ABI, i386's for an `int $0x80` on x86-64, or "-1 SP PC" when it was a
+ * fault or an interrupt, or after a signal handler's return. A thread with
+ * no user frame, a kernel thread or a leader that has ended, reads
+ * "-1 0x0 0x0", as Linux's with no stack does. All but the number are in
+ * hex. -EACCES for a caller `procfs_may_read_mem` refuses, which stands for
+ * Linux's mode 0400 and its PTRACE_MODE_ATTACH check. The text is made at
+ * the open, so the caller's own thread shows the call that opened it.
+ */
+static int procfs_gen_syscall(struct procfs_text *t, int pid)
+{
+    process_t *p = procfs_proc(pid);
+    const isr_params_t *tf;
+    unsigned long args[6];
+    int i;
+
+    if (!p) {
+        return -ENOENT;
+    }
+    if (!procfs_may_read_mem(p)) {
+        return -EACCES;
+    }
+    if (p != current_proc && (p->state == PROC_READY || p->state == PROC_RUNNING)) {
+        ap_str(t, "running\n");
+        return t->len;
+    }
+    if (p->state == PROC_ZOMBIE || p->space_root == 0) {
+        ap_str(t, "-1 0x0 0x0\n");
+        return t->len;
+    }
+    tf = proc_user_frame(p);
+    if (FRAME_SYSCALL(tf) && p->orig_nr != -1) {
+        args[0] = SC_ARG(tf, 0);
+        args[1] = SC_ARG(tf, 1);
+        args[2] = SC_ARG(tf, 2);
+        args[3] = SC_ARG(tf, 3);
+        args[4] = SC_ARG(tf, 4);
+        args[5] = SC_ARG(tf, 5);
+        ap_int(t, (int)p->orig_nr);
+        for (i = 0; i < 6; i++) {
+            ap_str(t, " 0x");
+            ap_xlow(t, args[i], 1);
+        }
+    } else {
+        ap_str(t, "-1");
+    }
+    ap_str(t, " 0x");
+    ap_xlow(t, (unsigned long)FRAME_SP(tf), 1);
+    ap_str(t, " 0x");
+    ap_xlow(t, (unsigned long)FRAME_PC(tf), 1);
+    ap_ch(t, '\n');
+    return t->len;
+}
+
+/**
+ * The name of the function thread `p` sleeps in, as /proc/<pid>/wchan gives
+ * it: the name its wait recorded while it is blocked, Linux's
+ * `do_signal_stop` or `ptrace_stop` while it is stopped, and NULL while it
+ * runs, is ready to, or has ended, as Linux's `get_wchan` gives 0 then.
+ */
+static const char *procfs_wchan(const process_t *p)
+{
+    if (p->state == PROC_BLOCKED) {
+        return p->wchan;
+    }
+    if (p->state == PROC_STOPPED) {
+        return p->ptrace_status != 0 ? "ptrace_stop" : "do_signal_stop";
+    }
+    return NULL;
+}
+
+/** /proc/<pid>/wchan: `procfs_wchan`'s name with no newline, or "0" for
+ * none and for a caller `procfs_may_read_mem` refuses, as Linux gives 0 to
+ * a reader that fails its PTRACE_MODE_READ check. */
+static int procfs_gen_wchan(struct procfs_text *t, int pid)
+{
+    process_t *p = procfs_proc(pid);
+    const char *name;
+
+    if (!p) {
+        return -ENOENT;
+    }
+    name = procfs_may_read_mem(p) ? procfs_wchan(p) : NULL;
+    ap_str(t, name ? name : "0");
+    return t->len;
+}
+
 /** The path /proc/<pid>/maps gives region `r` of `mm`: the file it maps,
  * which for the vDSO's two regions is [vvar] or [vdso] (`vdso_map`),
  * [heap], [stack], the program for the segments of its image, which lie
@@ -2198,6 +2290,10 @@ static const char *procfs_pid_file_name(int kind)
         return "setgroups";
     case SYNTH_PROC_CHILDREN:
         return "children";
+    case SYNTH_PROC_SYSCALL:
+        return "syscall";
+    case SYNTH_PROC_WCHAN:
+        return "wchan";
     default:
         return "stat";
     }
@@ -8603,6 +8699,10 @@ static int procfs_gen_pid_file(struct procfs_text *t, int pid, const struct vpat
         return procfs_gen_limits(t, pid);
     case SYNTH_PROC_CHILDREN:
         return procfs_gen_children(t, pid);
+    case SYNTH_PROC_SYSCALL:
+        return procfs_gen_syscall(t, pid);
+    case SYNTH_PROC_WCHAN:
+        return procfs_gen_wchan(t, pid);
     default:
         return procfs_is_idmap(vp->procfile) ? procfs_gen_idmap(t, pid, vp->procfile)
                                              : procfs_gen_cmdline(t, pid);

@@ -47,7 +47,7 @@ struct wait_queue;
 static short poll_fd(struct fd_entry *e, short events, struct wait_queue **wq);
 struct poll_deadline;
 static int poll_wait(int (*scan)(void *ctx, struct wait_queue **wqs), void *ctx, uint32_t n,
-                     struct poll_deadline *d);
+                     struct poll_deadline *d, const char *wchan);
 static int32_t poll_mask_set(uintptr_t umask, uint32_t size);
 static int32_t poll_mask_done(int32_t ret);
 #include "io/poll.c"

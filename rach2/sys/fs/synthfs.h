@@ -167,6 +167,10 @@ const char *synth_ns_name(int kind);
 #define SYNTH_PROC_LOCKWAIT    66
 /* /proc/<pid>/numa_maps, each region's memory policy and pages by node. */
 #define SYNTH_PROC_NUMA_MAPS   67
+/* /proc/<pid>/syscall and wchan, the call and the function a thread sleeps
+ * in. */
+#define SYNTH_PROC_SYSCALL     68
+#define SYNTH_PROC_WCHAN       69
 
 /* The pid of /proc/self and /dev/fd, which procfs takes as the caller's
  * (`procfs_resolve_pid`). */

@@ -182,12 +182,13 @@ short poll_fd(fd_entry_t *e, short events, struct wait_queue **wq)
 
 /** One scan, with a record for each queue it may name: a wait here ends at
  * once. */
-int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d)
+int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d, const char *wchan)
 {
     struct wait_queue **wqs = kzalloc(sizeof(*wqs) * (n ? n : 1u));
     int rc;
 
     (void)d;
+    (void)wchan;
     if (!wqs) {
         return -ENOMEM;
     }

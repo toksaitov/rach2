@@ -45,9 +45,12 @@ typedef uint32_t phys_addr_t;
 /* restart_syscall's number, arm's 0. */
 #define SC_RESTART_NR(p) 0u
 
-#define FRAME_PC(p)   ((p)->pc)
-#define FRAME_SP(p)   ((p)->sp)
-#define FRAME_USER(p) (((p)->cpsr & 0x1Fu) == 0x10u)
+#define FRAME_PC(p)      ((p)->pc)
+#define FRAME_SP(p)      ((p)->sp)
+#define FRAME_USER(p)    (((p)->cpsr & 0x1Fu) == 0x10u)
+/* Whether the frame is a system call's entry: `svc`, as vector 2 of the
+ * numbering a port's entry gives, its place in the vector table. */
+#define FRAME_SYSCALL(p) ((p)->vector == 2u)
 
 #define PAGE_SHIFT 12
 #define PAGE_SIZE  0x1000

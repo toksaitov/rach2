@@ -65,9 +65,10 @@ struct poll_deadline {
  * an array of `n` queues, the most it may name. Returns the ready count, 0
  * at the deadline, -EINTR or -ENOMEM. A deadline moved to a later tick stays
  * moved in `d`, so a caller that waits again with it keeps the same end.
+ * `wchan` is the sleep's name for /proc/PID/wchan, a static string.
  * Sleeps, so it is for system call context.
  */
-int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d);
+int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d, const char *wchan);
 
 /** In `d`, the deadline of a timeout of `timeout_ms` milliseconds: the first
  * tick at or after its end, and its end by time since boot. A negative

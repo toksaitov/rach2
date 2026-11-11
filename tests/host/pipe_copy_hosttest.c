@@ -154,6 +154,13 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return 0;
 }
 
+/** A named wait, which the model takes as `wq_wait_event`. */
+int wq_wait_event_as(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
+{
+    (void)name;
+    return wq_wait_event(wq, cond, arg);
+}
+
 /** Count the wakeups of each end's queue and the kinds of change they name,
  * waking nothing. */
 void wq_wake(wait_queue_t *wq, uint32_t kinds)

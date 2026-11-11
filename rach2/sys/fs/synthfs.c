@@ -532,7 +532,9 @@ static int synth_pid_file(struct comp name, int task)
                  {"mountinfo", SYNTH_PROC_MOUNTINFO},
                  {"uid_map", SYNTH_PROC_UID_MAP},
                  {"gid_map", SYNTH_PROC_GID_MAP},
-                 {"setgroups", SYNTH_PROC_SETGROUPS}};
+                 {"setgroups", SYNTH_PROC_SETGROUPS},
+                 {"syscall", SYNTH_PROC_SYSCALL},
+                 {"wchan", SYNTH_PROC_WCHAN}};
     uint32_t i;
 
     for (i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
