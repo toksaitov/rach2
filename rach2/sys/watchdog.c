@@ -69,7 +69,9 @@ int sysctl_hung_task_warnings = 10;
  * buddy check from a wait with interrupts off (`watchdog_wait`), the TSC of
  * the last tick, of the wait's last sample period and of the last buddy
  * check, the wait's turns and sample periods, and whether the wait's check
- * is under way. */
+ * is under way; and the program counter the last NMI interrupted and
+ * whether one NMI at it handled more than one source, Linux's
+ * `last_nmi_rip` and `swallow_nmi` (arch/x86/kernel/nmi.c). */
 struct wd_cpu {
     volatile unsigned int hrtimer_interrupts;
     unsigned int hrtimer_interrupts_saved;
@@ -91,6 +93,8 @@ struct wd_cpu {
     unsigned int wait_turns;
     unsigned int wait_periods;
     int in_wait;
+    uintptr_t last_nmi_pc;
+    int swallow_nmi;
 };
 
 static struct wd_cpu wd[NR_CPUS];
@@ -783,21 +787,34 @@ static int watchdog_check_timestamp(struct wd_cpu *w)
 
 int watchdog_nmi(isr_params_t *params)
 {
-    int cpu = (int)arch_cpu_id(), handled = 0, due;
+    int cpu = (int)arch_cpu_id(), handled = 0, due, b2b;
+    struct wd_cpu *w = &wd[cpu];
+    uintptr_t pc = (uintptr_t)FRAME_PC(params);
 
+    b2b = pc == w->last_nmi_pc;
+    if (!b2b) {
+        w->swallow_nmi = 0;
+    }
+    w->last_nmi_pc = pc;
     if (nmi_cpu_backtrace(params)) {
-        handled = 1;
+        handled++;
     }
     if (wd_perf && platform_pmu_overflow(&due)) {
-        handled = 1;
-        if (due && (watchdog_enabled() & WD_HARD) && watchdog_check_timestamp(&wd[cpu])) {
+        handled++;
+        if (due && (watchdog_enabled() & WD_HARD) && watchdog_check_timestamp(w)) {
             watchdog_hardlockup_check(cpu, params);
         }
     }
     if (smp_stop_nmi()) {
-        handled = 1;
+        handled++;
     }
-    return handled;
+    if (handled > 1) {
+        w->swallow_nmi = 1;
+    }
+    if (handled) {
+        return 1;
+    }
+    return (b2b && w->swallow_nmi) || platform_pmu_late();
 }
 
 /* ---- the hung-task detector, kernel/hung_task.c ---- */

@@ -73,8 +73,18 @@ void watchdog_sched(void);
  * overflow, which runs the hard-lockup check, or the stop of a panic that
  * the interprocessor interrupt did not reach (`smp_stop_others`), which
  * `smp_stop_nmi` takes and does not return from. 1 when the NMI was the
- * watchdog's, 0 for one of another source, which the caller reports as a
- * fault of the machine.
+ * watchdog's or came late for it, 0 for one of another source, which the
+ * caller reports as a fault of the machine.
+ *
+ * The processor latches one NMI while it handles another. When an NMI
+ * handles two sources, a backtrace request and the counter's overflow, the
+ * second may have latched one of its own, which then finds nothing to do;
+ * so an NMI that finds nothing, back to back with one that handled more
+ * than one source at the same program counter, is claimed, as Linux's
+ * `default_do_nmi` swallows it (arch/x86/kernel/nmi.c:404-405, 472-475).
+ * One the counter raised just before it was loaded again, stopped or
+ * acknowledged finds nothing either, and is claimed within the counter's
+ * window (`platform_pmu_late`).
  */
 int watchdog_nmi(isr_params_t *params);
 
