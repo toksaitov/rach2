@@ -144,6 +144,20 @@ int pipe_is(const struct fd_entry *e);
 int32_t pipe_splice_write(struct fd_entry *e, const char __user *buf, uint32_t count, int nonblock,
                           uint32_t src);
 
+struct kernel_iovec;
+
+/**
+ * Write the `count` elements of `iov`, a vector iov_import has checked and
+ * cut, to the write end `e` as one write(2) of their bytes, as Linux runs a
+ * writev(2) through one `pipe_write`: the newest buffer takes the vector's
+ * first total mod 4096 bytes when it can, and each page buffer opened after
+ * it fills across the elements. Returns as a write(2) of the pipe does: the
+ * bytes written, all of them unless O_NONBLOCK or an error cuts the write,
+ * or -EAGAIN, -EPIPE with SIGPIPE raised, -EINTR, -EBADF, -EFAULT or
+ * -ENOMEM before any byte. May sleep.
+ */
+int32_t pipe_writev(struct fd_entry *e, const struct kernel_iovec *iov, int count);
+
 /**
  * Write up to `count` bytes of the caller's memory at `buf` to the write end
  * `e` for vmsplice(2), as `pipe_splice_write` writes them, the source's pages
