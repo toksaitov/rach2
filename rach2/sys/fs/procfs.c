@@ -8084,11 +8084,12 @@ static int32_t procfs_sysctl_read(fd_entry_t *e, char __user *buf, uint32_t coun
 
 /**
  * Store the number of the NUL-ended text `s` in `*v`, as Linux's
- * `proc_doulongvec_minmax` takes a write to fs/file-max and
- * `proc_douintvec` one to fs/pipe-max-size: spaces stripped at both ends,
- * an optional `+`, then a number in base 0, as `oom_parse` reads one, from
- * 0 to `limit`. 0, or -EINVAL for a sign, text that is no number, or a
- * number out of range, which leaves `*v` as it was.
+ * `proc_doulongvec_minmax` takes a write to fs/file-max and the pipe page
+ * limits and `proc_douintvec` one to fs/pipe-max-size: spaces stripped at
+ * both ends, then a number in base 0, as `oom_parse` reads one, from 0 to
+ * `limit`. 0, or -EINVAL for a sign, `+` or `-`, as Linux's `proc_get_long`
+ * and its callers refuse either, text that is no number, or a number out of
+ * range, which leaves `*v` as it was.
  */
 static int sysctl_parse_ulong(const char *s, unsigned long limit, unsigned long *v)
 {
@@ -8101,9 +8102,6 @@ static int sysctl_parse_ulong(const char *s, unsigned long limit, unsigned long 
     }
     while (end > s && oom_space(end[-1])) {
         end--;
-    }
-    if (*s == '+') {
-        s++;
     }
     if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X') && oom_digit(s[2]) < 16u) {
         base = 16;

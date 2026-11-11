@@ -2050,6 +2050,7 @@
         {"assertion_id": "pages-vmsplice", "checks": "(l) two bytes vmsplice takes from the last byte of one page and the first of the next are two page buffers, as Linux's iter_to_pipe makes one for each page, so F_SETPIPE_SZ of 4096 fails with EBUSY, and both bytes read back in order.", "source": "program"},
         {"assertion_id": "max-round", "checks": "(k) /proc/sys/fs/pipe-max-size reads 1048576 after a write of 600000, 4096 after a write of 1, and 2147483648 after a write of it; it is set back to 1048576.", "source": "program"},
         {"assertion_id": "max-einval", "checks": "(k) a write of 2147483649 to pipe-max-size is EINVAL.", "source": "program"},
+        {"assertion_id": "sysctl-plus", "checks": "(k) a write of +64 to pipe-user-pages-soft and to pipe-user-pages-hard is EINVAL, as Linux's proc_get_long refuses a plus sign, and the files still read 16384 and 0.", "source": "program"},
         {"assertion_id": "limit-fork", "checks": "(k) fork succeeds for each child.", "source": "program"},
         {"assertion_id": "limit-past-max", "checks": "(k) the child, as user 65534 when the probe is root, gets EPERM for F_SETPIPE_SZ of 2097152.", "source": "program"},
         {"assertion_id": "limit-to-max", "checks": "(k) and F_SETPIPE_SZ of 600000 returns 1048576.", "source": "program"},
