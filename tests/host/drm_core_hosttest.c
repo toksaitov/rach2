@@ -6,6 +6,7 @@
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
  * host-deps: tests/host/compat/atomic_host.c
+ * host-deps: tests/host/compat/fd_flat.c
  *
  * The four files are included whole. A fake driver binds two devices: one
  * with a card and a render node, GEM, dumb buffers of the shmem helper
@@ -423,10 +424,10 @@ process_t *proc_named(uint32_t pid)
 
 fd_entry_t *fd_get(fd_table_t *table, int fd)
 {
-    if (!table || fd < 0 || fd >= table->cap || table->entries[fd].type == FD_TYPE_NONE) {
+    if (!table || fd < 0 || fd >= table->cap || table->chunks[0][fd].type == FD_TYPE_NONE) {
         return NULL;
     }
-    return &table->entries[fd];
+    return &table->chunks[0][fd];
 }
 
 /* The epoll set of the model: descriptor 7 of a table, whose one
@@ -1585,9 +1586,9 @@ static void test_kcmp(void)
     dup_node(&parent_fds[3], &child_fds[3]); /* the fork's copy */
     parent_fds[7].type = FD_TYPE_ANON;       /* an epoll set */
     child_fds[7].type = FD_TYPE_ANON;
-    parent_table.entries = parent_fds;
+    parent_table.chunks[0] = parent_fds;
     parent_table.cap = 8;
-    child_table.entries = child_fds;
+    child_table.chunks[0] = child_fds;
     child_table.cap = 8;
     user_a.fds = &parent_table;
     child_proc.fds = &child_table;

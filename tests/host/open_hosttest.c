@@ -8,6 +8,8 @@
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c tests/host/compat/park_host.c
  * host-deps: rach2/sys/fs/nodelock.c rach2/sys/mm/notify.c
+ * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/bkl_none.c
+ * host-deps: tests/host/compat/atomic_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
  * The rows check:
@@ -842,8 +844,8 @@ int vfs_open_node(struct vfs_mount *mnt, void *at, int flags, void **out)
     (void)flags;
     check(mnt == &mount && at == &node, "open uses node identity");
     check(installing < 0 || (fd_get(proc.fds, installing) == NULL &&
-                             proc.fds->entries[installing].type == FD_TYPE_NONE &&
-                             proc.fds->entries[installing].ofd),
+                             fd_slot(proc.fds, installing)->type == FD_TYPE_NONE &&
+                             fd_slot(proc.fds, installing)->ofd),
           "an open's descriptor is a reservation while the file system opens it");
     if (open_error) {
         return open_error;
@@ -916,7 +918,7 @@ int vfs_truncate(struct vfs_mount *mnt, void *at, uint64_t size)
     check(mnt == &mount && at == &handle && opens == releases + 1 && size == 0,
           "mounted truncation uses a live open handle");
     check(installing < 0 || (fd_get(proc.fds, installing) == NULL &&
-                             proc.fds->entries[installing].type == FD_TYPE_NONE),
+                             fd_slot(proc.fds, installing)->type == FD_TYPE_NONE),
           "an open's descriptor is not published while it truncates");
     fd_ofd_repoint(mnt, &node, &moved);
     relocate = 1;
@@ -2198,7 +2200,7 @@ static void truncation(void)
               "mounted node checks do not truncate before open");
         installing = fd_alloc(proc.fds);
         rc = open_install(&ref, installing, "target", 2 | (mode == 3 ? 0 : O_TRUNC));
-        check(rc < 0 || (rc == installing && fd_get(proc.fds, rc) == &proc.fds->entries[rc]),
+        check(rc < 0 || (rc == installing && fd_get(proc.fds, rc) == fd_slot(proc.fds, rc)),
               "a finished open publishes the descriptor it reserved");
         installing = -1;
         if (mode == 0 || mode == 3) {
@@ -2242,7 +2244,7 @@ static void row_end(void)
     int fd;
 
     for (fd = 0; fd < fd_table_cap(proc.fds); fd++) {
-        if (proc.fds->entries[fd].type != FD_TYPE_NONE || proc.fds->entries[fd].ofd) {
+        if (fd_slot(proc.fds, fd)->type != FD_TYPE_NONE || fd_slot(proc.fds, fd)->ofd) {
             fd_free(proc.fds, fd);
         }
     }
@@ -2305,8 +2307,8 @@ static void open_publishes(void)
 
     check(fd >= 0, "the waiting open reserves a descriptor");
     if (fd >= 0) {
-        proc.fds->entries[fd].node = &victim;
-        proc.fds->entries[fd].type = FD_TYPE_FILE;
+        fd_slot(proc.fds, fd)->node = &victim;
+        fd_slot(proc.fds, fd)->type = FD_TYPE_FILE;
     }
 }
 
@@ -2371,7 +2373,7 @@ static int program_close_removals = -1;
  * for the root's lock while the release of the program's file held it. */
 static void program_desc_closes(void)
 {
-    orphan_ofd = proc.fds->entries[program_fd].ofd;
+    orphan_ofd = fd_slot(proc.fds, program_fd)->ofd;
     check(close_fd(program_fd) == 0, "the close of the program file's descriptor");
     program_close_removals = removals;
 }
@@ -2518,7 +2520,7 @@ static void orphan_locks(void)
             root_row_end();
             continue;
         }
-        e = &proc.fds->entries[fd];
+        e = fd_slot(proc.fds, fd);
         victim.name[0] = '\0';
         if (fifo) {
             victim.mode = KRFFS_S_IFIFO | 0600;
@@ -2550,7 +2552,7 @@ static int made_desc(int path)
     if (fd < 0) {
         return fd;
     }
-    e = &proc.fds->entries[fd];
+    e = fd_slot(proc.fds, fd);
     e->ofd->vmnt = &mount;
     e->ofd->vnode = &made_dir;
     e->node = &made_dir;
@@ -2564,7 +2566,7 @@ static int made_desc(int path)
 static void made_desc_close(int fd)
 {
     if (fd >= 0) {
-        proc.fds->entries[fd].ofd->vmnt = 0;
+        fd_slot(proc.fds, fd)->ofd->vmnt = 0;
         fd_free(proc.fds, fd);
     }
 }
@@ -2823,8 +2825,8 @@ static void proc_fd_stat_errors(void)
         fd = model_open();
         check(fd >= 0, "open a descriptor for a followed stat");
         if (fd >= 0) {
-            proc.fds->entries[fd].type = directory ? FD_TYPE_DIR : FD_TYPE_FILE;
-            ofd = proc.fds->entries[fd].ofd;
+            fd_slot(proc.fds, fd)->type = directory ? FD_TYPE_DIR : FD_TYPE_FILE;
+            ofd = fd_slot(proc.fds, fd)->ofd;
             getattr_error = -EIO;
             check(synth_fd_stat((int)proc.pid, fd, &st) == -EIO,
                   "a followed descriptor stat returns the getattr error");
@@ -2909,7 +2911,7 @@ static void open_last_slot(void)
     other.fds = &files;
     for (fd = 0; fd < 3; fd++) {
         check(fd_alloc(proc.fds) == fd, "the table is full but for its last slot");
-        proc.fds->entries[fd].type = FD_TYPE_FILE;
+        fd_slot(proc.fds, fd)->type = FD_TYPE_FILE;
     }
     mount.type = &locked_type;
     installing = 3;
@@ -2932,7 +2934,7 @@ static void open_last_slot(void)
 static void release_closed(void)
 {
     check(fd_get(proc.fds, releasing) == NULL &&
-              (proc.fds->entries[releasing].flags & FD_FLAG_RELEASING),
+              (fd_slot(proc.fds, releasing)->flags & FD_FLAG_RELEASING),
           "a descriptor being released is closed to lookups");
     check(dup_clear(releasing) == -EBUSY, "dup2 onto a descriptor being released is busy");
 }
@@ -2950,7 +2952,7 @@ static void close_sleeping(void)
         in_release = release_closed;
         check(close_fd(fd) == 0 && in_release == 0 && refs == 0, "close releases the description");
         check(lock_closes == 1 && lock_closer == &proc, "the close drops the closer's locks once");
-        check(proc.fds->entries[fd].type == FD_TYPE_NONE && !proc.fds->entries[fd].ofd,
+        check(fd_slot(proc.fds, fd)->type == FD_TYPE_NONE && !fd_slot(proc.fds, fd)->ofd,
               "the slot is free after the release");
     }
     row_end();
@@ -2966,7 +2968,7 @@ static void third_call_ends(void)
     hold_fd(&third, releasing);
     fd_holds_release();
     current_proc = self;
-    check(proc.fds->entries[releasing].type == FD_TYPE_FILE && proc.fds->entries[releasing].ofd,
+    check(fd_slot(proc.fds, releasing)->type == FD_TYPE_FILE && fd_slot(proc.fds, releasing)->ofd,
           "a release under way is not begun again");
 }
 
@@ -2987,18 +2989,18 @@ static void deferred_release(void)
     check(fd >= 0, "open a descriptor two calls hold");
     if (fd >= 0) {
         hold_fd(&other, fd);
-        check(close_fd(fd) == 0 && (proc.fds->entries[fd].flags & FD_FLAG_CLOSING) && refs == 1,
+        check(close_fd(fd) == 0 && (fd_slot(proc.fds, fd)->flags & FD_FLAG_CLOSING) && refs == 1,
               "a close of a descriptor another call holds leaves it to that call");
         check(lock_closes == 1 && lock_closer == &proc,
               "that close drops the closer's record locks at once");
         fd_holds_release();
-        check(proc.fds->entries[fd].type == FD_TYPE_FILE, "the closer's call end leaves it");
+        check(fd_slot(proc.fds, fd)->type == FD_TYPE_FILE, "the closer's call end leaves it");
         current_proc = &other;
         releasing = fd;
         in_release = third_call_ends;
         fd_holds_release();
         current_proc = &proc;
-        check(proc.fds->entries[fd].type == FD_TYPE_NONE && refs == 0 && in_release == 0,
+        check(fd_slot(proc.fds, fd)->type == FD_TYPE_NONE && refs == 0 && in_release == 0,
               "the holder's call end releases it");
         check(lock_closes == 1, "that release drops no process's record locks");
     }
@@ -3012,7 +3014,7 @@ static int dup_source = -1;
 static void other_closes_source(void)
 {
     current_proc = &other;
-    check(close_fd(dup_source) == 0 && (proc.fds->entries[dup_source].flags & FD_FLAG_CLOSING),
+    check(close_fd(dup_source) == 0 && (fd_slot(proc.fds, dup_source)->flags & FD_FLAG_CLOSING),
           "a close of the source the dup2 holds leaves it to the dup2's call");
     current_proc = &proc;
 }
@@ -3038,16 +3040,16 @@ static void dup2_source_closed(void)
         params.ecx = (uint32_t)target;
         in_release = other_closes_source;
         check(sys_dup2(&params) == target && in_release == 0, "dup2 replaces its target");
-        check(fd_get(proc.fds, target) == &proc.fds->entries[target] &&
-                  !(proc.fds->entries[target].flags & (FD_FLAG_CLOSING | FD_FLAG_RELEASING)),
+        check(fd_get(proc.fds, target) == fd_slot(proc.fds, target) &&
+                  !(fd_slot(proc.fds, target)->flags & (FD_FLAG_CLOSING | FD_FLAG_RELEASING)),
               "the copy is an open descriptor");
         fd_holds_release();
         current_proc = &other;
         fd_holds_release();
         current_proc = &proc;
-        check(proc.fds->entries[dup_source].type == FD_TYPE_NONE &&
-                  proc.fds->entries[target].type == FD_TYPE_FILE &&
-                  proc.fds->entries[target].ofd->refcount == 1 && refs == 1,
+        check(fd_slot(proc.fds, dup_source)->type == FD_TYPE_NONE &&
+                  fd_slot(proc.fds, target)->type == FD_TYPE_FILE &&
+                  fd_slot(proc.fds, target)->ofd->refcount == 1 && refs == 1,
               "the source's release leaves the copy its description");
     }
     dup_source = -1;
@@ -3194,7 +3196,7 @@ static void sharer_llseeks(void)
 {
     current_proc = &other;
     sharer_seek =
-        llseek_bootlog(&sharer_files.entries[0], 16, 1, (long long __user *)&sharer_result);
+        llseek_bootlog(fd_slot(&sharer_files, 0), 16, 1, (long long __user *)&sharer_result);
     if (sharer_seek == 0) {
         sharer_seek = (int32_t)sharer_result;
     }
@@ -3298,14 +3300,14 @@ static void offset_seek_waits(void)
             row_end();
             return;
         }
-        e = &proc.fds->entries[0];
+        e = fd_slot(proc.fds, 0);
         e->type = cases[i].type;
         e->ops = cases[i].ops;
         e->flags = FD_FLAG_READ | FD_FLAG_WRITE;
         e->ofd->offset = 0x1000;
         log_len = 0x2000;
         sharer_files.refs = 1;
-        sharer_files.entries[0] = *e;
+        (*fd_slot(&sharer_files, 0)) = *e;
         e->ofd->refcount++;
         other.fds = &sharer_files;
         parked_on = 0;
@@ -3349,7 +3351,7 @@ static void log_seek_range(void)
 
     row_begin();
     check(fd_alloc(proc.fds) == 0, "the log row's descriptor");
-    e = &proc.fds->entries[0];
+    e = fd_slot(proc.fds, 0);
     e->type = FD_TYPE_DEVICE;
     e->ops = &log_ops;
     e->flags = FD_FLAG_READ;
@@ -3414,7 +3416,7 @@ static void device_reopen_closed(void)
     dev_holds = dev_enters = dev_closes = 0;
     proc.rlim[RLIM_NOFILE].cur = FD_TABLE_LIMIT;
     check(fd_alloc(proc.fds) == 0, "the device row's descriptor");
-    e = &proc.fds->entries[0];
+    e = fd_slot(proc.fds, 0);
     e->type = FD_TYPE_DEVICE;
     e->ops = &dev_ops;
     e->flags = FD_FLAG_READ | FD_FLAG_WRITE;
@@ -3425,7 +3427,7 @@ static void device_reopen_closed(void)
     in_dev_open = dev_desc_close;
     rc = proc_fd_reopen_device(e, 2 /* O_RDWR */);
     check(rc == -ENXIO && !in_dev_open, "the reopen opens the device, which is gone");
-    check(proc.fds->entries[0].type == FD_TYPE_NONE, "the device's descriptor is closed");
+    check(fd_slot(proc.fds, 0)->type == FD_TYPE_NONE, "the device's descriptor is closed");
     check(dev_closes == 1,
           "a close of a device's last descriptor while a reopen of it sleeps closes the device");
     check(dev_holds == 0 && dev_enters == 0 && ns_depth == 0,
@@ -3456,7 +3458,7 @@ static int orphan_desc(int fifo)
     if (fd < 0) {
         return fd;
     }
-    e = &proc.fds->entries[fd];
+    e = fd_slot(proc.fds, fd);
     victim.name[0] = '\0';
     if (fifo) {
         victim.mode = KRFFS_S_IFIFO | 0600;
@@ -3493,7 +3495,7 @@ static void orphan_dup2(void)
  * and an exec's of each close-on-exec one (`close_cloexec_fds`). */
 static void orphan_table_end(void)
 {
-    fd_release_backing(&proc.fds->entries[orphan_fd]);
+    fd_release_backing(fd_slot(proc.fds, orphan_fd));
     fd_free(proc.fds, orphan_fd);
 }
 
@@ -3502,7 +3504,7 @@ static void orphan_table_end(void)
 static void orphan_held_close(void)
 {
     hold_fd(&other, orphan_fd);
-    check(close_fd(orphan_fd) == 0 && proc.fds->entries[orphan_fd].type != FD_TYPE_NONE,
+    check(close_fd(orphan_fd) == 0 && fd_slot(proc.fds, orphan_fd)->type != FD_TYPE_NONE,
           "a close of the orphan's descriptor another call holds leaves it to that call");
     fd_holds_release();
     current_proc = &other;
@@ -3602,7 +3604,7 @@ static void mapping_reclaims(void)
 
     root_row_begin();
     mapped_fd = orphan_desc(0);
-    vf = mapped_fd >= 0 ? filemap_new(&proc.fds->entries[mapped_fd]) : NULL;
+    vf = mapped_fd >= 0 ? filemap_new(fd_slot(proc.fds, mapped_fd)) : NULL;
     check(vf != NULL, "a mapping of the orphan");
     if (vf) {
         removals_at_close = -1;

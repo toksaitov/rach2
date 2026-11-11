@@ -1,0 +1,46 @@
+/* The descriptor table's slot lookup and publication for host tests that keep
+ * a table's entries in one array, `chunks[0]`, and stub the rest of fs/fd.c. */
+#include "fs/fd.h"
+
+/** The entry of `fd`, which the test keeps below the array's length. */
+fd_entry_t *fd_slot(const fd_table_t *table, int fd)
+{
+    return &table->chunks[0][fd];
+}
+
+/** Publish the slot the test's `fd_alloc` reserved. */
+void fd_install(fd_table_t *table, int fd)
+{
+    table->chunks[0][fd].pending = 0;
+}
+
+/** The table's lock: the test has one thread, so nothing is taken. */
+uint32_t fd_table_lock(fd_table_t *table)
+{
+    (void)table;
+    return 0;
+}
+
+/** Release what `fd_table_lock` took. */
+void fd_table_unlock(fd_table_t *table, uint32_t flags)
+{
+    (void)table;
+    (void)flags;
+}
+
+/** Whether `e` is open: published and not closing. */
+int fd_entry_open(const fd_entry_t *e)
+{
+    return e->type != FD_TYPE_NONE && !e->pending && !(e->flags & FD_FLAG_CLOSING);
+}
+
+/** A copy of descriptor `fd`, below `cap`, without a reference; 0 or -EBADF. */
+int fd_peek(fd_table_t *table, int fd, fd_entry_t *out, int ref)
+{
+    (void)ref;
+    if (!table || fd < 0 || fd >= table->cap || !fd_entry_open(fd_slot(table, fd))) {
+        return -9;
+    }
+    *out = *fd_slot(table, fd);
+    return 0;
+}

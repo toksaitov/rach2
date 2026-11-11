@@ -18,6 +18,7 @@
  * fuzz-deps: rach2/sys/evdev.c
  * fuzz-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * fuzz-deps: tests/host/compat/spinlock_host.c tests/host/compat/atomic_host.c
+ * fuzz-deps: tests/host/compat/fd_flat.c
  *
  * The kernel's own sources are linked whole, each its own unit, and vkms
  * is included here, so that the harness reaches its composer and clock.
@@ -580,7 +581,7 @@ void mouse_written(uint16_t type, uint16_t code, int32_t value)
 
 #define FDS 32
 static fd_entry_t fd_entries[FDS];
-static fd_table_t fd_table = {fd_entries, FDS, 1, 0, NULL};
+static fd_table_t fd_table = {{fd_entries}, FDS, 1, 0, SPINLOCK_INIT, NULL};
 static process_t self;
 static struct tgroup self_tg;
 static struct mm self_mm;
@@ -590,9 +591,9 @@ int fd_alloc(fd_table_t *table)
     int i;
 
     for (i = 0; i < table->cap; i++) {
-        if (table->entries[i].type == FD_TYPE_NONE) {
-            memset(&table->entries[i], 0, sizeof(table->entries[i]));
-            table->entries[i].type = FD_TYPE_ANON;
+        if (table->chunks[0][i].type == FD_TYPE_NONE) {
+            memset(&table->chunks[0][i], 0, sizeof(table->chunks[0][i]));
+            table->chunks[0][i].type = FD_TYPE_ANON;
             return i;
         }
     }
@@ -604,16 +605,16 @@ int fd_free(fd_table_t *table, int fd)
     if (fd < 0 || fd >= table->cap) {
         return -EBADF;
     }
-    memset(&table->entries[fd], 0, sizeof(table->entries[fd]));
+    memset(&table->chunks[0][fd], 0, sizeof(table->chunks[0][fd]));
     return 0;
 }
 
 fd_entry_t *fd_get(fd_table_t *table, int fd)
 {
-    if (!table || fd < 0 || fd >= table->cap || table->entries[fd].type == FD_TYPE_NONE) {
+    if (!table || fd < 0 || fd >= table->cap || table->chunks[0][fd].type == FD_TYPE_NONE) {
         return NULL;
     }
-    return &table->entries[fd];
+    return &table->chunks[0][fd];
 }
 
 /* ---- the stack's state ---- */

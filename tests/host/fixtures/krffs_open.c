@@ -462,14 +462,14 @@ static void publication_open(int flags, int before)
     fd = do_open("hole", 2, 0);
     check(fd >= 0, "open free-extent fixture");
     k_memset(payload, 'H', 4096);
-    check(kv_write(&mount, writer.fds->entries[fd].ofd->fhandle, payload, 4096, 0) == 4096,
+    check(kv_write(&mount, fd_slot(writer.fds, fd)->ofd->fhandle, payload, 4096, 0) == 4096,
           "size free-extent fixture");
     fd_free(writer.fds, fd);
     create("separator");
     original = create("target");
     fd = do_open("target", 2, 0);
     check(fd >= 0, "open original target");
-    first = writer.fds->entries[fd].ofd;
+    first = fd_slot(writer.fds, fd)->ofd;
     check(kv_write(&mount, first->fhandle, "A", 1, 0) == 1, "seed concurrent target");
     create("blocker");
     vfs_ns_lock(&mount);
@@ -495,7 +495,7 @@ static void publication_open(int flags, int before)
     if (opened_fd < 0) {
         exit(2);
     }
-    second = reader.fds->entries[opened_fd].ofd;
+    second = fd_slot(reader.fds, opened_fd)->ofd;
     check(first->vnode == hole, "first relocation uses earlier free extent");
     moved = first->vnode;
     k_memset(payload, 'C', sizeof(payload));
@@ -506,7 +506,7 @@ static void publication_open(int flags, int before)
     check(reused == moved, "first copy offset reused");
     reuse = do_open("reuse-copy", 2, 0);
     check(reuse >= 0, "open reused copy offset");
-    check(kv_write(&mount, writer.fds->entries[reuse].ofd->fhandle, "R", 1, 0) == 1,
+    check(kv_write(&mount, fd_slot(writer.fds, reuse)->ofd->fhandle, "R", 1, 0) == 1,
           "write reused copy offset");
     check(kv_read(&mount, first->fhandle, &byte, 1, 0) == 1 && byte == 'C',
           "original open follows second move despite copy reuse");

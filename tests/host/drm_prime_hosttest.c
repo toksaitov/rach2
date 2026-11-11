@@ -4,6 +4,7 @@
  * device regions and the commit worker are host models.
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/atomic_host.c
+ * host-deps: tests/host/compat/fd_flat.c
  */
 #include "drm/drm_gem.c"
 #include "drm/drm_prime.c"
@@ -124,9 +125,9 @@ int fd_alloc(fd_table_t *t)
 {
     int i;
     for (i = 0; i < 64; i++)
-        if (t->entries[i].type == FD_TYPE_NONE) {
+        if (t->chunks[0][i].type == FD_TYPE_NONE) {
             k_memset(&descriptions[i], 0, sizeof(descriptions[i]));
-            t->entries[i].ofd = &descriptions[i];
+            t->chunks[0][i].ofd = &descriptions[i];
             return i;
         }
     return -EMFILE;
@@ -134,7 +135,7 @@ int fd_alloc(fd_table_t *t)
 /** Find a live model descriptor. */
 fd_entry_t *fd_get(fd_table_t *t, int fd)
 {
-    return fd >= 0 && fd < 64 && t->entries[fd].type != FD_TYPE_NONE ? &t->entries[fd] : NULL;
+    return fd >= 0 && fd < 64 && t->chunks[0][fd].type != FD_TYPE_NONE ? &t->chunks[0][fd] : NULL;
 }
 /** Release the object attached to a model descriptor. */
 int fd_free(fd_table_t *t, int fd)
@@ -951,7 +952,7 @@ static void vgem_fences(void)
 /** Run only the PRIME rows with each kernel ABI's structures. */
 int main(void)
 {
-    table.entries = slots;
+    table.chunks[0] = slots;
     table.cap = 64;
     self.fds = &table;
     cpu_table[0].current = &self;

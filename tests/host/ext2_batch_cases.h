@@ -131,8 +131,8 @@ static void batch_description_row(void)
     if (fd < 0) {
         return;
     }
-    parent.entries[fd].type = FD_TYPE_FILE;
-    ofd = parent.entries[fd].ofd;
+    fd_slot(&parent, fd)->type = FD_TYPE_FILE;
+    ofd = fd_slot(&parent, fd)->ofd;
     ofd->vmnt = &mnt;
     ofd->vnode = node;
     ofd->fhandle = handle;

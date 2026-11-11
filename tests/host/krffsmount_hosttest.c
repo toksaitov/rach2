@@ -8,6 +8,9 @@
  * host-deps: tests/host/compat/vfs_name_none.c
  * host-deps: rach2/sys/fs/fd.c rach2/sys/fs/lock.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/kirq_none.c
+ * host-deps: tests/host/compat/bkl_none.c
+ * host-deps: tests/host/compat/atomic_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
  * `vfs_ns_lock` runs the operation queued in `waiting` before it gives the
@@ -350,7 +353,7 @@ static void teardown(void)
     int i;
 
     for (i = 0; i < table.cap; i++) {
-        if (table.entries[i].ofd) {
+        if (fd_slot(&table, i)->ofd) {
             fd_free(&table, i);
         }
     }
@@ -378,7 +381,7 @@ static int open_node(void *node)
     struct open_file *ofd;
 
     check(fd >= 0, "allocate fixture description");
-    ofd = table.entries[fd].ofd;
+    ofd = fd_slot(&table, fd)->ofd;
     ofd->vmnt = &mount;
     ofd->vnode = node;
     check(kv_open(&mount, node, 2, &ofd->fhandle) == 0, "open fixture node");
@@ -400,7 +403,7 @@ static void first_move(void)
     reused = create("reuse");
     check(reused == original, "old offset reused by another file");
     reuse_fd = open_node(reused);
-    check(kv_write(&mount, table.entries[reuse_fd].ofd->fhandle, "R", 1, 0) == 1,
+    check(kv_write(&mount, fd_slot(&table, reuse_fd)->ofd->fhandle, "R", 1, 0) == 1,
           "write reused node");
     create("block-b");
 }
@@ -444,7 +447,7 @@ static void relocation(int truncate)
     setup();
     original = create("target");
     for (i = 0; i < 3; i++) {
-        descs[i] = table.entries[open_node(original)].ofd;
+        descs[i] = fd_slot(&table, open_node(original))->ofd;
     }
     check(kv_write(&mount, descs[0]->fhandle, "A", 1, 0) == 1, "seed target");
     create("block-a");
@@ -462,7 +465,7 @@ static void relocation(int truncate)
     }
     check(kv_getattr(&mount, current, &st) == 0 && st.size == sizeof(payload),
           "second relocation updates target length");
-    check(kv_read(&mount, table.entries[reuse_fd].ofd->fhandle, &byte, 1, 0) == 1 && byte == 'R',
+    check(kv_read(&mount, fd_slot(&table, reuse_fd)->ofd->fhandle, &byte, 1, 0) == 1 && byte == 'R',
           "reused offset retains its own bytes");
     teardown();
 }
@@ -477,10 +480,10 @@ static void directory(void)
     setup();
     create("entry");
     fd = open_node(mount.root);
-    check(kv_readdir(&mount, table.entries[fd].ofd->fhandle, &cursor, &ent) == 1 &&
+    check(kv_readdir(&mount, fd_slot(&table, fd)->ofd->fhandle, &cursor, &ent) == 1 &&
               !__builtin_memcmp(ent.name, "entry", 6),
           "directory read resolves its open handle");
-    check(kv_readdir(&mount, table.entries[fd].ofd->fhandle, &cursor, &ent) == 0,
+    check(kv_readdir(&mount, fd_slot(&table, fd)->ofd->fhandle, &cursor, &ent) == 0,
           "directory read reaches end");
     teardown();
 }
@@ -499,11 +502,11 @@ static void pinned(void)
 
     setup();
     fd = open_node(create("kept"));
-    check(kv_write(&mount, table.entries[fd].ofd->fhandle, "K", 1, 0) == 1, "seed pinned file");
+    check(kv_write(&mount, fd_slot(&table, fd)->ofd->fhandle, "K", 1, 0) == 1, "seed pinned file");
     fd_free(&table, fd);
     check(kv_lookup(&mount, mount.root, "kept", &node) == 0, "look up pinned file");
     fd = fd_alloc(&table);
-    ofd = table.entries[fd].ofd;
+    ofd = fd_slot(&table, fd)->ofd;
     ofd->vmnt = &mount;
     ofd->vnode = node;
     vfs_ns_lock(&mount);
@@ -532,7 +535,7 @@ static void failed_relocation(int truncate)
     setup();
     original = create("target");
     for (i = 0; i < 3; i++) {
-        descs[i] = table.entries[open_node(original)].ofd;
+        descs[i] = fd_slot(&table, open_node(original))->ofd;
     }
     check(kv_write(&mount, descs[0]->fhandle, "A", 1, 0) == 1, "seed failed relocation");
     create("block-a");
@@ -611,7 +614,7 @@ static void failed_clean_flush(void)
     setup();
     node = create("retained");
     fd = open_node(node);
-    handle = table.entries[fd].ofd->fhandle;
+    handle = fd_slot(&table, fd)->ofd->fhandle;
     check(kv_write(&mount, handle, "D", 1, 0) == 1, "seed clean-flush fixture");
     fd_free(&table, fd);
     cached[IMAGE_BYTES - 1] = 0x5a;
@@ -627,7 +630,7 @@ static void failed_clean_flush(void)
     fail_flush_at = 0;
     check((mount.flags & VFS_MS_RDONLY) != 0, "failed clean-flag flush makes mount read-only");
     fd = open_node(node);
-    handle = table.entries[fd].ofd->fhandle;
+    handle = fd_slot(&table, fd)->ofd->fhandle;
     check(kv_read(&mount, handle, &byte, 1, 0) == 1 && byte == 'D',
           "read after failed clean-flag flush succeeds");
     check(kv_write(&mount, handle, "X", 1, 0) == -EROFS,
@@ -660,7 +663,7 @@ static void creation_errors(void)
     vfs_ns_unlock(&mount);
     sync_error = 0;
     fd = open_node(create("big"));
-    check(kv_truncate(&mount, table.entries[fd].ofd->fhandle,
+    check(kv_truncate(&mount, fd_slot(&table, fd)->ofd->fhandle,
                       IMAGE_BYTES - 2 * sizeof(krffs_node_t) - 100) == 0,
           "a file grows to fill the volume");
     vfs_ns_lock(&mount);
@@ -686,7 +689,8 @@ static void owner_across(void)
 
     setup();
     fd = open_node(create("spacer"));
-    check(kv_truncate(&mount, table.entries[fd].ofd->fhandle, 3826 - 2 * sizeof(krffs_node_t)) == 0,
+    check(kv_truncate(&mount, fd_slot(&table, fd)->ofd->fhandle, 3826 - 2 * sizeof(krffs_node_t)) ==
+              0,
           "a spacer places the next node");
     maker.euid = maker.egid = 1000;
     current_proc = &maker;
@@ -894,22 +898,22 @@ static void owned_fsync(void)
     one = create("one");
     fd_one = open_node(one);
     k_memset(payload, 'O', sizeof(payload));
-    check(kv_write(&mount, table.entries[fd_one].ofd->fhandle, payload, 4096, 0) == 4096,
+    check(kv_write(&mount, fd_slot(&table, fd_one)->ofd->fhandle, payload, 4096, 0) == 4096,
           "fsync row: seed one");
     other = create("other");
     fd_other = open_node(other);
     for (i = 0; i < 4; i++) {
-        check(kv_write(&mount, table.entries[fd_other].ofd->fhandle, payload, sizeof(payload),
+        check(kv_write(&mount, fd_slot(&table, fd_other)->ofd->fhandle, payload, sizeof(payload),
                        i * sizeof(payload)) == (int)sizeof(payload),
               "fsync row: seed other");
     }
-    one = table.entries[fd_one].ofd->vnode;
-    other = table.entries[fd_other].ofd->vnode;
+    one = fd_slot(&table, fd_one)->ofd->vnode;
+    other = fd_slot(&table, fd_other)->ofd->vnode;
     check(block_of(offset_of(&mount, one) + sizeof(krffs_node_t) - 1) <
               block_of(offset_of(&mount, other)),
           "fsync row: one's header shares no block with other");
     first = block_of(offset_of(&mount, other) + sizeof(krffs_node_t)) + 1;
-    check(kv_write(&mount, table.entries[fd_one].ofd->fhandle, "o", 1, 0) == 1,
+    check(kv_write(&mount, fd_slot(&table, fd_one)->ofd->fhandle, "o", 1, 0) == 1,
           "fsync row: overwrite one");
     st.mode = 0600;
     check(kv_setattr(&mount, other, VFS_SET_MODE, &st) == 0, "fsync row: chmod other");
@@ -918,7 +922,7 @@ static void owned_fsync(void)
     }
     check(buffers[block_of(offset_of(&mount, one))].dirty, "write leaves one's header dirty");
     block_writes = 0;
-    check(kv_fsync(&mount, table.entries[fd_one].ofd->fhandle) == 0, "fsync of one succeeds");
+    check(kv_fsync(&mount, fd_slot(&table, fd_one)->ofd->fhandle) == 0, "fsync of one succeeds");
     check(block_writes == 1 && !buffers[block_of(offset_of(&mount, one))].dirty,
           "fsync of one writes its header block alone");
     check(buffers[block_of(offset_of(&mount, other))].dirty, "fsync of one leaves other's header");
@@ -949,31 +953,31 @@ static void owned_across_move(void)
     bystander = create("bystander");
     fd = open_node(create("target"));
     k_memset(payload, 'M', sizeof(payload));
-    check(kv_write(&mount, table.entries[fd].ofd->fhandle, payload, 4000, 0) == 4000,
+    check(kv_write(&mount, fd_slot(&table, fd)->ofd->fhandle, payload, 4000, 0) == 4000,
           "move row: seed target");
     create("wall");
-    check(kv_write(&mount, table.entries[fd].ofd->fhandle, payload, 4096, 2 * 4096) == 4096,
+    check(kv_write(&mount, fd_slot(&table, fd)->ofd->fhandle, payload, 4096, 2 * 4096) == 4096,
           "move row: grow target to 3 blocks");
-    at = offset_of(&mount, table.entries[fd].ofd->vnode);
+    at = offset_of(&mount, fd_slot(&table, fd)->ofd->vnode);
     check(at > 4096, "move row: target moved past the first block");
     fd_fill = open_node(create("filler"));
-    check(kv_truncate(&mount, table.entries[fd_fill].ofd->fhandle, 4000) == 0,
+    check(kv_truncate(&mount, fd_slot(&table, fd_fill)->ofd->fhandle, 4000) == 0,
           "move row: filler takes the old place");
     fd_tail = open_node(create("tail"));
-    link = offset_of(&mount, table.entries[fd_tail].ofd->vnode);
+    link = offset_of(&mount, fd_slot(&table, fd_tail)->ofd->vnode);
     check(link == at + sizeof(krffs_node_t) + 3 * 4096, "move row: tail follows target");
-    check(kv_truncate(&mount, table.entries[fd].ofd->fhandle, 100) == 0 &&
-              offset_of(&mount, table.entries[fd].ofd->vnode) == at,
+    check(kv_truncate(&mount, fd_slot(&table, fd)->ofd->fhandle, 100) == 0 &&
+              offset_of(&mount, fd_slot(&table, fd)->ofd->vnode) == at,
           "move row: shrink in place");
     check(buffers[block_of(link)].dirty &&
-              buffers[block_of(link)].owner == owner_of(table.entries[fd].ofd->fhandle),
+              buffers[block_of(link)].owner == owner_of(fd_slot(&table, fd)->ofd->fhandle),
           "shrink tags tail's backward link with target's record");
     st.mode = 0600;
     check(kv_setattr(&mount, bystander, VFS_SET_MODE, &st) == 0, "move row: chmod bystander");
     check(block_of(offset_of(&mount, bystander)) != block_of(at) &&
               block_of(offset_of(&mount, bystander)) != block_of(link),
           "move row: bystander's header is in a block of its own");
-    check(kv_fsync(&mount, table.entries[fd].ofd->fhandle) == 0, "move row: fsync of target");
+    check(kv_fsync(&mount, fd_slot(&table, fd)->ofd->fhandle) == 0, "move row: fsync of target");
     check(!buffers[block_of(at)].dirty && !buffers[block_of(link)].dirty,
           "fsync after a move writes the new header and the tagged link");
     check(buffers[block_of(offset_of(&mount, bystander))].dirty,
@@ -1002,36 +1006,36 @@ static void shrink_link(int reopen)
     a = create("a");
     fd_a = open_node(a);
     k_memset(payload, 'S', sizeof(payload));
-    check(kv_write(&mount, table.entries[fd_a].ofd->fhandle, payload, 4000, 0) == 4000,
+    check(kv_write(&mount, fd_slot(&table, fd_a)->ofd->fhandle, payload, 4000, 0) == 4000,
           "link row: seed a");
     fd_b = open_node(create("b"));
     other = create("other");
-    at = offset_of(&mount, table.entries[fd_a].ofd->vnode);
-    link = offset_of(&mount, table.entries[fd_b].ofd->vnode) + KRFFS_FIELD_PREVIOUS;
+    at = offset_of(&mount, fd_slot(&table, fd_a)->ofd->vnode);
+    link = offset_of(&mount, fd_slot(&table, fd_b)->ofd->vnode) + KRFFS_FIELD_PREVIOUS;
     check(link - KRFFS_FIELD_PREVIOUS == at + sizeof(krffs_node_t) + 4000, "link row: b follows a");
     check(block_of(link) != block_of(at) &&
               block_of(link) != block_of(at + sizeof(krffs_node_t) - 1),
           "link row: b's link is not in a's header block");
-    check(kv_truncate(&mount, table.entries[fd_a].ofd->fhandle, 100) == 0, "link row: shrink a");
-    was = table.entries[fd_a].ofd->fhandle;
+    check(kv_truncate(&mount, fd_slot(&table, fd_a)->ofd->fhandle, 100) == 0, "link row: shrink a");
+    was = fd_slot(&table, fd_a)->ofd->fhandle;
     check(buffers[block_of(link)].dirty && buffers[block_of(link)].owner == owner_of(was),
           "link row: the shrink leaves b's link dirty under a's record");
     if (!reopen) {
-        check(kv_truncate(&mount, table.entries[fd_b].ofd->fhandle, 0) == 0 &&
+        check(kv_truncate(&mount, fd_slot(&table, fd_b)->ofd->fhandle, 0) == 0 &&
                   buffers[block_of(link)].dirty &&
-                  buffers[block_of(link)].owner == owner_of(table.entries[fd_b].ofd->fhandle),
+                  buffers[block_of(link)].owner == owner_of(fd_slot(&table, fd_b)->ofd->fhandle),
               "link row: a truncate of b to its size retags the link as b's");
     } else {
         fd_free(&table, fd_a);
         open_node(other);
         fd_a = open_node(a);
-        if (table.entries[fd_a].ofd->fhandle == was) {
+        if (fd_slot(&table, fd_a)->ofd->fhandle == was) {
             /* The allocator gave the old record back: the tag still holds. */
             teardown();
             return;
         }
     }
-    check(kv_fsync(&mount, table.entries[fd_a].ofd->fhandle) == 0, "link row: fsync of a");
+    check(kv_fsync(&mount, fd_slot(&table, fd_a)->ofd->fhandle) == 0, "link row: fsync of a");
     check(!buffers[block_of(link)].dirty, "fsync of a shrunk file writes the next file's link");
     teardown();
 }
@@ -1047,10 +1051,11 @@ static void owned_after_failure(void)
 
     setup();
     fd = open_node(create("lone"));
-    check(kv_write(&mount, table.entries[fd].ofd->fhandle, "x", 1, 0) == 1, "failure row: seed");
+    check(kv_write(&mount, fd_slot(&table, fd)->ofd->fhandle, "x", 1, 0) == 1, "failure row: seed");
     buffers[IMAGE_BLOCKS - 1].dirty = 1;
     mount.flags |= VFS_MS_RDONLY;
-    check(kv_fsync(&mount, table.entries[fd].ofd->fhandle) == 0 && !buffers[IMAGE_BLOCKS - 1].dirty,
+    check(kv_fsync(&mount, fd_slot(&table, fd)->ofd->fhandle) == 0 &&
+              !buffers[IMAGE_BLOCKS - 1].dirty,
           "fsync on a mount made read-only writes every dirty block");
     teardown();
 }
