@@ -127,6 +127,7 @@ to check it again.
 .Cm run
 .Op Fl -umu
 .Op Fl -32
+.Op Fl -prefix Ar dir
 starts
 .Pa Bin64/Crysis.exe
 with
@@ -148,6 +149,10 @@ added to
 starts the 32-bit
 .Pa Bin32/Crysis.exe
 under WoW64.
+.Fl -prefix
+chooses another compatibility directory under
+.Pa /data ,
+which the launcher makes on its first use, as a new player's would be.
 Additional arguments follow these settings.
 The game's
 .Fl userpath
