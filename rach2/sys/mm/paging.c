@@ -1285,7 +1285,9 @@ static void panic_if_reading(const isr_params_t *params, uintptr_t fault_address
  * the stop; the death is logged only when no handler and no tracer will see
  * the signal.
  *
- * What is left panics: the usercopy helpers return -EFAULT before the
+ * Every panic here, the page-cache window's among them, follows the fault's
+ * note for the report (`k_panic_note_fault`). What is left panics: the
+ * usercopy helpers return -EFAULT before the
  * kernel touches a bad user pointer, so a kernel-mode fault here, or one
  * with no user context, is a kernel bug. One in the guard page below the
  * running thread's kernel stack is that stack running out, and the panic
@@ -1321,6 +1323,8 @@ static void _page_fault_handler(isr_params_t *params)
         }
     }
 
+    k_panic_note_fault("page fault", (uintptr_t)FRAME_PC(params), (long)params->error_code);
+    k_panic_note_address(fault_address);
     if (!user_mode && fault_address >= PCWIN_BASE &&
         fault_address < PCWIN_BASE + pc_window_size()) {
         if (!current_proc) {
@@ -1349,8 +1353,6 @@ static void _page_fault_handler(isr_params_t *params)
         return;
     }
 
-    k_panic_note_fault("page fault", (uintptr_t)FRAME_PC(params), (long)params->error_code);
-    k_panic_note_address(fault_address);
     pid = kstack_overrun_pid(fault_address);
     if (pid >= 0) {
         klog(KLOG_CRIT, "vm",
