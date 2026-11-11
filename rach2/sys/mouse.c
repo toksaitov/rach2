@@ -69,6 +69,12 @@ struct evdev *mouse_register(const char *name, const char *phys, uint16_t bustyp
 
     k_memset(keys, 0, sizeof(keys));
     dev = evdev_register(name, bustype, vendor, product, keys);
+    mouse_configure(dev, phys, caps);
+    return dev;
+}
+
+void mouse_configure(struct evdev *dev, const char *phys, unsigned int caps)
+{
     evdev_describe(dev, phys, 0);
     evdev_set_capability(dev, EV_KEY, BTN_LEFT);
     evdev_set_capability(dev, EV_KEY, BTN_RIGHT);
@@ -96,7 +102,6 @@ struct evdev *mouse_register(const char *name, const char *phys, uint16_t bustyp
     if (caps & MOUSE_POINTER) {
         evdev_set_prop(dev, INPUT_PROP_POINTER);
     }
-    return dev;
 }
 
 void mouse_report(struct evdev *dev, unsigned int buttons, int dx, int dy, int wheel, int hwheel)

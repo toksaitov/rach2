@@ -94,15 +94,17 @@ static struct input_sys records[EVDEV_MAX];
 /* The N of the next inputN. */
 static uint32_t next_number;
 
-/* The fixed parents, made on their first use and kept: /sys/class/input,
+/* The parents, made on first use: /sys/class/input,
  * /sys/devices/virtual/input, the i8042 with its link, /sys/bus/serio's
- * `devices`, and the i8042's ports. 0 for one not made yet. */
+ * `devices`, and the serio ports and their bus links. The pass-through
+ * port is removed on disconnect; the fixed parents stay. 0 for none. */
 static struct {
     int class_input;
     int virtual_input;
     int i8042, i8042_link;
     int bus_serio, serio_devices;
     int serio[SERIO_PORTS];
+    int serio_link[SERIO_PORTS];
 } parents;
 
 /* Each serio port's firmware ID, NULL for none; the functions that add its
@@ -843,7 +845,12 @@ static int serio_dir(int port)
             sysfs_remove(h);
             return -ENOMEM;
         }
-        (void)sysfs_add_link(bus, name, h);
+        parents.serio_link[port] = sysfs_add_link(bus, name, h);
+        if (parents.serio_link[port] < 0) {
+            sysfs_remove(h);
+            parents.serio_link[port] = 0;
+            return -ENOMEM;
+        }
         sysfs_uevent(h, "add", NULL);
     }
     parents.serio[port] = h;
@@ -1139,6 +1146,34 @@ void evdev_sysfs_serio_firmware_id(int port, const char *id)
     if (port >= 0 && port < SERIO_PORTS) {
         serio_firmware[port] = id;
     }
+}
+
+void evdev_sysfs_serio_remove(int port)
+{
+    int n, dir;
+
+    if (port < 0 || port >= SERIO_PORTS) {
+        return;
+    }
+    if (port == 1) {
+        evdev_sysfs_serio_remove(EVDEV_SERIO_PASS_THROUGH);
+    }
+    dir = parents.serio[port];
+    if (sysfs_node_kind(dir) == SYSFS_NODE_DIR) {
+        for (n = 0; n < EVDEV_MAX; n++) {
+            if (records[n].gen && sysfs_node_parent(records[n].holder) == dir) {
+                withdraw(&records[n]);
+            }
+        }
+        sysfs_uevent(dir, "remove", NULL);
+        sysfs_remove(parents.serio_link[port]);
+        sysfs_remove(dir);
+    }
+    parents.serio[port] = parents.serio_link[port] = 0;
+    serio_firmware[port] = NULL;
+    serio_driver[port] = NULL;
+    serio_files[port] = NULL;
+    k_memset(serio_made[port], 0, sizeof(serio_made[port]));
 }
 
 void evdev_sysfs_serio_driver(int port, int (*add)(int dir))

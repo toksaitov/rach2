@@ -440,6 +440,19 @@ int trackpoint_sysfs_add(int dir)
     return 0;
 }
 
+/** No sysfs tree is published by this model. */
+void evdev_sysfs_serio_remove(int port)
+{
+    (void)port;
+}
+
+/** This model has no competing command caller. */
+int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    (void)wq;
+    return cond(arg) ? 0 : -EINTR;
+}
+
 void evdev_sysfs_serio_files(int port, int (*add)(int dir))
 {
     (void)port;
@@ -604,18 +617,38 @@ const char *alps_mouse_name(const char *proto)
     return proto;
 }
 
-/** Record the event device registered; its pointer is never followed. */
-struct evdev *mouse_register(const char *name, const char *phys, uint16_t bustype, uint16_t vendor,
-                             uint16_t product, unsigned int caps)
+/** Reserve an event device; its pointer is never followed by the model. */
+struct evdev *evdev_reserve(void)
 {
+    return (struct evdev *)&mouse_registrations;
+}
+
+/** Record the identity of the registered device. */
+struct evdev *evdev_register_reserved(struct evdev *dev, const char *name, uint16_t bustype,
+                                      uint16_t vendor, uint16_t product, const uint8_t *keys)
+{
+    (void)dev;
+    (void)keys;
     mouse_registrations++;
     registered_name = name;
-    registered_phys = phys;
     registered_bus = bustype;
     registered_vendor = vendor;
     registered_product = product;
-    registered_caps = caps;
     return (struct evdev *)&mouse_registrations;
+}
+
+/** Record the mouse's path and capabilities. */
+void mouse_configure(struct evdev *dev, const char *phys, unsigned int caps)
+{
+    (void)dev;
+    registered_phys = phys;
+    registered_caps = caps;
+}
+
+/** The command lock never has another caller in this model. */
+void wq_wake_all(wait_queue_t *wq)
+{
+    (void)wq;
 }
 
 /** Record the packet reported, and count it. */

@@ -459,6 +459,11 @@ which probes the port whole; serio1 also takes
 and
 .Ql ETPS/2
 .Pq Ql elantech .
+The switch reserves a replacement event device first; if no slot is free,
+it fails with ENOMEM and keeps the current protocol and devices.
+A switch away from Synaptics removes the pass-through port and its files.
+An Elantech register or setting access that waited through a protocol
+switch fails with ENODEV.
 .Pa rate
 is the samples a second, 100 at first, set as the first of 200, 100, 80,
 60, 40, 20, 10 and 0 not above the number written, through the protocol's
@@ -482,9 +487,10 @@ begins, disables the device, polls it with 0xEB for a packet, which must
 have its protocol's form, and enables it again; a device whose poll fails
 is reconnected.
 .Pp
-After five packets in a row that break their form, a pad's that it
-refuses or a mouse's first byte without its framing bit, or the bytes
-0xAA 0x00 that a device sends when it has reset itself, the kernel thread
+After the number of bad packets in a row set by
+.Pa resetafter ,
+a pad's that it refuses or a mouse's first byte without its framing bit,
+or the bytes 0xAA 0x00 that a device sends when it has reset itself, the kernel thread
 kpsmoused reconnects it as Linux's psmouse does: a Synaptics pad is
 reset, must give the identity, model and capabilities it gave before, and
 is set up again, then the device behind its port; an Elantech pad is

@@ -639,6 +639,19 @@ void k_udelay(uint32_t usec)
     (void)usec;
 }
 
+/** No sysfs tree is published by this model. */
+void evdev_sysfs_serio_remove(int port)
+{
+    (void)port;
+}
+
+/** This model has no competing command caller. */
+int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    (void)wq;
+    return cond(arg) ? 0 : -EINTR;
+}
+
 void evdev_sysfs_serio_files(int port, int (*add)(int dir))
 {
     files_port = port;

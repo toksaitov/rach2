@@ -295,6 +295,34 @@ static struct evdev *mouse(void)
     return dev;
 }
 
+/** A reserved slot is invisible until registration and remains owned
+ * while another device takes the next slot. */
+static void reservation_rows(void)
+{
+    struct evdev *reserved, *other;
+    struct evdev_desc d;
+    struct opened o;
+    uint8_t keys[EVDEV_KEY_BYTES];
+    uint32_t changes = evdev_changes();
+
+    k_memset(keys, 0, sizeof(keys));
+    reserved = evdev_reserve();
+    CHECK("reserve the first slot", reserved == &devices[0]);
+    CHECK("a reservation publishes neither a node nor a change",
+          !evdev_present(0) && !evdev_snapshot(0, &d) && evdev_changes() == changes &&
+              open_dev(&o, 0) == -ENODEV);
+    other = evdev_register("other", EVDEV_BUS_I8042, 2, 1, keys);
+    CHECK("another registration cannot take the reserved slot", other == &devices[1]);
+    CHECK("the reservation becomes a live device at its original slot",
+          evdev_register_reserved(reserved, "reserved", EVDEV_BUS_I8042, 2, 2, keys) == reserved &&
+              evdev_snapshot(0, &d) && strcmp(d.name, "reserved") == 0);
+    evdev_unregister(reserved);
+    evdev_unregister(other);
+    reserved = evdev_reserve();
+    evdev_unregister(reserved);
+    CHECK("an unused reservation can be released", !devices[0].used && !devices[1].used);
+}
+
 /** A mouse's capabilities, records and packets, the filters and an
  * overflow. */
 static void motion_rows(void)
@@ -1154,6 +1182,7 @@ static void compat_rows(void)
 
 int main(void)
 {
+    reservation_rows();
     motion_rows();
     revoke_rows();
     text_rows();

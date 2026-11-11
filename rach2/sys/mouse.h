@@ -11,6 +11,13 @@
 
 struct evdev;
 
+/**
+ * Give a newly registered `dev` the physical path `phys` and the mouse
+ * capabilities `caps`, MOUSE_*, as `mouse_register` does. Any context;
+ * NULL is ignored. Used when the caller reserved the device beforehand.
+ */
+void mouse_configure(struct evdev *dev, const char *phys, unsigned int caps);
+
 /*
  * One movement packet, as a read of `/mouse` returns it.
  */

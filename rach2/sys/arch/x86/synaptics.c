@@ -550,8 +550,7 @@ static int register_pad(void)
     unsigned int i;
 
     k_memset(keys, 0, sizeof(keys));
-    pad = evdev_register("SynPS/2 Synaptics TouchPad", EVDEV_BUS_I8042, PSMOUSE_VENDOR,
-                         PSMOUSE_SYNAPTICS, keys);
+    pad = ps2mouse_register("SynPS/2 Synaptics TouchPad", PSMOUSE_SYNAPTICS, keys);
     if (!pad) {
         return -1;
     }

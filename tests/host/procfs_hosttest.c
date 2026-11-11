@@ -1339,12 +1339,20 @@ static void syscall_wchan_rows(void)
     thread.orig_nr = 3;
     thread.wchan = "pipe_read";
     user_frame.vector = 0x80;
+#ifdef RACH2_HOST_X86_64
+    user_frame.error_code = SC_ENTRY_IA32;
+    user_frame.rbx = 4;
+    user_frame.rcx = 0x804a000u;
+    user_frame.rdx = 0x100;
+    user_frame.rbp = 0xbffff000u;
+#else
     user_frame.ebx = 4;
     user_frame.ecx = 0x804a000u;
     user_frame.edx = 0x100;
     user_frame.ebp = 0xbffff000u;
-    user_frame.user_esp = 0xbfffefd0u;
-    user_frame.eip = 0x8048123u;
+#endif
+    FRAME_SP(&user_frame) = 0xbfffefd0u;
+    FRAME_PC(&user_frame) = 0x8048123u;
     check(pid_file_reads(9, 0, "3 0x4 0x804a000 0x100 0x0 0x0 0xbffff000 0xbfffefd0 0x8048123\n"),
           "a thread blocked in read shows the call, its arguments and its pointers");
     check(pid_file_reads(9, 1, "pipe_read"), "its wchan names its wait, with no newline");
@@ -3191,6 +3199,111 @@ static void input_change_rows(void)
           "every device gone, /sys/class/input is empty and the port keeps no input");
 }
 
+/* Count each installation of the child port's driver and protocol files. */
+static int guest_driver_calls, guest_protocol_calls;
+
+/** The text of a fixture attribute on a pass-through port. */
+static int32_t show_guest_file(void *obj, int arg, char *buf, uint32_t cap)
+{
+    (void)obj;
+    (void)arg;
+    if (cap >= 3) {
+        k_memcpy(buf, "1\n", 3);
+    }
+    return 2;
+}
+
+/** Install a driver's protocol selector on the child port. */
+static int add_guest_driver(int dir)
+{
+    static const struct sysfs_attr attr = {"protocol", 0444u, show_guest_file, NULL};
+
+    guest_driver_calls++;
+    return sysfs_add_attr(dir, &attr, NULL, 0) < 0 ? -ENOMEM : 0;
+}
+
+/** Install a protocol's setting on the child port. */
+static int add_guest_protocol(int dir)
+{
+    static const struct sysfs_attr attr = {"sensitivity", 0444u, show_guest_file, NULL};
+
+    guest_protocol_calls++;
+    return sysfs_add_attr(dir, &attr, NULL, 0) < 0 ? -ENOMEM : 0;
+}
+
+/** Publish, remove and recreate a pass-through port through the real
+ * sysfs registry, including its input and bus links and its callbacks. */
+static void input_guest_rows(void)
+{
+    struct evdev_desc *pad = &input_devs[0], *guest = &input_devs[1];
+    int parent, dir, bus, file, link, event, mark, sent, installed;
+    char text[16];
+
+    k_memset(input_devs, 0, sizeof(input_devs));
+    pad->gen = 200;
+    pad->id[0] = EVDEV_BUS_I8042;
+    k_strncpy(pad->name, "SynPS/2 Synaptics TouchPad", EVDEV_TEXT_MAX);
+    k_strncpy(pad->phys, "isa0060/serio1/input0", EVDEV_TEXT_MAX);
+    *guest = *pad;
+    guest->gen = 201;
+    k_strncpy(guest->name, "TPPS/2 IBM TrackPoint", EVDEV_TEXT_MAX);
+    k_strncpy(guest->phys, "synaptics-pt/serio0/input0", EVDEV_TEXT_MAX);
+    input_present[0] = input_present[1] = 1;
+    evdev_sysfs_serio_driver(EVDEV_SERIO_PASS_THROUGH, add_guest_driver);
+    evdev_sysfs_serio_files(EVDEV_SERIO_PASS_THROUGH, add_guest_protocol);
+    evdev_sysfs_sync();
+    parent = child(child(sysfs_anchor_find(SYSFS_PLATFORM, 0), "i8042"), "serio1");
+    bus = child(child(sysfs_anchor_find(SYSFS_BUS, 0), "serio"), "devices");
+    dir = child(parent, "serio2");
+    file = child(dir, "sensitivity");
+    link = child(bus, "serio2");
+    event = child(in_class, "event1");
+    check(dir > 0 && reg_is(child(dir, "protocol"), "1\n") && reg_is(file, "1\n") &&
+              sysfs_node_target(link) == dir && event > 0 && guest_driver_calls == 1 &&
+              guest_protocol_calls == 1,
+          "a pass-through port has its real directories, files and bus link");
+    input_present[1] = 0;
+    mark = (int)uevents_len;
+    sent = uevents_sent;
+    evdev_sysfs_serio_remove(EVDEV_SERIO_PASS_THROUGH);
+    check(!child(parent, "serio2") && !child(bus, "serio2") && !child(in_class, "event1") &&
+              !sysfs_node_kind(event) && !sysfs_node_kind(link) &&
+              sysfs_node_show(file, text, sizeof(text)) == -ENOENT,
+          "removing the guest withdraws its input links, serio parent, bus link and files");
+    check(uevents_sent == sent + 3 && uevent_has((uint32_t)mark, 0, "ACTION=remove") &&
+              uevent_has((uint32_t)mark, 1, "ACTION=remove") &&
+              uevent_has((uint32_t)mark, 2, "DEVPATH=/devices/platform/i8042/serio1/serio2"),
+          "the input event and input device are removed before their serio port");
+    evdev_sysfs_sync();
+    check(child(in_class, "event0") > 0 && !child(parent, "serio2"),
+          "a later sync keeps the pad and does not recreate the absent guest");
+
+    guest->gen++;
+    input_present[1] = 1;
+    installed = guest_driver_calls + guest_protocol_calls;
+    evdev_sysfs_sync();
+    dir = child(parent, "serio2");
+    check(dir > 0 && !child(dir, "protocol") && !child(dir, "sensitivity") &&
+              guest_driver_calls + guest_protocol_calls == installed,
+          "recreation without a binding cannot call callbacks of the removed port");
+    input_present[1] = 0;
+    evdev_sysfs_serio_remove(EVDEV_SERIO_PASS_THROUGH);
+    guest->gen++;
+    input_present[1] = 1;
+    evdev_sysfs_serio_driver(EVDEV_SERIO_PASS_THROUGH, add_guest_driver);
+    evdev_sysfs_serio_files(EVDEV_SERIO_PASS_THROUGH, add_guest_protocol);
+    evdev_sysfs_sync();
+    dir = child(parent, "serio2");
+    check(reg_is(child(dir, "protocol"), "1\n") && reg_is(child(dir, "sensitivity"), "1\n") &&
+              sysfs_node_target(child(bus, "serio2")) == dir && guest_driver_calls == 2 &&
+              guest_protocol_calls == 2,
+          "a new binding recreates the child port with its current callbacks and link");
+    input_present[1] = 0;
+    evdev_sysfs_serio_remove(EVDEV_SERIO_PASS_THROUGH);
+    input_present[0] = 0;
+    evdev_sysfs_sync();
+}
+
 int main(int argc, char **argv)
 {
     struct procfs_text text;
@@ -3262,6 +3375,7 @@ int main(int argc, char **argv)
     input_publish_rows();
     input_file_rows();
     input_change_rows();
+    input_guest_rows();
     if (!failures) {
         printf("procfs-hosttest: result: pass: stat allocation failure and times, descriptor "
                "links, task ids, the mem descriptor's counts, the exe link, a read of a reaped "

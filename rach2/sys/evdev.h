@@ -178,6 +178,22 @@ struct evdev *evdev_register(const char *name, uint16_t bustype, uint16_t vendor
                              const uint8_t *keys);
 
 /**
+ * Reserve the lowest free device slot without publishing a node. Any
+ * context. Returns NULL when every slot is taken. The caller owns the
+ * reservation until `evdev_register_reserved` publishes it or
+ * `evdev_unregister` releases it.
+ */
+struct evdev *evdev_reserve(void);
+
+/**
+ * Register the unused reservation `dev` with `evdev_register`'s arguments.
+ * A reserved device cannot fail; NULL asks to reserve a slot now and can
+ * return NULL. Any context. The caller must not use a live device here.
+ */
+struct evdev *evdev_register_reserved(struct evdev *dev, const char *name, uint16_t bustype,
+                                      uint16_t vendor, uint16_t product, const uint8_t *keys);
+
+/**
  * Give `dev` the text EVIOCGPHYS gives, such as "isa0060/serio0/input0",
  * copied and cut to EVDEV_TEXT_MAX bytes, and `flags`, EVDEV_SCAN and
  * EVDEV_KEYBOARD, the event types beyond EV_KEY that EVIOCGBIT says it
@@ -542,6 +558,15 @@ void evdev_sysfs_sync(void);
  * `firmware_id` file and uevent show as Linux's serio core shows a port's
  * PNP IDs; the string must stay. Defined in evdev_sysfs.c. */
 void evdev_sysfs_serio_firmware_id(int port, const char *id);
+
+/**
+ * Remove serio port `port`, its bus link, files and callbacks, after its
+ * event devices have been unregistered. Withdraw their published entries
+ * first, then send the port's remove uevent. Removing serio1 also removes
+ * its pass-through port. A later registration makes the port again. Under
+ * the big lock, in process context, as `evdev_sysfs_sync`.
+ */
+void evdev_sysfs_serio_remove(int port);
 
 /**
  * Have `add` put a driver's own files below the directory of the serio

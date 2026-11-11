@@ -30,8 +30,8 @@
  * its state PSMOUSE_ACTIVATED. A run of commands, a change of the guest's
  * settings or a reconnect, takes it back for its length: the handler then
  * leaves the mouse's bytes in the 8042 for the run to read, as Linux's
- * PSMOUSE_CMD_MODE gives them to `ps2_command`. Five packets out of form in
- * a row, Linux's `resetafter`, put the port in Linux's PSMOUSE_IGNORE, whose
+ * PSMOUSE_CMD_MODE gives them to `ps2_command`. The configured number of
+ * bad packets in a row, `resetafter`, puts it in PSMOUSE_IGNORE, whose
  * bytes are dropped, until kpsmoused has reconnected the device. A pause of
  * half a second inside a packet, or a first byte after the device was idle
  * for `resync_time` seconds, puts it in PSMOUSE_RESYNCING instead, until
@@ -66,12 +66,12 @@
 #include "isr.h"
 #include "../../kio.h"
 #include "../../serial.h"
+#include "../../proc/wait_queue.h"
 #ifndef RACH2_HOSTTEST
 #include "../../proc/percpu.h"
 #include "../../proc/process.h"
 #include "../../proc/sched.h"
 #include "../../proc/smp.h"
-#include "../../proc/wait_queue.h"
 #endif
 
 /* 8042 Controller Commands (write to 0x64) */
@@ -249,6 +249,13 @@ static volatile int reconnect_wanted;
 /* `init_mouse` is bringing the device up, with interrupts off. */
 static int booting;
 
+/* The main device reserved before a protocol switch, consumed by the
+ * mouse's or touchpad's registration under the command lock. */
+static struct evdev *replacement;
+
+/* Callers waiting for the command lock. */
+static wait_queue_t cmd_wq;
+
 /* The byte 0xAA began a packet: with 0x00 after it, the announcement of a
  * device that reset itself, Linux's PSMOUSE_RET_BAT and PSMOUSE_RET_ID. */
 static int bat_held;
@@ -259,7 +266,6 @@ static int bat_held;
  * `ps2mouse_msleep`. */
 static process_t *thread;
 static wait_queue_t reconnect_wq;
-static wait_queue_t cmd_wq;
 static wait_queue_t sleep_wq; /* woken by nothing: the sleep ends at its tick */
 #endif
 
@@ -1010,16 +1016,25 @@ static unsigned int mouse_caps(int type)
     }
 }
 
-/** Register the event device of a mouse of the protocol `type` as Linux's
- * psmouse does: its name the protocol's, the vendor and the model; its
- * capabilities, with the ThinkingMouse's extra button, the Cortron
- * trackball's side button, and a TrackPoint's pointing stick property. */
+/** Register the port's main device, consuming the reservation held by a
+ * protocol switch, or allocating at boot or reconnect. */
+struct evdev *ps2mouse_register(const char *name, uint16_t product, const uint8_t *keys)
+{
+    struct evdev *dev = replacement;
+
+    replacement = NULL;
+    return evdev_register_reserved(dev, name, EVDEV_BUS_I8042, 0x0002, product, keys);
+}
+
+/** Register a relative device with its protocol's name and capabilities. */
 static struct evdev *register_device(char *name, const char *phys, int type, const char *who)
 {
     struct evdev *dev;
+    uint8_t keys[EVDEV_KEY_BYTES];
 
-    dev = mouse_register(join(name, 64, proto_name(type), who), phys, EVDEV_BUS_I8042, 0x0002,
-                         (uint16_t)type, mouse_caps(type));
+    k_memset(keys, 0, sizeof(keys));
+    dev = ps2mouse_register(join(name, 64, proto_name(type), who), (uint16_t)type, keys);
+    mouse_configure(dev, phys, mouse_caps(type));
     if (type == PROTO_THINKPS) {
         evdev_set_capability(dev, EV_KEY, BTN_EXTRA);
     } else if (type == PROTO_CORTRON) {
@@ -1260,6 +1275,7 @@ static void guest_forget(void)
         evdev_unregister(guest.dev);
         guest.dev = NULL;
     }
+    evdev_sysfs_serio_remove(EVDEV_SERIO_PASS_THROUGH);
     guest.extra = 0;
     guest.side = 0;
 }
@@ -1699,7 +1715,6 @@ void platform_mouse_resync(void)
     packet_index = 0;
 }
 
-#ifndef RACH2_HOSTTEST
 /** Whether no run of commands is in progress. */
 static int cmd_free(void *arg)
 {
@@ -1707,6 +1722,7 @@ static int cmd_free(void *arg)
     return !cmd_busy;
 }
 
+#ifndef RACH2_HOSTTEST
 /** Whether the tick in `*arg` has come. */
 static int tick_passed(void *arg)
 {
@@ -1751,11 +1767,9 @@ static int cmd_begin_state(void)
     uint32_t flags;
     int was;
 
-#ifndef RACH2_HOSTTEST
     while (cmd_busy) {
         (void)wq_wait_event_nointr(&cmd_wq, cmd_free, NULL);
     }
-#endif
     flags = kirq_save();
     was = state;
     cmd_busy = 1;
@@ -1787,9 +1801,7 @@ static void cmd_end_state(int to)
         mouse_irq_handler(NULL);
     }
     kirq_restore(flags);
-#ifndef RACH2_HOSTTEST
     wq_wake_all(&cmd_wq);
-#endif
 }
 
 void ps2mouse_cmd_end(void)
@@ -2120,7 +2132,9 @@ void ps2mouse_resync(void)
  * `buf`, as Linux's `psmouse_attr_set_protocol` does, inside a change: the
  * protocol taken away, then `set_up_protocol`, its event device registered
  * before the old one is removed, serio1's files, and a Synaptics pad's
- * guest. Returns 0, or -EINVAL for a name `proto_lookup` refuses.
+ * guest. A replacement slot is reserved before any device is removed.
+ * Returns 0, -EINVAL for a name `proto_lookup` refuses, or -ENOMEM with
+ * the old protocol and devices intact when no slot is free.
  */
 static int aux_set_protocol(const char *buf, uint32_t len)
 {
@@ -2133,9 +2147,15 @@ static int aux_set_protocol(const char *buf, uint32_t len)
     if (type == protocol) {
         return 0;
     }
+    replacement = evdev_reserve();
+    if (!replacement) {
+        return -ENOMEM;
+    }
     old = disconnect_protocol();
     set_up_protocol(type);
     register_mouse();
+    evdev_unregister(replacement);
+    replacement = NULL;
     bind_files();
     if (old) {
         evdev_unregister(old);
@@ -2152,7 +2172,8 @@ static int aux_set_protocol(const char *buf, uint32_t len)
  * `aux_set_protocol` switches the port, with the protocols Rach2 can
  * detect through a touchpad: the guest's new event device registered before
  * the old one is removed, then the touchpad's mode for its packet size.
- * Returns 0, or -EINVAL.
+ * Reserve the replacement first; return -ENOMEM with the guest unchanged
+ * when no slot is free. Otherwise return 0, or -EINVAL for a bad name.
  */
 static int guest_set_protocol(const char *buf, uint32_t len)
 {
@@ -2164,6 +2185,10 @@ static int guest_set_protocol(const char *buf, uint32_t len)
     }
     if (type == guest.protocol) {
         return 0;
+    }
+    replacement = evdev_reserve();
+    if (!replacement) {
+        return -ENOMEM;
     }
     old = guest.dev;
     guest.dev = NULL;
@@ -2322,7 +2347,7 @@ static int32_t store_port(void *obj, int arg, const char *buf, uint32_t len)
         return rc;
     }
     if ((arg & 7) == FILE_PROTOCOL) {
-        rc = port == ON_GUEST ? guest_set_protocol(buf, n) : aux_set_protocol(buf, n);
+        rc = port == ON_GUEST ? guest_set_protocol(buf, len) : aux_set_protocol(buf, len);
     } else {
         rc = ps2mouse_parse_uint(buf, n, 10, 0xFFFFFFFFu, &v);
     }
