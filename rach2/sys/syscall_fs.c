@@ -13623,8 +13623,9 @@ static int32_t copy_from_file(fd_entry_t *in, uint64_t *pos, fd_entry_t *out, in
         if (want > COPY_CHUNK) {
             want = COPY_CHUNK;
         }
+        src = (uint32_t)(*pos & (PAGE_SIZE - 1));
         if (pipe_is(out)) {
-            int32_t room = pipe_splice_room(out, nonblock || done > 0);
+            int32_t room = pipe_splice_room(out, nonblock || done > 0, src);
 
             if (room < 0) {
                 return done > 0 ? (int32_t)done : room;
@@ -13634,7 +13635,6 @@ static int32_t copy_from_file(fd_entry_t *in, uint64_t *pos, fd_entry_t *out, in
                 full = 1;
             }
         }
-        src = (uint32_t)(*pos & (PAGE_SIZE - 1));
         if (pipe_is(out) && !full && want < count - done) {
             want -= (src + want) & (PAGE_SIZE - 1);
         }
