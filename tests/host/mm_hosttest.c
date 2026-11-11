@@ -5,6 +5,7 @@
  *
  * host-deps: tests/host/compat/vm_iter_host.c rach2/sys/mm/notify.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/spinlock_host.c
  *
  * `mm/mm.c` is included whole, over a model of the paging layer that counts
  * what is freed. A hold, which a /proc/PID/mem descriptor takes, must keep
@@ -109,6 +110,18 @@ uintptr_t get_page_dir_phys(page_dir_t *dir)
 {
     (void)dir;
     return 0x1000u;
+}
+
+/** 0: the host has no interrupt flag. */
+uint32_t kirq_save(void)
+{
+    return 0;
+}
+
+/** Nothing: the host has no interrupt flag. */
+void kirq_restore(uint32_t flags)
+{
+    (void)flags;
 }
 
 /** Load `dir`. */

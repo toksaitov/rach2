@@ -41,6 +41,7 @@
 #define _MM_H_
 
 #include "../lib/kint.h"
+#include "../lib/spinlock.h"
 #include "vm.h"
 
 struct page_dir;
@@ -113,9 +114,12 @@ struct mm {
     /* The present user pages of the page tables, VmRSS, which every change
      * of an entry's present bit keeps (`mm_resident_add`), and the most
      * there were before any went, as Linux's hiwater_rss; a fork's copy
-     * counts its own from none. */
+     * counts its own from none. `rss_lock` covers their writers, which
+     * processors faulting in the space at once are; a reader reads each
+     * word once without it. */
     unsigned long resident;
     unsigned long resident_peak;
+    struct spinlock rss_lock;
     /* Whether process_mrelease has freed the private pages of the space of
      * a dying process, as Linux's MMF_OOM_SKIP: a second call then has
      * nothing to do and answers 0. 0 in a new space and in a fork's copy. */
@@ -231,15 +235,17 @@ void mm_drop(struct process *p);
 unsigned long mm_resident(const struct mm *mm);
 
 /** The most pages `mm` has had in memory at once, VmHWM and what
- * `ru_maxrss` reports of it. */
+ * `ru_maxrss` reports of it. Needs no lock. */
 unsigned long mm_resident_peak(const struct mm *mm);
 
 /**
  * Count `pages` more present user pages, or fewer for a negative count, in
  * the address space whose directory is `dir`. Each writer of a user entry
- * calls it for the present bits it set or cleared, under the big lock, so
- * that `getrusage` and /proc read the size without walking the tables.
- * Nothing for a directory no address space has.
+ * calls it for the present bits it set or cleared, so that `getrusage` and
+ * /proc read the size without walking the tables. Takes the lock of the
+ * table of spaces by directory, when `dir` is not the running thread's, and
+ * then the space's count lock; both are below every other lock. Any
+ * context. Nothing for a directory no address space has.
  */
 void mm_resident_add(const struct page_dir *dir, long pages);
 
