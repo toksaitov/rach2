@@ -388,8 +388,11 @@ static int32_t get_info(struct vfio_container *c, uintptr_t arg)
     return copy_to_user((void __user *)arg, &info, minsz) != 0 ? -EFAULT : 0;
 }
 
-/** What a mapping does when an unmap or the end of the address space takes
- * its pages back: the device no longer reaches them, as the pin requires. */
+/** What a mapping does when an unmap, or for device pages the end of the
+ * address space, takes its pages back: the device no longer reaches them,
+ * as the pin requires. A mapping of RAM outlives the end of the address
+ * space (PIN_KEEP_PAST_END) until the container's release, after the
+ * device's own release at the close of its descriptor has reset it. */
 static void dma_released(struct pin *pin, void *owner)
 {
     struct vfio_dma *dma = (struct vfio_dma *)owner;
@@ -487,6 +490,7 @@ static int32_t map_dma(struct vfio_container *c, uintptr_t arg)
     dma->container = c;
     dma->holder.release = dma_released;
     dma->holder.owner = dma;
+    dma->holder.flags = PIN_KEEP_PAST_END;
     r = pin_user(vfio_hw_mm(), (uintptr_t)m.vaddr, (uintptr_t)m.size,
                  PIN_IO | PIN_SLOW | ((m.flags & VFIO_DMA_MAP_FLAG_WRITE) ? PIN_WRITE : 0u),
                  &dma->holder, &dma->pin);
