@@ -1,0 +1,18 @@
+crysis: save: default_00_Contact_01m_18s.CRYSISJMSF copied as default_accept_src_hud-4.CRYSISJMSF, sha256 d6458decf5183b9a4dae47b82ed546889b8ab8638b6f793c3f238d47d9ce392b
+crysis: started: crysis.sh run --umu -devmode +load default_accept_src_hud-4.CRYSISJMSF
+crysis: check: load: ok default_accept_src_hud-4.CRYSISJMSF: level loaded in 53.20 s
+crysis: prompt: passed
+crysis: check: prompt: ok the loading screen's prompt passed
+crysis: shot: loaded written
+crysis: console: log_Verbosity 4 set
+crysis: console: ds_LogLevel 4 set
+crysis: shot: after written
+crysis: check: after: ok the HUD 35 s after the trigger, to read
+crysis: shot: flash written
+crysis: enosys: syscall: 323: not implemented (asked for by wine)
+crysis: enosys: syscall: 323: not implemented (asked for by wine64)
+crysis: ended after 264 s, status 0
+crysis: dialog: line 1 at 1.711281 s, line 2 at 8.420839 s, Show after BootSeq 4710 ms
+crysis: check: lines: ok the reboot's two dialog lines played
+crysis: check: gamerules: ok GameRules hudShow="1"
+crysis: result: hud-4: ok

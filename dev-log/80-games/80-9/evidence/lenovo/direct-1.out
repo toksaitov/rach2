@@ -1,0 +1,17 @@
+crysis: started: crysis.sh run -devmode +map island +exec benchmark_gpu
+crysis: loaded in 40.68 s
+crysis: loop 0 finished at frame 2363
+crysis: loop 1 finished at frame 4364
+crysis: loop 2 finished at frame 6364
+crysis: loop 3 finished at frame 8363
+crysis: enosys: syscall: 323: not implemented (asked for by wine)
+crysis: enosys: syscall: 323: not implemented (asked for by wine64)
+crysis: ended after 486 s, status 0
+crysis: check: loop0: FAILED 13.43 fps (gate 24) linux 45.17, play 148.92 s, median 25.3 p99 1072.0 max 3636.0 >50ms 204 >100ms 191
+crysis: check: loop1: ok 29.97 fps (gate 24) linux 46.54, play 66.72 s, median 25.2 p99 283.8 max 1713.0 >50ms 60 >100ms 53
+crysis: check: loop2: ok 24.32 fps (gate 24) linux 45.97, play 82.24 s, median 25.6 p99 548.2 max 1618.0 >50ms 81 >100ms 74
+crysis: check: loop3: ok 25.09 fps (gate 24) linux 45.92, play 79.71 s, median 25.8 p99 369.4 max 1308.0 >50ms 183 >100ms 86
+crysis: check: loops: ok 4 of 4 loops finished
+crysis: check: wined3d: ok WineD3D's OpenGL renderer
+crysis: check: fsync: ok Wine's fsync
+crysis: result: direct-1: FAILED loop0

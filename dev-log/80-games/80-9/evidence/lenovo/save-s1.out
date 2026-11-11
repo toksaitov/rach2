@@ -1,0 +1,10 @@
+crysis: started: crysis.sh run --umu -devmode +map island
+crysis: check: load: ok island: level loaded in 52.02 s
+crysis: prompt: passed
+crysis: check: prompt: ok the loading screen's prompt passed
+crysis: shot: saved missing
+crysis: enosys: syscall: 323: not implemented (asked for by wine)
+crysis: enosys: syscall: 323: not implemented (asked for by wine64)
+crysis: ended after 402 s, status 1
+crysis: check: saved: FAILED /data/crysis/saves/SaveGames/default_accept_s1.CRYSISJMSF
+crysis: result: s1: FAILED saved

@@ -1,0 +1,12 @@
+crysis: started: crysis.sh run --umu -devmode +map island
+crysis: check: load: ok island: level loaded in 52.06 s
+crysis: prompt: passed
+crysis: check: prompt: ok the loading screen's prompt passed
+crysis: save: written at attempt 6
+crysis: shot: saved written
+crysis: enosys: syscall: 323: not implemented (asked for by wine)
+crysis: enosys: syscall: 323: not implemented (asked for by wine64)
+crysis: ended after 360 s, status 0
+crysis: check: saved: ok /data/crysis/saves/SaveGames/default_accept_s2.CRYSISJMSF
+crysis: save: default_accept_s2.CRYSISJMSF sha256 8a3d9b02b48fce98d9613c1d9407d5d32e1bdf499e1b7852f435150d7745e73f, 635315 bytes
+crysis: result: s2: ok
