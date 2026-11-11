@@ -380,6 +380,25 @@ int smp_cpu_count(void)
 }
 
 /**
+ * Stop this processor for good: leave VMX or SVM operation first
+ * (`k_panic_hook`), then mark it stopped, which is what `smp_stop_others`
+ * waits for, and halt. Linux's `smp_stop_nmi_callback` and
+ * `sysvec_reboot` call `cpu_emergency_disable_virtualization` before
+ * `stop_this_cpu` in the same order (arch/x86/kernel/smp.c:121-141), since
+ * a processor left in VMX operation blocks INIT, and the restart that
+ * follows the stop may need it (arch/x86/kernel/reboot.c:556-599).
+ */
+static void smp_stop_here(struct percpu *cpu)
+{
+    if (k_panic_hook) {
+        k_panic_hook();
+    }
+    cpu->online = 0;
+    cpu->stopped = 1;
+    arch_stop();
+}
+
+/**
  * A stop is final. A TLB request is answered by dropping the page's
  * translation, or all of them, and then clearing the word, which is what
  * the sender waits for; the processor does not go on with a translation it
@@ -392,9 +411,7 @@ void smp_service(void)
     struct percpu *cpu = this_cpu();
 
     if (cpu->stop_request) {
-        cpu->online = 0;
-        cpu->stopped = 1;
-        arch_stop();
+        smp_stop_here(cpu);
     }
     if (cpu->tlb_request) {
         uintptr_t va = cpu->tlb_page;
@@ -601,9 +618,7 @@ int smp_stop_nmi(void)
     if (!cpu->stop_request) {
         return 0;
     }
-    cpu->online = 0;
-    cpu->stopped = 1;
-    arch_stop();
+    smp_stop_here(cpu);
     return 1;
 }
 
