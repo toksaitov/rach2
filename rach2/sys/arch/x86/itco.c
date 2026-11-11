@@ -14,8 +14,14 @@
 #define TCO_NO_REBOOT 0x20u
 #define TCO_MASK      0x03FFu
 
+/* Linux's WATCHDOG_TIMEOUT, iTCO_wdt.c:118: the heartbeat when none is
+ * given or the one given is out of range. */
+#define ITCO_DEFAULT_TIMEOUT 30
+
 /* All callbacks are synchronous and do not sleep; the big lock serializes
- * the device. The host test supplies the same boundary over a TCO model. */
+ * the device, and the tick's feed (`itco_feed_tick`) reads only words that
+ * one store changes. The host test supplies the same boundary over a TCO
+ * model. */
 struct itco {
     uint16_t (*rd)(void *ctx, unsigned reg);
     void (*wr)(void *ctx, unsigned reg, uint16_t value);
@@ -24,9 +30,17 @@ struct itco {
     void *ctx;
     int timeout; /* requested seconds, as Linux reports GETTIMEOUT */
     int opened;
-    int magic;   /* the last nonempty write contained V */
-    int running; /* started and not since stopped: Linux's WDOG_ACTIVE */
-    int pinged;  /* started or fed since the last GETSTATUS */
+    int magic;          /* the last nonempty write contained V */
+    int running;        /* started by a program and not since stopped: Linux's WDOG_ACTIVE */
+    int pinged;         /* started or fed since the last GETSTATUS */
+    int hw_running;     /* counting toward a reset: Linux's WDOG_HW_RUNNING */
+    int nowayout;       /* a stop is refused: Linux's WDOG_NO_WAY_OUT */
+    int boot_feed;      /* the kernel feeds a running timer no program holds:
+                           Linux's watchdog.handle_boot_enabled */
+    uint32_t hz;        /* calls of `itco_feed_tick` a second */
+    uint32_t feed_left; /* calls until the kernel's next feed */
+    int open_limited;   /* a program must open the device in `open_left` calls */
+    uint32_t open_left; /* Linux's open_deadline, counted down */
 };
 
 /** Set NO_REBOOT to `on`; 0 or -EIO when firmware refuses the change. */
@@ -42,14 +56,18 @@ static int itco_noreboot(struct itco *t, int on)
     return t->gcs_rd(t->ctx) == value ? 0 : -EIO;
 }
 
-/** Halt the timer, then inhibit resets; 0 or -EIO if halt did not stick. */
+/** Halt the timer, then inhibit resets; 0 or -EIO if halt did not stick.
+ * Either way NO_REBOOT is asked for, so the timer no longer runs toward a
+ * reset unless firmware refuses both. */
 static int itco_stop(struct itco *t)
 {
     uint16_t value = t->rd(t->ctx, TCO1_CNT);
 
     t->wr(t->ctx, TCO1_CNT, (uint16_t)(value | TCO_HALT));
     value = t->rd(t->ctx, TCO1_CNT);
-    itco_noreboot(t, 1);
+    if (itco_noreboot(t, 1) == 0 || (value != 0xFFFFu && (value & TCO_HALT))) {
+        t->hw_running = 0;
+    }
     return value != 0xFFFFu && (value & TCO_HALT) ? 0 : -EIO;
 }
 
@@ -75,6 +93,7 @@ static int itco_start(struct itco *t)
         itco_stop(t);
         return -EIO;
     }
+    t->hw_running = 1;
     return 0;
 }
 
@@ -104,21 +123,82 @@ static int itco_timeleft(struct itco *t)
     return (int)((unsigned)(t->rd(t->ctx, TCO_RLD) & TCO_MASK) * 6u / 10u);
 }
 
-/** Check the register block, halt it and clear old status before use;
- * 0 or -EIO. All writes are bounded register accesses, with no wait loop. */
-static int itco_attach(struct itco *t)
+/**
+ * Check the register block, clear old status and set the timeout to
+ * `heartbeat` seconds, or to 30 when the chip refuses it, as iTCO_wdt_probe
+ * does (iTCO_wdt.c:593 to 612); 0, 1 when 30 was taken in place of
+ * `heartbeat`, or -EIO. A timer firmware left counting toward a reset,
+ * neither halted nor kept from resetting, is left running and fed, as
+ * iTCO_wdt_set_running (iTCO_wdt.c:444) leaves it for the watchdog core to
+ * feed; any other is halted with NO_REBOOT set. All writes are bounded
+ * register accesses, with no wait loop.
+ */
+static int itco_attach(struct itco *t, int heartbeat)
 {
-    if (t->rd(t->ctx, TCO1_CNT) == 0xFFFFu || t->rd(t->ctx, TCO_TMR) == 0xFFFFu ||
-        t->gcs_rd(t->ctx) == 0xFFFFFFFFu) {
+    uint16_t cnt = t->rd(t->ctx, TCO1_CNT);
+    uint32_t gcs = t->gcs_rd(t->ctx);
+
+    if (cnt == 0xFFFFu || t->rd(t->ctx, TCO_TMR) == 0xFFFFu || gcs == 0xFFFFFFFFu) {
         return -EIO;
     }
-    if (itco_stop(t) != 0) {
+    t->hw_running = !(cnt & TCO_HALT) && !(gcs & TCO_NO_REBOOT);
+    if (!t->hw_running && itco_stop(t) != 0) {
         return -EIO;
     }
     t->wr(t->ctx, TCO1_STS, 8);
     t->wr(t->ctx, TCO2_STS, 2);
     t->wr(t->ctx, TCO2_STS, 4);
-    return itco_timeout(t, 30) ? -EIO : 0;
+    if (itco_timeout(t, heartbeat) == 0) {
+        return 0;
+    }
+    return itco_timeout(t, ITCO_DEFAULT_TIMEOUT) ? -EIO : 1;
+}
+
+/**
+ * Start the timer for the kernel to feed, as firmware that leaves it
+ * running does, and feed it at the next call of `itco_feed_tick`; 0 or the
+ * start error. Until a program opens the device, the kernel feeds it, so
+ * that a kernel whose tick stops lets the chipset reset the machine.
+ */
+static int itco_boot_arm(struct itco *t)
+{
+    int result = t->hw_running ? 0 : itco_start(t);
+
+    t->feed_left = 0;
+    return result;
+}
+
+/**
+ * One tick of the kernel's feed of a running timer that no program holds,
+ * as watchdog_dev.c's hrtimer and worker do (watchdog_need_worker,
+ * watchdog_next_keepalive and watchdog_worker_should_ping, lines 76 to 214):
+ * a feed every half timeout until a program opens the device or the open
+ * deadline passes, the last one a timeout before the deadline. From the
+ * boot processor's tick, with interrupts off.
+ */
+static void itco_feed_tick(struct itco *t)
+{
+    uint32_t heartbeat;
+
+    if (t->running || !t->hw_running || !t->boot_feed) {
+        return;
+    }
+    if (t->open_limited) {
+        if (t->open_left == 0) {
+            return;
+        }
+        t->open_left--;
+    }
+    if (t->feed_left > 0) {
+        t->feed_left--;
+        return;
+    }
+    itco_ping(t);
+    heartbeat = (uint32_t)t->timeout * t->hz;
+    t->feed_left = heartbeat / 2u;
+    if (t->open_limited && t->open_left < heartbeat + t->feed_left) {
+        t->feed_left = t->open_left > heartbeat ? t->open_left - heartbeat : t->open_left;
+    }
 }
 
 /** Start a halted timer, as Linux's watchdog_start does: a running one is
@@ -138,11 +218,15 @@ static int itco_arm(struct itco *t)
     return result;
 }
 
-/** Halt a running timer, as Linux's watchdog_stop does; 0 or -EIO. */
+/** Halt a running timer, as Linux's watchdog_stop does; 0, -EBUSY under
+ * nowayout (watchdog_dev.c:299), or -EIO. */
 static int itco_disarm(struct itco *t)
 {
     if (!t->running) {
         return 0;
+    }
+    if (t->nowayout) {
+        return -EBUSY;
     }
     if (itco_stop(t) != 0) {
         return -EIO;
@@ -179,7 +263,10 @@ static int itco_status(struct itco *t)
 #include "../../fs/file.h"
 #include "../../mm/paging.h"
 #include "../../mm/usercopy.h"
+#include "../../cmdline.h"
 #include "../../klog.h"
+#include "../../lib/kstd.h"
+#include "../../timer.h"
 
 static struct itco watchdog;
 static uint16_t tco_base;
@@ -229,6 +316,8 @@ static int32_t itco_open(struct devfs_node *node, fd_entry_t *e, int flags)
     if (result == 0) {
         watchdog.opened = 1;
         watchdog.magic = 0;
+        /* watchdog_dev.c:904: the open deadline is for the first open. */
+        watchdog.open_limited = 0;
     }
     return result;
 }
@@ -271,7 +360,9 @@ static void itco_close(fd_entry_t *e)
     if (watchdog.running && (!watchdog.magic || itco_disarm(&watchdog) != 0)) {
         itco_keepalive(&watchdog);
         klog(KLOG_WARN, "watchdog", "close: did not stop: %s",
-             watchdog.magic ? "the timer refused halt" : "no magic close");
+             !watchdog.magic     ? "no magic close"
+             : watchdog.nowayout ? "nowayout"
+                                 : "the timer refused halt");
     }
     watchdog.opened = 0;
     watchdog.magic = 0;
@@ -342,11 +433,51 @@ static const struct file_ops itco_ops = {NULL,       itco_write, NULL, itco_ioct
                                          itco_close, NULL,       NULL};
 static struct devfs_node itco_node = {"watchdog", 10, 130, 0600, &itco_ops, itco_open, NULL};
 
+/**
+ * The number option `key`, `dflt` when the line lacks it, and `dflt` with a
+ * record when its value is not a number in [`lo`, `hi`].
+ */
+static long itco_option(const char *key, long dflt, long lo, long hi)
+{
+    char text[24];
+    long long v;
+
+    if (!kcmdline_value(key, text, sizeof(text))) {
+        return dflt;
+    }
+    if (k_strtoll(text, sizeof(text), &v) != 0 || v < lo || v > hi) {
+        klog(KLOG_WARN, "watchdog", "refused: %s=%s", key, text);
+        return dflt;
+    }
+    return (long)v;
+}
+
+/**
+ * Read Linux's options, iTCO_wdt's `heartbeat` and `nowayout` (iTCO_wdt.c:
+ * 118 to 127) and the watchdog core's `handle_boot_enabled` and
+ * `open_timeout` (watchdog_dev.c:1319 to 1325), and `rach2.itco.arm`, which
+ * starts the timer at boot for the kernel to feed.
+ */
+static void itco_options(int *heartbeat, int *arm)
+{
+    long open_timeout = itco_option("watchdog.open_timeout", 0, 0, 4000000L);
+
+    *heartbeat =
+        (int)itco_option("iTCO_wdt.heartbeat", ITCO_DEFAULT_TIMEOUT, -0x7fffffffL, 0x7fffffffL);
+    *arm = kcmdline_has("rach2.itco.arm");
+    watchdog.nowayout = kcmdline_bool("iTCO_wdt.nowayout", 0);
+    watchdog.boot_feed = kcmdline_bool("watchdog.handle_boot_enabled", 1);
+    watchdog.hz = TICK_HZ;
+    watchdog.open_limited = open_timeout != 0;
+    watchdog.open_left = (uint32_t)open_timeout * TICK_HZ;
+}
+
 void itco_init(void)
 {
     uint32_t rcba = board_rcba();
     uint16_t pm = board_pmbase();
     uintptr_t page;
+    int heartbeat, arm, result;
 
     if (!rcba || !pm) {
         return;
@@ -361,12 +492,32 @@ void itco_init(void)
     watchdog.wr = itco_wr;
     watchdog.gcs_rd = itco_gcs_rd;
     watchdog.gcs_wr = itco_gcs_wr;
-    if (itco_attach(&watchdog) != 0 || devfs_node_register(&itco_node) != 0) {
+    itco_options(&heartbeat, &arm);
+    result = itco_attach(&watchdog, heartbeat);
+    if (result < 0 || devfs_node_register(&itco_node) != 0) {
         klog(KLOG_WARN, "watchdog", "refused: the TCO registers or device node");
         return;
     }
+    if (result == 1) {
+        klog(KLOG_INFO, "watchdog", "timeout value out of range, using %d", ITCO_DEFAULT_TIMEOUT);
+    }
     registered = 1;
-    klog(KLOG_INFO, "watchdog", "ready: TCO version 2 at %X, halted, timeout 30 s", tco_base);
+    if (arm && itco_boot_arm(&watchdog) != 0) {
+        klog(KLOG_WARN, "watchdog", "refused: rach2.itco.arm: the timer would not start");
+    }
+    klog(KLOG_INFO, "watchdog", "ready: TCO version 2 at %X, %s, heartbeat %d s, nowayout %d",
+         tco_base,
+         !watchdog.hw_running ? "halted"
+         : watchdog.boot_feed ? "running, fed by the kernel until opened"
+                              : "running, unfed",
+         watchdog.timeout, watchdog.nowayout);
+}
+
+void itco_tick(void)
+{
+    if (registered) {
+        itco_feed_tick(&watchdog);
+    }
 }
 
 void itco_shutdown(void)

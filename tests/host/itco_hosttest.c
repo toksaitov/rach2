@@ -1,4 +1,5 @@
-/* Intel TCO register sequencing, two-stage expiry and watchdog file ABI.
+/* Intel TCO register sequencing, two-stage expiry, watchdog file ABI and
+ * the kernel's feed before a program opens the device.
  * host-deps:
  */
 extern int printf(const char *format, ...);
@@ -122,6 +123,10 @@ static void setup(void)
     watchdog.ctx = &model;
     watchdog.opened = watchdog.magic = watchdog.timeout = 0;
     watchdog.running = watchdog.pinged = 0;
+    watchdog.hw_running = watchdog.nowayout = watchdog.open_limited = 0;
+    watchdog.boot_feed = 1;
+    watchdog.hz = 5;
+    watchdog.feed_left = watchdog.open_left = 0;
     bad_user = NULL;
 }
 
@@ -183,6 +188,34 @@ int32_t devfs_node_register(struct devfs_node *node)
     (void)node;
     return 0;
 }
+/** No command line here: the rows set the options' fields. */
+int kcmdline_value(const char *key, char *out, unsigned int outlen)
+{
+    (void)key;
+    (void)out;
+    (void)outlen;
+    return 0;
+}
+/** No command line here. */
+int kcmdline_has(const char *flag)
+{
+    (void)flag;
+    return 0;
+}
+/** No command line here. */
+int kcmdline_bool(const char *key, int dflt)
+{
+    (void)key;
+    return dflt;
+}
+/** No command line here, so nothing is parsed. */
+int k_strtoll(const char *text, size_t len, long long *out)
+{
+    (void)text;
+    (void)len;
+    *out = 0;
+    return -1;
+}
 /** Diagnostics have no side effect in the model. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
@@ -233,7 +266,7 @@ static void trial(void)
     unsigned i, at;
 
     setup();
-    CHECK(itco_attach(&watchdog) == 0 && (model.gcs & TCO_NO_REBOOT));
+    CHECK(itco_attach(&watchdog, 30) == 0 && (model.gcs & TCO_NO_REBOOT));
     CHECK(itco_open(NULL, NULL, 0) == 0 && !(model.gcs & TCO_NO_REBOOT));
     CHECK(itco_ioctl(NULL, 0xC0045706u, (uintptr_t)&value) == 0 && value == 30);
     CHECK((model.words[TCO_TMR / 2] & TCO_MASK) == 50);
@@ -259,6 +292,117 @@ static void trial(void)
     CHECK(model.writes - at == 12);
 }
 
+/** Run `seconds` of the kernel's tick at 5 a second, the model's 0.6 s
+ * tick every third. */
+static void run(unsigned seconds)
+{
+    unsigned i;
+
+    for (i = 1; i <= seconds * 5u; i++) {
+        itco_feed_tick(&watchdog);
+        if (i % 3u == 0) {
+            advance(&model, 1);
+        }
+    }
+}
+
+/** A timer the kernel starts at boot with a 5 s heartbeat: fed by the
+ * tick every 2.5 s until a program opens the device, and reset two expiries
+ * after the tick stops, as after a panic; not fed with the core's
+ * handle_boot_enabled off. */
+static void boot(void)
+{
+    setup();
+    CHECK(itco_attach(&watchdog, 5) == 0 && watchdog.timeout == 5 && !watchdog.hw_running);
+    CHECK((model.words[TCO_TMR / 2] & TCO_MASK) == 8);
+    CHECK(itco_boot_arm(&watchdog) == 0 && watchdog.hw_running && !watchdog.running);
+    CHECK(!(model.gcs & TCO_NO_REBOOT) && !(model.words[TCO1_CNT / 2] & TCO_HALT));
+    run(60);
+    CHECK(model.resets == 0 && model.stage == 0);
+    /* The tick stops: the last feed was at most 2.5 s, 5 model ticks, ago. */
+    advance(&model, 10);
+    CHECK(model.resets == 0);
+    advance(&model, 6);
+    CHECK(model.resets == 1);
+
+    setup();
+    CHECK(itco_attach(&watchdog, 5) == 0 && itco_boot_arm(&watchdog) == 0);
+    run(30);
+    CHECK(itco_open(NULL, NULL, 0) == 0 && watchdog.running);
+    run(9);
+    CHECK(model.resets == 0);
+    run(2);
+    CHECK(model.resets == 1);
+    CHECK(itco_write(NULL, "V", 1) == 1);
+    itco_close(NULL);
+    CHECK(!watchdog.hw_running && (model.words[TCO1_CNT / 2] & TCO_HALT));
+    run(30);
+    CHECK(model.resets == 1);
+
+    setup();
+    watchdog.boot_feed = 0;
+    CHECK(itco_attach(&watchdog, 5) == 0 && itco_boot_arm(&watchdog) == 0);
+    run(10);
+    CHECK(model.resets == 1);
+}
+
+/** The open deadline, watchdog.open_timeout: fed until a timeout before it,
+ * then reset; an open before it ends it. */
+static void deadline(void)
+{
+    setup();
+    watchdog.open_limited = 1;
+    watchdog.open_left = 20 * 5;
+    CHECK(itco_attach(&watchdog, 5) == 0 && itco_boot_arm(&watchdog) == 0);
+    run(19);
+    CHECK(model.resets == 0);
+    run(20);
+    CHECK(model.resets >= 1);
+
+    setup();
+    watchdog.open_limited = 1;
+    watchdog.open_left = 20 * 5;
+    CHECK(itco_attach(&watchdog, 5) == 0 && itco_boot_arm(&watchdog) == 0);
+    run(10);
+    CHECK(itco_open(NULL, NULL, 0) == 0 && !watchdog.open_limited);
+    CHECK(itco_write(NULL, "V", 1) == 1);
+    itco_close(NULL);
+    run(60);
+    CHECK(model.resets == 0);
+}
+
+/** nowayout refuses a magic close and DISABLECARD with -EBUSY and leaves
+ * the timer running, fed once at the close, as watchdog_stop and
+ * watchdog_release do; a heartbeat out of range takes 30 s; a timer that
+ * firmware left counting toward a reset is kept running and fed. */
+static void options(void)
+{
+    int value = 1;
+
+    setup();
+    watchdog.nowayout = 1;
+    CHECK(itco_attach(&watchdog, 30) == 0 && itco_open(NULL, NULL, 0) == 0);
+    CHECK(itco_ioctl(NULL, 0x80045704u, (uintptr_t)&value) == -EBUSY && watchdog.running);
+    CHECK(itco_write(NULL, "V", 1) == 1);
+    advance(&model, 10);
+    itco_close(NULL);
+    CHECK(watchdog.running && watchdog.hw_running && model.left == 50);
+    CHECK(!(model.words[TCO1_CNT / 2] & TCO_HALT));
+
+    setup();
+    CHECK(itco_attach(&watchdog, 700) == 1 && watchdog.timeout == 30);
+    CHECK(itco_attach(&watchdog, 2) == 1 && watchdog.timeout == 30);
+
+    setup();
+    model.words[TCO1_CNT / 2] = 0x100;
+    model.gcs = 0x12340000;
+    model.left = 3;
+    CHECK(itco_attach(&watchdog, 5) == 0 && watchdog.hw_running);
+    CHECK(!(model.words[TCO1_CNT / 2] & TCO_HALT) && !(model.gcs & TCO_NO_REBOOT));
+    run(60);
+    CHECK(model.resets == 0);
+}
+
 /** Check actual writes, expiry, failures, exclusive open and the ioctl ABI. */
 int main(void)
 {
@@ -270,7 +414,7 @@ int main(void)
     } info;
 
     setup();
-    CHECK(itco_attach(&watchdog) == 0);
+    CHECK(itco_attach(&watchdog, 30) == 0);
     CHECK(model.words[TCO1_STS / 2] == 0x100);
     CHECK(model.words[TCO2_STS / 2] == 0x100);
     CHECK(model.words[TCO_TMR / 2] == (0xAC00 | 50));
@@ -331,21 +475,24 @@ int main(void)
     CHECK(itco_write(NULL, bad_user, 3) == -EFAULT);
     halted();
     trial();
+    boot();
+    deadline();
+    options();
     setup();
     model.absent = 1;
-    CHECK(itco_attach(&watchdog) == -EIO && model.writes == 0);
+    CHECK(itco_attach(&watchdog, 30) == -EIO && model.writes == 0);
     setup();
     model.locked = 1;
-    CHECK(itco_attach(&watchdog) == 0);
+    CHECK(itco_attach(&watchdog, 30) == 0);
     CHECK(itco_open(NULL, NULL, 0) == -EIO && !watchdog.opened);
     CHECK(model.words[TCO1_CNT / 2] & TCO_HALT);
     setup();
     model.stuck_timer = 1;
-    CHECK(itco_attach(&watchdog) == -EIO);
+    CHECK(itco_attach(&watchdog, 30) == -EIO);
     setup();
     model.stuck_halt = 1;
     model.words[TCO1_CNT / 2] &= (uint16_t)~TCO_HALT;
-    CHECK(itco_attach(&watchdog) == -EIO);
+    CHECK(itco_attach(&watchdog, 30) == -EIO);
     printf("itco_hosttest: %s\n", failures ? "failed" : "ok");
     return failures != 0;
 }
