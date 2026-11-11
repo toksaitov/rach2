@@ -69,6 +69,16 @@ void paging_user_count(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned
     *present = *dirty = *anon = 0;
 }
 
+/** The frames of the page tables, which this model has none of. */
+void paging_user_frames(page_dir_t *dir, uintptr_t start, uintptr_t end,
+                        struct paging_frame_counts *counts)
+{
+    (void)dir;
+    (void)start;
+    (void)end;
+    k_memset(counts, 0, sizeof(*counts));
+}
+
 /** The kernel's allocator, from the C library, zeroed. */
 void *kmalloc(size_t size)
 {

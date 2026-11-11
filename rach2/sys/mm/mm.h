@@ -203,6 +203,19 @@ void mm_unhold(struct mm *mm);
 
 struct process;
 
+/**
+ * Set `anon` (vm.h) on each region of anonymous memory that meets [start,
+ * end) and has a page written anywhere in it, before a call splits or
+ * merges a region, drops pages of the range or takes write from it. Linux
+ * gives a region its anon_vma at its first private page and keeps it after
+ * the page goes, and a split gives both parts the one it has; the store
+ * that writes a page here sets its entry's dirty bit with no fault, so the
+ * mark is taken while the pages that show it are still mapped and before a
+ * split copies it. A page a read brought in zeroed and nothing stored into
+ * does not count, as Linux maps its zero page there.
+ */
+void mm_note_anon(struct mm *mm, uintptr_t start, uintptr_t end);
+
 /** Take `p`'s address space from it and drop its user's count, loading the
  * kernel's directory first when this is the last user and its directory is
  * the one in use. `p` is left with none, as a kernel thread has none, and

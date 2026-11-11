@@ -623,12 +623,17 @@ int vm_remove(vm_space_t *vm, uintptr_t start, uintptr_t end)
  * charges one, and dropped by a change that leaves write off from anonymous
  * memory none of whose pages was written, as mprotect_fixup drops it from an
  * anonymous region with no anon_vma; and with VM_CHANGE_XO_KEY a key left at
- * the execute-only key dropped to 0.
+ * the execute-only key dropped to 0. A change that leaves the protection as
+ * it was changes nothing, as mprotect_fixup returns first when the flags are
+ * the same.
  */
 static uint32_t vm_change_prot(const vma_t *r, uint32_t mask, uint32_t bits, uint32_t opts)
 {
     uint32_t prot = (r->prot & ~mask) | bits;
 
+    if (prot == r->prot) {
+        return prot;
+    }
     if ((opts & VM_CHANGE_ACCOUNT) && r->type != VM_SHARED &&
         !(r->prot & (VM_PROT_WRITE | VM_PROT_NORESERVE))) {
         prot |= VM_PROT_ACCOUNT;
