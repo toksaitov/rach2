@@ -1238,8 +1238,10 @@ static void tcp_recv_span(int cs, int as)
     char *none = bad_page();
     int mode, n;
 
-    if (!buf || !none)
+    if (!buf || !none) {
         fail("no pages for the tcp recv span rows");
+        return;
+    }
     for (mode = 0; mode < 2; mode++) {
         buf[0] = 0;
         if (sys_write(as, "span", 4) != 4)
