@@ -409,6 +409,13 @@ int vm_resident(uintptr_t addr, uintptr_t len, int write)
     return 1;
 }
 
+/** `vm_ready_held`, which the futex word accesses of usercopy.c ask: the
+ * model's `vm_resident`, with no sleep either way. */
+int vm_ready_held(uintptr_t addr, uintptr_t len, int write)
+{
+    return vm_resident(addr, len, write);
+}
+
 /** Whether a pin may take the page of `addr`: always, since the model has
  * no region that Linux's get_user_pages refuses. */
 int paging_pin_allows(struct mm *mm, uintptr_t addr, int write)
