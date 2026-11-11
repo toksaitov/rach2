@@ -20,8 +20,10 @@
 
 #if RACH2_IA32
 
-/* The router of a system call's frame and the return after it (isr.c). */
+/* The router of a system call's frame, the note of its ioctl request for
+ * bkl/calls and the return after it (isr.c). */
 void isr_router_locked(isr_params_t *params);
+int isr_call_ioctl(const isr_params_t *params);
 void isr_leave(isr_params_t *params);
 
 /* The flags only `iretq` restores: TF, and RF, which `sysret` clears. */
@@ -508,6 +510,9 @@ uintptr_t ia32_vdso_sigreturn(int rt)
  * among them, has it as at address 0, in the first page, where the program
  * takes SIGSEGV.
  *
+ * The call and its ioctl request count in debugfs's bkl/calls as
+ * `_isr_router` counts an `int $0x80`'s.
+ *
  * After the call, and the signal its return delivers (`isr_leave`), the
  * return may be by `sysretl`, as Linux's opportunistic SYSRETL: when the
  * frame still returns to the landing pad, below 4 GiB, in the user's
@@ -518,7 +523,9 @@ int ia32_fast_syscall(isr_params_t *p, int sysenter)
 {
     struct mm *mm;
     uintptr_t base, landing;
-    uint32_t ebp;
+    uint64_t start = arch_cycles();
+    uint32_t ebp, nr = (uint32_t)p->rax;
+    int ioctl = 0;
 
     bkl_enter();
     mm = current_proc ? current_proc->mm : NULL;
@@ -533,8 +540,10 @@ int ia32_fast_syscall(isr_params_t *p, int sysenter)
         p->rax = (uint64_t)(int64_t)-EFAULT;
     } else {
         p->rbp = ebp;
+        ioctl = isr_call_ioctl(p);
         isr_router_locked(p);
     }
+    smp_call_end(nr, ioctl, start);
     isr_leave(p);
     return p->rip == landing && landing <= 0xFFFFFFFFu && p->cs == GDT_USER_CODE32 &&
            p->ss == GDT_USER_DATA && (p->rflags & (RFLAGS_TF | RFLAGS_RF)) == 0;
