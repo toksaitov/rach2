@@ -348,11 +348,12 @@ for d in /sys/bus/pci/devices/*; do
         sleep 1
         i=$((i + 1))
     done
-    if ls "$d"/drm/renderD* > /dev/null 2>&1; then
-        export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/intel_hasvk_icd.x86_64.json:/usr/share/vulkan/icd.d/intel_icd.x86_64.json
-        echo "bed-vm: gpu: ${d##*/} on $(readlink "$d/driver" | sed 's|.*/||'), Venus on Intel's Vulkan drivers" > /dev/ttyS0
+    icds=$(ls /usr/share/vulkan/icd.d/intel_*icd*.json 2>/dev/null | tr '\n' : | sed 's/:$//')
+    if ls "$d"/drm/renderD* > /dev/null 2>&1 && [ -n "$icds" ]; then
+        export VK_DRIVER_FILES="$icds"
+        echo "bed-vm: gpu: ${d##*/} on $(readlink "$d/driver" | sed 's|.*/||'), Venus on $icds" > /dev/ttyS0
     else
-        echo "bed-vm: gpu: ${d##*/} has no render node after 60 s; Venus on lavapipe" > /dev/ttyS0
+        echo "bed-vm: gpu: ${d##*/}: no render node after 60 s or no Intel driver; Venus on lavapipe" > /dev/ttyS0
     fi
     break
 done
