@@ -72,8 +72,9 @@ void watchdog_sched(void);
  * Take an NMI meant for the watchdog: a backtrace request, the counter's
  * overflow, which runs the hard-lockup check, or the stop of a panic that
  * the interprocessor interrupt did not reach (`smp_stop_others`), which
- * `smp_stop_nmi` takes and does not return from. 1 when the NMI was the watchdog's, 0 for one of another
- * source, which the caller reports as a fault of the machine.
+ * `smp_stop_nmi` takes and does not return from. 1 when the NMI was the
+ * watchdog's, 0 for one of another source, which the caller reports as a
+ * fault of the machine.
  */
 int watchdog_nmi(isr_params_t *params);
 

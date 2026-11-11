@@ -323,10 +323,10 @@ static void _exception_handler(isr_params_t *params)
  * request or its counter's overflow, is the watchdog's (`watchdog_nmi`), and
  * returns; so is the NMI of another processor's stop, which this processor
  * takes there, leaving VMX or SVM operation and halting (`smp_stop_nmi`), as
- * Linux's `smp_stop_nmi_callback` does. The paranoid router holds no lock, so no
- * signal may be posted here, and the panic begins before the record is
- * written, so that the console's lock, which the interrupted code may hold,
- * is not taken (`k_panic_begin`).
+ * Linux's `smp_stop_nmi_callback` does. The paranoid router holds no lock,
+ * so no signal may be posted here, and the panic begins before the record
+ * is written, so that the console's lock, which the interrupted code may
+ * hold, is not taken (`k_panic_begin`).
  */
 static void _hardware_fault_handler(isr_params_t *params)
 {
