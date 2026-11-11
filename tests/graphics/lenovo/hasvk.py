@@ -65,6 +65,53 @@ def end_desktop():
             pass
 
 
+def machine():
+    """Return the HD 4400's DRM card and hasvk's one x86-64 ICD, refusing any override."""
+    cards = [p for p in Path("/sys/class/drm").glob("card[0-9]*") if re.fullmatch(r"card\d+", p.name)]
+    intel = [p for p in cards if (p / "device/vendor").exists() and
+             (p / "device/vendor").read_text().strip() == "0x8086" and
+             (p / "device/device").read_text().strip() == "0x0a16"]
+    assert len(intel) == 1, "need the Lenovo's HD 4400"
+    assert (intel[0] / "device/driver").resolve().name == "i915", "i915 is not bound"
+    icds = list(Path("/usr/share/vulkan/icd.d").glob("intel_hasvk_icd*.json"))
+    icds = [p for p in icds if p.name in ("intel_hasvk_icd.json", "intel_hasvk_icd.x86_64.json")]
+    assert len(icds) == 1, "need exactly one x86-64 hasvk ICD"
+    for key in ("MESA_VK_VERSION_OVERRIDE", "MESA_LOADER_DRIVER_OVERRIDE", "LIBGL_ALWAYS_SOFTWARE",
+                "INTEL_DEBUG", "INTEL_DEVID_OVERRIDE", "MESA_DRICONF_EXECUTABLE_OVERRIDE", "MESA_DRICONF"):
+        assert key not in os.environ, "unset " + key
+    return intel[0], icds[0]
+
+
+def private_weston(user, out, env):
+    """Start USER's DRM Weston on ENV's runtime directory and socket; return it once it names Crocus.
+
+    The caller has ended the boot session's compositor and stops this one.
+    """
+    runtime = Path(env["XDG_RUNTIME_DIR"])
+    # Weston keeps its own shader cache, which the clients' clearing would
+    # otherwise race with as Weston writes it.
+    cache = Path(env["MESA_SHADER_CACHE_DIR"])
+    weston_env = dict(env, MESA_SHADER_CACHE_DIR=str(cache.parent / "weston-cache"))
+    command = user_command(user, ["env", "LIBSEAT_BACKEND=seatd", "weston", "--no-config",
+        "--debug", "--backend=drm", "--renderer=gl", "--shell=kiosk", "--xwayland",
+        "--idle-time=0", "--socket=" + env["WAYLAND_DISPLAY"], "--log=" + str(out / "weston.log")])
+    with (out / "weston.out").open("w") as log:
+        weston = subprocess.Popen(command, env=weston_env, stdout=log, stderr=log, start_new_session=True)
+    try:
+        for _ in range(600):
+            assert weston.poll() is None, "Weston ended; read weston.log"
+            if (runtime / env["WAYLAND_DISPLAY"]).is_socket():
+                break
+            time.sleep(0.1)
+        else:
+            raise RuntimeError("Weston made no socket")
+        assert "HD Graphics 4400" in (out / "weston.log").read_text(), "Weston did not name Crocus"
+    except BaseException:
+        stop(weston)
+        raise
+    return weston
+
+
 def judge(out):
     """Require Intel readbacks, a panel picture and Debian's sandbox policy; record rates."""
     reference = GRAPHICS / "ref/lenovo/hasvk"
@@ -112,18 +159,7 @@ def main():
     assert account.pw_uid != 0, "the programs need an ordinary user"
     out = Path(name).resolve()
     assert not out.exists(), "use a fresh output directory"
-    cards = [p for p in Path("/sys/class/drm").glob("card[0-9]*") if re.fullmatch(r"card\d+", p.name)]
-    intel = [p for p in cards if (p / "device/vendor").exists() and
-             (p / "device/vendor").read_text().strip() == "0x8086" and
-             (p / "device/device").read_text().strip() == "0x0a16"]
-    assert len(intel) == 1, "need the Lenovo's HD 4400"
-    assert (intel[0] / "device/driver").resolve().name == "i915", "i915 is not bound"
-    icds = list(Path("/usr/share/vulkan/icd.d").glob("intel_hasvk_icd*.json"))
-    icds = [p for p in icds if p.name in ("intel_hasvk_icd.json", "intel_hasvk_icd.x86_64.json")]
-    assert len(icds) == 1, "need exactly one x86-64 hasvk ICD"
-    for key in ("MESA_VK_VERSION_OVERRIDE", "MESA_LOADER_DRIVER_OVERRIDE", "LIBGL_ALWAYS_SOFTWARE",
-                "INTEL_DEBUG", "INTEL_DEVID_OVERRIDE", "MESA_DRICONF_EXECUTABLE_OVERRIDE", "MESA_DRICONF"):
-        assert key not in os.environ, "unset " + key
+    card, icd = machine()
     work = weston = None
     for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
         signal.signal(sig, lambda *_: sys.exit(1))
@@ -136,32 +172,15 @@ def main():
         runtime.mkdir(mode=0o700)
         os.chown(runtime, account.pw_uid, account.pw_gid)
         env = dict(os.environ, XDG_RUNTIME_DIR=str(runtime), WAYLAND_DISPLAY="wayland-hasvk",
-                   VK_DRIVER_FILES=str(icds[0]), MESA_SHADER_CACHE_DIR=str(work / "cache"),
+                   VK_DRIVER_FILES=str(icd), MESA_SHADER_CACHE_DIR=str(work / "cache"),
                    GRAPHICS_CLASS="performance", GRAPHICS_DONE="1", PYTHONDONTWRITEBYTECODE="1")
-        save(out / "machine.json", {"card": str(intel[0]), "icd": str(icds[0]),
+        save(out / "machine.json", {"card": str(card), "icd": str(icd),
              "cmdline": Path("/proc/cmdline").read_text(), "user": user,
              "kernel": os.uname().release})
         if shutil.which("mixer") and Path("/dev/mixer").exists():
             subprocess.run(["mixer", "vol", "1"], check=True)
         end_desktop()
-        command = user_command(user, ["env", "LIBSEAT_BACKEND=seatd", "weston", "--no-config",
-            "--debug", "--backend=drm", "--renderer=gl", "--shell=kiosk", "--xwayland",
-            "--idle-time=0", "--socket=wayland-hasvk", "--log=" + str(out / "weston.log")])
-        # Weston keeps its own shader cache, which the clients' clearing
-        # below would otherwise race with as Weston writes it.
-        weston_env = dict(env, MESA_SHADER_CACHE_DIR=str(work / "weston-cache"))
-        with (out / "weston.out").open("w") as log:
-            weston = subprocess.Popen(command, env=weston_env, stdout=log, stderr=log,
-                                      start_new_session=True)
-        for _ in range(600):
-            assert weston.poll() is None, "Weston ended; read weston.log"
-            if (runtime / "wayland-hasvk").is_socket():
-                break
-            time.sleep(0.1)
-        else:
-            raise RuntimeError("Weston made no socket")
-        log = (out / "weston.log").read_text()
-        assert "HD Graphics 4400" in log, "Weston did not name Crocus"
+        weston = private_weston(user, out, env)
         # The first pair starts from the empty shader cache guest-env.sh makes.
         setup = ". " + shlex.quote(str(GRAPHICS / "guest-env.sh"))
         run(user_command(user, ["sh", "-c", setup + " && graphics_env"]), out / "environment.log", env)
@@ -180,7 +199,7 @@ def main():
             timings.append({"frames": count, "seconds": seconds})
             save(out / "cube-timing.json", timings)
         env["GRAPHICS_DONE"] = "1"
-        capture = shlex.join(["sh", str(GRAPHICS / "runners/vkcube.sh"), "-d", "-i", str(icds[0]), "-o", str(out / "cube")])
+        capture = shlex.join(["sh", str(GRAPHICS / "runners/vkcube.sh"), "-d", "-i", str(icd), "-o", str(out / "cube")])
         run(user_command(user, ["sh", "-c", setup + " && " + capture]), out / "cube-capture.log", env)
         frames = (out / "cube/frames").read_text().splitlines()
         assert len(frames) == 2 and frames[0].split()[-1] != frames[1].split()[-1], "cube frames did not change"
