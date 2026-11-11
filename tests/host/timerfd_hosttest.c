@@ -60,7 +60,8 @@
  * expires it at the next tick, and a step back keeps it waiting until the
  * clock reaches the time again, while a relative timer of CLOCK_REALTIME
  * does not move. A timerfd set with TFD_TIMER_CANCEL_ON_SET becomes readable
- * at a step, and its read fails with ECANCELED and finds nothing after. A
+ * at a step, and its read fails with ECANCELED and finds nothing after; a
+ * setting that leaves real time's offset where it was cancels nothing. A
  * periodic one whose expiration nothing touched stays disarmed after that
  * read and reports its interval; one that timerfd_gettime touched runs on.
  * A canceled timerfd set to disarmed is not readable: a blocking read waits,
@@ -336,12 +337,18 @@ void timer_wake_hold(void)
 void timer_wake_release(void)
 {}
 
-/** Real time less the monotonic clock: the model's step of the real-time
- * clock. */
+/** Real time less the monotonic clock in the model: what the settings of the
+ * clock added (`real_step_ns`), with nanoseconds from 0 to 10^9 - 1. */
 void rtc_offset(int64_t *seconds, int32_t *nanoseconds)
 {
+    int64_t ns = real_step_ns % NS_PER_SEC;
+
     *seconds = real_step_ns / NS_PER_SEC;
-    *nanoseconds = (int32_t)(real_step_ns % NS_PER_SEC);
+    if (ns < 0) {
+        ns += NS_PER_SEC;
+        (*seconds)--;
+    }
+    *nanoseconds = (int32_t)ns;
 }
 
 /** The model's monotonic clock, CLOCK_MONOTONIC's as `clock_now` reads it,
@@ -574,6 +581,34 @@ static void cancel_read_rows(void)
     CHECK(!polls_readable() && timerfd_read(&entry, (char *)user, 8) == -EAGAIN,
           "the next finds nothing");
     CHECK(timer.armed, "a timer that has not expired runs on");
+}
+
+/** A timerfd canceled by a setting of the clock is not canceled by a setting
+ * that leaves real time's offset where it was, a refused one or an
+ * ADJ_SETOFFSET of zero, after which clock.c still calls
+ * timerfd_clock_was_set, as Linux's compares its moffs with the clock's
+ * offset (fs/timerfd.c:97-116); nor, once a read has reported a cancel, by
+ * one that leaves the offset the step made, which the read recorded
+ * (fs/timerfd.c:151-157). */
+static void cancel_refused_rows(void)
+{
+    struct setting at10 = {0, 0, 10, 0};
+
+    cancel_arm(&at10, 1);
+    wakes = 0;
+    step_clock(0);
+    CHECK(!timer.canceled && !polls_readable() && wakes == 0,
+          "a setting that leaves the offset cancels nothing");
+    CHECK(timerfd_read(&entry, (char *)user, 8) == -EAGAIN, "and its read finds nothing");
+    step_clock(-(int64_t)NS_PER_SEC / 2);
+    CHECK(timerfd_read(&entry, (char *)user, 8) == -ECANCELED, "a step back cancels it");
+    step_clock(0);
+    CHECK(!polls_readable() && timerfd_read(&entry, (char *)user, 8) == -EAGAIN,
+          "a refused setting after the read cancels nothing");
+    step_clock(-(int64_t)NS_PER_SEC / 2);
+    step_clock((int64_t)NS_PER_SEC / 2);
+    CHECK(timerfd_read(&entry, (char *)user, 8) == -ECANCELED,
+          "a step there and back cancels it, as the first step did");
 }
 
 /** A timerfd canceled by a setting of the clock, every tick from 1.001 s,
@@ -1780,6 +1815,7 @@ int main(void)
     long_rows();
     step_rows();
     cancel_read_rows();
+    cancel_refused_rows();
     cancel_periodic_rows();
     cancel_setting_rows();
     reading_rows();

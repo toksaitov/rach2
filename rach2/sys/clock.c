@@ -694,28 +694,33 @@ void rtc_coarse_realtime(int64_t *seconds, int64_t *nanoseconds)
  * floor that time, unless `valid` is clear or the time is before the
  * monotonic clock, which Linux refuses (kernel/time/timekeeping.c:1361-
  * 1364, 1410-1414); and either way the NTP state forgets its offsets, which
- * the next tick takes, the vDSO's clock takes the offset, and the step
- * count moves on, as Linux updates the clock with TK_CLEAR_NTP and calls
- * clock_was_set on both paths (kernel/time/timekeeping.c:1369-1376,
- * 1419-1426). 0, or -1 for a time refused.
+ * the next tick takes, and the vDSO's clock takes the offset, as Linux
+ * updates the clock with TK_CLEAR_NTP on both paths (kernel/time/
+ * timekeeping.c:1369-1376, 1419-1426). The step count moves on only when
+ * the offset changed, so that a refused time, or a step of nothing, counts
+ * the sleeps of real time again for no step. 0, or -1 for a time refused.
  */
 static int rtc_step_locked(int64_t msec, int64_t mnsec, int64_t seconds, int32_t nanoseconds,
                            int valid)
 {
+    int64_t wall_sec;
     int32_t ns, wall_nsec;
     int rc = -1;
 
     rtc_normalize(msec, mnsec, &msec, &ns);
     if (valid && (seconds > msec || (seconds == msec && nanoseconds >= ns))) {
-        rtc_normalize(seconds - msec, (int64_t)nanoseconds - ns, &rtc_wall_sec, &wall_nsec);
-        rtc_wall_nsec = wall_nsec;
+        rtc_normalize(seconds - msec, (int64_t)nanoseconds - ns, &wall_sec, &wall_nsec);
+        if (wall_sec != rtc_wall_sec || wall_nsec != rtc_wall_nsec) {
+            rtc_wall_sec = wall_sec;
+            rtc_wall_nsec = wall_nsec;
+            rtc_count_step();
+        }
         rtc_last_seconds = seconds;
         rtc_last_nanoseconds = nanoseconds;
         rc = 0;
     }
     ntp_clear();
     vclock_set_wall(rtc_wall_sec, rtc_wall_nsec);
-    rtc_count_step();
     return rc;
 }
 

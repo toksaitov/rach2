@@ -110,6 +110,7 @@ slew in progress, keeps the frequency and sets
 it counts the timers and sleeps of real time again and cancels a timerfd
 set with
 .Dv TFD_TIMER_CANCEL_ON_SET .
+A step refused, or of zero, does neither, as in Linux.
 A slew cancels nothing and counts nothing again, since it moves real time
 and the timers' monotonic clock together.
 .Pp
