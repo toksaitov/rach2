@@ -1374,19 +1374,16 @@ static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_times
         if (kind == KCLOCK_REAL) {
             rtc_mono_of_real(when->tv_sec, (int32_t)when->tv_nsec, &sec, &nsec);
         }
-        if (sec < 0) {
-            return 0;
-        }
-        due = tick_span(sec, (uint32_t)nsec);
+        due = sec < 0 ? 0 : tick_span(sec, (uint32_t)nsec);
         if (due <= now) {
-            return 0;
+            due = now + 1u;
         }
         current_proc->rt_steps = kind == KCLOCK_REAL ? steps : 0;
         current_proc->wakeup_ns = sleep_ns(sec, nsec);
         rc = sleep_until(base + (due - now), 0, wchan);
         current_proc->wakeup_ns = 0;
         current_proc->rt_steps = 0;
-    } while (rc == 1 || (rc == 0 && kind == KCLOCK_REAL));
+    } while (rc == 0 || rc == 1);
     return rc;
 }
 
