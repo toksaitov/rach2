@@ -2590,17 +2590,19 @@ static void feature_msr_rows(void)
 
 /** SVM's IA32_DEBUGCTL and last-branch MSRs, as the caller reaches them:
  * Linux's SVM without lbrv reads each as 0, takes and ignores any write
- * of DEBUGCTL, and takes only the caller's 0 of the others
- * (arch/x86/kvm/svm/svm.c:2966-2980, 3223-3227 and 3259-3290; x86.c:
- * 508-518). The vCPU is VMX's fake one, read with the backend SVM's and
- * the PMU started again for it. */
+ * of DEBUGCTL, and takes only the caller's 0 of the others, whose guest
+ * writes are unsupported (arch/x86/kvm/svm/svm.c:2966-2980, 3223-3227 and
+ * 3259-3290; x86.c:508-518 and 1590). The vCPU is VMX's fake one, read
+ * with the backend SVM's and the PMU started again for it. */
 static void svm_debugctl_rows(void)
 {
-    int vm, fd;
+    struct kvm_vcpu *v;
+    int vm, fd, r;
     uint64_t value = 1;
 
     vm = dev(KVM_CREATE_VM, 0);
     fd = fdio(vm, KVM_CREATE_VCPU, 0);
+    v = (struct kvm_vcpu *)entries[fd].priv;
     kvm_backend = &kvm_svm;
     kvm_pmu_start();
     CHECK(get_msr(fd, 0x1D9, &value) == 1 && value == 0, "SVM's DEBUGCTL reads 0");
@@ -2614,6 +2616,11 @@ static void svm_debugctl_rows(void)
           "LASTBRANCHFROMIP and LASTINTTOIP read 0");
     CHECK(set_msr(fd, 0x1DC, 0) == 1 && set_msr(fd, 0x1DD, 0x1000) == 0,
           "and take the caller's 0 alone");
+    v->vm->user_space_msr = KVM_MSR_EXIT_REASON_UNKNOWN;
+    r = kvm_msr_set(v, 0x1DB, 0, 0);
+    CHECK(r == KVM_MSR_UNKNOWN && kvm_msr_user_reason(v, r) == KVM_MSR_EXIT_REASON_UNKNOWN,
+          "the guest's write of one, 0 too, is unsupported: an UNKNOWN exit, as x86.c:1590");
+    v->vm->user_space_msr = 0;
     kvm_backend = &kvm_vmx;
     kvm_pmu_start();
     fdclose(fd);

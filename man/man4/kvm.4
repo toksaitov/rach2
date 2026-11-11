@@ -956,7 +956,9 @@ has them and the guest's CPUID offers them, and
 lists it on both vendors.
 On AMD, IA32_DEBUGCTL reads 0 and takes and ignores any write, and
 LASTBRANCHFROMIP, LASTBRANCHTOIP, LASTINTFROMIP and LASTINTTOIP are
-listed too, read 0 and take only the caller's write of 0.
+listed too, read 0 and take only the caller's write of 0; any other
+write is an MSR KVM does not have, which a guest's write reports as
+.Dv KVM_MSR_EXIT_REASON_UNKNOWN .
 PEBS is not advertised.
 .Pp
 .Dv KVM_CAP_PMU_EVENT_FILTER
