@@ -93,6 +93,10 @@ struct bkl_profile_slot {
 };
 static struct bkl_profile_slot bkl_profile[BKL_PROFILE_SLOTS];
 static uint32_t bkl_profile_samples, bkl_profile_lost;
+/* Set while `smp_profile_show` writes the profile, under the lock, so that
+ * its processor's tick, the only one that can sample then, leaves the table
+ * and totals as they are. */
+static volatile int bkl_profile_showing;
 
 /* The probes an open-addressed table makes before it gives up. */
 #define BKL_PROBES 32
@@ -430,7 +434,7 @@ void bkl_profile_sample(uintptr_t pc, uintptr_t fp)
     uint32_t entry, cmd;
     int i, f;
 
-    if (cpu->bkl_depth < 2) {
+    if (cpu->bkl_depth < 2 || bkl_profile_showing) {
         return;
     }
     sample_chain(chain, pc, fp, cpu->current ? cpu->current->kernel_stack : 0);
@@ -624,6 +628,7 @@ int32_t smp_profile_show(void *data, char *buf, uint32_t cap)
     t.buf = buf;
     t.cap = cap;
     t.len = 0;
+    bkl_profile_showing = 1;
     text_str(&t, "samples ");
     text_dec(&t, bkl_profile_samples);
     text_str(&t, "\nlost ");
@@ -641,6 +646,7 @@ int32_t smp_profile_show(void *data, char *buf, uint32_t cap)
             text_ch(&t, '\n');
         }
     }
+    bkl_profile_showing = 0;
     return (int32_t)t.len;
 }
 
