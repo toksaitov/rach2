@@ -88,9 +88,12 @@
  * /dev/mem reads the first megabyte and maps the local APIC, and fails with
  * EPERM for RAM and with EINVAL for a private mapping. klogctl gives the log
  * ring's size, its records whole, and after a clear none of those before;
- * /dev/log leads to /var/run/log. The clock's wake alarm comes at once for a
- * time past and fails with EINVAL for one two days ahead, ends a read at the
- * alarm, and wakes a suspend to idle that gives no process time meanwhile.
+ * /dev/log leads to /var/run/log. The clock's wake alarm, set for a time past
+ * or enabled by RTC_AIE_ON with its time past, comes, which a read waits for,
+ * and is then off with its time kept; one two days ahead fails with EINVAL,
+ * and one an hour ahead reads back with its time, which an invalid date and
+ * time leaves set. The alarm ends a read at its time and wakes a suspend to
+ * idle that gives no process time meanwhile.
  *
  * It prints "CALLSMUSL OK" and exits 0 on success, or prints "CALLSMUSL FAIL
  * (detail: errno N)" and exits 1 at the first failure.
@@ -2573,7 +2576,7 @@ static int past_alarms(int fd)
     if (wake_in(fd, -10, &w) != 0 || read(fd, &data, sizeof data) != (ssize_t)sizeof data ||
         !(data & 0x20) || ioctl(fd, RTC_WKALM_RD, &back) != 0 || back.enabled ||
         !same_alarm_time(&back, &w)) {
-        return fail("a wake alarm in the past did not come at once and keep its date and time");
+        return fail("a wake alarm in the past did not come and keep its date and time");
     }
     if (wake_in(fd, 2 * 86400, &w) != -1 || errno != EINVAL) {
         return fail("a wake alarm two days ahead was taken");
