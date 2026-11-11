@@ -4250,10 +4250,7 @@ static int pio_complete(struct kvm_vcpu *v)
     return X_OK;
 }
 
-/** A port instruction ended outside the backend's `exit`, which reads
- * `step_trap`: under the caller's single step the next step reports it,
- * as Linux's kvm_skip_emulated_instruction does from a completion. */
-static void pio_stepped(struct kvm_vcpu *v)
+void kvm_emul_stepped(struct kvm_vcpu *v)
 {
     struct kvm_emul *em = &v->emul;
 
@@ -4280,7 +4277,7 @@ int kvm_emul_complete(struct kvm_vcpu *v)
             return 0;
         }
         if (r == X_OK) {
-            pio_stepped(v);
+            kvm_emul_stepped(v);
         }
         em->step_trap = 0;
         return 0;
@@ -4291,7 +4288,7 @@ int kvm_emul_complete(struct kvm_vcpu *v)
         emul_end(v);
         if (linear(v, KVM_SEG_CS, v->regs.rip) == em->out_rip) {
             kvm_emul_skip(v, em->pio.len);
-            pio_stepped(v);
+            kvm_emul_stepped(v);
         }
         return 0;
     }
