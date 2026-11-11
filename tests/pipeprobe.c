@@ -50,7 +50,9 @@
  *       in order;
  *   (k) the limits of a caller without privilege, as on Linux: a write to
  *       /proc/sys/fs/pipe-max-size is rounded up to a power of two of a page
- *       or more and past 2^31 refused; a child that set its user to 65534
+ *       or more and past 2^31 refused, a write of +64 to
+ *       pipe-user-pages-soft or -hard is refused, as Linux's proc_get_long
+ *       refuses a plus sign; a child that set its user to 65534
  *       may not grow a pipe past pipe-max-size, may grow one to 1 MiB, and,
  *       with pipe-user-pages-soft set to 64, grows its own pipes to 64
  *       pages whatever root's hold, is refused a growth past them, gets a
@@ -255,6 +257,7 @@ enum {
     PAGES_VMSPLICE,
     MAX_ROUND,
     MAX_EINVAL,
+    SYSCTL_PLUS,
     LIMIT_FORK,
     LIMIT_PAST_MAX,
     LIMIT_TO_MAX,
@@ -331,6 +334,7 @@ static const struct {
      "two bytes vmspliced across a page boundary hold two pages: a shrink to 4096 -> -EBUSY"},
     {"max-round", "pipe-max-size takes 600000 as 1048576, 1 as 4096 and 2^31 as written"},
     {"max-einval", "pipe-max-size refuses 2^31 + 1 with EINVAL"},
+    {"sysctl-plus", "pipe-user-pages-soft and -hard refuse +64 with EINVAL and keep their values"},
     {"limit-fork", "fork for the limits' child"},
     {"limit-past-max", "an unprivileged F_SETPIPE_SZ of 2 MiB -> -EPERM"},
     {"limit-to-max", "an unprivileged F_SETPIPE_SZ of 600000 gives 1 MiB"},
@@ -956,6 +960,7 @@ static void case_pages(void)
 
 #define PIPE_MAX_FILE  "/proc/sys/fs/pipe-max-size"
 #define PIPE_SOFT_FILE "/proc/sys/fs/pipe-user-pages-soft"
+#define PIPE_HARD_FILE "/proc/sys/fs/pipe-user-pages-hard"
 
 /* Why case (k) wrote no /proc/sys file, or NULL when it did. */
 static const char *limits_skipped;
@@ -1085,6 +1090,10 @@ static void case_limits(void)
                   sysctl_is(PIPE_MAX_FILE, "2147483648\n"));
         check(MAX_EINVAL, sysctl_put(PIPE_MAX_FILE, "2147483649\n") == -EINVAL);
         sysctl_put(PIPE_MAX_FILE, "1048576\n");
+        check(SYSCTL_PLUS, sysctl_put(PIPE_SOFT_FILE, "+64\n") == -EINVAL &&
+                               sysctl_is(PIPE_SOFT_FILE, "16384\n") &&
+                               sysctl_put(PIPE_HARD_FILE, "+64\n") == -EINVAL &&
+                               sysctl_is(PIPE_HARD_FILE, "0\n"));
     }
     bits = limits_fork(root, 0);
     check(LIMIT_PAST_MAX, (bits & (LIMIT_BAD_USER | LIMIT_BAD_PAST)) == 0);
@@ -1118,7 +1127,8 @@ static void report_checks(void)
             report_fail(checks[i].id, checks[i].text);
         } else if (i == HEAP_KEPT && probe_native()) {
             report_notrun(checks[i].id, "machine=native shares the kernel heap");
-        } else if (limits_skipped && (i == MAX_ROUND || i == MAX_EINVAL || i >= SOFT_ROOT)) {
+        } else if (limits_skipped &&
+                   (i == MAX_ROUND || i == MAX_EINVAL || i == SYSCTL_PLUS || i >= SOFT_ROOT)) {
             report_notrun(checks[i].id, limits_skipped);
         } else {
             report_notrun(checks[i].id, "a check it depends on failed");

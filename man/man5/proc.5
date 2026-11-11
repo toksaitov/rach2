@@ -982,7 +982,7 @@ refuses it a growth with
 .Pa fs/pipe-user-pages-hard ,
 0, the pages past which such a caller's new pipe fails and its growth is
 refused, none while 0;
-both take any unsigned long, as on Linux;
+both take any unsigned long written with no sign, as on Linux;
 .Pa fs/mqueue/msg_default
 and
 .Pa msg_max ,
