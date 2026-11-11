@@ -785,7 +785,7 @@ build()
         "$WAD && ARCH=x86_64 make clean && ARCH=x86_64 make machine GNU_AGENTS=all && $staged &&
         $native cd $ARCH_DIR &&
         gzip -1 -c images/os-real-gnu.ext2 > images/os-real-gnu.ext2.gz &&
-        sha256sum rach2/kernel rach2-recovery/kernel $RECOVERY_IMAGE images/os-real-gnu.ext2 $payload \
+        sha256sum rach2/kernel rach2-recovery/kernel utils/sbin/bootctl $RECOVERY_IMAGE images/os-real-gnu.ext2 $payload \
             > images/release.sha256" > "$state/build.log" 2>&1; then
         if grep -q 'testing: the copy at .* is in use\|testing: the host did not answer' "$state/build.log"; then
             later "the build copy is busy or the host does not answer"
@@ -799,11 +799,11 @@ build()
         fail build "the build failed: $(tail -n 3 "$state/build.log" | tr '\n' ' ')"
     fi
     RACH2_TESTING_COPY=$COPY sh tools/dev/testing.sh get "$ARCH_DIR/rach2/kernel" \
-        "$ARCH_DIR/rach2-recovery/kernel" "$ARCH_DIR/$RECOVERY_IMAGE" \
+        "$ARCH_DIR/rach2-recovery/kernel" "$ARCH_DIR/utils/sbin/bootctl" "$ARCH_DIR/$RECOVERY_IMAGE" \
         "$ARCH_DIR/images/os-real-gnu.ext2.gz" "$ARCH_DIR/images/release.sha256" \
         ${payload:+"$ARCH_DIR/$payload"} >> "$state/build.log" 2>&1 ||
         later "the build's results could not be fetched"
-    for f in rach2/kernel rach2-recovery/kernel "$RECOVERY_IMAGE" $payload; do
+    for f in rach2/kernel rach2-recovery/kernel utils/sbin/bootctl "$RECOVERY_IMAGE" $payload; do
         [ "$(shasum -a 256 "$files/../$f" 2> /dev/null | cut -d ' ' -f 1)" = "$(digest "$f")" ] ||
             fail build "$f did not arrive whole"
     done
