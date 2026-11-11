@@ -3828,6 +3828,38 @@ static void x_string(struct xc *x)
     x->again = !done;
 }
 
+/** Whether leaf 0 of `v`'s CPUID names Intel, "GenuineIntel", as Linux's
+ * is_guest_vendor_intel. */
+static int guest_intel(const struct kvm_vcpu *v)
+{
+    const struct kvm_cpuid_entry2 *e = kvm_cpuid_find(v, 0, 0);
+
+    return e && e->ebx == 0x756E6547u && e->edx == 0x49656E69u && e->ecx == 0x6C65746Eu;
+}
+
+/**
+ * End a REP string instruction that finds rCX 0 at `addr_size`, with no
+ * element moved, as Linux's string_registers_quirk: an Intel guest's
+ * processor at address size 4 clears all of RCX, and the upper halves of
+ * RSI and RDI for MOVS, `si` and `di`, and of RDI for STOS, `di` alone.
+ * Every other register stays, RDI of INS among them. The caller steps RIP.
+ */
+static void string_none(struct kvm_vcpu *v, uint32_t addr_size, int si, int di)
+{
+    v->regs.rflags &= ~RFLAGS_RF;
+    if (addr_size != 4u || !guest_intel(v)) {
+        return;
+    }
+    v->regs.rcx = 0;
+    if (si) {
+        v->regs.rsi &= 0xFFFFFFFFull;
+    }
+    if (di) {
+        v->regs.rdi &= 0xFFFFFFFFull;
+    }
+    v->dirty |= KVM_PART_REGS;
+}
+
 /**
  * One pass over the instruction: its operands read, its operation run on
  * the record's registers, and its destination and other writes queued.
@@ -3836,13 +3868,16 @@ static void x_string(struct xc *x)
 static int x_exec(struct xc *x)
 {
     const struct kvm_insn *in = x->in;
-    int string = (in->flags & KVM_INSN_STRING) != 0, r;
+    int string = (in->flags & KVM_INSN_STRING) != 0, mov_di, r;
 
     if (in->flags & KVM_INSN_UD) {
         return x_fault(x, UD_VECTOR, 0, 0);
     }
     if (string && (in->flags & (KVM_INSN_REP | KVM_INSN_REPNE)) &&
         (x->v->regs.rcx & size_mask(in->addr_size)) == 0) {
+        /* MOVS and STOS are the moves to rDI. */
+        mov_di = in->op == KVM_OP_MOV && in->dst.kind == KVM_OPND_MEM && in->dst.mem == KVM_MEM_DI;
+        string_none(x->v, in->addr_size, mov_di && in->src.kind == KVM_OPND_MEM, mov_di);
         return X_OK;
     }
     r = x_simd(x);
@@ -4167,7 +4202,7 @@ static int pio_begin(struct kvm_vcpu *v, const struct kvm_pio *p, int single)
     if (p->string) {
         count = string_count(v, p);
         if (count == 0) {
-            v->regs.rflags &= ~RFLAGS_RF;
+            string_none(v, p->addr_size, 0, 0);
             kvm_emul_skip(v, p->len);
             ex->kind = KVM_X_AGAIN;
             return 0;
@@ -4208,9 +4243,9 @@ int kvm_emul_pio(struct kvm_vcpu *v, const struct kvm_pio *p)
  * caller may change rCX or rDI between the exit and the next KVM_RUN, and
  * as Linux's pio_in_emulated counts again from them, a smaller rCX moves
  * fewer elements, so that rCX reaches 0 and not past it, and rCX 0 ends
- * the instruction with none. X_OK; X_FAULT with the fault queued; or, for
- * a string that cannot be written, X_FAIL or -EFAULT, with the registers
- * as they were.
+ * the instruction with none and rDI as it stands, as `string_none` does.
+ * X_OK; X_FAULT with the fault queued; or, for a string that cannot be
+ * written, X_FAIL or -EFAULT, with the registers as they were.
  */
 static int pio_complete(struct kvm_vcpu *v)
 {
@@ -4230,16 +4265,19 @@ static int pio_complete(struct kvm_vcpu *v)
     }
     x = string_count(v, p);
     count = x < p->count ? (uint32_t)x : p->count;
-    if (count != 0) {
-        r = wq_add(v, linear(v, KVM_SEG_ES, v->regs.rdi & size_mask(p->addr_size)), v->exit.data,
-                   count * p->size, p->size);
-        if (r == X_OK) {
-            r = wq_commit(v);
-        }
-        if (r != X_OK) {
-            wq_reset(v);
-            return r;
-        }
+    if (count == 0) {
+        string_none(v, p->addr_size, 0, 0);
+        kvm_emul_skip(v, p->len);
+        return X_OK;
+    }
+    r = wq_add(v, linear(v, KVM_SEG_ES, v->regs.rdi & size_mask(p->addr_size)), v->exit.data,
+               count * p->size, p->size);
+    if (r == X_OK) {
+        r = wq_commit(v);
+    }
+    if (r != X_OK) {
+        wq_reset(v);
+        return r;
     }
     string_step(v, 7, p->size, p->addr_size, count);
     (void)string_done(v, p->rep, p->addr_size, count, p->len);
