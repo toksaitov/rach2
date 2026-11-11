@@ -23,14 +23,16 @@ under OUT/NAME and prints one result line, `crysis: result: NAME: ok` or
 and ends the game after LOOPS of its four loops; each loop's rate is judged
 against GATE frames a second (24 unless CRYSIS_GATE says), beside Linux's,
 but on the 32-bit game, which need only complete its loops.
-`hud` loads SAVE, a checkpoint before the suit's reboot on the first level,
-enters the reboot's trigger at the console and reads the HUD back 35 s later
-from a screenshot, the dialog's line times and a save's GameRules. `save`
+`hud` loads a copy of SAVE, a checkpoint before the suit's reboot on the
+first level, made under a name of its own so that the player's save is only
+read, enters the reboot's trigger at the console and reads the HUD back 35 s
+later from a screenshot, the dialog's line times and a save's GameRules. `save`
 starts the first level, saves as accept_NAME once its opening cinematic, in
 which the game refuses a save, has played, and records the save's SHA-256
 in /data/crysis/accept.json; `load` loads SAVE through PREFIX, the game's own
 prefix unless given, and requires the level loaded and the save's bytes as
-recorded. `restore` gives the game's directory back to its recorded owner.
+recorded; it loads no save that `save` did not make. `restore` gives the
+game's directory back to its recorded owner.
 """
 import ctypes
 import hashlib
@@ -449,6 +451,22 @@ def load_save(game, save, what):
     return ok
 
 
+def source_copy(out, name, save):
+    """Copy SAVE, a name in SaveGames, and its XML beside it as
+    default_accept_src_NAME, and into OUT, and return the copy's name, so
+    that no run loads or overwrites a save of the player's own."""
+    stem = save[:-len(".CRYSISJMSF")] if save.endswith(".CRYSISJMSF") else save
+    copy = "default_accept_src_%s" % name
+    for ext in (".CRYSISJMSF", ".xml"):
+        data = (SAVEGAMES / (stem + ext)).read_bytes()
+        for path in (SAVEGAMES / (copy + ext), out / (stem + ext)):
+            path.write_bytes(data)
+            os.chown(path, UID, UID)
+    say("save: %s copied as %s, sha256 %s" % (save, copy + ".CRYSISJMSF", hashlib.sha256(
+        (SAVEGAMES / (copy + ".CRYSISJMSF")).read_bytes()).hexdigest()))
+    return copy + ".CRYSISJMSF"
+
+
 def hud(name, save, route):
     """The suit's reboot from SAVE, read back 35 s after its trigger."""
     out = out_dir(name)
@@ -456,20 +474,31 @@ def hud(name, save, route):
     tag = "hud_" + name
     for old in SAVEGAMES.glob("default_%s.*" % tag):
         old.unlink()
-    game = Game(out, route, ["+load", save])
+    copy = source_copy(out, name, save)
+    # The dialog's log level is set at the start: a console line typed
+    # beside others was once lost, and its lines are what `lines` reads.
+    game = Game(out, route, ["+load", copy, "+log_verbosity", "4", "+ds_loglevel", "4"])
     try:
-        if load_save(game, save, "load"):
+        if load_save(game, copy, "load"):
             game.shot("loaded")
-            game.console("log_verbosity 4", "ds_loglevel 4", "gotoe suit_menu_and_objectives")
+            game.console("gotoe suit_menu_and_objectives")
             game.keys(35)
             check("after", game.shot("after"), "the HUD 35 s after the trigger, to read")
             game.console("sys_flash_info 1")
             game.shot("flash")
-            game.console("sys_flash_info 0", "save " + tag)
-            game.wait(lambda: any(SAVEGAMES.glob("default_%s.*" % tag)), "save")
+            game.console("sys_flash_info 0")
+            # A save the game refuses, as in a cinematic, writes nothing; try
+            # again a bounded number of times, as `save` does.
+            for attempt in range(6):
+                game.console("save " + tag)
+                game.keys(10)
+                if any(SAVEGAMES.glob("default_%s.*" % tag)):
+                    break
             game.keys(4)
     finally:
         game.end()
+        for path in SAVEGAMES.glob(copy.replace(".CRYSISJMSF", ".*")):
+            path.unlink()
     text = (out / "Game.log").read_text(errors="replace") if (out / "Game.log").exists() else ""
     lines = [re.findall(r"SID=\d+ Playing new line %d:.*now=([\d.]+)" % n, text) for n in (1, 2)]
     xml = SAVEGAMES / ("default_%s.xml" % tag)
@@ -538,6 +567,8 @@ def load(name, save_name, route, prefix):
     have = hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
     check("bytes", want is not None and have == want, "%s sha256 %s, recorded %s" % (
         save_name, have, want))
+    if want is None:
+        return
     made = prefix and not Path(prefix, "pfx/user.reg").exists()
     game = Game(out, route, ["+load", save_name], prefix)
     try:
