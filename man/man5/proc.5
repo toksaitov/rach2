@@ -1505,7 +1505,7 @@ and
 read a process's user from the directory's owner.
 A
 .Xr stat 2
-of a path works the owner out afresh, while a file, a descriptor's
+of a path works the owner out afresh, while a file, a link, a descriptor's
 .Pa fdinfo
 file, and the
 .Pa fd ,
@@ -1528,6 +1528,25 @@ An
 into
 .Pa fd
 is judged by that owner.
+A walk through
+.Pa fd ,
+.Pa fdinfo
+or
+.Pa task
+updates that directory's retained owner before looking up the next
+component, even when that next component is missing.
+Listing
+.Pa /dev
+does not update the owner of
+.Pa /proc/self/fd .
+An
+.Dv O_PATH | O_NOFOLLOW
+descriptor on
+.Pa exe ,
+.Pa cwd ,
+.Pa root ,
+a descriptor link or a namespace link keeps the link's owner by the same
+rule.
 The process's directory and its
 .Pa ns
 directory work their owner out at each

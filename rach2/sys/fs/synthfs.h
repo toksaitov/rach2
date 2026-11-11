@@ -223,7 +223,8 @@ int synth_classify(const char *path, struct vpath *vp);
  * The owner the last lookup gave a node of /proc whose Linux inode keeps
  * it, held by each descriptor open on that node (`procfs_owner_keep`): a
  * file of /proc/<pid> outside its net directory, a descriptor's fdinfo
- * file, or a process's fd, fdinfo or task directory. Linux sets the owner
+ * file, a process's fd, fdinfo or task directory, or its exe, cwd, root,
+ * descriptor or namespace link. Linux sets the owner
  * when a lookup makes or revalidates the inode, and the inode's getattr and
  * permission read it as it is.
  */

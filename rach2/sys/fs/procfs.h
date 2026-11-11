@@ -313,9 +313,9 @@ int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid);
 /** Give the descriptors open on the node `vp` names the owner a lookup of
  * its path gives it now, as Linux's lookup sets the owner of the inode they
  * share, when its inode keeps that owner (struct synth_owner): a file of
- * /proc/<pid> outside its net directory, a descriptor's fdinfo file, or a
- * process's fd, fdinfo or task directory. Any other node, and a process
- * gone, change nothing. */
+ * /proc/<pid> outside its net directory, a descriptor's fdinfo file, a
+ * process's fd, fdinfo or task directory, or its exe, cwd, root, descriptor
+ * or namespace link. Any other node, and a process gone, change nothing. */
 void procfs_lookup_owner(const struct vpath *vp);
 
 /** Put `o`, the zeroed record of a descriptor just opened on the node `vp`

@@ -7766,11 +7766,16 @@ static int procfs_node_of(const struct vpath *vp, int id, int node[4])
         node[1] = vp->procfile;
         break;
     case VNODE_PROC_FDINFO:
+    case VNODE_PROC_FD_LINK:
+    case VNODE_PROC_NS_LINK:
         node[1] = vp->procfd;
         break;
     case VNODE_PROC_FD_DIR:
     case VNODE_PROC_FDINFO_DIR:
     case VNODE_PROC_TASK_DIR:
+    case VNODE_PROC_EXE:
+    case VNODE_PROC_CWD:
+    case VNODE_PROC_ROOT:
         node[1] = 0;
         break;
     default:
@@ -7786,8 +7791,8 @@ static int procfs_node_of(const struct vpath *vp, int id, int node[4])
  * Give every kept owner of the node `node` (`procfs_node_of`) the owner
  * Linux's lookup gives its inode, task_dump_owner's for the inode's mode:
  * the effective IDs of the process or thread `node[2]` for the fdinfo and
- * task directories, mode 0555, and for the fd directory and the files while
- * it is dumpable, and root otherwise (`procfs_pid_owner`). Linux sets it
+ * task directories, mode 0555, and for the fd directory, files and links
+ * while it is dumpable, and root otherwise (`procfs_pid_owner`). Linux sets it
  * when the lookup makes the inode and again at each walk that finds the
  * dentry (fs/proc/base.c:1895, 2693 and 2066, fs/proc/fd.c:393 and 161).
  */
@@ -7801,6 +7806,10 @@ static void procfs_set_owner(const int node[4])
         mode = 0040500u;
     } else if (node[0] == VNODE_PROC_FDINFO_DIR || node[0] == VNODE_PROC_TASK_DIR) {
         mode = 0040555u;
+    } else if (node[0] == VNODE_PROC_EXE || node[0] == VNODE_PROC_CWD ||
+               node[0] == VNODE_PROC_ROOT || node[0] == VNODE_PROC_FD_LINK ||
+               node[0] == VNODE_PROC_NS_LINK) {
+        mode = 0120777u;
     }
     if (procfs_pid_owner(node[2], mode, &uid, &gid) != 0) {
         return;
