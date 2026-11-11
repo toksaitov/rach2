@@ -541,6 +541,7 @@ void terminate_current_process(int32_t signo)
     }
 
     ptrace_event(PTRACE_EVENT_EXIT, (uint32_t)(signo & 0x7F));
+    signal_exit_begin();
     pid = current_proc->tgid;
     is_init = (pid == init_pid && init_pid != 0);
     current_proc->in_syscall = 1;
