@@ -82,9 +82,7 @@ setting, and waits while there are none, or fails with
 .Er EAGAIN
 for a nonblocking descriptor.
 A read of a periodic timer whose counted expiration a setting of the
-clock back, or an offset of
-.Fn adjtimex
-back, has taken away, as below, returns 0, and does not wait, or fails
+clock back has taken away, as below, returns 0, and does not wait, or fails
 with
 .Er EAGAIN
 for a nonblocking descriptor, as in Linux.
@@ -131,14 +129,6 @@ or a setting, which moves its time on past the clock as it reads then and
 counts the intervals passed; after a setting of the clock back before the
 expiration, that takes the expiration back, and the timer is due again at
 the time it stopped at.
-.Dv ADJ_OFFSET
-and
-.Dv ADJ_OFFSET_SINGLESHOT
-of
-.Fn adjtimex
-take it back too when the offset is negative, unlike Linux, since this
-kernel steps the clock by such an offset where Linux slews it and its clock
-never goes back.
 A relative timer of
 .Dv CLOCK_REALTIME
 runs by
