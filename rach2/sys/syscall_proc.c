@@ -5126,8 +5126,8 @@ static int32_t kill_all(int signo)
 
 /** kill(2): pid > 0 a single process, which the id of any of its threads
  * names; pid == 0 the caller's process group; pid < -1 the group (-pid);
- * pid == -1 every process the caller may signal but itself and its PID
- * namespace's init (`kill_all`).
+ * pid == -1 every process the caller sees but its own and its PID
+ * namespace's init, posting only to those it may signal (`kill_all`).
  * signo 0 just probes existence and permission. A process whose threads
  * have all ended exists until its parent reaps it, and takes a signal and
  * discards it, as on Linux, where `kill -0` of a zombie succeeds. 0,
