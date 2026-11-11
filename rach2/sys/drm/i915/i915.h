@@ -728,9 +728,10 @@ struct drm_i915_gem_object {
     uint8_t dumb;
     struct i915_userptr userptr;
     /* The next shadow batch of its bucket in the GT's `pool`, and the tick
-     * of its last take; for an object of the pool alone. */
+     * at which a trim of the pool first found it idle, 0 while it is taken
+     * and until a trim finds it idle; for an object of the pool alone. */
     struct drm_i915_gem_object *pool_next;
-    uint64_t pool_taken;
+    uint64_t pool_idle;
 };
 
 /* Whether `obj` was made by GEM_USERPTR. */
@@ -2300,8 +2301,8 @@ int32_t i915_gem_userptr_ioctl(struct drm_device *dev, void *data, struct drm_fi
  * unplugged, so that the next access faults to a device that refuses it. */
 void i915_gem_unplug(struct drm_i915_private *i915);
 
-/* What `i915_gem_pool_trim` drops: a shadow idle since a take a second
- * ago, every idle one, or every one. */
+/* What `i915_gem_pool_trim` drops: a shadow idle for a second, every idle
+ * one, or every one. */
 #define I915_POOL_STALE 0
 #define I915_POOL_IDLE  1
 #define I915_POOL_ALL   2
@@ -2310,10 +2311,13 @@ void i915_gem_unplug(struct drm_i915_private *i915);
  * Drop the pool's reference to the shadow batches `how` names, as Linux's
  * pool_free_older_than frees the nodes idle for HZ: a shadow whose only
  * reference is the pool's is idle, since a request holds its batch's
- * objects until the chip is past it. The retire pass drops the stale ones,
- * the GT's park every idle one, and the unplug all. In process context.
+ * objects until the chip is past it, and its idle time runs from the first
+ * trim that found it so. The retire pass drops the stale ones, the GT's
+ * park and the shrinker every idle one, and the unplug all. Returns the
+ * frames freed with the idle shadows dropped. A dropped shadow is unbound
+ * and freed as the shrinker's purge unbinds and truncates an object.
  */
-void i915_gem_pool_trim(struct drm_i915_private *i915, int how);
+uint32_t i915_gem_pool_trim(struct drm_i915_private *i915, int how);
 
 /**
  * GEM_EXECBUFFER2 and its _WR form, as Linux 6.12's
