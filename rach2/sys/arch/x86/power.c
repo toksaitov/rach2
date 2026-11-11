@@ -293,12 +293,10 @@ static void power_reset(void)
 #define BIOS_RESET_FLAG_PHYS 0x472u
 #define BIOS_RESET_WARM      0x1234u
 
-/* What `reboot=` gave: the method to start from, whether one was given at
- * all, and the reset's warmth, for every restart and for a panic's, where
- * -1 is none given. */
+/* What `reboot=` gave: the method to start from, and the reset's warmth,
+ * for every restart and for a panic's, where -1 is none given. */
 struct reboot_options {
     char type;
-    int given;
     int warm;
     int panic_warm;
 };
@@ -321,11 +319,9 @@ static void reboot_read(struct reboot_options *o)
     int nth, *mode;
 
     o->type = REBOOT_ACPI;
-    o->given = 0;
     o->warm = 0;
     o->panic_warm = -1;
     for (nth = 0; kcmdline_value_nth("reboot", nth, value, (unsigned int)sizeof(value)); nth++) {
-        o->given = 1;
         for (p = value; *p != '\0';) {
             mode = &o->warm;
             if (p[0] == 'p' && p[1] == 'a' && p[2] == 'n' && p[3] == 'i' && p[4] == 'c' &&

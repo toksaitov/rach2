@@ -592,17 +592,19 @@ static void draw_report(void)
  * (kernel/panic.c, `panic`), measured by `k_udelay`, which needs no
  * interrupt, since none is taken now; the report's countdown changes once a
  * second of it. The reset is `emergency_restart`'s, with nothing shut down
- * (`power_emergency_restart`). The value is read once, here, so that a
- * write to /proc/sys/kernel/panic racing the panic gives one answer or the
- * other.
+ * (`power_emergency_restart`). The value is read once, here, once the
+ * other processors have stopped, as Linux reads it after
+ * `panic_other_cpus_shutdown`, and passed down, so that the report's rows,
+ * its countdown and the reset all follow the one value even when a write
+ * to /proc/sys/kernel/panic raced the panic.
  */
 void k_panic(const char *str)
 {
-    int timeout = panic_timeout;
-    int seconds, step, saved;
+    int timeout, seconds, step, saved;
     unsigned int was;
 
     k_panic_begin();
+    timeout = *(volatile int *)&panic_timeout;
     if (reading_process) {
         process_unsafe = 1;
         reading_process = 0;
