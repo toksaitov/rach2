@@ -36,7 +36,8 @@
 # process group of the session that is running in `session`, the clone's path in
 # `repo`, and in `copy` the copy on the testing host that RACH2_TESTING_COPY
 # names for testing.sh, if any; `touch STATE/stop` ends the loop after the
-# session that is running; tools/flow/stop.sh stops the session as well.
+# session that is running, and before it takes or starts a task;
+# tools/flow/stop.sh stops the session as well.
 # Sessions run with RACH2_MIN_FREE_GIB at 40 unless the environment gives
 # another, so that a build they start stops before it fills the disk, and
 # with RACH2_WORKER_STATE set to STATE, so that `board.sh release` of the
@@ -242,6 +243,7 @@ main()
             fi
             tidy
             prune_logs 's-*'
+            [ -e "$state/stop" ] && break
             if ! claim; then
                 sleep 60
                 continue
@@ -260,6 +262,7 @@ main()
                 sleep 300
                 continue ;;
         esac
+        [ -e "$state/stop" ] && break
         session "$issue" "$branch"
         if why=$(limited "$last.jsonl" "$last.err"); then
             log "limit: $why"
