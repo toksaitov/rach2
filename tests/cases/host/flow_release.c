@@ -1158,6 +1158,30 @@ static int rerun_rows(struct release *r)
          ok;
     snprintf(old, sizeof(old),
              "milestone 7\nsha %s\nbranch %s\nchosen %s\ntouched %s\nrun 101 failure\nfailure "
+             "full 101 x86_64:agents ia32:fs\nfailed tests: full run 101: x86_64:agents "
+             "ia32:fs\n",
+             H, BRANCH, T, T);
+    run(r,
+        &(struct release_row){.record = old, .sha = C, .git = "yes", .runs = "none", .rerun = 1});
+    ok = check(r,
+               f->status == 75 && fx_has(record(r), "\nagain full x86_64:agents ia32:fs\n") &&
+                   called(r, "-f title=Release tests of 22222222 for milestone 7: again only "
+                             "agents on x86_64, fs on ia32 -f suites=x86_64:agents ia32:fs$"),
+               "-r runs again only the failed suites of the ia32 profile") &&
+         ok;
+    snprintf(old, sizeof(old),
+             "milestone 7\nsha %s\nbranch %s\nchosen %s\ntouched %s\nrun 101 failure\nfailure "
+             "full 101 ia32:agents\nfailed tests: full run 101: ia32:agents\n",
+             H, BRANCH, T, T);
+    run(r,
+        &(struct release_row){.record = old, .sha = C, .git = "yes", .runs = "none", .rerun = 1});
+    ok = check(r,
+               f->status == 75 && !fx_has(record(r), "again ") &&
+                   called(r, "-f title=Release tests of 22222222 for milestone 7$"),
+               "-r runs every suite again after an ia32 word that is no i686 suite") &&
+         ok;
+    snprintf(old, sizeof(old),
+             "milestone 7\nsha %s\nbranch %s\nchosen %s\ntouched %s\nrun 101 failure\nfailure "
              "full 101 x86_64:agents x86_64:runner\nfailed tests: full run 101: x86_64:agents "
              "x86_64:runner\n",
              H, BRANCH, T, T);
