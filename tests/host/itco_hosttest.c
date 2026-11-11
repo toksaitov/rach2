@@ -393,7 +393,8 @@ static void deadline(void)
 /** nowayout refuses a magic close and DISABLECARD with -EBUSY and leaves
  * the timer running, fed once at the close, as watchdog_stop and
  * watchdog_release do; a heartbeat out of range takes 30 s; a timer that
- * firmware left counting toward a reset is kept running and fed. */
+ * firmware left counting is kept running and fed, NO_REBOOT cleared if it
+ * was set, as iTCO_wdt_probe does. */
 static void options(void)
 {
     int value = 1;
@@ -420,6 +421,16 @@ static void options(void)
     CHECK(!(model.words[TCO1_CNT / 2] & TCO_HALT) && !(model.gcs & TCO_NO_REBOOT));
     run(60);
     CHECK(model.resets == 0);
+
+    setup();
+    model.words[TCO1_CNT / 2] = 0x100;
+    model.left = 3;
+    CHECK(itco_attach(&watchdog, 5) == 0 && watchdog.hw_running);
+    CHECK(!(model.words[TCO1_CNT / 2] & TCO_HALT) && model.gcs == 0x12340000);
+    run(60);
+    CHECK(model.resets == 0);
+    advance(&model, 16);
+    CHECK(model.resets == 1);
 }
 
 /** Check actual writes, expiry, failures, exclusive open and the ioctl ABI. */
@@ -502,8 +513,8 @@ int main(void)
     CHECK(itco_attach(&watchdog, 30) == -EIO && model.writes == 0);
     setup();
     model.locked = 1;
-    CHECK(itco_attach(&watchdog, 30) == 0);
-    CHECK(itco_open(NULL, NULL, 0) == -EIO && !watchdog.opened);
+    CHECK(itco_attach(&watchdog, 30) == -ENODEV);
+    CHECK(model.writes == 1 && model.regs[0] == 0x3410);
     CHECK(model.words[TCO1_CNT / 2] & TCO_HALT);
     setup();
     model.stuck_timer = 1;
