@@ -26,7 +26,8 @@
  * the CPUID bit; SPIV's software disable masking the LVT; x2APIC mode, its
  * MSRs, its #GP cases, its self IPI and IPI, its MMIO hole and its moves
  * between modes; KVM_GET_LAPIC and KVM_SET_LAPIC with the x2APIC id and
- * the timer's count; KVM_INTERRUPT's ExtINT; the halted vCPU woken by an
+ * the timer's count; KVM_CAP_X2APIC_API's 32-bit ids, high MSI addresses
+ * and broadcast quirk; KVM_INTERRUPT's ExtINT; the halted vCPU woken by an
  * interrupt, by its timer's tick, or ended by a signal; the split
  * controller's enable, the routes' refusals, a SINT
  * route raising Hyper-V's SynIC, KVM_IRQ_LINE_STATUS and the EOI exit of a
@@ -963,6 +964,71 @@ static void route(int i, uint32_t gsi, uint32_t addr, uint32_t data)
     rt.e[i].u.msi.data = data;
 }
 
+/** KVM_SIGNAL_MSI of `addr` and `data` with the high address `hi`. */
+static int32_t signal_hi(uint32_t addr, uint32_t hi, uint32_t data)
+{
+    struct kvm_msi m;
+
+    k_memset(&m, 0, sizeof(m));
+    m.address_lo = addr;
+    m.address_hi = hi;
+    m.data = data;
+    return kvm_irq_ioctl(&vm, KVM_SIGNAL_MSI, (uintptr_t)&m);
+}
+
+/** KVM_CAP_X2APIC_API, as Linux's xapic_state_test and its MSI rules:
+ * the x2APIC id whole in KVM_GET_LAPIC and checked by KVM_SET_LAPIC, an
+ * MSI's destination in the high address, and 0xFF no longer a broadcast
+ * to an x2APIC; vCPU 2 is in x2APIC mode. */
+static void x2apic_api_rows(void)
+{
+    struct kvm_lapic_state s;
+    struct kvm_vcpu *v = vcpu[2];
+    uint32_t id;
+
+    vm.x2apic_format = 1;
+    CHECK(kvm_lapic_ioctl(v, KVM_GET_LAPIC, (uintptr_t)&s) == 0, "KVM_GET_LAPIC with 32-bit ids");
+    k_memcpy(&id, s.regs + APIC_ID, 4);
+    CHECK(id == 2, "the x2APIC id unshifted");
+    CHECK(kvm_lapic_ioctl(v, KVM_SET_LAPIC, (uintptr_t)&s) == 0, "KVM_SET_LAPIC of the vCPU's id");
+    id = 3;
+    k_memcpy(s.regs + APIC_ID, &id, 4);
+    CHECK(kvm_lapic_ioctl(v, KVM_SET_LAPIC, (uintptr_t)&s) == -EINVAL && msr_rd(v, 0x802) == 2,
+          "and of another id is -EINVAL");
+    vm.x2apic_format = 0;
+    id = 5u << 24;
+    k_memcpy(s.regs + APIC_ID, &id, 4);
+    CHECK(kvm_lapic_ioctl(v, KVM_SET_LAPIC, (uintptr_t)&s) == 0 && msr_rd(v, 0x802) == 2 &&
+              msr_rd(v, 0x80D) == 4,
+          "without 32-bit ids the caller's id is ignored");
+
+    clear_vectors();
+    CHECK(signal_hi(msi_addr(2, 0), 0x100, msi_data(0x61, 0, 0)) == 1 && has(v, APIC_IRR, 0x61),
+          "without 32-bit ids the high address is ignored");
+    vm.x2apic_format = 1;
+    CHECK(signal_hi(msi_addr(2, 0), 0x100, msi_data(0x62, 0, 0)) == -EPERM,
+          "with them it holds the destination's bits 31:8");
+    CHECK(signal_hi(msi_addr(2, 0), 0x1, msi_data(0x62, 0, 0)) == -EINVAL,
+          "and its bits 7:0 make the MSI invalid");
+    route(0, 9, msi_addr(2, 0), msi_data(0x62, 0, 0));
+    rt.e[0].u.msi.address_hi = 0x1;
+    rt.h.nr = 1;
+    rt.h.flags = 0;
+    CHECK(kvm_irq_ioctl(&vm, KVM_SET_GSI_ROUTING, (uintptr_t)&rt) == -EINVAL,
+          "a route of such an MSI is -EINVAL");
+    vm.x2apic_format = 0;
+
+    clear_vectors();
+    CHECK(signal(msi_addr(0xFF, 0), msi_data(0x63, 0, 0)) == NVCPU && has(v, APIC_IRR, 0x63),
+          "an MSI to 0xFF is a broadcast to an x2APIC too");
+    vm.x2apic_no_broadcast = 1;
+    clear_vectors();
+    CHECK(signal(msi_addr(0xFF, 0), msi_data(0x63, 0, 0)) == NVCPU - 1 && !has(v, APIC_IRR, 0x63),
+          "but not with KVM_X2APIC_API_DISABLE_BROADCAST_QUIRK");
+    vm.x2apic_no_broadcast = 0;
+    clear_vectors();
+}
+
 /** A KVM_IRQ_ROUTING_HV_SINT route of GSI 5 in `rt`'s first slot, raised
  * and lowered through KVM_IRQ_LINE_STATUS. */
 static void sint_route_rows(void)
@@ -1838,6 +1904,7 @@ int main(int argc, char **argv)
         timer_rows();
         x2apic_rows();
         state_rows();
+        x2apic_api_rows();
         extint_rows();
         halt_rows();
         routing_rows();
