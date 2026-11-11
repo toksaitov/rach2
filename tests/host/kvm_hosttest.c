@@ -1221,8 +1221,9 @@ static void startup_caps(int vm)
  * QEMU's list of MSRs to put; then the feature MSRs. */
 static void startup_msr_lists(void)
 {
+    const uint32_t *list;
     uint32_t i, nmsrs;
-    int ucode, steal;
+    int ucode, steal, debugctl;
     int32_t r;
 
     buf.list.nmsrs = 0;
@@ -1232,16 +1233,27 @@ static void startup_msr_lists(void)
     r = dev(KVM_GET_MSR_INDEX_LIST, (uintptr_t)&buf);
     CHECK(r == 0 && buf.list.nmsrs == nmsrs, "KVM_GET_MSR_INDEX_LIST with room");
     n_put = 0;
-    ucode = steal = 0;
+    ucode = steal = debugctl = 0;
     for (i = 0; i < nmsrs; i++) {
         put_msr(MSR_INDICES[i]);
         ucode |= MSR_INDICES[i] == 0x8B ? 1 : MSR_INDICES[i] == 0x1FC ? 2 : 0;
         ucode |= MSR_INDICES[i] == 0xC0010015u ? 4 : 0;
         steal |= MSR_INDICES[i] == MSR_KVM_STEAL_TIME;
+        debugctl |= MSR_INDICES[i] == 0x1D9;
     }
     CHECK(ucode == 7,
           "the index list names UCODE_REV, POWER_CTL and HWCR, as Linux's emulated_msrs");
     CHECK(steal, "and MSR_KVM_STEAL_TIME");
+    CHECK(kvm_backend == &kvm_vmx && debugctl,
+          "VMX's index list names IA32_DEBUGCTL, as Linux's msrs_to_save_base");
+    kvm_backend = &kvm_svm;
+    list = kvm_msr_list(0, &nmsrs);
+    kvm_backend = &kvm_vmx;
+    debugctl = 0;
+    for (i = 0; i < nmsrs; i++) {
+        debugctl |= list[i] == 0x1D9;
+    }
+    CHECK(!debugctl, "SVM's does not");
     buf.list.nmsrs = 4;
     r = dev(KVM_GET_MSR_FEATURE_INDEX_LIST, (uintptr_t)&buf);
     CHECK(r == 0 && buf.list.nmsrs == 2 && MSR_INDICES[0] == 0x8B && MSR_INDICES[1] == 0x345,

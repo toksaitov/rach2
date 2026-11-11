@@ -9,7 +9,7 @@ extern void free(void *p);
 
 static int failures, live, alloc_fail, copy_fail, pmi_count, fault_count;
 static int model_intel, model_ext, model_v2, model_missing, model_ignored, model_lbr, model_notsx;
-static int model_hybrid;
+static int model_hybrid, model_bld;
 static uint32_t model_amd_sig; /* AMD's leaf 1 signature, 0 for family 0 */
 static uint32_t irq_flags = 0x200u;
 static uint64_t physical[160];
@@ -118,6 +118,7 @@ void kcpu_id_sub(uint32_t leaf, uint32_t sub, uint32_t *a, uint32_t *b, uint32_t
     }
     if (leaf == 7 && model_intel) {
         *b = model_notsx ? 0 : 1u << 11;
+        *c = model_bld ? L7_BLD : 0;
         *d = model_hybrid ? L7_HYBRID : 0;
     }
     if (leaf == 0x80000000u) {
@@ -183,10 +184,16 @@ int kcpu_rdmsr_safe(uint32_t index, uint64_t *value)
     return 0;
 }
 
-/** Optional writes can fault or succeed without retaining a value. */
+/** Optional writes can fault or succeed without retaining a value. An
+ * LBR_FROM of format 4 without TSX faults unless bits 62:61 repeat bits
+ * 60:59, as Linux's lbr_from_signext_quirk_wr allows for. */
 int kcpu_wrmsr_safe(uint32_t index, uint64_t value)
 {
     if (model_missing) {
+        return -1;
+    }
+    if (model_lbr && model_notsx && index - LBR_FROM < 16u &&
+        ((value >> 61) & 3u) != ((value >> 59) & 3u)) {
         return -1;
     }
     if (!model_ignored) {
@@ -517,6 +524,23 @@ static void intel_placement(void)
           "counters the host does not hold stop in the host and are the guest's");
     kvm_pmu_vmx_exit(&v, guest, 1);
     CHECK(!other.pmu.counter[0], "another vCPU has independent counters");
+    *reg(GLOBAL_CTRL) = watch_global;
+    *reg(FIXED_CTRL) = 0xB0u;
+    v.pmu.eventsel[0] = 0;
+    v.pmu.eventsel[2] = 0x3Cu | EV_TXCP | EV_ENABLE | EV_OS;
+    v.pmu.global_ctrl = 4;
+    kvm_pmu_prepare(&v);
+    kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
+    CHECK(v.pmu.run_gp == 4 && v.pmu.phys[2] == 2 && global[0] == (watch_global | 4u),
+          "a TSX-checkpointed event runs on counter 2 alone");
+    kvm_pmu_vmx_exit(&v, guest, 1);
+    *reg(GLOBAL_CTRL) = watch_global | 4u;
+    *reg(EVENTSEL0 + 2u) = 0x3Cu | EV_ENABLE | EV_OS;
+    kvm_pmu_prepare(&v);
+    kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
+    CHECK(!v.pmu.run_gp && global[0] == (watch_global | 4u),
+          "and does not run while the host holds counter 2");
+    kvm_pmu_vmx_exit(&v, guest, 1);
 }
 
 /** Drive the guest's LBR stack: PERF_CAPABILITIES, DEBUGCTL, its MSRs,
@@ -554,15 +578,23 @@ static void intel_lbr(void)
     CHECK(kvm_pmu_msr(&v, DEBUGCTL, 1, &value, 0) == 0 &&
               v.pmu.debugctl == (DEBUGCTL_LBR | DEBUGCTL_FRZ),
           "the guest sets LBR and FREEZE_LBRS_ON_PMI");
-    value = 1ull << 2;
+    value = DEBUGCTL_BLD;
+    CHECK(kvm_pmu_msr(&v, DEBUGCTL, 1, &value, 1) == -1,
+          "BUS_LOCK_DETECT without the host's is #GP, the caller's too");
+    value = DEBUGCTL_RTM;
+    CHECK(kvm_pmu_msr(&v, DEBUGCTL, 1, &value, 1) == -1, "and RTM_DEBUG without TSX");
+    value = 1ull << 3;
     CHECK(kvm_pmu_msr(&v, DEBUGCTL, 1, &value, 0) == -1, "another DEBUGCTL bit is #GP");
     value = 7;
     CHECK(kvm_pmu_msr(&v, LBR_TOS, 1, &value, 1) == 0 && *reg(LBR_TOS) == 7 && v.pmu.lbr_tos == 7,
           "the caller writes LBR_TOS through the processor");
     value = 0x1FFFFFFF81000000ull;
-    CHECK(kvm_pmu_msr(&v, LBR_FROM + 15u, 1, &value, 0) == 0 &&
-              kvm_pmu_msr(&v, LBR_FROM + 16u, 0, &value, 0) == 1,
-          "the stack has exactly 16 records");
+    CHECK(kvm_pmu_msr(&v, LBR_FROM + 15u, 1, &value, 0) == -1,
+          "the guest's LBR_FROM without its sign bits faults, as on the processor");
+    CHECK(kvm_pmu_msr(&v, LBR_FROM + 15u, 1, &value, 1) == 0 &&
+              v.pmu.lbr_from[15] == 0x1FFFFFFF81000000ull,
+          "the caller's write of a value a read returned is kept as read");
+    CHECK(kvm_pmu_msr(&v, LBR_FROM + 16u, 0, &value, 0) == 1, "the stack has exactly 16 records");
     kvm_pmu_prepare(&v);
     kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
     k = list_find(guest, ng, LBR_FROM + 15u);
@@ -582,6 +614,25 @@ static void intel_lbr(void)
     CHECK(!ng && v.pmu.lbr_list == ~0u, "a stopped stack stays out of the lists");
     kvm_pmu_vmx_exit(&v, guest, 1);
     model_lbr = model_notsx = 0;
+    model_bld = 1;
+    setup(1, 0, 0);
+    value = DEBUGCTL_BLD | DEBUGCTL_RTM;
+    CHECK(
+        kvm_pmu_msr(&v, DEBUGCTL, 1, &value, 0) == 0 &&
+            v.pmu.debugctl == (DEBUGCTL_BLD | DEBUGCTL_RTM) &&
+            kvm_pmu_vmcs_debugctl(&v) == (DEBUGCTL_BLD | DEBUGCTL_RTM),
+        "BUS_LOCK_DETECT and RTM_DEBUG where the host has them and the guest's CPUID offers them");
+    cpuid[1].ebx &= ~L7_RTM;
+    cpuid[1].ecx &= ~L7_BLD;
+    value = DEBUGCTL_BLD;
+    CHECK(kvm_pmu_msr(&v, DEBUGCTL, 1, &value, 0) == -1, "BUS_LOCK_DETECT needs the guest's CPUID");
+    value = DEBUGCTL_RTM;
+    CHECK(kvm_pmu_msr(&v, DEBUGCTL, 1, &value, 0) == -1, "and RTM_DEBUG");
+    value = DEBUGCTL_BLD | DEBUGCTL_RTM;
+    CHECK(kvm_pmu_msr(&v, DEBUGCTL, 1, &value, 1) == 0 &&
+              v.pmu.debugctl == (DEBUGCTL_BLD | DEBUGCTL_RTM),
+          "the caller sets both without the guest's CPUID");
+    model_bld = 0;
 }
 
 /** Drive AMD's legacy, extended and PerfMonV2 switching and its absence. */
