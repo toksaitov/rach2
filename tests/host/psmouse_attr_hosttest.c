@@ -679,7 +679,8 @@ static struct file files[FILES_MAX];
 static int n_files;
 static int adding_protocol;
 static int (*port_driver[3])(int dir);
-static int files_made[3]; /* the times a protocol's files were made */
+static int driver_binds[3]; /* the times a driver's files were made */
+static int files_made[3];   /* the times a protocol's files were made */
 static int port_made[3];
 
 int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg)
@@ -732,6 +733,7 @@ void evdev_sysfs_serio_driver(int port, int (*add)(int dir))
     port_driver[port] = add;
     drop_files(port, 0);
     if (add) {
+        driver_binds[port]++;
         (void)add(100 + port);
     }
 }
@@ -1197,6 +1199,7 @@ static void model_reset(int kind, int p)
     last_warning = 0;
     n_files = 0;
     k_memset(files_made, 0, sizeof(files_made));
+    k_memset(driver_binds, 0, sizeof(driver_binds));
     k_memset(port_driver, 0, sizeof(port_driver));
     k_memset(port_made, 0, sizeof(port_made));
     etd_pktcnt = 0;
@@ -1665,9 +1668,10 @@ static void guest_rows(void)
     CHECK("a pad with a mouse behind its pass-through port is brought up",
           init_mouse() == 0 && touchpad == TOUCHPAD_SYNAPTICS && guest.dev != NULL);
     CHECK("serio1's protocol reads SynPS/2", reads(1, "protocol", "SynPS/2\n"));
-    CHECK("serio2 is made with psmouse's five files for its guest",
+    CHECK("serio2 is made with psmouse's five files for its guest, its driver's",
           port_made[EVDEV_SERIO_PASS_THROUGH] && file_of(EVDEV_SERIO_PASS_THROUGH, "protocol") &&
-              file_of(EVDEV_SERIO_PASS_THROUGH, "protocol")->of_protocol &&
+              !file_of(EVDEV_SERIO_PASS_THROUGH, "protocol")->of_protocol &&
+              port_driver[EVDEV_SERIO_PASS_THROUGH] == guest_files &&
               file_of(EVDEV_SERIO_PASS_THROUGH, "resync_time"));
     CHECK("its protocol reads ImPS/2", reads(EVDEV_SERIO_PASS_THROUGH, "protocol", "ImPS/2\n"));
     CHECK("its rate 100, resolution 200, resetafter 5 and resync_time 0",
@@ -1693,6 +1697,8 @@ static void guest_rows(void)
 /** The guest's protocol switches, refusals and removal with its parent. */
 static void guest_switch_rows(void)
 {
+    int binds = driver_binds[EVDEV_SERIO_PASS_THROUGH];
+
     CHECK("the guest refuses an embedded NUL and its suffix",
           store_bytes(EVDEV_SERIO_PASS_THROUGH, "protocol", "bare\0junk", 9) == -EINVAL &&
               guest.protocol == PROTO_IMPS);
@@ -1709,6 +1715,10 @@ static void guest_switch_rows(void)
     CHECK("imps finds the wheel again", store(EVDEV_SERIO_PASS_THROUGH, "protocol", "imps") == 4 &&
                                             guest.protocol == PROTO_IMPS && pt_mouse.reporting &&
                                             aux_mouse.reporting);
+    CHECK("the switches keep serio2's psmouse files, as Linux's driver keeps them",
+          driver_binds[EVDEV_SERIO_PASS_THROUGH] == binds &&
+              file_of(EVDEV_SERIO_PASS_THROUGH, "rate") &&
+              !file_of(EVDEV_SERIO_PASS_THROUGH, "rate")->of_protocol);
     guest.active = 0;
     CHECK("a write while the guest waits for its reconnect is -ENODEV",
           store(EVDEV_SERIO_PASS_THROUGH, "rate", "40") == -ENODEV);
