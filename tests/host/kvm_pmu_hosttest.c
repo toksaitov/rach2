@@ -643,8 +643,9 @@ static void intel_steps(void)
     CHECK(!kvm_pmu_nmi() && !*reg(GLOBAL_OVF),
           "KVM leaves the NMI of the host's counter's overflow to the detector");
     *reg(GLOBAL_STATUS) = FIXED_BIT(1) | FIXED_BIT(0) | 1u;
-    CHECK(kvm_pmu_nmi() && *reg(GLOBAL_OVF) == (FIXED_BIT(0) | 1u),
-          "and claims a guest counter's, acknowledging only the counters the host does not hold");
+    CHECK(kvm_pmu_nmi() == 2 && *reg(GLOBAL_OVF) == (FIXED_BIT(0) | 1u),
+          "and claims a guest counter's, acknowledging only the counters the host does not hold "
+          "and counting each, so that the NMI a second latched is swallowed");
     *reg(GLOBAL_STATUS) = 0;
     v.pmu.eventsel[1] = 0x1C0u | EV_ENABLE | EV_OS;
     v.pmu.counter[1] = v.pmu.gp_mask - 3;

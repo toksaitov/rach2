@@ -946,8 +946,8 @@ int watchdog_nmi(isr_params_t *params)
     if (nmi_cpu_backtrace(params)) {
         handled++;
     }
-    if (watchdog_guest_nmi && watchdog_guest_nmi()) {
-        handled++;
+    if (watchdog_guest_nmi) {
+        handled += watchdog_guest_nmi();
     }
     if (wd_perf && platform_pmu_overflow(&due)) {
         handled++;
