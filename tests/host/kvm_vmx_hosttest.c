@@ -514,6 +514,9 @@ int kcpu_wrmsr_safe(uint32_t msr, uint64_t value)
     return -1;
 }
 
+/* The NMI handler's hook, which kvm_pmu_start sets. */
+int (*watchdog_guest_nmi)(void);
+
 /** No virtual APIC is armed for a performance interrupt here. */
 void kvm_lapic_pmi(struct kvm_vcpu *v)
 {

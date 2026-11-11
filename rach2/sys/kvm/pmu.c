@@ -9,6 +9,7 @@
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
 #include "../mm/usercopy.h"
+#include "../watchdog.h"
 
 #define PMC0          0x0C1u
 #define EVENTSEL0     0x186u
@@ -255,8 +256,15 @@ struct pmu_host {
 };
 static struct pmu_host pmu_host;
 
-/* The measuring knob, KVM_PMU_STEP_* of pmu.h; each entry reads it once. */
+/* The measuring knob, KVM_PMU_STEP_* of pmu.h; each entry reads it once.
+ * `pmu_pmi` is set once an entry has set a physical counter's PMI bit,
+ * from when on `kvm_pmu_nmi` reads the global status, and `pmu_placed` is
+ * the physical counters the last Intel entry gave its guest's counters,
+ * bit n general counter n and bit 32 + j fixed counter j, which the
+ * read-only pmu_placed shows. */
 static volatile uint32_t pmu_steps;
+static volatile int pmu_pmi;
+static volatile uint64_t pmu_placed;
 
 /* Header values are copied once, then the event words, so a caller cannot
  * change the allocation's bound between the two copies. */
@@ -495,6 +503,34 @@ void kvm_pmu_start(void)
         pmu_host.version = pmu_host.nr_gp = pmu_host.nr_fixed = 0;
     }
     pmu_steps = 0;
+    pmu_pmi = 0;
+    pmu_placed = 0;
+    watchdog_guest_nmi = kvm_pmu_global() ? kvm_pmu_nmi : NULL;
+}
+
+/** Write `value` as sysfs shows a number: 0x, its hex digits without
+ * leading zeros, and a newline; the length, which `cap` may cut. */
+static int32_t show_hex(char *buf, uint32_t cap, uint64_t value)
+{
+    static const char digits[] = "0123456789abcdef";
+    char text[20];
+    uint32_t n = 0, shift = 64;
+
+    text[n++] = '0';
+    text[n++] = 'x';
+    do {
+        shift -= 4u;
+    } while (shift && !((value >> shift) & 0xFu));
+    for (;;) {
+        text[n++] = digits[(value >> shift) & 0xFu];
+        if (!shift) {
+            break;
+        }
+        shift -= 4u;
+    }
+    text[n++] = '\n';
+    k_memcpy(buf, text, n < cap ? n : cap);
+    return (int32_t)n;
 }
 
 int32_t kvm_pmu_steps_show(void *obj, int arg, char *buf, uint32_t cap)
@@ -546,11 +582,18 @@ int32_t kvm_pmu_steps_store(void *obj, int arg, const char *buf, uint32_t len)
         steps = steps * base + digit;
     }
     if ((steps & ~KVM_PMU_STEPS) || ((steps & KVM_PMU_STEP_SMM) && !pmu_host.smm_freeze) ||
-        ((steps & KVM_PMU_STEP_PMI) && !(steps & KVM_PMU_STEP_WRITE))) {
+        ((steps & KVM_PMU_STEP_PMI) && (!(steps & KVM_PMU_STEP_WRITE) || !kvm_pmu_global()))) {
         return -EINVAL;
     }
     pmu_steps = steps;
     return (int32_t)len;
+}
+
+int32_t kvm_pmu_placed_show(void *obj, int arg, char *buf, uint32_t cap)
+{
+    (void)obj;
+    (void)arg;
+    return show_hex(buf, cap, pmu_placed);
 }
 
 int kvm_pmu_enabled(void)
@@ -1712,13 +1755,21 @@ void kvm_pmu_svm_exit(struct kvm_vcpu *v)
 /**
  * The physical count that starts guest slot `s` with Linux's period: the
  * counts left before its guest count wraps, at least 2 and at most perf's
- * max_period, negated (arch/x86/kvm/pmu.c:167-174 and 256-272,
- * arch/x86/events/core.c:1397-1413, arch/x86/events/intel/core.c:7357-7358).
+ * max_period, then the model's limit, negated (arch/x86/kvm/pmu.c:167-174
+ * and 256-272, arch/x86/events/core.c:1397-1413,
+ * arch/x86/events/intel/core.c:7357-7358). The limits are `nhm_limit_period`
+ * on Nehalem, at least 32; `hsw_limit_period` on Haswell, at least 32, and
+ * 128 for INST_RETIRED.ALL, event 0xC0 with unit mask 1 (erratum HSW11); and
+ * `bdw_limit_period` on Broadwell, at least 128 with the low six bits clear
+ * for that event alone (arch/x86/events/intel/core.c:4748-4794, chosen at
+ * :6629, :6932 and :6975). A fixed counter's event is its own, 0x00C0 for
+ * fixed counter 0, as KVM's perf event for it has (`slot_select`).
  */
 static uint64_t start_count(const struct kvm_pmu *p, uint32_t s)
 {
-    uint64_t mask, left, most;
+    uint64_t mask, left, most, least = 0;
     uint32_t width;
+    int all = (slot_select(p, s) & 0xFFFFu) == 0x01C0u;
 
     if (s < KVM_PMU_GP_MAX) {
         mask = p->gp_mask;
@@ -1738,6 +1789,17 @@ static uint64_t start_count(const struct kvm_pmu *p, uint32_t s)
     }
     if (left > most) {
         left = most;
+    }
+    if (pmu_host.table == c_nehalem || pmu_host.table == c_hsw) {
+        least = pmu_host.table == c_hsw && all ? 128u : 32u;
+    } else if (pmu_host.table == c_bdw && all) {
+        least = 128;
+    }
+    if (left < least) {
+        left = least;
+    }
+    if (pmu_host.table == c_bdw && all) {
+        left &= ~(uint64_t)0x3F;
     }
     return (0 - left) & mask_bits(width);
 }
@@ -1776,6 +1838,7 @@ static uint64_t program_slots(struct kvm_pmu *p, struct kvm_pmu_msr *guest,
         select = slot_select(p, s);
         if (p->steps & KVM_PMU_STEP_PMI) {
             select |= EV_INT;
+            pmu_pmi = 1;
         }
         if (n >= 32u) {
             n -= 32u;
@@ -1865,6 +1928,9 @@ void kvm_pmu_vmx_enter(struct kvm_vcpu *v, struct kvm_pmu_msr *guest, struct kvm
             }
         }
     }
+    if (used) {
+        pmu_placed = used;
+    }
     fixed |= program_slots(p, guest, host, ng, nh);
     if (kvm_pmu_global()) {
         if (pmu_host.nr_fixed && fixed != host_fixed) {
@@ -1925,4 +1991,40 @@ void kvm_pmu_vmx_exit(struct kvm_vcpu *v, const struct kvm_pmu_msr *guest, int r
             }
         }
     }
+}
+
+/**
+ * Claim an NMI a guest counter raised, as `watchdog_guest_nmi` on a host
+ * with Intel's global status: acknowledge the overflow of each counter the
+ * host does not hold, which only guests run, in IA32_PERF_GLOBAL_OVF_CTRL,
+ * and return 1 when there was one, as Linux's perf handler acknowledges
+ * every set bit and counts each as handled (arch/x86/events/intel/
+ * core.c:3126-3131 and 3190). The guest's overflow itself was counted by
+ * the exit (`accumulate`), which delivers its PMI before the next entry.
+ * The counter's APIC entry, which the delivery masked, is unmasked by the
+ * hard-lockup detector's handler after this while its counter runs, and
+ * stays masked otherwise. Only the counters' MSRs are read: an NMI may come
+ * at any point of the host's code. 0 until an entry has set a PMI bit.
+ */
+int kvm_pmu_nmi(void)
+{
+    uint64_t status, held, fixed = 0;
+
+    if (!pmu_pmi || !kvm_pmu_global()) {
+        return 0;
+    }
+    status = pmu_read(GLOBAL_STATUS) & all_counters();
+    if (!status) {
+        return 0;
+    }
+    if (pmu_host.nr_fixed) {
+        fixed = pmu_read(FIXED_CTRL);
+    }
+    held = host_counters(pmu_read(GLOBAL_CTRL), fixed);
+    status &= ~held;
+    if (!status) {
+        return 0;
+    }
+    pmu_write(GLOBAL_OVF, status);
+    return 1;
 }
