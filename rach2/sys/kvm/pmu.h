@@ -36,7 +36,8 @@ struct kvm_pmu {
     uint8_t phys[KVM_PMU_GP_MAX];
     uint64_t base[KVM_PMU_GP_MAX], fixed_base[KVM_PMU_FIXED_MAX];
     uint64_t host_global; /* AMD's PerfMonV2 global control before an entry */
-    /* VMX's IA32_DEBUGCTL: only LBR and FREEZE_LBRS_ON_PMI are kept. */
+    /* VMX's IA32_DEBUGCTL: only LBR, FREEZE_LBRS_ON_PMI, BUS_LOCK_DETECT
+     * and RTM_DEBUG are kept. */
     uint64_t debugctl;
     /* The guest's LBR stack, 0 records without one, and its registers as
      * the last exit left them, read back as the hardware stored them. */
@@ -108,9 +109,15 @@ void kvm_pmu_vm_free(struct kvm_vm *vm);
 void kvm_pmu_prepare(struct kvm_vcpu *v);
 
 /** Access VMX's IA32_DEBUGCTL, as Linux's vmx_set_msr: LBR and
- * FREEZE_LBRS_ON_PMI with the guest's LBR stack or from the caller, BTF and
- * an LBR without a stack dropped, any other bit refused. 0 or -1. */
+ * FREEZE_LBRS_ON_PMI with the guest's LBR stack or from the caller,
+ * BUS_LOCK_DETECT and RTM_DEBUG where the host has them and the guest's
+ * CPUID or the caller asks, BTF and an LBR without a stack dropped, any
+ * other bit refused. 0 or -1. */
 int kvm_pmu_debugctl(struct kvm_vcpu *v, int write, uint64_t *value, int host);
+
+/** The guest's IA32_DEBUGCTL as the VMCS loads it: the kept bits, less LBR
+ * and FREEZE_LBRS_ON_PMI without the guest's LBR stack. */
+uint64_t kvm_pmu_vmcs_debugctl(const struct kvm_vcpu *v);
 
 /** Load/stop AMD's physical counters with interrupts off, outside the
  * big lock. Selectors use GuestOnly and never enable a physical PMI; a
