@@ -6352,7 +6352,8 @@ static int32_t file_read_plain(struct open_file *ofd, char __user *buf, uint32_t
  * shared folio, so that the read sees their stores, those an earlier buffer
  * of the same readv made among them; any other page, and any other file, is
  * read by `file_read_plain`. The bytes read, which stop at the first page
- * that fails after some were read, 0 at the end, or the type's error.
+ * that fails after some were read, 0 at the end, or the type's error, or
+ * -ENOMEM for a page in memory that no temporary mapping is free for.
  */
 static int32_t file_read_locked(struct open_file *ofd, char __user *buf, uint32_t count,
                                 uint64_t pos)

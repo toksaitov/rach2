@@ -451,6 +451,10 @@ and
 give it only for a vector with bytes, and return zero for one without.
 .It Er ENETUNREACH
 A stream connection timed out while its local address was gone.
+.It Er ENOMEM
+A page of the file that a mapping holds in memory could not be given a
+temporary kernel mapping, which on i686 has 1024 slots; the bytes of the
+pages before it are returned instead when there are any.
 .It Er ENOTCONN
 The stream socket is not connected and has not been shut down.
 .It Er ENXIO
