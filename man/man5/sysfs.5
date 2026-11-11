@@ -34,11 +34,11 @@ the panel's backlights under
 and the sleep states under
 .Pa /sys/power .
 Any user may read it; root writes the files of mode 0644.
-A write of more than 31 bytes to one of the fixed files is
-.Er EINVAL
-and changes nothing; a
+A file is given the first 4096 bytes of a write at most, as Linux's
+kernfs gives a page, so a longer write is taken in part, and parses them
+with its own limits; the arguments a
 .Pa uevent
-takes up to 256 bytes, and a driver's own file up to 4096.
+write gives its uevent fill at most 256 bytes.
 .Bl -tag -width Ds
 .It Pa /sys/bus/pci/devices/0000:BB:DD.F
 A symbolic link for each PCI function, named by its bus, device and
