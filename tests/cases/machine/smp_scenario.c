@@ -5,9 +5,12 @@
  * shell's preemption test and ring-3 payload on two; `nmi` raises an NMI on
  * both of two, which stops the machine as a fault of the machine, and
  * `exception` runs an invalid opcode in the kernel, each with panic=0 and
- * its report read on the screen after its panic; and `build` compiles the
- * ish sources four times over on the installed system with four, and checks
- * that every processor's user ticks grew.
+ * its report read on the screen after its panic; `build` compiles the ish
+ * sources four times over on the installed system with four, and checks
+ * that every processor's user ticks grew; and `softlockup`, `hardlockup`
+ * and `hungtask` hold the debug shell's lockup of each kind on two until
+ * the detector's report and its panic, with panic=0, and `lockups` holds
+ * all three in one boot without a panic.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -422,6 +425,101 @@ static void build(struct lc *l)
         lc_quit(l, m, NULL);
 }
 
+/** One kind of the debug shell's lockup: its case, the shell's command,
+ * the report's headline and the panic's reason. */
+struct lockup_kind {
+    const char *name;
+    const char *command;
+    const char *report;
+    const char *reason;
+};
+
+/* The hard lockup is held longest, since without a counter the buddy check
+ * takes three checks, three sample periods apart, to report it. */
+static const struct lockup_kind lockup_kinds[] = {
+    {"softlockup", "lockup soft 30\r", "watchdog: BUG: soft lockup - CPU#",
+     "panic: stopped: softlockup: hung tasks"},
+    {"hardlockup", "lockup hard 30\r", "watchdog: watchdog detected hard LOCKUP on cpu ",
+     "panic: stopped: Hard LOCKUP"},
+    {"hungtask", "lockup hung 30\r",
+     "hung_task: INFO: task test_lockup:", "panic: stopped: hung_task: blocked tasks"},
+};
+
+/** The kind of the case `name`, or NULL. */
+static const struct lockup_kind *lockup_kind(const char *name)
+{
+    size_t i;
+
+    for (i = 0; i < sizeof(lockup_kinds) / sizeof(lockup_kinds[0]); i++)
+        if (strcmp(lockup_kinds[i].name, name) == 0)
+            return &lockup_kinds[i];
+    return NULL;
+}
+
+/**
+ * Run case `softlockup`, `hardlockup` or `hungtask`, `k`: the boot line
+ * sets the kind's panic option, the debug shell holds the lockup, and the
+ * detector reports it with a trace and panics, after which both processors
+ * halt. Assertions `online`, `reported`, `traced`, `panicked`, `halted` and
+ * `one-panic`.
+ */
+static void lockup(struct lc *l, const struct lockup_kind *k)
+{
+    struct etude_case_machine *m;
+    uint64_t at, traced, panicked;
+    enum etude_status st;
+
+    if ((m = lc_shell(l, k->name, "fixture", &at)) == NULL)
+        return;
+    online(l, m, 2);
+    if (!lc_ok(l) || !lc_type(l, m, k->command))
+        return;
+    if (!lc_wait(l, m, k->report, &at, "reported"))
+        return;
+    traced = at;
+    if (!lc_wait(l, m, "Call Trace:", &traced, "traced"))
+        return;
+    panicked = at;
+    if (!lc_wait(l, m, k->reason, &panicked, "panicked"))
+        return;
+    st = etude_fault(m, ETUDE_END_PANIC);
+    if (st != ETUDE_OK) {
+        lc_halt(l, st, "the record of the kernel's panic");
+        return;
+    }
+    lc_halted(l, m, 2, "halted");
+    if (lc_ok(l) && lc_quit(l, m, NULL))
+        lc_find(l, m, "one-panic", "panic: stopped: ", panicked, 0);
+}
+
+/**
+ * Run case `lockups`: with no panic option, the debug shell holds each kind
+ * of lockup in turn; each must be reported and the shell must come back
+ * after it, and no panic may follow. Assertions `online`, `soft`,
+ * `soft-done`, `hard`, `hard-done`, `hung`, `hung-done` and `no-panic`.
+ */
+static void lockups(struct lc *l)
+{
+    static const char *const ids[][2] = {
+        {"soft", "soft-done"}, {"hard", "hard-done"}, {"hung", "hung-done"}};
+    struct etude_case_machine *m;
+    uint64_t at, start;
+    size_t i;
+
+    if ((m = lc_shell(l, "lockups", "fixture", &at)) == NULL)
+        return;
+    start = at;
+    online(l, m, 2);
+    for (i = 0; i < sizeof(ids) / sizeof(ids[0]) && lc_ok(l); i++) {
+        if (!lc_type(l, m, lockup_kinds[i].command) ||
+            !lc_wait(l, m, lockup_kinds[i].report, &at, ids[i][0]) ||
+            !lc_wait(l, m, "lockup: done", &at, ids[i][1]))
+            return;
+    }
+    if (lc_ok(l) && lc_quit(l, m, NULL))
+        lc_find(l, m, "no-panic", "panic: stopped: ", start, 0);
+}
+
 int etude_scenario(struct etude_case *c)
 {
     static const char *const smpmusl_ids[] = {"online", "exit", "said-ok", NULL};
@@ -431,7 +529,12 @@ int etude_scenario(struct etude_case *c)
                                           "halted",     "screen-cause", "screen-stopped",
                                           "one-report", "one-panic",    NULL};
     static const char *const build_ids[] = {"online", "login", "nproc", "sixteen", "grew", NULL};
+    static const char *const lockup_ids[] = {"online", "reported",  "traced", "panicked",
+                                             "halted", "one-panic", NULL};
+    static const char *const lockups_ids[] = {
+        "online", "soft", "soft-done", "hard", "hard-done", "hung", "hung-done", "no-panic", NULL};
     const char *name = case_name(c);
+    const struct lockup_kind *k = lockup_kind(name);
     struct lc l;
 
     if (strncmp(name, "smpmusl-", 8) == 0 || strncmp(name, "maxcpus-", 8) == 0) {
@@ -452,6 +555,12 @@ int etude_scenario(struct etude_case *c)
     } else if (strcmp(name, "build") == 0) {
         lc_begin(&l, c, build_ids);
         build(&l);
+    } else if (k != NULL) {
+        lc_begin(&l, c, lockup_ids);
+        lockup(&l, k);
+    } else if (strcmp(name, "lockups") == 0) {
+        lc_begin(&l, c, lockups_ids);
+        lockups(&l);
     } else {
         return 1;
     }
