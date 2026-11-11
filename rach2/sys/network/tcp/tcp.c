@@ -1177,6 +1177,10 @@ static int tcp_output(struct tcb *tcb)
  * Linux's tcp_retransmit_skb stamps retrans_stamp; an acknowledgement that
  * ends the recovery clears it (`tcp_take_ack`).
  *
+ * A SYN still unacknowledged at snd_una (`syn_unacked`) is sent again as
+ * the SYN-ACK, alone, which counts as one byte sent, as Linux's
+ * tcp_retransmit_skb sends the head of its queue.
+ *
  * Returns the bytes sent; 0 when `seq` is at or past the data sent or `most`
  * is 0; -1 when the driver refused the segment, counted as tcp_output counts
  * a refusal so that the tick's pump sends it later.
@@ -1187,6 +1191,7 @@ static int tcp_resend(struct tcb *tcb, uint32_t seq, uint32_t most)
     uint32_t from = tcb->send_ack + (seq - tcb->snd_una);
     uint32_t send_len, i;
     uint16_t seg_len;
+    int rc;
 
     if ((int32_t)(sent_end - seq) <= 0 || most == 0) {
         return 0;
@@ -1194,30 +1199,37 @@ static int tcp_resend(struct tcb *tcb, uint32_t seq, uint32_t most)
     if (tcb->retx_stamp == 0) {
         tcb->retx_stamp = tcp_due(1); /* this tick + 1 */
     }
-    tcp_mss_clamp(tcb);
-    send_len = sent_end - seq;
-    if (send_len > tcb->snd_mss)
-        send_len = tcb->snd_mss;
-    if (send_len > most)
-        send_len = most;
+    if (tcb->syn_unacked && seq == tcb->snd_una) {
+        rc = tcp_emit_flags(tcb, TCP_SYN | TCP_ACK, seq);
+        send_len = 1;
+    } else {
+        tcp_mss_clamp(tcb);
+        send_len = sent_end - seq;
+        if (send_len > tcb->snd_mss)
+            send_len = tcb->snd_mss;
+        if (send_len > most)
+            send_len = most;
 
-    write16be(tcp_tx_buf + 0, tcb->local_port);
-    write16be(tcp_tx_buf + 2, tcb->remote_port);
-    write32be(tcp_tx_buf + 4, seq);
-    write32be(tcp_tx_buf + 8, tcb->rcv_nxt);
-    tcp_tx_buf[12] = (uint8_t)((TCP_HDR_SIZE >> 2) << 4);
-    tcp_tx_buf[13] = TCP_ACK | TCP_PSH;
-    write16be(tcp_tx_buf + 14, tcp_wnd_field(tcb, TCP_ACK));
-    write16be(tcp_tx_buf + 16, 0);
-    write16be(tcp_tx_buf + 18, 0);
+        write16be(tcp_tx_buf + 0, tcb->local_port);
+        write16be(tcp_tx_buf + 2, tcb->remote_port);
+        write32be(tcp_tx_buf + 4, seq);
+        write32be(tcp_tx_buf + 8, tcb->rcv_nxt);
+        tcp_tx_buf[12] = (uint8_t)((TCP_HDR_SIZE >> 2) << 4);
+        tcp_tx_buf[13] = TCP_ACK | TCP_PSH;
+        write16be(tcp_tx_buf + 14, tcp_wnd_field(tcb, TCP_ACK));
+        write16be(tcp_tx_buf + 16, 0);
+        write16be(tcp_tx_buf + 18, 0);
 
-    for (i = 0; i < send_len; i++) {
-        tcp_tx_buf[TCP_HDR_SIZE + i] = tcb->send_buf[(from + i) & (TCP_RING_SIZE - 1)];
+        for (i = 0; i < send_len; i++) {
+            tcp_tx_buf[TCP_HDR_SIZE + i] = tcb->send_buf[(from + i) & (TCP_RING_SIZE - 1)];
+        }
+
+        seg_len = (uint16_t)(TCP_HDR_SIZE + send_len);
+        write16be(tcp_tx_buf + 16,
+                  tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
+        rc = tcp_tcb_tx(tcb, seg_len);
     }
-
-    seg_len = (uint16_t)(TCP_HDR_SIZE + send_len);
-    write16be(tcp_tx_buf + 16, tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
-    if (tcp_tcb_tx(tcb, seg_len) == -ENOBUFS) {
+    if (rc == -ENOBUFS) {
         tcb->tx_refused++;
         if (tcb->refused_since == 0) {
             tcb->refused_since = TCP_NOW() + 1;
@@ -2586,7 +2598,9 @@ void tcp_window_update(struct socket *sock)
  * acknowledged only, at most the ring's sent bytes; this keeps the
  * retransmission timer from sending acknowledged data again after the FIN is
  * sent. The caller has checked snd_una < ack_num <= snd_nxt. A fast resend
- * still owed is dropped, since its hole was at the old `snd_una`.
+ * still owed is dropped, since its hole was at the old `snd_una`. A SYN
+ * still unacknowledged (`syn_unacked`) is acknowledged by any such number,
+ * and its slot in the ring and its retransmission go with it.
  *
  * An acknowledgement that reaches `recover` ends a loss recovery, a fast one
  * with the congestion window set to the threshold. Outside a recovery
@@ -2601,6 +2615,12 @@ static void tcp_ack_data(struct tcb *tcb, uint32_t ack_num)
 
     tcb->send_ack += (acked < ring) ? acked : ring;
     tcb->snd_acked = acked > 0xFFFFFFFFu - tcb->snd_acked ? 0xFFFFFFFFu : tcb->snd_acked + acked;
+    if (tcb->syn_unacked) {
+        tcb->syn_unacked = 0;
+        if (tcb->retx_flags & TCP_SYN) {
+            tcb->retx_flags = 0;
+        }
+    }
     tcb->snd_una = ack_num;
     tcp_sent_acked(tcb);
     tcb->soft_error = 0;
@@ -2745,11 +2765,9 @@ static void tcp_ack_grow(struct tcb *tcb)
  * Take `len` bytes of in-order data and return how many to move `rcv_nxt`
  * by. A socket gets the data, and may take less than `len` when its receive
  * ring is nearly full, so that the peer sends the rest again. A block whose
- * socket `tcp_close` detached, which it does before the FIN is sent, so in
- * ESTABLISHED while queued data drains and in a closing state after it, has
- * no reader: the data is taken whole and dropped, which still acknowledges
- * it, so that the peer stops sending it again and the stream stays in
- * sequence for the peer's FIN.
+ * socket `tcp_close` detached has no reader, and new data ends it with a
+ * reset before it gets here (`tcp_rx_closed_data`); were any to come, it
+ * would be taken whole and dropped.
  */
 static uint16_t tcp_accept_data(struct tcb *tcb, const uint8_t *payload, uint16_t len)
 {
@@ -3325,28 +3343,72 @@ static void tcp_rx_answers(struct tcb *tcb, uint8_t flags, uint32_t ack_num)
 }
 
 /**
+ * End the connection `tcb` for a segment of `flags` that starts at `seq`
+ * with `len` bytes of data and acknowledges `ack_num`, whose data runs past
+ * what this side will read, counted in TCPAbortOnData: the connection ends
+ * as an accepted reset ends it (`tcp_reset`), and the segment is answered
+ * with a reset at `ack_num` (`tcp_send_rst_unmatched`), as Linux's
+ * tcp_rcv_state_process returns SKB_DROP_REASON_TCP_ABORT_ON_DATA after
+ * tcp_reset (tcp_input.c:7025-7030) and tcp_v4_do_rcv and tcp_v6_do_rcv
+ * send the reset for it (tcp_ipv4.c:1944-1950, tcp_ipv6.c:1652-1660). The
+ * caller must not use `tcb` afterwards.
+ */
+static void tcp_abort_on_data(struct tcb *tcb, uint8_t flags, uint32_t seq, uint32_t len,
+                              uint32_t ack_num)
+{
+    net_mib.tcp_abort_on_data++;
+    tcp_send_rst_unmatched(tcb->local_ip, tcb->remote_ip, tcb->local_port, tcb->remote_port, flags,
+                           seq, ack_num, len + ((flags & TCP_FIN) != 0));
+    tcp_reset(tcb);
+}
+
+/**
+ * End the block `tcb`, whose socket `tcp_close` detached, for a segment of
+ * `flags` that starts at `seq` with `len` bytes of data and acknowledges
+ * `ack_num`, when its data or FIN runs past rcv_nxt (`tcp_abort_on_data`),
+ * as Linux ends a socket whose close set RCV_SHUTDOWN (tcp.c:3071) in
+ * FIN_WAIT_1 and FIN_WAIT_2, both for the FIN acknowledged in the same
+ * segment (tcp_input.c:6958-6966) and in step 7 (:7019-7031). RFC 1122,
+ * 4.2.2.13, has a reset sent for data that no program will read. A block
+ * here in ESTABLISHED has its FIN queued behind its data, where Linux's
+ * close has moved to FIN_WAIT_1 already. Data or a FIN the peer sent again,
+ * ending at or before rcv_nxt, is taken and acknowledged as before.
+ *
+ * @return 1 when the block was ended and is gone; 0 otherwise.
+ */
+static int tcp_rx_closed_data(struct tcb *tcb, uint8_t flags, uint32_t seq, uint32_t len,
+                              uint32_t ack_num)
+{
+    if (tcb->sock || (len == 0 && !(flags & TCP_FIN)) || (int32_t)(seq + len - tcb->rcv_nxt) <= 0) {
+        return 0;
+    }
+    tcp_abort_on_data(tcb, flags, seq, len, ack_num);
+    return 1;
+}
+
+/**
  * Answer a segment of `flags` that starts at `seq` with `len` bytes of
- * data, received after the peer's FIN (CLOSE_WAIT, CLOSING or LAST_ACK),
- * as Linux's tcp_rcv_state_process answers it once its acknowledgement is
- * judged. One at or past rcv_nxt follows the FIN and is dropped with no
- * answer. One that starts before rcv_nxt and whose data runs past it, past
- * the peer's FIN, ends the connection as an accepted reset does
- * (`tcp_reset`), counted in TCPAbortOnData: the peer sent data after it
- * closed. Any other with data or a FIN is one the peer sent again, its FIN
- * above all, which tcp_data_queue acknowledges at once and counts
- * (`tcp_rx_resent`).
+ * data and acknowledges `ack_num`, received after the peer's FIN
+ * (CLOSE_WAIT, CLOSING or LAST_ACK), as Linux's tcp_rcv_state_process
+ * answers it once its acknowledgement is judged (tcp_input.c:7005-7031).
+ * One at or past rcv_nxt follows the FIN and is dropped with no answer.
+ * One that starts before rcv_nxt and whose data runs past it, past the
+ * peer's FIN, ends the connection and is answered with a reset
+ * (`tcp_abort_on_data`): the peer sent data after it closed. Any other
+ * with data or a FIN is one the peer sent again, its FIN above all, which
+ * tcp_data_queue acknowledges at once and counts (`tcp_rx_resent`).
  *
  * @return 1 when the connection was ended, and `tcb` may be gone; 0
  * otherwise.
  */
-static int tcp_rx_after_fin(struct tcb *tcb, uint8_t flags, uint32_t seq, uint32_t len)
+static int tcp_rx_after_fin(struct tcb *tcb, uint8_t flags, uint32_t seq, uint32_t len,
+                            uint32_t ack_num)
 {
     if ((int32_t)(seq - tcb->rcv_nxt) >= 0 || (len == 0 && !(flags & TCP_FIN))) {
         return 0;
     }
     if ((int32_t)(seq + len - tcb->rcv_nxt) > 0) {
-        net_mib.tcp_abort_on_data++;
-        tcp_reset(tcb);
+        tcp_abort_on_data(tcb, flags, seq, len, ack_num);
         return 1;
     }
     tcp_rx_resent(tcb, flags, seq, len);
@@ -3355,23 +3417,40 @@ static int tcp_rx_after_fin(struct tcb *tcb, uint8_t flags, uint32_t seq, uint32
 }
 
 /**
- * Take `ack_num`, the acknowledgement of this side's SYN, and the peer's
- * window `window`, and enter ESTABLISHED, ending the handshake's
- * retransmission. The bytes acknowledged (`snd_acked`) count the SYN on an
- * active open, as Linux's tcp_ack moves bytes_acked past it, and not on a
- * passive one, whose child Linux makes with snd_una past the SYN already.
+ * Take `ack_num`, the acknowledgement that ends the handshake, and the
+ * peer's window `window`, and enter ESTABLISHED. An acknowledgement of
+ * this side's SYN ends the handshake's retransmission. The bytes
+ * acknowledged (`snd_acked`) count the SYN on an active open, as Linux's
+ * tcp_ack moves bytes_acked past it, and not on a passive one, whose child
+ * Linux makes with snd_una past the SYN already.
+ *
+ * After a simultaneous open an acknowledgement of snd_una, the SYN's own
+ * number, ends the handshake too, as Linux's tcp_ack takes it and
+ * tcp_rcv_state_process enters ESTABLISHED (tcp_input.c:6880-6929), and
+ * leaves the SYN unacknowledged: its retransmission goes on, the SYN-ACK
+ * at snd_una, and the SYN holds the send ring's slot before the first byte
+ * of data (`syn_unacked`), so that an acknowledgement of the SYN and data
+ * moves the ring by both, as Linux's retransmission queue keeps the SYN
+ * before the data. The ring is empty here, since data is written only
+ * once the connection is established (`tcp_send`).
  */
 static void tcp_handshake_done(struct tcb *tcb, uint32_t ack_num, uint32_t window)
 {
-    tcb->snd_una = ack_num;
-    tcb->snd_acked = !tcb->passive;
     tcb->soft_error = 0;
     tcp_take_wnd(tcb, window);
     tcb->state = TCP_ESTABLISHED;
+    tcb->retx_stamp = 0;
+    if (ack_num == tcb->snd_una && ack_num != tcb->snd_nxt) {
+        tcb->syn_unacked = 1;
+        tcb->send_ack--; /* the SYN's slot */
+        tcb->snd_acked = 0;
+        return;
+    }
+    tcb->snd_una = ack_num;
+    tcb->snd_acked = !tcb->passive;
     tcb->retx_flags = 0;
     tcb->rto_due = 0;
     tcb->rto_backoff = 0;
-    tcb->retx_stamp = 0;
 }
 
 /**
@@ -3412,6 +3491,9 @@ static void tcp_rx_established(struct tcb *tcb, const uint8_t *data, uint16_t hd
         }
     }
 
+    if (tcp_rx_closed_data(tcb, flags, seq, payload_len, ack_num)) {
+        return;
+    }
     tcp_rx_resent(tcb, flags, seq, payload_len);
     if (payload_len > 0) {
         queued = tcp_take_data(tcb, seq, payload, payload_len, flags & TCP_FIN);
@@ -3478,24 +3560,30 @@ static void tcp_resend_syn_ack(struct tcb *tcb)
  * SYN-ACK (`tcp_resend_syn_ack`); an ACK of anything but snd_nxt is
  * answered with a reset at that number, as the listener answers it, and
  * the block stays; a segment outside the window offered
- * (`tcp_syn_rcvd_in_window`) is answered with an acknowledgement, at most
- * one in TCP_INVALID_RATELIMIT, counted in TCPACKSkippedSynRecv when held
- * back; a SYN at any other number resets the handshake, which frees the
- * block with its socket and counts in AttemptFails; and one at the peer's
- * first number with the right ACK draws the challenge Linux's new child
- * socket answers it with (TCPSYNChallenge).
+ * (`tcp_syn_rcvd_in_window`) is answered with an acknowledgement, which a
+ * segment with neither data nor a FIN, or with a SYN, gets at most once in
+ * TCP_INVALID_RATELIMIT, counted in TCPACKSkippedSynRecv when held back,
+ * and one with data or a FIN always gets (tcp_minisocks.c:790-804,
+ * tcp_input.c:3781-3784); a SYN at any other number resets the handshake,
+ * which frees the block with its socket and counts in AttemptFails; and
+ * one at the peer's first number with the right ACK draws the challenge
+ * Linux's new child socket answers it with (TCPSYNChallenge).
  *
  * The block of a simultaneous open judges it as Linux's
- * tcp_rcv_state_process: a segment with neither ACK nor SYN is dropped;
- * one outside the receive window draws a duplicate acknowledgement
- * (`tcp_dupack`); a SYN draws a challenge but for the peer's SYN-ACK at its
- * first number, with no data or FIN, that acknowledges snd_nxt; and an
- * acknowledgement of anything but snd_nxt is answered with a reset.
+ * tcp_rcv_state_process, in tcp_validate_incoming's order and then
+ * tcp_ack's (tcp_input.c:6031-6114, :3988-4009, :6867-6878): a segment
+ * with neither ACK nor SYN is dropped; a SYN draws a challenge, inside the
+ * receive window or outside it, but for the peer's SYN-ACK at its first
+ * number, with no data or FIN, that acknowledges snd_nxt; one outside the
+ * receive window draws a duplicate acknowledgement (`tcp_dupack`); and an
+ * acknowledgement outside [snd_una, snd_nxt] is answered with a reset. One
+ * of snd_una, which leaves this side's SYN unacknowledged, ends the
+ * handshake as one of snd_nxt does (`tcp_handshake_done`).
  *
  * A segment with no ACK that gets this far is dropped.
  *
- * @return 1 when the segment acknowledges this side's SYN and goes on; 0
- * when it was answered or dropped here, after which `tcb` may be gone.
+ * @return 1 when the segment acknowledges what it must and goes on; 0 when
+ * it was answered or dropped here, after which `tcb` may be gone.
  */
 static int tcp_rx_syn_rcvd(struct tcb *tcb, uint8_t flags, uint32_t seq, uint32_t end,
                            uint32_t ack_num)
@@ -3505,42 +3593,49 @@ static int tcp_rx_syn_rcvd(struct tcb *tcb, uint8_t flags, uint32_t seq, uint32_
             tcp_resend_syn_ack(tcb);
             return 0;
         }
-    } else if (!(flags & (TCP_ACK | TCP_SYN))) {
-        return 0;
-    }
-    if (tcb->passive && (flags & TCP_ACK) && ack_num != tcb->snd_nxt) {
-        tcp_send_rst_unmatched(tcb->local_ip, tcb->remote_ip, tcb->local_port, tcb->remote_port,
-                               flags, seq, ack_num, end - seq);
-        return 0;
-    }
-    if (tcb->passive && !tcp_syn_rcvd_in_window(tcb, seq, end)) {
-        if (!tcp_oow_limited(tcb, &net_mib.tcp_ack_skipped_syn_recv)) {
-            tcp_send_flags(tcb, TCP_ACK);
-        }
-        return 0;
-    }
-    if (!tcb->passive && !tcp_in_window(tcb, seq, end)) {
-        tcp_dupack(tcb, seq, end);
-        return 0;
-    }
-    if (flags & TCP_SYN) {
-        if (tcb->passive && seq != tcb->irs) {
+        if ((flags & TCP_ACK) && ack_num != tcb->snd_nxt) {
             tcp_send_rst_unmatched(tcb->local_ip, tcb->remote_ip, tcb->local_port, tcb->remote_port,
                                    flags, seq, ack_num, end - seq);
-            tcp_reset(tcb);
             return 0;
         }
-        if (tcb->passive || !(flags & TCP_ACK) || end != seq + 1u || end != tcb->rcv_nxt ||
-            ack_num != tcb->snd_nxt) {
+        if (!tcp_syn_rcvd_in_window(tcb, seq, end)) {
+            if ((end != seq && !(flags & TCP_SYN)) ||
+                !tcp_oow_limited(tcb, &net_mib.tcp_ack_skipped_syn_recv)) {
+                tcp_send_flags(tcb, TCP_ACK);
+            }
+            return 0;
+        }
+        if (flags & TCP_SYN) {
+            if (seq != tcb->irs) {
+                tcp_send_rst_unmatched(tcb->local_ip, tcb->remote_ip, tcb->local_port,
+                                       tcb->remote_port, flags, seq, ack_num, end - seq);
+                tcp_reset(tcb);
+                return 0;
+            }
             net_mib.tcp_syn_challenge++;
             tcp_challenge_ack(tcb);
             return 0;
         }
+        return (flags & TCP_ACK) != 0;
+    }
+
+    if (!(flags & (TCP_ACK | TCP_SYN))) {
+        return 0;
+    }
+    if ((flags & TCP_SYN) &&
+        (!(flags & TCP_ACK) || end != seq + 1u || end != tcb->rcv_nxt || ack_num != tcb->snd_nxt)) {
+        net_mib.tcp_syn_challenge++;
+        tcp_challenge_ack(tcb);
+        return 0;
+    }
+    if (!tcp_in_window(tcb, seq, end)) {
+        tcp_dupack(tcb, seq, end);
+        return 0;
     }
     if (!(flags & TCP_ACK)) {
         return 0;
     }
-    if (ack_num != tcb->snd_nxt) {
+    if ((int32_t)(ack_num - tcb->snd_una) < 0 || (int32_t)(ack_num - tcb->snd_nxt) > 0) {
         tcp_send_rst_unmatched(tcb->local_ip, tcb->remote_ip, tcb->local_port, tcb->remote_port,
                                flags, seq, ack_num, end - seq);
         return 0;
@@ -3620,10 +3715,11 @@ static int tcp_rx_syn_rcvd(struct tcb *tcb, uint8_t flags, uint32_t seq, uint32_
  * expects the ACK of this side's FIN.
  *
  * The FIN_WAIT states follow `tcp_close` or `tcp_shutdown_send`. After a
- * close the socket is detached, and in-order data is taken and dropped
- * (`tcp_accept_data`): acknowledging it stops the peer's retransmissions and
- * keeps the stream in sequence for the peer's FIN. After a shutdown the
- * socket reads the data and the FIN (`tcp_take_fin`).
+ * close the socket is detached, and data or a FIN past rcv_nxt, which no
+ * program will read, ends the block with a reset (`tcp_rx_closed_data`),
+ * in ESTABLISHED too while the FIN waits behind queued data; data and a
+ * FIN sent again are acknowledged, and a FIN in order is taken. After a
+ * shutdown the socket reads the data and the FIN (`tcp_take_fin`).
  *
  * FIN_WAIT_1 takes an ACK only inside (snd_una, snd_nxt], since a higher one
  * would move snd_una past what was sent, and moves to FIN_WAIT_2, starting
@@ -3639,7 +3735,8 @@ static int tcp_rx_syn_rcvd(struct tcb *tcb, uint8_t flags, uint32_t seq, uint32_
  * FIN_WAIT_1 until this side's FIN. Each such segment, taken whole before,
  * counts in DelayedACKLost (`tcp_rx_resent`); one whose data runs past the
  * peer's FIN ends the connection, in all three states, as an accepted reset
- * does (`tcp_reset`), counted in TCPAbortOnData. TIME_WAIT acknowledges a
+ * does, and is answered with a reset (`tcp_abort_on_data`), counted in
+ * TCPAbortOnData. TIME_WAIT acknowledges a
  * FIN the peer sent again because its acknowledgement was lost, and
  * restarts its 2MSL wait.
  */
@@ -3841,6 +3938,9 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
             }
         }
 
+        if (tcp_rx_closed_data(tcb, flags, seq, payload_len, ack_num)) {
+            break;
+        }
         tcp_rx_resent(tcb, flags, seq, payload_len);
         if (payload_len > 0) {
             queued = tcp_take_data(tcb, seq, payload, payload_len, flags & TCP_FIN);
@@ -3872,6 +3972,9 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
         const uint8_t *payload = data + hdr_len;
         int needs_ack = 0, queued = 1;
 
+        if (tcp_rx_closed_data(tcb, flags, seq, payload_len, ack_num)) {
+            break;
+        }
         tcp_rx_resent(tcb, flags, seq, payload_len);
         if (payload_len > 0) {
             queued = tcp_take_data(tcb, seq, payload, payload_len, flags & TCP_FIN);
@@ -3902,7 +4005,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
                 (int32_t)(ack_num - tcb->snd_nxt) < 0) {
                 tcp_take_ack(tcb, ack_num, window);
             }
-            (void)tcp_rx_after_fin(tcb, flags, seq, (uint32_t)(len - hdr_len));
+            (void)tcp_rx_after_fin(tcb, flags, seq, (uint32_t)(len - hdr_len), ack_num);
         }
         break;
 
@@ -3914,12 +4017,12 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
                 (int32_t)(ack_num - tcb->snd_nxt) < 0) {
                 tcp_take_ack(tcb, ack_num, window);
             }
-            (void)tcp_rx_after_fin(tcb, flags, seq, (uint32_t)(len - hdr_len));
+            (void)tcp_rx_after_fin(tcb, flags, seq, (uint32_t)(len - hdr_len), ack_num);
         }
         break;
 
     case TCP_CLOSE_WAIT:
-        if (tcp_rx_after_fin(tcb, flags, seq, (uint32_t)(len - hdr_len))) {
+        if (tcp_rx_after_fin(tcb, flags, seq, (uint32_t)(len - hdr_len), ack_num)) {
             break;
         }
         if ((flags & TCP_ACK) && (int32_t)(ack_num - tcb->snd_una) > 0 &&
