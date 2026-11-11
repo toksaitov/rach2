@@ -130,6 +130,15 @@ and nothing is queued.
 .Pp
 A stream must be in the established or close-wait state.
 If it cannot send, a pending TCP error is returned and cleared.
+A stream whose handshake is still under way, in
+.Dv SYN_SENT
+or
+.Dv SYN_RCVD ,
+with no pending TCP error, fails with
+.Er EAGAIN
+when nonblocking, and otherwise waits until the handshake ends, as Linux
+does: an established connection then takes the bytes, and a failed one
+returns its error.
 If the stream is outside those states and has no pending TCP error, the
 call fails with
 .Er EPIPE .
@@ -326,8 +335,8 @@ or a raw ICMPv6 one other than
 The interface a raw ICMPv6 datagram leaves by has no IPv6 address to
 send from.
 .It Bq Er EAGAIN
-A nonblocking stream send found no buffer space, or an ephemeral UDP
-port could not be assigned.
+A nonblocking stream send found no buffer space or a handshake still under
+way, or an ephemeral UDP port could not be assigned.
 .It Bq Er EBADF
 .Fa fd
 is not an open descriptor.
@@ -393,7 +402,8 @@ does not refer to a socket.
 The socket is ioctl-only, or a raw ICMP send requested a broadcast
 destination.
 .It Bq Er EPIPE
-A stream is not in a sending state and has no pending TCP error.
+A stream is past its handshake, not in a sending state, and has no pending
+TCP error.
 .It Bq Er ETIMEDOUT
 A pending TCP error reports that the connection timed out.
 .El

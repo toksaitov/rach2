@@ -33,6 +33,11 @@ and
 end them.
 .Xr connect 2
 gives the retransmission timeout, the handshake's give-up and the resets.
+A send during the handshake waits for its end, or fails with
+.Er EAGAIN
+on a nonblocking socket, as
+.Xr send 2
+says.
 .Ss Keepalive
 A connection with
 .Dv SO_KEEPALIVE
