@@ -2769,6 +2769,10 @@ void intel_vblank_fini(struct drm_i915_private *i915);
  * pending. */
 void intel_crtc_send_event(struct intel_crtc *crtc);
 
+/** Let `c`'s interactive mark go once its flip is no longer pending, as
+ * Linux's intel_cleanup_plane_fb after the flip. Interrupts masked. */
+void intel_crtc_interactive_end(struct intel_crtc *c);
+
 /**
  * Boost the GT's clock at the next vblank of `c` for `fence`, the request
  * drawing the flip of plane `slot`, if the chip has not begun it by then,

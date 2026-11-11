@@ -127,9 +127,7 @@ void intel_disable_vblank(struct drm_crtc *crtc)
     c->vbl_on = 0;
 }
 
-/** Let `c`'s interactive mark go once its flip is no longer pending, as
- * Linux's intel_cleanup_plane_fb after the flip. Interrupts masked. */
-static void interactive_end(struct intel_crtc *c)
+void intel_crtc_interactive_end(struct intel_crtc *c)
 {
     if (c->rps_interactive && !c->base.flip_pending) {
         c->rps_interactive = 0;
@@ -142,7 +140,7 @@ void intel_crtc_send_event(struct intel_crtc *c)
     struct drm_pending_event *e = c->event;
 
     if (!e) {
-        interactive_end(c);
+        intel_crtc_interactive_end(c);
         return;
     }
     c->event = NULL;
@@ -152,7 +150,7 @@ void intel_crtc_send_event(struct intel_crtc *c)
     }
     drm_crtc_send_vblank_event(&c->base, e);
     drm_crtc_vblank_put(&c->base);
-    interactive_end(c);
+    intel_crtc_interactive_end(c);
 }
 
 void intel_crtc_boost_after_vblank(struct intel_crtc *c, int slot, struct dma_fence *fence)
@@ -240,7 +238,7 @@ void intel_crtc_arm_event(struct intel_crtc *c, struct drm_atomic_state *state)
             i915_irq_mask(c->i915, I915_IRQ_DE, DE_PLANE_FLIP_DONE_IVB(c->pipe));
         }
         drm_crtc_send_vblank_event(&c->base, e);
-        interactive_end(c);
+        intel_crtc_interactive_end(c);
     }
     kirq_restore(flags);
 }
@@ -350,7 +348,7 @@ void intel_display_irq_work(struct drm_i915_private *i915)
                 intel_crtc_send_event(c);
             }
             /* A flip whose event the core sent ends here too. */
-            interactive_end(c);
+            intel_crtc_interactive_end(c);
         }
         if ((iir & DE_PLANE_FLIP_DONE_IVB(pipe)) && c->event && c->event_async) {
             intel_crtc_send_event(c);
