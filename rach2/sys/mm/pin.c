@@ -5,10 +5,12 @@
 
 #include "pin.h"
 
+#include "filemap.h"
 #include "kheap.h"
 #include "mm.h"
 #include "notify.h"
 #include "paging.h"
+#include "vm.h"
 #include "../lib/kerrno.h"
 #include "../proc/process.h"
 
@@ -22,10 +24,15 @@ struct pin {
     uint32_t count;
     uint32_t ram_pages; /* frames pinned and charged, excluding device pages */
     uint32_t live;      /* 1 while the frames are held */
+    /* Of a holder with PIN_KEEP_PAST_END: the shared mappings of disk files
+     * the range met, each held while the pin is live, or NULL for none. */
+    struct vm_file **files;
+    uint32_t nfiles;
 };
 
 /** Drop what `pin` holds, once: its range's registration, its frames'
- * pins and its charge. */
+ * pins, its charge and its files, whose last reference puts each on the
+ * list `vm_file_reap` empties. */
 static void pin_drop(struct pin *pin)
 {
     uint32_t i;
@@ -42,6 +49,59 @@ static void pin_drop(struct pin *pin)
         pin->mm->pinned -= pin->ram_pages;
         pin->mm = NULL;
     }
+    for (i = 0; i < pin->nfiles; i++) {
+        vm_file_put(pin->files[i]);
+    }
+    kfree(pin->files);
+    pin->files = NULL;
+    pin->nfiles = 0;
+}
+
+/** Whether `f` is among the first `n` of `files`. */
+static int pin_file_listed(struct vm_file *const *files, uint32_t n, const struct vm_file *f)
+{
+    while (n--) {
+        if (files[n] == f) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Hold each shared mapping of a disk file that [start, end) of `mm` meets,
+ * once, in `pin`, as Linux's pin holds a page cache folio: the file's pages
+ * in memory, among them the frames pinned, go with its last mapping
+ * (`filemap_disk_shared`), and a pin kept past the end of `mm` would then
+ * hold frames that a later write(2) of the file no longer reaches and
+ * whose device writes no write-back takes to the file. Held, the mapping
+ * keeps its pages, the file's descriptor writes reach them, and its release
+ * at `unpin` writes them back. The ranges of the regions met cannot change
+ * without an unmap, which takes the pin back. Does not sleep. 0, or -ENOMEM
+ * with nothing held.
+ */
+static int pin_keep_files(struct pin *pin, struct mm *mm, uintptr_t start, uintptr_t end)
+{
+    const vma_t *r;
+    uint32_t n = 0;
+
+    for (r = vm_lower(&mm->vm, start); r && r->start < end; r = vm_next(r)) {
+        n += filemap_disk_pages(r->file);
+    }
+    if (n == 0) {
+        return 0;
+    }
+    pin->files = kmalloc((size_t)n * sizeof(*pin->files));
+    if (!pin->files) {
+        return -ENOMEM;
+    }
+    for (r = vm_lower(&mm->vm, start); r && r->start < end; r = vm_next(r)) {
+        if (filemap_disk_pages(r->file) && !pin_file_listed(pin->files, pin->nfiles, r->file)) {
+            vm_file_get(r->file);
+            pin->files[pin->nfiles++] = r->file;
+        }
+    }
+    return 0;
 }
 
 /** The pin's range heard of a change: an unmap of a page of a user range,
@@ -150,7 +210,9 @@ int pin_user(struct mm *mm, uintptr_t addr, uintptr_t len, uint32_t flags,
     } else {
         rc = paging_pin_range(mm, start, end, flags & (PIN_WRITE | PIN_SLOW), pin->frames);
     }
-    if (rc == 0 && pin->ram_pages != 0 && !mem_lock_room(mm->pinned, pin->ram_pages)) {
+    if (rc == 0 && ((pin->ram_pages != 0 && !mem_lock_room(mm->pinned, pin->ram_pages)) ||
+                    (holder && (holder->flags & PIN_KEEP_PAST_END) &&
+                     pin_keep_files(pin, mm, start, end) != 0))) {
         uint32_t i;
 
         for (i = 0; i < pin->count; i++) {
@@ -200,12 +262,18 @@ int pin_frames(struct mm *mm, const uintptr_t *frames, uint32_t count,
 
 void unpin(struct pin *pin)
 {
+    int held;
+
     if (!pin) {
         return;
     }
+    held = pin->nfiles != 0;
     pin_drop(pin);
     kfree(pin->frames);
     kfree(pin);
+    if (held) {
+        vm_file_reap();
+    }
 }
 
 int pin_live(const struct pin *pin)

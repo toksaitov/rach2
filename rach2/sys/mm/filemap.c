@@ -562,6 +562,11 @@ struct vm_file *filemap_disk_shared(const fd_entry_t *e)
     return &m->vf;
 }
 
+int filemap_disk_pages(const struct vm_file *f)
+{
+    return f && f->share == filemap_share_disk && ((const struct filemap *)f)->shared;
+}
+
 struct vm_file *filemap_private(const fd_entry_t *e, struct shmem *sh, int disk)
 {
     struct vm_file *f;
