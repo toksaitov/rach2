@@ -1437,8 +1437,11 @@ int tcp_send(struct socket *sock, const uint8_t *buf, int len)
     tcb = sock->tcb;
 
     if ((tcb->state != TCP_ESTABLISHED && tcb->state != TCP_CLOSE_WAIT) || tcb->fin_pending) {
+        int rc =
+            tcb->state == TCP_SYN_SENT || tcb->state == TCP_SYN_RCVD ? TCP_SEND_CONNECTING : -1;
+
         net_unlock(flags);
-        return -1;
+        return rc;
     }
 
     free_space = TCP_RING_SIZE - (tcb->send_tail - tcb->send_ack);

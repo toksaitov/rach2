@@ -673,6 +673,17 @@ static int send_space_ready(void *arg)
     return (TCP_RING_SIZE - (tcb->send_tail - tcb->send_ack)) > 0;
 }
 
+/** The wait predicate of a send on a connection still in its handshake:
+ * the connection has left SYN_SENT and SYN_RCVD, or has an error, as
+ * Linux's sk_stream_wait_connect (net/core/stream.c:75-78) waits. */
+static int send_connect_ready(void *arg)
+{
+    struct socket *sock = (struct socket *)arg;
+    struct tcb *tcb = sock->tcb;
+
+    return !tcb || tcb->so_error != 0 || (tcb->state != TCP_SYN_SENT && tcb->state != TCP_SYN_RCVD);
+}
+
 /**
  * The reason a connection ended, as a negative errno, or `fallback` when
  * none was recorded.
@@ -696,12 +707,18 @@ static int tcp_dead_error(struct tcb *tcb, int fallback)
 }
 
 /**
- * `tcp_send` copies what fits without waiting: 0 for a full ring, and -1 for
- * a block that is gone or not sending. A blocking socket sleeps for room,
+ * `tcp_send` copies what fits without waiting: 0 for a full ring,
+ * TCP_SEND_CONNECTING for a connection still in its handshake, and -1 for a
+ * block that is gone or not sending. A blocking socket sleeps for room,
  * which `socket_tcp_writable` wakes it for when an ACK frees some, so a
  * nonzero request never returns 0, which a caller would take for the end of
- * input. The buffer is brought in again after each sleep, since `tcp_send`
- * reads it with interrupts off and another thread may have unmapped it.
+ * input. A send on a connection still in its handshake fails with its
+ * pending error if it has one, and otherwise with EAGAIN when nonblocking,
+ * or sleeps until the handshake ends and sends then, as Linux's
+ * tcp_sendmsg_locked (net/ipv4/tcp.c:1106-1111) has sk_stream_wait_connect
+ * (net/core/stream.c:62-82) do; EPIPE comes only from the other states. The
+ * buffer is brought in again after each sleep, since `tcp_send` reads it
+ * with interrupts off and another thread may have unmapped it.
  */
 int socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblock)
 {
@@ -709,7 +726,23 @@ int socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblo
         return -1;
     }
     for (;;) {
-        int sent = tcp_send(sock, buf, len);
+        int rc, sent = tcp_send(sock, buf, len);
+        if (sent == TCP_SEND_CONNECTING) {
+            if (sock->tcb && sock->tcb->so_error != 0) {
+                return tcp_dead_error(sock->tcb, -EPIPE);
+            }
+            if (nonblock) {
+                return SOCK_EAGAIN;
+            }
+            rc = wq_wait_event(&sock->waiters, send_connect_ready, sock);
+            if (rc < 0) {
+                return rc;
+            }
+            if (!vm_prefault_range((uintptr_t)buf, (uintptr_t)len, 0)) {
+                return -EFAULT;
+            }
+            continue;
+        }
         if (sent == -1) {
             return tcp_dead_error(sock->tcb, -EPIPE);
         }
@@ -723,11 +756,9 @@ int socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblo
         if (nonblock) {
             return SOCK_EAGAIN;
         }
-        {
-            int rc = wq_wait_event(&sock->waiters, send_space_ready, sock);
-            if (rc < 0) {
-                return rc;
-            }
+        rc = wq_wait_event(&sock->waiters, send_space_ready, sock);
+        if (rc < 0) {
+            return rc;
         }
         if (!vm_prefault_range((uintptr_t)buf, (uintptr_t)len, 0)) {
             return -EFAULT;
