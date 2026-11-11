@@ -203,7 +203,7 @@ static int firmware_takes_smi_reset(void)
  *
  * The first is the FADT's reset register, where the FADT says it has one:
  * the way ACPI defines, the register and the value the firmware publishes,
- * written in whatever space it gives. The other three ports are fixed, not
+ * written by `acpi_reset_write`. The other three ports are fixed, not
  * discovered, and the asymmetry with the power-off above is deliberate: that
  * one derives an address, and a wrong address would put a sleep word into a
  * live device, so it refuses unless it knows the address is right. Each of
@@ -243,11 +243,7 @@ static void power_reset(void)
     if (a->reset_supported && method++ >= skip) {
         klog(KLOG_INFO, "reboot", "acpi: writing 0x%x to the reset register",
              (unsigned)a->reset_value);
-        if (a->reset_reg.space == ACPI_SPACE_IO && a->reset_reg.address <= 0xFFFFu) {
-            outb((uint16_t)a->reset_reg.address, a->reset_value);
-        } else {
-            (void)acpi_gas_write(&a->reset_reg, a->reset_value);
-        }
+        acpi_reset_write(a);
         power_reset_settle();
     }
 
@@ -387,10 +383,10 @@ static void reboot_say(uint32_t *tried, char type, const char *what)
 
 /**
  * Write the FADT's reset value to its reset register, as Linux's
- * `acpi_reboot` does (drivers/acpi/reboot.c): only where the FADT, revision
- * 2 or later, says it has one (`reset_supported`), in I/O space, memory or
- * the configuration space of a function on bus 0, and then wait 15 ms, which
- * some machines take to act before the next method could race them.
+ * `acpi_reboot` does (drivers/acpi/reboot.c:36-82): only where the FADT,
+ * revision 2 or later, says it has one (`reset_supported`), a byte in I/O
+ * or PCI space as `acpi_reset_write` says, and then wait 15 ms, which some
+ * machines take to act before the next method could race them.
  */
 static void reboot_acpi(void)
 {
@@ -399,7 +395,7 @@ static void reboot_acpi(void)
     if (!a->reset_supported) {
         return;
     }
-    (void)acpi_gas_write(&a->reset_reg, a->reset_value);
+    acpi_reset_write(a);
     k_udelay(15000);
 }
 
