@@ -3212,14 +3212,14 @@ static void syscall_missing(uint32_t syscall_num, int compat)
  *
  * At the exit whatever the loopback ring holds is delivered, a lone
  * datagram too, so that a receive that follows the call finds what it sent,
- * as on Linux, where loopback_xmit queues the datagram for the softirq
- * (drivers/net/loopback.c:69-92) and the sender's local_bh_enable runs that
- * softirq before the send returns (kernel/softirq.c:402-407). A receive
- * that follows the sender's return therefore needs no drain of its own. The
- * sender's own frames are gone by then, so no delivery runs under them.
- * Interrupts are off, the drain does not run inside itself, and it takes at
- * most four times the ring's slots in one run; what is left is taken by the
- * next call's exit or by the timer.
+ * as on Linux 6.12.115, where loopback_xmit queues the datagram for the
+ * softirq (drivers/net/loopback.c:69-92) and the sender's local_bh_enable
+ * runs that softirq before the send returns (kernel/softirq.c:402-407). A
+ * receive that follows the sender's return therefore needs no drain of its
+ * own. The sender's own frames are gone by then, so no delivery runs under
+ * them. Interrupts are off, the drain does not run inside itself, and it
+ * takes at most four times the ring's slots in one run; what is left is
+ * taken by the next call's exit or by the timer.
  */
 static void _syscall_handler(isr_params_t *params)
 {

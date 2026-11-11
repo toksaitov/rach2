@@ -2055,9 +2055,12 @@ static void tcp_ports(void)
  * peer's. A socket bound to 127.0.0.1 at `sim_port` dials that same address
  * and port, so its own SYN is the one that reaches it in SYN_SENT, and the
  * SYN-ACK it answers with is the peer's; the connection it opens to itself
- * carries a message back to it. Two sockets of one thread cannot cross two
- * SYNs over the loopback, since each send is delivered before its call
- * returns, as on Linux; a socket's SYN to itself is crossed every time.
+ * carries a message back to it, as Linux's tcp_rcv_synsent_state_process
+ * takes "connect to self" in its arm for crossed SYNs (tcp_input.c:6661-6704
+ * in 6.12.115) and tcp_validate_incoming passes the SYN-ACK in SYN_RECV
+ * (6101-6106). Two sockets of one thread cannot cross two SYNs over the
+ * loopback, since each send is delivered before its call returns, as on
+ * Linux; a socket's SYN to itself is crossed every time.
  *
  * The connect is nonblocking and is decided in poll, as a crossing between
  * two machines would be: POLLOUT with neither POLLERR nor POLLHUP is the
