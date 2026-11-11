@@ -53,6 +53,9 @@ Accepted, but no descriptor reports this condition.
 An error condition exists.
 .It Dv POLLHUP
 A peer has closed or hung up.
+.It Dv POLLRDHUP
+A stream socket's receiving half is shut: its peer sent the end of
+input, or the socket was shut down for reading.
 .It Dv POLLNVAL
 The descriptor is invalid or was opened with
 .Dv O_PATH .
@@ -99,15 +102,28 @@ a write through a read-only descriptor fails with
 .Pp
 Datagram and protocol-bearing raw sockets are readable when a packet is
 queued and are always writable.
-A connected stream is readable with buffered data or a received FIN.
+A connected TCP stream reports as Linux's does.
+It is readable with buffered data, and readable with requested
+.Dv POLLRDHUP
+once its receiving half is shut, by the peer's FIN or by
+.Dv SHUT_RD .
 It is writable in the established or close-wait state while its send
-buffer has space.
+buffer has space, and once its sending half is shut by
+.Dv SHUT_WR ,
+since a send then fails at once.
 A pending connection error reports
 .Dv POLLERR
 and requested
 .Dv POLLOUT .
-A closed stream reports
-.Dv POLLHUP .
+A stream with both halves shut, or whose connection has ended, reports
+.Dv POLLHUP
+and is readable and writable.
+A stream with no connection, never connected or disconnected by a
+.Xr shutdown 2
+in its handshake, reports
+.Dv POLLHUP
+and requested
+.Dv POLLOUT .
 An ioctl-only socket reports
 .Dv POLLERR
 immediately.

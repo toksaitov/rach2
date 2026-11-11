@@ -1,4 +1,4 @@
-.Dd November 3, 2026
+.Dd November 11, 2026
 .Dt CONNECT 2
 .Os
 .Sh NAME
@@ -213,6 +213,11 @@ A TCP handshake is already in progress in
 is not an open descriptor.
 .It Bq Er ECONNREFUSED
 The blocking TCP handshake ended without an established connection.
+.It Bq Er ECONNRESET
+Another thread's
+.Xr shutdown 2
+disconnected the socket while its blocking handshake waited in
+.Dv SYN_SENT .
 .It Bq Er EFAULT
 The address, or the socketcall argument array, cannot be read from user memory.
 .It Bq Er EINPROGRESS
@@ -244,6 +249,7 @@ or is neither a supported datagram nor stream socket.
 .Xr bind 2 ,
 .Xr getsockopt 2 ,
 .Xr poll 2 ,
+.Xr shutdown 2 ,
 .Xr socket 2 ,
 .Xr socketcall 2 ,
 .Xr ipv6 7 ,

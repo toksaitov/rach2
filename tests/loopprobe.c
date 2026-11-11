@@ -1977,12 +1977,13 @@ static void tcp_refused(void)
 
 /**
  * A reader already asleep on a stream another process shuts down wakes with
- * the end of input. The sleeper is in the socket's wait queue, and the
- * shutdown detaches the socket from its block both ways, so nothing the peer
- * sends afterwards can reach that queue: the shutdown wakes it or nothing
- * does. `cs` is a connected socket with nothing to read. The shutdown waits
- * until /proc shows the child asleep, since a shutdown before its read takes
- * the path `shutdown_rows` covers, and a child that ends first fails.
+ * the end of input. The sleeper is in the socket's wait queue, and
+ * SHUT_RDWR shuts the receiving half, which ends a read of an empty stream
+ * at once, and wakes the queue: nothing the peer sends need come for the
+ * sleeper to see it. `cs` is a connected socket with nothing to read. The
+ * shutdown waits until /proc shows the child asleep, since a shutdown before
+ * its read takes the path `shutdown_rows` covers, and a child that ends
+ * first fails.
  */
 static void shutdown_wakes_a_sharer(int cs)
 {

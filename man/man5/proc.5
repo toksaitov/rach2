@@ -898,9 +898,10 @@ counters Linux has, a line of names and a line of values for those this
 kernel keeps, in Linux's order, which
 .Xr nstat 8
 reads by name: DelayedACKLost, the segments of data received again whole;
-TCPTimeouts, the retransmission timeouts; TCPAbortOnData and
-TCPAbortOnTimeout, the connections data past the peer's FIN ended and
-those a timeout ended; TCPChallengeACK and TCPSYNChallenge, the
+TCPTimeouts, the retransmission timeouts; TCPAbortOnData, the
+connections ended by data no program will read, past the peer's FIN or
+after this side's close; TCPAbortOnClose, those a close with data unread
+ended; TCPAbortOnTimeout, those a timeout ended; TCPChallengeACK and TCPSYNChallenge, the
 challenge acknowledgements sent and the SYNs that drew one;
 TCPACKSkippedSynRecv, TCPACKSkippedSeq and TCPACKSkippedChallenge, the
 answers of a handshake not yet ended, those to segments outside the
