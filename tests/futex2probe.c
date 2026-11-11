@@ -148,7 +148,7 @@ static void fail(const char *why)
 long thread_spawn(void (*fn)(void), void *stack_top);
 
 #if defined __x86_64__
-__asm__(".text\n"
+__asm__(".pushsection .text\n"
         ".globl thread_spawn\n"
         "thread_spawn:\n"
         "    subq $16, %rsi\n"
@@ -167,9 +167,10 @@ __asm__(".text\n"
         "    xorl %edi, %edi\n"
         "    movl $60, %eax\n"
         "    syscall\n"
-        "1:  ret\n");
+        "1:  ret\n"
+        ".popsection\n");
 #else
-__asm__(".text\n"
+__asm__(".pushsection .text\n"
         ".globl thread_spawn\n"
         "thread_spawn:\n"
         "    pushl %ebx\n"
@@ -195,7 +196,8 @@ __asm__(".text\n"
         "1:  popl %edi\n"
         "    popl %esi\n"
         "    popl %ebx\n"
-        "    ret\n");
+        "    ret\n"
+        ".popsection\n");
 #endif
 
 /** futex_wake(2); the count woken, or a negated errno. */

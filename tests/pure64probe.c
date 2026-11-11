@@ -173,7 +173,7 @@ extern char mode32[];
 static unsigned char stack32[4096] __attribute__((aligned(16)));
 unsigned long saved_rsp;
 
-__asm__(".text\n"
+__asm__(".pushsection .text\n"
         ".code64\n"
         ".globl call32\n"
         "call32:\n"
@@ -209,7 +209,8 @@ __asm__(".text\n"
         "    movzwl %cx, %ecx\n"
         "    orl %ecx, %eax\n"
         "    ljmp $0x33, $back64\n"
-        ".code64\n");
+        ".code64\n"
+        ".popsection\n");
 
 /** The exec of the i386 program fails with ENOEXEC, in a child, which exits
  * 0 for ENOEXEC, 2 for another error, and I386_STATUS where the program

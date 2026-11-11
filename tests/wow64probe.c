@@ -287,7 +287,7 @@ long call32(void *entry, void *stack_top, unsigned long arg);
 extern char mode32[], getpid32[], nocall32[], set32[], tls32[], kill32[], kill32_int80[];
 extern char handler32[], restorer32[], int3_32[];
 
-__asm__(".text\n"
+__asm__(".pushsection .text\n"
         ".code64\n"
         ".globl call32\n"
         "call32:\n"
@@ -384,7 +384,8 @@ __asm__(".text\n"
         "    movl $173, %eax\n"
         "    int $0x80\n"
         "    hlt\n"
-        ".code64\n");
+        ".code64\n"
+        ".popsection\n");
 
 /** The i386 call `nr` by `int $0x80` from 64-bit code, with three arguments,
  * each below 4 GiB; the result as the 32-bit EAX gives it. */
