@@ -1102,15 +1102,33 @@ static int scalar_count_ranges(int rd, int wr, int dirfd, const int *errors)
     return ok;
 }
 
-/** Check an end at and past LLONG_MAX using the original count, a bad
- * range before an overflowing end, and a zero count at a bad address.
- * `faults` says this kernel refuses the huge range and KERNEL_ADDRESS;
- * an i386 call on x86-64 passes both range checks. Return whether all match. */
-static int scalar_count_ends(int rd, int wr, int faults)
+/** Whether write, pread64 and pwrite64 of no bytes at `addr` each give
+ * EFAULT when `fault`, and 0 otherwise. */
+static int zero_count_at(int rd, int wr, void *addr, int fault)
+{
+    long wrote = syscall(SYS_write, wr, addr, 0);
+    int ok = fault ? refused(wrote, EFAULT) : wrote == 0;
+    long read_at = PREAD_WIDE(rd, addr, 0, 0, 0);
+    long wrote_at;
+
+    ok = ok && (fault ? refused(read_at, EFAULT) : read_at == 0);
+    wrote_at = PWRITE_WIDE(wr, addr, 0, 0, 0);
+    return ok && (fault ? refused(wrote_at, EFAULT) : wrote_at == 0);
+}
+
+/**
+ * Check an end at and past LLONG_MAX using the original count, a bad range
+ * before an overflowing end, and a zero count at the top of user memory and
+ * past it. `faults` says this kernel refuses the huge range, and an i386
+ * call on x86-64 passes both range checks. No bytes at KERNEL_ADDRESS are
+ * EFAULT on the x86-64 kernel alone: the i686 kernel takes a range of no
+ * bytes that ends at its base, as Linux's access_ok does, and refuses one a
+ * page above it, which `native32` says. Return whether all match.
+ */
+static int scalar_count_ends(int rd, int wr, int faults, int native32)
 {
     void *buf = (void *)(uintptr_t)0x10000;
     int ok, range = faults ? EFAULT : EINVAL;
-    long wrote, read_at, wrote_at;
 
     ok = refused(PREAD_WIDE(rd, buf, 0x7ffff001u, 0x80000fffu, 0x7fffffffu), EINVAL) &&
          refused(PWRITE_WIDE(wr, buf, 0x7ffff001u, 0x80000fffu, 0x7fffffffu), EINVAL) &&
@@ -1118,12 +1136,8 @@ static int scalar_count_ends(int rd, int wr, int faults)
          PWRITE_WIDE(wr, buf, 0x7ffff000u, 0x80000fffu, 0x7fffffffu) == 0x7ffff000L;
     ok = ok && refused(PREAD_WIDE(rd, buf, (size_t)-1, 0xffffffffu, 0x7fffffffu), range) &&
          refused(PWRITE_WIDE(wr, buf, (size_t)-1, 0xffffffffu, 0x7fffffffu), range);
-    wrote = syscall(SYS_write, wr, KERNEL_ADDRESS, 0);
-    ok = ok && (faults ? refused(wrote, EFAULT) : wrote == 0);
-    read_at = PREAD_WIDE(rd, KERNEL_ADDRESS, 0, 0, 0);
-    ok = ok && (faults ? refused(read_at, EFAULT) : read_at == 0);
-    wrote_at = PWRITE_WIDE(wr, KERNEL_ADDRESS, 0, 0, 0);
-    return ok && (faults ? refused(wrote_at, EFAULT) : wrote_at == 0);
+    ok = ok && zero_count_at(rd, wr, KERNEL_ADDRESS, faults && !native32);
+    return ok && zero_count_at(rd, wr, (char *)KERNEL_ADDRESS + 4096, faults);
 }
 
 /** Check write, pread64 and pwrite64 before the transfer limit is applied.
@@ -1135,7 +1149,7 @@ static int scalar_raw_count(void)
     int errors[] = {EFAULT, 0, 0, 0};
     int rd = open("/dev/null", O_RDONLY), wr = open("/dev/null", O_WRONLY);
     int dirfd = open("/", O_RDONLY), ep = epoll_create1(0), pipefd[2] = {-1, -1};
-    int ok;
+    int ok, native32 = 0;
 
 #if !defined __x86_64__
     if (getenv("ETUDE_KERNEL") != NULL && strcmp(getenv("ETUDE_KERNEL"), "x86_64") == 0) {
@@ -1143,11 +1157,12 @@ static int scalar_raw_count(void)
     } else {
         errors[1] = EFAULT;
         errors[2] = EINVAL;
+        native32 = 1;
     }
 #endif
     ok = rd >= 0 && wr >= 0 && dirfd >= 0 && ep >= 0 && pipe(pipefd) == 0 &&
          scalar_count_access(rd, wr, ep, pipefd) && scalar_count_ranges(rd, wr, dirfd, errors) &&
-         scalar_count_ends(rd, wr, errors[0] != 0);
+         scalar_count_ends(rd, wr, errors[0] != 0, native32);
     close(pipefd[0]);
     close(pipefd[1]);
     close(ep);
