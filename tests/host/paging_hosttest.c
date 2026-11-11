@@ -420,6 +420,18 @@ void bkl_enter(void)
 void bkl_exit(void)
 {}
 
+/** Nothing: the test has no interrupt flag. */
+void arch_irq_enable(void)
+{}
+
+/** Nothing: the test has no interrupt flag. */
+void arch_irq_disable(void)
+{}
+
+/** Nothing: no tick asks for a switch. */
+void sched_take_preempt(void)
+{}
+
 /** Nothing: the test has no address space that counts its resident pages. */
 void mm_resident_add(const struct page_dir *dir, long pages)
 {
