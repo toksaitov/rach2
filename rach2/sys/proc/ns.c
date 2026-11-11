@@ -696,14 +696,31 @@ int ns_owner_privileged(const process_t *p, const struct ns_common *c)
 
 /* ---- PIDs ---- */
 
-/** The number of `p` in the PID namespace `v`, 0 when `p` is not in `v`
- * or below it. */
-static uint32_t pid_in(const process_t *p, const struct pidns *v)
-{
-    const struct pidns *ns = proc_pidns(p);
+/*
+ * A reaped process's numbers that a group or a session still has as its ID:
+ * its kernel ID, its PID namespace, held, and its numbers in that namespace
+ * and those above it, as the process had them. Linux's struct pid lasts
+ * while any task has it as its PID, group or session, so a group's number
+ * names it in every namespace its leader was in after the leader is reaped
+ * (`ns_release` keeps one, `pid_held_prune` lets it go).
+ */
+struct pid_held {
+    struct pid_held *next;
+    uint32_t kid;
+    struct pidns *ns;
+    uint32_t nr[NS_LEVELS];
+};
 
+static struct pid_held *pids_held;
+
+/** The number in the PID namespace `v` of the ID `kid` whose namespace is
+ * `ns` and whose numbers by level are `nr`, 0 when `ns` is not `v` or
+ * below it. */
+static uint32_t pid_number(const struct pidns *ns, const uint32_t *nr, uint32_t kid,
+                           const struct pidns *v)
+{
     if (v == &init_pidns) {
-        return p->pid;
+        return kid;
     }
     if (ns->level < v->level) {
         return 0;
@@ -711,19 +728,97 @@ static uint32_t pid_in(const process_t *p, const struct pidns *v)
     while (ns->level > v->level) {
         ns = ns->parent;
     }
-    return ns == v ? p->nspid[v->level] : 0;
+    return ns == v ? nr[v->level] : 0;
+}
+
+/** The number of `p` in the PID namespace `v`, 0 when `p` is not in `v`
+ * or below it. */
+static uint32_t pid_in(const process_t *p, const struct pidns *v)
+{
+    return pid_number(proc_pidns(p), p->nspid, p->pid, v);
+}
+
+/** Whether a live process other than `gone` has the kernel ID `kid` as its
+ * group or its session. */
+static int pid_held_by_group(uint32_t kid, const process_t *gone)
+{
+    const process_t *p;
+
+    for (p = proc_list; p; p = p->next) {
+        if (p != gone && p->state != PROC_UNUSED && (p->pgid == kid || p->sid == kid)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** Let go of the kept numbers no group or session has now but through
+ * `gone`, a record being freed. */
+static void pid_held_prune(const process_t *gone)
+{
+    struct pid_held **link = &pids_held;
+
+    while (*link) {
+        struct pid_held *h = *link;
+
+        if (pid_held_by_group(h->kid, gone)) {
+            link = &h->next;
+            continue;
+        }
+        *link = h->next;
+        ns_put(&h->ns->c);
+        kfree(h);
+    }
+}
+
+/** The kept numbers of the reaped process whose kernel ID was `kid`, or
+ * NULL. */
+static const struct pid_held *pid_held_find(uint32_t kid)
+{
+    const struct pid_held *h;
+
+    for (h = pids_held; h && h->kid != kid; h = h->next) {
+    }
+    return h;
+}
+
+/** Keep the numbers of `p`, a record being freed in a PID namespace below
+ * the first, while a group or a session has its ID. Without the memory for
+ * them its group's number goes unseen in those namespaces. */
+static void pid_held_keep(const process_t *p)
+{
+    struct pid_held *h;
+
+    if (!p->pidns || p->pidns == &init_pidns || !pid_held_by_group(p->pid, p)) {
+        return;
+    }
+    h = kzalloc(sizeof(*h));
+    if (!h) {
+        return;
+    }
+    h->kid = p->pid;
+    h->ns = p->pidns;
+    ns_get(&h->ns->c);
+    k_memcpy(h->nr, p->nspid, sizeof(h->nr));
+    h->next = pids_held;
+    pids_held = h;
 }
 
 uint32_t pid_seen_by(const process_t *viewer, uint32_t kid)
 {
     const struct pidns *v = proc_pidns(viewer);
+    const struct pid_held *h;
     const process_t *p;
 
     if (v == &init_pidns || kid == 0) {
         return kid;
     }
     p = get_process(kid);
-    return p ? pid_in(p, v) : 0;
+    if (p) {
+        return pid_in(p, v);
+    }
+    h = pid_held_find(kid);
+    return h ? pid_number(h->ns, h->nr, kid, v) : 0;
 }
 
 uint32_t pid_seen(uint32_t kid)
@@ -734,6 +829,7 @@ uint32_t pid_seen(uint32_t kid)
 uint32_t pid_named(uint32_t pid)
 {
     const struct pidns *v = proc_pidns(current_proc);
+    const struct pid_held *h;
     const process_t *p;
 
     if (v == &init_pidns || pid == 0) {
@@ -742,6 +838,11 @@ uint32_t pid_named(uint32_t pid)
     for (p = proc_list; p; p = p->next) {
         if (p->state != PROC_UNUSED && pid_in(p, v) == pid) {
             return p->pid;
+        }
+    }
+    for (h = pids_held; h; h = h->next) {
+        if (pid_number(h->ns, h->nr, h->kid, v) == pid && pid_held_by_group(h->kid, NULL)) {
+            return h->kid;
         }
     }
     return 0;
@@ -761,7 +862,9 @@ static uint32_t pidns_alloc(struct pidns *ns)
 {
     uint32_t tries;
 
+    pid_held_prune(NULL);
     for (tries = 0; tries < NS_PID_MAX; tries++) {
+        const struct pid_held *h;
         const process_t *p;
         uint32_t n = ns->last >= NS_PID_MAX ? 2u : ns->last + 1u;
 
@@ -771,7 +874,12 @@ static uint32_t pidns_alloc(struct pidns *ns)
                 break;
             }
         }
-        if (!p) {
+        for (h = pids_held; !p && h; h = h->next) {
+            if (pid_number(h->ns, h->nr, h->kid, ns) == n) {
+                break;
+            }
+        }
+        if (!p && !h) {
             return n;
         }
     }
@@ -1128,6 +1236,8 @@ int32_t ns_fork(process_t *child, const process_t *parent, uint32_t flags)
 
 void ns_release(process_t *p)
 {
+    pid_held_prune(p);
+    pid_held_keep(p);
     if (p->userns) {
         ns_put(&p->userns->c);
         p->userns = NULL;

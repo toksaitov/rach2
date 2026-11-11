@@ -245,12 +245,15 @@ int64_t gid_named(uint32_t id);
 /**
  * The PID of the process or thread whose kernel id is `kid` as the current
  * process sees it: its number in the current PID namespace, 0 when it is
- * not in that namespace or below it.
+ * not in that namespace or below it. A reaped process's id that a group or
+ * a session still has reads as the process's number did.
  */
 uint32_t pid_seen(uint32_t kid);
 
 /** The kernel id of the process or thread the current process names `pid`,
- * 0 for none it can see; `pid` itself in the first PID namespace. */
+ * or of the reaped process whose id a group or a session still has, as
+ * Linux's find_vpid finds it; 0 for none it can see; `pid` itself in the
+ * first PID namespace. */
 uint32_t pid_named(uint32_t pid);
 
 /** The process or thread the current process names `pid`, as `pid_named`
