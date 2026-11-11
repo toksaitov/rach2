@@ -4,6 +4,7 @@
  * whose 16 MiB aperture holds what a program wrote through it until the
  * driver syncs it, and whose memory has a limit a row may set.
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/atomic_host.c
  */
 
 #define MODEL_TEST "i915-evict-test"

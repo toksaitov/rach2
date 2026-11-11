@@ -13,71 +13,160 @@
 #include "../mm/kheap.h"
 
 /* ------------------------------------------------------------------------
- * Handle tables
+ * References
  */
 
-/** Make room in `t` for the id `id`, doubling the slots: 0, or -ENOMEM. */
-static int32_t handles_grow(struct drm_handles *t, uint32_t id)
+/** Add 1 to `*refs`, which the caller holds one of, as Linux's kref_get. */
+static void refs_get(volatile uint32_t *refs)
 {
-    uint32_t cap = t->cap ? t->cap : 64u;
-    struct drm_handle **slot;
+    uint32_t old;
 
+    do {
+        old = *refs;
+    } while (arch_atomic_cmpxchg((volatile unsigned int *)refs, old, old + 1u) != old);
+}
+
+/** Add 1 to `*refs` unless it is 0, as Linux's kref_get_unless_zero: 1
+ * when it did, 0 when the last reference has gone. */
+static int refs_get_unless_zero(volatile uint32_t *refs)
+{
+    uint32_t old;
+
+    do {
+        old = *refs;
+        if (old == 0) {
+            return 0;
+        }
+    } while (arch_atomic_cmpxchg((volatile unsigned int *)refs, old, old + 1u) != old);
+    return 1;
+}
+
+/** Take 1 from `*refs`: 1 when that was the last, as Linux's kref_put. */
+static int refs_put(volatile uint32_t *refs)
+{
+    uint32_t old;
+
+    do {
+        old = *refs;
+    } while (arch_atomic_cmpxchg((volatile unsigned int *)refs, old, old - 1u) != old);
+    return old == 1u;
+}
+
+/* ------------------------------------------------------------------------
+ * Handle tables
+ *
+ * A slot holds its handle from the insert on. A GEM handle's `object` is
+ * NULL while the object's `open` hook runs, which reserves the id and
+ * hides it from every lookup, as Linux's drm_gem_handle_create_tail
+ * (drm_gem.c:419-454) allocates the id with NULL and replaces it after.
+ */
+
+/** The slots a table of `cap` slots grows to so that it holds the id `id`,
+ * doubling from 64, or 0 past what a size can say. */
+static uint32_t slots_for(uint32_t cap, uint32_t id)
+{
+    if (!cap) {
+        cap = 64u;
+    }
     while (cap <= id) {
-        if (cap > 0x7FFFFFFFu / sizeof(*slot) / 2u) {
-            return -ENOMEM;
+        if (cap > 0x7FFFFFFFu / sizeof(struct drm_handle *) / 2u) {
+            return 0;
         }
         cap *= 2u;
     }
-    slot = (struct drm_handle **)kzalloc(cap * sizeof(*slot));
-    if (!slot) {
-        return -ENOMEM;
-    }
-    if (t->slot) {
-        k_memcpy(slot, t->slot, t->cap * sizeof(*slot));
-        kfree(t->slot);
-    }
-    t->slot = slot;
-    t->cap = cap;
-    return 0;
+    return cap;
 }
 
-int32_t drm_handle_insert(struct drm_handles *t, void *object, uint32_t *id)
+/**
+ * Put `h` into `t` under the lowest free id from 1 and give the id in
+ * `h->id` and `*id`: 0, or -ENOMEM. A table too small grows by slots
+ * allocated with the lock let go, as Linux's idr_preload, and the search
+ * starts again with the lock taken back, since another insert may have run
+ * meanwhile.
+ */
+static int32_t handle_install(struct drm_handles *t, struct drm_handle *h, uint32_t *id)
 {
-    struct drm_handle *h;
-    uint32_t want = t->free ? t->free : 1u;
+    struct drm_handle **slot = NULL, **old = NULL;
+    uint32_t want, have, cap = 0, flags;
 
-    while (want < t->cap && t->slot[want]) {
-        want++;
-    }
-    if (want >= t->cap && handles_grow(t, want) != 0) {
-        return -ENOMEM;
-    }
-    h = (struct drm_handle *)kmalloc(sizeof(*h));
-    if (!h) {
-        return -ENOMEM;
+    for (;;) {
+        flags = spin_lock_irqsave(&t->lock);
+        want = t->free ? t->free : 1u;
+        while (want < t->cap && t->slot[want]) {
+            want++;
+        }
+        if (want < t->cap) {
+            break;
+        }
+        if (slot && cap > want) {
+            if (t->slot) {
+                k_memcpy(slot, t->slot, t->cap * sizeof(*slot));
+            }
+            old = t->slot;
+            t->slot = slot;
+            t->cap = cap;
+            slot = NULL;
+            break;
+        }
+        have = t->cap;
+        spin_unlock_irqrestore(&t->lock, flags);
+        kfree(slot);
+        cap = slots_for(have, want);
+        slot = cap ? (struct drm_handle **)kzalloc(cap * sizeof(*slot)) : NULL;
+        if (!slot) {
+            return -ENOMEM;
+        }
     }
     h->id = want;
-    h->object = object;
-    h->prime = NULL;
-    h->prime_next = NULL;
-    h->file = NULL;
-    h->obj_next = NULL;
     t->slot[want] = h;
     t->free = want + 1u;
+    spin_unlock_irqrestore(&t->lock, flags);
+    kfree(slot);
+    kfree(old);
     *id = want;
     return 0;
 }
 
-struct drm_handle *drm_handle_get(const struct drm_handles *t, uint32_t id)
+/** A new handle to `object`, every other member clear, or NULL. */
+static struct drm_handle *handle_new(void *object)
 {
-    return id < t->cap ? t->slot[id] : NULL;
+    struct drm_handle *h = (struct drm_handle *)kzalloc(sizeof(*h));
+
+    if (h) {
+        h->object = object;
+    }
+    return h;
 }
 
-void *drm_handle_find(const struct drm_handles *t, uint32_t id)
+int32_t drm_handle_insert(struct drm_handles *t, void *object, uint32_t *id)
 {
-    struct drm_handle *h = drm_handle_get(t, id);
+    struct drm_handle *h = handle_new(object);
 
-    return h ? h->object : NULL;
+    if (!h) {
+        return -ENOMEM;
+    }
+    if (handle_install(t, h, id) != 0) {
+        kfree(h);
+        return -ENOMEM;
+    }
+    return 0;
+}
+
+/** The handle of `id` in `t`, reserved or not, or NULL. `t->lock` is
+ * held. */
+static struct drm_handle *handle_at(const struct drm_handles *t, uint32_t id)
+{
+    return id && id < t->cap ? t->slot[id] : NULL;
+}
+
+void *drm_handle_find(struct drm_handles *t, uint32_t id)
+{
+    uint32_t flags = spin_lock_irqsave(&t->lock);
+    struct drm_handle *h = handle_at(t, id);
+    void *object = h ? h->object : NULL;
+
+    spin_unlock_irqrestore(&t->lock, flags);
+    return object;
 }
 
 /* The buckets the PRIME hash of a table starts with, and the most it grows
@@ -93,99 +182,180 @@ static uint32_t prime_bucket(const struct dma_buf *buf, uint32_t buckets)
     return (uint32_t)(k ^ (k >> 8) ^ (k >> 16)) & (buckets - 1u);
 }
 
-/** Double `t`'s PRIME buckets, keeping them when the heap has no room. */
-static void prime_grow(struct drm_handles *t)
+/** The buckets `t` should have before it takes one more cache: the first
+ * PRIME_BUCKETS_FIRST, twice as many as it has when it holds twice as many
+ * caches as buckets, or what it has. `t->lock` is held. */
+static uint32_t prime_buckets_wanted(const struct drm_handles *t)
 {
-    uint32_t n = t->prime_buckets * 2u, i, k;
-    struct drm_handle **b, *h, *next;
-
-    b = (struct drm_handle **)kzalloc(n * sizeof(*b));
-    if (!b) {
-        return;
+    if (!t->prime) {
+        return PRIME_BUCKETS_FIRST;
     }
+    if (t->prime_count >= 2u * t->prime_buckets && t->prime_buckets < PRIME_BUCKETS_MAX) {
+        return t->prime_buckets * 2u;
+    }
+    return t->prime_buckets;
+}
+
+/** Move `t`'s caches into `b`, `n` zeroed buckets, and return the old
+ * buckets for the caller to free once the lock is let go. `t->lock` is
+ * held. */
+static struct drm_handle **prime_rehash(struct drm_handles *t, struct drm_handle **b, uint32_t n)
+{
+    struct drm_handle **old = t->prime, *h, *next;
+    uint32_t i, k;
+
     for (i = 0; i < t->prime_buckets; i++) {
-        for (h = t->prime[i]; h; h = next) {
+        for (h = old[i]; h; h = next) {
             next = h->prime_next;
             k = prime_bucket(h->prime, n);
             h->prime_next = b[k];
             b[k] = h;
         }
     }
-    kfree(t->prime);
     t->prime = b;
     t->prime_buckets = n;
+    return old;
 }
 
-int32_t drm_handle_set_prime(struct drm_handles *t, struct drm_handle *h, struct dma_buf *buf)
+int32_t drm_handle_set_prime(struct drm_handles *t, uint32_t id, const void *object,
+                             struct dma_buf *buf)
 {
-    struct drm_handle **b;
+    struct drm_handle **b = NULL, **old = NULL, **link, *h;
+    uint32_t n = 0, want, flags;
+    int32_t rc;
 
-    if (!t->prime) {
-        t->prime = (struct drm_handle **)kzalloc(PRIME_BUCKETS_FIRST * sizeof(*t->prime));
-        if (!t->prime) {
-            return -ENOMEM;
+    /* Buckets are allocated with the lock let go; a table whose growth
+     * finds no memory keeps the buckets it has, and only the first set
+     * fails for it. */
+    flags = spin_lock_irqsave(&t->lock);
+    for (;;) {
+        want = prime_buckets_wanted(t);
+        if (want == t->prime_buckets) {
+            break;
         }
-        t->prime_buckets = PRIME_BUCKETS_FIRST;
-    } else if (t->prime_count >= 2u * t->prime_buckets && t->prime_buckets < PRIME_BUCKETS_MAX) {
-        prime_grow(t);
+        if (b && n == want) {
+            old = prime_rehash(t, b, n);
+            b = NULL;
+            break;
+        }
+        spin_unlock_irqrestore(&t->lock, flags);
+        kfree(b);
+        n = want;
+        b = (struct drm_handle **)kzalloc(n * sizeof(*b));
+        flags = spin_lock_irqsave(&t->lock);
+        if (!b) {
+            if (!t->prime) {
+                spin_unlock_irqrestore(&t->lock, flags);
+                return -ENOMEM;
+            }
+            break;
+        }
     }
-    b = &t->prime[prime_bucket(buf, t->prime_buckets)];
-    h->prime = buf;
-    h->prime_next = *b;
-    *b = h;
-    t->prime_count++;
-    return 0;
+    h = handle_at(t, id);
+    rc = !h || !h->object || h->object != object ? -ENOENT : h->prime ? -EEXIST : 0;
+    if (rc == 0) {
+        link = &t->prime[prime_bucket(buf, t->prime_buckets)];
+        h->prime = buf;
+        h->prime_next = *link;
+        *link = h;
+        t->prime_count++;
+    }
+    spin_unlock_irqrestore(&t->lock, flags);
+    kfree(b);
+    kfree(old);
+    return rc;
 }
 
-uint32_t drm_handle_prime_find(const struct drm_handles *t, const struct dma_buf *buf)
+struct dma_buf *drm_handle_prime_get(struct drm_handles *t, uint32_t id)
+{
+    uint32_t flags = spin_lock_irqsave(&t->lock);
+    struct drm_handle *h = handle_at(t, id);
+    struct dma_buf *buf = h ? dma_buf_ref(h->prime) : NULL;
+
+    spin_unlock_irqrestore(&t->lock, flags);
+    return buf;
+}
+
+uint32_t drm_handle_prime_find(struct drm_handles *t, const struct dma_buf *buf)
 {
     const struct drm_handle *h;
-    uint32_t id = 0;
+    uint32_t id = 0, flags = spin_lock_irqsave(&t->lock);
 
-    if (!t->prime) {
-        return 0;
-    }
-    for (h = t->prime[prime_bucket(buf, t->prime_buckets)]; h; h = h->prime_next) {
-        if (h->prime == buf && (!id || h->id < id)) {
-            id = h->id;
+    if (t->prime) {
+        for (h = t->prime[prime_bucket(buf, t->prime_buckets)]; h; h = h->prime_next) {
+            if (h->prime == buf && (!id || h->id < id)) {
+                id = h->id;
+            }
         }
     }
+    spin_unlock_irqrestore(&t->lock, flags);
     return id;
+}
+
+/**
+ * Take the handle `id` out of `t`, its id free again, and return it, or
+ * NULL when there is none: only a reserved handle when `reserved` is set,
+ * and only a published one when it is clear. The caller frees it with
+ * `handle_free`, once nothing else links it.
+ */
+static struct drm_handle *handle_take(struct drm_handles *t, uint32_t id, int reserved)
+{
+    uint32_t flags = spin_lock_irqsave(&t->lock);
+    struct drm_handle *h = handle_at(t, id), **p;
+
+    if (h && (h->object == NULL) != (reserved != 0)) {
+        h = NULL;
+    }
+    if (h) {
+        if (h->prime) {
+            for (p = &t->prime[prime_bucket(h->prime, t->prime_buckets)]; *p != h;
+                 p = &(*p)->prime_next) {
+            }
+            *p = h->prime_next;
+            t->prime_count--;
+        }
+        t->slot[id] = NULL;
+        if (id < t->free) {
+            t->free = id;
+        }
+    }
+    spin_unlock_irqrestore(&t->lock, flags);
+    return h;
+}
+
+/** Free `h`, taken out of its table, and drop its PRIME cache's
+ * reference. */
+static void handle_free(struct drm_handle *h)
+{
+    dma_buf_put(h->prime);
+    kfree(h);
 }
 
 void *drm_handle_remove(struct drm_handles *t, uint32_t id)
 {
-    struct drm_handle *h = drm_handle_get(t, id), **p;
+    struct drm_handle *h = handle_take(t, id, 0);
     void *object;
 
-    if (!h || id == 0) {
+    if (!h) {
         return NULL;
     }
     object = h->object;
-    if (h->prime) {
-        for (p = &t->prime[prime_bucket(h->prime, t->prime_buckets)]; *p != h;
-             p = &(*p)->prime_next) {
-        }
-        *p = h->prime_next;
-        t->prime_count--;
-    }
-    t->slot[id] = NULL;
-    if (id < t->free) {
-        t->free = id;
-    }
-    dma_buf_put(h->prime);
-    kfree(h);
+    handle_free(h);
     return object;
 }
 
-uint32_t drm_handle_next(const struct drm_handles *t, uint32_t id)
+uint32_t drm_handle_next(struct drm_handles *t, uint32_t id)
 {
-    for (; id < t->cap; id++) {
-        if (id && t->slot[id]) {
-            return id;
-        }
+    uint32_t flags = spin_lock_irqsave(&t->lock);
+
+    while (id < t->cap && (!id || !t->slot[id])) {
+        id++;
     }
-    return 0;
+    if (id >= t->cap) {
+        id = 0;
+    }
+    spin_unlock_irqrestore(&t->lock, flags);
+    return id;
 }
 
 void drm_handles_fini(struct drm_handles *t)
@@ -207,6 +377,8 @@ void drm_handles_fini(struct drm_handles *t)
 void drm_gem_object_init(struct drm_device *dev, struct drm_gem_object *obj, uint64_t size,
                          const struct drm_gem_object_funcs *funcs)
 {
+    uint32_t flags;
+
     k_memset(obj, 0, sizeof(*obj));
     obj->refs = 1;
     obj->dev = dev;
@@ -214,20 +386,22 @@ void drm_gem_object_init(struct drm_device *dev, struct drm_gem_object *obj, uin
     obj->funcs = funcs;
     obj->resv = &obj->resv_own;
     drm_dev_get(dev);
+    flags = spin_lock_irqsave(&dev->object_lock);
     obj->dev_next = dev->objects;
     dev->objects = obj;
+    spin_unlock_irqrestore(&dev->object_lock, flags);
 }
 
 void drm_gem_object_get(struct drm_gem_object *obj)
 {
     if (obj) {
-        obj->refs++;
+        refs_get(&obj->refs);
     }
 }
 
 /** Take `obj` off the list at `head`, the device's objects linked through
  * `dev_next`, or with `mmap` set those with an offset, through
- * `mmap_next`. */
+ * `mmap_next`. The device's `object_lock` is held. */
 static void unlink_obj(struct drm_gem_object **head, struct drm_gem_object *obj, int mmap)
 {
     struct drm_gem_object **p;
@@ -244,16 +418,19 @@ void drm_gem_object_put(struct drm_gem_object *obj)
 {
     struct drm_device *dev;
     struct dma_buf *import;
+    uint32_t flags;
 
-    if (!obj || --obj->refs > 0) {
+    if (!obj || !refs_put(&obj->refs)) {
         return;
     }
     dev = obj->dev;
     import = obj->import;
+    flags = spin_lock_irqsave(&dev->object_lock);
     unlink_obj(&dev->objects, obj, 0);
     if (obj->mmap_offset) {
         unlink_obj(&dev->mmap_objects, obj, 1);
     }
+    spin_unlock_irqrestore(&dev->object_lock, flags);
     dma_resv_fini(&obj->resv_own);
     if (obj->funcs && obj->funcs->free) {
         obj->funcs->free(obj);
@@ -264,61 +441,107 @@ void drm_gem_object_put(struct drm_gem_object *obj)
     drm_dev_put(dev);
 }
 
-int32_t drm_gem_handle_create(struct drm_file *file, struct drm_gem_object *obj, uint32_t *handle)
+struct drm_gem_object *drm_gem_object_next(struct drm_device *dev, struct drm_gem_object *prev)
 {
-    int32_t rc = drm_handle_insert(&file->objects, obj, handle);
-    struct drm_handle *h;
+    struct drm_gem_object *o;
+    uint32_t flags = spin_lock_irqsave(&dev->object_lock);
 
-    if (rc != 0) {
-        return rc;
+    /* `prev`, held, is still on the list: only its last put takes it off. */
+    o = prev ? prev->dev_next : dev->objects;
+    while (o && !refs_get_unless_zero(&o->refs)) {
+        o = o->dev_next;
     }
-    h = drm_handle_get(&file->objects, *handle);
-    h->file = file;
-    h->obj_next = obj->handles;
-    obj->handles = h;
-    obj->handle_count++;
-    drm_gem_object_get(obj);
-    rc = obj->funcs && obj->funcs->open ? obj->funcs->open(obj, file) : 0;
-    if (rc != 0) {
-        drm_gem_handle_delete(file, *handle);
-    }
-    return rc;
+    spin_unlock_irqrestore(&dev->object_lock, flags);
+    drm_gem_object_put(prev);
+    return o;
 }
 
-struct drm_gem_object *drm_gem_object_lookup(struct drm_file *file, uint32_t handle)
+/** Take `h` off `obj`'s handles and drop the hold it gave: the last handle
+ * takes the object's flink name, as Linux's
+ * drm_gem_object_handle_put_unlocked (drm_gem.c:279-288), and then the
+ * handle's reference goes. */
+static void handle_put(struct drm_gem_object *obj, struct drm_handle *h)
 {
-    struct drm_gem_object *obj = (struct drm_gem_object *)drm_handle_find(&file->objects, handle);
+    struct drm_device *dev = obj->dev;
+    struct drm_handle **p;
+    uint32_t flags = spin_lock_irqsave(&dev->object_lock);
 
-    drm_gem_object_get(obj);
-    return obj;
-}
-
-/** Drop a handle's hold on `obj`: the last handle takes its flink name,
- * as Linux's drm_gem_object_handle_put_unlocked. */
-static void handle_put(struct drm_gem_object *obj)
-{
-    if (--obj->handle_count == 0) {
-        obj->name = 0;
-    }
-    drm_gem_object_put(obj);
-}
-
-int32_t drm_gem_handle_delete(struct drm_file *file, uint32_t handle)
-{
-    struct drm_handle *h = handle ? drm_handle_get(&file->objects, handle) : NULL, **p;
-    struct drm_gem_object *obj;
-
-    if (!h) {
-        return -EINVAL;
-    }
-    obj = (struct drm_gem_object *)h->object;
     for (p = &obj->handles; *p && *p != h; p = &(*p)->obj_next) {
     }
     if (*p) {
         *p = h->obj_next;
     }
-    drm_handle_remove(&file->objects, handle);
-    handle_put(obj);
+    if (--obj->handle_count == 0) {
+        obj->name = 0;
+    }
+    spin_unlock_irqrestore(&dev->object_lock, flags);
+    drm_gem_object_put(obj);
+}
+
+/**
+ * As Linux's drm_gem_handle_create_tail (drm_gem.c:406-460): the object's
+ * handle count rises first, so that a racing close of another handle
+ * leaves its flink name; the id is reserved while the `open` hook runs,
+ * and published after it.
+ */
+int32_t drm_gem_handle_create(struct drm_file *file, struct drm_gem_object *obj, uint32_t *handle)
+{
+    struct drm_device *dev = obj->dev;
+    struct drm_handle *h = handle_new(NULL);
+    uint32_t flags;
+    int32_t rc;
+
+    if (!h) {
+        return -ENOMEM;
+    }
+    h->file = file;
+    drm_gem_object_get(obj);
+    flags = spin_lock_irqsave(&dev->object_lock);
+    h->obj_next = obj->handles;
+    obj->handles = h;
+    obj->handle_count++;
+    spin_unlock_irqrestore(&dev->object_lock, flags);
+    rc = handle_install(&file->objects, h, handle);
+    if (rc == 0 && obj->funcs && obj->funcs->open) {
+        rc = obj->funcs->open(obj, file);
+        if (rc != 0) {
+            handle_take(&file->objects, *handle, 1);
+        }
+    }
+    if (rc != 0) {
+        handle_put(obj, h);
+        kfree(h);
+        return rc;
+    }
+    flags = spin_lock_irqsave(&file->objects.lock);
+    h->object = obj;
+    spin_unlock_irqrestore(&file->objects.lock, flags);
+    return 0;
+}
+
+/** As Linux's objects_lookup (drm_gem.c:710-731): the reference is taken
+ * under the table's lock, so a racing close cannot free the object
+ * first. */
+struct drm_gem_object *drm_gem_object_lookup(struct drm_file *file, uint32_t handle)
+{
+    uint32_t flags = spin_lock_irqsave(&file->objects.lock);
+    struct drm_handle *h = handle_at(&file->objects, handle);
+    struct drm_gem_object *obj = h ? (struct drm_gem_object *)h->object : NULL;
+
+    drm_gem_object_get(obj);
+    spin_unlock_irqrestore(&file->objects.lock, flags);
+    return obj;
+}
+
+int32_t drm_gem_handle_delete(struct drm_file *file, uint32_t handle)
+{
+    struct drm_handle *h = handle_take(&file->objects, handle, 0);
+
+    if (!h) {
+        return -EINVAL;
+    }
+    handle_put((struct drm_gem_object *)h->object, h);
+    handle_free(h);
     return 0;
 }
 
@@ -336,7 +559,8 @@ void drm_gem_release(struct drm_file *file)
  * The first page offset of `dev`'s mmap space from which `pages` pages
  * touch neither an object's offset nor a driver's node, into `*at`: 0, or
  * -ENOSPC. Each range in the way moves the candidate past it and starts the
- * search again, so the two lists need not be merged.
+ * search again, so the two lists need not be merged. The device's
+ * `object_lock` is held.
  */
 static int32_t mmap_space_find(struct drm_device *dev, uint64_t pages, uint64_t *at)
 {
@@ -377,20 +601,22 @@ int32_t drm_gem_create_mmap_offset(struct drm_gem_object *obj)
     struct drm_device *dev = obj->dev;
     struct drm_gem_object **link = &dev->mmap_objects;
     uint64_t start;
+    uint32_t flags = spin_lock_irqsave(&dev->object_lock);
+    int32_t rc = 0;
 
-    if (obj->mmap_offset) {
-        return 0;
+    if (!obj->mmap_offset) {
+        rc = mmap_space_find(dev, obj->size >> PAGE_SHIFT, &start);
     }
-    if (mmap_space_find(dev, obj->size >> PAGE_SHIFT, &start) != 0) {
-        return -ENOSPC;
+    if (!obj->mmap_offset && rc == 0) {
+        while (*link && (*link)->mmap_offset < start << PAGE_SHIFT) {
+            link = &(*link)->mmap_next;
+        }
+        obj->mmap_offset = start << PAGE_SHIFT;
+        obj->mmap_next = *link;
+        *link = obj;
     }
-    while (*link && (*link)->mmap_offset < start << PAGE_SHIFT) {
-        link = &(*link)->mmap_next;
-    }
-    obj->mmap_offset = start << PAGE_SHIFT;
-    obj->mmap_next = *link;
-    *link = obj;
-    return 0;
+    spin_unlock_irqrestore(&dev->object_lock, flags);
+    return rc;
 }
 
 int32_t drm_mmap_node_add(struct drm_mmap_node *node)
@@ -398,42 +624,46 @@ int32_t drm_mmap_node_add(struct drm_mmap_node *node)
     struct drm_device *dev = node->obj->dev;
     struct drm_mmap_node **link = &dev->mmap_nodes;
     uint64_t start;
+    uint32_t flags = spin_lock_irqsave(&dev->object_lock);
+    int32_t rc = 0;
 
-    if (node->offset) {
-        return 0;
+    if (!node->offset) {
+        rc = mmap_space_find(dev, node->obj->size >> PAGE_SHIFT, &start);
     }
-    if (mmap_space_find(dev, node->obj->size >> PAGE_SHIFT, &start) != 0) {
-        return -ENOSPC;
+    if (!node->offset && rc == 0) {
+        while (*link && (*link)->offset < start << PAGE_SHIFT) {
+            link = &(*link)->next;
+        }
+        node->offset = start << PAGE_SHIFT;
+        node->next = *link;
+        *link = node;
     }
-    while (*link && (*link)->offset < start << PAGE_SHIFT) {
-        link = &(*link)->next;
-    }
-    node->offset = start << PAGE_SHIFT;
-    node->next = *link;
-    *link = node;
-    return 0;
+    spin_unlock_irqrestore(&dev->object_lock, flags);
+    return rc;
 }
 
 void drm_mmap_node_remove(struct drm_mmap_node *node)
 {
+    struct drm_device *dev = node->obj->dev;
     struct drm_mmap_node **link;
+    uint32_t flags = spin_lock_irqsave(&dev->object_lock);
 
-    if (!node->offset) {
-        return;
-    }
-    for (link = &node->obj->dev->mmap_nodes; *link; link = &(*link)->next) {
-        if (*link == node) {
-            *link = node->next;
-            break;
+    if (node->offset) {
+        for (link = &dev->mmap_nodes; *link; link = &(*link)->next) {
+            if (*link == node) {
+                *link = node->next;
+                break;
+            }
         }
+        node->offset = 0;
+        node->next = NULL;
     }
-    node->offset = 0;
-    node->next = NULL;
+    spin_unlock_irqrestore(&dev->object_lock, flags);
 }
 
 /** Whether `file` has a handle to `obj`, which Linux's mmap asks
  * (drm_vma_node_is_allowed): a walk over the object's handles, not the
- * file's. */
+ * file's. The device's `object_lock` is held. */
 static int file_has_handle(const struct drm_file *file, const struct drm_gem_object *obj)
 {
     const struct drm_handle *h;
@@ -455,18 +685,23 @@ static int mmap_covers(uint64_t offset, const struct drm_gem_object *obj, uint32
     return offset != 0 && pgoff >= first && pgoff - first < obj->size >> PAGE_SHIFT;
 }
 
+/** As Linux's drm_gem_mmap (drm_gem.c:1150-1200): an object found in the
+ * mmap space whose last reference is going is no object, since its free
+ * is about to take it out. */
 int32_t drm_gem_mmap(struct drm_file *file, vma_t *vma)
 {
     struct drm_device *dev = file->dev;
     struct drm_gem_object *obj;
     struct drm_mmap_node *node = NULL;
     uint32_t pages = (uint32_t)((vma->end - vma->start) >> PAGE_SHIFT);
-    uint32_t start = 0;
-    int32_t rc;
+    uint32_t start = 0, flags;
+    int32_t rc = 0;
+    int held = 0;
 
     if (dev->unplugged) {
         return -ENODEV;
     }
+    flags = spin_lock_irqsave(&dev->object_lock);
     for (obj = dev->mmap_objects; obj; obj = obj->mmap_next) {
         if (mmap_covers(obj->mmap_offset, obj, vma->pgoff)) {
             start = (uint32_t)(obj->mmap_offset >> PAGE_SHIFT);
@@ -483,19 +718,23 @@ int32_t drm_gem_mmap(struct drm_file *file, vma_t *vma)
         }
     }
     if (!obj || pages > (obj->size >> PAGE_SHIFT) - (vma->pgoff - start)) {
-        return -EINVAL;
+        rc = -EINVAL;
+    } else if (!(held = refs_get_unless_zero(&obj->refs))) {
+        rc = -EINVAL;
+    } else if (!file_has_handle(file, obj)) {
+        rc = -EACCES;
+    } else if (!node && (!obj->funcs || !obj->funcs->mmap)) {
+        rc = -ENODEV;
     }
-    if (!file_has_handle(file, obj)) {
-        return -EACCES;
+    spin_unlock_irqrestore(&dev->object_lock, flags);
+    if (rc == 0) {
+        vma->pgoff -= start;
+        rc = node ? node->mmap(node, vma) : obj->funcs->mmap(obj, vma);
+        if (rc != 0) {
+            vma->pgoff += start;
+        }
     }
-    if (!node && (!obj->funcs || !obj->funcs->mmap)) {
-        return -ENODEV;
-    }
-    drm_gem_object_get(obj);
-    vma->pgoff -= start;
-    rc = node ? node->mmap(node, vma) : obj->funcs->mmap(obj, vma);
-    if (rc != 0) {
-        vma->pgoff += start;
+    if (rc != 0 && held) {
         drm_gem_object_put(obj);
     }
     return rc;
@@ -661,12 +900,15 @@ int32_t drm_gem_close_ioctl(struct drm_device *dev, void *data, struct drm_file 
 }
 
 /** GEM_FLINK: the object's global name, given the first time as the lowest
- * free on the device, from 1. ENOENT for no such handle. */
+ * free on the device, from 1. ENOENT for no such handle, or for one closed
+ * meanwhile, as Linux (drm_gem.c:895-900), since the last handle's close
+ * takes the name. */
 int32_t drm_gem_flink_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
     struct drm_gem_flink *args = (struct drm_gem_flink *)data;
     struct drm_gem_object *obj, *o;
-    uint32_t name = 1;
+    uint32_t name = 1, flags;
+    int32_t rc = 0;
 
     if (!drm_core_check_feature(dev, DRIVER_GEM)) {
         return -EOPNOTSUPP;
@@ -675,7 +917,10 @@ int32_t drm_gem_flink_ioctl(struct drm_device *dev, void *data, struct drm_file 
     if (!obj) {
         return -ENOENT;
     }
-    if (!obj->name) {
+    flags = spin_lock_irqsave(&dev->object_lock);
+    if (obj->handle_count == 0) {
+        rc = -ENOENT;
+    } else if (!obj->name) {
         /* The lowest name no object has, as Linux's idr gives it: each
          * hit raises the candidate and starts the walk again. */
         for (o = dev->objects; o;) {
@@ -688,35 +933,43 @@ int32_t drm_gem_flink_ioctl(struct drm_device *dev, void *data, struct drm_file 
         }
         obj->name = name;
     }
-    args->name = obj->name;
+    if (rc == 0) {
+        args->name = obj->name;
+    }
+    spin_unlock_irqrestore(&dev->object_lock, flags);
     drm_gem_object_put(obj);
-    return 0;
+    return rc;
 }
 
 /** GEM_OPEN: a new handle to the object of a flink name, and its size.
- * ENOENT for no such name. */
+ * ENOENT for no such name. An object with a name has a handle, which holds
+ * a reference, so the reference taken here under the device's
+ * `object_lock` is never the first, as Linux's (drm_gem.c:942-946). */
 int32_t drm_gem_open_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
     struct drm_gem_open *args = (struct drm_gem_open *)data;
     struct drm_gem_object *obj;
-    uint32_t handle;
+    uint32_t handle, flags;
     int32_t rc;
 
     if (!drm_core_check_feature(dev, DRIVER_GEM)) {
         return -EOPNOTSUPP;
     }
+    flags = spin_lock_irqsave(&dev->object_lock);
     for (obj = dev->objects; obj && (!args->name || obj->name != args->name); obj = obj->dev_next) {
     }
+    drm_gem_object_get(obj);
+    spin_unlock_irqrestore(&dev->object_lock, flags);
     if (!obj) {
         return -ENOENT;
     }
     rc = drm_gem_handle_create(file, obj, &handle);
-    if (rc != 0) {
-        return rc;
+    if (rc == 0) {
+        args->handle = handle;
+        args->size = obj->size;
     }
-    args->handle = handle;
-    args->size = obj->size;
-    return 0;
+    drm_gem_object_put(obj);
+    return rc;
 }
 
 /**

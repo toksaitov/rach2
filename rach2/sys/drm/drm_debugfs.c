@@ -260,18 +260,20 @@ static int32_t clients_show(void *data, char *buf, uint32_t cap)
 }
 
 /** `gem_names`, Linux's drm_gem_name_info: each buffer object with a flink
- * name, by name, with its size, handles and references. */
+ * name, by name, with its size, handles and references, read under the
+ * device's `object_lock` as Linux reads them under `object_name_lock`. */
 static int32_t gem_names_show(void *data, char *buf, uint32_t cap)
 {
-    const struct drm_device *dev = (const struct drm_device *)data;
+    struct drm_device *dev = (struct drm_device *)data;
     const struct drm_gem_object *obj, *next;
     struct emit e;
-    uint32_t last = 0;
+    uint32_t last = 0, flags;
 
     e.buf = buf;
     e.cap = cap;
     e.len = 0;
     emit_str(&e, "  name     size handles refcount\n");
+    flags = spin_lock_irqsave(&dev->object_lock);
     for (;;) {
         next = NULL;
         for (obj = dev->objects; obj; obj = obj->dev_next) {
@@ -292,6 +294,7 @@ static int32_t gem_names_show(void *data, char *buf, uint32_t cap)
         emit_str(&e, "\n");
         last = next->name;
     }
+    spin_unlock_irqrestore(&dev->object_lock, flags);
     return emit_end(&e);
 }
 

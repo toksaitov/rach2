@@ -5,6 +5,7 @@
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/atomic_host.c
  *
  * The four files are included whole. A fake driver binds two devices: one
  * with a card and a render node, GEM, dumb buffers of the shmem helper
@@ -246,6 +247,13 @@ void dma_fence_put(struct dma_fence *f)
 void dma_buf_put(struct dma_buf *buf)
 {
     CHECK("no PRIME reference in core model", buf == NULL);
+}
+
+/** No PRIME objects are made by the core rows: a table's cache is NULL. */
+struct dma_buf *dma_buf_ref(struct dma_buf *buf)
+{
+    CHECK("no PRIME reference in core model", buf == NULL);
+    return buf;
 }
 
 /** Release modeled reservation slots at the object's last reference. */
