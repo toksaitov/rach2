@@ -438,22 +438,28 @@ static const struct file_ops itco_ops = {NULL,       itco_write, NULL, itco_ioct
 static struct devfs_node itco_node = {"watchdog", 10, 130, 0600, &itco_ops, itco_open, NULL};
 
 /**
- * The number option `key`, `dflt` when the line lacks it, and `dflt` with a
- * record when its value is not a number in [`lo`, `hi`].
+ * The number option `key`: `dflt` when the line lacks it, else the last of
+ * its values that is a number in [`lo`, `hi`], with a record for each that
+ * is not. Linux's parse_args applies each occurrence in order (Linux 6.12,
+ * kernel/params.c:117 to 158 and 161 to 212), and one its parser refuses
+ * leaves the value as it was.
  */
 static long itco_option(const char *key, long dflt, long lo, long hi)
 {
     char text[24];
     long long v;
+    long value = dflt;
+    int i, n = kcmdline_count(key);
 
-    if (!kcmdline_value(key, text, sizeof(text))) {
-        return dflt;
+    for (i = 0; i < n; i++) {
+        if (!kcmdline_value_nth(key, i, text, sizeof(text)) ||
+            k_strtoll(text, sizeof(text), &v) != 0 || v < lo || v > hi) {
+            klog(KLOG_WARN, "watchdog", "refused: %s=%s", key, text);
+            continue;
+        }
+        value = (long)v;
     }
-    if (k_strtoll(text, sizeof(text), &v) != 0 || v < lo || v > hi) {
-        klog(KLOG_WARN, "watchdog", "refused: %s=%s", key, text);
-        return dflt;
-    }
-    return (long)v;
+    return value;
 }
 
 /**
@@ -488,8 +494,8 @@ static void itco_options(int *heartbeat, int *arm)
     *heartbeat =
         (int)itco_option("iTCO_wdt.heartbeat", ITCO_DEFAULT_TIMEOUT, -0x7fffffffL, 0x7fffffffL);
     *arm = kcmdline_has("rach2.itco.arm");
-    watchdog.nowayout = kcmdline_bool("iTCO_wdt.nowayout", 0);
-    watchdog.boot_feed = kcmdline_bool("watchdog.handle_boot_enabled", 1);
+    watchdog.nowayout = kcmdline_param_bool("iTCO_wdt.nowayout", 0);
+    watchdog.boot_feed = kcmdline_param_bool("watchdog.handle_boot_enabled", 1);
     watchdog.hz = TICK_HZ;
     watchdog.open_limited = open_timeout != 0;
     watchdog.open_left = (uint32_t)open_timeout * TICK_HZ;
