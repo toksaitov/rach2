@@ -116,6 +116,10 @@ static const char *const leaf7_ecx[32] = {0,
                                           "sgx_lc",
                                           0};
 
+/* Leaf 0xD, subleaf 1, EAX: the XSAVE extensions. Linux shows no name for
+ * XFD, bit 4. */
+static const char *const xsave_eax[32] = {"xsaveopt", "xsavec", "xgetbv1", "xsaves"};
+
 /* Leaf 0x8000000A's EDX, the features of AMD's SVM. */
 static const char *const svm_edx[32] = {"npt",
                                         "lbrv",
@@ -587,7 +591,7 @@ uint32_t cpuinfo_text(char *out, uint32_t cap, int cpu)
 {
     struct text t;
     uint32_t max, ext_max, a, b, c, d, family, model;
-    uint32_t e1c = 0, e1d = 0, l7b = 0, l7c = 0, svm = 0, cache;
+    uint32_t e1c = 0, e1d = 0, l7b = 0, l7c = 0, xs = 0, svm = 0, cache;
     char vendor[13];
     char brand[49];
     struct cpu_place place;
@@ -652,6 +656,9 @@ uint32_t cpuinfo_text(char *out, uint32_t cap, int cpu)
     if (max >= 7) {
         kcpu_id_sub(7, 0, 0, &l7b, &l7c, 0);
     }
+    if (max >= 0xD) {
+        kcpu_id_sub(0xD, 1, &xs, 0, 0, 0);
+    }
     if (ext_max >= 0x8000000Au) {
         kcpu_id(0x8000000Au, 0, 0, 0, &svm);
     }
@@ -660,6 +667,7 @@ uint32_t cpuinfo_text(char *out, uint32_t cap, int cpu)
     put_flags(&t, leaf1_ecx, c);
     put_flags(&t, ext1_ecx, e1c);
     put_flags(&t, leaf7_ebx, l7b);
+    put_flags(&t, xsave_eax, xs);
     put_flags(&t, svm_edx, svm);
     put_flags(&t, leaf7_ecx, l7c);
     put(&t, "\n");
