@@ -54,8 +54,9 @@
  * a nonblocking master write behind a full slave counts the flow characters
  * it acts on, and its VSTART gives out the echo held; a background
  * process's change of its terminal takes SIGTTOU unless it ignores it, its
- * read EIO when it ignores SIGTTIN, and an orphaned group's call EIO, while
- * a TOSTOP write that ignores SIGTTOU goes ahead; the console's TCIOFF
+ * read EIO when it ignores SIGTTIN, and an orphaned group's call EIO, a
+ * parent whose leader exited while a thread runs keeping the group joined,
+ * while a TOSTOP write that ignores SIGTTOU goes ahead; the console's TCIOFF
  * writes its character under TCOOFF; and a session leader's read of a slave
  * does not make it its controlling terminal.
  */
@@ -1478,12 +1479,16 @@ static void lookahead_nonblocking(void)
 
 /* The dispositions of the background process in `job_check`. */
 static struct k_sigaction job_acts[KSIG_MAX + 1];
+/* A thread of the parent's process in `job_check`, alive after its
+ * leader, the producer, has exited. */
+static process_t parent_thread;
 
 /**
  * A process of a background group of the session the slave controls takes
  * SIGTTOU for a change, goes ahead when it ignores SIGTTOU, fails its read
  * with EIO when it ignores SIGTTIN, and fails with EIO, posting nothing,
- * once its group is orphaned; the foreground group passes.
+ * once its group is orphaned; the foreground group passes. A parent whose
+ * leader has exited still counts while another of its threads runs.
  */
 static void job_check(void)
 {
@@ -1521,6 +1526,21 @@ static void job_check(void)
     pair.slave.ldisc.tio.c_lflag |= TOSTOP;
     CHECK(pts_write(&slave, "w", 1) == 1 && signals_posted == 1,
           "a background TOSTOP write that ignores SIGTTOU goes ahead");
+    job_acts[SIGTTOU].handler = 0;
+    producer.state = PROC_ZOMBIE;
+    CHECK(tty_job_check(&pair.slave, SIGTTOU) == -EIO && signals_posted == 1,
+          "a group whose parent outside it has ended is orphaned");
+    clear(&parent_thread, sizeof(parent_thread));
+    producer.next = &parent_thread;
+    parent_thread.pid = 7;
+    parent_thread.tgid = parent_thread.pgid = 2;
+    parent_thread.sid = 1;
+    parent_thread.parent_pid = 1;
+    parent_thread.space_root = 1;
+    parent_thread.state = PROC_READY;
+    CHECK(tty_job_check(&pair.slave, SIGTTOU) == -EINTR && signals_posted == 2,
+          "a parent whose leader exited while a thread runs keeps the group joined");
+    producer.next = NULL;
     proc_list = NULL;
 }
 
