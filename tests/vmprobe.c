@@ -5,8 +5,10 @@
  * mmap region, a mapping placed below the break once the room above it is
  * taken, as Linux places it, the guard gap of 1 MiB below the stack's
  * growth window, which neither a hint nor a mapping that fills the address
- * space reaches, and stack growth by deep recursion that faults pages well
- * past the initial one.
+ * space reaches, stack growth by deep recursion that faults pages well
+ * past the initial one, and the 128 KiB the exec put in the stack's region
+ * below the entry stack pointer, which a write reaches with a mapping right
+ * under the region.
  *
  * Prints "VMPROBE OK" and exits 0 when every check passes, and otherwise
  * "VMPROBE FAIL count=N" and exits with N, the count of failed checks. The
@@ -17,9 +19,10 @@
  * assertion for each check, which `check` names: `brk-grow`, `brk-zero`,
  * `brk-readback`, `brk-shrink`, `mmap`, `mmap-zero`, `mmap-readback`,
  * `munmap`, `collision-map`, `collision-above`, `collision-refused`,
- * `below-break`, `stack-gap-hint`, `stack-gap-fill` and `stack`. A check
- * left out because the mapping it needs failed, or because RLIMIT_STACK is
- * not the 8 MiB that places the window, is reported not run.
+ * `below-break`, `stack-gap-hint`, `stack-gap-fill`, `stack` and
+ * `stack-expand`. A check left out because the mapping it needs failed, or
+ * because RLIMIT_STACK is not the 8 MiB that places the window, is reported
+ * not run.
  */
 
 #include "probe.h"
@@ -30,11 +33,12 @@
 #define PAGE 4096u
 
 /* mmap prot/flags (Linux's, on i386 and x86-64). */
-#define PROT_NONE     0x0
-#define PROT_READ     0x1
-#define PROT_WRITE    0x2
-#define MAP_PRIVATE   0x02
-#define MAP_ANONYMOUS 0x20
+#define PROT_NONE           0x0
+#define PROT_READ           0x1
+#define PROT_WRITE          0x2
+#define MAP_PRIVATE         0x02
+#define MAP_ANONYMOUS       0x20
+#define MAP_FIXED_NOREPLACE 0x100000
 
 /** The write call: the count written, or a negated errno. */
 static int sys_write(int fd, const void *buf, size_t count)
@@ -236,8 +240,8 @@ static unsigned long hex_at(const char **p)
 }
 
 /** The end of the [stack] line of /proc/self/maps, the top of the stack's
- * window, or 0. */
-static unsigned long stack_end(void)
+ * window, or 0; its start, the bottom of the stack's region, in `*start`. */
+static unsigned long stack_range(unsigned long *start)
 {
     static char maps[8192];
     int fd = (int)syscall3(SYS_OPEN, (long)"/proc/self/maps", 0, 0);
@@ -259,7 +263,7 @@ static unsigned long stack_end(void)
                    maps[i + 3] == 'a' && maps[i + 4] == 'c' && maps[i + 5] == 'k') {
             const char *q = maps + line;
 
-            hex_at(&q);
+            *start = hex_at(&q);
             q++;
             return hex_at(&q);
         }
@@ -282,7 +286,7 @@ static void stack_gap(void)
     struct {
         unsigned long long cur, max;
     } rl;
-    unsigned long top = stack_end(), gap, high = 0, p;
+    unsigned long bottom, top = stack_range(&bottom), gap, high = 0, p;
     unsigned long len = 1ul << (sizeof(long) == 8 ? 46 : 30);
     unsigned n = 0, i;
 
@@ -322,11 +326,59 @@ static void stack_gap(void)
     }
 }
 
+/* The growth of the stack's region at an exec below the pages its arguments
+ * took, and how far below the entry stack pointer the write goes. */
+#define EXEC_STACK_EXPAND 0x20000ul
+#define EXPAND_REACH      0x1e000ul
+
+/**
+ * The stack's region at the exec reaches EXEC_STACK_EXPAND below the pages
+ * the arguments took, as Linux 6.12.115's setup_arg_pages expands it
+ * (fs/exec.c:818-836), so that a write EXPAND_REACH below the entry stack
+ * pointer `sp` lands in the region with no growth. A readable mapping is
+ * placed on the page right under the region first, within the guard gap,
+ * so a region that did not reach that far could not grow to the write
+ * either (expand_downwards, mm/mmap.c:1167-1175). The write is made in a
+ * child, whose death by the fault is the failure; the mapping is removed
+ * before it returns.
+ */
+static void stack_expand(unsigned long sp)
+{
+    struct {
+        unsigned long long cur, max;
+    } rl;
+    unsigned long bottom = 0, top = stack_range(&bottom), p;
+    int pid, status = -1;
+
+    if (syscall4(SYS_PRLIMIT64, 0, 3, 0, (long)&rl) != 0 ||
+        rl.cur < top - sp + EXEC_STACK_EXPAND + PAGE || top == 0 || bottom < PAGE) {
+        report_notrun("stack-expand", "RLIMIT_STACK or the stack's region is not known");
+        return;
+    }
+    p = (unsigned long)probe_mmap((long)(bottom - PAGE), PAGE, PROT_READ | PROT_WRITE,
+                                  MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    check(p == bottom - PAGE, "stack-expand", "a page right under the stack's region is mapped");
+    if (p != bottom - PAGE) {
+        return;
+    }
+    pid = (int)syscall0(SYS_FORK);
+    if (pid == 0) {
+        *(volatile char *)(sp - EXPAND_REACH) = 1;
+        sys_exit(0);
+    }
+    if (pid > 0) {
+        syscall4(SYS_WAITPID, pid, (long)&status, 0, 0);
+    }
+    check(pid > 0 && status == 0, "stack-expand",
+          "a write 120 KiB below the entry stack pointer lands in the stack's region");
+    sys_munmap(p, PAGE);
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
-/** The probe: the six cases of the opening comment in order, each counted
+/** The probe: the seven cases of the opening comment in order, each counted
  * by `check`; `_start` calls it with the initial stack. */
 void probe_main(unsigned long *sp)
 {
@@ -413,6 +465,9 @@ void probe_main(unsigned long *sp)
 
     /* 6. Stack growth by about 64 KiB of recursion, far past the first page. */
     check(recurse(64) == 64 * 65 / 2, "stack", "stack grew under deep recursion");
+
+    /* 7. The exec put 128 KiB below the entry stack pointer in the region. */
+    stack_expand((unsigned long)sp);
 
     report_finish();
     if (fails == 0) {

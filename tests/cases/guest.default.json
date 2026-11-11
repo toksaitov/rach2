@@ -598,7 +598,8 @@
         {"assertion_id": "below-break", "checks": "Once reservations take the room between the break and the mmap base, an mmap without a hint is placed below the break.", "source": "program"},
         {"assertion_id": "stack-gap-hint", "checks": "Under the default RLIMIT_STACK of 8 MiB, an mmap hint whose page ends 1 MiB below the stack's limit, 8 MiB below the top of [stack] in /proc/self/maps, is taken, and a hint at that place, in the guard gap, is not.", "source": "program"},
         {"assertion_id": "stack-gap-fill", "checks": "PROT_NONE mappings without a hint, each the largest that still fits, fill every free range until a page no longer fits, and the highest of them ends at the guard gap, 1 MiB below the stack's limit.", "source": "program"},
-        {"assertion_id": "stack", "checks": "64 levels of recursion with 1 KiB frames each keep their bytes.", "source": "program"}
+        {"assertion_id": "stack", "checks": "64 levels of recursion with 1 KiB frames each keep their bytes.", "source": "program"},
+        {"assertion_id": "stack-expand", "checks": "With a readable page mapped right under the stack's region of /proc/self/maps, a child's write 120 KiB below the entry stack pointer succeeds, since the exec put 128 KiB below the arguments' pages in the region.", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
