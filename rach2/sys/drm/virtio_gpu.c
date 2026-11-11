@@ -1659,6 +1659,7 @@ static void vgpu_worker(void)
 
     arch_irq_enable();
     for (;;) {
+        sched_service_point();
         (void)wq_wait_event_idle(&vgpu_wake, work_pending, NULL);
         for (i = 0; i < VGPU_DEVICES; i++) {
             vg = vgpu_devices[i];
