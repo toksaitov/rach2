@@ -580,13 +580,13 @@ static int32_t steps(const char *text)
 
 /** Drive kvm_intel's pmu_steps: its text, the bits it refuses, and each
  * step on the switching: Linux's order, the counters written to minus
- * their periods with the model's limits, the interrupt bits and the NMI
- * they raise, the fixed field cleared at the exit, and FREEZE_WHILE_SMM in
- * the VMCS's DEBUGCTL alone; and pmu_placed. */
+ * their periods, the interrupt bits and the NMI they raise, and the fixed
+ * field cleared at the exit; and pmu_placed. `intel_step_limits` goes on
+ * from the state this leaves. */
 static void intel_steps(void)
 {
     struct kvm_pmu_msr guest[KVM_PMU_LIST_MAX], host[KVM_PMU_LIST_MAX];
-    uint64_t global[2], watch_global = FIXED_BIT(1), value;
+    uint64_t global[2], watch_global = FIXED_BIT(1);
     uint32_t ng, nh;
     char text[24];
     setup(1, 0, 0);
@@ -606,8 +606,12 @@ static void intel_steps(void)
     pmu_host.version = 1;
     CHECK(steps("0x05") < 0, "it refuses the PMI bits without the global status");
     pmu_host.version = 2;
-    CHECK(watchdog_guest_nmi == kvm_pmu_nmi && !kvm_pmu_nmi(),
-          "the NMI handler calls KVM, which claims nothing before a PMI bit is set");
+    *reg(GLOBAL_STATUS) = 1u;
+    *reg(GLOBAL_OVF) = 0;
+    CHECK(watchdog_guest_nmi == kvm_pmu_nmi && !kvm_pmu_nmi() && !*reg(GLOBAL_OVF),
+          "the NMI handler calls KVM, which claims and acknowledges no overflow before a PMI bit "
+          "is set");
+    *reg(GLOBAL_STATUS) = 0;
     CHECK(kvm_pmu_placed_show(NULL, 0, text, sizeof(text)) == 4 && !memcmp(text, "0x0\n", 4),
           "pmu_placed reads 0x0 before any entry");
     CHECK(steps("0x17") == 4, "and Linux's order, the writes, the PMI bits and the field");
@@ -647,6 +651,18 @@ static void intel_steps(void)
           "and claims a guest counter's, acknowledging only the counters the host does not hold "
           "and counting each, so that the NMI a second latched is swallowed");
     *reg(GLOBAL_STATUS) = 0;
+}
+
+/** Go on from `intel_steps`: the model's limits on a counter's start,
+ * FREEZE_WHILE_SMM in the VMCS's DEBUGCTL alone, and pmu_placed after an
+ * entry that places no counter. */
+static void intel_step_limits(void)
+{
+    struct kvm_pmu_msr guest[KVM_PMU_LIST_MAX], host[KVM_PMU_LIST_MAX];
+    uint64_t global[2], value;
+    uint32_t ng, nh;
+    char text[24];
+
     v.pmu.eventsel[1] = 0x1C0u | EV_ENABLE | EV_OS;
     v.pmu.counter[1] = v.pmu.gp_mask - 3;
     CHECK(start_count(&v.pmu, 1) == mask_bits(48) - 127u,
@@ -884,6 +900,7 @@ int main(void)
     intel_switch();
     intel_placement();
     intel_steps();
+    intel_step_limits();
     intel_lbr();
     amd_switch();
     amd_constraints();
