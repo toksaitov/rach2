@@ -6,7 +6,8 @@
  * that spans several reads is printed one read per chunk of input, and what
  * the peer sends after standard input ends is not read. Both outputs complete
  * partial writes. The loop ends with status 0 when a read from either side
- * returns 0 or fails, and with status 1 when a write fails.
+ * returns 0 or fails, and with status 1 when a write fails, EPIPE among the
+ * failures, since SIGPIPE is ignored.
  *
  * The port is decimal digits from 1 through 65535. The host is an IPv4
  * address or a name looked up in `/etc/hosts`, or `/hosts`, and then through
@@ -15,6 +16,7 @@
 
 #include <stdio.h>
 #include <errno.h>
+#include <signal.h>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -82,6 +84,7 @@ int main(int argc, char **argv)
         fputs("usage: nc <host> <port>\n", stderr);
         return 1;
     }
+    signal(SIGPIPE, SIG_IGN);
 
     port = parse_port(argv[2]);
     if (port == 0) {
