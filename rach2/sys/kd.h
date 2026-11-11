@@ -167,7 +167,9 @@ int kd_translates(void);
 /**
  * Set the Scroll Lock flag when `stopped` is nonzero and clear it otherwise,
  * and light the LEDs it follows, as Linux's vt_kbd_con_stop and
- * vt_kbd_con_start show a stop of the console's output. Any context.
+ * vt_kbd_con_start show a stop of the console's output. The keyboard's
+ * state is set up first, when nothing has used it yet, so that its first
+ * use later does not clear the flag. Any context.
  */
 void kd_scroll_lock(int stopped);
 
