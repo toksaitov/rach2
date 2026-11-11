@@ -231,10 +231,13 @@ void bkl_tick_tail(void);
 
 /** Write the tick's counts as debugfs's `bkl/tick` shows them: for each row,
  * its calls, their time in TSC cycles and in microseconds, and the longest
- * in microseconds. The caller holds the big lock. */
+ * in microseconds, from one copy taken with interrupts off so that a tick
+ * on this processor tears no row. The caller holds the big lock. */
 int32_t smp_tick_show(void *data, char *buf, uint32_t cap);
 
-/** Zero the tick's counts; `len`. */
+/** Zero the tick's counts with interrupts off, so that a tick on this
+ * processor leaves no row half cleared; `len`. The caller holds the big
+ * lock. */
 int32_t smp_tick_store(void *data, const char __user *buf, uint32_t len);
 
 /** Answer the requests other processors left this one: stop for good, drop

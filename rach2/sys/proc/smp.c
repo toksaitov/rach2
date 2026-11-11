@@ -590,10 +590,18 @@ int32_t smp_calls_store(void *data, const char __user *buf, uint32_t len)
 
 int32_t smp_tick_show(void *data, char *buf, uint32_t cap)
 {
+    struct bkl_tick_count snap[BKL_TICK_ROWS];
     struct bkl_text t;
+    uint32_t flags;
     int row;
 
     (void)data;
+    /* The tick writes the rows from its interrupt, which the big lock does
+     * not hold off on this processor: copy them with interrupts off, as
+     * Linux's u64_stats_sync.h:22-24 has a writer beside an interrupt's. */
+    flags = kirq_save();
+    k_memcpy(snap, bkl_ticks, sizeof(snap));
+    kirq_restore(flags);
     t.buf = buf;
     t.cap = cap;
     t.len = 0;
@@ -601,13 +609,13 @@ int32_t smp_tick_show(void *data, char *buf, uint32_t cap)
     for (row = 0; row < BKL_TICK_ROWS; row++) {
         text_str(&t, bkl_tick_names[row]);
         text_ch(&t, ' ');
-        text_dec(&t, bkl_ticks[row].calls);
+        text_dec(&t, snap[row].calls);
         text_ch(&t, ' ');
-        text_dec(&t, bkl_ticks[row].cycles);
+        text_dec(&t, snap[row].cycles);
         text_ch(&t, ' ');
-        text_dec(&t, timer_cycles_us(bkl_ticks[row].cycles));
+        text_dec(&t, timer_cycles_us(snap[row].cycles));
         text_ch(&t, ' ');
-        text_dec(&t, timer_cycles_us(bkl_ticks[row].max));
+        text_dec(&t, timer_cycles_us(snap[row].max));
         text_ch(&t, '\n');
     }
     return (int32_t)t.len;
@@ -615,9 +623,13 @@ int32_t smp_tick_show(void *data, char *buf, uint32_t cap)
 
 int32_t smp_tick_store(void *data, const char __user *buf, uint32_t len)
 {
+    uint32_t flags;
+
     (void)data;
     (void)buf;
+    flags = kirq_save();
     k_memset(bkl_ticks, 0, sizeof(bkl_ticks));
+    kirq_restore(flags);
     return (int32_t)len;
 }
 
