@@ -618,6 +618,9 @@ static void _dispatch(isr_params_t *params)
  * architecture's sysnr.h). */
 #define SYSCALL_ENTRY 0x80u
 
+static uintptr_t trace_pc;
+static uint32_t trace_ticks, trace_start;
+
 /**
  * Mark an entry from user mode that is not a system call with -1 in the
  * interrupted thread's `orig_nr`, as Linux writes -1 in `orig_ax` on every
@@ -648,6 +651,13 @@ void _isr_router(isr_params_t *params)
 /** Dispatch a saved frame with the big lock held; isr_leave releases it. */
 void isr_router_locked(isr_params_t *params)
 {
+    if (arch_cpu_id() == 0 && params->vector == SYSCALL_ENTRY) {
+        if (trace_ticks >= 64) {
+            klog(KLOG_WARN, "ticktrace", "user pc %p: %u ticks in %u us before syscall %d",
+                 (void *)trace_pc, trace_ticks, waketime_clock() - trace_start, (int)SC_NR(params));
+        }
+        trace_ticks = 0;
+    }
     bkl_note_entry((uint32_t)params->vector,
                    params->vector == SYSCALL_ENTRY ? (int32_t)SC_NR(params) : -1);
 #ifdef DEBUG
@@ -810,6 +820,14 @@ void _irq_router(isr_params_t *params)
     if (params->vector == IRQ_VECTOR(0)) {
         cpu->wake_irq_start = wake_irq;
         cpu->wake_irq_locked = waketime_clock();
+        if (arch_cpu_id() == 0 && FRAME_USER(params)) {
+            if (!trace_ticks || trace_pc != (uintptr_t)FRAME_PC(params)) {
+                trace_pc = (uintptr_t)FRAME_PC(params);
+                trace_ticks = 0;
+                trace_start = wake_irq;
+            }
+            trace_ticks++;
+        }
     }
     bkl_note_entry((uint32_t)params->vector, -1);
 #if defined(__x86_64__)
