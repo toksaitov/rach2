@@ -336,14 +336,19 @@ static volatile int hangcheck_kicked;
 
 #ifndef RACH2_HOSTTEST
 /** The earliest heartbeat or retire pass of the devices on the worker's
- * list whose GT is awake, as a tick, or 0 for none. */
+ * list whose GT is awake, as a tick, or 0 for none. A wedged GT or one whose
+ * hangcheck is off has no heartbeat, since i915_hangcheck returns before it
+ * moves `hc_next`, and a deadline already past would keep the worker from
+ * sleeping; Linux's next_heartbeat queues no beat when the interval is 0
+ * (drivers/gpu/drm/i915/gt/intel_engine_heartbeat.c:56-57 in 6.12.115). */
 static uint64_t hangcheck_deadline(void)
 {
     struct drm_i915_private *i915;
     uint64_t at = 0;
 
     for (i915 = submit_devices; i915; i915 = i915->gt.submit_next) {
-        if (i915->gt.awake && !i915->gt.wedged && (at == 0 || i915->gt.hc_next < at)) {
+        if (i915->gt.awake && !i915->gt.wedged && !i915->params.hangcheck_off &&
+            (at == 0 || i915->gt.hc_next < at)) {
             at = i915->gt.hc_next;
         }
         if (i915->gt.awake && (at == 0 || i915->gt.retire_next < at)) {
