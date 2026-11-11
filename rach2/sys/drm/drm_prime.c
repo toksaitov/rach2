@@ -64,14 +64,7 @@ static struct drm_handle *prime_handle(struct drm_file *file, uint32_t handle)
 /** The handle of `file` whose PRIME cache holds `buf`, or 0 for none. */
 static uint32_t prime_cached(struct drm_file *file, const struct dma_buf *buf)
 {
-    uint32_t i;
-
-    for (i = drm_handle_next(&file->objects, 1); i; i = drm_handle_next(&file->objects, i + 1)) {
-        if (drm_handle_get(&file->objects, i)->prime == buf) {
-            return i;
-        }
-    }
-    return 0;
+    return drm_handle_prime_find(&file->objects, buf);
 }
 
 /** Export a handle as a dma-buf descriptor, caching its identity until close.
@@ -101,7 +94,7 @@ int32_t drm_prime_handle_to_fd_ioctl(struct drm_device *dev, void *data, struct 
     if (!h->prime) {
         buf = obj->import ? obj->import : obj->dma_buf;
         if (buf) {
-            h->prime = dma_buf_ref(buf);
+            dma_buf_ref(buf);
         } else {
             buf = dma_buf_export(obj->size, &prime_ops, obj, obj->resv);
             if (!buf) {
@@ -111,7 +104,11 @@ int32_t drm_prime_handle_to_fd_ioctl(struct drm_device *dev, void *data, struct 
             obj->dma_buf = buf;
             buf->read_only = !(args->flags & DRM_RDWR);
             buf->map_flags = obj->map_wc ? VM_PROT_WC : 0;
-            h->prime = buf;
+        }
+        if (drm_handle_set_prime(&file->objects, h, buf) != 0) {
+            /* A new export's only reference: its put releases the export. */
+            dma_buf_put(buf);
+            return -ENOMEM;
         }
     }
     fd = dma_buf_fd(h->prime, args->flags & DRM_CLOEXEC);
@@ -214,8 +211,13 @@ int32_t drm_prime_fd_to_handle_ioctl(struct drm_device *dev, void *data, struct 
         rc = drm_gem_handle_create(file, obj, &handle);
         if (!rc) {
             h = prime_handle(file, handle);
-            h->prime = dma_buf_ref(buf);
-            args->handle = handle;
+            rc = drm_handle_set_prime(&file->objects, h, dma_buf_ref(buf));
+            if (rc) {
+                dma_buf_put(buf);
+                drm_gem_handle_delete(file, handle);
+            } else {
+                args->handle = handle;
+            }
         }
         drm_gem_object_put(obj);
     }

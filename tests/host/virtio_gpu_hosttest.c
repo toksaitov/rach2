@@ -539,6 +539,31 @@ struct drm_handle *drm_handle_get(const struct drm_handles *t, uint32_t id)
     return NULL;
 }
 
+/** Make `buf` the PRIME cache of the handle `h`, which the model keeps in
+ * place of drm_gem.c's hash: 0. */
+int32_t drm_handle_set_prime(struct drm_handles *t, struct drm_handle *h, struct dma_buf *buf)
+{
+    (void)t;
+    h->prime = buf;
+    return 0;
+}
+
+/** The lowest handle of the file whose table is `t` that caches `buf`, or
+ * 0. */
+uint32_t drm_handle_prime_find(const struct drm_handles *t, const struct dma_buf *buf)
+{
+    uint32_t best = 0;
+    int i;
+
+    for (i = 0; i < MAX_HANDLES; i++) {
+        if (handles[i].file && &handles[i].file->objects == t && handles[i].node.prime == buf &&
+            (!best || handles[i].id < best)) {
+            best = handles[i].id;
+        }
+    }
+    return best;
+}
+
 /** The lowest handle from `id` of the file whose table is `t`, or 0. */
 uint32_t drm_handle_next(const struct drm_handles *t, uint32_t id)
 {
