@@ -671,6 +671,16 @@ int smp_cpu_count(void)
     return cpus_online;
 }
 
+int smp_serialized(void)
+{
+    struct percpu *cpu = this_cpu();
+
+    if (k_panicking()) {
+        return 1;
+    }
+    return !cpu->in_nmi && (cpu->bkl_depth > 0 || cpus_online < 2);
+}
+
 /**
  * Stop this processor for good: leave VMX or SVM operation first
  * (`k_panic_hook`), stop the watchdog's counter, then mark it stopped,

@@ -490,16 +490,6 @@ static void trigger_allbut(int exclude, const isr_params_t *regs)
     trigger_backtrace(want, exclude, regs);
 }
 
-/** Let the next record go out at once to every destination when a panic is
- * to follow it, since the panic never returns to write out records queued
- * behind another processor's delivery, which may be the one locked up. */
-static void deliver_now(int panicking)
-{
-    if (panicking) {
-        klog_deliver_directly();
-    }
-}
-
 /**
  * kernel/watchdog.c:131-221: a processor whose watchdog timer has not fired
  * since the last check has had its interrupts off for a threshold. `cpu` is
@@ -528,7 +518,6 @@ static void watchdog_hardlockup_check(int cpu, const isr_params_t *regs)
     if (sysctl_hardlockup_all_cpu_backtrace && arch_atomic_xchg(&hard_lockup_nmi_warn, 1u) != 0u) {
         return;
     }
-    deliver_now(panicking);
     sflags = sync_get();
     klog(KLOG_CRIT, "watchdog", "watchdog detected hard LOCKUP on cpu %d", cpu);
     if (cpu == me) {
@@ -692,7 +681,6 @@ static void watchdog_timer_fn(struct wd_cpu *w, isr_params_t *regs)
     panicking = softlockup_panic != 0;
     t = current_proc;
     task_name(t, name);
-    deliver_now(panicking);
     sflags = sync_get();
     klog(KLOG_CRIT, "watchdog", "BUG: soft lockup - CPU#%d stuck for %us! [%s:%d]", me,
          (unsigned int)duration, name, t ? (int)t->pid : 0);
@@ -721,6 +709,28 @@ static void softlockup_fn(struct wd_cpu *w)
 void watchdog_sched(void)
 {
     softlockup_fn(&wd[arch_cpu_id()]);
+}
+
+/**
+ * Write out klog's kept records when the processor that holds the big lock,
+ * other than this one, has been reported hard-locked and has taken no tick
+ * for a sample period since: the reports of the detectors, made in an NMI
+ * or without the big lock, wait for a processor that holds it
+ * (`klog_flush`), and that one is locked up. One that took a tick has come
+ * back, and writes them out itself.
+ */
+static void flush_for_holder(int me)
+{
+    uint64_t now = arch_cycles(), cycles = sample_cycles();
+    int c;
+
+    for (c = 0; c < NR_CPUS; c++) {
+        if (c != me && cpu_table[c].bkl_depth > 0 && wd[c].hardlockup_warned &&
+            (cycles == 0 || (int64_t)(now - wd[c].tick_tsc) > (int64_t)cycles)) {
+            klog_flush_stuck();
+            return;
+        }
+    }
 }
 
 void watchdog_reconfigure(void)
@@ -778,6 +788,9 @@ void watchdog_tick(isr_params_t *params)
     }
     if (w->gen != wd_gen) {
         watchdog_restart(w);
+    }
+    if (klog_kept()) {
+        flush_for_holder((int)arch_cpu_id());
     }
     if (FRAME_USER(params) || this_cpu()->idle_wait) {
         softlockup_fn(w);
@@ -938,7 +951,6 @@ static int check_hung_task(process_t *t, uint32_t timeout, uint64_t now)
         sysctl_hung_task_warnings--;
     }
     task_name(t, name);
-    deliver_now(sysctl_hung_task_panic);
     sflags = sync_get();
     klog(sysctl_hung_task_panic ? KLOG_CRIT : KLOG_ERR, "hung_task",
          "INFO: task %s:%d blocked for more than %u seconds.", name, (int)t->pid,

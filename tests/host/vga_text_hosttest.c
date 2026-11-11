@@ -69,6 +69,13 @@ bool vga_graphics_mode = false;
 #include "display/vga_font.c"
 #include "kio.c"
 
+/** One processor, so the console's lock is never held by another for a
+ * wait to outlast: nothing to wait for. */
+void k_udelay(uint32_t usec)
+{
+    (void)usec;
+}
+
 /** No processor here has begun a panic, so the console takes its lock. */
 int k_panicking(void)
 {

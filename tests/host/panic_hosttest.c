@@ -117,6 +117,25 @@ unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, uns
     return was;
 }
 
+/** One processor: the exchange cannot lose. */
+unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
+{
+    unsigned int was = *p;
+
+    *p = value;
+    return was;
+}
+
+/** One processor, which holds the big lock: no record is kept for later. */
+int smp_serialized(void)
+{
+    return 1;
+}
+
+/** No performance counter here. */
+void platform_pmu_disable(void)
+{}
+
 /* What a write to /proc/sys/kernel/panic that lands while the stop is
  * under way gives `panic_timeout`, or STOP_WRITES_NONE for no write. */
 #define STOP_WRITES_NONE (-1000)

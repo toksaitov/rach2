@@ -401,6 +401,7 @@ static void timer_handler(isr_params_t *params)
     vkms_tick();
     speaker_tick();
     tty_console_poll();
+    klog_flush();
 
     sched_preempt();
 }

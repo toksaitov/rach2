@@ -322,15 +322,24 @@ static void _exception_handler(isr_params_t *params)
  * request or its counter's overflow, is the watchdog's (`watchdog_nmi`), and
  * returns; so is the NMI of another processor's stop, which this processor
  * takes there, leaving VMX or SVM operation and halting (`smp_stop_nmi`), as
- * Linux's `smp_stop_nmi_callback` does. The paranoid router holds no lock,
+ * Linux's `smp_stop_nmi_callback` does. The NMI is counted on the
+ * processor while the watchdog takes it, so that klog keeps its records
+ * for later (`smp_serialized`). The paranoid router holds no lock,
  * so no signal may be posted here, and the panic begins before the record
  * is written, so that the console's lock, which the interrupted code may
  * hold, is not taken (`k_panic_begin`).
  */
 static void _hardware_fault_handler(isr_params_t *params)
 {
-    if (params->vector == 2 && watchdog_nmi(params)) {
-        return;
+    int ours;
+
+    if (params->vector == 2) {
+        this_cpu()->in_nmi++;
+        ours = watchdog_nmi(params);
+        this_cpu()->in_nmi--;
+        if (ours) {
+            return;
+        }
     }
     k_panic_begin();
     klog_deliver_directly();

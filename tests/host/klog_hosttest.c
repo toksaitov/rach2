@@ -203,6 +203,48 @@ void kirq_restore(unsigned int flags)
 
 volatile uint64_t kernel_ticks;
 
+/** One processor, which holds the big lock: every record is written at
+ * once, and none is kept for later. */
+int smp_serialized(void)
+{
+    return 1;
+}
+
+/** One processor: the exchange cannot lose. */
+unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, unsigned int value)
+{
+    unsigned int was = *p;
+
+    if (was == old) {
+        *p = value;
+    }
+    return was;
+}
+
+/** One processor: the exchange cannot lose. */
+unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
+{
+    unsigned int was = *p;
+
+    *p = value;
+    return was;
+}
+
+/** The console's lock is always free here, and is not counted among the
+ * interrupt brackets. */
+int console_lock_bounded(uint32_t *flags, uint32_t us)
+{
+    (void)us;
+    *flags = 0;
+    return 1;
+}
+
+/** Give back the console's lock, which is not modelled. */
+void console_unlock(uint32_t flags)
+{
+    (void)flags;
+}
+
 #include "../../rach2/sys/klog.c"
 
 /* ---- helpers ---- */
