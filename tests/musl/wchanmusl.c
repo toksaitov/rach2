@@ -22,7 +22,8 @@
  * owns and gets EPERM from the read, and 0 from wchan. A process's 0555
  * directories keep its effective IDs in either dumpable state; its 0500
  * fd directory, 0511 ns directory and files belong to root when it is not
- * dumpable.
+ * dumpable, and a process of user 1000 that is not dumpable gets EACCES
+ * from a read open of its own ns directories, which O_PATH opens.
  *
  * Prints `WCHANMUSL OK` and exits 0 on success, and prints `WCHANMUSL FAIL
  * (detail)` and exits 1 otherwise. etude's report (probe_report.h), for the
@@ -446,11 +447,57 @@ static int owner_is(const char *path, mode_t mode, uid_t id)
     return stat(path, &st) == 0 && st.st_mode == mode && st.st_uid == id && st.st_gid == id;
 }
 
+/**
+ * In a child of user OTHER_ID whose address space is dumpable when
+ * `dumpable`, open its own ns directories, /proc/self/ns and its thread's,
+ * for reading: each opens while the child owns it, and is EACCES once root
+ * owns it, as mode 0511 answers a caller who is not the owner. O_PATH,
+ * which reads nothing, opens each either way. 1 when every open answers so,
+ * else 0.
+ */
+static int ns_opens(int dumpable)
+{
+    char thread[64];
+    const char *paths[2];
+    pid_t pid;
+    int status, fd, i;
+
+    pid = fork();
+    if (pid == 0) {
+        snprintf(thread, sizeof(thread), "/proc/self/task/%d/ns", (int)getpid());
+        paths[0] = "/proc/self/ns";
+        paths[1] = thread;
+        if (setgid(OTHER_ID) != 0 || setuid(OTHER_ID) != 0 ||
+            prctl(PR_SET_DUMPABLE, dumpable, 0, 0, 0) != 0) {
+            _exit(1);
+        }
+        for (i = 0; i < 2; i++) {
+            fd = open(paths[i], O_RDONLY | O_DIRECTORY);
+            if (dumpable ? fd < 0 : fd >= 0 || errno != EACCES) {
+                _exit(2);
+            }
+            if (fd >= 0) {
+                close(fd);
+            }
+            fd = open(paths[i], O_PATH | O_DIRECTORY);
+            if (fd < 0) {
+                _exit(3);
+            }
+            close(fd);
+        }
+        _exit(0);
+    }
+    return pid > 0 && waitpid(pid, &status, 0) == pid && WIFEXITED(status) &&
+           WEXITSTATUS(status) == 0;
+}
+
 /** Stat a sleeper's process, task, fdinfo and ns directories and its syscall
  * file. World-readable directories keep its effective IDs even when it
  * is not dumpable; the 0500 fd and 0511 ns directories and the file then
- * belong to root. The thread's ns directory has the same mode and owner.
- * Return 0 after reaping each sleeper, or report the failed row. */
+ * belong to root. The thread's ns directory has the same mode and owner,
+ * and a process opens its own ns directories as their owner says
+ * (`ns_opens`). Return 0 after reaping each sleeper, or report the failed
+ * row. */
 static int owner_rows(void)
 {
     static const char *const dirs[] = {"", "/task", "/fdinfo"};
@@ -480,6 +527,7 @@ static int owner_rows(void)
         ok = ok && owner_is(path, S_IFDIR | 0511, dumpable ? OTHER_ID : 0);
         snprintf(path, sizeof(path), "/proc/%d/task/%d/ns", (int)pid, (int)pid);
         ok = ok && owner_is(path, S_IFDIR | 0511, dumpable ? OTHER_ID : 0);
+        ok = ok && ns_opens(dumpable);
         close(wake);
         if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0 ||
             !ok) {
