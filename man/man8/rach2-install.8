@@ -1,4 +1,4 @@
-.Dd November 9, 2026
+.Dd November 11, 2026
 .Dt RACH2-INSTALL 8
 .Os
 .Sh NAME
@@ -38,6 +38,21 @@ The installer adds partition 6, the data partition, after the root, as
 .Xr disk 7
 describes.
 The disk boots by BIOS and by UEFI.
+Its menu boots the saved default, the candidate kernel once committed,
+and falls back to the previous kernel after a candidate boot that never
+reached user space, as Ubuntu's
+.Ql recordfail
+does: the candidate's entries set
+.Ql recordfail=1
+in the environment block before they load the kernel,
+.Xr init 8
+clears it with
+.Ql bootctl booted
+once user space runs, and while it stays set the menu boots the fallback.
+A committed kernel that panics at boot therefore resets once, after the
+panic's 30 seconds, into the fallback, and not into itself for ever.
+The menu of a disk installed before this version lacks the entries' line
+and falls back only when a kernel fails to load.
 On the installed machine,
 .Ql bootctl grub
 replaces the BIOS core in the BIOS boot partition; on a disk installed

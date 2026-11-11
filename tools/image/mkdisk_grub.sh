@@ -275,7 +275,9 @@ load_env
 # No line names `panic=`: the kernel's default, 30 seconds, keeps a panic's
 # report on the screen that long and then resets the machine, so that a
 # trial that panics comes back through the firmware to the saved default,
-# the fallback, with nobody at the machine (rach2/cmdline.md).
+# the fallback, with nobody at the machine (rach2/cmdline.md), and a
+# committed candidate that panics comes back to the fallback by the
+# recordfail its entry left set.
 #
 # The kernel draws its console on a framebuffer when the loader gives one,
 # and on the VGA's text mode when it does not. GRUB sets the mode that
@@ -287,6 +289,8 @@ load_env
 # text mode, takes the firmware's framebuffer whatever the variable says.
 
 menuentry "Start Rach2" --id candidate {
+    set recordfail=1
+    save_env recordfail
     search --no-floppy --fs-uuid --set=root RACH2_BOOT_SERIAL
     RACH2_MULTIBOOT /boot/kernel rach2.root=RACH2_CANDIDATE_ROOT rach2.boot=RACH2_BOOT_PART rach2.slot=candidate RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
     if [ "$grub_platform" = pc ]; then set gfxpayload=auto; fi
@@ -324,6 +328,8 @@ menuentry "RACH2_RECOVERY_TITLE" --id recovery {
 # mode does not suit and for the programs that draw in mode 13h. UEFI has no
 # text mode, so there it starts the kernel as the first entry does.
 menuentry "Start Rach2 in text mode" --id text {
+    set recordfail=1
+    save_env recordfail
     search --no-floppy --fs-uuid --set=root RACH2_BOOT_SERIAL
     RACH2_MULTIBOOT /boot/kernel rach2.root=RACH2_CANDIDATE_ROOT rach2.boot=RACH2_BOOT_PART rach2.slot=candidate RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
     if [ "$grub_platform" = pc ]; then set gfxpayload=text; fi
@@ -370,6 +376,18 @@ fi
 set default=fallback
 set fallback=1
 if [ "${saved_entry}" = "candidate" ]; then set default=candidate; fi
+# A candidate that never reached user space is not booted again. Its entries
+# set recordfail in the block before they load the kernel, the installed
+# system's init clears it once user space runs (`bootctl booted`), and while
+# it stays set the saved default gives way to the previous kernel, as
+# Ubuntu's recordfail keeps a failed boot from repeating (its
+# /etc/grub.d/00_header and 10_linux). Without it a committed candidate that
+# panics at boot resets into itself every 30 seconds for ever, since
+# `fallback=1` acts only when an entry fails to load. A trial armed since is
+# still taken, below, since a person asked for that boot.
+if [ "${default}" = "candidate" ]; then
+    if [ "${recordfail}" = "1" ]; then set default=fallback; fi
+fi
 # A repair is not one boot. Rewriting a root takes minutes, and a machine that
 # lost power in the middle of one would come back to a kernel that cannot mount
 # what is there and starts no way in; the boot partition is healthy, so nothing

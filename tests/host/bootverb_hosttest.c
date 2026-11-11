@@ -69,6 +69,9 @@ int main(void)
 
     CHECK(parse((char *)"status", 0, 0, &arg) == BOOTVERB_STATUS, "status is a verb");
     CHECK(parse((char *)"commit", 0, 0, &arg) == BOOTVERB_COMMIT, "commit is a verb");
+    CHECK(parse((char *)"booted", 0, 0, &arg) == BOOTVERB_BOOTED, "booted is a verb");
+    CHECK(parse((char *)"booted", (char *)"extra", 0, &arg) == BOOTVERB_NONE,
+          "booted with a surplus argument is refused");
     CHECK(parse((char *)"kernel", (char *)"/tmp/k", 0, &arg) == BOOTVERB_KERNEL,
           "kernel with a path is a verb");
 
@@ -151,7 +154,8 @@ int main(void)
     {
         static char *const names[] = {(char *)"status", (char *)"commit", (char *)"cancel",
                                       (char *)"kernel", (char *)"config", (char *)"trial",
-                                      (char *)"env",    (char *)"grub",   (char *)"fallback"};
+                                      (char *)"env",    (char *)"grub",   (char *)"fallback",
+                                      (char *)"booted"};
         unsigned i;
 
         for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
