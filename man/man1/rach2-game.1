@@ -125,6 +125,8 @@ An existing game tree is refused; use
 to check it again.
 .Pp
 .Cm run
+.Op Fl -umu
+.Op Fl -32
 starts
 .Pa Bin64/Crysis.exe
 with
@@ -132,6 +134,20 @@ with
 from its own directory through
 .Nm rach2-game
 with game ID 17300.
+.Fl -umu
+starts it through umu instead, with
+.Pa /data/crysis/game
+as
+.Ev STEAM_COMPAT_INSTALL_PATH ,
+since the game finds no language from the root of the drive umu maps there,
+and
+.Pa /data
+added to
+.Ev PRESSURE_VESSEL_FILESYSTEMS_RW .
+.Fl -32
+starts the 32-bit
+.Pa Bin32/Crysis.exe
+under WoW64.
 Additional arguments follow these settings.
 The game's
 .Fl userpath
