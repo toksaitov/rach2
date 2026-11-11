@@ -1612,6 +1612,7 @@ int32_t intel_display_init(struct drm_i915_private *i915)
     mc->fb_create = intel_fb_create;
     mc->fb_destroy = intel_fb_destroy;
     mc->commit_fence_wait = commit_fence_wait;
+    mc->commit_fence_timeout_ms = I915_FENCE_TIMEOUT_MS;
     intel_cdclk_init(i915);
     intel_wm_init(i915);
     intel_gmbus_setup(i915);
