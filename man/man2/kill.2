@@ -39,8 +39,19 @@ so at a shutdown; see
 .El
 .Pp
 A signal to a process is pending for the process as a whole, and any of
-its threads that does not block it takes it: the kernel wakes the first
-such thread, the one the ID names if it qualifies.
+its threads that does not block it takes it.
+The kernel wakes the thread the ID names when that thread would take it
+now, or else the first thread that would: one that does not block the
+signal and has not begun to end, and, unless the signal is
+.Dv SIGKILL ,
+is not stopped and is running or has neither an unblocked signal of its
+own nor signal work assigned to it by a previous send, as Linux's
+.Fn complete_signal
+chooses.
+When no thread would, one thread is made runnable without new signal
+work, as
+.Xr sigaction 2
+describes.
 An ignored signal is dropped before it is queued, unless the target thread
 blocks it, waits for it through a signal wait, or is traced and the signal
 is not
