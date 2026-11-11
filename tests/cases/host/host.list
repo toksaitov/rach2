@@ -11,7 +11,7 @@ krffs_open|krffs publication open
 krffs_root_lock|krffs root data operations under the mount's lock
 krffs_stat|the inode number of the krffs root in the stat calls
 kstack|a new kernel stack is cleared and guarded
-endothers|an init's end waits for the processes still ending
+endothers|an init's end waits for the processes still ending, and SIGKILL ends an exec's wait for the other threads
 chown|the set-id rules of a mounted chown
 pagecache|the page cache with sys_sync's bounded wait
 doom_libc|Doom C library on both architectures
