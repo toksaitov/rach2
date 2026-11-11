@@ -358,35 +358,6 @@ static void utf8_erase(void)
     }
 }
 
-/**
- * Run the rows; the count of failures, at most 255.
- *
- * A canonical read returns one line, and a second line waits for the next read.
- * ERASE on an empty line does nothing, with no underflow and no echo. VEOF on
- * an empty line is the end of file, read as 0, and once: a following character
- * starts a line again; in the middle of a line it delivers the partial line. A
- * ^D on an empty line typed before a later line is read back first, then the
- * line; a committed line before a ^D comes first, then the end of file. ISIG
- * flushes the whole input queue, not only the edit line, so a committed line
- * that was not read does not survive the signal. With INLCR and ICRNL off, NL
- * becomes CR, an ordinary character, so a lone NL completes no line.
- *
- * A partial canonical line becomes readable when ICANON goes off: the bytes
- * typed before a program switched to raw mode are not lost, the bytes typed
- * after them follow in order, and the counters say what moved and what was
- * read. A switch that stays canonical makes nothing readable; the order typed
- * is kept across the switch, a committed line, then the partial one, then the
- * raw bytes; and FIONREAD counts what a raw read would get. A partial line the
- * full queue cannot take at the switch is kept and read after the queue.
- *
- * A control character set to 0 is disabled, the _POSIX_VDISABLE convention, so
- * a NUL is not read as that character: not as VINTR, VEOF or VERASE. In raw
- * mode a hangup, the master's close, sets the end of file, which reads as
- * readable, so that a blocked reader returns 0 rather than wait for VMIN bytes
- * that will not come; bytes still queued are read first. A canonical line
- * longer than the buffer is capped, its terminator still lands, and the read
- * returns the capped line at once.
- */
 /** The bytes the read queue holds, read out into `buf` of `size`. */
 static int drain(struct n_tty *t, unsigned char *buf, int size)
 {
@@ -402,7 +373,6 @@ static int drain(struct n_tty *t, unsigned char *buf, int size)
 static void flow_control(void)
 {
     struct n_tty t;
-    struct ktermios tio;
     struct cap cp;
     unsigned char buf[16];
 
@@ -551,6 +521,35 @@ static void flow_stops(void)
     CHECK(n_tty_echo_flush(&t, sink, &cp, ~0u) == 0 && cap_is(&cp, "ab", 2));
 }
 
+/**
+ * Run the rows; the count of failures, at most 255.
+ *
+ * A canonical read returns one line, and a second line waits for the next read.
+ * ERASE on an empty line does nothing, with no underflow and no echo. VEOF on
+ * an empty line is the end of file, read as 0, and once: a following character
+ * starts a line again; in the middle of a line it delivers the partial line. A
+ * ^D on an empty line typed before a later line is read back first, then the
+ * line; a committed line before a ^D comes first, then the end of file. ISIG
+ * flushes the whole input queue, not only the edit line, so a committed line
+ * that was not read does not survive the signal. With INLCR and ICRNL off, NL
+ * becomes CR, an ordinary character, so a lone NL completes no line.
+ *
+ * A partial canonical line becomes readable when ICANON goes off: the bytes
+ * typed before a program switched to raw mode are not lost, the bytes typed
+ * after them follow in order, and the counters say what moved and what was
+ * read. A switch that stays canonical makes nothing readable; the order typed
+ * is kept across the switch, a committed line, then the partial one, then the
+ * raw bytes; and FIONREAD counts what a raw read would get. A partial line the
+ * full queue cannot take at the switch is kept and read after the queue.
+ *
+ * A control character set to 0 is disabled, the _POSIX_VDISABLE convention, so
+ * a NUL is not read as that character: not as VINTR, VEOF or VERASE. In raw
+ * mode a hangup, the master's close, sets the end of file, which reads as
+ * readable, so that a blocked reader returns 0 rather than wait for VMIN bytes
+ * that will not come; bytes still queued are read first. A canonical line
+ * longer than the buffer is capped, its terminator still lands, and the read
+ * returns the capped line at once.
+ */
 int main(void)
 {
     struct n_tty t;
