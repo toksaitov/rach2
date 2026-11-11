@@ -46,6 +46,11 @@ struct shmem *filemap_shmem(const struct vm_file *f);
  * region object that is not a mapped file. */
 const struct open_file *filemap_ofd(const struct vm_file *f);
 
+/** The descriptor entry the mapped file `f` keeps, whose /proc link target
+ * names the file; NULL for shared anonymous memory and for a region object
+ * that is not a mapped file. It lives as long as a reference to `f`. */
+const fd_entry_t *filemap_entry(const struct vm_file *f);
+
 /** Whether the pages `f` maps are memory's own, with no file on a disk
  * behind them: a tmpfs file's, a memfd's, shared anonymous memory's. Linux
  * counts such pages in a process's RssShmem, and a disk file's in RssFile. */
