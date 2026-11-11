@@ -7420,7 +7420,8 @@ static int procfs_gen_audio(struct procfs_text *t)
 #define OOM_SCORE_ADJ_MIN (-1000)
 #define OOM_SCORE_ADJ_MAX 1000
 
-int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid)
+/** Give a process node Linux's task_dump_owner ownership (procfs.h). */
+int procfs_pid_owner(int pid, uint32_t mode, uint32_t *uid, uint32_t *gid)
 {
     process_t *p = procfs_proc(pid);
 
@@ -7429,11 +7430,17 @@ int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid)
     }
     *uid = 0;
     *gid = 0;
-    if (p->mm && p->mm->dumpable) {
+    if (mode == 0040555u || (p->mm && p->mm->dumpable == 1u)) {
         *uid = p->euid;
         *gid = p->egid;
     }
     return 0;
+}
+
+/** The owner of oom_score_adj and the other process files, mode 0644. */
+int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid)
+{
+    return procfs_pid_owner(pid, 0100644u, uid, gid);
 }
 
 int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)

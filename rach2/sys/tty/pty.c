@@ -11,6 +11,7 @@
 #include "pty.h"
 #include "../fs/fd.h"
 #include "../fs/file.h"
+#include "../fs/krffs.h"
 #include "../proc/process.h"
 #include "../mm/usercopy.h"
 #include "../mm/kheap.h"
@@ -20,6 +21,7 @@
 #include "../lib/ksignal.h"
 #include "../lib/kirq.h"
 #include "../rtc.h"
+#include "../syscall_internal.h"
 
 /* Linux ioctls. The pty-number requests have the exact values musl uses. */
 #define FIONREAD           0x541B
@@ -554,18 +556,13 @@ static int ptm_write_free(void *arg)
     return !((const struct pty *)arg)->m_writing;
 }
 
-/** Feed one master write before another enters, including across a user
- * copy or a wait for input room. Linux's tty_write_lock serializes master
- * writes too: a nonblocking caller takes EAGAIN while another holds it,
- * and a blocking caller waits, with EINTR if a signal ends its wait. */
-static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+/** Take the master's write lock: 0, -EAGAIN for a nonblocking caller while
+ * another holds it, or -EINTR when a signal ends a blocking caller's wait.
+ * The caller releases it with `ptm_write_unlock` after the whole write. */
+static int32_t ptm_write_lock(fd_entry_t *e)
 {
     struct pty *p = (struct pty *)e->priv;
-    int32_t rc;
 
-    if (count == 0) {
-        return 0;
-    }
     while (p->m_writing) {
         if (fd_is_nonblock(e)) {
             return -EAGAIN;
@@ -575,10 +572,64 @@ static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
         }
     }
     p->m_writing = 1;
-    rc = ptm_write_in(e, buf, count);
+    return 0;
+}
+
+/** Release the master's write lock and wake the next writer. */
+static void ptm_write_unlock(struct pty *p)
+{
     p->m_writing = 0;
     wq_wake(&p->m_read_wq, 0);
+}
+
+/** Feed one master write before another enters, including across a user
+ * copy or a wait for input room, as Linux's tty_write_lock does. Return
+ * the bytes fed or the lock's or transfer's error. */
+static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    int32_t rc;
+
+    if (count == 0) {
+        return 0;
+    }
+    rc = ptm_write_lock(e);
+    if (rc == 0) {
+        rc = ptm_write_in(e, buf, count);
+        ptm_write_unlock((struct pty *)e->priv);
+    }
     return rc;
+}
+
+/** Feed the imported vector with one lock, as defined in pty.h. */
+int32_t pty_master_writev(fd_entry_t *e, const struct kernel_iovec *iov, int count)
+{
+    int32_t rc, total = 0;
+    int i;
+
+    for (i = 0; i < count && iov[i].iov_len == 0; i++) {
+    }
+    if (i == count) {
+        return 0;
+    }
+    rc = ptm_write_lock(e);
+    if (rc != 0) {
+        return rc;
+    }
+    for (; i < count; i++) {
+        if (iov[i].iov_len == 0) {
+            continue;
+        }
+        rc = ptm_write_in(e, (const char __user *)iov[i].iov_base, (uint32_t)iov[i].iov_len);
+        if (rc < 0) {
+            break;
+        }
+        total += rc;
+        if ((unsigned long)rc < iov[i].iov_len) {
+            break;
+        }
+    }
+    ptm_write_unlock((struct pty *)e->priv);
+    return total > 0 ? total : rc;
 }
 
 /** Report the master's readiness, all on m_read_wq, as Linux's n_tty_poll:

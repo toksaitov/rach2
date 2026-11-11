@@ -40,7 +40,9 @@
  * too. read and readv refuse the same descriptors with the same errors, with
  * no bytes too and before a count past 1024 or a vector or buffer outside
  * user memory, and a directory's read EFAULT for such a buffer before
- * EISDIR.
+ * EISDIR. read checks its original count before cutting it at MAX_RW_COUNT:
+ * an overflowing range is EFAULT, and on the i686 kernel a count negative
+ * as ssize_t is EINVAL once its range has passed the address check.
  * pwritev2 with RWF_APPEND writes at the end, moving the descriptor's
  * offset at offset -1 and not at another, and leaves O_APPEND clear;
  * RWF_NOAPPEND overrides O_APPEND for one call at either offset form,
@@ -1019,6 +1021,40 @@ static int read_empty(void)
     return ok;
 }
 
+/** Check read's original count before MAX_RW_COUNT cuts it. Linux's
+ * native i686 access_ok rejects a range past 3 GiB, then rw_verify_area
+ * rejects a count negative as ssize_t. An i386 call on x86-64 instead
+ * uses the kernel's 64-bit address range and ssize_t. A directory lets
+ * these checks finish without moving any of the requested bytes. */
+static int read_raw_count(void)
+{
+    void *buf = (void *)(uintptr_t)0x10000;
+    int dirfd = open("/", O_RDONLY), wr = open("/dev/null", O_WRONLY);
+    int ep = epoll_create1(0), huge = EFAULT, sign = EISDIR, span = EISDIR;
+    int ok;
+
+#if !defined __x86_64__
+    if (getenv("ETUDE_KERNEL") != NULL && strcmp(getenv("ETUDE_KERNEL"), "x86_64") == 0) {
+        huge = EISDIR;
+    } else {
+        sign = EINVAL;
+        span = EFAULT;
+    }
+#endif
+    ok = dirfd >= 0 && wr >= 0 && ep >= 0 &&
+         refused(syscall(SYS_read, 999, buf, (size_t)-1), EBADF) &&
+         refused(syscall(SYS_read, wr, buf, (size_t)-1), EBADF) &&
+         refused(syscall(SYS_read, ep, buf, (size_t)-1), EINVAL) &&
+         refused(syscall(SYS_read, dirfd, buf, (size_t)-1), huge) &&
+         refused(syscall(SYS_read, dirfd, buf, (size_t)0xc0000001u), span) &&
+         refused(syscall(SYS_read, dirfd, buf, (size_t)0x80000000u), sign) &&
+         refused(syscall(SYS_read, dirfd, buf, (size_t)0x7ffff001u), EISDIR);
+    close(ep);
+    close(wr);
+    close(dirfd);
+    return ok;
+}
+
 /**
  * Check the refusals of preadv and pwritev on the file vector_rows makes,
  * writev's cut of a vector past 2 GiB (`writev_cut`) and its vector of no
@@ -1065,6 +1101,9 @@ static int vector_refusal_rows(void)
     }
     if (!read_empty()) {
         return fail("read or readv does not refuse a bad descriptor before its count and buffer");
+    }
+    if (!read_raw_count()) {
+        return fail("read does not validate its original count before cutting the transfer");
     }
     report_held();
     return 0;

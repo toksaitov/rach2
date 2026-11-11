@@ -212,7 +212,9 @@ struct process;
  * that writes a page here sets its entry's dirty bit with no fault, so the
  * mark is taken while the pages that show it are still mapped and before a
  * split copies it. A page a read brought in zeroed and nothing stored into
- * does not count, as Linux maps its zero page there.
+ * does not count, as Linux's base-page anonymous fault maps its zero page
+ * there. Rach2 has no transparent huge pages; Linux's huge zero page
+ * prepares anon_vma on a read too, so its ac can differ for such a region.
  */
 void mm_note_anon(struct mm *mm, uintptr_t start, uintptr_t end);
 

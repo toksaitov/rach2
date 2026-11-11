@@ -279,7 +279,14 @@ uint32_t procfs_fd_ino(struct fd_entry *e);
  * share: a base and the low 16 bits of `pid`. */
 uint32_t procfs_ino_pid(int pid);
 
-/** The owner of the files and directories of process `pid` under /proc,
+/** The owner of a node of process `pid` under /proc, whose full type and
+ * permission bits are `mode`: its effective IDs for a directory of mode
+ * 0555, even after the address space is gone, and for any other node while
+ * its address space is dumpable; root otherwise. Returns 0,
+ * with the IDs in `*uid` and `*gid`, or -ENOENT for no such process. */
+int procfs_pid_owner(int pid, uint32_t mode, uint32_t *uid, uint32_t *gid);
+
+/** The owner of the files of process `pid` under /proc,
  * whose effective user ID may write its oom_score_adj beside a privileged
  * caller: the process's effective user and group IDs while it has an address
  * space that is dumpable, and 0 otherwise. 0, or -ENOENT when there is no

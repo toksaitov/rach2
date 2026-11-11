@@ -1637,6 +1637,55 @@ static void master_write_lock(void)
           "a failed user copy releases the master write lock");
 }
 
+/** Try a competing write while the second vector buffer's copy sleeps. */
+static void vector_compete(void)
+{
+    fd_entry_t other = master;
+
+    CHECK(n_tty_inq(&pair.slave.ldisc) == 1,
+          "the first vector element was fed before the second copy sleeps");
+    other.ofd = &nonblocking_ofd;
+    nonblocking_ofd.status_flags = OFD_NONBLOCK;
+    CHECK(ptm_write(&other, "x", 1) == -EAGAIN,
+          "another master writer cannot enter between vector elements");
+}
+
+/** Arrange a fault in the next element after the first copy completes. */
+static void vector_first_copy(void)
+{
+    copy_action = vector_compete;
+}
+
+/** A master vector keeps its lock across elements and a failed copy,
+ * returning the prefix on a later fault and releasing the lock every time. */
+static void master_write_vector(void)
+{
+    struct kernel_iovec iov[3];
+    char out[3];
+    int fault;
+
+    iov[0].iov_base = (uintptr_t)"a";
+    iov[0].iov_len = 1;
+    iov[1].iov_base = 0;
+    iov[1].iov_len = 0;
+    iov[2].iov_base = (uintptr_t)"b";
+    iov[2].iov_len = 1;
+    setup_pair();
+    copy_action = vector_first_copy;
+    CHECK(pty_master_writev(&master, iov, 3) == 2 && copy_calls == 2 && !pair.m_writing,
+          "a master writes both vector elements under one lock");
+    CHECK(ptm_write(&master, "x", 1) == 1 && pts_read(&slave, out, 3) == 3 && out[0] == 'a' &&
+              out[1] == 'b' && out[2] == 'x',
+          "the competing byte follows the whole vector");
+    for (fault = 1; fault <= 2; fault++) {
+        setup_pair();
+        copy_failure = fault;
+        CHECK(pty_master_writev(&master, iov, 3) == (fault == 1 ? -EFAULT : 1) && !pair.m_writing &&
+                  n_tty_inq(&pair.slave.ldisc) == fault - 1,
+              "a vector fault returns its completed prefix and releases the master lock");
+    }
+}
+
 /* The dispositions of the background process in `job_check`. */
 static struct k_sigaction job_acts[KSIG_MAX + 1];
 /* A thread of the parent's process in `job_check`, alive after its
@@ -1765,6 +1814,7 @@ int main(void)
     lookahead_bounded();
     lookahead_interrupted();
     master_write_lock();
+    master_write_vector();
     job_check();
     console_tcioff();
     read_claims_nothing();
