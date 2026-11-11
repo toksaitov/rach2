@@ -1253,7 +1253,7 @@ static void startup_msr_lists(void)
     for (i = 0; i < nmsrs; i++) {
         debugctl |= list[i] == 0x1D9;
     }
-    CHECK(!debugctl, "SVM's does not");
+    CHECK(debugctl, "and so does SVM's, which answers it as svm_get_msr without lbrv");
     buf.list.nmsrs = 4;
     r = dev(KVM_GET_MSR_FEATURE_INDEX_LIST, (uintptr_t)&buf);
     CHECK(r == 0 && buf.list.nmsrs == 2 && MSR_INDICES[0] == 0x8B && MSR_INDICES[1] == 0x345,
