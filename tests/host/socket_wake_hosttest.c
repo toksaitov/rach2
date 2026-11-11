@@ -20,11 +20,15 @@
  * reads ECONNRESET once and then 0, as Linux's tcp_recvmsg_locked tests
  * sk_err before RCV_SHUTDOWN; a send on a socket a shutdown in SYN_SENT left
  * with no block fails with ECONNRESET once and then EPIPE, as
- * sk_stream_wait_connect gives sock_error first; a UDP socket shut for
- * receiving ends a blocking receive with 0 once its queue is empty and polls
- * POLLIN and POLLRDHUP, and POLLHUP shut both ways, as datagram_poll; and a
- * closing listener resets each queued connection before releasing it, as
- * inet_csk_listen_stop. The protocol layers are substitutes.
+ * sk_stream_wait_connect gives sock_error first; a stream with no block,
+ * Linux's TCP_CLOSE, reads ENOTCONN and polls POLLHUP and POLLOUT, and
+ * once shut for receiving reads a recorded error once and then 0 and adds
+ * POLLIN and POLLRDHUP, as tcp_recvmsg_locked and tcp_poll; a UDP socket
+ * shut for receiving ends a blocking receive with 0 once its queue is empty
+ * and polls POLLIN and POLLRDHUP, and POLLHUP shut both ways, as
+ * datagram_poll; and a closing listener resets each queued connection
+ * before releasing it, as inet_csk_listen_stop. The protocol layers are
+ * substitutes.
  */
 #include "network/socket/socket.c"
 #include "ns_first.h"
@@ -327,6 +331,25 @@ static void shutdown_rows(void)
     CHECK(socket_tcp_send(&tcp, bytes, sizeof(bytes), 0) == -ECONNRESET,
           "a send after a shutdown in SYN_SENT gives the recorded ECONNRESET");
     CHECK(socket_tcp_send(&tcp, bytes, sizeof(bytes), 0) == -EPIPE, "and then EPIPE");
+
+    k_memset(&tcp, 0, sizeof(tcp));
+    tcp.type = SOCK_STREAM;
+    CHECK(socket_tcp_try_recv(&tcp, buf, sizeof(buf), 0) == -ENOTCONN &&
+              socket_tcp_recv(&tcp, buf, sizeof(buf), 0) == -ENOTCONN,
+          "a read of a stream that never connected is ENOTCONN");
+    CHECK(socket_poll(&tcp, (short)(POLLIN | POLLOUT | POLLRDHUP), NULL) ==
+              (short)(POLLHUP | POLLOUT),
+          "and it polls POLLHUP and POLLOUT");
+    tcp.shutdown = SOCK_RCV_SHUTDOWN;
+    tcp.so_error = ECONNRESET;
+    CHECK(socket_tcp_try_recv(&tcp, buf, sizeof(buf), 0) == -ECONNRESET,
+          "shut for receiving, it reads a recorded error first");
+    CHECK(socket_tcp_try_recv(&tcp, buf, sizeof(buf), 0) == 0 &&
+              socket_tcp_recv(&tcp, buf, sizeof(buf), 0) == 0,
+          "and then the end of input, with or without a wait");
+    CHECK(socket_poll(&tcp, (short)(POLLIN | POLLOUT | POLLRDHUP), NULL) ==
+              (short)(POLLHUP | POLLOUT | POLLIN | POLLRDHUP),
+          "and polls POLLIN and POLLRDHUP beside POLLHUP and POLLOUT");
 
     udp.rcvbuf = SOCK_RCVBUF_DEFAULT;
     udp.type = SOCK_DGRAM;

@@ -2479,11 +2479,15 @@ static void tcp_disconnect(struct socket *sock)
  * freed, each queued connection is reset (`socket_tcp_forget_queue`), the
  * socket's accept is woken to fail with EINVAL, and the socket may listen
  * again; SHUT_WR alone leaves a listener as it is. A connection in SYN_SENT
- * is disconnected (`tcp_disconnect`). A block that is CLOSED, or in
- * TIME_WAIT with its socket attached, is one Linux's full socket has left
- * for TCP_CLOSE already (tcp_time_wait calls tcp_done,
+ * is disconnected (`tcp_disconnect`). A socket with no block, never
+ * connected or disconnected, is Linux's TCP_CLOSE, and so is a block that is
+ * CLOSED, or in TIME_WAIT with its socket attached, which Linux's full
+ * socket has left for TCP_CLOSE already (tcp_time_wait calls tcp_done,
  * net/ipv4/tcp_minisocks.c:364): the flags are set and the call is
- * ENOTCONN, as Linux's TCP_CLOSE case falls through to set them. Any other
+ * ENOTCONN, as Linux's TCP_CLOSE case falls through to set them, and a
+ * later read and poll honour them (`socket_tcp_recv`, `socket_poll`). They
+ * stay set if the socket then connects, as Linux's connect leaves
+ * sk_shutdown as it is. Any other
  * state takes the flags, and a send shutdown from ESTABLISHED or CLOSE_WAIT
  * queues the FIN after the data, as tcp_shutdown sends it from those states
  * (net/ipv4/tcp.c:3006-3012); SYN_RCVD, a simultaneous open's, sends none,
@@ -2507,16 +2511,12 @@ int tcp_shutdown(struct socket *sock, int rd, int wr)
         net_unlock(flags);
         return 0;
     }
-    if (!tcb) {
-        net_unlock(flags);
-        return -ENOTCONN;
-    }
-    if (tcb->state == TCP_SYN_SENT) {
+    if (tcb && tcb->state == TCP_SYN_SENT) {
         tcp_disconnect(sock);
         net_unlock(flags);
         return 0;
     }
-    if (tcb->state == TCP_CLOSED || tcb->state == TCP_TIME_WAIT) {
+    if (!tcb || tcb->state == TCP_CLOSED || tcb->state == TCP_TIME_WAIT) {
         rc = -ENOTCONN;
     }
     if (rd) {
@@ -2524,7 +2524,7 @@ int tcp_shutdown(struct socket *sock, int rd, int wr)
     }
     if (wr) {
         sock->shutdown |= SOCK_SEND_SHUTDOWN;
-        if (tcb->state == TCP_ESTABLISHED || tcb->state == TCP_CLOSE_WAIT) {
+        if (tcb && (tcb->state == TCP_ESTABLISHED || tcb->state == TCP_CLOSE_WAIT)) {
             tcb->fin_pending = 1;
             tcp_pump(tcb);
         }
