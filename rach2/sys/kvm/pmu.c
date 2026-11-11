@@ -10,6 +10,7 @@
 #include "../mm/kheap.h"
 #include "../mm/usercopy.h"
 #include "../platform.h"
+#include "../proc/percpu.h"
 #include "../watchdog.h"
 
 #define PMC0          0x0C1u
@@ -258,13 +259,13 @@ struct pmu_host {
 static struct pmu_host pmu_host;
 
 /* The measuring knob, KVM_PMU_STEP_* of pmu.h; each entry reads it once.
- * `pmu_pmi` is set once an entry has set a physical counter's PMI bit,
- * from when on `kvm_pmu_nmi` reads the global status, and `pmu_placed` is
- * the physical counters the last Intel entry gave its guest's counters,
- * bit n general counter n and bit 32 + j fixed counter j, which the
- * read-only pmu_placed shows. */
+ * `pmu_pmi[cpu]` is the physical counters the last Intel entry on that
+ * processor gave a PMI bit, the only overflows `kvm_pmu_nmi` claims there,
+ * and `pmu_placed` the physical counters the last Intel entry gave its
+ * guest's counters, which the read-only pmu_placed shows; in both, bit n
+ * is general counter n and bit 32 + j fixed counter j. */
 static volatile uint32_t pmu_steps;
-static volatile int pmu_pmi;
+static volatile uint64_t pmu_pmi[NR_CPUS];
 static volatile uint64_t pmu_placed;
 
 /* Header values are copied once, then the event words, so a caller cannot
@@ -438,7 +439,7 @@ static void intel_table(void)
 
 void kvm_pmu_start(void)
 {
-    uint32_t a, b, c, d, top;
+    uint32_t a, b, c, d, top, i;
     uint64_t cap;
 
     k_memset(&pmu_host, 0, sizeof(pmu_host));
@@ -504,7 +505,9 @@ void kvm_pmu_start(void)
         pmu_host.version = pmu_host.nr_gp = pmu_host.nr_fixed = 0;
     }
     pmu_steps = 0;
-    pmu_pmi = 0;
+    for (i = 0; i < NR_CPUS; i++) {
+        pmu_pmi[i] = 0;
+    }
     pmu_placed = 0;
     watchdog_guest_nmi = kvm_pmu_global() ? kvm_pmu_nmi : NULL;
 }
@@ -1839,7 +1842,7 @@ static uint64_t program_slots(struct kvm_pmu *p, struct kvm_pmu_msr *guest,
         select = slot_select(p, s);
         if (p->steps & KVM_PMU_STEP_PMI) {
             select |= EV_INT;
-            pmu_pmi = 1;
+            pmu_pmi[arch_cpu_id()] |= 1ull << p->phys[s];
         }
         if (n >= 32u) {
             n -= 32u;
@@ -1886,6 +1889,30 @@ static void lbr_lists(struct kvm_pmu *p, struct kvm_pmu_msr *guest, uint32_t *ng
     }
 }
 
+/**
+ * Forget the counters the last entry on this processor gave a PMI bit,
+ * before the next entry gives its own, acknowledging the overflow of each
+ * that is still set. An overflow's NMI is taken before the exit's code
+ * reaches the next entry, forwarded at the exit or taken in the host once
+ * the exit unblocks NMIs; one whose bit is still set raised none, having
+ * come while the counters' APIC entry was masked, and the exit counted it
+ * already. Interrupts are off, so the processor does not change.
+ */
+static void pmi_retire(void)
+{
+    uint32_t cpu = arch_cpu_id();
+    uint64_t status;
+
+    if (!pmu_pmi[cpu]) {
+        return;
+    }
+    status = pmu_read(GLOBAL_STATUS) & pmu_pmi[cpu];
+    if (status) {
+        pmu_write(GLOBAL_OVF, status);
+    }
+    pmu_pmi[cpu] = 0;
+}
+
 void kvm_pmu_vmx_enter(struct kvm_vcpu *v, struct kvm_pmu_msr *guest, struct kvm_pmu_msr *host,
                        uint32_t *ng, uint32_t *nh, uint64_t *global)
 {
@@ -1908,6 +1935,7 @@ void kvm_pmu_vmx_enter(struct kvm_vcpu *v, struct kvm_pmu_msr *guest, struct kvm
     if (!pmu_host.intel || !pmu_host.version) {
         return;
     }
+    pmi_retire();
     if (kvm_pmu_global()) {
         host_global = pmu_read(GLOBAL_CTRL);
         if (pmu_host.nr_fixed) {
@@ -1986,11 +2014,12 @@ void kvm_pmu_vmx_exit(struct kvm_vcpu *v, const struct kvm_pmu_msr *guest, int r
             pmu_write(FIXED_CTRL, fixed & ~fields);
         }
     }
-    /* Once `kvm_pmu_nmi` reads the global status, an overflow of a counter
-     * that ran without its interrupt bit, which raises no NMI, is
-     * acknowledged here, so that no unrelated NMI finds it and is claimed.
-     * One with the bit is left to its NMI, which may come after this. */
-    if (pmu_pmi && kvm_pmu_global() && !(p->steps & KVM_PMU_STEP_PMI) && placed) {
+    /* The overflow of a counter that ran without its interrupt bit raises
+     * no NMI and is acknowledged here, so that its bit is never left set;
+     * one with the bit is left to its NMI, which the caller may forward
+     * after this, and to `pmi_retire` at the next entry. */
+    placed &= ~pmu_pmi[arch_cpu_id()];
+    if (kvm_pmu_global() && placed) {
         status = pmu_read(GLOBAL_STATUS) & placed;
         if (status) {
             pmu_write(GLOBAL_OVF, status);
@@ -2011,37 +2040,31 @@ void kvm_pmu_vmx_exit(struct kvm_vcpu *v, const struct kvm_pmu_msr *guest, int r
 
 /**
  * Claim an NMI a guest counter raised, as `watchdog_guest_nmi` on a host
- * with Intel's global status: acknowledge the overflow of each counter the
- * host does not hold, which only guests run, in IA32_PERF_GLOBAL_OVF_CTRL,
- * and return how many there were, as Linux's perf handler acknowledges
- * every set bit, counts each as handled (arch/x86/events/intel/
- * core.c:3126-3129 and 3190) and returns the count (events/core.c:
- * 1749-1754), so that a count above one lets the NMI handler swallow the
- * NMI a second overflow latched (kernel/nmi.c:404-405). The guest's
- * overflow itself was counted by the exit (`accumulate`), which delivers
- * its PMI before the next entry.
+ * with Intel's global status: acknowledge in IA32_PERF_GLOBAL_OVF_CTRL the
+ * overflow of each counter the last entry on this processor gave a PMI bit,
+ * the only overflows here that raise an NMI, and return how many there
+ * were, as Linux's perf handler acknowledges every set bit, each of a
+ * counter with its own PMI (events/core.c:618, 1353), counts each as
+ * handled (arch/x86/events/intel/core.c:3126-3129 and 3190) and returns
+ * the count (events/core.c:1749-1754), so that a count above one lets the
+ * NMI handler swallow the NMI a second overflow latched (kernel/nmi.c:
+ * 404-405). The guest's overflow itself was counted by the exit
+ * (`accumulate`), which delivers its PMI before the next entry.
  * The counter's APIC entry, which the delivery masked, is unmasked by the
  * hard-lockup detector's handler after this while its counter runs, and
  * stays masked otherwise. Only the counters' MSRs are read: an NMI may come
- * at any point of the host's code. 0 until an entry has set a PMI bit.
+ * at any point of the host's code. 0 while no PMI bit is set.
  */
 int kvm_pmu_nmi(void)
 {
-    uint64_t status, held, fixed = 0, bits;
+    uint64_t status, bits;
     int n = 0;
 
-    if (!pmu_pmi || !kvm_pmu_global()) {
+    bits = pmu_pmi[arch_cpu_id()];
+    if (!bits || !kvm_pmu_global()) {
         return 0;
     }
-    status = pmu_read(GLOBAL_STATUS) & all_counters();
-    if (!status) {
-        return 0;
-    }
-    if (pmu_host.nr_fixed) {
-        fixed = pmu_read(FIXED_CTRL);
-    }
-    held = host_counters(pmu_read(GLOBAL_CTRL), fixed);
-    status &= ~held;
+    status = pmu_read(GLOBAL_STATUS) & bits;
     if (!status) {
         return 0;
     }
