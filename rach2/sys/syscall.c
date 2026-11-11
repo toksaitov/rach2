@@ -1349,10 +1349,10 @@ static int time_reached(enum kclock_kind kind, const struct kernel_timespec *whe
  * the clock reaches `when`, as Linux's clock_was_set retriggers the hrtimer
  * of an absolute sleep on CLOCK_REALTIME (kernel/time/hrtimer.c:951-987,
  * 2133-2142); and a sleep on real time that reaches its tick before real
- * time reaches `when` counts again, since Linux's hrtimer never expires
- * before its clock reaches its time. Returns 0, or -EINTR when a signal the
- * process acts on comes first. `wchan` names the sleep, as for
- * `sleep_until`.
+ * time reaches `when`, as a clock slewed slower than the tick does, counts
+ * again, since Linux's hrtimer never expires before its clock reaches its
+ * time. Returns 0, or -EINTR when a signal the process acts on comes
+ * first. `wchan` names the sleep, as for `sleep_until`.
  */
 static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_timespec *when,
                                 const char *wchan)
@@ -1378,11 +1378,8 @@ static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_times
             return 0;
         }
         due = tick_span(sec, (uint32_t)nsec);
-        if (due <= now && kind != KCLOCK_REAL) {
-            return 0;
-        }
         if (due <= now) {
-            due = now + 1u;
+            return 0;
         }
         current_proc->rt_steps = kind == KCLOCK_REAL ? steps : 0;
         current_proc->wakeup_ns = sleep_ns(sec, nsec);
