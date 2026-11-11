@@ -1227,6 +1227,7 @@ void smp_start(void)
         }
     }
     n = platform_cpu_count(limit);
+    paging_temp_split((unsigned int)n);
     for (cpu = 1; cpu < n; cpu++) {
         struct percpu *c = &cpu_table[cpu];
 
