@@ -464,6 +464,16 @@ int fd_held_elsewhere(fd_table_t *table, int fd);
 int fd_close_claim(fd_table_t *table, int fd);
 
 /**
+ * Take over the release of descriptor `fd` of `table`, which a close marked
+ * closing (`fd_close_claim`) while another sharer's call held it, once that
+ * hold is gone: 1, with the slot marked releasing, when it is closing, not
+ * releasing and held by no other sharer's call, for the caller to release
+ * it; 0 when a call still holds it, or another thread has begun or ended
+ * its release. Taken under the table's lock.
+ */
+int fd_close_finish(fd_table_t *table, int fd);
+
+/**
  * Take slot `fd` of `table` for dup2 under its lock: 0 when it was free,
  * now reserved and held by the call, for the caller to fill and publish
  * (`fd_install`); 1 when it is open and no other sharer's call holds it,

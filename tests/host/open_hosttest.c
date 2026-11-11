@@ -1608,10 +1608,9 @@ int vfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, struct vf
 }
 
 /** No row sleeps in epoll_wait, so a close finds no poller to let go of. */
-void wq_poll_remove(wait_queue_t *wq, struct wq_waiter *w)
+void poll_let_go(process_t *t)
 {
-    (void)wq;
-    (void)w;
+    (void)t;
 }
 
 /** No row sleeps in epoll_wait, so nothing is woken for a closed hold. */

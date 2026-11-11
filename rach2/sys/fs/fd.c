@@ -875,6 +875,24 @@ int fd_close_claim(fd_table_t *table, int fd)
     return rc;
 }
 
+int fd_close_finish(fd_table_t *table, int fd)
+{
+    uint32_t flags = fd_table_lock(table);
+    fd_entry_t *e;
+    int rc = 0;
+
+    if (fd >= 0 && fd < table->cap) {
+        e = fd_slot(table, fd);
+        if ((e->flags & (FD_FLAG_CLOSING | FD_FLAG_RELEASING)) == FD_FLAG_CLOSING &&
+            !fd_held_elsewhere(table, fd)) {
+            e->flags |= FD_FLAG_RELEASING;
+            rc = 1;
+        }
+    }
+    fd_table_unlock(table, flags);
+    return rc;
+}
+
 int fd_dup_target(fd_table_t *table, int fd)
 {
     uint32_t flags = fd_table_lock(table);

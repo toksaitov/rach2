@@ -573,6 +573,62 @@ static void shared_closes(void)
 }
 
 /**
+ * A close that left a descriptor to another sharer's call takes its release
+ * over once that hold goes without the call's end, as a close does after it
+ * lets an epoll_wait asleep go of the descriptor: never while the hold
+ * stays, and once alone.
+ */
+static void close_finish(void)
+{
+    process_t *first = alloc_process();
+    process_t *second = alloc_process();
+    struct open_file *ofd;
+    int i, fd;
+
+    check(first && second, "two processes for the finished close");
+    if (!first || !second) {
+        return;
+    }
+    for (i = FD_STDIN; i <= FD_STDERR; i++) {
+        fd_free(second->fds, i);
+    }
+    fd_table_delete(second->fds);
+    second->fds = 0;
+    check(fd_table_share(first->fds, second) == 0, "the table is shared for the finished close");
+    current_proc = second;
+    fd = fd_alloc(second->fds);
+    check(fd == 3, "the second sharer holds descriptor 3");
+    if (fd != 3) {
+        return;
+    }
+    fd_slot(second->fds, fd)->type = FD_TYPE_CONSOLE;
+    ofd = fd_slot(second->fds, fd)->ofd;
+    fd_install(second->fds, fd);
+    current_proc = first;
+    check(fd_close_finish(first->fds, fd) == 0, "an open descriptor has no close to finish");
+    check(fd_close_claim(first->fds, fd) == 0 && fd_close_finish(first->fds, fd) == 0,
+          "a close does not finish while another sharer's call holds the descriptor");
+    second->fd_held[0] &= ~(1u << fd);
+    check(fd_close_finish(first->fds, fd) == 1 &&
+              (fd_slot(first->fds, fd)->flags & FD_FLAG_RELEASING),
+          "once the hold goes, the close takes the release over");
+    check(fd_close_finish(first->fds, fd) == 0, "and takes it once");
+    current_proc = second;
+    check(fd_holds_claim(0) == -1 && second->fd_holding == 0,
+          "the end of the call that lost its hold releases nothing");
+    current_proc = first;
+    check(ofd->refcount == 1 && fd_ofd_unref_unless_last(ofd) == 0,
+          "the close holds the description's last reference");
+    fd_ofd_unref(ofd);
+    fd_free_after(first->fds, fd);
+    current_proc = 0;
+    check(!first->fds->lock.locked, "the finished close lets the table's lock go");
+    free_process(second);
+    close_process(first);
+    check(!proc_list && !allocations, "the finished close leaves nothing allocated");
+}
+
+/**
  * A growth adds a chunk as large as the table and moves no entry, so the
  * address of an entry stays its slot's: chunk k > 0 holds the entries from
  * FD_TABLE_FIRST << (k - 1), each chunk contiguous.
@@ -825,6 +881,7 @@ int main(void)
     description_holders();
     description_live();
     shared_closes();
+    close_finish();
     table_chunks();
     description_last();
     if (fd_table_init(&table) != 0 || (fd = fd_alloc(&table)) < 0) {

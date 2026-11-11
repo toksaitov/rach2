@@ -5461,29 +5461,27 @@ static int epoll_wait_holds(const process_t *t, int fd)
  * that holds it and sleeps, so that a close releases it at once, as a
  * close on Linux does while a thread waits in epoll_wait: the wait comes
  * off every queue it sleeps on, each of which the release may free, with
- * the queue forgotten (`poll_wait`), its hold on `fd` goes, and it is woken
- * to scan its set again, through its own descriptors. The set's own
- * descriptor stays held, since the wait reads the set until it ends. The
- * sharers are found under the table's lock, and the waits' records are
- * changed under the big lock as well, which is taken only when such a wait
- * exists, since the waits look at their records under it.
+ * the queue forgotten (`poll_let_go`), its hold on `fd` goes, and it is
+ * woken to scan its set again, through its own descriptors. The set's own
+ * descriptor stays held, since the wait reads the set until it ends.
+ * Returns whether any wait let go.
+ *
+ * The caller has marked `fd` closing, so that no scan takes a new hold on
+ * it, or holds the big lock from here until it marks it, as dup2 does.
+ * The sharers are found under the big lock as well as the table's lock:
+ * epoll_wait runs under the big lock from its scan until its sleep gives
+ * the lock up, so a wait that holds `fd` is seen here asleep, with its
+ * queues published, and not between its scan and its sleep, where it
+ * would sleep on with the hold and the close would never end.
  */
-static void epoll_waits_let_go(fd_table_t *table, int fd)
+static int epoll_waits_let_go(fd_table_t *table, int fd)
 {
     process_t *t;
-    uint32_t flags, i;
+    uint32_t flags;
     int any = 0;
 
     if (table->refs < 2) {
-        return;
-    }
-    flags = fd_table_lock(table);
-    for (t = table->sharers; t && !any; t = t->fd_sharer_next) {
-        any = epoll_wait_holds(t, fd);
-    }
-    fd_table_unlock(table, flags);
-    if (!any) {
-        return;
+        return 0;
     }
     bkl_enter();
     flags = fd_table_lock(table);
@@ -5491,15 +5489,14 @@ static void epoll_waits_let_go(fd_table_t *table, int fd)
         if (!epoll_wait_holds(t, fd)) {
             continue;
         }
-        for (i = 0; i < t->poll_n; i++) {
-            wq_poll_remove(t->poll_wqs[i], &t->poll_recs[i]);
-            t->poll_wqs[i] = NULL;
-        }
+        poll_let_go(t);
         t->fd_held[fd / 32] &= ~(1u << (fd % 32));
         wq_wake_proc(t);
+        any = 1;
     }
     fd_table_unlock(table, flags);
     bkl_exit();
+    return any;
 }
 
 /**
@@ -5514,8 +5511,11 @@ static void epoll_waits_let_go(fd_table_t *table, int fd)
  * through the reference `fdget` takes. The choice is made under the table's
  * lock (`fd_close_claim`), so of two closes of one descriptor one answers
  * EBADF. An epoll_wait asleep does not keep the descriptors it watches
- * (`epoll_waits_let_go`), since Linux's epoll takes no reference to them.
- * 0, or -EBADF.
+ * (`epoll_waits_let_go`), since Linux's epoll takes no reference to them:
+ * when the holds that kept the slot were such waits', the close releases
+ * it itself (`fd_close_finish`). The claim comes first, so that no wait
+ * takes a hold after the close has looked. Runs without the big lock but
+ * where a step needs it. 0, or -EBADF.
  */
 static int32_t close_fd(int fd)
 {
@@ -5527,8 +5527,10 @@ static int32_t close_fd(int fd)
         return -EBADF;
     }
     fd_close_locks(e);
-    epoll_waits_let_go(table, fd);
     rc = fd_close_claim(table, fd);
+    if (rc == 0 && epoll_waits_let_go(table, fd)) {
+        rc = fd_close_finish(table, fd);
+    }
     if (rc == 1) {
         fd_teardown(table, fd);
     }
