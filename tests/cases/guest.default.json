@@ -2447,6 +2447,7 @@
         {"assertion_id": "tcp-recvmsg-overlap", "checks": "a TCP receive that overwrites a later iovec still writes its original buffer, blocking, nonblocking and peeking", "source": "program"},
         {"assertion_id": "tcp-recv-low", "checks": "readv, recvmsg, recvmsg with MSG_PEEK, recv and recvfrom into an address below user space fail with EFAULT, and a read then takes every byte", "source": "program"},
         {"assertion_id": "tcp-recv-buffer-kept", "checks": "with two segments queued and the second's destination a page that cannot be written, readv and recvmsg return the first segment and leave the second for a read", "source": "program"},
+        {"assertion_id": "tcp-recv-buffer-kept-many", "checks": "with 33 four-byte segments queued and the 33rd's destination a page that cannot be written, readv returns the 128 bytes of the 32 before it and leaves the 33rd for a read", "source": "program"},
         {"assertion_id": "tcp-recv-span", "checks": "recv and recvfrom of 8192 bytes into two pages whose second cannot be written each return the four bytes queued", "source": "program"},
         {"assertion_id": "tcp-recv-span-empty", "checks": "recv and recvfrom with MSG_DONTWAIT on the empty stream into a page they cannot write fail with EAGAIN", "source": "program"},
         {"assertion_id": "tcp-recv-waitall", "checks": "recv, recvfrom and recvmsg with MSG_WAITALL, seen asleep after half their bytes came, return all eight once the rest is sent", "source": "program"},

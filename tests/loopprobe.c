@@ -13,7 +13,8 @@
  * A datagram recvmsg fails only on a buffer the datagram reaches, and then
  * takes it. A stream receive into an address below user space fails with every
  * byte kept, one whose later segment cannot be written returns the segments
- * before it and keeps that one, and one with MSG_WAITALL waits until its
+ * before it and keeps that one, past 32 segments as before them, and one with
+ * MSG_WAITALL waits until its
  * buffers are full. recv and recvfrom into a buffer whose second page cannot
  * be written return the bytes queued, and into a page they cannot write at all
  * fail with EAGAIN on an empty nonblocking stream and return 0 at the end of
@@ -255,6 +256,8 @@ static const struct step {
     {"a tcp receive below user space was not EFAULT with every byte kept", "tcp-recv-low"},
     {"no page for the tcp receive buffer rows", "tcp-recv-buffer-kept"},
     {"a tcp receive did not keep the buffer whose destination failed", "tcp-recv-buffer-kept"},
+    {"a tcp receive past 32 buffers did not keep the buffer whose destination failed",
+     "tcp-recv-buffer-kept-many"},
     {"no pages for the tcp recv span rows", "tcp-recv-span"},
     {"a tcp recv into a buffer whose second page cannot be written did not return the bytes queued",
      "tcp-recv-span"},
@@ -1208,6 +1211,36 @@ static void tcp_recv_kept(int cs, int as)
     }
 }
 
+/** Past 32 receive buffers each is still kept whole: with 33 four-byte
+ * segments queued and the 33rd's destination a page that cannot be written,
+ * readv returns the 32 before it and leaves the 33rd for a read, where a
+ * table of 32 ends would have joined the 32nd to it and returned 31. */
+static void tcp_recv_kept_many(int cs, int as)
+{
+    struct iovec_probe iov[2];
+    char seg[4], got[33 * 4];
+    int i;
+
+    iov[0].iov_base = got;
+    iov[0].iov_len = 32 * 4;
+    iov[1].iov_base = bad_page();
+    iov[1].iov_len = 4;
+    for (i = 0; i < 33; i++) {
+        seg[0] = 's';
+        seg[1] = (char)('0' + i / 10);
+        seg[2] = (char)('0' + i % 10);
+        seg[3] = '.';
+        if (sys_write(as, seg, 4) != 4)
+            fail("a tcp receive past 32 buffers did not keep the buffer whose destination failed");
+    }
+    if (recv_wait(cs, got, sizeof(got), MSG_PEEK | MSG_DONTWAIT) != (int)sizeof(got) ||
+        syscall3(SYS_READV, cs, (long)iov, 2) != 32 * 4 ||
+        !mem_eq((const uint8_t *)got + 31 * 4, (const uint8_t *)"s31.", 4) ||
+        sys_read(cs, got, sizeof(got)) != 4 ||
+        !mem_eq((const uint8_t *)got, (const uint8_t *)"s32.", 4))
+        fail("a tcp receive past 32 buffers did not keep the buffer whose destination failed");
+}
+
 /** Two pages, the first writable and the second of no access, mapped once:
  * the first's address, or NULL when they cannot be had. */
 static char *span_pages(void)
@@ -1432,6 +1465,7 @@ static void tcp_recvmsg(int cs, int as)
     tcp_recvmsg_overlap(cs, as);
     tcp_recv_low(cs, as);
     tcp_recv_kept(cs, as);
+    tcp_recv_kept_many(cs, as);
     tcp_recv_span(cs, as);
     tcp_recv_waitall(cs, as);
     tcp_recvmsg_zero(cs, as);
