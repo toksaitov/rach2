@@ -157,6 +157,15 @@ struct open_file {
      * from a new description the heap gives the same address after its
      * last close; an epoll registration keeps both. */
     uint32_t serial;
+    /* For a device opened through a device node of a mounted file system or
+     * of the KRFFS root, that node and its mount, held as an O_PATH
+     * description holds its own: what an open of /proc/PID/fd/N checks and
+     * opens again, as Linux follows the descriptor's path, with the type's
+     * `pin` token on a type that keeps a node only while it is open. NULL
+     * for every other description. The last unref gives back all three. */
+    struct vfs_mount *dev_mnt;
+    void *dev_node;
+    void *dev_pin;
     /* A write or executable reservation, taken before an open may sleep.
      * The resolver holds this node until the description takes ownership. */
     struct vfs_mount *access_mnt;
@@ -401,6 +410,11 @@ int fd_ofd_live(const struct open_file *ofd, uint32_t serial);
  * of a KRFFS root node that no descriptor's `node` names, a FIFO's ends
  * among them, wherever their descriptors are. */
 int fd_ofd_holders(const struct vfs_mount *mnt, const void *node, const struct open_file *going);
+
+/** How many descriptions of devices opened through the node (`mnt`, `node`)
+ * there are (`dev_mnt`), `going` counted as `fd_ofd_holders` counts it. */
+int fd_ofd_dev_holders(const struct vfs_mount *mnt, const void *node,
+                       const struct open_file *going);
 
 /** 1 if `fd` is open and not closing, 0 otherwise. */
 int fd_is_valid(fd_table_t *table, int fd);

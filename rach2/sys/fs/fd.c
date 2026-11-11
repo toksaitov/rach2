@@ -163,6 +163,20 @@ int fd_ofd_holders(const struct vfs_mount *mnt, const void *node, const struct o
     return held;
 }
 
+int fd_ofd_dev_holders(const struct vfs_mount *mnt, const void *node, const struct open_file *going)
+{
+    struct ofd_rec *rec;
+    int held = 0;
+
+    for (rec = ofds; rec; rec = rec->next) {
+        if (rec->ofd.dev_mnt && vfs_mount_base(rec->ofd.dev_mnt) == vfs_mount_base(mnt) &&
+            rec->ofd.dev_node == node && (&rec->ofd != going || rec->ofd.refcount > 1)) {
+            held++;
+        }
+    }
+    return held;
+}
+
 /**
  * The root's adapter, `vfs_krffs_type`, uses the node as the handle of an
  * open too, so the handle moves with the node; a mounted KRFFS volume's
@@ -175,6 +189,9 @@ void fd_ofd_repoint(struct vfs_mount *mnt, const void *from, void *to)
     for (rec = ofds; rec; rec = rec->next) {
         if (rec->ofd.access_mnt == mnt && rec->ofd.access_node == from) {
             rec->ofd.access_node = to;
+        }
+        if (rec->ofd.dev_mnt == mnt && rec->ofd.dev_node == from) {
+            rec->ofd.dev_node = to;
         }
         if (rec->ofd.vmnt != mnt) {
             continue;
@@ -224,6 +241,19 @@ void fd_ofd_unref(struct open_file *ofd)
                     mnt->type->ops->unpin(mnt, pin);
                 }
                 vfs_desc_close(mnt, node, handle);
+            }
+            if (ofd->dev_mnt) {
+                struct vfs_mount *mnt = ofd->dev_mnt;
+                void *node = ofd->dev_node;
+                void *pin = ofd->dev_pin;
+
+                ofd->dev_mnt = NULL;
+                ofd->dev_node = NULL;
+                ofd->dev_pin = NULL;
+                if (pin) {
+                    mnt->type->ops->unpin(mnt, pin);
+                }
+                vfs_desc_close(mnt, node, NULL);
             }
             if (ofd->synth_mnt) {
                 struct vfs_ref ref;
