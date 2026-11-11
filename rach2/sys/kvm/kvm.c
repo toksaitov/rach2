@@ -188,6 +188,8 @@ int32_t kvm_check_extension(struct kvm_vm *vm, long cap)
     case KVM_CAP_EXIT_ON_EMULATION_FAILURE:
     case KVM_CAP_MSR_PLATFORM_INFO:
     case KVM_CAP_SYS_ATTRIBUTES:
+    case KVM_CAP_VCPU_ATTRIBUTES:
+    case KVM_CAP_STEAL_TIME:
     case KVM_CAP_DISABLE_QUIRKS:
     case KVM_CAP_BINARY_STATS_FD:
     case KVM_CAP_PRE_FAULT_MEMORY:

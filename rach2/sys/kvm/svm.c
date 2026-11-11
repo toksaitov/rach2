@@ -2273,6 +2273,8 @@ static int exit_code(struct kvm_vcpu *v)
     }
     switch (code) {
     case EXIT_INTR:
+        v->at_boundary = 1;
+        return 0;
     case EXIT_NMI:
     case EXIT_SMI:
     case EXIT_INIT:

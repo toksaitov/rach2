@@ -204,6 +204,10 @@ void kvm_vcpu_init_reset(struct kvm_vcpu *v)
 
     reset_arch(v);
     v->sregs.apic_base = base;
+    /* As Linux's kvm_vcpu_reset at INIT: the steal time and the kvmclock
+     * are off. */
+    v->st_msr = 0;
+    v->pv_time = 0;
     v->dirty |= KVM_PART_REGS | KVM_PART_SREGS | KVM_PART_EVENTS | KVM_PART_DEBUG | KVM_PART_CR8;
 }
 
@@ -679,6 +683,7 @@ static int32_t run_enter(struct kvm_vcpu *v)
         return -EAGAIN;
     }
     v->has_run = 1;
+    v->at_boundary = 0;
     depth = bkl_drop();
     r = kvm_backend->enter(v);
     v->mode = KVM_MODE_OUTSIDE;
@@ -772,6 +777,9 @@ static int32_t run_loop(struct kvm_vcpu *v)
         return r;
     }
     for (;;) {
+        if (current_proc->need_resched) {
+            kvm_steal_preempted(v);
+        }
         flags = kirq_save();
         sched_take_preempt();
         kirq_restore(flags);
@@ -799,6 +807,7 @@ static int32_t run_loop(struct kvm_vcpu *v)
             }
         }
         kvm_clock_prepare(v);
+        kvm_steal_prepare(v);
         if (kvm_vcpu_test_clear(v, KVM_REQ_EVENT)) {
             if (kvm_backend->inject) {
                 kvm_backend->inject(v);
@@ -852,6 +861,8 @@ static int32_t vcpu_run(struct kvm_vcpu *v, uintptr_t arg)
     if (arg) {
         return -EINVAL;
     }
+    /* Linux's vcpu_load asks for the steal time at each ioctl. */
+    req_set(v, KVM_REQ_STEAL_UPDATE);
     if (v->has_sigmask) {
         old = current_proc->sig_blocked;
         signal_set_blocked(v->sigmask);
@@ -1785,6 +1796,45 @@ static int32_t pre_fault(struct kvm_vcpu *v, uintptr_t arg)
     return r;
 }
 
+/**
+ * KVM_HAS_DEVICE_ATTR, KVM_GET_DEVICE_ATTR and KVM_SET_DEVICE_ATTR of `v`,
+ * by `request`, as Linux's kvm_vcpu_ioctl_device_attr: group
+ * KVM_VCPU_TSC_CTRL has KVM_VCPU_TSC_OFFSET, the u64 at the attribute's
+ * `addr`, which a get reads as the vCPU's TSC offset and a set gives it
+ * (`kvm_tsc_offset_set`). 0, -ENXIO for another group or attribute, or
+ * -EFAULT; -EINVAL for any other request, which `vcpu_state_ioctl` passes
+ * on, as Linux's vCPU ioctl answers one it does not have.
+ */
+static int32_t device_attr(struct kvm_vcpu *v, uint32_t request, uintptr_t arg)
+{
+    struct kvm_device_attr attr;
+    void __user *addr;
+    uint64_t value;
+
+    if (request != KVM_HAS_DEVICE_ATTR && request != KVM_GET_DEVICE_ATTR &&
+        request != KVM_SET_DEVICE_ATTR) {
+        return -EINVAL;
+    }
+    if (copy_from_user(&attr, (const void __user *)arg, sizeof(attr)) != 0) {
+        return -EFAULT;
+    }
+    if (attr.group != KVM_VCPU_TSC_CTRL || attr.attr != KVM_VCPU_TSC_OFFSET) {
+        return -ENXIO;
+    }
+    addr = (void __user *)(uintptr_t)attr.addr;
+    if (request == KVM_GET_DEVICE_ATTR) {
+        value = (uint64_t)v->tsc_offset;
+        return copy_to_user(addr, &value, sizeof(value)) ? -EFAULT : 0;
+    }
+    if (request == KVM_SET_DEVICE_ATTR) {
+        if (copy_from_user(&value, addr, sizeof(value)) != 0) {
+            return -EFAULT;
+        }
+        kvm_tsc_offset_set(v, (int64_t)value);
+    }
+    return 0;
+}
+
 /** The ioctls of `v` but KVM_RUN, under its lock. */
 static int32_t vcpu_state_ioctl(struct kvm_vcpu *v, uint32_t request, uintptr_t arg)
 {
@@ -1885,7 +1935,7 @@ static int32_t vcpu_state_ioctl(struct kvm_vcpu *v, uint32_t request, uintptr_t 
     case KVM_PRE_FAULT_MEMORY:
         return pre_fault(v, arg);
     default:
-        return -EINVAL;
+        return device_attr(v, request, arg);
     }
 }
 

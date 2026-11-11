@@ -181,6 +181,7 @@
 #define KVM_CAP_ENABLE_CAP_VM               98
 #define KVM_CAP_IOEVENTFD_NO_LENGTH         100
 #define KVM_CAP_VM_ATTRIBUTES               101
+#define KVM_CAP_VCPU_ATTRIBUTES             127
 #define KVM_CAP_CHECK_EXTENSION_VM          105
 #define KVM_CAP_IMMEDIATE_EXIT              136
 #define KVM_CAP_SPLIT_IRQCHIP               121
@@ -190,6 +191,7 @@
 #define KVM_CAP_MAX_VCPU_ID                 128
 #define KVM_CAP_GET_MSR_FEATURES            153
 #define KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2   168
+#define KVM_CAP_STEAL_TIME                  187
 #define KVM_CAP_ENFORCE_PV_FEATURE_CPUID    190
 #define KVM_CAP_HYPERV_TIME                 96
 #define KVM_CAP_HYPERV_SYNIC                123
@@ -464,6 +466,7 @@ struct kvm_clock_data {
 #define KVM_FEATURE_CLOCKSOURCE            0
 #define KVM_FEATURE_NOP_IO_DELAY           1
 #define KVM_FEATURE_CLOCKSOURCE2           3
+#define KVM_FEATURE_STEAL_TIME             5
 #define KVM_FEATURE_PV_UNHALT              7
 #define KVM_FEATURE_PV_SEND_IPI            11
 #define KVM_FEATURE_POLL_CONTROL           12
@@ -485,12 +488,14 @@ struct kvm_clock_data {
 
 /* The kvmclock's MSRs: the old pair, which the guest finds by
  * KVM_FEATURE_CLOCKSOURCE, and the new, by KVM_FEATURE_CLOCKSOURCE2; and
- * the halt polling control. Bit 0 of a SYSTEM_TIME MSR enables the clock
- * at the guest-physical address in the rest. */
+ * the steal time's, by KVM_FEATURE_STEAL_TIME; and the halt polling
+ * control. Bit 0 of a SYSTEM_TIME or STEAL_TIME MSR enables the record at
+ * the guest-physical address in the rest. */
 #define MSR_KVM_WALL_CLOCK      0x11u
 #define MSR_KVM_SYSTEM_TIME     0x12u
 #define MSR_KVM_WALL_CLOCK_NEW  0x4B564D00u
 #define MSR_KVM_SYSTEM_TIME_NEW 0x4B564D01u
+#define MSR_KVM_STEAL_TIME      0x4B564D03u
 #define MSR_KVM_POLL_CONTROL    0x4B564D05u
 #define KVM_MSR_ENABLED         1u
 
@@ -519,6 +524,25 @@ struct pvclock_wall_clock {
     uint32_t sec;
     uint32_t nsec;
 };
+
+/* A vCPU's steal time in guest memory, Linux's kvm_steal_time: the ns its
+ * thread waited for a host processor while the guest could have run,
+ * `version` odd while the host writes it, and KVM_VCPU_PREEMPTED in
+ * `preempted` while the host has taken the processor from it. 64 bytes,
+ * at a 64-byte aligned address: MSR_KVM_STEAL_TIME's bits 1 to 5 are
+ * reserved, and bits 6 up are the address. */
+struct kvm_steal_time {
+    uint64_t steal;
+    uint32_t version;
+    uint32_t flags;
+    uint8_t preempted;
+    uint8_t u8_pad[3];
+    uint32_t pad[11];
+};
+
+#define KVM_VCPU_PREEMPTED      0x1u
+#define KVM_STEAL_VALID_BITS    (~0x3Full)
+#define KVM_STEAL_RESERVED_MASK 0x3Eull
 
 /* KVM_HC_CLOCK_PAIRING's answer in guest memory, the real time at the
  * guest's TSC `tsc`. 64 bytes. */
@@ -844,6 +868,12 @@ struct kvm_hyperv_eventfd {
 /* The attribute of /dev/kvm in group 0: the XCR0 bits a guest may be given,
  * with those that need a request by arch_prctl first. */
 #define KVM_X86_XCOMP_GUEST_SUPP 0u
+
+/* The attribute of a vCPU in group KVM_VCPU_TSC_CTRL
+ * (KVM_CAP_VCPU_ATTRIBUTES): the offset of its TSC from the host's, the
+ * u64 at the attribute's `addr`. */
+#define KVM_VCPU_TSC_CTRL   0u
+#define KVM_VCPU_TSC_OFFSET 0u
 
 /* KVM_REGISTER_COALESCED_MMIO and KVM_UNREGISTER_COALESCED_MMIO: a zone of
  * guest-physical addresses, or of ports when `pio` is 1. */

@@ -2325,6 +2325,8 @@ static int exit_reason(struct kvm_vcpu *v)
     case EXIT_EXCEPTION_NMI:
         return exit_exception(v);
     case EXIT_EXTERNAL_INTR:
+        v->at_boundary = 1;
+        return 0;
     case EXIT_PREEMPTION_TIMER:
     case EXIT_INIT_SIGNAL:
     case EXIT_SIPI:
