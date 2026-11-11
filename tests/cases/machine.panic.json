@@ -1,0 +1,277 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.panic",
+  "summary": "A panic keeps its record for panic=N seconds and then resets the machine by the method reboot= names, in Linux's order",
+  "cases": [
+    {
+      "case_id": "machine.panic.acpi",
+      "behavior": "a panic with panic=5 and reboot=a on q35, whose FADT has a reset register, resets the machine through that register 5 seconds after its record",
+      "units": ["panic"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"boot_options": "panic=5 reboot=a", "machine": "q35"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "panic_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "fixture", "does": "boot the test image with rach2.stackoverrun=fork and panic=5 reboot=a, read the panic and the reset's records, and wait for the machine to end"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue", "rach2.stackoverrun=fork", "panic=5", "reboot=a"], "machine": "q35"}, "console": "serial", "qmp": true, "helper": false, "fault": {"end": "panic", "records": ["ran past the end of its kernel stack", "a kernel stack ran out", "rebooting in 5 seconds"]}}
+      ],
+      "assertions": [
+        {"assertion_id": "panicked", "checks": "the kernel panics because a kernel stack ran out", "source": "scenario"},
+        {"assertion_id": "said-wait", "checks": "the panic's record is followed by panic: rebooting in 5 seconds..", "source": "scenario"},
+        {"assertion_id": "methods", "checks": "the reset's record is reboot: emergency: acpi reset register", "source": "scenario"},
+        {"assertion_id": "no-other", "checks": "no record of another method follows them", "source": "scenario"},
+        {"assertion_id": "reset", "checks": "the machine ends by QEMU's SHUTDOWN event with the reason guest-reset", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "panic_scenario", "node": "tests/cases/machine/panic_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "firmware", "reason": "the case panics the kernel on purpose and needs QEMU to see the reset"}
+    },
+    {
+      "case_id": "machine.panic.kbd",
+      "behavior": "a panic with panic=5 and reboot=k resets the machine through the keyboard controller 5 seconds after its record",
+      "units": ["panic"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"boot_options": "panic=5 reboot=k", "machine": "pc"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "panic_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "fixture", "does": "boot the test image with rach2.stackoverrun=fork and panic=5 reboot=k, read the panic and the reset's records, and wait for the machine to end"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue", "rach2.stackoverrun=fork", "panic=5", "reboot=k"]}, "console": "serial", "qmp": true, "helper": false, "fault": {"end": "panic", "records": ["ran past the end of its kernel stack", "a kernel stack ran out", "rebooting in 5 seconds"]}}
+      ],
+      "assertions": [
+        {"assertion_id": "panicked", "checks": "the kernel panics because a kernel stack ran out", "source": "scenario"},
+        {"assertion_id": "said-wait", "checks": "the panic's record is followed by panic: rebooting in 5 seconds..", "source": "scenario"},
+        {"assertion_id": "methods", "checks": "the reset's record is reboot: emergency: keyboard controller", "source": "scenario"},
+        {"assertion_id": "no-other", "checks": "no record of another method follows them", "source": "scenario"},
+        {"assertion_id": "reset", "checks": "the machine ends by QEMU's SHUTDOWN event with the reason guest-reset", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "panic_scenario", "node": "tests/cases/machine/panic_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "firmware", "reason": "the case panics the kernel on purpose and needs QEMU to see the reset"}
+    },
+    {
+      "case_id": "machine.panic.cf9",
+      "behavior": "a panic with panic=5 and reboot=p resets the machine through port 0xCF9 5 seconds after its record",
+      "units": ["panic"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"boot_options": "panic=5 reboot=p", "machine": "pc"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "panic_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "fixture", "does": "boot the test image with rach2.stackoverrun=fork and panic=5 reboot=p, read the panic and the reset's records, and wait for the machine to end"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue", "rach2.stackoverrun=fork", "panic=5", "reboot=p"]}, "console": "serial", "qmp": true, "helper": false, "fault": {"end": "panic", "records": ["ran past the end of its kernel stack", "a kernel stack ran out", "rebooting in 5 seconds"]}}
+      ],
+      "assertions": [
+        {"assertion_id": "panicked", "checks": "the kernel panics because a kernel stack ran out", "source": "scenario"},
+        {"assertion_id": "said-wait", "checks": "the panic's record is followed by panic: rebooting in 5 seconds..", "source": "scenario"},
+        {"assertion_id": "methods", "checks": "the reset's record is reboot: emergency: port 0xcf9", "source": "scenario"},
+        {"assertion_id": "no-other", "checks": "no record of another method follows them", "source": "scenario"},
+        {"assertion_id": "reset", "checks": "the machine ends by QEMU's SHUTDOWN event with the reason guest-reset", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "panic_scenario", "node": "tests/cases/machine/panic_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "firmware", "reason": "the case panics the kernel on purpose and needs QEMU to see the reset"}
+    },
+    {
+      "case_id": "machine.panic.triple",
+      "behavior": "a panic with panic=5 and reboot=t resets the machine by a triple fault 5 seconds after its record",
+      "units": ["panic"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"boot_options": "panic=5 reboot=t", "machine": "pc"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "panic_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "fixture", "does": "boot the test image with rach2.stackoverrun=fork and panic=5 reboot=t, read the panic and the reset's records, and wait for the machine to end"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue", "rach2.stackoverrun=fork", "panic=5", "reboot=t"]}, "console": "serial", "qmp": true, "helper": false, "fault": {"end": "panic", "records": ["ran past the end of its kernel stack", "a kernel stack ran out", "rebooting in 5 seconds"]}}
+      ],
+      "assertions": [
+        {"assertion_id": "panicked", "checks": "the kernel panics because a kernel stack ran out", "source": "scenario"},
+        {"assertion_id": "said-wait", "checks": "the panic's record is followed by panic: rebooting in 5 seconds..", "source": "scenario"},
+        {"assertion_id": "methods", "checks": "the reset's record is reboot: emergency: triple fault", "source": "scenario"},
+        {"assertion_id": "no-other", "checks": "no record of another method follows them", "source": "scenario"},
+        {"assertion_id": "reset", "checks": "the machine ends by QEMU's SHUTDOWN event with the reason guest-reset", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "panic_scenario", "node": "tests/cases/machine/panic_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "firmware", "reason": "the case panics the kernel on purpose and needs QEMU to see the reset"}
+    },
+    {
+      "case_id": "machine.panic.default",
+      "behavior": "a panic with panic=5 and no reboot= tries the FADT's reset register first, as Linux's default order does, and on the pc machine, which has none, resets through the keyboard controller",
+      "units": ["panic"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"boot_options": "panic=5", "machine": "pc"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "panic_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "fixture", "does": "boot the test image with rach2.stackoverrun=fork and panic=5, read the panic and the reset's records, and wait for the machine to end"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue", "rach2.stackoverrun=fork", "panic=5"]}, "console": "serial", "qmp": true, "helper": false, "fault": {"end": "panic", "records": ["ran past the end of its kernel stack", "a kernel stack ran out", "rebooting in 5 seconds"]}}
+      ],
+      "assertions": [
+        {"assertion_id": "panicked", "checks": "the kernel panics because a kernel stack ran out", "source": "scenario"},
+        {"assertion_id": "said-wait", "checks": "the panic's record is followed by panic: rebooting in 5 seconds..", "source": "scenario"},
+        {"assertion_id": "methods", "checks": "the reset's records are reboot: emergency: acpi: the fadt has no reset register, then keyboard controller, in that order", "source": "scenario"},
+        {"assertion_id": "no-other", "checks": "no record of another method follows them", "source": "scenario"},
+        {"assertion_id": "reset", "checks": "the machine ends by QEMU's SHUTDOWN event with the reason guest-reset", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "panic_scenario", "node": "tests/cases/machine/panic_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "firmware", "reason": "the case panics the kernel on purpose and needs QEMU to see the reset"}
+    },
+    {
+      "case_id": "machine.panic.immediate",
+      "behavior": "a panic with panic=-1 resets the machine at once, with no wait",
+      "units": ["panic"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"boot_options": "panic=-1", "machine": "pc"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "panic_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "fixture", "does": "boot the test image with rach2.stackoverrun=fork and panic=-1, read the panic and the reset's records, and wait for the machine to end"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue", "rach2.stackoverrun=fork", "panic=-1"]}, "console": "serial", "qmp": true, "helper": false, "fault": {"end": "panic", "records": ["ran past the end of its kernel stack", "a kernel stack ran out"]}}
+      ],
+      "assertions": [
+        {"assertion_id": "panicked", "checks": "the kernel panics because a kernel stack ran out", "source": "scenario"},
+        {"assertion_id": "no-wait", "checks": "the kernel never says it is rebooting in some seconds", "source": "scenario"},
+        {"assertion_id": "methods", "checks": "the reset's records are reboot: emergency: acpi: the fadt has no reset register, then keyboard controller, in that order", "source": "scenario"},
+        {"assertion_id": "no-other", "checks": "no record of another method follows them", "source": "scenario"},
+        {"assertion_id": "reset", "checks": "the machine ends by QEMU's SHUTDOWN event with the reason guest-reset", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "panic_scenario", "node": "tests/cases/machine/panic_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "firmware", "reason": "the case panics the kernel on purpose and needs QEMU to see the reset"}
+    }
+  ]
+}

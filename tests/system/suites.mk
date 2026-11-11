@@ -690,6 +690,10 @@ $(SERVICELOG_ROOT_DISK): tests/system/mkrootdisk.sh tools/setup/e2fsprogs_path.s
 # most of the machine first, and each case of tests/cases/machine.reset.json
 # boots the kernel and the test image with the ones before it left out, so
 # that each must still restart the machine.
+# `tests/run panic`: a panic that resets the machine as panic= and reboot=
+# ask. Each case of tests/cases/machine.panic.json runs a kernel stack out at
+# boot with panic=5, or -1, and one reboot= method, and the kernel must say
+# when it resets and then reset the machine by that method alone.
 # `tests/run diskdiag`: a disk read without being mounted and without being
 # written. It is the case of tests/cases/machine.diskdiag.json, which etude
 # runs, and has no target here: the ordinary kernel mounting a copy of the
