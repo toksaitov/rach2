@@ -50,7 +50,11 @@
  * - on a model type that sets `file_locked`, with the node locks of
  *   rach2/sys/fs/nodelock.c, the order of the locks a create, an unlink,
  *   an rmdir and a rename in one directory and between two take, and a
- *   mount against an rmdir of the directory it covers.
+ *   mount against an rmdir of the directory it covers;
+ * - on the same model, fs.protected_hardlinks on a hard link to another
+ *   user's file, and fs.protected_regular and fs.protected_fifos on an
+ *   O_CREAT open of an existing file in a sticky directory, at each level,
+ *   as Linux 6.12's may_linkat and may_create_in_sticky judge them.
  *
  * The static declarations before the includes make the unused exports of
  * the three sources private, so the compiler drops them and the hardware
@@ -258,6 +262,12 @@ struct percpu cpu_table[NR_CPUS] = {{.current = &proc}};
 process_t *proc_list;
 volatile uint32_t fb_owner_pid;
 krffs_file_system_t *krffs_fs;
+/* The protections of /proc/sys/fs, at the values rach2/sys/fs/vfs.c gives
+ * them. */
+int vfs_protected_hardlinks = 1;
+int vfs_protected_symlinks = 1;
+int vfs_protected_fifos = 1;
+int vfs_protected_regular = 2;
 static int root_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **found);
 static const struct vfs_ops root_ops = {.lookup = root_lookup};
 const struct vfs_type vfs_krffs_type = {"krffs", 0, &root_ops, 1, 0};
@@ -1741,15 +1751,24 @@ int vfs_resolve_real(const char *path, int flags, struct vfs_ref *out, char *rea
     return vfs_resolve(0, path, flags, out, 0, 0);
 }
 
-/** This resolver model has no captured entry; its original walk is unchanged.
- */
+static void fl_dir_attrs(const struct vfs_ref *ref, struct vfs_stat *dir);
+
+/** This resolver model has no captured entry; its original walk is
+ * unchanged. The directory a file of /fl is in gives its attributes, and
+ * any other path none. */
 int vfs_resolve_entry(const char *path, int flags, struct vfs_ref *out, char *real,
-                      struct vfs_name **entry)
+                      struct vfs_name **entry, struct vfs_stat *dir)
 {
+    int rc;
+
     if (entry) {
         *entry = NULL;
     }
-    return vfs_resolve_real(path, flags, out, real);
+    rc = vfs_resolve_real(path, flags, out, real);
+    if (rc == 0 && dir) {
+        fl_dir_attrs(out, dir);
+    }
+    return rc;
 }
 
 /** Give back the lock a locked walk took. */
@@ -3663,6 +3682,10 @@ static const struct fl_node fl_tree[FL_NODES] = {
     {"d", 30, FL_B, 1, 2, 0, 0}, {"w", 12, FL_B, 0, 1, 0, 0},    {"", 40, -1, 0, 0, 0, 0},
 };
 static struct fl_node fl_nodes[FL_NODES];
+/* The mode and owner a protection row gives a node, a mode of 0 leaving the
+ * model's own; and the node a link was made to. */
+static uint32_t fl_mode[FL_NODES], fl_uid[FL_NODES];
+static const struct fl_node *fl_linked;
 static char fl_log[512];
 /* The node a mount covers, or NULL; the call another process makes when the
  * row's call first looks `fl_hook_name` up, or while its change sleeps; and
@@ -3752,16 +3775,44 @@ static int fl_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **
     return 0;
 }
 
-/** A directory of mode 0777, or a file of 0666, owned by root. */
+/** A directory of mode 0777, or a file of 0666, owned by root, unless a
+ * protection row gave the node a mode and an owner. */
 static int fl_getattr(struct vfs_mount *mnt, void *at, struct vfs_stat *st)
 {
     const struct fl_node *n = at ? at : &fl_nodes[FL_ROOT];
+    int i = (int)(n - fl_nodes);
 
     (void)mnt;
     k_memset(st, 0, sizeof(*st));
     st->ino = n->ino;
     st->nlink = n->nlink;
-    st->mode = n->dir ? 040777u : 0100666u;
+    st->mode = fl_mode[i] ? fl_mode[i] : n->dir ? 040777u : 0100666u;
+    st->uid = fl_uid[i];
+    return 0;
+}
+
+/** The attributes of the directory the node `ref` holds is in, a mode of 0
+ * for the model's root or a node of another mount. */
+static void fl_dir_attrs(const struct vfs_ref *ref, struct vfs_stat *dir)
+{
+    const struct fl_node *n = ref->node;
+
+    if (ref->mnt != &fl_mount || n->parent < 0) {
+        k_memset(dir, 0, sizeof(*dir));
+        return;
+    }
+    fl_getattr(&fl_mount, &fl_nodes[n->parent], dir);
+}
+
+/** Make `name` in the directory `dir` a link to `at`, which the model
+ * records and does not name. */
+int vfs_link(struct vfs_mount *mnt, void *dir, const char *name, void *at)
+{
+    check(mnt == &fl_mount && fl_holds(dir) && fl_holds(at),
+          "a link holds its directory's lock and its file's");
+    check(!fl_child_named(dir, name), "a link's name is new");
+    fl_note("link");
+    fl_linked = at;
     return 0;
 }
 
@@ -3965,6 +4016,9 @@ static void fl_row_begin(void)
 {
     row_begin();
     k_memcpy(fl_nodes, fl_tree, sizeof(fl_nodes));
+    k_memset(fl_mode, 0, sizeof(fl_mode));
+    k_memset(fl_uid, 0, sizeof(fl_uid));
+    fl_linked = 0;
     k_memset(&fl_mount, 0, sizeof(fl_mount));
     fl_mount.type = &fl_type;
     fl_mount.root = &fl_nodes[FL_ROOT];
@@ -4137,6 +4191,146 @@ static void resident_unmapped(void)
     dshares = NULL;
 }
 
+/* The uids of the protection rows: the caller and another user. */
+#define PR_USER  1000u
+#define PR_OTHER 1001u
+
+/** End a protection row: no lock order is asked of it, and the caller's
+ * group goes back to root's. */
+static void pr_row_end(const char *what)
+{
+    fl_log[0] = '\0';
+    fl_row_end("", what);
+    proc.egid = 0;
+}
+
+/**
+ * Link /fl/a/x, of `mode` and owned by `uid`, to the new name /fl/b/y, as
+ * the caller `euid` in the group of the same number: the link's result. The
+ * new name's directory is root's of mode 0777, so a link the protection lets
+ * through is made.
+ */
+static int32_t pr_link(uint32_t mode, uint32_t uid, uint32_t euid)
+{
+    int32_t rc;
+
+    fl_row_begin();
+    proc.euid = euid;
+    proc.egid = euid;
+    fl_mode[FL_X] = mode;
+    fl_uid[FL_X] = uid;
+    rc = do_link("/fl/a/x", "/fl/b/y", 0, 0, 0);
+    check(rc == 0 ? fl_linked == &fl_nodes[FL_X] : fl_linked == 0,
+          "a link is made exactly when it is allowed");
+    pr_row_end("a link gives back every lock");
+    return rc;
+}
+
+/**
+ * fs.protected_hardlinks, as Linux's may_linkat: a link to a file of another
+ * user is EPERM unless the file is a regular one with no setuid bit, no
+ * setgid bit with group execute, and both read and write open to the caller;
+ * its owner and a caller with CAP_FOWNER link anything, and at 0 the rule is
+ * off.
+ */
+static void protected_links(void)
+{
+    check(pr_link(0100644, PR_OTHER, PR_USER) == -EPERM,
+          "a link to another user's file the caller may not write is EPERM");
+    check(pr_link(0100666, PR_OTHER, PR_USER) == 0,
+          "a link to another user's file the caller may read and write is made");
+    check(pr_link(0104666, PR_OTHER, PR_USER) == -EPERM,
+          "a link to another user's setuid file is EPERM");
+    check(pr_link(0102676, PR_OTHER, PR_USER) == -EPERM,
+          "a link to another user's setgid, group-executable file is EPERM");
+    check(pr_link(0102666, PR_OTHER, PR_USER) == 0,
+          "a link to another user's setgid file without group execute is made");
+    check(pr_link(0010666, PR_OTHER, PR_USER) == -EPERM, "a link to another user's FIFO is EPERM");
+    check(pr_link(0100400, PR_USER, PR_USER) == 0,
+          "a link to the caller's own file it may not write is made");
+    check(pr_link(0104600, PR_OTHER, 0) == 0, "root links another user's setuid file");
+    vfs_protected_hardlinks = 0;
+    check(pr_link(0100644, PR_OTHER, PR_USER) == 0,
+          "with fs.protected_hardlinks at 0 any file is linked");
+    vfs_protected_hardlinks = 1;
+}
+
+/**
+ * Open /fl/b/w, of `mode` and owned by `uid`, with O_CREAT, O_DIRECTORY and
+ * `extra`, as the caller `euid` in the group of the same number, with /fl/b
+ * of `dmode` and owned by `duid`: the open's result. An open the protections
+ * let through stops at O_DIRECTORY on a file that is no directory, ENOTDIR,
+ * before anything is opened.
+ */
+static int32_t pr_create(uint32_t dmode, uint32_t duid, uint32_t mode, uint32_t uid, uint32_t euid,
+                         int extra)
+{
+    int32_t rc;
+
+    fl_row_begin();
+    proc.euid = euid;
+    proc.egid = euid;
+    fl_mode[FL_B] = dmode;
+    fl_uid[FL_B] = duid;
+    fl_mode[FL_W] = mode;
+    fl_uid[FL_W] = uid;
+    rc = do_open("/fl/b/w", O_CREAT | O_DIRECTORY | extra, 0644);
+    pr_row_end("an O_CREAT open gives back every lock");
+    return rc;
+}
+
+/**
+ * fs.protected_regular and fs.protected_fifos, as Linux's
+ * may_create_in_sticky: an O_CREAT open of an existing file in a sticky
+ * directory others may write is EACCES, for root too, when neither the
+ * caller nor the directory's owner owns the file; at level 2 a directory its
+ * group may write is enough; at 0 the rule is off for the kind; and a file
+ * of another kind is judged whatever the levels.
+ */
+static void protected_creates(void)
+{
+    check(pr_create(041777, 0, 0100644, PR_OTHER, PR_USER, 0) == -EACCES,
+          "O_CREAT on another user's file in /tmp is EACCES");
+    check(pr_create(041777, 0, 0100644, PR_OTHER, 0, 0) == -EACCES,
+          "O_CREAT on another user's file in /tmp is EACCES for root");
+    check(pr_create(041777, 0, 0100644, PR_OTHER, PR_USER, O_EXCL) == -EEXIST,
+          "O_CREAT|O_EXCL on another user's file is EEXIST");
+    check(pr_create(041777, 0, 0100644, PR_USER, PR_USER, 0) == -ENOTDIR,
+          "O_CREAT on the caller's own file in /tmp opens it");
+    check(pr_create(041777, PR_OTHER, 0100644, PR_OTHER, PR_USER, 0) == -ENOTDIR,
+          "O_CREAT on the directory owner's file opens it");
+    check(pr_create(040777, 0, 0100644, PR_OTHER, PR_USER, 0) == -ENOTDIR,
+          "O_CREAT on another user's file in a directory that is not sticky opens it");
+    check(pr_create(041775, 0, 0100644, PR_OTHER, PR_USER, 0) == -EACCES,
+          "O_CREAT on a file in a group-writable sticky directory is EACCES at level 2");
+    vfs_protected_regular = 1;
+    check(pr_create(041775, 0, 0100644, PR_OTHER, PR_USER, 0) == -ENOTDIR,
+          "level 1 lets a group-writable sticky directory's file open");
+    check(pr_create(041777, 0, 0100644, PR_OTHER, PR_USER, 0) == -EACCES,
+          "level 1 still refuses a world-writable sticky directory's file");
+    vfs_protected_regular = 0;
+    check(pr_create(041777, 0, 0100644, PR_OTHER, PR_USER, 0) == -ENOTDIR,
+          "fs.protected_regular at 0 lets the file open");
+    vfs_protected_regular = 2;
+
+    check(pr_create(041777, 0, 0010666, PR_OTHER, PR_USER, 0) == -EACCES,
+          "O_CREAT on another user's FIFO in /tmp is EACCES");
+    check(pr_create(041775, 0, 0010666, PR_OTHER, PR_USER, 0) == -ENOTDIR,
+          "level 1 lets a group-writable sticky directory's FIFO open");
+    vfs_protected_fifos = 2;
+    check(pr_create(041775, 0, 0010666, PR_OTHER, PR_USER, 0) == -EACCES,
+          "level 2 refuses a group-writable sticky directory's FIFO");
+    vfs_protected_fifos = 0;
+    check(pr_create(041777, 0, 0010666, PR_OTHER, PR_USER, 0) == -ENOTDIR,
+          "fs.protected_fifos at 0 lets the FIFO open");
+
+    vfs_protected_regular = 0;
+    check(pr_create(041777, 0, 0020666, PR_OTHER, PR_USER, 0) == -EACCES,
+          "O_CREAT on another user's device node in /tmp is EACCES at any level");
+    vfs_protected_regular = 2;
+    vfs_protected_fifos = 1;
+}
+
 int main(void)
 {
     mount.type = &mounted_type;
@@ -4169,6 +4363,8 @@ int main(void)
     file_locked_orders();
     file_locked_mount_rmdir();
     resident_unmapped();
+    protected_links();
+    protected_creates();
     if (!failures) {
         printf("open-hosttest: result: pass: mounted truncation, loop handles and root removals\n");
     }
