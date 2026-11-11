@@ -4747,7 +4747,7 @@
       "execution": {"program": "clockidmusl", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
       "assertions": [
         {"assertion_id": "within-tick", "checks": "Two CLOCK_MONOTONIC reads within a tick are found.", "source": "program"},
-        {"assertion_id": "boot-clocks", "checks": "Raw and boot time read between two monotonic reads.", "source": "program"},
+        {"assertion_id": "boot-clocks", "checks": "Boot time reads between two monotonic reads, and raw time never goes back in 1000 reads.", "source": "program"},
         {"assertion_id": "coarse-boot", "checks": "The coarse monotonic clock is no later than the fine one and at most two ticks earlier.", "source": "program"},
         {"assertion_id": "coarse-real", "checks": "The coarse real-time clock is no later than the fine one and at most two ticks earlier.", "source": "program"},
         {"assertion_id": "res-fine", "checks": "Real and boot time resolve to a microsecond or less.", "source": "program"},

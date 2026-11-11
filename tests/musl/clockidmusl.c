@@ -3,9 +3,12 @@
  * against them.
  *
  * Every row judges what the kernel counts. Time since boot is read within the
- * tick: two readings of `CLOCK_MONOTONIC` differ by less than a tick, raw and
- * boot time are the same clock, so a reading of either taken between two of
- * `CLOCK_MONOTONIC` lies between them, and the coarse clocks read the time at
+ * tick: two readings of `CLOCK_MONOTONIC` differ by less than a tick, boot
+ * time is the same clock with no suspend, so a reading of it taken between
+ * two of `CLOCK_MONOTONIC` lies between them, raw time never goes back but
+ * is checked against no other clock, since the NTP state slews the monotonic
+ * clock and not the raw one, as Linux's tkr_raw (kernel/time/
+ * timekeeping.c:2044), and the coarse clocks read the time at
  * the last tick the kernel counted (`coarse_clocks`); the CPU clocks advance
  * while this process spins and agree with what `times` reports; a CPU clock by
  * process id, the form `clock_getcpuclockid` returns, reads that process's
@@ -314,12 +317,39 @@ static int cpu_clocks(void)
 }
 
 /**
+ * Check that boot time reads between two readings of CLOCK_MONOTONIC, and
+ * that raw time does not go back over 1000 readings: the NTP state slews the
+ * monotonic clock and not the raw one, as Linux's tkr_raw
+ * (kernel/time/timekeeping.c:2044), so raw time is held to no other clock.
+ * Returns 0, or 1 after the failure is printed.
+ */
+static int boot_clocks(void)
+{
+    long long before = ns_of(CLOCK_MONOTONIC);
+    long long x = ns_of(CLOCK_BOOTTIME);
+    long long after = ns_of(CLOCK_MONOTONIC);
+    int i;
+
+    if (x < before || x > after) {
+        return fail("boot time does not read CLOCK_MONOTONIC");
+    }
+    before = ns_of(CLOCK_MONOTONIC_RAW);
+    for (i = 0; i < 1000; i++) {
+        after = ns_of(CLOCK_MONOTONIC_RAW);
+        if (after < before) {
+            return fail("raw time went back");
+        }
+        before = after;
+    }
+    return 0;
+}
+
+/**
  * Check the eight clocks and their resolutions, and then the CPU clocks
  * (`cpu_clocks`). Returns 0, or 1 after the failure is printed.
  */
 static int clocks(void)
 {
-    static const clockid_t boot_clocks[] = {CLOCK_MONOTONIC_RAW, CLOCK_BOOTTIME};
     static const clockid_t fine[] = {CLOCK_REALTIME, CLOCK_MONOTONIC, CLOCK_MONOTONIC_RAW,
                                      CLOCK_BOOTTIME};
     static const clockid_t coarse[] = {CLOCK_PROCESS_CPUTIME_ID, CLOCK_THREAD_CPUTIME_ID,
@@ -327,7 +357,6 @@ static int clocks(void)
     struct timespec res;
     long long before;
     long long after;
-    long long x;
     long long step = TICK_NS;
     unsigned int i;
 
@@ -343,13 +372,8 @@ static int clocks(void)
         return fail("time since boot does not read within the tick");
     }
     report_held();
-    for (i = 0; i < sizeof(boot_clocks) / sizeof(boot_clocks[0]); i++) {
-        before = ns_of(CLOCK_MONOTONIC);
-        x = ns_of(boot_clocks[i]);
-        after = ns_of(CLOCK_MONOTONIC);
-        if (x < before || x > after) {
-            return fail("a clock of time since boot does not read CLOCK_MONOTONIC");
-        }
+    if (boot_clocks() != 0) {
+        return 1;
     }
     report_held();
     if (coarse_clocks() != 0) {
