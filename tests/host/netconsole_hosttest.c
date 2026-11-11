@@ -24,6 +24,8 @@ extern int printf(const char *fmt, ...);
 #include "../../rach2/sys/network/driver/netdev.h"
 #include "../../rach2/sys/network/ip6/ip6.h"
 #include "../../rach2/sys/mm/kheap.h"
+#include "../../rach2/sys/panic.h"
+#include "../../rach2/sys/timer.h"
 
 /* ------------------------------------------------------------------ */
 /* The stubs netconsole links against.                                 */
@@ -129,6 +131,20 @@ static int lock_ever_negative;
 
 /** Take the network lock: count it and return 0 as the saved flags, since no
  * interrupt runs on the host. */
+/* The tick, which the settle rows move, and whether the kernel panics. */
+static uint64_t host_ticks;
+static int host_panicking;
+
+uint64_t tick_count(void)
+{
+    return host_ticks;
+}
+
+int k_panicking(void)
+{
+    return host_panicking;
+}
+
 unsigned int net_lock(void)
 {
     lock_depth++;
@@ -283,6 +299,10 @@ static void nc_reset(void)
     nc_tail = 0;
     nc_line_start = 0;
     nc_skip = 0;
+    nc_settle_ticks = 0;
+    nc_frames_up = 0;
+    host_ticks = 0;
+    host_panicking = 0;
     nc_boot_id = 0;
     nc_seq = 0;
     nc_frames = 0;
@@ -327,11 +347,48 @@ static unsigned frame_be16(unsigned f, unsigned off)
 }
 
 /**
+ * Check that a link that has just come up is sent nothing until it has been
+ * up for the settle time, and the held lines go out with the first newline
+ * after it; that a link that goes down starts the time again; and that a
+ * panicking kernel sends at once.
+ */
+static void settle_rows(void)
+{
+    nc_reset();
+    nc_settle_ticks = MS_TO_TICKS(NC_LINK_SETTLE_MS);
+    link_down = 1;
+    netconsole_enable();
+    put_string("held\n");
+    link_down = 0;
+    host_ticks = 100;
+    put_string("up\n");
+    CHECK(frame_count == 0 && nc_pending() == 8, "a link just up is sent nothing");
+    host_ticks = 100 + nc_settle_ticks - 1;
+    put_string("a\n");
+    CHECK(frame_count == 0, "nor a tick before the settle time");
+    host_ticks = 100 + nc_settle_ticks;
+    put_string("b\n");
+    CHECK(frame_count == 1 && frame_len[0] == NETCONSOLE_HDR_LEN + 12 && nc_pending() == 0,
+          "the first line after the settle time sends what was held with it");
+
+    link_down = 1;
+    put_string("down\n");
+    link_down = 0;
+    host_ticks += nc_settle_ticks * 4;
+    put_string("again\n");
+    CHECK(frame_count == 1, "a link that came back starts the settle time again");
+    host_panicking = 1;
+    put_string("panic\n");
+    CHECK(frame_count == 2 && nc_pending() == 0, "a panicking kernel sends at once");
+}
+
+/**
  * Check that the lines wait in the ring while the card has no link: before
  * it first comes up, when the ring fills meanwhile, and when it goes down in
  * the middle of a drain, where the drain held back goes out with the next
  * newline. A card that drops every frame is offered one frame by a long line
- * and one by its newline, and gets all of it once it takes frames.
+ * and one by its newline, and gets all of it once it takes frames. The
+ * settle rows follow.
  */
 static void link_rows(void)
 {
@@ -405,6 +462,8 @@ static void link_rows(void)
         netconsole_putc('\n');
         CHECK(nc_pending() == 0 && frame_count == 4, "and all of it once the card takes frames");
     }
+
+    settle_rows();
 }
 
 /**
