@@ -167,7 +167,10 @@ int platform_pmu_probe(void);
  */
 void platform_pmu_enable(uint64_t cycles);
 
-/** Stop this processor's counter and mask its APIC entry. */
+/** Stop this processor's counter and mask its APIC entry, as Linux's
+ * `clear_local_APIC` masks APIC_LVTPC; nothing when it is not running.
+ * Called with interrupts off, by the detector, at a panic and on each
+ * processor a stop halts. */
 void platform_pmu_disable(void);
 
 /**
