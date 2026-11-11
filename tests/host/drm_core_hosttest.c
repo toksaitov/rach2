@@ -6,7 +6,7 @@
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
  * host-deps: tests/host/compat/atomic_host.c
- * host-deps: tests/host/compat/fd_flat.c
+ * host-deps: tests/host/compat/fd_flat.c tests/host/compat/bkl_none.c
  *
  * The four files are included whole. A fake driver binds two devices: one
  * with a card and a render node, GEM, dumb buffers of the shmem helper
