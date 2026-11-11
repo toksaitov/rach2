@@ -2044,6 +2044,8 @@ static void row_ioctls(void)
     struct drm_virtgpu_map mp;
     struct drm_virtgpu_3d_transfer t;
     struct drm_virtgpu_3d_wait w;
+    struct virtio_gpu_object *bo;
+    uint32_t h, i;
     int value = -1;
 
     k_memset(&gp, 0, sizeof(gp));
@@ -2066,8 +2068,30 @@ static void row_ioctls(void)
     rc.size = 16 * 16 * 4;
     rc.depth = 1;
     rc.array_size = 1;
+    gpu.answer = ANSWER_NEVER;
     CHECK(vgpu_resource_create_ioctl(dev, &rc, &file) == 0 && rc.res_handle && rc.bo_handle,
           "RESOURCE_CREATE of a 2D texture");
+    k_memset(&w, 0, sizeof(w));
+    w.handle = rc.bo_handle;
+    w.flags = VIRTGPU_WAIT_NOWAIT;
+    CHECK(vgpu_wait_ioctl(dev, &w, &file) == -EBUSY,
+          "a 2D buffer of RESOURCE_CREATE is busy until its attach is answered, as on Linux");
+    bo = dumb(64, 64, &h);
+    CHECK(bo != NULL, "a dumb buffer while nothing is answered");
+    if (bo) {
+        w.handle = h;
+        CHECK(vgpu_wait_ioctl(dev, &w, &file) == 0, "a dumb buffer's attach is not fenced");
+        drm_gem_object_put(&bo->shmem.base);
+        CHECK(drm_gem_handle_delete(&file, h) == 0, "the dumb buffer's handle is closed");
+    }
+    for (i = 0; i < gpu.q[0].nflight; i++) {
+        gpu.q[0].flight[i].answered = 1;
+    }
+    (void)virtqueue_reap(vg->ctrlq);
+    vgpu_reap(vg);
+    gpu.answer = ANSWER_KICK;
+    w.handle = rc.bo_handle;
+    CHECK(vgpu_wait_ioctl(dev, &w, &file) == 0, "and idle once it is");
     CHECK(res_find(rc.res_handle) && res_find(rc.res_handle)->format == rc.format,
           "the host has it in its format");
     rc.target = 3;

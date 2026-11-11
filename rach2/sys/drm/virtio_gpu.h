@@ -774,12 +774,12 @@ void vgpu_reap(struct virtio_gpu_device *vg);
 /** Stop DMA, fail commands and free backing and contexts; process context. */
 void vgpu_kill(struct virtio_gpu_device *vg);
 /**
- * Create a buffer and 2D or 3D resource; caller owns one reference, NULL
- * sets err.
+ * Create a buffer and 2D or 3D resource, with `fenced` its attach's fence
+ * in its reservation; caller owns one reference, NULL sets err.
  */
 struct virtio_gpu_object *vgpu_obj_create(struct virtio_gpu_device *vg, uint64_t size,
                                           const struct drm_virtgpu_resource_create *params,
-                                          int virgl, int32_t *err);
+                                          int virgl, int fenced, int32_t *err);
 /** Read capability descriptions after DRIVER_OK; 0 or -errno. */
 int32_t vgpu_capsets_read(struct virtio_gpu_device *vg);
 /** Create a file's context lazily; 0 or -errno, may sleep. */
