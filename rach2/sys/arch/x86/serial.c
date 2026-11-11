@@ -51,6 +51,14 @@ static int _rx_irq_masked; /* and is off from a full ring to a half-empty one */
 /* The ring position before which `serial_rx_lookahead` has given every
  * byte; monotonic, as the head and tail are. */
 static uint32_t _rx_looked;
+/*
+ * Where `serial_rx_find`'s last scan for a set of three stopped, and the
+ * set: the bytes from the head to there hold none of the set, so a caller
+ * that asks again while the ring drains scans only what arrived since, and
+ * a throttled reader asking once per byte does not walk the ring each time.
+ */
+static uint32_t _rx_scanned;
+static unsigned char _rx_scan_set[3];
 
 /* Line control register bits */
 #define SERIAL_LCR_DLAB 0x80 /* Divisor latch access bit */
@@ -90,6 +98,21 @@ static int _serial_is_transmit_empty(void)
 static uint32_t _rx_count(void)
 {
     return _rx_tail - _rx_head;
+}
+
+/** Take `n` bytes, no more than the ring holds, from the ring's head, and
+ * bring `_rx_looked` and `_rx_scanned` up to the head when it passes them,
+ * so that each stays within the ring's bytes and their distances from the
+ * head never wrap. The caller holds the console's lock. */
+static void _rx_advance(uint32_t n)
+{
+    _rx_head += n;
+    if (_rx_looked - _rx_head > _rx_count()) {
+        _rx_looked = _rx_head;
+    }
+    if (_rx_scanned - _rx_head > _rx_count()) {
+        _rx_scanned = _rx_head;
+    }
 }
 
 /**
@@ -280,7 +303,7 @@ int serial_rx_take(void)
     flags = console_lock();
     if (_rx_count() > 0) {
         c = _rx_ring[_rx_head & (SERIAL_RX_SIZE - 1)];
-        _rx_head++;
+        _rx_advance(1);
     }
     if (_rx_irq_masked && _rx_count() < SERIAL_RX_SIZE / 2) {
         outb(SERIAL_COM1 + SERIAL_INTR_ENABLE, SERIAL_IER_RDA);
@@ -300,15 +323,6 @@ int serial_try_getc(void)
     return c;
 }
 
-/*
- * Where `serial_rx_find`'s last scan for a set of three stopped, and the
- * set: the bytes from the head to there hold none of the set, so a caller
- * that asks again while the ring drains scans only what arrived since, and
- * a throttled reader asking once per byte does not walk the ring each time.
- */
-static uint32_t _rx_scanned;
-static unsigned char _rx_scan_set[3];
-
 int serial_rx_find(const unsigned char *set, int n)
 {
     uint32_t flags = console_lock();
@@ -317,7 +331,7 @@ int serial_rx_find(const unsigned char *set, int n)
     int same = n == 3 && set[0] == _rx_scan_set[0] && set[1] == _rx_scan_set[1] &&
                set[2] == _rx_scan_set[2];
 
-    i = same && _rx_scanned > _rx_head && _rx_scanned <= _rx_tail ? _rx_scanned - _rx_head : 0;
+    i = same && _rx_scanned - _rx_head <= _rx_count() ? _rx_scanned - _rx_head : 0;
     for (; i < _rx_count() && found < 0; i++) {
         unsigned char c = _rx_ring[(_rx_head + i) & (SERIAL_RX_SIZE - 1)];
         int k;
@@ -339,10 +353,19 @@ int serial_rx_find(const unsigned char *set, int n)
     return found;
 }
 
+/** The bytes from the head that `serial_rx_lookahead` has given, which
+ * `_rx_advance` keeps within the ring's bytes. */
+static uint32_t _rx_looked_count(void)
+{
+    uint32_t d = _rx_looked - _rx_head;
+
+    return d <= _rx_count() ? d : 0;
+}
+
 int serial_rx_lookahead(unsigned char *buf, int max)
 {
     uint32_t flags = console_lock();
-    uint32_t at = (int32_t)(_rx_looked - _rx_head) > 0 ? _rx_looked : _rx_head;
+    uint32_t at = _rx_head + _rx_looked_count();
     int n = 0;
 
     while (at != _rx_tail && n < max) {
@@ -356,7 +379,7 @@ int serial_rx_lookahead(unsigned char *buf, int max)
 
 int serial_rx_looked(void)
 {
-    return (int32_t)(_rx_looked - _rx_head) > 0;
+    return _rx_looked_count() > 0;
 }
 
 void serial_rx_discard(int count)
@@ -366,7 +389,7 @@ void serial_rx_discard(int count)
     if ((uint32_t)count > _rx_count()) {
         count = (int)_rx_count();
     }
-    _rx_head += (uint32_t)count;
+    _rx_advance((uint32_t)count);
     console_unlock(flags);
 }
 
@@ -374,7 +397,7 @@ void serial_rx_flush(void)
 {
     uint32_t flags = console_lock();
 
-    _rx_head = _rx_tail;
+    _rx_advance(_rx_count());
     if (_serial_port_exists) {
         /* The bytes a full ring left in the UART are input too. */
         outb(SERIAL_COM1 + SERIAL_FIFO_CTRL, 0xC7 | 0x02); /* FIFO on, receiver cleared */
