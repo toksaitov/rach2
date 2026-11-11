@@ -1,0 +1,40 @@
+======================
+Proton: 1793687165 GE-Proton11-12
+SteamGameId: 2733
+Command: ['/data/trial2654/probes/probes/trip64.exe']
+Options: {'wined3d', 'wow64', 'gamedrive', 'forcelgadd'}
+Kernel: Linux 6.18.0-rach2 #1 Rach2 1.0.0 x86_64
+Language: LC_ALL None, LC_MESSAGES None, LC_CTYPE C.UTF-8
+PATH: /opt/proton/files/bin/:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
+System WINEDEBUG: -all,err+all
+Effective WINEDEBUG: -all,err+all
+WARNING: Low /proc/sys/vm/max_map_count: 65536 will prevent some games from working
+======================
+Inherited environment
+DISPLAY: :1
+======================
+Error: unable to check /proc/modules for NV driver presence
+fsync: up and running.
+00a8:err:ntoskrnl:ZwLoadDriver failed to create driver L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\winebth": c0000142
+MESA-INTEL: warning: Haswell Vulkan support is incomplete
+0024:err:steamclient:steamclient_init unable to load native steamclient library
+0140:err:winediag:wined3d_dll_init Using the Vulkan renderer.
+015c:err:winediag:wined3d_dll_init Using the Vulkan renderer.
+MESA-INTEL: warning: Haswell Vulkan support is incomplete
+MESA-INTEL: warning: Haswell Vulkan support is incomplete
+MESA-INTEL: warning: Haswell Vulkan support is incomplete
+MESA-INTEL: warning: Haswell Vulkan support is incomplete
+015c:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_FOGENABLE) (0x1c) should have a representative.
+015c:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_SPECULARENABLE) (0x1d) should have a representative.
+015c:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_COLORKEYENABLE) (0x29) should have a representative.
+015c:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_RANGEFOGENABLE) (0x30) should have a representative.
+015c:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_LIGHTING) (0x89) should have a representative.
+015c:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_COLORVERTEX) (0x8d) should have a representative.
+015c:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_LOCALVIEWER) (0x8e) should have a representative.
+015c:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_NORMALIZENORMALS) (0x8f) should have a representative.
+015c:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_DIFFUSEMATERIALSOURCE) (0x91) should have a representative.
+015c:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_SPECULARMATERIALSOURCE) (0x92) should have a representative.
+015c:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_AMBIENTMATERIALSOURCE) (0x93) should have a representative.
+015c:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_EMISSIVEMATERIALSOURCE) (0x94) should have a representative.
+015c:err:d3d:validate_state_table State STATE_RENDER(WINED3D_RS_VERTEXBLEND) (0x97) should have a representative.
+MESA-INTEL: warning: Haswell Vulkan support is incomplete

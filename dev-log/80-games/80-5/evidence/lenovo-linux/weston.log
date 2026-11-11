@@ -1,0 +1,70 @@
+Date: 2026-11-11 UTC
+[02:45:07.618] weston 14.0.2
+               https://wayland.freedesktop.org
+               Bug reports to: https://gitlab.freedesktop.org/wayland/weston/issues/
+               Build: 14.0.2
+[02:45:07.618] Command line: weston --backend=headless --renderer=gl --width=1280 --height=800 --shell=desktop --idle-time=0 --xwayland --socket=games-wine --log=/srv/ref80/t2654/linux/gpu/weston.log
+[02:45:07.618] OS: Linux, 6.12.115+deb13.1-amd64, #1 SMP PREEMPT_DYNAMIC Debian 6.12.115-2 (2026-11-01), x86_64
+[02:45:07.618] Flight recorder: enabled
+[02:45:07.618] Starting with no config file.
+[02:45:07.620] Output repaint window is 7 ms maximum.
+[02:45:07.621] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/headless-backend.so'
+[02:45:07.646] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/gl-renderer.so'
+[02:45:07.889] Using rendering device: /dev/dri/renderD128
+[02:45:07.900] EGL version: 1.5
+[02:45:07.900] EGL vendor: Mesa Project
+[02:45:07.900] EGL client APIs: OpenGL OpenGL_ES 
+[02:45:07.900] EGL features:
+               EGL Wayland extension: yes
+               context priority: yes
+               buffer age: no
+               partial update: no
+               swap buffers with damage: no
+               configless context: yes
+               surfaceless context: yes
+               dmabuf support: modifiers
+[02:45:07.914] GL version: OpenGL ES 3.2 Mesa 25.0.7-2+deb13u1
+[02:45:07.914] GLSL version: OpenGL ES GLSL ES 3.20
+[02:45:07.914] GL vendor: Intel
+[02:45:07.914] GL renderer: Mesa Intel(R) HD Graphics 4400 (HSW GT2)
+[02:45:07.960] GL ES 3.2 - renderer features:
+               read-back format: ARGB8888
+               glReadPixels supports y-flip: yes
+               glReadPixels supports PBO: yes
+               wl_shm 10 bpc formats: yes
+               wl_shm 16 bpc formats: yes
+               wl_shm half-float formats: yes
+               internal R and RG formats: yes
+               OES_EGL_image_external: yes
+[02:45:07.960] Using GL renderer
+[02:45:07.960] Registered plugin API 'weston_windowed_output_api_headless_v2' of size 16
+[02:45:07.960] Color manager: no-op
+                 protocol support: no
+[02:45:07.960] Output 'headless' attempts EOTF mode SDR and colorimetry mode default.
+[02:45:07.960] Output 'headless' using color profile: stock sRGB color profile
+[02:45:07.962] Output 'headless' enabled with head(s) headless
+[02:45:07.962] Compositor capabilities:
+               arbitrary surface rotation: yes
+               screen capture uses y-flip: yes
+               cursor planes: no
+               arbitrary resolutions: no
+               view mask clipping: yes
+               explicit sync: yes
+               color operations: yes
+               presentation clock: CLOCK_MONOTONIC_RAW, id 4
+               presentation clock resolution: 0.000000001 s
+[02:45:07.962] Loading module '/usr/lib/x86_64-linux-gnu/weston/desktop-shell.so'
+[02:45:07.963] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/xwayland.so'
+[02:45:07.966] Registered plugin API 'weston_xwayland_v3' of size 32
+[02:45:07.966] Registered plugin API 'weston_xwayland_surface_v2' of size 24
+[02:45:07.966] xserver listening on display :0
+[02:45:07.966] launching '/usr/libexec/weston-keyboard'
+[02:45:07.968] launching '/usr/libexec/weston-desktop-shell'
+[02:45:11.365] launching '/usr/bin/Xwayland'
+[02:45:11.641] xfixes version: 6.0
+[02:45:11.654] created wm, root 473
+[02:45:13.147] Detected an unmapped surface or view in the layer list, which should not occur.
+               Warning: the above message will not be printed again.
+[02:45:37.932] caught signal 15
+[02:45:37.932] xserver exited, will restart on demand
+[02:45:37.932] BUG: finalizing a layer with views still on it.

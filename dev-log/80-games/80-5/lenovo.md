@@ -1,6 +1,6 @@
 # 80-5's Lenovo step
 
-The step of 80-5.3 and 80-5.4: the Wine probes' gpu row (`tests/system/games/gpu.sh`, which runs `run.py gpu`) first under Linux, on the Debian 13.7 of the Lenovo's p5, then under Rach2, on one trial boot of the milestone branch's kernel and a trial root from the data partition. Each run draws the GL and Direct3D 9 probes at 64 and 32 bits through GE-Proton11-12 and WineD3D on Crocus, reads their pixels back, and times 1000 Direct3D 11 round trips on WineD3D's GL and Vulkan renderers. Rach2's run is judged against Linux's sums from the same machine. [80-5.md](../80-5.md) has the rehearsal in QEMU and will have the results.
+The step of 80-5.3 and 80-5.4: the Wine probes' gpu row (`tests/system/games/gpu.sh`, which runs `run.py gpu`) first under Linux, on the Debian 13.7 of the Lenovo's p5, then under Rach2, on one trial boot of the milestone branch's kernel and a trial root from the data partition. Each run draws the GL and Direct3D 9 probes at 64 and 32 bits through GE-Proton11-12 and WineD3D on Crocus, reads their pixels back, and times 1000 Direct3D 11 round trips on WineD3D's GL and Vulkan renderers. Rach2's run is judged against Linux's sums from the same machine. [80-5.md](../80-5.md) has the rehearsal in QEMU and the results.
 
 Silent: nothing plays, and nothing takes the screen but the boots' text. Weston runs headless on the GPU's render node, Debian's kernel has `snd_hda_intel` blacklisted, and Rach2's i915 binds with `rach2.i915.disable_display`, so the console stays the firmware's. No notice is needed.
 

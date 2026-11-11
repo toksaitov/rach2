@@ -1,0 +1,29 @@
+commit bb151e3baa6810fe8a513ac02a19ace4d881cb27
+milestone 12
+full waived
+root 1851d00c3a06ff637204b1c2bf6058129b2b797ee30a970ebf4fba53585c14a3
+bootctl: candidate: first sector 11848, 8192 sectors in 8192 clusters, 4194304 bytes
+bootctl: fallback: first sector 2053, 8192 sectors in 8192 clusters, 4194304 bytes
+bootctl: fallback: runs: 2053+4096 20040+4096
+bootctl: grubenv: first sector 10275, 2 sectors in 2 clusters, 1024 bytes
+bootctl: boot.cfg: first sector 10259, 16 sectors in 16 clusters, 8192 bytes
+bootctl: saved_entry: candidate
+bootctl: next_entry: empty (a trial was consumed)
+bootctl: booted: candidate
+rach2.root=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,3 rach2.rootfstype=ext2 rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.slot=candidate rach2.disk=ahci rach2.netconsole rach2.ip=none rach2.console=term
+ 02:24:35 up 7 min,  0 users,  load average: 0.00, 0.00, 0.00
+machine-identity: booted: candidate
+bootctl: candidate: first sector 11848, 8192 sectors in 8192 clusters, 4194304 bytes
+bootctl: fallback: first sector 2053, 8192 sectors in 8192 clusters, 4194304 bytes
+bootctl: fallback: runs: 2053+4096 20040+4096
+bootctl: grubenv: first sector 10275, 2 sectors in 2 clusters, 1024 bytes
+bootctl: boot.cfg: first sector 10259, 16 sectors in 16 clusters, 8192 bytes
+bootctl: saved_entry: candidate
+bootctl: next_entry: empty (a trial was consumed)
+bootctl: booted: candidate
+machine-identity: candidate: runs: 11848+5557
+machine-identity: sha256: candidate 0effe5acc26e1bf2f20b87b73e92ad8a9d769b708086b5ba700873f7e95e2cad
+machine-identity: fallback: runs: 2053+4096 20040+1461
+machine-identity: sha256: fallback 0effe5acc26e1bf2f20b87b73e92ad8a9d769b708086b5ba700873f7e95e2cad
+machine-identity: named: slot candidate, kernel build/runs/t2654/release-kernel, 2845120 bytes, sha256 0effe5acc26e1bf2f20b87b73e92ad8a9d769b708086b5ba700873f7e95e2cad
+machine-identity: result: the machine runs the named kernel: slot candidate, sha256 0effe5acc26e1bf2f20b87b73e92ad8a9d769b708086b5ba700873f7e95e2cad, build/runs/t2654/release-kernel; the fallback slot holds it too
