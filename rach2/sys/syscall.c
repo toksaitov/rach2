@@ -1486,6 +1486,26 @@ static int32_t sleep_cpu_for(int32_t clk, uint64_t due)
 }
 
 /**
+ * The name /proc/PID/wchan gives a sleep that restart_syscall resumed: the
+ * first of Linux's frames under it that is not `__sched`, which
+ * hrtimer_nanosleep_restart and do_nanosleep are. Linux's x86-64 kernel, built
+ * for ORC without frame pointers, reaches hrtimer_nanosleep_restart by tail
+ * calls from its entry, `do_syscall_64` for a call of its own ABI and
+ * `do_int80_emulation` for an i386 call by int 0x80, which Debian's 6.12.115
+ * shows. Its i386 kernel keeps frame pointers and so every frame, and the
+ * first is `__do_sys_restart_syscall`, which `__ia32_sys_restart_syscall`
+ * aliases and kallsyms lists first.
+ */
+static const char *sleep_resume_wchan(void)
+{
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    return in_compat_syscall() ? "do_int80_emulation" : "do_syscall_64";
+#else
+    return "__do_sys_restart_syscall";
+#endif
+}
+
+/**
  * The resumption of a relative sleep a signal that ran no handler cut short
  * (restart_syscall): on to the deadline the restart block keeps, with the
  * remainder where the first call asked for it, and the block kept for a
@@ -1503,8 +1523,7 @@ static long sleep_resume(isr_params_t *params)
     }
     end.tv_sec = (long)b->sec;
     end.tv_nsec = (long)b->nsec;
-    /* hrtimer_nanosleep_restart and do_nanosleep are both __sched. */
-    return sleep_to(b->tick, &end, "__do_sys_restart_syscall");
+    return sleep_to(b->tick, &end, sleep_resume_wchan());
 }
 
 long nanosleep_core(const struct kernel_timespec *req, uintptr_t urem, int wide)

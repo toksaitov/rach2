@@ -2172,8 +2172,13 @@ A wait names itself with Linux's function where Linux has one:
 .Ql do_wait ,
 .Ql hrtimer_nanosleep ,
 .Ql do_cpu_nanosleep ,
+for a sleep resumed after a stop
+.Ql do_syscall_64 ,
+or
+.Ql do_int80_emulation
+for an i386 program, on the x86-64 kernel and
 .Ql __do_sys_restart_syscall
-for a sleep resumed after a stop,
+on the i686 kernel,
 .Ql syslog_print ,
 .Ql do_sys_poll ,
 .Ql do_select ,
