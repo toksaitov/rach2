@@ -359,23 +359,10 @@ void arch_regset_get(const struct process *t, unsigned long type, uint8_t *out);
  * negative errno as Linux's set of that type returns it. */
 long arch_regset_set(struct process *t, unsigned long type, const uint8_t *in, uint32_t len);
 
-/** At a switch from `old` to `next`: save a deferred debug exception in
- * `old`, load the hardware breakpoints `next` has, or clear the processor's
- * enables when it has none. The caller holds the big lock with interrupts
- * off. */
-void arch_debug_switch(struct process *old, const struct process *next);
-
-/** Whether a deferred user debug hit must interrupt a wait regardless of
- * its signal mask or disposition, without posting or consuming the hit; 0
- * for a stale hit, of a thread whose enables a tracer cleared. The caller
- * holds the big lock with interrupts off. */
-int arch_debug_pending(void);
-
-/** Post the deferred kernel debug hits as a signal, in process context.
- * While a user hit is pending this posts nothing, since the kernel hits
- * share its record: the user hit is forced at the return to user mode. The
- * caller holds the big lock with interrupts off. */
-void arch_debug_deliver(void);
+/** At a switch to `next`: load the hardware breakpoints `next` has, or
+ * clear the processor's enables when it has none. The caller holds the big
+ * lock with interrupts off. */
+void arch_debug_switch(const struct process *next);
 
 /** The bytes of the floating-point notes of one thread in a core file. */
 uint32_t arch_core_fp_size(void);

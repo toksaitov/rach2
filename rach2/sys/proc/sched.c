@@ -664,7 +664,7 @@ void schedule(void)
     if (next != cpu->idle) {
         fpu_restore(next->fpu);
     }
-    arch_debug_switch(old, next);
+    arch_debug_switch(next);
     old->bkl_depth = cpu->bkl_depth;
     cpu->bkl_depth = next->bkl_depth;
     cpu->current = next;

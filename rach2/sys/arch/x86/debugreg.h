@@ -39,49 +39,28 @@ int debugreg_poke(process_t *t, unsigned n, unsigned long v);
 int32_t debugreg_status(void);
 
 /**
- * Defer a debug exception taken in the kernel on this processor, without a
- * lock or a thread's stack: record DR6's breakpoint and single-step bits
- * for `debugreg_deliver`, clear DR6, and clear DR7 until the next switch or
- * return to user mode, so that a second exception cannot nest on the
- * interrupt stack. x86-64's debug entry calls it on that stack.
+ * Drop a debug exception taken in the kernel on this processor, as Linux
+ * does, whose ptrace breakpoints exclude the kernel: clear DR6, and clear
+ * DR7 until the next switch or return to user mode, so that the rest of a
+ * copy through a watched range takes no further exception. Nothing is
+ * posted, and the thread's saved DR6 is unchanged. It takes no lock and
+ * needs no thread's stack, so x86-64's debug entry calls it on its
+ * interrupt stack.
  */
-void debugreg_defer(void);
-
-/**
- * Defer a debug exception taken in the kernel at `pc` when `pc` is the
- * system call entry's first instruction (`isr128` on i686, `syscall_entry`
- * on x86-64), where the processor can report a user data breakpoint whose
- * exception it delayed past the system call instruction: record it as
- * `debugreg_defer` does and, while the thread has breakpoints enabled, mark
- * it a user hit, whose SIGTRAP `debugreg_deliver` forces at the return to
- * user mode even when the thread blocks SIGTRAP. 1 for that entry; 0, with
- * the debug state unchanged, for any other `pc`.
- */
-int debugreg_defer_user(uintptr_t pc);
+void debugreg_drop(void);
 
 /**
  * Take a debug exception in the kernel at `pc` inside x86-64's `sysenter`
  * entry, from its first instruction to `sysenter_stepped`, where the
- * program's TF steps the processor until the entry clears it: record it as
- * `debugreg_defer` does, less the single step, for the caller to return
- * with TF kept. 1 for such a `pc`; 0, with the debug state unchanged, for
- * any other, and always on i686.
+ * program's TF steps the processor until the entry clears it: drop it as
+ * `debugreg_drop` does, for the caller to return with TF kept. 1 for such a
+ * `pc`; 0, with the debug state unchanged, for any other, and always on
+ * i686.
  */
-int debugreg_defer_sysenter(uintptr_t pc);
-
-/**
- * Post the current thread's deferred debug exceptions, this processor's and
- * those a switch saved in the thread, and clear both records: a user hit as
- * a forced SIGTRAP, and a kernel hit of a breakpoint the thread still has
- * enabled as a SIGTRAP its signal mask governs; a single step or a stale
- * hit posts nothing. `isr_leave` calls it at the return to user mode, and
- * `arch_debug_deliver` before a signal check, each on the thread's stack
- * with the big lock held and interrupts off.
- */
-void debugreg_deliver(void);
+int debugreg_drop_sysenter(uintptr_t pc);
 
 /** Make this processor's DR7 match the current thread's enables before the
- * return to user mode: reloaded when a deferred exception cleared it,
+ * return to user mode: reloaded when a dropped exception cleared it,
  * cleared when the thread has none. `isr_leave` calls it with interrupts
  * off. */
 void debugreg_resume(void);

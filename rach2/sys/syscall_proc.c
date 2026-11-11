@@ -4414,18 +4414,14 @@ void signal_force(process_t *target, int signo, const struct k_siginfo *info)
     signal_post_thread(target, signo, info);
 }
 
-/** The signals pending for the current thread and its process, read after
- * the deferred kernel debug hits are posted, so a signal wait can dequeue
- * them with their siginfo. A deferred user hit stays out of these sets until
- * the return to user mode delivers it. Called on the thread's stack with the
- * big lock held. Read with interrupts off, since a 64-bit read is two loads
- * on i686. */
+/** The signals pending for the current thread and its process. Called on
+ * the thread's stack with the big lock held. Read with interrupts off, since
+ * a 64-bit read is two loads on i686. */
 static uint64_t sig_pending_now(void)
 {
     uint32_t flags = sig_irq_save();
     uint64_t set;
 
-    arch_debug_deliver();
     set = current_proc->sig_pending | current_proc->tg->pending;
     sig_irq_restore(flags);
     return set;
@@ -4447,20 +4443,12 @@ static void sender_info(struct k_siginfo *info, int32_t code, const process_t *t
  * (`ptrace_return_stops`). A traced thread counts an ignored signal too, as
  * Linux's sig_ignored does, since its tracer sees each signal at a
  * signal-delivery stop, where a wait it cut short is restarted. Blocking
- * syscall loops call this on the thread's stack with the big lock held. A
- * deferred kernel debug hit is posted before its mask and disposition are
- * tested; a deferred user hit interrupts whatever either says, but stays
- * deferred until the return to user mode delivers it. Posting can make this
- * thread ready and clear its `wakeup_tick`, so a caller that keeps waiting
- * must arm its deadline again. No wait queue is changed. On the x86-64 debug
- * interrupt stack the kernel calls only `debugreg_defer_user` and, when it
- * declines, `debugreg_defer`; a user debug exception moves to the thread's
- * stack before entering C. */
+ * syscall loops call this on the thread's stack with the big lock held. No
+ * wait queue is changed. */
 int signal_pending(void)
 {
     uint64_t deliverable;
     uint32_t flags;
-    int debug_pending;
     int signo;
 
     if (!current_proc) {
@@ -4471,7 +4459,6 @@ int signal_pending(void)
     }
     flags = sig_irq_save();
     deliverable = sig_pending_now() & ~current_proc->sig_blocked;
-    debug_pending = arch_debug_pending();
     sig_irq_restore(flags);
     for (signo = 1; signo <= KSIG_MAX; signo++) {
         struct k_sigaction *sa;
@@ -4491,7 +4478,7 @@ int signal_pending(void)
         }
         return 1;
     }
-    return debug_pending;
+    return 0;
 }
 
 /**

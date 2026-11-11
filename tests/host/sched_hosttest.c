@@ -158,9 +158,8 @@ void membarrier_switch(const struct process *p)
 }
 
 /** Check that interrupts are off; no row sets a debug register. */
-void arch_debug_switch(struct process *old, const struct process *next)
+void arch_debug_switch(const struct process *next)
 {
-    (void)old;
     (void)next;
     CHECK(!irq_flags, "debug register switch with interrupts on");
 }

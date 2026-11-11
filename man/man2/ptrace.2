@@ -561,31 +561,14 @@ general-detect bit or reserved bit; a value against these is
 A breakpoint that fires sends
 .Dv SIGTRAP
 with
-.Dv TRAP_HWBKPT ,
-also when the kernel touches the address in a copy for the tracee.
-A hit deferred in the kernel is posted as that signal before the kernel
-next checks the tracee's pending signals, so it interrupts an
-interruptible wait subject to its signal mask and disposition, and
-.Xr rt_sigtimedwait 2
-or a
-.Xr signalfd 2
-read can take it.
-A hit on a user instruction that the processor delays into the
+.Dv TRAP_HWBKPT
+when the tracee's own instruction touches the address.
+As on Linux, an access by the kernel, in a copy to or from the tracee's
+memory for a system call, sends nothing and ends no wait, and neither does
+a hit on a user instruction that the processor delays into the
 system-call entry, as after a watched
-.Li mov ss ,
-ends an interruptible wait in that call whatever the signal mask, is not
-taken by a signal wait, and is forced as a user-mode hit is, through a
-blocked
-.Dv SIGTRAP ,
-so the tracee stops at the call's return.
-An Intel processor reports such a hit with no breakpoint bit in DR6, and
-the tracee's DR6 then shows none.
-Thus an infinite
-.Xr poll 2
-whose descriptor the kernel reads through a watchpoint stops for the
-tracer and returns
-.Er EINTR
-after the tracer suppresses the signal and resumes it.
+.Li mov ss ;
+the tracee's DR6 is unchanged.
 When the tracer ends, any breakpoint still loaded on the processor
 running the tracee is disabled at its next hit, switch or user return.
 That stale hit sends no hardware-breakpoint signal; a simultaneous single
