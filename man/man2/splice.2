@@ -55,7 +55,8 @@ pages holds at most
 of Linux's page buffers, and is full for
 .Fn splice ,
 .Fn tee ,
-.Fn vmsplice
+.Fn vmsplice ,
+.Xr write 2
 and
 .Xr poll 2
 once it has that many, however few bytes they hold: each page of a file
@@ -63,6 +64,9 @@ or of the caller's memory that the bytes come from takes one, and so does
 each buffer of another pipe, so a pipe of 64 KiB takes sixteen one-byte
 .Fn vmsplice
 calls, or 65535 bytes from byte 1 of a page.
+A write still puts bytes in the newest buffer when they join it, as
+.Xr write 2
+says.
 For the side that is a regular file, a non-null
 .Fa off_in
 or
@@ -128,9 +132,13 @@ untouched page is and an anonymous page read but never written is, a region of
 device memory or a page the caller cannot read ends the call, with the
 bytes before it or
 .Er EFAULT .
-The vector is checked whole first, as
+Into a read end's buffers the vector is checked whole first, as
 .Xr readv 2
 checks it.
+From a write end's only the lengths, and that each range lies in user
+space, are checked first, and each page is judged as it is copied, so a
+buffer that is not mapped ends the call with the bytes before it, as on
+Linux.
 .Pp
 .Fn sendfile
 copies up to
