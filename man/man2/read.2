@@ -67,7 +67,8 @@ is ignored or blocked.
 .Pp
 A background process reading its controlling terminal receives
 .Dv SIGTTIN .
-If that signal is blocked or ignored, the read fails with
+If that signal is blocked or ignored, or the process group is orphaned,
+the read fails with
 .Er EIO .
 A read of
 .Pa /fb
@@ -368,7 +369,7 @@ A file system or device read failed, a device was removed, or the
 random device has no usable seed.
 A background terminal read also gives this error when
 .Dv SIGTTIN
-is blocked or ignored.
+is blocked or ignored, or its process group is orphaned.
 .It Er EISDIR
 .Fn pread
 was given a descriptor on a directory.

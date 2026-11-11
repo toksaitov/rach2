@@ -732,7 +732,7 @@ static int pts_hung(const fd_entry_t *e, const struct pty *p)
  *
  * A session leader claims an unowned slave as its sole controlling terminal.
  * A background reader takes SIGTTIN, or EIO when SIGTTIN is blocked or
- * ignored.
+ * ignored or its group is orphaned (`tty_job_check`).
  * The wait is `tty_read`'s, which honours VMIN and VTIME and ends at the
  * master's close (`tty_hangup`), even after another reader consumed the
  * discipline's single canonical EOF marker. A raw read returns at most
@@ -760,13 +760,9 @@ static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
     if (p->slave.sid == 0 && (int)current_proc->sid == (int)current_proc->tgid) {
         tty_make_sole_ctty(&p->slave, (int)current_proc->sid, (int)current_proc->pgid);
     }
-    if (tty_is_background(&p->slave, (int)current_proc->sid, (int)current_proc->pgid)) {
-        if ((current_proc->sig_blocked & KSIG_BIT(SIGTTIN)) ||
-            current_proc->sigacts[SIGTTIN].handler == KSIG_IGN) {
-            return -EIO;
-        }
-        tty_signal_group((int)current_proc->pgid, SIGTTIN);
-        return -EINTR;
+    n = tty_job_check(&p->slave, SIGTTIN);
+    if (n != 0) {
+        return n;
     }
     n = tty_read(&p->slave, kbuf, (int)want, e->ofd && (e->ofd->status_flags & OFD_NONBLOCK));
     if (n < 0) {
@@ -905,9 +901,9 @@ static int32_t pts_write_out(fd_entry_t *e, struct pts_waiter *w, const char __u
  * processes' lines apart: a writer that finds another write in progress
  * waits for it, or takes -EAGAIN when non-blocking. Once the master has
  * closed, or a vhangup(2) has hung up the description, the write fails with
- * EIO. With TOSTOP set, a background writer
- * takes SIGTTOU, or EIO when SIGTTOU is blocked or ignored, as on the
- * console.
+ * EIO. With TOSTOP set, a background writer takes SIGTTOU, or EIO when its
+ * group is orphaned, and writes when it blocks or ignores SIGTTOU
+ * (`tty_job_check`), as on the console and on Linux.
  */
 static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
@@ -930,14 +926,8 @@ static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     if (!p->master_open) {
         return -EIO;
     }
-    if ((p->slave.ldisc.tio.c_lflag & TOSTOP) &&
-        tty_is_background(&p->slave, (int)current_proc->sid, (int)current_proc->pgid)) {
-        if ((current_proc->sig_blocked & KSIG_BIT(SIGTTOU)) ||
-            current_proc->sigacts[SIGTTOU].handler == KSIG_IGN) {
-            return -EIO;
-        }
-        tty_signal_group((int)current_proc->pgid, SIGTTOU);
-        return -EINTR;
+    if ((p->slave.ldisc.tio.c_lflag & TOSTOP) && (rc = tty_job_check(&p->slave, SIGTTOU)) != 0) {
+        return rc;
     }
     while (p->writing) {
         if (!p->master_open || pts_waiter_hung(&w)) {

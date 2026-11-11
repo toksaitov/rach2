@@ -25,6 +25,7 @@
 #include "../lib/kirq.h"
 #include "../lib/kstring.h"
 #include "../lib/kerrno.h"
+#include "../lib/ksignal.h"
 
 /* Most serial bytes drained into the discipline per interrupt-side pump
  * call, so a flood cannot hold interrupts off for an unbounded stretch. The
@@ -99,6 +100,68 @@ static void tty_deliver_signal(struct tty *t, int signo)
 int tty_is_background(struct tty *t, int sid, int pgid)
 {
     return t->sid != 0 && t->sid == sid && t->fg_pgid != 0 && t->fg_pgid != pgid;
+}
+
+/** The live user process numbered `pid`, as a member's parent_pid names
+ * its parent, or NULL. */
+static process_t *tty_live_process(uint32_t pid)
+{
+    process_t *p;
+
+    for (p = proc_list; p; p = p->next) {
+        if (p->pid == pid && p->state != PROC_ZOMBIE && p->space_root != 0) {
+            return p;
+        }
+    }
+    return NULL;
+}
+
+/**
+ * Whether process group `pgid` is orphaned, as Linux's
+ * will_become_orphaned_pgrp: no live member has a parent in another group
+ * of the same session. A member whose parent is init, or has gone, does not
+ * count.
+ */
+static int tty_pgrp_orphaned(int pgid)
+{
+    process_t *p, *parent;
+
+    for (p = proc_list; p; p = p->next) {
+        if (p->state == PROC_ZOMBIE || p->space_root == 0 || (int)p->pgid != pgid ||
+            p->parent_pid <= 1) {
+            continue;
+        }
+        parent = tty_live_process(p->parent_pid);
+        if (parent && (int)parent->pgid != pgid && parent->sid == p->sid) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/**
+ * Linux's __tty_check_change: when another group is in the foreground of the
+ * terminal `t` that controls the caller's session, a SIGTTOU the caller
+ * blocks or ignores lets the change go ahead and a SIGTTIN so treated is
+ * EIO; an orphaned group, which no shell would continue, is EIO; otherwise
+ * the signal goes to the caller's group and the call is EINTR, which the
+ * dispatcher restarts once the group is continued.
+ */
+int tty_job_check(struct tty *t, int signo)
+{
+    process_t *self = current_proc;
+
+    if (!self || !tty_is_background(t, (int)self->sid, (int)self->pgid)) {
+        return 0;
+    }
+    if ((self->sig_blocked & KSIG_BIT(signo)) || self->sigacts[signo].handler == KSIG_IGN) {
+        return signo == SIGTTIN ? -EIO : 0;
+    }
+    if (tty_pgrp_orphaned((int)self->pgid)) {
+        return -EIO;
+    }
+    tty_signal_group((int)self->pgid, signo);
+    return -EINTR;
 }
 
 /**

@@ -887,9 +887,10 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
  * to restart (`tty_wait_output`), or returns the bytes written, or -EAGAIN
  * when none, on a nonblocking description, as Linux's n_tty_write. A
  * process of a background group of the console's session writes freely
- * unless TOSTOP is set; with it set, the call is -EIO when SIGTTOU is
- * blocked or ignored, and otherwise SIGTTOU goes to the process group and
- * the call is -EINTR.
+ * unless TOSTOP is set; with it set, SIGTTOU goes to the process group and
+ * the call is -EINTR, unless the process blocks or ignores SIGTTOU, when it
+ * writes, or its group is orphaned, when the call is -EIO
+ * (`tty_job_check`), as Linux's n_tty_write.
  */
 static int32_t console_write(fd_entry_t *entry, const char __user *buf, uint32_t count)
 {
@@ -904,14 +905,12 @@ static int32_t console_write(fd_entry_t *entry, const char __user *buf, uint32_t
     if (fd_tty_hung(entry)) {
         return -EIO;
     }
-    if ((console_tty.ldisc.tio.c_lflag & TOSTOP) &&
-        tty_is_background(&console_tty, (int)current_proc->sid, (int)current_proc->pgid)) {
-        if ((current_proc->sig_blocked & KSIG_BIT(SIGTTOU)) ||
-            current_proc->sigacts[SIGTTOU].handler == KSIG_IGN) {
-            return -EIO;
+    if (console_tty.ldisc.tio.c_lflag & TOSTOP) {
+        int rc = tty_job_check(&console_tty, SIGTTOU);
+
+        if (rc != 0) {
+            return rc;
         }
-        tty_signal_group((int)current_proc->pgid, SIGTTOU);
-        return -EINTR;
     }
     while (done < count) {
         uint32_t chunk = count - done;
@@ -6313,9 +6312,9 @@ static int32_t socket_read(fd_entry_t *entry, char __user *buf, uint32_t count)
  * left to a leader that may have exited, and once a session owns the
  * console its foreground group changes only by TIOCSPGRP. A member of a
  * background group is sent SIGTTIN and the read is -EINTR, to be tried
- * again in the foreground, or -EIO when SIGTTIN is blocked or ignored, as
- * POSIX has it. Both checks come before `stdin_waiting_proc` is set, so no
- * return leaves it set.
+ * again in the foreground, or -EIO when SIGTTIN is blocked or ignored or
+ * the group is orphaned (`tty_job_check`), as POSIX has it. Both checks
+ * come before `stdin_waiting_proc` is set, so no return leaves it set.
  */
 static int32_t console_read(fd_entry_t *entry, char __user *buf, uint32_t count)
 {
@@ -6338,13 +6337,9 @@ static int32_t console_read(fd_entry_t *entry, char __user *buf, uint32_t count)
     if (console_tty.sid == 0 && (int)current_proc->sid == (int)current_proc->pid) {
         tty_make_sole_ctty(&console_tty, (int)current_proc->sid, (int)current_proc->pgid);
     }
-    if (tty_is_background(&console_tty, (int)current_proc->sid, (int)current_proc->pgid)) {
-        if ((current_proc->sig_blocked & KSIG_BIT(SIGTTIN)) ||
-            current_proc->sigacts[SIGTTIN].handler == KSIG_IGN) {
-            return -EIO;
-        }
-        tty_signal_group((int)current_proc->pgid, SIGTTIN);
-        return -EINTR;
+    n = tty_job_check(&console_tty, SIGTTIN);
+    if (n != 0) {
+        return n;
     }
     stdin_waiting_proc = current_proc;
     n = tty_read(&console_tty, kbuf, (int)want,
