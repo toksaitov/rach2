@@ -2076,7 +2076,10 @@ for the vDSO's data page and library on x86-64, both private, the data
 page never writable and the library copied on a write
 .Pq Xr vdso 7 ,
 the program for the segments of its image, or the dynamic linker the
-program names for the segments of the linker's.
+program names for the segments of the linker's, as exec recorded their
+paths, and
+.Ql "/dev/zero (deleted)"
+for shared anonymous memory, as on Linux.
 The offset is the file's at the region's first page, and 0 for a region
 that maps no file.
 The device's major and minor numbers, in hexadecimal, and the inode, in
@@ -2090,12 +2093,14 @@ of the file it names.
 A region with no path ends at the space after the inode, as on Linux.
 A mapped file's path is the target of its
 .Pa fd
-link when the first reading of
+link, built at each reading of
 .Pa maps ,
 .Pa smaps
 or
 .Pa numa_maps
-names it, and stays the same after.
+from the reader's root, as Linux's
+.Fn d_path
+builds it.
 It and
 .Pa smaps
 need what

@@ -424,11 +424,12 @@ void i915_gem_restore_fences(struct drm_i915_private *i915)
 }
 
 /** Nothing: execbuffer, which fills the pool of shadow batches, is the exec
- * test's. */
-void i915_gem_pool_trim(struct drm_i915_private *i915, int how)
+ * test's. No frame is freed. */
+uint32_t i915_gem_pool_trim(struct drm_i915_private *i915, int how)
 {
     (void)i915;
     (void)how;
+    return 0;
 }
 
 void i915_vma_revoke_mmap(struct i915_vma *vma)

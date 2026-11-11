@@ -88,11 +88,17 @@ uint32_t i915_gem_shrink(struct drm_i915_private *i915, uint32_t want)
 }
 
 /** The shrinker's `shrink`, which reclaim calls under the big kernel lock:
- * purging never sleeps, so `may_sleep` changes nothing. */
+ * the pool's idle shadows dropped first, as Linux's pool_retire makes an
+ * idle shadow purgeable for its shrinker (gt/intel_gt_buffer_pool.c:
+ * 107-112), then the purgeable objects purged. Neither sleeps, so
+ * `may_sleep` changes nothing. */
 static uint32_t i915_gem_shrinker_scan(struct mem_shrinker *s, uint32_t want, int may_sleep)
 {
+    struct drm_i915_private *i915 = ((struct i915_shrinker *)s)->i915;
+    uint32_t got = i915_gem_pool_trim(i915, I915_POOL_IDLE);
+
     (void)may_sleep;
-    return i915_gem_shrink(((struct i915_shrinker *)s)->i915, want);
+    return got >= want ? got : got + i915_gem_shrink(i915, want - got);
 }
 
 void i915_gem_shrinker_register(struct drm_i915_private *i915)
