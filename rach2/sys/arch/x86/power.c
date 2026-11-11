@@ -458,7 +458,9 @@ static void reboot_linux(void)
     for (;;) {
         switch (type) {
         case REBOOT_ACPI:
-            reboot_say(&tried, type, "acpi reset register");
+            reboot_say(&tried, type,
+                       acpi_get()->reset_supported ? "acpi reset register"
+                                                   : "acpi: the fadt has no reset register");
             reboot_acpi();
             type = REBOOT_KBD;
             break;
