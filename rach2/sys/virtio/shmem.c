@@ -112,11 +112,13 @@ struct vshm {
     uintptr_t window;       /* where the window was, while `gone` */
     struct spinlock heap_lock;
     /* The driver's interrupts, from virtio_ready to virtio_teardown: while
-     * `irq_on`, the queue's doorbell reaps the queues in its hook, as an
-     * interrupt does on PCI; `irq_lock` lets the release wait out a hook
-     * that runs. */
+     * `irq_on`, a ring of the queue's doorbell, which sets `irq_due`, has
+     * the interrupt thread reap the queues, as an interrupt does on PCI;
+     * `irq_lock` is over `irq_on` and the reap, so that the release waits
+     * out a reap that runs. */
     struct spinlock irq_lock;
     int irq_on;
+    volatile int irq_due;
     uint32_t binds, failures;
     uint64_t rung[2], woken[2], polls, refused;
     uint64_t maps, map_pages, map_live, revoked; /* as struct vgs_info has them */
@@ -143,9 +145,12 @@ static struct vshm *vshm_kept;        /* detached records whose heap pages objec
 static volatile uint32_t vshm_rang;   /* a bit for each vector rung since the thread looked */
 static wait_queue_t vshm_wq;          /* the thread sleeps here */
 static wait_queue_t vshm_detached_wq; /* a detacher waits here */
+static volatile int vshm_irq_rang;    /* the queue's doorbell rang since the
+                                         interrupt thread looked */
+static wait_queue_t vshm_irq_wq;      /* the interrupt thread sleeps here */
 #ifndef RACH2_HOSTTEST
 static int vshm_ready; /* the queues are made */
-static process_t *vshm_thread;
+static process_t *vshm_thread, *vshm_irq_thread;
 #endif
 
 /* What a sleep of the thread waits for: a doorbell, a detach or `due`. */
@@ -667,13 +672,14 @@ static int vs_irq_setup(struct virtio_dev *d, uint16_t nqueues)
 }
 
 /**
- * Start the driver's interrupts: from now on the queue's doorbell reaps the
- * queues in its hook (vshm_bell_signal), as virtio-pci's interrupt does and
- * as Linux's transports call vring_interrupt, so that an answer reaches its
- * waiter while the thread is busy. The thread binds the driver, and the
- * bind may wait on an answer: the console's first commit of the new card
- * waits on its buffer's fences, with the thread inside it. Without
- * doorbells the thread polls, and the driver's own waits poll the queue.
+ * Start the driver's interrupts: from now on a ring of the queue's doorbell
+ * has the interrupt thread reap the queues (vshm_irq_run), as virtio-pci's
+ * interrupt does and as Linux's transports call vring_interrupt, so that an
+ * answer reaches its waiter while the transport's thread is busy. That
+ * thread binds the driver, and the bind may wait on an answer: the
+ * console's first commit of the new card waits on its buffer's fences,
+ * with the thread inside it. Without doorbells the thread polls, and the
+ * driver's own waits poll the queue.
  */
 static void vs_irq_start(struct virtio_dev *d)
 {
@@ -685,7 +691,7 @@ static void vs_irq_start(struct virtio_dev *d)
 }
 
 /** Stop the driver's interrupts before its queues are freed, waiting for a
- * hook that reaps them now, as Linux's free_irq does. */
+ * reap that runs now, as Linux's free_irq does. */
 static void vs_irq_release(struct virtio_dev *d)
 {
     struct vshm *vs = to_vs(d);
@@ -1042,27 +1048,48 @@ static const struct virtio_ops vshm_ops = {
  * The doorbells the device rings
  */
 
-/** The device rang vector `b->vector`: note it, reap the queues for the
- * queue's vector while the driver's interrupts are on (vs_irq_start), and
- * wake the thread, taking the count as a read would. With the eventfd's
- * lock held and interrupts off, as an interrupt handler. */
+/**
+ * The device rang vector `b->vector`: note it, wake the interrupt thread
+ * for the queue's vector, and wake the transport's thread, taking the
+ * count as a read would. With the eventfd's lock held and interrupts off,
+ * so it reaps nothing itself: a reap's completions kick the device's
+ * eventfd and may signal a program's, and Linux refuses an eventfd signal
+ * inside another's (fs/eventfd.c:59-69 in 6.12.115), as vhost queues its
+ * work from the wakeup instead (drivers/vhost/vhost.c:184).
+ */
 static int vshm_bell_signal(struct eventfd_hook *h)
 {
     struct vshm_bell *b = (struct vshm_bell *)h;
     struct vshm *vs = b->vs;
-    uint32_t flags;
 
     vs->woken[b->vector]++;
     if (b->vector == VGS_VEC_QUEUE) {
-        flags = spin_lock_irqsave(&vs->irq_lock);
-        if (vs->irq_on) {
-            virtio_interrupt_queues(&vs->vdev);
-        }
-        spin_unlock_irqrestore(&vs->irq_lock, flags);
+        vs->irq_due = 1;
+        vshm_irq_rang = 1;
+        wq_wake_all(&vshm_irq_wq);
     }
     vshm_rang |= 1u << b->vector;
     wq_wake_all(&vshm_wq);
     return 1;
+}
+
+/**
+ * Reap the queues of `vs` when its queue's doorbell rang while the
+ * driver's interrupts are on, as an interrupt handler would, with
+ * `irq_lock` held and interrupts off. The interrupt thread calls it, in
+ * process context under the big lock and holding no eventfd's lock.
+ */
+static void vshm_irq_run(struct vshm *vs)
+{
+    uint32_t flags = spin_lock_irqsave(&vs->irq_lock);
+
+    if (vs->irq_due) {
+        vs->irq_due = 0;
+        if (vs->irq_on) {
+            virtio_interrupt_queues(&vs->vdev);
+        }
+    }
+    spin_unlock_irqrestore(&vs->irq_lock, flags);
 }
 
 /** The doorbell's last descriptor closed: nothing more rings it, so the
@@ -1343,16 +1370,42 @@ static void vshm_main(void)
     }
 }
 
-/** Make the thread, once: 0, or -ENOMEM. */
-static int32_t vshm_thread_start(void)
+/** Whether the queue's doorbell rang, for the interrupt thread's wait. */
+static int vshm_irq_woken(void *arg)
+{
+    (void)arg;
+    return vshm_irq_rang != 0;
+}
+
+/**
+ * The transport's interrupt thread, `vgpu-shm-irq`: it reaps the attached
+ * region's queues each time their doorbell rings (vshm_irq_run), as
+ * Linux's vhost worker runs the work a wakeup queued, so that the reap
+ * runs outside the eventfd's lock and while the transport's thread binds.
+ */
+static void vshm_irq_main(void)
+{
+    uint32_t flags;
+
+    arch_irq_enable();
+    for (;;) {
+        (void)wq_wait_event_idle(&vshm_irq_wq, vshm_irq_woken, NULL);
+        flags = kirq_save();
+        vshm_irq_rang = 0;
+        kirq_restore(flags);
+        if (vshm_cur) {
+            vshm_irq_run(vshm_cur);
+        }
+    }
+}
+
+/** A kernel thread named `comm` that runs `entry`, ready to run, or NULL. */
+static process_t *vshm_kthread(const char *comm, void (*entry)(void))
 {
     process_t *p;
     uintptr_t base;
     uint32_t flags;
 
-    if (vshm_thread) {
-        return 0;
-    }
     flags = kirq_save();
     base = kstack_alloc();
     p = base ? alloc_process() : NULL;
@@ -1361,18 +1414,30 @@ static int32_t vshm_thread_start(void)
             kstack_free(base + KERNEL_STACK_SIZE);
         }
         kirq_restore(flags);
-        return -ENOMEM;
+        return NULL;
     }
     p->kernel_stack = base + KERNEL_STACK_SIZE;
     p->space_root = 0;
     p->page_dir = NULL;
     p->parent_pid = 0;
-    proc_set_comm(p, "vgpu-shm");
-    setup_process_stack(p, vshm_main);
-    vshm_thread = p;
+    proc_set_comm(p, comm);
+    setup_process_stack(p, entry);
     sched_make_ready(p);
     kirq_restore(flags);
-    return 0;
+    return p;
+}
+
+/** Make the transport's thread and its interrupt thread, once each: 0, or
+ * -ENOMEM. */
+static int32_t vshm_thread_start(void)
+{
+    if (!vshm_thread) {
+        vshm_thread = vshm_kthread("vgpu-shm", vshm_main);
+    }
+    if (vshm_thread && !vshm_irq_thread) {
+        vshm_irq_thread = vshm_kthread("vgpu-shm-irq", vshm_irq_main);
+    }
+    return vshm_thread && vshm_irq_thread ? 0 : -ENOMEM;
 }
 #endif
 
@@ -1434,6 +1499,7 @@ static struct vshm *vshm_new(uint32_t peer)
         return NULL;
     }
     spin_lock_init(&vs->heap_lock, "vshm_heap");
+    spin_lock_init(&vs->irq_lock, "vshm_irq");
     vs->vdev.ops = &vshm_ops;
     vs->vdev.transport = vs;
     vs->vdev.id = VIRTIO_ID_GPU;
@@ -1498,10 +1564,39 @@ static struct shmem *vshm_region_of(int32_t fd, int32_t *err)
 }
 
 /**
+ * Take the caller's four doorbells of `a` into `vs`, unhooked: 0, -EBADF
+ * or -EINVAL for a descriptor that is not an eventfd, or -EINVAL for an
+ * eventfd the device would both ring and be rung by, since a kick of the
+ * device must never ring the driver's own doorbell. What was taken stays
+ * for the caller's vshm_release.
+ */
+static int32_t vshm_bells_get(struct vshm *vs, const struct vgs_attach *a)
+{
+    uint32_t i;
+    int32_t rc = 0;
+
+    for (i = 0; rc == 0 && i < 2; i++) {
+        vs->in[i].vs = vs;
+        vs->in[i].vector = i;
+        vs->in[i].hook.signal = vshm_bell_signal;
+        vs->in[i].hook.hangup = vshm_bell_hangup;
+        vs->in[i].ev = eventfd_get(a->bell_in[i], &rc);
+        vs->out[i] = rc == 0 ? eventfd_get(a->bell_out[i], &rc) : NULL;
+    }
+    for (i = 0; rc == 0 && i < 2; i++) {
+        if (vs->out[i] == vs->in[0].ev || vs->out[i] == vs->in[1].ev) {
+            rc = -EINVAL;
+        }
+    }
+    return rc;
+}
+
+/**
  * VGS_IOC_ATTACH: take the caller's region and doorbells and start the
  * thread's bind over them. 0; -EBUSY while a region is attached; -EBADF,
- * -EINVAL for a region or an eventfd the transport does not take or a
- * nonzero flag, -ENOMEM.
+ * -EINVAL for a region or an eventfd the transport does not take, an
+ * eventfd given both as a doorbell the device rings and one it is rung by,
+ * or a nonzero flag, -ENOMEM.
  */
 static int32_t vshm_attach(fd_entry_t *e, const struct vgs_attach *a)
 {
@@ -1554,13 +1649,8 @@ static int32_t vshm_attach(fd_entry_t *e, const struct vgs_attach *a)
         return -ENOMEM;
     }
     rc = vshm_take_region(vs, frames, npages, (volatile uint8_t *)va);
-    for (i = 0; rc == 0 && given == 4 && i < 2; i++) {
-        vs->in[i].vs = vs;
-        vs->in[i].vector = i;
-        vs->in[i].hook.signal = vshm_bell_signal;
-        vs->in[i].hook.hangup = vshm_bell_hangup;
-        vs->in[i].ev = eventfd_get(a->bell_in[i], &rc);
-        vs->out[i] = rc == 0 ? eventfd_get(a->bell_out[i], &rc) : NULL;
+    if (rc == 0 && given == 4) {
+        rc = vshm_bells_get(vs, a);
     }
     if (rc != 0) {
         vshm_release(vs);

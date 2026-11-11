@@ -36,7 +36,8 @@ whose size is a power of two from 32 KiB to 64 MiB;
 are two eventfds the device signals for the driver, the queues' vector 0
 and the control vector 1, and
 .Ar bell_out
-two the driver signals for the device;
+two the driver signals for the device, none of them one of
+.Ar bell_in ;
 .Ar peer
 is the driver's ivshmem peer id, below 65536.
 With every eventfd -1 the driver polls the region instead.
@@ -108,7 +109,8 @@ The region's descriptor does not name a tmpfs file, or an eventfd's
 descriptor is not an eventfd.
 .It Bq Er EINVAL
 The region's size or seals are wrong, some but not all eventfds are given,
-the peer is too large, a flag or reserved field is nonzero, or the
+one eventfd is given both as a doorbell the device rings and as one it is
+rung by, the peer is too large, a flag or reserved field is nonzero, or the
 detach's argument is unknown.
 .It Bq Er ENXIO
 The descriptor did not attach the region, or none is attached.
