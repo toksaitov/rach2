@@ -191,7 +191,7 @@ int rtc_decode(const rtc_snapshot_t *raw, int64_t *seconds, rtc_time_t *out)
 
 #if !defined(RACH2_HOSTTEST) || defined(RTC_HOST_TEST)
 
-#include "../../lib/kirq.h"
+#include "../../lib/spinlock.h"
 #include "pic.h"
 #include "pit.h"
 
@@ -234,6 +234,23 @@ extern volatile uint32_t kernel_second_ticks;
 /* How many pairs of samples a read takes before it gives up on a clock
  * whose samples keep disagreeing. */
 #define RTC_SAMPLE_TRIES 4
+
+/*
+ * Serialises every CMOS access across processors, as Linux's rtc_lock. Each
+ * access is a write of the register's number to the index port and then an
+ * access to the data port, and a second processor's index write between the
+ * two sends the access to its register: a read of status C there would clear
+ * the alarm's flag, a read of the time would give a wrong field. A sequence
+ * that must see one state of the clock, a pair of samples or a read of status
+ * B with the writes it decides, holds the lock throughout, with interrupts
+ * off, since the alarm's interrupt reads status C under it. The lock is taken
+ * inside devfs.c's `rtc_alarm_lock`, never around it. `rtc_init` and the
+ * reboot's write of the shutdown status (power.c) go without it: the first
+ * runs before the other processors start and before the alarm's interrupt is
+ * attached, the second after the other processors have stopped, where a lock
+ * one of them held would never come free.
+ */
+static struct spinlock rtc_cmos_lock = SPINLOCK_INIT;
 
 /** Read the CMOS register `reg`. Bit 7 of the address port is left clear,
  *  which leaves the NMI enabled. */
@@ -361,9 +378,9 @@ int rtc_read_clock(rtc_time_t *out)
     int sampled, try;
 
     for (try = 0; try < RTC_SAMPLE_TRIES; try++) {
-        flags = kirq_save();
+        flags = spin_lock_irqsave(&rtc_cmos_lock);
         sampled = rtc_sample(&first) == 0 && rtc_sample(&second) == 0;
-        kirq_restore(flags);
+        spin_unlock_irqrestore(&rtc_cmos_lock, flags);
         if (!sampled) {
             return -1;
         }
@@ -408,7 +425,7 @@ int rtc_write_clock(const rtc_time_t *t)
         return -1;
     }
     rtc_week_and_year_day(t, &weekday, &yearday);
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&rtc_cmos_lock);
     b = rtc_register(RTC_REG_STATUS_B);
     binary = (b & RTC_STATUS_B_BINARY) != 0;
     hour = rtc_hour_register(t->hour, b);
@@ -421,7 +438,7 @@ int rtc_write_clock(const rtc_time_t *t)
     rtc_write_register(RTC_REG_MONTH, rtc_to_register(t->month, binary));
     rtc_write_register(RTC_REG_YEAR, rtc_to_register(t->year - RTC_CENTURY_BASE, binary));
     rtc_write_register(RTC_REG_STATUS_B, (uint8_t)(b & ~RTC_STATUS_B_SET));
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&rtc_cmos_lock, flags);
     return 0;
 }
 
@@ -460,7 +477,7 @@ static uint8_t rtc_hour_register(int32_t hour, uint8_t b)
 
 void rtc_alarm_write(const rtc_time_t *t)
 {
-    uint32_t flags = kirq_save();
+    uint32_t flags = spin_lock_irqsave(&rtc_cmos_lock);
     uint8_t b = rtc_register(RTC_REG_STATUS_B);
     int binary = (b & RTC_STATUS_B_BINARY) != 0;
 
@@ -468,35 +485,39 @@ void rtc_alarm_write(const rtc_time_t *t)
     rtc_write_register(RTC_REG_MINUTE_ALARM, rtc_to_register(t->minute, binary));
     rtc_write_register(RTC_REG_HOUR_ALARM, rtc_hour_register(t->hour, b));
     (void)rtc_register(RTC_REG_STATUS_C);
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&rtc_cmos_lock, flags);
 }
 
 int rtc_alarm_read(rtc_time_t *t)
 {
-    uint32_t flags = kirq_save();
+    uint32_t flags = spin_lock_irqsave(&rtc_cmos_lock);
     uint8_t b = rtc_register(RTC_REG_STATUS_B);
 
     t->second = rtc_from_register(rtc_register(RTC_REG_SECOND_ALARM), b, 0);
     t->minute = rtc_from_register(rtc_register(RTC_REG_MINUTE_ALARM), b, 0);
     t->hour = rtc_from_register(rtc_register(RTC_REG_HOUR_ALARM), b, 1);
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&rtc_cmos_lock, flags);
     return (b & RTC_STATUS_B_AIE) != 0;
 }
 
 void rtc_alarm_interrupts(int on)
 {
-    uint32_t flags = kirq_save();
+    uint32_t flags = spin_lock_irqsave(&rtc_cmos_lock);
     uint8_t b = rtc_register(RTC_REG_STATUS_B);
 
     b = (uint8_t)(on ? b | RTC_STATUS_B_AIE : b & ~RTC_STATUS_B_AIE);
     rtc_write_register(RTC_REG_STATUS_B, b);
     (void)rtc_register(RTC_REG_STATUS_C);
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&rtc_cmos_lock, flags);
 }
 
 int rtc_alarm_ack(void)
 {
-    return (rtc_register(RTC_REG_STATUS_C) & RTC_STATUS_C_AF) != 0;
+    uint32_t flags = spin_lock_irqsave(&rtc_cmos_lock);
+    uint8_t c = rtc_register(RTC_REG_STATUS_C);
+
+    spin_unlock_irqrestore(&rtc_cmos_lock, flags);
+    return (c & RTC_STATUS_C_AF) != 0;
 }
 
 /* The CMOS clock's interrupt, IRQ 8, on the slave 8259, which reaches the
