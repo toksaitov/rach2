@@ -81,3 +81,66 @@ ap_mailbox:
 
 .globl ap_trampoline_end
 ap_trampoline_end:
+
+# The BIOS restart of reboot=b (x86/smpboot.c, `smpboot_bios_restart`), as
+# Linux's machine_real_restart_asm (arch/x86/realmode/rm/reboot.S).
+# smpboot.c copies everything from bios_restart to bios_restart_end to
+# TRAMPOLINE_PHYS, where the low window is mapped at its physical address,
+# and jumps there with interrupts off. It arrives in protected
+# mode through the kernel's page directory.
+# The code loads real mode's IDT and a GDT whose 16-bit segments have the
+# bases real mode gives their selectors, enters 16-bit protected mode,
+# clears CR3 and every bit of CR0 but ET, after CD and NW have turned the
+# cache off and WBINVD has written it back, which leaves paging and
+# protected mode, and jumps to the BIOS's reset entry, F000:FFF0, as a
+# processor reset would.
+
+.code32
+.globl bios_restart
+bios_restart:
+br_protected:
+    lidtl TRAMP + br_idt - bios_restart
+    lgdtl TRAMP + br_gdt_ptr - bios_restart
+    movl $0x20, %ecx
+    movl %ecx, %ds
+    movl %ecx, %es
+    movl %ecx, %fs
+    movl %ecx, %gs
+    movl %ecx, %ss
+    ljmpl $0x18, $(br_16 - bios_restart)
+
+.code16
+br_16:
+    xorl %ecx, %ecx
+    movl %cr0, %edx
+    andl $0x00000011, %edx
+    orl $0x60000000, %edx
+    movl %edx, %cr0
+    movl %ecx, %cr3
+    movl %cr0, %edx
+    testl $0x60000000, %edx
+    jz br_cached
+    wbinvd
+br_cached:
+    andb $0x10, %dl
+    movl %edx, %cr0
+    ljmpw $(TRAMP >> 4), $(br_real - bios_restart)
+br_real:
+    ljmpw $0xF000, $0xFFF0
+
+.balign 8
+br_gdt:
+    .long 0, 0
+    .long 0x0000FFFF, 0x00CF9A00    # 0x08: flat 32-bit code, ring 0
+    .long 0x0000FFFF, 0x00CF9200    # 0x10: flat data, ring 0
+    .long 0x8000FFFF, 0x00009B00    # 0x18: 16-bit code at TRAMP, 64 KiB
+    .long 0x0200FFFF, 0x00009300    # 0x20: 16-bit data at 0x200, segment 0x20
+br_gdt_ptr:
+    .word br_gdt_ptr - br_gdt - 1
+    .long TRAMP + br_gdt - bios_restart, 0
+br_idt:
+    .word 0xFFFF                    # real mode's IDT: limit 0xFFFF at 0
+    .long 0
+
+.globl bios_restart_end
+bios_restart_end:

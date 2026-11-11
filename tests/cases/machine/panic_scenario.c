@@ -2,7 +2,9 @@
  * panic_scenario.c: the scenario of machine.panic, in which a kernel stack
  * run out at boot panics the kernel, which keeps its record for panic=N
  * seconds and then resets the machine by the methods reboot= names, in
- * Linux's order. QEMU's SHUTDOWN event must say a reset.
+ * Linux's order: the FADT's register, the keyboard controller, port 0xCF9, a
+ * triple fault, the BIOS's reset entry, and EFI's ResetSystem under OVMF or
+ * its absence without it. QEMU's SHUTDOWN event must say a reset.
  */
 #include <stdint.h>
 #include <stdio.h>
@@ -28,6 +30,9 @@ static const struct panic_case cases[] = {
     {"triple", 5, {"triple fault", NULL}},
     {"default", 5, {"acpi: the fadt has no reset register", "keyboard controller", NULL}},
     {"immediate", -1, {"acpi: the fadt has no reset register", "keyboard controller", NULL}},
+    {"bios", 5, {"bios restart", NULL}},
+    {"efi", 5, {"efi: not booted by uefi", "bios restart", NULL}},
+    {"uefi", 5, {"efi resetsystem", NULL}},
 };
 
 /** Give the last part of the attempt's case identity. */

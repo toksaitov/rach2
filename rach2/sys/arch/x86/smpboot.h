@@ -42,11 +42,32 @@ extern const char ap_trampoline[];
 extern const char ap_trampoline_end[];
 extern const char ap_mailbox[];
 
+/* The BIOS restart (the architecture's trampoline.s): its first byte and
+ * one past its last. */
+extern const char bios_restart[];
+extern const char bios_restart_end[];
+
 /** Read the boot's memory map for whether the trampoline's pages lie in
  * memory the firmware gives as available and in nothing it gives as
  * anything else; without them `platform_cpu_count` keeps the machine on one
  * processor. Called from `platform_firmware_init`. */
 void smpboot_init(const struct boot_info *boot);
+
+/** Whether `smpboot_bios_restart` has the trampoline's page below 1 MiB,
+ * which it needs: 1 when the firmware's map gives the page as available. */
+int smpboot_bios_restart_ready(void);
+
+/**
+ * Restart the machine through the BIOS's reset entry, as Linux's
+ * `machine_real_restart(MRR_BIOS)` does (arch/x86/kernel/reboot.c:97-131):
+ * copy the architecture's `bios_restart` to TRAMPOLINE_PHYS, load the
+ * trampoline's page tables, which map that page at its physical address,
+ * and jump there, where the code leaves paging and protected mode and
+ * jumps to F000:FFF0. Interrupts must be off and the other processors
+ * stopped, and the caller writes CMOS's shutdown status first. Returns
+ * only when the page is not free (`smpboot_bios_restart_ready`).
+ */
+void smpboot_bios_restart(void);
 
 /** The local APIC's counts a tick, or 0 when the APIC does not tick
  * (platform.c). */

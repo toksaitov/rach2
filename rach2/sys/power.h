@@ -52,11 +52,12 @@ void power_stop(int how);
  * The methods run in Linux's order, from the one `reboot=` names, `a` when
  * it names none: the FADT's reset register (a), the keyboard controller's
  * pulse ten times (k), the register and the pulse again when the first was
- * the register, the firmware's EFI and BIOS restarts (e, b), which this
- * kernel does not call and passes over, port 0xCF9 (p), and a triple fault
- * (t), after which the pulse comes round again, for ever. `reboot=w` or
- * `reboot=panic_warm` asks for a warm reset, which the BIOS flag at 0x472
- * and the value written to 0xCF9 carry, and any other mode a cold one.
+ * the register, EFI's ResetSystem (e), where the kernel booted by UEFI
+ * firmware of its own word size, the BIOS's reset entry in real mode (b),
+ * port 0xCF9 (p), and a triple fault (t), after which the pulse comes round
+ * again, for ever. `reboot=w` or `reboot=panic_warm` asks for a warm reset,
+ * which the BIOS flag at 0x472, ResetSystem's reset type and the value
+ * written to 0xCF9 carry, and any other mode a cold one.
  * Each method logs `reboot: emergency: METHOD` on its first try.
  */
 void power_emergency_restart(void) K_NORETURN;
