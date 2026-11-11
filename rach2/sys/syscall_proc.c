@@ -453,15 +453,16 @@ static void __attribute__((noreturn)) exit_schedule_away(void)
 /**
  * Begin the end of the process `tg` with the wait status `code`, with
  * interrupts off: mark it ending, clear a stop in effect and a continue its
- * parent has not collected, and send SIGKILL to every thread but `spare`,
- * the caller's own for exit_group and a default action, as Linux 6.12.115's
+ * parent has not collected, and send SIGKILL to every thread, the current
+ * one too only when `self_too` is set, since exit_group and a default
+ * action end the current thread themselves, as Linux 6.12.115's
  * `complete_signal` and `do_group_exit` replace the group's flags with
  * SIGNAL_GROUP_EXIT and clear its stop (kernel/signal.c:1044-1056,
  * 1372-1392; kernel/exit.c:1070-1098). No stop or continue of the process
  * is reported after it, and `sig_prepare` drops every later signal but a
  * SIGKILL during a core dump.
  */
-static void sig_group_end(struct tgroup *tg, int32_t code, const process_t *spare)
+static void sig_group_end(struct tgroup *tg, int32_t code, int self_too)
 {
     struct k_siginfo info;
     process_t *t;
@@ -475,7 +476,7 @@ static void sig_group_end(struct tgroup *tg, int32_t code, const process_t *spar
     k_memset(&info, 0, sizeof(info));
     info.code = SI_KERNEL;
     for (t = proc_list; t; t = t->next) {
-        if (t->tg == tg && t != spare) {
+        if (t->tg == tg && (self_too || t != current_proc)) {
             sig_post_own(t, SIGKILL, &info);
         }
     }
@@ -487,7 +488,7 @@ void proc_group_exit(int32_t code)
     uint32_t flags = kirq_save();
 
     if (!tg->exiting && !tg->exec_task) {
-        sig_group_end(tg, code, current_proc);
+        sig_group_end(tg, code, 0);
     }
     kirq_restore(flags);
 }
@@ -4552,7 +4553,7 @@ static void sig_complete(process_t *target, process_t *taker, int signo, int who
         sig_wake(taker);
         return;
     }
-    sig_group_end(target->tg, signo, NULL);
+    sig_group_end(target->tg, signo, 1);
 }
 
 /**
