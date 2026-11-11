@@ -145,9 +145,16 @@ for the next receive;
 .Fn recvmsg
 checks its buffers as it copies into them, and fails with the datagram
 taken, as described below.
-On a stream, each receive buffer of the connection is checked before it is
-copied, and one whose destination cannot be written stays queued, as
-described below.
+On a stream, the buffer is checked at the start only to end in user space,
+as Linux's import_ubuf checks it, so the wait,
+.Er EAGAIN
+and the end of input come before any page of it is touched; then each
+receive buffer of the connection is checked before it is copied, and one
+whose destination cannot be written stays queued, as described below.
+A
+.Fn recv
+of 8192 bytes whose second page cannot be written thus returns the bytes
+queued that the first page holds, as on Linux.
 .Pp
 An IPv4 socket returns a 16-byte
 .Vt sockaddr_in
@@ -223,8 +230,12 @@ nothing is taken.
 The bytes are taken one receive buffer of the connection at a time, as
 Linux's tcp_recvmsg takes the buffers of its receive queue: each segment
 that arrived in order is one, and so are the bytes a filled hole releases
-at once; past 32 queued, a new one joins the last, as Linux joins
-segments.
+at once; past 32 queued, a new one joins the last.
+Linux joins an in-order segment to the last buffer of its queue whenever
+its tcp_try_coalesce can, which depends on how the two buffers are laid
+out and shared, so it may keep fewer: where Rach2 returns the buffers
+before a destination that cannot be written, Linux may fail the read with
+.Er EFAULT .
 When the destination of a buffer, as much of it as the vector takes,
 cannot be written, or lies outside user space, the buffer stays queued
 whole and the call returns the bytes of the buffers before it, or fails
