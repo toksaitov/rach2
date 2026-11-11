@@ -19,6 +19,8 @@
  * in and pins their frames, charged to VmPin; a pin past RLIMIT_MEMLOCK,
  * of an empty, wrapping or unmapped range, or a write pin of a read-only
  * one, is refused and pins nothing, and a privileged process has no limit;
+ * a read pin of a region without PROT_READ takes only a page there already,
+ * and none with PIN_SLOW;
  * a pin of an object's frames refuses a frame the allocator does not count;
  * the frame KVM shares with another program (`paging_user_ram_frame`) is
  * given for a writable private page and refused for a memfd_secret page and
@@ -695,6 +697,28 @@ uint32_t fpu_pkru(void)
     return 0;
 }
 
+/** A read pin of a region mapped without PROT_READ takes a page that is
+ * there already, as Linux's fast path does, and is refused one that is not
+ * and, with PIN_SLOW, one that is, as its slow path refuses the region. */
+static void noread_rows(void)
+{
+    uintptr_t addr = VA + 20 * P;
+    struct pin *p;
+
+    memlock(0xFFFFFFFFu);
+    check(vm_insert(&mm_a.vm, addr, addr + 2 * P, RW | VM_PROT_NOREAD, VM_ANON) == 0,
+          "a region with write and without PROT_READ is made");
+    check(pin_user(&mm_a, addr + P, P, 0, &holder, &p) == -EFAULT && pte_of(&dir_a, addr + P) == 0,
+          "a read pin of its page not yet there is refused and brings nothing in");
+    check(pin_user(&mm_a, addr, P, PIN_WRITE, &holder, &p) == 0, "a write pin brings its page in");
+    unpin(p);
+    check(pin_user(&mm_a, addr, P, PIN_SLOW, &holder, &p) == -EFAULT,
+          "with PIN_SLOW a read pin of the page there is refused");
+    check(pin_user(&mm_a, addr, P, 0, &holder, &p) == 0 && pin_phys(p, 0) != 0,
+          "without PIN_SLOW a read pin of the page there is made");
+    unpin(p);
+}
+
 /** Run every row; 0 when each passes, 1 otherwise. */
 int main(void)
 {
@@ -709,5 +733,6 @@ int main(void)
     stack_rows();
     mmio_rows();
     mmio_unaligned_rows();
+    noread_rows();
     return model_end();
 }
