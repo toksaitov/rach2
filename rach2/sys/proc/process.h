@@ -544,10 +544,13 @@ struct process {
      * first set; and whether it holds capabilities in its user namespace
      * whatever its ids there, as its creator and a process that joined it
      * do until an exec or a change of its effective uid. A fork passes them
-     * on (`ns_fork`). */
+     * on (`ns_fork`). Below the first PID namespace, `pid_keep` is the
+     * memory, taken at the fork, that keeps its numbers after it is reaped
+     * while a group or a session has its ID (ns.c). */
     struct userns *userns;
     struct pidns *pidns;
     uint32_t nspid[NS_LEVELS];
+    struct pid_held *pid_keep;
     struct nsset *nsset;
     uint32_t ns_granted;
 
