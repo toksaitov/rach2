@@ -1792,12 +1792,11 @@ static void shutdown_rows(int cs, uint8_t *sa)
     if (pid < 0)
         fail("fork for the send that raises SIGPIPE");
     if (pid == 0) {
-        struct {
-            long handler, flags, restorer;
-            unsigned long long mask;
-        } dfl = {0, 0, 0, 0}; /* SIG_DFL, whatever the probe inherited */
+        /* A zeroed sigaction, handler, flags, restorer and an 8-byte mask:
+         * SIG_DFL, whatever the probe inherited. */
+        static const unsigned long dfl[5] = {0, 0, 0, 0, 0};
 
-        syscall4(SYS_RT_SIGACTION, SIGPIPE, (long)&dfl, 0, 8);
+        syscall4(SYS_RT_SIGACTION, SIGPIPE, (long)dfl, 0, 8);
         args[3] = 0;
         socketcall(SC_SENDTO, args);
         sys_exit(0);

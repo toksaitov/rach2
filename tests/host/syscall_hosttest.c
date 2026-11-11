@@ -113,6 +113,14 @@ struct netdev *socket_iface6(const struct socket *s, int ifindex)
     return ifindex > 0 ? netdev_at(ifindex - 1) : NULL;
 }
 
+/** No row sends on a TCP stream that fails: no signal is posted. */
+void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
+{
+    (void)t;
+    (void)signo;
+    (void)info;
+}
+
 /** No row sets an option of a netlink socket, which this refuses. */
 int32_t netlink_setsockopt(struct socket *s, int optname, int val, int optlen)
 {
