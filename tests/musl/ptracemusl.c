@@ -135,7 +135,8 @@
 /*
  * The fields of each architecture's user_regs_struct the rows read: the
  * call's number, its result, the instruction pointer and the code segment,
- * whose user selector is 0x1b on i386 and 0x33 on x86-64. The floating-point
+ * which must be the selector the tracer runs with (`running_cs`). The
+ * floating-point
  * state is the fxsave image, which i386 reads with GETFPXREGS and x86-64 with
  * GETFPREGS. LAST_USER_WORD is the last four bytes of user space: below the
  * kernel at 3 GiB on i386, and below the last page of the lower half on
@@ -148,7 +149,6 @@
 #define R_RET(r)       ((r).rax)
 #define R_IP(r)        ((r).rip)
 #define R_CS(r)        ((r).cs)
-#define USER_CS        0x33
 #define PTRACE_GETFX   PTRACE_GETFPREGS
 #define LAST_USER_WORD 0x00007FFFFFFFEFFCUL
 typedef struct user_fpregs_struct fxregs_t;
@@ -159,11 +159,23 @@ typedef struct user_fpregs_struct fxregs_t;
 #define R_RET(r)       ((r).eax)
 #define R_IP(r)        ((r).eip)
 #define R_CS(r)        ((r).xcs)
-#define USER_CS        0x1b
 #define PTRACE_GETFX   PTRACE_GETFPXREGS
 #define LAST_USER_WORD 0xbffffffcUL
 typedef struct user_fpxregs_struct fxregs_t;
 #endif
+
+/**
+ * The code selector the caller runs with, which its forked tracee has too.
+ * An i386 program's depends on the kernel: 0x1b on Rach2's i686 kernel and
+ * 0x23, Linux's __USER32_CS, on an x86-64 kernel.
+ */
+static unsigned long running_cs(void)
+{
+    unsigned short cs;
+
+    __asm__ volatile("mov %%cs, %0" : "=r"(cs));
+    return cs;
+}
 
 /* The word the parent reads and changes in its traced child. */
 static volatile long target = 1234;
@@ -342,7 +354,7 @@ static int memory_and_registers(void)
         return 1;
     }
     held();
-    if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 || R_CS(regs) != USER_CS) {
+    if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 || R_CS(regs) != running_cs()) {
         return fail("GETREGS");
     }
     held();
@@ -1926,8 +1938,9 @@ static int watched_sigwait(void)
  * user space, fails with EPERM under ARCH_SET_FS and ARCH_SET_GS and with EIO
  * under POKEUSER, SETREGS and SETREGSET, and leaves the bases as they were.
  * On i386 the requests are PTRACE_GET_THREAD_AREA and PTRACE_SET_THREAD_AREA:
- * entry 6 is the thread pointer's, entries 7 and 8 read as unused and take
- * only an unused entry, and the others are EINVAL.
+ * the first TLS entry, 6 on an i386 kernel and 12 on an x86-64 one, is the
+ * thread pointer's, the two after it read as unused and take only an unused
+ * entry, and the others are EINVAL.
  */
 #define TP_WORDS 16
 #define TP_MARK  0x5A17C0DEUL
@@ -2102,8 +2115,20 @@ static int thread_pointer(void)
     return 0;
 }
 #else
-/* The GDT entry of the thread pointer's segment. */
-#define TLS_ENTRY 6
+/*
+ * The GDT entry of the thread pointer's segment, the first of the three TLS
+ * entries, which musl's set_thread_area was given and GS selects: 6 on an
+ * i386 kernel and 12 on an x86-64 kernel, as Linux's GDT_ENTRY_TLS_MIN.
+ */
+static unsigned int tls_entry(void)
+{
+    unsigned short gs;
+
+    __asm__ volatile("mov %%gs, %0" : "=r"(gs));
+    return gs >> 3;
+}
+
+#define TLS_ENTRY tls_entry()
 
 /* Linux i386's struct user_desc: the flags are its bit fields. */
 struct tp_desc {
@@ -2117,8 +2142,9 @@ struct tp_desc {
 #define UD_SEG_NOT_PRESENT 0x20u
 
 /**
- * Check that entries 7 and 8, beside the thread pointer's, read as unused and
- * take only an unused entry, and that entries 5 and 9 fail with EINVAL.
+ * Check that the two entries after the thread pointer's, 7 and 8 on an i386
+ * kernel, read as unused and take only an unused entry, and that the entries
+ * just outside the three fail with EINVAL.
  * Returns 0, or 1 after the failure is printed.
  */
 static int other_entries(pid_t pid)
@@ -2147,7 +2173,7 @@ static int other_entries(pid_t pid)
     held_to(base + 3);
     if (ptrace(PTRACE_GET_THREAD_AREA, pid, (void *)(TLS_ENTRY - 1), &d) != -1 || errno != EINVAL ||
         ptrace(PTRACE_GET_THREAD_AREA, pid, (void *)(TLS_ENTRY + 3), &d) != -1 || errno != EINVAL) {
-        return abandon(pid, "an entry outside 6 to 8 was not EINVAL");
+        return abandon(pid, "an entry outside the three TLS entries was not EINVAL");
     }
     held();
     return 0;
@@ -2155,8 +2181,8 @@ static int other_entries(pid_t pid)
 
 /**
  * Check the thread pointer on i386: PTRACE_GET_THREAD_AREA reads
- * pthread_self in entry 6, the rows of `other_entries`, and a tracee
- * continued with the entry's base moved reads TP_MARK through it.
+ * pthread_self in the first TLS entry, the rows of `other_entries`, and a
+ * tracee continued with the entry's base moved reads TP_MARK through it.
  * Returns 0, or 1 after the failure is printed.
  */
 static int thread_pointer(void)
