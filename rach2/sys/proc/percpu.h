@@ -67,6 +67,8 @@ struct percpu {
     int32_t bkl_nr;                             /* that entry's system call number, or -1 */
     uint64_t bkl_waited;                        /* cycles the hold under way waited for the lock */
     int bkl_ioctl;                              /* its ioctl request's slot plus one, or 0 */
+    uint64_t tick_tail;                         /* cycles at its tick's preempt, 0 for none */
+    struct process *tick_tail_proc;             /* the thread that tick interrupted */
     volatile uint32_t wake_bkl_start;           /* current lock wait's clock, microseconds */
     volatile uint32_t wake_bkl_waiting;         /* published after start, cleared under the lock */
     uint32_t wake_bkl_total;                    /* completed lock waits, microseconds modulo 2^32 */

@@ -322,6 +322,23 @@ uint32_t timer_late_passes(void)
 }
 
 /**
+ * End a tick's handler with `sched_preempt`. A tick that took the big lock
+ * for itself marks the preempt (`bkl_tick_tail`), whose time to the hold's
+ * end the hold's end charges; a tick that came inside a hold charges its
+ * whole handler, from `start`, to `BKL_TICK_NESTED` first, since what it
+ * does after is the interrupted hold's.
+ */
+static void timer_preempt(int nested, uint64_t start)
+{
+    if (nested) {
+        (void)bkl_tick_charge(BKL_TICK_NESTED, start);
+    } else {
+        bkl_tick_tail();
+    }
+    sched_preempt();
+}
+
+/**
  * Service a processor's tick, TICK_HZ a second, and preempt its current
  * process.
  *
@@ -363,43 +380,72 @@ uint32_t timer_late_passes(void)
  */
 static void timer_handler(isr_params_t *params)
 {
+    struct percpu *cpu = this_cpu();
+    int nested = cpu->bkl_depth > 1;
+    uint64_t start = arch_cycles(), t = start;
+
+    if (!nested) {
+        t = bkl_tick_charge(BKL_TICK_ENTRY, cpu->bkl_since);
+        start = t;
+    }
     if (arch_cpu_id() != 0) {
         sched_account_tick(FRAME_USER(params) != 0);
+        t = bkl_tick_charge(BKL_TICK_AP_ACCOUNT, t);
         if (timer_pass_late()) {
             timer_clock_pass();
             timer_wake_pass();
         }
-        sched_preempt();
+        t = bkl_tick_charge(BKL_TICK_AP_LATE_PASS, t);
+        timer_preempt(nested, start);
         return;
     }
     timer_clock_pass();
+    t = bkl_tick_charge(BKL_TICK_CLOCK, t);
 
     sched_account_tick(FRAME_USER(params) != 0);
     sched_load_tick();
     if (sched_all_idle()) {
         ip_loop_count_idle();
     }
+    t = bkl_tick_charge(BKL_TICK_ACCOUNT, t);
 
     timer_wake_pass();
+    t = bkl_tick_charge(BKL_TICK_WAKE, t);
 
     hda_tick();
+    t = bkl_tick_charge(BKL_TICK_HDA, t);
     netdev_poll();
+    t = bkl_tick_charge(BKL_TICK_NETDEV, t);
     ath9k_poll();
+    t = bkl_tick_charge(BKL_TICK_ATH9K, t);
     tcp_tick();
+    t = bkl_tick_charge(BKL_TICK_TCP, t);
     ip_frag_tick();
+    t = bkl_tick_charge(BKL_TICK_IP_FRAG, t);
     ip6_tick();
+    t = bkl_tick_charge(BKL_TICK_IP6, t);
     netlink_tick();
+    t = bkl_tick_charge(BKL_TICK_NETLINK, t);
     ip_loop_drain();
+    t = bkl_tick_charge(BKL_TICK_IP_LOOP, t);
     usb_poll();
+    t = bkl_tick_charge(BKL_TICK_USB, t);
     input_tick();
+    t = bkl_tick_charge(BKL_TICK_INPUT, t);
     block_lag_tick();
+    t = bkl_tick_charge(BKL_TICK_BLOCK_LAG, t);
     block_request_tick();
+    t = bkl_tick_charge(BKL_TICK_BLOCK_REQUEST, t);
     platform_tick();
+    t = bkl_tick_charge(BKL_TICK_PLATFORM, t);
     vkms_tick();
+    t = bkl_tick_charge(BKL_TICK_VKMS, t);
     speaker_tick();
+    t = bkl_tick_charge(BKL_TICK_SPEAKER, t);
     tty_console_poll();
+    (void)bkl_tick_charge(BKL_TICK_CONSOLE, t);
 
-    sched_preempt();
+    timer_preempt(nested, start);
 }
 
 /**
@@ -3969,19 +4015,22 @@ static void start_network(void)
     (void)ath9k_probe();
 }
 
-/* debugfs's bkl/calls and bkl/profile, the counts of system calls and
- * entries with their holds of the big lock, and the samples of the kernel
- * under it, which a write zeroes (proc/smp.c). */
+/* debugfs's bkl/calls, bkl/profile and bkl/tick, the counts of system calls
+ * and entries with their holds of the big lock, the samples of the kernel
+ * under it and the parts of the tick, which a write zeroes (proc/smp.c). */
 static const struct debugfs_text_ops bkl_calls_ops = {smp_calls_show, smp_calls_store};
 static const struct debugfs_text_ops bkl_profile_ops = {smp_profile_show, smp_profile_store};
+static const struct debugfs_text_ops bkl_tick_ops = {smp_tick_show, smp_tick_store};
 
 /** Start the processors past the first (`smp_start`), then register
- * bkl/calls and bkl/profile in debugfs; a failure there is logged. */
+ * bkl/calls, bkl/profile and bkl/tick in debugfs; a failure there is
+ * logged. */
 static void start_processors(void)
 {
     smp_start();
     if (debugfs_create_text("bkl/calls", 0644u, &bkl_calls_ops, NULL) != 0 ||
-        debugfs_create_text("bkl/profile", 0644u, &bkl_profile_ops, NULL) != 0) {
+        debugfs_create_text("bkl/profile", 0644u, &bkl_profile_ops, NULL) != 0 ||
+        debugfs_create_text("bkl/tick", 0644u, &bkl_tick_ops, NULL) != 0) {
         klog(KLOG_WARN, "bkl", "debugfs: files not registered");
     }
 }

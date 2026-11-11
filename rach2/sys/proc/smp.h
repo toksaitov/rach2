@@ -169,6 +169,64 @@ int32_t smp_profile_show(void *data, char *buf, uint32_t cap);
 /** Zero the profile; `len`. */
 int32_t smp_profile_store(void *data, const char __user *buf, uint32_t len);
 
+/* The rows of the tick's counts (`bkl_tick_charge`, debugfs's `bkl/tick`):
+ * the parts of a tick in the order it runs them. `ENTRY` is the router's
+ * work from the take of the lock to the handler; the boot processor's
+ * services follow, then another processor's own two; `RETURN` is the time
+ * from the tick's `sched_preempt` to the end of the hold, in the same
+ * thread, and `SWITCH` the same when the hold ended in another thread, the
+ * switch and what that thread did under the lock before it gave the lock
+ * back. `NESTED` counts the ticks that came while this processor already
+ * held the lock, with their handler's time, which the service rows count
+ * too: such a tick's time is the interrupted hold's, not vector 32's. */
+enum bkl_tick_row {
+    BKL_TICK_ENTRY,
+    BKL_TICK_CLOCK,
+    BKL_TICK_ACCOUNT,
+    BKL_TICK_WAKE,
+    BKL_TICK_HDA,
+    BKL_TICK_NETDEV,
+    BKL_TICK_ATH9K,
+    BKL_TICK_TCP,
+    BKL_TICK_IP_FRAG,
+    BKL_TICK_IP6,
+    BKL_TICK_NETLINK,
+    BKL_TICK_IP_LOOP,
+    BKL_TICK_USB,
+    BKL_TICK_INPUT,
+    BKL_TICK_BLOCK_LAG,
+    BKL_TICK_BLOCK_REQUEST,
+    BKL_TICK_PLATFORM,
+    BKL_TICK_VKMS,
+    BKL_TICK_SPEAKER,
+    BKL_TICK_CONSOLE,
+    BKL_TICK_AP_ACCOUNT,
+    BKL_TICK_AP_LATE_PASS,
+    BKL_TICK_RETURN,
+    BKL_TICK_SWITCH,
+    BKL_TICK_NESTED,
+    BKL_TICK_ROWS
+};
+
+/** Charge the cycles from `start` to now to the tick's row `row` and return
+ * now, the next part's start. The caller holds the big lock with
+ * interrupts off. */
+uint64_t bkl_tick_charge(int row, uint64_t start);
+
+/** Mark the tick's `sched_preempt` on this processor, whose tick took the
+ * big lock for itself: the hold's end charges the time from now to
+ * `BKL_TICK_RETURN`, or to `BKL_TICK_SWITCH` when it ends in a thread other
+ * than the current one. */
+void bkl_tick_tail(void);
+
+/** Write the tick's counts as debugfs's `bkl/tick` shows them: for each row,
+ * its calls, their time in TSC cycles and in microseconds, and the longest
+ * in microseconds. The caller holds the big lock. */
+int32_t smp_tick_show(void *data, char *buf, uint32_t cap);
+
+/** Zero the tick's counts; `len`. */
+int32_t smp_tick_store(void *data, const char __user *buf, uint32_t len);
+
 /** Answer the requests other processors left this one: stop for good, drop
  * a translation or every one, or give up a page directory for the
  * kernel's. Called with interrupts off. */

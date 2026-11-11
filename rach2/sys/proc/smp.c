@@ -92,6 +92,20 @@ struct bkl_profile_slot {
 static struct bkl_profile_slot bkl_profile[BKL_PROFILE_SLOTS];
 static uint32_t bkl_profile_samples, bkl_profile_lost;
 
+/* The tick's parts by row (`bkl_tick_charge`), in TSC cycles, and the names
+ * `smp_tick_show` gives them. */
+struct bkl_tick_count {
+    uint64_t cycles;
+    uint64_t max;
+    uint32_t calls;
+};
+static struct bkl_tick_count bkl_ticks[BKL_TICK_ROWS];
+static const char *const bkl_tick_names[BKL_TICK_ROWS] = {
+    "entry",        "clock",         "account",  "wake",    "hda",     "netdev",  "ath9k",
+    "tcp",          "ip_frag",       "ip6",      "netlink", "ip_loop", "usb",     "input",
+    "block_lag",    "block_request", "platform", "vkms",    "speaker", "console", "ap_account",
+    "ap_late_pass", "return",        "switch",   "nested"};
+
 /* The probes an open-addressed table makes before it gives up. */
 #define BKL_PROBES 32
 
@@ -200,9 +214,16 @@ static void call_hold(struct bkl_call_count *c, uint64_t held, uint64_t waited)
 
 static void bkl_hold_end(struct percpu *cpu)
 {
-    uint64_t held = arch_cycles() - cpu->bkl_since, waited;
+    uint64_t now = arch_cycles(), held = now - cpu->bkl_since, waited;
     int c = arch_cpu_id();
     int key, ioctl;
+
+    if (cpu->tick_tail != 0) {
+        (void)bkl_tick_charge(cpu->current == cpu->tick_tail_proc ? BKL_TICK_RETURN
+                                                                  : BKL_TICK_SWITCH,
+                              cpu->tick_tail);
+        cpu->tick_tail = 0;
+    }
 
     bkl_recent[bkl_releases % BKL_WAIT_HOLDS].cycles = held;
     bkl_recent[bkl_releases % BKL_WAIT_HOLDS].vector = cpu->bkl_vector;
@@ -234,6 +255,27 @@ static void bkl_hold_end(struct percpu *cpu)
         k_memcpy(bkl_hold_early_cycles, bkl_early_cycles[c], sizeof(bkl_hold_early_cycles));
         k_memcpy(bkl_hold_early_pc, bkl_early_pc[c], sizeof(bkl_hold_early_pc));
     }
+}
+
+uint64_t bkl_tick_charge(int row, uint64_t start)
+{
+    uint64_t now = arch_cycles(), spent = now - start;
+    struct bkl_tick_count *c = &bkl_ticks[row];
+
+    c->calls++;
+    c->cycles += spent;
+    if (spent > c->max) {
+        c->max = spent;
+    }
+    return now;
+}
+
+void bkl_tick_tail(void)
+{
+    struct percpu *cpu = this_cpu();
+
+    cpu->tick_tail_proc = cpu->current;
+    cpu->tick_tail = arch_cycles();
 }
 
 void bkl_note_entry(uint32_t vector, int32_t nr)
@@ -542,6 +584,39 @@ int32_t smp_calls_store(void *data, const char __user *buf, uint32_t len)
         k_memset(&bkl_ioctls[i].count, 0, sizeof(bkl_ioctls[i].count));
     }
     bkl_ioctls_lost = 0;
+    return (int32_t)len;
+}
+
+int32_t smp_tick_show(void *data, char *buf, uint32_t cap)
+{
+    struct bkl_text t;
+    int row;
+
+    (void)data;
+    t.buf = buf;
+    t.cap = cap;
+    t.len = 0;
+    text_str(&t, "part calls cycles us max_us\n");
+    for (row = 0; row < BKL_TICK_ROWS; row++) {
+        text_str(&t, bkl_tick_names[row]);
+        text_ch(&t, ' ');
+        text_dec(&t, bkl_ticks[row].calls);
+        text_ch(&t, ' ');
+        text_dec(&t, bkl_ticks[row].cycles);
+        text_ch(&t, ' ');
+        text_dec(&t, timer_cycles_us(bkl_ticks[row].cycles));
+        text_ch(&t, ' ');
+        text_dec(&t, timer_cycles_us(bkl_ticks[row].max));
+        text_ch(&t, '\n');
+    }
+    return (int32_t)t.len;
+}
+
+int32_t smp_tick_store(void *data, const char __user *buf, uint32_t len)
+{
+    (void)data;
+    (void)buf;
+    k_memset(bkl_ticks, 0, sizeof(bkl_ticks));
     return (int32_t)len;
 }
 
