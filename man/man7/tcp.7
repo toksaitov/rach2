@@ -166,13 +166,26 @@ not when it acknowledges this side's FIN, which ends the connection first;
 .Dv TIME_WAIT
 acknowledges only a FIN sent again and counts nothing.
 After the peer's FIN, a segment whose data runs past that FIN ends the
-connection as an accepted reset does, counted in TCPAbortOnData, as on
-Linux.
-Until the handshake ends, the peer's SYN sent again is answered with this
-side's SYN-ACK, an acknowledgement of another number with a reset, a
-segment outside the window offered with an acknowledgement, and, on a
-passive open, a SYN at another number with a reset that ends the
-handshake; the acknowledgement that ends it brings any data and FIN it
+connection as an accepted reset does and is answered with a reset,
+counted in TCPAbortOnData, as on Linux.
+After the program's last close, or a
+.Dv SHUT_RDWR
+shutdown, data or a FIN past what was received, which no program will
+read, ends the connection the same way (RFC 1122, section 4.2.2.13); data
+and a FIN sent again are acknowledged.
+Until a passive open's handshake ends, the peer's SYN sent again is
+answered with this side's SYN-ACK, an acknowledgement of another number
+with a reset, a segment outside the window offered with an
+acknowledgement, at most once in 500 milliseconds when it has a SYN or
+neither data nor a FIN, and a SYN at another number with a reset that
+ends the handshake.
+Until a simultaneous open's handshake ends, a SYN draws a challenge
+acknowledgement, but for the peer's SYN-ACK, a segment outside the
+receive window a duplicate acknowledgement, and an acknowledgement of a
+number other than this side's SYN or the one past it a reset; one of the
+SYN's own number ends the handshake and leaves the SYN unacknowledged, to
+be sent again as the SYN-ACK, as on Linux.
+The acknowledgement that ends either handshake brings any data and FIN it
 carries, which are taken at once.
 Challenge acknowledgements share the limit of 500 milliseconds.
 .Xr connect 2
