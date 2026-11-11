@@ -113,6 +113,12 @@ void sched_service_point(void);
 /** Remove `p` from its ready list before it is freed; the big lock is held. */
 void sched_forget(process_t *p);
 
+/** Make `p` this processor's current process without a switch, as the
+ * debug shell's process 0 takes back the processor a program it ran ended
+ * on, whichever that is: off any ready list, running, and placed on this
+ * processor. */
+void sched_adopt(process_t *p);
+
 /** With `hold` set, add each queued thread's wait so far to its `run_delay`
  * and count no wait until called with `hold` clear, which starts each
  * queued thread's wait again: a suspend to idle's bounds, as Linux's frozen

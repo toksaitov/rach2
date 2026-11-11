@@ -200,6 +200,25 @@ void sched_forget(process_t *p)
     kirq_restore(flags);
 }
 
+/**
+ * The record must name the processor it is current on: a switch away
+ * appends it to that processor's queue (`sched_append`), and a wake before
+ * the switch keeps it there (`sched_place`). Linux's init_idle sets an idle
+ * task's processor in the same hold of the run queue's lock that makes it
+ * the queue's current (kernel/sched/core.c:7782-7786).
+ */
+void sched_adopt(process_t *p)
+{
+    uint32_t flags = spin_lock_irqsave(&sched_lock);
+    int me = (int)arch_cpu_id();
+
+    sched_remove(p);
+    sched_move(p, me);
+    p->state = PROC_RUNNING;
+    cpu_table[me].current = p;
+    spin_unlock_irqrestore(&sched_lock, flags);
+}
+
 static int sched_may_run(const process_t *p, int cpu);
 
 void sched_priority_changed(process_t *p)

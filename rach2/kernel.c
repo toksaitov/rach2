@@ -610,8 +610,7 @@ void terminate_current_process(int32_t signo)
         free_process(current_proc);
 
         init_pid = 0;
-        current_proc = proc_idle;
-        current_proc->state = PROC_RUNNING;
+        sched_adopt(proc_idle);
 
         shell_reset_input();
 

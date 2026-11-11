@@ -588,8 +588,7 @@ int32_t exit_current(int32_t code)
 
     init_pid = 0;
 
-    current_proc = proc_idle;
-    current_proc->state = PROC_RUNNING;
+    sched_adopt(proc_idle);
 
     shell_reset_input();
     arch_irq_enable();
