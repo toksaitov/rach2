@@ -355,9 +355,10 @@ uint32_t sw_sync_info(char *buf, uint32_t cap);
  * `page` returns a borrowed physical frame, or 0 on failure, for PRIME
  * imports by other devices; NULL refuses those imports. It decides alone
  * whether it serves once its device is unplugged, but a frame it gave stays
- * the object's until the object is freed, unplugged or not, since an
- * importer such as i915 keeps it in its own GTT and page tables, as
- * Linux's page references keep it. `map_wc` records
+ * the object's while the object's dma-buf exists, unplugged or not, and is
+ * never purged meanwhile, since an importer such as i915 keeps it in its
+ * own GTT and page tables, and holds the dma-buf while it does, as Linux's
+ * page references and attachment pins keep it. `map_wc` records
  * the cache type that the exporter and its importers use. `vmap` returns
  * the kernel's address of the object's bytes, one contiguous range, for
  * the console's buffer (drm_client.c): valid while the object is scanned

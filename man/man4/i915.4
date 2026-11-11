@@ -370,7 +370,7 @@ and set
 .Fa retained
 to whether its pages are still there.
 When memory runs short, the kernel frees the pages of an idle object
-marked DONTNEED, unbinding it and revoking its maps; such an object
+marked DONTNEED that is not exported as a dma-buf, unbinding it and revoking its maps; such an object
 is purged, keeps that state, and fails with
 .Er EFAULT
 on each later use of its pages, and a touch of a map of it raises
