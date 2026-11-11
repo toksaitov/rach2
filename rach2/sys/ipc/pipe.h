@@ -161,6 +161,19 @@ struct kernel_iovec;
 int32_t pipe_writev(struct fd_entry *e, const struct kernel_iovec *iov, int count);
 
 /**
+ * Read the read end `e` into the `count` elements of `iov`, a vector
+ * iov_import has checked and cut, as one read(2) of their bytes, as Linux
+ * runs a readv(2) through one `pipe_read`: each page buffer of the pipe is
+ * copied whole, or as much of it as the vector takes, or not at all, so a
+ * destination that cannot be written leaves its buffer's bytes queued. The
+ * wait, the end of input and -EAGAIN come before any copy. Returns as a
+ * read(2) of the pipe does: the bytes read, 0 at the end of input or for a
+ * vector of no bytes, or -EBADF, -EFAULT, -EAGAIN or -EINTR before any
+ * byte. May sleep.
+ */
+int32_t pipe_readv(struct fd_entry *e, const struct kernel_iovec *iov, int count);
+
+/**
  * Write up to `count` bytes of the caller's memory at `buf` to the write end
  * `e` for vmsplice(2), as `pipe_splice_write` writes them, the source's pages
  * being those of `buf`. A page that Linux's get_user_pages refuses
