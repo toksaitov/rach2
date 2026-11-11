@@ -3360,11 +3360,13 @@ static void procfs_entry_holds(struct procfs_text *t)
         if (best < BKL_ENTRY_SYSCALLS) {
             ap_str(t, "syscall ");
             ap_u32(t, (uint32_t)best);
-        } else if (best < BKL_ENTRY_KEYS - 1) {
+        } else if (best < BKL_KEY_BIGCALL) {
             ap_str(t, "vector ");
             ap_u32(t, (uint32_t)(best - BKL_ENTRY_SYSCALLS));
-        } else {
+        } else if (best == BKL_KEY_BIGCALL) {
             ap_str(t, "syscall -1");
+        } else {
+            ap_str(t, best == BKL_KEY_IDLE ? "take 0" : "take 1");
         }
         ap_ch(t, ' ');
         ap_u32(t, best_holds);

@@ -1,4 +1,4 @@
-.Dd November 11, 2026
+.Dd November 12, 2026
 .Dt PROC 5
 .Os
 .Sh NAME
@@ -1415,12 +1415,16 @@ interrupt came that late.
 Up to 16 lines, one for each kernel entry that held the big kernel lock
 longest since boot, the longest first: the entry's kind,
 .Li syscall
-with its number or
+with its number,
 .Li vector
-with its interrupt vector, then its holds and their sum in microseconds.
-A hold counts under the entry that took the lock, up to the processor's
-next return to user mode or idle halt; vector 0 is a kernel thread or a
-take again after an idle halt, and
+with its interrupt vector, or
+.Li take
+with 0 for a take after an idle wait and 1 for a thread's take after its
+switch, then its holds and their sum in microseconds.
+A hold counts under the entry that took the lock, or under the entry the
+thread was in when it took the lock in a call or an interrupt that runs
+without it, up to the thread's next switch, idle wait or return to user
+mode; vector 0 is a kernel thread, and
 .Li syscall -1
 gathers the system calls numbered 512 and above.
 The boot processor's start-up hold is not counted here or in

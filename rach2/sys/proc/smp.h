@@ -67,14 +67,24 @@ void bkl_frame_push(int locked);
  * big lock. */
 int bkl_frame_pop(void);
 
-/** Let go of the big lock whatever the depth, before an idle wait or the
- * entry to user mode, and return the depth for `bkl_take`. Interrupts are
+/** The record of the newest frame, as `bkl_frame_pop` would return it,
+ * left in place. */
+int bkl_frame_top(void);
+
+/** Let go of the big lock whatever the depth, before a switch, an idle wait
+ * or a run of a guest, and return the depth for `bkl_take`. Interrupts are
  * off. */
 int bkl_drop(void);
 
-/** Take the big lock again at `depth`, as `bkl_drop` returned it.
- * Interrupts are off. */
+/** Take the big lock again at `depth`, as `bkl_drop` returned it, the hold
+ * charged to the entry the thread is in (`bkl_entry_push`). Interrupts are
+ * off. */
 void bkl_take(int depth);
+
+/** `bkl_take` with the hold charged to `key`: BKL_KEY_SWITCH for a thread's
+ * take after its switch (`schedule_tail`), BKL_KEY_IDLE for one after an idle
+ * wait, so that bkl/calls tells those holds apart. */
+void bkl_take_as(int depth, int key);
 
 /** The processors started and taking work, the boot processor counted. */
 int smp_cpu_count(void);
@@ -102,11 +112,12 @@ void smp_wait_stats(uint64_t *total_us, uint64_t *max_us, uint32_t *holds);
  * The caller holds the big lock. */
 void smp_wait_hold(unsigned int index, uint64_t *held_us, uint32_t *vector, int32_t *nr);
 
-/** Name the kernel entry that holds the big lock on this processor, by its
- * vector and, for a system call, its number (-1 otherwise), for the longest
- * hold's record. Only the outermost entry counts; a take again after an idle
- * halt names none. */
-void bkl_note_entry(uint32_t vector, int32_t nr);
+/** Count the entry by `vector`, the system call `nr` or -1 for none, and,
+ * when it took the big lock itself (`locked`) as the outermost entry, name
+ * it for the hold it began, by its vector and number. An interrupt's or an
+ * exception's call is counted here, on this processor's own counts, with or
+ * without the lock. Interrupts are off. */
+void bkl_note_entry(uint32_t vector, int32_t nr, int locked);
 
 /** Read the longest hold of the big lock since boot, from its take to its
  * give-back or drop, in microseconds, with its entry's vector (0 for none,
@@ -115,16 +126,21 @@ void bkl_note_entry(uint32_t vector, int32_t nr);
 void smp_hold_stats(uint64_t *max_us, uint32_t *vector, int32_t *nr);
 
 /* The keys of the holds by entry (`smp_entry_hold`): a system call's number
- * below `BKL_ENTRY_SYSCALLS`, then each interrupt vector's, the last for the
- * system calls numbered past the first range. */
+ * below `BKL_ENTRY_SYSCALLS`, then each interrupt vector's, then the system
+ * calls numbered past the first range, the takes after an idle wait and the
+ * takes after a switch. */
 #define BKL_ENTRY_SYSCALLS 512
-#define BKL_ENTRY_KEYS     (BKL_ENTRY_SYSCALLS + 256 + 1)
+#define BKL_KEY_BIGCALL    (BKL_ENTRY_SYSCALLS + 256)
+#define BKL_KEY_IDLE       (BKL_KEY_BIGCALL + 1)
+#define BKL_KEY_SWITCH     (BKL_KEY_IDLE + 1)
+#define BKL_ENTRY_KEYS     (BKL_KEY_SWITCH + 1)
 
 /** Read the holds of the big lock that entry `key` took since boot, the
  * boot processor's start-up left out: their sum in microseconds and their
- * number. A hold counts under the entry that took the lock, which a system
- * call keeps while it sleeps and the processor runs others, up to its next
- * return to user mode or idle halt. The caller holds the big lock. */
+ * number. A hold counts under the entry that took the lock, or under the
+ * entry its thread is in for a take made without one (`bkl_entry_push`), up
+ * to the thread's next switch, idle wait or return to user mode. The caller
+ * holds the big lock. */
 void smp_entry_hold(int key, uint64_t *held_us, uint32_t *holds);
 
 /* The instruction a hold's sample keeps, and the return addresses above it. */
@@ -180,23 +196,28 @@ void bkl_entry_push(struct bkl_entry_saved *saved, uint32_t vector, int32_t nr, 
 /** Put back the entry `bkl_entry_push` replaced. */
 void bkl_entry_pop(const struct bkl_entry_saved *saved);
 
-/** Charge the hold under way on this processor, the outermost entry's, to
- * ioctl request `cmd` as well as to the call, and return the request's slot
- * plus one for `smp_call_end`, 0 when every slot holds another request.
- * The caller holds the big lock. */
+/** Return the slot of ioctl request `cmd` plus one, for `smp_call_end`, 0
+ * when every slot holds another request, and charge the hold under way on
+ * this processor to the request as well as to the call when the processor
+ * holds the big lock as the call's outermost entry. A slot is claimed by a
+ * compare-and-exchange, so any processor may call it, with or without the
+ * lock. Interrupts are off. */
 int bkl_note_ioctl(uint32_t cmd);
 
-/** Count the system call `nr` that ends now: its time from `start`, the
- * cycle count before its entry took the big lock, to now, which includes
- * its wait for the lock and its sleeps, and, for `ioctl` above 0, the same
- * under that request's slot. The caller holds the big lock. */
+/** Count the system call `nr` that ends now on this processor's counts,
+ * which a read of bkl/calls sums: its time from `start`, the cycle count
+ * before its entry chose the big lock, to now, which includes any wait for
+ * the lock and its sleeps, and, for `ioctl` above 0, the same under that
+ * request's slot. Interrupts are off. */
 void smp_call_end(uint32_t nr, int ioctl, uint64_t start);
 
-/** Count a sample of the kernel's time under the big lock: the tick found
- * this processor holding it at `pc`, with the frame pointer `fp`, which
- * gives its callers, in the current process's entry (`bkl_entry_push`).
- * Nothing when this processor took the lock for the tick itself, from user
- * mode or an idle wait. */
+/** Count a sample of the kernel's time from the tick, which found this
+ * processor in kernel mode at `pc`, with the frame pointer `fp`, which gives
+ * its callers, in the current process's entry (`bkl_entry_push`): in the
+ * profile's first mode only when the interrupted code holds the big lock,
+ * and in its whole-kernel mode always (`smp_profile_store`). The tick calls
+ * it before it takes the lock, for any kernel-mode frame but an idle halt;
+ * the table has a spinlock of its own. Interrupts are off. */
 void bkl_profile_sample(uintptr_t pc, uintptr_t fp);
 
 /** Write the call counts as debugfs's `bkl/calls` shows them, as far as `cap`
@@ -212,16 +233,14 @@ int32_t smp_calls_store(void *data, const char __user *buf, uint32_t len);
 
 /** Write the profile as debugfs's `bkl/profile` shows it: the samples, those
  * a full table lost, and for each entry, instruction and three callers
- * sampled, its count. The caller holds the big lock, which keeps the other
- * processors' ticks from sampling; this processor's tick takes no sample
- * while the text is written, so that the slots' counts and `lost` sum to
- * `samples`. */
+ * sampled, its count. No tick samples while the text is written, so that
+ * the slots' counts and `lost` sum to `samples`. */
 int32_t smp_profile_show(void *data, char *buf, uint32_t cap);
 
-/** Zero the profile; `len`. The caller holds the big lock, which keeps the
- * other processors' ticks from sampling; this processor's tick is held off
- * while the table and its totals are zeroed, so that no sample lands in a
- * cleared slot before its total is cleared. */
+/** Zero the profile and choose its mode, and return `len`: whole-kernel
+ * sampling, every tick in kernel mode, for a write that begins with
+ * `kernel`, and samples under the big lock alone for anything else. No tick
+ * samples while the table and its totals are zeroed. */
 int32_t smp_profile_store(void *data, const char __user *buf, uint32_t len);
 
 /** Answer the requests other processors left this one: stop for good, drop

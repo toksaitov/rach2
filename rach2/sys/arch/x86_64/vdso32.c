@@ -529,9 +529,9 @@ int ia32_fast_syscall(isr_params_t *p, int sysenter)
     uintptr_t base, landing;
     uint64_t start = arch_cycles();
     uint32_t ebp, nr = (uint32_t)p->rax;
-    int ioctl = 0, locked;
+    int ioctl = 0;
 
-    locked = isr_entry_lock(p);
+    (void)isr_entry_lock(p);
     mm = current_proc ? current_proc->mm : NULL;
     base = mm && mm->compat ? mm->vdso : 0;
     landing = vdso32_at(base, vdso32_landing);
@@ -544,7 +544,7 @@ int ia32_fast_syscall(isr_params_t *p, int sysenter)
         p->rax = (uint64_t)(int64_t)-EFAULT;
     } else {
         p->rbp = ebp;
-        ioctl = locked ? isr_call_ioctl(p) : 0;
+        ioctl = isr_call_ioctl(p);
         isr_router_locked(p);
     }
     smp_call_end(nr, ioctl, start);

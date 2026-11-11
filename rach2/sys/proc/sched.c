@@ -753,7 +753,7 @@ void schedule_tail(void)
         (void)arch_atomic_xchg(&prev->on_cpu, 0u);
     }
     if (self->bkl_depth > 0 && cpu->bkl_depth == 0) {
-        bkl_take(self->bkl_depth);
+        bkl_take_as(self->bkl_depth, BKL_KEY_SWITCH);
     }
 }
 
@@ -1161,7 +1161,7 @@ void idle_wait_irq_off(void)
     this_cpu()->idle_wait = 1;
     depth = bkl_drop();
     arch_idle_masked();
-    bkl_take(depth);
+    bkl_take_as(depth, BKL_KEY_IDLE);
     this_cpu()->idle_wait = 0;
 }
 
@@ -1186,7 +1186,7 @@ void idle_wait_irq_on(void)
     this_cpu()->idle_wait = 1;
     depth = bkl_drop();
     arch_idle_masked();
-    bkl_take(depth);
+    bkl_take_as(depth, BKL_KEY_IDLE);
     this_cpu()->idle_wait = 0;
     kirq_restore(flags);
 }
