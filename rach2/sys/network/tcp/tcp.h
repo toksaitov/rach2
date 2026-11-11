@@ -64,9 +64,11 @@
 /* The SACK blocks an acknowledgement names at most: four, 36 bytes of
  * options, when a segment has no timestamps (RFC 2018). */
 #define TCP_SACK_BLOCKS     4
-/* Policy: the receive ring keeps the boundaries of up to 32 receive buffers,
+/* Policy: the receive ring keeps the bounds of up to 32 receive buffers,
  * which a stream receive copies whole or not at all; past that a new one
- * joins the last, as Linux joins a segment to the queue's tail. */
+ * joins the last. Linux joins an in-order segment to its queue's tail
+ * whenever tcp_try_coalesce can, which depends on how the sk_buffs are laid
+ * out and shared, so it may keep fewer bounds than these. */
 #define TCP_RECV_SEGS       32
 
 /* The timers are written in milliseconds and kept in ticks of the kernel's
@@ -302,8 +304,9 @@ struct tcb {
      * TCP_RECV_SEGS entries. Each in-order segment the ring takes is a
      * buffer, and so are the bytes past a hole that its filling makes
      * readable at once; with every entry in use a new buffer joins the
-     * last, as Linux's tcp_try_coalesce joins a segment to the queue's tail
-     * (net/ipv4/tcp_input.c:4930-4963, 5214-5216). An end at or before
+     * last. Linux joins an in-order segment to the queue's tail whenever
+     * tcp_try_coalesce can (net/ipv4/tcp_input.c:4930-4963, 5208-5216), so
+     * it may keep fewer bounds (TCP_RECV_SEGS). An end at or before
      * `recv_head` has been read, and is dropped when next looked at.
      * Changed with interrupts off.
      */
