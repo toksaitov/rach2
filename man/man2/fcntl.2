@@ -377,10 +377,11 @@ and checks that the new descriptor's flag is clear.
 A set lock command met a conflicting lock.
 .It Bq Er EBUSY
 .Dv F_SETPIPE_SZ
-asked for less than the pipe holds.
-Linux counts what it holds in pages, a write of less than a page taking
-one, and so refuses some shrinks of a pipe of small writes that this
-kernel makes.
+asked for fewer pages than the page buffers that hold the pipe's bytes,
+however few bytes they hold, as Linux counts them: a write's last part of
+a page joins the newest buffer when it fits in that page after the bytes
+written to it, and otherwise takes a page of its own, as each page of a
+tee or a splice into the pipe does.
 .It Bq Er EBADF
 .Fa fd
 is not an open descriptor, was opened with

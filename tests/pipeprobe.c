@@ -54,7 +54,13 @@
  *       may not grow a pipe past pipe-max-size, may grow one to 1 MiB, and,
  *       with pipe-user-pages-soft set to 64, grows its own pipes to 64
  *       pages whatever root's hold, is refused a growth past them, gets a
- *       new pipe of 8192 bytes, and may still shrink one.
+ *       new pipe of 8192 bytes, and may still shrink one;
+ *   (l) a pipe holding bytes in more page buffers than a smaller size has
+ *       refuses the shrink with EBUSY, however few bytes they are, as Linux
+ *       counts buffers: a write of 4096, a read of 4095 and a write of 1
+ *       leave two, since the byte does not fit in the first page after the
+ *       4096 written to it; two writes of a byte share one, and the shrink
+ *       to 4096 succeeds; and a byte tee copied is a buffer no write joins.
  *
  * Given `machine=native` (probe_args.h), the probe leaves out the heap's
  * comparison of (e), since the kernel's heap is shared with every process of
@@ -238,6 +244,10 @@ enum {
     WRAP_SHRINK,
     WRAP_TEE,
     WRAP_ORDER,
+    PAGES_PIPES,
+    PAGES_BUSY,
+    PAGES_MERGE,
+    PAGES_TEE,
     MAX_ROUND,
     MAX_EINVAL,
     LIMIT_FORK,
@@ -306,6 +316,11 @@ static const struct {
     {"wrap-shrink", "F_SETPIPE_SZ back to 64 KiB, a read of 10000, and to 32 KiB"},
     {"wrap-tee", "tee of the 30000 bytes wrapped into a pipe whose tail wraps, read in order"},
     {"wrap-order", "the 30000 bytes read back in order from the resized pipe"},
+    {"pages-pipes", "two nonblocking pipes for the page-buffer test"},
+    {"pages-busy",
+     "a write of 4096, a read of 4095 and a write of 1 hold two pages: a shrink to 4096 -> -EBUSY"},
+    {"pages-merge", "two writes of 1 share a page: a shrink to 4096 succeeds"},
+    {"pages-tee", "a byte tee copied takes no later write: a shrink to 4096 -> -EBUSY"},
     {"max-round", "pipe-max-size takes 600000 as 1048576, 1 as 4096 and 2^31 as written"},
     {"max-einval", "pipe-max-size refuses 2^31 + 1 with EINVAL"},
     {"limit-fork", "fork for the limits' child"},
@@ -841,6 +856,34 @@ static void case_wrap(void)
     syscall1(SYS_CLOSE, q[1]);
 }
 
+/**
+ * Case (l): a shrink is refused below the page buffers that hold bytes, as
+ * Linux counts them, however few bytes they hold. A write's last part of a
+ * page joins the newest buffer only when it fits in that page after the
+ * bytes written to it, and a buffer tee made takes no write.
+ */
+static void case_pages(void)
+{
+    int p[2], q[2];
+    char two[2] = {'a', 'b'};
+
+    check(PAGES_PIPES, do_pipe2(p, O_NONBLOCK) == 0 && do_pipe2(q, O_NONBLOCK) == 0);
+    check(PAGES_BUSY, wr(p[1], big, 4096) == 4096 && rd(p[0], back, 4095) == 4095 &&
+                          wr(p[1], two, 1) == 1 && set_size(p[1], 4096) == -EBUSY &&
+                          rd(p[0], back, 2) == 2);
+    check(PAGES_MERGE, wr(p[1], two, 1) == 1 && wr(p[1], two + 1, 1) == 1 &&
+                           set_size(p[1], 4096) == 4096 && rd(p[0], back, 2) == 2 &&
+                           back[0] == 'a' && back[1] == 'b');
+    check(PAGES_TEE, wr(p[1], two, 1) == 1 &&
+                         syscall4(SYS_TEE, p[0], q[1], 1, SPLICE_F_NONBLOCK) == 1 &&
+                         wr(q[1], two + 1, 1) == 1 && set_size(q[1], 4096) == -EBUSY &&
+                         rd(q[0], back, 2) == 2 && back[0] == 'a' && back[1] == 'b');
+    syscall1(SYS_CLOSE, p[0]);
+    syscall1(SYS_CLOSE, p[1]);
+    syscall1(SYS_CLOSE, q[0]);
+    syscall1(SYS_CLOSE, q[1]);
+}
+
 #define PIPE_MAX_FILE  "/proc/sys/fs/pipe-max-size"
 #define PIPE_SOFT_FILE "/proc/sys/fs/pipe-user-pages-soft"
 
@@ -1014,7 +1057,7 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
-/** Run cases (a) to (k) in order; a failed check is printed and counted,
+/** Run cases (a) to (l) in order; a failed check is printed and counted,
  * and the next case runs. */
 void probe_main(unsigned long *sp)
 {
@@ -1036,6 +1079,7 @@ void probe_main(unsigned long *sp)
     case_sweep();
     case_wrap();
     case_limits();
+    case_pages();
     report_checks();
     if (fails == 0) {
         puts("PIPEPROBE OK");
