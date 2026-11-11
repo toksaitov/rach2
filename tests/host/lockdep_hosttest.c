@@ -483,6 +483,32 @@ void irq_leave(void)
     irq_depth--;
 }
 
+/** debugfs's lockdep/inject: `abba` makes the possible deadlock, `irq` the
+ * interrupt inversion, another word fails, and a read names both words. A
+ * write runs with interrupts on, as a system call does. */
+static void row_inject(void)
+{
+    char text[16];
+
+    row_start();
+    irqs_on = 1;
+    check(lockdep_inject_store(NULL, (const char __user *)"abba", 4) == 4 &&
+              said("possible deadlock: lockdep_inject_a at ") &&
+              said(" under lockdep_inject_b at "),
+          "a write of abba makes the checker report a possible deadlock");
+    row_start();
+    check(lockdep_inject_store(NULL, (const char __user *)"irq\n", 4) == 4 &&
+              said("interrupt inversion: lockdep_inject_irq, taken in an interrupt at ") &&
+              said(", is taken before lockdep_inject_on, held with interrupts on at "),
+          "a write of irq makes it report an interrupt inversion");
+    row_start();
+    check(lockdep_inject_store(NULL, (const char __user *)"ab", 2) == -EINVAL && records == 0,
+          "another word fails and makes no report");
+    irqs_on = 0;
+    text[lockdep_inject_show(NULL, text, sizeof(text) - 1)] = '\0';
+    check(strstr(text, "abba\nirq\n") == text && text[9] == '\0', "a read names the two words");
+}
+
 int main(void)
 {
     lockdep_init_map(&mutex_m, "mutex_m", &mutex_key);
@@ -495,6 +521,7 @@ int main(void)
     row_trylock();
     row_misuse();
     row_proc();
+    row_inject();
     row_overflow();
     if (fails) {
         printf("lockdep-hosttest: %d failure(s)\n", fails);
