@@ -1020,7 +1020,8 @@ int sysfs_attr_writable(int node, int attr)
            sysfs_attr_uevent(node, attr) ||
            (node == SYSFS_PCI_DEVICE && attr == SYSFS_PCI_CONFIG) ||
            (node == SYSFS_BACKLIGHT && (attr == BACKLIGHT_POWER || attr == BACKLIGHT_BRIGHTNESS)) ||
-           (node == SYSFS_RFKILL && (attr == RFKILL_ATTR_SOFT || attr == RFKILL_ATTR_STATE));
+           (node == SYSFS_RFKILL && (attr == RFKILL_ATTR_SOFT || attr == RFKILL_ATTR_STATE)) ||
+           (node == SYSFS_THP && attr != SYSFS_THP_PMD_SIZE);
 }
 
 int sysfs_file_writable(int node, int key, int attr)

@@ -461,6 +461,7 @@ const char *synth_sysvipc_name(int origin);
 #define SYSFS_DMI_MODALIAS    22
 #define SYSFS_KERNEL_MM       58 /* /sys/kernel/mm */
 #define SYSFS_THP             59 /* /sys/kernel/mm/transparent_hugepage */
+#define SYSFS_THP_PMD_SIZE    3  /* its hpage_pmd_size, the one read-only file */
 
 /* The `procfile` of each file of a PCI function's directory, by Linux's
  * names (`sysfs_pci_attr`); 1 has no file, since 1 + 1 is the inode number
@@ -538,8 +539,8 @@ int sysfs_attr_uevent(int node, int attr);
 
 /** Whether the attribute `attr` of `node` takes a privileged write:
  * rtc0's wakealarm, /sys/power's state, a backlight's brightness and
- * bl_power, a radio switch's soft and state, and a device's uevent
- * (`sysfs_attr_uevent`). */
+ * bl_power, a radio switch's soft and state, a device's uevent
+ * (`sysfs_attr_uevent`), and each transparent-hugepage policy file. */
 int sysfs_attr_writable(int node, int attr);
 
 /** The interfaces' part, in procfs.c: the index of the interface named by

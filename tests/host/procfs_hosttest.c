@@ -2255,28 +2255,84 @@ static void system_rows(void)
           "modalias, as Linux's dmi-id.c makes it");
 }
 
-/** Read Linux's disabled THP values, including the native PMD size. */
+/** Read the THP files at Linux 6.12's defaults with the policy never, and
+ * write each policy as Linux's stores parse it. */
 static void thp_rows(void)
 {
     static const char *const expected[] = {"always madvise [never]\n",
-                                           "always defer defer+madvise madvise [never]\n",
-                                           "0\n",
+                                           "always defer defer+madvise [madvise] never\n",
+                                           "1\n",
 #if ELF_CLASS == 2
                                            "2097152\n",
 #else
                                            "4194304\n",
 #endif
                                            "always within_size advise [never] deny force\n",
-                                           "0\n"};
+                                           "1\n"};
+    static const struct {
+        int attr;
+        const char *text;
+        int32_t rc;
+        const char *after;
+    } writes[] = {
+        {0, "always\n", 7, "[always] madvise never\n"},
+        {0, "madvise", 7, "always [madvise] never\n"},
+        {0, "never ", -EINVAL, "always [madvise] never\n"},
+        {0, "never\n\n", -EINVAL, "always [madvise] never\n"},
+        {1, "defer+madvise\n", 14, "always defer [defer+madvise] madvise never\n"},
+        {1, "defer", 5, "always [defer] defer+madvise madvise never\n"},
+        {1, "sometimes", -EINVAL, "always [defer] defer+madvise madvise never\n"},
+        {2, "+0\n", 3, "0\n"},
+        {2, "2", -EINVAL, "0\n"},
+        {2, "0001", 4, "1\n"},
+        {2, "x", -EINVAL, "1\n"},
+        {2, "", -EINVAL, "1\n"},
+#if ELF_CLASS == 2
+        {2, "18446744073709551616", -ERANGE, "1\n"},
+        {2, "18446744073709551615", -EINVAL, "1\n"},
+#else
+        {2, "4294967296", -ERANGE, "1\n"},
+        {2, "4294967295", -EINVAL, "1\n"},
+#endif
+        {3, "1", -EINVAL, 0},
+        {4, "within_size\n", 12, "always [within_size] advise never deny force\n"},
+        {4, "force", 5, "always within_size advise never deny [force]\n"},
+        {4, "never\n\n", -EINVAL, "always within_size advise never deny [force]\n"},
+        {4, "never           \n", -EINVAL, "always within_size advise never deny [force]\n"},
+        {4, "deny", 4, "always within_size advise never [deny] force\n"},
+        {5, "off", 3, "0\n"},
+        {5, "yes please", 10, "1\n"},
+        {5, "F", 1, "0\n"},
+        {5, "on", 2, "1\n"},
+        {5, "o", -EINVAL, "1\n"},
+        {5, "maybe", -EINVAL, "1\n"},
+    };
     char out[128];
+    char text[32];
     int i;
 
     for (i = 0; i < (int)(sizeof(expected) / sizeof(expected[0])); i++) {
         check(sys_text(SYSFS_THP, 0, i, out, sizeof(out)) > 0 && eq(out, expected[i]),
-              "disabled THP attribute in Linux's format");
+              "THP attribute at Linux's default in Linux's format");
     }
     check(sys_text(SYSFS_THP, 0, 6, out, sizeof(out)) == -ENOENT,
           "no attribute past the THP files");
+    for (i = 0; i < (int)(sizeof(writes) / sizeof(writes[0])); i++) {
+        uint32_t n = (uint32_t)__builtin_strlen(writes[i].text);
+
+        k_memset(text, 0, sizeof(text));
+        k_memcpy(text, writes[i].text, n);
+        check(thp_store(writes[i].attr, text, n) == writes[i].rc,
+              "THP store takes and refuses what Linux's does");
+        check(!writes[i].after || (sys_text(SYSFS_THP, 0, writes[i].attr, out, sizeof(out)) > 0 &&
+                                   eq(out, writes[i].after)),
+              "THP file reads back the stored policy");
+    }
+    thp_enabled = 2;
+    thp_defrag = 3;
+    thp_shmem = 1;
+    thp_zero_page = 1;
+    thp_shrink_underused = 1;
 }
 
 /** The entry below `dir` named `name`. */

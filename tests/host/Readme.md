@@ -63,7 +63,7 @@ The `genetlink_hosttest.c` model registers a family against the real generic dis
 
 `kvm_irq_hosttest.c` checks the full interrupt controller through port and MMIO exits, GSI and state ioctls, and the real eventfd callbacks. Its full-controller rows cover allocation rollback, PIC priority and cascade, level EOI, RTC acknowledgement after state restore, irqfd resampling with independent line sources, PIT latches and reinjection, HPET handoff, halted wakeups and routing replacement. `--irqchip-only` runs these rows alone.
 
-`synthfs_hosttest.c --thp-only` checks the disabled transparent-hugepage paths, attributes and read-only modes. `procfs_hosttest.c --thp-only` checks their text and the native page-directory mapping size. `sched_hosttest.c --affinity-only` forces a remote affinity change to wait for a running target, a later request to permit the original processor, and a target to exit while the caller waits; it then runs the real rseq return handler on the moved thread and checks its CPU fields and concurrency ID. These rows also run with their programs' other rows.
+`synthfs_hosttest.c --thp-only` checks the transparent-hugepage paths, attributes and which of them root may write. `procfs_hosttest.c --thp-only` checks their text at Linux's defaults, the native page-directory mapping size, and writes that Linux's stores take and refuse. `sched_hosttest.c --affinity-only` forces a remote affinity change to wait for a running target, a later request to permit the original processor, and a target to exit while the caller waits; it then runs the real rseq return handler on the moved thread and checks its CPU fields and concurrency ID. These rows also run with their programs' other rows.
 
 ## Results
 
