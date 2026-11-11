@@ -184,6 +184,31 @@ static int pipe_writable(void *arg)
     return pipe_free_space(p) != 0 || !p->read_open;
 }
 
+/** The slots of Linux's ring for `p` that no buffer holds: its size in pages,
+ * Linux's `max_usage`, less the buffers that hold bytes. A write may leave
+ * more buffers than that (`pipe_buf_slots`), and then none is free. */
+static uint32_t pipe_slots_free(const pipe_t *p)
+{
+    uint32_t max = p->size / PAGE_SIZE;
+
+    return p->bufs < max ? max - p->bufs : 0;
+}
+
+/** Whether `p` has room for a buffer more, as Linux's `pipe_full` judges a
+ * splice, a tee, vmsplice and poll: a byte of the ring and a slot free. */
+static int pipe_slot_room(const pipe_t *p)
+{
+    return pipe_free_space(p) != 0 && pipe_slots_free(p) != 0;
+}
+
+/** The wait condition of a splice, a tee or a vmsplice into the pipe `arg`:
+ * a buffer more fits (`pipe_slot_room`), or no reader is left. */
+static int pipe_slot_writable(void *arg)
+{
+    pipe_t *p = (pipe_t *)arg;
+    return pipe_slot_room(p) || !p->read_open;
+}
+
 /** The wait condition of a reader of the pipe `arg` that a splice's hold
  * stopped: the hold has ended. */
 static int pipe_unspliced(void *arg)
@@ -235,8 +260,10 @@ static void pipe_wake(pipe_t *p, wait_queue_t *wq, uint32_t kinds)
 /** The slots of `buf_pages` for a ring of `size` bytes: twice its pages and
  * two, as many as writes can open, since of two neighbouring buffers past
  * the first that writes opened the second opened only because the first's
- * page had no room for its bytes. Tee, splice and vmsplice can open more,
- * which `pipe_buf_open` folds into the newest. */
+ * page had no room for its bytes. Tee, splice and vmsplice open a buffer
+ * only while fewer than the pages hold bytes (`pipe_slots_free`), but
+ * writes after theirs can open more, which `pipe_buf_open` folds into the
+ * newest. */
 static uint32_t pipe_buf_slots(uint32_t size)
 {
     return 2 * (size / PAGE_SIZE) + 2;
@@ -557,8 +584,9 @@ static void pipe_sigpipe(void)
 #define PUT_PINNED   0x4u /* vmsplice's, from pages a pin may take */
 
 /** Wait for room in `p` for a `pipe_put` with `how` that has written
- * `done` bytes: 0 once the ring has room, -EAGAIN when the put may not wait,
- * as with PUT_NONBLOCK or for a splice past its first byte, or -EINTR. */
+ * `done` bytes: 0 once the ring has a byte free, or for a splice a buffer
+ * more (`pipe_slot_room`), -EAGAIN when the put may not wait, as with
+ * PUT_NONBLOCK or for a splice past its first byte, or -EINTR. */
 static int32_t pipe_put_wait(pipe_t *p, uint32_t how, uint32_t done)
 {
     int merge = (how & PUT_MERGE) != 0;
@@ -566,11 +594,30 @@ static int32_t pipe_put_wait(pipe_t *p, uint32_t how, uint32_t done)
     if ((how & PUT_NONBLOCK) || (!merge && done > 0)) {
         return -EAGAIN;
     }
-    if (wq_wait_event_as(&p->write_wq, pipe_writable, p,
+    if (wq_wait_event_as(&p->write_wq, merge ? pipe_writable : pipe_slot_writable, p,
                          merge ? "pipe_write" : "pipe_wait_writable") < 0) {
         return -EINTR;
     }
     return 0;
+}
+
+/** Whether a splice's next byte, `src` bytes into its source page, opens a
+ * buffer of `p`, as `pipe_buf_add_pages` judges it: at a page's start, as
+ * the first after another writer's, `fresh`, or in an emptied pipe. */
+static int pipe_put_opens(const pipe_t *p, uint32_t src, int fresh)
+{
+    return fresh || p->bufs == 0 || (src & (PAGE_SIZE - 1)) == 0;
+}
+
+/** Whether `p` has room for the next bytes of a `pipe_put` with `how`: a
+ * byte free, and for a splice whose next byte opens a buffer, `opens`, a
+ * slot free as well, as Linux's `add_to_pipe` stops at `pipe_full`. */
+static int pipe_put_room(const pipe_t *p, uint32_t how, int opens)
+{
+    if (pipe_free_space(p) == 0) {
+        return 0;
+    }
+    return (how & PUT_MERGE) || !opens || pipe_slots_free(p) != 0;
 }
 
 /** Copy the `n` bytes at `from`, within one page, to `at` for a `pipe_put`
@@ -585,31 +632,35 @@ static int32_t pipe_put_copy(uint8_t *at, const char __user *from, uint32_t n, u
 }
 
 /**
- * The write of a pipe end: all `count` bytes, waiting whenever the ring is
- * full unless `how` has PUT_NONBLOCK. Returns the bytes written, or, before
- * a transfer, -EBADF for a descriptor not open for writing, -EFAULT for a
- * bad buffer, -EAGAIN for a full pipe with PUT_NONBLOCK, -EINTR when a
- * signal ends a wait, or -ENOMEM when the heap has no room for the ring;
- * each of these after a transfer returns the count written instead. With no
- * reader left the write
- * raises SIGPIPE in the calling thread, as Linux sends it, and returns
- * -EPIPE or the count written. Readers are woken for data at every
- * transfer, the ring empty before it or not, so an edge-triggered epoll
- * registration of the read end is told of each write, as Linux tells one of
- * a pipe.
+ * The write of a pipe end: up to `count` bytes, all of them for a write,
+ * PUT_MERGE, which waits whenever the ring is full until the last is in
+ * unless `how` has PUT_NONBLOCK, and what fits for a splice, which waits
+ * only before its first byte. Returns the bytes written, or, before a
+ * transfer, -EBADF for a descriptor not open for writing, -EFAULT for a bad
+ * buffer, -EAGAIN for a full pipe with PUT_NONBLOCK, -EINTR when a signal
+ * ends a wait, or -ENOMEM when the heap has no room for the ring; each of
+ * these after a transfer returns the count written instead. With no reader
+ * left the write raises SIGPIPE in the calling thread, as Linux sends it,
+ * and returns -EPIPE or the count written. Readers are woken for data at
+ * every transfer, the ring empty before it or not, so an edge-triggered
+ * epoll registration of the read end is told of each write, as Linux tells
+ * one of a pipe.
  *
  * Each transfer makes its page present as `pipe_read`'s does, and judges
  * the readers and the ring again after that sleep.
  *
- * A write, PUT_MERGE, fills Linux's page buffers as `pipe_buf_add` does,
- * and waits in `pipe_write` as Linux's does. Otherwise the bytes are a
- * splice's, which take a buffer for each page of the source they come from,
- * whose first byte lies `src` bytes into its page (`pipe_buf_add_pages`),
- * and wait for room only before their first byte, in `pipe_wait_writable`,
- * returning what fitted once the ring fills, as Linux's `wait_for_space` and
- * `iter_to_pipe` do. With PUT_PINNED, a source page that Linux's
- * get_user_pages refuses, such as `[vvar]`, ends the copy with -EFAULT or
- * the count written, judged after the last sleep before its copy.
+ * A write fills Linux's page buffers as `pipe_buf_add` does, and waits in
+ * `pipe_write` as Linux's does. A splice's bytes take a buffer for each
+ * page of the source they come from, whose first byte lies `src` bytes into
+ * its page (`pipe_buf_add_pages`), and a transfer stays within one such
+ * page. The splice stops where Linux's ring of a buffer for each page of
+ * the pipe's size is full (`pipe_put_room`), however few bytes its buffers
+ * hold, and waits for room only before its first byte, in
+ * `pipe_wait_writable`, returning what fitted once the ring fills, as
+ * Linux's `wait_for_space` and `iter_to_pipe` do. With PUT_PINNED, a source
+ * page that Linux's get_user_pages refuses, such as `[vvar]`, ends the copy
+ * with -EFAULT or the count written, judged after the last sleep before its
+ * copy.
  */
 static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, uint32_t how,
                         uint32_t src)
@@ -639,7 +690,7 @@ static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, u
             return (done > 0) ? (int32_t)done : -EPIPE;
         }
 
-        if (pipe_free_space(p) == 0) {
+        if (!pipe_put_room(p, how, pipe_put_opens(p, src + done, fresh || p->tail != last))) {
             rc = pipe_put_wait(p, how, done);
             if (rc < 0) {
                 return (done > 0) ? (int32_t)done : rc;
@@ -660,6 +711,9 @@ static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, u
             fill = 0;
             fresh = 1;
         }
+        if (!pipe_put_room(p, how, pipe_put_opens(p, src + done, fresh))) {
+            continue;
+        }
         {
             uint8_t *at;
 
@@ -671,6 +725,9 @@ static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, u
                 chunk = count - done;
             }
             chunk = page_piece(addr, chunk);
+            if (!merge) {
+                chunk = page_piece(src + done, chunk);
+            }
             rc = pipe_put_copy(at, buf + done, chunk, how);
             if (rc < 0) {
                 return (done > 0) ? (int32_t)done : rc;
@@ -742,7 +799,7 @@ static short pipe_poll(fd_entry_t *e, short events, struct wait_queue **wq)
         }
     }
     if (e->flags & FD_FLAG_WRITE) {
-        if (pipe_free_space(p) != 0 || !p->read_open) {
+        if (pipe_slot_room(p) || !p->read_open) {
             revents |= (short)(events & PIPE_POLLOUT);
         }
         if (!p->read_open) {
@@ -822,7 +879,7 @@ int32_t pipe_vmsplice_write(fd_entry_t *e, const char __user *buf, uint32_t coun
                     (uint32_t)((__force uintptr_t)buf & (PAGE_SIZE - 1)));
 }
 
-int32_t pipe_splice_room(fd_entry_t *e, int nonblock)
+int32_t pipe_splice_room(fd_entry_t *e, int nonblock, uint32_t src)
 {
     pipe_t *p = (pipe_t *)e->priv;
 
@@ -834,13 +891,15 @@ int32_t pipe_splice_room(fd_entry_t *e, int nonblock)
             pipe_sigpipe();
             return -EPIPE;
         }
-        if (pipe_free_space(p) != 0) {
-            return (int32_t)pipe_free_space(p);
+        if (pipe_slot_room(p)) {
+            uint32_t room = pipe_slots_free(p) * PAGE_SIZE - (src & (PAGE_SIZE - 1));
+
+            return (int32_t)(room < pipe_free_space(p) ? room : pipe_free_space(p));
         }
         if (nonblock) {
             return -EAGAIN;
         }
-        if (wq_wait_event(&p->write_wq, pipe_writable, p) < 0) {
+        if (wq_wait_event(&p->write_wq, pipe_slot_writable, p) < 0) {
             return -EINTR;
         }
     }
@@ -1016,6 +1075,24 @@ void pipe_splice_consume(fd_entry_t *e, uint32_t n)
     wq_wake(&p->splice_wq, WQ_ALL);
 }
 
+/** How many of the first `n` bytes buffered in `a` another pipe takes in
+ * `slots` buffers, one for each buffer of `a` the bytes reach
+ * (`pipe_buf_link`), as Linux's tee and splice between pipes stop once the
+ * other pipe is full. */
+static uint32_t pipe_tee_slots(const pipe_t *a, uint32_t n, uint32_t slots)
+{
+    uint32_t end;
+
+    if (!a->buf_pages) {
+        end = slots * PAGE_SIZE;
+    } else if (slots < a->bufs) {
+        end = pipe_buf_at(a, slots) - a->head;
+    } else {
+        return n;
+    }
+    return end < n ? end : n;
+}
+
 int32_t pipe_tee(fd_entry_t *in, fd_entry_t *out, uint32_t len, int nonblock, int move)
 {
     pipe_t *a = (pipe_t *)in->priv;
@@ -1041,13 +1118,13 @@ int32_t pipe_tee(fd_entry_t *in, fd_entry_t *out, uint32_t len, int nonblock, in
             pipe_sigpipe();
             return -EPIPE;
         }
-        if (pipe_free_space(b) != 0) {
+        if (pipe_slot_room(b)) {
             break;
         }
         if (nonblock) {
             return -EAGAIN;
         }
-        if (wq_wait_event(&b->write_wq, pipe_writable, b) < 0) {
+        if (wq_wait_event(&b->write_wq, pipe_slot_writable, b) < 0) {
             return -EINTR;
         }
     }
@@ -1058,6 +1135,7 @@ int32_t pipe_tee(fd_entry_t *in, fd_entry_t *out, uint32_t len, int nonblock, in
     if (n > pipe_free_space(b)) {
         n = pipe_free_space(b);
     }
+    n = pipe_tee_slots(a, n, pipe_slots_free(b));
     if (n > len) {
         n = len;
     }
