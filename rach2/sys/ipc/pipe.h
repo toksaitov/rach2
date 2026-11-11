@@ -85,6 +85,16 @@ typedef struct pipe {
      * meanwhile, so no byte goes to two readers. */
     int spliced;
     wait_queue_t splice_wq;
+    /* Linux's page buffers over the ring, which its shrink rule counts
+     * (`pipe_set_size`): the counter value at which each buffer that still
+     * holds bytes began, oldest first, `bufs` of them from `buf_first` in the
+     * `buf_cap` slots of `buf_start`, allocated with the ring; and whether
+     * the newest takes a later write's bytes. A NULL `buf_start` keeps none. */
+    uint32_t *buf_start;
+    uint32_t buf_cap;
+    uint32_t buf_first;
+    uint32_t bufs;
+    int buf_merge;
 } pipe_t;
 
 /** Empty the list of live pipes; called once at boot. Each pipe comes from

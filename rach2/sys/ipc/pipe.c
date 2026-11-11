@@ -163,6 +163,7 @@ static void pipe_free(pipe_t *p)
         *link = p->next;
     }
     kfree(p->buf);
+    kfree(p->buf_start);
     kfree(p);
 }
 
@@ -218,6 +219,167 @@ static void pipe_wake(pipe_t *p, wait_queue_t *wq, uint32_t kinds)
     if (p->rdwr_open) {
         wq_wake(&p->rdwr_wq, kinds);
     }
+}
+
+/*
+ * Linux keeps a pipe's bytes in page buffers, one to a slot of its ring, and
+ * refuses to shrink a pipe below the buffers that hold bytes, however few
+ * bytes they hold. The functions below keep the same buffers' bounds over
+ * the byte ring, `buf_start` in pipe.h, so that `pipe_set_size` can apply
+ * the rule: a write opens a page when the last one cannot take its bytes,
+ * and a buffer leaves once read whole.
+ */
+
+/** The slots of `buf_start` for a ring of `size` bytes: twice its pages and
+ * two, as many as writes can open, since of two neighbouring buffers past
+ * the first that writes opened the second opened only because the first's
+ * page had no room for its bytes. Tee and splice can open more, which
+ * `pipe_buf_open` folds into the newest. */
+static uint32_t pipe_buf_slots(uint32_t size)
+{
+    return 2 * (size / PAGE_SIZE) + 2;
+}
+
+/** The counter value at which the `i`th buffer of `p`, oldest first, began. */
+static uint32_t pipe_buf_at(const pipe_t *p, uint32_t i)
+{
+    return p->buf_start[(p->buf_first + i) % p->buf_cap];
+}
+
+/**
+ * Begin a buffer of `p` at the counter value `at`, which takes later writes'
+ * bytes when `merge`. With every slot in use the bytes join the newest
+ * buffer instead; the count is then still past the pages, so the shrinks
+ * it refuses are Linux's until that buffer alone is left.
+ */
+static void pipe_buf_open(pipe_t *p, uint32_t at, int merge)
+{
+    if (!p->buf_start) {
+        return;
+    }
+    if (p->bufs < p->buf_cap) {
+        p->buf_start[(p->buf_first + p->bufs) % p->buf_cap] = at;
+        p->bufs++;
+    }
+    p->buf_merge = merge;
+}
+
+/** Let go of the buffers of `p` that its reads have emptied; called after
+ * `head` moves. */
+static void pipe_buf_drop(pipe_t *p)
+{
+    uint32_t avail = pipe_available(p);
+
+    if (avail == 0) {
+        p->bufs = 0;
+        p->buf_first = 0;
+        return;
+    }
+    while (p->bufs > 1 && p->tail - pipe_buf_at(p, 1) >= avail) {
+        p->buf_first = (p->buf_first + 1) % p->buf_cap;
+        p->bufs--;
+    }
+}
+
+/**
+ * The bytes of a write of `count` that the newest buffer of `p` takes, as
+ * Linux's `pipe_write` merges them: the write's last part of a page, when
+ * the pipe holds bytes, the newest buffer takes merges and that part fits in
+ * its page after the bytes written to it.
+ */
+static uint32_t pipe_buf_merge_room(const pipe_t *p, uint32_t count)
+{
+    uint32_t chars = count & (PAGE_SIZE - 1);
+
+    if (chars == 0 || p->bufs == 0 || !p->buf_merge || pipe_available(p) == 0) {
+        return 0;
+    }
+    if (p->tail - pipe_buf_at(p, p->bufs - 1) + chars > PAGE_SIZE) {
+        return 0;
+    }
+    return chars;
+}
+
+/**
+ * Account for `n` bytes about to be written at the tail of `p`: the first
+ * `*fill` of them join the newest buffer, and the rest open buffers of a
+ * page each, which take later writes' bytes when `merge`. `*fill` is left
+ * with the room of the buffer the bytes ended in, for the same write's next
+ * bytes.
+ */
+static void pipe_buf_add(pipe_t *p, uint32_t n, uint32_t *fill, int merge)
+{
+    uint32_t at = p->tail;
+
+    if (p->bufs == 0) {
+        *fill = 0;
+    }
+    while (n > 0) {
+        uint32_t take;
+
+        if (*fill == 0) {
+            pipe_buf_open(p, at, merge);
+            *fill = PAGE_SIZE;
+        }
+        take = n < *fill ? n : *fill;
+        *fill -= take;
+        at += take;
+        n -= take;
+    }
+}
+
+/**
+ * Open in `b` a buffer for each buffer of `a` that the first `n` bytes
+ * buffered in `a` reach, none taking later writes' bytes, as Linux's tee and
+ * splice between pipes link each buffer, or a part of it, into the other
+ * pipe; called before `b`'s tail moves past the `n` bytes.
+ */
+static void pipe_buf_link(const pipe_t *a, pipe_t *b, uint32_t n)
+{
+    uint32_t i, from = 0, fill = 0;
+
+    if (!a->buf_start) {
+        pipe_buf_add(b, n, &fill, 0);
+        return;
+    }
+    for (i = 0; i < a->bufs && from < n; i++) {
+        pipe_buf_open(b, b->tail + from, 0);
+        from = i + 1 < a->bufs ? pipe_buf_at(a, i + 1) - a->head : n;
+    }
+}
+
+/**
+ * A ring of `size` bytes in `*ring` and the slots for its buffers' bounds in
+ * `*starts`: 0, or -ENOMEM with neither allocated.
+ */
+static int32_t pipe_ring_new(uint32_t size, uint8_t **ring, uint32_t **starts)
+{
+    *ring = kmalloc(size);
+    *starts = kmalloc(pipe_buf_slots(size) * sizeof(uint32_t));
+    if (!*ring || !*starts) {
+        kfree(*ring);
+        kfree(*starts);
+        return -ENOMEM;
+    }
+    return 0;
+}
+
+/** Give `p` its ring, at its first write when nothing has resized it yet:
+ * 0, or -ENOMEM. */
+static int32_t pipe_ring_ready(pipe_t *p)
+{
+    if (p->buf) {
+        return 0;
+    }
+    if (pipe_ring_new(p->size, &p->buf, &p->buf_start) < 0) {
+        p->buf = NULL;
+        p->buf_start = NULL;
+        return -ENOMEM;
+    }
+    p->buf_cap = pipe_buf_slots(p->size);
+    p->buf_first = 0;
+    p->bufs = 0;
+    return 0;
 }
 
 /**
@@ -311,6 +473,7 @@ static int32_t pipe_read(fd_entry_t *e, char __user *buf, uint32_t count)
             return (done > 0) ? (int32_t)done : -EFAULT;
         }
         pipe_ring_consume(p, chunk);
+        pipe_buf_drop(p);
         done += chunk;
         pipe_wake(p, &p->write_wq, WQ_ROOM);
     }
@@ -347,10 +510,11 @@ static void pipe_sigpipe(void)
  * Each transfer makes its page present as `pipe_read`'s does, and judges
  * the readers and the ring again after that sleep.
  */
-static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, int nonblock)
+static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, int nonblock,
+                        int merge)
 {
     pipe_t *p = (pipe_t *)e->priv;
-    uint32_t done = 0;
+    uint32_t done = 0, fill = merge ? pipe_buf_merge_room(p, count) : 0, last = p->tail;
 
     if (!(e->flags & FD_FLAG_WRITE)) {
         return -EBADF;
@@ -389,11 +553,11 @@ static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, i
         if (!p->read_open) {
             continue;
         }
-        if (!p->buf) {
-            p->buf = kmalloc(p->size);
-            if (!p->buf) {
-                return (done > 0) ? (int32_t)done : -ENOMEM;
-            }
+        if (pipe_ring_ready(p) < 0) {
+            return (done > 0) ? (int32_t)done : -ENOMEM;
+        }
+        if (p->tail != last) {
+            fill = 0;
         }
         {
             uint8_t *at;
@@ -409,7 +573,9 @@ static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, i
             if (copy_from_user(at, (const void __user *)(buf + done), chunk) != 0) {
                 return (done > 0) ? (int32_t)done : -EFAULT;
             }
+            pipe_buf_add(p, chunk, &fill, merge);
             pipe_ring_produce(p, chunk);
+            last = p->tail;
             done += chunk;
             pipe_wake(p, &p->read_wq, WQ_DATA);
         }
@@ -422,7 +588,7 @@ static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, i
  * description has O_NONBLOCK. */
 static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
-    return pipe_put(e, buf, count, fd_is_nonblock(e));
+    return pipe_put(e, buf, count, fd_is_nonblock(e), 1);
 }
 
 /* poll(2) event bits, the Linux values. */
@@ -539,7 +705,7 @@ int pipe_is(const fd_entry_t *e)
 
 int32_t pipe_splice_write(fd_entry_t *e, const char __user *buf, uint32_t count, int nonblock)
 {
-    return pipe_put(e, buf, count, nonblock);
+    return pipe_put(e, buf, count, nonblock, 0);
 }
 
 int32_t pipe_splice_room(fd_entry_t *e, int nonblock)
@@ -626,15 +792,15 @@ int32_t pipe_get_size(const fd_entry_t *e)
  * the slots their counters name in it, so `head` and `tail` keep counting
  * as they did. A growth wakes the writers, which may now have room. The
  * limits are Linux's `pipe_set_size`'s, and a shrink passes them even for a
- * user over the soft limit. The new size is checked against the bytes
- * buffered in bytes, where Linux checks it in pages, each write of less
- * than a page taking one, so a shrink Linux refuses with EBUSY for a pipe
- * of many small writes may succeed here.
+ * user over the soft limit. A shrink below the page buffers that hold bytes
+ * fails with EBUSY, as in Linux, however few bytes they hold: a write opens
+ * a page unless its last part of a page fits in the newest buffer's
+ * (`pipe_buf_merge_room`), and tee, splice and vmsplice always open one.
  */
 int32_t pipe_set_size(fd_entry_t *e, uint32_t size, int privileged)
 {
     pipe_t *p = (pipe_t *)e->priv;
-    uint32_t want = pipe_round_size(size), done = 0, n = pipe_available(p);
+    uint32_t want = pipe_round_size(size), done = 0, n = pipe_available(p), i, *starts;
     uint8_t *ring;
 
     if (want == 0) {
@@ -652,13 +818,16 @@ int32_t pipe_set_size(fd_entry_t *e, uint32_t size, int privileged)
     if (want == p->size) {
         return (int32_t)want;
     }
-    ring = kmalloc(want);
-    if (!ring) {
+    if (pipe_ring_new(want, &ring, &starts) < 0) {
         return -ENOMEM;
     }
-    if (n > want) {
+    if (n > want || p->bufs > want / PAGE_SIZE) {
         kfree(ring);
+        kfree(starts);
         return -EBUSY;
+    }
+    for (i = 0; i < p->bufs; i++) {
+        starts[i] = pipe_buf_at(p, i);
     }
     while (done < n) {
         uint32_t s = (p->head + done) & (p->size - 1), t = (p->head + done) & (want - 1);
@@ -674,7 +843,11 @@ int32_t pipe_set_size(fd_entry_t *e, uint32_t size, int privileged)
         done += chunk;
     }
     kfree(p->buf);
+    kfree(p->buf_start);
     p->buf = ring;
+    p->buf_start = starts;
+    p->buf_cap = pipe_buf_slots(want);
+    p->buf_first = 0;
     if (want > p->size) {
         pipe_wake(p, &p->write_wq, WQ_ROOM);
     }
@@ -719,6 +892,7 @@ void pipe_splice_consume(fd_entry_t *e, uint32_t n)
     }
     if (n > 0) {
         pipe_ring_consume(p, n);
+        pipe_buf_drop(p);
         pipe_wake(p, &p->write_wq, WQ_ROOM);
     }
     p->spliced = 0;
@@ -760,11 +934,8 @@ int32_t pipe_tee(fd_entry_t *in, fd_entry_t *out, uint32_t len, int nonblock, in
             return -EINTR;
         }
     }
-    if (!b->buf) {
-        b->buf = kmalloc(b->size);
-        if (!b->buf) {
-            return -ENOMEM;
-        }
+    if (pipe_ring_ready(b) < 0) {
+        return -ENOMEM;
     }
     n = pipe_available(a);
     if (n > pipe_free_space(b)) {
@@ -774,10 +945,12 @@ int32_t pipe_tee(fd_entry_t *in, fd_entry_t *out, uint32_t len, int nonblock, in
         n = len;
     }
     pipe_ring_copy(a, NULL, b, n);
+    pipe_buf_link(a, b, n);
     pipe_ring_produce(b, n);
     pipe_wake(b, &b->read_wq, WQ_DATA);
     if (move) {
         pipe_ring_consume(a, n);
+        pipe_buf_drop(a);
         pipe_wake(a, &a->write_wq, WQ_ROOM);
     }
     return (int32_t)n;
