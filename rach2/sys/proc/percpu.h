@@ -3,6 +3,7 @@
 #define _PERCPU_H_
 
 #include "../arch/arch.h"
+#include "../lib/lockdep.h"
 
 struct process;
 struct page_dir;
@@ -73,6 +74,16 @@ struct percpu {
     uint32_t wake_bkl_total;                    /* completed lock waits, microseconds modulo 2^32 */
     uint32_t wake_irq_start;  /* latest serviced timer interrupt before its lock */
     uint32_t wake_irq_locked; /* the same interrupt after taking its lock */
+#ifdef RACH2_LOCKDEP
+    /* The lock-order checker's (lib/lockdep.c): the spinlocks this
+     * processor holds, in interrupts and out, since a spinlock is held
+     * across no switch; the sleeping locks taken before it runs a process;
+     * and how deep it is in the checker, which takes no note of the locks
+     * it takes itself. */
+    struct lockdep_held lockdep_spin;
+    struct lockdep_held lockdep_sleep;
+    unsigned int lockdep_busy;
+#endif
 };
 
 extern struct percpu cpu_table[NR_CPUS];
