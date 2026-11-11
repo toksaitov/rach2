@@ -12,7 +12,9 @@
  * the kernel exception's order, the record and then `k_panic`, or the hardware
  * fault's, `k_panic_begin` and then the record. The rows at 80 by 24 are the
  * smallest screen the console takes, where the report covers the picture; the
- * QEMU rows of machine.smp force the two faults on 80 by 25.
+ * QEMU rows of machine.smp force the two faults on 80 by 25. `k_udelay`
+ * counts what the panic waits and `power_emergency_restart` jumps back too,
+ * so that a row of `panic_timeout` reads the wait and the reset.
  */
 #include <setjmp.h>
 
@@ -140,6 +142,47 @@ void k_stop(void)
     longjmp(stop_point, 1);
 }
 
+static unsigned long waited_us; /* what the panic waited, by `k_udelay` */
+static int restarted;           /* whether the panic reset the machine */
+
+/** Add `usec` to the time waited, without waiting. */
+void k_udelay(uint32_t usec)
+{
+    waited_us += usec;
+}
+
+/** The panic's reset: counted, and back to the row. */
+void power_emergency_restart(void)
+{
+    restarted = 1;
+    longjmp(stop_point, 2);
+}
+
+/** No boot line here: no option is given. */
+int kcmdline_count(const char *key)
+{
+    (void)key;
+    return 0;
+}
+
+/** No flag is given. */
+int kcmdline_has(const char *flag)
+{
+    (void)flag;
+    return 0;
+}
+
+/** No option has a value. */
+int kcmdline_value_nth(const char *key, int nth, char *out, unsigned int outlen)
+{
+    (void)key;
+    (void)nth;
+    if (outlen > 0) {
+        out[0] = '\0';
+    }
+    return 0;
+}
+
 static int failures;
 
 #define CHECK(condition, detail)                      \
@@ -242,6 +285,51 @@ static void both_routes(const char *what)
     CHECK(stayed(), what);
 }
 
+/**
+ * What `panic_timeout` does once the record is out: 3 says when the machine
+ * resets, on the screen and the port, waits 3 seconds and resets, and the
+ * longest record and reason still fit with that line; -1 resets with no wait
+ * and no line; 0 halts with neither.
+ */
+static void timeouts(void)
+{
+    static char lengthy[1024];
+
+    restart();
+    panic_timeout = 3;
+    waited_us = 0;
+    restarted = 0;
+    klog(KLOG_CRIT, "isr", "kernel exception: before a reset");
+    stop("timed");
+    CHECK(strstr(wire, "panic: rebooting in 3 seconds..") != 0 &&
+              strstr(shown, "panic: rebooting in 3 seconds..") != 0,
+          "panic=3 says when the machine resets, on the screen and the port");
+    CHECK(waited_us == 3000000ul && restarted, "and resets it after waiting 3 seconds");
+    CHECK(stayed(), "and its line scrolls nothing");
+
+    k_memset(lengthy, 'r', sizeof(lengthy) - 1);
+    restart();
+    klog(KLOG_CRIT, "isr", "%s", lengthy);
+    stop(lengthy);
+    CHECK(stayed() && strstr(shown, "panic: rebooting in 3 seconds..") != 0,
+          "the longest record and reason fit with the reset's line");
+
+    restart();
+    panic_timeout = -1;
+    waited_us = 0;
+    restarted = 0;
+    stop("at once");
+    CHECK(restarted && waited_us == 0 && strstr(wire, "rebooting in") == 0,
+          "panic=-1 resets the machine at once, with no line");
+
+    restart();
+    panic_timeout = 0;
+    restarted = 0;
+    stop("halted");
+    CHECK(!restarted && waited_us == 0 && strstr(wire, "rebooting in") == 0,
+          "panic=0 halts, with no line and no reset");
+}
+
 /** The longest record and reason, a panic with no record, one in the middle
  * of a line, and one inside an escape string. */
 static void edges(void)
@@ -287,6 +375,7 @@ int main(void)
     textcon_rows = 24;
     both_routes("the text console at 80 by 24 shows the vector, address and reason");
     edges();
+    timeouts();
 
     fb.type = BOOT_FB_RGB;
     fb.addr = 0x80000000u;
