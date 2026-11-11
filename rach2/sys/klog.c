@@ -567,6 +567,57 @@ static void dest_screen(const struct klog_record *r)
 
 /* ---- destination 3: the serial port ---- */
 
+/*
+ * klog's report lock: the number, plus one, of the processor that writes a
+ * record to the port, or 0. A holder of the big lock writes the port under
+ * it as a processor without it writes a report (`klog_report`), so the
+ * port has each record whole. It is the lock-order table's last row with
+ * the checker's own (lib/lockdep.Readme.md): nothing is taken under it.
+ */
+static volatile unsigned int report_owner;
+
+/* KLOG_REPORT_WAIT_MS in cycles of the time-stamp counter, counted at the
+ * serial port's rate, faster than any processor's counter runs. */
+#define KLOG_REPORT_WAIT_CYCLES (KLOG_REPORT_WAIT_MS * 5000000UL)
+
+/**
+ * Take the report lock: KLOG_REPORT_LOCKED when taken; KLOG_REPORT_RING
+ * when this processor holds it, as an interrupt of the holder finds it, or
+ * when `bounded` and another held it for KLOG_REPORT_WAIT_MS;
+ * KLOG_REPORT_PANIC when a panic finds it held by a processor the panic
+ * has stopped. Only this processor writes its own number, so the first
+ * reading cannot be stale for it.
+ */
+static int report_get(int bounded)
+{
+    unsigned int me = (unsigned int)arch_cpu_id() + 1u;
+    uint64_t start;
+
+    if (report_owner == me) {
+        return KLOG_REPORT_RING;
+    }
+    start = arch_cycles();
+    while (arch_atomic_cmpxchg(&report_owner, 0u, me) != 0u) {
+        if (k_panicking()) {
+            return KLOG_REPORT_PANIC;
+        }
+        if (bounded && arch_cycles() - start >= (uint64_t)KLOG_REPORT_WAIT_CYCLES) {
+            return KLOG_REPORT_RING;
+        }
+        arch_relax();
+    }
+    return KLOG_REPORT_LOCKED;
+}
+
+/** Let the report lock go when `report_get` gave `how`. */
+static void report_put(int how)
+{
+    if (how == KLOG_REPORT_LOCKED) {
+        k_barrier();
+        report_owner = 0;
+    }
+}
+
 /**
  * Write the record to the port.
  *
@@ -576,6 +627,7 @@ static void dest_screen(const struct klog_record *r)
 static void dest_serial(const struct klog_record *r)
 {
     uint32_t i;
+    int how = report_get(0);
 
     if (serial_line_open) {
         serial_out('\r');
@@ -588,6 +640,7 @@ static void dest_serial(const struct klog_record *r)
         }
         serial_out(r->text[i]);
     }
+    report_put(how);
 }
 
 /* ---- destination 4: netconsole ---- */
@@ -1149,6 +1202,49 @@ void klog(int level, const char *subsystem, const char *format, ...)
     va_start(ap, format);
     klog_v(level, subsystem, format, ap);
     va_end(ap);
+}
+
+/* ---- the reports that cannot wait ---- */
+
+int klog_report_begin(void)
+{
+    return report_get(1);
+}
+
+/**
+ * The record goes to the ring under the ring's lock, which is held only
+ * with interrupts off and for no wait, and then, unless the report is the
+ * ring's alone, to the port.
+ */
+void klog_report(int how, int level, const char *subsystem, const char *format, ...)
+{
+    struct klog_record r;
+    va_list ap;
+    uint32_t i;
+
+    va_start(ap, format);
+    klog_build(&r, level, subsystem, format, ap);
+    va_end(ap);
+    ring_append(r.text, r.len, 0u);
+    if (how == KLOG_REPORT_RING) {
+        return;
+    }
+    if (serial_line_open) {
+        serial_out('\r');
+        serial_out('\n');
+        serial_line_open = 0;
+    }
+    for (i = 0; i < r.len; i++) {
+        if (r.text[i] == '\n') {
+            serial_out('\r');
+        }
+        serial_out(r.text[i]);
+    }
+}
+
+void klog_report_end(int how)
+{
+    report_put(how);
 }
 
 /* ---- the console ---- */
