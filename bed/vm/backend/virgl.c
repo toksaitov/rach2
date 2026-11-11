@@ -7,12 +7,14 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
+#include <sys/eventfd.h>
 
 #include <virgl/virglrenderer.h>
 
@@ -39,6 +41,13 @@ struct vr_pin {
     uint32_t map_info; /* the cache type virglrenderer gave at the pin */
 };
 
+/* One record for each command the device holds until its fence retires. */
+struct vr_fence {
+    uint32_t ctx, ring;
+    uint64_t id;
+    int used, done, per_ctx;
+};
+
 struct vr {
     struct vd *dev;
     struct kms *kms;
@@ -52,17 +61,48 @@ struct vr {
     struct vr_pin pins[PINS];
     uint32_t npins;
     struct vr_pin_counts pc;
+    int fence_fd;               /* eventfd for asynchronous callbacks, or -1 */
+    pthread_mutex_t fence_lock; /* protects fences against renderer threads */
+    struct vr_fence fences[VD_PENDING];
 };
 
 /* virglrenderer calls back with the cookie vr_init passed. */
 static struct virgl_renderer_callbacks callbacks;
+
+/**
+ * Record retired fences on a renderer thread, waking the serving thread.
+ * Only that thread writes the device's queues and pending-command table.
+ */
+static void retire(struct vr *r, uint32_t ctx, int per_ctx, uint32_t ring, uint64_t id)
+{
+    uint64_t one = 1;
+    unsigned i;
+
+    if (r->fence_fd < 0) {
+        vd_fence_retired(r->dev, ctx, per_ctx, ring, id);
+        return;
+    }
+    pthread_mutex_lock(&r->fence_lock);
+    for (i = 0; i < VD_PENDING; i++) {
+        struct vr_fence *f = &r->fences[i];
+
+        if (f->used && f->per_ctx == per_ctx &&
+            (per_ctx ? f->ctx == ctx && f->ring == ring && f->id <= id
+                     : (int32_t)((uint32_t)f->id - (uint32_t)id) <= 0)) {
+            f->done = 1;
+        }
+    }
+    pthread_mutex_unlock(&r->fence_lock);
+    while (write(r->fence_fd, &one, sizeof(one)) < 0 && errno == EINTR) {
+    }
+}
 
 /** Retire the global timeline's fences up to fence. */
 static void write_fence(void *cookie, uint32_t fence)
 {
     struct vr *r = cookie;
 
-    vd_fence_retired(r->dev, 0, 0, 0, fence);
+    retire(r, 0, 0, 0, fence);
 }
 
 /** Retire a context ring's fences up to fence_id. */
@@ -70,7 +110,7 @@ static void write_context_fence(void *cookie, uint32_t ctx, uint32_t ring, uint6
 {
     struct vr *r = cookie;
 
-    vd_fence_retired(r->dev, ctx, 1, ring, fence_id);
+    retire(r, ctx, 1, ring, fence_id);
 }
 
 /** Give virglrenderer its own descriptor of the GBM device, or none. */
@@ -113,6 +153,7 @@ struct vr *vr_init(struct vd *dev, int gbm_fd, int venus, int native, int verbos
     r->gbm_fd = gbm_fd;
     r->verbose = verbose;
     r->module = -1;
+    r->fence_fd = -1;
     if (gbm_fd < 0) {
         flags |= VIRGL_RENDERER_USE_SURFACELESS;
     }
@@ -121,7 +162,17 @@ struct vr *vr_init(struct vd *dev, int gbm_fd, int venus, int native, int verbos
     }
     if (native) {
 #ifdef VIRGL_RENDERER_DRM
-        flags |= VIRGL_RENDERER_DRM;
+        flags |= VIRGL_RENDERER_DRM | VIRGL_RENDERER_ASYNC_FENCE_CB;
+        if (pthread_mutex_init(&r->fence_lock, NULL)) {
+            free(r);
+            return 0;
+        }
+        r->fence_fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+        if (r->fence_fd < 0) {
+            pthread_mutex_destroy(&r->fence_lock);
+            free(r);
+            return 0;
+        }
 #else
         fprintf(stderr, "backend: native context needs virglrenderer with DRM support\n");
         free(r);
@@ -135,6 +186,10 @@ struct vr *vr_init(struct vd *dev, int gbm_fd, int venus, int native, int verbos
     callbacks.write_context_fence = write_context_fence;
     if ((err = virgl_renderer_init(r, flags, &callbacks)) != 0) {
         fprintf(stderr, "backend: virglrenderer failed to start: %d\n", err);
+        if (r->fence_fd >= 0) {
+            close(r->fence_fd);
+            pthread_mutex_destroy(&r->fence_lock);
+        }
         free(r);
         return 0;
     }
@@ -155,15 +210,31 @@ struct vr *vr_init(struct vd *dev, int gbm_fd, int venus, int native, int verbos
 /** Return the descriptor that is readable when fences may have retired. */
 int vr_poll_fd(struct vr *r)
 {
-    (void)r;
-    return virgl_renderer_get_poll_fd();
+    return r->fence_fd >= 0 ? r->fence_fd : virgl_renderer_get_poll_fd();
 }
 
 /** Retire the fences that have signalled, on every timeline. */
 void vr_poll(struct vr *r)
 {
-    (void)r;
+    uint64_t count;
+    unsigned i;
+
     virgl_renderer_poll();
+    if (r->fence_fd < 0) {
+        return;
+    }
+    while (read(r->fence_fd, &count, sizeof(count)) < 0 && errno == EINTR) {
+    }
+    pthread_mutex_lock(&r->fence_lock);
+    for (i = 0; i < VD_PENDING; i++) {
+        struct vr_fence *f = &r->fences[i];
+
+        if (f->used && f->done) {
+            vd_fence_retired(r->dev, f->ctx, f->per_ctx, f->ring, f->id);
+            f->used = 0;
+        }
+    }
+    pthread_mutex_unlock(&r->fence_lock);
 }
 
 /** Return the number of capsets the renderer offers. */
@@ -372,11 +443,33 @@ static int op_submit(void *c, uint32_t ctx, void *buf, uint32_t bytes)
 /** Fence the work so far on the global timeline or a context's ring. */
 static int op_fence(void *c, uint32_t ctx, int per_ctx, uint32_t ring, uint64_t id)
 {
-    (void)c;
-    if (per_ctx) {
-        return virgl_renderer_context_create_fence(ctx, 0, ring, id);
+    struct vr *r = c;
+    struct vr_fence *f = NULL;
+    unsigned i;
+    int err;
+
+    if (r->fence_fd >= 0) {
+        pthread_mutex_lock(&r->fence_lock);
+        for (i = 0; i < VD_PENDING; i++) {
+            if (!r->fences[i].used) {
+                f = &r->fences[i];
+                *f = (struct vr_fence){ctx, ring, id, 1, 0, per_ctx};
+                break;
+            }
+        }
+        pthread_mutex_unlock(&r->fence_lock);
+        if (!f) {
+            return ENOMEM;
+        }
     }
-    return virgl_renderer_create_fence((int)(uint32_t)id, 0);
+    err = per_ctx ? virgl_renderer_context_create_fence(ctx, 0, ring, id)
+                  : virgl_renderer_create_fence((int)(uint32_t)id, 0);
+    if (err && f) {
+        pthread_mutex_lock(&r->fence_lock);
+        f->used = 0;
+        pthread_mutex_unlock(&r->fence_lock);
+    }
+    return err;
 }
 
 /** Name the capset at index and its sizes. */
@@ -599,6 +692,11 @@ static void op_reset(void *c)
     }
     memset(r->venus, 0, sizeof(r->venus));
     virgl_renderer_reset();
+    if (r->fence_fd >= 0) {
+        pthread_mutex_lock(&r->fence_lock);
+        memset(r->fences, 0, sizeof(r->fences));
+        pthread_mutex_unlock(&r->fence_lock);
+    }
 }
 
 const struct vd_ops vr_ops = {
