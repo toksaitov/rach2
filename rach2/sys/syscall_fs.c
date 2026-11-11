@@ -3023,7 +3023,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
         return procfs_resolve_id(vp) < 0 ? -ENOENT
                                          : procfs_open_ns(procfs_resolve_id(vp), vp->procfd, flags);
     default:
-        return -ENOENT;
+        return procfs_ino_global(vp->kind) ? procfs_open(vp, flags) : -ENOENT;
     }
 }
 
@@ -4036,6 +4036,47 @@ static int proc_read_only(const struct vfs_ref *ref, int flags, int dirs)
 }
 
 /**
+ * Whether an open with O_CREAT and without O_EXCL may open the existing file
+ * `ref`, found in the directory of attributes `dir`, as Linux's
+ * may_create_in_sticky (fs/namei.c:1248-1291): 0, or -EACCES for a file in
+ * a sticky directory that others may write, owned by neither the caller
+ * nor the directory's owner. A regular file is judged so only under
+ * fs.protected_regular and a FIFO under fs.protected_fifos, and at level 2
+ * of its sysctl one in a directory its group may write is refused too;
+ * any other kind is judged whatever the sysctls say, as Linux judges it.
+ * Root is refused as well: the rule keeps a privileged program from writing
+ * to a file another user made in its place. The caller holds `ref`.
+ */
+static int32_t may_create_in_sticky(const struct vfs_ref *ref, const struct vfs_stat *dir)
+{
+    struct vfs_stat st;
+    uint32_t type;
+    int level = 1;
+    int32_t rc;
+
+    if (!(dir->mode & 01000u)) {
+        return 0;
+    }
+    rc = vfs_getattr(ref->mnt, ref->node, &st);
+    if (rc != 0) {
+        return rc;
+    }
+    type = st.mode & S_IFMT;
+    if (type == S_IFREG) {
+        level = vfs_protected_regular;
+    } else if (type == S_IFIFO) {
+        level = vfs_protected_fifos;
+    }
+    if (level == 0 || st.uid == dir->uid || st.uid == proc_fsuid(current_proc)) {
+        return 0;
+    }
+    if ((dir->mode & 0002u) || (level >= 2 && (dir->mode & 0020u))) {
+        return -EACCES;
+    }
+    return 0;
+}
+
+/**
  * Open core shared by open and openat.
  *
  * `name` is a kernel-space path with any leading '/' already stripped; `flags`
@@ -4054,7 +4095,9 @@ static int proc_read_only(const struct vfs_ref *ref, int flags, int dirs)
  *
  * A file the open creates is empty, so O_TRUNC does nothing to it, and
  * its description is marked OFD_WATCH_MADE, so that inotify reports no
- * truncation of it (`open_done`).
+ * truncation of it (`open_done`). An existing file opened with O_CREAT and
+ * without O_EXCL meets fs.protected_regular and fs.protected_fifos
+ * (`may_create_in_sticky`) before the checks of its kind, as on Linux.
  *
  * The descriptor is reserved before the path is resolved, as Linux reserves
  * it, so that no other thread sharing the table can take the last one while
@@ -4066,6 +4109,7 @@ static int proc_read_only(const struct vfs_ref *ref, int flags, int dirs)
 static int32_t do_open(const char *name, int flags, uint32_t mode)
 {
     struct vfs_ref ref;
+    struct vfs_stat dir;
     struct vfs_name *entry = NULL;
     struct vfs_mount *locked;
     char *through = NULL;
@@ -4089,7 +4133,7 @@ again:
                                (((flags & O_NOFOLLOW) || ((flags & O_CREAT) && (flags & O_EXCL)))
                                     ? VFS_WALK_NOFOLLOW
                                     : 0),
-                           &ref, NULL, &entry);
+                           &ref, NULL, &entry, &dir);
     if (rc == -ENOENT && (flags & O_CREAT)) {
         if (!through) {
             through = path_buf_get();
@@ -4132,6 +4176,12 @@ again:
             synth_mount_record(rc, &ref, &vpc, flags);
             vfs_ref_release(&ref);
             synth_dir_record(rc, permanent, name);
+            goto out;
+        }
+        rc = (flags & (O_CREAT | O_EXCL)) == O_CREAT ? may_create_in_sticky(&ref, &dir) : 0;
+        if (rc != 0) {
+            vfs_walk_unlock(ref.mnt);
+            vfs_ref_release(&ref);
             goto out;
         }
         if (open_special(&ref, fd, flags, &rc)) {
@@ -8607,8 +8657,6 @@ static int32_t synth_stat_node(const struct vpath *vp, struct kstat *kst, int fo
         kst->st_mode = S_IFDIR | 0555;
         kst->st_ino = procfs_ino_fsdir();
         return 0;
-    case VNODE_PROC_FS_LOCKWAIT:
-        return synth_proc_stat(kst, procfs_ino_lockwait());
     case VNODE_SYS_DIR:
     case VNODE_SYS_LINK:
     case VNODE_SYS_FILE:
@@ -8739,7 +8787,8 @@ static int32_t synth_stat_node(const struct vpath *vp, struct kstat *kst, int fo
     case VNODE_ENOTDIR:
         return -ENOTDIR;
     default:
-        return -ENOENT;
+        return procfs_ino_global(vp->kind) ? synth_proc_stat(kst, procfs_ino_global(vp->kind))
+                                           : -ENOENT;
     }
 }
 
@@ -8833,7 +8882,8 @@ int32_t resolve_named_real(const char *name, int walk, int dir, struct vfs_ref *
 int32_t resolve_named_entry(const char *name, int walk, int dir, struct vfs_ref *ref, char *real,
                             struct vfs_name **entry)
 {
-    int32_t rc = vfs_resolve_entry(name, dir ? walk & ~VFS_WALK_NOFOLLOW : walk, ref, real, entry);
+    int32_t rc =
+        vfs_resolve_entry(name, dir ? walk & ~VFS_WALK_NOFOLLOW : walk, ref, real, entry, NULL);
 
     if (rc == 0 && dir) {
         rc = ref_dir_check(ref, 1);
@@ -9108,7 +9158,7 @@ static int32_t open_path(const char *name, int flags)
     if (!fd_can_alloc(current_proc->fds)) {
         return -EMFILE;
     }
-    rc = vfs_resolve_entry(name, walk, &ref, NULL, &entry);
+    rc = vfs_resolve_entry(name, walk, &ref, NULL, &entry, NULL);
     if (rc != 0) {
         return rc;
     }
@@ -12400,6 +12450,28 @@ static int32_t new_name_taken(const struct vfs_ref *parent, const char *leaf, co
 }
 
 /**
+ * Whether the caller may make a hard link to the file `src` of attributes
+ * `st`, as Linux's may_linkat (fs/namei.c:1198-1218): 0, or -EPERM under
+ * fs.protected_hardlinks for a file the caller neither owns nor may act as
+ * owner of (CAP_FOWNER) that is not a regular file, is setuid, is setgid
+ * and group-executable, or that the caller may not both read and write. A
+ * user who could link /etc/shadow into a directory of its own could leave a
+ * name there that a root process later acts on, and could keep a setuid
+ * program's old version alive past an upgrade.
+ */
+static int32_t may_linkat(const struct vfs_ref *src, const struct vfs_stat *st)
+{
+    if (!vfs_protected_hardlinks || st->uid == proc_fsuid(current_proc) || cred_fs_privileged()) {
+        return 0;
+    }
+    if ((st->mode & S_IFMT) == S_IFREG && !(st->mode & 04000u) && (st->mode & 02010u) != 02010u &&
+        cred_access_ref(src, CRED_R | CRED_W, 0) == 0) {
+        return 0;
+    }
+    return -EPERM;
+}
+
+/**
  * Make the hard link `newname` to `oldname`, both canonical paths: the core
  * of link(2) and linkat(2). Returns 0 or a negative errno.
  *
@@ -12411,7 +12483,8 @@ static int32_t new_name_taken(const struct vfs_ref *parent, const char *leaf, co
  * `newend`, as `make_dir_end` answers it; a new name that exists, EEXIST
  * (`new_name_taken`); another mount, EXDEV; a source in /dev, /proc or /sys
  * or on the KRFFS root, whose types have no links, and a directory, EPERM;
- * a read-only mount, EROFS; and the parent's write permission. The type
+ * a read-only mount, EROFS; fs.protected_hardlinks, EPERM (`may_linkat`);
+ * and the parent's write permission. The type
  * makes the link under the parent's lock (`vfs_node_lock`), and under the
  * source's after it on a type that sets `file_locked`, and one without links
  * answers EPERM.
@@ -12443,11 +12516,17 @@ static int32_t do_link(const char *oldname, const char *newname, int follow, int
         rc = -EXDEV;
     } else if (vfs_synth_vpath(src.mnt, src.node) || mnt_is_root(src.mnt)) {
         rc = -EPERM;
-    } else if (vfs_getattr(src.mnt, src.node, &st) == 0 && (st.mode & 0170000u) == 0040000u) {
-        rc = -EPERM;
-    } else if (parent.mnt->flags & VFS_MS_RDONLY) {
-        rc = -EROFS;
     } else {
+        rc = vfs_getattr(src.mnt, src.node, &st);
+    }
+    if (rc == 0 && (st.mode & 0170000u) == 0040000u) {
+        rc = -EPERM;
+    } else if (rc == 0 && (parent.mnt->flags & VFS_MS_RDONLY)) {
+        rc = -EROFS;
+    } else if (rc == 0) {
+        rc = may_linkat(&src, &st);
+    }
+    if (rc == 0) {
         rc = (int32_t)cred_access_ref(&parent, CRED_W, 0);
     }
     if (rc == 0) {
@@ -17735,6 +17814,43 @@ static int synth_dev_any_dirent(int row, int made, int n, char *name, uint64_t *
     return 1;
 }
 
+/* The entries of /proc before its processes: name, inode and type. */
+static const struct {
+    const char *name;
+    uint32_t (*inode)(void);
+    uint8_t type;
+} synth_proc_globals[] = {{"cmdline", procfs_ino_cmdline, DT_REG},
+                          {"disk", procfs_ino_disk, DT_REG},
+                          {"uptime", procfs_ino_uptime, DT_REG},
+                          {"stat", procfs_ino_statsys, DT_REG},
+                          {"meminfo", procfs_ino_meminfo, DT_REG},
+                          {"cpuinfo", procfs_ino_cpuinfo, DT_REG},
+                          {"loadavg", procfs_ino_loadavg, DT_REG},
+                          {"diskstats", procfs_ino_diskstats, DT_REG},
+                          {"version", procfs_ino_version, DT_REG},
+                          {"partitions", procfs_ino_partitions, DT_REG},
+                          {"vmstat", procfs_ino_vmstat, DT_REG},
+                          {"slabinfo", procfs_ino_slabinfo, DT_REG},
+                          {"swaps", procfs_ino_swaps, DT_REG},
+                          {"locks", procfs_ino_locks, DT_REG},
+#ifdef RACH2_LOCKDEP
+                          {"lockdep", procfs_ino_lockdep, DT_REG},
+                          {"lockdep_stats", procfs_ino_lockdep_stats, DT_REG},
+#endif
+                          {"mounts", procfs_ino_mounts, DT_REG},
+                          {"net", procfs_ino_netdir, DT_DIR},
+                          {"sysvipc", procfs_ino_sysvipcdir, DT_DIR},
+                          {"acpi", procfs_ino_acpidir, DT_DIR},
+                          {"fs", procfs_ino_fsdir, DT_DIR},
+                          {"sys", procfs_ino_sysdir, DT_DIR},
+                          {"self", procfs_ino_dir, DT_LNK},
+                          {"usb", procfs_ino_usb, DT_REG},
+                          {"loop", procfs_ino_loop, DT_REG},
+                          {"console", procfs_ino_console, DT_REG},
+                          {"audio", procfs_ino_audio, DT_REG},
+                          {"interrupts", procfs_ino_interrupts, DT_REG},
+                          {"filesystems", procfs_ino_filesystems, DT_REG}};
+
 /**
  * The entry at position `*pos` of a synthetic directory, from the directory
  * descriptor's record `sd`, its kind, pid and tid: fills name/ino/dtype and
@@ -17844,46 +17960,15 @@ static int synth_dirent_at(const struct synth_dir *sd, int *pos, char *name, uin
         return synth_net_dirent(kind == VNODE_PROC_NET_STAT_DIR, n, name, ino, dtype);
     }
     if (kind == VNODE_PROC_DIR) {
-        static const struct {
-            const char *name;
-            uint32_t (*inode)(void);
-            uint8_t type;
-        } globals[] = {{"cmdline", procfs_ino_cmdline, DT_REG},
-                       {"disk", procfs_ino_disk, DT_REG},
-                       {"uptime", procfs_ino_uptime, DT_REG},
-                       {"stat", procfs_ino_statsys, DT_REG},
-                       {"meminfo", procfs_ino_meminfo, DT_REG},
-                       {"cpuinfo", procfs_ino_cpuinfo, DT_REG},
-                       {"loadavg", procfs_ino_loadavg, DT_REG},
-                       {"diskstats", procfs_ino_diskstats, DT_REG},
-                       {"version", procfs_ino_version, DT_REG},
-                       {"partitions", procfs_ino_partitions, DT_REG},
-                       {"vmstat", procfs_ino_vmstat, DT_REG},
-                       {"slabinfo", procfs_ino_slabinfo, DT_REG},
-                       {"swaps", procfs_ino_swaps, DT_REG},
-                       {"locks", procfs_ino_locks, DT_REG},
-                       {"mounts", procfs_ino_mounts, DT_REG},
-                       {"net", procfs_ino_netdir, DT_DIR},
-                       {"sysvipc", procfs_ino_sysvipcdir, DT_DIR},
-                       {"acpi", procfs_ino_acpidir, DT_DIR},
-                       {"fs", procfs_ino_fsdir, DT_DIR},
-                       {"sys", procfs_ino_sysdir, DT_DIR},
-                       {"self", procfs_ino_dir, DT_LNK},
-                       {"usb", procfs_ino_usb, DT_REG},
-                       {"loop", procfs_ino_loop, DT_REG},
-                       {"console", procfs_ino_console, DT_REG},
-                       {"audio", procfs_ino_audio, DT_REG},
-                       {"interrupts", procfs_ino_interrupts, DT_REG},
-                       {"filesystems", procfs_ino_filesystems, DT_REG}};
-        int count = (int)(sizeof(globals) / sizeof(globals[0]));
+        int count = (int)(sizeof(synth_proc_globals) / sizeof(synth_proc_globals[0]));
 
         if (n < count) {
             int i;
-            for (i = 0; globals[n].name[i] != '\0'; i++)
-                name[i] = globals[n].name[i];
+            for (i = 0; synth_proc_globals[n].name[i] != '\0'; i++)
+                name[i] = synth_proc_globals[n].name[i];
             name[i] = '\0';
-            *dtype = globals[n].type;
-            *ino = globals[n].inode();
+            *dtype = synth_proc_globals[n].type;
+            *ino = synth_proc_globals[n].inode();
             return 1;
         }
         {

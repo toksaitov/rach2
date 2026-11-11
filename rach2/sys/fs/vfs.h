@@ -614,9 +614,22 @@ int vfs_replay_end(void);
 
 /* Resolve and capture the final regular-file entry in the same walk.
  * The returned name owns its parent and mount; the caller puts or transfers
- * it even if a later open fails. No entry is returned for a mount root. */
+ * it even if a later open fails. No entry is returned for a mount root.
+ * With `dir` not NULL, the attributes of the directory the path's last name
+ * was looked up in go there, after any link at the end is followed, as
+ * Linux's nd->dir_mode and dir_vfsuid; its mode is 0 when the walk ended
+ * on no name of a directory: the root, a mount entered by name, or a node
+ * of /dev, /proc or /sys. */
 int vfs_resolve_entry(const char *path, int flags, struct vfs_ref *out, char *real,
-                      struct vfs_name **entry);
+                      struct vfs_name **entry, struct vfs_stat *dir);
+
+/* The protections of Linux's /proc/sys/fs that Rach2 keeps, each its
+ * sysctl's value: protected_hardlinks and protected_symlinks 0 or 1,
+ * protected_fifos and protected_regular 0, 1 or 2 (fs/namei.c:1048-1085). */
+extern int vfs_protected_hardlinks;
+extern int vfs_protected_symlinks;
+extern int vfs_protected_fifos;
+extern int vfs_protected_regular;
 
 /** Take another hold on `r`'s node, on a type that counts holds. */
 void vfs_ref_hold(const struct vfs_ref *r);

@@ -54,6 +54,7 @@
 #include "../proc/tgroup.h"
 #include "../proc/seccomp.h"
 #include "../proc/ns.h"
+#include "../lib/lockdep.h"
 #include "../proc/smp.h"
 #include "../mm/mm.h"
 #include "../mm/paging.h"
@@ -110,40 +111,42 @@
 
 /* Inode namespace for /proc: the directory and the global files, then a
  * per-pid base. */
-#define PROCFS_INO_DIR         0x100u
-#define PROCFS_INO_CMDLINE     0x101u
-#define PROCFS_INO_DISK        0x102u
-#define PROCFS_INO_NETDIR      0x103u
-#define PROCFS_INO_NETDEV      0x104u
-#define PROCFS_INO_UPTIME      0x105u
-#define PROCFS_INO_STATSYS     0x106u
-#define PROCFS_INO_MEMINFO     0x107u
-#define PROCFS_INO_MOUNTS      0x108u
-#define PROCFS_INO_AUDIO       0x111u
-#define PROCFS_INO_USB         0x10Cu
-#define PROCFS_INO_FILESYSTEMS 0x10Du
-#define PROCFS_INO_LOOP        0x10Eu
-#define PROCFS_INO_INTERRUPTS  0x10Fu
-#define PROCFS_INO_CONSOLE     0x110u
-#define PROCFS_INO_NETROUTE    0x109u
-#define PROCFS_INO_NETARP      0x10Au
-#define PROCFS_INO_NETTCP      0x10Bu
-#define PROCFS_INO_CPUINFO     0x112u
-#define PROCFS_INO_LOADAVG     0x113u
-#define PROCFS_INO_DISKSTATS   0x114u
-#define PROCFS_INO_VERSION     0x115u
-#define PROCFS_INO_PARTITIONS  0x116u
-#define PROCFS_INO_SYSVIPC     0x117u /* and its three files after it */
-#define PROCFS_INO_NETSTAT     0x11Bu
-#define PROCFS_INO_VMSTAT      0x11Cu
-#define PROCFS_INO_SLABINFO    0x11Du
-#define PROCFS_INO_SWAPS       0x11Eu
-#define PROCFS_INO_LOCKS       0x11Fu
-#define PROCFS_INO_NET         0x120u /* and the other files of /proc/net after it, by slot */
-#define PROCFS_INO_ACPI        0x1F0u /* /proc/acpi */
-#define PROCFS_INO_ACPI_CALL   0x1F1u
-#define PROCFS_INO_FS          0x1F2u /* /proc/fs */
-#define PROCFS_INO_LOCKWAIT    0x1F3u
+#define PROCFS_INO_DIR           0x100u
+#define PROCFS_INO_CMDLINE       0x101u
+#define PROCFS_INO_DISK          0x102u
+#define PROCFS_INO_NETDIR        0x103u
+#define PROCFS_INO_NETDEV        0x104u
+#define PROCFS_INO_UPTIME        0x105u
+#define PROCFS_INO_STATSYS       0x106u
+#define PROCFS_INO_MEMINFO       0x107u
+#define PROCFS_INO_MOUNTS        0x108u
+#define PROCFS_INO_AUDIO         0x111u
+#define PROCFS_INO_USB           0x10Cu
+#define PROCFS_INO_FILESYSTEMS   0x10Du
+#define PROCFS_INO_LOOP          0x10Eu
+#define PROCFS_INO_INTERRUPTS    0x10Fu
+#define PROCFS_INO_CONSOLE       0x110u
+#define PROCFS_INO_NETROUTE      0x109u
+#define PROCFS_INO_NETARP        0x10Au
+#define PROCFS_INO_NETTCP        0x10Bu
+#define PROCFS_INO_CPUINFO       0x112u
+#define PROCFS_INO_LOADAVG       0x113u
+#define PROCFS_INO_DISKSTATS     0x114u
+#define PROCFS_INO_VERSION       0x115u
+#define PROCFS_INO_PARTITIONS    0x116u
+#define PROCFS_INO_SYSVIPC       0x117u /* and its three files after it */
+#define PROCFS_INO_NETSTAT       0x11Bu
+#define PROCFS_INO_VMSTAT        0x11Cu
+#define PROCFS_INO_SLABINFO      0x11Du
+#define PROCFS_INO_SWAPS         0x11Eu
+#define PROCFS_INO_LOCKS         0x11Fu
+#define PROCFS_INO_NET           0x120u /* and the other files of /proc/net after it, by slot */
+#define PROCFS_INO_ACPI          0x1F0u /* /proc/acpi */
+#define PROCFS_INO_ACPI_CALL     0x1F1u
+#define PROCFS_INO_FS            0x1F2u /* /proc/fs */
+#define PROCFS_INO_LOCKWAIT      0x1F3u
+#define PROCFS_INO_LOCKDEP       0x1F4u
+#define PROCFS_INO_LOCKDEP_STATS 0x1F5u
 
 /* Inode namespace for /sys: a fixed directory by its node, with its
  * attribute files 256 apart above it; a PCI function's directory by its
@@ -198,6 +201,8 @@ static const struct procfs_global procfs_globals[] = {
     {VNODE_PROC_SLABINFO, SYNTH_PROC_SLABINFO, PROCFS_INO_SLABINFO},
     {VNODE_PROC_SWAPS, SYNTH_PROC_SWAPS, PROCFS_INO_SWAPS},
     {VNODE_PROC_LOCKS, SYNTH_PROC_LOCKS, PROCFS_INO_LOCKS},
+    {VNODE_PROC_LOCKDEP, SYNTH_PROC_LOCKDEP, PROCFS_INO_LOCKDEP},
+    {VNODE_PROC_LOCKDEP_STATS, SYNTH_PROC_LOCKDEP_STATS, PROCFS_INO_LOCKDEP_STATS},
     {VNODE_PROC_MOUNTS, SYNTH_PROC_MOUNTS, PROCFS_INO_MOUNTS},
     {VNODE_PROC_AUDIO, SYNTH_PROC_AUDIO, PROCFS_INO_AUDIO},
     {VNODE_PROC_USB, SYNTH_PROC_USB, PROCFS_INO_USB},
@@ -256,89 +261,18 @@ static const struct procfs_global *procfs_global_find(int kind, int origin)
     " inode ref pointer drops\n"
 #define PROCFS_NETUNIX_HEADER "Num       RefCount Protocol Flags    Type St Inode Path\n"
 
+static const char *procfs_global_fd_path(int origin);
+
 /** The file's name, for the diagnostic of a text that could not be built. */
 static const char *procfs_kind_name(const struct vpath *vp)
 {
-    if (vp->kind == VNODE_PROC_CMDLINE) {
-        return "/proc/cmdline";
-    }
-    if (vp->kind == VNODE_PROC_DISK) {
-        return "/proc/disk";
-    }
-    if (vp->kind == VNODE_PROC_NET_DEV) {
-        return "/proc/net/dev";
-    }
-    if (vp->kind == VNODE_PROC_UPTIME) {
-        return "/proc/uptime";
-    }
-    if (vp->kind == VNODE_PROC_STAT_SYS) {
-        return "/proc/stat";
-    }
-    if (vp->kind == VNODE_PROC_MEMINFO) {
-        return "/proc/meminfo";
-    }
-    if (vp->kind == VNODE_PROC_CPUINFO) {
-        return "/proc/cpuinfo";
-    }
-    if (vp->kind == VNODE_PROC_LOADAVG) {
-        return "/proc/loadavg";
-    }
-    if (vp->kind == VNODE_PROC_DISKSTATS) {
-        return "/proc/diskstats";
-    }
-    if (vp->kind == VNODE_PROC_VERSION) {
-        return "/proc/version";
-    }
-    if (vp->kind == VNODE_PROC_PARTITIONS) {
-        return "/proc/partitions";
-    }
-    if (vp->kind == VNODE_PROC_VMSTAT) {
-        return "/proc/vmstat";
-    }
-    if (vp->kind == VNODE_PROC_SLABINFO) {
-        return "/proc/slabinfo";
-    }
-    if (vp->kind == VNODE_PROC_SWAPS) {
-        return "/proc/swaps";
-    }
-    if (vp->kind == VNODE_PROC_LOCKS) {
-        return "/proc/locks";
-    }
-    if (vp->kind == VNODE_PROC_FS_LOCKWAIT) {
-        return "/proc/fs/lockwait";
+    const struct procfs_global *g = procfs_global_find(vp->kind, 0);
+
+    if (g && procfs_global_fd_path(g->origin)) {
+        return procfs_global_fd_path(g->origin);
     }
     if (vp->kind == VNODE_PROC_SYS_FILE) {
         return "/proc/sys";
-    }
-    if (vp->kind == VNODE_PROC_MOUNTS) {
-        return "/proc/mounts";
-    }
-    if (vp->kind == VNODE_PROC_AUDIO) {
-        return "/proc/audio";
-    }
-    if (vp->kind == VNODE_PROC_USB) {
-        return "/proc/usb";
-    }
-    if (vp->kind == VNODE_PROC_INTERRUPTS) {
-        return "/proc/interrupts";
-    }
-    if (vp->kind == VNODE_PROC_CONSOLE) {
-        return "/proc/console";
-    }
-    if (vp->kind == VNODE_PROC_FILESYSTEMS) {
-        return "/proc/filesystems";
-    }
-    if (vp->kind == VNODE_PROC_LOOP) {
-        return "/proc/loop";
-    }
-    if (vp->kind == VNODE_PROC_NET_ROUTE) {
-        return "/proc/net/route";
-    }
-    if (vp->kind == VNODE_PROC_NET_ARP) {
-        return "/proc/net/arp";
-    }
-    if (vp->kind == VNODE_PROC_NET_TCP) {
-        return "/proc/net/tcp";
     }
     if (vp->kind == VNODE_PROC_NET_FILE) {
         return "/proc/net";
@@ -1519,6 +1453,64 @@ static const char *maps_path(const struct mm *mm, const vma_t *r)
     return NULL;
 }
 
+static void procfs_file_target(struct procfs_text *t, const fd_entry_t *e);
+
+/**
+ * Give each mapped file of process `pid` that has no path yet the path of
+ * its file, as its /proc link target gives it: mmap leaves the name to the
+ * first reader of maps, smaps or numa_maps, as Linux builds it with d_path
+ * only when maps is read (fs/proc/task_mmu.c, show_map_vma), since building
+ * an ext2 file's path reads each of its directories. Building a path may
+ * sleep and the regions may change meanwhile, so the files are gathered
+ * first, each with a reference, and named after; a file a region gained
+ * since, or one the heap had no room to name, is shown without a path. The
+ * caller looks the process up again afterwards. Nothing for a caller
+ * `procfs_may_read_mem` refuses.
+ */
+static void procfs_maps_names(int pid)
+{
+    process_t *p = procfs_proc(pid);
+    struct vm_file **files;
+    const vma_t *r;
+    uint32_t n = 0, i;
+
+    if (!p || !p->mm || !procfs_may_read_mem(p)) {
+        return;
+    }
+    for (r = vm_first(&p->mm->vm); r; r = vm_next(r)) {
+        n += r->file && !r->file->path && filemap_entry(r->file);
+    }
+    if (n == 0 || (files = kmalloc(n * sizeof(*files))) == NULL) {
+        return;
+    }
+    n = 0;
+    for (r = vm_first(&p->mm->vm); r; r = vm_next(r)) {
+        if (r->file && !r->file->path && filemap_entry(r->file)) {
+            vm_file_get(r->file);
+            files[n++] = r->file;
+        }
+    }
+    for (i = 0; i < n; i++) {
+        struct procfs_text name;
+
+        if (files[i]->path) {
+            continue;
+        }
+        procfs_text_init(&name);
+        procfs_file_target(&name, filemap_entry(files[i]));
+        if (!name.nomem && name.len > 0 && !files[i]->path &&
+            (files[i]->path = kmalloc((uint32_t)name.len + 1u)) != NULL) {
+            k_memcpy(files[i]->path, name.buf, (uint32_t)name.len);
+            files[i]->path[name.len] = '\0';
+        }
+        kfree(name.buf);
+    }
+    for (i = 0; i < n; i++) {
+        vm_file_put(files[i]);
+    }
+    kfree(files);
+}
+
 /** Append the device and inode of the file region `r` of `mm` maps, as stat
  * gives them (`vfs_fill_stat64`): the major and minor numbers in hex, a space
  * and the inode in decimal, or "00:00 0" for a region of no file. A segment
@@ -1602,10 +1594,12 @@ static void ap_maps_line(struct procfs_text *t, const struct mm *mm, const vma_t
  */
 static int procfs_gen_maps(struct procfs_text *t, int pid)
 {
-    process_t *p = procfs_proc(pid);
+    process_t *p;
     const struct mm *mm;
     const vma_t *r;
 
+    procfs_maps_names(pid);
+    p = procfs_proc(pid);
     if (!p) {
         return -ENOENT;
     }
@@ -1729,10 +1723,12 @@ static void ap_smaps_flags(struct procfs_text *t, const vma_t *r)
  */
 static int procfs_gen_smaps(struct procfs_text *t, int pid)
 {
-    process_t *p = procfs_proc(pid);
+    process_t *p;
     const struct mm *mm;
     const vma_t *r;
 
+    procfs_maps_names(pid);
+    p = procfs_proc(pid);
     if (!p) {
         return -ENOENT;
     }
@@ -1851,10 +1847,12 @@ static void ap_numa_count(struct procfs_text *t, const char *name, unsigned long
  */
 static int procfs_gen_numa_maps(struct procfs_text *t, int pid)
 {
-    process_t *p = procfs_proc(pid);
+    process_t *p;
     const struct mm *mm;
     const vma_t *r;
 
+    procfs_maps_names(pid);
+    p = procfs_proc(pid);
     if (!p) {
         return -ENOENT;
     }
@@ -2491,6 +2489,10 @@ static const char *procfs_global_fd_path(int origin)
         return "/proc/swaps";
     case SYNTH_PROC_LOCKS:
         return "/proc/locks";
+    case SYNTH_PROC_LOCKDEP:
+        return "/proc/lockdep";
+    case SYNTH_PROC_LOCKDEP_STATS:
+        return "/proc/lockdep_stats";
     case SYNTH_PROC_LOCKWAIT:
         return "/proc/fs/lockwait";
     case SYNTH_PROC_SYSVIPC:
@@ -2893,6 +2895,25 @@ uint32_t procfs_ino_swaps(void)
 uint32_t procfs_ino_locks(void)
 {
     return PROCFS_INO_LOCKS;
+}
+
+uint32_t procfs_ino_lockdep(void)
+{
+    return PROCFS_INO_LOCKDEP;
+}
+
+/** The inode number of the system-wide file whose node is of `kind`, from
+ * `procfs_globals`; 0 for a kind that is not one. */
+uint32_t procfs_ino_global(int kind)
+{
+    const struct procfs_global *g = procfs_global_find(kind, 0);
+
+    return g ? g->ino : 0;
+}
+
+uint32_t procfs_ino_lockdep_stats(void)
+{
+    return PROCFS_INO_LOCKDEP_STATS;
 }
 
 uint32_t procfs_ino_loadavg(void)
@@ -3403,11 +3424,13 @@ static void procfs_entry_holds(struct procfs_text *t)
         if (best < BKL_ENTRY_SYSCALLS) {
             ap_str(t, "syscall ");
             ap_u32(t, (uint32_t)best);
-        } else if (best < BKL_ENTRY_KEYS - 1) {
+        } else if (best < BKL_KEY_BIGCALL) {
             ap_str(t, "vector ");
             ap_u32(t, (uint32_t)(best - BKL_ENTRY_SYSCALLS));
-        } else {
+        } else if (best == BKL_KEY_BIGCALL) {
             ap_str(t, "syscall -1");
+        } else {
+            ap_str(t, best == BKL_KEY_IDLE ? "take 0" : "take 1");
         }
         ap_ch(t, ' ');
         ap_u32(t, best_holds);
@@ -8354,7 +8377,11 @@ static const struct {
     {SYNTH_SYS_WATCHDOG + 10, &sysctl_hung_task_check_count, 0, 0x7FFFFFFF},
     {SYNTH_SYS_HUNG_TASK_TIMEOUT, &sysctl_hung_task_timeout_secs, 0, SYSCTL_SECONDS_MAX},
     {SYNTH_SYS_HUNG_TASK_INTERVAL, &sysctl_hung_task_check_interval_secs, 0, SYSCTL_SECONDS_MAX},
-    {SYNTH_SYS_HUNG_TASK_WARNINGS, &sysctl_hung_task_warnings, -1, 0x7FFFFFFF}};
+    {SYNTH_SYS_HUNG_TASK_WARNINGS, &sysctl_hung_task_warnings, -1, 0x7FFFFFFF},
+    {SYNTH_SYS_PROTECTED_FIFOS, &vfs_protected_fifos, 0, 2},
+    {SYNTH_SYS_PROTECTED_FIFOS + 1, &vfs_protected_hardlinks, 0, 1},
+    {SYNTH_SYS_PROTECTED_FIFOS + 2, &vfs_protected_regular, 0, 2},
+    {SYNTH_SYS_PROTECTED_SYMLINKS, &vfs_protected_symlinks, 0, 1}};
 
 /** The index in `sysctl_ints` of the /proc/sys file `entry`, or -1. */
 static int sysctl_int(int entry)
@@ -9340,20 +9367,63 @@ static int procfs_gen_pid_file(struct procfs_text *t, int pid, const struct vpat
     }
 }
 
+/** Render /proc/disk into `t`: the record and the disks, within
+ * PROCFS_MAX_DISK bytes. Returns the length, 0 when the heap had no room,
+ * or -EOVERFLOW for a text that filled the bound. */
+static int procfs_gen_disk(struct procfs_text *t)
+{
+    int len;
+
+    if (procfs_text_room(t, PROCFS_MAX_DISK) != 0) {
+        return 0;
+    }
+    len = diskinfo_format(diskinfo_get(), t->buf, PROCFS_MAX_DISK);
+    len += diskinfo_format_disks(t->buf + len, PROCFS_MAX_DISK - len);
+    if (len >= PROCFS_MAX_DISK - 1) {
+        klog(KLOG_ERR, "procfs", "/proc/disk: text exceeds its %d-byte bound, refusing",
+             PROCFS_MAX_DISK);
+        return -EOVERFLOW;
+    }
+    return len;
+}
+
+#ifdef RACH2_LOCKDEP
+/* The most /proc/lockdep holds, its classes and their orders; the text is
+ * cut there. */
+#define PROCFS_MAX_LOCKDEP 131072
+
+/** Render /proc/lockdep, when `classes`, or /proc/lockdep_stats, from the
+ * lock-order checker (lib/lockdep.h). */
+static int procfs_gen_lockdep(struct procfs_text *t, int classes)
+{
+    int cap = classes ? PROCFS_MAX_LOCKDEP : 1024;
+
+    if (procfs_text_room(t, t->len + cap) != 0) {
+        return -ENOMEM;
+    }
+    t->len += classes ? lockdep_proc_text(t->buf + t->len, cap)
+                      : lockdep_stats_text(t->buf + t->len, cap);
+    return t->len;
+}
+#endif
+
 /** Whether a file of kind `kind` is one of a process, whose process must be
  * there at the open; 0 for the files of /proc outside /proc/<pid> and for
  * those of /sys. */
 static int procfs_needs_pid(int kind)
 {
     static const int global[] = {
-        VNODE_PROC_CMDLINE,   VNODE_PROC_DISK,       VNODE_PROC_NET_DEV,    VNODE_PROC_UPTIME,
-        VNODE_PROC_STAT_SYS,  VNODE_PROC_MEMINFO,    VNODE_PROC_CPUINFO,    VNODE_PROC_LOADAVG,
-        VNODE_PROC_DISKSTATS, VNODE_PROC_VERSION,    VNODE_PROC_PARTITIONS, VNODE_PROC_VMSTAT,
-        VNODE_PROC_SLABINFO,  VNODE_PROC_SWAPS,      VNODE_PROC_LOCKS,      VNODE_PROC_SYS_FILE,
-        VNODE_PROC_MOUNTS,    VNODE_PROC_USB,        VNODE_PROC_AUDIO,      VNODE_PROC_FILESYSTEMS,
-        VNODE_PROC_LOOP,      VNODE_PROC_INTERRUPTS, VNODE_PROC_CONSOLE,    VNODE_PROC_NET_ROUTE,
-        VNODE_PROC_NET_ARP,   VNODE_PROC_NET_TCP,    VNODE_PROC_NET_FILE,   VNODE_SYS_FILE,
-        VNODE_PROC_SYSVIPC,   VNODE_PROC_ACPI_CALL,  VNODE_PROC_FS_LOCKWAIT};
+        VNODE_PROC_CMDLINE,     VNODE_PROC_DISK,        VNODE_PROC_NET_DEV,
+        VNODE_PROC_UPTIME,      VNODE_PROC_STAT_SYS,    VNODE_PROC_MEMINFO,
+        VNODE_PROC_CPUINFO,     VNODE_PROC_LOADAVG,     VNODE_PROC_DISKSTATS,
+        VNODE_PROC_VERSION,     VNODE_PROC_PARTITIONS,  VNODE_PROC_VMSTAT,
+        VNODE_PROC_SLABINFO,    VNODE_PROC_SWAPS,       VNODE_PROC_LOCKS,
+        VNODE_PROC_SYS_FILE,    VNODE_PROC_MOUNTS,      VNODE_PROC_USB,
+        VNODE_PROC_AUDIO,       VNODE_PROC_FILESYSTEMS, VNODE_PROC_LOOP,
+        VNODE_PROC_INTERRUPTS,  VNODE_PROC_CONSOLE,     VNODE_PROC_NET_ROUTE,
+        VNODE_PROC_NET_ARP,     VNODE_PROC_NET_TCP,     VNODE_PROC_NET_FILE,
+        VNODE_SYS_FILE,         VNODE_PROC_SYSVIPC,     VNODE_PROC_ACPI_CALL,
+        VNODE_PROC_FS_LOCKWAIT, VNODE_PROC_LOCKDEP,     VNODE_PROC_LOCKDEP_STATS};
     uint32_t i;
 
     for (i = 0; i < sizeof(global) / sizeof(global[0]); i++) {
@@ -9383,16 +9453,7 @@ static int procfs_gen_text(struct procfs_text *t, const struct vpath *vp, int pi
         ap_ch(t, '\n');
         len = t->len;
     } else if (vp->kind == VNODE_PROC_DISK) {
-        len = 0;
-        if (procfs_text_room(t, PROCFS_MAX_DISK) == 0) {
-            len = diskinfo_format(diskinfo_get(), t->buf, PROCFS_MAX_DISK);
-            len += diskinfo_format_disks(t->buf + len, PROCFS_MAX_DISK - len);
-            if (len >= PROCFS_MAX_DISK - 1) {
-                klog(KLOG_ERR, "procfs", "/proc/disk: text exceeds its %d-byte bound, refusing",
-                     PROCFS_MAX_DISK);
-                return -EOVERFLOW;
-            }
-        }
+        len = procfs_gen_disk(t);
     } else if (vp->kind == VNODE_PROC_FDINFO) {
         len = procfs_gen_fdinfo(t, pid, vp->procfd);
     } else if (vp->kind == VNODE_PROC_NET_DEV) {
@@ -9417,6 +9478,10 @@ static int procfs_gen_text(struct procfs_text *t, const struct vpath *vp, int pi
         len = procfs_gen_locks(t);
     } else if (vp->kind == VNODE_PROC_FS_LOCKWAIT) {
         len = procfs_gen_lockwait(t);
+#ifdef RACH2_LOCKDEP
+    } else if (vp->kind == VNODE_PROC_LOCKDEP || vp->kind == VNODE_PROC_LOCKDEP_STATS) {
+        len = procfs_gen_lockdep(t, vp->kind == VNODE_PROC_LOCKDEP);
+#endif
     } else if (vp->kind == VNODE_PROC_SWAPS) {
         /* Linux's header, and no area under it, there being no swap. */
         ap_str(t, "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n");

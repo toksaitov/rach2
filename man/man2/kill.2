@@ -1,4 +1,4 @@
-.Dd November 9, 2026
+.Dd November 11, 2026
 .Dt KILL 2
 .Os
 .Sh NAME
@@ -29,8 +29,7 @@ Select the process group whose ID is
 .No - Ns Fa pid .
 .It Fa pid No = -1
 Select every process the caller may signal, except the caller's own
-process, the init of the caller's PID namespace and the kernel's
-threads, as on Linux.
+process and the init of the caller's PID namespace, as on Linux.
 An init sends
 .Dv SIGTERM
 and
@@ -48,16 +47,28 @@ is not
 .Dv SIGKILL .
 A process whose threads have all ended remains a target until its parent
 reaps it, as on Linux: the signal is discarded and the call succeeds.
+A kernel thread takes no signal: a permitted call succeeds and discards
+it, as Linux's kernel threads ignore every signal.
 A group request, and a request with a
 .Fa pid
-of \-1, posts the signal to every member the caller may signal.
+of \-1, posts the signal once to each process the caller may signal,
+through its leader, even when the leader has ended while other threads
+run, as on Linux: the leader's credentials decide the permission, its
+mask whether an ignored signal is kept, and any thread that does not
+block the signal takes it.
 A signal accepted during a member's fork is kept for its new child too;
 a send to one process or one thread is not.
-It succeeds if at least one member is permitted, returns
+A group request succeeds if at least one member is permitted, returns
 .Er EPERM
 if members exist but none is permitted, and returns
 .Er ESRCH
 if no member exists.
+A request with a
+.Fa pid
+of \-1 succeeds if it selects any process, permitted or not, a process
+whose threads have all ended and a kernel thread included, and returns
+.Er ESRCH
+only when it selects none, as on Linux.
 .Pp
 A privileged caller may signal any target: one with effective user ID 0
 in the first user namespace that has not given up its capabilities with
@@ -136,15 +147,18 @@ is not positive.
 .It Bq Er EPERM
 The caller may not signal the target, or may not signal any member of
 the selected group.
+A
+.Fa pid
+of \-1 never returns this error.
 .It Bq Er ESRCH
 No selected process exists, the selected group has no members, the
 thread has ended, or
 .Nm tgkill
 was given a thread that does not belong to the process.
 .Fn kill
-also returns this error for
-.Fa pid
--1 or the most negative 32-bit integer, and for
+also returns this error for the most negative 32-bit
+.Fa pid ,
+and for
 .Fa pid
 0 when there is no current process.
 .El

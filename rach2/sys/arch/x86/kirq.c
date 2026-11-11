@@ -7,6 +7,7 @@
  */
 
 #include "../../lib/kirq.h"
+#include "../../lib/lockdep.h"
 
 uint32_t kirq_save(void)
 {
@@ -23,11 +24,20 @@ uint32_t kirq_save(void)
 #endif
 }
 
+/** In the lock-order checker's build, the checker hears when interrupts
+ * come on, with them still off (lib/lockdep.h). */
 void kirq_restore(uint32_t flags)
 {
 #if defined(__x86_64__)
     unsigned long wide = flags;
 
+#endif
+#ifdef RACH2_LOCKDEP
+    if ((flags & 0x200u) != 0 && !kirq_enabled()) {
+        lockdep_irqs_on((uintptr_t)(const char *)__builtin_return_address(0));
+    }
+#endif
+#if defined(__x86_64__)
     __asm__ __volatile__("pushq %0; popfq" : : "r"(wide) : "memory", "cc");
 #else
     __asm__ __volatile__("pushl %0; popfl" : : "r"(flags) : "memory", "cc");

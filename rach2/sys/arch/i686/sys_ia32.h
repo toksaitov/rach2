@@ -17,4 +17,7 @@ long sys_ia32_fallocate(isr_params_t *params);
 long sys_ia32_fadvise64(isr_params_t *params);
 long sys_ia32_fadvise64_64(isr_params_t *params);
 
+/* futex_time64, whose timeout has 64-bit fields (sys_ia32.c). */
+long sys_ia32_futex_time64(isr_params_t *params);
+
 #endif /* _I686_SYS_IA32_H_ */

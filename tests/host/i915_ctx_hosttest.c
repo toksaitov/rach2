@@ -440,6 +440,14 @@ void i915_gem_object_put(struct drm_i915_gem_object *obj)
     (void)obj;
 }
 
+/** Nothing: execbuffer, which fills the pool of shadow batches, is the exec
+ * test's. */
+void i915_gem_pool_trim(struct drm_i915_private *i915, int how)
+{
+    (void)i915;
+    (void)how;
+}
+
 /* The GTT's allocator for the kernel's own ranges, i915_vma.c's: from
  * 16 MiB up, each range its own, `held` counting those not given back. */
 static uint64_t next_range;

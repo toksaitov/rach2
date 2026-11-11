@@ -29,6 +29,7 @@
 #include "sys/block/mbr.h"
 #include "sys/block/loop.h"
 #include "sys/fs/debugfs.h"
+#include "sys/lib/lockdep.h"
 #include "sys/fs/devfs.h"
 #include "sys/fs/procfs.h"
 #include "sys/fs/vfs.h"
@@ -361,10 +362,11 @@ uint32_t timer_late_passes(void)
  * Then the handler reschedules through `sched_preempt`: at once when the
  * current process is not inside a system call, and at the call's exit when
  * it is, since timer IRQs stay enabled during a call so HDA streaming keeps
- * running, yet a switch in the middle of one is unsafe. Kernel threads (no
- * current_proc, or one not in_syscall) are switched at once, but for one
- * inside klog (`klog_inside`), in a record, a console write or a console
- * byte, which gives way at a later tick.
+ * running, yet a switch in the middle of one is unsafe. Kernel threads and
+ * process 0 (no current_proc, or one not in_syscall) are switched at once,
+ * unless inside klog (`klog_inside`), in a record, a console write or a
+ * console byte, as process 0 is while the debug shell prints a line; such a
+ * thread gives way at a later tick.
  */
 static void timer_handler(isr_params_t *params)
 {
@@ -553,6 +555,7 @@ void terminate_current_process(int32_t signo)
     int alone;
     int last;
     int32_t event_status;
+    process_t *dead;
 
     if (!current_proc || current_proc->mm == NULL) {
         return;
@@ -606,11 +609,12 @@ void terminate_current_process(int32_t signo)
         init_end_line(pid, current_proc->tg->exit_code);
         console_puts("Init process exited. Returning to kernel debug shell.");
 
-        free_process(current_proc);
-
+        /* The idle task is current before the record is freed, since what
+         * the free calls may read the current record. */
+        dead = current_proc;
         init_pid = 0;
-        current_proc = proc_idle;
-        current_proc->state = PROC_RUNNING;
+        sched_adopt(proc_idle);
+        free_process(dead);
 
         shell_reset_input();
 
@@ -1442,6 +1446,10 @@ static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uint
     user_proc->kernel_stack = (uintptr_t)stack + KERNEL_STACK_SIZE;
     user_proc->parent_pid = current_proc ? current_proc->tgid : 0;
     proc_set_comm(user_proc, name);
+    if (current_proc) {
+        current_proc->on_cpu = 0;
+    }
+    user_proc->on_cpu = 1;
     current_proc = user_proc;
     fpu_restore(user_proc->fpu);
 
@@ -4039,10 +4047,17 @@ static void start_network(void)
  * under it, which a write zeroes (proc/smp.c). */
 static const struct debugfs_text_ops bkl_calls_ops = {smp_calls_show, smp_calls_store};
 static const struct debugfs_text_ops bkl_profile_ops = {smp_profile_show, smp_profile_store};
+#ifdef RACH2_LOCKDEP
+/* debugfs's lockdep/inject, which makes the checker's two reports on
+ * demand (lib/lockdep.c). */
+static const struct debugfs_text_ops lockdep_inject_ops = {lockdep_inject_show,
+                                                           lockdep_inject_store};
+#endif
 
 /** Start the processors past the first (`smp_start`) and the lockup
- * detectors on all of them (`watchdog_init`), then register bkl/calls and
- * bkl/profile in debugfs; a failure there is logged. */
+ * detectors on all of them (`watchdog_init`), then register bkl/calls,
+ * bkl/profile and, with the checker, lockdep/inject in debugfs; a failure
+ * there is logged. */
 static void start_processors(void)
 {
     smp_start();
@@ -4051,6 +4066,11 @@ static void start_processors(void)
         debugfs_create_text("bkl/profile", 0644u, &bkl_profile_ops, NULL) != 0) {
         klog(KLOG_WARN, "bkl", "debugfs: files not registered");
     }
+#ifdef RACH2_LOCKDEP
+    if (debugfs_create_text("lockdep/inject", 0600u, &lockdep_inject_ops, NULL) != 0) {
+        klog(KLOG_WARN, "lockdep", "debugfs: inject not registered");
+    }
+#endif
 }
 
 /**

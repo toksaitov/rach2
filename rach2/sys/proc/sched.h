@@ -6,6 +6,7 @@
 #define _SCHED_H_
 
 #include "process.h"
+#include "../arch/arch.h"
 
 /* The scheduling policies, Linux's numbers. FIFO and RR run by their
  * real-time priority, above every other thread; OTHER, BATCH and IDLE take
@@ -31,7 +32,8 @@ static __inline__ unsigned int sched_priority(const process_t *p)
 void sched_priority_changed(process_t *p);
 
 /** Initialize empty ready lists before any process is made ready, with the
- * scheduler off and the next selection allowed to prefer a woken process. */
+ * scheduler off and the next selection allowed to prefer a woken process,
+ * and mark the boot's current process, process 0, as on its processor. */
 void init_sched(void);
 
 /** Turn the scheduler on or off; while it is off, schedule() returns at
@@ -88,9 +90,50 @@ void sched_set_affinity(process_t *p, uint64_t mask);
  * The body of each processor's idle task, which does not return: switch to
  * whatever its queue, or the busiest other queue, has to run, and with
  * nothing, wait for an interrupt with the big lock let go
- * (`idle_wait_irq_off`). Entered with the big lock held at depth 1.
+ * (`idle_wait_irq_off`). Entered holding no big lock, which the idle task
+ * never holds but to drain the loopback ring.
  */
 void sched_idle_loop(void);
+
+/**
+ * The tail of a switch, run by the incoming thread on its own stack with
+ * interrupts off: where `schedule` returns past `switch_context`, at a
+ * forked child's first return (`ret_from_fork`, isr_handler.s) and at a
+ * kernel thread's first entry (`setup_process_stack`). It clears the
+ * outgoing thread's `on_cpu` and takes the big lock at the incoming
+ * thread's own depth.
+ */
+void schedule_tail(void);
+
+/** A full memory barrier: no load or store of this processor moves across
+ * it, as Linux's smp_mb. A waker that stores its condition and then reads a
+ * sleeper's state passes one between, as a sleeper does between its state
+ * and its test (`sched_set_current_state`). */
+static __inline__ void sched_mb(void)
+{
+    volatile unsigned int fence = 0;
+
+    (void)arch_atomic_xchg(&fence, 0u);
+}
+
+/**
+ * Set the current thread's state to `state`, PROC_BLOCKED or PROC_STOPPED
+ * before a sleep, with a full barrier after the store, as Linux's
+ * set_current_state (include/linux/sched.h:190-195). A sleep sets it, and
+ * files itself on its queue, before it tests its condition: a waker that
+ * changes the condition after the test finds the thread blocked and makes
+ * it ready, and `schedule` then keeps it running.
+ */
+static __inline__ void sched_set_current_state(proc_state_t state)
+{
+    current_proc->state = state;
+    sched_mb();
+}
+
+/** Wait until thread `p` is on no processor: the switch away from it has
+ * saved its registers, so its stack may be freed or another processor may
+ * run it. Returns at once for a thread that is not running. */
+void sched_wait_off_cpu(const process_t *p);
 
 /**
  * From an interrupt handler: switch this processor now, unless it runs its
@@ -112,6 +155,12 @@ void sched_service_point(void);
 
 /** Remove `p` from its ready list before it is freed; the big lock is held. */
 void sched_forget(process_t *p);
+
+/** Make `p` this processor's current process without a switch, as the
+ * debug shell's process 0 takes back the processor a program it ran ended
+ * on, whichever that is: off any ready list, running, and placed on this
+ * processor. */
+void sched_adopt(process_t *p);
 
 /** With `hold` set, add each queued thread's wait so far to its `run_delay`
  * and count no wait until called with `hold` clear, which starts each

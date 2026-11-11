@@ -202,7 +202,7 @@ struct evdev {
 static struct evdev devices[EVDEV_MAX];
 
 /* Over the devices and their opens' queues. */
-static struct spinlock evdev_lock = SPINLOCK_INIT;
+static struct spinlock evdev_lock = SPINLOCK_INIT_NAMED("evdev_lock");
 
 /* The registrations so far, which number each, and the registrations and
  * unregistrations, whose waiters `change_wq` holds; static storage starts

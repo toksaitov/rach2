@@ -2187,6 +2187,7 @@ int32_t virtio_gpu_bind(struct virtio_dev *vdev)
         return -ENOMEM;
     }
     drm_dev_init(&vg->drm, &vgpu_driver);
+    spin_lock_init(&vg->lock, "virtio_gpu");
     vg->vdev = vdev;
     vg->pci = pci;
     vg->vga = pci && pci->class_code == PCI_CLASS_DISPLAY && pci->subclass == PCI_SUBCLASS_VGA;

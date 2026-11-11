@@ -9,6 +9,7 @@
 
 #include "../arch/arch.h"
 #include "../lib/kint.h"
+#include "../lib/spinlock.h"
 #include "../fs/fd.h"
 #include "../mm/shmem.h"
 #include "../mm/vm.h"
@@ -36,6 +37,26 @@ struct sysfs_pci_ident;
  * sleeping lock and may only signal fences, count vblanks and queue
  * events. The order, outermost first, is a device's `commit_lock`, then
  * any lock a driver keeps for its own hardware.
+ *
+ * Spinlocks, as Linux's, keep the structures that DRM_UNLOCKED ioctls and
+ * other processors reach whole without the big lock. Each is taken with
+ * interrupts off, for a region that neither sleeps nor allocates, and no
+ * two of them nest:
+ *   * a handle table's `lock` (`struct drm_handles`) over its slots, its
+ *     PRIME hash and each handle's PRIME cache, Linux's `table_lock` and
+ *     `syncobj_table_lock` (include/drm/drm_file.h:309-315);
+ *   * a device's `object_lock` over its list of buffer objects, their flink
+ *     names, each object's handles and handle count, its weak `dma_buf`,
+ *     and the device's mmap space, Linux's `object_name_lock` and the
+ *     offset manager's `vm_lock`;
+ *   * a device's `event_lock` over each file's queued and reserved events
+ *     and its event space, Linux's `event_lock` (drm_device.h:276).
+ * A buffer object's `refs` change atomically, as Linux's kref: a walk that
+ * meets an object under `object_lock` takes a reference only while the
+ * count is not 0 (`drm_gem_object_next`, as Linux's drm_gem.c:1177), since
+ * the last put takes the object off the device's lists under that lock
+ * before it frees it. Everything else here, dma-buf references and the
+ * syncobj table's objects among them, still relies on the big lock.
  *
  * References. Each object counts its holders in `refs`, and the last put
  * frees it:
@@ -421,7 +442,7 @@ struct drm_gem_object_funcs {
  * EINVAL, as Linux's i915 refuses its userptr objects.
  */
 struct drm_gem_object {
-    uint32_t refs;
+    volatile uint32_t refs; /* changed atomically (drm_gem.c) */
     struct drm_device *dev;
     uint64_t size;
     uint32_t name;
@@ -432,11 +453,11 @@ struct drm_gem_object {
     struct dma_resv resv_own;
     const struct drm_gem_object_funcs *funcs;
     int map_wc;                 /* PRIME mappings use write-combining */
-    uint32_t handle_count;      /* handles any file has to it */
-    struct drm_handle *handles; /* those handles, through `obj_next` */
+    uint32_t handle_count;      /* handles any file has to it, under `object_lock` */
+    struct drm_handle *handles; /* those handles, through `obj_next`, under `object_lock` */
     uint8_t no_export;
-    struct drm_gem_object *dev_next;  /* the device's objects */
-    struct drm_gem_object *mmap_next; /* the device's objects with an offset, by offset */
+    struct drm_gem_object *dev_next;  /* the device's objects, under `object_lock` */
+    struct drm_gem_object *mmap_next; /* those with an offset, by offset, under `object_lock` */
 };
 
 /* The mmap space of a device's buffer objects, Linux's on each ABI: from
@@ -454,11 +475,18 @@ struct drm_gem_object {
  * device, and its own reservation. */
 void drm_gem_object_init(struct drm_device *dev, struct drm_gem_object *obj, uint64_t size,
                          const struct drm_gem_object_funcs *funcs);
-/** Take a reference to `obj`; NULL is allowed. */
+/** Take a reference to `obj`, which the caller holds one to; NULL is
+ * allowed. Any context. */
 void drm_gem_object_get(struct drm_gem_object *obj);
-/** Drop a reference; the last frees the object through its `free` and
- * drops its device. NULL is allowed. */
+/** Drop a reference; the last takes the object off its device's lists and
+ * frees it through its `free`, and drops its device. NULL is allowed. */
 void drm_gem_object_put(struct drm_gem_object *obj);
+/** The object of `dev` after `prev`, or its first when `prev` is NULL,
+ * with a reference taken, or NULL past the last; drops the caller's
+ * reference to `prev`. Objects whose last reference is going are passed
+ * over. A walk that may sleep is `for (o = drm_gem_object_next(dev, NULL);
+ * o; o = drm_gem_object_next(dev, o))`; one that leaves early puts `o`. */
+struct drm_gem_object *drm_gem_object_next(struct drm_device *dev, struct drm_gem_object *prev);
 /** Give `file` a new handle to `obj`, the lowest free from 1, in `*handle`,
  * with a reference of its own, and run the object's `open` hook: 0, or
  * -ENOMEM, or the hook's -errno, which leaves no handle. */
@@ -561,6 +589,7 @@ struct drm_pending_event {
     struct drm_pending_event *next;
     struct drm_pending_event *pending_next; /* the file's reserved events */
     struct drm_file *file;                  /* NULL once the file is released unsent */
+    struct drm_device *dev;                 /* whose `event_lock` keeps it once reserved */
     struct dma_fence *fence;                /* the sender signals it as it sends, or NULL */
     uint64_t sequence;                      /* the vblank count it waits for */
     struct drm_crtc *flip_crtc;             /* the CRTC whose flip it completes, or NULL */
@@ -591,8 +620,10 @@ struct drm_handle {
  * lookup costs one load whatever the handles a client holds. Its handles
  * with a PRIME cache are also hashed by their dma-buf, as Linux's
  * prime_fpriv->dmabufs, so that an import finds its handle without a walk
- * over the table. */
+ * over the table. Every call below takes `lock` itself and allocates and
+ * frees outside it. */
 struct drm_handles {
+    struct spinlock lock;      /* the members below and each handle's `prime` */
     struct drm_handle **slot;  /* slot[id], NULL where the id is free; slot[0] unused */
     uint32_t cap;              /* the slots allocated, 0 for none */
     uint32_t free;             /* no id below it is free */
@@ -604,24 +635,29 @@ struct drm_handles {
 /** Add `object` to the table `t` under the lowest free id from 1, as
  * Linux's idr gives handles, into `*id`: 0, or -ENOMEM. */
 int32_t drm_handle_insert(struct drm_handles *t, void *object, uint32_t *id);
-/** The object of `id` in `t`, or NULL. */
-void *drm_handle_find(const struct drm_handles *t, uint32_t id);
-/** The handle of `id` in `t`, or NULL. */
-struct drm_handle *drm_handle_get(const struct drm_handles *t, uint32_t id);
+/** The object of `id` in `t`, or NULL; no reference is taken, so the
+ * caller keeps the object alive by other means. */
+void *drm_handle_find(struct drm_handles *t, uint32_t id);
 /** Take `id` out of `t`, drop its PRIME cache reference and return its
  * object, or NULL for none. */
 void *drm_handle_remove(struct drm_handles *t, uint32_t id);
-/** Make `buf` the PRIME cache of `t`'s handle `h`, which has none, with the
- * caller's reference: 0, or -ENOMEM, which leaves the reference with the
- * caller, as Linux's drm_prime_add_buf_handle. */
-int32_t drm_handle_set_prime(struct drm_handles *t, struct drm_handle *h, struct dma_buf *buf);
+/** Make `buf` the PRIME cache of `t`'s handle `id`, with the caller's
+ * reference, as Linux's drm_prime_add_buf_handle: 0; -ENOENT when `id`
+ * names no handle or one to another object than `object`; -EEXIST when the
+ * handle has a cache already, which stays; or -ENOMEM. On an error the
+ * reference stays with the caller. */
+int32_t drm_handle_set_prime(struct drm_handles *t, uint32_t id, const void *object,
+                             struct dma_buf *buf);
+/** The PRIME cache of `t`'s handle `id`, with a reference for the caller,
+ * or NULL when it has none or `id` names no handle. */
+struct dma_buf *drm_handle_prime_get(struct drm_handles *t, uint32_t id);
 /** The lowest id of `t` whose PRIME cache is `buf`, or 0 for none, as
  * Linux's drm_prime_lookup_buf_handle. */
-uint32_t drm_handle_prime_find(const struct drm_handles *t, const struct dma_buf *buf);
+uint32_t drm_handle_prime_find(struct drm_handles *t, const struct dma_buf *buf);
 /** The lowest id from `id` that is in use in `t`, or 0 when none is: a
  * walk over the table is `for (i = drm_handle_next(t, 1); i;
  * i = drm_handle_next(t, i + 1))`. */
-uint32_t drm_handle_next(const struct drm_handles *t, uint32_t id);
+uint32_t drm_handle_next(struct drm_handles *t, uint32_t id);
 /** Free the slots and PRIME buckets of `t`, whose handles have all been
  * removed. */
 void drm_handles_fini(struct drm_handles *t);
@@ -629,7 +665,8 @@ void drm_handles_fini(struct drm_handles *t);
 /*
  * An open of a card or render node, one per open file description. The
  * client caps are what SET_CLIENT_CAP set. `event_space` is how many bytes
- * of events may still queue, Linux's 4096 at open.
+ * of events may still queue, Linux's 4096 at open. The events, the
+ * reserved list and `event_space` are under the device's `event_lock`.
  *
  * The master role follows Linux's drm_master records, each named here by
  * an id from the device's `next_master_id`. A file of the card has the id
@@ -675,7 +712,7 @@ struct drm_file {
 
 /*
  * Events, Linux's drm_event_reserve, drm_send_event and
- * drm_event_cancel_free. A sender allocates `e` with kmalloc, sets its
+ * drm_event_cancel_free. A sender allocates `e` with kzalloc, sets its
  * event and `length`, and reserves it, which counts its length against the
  * file's space and keeps it on the file's list of reserved events. Sending
  * queues it for the reader, signals its fence and wakes the reader; the
@@ -975,12 +1012,17 @@ struct drm_crtc_funcs {
  * off-delay runs. `events` are the events waiting for a count, in the order
  * queued. `wait` wakes at each vblank, when vblanks stop, and when a commit's
  * flip on the CRTC completes. `last` is the hardware's frame counter when the
- * count last took it in, for a CRTC with `get_vblank_counter`.
+ * count last took it in, for a CRTC with `get_vblank_counter`. `backwards`
+ * counts the times stored before the latest one stored earlier,
+ * `stamp_max_ns`, which debugfs's `crtc-N/vblank_backwards` reads.
  */
 struct drm_vblank {
+    uint32_t seq; /* odd while `count` and `time_ns` change, Linux's seqlock */
     uint64_t count;
     uint32_t last;
     int64_t time_ns;
+    int64_t stamp_max_ns;
+    uint32_t backwards;
     uint32_t refs;
     int enabled;   /* the driver's interrupt is on */
     int inmodeset; /* the CRTC is off, and `refs` holds one for it */
@@ -1663,7 +1705,8 @@ int32_t drm_crtc_vblank_get(struct drm_crtc *crtc);
 /** Let a hold go; the off-delay runs from the last. Any context. */
 void drm_crtc_vblank_put(struct drm_crtc *crtc);
 /** The vblank count of `crtc`, and the time of the last vblank in
- * `*time_ns` when it is not NULL. */
+ * `*time_ns` when it is not NULL, read as one pair against the vblank
+ * interrupt. Any context. */
 uint64_t drm_crtc_vblank_count_and_time(struct drm_crtc *crtc, int64_t *time_ns);
 /*
  * A driver's scanout position, Linux's get_scanout_position of
@@ -1775,7 +1818,8 @@ void drm_edid_override_reset(struct drm_connector *connector);
  * for that function in place of its own, as a driver that stands in for
  * another chip sets it before registering (sysfs.h's
  * `sysfs_pci_virtual_add`). `master` is the file that holds the master role,
- * or NULL. `commit_lock` orders commits (the lock rule above).
+ * or NULL. `commit_lock` orders commits, and `object_lock` and
+ * `event_lock` keep the objects and the events (the lock rules above).
  */
 struct drm_device {
     const struct drm_driver *driver;
@@ -1791,9 +1835,11 @@ struct drm_device {
     uint32_t open_count;
     struct drm_file *files;              /* its open files, through `dev_next` */
     uint32_t next_master_id;             /* the last master record's id */
+    struct spinlock object_lock;         /* the three lists below and their objects' names */
     struct drm_gem_object *objects;      /* its buffer objects, through `dev_next` */
     struct drm_gem_object *mmap_objects; /* those with an mmap offset, by offset */
     struct drm_mmap_node *mmap_nodes;    /* drivers' further offsets, by offset */
+    struct spinlock event_lock;          /* its files' events */
     struct drm_mode_config mode_config;
     int debugfs;     /* its debugfs directory is made (drm_debugfs.c) */
     int commit_held; /* the commit lock: 1 while a commit holds it */
@@ -1811,9 +1857,14 @@ struct drm_device {
 void drm_start(void);
 
 /** Fill a new device for `driver`, with one reference, the caller's, and
- * the driver's features; every other member is zero, and the driver sets
- * `unique`, `pci` and its own before it registers. Registers nothing. */
+ * the driver's features; its spinlocks are made and every other member is
+ * zero, and the driver sets `unique`, `pci` and its own before it registers.
+ * Registers nothing. */
 void drm_dev_init(struct drm_device *dev, const struct drm_driver *driver);
+/** Make the spinlocks of a new file's two handle tables, a class for each,
+ * as Linux's drm_gem_open and drm_syncobj_open make `table_lock` and
+ * `syncobj_table_lock`. */
+void drm_file_locks_init(struct drm_file *file);
 /** Register the device under the lowest free card index: its card node,
  * and its render node when it has DRIVER_RENDER, through the devfs
  * registry, with GET_UNIQUE's name made from `pci` or the driver's name

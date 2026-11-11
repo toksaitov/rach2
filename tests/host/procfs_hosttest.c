@@ -1995,6 +1995,25 @@ const struct open_file *filemap_ofd(const struct vm_file *f)
     return NULL;
 }
 
+/** No entry either, so the maps rows name no file when they are read. */
+const fd_entry_t *filemap_entry(const struct vm_file *f)
+{
+    (void)f;
+    return NULL;
+}
+
+/** Nothing: no maps row gathers a file to name. */
+void vm_file_get(struct vm_file *f)
+{
+    (void)f;
+}
+
+/** Nothing, as `vm_file_get`. */
+void vm_file_put(struct vm_file *f)
+{
+    (void)f;
+}
+
 /** The mount table the identity of a maps line searches, empty here. */
 int vfs_mount_slots(void)
 {

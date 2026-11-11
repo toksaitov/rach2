@@ -27,7 +27,11 @@
  * neither online nor counted. The profiler's sample of a hold of the big
  * lock walks the frames of the interrupted thread's kernel stack and stops
  * at a saved frame pointer above it, the user's value that the outermost
- * kernel frame holds.
+ * kernel frame holds. The big lock's counts: each processor's calls in its
+ * own tally, summed by bkl/calls; a hold charged to the entry of a thread
+ * that ran without the lock; the takes after an idle wait and a switch
+ * under their own keys; each thread's record of its entry frames; and the
+ * ioctl slots.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -177,6 +181,12 @@ int platform_cpu_count(int limit)
 {
     (void)limit;
     return cpu_count;
+}
+
+/** Nothing: the test maps no temporary slot. */
+void paging_temp_split(unsigned int cpus)
+{
+    (void)cpus;
 }
 
 /** Keep `entry` in `late_entry` for the row to call after the wait; 0. */
@@ -393,6 +403,108 @@ static void row_sample_stack(void)
     check(pc[3] == 0, "and stops at a saved frame pointer above the stack, reading nothing there");
 }
 
+/* The tallies of two processors, for the rows of bkl/calls. */
+static struct bkl_tally tally_rows[2][BKL_TALLIES];
+
+/* The system call `call_on` counts. */
+static uint32_t call_nr;
+
+/** Count one call of `call_nr` as the running processor, for `run_as`. */
+static int call_on(void)
+{
+    smp_call_end(call_nr, 0, 0);
+    return 0;
+}
+
+/** Whether `text` holds `line` at the start of one of its lines. */
+static int has_line(const char *text, const char *line)
+{
+    const char *t = text;
+
+    while (*t) {
+        const char *a = t, *b = line;
+
+        while (*b && *a == *b) {
+            a++;
+            b++;
+        }
+        if (!*b) {
+            return 1;
+        }
+        while (*t && *t != '\n') {
+            t++;
+        }
+        if (*t) {
+            t++;
+        }
+    }
+    return 0;
+}
+
+/**
+ * The big lock's counts: each processor counts its calls in its own tally,
+ * which a read of bkl/calls sums; a hold taken for a thread whose entry ran
+ * without the lock is charged to that entry; the takes after an idle wait
+ * and after a switch count under keys of their own; each thread keeps its
+ * own record of which entry frames took the lock; and an ioctl request
+ * keeps the slot it claimed while another takes a second.
+ */
+static void row_bkl_counts(void)
+{
+    static char text[16384];
+    int a, b;
+
+    bkl_tally[0] = tally_rows[0];
+    bkl_tally[1] = tally_rows[1];
+    bkl_booted = 1;
+    call_nr = 39;
+    run_as(0, call_on);
+    run_as(1, call_on);
+    run_as(1, call_on);
+    text[smp_calls_show(NULL, text, sizeof(text) - 1)] = 0;
+    check(tally_rows[0][39].calls == 1 && tally_rows[1][39].calls == 2 &&
+              has_line(text, "syscall 39 3 "),
+          "each processor counts its calls, and bkl/calls sums them");
+
+    cpu_table[0].current = &self;
+    cpu_table[0].bkl_depth = 0;
+    self.bkl_entry = 7u + 1u;
+    bkl_enter();
+    check(bkl_held() && cpu_table[0].bkl_nr == 7 && cpu_table[0].bkl_vector == BKL_CALL_VECTOR,
+          "a hold taken inside an entry that ran without the lock is charged to that entry");
+    bkl_exit();
+    check(!bkl_held() && bkl_calls[7].holds == 1, "and counted under it when it ends");
+    self.bkl_entry = 0;
+
+    bkl_take_as(1, BKL_KEY_IDLE);
+    check(bkl_drop() == 1 && bkl_calls[BKL_KEY_IDLE].holds == 1,
+          "a take after an idle wait counts under its own key");
+    bkl_take_as(1, BKL_KEY_SWITCH);
+    check(bkl_drop() == 1 && bkl_calls[BKL_KEY_SWITCH].holds == 1,
+          "and a take after a switch under another");
+    text[smp_calls_show(NULL, text, sizeof(text) - 1)] = 0;
+    check(has_line(text, "take 0 0 0 1 ") && has_line(text, "take 1 0 0 1 "),
+          "bkl/calls prints both takes");
+
+    bkl_frame_push(1);
+    cpu_table[0].current = &user_a;
+    bkl_frame_push(0);
+    check(bkl_frame_top() == 0, "a thread's entry frame that ran unlocked is its own");
+    cpu_table[0].current = &self;
+    check(bkl_frame_pop() == 1 && self.bkl_frames == 0,
+          "and another thread's frame that took the lock stays its own");
+    cpu_table[0].current = &user_a;
+    check(bkl_frame_pop() == 0 && user_a.bkl_frames == 0, "each pops its own");
+    cpu_table[0].current = &self;
+
+    a = ioctl_slot(0xc0406469u);
+    b = ioctl_slot(0x80086401u);
+    check(a > 0 && b > 0 && a != b && ioctl_slot(0xc0406469u) == a,
+          "an ioctl request keeps its slot, and another request takes a second");
+    bkl_tally[0] = bkl_tally_boot;
+    bkl_tally[1] = NULL;
+}
+
 /**
  * A stop asks every other processor: processor 1 takes the interrupt, 2
  * does not and takes the NMI, and 3 takes neither. Each that stops runs
@@ -417,6 +529,27 @@ static void row_stop(void)
           "each leaves VMX operation before it is marked stopped");
     check(hooked[0] == 0 && hooked[3] == 0,
           "and neither the caller nor the stuck processor runs the hook");
+}
+
+/** Take `lock` with interrupts off: one thread, so nothing waits. */
+uint32_t spin_lock_irqsave(struct spinlock *lock)
+{
+    lock->locked = 1;
+    return 0;
+}
+
+/** Give `lock` back. */
+void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
+{
+    (void)flags;
+    lock->locked = 0;
+}
+
+/** Copy `n` bytes from `src`: the test's user memory is its own. */
+int copy_from_user(void *dst, const void __user *src, size_t n)
+{
+    memcpy(dst, (const void *)src, n);
+    return 0;
 }
 
 /** Run every row; 0 when each passes, 1 otherwise. */
@@ -468,6 +601,7 @@ int main(void)
           "and one that comes after the wait stops, neither online nor counted");
 
     row_sample_stack();
+    row_bkl_counts();
 
     while (nguarded > 0) {
         free(guarded[--nguarded]);

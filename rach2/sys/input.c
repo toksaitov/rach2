@@ -45,7 +45,7 @@ static const unsigned int modifier_keys[8] = {KEY_LEFTSHIFT, KEY_RIGHTSHIFT, KEY
 
 /* Over the keyboards' list, their held keys, the modifiers' counts, the
  * repeat and the LEDs. */
-static struct spinlock input_lock = SPINLOCK_INIT;
+static struct spinlock input_lock = SPINLOCK_INIT_NAMED("input_lock");
 
 /* The keyboards attached. */
 static struct input_keyboard *keyboards;

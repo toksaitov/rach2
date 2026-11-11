@@ -248,6 +248,7 @@ static int32_t eventfd_open(uint32_t count, uint32_t flags)
     if (!ev) {
         return -ENOMEM;
     }
+    spin_lock_init(&ev->lock, "eventfd");
     ev->anon.name = "[eventfd]";
     ev->refs = 1;
     ev->count = count;

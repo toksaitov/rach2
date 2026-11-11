@@ -279,6 +279,7 @@ ACPI_STATUS AcpiOsCreateLock(ACPI_SPINLOCK *out)
     if (!lock) {
         return AE_NO_MEMORY;
     }
+    spin_lock_init(lock, "acpi_lock");
     *out = lock;
     return AE_OK;
 }
@@ -307,7 +308,7 @@ struct osl_sem {
 };
 
 /* Over every semaphore's units, which an interrupt may signal. */
-static struct spinlock sem_lock = SPINLOCK_INIT;
+static struct spinlock sem_lock = SPINLOCK_INIT_NAMED("acpi_sem_lock");
 
 /**
  * Whether the caller may block: the scheduler is on, and it is a process
@@ -615,7 +616,7 @@ static struct {
 static uint32_t queue_head, queue_tail;
 static int queue_running; /* an item taken off is still running */
 static int queue_full_said;
-static struct spinlock queue_lock = SPINLOCK_INIT;
+static struct spinlock queue_lock = SPINLOCK_INIT_NAMED("acpi_queue_lock");
 static wait_queue_t queue_work, queue_idle;
 static process_t *thread;
 
@@ -757,7 +758,7 @@ void acpica_thread_start(void)
 
 static char line[OSL_LINE_MAX];
 static int line_len;
-static struct spinlock line_lock = SPINLOCK_INIT;
+static struct spinlock line_lock = SPINLOCK_INIT_NAMED("acpi_line_lock");
 static uint32_t errors, warnings;
 
 /** Whether `s` begins with `prefix`. */

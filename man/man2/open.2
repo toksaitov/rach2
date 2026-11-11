@@ -128,6 +128,22 @@ By default, a final symbolic link is followed.
 With
 .Dv O_CREAT ,
 a dangling link causes its missing target to be created.
+In a sticky directory that others may write, a final link is followed
+only by its owner or when the directory's owner owns it, and
+.Dv O_CREAT
+without
+.Dv O_EXCL
+on an existing FIFO or regular file there, owned by neither the caller
+nor the directory's owner, fails; both are
+.Er EACCES ,
+for root as well, as under Linux's
+.Pa /proc/sys/fs
+files
+.Pa protected_symlinks ,
+.Pa protected_fifos
+and
+.Pa protected_regular
+.Pq Xr proc 5 .
 Path resolution follows at most 40 symbolic links.
 The copied path, including any directory prefix, must fit 4096 bytes
 with its terminating null byte.
@@ -595,7 +611,10 @@ call.
 .Bl -tag -width "[ENAMETOOLONG]"
 .It Bq Er EACCES
 Search or file access permission was denied, creation lacked parent
-write permission, a proc file was opened for writing or creation,
+write permission, a final symbolic link or an existing file opened with
+.Dv O_CREAT
+was another user's in a sticky directory that others may write,
+a proc file was opened for writing or creation,
 or a device node was opened on a mount with
 .Dv MS_NODEV .
 .It Bq Er EBADF

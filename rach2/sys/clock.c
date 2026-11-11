@@ -153,7 +153,7 @@ static int32_t rtc_step_nanoseconds;
 static int64_t rtc_last_seconds;
 static int64_t rtc_last_nanoseconds;
 /* Protect the clock's step and real-time floor across processors. */
-static struct spinlock rtc_realtime_lock;
+static struct spinlock rtc_realtime_lock = SPINLOCK_INIT_NAMED("rtc_realtime_lock");
 
 void rtc_anchor(int64_t seconds, uint32_t uptime)
 {
@@ -410,7 +410,7 @@ void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 /* The last reading of time since boot, which no later one is earlier than. */
 static int64_t rtc_mono_seconds;
 static int64_t rtc_mono_nanoseconds;
-static struct spinlock rtc_mono_lock;
+static struct spinlock rtc_mono_lock = SPINLOCK_INIT_NAMED("rtc_mono_lock");
 
 /** The floor is `rtc_realtime`'s, for the same reasons, kept apart from it
  * since setting the clock moves that one and not this. */

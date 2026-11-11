@@ -5,6 +5,7 @@
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/atomic_host.c
  *
  * The four files are included whole. A fake driver binds two devices: one
  * with a card and a render node, GEM, dumb buffers of the shmem helper
@@ -24,9 +25,15 @@
  * flags and node and its copies by direction; the master role between two
  * openers, a root caller and a close, with magic and authentication, and
  * the listener's view of each change; dumb buffers created, mapped, written
- * and freed, with their handles, flink names and mmap offsets; events
- * queued, polled, read and left by a closed file; unplug; and kcmp of a
- * dup, a fork's copy and two opens of a node, and its other kinds.
+ * and freed, with their handles, flink names and mmap offsets; a handle
+ * table's growth, its lowest free id and its walk; a handle reserved while
+ * its object's `open` hook runs; references held by the walk over a
+ * device's objects, and an object whose last put is under way passed over
+ * by it and by mmap; events queued, polled, read and left by a closed
+ * file; unplug; and kcmp of a dup, a fork's copy and two opens of a node,
+ * and its other kinds. Each row that ends with the core's locks free shows
+ * that no call left one held or took one twice, which the host's spinlock
+ * traps.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -246,6 +253,13 @@ void dma_fence_put(struct dma_fence *f)
 void dma_buf_put(struct dma_buf *buf)
 {
     CHECK("no PRIME reference in core model", buf == NULL);
+}
+
+/** No PRIME objects are made by the core rows: a table's cache is NULL. */
+struct dma_buf *dma_buf_ref(struct dma_buf *buf)
+{
+    CHECK("no PRIME reference in core model", buf == NULL);
+    return buf;
 }
 
 /** Release modeled reservation slots at the object's last reference. */
@@ -1201,6 +1215,158 @@ static void test_dumb_free(void)
     CHECK("each object held the device once", fake_dev.refs == 1);
 }
 
+/** Whether every lock of the core is free, as it is between calls: the
+ * fake device's, and `f`'s tables' when `f` is given. The host's spinlock
+ * traps on a lock taken twice, so a row that ends here also shows that no
+ * call nested one. */
+static int locks_free(const struct drm_file *f)
+{
+    return !fake_dev.object_lock.locked && !fake_dev.event_lock.locked &&
+           (!f || (!f->objects.lock.locked && !f->syncobjs.lock.locked));
+}
+
+/** A handle table past its first 64 slots: the lowest free id, two growths
+ * with the lock let go, finds, removes and a walk, each call leaving the
+ * table's lock free. */
+static void test_handle_table(void)
+{
+    static struct drm_handles t;
+    static int objs[130];
+    uint32_t i, id, n;
+    int ok = 1;
+
+    for (i = 1; i <= 129; i++) {
+        ok &= drm_handle_insert(&t, &objs[i], &id) == 0 && id == i && !t.lock.locked;
+    }
+    CHECK("129 handles in order, past two growths", ok && t.cap == 256);
+    CHECK("a find", drm_handle_find(&t, 100) == &objs[100] && !drm_handle_find(&t, 130) &&
+                        !drm_handle_find(&t, 0) && !t.lock.locked);
+    CHECK("a remove", drm_handle_remove(&t, 64) == &objs[64] && !drm_handle_find(&t, 64) &&
+                          !drm_handle_remove(&t, 64) && !t.lock.locked);
+    CHECK("the id removed is the lowest free", drm_handle_insert(&t, &objs[0], &id) == 0 &&
+                                                   id == 64 && drm_handle_find(&t, 64) == &objs[0]);
+    for (n = 0, i = drm_handle_next(&t, 1); i; i = drm_handle_next(&t, i + 1)) {
+        n++;
+    }
+    CHECK("the walk sees every handle", n == 129 && !t.lock.locked);
+    for (i = drm_handle_next(&t, 1); i; i = drm_handle_next(&t, i + 1)) {
+        drm_handle_remove(&t, i);
+    }
+    CHECK("each removed", drm_handle_next(&t, 1) == 0 && !t.lock.locked);
+    drm_handles_fini(&t);
+}
+
+static int32_t hook_rc;
+static int hook_runs, hook_ok, hook_frees;
+
+/** An object's `open` hook, which sees the handle being made reserved: no
+ * lookup, find or close reaches it, the object already counts it, and no
+ * lock is held while the hook runs, since a driver's hook may sleep. */
+static int32_t hook_open(struct drm_gem_object *obj, struct drm_file *file)
+{
+    hook_runs++;
+    hook_ok = !drm_handle_find(&file->objects, 1) && !drm_gem_object_lookup(file, 1) &&
+              drm_gem_handle_delete(file, 1) == -EINVAL && obj->handle_count == 1 &&
+              locks_free(file);
+    return hook_rc;
+}
+
+/** The free of the hook's object. */
+static void hook_free(struct drm_gem_object *obj)
+{
+    hook_frees++;
+    kfree(obj);
+}
+
+static const struct drm_gem_object_funcs hook_funcs = {hook_free, NULL, NULL, NULL,
+                                                       NULL,      NULL, NULL, hook_open};
+
+/** A handle's id is reserved while the object's `open` hook runs and
+ * published after it, as Linux's drm_gem_handle_create_tail; a failed hook
+ * leaves no handle, count or reference. */
+static void test_handle_open(void)
+{
+    fd_entry_t e;
+    struct drm_file *f;
+    struct drm_gem_object *obj = (struct drm_gem_object *)kzalloc(sizeof(*obj));
+    uint32_t h = 0;
+
+    open_node("dri/card0", &user_a, 0, &e);
+    f = (struct drm_file *)e.priv;
+    drm_gem_object_init(&fake_dev, obj, PAGE_SIZE, &hook_funcs);
+    hook_rc = -EIO;
+    CHECK("a failed open hook leaves no handle",
+          drm_gem_handle_create(f, obj, &h) == -EIO && hook_runs == 1 && hook_ok &&
+              !drm_handle_next(&f->objects, 1) && obj->handle_count == 0 && !obj->handles &&
+              obj->refs == 1 && locks_free(f));
+    hook_rc = 0;
+    CHECK("the handle is published after the hook",
+          drm_gem_handle_create(f, obj, &h) == 0 && h == 1 && hook_runs == 2 && hook_ok &&
+              drm_handle_find(&f->objects, 1) == obj && obj->refs == 2 && locks_free(f));
+    drm_gem_object_put(obj);
+    close_node(&e);
+    CHECK("the close frees it", hook_frees == 1 && !fake_dev.objects && locks_free(NULL));
+}
+
+/** References: the walk holds each object it visits and drops it at the
+ * next; an object whose last put has counted down but not yet taken it
+ * off the device's list is passed over by the walk and refused by mmap, as
+ * Linux's kref_get_unless_zero in drm_gem_mmap. */
+static void test_object_refs(void)
+{
+    fd_entry_t e;
+    struct drm_file *f;
+    struct drm_mode_create_dumb cd;
+    struct drm_mode_map_dumb md;
+    struct drm_gem_object *o1, *o2, *o, *last = NULL;
+    vma_t vma;
+    int n, held = 1;
+
+    open_node("dri/card0", &user_a, 0, &e);
+    f = (struct drm_file *)e.priv;
+    k_memset(&cd, 0, sizeof(cd));
+    cd.bpp = 32;
+    cd.width = 16;
+    cd.height = 16;
+    ioc(&e, &user_a, DRM_IOCTL_MODE_CREATE_DUMB, &cd);
+    ioc(&e, &user_a, DRM_IOCTL_MODE_CREATE_DUMB, &cd);
+    md.handle = 2;
+    md.pad = 0;
+    CHECK("two buffers, the second mapped",
+          cd.handle == 2 && ioc(&e, &user_a, DRM_IOCTL_MODE_MAP_DUMB, &md) == 0);
+    o1 = drm_gem_object_lookup(f, 1);
+    o2 = drm_gem_object_lookup(f, 2);
+    for (n = 0, o = drm_gem_object_next(&fake_dev, NULL); o;
+         o = drm_gem_object_next(&fake_dev, o)) {
+        n++;
+        held &= o->refs == 3 && locks_free(f);
+    }
+    CHECK("the walk holds what it visits, and only that",
+          n == 2 && held && o1->refs == 2 && o2->refs == 2 && locks_free(f));
+
+    o2->refs = 0;
+    for (n = 0, o = drm_gem_object_next(&fake_dev, NULL); o;
+         o = drm_gem_object_next(&fake_dev, o)) {
+        n++;
+        last = o;
+    }
+    CHECK("an object at 0 is passed over", n == 1 && last == o1 && o1->refs == 2);
+    k_memset(&vma, 0, sizeof(vma));
+    vma.end = PAGE_SIZE;
+    vma.type = VM_SHARED;
+    vma.prot = VM_PROT_READ | VM_PROT_WRITE;
+    vma.pgoff = (uint32_t)(md.offset >> PAGE_SHIFT);
+    CHECK("mmap refuses it", e.ops->mmap(&e, &vma) == -EINVAL && !vma.file && locks_free(f));
+    o2->refs = 2;
+    CHECK("and maps it held", e.ops->mmap(&e, &vma) == 0 && o2->refs == 3 && locks_free(f));
+    region_unmap(&vma);
+    CHECK("the unmap drops the region's", o2->refs == 2);
+    drm_gem_object_put(o1);
+    drm_gem_object_put(o2);
+    close_node(&e);
+    CHECK("the close frees both", !fake_dev.objects && !fake_dev.mmap_objects && locks_free(NULL));
+}
+
 /** Events: queued, polled, read whole, and left by a released file. */
 static void test_events(void)
 {
@@ -1220,7 +1386,8 @@ static void test_events(void)
     e1->event.base.type = DRM_EVENT_FLIP_COMPLETE;
     e1->event.base.length = e1->length;
     e1->event.vbl.sequence = 7;
-    CHECK("reserve", drm_event_reserve(f, e1) == 0 && f->event_space == 4096 - 32);
+    CHECK("reserve", drm_event_reserve(f, e1) == 0 && f->event_space == 4096 - 32 &&
+                         e1->dev == &fake_dev && locks_free(f));
     e2 = (struct drm_pending_event *)kzalloc(sizeof(*e2));
     e2->length = 5000;
     CHECK("reserve past the space", drm_event_reserve(f, e2) == -ENOMEM);
@@ -1246,7 +1413,8 @@ static void test_events(void)
     drm_event_reserve(f, e2);
     drm_send_event(e2);
     close_node(&a);
-    CHECK("the release leaves a reserved event unattached", e3->file == NULL);
+    CHECK("the release leaves a reserved event unattached, on its device's lock",
+          e3->file == NULL && e3->dev == &fake_dev && locks_free(NULL));
     drm_send_event(e3); /* frees it; the sanitizer finds a leak or a fault */
 }
 
@@ -1508,6 +1676,9 @@ int main(void)
     test_dumb_map();
     test_dumb_names();
     test_dumb_free();
+    test_handle_table();
+    test_handle_open();
+    test_object_refs();
     test_events();
     test_read_race();
     test_unplug();

@@ -130,6 +130,8 @@ void wlan_data_init(struct wlan_data *d, struct wlan *wlan, struct wlan_radio *r
     unsigned i;
 
     k_memset(d, 0, sizeof(*d));
+    spin_lock_init(&d->txq_lock, "wlan_txq");
+    spin_lock_init(&d->rxq_lock, "wlan_rxq");
     d->wlan = wlan;
     d->radio = radio;
     d->counters = counters;

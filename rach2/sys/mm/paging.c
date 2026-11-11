@@ -19,6 +19,7 @@
 #include "../lib/kirq.h"
 #include "../proc/process.h"
 #include "../proc/ptrace.h"
+#include "../proc/sched.h"
 #include "../proc/smp.h"
 #include "../lib/spinlock.h"
 #include "mm.h"
@@ -65,6 +66,18 @@ static size_t _free_window_frames; /* free frames below the window */
  * 4 GiB are taken once those above are gone. Set while they are left. */
 static int _framehigh_low;
 #define FRAME_HIGH_FIRST (0x100000000ULL / PAGE_SIZE)
+/* The index of the free frames, as Linux's free lists: `_frame_group_free[g]`
+ * counts the free frames of group g, the FRAME_GROUP frames from
+ * g * FRAME_GROUP, and bit g of `_frame_group_bits` is set while that count
+ * is not 0, so that a search passes 32 groups with no free frame in one word
+ * and never reads the used frames one at a time. Reserved beside the
+ * reference table and kept under frame_lock by `frame_take` and
+ * `frame_freed` once `_frame_index_ready`; the boot's searches before then
+ * read the table itself. */
+#define FRAME_GROUP      64u
+static uint32_t *_frame_group_bits;
+static uint8_t *_frame_group_free;
+static int _frame_index_ready;
 /* rach2.framefail: the allocation that fails on purpose, counted down. */
 static uint32_t _framefail_left;
 static int _framefail_on = -1; /* -1 until the boot line is read */
@@ -98,16 +111,39 @@ int paging_framefail_arm(uint32_t count)
 #ifndef ARCH_DIRECT_MAP_ALL
 /* The temporary mappings: one bit per slot of the region set while a caller
  * holds it, and one per slot given back but still mapped, which no caller is
- * given until the next sweep unmaps it. */
+ * given until the next sweep of its pool unmaps it. A pool's lock covers its
+ * bits. */
 static uint32_t _temp_slots[KVA_TEMP_SLOTS / 32];
 static uint32_t _temp_stale[KVA_TEMP_SLOTS / 32];
-/* The slot the next search for a free one starts at. */
-static uint32_t _temp_next;
+/* The most pools: each has whole words of the two maps, so that no two
+ * pools' locks cover one word. */
+#define TEMP_POOLS_MAX (KVA_TEMP_SLOTS / 32u)
+/*
+ * The slots split into a pool for each processor, as Linux gives each its
+ * own slots of the kmap_local fixmap (`kmap_local_calc_idx`,
+ * mm/highmem.c:476-480), so that processors mapping at once take their own
+ * locks and two never take one slot. A processor borrows from another's pool
+ * only when its own has nothing free even after a sweep.
+ */
+struct temp_pool {
+    struct spinlock lock; /* over `next` and the pool's bits of the maps */
+    uint32_t first, end;  /* the slots [first, end), multiples of 32 */
+    uint32_t next;        /* the slot the next search starts at */
+};
+static struct temp_pool _temp_pools[TEMP_POOLS_MAX] = {
+    {SPINLOCK_INIT_NAMED("kva_temp_pool"), 0, KVA_TEMP_SLOTS, 0}};
+/* The pools in use and the slots of each but the last, which also has the
+ * rest; one pool of every slot until `paging_temp_split`, which sets them
+ * once, before a second processor runs. */
+static uint32_t _temp_pool_count = 1;
+static uint32_t _temp_pool_size = KVA_TEMP_SLOTS;
 #endif
 /* The pages of the MMIO region, a bit each, set while a window or a
- * mapping of `map_mmio` has the page. */
+ * mapping of `map_mmio` has the page. `mmio_lock` covers them, the large
+ * spans' records and the region's entries. */
 #define MMIO_PAGES (KVA_MMIO_SIZE / PAGE_SIZE)
 static uint32_t _mmio_used[MMIO_PAGES / 32u];
+static struct spinlock mmio_lock = SPINLOCK_INIT_NAMED("mmio_lock");
 /* The first physical address past what an entry can name: 4 GiB on i686,
  * 2^52 on x86-64. */
 #define MMIO_PHYS_TOP ((uint64_t)PTE_ADDR(~(pte_t)0) + PAGE_SIZE)
@@ -132,6 +168,145 @@ static uintptr_t _user_frames_start = 0;
 static uint32_t _kernel_frames_reserved;
 
 static void _page_fault_handler(isr_params_t *params);
+
+/** The words of `_frame_group_bits`, one bit for each group of the table. */
+static size_t frame_index_words(void)
+{
+    size_t groups = (_frames_number + FRAME_GROUP - 1u) / FRAME_GROUP;
+
+    return (groups + 31u) / 32u;
+}
+
+/** Where the index begins in the frame table's reservation: after the
+ * reference words and the anonymous-frame bits, at a word's boundary. */
+static size_t frame_index_offset(void)
+{
+    size_t end = _frames_number * sizeof(uint32_t) + (_frames_number + 7u) / 8u;
+
+    return (end + sizeof(uint32_t) - 1u) & ~(sizeof(uint32_t) - 1u);
+}
+
+/** The index's bytes: its group bits and a count for each group. */
+static size_t frame_index_bytes(void)
+{
+    return frame_index_words() * sizeof(uint32_t) +
+           (_frames_number + FRAME_GROUP - 1u) / FRAME_GROUP;
+}
+
+/** Count the free frames of each group from the table, once the boot has
+ * marked what it holds, and from then on keep the index with each change. */
+static void frame_index_build(void)
+{
+    uintptr_t frame;
+
+    k_memset(_frame_group_bits, 0, frame_index_bytes());
+    for (frame = 0; frame < _frames_number; frame++) {
+        if (_frames[frame] == 0) {
+            uintptr_t g = frame / FRAME_GROUP;
+
+            _frame_group_free[g]++;
+            _frame_group_bits[g / 32u] |= 1u << (g % 32u);
+        }
+    }
+    _frame_index_ready = 1;
+}
+
+/** `frame`, which was free, is taken. `frame_lock` is held. */
+static void frame_index_take(uintptr_t frame)
+{
+    uintptr_t g = frame / FRAME_GROUP;
+
+    if (_frame_index_ready && --_frame_group_free[g] == 0) {
+        _frame_group_bits[g / 32u] &= ~(1u << (g % 32u));
+    }
+}
+
+/** `frame` is free again. `frame_lock` is held. */
+static void frame_index_put(uintptr_t frame)
+{
+    uintptr_t g = frame / FRAME_GROUP;
+
+    if (_frame_index_ready && _frame_group_free[g]++ == 0) {
+        _frame_group_bits[g / 32u] |= 1u << (g % 32u);
+    }
+}
+
+/** The lowest free frame in [from, to), or `to` when there is none. A group
+ * the index has no free frame in is passed whole, and 32 such groups with
+ * one word. `frame_lock` is held. */
+static uintptr_t frame_next_free(uintptr_t from, uintptr_t to)
+{
+    uintptr_t g, end;
+
+    if (!_frame_index_ready) {
+        for (; from < to; from++) {
+            if (_frames[from] == 0) {
+                return from;
+            }
+        }
+        return to;
+    }
+    while (from < to) {
+        g = from / FRAME_GROUP;
+        if (_frame_group_free[g] != 0) {
+            end = (g + 1u) * FRAME_GROUP < to ? (g + 1u) * FRAME_GROUP : to;
+            for (; from < end; from++) {
+                if (_frames[from] == 0) {
+                    return from;
+                }
+            }
+            continue;
+        }
+        g++;
+        while (g * FRAME_GROUP < to && !(_frame_group_bits[g / 32u] >> (g % 32u))) {
+            g = (g / 32u + 1u) * 32u;
+        }
+        while (g * FRAME_GROUP < to && _frame_group_free[g] == 0) {
+            g++;
+        }
+        from = g * FRAME_GROUP;
+    }
+    return to;
+}
+
+/** The highest free frame in [floor, from), or `floor` - 1 when there is
+ * none, passing groups as `frame_next_free` does. `floor` is above 0.
+ * `frame_lock` is held. */
+static uintptr_t frame_prev_free(uintptr_t floor, uintptr_t from)
+{
+    uintptr_t g, start;
+
+    if (!_frame_index_ready) {
+        while (from-- > floor) {
+            if (_frames[from] == 0) {
+                return from;
+            }
+        }
+        return floor - 1u;
+    }
+    while (from > floor) {
+        g = (from - 1u) / FRAME_GROUP;
+        if (_frame_group_free[g] != 0) {
+            start = g * FRAME_GROUP > floor ? g * FRAME_GROUP : floor;
+            while (from-- > start) {
+                if (_frames[from] == 0) {
+                    return from;
+                }
+            }
+            from = start;
+            continue;
+        }
+        while (g > 0 && g * FRAME_GROUP > floor &&
+               !(_frame_group_bits[(g - 1u) / 32u] << (31u - (g - 1u) % 32u))) {
+            g = (g - 1u) / 32u * 32u;
+        }
+        while (g > 0 && g * FRAME_GROUP > floor && _frame_group_free[g - 1u] == 0) {
+            g--;
+        }
+        from = g * FRAME_GROUP > floor ? g * FRAME_GROUP : floor;
+    }
+    return floor - 1u;
+}
 
 /**
  * The architecture places the frame table (`mmu_frame_table`): below the
@@ -167,7 +342,7 @@ void init_paging(struct frame_map *map)
     _frames_number = map->top_frame ? (size_t)map->top_frame : (HARD_MEMORY_LIMIT / PAGE_SIZE);
     _window_frames = _frames_number < HARD_MEMORY_LIMIT / PAGE_SIZE ? _frames_number
                                                                     : HARD_MEMORY_LIMIT / PAGE_SIZE;
-    table_bytes = _frames_number * sizeof(uint32_t) + (_frames_number + 7u) / 8u;
+    table_bytes = frame_index_offset() + frame_index_bytes();
     _frames = mmu_frame_table(map, table_bytes);
     if (_frames == NULL) {
         k_panic("init_paging: no reserved memory for the frame table");
@@ -190,6 +365,8 @@ void init_paging(struct frame_map *map)
     }
     _frame_anon = (uint8_t *)(_frames + _frames_number);
     k_memset(_frame_anon, 0, (_frames_number + 7u) / 8u);
+    _frame_group_bits = _frames + frame_index_offset() / sizeof(uint32_t);
+    _frame_group_free = (uint8_t *)(_frame_group_bits + frame_index_words());
     if (map->top_frame == 0) {
         k_memset(_frames, 0, table_bytes);
     } else {
@@ -246,6 +423,7 @@ void init_paging(struct frame_map *map)
             }
         }
     }
+    frame_index_build();
 
     register_isr_handler(PAGE_FAULT_VECTOR, &_page_fault_handler, "page fault");
 
@@ -703,11 +881,14 @@ static int range_ready(struct mm *mm, uintptr_t start, uintptr_t end, int write)
  * the kernel's own memory, which a file system's caller passes for a read
  * into a page or a program's image, and is always present; a user pointer
  * there never gets past `user_range_ok`. A range that starts in user space
- * and ends past it is not resident.
+ * and ends past it is not resident. The walk of the regions is made under
+ * the big lock, taken when the caller runs without it, until an address
+ * space has a lock of its own.
  */
 int vm_resident(uintptr_t addr, uintptr_t len, int write)
 {
     uintptr_t end = addr + len;
+    int taken, ready;
 
     if (len == 0 || (current_proc && proc_window_covers(current_proc, addr, len))) {
         return 1;
@@ -718,7 +899,15 @@ int vm_resident(uintptr_t addr, uintptr_t len, int write)
     if (end < addr || end > USER_ADDR_MAX || !current_proc || !current_proc->mm) {
         return 0;
     }
-    return range_ready(current_proc->mm, addr, end, write);
+    taken = !bkl_held();
+    if (taken) {
+        bkl_enter();
+    }
+    ready = range_ready(current_proc->mm, addr, end, write);
+    if (taken) {
+        bkl_exit();
+    }
+    return ready;
 }
 
 /**
@@ -729,11 +918,15 @@ int vm_resident(uintptr_t addr, uintptr_t len, int write)
  * nothing that sleeps, and brought in again when a page went. A range that
  * wraps is refused, since the loop would end early and leave its tail
  * unbacked. A kernel buffer the thread opened to the checks
- * (`user_window_open`) is present already.
+ * (`user_window_open`) is present already. The resolution is made under the
+ * big lock, taken when the caller runs without it, until an address space
+ * has a lock of its own; a caller that touches the range after the return
+ * holds the lock across both, as the copies do (usercopy.c).
  */
 int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
 {
     uintptr_t page, end;
+    int taken, ok = 1;
 
     if (!current_proc || current_proc->mm == NULL) {
         return 0;
@@ -746,14 +939,19 @@ int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
     if (end < addr) {
         return 0;
     }
+    taken = !bkl_held();
+    if (taken) {
+        bkl_enter();
+    }
     do {
-        for (page = addr & ~(PAGE_SIZE - 1); page < end; page += PAGE_SIZE) {
-            if (!vm_resolve(page, write)) {
-                return 0;
-            }
+        for (page = addr & ~(PAGE_SIZE - 1); ok && page < end; page += PAGE_SIZE) {
+            ok = vm_resolve(page, write);
         }
-    } while (!range_ready(current_proc->mm, addr, end, write));
-    return 1;
+    } while (ok && !range_ready(current_proc->mm, addr, end, write));
+    if (taken) {
+        bkl_exit();
+    }
+    return ok;
 }
 
 /**
@@ -1320,12 +1518,9 @@ static void fault_oom(uintptr_t address, int write)
  * would be pushed into the same guard, and the processor raises a double
  * fault instead (`isr_double_fault`).
  */
-static void _page_fault_handler(isr_params_t *params)
+static void page_fault(isr_params_t *params, uintptr_t fault_address)
 {
-    uintptr_t fault_address;
     int write, user_mode, have_user_proc, in_user_range, pid, key = -1;
-
-    fault_address = arch_fault_address();
 
     write = FAULT_WRITE(params);
     user_mode = FAULT_USER(params);
@@ -1392,19 +1587,46 @@ static void _page_fault_handler(isr_params_t *params)
     k_panic("Unrecoverable error: page fault while in kernel mode.");
 }
 
+/**
+ * Read the fault's address and handle the fault (`page_fault`), with
+ * interrupts on for a fault from user mode, as Linux's `do_user_addr_fault`
+ * turns them on (arch/x86/mm/fault.c), since its fill may sleep on a file's
+ * locks. The address is read first, before an interrupt's own fault could
+ * change it. Meanwhile the tick leaves its switch for the fault's end
+ * (`in_fault`), as it does in a system call, since the fault changes the
+ * address space under the big lock; the end takes it, as the dispatcher
+ * does at a call's.
+ */
+static void _page_fault_handler(isr_params_t *params)
+{
+    uintptr_t fault_address = arch_fault_address();
+
+    if (!FAULT_USER(params) || !current_proc) {
+        page_fault(params, fault_address);
+        return;
+    }
+    current_proc->in_fault = 1;
+    arch_irq_enable();
+    page_fault(params, fault_address);
+    arch_irq_disable();
+    current_proc->in_fault = 0;
+    sched_take_preempt();
+}
+
 uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
 {
     return map_mmio_typed(phys_addr, size, PTE_NOCACHE);
 }
 
-/** The bit of page `i` of the MMIO region in `_mmio_used`. */
+/** The bit of page `i` of the MMIO region in `_mmio_used`. `mmio_lock` is
+ * held. */
 static int mmio_bit(uintptr_t i)
 {
     return (_mmio_used[i / 32u] >> (i % 32u)) & 1u;
 }
 
 /** Mark the `count` pages of the MMIO region from page `i` used, or free
- * when `used` is 0. */
+ * when `used` is 0. `mmio_lock` is held. */
 static void mmio_mark(uintptr_t i, uintptr_t count, int used)
 {
     for (; count > 0; i++, count--) {
@@ -1420,6 +1642,7 @@ static void mmio_mark(uintptr_t i, uintptr_t count, int used)
  * The first page of the lowest free run of `count` pages of the MMIO region
  * whose index is `phase` modulo `align`, or MMIO_PAGES when there is none.
  * The region has 32768 pages, so a first fit over the bit map is cheap.
+ * `mmio_lock` is held.
  */
 static uintptr_t mmio_find(uintptr_t count, uintptr_t align, uintptr_t phase)
 {
@@ -1448,7 +1671,7 @@ static int mmio_span_large(uintptr_t va, uint64_t phys, uintptr_t lo, uintptr_t 
 /** Map the window of `pages` pages at the region's page `first` to the
  * device memory at `phys`, page-aligned, with the entry flags `flags`:
  * each aligned span with a large page where the architecture has them, the
- * rest a page at a time. */
+ * rest a page at a time. `mmio_lock` is held. */
 static void mmio_fill(uintptr_t first, uintptr_t pages, uint64_t phys, pte_t flags)
 {
     uintptr_t lo = KVA_MMIO + first * PAGE_SIZE;
@@ -1478,7 +1701,8 @@ static void mmio_fill(uintptr_t first, uintptr_t pages, uint64_t phys, pte_t fla
  * The MMIO region's page tables exist from the boot (`mmu_init`) and every
  * directory shares them, so a mapping made here at any time is seen by
  * every process. A bit for each page of the region says it is taken, so a
- * window `mmio_unmap` frees is used again.
+ * window `mmio_unmap` frees is used again. `mmio_lock` covers the search,
+ * the marks and the entries, so two processors never take one run.
  *
  * The page count is rounded up by division and not by adding a page less
  * one: a region reaching the top of the address space would wrap that sum to
@@ -1490,6 +1714,7 @@ uintptr_t mmio_map(uint64_t phys, size_t size, pte_t cache)
     uint64_t end_addr = phys + size;
     uint64_t span;
     uintptr_t pages, first, align = 1, phase = 0;
+    uint32_t flags;
 
     if (size == 0 || end_addr < phys || end_addr > MMIO_PHYS_TOP) {
         klog(KLOG_ERR, "vm", "map_mmio: bad region 0x%x%08x, %zu bytes", (uint32_t)(phys >> 32),
@@ -1509,6 +1734,7 @@ uintptr_t mmio_map(uint64_t phys, size_t size, pte_t cache)
         phase = (uintptr_t)((start_page / PAGE_SIZE) % align);
     }
 #endif
+    flags = spin_lock_irqsave(&mmio_lock);
     first = mmio_find(pages, align, phase);
 #if KVA_MMIO_LARGE
     if (first >= MMIO_PAGES && align > 1) {
@@ -1516,6 +1742,7 @@ uintptr_t mmio_map(uint64_t phys, size_t size, pte_t cache)
     }
 #endif
     if (first >= MMIO_PAGES) {
+        spin_unlock_irqrestore(&mmio_lock, flags);
         klog(KLOG_ERR, "vm", "map_mmio: no run of %lu pages free in the MMIO region",
              (unsigned long)pages);
         return 0;
@@ -1526,6 +1753,7 @@ uintptr_t mmio_map(uint64_t phys, size_t size, pte_t cache)
     /* Every translation the processor cached goes. */
     arch_space_load(arch_space_root());
     smp_kernel_mapping_changed();
+    spin_unlock_irqrestore(&mmio_lock, flags);
 
     return KVA_MMIO + first * PAGE_SIZE + (uintptr_t)(phys - start_page);
 }
@@ -1533,13 +1761,16 @@ uintptr_t mmio_map(uint64_t phys, size_t size, pte_t cache)
 uintptr_t mmio_map_frames(const uintptr_t *frames, uintptr_t count, pte_t cache)
 {
     uintptr_t first, i, va;
+    uint32_t flags;
 
     if (count == 0 || count > MMIO_PAGES) {
         klog(KLOG_ERR, "vm", "map_mmio: bad list of %lu frames", (unsigned long)count);
         return 0;
     }
+    flags = spin_lock_irqsave(&mmio_lock);
     first = mmio_find(count, 1, 0);
     if (first >= MMIO_PAGES) {
+        spin_unlock_irqrestore(&mmio_lock, flags);
         klog(KLOG_ERR, "vm", "map_mmio: no run of %lu pages free in the MMIO region",
              (unsigned long)count);
         return 0;
@@ -1552,6 +1783,7 @@ uintptr_t mmio_map_frames(const uintptr_t *frames, uintptr_t count, pte_t cache)
     }
     arch_space_load(arch_space_root());
     smp_kernel_mapping_changed();
+    spin_unlock_irqrestore(&mmio_lock, flags);
     return va;
 }
 
@@ -1559,11 +1791,13 @@ void mmio_unmap(uintptr_t va, size_t size)
 {
     uintptr_t lo = va & ~(uintptr_t)(PAGE_SIZE - 1);
     uintptr_t hi = va + size;
+    uint32_t flags;
 
     if (size == 0 || lo < KVA_MMIO || hi < va || hi > KVA_MMIO + KVA_MMIO_SIZE) {
         return;
     }
     hi = (hi + PAGE_SIZE - 1) & ~(uintptr_t)(PAGE_SIZE - 1); /* the region's end is aligned */
+    flags = spin_lock_irqsave(&mmio_lock);
     mmio_mark((lo - KVA_MMIO) / PAGE_SIZE, (hi - lo) / PAGE_SIZE, 0);
     for (va = lo; va < hi;) {
 #if KVA_MMIO_LARGE
@@ -1582,31 +1816,39 @@ void mmio_unmap(uintptr_t va, size_t size)
         va += PAGE_SIZE;
     }
     smp_kernel_mapping_changed();
+    spin_unlock_irqrestore(&mmio_lock, flags);
 }
 
 size_t mmio_page_size(uintptr_t va)
 {
+    size_t size;
+    uint32_t flags;
     pte_t *e;
 
     if (va < KVA_MMIO || va - KVA_MMIO >= KVA_MMIO_SIZE) {
         return 0;
     }
+    flags = spin_lock_irqsave(&mmio_lock);
 #if KVA_MMIO_LARGE
     {
         uintptr_t slot = (va - KVA_MMIO) / MMU_TABLE_SPAN;
 
         if (_mmio_large[slot / 32u] & (1u << (slot % 32u))) {
+            spin_unlock_irqrestore(&mmio_lock, flags);
             return MMU_TABLE_SPAN;
         }
     }
 #endif
     e = kernel_pte(va);
-    return e && (*e & PTE_P) ? PAGE_SIZE : 0;
+    size = e && (*e & PTE_P) ? PAGE_SIZE : 0;
+    spin_unlock_irqrestore(&mmio_lock, flags);
+    return size;
 }
 
 void mmio_usage(size_t *used, size_t *largest)
 {
     uintptr_t i, run = 0, best = 0, taken = 0;
+    uint32_t flags = spin_lock_irqsave(&mmio_lock);
 
     for (i = 0; i < MMIO_PAGES; i++) {
         if (mmio_bit(i)) {
@@ -1616,6 +1858,7 @@ void mmio_usage(size_t *used, size_t *largest)
             best = run;
         }
     }
+    spin_unlock_irqrestore(&mmio_lock, flags);
     *used = taken * PAGE_SIZE;
     *largest = best * PAGE_SIZE;
 }
@@ -1638,25 +1881,52 @@ void kunmap_temp(void *va)
 {
     (void)va;
 }
-#else
-/**
- * The first slot from `_temp_next` that is neither held nor stale, or
- * `KVA_TEMP_SLOTS` when there is none. Interrupts are off.
- *
- * Such a slot has been unmapped since every processor that holds the big
- * lock last dropped its translations, so none that runs the caller has one
- * for it and its new entry needs no flush.
- */
-static uint32_t temp_find(void)
+
+void paging_temp_split(unsigned int cpus)
 {
+    (void)cpus;
+}
+#else
+void paging_temp_split(unsigned int cpus)
+{
+    uint32_t flags = kirq_save();
+    uint32_t p;
+
+    _temp_pool_count = cpus < 1u ? 1u : cpus > TEMP_POOLS_MAX ? TEMP_POOLS_MAX : cpus;
+    _temp_pool_size = (KVA_TEMP_SLOTS / _temp_pool_count) & ~31u;
+    for (p = 0; p < _temp_pool_count; p++) {
+        struct temp_pool *pool = &_temp_pools[p];
+
+        pool->first = p * _temp_pool_size;
+        pool->end = p + 1u == _temp_pool_count ? KVA_TEMP_SLOTS : pool->first + _temp_pool_size;
+        pool->next = pool->first;
+    }
+    kirq_restore(flags);
+}
+
+/** The pool that has `slot`. */
+static struct temp_pool *temp_pool_of(uint32_t slot)
+{
+    uint32_t p = slot / _temp_pool_size;
+
+    return &_temp_pools[p < _temp_pool_count ? p : _temp_pool_count - 1u];
+}
+
+/**
+ * The first slot of `pool` from its `next` that is neither held nor stale,
+ * or `KVA_TEMP_SLOTS` when there is none. The pool's lock is held.
+ */
+static uint32_t temp_find(struct temp_pool *pool)
+{
+    uint32_t n = pool->end - pool->first;
     uint32_t i;
 
-    for (i = 0; i < KVA_TEMP_SLOTS; i++) {
-        uint32_t slot = (_temp_next + i) % KVA_TEMP_SLOTS;
+    for (i = 0; i < n; i++) {
+        uint32_t slot = pool->first + (pool->next - pool->first + i) % n;
         uint32_t bit = 1u << (slot % 32);
 
         if (!((_temp_slots[slot / 32] | _temp_stale[slot / 32]) & bit)) {
-            _temp_next = (slot + 1) % KVA_TEMP_SLOTS;
+            pool->next = slot + 1u < pool->end ? slot + 1u : pool->first;
             return slot;
         }
     }
@@ -1664,45 +1934,71 @@ static uint32_t temp_find(void)
 }
 
 /**
- * Unmap every stale slot and drop this processor's translations, and have
- * every other drop its own before it next takes the big lock: one change of
- * kernel mappings for all the slots given back since the last sweep, where
- * unmapping each as it was given back would be one change for each.
- * Interrupts are off.
+ * Unmap every stale slot of `pool` and drop every processor's translations
+ * before returning (`smp_kernel_mapping_changed`): one change of kernel
+ * mappings for all the slots of the pool given back since its last sweep,
+ * where unmapping each as it was given back would be one change for each.
+ * The pool's lock is held; 0 when no slot was stale, and then nothing
+ * changed.
  */
-static void temp_sweep(void)
+static int temp_sweep(struct temp_pool *pool)
 {
-    uint32_t slot;
+    uint32_t w, slot, swept = 0;
 
-    for (slot = 0; slot < KVA_TEMP_SLOTS; slot++) {
-        if (_temp_stale[slot / 32] & (1u << (slot % 32))) {
-            *kernel_pte(KVA_TEMP + slot * PAGE_SIZE) = 0;
+    for (w = pool->first / 32; w < pool->end / 32; w++) {
+        for (slot = w * 32; _temp_stale[w] != 0 && slot < w * 32 + 32; slot++) {
+            if (_temp_stale[w] & (1u << (slot % 32))) {
+                *kernel_pte(KVA_TEMP + slot * PAGE_SIZE) = 0;
+                _temp_stale[w] &= ~(1u << (slot % 32));
+                swept++;
+            }
         }
     }
-    k_memset(_temp_stale, 0, sizeof _temp_stale);
+    if (swept == 0) {
+        return 0;
+    }
     arch_space_load(arch_space_root());
     smp_kernel_mapping_changed();
+    return 1;
 }
 
+/**
+ * A slot is taken from this processor's pool, sweeping it when nothing in it
+ * is free, and then from each other pool in turn the same way, so that one
+ * processor may hold every slot of the region. The new entry's translation
+ * is dropped on this processor, since a sweep by another processor, or of
+ * another's pool, left this one's translations of the slot in place. The
+ * others need nothing: a sweep drops every processor's translations before
+ * it returns, so none has one of a slot taken after it.
+ */
 void *kmap_temp(uintptr_t phys)
 {
-    uint32_t flags = kirq_save();
-    uint32_t slot = temp_find();
+    uint32_t home = arch_cpu_id() % _temp_pool_count;
+    uint32_t slot = KVA_TEMP_SLOTS;
+    uint32_t i, flags;
     uintptr_t va;
 
-    if (slot == KVA_TEMP_SLOTS) {
-        temp_sweep();
-        slot = temp_find();
+    for (i = 0; i < _temp_pool_count && slot == KVA_TEMP_SLOTS; i++) {
+        struct temp_pool *pool = &_temp_pools[(home + i) % _temp_pool_count];
+
+        flags = spin_lock_irqsave(&pool->lock);
+        slot = temp_find(pool);
+        if (slot == KVA_TEMP_SLOTS && temp_sweep(pool)) {
+            slot = temp_find(pool);
+        }
+        if (slot != KVA_TEMP_SLOTS) {
+            _temp_slots[slot / 32] |= 1u << (slot % 32);
+            *kernel_pte(KVA_TEMP + slot * PAGE_SIZE) =
+                (pte_t)(phys & ~(PAGE_SIZE - 1)) | PTE_P | PTE_W;
+        }
+        spin_unlock_irqrestore(&pool->lock, flags);
     }
     if (slot == KVA_TEMP_SLOTS) {
-        kirq_restore(flags);
         klog(KLOG_ERR, "vm", "temporary mappings: every slot is held");
         return 0;
     }
     va = KVA_TEMP + slot * PAGE_SIZE;
-    _temp_slots[slot / 32] |= 1u << (slot % 32);
-    *kernel_pte(va) = (pte_t)(phys & ~(PAGE_SIZE - 1)) | PTE_P | PTE_W;
-    kirq_restore(flags);
+    arch_tlb_flush_page(va);
     return (void *)(va + (phys & (PAGE_SIZE - 1)));
 }
 
@@ -1710,15 +2006,17 @@ void kunmap_temp(void *va)
 {
     uintptr_t addr = (uintptr_t)va & ~(PAGE_SIZE - 1);
     uint32_t slot = (uint32_t)((addr - KVA_TEMP) / PAGE_SIZE);
+    struct temp_pool *pool;
     uint32_t flags;
 
     if (addr < KVA_TEMP || slot >= KVA_TEMP_SLOTS) {
         return;
     }
-    flags = kirq_save();
+    pool = temp_pool_of(slot);
+    flags = spin_lock_irqsave(&pool->lock);
     _temp_slots[slot / 32] &= ~(1u << (slot % 32));
     _temp_stale[slot / 32] |= 1u << (slot % 32);
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&pool->lock, flags);
 }
 #endif
 
@@ -1758,7 +2056,7 @@ int paging_copy_frame(uintptr_t dst, uintptr_t src)
  * processor and in any interrupt. It is taken with interrupts off, after
  * the big lock and the heap's lock, and nothing under it takes another.
  */
-static struct spinlock frame_lock = SPINLOCK_INIT;
+static struct spinlock frame_lock = SPINLOCK_INIT_NAMED("frame_lock");
 
 /** Mark `frame` used with one reference, whatever it held, and keep the
  * free counts. `frame_lock` is held, or the boot runs alone. */
@@ -1769,6 +2067,7 @@ static void frame_take(uintptr_t frame)
         if (frame < _window_frames) {
             _free_window_frames--;
         }
+        frame_index_take(frame);
     }
     _frames[frame] = 1;
     _frame_anon[frame / 8u] &= (uint8_t)~(1u << (frame % 8u));
@@ -1800,17 +2099,17 @@ static int frame_is_anon(uintptr_t phys)
  * A free frame for a user page or a kernel object: from above the window
  * first, then from below it while more than WINDOW_KEEP are free there;
  * `_frames_number` when there is none. The two hints say no frame below
- * each is free in its region. `frame_lock` is held.
+ * each is free in its region, and the search from each passes the groups
+ * the index has no free frame in (`frame_next_free`). `frame_lock` is held.
  */
 static uintptr_t find_free_frame(void)
 {
     uintptr_t frame;
 
-    for (frame = _next_free_upper; frame < _frames_number; frame++) {
-        if (_frames[frame] == 0) {
-            _next_free_upper = frame + 1;
-            return frame;
-        }
+    frame = frame_next_free(_next_free_upper, _frames_number);
+    if (frame < _frames_number) {
+        _next_free_upper = frame + 1;
+        return frame;
     }
     if (_framehigh_low) {
         _framehigh_low = 0;
@@ -1821,11 +2120,10 @@ static uintptr_t find_free_frame(void)
     if (_free_window_frames <= WINDOW_KEEP) {
         return _frames_number;
     }
-    for (frame = _next_free_frame; frame < _window_frames; frame++) {
-        if (_frames[frame] == 0) {
-            _next_free_frame = frame + 1;
-            return frame;
-        }
+    frame = frame_next_free(_next_free_frame, _window_frames);
+    if (frame < _window_frames) {
+        _next_free_frame = frame + 1;
+        return frame;
     }
     return _frames_number;
 }
@@ -1985,15 +2283,13 @@ void paging_user_count(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned
 void *alloc_kernel_frame(void)
 {
     uint32_t flags = spin_lock_irqsave(&frame_lock);
-    uintptr_t frame = _window_frames;
+    uintptr_t frame = frame_prev_free(_user_frames_start, _window_frames);
 
-    while (frame-- > _user_frames_start) {
-        if (_frames[frame] == 0) {
-            frame_take(frame);
-            _kernel_frames_reserved++;
-            spin_unlock_irqrestore(&frame_lock, flags);
-            return phys_to_virt(frame * PAGE_SIZE);
-        }
+    if (frame >= _user_frames_start && frame < _window_frames) {
+        frame_take(frame);
+        _kernel_frames_reserved++;
+        spin_unlock_irqrestore(&frame_lock, flags);
+        return phys_to_virt(frame * PAGE_SIZE);
     }
     spin_unlock_irqrestore(&frame_lock, flags);
     return 0;
@@ -2030,26 +2326,50 @@ size_t frame_free_count(void)
     return _free_frames;
 }
 
+/**
+ * An entry that was not present is in no processor's TLB, since x86 caches
+ * no translation of a page that is not present, so a new mapping is
+ * flushed on this processor alone; a changed one everywhere.
+ */
 void map_kernel_frame(uintptr_t va, uintptr_t phys, int writable)
 {
     pte_t *e = kernel_pte(va);
+    pte_t old;
 
     if (!e) {
         return;
     }
+    old = *e;
     *e = (pte_t)(phys & ~(PAGE_SIZE - 1)) | PTE_P | (writable ? PTE_W : 0);
-    paging_flush_tlb(va);
+    if (old & PTE_P) {
+        paging_flush_tlb(va);
+    } else {
+        arch_tlb_flush_page(va);
+    }
 }
 
 void unmap_kernel_frame(uintptr_t va)
 {
-    pte_t *e = kernel_pte(va);
+    unmap_kernel_frames(va, 1);
+}
 
-    if (!e) {
-        return;
+void unmap_kernel_frames(uintptr_t va, uint32_t count)
+{
+    uint32_t i;
+    int present = 0;
+
+    for (i = 0; i < count; i++) {
+        pte_t *e = kernel_pte(va + (uintptr_t)i * PAGE_SIZE);
+
+        if (e && (*e & PTE_P)) {
+            *e = 0;
+            arch_tlb_flush_page(va + (uintptr_t)i * PAGE_SIZE);
+            present = 1;
+        }
     }
-    *e = 0;
-    paging_flush_tlb(va);
+    if (present) {
+        smp_kernel_flush(va, va + (uintptr_t)count * PAGE_SIZE);
+    }
 }
 
 void paging_set_writable(page_dir_t *dir, uintptr_t addr, bool writable)
@@ -2102,8 +2422,9 @@ void paging_flush_tlb(uintptr_t addr)
 void paging_flush_dir(const page_dir_t *dir, uintptr_t addr)
 {
     if (addr < USER_ADDR_MIN || addr >= USER_ADDR_MAX) {
+        addr &= ~(uintptr_t)(PAGE_SIZE - 1);
         arch_tlb_flush_page(addr);
-        smp_kernel_mapping_changed();
+        smp_kernel_flush(addr, addr + PAGE_SIZE);
         return;
     }
     addr &= ~(uintptr_t)(PAGE_SIZE - 1);
@@ -2189,6 +2510,7 @@ void frame_ref(uintptr_t phys)
 static void frame_freed(uintptr_t frame)
 {
     _free_frames++;
+    frame_index_put(frame);
     if (frame < _window_frames) {
         _free_window_frames++;
         if (frame >= _user_frames_start && frame < _next_free_frame) {

@@ -282,6 +282,11 @@ struct process {
      * handler that switches away is left only when the process it
      * interrupted runs again. */
     uint32_t irq_depth;
+    /* The innermost entry under way on this process's stack, which a sample
+     * of debugfs's bkl/profile names (`bkl_entry_push` in smp.c): its key
+     * plus one, 0 for none, and its ioctl request for BKL_PROFILE_IOCTL. */
+    uint32_t bkl_entry;
+    uint32_t bkl_cmd;
     /* The resource limits `prlimit64` keeps, by the RLIM_ slots: threads of
      * the real user, open descriptors, and in bytes the address space, the
      * stack, a core file, a file written and memory locked; soft and hard,
@@ -584,11 +589,24 @@ struct process {
      * runs on while it runs (it is that processor's `current`) and the one
      * it last ran on after; the processors it may run on, a bit for each,
      * as sched_setaffinity(2) sets them and a fork passes them on; and its
-     * depth in the big lock when it was switched away, which the switch
-     * gives the processor back (sched.c). */
+     * own depth in the big lock, saved when it switches away and taken back
+     * by the switch's tail when it runs again (sched.c). */
     int cpu;
     uint64_t affinity;
     int bkl_depth;
+    /* 1 from its selection until the switch away from it has saved its
+     * registers, as Linux's `on_cpu`: set by the processor that switches to
+     * it, cleared with a release store by the next thread's tail on the
+     * same processor (`schedule_tail`). Its stack is in use while it is 1,
+     * so no other processor runs the thread or frees its stack and record. */
+    volatile unsigned int on_cpu;
+    /* The interrupt and system call frames on its kernel stack, newest in
+     * bit 0: 1 for one whose router took the big lock, which `isr_leave`
+     * gives back, 0 for one that ran without it (smp.h, `bkl_frame_push`). */
+    uint32_t bkl_frames;
+    /* What a kernel thread runs after its first switch's tail
+     * (`setup_process_stack`). */
+    void (*kthread_entry)(void);
     /* Ready-list links, owned by sched.c; current and idle tasks are absent. */
     struct process *ready_prev, *ready_next;
     int ready_linked;
@@ -622,6 +640,20 @@ struct process {
      * A post marks only the chosen thread; only that thread recomputes it
      * after changing its mask or taking signals. */
     uint32_t sig_woken;
+    /* Nonzero while a fault from user mode runs with interrupts on; the
+     * tick then leaves its switch for the fault's end, as in a system call
+     * (`sched_preempt`). */
+    volatile uint32_t in_fault;
+#ifdef RACH2_LOCKDEP
+    /* The sleeping locks this thread holds, which it keeps across its
+     * sleeps, for the lock-order checker (lib/lockdep.c); its spinlocks are
+     * its processor's (`percpu.lockdep_spin`). */
+    struct lockdep_held lockdep;
+    /* The subclass of the next sleeping lock this thread takes, 0 after it:
+     * a rename's second directory and its children, of one class with the
+     * first (`sleep_lock_subclass`). */
+    unsigned int lockdep_subclass;
+#endif
 };
 
 typedef struct process process_t;
@@ -702,7 +734,15 @@ void free_process(process_t *proc);
  * numbering, that of the first PID namespace; NULL for none. */
 process_t *get_process(uint32_t pid);
 
-/** Exchange two indexed thread ids at exec, under the big kernel lock. */
+/** Whether the record `p` is a kernel thread: a live record with no
+ * address space outside an exit, which a user thread leaves only past its
+ * mm_drop, in its exit's system call. Such a thread takes no signal, as
+ * Linux 6.12.115's kernel threads inherit kthreadd's SIG_IGN for every
+ * signal (kernel/kthread.c:745, kernel/signal.c:518-525). */
+int proc_is_kthread(const process_t *p);
+
+/** Exchange the kernel and namespace thread ids of two threads in the
+ * same PID namespace at exec, under the big kernel lock. */
 void proc_exchange_pids(process_t *a, process_t *b);
 
 /** Change the real uid and its record count, under the big kernel lock.
@@ -895,7 +935,10 @@ void signal_post(process_t *target, int signo);
  * `target`. Job control acts at once: SIGCONT ends a stop and cancels the
  * pending stop signals, SIGKILL makes the stopped threads ready, and a stop
  * signal cancels a pending SIGCONT. A process whose threads have all ended
- * takes nothing. SIGKILL also wakes a thread in execve's wait for the other
+ * takes nothing, and neither does a kernel thread (`proc_is_kthread`).
+ * `target` may be a leader that has ended while other threads run: its
+ * mask decides whether an ignored signal is kept, and another thread takes
+ * the signal. SIGKILL also wakes a thread in execve's wait for the other
  * threads. An interrupt handler may call it. The signal is delivered at a
  * return to user mode (`deliver_signals`).
  */
@@ -909,6 +952,17 @@ void signal_post_info(process_t *target, int signo, const struct k_siginfo *info
  * list (kernel/signal.c:1170-1181). The caller holds the big lock; an
  * interrupt handler may call it. */
 void signal_post_multi(process_t *target, int signo, const struct k_siginfo *info);
+
+/** Select one target per process while walking proc_list under the big
+ * lock: NULL for an unused record or a nonleader; otherwise the leader,
+ * zombie or not, whose credentials a send's permission check reads and
+ * whose mask decides whether an ignored signal is kept; signal_post_multi
+ * chooses the thread that takes the signal. Linux 6.12.115's multiprocess
+ * sends walk the leaders alone, a leader that has ended included, and
+ * post to each (kernel/fork.c:2596-2618; kernel/signal.c:1478-1479,
+ * 1635-1639).
+ * Does not sleep; an interrupt handler may call it. */
+process_t *signal_process_target(process_t *p);
 
 /** Post signal `signo` to the thread `t` alone, as tkill and tgkill do,
  * with the siginfo `info`, and wake it. A thread that has ended takes
@@ -974,6 +1028,19 @@ int signal_pending(void);
  */
 struct isr_params;
 void deliver_signals(struct isr_params *tf);
+
+/**
+ * Nonzero when a return to user mode through `tf` has work for
+ * `deliver_signals`: a signal deliverable or a stop to take, the thread's
+ * signal flag set (`sig_woken`), a call to restart, a mask to put back, a
+ * tracer, or ended threads to free. `isr_leave` asks it for an entry that ran
+ * without the big lock, and takes the lock only for this work, as Linux's
+ * exit to user mode acts only on its work flags. Read with interrupts off,
+ * without the lock: a signal posted after the read is acted on at the
+ * thread's next entry, as one posted while it runs user code is. Defined in
+ * syscall_proc.c.
+ */
+int signal_return_work(const struct isr_params *tf);
 
 /**
  * Save the running thread's kernel registers in `old` and resume

@@ -12,6 +12,7 @@
  * host-cflags: -U__INTPTR_TYPE__ -D__INTPTR_TYPE__=int
  * host-cflags: -U__SIZE_TYPE__ -D__SIZE_TYPE__=unsigned
  * host-cflags: -U__PTRDIFF_TYPE__ -D__PTRDIFF_TYPE__=int
+ * host-cflags: -DRACH2_HOST_CPU
  *
  * `map_mmio` (mm/paging.c) and `premap_kernel_window` (arch/i686/mmu.c)
  * each take a range of the 32-bit address space, and each fails, as its
@@ -43,6 +44,17 @@
  * which comes only when no slot is free and unmaps every released slot with
  * one change of kernel mappings, so 1024 mappings make one change; a held
  * slot survives the sweeps; and a mapping fails when every slot is held.
+ *
+ * Seven more split the slots between processors, as Linux gives each its
+ * own kmap_local slots, with `host_cpu` naming the processor that runs: two
+ * processors mapping at once take the first slot of each one's own pool and
+ * each drops its own translation of it; a slot released on another
+ * processor goes back to its owner's pool; a processor that has spent its
+ * pool sweeps that pool alone; one whose pool is all held borrows another's
+ * free slot, which the owner is then not given; one processor may still hold
+ * every slot; and three and 64 processors split the slots in whole words.
+ * Every pool's lock is free after each call, and the host's spinlocks trap
+ * on a lock taken twice.
  *
  * Two rows drive the page fault handler with a supervisor write fault: at an
  * address in the guard page below the running thread's kernel stack, which
@@ -82,6 +94,7 @@ static void check(int ok, const char *row)
 /* ---- what paging.c reaches outside itself ---- */
 
 struct percpu cpu_table[NR_CPUS];
+unsigned int host_cpu; /* the processor that runs, for `arch_cpu_id` */
 uintptr_t mem_reserved_ptr;
 volatile uint32_t init_pid = 1; /* no row faults as init */
 bool debug_shell_is_home;
@@ -385,6 +398,40 @@ void smp_kernel_mapping_changed(void)
     kernel_changes++;
 }
 
+/** Count a change of kernel mappings, as `smp_kernel_mapping_changed`. */
+void smp_kernel_flush(uintptr_t start, uintptr_t end)
+{
+    (void)start;
+    (void)end;
+    kernel_changes++;
+}
+
+/** 1: the test runs as the kernel, under the big lock. */
+int bkl_held(void)
+{
+    return 1;
+}
+
+/** Nothing: there is no big lock. */
+void bkl_enter(void)
+{}
+
+/** Nothing: there is no big lock. */
+void bkl_exit(void)
+{}
+
+/** Nothing: the test has no interrupt flag. */
+void arch_irq_enable(void)
+{}
+
+/** Nothing: the test has no interrupt flag. */
+void arch_irq_disable(void)
+{}
+
+/** Nothing: no tick asks for a switch. */
+void sched_take_preempt(void)
+{}
+
 /** Nothing: the test has no address space that counts its resident pages. */
 void mm_resident_add(const struct page_dir *dir, long pages)
 {
@@ -392,10 +439,15 @@ void mm_resident_add(const struct page_dir *dir, long pages)
     (void)pages;
 }
 
-/** Nothing: the host has no TLB. */
+/* The drops of one page's translation, and the last page dropped. */
+static int page_drops;
+static uintptr_t page_dropped;
+
+/** Count the drop of `va`'s translation. */
 void arch_tlb_flush_page(uintptr_t va)
 {
-    (void)va;
+    page_drops++;
+    page_dropped = va;
 }
 
 /** 0: the host has no interrupt flag. */
@@ -572,6 +624,189 @@ static void temp_rows(void)
     }
 }
 
+/** Unmap every temporary slot and mark each free. */
+static void temp_clear(void)
+{
+    uint32_t i;
+
+    for (i = 0; i < KVA_TEMP_SLOTS; i++) {
+        TEMP_PTE(i) = 0;
+    }
+    k_memset(_temp_slots, 0, sizeof _temp_slots);
+    k_memset(_temp_stale, 0, sizeof _temp_stale);
+}
+
+/** Whether no pool's lock is held. */
+static int temp_unlocked(void)
+{
+    uint32_t p;
+
+    for (p = 0; p < TEMP_POOLS_MAX; p++) {
+        if (_temp_pools[p].lock.locked) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/** The kernel address of temporary slot `slot`. */
+#define TEMP_VA(slot) ((uint8_t *)KVA_TEMP + (slot) * PAGE_SIZE)
+
+/* The slots of the two halves of the region, for the rows of two pools. */
+#define TEMP_HALF (KVA_TEMP_SLOTS / 2)
+
+/**
+ * Two processors' pools: each maps from its own, drops its own translation
+ * of the slot, and a release on the other processor goes to the owner's
+ * pool, still mapped.
+ */
+static void temp_two_rows(void)
+{
+    uint8_t *a, *b;
+
+    temp_clear();
+    paging_temp_split(2);
+    check(_temp_pool_count == 2 && _temp_pools[0].first == 0 && _temp_pools[0].end == TEMP_HALF &&
+              _temp_pools[1].first == TEMP_HALF && _temp_pools[1].end == KVA_TEMP_SLOTS,
+          "two processors' pools are the two halves of the slots");
+
+    page_drops = 0;
+    host_cpu = 0;
+    a = kmap_temp(0x5000000u);
+    check(page_drops == 1 && page_dropped == (uintptr_t)a,
+          "a processor drops its own translation of the slot it maps");
+    host_cpu = 1;
+    b = kmap_temp(0x5001000u);
+    check(a == TEMP_VA(0) && b == TEMP_VA(TEMP_HALF) && TEMP_PTE(0) == (0x5000000u | 0x3u) &&
+              TEMP_PTE(TEMP_HALF) == (0x5001000u | 0x3u) && page_drops == 2 &&
+              page_dropped == (uintptr_t)b && temp_unlocked(),
+          "two processors mapping at once take the first slot of each one's own pool");
+
+    kunmap_temp(a); /* on processor 1, the slot of processor 0 */
+    host_cpu = 0;
+    kunmap_temp(b);
+    check((_temp_stale[0] & 1u) && (_temp_stale[TEMP_HALF / 32] & 1u) && !(_temp_slots[0] & 1u) &&
+              !(_temp_slots[TEMP_HALF / 32] & 1u) && TEMP_PTE(0) != 0 && temp_unlocked(),
+          "a slot released on another processor goes back to its owner's pool, still mapped");
+}
+
+/**
+ * Processor 1, after `temp_two_rows`, spends its pool, which it sweeps
+ * alone, leaving processor 0's released slot mapped.
+ */
+static void temp_sweep_rows(void)
+{
+    uint8_t *va;
+    uint32_t i, mapped;
+    int wrong = 0;
+
+    host_cpu = 1;
+    kernel_changes = 0;
+    space_loads = 0;
+    for (i = 1; i < TEMP_HALF; i++) {
+        va = kmap_temp(0x6000000u);
+        wrong |= va != TEMP_VA(TEMP_HALF + i);
+        kunmap_temp(va);
+    }
+    va = kmap_temp(0x7000000u);
+    for (i = TEMP_HALF, mapped = 0; i < KVA_TEMP_SLOTS; i++) {
+        mapped += TEMP_PTE(i) != 0;
+    }
+    check(!wrong && va == TEMP_VA(TEMP_HALF) && mapped == 1 && kernel_changes == 1 &&
+              space_loads == 1 && TEMP_PTE(0) == (0x5000000u | 0x3u) && temp_unlocked(),
+          "a processor that has spent its pool sweeps that pool alone, with one change of kernel "
+          "mappings, and the other pool's released slot stays mapped");
+    kunmap_temp(va);
+    host_cpu = 0;
+}
+
+/**
+ * Processor 1, after `temp_sweep_rows`, holds its whole pool and borrows
+ * from processor 0's, which is then not given the borrowed slot.
+ */
+static void temp_borrow_rows(void)
+{
+    static uint8_t *held[TEMP_HALF];
+    uint8_t *a, *va;
+    uint32_t i;
+    int wrong = 0;
+
+    host_cpu = 1;
+    for (i = 0; i < TEMP_HALF; i++) {
+        held[i] = kmap_temp(0x8000000u);
+        wrong |= held[i] < TEMP_VA(TEMP_HALF);
+    }
+    page_drops = 0;
+    va = kmap_temp(0x9000000u);
+    host_cpu = 0;
+    a = kmap_temp(0xA000000u);
+    check(!wrong && va == TEMP_VA(1) && TEMP_PTE(1) == (0x9000000u | 0x3u) && a == TEMP_VA(2) &&
+              page_drops == 2 && temp_unlocked(),
+          "a processor whose pool is all held borrows a free slot of another's, which the owner "
+          "is then not given");
+    kunmap_temp(a);
+    kunmap_temp(va);
+    for (i = 0; i < TEMP_HALF; i++) {
+        kunmap_temp(held[i]);
+    }
+}
+
+/** One processor holds every slot of both pools, and is refused one more. */
+static void temp_all_rows(void)
+{
+    static uint8_t *held[KVA_TEMP_SLOTS];
+    uint32_t i;
+    int wrong = 0, unlocked = 1;
+
+    host_cpu = 0;
+    for (i = 0; i < KVA_TEMP_SLOTS; i++) {
+        held[i] = kmap_temp(0xB000000u);
+        wrong |= held[i] == 0;
+        unlocked &= temp_unlocked();
+    }
+    for (i = 0; i < KVA_TEMP_SLOTS / 32; i++) {
+        wrong |= _temp_slots[i] != 0xFFFFFFFFu;
+    }
+    check(!wrong && unlocked && kmap_temp(0xC000000u) == 0 && temp_unlocked(),
+          "one processor may hold every slot of both pools, and a mapping past them is refused");
+    for (i = 0; i < KVA_TEMP_SLOTS; i++) {
+        kunmap_temp(held[i]);
+    }
+}
+
+/** The split for three processors and for 64, in whole words. */
+static void temp_split_rows(void)
+{
+    uint8_t *va;
+
+    paging_temp_split(3);
+    check(_temp_pool_count == 3 && _temp_pool_size == 320 && _temp_pools[1].first == 320 &&
+              _temp_pools[1].end == 640 && _temp_pools[2].first == 640 &&
+              _temp_pools[2].end == KVA_TEMP_SLOTS && temp_pool_of(1023) == &_temp_pools[2],
+          "three processors' pools are whole words, and the last has the rest");
+
+    temp_clear();
+    paging_temp_split(64);
+    host_cpu = 33;
+    va = kmap_temp(0xD000000u);
+    check(_temp_pool_count == 32 && _temp_pool_size == 32 && va == TEMP_VA(32) &&
+              temp_pool_of(32) == &_temp_pools[1],
+          "64 processors share 32 pools of a word each, processor 33 taking pool 1's slots");
+    kunmap_temp(va);
+    host_cpu = 0;
+}
+
+/** The slots split between processors, in order, each row from the state
+ * the one before left. */
+static void temp_cpu_rows(void)
+{
+    temp_two_rows();
+    temp_sweep_rows();
+    temp_borrow_rows();
+    temp_all_rows();
+    temp_split_rows();
+}
+
 /**
  * Drive the page fault handler in a forked child with a supervisor write
  * fault at `addr`, which must panic with a text containing `text`. `what` is
@@ -679,6 +914,7 @@ int main(void)
     mmio_rows();
     window_rows();
     temp_rows();
+    temp_cpu_rows();
     fault_rows();
     recovered_rows();
     check(boot_carves == 0, "no row reached the boot allocator after the heap exists");

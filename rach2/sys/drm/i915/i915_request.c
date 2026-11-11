@@ -87,7 +87,7 @@ int i915_request_started(const struct i915_request *rq)
 /* The lock of every request's `awaits` and `added` and every engine's
  * `kick`, innermost of all, since a fence may signal in any interrupt and
  * with an engine's lock held. */
-static struct spinlock submit_lock = SPINLOCK_INIT;
+static struct spinlock submit_lock = SPINLOCK_INIT_NAMED("submit_lock");
 
 /* The devices whose requests may wait for fences, by their GT's
  * `submit_next`; and whether an engine has a request to give the chip,
@@ -779,7 +779,8 @@ static void request_release(struct i915_request *rq)
 }
 
 /** Park the GT, which is awake, and count the ticks it was awake, as
- * Linux's __gt_park adds to its awake time. */
+ * Linux's __gt_park adds to its awake time. The pool's idle shadows go,
+ * since no retire pass runs to age them while the GT sleeps. */
 static void gt_park(struct drm_i915_private *i915)
 {
     struct i915_gt *gt = &i915->gt;
@@ -787,6 +788,7 @@ static void gt_park(struct drm_i915_private *i915)
     gt->awake = 0;
     gt->awake_ticks += rtc_ticks_now() - gt->unpark_ticks;
     i915_gt_park(i915);
+    i915_gem_pool_trim(i915, I915_POOL_IDLE);
 }
 
 /**
@@ -882,6 +884,7 @@ void i915_gt_retire_requests(struct drm_i915_private *i915)
         spin_unlock_irqrestore(&e->lock, flags);
     }
     i915_retire_requests(i915);
+    i915_gem_pool_trim(i915, I915_POOL_STALE);
 }
 
 /**
@@ -1663,6 +1666,7 @@ void i915_requests_unplug(struct drm_i915_private *i915)
     if (gt->awake) {
         gt_park(i915);
     }
+    i915_gem_pool_trim(i915, I915_POOL_ALL);
     i915_gt_pages_unmap(i915, gt->scratch, 1, gt->scratch_ggtt);
     gt->scratch = 0;
     kfree(gt->default_state);

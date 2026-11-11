@@ -470,6 +470,11 @@ void usbdisk_step(void)
     }
 }
 
+int usbdisk_pending(void)
+{
+    return pending != 0;
+}
+
 void usbdisk_service(void)
 {
     if (pending) {

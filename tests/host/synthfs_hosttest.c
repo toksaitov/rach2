@@ -663,6 +663,22 @@ static void ipv6_conf(void)
  *
  * Returns the count of failed checks, at most 255.
  */
+/** The files of fs.protected_* under /proc/sys/fs, each its own entry and
+ * each one a privileged caller may write. */
+static void sys_protected(void)
+{
+    struct vpath vp;
+
+    CHECK(synth_classify("proc/sys/fs/protected_fifos", &vp) == VNODE_PROC_SYS_FILE &&
+          vp.sysent == SYNTH_SYS_PROTECTED_FIFOS && synth_sys_writable(vp.sysent));
+    CHECK(synth_classify("proc/sys/fs/protected_hardlinks", &vp) == VNODE_PROC_SYS_FILE &&
+          vp.sysent == SYNTH_SYS_PROTECTED_FIFOS + 1 && synth_sys_writable(vp.sysent));
+    CHECK(synth_classify("proc/sys/fs/protected_regular", &vp) == VNODE_PROC_SYS_FILE &&
+          vp.sysent == SYNTH_SYS_PROTECTED_FIFOS + 2 && synth_sys_writable(vp.sysent));
+    CHECK(synth_classify("proc/sys/fs/protected_symlinks", &vp) == VNODE_PROC_SYS_FILE &&
+          vp.sysent == SYNTH_SYS_PROTECTED_SYMLINKS && synth_sys_writable(vp.sysent));
+}
+
 /**
  * The fixed directories drivers add below, /sys/kernel/debug, the PCI
  * function's attribute files and its `subsystem` link to /sys/bus/pci.
@@ -986,6 +1002,7 @@ int main(int argc, char **argv)
     paths();
     sys_tree();
     sys_later();
+    sys_protected();
     sys_registry();
     sys_registry_grows();
     sys_class();

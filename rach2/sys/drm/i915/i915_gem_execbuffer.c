@@ -19,6 +19,7 @@
 #include "../../mm/usercopy.h"
 #include "../../proc/percpu.h"
 #include "../../proc/process.h"
+#include "../../rtc.h"
 
 /* The user address a 64-bit field of a call names. */
 #define EB_USER_PTR(v) ((void __user *)(uintptr_t)(v))
@@ -1146,10 +1147,118 @@ static int32_t eb_select_engine(struct eb *eb, struct intel_context **out)
     return (*out)->banned ? -EIO : 0;
 }
 
+/* The lock of every GT's pool of shadow batches: its lists and each take
+ * of a shadow's reference. */
+static struct spinlock pool_lock = SPINLOCK_INIT_NAMED("pool_lock");
+
+/* How long a shadow stays in the pool after its last take, Linux's HZ in
+ * pool_free_work (gt/intel_gt_buffer_pool.c:93). */
+#define I915_POOL_KEEP_MS 1000u
+
+/** The bucket of a shadow of `size` bytes, Linux's bucket_for_size
+ * (gt/intel_gt_buffer_pool.c:14-28): 2^n pages in bucket n, 8 or more in
+ * the last. */
+static uint32_t pool_bucket(uint64_t size)
+{
+    uint64_t pages = size >> PAGE_SHIFT;
+    uint32_t n = 0;
+
+    while (pages > 1u && n < I915_POOL_BUCKETS - 1u) {
+        pages >>= 1;
+        n++;
+    }
+    return n;
+}
+
+/**
+ * A shadow of at least `size` bytes for the parser, as Linux's
+ * intel_gt_get_buffer_pool (gt/intel_gt_buffer_pool.c:170-215): the first
+ * idle one of its bucket, its pages and binding kept, or a new one put in
+ * the pool. The caller gets a reference of its own and the object in the
+ * processor's domain for its copy.
+ *
+ * @return 0, or the errors of `i915_gem_object_create` and
+ *         `i915_gem_object_set_to_cpu_domain`.
+ */
+static int32_t pool_get(struct drm_i915_private *i915, uint64_t size,
+                        struct drm_i915_gem_object **out)
+{
+    struct i915_gt *gt = &i915->gt;
+    struct drm_i915_gem_object *obj;
+    uint32_t b, flags;
+    int32_t err;
+
+    size = (size + PAGE_SIZE - 1u) & ~(uint64_t)(PAGE_SIZE - 1u);
+    b = pool_bucket(size);
+    flags = spin_lock_irqsave(&pool_lock);
+    for (obj = gt->pool[b]; obj; obj = obj->pool_next) {
+        if (obj->base.size >= size && obj->base.refs == 1u) {
+            drm_gem_object_get(&obj->base);
+            obj->pool_taken = rtc_ticks_now();
+            break;
+        }
+    }
+    spin_unlock_irqrestore(&pool_lock, flags);
+    if (obj) {
+        err = i915_gem_object_set_to_cpu_domain(obj, 1);
+        if (err != 0) {
+            i915_gem_object_put(obj);
+            return err;
+        }
+        *out = obj;
+        return 0;
+    }
+    err = i915_gem_object_create(i915, size, &obj);
+    if (err != 0) {
+        return err;
+    }
+    drm_gem_object_get(&obj->base);
+    obj->pool_taken = rtc_ticks_now();
+    flags = spin_lock_irqsave(&pool_lock);
+    obj->pool_next = gt->pool[b];
+    gt->pool[b] = obj;
+    spin_unlock_irqrestore(&pool_lock, flags);
+    *out = obj;
+    return 0;
+}
+
+void i915_gem_pool_trim(struct drm_i915_private *i915, int how)
+{
+    struct i915_gt *gt = &i915->gt;
+    struct drm_i915_gem_object *drop = 0, **link, *obj;
+    uint64_t now = rtc_ticks_now();
+    uint32_t b, flags;
+
+    flags = spin_lock_irqsave(&pool_lock);
+    for (b = 0; b < I915_POOL_BUCKETS; b++) {
+        link = &gt->pool[b];
+        while ((obj = *link) != 0) {
+            if (how == I915_POOL_ALL ||
+                (obj->base.refs == 1u &&
+                 (how == I915_POOL_IDLE ||
+                  now - obj->pool_taken >= MS_TO_TICKS(I915_POOL_KEEP_MS)))) {
+                *link = obj->pool_next;
+                obj->pool_next = drop;
+                drop = obj;
+            } else {
+                link = &obj->pool_next;
+            }
+        }
+    }
+    spin_unlock_irqrestore(&pool_lock, flags);
+    while ((obj = drop) != 0) {
+        drop = obj->pool_next;
+        obj->pool_next = 0;
+        i915_gem_object_put(obj);
+    }
+}
+
 /**
  * Check the batch before it runs, as Linux's eb_parse on graphics 7: a
  * batch whose length the call gives, on an engine that parses, whoever the
- * caller is, is copied to a shadow of its length and the trampoline's,
+ * caller is, is copied to a shadow of at least its length and the
+ * trampoline's from the GT's pool (`pool_get`, as Linux's eb_parse takes
+ * it from intel_gt_get_buffer_pool, i915_gem_execbuffer.c:2298-2303),
  * bound in the global GTT, which runs in its place (i915_cmd_parser); any
  * other batch runs as it is.
  *
@@ -1167,8 +1276,8 @@ static int32_t eb_parse(struct eb *eb)
     if (eb->args->batch_len == 0 || !i915_engine_using_cmd_parser(eb->ce->engine)) {
         return 0;
     }
-    err = i915_gem_object_create(
-        eb->i915, (uint64_t)eb->batch_len + I915_CMD_PARSER_TRAMPOLINE_SIZE, &eb->shadow);
+    err =
+        pool_get(eb->i915, (uint64_t)eb->batch_len + I915_CMD_PARSER_TRAMPOLINE_SIZE, &eb->shadow);
     if (err != 0) {
         return err;
     }

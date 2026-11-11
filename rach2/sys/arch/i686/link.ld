@@ -23,7 +23,10 @@ SECTIONS {
         *(.rodata .rodata.*)
     } :text
 
+    /* _data to _image_end holds the kernel's static data, which the
+       lock-order checker keys a lock in by its address (lib/lockdep.c). */
     .data ALIGN(0x1000) : {
+        _data = .;
         *(.data .data.*)
     } :data
 
@@ -32,4 +35,5 @@ SECTIONS {
     } :data
 
     _end = .;
+    _image_end = .;
 }

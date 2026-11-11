@@ -9,6 +9,7 @@
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/atomic_host.c
  *
  * The rows, one for each of 78-5b's subtasks: the call's checks and
  * Linux's refusals; relocations as Linux's eb_relocate_entry applies them,
@@ -1476,7 +1477,9 @@ static void parser(void)
     dev_a->drm.master = 0;
     idle();
 
-    /* The shadow's pages and a closed batch's live until the retire. */
+    /* The shadow's pages and a closed batch's live until the retire; the
+     * shadow then goes back to the GT's pool, which a trim empties. */
+    i915_gem_pool_trim(dev_a, I915_POOL_ALL);
     frames = (uint32_t)frames_live;
     a.flags = I915_EXEC_RENDER;
     a.batch_len = 8;
@@ -1485,7 +1488,9 @@ static void parser(void)
     close_handle(&file_a, b);
     CHECK((uint32_t)frames_live == frames + 1u, "parser: the closed batch held while it runs");
     idle();
-    CHECK((uint32_t)frames_live == frames - 1u, "parser: both freed once the request retires");
+    i915_gem_pool_trim(dev_a, I915_POOL_IDLE);
+    CHECK((uint32_t)frames_live == frames - 1u,
+          "parser: both freed once the request retires and the pool is trimmed");
 }
 
 /**
@@ -1662,6 +1667,8 @@ int main(void)
     sol_and_faults();
     lifetime();
     idle();
+    /* The pool keeps its shadows past the rows until the GT parks. */
+    i915_gem_pool_trim(dev_a, I915_POOL_ALL);
     drm_syncobj_release(&file_a);
     CHECK(allocations - (int)dev_a->gt.ppgtt.tables == before,
           "the end: every record of the calls freed");

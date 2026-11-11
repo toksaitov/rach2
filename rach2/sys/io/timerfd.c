@@ -95,7 +95,7 @@ struct setting {
  * processor; it is taken with interrupts off, after the big lock, and
  * before the locks of the wait queues and the run queues a firing takes.
  */
-static struct spinlock timer_lock = SPINLOCK_INIT;
+static struct spinlock timer_lock = SPINLOCK_INIT_NAMED("timer_lock");
 static struct ktimer *armed;
 static struct ktimer *cpu_armed;
 

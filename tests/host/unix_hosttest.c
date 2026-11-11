@@ -89,6 +89,18 @@ uint32_t timer_now_us(void)
     return 0;
 }
 
+/** The cycle counter: the clock's microseconds, a cycle each. */
+uint64_t arch_cycles(void)
+{
+    return timer_now_us();
+}
+
+/** A cycle is a microsecond here. */
+uint64_t timer_cycles_us(uint64_t cycles)
+{
+    return cycles;
+}
+
 #define USER_BASE 0x04000000u
 #define PAGES     8
 #define SLOTS     16
@@ -1716,6 +1728,34 @@ const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
 {
     return m;
 }
+
+/** Take `lock` with interrupts off: one thread, so nothing waits. */
+uint32_t spin_lock_irqsave(struct spinlock *lock)
+{
+    lock->locked = 1;
+    return 0;
+}
+
+/** Give `lock` back. */
+void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
+{
+    (void)flags;
+    lock->locked = 0;
+}
+
+/** 1: the test runs as the kernel, under the big lock. */
+int bkl_held(void)
+{
+    return 1;
+}
+
+/** Nothing: there is no big lock. */
+void bkl_enter(void)
+{}
+
+/** Nothing: there is no big lock. */
+void bkl_exit(void)
+{}
 
 /** Set up the process and its shared table, and run every row; 0 when
  * each passes, 1 otherwise. */

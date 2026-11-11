@@ -164,7 +164,7 @@ static void irqfd_update(struct irq_vm *iv, struct irqfd *f)
 }
 
 static uint32_t events[KVM_EVENT_TOTAL];
-static struct spinlock events_lock;
+static struct spinlock events_lock = SPINLOCK_INIT_NAMED("events_lock");
 
 /** Count one event under a lock of its own, since an irqfd's runs with an
  * eventfd's lock held and perhaps without the big lock. */
@@ -401,6 +401,17 @@ static int32_t irqfd(struct kvm_vm *vm, uintptr_t arg)
     return 0;
 }
 
+/** A zeroed controller record with its lock made, or NULL. */
+static struct irq_vm *irq_vm_alloc(void)
+{
+    struct irq_vm *iv = kzalloc(sizeof(*iv));
+
+    if (iv) {
+        spin_lock_init(&iv->lock, "kvm_irq_vm");
+    }
+    return iv;
+}
+
 /** KVM_ENABLE_CAP(KVM_CAP_SPLIT_IRQCHIP), as Linux takes it: the local
  * APICs in the kernel and the first `args[0]` GSIs the caller's I/O APIC's.
  * 0; -EINVAL for more pins than routes; -EEXIST once a controller is in
@@ -415,7 +426,7 @@ int32_t kvm_irq_enable_split(struct kvm_vm *vm, const struct kvm_enable_cap *cap
     if (vm->irqchip != KVM_IRQCHIP_NONE || vm->nr_vcpus) {
         return -EEXIST;
     }
-    iv = kzalloc(sizeof(*iv));
+    iv = irq_vm_alloc();
     if (!iv) {
         return -ENOMEM;
     }
@@ -439,7 +450,7 @@ static int32_t create_irqchip(struct kvm_vm *vm)
     if (vm->nr_vcpus) {
         return -EINVAL;
     }
-    iv = kzalloc(sizeof(*iv));
+    iv = irq_vm_alloc();
     if (!iv) {
         return -ENOMEM;
     }

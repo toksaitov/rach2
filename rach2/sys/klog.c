@@ -567,6 +567,57 @@ static void dest_screen(const struct klog_record *r)
 
 /* ---- destination 3: the serial port ---- */
 
+/*
+ * klog's report lock: the number, plus one, of the processor that writes a
+ * record to the port, or 0. A holder of the big lock writes the port under
+ * it as a processor without it writes a report (`klog_report`), so the
+ * port has each record whole. It is the lock-order table's last row with
+ * the checker's own (lib/lockdep.Readme.md): nothing is taken under it.
+ */
+static volatile unsigned int report_owner;
+
+/* KLOG_REPORT_WAIT_MS in cycles of the time-stamp counter, counted at the
+ * serial port's rate, faster than any processor's counter runs. */
+#define KLOG_REPORT_WAIT_CYCLES (KLOG_REPORT_WAIT_MS * 5000000UL)
+
+/**
+ * Take the report lock: KLOG_REPORT_LOCKED when taken; KLOG_REPORT_RING
+ * when this processor holds it, as an interrupt of the holder finds it, or
+ * when `bounded` and another held it for KLOG_REPORT_WAIT_MS;
+ * KLOG_REPORT_PANIC when a panic finds it held by a processor the panic
+ * has stopped. Only this processor writes its own number, so the first
+ * reading cannot be stale for it.
+ */
+static int report_get(int bounded)
+{
+    unsigned int me = (unsigned int)arch_cpu_id() + 1u;
+    uint64_t start;
+
+    if (report_owner == me) {
+        return KLOG_REPORT_RING;
+    }
+    start = arch_cycles();
+    while (arch_atomic_cmpxchg(&report_owner, 0u, me) != 0u) {
+        if (k_panicking()) {
+            return KLOG_REPORT_PANIC;
+        }
+        if (bounded && arch_cycles() - start >= (uint64_t)KLOG_REPORT_WAIT_CYCLES) {
+            return KLOG_REPORT_RING;
+        }
+        arch_relax();
+    }
+    return KLOG_REPORT_LOCKED;
+}
+
+/** Let the report lock go when `report_get` gave `how`. */
+static void report_put(int how)
+{
+    if (how == KLOG_REPORT_LOCKED) {
+        k_barrier();
+        report_owner = 0;
+    }
+}
+
 /**
  * Write the record to the port.
  *
@@ -576,6 +627,7 @@ static void dest_screen(const struct klog_record *r)
 static void dest_serial(const struct klog_record *r)
 {
     uint32_t i;
+    int how = report_get(0);
 
     if (serial_line_open) {
         serial_out('\r');
@@ -588,6 +640,7 @@ static void dest_serial(const struct klog_record *r)
         }
         serial_out(r->text[i]);
     }
+    report_put(how);
 }
 
 /* ---- destination 4: netconsole ---- */
@@ -652,32 +705,67 @@ static int console_writing;
  * The largest burst is a USB hub pulled with the device table full behind
  * it: one pass of the USB stack, which runs in an interrupt, says each of
  * sixteen devices is gone and gives back its slot, and a disk says more.
- * Sixty-four records hold four for each. One more is counted and dropped,
- * and the count is reported once the queue is empty, because a log that
- * quietly loses records is worse than one that says how many.
+ * Sixty-four records hold four for each, beside the record a drain is
+ * writing out, which keeps its slot until every destination has had it.
+ * One more is counted and dropped, and the count is reported once the queue
+ * is empty, because a log that quietly loses records is worse than one that
+ * says how many.
  */
 #define KLOG_PENDING_MAX 64
 
+/* The queue's slots: room for `KLOG_PENDING_MAX` records and the one in
+ * flight, rounded up to a power of two so that it divides 2^32. */
+#define KLOG_PENDING_SLOTS 128
+
 /* The queue's records are those numbered from `pending_first` up to
- * `pending_next`, each in the slot of its number modulo the queue's size,
- * which divides 2^32: putting one moves only `pending_next`, and taking one
- * only `pending_first`, each in one store, so that a panic which stops
+ * `pending_next`, each in the slot of its number modulo
+ * `KLOG_PENDING_SLOTS`: putting one moves only `pending_next`, and taking
+ * one only `pending_first`, each in one store, so that a panic which stops
  * either at any instruction finds the queue whole. */
-static struct klog_record pending[KLOG_PENDING_MAX];
+static struct klog_record pending[KLOG_PENDING_SLOTS];
 static unsigned int pending_first;
 static unsigned int pending_next;
 static int pending_lost;
 
-/** How many records the queue holds. */
+/* 1 while `klog_drain` writes the queue's first record out, which then does
+ * not count against `KLOG_PENDING_MAX`. */
+static int pending_writing;
+
+/* Which destinations have had a record of the queue whole: its number times
+ * sixteen, plus 1 << i for each `DESTS[i]` that has, so that one store
+ * names both the record and the destinations and a panic that stops a drain
+ * finds them agreeing. The four destinations fit the four bits. */
+static unsigned int pending_had;
+
+/** How many records the queue holds, the one in flight included. */
 static int pending_count(void)
 {
     return (int)(pending_next - pending_first);
 }
 
+/** Whether the queue holds as many records as it takes, besides the one a
+ * drain is writing out. */
+static int pending_full(void)
+{
+    return pending_count() - pending_writing >= KLOG_PENDING_MAX;
+}
+
+/**
+ * The destinations that have had the queue's record numbered `n` whole, as
+ * `pending_had` gives them, 1 << i for each `DESTS[i]`; 0 when
+ * `pending_had` names another record.
+ */
+static unsigned int pending_had_by(unsigned int n)
+{
+    unsigned int had = pending_had;
+
+    return (had >> 4) == (n & 0x0fffffffu) ? had & 0xfu : 0u;
+}
+
 /** The newest record in the queue, which holds one. */
 static const struct klog_record *pending_last(void)
 {
-    return &pending[(pending_next - 1u) % KLOG_PENDING_MAX];
+    return &pending[(pending_next - 1u) % KLOG_PENDING_SLOTS];
 }
 
 /**
@@ -692,11 +780,11 @@ static void pending_put(const struct klog_record *r, uint32_t kept)
 {
     struct klog_record *q;
 
-    if (pending_count() >= KLOG_PENDING_MAX) {
+    if (pending_full()) {
         pending_lost++;
         return;
     }
-    q = &pending[pending_next % KLOG_PENDING_MAX];
+    q = &pending[pending_next % KLOG_PENDING_SLOTS];
     *q = *r;
     q->kept = kept;
     k_barrier();
@@ -712,18 +800,24 @@ static void pending_put(const struct klog_record *r, uint32_t kept)
  * flag is cleared with the queue empty and interrupts off, which leaves no
  * moment where a record is waiting and nobody is coming for it.
  *
- * A record leaves the queue only once it has been written out, so a panic
- * that stops the drain part way through one finds it still first in the
- * queue and writes it out again whole, as Linux moves a console's sequence
- * number past a record only after the console's write
- * (`console_emit_next_record`, kernel/printk/printk.c:3081-3086), and its
- * panic writes from that number on (`console_flush_on_panic`, :3449-3482).
+ * A record leaves the queue only once every destination has had it, and
+ * each destination that has is marked in `pending_had`, so a panic that
+ * stops the drain part way through one finds it still first in the queue
+ * and writes it out again whole to the destination that was writing it and
+ * to those after, and not to those before. So Linux keeps a sequence
+ * number for each console and moves it past a record only after that
+ * console's write (`con->seq`, `console_emit_next_record`,
+ * kernel/printk/printk.c:3081-3086); it walks each console from its own
+ * number (`console_flush_one_record`, :3144-3186), and its panic writes
+ * from there on (`console_flush_on_panic`, :3449-3482), so only the
+ * console that was writing has the record again.
  */
 static void klog_drain(void)
 {
     for (;;) {
         struct klog_record r;
         uint32_t flags;
+        unsigned int n, had;
         int lost;
         int i;
 
@@ -739,19 +833,31 @@ static void klog_drain(void)
             }
             return;
         }
-        r = pending[pending_first % KLOG_PENDING_MAX];
+        n = pending_first;
+        r = pending[n % KLOG_PENDING_SLOTS];
+        pending_writing = 1;
         kirq_restore(flags);
 
+        had = pending_had_by(n);
         for (i = 0; i < KLOG_N_DESTS; i++) {
             if (DESTS[i].write == dest_ring) {
                 continue; /* the ring took it where it was raised */
             }
+            if ((had & (1u << i)) != 0u) {
+                continue; /* it had the record whole before a panic */
+            }
             if (r.level <= DESTS[i].takes_down_to) {
                 DESTS[i].write(&r);
+                had |= 1u << i;
+                k_barrier();
+                pending_had = (n << 4) | had;
+                k_barrier();
             }
         }
-        k_barrier();
-        pending_first++;
+        flags = kirq_save();
+        pending_first = n + 1u;
+        pending_writing = 0;
+        kirq_restore(flags);
     }
 }
 
@@ -833,7 +939,9 @@ static int klog_enter(void)
  * (`console_trylock_spinning`, kernel/printk/printk.c:1956) and its serial
  * console's waits touch the NMI watchdog (drivers/tty/serial/8250/
  * 8250_port.c:2083). The writer's work is bounded: the records kept when it
- * began. Interrupts off. 1 when in; 0 when this processor may not write
+ * began. Interrupts off, so the wait answers other processors' requests
+ * (`smp_service`), since the writer may itself wait for this processor to
+ * drop a translation. 1 when in; 0 when this processor may not write
  * klog's state at all, and writes its bytes without it, as before the big
  * lock was taken.
  */
@@ -845,6 +953,7 @@ static int klog_enter_wait(void)
         }
         while (defer_taking != 0u && !k_panicking()) {
             touch_nmi_watchdog();
+            smp_service();
             arch_relax();
         }
     }
@@ -902,7 +1011,7 @@ static int defer_collect(unsigned int end)
         slot = h % KLOG_DEFER_MAX;
         if (defer_whole[slot] == h + 1u) {
             queued = pending_count() > 0 && pending_last()->kept == h + 1u;
-            if (!queued && pending_count() >= KLOG_PENDING_MAX) {
+            if (!queued && pending_full()) {
                 break;
             }
             if (ring_st[ring_cur].kept != h + 1u) {
@@ -1057,7 +1166,7 @@ void klog_v(int level, const char *subsystem, const char *format, va_list ap)
     nested = klog_delivering || console_writing;
     if (nested && defer_head != defer_tail) {
         (void)defer_collect(defer_tail);
-        if (defer_head != defer_tail && pending_count() >= KLOG_PENDING_MAX) {
+        if (defer_head != defer_tail && pending_full()) {
             klog_leave();
             defer_put(level, subsystem, format, ap);
             kirq_restore(flags);
@@ -1096,6 +1205,49 @@ void klog(int level, const char *subsystem, const char *format, ...)
     va_start(ap, format);
     klog_v(level, subsystem, format, ap);
     va_end(ap);
+}
+
+/* ---- the reports that cannot wait ---- */
+
+int klog_report_begin(void)
+{
+    return report_get(1);
+}
+
+/**
+ * The record goes to the ring under the ring's lock, which is held only
+ * with interrupts off and for no wait, and then, unless the report is the
+ * ring's alone, to the port.
+ */
+void klog_report(int how, int level, const char *subsystem, const char *format, ...)
+{
+    struct klog_record r;
+    va_list ap;
+    uint32_t i;
+
+    va_start(ap, format);
+    klog_build(&r, level, subsystem, format, ap);
+    va_end(ap);
+    ring_append(r.text, r.len, 0u);
+    if (how == KLOG_REPORT_RING) {
+        return;
+    }
+    if (serial_line_open) {
+        serial_out('\r');
+        serial_out('\n');
+        serial_line_open = 0;
+    }
+    for (i = 0; i < r.len; i++) {
+        if (r.text[i] == '\n') {
+            serial_out('\r');
+        }
+        serial_out(r.text[i]);
+    }
+}
+
+void klog_report_end(int how)
+{
+    report_put(how);
 }
 
 /* ---- the console ---- */

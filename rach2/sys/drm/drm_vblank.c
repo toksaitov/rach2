@@ -128,62 +128,116 @@ void drm_crtc_vblank_init(struct drm_crtc *crtc)
  */
 
 /**
- * The vblanks the hardware's frame counter has counted since the count
- * last took it in, which it now takes in, as Linux's
- * drm_update_vblank_count with a counter of 32 bits; 1 for a CRTC without
- * a counter, whose interrupt alone counts.
+ * Store `diff` more vblanks of `crtc`, the time `t` of the latest and the
+ * frame counter `last` they were counted to, Linux's store_vblank. A time
+ * of 0 marks none until the next vblank. A time before one stored earlier
+ * is counted in `backwards`, which no event or reply should ever carry,
+ * since a compositor takes each as the next frame's. The count and the
+ * time change inside an odd `seq`, as under Linux's write_seqlock
+ * (drm_vblank.c:192-195), so that drm_crtc_vblank_count_and_time, which
+ * runs with interrupts on, never pairs a count with another vblank's time
+ * or takes half of a time i686 stores in two moves. Interrupts masked.
  */
-static uint32_t vblank_hw_diff(struct drm_crtc *crtc)
+static void store_vblank(struct drm_crtc *crtc, uint32_t diff, int64_t t, uint32_t last)
 {
     struct drm_vblank *v = &crtc->vblank;
-    uint32_t cur, diff;
 
-    if (!crtc->funcs->get_vblank_counter) {
-        return 1;
+    v->last = last;
+    v->seq++;
+    k_barrier();
+    v->time_ns = t;
+    v->count += diff;
+    k_barrier();
+    v->seq++;
+    if (t != 0) {
+        if (t < v->stamp_max_ns) {
+            v->backwards++;
+        } else {
+            v->stamp_max_ns = t;
+        }
     }
-    cur = crtc->funcs->get_vblank_counter(crtc);
-    diff = cur - v->last;
-    v->last = cur;
-    return diff;
 }
 
-/** Turn the interrupt on, Linux's drm_vblank_enable, the vblanks of a
- * hardware counter that came while it was off counted first: 0 or the
- * driver's error. */
+/**
+ * Read `crtc`'s frame counter and the time of its latest vblank into `*t`,
+ * reading both again while the counter moved between them, at most
+ * VBLANK_TIMESTAMP_TRIES times, as the loops of Linux's
+ * drm_update_vblank_count and drm_reset_vblank_timestamp do: a vblank that
+ * begins between the two reads would pair the count before it with its own
+ * time, which the next vblank's reading of the same frame may then put a
+ * few microseconds earlier. Returns the counter.
+ */
+static uint32_t vblank_sample(struct drm_crtc *crtc, int in_vblank_irq, int64_t *t, int *precise)
+{
+    uint32_t cur;
+    int tries = VBLANK_TIMESTAMP_TRIES;
+
+    do {
+        cur = crtc->funcs->get_vblank_counter(crtc);
+        *t = vblank_timestamp(crtc, in_vblank_irq, precise);
+    } while (cur != crtc->funcs->get_vblank_counter(crtc) && --tries > 0);
+    return cur;
+}
+
+/**
+ * Take in the vblanks of `crtc` since the count last did, Linux's
+ * drm_update_vblank_count with a counter of 32 bits: the frame counter's
+ * difference, or 1 at an interrupt of a CRTC without a counter. When none
+ * has come, as at an interrupt whose frame was already counted, the count
+ * and its time stay as they are, since a second reading of the same frame
+ * may come out earlier than the first. Outside the interrupt the time is
+ * kept only from where the CRTC scans, else 0 until the next vblank.
+ * Interrupts masked.
+ */
+static void vblank_update_count(struct drm_crtc *crtc, int in_vblank_irq)
+{
+    uint32_t cur = crtc->vblank.last, diff;
+    int64_t t = 0;
+    int precise = 0;
+
+    if (crtc->funcs->get_vblank_counter) {
+        cur = vblank_sample(crtc, in_vblank_irq, &t, &precise);
+        diff = cur - crtc->vblank.last;
+    } else {
+        diff = in_vblank_irq ? 1 : 0;
+        if (diff != 0) {
+            t = vblank_timestamp(crtc, in_vblank_irq, &precise);
+        }
+    }
+    if (diff == 0) {
+        return;
+    }
+    if (!precise && !in_vblank_irq) {
+        t = 0;
+    }
+    store_vblank(crtc, diff, t, cur);
+}
+
+/** Turn the interrupt on, Linux's drm_vblank_enable, then count the
+ * vblanks that came while it was off: 0 or the driver's error. */
 static int32_t vblank_enable(struct drm_crtc *crtc)
 {
     int32_t rc;
-    uint32_t diff;
-    int64_t t;
-    int precise;
 
     if (crtc->vblank.enabled) {
         return 0;
     }
-    if (crtc->funcs->get_vblank_counter && (diff = vblank_hw_diff(crtc)) != 0) {
-        /* Linux's drm_update_vblank_count outside the interrupt: the time
-         * only from where the CRTC scans, else none until the next. */
-        crtc->vblank.count += diff;
-        t = vblank_timestamp(crtc, 0, &precise);
-        crtc->vblank.time_ns = precise ? t : 0;
-    }
     rc = crtc->funcs->enable_vblank(crtc);
     if (rc == 0) {
+        vblank_update_count(crtc, 0);
         crtc->vblank.enabled = 1;
     }
     return rc;
 }
 
-/** Turn the interrupt off, Linux's drm_vblank_disable_and_save, with a
- * hardware counter's vblanks counted up to now. */
+/** Turn the interrupt off, Linux's drm_vblank_disable_and_save, with the
+ * vblanks counted up to now. */
 static void vblank_disable(struct drm_crtc *crtc)
 {
     if (!crtc->vblank.enabled) {
         return;
     }
-    if (crtc->funcs->get_vblank_counter && !crtc->vblank.inmodeset) {
-        crtc->vblank.count += vblank_hw_diff(crtc);
-    }
+    vblank_update_count(crtc, 0);
     crtc->vblank.enabled = 0;
     if (crtc->funcs->disable_vblank) {
         crtc->funcs->disable_vblank(crtc);
@@ -224,12 +278,33 @@ void drm_crtc_vblank_put(struct drm_crtc *crtc)
     kirq_restore(flags);
 }
 
+/**
+ * Read the count and the time of `crtc`'s latest vblank as one pair, Linux's
+ * read_seqbegin and read_seqretry loop of drm_vblank_count_and_time
+ * (drm_vblank.c:953-957): read again while store_vblank was in the middle
+ * of a store, its `seq` odd, or made one between the reads, its `seq`
+ * moved. A compiler barrier is the whole of Linux's smp_rmb and smp_wmb
+ * on x86, which keeps each processor's loads, and its stores, in order.
+ */
 uint64_t drm_crtc_vblank_count_and_time(struct drm_crtc *crtc, int64_t *time_ns)
 {
+    const volatile uint32_t *seqp = &crtc->vblank.seq;
+    uint64_t count;
+    int64_t t;
+    uint32_t seq;
+
+    do {
+        while ((seq = *seqp) & 1u) {
+        }
+        k_barrier();
+        count = crtc->vblank.count;
+        t = crtc->vblank.time_ns;
+        k_barrier();
+    } while (*seqp != seq);
     if (time_ns) {
-        *time_ns = crtc->vblank.time_ns;
+        *time_ns = t;
     }
-    return crtc->vblank.count;
+    return count;
 }
 
 /* ------------------------------------------------------------------------
@@ -358,14 +433,12 @@ int drm_crtc_handle_vblank(struct drm_crtc *crtc)
 {
     struct drm_vblank *v = &crtc->vblank;
     int64_t now;
-    int precise;
 
     if (!v->enabled) {
         return 0;
     }
     now = vblank_now();
-    v->count += vblank_hw_diff(crtc);
-    v->time_ns = vblank_timestamp(crtc, 1, &precise);
+    vblank_update_count(crtc, 1);
     wq_wake_all(&v->wait);
     send_due_events(crtc, 0);
     if (v->refs == 0 && now - v->put_ns >= (int64_t)DRM_VBLANK_OFFDELAY_MS * 1000000) {
@@ -397,7 +470,7 @@ void drm_crtc_vblank_on(struct drm_crtc *crtc)
     struct drm_vblank *v = &crtc->vblank;
     int64_t t;
     int precise;
-    uint32_t flags = kirq_save();
+    uint32_t cur, flags = kirq_save();
 
     if (v->inmodeset) {
         v->refs--;
@@ -406,12 +479,13 @@ void drm_crtc_vblank_on(struct drm_crtc *crtc)
     /* Linux's drm_reset_vblank_timestamp: one more count, with the time
      * from where the CRTC scans or none until the next vblank; a hardware
      * counter is taken in from here. */
-    v->count++;
     if (crtc->funcs && crtc->funcs->get_vblank_counter) {
-        v->last = crtc->funcs->get_vblank_counter(crtc);
+        cur = vblank_sample(crtc, 0, &t, &precise);
+    } else {
+        cur = v->last;
+        t = vblank_timestamp(crtc, 0, &precise);
     }
-    t = vblank_timestamp(crtc, 0, &precise);
-    v->time_ns = precise ? t : 0;
+    store_vblank(crtc, 1, precise ? t : 0, cur);
     if (v->refs != 0 && drm_crtc_has_vblank(crtc)) {
         (void)vblank_enable(crtc);
     }
@@ -523,7 +597,7 @@ int32_t drm_crtc_wait_flip(struct drm_crtc *crtc, int below, int intr, uint32_t 
  * stopped. */
 static int count_reached(struct drm_crtc *crtc, uint64_t seq)
 {
-    return vblank_passed(crtc->vblank.count, seq) || !crtc->vblank.enabled;
+    return vblank_passed(drm_crtc_vblank_count_and_time(crtc, NULL), seq) || !crtc->vblank.enabled;
 }
 
 /* ------------------------------------------------------------------------
@@ -604,7 +678,7 @@ int32_t drm_wait_vblank_ioctl(struct drm_device *dev, void *data, struct drm_fil
     if (rc != 0) {
         return rc;
     }
-    seq = crtc->vblank.count;
+    seq = drm_crtc_vblank_count_and_time(crtc, NULL);
     if (type & _DRM_VBLANK_RELATIVE) {
         req_seq = seq + vblwait->request.sequence;
         vblwait->request.sequence = (unsigned int)req_seq;

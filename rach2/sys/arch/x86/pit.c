@@ -79,7 +79,7 @@ static struct pit_clock clock;
  * reads; a TCP round trip timed from one processor's send to another's
  * acknowledgement must not come out negative.
  */
-static struct spinlock now_lock;
+static struct spinlock now_lock = SPINLOCK_INIT_NAMED("pit_now_lock");
 static uint32_t now_floor;
 
 static uint32_t pit_phase_from(uint32_t count, uint8_t status);

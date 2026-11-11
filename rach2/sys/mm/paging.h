@@ -183,10 +183,8 @@ void paging_flush_tlb(uintptr_t addr);
  * A user address is dropped on this processor when it translates through
  * `dir`, and on every other that does (`smp_tlb_shootdown`), before this
  * returns, so that the caller may free the page's frame next. A kernel
- * address is in every directory: this processor drops it now, and every
- * other drops all its translations before it next takes the big lock,
- * which it holds whenever it reads kernel memory that was not mapped when
- * it last held it (`smp_kernel_mapping_changed`).
+ * address is in every directory, and is dropped on every processor before
+ * this returns (`smp_kernel_flush`).
  */
 void paging_flush_dir(const page_dir_t *dir, uintptr_t addr);
 
@@ -435,13 +433,25 @@ void mmio_usage(size_t *used, size_t *largest);
 /**
  * Map the frame at physical `phys` at a temporary kernel address and return
  * it, or 0, with a record, when every slot is held. The mapping lasts until
- * `kunmap_temp`; a caller may sleep while it holds one, since a slot is its
- * own. The paths that zero, copy or fill a user frame use these, because on
- * i686 a user frame may lie above the identity-mapped window. Where the
- * direct map reaches every frame (`ARCH_DIRECT_MAP_ALL`, x86-64), the
- * address is the frame's there and nothing is mapped.
+ * `kunmap_temp`, which any processor may call; a slot is its holder's alone.
+ * A holder may sleep and wake on another processor, with or without the big
+ * lock: a sweep of a slot drops every processor's translations before the
+ * slot is taken again (`smp_kernel_flush`). Any context. The paths that
+ * zero, copy or fill a user frame use these, because on i686 a user frame
+ * may lie above the identity-mapped window. Where the direct map reaches
+ * every frame (`ARCH_DIRECT_MAP_ALL`, x86-64), the address is the frame's
+ * there and nothing is mapped.
  */
 void *kmap_temp(uintptr_t phys);
+
+/**
+ * Split the temporary slots into a pool for each of `cpus` processors, at
+ * most 32, of whole words of the slot maps; with more processors, several
+ * share a pool by their index modulo the count. Called once, while the boot
+ * processor alone runs; a slot held then stays held and is given back to the
+ * pool its index now falls in. Nothing on x86-64.
+ */
+void paging_temp_split(unsigned int cpus);
 
 /** Whether the frame of the physical address `phys` is not the allocator's:
  * past the top of memory, or one the memory map does not offer, which
@@ -451,10 +461,10 @@ int paging_frame_is_device(uintptr_t phys);
 
 /**
  * Release a mapping `kmap_temp` returned. The caller must not use the
- * address again. On i686 the slot stays mapped until the slots are next
- * swept: when none is free, every released slot is unmapped at once and
- * every processor drops its translations, once for up to 1024 releases, as
- * Linux's `kmap` does with its pool.
+ * address again. On i686 the slot stays mapped until its pool is next
+ * swept: when a pool has none free, every released slot of it is unmapped
+ * at once and every processor drops its translations, once for all the
+ * pool's releases, as Linux's `kmap` does with its pool.
  */
 void kunmap_temp(void *va);
 
@@ -623,6 +633,12 @@ void map_kernel_frame(uintptr_t va, uintptr_t phys, int writable);
  * translation (`paging_flush_tlb`); nothing where the page table is
  * absent. */
 void unmap_kernel_frame(uintptr_t va);
+
+/** Clear the entries of the `count` kernel pages from the page-aligned `va`
+ * and drop their translations on every processor, with one request to each
+ * other (`smp_kernel_flush`), before this returns; pages not mapped are
+ * passed over. The caller frees the frames only after. */
+void unmap_kernel_frames(uintptr_t va, uint32_t count);
 
 /** The kernel's directory, whose tables of the kernel's layout every
  * directory shares. */

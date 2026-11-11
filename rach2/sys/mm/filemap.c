@@ -509,6 +509,11 @@ const struct open_file *filemap_ofd(const struct vm_file *f)
     return f && f->release == filemap_release ? ((const struct filemap *)f)->entry.ofd : NULL;
 }
 
+const fd_entry_t *filemap_entry(const struct vm_file *f)
+{
+    return f && f->release == filemap_release ? &((const struct filemap *)f)->entry : NULL;
+}
+
 int filemap_in_memory(const struct vm_file *f)
 {
     return f && f->share == filemap_share;

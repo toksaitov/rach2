@@ -20,7 +20,7 @@
 #define SPEAKER_HIGH_HZ 32766u
 
 /* The tone a request began, under speaker_lock. */
-static struct spinlock speaker_lock = SPINLOCK_INIT;
+static struct spinlock speaker_lock = SPINLOCK_INIT_NAMED("speaker_lock");
 static volatile int tone_timed;            /* a tone sounds until tone_end */
 static uint32_t tone_end;                  /* the low half of kernel_ticks it ends at */
 static int sounding;                       /* a tone or a sound has not ended */

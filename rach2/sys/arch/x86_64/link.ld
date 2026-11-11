@@ -54,6 +54,11 @@ SECTIONS {
 
     _end = . - KVA_IMAGE;
 
+    /* _data to _image_end, virtual addresses, holds the kernel's static
+       data, which the lock-order checker keys a lock in by its address
+       (lib/lockdep.c). */
+    _image_end = .;
+
     /* The unwinding tables GCC writes for x86-64 by default: the kernel
        unwinds nothing. */
     /DISCARD/ : {

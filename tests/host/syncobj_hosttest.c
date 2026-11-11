@@ -212,7 +212,7 @@ int32_t drm_handle_insert(struct drm_handles *t, void *object, uint32_t *id)
     return 0;
 }
 /** Find a handle's object. */
-void *drm_handle_find(const struct drm_handles *t, uint32_t id)
+void *drm_handle_find(struct drm_handles *t, uint32_t id)
 {
     return id < t->cap && t->slot[id] ? t->slot[id]->object : NULL;
 }
@@ -229,7 +229,7 @@ void *drm_handle_remove(struct drm_handles *t, uint32_t id)
     return object;
 }
 /** The lowest id from `id` in use, or 0. */
-uint32_t drm_handle_next(const struct drm_handles *t, uint32_t id)
+uint32_t drm_handle_next(struct drm_handles *t, uint32_t id)
 {
     for (; id < t->cap; id++)
         if (id && t->slot[id])

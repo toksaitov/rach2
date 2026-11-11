@@ -15,11 +15,12 @@
 #define WQ_KILLABLE 3
 
 /*
- * Save the interrupt flag and disable interrupts; restore puts it back. With
- * the big lock held, which keeps every other processor's kernel code out,
- * this is all the mutual exclusion a sleeper's test and block need against
- * an IRQ-context waker. The queues themselves, which the sleeper edits and
- * a waker walks, are under the wait queues' spinlock as well (`wq_lock`).
+ * Save the interrupt flag and disable interrupts; restore puts it back,
+ * which keeps a waker on the sleeper's own processor out between its
+ * filing and its block. The queues, which the sleeper edits and a waker
+ * walks, and the wakes themselves are under the wait queues' spinlock
+ * (`wq_lock`), which keeps out the other processors' wakers, with the big
+ * lock or without it.
  * The pairs are this file's own: under WAIT_QUEUE_HOSTTEST, in the host
  * tests that include this file, there is no interrupt to mask and no other
  * processor, they are no-ops, and a wake marks the process ready itself;
@@ -43,7 +44,7 @@ static void wq_ready(process_t *p)
     p->state = PROC_READY;
 }
 #else
-static struct spinlock wq_spin = SPINLOCK_INIT;
+static struct spinlock wq_spin = SPINLOCK_INIT_NAMED("wq_spin");
 
 static uint32_t irq_save(void)
 {
@@ -128,16 +129,21 @@ static void wq_dequeue(wait_queue_t *wq, struct wq_waiter *w)
  * marked uninterruptible, and one of WQ_KILLABLE killable too. `name` is
  * the wait's name for /proc/PID/wchan, stored before each block.
  *
- * The condition and the signal are tested, and the process queued and
- * marked BLOCKED, with interrupts off, and interrupts come back on only for
- * `schedule`. A waker therefore either ran before the test, which then saw
- * the condition true, or runs after it and finds the process queued.
- * Interrupts go off again before the state is read after `schedule`: still
- * BLOCKED means nothing woke the process and nothing else was ready, so it
- * idles in `idle_wait_irq_off`, whose `sti; hlt; cli` from IF=0 loses no
- * wake. On the way out, with interrupts still off, the process leaves the
- * queue, loses its wake mark and is RUNNING, whether a wake had set it
- * READY or it never slept.
+ * The process files itself on the queue and is marked BLOCKED, under the
+ * queues' lock, whose release is a full barrier, before it tests the
+ * condition and the signal, as Linux's `prepare_to_wait` comes before the
+ * test (kernel/sched/wait.c:229). A waker on any processor therefore
+ * either changed the condition before the test, which then sees it true,
+ * or wakes after it and finds the process on the queue and BLOCKED, and
+ * makes it ready, in which case `schedule` keeps it running. Interrupts are
+ * off from the filing to `schedule`. Interrupts go off again before the
+ * state is read after `schedule`: still BLOCKED means nothing woke the
+ * process and nothing else was ready, so it idles in `idle_wait_irq_off`,
+ * whose `sti; hlt; cli` from IF=0 loses no wake. On the way out, with
+ * interrupts still off, the process leaves the queue under its lock, as
+ * `finish_wait` (wait.c:356), loses its wake mark and is RUNNING, whether a
+ * wake had set it READY or it never slept. The condition is called with
+ * the process BLOCKED, and must not sleep.
  *
  * A deadline the caller armed in `wakeup_tick` before the wait is armed again
  * before each block. `signal_post` clears it when it wakes the process, and a
@@ -158,6 +164,14 @@ static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int kind, const
     flags = irq_save();
     deadline = current_proc->wakeup_tick;
     for (;;) {
+        wq_lock();
+        wq_enqueue(wq, &current_proc->waiter);
+        current_proc->wakeup_tick = deadline;
+        current_proc->wchan = name;
+        current_proc->uninterruptible = kind == WQ_NOSIGNAL || kind == WQ_KILLABLE;
+        current_proc->killable = kind == WQ_KILLABLE;
+        current_proc->state = PROC_BLOCKED;
+        wq_unlock();
         if (cond(arg)) {
             rc = 0;
             break;
@@ -166,15 +180,6 @@ static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int kind, const
             rc = -EINTR;
             break;
         }
-
-        wq_lock();
-        wq_enqueue(wq, &current_proc->waiter);
-        wq_unlock();
-        current_proc->wakeup_tick = deadline;
-        current_proc->wchan = name;
-        current_proc->state = PROC_BLOCKED;
-        current_proc->uninterruptible = kind == WQ_NOSIGNAL || kind == WQ_KILLABLE;
-        current_proc->killable = kind == WQ_KILLABLE;
         irq_restore(flags);
 
         schedule();
@@ -189,11 +194,11 @@ static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int kind, const
 
     wq_lock();
     wq_dequeue(wq, &current_proc->waiter);
-    wq_unlock();
     current_proc->woken = 0;
     current_proc->uninterruptible = 0;
     current_proc->killable = 0;
     current_proc->state = PROC_RUNNING;
+    wq_unlock();
     irq_restore(flags);
     return rc;
 }
@@ -221,17 +226,18 @@ int wq_active(const wait_queue_t *wq)
     return wq != NULL && wq->head != NULL;
 }
 
-void wq_wake(wait_queue_t *wq, uint32_t kinds)
+/**
+ * Wake every process on `wq` and count the wake of each kind among `kinds`;
+ * the queues' lock is held. Each wake is made under the lock, as Linux's
+ * `__wake_up` walks its list under the head's lock (kernel/sched/wait.c:
+ * 105-108): a record leaves its queue only under the lock, so a poller's or
+ * a stack's record is not read after its owner has let it go.
+ */
+static void wq_wake_locked(wait_queue_t *wq, uint32_t kinds)
 {
-    uint32_t flags;
     struct wq_waiter *w, *next;
     int k;
 
-    if (!wq) {
-        return;
-    }
-    flags = irq_save();
-    wq_lock();
     w = wq->head;
     wq->head = NULL;
     for (k = 0; k < WQ_KINDS; k++) {
@@ -239,7 +245,6 @@ void wq_wake(wait_queue_t *wq, uint32_t kinds)
             wq->wakes[k]++;
         }
     }
-    wq_unlock();
     for (; w; w = next) {
         next = w->next;
         w->next = NULL;
@@ -248,6 +253,30 @@ void wq_wake(wait_queue_t *wq, uint32_t kinds)
             wq_ready(w->proc);
         }
     }
+}
+
+void wq_wake(wait_queue_t *wq, uint32_t kinds)
+{
+    uint32_t flags;
+
+    if (!wq) {
+        return;
+    }
+    flags = irq_save();
+    wq_lock();
+    wq_wake_locked(wq, kinds);
+    wq_unlock();
+    irq_restore(flags);
+}
+
+void wq_complete(wait_queue_t *wq, volatile int *done)
+{
+    uint32_t flags = irq_save();
+
+    wq_lock();
+    *done = 1;
+    wq_wake_locked(wq, WQ_ALL);
+    wq_unlock();
     irq_restore(flags);
 }
 
@@ -260,10 +289,12 @@ void wq_wake_proc(process_t *p)
 {
     uint32_t flags = irq_save();
 
+    wq_lock();
     if (p->state == PROC_BLOCKED) {
         p->woken = 1;
         wq_ready(p);
     }
+    wq_unlock();
     irq_restore(flags);
 }
 

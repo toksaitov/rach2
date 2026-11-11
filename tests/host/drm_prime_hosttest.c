@@ -1,7 +1,9 @@
 /* PRIME sharing, cache identity and lifetimes over the real GEM and dma-buf
- * code, and vgem's fences on a buffer another device imports; frames,
- * descriptor tables, device regions and the commit worker are host models.
+ * code, the cache's set by handle id and its hash's growth, and vgem's
+ * fences on a buffer another device imports; frames, descriptor tables,
+ * device regions and the commit worker are host models.
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/atomic_host.c
  */
 #include "drm/drm_gem.c"
 #include "drm/drm_prime.c"
@@ -745,6 +747,84 @@ static void concurrent_import(void)
     importer.driver = &driver;
 }
 
+/** Whether the devices' and the files' locks are all free, as between
+ * calls; the host's spinlock traps on one taken twice. */
+static int locks_free(void)
+{
+    return !exporter.object_lock.locked && !importer.object_lock.locked &&
+           !exporter.event_lock.locked && !a.objects.lock.locked && !b.objects.lock.locked &&
+           !c.objects.lock.locked;
+}
+
+/** The PRIME cache set by handle id: refused for no handle and for a
+ * handle to another object, which an export that raced a close and a new
+ * handle would meet; refused while a cache is set, which an export that
+ * raced another export of the same handle meets, the first cache kept. */
+static void cache_by_id(void)
+{
+    uint32_t h1, h2;
+    struct drm_gem_object *o1 = new_object(&h1), *o2 = new_object(&h2);
+    struct dma_buf *mine, *other;
+    int fd;
+
+    fd = export_fd(&a, h1, DRM_RDWR);
+    mine = dma_buf_get(fd);
+    CHECK(drm_handle_set_prime(&a.objects, 9, o1, mine) == -ENOENT &&
+              drm_handle_set_prime(&a.objects, h2, o1, mine) == -ENOENT && locks_free(),
+          "a cache is set only on a handle to its object");
+    other = dma_buf_export(o2->size, &prime_ops, o2, o2->resv);
+    drm_gem_object_get(o2);
+    CHECK(drm_handle_set_prime(&a.objects, h1, o1, other) == -EEXIST &&
+              drm_handle_prime_find(&a.objects, mine) == h1 &&
+              !drm_handle_prime_find(&a.objects, other) && locks_free(),
+          "a second cache is refused and the first kept");
+    CHECK(drm_handle_prime_get(&a.objects, h1) == mine && mine->refs == 4 &&
+              !drm_handle_prime_get(&a.objects, h2) && !drm_handle_prime_get(&a.objects, 9),
+          "a cache read takes a reference");
+    dma_buf_put(mine);
+    o2->dma_buf = mine;
+    dma_buf_put(other);
+    CHECK(o2->dma_buf == mine, "a released export clears only a pointer that names it");
+    o2->dma_buf = NULL;
+    fd_free(&table, fd);
+    dma_buf_put(mine);
+    drm_gem_release(&a);
+    CHECK(!exporter.objects && locks_free(), "every reference released");
+}
+
+/** Forty exports cached on one file: the PRIME hash grows from 16 buckets
+ * to 32 with its buckets allocated outside the table's lock, and every
+ * cache is found by its dma-buf after the growth. */
+static void cache_growth(void)
+{
+    uint32_t h[40];
+    int fd[40], i, found = 1;
+
+    for (i = 0; i < 40; i++) {
+        new_object(&h[i]);
+        fd[i] = export_fd(&a, h[i], 0);
+    }
+    for (i = 0; i < 40; i++) {
+        found &= drm_handle_prime_find(&a.objects, slots[fd[i]].priv) == h[i];
+    }
+    CHECK(found && a.objects.prime_buckets == 32 && a.objects.prime_count == 40 && locks_free(),
+          "every cache found after the hash grows");
+    for (i = 0; i < 40; i += 2) {
+        drm_gem_handle_delete(&a, h[i]);
+    }
+    for (found = 1, i = 1; i < 40; i += 2) {
+        found &= drm_handle_prime_find(&a.objects, slots[fd[i]].priv) == h[i];
+    }
+    CHECK(found && a.objects.prime_count == 20 &&
+              !drm_handle_prime_find(&a.objects, slots[fd[0]].priv),
+          "a closed handle leaves the hash, and the rest stay");
+    for (i = 0; i < 40; i++) {
+        fd_free(&table, fd[i]);
+    }
+    drm_gem_release(&a);
+    CHECK(!exporter.objects && locks_free(), "the exports go with their handles");
+}
+
 /** Attach a vgem fence to `handle`, returning the ioctl's result. */
 static int32_t vgem_attach(struct drm_file *file, uint32_t handle, uint32_t flags, uint32_t *id)
 {
@@ -889,6 +969,8 @@ int main(void)
     udmabuf_import();
     failures_and_flags();
     concurrent_import();
+    cache_by_id();
+    cache_growth();
     unmappable();
     vgem_fences();
     CHECK(exporter.refs == 1 && importer.refs == 1, "device references return to baseline");

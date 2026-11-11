@@ -1372,7 +1372,7 @@ static int rtc_wake_ready;
 static int rtc_irq_ready; /* the alarm interrupt is attached (`rtc_irq_setup`) */
 /* Protects `rtc_alarms` and `rtc_wake_on` against the alarm interrupt, which
  * may come on another processor. */
-static struct spinlock rtc_alarm_lock = SPINLOCK_INIT;
+static struct spinlock rtc_alarm_lock = SPINLOCK_INIT_NAMED("rtc_alarm_lock");
 
 /* How `rtc_alarm_came` judges an alarm: due by the clock, whatever its state;
  * due by the clock and still enabled; or raised by the clock's interrupt,

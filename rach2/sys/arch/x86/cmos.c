@@ -250,7 +250,7 @@ extern volatile uint32_t kernel_second_ticks;
  * attached, the second after the other processors have stopped, where a lock
  * one of them held would never come free.
  */
-static struct spinlock rtc_cmos_lock = SPINLOCK_INIT;
+static struct spinlock rtc_cmos_lock = SPINLOCK_INIT_NAMED("rtc_cmos_lock");
 
 /** Read the CMOS register `reg`. Bit 7 of the address port is left clear,
  *  which leaves the NMI enabled. */
