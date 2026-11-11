@@ -1454,11 +1454,15 @@ struct maps_name {
 
 /** The names `procfs_maps_names` built for the mapped files of a process,
  * in the order of their regions, so that each region's file is found at or
- * just before `next`, the entry after the last one found. */
+ * just before `next`, the entry after the last one found, and for the
+ * program and the dynamic linker of `mm`. */
 struct maps_names {
     struct maps_name *v;
     uint32_t n;
     uint32_t next;
+    struct mm *mm; /* held until `maps_names_free`; NULL for none */
+    char *exe;     /* the program's present path, or NULL with none */
+    char *interp;  /* the dynamic linker's present path, or NULL */
 };
 
 /** The name in `mn` of the mapped file `f`, or NULL when it has none. */
@@ -1485,10 +1489,13 @@ static const char *maps_name_of(struct maps_names *mn, const struct vm_file *f)
  * was given, the name `mn` holds for the file it maps, which for the vDSO's
  * two regions is [vvar] or [vdso] (`vdso_map`), [heap], [stack], the
  * program for the segments of its image, which lie below the heap, the
- * dynamic linker for the segments of its own, above it, or none. */
+ * dynamic linker for the segments of its own, above it, or none. The program
+ * and the linker are named as `mn` named their files at this reading, or by
+ * the paths exec recorded when it has no name for them. */
 static const char *maps_path(const struct mm *mm, const vma_t *r, struct maps_names *mn)
 {
     const char *name;
+    int now = mn && mn->mm == mm;
 
     if (r->file && r->file->path) {
         return r->file->path;
@@ -1503,7 +1510,10 @@ static const char *maps_path(const struct mm *mm, const vma_t *r, struct maps_na
         return "[stack]";
     }
     if (r->type == VM_CODE || r->type == VM_DATA) {
-        return r->end <= mm->vm.heap_start ? mm->exe : mm->interp;
+        if (r->end <= mm->vm.heap_start) {
+            return now && mn->exe ? mn->exe : mm->exe;
+        }
+        return now && mn->interp ? mn->interp : mm->interp;
     }
     return NULL;
 }
@@ -1512,12 +1522,52 @@ static void procfs_file_target(struct procfs_text *t, const fd_entry_t *e);
 
 /** Whether `procfs_maps_names` names the file region `r` maps: a mapped
  * file with an open description and no path of its own. The segments of the
- * program and of the dynamic linker are left to `maps_path`, which gives
- * them the paths exec recorded, as their file has no path of its own. */
+ * program and of the dynamic linker are named from the address space's
+ * descriptions of their files (`maps_exe_name`). */
 static int maps_named(const vma_t *r)
 {
     return r->file && !r->file->path && r->type != VM_CODE && r->type != VM_DATA &&
            filemap_entry(r->file);
+}
+
+/** The present path of the program's or the dynamic linker's description
+ * `file`, from the reader's root, with " (deleted)" once its name is gone,
+ * as /proc/PID/exe reads (`exe_text`); `recorded`, the path exec found it
+ * at, stands for a name the file system cannot rebuild. A new string from
+ * the heap, or NULL for no file or no room. It may sleep. */
+static char *maps_exe_name(struct open_file *file, const char *recorded)
+{
+    static const char mark[] = " (deleted)";
+    char *now, *name;
+    const char *base;
+    size_t len;
+    int deleted;
+
+    if (!file) {
+        return NULL;
+    }
+    now = exe_file_path(file, &deleted);
+    base = now ? now : recorded;
+    if (!base) {
+        return NULL;
+    }
+    if (!deleted) {
+        if (now) {
+            return now;
+        }
+        len = k_strlen(base);
+        if ((name = kmalloc(len + 1)) != NULL) {
+            k_memcpy(name, base, len + 1);
+        }
+        return name;
+    }
+    len = k_strlen(base);
+    if ((name = kmalloc(len + sizeof(mark))) != NULL) {
+        k_memcpy(name, base, len);
+        k_memcpy(name + len, mark, sizeof(mark));
+    }
+    kfree(now);
+    return name;
 }
 
 /**
@@ -1531,8 +1581,11 @@ static int maps_named(const vma_t *r)
  * with a reference, and named after; a file a region gained since, or one the
  * heap had no room to name, is shown without a path. `mn` is empty for a
  * caller `procfs_may_read_mem` refuses and when the heap has no room. The
- * caller looks the process up again afterwards and frees `mn` with
- * `maps_names_free`.
+ * program and the dynamic linker are named from the files of the address
+ * space, held in `mn`, as Linux names their regions by their vm_file at each
+ * reading, with " (deleted)" from d_path once the file is unlinked
+ * (fs/proc/task_mmu.c:258-268, fs/d_path.c:286-287). The caller looks the
+ * process up again afterwards and frees `mn` with `maps_names_free`.
  */
 static void procfs_maps_names(int pid, struct maps_names *mn)
 {
@@ -1546,6 +1599,10 @@ static void procfs_maps_names(int pid, struct maps_names *mn)
         return;
     }
     mm = p->mm;
+    mm_hold(mm);
+    mn->mm = mm;
+    mn->exe = maps_exe_name(mm->exe_file, mm->exe);
+    mn->interp = maps_exe_name(mm->interp_file, mm->interp);
     mm_read_begin(mm);
     for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
         n += maps_named(r);
@@ -1584,7 +1641,8 @@ static void procfs_maps_names(int pid, struct maps_names *mn)
     }
 }
 
-/** Free the names of `mn` and drop its references to the files. */
+/** Free the names of `mn` and drop its references to the files and the
+ * address space. */
 static void maps_names_free(struct maps_names *mn)
 {
     uint32_t i;
@@ -1594,6 +1652,9 @@ static void maps_names_free(struct maps_names *mn)
         vm_file_put(mn->v[i].file);
     }
     kfree(mn->v);
+    kfree(mn->exe);
+    kfree(mn->interp);
+    mm_unhold(mn->mm);
     k_memset(mn, 0, sizeof(*mn));
 }
 
