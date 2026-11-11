@@ -1952,7 +1952,9 @@ static void devices_remove(struct virtio_gpu_device *vg)
  * the host and drops the pages of host-visible blobs. Frames of guest
  * memory stay the objects', for the mappings that still show them
  * (`obj_vm_page`); frames a transport gave from its own heap go back to it,
- * and such a mapping takes new pages at its next touch. Process context.
+ * and such a mapping takes new pages at its next touch, except an exported
+ * object's, which it keeps until it is freed, since an importer may hold
+ * them. Process context.
  */
 void vgpu_kill(struct virtio_gpu_device *vg)
 {

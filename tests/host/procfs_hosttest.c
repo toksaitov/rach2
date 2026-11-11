@@ -14,6 +14,7 @@
  * host-deps: rach2/sys/evdev_sysfs.c
  * host-deps: rach2/sys/fs/name.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/lib/kstd.c
  * host-deps: rach2/sys/tick.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
  *
@@ -191,24 +192,26 @@ int sysfs_attr_uevent(int node, int attr)
     return 0;
 }
 
-/** No row writes a backlight's attribute. */
+/* The length of the text the last backlight or radio switch store was
+ * given, which the rows read. */
+static int stored_len;
+
+/** A backlight's store: the length kept, and the text read as the real
+ * one reads it, by `k_strtoul`. */
 int backlight_store(int i, int attr, const char *text, int len)
 {
+    unsigned long n;
+
     (void)i;
     (void)attr;
-    (void)text;
-    (void)len;
-    return -ENODEV;
+    stored_len = len;
+    return k_strtoul(text, len < 0 ? 0 : (size_t)len, &n);
 }
 
-/** No row writes an rfkill switch's attribute. */
+/** A radio switch's store, kept and read as a backlight's. */
 int rfkill_store(int index, int attr, const char *text, int len)
 {
-    (void)index;
-    (void)attr;
-    (void)text;
-    (void)len;
-    return -ENODEV;
+    return backlight_store(index, attr, text, len);
 }
 
 /** No row writes /sys/power/state. */
@@ -2355,6 +2358,43 @@ static void thp_long_writes(void)
     k_memset(text, 0, sizeof(text));
 }
 
+/** Write the `count` bytes at `text` to attribute `attr` of the /sys
+ * directory `node` of device 0 through its descriptor's write; the call's
+ * answer. */
+static int32_t sysattr_write(int node, int attr, const char *text, uint32_t count)
+{
+    struct procfs_file file;
+    fd_entry_t entry;
+
+    k_memset(&file, 0, sizeof(file));
+    k_memset(&entry, 0, sizeof(entry));
+    file.origin_task = node << 8 | attr;
+    entry.priv = &file;
+    return procfs_sysattr_write(&entry, (const char __user *)text, count);
+}
+
+/**
+ * A backlight's and a radio switch's numbers reach their stores through
+ * the writer whole, with the count written, as Linux gives the buffer to
+ * kstrtoul: one newline is taken, and a space or a second newline after
+ * the number is EINVAL.
+ */
+static void sysattr_number_writes(void)
+{
+    check(sysattr_write(SYSFS_BACKLIGHT, BACKLIGHT_BRIGHTNESS, "1\n", 2) == 2 && stored_len == 2,
+          "a backlight's brightness takes a number and its newline, given whole");
+    check(sysattr_write(SYSFS_BACKLIGHT, BACKLIGHT_BRIGHTNESS, "0x1 ", 4) == -EINVAL &&
+              stored_len == 4,
+          "and refuses one with a space after it, as Linux's kstrtoul");
+    check(sysattr_write(SYSFS_BACKLIGHT, BACKLIGHT_POWER, "+1\n\n", 4) == -EINVAL &&
+              stored_len == 4,
+          "bl_power refuses a number with two newlines");
+    check(sysattr_write(SYSFS_RFKILL, RFKILL_ATTR_SOFT, "0\n", 2) == 2 && stored_len == 2,
+          "a radio switch's soft takes a number and its newline");
+    check(sysattr_write(SYSFS_RFKILL, RFKILL_ATTR_STATE, "1 \n", 3) == -EINVAL && stored_len == 3,
+          "and state refuses one with a space before its newline");
+}
+
 /** Read the THP files at Linux 6.12's defaults with the policy never, and
  * write each policy as Linux's stores parse it. */
 static void thp_rows(void)
@@ -2432,6 +2472,7 @@ static void thp_rows(void)
               "THP file reads back the stored policy");
     }
     thp_long_writes();
+    sysattr_number_writes();
     thp_enabled = 2;
     thp_defrag = 3;
     thp_shmem = 1;

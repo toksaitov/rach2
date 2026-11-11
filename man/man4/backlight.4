@@ -25,7 +25,8 @@ root sets it with a write of a number, read as Linux's
 .Fn kstrtoul
 reads it with base 0: decimal, octal after a leading 0, or hexadecimal
 after
-.Ql 0x .
+.Ql 0x ,
+with one newline at most after it.
 0 is as dark as the hardware goes, which may be dark enough to read
 nothing on the screen.
 .It Pa actual_brightness
