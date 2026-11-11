@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 12, 2026
 .Dt DEBUGFS 5
 .Os
 .Sh NAME
@@ -118,29 +118,36 @@ ioctl_lost 0
 .Pp
 .Ar calls
 counts a system call at its return and an interrupt or exception at its
-entry from user mode or an idle wait;
+entry, whether or not it takes the lock, each processor on counts of its
+own, which a read sums;
 .Ar wall_us
-is a system call's time from before its entry took the lock to its
+is a system call's time from before its entry chose the lock to its
 return, its waits for the lock and its sleeps included;
 .Ar holds
 and
 .Ar held_us
 are the holds of the lock that the entry began, from the take to the
-give-back, which a call keeps while it sleeps and the processor runs
-others, as the lines
+give-back, as the lines
 .Ql bkl_hold_entry
 of
 .Pa /proc/stat
-count them;
+count them: those of an entry that took the lock, and those a call or an
+interrupt that runs without it took, charged to the entry the thread was
+in;
 .Ar wait_us
 is the time those holds waited for the lock first.
+The lines
+.Ql take 0
+and
+.Ql take 1
+count the holds a thread takes again after an idle wait and after its
+switch, which have no calls.
 The line
 .Ql vector 0
 counts, beside the divide error, the holds of kernel threads and of the
-lock taken again after the kernel gave it up, for an idle halt, a run of a
+lock taken again by a thread in no entry, after a run of a
 .Xr kvm 4
-guest, another processor's claim or a processor's start, which have no
-calls.
+guest, another processor's claim or a processor's start.
 A system call numbered 512 or more counts as 512, a call of the i386 ABI
 under its own number.
 The times are microseconds, and 0 without an invariant time-stamp counter.
@@ -158,7 +165,10 @@ A profile of the kernel under the big lock, a Rach2 file: each processor's
 tick that finds the processor holding the lock, at 1000 Hz, takes a
 sample of the instruction it stopped and the three return addresses above
 it, from the frame chain, 0 past its end, with the entry the running
-process is in: its innermost system call, interrupt or exception, as
+process is in; in the whole-kernel mode, which a write of
+.Ql kernel
+chooses, every tick that finds the processor in kernel mode outside an
+idle halt takes one, with or without the lock: its innermost system call, interrupt or exception, as
 .Pa bkl/calls
 names it,
 .Ql ioctl
@@ -182,7 +192,10 @@ ioctl 0xc0406469 0xffffffff8024b1d0 0xffffffff80250c44 0xffffffff8024e9a8 0xffff
 .Ed
 .Pp
 The kernel's symbol table names the functions.
-A write of anything zeroes the profile.
+A write zeroes the profile and chooses its mode: the whole kernel for a
+write that begins with
+.Ql kernel ,
+and the big lock's holds for any other.
 .It Pa test_lockup
 Mode 0600.
 Reads

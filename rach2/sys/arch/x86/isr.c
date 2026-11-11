@@ -780,7 +780,7 @@ static void panic_if_reading(const isr_params_t *params)
  * Charge the hold under way to the ioctl(2) request of the system call in
  * `params`, of either ABI, for bkl/calls. Returns the request's slot plus
  * one, which `smp_call_end` takes, or 0 for another call or a request no
- * slot took. The caller holds the big lock; `ia32_fast_syscall` (vdso32.c)
+ * slot took. With or without the big lock; `ia32_fast_syscall` (vdso32.c)
  * calls it as `_isr_router` does.
  */
 int isr_call_ioctl(const isr_params_t *params)
@@ -831,7 +831,8 @@ void _isr_router(isr_params_t *params)
         nr = (uint32_t)SC_NR(params);
     }
     panic_if_reading(params);
-    if (isr_entry_lock(params) && params->vector == SYSCALL_ENTRY) {
+    (void)isr_entry_lock(params);
+    if (params->vector == SYSCALL_ENTRY) {
         ioctl = isr_call_ioctl(params);
     }
     isr_router_locked(params);
@@ -847,7 +848,7 @@ void isr_router_locked(isr_params_t *params)
     int32_t nr = params->vector == SYSCALL_ENTRY ? (int32_t)SC_NR(params) : -1;
     struct bkl_entry_saved saved;
 
-    bkl_note_entry((uint32_t)params->vector, nr);
+    bkl_note_entry((uint32_t)params->vector, nr, bkl_frame_top());
     bkl_entry_push(&saved, (uint32_t)params->vector, nr,
                    nr >= 0 && (uint32_t)nr == CALL_IOCTL_NR(params), (uint32_t)SC_ARG(params, 1));
 #ifdef DEBUG
@@ -1048,10 +1049,17 @@ void _irq_router(isr_params_t *params)
     struct percpu *cpu = this_cpu();
     uint32_t wake_irq = params->vector == IRQ_VECTOR(0) ? waketime_clock() : 0;
     int locked = 1;
+#if defined(__x86_64__)
+    uintptr_t fp = (uintptr_t)params->rbp;
+#else
+    uintptr_t fp = (uintptr_t)params->ebp;
+#endif
 
     user_entry(params);
     if (FRAME_PC(params) == (unsigned long)arch_idle_resume) {
         FRAME_IRQ_OFF(params);
+    } else if (params->vector == IRQ_VECTOR(0) && !FRAME_USER(params)) {
+        bkl_profile_sample((uintptr_t)FRAME_PC(params), fp);
     }
     if (params->vector == IRQ_VECTOR(0)) {
         watchdog_tick(params);
@@ -1082,19 +1090,9 @@ void _irq_router(isr_params_t *params)
         cpu->wake_irq_start = wake_irq;
         cpu->wake_irq_locked = waketime_clock();
     }
+    bkl_note_entry((uint32_t)params->vector, -1, locked);
     if (locked) {
-        bkl_note_entry((uint32_t)params->vector, -1);
-#if defined(__x86_64__)
-        bkl_hold_sample((uintptr_t)FRAME_PC(params), (uintptr_t)params->rbp);
-        if (params->vector == IRQ_VECTOR(0)) {
-            bkl_profile_sample((uintptr_t)FRAME_PC(params), (uintptr_t)params->rbp);
-        }
-#else
-        bkl_hold_sample((uintptr_t)FRAME_PC(params), (uintptr_t)params->ebp);
-        if (params->vector == IRQ_VECTOR(0)) {
-            bkl_profile_sample((uintptr_t)FRAME_PC(params), (uintptr_t)params->ebp);
-        }
-#endif
+        bkl_hold_sample((uintptr_t)FRAME_PC(params), fp);
     }
     count_up(&irq_count);
     if (params->vector >= 32 && params->vector <= ISR_MSI_LAST) {
