@@ -1,0 +1,5 @@
+PASS emulator (151 tests, 2 skipped)
+PASS s3 
+kvm-corpus: emulator: pass: as expected
+kvm-corpus: s3: pass: as expected
+kvm-corpus: result: pass: 2 as expected, 0 excluded
