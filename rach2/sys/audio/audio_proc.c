@@ -52,6 +52,53 @@ static void put_u32(struct audio_text *t, uint32_t v)
         put_ch(t, d[--n]);
 }
 
+/** Append `v` in decimal without 64-bit division, which the i686 kernel
+ * cannot call through libgcc. */
+static void put_u64(struct audio_text *t, uint64_t v)
+{
+    uint64_t powers[20];
+    int n, digit, shown = 0;
+
+    powers[0] = 1u;
+    for (n = 1; n < 20; n++)
+        powers[n] = powers[n - 1] * 10u;
+    for (n = 19; n >= 0; n--) {
+        for (digit = 0; v >= powers[n]; digit++)
+            v -= powers[n];
+        if (digit || shown || n == 0) {
+            put_ch(t, (char)('0' + digit));
+            shown = 1;
+        }
+    }
+}
+
+/** Append the service's measured time and latest missed-revolution event.
+ * These counters span playback sessions, unlike the queue's counters. */
+static void put_service(struct audio_text *t, const hda_service_report_t *s)
+{
+    put_str(t, "service calls ");
+    put_u32(t, s->calls);
+    put_str(t, " usec ");
+    put_u64(t, s->usec);
+    put_str(t, " max-usec ");
+    put_u64(t, s->max_usec);
+    put_str(t, " missed ");
+    put_u32(t, s->missed);
+    put_str(t, " clock-us ");
+    put_u64(t, s->clock_us);
+    put_str(t, " gap-us ");
+    put_u32(t, s->gap_us);
+    put_str(t, " asked-us ");
+    put_u32(t, s->asked_us);
+    put_str(t, " asked-valid ");
+    put_u32(t, s->asked_valid);
+    put_str(t, " moved-us ");
+    put_u32(t, s->moved_us);
+    put_str(t, " revolution-us ");
+    put_u32(t, s->revolution_us);
+    put_ch(t, '\n');
+}
+
 /** Append the low `width` hexadecimal digits of `v`, in capitals, to `t`. */
 static void put_hex(struct audio_text *t, uint32_t v, int width)
 {
@@ -294,6 +341,7 @@ int audio_proc_text(char *buf, int cap)
         put_ch(t, '\n');
     }
     put_input(t, &r->input);
+    put_service(t, &r->service);
     for (i = 0; i < 3; i++) {
         const hda_connection_report_t *c = &r->connections[i];
         if (!c->nid)

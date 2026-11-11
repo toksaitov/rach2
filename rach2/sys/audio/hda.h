@@ -262,6 +262,20 @@ typedef struct {
     uint32_t lpib;      /* the position in the DMA buffer, in bytes */
 } hda_queue_report_t;
 
+/* Service diagnostics since driver initialization, across stream starts. */
+typedef struct {
+    uint32_t calls;         /* khda service calls, including a wake with no refill */
+    uint64_t usec;          /* cycles around khda's services, converted to us */
+    uint64_t max_usec;      /* longest such call, including nested interrupts */
+    uint32_t missed;        /* playback revolutions missed across all sessions */
+    uint64_t clock_us;      /* TSC of the last miss in us, not uptime */
+    uint32_t gap_us;        /* WALCLK span between that service and its predecessor */
+    uint32_t asked_us;      /* WALCLK span from its first pending PLAY request */
+    uint32_t asked_valid;   /* the request came from this playback session */
+    uint32_t moved_us;      /* position's modular movement, converted to us */
+    uint32_t revolution_us; /* duration of the DMA buffer at that miss */
+} hda_service_report_t;
+
 /*
  * The input path enumeration chose and the input stream's last setup and
  * counters. The node IDs are 0 where there is none. The ADC reads the pin
@@ -344,6 +358,7 @@ typedef struct {
     int widget_count;
     hda_widget_report_t widgets[HDA_MAX_WIDGETS];
     hda_queue_report_t queue;
+    hda_service_report_t service;
     hda_input_report_t input;
     hda_jack_report_t jacks[HDA_JACKS];
     uint8_t beep;         /* the beep widget, or 0 */

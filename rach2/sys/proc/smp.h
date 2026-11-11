@@ -244,6 +244,15 @@ int32_t smp_calls_show(void *data, char *buf, uint32_t cap);
 /** Zero the call counts, keeping the requests in their slots; `len`. */
 int32_t smp_calls_store(void *data, const char __user *buf, uint32_t len);
 
+/** Write debugfs's bkl/long, the latest interrupt sample of each of the
+ * last 32 holds sampled at 16 ms or older. `buf` and `cap` are as for
+ * smp_calls_show; a NULL buffer snapshots the ring for the output call.
+ * The caller holds the big lock. */
+int32_t smp_long_show(void *data, char *buf, uint32_t cap);
+
+/** Zero the long-hold ring; `len`. The caller holds the big lock. */
+int32_t smp_long_store(void *data, const char __user *buf, uint32_t len);
+
 /** Write the profile as debugfs's `bkl/profile` shows it: the samples, those
  * a full table lost, and for each entry, instruction and three callers
  * sampled, its count. No tick samples while the text is written, so that
