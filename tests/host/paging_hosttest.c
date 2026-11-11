@@ -176,6 +176,20 @@ void k_panic(const char *str)
     exit(1);
 }
 
+/** Nothing: the fault's note is for the panic's report, which no row reads. */
+void k_panic_note_fault(const char *name, uintptr_t ip, long error)
+{
+    (void)name;
+    (void)ip;
+    (void)error;
+}
+
+/** Nothing, as `k_panic_note_fault`. */
+void k_panic_note_address(uintptr_t address)
+{
+    (void)address;
+}
+
 /** Nothing: the host has no task state segment. */
 void tss_set_double_fault_dir(uint32_t dir)
 {
