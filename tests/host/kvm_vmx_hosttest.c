@@ -398,9 +398,11 @@ unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, uns
     return cur;
 }
 
-/* The CPUID of the Lenovo's Haswell, as tests/host/kvm_hosttest.c gives
- * it; `cpuid_vmx` clears VMX for the probe's refusal, and `cpuid_sig` is
- * leaf 1's signature, which the probe's erratum rows change. */
+/* The CPUID of a Haswell, as tests/host/kvm_hosttest.c gives it, with leaf
+ * 1's signature a desktop Haswell's, 0x306C3, model 0x3C; the Lenovo's
+ * i3-4030U, 0x40651, model 0x45, replaces it only in its own row.
+ * `cpuid_vmx` clears VMX for the probe's refusal, and `cpuid_sig` is leaf
+ * 1's signature, which the probe's erratum rows change. */
 static int cpuid_vmx = 1;
 static uint32_t cpuid_sig = 0x000306C3u;
 
@@ -1854,7 +1856,8 @@ static void probe_rows(void)
      * whose exits may clear its fixed-counter bits, though they offer them. */
     model_lenovo();
     CHECK(vmx_probe() && caps.perf_global,
-          "the Lenovo's model offers the controls that load IA32_PERF_GLOBAL_CTRL, which are used");
+          "the model's desktop Haswell, 0x306C3, offers the controls that load "
+          "IA32_PERF_GLOBAL_CTRL, which are used");
     cpuid_sig = 0x000106A5u;
     CHECK(vmx_probe() && !caps.perf_global, "Nehalem EP, 0x106A5, does not use them");
     cpuid_sig = 0x000206C2u;
