@@ -132,11 +132,12 @@ static int bkl_booted;
 #define BKL_CLAIM_AFTER 4096u
 #define BKL_PASS_AFTER  (1u << 16)
 
-/* One sender of requests at a time: a TLB request, a barrier or a page
- * directory to give up. Each processor has one slot of each kind, which a
- * sender fills and waits for, so a second sender would overwrite the first's
- * request. A processor that waits for the lock answers its own requests
- * (`spin_lock`), so two senders do not wait on each other. */
+/* One sender of requests at a time: a TLB request, a barrier, a page
+ * directory to give up or a function to run. Each processor has one slot of
+ * each kind, which a sender fills and waits for, so a second sender would
+ * overwrite the first's request. A processor that waits for the lock
+ * answers its own requests (`spin_lock`), so two senders do not wait on each
+ * other. */
 static struct spinlock ipi_lock = SPINLOCK_INIT_NAMED("ipi_lock");
 
 /* The processors online, the boot processor counted (`smp_cpu_count`). */
@@ -1009,6 +1010,8 @@ static void smp_stop_here(struct percpu *cpu)
  * was asked to drop, since the sender frees the page once it sees the word
  * clear. A barrier request is answered by the locked exchange that clears
  * it, a full barrier, after a serializing instruction when it asks for one.
+ * A function to run is answered by clearing it after a full barrier, so the
+ * sender sees all the function wrote once it sees the slot clear.
  * A turn of a wait with interrupts off is also the watchdog's
  * (`watchdog_wait`).
  */
@@ -1045,6 +1048,11 @@ void smp_service(void)
             arch_space_load(get_page_dir_phys(_kernel_dir));
         }
         cpu->space_drop = NULL;
+    }
+    if (cpu->call_fn) {
+        cpu->call_fn(cpu->call_arg);
+        sched_mb();
+        cpu->call_fn = NULL;
     }
 }
 
@@ -1211,6 +1219,32 @@ void smp_space_release(const struct page_dir *dir)
     }
     for (c = 0; c < NR_CPUS; c++) {
         while (cpu_table[c].space_drop && cpu_table[c].online) {
+            smp_service();
+            arch_relax();
+        }
+    }
+    spin_unlock_irqrestore(&ipi_lock, flags);
+}
+
+void smp_call(int cpu, void (*fn)(void *), void *arg)
+{
+    uint32_t flags;
+
+    if (cpu == (int)arch_cpu_id()) {
+        flags = kirq_save();
+        fn(arg);
+        kirq_restore(flags);
+        return;
+    }
+    if (cpu < 0 || cpu >= NR_CPUS) {
+        return;
+    }
+    flags = spin_lock_irqsave(&ipi_lock);
+    if (cpu_table[cpu].online) {
+        cpu_table[cpu].call_arg = arg;
+        cpu_table[cpu].call_fn = fn;
+        platform_cpu_ipi(cpu);
+        while (cpu_table[cpu].call_fn && cpu_table[cpu].online) {
             smp_service();
             arch_relax();
         }
