@@ -29,11 +29,13 @@
  * is EAGAIN. A setgid directory gives a file
  * made in it its group, and a directory its group and the bit. A process
  * of another user may not open the maps or the descriptors
- * of a root process under /proc, and reads its own. Its /proc directory is
- * root's while a change of ids leaves it not dumpable, and its own once
- * PR_SET_DUMPABLE makes it so, as on Linux, and so is a descriptor open on its
- * maps. mlock, mlock2, munlock, mlockall and munlockall accept a mapped
- * range and count in VmLck, a mapping made under MCL_FUTURE is locked, an
+ * of a root process under /proc, and reads its own. Its /proc directory,
+ * mode 0555, is its own whether or not it is dumpable; a stat of its status
+ * is root's while a change of ids leaves it not dumpable and its own once
+ * PR_SET_DUMPABLE makes it so; and a descriptor open on its maps before that
+ * stays root's, the owner the open's lookup gave it, as on Linux. mlock,
+ * mlock2, munlock, mlockall and munlockall accept a mapped range and count
+ * in VmLck, a mapping made under MCL_FUTURE is locked, an
  * unprivileged mlock past RLIMIT_MEMLOCK fails with ENOMEM and with a limit
  * of 0 with EPERM, and mlock fails on a gap with ENOMEM; mincore reports a
  * touched page resident.
