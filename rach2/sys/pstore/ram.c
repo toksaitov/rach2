@@ -132,9 +132,14 @@ static int read_options(void)
         klog(KLOG_ERR, "ramoops", "refused: no room for the console, ftrace and pmsg zones");
         return -1;
     }
-    if (ecc > PRZ_ECC_MAX || mem_type > 2) {
-        klog(KLOG_ERR, "ramoops", "refused: ecc=%lu or mem_type=%lu is out of range",
-             (unsigned long)ecc, (unsigned long)mem_type);
+    if (ecc > PRZ_ECC_MAX) {
+        klog(KLOG_ERR, "ramoops",
+             "refused: ecc=%lu: a 128-byte block takes at most %u parity bytes", (unsigned long)ecc,
+             PRZ_ECC_MAX);
+        return -1;
+    }
+    if (mem_type > 2) {
+        klog(KLOG_ERR, "ramoops", "refused: mem_type=%lu is out of range", (unsigned long)mem_type);
         return -1;
     }
     return 0;

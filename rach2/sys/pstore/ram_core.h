@@ -18,12 +18,15 @@
  * struct persistent_ram_buffer (ram_core.c:33). */
 #define PRZ_HEADER 12u
 
-/* The bytes of data one parity block covers, ram_core.c:209. */
+/* The bytes of data one parity block covers, ram_core.c:199. */
 #define PRZ_ECC_BLOCK 128u
 
-/* The most parity bytes a block may have: a code of 255 symbols, less the
- * one data byte a block must keep. */
-#define PRZ_ECC_MAX 254u
+/* The most parity bytes a block may have: a code of 255 symbols, less a
+ * whole block of data. With more, a block's word is longer than the code,
+ * two of its positions share a root and the decoder cannot tell them apart;
+ * Linux's encode_rs8 refuses such a length with -ERANGE and decode_rs8
+ * stops at a BUG_ON (lib/reed_solomon/encode_rs.c:24, decode_rs.c:43). */
+#define PRZ_ECC_MAX (255u - PRZ_ECC_BLOCK)
 
 /*
  * A zone. `mem` is its mapping, `size` bytes: the header, then

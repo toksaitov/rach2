@@ -62,7 +62,9 @@ How the region is mapped: 0, the default, write-combining, with the
 write buffers drained after each write; 1 uncached; 2 cached.
 .It Cm ramoops.ecc
 The Reed-Solomon parity bytes of each 128-byte block, and of each zone's
-header: 0, the default, for none, 1 for 16, or 2 to 254.
+header: 0, the default, for none, 1 for 16, or 2 to 127.
+A larger value is refused, since a 128-byte block and its parity must fit
+in the code's 255 symbols; Linux does not handle one either.
 The code is Linux's for ramoops, so a region written by either kernel
 reads in the other.
 .El
