@@ -296,15 +296,16 @@ static volatile uint32_t missed_revolutions = 0;
 /*
  * The service's thread, khda, which refills the output stream and hands the
  * input stream's periods over, the mix's `transfer` and the rate conversion
- * among them, in process context. The interrupt and the tick only ask for it
- * (hda_service_kick), as Linux's azx_interrupt only acknowledges the stream
- * and calls snd_pcm_period_elapsed, which wakes the writer, whose own call
- * copies into the ring (sound/pci/hda/hda_controller.c:1056 and 1070,
- * sound/core/pcm_lib.c:232 and 2274, Linux 6.12.115). `service_wanted` holds
- * the HDA_SERVE_ bits asked for since the thread last took them; the
- * interrupt, the tick and the thread all hold the big lock. service_thread is
- * NULL until the first program has its pid, and always in the host test;
- * until then the service runs where it is asked for.
+ * among them, in process context with interrupts on. The interrupt and the
+ * tick only ask for it (hda_service_kick), as Linux's azx_interrupt only
+ * acknowledges the stream and calls snd_pcm_period_elapsed, which wakes the
+ * writer, whose own call copies into the ring
+ * (sound/pci/hda/hda_controller.c:1056 and 1070, sound/core/pcm_lib.c:232
+ * and 2274, Linux 6.12.115). `service_wanted` holds the HDA_SERVE_ bits
+ * asked for since the thread last took them; the interrupt, the tick and the
+ * thread all hold the big lock. service_thread is NULL until the first
+ * program has its pid, and always in the host test; until then, and while
+ * the scheduler is off, the service runs where it is asked for.
  */
 #define HDA_SERVE_CAPTURE   1u
 #define HDA_SERVE_PLAY      2u
@@ -675,8 +676,9 @@ static void hda_play_store(uint8_t *p, int32_t v)
  *
  * The frames a chunk of HDA_STAGE_FRAMES takes are known before it is made,
  * from hda_rs, so one `transfer` gives them all; the caller's silence for
- * frames it lacks is played like data. Runs with interrupts off, from the
- * service or `stream_start`.
+ * frames it lacks is played like data. The caller adds the count to
+ * stream_taken. Runs from the service, with interrupts on in khda, or from
+ * `stream_start` with them off.
  */
 static uint32_t hda_play_render(uint8_t *dest, uint32_t frames)
 {
@@ -706,24 +708,26 @@ static uint32_t hda_play_render(uint8_t *dest, uint32_t frames)
         taken += need;
         frames -= chunk;
     }
-    stream_taken += taken;
     return taken;
 }
 
 /** Fill period `index` of the DMA buffer from the stream, the callback or the
- * ring, and write it back to memory for the controller. */
-static void hda_fill_period(uint32_t index)
+ * ring, and write it back to memory for the controller. Gives the stream's
+ * frames taken for it, 0 without a stream. Interrupts as the service has
+ * them. */
+static uint32_t hda_fill_period(uint32_t index)
 {
     int16_t *period = audio_buffer + index * period_bytes / 2u;
+    uint32_t taken = 0;
 
     if (play_stream)
-        stream_in[index] = hda_play_render((uint8_t *)period, period_bytes / hda_out_frame());
+        taken = hda_play_render((uint8_t *)period, period_bytes / hda_out_frame());
     else if (user_callback)
         user_callback(period, period_bytes);
     else
         ring_render_to_hw_buffer(period, period_bytes / hda_out_frame());
     hda_dma_sync_range(period, period_bytes);
-    hw_fill_count++;
+    return taken;
 }
 
 /**
@@ -779,12 +783,25 @@ static void hda_play_signal(void)
 /**
  * Refill every DMA period played since the last call.
  *
- * Called from the service's thread, or, before it is made, from the
- * stream's interrupt and every timer tick (hda_service_kick), always with
- * interrupts off. The play position, from the position buffer or
+ * Called from the service's thread with interrupts on, or, before it runs,
+ * from the stream's interrupt and every timer tick (hda_service_kick) with
+ * them off. The play position, from the position buffer or
  * LPIB, names the period playing; the periods from the one playing at the
  * last call up to this one have been played, and are filled in that order, so
  * that they play after the periods filled before them.
+ *
+ * Interrupts are off only around the reads and updates of the state that
+ * hda_play_delay and hda_delay_at read, the position, hw_period_last,
+ * stream_in and stream_taken, and around the `period` calls; each period's
+ * fill, the mix's `transfer` and the rate conversion, runs with them as the
+ * caller has them, as Linux's __snd_pcm_lib_xfer drops the stream's lock,
+ * and with it the interrupts it turned off, around the writer's copy
+ * (sound/core/pcm_lib.c:2380-2387, Linux 6.12.115). hw_period_last moves
+ * on after each fill to the period after it, so that the periods it counts
+ * as filled ahead are always those whose stream_in is current. A fill also
+ * moves hda_rs and the ring, which the delay's readers read; those are
+ * system calls, which run only once the service has ended, since khda
+ * holds the big lock and is not switched while it serves.
  *
  * The position cannot show a whole revolution of the buffer between two
  * calls, after which every period but the one playing has been played again.
@@ -803,8 +820,11 @@ static void hda_play_signal(void)
 static void hda_service_stream(void)
 {
     uint32_t cbl, pos, now, period, elapsed, moved, rev, half, first, count, i;
+    uint32_t flags, index, taken;
 
+    flags = kirq_save();
     if (!playing || !stream_started || !hda_base) {
+        kirq_restore(flags);
         return;
     }
 
@@ -845,12 +865,23 @@ static void hda_service_stream(void)
     }
     lpib_last = pos;
     walclk_last = now;
-    hw_period_last = period;
+    hw_period_last = first % HDA_PERIODS;
 
-    for (i = 0; i < count; i++)
-        hda_fill_period((first + i) % HDA_PERIODS);
+    for (i = 0; i < count; i++) {
+        index = (first + i) % HDA_PERIODS;
+        kirq_restore(flags);
+        taken = hda_fill_period(index);
+        flags = kirq_save();
+        if (play_stream) {
+            stream_in[index] = taken;
+            stream_taken += taken;
+        }
+        hw_period_last = (index + 1) % HDA_PERIODS;
+        hw_fill_count++;
+    }
     if (play_stream)
         hda_play_signal();
+    kirq_restore(flags);
 }
 
 /**
@@ -1616,9 +1647,10 @@ static uint8_t in_boost[AUDIO_SOURCES];
  * rate it has; the service converts each finished period to the reader's
  * format and channels, hands it over with `transfer` and calls `period`.
  * No rate is converted: stream_setup grants the ADC's rate nearest the one
- * asked for. The service runs from the interrupt and the tick under
- * `cap_lock`, with interrupts off; the stream operations take the lock to
- * change what it reads.
+ * asked for. The service holds `cap_lock`, with interrupts off, while it
+ * reads and moves the position and the counts, and converts each period
+ * and passes it to `transfer` outside it (hda_service_capture); the stream
+ * operations take the lock to change what it reads.
  */
 #define HDA_CAPTURE_TAG       2      /* the input stream's tag; playback's is 1 */
 #define HDA_CAPTURE_BUFFER    65536u /* bytes of the DMA buffer at most */
@@ -3483,6 +3515,7 @@ static void hda_out_buffers(int stream, uint16_t fmt)
         for (i = 0; i < HDA_PERIODS; i++) {
             stream_in[i] = hda_play_render((uint8_t *)audio_buffer + i * period_bytes,
                                            period_bytes / hda_out_frame());
+            stream_taken += stream_in[i];
         }
     } else if (user_callback) {
         for (i = 0; i < HDA_PERIODS; i++) {
@@ -3937,14 +3970,27 @@ void hda_read_queue(void)
 }
 
 /** Run the services `wanted` asks for, HDA_SERVE_ bits, the input
- * stream's first, as the interrupt acknowledges it first. Interrupts are
- * off. */
+ * stream's first, as the interrupt acknowledges it first: from khda with
+ * interrupts on, or from the interrupt or the tick with them off. A call
+ * that comes while a service is under way, which only an interrupt in khda's
+ * fills could make, returns at once; the service under way, or the next
+ * tick's, refills what it would have. */
 static void hda_serve(uint32_t wanted)
 {
+    static volatile bool serving = false;
+    uint32_t flags = kirq_save();
+
+    if (serving) {
+        kirq_restore(flags);
+        return;
+    }
+    serving = true;
+    kirq_restore(flags);
     if (wanted & HDA_SERVE_CAPTURE)
         hda_service_capture();
     if (wanted & HDA_SERVE_PLAY)
         hda_service_stream();
+    serving = false;
 }
 
 /** Whether the service's thread runs the services: it is made and the
@@ -4021,11 +4067,21 @@ static int hda_service_asked(void *arg)
 
 /**
  * The service's thread, khda: sleep until the interrupt or the tick asks for
- * a service, then run it with interrupts off, as the interrupt ran it, so
- * that no switch comes between two refills. The hold of the big lock is the
- * thread's own (bkl_thread_hold), not that of the interrupt or the system
- * call that switched to it, so that `bkl/calls` charges the refill to no
- * entry; the scheduler counts its time in /proc/PID/schedstat.
+ * a service, then run it with interrupts on, as Linux's writer copies into
+ * the ring with them on (hda_service_stream). The services keep them off
+ * only around the stream's position and period state.
+ *
+ * No switch comes between two refills: the thread sets `in_syscall` while it
+ * serves, so that an interrupt only asks for a switch (sched_preempt), as it
+ * does of a system call, and the thread takes the switch asked for once the
+ * service ends, as a system call does at its return. So no system call runs
+ * on this processor in the middle of a service, and none on another, since
+ * the thread holds the big lock throughout.
+ *
+ * The hold of the big lock is the thread's own (bkl_thread_hold), not that
+ * of the interrupt or the system call that switched to it, so that
+ * `bkl/calls` charges the refill to no entry; the scheduler counts its time
+ * in /proc/PID/schedstat.
  */
 static void hda_service_thread(void)
 {
@@ -4034,11 +4090,16 @@ static void hda_service_thread(void)
     arch_irq_enable();
     for (;;) {
         (void)wq_wait_event_idle(&service_wq, hda_service_asked, NULL);
-        flags = kirq_save();
         bkl_thread_hold();
+        flags = kirq_save();
         wanted = service_wanted;
         service_wanted = 0;
+        current_proc->in_syscall = 1;
+        kirq_restore(flags);
         hda_serve(wanted);
+        flags = kirq_save();
+        current_proc->in_syscall = 0;
+        sched_take_preempt();
         kirq_restore(flags);
     }
 }
@@ -4312,8 +4373,9 @@ static uint32_t hda_capture_convert(const audio_stream_t *s, const uint8_t *src)
 }
 
 /**
- * Hand the input stream's finished periods to its reader, from the
- * interrupt and the tick with interrupts off.
+ * Hand the input stream's finished periods to its reader, from the service's
+ * thread with interrupts on, or, before it runs, from the interrupt and the
+ * tick with them off.
  *
  * The periods finished are those from `cap_next` to the one the position is
  * in. The device overruns when it comes round to `cap_next` again before a
@@ -4322,6 +4384,13 @@ static uint32_t hda_capture_convert(const audio_stream_t *s, const uint8_t *src)
  * device writes is lost and the rest, from the one after it, are handed
  * over: the newest whole revolution, in order. A service already under way
  * elsewhere is left to finish alone.
+ *
+ * `cap_lock` and interrupts are held around the reads and updates of the
+ * position, cap_next and the counts, and around `period`; each period's
+ * conversion and `transfer` run outside them, with interrupts as the caller
+ * has them, as hda_service_stream says. Nothing changes the stream while
+ * they run: the stream operations are system calls, which wait for the big
+ * lock that the service holds.
  */
 static void hda_service_capture(void)
 {
@@ -4357,8 +4426,14 @@ static void hda_service_capture(void)
     while (cap_next != cur) {
         const uint8_t *src = cap_buffer + cap_next * cap_period;
 
+        spin_unlock(&cap_lock);
+        kirq_restore(flags);
         hda_dma_sync_range(src, cap_period);
         s->transfer(s, cap_out, hda_capture_convert(s, src));
+        flags = kirq_save();
+        spin_lock(&cap_lock);
+        if (!cap_running)
+            goto out;
         s->period(s);
         cap_handed += cap_period / cap_frame;
         cap_next = (cap_next + 1) % cap_periods;
