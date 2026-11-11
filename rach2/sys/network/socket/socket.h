@@ -529,12 +529,14 @@ void socket_tcp_connected(struct socket *sock);
 void socket_tcp_writable(struct socket *sock);
 /**
  * Queue the `len` bytes at `buf` on the stream, waiting for room in the send
- * ring as long as none is free, and return the count queued, never 0 for a
- * nonzero `len`. Returns SOCK_EAGAIN instead of waiting when `nonblock` is
- * set, -EINTR on a signal, and on a connection no longer in a sending state
- * the error recorded for it or -EPIPE. `buf` is a user buffer the caller
- * has brought in (`user_buffer_ok`); after a wait this brings it in again,
- * and returns -EFAULT, with nothing queued, when it no longer can.
+ * ring as long as none is free, and for a connection still in its handshake
+ * to be established, and return the count queued, never 0 for a nonzero
+ * `len`. Returns SOCK_EAGAIN instead of waiting when `nonblock` is set,
+ * -EINTR on a signal, the error recorded for a connection that has one, and
+ * -EPIPE for one past its handshake and no longer in a sending state. `buf`
+ * is a user buffer the caller has brought in (`user_buffer_ok`); after a
+ * wait this brings it in again, and returns -EFAULT, with nothing queued,
+ * when it no longer can.
  */
 int socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblock);
 /** Copy in-order stream bytes into the receive ring and wake a reader;

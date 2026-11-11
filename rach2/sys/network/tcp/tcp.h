@@ -534,13 +534,18 @@ int tcp_listen(struct socket *sock, uint16_t port);
  */
 int tcp_connect(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port);
 
+/* `tcp_send`'s answer for a connection still in its handshake, SYN_SENT or
+ * SYN_RCVD, which can send once it is established. */
+#define TCP_SEND_CONNECTING (-2)
+
 /**
  * Queue up to `len` bytes of `buf` on the send ring of `sock`'s connection,
  * and send what the windows allow; the bytes stay in the ring until they are
- * acknowledged. Returns the bytes queued, 0 when the ring is full, or -1 for
- * a socket with no connection, a negative `len`, or a connection not in
- * ESTABLISHED or CLOSE_WAIT or whose sending half is shut. Takes `net_lock`
- * itself.
+ * acknowledged. Returns the bytes queued, 0 when the ring is full,
+ * TCP_SEND_CONNECTING for a connection in SYN_SENT or SYN_RCVD, or -1 for a
+ * socket with no connection, a negative `len`, or a connection in another
+ * state than ESTABLISHED or CLOSE_WAIT or whose sending half is shut. Takes
+ * `net_lock` itself.
  */
 int tcp_send(struct socket *sock, const uint8_t *buf, int len);
 
