@@ -664,6 +664,7 @@ void schedule(void)
     watchdog_sched();
     kick = sched_prepare_old(old, cpu, me);
     next = sched_select(me, old);
+    old->need_resched = 0;
 
     if (!next) {
         if (old == cpu->idle || old->state == PROC_RUNNING || !cpu->idle) {
@@ -828,12 +829,12 @@ void sched_preempt(void)
     schedule();
 }
 
-/** The request is cleared before the switch, so a request that arrives
- * during the switch is the next call's. */
+/** `schedule` clears the request under the run queues' lock, after its
+ * selection, so a request that arrives after the selection is the next
+ * call's and none is lost by a clear after the switch. */
 void sched_take_preempt(void)
 {
     if (current_proc && current_proc->need_resched) {
-        current_proc->need_resched = 0;
         schedule();
     }
 }
@@ -844,8 +845,8 @@ void sched_take_preempt(void)
  * by a keystroke then waits for the loop. A kernel thread keeps it until it
  * sleeps (`no_tick_switch`), and calls this between two completed works, as
  * Linux's worker calls cond_resched between works (kernel/workqueue.c:3290-
- * 3299). The switch is taken here as the exit would take it: interrupts
- * off, and the request cleared before the switch.
+ * 3299). The switch is taken here as the exit would take it, with
+ * interrupts off; `schedule` clears the request.
  *
  * `schedule` passes the big lock on only past a real switch, and a call on
  * a processor with nothing else queued has none to make, so the lock goes

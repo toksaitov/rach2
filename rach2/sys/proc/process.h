@@ -303,7 +303,9 @@ struct process {
     /* An interrupt asked for a switch that the process could not take
      * then: it was inside a system call, a fault or klog, or it defers the
      * tick's switch (`no_tick_switch`). A call's exit, a fault's end and a
-     * service point take it (`sched_take_preempt`). */
+     * service point take it (`sched_take_preempt`), and `schedule` clears
+     * it at each selection, as Linux's __schedule clears TIF_NEED_RESCHED
+     * (kernel/sched/core.c:6707). */
     volatile uint32_t need_resched;
     /* 1 for a kernel thread, which an interrupt does not switch: its
      * request waits in `need_resched` for the thread's next sleep or
