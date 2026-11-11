@@ -74,7 +74,7 @@ void schedule(void);
  * outrank the real-time thread running there, or that thread may run nowhere
  * else, goes instead to the processor it may run on whose highest real-time
  * priority, of its current thread and its queue, is lowest, when it outranks
- * every thread there. Its processor is sent an interrupt so that it selects now
+ * every thread there. Its processor is kicked so that it selects now
  * rather than at its tick when it is idle, halted in place with `p` current, or
  * runs a thread `p` outranks, whose `need_resched` is set, so that the
  * interrupt switches it in user mode and a call on that processor switches at

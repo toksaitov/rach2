@@ -1037,9 +1037,10 @@ void sched_wait_off_cpu(const process_t *p)
 }
 
 /**
- * A wake that puts a process on this processor's queue sends it the
- * interprocessor interrupt that ends the wait (`sched_ready_locked` asks
- * for it, and the waker sends it once its locks are let go). The
+ * A wake that puts a process on this processor's queue kicks it, which
+ * ends the wait's poll or sends the interprocessor interrupt that ends its
+ * halt (`sched_ready_locked` asks for it, and the waker kicks once its locks
+ * are let go). The
  * idle task holds no big lock: its selection and its halt need none, and a
  * thread it switches to takes the lock in its tail when it holds it.
  */
@@ -1507,6 +1508,67 @@ void sched_loadavg(uint32_t avg[3])
 }
 
 /**
+ * Wait for a wake with interrupts off and the big lock let go: poll this
+ * processor's `idle_poll` for `idle_poll_us`, then halt unless a wake
+ * turned it to CPU_POLL_KICKED meanwhile (`smp_kick`). A kick that comes
+ * after the poll finds it off and sends the interrupt that ends the halt.
+ * The poll answers the requests other processors leave (`smp_service`), as
+ * a wait for the big lock does, and keeps interrupts waiting at most its
+ * length.
+ *
+ * The length adapts as Linux 6.12.115's haltpoll governor adapts its own
+ * (adjust_poll_limit, drivers/cpuidle/governors/haltpoll.c): a wait the
+ * halt ended within IDLE_POLL_MAX_US doubles it, to at least
+ * IDLE_POLL_START_US, and a longer one halves it, to 0 below
+ * IDLE_POLL_START_US. A processor whose threads
+ * hand work back and forth, as a renderer's do, then takes each wake in the
+ * poll, without an interrupt sent under the big lock, a halt and its exit;
+ * one that stays idle, which its tick wakes every millisecond, soon halts at
+ * once again. As Linux polls only in a guest, so does this: on a machine
+ * of its own an interrupt and a halt cost a few microseconds, and a poll
+ * the power of a busy processor. Without a measured counter there is no
+ * poll either.
+ */
+static void idle_halt(void)
+{
+    struct percpu *cpu = this_cpu();
+    uint32_t per_us = timer_calibrate() / TICK_US;
+    uint64_t start, limit, gone;
+    uint32_t grow;
+
+    if (per_us == 0 || !arch_guest()) {
+        arch_idle_masked();
+        return;
+    }
+    start = arch_cycles();
+    if (cpu->idle_poll_us != 0) {
+        limit = (uint64_t)cpu->idle_poll_us * per_us;
+        (void)arch_atomic_xchg(&cpu->idle_poll, CPU_POLL_ON);
+        while (cpu->idle_poll == CPU_POLL_ON && arch_cycles() - start < limit) {
+            smp_service();
+            arch_relax();
+        }
+        if (arch_atomic_xchg(&cpu->idle_poll, CPU_POLL_NONE) == CPU_POLL_KICKED) {
+            return;
+        }
+    }
+    arch_idle_masked();
+    gone = tick_div(arch_cycles() - start, per_us, NULL);
+    if (gone > IDLE_POLL_MAX_US) {
+        cpu->idle_poll_us /= 2u;
+        if (cpu->idle_poll_us < IDLE_POLL_START_US) {
+            cpu->idle_poll_us = 0;
+        }
+    } else if (gone > cpu->idle_poll_us) {
+        grow = cpu->idle_poll_us * 2u;
+        if (grow < IDLE_POLL_START_US) {
+            grow = IDLE_POLL_START_US;
+        }
+        cpu->idle_poll_us = grow > IDLE_POLL_MAX_US ? IDLE_POLL_MAX_US : grow;
+    }
+}
+
+/**
  * Every caller of this one enters with IF already clear, having checked its
  * condition there, and that is what makes the wait free of a lost wakeup:
  * `sti; hlt` issued from IF=0 is atomic against a wake that became pending
@@ -1531,9 +1593,9 @@ void sched_loadavg(uint32_t avg[3])
  *
  * The big lock is let go for the halt and taken again after it, so that the
  * other processors run kernel code meanwhile. A wake from another processor
- * that comes between the two is not lost either: the waker sends this
- * processor an interrupt (`sched_ready_locked` asks for it), which is pending
- * until the `sti` and ends the halt.
+ * that comes between the two is not lost either: the waker kicks this
+ * processor (`smp_kick`), which ends a poll before the halt or else sends an
+ * interrupt that is pending until the `sti` and ends the halt.
  */
 void idle_wait_irq_off(void)
 {
@@ -1552,7 +1614,7 @@ void idle_wait_irq_off(void)
     }
     this_cpu()->idle_wait = 1;
     depth = bkl_drop();
-    arch_idle_masked();
+    idle_halt();
     bkl_take_as(depth, BKL_KEY_IDLE);
     this_cpu()->idle_wait = 0;
 }
@@ -1577,7 +1639,7 @@ void idle_wait_irq_on(void)
 
     this_cpu()->idle_wait = 1;
     depth = bkl_drop();
-    arch_idle_masked();
+    idle_halt();
     bkl_take_as(depth, BKL_KEY_IDLE);
     this_cpu()->idle_wait = 0;
     kirq_restore(flags);

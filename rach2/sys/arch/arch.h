@@ -120,6 +120,10 @@ void arch_invalid_opcode(void);
  * when this returns. */
 void arch_idle_masked(void);
 
+/** Whether this processor runs under a hypervisor, as `cpuid` leaf 1
+ * reports in ECX bit 31; read once, since in a guest `cpuid` is an exit. */
+int arch_guest(void);
+
 /** Hold interrupts off and stop this processor for good. */
 void arch_stop(void) K_NORETURN;
 

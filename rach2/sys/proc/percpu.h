@@ -21,6 +21,19 @@ struct page_dir;
  * to be dropped. */
 #define CPU_TLB_ALL ((uintptr_t)-1)
 
+/* An idle wait's `idle_poll`: not polling, polling before its halt, or
+ * kicked by a wake while it polled, which then sent no interrupt
+ * (`smp_kick`). */
+#define CPU_POLL_NONE   0u
+#define CPU_POLL_ON     1u
+#define CPU_POLL_KICKED 2u
+
+/* The longest an idle wait polls before it halts, in microseconds, and the
+ * length a poll that grows from 0 starts at: Linux's guest_halt_poll_ns and
+ * guest_halt_poll_grow_start of cpuidle-haltpoll. */
+#define IDLE_POLL_MAX_US   200u
+#define IDLE_POLL_START_US 50u
+
 /*
  * What the shared kernel keeps for each processor: the process it runs and
  * its idle task, the page directory it translates through, its depth in the
@@ -38,7 +51,8 @@ struct page_dir;
  * see it settled reads it under that lock. `space` changes at the switch
  * and when `smp_service` gives it up at a request whose sender waits for
  * it; another processor reads it to choose whom a shootdown interrupts
- * (proc/smp.c). Another processor writes only the requests.
+ * (proc/smp.c). Another processor writes only the requests and, by
+ * compare-and-exchange, `idle_poll`.
  */
 struct percpu {
     struct process *current;                    /* the process this processor runs */
@@ -50,6 +64,8 @@ struct percpu {
     volatile int online;                        /* started, and taking work */
     volatile unsigned int admit;                /* CPU_STARTING, ADMITTED or REFUSED */
     volatile int idle_wait;                     /* halted in an idle wait, for a tick to see */
+    volatile unsigned int idle_poll;            /* CPU_POLL_: polling before a halt, or kicked */
+    uint32_t idle_poll_us;                      /* the poll's length now, 0 to IDLE_POLL_MAX_US */
     volatile int in_nmi;                        /* NMIs it is handling, nested */
     volatile unsigned int tlb_request;          /* drop the translations from `tlb_page` */
     volatile uintptr_t tlb_page;                /* a user page, or CPU_TLB_ALL */
