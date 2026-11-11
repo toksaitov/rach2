@@ -20,9 +20,11 @@
 /* Milliseconds as whole ticks, rounded up, for a constant under 2^22 ms. */
 #define MS_TO_TICKS(ms) (((uint32_t)(ms) * TICK_HZ + 999u) / 1000u)
 
-/* The ticks since the timer started, counted by the boot processor's timer
- * handler (kernel.c) at the platform's rate, as many for each interrupt as
- * `timer_tick_clock` says. It is 64 bits wide, so it does not wrap; the low
+/* The ticks of the monotonic clock since the timer started, counted by the
+ * boot processor's timer handler (kernel.c): the raw ticks each interrupt
+ * counts, as many as `timer_tick_clock` says, each of the NTP state's tick
+ * length, which is TICK_NS while nothing slews the clock (clock.c's
+ * `rtc_tick_advance`). It is 64 bits wide, so it does not wrap; the low
  * 32 bits, which any processor reads in one load, wrap after 2^32 ticks.
  * On the i686 a reader of the whole count reads it with `tick_count`, since
  * there the two halves are two loads; one that wants only an interval

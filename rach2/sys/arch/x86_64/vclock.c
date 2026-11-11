@@ -34,7 +34,10 @@ typedef char
                     __builtin_offsetof(struct vdso_data, real_nsec) == VDSO_DATA_REAL_NSEC &&
                     __builtin_offsetof(struct vdso_data, res_ns) == VDSO_DATA_RES_NS &&
                     __builtin_offsetof(struct vdso_data, getcpu) == VDSO_DATA_GETCPU &&
-                    __builtin_offsetof(struct vdso_data, coarse_ns) == VDSO_DATA_COARSE_NS)
+                    __builtin_offsetof(struct vdso_data, coarse_ns) == VDSO_DATA_COARSE_NS &&
+                    __builtin_offsetof(struct vdso_data, raw_mult) == VDSO_DATA_RAW_MULT &&
+                    __builtin_offsetof(struct vdso_data, raw_sec) == VDSO_DATA_RAW_SEC &&
+                    __builtin_offsetof(struct vdso_data, raw_nsec) == VDSO_DATA_RAW_NSEC)
                        ? 1
                        : -1];
 #endif
@@ -42,11 +45,12 @@ typedef char
 #define NSEC_PER_SEC 1000000000u
 
 /*
- * The steering. Each tick the clock's error against the reference, the
- * reference less the clock, is to be made good over the next 2^SLEW_SHIFT
- * nanoseconds, about 16.8 ms, by a rate that much faster or slower than
- * the measured one; the error is cut to SLEW_MAX_NS, so the rate is never
- * more than SLEW_MAX_NS / 2^SLEW_SHIFT, one part in 2000, from the measured
+ * The steering. Each tick a clock's error against the tick's clock it
+ * follows, the tick's less the TSC's, is to be made good over the next
+ * 2^SLEW_SHIFT nanoseconds, about 16.8 ms, by a rate that much faster or
+ * slower than the one it runs at, the measured rate times the NTP state's
+ * for the monotonic clock; the error is cut to SLEW_MAX_NS, so the rate is
+ * never more than SLEW_MAX_NS / 2^SLEW_SHIFT, one part in 2000, from that
  * rate. A clock more than STEP_NS behind, as after a stretch the boot
  * processor spent with interrupts off longer than the steering can make
  * good, is stepped forward; one ahead is only slowed, since a step back
@@ -58,18 +62,18 @@ typedef char
 
 /*
  * The clock: whether it runs, the data page in the kernel's map, the rate
- * measured, the monotonic clock and real time at the page's base in
- * nanoseconds whole, and the course real time follows (rtc.h). The page's
- * fields and these change under `vclock_lock`, the page's between the
- * increments of its sequence count.
+ * measured, the monotonic and raw clocks at the page's base in nanoseconds
+ * whole, and real time's offset over the monotonic clock in nanoseconds,
+ * which may be negative. The page's fields and these change under
+ * `vclock_lock`, the page's between the increments of its sequence count.
  */
 static int running;
 static struct vdso_data *data;
 static uintptr_t data_phys;
 static uint32_t mult_measured;
 static uint64_t mono_base_ns;
-static uint64_t real_base_ns;
-static struct rtc_course course;
+static uint64_t raw_base_ns;
+static int64_t wall_ns;
 static struct spinlock vclock_lock = SPINLOCK_INIT_NAMED("vclock_lock");
 
 /** `delta` counts of the TSC at `mult` / 2^`shift` nanoseconds a count, for
@@ -82,65 +86,41 @@ static uint64_t vclock_scale(uint64_t delta, uint32_t mult, uint32_t shift)
     return (hi << (32u - shift)) + (lo >> shift);
 }
 
+/** The counts of the TSC from the page's base to `cycles`; a count behind
+ * the base, as another processor's can be by a few counts, is none. */
+static uint64_t vclock_since(uint64_t cycles)
+{
+    return cycles >= data->cycle_base ? cycles - data->cycle_base : 0;
+}
+
 /** The monotonic clock at the TSC's count `cycles`, by the page's base and
- * rate; a count behind the base reads as the base. */
+ * rate. */
 static uint64_t vclock_at(uint64_t cycles)
 {
-    uint64_t delta = cycles >= data->cycle_base ? cycles - data->cycle_base : 0;
-
-    return mono_base_ns + vclock_scale(delta, data->mult, data->shift);
+    return mono_base_ns + vclock_scale(vclock_since(cycles), data->mult, data->shift);
 }
 
-/** Real time at the TSC's count `cycles`, by the page's base and real
- * time's rate; a count behind the base reads as the base. */
-static uint64_t vclock_real_at(uint64_t cycles)
+/** The raw clock at the TSC's count `cycles`, by the page's base and
+ * rate. */
+static uint64_t vclock_raw_at(uint64_t cycles)
 {
-    uint64_t delta = cycles >= data->cycle_base ? cycles - data->cycle_base : 0;
-
-    return real_base_ns + vclock_scale(delta, data->real_mult, data->shift);
+    return raw_base_ns + vclock_scale(vclock_since(cycles), data->raw_mult, data->shift);
 }
 
-/** Real time that the course gives at the monotonic time `mono_ns`. */
-static uint64_t vclock_course_ns(uint64_t mono_ns)
-{
-    int64_t off_sec;
-    int32_t off_nsec;
-    uint64_t frac;
-
-    rtc_course_at(&course, (int64_t)(mono_ns / NSEC_PER_SEC), (int64_t)(mono_ns % NSEC_PER_SEC),
-                  &off_sec, &off_nsec, &frac);
-    return mono_ns + (uint64_t)(off_sec * NSEC_PER_SEC + off_nsec);
-}
-
-/** Real time's rate for the monotonic clock's `mult`: that times the
- * course's, plus the steering of `error`, the course less the page's real
- * time at the base, made good over 2^SLEW_SHIFT nanoseconds and cut to
- * SLEW_MAX_NS, as the monotonic clock's own. Under 2^32: `mult` is under
- * 2^31 and the course's rate under a quarter. */
-static uint32_t vclock_real_rate(uint32_t mult, int64_t error)
-{
-    int64_t r32 = course.rate / ((int64_t)1 << (RTC_RATE_SHIFT - 32));
-    uint64_t part = ((uint64_t)mult * (uint64_t)(r32 < 0 ? -r32 : r32)) >> 32;
-    uint64_t rate = r32 < 0 ? mult - part : mult + part;
-    uint64_t steer;
-
-    if (error > SLEW_MAX_NS) {
-        error = SLEW_MAX_NS;
-    } else if (error < -SLEW_MAX_NS) {
-        error = -SLEW_MAX_NS;
-    }
-    steer = ((uint64_t)mult * (uint64_t)(error < 0 ? -error : error)) >> SLEW_SHIFT;
-    return (uint32_t)(error < 0 ? rate - steer : rate + steer);
-}
-
-/** Write the page's times for the bases `mono_base_ns` and `real_base_ns`,
- * in seconds and nanoseconds. */
+/** Write the page's times for the bases `mono_base_ns` and `raw_base_ns`,
+ * and real time, the first plus `wall_ns`, in seconds and nanoseconds; and
+ * real time's rate, the monotonic clock's. */
 static void vclock_write_times(void)
 {
+    uint64_t real_ns = mono_base_ns + (uint64_t)wall_ns;
+
     data->mono_sec = (int64_t)(mono_base_ns / NSEC_PER_SEC);
     data->mono_nsec = mono_base_ns % NSEC_PER_SEC;
-    data->real_sec = (int64_t)(real_base_ns / NSEC_PER_SEC);
-    data->real_nsec = real_base_ns % NSEC_PER_SEC;
+    data->real_sec = (int64_t)(real_ns / NSEC_PER_SEC);
+    data->real_nsec = real_ns % NSEC_PER_SEC;
+    data->raw_sec = (int64_t)(raw_base_ns / NSEC_PER_SEC);
+    data->raw_nsec = raw_base_ns % NSEC_PER_SEC;
+    data->real_mult = data->mult;
 }
 
 /** Begin and end a change of the page, under `vclock_lock`. The fence
@@ -158,18 +138,17 @@ static void vclock_write_end(void)
     data->seq++;
 }
 
-/** The reference's monotonic clock now in nanoseconds, the clock the tick
- * keeps, and the TSC at that reading, the middle of a reading on each
+/** The tick's monotonic clock now in nanoseconds, with its raw clock in
+ * `*raw_ns`, and the TSC at that reading, the middle of a reading on each
  * side. */
-static uint64_t vclock_reference(uint64_t *cycles)
+static uint64_t vclock_reference(uint64_t *cycles, uint64_t *raw_ns)
 {
-    uint64_t ticks, before;
-    uint32_t phase_ns;
+    uint64_t before, mono_ns;
 
     before = tsc_ordered();
-    rtc_tick_phase(&ticks, &phase_ns);
+    rtc_tick_both(&mono_ns, raw_ns);
     *cycles = before + (tsc_ordered() - before) / 2u;
-    return ticks * TICK_NS + phase_ns;
+    return mono_ns;
 }
 
 /** The rate and its shift for `per_tick` counts a tick: the largest shift,
@@ -226,7 +205,7 @@ static const char *vclock_refusal(void)
 void vclock_start(void)
 {
     const char *why;
-    uint64_t cycles;
+    uint64_t cycles, mono, raw;
     uint32_t flags;
 
     tsc_cpu_setup(0);
@@ -239,15 +218,15 @@ void vclock_start(void)
         klog(KLOG_INFO, "vdso", "clock: the system call; %s", why);
         return;
     }
-    rtc_get_course(&course);
+    mono = vclock_reference(&cycles, &raw);
     flags = spin_lock_irqsave(&vclock_lock);
     vclock_rate(tsc_counts_per_tick(), &mult_measured, &data->shift);
     vclock_write_begin();
-    mono_base_ns = vclock_reference(&cycles);
-    real_base_ns = vclock_course_ns(mono_base_ns);
+    mono_base_ns = mono;
+    raw_base_ns = raw;
     data->cycle_base = cycles;
-    data->mult = mult_measured;
-    data->real_mult = vclock_real_rate(mult_measured, 0);
+    data->mult = (uint32_t)rtc_slewed(mult_measured, rtc_mono_rate());
+    data->raw_mult = mult_measured;
     data->res_ns = vclock_resolution_ns();
     vclock_write_times();
     data->mode = VCLOCK_TSC;
@@ -263,59 +242,86 @@ int vclock_running(void)
 }
 
 /**
- * The error is measured at the reference's reading and the base moved to a
+ * The rate for a clock that runs at `mult` and reads `clock_ns` where the
+ * tick's reads `ref_ns`, steered toward the tick's; a clock more than
+ * STEP_NS behind has its base `*base_ns` moved forward as far and is not
+ * steered. The base is the clock at the page's new base, after the
+ * reading.
+ */
+static uint32_t vclock_steer(uint32_t mult, uint64_t ref_ns, uint64_t clock_ns, uint64_t *base_ns)
+{
+    int ahead = clock_ns > ref_ns;
+    uint32_t error, adjust;
+
+    if (!ahead && ref_ns - clock_ns > STEP_NS) {
+        *base_ns += ref_ns - clock_ns;
+        return mult;
+    }
+    error = (uint32_t)(ahead ? clock_ns - ref_ns : ref_ns - clock_ns);
+    if (error > SLEW_MAX_NS) {
+        error = SLEW_MAX_NS;
+    }
+    adjust = (uint32_t)(((uint64_t)mult * error) >> SLEW_SHIFT);
+    return ahead ? mult - adjust : mult + adjust;
+}
+
+/**
+ * The errors are measured at the tick's reading and the base moved to a
  * TSC count taken after the page's count went odd, so that a reading that
- * used the old rate was of a count before the new base, and the clock is
+ * used the old rate was of a count before the new base, and each clock is
  * continuous there: the base's time is the old rate's time at that count.
- * Real time is carried on the same way, by its own rate, and steered toward
- * the course at the monotonic clock's new base; a step of the monotonic
- * clock forward moves it as far, and so does one of more than STEP_NS
- * behind the course.
+ * The monotonic clock's rate is the measured one at the tick length's
+ * rate, under 2^32 since the measured is under 2^31 and the length within a
+ * quarter of a tick. Real time goes with the monotonic clock, a step
+ * forward of it included.
  */
 void vclock_tick(void)
 {
-    uint64_t at_ref, cycles, ref_ns, clock_ns, target;
-    uint32_t error, adjust;
-    int ahead;
+    uint64_t at_ref, cycles, ref_ns, ref_raw, clock_ns, clock_raw;
+    uint32_t mono_mult;
 
     if (!running) {
         return;
     }
-    ref_ns = vclock_reference(&at_ref);
+    ref_ns = vclock_reference(&at_ref, &ref_raw);
+    mono_mult = (uint32_t)rtc_slewed(mult_measured, rtc_mono_rate());
     spin_lock(&vclock_lock);
     clock_ns = vclock_at(at_ref);
-    ahead = clock_ns > ref_ns;
+    clock_raw = vclock_raw_at(at_ref);
     vclock_write_begin();
     cycles = tsc_ordered();
     mono_base_ns = vclock_at(cycles);
-    real_base_ns = vclock_real_at(cycles);
-    if (!ahead && ref_ns - clock_ns > STEP_NS) {
-        mono_base_ns += ref_ns - clock_ns;
-        real_base_ns += ref_ns - clock_ns;
-        error = 0;
-    } else {
-        error = (uint32_t)(ahead ? clock_ns - ref_ns : ref_ns - clock_ns);
-        if (error > SLEW_MAX_NS) {
-            error = SLEW_MAX_NS;
-        }
-    }
-    adjust = (uint32_t)(((uint64_t)mult_measured * error) >> SLEW_SHIFT);
-    data->mult = ahead ? mult_measured - adjust : mult_measured + adjust;
+    raw_base_ns = vclock_raw_at(cycles);
+    data->mult = vclock_steer(mono_mult, ref_ns, clock_ns, &mono_base_ns);
+    data->raw_mult = vclock_steer(mult_measured, ref_raw, clock_raw, &raw_base_ns);
     data->cycle_base = cycles;
-    target = vclock_course_ns(mono_base_ns);
-    if (target > real_base_ns + STEP_NS) {
-        real_base_ns = target;
-    }
-    data->real_mult = vclock_real_rate(data->mult, (int64_t)(target - real_base_ns));
     vclock_write_times();
     vclock_write_end();
     spin_unlock(&vclock_lock);
 }
 
-int vclock_read(int real, int coarse, int64_t *sec, int64_t *nsec)
+/** The page's base seconds, nanoseconds and rate of the clock `which`. */
+static void vclock_fields(int which, int64_t *sec, uint64_t *nsec, uint32_t *mult)
 {
-    uint64_t ns, cycles, delta;
-    uint32_t seq;
+    if (which == VCLOCK_READ_REAL) {
+        *sec = data->real_sec;
+        *nsec = data->real_nsec;
+        *mult = data->real_mult;
+    } else if (which == VCLOCK_READ_RAW) {
+        *sec = data->raw_sec;
+        *nsec = data->raw_nsec;
+        *mult = data->raw_mult;
+    } else {
+        *sec = data->mono_sec;
+        *nsec = data->mono_nsec;
+        *mult = data->mult;
+    }
+}
+
+int vclock_read(int which, int coarse, int64_t *sec, int64_t *nsec)
+{
+    uint64_t ns, cycles;
+    uint32_t seq, mult;
     int64_t s;
 
     if (!running) {
@@ -326,12 +332,10 @@ int vclock_read(int real, int coarse, int64_t *sec, int64_t *nsec)
             __asm__ __volatile__("pause");
         }
         __asm__ __volatile__("" : : : "memory");
-        s = real ? data->real_sec : data->mono_sec;
-        ns = real ? data->real_nsec : data->mono_nsec;
+        vclock_fields(which, &s, &ns, &mult);
         if (!coarse) {
             cycles = tsc_ordered();
-            delta = cycles >= data->cycle_base ? cycles - data->cycle_base : 0;
-            ns += vclock_scale(delta, real ? data->real_mult : data->mult, data->shift);
+            ns += vclock_scale(vclock_since(cycles), mult, data->shift);
         }
         __asm__ __volatile__("" : : : "memory");
     } while (data->seq != seq);
@@ -344,10 +348,11 @@ int vclock_read(int real, int coarse, int64_t *sec, int64_t *nsec)
     return 1;
 }
 
-int vclock_read_cycles(int real, uint64_t *ns, uint64_t *cycles)
+int vclock_read_cycles(int which, uint64_t *ns, uint64_t *cycles)
 {
-    uint64_t base, c, delta;
-    uint32_t seq;
+    uint64_t base, c, nsec;
+    uint32_t seq, mult;
+    int64_t sec;
 
     if (!running) {
         return 0;
@@ -357,14 +362,10 @@ int vclock_read_cycles(int real, uint64_t *ns, uint64_t *cycles)
             __asm__ __volatile__("pause");
         }
         __asm__ __volatile__("" : : : "memory");
-        if (real) {
-            base = (uint64_t)data->real_sec * NSEC_PER_SEC + data->real_nsec;
-        } else {
-            base = (uint64_t)data->mono_sec * NSEC_PER_SEC + data->mono_nsec;
-        }
+        vclock_fields(which, &sec, &nsec, &mult);
+        base = (uint64_t)sec * NSEC_PER_SEC + nsec;
         c = tsc_ordered();
-        delta = c >= data->cycle_base ? c - data->cycle_base : 0;
-        base += vclock_scale(delta, real ? data->real_mult : data->mult, data->shift);
+        base += vclock_scale(vclock_since(c), mult, data->shift);
         __asm__ __volatile__("" : : : "memory");
     } while (data->seq != seq);
     *ns = base;
@@ -372,24 +373,23 @@ int vclock_read_cycles(int real, uint64_t *ns, uint64_t *cycles)
     return 1;
 }
 
-void vclock_set_course(const struct rtc_course *c, int step)
+void vclock_set_wall(int64_t sec, int32_t nsec)
 {
     uint64_t cycles;
-    uint32_t flags;
+    uint32_t flags = spin_lock_irqsave(&vclock_lock);
 
-    if (!running) {
-        return;
+    if (running) {
+        vclock_write_begin();
+        cycles = tsc_ordered();
+        mono_base_ns = vclock_at(cycles);
+        raw_base_ns = vclock_raw_at(cycles);
+        data->cycle_base = cycles;
     }
-    flags = spin_lock_irqsave(&vclock_lock);
-    course = *c;
-    vclock_write_begin();
-    cycles = tsc_ordered();
-    mono_base_ns = vclock_at(cycles);
-    real_base_ns = step ? vclock_course_ns(mono_base_ns) : vclock_real_at(cycles);
-    data->cycle_base = cycles;
-    data->real_mult = vclock_real_rate(data->mult, 0);
-    vclock_write_times();
-    vclock_write_end();
+    wall_ns = sec * (int64_t)NSEC_PER_SEC + nsec;
+    if (running) {
+        vclock_write_times();
+        vclock_write_end();
+    }
     spin_unlock_irqrestore(&vclock_lock, flags);
 }
 

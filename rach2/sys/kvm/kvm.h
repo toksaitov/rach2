@@ -709,7 +709,9 @@ void kvm_stats_id(char *id, const struct kvm_vcpu *v);
  * is returned. */
 char *kvm_decimal(char *p, uint32_t n);
 
-/** The host's kvmclock in nanoseconds, the monotonic clock. */
+/** The host's kvmclock in nanoseconds, the raw clock, which the NTP state
+ * does not slew, as Linux's get_kvmclock_base_ns counts from boot at the
+ * raw clock's rate (arch/x86/kvm/x86.c). */
 uint64_t kvm_host_ns(void);
 
 /* vcpu.c */

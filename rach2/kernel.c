@@ -107,14 +107,15 @@ static volatile size_t cmd_pos = 0;
 static volatile bool cmd_ready = false;
 static volatile bool kernel_shell_active = false;
 
-/* Free-running tick counter, bumped at TICK_HZ by the timer IRQ. */
+/* The monotonic clock's ticks since boot, which the timer pass moves on at
+ * the NTP state's tick length (sys/clock.c's `rtc_tick_advance`). */
 volatile uint64_t kernel_ticks = 0;
 
 /*
- * Whole seconds since boot and the ticks into the current second, counted
- * beside the tick so that the clock divides no 64-bit count, which the
- * freestanding kernel has no `__udivdi3` for. The seconds wrap after 136
- * years.
+ * Whole seconds of the monotonic clock since boot and its ticks into the
+ * current second, counted beside the tick so that the clock divides no
+ * 64-bit count, which the freestanding kernel has no `__udivdi3` for. The
+ * seconds wrap after 136 years.
  */
 volatile uint32_t kernel_uptime_seconds = 0;
 volatile uint32_t kernel_second_ticks = 0;
@@ -271,34 +272,29 @@ static uint32_t boot_ticks_skipped;
 #define BOOT_TICK_SKIPS 4u
 
 /**
- * Advance the tick count and the uptime by the ticks the clock says this
+ * Advance the clocks since boot by the raw ticks the clock says this
  * interrupt counts (`timer_tick_clock`), none for one delivered again and
- * more than one for one that came late, carry the vDSO's clock on to the
- * tick (`vclock_tick`), give real time each second that passed, which its
- * NTP state counts (`rtc_seconds`), and measure the gap since the last pass
+ * more than one for one that came late, each the NTP state's tick length,
+ * which moves the tick count and the uptime (`rtc_tick_advance`); give the
+ * NTP state each second of real time that began (`rtc_seconds`), whose tick
+ * length the next ticks take; carry the vDSO's clock on to the tick at that
+ * rate (`vclock_tick`); and measure the gap since the last pass
  * (`latency_tick`). The caller holds `clock_pass_lock` with interrupts off,
  * and no big lock: readers of the tick on other processors read it inside
  * its sequence count (`tick_count`, clock.c).
  */
 static void timer_clock_pass(void)
 {
-    uint32_t due, seconds = 0;
+    int64_t length = rtc_tick_length();
+    uint32_t seconds;
 
     tick_write_begin();
-    due = timer_tick_clock();
-    while (due-- > 0) {
-        ++kernel_ticks;
-        if (++kernel_second_ticks >= TICK_HZ) {
-            kernel_second_ticks = 0;
-            ++kernel_uptime_seconds;
-            seconds++;
-        }
-    }
+    seconds = rtc_tick_advance(timer_tick_clock(), length);
     tick_write_end();
-    vclock_tick();
     if (seconds != 0) {
         rtc_seconds(seconds);
     }
+    vclock_tick();
     latency_tick();
 }
 

@@ -569,10 +569,10 @@ struct mq_wait {
     int64_t nsec;
 };
 
-/** Count the tick of `w`'s deadline from the real-time clock now, at its
- * present rate (`rtc_real_span`), after the clock's step count, which is
- * read first so that a setting between the two readings leaves it behind;
- * a time already past is the tick now. */
+/** Count the tick of `w`'s deadline from the real-time clock now, which
+ * goes on as the ticks do, after the clock's step count, which is read
+ * first so that a setting between the two readings leaves it behind; a
+ * time already past is the tick now. */
 static void mq_count(struct mq_wait *w)
 {
     int64_t now, now_ns, dsec, dns;
@@ -587,7 +587,7 @@ static void mq_count(struct mq_wait *w)
     }
     w->target = tick_count();
     if (dsec >= 0) {
-        w->target += rtc_real_span(dsec, (uint32_t)dns);
+        w->target += tick_span(dsec, (uint32_t)dns);
     }
 }
 
@@ -603,14 +603,14 @@ static int mq_wait_done(void *arg)
 
 /**
  * Sleep on `q` for what `w` waits for: 0 for a change, -ETIMEDOUT at the
- * deadline, -EINTR for a signal. A setting of the real-time clock or a
- * change of its rate wakes the sleep at the next tick (`rt_steps`), which
+ * deadline, -EINTR for a signal. A step of the real-time clock, a setting
+ * or a leap second, wakes the sleep at the next tick (`rt_steps`), which
  * counts the deadline's tick again from the clock as it then is and sleeps
  * on while the time is still to come, as Linux's wq_sleep waits on an
  * hrtimer of CLOCK_REALTIME that clock_was_set moves (ipc/mqueue.c:728-729,
- * kernel/time/hrtimer.c:951-987); so does the deadline's tick when a
- * slewed clock has not reached the time by it, since Linux's hrtimer never
- * expires before its clock reaches its time.
+ * kernel/time/hrtimer.c:951-987); so does the deadline's tick when the
+ * clock, read within the tick, has not reached the time by it, since
+ * Linux's hrtimer never expires before its clock reaches its time.
  */
 static int32_t mq_sleep(struct mqueue *q, struct mq_wait *w)
 {

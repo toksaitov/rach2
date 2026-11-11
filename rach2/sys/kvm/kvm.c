@@ -83,7 +83,7 @@ uint64_t kvm_host_ns(void)
 {
     int64_t s, ns;
 
-    rtc_monotonic(&s, &ns);
+    rtc_raw_monotonic(&s, &ns);
     return (uint64_t)s * 1000000000ull + (uint64_t)ns;
 }
 

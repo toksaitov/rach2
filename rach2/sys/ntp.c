@@ -1,10 +1,10 @@
 /*
- * ntp.c: the real-time clock's NTP state, as Linux 6.12.115's
- * kernel/time/ntp.c keeps it, without PPS and leap seconds: the phase-locked
- * and frequency-locked loops that adjtimex's offsets feed, the frequency,
- * adjtime's slew, and the length of a tick they give, which clock.c runs
- * real time at, so that an NTP daemon's corrections slew the clock and
- * never step it.
+ * ntp.c: the clock's NTP state, as Linux 6.12.115's kernel/time/ntp.c keeps
+ * it, without PPS: the phase-locked and frequency-locked loops that
+ * adjtimex's offsets feed, the frequency, adjtime's slew, the length of a
+ * tick they give, which clock.c runs the clocks since boot and real time
+ * at, so that an NTP daemon's corrections slew the clock and never step it,
+ * and the leap seconds an NTP daemon announces.
  */
 
 #include "ntp.h"
@@ -32,6 +32,9 @@
 #define MAXSEC              2048
 #define NTP_PHASE_LIMIT     ((MAXPHASE / 1000) << 5) /* microseconds */
 #define MAX_TAI_OFFSET      100000
+#define SECS_PER_DAY        86400
+/* No leap second due, Linux's TIME64_MAX for ntp_next_leap_sec. */
+#define NO_LEAP             ((int64_t)0x7FFFFFFFFFFFFFFFLL)
 /* adjtime's slew, 500 microseconds a second, and its share of a tick in
  * nanoseconds times 2^32, Linux's MAX_TICKADJ_SCALED; 500000 divides by
  * TICK_HZ, so the share is exact. */
@@ -42,6 +45,7 @@
 static uint32_t tick_usec = 10000; /* a tick of USER_HZ, microseconds */
 static int64_t tick_length = (int64_t)TICK_NS << NTP_SCALE_SHIFT;
 static int64_t tick_length_base = (int64_t)TICK_NS << NTP_SCALE_SHIFT;
+static int32_t time_state = TIME_OK;
 static int32_t time_status = STA_UNSYNC;
 static int64_t time_offset; /* the PLL's offset left, a tick's share */
 static int32_t time_constant = 2;
@@ -51,6 +55,7 @@ static int64_t time_freq;                       /* nanoseconds a second << 32 */
 static int64_t time_reftime;                    /* real time at the last offset, seconds */
 static int64_t time_adjust;                     /* adjtime's slew left, microseconds */
 static int32_t time_tai;
+static int64_t ntp_next_leap_sec = NO_LEAP; /* real time of the leap */
 
 /** `x` shifted right by `s`, toward zero, Linux's shift_right
  * (linux/timex.h:151-155). */
@@ -164,6 +169,7 @@ void ntp_clear(void)
     ntp_update_frequency();
     tick_length = tick_length_base;
     time_offset = 0;
+    ntp_next_leap_sec = NO_LEAP;
 }
 
 int64_t ntp_tick_length(void)
@@ -171,16 +177,76 @@ int64_t ntp_tick_length(void)
     return tick_length;
 }
 
+/** `secs` modulo a day, with the sign of `secs`, as Linux's div_s64_rem
+ * leaves it. */
+static int32_t day_rem(int64_t secs)
+{
+    uint64_t rem;
+
+    if (secs < 0) {
+        (void)tick_div64((uint64_t)-secs, SECS_PER_DAY, &rem);
+        return -(int32_t)rem;
+    }
+    (void)tick_div64((uint64_t)secs, SECS_PER_DAY, &rem);
+    return (int32_t)rem;
+}
+
 /**
- * Leap seconds are not kept, so the state stays TIME_OK and STA_INS and
- * STA_DEL change nothing. The PLL's share is its offset shifted by
- * SHIFT_PLL and the time constant, a quarter of it at the least; adjtime's
- * slew takes 500 microseconds a second until less is left, and then the
- * rest (kernel/time/ntp.c:457-491).
+ * The leap second's states are Linux's (kernel/time/ntp.c:407-455): STA_INS
+ * in TIME_OK announces a second inserted at the end of the day, TIME_INS,
+ * which at midnight steps real time back a second, from 00:00:00 to
+ * 23:59:59 again, and goes to TIME_OOP for that second; STA_DEL announces
+ * one deleted, TIME_DEL, which steps real time on a second at 23:59:59;
+ * both then wait in TIME_WAIT until the status bit is cleared. The PLL's
+ * share is its offset shifted by SHIFT_PLL and the time constant, a
+ * quarter of it at the least; adjtime's slew takes 500 microseconds a
+ * second until less is left, and then the rest (ntp.c:457-491).
  */
-void ntp_second_overflow(void)
+int ntp_second_overflow(int64_t secs)
 {
     int64_t delta;
+    int leap = 0;
+
+    switch (time_state) {
+    case TIME_OK:
+        if (time_status & STA_INS) {
+            time_state = TIME_INS;
+            ntp_next_leap_sec = secs + SECS_PER_DAY - day_rem(secs);
+        } else if (time_status & STA_DEL) {
+            time_state = TIME_DEL;
+            ntp_next_leap_sec = secs + SECS_PER_DAY - day_rem(secs + 1);
+        }
+        break;
+    case TIME_INS:
+        if (!(time_status & STA_INS)) {
+            ntp_next_leap_sec = NO_LEAP;
+            time_state = TIME_OK;
+        } else if (secs == ntp_next_leap_sec) {
+            leap = -1;
+            time_state = TIME_OOP;
+        }
+        break;
+    case TIME_DEL:
+        if (!(time_status & STA_DEL)) {
+            ntp_next_leap_sec = NO_LEAP;
+            time_state = TIME_OK;
+        } else if (secs == ntp_next_leap_sec) {
+            leap = 1;
+            ntp_next_leap_sec = NO_LEAP;
+            time_state = TIME_WAIT;
+        }
+        break;
+    case TIME_OOP:
+        ntp_next_leap_sec = NO_LEAP;
+        time_state = TIME_WAIT;
+        break;
+    default: /* TIME_WAIT */
+        if (!(time_status & (STA_INS | STA_DEL))) {
+            time_state = TIME_OK;
+        }
+        break;
+    }
+    time_tai -= leap;
 
     time_maxerror += MAXFREQ / 1000;
     if (time_maxerror > NTP_PHASE_LIMIT) {
@@ -192,33 +258,36 @@ void ntp_second_overflow(void)
     time_offset -= delta;
     tick_length += delta;
     if (time_adjust == 0) {
-        return;
+        return leap;
     }
     if (time_adjust > MAX_TICKADJ) {
         time_adjust -= MAX_TICKADJ;
         tick_length += MAX_TICKADJ_SCALED;
-        return;
+        return leap;
     }
     if (time_adjust < -MAX_TICKADJ) {
         time_adjust += MAX_TICKADJ;
         tick_length -= MAX_TICKADJ_SCALED;
-        return;
+        return leap;
     }
     tick_length +=
         div_signed(time_adjust * 1000, NTP_INTERVAL_FREQ) * ((int64_t)1 << NTP_SCALE_SHIFT);
     time_adjust = 0;
+    return leap;
 }
 
 /**
  * Take ADJ_STATUS's bits but the read-only ones, Linux's process_adj_status
  * (kernel/time/ntp.c:694-714): turning STA_PLL off leaves the status
- * STA_UNSYNC alone, and turning it on starts the PLL's interval at
- * `now_sec`.
+ * STA_UNSYNC alone and forgets a leap second, and turning it on starts the
+ * PLL's interval at `now_sec`.
  */
 static void ntp_take_status(const struct ktimex *tx, int64_t now_sec)
 {
     if ((time_status & STA_PLL) && !(tx->status & STA_PLL)) {
+        time_state = TIME_OK;
         time_status = STA_UNSYNC;
+        ntp_next_leap_sec = NO_LEAP;
     }
     if (!(time_status & STA_PLL) && (tx->status & STA_PLL)) {
         time_reftime = now_sec;
@@ -273,8 +342,11 @@ static void ntp_take_modes(const struct ktimex *tx, int64_t now_sec)
     }
 }
 
-int32_t ntp_adjtimex(struct ktimex *tx, int64_t now_sec)
+int32_t ntp_adjtimex(struct ktimex *tx)
 {
+    int64_t now_sec = tx->sec;
+    int32_t result;
+
     if (tx->modes & ADJ_ADJTIME) {
         int64_t save_adjust = time_adjust;
 
@@ -303,5 +375,21 @@ int32_t ntp_adjtimex(struct ktimex *tx, int64_t now_sec)
     tx->tick = tick_usec;
     tx->shift = 0;
     tx->tai = time_tai;
-    return (time_status & (STA_UNSYNC | STA_CLOCKERR)) ? TIME_ERROR : TIME_OK;
+    result = (time_status & (STA_UNSYNC | STA_CLOCKERR)) ? TIME_ERROR : time_state;
+    if (now_sec >= ntp_next_leap_sec) {
+        if (time_state == TIME_INS && (time_status & STA_INS)) {
+            result = TIME_OOP;
+            tx->tai++;
+            tx->sec--;
+        }
+        if (time_state == TIME_DEL && (time_status & STA_DEL)) {
+            result = TIME_WAIT;
+            tx->tai--;
+            tx->sec++;
+        }
+        if (time_state == TIME_OOP && now_sec == ntp_next_leap_sec) {
+            result = TIME_WAIT;
+        }
+    }
+    return result;
 }

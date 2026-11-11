@@ -480,10 +480,17 @@ long sys_time(isr_params_t *params)
 #define CPUCLOCK_WHICH     3u
 #define CPUCLOCK_VIRT      1u
 
-/* The kinds of clock the ids name: real time and time since boot read to the
- * microsecond, the two at the last tick, and a process's CPU time, which
- * counts ticks. */
-enum kclock_kind { KCLOCK_REAL, KCLOCK_REAL_COARSE, KCLOCK_MONO, KCLOCK_MONO_COARSE, KCLOCK_CPU };
+/* The kinds of clock the ids name: real time and the monotonic clock read
+ * within the tick, the two at the last tick, the raw clock, which the NTP
+ * state does not slew, and a process's CPU time, which counts ticks. */
+enum kclock_kind {
+    KCLOCK_REAL,
+    KCLOCK_REAL_COARSE,
+    KCLOCK_MONO,
+    KCLOCK_MONO_COARSE,
+    KCLOCK_MONO_RAW,
+    KCLOCK_CPU
+};
 
 /* What a clock id names: its kind, and for a CPU clock the process whose time
  * it reads and whether that is user time alone. */
@@ -522,9 +529,11 @@ static int32_t clock_resolve(int32_t clk, struct kclock *out)
         out->kind = KCLOCK_REAL_COARSE;
         return 0;
     case CLOCK_MONOTONIC:
-    case CLOCK_MONOTONIC_RAW:
     case CLOCK_BOOTTIME:
         out->kind = KCLOCK_MONO;
+        return 0;
+    case CLOCK_MONOTONIC_RAW:
+        out->kind = KCLOCK_MONO_RAW;
         return 0;
     case CLOCK_MONOTONIC_COARSE:
         out->kind = KCLOCK_MONO_COARSE;
@@ -586,17 +595,19 @@ struct kernel_timespec64 {
 /**
  * Read clock `c` into `out`.
  *
- * Real time is the clock read at boot (clock.c) with the timer's place within
- * the tick added; its coarse form stops at the last tick. Time since boot is
- * the uptime seconds and the ticks within the second, with the timer's place
- * added as well (`rtc_monotonic`), read with interrupts masked, so no torn
- * second can make it step back; its coarse form stops at the tick. Where the
- * clock runs from the TSC (vdso.h), both are that clock's, which the vDSO reads
- * too, so that a call here and a reading there agree. No clock follows an
- * outside time: the machine reads the CMOS once and then keeps its own time,
- * which only a setting of the real time steps, and it is never suspended, which
- * is why CLOCK_MONOTONIC, CLOCK_MONOTONIC_RAW and CLOCK_BOOTTIME read the same.
- * A CPU clock is the ticks the timer charged. The seconds are 64 bits; the
+ * The monotonic clock is the uptime seconds and the ticks within the second,
+ * each tick the NTP state's length, with the timer's place added
+ * (`rtc_monotonic`), read with interrupts masked, so no torn second can make
+ * it step back; its coarse form stops at the tick. Real time is that clock
+ * plus the offset the reading at boot and each setting made (clock.c); its
+ * coarse form stops at the last tick. The raw clock is the timer's ticks
+ * alone, which no slew changes (`rtc_raw_monotonic`). Where the clock runs
+ * from the TSC (vdso.h), each is that clock's, which the vDSO reads too, so
+ * that a call here and a reading there agree. The machine is never
+ * suspended, which is why CLOCK_MONOTONIC and CLOCK_BOOTTIME read the same,
+ * as Linux's do until a suspend moves offs_boot
+ * (kernel/time/timekeeping.c:168-170). A CPU clock is the ticks the timer
+ * charged. The seconds are 64 bits; the
  * 32-bit timespec of i386's clock_gettime cuts them, which ends in 2038 for
  * real time, as Linux's does.
  */
@@ -627,6 +638,11 @@ static void clock_read(const struct kclock *c, struct kernel_timespec64 *out)
         out->tv_sec = seconds;
         out->tv_nsec = nanoseconds;
         break;
+    case KCLOCK_MONO_RAW:
+        rtc_raw_monotonic(&seconds, &nanoseconds);
+        out->tv_sec = seconds;
+        out->tv_nsec = nanoseconds;
+        break;
     case KCLOCK_CPU:
     default:
         out->tv_sec = (int64_t)tick_div(clock_cpu_ticks(c), TICK_HZ, &rest);
@@ -635,12 +651,12 @@ static void clock_read(const struct kclock *c, struct kernel_timespec64 *out)
     }
 }
 
-/** A clock's resolution in nanoseconds: for real time and time since boot,
- * the resolution of the timer's place within the tick, which they are read
- * to (`timer_resolution_ns`), and the tick for the rest. */
+/** A clock's resolution in nanoseconds: for real time and the clocks since
+ * boot, the resolution of the timer's place within the tick, which they are
+ * read to (`timer_resolution_ns`), and the tick for the rest. */
 static int32_t clock_res_ns(const struct kclock *c)
 {
-    if (c->kind != KCLOCK_REAL && c->kind != KCLOCK_MONO) {
+    if (c->kind != KCLOCK_REAL && c->kind != KCLOCK_MONO && c->kind != KCLOCK_MONO_RAW) {
         return (int32_t)TICK_NS;
     }
     return (int32_t)(vclock_running() ? vclock_resolution_ns() : timer_resolution_ns());
@@ -1328,30 +1344,32 @@ static int time_reached(enum kclock_kind kind, const struct kernel_timespec *whe
 }
 
 /**
- * Sleep until real time or time since boot, `kind`, reads `when` or later.
+ * Sleep until real time or the monotonic clock, `kind`, reads `when` or
+ * later.
  *
- * Time since boot advances with the tick: time since boot at a tick is
- * that tick's count in TICK_HZ parts of a second. A deadline of real time
- * is the time since boot at which real time reaches it at its present rate
- * (`rtc_mono_of_real`), which is real time less its offset while nothing
- * slews the clock, as Linux's hrtimer subtracts its base's whole offset
- * (kernel/time/hrtimer.c:922, 2140). So the sleep ends at the first tick
- * whose count reaches `when`, and a program that reads the clock then
- * reads `when` or later. Both are read to the microsecond, within the
- * tick, so a time the clock has reached returns at once, before the
- * deadline is rounded up to a tick. The tick count and the time since boot
- * are read as one reading (`tick_now`), since the tick changes both. A
- * setting of the real-time clock or a change of its rate during a sleep on
- * it wakes the sleep, which counts its tick again from the clock as it
- * then is; the step count (`rt_steps`) is read before the clock, so that a
- * change between the two is not missed. A step forward past `when` thus
- * ends the sleep at the next tick, and a step back keeps it sleeping until
- * the clock reaches `when`, as Linux's clock_was_set retriggers the hrtimer
- * of an absolute sleep on CLOCK_REALTIME (kernel/time/hrtimer.c:951-987,
- * 2133-2142); and a sleep on real time that reaches its tick before real
- * time reaches `when`, as a clock slewed slower than the tick does, counts
- * again, since Linux's hrtimer never expires before its clock reaches its
- * time. Returns 0, or -EINTR when a signal the process acts on comes
+ * The monotonic clock at a tick is that tick's count in TICK_HZ parts of a
+ * second, the tick count following the NTP state's slew as the clock does
+ * (clock.c's `rtc_tick_advance`). A deadline of real time is the monotonic
+ * time at which real time reaches it, real time less its offset
+ * (`rtc_mono_of_real`), as Linux's hrtimer subtracts its base's whole
+ * offset (kernel/time/hrtimer.c:922, 2140). So the sleep ends at the first
+ * tick whose count reaches `when`, and a program that reads the clock then
+ * reads `when` or later. Both are read within the tick, so a time the clock
+ * has reached returns at once, before the deadline is rounded up to a tick.
+ * The tick count and the uptime are read as one reading (`tick_now`), since
+ * the tick changes both. A step of real time during a sleep on it, a setting
+ * or a leap second, wakes the sleep, which counts its tick again from the
+ * clock as it then is; the step count (`rt_steps`) is read before the clock,
+ * so that a step between the two is not missed. A step forward past `when`
+ * thus ends the sleep at the next tick, and a step back keeps it sleeping
+ * until the clock reaches `when`, as Linux's clock_was_set retriggers the
+ * hrtimer of an absolute sleep on CLOCK_REALTIME (kernel/time/hrtimer.c:
+ * 951-987, 2133-2142). A sleep returns only once the clock reads `when`,
+ * since Linux's hrtimer never expires before its clock reaches its time
+ * (hrtimer.c:1814-1815): a sleep whose tick has come while the clock, which
+ * the TSC's clock may keep up to a millisecond behind the tick
+ * (arch/x86_64/vclock.c), still reads short of it, sleeps a tick more and
+ * looks again. Returns 0, or -EINTR when a signal the process acts on comes
  * first. `wchan` names the sleep, as for `sleep_until`.
  */
 static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_timespec *when,
