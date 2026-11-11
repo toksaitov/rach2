@@ -144,18 +144,35 @@ not answer each other for ever.
 Its acknowledgement and window are not taken.
 A SYN draws a challenge acknowledgement, which a true peer answers with a
 segment this side accepts (RFC 5961, section 4).
-An acknowledgement of data never sent drops the segment, with a
-challenge after the peer's FIN or this side's.
-One further below the oldest unacknowledged byte than the largest window
-the peer has offered or the bytes it has acknowledged, whichever is less,
-drops the segment with a challenge in every state (RFC 5961, section 5);
-the bytes acknowledged count this side's SYN only on an active open, as on
-Linux.
+An acknowledgement below the oldest unacknowledged byte by more than the
+largest window the peer has offered or the bytes it has acknowledged,
+whichever is less, drops the segment with a challenge in every state
+(RFC 5961, section 5); the bytes acknowledged count this side's SYN only on
+an active open, as on Linux.
 An older acknowledgement nearer is taken without its window.
+Only then is an acknowledgement at or past the oldest unacknowledged byte
+judged against the data sent: one of data never sent drops the segment,
+with a challenge after the peer's FIN or this side's.
 A segment with data or a FIN that the peer sent again after it was taken
 whole, because this side's acknowledgement was lost, is acknowledged and
-counted in DelayedACKLost, in every state from the handshake's end to
-.Dv TIME_WAIT .
+counted in DelayedACKLost, from the handshake's end to
+.Dv LAST_ACK ,
+but in
+.Dv CLOSING
+and
+.Dv LAST_ACK
+not when it acknowledges this side's FIN, which ends the connection first;
+.Dv TIME_WAIT
+acknowledges only a FIN sent again and counts nothing.
+After the peer's FIN, a segment whose data runs past that FIN ends the
+connection as an accepted reset does, counted in TCPAbortOnData, as on
+Linux.
+Until the handshake ends, the peer's SYN sent again is answered with this
+side's SYN-ACK, an acknowledgement of another number with a reset, a
+segment outside the window offered with an acknowledgement, and, on a
+passive open, a SYN at another number with a reset that ends the
+handshake; the acknowledgement that ends it brings any data and FIN it
+carries, which are taken at once.
 Challenge acknowledgements share the limit of 500 milliseconds.
 .Xr connect 2
 gives the resets.
@@ -210,11 +227,13 @@ takes.
 counts in its
 .Ql TcpExt:
 line the segments of data received again whole, DelayedACKLost; the
-retransmission timeouts, TCPTimeouts; the connections a timeout ended,
+retransmission timeouts, TCPTimeouts; the connections data past the
+peer's FIN ended, TCPAbortOnData, and those a timeout ended,
 TCPAbortOnTimeout; the challenge acknowledgements sent, TCPChallengeACK,
-and the SYNs that drew one, TCPSYNChallenge; the answers to a segment
-outside the window held back by the limit, TCPACKSkippedSeq, and the
-challenges held back, TCPACKSkippedChallenge; the keepalive probes sent,
+and the SYNs that drew one, TCPSYNChallenge; the answers of a handshake
+not yet ended held back by the limit, TCPACKSkippedSynRecv, those to a
+segment outside the window, TCPACKSkippedSeq, and the challenges held
+back, TCPACKSkippedChallenge; the keepalive probes sent,
 TCPKeepAlive; and the probes of a larger segment lost and taken,
 TCPMTUPFail and TCPMTUPSuccess.
 .Pa /proc/net/snmp
