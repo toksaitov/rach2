@@ -24,7 +24,8 @@
  * the objects held until the request retires, their bindings kept while
  * the object is busy (78-5c); a batch whose breadcrumb is written before
  * its interrupt is taken, idle to WAIT and BUSY with the GT left awake
- * (80-61); a ring that refuses the commands.
+ * (80-61); the unbind wait's signal asked for before its spin (80-72.1); a
+ * ring that refuses the commands.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -156,10 +157,22 @@ uint32_t i915_ggtt_pte_encode(uint64_t addr, int cache)
            (cache != I915_CACHE_NONE ? HSW_WB_LLC_AGE3 : 0);
 }
 
+static void ring_release(int i);
+
+/* The engine whose held ring the next delay lets run, as the chip that
+ * finishes a request during a wait's spin; -1 for none. */
+static int release_in_delay = -1;
+
 void i915_delay_us(struct i915_hw *hw, uint32_t us)
 {
+    int i = release_in_delay;
+
     (void)hw;
     now_ns += (int64_t)us * 1000;
+    if (i >= 0) {
+        release_in_delay = -1;
+        ring_release(i);
+    }
 }
 
 int32_t i915_wait_for(struct i915_hw *hw, const char *what, uint32_t reg, uint32_t mask,
@@ -1511,6 +1524,42 @@ static void wait_before_interrupt(void)
 }
 
 /**
+ * 80-72.1: the unbind wait asks for the signal of a running batch before
+ * it spins, as Linux's i915_active_wait enables its fences
+ * (i915_active.c:559-571, 589-620), so a last request the chip finishes
+ * during the spin lets its engine go and the GT parks
+ * (gt/intel_breadcrumbs.c:220-235).
+ */
+static void unbind_wait_spin(void)
+{
+    uint32_t b = batch_end();
+    struct drm_i915_gem_object *obj = object(&file_a, b);
+    struct i915_engine *rcs = &dev_a->gt.engine[I915_RCS0];
+    struct dma_fence *f = 0;
+    int p;
+
+    /* The earlier rows' engines retired and the GT parked. */
+    idle();
+    i915_gt_retire_requests(dev_a);
+    p = parks;
+    ring_hold(I915_RCS0);
+    CHECK(exec1(b, I915_EXEC_RENDER) == 0 && obj->base.resv->nreads == 1,
+          "unbind: a batch running, the engine's last");
+    if (obj->base.resv->nreads == 1) {
+        f = dma_fence_get(obj->base.resv->reads[0]);
+    }
+    release_in_delay = I915_RCS0;
+    CHECK(f && !f->signaled && i915_gem_object_wait_idle(obj, 1) == 0 && release_in_delay < 0,
+          "unbind: the wait returns once the chip finishes the batch during its spin");
+    CHECK(f && f->listened && f->signaled && !rcs->requests && !rcs->unretired &&
+              !dev_a->gt.awake && parks == p + 1,
+          "unbind: its signal asked for first, the engine let go and the GT parked");
+    release_in_delay = -1;
+    dma_fence_put(f);
+    close_handle(&file_a, b);
+}
+
+/**
  * GEN7_SOL_RESET zeroes the four stream output offsets before the render
  * batch; on the blitter it fails, the request added without its batch.
  * A ring that refuses the commands fails the call with EIO.
@@ -1609,6 +1658,7 @@ int main(void)
     wsi_sync_files();
     parser();
     wait_before_interrupt();
+    unbind_wait_spin();
     sol_and_faults();
     lifetime();
     idle();

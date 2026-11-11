@@ -171,6 +171,27 @@ static int32_t object_fence_wait(struct dma_fence *f, uint32_t flags, int64_t de
     return err;
 }
 
+/**
+ * Ask for the signal of each leaf of `f` that has not signalled, as
+ * Linux's flush_lazy_signals enables every fence an i915_active tracks
+ * before __i915_active_wait sleeps (i915_active.c:559-571, 589-620): a
+ * listened request that completes during a later spin then hands its
+ * engine to retirement (gt/intel_breadcrumbs.c:220-235). The leaves are
+ * armed alone, so that a merge asks for no signal. Never sleeps.
+ */
+static void object_fence_arm(struct dma_fence *f)
+{
+    struct dma_fence_unwrap u;
+    struct dma_fence *leaf;
+
+    for (leaf = dma_fence_unwrap_first(f, &u); leaf; leaf = dma_fence_unwrap_next(&u)) {
+        if (!dma_fence_is_signaled(leaf)) {
+            dma_fence_enable_sw_signaling(leaf);
+        }
+    }
+    dma_fence_unwrap_end(&u);
+}
+
 int32_t i915_gem_object_wait_idle(struct drm_i915_gem_object *obj, int intr)
 {
     struct dma_resv *r = obj->base.resv;
@@ -178,6 +199,16 @@ int32_t i915_gem_object_wait_idle(struct drm_i915_gem_object *obj, int intr)
     uint32_t i;
     int32_t err;
 
+    /* Every fence of now armed before any wait, as Linux's unbind; one
+     * added while the wait sleeps is waited for but not armed. */
+    if (fence_busy(r->write)) {
+        object_fence_arm(r->write);
+    }
+    for (i = 0; i < r->nreads; i++) {
+        if (fence_busy(r->reads[i])) {
+            object_fence_arm(r->reads[i]);
+        }
+    }
     for (;;) {
         f = fence_busy(r->write) ? r->write : 0;
         for (i = 0; !f && i < r->nreads; i++) {

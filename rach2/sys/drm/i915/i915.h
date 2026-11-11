@@ -2155,7 +2155,10 @@ int i915_gem_object_is_active(const struct drm_i915_gem_object *obj);
 /**
  * Wait until no fence of the object's reservation is busy, so that the GPU
  * no longer reads or writes its pages, for ever, as Linux's i915_vma_sync;
- * with `intr` a signal ends the wait. Allocates nothing.
+ * with `intr` a signal ends the wait. Each busy fence's signal is asked
+ * for before the first wait, as Linux's i915_active_wait enables its
+ * fences, so that a last request done during the wait's spin lets its
+ * engine go. Allocates nothing.
  *
  * @return 0, or -EINTR with `intr`.
  */
