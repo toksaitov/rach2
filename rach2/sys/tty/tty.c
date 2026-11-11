@@ -1080,10 +1080,12 @@ void tty_console_counters(struct console_counters *out)
 }
 
 /* The ticks between two readings of the port by the tick once its receive
- * interrupt has taken a byte: Linux's 8250 backup timer, a fifth of a second
- * (drivers/tty/serial/8250/8250_core.c:262-285), which reads again a port
- * whose interrupt edge was lost. Linux reads a port that has an interrupt
- * from no timer but that one, and a port without one at every poll. */
+ * interrupt has taken a byte, a fifth of a second: Rach2's own fallback for
+ * an edge the interrupt lost, which the handler's loop makes rare. Linux
+ * reads an 8250 that has an interrupt from no timer; its backup timer only
+ * sends, for a UART with the THRE bug (8250_core.c:269-275), and a port
+ * without an interrupt is polled every uart_poll_timeout
+ * (8250_core.c:207-213). */
 #define CONSOLE_BACKUP_TICKS (TICK_HZ / 5)
 
 static void console_deliver(void);
