@@ -1963,9 +1963,6 @@ static int32_t do_accept(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr, uint32_t
         if (rc < 0) {
             return rc;
         }
-        if (!listen_sock->listening) {
-            continue;
-        }
         new_fd = fd_alloc(current_proc->fds);
         if (new_fd < 0) {
             return new_fd;
