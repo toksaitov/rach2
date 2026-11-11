@@ -78,8 +78,8 @@ struct vshm_rev {
  * of the VM's pages until its map_free. The record is freed with the last;
  * the detach gives back the region's pages and window, and the driver's
  * and maps' remaining references keep the record until they let go. A
- * record detached while objects still hold pages of its heap, as an
- * exported buffer does through a reset, keeps its heap's map and table of
+ * record detached while objects still hold pages of its heap, as a buffer
+ * whose dma-buf exists does through a reset, keeps its heap's map and table of
  * frames until they give the last back, and a later region over the same
  * memory leaves those frames out of its heap meanwhile.
  * `me` is the driver's block as last stored and `dev` the device's as last
@@ -1172,8 +1172,8 @@ static void vshm_release(struct vshm *vs)
         vshm_unreserve(vs);
     }
     if (vs->heap_map && vs->rev && vs->frames && vs->heap_used > 0) {
-        /* The objects that hold these pages hold their frames too; the
-         * table keeps their addresses alone, for `gone_give`. */
+        /* A backing holds its frames; a command's page is held by its
+         * address alone, which the table keeps for `gone_give`. */
         vs->gone = 1;
         vs->gone_next = vshm_kept;
         vshm_kept = vs;
@@ -1336,8 +1336,9 @@ static int32_t vshm_thread_start(void)
 /**
  * Take the region of `npages` frames, each with a reference the record now
  * holds, mapped at `base`: sort its frames, lay it out, with its magic
- * last, and make its heap. The driver's epoch starts at 0, so that the
- * first reset makes epoch 1. 0, or -ENOMEM.
+ * last, and make its heap, without the frames a detached record's objects
+ * still hold (`vshm_gone_reserve`). The driver's epoch starts at 0, so
+ * that the first reset makes epoch 1. 0, or -ENOMEM.
  */
 static int32_t vshm_take_region(struct vshm *vs, uintptr_t *frames, uint32_t npages,
                                 volatile uint8_t *base)
@@ -1366,6 +1367,7 @@ static int32_t vshm_take_region(struct vshm *vs, uintptr_t *frames, uint32_t npa
     }
     vshm_sort(vs->rev, npages);
     vs->l = l;
+    vshm_gone_reserve(vs);
     VGS_LAYOUT(base)->magic = 0;
     VGS_MB();
     k_memset((void *)(uintptr_t)(base + 4), 0, VGS_CTRL_SIZE - 4u);
@@ -1529,7 +1531,6 @@ static int32_t vshm_attach(fd_entry_t *e, const struct vgs_attach *a)
     klog(KLOG_INFO, "vgpu-shm", "attached: %u KiB, heap %u pages, peer %u, %s",
          (unsigned)(vs->size / 1024u), (unsigned)vs->heap_pages, (unsigned)a->peer,
          vs->bells ? "doorbells offered" : "polling");
-    vshm_gone_reserve(vs);
     e->priv = vs;
     vshm_cur = vs;
     wq_wake_all(&vshm_wq);
