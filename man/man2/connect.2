@@ -90,10 +90,14 @@ During the active open a reset counts only when it acknowledges the SYN,
 its acknowledgement number being the SYN's sequence number plus one;
 any other reset is ignored.
 After establishment a reset at the next expected sequence number records
-.Er ECONNRESET .
+.Er ECONNRESET ,
+and so does one at the number before it after the peer's FIN, and one at
+the right edge of the rightmost block of out-of-order data this side
+acknowledges selectively, as Linux takes them.
 A reset elsewhere in the receive window is answered with an
-acknowledgement and leaves the connection open, since the true peer
-answers that acknowledgement with a reset at the expected number;
+acknowledgement, at most one in 500 milliseconds, and leaves the
+connection open, since the true peer answers that acknowledgement with a
+reset at the expected number;
 a reset outside the window is ignored.
 This is RFC 5961, section 3.2.
 These pending errors are reported by

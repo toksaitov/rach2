@@ -61,7 +61,9 @@ A connection
 .Xr accept 2
 gives takes the listener's settings.
 A probe from the peer, a segment with no data below the next sequence
-number expected, is answered with an acknowledgement.
+number expected, is answered with an acknowledgement, as any segment
+outside the receive window is; see
+.Sx Segments refused .
 .Ss Give-up
 A connection whose data or FIN goes unacknowledged is given up with
 .Er ETIMEDOUT
@@ -111,14 +113,37 @@ and ends a closed window's probing that long after its first probe,
 answered or not, or over data in flight, just past that long after the
 loss's first retransmission, as Linux does; 0 restores the default.
 When the first probe over data in flight is that first retransmission,
-it gives up at once if that long has passed since the retransmission
-timer was last started, by the send of the oldest data unacknowledged or
-by an acknowledgement of new data since, where Linux counts from the
-oldest data's send.
+it gives up at once if that long has passed since the oldest data
+unacknowledged was first sent, as on Linux.
 A frame the card refuses is kept and sent again at the next tick; a
 connection whose every frame the card has refused for 30 seconds, with
 nothing sent between, is given up, but the wait does not run while the card
 reports its link down, so a cable out for a minute ends nothing.
+.Ss Segments refused
+After the handshake and before
+.Dv TIME_WAIT ,
+a connection judges each segment before it takes anything from it, as
+Linux does.
+One without the ACK flag is dropped.
+One outside the receive window, which ends before the data this side last
+acknowledged or starts past the right edge of the window it offered, is
+dropped and answered with an acknowledgement of what was received: one
+carrying data or a FIN each time, and one without, as a peer's keepalive
+probe is, at most once in 500 milliseconds, as Linux's
+.Pa tcp_invalid_ratelimit
+has it, so that two ends that each find the other's segments stale do
+not answer each other for ever.
+Its acknowledgement and window are not taken.
+A SYN draws a challenge acknowledgement, which a true peer answers with a
+segment this side accepts (RFC 5961, section 4).
+An acknowledgement of data never sent drops the segment, with a
+challenge after the peer's FIN or this side's, and so does one further
+below the oldest unacknowledged byte than the largest window the peer has
+offered or the bytes it has acknowledged (RFC 5961, section 5).
+An older acknowledgement nearer is taken without its window.
+Challenge acknowledgements share the limit of 500 milliseconds.
+.Xr connect 2
+gives the resets.
 .Ss Black holes
 A path that drops segments larger than some size without reporting it, a
 black hole, is detected as RFC 4821 and Linux's
@@ -169,9 +194,14 @@ takes.
 .Pa /proc/net/netstat
 counts in its
 .Ql TcpExt:
-line the retransmission timeouts, TCPTimeouts; the connections a timeout
-ended, TCPAbortOnTimeout; the keepalive probes sent, TCPKeepAlive; and the
-probes of a larger segment lost and taken, TCPMTUPFail and TCPMTUPSuccess.
+line the segments of data received again whole, DelayedACKLost; the
+retransmission timeouts, TCPTimeouts; the connections a timeout ended,
+TCPAbortOnTimeout; the challenge acknowledgements sent, TCPChallengeACK,
+and the SYNs that drew one, TCPSYNChallenge; the answers to a segment
+outside the window held back by the limit, TCPACKSkippedSeq, and the
+challenges held back, TCPACKSkippedChallenge; the keepalive probes sent,
+TCPKeepAlive; and the probes of a larger segment lost and taken,
+TCPMTUPFail and TCPMTUPSuccess.
 .Pa /proc/net/snmp
 counts the segments and the connections ended; see
 .Xr proc 5 .
