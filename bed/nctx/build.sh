@@ -146,10 +146,13 @@ halt()
 session()
 {
     [ -f "$ref/prepared.qcow2" ] || die "no prepared image; run tests/graphics/debian-ref/debian-ref.sh prepare"
-    mkdir -p "$cache"
+    work='' qemu=''
+    trap 'if [ -n "$qemu" ]; then kill "$qemu" 2>/dev/null || true; wait "$qemu" 2>/dev/null || true; fi; [ -z "$work" ] || rm -rf "$work"' EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    mkdir -p "$cache" "${TMPDIR:-$tree/build/tmp}"
     work=$(mktemp -d "${TMPDIR:-$tree/build/tmp}/nctx.XXXXXX")
-    qemu=
-    trap 'kill "$qemu" 2>/dev/null || true; rm -rf "$work"' EXIT
     snapshot > "$work/snapshot"
 }
 
@@ -254,24 +257,28 @@ reverse()
 {
     session
     [ -f "$cache/nctx-alone.qcow2" ] || die "no nctx-alone.qcow2; run build.sh alone"
+    (cd "$cache" && sha256sum -c nctx-alone.qcow2.sha256) || die "the standalone image's digest differs"
     [ ! -f "$cache/id_ed25519" ] || key=$cache/id_ed25519
     qemu-img create -q -f qcow2 -F qcow2 -b "$cache/nctx-alone.qcow2" "$work/reverse.qcow2"
     boot "$work/reverse.qcow2"
     echo "nctx: building the reversed VM; console in $work/console.log"
-    put "$here/reverse-vm.sh" "$here/pins" "$work/snapshot"
+    put "$here/reverse-vm.sh" "$here/relocations.sh" "$here/nctxcheck.c" "$here/pins" "$work/snapshot"
     # shellcheck disable=SC2086 # opts are words
     (cd "$tree" && tar cf - bed/vm/module bed/vm/backend rach2/sys/virtio/vgpushm.h) |
         ssh $opts -p "$port" gfx@127.0.0.1 'mkdir -p nctx/build/source && tar xf - -C nctx/build/source'
     in_guest 'sudo sh reverse-vm.sh prepare build/source'
+    in_guest 'cc -std=c99 -O2 -Wall -Wextra -o nctxcheck nctxcheck.c -ldl'
+    get nctxcheck
+    release=$(in_guest 'uname -r')
     for name in vmlinuz initrd.img; do
         # shellcheck disable=SC2086 # opts are words
-        ssh $opts -p "$port" gfx@127.0.0.1 "sudo cat /$name" < /dev/null > "$cache/reverse-$name.part"
+        ssh $opts -p "$port" gfx@127.0.0.1 "sudo cat /boot/$name-$release" < /dev/null > "$cache/reverse-$name.part"
         mv "$cache/reverse-$name.part" "$cache/reverse-$name"
     done
     halt
     qemu-img convert -O qcow2 "$work/reverse.qcow2" "$cache/reverse.qcow2.part"
     mv "$cache/reverse.qcow2.part" "$cache/reverse.qcow2"
-    (cd "$cache" && sha256sum reverse.qcow2 reverse-vmlinuz reverse-initrd.img mesa-nctx.tar.xz \
+    (cd "$cache" && sha256sum reverse.qcow2 reverse-vmlinuz reverse-initrd.img mesa-nctx.tar.xz nctxcheck \
         > reverse.sha256)
     echo "nctx: result: $cache/reverse.qcow2, reverse-vmlinuz, reverse-initrd.img and reverse.sha256"
 }

@@ -15,10 +15,11 @@ The matched research stack of the bed's native-context rung, kept apart from the
 * `check` boots an overlay of `nctx.qcow2` and prints what it holds: the running kernel, both QEMUs' versions, whether the bed's QEMU takes `drm_native_context`, the virglrenderer it loads, and whether that library holds the i915 renderer and the built Mesa holds Crocus and Crocus's virtio path.
 * `run CMD` boots an overlay of `nctx.qcow2`, copies this directory's scripts into `~/nctx` there and runs CMD in it as the user `gfx`.
 
-Two more steps, outside `all`, carry the stack to another host and rehearse 83-6b's session:
+Three more steps, outside `all`, carry the stack to another host and prepare the two directions:
 
 * `alone` makes `nctx-alone.qcow2`, a compressed copy of `nctx.qcow2` with no backing file, 1,932,853,248 bytes, with its SHA-256 in `nctx-alone.qcow2.sha256` and the three tars' in `SHA256SUMS`.
 * `rehearse` boots a new overlay of the prepared reference image, Debian 13 with Linux 6.12 like the Lenovo's Debian but with no i915, with `nctx-alone.qcow2` as its second disk, and runs `session.sh all` there as root with `REHEARSE=1`; the session's output is kept as `rehearsal.tar` in the cache.
+* `reverse` builds the shared-memory backend against the private virglrenderer and its module against the running backports kernel, in a new overlay of `nctx-alone.qcow2`. It exports a standalone `reverse.qcow2`, `reverse-vmlinuz`, `reverse-initrd.img` and `nctxcheck`, with their digests and Mesa's in `reverse.sha256`. The image's service starts only with `nctx.reverse=fallback` or `nctx.reverse=native` on its boot line: the former serves virgl on llvmpipe without the DRM capset, the latter serves native context on the VM's i915 render node. The input image's SSH key must be `id_ed25519` in the cache, or the prepared reference image's key.
 
 The cache is `build/cache/nctx` of the main clone, shared by its worktrees, or `NCTX_CACHE`. The builder has 16 CPUs and 16 GiB unless `NCTX_CPUS` and `NCTX_MIB` say otherwise.
 
