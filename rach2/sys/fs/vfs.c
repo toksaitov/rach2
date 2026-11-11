@@ -354,6 +354,47 @@ static int may_search(struct vfs_mount *mnt, void *node, int use_real)
     return (bits & 1u) ? 0 : -EACCES;
 }
 
+/* The protections of /proc/sys/fs, at the values Debian and Ubuntu set at
+ * boot; Linux's own are 0 (fs/namei.c:1042-1045). */
+int vfs_protected_hardlinks = 1;
+int vfs_protected_symlinks = 1;
+int vfs_protected_fifos = 1;
+int vfs_protected_regular = 2;
+
+/**
+ * Whether the walk may follow the symbolic link of attributes `lst`, the
+ * last name of a path, found in the directory `dir` of `mnt`, as Linux's
+ * may_follow_link (fs/namei.c:1112-1140): 0, or -EACCES under
+ * fs.protected_symlinks for a link in a sticky directory that others may
+ * write, owned by neither the follower nor the directory's owner. Root is
+ * refused too, since the rule guards it against a link another user plants
+ * in /tmp. The follower is the file-system uid, or the real uid with
+ * `use_real`, for access(2).
+ */
+static int may_follow_link(struct vfs_mount *mnt, void *dir, const struct vfs_stat *lst,
+                           int use_real)
+{
+    struct vfs_stat dst;
+    uint32_t uid;
+    int rc;
+
+    if (!vfs_protected_symlinks || !current_proc) {
+        return 0;
+    }
+    uid = use_real ? current_proc->ruid : proc_fsuid(current_proc);
+    if (lst->uid == uid) {
+        return 0;
+    }
+    rc = mnt->type->ops->getattr(mount_base(mnt), dir, &dst);
+    if (rc != 0) {
+        return rc;
+    }
+    if ((dst.mode & 01002u) != 01002u || dst.uid == lst->uid) {
+        return 0;
+    }
+    return -EACCES;
+}
+
 /* The resolver. */
 
 /**
@@ -1171,6 +1212,9 @@ struct walk_record {
     char *real;
     struct vfs_name **entry;
     const struct vfs_scope *scope; /* an openat2's, or NULL */
+    /* The attributes of the directory the last name was looked up in, or
+     * NULL; a mode of 0 when no name was (`vfs_resolve_entry`). */
+    struct vfs_stat *dir;
 };
 
 /* The restrictions one walk applies: an openat2's scope (`vfs_resolve_scoped`)
@@ -1241,6 +1285,21 @@ static int walk_link_ok(const struct walk_rules *rules, int magic)
         return -EAGAIN;
     }
     return 0;
+}
+
+/**
+ * Whether the walk under `rules` may follow the symbolic link of attributes
+ * `lst` that it found in the directory `cur`: the last name of the path
+ * unless `more` comes after it, which fs.protected_symlinks judges first
+ * (`may_follow_link`), as Linux's pick_link does, and then the link rules
+ * of `walk_link_ok`. 0 or a negative errno.
+ */
+static int walk_follow_ok(const struct walk_rules *rules, const struct vfs_ref *cur,
+                          const struct vfs_stat *lst, int more, int use_real)
+{
+    int rc = more ? 0 : may_follow_link(cur->mnt, cur->node, lst, use_real);
+
+    return rc != 0 ? rc : walk_link_ok(rules, 0);
 }
 
 /** Start the record `wn` at the anchor of the walk `rules` has, or at the
@@ -1477,9 +1536,13 @@ static int walk_record_entry(struct walk_record *record, const struct vfs_ref *p
     return vfs_name_capture(parent, leaf, record->entry);
 }
 
-/** Release an unsuccessful walk's entry, or initialize its empty slot. */
+/** Release an unsuccessful walk's entry, or initialize its empty slot, and
+ * mark its directory's attributes as not read. */
 static void walk_record_clear(struct walk_record *record, int release)
 {
+    if (record && record->dir) {
+        record->dir->mode = 0;
+    }
     if (record && record->entry) {
         if (release) {
             vfs_name_put(*record->entry);
@@ -1488,11 +1551,21 @@ static void walk_record_clear(struct walk_record *record, int release)
     }
 }
 
-/** Move to a looked-up node after recording its final directory entry. */
+/** Move to a looked-up node after recording its final directory entry and,
+ * for the last name of the path, its directory's attributes. */
 static int walk_record_move(struct walk_record *record, struct vfs_ref *cur, void *found,
                             const char *leaf, const char *rest)
 {
     int rc = walk_record_entry(record, cur, found, leaf, rest);
+
+    if (rc == 0 && record && record->dir) {
+        while (*rest == '/') {
+            rest++;
+        }
+        if (*rest == '\0') {
+            rc = vfs_getattr(cur->mnt, cur->node, record->dir);
+        }
+    }
 
     if (rc != 0) {
         node_put(cur->mnt, found);
@@ -1561,7 +1634,8 @@ static int walk_finish(const struct vfs_ref *cur, int flags)
  *
  * On a type with symbolic links, a component that is one is followed when
  * more of the path comes after it, and at the last component unless the
- * caller passed VFS_WALK_NOFOLLOW. Its target replaces the component, an
+ * caller passed VFS_WALK_NOFOLLOW, where fs.protected_symlinks may refuse it
+ * (`may_follow_link`). Its target replaces the component, an
  * absolute target restarts at the root, and the walk goes on from the
  * directory the link was found in. A mount covers a directory, so a link is
  * never a covered node. /proc/<pid>/exe is followed to the program's file
@@ -1856,7 +1930,7 @@ begin:
                 goto out_err;
             }
             if ((lst.mode & 0170000u) == 0120000u && (more || !(flags & VFS_WALK_NOFOLLOW))) {
-                int absolute = walk_link_ok(&rules, 0);
+                int absolute = walk_follow_ok(&rules, &cur, &lst, more, use_real);
 
                 if (absolute != 0) {
                     node_put(cur.mnt, found);
@@ -1998,6 +2072,7 @@ int vfs_resolve_scoped(const struct vfs_scope *scope, const char *path, int flag
     record.real = real;
     record.entry = NULL;
     record.scope = scope;
+    record.dir = NULL;
     flags &= VFS_WALK_NOFOLLOW | VFS_WALK_LOCK | VFS_WALK_CREATE;
     if (path[0] == '/' && (scope->resolve & VFS_RESOLVE_BENEATH)) {
         return -EXDEV;
@@ -2020,17 +2095,18 @@ int vfs_resolve_scoped(const struct vfs_scope *scope, const char *path, int flag
 
 int vfs_resolve_real(const char *path, int flags, struct vfs_ref *out, char *real)
 {
-    return vfs_resolve_entry(path, flags, out, real, NULL);
+    return vfs_resolve_entry(path, flags, out, real, NULL, NULL);
 }
 
 int vfs_resolve_entry(const char *path, int flags, struct vfs_ref *out, char *real,
-                      struct vfs_name **entry)
+                      struct vfs_name **entry, struct vfs_stat *dir)
 {
     struct walk_record record;
 
     record.real = real;
     record.entry = entry;
     record.scope = NULL;
+    record.dir = dir;
     return resolve_path(0, path, flags & ~(VFS_WALK_PARENT | VFS_WALK_CREATE), out, 0, 0, &record);
 }
 

@@ -8354,7 +8354,11 @@ static const struct {
     {SYNTH_SYS_WATCHDOG + 10, &sysctl_hung_task_check_count, 0, 0x7FFFFFFF},
     {SYNTH_SYS_HUNG_TASK_TIMEOUT, &sysctl_hung_task_timeout_secs, 0, SYSCTL_SECONDS_MAX},
     {SYNTH_SYS_HUNG_TASK_INTERVAL, &sysctl_hung_task_check_interval_secs, 0, SYSCTL_SECONDS_MAX},
-    {SYNTH_SYS_HUNG_TASK_WARNINGS, &sysctl_hung_task_warnings, -1, 0x7FFFFFFF}};
+    {SYNTH_SYS_HUNG_TASK_WARNINGS, &sysctl_hung_task_warnings, -1, 0x7FFFFFFF},
+    {SYNTH_SYS_PROTECTED_FIFOS, &vfs_protected_fifos, 0, 2},
+    {SYNTH_SYS_PROTECTED_FIFOS + 1, &vfs_protected_hardlinks, 0, 1},
+    {SYNTH_SYS_PROTECTED_FIFOS + 2, &vfs_protected_regular, 0, 2},
+    {SYNTH_SYS_PROTECTED_SYMLINKS, &vfs_protected_symlinks, 0, 1}};
 
 /** The index in `sysctl_ints` of the /proc/sys file `entry`, or -1. */
 static int sysctl_int(int entry)

@@ -372,6 +372,11 @@ int synth_sys_count(void);
 #define SYNTH_SYS_HUNG_TASK_TIMEOUT    70
 #define SYNTH_SYS_HUNG_TASK_INTERVAL   71
 #define SYNTH_SYS_HUNG_TASK_WARNINGS   72
+/* The entries of fs/protected_fifos, protected_hardlinks, protected_regular
+ * and protected_symlinks, in that order, whose values are vfs.h's
+ * `vfs_protected_*`. */
+#define SYNTH_SYS_PROTECTED_FIFOS      73
+#define SYNTH_SYS_PROTECTED_SYMLINKS   76
 /**
  * Whether `entry` is under net/ipv6/conf: 1 with the name of its directory
  * in `*dir`, `all`, `default` or an interface's, and in `*key` the

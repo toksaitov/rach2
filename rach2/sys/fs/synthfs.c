@@ -327,7 +327,11 @@ static const struct {
                {6, "hung_task_check_count", ""},
                {6, "hung_task_timeout_secs", ""},
                {6, "hung_task_check_interval_secs", ""},
-               {6, "hung_task_warnings", ""}};
+               {6, "hung_task_warnings", ""},
+               {1, "protected_fifos", ""},
+               {1, "protected_hardlinks", ""},
+               {1, "protected_regular", ""},
+               {1, "protected_symlinks", ""}};
 
 /* The entries of the table. */
 #define SYNTH_SYS_TABLE ((int)(sizeof(sysents) / sizeof(sysents[0])))
@@ -377,7 +381,8 @@ int synth_sys_writable(int entry)
            entry == SYNTH_SYS_PANIC || entry == SYNTH_SYS_PANIC_ON_OOPS ||
            (entry >= SYNTH_SYS_WATCHDOG && entry <= SYNTH_SYS_HUNG_TASK_WARNINGS &&
             (entry != SYNTH_SYS_NMI_WATCHDOG || watchdog_hardlockup_available())) ||
-           (entry >= SYNTH_SYS_TCP_KEEPALIVE_TIME && entry <= SYNTH_SYS_TCP_RETRIES2);
+           (entry >= SYNTH_SYS_TCP_KEEPALIVE_TIME && entry <= SYNTH_SYS_TCP_RETRIES2) ||
+           (entry >= SYNTH_SYS_PROTECTED_FIFOS && entry <= SYNTH_SYS_PROTECTED_SYMLINKS);
 }
 
 /* The files of /proc/net after the first four, by origin and name. */
