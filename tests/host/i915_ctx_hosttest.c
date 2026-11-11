@@ -1612,7 +1612,8 @@ static void row_park_building(void)
 
     err = i915_request_create(r, &rq);
     p = parks;
-    CHECK("park: a request being built", err == 0 && rcs->reserved != 0 && i915->gt.awake);
+    CHECK("park: a request being built",
+          err == 0 && rcs->reserved != 0 && rcs->building && i915->gt.awake);
     run_ms(1001);
     (void)i915_submit_work();
     CHECK("park: holds the GT awake past the worker's pass", i915->gt.awake && parks == p);
