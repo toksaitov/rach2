@@ -1,4 +1,5 @@
 """Run a browser's HTTPS pages, diagnostics, GPU, WebGPU or recovery acceptance."""
+import base64
 import contextlib
 import http.server
 import json
@@ -461,6 +462,62 @@ def webgpu_venus(b, url):
     return result
 
 
+# Chromium's trace categories for the picture's first frames: each thread's
+# tasks, the GPU process's and the compositor's work, Dawn's calls, Mojo's
+# and Wayland's messages and the page's own marks.
+TRACE_CATEGORIES = ["toplevel", "gpu", "gpu.dawn", "disabled-by-default-gpu.dawn", "viz", "cc",
+                    "ui", "mojom", "ipc", "wayland", "benchmark", "blink.user_timing"]
+
+
+def hasvk_picture(b, url, trace=None):
+    """Check hasvk's compute and render readback, then draw the picture page's 480 frames.
+
+    With TRACE, a path, Chromium's own trace of the picture page is kept
+    there, gzipped.
+    """
+    b.navigate(url + "/page.html")
+    result = {"readback": b.script("""(async () => {
+        const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter || adapter.info.vendor !== 'intel' ||
+            adapter.info.architecture !== 'gen-7' || adapter.info.isFallbackAdapter)
+            throw Error('no native Intel gen-7 adapter');
+        return await gpu(adapter);
+    })()""")}
+    save(b.out / "partial.json", result)
+    got = result["readback"]
+    assert got["words"] == 1024 and got["errors"] == 0 and got["pixel"] == [255, 128, 0, 255], got
+    if trace:
+        b.client.call("Tracing.start", {"transferMode": "ReturnAsStream", "streamCompression": "gzip",
+            "traceConfig": {"recordMode": "recordContinuously", "traceBufferSizeInKb": 262144,
+                            "includedCategories": TRACE_CATEGORIES}})
+    b.navigate(url + "/hasvk.html")
+    result["picture"] = b.until(lambda: b.script("window.result || null"))
+    if trace:
+        b.client.call("Tracing.end")
+        stream = b.client.event("Tracing.tracingComplete")["params"]["stream"]
+        with open(trace, "wb") as kept:
+            while True:
+                part = b.client.call("IO.read", {"handle": stream, "size": 1 << 20})
+                data = part.get("data", "")
+                kept.write(base64.b64decode(data) if part.get("base64Encoded") else data.encode())
+                if part.get("eof"):
+                    break
+        b.client.call("IO.close", {"handle": stream})
+    save(b.out / "partial.json", result)
+    assert result["picture"]["ok"], result["picture"]
+    return result
+
+
+def webgpu_frames(b, url, trace):
+    """Draw the hasvk picture as webgpu-hasvk does and keep its frame times, with a trace if asked.
+
+    Like webgpu-hasvk, the caller supplies a DRM Weston. Nothing is judged
+    but the readback and the picture's own errors; the caller reads the times.
+    """
+    assert b.name == "chromium"
+    return hasvk_picture(b, url, b.out / "trace.json.gz" if trace else None)
+
+
 def webgpu_hasvk(b, url):
     """Read hasvk's compute and pixels, capture the panel, then read the sandboxes.
 
@@ -473,21 +530,7 @@ def webgpu_hasvk(b, url):
     (b.out / "vulkaninfo.out").write_text(vulkan)
     assert "HD Graphics 4400" in vulkan and "llvmpipe" not in vulkan, vulkan
     assert re.search(r"apiVersion\s*=\s*1\.2\.", vulkan), "hasvk is not at its default API version"
-    b.navigate(url + "/page.html")
-    result = {"readback": b.script("""(async () => {
-        const adapter = await navigator.gpu.requestAdapter();
-        if (!adapter || adapter.info.vendor !== 'intel' ||
-            adapter.info.architecture !== 'gen-7' || adapter.info.isFallbackAdapter)
-            throw Error('no native Intel gen-7 adapter');
-        return await gpu(adapter);
-    })()""")}
-    save(b.out / "partial.json", result)
-    got = result["readback"]
-    assert got["words"] == 1024 and got["errors"] == 0 and got["pixel"] == [255, 128, 0, 255], got
-    b.navigate(url + "/hasvk.html")
-    result["picture"] = b.until(lambda: b.script("window.result || null"))
-    save(b.out / "partial.json", result)
-    assert result["picture"]["ok"], result["picture"]
+    result = hasvk_picture(b, url)
     shots = b.work / "shots"
     shots.mkdir()
     with (b.out / "screenshooter.log").open("w") as log:
@@ -540,6 +583,8 @@ def main():
                 result = webgpu_venus(b, url)
             elif mode == "webgpu-hasvk":
                 result = webgpu_hasvk(b, url)
+            elif mode in ("webgpu-frames", "webgpu-trace"):
+                result = webgpu_frames(b, url, mode == "webgpu-trace")
             elif mode == "sound":
                 result = sound(b, url)
             else:

@@ -40,18 +40,20 @@ def main():
 
     The arguments are the user, the browser, the output directory and the
     runner's mode, `sandbox` when it is left out, `gpu` for the GPU
-    profile, or `webgpu-hasvk` on the caller's DRM Weston.
+    profile, or `webgpu-hasvk`, `webgpu-frames` or `webgpu-trace` on the
+    caller's DRM Weston.
     """
     user, browser, out_name = sys.argv[1:4]
     mode = sys.argv[4] if len(sys.argv) > 4 else "sandbox"
-    assert mode in ("sandbox", "gpu", "webgpu-hasvk"), mode
+    hasvk = ("webgpu-hasvk", "webgpu-frames", "webgpu-trace")
+    assert mode in ("sandbox", "gpu") + hasvk, mode
     assert os.getuid() == 0, "sandbox proc reader needs root"
     out = Path(out_name).resolve()
     out.mkdir(parents=True, exist_ok=True)
     account = pwd.getpwnam(user)
     os.chown(out, account.pw_uid, account.pw_gid)
     here = Path(__file__).resolve().parent
-    kind = "performance" if mode == "webgpu-hasvk" else "conformance"
+    kind = "performance" if mode in hasvk else "conformance"
     command = ("export GRAPHICS_CLASS=%s GRAPHICS_DONE=1; . %s && sh %s %s %s %s" %
                (kind, shlex.quote(str(here / "../guest-env.sh")),
                 shlex.quote(str(here / "run.sh")), shlex.quote(browser),
