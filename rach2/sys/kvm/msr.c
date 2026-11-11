@@ -12,6 +12,8 @@
 #include "../mm/kheap.h"
 #include "../mm/usercopy.h"
 
+#define MSR_IA32_P5_MC_ADDR    0x000u
+#define MSR_IA32_P5_MC_TYPE    0x001u
 #define MSR_IA32_TSC           0x010u
 #define MSR_IA32_TSC_ADJUST    0x03Bu
 #define MSR_IA32_UCODE_REV     0x08Bu
@@ -32,6 +34,7 @@
 #define MSR_MTRR_FIX_16K_A0000 0x259u
 #define MSR_MTRR_FIX_4K_C0000  0x268u
 #define MSR_IA32_CR_PAT        0x277u
+#define MSR_IA32_MC0_CTL2      0x280u
 #define MSR_IA32_TSC_DEADLINE  0x6E0u
 #define MSR_IA32_XSS           0xDA0u
 #define MSR_MTRR_DEF_TYPE      0x2FFu
@@ -326,6 +329,20 @@ static int mce_bank_msr(const struct kvm_vcpu *v, uint32_t index, uint32_t *bank
     return 1;
 }
 
+/** Whether `index` is the CTL2 MSR of a machine-check bank: 1 for one of
+ * a bank `v` has, -1 for one of a bank it lacks, 0 for another MSR. No
+ * MCG_CAP offers MCG_CMCI_P, as none of Linux 6.12's does, so a CTL2 of a
+ * bank that is there holds 0 alone: the caller reads 0 and writes 0, and
+ * the guest neither reads nor writes it, as Linux's get_msr_mce and
+ * set_msr_mce. */
+static int mce_ctl2_msr(const struct kvm_vcpu *v, uint32_t index)
+{
+    if (index < MSR_IA32_MC0_CTL2 || index >= MSR_IA32_MC0_CTL2 + KVM_MAX_MCE_BANKS) {
+        return 0;
+    }
+    return index - MSR_IA32_MC0_CTL2 < (uint32_t)(v->mcg_cap & 0xFFu) ? 1 : -1;
+}
+
 /** Whether the guest of `v` may write a nonzero value to a bank's STATUS:
  * a guest whose vendor is AMD or Hygon, with HWCR's McStatusWrEn set, as
  * Linux's can_set_mci_status. */
@@ -362,6 +379,8 @@ int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value, int host)
     switch (index) {
     case MSR_AMD64_SYSCFG:
     case MSR_AMD64_NB_CFG:
+    case MSR_IA32_P5_MC_ADDR:
+    case MSR_IA32_P5_MC_TYPE:
         *value = 0;
         return 0;
     case MSR_IA32_TSC:
@@ -414,6 +433,14 @@ int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value, int host)
             return KVM_MSR_INVAL;
         }
         *value = v->mce_banks[bank * 4u + reg];
+        return 0;
+    }
+    r = mce_ctl2_msr(v, index);
+    if (r != 0) {
+        if (r < 0 || !host) {
+            return KVM_MSR_INVAL;
+        }
+        *value = 0;
         return 0;
     }
     if (!table_msr(index)) {
@@ -514,7 +541,8 @@ static int feature_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value)
  * set_msr_mce: MCG_CTL 0 or all ones, and only with MCG_CTL_P but for the
  * caller's 0; a bank's CTL 0 or all ones but for bit 10 and bit 0, which
  * some guests clear; a bank's STATUS anything from the caller, but only 0
- * from the guest unless `mci_status_writable`. 0, KVM_MSR_INVAL, or 1 for
+ * from the guest unless `mci_status_writable`; a bank's CTL2 0 from the
+ * caller alone, as `mce_ctl2_msr` says. 0, KVM_MSR_INVAL, or 1 for
  * another MSR.
  */
 static int mce_set(struct kvm_vcpu *v, uint32_t index, uint64_t value, int host)
@@ -537,6 +565,10 @@ static int mce_set(struct kvm_vcpu *v, uint32_t index, uint64_t value, int host)
         return 0;
     default:
         break;
+    }
+    r = mce_ctl2_msr(v, index);
+    if (r != 0) {
+        return r > 0 && host && value == 0 ? 0 : KVM_MSR_INVAL;
     }
     r = mce_bank_msr(v, index, &bank, &reg);
     if (r <= 0) {
@@ -591,6 +623,11 @@ int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value, int host)
         kvm_tsc_sync(v, &value);
         return 0;
     case MSR_IA32_MCG_CAP:
+        /* The caller's alone: Linux's kvm_set_msr_common has no case for
+         * it, so the guest's write is an unknown MSR's. */
+        if (!host) {
+            return KVM_MSR_UNKNOWN;
+        }
         if (value & ~(MCG_CTL_P | MCG_SER_P | 0xFFull | 0xFF0000ull) ||
             (value & 0xFFu) > KVM_MAX_MCE_BANKS) {
             return KVM_MSR_INVAL;
