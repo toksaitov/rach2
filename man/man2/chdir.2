@@ -42,19 +42,25 @@ or
 A process directory reached through
 .Pa /proc/self
 is recorded with the actual process ID.
-Another process's
-.Pa /proc/PID/fd
-and
+A process's
+.Pa /proc/PID/fd ,
+mode 0500, is entered by its owner, a thread of the process and a
+privileged caller, whatever their groups, and
 .Pa /proc/PID/fdinfo
-are entered only by a caller that may read its descriptors, as
+only by a caller that may read the process's descriptors, as
 .Xr proc 5
-says, and are otherwise
+says; any other caller gets
 .Er EACCES ,
 through
 .Fn chdir
 and through
 .Fn fchdir
 alike, as on Linux.
+.Fn fchdir
+into the fd directory of a process that has ended judges the owner the
+directory had when the descriptor was opened, and into its fdinfo
+directory returns
+.Er ESRCH .
 .Pp
 .Fn fchdir
 makes the directory
@@ -235,7 +241,11 @@ The output buffer is too small for the path and terminating null byte.
 .It Er ESRCH
 The raw
 .Fn getcwd
-call has no current process.
+call has no current process, or
+.Fn fchdir
+names the
+.Pa /proc/PID/fdinfo
+directory of a process that has ended.
 .El
 .Sh SEE ALSO
 .Xr access 2 ,

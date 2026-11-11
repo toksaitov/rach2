@@ -1560,19 +1560,25 @@ At most the first 128 KiB of them are read, so a longer list ends inside
 a string, without that string's NUL, and a page the address space cannot
 read ends it early.
 .It Pa /proc/PID/fd/N
-The directory, of mode 0500, and each link in it are
+The directory has mode 0500 and is owned by the process's effective IDs
+while it is dumpable and by root otherwise.
+An open of it for reading, and a change of the working directory into it
+by
+.Xr chdir 2
+or
+.Fn fchdir ,
+are judged by that mode and owner, whatever the caller's groups, with a
+thread of the process always let in, as Linux's
+.Fn proc_fd_permission
+judges them; any other caller but a privileged one gets
+.Er EACCES .
+An open with
+.Dv O_PATH ,
+which reads nothing, succeeds for anyone, as Linux's does.
+Each link in it is
 .Er EACCES
 to a caller that may not read
-.Pa environ ,
-but an open of the directory with
-.Dv O_PATH ,
-which reads nothing, succeeds, as Linux's does;
-a change of the working directory into it by
-.Xr chdir 2 ,
-or by
-.Fn fchdir
-through such a descriptor, is
-.Er EACCES .
+.Pa environ .
 A symbolic link for each open descriptor N, whose target names what the
 descriptor is open on: a file by its path now, from the reader's root, as
 Linux's
@@ -2289,11 +2295,13 @@ their delivery off, and ended by an EOI; one taken from the PIC is ended
 at the PIC and counts no EOI.
 The counts are Rach2's own, not Linux's, and wrap at 2^32.
 Linux adds lines of each kind of file.
-Another user's is
-.Er EACCES ,
-as
-.Pa /proc/PID/fd
-is.
+It is
+.Er EACCES
+to a caller that may not read
+.Pa environ ,
+and a change of the working directory into it through a descriptor opened
+before the process ended is
+.Er ESRCH .
 .Xr chroot 2
 to it gives the caller a root that holds nothing, the empty root of a
 file system no path reaches.

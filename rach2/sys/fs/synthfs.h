@@ -233,6 +233,8 @@ struct synth_dir {
     int pid;
     int used; /* 1 from its allocation; nothing reads it */
     int tid;
+    uint32_t uid; /* a /proc/PID/fd directory's owner at its open, which */
+    uint32_t gid; /* fchdir judges by once the process has ended */
 };
 
 /**

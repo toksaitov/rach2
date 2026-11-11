@@ -42,6 +42,11 @@ int procfs_resolve_pid(int pid);
  * not privileged. 0 when there is no such process. */
 int procfs_may_read(int pid);
 
+/** Whether process `pid` is the caller's own, a thread of the caller's
+ * thread group, as Linux's same_thread_group asks: 1 or 0, 0 when there is
+ * no such process. */
+int procfs_same_group(int pid);
+
 /** The mode of the file `procfile` of a process's directory when only its
  * owner may open it, Linux's: 0400 for environ, auxv and syscall, 0600 for
  * mem; 0 for a file of another mode. */

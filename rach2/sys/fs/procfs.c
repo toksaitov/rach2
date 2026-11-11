@@ -820,6 +820,13 @@ int procfs_may_read(int pid)
     return p && procfs_may_read_mem(p);
 }
 
+int procfs_same_group(int pid)
+{
+    process_t *p = procfs_proc(pid);
+
+    return p && current_proc && p->tg == current_proc->tg;
+}
+
 int procfs_exe_file(int pid, struct vfs_ref *out)
 {
     process_t *p = procfs_proc(pid);
