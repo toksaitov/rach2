@@ -1,0 +1,22 @@
+[21:57:13.799] Using config file '/etc/xdg/weston/weston.ini'
+[21:57:13.810] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/drm-backend.so'
+[21:57:15.425] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/gl-renderer.so'
+[21:57:15.543] GL renderer: Mesa Intel(R) HD Graphics 4400 (HSW GT2)
+[21:57:15.565] Using GL renderer
+[21:57:15.681] Registered plugin API 'weston_drm_output_api_v1' of size 40
+[21:57:15.681] Registered plugin API 'weston_drm_virtual_output_api_v2' of size 48
+[21:57:15.683] Loading module '/usr/lib/x86_64-linux-gnu/weston/kiosk-shell.so'
+[21:57:15.693] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/xwayland.so'
+[21:57:15.779] Registered plugin API 'weston_xwayland_v3' of size 32
+[21:57:15.779] Registered plugin API 'weston_xwayland_surface_v2' of size 24
+rach2-desktop: session: ended; SIGHUP starts it again
+        47       34:51 S    /bin/bash /usr/libexec/rach2-desktop
+       100       34:48 Ss   bash -c udevadm monitor --udev --subsystem-match=drm |     while read -r line; do         case $line in             *" rem
+       105       34:48 S    bash -c udevadm monitor --udev --subsystem-match=drm |     while read -r line; do         case $line in             *" rem
+      4590       20:52 S    bash -c cd /data/t2670/run && setsid env MEASURE_RUNNERS=/data/t2670/run/runners TMPDIR=/data/t2670/tmp sh bed-shm.sh -d /
+      4591       20:52 Ss   sh bed-shm.sh -d /data/t2670/vm.disk -p ./vgshmprobe -w -x /data/t2670/run/measure -S glmark2 piglit webgl game venus:glma
+      4597       20:52 S    ivshmemd -s 32M /data/t2670/out/shm-glmark2/ivs.sock
+      4605       20:52 S    bash ./gpu.sh -d 0000:00:02.0 -m 2048 -s 2 -w 0 -o /data/t2670/out/shm-glmark2/gpu -D /data/t2670/vm.disk -- -pidfile /dat
+      4645       20:52 Sl   qemu-system-x86_64 -machine q35,kernel-irqchip=split -accel kvm -cpu host -m 2048 -smp 2 -nodefaults -vga none -display no
+     19317       00:00 S    sleep 1
+     19327       00:00 S    sleep 1

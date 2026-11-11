@@ -1,0 +1,1 @@
+measure: result: glmark2 vtest frames 162 frame_ms 249.518 p50 243.700 p99 405.700 cpu_ms_per_frame 1004.012 latency_ms 2.048 copied_bytes 737365388 exits 742248 round_trips 1302 seconds 42.7 passed -

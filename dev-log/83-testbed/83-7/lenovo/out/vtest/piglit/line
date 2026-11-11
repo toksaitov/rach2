@@ -1,0 +1,1 @@
+measure: result: piglit vtest frames 7 frame_ms 14918.916 p50 3573.951 p99 43433.739 cpu_ms_per_frame 55908.571 latency_ms 2.148 copied_bytes 814625648 exits 2693432 round_trips 158701 seconds 127.2 passed 7/10

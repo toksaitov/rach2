@@ -1,0 +1,1039 @@
+vtest-rach2: compile triangle.c with gcc
+vtest-rach2: draw on llvmpipe
+vtest-rach2: llvmpipe: triangle: renderer: llvmpipe (LLVM 19.1.7, 256 bits)
+vtest-rach2: llvmpipe: triangle: fence: signalled
+vtest-rach2: llvmpipe: triangle: checksum: f0b3cd1d6d2e2625
+vtest-rach2: llvmpipe: triangle: pixels: 18432 triangle, 47104 texture, 0 other
+vtest-rach2: llvmpipe: triangle: result: ok
+vtest-rach2: boot the guest under kvm, 2 CPUs, 2048 MiB, with 0000:00:02.0
+vtest-rach2: the guest's server is ready after 21 s
+vtest-rach2: qmp: {"QMP": {"version": {"qemu": {"micro": 13, "minor": 0, "major": 10}, "package": "Debian 1:10.0.13+ds-0+deb13u1"}, "capabilities": ["oob"]}}
+vtest-rach2: qmp: {"return": {}}
+vtest-rach2: qmp: {"return": {"status": "running", "running": true}}
+vtest-rach2: stat: kvm_vms 1
+vtest-rach2: stat: kvm_vcpus 2
+vtest-rach2: stat: kvm_slots 11
+vtest-rach2: stat: kvm_tdp_pages 195
+vtest-rach2: stat: kvm_run_mappings 2
+vtest-rach2: stat: kvm_gpa_maps 0
+vtest-rach2: stat: kvm_gpa_map_pages 0
+vtest-rach2: stat: kvm_ioeventfd_signals 26143
+vtest-rach2: stat: kvm_irqfd_raises 97
+vtest-rach2: stat: kvm_exits 4543067
+vtest-rach2: fdinfo: kvm_irqchip:	split
+vtest-rach2: fdinfo: kvm_vcpu_vector:	0 0 accepted 0 dropped 1 acked 0 injected 0 saved 0 eoi 0
+vtest-rach2: fdinfo: kvm_vcpu_vector:	0 8 accepted 0 dropped 0 acked 5 injected 6 saved 1 eoi 0
+vtest-rach2: fdinfo: kvm_vcpu_vector:	0 32 accepted 15 dropped 0 acked 15 injected 15 saved 0 eoi 15
+vtest-rach2: fdinfo: kvm_vcpu_vector:	0 33 accepted 1 dropped 0 acked 1 injected 1 saved 0 eoi 1
+vtest-rach2: fdinfo: kvm_vcpu_vector:	0 35 accepted 7 dropped 0 acked 7 injected 7 saved 0 eoi 7
+vtest-rach2: fdinfo: kvm_vcpu_vector:	0 36 accepted 2720 dropped 0 acked 2536 injected 2536 saved 0 eoi 2536
+vtest-rach2: fdinfo: kvm_vcpu_vector:	0 37 accepted 4 dropped 0 acked 4 injected 4 saved 0 eoi 4
+vtest-rach2: fdinfo: kvm_vcpu_vector:	0 48 accepted 33 dropped 0 acked 31 injected 31 saved 0 eoi 29
+vtest-rach2: fdinfo: kvm_vcpu_vector:	0 236 accepted 2608 dropped 0 acked 2608 injected 2608 saved 0 eoi 2608
+vtest-rach2: fdinfo: kvm_vcpu_vector:	0 246 accepted 2 dropped 0 acked 2 injected 2 saved 0 eoi 2
+vtest-rach2: fdinfo: kvm_vcpu_vector:	0 251 accepted 1709 dropped 0 acked 1709 injected 1709 saved 0 eoi 1709
+vtest-rach2: fdinfo: kvm_vcpu_vector:	0 253 accepted 538 dropped 0 acked 538 injected 538 saved 0 eoi 538
+vtest-rach2: fdinfo: kvm_vcpu_vector:	1 33 accepted 9 dropped 0 acked 9 injected 9 saved 0 eoi 9
+vtest-rach2: fdinfo: kvm_vcpu_vector:	1 34 accepted 15144 dropped 0 acked 461 injected 461 saved 0 eoi 461
+vtest-rach2: fdinfo: kvm_vcpu_vector:	1 36 accepted 22 dropped 0 acked 22 injected 22 saved 0 eoi 22
+vtest-rach2: fdinfo: kvm_vcpu_vector:	1 38 accepted 97 dropped 0 acked 97 injected 97 saved 0 eoi 97
+vtest-rach2: fdinfo: kvm_vcpu_vector:	1 236 accepted 2513 dropped 0 acked 2513 injected 2513 saved 0 eoi 2513
+vtest-rach2: fdinfo: kvm_vcpu_vector:	1 246 accepted 40 dropped 0 acked 40 injected 40 saved 0 eoi 40
+vtest-rach2: fdinfo: kvm_vcpu_vector:	1 251 accepted 9019 dropped 0 acked 9019 injected 9019 saved 0 eoi 9019
+vtest-rach2: fdinfo: kvm_vcpu_vector:	1 253 accepted 679 dropped 0 acked 679 injected 679 saved 0 eoi 679
+vtest-rach2: qmp: {"QMP": {"version": {"qemu": {"micro": 13, "minor": 0, "major": 10}, "package": "Debian 1:10.0.13+ds-0+deb13u1"}, "capabilities": ["oob"]}}
+vtest-rach2: qmp: {"return": {}}
+vtest-rach2: qmp: {"return": "pic1: irr=11 imr=ff isr=00 hprio=0 irq_base=38 rr_sel=0 elcr=0c fnm=0
+vtest-rach2: qmp: pic0: irr=13 imr=ff isr=00 hprio=0 irq_base=30 rr_sel=0 elcr=00 fnm=0
+vtest-rach2: qmp: ioapic0: ver=0x20 id=0x00 sel=0x30 (redir[16])
+vtest-rach2: qmp:   pin 0  0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 1  0x0100000000000021 dest=1 vec=33  active-hi edge         fixed  physical
+vtest-rach2: qmp:   pin 2  0x0000000000000030 dest=0 vec=48  active-hi edge         fixed  physical
+vtest-rach2: qmp:   pin 3  0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 4  0x0100000000000022 dest=1 vec=34  active-hi edge         fixed  physical
+vtest-rach2: qmp:   pin 5  0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 6  0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 7  0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 8  0x0000000000000021 dest=0 vec=33  active-hi edge         fixed  physical
+vtest-rach2: qmp:   pin 9  0x0100000000008020 dest=1 vec=32  active-hi level        fixed  physical
+vtest-rach2: qmp:   pin 10 0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 11 0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 12 0x0000000000000020 dest=0 vec=32  active-hi edge         fixed  physical
+vtest-rach2: qmp:   pin 13 0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 14 0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 15 0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 16 0x0000000000008022 dest=0 vec=34  active-hi level        fixed  physical
+vtest-rach2: qmp:   pin 17 0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 18 0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 19 0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 20 0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 21 0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 22 0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 23 0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   IRR      (none)
+vtest-rach2: qmp:   Remote IRR (none)
+vtest-rach2: qmp: "}
+vtest-rach2: record: guest virgl-server 1.1.0-2
+vtest-rach2: record: guest libgl1-mesa-dri 25.0.7-2+deb13u1
+vtest-rach2: record: guest socat 1.8.0.3-1+deb13u1
+vtest-rach2: record: guest kernel 6.12.115+deb13.1-amd64
+vtest-rach2: record: guest_renderer gpu 0000:00:02.0 i915 /dev/dri/renderD128
+vtest-rach2: record: function 0000:00:02.0, a display function
+vtest-rach2: record: accelerator kvm
+vtest-rach2: record: cpus 2
+vtest-rach2: record: memory_mib 2048
+vtest-rach2: record: qemu QEMU emulator version 10.0.13 (Debian 1:10.0.13+ds-0+deb13u1)
+vtest-rach2: record: relay vtestrelay 1, vtest protocol 0
+vtest-rach2: draw on virpipe through the relay
+vtest-rach2: virpipe: triangle: renderer: virgl (Mesa Intel(R) HD Graphics 4400 (HSW GT2))
+vtest-rach2: virpipe: triangle: fence: signalled
+vtest-rach2: virpipe: triangle: checksum: f0b3cd1d6d2e2625
+vtest-rach2: virpipe: triangle: pixels: 18432 triangle, 47104 texture, 0 other
+vtest-rach2: virpipe: triangle: result: ok
+vtest-rach2: vtestrelay: listening on /data/t2670/tmp/rach2-vtest.qhKd7B/vtest.sock for 127.0.0.1:5555
+vtest-rach2: vtestrelay: result: 17 commands, 1 caps, 4 create, 1 get, 2 put, 1 submit, 5 wait, 1 renderer, 1 caps2, 1 hidden version query; 264833 bytes to the server, 263912 to the client
+vtest-rach2: measure glmark2 through the relay
+vtest-rach2: measure: measure: result: glmark2 vtest frames 162 frame_ms 249.518 p50 243.700 p99 405.700 cpu_ms_per_frame 1004.012 latency_ms 2.048 copied_bytes 737365388 exits 742248 round_trips 1302 seconds 42.7 passed -
+vtest-rach2: measure piglit through the relay
+vtest-rach2: measure: measure: result: piglit vtest frames 7 frame_ms 14918.916 p50 3573.951 p99 43433.739 cpu_ms_per_frame 55908.571 latency_ms 2.148 copied_bytes 814625648 exits 2693432 round_trips 158701 seconds 127.2 passed 7/10
+vtest-rach2: stat: kvm_vms 1
+vtest-rach2: stat: kvm_vcpus 2
+vtest-rach2: stat: kvm_slots 11
+vtest-rach2: stat: kvm_tdp_pages 1000
+vtest-rach2: stat: kvm_run_mappings 2
+vtest-rach2: stat: kvm_gpa_maps 0
+vtest-rach2: stat: kvm_gpa_map_pages 0
+vtest-rach2: stat: kvm_ioeventfd_signals 136211
+vtest-rach2: stat: kvm_irqfd_raises 17454
+vtest-rach2: stat: kvm_exits 8044626
+vtest-rach2: fdinfo: kvm_irqchip:	split
+vtest-rach2: fdinfo: kvm_vcpu_vector:	0 0 accepted 0 dropped 1 acked 0 injected 0 saved 0 eoi 0
+vtest-rach2: fdinfo: kvm_vcpu_vector:	0 8 accepted 0 dropped 0 acked 5 injected 6 saved 1 eoi 0
+vtest-rach2: fdinfo: kvm_vcpu_vector:	0 32 accepted 15 dropped 0 acked 15 injected 15 saved 0 eoi 15
+vtest-rach2: fdinfo: kvm_vcpu_vector:	0 33 accepted 1 dropped 0 acked 1 injected 1 saved 0 eoi 1
+vtest-rach2: fdinfo: kvm_vcpu_vector:	0 35 accepted 553012 dropped 0 acked 545404 injected 545404 saved 0 eoi 545404
+vtest-rach2: fdinfo: kvm_vcpu_vector:	0 36 accepted 4057 dropped 0 acked 3827 injected 3827 saved 0 eoi 3827
+vtest-rach2: fdinfo: kvm_vcpu_vector:	0 37 accepted 11 dropped 0 acked 11 injected 11 saved 0 eoi 11
+vtest-rach2: fdinfo: kvm_vcpu_vector:	0 48 accepted 33 dropped 0 acked 31 injected 31 saved 0 eoi 29
+vtest-rach2: fdinfo: kvm_vcpu_vector:	0 236 accepted 37647 dropped 0 acked 37647 injected 37647 saved 0 eoi 37647
+vtest-rach2: fdinfo: kvm_vcpu_vector:	0 246 accepted 25992 dropped 0 acked 25992 injected 25992 saved 0 eoi 25992
+vtest-rach2: fdinfo: kvm_vcpu_vector:	0 251 accepted 132403 dropped 0 acked 132403 injected 132403 saved 0 eoi 132403
+vtest-rach2: fdinfo: kvm_vcpu_vector:	0 253 accepted 751 dropped 0 acked 751 injected 751 saved 0 eoi 751
+vtest-rach2: fdinfo: kvm_vcpu_vector:	1 33 accepted 9 dropped 0 acked 9 injected 9 saved 0 eoi 9
+vtest-rach2: fdinfo: kvm_vcpu_vector:	1 34 accepted 23461 dropped 0 acked 626 injected 626 saved 0 eoi 626
+vtest-rach2: fdinfo: kvm_vcpu_vector:	1 36 accepted 110786 dropped 0 acked 110649 injected 110649 saved 0 eoi 110649
+vtest-rach2: fdinfo: kvm_vcpu_vector:	1 38 accepted 17454 dropped 0 acked 17454 injected 17454 saved 0 eoi 17454
+vtest-rach2: fdinfo: kvm_vcpu_vector:	1 236 accepted 38100 dropped 0 acked 38100 injected 38100 saved 0 eoi 38100
+vtest-rach2: fdinfo: kvm_vcpu_vector:	1 246 accepted 29347 dropped 0 acked 29347 injected 29347 saved 0 eoi 29347
+vtest-rach2: fdinfo: kvm_vcpu_vector:	1 251 accepted 225842 dropped 0 acked 225842 injected 225842 saved 0 eoi 225842
+vtest-rach2: fdinfo: kvm_vcpu_vector:	1 253 accepted 973 dropped 0 acked 973 injected 973 saved 0 eoi 973
+vtest-rach2: qmp: {"QMP": {"version": {"qemu": {"micro": 13, "minor": 0, "major": 10}, "package": "Debian 1:10.0.13+ds-0+deb13u1"}, "capabilities": ["oob"]}}
+vtest-rach2: qmp: {"return": {}}
+vtest-rach2: qmp: {"return": "pic1: irr=11 imr=ff isr=00 hprio=0 irq_base=38 rr_sel=0 elcr=0c fnm=0
+vtest-rach2: qmp: pic0: irr=13 imr=ff isr=00 hprio=0 irq_base=30 rr_sel=0 elcr=00 fnm=0
+vtest-rach2: qmp: ioapic0: ver=0x20 id=0x00 sel=0x30 (redir[16])
+vtest-rach2: qmp:   pin 0  0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 1  0x0100000000000021 dest=1 vec=33  active-hi edge         fixed  physical
+vtest-rach2: qmp:   pin 2  0x0000000000000030 dest=0 vec=48  active-hi edge         fixed  physical
+vtest-rach2: qmp:   pin 3  0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 4  0x0100000000000022 dest=1 vec=34  active-hi edge         fixed  physical
+vtest-rach2: qmp:   pin 5  0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 6  0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 7  0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 8  0x0000000000000021 dest=0 vec=33  active-hi edge         fixed  physical
+vtest-rach2: qmp:   pin 9  0x0100000000008020 dest=1 vec=32  active-hi level        fixed  physical
+vtest-rach2: qmp:   pin 10 0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 11 0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 12 0x0000000000000020 dest=0 vec=32  active-hi edge         fixed  physical
+vtest-rach2: qmp:   pin 13 0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 14 0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 15 0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 16 0x0000000000008022 dest=0 vec=34  active-hi level        fixed  physical
+vtest-rach2: qmp:   pin 17 0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 18 0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 19 0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 20 0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 21 0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 22 0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   pin 23 0x0000000000010000 dest=0 vec=0   active-hi edge  masked fixed  physical
+vtest-rach2: qmp:   IRR      (none)
+vtest-rach2: qmp:   Remote IRR (none)
+vtest-rach2: qmp: "}
+vtest-rach2: gpu: before: 0000:00:02.0 on card0; kvm_vms 0 kvm_vcpus 0 kvm_slots 0 kvm_tdp_pages 0 kvm_run_mappings 0 vfio_groups 0 vfio_devices 0 vfio_dma_mappings 0 vfio_dma_pages 0 vfio_dma_io_pages 0 msi_vectors_free 184 
+vtest-rach2: gpu: unbind: 0000:00:02.0 from i915
+vtest-rach2: gpu: bind: 0000:00:02.0 to vfio-pci
+vtest-rach2: gpu: function: 0000:00:02.0, vendor 0x8086, class 0x030000
+vtest-rach2: gpu: start: qemu-system-x86_64 -machine q35,kernel-irqchip=split -accel kvm -cpu host -m 2048 -smp 2 -nodefaults -vga none -device vfio-pci,host=0000:00:02.0,bus=pcie.0,addr=02.0,x-igd-opregion=on -drive file=/data/t2670/tmp/rach2-vtest.qhKd7B/run.raw,format=raw,if=none,id=guest,snapshot=on -device ide-hd,drive=guest,bus=ide.0 -pidfile /data/t2670/tmp/rach2-vtest.qhKd7B/qemu.pid -netdev user,id=net0,hostfwd=tcp:127.0.0.1:5555-:5555 -device virtio-net-pci,netdev=net0 -device virtio-rng-pci -qmp tcp:127.0.0.1:5556,server,wait=off
+vtest-rach2: gpu: kill: QEMU on SIGUSR1; kvm_vms 1 kvm_vcpus 2 kvm_slots 11 kvm_tdp_pages 1000 kvm_run_mappings 2 vfio_groups 1 vfio_devices 1 vfio_dma_mappings 11 vfio_dma_pages 524352 vfio_dma_io_pages 66559 msi_vectors_free 184 
+vtest-rach2: /data/t2670/run/gpu.sh: line 298:  2966 Killed                     "$qemu" -machine q35,kernel-irqchip=split -accel "$accel" -cpu "$cpu" -m "$mib" -smp "$cpus" -nodefaults -vga none -display none -no-reboot -serial "file:$out/console" "$@" 2> "$out/qemu.err" < /dev/null
+vtest-rach2: [H[J[1;1H[H[J[1;1H  Booting `Debian GNU/Linux'
+vtest-rach2: 
+vtest-rach2: Loading Linux 6.12.115+deb13.1-amd64 ...
+vtest-rach2: Loading initial ramdisk ...
+vtest-rach2: [    0.000000] Linux version 6.12.115+deb13.1-amd64 (debian-kernel@lists.debian.org) (x86_64-linux-gnu-gcc-14 (Debian 14.2.0-19) 14.2.0, GNU ld (GNU Binutils for Debian) 2.44) #1 SMP PREEMPT_DYNAMIC Debian 6.12.115-2 (2026-11-01)
+vtest-rach2: [    0.000000] Command line: BOOT_IMAGE=/boot/vmlinuz-6.12.115+deb13.1-amd64 root=PARTUUID=138f3e8b-bdeb-47ac-84b8-f9df1662abc8 ro console=tty0 console=ttyS0,115200 earlyprintk=ttyS0,115200 consoleblank=0
+vtest-rach2: [    0.000000] BIOS-provided physical RAM map:
+vtest-rach2: [    0.000000] BIOS-e820: [mem 0x0000000000000000-0x000000000009fbff] usable
+vtest-rach2: [    0.000000] BIOS-e820: [mem 0x000000000009fc00-0x000000000009ffff] reserved
+vtest-rach2: [    0.000000] BIOS-e820: [mem 0x00000000000f0000-0x00000000000fffff] reserved
+vtest-rach2: [    0.000000] BIOS-e820: [mem 0x0000000000100000-0x000000007aefffff] usable
+vtest-rach2: [    0.000000] BIOS-e820: [mem 0x000000007af00000-0x000000007eefffff] reserved
+vtest-rach2: [    0.000000] BIOS-e820: [mem 0x000000007ef00000-0x000000007ffdcfff] usable
+vtest-rach2: [    0.000000] BIOS-e820: [mem 0x000000007ffdd000-0x000000007fffffff] reserved
+vtest-rach2: [    0.000000] BIOS-e820: [mem 0x00000000b0000000-0x00000000bfffffff] reserved
+vtest-rach2: [    0.000000] BIOS-e820: [mem 0x00000000fed1c000-0x00000000fed1ffff] reserved
+vtest-rach2: [    0.000000] BIOS-e820: [mem 0x00000000feffc000-0x00000000feffffff] reserved
+vtest-rach2: [    0.000000] BIOS-e820: [mem 0x00000000fffc0000-0x00000000ffffffff] reserved
+vtest-rach2: [    0.000000] printk: legacy bootconsole [earlyser0] enabled
+vtest-rach2: [    0.000000] NX (Execute Disable) protection: active
+vtest-rach2: [    0.000000] APIC: Static calls initialized
+vtest-rach2: [    0.000000] SMBIOS 2.8 present.
+vtest-rach2: [    0.000000] DMI: QEMU Standard PC (Q35 + ICH9, 2009), BIOS 1.16.3-debian-1.16.3-2 04/01/2014
+vtest-rach2: [    0.000000] DMI: Memory slots populated: 1/1
+vtest-rach2: [    0.000000] Hypervisor detected: KVM
+vtest-rach2: [    0.000000] last_pfn = 0x7ffdd max_arch_pfn = 0x400000000
+vtest-rach2: [    0.000000] kvm-clock: Using msrs 4b564d01 and 4b564d00
+vtest-rach2: [    0.000002] kvm-clock: using sched offset of 7847194389 cycles
+vtest-rach2: [    0.001733] clocksource: kvm-clock: mask: 0xffffffffffffffff max_cycles: 0x1cd42e4dffb, max_idle_ns: 881590591483 ns
+vtest-rach2: [    0.007478] tsc: Detected 1895.610 MHz processor
+vtest-rach2: [    0.009932] last_pfn = 0x7ffdd max_arch_pfn = 0x400000000
+vtest-rach2: [    0.011929] MTRR map: 4 entries (3 fixed + 1 variable; max 19), built from 8 variable MTRRs
+vtest-rach2: [    0.016835] x86/PAT: Configuration [0-7]: WB  WC  UC- UC  WB  WP  UC- WT  
+vtest-rach2: Memory KASLR using RDRAND RDTSC...
+vtest-rach2: [    0.040241] found SMP MP-table at [mem 0x000f5470-0x000f547f]
+vtest-rach2: [    0.042231] Using GB pages for direct mapping
+vtest-rach2: [    0.043940] RAMDISK: [mem 0x33913000-0x35c80fff]
+vtest-rach2: [    0.046117] ACPI: Early table checksum verification disabled
+vtest-rach2: [    0.048060] ACPI: RSDP 0x00000000000F52B0 000014 (v00 BOCHS )
+vtest-rach2: [    0.050075] ACPI: RSDT 0x000000007FFE036E 000038 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+vtest-rach2: [    0.053179] ACPI: FACP 0x000000007FFE015E 0000F4 (v03 BOCHS  BXPC     00000001 BXPC 00000001)
+vtest-rach2: [    0.056097] ACPI: DSDT 0x000000007FFDE040 00211E (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+vtest-rach2: [    0.058978] ACPI: FACS 0x000000007FFDE000 000040
+vtest-rach2: [    0.062624] ACPI: APIC 0x000000007FFE0252 000080 (v03 BOCHS  BXPC     00000001 BXPC 00000001)
+vtest-rach2: [    0.065486] ACPI: HPET 0x000000007FFE02D2 000038 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+vtest-rach2: [    0.068354] ACPI: MCFG 0x000000007FFE030A 00003C (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+vtest-rach2: [    0.071289] ACPI: WAET 0x000000007FFE0346 000028 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+vtest-rach2: [    0.074160] ACPI: Reserving FACP table memory at [mem 0x7ffe015e-0x7ffe0251]
+vtest-rach2: [    0.076740] ACPI: Reserving DSDT table memory at [mem 0x7ffde040-0x7ffe015d]
+vtest-rach2: [    0.079138] ACPI: Reserving FACS table memory at [mem 0x7ffde000-0x7ffde03f]
+vtest-rach2: [    0.081481] ACPI: Reserving APIC table memory at [mem 0x7ffe0252-0x7ffe02d1]
+vtest-rach2: [    0.085978] ACPI: Reserving HPET table memory at [mem 0x7ffe02d2-0x7ffe0309]
+vtest-rach2: [    0.088396] ACPI: Reserving MCFG table memory at [mem 0x7ffe030a-0x7ffe0345]
+vtest-rach2: [    0.090738] ACPI: Reserving WAET table memory at [mem 0x7ffe0346-0x7ffe036d]
+vtest-rach2: [    0.093855] No NUMA configuration found
+vtest-rach2: [    0.095194] Faking a node at [mem 0x0000000000000000-0x000000007ffdcfff]
+vtest-rach2: [    0.097658] NODE_DATA(0) allocated [mem 0x7ffb2680-0x7ffdcfff]
+vtest-rach2: [    0.100051] Zone ranges:
+vtest-rach2: [    0.100927]   DMA      [mem 0x0000000000001000-0x0000000000ffffff]
+vtest-rach2: [    0.103200]   DMA32    [mem 0x0000000001000000-0x000000007ffdcfff]
+vtest-rach2: [    0.105259]   Normal   empty
+vtest-rach2: [    0.108340]   Device   empty
+vtest-rach2: [    0.109307] Movable zone start for each node
+vtest-rach2: [    0.110716] Early memory node ranges
+vtest-rach2: [    0.112004]   node   0: [mem 0x0000000000001000-0x000000000009efff]
+vtest-rach2: [    0.114217]   node   0: [mem 0x0000000000100000-0x000000007aefffff]
+vtest-rach2: [    0.116292]   node   0: [mem 0x000000007ef00000-0x000000007ffdcfff]
+vtest-rach2: [    0.118421] Initmem setup node 0 [mem 0x0000000000001000-0x000000007ffdcfff]
+vtest-rach2: [    0.121069] On node 0, zone DMA: 1 pages in unavailable ranges
+vtest-rach2: [    0.123467] On node 0, zone DMA: 97 pages in unavailable ranges
+vtest-rach2: [    0.136915] On node 0, zone DMA32: 16384 pages in unavailable ranges
+vtest-rach2: [    0.139094] On node 0, zone DMA32: 35 pages in unavailable ranges
+vtest-rach2: [    0.141373] Reserving Intel graphics memory at [mem 0x7af00000-0x7eefffff]
+vtest-rach2: [    0.144505] ACPI: PM-Timer IO Port: 0x608
+vtest-rach2: [    0.145930] ACPI: LAPIC_NMI (acpi_id[0xff] dfl dfl lint[0x1])
+vtest-rach2: [    0.148141] IOAPIC[0]: apic_id 0, version 32, address 0xfec00000, GSI 0-23
+vtest-rach2: [    0.150495] ACPI: INT_SRC_OVR (bus 0 bus_irq 0 global_irq 2 dfl dfl)
+vtest-rach2: [    0.154745] ACPI: INT_SRC_OVR (bus 0 bus_irq 5 global_irq 5 high level)
+vtest-rach2: [    0.157146] ACPI: INT_SRC_OVR (bus 0 bus_irq 9 global_irq 9 high level)
+vtest-rach2: [    0.159345] ACPI: INT_SRC_OVR (bus 0 bus_irq 10 global_irq 10 high level)
+vtest-rach2: [    0.161607] ACPI: INT_SRC_OVR (bus 0 bus_irq 11 global_irq 11 high level)
+vtest-rach2: [    0.163940] ACPI: Using ACPI (MADT) for SMP configuration information
+vtest-rach2: [    0.166090] ACPI: HPET id: 0x8086a201 base: 0xfed00000
+vtest-rach2: [    0.168020] TSC deadline timer available
+vtest-rach2: [    0.169327] CPU topo: Max. logical packages:   1
+vtest-rach2: [    0.170838] CPU topo: Max. logical dies:       1
+vtest-rach2: [    0.172401] CPU topo: Max. dies per package:   1
+vtest-rach2: [    0.173967] CPU topo: Max. threads per core:   1
+vtest-rach2: [    0.177345] CPU topo: Num. cores per package:     2
+vtest-rach2: [    0.179016] CPU topo: Num. threads per package:   2
+vtest-rach2: [    0.180616] CPU topo: Allowing 2 present CPUs plus 0 hotplug CPUs
+vtest-rach2: [    0.182703] kvm-guest: setup PV sched yield
+vtest-rach2: [    0.184137] PM: hibernation: Registered nosave memory: [mem 0x00000000-0x00000fff]
+vtest-rach2: [    0.186627] PM: hibernation: Registered nosave memory: [mem 0x0009f000-0x000fffff]
+vtest-rach2: [    0.189161] PM: hibernation: Registered nosave memory: [mem 0x7af00000-0x7eefffff]
+vtest-rach2: [    0.191847] [mem 0xc0000000-0xfed1bfff] available for PCI devices
+vtest-rach2: [    0.193911] Booting paravirtualized kernel on KVM
+vtest-rach2: [    0.195510] clocksource: refined-jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 7645519600211568 ns
+vtest-rach2: [    0.210187] setup_percpu: NR_CPUS:8192 nr_cpumask_bits:2 nr_cpu_ids:2 nr_node_ids:1
+vtest-rach2: [    0.213190] percpu: Embedded 66 pages/cpu s233472 r8192 d28672 u1048576
+vtest-rach2: [    0.215914] kvm-guest: PV spinlocks enabled
+vtest-rach2: [    0.217674] PV qspinlock hash table entries: 256 (order: 0, 4096 bytes, linear)
+vtest-rach2: [    0.223045] Kernel command line: BOOT_IMAGE=/boot/vmlinuz-6.12.115+deb13.1-amd64 root=PARTUUID=138f3e8b-bdeb-47ac-84b8-f9df1662abc8 ro console=tty0 console=ttyS0,115200 earlyprintk=ttyS0,115200 consoleblank=0
+vtest-rach2: [    0.231032] random: crng init done
+vtest-rach2: [    0.232769] Dentry cache hash table entries: 262144 (order: 9, 2097152 bytes, linear)
+vtest-rach2: [    0.236337] Inode-cache hash table entries: 131072 (order: 8, 1048576 bytes, linear)
+vtest-rach2: [    0.240174] Fallback order for Node 0: 0 
+vtest-rach2: [    0.240181] Built 1 zonelists, mobility grouping on.  Total pages: 507771
+vtest-rach2: [    0.246794] Policy zone: DMA32
+vtest-rach2: [    0.248132] mem auto-init: stack:all(zero), heap alloc:on, heap free:off
+vtest-rach2: [    0.256502] SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=2, Nodes=1
+vtest-rach2: [    0.259392] Kernel/User page tables isolation: enabled
+vtest-rach2: Poking KASLR using RDRAND RDTSC...
+vtest-rach2: [    0.277081] ftrace: allocating 45285 entries in 180 pages
+vtest-rach2: [    0.279416] ftrace: allocated 180 pages with 4 groups
+vtest-rach2: [    0.282668] Dynamic Preempt: voluntary
+vtest-rach2: [    0.284563] rcu: Preemptible hierarchical RCU implementation.
+vtest-rach2: [    0.287052] rcu: 	RCU restricting CPUs from NR_CPUS=8192 to nr_cpu_ids=2.
+vtest-rach2: [    0.291994] 	Trampoline variant of Tasks RCU enabled.
+vtest-rach2: [    0.294139] 	Rude variant of Tasks RCU enabled.
+vtest-rach2: [    0.296134] 	Tracing variant of Tasks RCU enabled.
+vtest-rach2: [    0.298165] rcu: RCU calculated value of scheduler-enlistment delay is 25 jiffies.
+vtest-rach2: [    0.301364] rcu: Adjusting geometry for rcu_fanout_leaf=16, nr_cpu_ids=2
+vtest-rach2: [    0.304219] RCU Tasks: Setting shift to 1 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=2.
+vtest-rach2: [    0.308223] RCU Tasks Rude: Setting shift to 1 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=2.
+vtest-rach2: [    0.312112] RCU Tasks Trace: Setting shift to 1 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=2.
+vtest-rach2: [    0.326542] NR_IRQS: 524544, nr_irqs: 440, preallocated irqs: 16
+vtest-rach2: [    0.329758] rcu: srcu_init: Setting srcu_struct sizes based on contention.
+vtest-rach2: [    0.332734] clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 7645041785100000 ns
+vtest-rach2: [    0.341557] Console: colour VGA+ 80x25
+vtest-rach2: [    0.343174] printk: legacy console [tty0] enabled
+vtest-rach2: [    0.383710] printk: legacy console [ttyS0] enabled
+vtest-rach2: [    0.383710] printk: legacy console [ttyS0] enabled
+vtest-rach2: [    0.388191] printk: legacy bootconsole [earlyser0] disabled
+vtest-rach2: [    0.388191] printk: legacy bootconsole [earlyser0] disabled
+vtest-rach2: [    0.393336] ACPI: Core revision 20240827
+vtest-rach2: [    0.396019] clocksource: hpet: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 19112604467 ns
+vtest-rach2: [    0.400907] APIC: Switch to symmetric I/O mode setup
+vtest-rach2: [    0.407539] x2apic enabled
+vtest-rach2: [    0.963251] APIC: Switched APIC routing to: physical x2apic
+vtest-rach2: [    1.000947] kvm-guest: APIC: send_IPI_mask() replaced with kvm_send_ipi_mask()
+vtest-rach2: [    1.014769] kvm-guest: APIC: send_IPI_mask_allbutself() replaced with kvm_send_ipi_mask_allbutself()
+vtest-rach2: [    1.022635] kvm-guest: setup PV IPIs
+vtest-rach2: [    1.042146] ..TIMER: vector=0x30 apic1=0 pin1=2 apic2=-1 pin2=-1
+vtest-rach2: [    1.045604] clocksource: tsc-early: mask: 0xffffffffffffffff max_cycles: 0x36a5f12a74d, max_idle_ns: 881590412319 ns
+vtest-rach2: [    1.053023] Calibrating delay loop (skipped) preset value.. 3791.22 BogoMIPS (lpj=7582440)
+vtest-rach2: [    1.058177] Last level iTLB entries: 4KB 0, 2MB 0, 4MB 0
+vtest-rach2: [    1.061290] Last level dTLB entries: 4KB 0, 2MB 0, 4MB 0, 1GB 0
+vtest-rach2: [    1.065293] Spectre V1 : Mitigation: usercopy/swapgs barriers and __user pointer sanitization
+vtest-rach2: [    1.069314] Spectre V2 : Mitigation: Retpolines
+vtest-rach2: [    1.071556] Spectre V2 : Spectre v2 / SpectreRSB: Filling RSB on context switch and VMEXIT
+vtest-rach2: [    1.073340] Speculative Store Bypass: Vulnerable
+vtest-rach2: [    1.077288] MDS: Vulnerable: Clear CPU buffers attempted, no microcode
+vtest-rach2: [    1.080257] MMIO Stale Data: Unknown: No mitigations
+vtest-rach2: [    1.081292] SRBDS: Unknown: Dependent on hypervisor status
+vtest-rach2: [    1.083871] active return thunk: its_return_thunk
+vtest-rach2: [    1.085288] ITS: Mitigation: Aligned branch/return thunks
+vtest-rach2: [    1.089345] x86/fpu: Supporting XSAVE feature 0x001: 'x87 floating point registers'
+vtest-rach2: [    1.093311] x86/fpu: Supporting XSAVE feature 0x002: 'SSE registers'
+vtest-rach2: [    1.097282] x86/fpu: Supporting XSAVE feature 0x004: 'AVX registers'
+vtest-rach2: [    1.101284] x86/fpu: xstate_offset[2]:  576, xstate_sizes[2]:  256
+vtest-rach2: [    1.104189] x86/fpu: Enabled xstate features 0x7, context size is 832 bytes, using 'standard' format.
+vtest-rach2: [    1.141759] Freeing SMP alternatives memory: 40K
+vtest-rach2: [    1.144111] pid_max: default: 32768 minimum: 301
+vtest-rach2: [    1.145349] LSM: initializing lsm=lockdown,capability,landlock,yama,apparmor,tomoyo,bpf,ipe,ima,evm
+vtest-rach2: [    1.149390] landlock: Up and running.
+vtest-rach2: [    1.151231] Yama: disabled by default; enable with sysctl kernel.yama.*
+vtest-rach2: [    1.153399] AppArmor: AppArmor initialized
+vtest-rach2: [    1.155434] TOMOYO Linux initialized
+vtest-rach2: [    1.157591] LSM support for eBPF active
+vtest-rach2: [    1.159600] Mount-cache hash table entries: 4096 (order: 3, 32768 bytes, linear)
+vtest-rach2: [    1.161348] Mountpoint-cache hash table entries: 4096 (order: 3, 32768 bytes, linear)
+vtest-rach2: [    1.165856] smpboot: CPU0: Intel(R) Core(TM) i3-4030U CPU @ 1.90GHz (family: 0x6, model: 0x45, stepping: 0x1)
+vtest-rach2: [    1.169687] Performance Events: unsupported p6 CPU model 69 no PMU driver, software events only.
+vtest-rach2: [    1.173388] signal: max sigframe size: 1776
+vtest-rach2: [    1.177343] rcu: Hierarchical SRCU implementation.
+vtest-rach2: [    1.179641] rcu: 	Max phase no-delay instances is 1000.
+vtest-rach2: [    1.181358] Timer migration: 1 hierarchy levels; 8 children per group; 1 crossnode level
+vtest-rach2: [    1.190535] NMI watchdog: Perf NMI watchdog permanently disabled
+vtest-rach2: [    1.193360] smp: Bringing up secondary CPUs ...
+vtest-rach2: [    1.197571] smpboot: x86: Booting SMP configuration:
+vtest-rach2: [    1.199954] .... node  #0, CPUs:      #1
+vtest-rach2: [    1.201159] smp: Brought up 1 node, 2 CPUs
+vtest-rach2: [    1.205302] smpboot: Total of 2 processors activated (7582.44 BogoMIPS)
+vtest-rach2: [    1.247547] node 0 deferred pages initialised in 40ms
+vtest-rach2: [    1.253171] Memory: 1908492K/2031084K available (16384K kernel code, 2499K rwdata, 11832K rodata, 4176K init, 4888K bss, 118616K reserved, 0K cma-reserved)
+vtest-rach2: [    1.257527] devtmpfs: initialized
+vtest-rach2: [    1.259033] x86/mm: Memory block size: 128MB
+vtest-rach2: [    1.261156] futex hash table entries: 512 (order: 3, 32768 bytes, linear)
+vtest-rach2: [    1.265116] pinctrl core: initialized pinctrl subsystem
+vtest-rach2: [    1.269383] NET: Registered PF_NETLINK/PF_ROUTE protocol family
+vtest-rach2: [    1.272856] DMA: preallocated 256 KiB GFP_KERNEL pool for atomic allocations
+vtest-rach2: [    1.273330] DMA: preallocated 256 KiB GFP_KERNEL|GFP_DMA pool for atomic allocations
+vtest-rach2: [    1.277838] DMA: preallocated 256 KiB GFP_KERNEL|GFP_DMA32 pool for atomic allocations
+vtest-rach2: [    1.281338] audit: initializing netlink subsys (disabled)
+vtest-rach2: [    1.283933] audit: type=2000 audit(1794434036.676:1): state=initialized audit_enabled=0 res=1
+vtest-rach2: [    1.283933] thermal_sys: Registered thermal governor 'fair_share'
+vtest-rach2: [    1.285357] thermal_sys: Registered thermal governor 'bang_bang'
+vtest-rach2: [    1.288298] thermal_sys: Registered thermal governor 'step_wise'
+vtest-rach2: [    1.289298] thermal_sys: Registered thermal governor 'user_space'
+vtest-rach2: [    1.292490] thermal_sys: Registered thermal governor 'power_allocator'
+vtest-rach2: [    1.293325] cpuidle: using governor ladder
+vtest-rach2: [    1.301036] cpuidle: using governor menu
+vtest-rach2: [    1.303296] acpiphp: ACPI Hot Plug PCI Controller Driver version: 0.5
+vtest-rach2: [    1.305746] PCI: ECAM [mem 0xb0000000-0xbfffffff] (base 0xb0000000) for domain 0000 [bus 00-ff]
+vtest-rach2: [    1.309322] PCI: ECAM [mem 0xb0000000-0xbfffffff] reserved as E820 entry
+vtest-rach2: [    1.312552] PCI: Using configuration type 1 for base access
+vtest-rach2: [    1.313574] kprobes: kprobe jump-optimization is enabled. All kprobes are optimized if possible.
+vtest-rach2: [    1.341077] HugeTLB: registered 1.00 GiB page size, pre-allocated 0 pages
+vtest-rach2: [    1.345339] HugeTLB: 16380 KiB vmemmap can be freed for a 1.00 GiB page
+vtest-rach2: [    1.348394] HugeTLB: registered 2.00 MiB page size, pre-allocated 0 pages
+vtest-rach2: [    1.349294] HugeTLB: 28 KiB vmemmap can be freed for a 2.00 MiB page
+vtest-rach2: [    1.357555] ACPI: Added _OSI(Module Device)
+vtest-rach2: [    1.361746] ACPI: Added _OSI(Processor Device)
+vtest-rach2: [    1.364520] ACPI: Added _OSI(Processor Aggregator Device)
+vtest-rach2: [    1.366748] ACPI: 1 ACPI AML tables successfully acquired and loaded
+vtest-rach2: [    1.374381] ACPI: Interpreter enabled
+vtest-rach2: [    1.377324] ACPI: PM: (supports S0 S3 S4 S5)
+vtest-rach2: [    1.380490] ACPI: Using IOAPIC for interrupt routing
+vtest-rach2: [    1.381352] PCI: Using host bridge windows from ACPI; if necessary, use "pci=nocrs" and report a bug
+vtest-rach2: [    1.385363] PCI: Using E820 reservations for host bridge windows
+vtest-rach2: [    1.388453] ACPI: Enabled 2 GPEs in block 00 to 3F
+vtest-rach2: [    1.393481] ACPI: PCI Root Bridge [PCI0] (domain 0000 [bus 00-ff])
+vtest-rach2: [    1.396833] acpi PNP0A08:00: _OSC: OS supports [ExtendedConfig ASPM ClockPM Segments MSI HPX-Type3]
+vtest-rach2: [    1.397469] acpi PNP0A08:00: _OSC: platform does not support [PCIeHotplug LTR]
+vtest-rach2: [    1.400969] acpi PNP0A08:00: _OSC: OS now controls [SHPCHotplug PME AER PCIeCapability]
+vtest-rach2: [    1.405703] PCI host bridge to bus 0000:00
+vtest-rach2: [    1.407818] pci_bus 0000:00: root bus resource [io  0x0000-0x0cf7 window]
+vtest-rach2: [    1.413306] pci_bus 0000:00: root bus resource [io  0x0d00-0xffff window]
+vtest-rach2: [    1.416764] pci_bus 0000:00: root bus resource [mem 0x000a0000-0x000bffff window]
+vtest-rach2: [    1.417318] pci_bus 0000:00: root bus resource [mem 0x80000000-0xafffffff window]
+vtest-rach2: [    1.420981] pci_bus 0000:00: root bus resource [mem 0xc0000000-0xfebfffff window]
+vtest-rach2: [    1.421375] pci_bus 0000:00: root bus resource [mem 0x100000000-0x8ffffffff window]
+vtest-rach2: [    1.424954] pci_bus 0000:00: root bus resource [bus 00-ff]
+vtest-rach2: [    1.429492] pci 0000:00:00.0: [8086:29c0] type 00 class 0x060000 conventional PCI endpoint
+vtest-rach2: [    1.435012] pci 0000:00:01.0: [1af4:1000] type 00 class 0x020000 conventional PCI endpoint
+vtest-rach2: [    1.442425] pci 0000:00:01.0: BAR 0 [io  0xc040-0xc05f]
+vtest-rach2: [    1.443264] pci 0000:00:01.0: BAR 1 [mem 0xfe860000-0xfe860fff]
+vtest-rach2: [    1.450541] pci 0000:00:01.0: BAR 4 [mem 0xf0000000-0xf0003fff 64bit pref]
+vtest-rach2: [    1.457032] pci 0000:00:01.0: ROM [mem 0xfe800000-0xfe83ffff pref]
+vtest-rach2: [    1.462642] pci 0000:00:02.0: [8086:0a16] type 00 class 0x030000 conventional PCI endpoint
+vtest-rach2: [    1.473063] pci 0000:00:02.0: BAR 0 [mem 0xfe400000-0xfe7fffff 64bit]
+vtest-rach2: [    1.481092] pci 0000:00:02.0: BAR 2 [mem 0xe0000000-0xefffffff 64bit pref]
+vtest-rach2: [    1.513059] pci 0000:00:02.0: ROM [mem 0xfe840000-0xfe85ffff pref]
+vtest-rach2: [    1.518055] pci 0000:00:02.0: Video device with shadowed ROM at [mem 0x000c0000-0x000dffff]
+vtest-rach2: [    1.523074] pci 0000:00:03.0: [1af4:1005] type 00 class 0x00ff00 conventional PCI endpoint
+vtest-rach2: [    1.526824] pci 0000:00:03.0: BAR 0 [io  0xc060-0xc07f]
+vtest-rach2: [    1.530344] pci 0000:00:03.0: BAR 1 [mem 0xfe861000-0xfe861fff]
+vtest-rach2: [    1.537033] pci 0000:00:03.0: BAR 4 [mem 0xf0004000-0xf0007fff 64bit pref]
+vtest-rach2: [    1.544416] pci 0000:00:1f.0: [8086:2918] type 00 class 0x060100 conventional PCI endpoint
+vtest-rach2: [    1.546840] pci 0000:00:1f.0: quirk: [io  0x0600-0x067f] claimed by ICH6 ACPI/GPIO/TCO
+vtest-rach2: [    1.550060] pci 0000:00:1f.2: [8086:2922] type 00 class 0x010601 conventional PCI endpoint
+vtest-rach2: [    1.557635] pci 0000:00:1f.2: BAR 4 [io  0xc080-0xc09f]
+vtest-rach2: [    1.558160] pci 0000:00:1f.2: BAR 5 [mem 0xfe862000-0xfe862fff]
+vtest-rach2: [    1.561017] pci 0000:00:1f.3: [8086:2930] type 00 class 0x0c0500 conventional PCI endpoint
+vtest-rach2: [    1.567794] pci 0000:00:1f.3: BAR 4 [io  0x0700-0x073f]
+vtest-rach2: [    1.574821] ACPI: PCI: Interrupt link LNKA configured for IRQ 10
+vtest-rach2: [    1.577017] ACPI: PCI: Interrupt link LNKB configured for IRQ 10
+vtest-rach2: [    1.581460] ACPI: PCI: Interrupt link LNKC configured for IRQ 11
+vtest-rach2: [    1.585202] ACPI: PCI: Interrupt link LNKD configured for IRQ 11
+vtest-rach2: [    1.588239] ACPI: PCI: Interrupt link LNKE configured for IRQ 10
+vtest-rach2: [    1.589500] ACPI: PCI: Interrupt link LNKF configured for IRQ 10
+vtest-rach2: [    1.592504] ACPI: PCI: Interrupt link LNKG configured for IRQ 11
+vtest-rach2: [    1.597497] ACPI: PCI: Interrupt link LNKH configured for IRQ 11
+vtest-rach2: [    1.600407] ACPI: PCI: Interrupt link GSIA configured for IRQ 16
+vtest-rach2: [    1.601308] ACPI: PCI: Interrupt link GSIB configured for IRQ 17
+vtest-rach2: [    1.604189] ACPI: PCI: Interrupt link GSIC configured for IRQ 18
+vtest-rach2: [    1.605309] ACPI: PCI: Interrupt link GSID configured for IRQ 19
+vtest-rach2: [    1.608420] ACPI: PCI: Interrupt link GSIE configured for IRQ 20
+vtest-rach2: [    1.609307] ACPI: PCI: Interrupt link GSIF configured for IRQ 21
+vtest-rach2: [    1.613319] ACPI: PCI: Interrupt link GSIG configured for IRQ 22
+vtest-rach2: [    1.616108] ACPI: PCI: Interrupt link GSIH configured for IRQ 23
+vtest-rach2: [    1.617114] iommu: Default domain type: Translated
+vtest-rach2: [    1.619469] iommu: DMA domain TLB invalidation policy: lazy mode
+vtest-rach2: [    1.621435] pps_core: LinuxPPS API ver. 1 registered
+vtest-rach2: [    1.623875] pps_core: Software ver. 5.3.6 - Copyright 2005-2007 Rodolfo Giometti <giometti@linux.it>
+vtest-rach2: [    1.625322] PTP clock support registered
+vtest-rach2: [    1.627323] EDAC MC: Ver: 3.0.0
+vtest-rach2: [    1.629709] NetLabel: Initializing
+vtest-rach2: [    1.631115] NetLabel:  domain hash size = 128
+vtest-rach2: [    1.633292] NetLabel:  protocols = UNLABELED CIPSOv4 CALIPSO
+vtest-rach2: [    1.635957] NetLabel:  unlabeled traffic allowed by default
+vtest-rach2: [    1.637291] PCI: Using ACPI for IRQ routing
+vtest-rach2: [    1.851973] pci 0000:00:02.0: vgaarb: setting as boot VGA device
+vtest-rach2: [    1.851973] pci 0000:00:02.0: vgaarb: bridge control possible
+vtest-rach2: [    1.853017] pci 0000:00:02.0: vgaarb: VGA device added: decodes=io+mem,owns=io+mem,locks=none
+vtest-rach2: [    1.853032] vgaarb: loaded
+vtest-rach2: [    1.854676] hpet0: at MMIO 0xfed00000, IRQs 2, 8, 0
+vtest-rach2: [    1.857032] hpet0: 3 comparators, 64-bit 100.000000 MHz counter
+vtest-rach2: [    1.863338] clocksource: Switched to clocksource kvm-clock
+vtest-rach2: [    1.865017] VFS: Disk quotas dquot_6.6.0
+vtest-rach2: [    1.866601] VFS: Dquot-cache hash table entries: 512 (order 0, 4096 bytes)
+vtest-rach2: [    1.870445] AppArmor: AppArmor Filesystem Enabled
+vtest-rach2: [    1.872872] pnp: PnP ACPI init
+vtest-rach2: [    1.874681] system 00:04: [mem 0xb0000000-0xbfffffff window] has been reserved
+vtest-rach2: [    1.879036] pnp: PnP ACPI: found 5 devices
+vtest-rach2: [    1.898226] clocksource: acpi_pm: mask: 0xffffff max_cycles: 0xffffff, max_idle_ns: 2085701024 ns
+vtest-rach2: [    1.902797] NET: Registered PF_INET protocol family
+vtest-rach2: [    1.907141] IP idents hash table entries: 32768 (order: 6, 262144 bytes, linear)
+vtest-rach2: [    1.931555] tcp_listen_portaddr_hash hash table entries: 1024 (order: 2, 16384 bytes, linear)
+vtest-rach2: [    1.935959] Table-perturb hash table entries: 65536 (order: 6, 262144 bytes, linear)
+vtest-rach2: [    1.939825] TCP established hash table entries: 16384 (order: 5, 131072 bytes, linear)
+vtest-rach2: [    1.943777] TCP bind hash table entries: 16384 (order: 7, 524288 bytes, linear)
+vtest-rach2: [    1.947670] TCP: Hash tables configured (established 16384 bind 16384)
+vtest-rach2: [    1.952983] MPTCP token hash table entries: 2048 (order: 4, 49152 bytes, linear)
+vtest-rach2: [    1.956621] UDP hash table entries: 1024 (order: 3, 32768 bytes, linear)
+vtest-rach2: [    1.959743] UDP-Lite hash table entries: 1024 (order: 3, 32768 bytes, linear)
+vtest-rach2: [    1.963195] NET: Registered PF_UNIX/PF_LOCAL protocol family
+vtest-rach2: [    1.966001] NET: Registered PF_XDP protocol family
+vtest-rach2: [    1.968296] pci_bus 0000:00: resource 4 [io  0x0000-0x0cf7 window]
+vtest-rach2: [    1.971734] pci_bus 0000:00: resource 5 [io  0x0d00-0xffff window]
+vtest-rach2: [    1.976951] pci_bus 0000:00: resource 6 [mem 0x000a0000-0x000bffff window]
+vtest-rach2: [    1.980134] pci_bus 0000:00: resource 7 [mem 0x80000000-0xafffffff window]
+vtest-rach2: [    1.983412] pci_bus 0000:00: resource 8 [mem 0xc0000000-0xfebfffff window]
+vtest-rach2: [    1.986591] pci_bus 0000:00: resource 9 [mem 0x100000000-0x8ffffffff window]
+vtest-rach2: [    1.990126] PCI: CLS 0 bytes, default 64
+vtest-rach2: [    1.992415] clocksource: tsc: mask: 0xffffffffffffffff max_cycles: 0x36a5f12a74d, max_idle_ns: 881590412319 ns
+vtest-rach2: [    1.992431] Trying to unpack rootfs image as initramfs...
+vtest-rach2: [    2.001427] Initialise system trusted keyrings
+vtest-rach2: [    2.009225] Key type blacklist registered
+vtest-rach2: [    2.013266] workingset: timestamp_bits=36 max_order=19 bucket_order=0
+vtest-rach2: [    2.021345] zbud: loaded
+vtest-rach2: [    2.023979] fuse: init (API version 7.41)
+vtest-rach2: [    2.028278] integrity: Platform Keyring initialized
+vtest-rach2: [    2.032799] integrity: Machine keyring initialized
+vtest-rach2: [    2.090166] Key type asymmetric registered
+vtest-rach2: [    2.093744] Asymmetric key parser 'x509' registered
+vtest-rach2: [    2.300009] Freeing initrd memory: 36280K
+vtest-rach2: [    2.310916] Block layer SCSI generic (bsg) driver version 0.4 loaded (major 246)
+vtest-rach2: [    2.314675] io scheduler mq-deadline registered
+vtest-rach2: [    2.322015] ledtrig-cpu: registered to indicate activity on CPUs
+vtest-rach2: [    2.325080] shpchp: Standard Hot Plug PCI Controller Driver version: 0.4
+vtest-rach2: [    2.329121] ACPI: \_SB_.GSIF: Enabled at IRQ 21
+vtest-rach2: [    2.334489] ACPI: \_SB_.GSIH: Enabled at IRQ 23
+vtest-rach2: [    2.339635] Serial: 8250/16550 driver, 4 ports, IRQ sharing enabled
+vtest-rach2: [    2.345887] 00:02: ttyS0 at I/O 0x3f8 (irq = 4, base_baud = 115200) is a 16550A
+vtest-rach2: [    2.350764] Linux agpgart interface v0.103
+vtest-rach2: [    2.353739] i8042: PNP: PS/2 Controller [PNP0303:KBD,PNP0f13:MOU] at 0x60,0x64 irq 1,12
+vtest-rach2: [    2.360358] serio: i8042 KBD port at 0x60,0x64 irq 1
+vtest-rach2: [    2.362813] serio: i8042 AUX port at 0x60,0x64 irq 12
+vtest-rach2: [    2.367932] mousedev: PS/2 mouse device common for all mice
+vtest-rach2: [    2.371585] input: AT Translated Set 2 keyboard as /devices/platform/i8042/serio0/input/input0
+vtest-rach2: [    2.374192] rtc_cmos 00:03: RTC can wake from S4
+vtest-rach2: [    2.381630] rtc_cmos 00:03: registered as rtc0
+vtest-rach2: [    2.384064] rtc_cmos 00:03: setting system clock to 2026-11-11T21:53:58 UTC (1794434038)
+vtest-rach2: [    2.390622] rtc_cmos 00:03: alarms up to one day, y3k, 242 bytes nvram, hpet irqs
+vtest-rach2: [    2.394241] intel_pstate: CPU model not supported
+vtest-rach2: [    2.397014] NET: Registered PF_INET6 protocol family
+vtest-rach2: [    2.414723] Segment Routing with IPv6
+vtest-rach2: [    2.416682] In-situ OAM (IOAM) with IPv6
+vtest-rach2: [    2.418676] mip6: Mobile IPv6
+vtest-rach2: [    2.420357] NET: Registered PF_PACKET protocol family
+vtest-rach2: [    2.422988] mpls_gso: MPLS GSO support
+vtest-rach2: [    2.425464] IPI shorthand broadcast: enabled
+vtest-rach2: [    2.430855] sched_clock: Marking stable (1720050541, 708284735)->(3574887589, -1146552313)
+vtest-rach2: [    2.437732] registered taskstats version 1
+vtest-rach2: [    2.439986] Loading compiled-in X.509 certificates
+vtest-rach2: [    2.498335] Loaded X.509 cert 'Build time autogenerated kernel key: 6a85889db6fd84d8915bd6ad2e7b53d0bec514b4'
+vtest-rach2: [    2.507721] Demotion targets for Node 0: null
+vtest-rach2: [    2.510166] Key type .fscrypt registered
+vtest-rach2: [    2.512187] Key type fscrypt-provisioning registered
+vtest-rach2: [    2.554125] Key type encrypted registered
+vtest-rach2: [    2.556266] AppArmor: AppArmor sha256 policy hashing enabled
+vtest-rach2: [    2.559137] ima: No TPM chip found, activating TPM-bypass!
+vtest-rach2: [    2.561891] ima: Allocated hash algorithm: sha256
+vtest-rach2: [    2.564274] ima: No architecture policies found
+vtest-rach2: [    2.566676] evm: Initialising EVM extended attributes:
+vtest-rach2: [    2.569264] evm: security.selinux
+vtest-rach2: [    2.570936] evm: security.SMACK64 (disabled)
+vtest-rach2: [    2.575261] evm: security.SMACK64EXEC (disabled)
+vtest-rach2: [    2.577580] evm: security.SMACK64TRANSMUTE (disabled)
+vtest-rach2: [    2.580049] evm: security.SMACK64MMAP (disabled)
+vtest-rach2: [    2.582366] evm: security.apparmor
+vtest-rach2: [    2.584117] evm: security.ima
+vtest-rach2: [    2.585687] evm: security.capability
+vtest-rach2: [    2.587587] evm: HMAC attrs: 0x1
+vtest-rach2: [    2.625959] RAS: Correctable Errors collector initialized.
+vtest-rach2: [    2.667633] clk: Disabling unused clocks
+vtest-rach2: [    2.670846] PM: genpd: Disabling unused power domains
+vtest-rach2: [    2.678630] Freeing unused decrypted memory: 2028K
+vtest-rach2: [    2.681253] Freeing unused kernel image (initmem) memory: 4176K
+vtest-rach2: [    2.683444] Write protecting the kernel read-only data: 28672k
+vtest-rach2: [    2.688300] Freeing unused kernel image (rodata/data gap) memory: 456K
+vtest-rach2: [    2.773259] x86/mm: Checked W+X mappings: passed, no W+X pages found.
+vtest-rach2: [    2.775457] x86/mm: Checking user space page tables
+vtest-rach2: [    2.858900] x86/mm: Checked W+X mappings: passed, no W+X pages found.
+vtest-rach2: [    2.861113] Run /init as init process
+vtest-rach2: Loading, please wait...
+vtest-rach2: Starting systemd-udevd version 257.13-1~deb13u1
+vtest-rach2: [    3.114761] lpc_ich 0000:00:1f.0: I/O space for GPIO uninitialized
+vtest-rach2: [    3.127579] input: VirtualPS/2 VMware VMMouse as /devices/platform/i8042/serio1/input/input3
+vtest-rach2: [    3.133807] input: VirtualPS/2 VMware VMMouse as /devices/platform/i8042/serio1/input/input2
+vtest-rach2: [    3.160084] ACPI: \_SB_.GSIA: Enabled at IRQ 16
+vtest-rach2: [    3.162737] i801_smbus 0000:00:1f.3: SMBus using PCI interrupt
+vtest-rach2: [    3.165181] i2c i2c-0: Memory type 0x07 not supported yet, not instantiating SPD
+vtest-rach2: [    3.171643] iTCO_vendor_support: vendor-support=0
+vtest-rach2: [    3.190423] iTCO_wdt iTCO_wdt.1.auto: Found a ICH9 TCO device (Version=2, TCOBASE=0x0660)
+vtest-rach2: [    3.195948] iTCO_wdt iTCO_wdt.1.auto: initialized. heartbeat=30 sec (nowayout=0)
+vtest-rach2: [    3.201356] virtio_net virtio0 enp0s1: renamed from eth0
+vtest-rach2: [    3.217912] SCSI subsystem initialized
+vtest-rach2: [    3.335622] ahci 0000:00:1f.2: AHCI vers 0001.0000, 32 command slots, 1.5 Gbps, SATA mode
+vtest-rach2: [    3.338638] ahci 0000:00:1f.2: 6/6 ports implemented (port mask 0x3f)
+vtest-rach2: [    3.341250] ahci 0000:00:1f.2: flags: 64bit ncq only 
+vtest-rach2: [    3.348707] scsi host0: ahci
+vtest-rach2: [    3.350669] scsi host1: ahci
+vtest-rach2: [    3.354526] scsi host2: ahci
+vtest-rach2: [    3.356217] scsi host3: ahci
+vtest-rach2: [    3.358028] scsi host4: ahci
+vtest-rach2: [    3.359664] scsi host5: ahci
+vtest-rach2: [    3.361213] ata1: SATA max UDMA/133 abar m4096@0xfe862000 port 0xfe862100 irq 27 lpm-pol 1
+vtest-rach2: [    3.364106] ata2: SATA max UDMA/133 abar m4096@0xfe862000 port 0xfe862180 irq 27 lpm-pol 1
+vtest-rach2: [    3.366988] ata3: SATA max UDMA/133 abar m4096@0xfe862000 port 0xfe862200 irq 27 lpm-pol 1
+vtest-rach2: [    3.369781] ata4: SATA max UDMA/133 abar m4096@0xfe862000 port 0xfe862280 irq 27 lpm-pol 1
+vtest-rach2: [    3.372588] ata5: SATA max UDMA/133 abar m4096@0xfe862000 port 0xfe862300 irq 27 lpm-pol 1
+vtest-rach2: [    3.377082] ata6: SATA max UDMA/133 abar m4096@0xfe862000 port 0xfe862380 irq 27 lpm-pol 1
+vtest-rach2: [    3.709712] ata6: SATA link down (SStatus 0 SControl 300)
+vtest-rach2: [    3.713557] ata3: SATA link down (SStatus 0 SControl 300)
+vtest-rach2: [    3.716283] ata4: SATA link down (SStatus 0 SControl 300)
+vtest-rach2: [    3.719381] ata5: SATA link down (SStatus 0 SControl 300)
+vtest-rach2: [    3.724189] ata2: SATA link down (SStatus 0 SControl 300)
+vtest-rach2: [    3.727771] ata1: SATA link up 1.5 Gbps (SStatus 113 SControl 300)
+vtest-rach2: [    3.730268] ata1.00: Model 'QEMU HARDDISK', rev '2.5+', applying quirks: bridgeok
+vtest-rach2: [    3.732806] ata1.00: LPM support broken, forcing max_power
+vtest-rach2: [    3.734944] ata1.00: ATA-7: QEMU HARDDISK, 2.5+, max UDMA/100
+vtest-rach2: [    3.736969] ata1.00: 16777216 sectors, multi 16: LBA48 NCQ (depth 32)
+vtest-rach2: [    3.739633] ata1.00: LPM support broken, forcing max_power
+vtest-rach2: [    3.741639] ata1.00: configured for UDMA/100
+vtest-rach2: [    3.745375] scsi 0:0:0:0: Direct-Access     ATA      QEMU HARDDISK    2.5+ PQ: 0 ANSI: 5
+vtest-rach2: [    3.774246] sd 0:0:0:0: [sda] 16777216 512-byte logical blocks: (8.59 GB/8.00 GiB)
+vtest-rach2: [    3.777304] sd 0:0:0:0: [sda] Write Protect is off
+vtest-rach2: [    3.779023] sd 0:0:0:0: [sda] Write cache: enabled, read cache: enabled, doesn't support DPO or FUA
+vtest-rach2: [    3.782297] sd 0:0:0:0: [sda] Preferred minimum I/O size 512 bytes
+vtest-rach2: [    3.815807]  sda: sda1 sda14 sda15
+vtest-rach2: [    3.817648] sd 0:0:0:0: [sda] Attached SCSI disk
+vtest-rach2: Begin: Loading essential drivers ... done.
+vtest-rach2: Begin: Running /scripts/init-premount ... done.
+vtest-rach2: Begin: Mounting root file system ... Begin: Running /scripts/local-top ... done.
+vtest-rach2: Begin: Running /scripts/local-premount ... done.
+vtest-rach2: Warning: fsck not present, so skipping root file system
+vtest-rach2: [    4.373689] EXT4-fs (sda1): mounted filesystem 96e538c4-e118-47a5-ad63-ddbd0e67f846 ro with ordered data mode. Quota mode: none.
+vtest-rach2: done.
+vtest-rach2: Begin: Running /scripts/local-bottom ... GROWROOT: NOCHANGE: partition 1 is size 16515039. it cannot be grown
+vtest-rach2: done.
+vtest-rach2: Begin: Running /scripts/init-bottom ... done.
+vtest-rach2: [    4.526753] Not activating Mandatory Access Control as /sbin/tomoyo-init does not exist.
+vtest-rach2: [    4.941561] systemd[1]: Inserted module 'autofs4'
+vtest-rach2: [!p]104[?7h[    5.056909] systemd[1]: systemd 257.13-1~deb13u1 running in system mode (+PAM +AUDIT +SELINUX +APPARMOR +IMA +IPE +SMACK +SECCOMP +GCRYPT -GNUTLS +OPENSSL +ACL +BLKID +CURL +ELFUTILS +FIDO2 +IDN2 -IDN +IPTC +KMOD +LIBCRYPTSETUP +LIBCRYPTSETUP_PLUGINS +LIBFDISK +PCRE2 +PWQUALITY +P11KIT +QRENCODE +TPM2 +BZIP2 +LZ4 +XZ +ZLIB +ZSTD +BPF_FRAMEWORK +BTF -XKBCOMMON -UTMP +SYSVINIT +LIBARCHIVE)
+vtest-rach2: [    5.067895] systemd[1]: Detected virtualization kvm.
+vtest-rach2: [    5.069736] systemd[1]: Detected architecture x86-64.
+vtest-rach2: 
+vtest-rach2: [0;1;39mWelcome to [0m[1mDebian GNU/Linux 13 (trixie)[0m[0;1;39m![0m
+vtest-rach2: 
+vtest-rach2: [    5.083766] systemd[1]: Hostname set to <bed-vtest>.
+vtest-rach2: [    5.325028] systemd[1]: bpf-restrict-fs: LSM BPF program attached
+vtest-rach2: [    5.522524] Guest personality initialized and is inactive
+vtest-rach2: [    5.529903] VMCI host device registered (name=vmci, major=10, minor=260)
+vtest-rach2: [    5.533935] Initialized host personality
+vtest-rach2: [    5.568339] NET: Registered PF_VSOCK protocol family
+vtest-rach2: [    5.742623] systemd-ssh-generator[264]: Failed to query local AF_VSOCK CID: Cannot assign requested address
+vtest-rach2: [    5.748690] (sd-exec-[254]: /usr/lib/systemd/system-generators/systemd-ssh-generator failed with exit status 1.
+vtest-rach2: [    6.022225] systemd[1]: Queued start job for default target graphical.target.
+vtest-rach2: [    6.064119] systemd[1]: Created slice system-getty.slice - Slice /system/getty.
+vtest-rach2: [[0;32m  OK  [0m] Created slice [0;1;39msystem-getty.slice[0m - Slice /system/getty.
+vtest-rach2: [    6.073837] systemd[1]: Created slice system-modprobe.slice - Slice /system/modprobe.
+vtest-rach2: [[0;32m  OK  [0m] Created slice [0;1;39msystem-modprobe.slice[0m - Slice /system/modprobe.
+vtest-rach2: [    6.081489] systemd[1]: Created slice system-serial\x2dgetty.slice - Slice /system/serial-getty.
+vtest-rach2: [[0;32m  OK  [0m] Created slice [0;1;39msystem-serial\x2dgetslice[0m - Slice /system/serial-getty.
+vtest-rach2: [    6.091658] systemd[1]: Created slice system-systemd\x2dfsck.slice - Slice /system/systemd-fsck.
+vtest-rach2: [[0;32m  OK  [0m] Created slice [0;1;39msystem-systemd\x2dfsslice[0m - Slice /system/systemd-fsck.
+vtest-rach2: [    6.099813] systemd[1]: Created slice user.slice - User and Session Slice.
+vtest-rach2: [[0;32m  OK  [0m] Created slice [0;1;39muser.slice[0m - User and Session Slice.
+vtest-rach2: [    6.106432] systemd[1]: Started systemd-ask-password-console.path - Dispatch Password Requests to Console Directory Watch.
+vtest-rach2: [[0;32m  OK  [0m] Started [0;1;39msystemd-ask-password-conso[0mequests to Console Directory Watch.
+vtest-rach2: [    6.116737] systemd[1]: Started systemd-ask-password-wall.path - Forward Password Requests to Wall Directory Watch.
+vtest-rach2: [[0;32m  OK  [0m] Started [0;1;39msystemd-ask-password-wall.[0md Requests to Wall Directory Watch.
+vtest-rach2: [    6.125124] systemd[1]: Set up automount proc-sys-fs-binfmt_misc.automount - Arbitrary Executable File Formats File System Automount Point.
+vtest-rach2: [[0;32m  OK  [0m] Set up automount [0;1;39mproc-sys-fs-binfm[0mormats File System Automount Point.
+vtest-rach2: [    6.134077] systemd[1]: Expecting device dev-disk-by\x2dpartuuid-79f75176\x2d0229\x2d455e\x2d8aa8\x2dae49e9b72956.device - /dev/disk/by-partuuid/79f75176-0229-455e-8aa8-ae49e9b72956...
+vtest-rach2:          Expecting device [0;1;39mdev-disk-by\x2dpa[0m5176-0229-455e-8aa8-ae49e9b72956...
+vtest-rach2: [    6.145541] systemd[1]: Expecting device dev-ttyS0.device - /dev/ttyS0...
+vtest-rach2:          Expecting device [0;1;39mdev-ttyS0.device[0m - /dev/ttyS0...
+vtest-rach2: [    6.150945] systemd[1]: Reached target paths.target - Path Units.
+vtest-rach2: [[0;32m  OK  [0m] Reached target [0;1;39mpaths.target[0m - Path Units.
+vtest-rach2: [    6.155991] systemd[1]: Reached target remote-fs.target - Remote File Systems.
+vtest-rach2: [[0;32m  OK  [0m] Reached target [0;1;39mremote-fs.target[0m - Remote File Systems.
+vtest-rach2: [    6.164170] systemd[1]: Reached target slices.target - Slice Units.
+vtest-rach2: [[0;32m  OK  [0m] Reached target [0;1;39mslices.target[0m - Slice Units.
+vtest-rach2: [    6.169350] systemd[1]: Reached target swap.target - Swaps.
+vtest-rach2: [[0;32m  OK  [0m] Reached target [0;1;39mswap.target[0m - Swaps.
+vtest-rach2: [    6.176017] systemd[1]: Listening on systemd-creds.socket - Credential Encryption/Decryption.
+vtest-rach2: [[0;32m  OK  [0m] Listening on [0;1;39msystemd-creds.socket[0m - Credential Encryption/Decryption.
+vtest-rach2: [    6.184947] systemd[1]: Listening on systemd-initctl.socket - initctl Compatibility Named Pipe.
+vtest-rach2: [[0;32m  OK  [0m] Listening on [0;1;39msystemd-initctl.socke[0m- initctl Compatibility Named Pipe.
+vtest-rach2: [    6.192017] systemd[1]: Listening on systemd-journald-dev-log.socket - Journal Socket (/dev/log).
+vtest-rach2: [[0;32m  OK  [0m] Listening on [0;1;39msystemd-journald-dev-socket[0m - Journal Socket (/dev/log).
+vtest-rach2: [    6.200126] systemd[1]: Listening on systemd-journald.socket - Journal Sockets.
+vtest-rach2: [[0;32m  OK  [0m] Listening on [0;1;39msystemd-journald.socket[0m - Journal Sockets.
+vtest-rach2: [    6.208897] systemd[1]: Listening on systemd-networkd.socket - Network Service Netlink Socket.
+vtest-rach2: [[0;32m  OK  [0m] Listening on [0;1;39msystemd-networkd.socket[0m - Network Service Netlink Socket.
+vtest-rach2: [    6.215778] systemd[1]: systemd-pcrextend.socket - TPM PCR Measurements skipped, unmet condition check ConditionSecurity=measured-uki
+vtest-rach2: [    6.219995] systemd[1]: systemd-pcrlock.socket - Make TPM PCR Policy skipped, unmet condition check ConditionSecurity=measured-uki
+vtest-rach2: [    6.224032] systemd[1]: Listening on systemd-udevd-control.socket - udev Control Socket.
+vtest-rach2: [[0;32m  OK  [0m] Listening on [0;1;39msystemd-udevd-control.socket[0m - udev Control Socket.
+vtest-rach2: [    6.232657] systemd[1]: Listening on systemd-udevd-kernel.socket - udev Kernel Socket.
+vtest-rach2: [[0;32m  OK  [0m] Listening on [0;1;39msystemd-udevd-kernel.socket[0m - udev Kernel Socket.
+vtest-rach2: [    6.241331] systemd[1]: Mounting dev-hugepages.mount - Huge Pages File System...
+vtest-rach2:          Mounting [0;1;39mdev-hugepages.mount[0m - Huge Pages File System...
+vtest-rach2: [    6.256997] systemd[1]: Mounting dev-mqueue.mount - POSIX Message Queue File System...
+vtest-rach2:          Mounting [0;1;39mdev-mqueue.mount[0m - POSIX Message Queue File System...
+vtest-rach2: [    6.278083] systemd[1]: Mounting run-lock.mount - Legacy Locks Directory /run/lock...
+vtest-rach2:          Mounting [0;1;39mrun-lock.mount[0m - Legacy Locks Directory /run/lock...
+vtest-rach2: [    6.298835] systemd[1]: Mounting sys-kernel-debug.mount - Kernel Debug File System...
+vtest-rach2:          Mounting [0;1;39msys-kernel-debug.mount[0m - Kernel Debug File System...
+vtest-rach2: [    6.313061] systemd[1]: Mounting sys-kernel-tracing.mount - Kernel Trace File System...
+vtest-rach2:          Mounting [0;1;39msys-kernel-tracing.mount[0m - Kernel Trace File System...
+vtest-rach2: [    6.358066] systemd[1]: Mounting tmp.mount - Temporary Directory /tmp...
+vtest-rach2:          Mounting [0;1;39mtmp.mount[0m - Temporary Directory /tmp...
+vtest-rach2: [    6.368583] systemd[1]: Starting kmod-static-nodes.service - Create List of Static Device Nodes...
+vtest-rach2:          Starting [0;1;39mkmod-static-nodes.service[0meate List of Static Device Nodes...
+vtest-rach2: [    6.382924] systemd[1]: Starting modprobe@configfs.service - Load Kernel Module configfs...
+vtest-rach2:          Starting [0;1;39mmodprobe@configfs.service[0m - Load Kernel Module configfs...
+vtest-rach2: [    6.397077] systemd[1]: Starting modprobe@drm.service - Load Kernel Module drm...
+vtest-rach2:          Starting [0;1;39mmodprobe@drm.service[0m - Load Kernel Module drm...
+vtest-rach2: [    6.414402] systemd[1]: Starting modprobe@efi_pstore.service - Load Kernel Module efi_pstore...
+vtest-rach2:          Starting [0;1;39mmodprobe@efi_pstore.servi[0m - Load Kernel Module efi_pstore...
+vtest-rach2: [    6.441065] systemd[1]: Starting modprobe@fuse.service - Load Kernel Module fuse...
+vtest-rach2:          Starting [0;1;39mmodprobe@fuse.service[0m - Load Kernel Module fuse...
+vtest-rach2: [    6.448042] systemd[1]: netplan-ovs-cleanup.service - OpenVSwitch configuration for cleanup skipped, unmet condition check ConditionFileIsExecutable=/usr/bin/ovs-vsctl
+vtest-rach2: [    6.468960] systemd[1]: Starting systemd-fsck-root.service - File System Check on Root Device...
+vtest-rach2:          Starting [0;1;39msystemd-fsck-root.service[0mFile System Check on Root Device...
+vtest-rach2: [    6.483617] systemd[1]: systemd-hibernate-clear.service - Clear Stale Hibernate Storage Info skipped, unmet condition check ConditionPathExists=/sys/firmware/efi/efivars/HibernateLocation-8cf2644b-4b0b-428f-9387-6d876050dc67
+vtest-rach2: [    6.518418] systemd[1]: Starting systemd-journald.service - Journal Service...
+vtest-rach2:          Starting [0;1;39msystemd-journald.service[0m - Journal Service...
+vtest-rach2: [    6.547593] systemd[1]: Starting systemd-modules-load.service - Load Kernel Modules...
+vtest-rach2:          Starting [0;1;39msystemd-modules-load.service[0m - Load Kernel Modules...
+vtest-rach2: [    6.582232] systemd[1]: Starting systemd-network-generator.service - Generate Network Units from Kernel Command Line...
+vtest-rach2:          Starting [0;1;39msystemd-network-generator[0mk Uni[    6.608651] systemd[1]: systemd-pcrmachine.service - TPM PCR Machine ID Measurement skipped, unmet condition check ConditionSecurity=measured-uki
+vtest-rach2: ts from Kernel Command Line...
+vtest-rach2: [    6.616189] systemd[1]: systemd-tpm2-setup-early.service - Early TPM SRK Setup skipped, unmet condition check ConditionSecurity=measured-uki
+vtest-rach2: [    6.634795] systemd[1]: Starting systemd-udev-load-credentials.service - Load udev Rules from Credentials...
+vtest-rach2: [    6.657444] ACPI: bus type drm_connector registered
+vtest-rach2:          Starting [0;1;39msystemd-udev-load-credent[0mLoad udev Rules from Credentials...
+vtest-rach2: [    6.686002] systemd[1]: Starting systemd-udev-trigger.service - Coldplug All udev Devices...
+vtest-rach2:          Starting [0;1;39msystemd-udev-trigger.service[0m - Coldplug All udev Devices...
+vtest-rach2: [    6.716022] systemd-journald[288]: Collecting audit messages is disabled.
+vtest-rach2: [    6.725963] systemd[1]: Mounted dev-hugepages.mount - Huge Pages File System.
+vtest-rach2: [[0;32m  OK  [0m] Mounted [0;1;39mdev-hugepages.mount[0m - Huge Pages File System.
+vtest-rach2: [    6.741023] systemd[1]: Mounted dev-mqueue.mount - POSIX Message Queue File System.
+vtest-rach2: [[0;32m  OK  [0m] Mounted [0;1;39mdev-mqueue.mount[0m - POSIX Message Queue File System.
+vtest-rach2: [    6.759471] systemd[1]: Mounted run-lock.mount - Legacy Locks Directory /run/lock.
+vtest-rach2: [[0;32m  OK  [0m] Mounted [0;1;39mrun-lock.mount[0m - Legacy Locks Directory /run/lock.
+vtest-rach2: [    6.772692] systemd[1]: Mounted sys-kernel-debug.mount - Kernel Debug File System.
+vtest-rach2: [[0;32m  OK  [0m] Mounted [0;1;39msys-kernel-debug.mount[0m - Kernel Debug File System.
+vtest-rach2: [    6.781737] systemd[1]: Started systemd-journald.service - Journal Service.
+vtest-rach2: [[0;32m  OK  [0m] Started [0;1;39msystemd-journald.service[0m - Journal Service.
+vtest-rach2: [[0;32m  OK  [0m] Mounted [0;1;39msys-kernel-tracing.mount[0m - Kernel Trace File System.
+vtest-rach2: [[0;32m  OK  [0m] Mounted [0;1;39mtmp.mount[0m - Temporary Directory /tmp.
+vtest-rach2: [[0;32m  OK  [0m] Finished [0;1;39mkmod-static-nodes.service[0mCreate List of Static Device Nodes.
+vtest-rach2: [[0;32m  OK  [0m] Finished [0;1;39mmodprobe@configfs.service[0m - Load Kernel Module configfs.
+vtest-rach2: [[0;32m  OK  [0m] Finished [0;1;39mmodprobe@drm.service[0m - Load Kernel Module drm.
+vtest-rach2: [[0;32m  OK  [0m] Finished [0;1;39mmodprobe@efi_pstore.service[0m - Load Kernel Module efi_pstore.
+vtest-rach2: [[0;32m  OK  [0m] Finished [0;1;39mmodprobe@fuse.service[0m - Load Kernel Module fuse.
+vtest-rach2: [[0;32m  OK  [0m] Finished [0;1;39msystemd-fsck-root.service[0m - File System Check on Root Device.
+vtest-rach2: [[0;32m  OK  [0m] Finished [0;1;39msystemd-modules-load.service[0m - Load Kernel Modules.
+vtest-rach2: [[0;32m  OK  [0m] Finished [0;1;39msystemd-network-generator[0mork Units from Kernel Command Line.
+vtest-rach2: [[0;32m  OK  [0m] Finished [0;1;39msystemd-udev-load-credent[0m- Load udev Rules from Credentials.
+vtest-rach2: [[0;32m  OK  [0m] Reached target [0;1;39mnetwork-pre.target[0m - Preparation for Network.
+vtest-rach2:          Mounting [0;1;39msys-fs-fuse-connections.mount[0m - FUSE Control File System...
+vtest-rach2:          Mounting [0;1;39msys-kernel-config.mount[0m - Kernel Configuration File System...
+vtest-rach2:          Starting [0;1;39msystemd-remount-fs.servic[0munt Root and Kernel File Systems...
+vtest-rach2:          Starting [0;1;39msystemd-sysctl.service[0m - Apply Kernel Variables...
+vtest-rach2:          Starting [0;1;39msystemd-tmpfiles-setup-de[0m Device Nodes in /dev gracefully...
+vtest-rach2: [[0;32m  OK  [0m] Finished [0;1;39msystemd-ud[    6.980459] EXT4-fs (sda1): re-mounted 96e538c4-e118-47a5-ad63-ddbd0e67f846 r/w.
+vtest-rach2: ev-trigger.service[0m - Coldplug All udev Devices.
+vtest-rach2: [[0;32m  OK  [0m] Mounted [0;1;39msys-fs-fuse-connections.mount[0m - FUSE Control File System.
+vtest-rach2: [[0;32m  OK  [0m] Mounted [0;1;39msys-kernel-config.mount[0m - Kernel Configuration File System.
+vtest-rach2: [[0;32m  OK  [0m] Finished [0;1;39msystemd-remount-fs.servic[0mmount Root and Kernel File Systems.
+vtest-rach2: [[0;32m  OK  [0m] Finished [0;1;39msystemd-sysctl.service[0m - Apply Kernel Variables.
+vtest-rach2:          Starting [0;1;39msystemd-growfs-root.service[0m - Grow Root File System...
+vtest-rach2:          Starting [0;1;39msystemd-journal-flush.ser[0msh Journal to Persistent Storage...
+vtest-rach2:          Starting [0;1;39msystemd-random-seed.service[0m - Load/Save OS Random Seed...
+vtest-rach2: [[0;32m  OK  [0m] Finished [0;1;39msystemd-tmpfiles-setup-de[0mic Device Nodes in /dev gracefully.
+vtest-rach2:          Starting [0;1;39msystemd-resolved.service[0m - Network Name Resolutio[    7.131275] EXT4-fs (sda1): resizing filesystem from 2064379 to 2064379 blocks
+vtest-rach2: n...
+vtest-rach2: [    7.137776] systemd-journald[288]: Received client request to flush runtime journal.
+vtest-rach2:          Starting [0;1;39msystemd-timesyncd.service[0m - Network Time Synchronization...
+vtest-rach2:          Starting [0;1;39msystemd-tmpfiles-setup-de[0meate Static Device Nodes in /dev...
+vtest-rach2: [[0;32m  OK  [0m] Finished [0;1;39msystemd-growfs-root.service[0m - Grow Root File System.
+vtest-rach2: [[0;32m  OK  [0m] Finished [0;1;39msystemd-random-seed.service[0m - Load/Save OS Random Seed.
+vtest-rach2: [[0;32m  OK  [0m] Finished [0;1;39msystemd-journal-flush.ser[0mlush Journal to Persistent Storage.
+vtest-rach2: [[0;32m  OK  [0m] Finished [0;1;39msystemd-tmpfiles-setup-de[0mCreate Static Device Nodes in /dev.
+vtest-rach2: [[0;32m  OK  [0m] Reached target [0;1;39mlocal-fs-pre.target[0mPreparation for Local File Systems.
+vtest-rach2:          Starting [0;1;39msystemd-udevd.service[0m - Rager for Device Events and Files...
+vtest-rach2: [[0;32m  OK  [0m] Started [0;1;39msystemd-timesyncd.service[0m - Network Time Synchronization.
+vtest-rach2: [[0;32m  OK  [0m] Reached target [0;1;39mtime-set.target[0m - System Time Set.
+vtest-rach2: [[0;32m  OK  [0m] Started [0;1;39msystemd-resolved.service[0m - Network Name Resolution.
+vtest-rach2: [[0;32m  OK  [0m] Reached target [0;1;39mnss-lookup.target[0m - Host and Network Name Lookups.
+vtest-rach2: [[0;32m  OK  [0m] Started [0;1;39msystemd-udevd.service[0m - Ruanager for Device Events and Files.
+vtest-rach2:          Starting [0;1;39msystemd-networkd.service[0m - Network Configuration...
+vtest-rach2: [[0;32m  OK  [0m] Found device [0;1;39mdev-ttyS0.device[0m - /dev/ttyS0.
+vtest-rach2: [    8.003630] input: Power Button as /devices/LNXSYSTM:00/LNXPWRBN:00/input/input4
+vtest-rach2: [    8.019360] sd 0:0:0:0: Attached scsi generic sg0 type 0
+vtest-rach2: [    8.037797] ACPI: button: Power Button [PWRF]
+vtest-rach2: [[0;32m  OK  [0m] Listening on [0;1;39msystemd-rfkill.socket[0mll Switch Status /dev/rfkill Watch.
+vtest-rach2: [    8.168219] cfg80211: Loading compiled-in X.509 certificates for regulatory database
+vtest-rach2: [    8.191746] Loaded X.509 cert 'benh@debian.org: 577e021cb980e0e820821ba7b54b4961b8b4fadf'
+vtest-rach2: [    8.201142] Loaded X.509 cert 'romain.perier@gmail.com: 3abbc6ec146e09d1b6016ab9d6cf71dd233f0328'
+vtest-rach2: [    8.208574] Loaded X.509 cert 'sforshee: 00b28ddf47aef9cea7'
+vtest-rach2: [    8.212503] Loaded X.509 cert 'wens: 61c038651aabdcf94bd0ac7ff06c7248db18c600'
+vtest-rach2: [    8.219526] platform regulatory.0: firmware: failed to load regulatory.db (-2)
+vtest-rach2: [    8.222159] platform regulatory.0: firmware: failed to load regulatory.db (-2)
+vtest-rach2: [    8.225331] platform regulatory.0: firmware: failed to load regulatory.db (-2)
+vtest-rach2: [    8.232179] platform regulatory.0: Direct firmware load for regulatory.db failed with error -2
+vtest-rach2: [    8.235839] cfg80211: failed to load regulatory.db
+vtest-rach2: [[0;32m  OK  [0m] Started [0;1;39msystemd-networkd.service[0m - Network Configuration.
+vtest-rach2: [[0;32m  OK  [0m] Reached target [0;1;39mnetwork.target[0m - Network.
+vtest-rach2:          Starting [0;1;39msystemd-networkd-persiste[0mtent Storage in systemd-networkd...
+vtest-rach2: [    8.407676] RAPL PMU: API unit is 2^-32 Joules, 0 fixed counters, 10737418240 ms ovfl timer
+vtest-rach2: [[0;32m  OK  [0m] Found device [0;1;39mdev-disk-by\x2dpartuue9b72956.device[0m - QEMU_HARDDISK 15.
+vtest-rach2: [    8.461366] cryptd: max_cpu_qlen set to 1000
+vtest-rach2: [[0;32m  OK  [0m] Finished [0;1;39msystemd-networkd-persiste[0mistent Storage in systemd-networkd.
+vtest-rach2:          Starting [0;1;39msystemd-fsck@dev-disk-by\[0m5176-0229-455e-8aa8-ae49e9b72956...
+vtest-rach2: [    8.532799] AES CTR mode by8 optimization enabled
+vtest-rach2: [[0;32m  OK  [0m] Finished [0;1;39msystemd-fsck@dev-disk-by\[0mf75176-0229-455e-8aa8-ae49e9b72956.
+vtest-rach2:          Mounting [0;1;39mboot-efi.mount[0m - /boot/efi...
+vtest-rach2: [[0;32m  OK  [0m] Mounted [0;1;39mboot-efi.mount[0m - /boot/efi.
+vtest-rach2: [[0;32m  OK  [0m] Reached target [0;1;39mlocal-fs.target[0m - Local File Systems.
+vtest-rach2: [[0;32m  OK  [0m] Listening on [0;1;39msystemd-sysext.socket[0m System Extension Image Management.
+vtest-rach2:          Starting [0;1;39mapparmor.service[0m - Load AppArmor profiles...
+vtest-rach2:          Starting [0;1;39msystemd-binfmt.service[0m - Set Up Additional Binary Formats...
+vtest-rach2:          Starting [0;1;39msystemd-tmpfiles-setup.se[0mate System Files and Directories...
+vtest-rach2:          Mounting [0;1;39mproc-sys-fs-binfmt_misc.m[0mcutable File Formats File System...
+vtest-rach2: [[0;32m  OK  [0m] Finished [0;1;39msystemd-tmpfiles-setup.se[0mreate System Files and Directories.
+vtest-rach2: [[0;32m  OK  [0m] Mounted [0;1;39mproc-sys-fs-binfmt_misc.mo[0mxecutable File Formats File System.
+vtest-rach2: [[0;32m  OK  [0m] Finished [0;1;39msystemd-binfmt.service[0m - Set Up Additional Binary Formats.
+vtest-rach2: [    9.114293] audit: type=1400 audit(1794434045.228:2): apparmor="STATUS" operation="profile_load" profile="unconfined" name="Discord" pid=466 comm="apparmor_parser"
+vtest-rach2: [    9.120236] audit: type=1400 audit(1794434045.228:3): apparmor="STATUS" operation="profile_load" profile="unconfined" name="1password" pid=465 comm="apparmor_parser"
+vtest-rach2: [    9.132296] audit: type=1400 audit(1794434045.244:4): apparmor="STATUS" operation="profile_load" profile="unconfined" name=4D6F6E676F444220436F6D70617373 pid=469 comm="apparmor_parser"
+vtest-rach2: [    9.142134] audit: type=1400 audit(1794434045.256:5): apparmor="STATUS" operation="profile_load" profile="unconfined" name="QtWebEngineProcess" pid=470 comm="apparmor_parser"
+vtest-rach2: [    9.154182] audit: type=1400 audit(1794434045.268:6): apparmor="STATUS" operation="profile_load" profile="unconfined" name="balena-etcher" pid=472 comm="apparmor_parser"
+vtest-rach2: [    9.169228] audit: type=1400 audit(1794434045.284:7): apparmor="STATUS" operation="profile_load" profile="unconfined" name="brave" pid=473 comm="apparmor_parser"
+vtest-rach2: [    9.180306] audit: type=1400 audit(1794434045.292:8): apparmor="STATUS" operation="profile_load" profile="unconfined" name="Xorg" pid=471 comm="apparmor_parser"
+vtest-rach2: [    9.188929] audit: type=1400 audit(1794434045.300:9): apparmor="STATUS" operation="profile_load" profile="unconfined" name="busybox" pid=475 comm="apparmor_parser"
+vtest-rach2: [    9.196867] audit: type=1400 audit(1794434045.300:10): apparmor="STATUS" operation="profile_load" profile="unconfined" name="buildah" pid=474 comm="apparmor_parser"
+vtest-rach2: [    9.205822] audit: type=1400 audit(1794434045.316:11): apparmor="STATUS" operation="profile_load" profile="unconfined" name="cam" pid=476 comm="apparmor_parser"
+vtest-rach2: [[0;32m  OK  [0m] Finished [0;1;39mapparmor.service[0m - Load AppArmor profiles.
+vtest-rach2: [[0;32m  OK  [0m] Reached target [0;1;39msysinit.target[0m - System Initialization.
+vtest-rach2: [[0;32m  OK  [0m] Started [0;1;39mapt-daily.timer[0m - Daily apt download activities.
+vtest-rach2: [[0;32m  OK  [0m] Started [0;1;39mapt-daily-upgrade.timer[0m - y apt upgrade and clean activities.
+vtest-rach2: [[0;32m  OK  [0m] Started [0;1;39mapt-listchanges.timer[0m - Tre apt-listchanges database for APT.
+vtest-rach2: [[0;32m  OK  [0m] Started [0;1;39mdpkg-db-backup.timer[0m - Daily dpkg database backup timer.
+vtest-rach2: [[0;32m  OK  [0m] Started [0;1;39me2scrub_all.timer[0m - PeriodMetadata Check for All Filesystems.
+vtest-rach2: [[0;32m  OK  [0m] Started [0;1;39mfstrim.timer[0m - Discard unused filesystem blocks once a week.
+vtest-rach2: [[0;32m  OK  [0m] Started [0;1;39mman-db.timer[0m - Daily man-db regeneration.
+vtest-rach2: [[0;32m  OK  [0m] Started [0;1;39msystemd-tmpfiles-clean.tim[0my Cleanup of Temporary Directories.
+vtest-rach2: [[0;32m  OK  [0m] Reached target [0;1;39mtimers.target[0m - Timer Units.
+vtest-rach2: [[0;32m  OK  [0m] Listening on [0;1;39mdbus.socket[0m - D-Bus System Message Bus Socket.
+vtest-rach2: [[0;32m  OK  [0m] Listening on [0;1;39msshd-unix-local.socke[0mtemd-ssh-generator, AF_UNIX Local).
+vtest-rach2: [[0;32m  OK  [0m] Listening on [0;1;39msystemd-hostnamed.socket[0m - Hostname Service Socket.
+vtest-rach2: [[0;32m  OK  [0m] Listening on [0;1;39muuidd.socket[0m - UUID daemon activation socket.
+vtest-rach2: [[0;32m  OK  [0m] Reached target [0;1;39msockets.target[0m - Socket Units.
+vtest-rach2: [[0;32m  OK  [0m] Reached target [0;1;39mbasic.target[0m - Basic System.
+vtest-rach2:          Starting [0;1;39mdbus.service[0m - D-Bus System Message Bus...
+vtest-rach2:          Starting [0;1;39me2scrub_reap.service[0m - Rene ext4 Metadata Check Snapshots...
+vtest-rach2:          Starting [0;1;39mgrub-common.service[0m - Record successful boot for GRUB...
+vtest-rach2:          Starting [0;1;39mssh.service[0m - OpenBSD Secure Shell server...
+vtest-rach2:          Starting [0;1;39msystemd-logind.service[0m - User Login Management...
+vtest-rach2:          Starting [0;1;39msystemd-user-sessions.service[0m - Permit User Sessions...
+vtest-rach2: [[0;32m  OK  [0m] Started [0;1;39mvtest-server.service[0m - virst server on /run/vtest/vtest.sock.
+vtest-rach2: [   10.337692] i915 0000:00:02.0: [drm] Found HASWELL/ULT (device ID 0a16) display version 7.00 stepping N/A
+vtest-rach2: [   10.341815] i915 0000:00:02.0: [drm] VT-d active for gfx access
+vtest-rach2: [[0;32m  OK  [0m] Started [0;1;39mvtest-tcp.service[0m - The vtt server's socket on TCP port 5555.[   10.353412] i915 0000:00:02.0: vgaarb: deactivate vga console
+vtest-rach2: [   10.355730] Console: switching to colour dummy device 80x25
+vtest-rach2: [   10.360694] i915 0000:00:02.0: [drm] Using Transparent Hugepages
+vtest-rach2: [   10.362814] i915 0000:00:02.0: [drm] DMAR active, disabling use of stolen memory
+vtest-rach2: 
+vtest-rach2:          Starting [0;1;39mvtest-ready.service[0m - Reprver ready on the serial console...
+vtest-rach2: [   10.424769] i915 0000:00:02.0: vgaarb: VGA decodes changed: olddecodes=io+mem,decodes=io+mem:owns=io+mem
+vtest-rach2: [[0;32m  OK  [0m] Started [0;1;39mdbus.service[0m - D-Bus System Message Bus.
+vtest-rach2: [[0;32m  OK  [0m] Finished [0;1;39me2scrub_reap.service[0m - Reline ext4 Metadata Check Snapshots.
+vtest-rach2: [[0;32m  OK  [0m] Started [0;1;39msystemd-logind.service[0m - User Login Management.
+vtest-rach2: [[0;32m  OK  [0m] Finished [0;1;39msystemd-user-sessions.service[0m - Permit User Sessions.
+vtest-rach2: [[0;32m  OK  [0m] Started [0;1;39mgetty@tty1.service[0m - Getty on tty1.
+vtest-rach2: [[0;32m  OK  [0m] Started [0;1;39mserial-getty@ttyS0.service[0m - Serial Getty on ttyS0.
+vtest-rach2: [[0;32m  OK  [0m] Reached target [0;1;39mgetty.target[0m - Login Prompts.
+vtest-rach2: [[0;32m  OK  [0m] Started [0;1;39munattended-upgrades.service[0m - Unattended Upgrades Shutdown.
+vtest-rach2: [[0;32m  OK  [0m] Started [0;1;39mssh.service[0m - OpenBSD Secure Shell server.
+vtest-rach2: [[0;32m  OK  [0m] Finished [0;1;39mgrub-common.service[0m - Record successful boot for GRUB.
+vtest-rach2: [   10.733210] [drm] Initialized i915 1.6.0 for 0000:00:02.0 on minor 0
+vtest-rach2: [   10.765418] fbcon: i915drmfb (fb0) is primary device
+vtest-rach2: [   11.033476] Console: switching to colour frame buffer device 170x48
+vtest-rach2: [   11.054609] i915 0000:00:02.0: [drm] fb0: i915drmfb frame buffer device
+vtest-rach2: [[0;32m  OK  [0m] Created slice [0;1;39msystem-systemd\x2dba[0m - Slice /system/systemd-backlight.
+vtest-rach2:          Starting [0;1;39msystemd-backlight@backlig[0mess of backlight:intel_backlight...
+vtest-rach2: [[0;32m  OK  [0m] Finished [0;1;39msystemd-backlight@backlig[0mtness of backlight:intel_backlight.
+vtest-rach2: vtest-guest: version: virgl-server 1.1.0-2
+vtest-rach2: vtest-guest: version: libgl1-mesa-dri 25.0.7-2+deb13u1
+vtest-rach2: vtest-guest: version: socat 1.8.0.3-1+deb13u1
+vtest-rach2: vtest-guest: version: kernel 6.12.115+deb13.1-amd64
+vtest-rach2: vtest-guest: renderer: gpu 0000:00:02.0 i915 /dev/dri/renderD128
+vtest-rach2: vtest-guest: ready on port 5555
+vtest-rach2: [[0;32m  OK  [0m] Finished [0;1;39mvtest-ready.service[0m - Repserver ready on the serial console.
+vtest-rach2: [[0;32m  OK  [0m] Reached target [0;1;39mmulti-user.target[0m - Multi-User System.
+vtest-rach2: [[0;32m  OK  [0m] Reached target [0;1;39mgraphical.target[0m - Graphical Interface.
+vtest-rach2: [!p]104[?7h[6n[32766;32766H[6n[!p]104[?7h[6n[32766;32766H[6n
+vtest-rach2: Debian GNU/Linux 13 bed-vtest ttyS0
+vtest-rach2: 
+vtest-rach2: bed-vtest login: [   15.551697] vtest-serve[637]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   15.554001] vtest-serve[637]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   15.610626] vtest-serve[637]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   15.611740] vtest-serve[637]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   16.205047] vtest-serve[637]: vtest_client_dispatch_commands: client context created.
+vtest-rach2: [   16.221784] vtest-serve[637]: client: VTEST_CLIENT_DISCONNECTED
+vtest-rach2: [   17.758674] vtest-serve[647]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   17.765730] vtest-serve[647]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   17.773847] vtest-serve[647]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   17.782904] vtest-serve[647]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   18.356283] vtest-serve[647]: vtest_client_dispatch_commands: client context created.
+vtest-rach2: [   18.359202] vtest-serve[647]: client: VTEST_CLIENT_DISCONNECTED
+vtest-rach2: [   19.101343] vtest-serve[656]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   19.105975] vtest-serve[656]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   19.111593] vtest-serve[656]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   19.118806] vtest-serve[656]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   61.067286] vtest-serve[656]: vtest_client_dispatch_commands: client context created.
+vtest-rach2: [   61.077075] vtest-serve[656]: client: VTEST_CLIENT_DISCONNECTED
+vtest-rach2: [   61.795433] vtest-serve[678]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   61.798446] vtest-serve[678]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   61.817811] vtest-serve[678]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   61.818953] vtest-serve[678]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   62.459162] vtest-serve[678]: vtest_client_dispatch_commands: client context created.
+vtest-rach2: [   62.466690] vtest-serve[678]: client: VTEST_CLIENT_DISCONNECTED
+vtest-rach2: [   63.323686] vtest-serve[687]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   63.331129] vtest-serve[687]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   63.339044] vtest-serve[687]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   63.348085] vtest-serve[687]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   63.442546] vtest-serve[687]: vtest_client_dispatch_commands: client context created.
+vtest-rach2: [   63.446469] vtest-serve[687]: client: VTEST_CLIENT_DISCONNECTED
+vtest-rach2: [   76.683697] vtest-serve[698]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   76.691064] vtest-serve[698]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   76.699876] vtest-serve[698]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   76.707463] vtest-serve[698]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   79.624244] vtest-serve[698]: vtest_client_dispatch_commands: client context created.
+vtest-rach2: [   79.657990] vtest-serve[698]: client: VTEST_CLIENT_DISCONNECTED
+vtest-rach2: [   79.824325] vtest-serve[707]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   79.829291] vtest-serve[707]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   79.836440] vtest-serve[707]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   79.841684] vtest-serve[707]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   87.557912] vtest-serve[707]: vtest_client_dispatch_commands: client context created.
+vtest-rach2: [   87.591896] vtest-serve[707]: client: VTEST_CLIENT_DISCONNECTED
+vtest-rach2: [   87.771874] vtest-serve[716]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   87.773447] vtest-serve[716]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   87.792889] vtest-serve[716]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [   87.793746] vtest-serve[716]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [  130.978331] vtest-serve[716]: vtest_client_dispatch_commands: client context created.
+vtest-rach2: [  131.013005] vtest-serve[716]: client: VTEST_CLIENT_DISCONNECTED
+vtest-rach2: [  131.183039] vtest-serve[725]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [  131.187786] vtest-serve[725]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [  131.196292] vtest-serve[725]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [  131.203491] vtest-serve[725]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [  131.510658] vtest-serve[725]: vtest_client_dispatch_commands: client context created.
+vtest-rach2: [  131.523498] vtest-serve[725]: client: VTEST_CLIENT_DISCONNECTED
+vtest-rach2: [  131.692520] vtest-serve[734]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [  131.693623] vtest-serve[734]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [  131.713702] vtest-serve[734]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [  131.714594] vtest-serve[734]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [  132.163971] vtest-serve[734]: vtest_client_dispatch_commands: client context created.
+vtest-rach2: [  132.179064] vtest-serve[734]: client: VTEST_CLIENT_DISCONNECTED
+vtest-rach2: [  132.350082] vtest-serve[743]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [  132.351289] vtest-serve[743]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [  132.371588] vtest-serve[743]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [  132.373216] vtest-serve[743]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [  135.729425] vtest-serve[743]: vtest_client_dispatch_commands: client context created.
+vtest-rach2: [  135.755858] vtest-serve[743]: client: VTEST_CLIENT_DISCONNECTED
+vtest-rach2: [  135.928254] vtest-serve[752]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [  135.931857] vtest-serve[752]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [  135.949200] vtest-serve[752]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [  135.950116] vtest-serve[752]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [  180.931582] vtest-serve[752]: vtest_client_dispatch_commands: client context created.
+vtest-rach2: [  180.953839] vtest-serve[752]: client: VTEST_CLIENT_DISCONNECTED
+vtest-rach2: [  181.122182] vtest-serve[761]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [  181.123701] vtest-serve[761]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [  181.143060] vtest-serve[761]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [  181.143987] vtest-serve[761]: Failed to create /home/vtest for shader cache (Permission denied)---disabling.
+vtest-rach2: [  188.191732] virgl_test_serv invoked oom-killer: gfp_mask=0x140cca(GFP_HIGHUSER_MOVABLE|__GFP_COMP), order=0, oom_score_adj=0
+vtest-rach2: [  188.197797] CPU: 0 UID: 999 PID: 761 Comm: virgl_test_serv Not tainted 6.12.115+deb13.1-amd64 #1  Debian 6.12.115-2
+vtest-rach2: [  188.197804] Hardware name: QEMU Standard PC (Q35 + ICH9, 2009), BIOS 1.16.3-debian-1.16.3-2 04/01/2014
+vtest-rach2: [  188.197807] Call Trace:
+vtest-rach2: [  188.197812]  <TASK>
+vtest-rach2: [  188.197816]  dump_stack_lvl+0x5d/0x80
+vtest-rach2: [  188.197827]  dump_header+0x43/0x1aa
+vtest-rach2: [  188.197835]  oom_kill_process.cold+0x8/0x8d
+vtest-rach2: [  188.197841]  out_of_memory+0x219/0x4b0
+vtest-rach2: [  188.197848]  __alloc_pages_slowpath.constprop.0+0xc27/0xdc0
+vtest-rach2: [  188.197859]  __alloc_pages_noprof+0x2fb/0x310
+vtest-rach2: [  188.197868]  alloc_pages_mpol_noprof+0xd7/0x1c0
+vtest-rach2: [  188.197875]  folio_alloc_noprof+0x5b/0xb0
+vtest-rach2: [  188.197880]  __filemap_get_folio+0x1aa/0x300
+vtest-rach2: [  188.197887]  filemap_fault+0x34e/0xea0
+vtest-rach2: [  188.197895]  __do_fault+0x33/0x170
+vtest-rach2: [  188.197901]  do_fault+0x341/0x550
+vtest-rach2: [  188.197907]  __handle_mm_fault+0x70d/0xf90
+vtest-rach2: [  188.197917]  handle_mm_fault+0xe2/0x2c0
+vtest-rach2: [  188.197923]  do_user_addr_fault+0x217/0x650
+vtest-rach2: [  188.197930]  exc_page_fault+0x7e/0x180
+vtest-rach2: [  188.197937]  asm_exc_page_fault+0x26/0x30
+vtest-rach2: [  188.197947] RIP: 0033:0x7f2858d7165b
+vtest-rach2: [  188.197965] Code: Unable to access opcode bytes at 0x7f2858d71631.
+vtest-rach2: [  188.197968] RSP: 002b:00007ffeb415f070 EFLAGS: 00010246
+vtest-rach2: [  188.197973] RAX: fffffffffffffff4 RBX: 00007ffeb415f120 RCX: 00007f2858d7165b
+vtest-rach2: [  188.197976] RDX: 00007ffeb415f114 RSI: 00000000400c645f RDI: 0000000000000007
+vtest-rach2: [  188.197979] RBP: 00005570af0a5530 R08: 00007f2858e4aac0 R09: 0000000000000001
+vtest-rach2: [  188.197982] R10: 0000000000000001 R11: 0000000000000246 R12: 0000000000001000
+vtest-rach2: [  188.197984] R13: 00007ffeb415f114 R14: 0000000000000007 R15: 00005570aea98700
+vtest-rach2: [  188.197992]  </TASK>
+vtest-rach2: [  188.197994] Mem-Info:
+vtest-rach2: [  188.284029] active_anon:6578 inactive_anon:4675 isolated_anon:0
+vtest-rach2: [  188.284029]  active_file:94 inactive_file:101 isolated_file:0
+vtest-rach2: [  188.284029]  unevictable:425254 dirty:0 writeback:0
+vtest-rach2: [  188.284029]  slab_reclaimable:1828 slab_unreclaimable:7012
+vtest-rach2: [  188.284029]  mapped:83 shmem:425924 pagetables:1273
+vtest-rach2: [  188.284029]  sec_pagetables:0 bounce:0
+vtest-rach2: [  188.284029]  kernel_misc_reclaimable:0
+vtest-rach2: [  188.284029]  free:34846 free_pcp:10 free_cma:0
+vtest-rach2: [  188.305900] Node 0 active_anon:12048kB inactive_anon:32964kB active_file:328kB inactive_file:452kB unevictable:1701016kB isolated(anon):0kB isolated(file):0kB mapped:332kB dirty:0kB writeback:0kB shmem:1703696kB shmem_thp:1314816kB shmem_pmdmapped:0kB anon_thp:0kB writeback_tmp:0kB kernel_stack:1936kB pagetables:5092kB sec_pagetables:0kB all_unreclaimable? no
+vtest-rach2: [  188.323696] Node 0 DMA free:7760kB boost:0kB min:360kB low:448kB high:536kB reserved_highatomic:0KB active_anon:0kB inactive_anon:0kB active_file:0kB inactive_file:0kB unevictable:7332kB writepending:0kB present:15992kB managed:15360kB mlocked:0kB bounce:0kB free_pcp:0kB local_pcp:0kB free_cma:0kB
+vtest-rach2: [  188.338278] lowmem_reserve[]: 0 1852 1852 1852 1852
+vtest-rach2: [  188.343614] Node 0 DMA32 free:131624kB boost:88064kB min:132756kB low:143928kB high:155100kB reserved_highatomic:0KB active_anon:9704kB inactive_anon:35304kB active_file:936kB inactive_file:136kB unevictable:1693684kB writepending:0kB present:2015092kB managed:1940048kB mlocked:0kB bounce:0kB free_pcp:40kB local_pcp:40kB free_cma:0kB
+vtest-rach2: [  188.360930] lowmem_reserve[]: 0 0 0 0 0
+vtest-rach2: [  188.364083] Node 0 DMA: 0*4kB 1*8kB (E) 1*16kB (E) 0*32kB 1*64kB (E) 0*128kB 2*256kB (UE) 2*512kB (UE) 0*1024kB 3*2048kB (UME) 0*4096kB = 7768kB
+vtest-rach2: [  188.373650] Node 0 DMA32: 1562*4kB (UME) 1121*8kB (UME) 939*16kB (UME) 690*32kB (UME) 426*64kB (UME) 172*128kB (UME) 72*256kB (UM) 23*512kB (UM) 0*1024kB 0*2048kB 0*4096kB = 131808kB
+vtest-rach2: [  188.384356] Node 0 hugepages_total=0 hugepages_free=0 hugepages_surp=0 hugepages_size=1048576kB
+vtest-rach2: [  188.391740] Node 0 hugepages_total=0 hugepages_free=0 hugepages_surp=0 hugepages_size=2048kB
+vtest-rach2: [  188.397436] 426129 total pagecache pages
+vtest-rach2: [  188.400733] 0 pages in swap cache
+vtest-rach2: [  188.403807] Free swap  = 0kB
+vtest-rach2: [  188.406643] Total swap = 0kB
+vtest-rach2: [  188.409390] 507771 pages RAM
+vtest-rach2: [  188.413951] 0 pages HighMem/MovableOnly
+vtest-rach2: [  188.417203] 18919 pages reserved
+vtest-rach2: [  188.419012] 0 pages hwpoisoned
+vtest-rach2: [  188.420728] Tasks state (memory values in pages):
+vtest-rach2: [  188.424415] [  pid  ]   uid  tgid total_vm      rss rss_anon rss_file rss_shmem pgtables_bytes swapents oom_score_adj name
+vtest-rach2: [  188.443665] [    288]     0   288     8731      352      288       62         2    90112        0          -250 systemd-journal
+vtest-rach2: [  188.448969] [    332]   990   332     5892      675      640       35         0    86016        0             0 systemd-resolve
+vtest-rach2: [  188.454568] [    333]   997   333    23072      305      288       17         0    86016        0             0 systemd-timesyn
+vtest-rach2: [  188.462427] [    345]     0   345     8872      462      448       14         0    98304        0         -1000 systemd-udevd
+vtest-rach2: [  188.467915] [    353]   998   353     5258      526      364      162         0    81920        0             0 systemd-network
+vtest-rach2: [  188.474242] [    567]   996   567     1989      146      128       18         0    57344        0          -900 dbus-daemon
+vtest-rach2: [  188.481988] [    574]     0   574     4629      323      288       35         0    81920        0             0 systemd-logind
+vtest-rach2: [  188.487614] [    576]   999   576     2304      100       64       36         0    61440        0             0 virgl_test_serv
+vtest-rach2: [  188.493312] [    580]   999   580     2932      243      192       51         0    65536        0             0 socat
+vtest-rach2: [  188.498517] [    603]     0   603     2943      330      288       42         0    57344        0         -1000 sshd
+vtest-rach2: [  188.505485] [    609]     0   609     1292       52       32       20         0    53248        0             0 agetty
+vtest-rach2: [  188.510090] [    611]     0   611     1303       67       32       35         0    53248        0             0 agetty
+vtest-rach2: [  188.515295] [    612]     0   612     9223     2132     2112       20         0   114688        0             0 unattended-upgr
+vtest-rach2: [  188.522562] [    760]   999   760     2932      207      193       14         0    61440        0             0 socat
+vtest-rach2: [  188.529972] [    761]   999   761   572515     4358     4330       28         0  3817472        0             0 virgl_test_serv
+vtest-rach2: [  188.535882] oom-kill:constraint=CONSTRAINT_NONE,nodemask=(null),cpuset=/,mems_allowed=0,global_oom,task_memcg=/system.slice/vtest-server.service,task=virgl_test_serv,pid=761,uid=999
+vtest-rach2: [  188.544701] Out of memory: Killed process 761 (virgl_test_serv) total-vm:2290060kB, anon-rss:17320kB, file-rss:112kB, shmem-rss:0kB, UID:999 pgtables:3728kB oom_score_adj:0
+vtest-rach2: [  187.964895] socat[760]: 2026/11/11 21:57:04 socat[760] E read(5, 0x55fe9f142000, 8192): Connection reset by peer
+vtest-rach2: [  188.283000] socat[769]: 2026/11/11 21:57:05 socat[769] E connect(, AF=1 "/run/vtest/vtest.sock", 23): No such file or directory
+vtest-rach2: [  188.505813] socat[770]: 2026/11/11 21:57:05 socat[770] E connect(, AF=1 "/run/vtest/vtest.sock", 23): No such file or directory
+vtest-rach2: qemu-system-x86_64: -device vfio-pci,host=0000:00:02.0,bus=pcie.0,addr=02.0,x-igd-opregion=on: warning: vfio 0000:00:02.0: Could not enable error recovery for the device
+vtest-rach2: gpu: unbind: 0000:00:02.0 from vfio-pci
+vtest-rach2: gpu: bind: 0000:00:02.0 to i915
+vtest-rach2: [  597.168000] i915: handoff: 0000:00:02.0: released: the display off, the GPU reset, interrupts and bus mastering off
+vtest-rach2: [  809.307000] i915: handoff: 0000:00:02.0: bound from a reset
+vtest-rach2: gpu: after: 0000:00:02.0 on card0; kvm_vms 0 kvm_vcpus 0 kvm_slots 0 kvm_tdp_pages 0 kvm_run_mappings 0 vfio_groups 0 vfio_devices 0 vfio_dma_mappings 0 vfio_dma_pages 0 vfio_dma_io_pages 0 msi_vectors_free 184 
+vtest-rach2: gpu: result: pass: 0000:00:02.0 to the guest and back to i915 after 198 s, QEMU killed
+vtest-rach2: handoff: pass: 0000:00:02.0 to the guest and back to i915 after 198 s, QEMU killed
+vtest-rach2: result: pass: the triangle through the relay checks on virgl (Mesa Intel(R) HD Graphics 4400 (HSW GT2)), f0b3cd1d6d2e2625, llvmpipe's f0b3cd1d6d2e2625

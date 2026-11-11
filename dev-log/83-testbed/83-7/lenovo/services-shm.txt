@@ -1,0 +1,795 @@
+udhcpc: started, v1.36.1
+udhcpc: broadcasting discover
+udhcpc: sendto: Network is down
+udhcpc: broadcasting discover
+udhcpc: broadcasting select for 192.168.0.106, server 192.168.0.1
+udhcpc: lease of 192.168.0.106 obtained from 192.168.0.1, lease time 4294967295
+ifplugd(eth0): started: BusyBox v1.36.1 (2026-11-06 13:20:12 +05)
+ifplugd(eth0): interface exists
+ifplugd(eth0): link is up
+1794433435.158084: Successfully initialized wpa_supplicant
+1794433435.207181: wlan0: nl80211: kernel reports: unsupported generic-netlink operation
+ssh-keygen: generating new host keys: RSA 1794433435.240278: PKCS11 provider not present
+Using default interface naming scheme 'v257'.
+/usr/lib/udev/rules.d/50-udev-default.rules:42 Unknown group 'dialout', ignoring.
+/usr/lib/udev/rules.d/50-udev-default.rules:44 Unknown group 'kmem', ignoring.
+/usr/lib/udev/rules.d/50-udev-default.rules:60 Unknown group 'sgx', ignoring.
+/usr/lib/udev/rules.d/50-udev-default.rules:61 Unknown group 'sgx', ignoring.
+/usr/lib/udev/rules.d/50-udev-default.rules:81 Unknown group 'lp', ignoring.
+/usr/lib/udev/rules.d/50-udev-default.rules:82 Unknown group 'lp', ignoring.
+/usr/lib/udev/rules.d/50-udev-default.rules:83 Unknown group 'lp', ignoring.
+/usr/lib/udev/rules.d/50-udev-default.rules:84 Unknown group 'lp', ignoring.
+/usr/lib/udev/rules.d/50-udev-default.rules:85 Unknown group 'lp', ignoring.
+/usr/lib/udev/rules.d/50-udev-default.rules:86 Unknown group 'lp', ignoring.
+/usr/lib/udev/rules.d/50-udev-default.rules:88 Unknown group 'disk', ignoring.
+/usr/lib/udev/rules.d/50-udev-default.rules:89 Unknown group 'cdrom', ignoring.
+/usr/lib/udev/rules.d/50-udev-default.rules:90 Unknown group 'cdrom', ignoring.
+/usr/lib/udev/rules.d/50-udev-default.rules:91 Unknown group 'cdrom', ignoring.
+/usr/lib/udev/rules.d/50-udev-default.rules:92 Unknown group 'cdrom', ignoring.
+/usr/lib/udev/rules.d/50-udev-default.rules:93 Unknown group 'cdrom', ignoring.
+/usr/lib/udev/rules.d/50-udev-default.rules:95 Unknown group 'tape', ignoring.
+/usr/lib/udev/rules.d/50-udev-default.rules:96 Unknown group 'disk', ignoring.
+/usr/lib/udev/rules.d/50-udev-default.rules:97 Unknown group 'disk', ignoring.
+/usr/lib/udev/rules.d/50-udev-default.rules:98 Unknown group 'disk', ignoring.
+/usr/lib/udev/rules.d/50-udev-default.rules:99 Unknown group 'disk', ignoring.
+/usr/lib/udev/rules.d/50-udev-default.rules:100 Unknown group 'disk', ignoring.
+/usr/lib/udev/rules.d/50-udev-default.rules:101 Unknown group 'disk', ignoring.
+/usr/lib/udev/rules.d/50-udev-default.rules:102 Unknown group 'disk', ignoring.
+/usr/lib/udev/rules.d/50-udev-default.rules:111 Unknown group 'kvm', ignoring.
+/usr/lib/udev/rules.d/50-udev-default.rules:116 Unknown group 'kvm', ignoring.
+/usr/lib/udev/rules.d/50-udev-default.rules:118 Unknown group 'kvm', ignoring.
+/usr/lib/udev/rules.d/50-udev-default.rules:120 Unknown group 'kvm', ignoring.
+/usr/lib/udev/rules.d/80-debian-compat.rules:7 Unknown group 'dialout', ignoring.
+/usr/lib/udev/rules.d/80-debian-compat.rules:8 Unknown group 'dialout', ignoring.
+/usr/lib/udev/rules.d/80-debian-compat.rules:9 Unknown group 'kmem', ignoring.
+/usr/lib/udev/rules.d/80-debian-compat.rules:10 Unknown group 'cdrom', ignoring.
+/usr/lib/udev/rules.d/90-alsa-restore.rules:18 GOTO="alsa_restore_std" has no matching label, ignoring.
+/usr/lib/udev/rules.d/90-alsa-restore.rules:18 The line has no effect any more, dropping.
+/usr/lib/udev/rules.d/90-alsa-restore.rules:22 GOTO="alsa_restore_std" has no matching label, ignoring.
+/usr/lib/udev/rules.d/90-alsa-restore.rules:22 The line has no effect any more, dropping.
+ECDSA ED25519 MLDSA44-ED25519 
+Server listening on 0.0.0.0 port 22.
+Server listening on :: port 22.
+Accepted publickey for root from 192.168.0.100 port 63642 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 63642:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 63642
+Accepted publickey for root from 192.168.0.100 port 63643 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 63643:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 63643
+00:00:00.000 [INFO] [seatd/seat.c:50] Created seat seat0
+00:00:00.000 [INFO] [seatd/seatd.c:194] seatd started
+rach2-desktop: session: started as 123 on drm card0 gl
+Date: 2026-11-11 UTC
+[21:43:58.077] weston 14.0.2
+               https://wayland.freedesktop.org
+               Bug reports to: https://gitlab.freedesktop.org/wayland/weston/issues/
+               Build: 14.0.2
+[21:43:58.078] Command line: weston --backend=drm --drm-device=card0 --renderer=gl --socket=wayland-0 --config=/etc/xdg/weston/weston.ini
+[21:43:58.078] OS: Linux, 6.18.0-rach2, #1 Rach2 1.0.0, x86_64
+[21:43:58.078] Flight recorder: enabled
+[21:43:58.080] Using config file '/etc/xdg/weston/weston.ini'
+[21:43:58.086] Output repaint window is 7 ms maximum.
+[21:43:58.088] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/drm-backend.so'
+[21:43:58.129] initializing drm backend
+[21:43:58.129] Trying libseat launcher...
+00:00:01.384 [INFO] [seatd/server.c:145] New client connected (pid: 127, uid: 1001, gid: 1001)
+00:00:01.385 [INFO] [seatd/seat.c:239] Added client 0 to seat0
+00:00:01.385 [INFO] [seatd/seat.c:563] Opened client 0 on seat0
+[21:43:58.131] [libseat/libseat.c:62] Seat opened with backend 'seatd'
+[21:43:58.132] [libseat/backend/seatd.c:212] Enabling seat
+[21:43:58.132] libseat: session control granted
+[21:43:58.135] using /dev/dri/card0
+[21:43:58.135] DRM: supports atomic modesetting
+[21:43:58.136] DRM: supports GBM modifiers
+[21:43:58.136] DRM: supports Atomic async page flip
+[21:43:58.136] DRM: supports picture aspect ratio
+ntpd: reply from 178.215.228.24: delay 0.086665 is too high, ignoring
+W: [pulseaudio] module.c: module-oss is deprecated: Please use module-alsa-card instead of module-oss!
+W: [pulseaudio] authkey.c: Failed to open cookie file '/home/desktop/.config/pulse/cookie': No such file or directory
+W: [pulseaudio] authkey.c: Failed to load authentication key '/home/desktop/.config/pulse/cookie': No such file or directory
+W: [pulseaudio] authkey.c: Failed to open cookie file '/home/desktop/.pulse-cookie': No such file or directory
+W: [pulseaudio] authkey.c: Failed to load authentication key '/home/desktop/.pulse-cookie': No such file or directory
+[21:43:59.348] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/gl-renderer.so'
+[21:43:59.407] Using rendering device: /dev/dri/renderD128
+[21:43:59.408] EGL version: 1.5
+[21:43:59.408] EGL vendor: Mesa Project
+[21:43:59.408] EGL client APIs: OpenGL OpenGL_ES 
+[21:43:59.408] EGL features:
+               EGL Wayland extension: yes
+               context priority: yes
+               buffer age: yes
+               partial update: no
+               swap buffers with damage: no
+               configless context: yes
+               surfaceless context: yes
+               dmabuf support: modifiers
+[21:43:59.440] GL version: OpenGL ES 3.2 Mesa 25.0.7-2+deb13u1
+[21:43:59.441] GLSL version: OpenGL ES GLSL ES 3.20
+[21:43:59.441] GL vendor: Intel
+[21:43:59.441] GL renderer: Mesa Intel(R) HD Graphics 4400 (HSW GT2)
+[21:43:59.632] GL ES 3.2 - renderer features:
+               read-back format: ARGB8888
+               glReadPixels supports y-flip: yes
+               glReadPixels supports PBO: yes
+               wl_shm 10 bpc formats: yes
+               wl_shm 16 bpc formats: yes
+               wl_shm half-float formats: yes
+               internal R and RG formats: yes
+               OES_EGL_image_external: yes
+[21:43:59.632] Using GL renderer
+[21:43:59.677] event0  - AT Translated Set 2 keyboard: is tagged by udev as: Keyboard
+[21:43:59.677] event0  - AT Translated Set 2 keyboard: device is a keyboard
+[21:43:59.683] event5  - SynPS/2 Synaptics TouchPad: is tagged by udev as: Touchpad
+[21:43:59.688] event5  - SynPS/2 Synaptics TouchPad: device is a touchpad
+[21:43:59.694] event6  - Logitech USB Keyboard: is tagged by udev as: Keyboard
+[21:43:59.694] event6  - Logitech USB Keyboard: device is a keyboard
+[21:43:59.699] event7  - Logitech USB Keyboard: is tagged by udev as: Keyboard
+[21:43:59.699] event7  - Logitech USB Keyboard: device is a keyboard
+[21:43:59.704] event8  - Logitech USB Optical Mouse: is tagged by udev as: Mouse
+[21:43:59.705] event8  - Logitech USB Optical Mouse: device is a pointer
+[21:43:59.708] event1  - Power Button: is tagged by udev as: Keyboard
+[21:43:59.708] event1  - Power Button: device is a keyboard
+[21:43:59.711] event2  - Power Button: is tagged by udev as: Keyboard
+[21:43:59.711] event2  - Power Button: device is a keyboard
+[21:43:59.714] event3  - Video Bus: is tagged by udev as: Keyboard
+[21:43:59.715] event3  - Video Bus: device is a keyboard
+[21:43:59.718] event4  - Ideapad extra buttons: is tagged by udev as: Keyboard
+[21:43:59.718] event4  - Ideapad extra buttons: device is a keyboard
+[21:43:59.750] libinput: configuring device "AT Translated Set 2 keyboard".
+[21:43:59.751] libinput: configuring device "SynPS/2 Synaptics TouchPad".
+[21:43:59.751] libinput: configuring device "Logitech USB Keyboard".
+[21:43:59.751] libinput: configuring device "Logitech USB Keyboard".
+[21:43:59.751] libinput: configuring device "Logitech USB Optical Mouse".
+[21:43:59.751] libinput: configuring device "Power Button".
+[21:43:59.751] libinput: configuring device "Power Button".
+[21:43:59.751] libinput: configuring device "Video Bus".
+[21:43:59.751] libinput: configuring device "Ideapad extra buttons".
+[21:43:59.754] DRM: head 'eDP-1' found, connector 74 is connected, EDID make 'AU Optronics', model '0x40EC', serial ''
+               Supported EOTF modes: SDR
+               Supported colorimetry modes: default
+[21:43:59.756] DRM: head 'HDMI-A-1' found, connector 78 is disconnected.
+[21:43:59.757] DRM: head 'DP-1' found, connector 81 is disconnected.
+[21:43:59.759] DRM: head 'HDMI-A-2' found, connector 83 is disconnected.
+[21:43:59.762] Registered plugin API 'weston_drm_output_api_v1' of size 40
+[21:43:59.762] Registered plugin API 'weston_drm_virtual_output_api_v2' of size 48
+[21:43:59.762] Color manager: no-op
+                 protocol support: no
+[21:43:59.764] Output 'eDP-1' attempts EOTF mode SDR and colorimetry mode default.
+[21:43:59.764] Output 'eDP-1' using color profile: stock sRGB color profile
+[21:43:59.764] Chosen EGL config details: id:  28 rgba: 8 8 8 0 buf: 24 dep:  0 stcl: 0 int: 1-1 type: win vis_id: XRGB8888 (0x34325258)
+[21:43:59.765] Output eDP-1 (crtc 44) video modes:
+               1366x768@60.0, preferred, current, 76.3 MHz
+[21:43:59.765] associating input device event0 with output eDP-1 (none by udev)
+[21:43:59.765] associating input device event5 with output eDP-1 (none by udev)
+[21:43:59.765] associating input device event6 with output eDP-1 (none by udev)
+[21:43:59.765] associating input device event7 with output eDP-1 (none by udev)
+[21:43:59.765] associating input device event8 with output eDP-1 (none by udev)
+[21:43:59.765] associating input device event1 with output eDP-1 (none by udev)
+[21:43:59.765] associating input device event2 with output eDP-1 (none by udev)
+[21:43:59.765] associating input device event3 with output eDP-1 (none by udev)
+[21:43:59.765] associating input device event4 with output eDP-1 (none by udev)
+[21:43:59.766] Output 'eDP-1' enabled with head(s) eDP-1
+[21:43:59.766] Compositor capabilities:
+               arbitrary surface rotation: yes
+               screen capture uses y-flip: yes
+               cursor planes: yes
+               arbitrary resolutions: no
+               view mask clipping: yes
+               explicit sync: yes
+               color operations: yes
+               presentation clock: CLOCK_MONOTONIC, id 1
+               presentation clock resolution: 0.000000001 s
+[21:43:59.766] Loading module '/usr/lib/x86_64-linux-gnu/weston/kiosk-shell.so'
+[21:43:59.778] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/xwayland.so'
+[21:43:59.914] Registered plugin API 'weston_xwayland_v3' of size 32
+[21:43:59.914] Registered plugin API 'weston_xwayland_surface_v2' of size 24
+[21:43:59.915] xserver listening on display :0
+Accepted publickey for root from 192.168.0.100 port 63645 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 63645:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 63645
+ntpd: timed out waiting for 46.175.224.7, reach 0x00, next query in 33s
+Accepted publickey for root from 192.168.0.100 port 63665 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 63665:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 63665
+Accepted publickey for root from 192.168.0.100 port 63666 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 63666:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 63666
+Accepted publickey for root from 192.168.0.100 port 63676 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 63676:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 63676
+Accepted publickey for root from 192.168.0.100 port 63683 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 63683:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 63683
+Accepted publickey for root from 192.168.0.100 port 63739 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+[21:45:23.379] caught signal 15
+[21:45:23.383] event0  - AT Translated Set 2 keyboard: device removed
+[21:45:23.383] event5  - SynPS/2 Synaptics TouchPad: device removed
+[21:45:23.384] event6  - Logitech USB Keyboard: device removed
+[21:45:23.385] event7  - Logitech USB Keyboard: device removed
+[21:45:23.385] event8  - Logitech USB Optical Mouse: device removed
+[21:45:23.385] event1  - Power Button: device removed
+[21:45:23.386] event2  - Power Button: device removed
+[21:45:23.386] event3  - Video Bus: device removed
+[21:45:23.386] event4  - Ideapad extra buttons: device removed
+00:01:26.702 [INFO] [seatd/seat.c:158] No clients on seat0 to activate
+00:01:26.702 [INFO] [seatd/seat.c:290] Removed client 0 from seat0
+00:01:26.702 [INFO] [seatd/client.c:496] Client disconnected
+rach2-desktop: session: ended; SIGHUP starts it again
+Received disconnect from 192.168.0.100 port 63739:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 63739
+Accepted publickey for root from 192.168.0.100 port 63742 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+rach2-desktop: session: started as 278 on drm card0 gl
+Date: 2026-11-11 UTC
+[21:45:29.483] weston 14.0.2
+               https://wayland.freedesktop.org
+               Bug reports to: https://gitlab.freedesktop.org/wayland/weston/issues/
+               Build: 14.0.2
+[21:45:29.483] Command line: weston --backend=drm --drm-device=card0 --renderer=gl --socket=wayland-0 --config=/etc/xdg/weston/weston.ini
+[21:45:29.483] OS: Linux, 6.18.0-rach2, #1 Rach2 1.0.0, x86_64
+[21:45:29.483] Flight recorder: enabled
+[21:45:29.485] Using config file '/etc/xdg/weston/weston.ini'
+[21:45:29.519] Output repaint window is 7 ms maximum.
+[21:45:29.523] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/drm-backend.so'
+[21:45:29.613] initializing drm backend
+[21:45:29.614] Trying libseat launcher...
+00:01:32.876 [INFO] [seatd/server.c:145] New client connected (pid: 282, uid: 1001, gid: 1001)
+00:01:32.876 [INFO] [seatd/seat.c:239] Added client 1 to seat0
+00:01:32.876 [INFO] [seatd/seat.c:563] Opened client 1 on seat0
+[21:45:29.615] [libseat/libseat.c:62] Seat opened with backend 'seatd'
+[21:45:29.615] [libseat/backend/seatd.c:212] Enabling seat
+[21:45:29.615] libseat: session control granted
+[21:45:29.622] using /dev/dri/card0
+[21:45:29.623] DRM: supports atomic modesetting
+[21:45:29.623] DRM: supports GBM modifiers
+[21:45:29.623] DRM: supports Atomic async page flip
+[21:45:29.623] DRM: supports picture aspect ratio
+W: [pulseaudio] module.c: module-oss is deprecated: Please use module-alsa-card instead of module-oss!
+[21:45:29.863] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/gl-renderer.so'
+[21:45:29.897] Using rendering device: /dev/dri/renderD128
+[21:45:29.897] EGL version: 1.5
+[21:45:29.897] EGL vendor: Mesa Project
+[21:45:29.897] EGL client APIs: OpenGL OpenGL_ES 
+[21:45:29.897] EGL features:
+               EGL Wayland extension: yes
+               context priority: yes
+               buffer age: yes
+               partial update: no
+               swap buffers with damage: no
+               configless context: yes
+               surfaceless context: yes
+               dmabuf support: modifiers
+[21:45:29.903] GL version: OpenGL ES 3.2 Mesa 25.0.7-2+deb13u1
+[21:45:29.904] GLSL version: OpenGL ES GLSL ES 3.20
+[21:45:29.904] GL vendor: Intel
+[21:45:29.904] GL renderer: Mesa Intel(R) HD Graphics 4400 (HSW GT2)
+[21:45:29.943] GL ES 3.2 - renderer features:
+               read-back format: ARGB8888
+               glReadPixels supports y-flip: yes
+               glReadPixels supports PBO: yes
+               wl_shm 10 bpc formats: yes
+               wl_shm 16 bpc formats: yes
+               wl_shm half-float formats: yes
+               internal R and RG formats: yes
+               OES_EGL_image_external: yes
+[21:45:29.943] Using GL renderer
+[21:45:29.978] event0  - AT Translated Set 2 keyboard: is tagged by udev as: Keyboard
+[21:45:29.979] event0  - AT Translated Set 2 keyboard: device is a keyboard
+[21:45:29.986] event5  - SynPS/2 Synaptics TouchPad: is tagged by udev as: Touchpad
+[21:45:29.990] event5  - SynPS/2 Synaptics TouchPad: device is a touchpad
+[21:45:29.994] event6  - Logitech USB Keyboard: is tagged by udev as: Keyboard
+[21:45:29.994] event6  - Logitech USB Keyboard: device is a keyboard
+[21:45:29.999] event7  - Logitech USB Keyboard: is tagged by udev as: Keyboard
+[21:45:29.999] event7  - Logitech USB Keyboard: device is a keyboard
+[21:45:30.003] event8  - Logitech USB Optical Mouse: is tagged by udev as: Mouse
+[21:45:30.004] event8  - Logitech USB Optical Mouse: device is a pointer
+[21:45:30.007] event1  - Power Button: is tagged by udev as: Keyboard
+[21:45:30.008] event1  - Power Button: device is a keyboard
+[21:45:30.011] event2  - Power Button: is tagged by udev as: Keyboard
+[21:45:30.011] event2  - Power Button: device is a keyboard
+[21:45:30.014] event3  - Video Bus: is tagged by udev as: Keyboard
+[21:45:30.014] event3  - Video Bus: device is a keyboard
+[21:45:30.017] event4  - Ideapad extra buttons: is tagged by udev as: Keyboard
+[21:45:30.017] event4  - Ideapad extra buttons: device is a keyboard
+[21:45:30.047] libinput: configuring device "AT Translated Set 2 keyboard".
+[21:45:30.048] libinput: configuring device "SynPS/2 Synaptics TouchPad".
+[21:45:30.048] libinput: configuring device "Logitech USB Keyboard".
+[21:45:30.048] libinput: configuring device "Logitech USB Keyboard".
+[21:45:30.048] libinput: configuring device "Logitech USB Optical Mouse".
+[21:45:30.048] libinput: configuring device "Power Button".
+[21:45:30.048] libinput: configuring device "Power Button".
+[21:45:30.048] libinput: configuring device "Video Bus".
+[21:45:30.049] libinput: configuring device "Ideapad extra buttons".
+[21:45:30.051] DRM: head 'eDP-1' found, connector 74 is connected, EDID make 'AU Optronics', model '0x40EC', serial ''
+               Supported EOTF modes: SDR
+               Supported colorimetry modes: default
+[21:45:30.055] DRM: head 'HDMI-A-1' found, connector 78 is disconnected.
+[21:45:30.056] DRM: head 'DP-1' found, connector 81 is disconnected.
+[21:45:30.058] DRM: head 'HDMI-A-2' found, connector 83 is disconnected.
+[21:45:30.059] Registered plugin API 'weston_drm_output_api_v1' of size 40
+[21:45:30.059] Registered plugin API 'weston_drm_virtual_output_api_v2' of size 48
+[21:45:30.059] Color manager: no-op
+                 protocol support: no
+[21:45:30.061] Output 'eDP-1' attempts EOTF mode SDR and colorimetry mode default.
+[21:45:30.061] Output 'eDP-1' using color profile: stock sRGB color profile
+[21:45:30.061] Chosen EGL config details: id:  28 rgba: 8 8 8 0 buf: 24 dep:  0 stcl: 0 int: 1-1 type: win vis_id: XRGB8888 (0x34325258)
+[21:45:30.062] Output eDP-1 (crtc 44) video modes:
+               1366x768@60.0, preferred, current, 76.3 MHz
+[21:45:30.062] associating input device event0 with output eDP-1 (none by udev)
+[21:45:30.062] associating input device event5 with output eDP-1 (none by udev)
+[21:45:30.062] associating input device event6 with output eDP-1 (none by udev)
+[21:45:30.062] associating input device event7 with output eDP-1 (none by udev)
+[21:45:30.062] associating input device event8 with output eDP-1 (none by udev)
+[21:45:30.062] associating input device event1 with output eDP-1 (none by udev)
+[21:45:30.062] associating input device event2 with output eDP-1 (none by udev)
+[21:45:30.062] associating input device event3 with output eDP-1 (none by udev)
+[21:45:30.062] associating input device event4 with output eDP-1 (none by udev)
+[21:45:30.062] Output 'eDP-1' enabled with head(s) eDP-1
+[21:45:30.062] Compositor capabilities:
+               arbitrary surface rotation: yes
+               screen capture uses y-flip: yes
+               cursor planes: yes
+               arbitrary resolutions: no
+               view mask clipping: yes
+               explicit sync: yes
+               color operations: yes
+               presentation clock: CLOCK_MONOTONIC, id 1
+               presentation clock resolution: 0.000000001 s
+[21:45:30.063] Loading module '/usr/lib/x86_64-linux-gnu/weston/kiosk-shell.so'
+[21:45:30.075] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/xwayland.so'
+[21:45:30.208] Registered plugin API 'weston_xwayland_v3' of size 32
+[21:45:30.208] Registered plugin API 'weston_xwayland_surface_v2' of size 24
+[21:45:30.208] xserver listening on display :0
+Received disconnect from 192.168.0.100 port 63742:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 63742
+Accepted publickey for root from 192.168.0.100 port 63760 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 63760:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 63760
+Accepted publickey for root from 192.168.0.100 port 63780 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+[21:46:49.548] libwayland: failed to read client connection (pid 392)
+Received disconnect from 192.168.0.100 port 63780:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 63780
+Accepted publickey for root from 192.168.0.100 port 63870 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 63870:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 63870
+Accepted publickey for root from 192.168.0.100 port 63896 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 63896:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 63896
+Accepted publickey for root from 192.168.0.100 port 63919 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 63919:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 63919
+Accepted publickey for root from 192.168.0.100 port 63925 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 63925:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 63925
+Accepted publickey for root from 192.168.0.100 port 63933 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+[21:47:58.327] libwayland: failed to read client connection (pid 1127)
+Received disconnect from 192.168.0.100 port 63933:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 63933
+Accepted publickey for root from 192.168.0.100 port 63980 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 63980:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 63980
+Accepted publickey for root from 192.168.0.100 port 63983 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 63983:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 63983
+Accepted publickey for root from 192.168.0.100 port 63995 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 63995:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 63995
+Accepted publickey for root from 192.168.0.100 port 64018 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64018:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64018
+Accepted publickey for root from 192.168.0.100 port 64086 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64086:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64086
+Accepted publickey for root from 192.168.0.100 port 64121 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64121:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64121
+Accepted publickey for root from 192.168.0.100 port 64140 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64140:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64140
+Accepted publickey for root from 192.168.0.100 port 64147 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+rach2-desktop: session: its display drm card0 gl is gone; starting again
+[21:53:41.958] caught signal 15
+[21:53:41.962] event0  - AT Translated Set 2 keyboard: device removed
+[21:53:41.962] event5  - SynPS/2 Synaptics TouchPad: device removed
+[21:53:41.966] event6  - Logitech USB Keyboard: device removed
+[21:53:41.967] event7  - Logitech USB Keyboard: device removed
+[21:53:41.968] event8  - Logitech USB Optical Mouse: device removed
+[21:53:41.968] event1  - Power Button: device removed
+[21:53:41.969] event2  - Power Button: device removed
+[21:53:41.969] event3  - Video Bus: device removed
+[21:53:41.971] event4  - Ideapad extra buttons: device removed
+DRM_IOCTL_I915_GEM_CONTEXT_DESTROY failed: No such device
+DRM_IOCTL_I915_GEM_CONTEXT_DESTROY failed: No such device
+00:09:45.233 [ERROR] [seatd/seat.c:442] Could not revoke drm master on device fd: No such device
+00:09:45.236 [INFO] [seatd/seat.c:158] No clients on seat0 to activate
+00:09:45.236 [INFO] [seatd/seat.c:290] Removed client 1 from seat0
+00:09:45.236 [INFO] [seatd/client.c:496] Client disconnected
+rach2-desktop: session: started as 2984 on headless - gl
+Date: 2026-11-11 UTC
+[21:53:42.500] weston 14.0.2
+               https://wayland.freedesktop.org
+               Bug reports to: https://gitlab.freedesktop.org/wayland/weston/issues/
+               Build: 14.0.2
+[21:53:42.501] Command line: weston --backend=headless --renderer=gl --socket=wayland-0 --config=/etc/xdg/weston/weston.ini
+[21:53:42.502] OS: Linux, 6.18.0-rach2, #1 Rach2 1.0.0, x86_64
+[21:53:42.502] Flight recorder: enabled
+[21:53:42.505] Using config file '/etc/xdg/weston/weston.ini'
+[21:53:42.513] Output repaint window is 7 ms maximum.
+[21:53:42.514] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/headless-backend.so'
+[21:53:42.767] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/gl-renderer.so'
+W: [pulseaudio] module.c: module-oss is deprecated: Please use module-alsa-card instead of module-oss!
+[21:53:52.703] warning: failed to query rendering device from EGL
+[21:53:52.704] failed to initialize allocator
+[21:53:52.704] EGL version: 1.5
+[21:53:52.704] EGL vendor: Mesa Project
+[21:53:52.704] EGL client APIs: OpenGL OpenGL_ES 
+[21:53:52.704] EGL features:
+               EGL Wayland extension: no
+               context priority: no
+               buffer age: no
+               partial update: no
+               swap buffers with damage: no
+               configless context: yes
+               surfaceless context: yes
+               dmabuf support: modifiers
+[21:53:53.375] GL version: OpenGL ES 3.2 Mesa 25.0.7-2+deb13u1
+[21:53:53.375] GLSL version: OpenGL ES GLSL ES 3.20
+[21:53:53.375] GL vendor: Mesa
+[21:53:53.375] GL renderer: llvmpipe (LLVM 19.1.7, 256 bits)
+[21:53:53.509] GL ES 3.2 - renderer features:
+               read-back format: ARGB8888
+               glReadPixels supports y-flip: yes
+               glReadPixels supports PBO: yes
+               wl_shm 10 bpc formats: yes
+               wl_shm 16 bpc formats: yes
+               wl_shm half-float formats: yes
+               internal R and RG formats: yes
+               OES_EGL_image_external: yes
+[21:53:53.509] Using GL renderer
+[21:53:53.510] Registered plugin API 'weston_windowed_output_api_headless_v2' of size 16
+[21:53:53.511] Color manager: no-op
+                 protocol support: no
+[21:53:53.514] Output 'headless' attempts EOTF mode SDR and colorimetry mode default.
+[21:53:53.514] Output 'headless' using color profile: stock sRGB color profile
+[21:53:53.525] Output 'headless' enabled with head(s) headless
+[21:53:53.525] Compositor capabilities:
+               arbitrary surface rotation: yes
+               screen capture uses y-flip: yes
+               cursor planes: no
+               arbitrary resolutions: no
+               view mask clipping: yes
+               explicit sync: yes
+               color operations: yes
+               presentation clock: CLOCK_MONOTONIC_RAW, id 4
+               presentation clock resolution: 0.000000001 s
+[21:53:53.526] Loading module '/usr/lib/x86_64-linux-gnu/weston/kiosk-shell.so'
+[21:53:53.543] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/xwayland.so'
+[21:53:53.570] Registered plugin API 'weston_xwayland_v3' of size 32
+[21:53:53.570] Registered plugin API 'weston_xwayland_surface_v2' of size 24
+[21:53:53.705] xserver listening on display :0
+Accepted publickey for root from 192.168.0.100 port 64310 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64310:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64310
+Accepted publickey for root from 192.168.0.100 port 64323 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64323:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64323
+Accepted publickey for root from 192.168.0.100 port 64370 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64370:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64370
+Accepted publickey for root from 192.168.0.100 port 64371 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64371:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64371
+Accepted publickey for root from 192.168.0.100 port 64401 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64401:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64401
+Accepted publickey for root from 192.168.0.100 port 64402 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64402:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64402
+Accepted publickey for root from 192.168.0.100 port 64452 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64452:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64452
+Accepted publickey for root from 192.168.0.100 port 64453 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64453:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64453
+rach2-desktop: session: display drm card0 gl appeared; starting again
+[21:57:13.379] caught signal 15
+rach2-desktop: session: started as 4453 on drm card0 gl
+Date: 2026-11-11 UTC
+[21:57:13.785] weston 14.0.2
+               https://wayland.freedesktop.org
+               Bug reports to: https://gitlab.freedesktop.org/wayland/weston/issues/
+               Build: 14.0.2
+[21:57:13.790] Command line: weston --backend=drm --drm-device=card0 --renderer=gl --socket=wayland-0 --config=/etc/xdg/weston/weston.ini
+[21:57:13.792] OS: Linux, 6.18.0-rach2, #1 Rach2 1.0.0, x86_64
+[21:57:13.793] Flight recorder: enabled
+[21:57:13.799] Using config file '/etc/xdg/weston/weston.ini'
+[21:57:13.808] Output repaint window is 7 ms maximum.
+[21:57:13.810] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/drm-backend.so'
+[21:57:13.881] initializing drm backend
+[21:57:13.882] Trying libseat launcher...
+00:13:17.132 [INFO] [seatd/server.c:145] New client connected (pid: 4465, uid: 1001, gid: 1001)
+00:13:17.132 [INFO] [seatd/seat.c:239] Added client 2 to seat0
+00:13:17.132 [INFO] [21:57:13.883] [libseat/libseat.c:62] Seat opened with backend 'seatd'
+[seatd/seat.c:563] Opened client 2 on seat0
+[21:57:13.883] [libseat/backend/seatd.c:212] Enabling seat
+[21:57:13.883] libseat: session control granted
+[21:57:13.891] using /dev/dri/card0
+[21:57:13.891] DRM: supports atomic modesetting
+[21:57:13.891] DRM: supports GBM modifiers
+[21:57:13.891] DRM: supports Atomic async page flip
+[21:57:13.891] DRM: supports picture aspect ratio
+W: [pulseaudio] module.c: module-oss is deprecated: Please use module-alsa-card instead of module-oss!
+[21:57:15.425] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/gl-renderer.so'
+Received disconnect from 192.168.0.100 port 64147:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64147
+[21:57:15.532] Using rendering device: /dev/dri/renderD128
+[21:57:15.532] EGL version: 1.5
+[21:57:15.532] EGL vendor: Mesa Project
+[21:57:15.532] EGL client APIs: OpenGL OpenGL_ES 
+[21:57:15.533] EGL features:
+               EGL Wayland extension: yes
+               context priority: yes
+               buffer age: yes
+               partial update: no
+               swap buffers with damage: no
+               configless context: yes
+               surfaceless context: yes
+               dmabuf support: modifiers
+[21:57:15.543] GL version: OpenGL ES 3.2 Mesa 25.0.7-2+deb13u1
+[21:57:15.543] GLSL version: OpenGL ES GLSL ES 3.20
+[21:57:15.543] GL vendor: Intel
+[21:57:15.543] GL renderer: Mesa Intel(R) HD Graphics 4400 (HSW GT2)
+[21:57:15.564] GL ES 3.2 - renderer features:
+               read-back format: ARGB8888
+               glReadPixels supports y-flip: yes
+               glReadPixels supports PBO: yes
+               wl_shm 10 bpc formats: yes
+               wl_shm 16 bpc formats: yes
+               wl_shm half-float formats: yes
+               internal R and RG formats: yes
+               OES_EGL_image_external: yes
+[21:57:15.565] Using GL renderer
+[21:57:15.601] event0  - AT Translated Set 2 keyboard: is tagged by udev as: Keyboard
+[21:57:15.601] event0  - AT Translated Set 2 keyboard: device is a keyboard
+[21:57:15.608] event5  - SynPS/2 Synaptics TouchPad: is tagged by udev as: Touchpad
+[21:57:15.612] event5  - SynPS/2 Synaptics TouchPad: device is a touchpad
+[21:57:15.617] event6  - Logitech USB Keyboard: is tagged by udev as: Keyboard
+[21:57:15.617] event6  - Logitech USB Keyboard: device is a keyboard
+[21:57:15.621] event7  - Logitech USB Keyboard: is tagged by udev as: Keyboard
+[21:57:15.621] event7  - Logitech USB Keyboard: device is a keyboard
+[21:57:15.626] event8  - Logitech USB Optical Mouse: is tagged by udev as: Mouse
+[21:57:15.626] event8  - Logitech USB Optical Mouse: device is a pointer
+[21:57:15.631] event1  - Power Button: is tagged by udev as: Keyboard
+[21:57:15.631] event1  - Power Button: device is a keyboard
+[21:57:15.634] event2  - Power Button: is tagged by udev as: Keyboard
+[21:57:15.634] event2  - Power Button: device is a keyboard
+[21:57:15.637] event3  - Video Bus: is tagged by udev as: Keyboard
+[21:57:15.637] event3  - Video Bus: device is a keyboard
+[21:57:15.640] event4  - Ideapad extra buttons: is tagged by udev as: Keyboard
+[21:57:15.640] event4  - Ideapad extra buttons: device is a keyboard
+[21:57:15.671] libinput: configuring device "AT Translated Set 2 keyboard".
+[21:57:15.672] libinput: configuring device "SynPS/2 Synaptics TouchPad".
+[21:57:15.672] libinput: configuring device "Logitech USB Keyboard".
+[21:57:15.672] libinput: configuring device "Logitech USB Keyboard".
+[21:57:15.672] libinput: configuring device "Logitech USB Optical Mouse".
+[21:57:15.672] libinput: configuring device "Power Button".
+[21:57:15.672] libinput: configuring device "Power Button".
+[21:57:15.672] libinput: configuring device "Video Bus".
+[21:57:15.672] libinput: configuring device "Ideapad extra buttons".
+[21:57:15.677] DRM: head 'eDP-1' found, connector 74 is connected, EDID make 'AU Optronics', model '0x40EC', serial ''
+               Supported EOTF modes: SDR
+               Supported colorimetry modes: default
+[21:57:15.679] DRM: head 'HDMI-A-1' found, connector 78 is disconnected.
+[21:57:15.679] DRM: head 'DP-1' found, connector 81 is disconnected.
+[21:57:15.681] DRM: head 'HDMI-A-2' found, connector 83 is disconnected.
+[21:57:15.681] Registered plugin API 'weston_drm_output_api_v1' of size 40
+[21:57:15.681] Registered plugin API 'weston_drm_virtual_output_api_v2' of size 48
+[21:57:15.681] Color manager: no-op
+                 protocol support: no
+[21:57:15.682] Output 'eDP-1' attempts EOTF mode SDR and colorimetry mode default.
+[21:57:15.682] Output 'eDP-1' using color profile: stock sRGB color profile
+[21:57:15.682] Chosen EGL config details: id:  28 rgba: 8 8 8 0 buf: 24 dep:  0 stcl: 0 int: 1-1 type: win vis_id: XRGB8888 (0x34325258)
+[21:57:15.682] Output eDP-1 (crtc 44) video modes:
+               1366x768@60.0, preferred, current, 76.3 MHz
+[21:57:15.682] associating input device event0 with output eDP-1 (none by udev)
+[21:57:15.682] associating input device event5 with output eDP-1 (none by udev)
+[21:57:15.682] associating input device event6 with output eDP-1 (none by udev)
+[21:57:15.683] associating input device event7 with output eDP-1 (none by udev)
+[21:57:15.683] associating input device event8 with output eDP-1 (none by udev)
+[21:57:15.683] associating input device event1 with output eDP-1 (none by udev)
+[21:57:15.683] associating input device event2 with output eDP-1 (none by udev)
+[21:57:15.683] associating input device event3 with output eDP-1 (none by udev)
+[21:57:15.683] associating input device event4 with output eDP-1 (none by udev)
+[21:57:15.683] Output 'eDP-1' enabled with head(s) eDP-1
+[21:57:15.683] Compositor capabilities:
+               arbitrary surface rotation: yes
+               screen capture uses y-flip: yes
+               cursor planes: yes
+               arbitrary resolutions: no
+               view mask clipping: yes
+               explicit sync: yes
+               color operations: yes
+               presentation clock: CLOCK_MONOTONIC, id 1
+               presentation clock resolution: 0.000000001 s
+[21:57:15.683] Loading module '/usr/lib/x86_64-linux-gnu/weston/kiosk-shell.so'
+[21:57:15.693] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/xwayland.so'
+[21:57:15.779] Registered plugin API 'weston_xwayland_v3' of size 32
+[21:57:15.779] Registered plugin API 'weston_xwayland_surface_v2' of size 24
+[21:57:15.780] xserver listening on display :0
+Accepted publickey for root from 192.168.0.100 port 64461 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64461:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64461
+Accepted publickey for root from 192.168.0.100 port 64468 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64468:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64468
+Accepted publickey for root from 192.168.0.100 port 64469 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64469:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64469
+Accepted publickey for root from 192.168.0.100 port 64472 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64472:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64472
+Accepted publickey for root from 192.168.0.100 port 64473 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64473:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64473
+Accepted publickey for root from 192.168.0.100 port 64474 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+[21:57:41.400] caught signal 15
+[21:57:41.409] event0  - AT Translated Set 2 keyboard: device removed
+[21:57:41.409] event5  - SynPS/2 Synaptics TouchPad: device removed
+[21:57:41.409] event6  - Logitech USB Keyboard: device removed
+[21:57:41.419] event7  - Logitech USB Keyboard: device removed
+[21:57:41.426] event8  - Logitech USB Optical Mouse: device removed
+[21:57:41.433] event1  - Power Button: device removed
+[21:57:41.442] event2  - Power Button: device removed
+[21:57:41.449] event3  - Video Bus: device removed
+[21:57:41.465] event4  - Ideapad extra buttons: device removed
+00:13:44.849 [INFO] [seatd/seat.c:158] No clients on seat0 to activate
+00:13:44.849 [INFO] [seatd/seat.c:290] Removed client 2 from seat0
+00:13:44.849 [INFO] [seatd/client.c:496] Client disconnected
+rach2-desktop: session: ended; SIGHUP starts it again
+Received disconnect from 192.168.0.100 port 64474:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64474
+Accepted publickey for root from 192.168.0.100 port 64483 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Accepted publickey for root from 192.168.0.100 port 64489 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64489:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64489
+Accepted publickey for root from 192.168.0.100 port 64494 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64494:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64494
+Accepted publickey for root from 192.168.0.100 port 64495 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64495:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64495
+Accepted publickey for root from 192.168.0.100 port 64505 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64505:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64505
+Accepted publickey for root from 192.168.0.100 port 64506 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64506:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64506
+Accepted publickey for root from 192.168.0.100 port 64513 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64513:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64513
+Accepted publickey for root from 192.168.0.100 port 64514 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64514:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64514
+Accepted publickey for root from 192.168.0.100 port 64531 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64531:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64531
+Accepted publickey for root from 192.168.0.100 port 64532 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64532:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64532
+Accepted publickey for root from 192.168.0.100 port 64535 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64535:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64535
+Accepted publickey for root from 192.168.0.100 port 64536 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64536:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64536
+Accepted publickey for root from 192.168.0.100 port 64547 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64547:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64547
+Accepted publickey for root from 192.168.0.100 port 64548 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64548:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64548
+Accepted publickey for root from 192.168.0.100 port 64573 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64573:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64573
+Accepted publickey for root from 192.168.0.100 port 64574 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64574:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64574
+Accepted publickey for root from 192.168.0.100 port 64586 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64586:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64586
+Accepted publickey for root from 192.168.0.100 port 64587 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64587:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64587
+Accepted publickey for root from 192.168.0.100 port 64597 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64597:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64597
+Accepted publickey for root from 192.168.0.100 port 64598 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64598:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64598
+Accepted publickey for root from 192.168.0.100 port 64638 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64638:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64638
+Accepted publickey for root from 192.168.0.100 port 64639 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64639:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64639
+Accepted publickey for root from 192.168.0.100 port 64676 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64676:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64676
+Accepted publickey for root from 192.168.0.100 port 64678 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64678:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64678
+Accepted publickey for root from 192.168.0.100 port 64711 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64711:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64711
+Accepted publickey for root from 192.168.0.100 port 64712 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64712:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64712
+Accepted publickey for root from 192.168.0.100 port 64764 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64764:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64764
+Accepted publickey for root from 192.168.0.100 port 64765 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64765:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64765
+Accepted publickey for root from 192.168.0.100 port 64784 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64784:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64784
+Accepted publickey for root from 192.168.0.100 port 64785 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64785:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64785
+Accepted publickey for root from 192.168.0.100 port 64798 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64798:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64798
+Accepted publickey for root from 192.168.0.100 port 64799 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64799:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64799
+Accepted publickey for root from 192.168.0.100 port 64810 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64810:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64810
+Accepted publickey for root from 192.168.0.100 port 64811 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64811:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64811
+Accepted publickey for root from 192.168.0.100 port 64859 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64859:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64859
+Accepted publickey for root from 192.168.0.100 port 64860 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64860:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64860
+Accepted publickey for root from 192.168.0.100 port 64877 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64877:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64877
+Accepted publickey for root from 192.168.0.100 port 64878 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64878:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64878
+Accepted publickey for root from 192.168.0.100 port 64891 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64891:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64891
+Accepted publickey for root from 192.168.0.100 port 64892 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64892:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64892
+Accepted publickey for root from 192.168.0.100 port 64899 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64899:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64899
+Accepted publickey for root from 192.168.0.100 port 64900 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64900:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64900
+Accepted publickey for root from 192.168.0.100 port 64924 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 64924:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 64924
+Accepted publickey for root from 192.168.0.100 port 49212 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 49212:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 49212
+Accepted publickey for root from 192.168.0.100 port 49228 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 49228:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 49228
+Accepted publickey for root from 192.168.0.100 port 49239 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 49239:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 49239
+Accepted publickey for root from 192.168.0.100 port 49247 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 49247:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 49247
+Accepted publickey for root from 192.168.0.100 port 49248 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 49248:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 49248
+Accepted publickey for root from 192.168.0.100 port 49263 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+Received disconnect from 192.168.0.100 port 49263:11: disconnected by user
+Disconnected from user root 192.168.0.100 port 49263
+Accepted publickey for root from 192.168.0.100 port 49275 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8

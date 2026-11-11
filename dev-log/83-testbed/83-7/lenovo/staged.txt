@@ -1,0 +1,16 @@
+fa970943cd5e9b7e8f8d70f265b07f759518fee1500090ca06d9903a8880ff7a  kernel-fa970943cd5e9b7e
+f82b9f83f20f9096c0edbaf5810c3a85318162d8df4921ff5f112858b20a790c  bootctl
+3c8e8df0e57b4b8260abcf63aeaaa31d8865abff4c7ea562b46168aed6aac204  root-3c8e8df0e57b4b82.img
+7f8a341e1a41393985b445ee081d43235e00c97fb27515213c0e99cc3ec48820  vm.qcow2
+05643542c75cddd631504a7ca9dc8384794f37d4d3c765169e4225853e5796db  guest.qcow2
+08165add30c568622de85cbff35343eac415d18481e959e65ca929816e72cf87  run.tar.gz
+3969770d37e9ab3a5f255377e19c5eab8016ed377b48c07ee39d2c8af24e5ce9  fwd/forward.sh
+ad32dc2a6a7f32b114c7cff6f10d157717e8c1cfd60b11fece61c570cdd2bf4d  fwd/guest.tar
+c86556ff931c583b1e314fbb38e0a8289a5fe3fe45d1c66a14d921f641c6d29a  fwd/id_ed25519
+total 849008
+-rw-r--r-- 1 toksaitov toksaitov 438829056 Nov  9 19:52 debian-13-generic-amd64-20261103-2651.qcow2
+-rw-r--r-- 1 toksaitov toksaitov 429654016 Nov 11 20:59 prepared.qcow2
+-rw-r--r-- 1 toksaitov toksaitov     17137 Nov 11 20:59 triangle.c
+-rw-r--r-- 1 toksaitov toksaitov     19147 Nov 11 20:59 vtest-rach2.sh
+Filesystem     1K-blocks     Used Available Use% Mounted on
+/dev/disk0p6   142831984 92324876  43337012  69% /data

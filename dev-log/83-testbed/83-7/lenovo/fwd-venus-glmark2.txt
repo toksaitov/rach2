@@ -1,0 +1,8 @@
+bed-forward: start: qemu-system-x86_64 -accel kvm,kernel-irqchip=split -cpu host -smp 4 -m 4096 -device virtio-vga-gl,edid=on,xres=1280,yres=800,venus=on,blob=on,hostmem=4G -display egl-headless,rendernode=/dev/dri/renderD128
+bed-forward: guest: SSH answered after 19 s
+bed-forward: host: before busy 93759 kvm_exits 2709735 after busy 101553 kvm_exits 3016885 
+bed-forward: figure: measure: counts: before
+bed-forward: figure: measure: counts: after
+bed-forward: figure: measure: result: glmark2 forward-venus frames 3971 frame_ms 10.078 p50 10.680 p99 28.450 cpu_ms_per_frame 19.627 latency_ms 3.995 copied_bytes - exits 307150 round_trips - seconds 43.9 passed -
+bed-forward: result: pass: venus: measure: result: glmark2 forward-venus frames 3971 frame_ms 10.078 p50 10.680 p99 28.450 cpu_ms_per_frame 19.627 latency_ms 3.995 copied_bytes - exits 307150 round_trips - seconds 43.9 passed -
+exit 0

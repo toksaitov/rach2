@@ -1,0 +1,209 @@
+[    0.000000] boot: Rach2 Booting
+[    0.000000] boot: loader: GRUB 2.12-1ubuntu7.3, by multiboot2 on UEFI
+[    0.000000] boot: screen: framebuffer, rgb, 1366x768, 32 bits, pitch 5504, at 0xb0000000
+[    0.000000] module: none: the loader carried no module
+[    0.000000] console: framebuffer: 1366x768, 32 bits a pixel; the font at 2x, 85x24 cells
+[    0.000000] console: font: drawn: code page 437 box drawing with Cyrillic
+[    0.000000] boot: Initializing system components
+[    0.000000] cpu: page attributes: 0x0007040600070106; the framebuffer is mapped write-combining
+[    0.000000] boot: gdt: ready
+[    0.000000] boot: tss: ready
+[    0.000000] boot: idt: ready
+[    0.000000] boot: isr: ready
+[    0.000000] fpu: fxsr: on, sse: on, xsave: on, xcr0: 0x7, area: 832 bytes
+[    0.000000] boot: memory manager: ready
+[    0.000000] memory: map: 0x0000000000000000-0x000000000006F000 available
+[    0.000000] memory: map: 0x000000000006F000-0x0000000000070000 reserved
+[    0.000000] memory: map: 0x0000000000070000-0x0000000000088000 available
+[    0.000000] memory: map: 0x0000000000088000-0x00000000000A0000 reserved
+[    0.000000] memory: map: 0x0000000000100000-0x00000000A56B0000 available
+[    0.000000] memory: map: 0x00000000A56B0000-0x00000000A5EB0000 reserved
+[    0.000000] memory: map: 0x00000000A5EB0000-0x00000000AA6BF000 available
+[    0.000000] memory: map: 0x00000000AA6BF000-0x00000000AAEBF000 reserved
+[    0.000000] memory: map: 0x00000000AAEBF000-0x00000000AAFBF000 nvs
+[    0.000000] memory: map: 0x00000000AAFBF000-0x00000000AAFFF000 acpi
+[    0.000000] memory: map: 0x00000000AAFFF000-0x00000000AB000000 available
+[    0.000000] memory: map: 0x0000000100000000-0x000000044F600000 available
+[    0.000000] memory: map: 0x00000000000A0000-0x00000000000C0000 reserved
+[    0.000000] memory: map: 0x00000000AB000000-0x00000000AFA00000 reserved
+[    0.000000] memory: map: 0x00000000E0000000-0x00000000F0000000 reserved
+[    0.000000] memory: map: 0x00000000FE101000-0x00000000FE113000 reserved
+[    0.000000] memory: map: 0x00000000FEB00000-0x00000000FEB10000 reserved
+[    0.000000] memory: map: 0x00000000FEC00000-0x00000000FEC01000 reserved
+[    0.000000] memory: map: 0x00000000FED00000-0x00000000FEE01000 reserved
+[    0.000000] memory: map: 0x00000000FFC00000-0x0000000100000000 reserved
+[    0.000000] memory: usable 16666908 KiB, unreachable 0 KiB, reserved 25244 KiB, managed 16641664 KiB
+[    0.000000] boot: paging: ready
+[    0.000000] boot: page cache: ready
+[    0.000000] acpi: rsdp: at 0x6fa9ec, from the boot record
+[    0.000000] acpi: tables: xsdt at 0xaaffe210, revision 2, LENOVO: FACP SLIC UEFI FPDT POAT ASF? HPET APIC MCFG WDAT SSDT BOOT LPIT ASPT DBGP SSDT SSDT SSDT DMAR BGRT DSDT
+[    0.000000] acpi: madt: 4 processors (4 usable), 1 ioapics, 2 overrides, 0 nmi inputs, an 8259 pair
+[    0.000000] acpi: madt: override: isa 0 to gsi 2, flags 0x0
+[    0.000000] acpi: madt: override: isa 9 to gsi 9, flags 0xd
+[    0.000000] acpi: fadt: revision 5, pm1a 0x1804, pm timer 0x1808 (24-bit), reset register, 8042 yes, century 0
+[    0.000000] acpi: dsdt: \_S5 sleep types 7 and 0
+[    0.000000] acpi: hpet: at 0xfed00000
+[    0.000000] acpi: mcfg: segment 0, buses 0 to 255 at 0xe0000000
+[    0.000000] pci: ecam: buses 0 to 2 of segment 0 at 0xe0000000
+[    0.000000] pci: ecam: 0:1b.0: extended capability 0x2, version 1, at 0x100
+[    0.000000] pci: ecam: 0:1c.0: extended capability 0x0, version 0, at 0x100
+[    0.000000] pci: ecam: 0:1c.3: extended capability 0x0, version 0, at 0x100
+[    0.000000] pci: ecam: 1:0.0: extended capability 0x1, version 2, at 0x100
+[    0.000000] pci: ecam: 2:0.0: extended capability 0x1, version 1, at 0x100
+[    0.000000] pci: ecam: 5 functions with extended capabilities
+[    0.000000] hpet: ready: 14318179 Hz, period 69841279 fs
+[    0.000000] lapic: ready: id 0, version 0x15, base 0xfee00000
+[    0.000000] ioapic: ready: id 2 at 0xfec00000, version 0x20, gsi 0 to 39
+[    0.000000] lapic: tick: 6235 counts, measured against the hpet
+[    0.000000] ioapic: interrupts: lines through the ioapic, the 8259 masked
+[    0.001000] boot: timer: ready
+[    0.001000] rtc: 2026-11-11 20:38:35 UTC
+[    0.001000] clock: ready
+[    0.001000] entropy: ready: RDRAND, trusted
+[    0.004000] board: lynxpoint-lp: ACPI enabled
+[    0.004000] board: lynxpoint-lp: masked the SCI on IRQ 9
+[    0.004000] board: ready: lynxpoint-lp
+[    0.011000] ioapic: route: line 1 to gsi 1, vector 33, edge, active high
+[    0.011000] console: blank: after 600 seconds without input
+[    0.018000] backlight: intel_backlight: lynxpoint-lp PWM, levels 0 to 937, at 937, off by the panel's enable
+[    0.031000] boot: keyboard: ready
+[    0.031000] mouse: started
+[    0.031000] ioapic: route: line 12 to gsi 12, vector 44, edge, active high
+[    0.410000] mouse: ready
+[    0.410000] boot: syscall: ready
+[    0.410000] boot: process: ready
+[    0.410000] boot: scheduler: ready
+[    0.410000] acpi: acpica: RSDP 0x00000000006FA9EC 000024 (v02 LENOVO)
+[    0.410000] acpi: acpica: XSDT 0x00000000AAFFE210 0000C4 (v01 LENOVO CB-01    00000001      01000013)
+[    0.410000] acpi: acpica: FACP 0x00000000AAFF7000 00010C (v05 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.415000] acpi: acpica: DSDT 0x00000000AAFE4000 00F4BB (v02 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.415000] acpi: acpica: FACS 0x00000000AAFBA000 000040
+[    0.415000] acpi: acpica: SLIC 0x00000000AAFFD000 000176 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.415000] acpi: acpica: UEFI 0x00000000AAFFC000 000236 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.416000] acpi: acpica: FPDT 0x00000000AAFFA000 000044 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.416000] acpi: acpica: POAT 0x00000000AAFF9000 000055 (v03 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.416000] acpi: acpica: ASF! 0x00000000AAFF8000 0000A5 (v32 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.416000] acpi: acpica: HPET 0x00000000AAFF6000 000038 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.416000] acpi: acpica: APIC 0x00000000AAFF5000 00008C (v03 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.416000] acpi: acpica: MCFG 0x00000000AAFF4000 00003C (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.416000] acpi: acpica: WDAT 0x00000000AAFE3000 000224 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.416000] acpi: acpica: SSDT 0x00000000AAFE0000 002028 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.416000] acpi: acpica: BOOT 0x00000000AAFDE000 000028 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.416000] acpi: acpica: LPIT 0x00000000AAFDD000 000094 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.416000] acpi: acpica: ASPT 0x00000000AAFDB000 000034 (v07 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.416000] acpi: acpica: DBGP 0x00000000AAFDA000 000034 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.417000] acpi: acpica: SSDT 0x00000000AAFD2000 0004D6 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.417000] acpi: acpica: SSDT 0x00000000AAFD1000 000AD8 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.418000] acpi: acpica: SSDT 0x00000000AAFCD000 0034F8 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.418000] acpi: acpica: DMAR 0x00000000AAFCB000 0000B0 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.418000] acpi: acpica: BGRT 0x00000000AAFCC000 000038 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.471000] acpi: acpica: 5 ACPI AML tables successfully acquired and loaded
+[    0.475000] acpi: ec: \_SB.PCI0.LPCB.EC0 at ports 0x62 and 0x66, gpe 0x7
+[    0.475000] ioapic: route: line 9 to gsi 9, vector 41, level, active high
+[    0.475000] acpi: sci: line 9
+[    0.481000] acpi: ec: gpe 0x7 enabled, status 0x00
+[    0.487000] acpi: video: bus \_SB.PCI0.GFX0, outputs 16
+[    0.493000] acpi: ideapad: \_SB.PCI0.LPCB.EC0.VPC0: cfg 0xfde104, wifi 0, ideapad_wlan
+[    0.495000] acpi: ideapad: radio switch 1
+[    0.495000] acpi: acpica: Enabled 8 GPEs in block 00 to 7F
+[    0.496000] acpi: ec: query 0x42
+[    0.498000] acpi: acpica: 2872 objects, 0 errors
+[    0.505000] audio: started
+[    0.505000] audio: not driven: 8086:a0c at 00:03.0
+[    0.633000] pci: msi: 0:1b.0 on vector 48
+[    0.633000] audio: interrupts: messages on vector 48
+[    0.639000] audio: ready: Intel HD Audio, codec 0x14f1510f
+[    0.645000] disk: policy: read-write
+[    0.651000] modules: none
+[    0.656000] block: started
+[    0.661000] ahci: found: 8086:9C03 at 0:31.2, prog-if 1, BAR5 C061B000
+[    0.672000] ahci: port 1: signature EB140101 is not a disk; skipped
+[    1.761000] ahci: port 2: no link after 1000 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+[    2.850000] ahci: port 3: no link after 1000 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+[    2.850000] disk: disk0: ahci 0: 488397168 sectors, model Samsung SSD 870 EVO 250GB
+[    2.856000] ahci: port 0: 488397168 sectors, 238475 MiB
+[    2.868000] nvme: none: no NVMe controller on the bus
+[    2.880000] ioapic: route: line 14 to gsi 14, vector 46, edge, active high
+[    2.880000] ioapic: route: line 15 to gsi 15, vector 47, edge, active high
+[    2.882000] devfs: /dev/grubcore: BIOS boot partition 4, 2014 sectors at LBA 34
+[    2.888000] root: GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,3: /dev/disk0p3, ext2
+[    2.899000] ext2: mounted: 16777216 blocks of 4096, 4194304 inodes, 512 groups
+[    2.905000] ext2: root: /dev/disk0p3
+[    2.911000] usb: started
+[    2.916000] usb: controller: 0:14.0 xhci interface 0x30 8086:9c31 bar0 0xC0600004
+[    2.922000] usb: routing: usb2 0xA of 0x1FF, usb3 0x1 of 0xF, as the firmware left it
+[    2.929000] usb: controller: 0:1d.0 ehci interface 0x20 8086:9c26 bar0 0xC061C000
+[    2.942000] usb: handoff: ehci at 00:1d.0: taken from the firmware, halted
+[    2.955000] usb: routing: usb2 0x1FF of 0x1FF, usb3 0xF of 0xF, taken
+[    2.962000] usb: found: xhci0: 8086:9c31 at 0:20.0, aperture 0xC0600000
+[    2.968000] usb: unsupported: ehci at 00:1d.0
+[    2.981000] usb: caps: hcs1 0xD000820 hcs2 0x84000054 hcc1 0x200077C1 pagesize 0x1
+[    2.981000] usb: caps: scratchpads 16, contexts 32 bytes, 64-bit 1
+[    2.981000] usb: handoff: legsup 0x10801 legctl 0x40012000 before
+[    2.983000] usb: handoff: legsup 0x1000801 legctl 0x0 after
+[    2.984000] usb: ready: xhci0: version 100, 13 ports, 32 slots, 32-byte contexts
+[    3.091000] usb: port: xhci0.2: a device; its reset tells full from high speed
+[    3.091000] usb: port: xhci0.4: a device; its reset tells full from high speed
+[    3.091000] usb: port: xhci0.6: a device; its reset tells full from high speed
+[    3.091000] usb: port: xhci0.7: a device; its reset tells full from high speed
+[    3.091000] usb: port: xhci0.10: a device; its reset tells full from high speed
+[    3.153000] usb: device: port 10: 35d6:3510, class 9 protocol 0, endpoint 1, a hub
+[    3.276000] usb: device: port 2: 35d6:2510, class 9 protocol 1, endpoint 1, a hub
+[    3.394000] usb: device: port 4: bda:129, class 0: no driver for it here
+[    3.547000] usb: device: port 6: bda:579a, class 0: no driver for it here
+[    3.666000] usb: device: port 7: cf3:3004, class 0: no driver for it here
+[    3.675000] usb: slot: 3: given back
+[    3.676000] usb: slot: 4: given back
+[    3.677000] usb: slot: 5: given back
+[    3.780000] usb: hub: device 1: 4 ports, power mode 0, think time 0
+[    3.786000] usb: hub: device 2: 4 ports, power mode 0, think time 1
+[    3.972000] usb: device: port 2.1: 46d:c34b, class 3 protocol 1, endpoint 1
+[    4.059000] usb: device: port 2.3: 46d:c077, class 3 protocol 2, endpoint 1
+[    4.065000] usb: devices: 4 configured
+[    4.071000] pci: msi: 0:14.0 on vector 49
+[    4.071000] usb: interrupts: xhci0: messages on vector 49
+[    4.077000] pci: msi: 0:1f.2 on vector 50
+[    4.077000] ahci: interrupts: messages on vector 50, 1 disks queued
+[    4.084000] net: started
+[    4.111000] pci: msi: 1:0.0 on vector 51
+[    4.111000] rtl8168: interrupts: messages on vector 51
+[    4.117000] net: eth0: IPv6 fe80::2ad2:44ff:fe7e:e0af/64 added
+[    4.123000] net: ready: RTL8168GU
+[    4.129000] net: eth0: RTL8168GU, station 28:D2:44:7E:E0:AF
+[    4.135000] rtl8168: RTL8168GU: xid 0x509, MMIO 0x787000, MAC 28:D2:44:7E:E0:AF
+[    4.135000] rtl8168: no link yet
+[    4.140000] rtl8168: messages on vector 51: none yet, 0 by the tick
+[    4.146000] net: eth0: no address
+[    4.151000] netconsole: broadcast, ethertype 0x88b5, boot id 0x362180c2, 0 frames, 4046 characters dropped
+[    4.172000] pci: msi: 2:0.0 on vector 52
+[    4.172000] ath9k: interrupts: messages on vector 52
+[    4.178000] ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac b8:ee:65:32:89:15 subsys 17aa:4026
+[    4.520000] timing: tick 1000 Hz, 200 ms delay measured 201 ms, 2000 us wait measured 2014 us
+[    4.526000] clock: reference: the hpet; a tick the timer misses or delays is counted
+[    4.545000] smp: cpu1: tsc: synchronized with cpu0
+[    4.566000] smp: cpu2: tsc: synchronized with cpu0
+[    4.588000] smp: cpu3: tsc: synchronized with cpu0
+[    4.596000] smp: processors: 4 online of 4
+[    4.604000] vdso: clock: the tsc, 1895613 counts a tick
+[    4.617000] boot: starting /sbin/init
+[    4.621000] acpi: thread: kacpid is pid 2
+[    4.621000] wlan: worker: kwlan is pid 3
+[    7.164000] rtl8168: link 1000 Mb/s, full duplex, pause both ways
+[    7.345000] net: eth0: IPv4 192.168.0.106/24
+[    7.549000] net: wlan0: IPv6 fe80::baee:65ff:fe32:8915/64 added
+[    8.623000] net: eth0: IPv6 fd91:381e:e667:4a0c:ed8a:e65:4c38:4f64/64 added
+[    8.623000] net: eth0: IPv6 fd91:381e:e667:4a0c:389:1648:7fe4:adad/64 added
+[    8.974000] wlan: wlan0: key: pairwise: last pn 0, decrypt errors 0, duplicates 0, replays 0
+[    9.058000] net: wlan0: IPv4 192.168.0.105/24
+[   10.531000] net: wlan0: IPv6 fd91:381e:e667:4a0c:a1e:e4b1:d013:473b/64 added
+[   10.531000] net: wlan0: IPv6 fd91:381e:e667:4a0c:1974:2286:afc0:cb4d/64 added
+[  466.373000] ext2: mounted: 35850496 blocks of 4096, 2242560 inodes, 1095 groups
+[  466.373000] vfs: mounted: /dev/disk0p6 on /data (ext2)
+[ 1810.426000] net: eth0: IPv6 fd91:381e:e667:4a0c:d27:b478:3e7a:8c23/64 added
+[ 1811.426000] net: wlan0: IPv6 fd91:381e:e667:4a0c:14e:3993:1dcf:a244/64 added
+[ 1815.426000] nd6: eth0: fd91:381e:e667:4a0c:389:1648:7fe4:adad expired
+[ 1815.426000] net: eth0: IPv6 fd91:381e:e667:4a0c:389:1648:7fe4:adad removed
+[ 1816.426000] nd6: wlan0: fd91:381e:e667:4a0c:1974:2286:afc0:cb4d expired
+[ 1816.426000] net: wlan0: IPv6 fd91:381e:e667:4a0c:1974:2286:afc0:cb4d removed
+[ 2030.584000] wlan: wlan0: beacon: 60:a4:b7:a4:eb:63: on channel 9, not 5
+[ 2031.591000] wlan: wlan0: switched: 60:a4:b7:a4:eb:63: to channel 9

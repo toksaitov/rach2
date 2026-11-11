@@ -1,0 +1,9 @@
+fa970943cd5e9b7e8f8d70f265b07f759518fee1500090ca06d9903a8880ff7a  build/worktrees/t2670/build/x86_64/rach2/kernel
+f82b9f83f20f9096c0edbaf5810c3a85318162d8df4921ff5f112858b20a790c  build/worktrees/t2670/build/x86_64/utils/sbin/bootctl
+7f8a341e1a41393985b445ee081d43235e00c97fb27515213c0e99cc3ec48820  build/worktrees/t2670/build/t2670-vm.qcow2
+9ecaea4b700de96660725c5f949638dd89f819e9b88f8555fc9e6d868e276916  build/worktrees/t2670/build/t2670-vtest.tar
+08165add30c568622de85cbff35343eac415d18481e959e65ca929816e72cf87  build/worktrees/t2670/build/t2670-run.tar.gz
+05643542c75cddd631504a7ca9dc8384794f37d4d3c765169e4225853e5796db  build/worktrees/t2670/build/tests/cases/bed-forward/guest.qcow2
+ad32dc2a6a7f32b114c7cff6f10d157717e8c1cfd60b11fece61c570cdd2bf4d  build/worktrees/t2670/build/tests/cases/bed-forward/guest.tar
+-rwxr-xr-x@ 1 toksaitov  staff  3776664 Nov 12 02:57 build/worktrees/t2670/build/x86_64/rach2/kernel
+image: 3c8e8df0e57b4b8260abcf63aeaaa31d8865abff4c7ea562b46168aed6aac204  -
