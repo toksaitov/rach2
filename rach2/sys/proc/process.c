@@ -9,6 +9,7 @@
 #include "../panic.h"
 #include "../mm/kheap.h"
 #include "../lib/kirq.h"
+#include "../lib/lockdep.h"
 #include "sched.h"
 #include "tgroup.h"
 #include "seccomp.h"
@@ -360,12 +361,14 @@ static struct fs_struct *fs_new(void)
  */
 static process_t *process_alloc(const process_t *parent, int thread, int share_fs)
 {
-    process_t *p = kmalloc(sizeof(*p));
+    process_t *p;
     struct tgroup *group = NULL;
     struct fs_struct *dirs = NULL;
     uint32_t tgid = 0, ruid = 0;
     int fd;
 
+    bkl_assert_held();
+    p = kmalloc(sizeof(*p));
     if (!p) {
         return NULL;
     }
@@ -468,6 +471,7 @@ void free_process(process_t *proc)
     if (!proc) {
         return;
     }
+    bkl_assert_held();
     proc->state = PROC_UNUSED;
     proc_timer_update(proc);
     pid_remove(proc);
@@ -633,6 +637,7 @@ process_t *get_process(uint32_t pid)
 {
     process_t *p;
 
+    bkl_assert_held();
     if (!pid_capacity) {
         return NULL;
     }

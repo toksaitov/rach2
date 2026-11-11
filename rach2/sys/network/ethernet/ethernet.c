@@ -5,6 +5,7 @@
  */
 
 #include "../../klog.h"
+#include "../../lib/lockdep.h"
 #include "ethernet.h"
 #include "../net.h"
 #include "../driver/netdev.h"
@@ -33,6 +34,7 @@ void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
 {
     uint16_t etype;
 
+    bkl_assert_held();
     if (len < ETH_HDR_SIZE) {
         nd->rx_dropped++;
         return;
