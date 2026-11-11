@@ -41,9 +41,8 @@ on Linux.
 .It Dv RTC_WKALM_SET , RTC_WKALM_RD
 Set and read the wake alarm, a
 .Vt struct rtc_wkalrm :
-a byte that enables it, a byte that says it has come since the last
-.Xr read 2 ,
-and its date and time.
+a byte that enables it, a pending byte, which a read gives as 0, as
+Linux's does, and its date and time.
 A set with the first byte 0 sets the time and disables the alarm.
 .El
 .Pp
@@ -63,7 +62,8 @@ A
 .Xr read 2
 of exactly four bytes, or of an unsigned long's or more, eight bytes on
 x86-64, waits for the alarm and gives that many: the
-alarms since the last read in the bits above the low eight, with
+alarms since the last read in the bits above the low eight, which enabling
+or setting the alarm does not clear, with
 .Dv RTC_AF ,
 0x20, and
 .Dv RTC_IRQF ,
