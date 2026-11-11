@@ -26,6 +26,7 @@
  */
 
 #include "../../klog.h"
+#include "../../lib/lockdep.h"
 #include "../../lib/kerrno.h"
 #include "tcp.h"
 #include "rcvwnd.h"
@@ -3933,6 +3934,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
     struct socket *conn_sock;
     struct socket *listen_sock;
 
+    bkl_assert_held();
     hdr_len = tcp_seg_check(src_ip, dst_ip, data, len);
     if (hdr_len == 0) {
         return;

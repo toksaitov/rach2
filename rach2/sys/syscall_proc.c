@@ -7,6 +7,7 @@
 #include "arch/arch.h"
 #include "arch/uabi.h"
 #include "fpu.h"
+#include "lib/lockdep.h"
 #include "../kernel.h"
 #include "mm/filecache.h"
 #include "mm/kheap.h"
@@ -4869,6 +4870,7 @@ void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
     uint32_t f;
     process_t *taker;
 
+    bkl_assert_held();
     if (!t || signo < 1 || signo > KSIG_MAX || t->state == PROC_ZOMBIE || t->state == PROC_UNUSED ||
         proc_is_kthread(t)) {
         return;

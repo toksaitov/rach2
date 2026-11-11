@@ -8,6 +8,7 @@
  */
 
 #include "../../klog.h"
+#include "../../lib/lockdep.h"
 #include "../../lib/kerrno.h"
 #include "ip.h"
 #include "icmp.h"
@@ -78,6 +79,7 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
     uint32_t src_ip, dst_ip;
     int to_broadcast;
 
+    bkl_assert_held();
     net_mib.ip_in_receives++;
     if (len < IP_HDR_SIZE) {
         net_mib.ip_in_hdr_errors++;
