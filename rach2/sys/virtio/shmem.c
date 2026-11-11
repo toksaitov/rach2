@@ -77,7 +77,11 @@ struct vshm_rev {
  * and each bind of virtio-gpu until that bind's virtio_put, and each map
  * of the VM's pages until its map_free. The record is freed with the last;
  * the detach gives back the region's pages and window, and the driver's
- * and maps' remaining references keep the record until they let go.
+ * and maps' remaining references keep the record until they let go. A
+ * record detached while objects still hold pages of its heap, as an
+ * exported buffer does through a reset, keeps its heap's map and table of
+ * frames until they give the last back, and a later region over the same
+ * memory leaves those frames out of its heap meanwhile.
  * `me` is the driver's block as last stored and `dev` the device's as last
  * read; both are this file's own copies.
  */
@@ -103,6 +107,9 @@ struct vshm {
     struct eventfd *out[2];
     uint32_t *heap_map; /* a bit for each page of the heap in use */
     uint32_t heap_pages, heap_used, heap_rover;
+    struct vshm *gone_next; /* on vshm_kept, while `gone` */
+    int gone;               /* detached with heap pages objects still hold */
+    uintptr_t window;       /* where the window was, while `gone` */
     struct spinlock heap_lock;
     uint32_t binds, failures;
     uint64_t rung[2], woken[2], polls, refused;
@@ -126,6 +133,7 @@ struct virtio_map {
 };
 
 static struct vshm *vshm_cur;         /* the region attached, or detaching */
+static struct vshm *vshm_kept;        /* detached records whose heap pages objects hold */
 static volatile uint32_t vshm_rang;   /* a bit for each vector rung since the thread looked */
 static wait_queue_t vshm_wq;          /* the thread sleeps here */
 static wait_queue_t vshm_detached_wq; /* a detacher waits here */
@@ -292,6 +300,20 @@ static void heap_give(struct vshm *vs, uint32_t i, uint32_t n)
         }
     }
     spin_unlock_irqrestore(&vs->heap_lock, flags);
+}
+
+/** Give back heap page `i` if it is in use: 1 when it was, else 0. */
+static int heap_drop(struct vshm *vs, uint32_t i)
+{
+    uint32_t flags = spin_lock_irqsave(&vs->heap_lock);
+    int used = i < vs->heap_pages && heap_bit(vs, i);
+
+    if (used) {
+        heap_mark(vs, i, 1, 0);
+        vs->heap_used--;
+    }
+    spin_unlock_irqrestore(&vs->heap_lock, flags);
+    return used;
 }
 
 /** The region's page of heap page `i`. */
@@ -668,18 +690,32 @@ static void *vs_dma_alloc(struct virtio_dev *d, uint32_t bytes, uint64_t *addr)
     return (void *)(uintptr_t)(vs->base + off);
 }
 
-/** Give back the heap pages of `bytes` at `p`; nothing for a queue's rings,
- * which the ring area holds, or after the detach. */
+static void gone_give(struct vshm *vs, uintptr_t frame);
+static void vshm_gone_free(struct vshm *vs);
+
+/** Give back the heap pages of `bytes` at `p`, after the detach too, which
+ * keeps the record's heap while they are out; nothing for a queue's rings,
+ * which the ring area holds. */
 static void vs_dma_free(struct virtio_dev *d, void *p, uint32_t bytes)
 {
     struct vshm *vs = to_vs(d);
-    uintptr_t at = (uintptr_t)p, base = (uintptr_t)vs->base;
-    uint32_t n = bytes / VGS_PAGE + (bytes % VGS_PAGE != 0);
+    uintptr_t at = (uintptr_t)p, base = vs->gone ? vs->window : (uintptr_t)vs->base;
+    uint32_t n = bytes / VGS_PAGE + (bytes % VGS_PAGE != 0), i, first;
 
-    if (!vs->attached || at < base + vs->l.heap_off || at >= base + vs->size) {
+    if ((!vs->attached && !vs->gone) || at < base + vs->l.heap_off || at >= base + vs->size) {
         return;
     }
-    heap_give(vs, (uint32_t)((at - base - vs->l.heap_off) / VGS_PAGE), n);
+    first = (uint32_t)((at - base - vs->l.heap_off) / VGS_PAGE);
+    if (vs->attached) {
+        heap_give(vs, first, n);
+        return;
+    }
+    for (i = first; i < first + n && i < vs->heap_pages; i++) {
+        gone_give(vs, vs->frames[heap_page(vs, i)]);
+    }
+    if (vs->heap_used == 0) {
+        vshm_gone_free(vs);
+    }
 }
 
 /** No shared memory region beside the transport's own: -ENOENT, so that
@@ -774,14 +810,55 @@ static int vs_backing_fill(struct virtio_dev *d, struct shmem *sh, uint64_t byte
     return rc;
 }
 
+/** The heap page of `vs` that is the region's `frame`, or the heap's size
+ * for a frame not in its heap. */
+static uint32_t heap_of(const struct vshm *vs, uintptr_t frame)
+{
+    uint32_t page = vshm_page_of(vs, frame), base = heap_page(vs, 0);
+
+    if (page >= vs->npages || page < base || vs->frames[page] != frame) {
+        return vs->heap_pages;
+    }
+    return page - base;
+}
+
+/** Give a detached record's heap back its `frame`, which nothing holds
+ * now, and the attached region's heap the same frame, which its attach left
+ * out for this record (`vshm_gone_reserve`). */
+static void gone_give(struct vshm *vs, uintptr_t frame)
+{
+    struct vshm *cur = vshm_cur;
+
+    if (!heap_drop(vs, heap_of(vs, frame))) {
+        return;
+    }
+    if (cur && cur != vs && cur->attached) {
+        (void)heap_drop(cur, heap_of(cur, frame));
+    }
+}
+
 /** Give the heap back the pages `vs_backing_fill` gave `sh`: each page that
- * holds the region's frame for a heap page. */
+ * holds the region's frame for a heap page, the detached region's too. */
 static void vs_backing_release(struct virtio_dev *d, struct shmem *sh)
 {
     struct vshm *vs = to_vs(d);
+    uint32_t n = (uint32_t)(sh->size / VGS_PAGE + (sh->size % VGS_PAGE != 0));
+
+    uintptr_t frame;
+    uint32_t i;
 
     if (vs->attached) {
-        backing_give(vs, sh, (uint32_t)(sh->size / VGS_PAGE + (sh->size % VGS_PAGE != 0)));
+        backing_give(vs, sh, n);
+    } else if (vs->gone) {
+        for (i = 0; i < n; i++) {
+            frame = shmem_resident(sh, i);
+            if (frame) {
+                gone_give(vs, frame);
+            }
+        }
+        if (vs->heap_used == 0) {
+            vshm_gone_free(vs);
+        }
     }
 }
 
@@ -965,9 +1042,67 @@ static void vshm_bell_hangup(struct eventfd_hook *h)
  * Attaching and detaching
  */
 
-/** Free what the attach took and the record, once nothing refers to it. */
+/** Take a detached record off `vshm_kept` and free the tables it kept. */
+static void vshm_gone_free(struct vshm *vs)
+{
+    struct vshm **p;
+
+    for (p = &vshm_kept; *p && *p != vs; p = &(*p)->gone_next) {
+    }
+    if (*p) {
+        *p = vs->gone_next;
+    }
+    vs->gone = 0;
+    vs->gone_next = NULL;
+    kfree(vs->frames);
+    vs->frames = NULL;
+    kfree(vs->rev);
+    vs->rev = NULL;
+    kfree(vs->heap_map);
+    vs->heap_map = NULL;
+}
+
+/**
+ * Leave out of `vs`'s heap, before the region is published, each frame of
+ * it that an object of a detached record still holds, so that no two
+ * objects share a frame when the same memory is attached again. Does not
+ * sleep.
+ */
+static void vshm_gone_reserve(struct vshm *vs)
+{
+    struct vshm *g;
+    uint32_t i, page, flags;
+
+    for (g = vshm_kept; g; g = g->gone_next) {
+        flags = spin_lock_irqsave(&g->heap_lock);
+        for (i = 0; i < g->heap_pages; i++) {
+            if (!heap_bit(g, i)) {
+                continue;
+            }
+            page = vshm_page_of(vs, g->frames[heap_page(g, i)]);
+            if (page < vs->npages && page >= heap_page(vs, 0) &&
+                !heap_bit(vs, page - heap_page(vs, 0))) {
+                heap_mark(vs, page - heap_page(vs, 0), 1, 1);
+                vs->heap_used++;
+            }
+        }
+        spin_unlock_irqrestore(&g->heap_lock, flags);
+    }
+}
+
+/** Free what the attach took and the record, once nothing refers to it: a
+ * detached record's heap pages that were never given back first, since
+ * nothing of it holds them now. */
 static void vshm_free(struct vshm *vs)
 {
+    uint32_t i;
+
+    for (i = 0; vs->gone && i < vs->heap_pages; i++) {
+        gone_give(vs, vs->frames[heap_page(vs, i)]);
+    }
+    if (vs->gone) {
+        vshm_gone_free(vs);
+    }
     kfree(vs->frames);
     kfree(vs->rev);
     kfree(vs->heap_map);
@@ -975,8 +1110,34 @@ static void vshm_free(struct vshm *vs)
 }
 
 /**
+ * Clear from `vs`'s heap each page another detached record holds: the
+ * attach left it out for that record (`vshm_gone_reserve`), which alone
+ * gives it back, so that only the attached region's heap keeps such marks.
+ */
+static void vshm_unreserve(struct vshm *vs)
+{
+    struct vshm *g;
+    uintptr_t frame;
+    uint32_t i;
+
+    for (i = 0; i < vs->heap_pages; i++) {
+        if (!heap_bit(vs, i)) {
+            continue;
+        }
+        frame = vs->frames[heap_page(vs, i)];
+        for (g = vshm_kept; g; g = g->gone_next) {
+            if (heap_of(g, frame) < g->heap_pages && heap_bit(g, heap_of(g, frame))) {
+                (void)heap_drop(vs, i);
+                break;
+            }
+        }
+    }
+}
+
+/**
  * Give back what the region holds: the doorbells' hooks and references,
- * the window and the frames. Every operation is a no-op from here on.
+ * the window and the frames. Every operation is a no-op from here on, but
+ * for giving back the heap pages objects still hold.
  */
 static void vshm_release(struct vshm *vs)
 {
@@ -999,12 +1160,24 @@ static void vshm_release(struct vshm *vs)
     }
     if (vs->base) {
         mmio_unmap((uintptr_t)vs->base, (size_t)vs->npages * VGS_PAGE);
+        vs->window = (uintptr_t)vs->base;
         vs->base = NULL;
     }
     for (i = 0; vs->frames && i < vs->npages; i++) {
         if (vs->frames[i]) {
             frame_unref(vs->frames[i]);
         }
+    }
+    if (vs->heap_map && vs->rev && vs->frames) {
+        vshm_unreserve(vs);
+    }
+    if (vs->heap_map && vs->rev && vs->frames && vs->heap_used > 0) {
+        /* The objects that hold these pages hold their frames too; the
+         * table keeps their addresses alone, for `gone_give`. */
+        vs->gone = 1;
+        vs->gone_next = vshm_kept;
+        vshm_kept = vs;
+        return;
     }
     kfree(vs->frames);
     vs->frames = NULL;
@@ -1356,6 +1529,7 @@ static int32_t vshm_attach(fd_entry_t *e, const struct vgs_attach *a)
     klog(KLOG_INFO, "vgpu-shm", "attached: %u KiB, heap %u pages, peer %u, %s",
          (unsigned)(vs->size / 1024u), (unsigned)vs->heap_pages, (unsigned)a->peer,
          vs->bells ? "doorbells offered" : "polling");
+    vshm_gone_reserve(vs);
     e->priv = vs;
     vshm_cur = vs;
     wq_wake_all(&vshm_wq);
