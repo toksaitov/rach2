@@ -340,6 +340,10 @@ int synth_sys_count(void);
  * values are ipc/pipe.h's `pipe_user_pages_hard` and `_soft`. */
 #define SYNTH_SYS_PIPE_USER_PAGES_HARD 55
 #define SYNTH_SYS_PIPE_USER_PAGES_SOFT 56
+/* The entries of kernel/panic and kernel/panic_on_oops, whose values are
+ * panic.h's `panic_timeout` and `panic_on_oops`. */
+#define SYNTH_SYS_PANIC                57
+#define SYNTH_SYS_PANIC_ON_OOPS        58
 /**
  * Whether `entry` is under net/ipv6/conf: 1 with the name of its directory
  * in `*dir`, `all`, `default` or an interface's, and in `*key` the

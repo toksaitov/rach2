@@ -244,7 +244,8 @@ static void synth_put_proc(char *out, int cap, int *pos, int pid, int tid)
  * off, which libcap and libgcrypt read; the mount namespaces a user may
  * own, the limit of the reader's user namespace (proc/ns.h); and the largest
  * pipe an unprivileged F_SETPIPE_SZ makes and the limits of one user's pipe
- * pages (ipc/pipe.h). An entry whose
+ * pages (ipc/pipe.h); and what a panic does once its record is out and
+ * whether an oops panics (panic.h). An entry whose
  * text is empty is procfs's, which reads its value when the file is opened.
  * A new entry goes at the end, so that the indices SYNTH_SYS_ names stay
  * the same. */
@@ -308,7 +309,9 @@ static const struct {
                {52, "max_mnt_namespaces", ""},
                {1, "pipe-max-size", ""},
                {1, "pipe-user-pages-hard", ""},
-               {1, "pipe-user-pages-soft", ""}};
+               {1, "pipe-user-pages-soft", ""},
+               {6, "panic", ""},
+               {6, "panic_on_oops", ""}};
 
 /* The entries of the table. */
 #define SYNTH_SYS_TABLE ((int)(sizeof(sysents) / sizeof(sysents[0])))
@@ -355,6 +358,7 @@ int synth_sys_writable(int entry)
            entry == SYNTH_SYS_NR_OPEN || entry == SYNTH_SYS_FILE_MAX ||
            entry == SYNTH_SYS_RANDOMIZE_VA_SPACE || entry == SYNTH_SYS_MAX_MNT_NAMESPACES ||
            (entry >= SYNTH_SYS_PIPE_MAX_SIZE && entry <= SYNTH_SYS_PIPE_USER_PAGES_SOFT) ||
+           entry == SYNTH_SYS_PANIC || entry == SYNTH_SYS_PANIC_ON_OOPS ||
            (entry >= SYNTH_SYS_TCP_KEEPALIVE_TIME && entry <= SYNTH_SYS_TCP_RETRIES2);
 }
 
