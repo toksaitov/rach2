@@ -488,9 +488,11 @@ static int setgids(void)
 /**
  * Run in a child of root: as user 4243, open the root process `parent`'s maps
  * and fd directory and read a link in that directory, which fail with EACCES,
- * open the caller's own maps, and check the owner of its /proc directory
- * before and after PR_SET_DUMPABLE. Returns 0, or the number of the first
- * step that went wrong.
+ * open the caller's own maps, and check the owners of its /proc entries
+ * before and after PR_SET_DUMPABLE: the 0555 directory is the effective
+ * user's throughout, while status and the open maps are root's until the
+ * process is dumpable again, as Linux's task_dump_owner gives them. Returns
+ * 0, or the number of the first step that went wrong.
  */
 static int privacies_child(pid_t parent)
 {
@@ -520,7 +522,8 @@ static int privacies_child(pid_t parent)
     if (fd < 0) {
         return 4;
     }
-    if (stat("/proc/self/", &st) != 0 || st.st_uid != 0 ||
+    if (stat("/proc/self/", &st) != 0 || st.st_uid != user || stat("/proc/self/status", &st) != 0 ||
+        st.st_uid != 0 || fstat(fd, &st) != 0 || st.st_uid != 0 ||
         prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0 || stat("/proc/self/", &st) != 0 ||
         st.st_uid != user || stat("/proc/self/status", &st) != 0 || st.st_uid != user ||
         fstat(fd, &st) != 0 || st.st_uid != user) {
