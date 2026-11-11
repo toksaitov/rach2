@@ -722,6 +722,9 @@ static void unmappable(void)
           "the object freed with its handle");
 }
 
+/** An import whose driver hook sleeps while another import of the same
+ * buffer publishes its handle: the first gets that handle, and its own
+ * object is freed with its reference on the buffer. */
 static void concurrent_import(void)
 {
     struct drm_driver custom = driver;
