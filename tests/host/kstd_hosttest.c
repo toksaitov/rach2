@@ -14,8 +14,9 @@
  * depends on k_strreverse and k_strtoupper, compiled in. k_strtoul is
  * checked against what Linux's kstrtoul takes with base 0: the bases, the
  * plus sign, one newline, leading zeros past 31 bytes, the end of the text
- * at a NUL, junk, and a number past an unsigned long, with `*out` left
- * alone on an error. Exits with the count of failed checks, at most 120.
+ * at a NUL, junk, a number past 64 bits before junk and one past 32 bits
+ * with and without it, which i686's unsigned long cannot hold, with `*out`
+ * left alone on an error. Exits with the count of failed checks, at most 120.
  */
 
 #include "kerrno.h"
@@ -124,6 +125,14 @@ int main(void)
     CHECK(reads("1 ", -EINVAL, 0));
     CHECK(reads("1\n\n", -EINVAL, 0));
     CHECK(reads("0x10000000000000000", -ERANGE, 0));
+    /* A 64-bit overflow is ERANGE before the junk after it, and junk after
+     * a number past 32 bits EINVAL, at either width. */
+    CHECK(reads("18446744073709551616x", -ERANGE, 0));
+    CHECK(reads("4294967296x", -EINVAL, 0));
+    /* The unsigned long's bound comes last: ERANGE where it has 32 bits,
+     * as on i686. */
+    CHECK(sizeof(unsigned long) == 4 ? reads("4294967296", -ERANGE, 0)
+                                     : reads("4294967296", 0, (unsigned long)4294967296ull));
     {
         unsigned long out = 0;
 

@@ -8635,10 +8635,12 @@ static int32_t procfs_uevent_write(int node, int key, int attr, const char *text
  * writable /sys attribute of `f`, each of which parses them with its own
  * limits. A registered attribute (sysfs.h) takes them as written, through
  * its `store`, and a uevent file as `procfs_uevent_write` does; the
- * transparent_hugepage files go to `thp_store`. The rest have their final
- * newlines and spaces cut first. A backlight's brightness and bl_power
- * take what `backlight_store` takes, and a radio switch's soft and state
- * what `rfkill_store` takes, with their errors. rtc0's wakealarm takes
+ * transparent_hugepage files go to `thp_store`. A backlight's brightness
+ * and bl_power take what `backlight_store` takes, and a radio switch's
+ * soft and state what `rfkill_store` takes, with their errors, given the
+ * text whole, as Linux gives the buffer to kstrtoul, which takes one
+ * newline. The rest have their final newlines and spaces cut first.
+ * rtc0's wakealarm takes
  * seconds since 1970, or `+N` for N seconds from now, and 0 to clear it; a
  * new time while an alarm is set is -EBUSY, as on Linux, which wants the
  * alarm cleared first, and a time `devfs_rtc_set_wakealarm` does not set
@@ -8666,16 +8668,16 @@ static int32_t procfs_sysattr_store(const struct procfs_file *f, char *text, uin
     if (node == SYSFS_THP) {
         return thp_store(attr, text, count);
     }
-    while (n > 0 && (text[n - 1] == '\n' || text[n - 1] == ' ')) {
-        text[--n] = '\0';
-    }
     if (node == SYSFS_BACKLIGHT) {
-        rc = backlight_store(f->origin_pid, attr, text, (int)n);
+        rc = backlight_store(f->origin_pid, attr, text, (int)count);
         return rc != 0 ? rc : (int32_t)count;
     }
     if (node == SYSFS_RFKILL) {
-        rc = rfkill_store(f->origin_pid, attr, text, (int)n);
+        rc = rfkill_store(f->origin_pid, attr, text, (int)count);
         return rc != 0 ? rc : (int32_t)count;
+    }
+    while (n > 0 && (text[n - 1] == '\n' || text[n - 1] == ' ')) {
+        text[--n] = '\0';
     }
     if (node == SYSFS_POWER) {
         if (!sysattr_is(text, n, "freeze") && !sysattr_is(text, n, "mem")) {

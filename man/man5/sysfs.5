@@ -741,7 +741,8 @@ still says what root wrote; and
 .Pa type ,
 .Ql raw ,
 a level of the hardware's own.
-Another value is
+A write is a number as Linux's kstrtoul reads it with base 0, with one
+newline at most after it; another value, or other text after it, is
 .Er EINVAL .
 See
 .Xr backlight 4 .

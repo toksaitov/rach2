@@ -1,6 +1,7 @@
 /* The kernel's conversions between integers and text. */
 #include "kstd.h"
 #include "kerrno.h"
+#include "kint.h"
 
 /**
  * The digits are written least significant first and the string is then
@@ -121,15 +122,23 @@ static unsigned int digit_value(char c)
     return 16;
 }
 
+/* The largest value of 64 bits, the width Linux's kstrtoul parses at. */
+#define KSTD_U64_MAX (~(uint64_t)0)
+
 /**
  * The base is chosen as Linux's _parse_integer_fixup_radix chooses it: a
  * leading 0 means octal, and hexadecimal only when a hex digit follows the
- * `x`, so that "0x" alone is a 0 followed by junk.
+ * `x`, so that "0x" alone is a 0 followed by junk. The number is read in
+ * 64 bits and its end checked before it is held to an unsigned long, as
+ * Linux's kstrtoul calls _kstrtoull first (lib/kstrtox.c:181-190): on
+ * i686 "4294967296x" is then -EINVAL for its junk, and a 64-bit overflow
+ * is -ERANGE whatever follows it. The limits are constants, so that i686
+ * needs no 64-bit division.
  */
 int k_strtoul(const char *s, size_t len, unsigned long *out)
 {
-    unsigned long v = 0, max = ~0ul;
-    unsigned int base = 10, d;
+    uint64_t v = 0, lim;
+    unsigned int base = 10, d, last;
     size_t i = 0, start;
 
     for (start = 0; start < len && s[start] != '\0'; start++) {
@@ -145,8 +154,10 @@ int k_strtoul(const char *s, size_t len, unsigned long *out)
             i += 2;
         }
     }
+    lim = base == 16 ? KSTD_U64_MAX / 16u : base == 8 ? KSTD_U64_MAX / 8u : KSTD_U64_MAX / 10u;
+    last = base == 10 ? (unsigned int)(KSTD_U64_MAX % 10u) : base - 1u;
     for (start = i; i < len && (d = digit_value(s[i])) < base; i++) {
-        if (v > (max - d) / base) {
+        if (v > lim || (v == lim && d > last)) {
             return -ERANGE;
         }
         v = v * base + d;
@@ -160,6 +171,9 @@ int k_strtoul(const char *s, size_t len, unsigned long *out)
     if (i < len) {
         return -EINVAL;
     }
-    *out = v;
+    if (v > (uint64_t)~0ul) {
+        return -ERANGE;
+    }
+    *out = (unsigned long)v;
     return 0;
 }
