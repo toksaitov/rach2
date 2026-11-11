@@ -2193,6 +2193,9 @@ int i915_gem_object_has_pages(const struct drm_i915_gem_object *obj);
 /** Whether a fence of the object's reservation has not signalled, so that
  * the GPU may still read or write its pages. */
 int i915_gem_object_is_active(const struct drm_i915_gem_object *obj);
+/** `i915_gem_object_is_active` for a caller that holds the reservation's
+ * lock, as the shrinker does. */
+int i915_gem_object_is_active_locked(const struct drm_i915_gem_object *obj);
 
 /**
  * Wait until no fence of the object's reservation is busy, so that the GPU
