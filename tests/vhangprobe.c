@@ -107,8 +107,11 @@ struct pollfd {
 /* The bytes the output-flush row reads from the master at most. */
 #define FLUSH_READ 64
 
-/* The master's ring is 4096 bytes; a writer under OPOST, which keeps room
- * for ONLCR's CR LF, waits once fewer than 2 are free. */
+/* The most the master's FIONREAD counts while the writer waits. On Rach2
+ * the master's ring is 4096 bytes and a writer under OPOST, which keeps room
+ * for ONLCR's CR LF, waits once fewer than 2 are free; on Linux the raw
+ * master's n_tty keeps one byte of its 4096-byte read buffer free
+ * (n_tty_receive_buf_common's room--). */
 #define RING_FULL 4095
 
 /* The rows, in the order of the report and of the child's exit codes. */
