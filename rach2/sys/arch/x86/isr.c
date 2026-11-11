@@ -134,6 +134,14 @@ static const char *const _exception_names[32] = {"divide error",
                                                  "reserved",
                                                  "reserved"};
 
+/** Whether the processor pushes an error code for exception `vector`: the
+ * double fault, the TSS, segment, stack, protection and page faults, the
+ * alignment check and the control protection exception. */
+static int _has_error_code(uint32_t vector)
+{
+    return vector == 8 || (vector >= 10 && vector <= 14) || vector == 17 || vector == 21;
+}
+
 /** The si_code of the floating-point exception an FPU status names, as
  * Linux reports it: invalid operation, then division by zero, overflow,
  * underflow (with a denormal operand) and precision, among the flags
@@ -299,6 +307,8 @@ static void _exception_handler(isr_params_t *params)
     klog(KLOG_CRIT, "isr", "kernel exception: %s (vector %d, err 0x%x, eip 0x%x)", name,
          params->vector, params->error_code, params->eip);
 #endif
+    k_panic_note_fault(name, (uintptr_t)FRAME_PC(params),
+                       _has_error_code(params->vector) ? (long)params->error_code : PANIC_NO_ERROR);
     k_panic("unrecoverable CPU exception in kernel mode");
 }
 
@@ -323,6 +333,8 @@ static void _hardware_fault_handler(isr_params_t *params)
     klog_deliver_directly();
     klog(KLOG_CRIT, "isr", "hardware fault: %s (vector %d, pc 0x%lx)",
          _exception_names[params->vector], (int)params->vector, (unsigned long)FRAME_PC(params));
+    k_panic_note_fault(_exception_names[params->vector], (uintptr_t)FRAME_PC(params),
+                       PANIC_NO_ERROR);
     k_panic("the machine reported a fault");
 }
 
@@ -349,6 +361,8 @@ static void _double_fault_handler(isr_params_t *params)
 
     k_panic_begin();
     klog_deliver_directly();
+    k_panic_note_fault("double fault", (uintptr_t)params->rip, PANIC_NO_ERROR);
+    k_panic_note_address(cr2);
     pid = kstack_overrun_pid(cr2);
     if (pid >= 0) {
         klog(KLOG_CRIT, "isr",
@@ -390,6 +404,8 @@ void isr_double_fault(void)
     __asm__ __volatile__("mov %%cr2, %0" : "=r"(cr2));
     k_panic_begin();
     klog_deliver_directly();
+    k_panic_note_fault("double fault", (uintptr_t)kernel_tss[arch_cpu_id()].eip, PANIC_NO_ERROR);
+    k_panic_note_address(cr2);
     pid = kstack_overrun_pid(cr2);
     if (pid >= 0) {
         klog(KLOG_CRIT, "isr",

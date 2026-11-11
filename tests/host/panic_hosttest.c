@@ -1,6 +1,6 @@
 /*
- * panic_hosttest.c: the panic's report on the screen (`panic.c`), at 80 by 24
- * on the text console and on a framebuffer.
+ * panic_hosttest.c: the panic's picture and short report on the screen
+ * (`panic.c`), on the text console and on framebuffers of three sizes.
  *
  * host-deps: rach2/sys/lib/kfmt.c rach2/sys/lib/kstd.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
@@ -9,12 +9,13 @@
  *
  * The console, the log and the panic are included whole, and `k_stop` jumps
  * back to the row, so each row can read the cells the panic left. A row raises
- * the kernel exception's order, the record and then `k_panic`, or the hardware
- * fault's, `k_panic_begin` and then the record. The rows at 80 by 24 are the
- * smallest screen the console takes, where the report covers the picture; the
- * QEMU rows of machine.smp force the two faults on 80 by 25. `k_udelay`
- * counts what the panic waits and `power_emergency_restart` jumps back too,
- * so that a row of `panic_timeout` reads the wait and the reset.
+ * the kernel exception's order, the record, the note and then `k_panic`, or
+ * the hardware fault's, `k_panic_begin` and then the record. The screens are
+ * the VGA's 80 by 25 and 80 by 24, the smallest the console takes, the
+ * Lenovo's 85 by 24, where the report goes over the picture's bottom-left
+ * corner, and 128 by 48, where it goes below the picture. `k_udelay` counts
+ * what the panic waits and `power_emergency_restart` jumps back too, so that
+ * a row of `panic_timeout` reads the wait, the countdown and the reset.
  */
 #include <setjmp.h>
 
@@ -28,6 +29,9 @@ static uint16_t vram[16384];
 extern int printf(const char *format, ...);
 extern void *memset(void *s, int c, unsigned long n);
 extern char *strstr(const char *haystack, const char *needle);
+extern char *strchr(const char *s, int c);
+extern int memcmp(const void *a, const void *b, unsigned long n);
+extern unsigned long strlen(const char *s);
 
 /** The adapter's store hook of vga_text.c, which these rows do not count. */
 void vga_text_hosttest_stored(void)
@@ -126,12 +130,12 @@ void console_set_blank_time(unsigned int seconds)
     (void)seconds;
 }
 
-static uint8_t pixels[(640 * 4 + 64) * 384]; /* the framebuffer */
+static uint8_t big[1366 * 4 * 768]; /* the framebuffer, at most the Lenovo's size */
 
 /** The framebuffer's mapping. */
 volatile uint8_t *fbcon_window(void)
 {
-    return pixels;
+    return big;
 }
 
 static jmp_buf stop_point; /* where `k_stop` goes back to */
@@ -185,28 +189,58 @@ int kcmdline_value_nth(const char *key, int nth, char *out, unsigned int outlen)
 
 static int failures;
 
-#define CHECK(condition, detail)                      \
-    do {                                              \
-        if (!(condition)) {                           \
-            printf("panic-test: fail: %s\n", detail); \
-            failures++;                               \
-        }                                             \
+#define CHECK(condition, detail)                                 \
+    do {                                                         \
+        if (!(condition)) {                                      \
+            printf("panic-test: fail: %s: %s\n", where, detail); \
+            failures++;                                          \
+        }                                                        \
     } while (0)
 
-static char shown[TEXTCON_COLS_MAX * 64]; /* the screen, its rows run together */
+static char shown[TEXTCON_COLS_MAX * 64 + 1]; /* the screen, its rows run together */
 static process_t running;
+static const char *where = "80 by 25"; /* the screen the rows run on */
+static int dumps;                      /* what `dump` returns */
 
-/** Copy the screen's cells into `shown`. */
+/** The cell at (`col`, `row`) of the live screen. */
+static uint16_t cell_at(unsigned int col, unsigned int row)
+{
+    return vga_text_line_ptr(_live_top_line + row)[col];
+}
+
+/** Copy the screen's characters into `shown`, a row after another. */
 static void read_screen(void)
 {
-    unsigned int i, cells = textcon_cols * textcon_rows;
+    unsigned int col, row, i = 0;
 
-    for (i = 0; i < cells; i++) {
-        char c = (char)(vga_text_memory()[i] & 0xFF);
+    for (row = 0; row < textcon_rows; row++) {
+        for (col = 0; col < textcon_cols; col++) {
+            char c = (char)(cell_at(col, row) & 0xFF);
 
-        shown[i] = c == '\0' ? ' ' : c;
+            shown[i++] = c == '\0' ? ' ' : c;
+        }
     }
-    shown[cells] = '\0';
+    shown[i] = '\0';
+}
+
+/** Whether `text` begins a row of the screen at column `col`; the row, or
+ * -1. */
+static int row_of(const char *text, unsigned int col)
+{
+    unsigned int row, n = (unsigned int)strlen(text);
+
+    for (row = 0; row < textcon_rows; row++) {
+        if (col + n <= textcon_cols && memcmp(shown + row * textcon_cols + col, text, n) == 0) {
+            return (int)row;
+        }
+    }
+    return -1;
+}
+
+/** A crash record that is saved, or not, as `dumps` says. */
+static int dump(void)
+{
+    return dumps;
 }
 
 /** A log and a panic not yet raised, with the screen clear. */
@@ -214,13 +248,19 @@ static void restart(void)
 {
     panic_owner = 0;
     others_stopped = 0;
-    last_crit.len = 0;
+    screen_stopped = 0;
+    fault_name = 0;
+    fault_has_address = 0;
+    reading_process = 0;
+    process_unsafe = 0;
     wire_len = 0;
     wire[0] = '\0';
     screen_line_open = 0;
     serial_line_open = 0;
     klog_delivering = 0;
     console_writing = 0;
+    waited_us = 0;
+    restarted = 0;
     set_back_color(black);
     k_cls();
     cpu_table[0].current = &running;
@@ -237,161 +277,210 @@ static void stop(const char *reason)
     read_screen();
 }
 
-/** Say whether nothing scrolled: the picture's top and the last row are as
- * the panic drew them, and the report left the cursor on the screen. */
-static int stayed(void)
+/**
+ * Whether the picture is whole and no cell of the character is covered:
+ * every row from her first is on the screen, every cell of hers shows her
+ * color with nothing written in it, and nothing scrolled.
+ */
+static int picture_whole(void)
 {
-    unsigned int last = (textcon_rows - 1) * textcon_cols;
-    unsigned int col;
+    unsigned int col, row;
+    int r;
 
-    for (col = 0; col < textcon_cols; col++) {
-        if (shown[last + col] != ' ') {
-            return 0;
+    if (_live_top_line != 0 || report.picture_top + FAIL_FIRST_ROW < 0 ||
+        report.picture_top + (int)FAIL_ROWS > (int)textcon_rows) {
+        return 0;
+    }
+    for (row = 0; row < FAIL_ROWS; row++) {
+        r = report.picture_top + (int)row;
+        for (col = 0; col < FAIL_COLS && r >= 0; col++) {
+            uint16_t c = cell_at(report.picture_left + col, (unsigned int)r);
+
+            if (_fail_image[row * FAIL_COLS + col] != blue &&
+                ((c >> 12) != _fail_image[row * FAIL_COLS + col] || (c & 0xFF) != ' ')) {
+                return 0;
+            }
         }
     }
-    return _live_top_line == 0 && y == textcon_rows - 1;
+    return 1;
 }
 
-/** Check the report of the two routes on the screen as it is set. */
-static void both_routes(const char *what)
+/** Whether the lines `lines`, NULL-ended, are rows of the report in that
+ * order, one under another, from its left column, and the last is the
+ * report's last. */
+static int report_reads(const char *const *lines)
 {
-    const char *cause, *reason;
+    int row = -1, r;
+
+    for (; *lines != 0; lines++) {
+        r = row_of(*lines, report.left);
+        if (r < 0 || (row >= 0 && r != row + 1)) {
+            return 0;
+        }
+        row = r;
+    }
+    return row == (int)(report.top + report.count - 1);
+}
+
+/** A fault in the kernel, its record and its note, and the panic. */
+static void exception(void)
+{
+    restart();
+    klog(KLOG_CRIT, "isr", "kernel exception: page fault (vector 14, err 0x2, rip 0x106000)");
+    k_panic_note_fault("page fault", 0x106000, 2);
+    k_panic_note_address(0xdead0);
+    stop("Unrecoverable error: page fault while in kernel mode.");
+}
+
+/** The address `v` as the report writes it. */
+static const char *address(const char *what, uintptr_t v)
+{
+    static char line[2][64];
+    static int which;
+    char *s = line[which++ & 1];
+
+    s[0] = '\0';
+    put_str(s, what);
+    put_address(s, v);
+    return s;
+}
+
+/** Check the report of a page fault and a hardware fault on the screen as it
+ * is set. */
+static void routes(const char *what)
+{
+    const char *fault[] = {"rebooting in 0 s",
+                           "build " RACH2_HEAD,
+                           "cpu 0  pid 42",
+                           "cmd ?[2J?[H",
+                           0,
+                           0,
+                           "page fault, error 0x2",
+                           "panic: Unrecoverable error: page fault while in kernel mode.",
+                           0};
+    const char *nmi[] = {"halted",
+                         "build " RACH2_HEAD,
+                         "cpu 0  pid 42",
+                         "cmd ?[2J?[H",
+                         0,
+                         "non-maskable interrupt",
+                         "panic: the machine reported a fault",
+                         0};
+
+    where = what;
+    panic_timeout = PANIC_TIMEOUT_DEFAULT;
+    exception();
+    fault[4] = address("ip ", 0x106000);
+    fault[5] = address("addr ", 0xdead0);
+    CHECK(picture_whole(), "the picture is whole, with no cell of hers covered");
+    CHECK(report_reads(fault), "the report reads its lines in order, the reason last");
+    CHECK(waited_us == 30000000ul && restarted, "the default waits 30 seconds and resets");
+    CHECK(strstr(wire, "panic: stopped: Unrecoverable error") != 0 &&
+              strstr(wire, "panic: report: cpu 0  pid 42") != 0 &&
+              strstr(wire, "panic: rebooting in 30 seconds..") != 0,
+          "the port has the record, the report's lines and the reset's line");
+    CHECK(strchr(wire, '\033') == 0, "and no escape from the process's name");
+    CHECK(strstr(shown, "isr:") == 0 && strstr(shown, "stopped") == 0,
+          "the screen has no record of the log's");
 
     restart();
-    klog(KLOG_CRIT, "isr",
-         "kernel exception: invalid opcode (vector 6, err 0x0, rip 0xffffffff80106000)");
-    stop("unrecoverable CPU exception in kernel mode");
-    cause = strstr(shown, "isr: kernel exception: invalid opcode (vector 6,");
-    CHECK(cause != 0, what);
-    reason = cause != 0 ? strstr(cause, "panic: stopped: unrecoverable CPU") : 0;
-    CHECK(reason != 0, what);
-    CHECK(stayed(), what);
-    CHECK(strstr(shown, "pid 42") == 0 && strstr(wire, "pid 42") == 0,
-          "the report reads no process, whose name clears the screen");
-    CHECK(strstr(wire, "kernel exception") == strstr(wire, "isr: kernel") + 5,
-          "the port has the record once");
-    CHECK(strstr(strstr(wire, "kernel exception") + 1, "kernel exception") == 0, "and only once");
-
-    restart();
+    panic_timeout = 0;
     k_panic_begin();
     klog_deliver_directly();
     klog(KLOG_CRIT, "isr", "hardware fault: non-maskable interrupt (vector 2, pc 0x%lx)",
          (unsigned long)0x106000);
+    k_panic_note_fault("non-maskable interrupt", 0x106000, PANIC_NO_ERROR);
     stop("the machine reported a fault");
-    cause = strstr(shown, "isr: hardware fault: non-maskable interrupt (vector 2, pc 0x106000)");
-    CHECK(cause != 0, what);
-    reason = cause != 0 ? strstr(cause, "panic: stopped: the machine reported") : 0;
-    CHECK(reason != 0, what);
-    CHECK(stayed(), what);
+    nmi[4] = address("ip ", 0x106000);
+    CHECK(picture_whole(), "the hardware fault's picture is whole");
+    CHECK(report_reads(nmi), "and its report has no error code or address, and says halted");
+    CHECK(!restarted && waited_us == 0, "panic=0 halts");
+    panic_timeout = PANIC_TIMEOUT_DEFAULT;
 }
 
-/**
- * What `panic_timeout` does once the record is out: 3 says when the machine
- * resets, on the screen and the port, waits 3 seconds and resets, and the
- * longest record and reason still fit with that line; -1 resets with no wait
- * and no line; 0 halts with neither.
- */
-static void timeouts(void)
-{
-    static char lengthy[1024];
-
-    restart();
-    panic_timeout = 3;
-    waited_us = 0;
-    restarted = 0;
-    klog(KLOG_CRIT, "isr", "kernel exception: before a reset");
-    stop("timed");
-    CHECK(strstr(wire, "panic: rebooting in 3 seconds..") != 0 &&
-              strstr(shown, "panic: rebooting in 3 seconds..") != 0,
-          "panic=3 says when the machine resets, on the screen and the port");
-    CHECK(waited_us == 3000000ul && restarted, "and resets it after waiting 3 seconds");
-    CHECK(stayed(), "and its line scrolls nothing");
-
-    k_memset(lengthy, 'r', sizeof(lengthy) - 1);
-    restart();
-    klog(KLOG_CRIT, "isr", "%s", lengthy);
-    stop(lengthy);
-    CHECK(stayed() && strstr(shown, "panic: rebooting in 3 seconds..") != 0,
-          "the longest record and reason fit with the reset's line");
-
-    restart();
-    panic_timeout = -1;
-    waited_us = 0;
-    restarted = 0;
-    stop("at once");
-    CHECK(restarted && waited_us == 0 && strstr(wire, "rebooting in") == 0,
-          "panic=-1 resets the machine at once, with no line");
-
-    restart();
-    panic_timeout = 0;
-    restarted = 0;
-    stop("halted");
-    CHECK(!restarted && waited_us == 0 && strstr(wire, "rebooting in") == 0,
-          "panic=0 halts, with no line and no reset");
-}
-
-/** The longest record and reason, a panic with no record, one in the middle
- * of a line, and one inside an escape string. */
+/** The countdown, the other timeouts, the saved record, a long reason, a
+ * fault while the process is read, and a panic with no process. */
 static void edges(void)
 {
     static char lengthy[1024];
-    const char *escape = "\033]0;ab";
+    const char *saved[] = {"rebooting in 0 s", "crash record saved", "build " RACH2_HEAD, 0};
+    const char *bare[] = {"rebooting", "build " RACH2_HEAD, "cpu 0", "panic: no process", 0};
+
+    restart();
+    panic_timeout = 3;
+    stop("timed");
+    CHECK(waited_us == 3000000ul && restarted &&
+              row_of("rebooting in 0 s", report.left) == (int)report.top &&
+              row_of("rebooting in 0 s ", report.left) >= 0,
+          "panic=3 counts down to 0 and resets, and a shorter count leaves no digit");
+    CHECK(strstr(wire, "panic: rebooting in 3 seconds..") != 0, "and says so on the port");
+
+    restart();
+    dumps = 1;
+    k_panic_dump = dump;
+    stop("saved");
+    CHECK(row_of(saved[0], report.left) == (int)report.top &&
+              row_of(saved[1], report.left) == (int)report.top + 1,
+          "a saved crash record is said under the countdown");
+    k_panic_dump = 0;
 
     k_memset(lengthy, 'r', sizeof(lengthy) - 1);
     restart();
-    klog(KLOG_CRIT, "isr", "%s", lengthy);
     stop(lengthy);
-    CHECK(stayed(), "the longest record and reason fit without a scroll");
-    CHECK(strstr(shown, "...") != 0, "and the cut record shows its mark");
-    CHECK(strstr(shown, "panic: stopped: rrr") != 0, "and the reason is there");
+    CHECK(picture_whole(), "a long reason covers none of her");
+    CHECK(row_of("panic: rrrr", report.left) == (int)(report.top + report.count - 1),
+          "and is cut on its row");
 
     restart();
-    stop("no record before");
-    CHECK(strstr(shown, "panic: stopped: no record before") != 0, "a panic with no record");
-    CHECK(strstr(shown, "isr:") == 0 && stayed(), "shows its reason alone");
-
-    restart();
-    console_putc('>');
-    klog(KLOG_CRIT, "isr", "kernel exception: after a prompt");
-    stop("open line");
-    CHECK(stayed(), "a line left open adds no row");
-    CHECK(strstr(shown, "isr: kernel exception: after a prompt") != 0, "and the record is shown");
-
-    restart();
-    while (*escape != '\0') {
-        k_putc(*escape++);
-    }
-    klog(KLOG_CRIT, "isr", "kernel exception: inside an escape string");
-    stop("inside an escape string");
-    CHECK(strstr(shown, "isr: kernel exception: inside an escape string") != 0,
-          "a half-read escape string takes none of the report");
-    CHECK(strstr(shown, "panic: stopped: inside an escape string") != 0, "or of the reason");
+    panic_timeout = -1;
+    reading_process = 1;
+    stop("no process");
+    CHECK(restarted && waited_us == 0 && strstr(wire, "rebooting in") == 0,
+          "panic=-1 resets at once, with no countdown");
+    CHECK(report_reads(bare) && strstr(shown, "pid") == 0,
+          "a panic while the process was read leaves it out");
+    panic_timeout = PANIC_TIMEOUT_DEFAULT;
 }
 
-int main(void)
+/** Take a framebuffer of `w` by `h` pixels at `big`. */
+static int framebuffer(unsigned int w, unsigned int h)
 {
     static struct boot_framebuffer fb;
 
-    textcon_rows = 24;
-    both_routes("the text console at 80 by 24 shows the vector, address and reason");
-    edges();
-    timeouts();
-
     fb.type = BOOT_FB_RGB;
     fb.addr = 0x80000000u;
-    fb.width = 640;
-    fb.height = 384;
+    fb.width = w;
+    fb.height = h;
     fb.bpp = 32;
-    fb.pitch = 640 * 4 + 64;
+    fb.pitch = w * 4;
     fb.red_shift = 16;
     fb.red_bits = 8;
     fb.green_shift = 8;
     fb.green_bits = 8;
     fb.blue_shift = 0;
     fb.blue_bits = 8;
-    CHECK(fbcon_init(&fb) == 0, "the framebuffer is taken");
-    CHECK(textcon_cols == 80 && textcon_rows == 24, "and is 80 by 24");
-    both_routes("the framebuffer at 80 by 24 shows the vector, address and reason");
+    return fbcon_init(&fb);
+}
+
+int main(void)
+{
+    routes("the text console at 80 by 25");
+    edges();
+    textcon_rows = 24;
+    routes("the text console at 80 by 24");
+
+    CHECK(framebuffer(1366, 768) == 0 && textcon_cols == 85 && textcon_rows == 24,
+          "the Lenovo's framebuffer is 85 by 24");
+    routes("the framebuffer at 85 by 24");
+    CHECK(report.top + report.count <= FAIL_ROWS + (unsigned int)report.picture_top,
+          "where the report goes over the picture");
+
+    CHECK(framebuffer(1024, 768) == 0 && textcon_cols == 128 && textcon_rows == 48,
+          "a framebuffer of 128 by 48");
+    routes("the framebuffer at 128 by 48");
+    CHECK((int)report.top == report.picture_top + (int)FAIL_ROWS + 1 &&
+              report.left == report.picture_left,
+          "where the report goes below the picture, under its left edge");
 
     if (failures != 0) {
         printf("panic-test: result: fail: %d\n", failures);
