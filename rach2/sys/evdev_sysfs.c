@@ -1311,7 +1311,10 @@ static int changed(void *arg)
 /** The worker, kinputd: sync /sys with the devices, then sleep in an idle
  * wait until a device comes or goes, holding the big lock as kernel code
  * does. The count is read before each sync, so a change during one brings
- * another. */
+ * another. The tick's switch waits for its sleeps and the service point
+ * after each sync, which the wait does not give when a change came during
+ * the sync, as Linux's worker calls cond_resched between works
+ * (kernel/workqueue.c:3290-3299). */
 static void sync_thread(void)
 {
     uint32_t seen;
@@ -1320,6 +1323,7 @@ static void sync_thread(void)
     for (;;) {
         seen = evdev_changes();
         evdev_sysfs_sync();
+        sched_service_point();
         (void)wq_wait_event_idle(evdev_change_queue(), changed, &seen);
     }
 }

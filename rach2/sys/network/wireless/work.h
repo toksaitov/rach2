@@ -50,7 +50,12 @@ void wlan_work_threads_start(void);
  * the tick it was queued, work that queues more at once never holds up a
  * timer already due: that timer runs before any callback queued after it
  * came due. The worker thread calls it with the kernel lock; the host test
- * calls it to stand in for the thread. Returns the number of callbacks run.
+ * calls it to stand in for the thread. In the kernel a service point
+ * (`sched_service_point`) follows each callback, once its end is published
+ * and its cancellation waiters woken, since the thread takes the tick's
+ * switch only at its sleeps and service points, as Linux's worker calls
+ * cond_resched between works (kernel/workqueue.c:3290-3299). Returns the
+ * number of callbacks run.
  */
 unsigned wlan_work_run_due(uint64_t now);
 

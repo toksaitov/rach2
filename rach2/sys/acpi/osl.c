@@ -673,6 +673,9 @@ void osl_drain(void)
         queue_running = 1;
         spin_unlock_irqrestore(&queue_lock, flags);
         function(context);
+        if (current_proc == thread) {
+            sched_service_point();
+        }
     }
 }
 
@@ -712,7 +715,8 @@ void AcpiOsWaitEventsComplete(void)
 /** ACPICA's thread, kacpid: run the queue's work as it comes, holding the
  * big lock as kernel code does, and sleep when there is none in an idle
  * wait, which /proc/stat does not count as blocked; a wait inside a method
- * still counts. */
+ * still counts. The tick's switch waits for its sleeps and the service
+ * point after each work (`osl_drain`). */
 static void osl_thread(void)
 {
     arch_irq_enable();

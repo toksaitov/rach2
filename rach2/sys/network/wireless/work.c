@@ -105,8 +105,9 @@ void wlan_cancel_work(struct wlan_work *work)
     }
     spin_unlock_irqrestore(&queue_lock, flags);
 #ifndef RACH2_HOSTTEST
-    /* The timer switches the thread away inside a callback; once scheduling
-       is off it never runs again, and a wait for its end would not end. */
+    /* A callback may sleep, and the thread may be switched away at a
+       service point; once scheduling is off it never runs again, and a
+       wait for its end would not end. */
     if (current_proc != thread && sched_is_enabled()) {
         (void)wq_wait_event_nointr(&idle_wq, work_not_running, work);
     }
@@ -156,6 +157,7 @@ unsigned wlan_work_run_due(uint64_t now)
         spin_unlock_irqrestore(&queue_lock, flags);
 #ifndef RACH2_HOSTTEST
         wq_wake_all(&idle_wq);
+        sched_service_point();
 #endif
     }
 }
@@ -173,7 +175,9 @@ static int work_ready(void *arg)
 }
 
 /** The thread, kwlan: sleep until the earliest work is due or new work
- * comes, then run what is due, holding the big lock as kernel code does. */
+ * comes, then run what is due, holding the big lock as kernel code does.
+ * The tick's switch waits for its sleeps and the service point after each
+ * work (`wlan_work_run_due`). */
 static void work_thread(void)
 {
     uint64_t armed;

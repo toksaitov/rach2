@@ -2503,7 +2503,11 @@ void ps2mouse_msleep(unsigned int ms)
 #ifndef RACH2_HOSTTEST
 /** The worker, kpsmoused: sleep until the handler asks for a reconnect or
  * a resync, then do it, holding the big lock as kernel code does; a
- * reconnect first, which makes a resync due before it needless. */
+ * reconnect first, which makes a resync due before it needless. The tick's
+ * switch waits for its sleeps and the service point after each pass, which
+ * the wait does not give when the next request came during the pass, as
+ * Linux's worker calls cond_resched between works
+ * (kernel/workqueue.c:3290-3299). */
 static void psmoused(void)
 {
     arch_irq_enable();
@@ -2514,6 +2518,7 @@ static void psmoused(void)
         } else {
             ps2mouse_resync();
         }
+        sched_service_point();
     }
 }
 
