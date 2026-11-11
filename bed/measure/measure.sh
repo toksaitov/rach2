@@ -319,14 +319,16 @@ scene_pid='' copy_pid='' under_su=0
 # spaces, parentheses and newlines, so it ends at the last parenthesis.
 inner_group()
 {
-    st=$(tr '\n' ' ' 2>/dev/null < "/proc/$1/stat") || return 0
+    p=$1
+    st=$(tr '\n' ' ' 2>/dev/null < "/proc/$p/stat") || return 0
     st=${st#*\(}
     [ "${st%) *}" = su ] || return 0
     for d in /proc/[0-9]*; do
         st=$(tr '\n' ' ' 2>/dev/null < "$d/stat") || continue
+        # set -- replaces $1, so the PID is compared from p.
         # shellcheck disable=SC2086 # state, ppid, pgrp and the rest are words
         set -- ${st##*) }
-        if [ "${2:-}" = "$1" ] && [ "${3:-}" = "${d#/proc/}" ]; then
+        if [ "${2:-}" = "$p" ] && [ "${3:-}" = "${d#/proc/}" ]; then
             echo "$3"
             return 0
         fi
