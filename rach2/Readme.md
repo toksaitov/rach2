@@ -103,7 +103,7 @@ The cross compiler of `mk/arch.mk` compiles the kernel with `-ansi -nostdlib -no
 
 * The kernel calls no UEFI service, since GRUB leaves the firmware's boot services first ([the PC platform](sys/arch/x86/Readme.md)).
 * It has no swap and no loadable modules.
-* Most kernel code runs under one big lock, on one processor at a time; `sched_yield` is the one system call that runs without it.
+* Most kernel code runs under one big lock, on one processor at a time; the few system calls that run without it are listed in [the process Readme](sys/proc/Readme.md).
 * The scheduler reads real-time and inherited PI priorities, and no nice value or I/O priority.
 * The root is never a USB stick.
 * [limits(7)](../man/man7/limits.7) and each subsystem's Readme give the fixed capacities.

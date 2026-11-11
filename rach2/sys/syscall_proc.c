@@ -4248,6 +4248,13 @@ long sys_waitid(isr_params_t *params)
  * switches of the same threads or children. The other counters are zero.
  * -EINVAL for any other `who`, Linux's RUSAGE_BOTH among them, -EFAULT for
  * a structure that cannot be written.
+ *
+ * The call runs without the big lock. RUSAGE_THREAD reads only the calling
+ * thread's own counters, which only it and the tick on its own processor
+ * write, and its space's peak, read without a lock as `mm_resident_peak`
+ * says, as Linux 6.12.115's getrusage reads them under no lock
+ * (kernel/sys.c:1825-1829). The other targets read the thread group's
+ * threads and totals, and take the big lock for that.
  */
 long sys_getrusage(isr_params_t *params)
 {
@@ -4261,6 +4268,9 @@ long sys_getrusage(isr_params_t *params)
 
     if (who != RUSAGE_SELF && who != RUSAGE_CHILDREN && who != RUSAGE_THREAD) {
         return -EINVAL;
+    }
+    if (who != RUSAGE_THREAD) {
+        bkl_enter();
     }
     if (who == RUSAGE_SELF) {
         proc_cpu_time(current_proc, &user, &sys);
@@ -4296,6 +4306,9 @@ long sys_getrusage(isr_params_t *params)
             current_proc->mm ? mm_resident_peak(current_proc->mm) * (PAGE_SIZE / 1024u) : 0;
 
         ru.maxrss = (long)(now > current_proc->tg->maxrss_kb ? now : current_proc->tg->maxrss_kb);
+    }
+    if (who != RUSAGE_THREAD) {
+        bkl_exit();
     }
     if (rusage_put(SC_ARG(params, 1), &ru) != 0) {
         return -EFAULT;
