@@ -1198,7 +1198,8 @@ Passes over the active timer list since boot, modulo 2^32.
 .It Li timer_passes_late
 Timer passes since boot that a processor other than the boot processor made
 because the boot processor's tick had not made one over two of its own
-ticks, as while that tick waits for the big lock, modulo 2^32.
+ticks, as when that tick finds the big lock held by another processor and
+ends without it, modulo 2^32.
 .It Li tlb_shootdowns , tlb_shootdown_ipis
 Requests since boot that had another processor drop user translations after
 a change of page table entries, and the interprocessor interrupts they sent,
