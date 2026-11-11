@@ -203,12 +203,20 @@ klog_more()
 # With -u, the console onto the host's virtio-gpu card and the card away.
 if [ "$unplug" = 1 ]; then
     reset='' host=''
+    # The card's directory is named by its bus address, and dri/N, N the
+    # card's minor, links to it.
     for f in /sys/kernel/debug/dri/*/virtio_gpu_reset; do
         [ -e "$f" ] || continue
-        reset=$f
-        host=${f#/sys/kernel/debug/dri/}
-        host=card${host%%/*}
-        break
+        dir=${f%/virtio_gpu_reset}
+        dir=${dir##*/}
+        for link in /sys/kernel/debug/dri/[0-9]*; do
+            n=${link##*/}
+            case $n in *[!0-9]*) continue ;; esac
+            [ "$n" -lt 128 ] && [ "$(readlink "$link")" = "$dir" ] || continue
+            reset=$f host=card$n
+            break
+        done
+        [ -z "$reset" ] || break
     done
     pkill -x weston 2>/dev/null || :
     n=30
@@ -469,6 +477,19 @@ nocopy_rows()
     fi
 }
 
+# still_counts: wait until the doorbells' counts, both sides' and KVM's,
+# are the same at two looks a second apart, 10 looks at most.
+still_counts()
+{
+    n=10 last=''
+    while [ "$n" -gt 0 ]; do
+        now="$(info woken) $(info rung) $(stat kvm_ioeventfd_signals) $(stat kvm_irqfd_raises)"
+        [ "$now" != "$last" ] || return 0
+        last=$now n=$((n - 1))
+        sleep 1
+    done
+}
+
 # virgl_rows: the frame drawn, the doorbells, and the VM's death with
 # fences pending.
 virgl_rows()
@@ -477,9 +498,14 @@ virgl_rows()
         fail draw "virtio-gpu did not bind over the region: $(tail -n 2 "$console" "$out/qemu.out" 2>&1 | tr '\n' ' ')"
         fail doorbell "no device"
     else
+        # A doorbell is counted twice, by KVM and by the transport, one
+        # after the other, so each pair of counts is read with the doorbells
+        # still, which would otherwise split one across the two reads.
+        still_counts
         io0=$(stat kvm_ioeventfd_signals) irq0=$(stat kvm_irqfd_raises)
         woken0=$(info woken | cut -d/ -f1) rung0=$(info rung | cut -d/ -f1)
         "$probe" draw "$crc" > "$out/draw.out" 2>&1
+        still_counts
         io1=$(stat kvm_ioeventfd_signals) irq1=$(stat kvm_irqfd_raises)
         woken1=$(info woken | cut -d/ -f1) rung1=$(info rung | cut -d/ -f1)
         polls=$(info polls)
