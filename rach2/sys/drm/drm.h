@@ -354,7 +354,10 @@ uint32_t sw_sync_info(char *buf, uint32_t cap);
  * refuses mapping with ENODEV; NULL `free` frees the record with kfree.
  * `page` returns a borrowed physical frame, or 0 on failure, for PRIME
  * imports by other devices; NULL refuses those imports. It decides alone
- * whether it serves once its device is unplugged. `map_wc` records
+ * whether it serves once its device is unplugged, but a frame it gave stays
+ * the object's until the object is freed, unplugged or not, since an
+ * importer such as i915 keeps it in its own GTT and page tables, as
+ * Linux's page references keep it. `map_wc` records
  * the cache type that the exporter and its importers use. `vmap` returns
  * the kernel's address of the object's bytes, one contiguous range, for
  * the console's buffer (drm_client.c): valid while the object is scanned
@@ -1747,8 +1750,10 @@ int32_t drm_dev_register(struct drm_device *dev);
  * the record stays until its last holder lets go. */
 void drm_dev_unplug(struct drm_device *dev);
 /** Zap every program's mapping of `obj` and of each import of its dma-buf
- * on any device, so that the next touch of one asks for its page again.
- * Under the big kernel lock; does not sleep. */
+ * on any device that maps the import under its own address, as the shmem
+ * helper's import does, so that the next touch of one asks for its page
+ * again. i915 maps an import under its mmap-offset records, which this
+ * does not reach. Under the big kernel lock; does not sleep. */
 void drm_gem_object_zap(struct drm_gem_object *obj);
 /** Take and drop a reference to a device. */
 void drm_dev_get(struct drm_device *dev);
