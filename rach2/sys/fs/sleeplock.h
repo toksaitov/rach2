@@ -6,14 +6,15 @@
  * it holds it, waiters served in the order they asked, and a record of the
  * longest hold that crossed a disk wait.
  *
- * The big lock covers the kernel and a system call is not preempted, so
- * what changes between two sleeps is already atomic. A sleeping lock is
- * needed only for what must stay unchanged across a sleep, such as a
+ * A sleeping lock keeps what must stay unchanged across a sleep, such as a
  * file's block map while its blocks are read; it is held across the sleep,
- * and every other caller that wants it waits.
+ * and every other caller that wants it waits. Its own state is kept under a
+ * spinlock of its own, so that callers with and without the big lock take
+ * it alike.
  */
 
 #include "../lib/kint.h"
+#include "../lib/spinlock.h"
 #include "../proc/wait_queue.h"
 
 /*
@@ -49,9 +50,10 @@ struct sleep_lock_record {
  * gives the lock back and asks again waits behind everyone who asked
  * meanwhile. A hold lasts from the first take to the last give;
  * `taken_us` and `taken_waits` are its start, by `timer_now_us` and by
- * the holder's `disk_waits`.
+ * the holder's `disk_waits`. `spin` keeps every field but `wq`.
  */
 struct sleep_lock {
+    struct spinlock spin;
     int holder;
     int depth;
     uint32_t next;
@@ -72,8 +74,8 @@ void sleep_lock_init(struct sleep_lock *l, struct sleep_lock_record *record, int
  * Take `l`, sleeping until it is free and the caller's place is served; a
  * signal does not end the wait, since a waiter that retried without
  * sleeping would never let the holder run. The holder takes it again
- * without a place. Called with the big lock held, from a context that may
- * sleep unless the caller holds `l` already.
+ * without a place. From a context that may sleep unless the caller holds
+ * `l` already, with or without the big lock.
  */
 void sleep_lock_take(struct sleep_lock *l);
 
