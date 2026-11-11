@@ -29,7 +29,7 @@ Three lists give the detail:
 
 ## Status
 
-Rach2 runs in QEMU and on one real machine, a Lenovo G50-70 laptop, which boots the x86-64 kernel by UEFI from a SATA disk. Programs run on up to 64 processors at once, and the kernel, under one lock, on one at a time. The network has IPv4 and IPv6, USB works only through xHCI controllers, and there is no swap. [`limits(7)`](man/man7/limits.7) lists the numeric limits.
+Rach2 runs in QEMU and on one real machine, a Lenovo G50-70 laptop, which boots the x86-64 kernel by UEFI from a SATA disk. Programs run on up to 64 processors at once; most kernel code runs under one big lock, on one processor at a time, which every sleep and switch gives up. The network has IPv4 and IPv6, USB works only through xHCI controllers, and there is no swap. [`limits(7)`](man/man7/limits.7) lists the numeric limits.
 
 ## Quick start
 
