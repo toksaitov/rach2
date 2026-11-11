@@ -1904,8 +1904,9 @@ void drm_edid_override_reset(struct drm_connector *connector);
  * for that function in place of its own, as a driver that stands in for
  * another chip sets it before registering (sysfs.h's
  * `sysfs_pci_virtual_add`). `master` is the file that holds the master role,
- * or NULL. `commit_lock` orders commits, and `object_lock` and
- * `event_lock` keep the objects and the events (the lock rules above).
+ * or NULL. `mode_lock`, the commit lock, keeps the mode state, and
+ * `object_lock`, `event_lock` and `vbl_lock` keep the objects, the events
+ * and the vblanks (the lock rules above).
  */
 struct drm_device {
     const struct drm_driver *driver;
