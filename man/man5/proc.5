@@ -1926,9 +1926,10 @@ segment of the program, and a private mapping that was writable when
 made it or that
 .Xr mprotect 2
 first made writable, even after it stops being writable, except anonymous
-memory of which no page was ever written, which
+memory of which no page was written while it, or the region it was split
+from, held it, which
 .Xr mprotect 2
-uncounts when it takes write away,
+uncounts when it takes write away and changes the protection,
 .Ql nr
 for a mapping made with
 .Dv MAP_NORESERVE ,
