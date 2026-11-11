@@ -34,7 +34,7 @@ The file system is one directory of files that are records in kernel memory, mad
 ## Limits
 
 * The kernel has no oops it survives, so only a panic writes a dmesg record; there are no ftrace or pmsg records and no compression.
-* The region must lie below 4 GiB and within what the kernel maps.
+* The region's size must be under 4 GiB and its end within what the kernel reaches, which is 4 GiB on i686 and the direct map's end on x86-64, as pstore(5) gives; it is mapped in the 128 MiB window the devices' registers share.
 
 ## Tests
 
