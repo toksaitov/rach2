@@ -130,6 +130,24 @@ int cmpxchg_user_u32(uintptr_t dst, uint32_t old, uint32_t value, uint32_t *prev
     return 0;
 }
 
+int get_user_u32_nofault(uint32_t *val, uintptr_t src)
+{
+    if ((src & 3u) != 0 || !user_range_ok(src, 4) || !vm_ready_held(src, 4, 0)) {
+        return -EFAULT;
+    }
+    *val = *(const volatile uint32_t *)src;
+    return 0;
+}
+
+int cmpxchg_user_u32_nofault(uintptr_t dst, uint32_t old, uint32_t value, uint32_t *prev)
+{
+    if ((dst & 3u) != 0 || !user_range_ok(dst, 4) || !vm_ready_held(dst, 4, 1)) {
+        return -EFAULT;
+    }
+    *prev = arch_atomic_cmpxchg((volatile unsigned int *)dst, old, value);
+    return 0;
+}
+
 /**
  * Take the current address space's regions' lock to read for a string's
  * walk, which brings its pages in one at a time and reads each under the
