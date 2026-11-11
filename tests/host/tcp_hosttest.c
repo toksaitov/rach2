@@ -1254,7 +1254,10 @@ static void zero_window_flight_rows(void)
  * window offered and the free space left is less than one unit of the
  * window's scale, so that the window offered is 0, a byte sent at rcv_nxt,
  * as a stack that probes with data sends it, is dropped, as Linux drops
- * it, and acknowledged with the window still closed.
+ * it, and acknowledged with the window still closed. The right edge counts
+ * from the peer's SYN, not from the SYN this side sent before it: a peer
+ * whose first number is 2^31, and one whose window wraps past 0, has its
+ * first data taken.
  */
 static void closed_window_rx_rows(void)
 {
@@ -1278,6 +1281,22 @@ static void closed_window_rx_rows(void)
     CHECK("and acknowledged with the window still closed",
           n_segs == 1 && read32be(segs[0].data + 8) == nxt && read16be(segs[0].data + 14) == 0);
     conn->recv_tail = conn->recv_head;
+
+    reset_all();
+    peer_seq = 0x80000000u;
+    conn = open_conn(&sock, 109, &peer_seq, &lport);
+    got = delivered_bytes;
+    rx(109, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, "x", 1);
+    CHECK("a peer whose first number is 2^31 has its first byte taken",
+          delivered_bytes == got + 1 && conn->rcv_nxt == peer_seq + 1u);
+
+    reset_all();
+    peer_seq = 0xfffffff0u;
+    conn = open_conn(&sock, 110, &peer_seq, &lport);
+    got = delivered_bytes;
+    rx(110, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, "0123456789abcdefghijklmnopqrstuv", 32);
+    CHECK("and one whose window wraps past 0 its first 32 bytes, across the wrap",
+          delivered_bytes == got + 32 && conn->rcv_nxt == peer_seq + 32u);
 }
 
 /**

@@ -266,13 +266,16 @@ static uint32_t tcp_rcv_window(const struct tcb *tcb)
 }
 
 /**
- * The window field of a segment about to be sent: the window shifted by the
- * connection's scale, except in a SYN, whose field is never scaled (RFC
- * 7323). The right edge the field offers moves `rcv_adv` forward, never
- * back, past SYN_SENT, where `rcv_nxt` is not yet known.
+ * The window field of a segment of `flags` about to be sent: the window
+ * shifted by the connection's scale, except in a SYN, whose field is never
+ * scaled (RFC 7323). The right edge the field offers moves `rcv_adv`
+ * forward, never back, in a segment that carries an ACK, since only those
+ * follow the peer's SYN, which `rcv_nxt` is taken from: the SYN of an
+ * active open records nothing, as Linux takes rcv_wup from the peer's SYN.
  */
-static uint16_t tcp_wnd_field(struct tcb *tcb, int syn)
+static uint16_t tcp_wnd_field(struct tcb *tcb, uint8_t flags)
 {
+    int syn = (flags & TCP_SYN) != 0;
     uint32_t field = syn ? tcb->rcv_wnd : tcb->rcv_wnd >> tcb->rcv_wscale;
     uint32_t edge;
 
@@ -280,7 +283,7 @@ static uint16_t tcp_wnd_field(struct tcb *tcb, int syn)
         field = TCP_WINDOW_SIZE;
     }
     edge = tcb->rcv_nxt + (syn ? field : field << tcb->rcv_wscale);
-    if (tcb->state != TCP_SYN_SENT && (!tcb->rcv_adv_set || (int32_t)(edge - tcb->rcv_adv) > 0)) {
+    if ((flags & TCP_ACK) && (!tcb->rcv_adv_set || (int32_t)(edge - tcb->rcv_adv) > 0)) {
         tcb->rcv_adv = edge;
         tcb->rcv_adv_set = 1;
     }
@@ -719,7 +722,7 @@ static int tcp_emit_flags(struct tcb *tcb, uint8_t flags, uint32_t seq)
     write32be(tcp_tx_buf + 8, (flags & TCP_ACK) ? tcb->rcv_nxt : 0);
     tcp_tx_buf[12] = (uint8_t)((hdr_len >> 2) << 4);
     tcp_tx_buf[13] = flags;
-    write16be(tcp_tx_buf + 14, tcp_wnd_field(tcb, flags & TCP_SYN));
+    write16be(tcp_tx_buf + 14, tcp_wnd_field(tcb, flags));
     write16be(tcp_tx_buf + 16, 0);
     write16be(tcp_tx_buf + 18, 0);
 
@@ -988,7 +991,7 @@ static int tcp_output(struct tcb *tcb)
         write32be(tcp_tx_buf + 8, tcb->rcv_nxt);
         tcp_tx_buf[12] = (uint8_t)((TCP_HDR_SIZE >> 2) << 4);
         tcp_tx_buf[13] = TCP_ACK | TCP_PSH;
-        write16be(tcp_tx_buf + 14, tcp_wnd_field(tcb, 0));
+        write16be(tcp_tx_buf + 14, tcp_wnd_field(tcb, TCP_ACK));
         write16be(tcp_tx_buf + 16, 0);
         write16be(tcp_tx_buf + 18, 0);
 
@@ -1061,7 +1064,7 @@ static int tcp_resend(struct tcb *tcb, uint32_t seq, uint32_t most)
     write32be(tcp_tx_buf + 8, tcb->rcv_nxt);
     tcp_tx_buf[12] = (uint8_t)((TCP_HDR_SIZE >> 2) << 4);
     tcp_tx_buf[13] = TCP_ACK | TCP_PSH;
-    write16be(tcp_tx_buf + 14, tcp_wnd_field(tcb, 0));
+    write16be(tcp_tx_buf + 14, tcp_wnd_field(tcb, TCP_ACK));
     write16be(tcp_tx_buf + 16, 0);
     write16be(tcp_tx_buf + 18, 0);
 
@@ -1496,7 +1499,7 @@ static int tcp_send_byte(struct tcb *tcb, uint32_t seq, uint32_t at)
     write32be(tcp_tx_buf + 8, tcb->rcv_nxt);
     tcp_tx_buf[12] = (uint8_t)((TCP_HDR_SIZE >> 2) << 4);
     tcp_tx_buf[13] = TCP_ACK;
-    write16be(tcp_tx_buf + 14, tcp_wnd_field(tcb, 0));
+    write16be(tcp_tx_buf + 14, tcp_wnd_field(tcb, TCP_ACK));
     write16be(tcp_tx_buf + 16, 0);
     write16be(tcp_tx_buf + 18, 0);
     tcp_tx_buf[TCP_HDR_SIZE] = tcb->send_buf[at & (TCP_RING_SIZE - 1)];
