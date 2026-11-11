@@ -1526,9 +1526,11 @@ static void park_listener(struct dma_fence *fence, struct dma_fence_cb *cb)
  * 80-47: the GT parks when Linux 6.12's would on Haswell, whose ring
  * submission gives each engine one timeline: once every engine's requests
  * are retired, which happens at once only when an engine's last request
- * signals to a listener, and otherwise at the retire worker's pass, a
- * second after the unpark. Here, requests no one waits for: a client's
- * next request finds the GT awake, with no park and unpark between them.
+ * signals to a listener, and otherwise at the retire worker's pass, on
+ * the first whole second after a second from the unpark, as Linux's
+ * round_jiffies_up_relative(HZ). Here, requests no one waits for: a
+ * client's next request finds the GT awake, with no park and unpark
+ * between them.
  */
 static void row_park_unwatched(void)
 {
@@ -1537,7 +1539,8 @@ static void row_park_unwatched(void)
     struct i915_engine *rcs = &i915->gt.engine[I915_RCS0];
     struct intel_context *r = engine_of(&file_a, 0, I915_RCS0);
     struct i915_request *rq;
-    int p, u;
+    uint64_t at;
+    int n, p, u;
 
     rq = submit(r, 0, 0);
     run_ms(1);
@@ -1554,10 +1557,16 @@ static void row_park_unwatched(void)
     (void)i915_submit_work();
     CHECK("park: the retire worker does not pass before its second",
           i915->gt.awake && rcs->unretired);
-    run_ms(1000);
-    (void)i915_submit_work();
-    CHECK("park: its pass a second after the unpark retires the engine and parks the GT",
+    for (n = 0; n < 2100 && i915->gt.awake; n++) {
+        run_ms(1);
+        (void)i915_submit_work();
+    }
+    at = rtc_ticks_now();
+    CHECK("park: its pass retires the engine and parks the GT",
           !i915->gt.awake && parks == p + 1 && !rcs->requests && !rcs->unretired);
+    CHECK("park: on the first whole second after a second from the unpark",
+          at % 1000u == 0 && at - i915->gt.unpark_ticks > 1000u &&
+              at - i915->gt.unpark_ticks <= 2000u);
     i915_request_put(rq);
     intel_context_put(r);
     done(&m);
@@ -1662,7 +1671,7 @@ static void row_park_building(void)
     p = parks;
     CHECK("park: a request being built",
           err == 0 && rcs->reserved != 0 && rcs->building && i915->gt.awake);
-    run_ms(1001);
+    run_ms(2001);
     (void)i915_submit_work();
     CHECK("park: holds the GT awake past the worker's pass", i915->gt.awake && parks == p);
     CHECK("park: and once added and waited for, parks it",

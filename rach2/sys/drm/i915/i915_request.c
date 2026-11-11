@@ -58,8 +58,9 @@
  * signal, Linux's CONFIG_DRM_I915_MAX_REQUEST_BUSYWAIT, 8000 ns. */
 #define I915_BUSYWAIT_US 8u
 
-/* How often the retire worker passes while the GT is awake, as Linux's
- * retire_work_handler queues itself round_jiffies_up_relative(HZ) on. */
+/* The second the retire worker's pass is rounded to while the GT is
+ * awake, as Linux's retire_work_handler queues itself
+ * round_jiffies_up_relative(HZ) on (`retire_deadline`). */
 #define I915_RETIRE_INTERVAL_MS 1000u
 
 /* The room a request is given in its ring before it begins, which holds
@@ -102,6 +103,22 @@ static wait_queue_t submit_wait;
 static volatile int retire_kicked;
 
 static void retire_work(void);
+
+/**
+ * The tick of the retire worker's next pass from the tick `now`: the first
+ * whole second after a second from now, 1 to 2 s on, as Linux's
+ * round_jiffies_up_relative(HZ) rounds it up on the first processor
+ * (gt/intel_gt_requests.c:210-211 and 227-228; kernel/time/timer.c:
+ * 349-377, whose rounding up adds a second even to a whole one).
+ */
+static uint64_t retire_deadline(uint64_t now)
+{
+    uint32_t sec = MS_TO_TICKS(I915_RETIRE_INTERVAL_MS), rem;
+    uint64_t at = now + sec;
+
+    (void)tick_div(at, sec, &rem);
+    return at - rem + sec;
+}
 
 /** Whether a fence's error keeps a request that waits for it from running,
  * as Linux's fatal_error: any but -EAGAIN, an innocent request's in a
@@ -766,12 +783,12 @@ void i915_gt_retire_requests(struct drm_i915_private *i915)
 
 /**
  * The retire worker, Linux's retire_work_handler and engine_retire: on
- * each device whose GT is awake, the pass of every engine once a second,
- * and the requests of an engine whose last request signalled to a
- * listener at once. Until then the GT stays awake between a client's
- * requests, as on Linux, where each request holds its engine, and the
- * engine the GT, until it retires; RC6 and RPS's down interrupts lower its
- * power meanwhile. In the worker, or a host test's call of
+ * each device whose GT is awake, the pass of every engine at
+ * `retire_deadline`, and the requests of an engine whose last request
+ * signalled to a listener at once. Until then the GT stays awake between
+ * a client's requests, as on Linux, where each request holds its engine,
+ * and the engine the GT, until it retires; RC6 and RPS's down interrupts
+ * lower its power meanwhile. In the worker, or a host test's call of
  * `i915_submit_work`.
  */
 static void retire_work(void)
@@ -792,7 +809,7 @@ static void retire_work(void)
             continue;
         }
         if (now >= i915->gt.retire_next) {
-            i915->gt.retire_next = now + MS_TO_TICKS(I915_RETIRE_INTERVAL_MS);
+            i915->gt.retire_next = retire_deadline(now);
             i915_gt_retire_requests(i915);
         } else if (kicked) {
             i915_retire_requests(i915);
@@ -1071,7 +1088,7 @@ static int32_t request_new(struct intel_context *ce, struct i915_request **out)
     if (!i915->gt.awake) {
         i915->gt.awake = 1;
         i915->gt.unpark_ticks = rtc_ticks_now();
-        i915->gt.retire_next = i915->gt.unpark_ticks + MS_TO_TICKS(I915_RETIRE_INTERVAL_MS);
+        i915->gt.retire_next = retire_deadline(i915->gt.unpark_ticks);
         i915_gt_unpark(i915);
         /* The worker beats while the GT is awake. */
         i915_hangcheck_unpark(i915);
