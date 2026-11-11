@@ -3,7 +3,7 @@
 # the user gfx, whose sudo asks no password: a picture drawn through the
 # guest's virtio-gpu and checked there, and its rate.
 #
-#   scene.sh virgl|venus [-o OUT] [-r REF]
+#   scene.sh virgl|venus [-o OUT] [-r REF] [-M SCENE [-t SECONDS]]
 #
 # `virgl` builds triangle.c, bed/fixture's, with the guest's GCC and draws
 # the triangle on the guest's llvmpipe and then on its GPU; it passes when
@@ -21,6 +21,12 @@
 # sum depends on the GPU that draws it, so another host's run names the
 # frames that Debian in Rach2's place drew there; REF `none` records the
 # frames without judging them, which is how that reference is taken.
+#
+# With -M the profile's check gives way to the test bed's measurement
+# harness, measure/ beside this file: its SCENE, glmark2 or webgl, which the
+# guest's packages have, SECONDS long, as the rung forward-PROFILE; under
+# venus, GL goes through Zink on Venus's ICD. Its line is printed as
+# `bed-forward: figure: LINE`.
 #
 # Beside this file in the guest are triangle.c, guest-env.sh, and for venus
 # runners/, the graphics tests' runners, and vkcube.ref. OUT, /tmp/out by
@@ -43,16 +49,19 @@ die()
     exit 1
 }
 
-usage='usage: scene.sh virgl|venus [-o OUT] [-r REF]'
+usage='usage: scene.sh virgl|venus [-o OUT] [-r REF] [-M SCENE [-t SECONDS]]'
 [ $# -ge 1 ] || die "$usage"
 profile=$1
 shift
 out=/tmp/out
 ref=$here/vkcube.ref
-while getopts o:r: o; do
+measure='' seconds=10
+while getopts o:r:M:t: o; do
     case $o in
         o) out=$OPTARG ;;
         r) ref=$OPTARG ;;
+        M) measure=$OPTARG ;;
+        t) seconds=$OPTARG ;;
         *) die "$usage" ;;
     esac
 done
@@ -150,6 +159,19 @@ venus()
     echo "bed-forward: result: pass: venus: $device; ${line#vkcube: result: }"
 }
 
+# measure_scene: the harness's scene `measure` on this profile's device.
+measure_scene()
+{
+    [ "$profile" != venus ] || export MESA_LOADER_DRIVER_OVERRIDE=zink VK_DRIVER_FILES=$ICD
+    MEASURE_RUNNERS=$here/runners sh "$here/measure/measure.sh" -r "forward-$profile" -t "$seconds" -o "$out/measure" "$measure" \
+        > "$out/measure.log" 2>&1 || die "the harness's $measure failed: $(last "$out/measure.log")"
+    sed 's/^/bed-forward: figure: /' "$out/measure.log"
+    echo "bed-forward: result: pass: $profile: $(tail -n 1 "$out/measure.log")"
+}
+
+case $profile in
+    virgl | venus) [ -z "$measure" ] || { measure_scene; exit 0; } ;;
+esac
 case $profile in
     virgl) virgl ;;
     venus) venus ;;

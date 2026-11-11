@@ -5,8 +5,8 @@
 # scene.sh inside it and report what it drew.
 #
 # Usage: forward.sh [-a ACCEL] [-c CPUS] [-m MIB] [-p PORT] [-w SECONDS]
-#                   [-o OUT] [-f FORMAT] [-r REF] -d DISK -k KEY -g FILES
-#                   virgl|venus
+#                   [-o OUT] [-f FORMAT] [-r REF] [-M SCENE [-t SECONDS]]
+#                   -d DISK -k KEY -g FILES virgl|venus
 #
 # DISK is the guest's disk, the Debian reference guest's image as a device or
 # file in QEMU's FORMAT, raw by default, or qcow2 for the image file itself;
@@ -20,6 +20,8 @@
 # as out.tar. REF is for venus: a frames file of vkcube.sh that the scene
 # judges vkcube's frames by in place of the archive's vkcube.ref, copied into
 # the guest, or `none`, which records the frames without judging them.
+# SCENE, with SECONDS, has scene.sh run the test bed's measurement harness
+# on the profile's device in place of its check (scene.sh -M).
 #
 # DISK is opened with QEMU's snapshot=on: the guest's writes go to a
 # temporary overlay, a file without a name on OUT's file system, which is
@@ -58,15 +60,18 @@
 # on a failure and 2 on a usage error.
 
 accel=kvm cpus=4 mib=4096 port=2222 silence=600 out=. format=raw ref='' disk='' key='' files=''
+measure='' seconds=''
 usage()
 {
     echo "usage: forward.sh [-a ACCEL] [-c CPUS] [-m MIB] [-p PORT] [-w SECONDS]" >&2
-    echo "                  [-o OUT] [-f FORMAT] [-r REF] -d DISK -k KEY -g FILES" >&2
-    echo "                  virgl|venus" >&2
+    echo "                  [-o OUT] [-f FORMAT] [-r REF] [-M SCENE [-t SECONDS]]" >&2
+    echo "                  -d DISK -k KEY -g FILES virgl|venus" >&2
     exit 2
 }
-while getopts a:c:m:p:w:o:f:r:d:k:g: o; do
+while getopts a:c:m:p:w:o:f:r:M:t:d:k:g: o; do
     case $o in
+        M) measure=$OPTARG ;;
+        t) seconds=$OPTARG ;;
         a) accel=$OPTARG ;;
         c) cpus=$OPTARG ;;
         m) mib=$OPTARG ;;
@@ -191,7 +196,8 @@ esac
 # The scene runs beside the watch on its output, so that a guest that stops
 # is found by its silence.
 (
-    guest "sh /tmp/forward/scene.sh $profile -o /tmp/out$scene_ref" > "$out/scene.log" 2>&1
+    guest "sh /tmp/forward/scene.sh $profile -o /tmp/out$scene_ref${measure:+ -M $measure}${seconds:+ -t $seconds}" \
+        > "$out/scene.log" 2>&1
     echo $? > "$out/scene.status"
 ) &
 scene=$!

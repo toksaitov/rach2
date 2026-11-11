@@ -1190,9 +1190,12 @@ build/tests/cases/bed-vtest/bed-vtest.ext2: $(BED_VTEST_FILES)
 # That script prepares the reference guest first where this clone's cache has
 # none, a download of some 440 MiB and a few minutes of apt.
 BED_FORWARD_DIR = build/tests/cases/bed-forward
-BED_FORWARD_RUNNERS = $(addprefix tests/graphics/runners/,vkcube.sh common.sh vkhold.c frame.py)
+BED_FORWARD_RUNNERS = $(addprefix tests/graphics/runners/,vkcube.sh common.sh vkhold.c frame.py \
+                          server.py events.py piglit.sh games.sh)
+BED_MEASURE = $(addprefix bed/measure/,measure.sh latency.c webgl.html piglit.txt)
 BED_FORWARD_SCENES = bed/forward/scene.sh bed/fixture/triangle.c tests/graphics/guest-env.sh \
-                     tests/graphics/ref/venus-wsl/vkcube/frames.out $(BED_FORWARD_RUNNERS)
+                     tests/graphics/ref/venus-wsl/vkcube/frames.out $(BED_FORWARD_RUNNERS) \
+                     $(BED_MEASURE)
 $(BED_FORWARD_DIR)/guest.qcow2: bed/forward/guest.sh vendor/gnu/debian/venus.list \
                                 $(addprefix tests/graphics/debian-ref/,debian-ref.sh image packages \
                                     setup.sh.in user-data.in meta-data network-config)
@@ -1203,10 +1206,11 @@ $(BED_FORWARD_DIR)/guest.tar: $(BED_FORWARD_SCENES)
 	trap '[ -z "$$work" ] || rm -rf "$$work"; rm -f "$@.tmp"' EXIT; \
 	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; \
 	mkdir -p build/tmp $(BED_FORWARD_DIR); work=$$(mktemp -d build/tmp/bed-forward.XXXXXX); \
-	mkdir -p "$$work/runners"; \
+	mkdir -p "$$work/runners" "$$work/measure"; \
 	cp bed/forward/scene.sh bed/fixture/triangle.c tests/graphics/guest-env.sh "$$work/"; \
 	cp tests/graphics/ref/venus-wsl/vkcube/frames.out "$$work/vkcube.ref"; \
 	cp $(BED_FORWARD_RUNNERS) "$$work/runners/"; \
+	cp $(BED_MEASURE) "$$work/measure/"; \
 	tar -cf $@.tmp -C "$$work" .; \
 	mv $@.tmp $@
 $(BED_FORWARD_DIR)/forward.ext2: bed/forward/forward.sh $(BED_FORWARD_DIR)/guest.tar $(BED_FORWARD_DIR)/id_ed25519
