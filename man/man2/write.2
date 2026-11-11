@@ -103,8 +103,8 @@ when
 .Dv TOSTOP
 is set: the write posts the signal to its process group and returns
 .Er EINTR .
-If the signal is blocked or ignored, the write goes ahead, and in an
-orphaned process group it fails with
+If the signal is blocked or ignored, the write goes ahead.
+Otherwise, in an orphaned process group, it fails with
 .Er EIO ,
 as on Linux.
 .Ss Sockets
