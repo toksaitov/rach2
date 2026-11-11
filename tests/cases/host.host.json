@@ -1516,6 +1516,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "watchdog_nmi",
+          "checks": "tests/host/watchdog_nmi_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "wcrypto",
           "checks": "tests/host/wcrypto_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
