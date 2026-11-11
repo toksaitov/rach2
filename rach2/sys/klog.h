@@ -71,6 +71,38 @@ void klog(int level, const char *subsystem, const char *format, ...);
 /** As `klog`, with the arguments in `ap`, which the call consumes. */
 void klog_v(int level, const char *subsystem, const char *format, va_list ap);
 
+/* Where `klog_report_begin` sends a report: the ring and the serial port,
+ * under the report lock; the ring alone, when this processor holds that
+ * lock already, as an interrupt of its holder does, or another held it
+ * longer than KLOG_REPORT_WAIT_MS; or both without the lock, in a panic
+ * that found it held by a processor it stopped. */
+#define KLOG_REPORT_LOCKED 1
+#define KLOG_REPORT_RING   0
+#define KLOG_REPORT_PANIC  2
+
+/* The longest a report waits for the report lock. The holder may be an
+ * ordinary record's write to a port that has stopped draining, or may be
+ * interrupted by a handler that spins on a spinlock the reporter holds. */
+#define KLOG_REPORT_WAIT_MS 100UL
+
+/**
+ * Begin a report that cannot wait for the big lock, the lock-order
+ * checker's: its records go to the ring at once, from any processor, and
+ * to the serial port under klog's report lock, which a record written to
+ * the port by the usual path also holds, so that two never mix. The screen
+ * and netconsole, which the big lock guards, do not have them, nor
+ * ramoops's console. Interrupts are off from the begin to
+ * `klog_report_end`, and the caller takes no lock in between. Returns a
+ * KLOG_REPORT_ number, for `klog_report` and `klog_report_end`.
+ */
+int klog_report_begin(void);
+
+/** Make one record of the report `how` began, as `klog` makes one. */
+void klog_report(int how, int level, const char *subsystem, const char *format, ...);
+
+/** End the report `how` began. */
+void klog_report_end(int how);
+
 /** Write out the records kept for later, oldest first, when this processor
  * may (`smp_serialized`) and no other is writing them out for it
  * (`klog_flush_stuck`), after the records a delivery the panic stopped left
