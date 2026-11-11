@@ -74,13 +74,23 @@ void k_panic_begin(void);
  * instruction it was raised at; and `error`, its error code, or
  * PANIC_NO_ERROR for an exception that has none. `k_panic_note_address`
  * adds the address it was about, CR2 for a page fault. From the handler,
- * with interrupts off, before `k_panic`.
+ * with interrupts off, before `k_panic`. The note is the calling
+ * processor's, and the report shows the owner's alone.
  */
 void k_panic_note_fault(const char *name, uintptr_t ip, long error);
 void k_panic_note_address(uintptr_t address);
 
 /** Whether this processor has begun a panic. */
 int k_panicking(void);
+
+/**
+ * Whether this processor's panic is reading the running process for its
+ * report. A fault handler tests it before it reads `current_proc` itself,
+ * since the record may be what the fault is about, and panics at once
+ * when it is set; that panic reports the first one's reason and leaves the
+ * process out.
+ */
+int k_panic_reading(void);
 
 /**
  * Called by `k_panic_begin` on the processor that panics, and by a stop on

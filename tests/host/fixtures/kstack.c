@@ -15,7 +15,8 @@
  * without (`kalloc_pages`), and records which a stack came from and went
  * back to: a stack must be a guarded run, since the guard is what turns an
  * overrun into a fault. `kstack_overrun_pid` must name the running thread
- * for an address in the page below its stack and for no other. The boot
+ * for an address in the page below its stack and for no other, and answer
+ * without reading it while the panic reads the running process. The boot
  * stack is the kernel image's, and `kstack_free` must give nothing back for
  * its top, which a record reaches when a thread of a program on the boot
  * stack calls execve and the leader's record goes; the heap here frees only
@@ -50,6 +51,16 @@ void *kalloc_guarded(uint32_t count);
 void kfree_guarded(void *pages, uint32_t count);
 void *k_memset(void *dst, int c, size_t n);
 int kstack_overrun_pid(uintptr_t addr);
+int k_panic_reading(void);
+
+/* Whether `k_panic_reading` says the panic reads the running process. */
+static int panic_reading;
+
+/** What `panic_reading` says. */
+int k_panic_reading(void)
+{
+    return panic_reading;
+}
 
 #include "kstack.inc"
 
@@ -166,6 +177,11 @@ static void overrun_rows(void)
           "a thread with no stack gives none, even at the guard its zero top would wrap to");
     current_proc = NULL;
     check(kstack_overrun_pid(0xC0101000u) == -1, "no running thread gives none");
+    current_proc = &thread;
+    panic_reading = 1;
+    check(kstack_overrun_pid(0xC0101000u) == -1,
+          "while the panic reads the process, its guard gives none, unread");
+    panic_reading = 0;
 }
 
 /** Run the rows: 0 when every row passes, 1 otherwise. */

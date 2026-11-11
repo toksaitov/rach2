@@ -134,13 +134,16 @@ void kstack_free(uintptr_t top)
  * it gives, or the one loader.s leaves below the boot stack, which process
  * 0, the first program and the programs the debug shell starts run on. The
  * double fault's handler and the page fault's call this with the address
- * the processor left in CR2.
+ * the processor left in CR2. It answers -1 without reading the process
+ * while the panic reads it (`k_panic_reading`), since a fault there may be
+ * about the process's record.
  */
 int kstack_overrun_pid(uintptr_t addr)
 {
     uintptr_t guard;
 
-    if (!current_proc || current_proc->kernel_stack < KERNEL_STACK_SIZE + PAGE_SIZE) {
+    if (k_panic_reading() || !current_proc ||
+        current_proc->kernel_stack < KERNEL_STACK_SIZE + PAGE_SIZE) {
         return -1;
     }
     guard = current_proc->kernel_stack - KERNEL_STACK_SIZE - PAGE_SIZE;
