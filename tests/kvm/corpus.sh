@@ -26,7 +26,7 @@
 #   its own; exit 0 is a pass and 4, kselftest's code, a skip.
 #
 # The copy and the directories are under TMPDIR, /tmp by default, and are
-# removed on every exit; a unit run sets kernel.nmi_watchdog to 0 and puts it
+# removed on every exit; kernel.nmi_watchdog reads 0 for the run and is put
 # back on every exit. Each test's line is `kvm-corpus: NAME: RESULT`, with
 # `as expected` or `expected EXPECT` after it, and a kvm-unit-test's own log
 # on standard error after the second, and each excluded one's
@@ -117,14 +117,16 @@ excluded=$(awk '$2 == "excluded"' "$work/list" | wc -l | tr -d ' ')
 
 # results: write NAME RESULT a line to $work/got, RESULT pass, skip or fail.
 : > "$work/got"
+# The hard-lockup detector holds a counter, which the PMU tests count on
+# having: kvm-unit-tests' `pmu` and `pmu_lbr` require kernel.nmi_watchdog to
+# read 0, as their configuration checks, and `pmu_counters_test` uses every
+# general counter. It reads 0 for the run and its value comes back on every
+# exit.
+if read -r w < /proc/sys/kernel/nmi_watchdog 2> /dev/null && [ "$w" != 0 ] &&
+    echo 0 2> /dev/null > /proc/sys/kernel/nmi_watchdog; then
+    watchdog=$w
+fi
 if [ "$kind" = unit ]; then
-    # `pmu` and `pmu_lbr` require kernel.nmi_watchdog to read 0, as their
-    # configuration checks, since the hard-lockup detector holds a counter;
-    # it reads 0 for the run and its value comes back on every exit.
-    if read -r w < /proc/sys/kernel/nmi_watchdog 2> /dev/null && [ "$w" != 0 ] &&
-        echo 0 2> /dev/null > /proc/sys/kernel/nmi_watchdog; then
-        watchdog=$w
-    fi
     cp -R "$tree" "$work/kut" || exit 1
     # shellcheck disable=SC2046 # one word a test
     (cd "$work/kut" && ACCEL=kvm,kernel-irqchip=split TIMEOUT=0 \
