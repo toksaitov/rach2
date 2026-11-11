@@ -1,9 +1,10 @@
 /**
  * drmfuzz: random ioctls on the display stack's device nodes from an
  * ordinary user, for a fixed count, with the kernel's own records of the run
- * and its heap read after.
+ * and its heap read after; or on /dev/kvm, a VM and a vCPU.
  *
  *   drmfuzz [COUNT [SEED [TRACE]]]
+ *   drmfuzz kvm [COUNT [SEED [TRACE]]]
  *
  * As root, the parent opens every node 76 brings that exists: the DRM cards
  * and render nodes, /dev/udmabuf, the evdev nodes and sw_sync's debugfs
@@ -46,6 +47,21 @@
  * for the case ETUDE_CASE names, has the assertions `open` (a node opened),
  * `calls` (the child made them all and exited by itself) and `records` (no
  * fault recorded). Freestanding; direct system calls (probe.h).
+ *
+ * With `kvm`, the only node is /dev/kvm, which an ordinary user opens. The
+ * child, as nobody, makes a VM with a memory slot of 64 KiB at guest address
+ * 0 over pages of HLT and a vCPU, which the calls never close, and the
+ * ioctls are KVM's, type 0xAE: three in four with the number of one of the
+ * interface's ioctls, the rest with a random number, direction and size.
+ * KVM_SET_SIGNAL_MASK is not among the first, since a mask that blocks the
+ * timer's signal lets a guest that never exits hold KVM_RUN, as on Linux.
+ * The parent reads /proc/stat's live KVM counts (`kvm_vms` to
+ * `kvm_gpa_map_pages`) before the fork and after the child is reaped, prints
+ *
+ *   drmfuzz: kvm: before V C S T R G P after V C S T R G P
+ *
+ * and fails the run, and the case's assertion `leak`, when any differs. The
+ * default case is machine.kvm.fuzz.
  */
 
 #include "probe.h"
@@ -97,6 +113,43 @@ static int fds[FDS_MAX], nfds, nodes;
 #define MAP_BYTES (ARG_SIZE + BUF_SIZE + POOL * BUF_SIZE + BUF_SIZE)
 static unsigned char *arg, *pool[POOL], *guard;
 static char text[16384];
+
+/* `drmfuzz kvm`: the node is /dev/kvm and the ioctls are KVM's. */
+static int kvm_mode;
+
+/* KVM's ioctl numbers, built as <linux/kvm.h> builds them: the direction
+ * (1 write, 2 read), the argument's size, type 0xAE and the number. */
+#define KVMIO 0xAEu
+#define K(dir, nr, size) \
+    ((unsigned long)(dir) << 30 | (unsigned long)(size) << 16 | KVMIO << 8 | (nr))
+#define KVM_CREATE_VM              K(0, 0x01, 0)
+#define KVM_CREATE_VCPU            K(0, 0x41, 0)
+#define KVM_SET_USER_MEMORY_REGION K(1, 0x46, 32)
+
+/* Each ioctl of rach2/sys/kvm/kvm_abi.h but KVM_SET_SIGNAL_MASK: the
+ * system's, the VM's, the devices' and the vCPU's. */
+static const unsigned long kvm_cmds[] = {
+    K(0, 0x00, 0),    K(0, 0x01, 0),    K(3, 0x02, 4),   K(0, 0x03, 0),    K(0, 0x04, 0),
+    K(3, 0x05, 8),    K(3, 0x09, 8),    K(3, 0x0A, 4),   K(2, 0x9D, 8),    K(3, 0xC1, 8),
+    K(0, 0x41, 0),    K(1, 0x42, 16),   K(0, 0x44, 0),   K(0, 0x45, 0),    K(1, 0x46, 32),
+    K(0, 0x47, 0),    K(1, 0x48, 8),    K(1, 0x49, 160), K(0, 0x60, 0),    K(1, 0x61, 8),
+    K(3, 0x62, 520),  K(2, 0x63, 520),  K(0, 0x64, 0),   K(3, 0x65, 72),   K(2, 0x66, 72),
+    K(3, 0x67, 8),    K(1, 0x67, 16),   K(1, 0x68, 16),  K(1, 0x6A, 8),    K(0, 0x71, 0),
+    K(1, 0x76, 32),   K(1, 0x77, 64),   K(0, 0x78, 0),   K(1, 0x79, 64),   K(1, 0x7B, 48),
+    K(2, 0x7C, 48),   K(2, 0x9F, 112),  K(1, 0xA0, 112), K(1, 0xA3, 104),  K(1, 0xA5, 32),
+    K(1, 0xBD, 24),   K(3, 0xC0, 24),   K(3, 0xE0, 12),  K(0, 0xCE, 0),    K(1, 0xE1, 24),
+    K(1, 0xE2, 24),   K(1, 0xE3, 24),   K(0, 0x80, 0),   K(2, 0x81, 144),  K(1, 0x82, 144),
+    K(2, 0x83, 312),  K(1, 0x84, 312),  K(3, 0x85, 24),  K(1, 0x86, 4),    K(3, 0x88, 8),
+    K(1, 0x89, 8),    K(2, 0x8C, 416),  K(1, 0x8D, 416), K(2, 0x8E, 1024), K(1, 0x8F, 1024),
+    K(1, 0x90, 8),    K(3, 0x91, 8),    K(1, 0x93, 8),   K(2, 0x98, 4),    K(1, 0x99, 4),
+    K(0, 0x9A, 0),    K(0, 0xA2, 0),    K(0, 0xA3, 0),   K(1, 0x9B, 72),   K(1, 0x9C, 8),
+    K(1, 0x9E, 64),   K(2, 0x9F, 64),   K(1, 0xA0, 64),  K(2, 0xA1, 128),  K(1, 0xA2, 128),
+    K(2, 0xA4, 4096), K(1, 0xA5, 4096), K(2, 0xA6, 392), K(1, 0xA7, 392),  K(0, 0xAD, 0),
+    K(3, 0xD5, 64)};
+
+/* The guest memory of the child's VM: 64 KiB of HLT, so that a vCPU sent
+ * into it exits at once. */
+#define KVM_SLOT_BYTES 65536
 
 struct k_sigaction {
     void (*handler)(int);
@@ -261,11 +314,16 @@ static void open_numbered(const char *prefix, unsigned n)
     open_node(path);
 }
 
-/** Open every node of 76's that exists and the caller may open. */
+/** Open every node of 76's that exists and the caller may open, or
+ * /dev/kvm alone in KVM's mode. */
 static void open_nodes(void)
 {
     unsigned i;
 
+    if (kvm_mode) {
+        open_node("/dev/kvm");
+        return;
+    }
     for (i = 0; i < 8; i++) {
         open_numbered("/dev/dri/card", i);
         open_numbered("/dev/dri/renderD", 128 + i);
@@ -373,11 +431,20 @@ static long bad_address(void)
  * and size, the number most often among those the type's decoders take. */
 static unsigned long command(void)
 {
+    static const unsigned short kvm_sizes[] = {0,  4,   8,   12,  16,  24,  32,  48,  64,
+                                               72, 104, 112, 144, 160, 312, 392, 416, 520};
     static const unsigned char types[] = {'d', 'd', 'd', 'E', '>', 'b', 'W', 'u'};
     static const unsigned short sizes[] = {0,  4,  8,  12, 16, 24, 32,  36,  40,
                                            48, 56, 64, 68, 72, 80, 104, 128, 256};
     unsigned type = types[below(sizeof(types))], nr, size, dir = below(4);
 
+    if (kvm_mode) {
+        if (below(4) != 0) {
+            return kvm_cmds[below(sizeof(kvm_cmds) / sizeof(kvm_cmds[0]))];
+        }
+        size = kvm_sizes[below(sizeof(kvm_sizes) / sizeof(kvm_sizes[0]))];
+        return (unsigned long)dir << 30 | (unsigned long)size << 16 | KVMIO << 8 | below(0x100);
+    }
     switch (type) {
     case 'd':
         nr = below(4) == 0 ? below(0x40) : 0xA0 + below(0x40);
@@ -483,6 +550,54 @@ static void step(void)
     find_new();
 }
 
+/* KVM_SET_USER_MEMORY_REGION's argument. */
+struct kvm_region {
+    unsigned slot, flags;
+    unsigned long long guest_phys_addr, memory_size, userspace_addr;
+};
+
+/** Make a VM of the /dev/kvm the child opened, with a slot over 64 KiB of
+ * HLT and a vCPU, and keep both among the nodes, which no call closes. */
+static void kvm_setup(void)
+{
+    struct kvm_region r;
+    long mem, vm, vcpu;
+    int i, sys = -1;
+
+    for (i = 0; i < nfds; i++) {
+        if (syscall3(SYS_IOCTL, fds[i], (long)K(0, 0x00, 0), 0) == 12) {
+            sys = fds[i];
+        }
+    }
+    mem = probe_mmap(0, KVM_SLOT_BYTES, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (sys < 0 || sys_failed(mem)) {
+        probe_line("DRMFUZZ FAIL: ", "nobody could not open /dev/kvm or map the guest's memory", 0);
+        sys_exit(1);
+    }
+    for (i = 0; i < KVM_SLOT_BYTES; i++) {
+        ((unsigned char *)mem)[i] = 0xF4;
+    }
+    vm = syscall3(SYS_IOCTL, sys, (long)KVM_CREATE_VM, 0);
+    r.slot = 0;
+    r.flags = 0;
+    r.guest_phys_addr = 0;
+    r.memory_size = KVM_SLOT_BYTES;
+    r.userspace_addr = (unsigned long long)(unsigned long)mem;
+    if (vm < 0 || syscall3(SYS_IOCTL, vm, (long)KVM_SET_USER_MEMORY_REGION, (long)&r) < 0) {
+        probe_line("DRMFUZZ FAIL: ", "nobody could not make a VM with a memory slot", 0);
+        sys_exit(1);
+    }
+    vcpu = syscall3(SYS_IOCTL, vm, (long)KVM_CREATE_VCPU, 0);
+    if (vcpu < 0) {
+        probe_line("DRMFUZZ FAIL: ", "nobody could not make a vCPU", 0);
+        sys_exit(1);
+    }
+    add_fd((int)vm);
+    add_fd((int)vcpu);
+    nodes += 2;
+    probe_line("drmfuzz: node: ", "a VM and a vCPU", " (as nobody)");
+}
+
 /** The child: drop to nobody, open what nobody may, and make the calls;
  * exits 0 having made them all. */
 static void child(unsigned long n)
@@ -499,6 +614,9 @@ static void child(unsigned long n)
         sys_exit(1);
     }
     open_nodes();
+    if (kvm_mode) {
+        kvm_setup();
+    }
     ka.handler = tick;
     /* SA_SIGINFO: i386 gives a handler without it the old frame, which
      * the restorer's rt_sigreturn does not read. */
@@ -566,6 +684,52 @@ static unsigned long heap_objects(void)
         }
     }
     return sum;
+}
+
+static unsigned long number(const char *s, unsigned long def);
+
+/* /proc/stat's live KVM counts, in this order. */
+static const char *const kvm_counts[] = {"kvm_vms",          "kvm_vcpus",        "kvm_slots",
+                                         "kvm_tdp_pages",    "kvm_run_mappings", "kvm_gpa_maps",
+                                         "kvm_gpa_map_pages"};
+#define KVM_COUNTS 7
+
+/** Read /proc/stat's KVM counts into `v`; 0 when a count is missing. */
+static int kvm_live(unsigned long *v)
+{
+    int fd = (int)syscall3(SYS_OPEN, (long)"/proc/stat", 0, 0), k, found = 0;
+    long n, i;
+
+    if (fd < 0) {
+        return 0;
+    }
+    n = syscall3(SYS_READ, fd, (long)text, (long)sizeof(text) - 1);
+    syscall1(SYS_CLOSE, fd);
+    if (n <= 0) {
+        return 0;
+    }
+    text[n] = 0;
+    for (k = 0; k < KVM_COUNTS; k++) {
+        const char *name = kvm_counts[k];
+
+        for (i = 0; i < n; i++) {
+            long j = 0;
+
+            if (i != 0 && text[i - 1] != '\n') {
+                continue;
+            }
+            while (name[j] && text[i + j] == name[j]) {
+                j++;
+            }
+            if (name[j] || text[i + j] != ' ') {
+                continue;
+            }
+            v[k] = number(text + i + j + 1, 0);
+            found++;
+            break;
+        }
+    }
+    return found == KVM_COUNTS;
 }
 
 /** Fail the path's next assertion and the run with `why`. */
@@ -650,6 +814,32 @@ static void count_records(long len, int *faults, int *errors, int *warnings)
     }
 }
 
+/** Print the live KVM counts `before` the fork and now, and fail the run
+ * and the assertion `leak` when any differs. */
+static void kvm_judge(const unsigned long *before)
+{
+    unsigned long after[KVM_COUNTS];
+    int k, leaked = 0;
+
+    if (!kvm_live(after)) {
+        fail("/proc/stat has no KVM counts");
+    }
+    line_add("drmfuzz: kvm: before", 0xFFFFFFFFUL);
+    for (k = 0; k < KVM_COUNTS; k++) {
+        line_add(" ", before[k]);
+    }
+    line_add(" after", 0xFFFFFFFFUL);
+    for (k = 0; k < KVM_COUNTS; k++) {
+        line_add(" ", after[k]);
+        leaked |= after[k] != before[k];
+    }
+    line_end();
+    if (leaked) {
+        fail("a KVM object outlived the child");
+    }
+    report_held();
+}
+
 PROBE_SP_ENTRY;
 
 void probe_main(unsigned long *sp);
@@ -657,24 +847,36 @@ void probe_main(unsigned long *sp);
 /** Open the nodes, run the child and judge what the kernel recorded. */
 void probe_main(unsigned long *sp)
 {
-    char **argv = (char **)(sp + 1);
-    unsigned long n = number(sp[0] > 1 ? argv[1] : 0, 20000);
-    unsigned long before, after;
+    char **argv = (char **)(sp + 1), **env = argv + sp[0] + 1;
+    unsigned long n, before, after, kvm_before[KVM_COUNTS];
+    unsigned long argc = sp[0];
     int status = 0, faults = 0, errors = 0, warnings = 0;
     long pid, len, i;
 
-    state = number(sp[0] > 2 ? argv[2] : 0, 1) * 0x9E3779B97F4A7C15ULL + 1;
-    trace_from = number(sp[0] > 3 ? argv[3] : 0, 0xFFFFFFFFUL);
+    if (argc > 1 && argv[1][0] == 'k' && argv[1][1] == 'v' && argv[1][2] == 'm' && !argv[1][3]) {
+        kvm_mode = 1;
+        argv++;
+        argc--;
+    }
+    n = number(argc > 1 ? argv[1] : 0, 20000);
+    state = number(argc > 2 ? argv[2] : 0, 1) * 0x9E3779B97F4A7C15ULL + 1;
+    trace_from = number(argc > 3 ? argv[3] : 0, 0xFFFFFFFFUL);
     map_region();
-    report_begin(report_case(argv + sp[0] + 1, "guest.dmabuf.drmfuzz"));
+    report_begin(report_case(env, kvm_mode ? "machine.kvm.fuzz" : "guest.dmabuf.drmfuzz"));
     report_plan("open");
     report_plan("calls");
     report_plan("records");
+    if (kvm_mode) {
+        report_plan("leak");
+    }
     open_nodes();
     if (nodes == 0) {
-        fail("no node of the display stack opened");
+        fail(kvm_mode ? "/dev/kvm did not open" : "no node of the display stack opened");
     }
     report_held();
+    if (kvm_mode && !kvm_live(kvm_before)) {
+        fail("/proc/stat has no KVM counts");
+    }
     syscall3(SYS_SYSLOG, SYSLOG_CLEAR, 0, 0);
     before = heap_objects();
     pid = syscall0(SYS_FORK);
@@ -711,6 +913,9 @@ void probe_main(unsigned long *sp)
         fail("the kernel recorded a fault");
     }
     report_held();
+    if (kvm_mode) {
+        kvm_judge(kvm_before);
+    }
     report_end();
     put("DRMFUZZ OK\n");
     sys_exit(0);

@@ -9,6 +9,7 @@ The KVM suite runs Rach2's KVM the way a person uses it: Debian's QEMU on the x8
 * `entry`: the small real-mode guest in `svm-entry.c` reads its memory slot, executes CPUID, reads CR0 and EFER, exits through port I/O and HLT, and reads a replacement frame after MAP_FIXED. It starts with XCR0 at its reset value, which also checks that the backend restores the full XSAVE image before applying the guest's XCR0.
 * `slots`: `svm-entry slots` repeats the read after fork, mprotect, discard and munmap with a replacement page. A guest then counts in another page while the caller forks, protects and replaces the data page; its first counter increment proves it was running before the changes, and it exits only after reading the replacement value. The same case reads VGA memory through a `/dev/mem` slot and the end of a 4 MiB GEM object through another slot, on std-vga.
 * `leak`: `leak.sh` kills QEMU after the Debian guest prints its kernel version. The five live KVM counts and `fs.file-nr` must return to their initial values, QEMU must have no pinned pages before the kill, and its address space must disappear after it is reaped.
+* `fuzz`: `drmfuzz kvm 20000 1`, the ioctl fuzzer of [`tests/drmfuzz.c`](../drmfuzz.c) in its KVM mode: as uid 65534 it opens `/dev/kvm`, makes a VM with a memory slot of 64 KiB of HLT and a vCPU, and makes 20000 random calls of seed 1, three in four of them KVM's own ioctl numbers with random arguments, on them and on the VMs, vCPUs and devices the calls make. It must make every call, the kernel must record no fault, and `/proc/stat`'s seven live KVM counts must be back to their values before once the child is reaped.
 * `boot-debian-kvm` and `boot-rach2-kvm`: Debian and the small i686 Rach2 guest boot under Rach2's SVM on `max-svm`, on Linux and macOS. These boots use the full in-kernel interrupt controller. The Rach2 guest boots with `rach2.tscreliable`, so that its clock and its waits read the TSC and not the HPET, each read of which is an exit to the guest's QEMU. The `-nested` variants run on `host-svm`, on Linux alone.
 * `boot-debian-tcg`: `kvm-boot.sh -a tcg` boots the Debian guest in Rach2's QEMU under TCG to its token.
 * `unit-tests` and `selftests`: `corpus.sh` runs the corpus under Rach2's KVM, on the `max-svm` profile, on Linux and on macOS.
@@ -27,6 +28,7 @@ On a Rach2 with the GNU root, the runners run alone, as root:
     sh kvm-boot.sh -a tcg -d /tmp/i686.img -t 'RACH2 OK'
     sh corpus.sh unit unit-tests.list
     sh corpus.sh selftests selftests.list
+    ./drmfuzz kvm 20000 1
     sh bed-shm.sh -d /dev/disk2 -p ./vgshmprobe
     sh bed-shm.sh -d /dev/disk2 -p ./vgshmprobe -k ./nocopy.c
     sh bed-shm.sh -d vm.disk -p ./vgshmprobe -k ./nocopy.c -g 0000:00:02.0
