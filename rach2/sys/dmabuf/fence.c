@@ -112,19 +112,36 @@ int dma_fence_is_signaled(struct dma_fence *f)
 }
 
 /** Mark the fence listened and run its `enable_signaling` the first time,
- * as Linux's __dma_fence_enable_signaling (dma-fence.c:579-601), signalling
- * it when that returns 0. */
+ * signalling the fence when that returns 0, as Linux's
+ * __dma_fence_enable_signaling (dma-fence.c:579-601). Returns 1 while the
+ * fence is unsignalled. The caller masks interrupts, as Linux holds the
+ * fence's lock with them off (dma-fence.c:615-617, 657-667): an interrupt
+ * between the test and the mark could enter the same fence's setup, and
+ * both would run the hook, which arms an array's children twice. */
+static int enable_masked(struct dma_fence *f)
+{
+    int was_set = f->listened;
+    f->listened = 1;
+    if (f->signaled)
+        return 0;
+    if (!was_set && f->ops && f->ops->enable_signaling && !f->ops->enable_signaling(f)) {
+        if (!f->signaled)
+            (void)dma_fence_signal(f);
+        return 0;
+    }
+    return !f->signaled;
+}
+
+/** Enable signalling with interrupts masked, as Linux's
+ * dma_fence_enable_sw_signaling (dma-fence.c:611-618). */
 void dma_fence_enable_sw_signaling(struct dma_fence *f)
 {
-    int was_set;
+    uint32_t flags;
     if (!f)
         return;
-    was_set = f->listened;
-    f->listened = 1;
-    if (f->signaled || was_set)
-        return;
-    if (f->ops && f->ops->enable_signaling && !f->ops->enable_signaling(f) && !f->signaled)
-        (void)dma_fence_signal(f);
+    flags = kirq_save();
+    (void)enable_masked(f);
+    kirq_restore(flags);
 }
 
 /** Report completion or the producer's error. */
@@ -134,19 +151,18 @@ int32_t dma_fence_status(struct dma_fence *f)
 }
 
 /** Add a callback unless completion has already happened: 0, or -ENOENT
- * when it has. Signalling is enabled first, as Linux's
- * dma_fence_add_callback does. The test and the link are one step with
- * interrupts masked, so that a signal from an interrupt either finds the
- * callback or comes first. */
+ * when it has. Signalling is enabled and the callback linked in one step
+ * with interrupts masked, as Linux's dma_fence_add_callback does under the
+ * fence's lock (dma-fence.c:657-667), so that a signal from an interrupt
+ * either finds the callback or comes first. */
 int32_t dma_fence_add_callback(struct dma_fence *f, struct dma_fence_cb *cb,
                                void (*func)(struct dma_fence *, struct dma_fence_cb *))
 {
     uint32_t flags;
     if (dma_fence_is_signaled(f))
         return -ENOENT;
-    dma_fence_enable_sw_signaling(f);
     flags = kirq_save();
-    if (f->signaled) {
+    if (!enable_masked(f)) {
         kirq_restore(flags);
         return -ENOENT;
     }
