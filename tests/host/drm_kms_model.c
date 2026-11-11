@@ -206,6 +206,13 @@ void drm_send_event(struct drm_pending_event *e)
     kfree(e);
 }
 
+/** `drm_send_event`, with the event lock held, which is the same in one
+ * thread. */
+void drm_send_event_locked(struct drm_pending_event *e)
+{
+    drm_send_event(e);
+}
+
 /** Take back a reserved `e`, or a commit's that has no file. */
 void drm_event_cancel_free(struct drm_pending_event *e)
 {

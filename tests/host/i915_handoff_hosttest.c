@@ -940,7 +940,7 @@ void drm_dev_init(struct drm_device *dev, const struct drm_driver *driver)
     dev->features = driver->ident.features;
     dev->index = -1;
     dev->refs = 1;
-    wait_queue_init(&dev->commit_wait);
+    mutex_init(&dev->mode_lock, "drm_mode_lock");
 }
 
 void drm_dev_get(struct drm_device *dev)

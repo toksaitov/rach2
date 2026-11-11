@@ -11,6 +11,7 @@
  * host-deps: rach2/sys/drm/i915/intel_bios.c rach2/sys/drm/i915/i915_power.c
  * host-deps: tests/host/compat/resv_host.c
  * host-deps: tests/host/compat/i915_gem_lock_host.c
+ * host-deps: tests/host/compat/mutex_none.c
  * host-inputs: tests/fixtures/lenovo-gpu/i915_vbt.bin
  *
  * The rows: the ports the VBT and the straps give, HDMI on B and DP++ on

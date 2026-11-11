@@ -72,6 +72,11 @@ void mutex_init_key(struct mutex *m, const char *name, const struct lockdep_key 
  */
 void mutex_lock(struct mutex *m);
 
+/** Take `m` as `mutex_lock` does, but end the wait at a signal, as
+ * Linux's `mutex_lock_interruptible`: 0 once held, or -EINTR with `m` not
+ * taken. */
+int mutex_lock_interruptible(struct mutex *m);
+
 /** Take `m` if it is free and return 1, or return 0 at once. Any context
  * but an interrupt. */
 int mutex_trylock(struct mutex *m);

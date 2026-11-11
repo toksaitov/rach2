@@ -2833,7 +2833,8 @@ void intel_wm_commit(struct intel_crtc *crtc, struct drm_atomic_state *state, in
 
 /** Program `crtc`'s new planes' watermarks once the frame counter passed
  * the commit's frame, Linux's ilk_optimize_watermarks. From the deferred
- * vblank work. */
+ * vblank work, with the DRM device's `event_lock` held, which keeps every
+ * pipe's watermarks and their registers. */
 void intel_wm_vblank(struct intel_crtc *crtc);
 
 /**
@@ -2843,7 +2844,8 @@ void intel_wm_vblank(struct intel_crtc *crtc);
  */
 void intel_wm_sanitize(struct drm_i915_private *i915);
 
-/** Let a pending `intel_wm_vblank` go, with its vblank reference. */
+/** Let a pending `intel_wm_vblank` go, with its vblank reference. Takes
+ * the DRM device's `event_lock`. */
 void intel_wm_cancel(struct intel_crtc *crtc);
 
 /** Unmask the flip done of `crtc` when its new state in `state` is an
@@ -2881,14 +2883,15 @@ int32_t intel_vblank_init(struct drm_i915_private *i915);
  * dropped. */
 void intel_vblank_fini(struct drm_i915_private *i915);
 
-/** Send `crtc`'s held event now, as a pipe that goes off does, with
- * interrupts off; the pipe's interactive mark goes once no flip is
- * pending. */
+/** Send `crtc`'s held event now, as a pipe that goes off does, with the
+ * DRM device's `event_lock` held; the pipe's interactive mark goes once no
+ * flip is pending. */
 void intel_crtc_send_event(struct intel_crtc *crtc);
 
 /** Let `c` go of its commit's interactive mark once its flip is no longer
  * pending, and the mark go with the last of the commit's pipes, as Linux's
- * intel_cleanup_plane_fb after the commit's flips. Interrupts masked. */
+ * intel_cleanup_plane_fb after the commit's flips. The DRM device's
+ * `event_lock` is held. */
 void intel_crtc_interactive_end(struct intel_crtc *c);
 
 /** Turn `c`'s vblanks off as its pipe goes off (`drm_crtc_vblank_off`),
@@ -3442,7 +3445,8 @@ const char *const *intel_crtc_get_crc_sources(struct drm_crtc *crtc, uint32_t *c
 
 /** Enter `crc`, the CRC the error interrupt read at `crtc`'s CRC done,
  * while a source runs, past the first, as Linux's
- * display_pipe_crc_irq_handler; from the deferred interrupt work. */
+ * display_pipe_crc_irq_handler; from the deferred interrupt work, with the
+ * DRM device's `event_lock` held. */
 void intel_crtc_crc_frame(struct intel_crtc *crtc, uint32_t crc);
 
 /**

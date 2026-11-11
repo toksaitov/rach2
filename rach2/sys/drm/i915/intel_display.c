@@ -476,7 +476,7 @@ static void commit_fence_wait(struct drm_device *dev, struct dma_fence *fence)
 static void interactive_handover(struct drm_i915_private *i915, uint32_t pipes, int32_t err)
 {
     struct intel_display *d = &i915->display;
-    uint32_t flags = kirq_save();
+    uint32_t flags = spin_lock_irqsave(&i915->drm.event_lock);
     int pipe, slot;
 
     /* A flip the core ended with no vblank, on a pipe a queued commit
@@ -497,7 +497,7 @@ static void interactive_handover(struct drm_i915_private *i915, uint32_t pipes, 
     if (slot < I915_NUM_PIPES && d->rps_marks[slot]) {
         i915_rps_mark_interactive(i915, 1);
     }
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&i915->drm.event_lock, flags);
     i915_rps_mark_interactive(i915, 0);
 }
 
@@ -1099,9 +1099,9 @@ static void intel_crtc_disable(struct drm_crtc *crtc, struct drm_atomic_state *s
     if (!state->crtcs_new[crtc->index]->active) {
         intel_wm_commit(c, state, 1);
     }
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&i915->drm.event_lock);
     intel_crtc_send_event(c);
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&i915->drm.event_lock, flags);
 }
 
 /** Before the planes: a pipe that comes on turned on, as Linux's commit

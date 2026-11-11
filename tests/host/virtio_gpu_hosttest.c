@@ -7,6 +7,7 @@
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/atomic_host.c tests/host/compat/resv_host.c
+ * host-deps: tests/host/compat/mutex_none.c
  *
  * The rows: a bind with EDID, which reads the EDID and then the displays,
  * fences each command with the next id, and lists Linux's 26 modes of
@@ -323,6 +324,13 @@ void drm_send_event(struct drm_pending_event *e)
     events_sent++;
     last_event_type = e->event.base.type;
     event_free(e);
+}
+
+/** `drm_send_event`, with the event lock held, which is the same in one
+ * thread. */
+void drm_send_event_locked(struct drm_pending_event *e)
+{
+    drm_send_event(e);
 }
 
 /** Take back a reserved event. */
