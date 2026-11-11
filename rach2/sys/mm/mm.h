@@ -204,12 +204,20 @@ void mm_get(struct mm *mm);
  * one: 1 when taken, 0 once the last user's put has freed the pages. */
 int mm_get_live(struct mm *mm);
 
-/** Drop a user's count; the last tells the ranges drivers registered and
+/**
+ * Drop a user's count; the last tells the ranges drivers registered and
  * releases the pins charged to the space (`mmn_release`), frees the pages,
  * the page tables, the directory and the regions, lets go of the program's
  * file and releases the files its regions mapped, either of which may
  * sleep, and then drops the users' hold. Its directory must not be the one
- * in use, which the caller switches away from first. */
+ * in use, which the caller switches away from first. The directory leaves
+ * the space, its count and the table of spaces by directory before its
+ * pages are freed, so that the walks, which give way every bounded batch
+ * (`free_user_pages`), work on tables nothing else reaches: a holder that
+ * is not a user finds no directory, as after the put. Linux's exit_mmap
+ * likewise frees the regions with preemption on and the space unreachable
+ * (mm/mmap.c:1957-1969).
+ */
 void mm_put(struct mm *mm);
 
 /** Keep the record of `mm`, and nothing of its memory. */

@@ -17,6 +17,7 @@
 #include "../../klog.h"
 #include "../../mm/kheap.h"
 #include "../../mm/paging.h"
+#include "../../proc/sched.h"
 
 /* Set once the heap exists: from then on page tables and directories come
  * from it and go back to it, and their physical addresses, which the
@@ -441,7 +442,10 @@ uintptr_t paging_virt_to_phys(uintptr_t va)
  * 0 or the page table itself is corrupt and is cleared without touching a
  * frame. The page tables stay, for `free_page_directory`. No other
  * processor translates through `dir` (`smp_space_release`), so the pages
- * are flushed once, at the end.
+ * are flushed once, at the end. The walk gives way after each page table,
+ * 1024 pages, as Linux's zap_pmd_range calls cond_resched after each PMD
+ * entry (mm/memory.c:1740); `dir` is unreachable then (paging.h), so the
+ * pointers into it stay valid.
  */
 void free_user_pages(page_dir_t *dir)
 {
@@ -489,6 +493,7 @@ void free_user_pages(page_dir_t *dir)
             frame_unref(phys_addr);
             table->pages[page_idx] = 0;
         }
+        sched_give_way();
     }
     if (changed) {
         paging_flush_range(dir, USER_ADDR_MIN, USER_ADDR_MAX);
@@ -499,10 +504,12 @@ void free_user_pages(page_dir_t *dir)
  * Give a page directory and its private page tables back to the heap,
  * after `free_user_pages` has dropped its pages. The kernel directory and
  * the one loaded are left in place: a caller switches to another first.
+ * The walk gives way after each 512 tables, as `free_user_pages` does
+ * after each table.
  */
 void free_page_directory(page_dir_t *dir)
 {
-    uint32_t dir_idx;
+    uint32_t dir_idx, freed = 0;
     page_table_t *table;
 
     if (!dir || dir == _kernel_dir || dir == _curr_dir) {
@@ -520,6 +527,9 @@ void free_page_directory(page_dir_t *dir)
         free_page_table(table);
         dir->logical_page_tables[dir_idx] = NULL;
         dir->phys_page_tables[dir_idx] = 0;
+        if (++freed % 512u == 0) {
+            sched_give_way();
+        }
     }
 
     kfree_pages(dir, sizeof(page_dir_t) / PAGE_SIZE);
