@@ -625,7 +625,7 @@ int32_t filemap_read_resident(const struct vfs_mount *mnt, uint64_t ino, uint64_
     page = kmap_temp(phys);
     if (!page) {
         free_frame(phys);
-        return 0;
+        return -ENOMEM;
     }
     rc = copy_to_user(dst, page + in, count);
     kunmap_temp(page);

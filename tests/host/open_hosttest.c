@@ -45,6 +45,8 @@
  * - the release of the last holder of a file of the KRFFS root that lost
  *   its name, by each path a descriptor or a file mapping ends on, while
  *   another process's allocation on the root runs in the reclaim's sleep;
+ * - a read of a disk file whose pages a shared mapping holds in memory
+ *   when no temporary mapping is free for one of them;
  * - on a model type that sets `file_locked`, with the node locks of
  *   rach2/sys/fs/nodelock.c, the order of the locks a create, an unlink,
  *   an rmdir and a rename in one directory and between two take, and a
@@ -747,12 +749,27 @@ struct vfs_mount *vfs_root_mount(void)
     return &mount;
 }
 
+/* The resident-read row (`resident_unmapped`): set while it runs, the two
+ * pages a shared mapping of its disk file holds in memory, the page
+ * `kmap_temp` finds no free slot for, and the references its reads hold. */
+static int resident_row;
+static uint8_t resident_pages[2][PAGE_SIZE];
+static uintptr_t resident_fail;
+static int resident_refs;
+
 /** Report an accessible regular file with set-id bits, or in the mkdir rows
  * the directory a name is made in. A read the mount's lock does not cover
  * may sleep for the disk, and the call queued for the row, a write that
  * moves the file, runs then. */
 int vfs_getattr(struct vfs_mount *mnt, void *at, struct vfs_stat *st)
 {
+    if (resident_row) {
+        check(mnt == &mount && at == &node, "a resident read sizes the file it reads");
+        k_memset(st, 0, sizeof(*st));
+        st->mode = 0100644;
+        st->size = sizeof(resident_pages);
+        return 0;
+    }
     if (mnt == &fl_mount) {
         return fl_getattr(mnt, at, st);
     }
@@ -971,10 +988,14 @@ int unix_inflight_holds(const void *node)
     return 0;
 }
 
-/** No row reads, shares or cuts the pages of a mapping. */
+/** Map a page of the resident-read row, the address being the page's, or
+ * none for `resident_fail`; no other row reads, shares or cuts the pages of
+ * a mapping. */
 void *kmap_temp(uintptr_t phys)
 {
-    (void)phys;
+    if (resident_row) {
+        return phys == resident_fail ? NULL : (void *)phys;
+    }
     check(0, "unexpected read of a mapping's page");
     return NULL;
 }
@@ -1020,12 +1041,15 @@ void *kmalloc(size_t size)
     return kzalloc(size);
 }
 
-/** The shared mappings of disk files, which no row makes: a row's mapping
- * is private, and no page of a shared one is resident. */
+/** The pages of a shared mapping of a disk file in memory: the
+ * resident-read row's two, and none in any other row, whose mappings are
+ * private. */
 uintptr_t shmem_resident(const struct shmem *sh, uint32_t pgoff)
 {
     (void)sh;
-    (void)pgoff;
+    if (resident_row && pgoff < 2) {
+        return (uintptr_t)resident_pages[pgoff];
+    }
     return 0;
 }
 
@@ -1055,18 +1079,22 @@ uintptr_t alloc_user_frame(void)
     return 0;
 }
 
-/** Fail the row: no shared page gains a reference. */
+/** Count a reference to a page of the resident-read row; fail any other
+ * row, where no shared page gains one. */
 void frame_ref(uintptr_t phys)
 {
     (void)phys;
-    check(0, "unexpected reference to a shared page");
+    check(resident_row, "unexpected reference to a shared page");
+    resident_refs++;
 }
 
-/** Fail the row: no shared page is freed. */
+/** Drop a reference to a page of the resident-read row; fail any other
+ * row, where no shared page is freed. */
 void free_frame(uintptr_t phys)
 {
     (void)phys;
-    check(0, "unexpected free of a shared page");
+    check(resident_row, "unexpected free of a shared page");
+    resident_refs--;
 }
 
 /** Fail the row: no row holds a mapping. */
@@ -4049,6 +4077,46 @@ static void file_locked_mount_rmdir(void)
     fl_row_end("M L5 L30 M rmdir oW30 U30 U5 oL30 oU30 ", "the mount waits for the victim's lock");
 }
 
+/**
+ * A read of a disk file whose two pages a shared mapping holds in memory,
+ * with stores not written back, when `kmap_temp` has no free slot for a
+ * page: the read returns the pages before that page, or -ENOMEM when it is
+ * the first, and never reads the file's stale bytes in its place, as
+ * Linux's filemap_read fails rather than read around a folio it has.
+ */
+static void resident_unmapped(void)
+{
+    static struct dshare ds;
+    static char out[2 * PAGE_SIZE];
+    struct open_file ofd;
+
+    k_memset(&ofd, 0, sizeof(ofd));
+    ofd.vmnt = &mount;
+    ofd.vnode = &node;
+    ofd.ino = 77;
+    ds.mnt = &mount;
+    ds.ino = 77;
+    ds.sh.npages = 2;
+    k_memset(resident_pages[0], 'a', PAGE_SIZE);
+    k_memset(resident_pages[1], 'b', PAGE_SIZE);
+    dshares = &ds;
+    resident_row = 1;
+
+    resident_fail = (uintptr_t)resident_pages[1];
+    k_memset(out, 0, sizeof(out));
+    check(file_read_locked(&ofd, (char __user *)out, sizeof(out), 0) == PAGE_SIZE &&
+              out[0] == 'a' && out[PAGE_SIZE - 1] == 'a' && out[PAGE_SIZE] == 0,
+          "a resident read returns the page before the one it cannot map");
+    resident_fail = (uintptr_t)resident_pages[0];
+    check(file_read_locked(&ofd, (char __user *)out, sizeof(out), 0) == -ENOMEM,
+          "a resident read of a first page it cannot map fails with ENOMEM");
+    check(resident_refs == 0, "a resident read lets every page's reference go");
+
+    resident_row = 0;
+    resident_fail = 0;
+    dshares = NULL;
+}
+
 int main(void)
 {
     mount.type = &mounted_type;
@@ -4080,6 +4148,7 @@ int main(void)
     mapping_reclaims();
     file_locked_orders();
     file_locked_mount_rmdir();
+    resident_unmapped();
     if (!failures) {
         printf("open-hosttest: result: pass: mounted truncation, loop handles and root removals\n");
     }
