@@ -118,6 +118,14 @@ void netconsole_putc(char c);
 int netconsole_setup(const char *config, int frames);
 
 /**
+ * Read `netpoll.carrier_timeout=` from the boot line, once, early in every
+ * boot, as Linux's `parse_args` reads its parameters, logging each value
+ * it refuses and each bare key as `netconsole: refused:` in the line's
+ * order.
+ */
+void netconsole_read_params(void);
+
+/**
  * Choose the boot id, and begin the frames' start, as `netconsole_flush`
  * describes it.
  *
