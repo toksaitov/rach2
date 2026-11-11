@@ -83,4 +83,4 @@ The reports go through `klog_report_begin`, `klog_report` and `klog_report_end`,
 
 ## Tests
 
-`tests/host/lockdep_hosttest.c` compiles `lockdep.c` and `spinlock.c` on the host with `-DRACH2_LOCKDEP` and checks an AB-BA order, a cycle of three, an interrupt-inconsistent lock, an interrupt inversion, sleeps under a spinlock, recursion and subclasses, trylocks, misuse, the text of `/proc/lockdep` and `/proc/lockdep_stats`, and a full pool. It runs as the `lockdep` case of `tests/cases/host.host.json`.
+`tests/host/lockdep_hosttest.c` compiles `lockdep.c` and `spinlock.c` on the host with `-DRACH2_LOCKDEP` and checks an AB-BA order, a cycle of three, an interrupt-inconsistent lock, an interrupt inversion, sleeps under a spinlock, recursion and subclasses, trylocks, misuse, the text of `/proc/lockdep` and `/proc/lockdep_stats`, the reports `lockdep/inject` makes, and a full pool. It runs as the `lockdep` case of `tests/cases/host.host.json`.
