@@ -82,9 +82,10 @@ void watchdog_sched(void);
  * so an NMI that finds nothing, back to back with one that handled more
  * than one source at the same program counter, is claimed, as Linux's
  * `default_do_nmi` swallows it (arch/x86/kernel/nmi.c:404-405, 472-475).
- * One the counter raised just before it was loaded again, stopped or
- * acknowledged finds nothing either, and is claimed within the counter's
- * window (`platform_pmu_late`).
+ * One the counter raised just before it was armed again or stopped, or
+ * that AMD's counter raised late after an overflow it handled, finds
+ * nothing either, and is claimed within the counter's window
+ * (`platform_pmu_late`).
  */
 int watchdog_nmi(isr_params_t *params);
 
