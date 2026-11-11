@@ -45,11 +45,6 @@
 #define REGION_DRIVER_STATE 260
 #define DRIVER_GONE         3
 
-/* The most pages one pin holds, 1 GiB of them, and the runs one call of
- * VGPUSHM_IOC_PAGES gives. */
-#define PIN_MAX_PAGES  (1ul << 18)
-#define PAGES_MAX_RUNS 4096u
-
 /* How often pins kept after their file closed are looked at again. */
 #define KEPT_POLL_MS 100
 
@@ -93,7 +88,7 @@ struct vgpushm {
     struct miscdevice misc;
     struct kref ref;  /* the binding's and an open file's */
     struct mutex ops; /* orders the ioctls against vgpushm_remove */
-    bool gone;        /* set under ops once the device is unbound */
+    bool gone;        /* set under ops once the device is unbound; mmap reads it without */
     atomic_t opened;  /* 1 while a file holds the node; it is exclusive */
     spinlock_t lock;  /* guards efd against the interrupt handlers */
     struct eventfd_ctx *efd[VGPUSHM_VECTORS];
@@ -173,7 +168,14 @@ static void vgpushm_set_efd(struct vgpushm *dev, unsigned int n, struct eventfd_
  * @dev: the device whose counts hold the pin, or NULL for a pin not made
  * @rec: the pin, off every list, whatever part of it was made
  *
- * Context: holds dev->ops.
+ * Each shmem page is marked dirty before its reference goes, as i915 marks
+ * its shmem pages: Rach2 writes them through KVM, which leaves no dirty bit
+ * in the VM, and reclaim frees a clean shmem page without writing it to
+ * swap, so the blob would read back as zeros. The page is locked for the
+ * mark, as unpin_user_pages_dirty_lock locks one, since the file is its
+ * owner's, who may truncate it meanwhile.
+ *
+ * Context: holds dev->ops; may sleep.
  */
 static void vgpushm_unpin(struct vgpushm *dev, struct vgpushm_pinrec *rec)
 {
@@ -186,8 +188,10 @@ static void vgpushm_unpin(struct vgpushm *dev, struct vgpushm_pinrec *rec)
     if (rec->dmabuf)
         dma_buf_put(rec->dmabuf);
     for (i = 0; rec->pages && i < rec->npages; i++)
-        if (rec->pages[i])
+        if (rec->pages[i]) {
+            set_page_dirty_lock(rec->pages[i]);
             put_page(rec->pages[i]);
+        }
     if (dev) {
         dev->npins--;
         dev->npinned -= rec->npages;
@@ -273,9 +277,14 @@ static int vgpushm_pin_shmem(struct vgpushm_pinrec *rec, struct file *file, u64 
  * @rec: the pin, with npages and phys sized and dmabuf held
  * @offset: the first byte, page-aligned
  *
- * Return: 0, -EINVAL past the buffer's end or for a part not page-aligned,
- * -EFAULT for memory with no page of RAM, such as a GPU's own, or the
- * error of the attachment.
+ * The pages are read from the importer's scatterlist, which dma-buf allows
+ * importers only for its DMA addresses: under CONFIG_DMABUF_DEBUG it scrambles
+ * each entry's page, which would give Rach2 unrelated memory to map, so such
+ * a kernel is refused.
+ *
+ * Return: 0, -EOPNOTSUPP under CONFIG_DMABUF_DEBUG, -EINVAL past the
+ * buffer's end or for a part not page-aligned, -EFAULT for memory with no
+ * page of RAM, such as a GPU's own, or the error of the attachment.
  */
 static int vgpushm_pin_dmabuf(struct vgpushm *dev, struct vgpushm_pinrec *rec, u64 offset)
 {
@@ -284,6 +293,8 @@ static int vgpushm_pin_dmabuf(struct vgpushm *dev, struct vgpushm_pinrec *rec, u
     u64 at = 0, end = offset + ((u64)rec->npages << PAGE_SHIFT);
     unsigned int i;
 
+    if (IS_ENABLED(CONFIG_DMABUF_DEBUG))
+        return -EOPNOTSUPP;
     if (end > rec->dmabuf->size)
         return -EINVAL;
     rec->attach = dma_buf_attach(rec->dmabuf, &dev->pdev->dev);
@@ -325,9 +336,10 @@ static int vgpushm_pin_dmabuf(struct vgpushm *dev, struct vgpushm_pinrec *rec, u
  * @arg: the user's struct vgpushm_pin
  *
  * Context: holds dev->ops.
- * Return: 0; -EFAULT; -EINVAL for an empty, unaligned or too large range or
- * a descriptor that is neither a shmem file nor a dma-buf; the error of
- * pinning; -ENOMEM.
+ * Return: 0; -EFAULT; -EINVAL for an empty or unaligned range, one larger
+ * than VGPUSHM_PIN_MAX_SIZE, or a descriptor that is neither a shmem file
+ * nor a dma-buf; -EBADF for a descriptor not open; the error of pinning;
+ * -ENOMEM.
  */
 static long vgpushm_pin(struct vgpushm *dev, void __user *arg)
 {
@@ -339,7 +351,7 @@ static long vgpushm_pin(struct vgpushm *dev, void __user *arg)
     if (copy_from_user(&req, arg, sizeof(req)))
         return -EFAULT;
     if (req.size == 0 || ((req.offset | req.size) & ~PAGE_MASK) ||
-        (req.size >> PAGE_SHIFT) > PIN_MAX_PAGES || req.offset + req.size < req.offset) {
+        req.size > VGPUSHM_PIN_MAX_SIZE || req.offset + req.size < req.offset) {
         dev->refused++;
         return -EINVAL;
     }
@@ -407,7 +419,7 @@ static struct vgpushm_pinrec *vgpushm_find(struct vgpushm *dev, u32 handle)
  *
  * Context: holds dev->ops.
  * Return: 0; -EFAULT; -ENOENT for no such pin; -EINVAL for a first page
- * past the pin's end or no room for a run.
+ * past the pin's end, or a `max` of 0 or over VGPUSHM_PAGES_MAX_RUNS.
  */
 static long vgpushm_pages(struct vgpushm *dev, void __user *arg)
 {
@@ -422,7 +434,7 @@ static long vgpushm_pages(struct vgpushm *dev, void __user *arg)
     rec = vgpushm_find(dev, req.handle);
     if (!rec)
         return -ENOENT;
-    if (req.first >= rec->npages || req.max == 0 || req.max > PAGES_MAX_RUNS)
+    if (req.first >= rec->npages || req.max == 0 || req.max > VGPUSHM_PAGES_MAX_RUNS)
         return -EINVAL;
     out = u64_to_user_ptr(req.runs);
     req.count = 0;
@@ -499,20 +511,22 @@ static int vgpushm_release(struct inode *inode, struct file *file)
  * The mapping is write-back: the region is the host's RAM, which QEMU's
  * other peer maps cached, and under KVM the guest's attribute is ignored.
  *
+ * Context: holds mmap_lock for write, so it reads dev->gone without dev->ops,
+ * under which the ioctls copy to and from user memory and so take mmap_lock.
+ * A mapping made as the device goes is one made before, which stays.
+ *
  * Return: 0, -ENODEV once the device is unbound, or -EINVAL for an offset
  * or a size outside the region.
  */
 static int vgpushm_mmap(struct file *file, struct vm_area_struct *vma)
 {
     struct vgpushm *dev = file->private_data;
-    int err;
 
     if (vma->vm_pgoff != 0)
         return -EINVAL;
-    mutex_lock(&dev->ops);
-    err = dev->gone ? -ENODEV : vm_iomap_memory(vma, dev->shm_start, dev->shm_len);
-    mutex_unlock(&dev->ops);
-    return err;
+    if (READ_ONCE(dev->gone))
+        return -ENODEV;
+    return vm_iomap_memory(vma, dev->shm_start, dev->shm_len);
 }
 
 /**
@@ -778,7 +792,7 @@ static void vgpushm_remove(struct pci_dev *pdev)
 
     misc_deregister(&dev->misc);
     mutex_lock(&dev->ops);
-    dev->gone = true;
+    WRITE_ONCE(dev->gone, true);
     mutex_unlock(&dev->ops);
     cancel_delayed_work_sync(&dev->kept_work);
     mutex_lock(&dev->ops);
