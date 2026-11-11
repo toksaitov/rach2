@@ -90,6 +90,18 @@
 #include "timer.h"
 #include "syscall_internal.h"
 
+/*
+ * The record from the heap that the `priv` of an O_PATH descriptor on a
+ * synthetic leaf, FD_TYPE_SYNTH_PATH, points at: the node's classified path,
+ * first so that `priv` reads as a `struct vpath`, and the owner its last
+ * lookup gave it when its inode keeps one (struct synth_owner). The release
+ * of the description's last reference frees it (`fd_release_objects`).
+ */
+struct synth_path {
+    struct vpath vp;
+    struct synth_owner own;
+};
+
 /**
  * A record from the heap of the synthetic directory an FD_TYPE_SYNTH_DIR
  * descriptor is open on, or NULL when the heap has no room. The kind, a
@@ -402,6 +414,8 @@ static void fd_release_objects(fd_entry_t *e)
     e = fd_entry_now(current_proc ? current_proc->fds : NULL, e);
     if ((e->type == FD_TYPE_SYNTH_DIR || e->type == FD_TYPE_SYNTH_PATH) && e->priv && e->ofd &&
         e->ofd->refcount == 1) {
+        procfs_owner_drop(e->type == FD_TYPE_SYNTH_DIR ? &((struct synth_dir *)e->priv)->own
+                                                       : &((struct synth_path *)e->priv)->own);
         kfree(e->priv);
         e->priv = NULL;
     }
@@ -3037,10 +3051,12 @@ static int32_t proc_ns_dir_read(const struct vpath *vp, int pid, int flags)
  * a chdir, over the directory of kind `kind` of the process `pid`: 0, or a
  * negative errno. /proc/PID/fd is judged as Linux's `proc_fd_permission`
  * judges it: by its mode, 0500, and its owner (`procfs_pid_owner`), with a
- * thread of the caller's own process always let in. Once the process has
- * ended, the owner is the one `sd`, the record of a descriptor open on the
- * directory, kept from its open, as Linux judges the inode it has; with no
- * record, -ENOENT. /proc/PID/fdinfo, mode 0555, takes Linux's ptrace check
+ * thread of the caller's own process always let in. A walk judges the owner
+ * the lookup gives it now, and fchdir the one `sd`, the record of a
+ * descriptor open on the directory, keeps from its last lookup
+ * (`procfs_owner_keep`), as Linux judges the inode's owner, which only a
+ * lookup sets (fs/proc/fd.c:331-345); with no record, a process that has
+ * ended is -ENOENT. /proc/PID/fdinfo, mode 0555, takes Linux's ptrace check
  * as well (`procfs_may_read`), -EACCES, and -ESRCH once the process has
  * ended, as Linux's `proc_fdinfo_permission` answers. Any other kind is 0.
  */
@@ -3061,10 +3077,12 @@ static int32_t proc_fd_dir_access(int kind, int pid, int want, const struct synt
         if (!sd) {
             return -ENOENT;
         }
-        uid = sd->uid;
-        gid = sd->gid;
     } else if (procfs_same_group(pid)) {
         return 0;
+    }
+    if (sd) {
+        uid = sd->own.uid;
+        gid = sd->own.gid;
     }
     return cred_access_bits(uid, gid, 0500, want, 0);
 }
@@ -3077,7 +3095,8 @@ static int32_t proc_fd_dir_access(int kind, int pid, int want, const struct synt
  * last close, with the process's pid and, for a thread's directory, the
  * thread's id, as the caller's PID namespace numbers them, which is how its
  * listing, its /proc/PID/fd link and the names relative to it read them, so
- * they stay the thread's.
+ * they stay the thread's; and for an fd, fdinfo or task directory the owner
+ * a lookup last gave it (`procfs_owner_keep`).
  *
  * The directory exists, so flags that contradict that fail. O_CREAT with
  * O_EXCL is -EEXIST whatever the access mode, since the usual form of an
@@ -3141,14 +3160,12 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
     if (!sd) {
         return -ENFILE;
     }
-    if (vp->kind == VNODE_PROC_FD_DIR) {
-        (void)procfs_pid_owner(pid, S_IFDIR | 0500, &sd->uid, &sd->gid);
-    }
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         kfree(sd);
         return fd;
     }
+    procfs_owner_keep(&sd->own, vp);
     e = &current_proc->fds->entries[fd];
     e->type = FD_TYPE_SYNTH_DIR;
     e->node = NULL;
@@ -8391,9 +8408,10 @@ static int synth_proc_writable(int procfile)
  * regular file of mode 0444, root's unless it is a process's, whose files
  * and directories are owned as `synth_pid_owner` has it; oom_score_adj,
  * uid_map, gid_map and setgroups are their owner's to write, mode 0644, as
- * on Linux, and so is a /proc/sys file that can be written. /proc/disk and
- * a descriptor's fdinfo file are 0400, as are a process's syscall, environ
- * and auxv files; its mem file is 0600 and its fd directory 0500.
+ * on Linux, and so is a /proc/sys file that can be written. A
+ * descriptor's fdinfo file is 0444 (fs/proc/fd.c:383); /proc/disk is 0400,
+ * as are a process's syscall, environ and auxv files; its mem file is 0600
+ * and its fd directory 0500.
  *
  * The /proc links, /proc/self, a process's cwd, root and exe, its namespace
  * links and its descriptors' links, are links of mode 0777 when not
@@ -8622,7 +8640,7 @@ static int32_t synth_stat_node(const struct vpath *vp, struct kstat *kst, int fo
             return rc;
         }
         kst->st_dev = PROCFS_FSID;
-        kst->st_mode = S_IFREG | 0400;
+        kst->st_mode = S_IFREG | 0444;
         kst->st_ino = procfs_ino_pid(rpid);
         synth_pid_owner(rpid, kst);
         return 0;
@@ -8682,17 +8700,17 @@ static int32_t synth_stat_node(const struct vpath *vp, struct kstat *kst, int fo
 
 /**
  * Fill `kst` for the node `vp` as a lookup of its path finds it
- * (`synth_stat_node`). A lookup that finds a file of /proc/<pid> or an
- * fdinfo file gives the descriptors open on it the owner it reports, as
- * Linux's walk sets the owner of the inode they share
- * (`procfs_lookup_owner`); the fstat of a descriptor takes
+ * (`synth_stat_node`). A lookup that finds a file of /proc/<pid>, an fdinfo
+ * file or a process's fd, fdinfo or task directory gives the descriptors
+ * open on it the owner it reports, as Linux's walk sets the owner of the
+ * inode they share (`procfs_lookup_owner`); the fstat of a descriptor takes
  * `synth_stat_node`, which sets nothing.
  */
 static int32_t synth_stat(const struct vpath *vp, struct kstat *kst, int follow)
 {
     int32_t rc = synth_stat_node(vp, kst, follow);
 
-    if (rc == 0 && (vp->kind == VNODE_PROC_FILE || vp->kind == VNODE_PROC_FDINFO)) {
+    if (rc == 0) {
         procfs_lookup_owner(vp);
     }
     return rc;
@@ -8840,8 +8858,10 @@ static int32_t open_named(const char *name, int flags, uint32_t mode, int end)
  * An O_PATH descriptor on the synthetic node `vp`, whose canonical path is
  * `name`, leading '/' stripped. A directory is FD_TYPE_SYNTH_DIR, as an open
  * of it makes, and anything else FD_TYPE_SYNTH_PATH, which keeps a copy of
- * `vp` for fstat and fstatfs and `name` for /proc/PID/fd. Nothing is opened:
- * a device does not learn of it and a /proc file takes no snapshot.
+ * `vp` for fstat and fstatfs, the owner a lookup last gave a /proc node
+ * whose inode keeps it (`procfs_owner_keep`), and `name` for /proc/PID/fd.
+ * Nothing is opened: a device does not learn of it and a /proc file takes
+ * no snapshot.
  *
  * The /proc links are classified, not resolved, so the O_NOFOLLOW choice is
  * made here: /proc/self is the process directory unless O_NOFOLLOW names the
@@ -8854,7 +8874,7 @@ static int32_t synth_open_path(const struct vpath *vp, const char *name, int fla
 {
     int follow = !(flags & O_NOFOLLOW);
     struct kstat kst;
-    struct vpath *copy;
+    struct synth_path *copy;
     fd_entry_t *e;
     int fd;
 
@@ -8875,7 +8895,7 @@ static int32_t synth_open_path(const struct vpath *vp, const char *name, int fla
     if (flags & O_DIRECTORY) {
         return -ENOTDIR;
     }
-    copy = kmalloc(sizeof(*copy));
+    copy = kzalloc(sizeof(*copy));
     if (!copy) {
         return -ENOMEM;
     }
@@ -8884,7 +8904,8 @@ static int32_t synth_open_path(const struct vpath *vp, const char *name, int fla
         kfree(copy);
         return fd;
     }
-    *copy = *vp;
+    copy->vp = *vp;
+    procfs_owner_keep(&copy->own, vp);
     e = &current_proc->fds->entries[fd];
     e->type = FD_TYPE_SYNTH_PATH;
     e->node = NULL;
@@ -9856,6 +9877,55 @@ static int32_t fstat_anon(fd_entry_t *entry, struct kstat *kst)
 }
 
 /**
+ * Fill `kst`, zeroed with the boot times, for the synthetic descriptor
+ * `entry`, FD_TYPE_SYNTH_DIR or FD_TYPE_SYNTH_PATH, as `fstat_fill_attrs`
+ * describes, with the owner its record keeps (`procfs_owner_keep`) when the
+ * node's inode keeps one.
+ */
+static void fstat_synth(fd_entry_t *entry, struct kstat *kst)
+{
+    const struct synth_owner *own = NULL;
+
+    if (entry->type == FD_TYPE_SYNTH_DIR) {
+        const struct synth_dir *sd = (const struct synth_dir *)entry->priv;
+        struct vpath vp;
+
+        own = sd ? &sd->own : NULL;
+        synth_dir_vpath(sd, &vp);
+        if (synth_stat_node(&vp, kst, 1) != 0) {
+            kst->st_mode = own && own->kept ? synth_pid_dir_mode(&vp) : S_IFDIR | 0555;
+            kst->st_nlink = 1;
+            kst->st_blksize = 4096;
+            kst->st_dev = PROCFS_FSID;
+            if (synth_is_sys(&vp)) {
+                synth_sys_identity(&vp, kst, 1);
+            }
+        }
+    } else {
+        const struct synth_path *sp = (const struct synth_path *)entry->priv;
+        const struct vpath *vp = sp ? &sp->vp : NULL;
+
+        own = sp ? &sp->own : NULL;
+        if (!vp || synth_stat_node(vp, kst, 0) != 0) {
+            int dev = vp && (vp->kind == VNODE_DEV || vp->kind == VNODE_PTS);
+
+            k_memset(kst, 0, sizeof(*kst));
+            stat64_boot_times(kst);
+            kst->st_mode = dev ? 020600 : (S_IFREG | 0444); /* S_IFCHR | 0600 */
+            kst->st_blksize = 4096;
+            kst->st_dev = dev ? DEVFS_FSID : PROCFS_FSID;
+            if (synth_is_sys(vp)) {
+                synth_sys_identity(vp, kst, 0);
+            }
+        }
+    }
+    if (own && own->kept) {
+        kst->st_uid = own->uid;
+        kst->st_gid = own->gid;
+    }
+}
+
+/**
  * Fill `kst` with the attributes of what the descriptor `entry` is open on,
  * for fstat64, for fstatat64 and statx with AT_EMPTY_PATH, and for a
  * followed /proc/PID/fd link; 0, or the error of a mounted type's getattr.
@@ -9896,9 +9966,13 @@ static int32_t fstat_anon(fd_entry_t *entry, struct kstat *kst)
  * directory once its process has exited. An O_PATH descriptor on a
  * synthetic leaf, or on a /proc link under O_NOFOLLOW, reports what an
  * lstat of its path gives while the node is there, and a bare device or
- * file once it is gone. A pty slave reports what a stat of /dev/pts/N
- * gives, which the /proc/self/fd link names, or a character device of mode
- * 0620 once its pty is gone. Anything else, a pty master, the framebuffer
+ * file once it is gone. Either kind of descriptor on a process's fd, fdinfo
+ * or task directory, a file of /proc/<pid> or an fdinfo file reports the
+ * owner the last lookup of its node gave (`procfs_owner_keep`), as Linux's
+ * fstat reads the inode's owner (fs/stat.c:229), which only a lookup sets.
+ * A pty slave reports what a stat of /dev/pts/N gives, which the
+ * /proc/self/fd link names, or a character device of mode 0620 once its
+ * pty is gone. Anything else, a pty master, the framebuffer
  * or the mouse, is a character device of mode 0666 and size 0.
  */
 static int32_t fstat_fill_attrs(fd_entry_t *entry, struct kstat *kst)
@@ -9979,34 +10053,8 @@ static int32_t fstat_fill_attrs(fd_entry_t *entry, struct kstat *kst)
         kst->st_dev = DEVFS_FSID;
         kst->st_rdev = crdev;
         kst->st_ino = cino;
-    } else if (entry->type == FD_TYPE_SYNTH_DIR) {
-        struct vpath vp;
-
-        synth_dir_vpath((const struct synth_dir *)entry->priv, &vp);
-        if (synth_stat_node(&vp, kst, 1) != 0) {
-            kst->st_mode = S_IFDIR | 0555;
-            kst->st_nlink = 1;
-            kst->st_blksize = 4096;
-            kst->st_dev = PROCFS_FSID;
-            if (synth_is_sys(&vp)) {
-                synth_sys_identity(&vp, kst, 1);
-            }
-        }
-    } else if (entry->type == FD_TYPE_SYNTH_PATH) {
-        const struct vpath *vp = (const struct vpath *)entry->priv;
-
-        if (!vp || synth_stat_node(vp, kst, 0) != 0) {
-            int dev = vp && (vp->kind == VNODE_DEV || vp->kind == VNODE_PTS);
-
-            k_memset(kst, 0, sizeof(*kst));
-            stat64_boot_times(kst);
-            kst->st_mode = dev ? 020600 : (S_IFREG | 0444); /* S_IFCHR | 0600 */
-            kst->st_blksize = 4096;
-            kst->st_dev = dev ? DEVFS_FSID : PROCFS_FSID;
-            if (synth_is_sys(vp)) {
-                synth_sys_identity(vp, kst, 0);
-            }
-        }
+    } else if (entry->type == FD_TYPE_SYNTH_DIR || entry->type == FD_TYPE_SYNTH_PATH) {
+        fstat_synth(entry, kst);
     } else if (entry->type == FD_TYPE_PTS) {
         struct vpath vp;
         k_memset(&vp, 0, sizeof(vp));
@@ -17851,7 +17899,7 @@ static long dirent_put(char *buf, uint32_t count, const struct vfs_dirent *de, u
  */
 static int32_t synth_getdents(fd_entry_t *e, char *buf, uint32_t count, int format)
 {
-    static const struct synth_dir none = {VNODE_ENOENT, 0, 0, 0, 0, 0};
+    static const struct synth_dir none = {VNODE_ENOENT, 0, 0, 0, {0, {0, 0, 0, 0}, 0, 0, NULL}};
     const struct synth_dir *sd = e->priv ? (const struct synth_dir *)e->priv : &none;
     uint32_t written = 0;
     int idx = (int)e->ofd->offset;

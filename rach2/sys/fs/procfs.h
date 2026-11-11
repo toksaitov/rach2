@@ -14,6 +14,7 @@
 
 struct vpath;
 struct fd_entry;
+struct synth_owner;
 struct vfs_ref;
 
 /* st_dev for /proc nodes, distinct from KRFFS (0) and devfs (DEVFS_FSID). */
@@ -304,12 +305,24 @@ int procfs_pid_owner(int pid, uint32_t mode, uint32_t *uid, uint32_t *gid);
  * such process. */
 int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid);
 
-/** Give the descriptors open on the file `vp` names the owner a lookup of
- * its path gives it now, `procfs_oom_owner`'s, when it is a file of
- * /proc/<pid> outside its net directory or a descriptor's fdinfo file, as
- * Linux's lookup of the path sets its inode's owner; any other node, and a
- * process gone, change nothing. */
+/** Give the descriptors open on the node `vp` names the owner a lookup of
+ * its path gives it now, as Linux's lookup sets the owner of the inode they
+ * share, when its inode keeps that owner (struct synth_owner): a file of
+ * /proc/<pid> outside its net directory, a descriptor's fdinfo file, or a
+ * process's fd, fdinfo or task directory. Any other node, and a process
+ * gone, change nothing. */
 void procfs_lookup_owner(const struct vpath *vp);
+
+/** Put `o`, the zeroed record of a descriptor just opened on the node `vp`
+ * names, on the list of kept owners when that node's inode keeps its owner
+ * (`procfs_lookup_owner`), and give it and the node's other records the
+ * owner of this lookup, the open's. Any other node, or a process gone,
+ * leaves `o` off the list, with `kept` 0. */
+void procfs_owner_keep(struct synth_owner *o, const struct vpath *vp);
+
+/** Take `o` off the list of kept owners, if it is on it; at the last close
+ * of the description that holds it, before its record is freed. */
+void procfs_owner_drop(struct synth_owner *o);
 
 /** The owner of a descriptor open on a file of /proc/<pid> or an fdinfo
  * file, into `*uid` and `*gid`: what the last lookup of its path gave it
