@@ -819,16 +819,16 @@ static void ring_get(uint8_t *dst, const uint8_t *ring, uint32_t size, uint32_t 
  */
 static void tcp_sent_note(struct tcb *tcb, uint32_t end)
 {
-    uint32_t now = TCP_NOW();
+    uint32_t stamp = tcp_due(1); /* now + 1, never 0 */
     uint8_t n = tcb->sent_runs;
 
-    if (n > 0 && (tcb->sent_tick[n - 1] == now || n == TCP_SENT_RUNS)) {
+    if (n > 0 && (tcb->sent_tick[n - 1] == stamp || n == TCP_SENT_RUNS)) {
         tcb->sent_end[n - 1] = end;
-        tcb->sent_tick[n - 1] = now;
+        tcb->sent_tick[n - 1] = stamp;
         return;
     }
     tcb->sent_end[n] = end;
-    tcb->sent_tick[n] = now;
+    tcb->sent_tick[n] = stamp;
     tcb->sent_runs = (uint8_t)(n + 1);
 }
 
@@ -1993,9 +1993,7 @@ static int tcp_rto_expire(struct tcb *tcb)
         if (sync && !zwp) {
             tcb->retx_stamp = tcp_due(1); /* this tick + 1 */
         } else if (zwp && tcb->sent_runs > 0) {
-            tcb->retx_stamp = tcb->sent_tick[0] + 1u;
-            if (tcb->retx_stamp == 0)
-                tcb->retx_stamp = 1;
+            tcb->retx_stamp = tcb->sent_tick[0];
             probe0 = 1;
         } else {
             tcb->retx_stamp = due + 1 - tcb->rto; /* the arming's tick + 1 */
