@@ -42,7 +42,7 @@
  *
  * `write`: as on Linux, which maps the vDSO private and may-write so that a
  * debugger can set a breakpoint there, a child's mprotect makes it rwxp, a
- * byte written there reads back and its clock_gettime still works, and
+ * store there does not fault and its clock_gettime still works, and
  * another child's write through /proc/self/mem, as a tracer writes, reads
  * back with the page still read-only; the parent's vDSO, which shared the
  * kernel's page with both, is unchanged.
