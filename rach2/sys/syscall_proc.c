@@ -4928,11 +4928,17 @@ static void sender_info(struct k_siginfo *info, int32_t code, const process_t *t
  * syscall loops call this on the thread's stack with the big lock held. A
  * group stop not yet taken also ends the wait, as Linux 6.12.115's pending
  * job control does (kernel/signal.c:157-164). Before a wait goes back to
- * sleep, recompute its signal-work flag, as recalc_sigpending does after a
- * restart (kernel/signal.c:173-178). No wait queue is changed. */
+ * sleep, discard the ignored signals it passed over, from the thread and
+ * from its process, as get_signal discards each it dequeues after the wait
+ * ends (kernel/signal.c:2821, 2838-2839, 2853-2854), and recompute the
+ * signal-work flag, as recalc_sigpending then does (kernel/signal.c:
+ * 173-178); kept, they would mark the thread again, and a later signal to
+ * the process would pass over it (`sig_wants_now`). No wait queue is
+ * changed. */
 int signal_pending(void)
 {
     uint64_t deliverable;
+    uint64_t ignored = 0;
     uint32_t flags;
     int signo;
     int pending = 0;
@@ -4948,26 +4954,20 @@ int signal_pending(void)
     }
     deliverable = sig_pending_now() & ~current_proc->sig_blocked;
     for (signo = 1; signo <= KSIG_MAX; signo++) {
-        struct k_sigaction *sa;
-
         if (!(deliverable & KSIG_BIT(signo))) {
             continue;
         }
-        sa = &current_proc->sigacts[signo];
-        if (current_proc->ptrace & PT_TRACED) {
-            pending = 1;
-            break;
-        }
-        if (sa->handler == KSIG_IGN) {
-            continue;
-        }
-        if (sa->handler == KSIG_DFL && ksig_default_action(signo) == KSIG_DEFAULT_IGNORE) {
+        if (!(current_proc->ptrace & PT_TRACED) &&
+            sig_handler_ignored(current_proc->sigacts[signo].handler, signo)) {
+            ignored |= KSIG_BIT(signo);
             continue;
         }
         pending = 1;
         break;
     }
     if (!pending) {
+        current_proc->sig_pending &= ~ignored;
+        current_proc->tg->pending &= ~ignored;
         sig_recalc();
     }
     sig_irq_restore(flags);
