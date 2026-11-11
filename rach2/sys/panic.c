@@ -5,10 +5,14 @@
 #include "panic.h"
 
 #include "arch/arch.h"
+#include "cmdline.h"
 #include "display/blank.h"
 #include "klog.h"
+#include "lib/kstd.h"
 #include "lib/kstring.h"
+#include "power.h"
 #include "proc/smp.h"
+#include "udelay.h"
 
 /* The panic picture, 80 columns by 25 rows, a background color for each
  * cell. */
@@ -103,6 +107,43 @@ static const display_color_t _fail_image[FAIL_COLS * FAIL_ROWS] = {
 /* Halt this processor for good, with interrupts off (loader.s). */
 extern void k_stop(void) K_NORETURN;
 
+/* The step of a panic's wait before its reset, in milliseconds, as Linux's
+ * PANIC_TIMER_STEP (kernel/panic.c). */
+#define PANIC_TIMER_STEP 100
+
+int panic_timeout;
+int panic_on_oops;
+
+/**
+ * Linux reads `panic=` by `param_set_int`, which takes what `kstrtoint` in
+ * base 0 takes and refuses the rest with the old value kept
+ * (kernel/params.c); `k_strtoll` reads the same forms, and the range check
+ * makes it an int's. `oops=` reads only `panic` (kernel/panic.c,
+ * `oops_setup`), and another value changes nothing, so one `oops=panic`
+ * anywhere on the line is the whole of it.
+ */
+void k_panic_setup(void)
+{
+    char value[24];
+    long long v;
+    int nth;
+
+    for (nth = 0; nth < kcmdline_count("panic"); nth++) {
+        if (!kcmdline_value_nth("panic", nth, value, (unsigned int)sizeof(value)) ||
+            k_strtoll(value, k_strlen(value), &v) != 0 || v < -0x7FFFFFFFL - 1 || v > 0x7FFFFFFFL) {
+            klog(KLOG_WARN, "panic", "panic=: refused: not an integer");
+            continue;
+        }
+        panic_timeout = (int)v;
+    }
+    if (kcmdline_has("oops=panic")) {
+        panic_on_oops = 1;
+    }
+    if (panic_timeout != 0) {
+        klog(KLOG_INFO, "panic", "timeout: %d seconds", panic_timeout);
+    }
+}
+
 /* The first processor to panic, as its number plus one, 0 before any has;
  * and whether it has stopped the others. */
 static volatile unsigned int panic_owner;
@@ -190,13 +231,14 @@ static unsigned int text_rows(size_t chars)
 
 /**
  * Place the cursor for the report of `str`, which is `klog_show_crit`'s
- * record and the line `k_panic` writes, on the picture's last rows or as far
- * above them as the report needs. Its last line ends with a newline and the
- * last row stays free for it, since a scroll would move the picture. `last` is
- * the picture's last row.
+ * record, the line `k_panic` writes and, with `panic_timeout` above 0, the
+ * line that says when the machine resets, on the picture's last rows or as
+ * far above them as the report needs. Its last line ends with a newline and
+ * the last row stays free for it, since a scroll would move the picture.
+ * `last` is the picture's last row.
  *
- * The console has 24 rows or more, and a report at most six: three for a
- * record and three for `str`, which a record cuts too.
+ * The console has 24 rows or more, and a report at most seven: three for a
+ * record, three for `str`, which a record cuts too, and one for the reset.
  */
 static void place_report(const char *str, unsigned int last)
 {
@@ -210,6 +252,9 @@ static void place_report(const char *str, unsigned int last)
     rows = text_rows(reason);
     if (cause != 0) {
         rows += text_rows(cause);
+    }
+    if (panic_timeout > 0) {
+        rows++;
     }
     x = 0;
     y = last - 1;
@@ -233,9 +278,19 @@ static void place_report(const char *str, unsigned int last)
  * that nothing changes the screen or the state the record describes
  * (`k_panic_begin`). Nothing after the record runs to write out klog's queue,
  * so the record goes out directly (`klog_deliver_directly`).
+ *
+ * The wait before a reset is Linux's loop of PANIC_TIMER_STEP milliseconds
+ * (kernel/panic.c, `panic`), measured by `k_udelay`, which needs no
+ * interrupt, since none is taken now; the reset is `emergency_restart`'s,
+ * with nothing shut down (`power_emergency_restart`). The value is read once,
+ * here, so that a write to /proc/sys/kernel/panic racing the panic gives one
+ * answer or the other.
  */
 void k_panic(const char *str)
 {
+    int timeout = panic_timeout;
+    int seconds, step;
+
     k_panic_begin();
     k_terminal_restart();
     place_report(str, draw_fail_image());
@@ -246,5 +301,16 @@ void k_panic(const char *str)
     klog_show_crit();
     klog(KLOG_CRIT, "panic", "stopped: %s", str);
 
+    if (timeout > 0) {
+        klog(KLOG_CRIT, "panic", "rebooting in %d seconds..", timeout);
+        for (seconds = 0; seconds < timeout; seconds++) {
+            for (step = 0; step < 1000; step += PANIC_TIMER_STEP) {
+                k_udelay(PANIC_TIMER_STEP * 1000u);
+            }
+        }
+    }
+    if (timeout != 0) {
+        power_emergency_restart();
+    }
     k_stop();
 }
