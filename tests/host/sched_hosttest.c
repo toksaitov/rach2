@@ -416,6 +416,35 @@ static void accounting(void)
 }
 
 /**
+ * The load average's sample keeps the period's phase when the call that
+ * makes it comes late, as the boot processor's does after ticks that found
+ * the big lock held, and a gap of three periods folds three samples.
+ */
+static void load_phase(void)
+{
+    uint32_t active, total, avg, i;
+    uint64_t want;
+
+    load_tick = (uint32_t)kernel_ticks;
+    load_wait = 10;
+    kernel_ticks += 12;
+    sched_load_tick();
+    CHECK(load_wait == LOAD_FREQ - 2, "a sample two ticks late leaves the next two ticks sooner");
+    sched_task_counts(&active, &total);
+    active *= LOAD_ONE;
+    load_avg[0] = 3u * LOAD_ONE;
+    avg = load_avg[0];
+    for (i = 0; i < 3; i++) {
+        want = (uint64_t)avg * load_decay[0] + (uint64_t)active * (LOAD_ONE - load_decay[0]);
+        avg = (uint32_t)((want + (active >= avg ? LOAD_ONE - 1u : 0u)) >> SCHED_LOAD_SHIFT);
+    }
+    kernel_ticks += load_wait + 2u * LOAD_FREQ;
+    sched_load_tick();
+    CHECK(load_avg[0] + 2u >= avg && load_avg[0] <= avg + 2u && load_wait == LOAD_FREQ,
+          "a gap of three periods folds three samples and keeps the phase");
+}
+
+/**
  * The machine is idle when every processor online is halted in an idle
  * wait: one that runs makes it busy, and one that is not online does not
  * count, whatever its marker says.
@@ -527,6 +556,7 @@ int main(void)
     states();
     lifecycle();
     accounting();
+    load_phase();
     all_idle();
     ready_lists();
     migration();
@@ -534,6 +564,7 @@ int main(void)
         return 1;
     }
     dprintf(1, "sched-hosttest: result: pass: priority, fairness, states, lifecycle, accounting, "
+               "load phase, "
                "idle machine, ready lists, migration\n");
     return 0;
 }

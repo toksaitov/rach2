@@ -791,17 +791,39 @@ void sched_task_counts(uint32_t *active, uint32_t *total)
 }
 
 /**
+ * `decay` to the power `n` in the averages' fixed point, rounded at each
+ * product, as Linux's `fixed_power_int` takes it: the decay of `n` samples
+ * at once.
+ */
+static uint32_t sched_load_power(uint32_t decay, uint32_t n)
+{
+    uint32_t result = LOAD_ONE;
+
+    while (n != 0) {
+        if (n & 1u) {
+            result = (result * decay + LOAD_ONE / 2u) >> SCHED_LOAD_SHIFT;
+        }
+        n >>= 1;
+        decay = (decay * decay + LOAD_ONE / 2u) >> SCHED_LOAD_SHIFT;
+    }
+    return result;
+}
+
+/**
  * Each average is folded as Linux's `calc_load` folds it: the new average is
  * the old one decayed, plus the count times what the decay took off, rounded
  * up while the count is above it. Linux counts the uninterruptible sleepers
  * as well, and this kernel does not. The products are taken in 64 bits,
  * since 4096 processes in fixed point times a decay pass 32. The period is
  * measured by the tick count, since a boot processor's tick that found the
- * big lock held ends without calling this, and the next counts its ticks.
+ * big lock held ends without calling this, and the next counts its ticks:
+ * a sample made late keeps the period's phase, and the samples a long gap
+ * passed over are folded at once with the decay to their power, as Linux's
+ * `calc_global_nohz` and `calc_load_n` fold them.
  */
 void sched_load_tick(void)
 {
-    uint32_t active, total, now = (uint32_t)kernel_ticks, passed = now - load_tick;
+    uint32_t active, total, now = (uint32_t)kernel_ticks, passed = now - load_tick, n;
     int i;
 
     load_tick = now;
@@ -809,12 +831,14 @@ void sched_load_tick(void)
         load_wait -= passed;
         return;
     }
-    load_wait = LOAD_FREQ;
+    passed -= load_wait;
+    n = 1u + passed / LOAD_FREQ;
+    load_wait = LOAD_FREQ - passed % LOAD_FREQ;
     sched_task_counts(&active, &total);
     active *= LOAD_ONE;
     for (i = 0; i < 3; i++) {
-        uint64_t next =
-            (uint64_t)load_avg[i] * load_decay[i] + (uint64_t)active * (LOAD_ONE - load_decay[i]);
+        uint32_t decay = n == 1u ? load_decay[i] : sched_load_power(load_decay[i], n);
+        uint64_t next = (uint64_t)load_avg[i] * decay + (uint64_t)active * (LOAD_ONE - decay);
 
         if (active >= load_avg[i]) {
             next += LOAD_ONE - 1u;
