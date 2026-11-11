@@ -77,7 +77,9 @@ void mouse_configure(struct evdev *dev, const char *phys, unsigned int caps)
 {
     evdev_describe(dev, phys, 0);
     evdev_set_capability(dev, EV_KEY, BTN_LEFT);
-    evdev_set_capability(dev, EV_KEY, BTN_RIGHT);
+    if (!(caps & MOUSE_NO_RIGHT)) {
+        evdev_set_capability(dev, EV_KEY, BTN_RIGHT);
+    }
     if (!(caps & MOUSE_NO_MIDDLE)) {
         evdev_set_capability(dev, EV_KEY, BTN_MIDDLE);
     }

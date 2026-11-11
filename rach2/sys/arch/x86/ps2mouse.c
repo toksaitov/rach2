@@ -156,7 +156,9 @@ static const struct port_settings defaults = {100, 200, 5, 0};
 #define ON_GUEST 2
 
 /* Linux's psmouse names and aliases. A known protocol without a detect
- * follows the same reset and PS/2 fallback as a detect that fails. */
+ * follows the same reset and PS/2 fallback as a detect that fails. OLPC's
+ * HGPK is in Linux's table only when it is built for the OLPC XO, which
+ * only a 32-bit kernel can be. */
 static const struct {
     int type;
     const char *name;
@@ -175,7 +177,9 @@ static const struct {
                  {PROTO_UNDRIVEN, "LBPS/2", "lifebook"},
                  {PROTO_TRACKPOINT, "TPPS/2", "trackpoint"},
                  {PROTO_UNDRIVEN, "touchkitPS/2", "touchkit"},
+#ifdef __i386__
                  {PROTO_UNDRIVEN, "OLPC HGPK", "hgpk"},
+#endif
                  {PROTO_ELANTECH, "ETPS/2", "elantech"},
                  {PROTO_UNDRIVEN, "ETSMBus", "elantech-smbus"},
                  {PROTO_UNDRIVEN, "FSPPS/2", "fsp"},
@@ -304,6 +308,13 @@ static struct {
  * device's name. */
 static char guest_who_text[40];
 static char guest_devname[64];
+
+/* The bindings of the auxiliary port's protocol and of the guest that have
+ * ended, which a callback that waited for the command lock compares with
+ * the count it saw on entry, so that it does not change their successors,
+ * as Linux's removal of a driver's files waits out their callbacks. */
+static unsigned int aux_gen;
+static unsigned int guest_gen;
 
 /* How many bytes the first drain reads before it calls the controller
    stuck. A PS/2 output buffer has one byte, so anything past a handful is a
@@ -673,7 +684,7 @@ void ps2mouse_port_rate_set(unsigned int rate)
  * it set. */
 static unsigned int aux_set_rate(unsigned int rate)
 {
-    if (touchpad == TOUCHPAD_SYNAPTICS) {
+    if (touchpad == TOUCHPAD_SYNAPTICS || protocol == PROTO_SYNREL) {
         return synaptics_set_rate(rate);
     }
     if (touchpad == TOUCHPAD_ELANTECH) {
@@ -995,7 +1006,7 @@ static void set_up_protocol(int type)
             packet_size = 3;
         }
         if (touchpad <= 0 && alps <= 0) {
-            ps2mouse_initialize(NULL);
+            ps2mouse_initialize(protocol == PROTO_SYNREL ? synaptics_set_rate : NULL);
         }
     }
     if (touchpad <= 0 && alps <= 0) {
@@ -1021,6 +1032,8 @@ static unsigned int mouse_caps(int type)
         return MOUSE_POINTER | MOUSE_WHEEL | MOUSE_SIDE;
     case PROTO_TRACKPOINT:
         return MOUSE_POINTER | (trackpoint_buttons() < 3 ? MOUSE_NO_MIDDLE : 0);
+    case PROTO_SYNREL:
+        return MOUSE_POINTER | synaptics_relative_caps();
     default:
         return MOUSE_POINTER;
     }
@@ -1051,6 +1064,8 @@ static struct evdev *register_device(char *name, const char *phys, int type, con
         evdev_set_capability(dev, EV_KEY, BTN_SIDE);
     } else if (type == PROTO_TRACKPOINT) {
         evdev_set_prop(dev, INPUT_PROP_POINTING_STICK);
+    } else if (type == PROTO_SYNREL) {
+        evdev_set_version(dev, synaptics_model());
     }
     return dev;
 }
@@ -1067,12 +1082,14 @@ static void register_mouse(void)
     mouse_dev = register_device(aux_devname, "isa0060/serio1/input0", protocol, aux_who);
 }
 
-/** Give serio1 the files of its protocol: a TrackPoint's settings, or an
- * Elantech pad's registers. */
+/** Give serio1 the files of its protocol: a TrackPoint's settings, an
+ * Elantech pad's registers, or a Synaptics pad's `disable_gesture` in
+ * relative mode. */
 static void bind_files(void)
 {
     evdev_sysfs_serio_files(1, protocol == PROTO_TRACKPOINT ? trackpoint_sysfs_add
                                : protocol == PROTO_ELANTECH ? elantech_sysfs_add
+                               : protocol == PROTO_SYNREL   ? synaptics_sysfs_add
                                                             : NULL);
 }
 
@@ -1264,19 +1281,18 @@ static void guest_initialize(const struct ps2io *io)
 }
 
 /** Register the guest's event device as `register_device` names it, at
- * "synaptics-pt/serio0/input0", with serio2's files: psmouse's, and a
- * TrackPoint's settings. */
+ * "synaptics-pt/serio0/input0", with serio2's files (`guest_files`). */
 static void guest_register(void)
 {
     guest.who = who_default(guest.who, guest.protocol);
     guest.dev = register_device(guest_devname, GUEST_PHYS, guest.protocol, guest.who);
-    evdev_sysfs_serio_driver(EVDEV_SERIO_PASS_THROUGH, guest_files);
-    evdev_sysfs_serio_files(EVDEV_SERIO_PASS_THROUGH,
-                            guest.protocol == PROTO_TRACKPOINT ? trackpoint_sysfs_add : NULL);
+    evdev_sysfs_serio_files(EVDEV_SERIO_PASS_THROUGH, guest_files);
 }
 
-/** Take the guest's event device away, as Linux's `psmouse_disconnect`
- * does before a port is probed anew. */
+/** Unbind the guest, as Linux's `psmouse_disconnect` does when its port is
+ * probed anew: its event device and serio2's files go, and the callbacks
+ * that wait for the command lock expire; serio2 stays, as Linux's serio
+ * core keeps a port whose driver went. */
 static void guest_forget(void)
 {
     guest.active = 0;
@@ -1285,7 +1301,8 @@ static void guest_forget(void)
         evdev_unregister(guest.dev);
         guest.dev = NULL;
     }
-    evdev_sysfs_serio_remove(EVDEV_SERIO_PASS_THROUGH);
+    evdev_sysfs_serio_files(EVDEV_SERIO_PASS_THROUGH, NULL);
+    guest_gen++;
     guest.extra = 0;
     guest.side = 0;
 }
@@ -1605,6 +1622,26 @@ static void mouse_irq_handler(isr_params_t *params)
 }
 
 /**
+ * Make serio2, the pass-through port of a Synaptics pad that has one, as
+ * Linux's `synaptics_pt_create` makes it in either mode, and find the
+ * guest behind it in absolute mode. In relative mode the pad sends a
+ * mouse's packets, among which no pass-through packet carries a guest's
+ * reply, so the port stays without a guest, as Linux's psmouse finds none
+ * there.
+ */
+static void connect_pass_through(void)
+{
+    if ((touchpad != TOUCHPAD_SYNAPTICS && protocol != PROTO_SYNREL) ||
+        !synaptics_has_pass_through()) {
+        return;
+    }
+    evdev_sysfs_serio_add(EVDEV_SERIO_PASS_THROUGH);
+    if (touchpad == TOUCHPAD_SYNAPTICS) {
+        (void)ps2mouse_guest_connect(&synaptics_pt);
+    }
+}
+
+/**
  * Find the device on the port and set it up, as Linux's `psmouse_connect`
  * does: the port's settings Linux's defaults; the reset and the defaults, a
  * refusal of either tolerated, since some emulators answer neither; the
@@ -1627,9 +1664,7 @@ static void connect_device(void)
     set_up_protocol(PROTO_AUTO);
     register_mouse();
     bind_files();
-    if (touchpad == TOUCHPAD_SYNAPTICS && synaptics_has_pass_through()) {
-        (void)ps2mouse_guest_connect(&synaptics_pt);
-    }
+    connect_pass_through();
 }
 
 /**
@@ -1826,7 +1861,14 @@ static int port_trackpoint(void)
 
 const struct ps2io *ps2mouse_guest_change_begin(void)
 {
+    unsigned int aux_was = aux_gen, guest_was = guest_gen;
+    int on_aux = port_trackpoint();
+
     ps2mouse_cmd_begin();
+    if (on_aux ? aux_gen != aux_was : guest_gen != guest_was) {
+        ps2mouse_cmd_end(); /* the stick the file was made for went meanwhile */
+        return NULL;
+    }
     if (port_trackpoint()) {
         (void)deactivate(&ps2mouse_aux);
         return &ps2mouse_aux;
@@ -1854,15 +1896,18 @@ void ps2mouse_guest_change_end(void)
 /**
  * Begin a change through a file of the port `port`, ON_AUX or ON_GUEST, as
  * Linux's `psmouse_attr_set_helper` begins one: a run of commands, then the
- * touchpad disabled, and for the guest the guest after it. Returns 0, or
- * -ENODEV, having begun nothing, while the port waits for its reconnect or
- * the guest does not report.
+ * touchpad disabled, and for the guest the guest after it. `gen` is the
+ * count `guest_gen` had when a guest's file was called. Returns 0, or
+ * -ENODEV, having begun nothing, while the port waits for its reconnect,
+ * the guest does not report, or the guest the file was made for went
+ * while the change waited for the command lock.
  */
-static int port_change_begin(int port)
+static int port_change_begin(int port, unsigned int gen)
 {
     int was = cmd_begin_state();
 
-    if (was == STATE_IGNORE || (port == ON_GUEST && (!guest.dev || !guest.active))) {
+    if (was == STATE_IGNORE ||
+        (port == ON_GUEST && (!guest.dev || !guest.active || guest_gen != gen))) {
         cmd_end_state(was);
         return -ENODEV;
     }
@@ -1893,7 +1938,7 @@ static void port_change_end(int port, int rc)
 
 int ps2mouse_change_begin(void)
 {
-    return port_change_begin(ON_AUX);
+    return port_change_begin(ON_AUX, guest_gen);
 }
 
 void ps2mouse_change_end(int rc)
@@ -1968,6 +2013,8 @@ static struct evdev *disconnect_protocol(void)
     struct evdev *old = mouse_dev;
 
     guest_forget();
+    evdev_sysfs_serio_remove(EVDEV_SERIO_PASS_THROUGH);
+    aux_gen++;
     synaptics_disconnect();
     if (touchpad == TOUCHPAD_ELANTECH) {
         elantech_disconnect();
@@ -1999,6 +2046,12 @@ void ps2mouse_reconnect(void)
             reconnect_guest();
         }
         klog(KLOG_INFO, "mouse", "reconnect: the touchpad reports again");
+    } else if (protocol == PROTO_SYNREL && synaptics_reconnect() == 0) {
+        packet_index = 0;
+        if (mouse_send_command(MOUSE_CMD_ENABLE) != MOUSE_ACK) {
+            klog(KLOG_WARN, "mouse", "the device did not enable reporting");
+        }
+        klog(KLOG_INFO, "mouse", "reconnect: the touchpad reports again in relative mode");
     } else if ((touchpad == TOUCHPAD_ELANTECH && elantech_reconnect() == 0) ||
                (alps > 0 && alps_reconnect() == 0)) {
         if (mouse_send_command(MOUSE_CMD_ENABLE) != MOUSE_ACK) {
@@ -2168,9 +2221,7 @@ static int aux_set_protocol(const char *buf, uint32_t len)
     if (old) {
         evdev_unregister(old);
     }
-    if (touchpad == TOUCHPAD_SYNAPTICS && synaptics_has_pass_through()) {
-        (void)ps2mouse_guest_connect(&synaptics_pt);
-    }
+    connect_pass_through();
     klog(KLOG_INFO, "mouse", "protocol: now %s", proto_name(protocol));
     return 0;
 }
@@ -2345,12 +2396,13 @@ static int32_t store_port(void *obj, int arg, const char *buf, uint32_t len)
 {
     int port = arg >> 3, rc;
     struct port_settings *set = port == ON_GUEST ? &guest.set : &aux;
+    unsigned int gen = guest_gen;
     uint32_t n, v = 0;
 
     (void)obj;
     for (n = 0; n < len && buf[n]; n++) { /* Linux's store reads a string */
     }
-    rc = port_change_begin(port);
+    rc = port_change_begin(port, gen);
     if (rc < 0) {
         return rc;
     }
@@ -2406,10 +2458,16 @@ static int aux_files(int dir)
     return add_port_files(dir, ON_AUX);
 }
 
-/** The pass-through port's files, which evdev_sysfs.c adds to serio2. */
+/** The files of the guest that evdev_sysfs.c adds to serio2: psmouse's,
+ * and a TrackPoint's settings. */
 static int guest_files(int dir)
 {
-    return add_port_files(dir, ON_GUEST);
+    int rc = add_port_files(dir, ON_GUEST);
+
+    if (rc == 0 && guest.protocol == PROTO_TRACKPOINT) {
+        rc = trackpoint_sysfs_add(dir);
+    }
+    return rc;
 }
 
 void ps2mouse_msleep(unsigned int ms)
