@@ -4878,16 +4878,9 @@ long sys_pause(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    /* Linux's name of the call's entry for the ABI it was made by. */
-#if defined(__x86_64__)
-    sig_wait(SC_COMPAT(params) ? "__ia32_sys_pause" : "__x64_sys_pause");
-#elif defined(__i386__)
     (void)params;
-    sig_wait("__ia32_sys_pause");
-#else
-    (void)params;
-    sig_wait("sys_pause");
-#endif
+    /* Linux's entries share __do_sys_pause's address; nm -n lists it first. */
+    sig_wait("__do_sys_pause");
     current_proc->restart_kind = RESTART_NOHAND;
     return -EINTR;
 }

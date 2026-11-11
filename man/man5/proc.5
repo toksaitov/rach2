@@ -2156,14 +2156,18 @@ A wait names itself with Linux's function where Linux has one:
 .Ql ep_poll ,
 .Ql sigsuspend ,
 .Ql do_sigtimedwait ,
-.Ql __x64_sys_pause
-or
-.Ql __ia32_sys_pause ,
+.Ql __do_sys_pause ,
 and
 .Ql do_signal_stop
 or
 .Ql ptrace_stop
 for a stopped thread.
+A thread in
+.Xr pause 2
+reads
+.Ql __do_sys_pause
+whichever ABI made the call: Linux's entries of both ABIs are aliases of
+that function, and its symbol table lists it first of the three.
 Any other wait reads as Rach2's
 .Ql wq_wait_event ,
 .Ql wq_wait_event_nointr
