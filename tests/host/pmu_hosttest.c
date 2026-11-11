@@ -617,7 +617,9 @@ static void counter_row(const struct chip *c, const char *line, int want_fixed, 
     check(evtsel == 0 && fixed_ctrl == 0, "the probe leaves the counters stopped");
     check(other_evtsel[1] == 0, "the probe stops the counter the firmware left");
 
+    check(!platform_pmu_armed(), "the counter is not armed before the enable");
     platform_pmu_enable(period);
+    check(platform_pmu_armed(), "the enable arms it");
     check(*ctl == want_ctl, "the control counts cycles with an interrupt");
     check(want_fixed ? evtsel == 0 : fixed_ctrl == 0, "the other counter stays stopped");
     check(last_msr_written == (int)(want_fixed ? IA32_FIXED_CTR_CTRL : evtsel_msr()) &&
@@ -667,6 +669,7 @@ static void counter_row(const struct chip *c, const char *line, int want_fixed, 
     }
 
     platform_pmu_disable();
+    check(!platform_pmu_armed(), "the disable leaves it unarmed");
     check(*ctl == 0, "the disable stops the counter");
     check((lvtpc & LAPIC_LVT_MASKED) != 0, "the disable masks the entry");
     check(chip_amd() || chip_version() < 2 || (global_ctrl & want_global) == 0,
@@ -691,6 +694,7 @@ static void none_row(const struct chip *c, const char *line)
     check(evtsel == 0 && (fixed_ctrl & 0x30u) == 0, "the counters are left stopped");
     writes = msr_writes;
     platform_pmu_enable(c->hz * 10u);
+    check(!platform_pmu_armed(), "without a counter the enable arms none");
     platform_pmu_disable();
     check(msr_writes == writes && lvtpc == (LAPIC_LVT_MASKED | LAPIC_LVT_NMI),
           "the enable and disable touch nothing");
