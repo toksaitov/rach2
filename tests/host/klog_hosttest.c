@@ -659,6 +659,44 @@ static void panic_queue_rows(void)
 }
 
 /**
+ * A record a drain the panic stopped was part way through goes out again
+ * from its own slot, which a full burst raised during its write leaves
+ * alone: with no slot beyond the queue's limit for the record in flight,
+ * the burst's last record would take its place.
+ */
+static void panic_burst_rows(void)
+{
+    reset();
+    console_write_begin();
+    klog(KLOG_INFO, "outer", "began: queued behind a console write");
+    reenter_times = KLOG_PENDING_MAX;
+    stop_at_serial = 5;
+    if (setjmp(stopped) == 0) {
+        console_write_end();
+    }
+    CHECK("the queue holds the burst beside the record in flight",
+          reenter_times == 0 && pending_count() == KLOG_PENDING_MAX + 1 && pending_lost == 0);
+    panicking = 1;
+    klog_deliver_directly();
+    klog(KLOG_CRIT, "panic", "stopped: after a burst");
+    serial[serial_len] = '\0';
+    CHECK("the panic writes the record in flight out again whole, then the burst",
+          has(serial, "<6>[0"
+                      "<6>[0.000000] outer: began: queued behind a console write\r\n"
+                      "<3>[0.000000] irq: landed: one of a burst\r\n") &&
+              count_lines(serial) == KLOG_PENDING_MAX + 2 &&
+              has(serial, "irq: landed: one of a burst\r\n"
+                          "<2>[0.000000] panic: stopped: after a burst\r\n"));
+    screen[screen_len] = '\0';
+    CHECK("and the screen, which had it whole, has it once",
+          has(screen, "outer: began: queued behind a console write\n"
+                      "irq: landed: one of a burst\n") &&
+              count_lines(screen) == KLOG_PENDING_MAX + 2);
+    CHECK("and nothing waits or is dropped after",
+          pending_count() == 0 && pending_lost == 0 && !has(serial, "klog: dropped:"));
+}
+
+/**
  * The records kept for later, made in an NMI or by a processor without the
  * big lock: they reach the ring and the destinations in the order they were
  * made, ahead of a record made after them, inside another record's delivery
@@ -1291,6 +1329,7 @@ int main(void)
     kept_stuck_rows();
     exclusion_rows();
     panic_queue_rows();
+    panic_burst_rows();
     bracket_rows();
 
     if (fails == 0) {
