@@ -3,7 +3,7 @@
 # graphics guest or on a machine's own display, as an ordinary user, the way
 # Linux's reference runs on the Lenovo took them.
 #
-#   games.sh [-d] [-s WxH] [-t SECONDS] [-o OUT] [-r REPLAYS] supertuxkart|0ad
+#   games.sh [-d] [-s WxH] [-t SECONDS] [-o OUT] [-r REPLAYS] GAME
 #
 # Plays the game's fixed replay of REPLAYS (/usr/share/games/rach2/replays,
 # which the games layer installs) once, fullscreen at WxH (1280x800) under a
@@ -13,6 +13,9 @@
 #                 arguments of supertuxkart.args: AI karts drive one track for
 #                 a fixed span of the race's own time, and the game ends
 #                 itself with its profile summary.
+#   supertuxkart-i386
+#                 the same race in the i386 SuperTuxKart of the x86-64 root's
+#                 i386 layer, supertuxkart.i386-linux-gnu, on the i386 Mesa.
 #   0ad           0 A.D.'s visual replay of 0ad-mainland/commands.txt, a
 #                 recorded match of two AI players, played for 150 s after
 #                 its loading screen and then ended.
@@ -37,8 +40,8 @@
 # that whole window. It never starts before the game's own start, which comes
 # later only where every frame lasts about a second, as under TCG: for 0 A.D.
 # the frames the HUD had written when the engine printed GAME STARTED, and
-# for SuperTuxKart the race's frames counted back from the dump's end until
-# they make the race's time, each giving at most 50 ms of it, as its main
+# for either SuperTuxKart the race's frames counted back from the dump's end
+# until they make the race's time, each giving at most 50 ms of it, as its main
 # loop gives.
 #
 # OUT (.) gets the record, the game's log, `hud`, every frame time the HUD
@@ -74,21 +77,22 @@ while getopts ds:t:o:r: o; do
 done
 shift $((OPTIND - 1))
 [ $# -eq 1 ] || {
-    echo "usage: games.sh [-d] [-s WxH] [-t SECONDS] [-o OUT] [-r REPLAYS] supertuxkart|0ad" >&2
+    echo "usage: games.sh [-d] [-s WxH] [-t SECONDS] [-o OUT] [-r REPLAYS] supertuxkart|supertuxkart-i386|0ad" >&2
     exit 2
 }
 game=$1
 PATH=$PATH:/usr/games
 case $game in
     supertuxkart) program=supertuxkart span= ;;
+    supertuxkart-i386) program=supertuxkart.i386-linux-gnu span= ;;
     0ad) program=pyrogenesis span=150 ;;
-    *) echo "games: no game $game; supertuxkart or 0ad" >&2; exit 2 ;;
+    *) echo "games: no game $game; supertuxkart, supertuxkart-i386 or 0ad" >&2; exit 2 ;;
 esac
 command -v "$program" > /dev/null || { echo "games: no $program" >&2; exit 1; }
 case $seconds in
     '') ;;
     *[!0-9]* | 0*) echo "games: -t $seconds is no whole number of seconds" >&2; exit 2 ;;
-    *) [ "$game" = supertuxkart ] || span=$seconds ;;
+    *) [ "$game" != 0ad ] || span=$seconds ;;
 esac
 
 runner_init games "$out"
@@ -175,22 +179,25 @@ frames()
 
 log=$out/$game.log
 case $game in
-    supertuxkart)
+    supertuxkart | supertuxkart-i386)
         args=$replays/supertuxkart.args
         [ -r "$args" ] || runner_die "no $args"
         words="$(grep -v '^#' "$args" | tr '\n' ' ')--fullscreen --screensize=$size"
         if [ -n "$seconds" ]; then
             words=$(echo "$words" | sed "s/--profile-time=[0-9]*/--profile-time=$seconds/")
         fi
-        runner_record "case supertuxkart the profile race of $args"
-        runner_record "game $(supertuxkart --version 2>&1 |
+        runner_record "case $game the profile race of $args"
+        # The ELF header's fifth byte is its class: 1 for 32-bit, 2 for 64-bit.
+        runner_record "program $(command -v "$program"), ELF class $(od -An -tu1 -j4 -N1 \
+            "$(command -v "$program")" | tr -d ' ')"
+        runner_record "game $("$program" --version 2>&1 |
             sed -n 's/.*\(SuperTuxKart, [0-9][^ ]*\)\.$/\1/p' | head -n 1)"
         runner_record "arguments $words"
         # shellcheck disable=SC2086 # the arguments are words
-        supertuxkart $words > "$log" 2>&1 < /dev/null ||
-            runner_die "supertuxkart failed: $(tail -n 3 "$log")"
+        "$program" $words > "$log" 2>&1 < /dev/null ||
+            runner_die "$program failed: $(tail -n 3 "$log")"
         grep -q 'Number of frames: ' "$log" ||
-            runner_die "supertuxkart printed no profile summary: $(tail -n 3 "$log")"
+            runner_die "$program printed no profile summary: $(tail -n 3 "$log")"
         runner_record "profile $(sed -n 's/.*\(Number of frames: .*\)/\1/p' "$log" | tail -n 1)"
         race=$(echo "$words" | sed -n 's/.*--profile-time=\([0-9]*\).*/\1/p')
         from=$(cat "$RUNNER_WORK/hud/"* 2>/dev/null | awk -v race="$((race * 1000))" '

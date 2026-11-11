@@ -315,8 +315,9 @@ static int parse_virgl(struct graphics_case *s, const char *name)
  * program TEST, whose name has no dash, on PROFILE; modetest's PROFILE;
  * piglit's PART, on virtio-vga; glmark2's `wayland`, on virtio-vga;
  * venus's as parse_venus says; vkpresent's `vkcube`, on venus;
- * games-native's `supertuxkart` or `0ad`, on virtio-vga; and virgl's as
- * parse_virgl says. Give 0 for an identity of no such form.
+ * games-native's `supertuxkart`, `supertuxkart-i386` or `0ad`, on
+ * virtio-vga; and virgl's as parse_virgl says. Give 0 for an identity of
+ * no such form.
  */
 static int parse(struct graphics_case *s, const char *id)
 {
@@ -362,7 +363,8 @@ static int parse(struct graphics_case *s, const char *id)
         strcpy(s->profile, "venus");
         return strcmp(name, "vkcube") == 0;
     case GAMES:
-        if (strcmp(name, "supertuxkart") != 0 && strcmp(name, "0ad") != 0)
+        if (strcmp(name, "supertuxkart") != 0 && strcmp(name, "supertuxkart-i386") != 0 &&
+            strcmp(name, "0ad") != 0)
             return 0;
         strcpy(s->test, name);
         return set_profile(s, "virtio-vga");
