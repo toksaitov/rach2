@@ -38,7 +38,13 @@ each number may be decimal, octal with a leading 0, or hexadecimal with
 a leading 0x:
 .Bl -tag -width Ds
 .It Cm ramoops.mem_address , Cm ramoops.mem_size
-The region's physical address and size, which must be under 4 GiB.
+The region's physical address and size.
+The size must be under 4 GiB, and the region must end within what the
+kernel reaches: 4 GiB on i686, and on x86-64 the end of the direct map,
+64 TiB, or 64 GiB on a processor without 1 GiB pages.
+The region is mapped in the kernel's 128 MiB window for device memory,
+which it shares with the devices' registers; one that does not fit there
+is reserved but not used.
 The kernel takes the region out of its memory before it gives any of it
 out, as Linux's
 .Cm memmap=
