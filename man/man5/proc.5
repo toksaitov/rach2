@@ -1060,6 +1060,20 @@ moves nothing; a write from 0 to 2 sets it for the next exec;
 40, the highest capability Linux 6.12 numbers,
 .Dv CAP_CHECKPOINT_RESTORE ,
 which libcap reads to bound its sets;
+.Pa kernel/panic ,
+what a panic does once its record is out, as Linux's
+.Va panic_timeout :
+0 halts the machine; a number of seconds above 0 keeps the record on the
+screen that long and then resets the machine; one below 0 resets it at
+once.
+.Ql panic= Ns Ar N
+on the boot line sets it, 0 without, and a write of any int sets it;
+.Pa kernel/panic_on_oops ,
+1 with
+.Ql oops=panic
+on the boot line and 0 without, which a write of any int sets; an
+exception the kernel takes in its own code panics whatever the value, as
+Linux's oops does with it set;
 .Pa crypto/fips_enabled ,
 0, since the kernel is not in FIPS mode, which libgcrypt and OpenSSL read;
 .Pa user/max_mnt_namespaces ,
