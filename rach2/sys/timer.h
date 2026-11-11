@@ -190,6 +190,13 @@ uint32_t timer_calibrate(void);
  * This conversion reads no hardware and is safe with interrupts off. */
 uint64_t timer_cycles_us(uint64_t cycles);
 
+/** Whether a span of processor cycles can be timed by `timer_cycles_us`:
+ * the counter's rate was measured and every processor started so far
+ * passed the check that its counter agrees with the boot processor's
+ * (arch/x86/tsc.h), so that a span begun on one processor and ended on
+ * another reads true. Safe with interrupts off. */
+int timer_cycles_agree(void);
+
 /** The reference that keeps the clock, "hpet", "pm timer" or "tsc", or NULL
  * when the counter under the tick keeps it. */
 const char *timer_reference(void);

@@ -60,7 +60,8 @@ void sleep_lock_init(struct sleep_lock *l, struct sleep_lock_record *record, int
     l->depth = 0;
     l->next = 0;
     l->serving = 0;
-    l->taken_cycles = 0;
+    l->taken_at = 0;
+    l->taken_by_cycles = 0;
     l->taken_waits = 0;
     l->flags = flags;
     l->record = record;
@@ -117,7 +118,8 @@ void sleep_lock_take(struct sleep_lock *l)
     }
     l->holder = me;
     l->depth = 1;
-    l->taken_cycles = arch_cycles();
+    l->taken_by_cycles = timer_cycles_agree();
+    l->taken_at = l->taken_by_cycles ? arch_cycles() : timer_now_us();
     l->taken_waits = current_proc ? current_proc->disk_waits : 0;
     spin_unlock_irqrestore(&l->spin, irq);
     if ((l->flags & SLEEP_LOCK_FILE) && current_proc) {
@@ -127,19 +129,29 @@ void sleep_lock_take(struct sleep_lock *l)
 
 /** Count the hold of `l` that is ending in its record when its holder
  * finished a disk wait during it, under the records' lock, since every
- * lock of a kind shares its record. The hold is converted from processor
- * cycles here, the one place it is read; it reads 0 where the counter was
- * not calibrated, and its microseconds are kept in 32 bits, so a hold longer
- * than 71 minutes reads short. The holder calls it before it gives `l` up. */
+ * lock of a kind shares its record. A hold stamped by the processor's
+ * counter is converted from cycles here, the one place it is read, and one
+ * stamped by the clock is read from it, so that every machine times its
+ * holds, as Linux's lock_stat times a hold by local_clock, which falls back
+ * from the TSC where it cannot be trusted (kernel/locking/lockdep.c:246-249,
+ * 350). A counter read below the stamp reads 0. Its microseconds are kept
+ * in 32 bits, so a hold longer than 71 minutes reads short. The holder calls it
+ * before it gives `l` up. */
 static void sleep_record_hold(const struct sleep_lock *l)
 {
     struct sleep_lock_record *r = l->record;
     uint32_t held, irq;
+    uint64_t now;
 
     if (!r || !current_proc || current_proc->disk_waits == l->taken_waits) {
         return;
     }
-    held = (uint32_t)timer_cycles_us(arch_cycles() - l->taken_cycles);
+    if (l->taken_by_cycles) {
+        now = arch_cycles();
+        held = now > l->taken_at ? (uint32_t)timer_cycles_us(now - l->taken_at) : 0;
+    } else {
+        held = timer_now_us() - (uint32_t)l->taken_at;
+    }
     irq = spin_lock_irqsave(&records_lock);
     r->crossings++;
     if (held > r->longest_us) {

@@ -7,6 +7,7 @@
 #include "portio.h"
 #include "pit.h"
 #include "refclock.h"
+#include "tsc.h"
 
 #include "kcpu.h"
 #include "../arch.h"
@@ -474,6 +475,14 @@ uint64_t timer_cycles_us(uint64_t cycles)
         }
     }
     return ticks * TICK_US + refclock_scale((uint32_t)rem, TICK_US, tsc_per_tick);
+}
+
+int timer_cycles_agree(void)
+{
+    uint64_t behind;
+    int cpu;
+
+    return tsc_per_tick != 0 && tsc_synced(&cpu, &behind);
 }
 
 int timer_tick_shared(void)
