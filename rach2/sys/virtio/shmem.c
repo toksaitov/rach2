@@ -76,9 +76,11 @@ struct vshm_rev {
  * The transport's record of one attached region. `refs` counts the attach
  * and each bind of virtio-gpu until that bind's virtio_put, each map of
  * the VM's pages until its map_free, and the interrupt thread's reap while
- * it runs, and changes only with interrupts off (vs_get, vs_put), since a
- * kernel thread that the tick switches may drop the last one, as one that
- * frees an imported buffer does. The record is freed with the last; the
+ * it runs, and changes only with interrupts off (vs_get, vs_put), as
+ * kref's count is atomic. Every thread that takes or drops one, a system
+ * call or a kernel thread marked `no_tick_switch` such as ki915 freeing an
+ * imported buffer, runs unswitched by the tick; the count stays whole even
+ * without that rule. The record is freed with the last; the
  * detach gives back the region's pages and window, and the driver's and
  * maps' remaining references keep the record until they let go. A record
  * detached while objects still hold pages of its heap, as a buffer whose
@@ -157,9 +159,11 @@ static wait_queue_t vshm_irq_wq;      /* the interrupt thread sleeps here */
 /*
  * The lock over `vshm_kept`, each kept record's `gone`, `gone_next`, heap
  * map and tables, and `vshm_marked`, from its attach's marks to its
- * detach. Pages come back from system calls and from any kernel thread
- * that frees a buffer, which the tick may switch, so a walk of the list,
- * a give-back to two heaps or a record's leaving it runs whole, as KVM
+ * detach. Pages come back from system calls and from the kernel threads
+ * that free a buffer, ki915, kvkms and DRM's and virtio-gpu's workers, so
+ * a walk of the list, a give-back to two heaps or a record's leaving it
+ * runs whole under one lock, and not by the rule that the tick switches
+ * none of them (`no_tick_switch`), as KVM
  * keeps its irqfds under irqfds.lock (virt/kvm/eventfd.c:596-605 in
  * 6.12.115). Taken before a record's `heap_lock`, with interrupts off;
  * what leaves under it is freed after it is let go (vshm_tables_free), as
@@ -950,9 +954,11 @@ static int vs_dma_addr(struct virtio_dev *d, uintptr_t phys, uint64_t *addr)
 
 /**
  * Take a reference on the record. `refs` changes with interrupts off, so
- * that no tick passes the big lock on inside the load and the store when
- * a kernel thread that the tick switches takes or drops one; it is
- * kref_get's increment (include/linux/kref.h:43-46 in 6.12.115).
+ * that no tick passes the big lock on inside the load and the store even
+ * from a thread the tick might switch. Every thread that takes one runs
+ * unswitched (`no_tick_switch`), and this keeps the count whole without
+ * that rule, as kref_get's atomic increment does
+ * (include/linux/kref.h:43-46 in 6.12.115).
  */
 static void vs_get(struct vshm *vs)
 {
