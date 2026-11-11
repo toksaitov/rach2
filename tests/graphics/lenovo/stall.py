@@ -4,9 +4,9 @@ Run as root: python3 stall.py USER OUT RUNS, on Rach2 or on the Lenovo's
 Debian alike. Like hasvk.py it owns the screen: it ends the boot session's
 Weston, starts a private DRM Weston through seatd, presents vkcube's 300
 frames once, as hasvk.py does before its picture, and then runs Chromium's
-WebGPU picture RUNS times as USER, the even runs alone and the odd ones
-with Chromium's own trace. threadwatch samples the threads of Chromium,
-Weston and Xwayland through each run, with the GPU's clock, the i915
+WebGPU picture RUNS times as USER, in turn alone, beside threadwatch, and
+beside threadwatch with Chromium's own trace. threadwatch samples the
+threads of Chromium, Weston and Xwayland, with the GPU's clock, the i915
 interrupt's count and, on Rach2, the big lock's and the timer's counters.
 OUT must not exist; it keeps every run and, in summary.json and stall.txt,
 the slowest gap of each run's first frames and what each thread did in it.
@@ -36,6 +36,9 @@ FIRST = 16
 STEADY = 10
 # What threadwatch's window around a gap keeps before and after it, in ns.
 MARGIN = 20000000
+# The runs in turn: the picture alone, beside threadwatch, whose reads take
+# the kernel's big lock on Rach2, and beside threadwatch with Chromium's trace.
+KINDS = ("bare", "watched", "traced")
 
 
 def snapshot(card, into):
@@ -149,35 +152,41 @@ def main():
         summary = []
         report = []
         for index in range(count):
-            mode = "webgpu-trace" if index % 2 else "webgpu-frames"
+            kind = KINDS[index % len(KINDS)]
+            mode = "webgpu-trace" if kind == "traced" else "webgpu-frames"
             here = out / ("run-%d" % index)
             here.mkdir()
             os.chown(here, account.pw_uid, account.pw_gid)
             snapshot(card, here / "before")
             log = here / "threadwatch.txt"
-            watch = subprocess.Popen([str(sampler), "-i", "1000",
-                "-f", str(card / "gt_act_freq_mhz"), "-f", "/proc/interrupts@i915",
-                # Rach2's big lock and timer counters, which Linux lacks.
-                "-f", "/proc/stat@bkl_wait", "-f", "/proc/stat@bkl_hold_max",
-                "-f", "/proc/stat@latency_timer_us", "-f", "/proc/stat@timer_passes_late",
-                str(log), "600", "chromium", "weston", "Xwayland"], start_new_session=True)
+            if kind != "bare":
+                watch = subprocess.Popen([str(sampler), "-i", "1000",
+                    "-f", str(card / "gt_act_freq_mhz"), "-f", "/proc/interrupts@i915",
+                    # Rach2's big lock and timer counters, which Linux lacks.
+                    "-f", "/proc/stat@bkl_wait|bkl_hold_max|latency_timer_us|timer_passes_late",
+                    str(log), "600", "chromium", "weston", "Xwayland"], start_new_session=True)
             try:
                 run(["python3", str(GRAPHICS / "browser/sandbox.py"), user, "chromium",
                      str(here / "browser"), mode], here / "browser.log", env)
             finally:
-                watch.send_signal(signal.SIGTERM)
-                assert watch.wait() == 0, "threadwatch failed"
-                watch = None
+                if watch is not None:
+                    watch.send_signal(signal.SIGTERM)
+                    assert watch.wait() == 0, "threadwatch failed"
+                    watch = None
             snapshot(card, here / "after")
             picture = json.loads((here / "browser/result.json").read_text())["picture"]
-            row = dict(frames(picture), run=index, mode=mode)
+            row = dict(frames(picture), run=index, kind=kind)
             summary.append(row)
             save(out / "summary.json", summary)
             print("stall: run %d: %s: gap %.1f ms after frame %d, steady %.2f FPS, %d late, %.4f s" % (
-                index, mode, row["gap_ms"], row["after_frame"], row["steady_fps"],
+                index, kind, row["gap_ms"], row["after_frame"], row["steady_fps"],
                 row["late_after_steady"], row["seconds"]), flush=True)
             k = row["after_frame"]
-            report.append("run %d (%s): %s" % (index, mode, json.dumps(row, sort_keys=True)))
+            report.append("run %d (%s): %s" % (index, kind, json.dumps(row, sort_keys=True)))
+            if kind == "bare":
+                report.append("")
+                (out / "stall.txt").write_text("\n".join(report) + "\n")
+                continue
             header, _, _ = watched(log, 0, 0)
             # threadwatch's first line pairs its two clocks; the page's
             # times are on the epoch's through timeOrigin.
@@ -186,7 +195,7 @@ def main():
             origin = (picture["timeOrigin"] + picture["start"]) * 1e6
             low = int(origin + picture["frameEnds"][k] * 1e6) - offset
             high = int(origin + picture["frameStarts"][k + 1] * 1e6) - offset
-            if mode == "webgpu-trace":
+            if kind == "traced":
                 mark_low, mark_high, rows = traced(here / "browser/trace.json.gz", k)
                 if mark_low is not None:
                     report.append("trace: frames %d and %d marked %.1f ms apart; the epoch's mapping put "
