@@ -175,7 +175,7 @@ copy; when the first destination cannot be written the call gives
 but for a file of a mounted file system only after the check of the
 list's end at the offset and when the file has a byte to read at the
 offset; when it has none the call returns zero, as on Linux.
-A pipe and a stream socket answer the wait, the end of input and
+A pipe and a socket answer the wait, the end of input and
 .Er EAGAIN
 before any copy, so a list whose first buffer cannot be written reads zero
 from an ended pipe.
@@ -193,7 +193,13 @@ describes: a buffer whose destination cannot be written, or lies outside
 user space, stays queued whole and ends the call with the bytes of the
 buffers before it, or
 .Er EFAULT .
-A datagram socket gives
+An AF_UNIX stream socket copies its messages in order: a page that cannot
+be written ends the call with the bytes of the messages before it, or
+.Er EFAULT ,
+and the message it was copying stays queued, as Linux's
+.Fn unix_stream_read_generic
+leaves it.
+A datagram socket, of the network or AF_UNIX, gives
 .Er EFAULT
 when any copy of the datagram fails, and the datagram is consumed.
 The descriptor is checked before the list, as for
@@ -216,6 +222,12 @@ buffer of the same call stored into a mapping of the file.
 A pipe and a stream socket are read as one read of the whole list, which
 waits only for its first byte and takes what is queued, as much as the
 buffers hold.
+An AF_UNIX socket of any type is one receive into the whole list, as
+Linux's socket read gives the list to the socket's
+.Fn recvmsg :
+a stream socket reads across its messages, and a datagram or
+sequenced-packet socket takes one message across the buffers and leaves
+the next queued, however much room is left.
 For a device or a
 .Pa /proc
 file, later buffers are read only while the descriptor reports read
@@ -223,9 +235,9 @@ readiness; a device that reports it immediately, a disk among them, can
 still sleep in the read itself.
 A terminal is read only once, into the first nonempty buffer.
 .Pp
-For a datagram, raw or packet socket, exactly one message is taken into a
-kernel buffer before it is scattered across the destinations of the copied
-list.
+For a datagram, raw or packet socket of the network, exactly one message is
+taken into a kernel buffer before it is scattered across the destinations
+of the copied list; an AF_UNIX one copies its message straight into them.
 Bytes beyond the combined capacity are discarded.
 A failed copy gives
 .Er EFAULT ,

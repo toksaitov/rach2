@@ -2336,7 +2336,11 @@ static int32_t recv_stream(struct unix_sock *s, int nonblock, const struct kerne
 
 /** A receive of one message into `iov` on a datagram or sequenced-packet
  * socket, which the receive lock keeps from its choice to its consumption;
- * its length as `unix_recvfrom` gives it, or its errors. */
+ * its length as `unix_recvfrom` gives it, or its errors. A copy that faults
+ * is -EFAULT and consumes the message, closing its descriptors, unless
+ * MSG_PEEK, as Linux's __unix_dgram_recvmsg has dequeued the skb before its
+ * copy and frees it (net/unix/af_unix.c:2459-2460, 2501-2502 and
+ * 2541-2542 in 6.12). */
 static int32_t recv_msg(struct unix_sock *s, int nonblock, const struct kernel_iovec *iov,
                         uint32_t iovlen, uint32_t total, int flags, struct unix_in *in)
 {
@@ -2365,6 +2369,9 @@ static int32_t recv_msg(struct unix_sock *s, int nonblock, const struct kernel_i
     m = s->rq_head;
     chunk = m->len < total ? m->len : total;
     if (iov_copy(iov, iovlen, 0, m->data, chunk, 1) != 0) {
+        if (!peek) {
+            msg_free(dequeue(s));
+        }
         recv_unlock(s);
         return -EFAULT;
     }
@@ -2573,6 +2580,19 @@ int32_t unix_recvfrom(fd_entry_t *e, uintptr_t buf, uint32_t len, int flags, uin
             return err;
         }
     }
+    return rc;
+}
+
+int32_t unix_readv(fd_entry_t *e, const struct kernel_iovec *iov, int count, uint32_t total)
+{
+    struct unix_in in;
+    int32_t rc;
+
+    k_memset(&in, 0, sizeof(in));
+    transit_enter(&in);
+    rc = recv_core(e, iov, (uint32_t)count, total, 0, &in);
+    release_in(&in);
+    transit_leave(&in);
     return rc;
 }
 

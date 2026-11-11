@@ -6940,10 +6940,15 @@ static uint32_t readv_room(const struct kernel_iovec *iov, uint32_t left)
  * How depends on what is behind the descriptor, since a second read is not
  * always reading on. A datagram, raw or packet socket is read once
  * (`readv_dgram`): one datagram is one message, and a second read would
- * take the next one. A stream socket (`stream_readv`) and a pipe
- * (`pipe_readv`) read the vector as one read, as Linux's tcp_recvmsg and
- * pipe_read take an iov_iter: the wait, the end of input and -EAGAIN come
- * first, and a copy that faults leaves its bytes queued.
+ * take the next one. An AF_UNIX socket of any type is one receive into the
+ * whole vector (`unix_readv`), as Linux's sock_read_iter gives it to
+ * unix_recvmsg: a datagram or sequenced-packet socket takes one message
+ * across the elements (net/unix/af_unix.c:2496-2501 in 6.12), and a stream
+ * socket's copy that faults keeps its message queued (af_unix.c:2921-2927).
+ * A stream socket of the network (`stream_readv`) and a pipe (`pipe_readv`)
+ * read the vector as one read, as Linux's tcp_recvmsg and pipe_read take an
+ * iov_iter: the wait, the end of input and -EAGAIN come first, and a copy
+ * that faults leaves its bytes queued.
  *
  * Anything else, a device or a /proc file among them, is read for the first
  * buffer by the ordinary read, which waits if it must, and for each later
@@ -6978,6 +6983,9 @@ static long readv_elements(fd_entry_t *entry, int fd, const struct kernel_iovec 
         if (entry->sock->type == SOCK_STREAM) {
             return stream_readv(entry, iov, (uint32_t)count, 0);
         }
+    }
+    if (entry->type == FD_TYPE_UNIX) {
+        return unix_readv(entry, iov, count, wanted);
     }
     if (pipe_is(entry)) {
         return pipe_readv(entry, iov, count);
