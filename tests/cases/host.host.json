@@ -2993,7 +2993,7 @@
         },
         {
           "assertion_id": "endothers",
-          "checks": "an init's end waits for the processes still ending: its prepared kernel fixture exits 0",
+          "checks": "an init's end waits for the processes still ending, and SIGKILL ends an exec's wait for the other threads: its prepared kernel fixture exits 0",
           "source": "program"
         },
         {
