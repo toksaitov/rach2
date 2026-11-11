@@ -1881,6 +1881,12 @@ int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid)
     return -ENOENT;
 }
 
+/** No descriptor is of /proc, so a lookup has no owner to set. */
+void procfs_lookup_owner(const struct vpath *vp)
+{
+    (void)vp;
+}
+
 /** No descriptor is of /proc: -1. */
 int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
 {
