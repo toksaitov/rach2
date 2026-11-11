@@ -12,7 +12,7 @@ die()
 # Print the commands, whose game files and state all live under /data.
 usage()
 {
-    echo 'usage: crysis.sh install SETUP.exe | verify | run [ARGUMENT...]'
+    echo 'usage: crysis.sh install SETUP.exe | verify | run [--umu] [--32] [ARGUMENT...]'
 }
 
 action=${1:-}
@@ -84,6 +84,23 @@ STEAM_COMPAT_CLIENT_INSTALL_PATH=$base/steam
 export MESA_SHADER_CACHE_DIR MESA_SHADER_CACHE_DISABLE PROTON_LOG_DIR
 export STEAM_COMPAT_CLIENT_INSTALL_PATH
 mkdir -p "$base/saves" "$MESA_SHADER_CACHE_DIR" "$PROTON_LOG_DIR"
-cd "$base/game/Bin64"
-exec rach2-game --id 17300 --prefix "$base/compat" "$PWD/Crysis.exe" \
+route=
+bin=Bin64
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --umu) route=--umu; shift ;;
+        --32) bin=Bin32; shift ;;
+        *) break ;;
+    esac
+done
+if [ -n "$route" ]; then
+    # umu maps drive S: to the directory above the install path, which is
+    # the program's own by default; from S:\ the game finds no language.
+    # The container shares /data, which holds the prefix and the saves.
+    STEAM_COMPAT_INSTALL_PATH=$base/game
+    PRESSURE_VESSEL_FILESYSTEMS_RW=/data${PRESSURE_VESSEL_FILESYSTEMS_RW:+:$PRESSURE_VESSEL_FILESYSTEMS_RW}
+    export STEAM_COMPAT_INSTALL_PATH PRESSURE_VESSEL_FILESYSTEMS_RW
+fi
+cd "$base/game/$bin"
+exec rach2-game ${route:+"$route"} --id 17300 --prefix "$base/compat" "$PWD/Crysis.exe" \
     -dx9 -userpath 'Z:\data\crysis\saves' "$@"
