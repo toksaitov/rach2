@@ -582,7 +582,9 @@ int32_t readv_dgram(fd_entry_t *entry, const struct kernel_iovec *iov, int iovcn
  * ready, or -errno as recv(2): -EAGAIN, -ENOTCONN, -ECONNRESET, -EINTR, or
  * -EFAULT when the destination of the first receive buffer cannot be
  * written, which stays queued; one that cannot be written after another was
- * taken stays queued and ends the call with the bytes taken. May sleep.
+ * taken stays queued and ends the call with the bytes taken. Holds the
+ * socket's `recv_lock` but while it waits for data, so the bytes it returns
+ * are adjacent in the stream. May sleep.
  */
 int32_t stream_readv(fd_entry_t *entry, const struct kernel_iovec *iov, uint32_t iovlen, int flags);
 
