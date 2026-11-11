@@ -1928,9 +1928,7 @@ void kvm_pmu_vmx_enter(struct kvm_vcpu *v, struct kvm_pmu_msr *guest, struct kvm
             }
         }
     }
-    if (used) {
-        pmu_placed = used;
-    }
+    pmu_placed = used;
     fixed |= program_slots(p, guest, host, ng, nh);
     if (kvm_pmu_global()) {
         if (pmu_host.nr_fixed && fixed != host_fixed) {

@@ -676,6 +676,12 @@ static void intel_steps(void)
     kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
     CHECK(!(kvm_pmu_vmcs_debugctl(&v) & KVM_DEBUGCTL_FREEZE_IN_SMM), "nor FREEZE_WHILE_SMM");
     kvm_pmu_vmx_exit(&v, guest, 1);
+    v.pmu.global_ctrl = 0;
+    kvm_pmu_prepare(&v);
+    kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
+    CHECK(kvm_pmu_placed_show(NULL, 0, text, sizeof(text)) == 4 && !memcmp(text, "0x0\n", 4),
+          "an entry that places no counter gives pmu_placed 0x0");
+    kvm_pmu_vmx_exit(&v, guest, 1);
 }
 
 /** Drive the guest's LBR stack: PERF_CAPABILITIES, DEBUGCTL, its MSRs,
