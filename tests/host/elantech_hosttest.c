@@ -1526,8 +1526,6 @@ void k_udelay(uint32_t usec)
     }
 }
 
-/* What the guest of a Synaptics pad's pass-through port needs, which an
- * Elantech pad never calls; trackpoint_hosttest.c tests it. */
 /** No sysfs tree is published by this model. */
 void evdev_sysfs_serio_remove(int port)
 {
@@ -1539,6 +1537,13 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
     return cond(arg) ? 0 : -EINTR;
+}
+
+/* What the guest of a Synaptics pad's pass-through port needs, which an
+ * Elantech pad never calls; trackpoint_hosttest.c tests it. */
+void evdev_sysfs_serio_add(int port)
+{
+    (void)port;
 }
 
 void evdev_sysfs_serio_files(int port, int (*add)(int dir))

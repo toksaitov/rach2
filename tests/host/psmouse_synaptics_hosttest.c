@@ -490,9 +490,10 @@ int copy_from_user(void *dst, const void __user *src, size_t n)
 /*
  * The files sysfs would hold: each attribute added, the directory it went
  * below, which is 100 and its port's number, and whether a protocol's
- * files or the port's own added it. `evdev_sysfs_serio_driver` and
- * `evdev_sysfs_serio_files` make them at once, as evdev_sysfs.c does for a
- * port whose directory is there.
+ * files or the port's own added it. `evdev_sysfs_serio_files` makes a
+ * protocol's files at once, as evdev_sysfs.c does for a port whose
+ * directory is there; this model makes a driver's files at once too, where
+ * evdev_sysfs.c records the callback and makes them with the directory.
  */
 #define FILES_MAX 64
 struct file {
@@ -546,6 +547,14 @@ void evdev_sysfs_serio_remove(int port)
     drop_files(port, 0);
     drop_files(port, 1);
     port_driver[port] = NULL;
+}
+
+/** The Lenovo's pad has no pass-through port, which alone is made so. */
+void evdev_sysfs_serio_add(int port)
+{
+    printf("psmouse-synaptics-test: fail: serio%d made for a pad without a pass-through port\n",
+           port);
+    fails++;
 }
 
 /** This model has no competing command caller. */
@@ -817,14 +826,106 @@ static void pause_rows(void)
     CHECK("a finger reports after the poll", moves_to(3700));
 }
 
-/** Relative mode is selectable, and a failed absolute setup is retried
- * when the device reconnects. */
-static void relative_rows(void)
+/** Whether bit `code` of the bit set `bits` is on. */
+static int bit_set(const uint8_t *bits, unsigned int code)
 {
+    return (bits[code >> 3] >> (code & 7)) & 1;
+}
+
+/** Whether the event device named `name` is registered, its description
+ * into `*d`. */
+static int described(const char *name, struct evdev_desc *d)
+{
+    int n;
+
+    for (n = 0; n < EVDEV_MAX; n++) {
+        if (evdev_snapshot(n, d) && strcmp(d->name, name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** Relative mode set up as Linux's `synaptics_init_relative` sets it: the
+ * mode byte of absolute mode without its absolute bit, the pad's buttons
+ * and model, and its rate through the pad's own setter. */
+static void relative_mode_rows(void)
+{
+    static const uint8_t rate40[] = {0xF5, 0xE6, 0xE8, 0,    0xE8, 0,   0xE8,
+                                     1,    0xE8, 1,    0xF3, 0x14, 0xF4};
+    struct evdev_desc d;
+
     CHECK("synaptics-relative selects three-byte relative packets",
           store(1, "protocol", "synaptics-relative") == 18 &&
-              reads(1, "protocol", "SynRelPS/2\n") && pad_mode == 0 &&
-              touchpad == -TOUCHPAD_SYNAPTICS && packet_size == 3 && mouse_dev && !pad);
+              reads(1, "protocol", "SynRelPS/2\n") && touchpad == -TOUCHPAD_SYNAPTICS &&
+              packet_size == 3 && mouse_dev && !pad && reporting);
+    CHECK("with Linux's mode byte 0x45: high rate, gestures off and W mode", pad_mode == 0x45);
+    CHECK("on a device of psmouse's name", described("SynRelPS/2 Synaptics TouchPad", &d));
+    CHECK("whose version is the pad's model", d.id[3] == 0x01b1);
+    CHECK("with the left and right buttons and no middle one, as the pad has none",
+          bit_set(d.key, BTN_LEFT) && bit_set(d.key, BTN_RIGHT) && !bit_set(d.key, BTN_MIDDLE));
+    CHECK("and relative motion",
+          bit_set(d.rel, REL_X) && bit_set(d.rel, REL_Y) && bit_set(d.prop, INPUT_PROP_POINTER));
+    CHECK("rate reads 80, the pad's high rate", reads(1, "rate", "80\n"));
+    n_took = 0;
+    CHECK("40 is written", store(1, "rate", "40") == 2);
+    CHECK("as the mode byte 0x05, the high rate off",
+          took_bytes(rate40, 13) && pad_mode == 0x05 && reads(1, "rate", "40\n"));
+    CHECK("60 reads 40", store(1, "rate", "60") == 2 && reads(1, "rate", "40\n"));
+    CHECK("100 reads 80",
+          store(1, "rate", "100") == 3 && reads(1, "rate", "80\n") && pad_mode == 0x45);
+}
+
+/** The relative pad's `disable_gesture`, read and written. */
+static void relative_gesture_rows(void)
+{
+    CHECK("disable_gesture is serio1's protocol file",
+          file_of(1, "disable_gesture") && file_of(1, "disable_gesture")->of_protocol &&
+              file_of(1, "disable_gesture")->attr.mode == 0644u);
+    CHECK("and reads 1", reads(1, "disable_gesture", "1\n"));
+    CHECK("0 turns the pad's gestures on", store(1, "disable_gesture", "0") == 1 &&
+                                               pad_mode == 0x41 &&
+                                               reads(1, "disable_gesture", "0\n") && reporting);
+    CHECK("2 is refused", store(1, "disable_gesture", "2") == -EINVAL && pad_mode == 0x41);
+    CHECK("1 turns them off again",
+          store(1, "disable_gesture", "1\n") == 2 && pad_mode == 0x45 && reporting);
+}
+
+/** The relative pad's reconnect, which keeps its mode and device, and its
+ * file's callback after a switch back to absolute mode. */
+static void relative_reconnect_rows(void)
+{
+    struct evdev *old = mouse_dev;
+    struct file saved;
+
+    state = STATE_IGNORE;
+    reconnect_wanted = RECONNECT_PORT;
+    ps2mouse_reconnect();
+    CHECK("a reconnect keeps relative mode and its device",
+          state == STATE_ACTIVE && protocol == PROTO_SYNREL && mouse_dev == old && !pad &&
+              reads(1, "protocol", "SynRelPS/2\n"));
+    CHECK("sending the mode byte again", pad_mode == 0x45 && reporting);
+    CHECK("its file stays", file_of(1, "disable_gesture") != NULL);
+    if (!file_of(1, "disable_gesture")) {
+        return;
+    }
+    saved = *file_of(1, "disable_gesture");
+    CHECK("absolute mode can be selected again", store(1, "protocol", "SynPS/2") == 7 && pad &&
+                                                     touchpad == TOUCHPAD_SYNAPTICS &&
+                                                     pad_mode == 0xC5);
+    CHECK("which takes disable_gesture away", file_of(1, "disable_gesture") == NULL);
+    CHECK("whose old callback is refused and leaves the mode",
+          saved.attr.store(saved.obj, saved.arg, "0", 1) == -ENODEV &&
+              saved.attr.show(saved.obj, saved.arg, shown, sizeof(shown)) == -ENODEV &&
+              pad_mode == 0xC5);
+}
+
+/** A failed absolute setup leaves a relative mouse, and is retried when
+ * the device reconnects. */
+static void relative_rows(void)
+{
+    CHECK("synaptics-relative selects relative mode again",
+          store(1, "protocol", "synaptics-relative") == 18 && pad_mode == 0x45);
     CHECK("absolute mode can be selected again",
           store(1, "protocol", "SynPS/2") == 7 && pad && touchpad == TOUCHPAD_SYNAPTICS);
     CHECK("bare leaves absolute mode", store(1, "protocol", "bare") == 4);
@@ -848,6 +949,9 @@ int main(void)
     other_rows();
     switch_rows();
     pause_rows();
+    relative_mode_rows();
+    relative_gesture_rows();
+    relative_reconnect_rows();
     relative_rows();
     if (fails == 0) {
         printf("psmouse-synaptics-test: pass\n");

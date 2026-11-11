@@ -660,9 +660,11 @@ void console_poke(void)
 /*
  * The files sysfs would hold: each attribute added, the directory it went
  * below, which is 100 and its port's number, and whether a protocol's
- * files or the port's own added it. This model makes driver files at once;
- * evdev_sysfs.c records the callback and makes them with the directory.
- * procfs_hosttest.c exercises the real registry and file replacement.
+ * files or the port's own added it; and whether the driver asked for each
+ * serio port without a device, as `evdev_sysfs_serio_add` does. This model
+ * makes driver files at once; evdev_sysfs.c records the callback and makes
+ * them with the directory. procfs_hosttest.c exercises the real registry
+ * and file replacement.
  */
 #define FILES_MAX 64
 struct file {
@@ -678,6 +680,7 @@ static int n_files;
 static int adding_protocol;
 static int (*port_driver[3])(int dir);
 static int files_made[3]; /* the times a protocol's files were made */
+static int port_made[3];
 
 int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg)
 {
@@ -716,6 +719,12 @@ void evdev_sysfs_serio_remove(int port)
     drop_files(port, 0);
     drop_files(port, 1);
     port_driver[port] = NULL;
+    port_made[port] = 0;
+}
+
+void evdev_sysfs_serio_add(int port)
+{
+    port_made[port] = 1;
 }
 
 void evdev_sysfs_serio_driver(int port, int (*add)(int dir))
@@ -799,14 +808,14 @@ static int32_t store(int port, const char *name, const char *text)
     return store_bytes(port, name, text, (uint32_t)k_strlen(text));
 }
 
-/* The Synaptics driver, a stub: a pad with a pass-through port when the row
- * says, which takes no bytes of its own. */
 /** The relative-mode probe sees the same modeled device. */
 int synaptics_init_relative(void)
 {
     return synaptics_init();
 }
 
+/* The Synaptics driver, a stub: a pad with a pass-through port when the row
+ * says, which takes no bytes of its own. */
 int synaptics_init(void)
 {
     return synaptics_answer;
@@ -848,6 +857,22 @@ unsigned int synaptics_set_rate(unsigned int rate)
 {
     synaptics_rate = rate;
     return rate >= 80 ? 80 : 40;
+}
+
+unsigned int synaptics_relative_caps(void)
+{
+    return 0;
+}
+
+uint16_t synaptics_model(void)
+{
+    return 0;
+}
+
+int synaptics_sysfs_add(int dir)
+{
+    (void)dir;
+    return 0;
 }
 
 /* The TrackPoint driver: no stick answers. */
@@ -1173,6 +1198,7 @@ static void model_reset(int kind, int p)
     n_files = 0;
     k_memset(files_made, 0, sizeof(files_made));
     k_memset(port_driver, 0, sizeof(port_driver));
+    k_memset(port_made, 0, sizeof(port_made));
     etd_pktcnt = 0;
 }
 
@@ -1419,17 +1445,15 @@ static void protocol_rows(void)
 }
 
 /** Every known name without a detect is accepted, resets the device and
- * falls back to PS/2 on both ports. */
+ * falls back to PS/2 on both ports; OLPC's HGPK, which only an i686 kernel
+ * has, is no protocol here. */
 static void fallback_name_rows(void)
 {
-    static const char *const names[] = {"PS2++",       "logitech",       "CyPS/2",
-                                        "cypress",     "SynSMBus",       "synaptics-smbus",
-                                        "LBPS/2",      "lifebook",       "touchkitPS/2",
-                                        "touchkit",    "OLPC HGPK",      "hgpk",
-                                        "ETSMBus",     "elantech-smbus", "FSPPS/2",
-                                        "fsp",         "FocalTechPS/2",  "focaltech",
-                                        "VirtualPS/2", "vmmouse",        "BYDPS/2",
-                                        "byd"};
+    static const char *const names[] = {
+        "PS2++",           "logitech",       "CyPS/2",   "cypress",      "SynSMBus",
+        "synaptics-smbus", "LBPS/2",         "lifebook", "touchkitPS/2", "touchkit",
+        "ETSMBus",         "elantech-smbus", "FSPPS/2",  "fsp",          "FocalTechPS/2",
+        "focaltech",       "VirtualPS/2",    "vmmouse",  "BYDPS/2",      "byd"};
     unsigned int i;
     int port, expected;
 
@@ -1447,6 +1471,9 @@ static void fallback_name_rows(void)
                   reads(port, "protocol", "PS/2\n") &&
                       (port == 1 ? aux_mouse.id : pt_mouse.id) == 0);
         }
+        CHECK("OLPC HGPK is refused, as Linux built for x86-64 refuses it",
+              store(port, "protocol", "OLPC HGPK") == -EINVAL &&
+                  store(port, "protocol", "hgpk") == -EINVAL && reads(port, "protocol", "PS/2\n"));
     }
 }
 
@@ -1638,9 +1665,10 @@ static void guest_rows(void)
     CHECK("a pad with a mouse behind its pass-through port is brought up",
           init_mouse() == 0 && touchpad == TOUCHPAD_SYNAPTICS && guest.dev != NULL);
     CHECK("serio1's protocol reads SynPS/2", reads(1, "protocol", "SynPS/2\n"));
-    CHECK("serio2 has psmouse's five files", port_driver[EVDEV_SERIO_PASS_THROUGH] == guest_files &&
-                                                 file_of(EVDEV_SERIO_PASS_THROUGH, "protocol") &&
-                                                 file_of(EVDEV_SERIO_PASS_THROUGH, "resync_time"));
+    CHECK("serio2 is made with psmouse's five files for its guest",
+          port_made[EVDEV_SERIO_PASS_THROUGH] && file_of(EVDEV_SERIO_PASS_THROUGH, "protocol") &&
+              file_of(EVDEV_SERIO_PASS_THROUGH, "protocol")->of_protocol &&
+              file_of(EVDEV_SERIO_PASS_THROUGH, "resync_time"));
     CHECK("its protocol reads ImPS/2", reads(EVDEV_SERIO_PASS_THROUGH, "protocol", "ImPS/2\n"));
     CHECK("its rate 100, resolution 200, resetafter 5 and resync_time 0",
           reads(EVDEV_SERIO_PASS_THROUGH, "rate", "100\n") &&
@@ -1685,14 +1713,84 @@ static void guest_switch_rows(void)
     CHECK("a write while the guest waits for its reconnect is -ENODEV",
           store(EVDEV_SERIO_PASS_THROUGH, "rate", "40") == -ENODEV);
     guest.active = 1;
-    CHECK("switching the pad to bare removes its child port's callbacks",
+    CHECK("switching the pad to bare removes its child port and callbacks",
           store(1, "protocol", "bare") == 4 && !guest.dev &&
               !file_of(EVDEV_SERIO_PASS_THROUGH, "protocol") &&
-              !port_driver[EVDEV_SERIO_PASS_THROUGH]);
-    CHECK("switching back recreates the guest's files",
+              !port_made[EVDEV_SERIO_PASS_THROUGH]);
+    CHECK("switching back recreates the port and the guest's files",
           store(1, "protocol", "synaptics") == 9 && guest.dev &&
-              file_of(EVDEV_SERIO_PASS_THROUGH, "protocol") &&
-              port_driver[EVDEV_SERIO_PASS_THROUGH] == guest_files);
+              file_of(EVDEV_SERIO_PASS_THROUGH, "protocol") && port_made[EVDEV_SERIO_PASS_THROUGH]);
+}
+
+/** A guest that fails its reconnect loses its device and files but not
+ * serio2, as Linux's serio core keeps the port; one that answers again is
+ * bound there anew. A pad whose guest never answers still has serio2. */
+static void guest_reconnect_rows(void)
+{
+    pt_present = 0;
+    reconnect_wanted = RECONNECT_GUEST;
+    ps2mouse_reconnect();
+    CHECK("a guest that does not answer its reconnect is unbound",
+          !guest.dev && !file_of(EVDEV_SERIO_PASS_THROUGH, "protocol") &&
+              show(EVDEV_SERIO_PASS_THROUGH, "rate") == -ENOENT);
+    CHECK("serio2 stays", port_made[EVDEV_SERIO_PASS_THROUGH]);
+    CHECK("the pad reports", aux_mouse.reporting && state == STATE_ACTIVE);
+    pt_present = 1;
+    pt_mouse.id = 0;
+    reconnect_wanted = RECONNECT_GUEST;
+    ps2mouse_reconnect();
+    CHECK("a guest that answers again is bound with its files",
+          guest.dev && port_made[EVDEV_SERIO_PASS_THROUGH] &&
+              reads(EVDEV_SERIO_PASS_THROUGH, "protocol", "ImPS/2\n") && pt_mouse.reporting);
+
+    model_reset(KIND_MOUSE, 0);
+    synaptics_answer = 1;
+    CHECK("a pad whose pass-through port has no guest is brought up",
+          init_mouse() == 0 && touchpad == TOUCHPAD_SYNAPTICS && !guest.dev);
+    CHECK("with serio2 and no files on it",
+          port_made[EVDEV_SERIO_PASS_THROUGH] && !file_of(EVDEV_SERIO_PASS_THROUGH, "protocol"));
+}
+
+/* A write of the guest's rate that waits for the command lock, and what it
+ * returned. */
+static struct file parked_file;
+static int32_t parked_result;
+
+/** Enter the saved guest file's write, whose command wait parks it. */
+static void parked_rate_write(void)
+{
+    parked_result = parked_file.attr.store(parked_file.obj, parked_file.arg, "40", 2);
+}
+
+/** A write of serio2's rate parked behind serio1's `any`, which probes the
+ * port whole and binds a new guest: the write finds its guest gone and
+ * changes nothing of the new one. */
+static void guest_parked_rows(void)
+{
+    int done;
+
+    model_reset(KIND_MOUSE, 0);
+    synaptics_answer = 1;
+    pt_present = 1;
+    pt_mouse.wheel = ID_IMPS;
+    CHECK("the parked row brings a pad and its guest up", init_mouse() == 0 && guest.dev);
+    parked_file = *file_of(EVDEV_SERIO_PASS_THROUGH, "rate");
+    parked_result = 0;
+    CHECK("a change of serio1 takes the command lock", ps2mouse_change_begin() == 0);
+    done = park_run(parked_rate_write);
+    CHECK("the guest's write waits for it", done == 0 && cmd_busy);
+    CHECK("any probes serio1 anew and binds a new guest",
+          aux_set_protocol("any", 3) == 0 && guest.dev && guest.active);
+    ps2mouse_change_end(0);
+    pt_mouse.n_took = 0;
+    if (!done) {
+        CHECK("the waiting write returns", park_resume() == 1);
+    }
+    CHECK("with ENODEV", parked_result == -ENODEV);
+    CHECK("sending the new guest nothing", pt_mouse.n_took == 0 && pt_mouse.rate != 40 &&
+                                               reads(EVDEV_SERIO_PASS_THROUGH, "rate", "100\n"));
+    CHECK("the pad and the new guest report with the lock free",
+          !cmd_busy && state == STATE_ACTIVE && aux_mouse.reporting && pt_mouse.reporting);
 }
 
 /** Whether reg_10 reads 0x5b. */
@@ -1894,6 +1992,8 @@ int main(void)
     detect_rows();
     guest_rows();
     guest_switch_rows();
+    guest_reconnect_rows();
+    guest_parked_rows();
     exhaustion_rows(0);
     exhaustion_rows(1);
     pad_exhaustion_rows();
