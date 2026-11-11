@@ -522,7 +522,8 @@ static void skip_ticks(uint32_t n)
 }
 
 /** Check that the deadlines and the wait count keep the tick count when one
- *  call counts several ticks. */
+ *  call counts several ticks, and that a request taken inside such a span
+ *  counts and takes its deadline from the tick it was taken. */
 static void skipped_ticks(void)
 {
     struct block_request *r;
@@ -542,6 +543,19 @@ static void skipped_ticks(void)
     skip_ticks(1);
     check(r->state == BLOCK_REQ_IN_FLIGHT && r->overdue == 1 && block_wait_ticks() == waited + 8,
           "three calls over eight ticks pass the first deadline");
+    answer_read(r, gen);
+
+    kernel_ticks += 3;
+    r = begin(lag, &gen);
+    waited = block_wait_ticks();
+    skip_ticks(1);
+    check(block_wait_ticks() == waited + 1,
+          "a request taken three ticks into a skipped span counts one tick at the next call");
+    skip_ticks(6);
+    check(r->overdue == 0, "its deadline counts from when it was taken: not due after seven");
+    skip_ticks(1);
+    check(r->state == BLOCK_REQ_IN_FLIGHT && r->overdue == 1 && block_wait_ticks() == waited + 8,
+          "and passed at eight, each of the eight counted once");
     answer_read(r, gen);
 }
 

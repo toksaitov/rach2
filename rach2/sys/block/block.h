@@ -291,6 +291,7 @@ struct block_request {
     volatile int state;  /* BLOCK_REQ_* */
     uint32_t generation; /* unique to this request */
     uint32_t deadline;   /* tick at which the next period ends */
+    uint32_t taken_tick; /* the deadlines' clock when it was taken */
     uint32_t overdue;    /* periods passed unanswered */
     int held_by_caller;  /* until the caller has read the answer or given up */
     int held_by_device;  /* until the device has answered */

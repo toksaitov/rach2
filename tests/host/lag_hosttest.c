@@ -341,6 +341,27 @@ int main(void)
     ticks(2);
     CHECK(duplicated[2] == 1 && duplicated[3] == 1, "their duplicates carry the error");
 
+    request_init(2, 1);
+    CHECK(lag_submit(lag, &reqs[2]) == 0, "a write is taken before ticks the timer skips");
+    kernel_ticks += 3 * LAG_UNIT;
+    block_lag_tick();
+    CHECK(answered[2] == 1, "one call after the lag's ticks answers it");
+    kernel_ticks += 2 * LAG_UNIT;
+    block_lag_tick();
+    CHECK(duplicated[2] == 1, "and one call after two units more its duplicate");
+    request_init(3, 1);
+    kernel_ticks += 2;
+    CHECK(lag_submit(lag, &reqs[3]) == 0, "a write is taken two ticks into a skipped span");
+    kernel_ticks += 3 * LAG_UNIT - 1;
+    block_lag_tick();
+    CHECK(answered[3] == 0, "its lag counts from when it was taken: not answered a tick early");
+    kernel_ticks++;
+    block_lag_tick();
+    CHECK(answered[3] == 1, "and answered at its lag");
+    kernel_ticks += 2 * LAG_UNIT;
+    block_lag_tick();
+    CHECK(duplicated[3] == 1, "with its duplicate after");
+
     for (i = 0; i < LAG_QUEUE; i++) {
         CHECK(!queue[i].used, "a slot is free after its duplicate");
     }
