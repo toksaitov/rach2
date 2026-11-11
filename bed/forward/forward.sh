@@ -144,7 +144,7 @@ mkdir -p "$out" || fail "cannot make $out"
 out=$(cd "$out" && pwd) || fail "cannot enter $out"
 : > "$out/console.log"
 : > "$out/scene.log"
-rm -rf "$out/shader-cache"
+rm -rf "$out/shader-cache" "$out/scene.status"
 mkdir -p "$out/shader-cache" || fail "cannot make $out/shader-cache"
 
 # The guest's account, reached through the forwarded port with its key
@@ -211,12 +211,13 @@ host_counts()
          $1 == "kvm_exits" { print $1, $2 }' /proc/stat
 }
 
-# marks: Rach2's counts at each of the harness's marks the scene's output
-# has shown and this runner has not yet read, into OUT/host-counts.
+# marks MARK...: Rach2's counts at each of the harness's marks MARK, before
+# or after, that the scene's output has shown and this runner has not yet
+# read, into OUT/host-counts.
 marked=''
 marks()
 {
-    for m in before after; do
+    for m in "$@"; do
         case " $marked " in *" $m "*) continue ;; esac
         grep -q "^measure: counts: $m" "$out/scene.log" || continue
         { echo "$m"; host_counts; } >> "$out/host-counts"
@@ -255,12 +256,19 @@ host_line()
 ) &
 scene=$!
 while [ ! -f "$out/scene.status" ]; do
-    [ -z "$measure" ] || marks
+    [ -z "$measure" ] || marks before after
     quiet "the scene ran"
 done
 wait "$scene"
 if [ -n "$measure" ]; then
-    marks
+    # The after mark read now is a second late at most, as one read in the
+    # loop; a before mark the loop missed would span nothing, and is left
+    # unread, so that the line gives `-`.
+    marks after
+    case " $marked " in
+        *" before "*) ;;
+        *) echo "bed-forward: host: the harness's before mark was not read while the scene ran; its counts are -" ;;
+    esac
     echo "bed-forward: host: $(tr '
 ' ' ' < "$out/host-counts")"
     host_line > "$out/scene.host"
