@@ -32,7 +32,8 @@ struct pstore_file {
     char *buf; /* the record, kmalloc'd */
     uint32_t size;
     uint64_t ino;
-    int64_t time_s, time_ns;
+    int64_t time_s, time_ns; /* mtime and ctime: the record's, else made_ */
+    int64_t made_s, made_ns; /* atime: when the file was made, the first mount */
     uint32_t refs;
     int removed;
     struct pstore_file *next;
@@ -164,8 +165,8 @@ static void ps_put(struct vfs_mount *mnt, void *node)
 
 /** The `getattr` of pstore: the root 0750 and each file 0444, root's, as
  * Linux's pstore_get_inode and pstore_mkfile make them (inode.c:360, 424);
- * a file's size is its record's, and its times the record's when ramoops
- * wrote one, else the mount's. */
+ * a file's size is its record's, its atime the time it was made, and its
+ * mtime and ctime the record's when ramoops wrote one, else the same. */
 static int ps_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     struct pstore_file *f = node_of(node);
@@ -176,8 +177,10 @@ static int ps_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     st->nlink = f == &root ? 2 : f->removed ? 0 : 1;
     st->size = f == &root ? 0 : f->size;
     st->ino = f->ino;
-    st->atime_sec = st->mtime_sec = st->ctime_sec = f->time_s;
-    st->atime_nsec = st->mtime_nsec = st->ctime_nsec = f->time_ns;
+    st->atime_sec = f->made_s;
+    st->atime_nsec = f->made_ns;
+    st->mtime_sec = st->ctime_sec = f->time_s;
+    st->mtime_nsec = st->ctime_nsec = f->time_ns;
     return 0;
 }
 
@@ -346,12 +349,17 @@ static int pstore_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t fla
     if (root.ino == 0) {
         root.ino = 1;
         rtc_coarse_realtime(&root.time_s, &root.time_ns);
-        /* A record without a time, the console's, takes the time its file
-         * is made, as Linux's pstore_fill_super makes the files at mount
-         * (inode.c:436) and pstore_mkfile stamps only a timed record over
-         * the new inode's time (inode.c:380, 223); ramoops finds the
-         * records before the clock is read. */
+        root.made_s = root.time_s;
+        root.made_ns = root.time_ns;
+        /* Each file is made now, as Linux's pstore_fill_super makes the
+         * files at mount (inode.c:436): pstore_get_inode sets its three
+         * times to the clock (inode.c:223), and pstore_mkfile then sets
+         * only the mtime and ctime of a timed record to the record's
+         * (inode.c:380-382). ramoops finds the records before the clock
+         * is read. */
         for (f = files; f; f = f->next) {
+            f->made_s = root.time_s;
+            f->made_ns = root.time_ns;
             if (f->time_s == 0) {
                 f->time_s = root.time_s;
                 f->time_ns = root.time_ns;
