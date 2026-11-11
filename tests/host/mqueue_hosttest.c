@@ -35,7 +35,7 @@ static uint64_t armed;
 static uint32_t armed_steps;
 /* The real-time clock's time in seconds at tick 2000 and its step count,
  * the seconds a setting moves it by in the next wait, 0 for none, and how
- * far real time falls behind the tick, for the slew row. */
+ * far real time falls behind the tick, for the lag row. */
 static int64_t rt_sec = 100;
 static uint32_t rt_steps = 1u;
 static int64_t step_in_wait;
@@ -64,7 +64,7 @@ uint32_t rtc_step_count(void)
 
 /** The real time: `rt_sec` at tick 2000, where each row starts, and on
  * with the tick from there, `rt_lag_ns` behind it once the tick has moved,
- * as a clock slewed slower than the tick falls behind during a wait. */
+ * as the clock read between ticks can be behind the tick count. */
 void get_current_time(int64_t *seconds, int64_t *nanoseconds)
 {
     int64_t ns = ((int64_t)kernel_ticks - 2000) * TICK_NS;
@@ -79,14 +79,6 @@ void get_current_time(int64_t *seconds, int64_t *nanoseconds)
         *nanoseconds += 1000000000;
         (*seconds)--;
     }
-}
-
-/** The ticks in which real time goes on by `sec` and `nsec`
- * (`rtc_real_span`): the tick's own, since no row slews the clock's rate
- * as the kernel counts it. */
-uint64_t rtc_real_span(int64_t sec, uint32_t nsec)
-{
-    return tick_span(sec, nsec);
 }
 
 /** A setting of the real-time clock `sec` seconds on from where it is, as
@@ -286,10 +278,9 @@ static void deadline(struct mq_wait *w, int64_t at)
  * sleep is counted before the sleep: back, the wait sleeps to the time as
  * set; forward past it, it ends without a sleep. Each is Linux's hrtimer of
  * CLOCK_REALTIME, which clock_was_set moves (ipc/mqueue.c:728-729,
- * kernel/time/hrtimer.c:951-987). A wait whose tick comes while a clock
- * slewed slower than the tick is still short of the time counts again and
- * sleeps on, since Linux's hrtimer never expires before its clock reaches
- * its time.
+ * kernel/time/hrtimer.c:951-987). A wait whose tick comes while the clock
+ * read then is still short of the time counts again and sleeps on, since
+ * Linux's hrtimer never expires before its clock reaches its time.
  */
 static void realtime_steps(void)
 {
@@ -333,7 +324,7 @@ static void realtime_steps(void)
     deadline(&w, 101);
     w.q = &q;
     CHECK(mq_sleep(&q, &w) == -ETIMEDOUT && waits == 2 && armed == 3002u,
-          "a wait whose tick comes before a slewed clock reaches its time sleeps on to it");
+          "a wait whose tick comes before the clock reaches its time sleeps on to it");
     rt_lag_ns = 0;
 }
 

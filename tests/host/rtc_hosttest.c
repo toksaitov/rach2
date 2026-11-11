@@ -208,9 +208,9 @@ void arch_relax(void)
 }
 
 /** The clock does not run from the TSC here, so clock.c keeps the time. */
-int vclock_read(int real, int coarse, int64_t *sec, int64_t *nsec)
+int vclock_read(int which, int coarse, int64_t *sec, int64_t *nsec)
 {
-    (void)real;
+    (void)which;
     (void)coarse;
     (void)sec;
     (void)nsec;
@@ -223,18 +223,16 @@ int vclock_running(void)
     return 0;
 }
 
-/** No vDSO page takes the course here. */
-void vclock_set_course(const struct rtc_course *c, int step)
+/** No vDSO page takes the offset here. */
+void vclock_set_wall(int64_t sec, int32_t nsec)
 {
-    (void)c;
-    (void)step;
+    (void)sec;
+    (void)nsec;
 }
 
 /** No timer here waits on real time. */
-void timerfd_clock_was_set(int cancel)
-{
-    (void)cancel;
-}
+void timerfd_clock_was_set(void)
+{}
 
 /** The command line here is empty. */
 int kcmdline_has(const char *flag)

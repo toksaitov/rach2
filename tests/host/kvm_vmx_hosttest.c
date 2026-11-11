@@ -285,7 +285,7 @@ void mm_unhold(struct mm *mm)
     (void)mm;
 }
 
-void rtc_monotonic(int64_t *s, int64_t *ns)
+void rtc_raw_monotonic(int64_t *s, int64_t *ns)
 {
     *s = 5;
     *ns = 0;
@@ -924,9 +924,9 @@ int vclock_running(void)
     return 0;
 }
 
-int vclock_read_cycles(int real, uint64_t *ns, uint64_t *cycles)
+int vclock_read_cycles(int which, uint64_t *ns, uint64_t *cycles)
 {
-    (void)real;
+    (void)which;
     (void)ns;
     (void)cycles;
     return 0;

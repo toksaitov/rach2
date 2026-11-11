@@ -440,6 +440,12 @@ void rtc_monotonic(int64_t *seconds, int64_t *nanoseconds)
     kirq_restore(flags);
 }
 
+/** The raw clock, which no row slews, the monotonic clock's reading. */
+void rtc_raw_monotonic(int64_t *seconds, int64_t *nanoseconds)
+{
+    rtc_monotonic(seconds, nanoseconds);
+}
+
 /** The tick count and the place within the tick, as a sleep reads them. */
 void rtc_tick_phase(uint64_t *ticks, uint32_t *phase_ns)
 {
@@ -1701,28 +1707,15 @@ static void cpu_clock_sibling(void)
 }
 
 /**
- * clock_nanosleep's clocks, deadlines and remainders.
- *
- * The raw and coarse clocks and the thread CPU clock cannot be slept on
- * (EOPNOTSUPP), nor a thread clock by id (EINVAL); an unknown clock and a bad
- * request fail with EINVAL. An interval sleeps as nanosleep does, three ticks
- * from tick 1000 until 1003, but writes nothing on completion; a signal leaves
- * the whole interval. An absolute time of time since boot three and a half
- * ticks past tick 1000 is reached at tick 1004, the first tick that reads it;
- * one of real time is counted from the boot's epoch, two ticks past tick 1000
- * reached at 1002; a time already past returns at once, and a signal leaves
- * no remainder. A time the clock passed within the tick returns at once, and
- * one still ahead within it is reached at the next tick. The caller's
- * CPU clock returns at once for a time it has reached, and a signal ends a wait
- * for one it has not, leaving the ticks still due of an interval. A signal is
- * pending in each row that must return without sleeping, so a fault that makes
- * one sleep ends it at once instead of waiting out a deadline the model never
- * reaches.
+ * clock_nanosleep's refusals: the raw and coarse clocks and the thread CPU
+ * clock cannot be slept on (EOPNOTSUPP), nor a thread clock by id (EINVAL);
+ * an unknown clock and a bad request fail with EINVAL. A signal is pending
+ * in each row that names a clock Linux cannot sleep on, so a fault that
+ * makes one sleep ends it at once.
  */
-static void clock_sleeps(void)
+static void clock_sleep_refusals(void)
 {
     isr_params_t p;
-    struct kernel_timespec rem;
     int clk;
     static const int nosleep[] = {3, 4, 5, 6};
 
@@ -1739,6 +1732,32 @@ static void clock_sleeps(void)
     ask_clock_sleep(&p, 1, 0, 0, 1000000000);
     CHECK(clock_sleep_call(&p) == -EINVAL,
           "a clock sleep of a whole second in nanoseconds is refused");
+}
+
+/**
+ * clock_nanosleep's deadlines and remainders.
+ *
+ * An interval sleeps as nanosleep does, three ticks from tick 1000 until
+ * 1003, but writes nothing on completion; a signal leaves the whole
+ * interval. An absolute time of time since boot three and a half ticks past
+ * tick 1000 is reached at tick 1004, the first tick that reads it; one of
+ * real time is counted from the boot's epoch, two ticks past tick 1000
+ * reached at 1002; a time whose tick comes while the clock, held a
+ * microsecond behind the tick count as the TSC's clock can be, still reads
+ * short of it sleeps on to the next tick, since Linux's hrtimer never
+ * expires before its clock reaches its time; a time already past returns at
+ * once, and a signal leaves no remainder. A time the clock passed within
+ * the tick returns at once, and one still ahead within it is reached at the
+ * next tick. The caller's CPU clock returns at once for a time it has
+ * reached, and a signal ends a wait for one it has not, leaving the ticks
+ * still due of an interval. A signal is pending in each row that must
+ * return without sleeping, so a fault that makes one sleep ends it at once
+ * instead of waiting out a deadline the model never reaches.
+ */
+static void clock_sleeps(void)
+{
+    isr_params_t p;
+    struct kernel_timespec rem;
 
     ask_clock_sleep(&p, 1, 0, 0, TICKS_NS(3));
     uptime_at(1000);
@@ -1761,6 +1780,13 @@ static void clock_sleeps(void)
     uptime_at(1000);
     CHECK(clock_sleep_call(&p) == 0 && blocked_until == 1004,
           "boot time sleeps as time since boot");
+    ask_clock_tick(&p, 1, 1, 0, 1003, 0);
+    uptime_at(1000);
+    mono_phase_ns = -1000;
+    CHECK(clock_sleep_call(&p) == 0 && first_blocked_until == 1003 && blocked_until == 1004 &&
+              kernel_ticks == 1004,
+          "a clock a microsecond behind the tick at the time's tick sleeps a tick more");
+    mono_phase_ns = 0;
     ask_clock_tick(&p, 0, 1, 1000000, 1002, 0);
     uptime_at(1000);
     CHECK(clock_sleep_call(&p) == 0 && blocked_until == 1002 && kernel_ticks == 1002,
@@ -2200,6 +2226,7 @@ int main(void)
     queue_full();
     clocks();
     clock_ids();
+    clock_sleep_refusals();
     clock_sleeps();
     realtime_steps();
     sleeps_masked();

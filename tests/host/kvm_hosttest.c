@@ -58,6 +58,7 @@
 #include "kvm/vcpu.c"
 #include "fs/debugfs.h"
 #include "lib/kstring.h"
+#include "vdso.h"
 
 extern int printf(const char *format, ...);
 extern void *malloc(unsigned long n);
@@ -270,10 +271,11 @@ void mm_unhold(struct mm *mm)
     holds--;
 }
 
-/* The clocks: the monotonic and real nanoseconds, and the TSC. */
+/* The clocks: the raw clock, which the kvmclock counts, the real
+ * nanoseconds, and the TSC. */
 static uint64_t mono_ns = 5000000000ull, real_ns = 1800000000000000000ull, tsc = 1000000;
 
-void rtc_monotonic(int64_t *s, int64_t *ns)
+void rtc_raw_monotonic(int64_t *s, int64_t *ns)
 {
     *s = (int64_t)(mono_ns / 1000000000ull);
     *ns = (int64_t)(mono_ns % 1000000000ull);
@@ -300,12 +302,12 @@ int vclock_running(void)
     return vclock_on;
 }
 
-int vclock_read_cycles(int real, uint64_t *ns, uint64_t *cycles)
+int vclock_read_cycles(int which, uint64_t *ns, uint64_t *cycles)
 {
     if (!vclock_on) {
         return 0;
     }
-    *ns = real ? real_ns : mono_ns;
+    *ns = which == VCLOCK_READ_REAL ? real_ns : mono_ns;
     *cycles = tsc;
     return 1;
 }
