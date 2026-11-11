@@ -1,0 +1,196 @@
+browsers-gpu: evidence: chromium
+{
+  "chrome://gpu": "\n\n  :host {\n    --green: #080;\n    --yellow: #880;\n    --red: #f00;\n    --gray: #888;\n    --bg-yellow: #ff0;\n\n    display: block;\n    flex: 1;\n    overflow: auto;\n    padding: 10px;\n  }\n\n  @media (prefers-color-scheme: dark) {\n    :host {\n      --green: #0F0;\n      --yellow: #FF0;\n      --red: #f00;\n      --gray: #888;\n      --bg-yellow: #880;\n    }\n  }\n\n  :host * {\n    user-select: text;\n  }\n\n  :host([selected]) {\n    display: flex;\n    flex-direction: column;\n  }\n\n  h3,\n  ul {\n    margin-bottom: 0;\n    margin-top: 0;\n  }\n\n  #content > div,\n  #download-to-file {\n    margin-bottom: 1em;\n  }\n\n  .feature-green {\n    color: var(--green);\n  }\n\n  .feature-yellow {\n    color: var(--yellow);\n  }\n\n  .feature-red {\n    color: var(--red);\n  }\n\n  .feature-gray {\n    color: var(--gray);\n  }\n\n  .bg-yellow {\n    background-color: var(--bg-yellow);\n  }\n\n  #vulkan-info-value {\n    white-space: pre;\n  }\n\n  #download-to-file {\n    font: inherit;\n    min-height: 2em;\n    user-select: none;\n  }\n\n  h4.dawn-info-header {\n    color: var(--yellow);\n    margin-bottom: 2px;\n    margin-top: 10px;\n  }\n  \n  table.info-table {\n    border-collapse: collapse;\n    table-layout: fixed;\n    width: 100%;\n  }\n  .info-table td {\n    border: 1px solid #777;\n    vertical-align: top;\n    overflow-x: auto;\n  }\n  .info-table td:nth-child(1) {\n    font-weight: bold;\n    width: 25%;\n  }\n  .info-table td:nth-child(2) {\n    font-weight: bold;\n    width: 75%;\n  }\n\n  /*\n  This class is used to show text that is only available\n  when the user copies text or downloads the report to a file.\n  We insert extra but hidden text to make plain text formatting\n  look better, at copy/download time we make the text visible\n  */\n  .copy {\n    display: none;\n  }\n\n\n\n  Download Report to File\n\n\n  GPU Info\n\n\nGraphics Feature Status\n=======================*   Canvas: Hardware accelerated*   Direct Rendering Display Compositor: Disabled*   Compositing: Hardware accelerated*   Multiple Raster Threads: Enabled*   OpenGL: Enabled*   Rasterization: Hardware accelerated on all pages*   Raw Draw: Disabled*   Skia Graphite: Disabled*   TreesInViz: Disabled*   Video Decode: Hardware accelerated*   Video Encode: Software only. Hardware acceleration disabled*   Vulkan: Disabled*   WebGL: Hardware accelerated*   WebGPU: Hardware accelerated*   WebGPU interop: Disabled*   WebNN: Disabled\n\nVersion Information\n===================Data exported              :2026-11-10T23:58:55.857ZChrome version             :Chrome/156.0.8078.79Operating system           :Linux 6.18.0-rach2Software rendering list URL:https://chromium.googlesource.com/chromium/src/+/a21ce95c24ce3964416f09ae1862f53f319eb4d0/gpu/config/software_rendering_list.jsonDriver bug list URL        :https://chromium.googlesource.com/chromium/src/+/a21ce95c24ce3964416f09ae1862f53f319eb4d0/gpu/config/gpu_driver_bug_list.jsonANGLE commit id            :unknown hash2D graphics backend        :Skia/156 aa789d9bd566b9865add4070dc6777b3266c64e9Command Line               :/usr/lib/chromium/chromium --show-component-extension-options --enable-gpu-rasterization --no-default-browser-check --disable-pings --media-router=0 --enable-remote-extensions --load-extension --ozone-platform=wayland --no-first-run --no-default-browser-check --password-store=basic --start-fullscreen --ignore-certificate-errors --remote-debugging-port=0 --user-data-dir=/tmp/browser.8jfghU/profile --disable-background-networking --disable-hang-monitor --disable-background-timer-throttling --disable-renderer-backgrounding --autoplay-policy=no-user-gesture-required --flag-switches-begin --flag-switches-end --render-node-override=/dev/dri/renderD128 about:blank\n\nDriver Information\n==================Initialization time             :1210In-process GPU                  :falseSkia Backend                    :GaneshGLPassthrough Command Decoder     :trueSandboxed                       :falseGPU0                            :VENDOR= 0x8086 [Google Inc. (Intel)], DEVICE=0x0a16 [ANGLE (Intel, Mesa Intel(R) HD Graphics 4400 (HSW GT2), OpenGL ES 3.2 Mesa 25.0.7-2+deb13u1)], DRIVER_VENDOR=Mesa, DRIVER_VERSION=25.0.7 *ACTIVE*Optimus                         :falseAMD switchable                  :falsePixel shader version            :3.00Vertex shader version           :3.00Max. MSAA samples               :8Machine model name              :Machine model version           :GL implementation parts         :(gl=egl-angle,angle=opengl)Display type                    :ANGLE_OPENGLGL_VENDOR                       :Google Inc. (Intel)GL_RENDERER                     :ANGLE (Intel, Mesa Intel(R) HD Graphics 4400 (HSW GT2), OpenGL ES 3.2 Mesa 25.0.7-2+deb13u1)GL_VERSION                      :OpenGL ES 3.0 (ANGLE 2.1 git hash: unknown hash)GL_EXTENSIONS                   :GL_AMD_performance_monitor GL_ANGLE_blob_cache GL_ANGLE_client_arrays GL_ANGLE_clip_cull_distance GL_ANGLE_compressed_texture_etc GL_ANGLE_depth_texture GL_ANGLE_framebuffer_blit GL_ANGLE_framebuffer_multisample GL_ANGLE_get_serialized_context_string GL_ANGLE_get_tex_level_parameter GL_ANGLE_instanced_arrays GL_ANGLE_memory_size GL_ANGLE_program_binary_readiness_query GL_ANGLE_program_cache_control GL_ANGLE_renderability_validation GL_ANGLE_request_extension GL_ANGLE_robust_client_memory GL_ANGLE_shader_pixel_local_storage GL_ANGLE_stencil_texturing GL_ANGLE_texture_compression_dxt3 GL_ANGLE_texture_compression_dxt5 GL_ANGLE_texture_multisample GL_ANGLE_translated_shader_source GL_ARM_rgba8 GL_CHROMIUM_bind_generates_resource GL_CHROMIUM_bind_uniform_location GL_CHROMIUM_copy_texture GL_CHROMIUM_lose_context GL_EXT_blend_func_extended GL_EXT_blend_minmax GL_EXT_clear_texture GL_EXT_clip_control GL_EXT_clip_cull_distance GL_EXT_color_buffer_float GL_EXT_color_buffer_half_float GL_EXT_compressed_ETC1_RGB8_sub_texture GL_EXT_conservative_depth GL_EXT_debug_label GL_EXT_debug_marker GL_EXT_depth_clamp GL_EXT_discard_framebuffer GL_EXT_disjoint_timer_query GL_EXT_draw_buffers GL_EXT_draw_buffers_indexed GL_EXT_float_blend GL_EXT_frag_depth GL_EXT_instanced_arrays GL_EXT_map_buffer_range GL_EXT_memory_object GL_EXT_memory_object_fd GL_EXT_occlusion_query_boolean GL_EXT_polygon_offset_clamp GL_EXT_read_format_bgra GL_EXT_render_snorm GL_EXT_robustness GL_EXT_sRGB GL_EXT_sRGB_write_control GL_EXT_semaphore GL_EXT_semaphore_fd GL_EXT_shader_framebuffer_fetch_non_coherent GL_EXT_shadow_samplers GL_EXT_texture_border_clamp GL_EXT_texture_compression_bptc GL_EXT_texture_compression_dxt1 GL_EXT_texture_compression_rgtc GL_EXT_texture_compression_s3tc_srgb GL_EXT_texture_filter_anisotropic GL_EXT_texture_format_BGRA8888 GL_EXT_texture_mirror_clamp_to_edge GL_EXT_texture_norm16 GL_EXT_texture_rg GL_EXT_texture_sRGB_R8 GL_EXT_texture_sRGB_decode GL_EXT_texture_shadow_lod GL_EXT_texture_storage GL_EXT_texture_type_2_10_10_10_REV GL_EXT_unpack_subimage GL_KHR_blend_equation_advanced GL_KHR_blend_equation_advanced_coherent GL_KHR_debug GL_KHR_parallel_shader_compile GL_KHR_robustness GL_KHR_texture_compression_astc_ldr GL_KHR_texture_compression_astc_sliced_3d GL_MESA_framebuffer_flip_y GL_NV_fence GL_NV_framebuffer_blit GL_NV_pack_subimage GL_NV_pixel_buffer_object GL_NV_read_depth GL_NV_read_stencil GL_NV_shader_noperspective_interpolation GL_OES_EGL_image GL_OES_EGL_image_external GL_OES_EGL_image_external_essl3 GL_OES_EGL_sync GL_OES_compressed_ETC1_RGB8_texture GL_OES_depth24 GL_OES_draw_buffers_indexed GL_OES_element_index_uint GL_OES_fbo_render_mipmap GL_OES_get_program_binary GL_OES_mapbuffer GL_OES_packed_depth_stencil GL_OES_required_internalformat GL_OES_rgb8_rgba8 GL_OES_sample_variables GL_OES_shader_multisample_interpolation GL_OES_standard_derivatives GL_OES_surfaceless_context GL_OES_texture_3D GL_OES_texture_border_clamp GL_OES_texture_float GL_OES_texture_float_linear GL_OES_texture_half_float GL_OES_texture_half_float_linear GL_OES_texture_npot GL_OES_texture_stencil8 GL_OES_texture_storage_multisample_2d_array GL_OES_vertex_array_objectDisabled Extensions             :GL_KHR_blend_equation_advanced GL_KHR_blend_equation_advanced_coherentDisabled WebGL Extensions       :Window system binding vendor    :Google Inc. (Intel)Window system binding version   :1.5 (ANGLE 2.1 git hash: unknown hash)Window system binding extensions:EGL_EXT_create_context_robustness EGL_KHR_create_context EGL_KHR_image EGL_KHR_image_base EGL_KHR_gl_colorspace EGL_KHR_gl_texture_2D_image EGL_KHR_gl_texture_cubemap_image EGL_KHR_gl_texture_3D_image EGL_KHR_gl_renderbuffer_image EGL_KHR_get_all_proc_addresses EGL_KHR_fence_sync EGL_KHR_wait_sync EGL_ANGLE_create_context_webgl_compatibility EGL_CHROMIUM_create_context_bind_generates_resource EGL_KHR_swap_buffers_with_damage EGL_EXT_pixel_format_float EGL_KHR_surfaceless_context EGL_ANGLE_display_texture_share_group EGL_ANGLE_display_semaphore_share_group EGL_ANGLE_create_context_client_arrays EGL_ANGLE_program_cache_control EGL_ANGLE_robust_resource_initialization EGL_ANGLE_create_context_extensions_enabled EGL_ANDROID_blob_cache EGL_ANDROID_recordable EGL_ANDROID_native_fence_sync EGL_ANGLE_create_context_backwards_compatible EGL_KHR_no_config_context EGL_KHR_create_context_no_error EGL_EXT_image_dma_buf_import EGL_EXT_image_dma_buf_import_modifiers EGL_KHR_reusable_sync EGL_ANGLE_external_context_and_surface EGL_EXT_buffer_age EGL_ANGLE_context_virtualization EGL_ANGLE_memory_usage_report EGL_ANGLE_create_context_passthrough_shadersInterfaces exposed by the Wayland compositor:wl_compositor:5 wl_subcompositor:1 wp_viewporter:1 zxdg_output_manager_v1:2 wp_presentation:1 wp_single_pixel_buffer_manager_v1:1 wp_tearing_control_manager_v1:1 zwp_relative_pointer_manager_v1:1 zwp_pointer_constraints_v1:1 zwp_input_timestamps_manager_v1:1 weston_capture_v1:1 wl_data_device_manager:3 wl_shm:2 zwp_linux_explicit_synchronization_v1:2 wl_output:4 xdg_wm_base:5 zwp_linux_dmabuf_v1:5 wl_drm:2Ozone platform                  :waylandDirect rendering version        :unknownReset notification strategy     :0x8252GPU process crash count         :0\n\nDriver Bug Workarounds\n======================*   enable_webgl_timer_query_extensions*   exit_on_context_lost*   msaa_is_slow*   msaa_is_slow_2*   rely_on_implicit_sync_for_swap_buffers*   disabled_extension_GL_KHR_blend_equation_advanced*   disabled_extension_GL_KHR_blend_equation_advanced_coherent\n\nProblems Detected\n=================*   Accelerated video encode has been disabled, either via blocklist, about:flags or the command line.    Disabled Features: video_encode\n\n*   Disable webgpu on vk via gl interop:\n    442791440(http://crbug.com/442791440), 475935650(http://crbug.com/475935650)    Disabled Features: webgpu_on_vk_via_gl_interop\n\n*   On Intel GPUs MSAA performance is not acceptable for GPU rasterization:\n    527565(http://crbug.com/527565), 1298585(http://crbug.com/1298585)    Applied Workarounds: msaa_is_slow\n\n*   Disable KHR_blend_equation_advanced until cc shaders are updated:\n    661715(http://crbug.com/661715)    Applied Workarounds: disable(GL_KHR_blend_equation_advanced),\n        disable(GL_KHR_blend_equation_advanced_coherent)\n\n*   Expose WebGL's disjoint_timer_query extensions on platforms with site isolation:\n    808744(http://crbug.com/808744), 870491(http://crbug.com/870491)    Applied Workarounds: enable_webgl_timer_query_extensions\n\n*   Some drivers can't recover after OUT_OF_MEM and context lost:\n    893177(http://crbug.com/893177)    Applied Workarounds: exit_on_context_lost\n\n*   Avoid waiting on a egl fence before swapping buffers and rely on implicit sync on Intel GPUs:\n    938286(http://crbug.com/938286)    Applied Workarounds: rely_on_implicit_sync_for_swap_buffers\n\n*   On pre-Ice Lake Intel GPUs MSAA performance is not acceptable for GPU rasterization:\n    527565(http://crbug.com/527565), 1298585(http://crbug.com/1298585), 1341830(http://crbug.com/1341830)    Applied Workarounds: msaa_is_slow_2\n\n\n\nANGLE Features\n==============*   allowCompressedFormats (Frontend workarounds): Enabled\n\n*   allowExtensionDisableAfterNonPpTokens (Frontend features): Disabled\n\n*   alwaysEnableEmulatedMultidrawExtensions (Frontend workarounds): Disabled\n\n*   alwaysRunLinkSubJobsThreaded (Frontend features): Disabled\n\n*   cacheCompiledShader (Frontend features): Enabled\n\n*   clipCullDistanceBrokenWithPassthroughShaders (Frontend features): Disabled\n\n*   compileJobIsThreadSafe (Frontend features): Disabled\n\n*   compressProgramBinaryBlob (Frontend features): Disabled\n\n*   disableAnisotropicFiltering (Frontend workarounds): Disabled\n\n*   disableProgramBinary (Frontend features): Disabled\n\n*   disableProgramCaching (Frontend features): Disabled\n\n*   disableProgramCachingForTransformFeedback (Frontend workarounds): Disabled\n\n*   disallowNonZeroBaseLevelAndIncompatibleLevelsOnHardenedContexts (Frontend workarounds): Disabled\n\n*   dumpShaderSource (Frontend features): Disabled\n\n*   dumpTranslatedShaders (Frontend features): Disabled\n\n*   emulatePixelLocalStorage (Frontend features): Enabled\n\n*   enableCaptureLimits (Frontend features): Disabled\n\n*   enableCreateContextBackwardsCompatible (Frontend features): Enabled\n\n*   enableProgramBinaryForCapture (Frontend features): Disabled\n\n*   enableShaderSubstitution (Frontend workarounds): Disabled\n\n*   enableTranslatedShaderSubstitution (Frontend workarounds): Disabled\n\n*   forceDebugContexts (Frontend features): Disabled\n\n*   forceDepthAttachmentInitOnClear (Frontend workarounds): Disabled\n\n*   forceFlushAfterDrawcallUsingShadowmap (Frontend workarounds): Disabled\n\n*   forceGlErrorChecking (Frontend features): Disabled\n\n*   forceInitShaderVariables (Frontend features): Disabled\n\n*   forceMinimumMaxVertexAttributes (Frontend features): Disabled\n\n*   forcePassthroughShaders (Frontend features): Disabled\n\n*   forceRobustResourceInit (Frontend features): Disabled\n\n*   limitMaxBufferBytesTo1MB (Frontend features): Disabled\n\n*   limitMaxTextureBytesTo1MB (Frontend features): Disabled\n\n*   linkJobIsThreadSafe (Frontend features): Disabled\n\n*   loseContextOnOutOfMemory (Frontend workarounds): Enabled\n\n*   loseHardenedContextOnBackendError (Frontend workarounds): Enabled\n\n*   noperspectiveInterpolationBrokenWithPassthroughShaders (Frontend features): Disabled\n\n*   setNeedInitOnInvalidation (Frontend features): Enabled\n\n*   singleThreadedTextureDecompression (Frontend workarounds): Disabled\n\n*   uncurrentEglSurfaceUponSurfaceDestroy (Frontend workarounds): Disabled\n\n*   useIr (Frontend features): Disabled\n\n*   RGBA4IsNotSupportedForColorRendering (OpenGL workarounds): Disabled\n\n*   RGBDXT1TexturesSampleZeroAlpha (OpenGL workarounds): Disabled\n\n*   addAndTrueToLoopCondition (OpenGL workarounds): Disabled\n\n*   adjustSrcDstRegionForBlitFramebuffer (OpenGL workarounds): Enabled\n\n*   allowAstcFormats (OpenGL workarounds): Disabled\n\n*   allowClearForRobustResourceInit (OpenGL workarounds): Disabled\n\n*   allowETCFormats (OpenGL workarounds): Disabled\n\n*   alwaysCallUseProgramAfterLink (OpenGL workarounds): Enabled\n\n*   alwaysUnbindFramebufferTexture2D (OpenGL workarounds): Disabled\n\n*   avoid1BitAlphaTextureFormats (OpenGL workarounds): Disabled\n\n*   avoidBindFragDataLocation (OpenGL workarounds): Disabled\n\n*   avoidComplexExpressionsInStructConstructor (OpenGL workarounds): Disabled\n\n*   bgraTexImageFormatsBroken (OpenGL workarounds): Disabled\n\n*   bindCompleteFramebufferForTimerQueries (OpenGL workarounds): Disabled\n\n*   bindTransformFeedbackBufferBeforeBindBufferRange (OpenGL workarounds): Disabled\n\n*   clampArrayAccess (OpenGL workarounds): Disabled\n\n*   clampFragDepth (OpenGL workarounds): Disabled\n\n*   clampMscRate (OpenGL workarounds): Enabled\n\n*   clampPointSize (OpenGL workarounds): Disabled\n\n*   clearsWithGapsNeedFlush (OpenGL workarounds): Disabled\n\n*   clipSrcRegionForBlitFramebuffer (OpenGL workarounds): Disabled\n\n*   corruptProgramBinaryForTesting (OpenGL workarounds): Disabled\n\n*   decodeEncodeSRGBForGenerateMipmap (OpenGL workarounds): Disabled\n\n*   disableBaseInstanceVertex (OpenGL workarounds): Enabled\n\n*   disableBlendEquationAdvanced (OpenGL workarounds): Disabled\n\n*   disableClearTexImageForRobustInit (OpenGL workarounds): Disabled\n\n*   disableClearTexture (OpenGL workarounds): Disabled\n\n*   disableClipControl (OpenGL features): Disabled\n\n*   disableDrawBuffersIndexed (OpenGL workarounds): Disabled\n\n*   disableGPUSwitchingSupport (OpenGL workarounds): Disabled\n\n*   disableMSAASampleCount1 (OpenGL workarounds): Disabled\n\n*   disableMultisampledRenderToTexture (OpenGL workarounds): Disabled\n\n*   disableNativeParallelCompile (OpenGL workarounds): Disabled\n\n*   disablePassthroughShaders (OpenGL workarounds): Disabled\n\n*   disableRenderSnorm (OpenGL workarounds): Disabled\n\n*   disableSemaphoreFd (OpenGL workarounds): Disabled\n\n*   disableSyncControlSupport (OpenGL workarounds): Disabled\n\n*   disableTextureClampToBorder (OpenGL workarounds): Disabled\n\n*   disableTextureMirrorClampToEdge (OpenGL workarounds): Disabled\n\n*   disableTiledRendering (OpenGL workarounds): Disabled\n\n*   disableTimestampQueries (OpenGL workarounds): Disabled\n\n*   doesSRGBClearsOnLinearFramebufferAttachments (OpenGL workarounds): Enabled\n\n*   dontInitializeUninitializedLocals (OpenGL workarounds): Disabled\n\n*   dontInvalidateIncompleteFBOs (OpenGL workarounds): Disabled\n\n*   dontUseLoopsToInitializeVariables (OpenGL workarounds): Disabled\n\n*   emitMaxGlsl400ForTesting (OpenGL workarounds): Disabled\n\n*   emulateAbsIntFunction (OpenGL workarounds): Disabled\n\n*   emulateAtan2Float (OpenGL workarounds): Disabled\n\n*   emulateClipDistanceState (OpenGL workarounds): Disabled\n\n*   emulateClipOrigin (OpenGL workarounds): Disabled\n\n*   emulateCopyTexImage2D (OpenGL workarounds): Disabled\n\n*   emulateCopyTexImage2DFromRenderbuffers (OpenGL workarounds): Disabled\n\n*   emulateImmutableCompressedTexture3D (OpenGL workarounds): Disabled\n\n*   emulateMaxVertexAttribStride (OpenGL workarounds): Disabled\n\n*   emulatePackSkipRowsAndPackSkipPixels (OpenGL workarounds): Disabled\n\n*   emulatePrimitiveRestartFixedIndex (OpenGL workarounds): Disabled\n\n*   emulateRGB10 (OpenGL workarounds): Disabled\n\n*   ensureNonEmptyBufferIsBoundForDraw (OpenGL features): Disabled\n\n*   explicitFragmentLocations (OpenGL workarounds): Disabled\n\n*   finishBeforeBlitFramebufferMultiAttachment (OpenGL workarounds): Disabled\n\n*   finishDoesNotCauseQueriesToBeAvailable (OpenGL workarounds): Disabled\n\n*   flushBeforeDeleteTextureIfCopiedTo (OpenGL workarounds): Disabled\n\n*   flushBeforeGenerateMipmap (OpenGL workarounds): Disabled\n\n*   flushOnFramebufferChange (OpenGL workarounds): Disabled\n\n*   flushQueriesBeforeDeletingOrUnbindingFbo (OpenGL workarounds): Disabled\n\n*   forceLumaWorkaroundForSameTextureCopyTexImage2D (OpenGL workarounds): Disabled\n\n*   forceMaxCombinedShaderOutputResources (OpenGL features): Disabled\n\n*   initFragmentOutputVariables (OpenGL workarounds): Disabled\n\n*   initializeCurrentVertexAttributes (OpenGL workarounds): Disabled\n\n*   keepBufferShadowCopy (OpenGL workarounds): Disabled\n\n*   limitMax3dArrayTextureSizeTo1024 (OpenGL workarounds): Disabled\n\n*   limitMaxBufferSizeTo1gb (OpenGL workarounds): Disabled\n\n*   limitMaxMSAASamplesTo4 (OpenGL workarounds): Disabled\n\n*   limitOutputVaryingsTo256AtCompileTime (OpenGL workarounds): Disabled\n\n*   limitWebglMaxTextureSizeTo4096 (OpenGL workarounds): Disabled\n\n*   limitWebglMaxTextureSizeTo8192 (OpenGL workarounds): Disabled\n\n*   multiviewViaViewportArray (OpenGL features): Disabled\n\n*   packLargeRowLengthSeparatelyPackBuffer (OpenGL workarounds): Disabled\n\n*   packLastRowSeparatelyForPaddingInclusion (OpenGL workarounds): Disabled\n\n*   packOverlappingRowsSeparatelyPackBuffer (OpenGL workarounds): Disabled\n\n*   passHighpToPackUnormSnormBuiltins (OpenGL workarounds): Disabled\n\n*   preAddTexelFetchOffsets (OpenGL workarounds): Disabled\n\n*   preTransformTextureCubeGradDerivatives (OpenGL workarounds): Disabled\n\n*   promotePackedFormatsTo8BitPerChannel (OpenGL workarounds): Disabled\n\n*   queryCounterBitsGeneratesErrors (OpenGL workarounds): Disabled\n\n*   readPixelsUsingImplementationColorReadFormatForNorm16 (OpenGL workarounds): Disabled\n\n*   reapplyUBOBindingsAfterUsingBinaryProgram (OpenGL workarounds): Disabled\n\n*   reattachFboDepthStencilOnReallocation (OpenGL workarounds): Disabled\n\n*   reattachTextureToFboAfterLayerIncrease (OpenGL workarounds): Disabled\n\n*   recreateImmutableTextureOnBaseLevelIncrease (OpenGL workarounds): Disabled\n\n*   recreateMipmapLevelsBeforeGenerate (OpenGL workarounds): Enabled\n\n*   recreateTextureOnTexImage3dDepthIncrease (OpenGL workarounds): Disabled\n\n*   removeDynamicIndexingOfSwizzledVector (OpenGL workarounds): Disabled\n\n*   removeInvariantAndCentroidForESSL3 (OpenGL workarounds): Disabled\n\n*   resetBaseLevelForASTCImage (OpenGL workarounds): Disabled\n\n*   resetSampleCoverageOnFBOChange (OpenGL workarounds): Disabled\n\n*   resetTexImage2DBaseLevel (OpenGL workarounds): Disabled\n\n*   resetTexStorage2DBaseLevel (OpenGL workarounds): Disabled\n\n*   resyncDepthRangeOnClipControl (OpenGL workarounds): Disabled\n\n*   rewriteRepeatedAssignToSwizzled (OpenGL workarounds): Disabled\n\n*   rewriteRowMajorMatrices (OpenGL workarounds): Disabled\n\n*   roundUp3dTextureSizeToPOTForLimit (OpenGL workarounds): Disabled\n\n*   sanitizeAMDGPURendererString (OpenGL workarounds): Disabled\n\n*   scalarizeVecAndMatConstructorArgs (OpenGL workarounds): Disabled\n\n*   setPrimitiveRestartFixedIndexForDrawArrays (OpenGL workarounds): Disabled\n\n*   setZeroLevelBeforeGenerateMipmap (OpenGL workarounds): Disabled\n\n*   shiftInstancedArrayDataWithOffset (OpenGL workarounds): Disabled\n\n*   splitLevel0PboFullSubImage2D (OpenGL workarounds): Disabled\n\n*   srgbBlendingBroken (OpenGL workarounds): Disabled\n\n*   supportsFragmentShaderInterlockARB (OpenGL features): Disabled\n\n*   supportsFragmentShaderInterlockNV (OpenGL features): Disabled\n\n*   supportsFragmentShaderOrderingINTEL (OpenGL features): Disabled\n\n*   supportsShaderFramebufferFetchEXT (OpenGL features): Disabled\n\n*   supportsShaderFramebufferFetchNonCoherentEXT (OpenGL features): Enabled\n\n*   syncAllVertexArraysToDefault (OpenGL workarounds): Disabled\n\n*   syncDefaultVertexArraysToDefault (OpenGL workarounds): Enabled\n\n*   unbindFBOBeforeSwitchingContext (OpenGL workarounds): Disabled\n\n*   unfoldShortCircuits (OpenGL workarounds): Disabled\n\n*   unpackLastRowSeparatelyForPaddingInclusion (OpenGL workarounds): Disabled\n\n*   unpackOverlappingRowsSeparatelyUnpackBuffer (OpenGL workarounds): Disabled\n\n*   unsizedSRGBReadPixelsDoesntTransform (OpenGL workarounds): Disabled\n\n*   uploadOversizedMipLevelsViaUnpackBuffer (OpenGL workarounds): Disabled\n\n*   uploadTextureDataInChunks (OpenGL workarounds): Disabled\n\n*   useIntermediateTextureForGenerateMipmap (OpenGL workarounds): Disabled\n\n*   useTempForNonZeroBaseLevelGenMipmapUsingCopyImageSubData (OpenGL workarounds): Disabled\n\n*   useTexSubImageForClientDataNpotUploads (OpenGL workarounds): Disabled\n\n*   useUnusedBlocksWithStandardOrSharedLayout (OpenGL workarounds): Disabled\n\n*   validateMaxPerStageUniformBlocksAtCompileTime (OpenGL workarounds): Disabled\n\n*   validateState (OpenGL features): Disabled\n\n*   vertexIDDoesNotIncludeBaseVertex (OpenGL workarounds): Disabled\n\n\n\nDawn Info\n=========\n\nCompositor Information\n======================Tile Update Mode:One-copyPartial Raster  :Enabled\n\nDisplay(s) Information\n======================Info                          :Display[17] bounds=[0,0 1280x800], workarea=[0,0 1280x800], scale=1, rotation=0, panel_rotation=0 external detectedColor space (all)             :{primaries:BT709, transfer:SRGB, matrix:RGB, range:FULL}Buffer format (all)           :RGBA_8888Color volume                  :{name:'srgb', r:[0.6400, 0.3300], g:[0.3000, 0.6000], b:[0.1500, 0.0600], w:[0.3127, 0.3290]}SDR white level in nits       :203HDR relative maximum luminance:1Bits per color component      :8Bits per pixel                :24\n\nVideo Acceleration Information\n==============================Decoding            :Decode h264 baseline:16x16 to 4096x4096 pixelsDecode h264 main    :16x16 to 4096x4096 pixelsDecode h264 high    :16x16 to 4096x4096 pixelsEncoding            :\n\nVulkan Information\n==================\n\nDevice Performance Information\n==============================\n\nDiagnostics\n===========\n\nDriver Information for Hardware GPU\n===================================\n\nGraphics Feature Status for Hardware GPU\n========================================\n\nDriver Bug Workarounds for Hardware GPU\n=======================================\n\nProblems Detected for Hardware GPU\n==================================\n\nLog Messages\n============[313:313:1110/235848.921214:WARNING:sandbox/policy/linux/sandbox_linux.cc:405] : InitializeSandbox() called with multiple threads in process gpu-process.\n",
+  "chrome://sandbox": "Sandbox Status\nLayer 1 Sandbox\tNamespace\nPID namespaces\tYes\nNetwork namespaces\tYes\nSeccomp-BPF sandbox\tYes\nSeccomp-BPF sandbox supports TSYNC\tYes\nPtrace Protection with Yama LSM (Broker)\tNo\nPtrace Protection with Yama LSM (Non-broker)\tNo\n\nYou are adequately sandboxed.",
+  "gl_renderer": "ANGLE (Intel, Mesa Intel(R) HD Graphics 4400 (HSW GT2), OpenGL ES 3.2 Mesa 25.0.7-2+deb13u1)",
+  "gpu0": [
+    "0x8086",
+    "0x0a16"
+  ],
+  "processes": [
+    {
+      "argv": "/usr/lib/chromium/chromium --type=renderer --crashpad-handler-pid=0 --enable-crash-reporter=,built on Debian GNU/Linux 13 (trixie) --user-data-dir=/tmp/browser.8jfghU/profile --change-stack-guard-on-fork=enabl",
+      "namespaces": {
+        "mnt": false,
+        "net": true,
+        "pid": true,
+        "user": true
+      },
+      "pid": 391,
+      "role": "renderer",
+      "seccomp": 2
+    },
+    {
+      "argv": "/usr/lib/chromium/chromium --type=renderer --crashpad-handler-pid=0 --enable-crash-reporter=,built on Debian GNU/Linux 13 (trixie) --user-data-dir=/tmp/browser.8jfghU/profile --change-stack-guard-on-fork=enabl",
+      "namespaces": {
+        "mnt": false,
+        "net": true,
+        "pid": true,
+        "user": true
+      },
+      "pid": 365,
+      "role": "renderer",
+      "seccomp": 2
+    },
+    {
+      "argv": "/usr/lib/chromium/chromium --type=renderer --crashpad-handler-pid=0 --enable-crash-reporter=,built on Debian GNU/Linux 13 (trixie) --user-data-dir=/tmp/browser.8jfghU/profile --change-stack-guard-on-fork=enabl",
+      "namespaces": {
+        "mnt": false,
+        "net": true,
+        "pid": true,
+        "user": true
+      },
+      "pid": 366,
+      "role": "renderer",
+      "seccomp": 2
+    },
+    {
+      "argv": "/usr/lib/chromium/chromium --type=renderer --top-chrome-webui --crashpad-handler-pid=0 --enable-crash-reporter=,built on Debian GNU/Linux 13 (trixie) --user-data-dir=/tmp/browser.8jfghU/profile --change-stack-",
+      "namespaces": {
+        "mnt": false,
+        "net": true,
+        "pid": true,
+        "user": true
+      },
+      "pid": 354,
+      "role": "renderer",
+      "seccomp": 2
+    },
+    {
+      "argv": "/usr/lib/chromium/chromium --type=gpu-process --gpu-recent-crash-count=0 --enable-gpu-rasterization --ozone-platform=wayland --render-node-override=/dev/dri/renderD128 --crashpad-handler-pid=0 --enable-crash-reporter=,built on De",
+      "namespaces": {
+        "mnt": false,
+        "net": false,
+        "pid": false,
+        "user": false
+      },
+      "pid": 313,
+      "role": "gpu",
+      "seccomp": 0
+    },
+    {
+      "argv": "/usr/lib/chromium/chromium --type=utility --utility-sub-type=network.mojom.NetworkService --lang=en-US --service-sandbox-type=none --ignore-certificate-errors --render-node-override=/dev/dri/renderD128 --ignore-certificate-errors --crashpad-handler-pid=0 --enable-crash-reporter=,built on Debian GNU/Linux 13 (trixie) --user-data-dir=/tmp/browser.8jfghU/profile --change-stack-guard-on-fork=enable --shared-files=v8_context_snapshot_data:100 --metrics-shmem-handle=4,i,881756870436051479,15894821539262429667,524288 --field-trial-handle=3,i,5630773200692769057,11336119755420541219,262144 --variations-seed-version --pseudonymization-salt-handle=7,i,4721395546577485268,1425267980118284598,4 --trace-process-track-uuid=31907089",
+      "namespaces": {
+        "mnt": false,
+        "net": false,
+        "pid": false,
+        "user": false
+      },
+      "pid": 318,
+      "role": "network",
+      "seccomp": 0
+    },
+    {
+      "argv": "/usr/lib/chromium/chromium --type=utility --utility-sub-type=storage.mojom.StorageService --lang=en-US --service-sandbox-type=utility --ignore-certificate-errors --render-node-override=/dev/dri/renderD128 --ig",
+      "namespaces": {
+        "mnt": false,
+        "net": true,
+        "pid": true,
+        "user": true
+      },
+      "pid": 340,
+      "role": "storage",
+      "seccomp": 2
+    }
+  ],
+  "webgl": {
+    "pixel": [
+      255,
+      128,
+      0,
+      255
+    ],
+    "renderer": "ANGLE (Intel, Mesa Intel(R) HD Graphics 4400 (HSW GT2), OpenGL ES 3.2)"
+  },
+  "webgl_status": "Hardware accelerated"
+}
+browsers-gpu: result: chromium pass
+browsers-gpu: evidence: firefox
+{
+  "about:support": "Seccomp-BPF (System Call Filtering)\ttrue\nSeccomp Thread Synchronization\ttrue\nUser Namespaces\ttrue\nContent Process Sandboxing\ttrue\nMedia Plugin Sandboxing\ttrue\nContent Process Sandbox Level\t6\nEffective Content Process Sandbox Level\t6",
+  "application": "Firefox",
+  "graphics": {
+    "Compositing": "WebRender",
+    "Description": "Mesa Intel(R) HD Graphics 4400 (HSW GT2)",
+    "Device ID": "0x0a16",
+    "Driver Vendor": "mesa/crocus",
+    "Driver Version": "25.0.7.0",
+    "Vendor ID": "0x8086",
+    "WebGL 1 Driver Renderer": "Intel -- Mesa Intel(R) HD Graphics 4400 (HSW GT2)",
+    "WebGL 2 Driver Renderer": "Intel -- Mesa Intel(R) HD Graphics 4400 (HSW GT2)",
+    "Window Protocol": "wayland"
+  },
+  "webgl": {
+    "pixel": [
+      255,
+      128,
+      0,
+      255
+    ],
+    "renderer": "Intel(R) HD Graphics, or similar"
+  }
+}
+browsers-gpu: result: firefox pass
+browsers-gpu: evidence: x11/glxinfo.txt
+name of display: :1
+display: :1  screen: 0
+direct rendering: Yes
+Extended renderer info (GLX_MESA_query_renderer):
+    Vendor: Intel (0x8086)
+    Device: Mesa Intel(R) HD Graphics 4400 (HSW GT2) (0xa16)
+    Version: 25.0.7
+    Accelerated: yes
+    Video memory: 1536MB
+    Unified memory: yes
+    Preferred profile: core (0x1)
+    Max core profile version: 4.6
+    Max compat profile version: 4.6
+    Max GLES1 profile version: 1.1
+    Max GLES[23] profile version: 3.2
+OpenGL vendor string: Intel
+OpenGL renderer string: Mesa Intel(R) HD Graphics 4400 (HSW GT2)
+OpenGL core profile version string: 4.6 (Core Profile) Mesa 25.0.7-2+deb13u1
+OpenGL core profile shading language version string: 4.60
+OpenGL core profile context flags: (none)
+OpenGL core profile profile mask: core profile
+
+OpenGL version string: 4.6 (Compatibility Profile) Mesa 25.0.7-2+deb13u1
+OpenGL shading language version string: 4.60
+OpenGL context flags: (none)
+OpenGL profile mask: compatibility profile
+
+OpenGL ES profile version string: OpenGL ES 3.2 Mesa 25.0.7-2+deb13u1
+OpenGL ES profile shading language version string: OpenGL ES GLSL ES 3.20
+
+exit 0
+browsers-gpu: evidence: x11/glmark2.txt
+=======================================================
+    glmark2 2023.01
+=======================================================
+    OpenGL Information
+    GL_VENDOR:      Intel
+    GL_RENDERER:    Mesa Intel(R) HD Graphics 4400 (HSW GT2)
+    GL_VERSION:     4.6 (Compatibility Profile) Mesa 25.0.7-2+deb13u1
+    Surface Config: buf=32 r=8 g=8 b=8 a=8 depth=24 stencil=0 samples=0
+    Surface Size:   800x600 windowed
+=======================================================
+[build] <default>: Validation: Success
+[texture] <default>: Validation: Success
+exit 0
+browsers-gpu: evidence: d3d9.log
+d3d: environment: {"uname": ["Linux", "rach2", "6.18.0-rach2", "#1 Rach2 1.0.0", "x86_64"], "family": "probe", "row": "wined3d/9", "adapter": "host", "mode": null, "reference": null, "environment": {"DXVK_LOG_LEVEL": "info", "VKD3D_DEBUG": "info", "MESA_VK_IGNORE_CONFORMANCE_WARNING": "1", "PROTON_USE_WOW64": "1", "DXVK_LOG_PATH": "/tmp/t2659-out/d3d9", "PROTON_LOG": "1", "PROTON_LOG_DIR": "/tmp/t2659-out/d3d9", "MESA_SHADER_CACHE_DIR": "/tmp/d3d-00jqkcpm/shader-cache", "LP_NUM_THREADS": "4"}, "display": "the caller's :1", "cache": "empty private directory", "iommu": "rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial/root-f216a775d48669a6.img rach2.slot=trialroot rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.disk=ahci rach2.netconsole rach2.ip=none rach2.console=term rach2.i915 rach2.trace=enosys\n"}
+d3d: prefix: creating
+d3d: prefix: ready
+d3d: unit: wined3d/9 {"exit": 0, "pixels": "adapter: Mesa Intel(R) HD Graphics 4400 (HSW GT2) driver igdumdim32.dll vendor 0x8086 device 0x0a16\nCreateDevice: hr=0x00000000\ncaps: vs 3.0 ps 3.0 texture memory 1536 MiB\ncenter 255 128 0 255 corner 0 0 128 255 draw OK\nD3D9 OK\n", "adapter": "Mesa Intel(R) HD Graphics 4400 (HSW GT2) driver igdumdim32.dll", "matched": true}
+D3DROW OK probe wined3d/9
+exit 0
+browsers-gpu: evidence: d3d9/pixels.txt
+adapter: Mesa Intel(R) HD Graphics 4400 (HSW GT2) driver igdumdim32.dll vendor 0x8086 device 0x0a16
+CreateDevice: hr=0x00000000
+caps: vs 3.0 ps 3.0 texture memory 1536 MiB
+center 255 128 0 255 corner 0 0 128 255 draw OK
+D3D9 OK
+browsers-gpu: result: x11 pass
+browsers-gpu: result: d3d9 pass
+browsers-gpu: result: pass
+0
