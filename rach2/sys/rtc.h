@@ -130,8 +130,8 @@ void rtc_realtime_unlocked(int64_t *seconds, int32_t *microseconds);
  * second: the monotonic clock to the timer's place within the tick, or the
  * TSC's clock while it runs (vdso.h's `vclock_read`), plus the offset, so a
  * reading here and the vDSO's agree. No reading is earlier than the one
- * before it until the clock is set again. Interrupts are off while it
- * reads.
+ * before it until the clock is set or a leap second is inserted.
+ * Interrupts are off while it reads.
  */
 void rtc_realtime(int64_t *seconds, int64_t *nanoseconds);
 
