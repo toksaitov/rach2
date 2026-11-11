@@ -206,10 +206,15 @@ struct dma_fence;
 typedef int32_t (*drm_ioctl_t)(struct drm_device *dev, void *data, struct drm_file *file);
 
 /* Who may call an ioctl, Linux's flags: an authenticated client, the
- * master, root, and a render node's client. */
+ * master, root, and a render node's client. DRM_UNLOCKED, at Linux's
+ * value, runs the handler without the big lock, under the locks its row
+ * names; the dispatcher takes the big lock around every other handler, as
+ * Linux took drm_global_mutex around a row without it (drm_ioctl.c:
+ * 786-792). */
 #define DRM_AUTH         (1u << 0)
 #define DRM_MASTER       (1u << 1)
 #define DRM_ROOT_ONLY    (1u << 2)
+#define DRM_UNLOCKED     (1u << 4)
 #define DRM_RENDER_ALLOW (1u << 5)
 
 /* An ioctl of the core's table or a driver's own (numbers DRM_COMMAND_BASE
@@ -742,7 +747,10 @@ void drm_mode_file_release(struct drm_file *file);
  * number of another type, EINVAL for a number no row names, EACCES for a
  * caller the row's flags refuse, EFAULT, ENOMEM, or the handler's answer.
  * The argument is copied back by the direction the number and the row
- * share, whatever the handler answered. May sleep.
+ * share, whatever the handler answered. Called without the big lock, since
+ * a node's operations are FILE_OPS_UNLOCKED: the copies run without it,
+ * and the handler of a row without DRM_UNLOCKED, with the permission
+ * check, under it. May sleep.
  */
 int32_t drm_ioctl(struct drm_file *file, uint32_t cmd, uintptr_t arg);
 
