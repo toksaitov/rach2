@@ -288,7 +288,8 @@ static void timer_wake_pass(void)
  * Whether this processor, not the boot one, whose tick has the big lock,
  * should make the timer pass: the tick count has not moved over two of its
  * ticks, so the boot processor's pass is a tick or more late, as when its
- * tick waits for the lock that a long call on this processor holds; and a
+ * tick found the lock held, by a long call on this processor or another,
+ * and ended without it (`_irq_router`, arch/x86/isr.c); and a
  * reference keeps the clock, so that any processor may count the tick
  * (`timer_tick_shared`), whose count then comes from the reference and not
  * from this processor's ticks. Linux's timers fire from whichever

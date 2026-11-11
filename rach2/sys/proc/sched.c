@@ -771,6 +771,7 @@ int sched_tick_waits(void)
 static const uint32_t load_decay[3] = {1884u, 2014u, 2037u};
 static uint32_t load_avg[3];
 static uint32_t load_wait = LOAD_FREQ;
+static uint32_t load_tick; /* the tick count at the last call */
 
 void sched_task_counts(uint32_t *active, uint32_t *total)
 {
@@ -794,14 +795,18 @@ void sched_task_counts(uint32_t *active, uint32_t *total)
  * the old one decayed, plus the count times what the decay took off, rounded
  * up while the count is above it. Linux counts the uninterruptible sleepers
  * as well, and this kernel does not. The products are taken in 64 bits,
- * since 4096 processes in fixed point times a decay pass 32.
+ * since 4096 processes in fixed point times a decay pass 32. The period is
+ * measured by the tick count, since a boot processor's tick that found the
+ * big lock held ends without calling this, and the next counts its ticks.
  */
 void sched_load_tick(void)
 {
-    uint32_t active, total;
+    uint32_t active, total, now = (uint32_t)kernel_ticks, passed = now - load_tick;
     int i;
 
-    if (--load_wait != 0) {
+    load_tick = now;
+    if (passed < load_wait) {
+        load_wait -= passed;
         return;
     }
     load_wait = LOAD_FREQ;
