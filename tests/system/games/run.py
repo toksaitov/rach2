@@ -433,6 +433,8 @@ class Runner:
             if linux is not None and results[name]["crc32"] != want:
                 say("%s: crc32 %s differs from linux's %s" % (name, results[name]["crc32"], want))
                 ok = False
+            elif linux is not None:
+                say("%s: crc32 %s equals linux's" % (name, want))
         for renderer in TRIP_RENDERERS:
             name = "trip-" + renderer
             status, text = self.probe(name, {"WINEDEBUG": "-all,err+all"}, program="trip64",
