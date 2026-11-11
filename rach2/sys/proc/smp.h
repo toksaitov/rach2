@@ -196,7 +196,10 @@ int32_t smp_calls_store(void *data, const char __user *buf, uint32_t len);
 
 /** Write the profile as debugfs's `bkl/profile` shows it: the samples, those
  * a full table lost, and for each entry, instruction and three callers
- * sampled, its count. The caller holds the big lock. */
+ * sampled, its count. The caller holds the big lock, which keeps the other
+ * processors' ticks from sampling; this processor's tick takes no sample
+ * while the text is written, so that the slots' counts and `lost` sum to
+ * `samples`. */
 int32_t smp_profile_show(void *data, char *buf, uint32_t cap);
 
 /** Zero the profile; `len`. The caller holds the big lock, which keeps the
