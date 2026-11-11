@@ -16,8 +16,14 @@
  * no new name, and `..` climbs from it as the working directory. A child's
  * working directory and root are reached through /proc/PID/cwd and root, and
  * ".." after cwd climbs from the directory. A child of uid 1000 holds a
- * directory open: root and another process of uid 1000 reach it through
- * /proc/PID/fd/N, and a process of uid 1001 is refused with EACCES. A
+ * directory open, dumpable again after its setuid: root and another process
+ * of uid 1000 reach it through /proc/PID/fd/N, and a process of uid 1001 is
+ * refused with EACCES. Its /proc/PID/fd, mode 0500 and owned by uid and
+ * gid 1000, is entered by chdir and by fchdir through an O_PATH descriptor
+ * of uid 1000 and gid 1001, as Linux's proc_fd_permission judges the owner
+ * whatever its group, and refused to uid 1001 with EACCES both ways; once
+ * the holder is gone, fchdir through such a descriptor still enters its fd
+ * directory and gives ESRCH for its fdinfo directory. A
  * descriptor on a file or a pipe used as a directory is ENOTDIR, a closed one
  * ENOENT, and a descriptor on /dev reaches its devices. The links of a
  * directory and a file whose paths are longer than 64 bytes name them
@@ -36,7 +42,8 @@
  * `removed-links`, `removed-create`, `removed-cwd`, `file-notdir`,
  * `pipe-notdir`, `closed-enoent`, `dev-through`, `cwd-root-other`,
  * `cwd-root-self`, `fd-other-root`, `fd-other-same-uid`, `fd-other-eacces`,
- * `long-link`, `long-removal` and `cleanup`. The first failure fails its
+ * `fd-dir-owner`, `fd-dir-eacces`, `fd-dir-ended`, `long-link`,
+ * `long-removal` and `cleanup`. The first failure fails its
  * assertion and leaves the rest not run.
  */
 
@@ -46,6 +53,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/mount.h>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -475,8 +483,10 @@ static int as_user(int id, const char *path, int want)
 }
 
 /**
- * Check another process's /proc/PID/fd/N: a child of uid 1000 holds TOP/d2
- * open, and root and a process of uid 1000 reach TOP/d2/f through its link,
+ * Check another process's /proc/PID/fd/N: a child of uid 1000, dumpable
+ * again after its setuid, which clears the flag as Linux's commit_creds
+ * does, holds TOP/d2 open, and root and a process of uid 1000 reach TOP/d2/f
+ * through its link,
  * where a process of uid 1001 is refused with EACCES. Returns 0, or 1 after
  * printing the failure; the step that failed says which of the three it is.
  */
@@ -496,7 +506,7 @@ static int other_process(void)
         close(ready[0]);
         close(go[1]);
         if (setgid((gid_t)probe_id(1000)) != 0 || setuid((uid_t)probe_id(1000)) != 0 ||
-            (d = open(TOP "/d2", O_RDONLY)) < 0) {
+            prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0 || (d = open(TOP "/d2", O_RDONLY)) < 0) {
             _exit(2);
         }
         if (write(ready[1], &d, sizeof(d)) != sizeof(d) || read(go[0], &c, 1) != 1) {
@@ -536,6 +546,138 @@ static int other_process(void)
     return st == 0 ? 0 : fail_step("another process's descriptor", st);
 }
 
+/**
+ * In a child of uid `uid` and gid `gid`, enter `dir`, another process's
+ * /proc/PID/fd, by chdir and by fchdir through an O_PATH descriptor: 0 when
+ * both succeed with `want` 0 or fail with errno `want`, its step otherwise.
+ */
+static int fd_dir_enter(int uid, int gid, const char *dir, int want)
+{
+    pid_t pid = fork();
+    int o, rc;
+
+    if (pid == 0) {
+        if (setgid((gid_t)gid) != 0 || setuid((uid_t)uid) != 0) {
+            _exit(2);
+        }
+        o = open(dir, O_PATH | O_DIRECTORY);
+        if (o < 0) {
+            _exit(3);
+        }
+        rc = chdir(dir);
+        if (want == 0 ? rc != 0 : !refused(rc, want)) {
+            _exit(4);
+        }
+        rc = fchdir(o);
+        _exit(want == 0 ? (rc == 0 ? 0 : 5) : (refused(rc, want) ? 0 : 6));
+    }
+    return child_status(pid);
+}
+
+/** In a child of uid 1000 and gid 1001, open O_PATH descriptors of `dir`
+ * and `info`, the fd and fdinfo directories of the process `owner`, then
+ * write to `go`, which ends `owner`, reap `owner`, and fchdir through each:
+ * 0 when the fd directory is entered and the fdinfo one is ESRCH, 40 plus
+ * the child's step otherwise, or -1 when the child could not be made or
+ * `owner` did not end well. */
+static int fd_dir_ended(pid_t owner, const char *dir, const char *info, int go)
+{
+    int seen[2], gone[2];
+    char c = 0;
+    pid_t late;
+    int st, fo, io;
+
+    if (pipe(seen) != 0 || pipe(gone) != 0) {
+        return -1;
+    }
+    late = fork();
+    if (late == 0) {
+        if (setgid((gid_t)probe_id(1001)) != 0 || setuid((uid_t)probe_id(1000)) != 0) {
+            _exit(2);
+        }
+        fo = open(dir, O_PATH | O_DIRECTORY);
+        io = open(info, O_PATH | O_DIRECTORY);
+        if (fo < 0 || io < 0 || write(seen[1], &c, 1) != 1 || read(gone[0], &c, 1) != 1) {
+            _exit(3);
+        }
+        if (fchdir(fo) != 0) {
+            _exit(4);
+        }
+        _exit(refused(fchdir(io), ESRCH) ? 0 : 5);
+    }
+    st = -1;
+    if (late > 0 && read(seen[0], &c, 1) == 1 && write(go, &c, 1) == 1 &&
+        child_status(owner) == 0 && write(gone[1], &c, 1) == 1) {
+        st = child_status(late);
+        st = st == 0 ? 0 : 40 + st;
+    }
+    close(seen[0]);
+    close(seen[1]);
+    close(gone[0]);
+    close(gone[1]);
+    return st;
+}
+
+/**
+ * Check the search of another process's /proc/PID/fd, mode 0500, whose
+ * owner is a dumpable child of uid and gid 1000: a process of uid 1000 and
+ * gid 1001 enters it by chdir and by fchdir, as Linux's proc_fd_permission
+ * judges the owner whatever its group, and one of uid 1001 gets EACCES both
+ * ways; and once the child is reaped, the fd directory is entered and the
+ * fdinfo one is ESRCH through descriptors opened before (`fd_dir_ended`).
+ * Returns 0, or 1 after printing the failure; the step says which check
+ * failed.
+ */
+static int fd_dir_search(void)
+{
+    char dir[64], info[64];
+    int ready[2], go[2];
+    char c = 0;
+    pid_t pid;
+    int st;
+
+    if (pipe(ready) != 0 || pipe(go) != 0) {
+        return fail("the pipes of the fd directory's search");
+    }
+    pid = fork();
+    if (pid == 0) {
+        if (setgid((gid_t)probe_id(1000)) != 0 || setuid((uid_t)probe_id(1000)) != 0 ||
+            prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0 || write(ready[1], &c, 1) != 1 ||
+            read(go[0], &c, 1) != 1) {
+            _exit(2);
+        }
+        _exit(0);
+    }
+    if (read(ready[0], &c, 1) != 1) {
+        return fail("the fd directory's owner");
+    }
+    snprintf(dir, sizeof(dir), "/proc/%d/fd", (int)pid);
+    snprintf(info, sizeof(info), "/proc/%d/fdinfo", (int)pid);
+    st = fd_dir_enter((int)probe_id(1000), (int)probe_id(1001), dir, 0);
+    if (st == 0) {
+        report_held();
+        st = fd_dir_enter((int)probe_id(1001), (int)probe_id(1001), dir, EACCES);
+        st = st == 0 ? 0 : 20 + st;
+    }
+    if (st == 0) {
+        report_held();
+        st = fd_dir_ended(pid, dir, info, go[1]);
+    } else if (write(go[1], &c, 1) != 1 || child_status(pid) != 0) {
+        st = -1;
+    }
+    close(ready[0]);
+    close(ready[1]);
+    close(go[0]);
+    close(go[1]);
+    if (st < 0) {
+        return fail("the fd directory's owner's end");
+    }
+    if (st == 0) {
+        report_held();
+    }
+    return st == 0 ? 0 : fail_step("another process's fd directory", st);
+}
+
 /** Begin the report and plan its assertions, in the order they are
  * checked. */
 static void plan(void)
@@ -566,6 +708,9 @@ static void plan(void)
                                       "fd-other-root",
                                       "fd-other-same-uid",
                                       "fd-other-eacces",
+                                      "fd-dir-owner",
+                                      "fd-dir-eacces",
+                                      "fd-dir-ended",
                                       "long-link",
                                       "long-removal",
                                       "cleanup"};
@@ -599,7 +744,7 @@ int main(int argc, char **argv)
         return fail("the directory");
     }
     bad = through(d) || renamed(d) || removed() || not_dirs() || cwd_root() || other_process() ||
-          long_paths();
+          fd_dir_search() || long_paths();
     close(d);
     if (umount2(TOP, 0) != 0 || rmdir(TOP) != 0) {
         return fail("the tmpfs's removal");
