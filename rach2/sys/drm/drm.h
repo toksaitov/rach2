@@ -571,23 +571,37 @@ struct drm_pending_event {
     } event;
 };
 
-/* A handle of a file's table: to a buffer object or to a syncobj. A table
- * is a list in the order of the ids. */
+/* A handle of a file's table: to a buffer object or to a syncobj. */
 struct drm_handle {
     uint32_t id;
     void *object;
     struct dma_buf *prime; /* held export/import cache, NULL for other handles */
-    struct drm_handle *next;
 };
 
-/** Add `object` to the table `list` under the lowest free id from 1, as
+/* A file's table of handles, indexed by id as Linux's idr is, so that a
+ * lookup costs one load whatever the handles a client holds. */
+struct drm_handles {
+    struct drm_handle **slot; /* slot[id], NULL where the id is free; slot[0] unused */
+    uint32_t cap;             /* the slots allocated, 0 for none */
+    uint32_t free;            /* no id below it is free */
+};
+
+/** Add `object` to the table `t` under the lowest free id from 1, as
  * Linux's idr gives handles, into `*id`: 0, or -ENOMEM. */
-int32_t drm_handle_insert(struct drm_handle **list, void *object, uint32_t *id);
-/** The object of `id` in `list`, or NULL. */
-void *drm_handle_find(struct drm_handle *list, uint32_t id);
-/** Take `id` out of `list`, drop its PRIME cache reference and return its
+int32_t drm_handle_insert(struct drm_handles *t, void *object, uint32_t *id);
+/** The object of `id` in `t`, or NULL. */
+void *drm_handle_find(const struct drm_handles *t, uint32_t id);
+/** The handle of `id` in `t`, or NULL. */
+struct drm_handle *drm_handle_get(const struct drm_handles *t, uint32_t id);
+/** Take `id` out of `t`, drop its PRIME cache reference and return its
  * object, or NULL for none. */
-void *drm_handle_remove(struct drm_handle **list, uint32_t id);
+void *drm_handle_remove(struct drm_handles *t, uint32_t id);
+/** The lowest id from `id` that is in use in `t`, or 0 when none is: a
+ * walk over the table is `for (i = drm_handle_next(t, 1); i;
+ * i = drm_handle_next(t, i + 1))`. */
+uint32_t drm_handle_next(const struct drm_handles *t, uint32_t id);
+/** Free the slots of `t`, whose handles have all been removed. */
+void drm_handles_fini(struct drm_handles *t);
 
 /*
  * An open of a card or render node, one per open file description. The
@@ -622,8 +636,8 @@ struct drm_file {
     int set_busid; /* its master record has the bus name: SET_VERSION 1.1 or later */
     int universal_planes, atomic, aspect_ratio, writeback_connectors, stereo_allowed,
         supports_virtualized_cursor_plane;
-    struct drm_handle *objects;  /* buffer object handles */
-    struct drm_handle *syncobjs; /* syncobj handles */
+    struct drm_handles objects;  /* buffer object handles */
+    struct drm_handles syncobjs; /* syncobj handles */
     struct drm_framebuffer *fbs; /* framebuffers it made, through `file_next` */
     struct drm_pending_event *events, *events_tail;
     struct drm_pending_event *pending; /* reserved, not yet sent */

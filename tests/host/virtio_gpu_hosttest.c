@@ -479,8 +479,8 @@ void drm_gem_object_put(struct drm_gem_object *obj)
     drm_dev_put(d);
 }
 
-/* Handles, each also on its file's list of `struct drm_handle`, where
- * PRIME keeps its export. `prime_drop` drops a deleted handle's export, in
+/* Handles, each with its `struct drm_handle`, where PRIME keeps its
+ * export. `prime_drop` drops a deleted handle's export, in
  * the rows that have them. */
 #define MAX_HANDLES 32
 static struct {
@@ -520,11 +520,38 @@ int32_t drm_gem_handle_create(struct drm_file *file, struct drm_gem_object *obj,
     k_memset(&handles[slot].node, 0, sizeof(handles[slot].node));
     handles[slot].node.id = id;
     handles[slot].node.object = obj;
-    handles[slot].node.next = file->objects;
-    file->objects = &handles[slot].node;
     obj->refs++;
     *handle = id;
     return 0;
+}
+
+/** The handle `id` of the file whose table is `t`, as drm_gem.c's table
+ * gives it to PRIME, or NULL. */
+struct drm_handle *drm_handle_get(const struct drm_handles *t, uint32_t id)
+{
+    int i;
+
+    for (i = 0; i < MAX_HANDLES; i++) {
+        if (handles[i].file && &handles[i].file->objects == t && handles[i].id == id) {
+            return &handles[i].node;
+        }
+    }
+    return NULL;
+}
+
+/** The lowest handle from `id` of the file whose table is `t`, or 0. */
+uint32_t drm_handle_next(const struct drm_handles *t, uint32_t id)
+{
+    uint32_t best = 0;
+    int i;
+
+    for (i = 0; i < MAX_HANDLES; i++) {
+        if (handles[i].file && &handles[i].file->objects == t && handles[i].id >= id &&
+            (!best || handles[i].id < best)) {
+            best = handles[i].id;
+        }
+    }
+    return best;
 }
 
 /** The object of `handle`, held, or NULL. */
@@ -548,13 +575,6 @@ int32_t drm_gem_handle_delete(struct drm_file *file, uint32_t handle)
 
     for (i = 0; i < MAX_HANDLES; i++) {
         if (handles[i].file == file && handles[i].id == handle) {
-            struct drm_handle **p;
-
-            for (p = &file->objects; *p && *p != &handles[i].node; p = &(*p)->next) {
-            }
-            if (*p) {
-                *p = handles[i].node.next;
-            }
             if (handles[i].node.prime && prime_drop) {
                 prime_drop(handles[i].node.prime);
             }
