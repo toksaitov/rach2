@@ -1118,6 +1118,12 @@ int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid)
     return -ENOENT;
 }
 
+/** No row's descriptor is a /proc file, so a lookup has no owner to set. */
+void procfs_lookup_owner(const struct vpath *vp)
+{
+    (void)vp;
+}
+
 /** No row's descriptor is a /proc file: -1. */
 int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
 {
