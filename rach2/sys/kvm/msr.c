@@ -679,10 +679,11 @@ int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value, int host)
         break;
     default:
         if (index - MSR_LASTBRANCH_FROM < N_LASTBRANCH && kvm_backend == &kvm_svm) {
-            /* svm_set_msr without lbrv has no such MSR, and Linux takes
-             * only the caller's 0 of a listed one (svm/svm.c:3259-3290,
-             * x86.c:508-518). */
-            return host && value == 0 ? 0 : KVM_MSR_INVAL;
+            /* svm_set_msr without lbrv has no such MSR: Linux takes only
+             * the caller's 0 of a listed one, and any other write is
+             * unsupported, an UNKNOWN exit for the guest's
+             * (svm/svm.c:3259-3290, x86.c:508-518, 1590). */
+            return host && value == 0 ? 0 : KVM_MSR_UNKNOWN;
         }
         if (!table_msr(index)) {
             return KVM_MSR_UNKNOWN;
