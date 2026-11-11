@@ -4,6 +4,7 @@
  */
 
 #include "../arch/arch.h"
+#include "../../kernel.h"
 #include "../cmdline.h"
 #include "../fpu.h"
 #include "../klog.h"
@@ -1252,6 +1253,25 @@ static void note_fault(const isr_params_t *params, uintptr_t fault_address)
     k_panic_note_address(fault_address);
 }
 
+/** End a user process whose fault at `address` found no frame, on a write
+ * when `write` is nonzero, through SIGKILL or directly for the system's
+ * init, which drops SIGKILL. Called on the faulting thread's stack with the
+ * big lock held; only the signal-posting path returns. */
+static void fault_oom(uintptr_t address, int write)
+{
+    struct k_siginfo info;
+
+    k_memset(&info, 0, sizeof(info));
+    info.code = SI_KERNEL;
+    klog(KLOG_WARN, "vm", "fault: out of memory: killing pid %d: no frame for a %s at 0x%lx",
+         current_proc->pid, write ? "write" : "read", (unsigned long)address);
+    if (current_proc->tgid == init_pid && !debug_shell_is_home) {
+        terminate_current_process(SIGKILL);
+    } else {
+        signal_force(current_proc, SIGKILL, &info);
+    }
+}
+
 /**
  * Resolve a page fault, or end what caused it.
  *
@@ -1278,8 +1298,11 @@ static void note_fault(const isr_params_t *params, uintptr_t fault_address)
  * (`device_fault`) is SIGBUS with BUS_ADRERR and the address, forced as
  * the SIGSEGV below is, as Linux answers a driver's VM_FAULT_SIGBUS.
  * A user fault of a legal access that no frame could be had for ends the
- * process with SIGKILL, which no handler sees, as Linux's OOM killer does;
- * a SIGSEGV handler that returned would fault again. Any other user fault
+ * process with SIGKILL, which no handler sees. The system's init is ended
+ * directly, since Linux 6.12.115's sig_task_ignored drops its SIGKILL
+ * (kernel/signal.c:88-90). Linux's OOM killer excludes init instead
+ * (mm/oom_kill.c:164-171); this kernel has no other-victim selection.
+ * A SIGSEGV handler that returned would fault again. Any other user fault
  * is SIGSEGV with the address, SEGV_ACCERR when a region holds it and
  * SEGV_MAPERR when none does, forced as Linux forces it: a handler runs and
  * the faulting instruction runs again after it returns, and a tracer takes
@@ -1338,13 +1361,7 @@ static void _page_fault_handler(isr_params_t *params)
     }
 
     if (user_mode && have_user_proc && in_user_range && current_proc->frame_refused) {
-        struct k_siginfo info;
-
-        k_memset(&info, 0, sizeof(info));
-        info.code = SI_KERNEL;
-        klog(KLOG_WARN, "vm", "fault: out of memory: killing pid %d: no frame for a %s at 0x%lx",
-             current_proc->pid, write ? "write" : "read", (unsigned long)fault_address);
-        signal_force(current_proc, SIGKILL, &info);
+        fault_oom(fault_address, write);
         return;
     }
 
