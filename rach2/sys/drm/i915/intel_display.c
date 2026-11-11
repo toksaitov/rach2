@@ -429,30 +429,37 @@ static void flip_boost(struct intel_crtc *c, const struct drm_plane_state *ps)
 }
 
 /**
- * Give each pipe of `pipes` whose flip is pending a mark of its own in
- * RPS's interactive count, which it lets go once its flip ends, as Linux's
- * intel_cleanup_plane_fb after the commit's flips; then let the commit's
- * own mark go. So the count stays up until the last pipe of the commit has
- * flipped, and a commit that failed (`err`), waited for its flips, or has
- * no event to wait for leaves no mark.
+ * Hand the commit's mark in RPS's interactive count to the pipes of
+ * `pipes` whose flip is pending: one mark for the commit, in a free slot
+ * of `rps_marks`, which the last of those pipes lets go once its flip
+ * ends, as Linux's intel_cleanup_plane_fb lets the commit's mark go after
+ * its flips (state->rps_interactive). A commit that failed (`err`), waited
+ * for its flips, or has no event to wait for leaves no mark; a pipe that
+ * still holds an older commit's mark keeps that one.
  */
 static void interactive_handover(struct drm_i915_private *i915, uint32_t pipes, int32_t err)
 {
+    struct intel_display *d = &i915->display;
     uint32_t flags = kirq_save();
-    int pipe;
+    int pipe, slot;
 
     /* A flip the core ended with no vblank, on a pipe a queued commit
      * turned off, lets its mark go here. */
     for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
-        intel_crtc_interactive_end(&i915->display.crtc[pipe]);
+        intel_crtc_interactive_end(&d->crtc[pipe]);
     }
-    for (pipe = 0; err == 0 && pipe < I915_NUM_PIPES; pipe++) {
-        struct intel_crtc *c = &i915->display.crtc[pipe];
+    for (slot = 0; slot < I915_NUM_PIPES && d->rps_marks[slot]; slot++) {
+    }
+    for (pipe = 0; err == 0 && slot < I915_NUM_PIPES && pipe < I915_NUM_PIPES; pipe++) {
+        struct intel_crtc *c = &d->crtc[pipe];
 
-        if ((pipes & (1u << pipe)) && c->base.flip_pending && !c->rps_interactive) {
-            c->rps_interactive = 1;
-            i915_rps_mark_interactive(i915, 1);
+        if ((pipes & (1u << pipe)) && c->base.flip_pending && !c->rps_mark) {
+            c->rps_mark = (uint8_t)(slot + 1);
+            d->rps_marks[slot] |= (uint8_t)(1u << pipe);
         }
+    }
+    if (slot < I915_NUM_PIPES && d->rps_marks[slot]) {
+        i915_rps_mark_interactive(i915, 1);
     }
     kirq_restore(flags);
     i915_rps_mark_interactive(i915, 0);

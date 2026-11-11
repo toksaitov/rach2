@@ -325,6 +325,7 @@ int32_t drm_gem_handle_delete(struct drm_file *file, uint32_t handle)
 static struct dma_fence in_fence;
 static int fence_refs, fence_waits, fence_wait_rc;
 static struct dma_fence *fence_waited; /* the last fence waited for */
+static struct dma_fence *unsignaled;   /* a fence a row holds unsignalled */
 
 /** The fence of sync file `fd`, held, or NULL. */
 struct dma_fence *sync_file_get_fence(int32_t fd)
@@ -374,11 +375,11 @@ struct dma_fence *dma_fence_merge(struct dma_fence **fences, uint32_t count)
     return NULL;
 }
 
-/** Whether the fence has signalled: the model's has. */
+/** Whether the fence has signalled: the model's has, but the one a row
+ * holds unsignalled. */
 int dma_fence_is_signaled(struct dma_fence *fence)
 {
-    (void)fence;
-    return 1;
+    return fence != unsignaled;
 }
 
 /** No callback is added to a fence that has signalled. */

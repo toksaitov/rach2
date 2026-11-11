@@ -2398,6 +2398,10 @@ static void sysattr_number_writes(void)
     check(sysattr_write(SYSFS_BACKLIGHT, BACKLIGHT_POWER, "+1\n\n", 4) == -EINVAL &&
               stored_len == 4,
           "bl_power refuses a number with two newlines");
+    check(sysattr_write(SYSFS_BACKLIGHT, BACKLIGHT_BRIGHTNESS,
+                        "0000000000000000000000000000000000000001\n", 41) == 41 &&
+              stored_len == 41,
+          "a backlight's brightness takes 41 bytes whole, past the old 31-byte buffer");
     check(sysattr_write(SYSFS_RFKILL, RFKILL_ATTR_SOFT, "0\n", 2) == 2 && stored_len == 2,
           "a radio switch's soft takes a number and its newline");
     check(sysattr_write(SYSFS_RFKILL, RFKILL_ATTR_STATE, "1 \n", 3) == -EINVAL && stored_len == 3,

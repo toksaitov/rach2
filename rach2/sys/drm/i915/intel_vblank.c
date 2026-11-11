@@ -130,9 +130,15 @@ void intel_disable_vblank(struct drm_crtc *crtc)
 
 void intel_crtc_interactive_end(struct intel_crtc *c)
 {
-    if (c->rps_interactive && !c->base.flip_pending) {
-        c->rps_interactive = 0;
-        i915_rps_mark_interactive(c->i915, 0);
+    uint8_t *mark;
+
+    if (c->rps_mark && !c->base.flip_pending) {
+        mark = &c->i915->display.rps_marks[c->rps_mark - 1];
+        *mark &= (uint8_t)~(1u << c->pipe);
+        c->rps_mark = 0;
+        if (*mark == 0) {
+            i915_rps_mark_interactive(c->i915, 0);
+        }
     }
 }
 
@@ -191,6 +197,16 @@ static void vblank_boost(struct intel_crtc *c, int boost)
         drm_crtc_vblank_put(&c->base);
         kfree(b);
     }
+}
+
+void intel_crtc_vblank_off(struct intel_crtc *c)
+{
+    uint32_t flags;
+
+    drm_crtc_vblank_off(&c->base);
+    flags = kirq_save();
+    vblank_boost(c, 1);
+    kirq_restore(flags);
 }
 
 void intel_crtc_arm_flip_done(struct intel_crtc *c, struct drm_atomic_state *state)
