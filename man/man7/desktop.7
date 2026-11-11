@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 11, 2026
 .Dt DESKTOP 7
 .Os
 .Sh NAME
@@ -31,7 +31,10 @@ The session has its own D-Bus bus and runtime directory,
 .Pa /run/user/1001 ,
 owned by desktop with mode 0700.
 Weston uses headless with Pixman when no connector is connected.
-A connected display uses DRM with Pixman, or GL when a render node exists.
+A connected display uses DRM with Pixman, or GL when its card has a render
+node; of several cards with a connected connector, the first by number of
+those with a render node, then of the others, and Weston opens that card
+alone.
 .Sh DISPLAY
 Weston runs the DRM backend as the card's master and holds the keyboard.
 On QEMU's standard VGA, under
@@ -74,6 +77,26 @@ says.
 The supervisor logs
 .Dq rach2-desktop: session: ended; SIGHUP starts it again
 and starts no session until SIGHUP.
+.Pp
+When the card the session draws on goes away, as when a virtual machine
+that drew it through
+.Xr vgpu-shm 4
+dies or the GPU is given to a machine, the supervisor ends the session and
+starts it again on the displays left, headless with GL on llvmpipe when
+none is, and logs
+.Dq rach2-desktop: session: its display BACKEND CARD RENDERER is gone; starting again .
+Until the session draws on a card again, the next card with a connected
+connector that appears starts it again there, with
+.Dq rach2-desktop: session: display BACKEND CARD RENDERER appeared; starting again ,
+which is how the session comes back to a GPU that Rach2's driver has
+again.
+A card that appears while the session draws on another, or headless since
+boot, changes nothing; SIGHUP chooses the display anew.
+Each start logs
+.Dq rach2-desktop: session: started as PID on BACKEND CARD RENDERER .
+udev's events for the cards, which
+.Ql udevadm monitor
+reads, wake the supervisor.
 The device services go on; when one ends the supervisor exits and
 .Xr init 8
 starts it again.
