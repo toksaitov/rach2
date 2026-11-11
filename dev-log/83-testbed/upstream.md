@@ -100,3 +100,14 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: nothing. The pictures are right, and QEMU's process keeps the mappings until it ends. Rach2's own virtio-gpu driver logs the same answer from the testing PC's QEMU, `virtio_gpu: command 0x209: error 0x1200`, when QEMU on Rach2 ends.
 * Status: unreported.
 * Next: read virglrenderer's main branch, where `virgl_renderer_resource_unmap` may record how a resource was mapped; if it does not, send a patch that unmaps by the way of the mapping, and say in the report what the leak costs a long-lived QEMU.
+
+## Linux's virtio-gpu driver warns when fbdev's damage worker queues a command after the device was shut down
+
+* Project: Linux 6.12.115, `drivers/gpu/drm/virtio/virtgpu_vq.c` and `drivers/virtio/virtio.c`, read in `linux-6.12.115.tar.xz` of kernel.org (SHA-256 0ec90fe4b20422b1b664b77e6d2dde22b40bd41e7eb2cad8ac8739a4749cb1bb), which Rach2 does not keep in the tree. The kernel that warned is Debian's 6.12.115+deb13.1-amd64 in the graphics tests' Debian reference guest; Debian's patches to these two files were not read.
+* Fails: at power-off the guest's kernel prints `WARNING: ... at drivers/gpu/drm/virtio/virtgpu_vq.c:358 virtio_gpu_queue_fenced_ctrl_buffer`, from the workqueue `drm_fb_helper_damage_work`. `virtio_dev_shutdown` marks the device's queues broken and resets it at `device_shutdown` (`virtio.c` lines 380-405), but the fbdev emulation's damage worker still flushes the console afterwards; `virtio_gpu_queue_ctrl_sgs` then gets an error from `virtqueue_add_sgs` on the broken queue and meets `WARN_ON(ret)` (`virtgpu_vq.c` lines 357-358). The power-off goes on.
+* Found: 2026-11-11, the Lenovo, milestone 83, task 83-2b, at the end of each of the forward direction's eight runs, the guest on QEMU 10.0.13 under Debian 13.7's KVM and under Rach2's. The same warning was seen earlier at a power-off of the guest on QEMU in WSL ([qemu-wsl.md](../76-graphics/research/work/tonight/qemu-wsl.md)).
+* Reproduction: a Debian 13 guest of QEMU with `virtio-vga-gl` and a console on fbdev, powered off from inside after drawing (`bed/forward/forward.sh virgl`, which ends the guest with `systemctl poweroff`); the warning is near the end of the guest's console log.
+* Evidence: the runs' console logs are kept in the Mac's `build/runs/t2667/`, not committed; [83-2.md](83-2.md#results-on-the-lenovo).
+* Rach2: nothing. The guest is the reference guest, and the warning comes after its work and its last write to disk.
+* Status: unreported.
+* Next: read Linux's master for a stop of the fbdev damage worker, or a `drm_dev_unplug`, in virtio-gpu's shutdown path; check whether Debian's patch set adds `virtio_dev_shutdown`'s break and reset to 6.12, and report it to the virtio-gpu maintainers with the console's trace.
