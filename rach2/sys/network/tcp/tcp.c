@@ -2847,8 +2847,8 @@ static void tcp_sack_note(struct tcb *tcb, uint32_t seq)
  * segment makes the whole run readable and the peer, whose acknowledgement
  * then covers it, does not send it again. A segment taken at rcv_nxt
  * stamps `ka_since`, as tcp_event_data_recv stamps lrcvtime for a segment
- * with data queued, even when only its FIN is new. The caller acknowledges
- * the segment either way.
+ * with data queued, even when only its FIN is new; a FIN without data
+ * stamps nothing here. The caller acknowledges the segment either way.
  *
  * @return 0 when the window dropped the segment, whose FIN must then not
  * be taken; 1 otherwise.
@@ -2856,7 +2856,7 @@ static void tcp_sack_note(struct tcb *tcb, uint32_t seq)
 static int tcp_take_data(struct tcb *tcb, uint32_t seq, const uint8_t *payload, uint16_t len,
                          int fin)
 {
-    uint32_t skip, n;
+    uint32_t skip = 0, n;
     uint16_t took;
 
     if ((int32_t)(seq - tcb->rcv_nxt) < 0) {
@@ -2882,7 +2882,7 @@ static int tcp_take_data(struct tcb *tcb, uint32_t seq, const uint8_t *payload, 
     }
     took = len > 0 ? tcp_accept_data(tcb, payload, len) : 0;
     tcb->rcv_nxt += took;
-    if (took > 0 || len == 0) {
+    if (took > 0 || (len == 0 && skip > 0)) {
         tcb->ka_since = TCP_NOW();
     }
     while (tcb->ooo_count > 0 && (int32_t)(tcb->ooo_start[0] - tcb->rcv_nxt) <= 0) {
