@@ -1017,6 +1017,17 @@ uint32_t procfs_ino_pid(int pid)
     return 0;
 }
 
+/** The owner of a node of a process under /proc, which no row reads:
+ * -ENOENT. */
+int procfs_pid_owner(int pid, uint32_t mode, uint32_t *uid, uint32_t *gid)
+{
+    (void)pid;
+    (void)mode;
+    (void)uid;
+    (void)gid;
+    return -ENOENT;
+}
+
 /* The descriptor, process and mount lookups of fstat and of a descriptor's
  * path, which no row reaches: GCC keeps their callers, so a link needs
  * them. */
