@@ -507,6 +507,7 @@ void platform_tick(void)
     ata_tick();
     ps2kbd_tick();
     alps_tick();
+    itco_tick();
 }
 
 void platform_disks_probe(void)
