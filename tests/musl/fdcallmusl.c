@@ -28,8 +28,7 @@
  * descriptor 0's file. A device opened through a node of its own, one of
  * /dev/null's numbers with mode 0600 on a private tmpfs, since the KRFFS root
  * the test image boots makes no device node, is opened again by the node's
- * mode,
- * as Linux follows the descriptor's path: uid 1000, which inherits the
+ * mode, as Linux follows the descriptor's path: uid 1000, which inherits the
  * descriptor, is refused with EACCES though /dev/null is 0666, and root
  * opens it again once the node has lost its name. User 1000 is the NEW of
  * 1000 when a native run gives `ids=OLD:NEW,...` (tests/native/Readme.md).
