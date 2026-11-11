@@ -406,6 +406,11 @@ program.
 .It Bq Er ENOMEM
 The kernel could not allocate the child's process record, page tables,
 user page state, kernel stack, memory region records, or descriptor table.
+The child's PID namespace, or one above it, has closed allocation after
+its init died or its last allocated PID was released by a failed fork.
+Failure to copy files or directories, before PID allocation, leaves a
+new namespace open; a failure within PID allocation resets its
+first-number cursor, as on Linux.
 .It Bq Er ENOSPC
 .Dv CLONE_NEWNS
 was given while the mount namespaces of the caller's user, or of the owner of

@@ -541,7 +541,8 @@ on Linux.
 The robust futexes the thread holds are released next, as
 .Xr futex 2
 describes, and a thread other than the one that began the process then
-takes that thread's ID, which is the process ID, as on Linux.
+takes that thread's ID, which is the process ID, in every PID namespace,
+as on Linux.
 The old address space is freed, unless the parent of a
 .Xr vfork 2
 child still has it; that parent then runs again.

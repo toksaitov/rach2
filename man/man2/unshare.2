@@ -39,6 +39,9 @@ ends are given to it, and when it ends every other process of the
 namespace is sent
 .Dv SIGKILL
 and no process may be made in it.
+Allocation also closes if a failed fork releases the last allocated PID
+before init starts; see
+.Xr fork 2 .
 A process sees the processes of its namespace and of those below it, by
 their numbers there, and sees the parent of a namespace's init as 0.
 .It Dv CLONE_NEWNS

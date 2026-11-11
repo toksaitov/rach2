@@ -702,7 +702,8 @@ void free_process(process_t *proc);
  * numbering, that of the first PID namespace; NULL for none. */
 process_t *get_process(uint32_t pid);
 
-/** Exchange two indexed thread ids at exec, under the big kernel lock. */
+/** Exchange the kernel and namespace thread ids of two threads in the
+ * same PID namespace at exec, under the big kernel lock. */
 void proc_exchange_pids(process_t *a, process_t *b);
 
 /** Change the real uid and its record count, under the big kernel lock.

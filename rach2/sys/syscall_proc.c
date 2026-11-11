@@ -3058,8 +3058,8 @@ static void fork_frame(process_t *child, const isr_params_t *params, const struc
 }
 
 /** Give back every part of a child whose fork failed, with the big lock
- * held. The child has not run; the last steps undo its reserved PID 1, if
- * any, and free its record without an intervening sleep. */
+ * held. The child has not run; the last steps release any allocated PID
+ * numbers and free its record without an intervening sleep. */
 static void fork_discard(process_t *child)
 {
     proc_files_put(child);
@@ -3109,14 +3109,14 @@ static process_t *fork_build(process_t *parent, const struct fork_req *req, int3
         (req->flags & (CLONE_THREAD | CLONE_PARENT)) ? parent->parent_pid : parent->tgid;
     fork_ids(child, parent);
     rseq_fork(child, parent, (req->flags & CLONE_VM) != 0);
-    rc = ns_fork(child, parent, req->flags);
-    if (rc != 0) {
-        goto fail;
-    }
     child->tls_base = (req->flags & CLONE_SETTLS) && !req->tls_desc_set ? req->tls : arch_tls_get();
     fpu_save(child->fpu);
 
     rc = fork_shares(child, parent, req->flags);
+    if (rc != 0) {
+        goto fail;
+    }
+    rc = ns_fork(child, parent, req->flags);
     if (rc != 0) {
         goto fail;
     }
