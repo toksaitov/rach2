@@ -495,13 +495,16 @@ static struct vr_pin *pin_new(struct vr *r, const struct vd_pages *q)
         r->pc.refused++;
         return 0;
     }
-    if ((err = virgl_renderer_resource_export_blob(q->id, &fd_type, &fd)) != 0 ||
-        virgl_renderer_resource_get_map_info(q->id, &info) != 0) {
+    if ((err = virgl_renderer_resource_export_blob(q->id, &fd_type, &fd)) != 0) {
         fprintf(stderr, "backend: map: resource %u: refused: not exported: %d\n", (unsigned)q->id,
                 err);
-        if (fd >= 0) {
-            close(fd);
-        }
+        r->pc.refused++;
+        return 0;
+    }
+    if ((err = virgl_renderer_resource_get_map_info(q->id, &info)) != 0) {
+        fprintf(stderr, "backend: map: resource %u: refused: no map info: %d\n", (unsigned)q->id,
+                err);
+        close(fd);
         r->pc.refused++;
         return 0;
     }
@@ -543,7 +546,7 @@ static int op_pages(void *c, struct vd_pages *q)
     }
     memset(&pg, 0, sizeof(pg));
     pg.handle = p->handle;
-    pg.max = q->max < 4096u ? q->max : 4096u;
+    pg.max = q->max < VGPUSHM_PAGES_MAX_RUNS ? q->max : VGPUSHM_PAGES_MAX_RUNS;
     pg.first = q->first;
     /* struct vgs_run and struct vgpushm_run are both two u64s, address first. */
     pg.runs = (uint64_t)(uintptr_t)q->runs;
