@@ -45,9 +45,10 @@ def main():
     audio = child = None
     signal.signal(signal.SIGINT, interrupted)
     signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGHUP, interrupted)
     try:
         out.mkdir(parents=True, exist_ok=False)
-        print("trigger: evidence:", out, flush=True)
+        print("trigger: pid:", os.getpid(), "evidence:", out, flush=True)
         scratch = Path(tempfile.mkdtemp(prefix='rach2-hda-', dir=tmp))
         with open('/dev/zero', 'rb') as zero, open(out / 'pacat.log', 'wb') as log:
             audio = subprocess.Popen([
@@ -112,6 +113,7 @@ os._exit(0)
     finally:
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
         for proc in (child, audio):
             if proc is not None:
                 try:
