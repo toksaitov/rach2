@@ -20,8 +20,11 @@
 # The decoder is named by the browser: Chromium's by the kVideoDecoderName
 # that its DevTools protocol's Media domain reports (cdp.py), Firefox's by
 # the description its PlatformDecoderModule log gives as the decoder is
-# made, such as "ffmpeg video decoder (RDD remote)"; a space in the name is
-# written `_` in the result line. OUT (.) gets the record and, for each clip,
+# made, such as "ffmpeg video decoder (RDD remote)", with " with VA-API"
+# added when its FFmpegVideo log says it opened VA-API, which needs
+# VIDEO_MOZ_LOG, Firefox's MOZ_LOG (PlatformDecoderModule:5), to name
+# FFmpegVideo:4 too; a space in the name is written `_` in the result
+# line. OUT (.) gets the record and, for each clip,
 # BROWSER-CLIP.plays, one line a play, `REP WARM TOTAL DROPPED CORRUPTED
 # SECONDS WIDTHxHEIGHT ERROR`, and BROWSER-CLIP.decoders. Each clip prints
 # one line, the counts of the counted plays:
@@ -149,7 +152,7 @@ for name; do
     # shellcheck disable=SC2034 # runner_browser reads them
     case $browser in
         chromium) RUNNER_CDP=$RUNNER_WORK/cdp; : > "$RUNNER_CDP" ;;
-        firefox) RUNNER_MOZ_LOG=PlatformDecoderModule:5 ;;
+        firefox) RUNNER_MOZ_LOG=${VIDEO_MOZ_LOG:-PlatformDecoderModule:5} ;;
     esac
     runner_browser "$browser" "http://127.0.0.1:$RUNNER_PORT/video-runner.html?clip=$name&warm=$warmup&reps=$reps" "$log"
     waited=$(python3 -I "$RUNNER_DIR/events.py" wait "$events" "$lines" "$RUNNER_BROWSER" "$silence")
@@ -173,9 +176,16 @@ print("\n".join(dict.fromkeys(names)))' "$RUNNER_CDP" > "$RUNNER_OUT/$browser-$n
             decoder=$(sed -n 's/^kVideoDecoderName=//p' "$RUNNER_OUT/$browser-$name.decoders" | tail -n 1)
             ;;
         firefox)
+            # With FFmpegVideo's log at 4, a decoder that opened VA-API says
+            # so, and each frame it decodes on the GPU is a line.
+            va=$(grep -a -c 'VA-API FFmpeg init successful' "$log" || true)
+            hw=''
+            [ "${va:-0}" -eq 0 ] || hw=' with VA-API'
             {
-                grep -a -o 'has been initialized - description: .*' "$log" | sed 's/^.*description: //'
+                grep -a -o 'has been initialized - description: .*' "$log" |
+                    sed "s/^.*description: //; 1s/, process: /$hw, process: /"
                 grep -a -o 'PDMInitializer, [0-9]*: .*' "$log" | sort -u
+                echo "vaapi: init ${va:-0}, frames $(grep -a -c -E 'VA-API frame|Got VA-API DMABufSurface' "$log" || true)"
             } > "$RUNNER_OUT/$browser-$name.decoders" || true
             decoder=$(sed -n '1s/, process: .*//p' "$RUNNER_OUT/$browser-$name.decoders")
             ;;
