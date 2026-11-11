@@ -144,8 +144,8 @@
 
 /* Inode namespace for /sys: a fixed directory by its node, with its
  * attribute files 256 apart above it; a PCI function's directory by its
- * key times four, with its uevent one more and its config three more, and
- * its link by its key in a range of its own; a USB device's directory by
+ * key in bits 8 to 23 and its file in the low byte, and its link by its
+ * key in a range of its own; a USB device's directory by
  * its key with the top bit set, its uevent with the next bit too, and its
  * link with that bit alone;
  * and an interface's, a disk node's and a processor's directory and files
@@ -5225,7 +5225,7 @@ uint32_t sysfs_ino(int node, int key, int file)
         return SYSFS_INO_PCI_LINK + (uint32_t)key;
     }
     if (node == SYSFS_PCI_DEVICE) {
-        return SYSFS_INO_PCI + ((uint32_t)key << 4) + ((uint32_t)file & 15u);
+        return SYSFS_INO_PCI + ((uint32_t)key << 8) + ((uint32_t)file & 0xFFu);
     }
     if (node == SYSFS_USB_DEVICE && file == 2) {
         return SYSFS_INO_FILE | (uint32_t)key;

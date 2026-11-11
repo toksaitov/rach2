@@ -2328,6 +2328,26 @@ static int bar_file_map(uint32_t pgoff, uint32_t pages)
     return procfs_pcibar_mmap(&entries[0], &v);
 }
 
+/** Every file, directory and bus link has a distinct inode, within one
+ * function, beside its neighbor and at the last PCI function's key. */
+static void pci_inode_rows(void)
+{
+    static const int keys[] = {0, 1, 0xFFFF};
+    uint32_t inodes[3 * (SYSFS_PCI_ATTRS + 1)], ino;
+    int key, file, n = 0, i, ok = 1;
+
+    for (key = 0; key < 3; key++) {
+        for (file = 0; file <= SYSFS_PCI_ATTRS; file++) {
+            ino = sysfs_ino(SYSFS_PCI_DEVICE, keys[key], file);
+            for (i = 0; i < n; i++) {
+                ok = ok && ino != inodes[i];
+            }
+            inodes[n++] = ino;
+        }
+    }
+    check(ok, "PCI directories, bus links and all resource aliases have distinct inodes");
+}
+
 /** Which resourceN files a function has, one for each BAR with a length,
  * each as long as its BAR, and that root alone opens them. */
 static void pci_bar_file_rows(void)
@@ -3021,6 +3041,7 @@ int main(int argc, char **argv)
     drm_event_rows();
     drm_ident_rows();
     pci_config_rows();
+    pci_inode_rows();
     pci_bar_file_rows();
     pci_bar_mem_rows();
     pci_bar_wc_rows();
