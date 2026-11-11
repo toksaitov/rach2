@@ -80,7 +80,7 @@ void prz_free_old(struct prz *z);
 
 /**
  * Write the notice Linux appends to a record read from a zone with ECC,
- * persistent_ram_ecc_string (ram_core.c:258), into `buf` of `cap` bytes
+ * persistent_ram_ecc_string (ram_core.c:256), into `buf` of `cap` bytes
  * with a NUL, cut to fit; return its length, uncut, or 0 without ECC.
  */
 uint32_t prz_ecc_string(const struct prz *z, char *buf, uint32_t cap);
@@ -89,7 +89,7 @@ uint32_t prz_ecc_string(const struct prz *z, char *buf, uint32_t cap);
  * Mend the `len` bytes at `data`, followed by the `nroots` parity bytes at
  * `par`, by the Reed-Solomon code of Linux's ramoops: symbols of 8 bits,
  * the field polynomial 0x11d, the first root 1 and the generator 1
- * (ram_core.c:230). Returns the symbols corrected, data and parity both, or
+ * (ram_core.c:224). Returns the symbols corrected, data and parity both, or
  * -EBADMSG when there are more errors than the code mends, leaving the
  * bytes as they were. `len` + `nroots` is at most 255.
  */

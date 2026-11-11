@@ -29,7 +29,7 @@
 /* ram.c:29 and the defaults of its parameters, ram.c:31 to 45. */
 #define MIN_MEM_SIZE 4096u
 
-/* The options, as ramoops_register_dummy (ram.c:908) reads its module
+/* The options, as ramoops_register_dummy (ram.c:917) reads its module
  * parameters. */
 static uint64_t mem_address;
 static uint64_t mem_size;
@@ -124,7 +124,7 @@ static int read_options(void)
     console_size = pow2_down(console_size);
     ftrace_size = pow2_down(ftrace_size);
     pmsg_size = pow2_down(pmsg_size);
-    ecc = ecc == 1 ? 16 : ecc; /* ram.c:944: 1 means 16 bytes of parity */
+    ecc = ecc == 1 ? 16 : ecc; /* ram.c:965: 1 means 16 bytes of parity */
     if (mem_size > 0xffffffffu) {
         klog(KLOG_ERR, "ramoops", "refused: mem_size is 4 GiB or more");
         return -1;
@@ -226,7 +226,7 @@ static uint32_t read_kmsg_hdr(const char *buf, uint32_t len, struct pstore_recor
 
 /** Make the record `r`, whose kind, number and time are set, of what zone
  * `z` held at boot past `skip` bytes of header, with the parity's notice
- * after it, as ramoops_pstore_read does (ram.c:178). */
+ * after it, as ramoops_pstore_read does (ram.c:182). */
 static void keep(struct prz *z, struct pstore_record *r, uint32_t skip)
 {
     uint32_t body = z->old_size - skip, notice = prz_ecc_string(z, 0, 0);
@@ -247,7 +247,7 @@ static void keep(struct prz *z, struct pstore_record *r, uint32_t skip)
 }
 
 /** The cache bits of Linux's mem_type: 0 write-combining, 1 uncached, 2
- * cached (persistent_ram_vmap, ram_core.c:414). */
+ * cached (persistent_ram_vmap, ram_core.c:435). */
 static pte_t cache_bits(void)
 {
     if (mem_type == 1) {
@@ -281,7 +281,7 @@ static void console_start(void)
 /**
  * The layout is ramoops_probe's: the dmesg zones of `record_size` from the
  * region's start, as many as fit in what the console, ftrace and pmsg zones
- * leave, each of the same even size (ram.c:524); then the console zone. The
+ * leave, each of the same even size (ram.c:486); then the console zone. The
  * pmsg and ftrace zones keep their place after it, unwritten, so that the
  * first two lie where Linux would put them with the same options.
  */
@@ -434,7 +434,7 @@ int pstore_panic_dump(void)
     dumped = 1;
     z = &dprzs[dump_write_cnt];
     rtc_realtime_unlocked(&sec, &us);
-    /* ram.c:333: "====%lld.%06lu-%c\n" */
+    /* ram.c:304: "====%lld.%06lu-%c\n" */
     k_memcpy(hdr, RAMOOPS_KERNMSG_HDR, 4);
     hl = 4;
     if (sec < 0) {
