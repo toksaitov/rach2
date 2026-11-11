@@ -344,14 +344,19 @@ live()
     [ "${st%% *}" != Z ]
 }
 
-# stop_copy: end the current reader. util-linux's su forwards TERM to its
-# child and KILL 2 seconds later; BusyBox's su execs the reader. The reader
-# is USER's, which USER may stop with SIGSTOP or ptrace, and util-linux's su
-# stops itself when its child stops; a stopped task takes no TERM until it
-# runs again (kernel/signal.c:988-989 of 6.12.115). So CONT follows TERM and
-# wakes it (:923-937), and a reader still alive after 5 seconds gets KILL,
-# with su's child's group, which a stop or a tracer cannot hold off
-# (:985-986, :1037-1064).
+# stop_copy: end the current reader without waiting for it. util-linux's su
+# forwards TERM to its child and KILL 2 seconds later; BusyBox's su execs the
+# reader. The reader is USER's, which USER may stop with SIGSTOP or ptrace,
+# and util-linux's su stops itself when its child stops; a stopped task
+# takes no TERM until it runs again (kernel/signal.c:988-989 of 6.12.115).
+# So CONT follows TERM and wakes it (:923-937), and when the reader has gone
+# or 5 seconds have passed, KILL goes to it and to su's child's group, which
+# no stop or tracer can hold off (:985-986, :1037-1064). The KILL is sent
+# even when /proc shows Z, since a leader whose other threads live shows Z.
+# The reader is not reaped here: a traced zombie is reported only to its
+# tracer and a leader with live threads not at all (kernel/exit.c:1476-1484),
+# so wait could block. Once this shell exits, its reaper takes it
+# (:698-722).
 # shellcheck disable=SC2317 # the EXIT trap calls it
 stop_copy()
 {
@@ -363,12 +368,9 @@ stop_copy()
         sleep 0.1
         n=$((n - 1))
     done
-    if live "$copy_pid"; then
-        group=$(inner_group "$copy_pid")
-        [ -z "$group" ] || kill -KILL "-$group" 2>/dev/null || true
-        kill -KILL "$copy_pid" 2>/dev/null || true
-    fi
-    wait "$copy_pid" 2>/dev/null || true
+    group=$(inner_group "$copy_pid")
+    [ -z "$group" ] || kill -KILL "-$group" 2>/dev/null || true
+    kill -KILL "$copy_pid" 2>/dev/null || true
     copy_pid=''
 }
 
@@ -462,7 +464,8 @@ end=$(date +%s.%N)
 # of OUT/taken. A swapped-in FIFO can block the reader; wait, unlike a
 # foreground command, lets a trapped signal interrupt it (POSIX XCU 2.11).
 # The EXIT trap ends that reader, TERM and CONT and after 5 seconds KILL,
-# before returning, so a reader USER stopped cannot hold the stop either.
+# and does not wait for it, so a reader USER stopped or traces cannot hold
+# the stop either.
 for f in frametimes cpuframes passes; do
     g="$out/$f" rc=0
     # shellcheck disable=SC2016 # the reader's shell expands its argument
