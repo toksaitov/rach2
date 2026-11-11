@@ -872,6 +872,8 @@ static struct virtio_gpu_cmd *vgpu_transfer_cmd(struct virtio_gpu_device *vg, ui
         req->resource_id = res;
         req->offset = offset;
         req->r = r;
+        /* Every 2D format of virtio-gpu has 4 bytes a pixel. */
+        vgpu_count_copied((uint64_t)r.width * r.height * 4u);
     }
     return cmd;
 }

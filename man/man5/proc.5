@@ -1390,6 +1390,13 @@ These counts include objects retained by mappings after their descriptors close
 Completed KVM backend entries since boot, including exits handled within
 KVM_RUN, on x86-64.
 Failed entries whose backend returns an error are excluded.
+.It Li virtio_gpu_copied_bytes
+Bytes that
+.Xr virtio-gpu 4
+has had its device copy between a resource and its backing since boot,
+both ways: each 2D transfer's rectangle at 4 bytes a pixel, and each 3D
+transfer's box at its virgl format's bytes a texel, 4 for a format other
+than the common 8-, 16-, 64- and 128-bit ones.
 .It Li iommu_dma_faults , iommu_irq_faults
 DMA and interrupt faults reported by VT-d since boot, on x86-64.
 .It Li vfio_groups , vfio_devices , vfio_dma_mappings , vfio_dma_pages , vfio_dma_io_pages

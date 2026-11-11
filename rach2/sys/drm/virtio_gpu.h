@@ -828,6 +828,11 @@ int32_t vgpu_transfer_3d_ioctl(struct drm_device *, void *, struct drm_file *, i
 int32_t vgpu_wait_ioctl(struct drm_device *, void *, struct drm_file *);
 int32_t vgpu_blob_ioctl(struct drm_device *, void *, struct drm_file *);
 int32_t vgpu_context_init_ioctl(struct drm_device *, void *, struct drm_file *);
+/** Count `bytes` a transfer has the device copy between a resource and its
+ * backing; under the big lock. */
+void vgpu_count_copied(uint64_t bytes);
+/** The bytes the device has copied for transfers since boot, both ways. */
+uint64_t virtio_gpu_copied_bytes(void);
 /**
  * Wait for the leaves of a dependency on any fence context but `context`,
  * the waiter's own, whose order the queue keeps; 0 or -errno,
