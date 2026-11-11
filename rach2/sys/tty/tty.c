@@ -102,14 +102,19 @@ int tty_is_background(struct tty *t, int sid, int pgid)
     return t->sid != 0 && t->sid == sid && t->fg_pgid != 0 && t->fg_pgid != pgid;
 }
 
-/** The live user process numbered `pid`, as a member's parent_pid names
- * its parent, or NULL. */
+/**
+ * A live thread of the user process numbered `pid`, as a member's
+ * parent_pid names its parent, or NULL once every thread has ended. A
+ * leader that has exited while its other threads run is a zombie, but the
+ * process lives on and its children keep it as their parent, so any live
+ * thread answers for it; every thread has the process's group and session.
+ */
 static process_t *tty_live_process(uint32_t pid)
 {
     process_t *p;
 
     for (p = proc_list; p; p = p->next) {
-        if (p->pid == pid && p->state != PROC_ZOMBIE && p->space_root != 0) {
+        if (p->tgid == pid && p->state != PROC_ZOMBIE && p->space_root != 0) {
             return p;
         }
     }

@@ -162,9 +162,13 @@ fails the read with
 .Er EIO ,
 and a blocked or ignored
 .Dv SIGTTOU
-lets the write go ahead, as on Linux; in an orphaned process group
-either fails with
-.Er EIO .
+lets the write go ahead, as on Linux.
+A write that would post
+.Dv SIGTTOU
+from an orphaned process group, which no member's parent in the
+session can continue, fails with
+.Er EIO
+instead.
 .Ss Screen
 The screen is a terminal whose escape sequences the terminfo entry
 .Ql rach2

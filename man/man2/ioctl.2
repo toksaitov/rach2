@@ -218,8 +218,10 @@ to be restarted once the group is continued.
 A process that blocks or ignores
 .Dv SIGTTOU
 makes the request at once.
-In an orphaned process group, which no member's parent in the session
-can continue, the request fails with
+A request that would post
+.Dv SIGTTOU
+from an orphaned process group, which no member's parent in the session
+can continue, fails instead with
 .Er EIO ,
 and
 .Dv TIOCSPGRP
