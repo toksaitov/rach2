@@ -105,7 +105,7 @@ int32_t i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
     }
     for (tries = 0; tries < USERPTR_PIN_TRIES; tries++) {
         seq = obj->userptr.range.seq;
-        err = paging_pin_range(obj->userptr.range.mm, start, end, 1, frames);
+        err = paging_pin_range(obj->userptr.range.mm, start, end, PIN_WRITE, frames);
         if (err != 0) {
             kfree(frames);
             return err;

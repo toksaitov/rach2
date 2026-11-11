@@ -121,8 +121,9 @@
  * VM_PROT_READ only because x86 paging cannot withhold a read from either.
  * Linux keeps such a region without VM_READ, which /proc/PID/maps, smaps and
  * a core file's program header show, and its get_user_pages refuses it a
- * read: process_vm_readv's always, and a pin's, vmsplice's among them,
- * unless the page is present and not the zero page (`paging_pin_allows`). */
+ * read: process_vm_readv's and a VFIO map's always (PIN_SLOW), and
+ * vmsplice's, which Linux takes by its fast path, unless the page is
+ * present and not the zero page (`paging_pin_allows`). */
 #define VM_PROT_NOREAD      0x400000u
 /* Whether the protection `prot` has Linux's VM_READ: PROT_READ was asked. */
 #define VM_READABLE(prot)   (((prot) & (VM_PROT_READ | VM_PROT_NOREAD)) == VM_PROT_READ)

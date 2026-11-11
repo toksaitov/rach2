@@ -791,35 +791,42 @@ int vm_populate(uintptr_t start, uintptr_t end)
 /** Whether a read pin may take the page at `page` of the region `vma` of
  * `mm`: always in a region mapped with PROT_READ, and in one without it
  * (VM_PROT_NOREAD) only a page present and not the zero page, as Linux's
- * get_user_pages_fast takes such a page from its entry while the slow path
- * refuses a region without VM_READ. */
-static int pin_read_allows(struct mm *mm, const vma_t *vma, uintptr_t page)
+ * get_user_pages_fast takes such a page from its entry, and never with
+ * `slow`, as the slow path and a remote pin refuse a region without
+ * VM_READ. */
+static int pin_read_allows(struct mm *mm, const vma_t *vma, uintptr_t page, int slow)
 {
     pte_t *e;
 
     if (VM_READABLE(vma->prot)) {
         return 1;
     }
+    if (slow) {
+        return 0;
+    }
     e = user_pte(mm->dir, page);
     return e && (*e & PTE_P) && !PTE_IS_ZERO(*e);
 }
 
-/** Whether the region allows the access and, with `io`, device memory; a
- * region of memfd_secret and the vDSO's data page never do, as Linux's
- * get_user_pages refuses both, and a read of a region mapped without
- * PROT_READ needs its page there already (`pin_read_allows`). */
-static int pin_allows(struct mm *mm, uintptr_t page, int write, int io)
+/** Whether the region allows the access of a pin with `flags`, PIN_WRITE
+ * for a write, and with PIN_IO device memory; a region of memfd_secret and
+ * the vDSO's data page never do, as Linux's get_user_pages refuses both,
+ * and a read of a region mapped without PROT_READ needs its page there
+ * already, and is refused with PIN_SLOW (`pin_read_allows`). */
+static int pin_allows(struct mm *mm, uintptr_t page, uint32_t flags)
 {
     const vma_t *vma = vm_find(&mm->vm, page);
+    int write = (flags & PIN_WRITE) != 0;
 
-    return vma && (io || !(vma->prot & VM_PROT_IO)) &&
+    return vma && ((flags & PIN_IO) || !(vma->prot & VM_PROT_IO)) &&
            !(vma->prot & (VM_PROT_SECRET | VM_PROT_VVAR)) && region_allows(vma, write) &&
-           (write || pin_read_allows(mm, vma, page)) && pkey_allows(mm, vma, write);
+           (write || pin_read_allows(mm, vma, page, (flags & PIN_SLOW) != 0)) &&
+           pkey_allows(mm, vma, write);
 }
 
 int paging_pin_allows(struct mm *mm, uintptr_t addr, int write)
 {
-    return pin_allows(mm, addr & ~(uintptr_t)(PAGE_SIZE - 1), write, 0);
+    return pin_allows(mm, addr & ~(uintptr_t)(PAGE_SIZE - 1), write ? PIN_WRITE : 0u);
 }
 
 /** Resolve a pin's page, preserving the caller's pending SIGBUS detail. */
@@ -847,8 +854,8 @@ static int pin_resolve(struct mm *mm, uintptr_t page, int write, uintptr_t as_li
  * by a fork or as a file's page, is given a frame of its own with its
  * rights (`page_private`), so that a later write by the process reaches the
  * frame the device has, as Linux unshares a page it pins, and the frame is
- * pinned. With `io`, device pages outside the allocator are kept without
- * pins; `ram_pages` counts only the RAM frames that were pinned.
+ * pinned. With PIN_IO in `flags`, device pages outside the allocator are
+ * kept without pins; `ram_pages` counts only the RAM frames that were pinned.
  */
 static int pin_range(struct mm *mm, uintptr_t start, uintptr_t end, uint32_t flags,
                      uintptr_t *frames, uint32_t *ram_pages)
@@ -856,17 +863,17 @@ static int pin_range(struct mm *mm, uintptr_t start, uintptr_t end, uint32_t fla
     uintptr_t as_limit = current_proc ? current_proc->rlim[RLIM_AS].cur : RLIM_INFINITY;
     uintptr_t page;
     uint32_t i = 0, ram = 0;
-    int write = (flags & PIN_WRITE) != 0, io = (flags & PIN_IO) != 0;
+    int write = (flags & PIN_WRITE) != 0;
     int rc = -ENOMEM;
 
     do {
         for (page = start; page < end; page += PAGE_SIZE) {
-            if (!pin_allows(mm, page, write, io)) {
+            if (!pin_allows(mm, page, flags)) {
                 return -EFAULT;
             }
             rc = pin_resolve(mm, page, write, as_limit);
             if (rc != 0) {
-                return pin_allows(mm, page, write, io) ? rc : -EFAULT;
+                return pin_allows(mm, page, flags) ? rc : -EFAULT;
             }
         }
     } while (!range_ready(mm, start, end, write));
@@ -875,7 +882,7 @@ static int pin_range(struct mm *mm, uintptr_t start, uintptr_t end, uint32_t fla
         const vma_t *vma = vm_find(&mm->vm, page);
         pte_t *e = user_pte(mm->dir, page);
 
-        if (!pin_allows(mm, page, write, io)) {
+        if (!pin_allows(mm, page, flags)) {
             break;
         }
         if (vma->prot & VM_PROT_IO) {
@@ -910,17 +917,18 @@ static int pin_range(struct mm *mm, uintptr_t start, uintptr_t end, uint32_t fla
     return rc;
 }
 
-int paging_pin_range(struct mm *mm, uintptr_t start, uintptr_t end, int write, uintptr_t *frames)
+int paging_pin_range(struct mm *mm, uintptr_t start, uintptr_t end, uint32_t flags,
+                     uintptr_t *frames)
 {
     uint32_t ram;
 
-    return pin_range(mm, start, end, write ? PIN_WRITE : 0u, frames, &ram);
+    return pin_range(mm, start, end, flags & ~PIN_IO, frames, &ram);
 }
 
-int paging_dma_range(struct mm *mm, uintptr_t start, uintptr_t end, int write, uintptr_t *frames,
-                     uint32_t *ram_pages)
+int paging_dma_range(struct mm *mm, uintptr_t start, uintptr_t end, uint32_t flags,
+                     uintptr_t *frames, uint32_t *ram_pages)
 {
-    return pin_range(mm, start, end, PIN_IO | (write ? PIN_WRITE : 0u), frames, ram_pages);
+    return pin_range(mm, start, end, PIN_IO | flags, frames, ram_pages);
 }
 
 /**

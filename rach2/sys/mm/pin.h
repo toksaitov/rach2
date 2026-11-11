@@ -34,6 +34,10 @@ struct pin;
 /* Permit device pages outside the frame allocator, as VFIO's PFN mappings.
  * They count neither in VmPin nor against RLIMIT_MEMLOCK. */
 #define PIN_IO    0x2u
+/* A pin Linux makes remotely or by get_user_pages' slow path, as VFIO's
+ * pin_user_pages_remote: a region mapped without PROT_READ refuses it a
+ * read whatever its page, with no fast path to take a present one. */
+#define PIN_SLOW  0x4u
 
 /*
  * The holder of a pin, a record of the driver's that lives as long as the
@@ -62,7 +66,9 @@ struct pin_holder {
  * Linux's account_locked_vm answers, or when memory runs out. On an error
  * nothing is pinned. With PIN_IO, device pages outside the frame allocator
  * are also accepted without a RAM pin or charge; a device revocation or
- * protection change takes back a pin that includes such pages.
+ * protection change takes back a pin that includes such pages. With
+ * PIN_SLOW, a read of a region mapped without PROT_READ is -EFAULT even for
+ * a present page.
  */
 int pin_user(struct mm *mm, uintptr_t addr, uintptr_t len, uint32_t flags,
              const struct pin_holder *holder, struct pin **out);
@@ -97,26 +103,29 @@ uintptr_t pin_phys(const struct pin *pin, uint32_t i);
 
 /**
  * Pin the frames of the pages of [start, end) of `mm`, page-aligned, as
- * `pin_user` says, and put their physical addresses in `frames`, one for
- * each page. The part of paging.c that walks the regions and the tables.
- * 0, -EFAULT or -ENOMEM; on an error nothing is pinned.
+ * `pin_user` says for `flags` (PIN_WRITE and PIN_SLOW), and put their
+ * physical addresses in `frames`, one for each page. The part of paging.c
+ * that walks the regions and the tables. 0, -EFAULT or -ENOMEM; on an error
+ * nothing is pinned.
  */
-int paging_pin_range(struct mm *mm, uintptr_t start, uintptr_t end, int write, uintptr_t *frames);
+int paging_pin_range(struct mm *mm, uintptr_t start, uintptr_t end, uint32_t flags,
+                     uintptr_t *frames);
 
 /** Whether a pin may take the page of `mm` that holds `addr`, for writing
  * with `write`, as Linux's get_user_pages judges its region: one that
  * allows the access, by its protection and its key, and is no device
  * memory, memfd_secret region or vDSO data page. A read of a region mapped
  * without PROT_READ needs the page present and not the zero page, as
- * Linux's fast path takes it while its slow path refuses the region. Takes
- * no page in and does not sleep. */
+ * Linux's fast path, the one vmsplice's pin takes, takes it while its slow
+ * path refuses the region (PIN_SLOW). Takes no page in and does not
+ * sleep. */
 int paging_pin_allows(struct mm *mm, uintptr_t addr, int write);
 
 /** As paging_pin_range, also accepting device pages outside the frame
  * allocator. On success, `ram_pages` is the number of RAM frames pinned;
  * the remaining entries in `frames` need no frame pin or memory charge. */
-int paging_dma_range(struct mm *mm, uintptr_t start, uintptr_t end, int write, uintptr_t *frames,
-                     uint32_t *ram_pages);
+int paging_dma_range(struct mm *mm, uintptr_t start, uintptr_t end, uint32_t flags,
+                     uintptr_t *frames, uint32_t *ram_pages);
 
 /** The number of RAM pages in `pin`, excluding uncharged device pages. */
 uint32_t pin_ram_count(const struct pin *pin);

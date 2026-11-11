@@ -135,10 +135,10 @@ int pin_user(struct mm *mm, uintptr_t addr, uintptr_t len, uint32_t flags,
         return rc;
     }
     if (flags & PIN_IO) {
-        rc = paging_dma_range(mm, start, end, (flags & PIN_WRITE) != 0, pin->frames,
+        rc = paging_dma_range(mm, start, end, flags & (PIN_WRITE | PIN_SLOW), pin->frames,
                               &pin->ram_pages);
     } else {
-        rc = paging_pin_range(mm, start, end, (flags & PIN_WRITE) != 0, pin->frames);
+        rc = paging_pin_range(mm, start, end, flags & (PIN_WRITE | PIN_SLOW), pin->frames);
     }
     if (rc == 0 && pin->ram_pages != 0 && !mem_lock_room(mm->pinned, pin->ram_pages)) {
         uint32_t i;
