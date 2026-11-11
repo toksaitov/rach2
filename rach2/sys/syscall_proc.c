@@ -316,7 +316,7 @@ void proc_fs_put(process_t *p)
  * the two release it independently. The copy has dropped a descriptor a
  * sharer closed, which a call of another still holds, and a slot a sharer's
  * call has reserved and not yet published. The sockets are taken under the
- * big lock, which a socket's release takes (`fd_release_unlocked`), with no
+ * big lock, which a socket's release takes (`file_ops_unlocked`), with no
  * sleep since the copy.
  */
 static void files_take(fd_table_t *table)

@@ -384,7 +384,9 @@ struct vfs_type {
  * `refs` counts what keeps the mount from being unmounted: the
  * descriptions on it, the working directories and process roots in it, the
  * child mounts under it and the binds that show it. `inprogress` counts
- * operations in flight, which is what unmount drains. */
+ * operations in flight, which is what unmount drains. Both change in one
+ * atomic step (`vfs_mount_get`, `vfs_mount_put`, `vfs_enter`, `vfs_leave`),
+ * and the unmount judges them under the big lock. */
 struct vfs_mount {
     const struct vfs_type *type;
     block_device_t *dev; /* NULL for the KRFFS root and a type with no device */
@@ -770,6 +772,14 @@ int vfs_enter(struct vfs_mount *mnt);
 /** End an operation `vfs_enter` counted, and wake an unmount waiting for
  * the count to reach zero. */
 void vfs_leave(struct vfs_mount *mnt);
+
+/** Take a reference to `mnt`, which keeps it from being unmounted, in one
+ * atomic step. */
+void vfs_mount_get(struct vfs_mount *mnt);
+
+/** Drop a reference `vfs_mount_get` took, in one atomic step, and return
+ * how many are left; the caller reaps a detached mount at 0. */
+uint32_t vfs_mount_put(struct vfs_mount *mnt);
 
 /**
  * Whether the calling process holds the namespace lock of any mount, or a

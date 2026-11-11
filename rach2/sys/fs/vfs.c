@@ -8,6 +8,7 @@
 #include "vfs.h"
 #include "name.h"
 
+#include "../arch/arch.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
@@ -213,12 +214,49 @@ int vfs_replay_end(void)
     return tripped;
 }
 
+/**
+ * Add `delta` to the mount count at `count` in one atomic step and return
+ * the new value. The counts of a mount change so, since a call on a
+ * descriptor whose operations run without the big lock (`file_ops_lock`)
+ * may take or give one beside a caller that holds it.
+ */
+static uint32_t mount_count_add(uint32_t *count, int delta)
+{
+    volatile unsigned int *p = (volatile unsigned int *)count;
+    unsigned int old;
+
+    do {
+        old = *p;
+    } while (arch_atomic_cmpxchg(p, old, old + (unsigned int)delta) != old);
+    return old + (unsigned int)delta;
+}
+
+void vfs_mount_get(struct vfs_mount *mnt)
+{
+    mount_count_add(&mnt->refs, 1);
+}
+
+uint32_t vfs_mount_put(struct vfs_mount *mnt)
+{
+    if (mnt->refs == 0) {
+        k_panic("vfs: a mount's last reference was put twice");
+    }
+    return mount_count_add(&mnt->refs, -1);
+}
+
+/**
+ * The count goes up before the state is read, and the unmount stores its
+ * state with a full barrier before it reads the count (`unmount_mount`), so
+ * either this sees the unmount and leaves, or the unmount sees the count
+ * and waits, as Linux's `__legitimize_mnt` pairs with `mnt_make_shortterm`.
+ */
 int vfs_enter(struct vfs_mount *mnt)
 {
-    if (mnt->state != VFS_ACTIVE) {
+    mount_count_add(&mnt->inprogress, 1);
+    if (*(volatile int *)&mnt->state != VFS_ACTIVE) {
+        vfs_leave(mnt);
         return -EBUSY;
     }
-    mnt->inprogress++;
     return 0;
 }
 
@@ -229,8 +267,8 @@ void vfs_leave(struct vfs_mount *mnt)
     if (mnt->inprogress == 0) {
         k_panic("vfs: an operation left a mount it never entered");
     }
-    mnt->inprogress--;
-    if (mnt->inprogress == 0 && mnt->state == VFS_UNMOUNTING) {
+    if (mount_count_add(&mnt->inprogress, -1) == 0 &&
+        *(volatile int *)&mnt->state == VFS_UNMOUNTING) {
         wq_wake_all(&mnt->drain_wq);
     }
 }
@@ -2122,7 +2160,7 @@ void vfs_ref_release(struct vfs_ref *r)
 
 void vfs_desc_open(struct vfs_mount *mnt)
 {
-    mnt->refs++;
+    vfs_mount_get(mnt);
 }
 
 static void reap_if_detached(const struct vfs_mount *mnt);
@@ -2140,7 +2178,7 @@ void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle)
     if (mnt->refs == 0) {
         k_panic("vfs: a description closed on a mount that had none");
     }
-    mnt->refs--;
+    vfs_mount_put(mnt);
     reap_if_detached(mnt);
 }
 
@@ -4255,7 +4293,7 @@ int vfs_root_over_image(const struct vfs_type *type, struct block_device *dev, c
     old->seq = ++mount_seq;
     tree_seq++;
     k_strncpy(old->covered_path, place, sizeof(old->covered_path));
-    m->refs++;
+    vfs_mount_get(m);
     *host = old;
     return 0;
 }
@@ -4540,7 +4578,7 @@ static struct vfs_mount *mount_place(struct vfs_mount *parent, void *covered,
     k_strncpy(m->covered_path, canon, sizeof(m->covered_path));
     k_strncpy(m->source, source, sizeof(m->source));
     m->source[sizeof(m->source) - 1] = '\0';
-    parent->refs++;
+    vfs_mount_get(parent);
     return m;
 }
 
@@ -4639,7 +4677,7 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
         cov.mnt = m->parent;
         cov.node = m->covered;
         vfs_ref_put(&cov);
-        m->parent->refs--;
+        vfs_mount_put(m->parent);
         devfs_release_claim(claim);
         mount_release(m);
         mount_refused(dev);
@@ -4667,7 +4705,7 @@ int vfs_mount_in_sys(const struct vfs_type *t, const char *path, const char *sou
     }
     rc = t->mount(m, 0, flags, 0);
     if (rc != 0) {
-        sys->refs--;
+        vfs_mount_put(sys);
         mount_release(m);
         return rc;
     }
@@ -4773,7 +4811,7 @@ static void bind_fill(struct vfs_mount *m, struct vfs_mount *from, void *root, c
     m->root = root;
     m->bind_of = base;
     k_strncpy(m->bind_root, inner, sizeof(m->bind_root));
-    base->refs++;
+    vfs_mount_get(base);
 }
 
 /**
@@ -5417,8 +5455,8 @@ static int unmount_bind(struct vfs_mount *m)
     if (cov.node) {
         vfs_ref_put(&cov);
     }
-    m->parent->refs--;
-    m->bind_of->refs--;
+    vfs_mount_put(m->parent);
+    vfs_mount_put(m->bind_of);
     mount_release(m);
     return 0;
 }
@@ -5442,9 +5480,9 @@ static int unmount_mount(struct vfs_mount *m)
     int rc;
     block_device_t *dev = m->dev;
 
-    m->state = VFS_UNMOUNTING;
+    arch_atomic_xchg((volatile unsigned int *)(void *)&m->state, (unsigned int)VFS_UNMOUNTING);
     tree_seq++;
-    while (m->inprogress > 0) {
+    while (*(volatile uint32_t *)&m->inprogress > 0) {
         wq_wait_event_nointr(&m->drain_wq, drained, m);
     }
     if (m->refs > 0) {
@@ -5508,7 +5546,7 @@ static int unmount_mount(struct vfs_mount *m)
     cov.mnt = m->parent;
     cov.node = m->covered;
     vfs_ref_put(&cov);
-    m->parent->refs--;
+    vfs_mount_put(m->parent);
     devfs_release_claim(m->claim);
     mount_release(m);
     loop_unmounted(dev);
@@ -5537,7 +5575,7 @@ static void hold_release(struct vfs_mount *mnt, void *node)
     r.mnt = mnt;
     r.node = node;
     vfs_ref_put(&r);
-    mnt->refs--;
+    vfs_mount_put(mnt);
     reap_if_detached(mnt);
 }
 
@@ -5562,7 +5600,7 @@ void vfs_cwd_set(struct process *p, struct vfs_mount *mnt, void *node)
         if (mnt->type->ops->hold) {
             mnt->type->ops->hold(mount_base(mnt), node);
         }
-        mnt->refs++;
+        vfs_mount_get(mnt);
     }
     p->fs->cwd_mnt = mnt;
     p->fs->cwd_node = mnt ? node : 0;
@@ -5587,7 +5625,7 @@ void vfs_root_set(struct process *p, struct vfs_mount *mnt, void *node)
         if (mnt->type->ops->hold) {
             mnt->type->ops->hold(mount_base(mnt), node);
         }
-        mnt->refs++;
+        vfs_mount_get(mnt);
     }
     p->fs->root_mnt = mnt;
     p->fs->root_node = mnt ? node : 0;

@@ -1,6 +1,7 @@
 /* The descriptor table's slot lookup and publication for host tests that keep
  * a table's entries in one array, `chunks[0]`, and stub the rest of fs/fd.c. */
 #include "fs/fd.h"
+#include "fs/file.h"
 
 /** The entry of `fd`, which the test keeps below the array's length. */
 fd_entry_t *fd_slot(const fd_table_t *table, int fd)
@@ -43,4 +44,18 @@ int fd_peek(fd_table_t *table, int fd, fd_entry_t *out, int ref)
     }
     *out = *fd_slot(table, fd);
     return 0;
+}
+
+/** The big lock for a call on `e`: the test has one thread, so nothing is
+ * taken, and nothing is given back. */
+int file_ops_lock(const fd_entry_t *e)
+{
+    (void)e;
+    return 0;
+}
+
+/** Give back what `file_ops_lock` took: nothing. */
+void file_ops_unlock(int taken)
+{
+    (void)taken;
 }

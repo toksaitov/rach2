@@ -1247,11 +1247,17 @@ long sys_ftruncate(isr_params_t *params)
 }
 
 /** write(2) takes fd, buf and the raw count, which write_fd checks before
- * cutting it at Linux's MAX_RW_COUNT; the bytes written, or -errno. */
+ * cutting it at Linux's MAX_RW_COUNT; the bytes written, or -errno. The
+ * call holds the big lock unless the descriptor's type runs without it
+ * (`fd_call_lock`). */
 long sys_write(isr_params_t *params)
 {
-    return write_fd((int)SC_ARG(params, 0), (const char __user *)SC_ARG(params, 1),
-                    SC_ARG(params, 2), 1);
+    int fd = (int)SC_ARG(params, 0);
+    int big = fd_call_lock(fd);
+    long rc = write_fd(fd, (const char __user *)SC_ARG(params, 1), SC_ARG(params, 2), 1);
+
+    file_ops_unlock(big);
+    return rc;
 }
 
 /** Element `i` of the vector of struct iovec at `uvec`, in the caller's
@@ -5366,9 +5372,27 @@ long sys_openat2(isr_params_t *params)
     return rc;
 }
 
+/**
+ * A socket's calls and release are the network stack's, which runs under the
+ * big lock; a description that names a file, a device node or a synthetic
+ * node is released by a file system; and the description lock that guards
+ * an offset (`ops_offset_held`) is a flag the big lock guards.
+ */
+int file_ops_unlocked(const fd_entry_t *e)
+{
+    const struct open_file *ofd;
+
+    if (!e || !e->ops || !(e->ops->flags & FILE_OPS_UNLOCKED) || e->type == FD_TYPE_SOCKET ||
+        ops_offset_held((fd_entry_t *)(uintptr_t)e)) {
+        return 0;
+    }
+    ofd = e->ofd;
+    return !ofd || (!ofd->vmnt && !ofd->dev_mnt && !ofd->synth_mnt);
+}
+
 int file_ops_lock(const fd_entry_t *e)
 {
-    if (e && e->ops && (e->ops->flags & FILE_OPS_UNLOCKED)) {
+    if (file_ops_unlocked(e)) {
         return 0;
     }
     bkl_enter();
@@ -5383,16 +5407,14 @@ void file_ops_unlock(int taken)
 }
 
 /**
- * Whether the release of `e` may run without the big lock: the object's
- * operations are marked unlocked (`FILE_OPS_UNLOCKED`), it is no socket,
- * and its description names no file, whose release is a file system's.
+ * The lookup holds the descriptor for the length of the call in a shared
+ * table (`fd_get`), so another sharer's close leaves the slot as it is
+ * until the call ends, and the call's own lookups find the same object or,
+ * once the close has marked it, none.
  */
-static int fd_release_unlocked(const fd_entry_t *e)
+int fd_call_lock(int fd)
 {
-    const struct open_file *ofd = e->ofd;
-
-    return e->ops && (e->ops->flags & FILE_OPS_UNLOCKED) && e->type != FD_TYPE_SOCKET &&
-           (!ofd || (!ofd->vmnt && !ofd->dev_mnt && !ofd->synth_mnt));
+    return file_ops_lock(current_proc ? fd_get(current_proc->fds, fd) : NULL);
 }
 
 /**
@@ -5413,7 +5435,7 @@ static int fd_release_unlocked(const fd_entry_t *e)
 static void fd_teardown(fd_table_t *table, int fd)
 {
     fd_entry_t *e = fd_slot(table, fd);
-    int big = !fd_release_unlocked(e);
+    int big = !file_ops_unlocked(e);
 
     if (big) {
         bkl_enter();
@@ -6890,10 +6912,17 @@ static int32_t read_fd(int fd, char __user *buf, size_t requested)
  * range are checked before a count past USER_RW_MAX is cut there, as on
  * Linux. On i686 a count negative as ssize_t is EINVAL after the range
  * check; a compat call on x86-64 has the kernel's 64-bit ssize_t instead.
+ * The call holds the big lock unless the descriptor's type runs without it
+ * (`fd_call_lock`).
  */
 long sys_read(isr_params_t *params)
 {
-    return read_fd((int)SC_ARG(params, 0), (char __user *)SC_ARG(params, 1), SC_ARG(params, 2));
+    int fd = (int)SC_ARG(params, 0);
+    int big = fd_call_lock(fd);
+    long rc = read_fd(fd, (char __user *)SC_ARG(params, 1), SC_ARG(params, 2));
+
+    file_ops_unlock(big);
+    return rc;
 }
 
 /**
@@ -10341,7 +10370,9 @@ long sys_sync_file_range(isr_params_t *params)
  * descriptor's included, to the user's buffer in argument 1, with the
  * owner and group the caller's user namespace sees; 0, -EBADF for a
  * descriptor that is not open, -EFAULT for a NULL or bad buffer, or the
- * error of a mounted type's getattr.
+ * error of a mounted type's getattr. The call holds the big lock unless the
+ * descriptor's type runs without it (`fd_call_lock`); i386's fstat calls
+ * come here too (arch/x86_64/ia32_fs.c).
  */
 long sys_fstat64(isr_params_t *params)
 {
@@ -10350,6 +10381,7 @@ long sys_fstat64(isr_params_t *params)
     struct user_stat __user *st = (struct user_stat __user *)SC_ARG(params, 1);
     struct kstat kst;
     fd_entry_t *entry;
+    int big;
 
     if (!current_proc || !st) {
         return -EFAULT;
@@ -10358,7 +10390,9 @@ long sys_fstat64(isr_params_t *params)
     if (!entry) {
         return -EBADF;
     }
+    big = file_ops_lock(entry);
     rc = fstat_getattr(entry, &kst);
+    file_ops_unlock(big);
     if (rc != 0) {
         return rc;
     }
@@ -13182,7 +13216,7 @@ static void pio_view(fd_entry_t *entry, uint64_t at, fd_entry_t *view, struct op
  * reads it, and a device, a /proc snapshot or a debugfs file, whose
  * operations read, through `pio_view`.
  */
-long ksys_pread64(int fd, char __user *buf, size_t requested, long long pos)
+static long pread_at(int fd, char __user *buf, size_t requested, long long pos)
 {
     uint64_t at = (uint64_t)pos;
     fd_entry_t *entry = NULL;
@@ -13206,7 +13240,7 @@ long ksys_pread64(int fd, char __user *buf, size_t requested, long long pos)
 
 /** Write at the offset through file_write or a device's private view,
  * after checking the original request as pread64 does. */
-long ksys_pwrite64(int fd, const char __user *buf, size_t requested, long long pos)
+static long pwrite_at(int fd, const char __user *buf, size_t requested, long long pos)
 {
     uint64_t at = (uint64_t)pos;
     fd_entry_t *entry = NULL;
@@ -13226,6 +13260,27 @@ long ksys_pwrite64(int fd, const char __user *buf, size_t requested, long long p
     }
     pio_view(entry, at, &view, &desc);
     return entry->ops->write(&view, buf, count);
+}
+
+/** The call holds the big lock unless the descriptor's type runs without it
+ * (`fd_call_lock`). */
+long ksys_pread64(int fd, char __user *buf, size_t requested, long long pos)
+{
+    int big = fd_call_lock(fd);
+    long rc = pread_at(fd, buf, requested, pos);
+
+    file_ops_unlock(big);
+    return rc;
+}
+
+/** `ksys_pread64`'s lock around `pwrite_at`. */
+long ksys_pwrite64(int fd, const char __user *buf, size_t requested, long long pos)
+{
+    int big = fd_call_lock(fd);
+    long rc = pwrite_at(fd, buf, requested, pos);
+
+    file_ops_unlock(big);
+    return rc;
 }
 
 /**
@@ -18387,7 +18442,7 @@ int32_t fs_socket_bind(const char *path, uint32_t mode, struct vfs_ref *ref, uin
             rc = vfs_getattr(ref->mnt, ref->node, &st);
             if (rc == 0) {
                 *ino = (uint32_t)st.ino;
-                ref->mnt->refs++;
+                vfs_mount_get(ref->mnt);
                 vfs_leave(ref->mnt);
             } else {
                 vfs_ref_release(ref);
@@ -18406,8 +18461,7 @@ void fs_socket_unbind(struct vfs_ref *ref)
     struct vfs_mount *mnt = ref->mnt;
 
     vfs_ref_put(ref);
-    mnt->refs--;
-    if (mnt->refs == 0) {
+    if (vfs_mount_put(mnt) == 0) {
         vfs_reap_detached();
     }
 }

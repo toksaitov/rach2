@@ -36,6 +36,16 @@ in the open file description, as
 does with
 .Dv F_SETFL ,
 and zero clears it.
+They also accept
+.Dv FIOCLEX ,
+which sets the descriptor's close-on-exec flag, and
+.Dv FIONCLEX ,
+which clears it, as
+.Xr fcntl 2
+does with
+.Dv F_SETFD ;
+both ignore
+.Fa arg .
 Sockets first handle network-interface requests.
 The console and pseudo-terminal slaves share the terminal requests below.
 A descriptor with device operations handles its remaining requests through
