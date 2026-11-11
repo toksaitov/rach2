@@ -66,6 +66,13 @@ unusedStructMember:*tests/musl/callsmusl.c
 # and the members around them are the layout.
 unusedStructMember:*tests/musl/kvmslotmusl.c
 
+# The DRM, vgem and timespec structs in the lock stress program are Linux's
+# struct drm_version, drm_mode_create_dumb, drm_vgem_fence_attach and
+# drm_vgem_fence_signal, which their ioctls copy whole, and the 64-bit
+# timespec futex_time64 reads; the members the program does not read are the
+# layout.
+unusedStructMember:*tests/musl/lockstressmusl.c
+
 # `struct input_event` and `struct mixer_info` in the event probe are Linux's,
 # which a read of an event device and SOUND_MIXER_INFO fill whole; the probe
 # reads an event's type, code and value and the info's id and name, and the
