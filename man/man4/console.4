@@ -50,6 +50,10 @@ The slave is
 where N is the lowest index not used by a live pair.
 A network login uses one pair per session.
 Master writes become slave input.
+Master writes are serialized too: a write waits while another is in
+progress, or fails with
+.Er EAGAIN
+when non-blocking.
 A master write that finds no room waits, or fails with
 .Er EAGAIN
 when non-blocking.

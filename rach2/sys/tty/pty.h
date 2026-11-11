@@ -57,6 +57,7 @@ struct pty {
     int packet;        /* TIOCPKT: each master read begins with a status byte */
     uint8_t pktstatus; /* pending TIOCPKT_* bits for the next packet read */
     int writing;       /* a slave write is in progress, which no other enters */
+    int m_writing;     /* a master write is in progress, which no other enters */
     int m_stopped;     /* TCOOFF on the master: its writes wait for TCOON */
 
     /* Ownership of the slave (/dev/pts/N), the state a login server sets

@@ -1905,6 +1905,41 @@ int pgrp_in_session(int pgid, int sid)
     return 0;
 }
 
+/** Whether a thread, process group or session still holds the kernel PID
+ * `pid`, zombies included, as Linux's find_vpid finds a number until its
+ * last task detaches. A terminal's foreground group alone does not hold
+ * the number in that lookup. The caller holds the big kernel lock. */
+static int tty_pid_exists(uint32_t pid)
+{
+    const process_t *p;
+
+    if (!pid) {
+        return 0;
+    }
+    for (p = proc_list; p; p = p->next) {
+        if (p->pid == pid || p->tgid == pid || p->pgid == pid || p->sid == pid) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** The session of a group, or of the thread whose PID is `pid` if no group
+ * has that number, as Linux's session_of_pgrp permits for TIOCSPGRP.
+ * Returns zero when neither exists. The caller holds the big kernel lock. */
+static uint32_t tty_pgrp_session(uint32_t pid)
+{
+    const process_t *p;
+
+    for (p = proc_list; p; p = p->next) {
+        if (p->pgid == pid) {
+            return p->sid;
+        }
+    }
+    p = get_process(pid);
+    return p ? p->sid : 0;
+}
+
 /* The termios2 of TCGETS2 and the TCSETS2 family: the kernel termios, then
  * the input and output speeds. GNU libc uses these for tcgetattr, tcsetattr
  * and isatty. */
@@ -2123,9 +2158,10 @@ static int32_t tty_job_gate(struct tty *t, uint32_t request)
  * TIOCSPGRP ENOTTY, as Linux's tiocspgrp turns that EIO.
  *
  * TIOCSPGRP needs the caller's session to be the one the terminal controls,
- * checked before the argument, as on Linux (-ENOTTY), and a group in that
- * session (`pgrp_in_session`, -EPERM). TIOCSCTTY lets a session leader take
- * a terminal no other session controls, with the caller's group in the
+ * and a group in that session, or a thread in it when the number names no
+ * group (`tty_pgrp_session`, -EPERM). A negative number is EINVAL; one no
+ * thread, group or session holds is ESRCH. TIOCSCTTY lets a session leader
+ * take a terminal no other session controls, with the caller's group in the
  * foreground; `tty_make_sole_ctty` publishes the session and the group and
  * drops every other terminal the session controlled, the console and any
  * other pty, in one step with interrupts off, so the console's drain in
@@ -2209,17 +2245,17 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uintptr_t arg, 
         if (copy_from_user(&pgrp, (const void __user *)arg, sizeof(pgrp)) != 0) {
             return -EFAULT;
         }
+        if (pgrp < 0) {
+            return -EINVAL;
+        }
         if (t->sid == 0 || (int)current_proc->sid != t->sid) {
             return -ENOTTY;
         }
-        if (pgrp <= 0) {
-            return -EINVAL;
-        }
         pgrp = (int)pid_named((uint32_t)pgrp);
-        if (pgrp == 0) {
+        if (!tty_pid_exists((uint32_t)pgrp)) {
             return -ESRCH;
         }
-        if (!pgrp_in_session(pgrp, t->sid)) {
+        if (tty_pgrp_session((uint32_t)pgrp) != (uint32_t)t->sid) {
             return -EPERM;
         }
         t->fg_pgid = pgrp;

@@ -184,6 +184,12 @@ pointer
 and make it foreground.
 The terminal must belong to the caller's session, and the group must
 have a member in that session.
+If the number names no group but names a thread in the session, that
+number is accepted as on Linux.
+A negative number fails with
+.Er EINVAL ;
+zero or a number no thread, process group or session holds fails with
+.Er ESRCH .
 .It Dv TIOCSCTTY
 Make this the session's controlling terminal and set its foreground
 group to the caller's process group.
@@ -838,7 +844,8 @@ reads its foreground group with
 .Dv TIOCGPGRP ,
 and changes that group with
 .Dv TIOCSPGRP .
-It checks the refusals for a foreign group, a negative group ID, and a
+It checks the refusals for a foreign group, a missing, zero or negative
+group ID, and a
 terminal detached by
 .Dv TIOCNOTTY ,
 and that once a zombie's group is in front its own orphaned group's
@@ -936,7 +943,10 @@ flag, or a keyboard request came from a caller
 .Xr console 4
 does not let set it.
 .It Bq Er ESRCH
-There is no current process, or the default route to remove is absent
+There is no current process,
+.Dv TIOCSPGRP
+was given zero or a number no thread, process group or session holds,
+or the default route to remove is absent
 or has a different nonzero gateway from the one supplied.
 .El
 .Sh SEE ALSO

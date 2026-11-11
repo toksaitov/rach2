@@ -499,7 +499,7 @@ static int32_t ptm_wait_feed(struct ptm_feed *f, uint32_t *i)
  * Master readers are woken before every return that fed bytes, a failed
  * copy included, so they see the echo.
  */
-static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+static int32_t ptm_write_in(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
     struct ptm_feed f;
     uint8_t kbuf[256];
@@ -546,6 +546,39 @@ static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     }
     wake_master(f.p, &f.pushed);
     return (int32_t)f.done;
+}
+
+/** Whether the preceding master write has released the pair. */
+static int ptm_write_free(void *arg)
+{
+    return !((const struct pty *)arg)->m_writing;
+}
+
+/** Feed one master write before another enters, including across a user
+ * copy or a wait for input room. Linux's tty_write_lock serializes master
+ * writes too: a nonblocking caller takes EAGAIN while another holds it,
+ * and a blocking caller waits, with EINTR if a signal ends its wait. */
+static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    struct pty *p = (struct pty *)e->priv;
+    int32_t rc;
+
+    if (count == 0) {
+        return 0;
+    }
+    while (p->m_writing) {
+        if (fd_is_nonblock(e)) {
+            return -EAGAIN;
+        }
+        if (wq_wait_event(&p->m_read_wq, ptm_write_free, p) < 0) {
+            return -EINTR;
+        }
+    }
+    p->m_writing = 1;
+    rc = ptm_write_in(e, buf, count);
+    p->m_writing = 0;
+    wq_wake(&p->m_read_wq, 0);
+    return rc;
 }
 
 /** Report the master's readiness, all on m_read_wq, as Linux's n_tty_poll:

@@ -1561,6 +1561,8 @@ static void lookahead_compete(void)
         piece[255] = pair.slave.ldisc.stopped ? '\021' : '\023';
         rc = ptm_write(&master, piece, sizeof(piece));
         CHECK(rc == 256 || rc == -EAGAIN, "a competing write takes its prefix or refuses it");
+        CHECK(!pair.m_writing || rc == -EAGAIN,
+              "a nonblocking master cannot enter while another writer sleeps");
         if (rc > 0) {
             competing_bytes += rc - 1;
         }
@@ -1574,7 +1576,8 @@ static void lookahead_compete(void)
  * VSTOP. If it sleeps, another writer fills all but 15 queue slots through
  * the same description and interrupts it. The accepted prefix must already
  * be stored before that can happen. Without the VSTOP, the first writer
- * really waits and must return EINTR without feeding or counting its data.
+ * really waits, excludes the competing writer and returns EINTR without
+ * feeding or counting its data.
  */
 static void lookahead_interrupted(void)
 {
@@ -1596,6 +1599,7 @@ static void lookahead_interrupted(void)
         scheduled_action = lookahead_compete;
         wake_detail = "the signal wakes the blocked master writer";
         rc = ptm_write(&master, piece, (uint32_t)(255 + flow));
+        CHECK(!pair.m_writing, "the master releases its write lock on return or interruption");
         if (!switches) {
             current_proc = &producer;
             lookahead_compete();
@@ -1608,6 +1612,29 @@ static void lookahead_interrupted(void)
         master.ofd = NULL;
         scheduled_action = NULL;
     }
+}
+
+/** Complete the preceding write and wake the writer waiting for its lock. */
+static void master_unlock_action(void)
+{
+    CHECK(pair.m_writing, "the master writer waits for the preceding write");
+    pair.m_writing = 0;
+    wq_wake(&pair.m_read_wq, 0);
+}
+
+/** A blocking master waits for the preceding write, and a failed copy
+ * releases the lock as a successful write does. */
+static void master_write_lock(void)
+{
+    setup_pair();
+    pair.m_writing = 1;
+    scheduled_action = master_unlock_action;
+    wake_detail = "completing a master write wakes the next writer";
+    CHECK(ptm_write(&master, "a", 1) == 1 && switches == 1 && !pair.m_writing,
+          "the next master write takes the lock and releases it after feeding");
+    copy_failure = copy_calls + 1;
+    CHECK(ptm_write(&master, "b", 1) == -EFAULT && !pair.m_writing,
+          "a failed user copy releases the master write lock");
 }
 
 /* The dispositions of the background process in `job_check`. */
@@ -1737,6 +1764,7 @@ int main(void)
     lookahead_nonblocking();
     lookahead_bounded();
     lookahead_interrupted();
+    master_write_lock();
     job_check();
     console_tcioff();
     read_claims_nothing();
