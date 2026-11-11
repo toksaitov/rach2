@@ -35,7 +35,7 @@ struct thread {
     size_t key;     /* the length of call that a change is judged by */
 };
 
-/* One watched file; at `@word` only its lines holding the word. */
+/* One watched file; with `@WORD|WORD...` only its lines holding a word. */
 struct file {
     char path[256];
     const char *word;
@@ -300,10 +300,34 @@ static void sample(struct thread *th, long long t)
          th->tid, th->comm, state, th->cpu, wchan, call);
 }
 
+/** Say whether `line` holds one of the words of `words`, split by '|'. */
+static int holds(const char *line, const char *words)
+{
+    char word[256];
+    const char *bar;
+    size_t n;
+
+    for (;;) {
+        bar = strchr(words, '|');
+        n = bar ? (size_t)(bar - words) : strlen(words);
+        if (n >= sizeof word)
+            n = sizeof word - 1;
+        memcpy(word, words, n);
+        word[n] = 0;
+        if (n && strstr(line, word))
+            return 1;
+        if (!bar)
+            return 0;
+        words = bar + 1;
+    }
+}
+
 /** Read one watched file and log it at time `t` when it changed. */
 static void watch_file(struct file *f, long long t)
 {
-    char buf[TEXT], out[TEXT];
+    /* Whole, since the lines asked for may lie past TEXT bytes. */
+    static char buf[1 << 16];
+    char out[TEXT];
     char *line, *next;
     size_t j = 0;
 
@@ -314,13 +338,13 @@ static void watch_file(struct file *f, long long t)
         for (line = buf; line && *line; line = next) {
             if ((next = strchr(line, '\n')) != NULL)
                 *next++ = 0;
-            if (strstr(line, f->word) && j + strlen(line) + 2 < sizeof out) {
+            if (holds(line, f->word) && j + strlen(line) + 2 < sizeof out) {
                 j += (size_t)sprintf(out + j, "%s\n", line);
             }
         }
         snprintf(buf, sizeof buf, "%s", out);
     }
-    flatten(buf, sizeof buf);
+    flatten(buf, TEXT);
     if (strcmp(buf, f->last) == 0)
         return;
     snprintf(f->last, sizeof f->last, "%s", buf);
@@ -330,7 +354,7 @@ static void watch_file(struct file *f, long long t)
 /** Print the usage line and exit 2. */
 static void usage(void)
 {
-    fprintf(stderr, "usage: threadwatch [-i USEC] [-r MSEC] [-f FILE[@WORD]]... "
+    fprintf(stderr, "usage: threadwatch [-i USEC] [-r MSEC] [-f FILE[@WORD|...]]... "
                     "OUT SECONDS NAME[:ARG]...\n");
     exit(2);
 }
