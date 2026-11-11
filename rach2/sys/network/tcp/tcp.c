@@ -2391,6 +2391,7 @@ int tcp_connect(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port)
     tcb->ns = sock->ns;
     tcb->local_ip = from;
     tcb->local_port = local;
+    tcb->port_auto = sock->local_port == 0;
     tcb->remote_ip = dst_ip;
     tcb->remote_port = dst_port;
     tcb->iss = tcp_isn(tcb);
@@ -2457,6 +2458,69 @@ void tcp_shutdown_send(struct socket *sock)
 }
 
 /**
+ * Disconnect `sock`, whose connection is in SYN_SENT, as Linux's
+ * inet_shutdown has tcp_disconnect do for a shutdown in SYN_SENT
+ * (net/ipv4/af_inet.c:934-937, net/ipv4/tcp.c:3298-3318): the attempt ends
+ * with no segment sent and no count, the socket records ECONNRESET for its
+ * `connect` or SO_ERROR, its shutdown flags are cleared, and it may
+ * connect again. A port `tcp_connect` chose is given back, as Linux's move
+ * to TCP_CLOSE puts a port the socket did not bind. With `net_lock` held.
+ */
+static void tcp_disconnect(struct socket *sock)
+{
+    struct tcb *tcb = sock->tcb;
+
+    if (tcb->port_auto) {
+        sock->local_port = 0;
+    }
+    sock->tcb = NULL;
+    tcb->sock = NULL;
+    tcb_free(tcb);
+    sock->so_error = ECONNRESET;
+    sock->shutdown = 0;
+}
+
+/**
+ * Linux's inet_shutdown sets the flags on a connected socket and has
+ * tcp_shutdown send the FIN for SEND_SHUTDOWN from ESTABLISHED and
+ * CLOSE_WAIT (net/ipv4/af_inet.c:915-924, net/ipv4/tcp.c:2997-3013); the
+ * later states have sent theirs. A SYN_RCVD here is an active open's,
+ * whose shutdown is refused.
+ */
+int tcp_shutdown(struct socket *sock, int rd, int wr)
+{
+    struct tcb *tcb;
+    uint32_t flags = net_lock();
+
+    tcb = sock->tcb;
+    if (!tcb || sock->listening) {
+        net_unlock(flags);
+        return -ENOTCONN;
+    }
+    if (tcb->state == TCP_SYN_SENT) {
+        tcp_disconnect(sock);
+        net_unlock(flags);
+        return 0;
+    }
+    if (tcb->state < TCP_ESTABLISHED) {
+        net_unlock(flags);
+        return -ENOTCONN;
+    }
+    if (rd) {
+        sock->shutdown |= SOCK_RCV_SHUTDOWN;
+    }
+    if (wr) {
+        sock->shutdown |= SOCK_SEND_SHUTDOWN;
+        if (tcb->state == TCP_ESTABLISHED || tcb->state == TCP_CLOSE_WAIT) {
+            tcb->fin_pending = 1;
+            tcp_pump(tcb);
+        }
+    }
+    net_unlock(flags);
+    return 0;
+}
+
+/**
  * Give back the receive ring of a block in TIME_WAIT once no program can
  * read from it: no socket holds the block, or the ring has nothing unread.
  * TIME_WAIT takes no more data, so the ring is never filled again, and a
@@ -2483,12 +2547,45 @@ static void tcp_enter_time_wait(struct tcb *tcb)
 }
 
 /**
+ * Whether `tcb` must be ended with a reset at its socket's close, as
+ * Linux's __tcp_close ends a connection whose receive queue held a byte
+ * past copied_seq (net/ipv4/tcp.c:3085-3093): data received and never read,
+ * from ESTABLISHED to LAST_ACK. A block in TIME_WAIT or CLOSED with its
+ * socket still attached is one Linux's full socket has left for TCP_CLOSE
+ * already (tcp_time_wait, tcp_done), which its close frees with no reset.
+ * Bytes held past a hole do not count, as Linux's out-of-order queue does
+ * not.
+ */
+static int tcp_unread_on_close(const struct tcb *tcb)
+{
+    return tcb->state >= TCP_ESTABLISHED && tcb->state != TCP_TIME_WAIT &&
+           tcb->recv_tail != tcb->recv_head;
+}
+
+/**
+ * End `tcb`, whose socket closed with received data unread, with a reset
+ * and free it, as Linux's __tcp_close counts TCPAbortOnClose, moves to
+ * TCP_CLOSE and sends tcp_send_active_reset (net/ipv4/tcp.c:3109-3113): an
+ * RST and ACK at snd_nxt, tcp_acceptable_seq's answer while the peer's
+ * window covers it (net/ipv4/tcp_output.c:3661-3662), and RFC 1122,
+ * 4.2.2.13, has the peer told that data was lost. The move to TCP_CLOSE
+ * counts EstabResets from ESTABLISHED and CLOSE_WAIT (`tcp_count_end`).
+ * The caller must not use `tcb` afterwards.
+ */
+static void tcp_abort_on_close(struct tcb *tcb)
+{
+    net_mib.tcp_abort_on_close++;
+    (void)tcp_emit_flags(tcb, TCP_RST | TCP_ACK, tcb->snd_nxt);
+    tcp_count_end(tcb->state);
+    tcb_free(tcb);
+}
+
+/**
  * FIN_WAIT_1, CLOSING, LAST_ACK and TIME_WAIT follow a shutdown: the FIN
  * went, and the block finishes the close without its socket, as it does
  * after a close. A detached block that still sends starts its limit,
- * TCP_ORPHAN_TICKS, here. A shutdown may also leave the socket's
- * descriptors open, so the caller, and not this, decides when the socket
- * goes.
+ * TCP_ORPHAN_TICKS, here. Data the reader left unread ends the connection
+ * with a reset instead (`tcp_abort_on_close`).
  */
 void tcp_close(struct socket *sock)
 {
@@ -2505,6 +2602,11 @@ void tcp_close(struct socket *sock)
     tcb->sock = NULL;
     if (tcb->state == TCP_LISTEN) {
         tcp_free_half_opens(tcb);
+    }
+    if (tcp_unread_on_close(tcb)) {
+        tcp_abort_on_close(tcb);
+        net_unlock(flags);
+        return;
     }
 
     switch (tcb->state) {
@@ -2566,9 +2668,11 @@ int tcp_is_connected(struct socket *sock)
  *
  * FIN_WAIT_1 and FIN_WAIT_2 are among the states updated, since a reader
  * that shut down its sending half goes on reading. CLOSE_WAIT is not: it is
- * entered on the peer's FIN, after which the peer sends no data. The lock is
- * held from the read of `sock->tcb` through the send, so that the block
- * sent from is the one checked.
+ * entered on the peer's FIN, after which the peer sends no data. Nor is a
+ * socket shut for receiving, as Linux's tcp_cleanup_rbuf announces no window
+ * after RCV_SHUTDOWN (net/ipv4/tcp.c:1489). The lock is held from the read
+ * of `sock->tcb` through the send, so that the block sent from is the one
+ * checked.
  */
 void tcp_window_update(struct socket *sock)
 {
@@ -2582,8 +2686,9 @@ void tcp_window_update(struct socket *sock)
 
     flags = net_lock();
     tcb = sock->tcb;
-    if (tcb && (tcb->state == TCP_ESTABLISHED || tcb->state == TCP_FIN_WAIT_1 ||
-                tcb->state == TCP_FIN_WAIT_2)) {
+    if (tcb && !(sock->shutdown & SOCK_RCV_SHUTDOWN) &&
+        (tcb->state == TCP_ESTABLISHED || tcb->state == TCP_FIN_WAIT_1 ||
+         tcb->state == TCP_FIN_WAIT_2)) {
         wnd = rcvwnd_update(tcb->rcv_wnd, tcb->recv_tail - tcb->recv_head, tcb->recv_size,
                             (uint32_t)TCP_WINDOW_SIZE << tcb->rcv_wscale, TCP_MSS);
         if (wnd != 0u) {
@@ -3366,23 +3471,30 @@ static void tcp_abort_on_data(struct tcb *tcb, uint8_t flags, uint32_t seq, uint
 }
 
 /**
- * End the block `tcb`, whose socket `tcp_close` detached, for a segment of
- * `flags` that starts at `seq` with `len` bytes of data and acknowledges
- * `ack_num`, when its data or FIN runs past rcv_nxt (`tcp_abort_on_data`),
- * as Linux ends a socket whose close set RCV_SHUTDOWN (tcp.c:3071) in
- * FIN_WAIT_1 and FIN_WAIT_2, both for the FIN acknowledged in the same
- * segment (tcp_input.c:6958-6966) and in step 7 (:7019-7031). RFC 1122,
- * 4.2.2.13, has a reset sent for data that no program will read. A block
- * here in ESTABLISHED has its FIN queued behind its data, where Linux's
- * close has moved to FIN_WAIT_1 already. Data or a FIN the peer sent again,
- * ending at or before rcv_nxt, is taken and acknowledged as before.
+ * End the connection `tcb`, shut for receiving after this side's FIN, for
+ * a segment of `flags` that starts at `seq` with `len` bytes of data and
+ * acknowledges `ack_num`, when its data or FIN runs past rcv_nxt
+ * (`tcp_abort_on_data`), as Linux ends a socket with RCV_SHUTDOWN in
+ * FIN_WAIT_1 and FIN_WAIT_2 (net/ipv4/tcp_input.c:7019-7031). RCV_SHUTDOWN
+ * comes from the close (net/ipv4/tcp.c:3071), the block here detached, or
+ * from shutdown(SHUT_RD) (`SOCK_RCV_SHUTDOWN`); after a close Linux also
+ * ends it for the FIN acknowledged in the same segment
+ * (tcp_input.c:6958-6966). RFC 1122, 4.2.2.13, has a reset sent for data
+ * that no program will read. A block here in ESTABLISHED counts only with
+ * its FIN queued behind its data, where Linux's close and shutdown have
+ * moved to FIN_WAIT_1 already; without one, data after SHUT_RD alone is
+ * taken, as Linux's ESTABLISHED queues it. Data or a FIN the peer sent
+ * again, ending at or before rcv_nxt, is taken and acknowledged as before.
  *
- * @return 1 when the block was ended and is gone; 0 otherwise.
+ * @return 1 when the connection was ended, and `tcb` may be gone; 0
+ * otherwise.
  */
 static int tcp_rx_closed_data(struct tcb *tcb, uint8_t flags, uint32_t seq, uint32_t len,
                               uint32_t ack_num)
 {
-    if (tcb->sock || (len == 0 && !(flags & TCP_FIN)) || (int32_t)(seq + len - tcb->rcv_nxt) <= 0) {
+    if ((tcb->sock && !(tcb->sock->shutdown & SOCK_RCV_SHUTDOWN)) ||
+        (tcb->state == TCP_ESTABLISHED && !tcb->fin_pending) || (len == 0 && !(flags & TCP_FIN)) ||
+        (int32_t)(seq + len - tcb->rcv_nxt) <= 0) {
         return 0;
     }
     tcp_abort_on_data(tcb, flags, seq, len, ack_num);
@@ -3718,11 +3830,13 @@ static int tcp_rx_syn_rcvd(struct tcb *tcb, uint8_t flags, uint32_t seq, uint32_
  * expects the ACK of this side's FIN.
  *
  * The FIN_WAIT states follow `tcp_close` or `tcp_shutdown_send`. After a
- * close the socket is detached, and data or a FIN past rcv_nxt, which no
- * program will read, ends the block with a reset (`tcp_rx_closed_data`),
- * in ESTABLISHED too while the FIN waits behind queued data; data and a
- * FIN sent again are acknowledged, and a FIN in order is taken. After a
- * shutdown the socket reads the data and the FIN (`tcp_take_fin`).
+ * close, which detaches the socket, or a shutdown of the receiving half
+ * too, data or a FIN past rcv_nxt, which no program will read, ends the
+ * connection with a reset (`tcp_rx_closed_data`), in ESTABLISHED too while
+ * the FIN waits behind queued data; data and a FIN sent again are
+ * acknowledged, and a FIN in order is taken. After a shutdown of the
+ * sending half alone the socket reads the data and the FIN
+ * (`tcp_take_fin`).
  *
  * FIN_WAIT_1 takes an ACK only inside (snd_una, snd_nxt], since a higher one
  * would move snd_una past what was sent, and moves to FIN_WAIT_2, starting

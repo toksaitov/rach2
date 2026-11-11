@@ -43,6 +43,11 @@
  * have to wait: EAGAIN, negated. */
 #define SOCK_EAGAIN (-11)
 
+/* The bits of a stream's `shutdown`, Linux's RCV_SHUTDOWN and
+ * SEND_SHUTDOWN. */
+#define SOCK_RCV_SHUTDOWN  0x1
+#define SOCK_SEND_SHUTDOWN 0x2
+
 /* Policy: an AF_INET6 socket holds at most eight multicast memberships
  * (IPV6_JOIN_GROUP), each a group on one interface. */
 #define SOCK_GROUPS6 8
@@ -249,10 +254,13 @@ typedef struct socket {
     int accept_head, accept_tail;
     int listening;
 
-    /* Set by shutdown(SHUT_RDWR), which detaches the block: a read of the
-     * socket afterwards is the end of input, where a stream that never
-     * connected has no block either and answers ENOTCONN. */
-    int shut_down;
+    /* A stream's halves shut by shutdown(2), as Linux's sk_shutdown:
+     * SOCK_RCV_SHUTDOWN, from SHUT_RD, makes a read of an empty stream the
+     * end of input and poll report POLLIN and POLLRDHUP, and has new data
+     * after this side's FIN answered with a reset (`tcp_rx_closed_data`);
+     * SOCK_SEND_SHUTDOWN, from SHUT_WR, has poll report POLLOUT, where a
+     * send fails with EPIPE. Written under `net_lock`. */
+    int shutdown;
 
     /*
      * Identity, for the files that report sockets. `inode` is this socket's

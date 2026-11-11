@@ -361,13 +361,14 @@ static int udp_recv_ready(void *arg)
 }
 
 /** The wait predicate of a stream receive: bytes are buffered, the FIN
- * came, the connection is closed, or the socket has no block, which a
- * sharer's shutdown detached during the wait. */
+ * came, the connection is closed, the socket was shut for receiving, or it
+ * has no block, which a sharer's shutdown in SYN_SENT freed during the
+ * wait. */
 static int tcp_recv_ready(void *arg)
 {
     socket_t *sock = (socket_t *)arg;
     struct tcb *tcb = sock->tcb;
-    if (!tcb) {
+    if (!tcb || (sock->shutdown & SOCK_RCV_SHUTDOWN)) {
         return 1;
     }
     return (tcb->recv_tail - tcb->recv_head) != 0 || tcb->fin_received || tcb->state == TCP_CLOSED;
@@ -685,6 +686,19 @@ static int send_connect_ready(void *arg)
 }
 
 /**
+ * What a read of the stream socket `sock`, which has no block, answers:
+ * the error a shutdown in SYN_SENT recorded, ECONNRESET, once, and then
+ * -ENOTCONN, as Linux's tcp_recvmsg gives sk_err before TCP_CLOSE's
+ * ENOTCONN (net/ipv4/tcp.c:2687-2700).
+ */
+static int tcp_unconnected_error(struct socket *sock)
+{
+    int err = socket_dgram_error(sock);
+
+    return err != 0 ? err : -ENOTCONN;
+}
+
+/**
  * The reason a connection ended, as a negative errno, or `fallback` when
  * none was recorded.
  *
@@ -692,8 +706,7 @@ static int send_connect_ready(void *arg)
  * and a reader or a writer of a connection that is gone is given it; a bare
  * -1 would reach the program as `EPERM`. The reason is cleared once given. A
  * block with no reason answers `fallback`, the errno the caller gives for
- * its own case: `-EPIPE` for a sender, `-ECONNRESET` for a reader. A block a
- * shutdown detached never reaches here; the entry checks answer for it.
+ * its own case: `-EPIPE` for a sender, `-ECONNRESET` for a reader.
  */
 static int tcp_dead_error(struct tcb *tcb, int fallback)
 {
@@ -886,11 +899,15 @@ void socket_tcp_release(struct socket *sock, uint32_t n)
     wq_wake(&sock->waiters, WQ_DATA);
 }
 
-/** A sharer's shutdown may detach the block during the wait, which is then
- * the end of input. The buffer is brought in again after the wait, which
- * another thread's munmap may have outlasted; that can sleep too, so the
- * ring is judged again after it, and bytes another reader took meanwhile
- * send this one back to the wait instead of reading as the end of input. */
+/** A read of an empty stream shut for receiving is the end of input at
+ * once, as Linux's tcp_recvmsg ends at RCV_SHUTDOWN (net/ipv4/tcp.c:2692),
+ * while bytes buffered before or after the shutdown are still read. A
+ * sharer's shutdown in SYN_SENT may free the block during the wait
+ * (`tcp_unconnected_error`). The buffer is brought in again after the
+ * wait, which another thread's munmap may have outlasted; that can sleep
+ * too, so the ring is judged again after it, and bytes another reader took
+ * meanwhile send this one back to the wait instead of reading as the end
+ * of input. */
 int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len, int peek)
 {
     struct tcb *tcb;
@@ -900,7 +917,7 @@ int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len, int peek)
     if (!sock)
         return -1;
     if (!sock->tcb)
-        return sock->shut_down ? 0 : -ENOTCONN;
+        return tcp_unconnected_error(sock);
     if (sock->tcb->state == TCP_LISTEN)
         return -ENOTCONN;
 
@@ -918,7 +935,7 @@ int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len, int peek)
     }
     tcb = sock->tcb;
     if (!tcb) {
-        return 0;
+        return tcp_unconnected_error(sock);
     }
 
     avail = tcb->recv_tail - tcb->recv_head;
@@ -942,7 +959,8 @@ int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len, int peek)
 
 /**
  * Read queued stream bytes without waiting, leaving them queued for a peek.
- * Return SOCK_EAGAIN without input, or -ENOTCONN on a listener.
+ * Return SOCK_EAGAIN without input, 0 at the end of input or when shut for
+ * receiving, or -ENOTCONN on a listener.
  */
 int socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len, int peek)
 {
@@ -952,14 +970,14 @@ int socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len, int peek)
     if (!sock)
         return -1;
     if (!sock->tcb)
-        return sock->shut_down ? 0 : -ENOTCONN;
+        return tcp_unconnected_error(sock);
     tcb = sock->tcb;
     if (tcb->state == TCP_LISTEN)
         return -ENOTCONN;
 
     avail = tcb->recv_tail - tcb->recv_head;
     if (avail == 0) {
-        if (tcb->fin_received)
+        if (tcb->fin_received || (sock->shutdown & SOCK_RCV_SHUTDOWN))
             return 0;
         if (tcb->state == TCP_CLOSED)
             return tcp_dead_error(tcb, -ECONNRESET);
@@ -1047,14 +1065,14 @@ struct tcp_more {
 };
 
 /** The wait predicate of `socket_tcp_wait_more`: more than `have` bytes are
- * buffered, or the input ended, the connection closed or has an error, or
- * the socket has no block. */
+ * buffered, or the input ended, the socket was shut for receiving, the
+ * connection closed or has an error, or the socket has no block. */
 static int tcp_more_ready(void *arg)
 {
     const struct tcp_more *m = (const struct tcp_more *)arg;
     struct tcb *tcb = m->sock->tcb;
 
-    if (!tcb) {
+    if (!tcb || (m->sock->shutdown & SOCK_RCV_SHUTDOWN)) {
         return 1;
     }
     return tcb->recv_tail - tcb->recv_head > m->have || tcb->fin_received ||
@@ -1093,14 +1111,19 @@ void socket_tcp_fin(struct socket *sock)
  * datagram socket can always send.
  *
  * A listener is ready for input when a connection waits to be accepted. A
- * stream a shutdown detached is ready both ways, since a read of it answers
- * end of input at once. A connected stream is ready for input with bytes
- * buffered or the FIN taken, and for output only in a sending state with
- * send-ring room free, so a poll-then-send loop blocks instead of spinning on
- * a full ring. A recorded error adds POLLERR and POLLOUT, so a non-blocking
- * connect polled for POLLOUT wakes and reads SO_ERROR. A closed or reset
- * connection adds POLLHUP and is ready for input, since a receive answers at
- * once.
+ * stream with no block, never connected or disconnected by a shutdown in
+ * SYN_SENT, is Linux's TCP_CLOSE: POLLHUP and POLLOUT, and POLLERR while
+ * an error waits. A connected stream answers as Linux's tcp_poll does
+ * (net/ipv4/tcp.c:559-596), with the halves shut counted as its
+ * sk_shutdown counts them: the receiving half by SHUT_RD or the peer's
+ * FIN, both by a closed or reset connection. A receiving half shut adds
+ * POLLIN and POLLRDHUP, since a receive answers at once, and both halves
+ * shut, or a closed connection, add POLLHUP. Bytes buffered add POLLIN. A
+ * sending half shut adds POLLOUT, since a send fails at once; otherwise
+ * POLLOUT comes only in a sending state with send-ring room free, so a
+ * poll-then-send loop blocks instead of spinning on a full ring. A
+ * recorded error adds POLLERR and POLLOUT, so a non-blocking connect
+ * polled for POLLOUT wakes and reads SO_ERROR.
  */
 short socket_poll(struct socket *sock, short events, struct wait_queue **wq)
 {
@@ -1134,25 +1157,41 @@ short socket_poll(struct socket *sock, short events, struct wait_queue **wq)
         }
         return revents;
     }
-    if (sock->shut_down && !sock->tcb) {
-        return (short)(POLLHUP | (events & (POLLIN | POLLOUT)));
+    if (!sock->tcb) {
+        revents = (short)(POLLHUP | (events & POLLOUT));
+        if (sock->so_error != 0) {
+            revents |= POLLERR;
+        }
+        return revents;
     }
-    if (sock->tcb) {
+    {
         struct tcb *tcb = sock->tcb;
-        if ((tcb->recv_tail - tcb->recv_head) != 0 || tcb->fin_received) {
+        int shut = sock->shutdown;
+
+        if (tcb->fin_received) {
+            shut |= SOCK_RCV_SHUTDOWN;
+        }
+        if (tcb->state == TCP_CLOSED) {
+            shut = SOCK_RCV_SHUTDOWN | SOCK_SEND_SHUTDOWN;
+        }
+        if (shut == (SOCK_RCV_SHUTDOWN | SOCK_SEND_SHUTDOWN)) {
+            revents |= POLLHUP;
+        }
+        if (shut & SOCK_RCV_SHUTDOWN) {
+            revents |= (short)(events & (POLLIN | POLLRDHUP));
+        }
+        if ((tcb->recv_tail - tcb->recv_head) != 0) {
             revents |= (short)(events & POLLIN);
         }
-        if ((tcb->state == TCP_ESTABLISHED || tcb->state == TCP_CLOSE_WAIT) &&
-            (TCP_RING_SIZE - (tcb->send_tail - tcb->send_ack)) > 0) {
+        if (shut & SOCK_SEND_SHUTDOWN) {
+            revents |= (short)(events & POLLOUT);
+        } else if ((tcb->state == TCP_ESTABLISHED || tcb->state == TCP_CLOSE_WAIT) &&
+                   (TCP_RING_SIZE - (tcb->send_tail - tcb->send_ack)) > 0) {
             revents |= (short)(events & POLLOUT);
         }
         if (tcb->so_error != 0) {
             revents |= POLLERR;
             revents |= (short)(events & POLLOUT);
-        }
-        if (tcb->state == TCP_CLOSED) {
-            revents |= POLLHUP;
-            revents |= (short)(events & POLLIN);
         }
     }
     return revents;
