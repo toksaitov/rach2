@@ -228,6 +228,19 @@ int kcmdline_param_bool(const char *key, int dflt)
     (void)key;
     return dflt;
 }
+/** No command line here, so no token is bare. */
+int kcmdline_bare_count(const char *flag)
+{
+    (void)flag;
+    return 0;
+}
+/** No command line here, so nothing is parsed. */
+int kcmdline_parse_bool(const char *text, int *out)
+{
+    (void)text;
+    (void)out;
+    return -1;
+}
 /** No command line here, so nothing is parsed. */
 int k_strtoll(const char *text, size_t len, long long *out)
 {

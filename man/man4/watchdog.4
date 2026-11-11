@@ -43,7 +43,8 @@ These options of Linux's are read from the command line as Linux reads
 module parameters: when one is given more than once, each value is taken
 in order, so the last valid one counts, and a value that is not valid is
 logged and leaves the option as it was.
-A boolean option given bare, with no value, is true.
+A boolean option given bare, with no value, is true, and a number option
+given bare is not valid.
 .Bl -tag -width Ds
 .It Cm iTCO_wdt.heartbeat Ns = Ns Ar SECONDS
 The timeout at boot, 3 through 614 seconds; 30 when not given, or when
