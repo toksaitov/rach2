@@ -1018,11 +1018,11 @@ uint32_t socket_tcp_buffer(struct socket *sock, uint32_t off)
     struct tcb *tcb;
     uint32_t flags, at, n = 0, i;
 
-    if (!sock || !sock->tcb || sock->tcb->state == TCP_LISTEN)
+    if (!sock)
         return 0;
     flags = net_lock();
     tcb = sock->tcb;
-    if (tcb && tcb->recv_tail - tcb->recv_head > off) {
+    if (tcb && tcb->state != TCP_LISTEN && tcb->recv_tail - tcb->recv_head > off) {
         at = tcb->recv_head + off;
         n = tcb->recv_tail - at;
         recv_seg_trim(tcb);
