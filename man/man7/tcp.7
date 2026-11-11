@@ -1,4 +1,4 @@
-.Dd November 2, 2026
+.Dd November 11, 2026
 .Dt TCP 7
 .Os
 .Sh NAME
@@ -173,11 +173,14 @@ acknowledges only a FIN sent again and counts nothing.
 After the peer's FIN, a segment whose data runs past that FIN ends the
 connection as an accepted reset does and is answered with a reset,
 counted in TCPAbortOnData, as on Linux.
-After the program's last close, or a
-.Dv SHUT_RDWR
-shutdown, data or a FIN past what was received, which no program will
-read, ends the connection the same way (RFC 1122, section 4.2.2.13); data
-and a FIN sent again are acknowledged.
+Before the peer's FIN, once this side's FIN is sent or queued after the
+program's last close or a shutdown of both halves, data or a FIN past
+what was received, which no program will read, ends the connection the
+same way (RFC 1122, section 4.2.2.13); data and a FIN sent again are
+acknowledged.
+A close with received data the program has not read sends a reset in
+place of the FIN and ends the connection, counted in TCPAbortOnClose, as
+on Linux.
 Until a passive open's handshake ends, the peer's SYN sent again is
 answered with this side's SYN-ACK, an acknowledgement of another number
 with a reset, a segment outside the window offered with an
@@ -246,9 +249,9 @@ takes.
 counts in its
 .Ql TcpExt:
 line the segments of data received again whole, DelayedACKLost; the
-retransmission timeouts, TCPTimeouts; the connections data past the
-peer's FIN ended, TCPAbortOnData, and those a timeout ended,
-TCPAbortOnTimeout; the challenge acknowledgements sent, TCPChallengeACK,
+retransmission timeouts, TCPTimeouts; the connections ended by data no
+program will read, TCPAbortOnData, those a close with data unread ended,
+TCPAbortOnClose, and those a timeout ended, TCPAbortOnTimeout; the challenge acknowledgements sent, TCPChallengeACK,
 and the SYNs that drew one, TCPSYNChallenge; the answers of a handshake
 not yet ended held back by the limit, TCPACKSkippedSynRecv, those to a
 segment outside the window, TCPACKSkippedSeq, and the challenges held
