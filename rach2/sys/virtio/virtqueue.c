@@ -586,8 +586,11 @@ void virtio_interrupt_queues(struct virtio_dev *d)
 
 void virtio_interrupt_config(struct virtio_dev *d)
 {
+    /* Read once: a driver clears it while a handler may run elsewhere. */
+    void (*changed)(struct virtio_dev *) = ((volatile struct virtio_dev *)d)->config_changed;
+
     d->config_events++;
-    if (d->config_changed) {
-        d->config_changed(d);
+    if (changed) {
+        changed(d);
     }
 }

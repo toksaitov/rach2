@@ -261,12 +261,15 @@ static void cmd_submit(struct virtio_gpu_cmd *cmd)
 }
 
 /**
- * A queue's `done`: the device answered `cmd` with `len` bytes. The fence
- * signals first, failing with -EIO on an error answer, and with it every
- * earlier fence of its fence context, whose order the device keeps, as
- * Linux's virtio_gpu_fence_event_process does, while the command is still
- * neither its waiter's to free nor on the done list; then it is marked
- * done, and the commands held for the queue go in. Handler context.
+ * A queue's `done`: the device answered `cmd` with `len` bytes. Under the
+ * device's lock, which keeps the list of live commands, the fence signals
+ * first, failing with -EIO on an error answer, and with it every earlier
+ * fence of its fence context, whose order the device keeps, as Linux's
+ * virtio_gpu_fence_event_process does under its fence lock
+ * (virtgpu_fence.c:134-174), while the command is still neither its
+ * waiter's to free nor on the done list; then it is marked done, and the
+ * commands held for the queue go in. Handler context, without the big lock
+ * on a device with MSI-X (`irq_unlocked`).
  */
 static void cmd_done(struct virtqueue *vq, void *token, uint32_t len)
 {
@@ -289,6 +292,7 @@ static void cmd_done(struct virtqueue *vq, void *token, uint32_t len)
         type = VIRTIO_GPU_RESP_ERR_UNSPEC;
     }
     cmd->response_len = len;
+    flags = spin_lock_irqsave(&vg->lock);
     if (cmd->fence) {
         if (!ok) {
             dma_fence_set_error(cmd->fence, -EIO);
@@ -304,7 +308,6 @@ static void cmd_done(struct virtqueue *vq, void *token, uint32_t len)
             }
         }
     }
-    flags = spin_lock_irqsave(&vg->lock);
     cmd->resp_type = type;
     cmd->done = 1;
     if (!ok) {
@@ -2204,6 +2207,8 @@ int32_t virtio_gpu_bind(struct virtio_dev *vdev)
         virtio_put(vdev);
         return -ENOMEM;
     }
+    /* cmd_done and vgpu_config_changed take only the device's lock. */
+    vdev->irq_unlocked = 1;
     rc = virtio_init(vdev,
                      VIRTIO_BIT(VIRTIO_GPU_F_EDID) | VIRTIO_BIT(VIRTIO_GPU_F_VIRGL) |
                          VIRTIO_BIT(VIRTIO_GPU_F_RESOURCE_UUID) |
