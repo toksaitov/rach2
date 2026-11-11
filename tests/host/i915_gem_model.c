@@ -109,6 +109,15 @@ void i915_ppgtt_clear_range(struct drm_i915_private *i915, uint64_t offset, uint
     (void)offset;
     (void)size;
 }
+
+/* The pool of shadow batches, which execbuffer fills: empty here, so the
+ * shrinker's trim frees nothing. */
+uint32_t i915_gem_pool_trim(struct drm_i915_private *i915, int how)
+{
+    (void)i915;
+    (void)how;
+    return 0;
+}
 #endif
 
 /** GET_PIPE_FROM_CRTC_ID, which the table names; the display is not here. */

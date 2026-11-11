@@ -1151,7 +1151,7 @@ static int32_t eb_select_engine(struct eb *eb, struct intel_context **out)
  * of a shadow's reference. */
 static struct spinlock pool_lock = SPINLOCK_INIT_NAMED("pool_lock");
 
-/* How long a shadow stays in the pool after its last take, Linux's HZ in
+/* How long a shadow stays in the pool once it is idle, Linux's HZ in
  * pool_free_work (gt/intel_gt_buffer_pool.c:93). */
 #define I915_POOL_KEEP_MS 1000u
 
@@ -1175,10 +1175,14 @@ static uint32_t pool_bucket(uint64_t size)
  * intel_gt_get_buffer_pool (gt/intel_gt_buffer_pool.c:170-215): the first
  * idle one of its bucket, its pages and binding kept, or a new one put in
  * the pool. The caller gets a reference of its own and the object in the
- * processor's domain for its copy.
+ * processor's domain for its copy. No new shadow goes in the pool of a GT
+ * the unplug wedged for good, since the unplug's trim of every shadow may
+ * have run already, and a shadow it left would hold the device for good;
+ * Linux flushes its pool at the driver's remove and again at the GT's
+ * release (gt/intel_gt.c:792,849).
  *
- * @return 0, or the errors of `i915_gem_object_create` and
- *         `i915_gem_object_set_to_cpu_domain`.
+ * @return 0; -EIO once the device is unplugged; or the errors of
+ *         `i915_gem_object_create` and `i915_gem_object_set_to_cpu_domain`.
  */
 static int32_t pool_get(struct drm_i915_private *i915, uint64_t size,
                         struct drm_i915_gem_object **out)
@@ -1194,7 +1198,7 @@ static int32_t pool_get(struct drm_i915_private *i915, uint64_t size,
     for (obj = gt->pool[b]; obj; obj = obj->pool_next) {
         if (obj->base.size >= size && obj->base.refs == 1u) {
             drm_gem_object_get(&obj->base);
-            obj->pool_taken = rtc_ticks_now();
+            obj->pool_idle = 0;
             break;
         }
     }
@@ -1213,8 +1217,14 @@ static int32_t pool_get(struct drm_i915_private *i915, uint64_t size,
         return err;
     }
     drm_gem_object_get(&obj->base);
-    obj->pool_taken = rtc_ticks_now();
+    obj->pool_idle = 0;
     flags = spin_lock_irqsave(&pool_lock);
+    if (gt->wedged_terminal) {
+        spin_unlock_irqrestore(&pool_lock, flags);
+        i915_gem_object_put(obj);
+        i915_gem_object_put(obj);
+        return -EIO;
+    }
     obj->pool_next = gt->pool[b];
     gt->pool[b] = obj;
     spin_unlock_irqrestore(&pool_lock, flags);
@@ -1222,21 +1232,48 @@ static int32_t pool_get(struct drm_i915_private *i915, uint64_t size,
     return 0;
 }
 
-void i915_gem_pool_trim(struct drm_i915_private *i915, int how)
+/** Whether trim `how` drops `obj`, at the tick `now`, never 0: every
+ * shadow for I915_POOL_ALL, and an idle one for I915_POOL_IDLE, or for
+ * I915_POOL_STALE once it has been idle for I915_POOL_KEEP_MS. A shadow a
+ * pass finds idle with no stamp is stamped, as Linux's pool_retire stamps
+ * a node's age when its last request retires
+ * (gt/intel_gt_buffer_pool.c:118); the retire pass that lets a request's
+ * hold go trims right after. `pool_lock` is held. */
+static int pool_drops(struct drm_i915_gem_object *obj, int how, uint64_t now)
+{
+    if (how == I915_POOL_ALL) {
+        return 1;
+    }
+    if (obj->base.refs != 1u) {
+        return 0;
+    }
+    if (how == I915_POOL_IDLE) {
+        return 1;
+    }
+    if (obj->pool_idle == 0) {
+        obj->pool_idle = now;
+    }
+    return now - obj->pool_idle >= MS_TO_TICKS(I915_POOL_KEEP_MS);
+}
+
+uint32_t i915_gem_pool_trim(struct drm_i915_private *i915, int how)
 {
     struct i915_gt *gt = &i915->gt;
     struct drm_i915_gem_object *drop = 0, **link, *obj;
     uint64_t now = rtc_ticks_now();
-    uint32_t b, flags;
+    uint32_t b, flags, freed = 0;
 
+    if (now == 0) {
+        now = 1;
+    }
     flags = spin_lock_irqsave(&pool_lock);
     for (b = 0; b < I915_POOL_BUCKETS; b++) {
         link = &gt->pool[b];
         while ((obj = *link) != 0) {
-            if (how == I915_POOL_ALL ||
-                (obj->base.refs == 1u &&
-                 (how == I915_POOL_IDLE ||
-                  now - obj->pool_taken >= MS_TO_TICKS(I915_POOL_KEEP_MS)))) {
+            if (pool_drops(obj, how, now)) {
+                if (obj->base.refs == 1u) {
+                    freed += obj->pages.held;
+                }
                 *link = obj->pool_next;
                 obj->pool_next = drop;
                 drop = obj;
@@ -1251,6 +1288,7 @@ void i915_gem_pool_trim(struct drm_i915_private *i915, int how)
         obj->pool_next = 0;
         i915_gem_object_put(obj);
     }
+    return freed;
 }
 
 /**
