@@ -4123,13 +4123,39 @@ static int pio_outs(struct kvm_vcpu *v, const struct kvm_pio *p, uint32_t count,
     return 0;
 }
 
+/**
+ * The elements of the string port instruction `p` that one exit moves,
+ * from the registers as they stand: rCX's count under REP, else one, and
+ * at most the rest of the page of the first element, and of the port I/O
+ * page, and the elements before the offset wraps at the address size; one
+ * element when DF counts down. 0 when REP finds rCX 0.
+ */
+static uint64_t string_count(const struct kvm_vcpu *v, const struct kvm_pio *p)
+{
+    uint64_t m = size_mask(p->addr_size), count = 1, la, room, off;
+
+    if (p->rep) {
+        count = v->regs.rcx & m;
+    }
+    off = (p->in ? v->regs.rdi : v->regs.rsi) & m;
+    la = linear(v, p->in ? KVM_SEG_ES : p->seg, off);
+    room = (4096u - (la & 0xFFFu)) / p->size;
+    if (room != 0 && room - 1u > (m - off) / p->size) {
+        room = (m - off) / p->size + 1u;
+    }
+    if (room == 0 || (v->regs.rflags & RFLAGS_DF)) {
+        room = 1;
+    }
+    return count > room ? room : count;
+}
+
 /** Begin the port I/O instruction `p`, as `kvm_emul_pio`; `single` is set
  * when a string OUT runs again with the answer of an MMIO read. */
 static int pio_begin(struct kvm_vcpu *v, const struct kvm_pio *p, int single)
 {
     struct kvm_emul *em = &v->emul;
     struct kvm_exit *ex = &v->exit;
-    uint64_t m = size_mask(p->addr_size), count = 1, la, room, off;
+    uint64_t count = 1;
 
     ex->kind = KVM_X_IO;
     k_memset(&ex->io, 0, sizeof(ex->io));
@@ -4138,29 +4164,12 @@ static int pio_begin(struct kvm_vcpu *v, const struct kvm_pio *p, int single)
     ex->io.port = p->port;
     em->pio = *p;
     if (p->string) {
-        if (p->rep) {
-            count = v->regs.rcx & m;
-            if (count == 0) {
-                v->regs.rflags &= ~RFLAGS_RF;
-                kvm_emul_skip(v, p->len);
-                ex->kind = KVM_X_AGAIN;
-                return 0;
-            }
-        }
-        /* At most the rest of the page of the first element, and of the
-         * port I/O page, and the elements before the offset wraps at the
-         * address size; one element when DF counts down. */
-        off = (p->in ? v->regs.rdi : v->regs.rsi) & m;
-        la = linear(v, p->in ? KVM_SEG_ES : p->seg, off);
-        room = (4096u - (la & 0xFFFu)) / p->size;
-        if (room != 0 && room - 1u > (m - off) / p->size) {
-            room = (m - off) / p->size + 1u;
-        }
-        if (room == 0 || (v->regs.rflags & RFLAGS_DF)) {
-            room = 1;
-        }
-        if (count > room) {
-            count = room;
+        count = string_count(v, p);
+        if (count == 0) {
+            v->regs.rflags &= ~RFLAGS_RF;
+            kvm_emul_skip(v, p->len);
+            ex->kind = KVM_X_AGAIN;
+            return 0;
         }
     }
     ex->io.count = (uint32_t)count;
@@ -4190,16 +4199,24 @@ int kvm_emul_pio(struct kvm_vcpu *v, const struct kvm_pio *p)
     return pio_begin(v, p, 0);
 }
 
-/** Finish a port read with the bytes the caller or a device answered in
+/**
+ * Finish a port read with the bytes the caller or a device answered in
  * `v->exit.data`: the accumulator, or the string at ES:rDI, whose elements
- * in device memory leave as MMIO writes, one for each. X_OK; X_FAULT with
- * the fault queued; or, for a string that cannot be written, X_FAIL or
- * -EFAULT, with the registers as they were. */
+ * in device memory leave as MMIO writes, one for each. A string moves the
+ * elements its registers allow now, at most those the exit asked for: a
+ * caller may change rCX or rDI between the exit and the next KVM_RUN, and
+ * as Linux's pio_in_emulated counts again from them, a smaller rCX moves
+ * fewer elements, so that rCX reaches 0 and not past it, and rCX 0 ends
+ * the instruction with none. X_OK; X_FAULT with the fault queued; or, for
+ * a string that cannot be written, X_FAIL or -EFAULT, with the registers
+ * as they were.
+ */
 static int pio_complete(struct kvm_vcpu *v)
 {
     struct kvm_emul *em = &v->emul;
     struct kvm_pio *p = &em->pio;
     uint64_t x;
+    uint32_t count;
     int r;
 
     emul_end(v);
@@ -4210,17 +4227,21 @@ static int pio_complete(struct kvm_vcpu *v)
         kvm_emul_skip(v, p->len);
         return X_OK;
     }
-    r = wq_add(v, linear(v, KVM_SEG_ES, v->regs.rdi & size_mask(p->addr_size)), v->exit.data,
-               p->count * p->size, p->size);
-    if (r == X_OK) {
-        r = wq_commit(v);
+    x = string_count(v, p);
+    count = x < p->count ? (uint32_t)x : p->count;
+    if (count != 0) {
+        r = wq_add(v, linear(v, KVM_SEG_ES, v->regs.rdi & size_mask(p->addr_size)), v->exit.data,
+                   count * p->size, p->size);
+        if (r == X_OK) {
+            r = wq_commit(v);
+        }
+        if (r != X_OK) {
+            wq_reset(v);
+            return r;
+        }
     }
-    if (r != X_OK) {
-        wq_reset(v);
-        return r;
-    }
-    string_step(v, 7, p->size, p->addr_size, p->count);
-    (void)string_done(v, p->rep, p->addr_size, p->count, p->len);
+    string_step(v, 7, p->size, p->addr_size, count);
+    (void)string_done(v, p->rep, p->addr_size, count, p->len);
     if (wq_pending(v)) {
         em->stage = EMUL_WRITE;
         em->resume = 1;

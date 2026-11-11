@@ -1995,12 +1995,73 @@ static void outs_wrap_rows(int fd)
     CHECK(r.rcx == 0 && r.rsi == 3 && r.rip == 0x1002, "and counts RCX and RSI off, stepped past");
 }
 
-/** The string I/O instructions cut at a page, and one near no wrap. */
+/** Set RCX and RDI of the vCPU on `fd`, as a caller does between an exit
+ * and the next KVM_RUN. */
+static void set_cx_di(int fd, uint64_t rcx, uint64_t rdi)
+{
+    struct kvm_regs r = regs_of(fd);
+
+    r.rcx = rcx;
+    r.rdi = rdi;
+    CHECK(fdio(fd, KVM_SET_REGS, (uintptr_t)&r) == 0, "KVM_SET_REGS of RCX and RDI");
+}
+
+/** REP INSB whose count the caller changes between the exit and the next
+ * KVM_RUN, as Linux's userspace_io_test does: the elements stored are
+ * those RCX now allows, at most the exit's, so RCX ends at 0 and not past
+ * it, and the guest's buffer is not overrun. */
+static void ins_count_rows(int fd)
+{
+    struct kvm_vcpu *v = vcpu_of(fd);
+    struct kvm_run *rp = run_of(fd);
+    struct kvm_regs r;
+
+    k_memset(&ram[0x2000], 0, 8);
+    set_regs(fd, 0x1000, 0, 2, 0);
+    set_cx_di(fd, 2, 0x2000);
+    script(EXIT_IO, 0x38u | (0x80ull << 16), 2);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO && rp->u.io.count == 2,
+          "REP INSB of two bytes asks the caller for both");
+    set_cx_di(fd, 1, 0x2000);
+    k_memcpy(v->pio, "xy", 2);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_HLT, "the caller's RCX of 1 ends it");
+    r = regs_of(fd);
+    CHECK(ram[0x2000] == 'x' && ram[0x2001] == 0 && r.rcx == 0 && r.rdi == 0x2001 &&
+              r.rip == 0x1003 && !(r.rflags & F_RF),
+          "with the one byte RCX allows stored and RCX at 0, as Linux leaves them");
+
+    set_regs(fd, 0x1000, 0, 3, 0);
+    set_cx_di(fd, 3, 0x2000);
+    script(EXIT_IO, 0x38u | (0x80ull << 16), 2);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO && rp->u.io.count == 3,
+          "REP INSB of three bytes asks for three");
+    set_cx_di(fd, 5, 0x2000);
+    k_memcpy(v->pio, "abc", 3);
+    script(EXIT_IO, 0x38u | (0x80ull << 16), 2);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO && rp->u.io.count == 2,
+          "a caller's RCX of 5 stores the three answered and asks for the other two");
+    r = regs_of(fd);
+    CHECK(memcmp(&ram[0x2000], "abc", 3) == 0 && ram[0x2003] == 0 && r.rcx == 2 &&
+              r.rdi == 0x2003 && r.rip == 0x1000 && (r.rflags & F_RF),
+          "with RCX and RDI counted by three");
+    set_cx_di(fd, 0, 0x2003);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_HLT, "the caller's RCX of 0 ends it");
+    r = regs_of(fd);
+    CHECK(ram[0x2003] == 0 && r.rcx == 0 && r.rdi == 0x2003 && r.rip == 0x1003 &&
+              !(r.rflags & F_RF),
+          "with nothing stored, as Linux's first termination condition ends it");
+}
+
+/** The string I/O instructions cut at a page, one near no wrap, and a
+ * count the caller changes. */
 static void io_string_rows(int fd)
 {
     outs_rf_rows(fd);
     ins_rf_rows(fd);
     outs_wrap_rows(fd);
+    ins_count_rows(fd);
 }
 
 /** Write the instruction `bytes` of `n` bytes at `rip` and point RIP at
