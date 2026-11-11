@@ -1,0 +1,60 @@
+[  836.837000] i915: gmbus dpb: NAK for addr 0050 w(1)
+[  836.837000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[  836.837000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+[  836.837000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+[  836.837000] i915: gmbus dpc: NAK for addr 0050 w(1)
+[  836.837000] i915: gmbus dpc: NAK on first message, retry
+[  836.837000] i915: gmbus dpc: NAK for addr 0050 w(1)
+[  836.837000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[  836.837000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+[  836.840000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+[  836.881000] console: card0: taken back from a master, the keyboard on
+[  836.881000] console: card0: 1366x768, the font at 2x
+[  837.890000] console: card0: handed to a master, the keyboard off
+[  838.212000] i915: dpll: disable LCPLL 1350 for pipe A (active 0x0)
+[  838.212000] i915: dpll: enable LCPLL 1350 for pipe A (active 0x1)
+[  838.947000] i915: display: pipe A set: 1366x768 in 1366x768@60, 76300 kHz, 18 bpp, 1 lane at 270000 kHz
+[  839.420000] i915: dpll: disable LCPLL 1350 for pipe A (active 0x0)
+[  839.420000] i915: dpll: enable LCPLL 1350 for pipe A (active 0x1)
+[  840.144000] i915: display: pipe A set: 1366x768 in 1366x768@60, 76300 kHz, 18 bpp, 1 lane at 270000 kHz
+[  840.195000] i915: gmbus dpb: NAK for addr 0050 w(1)
+[  840.195000] i915: gmbus dpb: NAK on first message, retry
+[  840.195000] i915: gmbus dpb: NAK for addr 0050 w(1)
+[  840.195000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[  840.195000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+[  840.195000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+[  840.195000] i915: gmbus dpc: NAK for addr 0050 w(1)
+[  840.195000] i915: gmbus dpc: NAK on first message, retry
+[  840.195000] i915: gmbus dpc: NAK for addr 0050 w(1)
+[  840.195000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[  840.195000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+[  840.198000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+[  840.211000] console: card0: taken back from a master, the keyboard on
+[  840.211000] console: card0: 1366x768, the font at 2x
+[  848.866000] vgpu-shm: attached: 32768 KiB, heap 8189 pages, peer 0, doorbells offered
+[  849.198000] i915: dpll: disable LCPLL 1350 for pipe A (active 0x0)
+[  849.198000] console: card0: left
+[  849.198000] i915: handoff: 0000:00:02.0: released: the display off, the GPU reset, interrupts and bus mastering off
+[  849.250000] vfio: bind: 0000:00:02.0 to vfio-pci, group 0
+[  849.450000] vtd: dmar0: translation on
+[  849.450000] vtd: attach: 0:2.0 to domain 2 of dmar0
+[  850.937000] pci: reset: 0:2.0 by advanced features function-level reset
+[  850.937000] vfio: igd: 0000:00:02.0: OpRegion 2.00, 8192 bytes, bridges
+[  851.182000] pci: reset: 0:2.0 by advanced features function-level reset
+[  869.741000] vtd: irte: dmar0 index 0: msi of 0:2.0, vector 53 to apic 0, edge, sid 0x0010 svt 1
+[  869.741000] pci: msi: 0:2.0 on vector 53, remapped
+[  872.399000] virtio: features: vgpu-shm: offered 1:19, taken 1:19
+[  872.399000] virtio_gpu: host memory: the device's own pages, by MAP_BLOB
+[  872.399000] virtio_gpu: features: +virgl -edid +resource_blob +host_visible
+[  872.399000] virtio_gpu: features: +context_init
+[  872.399000] virtio: queue: vgpu-shm: 0 of 128 entries, vector 0
+[  872.399000] virtio: queue: vgpu-shm: 1 of 128 entries, vector 0
+[  872.399000] virtio_gpu: number of scanouts: 1
+[  872.399000] virtio_gpu: number of cap sets: 3
+[  872.399000] vgpu-shm: running: epoch 1, device peer 1, doorbells
+[  872.444000] virtio_gpu: display: scanout 0: 1024x768+0+0
+[  872.444000] drm: virtio_gpu: card0
+[  872.444000] console: card0: a native display
+[ 1812.627000] net: eth0: IPv6 fd91:381e:e667:4a0c:e580:a353:89b0:b87e/64 added
+[ 1817.601000] nd6: eth0: fd91:381e:e667:4a0c:8442:6af6:2c87:2abb expired
+[ 1817.601000] net: eth0: IPv6 fd91:381e:e667:4a0c:8442:6af6:2c87:2abb removed

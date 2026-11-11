@@ -1,0 +1,2 @@
+measure: result: webgl native-rach2 frames 599 frame_ms 2.878 p50 2.000 p99 19.400 cpu_ms_per_frame 72.671 latency_ms 0.146 copied_bytes 0 exits 0 round_trips - seconds 14.9 passed -
+exit 0

@@ -1,0 +1,11 @@
+03:43:00 mac: p1: 10 runs differ from p1-before.img
+e21e697a49f5b85f6e7056e55257106fdae59f96b30724a622b551e174c04381  /dev/bootpart
+mac: want e21e697a49f5b85f6e7056e55257106fdae59f96b30724a622b551e174c04381
+bootctl: candidate: first sector 11848, 8192 sectors in 8192 clusters, 4194304 bytes
+bootctl: fallback: first sector 2053, 8192 sectors in 8192 clusters, 4194304 bytes
+bootctl: fallback: runs: 2053+4096 20040+4096
+bootctl: grubenv: first sector 10275, 2 sectors in 2 clusters, 1024 bytes
+bootctl: boot.cfg: first sector 10259, 16 sectors in 16 clusters, 8192 bytes
+bootctl: saved_entry: candidate
+bootctl: next_entry: empty (a trial was consumed)
+bootctl: booted: candidate

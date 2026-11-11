@@ -1,0 +1,26 @@
+commit bb151e3baa6810fe8a513ac02a19ace4d881cb27
+milestone 12
+full waived
+root 1851d00c3a06ff637204b1c2bf6058129b2b797ee30a970ebf4fba53585c14a3
+bootctl: candidate: first sector 11848, 8192 sectors in 8192 clusters, 4194304 bytes
+bootctl: fallback: first sector 2053, 8192 sectors in 8192 clusters, 4194304 bytes
+bootctl: fallback: runs: 2053+4096 20040+4096
+bootctl: grubenv: first sector 10275, 2 sectors in 2 clusters, 1024 bytes
+bootctl: boot.cfg: first sector 10259, 16 sectors in 16 clusters, 8192 bytes
+bootctl: saved_entry: candidate
+bootctl: next_entry: empty (a trial was consumed)
+bootctl: booted: candidate
+e21e697a49f5b85f6e7056e55257106fdae59f96b30724a622b551e174c04381  /Users/toksaitov/Desktop/rach2/build/cache/80-2/p1-before.img
+03:39:03 mac: p1: 9 runs differ from p1-debian.img
+ee23e64ecc7b17fe15d335fd609c7f75f28db0354f1d53664cded9c2c7d36fb0  /dev/bootpart
+bootctl: staged: 742 bytes of menu in a 8192-byte slot
+bootctl: armed: the next boot tries recovery once
+bootctl: candidate: first sector 11848, 8192 sectors in 8192 clusters, 4194304 bytes
+bootctl: fallback: first sector 2053, 8192 sectors in 8192 clusters, 4194304 bytes
+bootctl: fallback: runs: 2053+4096 20040+4096
+bootctl: grubenv: first sector 10275, 2 sectors in 2 clusters, 1024 bytes
+bootctl: boot.cfg: first sector 10259, 16 sectors in 16 clusters, 8192 bytes
+bootctl: saved_entry: candidate
+bootctl: next_entry: recovery
+bootctl: booted: candidate
+03:39:07 mac: rebooting Rach2 into Debian

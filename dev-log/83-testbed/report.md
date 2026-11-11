@@ -28,8 +28,24 @@ The latency, the CPU a frame, the bytes copied, the exits and the round trips ha
 
 ## Results
 
-The trial's table comes here when 83-7.5 has run: a row for each rung and scene, its line's frames, mean, median and 99th percentile, CPU a frame, latency, bytes copied, exits and round trips, beside Linux's figure and its IOMMU configuration.
+The trial of 2026-11-12, cut to an hour on the machine: one short run a scene, the game at `-t 30`, Debian booted only for the WebGL scene ([83-7.md](83-7.md#results)). The shm rungs did not run: virtio-gpu's bind over the region did not return on the Lenovo (83-7.md). Linux's figure names its IOMMU configuration.
+
+| Rung | Scene | Frames | Mean ms | p50 | p99 | CPU ms/frame | Latency ms | Copied bytes | Exits | Round trips | Linux |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| native-rach2, panel | glmark2 | 35,805 | 1.118 | 0.480 | 10.050 | 2.885 | 0.145 | 0 | 0 | - | 0.488 to 0.616 a scene, stored, translation on |
+| native-rach2, panel | piglit | 10, 10/10 | 1,629.1 | 603.4 | 1,784.3 | 5,814 | 0.103 | 0 | 0 | - | median 729.5, stored, translation on, run in parallel |
+| native-rach2, panel | webgl | 599 | 2.878 | 2.000 | 19.400 | 72.671 | 0.146 | 0 | 0 | - | none on the panel |
+| native-rach2, panel | game, `-t 30` | 2,010 | 14.958 | 14.310 | 35.680 | 42.548 | 0.125 | 0 | 0 | - | 80-2: median 14.66 to 14.78, p99 19.03 to 19.25, 90 s, translation off |
+| native-rach2, headless | webgl | 599 | 13.198 | 12.000 | 38.300 | 70.417 | 0.146 | 0 | 0 | - | native-linux: 599, 20.531, p50 20.100, p99 34.900, CPU 35.659, translation off |
+| forward-virgl | glmark2 | 14,238 | 2.815 | 1.104 | 21.140 | 7.123 | 0.481 | - | 272,434 | - | |
+| forward-virgl | webgl | 599 | 19.724 | 16.000 | 95.100 | 93.489 | 0.449 | - | 281,273 | - | |
+| forward-venus | glmark2 | 3,971 | 10.078 | 10.680 | 28.450 | 19.627 | 3.995 | - | 307,150 | - | |
+| forward-venus | webgl | 599 | 32.088 | 30.600 | 89.300 | 118.080 | 4.053 | - | 337,813 | - | |
+| vtest | glmark2 | 162 | 249.518 | 243.700 | 405.700 | 1,004.0 | 2.048 | 737,365,388 | 742,248 | 1,302 | none |
+| vtest | piglit | 7, 7/10 | 14,918.9 | 3,574.0 | 43,433.7 | 55,908.6 | 2.148 | 814,625,648 | 2,693,432 | 158,701 | none |
+
+The forward rungs' CPU a frame and exits are Rach2's, around the guest's harness; their bytes copied are QEMU's, which nothing counts.
 
 ## The VM's death
 
-83-7.6's run comes here: for each load, glmark2, piglit, the WebGL scene and the game, the waits that failed, the session's restart on llvmpipe and then on Rach2's driver, its log lines and the pipe's CRC against the mode's.
+Not measured yet: the one run of 2026-11-12 under glmark2 stopped before the VM's death, at virtio-gpu's bind over the region ([83-7.md](83-7.md#results)). The runs under each load follow the bind's fix, and the piglit, WebGL and game loads wait for the full runs at the end of all phases.
