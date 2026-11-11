@@ -705,13 +705,19 @@ static void gt_park(struct drm_i915_private *i915)
  * user interrupt is let go once the list is empty.  Each finished request
  * moves the ring's head to its end, as Linux's i915_request_retire, so
  * that the room it took is free again; a cancel (`all`) leaves the head to
- * the ring's restart.
+ * the ring's restart. A request passed before its interrupt is signalled
+ * first by `i915_request_signal`, whose rule for a listened last request
+ * then lets the engine go, as Linux's retirement in any path drops the
+ * request's hold on its engine.
  */
 static void engine_retire(struct drm_i915_private *i915, struct i915_engine *e, int all)
 {
     struct i915_request *done = 0, **tail = &done, *rq;
     uint32_t flags;
 
+    if (!all) {
+        i915_request_signal(i915, e);
+    }
     flags = spin_lock_irqsave(&e->lock);
     if (all) {
         e->queued = 0;
@@ -1262,7 +1268,7 @@ int32_t i915_request_wait(struct i915_request *rq, int intr, int64_t timeout_ns)
         request_poll(rq, I915_BUSYWAIT_US);
     }
     if (!i915_request_completed(rq)) {
-        rq->fence.base.listened = 1;
+        dma_fence_enable_sw_signaling(&rq->fence.base);
     }
     rq->waiters++;
     while (!i915_request_completed(rq)) {
@@ -1279,7 +1285,8 @@ int32_t i915_request_wait(struct i915_request *rq, int intr, int64_t timeout_ns)
             slice = deadline;
         }
         if (current_proc && i915->msi_vector >= 0) {
-            err = dma_fence_wait_until(&rq->fence.base, intr, slice);
+            /* The default sleep: the fence's own wait is this one. */
+            err = dma_fence_default_wait(&rq->fence.base, intr, slice);
             if (err == -EINTR) {
                 break;
             }

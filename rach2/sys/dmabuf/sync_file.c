@@ -18,9 +18,11 @@ static short sync_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     struct sync_file *s = e->priv;
     int32_t status = dma_fence_status(s->fence);
     /* A poller asks for the signal, as Linux's sync_file_poll adds a
-     * callback. */
-    if (wq && !status)
-        s->fence->listened = 1;
+     * callback, which also arms a merged fence. */
+    if (wq && !status) {
+        dma_fence_enable_sw_signaling(s->fence);
+        status = dma_fence_status(s->fence);
+    }
     if (wq)
         *wq = &s->fence->wq;
     return (short)(status ? (events & 1) : 0);

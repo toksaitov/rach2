@@ -235,15 +235,21 @@ struct drm_driver {
 /*
  * A fence's driver and timeline names, for SYNC_IOC_FILE_INFO and debugfs,
  * and its release, which frees the record when the last reference goes;
- * NULL frees it with kfree. `enable_signaling` is called once, the first
- * time anyone waits or adds a callback, for a driver that signals only on
- * request; it returns 0 when the fence has signalled meanwhile.
+ * NULL frees it with kfree. The rest may be NULL, as Linux's:
+ * `enable_signaling` is called once, the first time anyone waits or adds a
+ * callback, for a fence that signals only on request; it returns 0 when
+ * the fence has signalled meanwhile. `signaled` answers a query without
+ * enabling anything, and returns 1 when the fence may be signalled now.
+ * `wait` replaces the default sleep of `dma_fence_wait_until`, after
+ * signalling is enabled, with the same deadline and results.
  */
 struct dma_fence_ops {
     const char *(*get_driver_name)(struct dma_fence *fence);
     const char *(*get_timeline_name)(struct dma_fence *fence);
     int (*enable_signaling)(struct dma_fence *fence);
     void (*release)(struct dma_fence *fence);
+    int (*signaled)(struct dma_fence *fence);
+    int32_t (*wait)(struct dma_fence *fence, int intr, int64_t deadline_ns);
 };
 
 /* A callback run once when its fence signals, in the signaller's context,
@@ -270,11 +276,12 @@ struct dma_fence {
     int64_t deadline_ns; /* earliest requested completion hint, INT64_MAX if none */
     struct dma_fence_cb *cbs;
     wait_queue_t wq;
-    int signaling_enabled;
-    /* A callback, a sleeper or a poller has asked for the signal, as
-     * Linux's DMA_FENCE_FLAG_ENABLE_SIGNAL_BIT is set by
-     * dma_fence_add_callback and dma_fence_default_wait; it stays set when
-     * they leave. `signaling_enabled` is also set by a mere query. */
+    /* A callback, a sleeper or a poller has asked for the signal, and
+     * `enable_signaling` has run, as Linux's
+     * DMA_FENCE_FLAG_ENABLE_SIGNAL_BIT is set by
+     * __dma_fence_enable_signaling from dma_fence_add_callback,
+     * dma_fence_wait_timeout and dma_fence_enable_sw_signaling; it stays
+     * set when they leave. A query sets nothing. */
     int listened;
 };
 
@@ -293,8 +300,12 @@ void dma_fence_set_error(struct dma_fence *fence, int32_t error);
 /** Signal: stamp the time, run the callbacks, wake the waiters. Returns 0,
  * or -EINVAL when it had signalled. Any context, an interrupt among them. */
 int32_t dma_fence_signal(struct dma_fence *fence);
-/** Whether the fence has signalled, asking the driver if need be. */
+/** Whether the fence has signalled, asking its `signaled` if need be and
+ * signalling it when that says so; enables nothing, as Linux's. */
 int dma_fence_is_signaled(struct dma_fence *fence);
+/** Ask for the signal, as Linux's dma_fence_enable_sw_signaling: mark the
+ * fence `listened` and run its `enable_signaling` the first time. */
+void dma_fence_enable_sw_signaling(struct dma_fence *fence);
 /** Run `func` when `fence` signals: 0, with the fence marked `listened`,
  * or -ENOENT, with nothing added, when it has signalled already. */
 int32_t dma_fence_add_callback(struct dma_fence *fence, struct dma_fence_cb *cb,
@@ -306,10 +317,16 @@ int dma_fence_remove_callback(struct dma_fence *fence, struct dma_fence_cb *cb);
  * Wait for the fence until the CLOCK_MONOTONIC time `deadline_ns`, or for
  * ever when it is negative; sleeps. Returns 0 once signalled (the fence's
  * error is read from it), -ETIME at the deadline, or -EINTR for a
- * signal when `intr` is set. A wait that sleeps marks the fence
- * `listened`.
+ * signal when `intr` is set. A fence not signalled before the deadline is
+ * enabled (`dma_fence_enable_sw_signaling`), as Linux's
+ * dma_fence_wait_timeout enables it, and then waited for by its `wait`, or
+ * else by `dma_fence_default_wait`.
  */
 int32_t dma_fence_wait_until(struct dma_fence *fence, int intr, int64_t deadline_ns);
+/** The sleep of `dma_fence_wait_until` without the fence's `wait`, Linux's
+ * dma_fence_default_wait: enables signalling and sleeps on the fence's
+ * queue; for a driver's `wait` that sleeps on its own fence. */
+int32_t dma_fence_default_wait(struct dma_fence *fence, int intr, int64_t deadline_ns);
 
 /*
  * The implicit fences of a buffer, Linux's dma_resv: outstanding writes

@@ -1037,7 +1037,7 @@ static void row_fini(void)
 /* ---- RPS's waitboost and interactive mode, which the driver calls ---- */
 
 /* The requests' fences, i915_gem.c's, which no flip here waits on. */
-const struct dma_fence_ops i915_fence_ops = {0, 0, 0, 0};
+const struct dma_fence_ops i915_fence_ops = {0, 0, 0, 0, 0, 0};
 
 /** Whether the chip has begun `rq`; no request runs here, so only once
  * it has signalled. */

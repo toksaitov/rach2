@@ -20,7 +20,8 @@ static const char *fence_timeline(struct dma_fence *f)
     return "controlq";
 }
 
-static const struct dma_fence_ops vgpu_fence_ops = {fence_driver, fence_timeline, NULL, NULL};
+static const struct dma_fence_ops vgpu_fence_ops = {fence_driver, fence_timeline, NULL,
+                                                    NULL,         NULL,           NULL};
 
 /**
  * Initialize a command's fence once before reservation or descriptor

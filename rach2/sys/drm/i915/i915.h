@@ -2187,7 +2187,10 @@ void i915_gem_object_put(struct drm_i915_gem_object *obj);
  * Wait for the object's writers, or with `all` for its readers too, for
  * `timeout_ns`, for ever when it is negative, as Linux's
  * i915_gem_object_wait, after a waitboost for each of their requests the
- * chip has not begun, timeout 0 too.
+ * chip has not begun, timeout 0 too. Each request is waited for through
+ * `i915_request_wait`, each other fence through `dma_fence_wait_until`, and
+ * a merge of them by its fences one at a time; a timeout of 0 asks for no
+ * signal.
  *
  * @return 0, -ETIME when one is busy at the timeout (at once for 0),
  *         -EINTR for a signal, or -ENOMEM.

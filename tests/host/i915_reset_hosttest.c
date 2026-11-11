@@ -423,7 +423,7 @@ void i915_vma_revoke_mmap(struct i915_vma *vma)
 }
 
 /* The driver's fences, i915_gem.c's. */
-const struct dma_fence_ops i915_fence_ops = {0, 0, 0, 0};
+const struct dma_fence_ops i915_fence_ops = {0, 0, 0, 0, 0, 0};
 
 /* The id table: the Lenovo's chip alone. */
 static const struct i915_platform hsw = {"HASWELL", 7, 50, 7, 2, 0xf, 1, 1, 1, 0, 1, 31, 40};

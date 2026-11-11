@@ -1024,6 +1024,14 @@ void i915_rps_boost(struct i915_request *rq)
     (void)rq;
 }
 
+/** A wait for a request, which here is its fence alone: the fence's default
+ * wait until the timeout, for ever when it is negative. */
+int32_t i915_request_wait(struct i915_request *rq, int intr, int64_t timeout_ns)
+{
+    return dma_fence_default_wait(&rq->fence.base, intr,
+                                  timeout_ns < 0 ? -1 : dma_fence_now() + timeout_ns);
+}
+
 int main(void)
 {
     model_start();
