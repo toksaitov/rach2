@@ -31,8 +31,10 @@
  * engine finishing first, each wait's own timeout and no later wait after
  * a timeout, even if the first signals before the worker runs (80-78);
  * connector forcing, the EDID override, and the CRC files' source,
- * entries, lines and overflow (76-5b.4); and an unplug that sends what is
- * queued with -ENODEV on its fences. Every allocation is given back.
+ * entries, lines and overflow (76-5b.4); times of vblanks that never go
+ * back, from a frame counter and a scanout position whose second reading
+ * of a frame lies before its first (80-86); and an unplug that sends what
+ * is queued with -ENODEV on its fences. Every allocation is given back.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -1222,6 +1224,115 @@ static void row_crc(void)
           "nothing comes after the release");
 }
 
+/* ---- 80-86: a vblank's time never goes back ---- */
+
+/* CRTC 1's frame counter and scanout position while row_stamps gives it
+ * hooks: the counter, its value when the row began, the time the vertical
+ * blank of that frame ends, the readings of the time so far, a vblank that
+ * begins between the counter's read and the next reading of the time, and
+ * a driver's time two frames back. */
+static uint32_t hw_frame, hw_frame0;
+static int64_t hw_stamp0;
+static int hw_readings, hw_vblank_between, hw_back;
+
+/** CRTC 1's frame counter. */
+static uint32_t stamp_counter(struct drm_crtc *c)
+{
+    (void)c;
+    return hw_frame;
+}
+
+/**
+ * The time CRTC 1's latest vertical blank ended, from where it scans. Each
+ * reading comes out a microsecond earlier than the one before it, within
+ * the line of some 20 us by which i915's scanline counter places it, so a
+ * second reading of a frame lies before the first.
+ */
+static int stamp_time(struct drm_crtc *c, int64_t *time_ns, int in_vblank_irq)
+{
+    (void)c;
+    (void)in_vblank_irq;
+    if (hw_vblank_between) {
+        hw_vblank_between = 0;
+        hw_frame++;
+    }
+    hw_readings++;
+    *time_ns = hw_stamp0 + (int64_t)(hw_frame - hw_frame0) * FRAME_NS - hw_readings * 1000ll -
+               (hw_back ? 2 * FRAME_NS : 0);
+    return 1;
+}
+
+/** CRTC 1's count and the time of its last vblank in microseconds, as
+ * WAIT_VBLANK's query answers them, the query Weston starts its repaint
+ * with. */
+static int64_t query1(uint32_t *seq)
+{
+    union drm_wait_vblank w;
+
+    CHECK(wait_vblank(&w, _DRM_VBLANK_RELATIVE | _DRM_VBLANK_SECONDARY, 0, 0) == 0,
+          "WAIT_VBLANK's query on CRTC 1");
+    *seq = w.reply.sequence;
+    return (int64_t)w.reply.tval_sec * 1000000 + w.reply.tval_usec;
+}
+
+/**
+ * The times that events and replies carry never go back, as Weston asserts
+ * in weston_output_finish_frame: an interrupt whose frame the count already
+ * took in keeps the count's time, and a vblank that begins between the
+ * frame counter's read and the time's is read again, at an interrupt and
+ * when the CRTC comes on, as Linux 6.12.115's drm_update_vblank_count and
+ * drm_reset_vblank_timestamp do; a driver's time before an earlier one is
+ * counted in `backwards`.
+ */
+static void row_stamps(void)
+{
+    static const struct drm_crtc_funcs stamp_funcs = {NULL, NULL,          NULL,       NULL, NULL,
+                                                      NULL, vblank_on,     vblank_off, NULL, NULL,
+                                                      NULL, stamp_counter, stamp_time};
+    struct drm_crtc *c = &crtc[1];
+    uint32_t seq, seq2;
+    int64_t t, t2;
+
+    c->funcs = &stamp_funcs;
+    hw_frame = hw_frame0 = c->vblank.last;
+    hw_stamp0 = model_now_ns + FRAME_NS;
+    CHECK(drm_crtc_vblank_get(c) == 0 && c->vblank.enabled && c->vblank.backwards == 0,
+          "a hold keeps CRTC 1's vblanks on");
+    hw_frame++;
+    (void)drm_crtc_handle_vblank(c);
+    t = query1(&seq);
+    CHECK(c->vblank.time_ns == hw_stamp0 + FRAME_NS - hw_readings * 1000ll,
+          "a vblank stamped from where the CRTC scans");
+    (void)drm_crtc_handle_vblank(c);
+    t2 = query1(&seq2);
+    CHECK(seq2 == seq && t2 == t, "an interrupt of a frame already counted keeps its time");
+    hw_vblank_between = 1;
+    (void)drm_crtc_handle_vblank(c);
+    t = query1(&seq);
+    CHECK(seq == seq2 + 1 && t > t2,
+          "a vblank begun between the counter's read and the time's is counted with its time");
+    (void)drm_crtc_handle_vblank(c);
+    t2 = query1(&seq2);
+    CHECK(seq2 == seq && t2 == t, "and its own interrupt keeps that time");
+    drm_crtc_vblank_off(c);
+    hw_vblank_between = 1;
+    drm_crtc_vblank_on(c);
+    t = query1(&seq);
+    CHECK(seq == seq2 + 1 && t > t2 && c->vblank.last == hw_frame,
+          "a CRTC turned on as a vblank begins takes in the counter of its time");
+    (void)drm_crtc_handle_vblank(c);
+    t2 = query1(&seq2);
+    CHECK(seq2 == seq && t2 == t, "and that vblank's interrupt keeps it");
+    CHECK(c->vblank.backwards == 0, "no time went back");
+    hw_frame++;
+    hw_back = 1;
+    (void)drm_crtc_handle_vblank(c);
+    CHECK(c->vblank.backwards == 1, "a driver's time before an earlier one is counted");
+    hw_back = 0;
+    drm_crtc_vblank_put(c);
+    c->funcs = &crtc1_funcs;
+}
+
 /** An unplug turns the CRTCs off: what was queued is sent, its fences
  * with -ENODEV. */
 static void row_unplug(void)
@@ -1266,6 +1377,7 @@ int main(void)
     row_force();
     row_edid_override();
     row_crc();
+    row_stamps();
     row_unplug();
     drm_mode_file_release(&fa);
     CHECK(reserved == 0 && !mc->fbs, "the file's release leaves no event or framebuffer");
