@@ -315,11 +315,13 @@ static void reset_all(void)
     kernel_ticks = 1000;
 }
 
-/** One segment from the peer's port to `dport`, checksummed as it is sent. */
-static void rx(uint16_t dport, uint32_t seq, uint32_t ack, uint8_t flags)
+/** One segment from the peer's port to `dport` with `plen` bytes of data,
+ * at most 16, checksummed as it is sent. */
+static void rx_data(uint16_t dport, uint32_t seq, uint32_t ack, uint8_t flags, uint16_t plen)
 {
-    uint8_t seg[20];
+    uint8_t seg[36];
 
+    k_memset(seg, 'x', sizeof(seg));
     write16be(seg + 0, PEER_PORT);
     write16be(seg + 2, dport);
     write32be(seg + 4, seq);
@@ -329,8 +331,15 @@ static void rx(uint16_t dport, uint32_t seq, uint32_t ack, uint8_t flags)
     write16be(seg + 14, 65535);
     write16be(seg + 16, 0);
     write16be(seg + 18, 0);
-    write16be(seg + 16, tcp_checksum(net_addr4(PEER), net_addr4(net_ip_addr), seg, 20));
-    tcp_rx(PEER, net_ip_addr, seg, 20);
+    write16be(seg + 16,
+              tcp_checksum(net_addr4(PEER), net_addr4(net_ip_addr), seg, (uint16_t)(20 + plen)));
+    tcp_rx(PEER, net_ip_addr, seg, (uint16_t)(20 + plen));
+}
+
+/** One segment from the peer's port to `dport`, with no data. */
+static void rx(uint16_t dport, uint32_t seq, uint32_t ack, uint8_t flags)
+{
+    rx_data(dport, seq, ack, flags, 0);
 }
 
 /** Open a connection from SELF_PORT to the peer and take its SYN-ACK. */
@@ -422,10 +431,10 @@ static void test_established(void)
 
 /**
  * After the peer's FIN, in CLOSE_WAIT, a reset at the FIN's own number,
- * the next expected less one, closes the connection, as Linux's
- * tcp_reset_check takes it, though it is below the window; in ESTABLISHED
- * one there is dropped. A SYN draws a challenge acknowledgement, counted
- * in TCPSYNChallenge, and closes nothing.
+ * the next expected less one, closes the connection with EPIPE, as Linux's
+ * tcp_reset_check takes it and tcp_reset records it, though it is below
+ * the window; in ESTABLISHED one there is dropped. A SYN draws a challenge
+ * acknowledgement, counted in TCPSYNChallenge, and closes nothing.
  */
 static void test_after_fin(void)
 {
@@ -447,8 +456,8 @@ static void test_after_fin(void)
     CHECK("the peer's FIN leads to CLOSE_WAIT",
           conn->state == TCP_CLOSE_WAIT && conn->rcv_nxt == nxt + 1);
     rx(SELF_PORT, nxt, 0, F_RST);
-    CHECK("and there a reset at the FIN's number closes the connection",
-          conn->state == TCP_CLOSED && conn->so_error == ECONNRESET);
+    CHECK("and there a reset at the FIN's number closes the connection with EPIPE",
+          conn->state == TCP_CLOSED && conn->so_error == EPIPE);
     tcp_close(&sock);
     reset_all();
 }
@@ -484,6 +493,69 @@ static void test_syn_sent(void)
     rx(SELF_PORT, 0, iss + 1, (uint8_t)(F_RST | F_ACK));
     CHECK("a reset that acknowledges the SYN refuses the connection",
           conn->state == TCP_CLOSED && conn->so_error == ECONNREFUSED);
+    tcp_close(&sock);
+    reset_all();
+}
+
+/**
+ * In SYN_RCVD, as Linux's tcp_check_req and tcp_reqsk_send_challenge_ack
+ * judge it: a reset inside the window offered but not at the next expected
+ * number draws one challenge acknowledgement, counted in TCPChallengeACK;
+ * a second in the same tick, one with data among them, draws none, counted
+ * in TCPACKSkippedChallenge; one 500 ms after the first draws one again;
+ * and a reset at the next expected number frees the passive block. After
+ * an active open met the peer's SYN (simultaneous open), such a reset
+ * closes the connection with ECONNRESET, as Linux's tcp_reset records it
+ * in any state but SYN_SENT and CLOSE_WAIT.
+ */
+static void test_syn_rcvd(void)
+{
+    struct socket lsock, sock;
+    struct tcb *conn;
+    uint32_t iss, challenges = net_mib.tcp_challenge_ack,
+                  skipped = net_mib.tcp_ack_skipped_challenge;
+
+    reset_all();
+    k_memset(&lsock, 0, sizeof(lsock));
+    lsock.type = SOCK_STREAM;
+    CHECK("a listener can be opened", tcp_listen(&lsock, SELF_PORT) == 0);
+    rx(SELF_PORT, 9000, 0, F_SYN);
+    conn = tcbs;
+    iss = segs[0].seq;
+    CHECK("a SYN makes a block in SYN_RCVD", n_segs == 1 && conn && conn->state == TCP_SYN_RCVD);
+    n_segs = 0;
+    rx(SELF_PORT, 9001 + 100, 0, F_RST);
+    CHECK("a reset in the window not at the next number draws one challenge",
+          conn->state == TCP_SYN_RCVD && n_segs == 1 && segs[0].flags == F_ACK &&
+              segs[0].seq == iss + 1 && segs[0].ack == 9001 &&
+              net_mib.tcp_challenge_ack == challenges + 1);
+    n_segs = 0;
+    rx(SELF_PORT, 9001 + 200, 0, F_RST);
+    rx_data(SELF_PORT, 9001 + 300, 0, F_RST, 8);
+    CHECK("two more in the same tick, one with data, draw none, counted as skipped",
+          conn->state == TCP_SYN_RCVD && n_segs == 0 &&
+              net_mib.tcp_challenge_ack == challenges + 1 &&
+              net_mib.tcp_ack_skipped_challenge == skipped + 2);
+    kernel_ticks += TCP_INVALID_RATELIMIT;
+    rx_data(SELF_PORT, 9001 + 300, 0, F_RST, 8);
+    CHECK("one with data 500 ms after the first draws one again",
+          n_segs == 1 && segs[0].flags == F_ACK && net_mib.tcp_challenge_ack == challenges + 2);
+    rx(SELF_PORT, 9001, 0, F_RST);
+    CHECK("a reset at the next number frees the passive block",
+          tcbs != 0 && tcbs->next == 0 && tcbs->state == TCP_LISTEN && unrefs == 1);
+    tcp_close(&lsock);
+
+    reset_all();
+    k_memset(&sock, 0, sizeof(sock));
+    sock.type = SOCK_STREAM;
+    sock.local_port = SELF_PORT;
+    CHECK("an open can be started", tcp_connect(&sock, net_addr4(PEER), PEER_PORT) == 0);
+    conn = sock.tcb;
+    rx(SELF_PORT, 7000, 0, F_SYN);
+    CHECK("the peer's own SYN leads to SYN_RCVD", conn->state == TCP_SYN_RCVD);
+    rx(SELF_PORT, 7001, 0, F_RST);
+    CHECK("where a reset at the next number closes the connection with ECONNRESET",
+          conn->state == TCP_CLOSED && conn->so_error == ECONNRESET);
     tcp_close(&sock);
     reset_all();
 }
@@ -604,6 +676,7 @@ int main(void)
     test_established();
     test_after_fin();
     test_syn_sent();
+    test_syn_rcvd();
     test_listener_gone();
     test_isn();
     if (fails == 0) {

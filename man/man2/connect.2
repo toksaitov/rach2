@@ -84,18 +84,27 @@ A failed blocking handshake returns
 including a handshake that timed out.
 The pending socket error distinguishes a timeout
 .Pq Er ETIMEDOUT
-from a reset during active open
+from a reset of the SYN
 .Pq Er ECONNREFUSED .
-During the active open a reset counts only when it acknowledges the SYN,
-its acknowledgement number being the SYN's sequence number plus one;
+While the SYN is unanswered a reset counts only when it acknowledges the
+SYN, its acknowledgement number being the SYN's sequence number plus one;
 any other reset is ignored.
-After establishment a reset at the next expected sequence number records
+After the peer's own SYN, and after establishment, a reset at the next
+expected sequence number records
 .Er ECONNRESET ,
-and so does one at the number before it after the peer's FIN, and one at
-the right edge of the rightmost block of out-of-order data this side
-acknowledges selectively, as Linux takes them.
-A reset elsewhere in the receive window is answered with an
-acknowledgement, at most one in 500 milliseconds, and leaves the
+and so does one at the right edge of the rightmost block of out-of-order
+data this side acknowledges selectively; after the peer's FIN, in the
+close-wait state, the reset records
+.Er EPIPE
+instead, and one at the number before the next expected is taken too, as
+Linux's
+.Fn tcp_reset_check
+takes it and
+.Fn tcp_reset
+records it.
+A reset elsewhere in the receive window, with data or without, is
+answered with an acknowledgement, at most one in 500 milliseconds, after
+the peer's SYN as after establishment, and leaves the
 connection open, since the true peer answers that acknowledgement with a
 reset at the expected number;
 a reset outside the window is ignored.
