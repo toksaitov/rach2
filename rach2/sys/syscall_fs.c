@@ -151,7 +151,9 @@ static void synth_dir_vpath(const struct synth_dir *sd, struct vpath *vp)
  * hold it too, by their descriptions, whose descriptors name a pipe and no
  * node: every description of the FIFO counts, `except`'s only when a
  * descriptor besides it keeps it, since the FIFO's pipe is found by the
- * node's address, which a new node must not take while an end is open.
+ * node's address, which a new node must not take while an end is open. So do
+ * the descriptions of the devices opened through a device node (`dev_node`),
+ * counted the same way.
  */
 static int fd_node_holders(const krffs_node_t *node, const fd_entry_t *except)
 {
@@ -177,7 +179,36 @@ static int fd_node_holders(const krffs_node_t *node, const fd_entry_t *except)
     if (krffs_mode_type(node->mode) == KRFFS_S_IFIFO) {
         held += fd_ofd_holders(vfs_root_mount(), node, except ? except->ofd : NULL);
     }
+    held += fd_ofd_dev_holders(vfs_root_mount(), node, except ? except->ofd : NULL);
     return held;
+}
+
+static void fd_free_orphan(const fd_entry_t *e, krffs_node_t *node);
+
+/** The node of the KRFFS root through which the device of the description
+ * `ofd` was opened (`dev_node`), or NULL for one of another mount or none. */
+static krffs_node_t *ofd_root_dev_node(const struct open_file *ofd)
+{
+    if (!ofd || !ofd->dev_mnt || !krffs_fs || vfs_mount_base(ofd->dev_mnt) != vfs_root_mount() ||
+        ofd->dev_mnt->type != &vfs_krffs_type) {
+        return NULL;
+    }
+    return (krffs_node_t *)ofd->dev_node;
+}
+
+/**
+ * Free the device node of the KRFFS root that the description of `e` holds
+ * (`dev_node`), when the node lost its name and `e` is its last holder, and
+ * let go of it. The caller holds the root's namespace lock.
+ */
+static void fd_dev_orphan(const fd_entry_t *e)
+{
+    krffs_node_t *node = ofd_root_dev_node(e->ofd);
+
+    if (node && node->name[0] == '\0' && fd_node_holders(node, e) == 0) {
+        fd_free_orphan(e, node);
+        e->ofd->dev_node = NULL;
+    }
 }
 
 /**
@@ -240,6 +271,8 @@ struct vfs_mount *fd_release_lock(const fd_entry_t *e)
     }
     if (e->type == FD_TYPE_FILE) {
         orphanable = fd_root_node(e) != NULL;
+    } else if (ofd_root_dev_node(e->ofd)) {
+        orphanable = 1;
     } else {
         orphanable = (e->type == FD_TYPE_PIPE || e->type == FD_TYPE_NONE) && e->ofd &&
                      e->ofd->vmnt && vfs_mount_base(e->ofd->vmnt) == root && mnt_is_root(root);
@@ -253,8 +286,9 @@ struct vfs_mount *fd_release_lock(const fd_entry_t *e)
 
 /**
  * Free the node of the KRFFS root that `e` holds, when the node lost its name
- * and `e` is its last holder: a file, or a FIFO whose end or reservation of
- * an open `e` is (`fd_fifo_orphan`). The count of the holders and the reclaim
+ * and `e` is its last holder: a file, a device node a device was opened
+ * through (`fd_dev_orphan`), or a FIFO whose end or reservation of an open
+ * `e` is (`fd_fifo_orphan`). The count of the holders and the reclaim
  * run under the root's namespace lock (`fd_release_lock`). A descriptor in a
  * table stays there, and so among the holders, until the release that calls
  * this ends; a holder kept in a list of its own leaves the list under the
@@ -278,6 +312,8 @@ static void fd_release_orphan(fd_entry_t *e)
                 e->ofd->vnode = NULL;
             }
         }
+    } else if (ofd_root_dev_node(e->ofd)) {
+        fd_dev_orphan(e);
     } else {
         fd_fifo_orphan(e);
     }
@@ -2552,27 +2588,83 @@ static int proc_fd_xdev(const fd_entry_t *entry, const struct vfs_mount *mnt)
 {
     const struct open_file *ofd = entry->ofd;
 
-    return mnt && (!ofd || (ofd->vmnt ? ofd->vmnt : ofd->synth_mnt) != mnt) ? -EXDEV : 0;
+    return mnt && (!ofd || (ofd->vmnt      ? ofd->vmnt
+                            : ofd->dev_mnt ? ofd->dev_mnt
+                                           : ofd->synth_mnt) != mnt)
+               ? -EXDEV
+               : 0;
 }
 
 static int open_want(int flags);
 
 /**
- * Open again the device of /dev that the descriptor `src` is open on, as an
- * open(2) of its /dev path would: the access `flags` ask for is checked
- * against the device's mode, owner and group, as Linux checks it against
- * the inode the /proc/PID/fd/N link leads to, whatever access `src` has,
- * and the device's own open runs again, so that the description is a new
- * one and a DRM device gives a new file. Nothing before the open sleeps.
- * Returns the new descriptor, -ENXIO when the device is gone, or the
- * check's or the open's negative errno.
+ * Open again, as `open_special` opens a device node, the device node of a
+ * mounted file system or of the KRFFS root that the description `held` keeps
+ * (`dev_node`): the node is read under the mount's namespace lock, where a
+ * relocation of the KRFFS root moves it, and its own mode, owner and group
+ * are checked. The caller holds `held`. Returns the new descriptor, -ENOENT
+ * for a mount being unmounted, or the check's or the open's negative errno.
+ */
+static int32_t proc_fd_reopen_node(const struct open_file *held, int flags)
+{
+    struct vfs_mount *mnt = held->dev_mnt;
+    struct vfs_ref ref;
+    int32_t rc;
+    int fd = fd_alloc(current_proc->fds);
+
+    if (fd < 0) {
+        return fd;
+    }
+    if (vfs_enter(mnt) != 0) {
+        fd_free(current_proc->fds, fd);
+        return -ENOENT;
+    }
+    if (mnt->type->ns_serialised) {
+        vfs_ns_lock(mnt);
+    }
+    ref.mnt = mnt;
+    ref.node = held->dev_node;
+    if (!ref.node) {
+        vfs_walk_unlock(mnt);
+        vfs_leave(mnt);
+        fd_free(current_proc->fds, fd);
+        return -ENXIO;
+    }
+    vfs_ref_hold(&ref);
+    if (open_special(&ref, fd, flags, &rc)) {
+        return rc;
+    }
+    vfs_walk_unlock(mnt);
+    vfs_ref_release(&ref);
+    fd_free(current_proc->fds, fd);
+    return -ENXIO;
+}
+
+/**
+ * Open again the device that the descriptor `src` is open on, as an open(2)
+ * of the node it was opened through would, as Linux follows the descriptor's
+ * path: the access `flags` ask for is checked against that node's mode, owner
+ * and group, whatever access `src` has, and the device's own open runs again,
+ * so that the description is a new one and a DRM device gives a new file. A
+ * device opened through a node of a mounted file system or of the KRFFS root
+ * is opened through the node its description keeps (`proc_fd_reopen_node`),
+ * and one opened in /dev through its entry there. Returns the new
+ * descriptor, -ENXIO when the device is gone, or the check's or the open's
+ * negative errno.
  */
 static int32_t proc_fd_reopen_device(fd_entry_t *src, int flags)
 {
     uint32_t mode = devfs_fd_mode(src), uid, gid;
     const char *name = devfs_name_of((mode & 0170000u) == 0060000u, devfs_rdev(src));
+    struct open_file *held = src->ofd;
     int32_t rc;
 
+    if (held && held->dev_mnt) {
+        fd_ofd_ref(held);
+        rc = proc_fd_reopen_node(held, flags);
+        fd_ofd_unref(held);
+        return rc;
+    }
     if (!name) {
         return -ENXIO;
     }
@@ -3328,6 +3420,62 @@ static int32_t open_device(int block, uint32_t rdev, int flags)
 }
 
 /**
+ * The device half of `open_special` for the device node at `ref`, whose
+ * checks have passed: the device opened (`open_device`) into the lowest free
+ * descriptor, as `fd`, the open's reservation, is freed first, with the node
+ * kept by the new description (`dev_node`). Until then the node is kept by a
+ * description of its own, which a relocation of the KRFFS root repoints and
+ * an unlink counts as a holder, or which pins the node on a type that keeps
+ * one only while it is open, since the device's open may sleep. Returns
+ * the descriptor or a negative errno, with `ref` and the walk's lock
+ * released either way.
+ */
+static int32_t open_device_node(struct vfs_ref *ref, int fd, int block, uint32_t rdev, int flags)
+{
+    struct vfs_mount *mnt = ref->mnt, *root;
+    struct open_file *keep = fd_ofd_new(), *to;
+    fd_entry_t gone;
+    int32_t rc;
+
+    rc = keep ? 0 : -ENOMEM;
+    if (rc == 0 && !mnt_is_root(mnt) && mnt->type->ops->pin) {
+        rc = mnt->type->ops->pin(mnt, ref->node, &keep->dev_pin);
+    }
+    if (rc != 0) {
+        vfs_walk_unlock(mnt);
+        vfs_ref_release(ref);
+        fd_free(current_proc->fds, fd);
+        fd_ofd_unref(keep);
+        return rc;
+    }
+    keep->dev_mnt = mnt;
+    keep->dev_node = ref->node;
+    vfs_desc_open(mnt);
+    vfs_walk_unlock(mnt);
+    vfs_leave(mnt);
+    fd_free(current_proc->fds, fd);
+    rc = open_device(block, rdev, flags);
+    to = rc >= 0 ? current_proc->fds->entries[rc].ofd : NULL;
+    if (to && !to->dev_mnt) {
+        to->dev_mnt = keep->dev_mnt;
+        to->dev_node = keep->dev_node;
+        to->dev_pin = keep->dev_pin;
+        keep->dev_mnt = NULL;
+        keep->dev_node = NULL;
+        keep->dev_pin = NULL;
+    } else if (ofd_root_dev_node(keep)) {
+        root = vfs_root_mount();
+        vfs_ns_lock(root);
+        k_memset(&gone, 0, sizeof(gone));
+        gone.ofd = keep;
+        fd_dev_orphan(&gone);
+        vfs_ns_unlock(root);
+    }
+    fd_ofd_unref(keep);
+    return rc;
+}
+
+/**
  * Open the FIFO, the socket file or the device node at `ref`, which name no
  * bytes of their own: 1 with the descriptor or the errno in `*result`, `ref`
  * and the walk's lock released, and the descriptor `fd` the open reserved
@@ -3399,13 +3547,14 @@ static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result)
         *result = open_fifo(ref, fd, ino, flags);
         return 1;
     }
+    if (rc == 0 && type != S_IFSOCK) {
+        *result = open_device_node(ref, fd, type == S_IFBLK, rdev, flags);
+        return 1;
+    }
     vfs_walk_unlock(mnt);
     vfs_ref_release(ref);
     fd_free(current_proc->fds, fd);
-    if (rc == 0) {
-        rc = type == S_IFSOCK ? -ENXIO : open_device(type == S_IFBLK, rdev, flags);
-    }
-    *result = rc;
+    *result = rc == 0 ? -ENXIO : rc;
     return 1;
 }
 

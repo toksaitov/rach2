@@ -25,7 +25,11 @@
  * description of its own at offset 0, and so does a device, whose new
  * description may have more access and other status flags than the first,
  * as a DRM program's second file of one device needs; /dev/stdin is
- * descriptor 0's file.
+ * descriptor 0's file. A device opened through a node of its own, one of
+ * /dev/null's numbers with mode 0600, is opened again by the node's mode,
+ * as Linux follows the descriptor's path: uid 1000, which inherits the
+ * descriptor, is refused with EACCES though /dev/null is 0666, and root
+ * opens it again once the node has lost its name.
  *
  * Prints `FDCALLMUSL OK` and exits 0 on success, and prints
  * `FDCALLMUSL FAIL (detail)` and exits 1 otherwise.
@@ -39,12 +43,15 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/sysmacros.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
 /* The file and the directory the time rows make and remove. */
 #define FILE_PATH "/fdcall.tmp"
 #define DIR_PATH  "/fdcalldir"
+#define NODE_PATH "/fdcall.null"
 
 /* An instant with a nanosecond part, so a store that drops it shows. */
 #define WHEN_SEC  1786712707L
@@ -389,6 +396,50 @@ static int fd_link_rows(void)
     return 0;
 }
 
+/**
+ * Check that /proc/self/fd/N of a device opened through a device node of
+ * the root file system checks that node's mode, not /dev's, and still opens
+ * the device once the node is unlinked. Returns 0, or 1 once the failure is
+ * reported.
+ */
+static int node_link_rows(void)
+{
+    char path[32];
+    int f, g, status = -1;
+    pid_t pid;
+
+    if (mknod(NODE_PATH, S_IFCHR | 0600, makedev(1, 3)) != 0 || chmod(NODE_PATH, 0600) != 0) {
+        return fail("could not make a node of /dev/null's numbers");
+    }
+    f = open(NODE_PATH, O_RDONLY);
+    if (f < 0) {
+        return fail("root could not open its node of /dev/null");
+    }
+    snprintf(path, sizeof(path), "/proc/self/fd/%d", f);
+    pid = fork();
+    if (pid == 0) {
+        if (setuid(1000) != 0) {
+            _exit(2);
+        }
+        g = open(path, O_RDONLY);
+        _exit(g < 0 && errno == EACCES ? 0 : 1);
+    }
+    if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        close(f);
+        return fail("uid 1000 opened a 0600 node's device again by /proc/self/fd/N");
+    }
+    unlink(NODE_PATH);
+    g = open(path, O_WRONLY);
+    if (g < 0 || write(g, "x", 1) != 1) {
+        close(f);
+        return fail("root could not open an unlinked node's device by /proc/self/fd/N");
+    }
+    close(g);
+    close(f);
+    return 0;
+}
+
 int main(void)
 {
     int rc = stat_rows();
@@ -397,6 +448,10 @@ int main(void)
     if (rc == 0) {
         rc = fd_link_rows();
     }
+    if (rc == 0) {
+        rc = node_link_rows();
+    }
+    unlink(NODE_PATH);
     unlink(FILE_PATH);
     rmdir(DIR_PATH);
     if (rc == 0) {

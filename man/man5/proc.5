@@ -1571,11 +1571,14 @@ exec, as Chromium does, closes them all.
 A followed link reports the descriptor's attributes.
 An open of the link follows it: a file or a directory is opened again,
 with the checks of an open by name and a description of its own, even
-when it has lost its name; so is a device of
+when it has lost its name; so is a device, whose driver opens it again,
+so that a second DRM file of one card is a file of its own, after the
+mode, owner and group of the node it was opened through are checked for
+the access asked for: its entry in
 .Pa /dev ,
-whose mode, owner and group are checked for the access asked for and
-whose driver opens it again, so that a second DRM file of one card is a
-file of its own; a pipe, a socket or a terminal gets
+or a device node of another file system, even one that has lost its
+name, as Linux follows the descriptor's path; a pipe, a socket or a
+terminal gets
 the descriptor's own description, shared as
 .Xr dup 2
 shares it, when the descriptor has the access asked for, and the open is
