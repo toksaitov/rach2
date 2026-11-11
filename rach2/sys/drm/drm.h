@@ -431,8 +431,9 @@ struct drm_gem_object {
     struct dma_resv *resv;
     struct dma_resv resv_own;
     const struct drm_gem_object_funcs *funcs;
-    int map_wc;            /* PRIME mappings use write-combining */
-    uint32_t handle_count; /* handles any file has to it */
+    int map_wc;                 /* PRIME mappings use write-combining */
+    uint32_t handle_count;      /* handles any file has to it */
+    struct drm_handle *handles; /* those handles, through `obj_next` */
     uint8_t no_export;
     struct drm_gem_object *dev_next;  /* the device's objects */
     struct drm_gem_object *mmap_next; /* the device's objects with an offset, by offset */
@@ -571,19 +572,33 @@ struct drm_pending_event {
     } event;
 };
 
-/* A handle of a file's table: to a buffer object or to a syncobj. */
+/*
+ * A handle of a file's table: to a buffer object or to a syncobj. A buffer
+ * object's handle is also on the object's list of handles, with the file
+ * that holds it, which is what mmap asks, as Linux's vm_files of the
+ * object's drm_vma_offset_node.
+ */
 struct drm_handle {
     uint32_t id;
     void *object;
-    struct dma_buf *prime; /* held export/import cache, NULL for other handles */
+    struct dma_buf *prime;         /* held export/import cache, NULL for other handles */
+    struct drm_handle *prime_next; /* the table's PRIME bucket */
+    struct drm_file *file;         /* the holder, for a buffer object's handle */
+    struct drm_handle *obj_next;   /* the object's handles */
 };
 
 /* A file's table of handles, indexed by id as Linux's idr is, so that a
- * lookup costs one load whatever the handles a client holds. */
+ * lookup costs one load whatever the handles a client holds. Its handles
+ * with a PRIME cache are also hashed by their dma-buf, as Linux's
+ * prime_fpriv->dmabufs, so that an import finds its handle without a walk
+ * over the table. */
 struct drm_handles {
-    struct drm_handle **slot; /* slot[id], NULL where the id is free; slot[0] unused */
-    uint32_t cap;             /* the slots allocated, 0 for none */
-    uint32_t free;            /* no id below it is free */
+    struct drm_handle **slot;  /* slot[id], NULL where the id is free; slot[0] unused */
+    uint32_t cap;              /* the slots allocated, 0 for none */
+    uint32_t free;             /* no id below it is free */
+    struct drm_handle **prime; /* buckets of the PRIME caches, NULL before the first */
+    uint32_t prime_buckets;    /* a power of two, 0 before the first */
+    uint32_t prime_count;      /* handles with a PRIME cache */
 };
 
 /** Add `object` to the table `t` under the lowest free id from 1, as
@@ -596,11 +611,19 @@ struct drm_handle *drm_handle_get(const struct drm_handles *t, uint32_t id);
 /** Take `id` out of `t`, drop its PRIME cache reference and return its
  * object, or NULL for none. */
 void *drm_handle_remove(struct drm_handles *t, uint32_t id);
+/** Make `buf` the PRIME cache of `t`'s handle `h`, which has none, with the
+ * caller's reference: 0, or -ENOMEM, which leaves the reference with the
+ * caller, as Linux's drm_prime_add_buf_handle. */
+int32_t drm_handle_set_prime(struct drm_handles *t, struct drm_handle *h, struct dma_buf *buf);
+/** The lowest id of `t` whose PRIME cache is `buf`, or 0 for none, as
+ * Linux's drm_prime_lookup_buf_handle. */
+uint32_t drm_handle_prime_find(const struct drm_handles *t, const struct dma_buf *buf);
 /** The lowest id from `id` that is in use in `t`, or 0 when none is: a
  * walk over the table is `for (i = drm_handle_next(t, 1); i;
  * i = drm_handle_next(t, i + 1))`. */
 uint32_t drm_handle_next(const struct drm_handles *t, uint32_t id);
-/** Free the slots of `t`, whose handles have all been removed. */
+/** Free the slots and PRIME buckets of `t`, whose handles have all been
+ * removed. */
 void drm_handles_fini(struct drm_handles *t);
 
 /*
