@@ -63,7 +63,7 @@ The line's handler is on the device's platform line from the first time it is us
 
 ### Release
 
-The last descriptor and mapping of a function release it, and the owner's death closes both: every interrupt off and its vectors and eventfds given back, bus mastering off, a reset when one worked at the open, and the state kept then written back. The identity and the header are read back and a difference is logged. The function stays bound to vfio-pci.
+The last descriptor and mapping of a function release it, and the owner's death closes both. The release first checks the container's live mappings of RAM against the domain, page by page, and logs `vfio: release: BDF: L of N pages of RAM out of the domain, the first at 0xIOVA; F DMA faults`, a warning when L is not 0: a device still running has had its reads and writes of those pages blocked. Each mapping a pin's release takes from the domain is logged as `vfio: dma: taken back: 0xIOVA, P pages, R of them RAM`. Then: every interrupt off and its vectors and eventfds given back, bus mastering off, a reset when one worked at the open, and the state kept then written back. The identity and the header are read back and a difference is logged. The function stays bound to vfio-pci.
 
 ## Limits
 
