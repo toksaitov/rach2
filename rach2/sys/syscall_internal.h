@@ -570,15 +570,19 @@ int32_t readv_dgram(fd_entry_t *entry, const struct kernel_iovec *iov, int iovcn
 /**
  * Read the stream socket of `entry` into the `iovlen` buffers of the copied
  * vector `iov`, which iov_import has checked and cut, as Linux's
- * tcp_recvmsg reads an iov_iter, for readv(2) and recvmsg(2): it waits for a
- * byte unless MSG_DONTWAIT in `flags` or O_NONBLOCK, then takes the bytes
- * queued, as many as the buffers hold, filling them in order. With MSG_PEEK
- * the bytes stay queued. A vector of no bytes waits for input too, as Linux
- * 6.12's tcp_recvmsg_locked and sock_rcvlowat do, and takes nothing.
- * Returns the bytes read, 0 at the end of input or for a vector of no bytes
- * with input ready, or -errno as recv(2): -EAGAIN, -ENOTCONN, -ECONNRESET,
- * -EINTR, or -EFAULT, with every byte left queued, when a destination of
- * the bytes cannot be written. May sleep.
+ * tcp_recvmsg reads an iov_iter, for readv(2), recv(2), recvfrom(2) and
+ * recvmsg(2): it waits for a byte unless MSG_DONTWAIT in `flags` or
+ * O_NONBLOCK, then takes the bytes queued, as many as the buffers hold,
+ * filling them in order, one receive buffer at a time; with MSG_WAITALL it
+ * waits on until the buffers are full, the input ends, an error comes or a
+ * signal, and returns what it took. With MSG_PEEK the bytes stay queued. A
+ * vector of no bytes waits for input too, as Linux 6.12's
+ * tcp_recvmsg_locked and sock_rcvlowat do, and takes nothing. Returns the
+ * bytes read, 0 at the end of input or for a vector of no bytes with input
+ * ready, or -errno as recv(2): -EAGAIN, -ENOTCONN, -ECONNRESET, -EINTR, or
+ * -EFAULT when the destination of the first receive buffer cannot be
+ * written, which stays queued; one that cannot be written after another was
+ * taken stays queued and ends the call with the bytes taken. May sleep.
  */
 int32_t stream_readv(fd_entry_t *entry, const struct kernel_iovec *iov, uint32_t iovlen, int flags);
 

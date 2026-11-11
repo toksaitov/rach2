@@ -797,6 +797,33 @@ static void recv_ring_get(uint8_t *dst, struct tcb *tcb, uint32_t at, uint32_t n
     }
 }
 
+/** Drop the ends of the receive buffers of `tcb` that `recv_head` has
+ * passed. With interrupts off. */
+static void recv_seg_trim(struct tcb *tcb)
+{
+    while (tcb->recv_seg_count > 0 &&
+           (int32_t)(tcb->recv_seg_end[tcb->recv_seg_first] - tcb->recv_head) <= 0) {
+        tcb->recv_seg_first = (uint8_t)((tcb->recv_seg_first + 1u) % TCP_RECV_SEGS);
+        tcb->recv_seg_count--;
+    }
+}
+
+/** End a receive buffer of `tcb` at `recv_tail`, or move the last one's end
+ * there when every entry is in use. With interrupts off. */
+static void recv_seg_add(struct tcb *tcb)
+{
+    uint32_t at;
+
+    recv_seg_trim(tcb);
+    if (tcb->recv_seg_count == TCP_RECV_SEGS) {
+        at = (tcb->recv_seg_first + TCP_RECV_SEGS - 1u) % TCP_RECV_SEGS;
+    } else {
+        at = (tcb->recv_seg_first + tcb->recv_seg_count) % TCP_RECV_SEGS;
+        tcb->recv_seg_count++;
+    }
+    tcb->recv_seg_end[at] = tcb->recv_tail;
+}
+
 /**
  * `recv_head` and `recv_tail` are free-running counts, masked to the ring's
  * size where they index it. The wake is for data, and comes only when bytes
@@ -821,6 +848,7 @@ uint16_t socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t l
     tcb->recv_tail += copy_len;
 
     if (copy_len > 0) {
+        recv_seg_add(tcb);
         wq_wake(&sock->waiters, WQ_DATA);
     }
     return (uint16_t)copy_len;
@@ -854,6 +882,7 @@ void socket_tcp_release(struct socket *sock, uint32_t n)
     if (!sock || !sock->tcb || n == 0)
         return;
     sock->tcb->recv_tail += n;
+    recv_seg_add(sock->tcb);
     wq_wake(&sock->waiters, WQ_DATA);
 }
 
@@ -979,6 +1008,73 @@ uint32_t socket_tcp_queued(const struct socket *sock)
     if (!sock || !sock->tcb || sock->tcb->state == TCP_LISTEN)
         return 0;
     return sock->tcb->recv_tail - sock->tcb->recv_head;
+}
+
+/** The receive buffers are read under `net_lock`, since the receive path
+ * adds to them with interrupts off. A byte past every recorded end, which
+ * the table's invariant rules out, is counted to the tail. */
+uint32_t socket_tcp_buffer(struct socket *sock, uint32_t off)
+{
+    struct tcb *tcb;
+    uint32_t flags, at, n = 0, i;
+
+    if (!sock || !sock->tcb || sock->tcb->state == TCP_LISTEN)
+        return 0;
+    flags = net_lock();
+    tcb = sock->tcb;
+    if (tcb && tcb->recv_tail - tcb->recv_head > off) {
+        at = tcb->recv_head + off;
+        n = tcb->recv_tail - at;
+        recv_seg_trim(tcb);
+        for (i = 0; i < tcb->recv_seg_count; i++) {
+            uint32_t end = tcb->recv_seg_end[(tcb->recv_seg_first + i) % TCP_RECV_SEGS];
+
+            if ((int32_t)(end - at) > 0) {
+                n = end - at;
+                break;
+            }
+        }
+    }
+    net_unlock(flags);
+    return n;
+}
+
+/* What `socket_tcp_wait_more` waits on: the socket, and the bytes queued
+ * that do not count. */
+struct tcp_more {
+    socket_t *sock;
+    uint32_t have;
+};
+
+/** The wait predicate of `socket_tcp_wait_more`: more than `have` bytes are
+ * buffered, or the input ended, the connection closed or has an error, or
+ * the socket has no block. */
+static int tcp_more_ready(void *arg)
+{
+    const struct tcp_more *m = (const struct tcp_more *)arg;
+    struct tcb *tcb = m->sock->tcb;
+
+    if (!tcb) {
+        return 1;
+    }
+    return tcb->recv_tail - tcb->recv_head > m->have || tcb->fin_received ||
+           tcb->state == TCP_CLOSED || tcb->so_error != 0;
+}
+
+int socket_tcp_wait_more(struct socket *sock, uint32_t have)
+{
+    struct tcp_more m;
+    int rc;
+
+    if (!sock || !sock->tcb || sock->tcb->state == TCP_LISTEN)
+        return 0;
+    m.sock = sock;
+    m.have = have;
+    rc = wq_wait_event(&sock->waiters, tcp_more_ready, &m);
+    if (rc < 0) {
+        return rc;
+    }
+    return sock->tcb && sock->tcb->recv_tail - sock->tcb->recv_head > have;
 }
 
 void socket_tcp_fin(struct socket *sock)

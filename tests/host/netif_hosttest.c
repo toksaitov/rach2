@@ -338,6 +338,65 @@ int socket_tcp_try_recv(struct socket *s, uint8_t *buf, int len, int peek)
     return socket_tcp_recv(s, buf, len, peek);
 }
 
+/** Report no stream bytes queued: no row reads a stream past the checks
+ * before the receive. */
+uint32_t socket_tcp_queued(const struct socket *s)
+{
+    (void)s;
+    return 0;
+}
+
+/** Report no receive buffer past `off`, as `socket_tcp_queued` reports no
+ * bytes. */
+uint32_t socket_tcp_buffer(struct socket *s, uint32_t off)
+{
+    (void)s;
+    (void)off;
+    return 0;
+}
+
+/** Report the input ended, so that a receive returns what it took. */
+int socket_tcp_wait_more(struct socket *s, uint32_t have)
+{
+    (void)s;
+    (void)have;
+    return 0;
+}
+
+/** Copy nothing: no stream bytes are queued. */
+int socket_tcp_peek_at(struct socket *s, uint32_t off, uint8_t *buf, int len)
+{
+    (void)s;
+    (void)off;
+    (void)buf;
+    (void)len;
+    return 0;
+}
+
+/** Report whether a user range lies inside `user`, as `user_buffer_ok`. */
+int user_range_ok(uintptr_t addr, size_t len)
+{
+    return user_buffer_ok(addr, len, 1);
+}
+
+/** Report every page of `user` present. */
+int vm_resident(uintptr_t addr, uintptr_t len, int write)
+{
+    (void)addr;
+    (void)len;
+    (void)write;
+    return 1;
+}
+
+/** Report every page of `user` brought in. */
+int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
+{
+    (void)addr;
+    (void)len;
+    (void)write;
+    return 1;
+}
+
 /** Fail the row: no row releases a socket. */
 void socket_unref(struct socket *s)
 {
