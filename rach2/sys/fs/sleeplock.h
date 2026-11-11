@@ -56,8 +56,9 @@ struct sleep_lock_record {
  * is free and its place is the one served (`serving`), so a process that
  * gives the lock back and asks again waits behind everyone who asked
  * meanwhile. A hold lasts from the first take to the last give;
- * `taken_us` and `taken_waits` are its start, by `timer_now_us` and by
- * the holder's `disk_waits`. `spin` keeps every field but `wq`.
+ * `taken_cycles` and `taken_waits` are its start, by `arch_cycles` and by
+ * the holder's `disk_waits`: a take reads the processor's counter and no
+ * clock, as Linux's mutex_lock reads none. `spin` keeps every field but `wq`.
  */
 struct sleep_lock {
     struct spinlock spin;
@@ -65,7 +66,7 @@ struct sleep_lock {
     int depth;
     uint32_t next;
     uint32_t serving;
-    uint32_t taken_us;
+    uint64_t taken_cycles;
     uint32_t taken_waits;
     int flags;                        /* SLEEP_LOCK_FILE or 0 */
     struct sleep_lock_record *record; /* its kind's, or NULL */

@@ -193,6 +193,18 @@ uint32_t timer_now_us(void)
     return 0;
 }
 
+/** The cycle counter: the clock's microseconds, a cycle each. */
+uint64_t arch_cycles(void)
+{
+    return timer_now_us();
+}
+
+/** A cycle is a microsecond here. */
+uint64_t timer_cycles_us(uint64_t cycles)
+{
+    return cycles;
+}
+
 /** A panic of the lock, a give by a thread that does not hold it: print
  * it and exit 2. */
 void k_panic(const char *message)
