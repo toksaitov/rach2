@@ -1,0 +1,7 @@
+{
+  "card": "/sys/class/drm/card0",
+  "cmdline": "rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial/t2660/root-6c766a95a4ced997.img rach2.slot=trialroot rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.disk=ahci rach2.netconsole rach2.ip=none rach2.console=term rach2.i915\n",
+  "icd": "/usr/share/vulkan/icd.d/intel_hasvk_icd.json",
+  "kernel": "6.18.0-rach2",
+  "user": "desktop"
+}
