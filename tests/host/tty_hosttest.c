@@ -123,6 +123,17 @@ static void clear(void *ptr, unsigned long size)
     }
 }
 
+/** Fill `n` bytes at `ptr` with `c`, as the kernel's string helper does. */
+void *k_memset(void *ptr, int c, size_t n)
+{
+    unsigned char *p = ptr;
+
+    while (n--) {
+        *p++ = (unsigned char)c;
+    }
+    return ptr;
+}
+
 /** Clear the model's interrupt flag and return what it was. */
 uint32_t kirq_save(void)
 {
