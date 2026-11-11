@@ -32,8 +32,9 @@ A successful call may return fewer bytes than requested; a count past
 .Dv MAX_RW_COUNT ,
 reads at most that many, so that the count returned is never negative.
 A zero-length read checks the descriptor as a longer one does, that it
-exists, is open for reading, is no directory and is open on an object with
-a read method, then returns zero without inspecting the buffer;
+exists, is open for reading, is open on an object with a read method and
+is no directory, and that the buffer does not pass the top of user
+memory, then returns zero without touching the buffer;
 an eventfd and a timerfd, which read whole eight-byte counts, refuse it
 with
 .Er EINVAL ,
@@ -48,7 +49,8 @@ Directories cannot be read with these calls: a read of any count returns
 .Er EISDIR ,
 after
 .Er EFAULT
-for a buffer that passes the top of user memory, as on Linux.
+for a buffer that passes the top of user memory, of no bytes too, as on
+Linux.
 Use
 .Xr getdents64 2
 to read directory entries.

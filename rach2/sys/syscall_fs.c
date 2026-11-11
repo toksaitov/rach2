@@ -6344,8 +6344,12 @@ static int32_t read_allowed(const fd_entry_t *entry)
  * `read_allowed`'s, then -EFAULT for a buffer past the top of user memory,
  * then -EISDIR for a directory, as Linux's vfs_read orders them, then
  * -EFAULT for a NULL or bad buffer. A
- * read of zero bytes returns 0 once those checks have passed and does not
- * look at `buf`, which may then be NULL, as POSIX allows.
+ * read of zero bytes returns 0 once those checks have passed, and `buf`
+ * may then be NULL, as POSIX allows; from an anonymous descriptor with a
+ * read method it goes to that method, since an eventfd and a timerfd read
+ * whole eight-byte counts and fail a shorter read, zero bytes among them,
+ * with EINVAL, as Linux's do. readv(2) of nothing returns before this, as
+ * Linux's does.
  *
  * The read goes by what is behind the descriptor. An object with a vtable,
  * a pipe, a pty, a device or a /proc file among them, reads through it
@@ -6373,10 +6377,11 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
     if (rc != 0) {
         return rc;
     }
-    /* Linux's access_ok, which vfs_read makes before the file's read: the
-     * top of user memory, or a kernel caller's window (user_window_open). */
-    if (count != 0 && !user_span_ok((__force uintptr_t)buf, count) &&
-        !user_access_ok((__force uintptr_t)buf, count)) {
+    /* Linux's access_ok, which vfs_read makes before the file's read, for
+     * a count of 0 too: the top of user memory, or a kernel caller's window
+     * (user_window_open). */
+    if (!user_span_ok((__force uintptr_t)buf, count) &&
+        !proc_window_covers(current_proc, (__force uintptr_t)buf, count)) {
         return -EFAULT;
     }
     if (entry->type == FD_TYPE_DIR || entry->type == FD_TYPE_SYNTH_DIR) {
@@ -6384,7 +6389,8 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
     }
 
     if (count == 0) {
-        return 0;
+        /* An eventfd's or a timerfd's read refuses a count under 8. */
+        return entry->type == FD_TYPE_ANON && entry->ops ? read_ops(entry, buf, 0) : 0;
     }
     if (!buf) {
         return -EFAULT;
@@ -6431,20 +6437,9 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
  * 0 into the user's buffer in argument 1 (`read_fd`); the bytes read, 0 at
  * the end, or a negative errno. A count past USER_RW_MAX is taken as
  * USER_RW_MAX, as on Linux.
- *
- * A read of zero bytes from an anonymous descriptor with a read method goes
- * to that method, ahead of the zero-length shortcut of `read_fd`: an
- * eventfd and a timerfd read whole eight-byte counts and fail a shorter
- * read, zero bytes among them, with EINVAL, as Linux's do. readv(2) of
- * nothing keeps the shortcut, as Linux's does.
  */
 long sys_read(isr_params_t *params)
 {
-    fd_entry_t *e = current_proc ? fd_get(current_proc->fds, (int)SC_ARG(params, 0)) : NULL;
-
-    if (SC_ARG(params, 2) == 0 && e && e->type == FD_TYPE_ANON && e->ops && e->ops->read) {
-        return read_ops(e, (char __user *)SC_ARG(params, 1), 0);
-    }
     return read_fd((int)SC_ARG(params, 0), (char __user *)SC_ARG(params, 1),
                    USER_RW_LEN(SC_ARG(params, 2)));
 }

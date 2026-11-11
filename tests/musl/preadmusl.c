@@ -981,9 +981,10 @@ static int writev_empty(void)
  * open only for writing, with no bytes too, and before a count past 1024 or
  * a vector outside user memory; EINVAL for an epoll set, which has no read
  * method, for no bytes and one, and before the same; and for a directory
- * EFAULT for a buffer outside user memory before EISDIR, and EISDIR for no
- * bytes there. KERNEL_ADDRESS is user memory for an i386 program on the
- * x86-64 kernel, whose read of the directory there is EISDIR, as on Linux.
+ * EFAULT for a buffer outside user memory before EISDIR, for no bytes too
+ * on x86-64. KERNEL_ADDRESS is user memory for an i386 program on the
+ * x86-64 kernel, whose read of the directory there is EISDIR, as on Linux,
+ * and the i686 kernel's top, where Linux takes a range of no bytes.
  */
 static int read_empty(void)
 {
@@ -1008,8 +1009,10 @@ static int read_empty(void)
          refused(readv(wr, KERNEL_ADDRESS, 1), EBADF) && refused(read(ep, buf, 0), EINVAL) &&
          refused(read(ep, buf, 1), EINVAL) && refused(readv(ep, NULL, 0), EINVAL) &&
          refused(readv(ep, v, 1025), EINVAL) && refused(readv(ep, KERNEL_ADDRESS, 1), EINVAL) &&
-         refused(read(dirfd, KERNEL_ADDRESS, 1), fault) &&
-         refused(read(dirfd, KERNEL_ADDRESS, 0), EISDIR);
+         refused(read(dirfd, KERNEL_ADDRESS, 1), fault);
+#if defined __x86_64__
+    ok = ok && refused(read(dirfd, KERNEL_ADDRESS, 0), EFAULT);
+#endif
     close(wr);
     close(ep);
     close(dirfd);
