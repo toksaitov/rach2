@@ -6754,7 +6754,7 @@
         {"assertion_id": "klog-records", "checks": "klogctl's read of the whole ring gives whole records.", "source": "program"},
         {"assertion_id": "klog-clear", "checks": "After a clear, klogctl's read gives no record from before it.", "source": "program"},
         {"assertion_id": "dev-log-link", "checks": "/dev/log is a link to /var/run/log.", "source": "program"},
-        {"assertion_id": "rtc-alarm-refused", "checks": "The clock's wake alarm is ETIME for a time past and EINVAL for one two days ahead.", "source": "program"},
+        {"assertion_id": "rtc-alarm-range", "checks": "The clock's wake alarm for a time past comes at once and is then off, as on Linux, and one two days ahead is EINVAL.", "source": "program"},
         {"assertion_id": "rtc-alarm-readback", "checks": "A wake alarm two seconds ahead reads back.", "source": "program"},
         {"assertion_id": "rtc-read-af", "checks": "A read of /dev/rtc0 ends at the alarm with RTC_AF.", "source": "program"},
         {"assertion_id": "rtc-wakeup-enabled", "checks": "The clock may wake the machine.", "source": "program"},

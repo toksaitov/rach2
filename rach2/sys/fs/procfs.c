@@ -8577,9 +8577,11 @@ static int sysattr_is(const char *s, uint32_t len, const char *word)
  * now, or `+=N` to move a set alarm N seconds later, the number read as
  * kstrtos64 with base 0 reads it (`k_strtoll`). A time after now, or any
  * push, sets the alarm: -EBUSY while one is set but for a push, and
- * -EINVAL for a push with none set; any other time clears it. The count,
- * -EIO when the clock cannot be read, the parse's error, or the error of
- * `devfs_rtc_set_wakealarm`.
+ * -EINVAL for a push with none set or to a time before 1970, which
+ * Linux's rtc_valid_tm refuses (drivers/rtc/lib.c:161-172); a push to a
+ * time not after now raises the alarm at once. Any other time clears it.
+ * The count, -EIO when the clock cannot be read, the parse's error, or the
+ * error of `devfs_rtc_set_wakealarm`.
  */
 static int32_t wakealarm_store(const char *text, uint32_t count)
 {
@@ -8621,6 +8623,9 @@ static int32_t wakealarm_store(const char *text, uint32_t count)
         }
         if (push) {
             alarm = (long long)((uint64_t)alarm + (uint64_t)set);
+            if (alarm < 0) {
+                return -EINVAL;
+            }
         }
         rc = devfs_rtc_set_wakealarm(alarm);
     } else {

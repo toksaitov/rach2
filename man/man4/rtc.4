@@ -40,7 +40,9 @@ Set and read the wake alarm, a
 a byte that enables it, a byte that says it has come, and its date and
 time.
 The CMOS clock has no day alarm, so the time must lie within a day ahead,
-as Linux's driver requires.
+as Linux's driver requires; a time not after now raises the alarm at once,
+as on Linux.
+An alarm comes once: then its interrupt is off and no wake alarm is set.
 .El
 .Pp
 A
@@ -75,8 +77,6 @@ than a day ahead; a read of another count below an unsigned long's; or a
 .Xr write 2
 of the device.
 The clock's update and periodic interrupts are not given.
-.It Bq Er ETIME
-A wake alarm in the past.
 .It Bq Er EAGAIN
 A non-blocking read with no alarm come.
 .It Bq Er EIO
