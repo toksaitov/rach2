@@ -310,11 +310,14 @@ static char guest_who_text[40];
 static char guest_devname[64];
 
 /* The bindings of the auxiliary port's protocol and of the guest that have
- * ended, which a callback that waited for the command lock compares with
- * the count it saw on entry, so that it does not change their successors,
- * as Linux's removal of a driver's files waits out their callbacks. */
+ * ended, and the guest's protocols replaced or unbound, which a callback
+ * that waited for the command lock compares with the count it saw on
+ * entry, so that it does not change their successors, as Linux's removal
+ * of a driver's or a protocol's files waits out their callbacks: serio2's
+ * psmouse files compare `guest_gen`, a guest TrackPoint's `guest_proto_gen`. */
 static unsigned int aux_gen;
 static unsigned int guest_gen;
+static unsigned int guest_proto_gen;
 
 /* How many bytes the first drain reads before it calls the controller
    stuck. A PS/2 output buffer has one byte, so anything past a handful is a
@@ -1281,12 +1284,14 @@ static void guest_initialize(const struct ps2io *io)
 }
 
 /** Register the guest's event device as `register_device` names it, at
- * "synaptics-pt/serio0/input0", with serio2's files (`guest_files`). */
+ * "synaptics-pt/serio0/input0", with its protocol's files on serio2, a
+ * TrackPoint's settings or none. */
 static void guest_register(void)
 {
     guest.who = who_default(guest.who, guest.protocol);
     guest.dev = register_device(guest_devname, GUEST_PHYS, guest.protocol, guest.who);
-    evdev_sysfs_serio_files(EVDEV_SERIO_PASS_THROUGH, guest_files);
+    evdev_sysfs_serio_files(EVDEV_SERIO_PASS_THROUGH,
+                            guest.protocol == PROTO_TRACKPOINT ? trackpoint_sysfs_add : NULL);
 }
 
 /** Unbind the guest, as Linux's `psmouse_disconnect` does when its port is
@@ -1302,7 +1307,9 @@ static void guest_forget(void)
         guest.dev = NULL;
     }
     evdev_sysfs_serio_files(EVDEV_SERIO_PASS_THROUGH, NULL);
+    evdev_sysfs_serio_driver(EVDEV_SERIO_PASS_THROUGH, NULL);
     guest_gen++;
+    guest_proto_gen++;
     guest.extra = 0;
     guest.side = 0;
 }
@@ -1343,6 +1350,7 @@ int ps2mouse_guest_connect(const struct ps2io *io)
     guest_check_resync();
     guest_initialize(io);
     guest_register();
+    evdev_sysfs_serio_driver(EVDEV_SERIO_PASS_THROUGH, guest_files);
     synaptics_pt_activate(guest.packet_size);
     if (io_cmd(io, MOUSE_CMD_ENABLE) < 0) {
         klog(KLOG_WARN, "mouse", "pass-through: the guest did not enable reporting");
@@ -1861,11 +1869,11 @@ static int port_trackpoint(void)
 
 const struct ps2io *ps2mouse_guest_change_begin(void)
 {
-    unsigned int aux_was = aux_gen, guest_was = guest_gen;
+    unsigned int aux_was = aux_gen, guest_was = guest_proto_gen;
     int on_aux = port_trackpoint();
 
     ps2mouse_cmd_begin();
-    if (on_aux ? aux_gen != aux_was : guest_gen != guest_was) {
+    if (on_aux ? aux_gen != aux_was : guest_proto_gen != guest_was) {
         ps2mouse_cmd_end(); /* the stick the file was made for went meanwhile */
         return NULL;
     }
@@ -2231,6 +2239,8 @@ static int aux_set_protocol(const char *buf, uint32_t len)
  * `aux_set_protocol` switches the port, with the protocols Rach2 can
  * detect through a touchpad: the guest's new event device registered before
  * the old one is removed, then the touchpad's mode for its packet size.
+ * serio2's psmouse files stay; the old protocol's files are replaced by the
+ * new one's, and their callbacks that wait for the command lock expire.
  * Reserve the replacement first; return -ENOMEM with the guest unchanged
  * when no slot is free. Otherwise return 0, or -EINVAL for a bad name.
  */
@@ -2251,6 +2261,7 @@ static int guest_set_protocol(const char *buf, uint32_t len)
     }
     old = guest.dev;
     guest.dev = NULL;
+    guest_proto_gen++;
     guest.side = 0;
     guest.extra = 0;
     if (type == PROTO_AUTO) {
@@ -2458,16 +2469,11 @@ static int aux_files(int dir)
     return add_port_files(dir, ON_AUX);
 }
 
-/** The files of the guest that evdev_sysfs.c adds to serio2: psmouse's,
- * and a TrackPoint's settings. */
+/** The guest's psmouse files, which evdev_sysfs.c adds to serio2 while a
+ * guest is bound, whatever its protocol. */
 static int guest_files(int dir)
 {
-    int rc = add_port_files(dir, ON_GUEST);
-
-    if (rc == 0 && guest.protocol == PROTO_TRACKPOINT) {
-        rc = trackpoint_sysfs_add(dir);
-    }
-    return rc;
+    return add_port_files(dir, ON_GUEST);
 }
 
 void ps2mouse_msleep(unsigned int ms)
