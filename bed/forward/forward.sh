@@ -21,7 +21,14 @@
 # judges vkcube's frames by in place of the archive's vkcube.ref, copied into
 # the guest, or `none`, which records the frames without judging them.
 # SCENE, with SECONDS, has scene.sh run the test bed's measurement harness
-# on the profile's device in place of its check (scene.sh -M).
+# on the profile's device in place of its check (scene.sh -M). The harness
+# counts the guest's processors, which leave out QEMU's own threads, where
+# virglrenderer and Venus draw, and has no KVM exits: the runner reads
+# Rach2's /proc/stat as the harness marks its own readings, and puts
+# Rach2's busy ticks over the frames and its kvm_exits in the harness's
+# line in place of the guest's cpu_ms_per_frame and exits, or `-` when it
+# missed a mark. copied_bytes stays the guest's `-`: the copies are QEMU's,
+# inside its process, which counts none.
 #
 # DISK is opened with QEMU's snapshot=on: the guest's writes go to a
 # temporary overlay, a file without a name on OUT's file system, which is
@@ -193,8 +200,50 @@ case $ref in
         ;;
 esac
 
+# host_counts: Rach2's busy ticks and KVM exits now, `NAME VALUE` a line.
+host_counts()
+{
+    awk '$1 == "cpu" { t = 0; for (i = 2; i <= NF; i++) t += $i; print "busy", t - $5 - $6 }
+         $1 == "kvm_exits" { print $1, $2 }' /proc/stat
+}
+
+# marks: Rach2's counts at each of the harness's marks the scene's output
+# has shown and this runner has not yet read, into OUT/host-counts.
+marked=''
+marks()
+{
+    for m in before after; do
+        case " $marked " in *" $m "*) continue ;; esac
+        grep -q "^measure: counts: $m" "$out/scene.log" || continue
+        { echo "$m"; host_counts; } >> "$out/host-counts"
+        marked="$marked $m"
+    done
+}
+
+# host_line: the scene's output with each harness line's cpu_ms_per_frame
+# and exits Rach2's, over the marks, or `-` without both.
+host_line()
+{
+    awk -v tick="$(getconf CLK_TCK 2>/dev/null || echo 100)" -v counts="$out/host-counts" '
+        FILENAME == counts { if ($1 == "before" || $1 == "after") at = $1; else v[at " " $1] = $2; next }
+        /measure: result: / {
+            busy = "-"; exits = "-"
+            if (("before busy" in v) && ("after busy" in v)) busy = v["after busy"] - v["before busy"]
+            if (("before kvm_exits" in v) && ("after kvm_exits" in v)) exits = v["after kvm_exits"] - v["before kvm_exits"]
+            frames = 0
+            for (i = 1; i < NF; i++) if ($i == "frames") frames = $(i + 1)
+            for (i = 1; i < NF; i++) {
+                if ($i == "cpu_ms_per_frame")
+                    $(i + 1) = busy == "-" || frames + 0 == 0 ? "-" : sprintf("%.3f", busy * 1000 / tick / frames)
+                if ($i == "exits") $(i + 1) = exits
+            }
+        }
+        { print }' "$out/host-counts" "$out/scene.log"
+}
+
 # The scene runs beside the watch on its output, so that a guest that stops
 # is found by its silence.
+: > "$out/host-counts"
 (
     guest "sh /tmp/forward/scene.sh $profile -o /tmp/out$scene_ref${measure:+ -M $measure}${seconds:+ -t $seconds}" \
         > "$out/scene.log" 2>&1
@@ -202,9 +251,17 @@ esac
 ) &
 scene=$!
 while [ ! -f "$out/scene.status" ]; do
+    [ -z "$measure" ] || marks
     quiet "the scene ran"
 done
 wait "$scene"
+if [ -n "$measure" ]; then
+    marks
+    echo "bed-forward: host: $(tr '
+' ' ' < "$out/host-counts")"
+    host_line > "$out/scene.host"
+    mv "$out/scene.host" "$out/scene.log"
+fi
 grep '^bed-forward: ' "$out/scene.log" | grep -v '^bed-forward: result: '
 guest 'tar -cf - -C /tmp out' > "$out/out.tar" 2> /dev/null || rm -f "$out/out.tar"
 guest 'sudo systemctl poweroff' > /dev/null 2>&1

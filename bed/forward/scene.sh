@@ -26,7 +26,8 @@
 # harness, measure/ beside this file: its SCENE, glmark2 or webgl, which the
 # guest's packages have, SECONDS long, as the rung forward-PROFILE; under
 # venus, GL goes through Zink on Venus's ICD. Its line is printed as
-# `bed-forward: figure: LINE`.
+# `bed-forward: figure: LINE`, and its marks `measure: counts: before` and
+# `after` as it reads its counts, at which forward.sh reads Rach2's.
 #
 # Beside this file in the guest are triangle.c, guest-env.sh, and for venus
 # runners/, the graphics tests' runners, and vkcube.ref. OUT, /tmp/out by
@@ -163,8 +164,13 @@ venus()
 measure_scene()
 {
     [ "$profile" != venus ] || export MESA_LOADER_DRIVER_OVERRIDE=zink VK_DRIVER_FILES=$ICD
-    MEASURE_RUNNERS=$here/runners sh "$here/measure/measure.sh" -r "forward-$profile" -t "$seconds" -o "$out/measure" "$measure" \
-        > "$out/measure.log" 2>&1 || die "the harness's $measure failed: $(last "$out/measure.log")"
+    # The harness's marks go out as it prints them.
+    {
+        MEASURE_RUNNERS=$here/runners sh "$here/measure/measure.sh" -c -r "forward-$profile" -t "$seconds" \
+            -o "$out/measure" "$measure" 2>&1
+        echo $? > "$out/measure.status"
+    } | tee "$out/measure.log" | grep --line-buffered '^measure: counts: '
+    [ "$(cat "$out/measure.status")" = 0 ] || die "the harness's $measure failed: $(last "$out/measure.log")"
     sed 's/^/bed-forward: figure: /' "$out/measure.log"
     echo "bed-forward: result: pass: $profile: $(tail -n 1 "$out/measure.log")"
 }
