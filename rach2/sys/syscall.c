@@ -3316,6 +3316,30 @@ static void syscall_mm_unlock(void)
 }
 
 /**
+ * Mark the futex calls to run without the big lock, native and i386, as
+ * Linux's futexes have their bucket locks alone: each names its futex and
+ * reads its word under the address space's regions' lock and the bucket's
+ * spinlock, and the PI operations take the big lock themselves before a
+ * bucket's lock (`futex_pi_call`, proc/futex.c). get_robust_list keeps the
+ * big lock, since it looks another thread up. The i386 forms with their own
+ * timespec are marked as their tables are filled (`arch_syscall_init`,
+ * `ia32_syscall_init`).
+ */
+static void syscall_futex_unlock(void)
+{
+    static syscall_fn_t const calls[] = {
+        sys_futex,      sys_futex_waitv,   sys_futex_wake,
+        sys_futex_wait, sys_futex_requeue, sys_set_robust_list,
+    };
+    uint32_t i;
+
+    for (i = 0; i < sizeof(calls) / sizeof(calls[0]); i++) {
+        syscall_unlock(SYSCALL_ABI_NATIVE, calls[i]);
+        syscall_unlock(SYSCALL_ABI_IA32, calls[i]);
+    }
+}
+
+/**
  * The system call entry's handler: dispatch on the call's number.
  *
  * Looks up the number in _syscall_table, or for a call SC_COMPAT marks in
@@ -3497,6 +3521,7 @@ void init_syscall(void)
     syscall_unlock(SYSCALL_ABI_IA32, sys_sched_yield);
     unlock_file_calls();
     syscall_mm_unlock();
+    syscall_futex_unlock();
 
     _trace_enosys = kcmdline_has("rach2.trace=enosys");
 }
