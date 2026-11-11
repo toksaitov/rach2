@@ -562,7 +562,7 @@ desk_rows()
     for c in /sys/class/drm/card[0-9]*; do
         case $(readlink -f "$c/device" 2>/dev/null) in */"$bdf") back=${c##*/} ;; esac
     done
-    if [ -n "$back" ] && started "$dead" "drm $back gl" Intel 300 &&
+    if [ -n "$back" ] && started "$dead" "drm $back gl" "Mesa Intel" 300 &&
         grep -q "rach2-desktop: session: display drm $back gl appeared" "$out/services.txt"; then
         dir=/sys/kernel/debug/dri/${back#card}/crtc-0/crc
         echo auto > "$dir/control" 2>/dev/null
