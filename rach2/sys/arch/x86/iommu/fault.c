@@ -12,7 +12,7 @@
  * clearing each by writing its F bit as one, as Linux's dmar_fault does
  * (drivers/iommu/intel/dmar.c:1958-2035 in 6.12.115), so that a fault
  * recorded while the handler runs is read in the same pass, and it drops
- * the unit's lock between records, as dmar_fault does (:2013, :2023). A
+ * the unit's lock between records, as dmar_fault does (:2015, :2026). A
  * fault that finds every record full is lost, and the unit says so only by
  * PFO, once however many were lost.
  *
