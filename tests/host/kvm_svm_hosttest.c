@@ -16,6 +16,8 @@
  * be read at CPL 0, which ends in Linux's emulation failure. Each must give
  * the error code only when EXITINTINFO is valid and has one, as Linux's
  * svm_get_exit_info, and 0 for the error bit alone or the valid bit alone.
+ * Beside them, the MSR filter's half in SVM: the permission map's bits
+ * and the exits of the guest's filtered RDMSR and WRMSR.
  */
 #include "kvm/svm.c"
 
@@ -41,6 +43,15 @@ void (*k_panic_hook)(void);
 /* What the emulator's stubs were given, and which of them ran. */
 static uint64_t seen[5];
 static int seen_mmio, seen_ud;
+
+/* The MSR rows' filter, on with `filter_on`, which denies the guest's
+ * reads of FS_BASE and writes of KERNEL_GS_BASE; the reasons the caller
+ * takes, `user_filter` for KVM_MSR_EXIT_REASON_FILTER; and what the
+ * instruction's exit did: the caller's exits, their failure and length,
+ * the #GPs queued, the bytes fetched for a decode, the bytes skipped. */
+static int filter_on, user_filter;
+static int user_exits, user_r, gps, fetches;
+static uint32_t user_len, skipped;
 
 void *k_memset(void *ptr, int c, size_t n)
 {
@@ -154,6 +165,7 @@ int kvm_emul_cpuid(struct kvm_vcpu *v)
 int kvm_emul_fetch(struct kvm_vcpu *v, uint8_t *buf)
 {
     (void)v, (void)buf;
+    fetches++;
     return 0;
 }
 uint64_t kvm_emul_hypercall(struct kvm_vcpu *v)
@@ -183,7 +195,8 @@ int kvm_emul_resume(struct kvm_vcpu *v)
 }
 void kvm_emul_skip(struct kvm_vcpu *v, uint32_t len)
 {
-    (void)v, (void)len;
+    (void)v;
+    skipped += len;
 }
 int kvm_emul_xsetbv(struct kvm_vcpu *v)
 {
@@ -240,8 +253,8 @@ uint8_t *kvm_map_pages(uint32_t count, uintptr_t *pa)
 }
 int kvm_msr_allowed(const struct kvm_vcpu *v, uint32_t index, int write)
 {
-    (void)v, (void)index, (void)write;
-    return 1;
+    (void)v;
+    return !filter_on || !(write ? index == MSR_KERNEL_GS_BASE : index == MSR_FS_BASE);
 }
 int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value, int host)
 {
@@ -258,11 +271,23 @@ int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value, int host)
     (void)v, (void)index, (void)value, (void)host;
     return 0;
 }
+uint32_t kvm_msr_user_reason(const struct kvm_vcpu *v, int r)
+{
+    (void)v;
+    return user_filter && r == KVM_MSR_FILTERED ? KVM_MSR_EXIT_REASON_FILTER : 0;
+}
 int kvm_msr_user_exit(struct kvm_vcpu *v, uint32_t index, int write, uint64_t value, int r,
                       uint32_t len)
 {
-    (void)v, (void)index, (void)write, (void)value, (void)r, (void)len;
-    return 0;
+    (void)index, (void)write, (void)value;
+    if (!kvm_msr_user_reason(v, r)) {
+        return 0;
+    }
+    v->exit.kind = KVM_X_MSR;
+    user_exits++;
+    user_r = r;
+    user_len = len;
+    return 1;
 }
 void kvm_queue_db(struct kvm_vcpu *v, uint64_t payload)
 {
@@ -270,7 +295,8 @@ void kvm_queue_db(struct kvm_vcpu *v, uint64_t payload)
 }
 void kvm_queue_exception(struct kvm_vcpu *v, uint8_t nr, int has_error, uint32_t error)
 {
-    (void)v, (void)nr, (void)has_error, (void)error;
+    (void)v, (void)has_error, (void)error;
+    gps += nr == GP_VECTOR;
 }
 int kvm_task_switch(struct kvm_vcpu *v, uint16_t sel, int reason, int idt_index, uint64_t next_rip,
                     int64_t error)
@@ -359,13 +385,75 @@ static void report_rows(struct kvm_vcpu *v)
     }
 }
 
+/** A guest's RDMSR or WRMSR of `index` at RIP 0x1000, `next_rip` 0 for a
+ * processor without NextRIP save, through `exit_msr`, with the counters
+ * cleared first. */
+static void msr_exit(struct kvm_vcpu *v, uint32_t index, int write, uint64_t next_rip)
+{
+    struct svm_exit *x = &sv(v)->ex;
+
+    x->code = EXIT_MSR;
+    x->info1 = (uint64_t)write;
+    x->next_rip = next_rip;
+    v->regs.rip = 0x1000;
+    v->regs.rcx = index;
+    v->exit.kind = KVM_X_AGAIN;
+    user_exits = gps = fetches = 0;
+    user_r = 0;
+    user_len = skipped = 0;
+    CHECK(exit_msr(v) == 0, "exit_msr returns 0");
+}
+
+/**
+ * The SVM half of KVM_X86_SET_MSR_FILTER, as Linux's svm_msr_filter_changed
+ * and svm_handle_msr: the permission map's bits for FS_BASE, GS_BASE and
+ * KERNEL_GS_BASE, from byte 2048 + 0x40, the read's bit 2n and the write's
+ * 2n + 1, with the byte's other bits kept; a filtered access going to the
+ * caller with its length, or #GP when the caller did not ask for the
+ * reason, then with no decode; and an access the new filter allows that
+ * came under the old map entering again unstepped.
+ */
+static void filter_rows(struct kvm_vcpu *v, uint8_t *msrpm)
+{
+    sv(v)->msrpm = msrpm;
+    msrpm[2048 + 0x40] = 0xC0;
+    filter_on = 1;
+    svm_msr_filter_changed(v);
+    CHECK(msrpm[2048 + 0x40] == 0xE1,
+          "the map intercepts FS_BASE's reads and KERNEL_GS_BASE's writes alone");
+
+    user_filter = 1;
+    msr_exit(v, MSR_FS_BASE, 0, 0x1002);
+    CHECK(v->exit.kind == KVM_X_MSR && user_exits == 1 && user_r == KVM_MSR_FILTERED &&
+              user_len == 2 && gps == 0 && skipped == 0,
+          "a filtered RDMSR goes to the caller with its length, unstepped");
+
+    user_filter = 0;
+    msr_exit(v, MSR_FS_BASE, 0, 0);
+    CHECK(v->exit.kind == KVM_X_AGAIN && user_exits == 0 && gps == 1 && fetches == 0 &&
+              skipped == 0,
+          "without the reason it is #GP, with no decode on a processor without NextRIP save");
+
+    msr_exit(v, MSR_FS_BASE, 1, 0x1002);
+    CHECK(v->exit.kind == KVM_X_AGAIN && gps == 0 && skipped == 0 && user_exits == 0,
+          "a write of FS_BASE the filter allows enters again, unstepped, under the new map");
+
+    filter_on = 0;
+    svm_msr_filter_changed(v);
+    CHECK(msrpm[2048 + 0x40] == 0xC0, "with no filter the map passes all three");
+    sv(v)->msrpm = NULL;
+}
+
 int main(void)
 {
     struct kvm_vcpu *v = calloc(1, sizeof(*v));
     struct svm_vcpu *s = calloc(1, sizeof(*s));
+    uint8_t *msrpm = calloc(1, 8192);
 
     v->backend = s;
     report_rows(v);
+    filter_rows(v, msrpm);
+    free(msrpm);
     free(s);
     free(v);
     if (failures) {
