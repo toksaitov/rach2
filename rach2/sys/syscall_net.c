@@ -3636,12 +3636,17 @@ static int32_t recvmsg_stream(fd_entry_t *entry, struct kernel_msghdr *hdr, uint
 /**
  * Receive one datagram of the socket of `entry` into the buffers of the
  * user's vector that the header `hdr` names, for `do_recvmsg`: the vector
- * copied once and every buffer brought in for writing before the datagram
- * is taken (`iov_import`), then, with MSG_DONTWAIT in `flags`, -EAGAIN when
+ * copied once and each range checked to end in user space, with no page
+ * brought in (`iov_import`), as Linux checks only access_ok
+ * (lib/iov_iter.c:1474); then, with MSG_DONTWAIT in `flags`, -EAGAIN when
  * none waits, and the receive (`readv_dgram`), which reports the sender in
- * `src_ip` and `src_port` and the datagram's length in `whole`. Returns the
- * bytes copied, or -errno, -ENOMEM for the copy of a vector of more than
- * eight buffers among them.
+ * `src_ip` and `src_port` and the datagram's length in `whole`. Only the
+ * buffers the datagram reaches are written, and one that cannot be makes
+ * the call -EFAULT with the datagram consumed, or kept with MSG_PEEK, as
+ * Linux's udp_recvmsg copies no more than the datagram and drops it on a
+ * failed copy (net/ipv4/udp.c:1909-1913, 1941-1949). Returns the bytes
+ * copied, or -errno, -ENOMEM for the copy of a vector of more than eight
+ * buffers among them.
  */
 static int32_t recvmsg_dgram(fd_entry_t *entry, const struct kernel_msghdr *hdr, int flags,
                              net_addr_t *src_ip, uint16_t *src_port, int32_t *whole)
@@ -3656,7 +3661,7 @@ static int32_t recvmsg_dgram(fd_entry_t *entry, const struct kernel_msghdr *hdr,
             return -ENOMEM;
         }
     }
-    taken = (int32_t)iov_import(iov, hdr->msg_iov, (int)iovlen, 1);
+    taken = (int32_t)iov_import(iov, hdr->msg_iov, (int)iovlen, -1);
     if (taken >= 0 && (flags & MSG_DONTWAIT)) {
         taken = socket_dgram_nowait(entry->sock);
     }
@@ -3686,8 +3691,7 @@ static int32_t recvmsg_dgram(fd_entry_t *entry, const struct kernel_msghdr *hdr,
  * length of zero, the true answer, but on an AF_INET6 UDP or raw socket that
  * asked for IPV6_PKTINFO, IPV6_HOPLIMIT or IPV6_TCLASS, or an AF_INET one that
  * asked for IP_RECVTTL (`put_rx_control`); a message that does not fit sets
- * MSG_CTRUNC, and the buffer is checked with the others before the datagram is
- * taken.
+ * MSG_CTRUNC, and the buffer is checked before the datagram is taken.
  *
  * A datagram longer than the buffers is cut, and `msg_flags` says so with
  * MSG_TRUNC; with MSG_TRUNC in `flags` the call answers the datagram's whole
@@ -3704,16 +3708,18 @@ static int32_t recvmsg_dgram(fd_entry_t *entry, const struct kernel_msghdr *hdr,
  * Linux does and how a caller learns its buffer was too small; it is zero
  * for a packet socket that has no sender to report.
  *
- * Every destination is checked before the datagram is taken, because taking
- * it is what destroys it: a fault discovered half way through the copy would
- * report an error for a message the machine no longer has. The vector is
- * copied once, and the copy, with its cut lengths, serves the transfer.
- * readv(2) makes no such pass, as Linux's makes none, and fails with
- * -EFAULT after the datagram is taken (`readv_dgram`). Only what will be
- * written of the
- * address is checked, twenty bytes for a packet socket and sixteen for an
- * AF_INET one, however much the caller declared, since checking the whole
- * declared capacity would fail a call whose address fits.
+ * The vector is copied once, and the copy, with its cut lengths, serves the
+ * transfer. Its buffers are checked only to lie below the top of user space
+ * (`iov_import`), as Linux's import checks them: the datagram is copied into
+ * as many of them as it fills, and a copy that fails makes the call -EFAULT
+ * with the datagram taken, or kept with MSG_PEEK, as readv(2) fails
+ * (`readv_dgram`), so that a bad buffer the datagram does not reach is no
+ * error and one on an empty socket waits, or answers -EAGAIN. The address
+ * and the control buffer are checked before the datagram is taken, and of
+ * the address only what will be written, twenty bytes for a packet socket
+ * and sixteen for an AF_INET one, however much the caller declared, since
+ * checking the whole declared capacity would fail a call whose address
+ * fits.
  *
  * Returns the bytes taken, or with MSG_TRUNC the datagram's whole length, or
  * -errno: -EOPNOTSUPP on a socket that is neither a stream, a datagram nor a
