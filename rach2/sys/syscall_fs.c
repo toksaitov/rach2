@@ -6899,15 +6899,16 @@ int32_t readv_dgram(fd_entry_t *entry, const struct kernel_iovec *iov, int iovcn
  */
 static uint32_t readv_room(const struct kernel_iovec *iov, uint32_t left)
 {
-    struct kernel_iovec room = *iov;
+    struct kernel_iovec room[1];
 
-    if (room.iov_len > left) {
-        room.iov_len = left;
+    room[0] = *iov;
+    if (room[0].iov_len > left) {
+        room[0].iov_len = left;
     }
-    if (!user_access_ok(room.iov_base, room.iov_len)) {
+    if (!user_access_ok(room[0].iov_base, room[0].iov_len)) {
         return 0;
     }
-    return iov_prefix(&room, 1, 1);
+    return iov_prefix(room, 1, 1);
 }
 
 /**
