@@ -15,7 +15,8 @@
 # vendor/gnu/debian/venus.list pins, and turns cloud-init off. The image's
 # key, the SHA-256 of the seed's files and the image's pins, is kept beside
 # it; with -n `prepare` does nothing when an image of the same key exists,
-# and `run` refuses an image of another key.
+# and `run` refuses an image of another key. One preparation of a cache runs
+# at a time; another waits for it.
 # `run` boots a new overlay of the prepared image with the display PROFILE
 # (std-vga by default), CPUS processors (8) and MIB of memory (8192), copies
 # tests/graphics/guest-env.sh to /tmp/guest-env.sh and each FILE of -i to
@@ -140,10 +141,26 @@ watch()
     grep -aq "$3" "$2"
 }
 
+# ready: whether the prepared image is there with the key the seed makes.
+ready()
+{
+    [ -f "$prepared" ] && [ "$(cat "$prepared.key" 2>/dev/null)" = "$(seedkey)" ]
+}
+
+# prepare [-n]: make the prepared image, as the head comment says. The work is
+# in fixed paths of the cache, so it runs under flock(1)'s lock on
+# $cache/prepare.lock, held on descriptor 9 until the script exits; a second
+# caller of -n waits for it and then finds the image prepared.
 prepare()
 {
-    if [ "${1:-}" = -n ] && [ -f "$prepared" ] &&
-        [ "$(cat "$prepared.key" 2>/dev/null)" = "$(seedkey)" ]; then
+    if [ "${1:-}" = -n ] && ready; then
+        return 0
+    fi
+    command -v flock >/dev/null || die "flock keeps two preparations apart; install it"
+    mkdir -p "$cache"
+    exec 9>> "$cache/prepare.lock"
+    flock 9 || die "cannot lock $cache/prepare.lock"
+    if [ "${1:-}" = -n ] && ready; then
         return 0
     fi
     fetch
@@ -174,7 +191,7 @@ prepare()
     echo "debian-ref: preparing on $firmware, $ACCEL_OPTS; console in $work/console.log"
     # shellcheck disable=SC2086 # words
     qemu-system-x86_64 $words -drive file="$work/seed.iso",if=virtio,format=raw,readonly=on \
-        -serial file:"$work/console.log" -monitor none &
+        -serial file:"$work/console.log" -monitor none 9>&- &
     qemu=$!
     watch "$qemu" "$work/console.log" 'debian-ref: \(prepared\|failed\)' 1200 || true
     wait "$qemu" || true
