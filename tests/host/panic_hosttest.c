@@ -250,6 +250,14 @@ static int dump(void)
     return dumps;
 }
 
+/** A crash record saved while another processor writes 0 to
+ * /proc/sys/kernel/panic, which the panic under way must not see. */
+static int racing_dump(void)
+{
+    panic_timeout = 0;
+    return 1;
+}
+
 /** A log and a panic not yet raised, with the screen clear. */
 static void restart(void)
 {
@@ -429,6 +437,15 @@ static void edges(void)
     CHECK(row_of(saved[0], report.left) == (int)report.top &&
               row_of(saved[1], report.left) == (int)report.top + 1,
           "a saved crash record is said under the countdown");
+
+    restart();
+    panic_timeout = 3;
+    k_panic_dump = racing_dump;
+    stop("raced");
+    CHECK(waited_us == 3000000ul && restarted &&
+              row_of("rebooting in 0 s", report.left) == (int)report.top,
+          "a write to panic_timeout during the panic changes neither its wait nor its report");
+    panic_timeout = 3;
     k_panic_dump = 0;
 
     k_memset(lengthy, 'r', sizeof(lengthy) - 1);
