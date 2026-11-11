@@ -561,7 +561,7 @@ tests/host/rtc_hosttest.c:main lines 169 a test's rows, each a case, read as one
 tests/host/rtl8168_hosttest.c:main complexity 99 a test's rows, each a case, read as one table
 tests/host/rtl8168_hosttest.c:main lines 692 a test's rows, each a case, read as one table
 
-tests/host/synthfs_hosttest.c:main complexity 41 a test's rows, each a case, read as one table
+tests/host/synthfs_hosttest.c:main complexity 43 a test's rows, each a case, read as one table
 
 tests/host/syscall_hosttest.c:clock_ids complexity 32 a test's rows, each a case, read as one table
 tests/host/syscall_hosttest.c:clock_sleeps lines 104 a test's rows, each a case, read as one table

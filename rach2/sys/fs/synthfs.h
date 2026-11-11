@@ -459,6 +459,8 @@ const char *synth_sysvipc_name(int origin);
  * as dmi.h's DMI_ fields, and modalias follows them. */
 #define SYSFS_DMI_ID          57
 #define SYSFS_DMI_MODALIAS    22
+#define SYSFS_KERNEL_MM       58 /* /sys/kernel/mm */
+#define SYSFS_THP             59 /* /sys/kernel/mm/transparent_hugepage */
 
 /* The `procfile` of each file of a PCI function's directory, by Linux's
  * names (`sysfs_pci_attr`); 1 has no file, since 1 + 1 is the inode number

@@ -199,6 +199,32 @@ void rseq_preempt(process_t *p)
     (void)p;
 }
 
+/** No rseq area is registered in the host switch model. */
+void rseq_migrate(process_t *p)
+{
+    (void)p;
+}
+
+/** The recorder's model never waits for a remote affinity change. */
+void wait_queue_init(wait_queue_t *wq)
+{
+    (void)wq;
+}
+
+/** No remote affinity waiter is present in the recorder's model. */
+void wq_wake_all(wait_queue_t *wq)
+{
+    (void)wq;
+}
+
+/** Refuse an unexpected remote affinity wait in this single-CPU model. */
+int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    (void)wq;
+    CHECK(cond(arg), "unexpected remote affinity wait");
+    return 0;
+}
+
 /** No process registers for the sync-core barrier in the host model. */
 void membarrier_switch(const struct process *p)
 {

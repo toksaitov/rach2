@@ -281,8 +281,9 @@ processors up to the highest started, as Linux sizes its mask.
 .Fn sched_setaffinity
 reads at most that many bytes of the mask, binds the process to the
 started processors the mask has, whatever it says of others, and moves a
-process that runs on a processor it no longer has: the caller before the
-call returns, another process at its processor's next tick.
+process that runs on a processor it no longer has before the call returns.
+For another running thread, the caller waits until it switches away;
+a later affinity request that permits its current processor also ends the wait.
 A fork passes the set on, and an exec keeps it.
 .Pp
 .Fn getcpu

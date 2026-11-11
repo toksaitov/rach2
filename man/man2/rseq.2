@@ -52,8 +52,12 @@ The kernel writes
 and
 .Va mm_cid
 on the thread's first return to user mode after the registration, after
-each switch of the thread away from its processor, and before a signal
-handler runs.
+each switch of the thread away from its processor, after a move to another
+processor, and before a signal handler runs.
+A remote
+.Xr sched_setaffinity 2
+waits for the thread to leave a processor the new mask excludes; the
+rseq area is updated before that thread resumes user instructions.
 A
 .Vt struct rseq_cs
 gives the section's

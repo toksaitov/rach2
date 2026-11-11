@@ -6090,6 +6090,22 @@ static int procfs_gen_sysattr(struct procfs_text *t, int node, int attr)
     if (node >= SYSFS_NODE && node <= SYSFS_DMI_ID) {
         return procfs_gen_system(t, node, attr);
     }
+    if (node == SYSFS_THP) {
+        /* Linux's huge_memory.c and shmem.c, with huge pages disabled. */
+        static const char *const values[] = {"always madvise [never]\n",
+                                             "always defer defer+madvise madvise [never]\n",
+                                             "0\n",
+#if ELF_CLASS == 2
+                                             "2097152\n",
+#else
+                                             "4194304\n",
+#endif
+                                             "always within_size advise [never] deny force\n",
+                                             "0\n"};
+
+        ap_str(t, values[attr]);
+        return t->len;
+    }
     if (node == SYSFS_KERNEL) {
         ap_u32(t, sysfs_uevent_seqnum());
         ap_ch(t, '\n');

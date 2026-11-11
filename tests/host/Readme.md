@@ -63,6 +63,8 @@ The `genetlink_hosttest.c` model registers a family against the real generic dis
 
 `kvm_irq_hosttest.c` checks the full interrupt controller through port and MMIO exits, GSI and state ioctls, and the real eventfd callbacks. Its full-controller rows cover allocation rollback, PIC priority and cascade, level EOI, RTC acknowledgement after state restore, irqfd resampling with independent line sources, PIT latches and reinjection, HPET handoff, halted wakeups and routing replacement. `--irqchip-only` runs these rows alone.
 
+`synthfs_hosttest.c --thp-only` checks the disabled transparent-hugepage paths, attributes and read-only modes. `procfs_hosttest.c --thp-only` checks their text and the native page-directory mapping size. `sched_hosttest.c --affinity-only` forces a remote affinity change to wait for a running target, a later request to permit the original processor, and a target to exit while the caller waits; it then runs the real rseq return handler on the moved thread and checks its CPU fields and concurrency ID. These rows also run with their programs' other rows.
+
 ## Results
 
 `vdso32_hosttest.c` checks the fast i386 entry with a modeled user copy that requires the big lock. Both sysenter and syscall32 must hold it once through the copy and dispatch, and release it once on success or EFAULT. `vm_hosttest.c` checks a fallback mapping across the mmap base and the 256-page gap below a growing stack.

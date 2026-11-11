@@ -14,9 +14,10 @@ struct process;
 #define RSEQ_ALIGN        32u
 
 /* The events that abort a critical section, Linux's rseq_event_mask bits:
- * the thread was switched away from its processor, or took a signal. */
+ * the thread was switched away from its processor, took a signal, or moved. */
 #define RSEQ_EVENT_PREEMPT 0x1u
 #define RSEQ_EVENT_SIGNAL  0x2u
+#define RSEQ_EVENT_MIGRATE 0x4u
 
 /** rseq(rseq, rseq_len, flags, sig): register or unregister the
  * calling thread's area; 0 or -errno. */
@@ -27,6 +28,10 @@ long sys_rseq(isr_params_t *params);
  * a critical section it is in and gives it its processor again. Called
  * with the scheduler's lock held; touches only `p`'s record. */
 void rseq_preempt(struct process *p);
+
+/** Mark a move of `p` to another processor, under the scheduler's lock.
+ * The next return to user mode aborts its section and updates its area. */
+void rseq_migrate(struct process *p);
 
 /** The current thread's part of a return to user mode to the frame
  * `params`, after its signals (`isr_leave`): when an event or a
