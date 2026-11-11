@@ -97,11 +97,14 @@ DHCP_APPEND="${RACH2_DISK_DHCP_APPEND:-}"
 # BOOTSLOT_MAX_CLUSTERS (131072), which a 64 MiB partition at one sector per
 # cluster, about 130000 clusters with a 1016-sector FAT, stays within. The
 # build reads the count back from the volume and refuses one outside both.
+# Either table's boot partition holds the two kernel slots, the menu, the
+# environment block and GRUB's EFI image, which take 40 MiB with 16 MiB
+# slots; that is the default, and a smaller partition is refused below.
 GAP_MB=1
 TABLE="${RACH2_DISK_TABLE:-gpt}"
 case "$TABLE" in
-    gpt) BOOT_MB="${RACH2_DISK_BOOT_MB:-33}" ;;
-    mbr) BOOT_MB="${RACH2_DISK_BOOT_MB:-16}" ;;
+    gpt) BOOT_MB="${RACH2_DISK_BOOT_MB:-40}" ;;
+    mbr) BOOT_MB="${RACH2_DISK_BOOT_MB:-40}" ;;
     *)
         echo "mkdisk_grub: RACH2_DISK_TABLE is gpt or mbr, not $TABLE" >&2
         exit 1
@@ -167,12 +170,24 @@ FALLBACK_ROOT="$DISK_IDENTITY,3 rach2.rootfstype=ext2"
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1700000000}"
 export SOURCE_DATE_EPOCH
 
-# The candidate slot: bootctl rewrites these bytes in place and never
-# touches FAT metadata, so the file's size is fixed at build time. It is
-# 4 MiB: room for the kernel TinyCC builds on the machine itself, which is
-# larger than GCC's, and the longest file bootslot walks at one sector per
-# cluster (BOOTSLOT_MAX_FILE_CLUSTERS).
-SLOT_BYTES=4194304
+# The kernel slots, /boot/kernel and /boot/fallback: bootctl rewrites these
+# bytes in place and never touches FAT metadata, so the files' size is fixed
+# at build time. It is BOOTSLOT_SLOT_BYTES of utils/bootslot.h, its one home,
+# read from the header's define line: room for years of the kernel's growth,
+# and for the kernel TinyCC builds on the machine itself, which is larger
+# than GCC's. A boot partition takes two slots and 8 MiB besides, for the
+# FATs, GRUB's EFI image and the small files.
+SLOT_BYTES=$(sed -n 's/^.define BOOTSLOT_SLOT_BYTES  *\([0-9][0-9]*\).*/\1/p' "$REPO/utils/bootslot.h")
+if [ -z "$SLOT_BYTES" ]; then
+    echo "mkdisk_grub: utils/bootslot.h defines no BOOTSLOT_SLOT_BYTES" >&2
+    exit 1
+fi
+BOOT_MIN_MB=$((2 * SLOT_BYTES / 1048576 + 8))
+if [ "$BOOT_MB" -lt "$BOOT_MIN_MB" ]; then
+    echo "mkdisk_grub: a boot partition of $BOOT_MB MiB cannot hold two $SLOT_BYTES-byte" \
+         "kernel slots; RACH2_DISK_BOOT_MB is $BOOT_MIN_MB or more" >&2
+    exit 1
+fi
 # The rewritable menu's slot. bootctl overwrites these bytes in place and never
 # extends the file or moves its chain, so the size is fixed at build time and is
 # a whole number of clusters at either geometry this script produces.
@@ -616,7 +631,7 @@ CLUSTERS=$(( ($5 - ($2 + $3 * 256) - $4 * $6) / $1 ))
 if [ "$TABLE" = gpt ] && { [ "$CLUSTERS" -lt 65525 ] || [ "$CLUSTERS" -gt 131070 ]; }; then
     echo "mkdisk_grub: the EFI system partition has $CLUSTERS clusters; UEFI firmware reads" \
          "a FAT32 volume with 65525 or more and bootctl walks 131070 at most, so" \
-         "RACH2_DISK_BOOT_MB is 33 to 64" >&2
+         "RACH2_DISK_BOOT_MB is at most 64" >&2
     exit 1
 fi
 awk -v cbytes="$CLBYTES" -v kernel="$SLOT_BYTES" -v fallback="$SLOT_BYTES" \

@@ -192,7 +192,6 @@ static int name11_eq(const uint8_t *entry, const char *name11)
 
 /* The recursive scan's result: where the named files were found. */
 struct scan_state {
-    struct bootslot_file dir;
     uint32_t kernel_cluster, kernel_size;
     uint32_t fallback_cluster, fallback_size;
     uint32_t grubenv_cluster, grubenv_size;
@@ -213,6 +212,12 @@ static int chain_fits(const struct bootslot *bs, uint32_t len, uint32_t size)
     return len == size / cluster_bytes + (size % cluster_bytes != 0 ? 1u : 0u);
 }
 
+/* The chain of the directory each level of the scan reads, one for each
+ * depth the walk allows. A chain has room for a slot's clusters, 128 KiB,
+ * so it is static and not on the recursion's stack; a depth has one
+ * directory open at a time. */
+static struct bootslot_file scan_dirs[DIR_DEPTH_MAX + 1];
+
 /**
  * Scan one directory chain: mark every child chain visited (so disjointness
  * is proved across the whole reachable namespace), remember the named files
@@ -226,7 +231,7 @@ static int chain_fits(const struct bootslot *bs, uint32_t len, uint32_t size)
 static int scan_dir(struct bootslot *bs, uint32_t first_cluster, int path, int depth,
                     struct scan_state *st, char *err, size_t errlen)
 {
-    struct bootslot_file dir;
+    struct bootslot_file *dir;
     uint8_t sector[BOOTSLOT_SECTOR];
     uint32_t s;
     int i;
@@ -234,11 +239,12 @@ static int scan_dir(struct bootslot *bs, uint32_t first_cluster, int path, int d
     if (depth > DIR_DEPTH_MAX) {
         return fail(err, errlen, "the directory tree is deeper than the walk");
     }
-    if (walk_chain(bs, first_cluster, &dir, NULL, err, errlen) != 0) {
+    dir = &scan_dirs[depth];
+    if (walk_chain(bs, first_cluster, dir, NULL, err, errlen) != 0) {
         return -1;
     }
-    for (s = 0; s < dir.chain_len * bs->cluster_sectors; s++) {
-        if (file_read_sector(bs, &dir, s, sector) != 0) {
+    for (s = 0; s < dir->chain_len * bs->cluster_sectors; s++) {
+        if (file_read_sector(bs, dir, s, sector) != 0) {
             return fail(err, errlen, "a directory sector does not read");
         }
         for (i = 0; i < BOOTSLOT_SECTOR / DIRENT_SIZE; i++) {
@@ -457,6 +463,16 @@ int bootslot_open(struct bootslot *bs, const struct bootslot_io *io, char *err, 
     }
     if (bs->grubenv.size != ENV_BYTES) {
         return fail(err, errlen, "the environment block is not 1024 bytes");
+    }
+    return 0;
+}
+
+int bootslot_layout_current(const struct bootslot *bs, char *err, size_t errlen)
+{
+    if (bs->kernel.size < BOOTSLOT_SLOT_BYTES || bs->fallback.size < BOOTSLOT_SLOT_BYTES) {
+        return fail(err, errlen,
+                    "the kernel slots are smaller than this version's; "
+                    "move the disk to them with rach2-install --slots DISK");
     }
     return 0;
 }

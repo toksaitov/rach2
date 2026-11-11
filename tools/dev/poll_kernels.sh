@@ -86,6 +86,9 @@ trap 'keep=; exit 130' INT
 trap 'keep=; exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-poll-kernels.XXXXXX")
 cp -R rach2 mk "$work/"
+# The kernel's link reads the slot size from utils/bootslot.h.
+mkdir -p "$work/utils"
+cp utils/bootslot.h "$work/utils/"
 # rach2/Makefile's kernel rule runs `make build/tools/inspect/elfcheck` in the
 # directory above rach2/ before it links the kernel and checks it with
 # $(ELFCHECK). The private tree's top Makefile has an empty rule for that

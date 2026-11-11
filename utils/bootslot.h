@@ -29,14 +29,25 @@
  * from it. */
 #define BOOTSLOT_ENV_BYTES 1024
 
+/* The size of each kernel slot, /boot/kernel and /boot/fallback, on the
+ * disks this version builds: 16 MiB, four times the x86-64 kernel of
+ * milestone 78. This line is the one place it is set. rach2/Makefile reads
+ * it for the link's size check, tools/image/mkdisk_grub.sh for the files it
+ * makes, and `bootctl status` prints it for rach2-install. Two slots, the
+ * menu, the environment block and GRUB's EFI image fit a boot partition of
+ * 40 MiB; the 64 MiB one of an installed disk also holds a grown slot's copy
+ * beside the slot while rach2-install moves an older disk to this size.
+ * `bootslot_layout_current` refuses a disk whose slots are smaller. */
+#define BOOTSLOT_SLOT_BYTES 16777216
+
 /* Bounds on what the walk accepts: enough for an EFI system partition of up
  * to 64 MiB at 512-byte clusters (1016-sector FATs, about 130000 clusters),
  * since UEFI firmware reads a FAT32 volume only when it has at least 65525
- * clusters, and for a file of 4 MiB at that cluster size; small enough that
- * every array in `struct bootslot` has a fixed size. */
+ * clusters, and for a slot of BOOTSLOT_SLOT_BYTES at that cluster size;
+ * small enough that every array in `struct bootslot` has a fixed size. */
 #define BOOTSLOT_FAT_MAX_SECTORS   1024
 #define BOOTSLOT_MAX_CLUSTERS      131072
-#define BOOTSLOT_MAX_FILE_CLUSTERS 8192
+#define BOOTSLOT_MAX_FILE_CLUSTERS (BOOTSLOT_SLOT_BYTES / BOOTSLOT_SECTOR)
 
 /** Sector I/O over the boot partition, supplied by the caller. `lba` is
  *  partition-relative; both return 0 or -1. */
@@ -83,6 +94,18 @@ struct bootslot {
  * The library keeps its sector buffers in static storage, so one call runs
  * at a time.
  */
+
+/**
+ * Whether both kernel slots of the opened volume are at least
+ * BOOTSLOT_SLOT_BYTES long, the size this version's disks have.
+ *
+ * A disk built before the slots grew has 4 MiB ones, which `bootctl` would
+ * write in place and never grow, so the kernel's growth would end its use
+ * without warning. `bootctl kernel` and `bootctl fallback` call this first
+ * and refuse such a disk; `rach2-install --slots DISK` moves it. Returns 0,
+ * or -1 with a diagnostic that names that command.
+ */
+int bootslot_layout_current(const struct bootslot *bs, char *err, size_t errlen);
 
 /** Read and check the volume into `bs`, which keeps a copy of `io`: the BPB,
  *  both FATs (compared whole), and the namespace walk that resolves the four
