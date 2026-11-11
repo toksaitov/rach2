@@ -264,6 +264,12 @@ void k_panic_note_address(uintptr_t address)
     (void)address;
 }
 
+/** No panic reads a process here. */
+int k_panic_reading(void)
+{
+    return 0;
+}
+
 /* The last signal the fault handler sent. */
 static int sent_signo;
 static struct k_siginfo sent_info;

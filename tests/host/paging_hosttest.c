@@ -190,6 +190,12 @@ void k_panic_note_address(uintptr_t address)
     (void)address;
 }
 
+/** No panic reads a process here. */
+int k_panic_reading(void)
+{
+    return 0;
+}
+
 /** Nothing: the host has no task state segment. */
 void tss_set_double_fault_dir(uint32_t dir)
 {

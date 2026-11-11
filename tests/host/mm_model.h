@@ -452,6 +452,12 @@ void k_panic_note_address(uintptr_t address)
     (void)address;
 }
 
+/** No panic reads a process here. */
+int k_panic_reading(void)
+{
+    return 0;
+}
+
 #ifndef MM_MODEL_PRESSURE
 /** Nothing: memory is never short. */
 void mem_balance(void)

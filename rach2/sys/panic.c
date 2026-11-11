@@ -170,26 +170,40 @@ void (*k_panic_hook)(void);
 int (*k_panic_dump)(void);
 
 /* The exception a panic is for, which `k_panic_note_fault` and
- * `k_panic_note_address` set before the panic; `fault_name` is NULL for
- * none, `fault_error` PANIC_NO_ERROR for an exception without an error
- * code, and `fault_address` meaningful only with `fault_has_address`. */
-static const char *fault_name;
-static uintptr_t fault_ip;
-static long fault_error;
-static uintptr_t fault_address;
-static int fault_has_address;
+ * `k_panic_note_address` set before the panic. */
+struct fault_note {
+    const char *name;  /* NULL for none */
+    uintptr_t ip;      /* the instruction it was raised at */
+    long error;        /* its error code, or PANIC_NO_ERROR */
+    uintptr_t address; /* what it was about, with `has_address` */
+    int has_address;
+};
+
+/*
+ * Each processor's note, by `arch_cpu_id()`. The handlers write it before
+ * `k_panic`, and so before `k_panic_begin` has chosen the owner, and a
+ * processor that faults after the first panics must not replace the
+ * owner's, as Linux prints a fault from its own registers under `die_lock`
+ * (arch/x86/kernel/dumpstack.c:351-371, 460-467).
+ */
+static struct fault_note fault_notes[NR_CPUS];
 
 void k_panic_note_fault(const char *name, uintptr_t ip, long error)
 {
-    fault_name = name;
-    fault_ip = ip;
-    fault_error = error;
+    struct fault_note *n = &fault_notes[arch_cpu_id()];
+
+    n->name = name;
+    n->ip = ip;
+    n->error = error;
+    n->has_address = 0;
 }
 
 void k_panic_note_address(uintptr_t address)
 {
-    fault_address = address;
-    fault_has_address = 1;
+    struct fault_note *n = &fault_notes[arch_cpu_id()];
+
+    n->address = address;
+    n->has_address = 1;
 }
 
 /**
@@ -264,6 +278,17 @@ static struct {
  * again, and that panic leaves the process out (`process_unsafe`). */
 static volatile int reading_process;
 static int process_unsafe;
+
+/* The reason and the note of the owner's first panic, which a panic that a
+ * fault in the read of the process raises reports again in place of its
+ * own. */
+static const char *panic_reason;
+static struct fault_note panic_fault;
+
+int k_panic_reading(void)
+{
+    return reading_process && k_panicking();
+}
 
 /** Begin a new line of the report, empty, and return it; the last line is
  * reused once all are taken. */
@@ -363,7 +388,9 @@ static void put_end(char *line, int timeout, int seconds)
  * The process is read only when it is safe to: `current_proc` is the
  * kernel's own record, and its pid and name are plain fields of it, but the
  * record may be what the fault is about. A fault while it is read panics
- * again, and the second report leaves the process out.
+ * again, at once (`k_panic_reading`), and the second report leaves the
+ * process out. The exception is the owner's own (`panic_fault`), whatever
+ * another processor noted since.
  */
 static void build_report(const char *str, int timeout, int saved)
 {
@@ -384,6 +411,7 @@ static void build_report(const char *str, int timeout, int saved)
     put_num(line, (long)arch_cpu_id(), 'd');
     if (!process_unsafe) {
         reading_process = 1;
+        k_barrier();
         p = current_proc;
         if (p != NULL) {
             put_str(line, "  pid ");
@@ -394,23 +422,24 @@ static void build_report(const char *str, int timeout, int saved)
                 put_comm(line, p->comm);
             }
         }
+        k_barrier();
         reading_process = 0;
     }
 
-    if (fault_name != NULL) {
+    if (panic_fault.name != NULL) {
         line = report_line();
         put_str(line, "ip ");
-        put_address(line, fault_ip);
-        if (fault_has_address) {
+        put_address(line, panic_fault.ip);
+        if (panic_fault.has_address) {
             line = report_line();
             put_str(line, "addr ");
-            put_address(line, fault_address);
+            put_address(line, panic_fault.address);
         }
         line = report_line();
-        put_str(line, fault_name);
-        if (fault_error != PANIC_NO_ERROR) {
+        put_str(line, panic_fault.name);
+        if (panic_fault.error != PANIC_NO_ERROR) {
             put_str(line, ", error ");
-            put_num(line, fault_error, 'x');
+            put_num(line, panic_fault.error, 'x');
         }
     }
 
@@ -591,16 +620,27 @@ static void draw_report(void)
  * The wait before a reset is Linux's loop of PANIC_TIMER_STEP milliseconds
  * (kernel/panic.c, `panic`), measured by `k_udelay`, which needs no
  * interrupt, since none is taken now; the report's countdown changes once a
- * second of it. The reset is `emergency_restart`'s, with nothing shut down
+ * second of it. A count too long for the room its row has, which only a
+ * `panic_timeout` of many digits and a screen with no placement for the
+ * whole report give (`place_report`), is not shown cut: the line says
+ * "rebooting" alone, and the record has the number whole, as Linux's
+ * "Rebooting in %d seconds.." (kernel/panic.c:477). The reset is
+ * `emergency_restart`'s, with nothing shut down
  * (`power_emergency_restart`). The value is read once, here, once the
  * other processors have stopped, as Linux reads it after
  * `panic_other_cpus_shutdown`, and passed down, so that the report's rows,
  * its countdown and the reset all follow the one value even when a write
  * to /proc/sys/kernel/panic raced the panic.
+ *
+ * A panic raised by a fault in the report's read of the process
+ * (`reading_process`) writes its own reason to the record and then reports
+ * the first panic's reason and exception again, with the process left out,
+ * since the first is what stopped the machine; Linux lets the owner's
+ * nested oops go on in the same way (arch/x86/kernel/dumpstack.c:361-366).
  */
 void k_panic(const char *str)
 {
-    int timeout, seconds, step, saved;
+    int timeout, seconds, step, saved, counting;
     unsigned int was;
 
     k_panic_begin();
@@ -608,11 +648,15 @@ void k_panic(const char *str)
     if (reading_process) {
         process_unsafe = 1;
         reading_process = 0;
+    } else {
+        panic_reason = str;
+        k_memcpy(&panic_fault, &fault_notes[arch_cpu_id()], sizeof(panic_fault));
     }
     k_terminal_restart();
     klog_screen_stop();
     klog_deliver_directly();
     klog(KLOG_CRIT, "panic", "stopped: %s", str);
+    str = panic_reason;
 
     build_report(str, timeout, 0);
     for (step = 1; step < (int)report.count - 1; step++) {
@@ -626,6 +670,10 @@ void k_panic(const char *str)
         build_report(str, timeout, 1);
     }
     place_report();
+    counting = timeout > 0 && k_strlen(report.text[0]) <= room(report.top, report.left);
+    if (timeout > 0 && !counting) {
+        put_end(report.text[0], -1, 0);
+    }
     draw_report();
 
     if (timeout > 0) {
@@ -633,9 +681,11 @@ void k_panic(const char *str)
             for (step = 0; step < 1000; step += PANIC_TIMER_STEP) {
                 k_udelay(PANIC_TIMER_STEP * 1000u);
             }
-            was = (unsigned int)k_strlen(report.text[0]);
-            put_end(report.text[0], timeout, seconds - 1);
-            draw_line(0, was);
+            if (counting) {
+                was = (unsigned int)k_strlen(report.text[0]);
+                put_end(report.text[0], timeout, seconds - 1);
+                draw_line(0, was);
+            }
         }
     }
     if (timeout != 0) {

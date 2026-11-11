@@ -5,7 +5,8 @@
  * host-deps: rach2/sys/lib/kfmt.c rach2/sys/lib/kstd.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c rach2/sys/wcwidth.c
- * host-deps: rach2/sys/tick.c
+ * host-deps: rach2/sys/tick.c tests/host/compat/fault_host.c
+ * host-cflags: -DRACH2_HOST_CPU
  *
  * The console, the log and the panic are included whole, and `k_stop` jumps
  * back to the row, so each row can read the cells the panic left. A row raises
@@ -15,7 +16,12 @@
  * Lenovo's 85 by 24, where the report goes over the picture's bottom-left
  * corner, and 128 by 48, where it goes below the picture. `k_udelay` counts
  * what the panic waits and `power_emergency_restart` jumps back too, so that
- * a row of `panic_timeout` reads the wait, the countdown and the reset.
+ * a row of `panic_timeout` reads the wait, the countdown and the reset; the
+ * first wait takes a copy of the screen as the panic first drew it.
+ * `host_cpu` is the processor a call runs on, so that a row can note a
+ * second processor's fault, and `compat/fault_host.c` gives a page that
+ * faults on every access, which a row makes the running process, so that the
+ * report's read of it faults for real.
  */
 #include <setjmp.h>
 
@@ -62,6 +68,10 @@ bool vga_graphics_mode = false;
 
 struct percpu cpu_table[NR_CPUS];
 volatile uint64_t kernel_ticks;
+unsigned int host_cpu;
+
+void *host_fault_page(void);
+int host_fault_catch(void (*hook)(void));
 
 static char wire[8192]; /* what reached the serial port and netconsole */
 static unsigned int wire_len;
@@ -155,10 +165,20 @@ void k_stop(void)
 
 static unsigned long waited_us; /* what the panic waited, by `k_udelay` */
 static int restarted;           /* whether the panic reset the machine */
+static void read_screen(void);
+static char first[TEXTCON_COLS_MAX * 64 + 1]; /* the screen at the first wait */
+static int first_taken;                       /* whether `first` holds it */
+static char shown[TEXTCON_COLS_MAX * 64 + 1]; /* the screen, its rows run together */
 
-/** Add `usec` to the time waited, without waiting. */
+/** Add `usec` to the time waited, without waiting, and copy the screen into
+ * `first` at the first wait. */
 void k_udelay(uint32_t usec)
 {
+    if (!first_taken) {
+        read_screen();
+        k_memcpy(first, shown, sizeof(first));
+        first_taken = 1;
+    }
     waited_us += usec;
 }
 
@@ -204,7 +224,6 @@ static int failures;
         }                                                        \
     } while (0)
 
-static char shown[TEXTCON_COLS_MAX * 64 + 1]; /* the screen, its rows run together */
 static process_t running;
 static const char *where = "80 by 25"; /* the screen the rows run on */
 static int dumps;                      /* what `dump` returns */
@@ -264,10 +283,14 @@ static void restart(void)
     panic_owner = 0;
     others_stopped = 0;
     screen_stopped = 0;
-    fault_name = 0;
-    fault_has_address = 0;
+    k_memset(fault_notes, 0, sizeof(fault_notes));
+    k_memset(&panic_fault, 0, sizeof(panic_fault));
+    panic_reason = 0;
+    host_cpu = 0;
     reading_process = 0;
     process_unsafe = 0;
+    first[0] = '\0';
+    first_taken = 0;
     wire_len = 0;
     wire[0] = '\0';
     screen_line_open = 0;
@@ -466,6 +489,84 @@ static void edges(void)
     panic_timeout = PANIC_TIMEOUT_DEFAULT;
 }
 
+static int fault_outside; /* whether the page faulted outside the panic's read */
+
+/** The fault of the page that `faults` makes the running process: what the
+ * kernel's handlers do while the panic reads the process, a note and a
+ * panic at once (`k_panic_reading`), here for a general protection fault. */
+static void read_fault(void)
+{
+    if (!k_panic_reading()) {
+        fault_outside = 1;
+        longjmp(stop_point, 3);
+    }
+    k_panic_note_fault("general protection fault", 0x107000, 0);
+    k_panic("unrecoverable CPU exception in kernel mode");
+}
+
+/**
+ * A fault another processor notes after the owner's; a real fault in the
+ * report's read of the process, whose panic reports the first one's reason
+ * and fault again; and a countdown of six digits on a row with room for
+ * fewer, on the screen as the panic first drew it.
+ */
+static void faults(void)
+{
+    const char *owner[] = {"halted",
+                           "build " RACH2_HEAD,
+                           "cpu 0  pid 42",
+                           "cmd ?[2J?[H",
+                           0,
+                           0,
+                           "page fault, error 0x2",
+                           "panic: owner",
+                           0};
+    const char *again[] = {"rebooting", "build " RACH2_HEAD,     "cpu 0",        0,
+                           0,           "page fault, error 0x2", "panic: first", 0};
+    const char *top;
+    void *page = host_fault_page();
+
+    owner[4] = again[3] = address("ip ", 0x106000);
+    owner[5] = again[4] = address("addr ", 0xdead0);
+    restart();
+    panic_timeout = 0;
+    k_panic_note_fault("page fault", 0x106000, 2);
+    k_panic_note_address(0xdead0);
+    host_cpu = 1;
+    k_panic_note_fault("general protection fault", 0x107000, 0);
+    host_cpu = 0;
+    stop("owner");
+    CHECK(report_reads(owner) && strstr(shown, "general protection") == 0,
+          "a fault another processor notes leaves the owner's report its own");
+
+    CHECK(page != 0 && host_fault_catch(read_fault) == 0, "a page that faults can be had");
+    if (page != 0) {
+        restart();
+        panic_timeout = -1;
+        fault_outside = 0;
+        cpu_table[0].current = (process_t *)page;
+        k_panic_note_fault("page fault", 0x106000, 2);
+        k_panic_note_address(0xdead0);
+        stop("first");
+        host_fault_catch(0);
+        CHECK(!fault_outside && restarted && report_reads(again) && strstr(shown, "pid") == 0,
+              "a fault in the read of the process panics again, with the first reason and fault "
+              "and no process");
+        CHECK(strstr(wire, "panic: stopped: first") != 0 &&
+                  strstr(wire, "panic: stopped: unrecoverable CPU exception") != 0,
+              "and the record has both reasons");
+    }
+
+    panic_timeout = 100000;
+    exception();
+    top = first + report.top * textcon_cols + report.left;
+    CHECK(restarted && first_taken &&
+              (memcmp(top, "rebooting in 100000 s", 21) == 0 ||
+               (memcmp(top, "rebooting", 9) == 0 && top[9] == ' ')),
+          "a count of six digits is shown whole or not at all");
+    panic_timeout = PANIC_TIMEOUT_DEFAULT;
+}
+
 /** Take a framebuffer of `w` by `h` pixels at `big`. */
 static int framebuffer(unsigned int w, unsigned int h)
 {
@@ -492,6 +593,7 @@ int main(void)
     CHECK(panic_timeout == 30, "with no panic= on the boot line a panic waits 30 seconds");
     routes("the text console at 80 by 25");
     edges();
+    faults();
     textcon_rows = 24;
     routes("the text console at 80 by 24");
 
