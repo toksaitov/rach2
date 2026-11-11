@@ -30,6 +30,14 @@
 #include "../i686/tss.h"
 #endif
 
+/* ioctl's number in the table of the call in `p`: i386's 54 for a compat
+ * call on x86-64, whose names ../x86_64/ia32_sysnr.h would redefine. */
+#if defined(__x86_64__) && RACH2_IA32
+#define CALL_IOCTL_NR(p) (SC_COMPAT(p) ? 54u : (uint32_t)SYS_IOCTL)
+#else
+#define CALL_IOCTL_NR(p) ((uint32_t)SYS_IOCTL)
+#endif
+
 #include "../../../kernel.h"
 
 #if defined(__x86_64__)
@@ -89,6 +97,7 @@ static uint16_t lines_pci;
  * first two through `x86_64_route` (x86_64/idt.c). */
 void _isr_router(isr_params_t *params);
 void isr_router_locked(isr_params_t *params);
+int isr_call_ioctl(const isr_params_t *params);
 
 void _irq_router(isr_params_t *params);
 
@@ -677,6 +686,21 @@ static void panic_if_reading(const isr_params_t *params)
 }
 
 /**
+ * Charge the hold under way to the ioctl(2) request of the system call in
+ * `params`, of either ABI, for bkl/calls. Returns the request's slot plus
+ * one, which `smp_call_end` takes, or 0 for another call or a request no
+ * slot took. The caller holds the big lock; `ia32_fast_syscall` (vdso32.c)
+ * calls it as `_isr_router` does.
+ */
+int isr_call_ioctl(const isr_params_t *params)
+{
+    if ((uint32_t)SC_NR(params) != CALL_IOCTL_NR(params)) {
+        return 0;
+    }
+    return bkl_note_ioctl((uint32_t)SC_ARG(params, 1));
+}
+
+/**
  * Take the big lock and run the handler chain of a processor exception or
  * a system call; `isr_leave` gives the lock back. `params` is the saved
  * register frame, so that a handler can change the saved registers, a
@@ -686,20 +710,18 @@ static void panic_if_reading(const isr_params_t *params)
 void _isr_router(isr_params_t *params)
 {
     uint64_t start = 0;
-    uint32_t nr = 0, cmd = 0;
-    int is_ioctl = 0, ioctl = 0;
+    uint32_t nr = 0;
+    int ioctl = 0;
 
     user_entry(params);
     if (params->vector == SYSCALL_ENTRY) {
         start = arch_cycles();
         nr = (uint32_t)SC_NR(params);
-        is_ioctl = !SC_COMPAT(params) && nr == SYS_IOCTL;
-        cmd = (uint32_t)SC_ARG(params, 1);
     }
     panic_if_reading(params);
     bkl_enter();
-    if (is_ioctl) {
-        ioctl = bkl_note_ioctl(cmd);
+    if (params->vector == SYSCALL_ENTRY) {
+        ioctl = isr_call_ioctl(params);
     }
     isr_router_locked(params);
     if (params->vector == SYSCALL_ENTRY) {
