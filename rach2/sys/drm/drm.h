@@ -1017,6 +1017,7 @@ struct drm_crtc_funcs {
  * `stamp_max_ns`, which debugfs's `crtc-N/vblank_backwards` reads.
  */
 struct drm_vblank {
+    uint32_t seq; /* odd while `count` and `time_ns` change, Linux's seqlock */
     uint64_t count;
     uint32_t last;
     int64_t time_ns;
@@ -1704,7 +1705,8 @@ int32_t drm_crtc_vblank_get(struct drm_crtc *crtc);
 /** Let a hold go; the off-delay runs from the last. Any context. */
 void drm_crtc_vblank_put(struct drm_crtc *crtc);
 /** The vblank count of `crtc`, and the time of the last vblank in
- * `*time_ns` when it is not NULL. */
+ * `*time_ns` when it is not NULL, read as one pair against the vblank
+ * interrupt. Any context. */
 uint64_t drm_crtc_vblank_count_and_time(struct drm_crtc *crtc, int64_t *time_ns);
 /*
  * A driver's scanout position, Linux's get_scanout_position of

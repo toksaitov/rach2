@@ -132,15 +132,23 @@ void drm_crtc_vblank_init(struct drm_crtc *crtc)
  * frame counter `last` they were counted to, Linux's store_vblank. A time
  * of 0 marks none until the next vblank. A time before one stored earlier
  * is counted in `backwards`, which no event or reply should ever carry,
- * since a compositor takes each as the next frame's. Interrupts masked.
+ * since a compositor takes each as the next frame's. The count and the
+ * time change inside an odd `seq`, as under Linux's write_seqlock
+ * (drm_vblank.c:192-195), so that drm_crtc_vblank_count_and_time, which
+ * runs with interrupts on, never pairs a count with another vblank's time
+ * or takes half of a time i686 stores in two moves. Interrupts masked.
  */
 static void store_vblank(struct drm_crtc *crtc, uint32_t diff, int64_t t, uint32_t last)
 {
     struct drm_vblank *v = &crtc->vblank;
 
     v->last = last;
+    v->seq++;
+    k_barrier();
     v->time_ns = t;
     v->count += diff;
+    k_barrier();
+    v->seq++;
     if (t != 0) {
         if (t < v->stamp_max_ns) {
             v->backwards++;
@@ -270,12 +278,33 @@ void drm_crtc_vblank_put(struct drm_crtc *crtc)
     kirq_restore(flags);
 }
 
+/**
+ * Read the count and the time of `crtc`'s latest vblank as one pair, Linux's
+ * read_seqbegin and read_seqretry loop of drm_vblank_count_and_time
+ * (drm_vblank.c:953-957): read again while store_vblank was in the middle
+ * of a store, its `seq` odd, or made one between the reads, its `seq`
+ * moved. A compiler barrier is the whole of Linux's smp_rmb and smp_wmb
+ * on x86, which keeps each processor's loads, and its stores, in order.
+ */
 uint64_t drm_crtc_vblank_count_and_time(struct drm_crtc *crtc, int64_t *time_ns)
 {
+    const volatile uint32_t *seqp = &crtc->vblank.seq;
+    uint64_t count;
+    int64_t t;
+    uint32_t seq;
+
+    do {
+        while ((seq = *seqp) & 1u) {
+        }
+        k_barrier();
+        count = crtc->vblank.count;
+        t = crtc->vblank.time_ns;
+        k_barrier();
+    } while (*seqp != seq);
     if (time_ns) {
-        *time_ns = crtc->vblank.time_ns;
+        *time_ns = t;
     }
-    return crtc->vblank.count;
+    return count;
 }
 
 /* ------------------------------------------------------------------------
@@ -568,7 +597,7 @@ int32_t drm_crtc_wait_flip(struct drm_crtc *crtc, int below, int intr, uint32_t 
  * stopped. */
 static int count_reached(struct drm_crtc *crtc, uint64_t seq)
 {
-    return vblank_passed(crtc->vblank.count, seq) || !crtc->vblank.enabled;
+    return vblank_passed(drm_crtc_vblank_count_and_time(crtc, NULL), seq) || !crtc->vblank.enabled;
 }
 
 /* ------------------------------------------------------------------------
@@ -649,7 +678,7 @@ int32_t drm_wait_vblank_ioctl(struct drm_device *dev, void *data, struct drm_fil
     if (rc != 0) {
         return rc;
     }
-    seq = crtc->vblank.count;
+    seq = drm_crtc_vblank_count_and_time(crtc, NULL);
     if (type & _DRM_VBLANK_RELATIVE) {
         req_seq = seq + vblwait->request.sequence;
         vblwait->request.sequence = (unsigned int)req_seq;
