@@ -96,8 +96,18 @@ which a caller that leaves a buffer alone after
 cannot tell apart.
 The pipe end waits as
 .Fn splice
-does; reading, only the first buffer waits, and the call stops at an
-empty pipe once it has copied a byte.
+does: writing, the call takes what fits once it has copied a byte;
+reading, only the first buffer waits, and the call stops at an empty pipe
+once it has copied a byte.
+A page Linux would not hand the pipe, as its
+.Fn get_user_pages
+refuses it, is not copied either: the vDSO's data page,
+.Li [vvar] ,
+a region of
+.Xr memfd_secret 2 ,
+device memory or a page the caller cannot read ends the call, with the
+bytes before it or
+.Er EFAULT .
 The vector is checked whole first, as
 .Xr readv 2
 checks it.
@@ -189,7 +199,8 @@ also an output with
 .It Bq Er EFAULT
 An offset cannot be read or written, or a
 .Fn vmsplice
-vector or buffer cannot be reached.
+vector or buffer cannot be reached or holds a page Linux would not hand
+the pipe.
 .It Bq Er EINTR
 A signal came before a byte moved.
 .It Bq Er EINVAL

@@ -129,17 +129,28 @@ int32_t fifo_attach(struct fd_entry *e, const void *mnt, uint64_t ino, int flags
 int pipe_is(const struct fd_entry *e);
 
 /**
- * Write `count` bytes of `buf`, a user buffer or one the thread opened to
- * the user-copy checks, to the write end `e`, as a write(2) of it does but
- * without waiting for room when `nonblock`, the descriptor's O_NONBLOCK or
- * not; the bytes written or a negative errno, -EAGAIN, -EPIPE with SIGPIPE
- * raised, -EINTR, -EBADF, -EFAULT or -ENOMEM. The bytes take a page buffer
- * for each page of their source they come from, as Linux's vmsplice and
- * splice link the source's pages, the first byte lying `src` bytes into its
- * page, and no later write joins them.
+ * Write up to `count` bytes of `buf`, a user buffer or one the thread opened
+ * to the user-copy checks, to the write end `e`, as a write(2) of it does,
+ * but waiting for room only before the first byte and not at all when
+ * `nonblock`, the descriptor's O_NONBLOCK or not, and returning what fitted
+ * once the ring fills, as Linux's splice does; the bytes written or a
+ * negative errno, -EAGAIN, -EPIPE with SIGPIPE raised, -EINTR, -EBADF,
+ * -EFAULT or -ENOMEM. The bytes take a page buffer for each page of their
+ * source they come from, as Linux's splice links the source's pages, the
+ * first byte lying `src` bytes into its page, and no later write joins them.
  */
 int32_t pipe_splice_write(struct fd_entry *e, const char __user *buf, uint32_t count, int nonblock,
                           uint32_t src);
+
+/**
+ * Write up to `count` bytes of the caller's memory at `buf` to the write end
+ * `e` for vmsplice(2), as `pipe_splice_write` writes them, the source's pages
+ * being those of `buf`. A page that Linux's get_user_pages refuses
+ * (`paging_pin_allows`), the vDSO's data page among them, ends the write
+ * with -EFAULT, or with the count written before it.
+ */
+int32_t pipe_vmsplice_write(struct fd_entry *e, const char __user *buf, uint32_t count,
+                            int nonblock);
 
 /**
  * Wait for room in the pipe of the write end `e` unless `nonblock`: the

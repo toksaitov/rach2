@@ -800,6 +800,11 @@ static int pin_allows(struct mm *mm, uintptr_t page, int write, int io)
            pkey_allows(mm, vma, write);
 }
 
+int paging_pin_allows(struct mm *mm, uintptr_t addr, int write)
+{
+    return pin_allows(mm, addr & ~(uintptr_t)(PAGE_SIZE - 1), write, 0);
+}
+
 /** Resolve a pin's page, preserving the caller's pending SIGBUS detail. */
 static int pin_resolve(struct mm *mm, uintptr_t page, int write, uintptr_t as_limit)
 {

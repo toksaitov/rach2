@@ -103,6 +103,13 @@ uintptr_t pin_phys(const struct pin *pin, uint32_t i);
  */
 int paging_pin_range(struct mm *mm, uintptr_t start, uintptr_t end, int write, uintptr_t *frames);
 
+/** Whether a pin may take the page of `mm` that holds `addr`, for writing
+ * with `write`, as Linux's get_user_pages judges its region: one that
+ * allows the access, by its protection and its key, and is no device
+ * memory, memfd_secret region or vDSO data page. Takes no page in and does
+ * not sleep. */
+int paging_pin_allows(struct mm *mm, uintptr_t addr, int write);
+
 /** As paging_pin_range, also accepting device pages outside the frame
  * allocator. On success, `ram_pages` is the number of RAM frames pinned;
  * the remaining entries in `frames` need no frame pin or memory charge. */
