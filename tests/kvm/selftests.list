@@ -19,7 +19,7 @@ coalesced_io_test pass pass
 demand_paging_test pass pass
 dirty_log_perf_test pass pass
 dirty_log_test pass fail Linux: Set page 369 value 1 incorrect (iteration=3)
-guest_memfd_test pass fail Linux: guest_memfd() with flag '0x1' should fail with EINVAL
+guest_memfd_test excluded fail guest_memfd, deferred by the owner's decision of 2026-11-10 to a later milestone; Linux: guest_memfd() with flag '0x1' should fail with EINVAL
 guest_print_test pass pass
 hardware_disable_test pass pass
 kvm_binary_stats_test pass pass
@@ -69,7 +69,7 @@ x86_64/sev_init2_tests skip skip Requirement not met: __kvm_has_device_attr(kvm_
 x86_64/sev_migrate_tests skip skip Requirement not met: kvm_cpu_has(X86_FEATURE_SEV)
 x86_64/sev_smoke_test skip skip Requirement not met: kvm_cpu_has(X86_FEATURE_SEV)
 x86_64/smaller_maxphyaddr_emulation_test skip skip Requirement not met: kvm_has_cap(KVM_CAP_SMALLER_MAXPHYADDR)
-x86_64/smm_test pass pass
+x86_64/smm_test excluded pass SMM, deferred by the owner's decision of 2026-11-10 to a later milestone
 x86_64/state_test pass pass
 x86_64/svm_int_ctl_test excluded pass nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
 x86_64/svm_nested_shutdown_test excluded pass nested virtualization, excluded by the owner's decision of 2026-11-10: Rach2's KVM gives its guests neither SVM nor VMX
