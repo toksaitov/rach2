@@ -1,0 +1,224 @@
+[    0.018000] watchdog: ready: TCO version 2 at 1860, halted, timeout 30 s
+[    0.024000] ioapic: route: line 1 to gsi 1, vector 33, edge, active high
+[    0.024000] console: blank: after 600 seconds without input
+[    0.031000] backlight: intel_backlight: lynxpoint-lp PWM, levels 0 to 937, at 937, off by the panel's enable
+[    0.044000] boot: keyboard: ready
+[    0.044000] boot: syscall: ready
+[    0.044000] boot: process: ready
+[    0.044000] boot: scheduler: ready
+[    0.044000] acpi: acpica: RSDP 0x00000000008B44EC 000024 (v02 LENOVO)
+[    0.044000] acpi: acpica: XSDT 0x00000000AAFFE210 0000C4 (v01 LENOVO CB-01    00000001      01000013)
+[    0.044000] acpi: acpica: FACP 0x00000000AAFF7000 00010C (v05 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.049000] acpi: acpica: DSDT 0x00000000AAFE4000 00F4BB (v02 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.049000] acpi: acpica: FACS 0x00000000AAFBA000 000040
+[    0.049000] acpi: acpica: SLIC 0x00000000AAFFD000 000176 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.049000] acpi: acpica: UEFI 0x00000000AAFFC000 000236 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.049000] acpi: acpica: FPDT 0x00000000AAFFA000 000044 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.049000] acpi: acpica: POAT 0x00000000AAFF9000 000055 (v03 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.049000] acpi: acpica: ASF! 0x00000000AAFF8000 0000A5 (v32 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.050000] acpi: acpica: HPET 0x00000000AAFF6000 000038 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.050000] acpi: acpica: APIC 0x00000000AAFF5000 00008C (v03 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.050000] acpi: acpica: MCFG 0x00000000AAFF4000 00003C (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.050000] acpi: acpica: WDAT 0x00000000AAFE3000 000224 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.050000] acpi: acpica: SSDT 0x00000000AAFE0000 002028 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.050000] acpi: acpica: BOOT 0x00000000AAFDE000 000028 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.050000] acpi: acpica: LPIT 0x00000000AAFDD000 000094 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.050000] acpi: acpica: ASPT 0x00000000AAFDB000 000034 (v07 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.051000] acpi: acpica: DBGP 0x00000000AAFDA000 000034 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.051000] acpi: acpica: SSDT 0x00000000AAFD2000 0004D6 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.051000] acpi: acpica: SSDT 0x00000000AAFD1000 000AD8 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.052000] acpi: acpica: SSDT 0x00000000AAFCD000 0034F8 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.052000] acpi: acpica: DMAR 0x00000000AAFCB000 0000B0 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.052000] acpi: acpica: BGRT 0x00000000AAFCC000 000038 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.105000] acpi: acpica: 5 ACPI AML tables successfully acquired and loaded
+[    0.109000] acpi: ec: \_SB.PCI0.LPCB.EC0 at ports 0x62 and 0x66, gpe 0x7
+[    0.109000] ioapic: route: line 9 to gsi 9, vector 41, level, active high
+[    0.109000] acpi: sci: line 9
+[    0.115000] acpi: ec: gpe 0x7 enabled, status 0x00
+[    0.121000] acpi: video: bus \_SB.PCI0.GFX0, outputs 16
+[    0.127000] acpi: ideapad: \_SB.PCI0.LPCB.EC0.VPC0: cfg 0xfde104, wifi 0, ideapad_wlan
+[    0.129000] acpi: ideapad: radio switch 1
+[    0.132000] acpi: pnp: i8042 kbd: PNP: PNP0303
+[    0.138000] acpi: pnp: i8042 aux: PNP: SYN2b37 PNP0f13 SYN0002 SYN2b00
+[    0.148000] acpi: acpica: Enabled 8 GPEs in block 00 to 7F
+[    0.148000] acpi: ec: query 0x42
+[    0.150000] acpi: acpica: 2872 objects, 0 errors
+[    0.157000] vtd: dmar: host address width 39, flags 0x1
+[    0.157000] vtd: dmar: unit at 0xfed90000, segment 0, flags 0x0
+[    0.157000] vtd: dmar: device 0:2.0
+[    0.157000] vtd: dmar: unit at 0xfed91000, segment 0, flags 0x1
+[    0.157000] vtd: dmar: ioapic id 2 at f0:1f.0
+[    0.157000] vtd: dmar: hpet id 0 at f0:f.0
+[    0.157000] vtd: dmar: reserved region 0xaae11000 to 0xaae30fff
+[    0.157000] vtd: dmar: reserved region 0xab800000 to 0xaf9fffff
+[    0.157000] vtd: dmar0: at 0xfed90000, version 1.0, cap 0xc0000020660462, ecap 0xf0101a
+[    0.163000] vtd: dmar1: at 0xfed91000, version 1.0, cap 0xd2008020660462, ecap 0xf010da
+[    0.169000] vtd: irte: dmar1 index 0: ioapic 2, vector 33 to apic 0, edge, sid 0xf0f8 svt 1
+[    0.169000] vtd: irte: dmar1 index 1: ioapic 2, vector 41 to apic 0, level, sid 0xf0f8 svt 1
+[    0.169000] vtd: interrupt remapping: on, compatibility format refused
+[    0.175000] vtd: ready: 2 units, interrupt remapping on, translation on for assigned devices only
+[    0.182000] mouse: started
+[    0.182000] synaptics: found: touchpad model 1, fw 8.1, id 0x1e2b1, caps 0xd00123/0x840300/0x2a800/0x0, board id 2848, fw id 1581875
+[    0.182000] vtd: irte: dmar1 index 2: ioapic 2, vector 44 to apic 0, edge, sid 0xf0f8 svt 1
+[    0.182000] ioapic: route: line 12 to gsi 12, vector 44, edge, active high
+[    1.518000] mouse: ready
+[    1.518000] audio: started
+[    1.518000] audio: not driven: 8086:a0c at 00:03.0
+[    1.641000] vtd: irte: dmar1 index 3: msi of 0:1b.0, vector 49 to apic 0, edge, sid 0x00d8 svt 1
+[    1.641000] pci: msi: 0:1b.0 on vector 49, remapped
+[    1.641000] audio: interrupts: messages on vector 49
+[    1.648000] audio: ready: Intel HD Audio, codec 0x14f1510f
+[    1.654000] disk: policy: read-write
+[    1.660000] modules: none
+[    1.666000] block: started
+[    1.672000] ahci: found: 8086:9C03 at 0:31.2, prog-if 1, BAR5 C061B000
+[    1.685000] ahci: port 1: signature EB140101 is not a disk; skipped
+[    2.774000] ahci: port 2: no link after 1000 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+[    3.863000] ahci: port 3: no link after 1000 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+[    3.866000] disk: disk0: ahci 0: 488397168 sectors, model Samsung SSD 870 EVO 250GB
+[    3.873000] ahci: port 0: 488397168 sectors, 238475 MiB
+[    3.879000] nvme: none: no NVMe controller on the bus
+[    3.885000] vtd: irte: dmar1 index 4: ioapic 2, vector 46 to apic 0, edge, sid 0xf0f8 svt 1
+[    3.885000] ioapic: route: line 14 to gsi 14, vector 46, edge, active high
+[    3.885000] vtd: irte: dmar1 index 5: ioapic 2, vector 47 to apic 0, edge, sid 0xf0f8 svt 1
+[    3.885000] ioapic: route: line 15 to gsi 15, vector 47, edge, active high
+[    3.887000] devfs: /dev/grubcore: BIOS boot partition 4, 2014 sectors at LBA 34
+[    3.899000] ext2: mounted: 35850496 blocks of 4096, 2242560 inodes, 1095 groups
+[    3.906000] ext2: root: /dev/disk0p6
+[    3.912000] loop: loop0: /t2666/root-3b6ef0e0aef61a54.img, 0 bytes, read-write
+[    3.923000] ext2: mounted: 4194304 blocks of 4096, 1048576 inodes, 128 groups
+[    3.930000] root: image: /t2666/root-3b6ef0e0aef61a54.img on /dev/disk0p6, ext2 through /dev/loop0; /data is /dev/disk0p6
+[    3.944000] usb: started
+[    3.950000] usb: controller: 0:14.0 xhci interface 0x30 8086:9c31 bar0 0xC0600004
+[    3.957000] usb: routing: usb2 0xA of 0x1FF, usb3 0x1 of 0xF, as the firmware left it
+[    3.964000] usb: controller: 0:1d.0 ehci interface 0x20 8086:9c26 bar0 0xC061C000
+[    3.972000] usb: handoff: ehci at 00:1d.0: taken from the firmware, halted
+[    3.980000] usb: routing: usb2 0x1FF of 0x1FF, usb3 0xF of 0xF, taken
+[    3.987000] usb: found: xhci0: 8086:9c31 at 0:20.0, aperture 0xC0600000
+[    3.993000] usb: unsupported: ehci at 00:1d.0
+[    4.000000] usb: caps: hcs1 0xD000820 hcs2 0x84000054 hcc1 0x200077C1 pagesize 0x1
+[    4.000000] usb: caps: scratchpads 16, contexts 32 bytes, 64-bit 1
+[    4.000000] usb: handoff: legsup 0x10801 legctl 0xC0012000 before
+[    4.002000] usb: handoff: legsup 0x1000801 legctl 0x0 after
+[    4.003000] usb: ready: xhci0: version 100, 13 ports, 32 slots, 32-byte contexts
+[    4.111000] usb: port: xhci0.2: a device; its reset tells full from high speed
+[    4.111000] usb: port: xhci0.4: a device; its reset tells full from high speed
+[    4.111000] usb: port: xhci0.6: a device; its reset tells full from high speed
+[    4.111000] usb: port: xhci0.7: a device; its reset tells full from high speed
+[    4.111000] usb: port: xhci0.10: a device; its reset tells full from high speed
+[    4.173000] usb: device: port 10: 35d6:3510, class 9 protocol 0, endpoint 1, a hub
+[    4.299000] usb: device: port 2: 35d6:2510, class 9 protocol 1, endpoint 1, a hub
+[    4.418000] usb: device: port 4: bda:129, class 0: no driver for it here
+[    4.572000] usb: device: port 6: bda:579a, class 0: no driver for it here
+[    4.692000] usb: device: port 7: cf3:3004, class 0: no driver for it here
+[    4.702000] usb: slot: 3: given back
+[    4.703000] usb: slot: 4: given back
+[    4.704000] usb: slot: 5: given back
+[    4.807000] usb: hub: device 1: 4 ports, power mode 0, think time 0
+[    4.814000] usb: hub: device 2: 4 ports, power mode 0, think time 1
+[    5.008000] usb: hid: device 3 interface 0: Logitech USB Keyboard on usb-3/input0, input devices: 1
+[    5.024000] usb: hid: device 3 interface 1: Logitech USB Keyboard on usb-3/input1, input devices: 1
+[    5.024000] usb: device: port 2.1: 46d:c34b, class 3 protocol 1, endpoint 1, HID interfaces 2 of 2
+[    5.137000] usb: hid: device 4 interface 0: Logitech USB Optical Mouse on usb-4/input0, input devices: 1
+[    5.137000] usb: device: port 2.3: 46d:c077, class 3 protocol 2, endpoint 1, HID interfaces 1 of 1
+[    5.165000] usb: devices: 4 configured
+[    5.172000] vtd: irte: dmar1 index 6: msi of 0:14.0, vector 50 to apic 0, edge, sid 0x00a0 svt 1
+[    5.172000] pci: msi: 0:14.0 on vector 50, remapped
+[    5.172000] usb: interrupts: xhci0: messages on vector 50
+[    5.179000] vtd: irte: dmar1 index 7: msi of 0:1f.2, vector 51 to apic 0, edge, sid 0x00fa svt 1
+[    5.179000] pci: msi: 0:1f.2 on vector 51, remapped
+[    5.179000] ahci: interrupts: messages on vector 51, 1 disks queued
+[    5.186000] net: started
+[    5.202000] vtd: irte: dmar1 index 8: msi of 1:0.0, vector 52 to apic 0, edge, sid 0x0100 svt 1
+[    5.202000] pci: msi: 1:0.0 on vector 52, remapped
+[    5.202000] rtl8168: interrupts: messages on vector 52
+[    5.209000] net: eth0: IPv6 fe80::2ad2:44ff:fe7e:e0af/64 added
+[    5.216000] net: ready: RTL8168GU
+[    5.222000] net: eth0: RTL8168GU, station 28:D2:44:7E:E0:AF
+[    5.229000] rtl8168: RTL8168GU: xid 0x509, MMIO 0x48A000, MAC 28:D2:44:7E:E0:AF
+[    5.229000] rtl8168: no link yet
+[    5.235000] rtl8168: messages on vector 52: none yet, 0 by the tick
+[    5.242000] net: eth0: no address
+[    5.249000] netconsole: broadcast, ethertype 0x88b5, boot id 0x981f92c, 0 frames, 6791 characters dropped
+[    5.273000] vtd: irte: dmar1 index 9: msi of 2:0.0, vector 56 to apic 0, edge, sid 0x0200 svt 1
+[    5.273000] pci: msi: 2:0.0 on vector 56, remapped
+[    5.273000] ath9k: interrupts: messages on vector 56
+[    5.280000] ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac b8:ee:65:32:89:15 subsys 17aa:4026
+[    5.291000] drm: start
+[    5.298000] i915: uncore: an unclaimed access before the bind, cleared
+[    5.305000] i915: stolen: [mem 0xaba00000-0xaf9fffff], 64512 KiB usable, inside the device's reserved region; DMAR active, no buffers in it
+[    5.320000] i915: gtt: pipe A's firmware surface at 0x0, 4128 KiB, kept
+[    5.336000] i915: gtt: 2048 MiB, 256 MiB of it through the aperture; 523256 entries to the scratch page, 1032 kept
+[    5.350000] i915: opregion: version 2.0.0 at 0xaafb4018, mailboxes 0x1f; VBT in mailbox 4
+[    5.357000] i915: vbt: "$VBT HASWELL        " from the OpRegion (Mailbox #4), version 177, 3 outputs
+[    5.372000] i915: gem: 32 fences, swizzle 9/10 for X tiles and 9 for Y
+[    5.379000] vtd: irte: dmar0 index 0: msi of 0:2.0, vector 53 to apic 0, edge, sid 0x0010 svt 1
+[    5.379000] pci: msi: 0:2.0 on vector 53, remapped
+[    5.379000] i915: interrupts: messages on vector 53
+[    5.386000] i915: rps: RPn 200 MHz, RP1 200 MHz, RP0 1000 MHz, RPe 500 MHz, max 1000 MHz
+[    5.394000] i915: ppgtt: aliasing, 2048 MiB shared, directory at 0x7fde0000
+[    5.402000] i915: rings: rcs0, bcs0, vcs0 and vecs0 started: 16 KiB each at 0x7fffb000, 0x7fff6000, 0x7fff1000 and 0x7ffec000, status pages at 0x7ffff000, 0x7fffa000, 0x7fff5000 and 0x7fff0000
+[    5.426000] i915: workarounds: applied: 3 of the GT and 6 of rcs0, 0 lost
+[    5.435000] i915: pcode: read of command 0x5: error -6
+[    5.435000] i915: found: 00:02.0: haswell/ult (device id 0a16), graphics 7.5, display version 7.00, gt2, revision 0b
+[    5.452000] i915: cdclk: 450000 kHz, the most 450000 kHz, pixel clocks to 450000 kHz
+[    5.461000] i915: wm: latencies 20, 4, 36, 90 and 160 (level 0 in 0.1 us, then 0.5 us)
+[    5.470000] i915: pps: power up 200 ms, down 50 ms, cycle 500 ms, backlight on 1 ms, off 200 ms
+[    5.487000] i915: panel: the EDID's preferred fixed mode 1366x768@60, 76300 kHz
+[    5.495000] i915: edp: DPCD 1.1, eDP 1, 1 lane, rates 162000 to 270000 kHz, 6 bpc, EDID 128 bytes
+[    5.504000] i915: hdmi B: DDC pin 5, level 9, 300000 kHz TMDS
+[    5.513000] i915: display: port B: HDMI
+[    5.521000] i915: hdmi C: DDC pin 4, level 6, 300000 kHz TMDS, DP++
+[    5.529000] i915: display: port C: DP+HDMI
+[    5.537000] i915: display: pipe A adopted: 1366x768 in 1366x768@60, 76300 kHz, 18 bpp, 1 lane at 270000 kHz, the firmware's framebuffer at GTT 0x0, stride 5504
+[    5.554000] i915: backlight: intel_backlight: levels 0 to 937, at 937, off with the pipe
+[    5.562000] drm: worker: kdrm is pid 1
+[    5.562000] drm: i915: card0
+[    5.571000] console: card0: a native display
+[    5.579000] i915: gmbus dpb: NAK for addr 0050 w(1)
+[    5.579000] i915: gmbus dpb: NAK on first message, retry
+[    5.579000] i915: gmbus dpb: NAK for addr 0050 w(1)
+[    5.579000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[    5.579000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+[    5.579000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+[    5.579000] i915: gmbus dpc: NAK for addr 0050 w(1)
+[    5.579000] i915: gmbus dpc: NAK on first message, retry
+[    5.579000] i915: gmbus dpc: NAK for addr 0050 w(1)
+[    5.579000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[    5.579000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+[    5.581000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+[    5.581000] i915: registered: i915 1.6.0 for pci:0000:00:02.0 on card 0
+[    5.590000] fbdrm: framebuffer at 0xb0000000 is a native driver's
+[    5.598000] kvm: ready: vmx
+[    5.606000] vfio: ready: 12 groups of 14 functions
+[    5.946000] timing: tick 1000 Hz, 200 ms delay measured 201 ms, 2000 us wait measured 2011 us
+[    5.954000] clock: reference: the hpet; a tick the timer misses or delays is counted
+[    5.974000] smp: cpu1: tsc: synchronized with cpu0
+[    5.998000] smp: cpu2: tsc: synchronized with cpu0
+[    6.022000] smp: cpu3: tsc: synchronized with cpu0
+[    6.033000] smp: processors: 4 online of 4
+[    6.043000] vdso: clock: the tsc, 1895607 counts a tick
+[    6.060000] boot: starting /sbin/init
+[    6.063000] acpi: thread: kacpid is pid 3
+[    6.063000] wlan: worker: kwlan is pid 4
+[    6.063000] mouse: worker: kpsmoused is pid 5
+[    6.066000] input: sysfs: worker: kinputd is pid 6
+[    8.194000] rtl8168: link 1000 Mb/s, full duplex, pause both ways
+[    9.134000] net: eth0: IPv4 192.168.0.106/24
+[    9.442000] net: wlan0: IPv6 fe80::baee:65ff:fe32:8915/64 added
+[    9.484000] net: eth0: IPv6 fd91:381e:e667:4a0c:85e3:7539:6efb:bc0a/64 added
+[    9.484000] net: eth0: IPv6 fd91:381e:e667:4a0c:4283:5c17:c67b:5f7e/64 added
+[   12.722000] console: card0: handed to a master, the keyboard off
+[   14.282000] i915: gmbus dpb: NAK for addr 0050 w(1)
+[   14.282000] i915: gmbus dpb: NAK on first message, retry
+[   14.282000] i915: gmbus dpb: NAK for addr 0050 w(1)
+[   14.282000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[   14.282000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+[   14.283000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+[   14.284000] i915: gmbus dpc: NAK for addr 0050 w(1)
+[   14.284000] i915: gmbus dpc: NAK on first message, retry
+[   14.284000] i915: gmbus dpc: NAK for addr 0050 w(1)
+[   14.284000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[   14.284000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+[   14.285000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+[   14.443000] i915: worker: ki915 is pid 119
