@@ -27,6 +27,7 @@
 
 #include "../lib/kint.h"
 #include "../lib/kuser.h"
+#include "../fs/sleeplock.h"
 #include "../proc/wait_queue.h"
 
 #define PIPE_BUF_SIZE 65536   /* a new pipe's ring, a power of two */
@@ -101,6 +102,13 @@ typedef struct pipe {
     uint32_t buf_cap;
     uint32_t buf_first;
     uint32_t bufs;
+    /* Linux's `pipe->mutex`: held by a read, a write, a splice's or a tee's
+     * use of the ring, a resize and FIONREAD from their start to their
+     * return, across the page faults of their copies, and given back only
+     * while they wait (`pipe_sleep`), so no other reader or writer moves
+     * the ring while a copy sleeps. A close does not take it, since a
+     * closed end only ends a wait or a write, which each judge again. */
+    struct sleep_lock lock;
 } pipe_t;
 
 /** Empty the list of live pipes; called once at boot. Each pipe comes from
