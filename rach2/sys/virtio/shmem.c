@@ -1459,9 +1459,9 @@ static int vshm_present(void *arg)
  * doorbell, or each tick when it polls, and carries out a detach. The tick does
  * not switch it (`no_tick_switch`): it gives way where it sleeps, at the top of
  * each pass and after each look of `vshm_await` that fails, as vhost's worker
- * calls cond_resched between works (drivers/vhost/vhost.c:440 in 6.12.115),
- * so the state its steps change, which the big lock guards, never changes
- * under it.
+ * calls cond_resched between works (drivers/vhost/vhost.c:440 in 6.12.115), so
+ * the state its steps change, which the big lock guards, never changes under
+ * it.
  */
 static void vshm_main(void)
 {
