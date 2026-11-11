@@ -262,6 +262,14 @@ int acpi_gas_write(const struct acpi_gas *g, uint32_t value)
     return 0;
 }
 
+/** The reset register's byte, as acpi.c writes an I/O register's. */
+void acpi_reset_write(const struct acpi_info *a)
+{
+    if (a->reset_supported) {
+        outb((uint16_t)a->reset_reg.address, a->reset_value);
+    }
+}
+
 /** Whether write `i` was `value` to `port`, `width` wide. */
 static int wrote(int i, uint16_t port, uint32_t value, int width)
 {
