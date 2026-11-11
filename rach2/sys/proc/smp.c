@@ -673,18 +673,23 @@ int smp_cpu_count(void)
 
 /**
  * Stop this processor for good: leave VMX or SVM operation first
- * (`k_panic_hook`), then mark it stopped, which is what `smp_stop_others`
- * waits for, and halt. Linux's `smp_stop_nmi_callback` and
- * `sysvec_reboot` call `cpu_emergency_disable_virtualization` before
- * `stop_this_cpu` in the same order (arch/x86/kernel/smp.c:121-141), since
- * a processor left in VMX operation blocks INIT, and the restart that
- * follows the stop may need it (arch/x86/kernel/reboot.c:556-599).
+ * (`k_panic_hook`), stop the watchdog's counter, then mark it stopped,
+ * which is what `smp_stop_others` waits for, and halt. Linux's
+ * `smp_stop_nmi_callback` and `sysvec_reboot` call
+ * `cpu_emergency_disable_virtualization` before `stop_this_cpu` in the same
+ * order (arch/x86/kernel/smp.c:121-141), since a processor left in VMX
+ * operation blocks INIT, and the restart that follows the stop may need it
+ * (arch/x86/kernel/reboot.c:556-599). `stop_this_cpu` masks the counter's
+ * APIC entry (`disable_local_APIC`, arch/x86/kernel/process.c:822), since
+ * its NMI would wake the halt and the stopped processor, taking no ticks,
+ * would be reported as a hard lockup.
  */
 static void smp_stop_here(struct percpu *cpu)
 {
     if (k_panic_hook) {
         k_panic_hook();
     }
+    platform_pmu_disable();
     cpu->online = 0;
     cpu->stopped = 1;
     arch_stop();
