@@ -75,12 +75,11 @@ as a nonzero set of bits a wake must share, and
 .Fa timeout
 an absolute time on the monotonic clock, or on the real-time clock with
 .Dv FUTEX_CLOCK_REALTIME .
-A setting of the real-time clock moves a deadline on it, here and for every
-wait below, as in Linux: a setting past the time ends the wait at the next
-tick with
+A setting of the real-time clock or a leap second moves a deadline on it,
+here and for every wait below, as in Linux: a step past the time ends the
+wait at the next tick with
 .Er ETIMEDOUT ,
-and a setting back keeps it waiting until the clock reaches the time
-again.
+and a step back keeps it waiting until the clock reaches the time again.
 .It Dv FUTEX_WAKE
 Wake up to
 .Fa val

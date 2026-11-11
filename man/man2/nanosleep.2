@@ -108,10 +108,11 @@ read the same time since boot, and
 is that time with the boot's real time added, so an absolute sleep on any
 of the three ends when time since boot reaches the time asked for, less the
 real-time clock's offset on that clock.
-A setting of the real-time clock moves an absolute sleep on
+A setting of the real-time clock or a leap second moves an absolute sleep
+on
 .Dv CLOCK_REALTIME ,
-as in Linux: a setting past its time ends it at the next tick, and a
-setting back keeps it sleeping until the clock reaches its time again.
+as in Linux: a step past its time ends it at the next tick, and a step back
+keeps it sleeping until the clock reaches its time again.
 The fourth is the caller's process CPU clock,
 .Dv CLOCK_PROCESS_CPUTIME_ID ,
 or any process's in the negative form
