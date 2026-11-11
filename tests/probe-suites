@@ -62,6 +62,7 @@ blankprobe screen
 musl/vdsomusl vdso
 musl/audioclientsmusl audio
 watchdogprobe watchdog
+pstoreprobe watchdog
 udmabufprobe dmabuf
 fenceprobe dmabuf
 drmfuzz dmabuf

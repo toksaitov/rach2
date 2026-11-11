@@ -392,9 +392,11 @@ $(GRUB_CASE_DISK): $(DEMO_CREDS) tools/image/mkdisk_grub.sh $(KERNEL) $(GRUB_TES
 	RACH2_DISK_RECOVERY_MB=8 \
 	    sh tools/image/mkdisk_grub.sh $(KERNEL) $@
 # `tests/run watchdog`: version 2 TCO expiry on q35, observed as QMP's
-# watchdog run state, and gfxtool's refusal of std-vga before MMIO.
+# watchdog run state, a panic's record kept by ramoops across the reset the
+# TCO makes, and gfxtool's refusal of std-vga before MMIO.
 WATCHDOG_IMAGE = $(ARCH_CASE_DIR)/watchdog/watchdog.krffs
 $(WATCHDOG_IMAGE): krffs/manifests/watchdog.manifest $(ARCH_BUILD)/tests/watchdogprobe \
+                   $(ARCH_BUILD)/tests/pstoreprobe \
                    $(ARCH_BUILD)/utils/sbin/gfxtool $(IMAGE_TOOLS) | krffs
 	$(MKIMAGE) krffs/manifests/watchdog.manifest $@ 4
 

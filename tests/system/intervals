@@ -9,6 +9,7 @@ tests/host/etude_watchdog_hosttest.c: progress every 20 ms, which the case's bou
 tests/host/etude_watchdog_hosttest.c: silent for three seconds, past a gap of two
 tests/host/etude_watchdog_hosttest.c: the caller stays away past the cases' bounds
 tests/host/etude_sched_hosttest.c: a job holds its claims so the workers' claims overlap
+tests/pstoreprobe.c: the kernel alone feeds the TCO for three heartbeats
 tests/timeprobe.c: naps between looks; the parent's are the sleep tested
 tests/restartprobe.c: naps between looks at a child, and the stop's hold
 tests/restartprobe.c: the sleeps tested, timed against their deadlines
