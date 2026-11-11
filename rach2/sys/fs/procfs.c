@@ -3661,6 +3661,24 @@ static void procfs_assignment_counts(struct procfs_text *t)
 #endif
 }
 
+/** Append a big-lock hold's entry as its vector and system call number, -1
+ * for none, or as `take 0` or `take 1` for a take after an idle wait or a
+ * switch, as bkl/calls names it. */
+static void procfs_hold_entry(struct procfs_text *t, uint32_t vector, int32_t nr)
+{
+    if (nr == BKL_NR_IDLE || nr == BKL_NR_SWITCH) {
+        ap_str(t, nr == BKL_NR_IDLE ? "take 0" : "take 1");
+        return;
+    }
+    ap_u32(t, vector);
+    ap_ch(t, ' ');
+    if (nr < 0) {
+        ap_str(t, "-1");
+    } else {
+        ap_u32(t, (uint32_t)nr);
+    }
+}
+
 /** Append the retained holds completed during the longest big-lock wait. */
 static void procfs_wait_holds(struct procfs_text *t, uint32_t holds)
 {
@@ -3671,13 +3689,7 @@ static void procfs_wait_holds(struct procfs_text *t, uint32_t holds)
     for (i = 0; i < holds && i < BKL_WAIT_HOLDS; i++) {
         smp_wait_hold(i, &us, &vector, &nr);
         ap_str(t, "\nbkl_wait_max_hold ");
-        ap_u32(t, vector);
-        ap_ch(t, ' ');
-        if (nr < 0) {
-            ap_str(t, "-1");
-        } else {
-            ap_u32(t, (uint32_t)nr);
-        }
+        procfs_hold_entry(t, vector, nr);
         ap_ch(t, ' ');
         ap_u64(t, us);
     }
@@ -3731,13 +3743,7 @@ static void procfs_work_counts(struct procfs_text *t)
     ap_str(t, "\nbkl_hold_max_us ");
     ap_u64(t, held);
     ap_str(t, "\nbkl_hold_max_entry ");
-    ap_u32(t, vector);
-    ap_ch(t, ' ');
-    if (nr < 0) {
-        ap_str(t, "-1");
-    } else {
-        ap_u32(t, (uint32_t)nr);
-    }
+    procfs_hold_entry(t, vector, nr);
     ap_str(t, "\nbkl_hold_sample_us ");
     ap_u64(t, age);
     ap_str(t, "\nbkl_hold_sample_pc");
