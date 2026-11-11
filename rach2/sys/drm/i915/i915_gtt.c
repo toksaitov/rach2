@@ -11,6 +11,8 @@
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
 #include "../../mm/paging.h"
+#include "../../proc/mutex.h"
+#include "../../proc/sched.h"
 
 /* The aperture's sizes by MSAC's code; 0 for the code no chip uses. */
 static const uint32_t i915_aperture_sizes[4] = {0x8000000u, 0x10000000u, 0, 0x20000000u};
@@ -153,16 +155,44 @@ int32_t i915_ggtt_insert(struct drm_i915_private *i915, uint64_t offset, const u
     return 0;
 }
 
+/*
+ * The entries a clear writes between two points where it gives way: 2 MiB
+ * of the GTT, as Linux gives way after each PMD entry's 512 pages
+ * (mm/memory.c:1740).
+ */
+#define I915_GGTT_CLEAR_BATCH 512u
+
+/**
+ * Linux's gen6_ggtt_clear_range, which Haswell's aliasing PPGTT selects
+ * (gt/intel_ggtt.c:718-737, 1422-1425), and gen8_ggtt_clear_range (548-567)
+ * write the entries in one loop and leave the GTT's flush to the next
+ * insert (gen6_ggtt_insert_entries, 637-641); this clear flushes once,
+ * after the last entry, so that no translation of a page it unmaps
+ * outlives it in the GPU's TLB. The entries go through a write-combining
+ * mapping, as Linux's ggtt_probe_common maps them (1167-1170), and the
+ * flush's posting read waits for them all. A holder of the GEM lock with
+ * interrupts on gives way after each I915_GGTT_CLEAR_BATCH entries
+ * (`sched_give_way`): the lock keeps the GTT and its bindings whole for
+ * every other thread (i915.h), and the range stays reserved to its caller,
+ * which releases it only after the clear, so no other thread reaches the
+ * entries between two batches.
+ */
 int32_t i915_ggtt_clear_range(struct drm_i915_private *i915, uint64_t offset, uint64_t size)
 {
-    uint32_t i, first = (uint32_t)(offset / I915_GTT_PAGE_SIZE);
+    uint32_t i, n, first = (uint32_t)(offset / I915_GTT_PAGE_SIZE);
     int32_t err = i915_ggtt_check(&i915->ggtt, offset, size);
+    int yield;
 
     if (err < 0) {
         return err;
     }
-    for (i = 0; i < size / I915_GTT_PAGE_SIZE; i++) {
+    n = (uint32_t)(size / I915_GTT_PAGE_SIZE);
+    yield = mutex_held(&i915->gem.lock);
+    for (i = 0; i < n; i++) {
         i915_gtt_write(&i915->hw, first + i, i915->ggtt.scratch_pte);
+        if (yield && (i + 1u) % I915_GGTT_CLEAR_BATCH == 0 && i + 1u < n) {
+            sched_give_way();
+        }
     }
     i915_ggtt_invalidate(i915);
     return 0;
