@@ -93,9 +93,10 @@ typedef struct pipe {
     int spliced;
     wait_queue_t splice_wq;
     /* Linux's page buffers over the ring, which its shrink rule counts
-     * (`pipe_set_size`): each buffer that still holds bytes, oldest first,
-     * `bufs` of them from `buf_first` in the `buf_cap` slots of `buf_pages`,
-     * allocated with the ring. A NULL `buf_pages` keeps none. */
+     * (`pipe_set_size`): each buffer that still holds bytes, and each empty
+     * one a write whose page faulted left, oldest first, `bufs` of them
+     * from `buf_first` in the `buf_cap` slots of `buf_pages`, allocated with
+     * the ring. A NULL `buf_pages` keeps none. */
     struct pipe_page *buf_pages;
     uint32_t buf_cap;
     uint32_t buf_first;
@@ -153,7 +154,10 @@ struct kernel_iovec;
  * first total mod 4096 bytes when it can, and each page buffer opened after
  * it fills across the elements. Each of those groups is committed whole
  * once it is full or the vector is spent, so a fault leaves none of its
- * group readable, as Linux leaves an unfinished page empty. Returns as a
+ * group readable, as Linux leaves an unfinished page empty; a page group
+ * that faults leaves its buffer in the pipe empty, as Linux's does, which
+ * poll reports as data, which takes a slot and which a later small write
+ * joins, until a read reaches it. Returns as a
  * write(2) of the pipe does: the bytes written, all of them unless
  * O_NONBLOCK or an error cuts the write, or -EAGAIN, -EPIPE with SIGPIPE
  * raised, -EINTR, -EBADF, -EFAULT or -ENOMEM before any byte. May sleep.

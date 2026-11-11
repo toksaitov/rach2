@@ -37,6 +37,8 @@ extern int printf(const char *format, ...);
 
 static pipe_t ring;
 static uint8_t ring_bytes[PIPE_BUF_SIZE];
+/* The page buffers' slots, which a row that counts them gives the ring. */
+static struct pipe_page ring_pages[2 * (PIPE_BUF_SIZE / PAGE_SIZE) + 2];
 static fd_entry_t reader, writer;
 static struct open_file read_ofd, write_ofd;
 static uint8_t memory[USER_PAGES * PAGE_SIZE];
@@ -502,8 +504,12 @@ static void write_with_data(void)
  * before any copy. A write of fewer bytes
  * than a page is one group, which a write commits whole, as Linux's
  * pipe_write commits a page: when its second page faults it is -EFAULT
- * with no byte added and no reader woken, and when the reader closes while
- * that page is resolved it is -EPIPE with SIGPIPE and no byte added.
+ * with no byte added, and it leaves the group's buffer empty in the ring,
+ * as Linux's pipe_write leaves the buffer it moved the head past: the
+ * readers are woken, poll reports POLLIN, a later small write joins the
+ * buffer, and a read that reaches it alone lets it go and is -EAGAIN. When
+ * the reader closes while that page is resolved the write is -EPIPE with
+ * SIGPIPE and no byte added.
  */
 static void later_page(void)
 {
@@ -523,11 +529,26 @@ static void later_page(void)
     CHECK(pipe_read(&reader, user_at(0), 4) == 0, "an ended pipe is 0 before a bad buffer faults");
 
     setup(0);
+    ring.buf_pages = ring_pages;
+    ring.buf_cap = pipe_buf_slots(ring.size);
     pages[1] = -1;
     CHECK(pipe_write(&writer, user_at(PAGE_SIZE - 2), 6) == -EFAULT,
           "a write fault in the first group returns efault");
-    CHECK(pipe_available(&ring) == 0 && read_wakes == 0,
-          "a write fault publishes no byte of its group");
+    CHECK(pipe_available(&ring) == 0 && ring.bufs == 1 && read_wakes == 1 && read_kinds == WQ_DATA,
+          "a write fault publishes no byte of its group and leaves its buffer empty");
+    CHECK(pipe_poll(&reader, PIPE_POLLIN, NULL) == PIPE_POLLIN,
+          "a pipe with an empty buffer polls in");
+    CHECK(pipe_write(&writer, user_at(0), 3) == 3 && ring.bufs == 1 && pipe_available(&ring) == 3,
+          "a small write joins the empty buffer");
+    CHECK(pipe_read(&reader, user_at(PEER_PAGE * PAGE_SIZE), 8) == 3 && ring.bufs == 0,
+          "a read takes the joined buffer whole");
+    CHECK(pipe_write(&writer, user_at(PAGE_SIZE - 2), 6) == -EFAULT && ring.bufs == 1,
+          "a second write fault leaves an empty buffer");
+    write_wakes = 0;
+    CHECK(pipe_read(&reader, user_at(PEER_PAGE * PAGE_SIZE), 4) == -EAGAIN && ring.bufs == 0 &&
+              write_wakes == 1,
+          "a read lets go of an empty buffer and is eagain");
+    CHECK(pipe_poll(&reader, PIPE_POLLIN, NULL) == 0, "a pipe whose empty buffer went polls empty");
 
     setup(0);
     pipe_ring_put(&ring, memory, 6);

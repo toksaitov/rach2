@@ -170,12 +170,21 @@ static void pipe_free(pipe_t *p)
     kfree(p);
 }
 
-/** The wait condition of a read of the pipe `arg`: bytes are buffered, or
- * no writer is left, when the read returns 0. */
+/** Whether `p` holds bytes or a buffer, as Linux's `pipe_empty` is false:
+ * a write that faults in a page leaves an empty buffer (`pipe_buf_fault`),
+ * which poll reports and a read lets go of (`pipe_buf_skip_empty`). */
+static int pipe_holds(const pipe_t *p)
+{
+    return pipe_available(p) != 0 || p->bufs != 0;
+}
+
+/** The wait condition of a read of the pipe `arg`: it holds bytes or a
+ * buffer (`pipe_holds`), or no writer is left, when the read returns 0, as
+ * Linux's `pipe_readable`. */
 static int pipe_readable(void *arg)
 {
     pipe_t *p = (pipe_t *)arg;
-    return pipe_available(p) != 0 || !p->write_open;
+    return pipe_holds(p) || !p->write_open;
 }
 
 /** The wait condition of a write to the pipe `arg`: the ring has room, or
@@ -187,8 +196,9 @@ static int pipe_writable(void *arg)
 }
 
 /** The slots of Linux's ring for `p` that no buffer holds: its size in pages,
- * Linux's `max_usage`, less the buffers that hold bytes. A write may leave
- * more buffers than that (`pipe_buf_slots`), and then none is free. */
+ * Linux's `max_usage`, less its buffers, those of no bytes among them. A
+ * write may leave more buffers than that (`pipe_buf_slots`), and then none
+ * is free. */
 static uint32_t pipe_slots_free(const pipe_t *p)
 {
     uint32_t max = p->size / PAGE_SIZE;
@@ -251,12 +261,13 @@ static void pipe_wake(pipe_t *p, wait_queue_t *wq, uint32_t kinds)
 
 /*
  * Linux keeps a pipe's bytes in page buffers, one to a slot of its ring, and
- * refuses to shrink a pipe below the buffers that hold bytes, however few
- * bytes they hold. The functions below keep the same buffers over the byte
- * ring, `buf_pages` in pipe.h, so that `pipe_set_size` can apply the rule: a
- * write opens a page when the last buffer cannot take its bytes, vmsplice and
- * splice from a file open one for each page of their source, and a buffer
- * leaves once read whole.
+ * refuses to shrink a pipe below its buffers, however few bytes they hold.
+ * The functions below keep the same buffers over the byte ring, `buf_pages`
+ * in pipe.h, so that `pipe_set_size` can apply the rule: a write opens a
+ * page when the last buffer cannot take its bytes, and leaves it empty when
+ * the page's source faults; vmsplice and splice from a file open one for
+ * each page of their source; and a buffer leaves once read whole, or, empty,
+ * once a read reaches it.
  */
 
 /** The slots of `buf_pages` for a ring of `size` bytes: twice its pages and
@@ -307,35 +318,78 @@ static void pipe_buf_open(pipe_t *p, uint32_t at, uint32_t offset, int merge)
     pg->merge = (uint16_t)(merge != 0);
 }
 
-/** Let go of the buffers of `p` that its reads have emptied; called after
- * `head` moves. */
+/** The counter value at which the `i`th buffer of `p`, oldest first, ends:
+ * where the next began, or the tail for the newest. */
+static uint32_t pipe_buf_end(const pipe_t *p, uint32_t i)
+{
+    return i + 1 < p->bufs ? pipe_buf_at(p, i + 1) : p->tail;
+}
+
+/** Let go of the oldest buffer of `p`. */
+static void pipe_buf_shift(pipe_t *p)
+{
+    p->buf_first = (p->buf_first + 1) % p->buf_cap;
+    if (--p->bufs == 0) {
+        p->buf_first = 0;
+    }
+}
+
+/**
+ * Let go of the buffers of `p` that a read has passed; called after `head`
+ * moves. A buffer is passed when its end is at or before the head and it
+ * began before the head: an empty buffer the head has just reached stays,
+ * as Linux's `pipe_read` stops once its count is spent, before the next
+ * buffer, and one the head moved past goes, as Linux's lets go of each
+ * empty buffer it meets on the way.
+ */
 static void pipe_buf_drop(pipe_t *p)
 {
     uint32_t avail = pipe_available(p);
 
-    if (avail == 0) {
-        p->bufs = 0;
-        p->buf_first = 0;
-        return;
+    while (p->bufs > 0 && pipe_buf_at(p, 0) != p->head && p->tail - pipe_buf_end(p, 0) >= avail) {
+        pipe_buf_shift(p);
     }
-    while (p->bufs > 1 && p->tail - pipe_buf_at(p, 1) >= avail) {
-        p->buf_first = (p->buf_first + 1) % p->buf_cap;
-        p->bufs--;
+}
+
+/**
+ * Let go of the empty buffers at the front of `p`, as Linux's `pipe_read`
+ * lets go of an empty buffer it reaches with room left, and wake the
+ * writers, who may wait for a slot, when one went. Called by a read with
+ * room left before it reads the next buffer or waits.
+ */
+static void pipe_buf_skip_empty(pipe_t *p)
+{
+    uint32_t bufs = p->bufs;
+
+    while (p->bufs > 0 && pipe_buf_end(p, 0) == p->head) {
+        pipe_buf_shift(p);
     }
+    if (p->bufs != bufs) {
+        pipe_wake(p, &p->write_wq, WQ_ROOM);
+    }
+}
+
+/** Whether the newest buffer of `p` has no byte, or there is none: a
+ * splice's next bytes then open a buffer, since the buffer its earlier
+ * bytes took is gone or another writer opened one after it. */
+static int pipe_buf_tail_empty(const pipe_t *p)
+{
+    return p->bufs == 0 || pipe_buf_at(p, p->bufs - 1) == p->tail;
 }
 
 /**
  * The bytes of a write of `count` that the newest buffer of `p` takes, as
  * Linux's `pipe_write` merges them: the write's first `count` mod 4096
- * bytes, when the pipe holds bytes, the newest buffer takes merges and they
- * fit in its page after its offset and the bytes written to it.
+ * bytes, when the pipe has a buffer, an empty one a faulted write left
+ * among them, the newest buffer takes merges and they fit in its page
+ * after its offset and the bytes written to it.
  */
 static uint32_t pipe_buf_merge_room(const pipe_t *p, uint32_t count)
 {
     uint32_t chars = count & (PAGE_SIZE - 1);
     const struct pipe_page *pg;
 
-    if (chars == 0 || p->bufs == 0 || pipe_available(p) == 0) {
+    if (chars == 0 || p->bufs == 0) {
         return 0;
     }
     pg = pipe_buf_page(p, p->bufs - 1);
@@ -380,14 +434,15 @@ static void pipe_buf_add(pipe_t *p, uint32_t n, uint32_t *fill)
  * splice from a file link the source's pages: a buffer for each source page
  * the bytes reach, none taking later writes' bytes. `fresh` opens one for
  * the first byte even inside a page, as for a call's first bytes or those
- * after another writer's, and so does a pipe with no buffer, which a reader
- * emptied while the call slept part way through a page.
+ * after another writer's, and so does a pipe whose newest buffer is empty
+ * or gone (`pipe_buf_tail_empty`), since a reader emptied it or a faulted
+ * write opened one while the call slept part way through a page.
  */
 static void pipe_buf_add_pages(pipe_t *p, uint32_t n, uint32_t src, int fresh)
 {
     uint32_t at = p->tail;
 
-    if (p->bufs == 0) {
+    if (pipe_buf_tail_empty(p)) {
         fresh = 1;
     }
     while (n > 0) {
@@ -534,10 +589,10 @@ static int32_t pipe_put_wait(pipe_t *p, uint32_t how, uint32_t done, int opens)
 /** Whether the next byte of a splice's `pipe_put`, `src` bytes into its
  * source page, opens a buffer of `p`, as `pipe_buf_add_pages` judges it: at
  * a page's start, as the call's first, `fresh`, or the first after another
- * writer's, `other`, or in an emptied pipe. */
+ * writer's, `other`, or after a newest buffer that is empty or gone. */
 static int pipe_put_opens(const pipe_t *p, uint32_t src, int fresh, int other)
 {
-    return fresh || other || p->bufs == 0 || (src & (PAGE_SIZE - 1)) == 0;
+    return fresh || other || pipe_buf_tail_empty(p) || (src & (PAGE_SIZE - 1)) == 0;
 }
 
 /** Whether `p` has room for the next bytes of a put: a byte free, and when
@@ -820,7 +875,10 @@ static uint32_t pipe_buf_head_len(const pipe_t *p)
  * a destination page that cannot be written ends the read with the bytes of
  * the buffers before it, or -EFAULT, and the buffer keeps every byte. The
  * read goes on through the buffers while bytes are buffered, and waits only
- * before its first byte.
+ * before its first byte. An empty buffer a faulted write left is let go of
+ * when the read reaches it with room left (`pipe_buf_skip_empty`), so a
+ * read of a pipe that holds only such buffers waits, or is -EAGAIN, as
+ * Linux's.
  *
  * Each copy brings its destination in for writing first, which may sleep,
  * and judges the ring again after any sleep; then, with no sleep between,
@@ -851,6 +909,7 @@ static int32_t pipe_read_vec(fd_entry_t *e, const struct kernel_iovec *iov, int 
         uint32_t len;
         int32_t rc;
 
+        pipe_buf_skip_empty(p);
         if (pipe_available(p) == 0) {
             if (done > 0 || !p->write_open) {
                 break;
@@ -896,6 +955,29 @@ static int32_t pipe_read_vec(fd_entry_t *e, const struct kernel_iovec *iov, int 
 }
 
 /**
+ * Leave in `p` the empty buffer of a write's page group whose source
+ * faulted, as Linux's `pipe_write` moves `pipe->head` past an empty buffer
+ * before its copy and leaves it in the ring after a fault: poll reports it
+ * as data, it takes a slot, a later write's first `count` mod 4096 bytes
+ * join it (`pipe_buf_merge_room`), and a read lets go of it
+ * (`pipe_buf_skip_empty`). The readers are woken, as Linux wakes them for
+ * an empty pipe. Nothing is opened when no slot is free, since a sleep in
+ * the fault may have let other writers fill the ring.
+ */
+static void pipe_buf_fault(pipe_t *p)
+{
+    uint32_t bufs = p->bufs;
+
+    if (pipe_slots_free(p) == 0) {
+        return;
+    }
+    pipe_buf_open(p, p->tail, 0, 1);
+    if (p->bufs != bufs) {
+        pipe_wake(p, &p->read_wq, WQ_DATA);
+    }
+}
+
+/**
  * The write of a pipe end: the `n` elements of the vector `iov`, whose
  * ranges iov_import or the caller has cut, `count` bytes in all, as one
  * write, which waits whenever the ring is full until the last byte is in,
@@ -924,9 +1006,12 @@ static int32_t pipe_read_vec(fd_entry_t *e, const struct kernel_iovec *iov, int 
  * readers and the ring are judged again after any sleep; then, with no sleep
  * between, the group is copied past the tail and the tail moves past it. A
  * page the caller cannot read ends the write with the bytes of the groups
- * before it, or -EFAULT, and no byte of its own group is readable, as
- * Linux's leaves an unfinished page empty. A write of PIPE_BUF bytes or
- * fewer is one group, so no other writer's bytes come between its own.
+ * before it, or -EFAULT, and no byte of its own group is readable. A page
+ * group that faults leaves its buffer open and empty (`pipe_buf_fault`), as
+ * Linux's `pipe_write` moves the head past a buffer before its copy and
+ * leaves it after a fault; merged bytes that fault open nothing. A write of
+ * PIPE_BUF bytes or fewer is one group, so no other writer's bytes come
+ * between its own.
  *
  * A free slot means a page of the ring is free, since each buffer holds a
  * page at most and the ring has a page for each slot.
@@ -980,13 +1065,13 @@ static int32_t pipe_put_vec(fd_entry_t *e, const struct kernel_iovec *iov, int n
             continue;
         }
         rc = pipe_iov_resident(iov, k, off, len, 0);
-        if (rc < 0) {
-            return (done > 0) ? (int32_t)done : rc;
-        }
         if (rc == 0) {
             continue;
         }
-        if (pipe_iov_copy(p, iov, &k, &off, len) < 0) {
+        if (rc < 0 || pipe_iov_copy(p, iov, &k, &off, len) < 0) {
+            if (fill == 0) {
+                pipe_buf_fault(p);
+            }
             return (done > 0) ? (int32_t)done : -EFAULT;
         }
         pipe_buf_add(p, len, &fill);
@@ -1024,7 +1109,9 @@ static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
  * every change of either wakes (`pipe_wake`).
  *
  * A poller wakes for what ends the wait of a read or a write. The read end
- * is POLLIN while data is buffered and POLLHUP once the writers are gone, so
+ * is POLLIN while it holds data or a buffer, an empty one a faulted write
+ * left among them (`pipe_holds`), as Linux's tests `pipe_empty`, and
+ * POLLHUP once the writers are gone, so
  * an empty pipe with no writers, whose read returns 0, reports POLLHUP
  * alone, as on Linux. A FIFO reader opened nonblocking with no writer
  * reports no hangup until a writer has opened since that read open.
@@ -1046,7 +1133,7 @@ static short pipe_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     }
 
     if (e->flags & FD_FLAG_READ) {
-        if (pipe_available(p) != 0) {
+        if (pipe_holds(p)) {
             revents |= (short)(events & PIPE_POLLIN);
         }
         if (!p->write_open && (!p->fifo || e->ofd->fifo_write_opens != p->write_opens)) {
@@ -1179,13 +1266,20 @@ int32_t pipe_splice_room(fd_entry_t *e, int nonblock, uint32_t src)
 /**
  * Wait until the pipe of the read end `e` has bytes, or has no writer left:
  * the bytes buffered, 0 for none and no writer, -EAGAIN for none with
- * `nonblock`, or -EINTR when a signal ends the wait.
+ * `nonblock`, or -EINTR when a signal ends the wait. The empty buffers at
+ * the front, which faulted writes left, are let go of first, as a read
+ * lets go of them (`pipe_buf_skip_empty`), so a splice or a tee waits for
+ * bytes.
  */
 static int32_t pipe_wait_data(fd_entry_t *e, int nonblock)
 {
     pipe_t *p = (pipe_t *)e->priv;
 
-    while (pipe_available(p) == 0) {
+    for (;;) {
+        pipe_buf_skip_empty(p);
+        if (pipe_available(p) != 0) {
+            break;
+        }
         if (!p->write_open) {
             return 0;
         }
@@ -1236,8 +1330,9 @@ int32_t pipe_get_size(const fd_entry_t *e)
  * the slots their counters name in it, so `head` and `tail` keep counting
  * as they did. A growth wakes the writers, which may now have room. The
  * limits are Linux's `pipe_set_size`'s, and a shrink passes them even for a
- * user over the soft limit. A shrink below the page buffers that hold bytes
- * fails with EBUSY, as in Linux, however few bytes they hold: a write opens
+ * user over the soft limit. A shrink below the page buffers fails with
+ * EBUSY, as in Linux, however few bytes they hold, an empty one a faulted
+ * write left among them (`pipe_buf_fault`): a write opens
  * a page unless its first `count` mod 4096 bytes fit in the newest buffer's
  * (`pipe_buf_merge_room`), and tee, splice and vmsplice open one for each
  * buffer or source page their bytes come from (`pipe_buf_link`,
