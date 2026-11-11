@@ -1,0 +1,14 @@
+# piglit.txt: the test bed's piglit scene (bed/measure/Readme.md), tests of
+# piglit's quick profile that draw, upload or read back and that pass on
+# virgl in the testing PC's reference (tests/graphics/ref/virgl-wsl/piglit),
+# one name a line as piglit.sh -l takes them.
+spec@!opengl 1.0@gl-1.0-readpixsanity
+spec@ext_framebuffer_object@fbo-readpixels
+spec@!opengl 1.1@texsubimage
+shaders@glsl-fs-loop
+spec@ext_framebuffer_object@fbo-generatemipmap
+spec@!opengl 1.4@triangle-rasterization
+spec@arb_vertex_buffer_object@vbo-subdata-many drawarrays
+spec@!opengl 1.1@streaming-texture-leak
+shaders@glsl-fs-sampler-numbering
+spec@!opengl 1.1@getteximage-formats
