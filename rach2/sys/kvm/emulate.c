@@ -2347,7 +2347,9 @@ static int seg_check(uint32_t seg, uint16_t sel, const struct desc *d, uint32_t 
 /**
  * Load `seg` with the null selector `sel`: #GP(0) for CS, TR, and SS
  * outside 64-bit mode or at another privilege; SS becomes a flat data
- * segment at the CPL, any other unusable.
+ * segment at the CPL, any other unusable. SS's limit is Linux's: a zero
+ * descriptor limit scaled by G to 0xFFF, since VM entry refuses a limit
+ * whose low 12 bits are not all ones under G.
  */
 static int seg_load_null(struct xc *x, uint32_t seg, uint16_t sel)
 {
@@ -2366,6 +2368,7 @@ static int seg_load_null(struct xc *x, uint32_t seg, uint16_t sel)
         s->dpl = (uint8_t)x->cpl;
         s->db = 1;
         s->g = 1;
+        s->limit = 0xFFFu;
     } else {
         s->unusable = 1;
     }
