@@ -296,6 +296,19 @@ uint32_t ip_loop_delivered(int from);
 /** Nonzero while the loopback ring holds anything at all. */
 int ip_loop_pending(void);
 
+/**
+ * Deliver what the loopback ring holds, as a system call's exit does, before
+ * a call that answers from a socket's queues: a receive, an accept or a
+ * poll. Linux delivers a loopback datagram within the sender's own call
+ * (loopback_xmit, then the softirq that local_bh_enable runs), so a
+ * nonblocking receive or a poll of no timeout right after a local send
+ * finds it; the ring holds one or two until the timer instead
+ * (`ip_loop_crowded`). The caller calls it at its start, with interrupts on
+ * and no work of its own on the stack under way; it may run the receive
+ * path, which may transmit.
+ */
+void ip_loop_settle(void);
+
 /** Count the datagrams on the loopback ring as left for the timer by an idle
  * machine. The boot processor's tick calls it, before its own work can send
  * onto the ring, when every processor online is halted in an idle wait. The

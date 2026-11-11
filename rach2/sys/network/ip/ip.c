@@ -818,3 +818,15 @@ void ip_loop_drain(void)
 {
     ip_loop_drain_from(IP_LOOP_FROM_TICK);
 }
+
+void ip_loop_settle(void)
+{
+    uint32_t flags;
+
+    if (!ip_loop_pending()) {
+        return;
+    }
+    flags = net_lock();
+    ip_loop_drain_from(IP_LOOP_FROM_CALL);
+    net_unlock(flags);
+}
