@@ -286,13 +286,13 @@ static int32_t vma_bind(struct drm_i915_private *i915, struct i915_vma *vma)
         if (err == 0) {
             err = i915_ppgtt_insert(i915, at, chunk, k, obj->cache_level);
             if (err != 0) {
-                (void)i915_ggtt_clear_range(i915, at, (uint64_t)k << PAGE_SHIFT);
+                (void)i915_ggtt_clear_range(i915, at, (uint64_t)k << PAGE_SHIFT, 0);
             }
         }
         if (err != 0) {
             /* A failed insert writes nothing; the chunks before it go. */
             if (done) {
-                (void)i915_ggtt_clear_range(i915, vma->start, (uint64_t)done << PAGE_SHIFT);
+                (void)i915_ggtt_clear_range(i915, vma->start, (uint64_t)done << PAGE_SHIFT, 0);
                 i915_ppgtt_clear_range(i915, vma->start, (uint64_t)done << PAGE_SHIFT);
             }
             return err;
@@ -397,11 +397,11 @@ static int32_t vma_existing(struct drm_i915_gem_object *obj, const struct vma_pl
     if (obj->userptr.stale) {
         /* Its entries map the scratch page since the program's pages
          * changed: undone, and bound again on new frames, unless held. */
-        return i915_vma_unbind(vma) == 0 ? 0 : -EAGAIN;
+        return i915_vma_unbind(vma, !(flags & I915_PIN_NONBLOCK)) == 0 ? 0 : -EAGAIN;
     }
     if (((flags & I915_PIN_MAPPABLE) && !vma->mappable) || (vma->start & (align - 1))) {
         /* Misplaced, as Linux's i915_vma_misplaced: moved, unless held. */
-        err = i915_vma_unbind(vma);
+        err = i915_vma_unbind(vma, !(flags & I915_PIN_NONBLOCK));
         return err == -EAGAIN ? -ENOSPC : err;
     }
     *out = vma;
@@ -592,7 +592,7 @@ int32_t i915_vma_pin_args(struct drm_i915_gem_object *obj, const struct i915_pin
         if (vma && (obj->userptr.stale || !vma_placed(vma, a, align))) {
             /* Misplaced, or on the scratch page since a userptr object's
              * pages changed: undone, unless held. */
-            err = i915_vma_unbind(vma);
+            err = i915_vma_unbind(vma, !(a->flags & I915_PIN_NONBLOCK));
             if (err != 0) {
                 return obj->userptr.stale ? -EAGAIN : -ENOSPC;
             }
@@ -616,7 +616,7 @@ void i915_vma_unpin(struct i915_vma *vma)
         if (vma->pin_count == 0 && vma->obj && vma->obj->userptr.stale) {
             /* It maps the scratch page since the program's pages changed;
              * with it go the old frames. */
-            (void)i915_vma_unbind(vma);
+            (void)i915_vma_unbind(vma, 0);
         }
     }
 }
@@ -658,7 +658,7 @@ void i915_vma_flush_writes(struct i915_vma *vma)
     vma->ggtt_write = 0;
 }
 
-int32_t i915_vma_unbind(struct i915_vma *vma)
+int32_t i915_vma_unbind(struct i915_vma *vma, int may_yield)
 {
     struct drm_i915_gem_object *obj = vma->obj;
     struct drm_i915_private *i915 = to_i915(obj->base.dev);
@@ -675,7 +675,7 @@ int32_t i915_vma_unbind(struct i915_vma *vma)
     i915_vma_revoke_mmap(vma);
     i915_vma_flush_writes(vma);
     i915_vma_revoke_fence(vma);
-    (void)i915_ggtt_clear_range(i915, vma->start, vma->node_size);
+    (void)i915_ggtt_clear_range(i915, vma->start, vma->node_size, may_yield);
     i915_ppgtt_clear_range(i915, vma->start, vma->node_size);
     i915_gem_object_unpin_pages(obj);
     ggtt_unlink(i915, vma);
@@ -690,14 +690,14 @@ int32_t i915_vma_unbind(struct i915_vma *vma)
     return 0;
 }
 
-int32_t i915_gem_object_unbind(struct drm_i915_gem_object *obj)
+int32_t i915_gem_object_unbind(struct drm_i915_gem_object *obj, int may_yield)
 {
     struct i915_vma *vma = obj->vmas, *next;
     int32_t err = 0;
 
     while (vma) {
         next = vma->obj_next;
-        if (i915_vma_unbind(vma) != 0) {
+        if (i915_vma_unbind(vma, may_yield) != 0) {
             err = -EAGAIN;
         }
         vma = next;

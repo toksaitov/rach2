@@ -93,7 +93,7 @@ uint32_t i915_gem_shrink_flags(struct drm_i915_private *i915, uint32_t want, uin
             continue;
         }
         if (purgeable(obj) && (flags & (obj->vmas ? I915_SHRINK_BOUND : I915_SHRINK_UNBOUND)) &&
-            i915_gem_object_unbind(obj) == 0 && !obj->pages_pin_count) {
+            i915_gem_object_unbind(obj, 0) == 0 && !obj->pages_pin_count) {
             got += i915_gem_object_truncate(obj);
             i915->gem.purged++;
         }
@@ -110,11 +110,13 @@ uint32_t i915_gem_shrink(struct drm_i915_private *i915, uint32_t want)
 /** The shrinker's `shrink`, which reclaim calls under the big kernel lock:
  * the pool's idle shadows dropped first, as Linux's pool_retire makes an
  * idle shadow purgeable for its shrinker (gt/intel_gt_buffer_pool.c:
- * 107-112), then the purgeable objects purged. Neither sleeps, so
- * `may_sleep` changes nothing. It only tries the GEM lock, as Linux's
- * shrinker only tries each object's (gem/i915_gem_shrinker.c:216-220),
- * and frees nothing while another holds it; a caller that holds it
- * already, whose allocation reclaims, frees under it. */
+ * 107-112), then the purgeable objects purged. Neither sleeps, and their
+ * unbinds give no way (`i915_gem_object_unbind`), so `may_sleep` changes
+ * nothing and the big lock stays held throughout. It only tries the GEM
+ * lock, as Linux's shrinker only tries each object's lock
+ * (gem/i915_gem_shrinker.c:216-220), and frees nothing while another
+ * holds it; a caller that holds it already, whose allocation reclaims,
+ * frees under it. */
 static uint32_t i915_gem_shrinker_scan(struct mem_shrinker *s, uint32_t want, int may_sleep)
 {
     struct drm_i915_private *i915 = ((struct i915_shrinker *)s)->i915;

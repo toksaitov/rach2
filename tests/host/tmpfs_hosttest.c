@@ -40,9 +40,20 @@ void sched_service_point(void)
     service_points++;
 }
 
-/** Nothing: one thread has no one to give way to. */
+/* The give-ways of the frees, and a check each runs while `at_give_way`
+ * is set. */
+static unsigned give_ways;
+static void (*at_give_way)(void);
+
+/** Count a give-way of a free and run the row's check there, if it set
+ *  one. */
 void sched_give_way(void)
-{}
+{
+    give_ways++;
+    if (at_give_way) {
+        at_give_way();
+    }
+}
 
 /* When positive, the allocation that counts it down to zero fails. */
 static int heap_fails_in;
@@ -764,6 +775,69 @@ static void allocation(void)
     CHECK(frames_in_use() == frames);
 }
 
+/** Make the file `name` in the root with one page in each of leaves 0 to
+ *  3, so that its table is the four leaves, each present. Returns it,
+ *  held. */
+static void *four_leaves(const char *name)
+{
+    void *f = make(NULL, name, 0644);
+    uint32_t leaf;
+
+    for (leaf = 0; leaf < 4; leaf++) {
+        CHECK(tmpfs_write(&mnt, f, "x", 1, (uint64_t)leaf * SHMEM_LEAF * PAGE_SIZE) == 1);
+    }
+    CHECK(((struct tmpfs_node *)f)->data.nleaves == 4);
+    return f;
+}
+
+/* The node a rename moves, and the give-ways that found it by its new
+ * name. */
+static void *moved;
+static unsigned moved_found;
+
+/** At a give-way of the replaced file's free: whether the moved node has
+ *  its new name, "dst", already. */
+static void find_moved(void)
+{
+    void *n = look(NULL, "dst");
+
+    moved_found += n != NULL && n == moved;
+    if (n) {
+        tmpfs_put(&mnt, n);
+    }
+}
+
+/**
+ * The give-ways of a file's free. A file with a page in each of four
+ * leaves gives no way at an unlink while a hold remains, and three, one
+ * between each two leaves, at its last put. A rename over such a file
+ * gives way three times as it frees it, and at each the moved file is
+ * found by its new name.
+ */
+static void give_way_per_leaf(void)
+{
+    int frames = frames_in_use();
+    void *f = four_leaves("big");
+
+    CHECK(frames_in_use() == frames + 4);
+    give_ways = 0;
+    CHECK(tmpfs_unlink(&mnt, NULL, "big") == 0 && give_ways == 0);
+    tmpfs_put(&mnt, f);
+    CHECK(give_ways == 3 && frames_in_use() == frames);
+
+    tmpfs_put(&mnt, four_leaves("dst"));
+    moved = make(NULL, "src", 0644);
+    tmpfs_put(&mnt, moved);
+    give_ways = 0;
+    moved_found = 0;
+    at_give_way = find_moved;
+    CHECK(tmpfs_rename(&mnt, NULL, "src", NULL, "dst") == 0);
+    at_give_way = NULL;
+    CHECK(give_ways == 3 && moved_found == 3 && frames_in_use() == frames);
+    CHECK(look(NULL, "src") == NULL);
+    CHECK(tmpfs_unlink(&mnt, NULL, "dst") == 0);
+}
+
 /**
  * Mount with mode= and size= and check the root's mode and links, mount
  * again with no options, whose root is 01777, and run the rows on that
@@ -793,6 +867,7 @@ int main(void)
     rename_refused();
     sizes();
     allocation();
+    give_way_per_leaf();
     tmpfs_unmount(&mnt);
     CHECK(frames_in_use() == 0);
     return fails > 100 ? 100 : fails;

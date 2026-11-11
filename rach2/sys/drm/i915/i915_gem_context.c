@@ -129,7 +129,7 @@ static void intel_context_image_free(struct intel_context *ce)
         return;
     }
     taken = i915_gem_lock(i915);
-    (void)i915_ggtt_clear_range(i915, ce->image_ggtt, size);
+    (void)i915_ggtt_clear_range(i915, ce->image_ggtt, size, 0);
     i915_ggtt_release(i915, ce->image_ggtt);
     i915_gem_unlock(i915, taken);
     kfree_pages(ce->image, I915_HSW_CXT_PAGES);

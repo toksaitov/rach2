@@ -783,7 +783,7 @@ static void lifetime(void)
     CHECK(i915_gem_object_is_active(obj) && v && v->start == ts && frame != 0 &&
               (uintptr_t)chip_a.gtt[ts >> 12] == frame && chip_a.gtt[bs >> 12] != 0,
           "lifetime: closed while the request runs, both keep their bindings");
-    CHECK(v && i915_vma_unbind(v) == -EBUSY && i915_gem_object_unbind(obj) == -EAGAIN &&
+    CHECK(v && i915_vma_unbind(v, 1) == -EBUSY && i915_gem_object_unbind(obj, 1) == -EAGAIN &&
               chip_a.gtt[ts >> 12] != 0,
           "lifetime: a busy object's binding is not undone");
     ring_release(I915_RCS0);
