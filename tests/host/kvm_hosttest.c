@@ -302,12 +302,20 @@ int vclock_running(void)
     return vclock_on;
 }
 
+/** The TSC's clock `which` and the TSC read together. The kvmclock counts
+ * the raw clock, as Linux's get_kvmclock_base_ns counts ktime_get_raw
+ * (arch/x86/kvm/x86.c:1870-1874), so a reading of the monotonic clock, which
+ * the NTP state slews, is a failure, and answers 7 ms apart from the raw
+ * clock, so that rows that read it see the difference. */
 int vclock_read_cycles(int which, uint64_t *ns, uint64_t *cycles)
 {
     if (!vclock_on) {
         return 0;
     }
-    *ns = which == VCLOCK_READ_REAL ? real_ns : mono_ns;
+    CHECK(which != VCLOCK_READ_MONO, "the kvmclock reads the raw clock, never the slewed one");
+    *ns = which == VCLOCK_READ_REAL  ? real_ns
+          : which == VCLOCK_READ_RAW ? mono_ns
+                                     : mono_ns + 7000000u;
     *cycles = tsc;
     return 1;
 }
