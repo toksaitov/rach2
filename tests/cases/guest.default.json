@@ -5768,6 +5768,8 @@
         {"assertion_id": "mq-unlink", "checks": "The name goes with mq_unlink.", "source": "program"},
         {"assertion_id": "mqueue-file", "checks": "/dev/mqueue gives a queue's file its mode and size.", "source": "program"},
         {"assertion_id": "mqueue-status", "checks": "The queue's file reads as its status line.", "source": "program"},
+        {"assertion_id": "mqueue-null-efault", "checks": "A read into NULL at offset 0 of an empty queue's file, of size 0, is EFAULT, since its status line has a byte there.", "source": "program"},
+        {"assertion_id": "mqueue-pread-end", "checks": "A pread at the end of an empty queue's status line returns 0.", "source": "program"},
         {"assertion_id": "mqueue-listed", "checks": "/dev/mqueue lists the queue.", "source": "program"},
         {"assertion_id": "mqueue-unlink-file", "checks": "Unlinking a queue's file takes its name.", "source": "program"},
         {"assertion_id": "mq-fstat", "checks": "fstat of a queue's descriptor gives its file's stat.", "source": "program"},
