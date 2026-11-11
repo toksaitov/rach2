@@ -37,8 +37,12 @@
  * 2 MiB leaf dropping the leaf; the end of the address space; dirty logging
  * with KVM_GET_DIRTY_LOG and, under KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2,
  * KVM_CLEAR_DIRTY_LOG, their refusals, and no 2 MiB leaf in a slot that
- * logs; a slot moved, its flags changed and deleted with its leaves and
- * tables gone; and every allocation and frame given back.
+ * logs; kvm_tdp_write_nofault refusing a read-only slot, a page not yet
+ * stored into, read-only, a device's, absent or memfd_secret's, a write
+ * across a page or of nothing, an address of no slot and a thread of
+ * another address space, and writing a stored-into page of RAM at its
+ * offset, logged; a slot moved, its flags changed and deleted with its
+ * leaves and tables gone; and every allocation and frame given back.
  */
 #include "kvm/dirty.c"
 #include "kvm/slots.c"
@@ -846,6 +850,63 @@ static void dirty_rows(void)
     CHECK(set(3, 0, 0, 0, 0) == 0, "deleted");
 }
 
+/** kvm_tdp_write_nofault, the steal time's write from inside `schedule`:
+ * it writes only a present, writable page of a slot of the caller's that
+ * was already stored into, of RAM and not memfd_secret's, within one page,
+ * and marks the slot's dirty log. */
+static void write_nofault_rows(void)
+{
+    uintptr_t a = HVA + 5 * MIB2;
+    uint64_t gfn = 0x600, gpa = gfn * 4096u, bits[2];
+    uintptr_t page = fresh();
+    uint8_t *mem = (uint8_t *)phys_to_virt(page);
+    uint8_t buf[16] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+    struct mm other;
+
+    region(a, 5, 1);
+    *host_entry(a) = page | PTE_P | PTE_U | PTE_W | PTE_DIRTY;
+    *host_entry(a + 4096u) = fresh() | PTE_P | PTE_U | PTE_W;
+    *host_entry(a + 2 * 4096u) = fresh() | PTE_P | PTE_U | PTE_DIRTY;
+    *host_entry(a + 3 * 4096u) = DEV_BASE | PTE_P | PTE_U | PTE_W | PTE_DIRTY;
+    k_memset(mem, 0, 4096u);
+
+    CHECK(set(6, KVM_MEM_READONLY, gpa, 5 * 4096u, a) == 0, "a read-only slot to write");
+    CHECK(kvm_tdp_write_nofault(&vm, gpa + 8, buf, 4) == 1 && mem[8] == 0,
+          "a read-only slot is refused");
+    CHECK(set(6, 0, 0, 0, 0) == 0, "deleted");
+    CHECK(set(6, KVM_MEM_LOG_DIRTY_PAGES, gpa, 5 * 4096u, a) == 0, "a slot that logs, to write");
+    CHECK(get_dirty(6, bits) == 0 && bits[0] == 0, "nothing logged yet");
+    CHECK(kvm_tdp_write_nofault(&vm, gpa + 4096u, buf, 4) == 1,
+          "a page not yet stored into is refused");
+    CHECK(kvm_tdp_write_nofault(&vm, gpa + 2 * 4096u, buf, 4) == 1, "a read-only page is refused");
+    CHECK(kvm_tdp_write_nofault(&vm, gpa + 3 * 4096u, buf, 4) == 1, "a device's frame is refused");
+    CHECK(kvm_tdp_write_nofault(&vm, gpa + 4 * 4096u, buf, 4) == 1,
+          "a page not present is refused");
+    CHECK(kvm_tdp_write_nofault(&vm, gpa + 4090u, buf, 8) == 1 && mem[4090] == 0,
+          "a write across a page is refused");
+    CHECK(kvm_tdp_write_nofault(&vm, gpa + 8, buf, 0) == 1, "an empty write is refused");
+    CHECK(kvm_tdp_write_nofault(&vm, 0x7000000ull, buf, 4) == 1,
+          "an address of no slot is refused");
+    secret.start = a;
+    secret.end = a + 4096u;
+    secret.prot = VM_PROT_READ | VM_PROT_WRITE | VM_PROT_SECRET;
+    secret_on = 1;
+    CHECK(kvm_tdp_write_nofault(&vm, gpa + 8, buf, 4) == 1 && mem[8] == 0,
+          "a page of memfd_secret is refused");
+    secret_on = 0;
+    k_memset(&other, 0, sizeof(other));
+    caller.mm = &other;
+    CHECK(kvm_tdp_write_nofault(&vm, gpa + 8, buf, 4) == 1 && mem[8] == 0,
+          "a thread of another address space is refused");
+    caller.mm = &the_mm;
+    CHECK(get_dirty(6, bits) == 0 && bits[0] == 0, "no refusal was logged");
+    CHECK(kvm_tdp_write_nofault(&vm, gpa + 8, buf, 4) == 0 && mem[7] == 0 && mem[8] == 1 &&
+              mem[11] == 4 && mem[12] == 0,
+          "a stored-into page of RAM takes the write at its offset");
+    CHECK(get_dirty(6, bits) == 0 && bits[0] == 1, "and the slot's log names the page");
+    CHECK(set(6, 0, 0, 0, 0) == 0, "deleted");
+}
+
 /** The end of the address space. */
 static void release_rows(void)
 {
@@ -884,6 +945,7 @@ int main(void)
     pre_fault_rows();
     device_rows();
     dirty_rows();
+    write_nofault_rows();
     release_rows();
     CHECK(((struct tdp *)vm.tdp)->tables == 1, "no table below the top once every slot went");
     CHECK(set(0, 0, 0, 0x1000, HVA) == 0 && kvm_tdp_fault(&vm, 0, 0) == 0, "a slot left");
