@@ -2461,7 +2461,7 @@
         {"assertion_id": "pingpong-connect", "checks": "a connection to a child's listener is made for the round trips", "source": "program"},
         {"assertion_id": "pingpong-rounds", "checks": "200 round trips over the loopback complete", "source": "program"},
         {"assertion_id": "pingpong-child", "checks": "the child of the round trips exits 0", "source": "program"},
-        {"assertion_id": "pingpong-idle", "checks": "/proc/stat counts the round trips delivered by the idle path at least 200 times, and no more often by the timer than by it", "source": "program"},
+        {"assertion_id": "pingpong-idle", "checks": "by /proc/stat's counts, the exits of the round trips' system calls deliver at least 200 loopback datagrams, one a round, and the timer finds none left on an idle machine", "source": "program"},
         {"assertion_id": "bind-missing-address", "checks": "a bind to 192.0.2.1, an address the machine lacks, fails with EADDRNOTAVAIL", "source": "program"},
         {"assertion_id": "bound-listen", "checks": "a listener binds to 127.0.0.1 and listens", "source": "program"},
         {"assertion_id": "bound-not-at-interface", "checks": "a connection to the interface address does not reach that listener", "source": "program"},

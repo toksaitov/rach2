@@ -30,9 +30,10 @@
  * The probe uses UDP ports 7100 to 7102 and TCP ports 7200 to 7207, 7300,
  * 7301 and 7310, and 7300 is the closed port until its rows listen on it. A
  * native run maps them with `ports=OLD:NEW,...` (probe_args.h). With
- * `machine=native` the probe leaves out the two checks of counts that every
+ * `machine=native` the probe leaves out the checks of counts that every
  * loopback datagram of the machine moves, no datagram dropped in the bulk
- * transfer and no round trip left for the timer by an idle machine.
+ * transfer, and the round trips delivered at their calls' exits with none
+ * left for the timer by an idle machine.
  *
  * Prints "LOOPPROBE OK" and exits 0 on success.
  *
@@ -278,6 +279,7 @@ static const struct step {
     {"ping-pong write", "pingpong-rounds"},
     {"ping-pong read", "pingpong-rounds"},
     {"the ping-pong child did not finish", "pingpong-child"},
+    {"the exits of the round trips' calls delivered fewer datagrams than rounds", "pingpong-idle"},
     {"a local round trip waited for the timer with nothing running", "pingpong-idle"},
     {"bound listener socket", "bind-missing-address"},
     {"a bind to an address the machine lacks was not refused", "bind-missing-address"},
@@ -1522,17 +1524,23 @@ static int pipe_pingpong_ms(void)
 
 /**
  * PINGPONG_ROUNDS round trips of a byte each way between this process and a
- * child over a loopback connection, judged leg by leg by the kernel's count
- * of the datagrams a tick found on the ring while every processor was idle
- * (`loopback_left_idle` in /proc/stat).
+ * child over a loopback connection, judged by the kernel's counts of the
+ * loopback datagrams each path delivered (`loopback_delivered_*` in
+ * /proc/stat).
  *
- * Each leg queues one datagram, which the write's exit delivers, or a tick
- * that comes first, and the sender then blocks in its read. The count sees a
- * leg left on the ring while every processor halted in an idle wait, which
- * then waited for the timer: a connection that does turns over one window a
- * tick. No leg may, so the count must not rise. The legs each path delivered
- * and the times of these rounds and of the same rounds over pipes are printed
- * for a person and not judged.
+ * Each leg queues one datagram, which the exit of the write that sent it
+ * delivers, with the acknowledgement it draws, before the write returns, as
+ * Linux 6.12.115's local_bh_enable runs the softirq that loopback_xmit queued
+ * it for (drivers/net/loopback.c:69-92, kernel/softirq.c:402-407); a tick
+ * that comes between the send and the exit may take it first. The sender
+ * then blocks in its read with the ring empty, so the idle wait's drain
+ * (`idle_wait_irq_off`) finds nothing and delivers no leg. The exits must
+ * have delivered at least one datagram a round, which a broken exit drain
+ * leaves to the idle wait and the timer. `loopback_left_idle`, the datagrams
+ * a tick found on the ring with every processor halted, must not rise: such
+ * a leg waited for the timer with nothing running, a turn of one window a
+ * tick. The other counts and the times of these rounds and of the same
+ * rounds over pipes are printed for a person and not judged.
  */
 static void tcp_loop_pingpong(void)
 {
@@ -1541,7 +1549,7 @@ static void tcp_loop_pingpong(void)
     long t0[2], t1[2];
     char one = 'p';
     int ls, cs, as, pid, status = 0, round, ms, base;
-    uint32_t idle, tick, left;
+    uint32_t call, idle, tick, left;
 
     base = pipe_pingpong_ms();
 
@@ -1594,6 +1602,7 @@ static void tcp_loop_pingpong(void)
     as = socketcall(SC_ACCEPT, args);
     if (as < 0)
         fail("ping-pong accept");
+    call = proc_stat_u32("loopback_delivered_call ", 24);
     idle = proc_stat_u32("loopback_delivered_idle ", 24);
     tick = proc_stat_u32("loopback_delivered_tick ", 24);
     left = proc_stat_u32("loopback_left_idle ", 19);
@@ -1611,6 +1620,7 @@ static void tcp_loop_pingpong(void)
     sys_close(as);
     sys_close(ls);
     ms = elapsed_ms(t0, t1);
+    call = proc_stat_u32("loopback_delivered_call ", 24) - call;
     idle = proc_stat_u32("loopback_delivered_idle ", 24) - idle;
     tick = proc_stat_u32("loopback_delivered_tick ", 24) - tick;
     left = proc_stat_u32("loopback_left_idle ", 19) - left;
@@ -1618,13 +1628,18 @@ static void tcp_loop_pingpong(void)
     print_u32((uint32_t)ms);
     print(" ms over the loopback, ");
     print_u32((uint32_t)base);
-    print(" over a pipe, for 200 round trips; delivered by the idle path ");
+    print(" over a pipe, for 200 round trips; delivered at a call's exit ");
+    print_u32(call);
+    print(", by the idle wait ");
     print_u32(idle);
     print(", by the timer ");
     print_u32(tick);
     print(", left for the timer by an idle machine ");
     print_u32(left);
     print("\n");
+    if (!probe_native() && call < PINGPONG_ROUNDS) {
+        fail("the exits of the round trips' calls delivered fewer datagrams than rounds");
+    }
     if (!probe_native() && left != 0) {
         fail("a local round trip waited for the timer with nothing running");
     }
