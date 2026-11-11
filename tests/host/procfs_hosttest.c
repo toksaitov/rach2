@@ -1365,8 +1365,11 @@ static void syscall_wchan_rows(void)
     thread.orig_nr = -1;
     check(pid_file_reads(9, 0, "-1 0xbfffefd0 0x8048123\n"),
           "a thread past a handler's return shows -1 and its pointers");
-    thread.orig_nr = 240;
+    thread.orig_nr = -2;
     thread.state = PROC_STOPPED;
+    check(pid_file_reads(9, 0, "-2 0xbfffefd0 0x8048123\n"),
+          "a thread stopped at a call a tracer made -2 shows -2 and its pointers alone");
+    thread.orig_nr = 240;
     check(pid_file_reads(9, 0, "240 0x4 0x804a000 0x100 0x0 0x0 0xbffff000 0xbfffefd0 0x8048123\n"),
           "a stopped thread shows the call it stopped in");
     check(pid_file_reads(9, 1, "do_signal_stop"), "a job-control stop is do_signal_stop");
