@@ -30,10 +30,16 @@ struct vfs_ref;
 int procfs_resolve_pid(int pid);
 
 /** Whether the caller may see process `pid`'s memory map and descriptors,
- * as Linux's ptrace read check asks: a thread of its own process, a
- * privileged caller, or one with its real user ID when it is not privileged.
- * 0 when there is no such process. */
+ * as Linux's ptrace check with PTRACE_MODE_FSCREDS asks: a thread of its
+ * own process, a privileged caller, or one whose file-system user and group
+ * IDs are each of the process's three, while the process is dumpable and
+ * not privileged. 0 when there is no such process. */
 int procfs_may_read(int pid);
+
+/** The mode of the file `procfile` of a process's directory when only its
+ * owner may open it, Linux's: 0400 for environ, auxv and syscall, 0600 for
+ * mem; 0 for a file of another mode. */
+uint32_t procfs_owner_mode(int procfile);
 
 /** The id of the process, or of the thread for a path under
  * /proc/<pid>/task/<tid>, whose files the path `vp` shows; -1 when the

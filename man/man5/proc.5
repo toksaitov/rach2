@@ -1697,11 +1697,9 @@ keeps, the process has none: the link reads as an empty string on a file
 system other than the KRFFS root, and as
 .Ql " (deleted)"
 alone for a file of the KRFFS root whose name has been removed.
-Reading the link, or going through it, needs a thread of the process, a
-privileged caller, one whose effective user ID is 0 and which kept its
-capabilities
-.Pq see Xr capget 2 ,
-or the process's real user ID and a process that is not privileged.
+Reading the link, or going through it, needs what
+.Pa environ
+needs past its mode.
 An
 .Xr lstat 2
 of the link itself needs none of these, as on Linux; the link is absent
@@ -2134,16 +2132,21 @@ number and arguments.
 The text is made at the first
 .Xr read 2 ,
 so the caller's own thread shows that read.
-The file is mode 0400; opening it needs what
-.Pa environ
-needs, and is
+The file has mode 0400, which an open checks as for
+.Pa environ ,
+and is
 .Er EACCES
-otherwise.
+to a caller that is not its owner; a read by a caller that lacks what
+.Pa environ
+needs past its mode is
+.Er EPERM ,
+as on Linux.
 .It Pa /proc/PID/wchan
 The name of the kernel function the thread sleeps in, with no newline, or
 .Ql 0
-when it runs, is ready to, has ended, or the caller may not read the
-process.
+when it runs, is ready to, has ended, or the caller lacks what
+.Pa environ
+needs past its mode.
 A wait names itself with Linux's function where Linux has one:
 .Ql pipe_read ,
 .Ql pipe_write ,
@@ -2296,13 +2299,20 @@ The environment strings of the initial stack, each ended by a NUL, at
 most their first 128 KiB, cut as
 .Pa cmdline
 is.
-It,
+It and
 .Pa auxv
-and the
+have mode 0400: only the owner, or a caller with privilege over files, may
+open them.
+Past the mode, they, the
 .Pa exe
-link need a thread of the process, a privileged caller, or the process's
-real user ID and a process that is not privileged; Linux asks more, the
-process's three user and group IDs and a dumpable process.
+link and the other files that say so need what Linux's ptrace check with
+.Dv PTRACE_MODE_FSCREDS
+needs: a thread of the process, a privileged caller, one whose effective
+user ID is 0 and which kept its capabilities
+.Pq see Xr capget 2 ,
+or one whose file-system user and group IDs are each of the process's
+three user and group IDs, while the process is dumpable and not
+privileged.
 .It Pa /proc/PID/mem
 The process's memory, read and written at the descriptor's offset, which
 is the address, as GDB uses it through
@@ -2314,10 +2324,10 @@ An address no region allows is
 and a write reaches read-only program text, as a tracer's does.
 A transfer that runs into such an address returns the bytes it did
 before it, as on Linux, and moves the offset past them.
-Opening it needs a thread of the process, a privileged caller, or the
-process's real user ID and a dumpable process that is not privileged;
-Linux compares the caller's file-system IDs with every user and group ID
-of the process.
+The file has mode 0600, and opening it needs the owner's access or
+privilege over files, and then what
+.Pa environ
+needs.
 The descriptor reaches the address space the open found while anything
 runs in it, a thread of the process or another process that shares it
 with
