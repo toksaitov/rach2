@@ -119,8 +119,9 @@ static long sys_pread64(isr_params_t *params);
 static long sys_pwrite64(isr_params_t *params);
 static long sys_preadv(isr_params_t *params);
 static long sys_pwritev(isr_params_t *params);
-static int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, net_addr_t *src_ip,
-                           uint16_t *src_port, int peek, int32_t *whole);
+struct kernel_iovec;
+static int32_t readv_dgram(fd_entry_t *entry, const struct kernel_iovec *iov, int iovcnt,
+                           net_addr_t *src_ip, uint16_t *src_port, int peek, int32_t *whole);
 static long sys_readv(isr_params_t *params);
 static long sys_dup(isr_params_t *params);
 static long sys_dup2(isr_params_t *params);

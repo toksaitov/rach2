@@ -6723,14 +6723,13 @@ long sys_read(isr_params_t *params)
 /**
  * Read up to `count` bytes of descriptor `fd`, whose entry is `entry`, into
  * `buf`, only as far as that can be done without waiting: the second and
- * later buffers of a readv(2) of anything whose bytes arrive over time.
- * Returns the bytes read, 0 when none are waiting or `entry` is NULL, or a
- * negative errno: -EOPNOTSUPP for the query socket, -EFAULT for a buffer the
- * caller cannot write, or the read's own.
+ * later buffers of a readv(2) of a device or a /proc file, whose bytes
+ * may arrive over time. Returns the bytes read, 0 when none are waiting or
+ * `entry` is NULL, or a negative errno: -EFAULT for a buffer the caller
+ * cannot write, or the read's own.
  *
  * Readiness is asked of the object behind the descriptor: its vtable
- * answers `poll`, and a stream or raw socket has a read of its own that
- * does not wait. No other process can take the bytes between the question
+ * answers `poll`. No other process can take the bytes between the question
  * and the read: kernel code runs under the big lock, the switch an
  * interrupt asks for waits for the system call's exit, and an interrupt
  * only adds bytes. Any other descriptor is read by `read_fd`.
@@ -6759,22 +6758,6 @@ static int32_t read_ready(fd_entry_t *entry, int fd, char __user *buf, uint32_t 
 
         return read_ops(entry, buf, count, count);
     }
-    if (entry->type == FD_TYPE_SOCKET && entry->sock) {
-        int32_t r;
-
-        if (sock_is_query(entry->sock)) {
-            return -EOPNOTSUPP;
-        }
-        if (!user_buffer_ok((__force uintptr_t)buf, count, 1)) {
-            return -EFAULT;
-        }
-        if (entry->sock->type == SOCK_RAW) {
-            return socket_try_recv(entry->sock, (uint8_t __force *)buf, (int)count, NULL, NULL, 0);
-        }
-        r = socket_tcp_try_recv(entry->sock, (uint8_t __force *)buf, (int)count, 0);
-
-        return (r == SOCK_EAGAIN) ? 0 : r;
-    }
 
     return read_fd(fd, buf, count);
 }
@@ -6785,37 +6768,27 @@ static int32_t read_ready(fd_entry_t *entry, int fd, char __user *buf, uint32_t 
 
 /**
  * Copy the `n` bytes of a datagram at `message` into the buffers of the
- * user's iovec array at `iov_user` of `iovcnt` elements, in order, reading
- * each element as it goes: the bytes copied, which stop at the first element
- * that cannot be read or buffer that cannot be written, or -EFAULT when the
- * first copy fails, as Linux's copy of a datagram fails.
+ * copied vector `iov` of `iovcnt` elements, in order: the bytes copied, or
+ * -EFAULT when any copy fails, as Linux's copy of a datagram into an
+ * iov_iter fails whole (include/net/udp.h:381-385).
  */
-static int32_t dgram_spread(uintptr_t iov_user, int iovcnt, const uint8_t *message, uint32_t n)
+static int32_t dgram_spread(const struct kernel_iovec *iov, int iovcnt, const uint8_t *message,
+                            uint32_t n)
 {
-    struct kernel_iovec iov;
     uint32_t offset = 0;
     int i;
 
     for (i = 0; i < iovcnt && offset < n; i++) {
-        uint32_t chunk;
+        uint32_t chunk = n - offset;
 
-        if (iov_fetch(&iov, iov_user, (uint32_t)i) != 0) {
-            break;
+        if (chunk > iov[i].iov_len) {
+            chunk = (uint32_t)iov[i].iov_len;
         }
-        if (iov.iov_len == 0) {
-            continue;
-        }
-        chunk = n - offset;
-        if (chunk > iov.iov_len) {
-            chunk = USER_LEN32(iov.iov_len);
-        }
-        if (copy_to_user((void __user *)iov.iov_base, message + offset, chunk) != 0) {
-            return offset > 0 ? (int32_t)offset : -EFAULT;
+        if (chunk > 0 &&
+            copy_to_user((void __user *)iov[i].iov_base, message + offset, chunk) != 0) {
+            return -EFAULT;
         }
         offset += chunk;
-        if (chunk < iov.iov_len) {
-            break;
-        }
     }
     return (int32_t)offset;
 }
@@ -6841,21 +6814,20 @@ static int32_t dgram_spread(uintptr_t iov_user, int iovcnt, const uint8_t *messa
  * reports it truncated. A netlink socket notes the sum as the size of a
  * read, which sizes its answers (`netlink_note_recv`).
  *
- * The spread runs with interrupts on, through `copy_to_user`, and reads each
- * iovec from user memory as it goes, so a buffer may point at the caller's own
- * iovec array and the datagram rewrite the destinations after it, which the
- * check made before the read never saw. `copy_to_user` fails on an address it
- * cannot fault in, so such a caller writes only its own memory; the copy stops
- * at the first iovec it cannot read or buffer it cannot write, and a datagram
- * whose first copy fails, which is consumed all the same, is -EFAULT, as
- * Linux's copy of a datagram fails.
+ * The spread runs with interrupts on, through `copy_to_user`, over the
+ * vector copied before the wait, as Linux copies the native or compat
+ * vector first (lib/iov_iter.c:1408, from fs/read_write.c:1011): a buffer
+ * that points at the caller's own iovec array is written as any other, and
+ * the destinations after it stay those the call was given. `copy_to_user`
+ * fails on an address it cannot fault in, and any copy that fails makes the
+ * call -EFAULT, the datagram consumed or, with `peek`, kept, as Linux's
+ * udp_recvmsg fails at any element (net/ipv4/udp.c:1932-1949).
  */
-int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, net_addr_t *src_ip,
-                    uint16_t *src_port, int peek, int32_t *whole)
+int32_t readv_dgram(fd_entry_t *entry, const struct kernel_iovec *iov, int iovcnt,
+                    net_addr_t *src_ip, uint16_t *src_port, int peek, int32_t *whole)
 {
     uint8_t small[READV_DGRAM_STACK];
     uint8_t *message = small;
-    struct kernel_iovec iov;
     uint32_t want = 0;
     int32_t total;
     uint32_t held;
@@ -6865,13 +6837,7 @@ int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, net_addr_
     int i;
 
     for (i = 0; i < iovcnt; i++) {
-        uint32_t n;
-
-        if (iov_fetch(&iov, iov_user, (uint32_t)i) != 0) {
-            break;
-        }
-        n = USER_LEN32(iov.iov_len);
-        want = n > 0x7FFFFFFFu - want ? 0x7FFFFFFFu : want + n;
+        want += (uint32_t)iov[i].iov_len;
     }
 
     nonblock = entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK);
@@ -6920,7 +6886,7 @@ int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, net_addr_
         *whole = length;
     }
 
-    total = dgram_spread(iov_user, iovcnt, message, (uint32_t)taken);
+    total = dgram_spread(iov, iovcnt, message, (uint32_t)taken);
     if (message != small) {
         kfree(message);
     }
@@ -6947,56 +6913,128 @@ static uint32_t readv_room(const struct kernel_iovec *iov, uint32_t left)
 }
 
 /**
+ * Read the descriptor `fd`, whose entry is `entry`, into the `count`
+ * elements of the copied vector `iov`, `wanted` bytes in all, for `readv`
+ * on anything but a file of a mount: the bytes read or a negative errno.
+ *
+ * How depends on what is behind the descriptor, since a second read is not
+ * always reading on. A datagram, raw or packet socket is read once
+ * (`readv_dgram`): one datagram is one message, and a second read would
+ * take the next one. A stream socket (`stream_readv`) and a pipe
+ * (`pipe_readv`) read the vector as one read, as Linux's tcp_recvmsg and
+ * pipe_read take an iov_iter: the wait, the end of input and -EAGAIN come
+ * first, and a copy that faults leaves its bytes queued.
+ *
+ * Anything else, a device or a /proc file among them, is read for the first
+ * buffer by the ordinary read, which waits if it must, and for each later
+ * one only while it has bytes waiting (`read_ready`), since a read of an
+ * empty one would wait for input nobody has written; a file is read on into
+ * each buffer, since its bytes have no boundary. A terminal is
+ * read once: its line discipline returns one line, and a second buffer
+ * filled with the next would return two lines where the reader asked for
+ * one. Each buffer is brought in for writing before it is read into and cut
+ * before its first page that cannot be written (`readv_room`), so that the
+ * read ends there with the bytes before it; a first buffer of which no byte
+ * can be written goes to the read whole, so that the object answers its
+ * wait, end of input and -EAGAIN before the copy fails, as Linux's import
+ * checks only that a range lies in user space (lib/iov_iter.c:1474). The
+ * walk stops at the first buffer it does not fill, and once a byte has been
+ * read, a later failure ends it with the total.
+ */
+static long readv_elements(fd_entry_t *entry, int fd, const struct kernel_iovec *iov, int count,
+                           uint32_t wanted)
+{
+    uint32_t total = 0;
+    int walk;
+    int i;
+
+    if (entry->type == FD_TYPE_SOCKET && entry->sock && !entry->ops) {
+        if (sock_is_query(entry->sock)) {
+            return -EOPNOTSUPP;
+        }
+        if (entry->sock->type == SOCK_DGRAM || entry->sock->type == SOCK_RAW) {
+            ip_loop_settle();
+            return readv_dgram(entry, iov, count, 0, 0, 0, 0);
+        }
+        if (entry->sock->type == SOCK_STREAM) {
+            ip_loop_settle();
+            return stream_readv(entry, iov, (uint32_t)count, 0);
+        }
+    }
+    if (pipe_is(entry)) {
+        return pipe_readv(entry, iov, count);
+    }
+    walk = !entry->ops && entry->type == FD_TYPE_FILE;
+
+    for (i = 0; i < count && total < wanted; i++) {
+        char __user *buf = (char __user *)iov[i].iov_base;
+        uint32_t len;
+        int32_t r;
+
+        if (iov[i].iov_len == 0) {
+            continue;
+        }
+        len = readv_room(&iov[i], wanted - total);
+        if (len == 0 && total > 0) {
+            break;
+        }
+        if (total > 0 && !walk) {
+            r = read_ready(entry, fd, buf, len);
+            if (r <= 0) {
+                break;
+            }
+        } else {
+            if (len == 0) {
+                len = iov[i].iov_len < wanted ? (uint32_t)iov[i].iov_len : wanted;
+            }
+            r = read_fd(fd, buf, len);
+            if (r < 0) {
+                return (total > 0) ? (long)total : r;
+            }
+        }
+        total += (uint32_t)r;
+        if ((uint32_t)r < iov[i].iov_len) {
+            break;
+        }
+    }
+
+    return (long)total;
+}
+
+/**
  * readv(2): read from the descriptor in argument 0 into the buffers of the
  * user's iovec array in argument 1, of the count in argument 2, in order;
  * the total bytes read, or a negative errno. musl's stdio reads through
  * this call whenever it asks for more than one byte, so `fgets`, `fread`
  * and `scanf` depend on it.
  *
- * A file of a mount is read by `iov_file_read`, which takes the vector whole,
- * as Linux's vfs_iter_read takes an iov_iter: a buffer that cannot be
- * written ends the read with the bytes before it. For anything else the
- * array is checked whole first, as Linux's import checks it (`iov_import`):
- * a count past IOV_MAX_LOCAL, or a negative length, is -EINVAL, and an
- * iovec the caller cannot read or a range outside user space is -EFAULT;
- * the total is cut at MAX_RW_COUNT, as Linux's is, and that total ending
- * past 2^63-1 at the description's offset is -EINVAL (`rw_offset_end`).
- * Each buffer is then brought in for writing before it is read into and cut
- * before its first page that cannot be written (`iov_prefix`), so that the
- * read ends there with the bytes before it, as Linux's copy to an iov_iter
- * stops at its first fault; -EFAULT only when no byte was read, and the
- * input past the cut stays queued. The descriptor is checked before the
- * array (`read_allowed`), as Linux's vfs_readv checks it, so an array that
- * asks for nothing returns 0 only from a descriptor a read could use, a
- * directory among them. Once a byte has been read, a later failure ends the
- * call with the total.
+ * The descriptor is checked first (`read_allowed`), as Linux's vfs_readv
+ * checks it, so a vector that asks for nothing returns 0 only from a
+ * descriptor a read could use, a directory among them. A file of a mount is
+ * read by `iov_file_read`, which takes the vector whole, as Linux's
+ * vfs_iter_read takes an iov_iter, under the description's lock held across
+ * the vector and the check of its end at the offset, as Linux holds
+ * f_pos_lock. For anything else the vector is copied into the kernel once
+ * and checked whole, as Linux's import copies and checks it
+ * (`iov_import`): a count past IOV_MAX_LOCAL, or a negative length, is
+ * -EINVAL, and an iovec the caller cannot read or a range outside user space
+ * is -EFAULT; the total is cut at MAX_RW_COUNT, as Linux's is, and that
+ * total ending past 2^63-1 at the description's offset is -EINVAL
+ * (`rw_offset_end`); a vector of more than eight elements that the heap has
+ * no room for is -ENOMEM. The copy, with its cut lengths, serves the whole
+ * transfer (`readv_elements`), so a destination that overwrites a later
+ * iovec in the caller's memory does not move that later destination, as
+ * Linux copies the vector before any read (lib/iov_iter.c:1408, from
+ * fs/read_write.c:1011).
  *
- * The buffers are filled in order, and how depends on what is behind the
- * descriptor, since a second read is not always reading on. A file of a
- * mount is read on into each buffer, since its bytes have no message
- * boundary, under the description's lock held across the vector and the
- * check of its end at the offset (`iov_file_read`), as Linux holds
- * f_pos_lock. A
- * datagram socket is read once (`readv_dgram`): one datagram is one
- * message, and a second read would take the next one. Anything else, a
- * pipe, a stream socket, a device or a /proc file, is read for the first
- * buffer by the ordinary read, which waits if it must, and for each later
- * one only while it has bytes waiting (`read_ready`), since a read of an
- * empty one would wait for input nobody has written. A terminal is read
- * once: its line discipline returns one line, and a second buffer filled
- * with the next would return two lines where the reader asked for one.
- *
- * The call stops at the first buffer it does not fill. Returning less than
- * was asked is what a reader must handle, and musl's stdio loops.
+ * The call returns less than was asked whenever a buffer is not filled,
+ * which is what a reader must handle; musl's stdio loops.
  */
 static long readv(int fd, uintptr_t iov_user, int iovcnt)
 {
-    struct kernel_iovec iov;
+    struct kernel_iovec local[8], *iov = local;
     fd_entry_t *entry;
     long wanted;
-    int32_t total = 0;
-    int walk;
-    int i;
 
     wanted = read_allowed(current_proc ? fd_get(current_proc->fds, fd) : (fd_entry_t *)0);
     if (wanted != 0) {
@@ -7005,57 +7043,27 @@ static long readv(int fd, uintptr_t iov_user, int iovcnt)
     if (iovcnt < 0 || iovcnt > IOV_MAX_LOCAL) {
         return -EINVAL;
     }
-    entry = current_proc ? fd_get(current_proc->fds, fd) : (fd_entry_t *)0;
+    entry = fd_get(current_proc->fds, fd);
     if (iov_mount_file(entry)) {
         return iov_file_read(entry, iov_user, iovcnt, -1);
     }
-    wanted = iov_import(NULL, iov_user, iovcnt, -1);
-    if (wanted <= 0) {
-        return wanted;
-    }
-    if (rw_offset_end(entry, (size_t)wanted) != 0) {
-        return -EINVAL;
-    }
-
-    if (entry && entry->type == FD_TYPE_SOCKET && entry->sock && entry->sock->type == SOCK_DGRAM) {
-        ip_loop_settle();
-        return readv_dgram(entry, iov_user, iovcnt, 0, 0, 0, 0);
-    }
-    walk = entry && !entry->ops && entry->type == FD_TYPE_FILE;
-
-    for (i = 0; i < iovcnt && total < wanted; i++) {
-        uint32_t len;
-        int32_t r;
-
-        if (iov_fetch(&iov, iov_user, (uint32_t)i) != 0) {
-            return (total > 0) ? total : -EFAULT;
-        }
-        if (iov.iov_len == 0) {
-            continue;
-        }
-        len = readv_room(&iov, (uint32_t)(wanted - total));
-        if (len == 0) {
-            return (total > 0) ? total : -EFAULT;
-        }
-
-        if (total > 0 && !walk) {
-            r = read_ready(entry, fd, (char __user *)iov.iov_base, len);
-            if (r <= 0) {
-                break;
-            }
-        } else {
-            r = read_fd(fd, (char __user *)iov.iov_base, len);
-            if (r < 0) {
-                return (total > 0) ? total : r;
-            }
-        }
-        total += r;
-        if ((uint32_t)r < iov.iov_len) {
-            break;
+    if (iovcnt > (int)(sizeof(local) / sizeof(local[0]))) {
+        iov = kmalloc((size_t)iovcnt * sizeof(*iov));
+        if (!iov) {
+            return -ENOMEM;
         }
     }
-
-    return total;
+    wanted = iov_import(iov, iov_user, iovcnt, -1);
+    if (wanted > 0 && rw_offset_end(entry, (size_t)wanted) != 0) {
+        wanted = -EINVAL;
+    }
+    if (wanted > 0) {
+        wanted = readv_elements(entry, fd, iov, iovcnt, (uint32_t)wanted);
+    }
+    if (iov != local) {
+        kfree(iov);
+    }
+    return wanted;
 }
 
 /** readv(2): the descriptor, vector and count in the caller's registers. */

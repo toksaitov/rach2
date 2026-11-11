@@ -16,10 +16,12 @@
  * that asked for more than it got must go round again, which is what musl's
  * stdio does and what the buffered cases here show.
  *
- * The rest is the edges: the whole vector list is checked before a byte is
- * taken, so a bad address in a later buffer fails the call with the input
- * still queued; a list that asks for nothing still checks the descriptor; and
- * a negative count fails with EINVAL.
+ * The rest is the edges: a pipe's buffer is taken only once its copy is
+ * whole, so a bad address in a later buffer fails the call with the input
+ * still queued; an ended pipe reads 0 even into a bad buffer; a list that
+ * asks for nothing still checks the descriptor; and a negative count fails
+ * with EINVAL. A datagram is copied whole or fails with EFAULT, through the
+ * vector as the call was given it, whatever the datagram writes over it.
  *
  * Prints `READVMUSL OK` and exits 0 on success, and prints
  * `READVMUSL FAIL (detail)` and exits 1 otherwise. Writes etude's report
@@ -75,6 +77,8 @@ enum {
     OUTSIDE_WINDOW,
     UNMAPPED,
     INPUT_KEPT,
+    ENDED_PIPE,
+    END_BEFORE_FAULT,
     EDGE_PIPE,
     EMPTY_BUFFERS,
     CLOSED_FD,
@@ -91,6 +95,8 @@ enum {
     DGRAM_TRUNCATED_BYTES,
     DGRAM_SEND_ALIAS,
     DGRAM_ALIAS,
+    DGRAM_SEND_LATE,
+    DGRAM_LATE_FAULT,
     DGRAM_SEND_3,
     DGRAM_NEXT,
     PTY_MASTER,
@@ -136,6 +142,8 @@ static const struct {
     {"outside-window", "an address outside the user window was not refused"},
     {"unmapped", "an unmapped address inside the user window was not refused"},
     {"input-kept", "the refused readv had already taken the input"},
+    {"ended-pipe", "could not make the ended pipe the bad-buffer case uses"},
+    {"end-before-fault", "readv of an ended pipe into a bad buffer did not return 0"},
     {"edge-pipe", "could not make the pipe the edge cases use"},
     {"empty-buffers", "readv of empty buffers did not return 0"},
     {"closed-fd", "readv of empty buffers on a closed fd was not refused"},
@@ -151,7 +159,9 @@ static const struct {
     {"dgram-truncate", "a datagram past the end of the buffers did not stop there"},
     {"dgram-truncated-bytes", "the truncated datagram has the wrong bytes"},
     {"dgram-send-alias", "could not send the aliasing datagram"},
-    {"dgram-alias", "the aliasing readv did not stop at the forged descriptor"},
+    {"dgram-alias", "the aliasing readv used the rewritten descriptor, not the copied one"},
+    {"dgram-send-late", "could not send the datagram for the later bad buffer"},
+    {"dgram-late-fault", "a datagram whose later buffer cannot be written was not EFAULT"},
     {"dgram-send-3", "could not send the third datagram"},
     {"dgram-next", "a read after a truncated datagram saw the wrong message"},
     {"pty-master", "could not open a pty master"},
@@ -428,6 +438,63 @@ static int check_stream(void)
 }
 
 /**
+ * Check how a datagram meets the vector on the socket `fd`, bound at `me`:
+ * the vector is the one the call was given, and the datagram is copied
+ * whole or not at all. Returns 0, or 1 once the failure is reported.
+ *
+ * A caller may point a buffer at its own vector list, so that the message
+ * rewrites the descriptors after it. The aliasing payload does that: four
+ * bytes for the first buffer, then a descriptor of an address in the user
+ * window that no mapping backs (8 bytes on i386, 16 on x86-64), then bytes
+ * for the third buffer. The kernel copies the vector before it reads, as
+ * Linux's import does, so the forged descriptor lands in the caller's memory
+ * and changes nothing: the third buffer takes its four bytes, and the call
+ * returns all of them.
+ *
+ * A datagram whose second buffer cannot be written is EFAULT, as Linux's
+ * udp_recvmsg fails at any element, and is consumed all the same, so the
+ * next read takes the next datagram, which `check_datagram` then reads.
+ */
+static int check_datagram_vector(int fd, const struct sockaddr_in *me)
+{
+    struct iovec forged = {(void *)0x30000000, 4};
+    unsigned char payload[4 + sizeof(struct iovec) + 8];
+    struct iovec alias[3];
+    char sink[4];
+
+    memcpy(payload, "AAAA", 4);
+    memcpy(payload + 4, &forged, sizeof(forged));
+    memcpy(payload + 4 + sizeof(forged), "BBBBCCCC", 8);
+    if (sendto(fd, payload, sizeof(payload), 0, (const struct sockaddr *)me, sizeof(*me)) !=
+        (ssize_t)sizeof(payload)) {
+        return fail(DGRAM_SEND_ALIAS);
+    }
+    alias[0].iov_base = sink;
+    alias[0].iov_len = sizeof(sink);
+    alias[1].iov_base = &alias[2]; /* the next descriptor itself */
+    alias[1].iov_len = sizeof(alias[2]);
+    alias[2].iov_base = sink;
+    alias[2].iov_len = sizeof(sink);
+    if (readv(fd, alias, 3) != (ssize_t)(4 + sizeof(struct iovec) + 4) ||
+        memcmp(sink, "BBBB", 4) != 0 || memcmp(&alias[2], &forged, sizeof(forged)) != 0) {
+        return fail(DGRAM_ALIAS);
+    }
+
+    /* A later buffer that cannot be written fails the whole datagram. */
+    if (sendto(fd, "LATEBADX", 8, 0, (const struct sockaddr *)me, sizeof(*me)) != 8) {
+        return fail(DGRAM_SEND_LATE);
+    }
+    alias[0].iov_len = sizeof(sink);
+    alias[1].iov_base = (void *)0x30000000;
+    alias[1].iov_len = 4;
+    if (readv(fd, alias, 2) != -1 || errno != EFAULT) {
+        return fail(DGRAM_LATE_FAULT);
+    }
+
+    return 0;
+}
+
+/**
  * Check a datagram socket, where the message and not the buffer is the unit.
  * Returns 0, or 1 once the failure is reported.
  *
@@ -438,14 +505,7 @@ static int check_stream(void)
  * new message: a read after it must return the next datagram whole, not the
  * tail of the last.
  *
- * A caller may point a buffer at its own vector list, so that the message
- * rewrites the descriptors after it, with addresses nothing checked. The
- * aliasing payload does that: four bytes for the first buffer, then a
- * descriptor of an address in the user window that no mapping backs (8 bytes
- * on i386, 16 on x86-64), then bytes for the kernel to put there. The call
- * must return, not fault in kernel mode, with what it copied before it
- * stopped: the first buffer and the forged descriptor, since the kernel reads
- * each descriptor as it reaches it and stops at the address it cannot write.
+ * The vector's own rows are `check_datagram_vector`'s.
  *
  * The socket is on loopback, so the case needs no network device.
  */
@@ -516,38 +576,14 @@ static int check_datagram(void)
         return fail(DGRAM_TRUNCATED_BYTES);
     }
 
-    /* A buffer that aliases the vector list. */
-    {
-        struct iovec alias[3];
-        struct iovec forged = {(void *)0x30000000, 4};
-        unsigned char payload[4 + sizeof(struct iovec) + 8];
-        char sink[4];
+    if (check_datagram_vector(fd, &me) != 0) {
+        close(fd);
 
-        memcpy(payload, "AAAA", 4);
-        memcpy(payload + 4, &forged, sizeof(forged));
-        memcpy(payload + 4 + sizeof(forged), "BBBBCCCC", 8);
-        if (sendto(fd, payload, sizeof(payload), 0, (struct sockaddr *)&me, sizeof(me)) !=
-            (ssize_t)sizeof(payload)) {
-            close(fd);
-
-            return fail(DGRAM_SEND_ALIAS);
-        }
-        alias[0].iov_base = sink;
-        alias[0].iov_len = sizeof(sink);
-        alias[1].iov_base = &alias[2]; /* the next descriptor itself */
-        alias[1].iov_len = sizeof(alias[2]);
-        alias[2].iov_base = sink;
-        alias[2].iov_len = sizeof(sink);
-        got = readv(fd, alias, 3);
-        if (got != (ssize_t)(4 + sizeof(struct iovec)) || memcmp(sink, "AAAA", 4) != 0 ||
-            memcmp(&alias[2], &forged, sizeof(forged)) != 0) {
-            close(fd);
-
-            return fail(DGRAM_ALIAS);
-        }
+        return 1;
     }
 
-    /* The tail went with its message, so the next read is the next message. */
+    /* The tail and the failed datagram went with their messages, so the
+     * next read is the next message. */
     if (sendto(fd, "TAIL", 4, 0, (struct sockaddr *)&me, sizeof(me)) != 4) {
         close(fd);
 
@@ -631,10 +667,13 @@ static int check_terminal(void)
  * once the failure is reported.
  *
  * A bad address in the second buffer fails the call, and the bytes the first
- * buffer would have taken are still there afterwards. There are two kinds of
- * bad address: one below the user window, and one inside it that no mapping
- * backs, which a range check alone would let through and only a write to it
- * would find, by which time the input would be gone.
+ * buffer would have taken are still there afterwards: the pipe holds all
+ * eight in one buffer, and Linux's pipe_read takes a buffer only once its
+ * copy is whole. There are two kinds of bad address, one below the user
+ * window and one inside it that no mapping backs; Linux's import lets both
+ * through, since it checks only that a range lies in user space, and the
+ * copy finds them. A pipe that has ended answers 0 before any copy, so a
+ * read of it into a bad buffer is 0, not EFAULT.
  */
 static int check_edges(void)
 {
@@ -671,6 +710,19 @@ static int check_edges(void)
         return fail(INPUT_KEPT);
     }
     close(fd);
+
+    /* The end of input comes before the copy. */
+    fd = pipe_holding("");
+    if (fd < 0) {
+        return fail(ENDED_PIPE);
+    }
+    parts[1].iov_base = NULL;
+    parts[1].iov_len = 5;
+    got = readv(fd, &parts[1], 1);
+    close(fd);
+    if (got != 0) {
+        return fail(END_BEFORE_FAULT);
+    }
 
     /* Asking for nothing still says whether the descriptor was any good. */
     parts[0].iov_len = 0;
