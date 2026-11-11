@@ -1920,7 +1920,10 @@ segment of the program, and a private mapping that was writable when
 .Xr mmap 2
 made it or that
 .Xr mprotect 2
-first made writable, even after it stops being writable,
+first made writable, even after it stops being writable, except anonymous
+memory of which no page was ever written, which
+.Xr mprotect 2
+uncounts when it takes write away,
 .Ql nr
 for a mapping made with
 .Dv MAP_NORESERVE ,
