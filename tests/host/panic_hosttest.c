@@ -117,9 +117,19 @@ unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, uns
     return was;
 }
 
-/** No other processor here. */
+/* What a write to /proc/sys/kernel/panic that lands while the stop is
+ * under way gives `panic_timeout`, or STOP_WRITES_NONE for no write. */
+#define STOP_WRITES_NONE (-1000)
+static int stop_writes = STOP_WRITES_NONE;
+
+/** No other processor here; a write racing the stop may land meanwhile. */
 void smp_stop_others(void)
-{}
+{
+    if (stop_writes != STOP_WRITES_NONE) {
+        panic_timeout = stop_writes;
+        stop_writes = STOP_WRITES_NONE;
+    }
+}
 
 /** The console here never blanks. */
 void console_panic_unblank(void)
@@ -466,12 +476,14 @@ static void edges(void)
           "a saved crash record is said under the countdown");
 
     restart();
-    panic_timeout = 3;
+    panic_timeout = 5;
+    stop_writes = 3;
     k_panic_dump = racing_dump;
     stop("raced");
     CHECK(waited_us == 3000000ul && restarted &&
               row_of("rebooting in 0 s", report.left) == (int)report.top,
-          "a write to panic_timeout during the panic changes neither its wait nor its report");
+          "panic_timeout is read once the other processors have stopped, and a write after "
+          "changes neither the panic's wait nor its report");
     panic_timeout = 3;
     k_panic_dump = 0;
 
@@ -528,6 +540,8 @@ static void faults(void)
     const char *again[] = {"rebooting", "build " RACH2_HEAD,     "cpu 0",        0,
                            0,           "page fault, error 0x2", "panic: first", 0};
     const char *top;
+    unsigned int fit, col;
+    int bare;
     void *page = host_fault_page();
 
     owner[4] = again[3] = address("ip ", 0x106000);
@@ -564,10 +578,15 @@ static void faults(void)
     panic_timeout = 100000;
     exception();
     top = first + report.top * textcon_cols + report.left;
+    fit = room(report.top, report.left);
+    bare = memcmp(top, "rebooting", 9) == 0;
+    for (col = 9; bare && col < fit; col++) {
+        bare = top[col] == ' ';
+    }
     CHECK(restarted && first_taken &&
-              (memcmp(top, "rebooting in 100000 s", 21) == 0 ||
-               (memcmp(top, "rebooting", 9) == 0 && top[9] == ' ')),
-          "a count of six digits is shown whole or not at all");
+              ((fit >= 21 && memcmp(top, "rebooting in 100000 s", 21) == 0) || bare),
+          "a count of six digits is shown whole, or \"rebooting\" alone with blanks to the end "
+          "of its room");
     panic_timeout = PANIC_TIMEOUT_DEFAULT;
 }
 
