@@ -730,9 +730,10 @@ static int pts_hung(const fd_entry_t *e, const struct pty *p)
 /**
  * Read slave input, draining queued bytes before the master's closing EOF.
  *
- * A session leader claims an unowned slave as its sole controlling terminal.
- * A background reader takes SIGTTIN, or EIO when SIGTTIN is blocked or
- * ignored or its group is orphaned (`tty_job_check`).
+ * A read makes the slave no one's controlling terminal, as on Linux, where
+ * only an open without O_NOCTTY and TIOCSCTTY do. A background reader takes
+ * SIGTTIN, or EIO when SIGTTIN is blocked or ignored or its group is
+ * orphaned (`tty_job_check`).
  * The wait is `tty_read`'s, which honours VMIN and VTIME and ends at the
  * master's close (`tty_hangup`), even after another reader consumed the
  * discipline's single canonical EOF marker. A raw read returns at most
@@ -756,9 +757,6 @@ static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
     want = count;
     if (want > sizeof(kbuf)) {
         want = sizeof(kbuf);
-    }
-    if (p->slave.sid == 0 && (int)current_proc->sid == (int)current_proc->tgid) {
-        tty_make_sole_ctty(&p->slave, (int)current_proc->sid, (int)current_proc->pgid);
     }
     n = tty_job_check(&p->slave, SIGTTIN);
     if (n != 0) {

@@ -6305,16 +6305,13 @@ static int32_t socket_read(fd_entry_t *entry, char __user *buf, uint32_t count)
  * framebuffer reads its keys here too, after it has put the keyboard in
  * K_RAW or K_MEDIUMRAW and the terminal in raw mode (kd.h).
  *
- * A session leader with no controlling terminal that reads the console
- * takes it as its only one (`tty_make_sole_ctty`), its group the foreground
- * and any pty it held dropped, so that a lone program receives ^C. A
- * process that is not a leader takes nothing, since the terminal would be
- * left to a leader that may have exited, and once a session owns the
- * console its foreground group changes only by TIOCSPGRP. A member of a
- * background group is sent SIGTTIN and the read is -EINTR, to be tried
- * again in the foreground, or -EIO when SIGTTIN is blocked or ignored or
- * the group is orphaned (`tty_job_check`), as POSIX has it. Both checks
- * come before `stdin_waiting_proc` is set, so no return leaves it set.
+ * A read makes no terminal a controlling one, as on Linux, where only an
+ * open and TIOCSCTTY do; init's console session claims the console with
+ * TIOCSCTTY after setsid, as getty does. A member of a background group is
+ * sent SIGTTIN and the read is -EINTR, to be tried again in the foreground,
+ * or -EIO when SIGTTIN is blocked or ignored or the group is orphaned
+ * (`tty_job_check`), as POSIX has it. The check comes before
+ * `stdin_waiting_proc` is set, so no return leaves it set.
  */
 static int32_t console_read(fd_entry_t *entry, char __user *buf, uint32_t count)
 {
@@ -6334,9 +6331,6 @@ static int32_t console_read(fd_entry_t *entry, char __user *buf, uint32_t count)
         want = sizeof(kbuf);
     }
 
-    if (console_tty.sid == 0 && (int)current_proc->sid == (int)current_proc->pid) {
-        tty_make_sole_ctty(&console_tty, (int)current_proc->sid, (int)current_proc->pgid);
-    }
     n = tty_job_check(&console_tty, SIGTTIN);
     if (n != 0) {
         return n;
