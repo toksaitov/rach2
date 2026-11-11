@@ -58,6 +58,7 @@ typedef unsigned char uint8_t;
 
 #define MSG_DONTWAIT 0x40
 #define MSG_PEEK     0x2
+#define MSG_NOSIGNAL 0x4000
 #define EAGAIN       11
 #define EFAULT       14
 
@@ -82,6 +83,7 @@ static uint16_t sim_port[2 * SIM_PAIRS];
 
 #define EADDRINUSE  98
 #define EPIPE       32
+#define SIGPIPE     13
 #define ENOTCONN    107
 #define EINPROGRESS 115
 
@@ -322,6 +324,9 @@ static const struct step {
     {"a reader asleep through a shutdown did not read the end of input", "shutdown-wakes-reader"},
     {"shutdown of the client", "shutdown-epipe"},
     {"a send after shutdown is not EPIPE", "shutdown-epipe"},
+    {"fork for the send that raises SIGPIPE", "shutdown-epipe"},
+    {"a send after shutdown without MSG_NOSIGNAL did not end the sender with SIGPIPE",
+     "shutdown-epipe"},
     {"a blocking read after shutdown is not the end of input", "shutdown-blocking-eof"},
     {"nonblocking after shutdown", "shutdown-nonblocking-eof"},
     {"a nonblocking read after shutdown is not the end of input", "shutdown-nonblocking-eof"},
@@ -1759,15 +1764,17 @@ static void shutdown_wakes_a_sharer(int cs)
 }
 
 /**
- * A stream this end shut down for writing: a send is EPIPE, and a read,
- * blocking or not, is the end of input, since the peer has closed its end.
- * A stream that never connected reads ENOTCONN. `cs` is a connected client
- * whose peer has shut down; `sa` is scratch space of a byte.
+ * A stream this end shut down for writing: a send with MSG_NOSIGNAL is
+ * EPIPE, and one without it ends the sender with SIGPIPE, as on Linux; a
+ * read, blocking or not, is the end of input, since the peer has closed
+ * its end. A stream that never connected reads ENOTCONN. `cs` is a
+ * connected client whose peer has shut down; `sa` is scratch space of a
+ * byte.
  */
 static void shutdown_rows(int cs, uint8_t *sa)
 {
     unsigned long args[6];
-    int fresh;
+    int fresh, pid, status = 0;
 
     args[0] = (uint32_t)cs;
     args[1] = 1; /* SHUT_WR */
@@ -1776,11 +1783,27 @@ static void shutdown_rows(int cs, uint8_t *sa)
     args[0] = (uint32_t)cs;
     args[1] = (unsigned long)"x";
     args[2] = 1;
-    args[3] = 0;
+    args[3] = MSG_NOSIGNAL;
     args[4] = 0;
     args[5] = 0;
     if (socketcall(SC_SENDTO, args) != -EPIPE)
         fail("a send after shutdown is not EPIPE");
+    pid = sys_fork();
+    if (pid < 0)
+        fail("fork for the send that raises SIGPIPE");
+    if (pid == 0) {
+        struct {
+            long handler, flags, restorer;
+            unsigned long long mask;
+        } dfl = {0, 0, 0, 0}; /* SIG_DFL, whatever the probe inherited */
+
+        syscall4(SYS_RT_SIGACTION, SIGPIPE, (long)&dfl, 0, 8);
+        args[3] = 0;
+        socketcall(SC_SENDTO, args);
+        sys_exit(0);
+    }
+    if (sys_waitpid(pid, &status) != pid || (status & 0x7F) != SIGPIPE)
+        fail("a send after shutdown without MSG_NOSIGNAL did not end the sender with SIGPIPE");
     if (sys_read(cs, sa, 1) != 0)
         fail("a blocking read after shutdown is not the end of input");
     if (sys_fcntl(cs, F_SETFL, O_NONBLOCK) != 0)
