@@ -4,6 +4,7 @@
  * holds what a program or the kernel last wrote through it until the driver
  * syncs it.
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/atomic_host.c
  */
 
 #include "i915_gem_model.c"

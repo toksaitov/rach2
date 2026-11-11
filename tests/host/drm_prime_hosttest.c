@@ -2,6 +2,7 @@
  * code, and vgem's fences on a buffer another device imports; frames,
  * descriptor tables, device regions and the commit worker are host models.
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/atomic_host.c
  */
 #include "drm/drm_gem.c"
 #include "drm/drm_prime.c"

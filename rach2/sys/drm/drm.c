@@ -15,7 +15,6 @@
 #include "../io/poll.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
-#include "../lib/kirq.h"
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
 #include "../mm/paging.h"
@@ -268,18 +267,20 @@ int32_t drm_dev_register(struct drm_device *dev)
 void drm_gem_object_zap(struct drm_gem_object *obj)
 {
     struct drm_gem_object *imported;
+    struct dma_buf *buf = obj->dma_buf;
     int i;
 
     paging_zap_device(obj, 0, (uint32_t)(obj->size >> PAGE_SHIFT));
-    if (!obj->dma_buf) {
+    if (!buf) {
         return;
     }
     for (i = 0; i < DRM_MAX_DEVICES; i++) {
         if (!devices[i]) {
             continue;
         }
-        for (imported = devices[i]->objects; imported; imported = imported->dev_next) {
-            if (imported->import == obj->dma_buf) {
+        for (imported = drm_gem_object_next(devices[i], NULL); imported;
+             imported = drm_gem_object_next(devices[i], imported)) {
+            if (imported->import == buf) {
                 paging_zap_device(imported, 0, (uint32_t)(imported->size >> PAGE_SHIFT));
             }
         }
@@ -302,7 +303,7 @@ void drm_dev_unplug(struct drm_device *dev)
         devfs_node_unregister(&minors[dev->index][1].node);
         drm_client_dev_unregister(dev);
     }
-    for (obj = dev->objects; obj; obj = obj->dev_next) {
+    for (obj = drm_gem_object_next(dev, NULL); obj; obj = drm_gem_object_next(dev, obj)) {
         drm_gem_object_zap(obj);
     }
     if (drm_core_check_feature(dev, DRIVER_MODESET)) {
@@ -403,11 +404,11 @@ static int32_t drm_node_open(struct devfs_node *node, fd_entry_t *e, int flags)
 }
 
 /** Free the events queued for `file` and leave its reserved ones to their
- * senders, unattached. */
+ * senders, unattached, as Linux's drm_events_release (drm_file.c:189-211). */
 static void events_release(struct drm_file *file)
 {
     struct drm_pending_event *e, *queued;
-    uint32_t flags = kirq_save();
+    uint32_t flags = spin_lock_irqsave(&file->dev->event_lock);
 
     while ((e = file->pending) != NULL) {
         file->pending = e->pending_next;
@@ -417,7 +418,7 @@ static void events_release(struct drm_file *file)
     queued = file->events;
     file->events = NULL;
     file->events_tail = NULL;
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&file->dev->event_lock, flags);
     while ((e = queued) != NULL) {
         queued = e->next;
         kfree(e);
@@ -468,22 +469,24 @@ static void drm_node_close(fd_entry_t *e)
 
 int32_t drm_event_reserve(struct drm_file *file, struct drm_pending_event *e)
 {
-    uint32_t flags = kirq_save();
+    uint32_t flags = spin_lock_irqsave(&file->dev->event_lock);
 
     if (file->event_space < e->length) {
-        kirq_restore(flags);
+        spin_unlock_irqrestore(&file->dev->event_lock, flags);
         return -ENOMEM;
     }
     file->event_space -= e->length;
     e->file = file;
+    e->dev = file->dev;
     e->next = NULL;
     e->pending_next = file->pending;
     file->pending = e;
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&file->dev->event_lock, flags);
     return 0;
 }
 
-/** Take `e` off its file's reserved events. Interrupts masked. */
+/** Take `e` off its file's reserved events. The device's `event_lock` is
+ * held. */
 static void pending_unlink(struct drm_pending_event *e)
 {
     struct drm_pending_event **link;
@@ -497,9 +500,17 @@ static void pending_unlink(struct drm_pending_event *e)
     e->pending_next = NULL;
 }
 
+/**
+ * As Linux's drm_send_event_helper (drm_file.c:727-760): the event's file
+ * is read, and its reader woken, under the event lock of the device it was
+ * reserved on, since a release of the file on another processor clears
+ * `file` under that lock before it frees the file. An event never reserved
+ * has no device to lock, and is freed.
+ */
 void drm_send_event(struct drm_pending_event *e)
 {
     struct drm_file *file;
+    struct drm_device *dev = e->dev;
     struct dma_fence *fence = e->fence;
     uint32_t flags;
 
@@ -508,23 +519,27 @@ void drm_send_event(struct drm_pending_event *e)
         dma_fence_signal(fence);
         dma_fence_put(fence);
     }
-    flags = kirq_save();
-    file = e->file;
-    if (!file) {
-        kirq_restore(flags);
+    if (!dev) {
         kfree(e);
         return;
     }
-    pending_unlink(e);
-    e->next = NULL;
-    if (file->events_tail) {
-        file->events_tail->next = e;
-    } else {
-        file->events = e;
+    flags = spin_lock_irqsave(&dev->event_lock);
+    file = e->file;
+    if (file) {
+        pending_unlink(e);
+        e->next = NULL;
+        if (file->events_tail) {
+            file->events_tail->next = e;
+        } else {
+            file->events = e;
+        }
+        file->events_tail = e;
+        wq_wake(&file->event_wait, WQ_DATA);
     }
-    file->events_tail = e;
-    kirq_restore(flags);
-    wq_wake(&file->event_wait, WQ_DATA);
+    spin_unlock_irqrestore(&dev->event_lock, flags);
+    if (!file) {
+        kfree(e);
+    }
 }
 
 void drm_event_cancel_free(struct drm_pending_event *e)
@@ -533,12 +548,14 @@ void drm_event_cancel_free(struct drm_pending_event *e)
 
     dma_fence_put(e->fence);
     e->fence = NULL;
-    flags = kirq_save();
-    if (e->file) {
-        pending_unlink(e);
-        e->file->event_space += e->length;
+    if (e->dev) {
+        flags = spin_lock_irqsave(&e->dev->event_lock);
+        if (e->file) {
+            pending_unlink(e);
+            e->file->event_space += e->length;
+        }
+        spin_unlock_irqrestore(&e->dev->event_lock, flags);
     }
-    kirq_restore(flags);
     kfree(e);
 }
 
@@ -559,7 +576,7 @@ static int events_readable(void *arg)
 static int event_take(struct drm_file *file, uint32_t room, struct drm_pending_event **out)
 {
     struct drm_pending_event *ev;
-    uint32_t flags = kirq_save();
+    uint32_t flags = spin_lock_irqsave(&file->dev->event_lock);
     int rc = 1;
 
     ev = file->events;
@@ -574,17 +591,17 @@ static int event_take(struct drm_file *file, uint32_t room, struct drm_pending_e
         }
         *out = ev;
     }
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&file->dev->event_lock, flags);
     return rc;
 }
 
 /** Give back the space of `ev`, taken by event_take and copied, and free it. */
 static void event_done(struct drm_file *file, struct drm_pending_event *ev)
 {
-    uint32_t flags = kirq_save();
+    uint32_t flags = spin_lock_irqsave(&file->dev->event_lock);
 
     file->event_space += ev->length;
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&file->dev->event_lock, flags);
     kfree(ev);
 }
 
@@ -593,14 +610,14 @@ static void event_done(struct drm_file *file, struct drm_pending_event *ev)
  * Linux's drm_read does after a failed copy. */
 static void event_put_back(struct drm_file *file, struct drm_pending_event *ev)
 {
-    uint32_t flags = kirq_save();
+    uint32_t flags = spin_lock_irqsave(&file->dev->event_lock);
 
     ev->next = file->events;
     file->events = ev;
     if (!file->events_tail) {
         file->events_tail = ev;
     }
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&file->dev->event_lock, flags);
     wq_wake(&file->event_wait, WQ_DATA);
 }
 

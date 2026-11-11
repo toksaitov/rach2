@@ -9,6 +9,7 @@
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/atomic_host.c
  *
  * The rows, one for each of 78-5b's subtasks: the call's checks and
  * Linux's refusals; relocations as Linux's eb_relocate_entry applies them,

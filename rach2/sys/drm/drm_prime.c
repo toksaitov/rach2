@@ -23,12 +23,17 @@ static int32_t prime_mmap(struct dma_buf *buf, vma_t *vma)
     return rc;
 }
 
-/** Clear the weak export pointer before releasing the exporter's object. */
+/** Clear the weak export pointer, if it still names `buf`, before
+ * releasing the exporter's object. */
 static void prime_release(struct dma_buf *buf)
 {
     struct drm_gem_object *obj = buf->priv;
+    uint32_t flags = spin_lock_irqsave(&obj->dev->object_lock);
 
-    obj->dma_buf = NULL;
+    if (obj->dma_buf == buf) {
+        obj->dma_buf = NULL;
+    }
+    spin_unlock_irqrestore(&obj->dev->object_lock, flags);
     drm_gem_object_put(obj);
 }
 
@@ -55,27 +60,60 @@ static int32_t prime_cpu_access(struct dma_buf *buf, uint64_t flags)
 static const struct dma_buf_ops prime_ops = {prime_mmap, prime_release, prime_cpu_access,
                                              prime_page};
 
-/** Find a GEM handle's cache entry; the big kernel lock protects the table. */
-static struct drm_handle *prime_handle(struct drm_file *file, uint32_t handle)
-{
-    return drm_handle_get(&file->objects, handle);
-}
-
 /** The handle of `file` whose PRIME cache holds `buf`, or 0 for none. */
 static uint32_t prime_cached(struct drm_file *file, const struct dma_buf *buf)
 {
     return drm_handle_prime_find(&file->objects, buf);
 }
 
+/**
+ * The dma-buf of `obj` with a reference for the caller: the one it was
+ * imported from, the one exported of it already, or a new export with
+ * `flags`' access, or NULL with no memory. The weak `dma_buf` is read and
+ * set under the device's `object_lock`, as Linux's export under
+ * `object_name_lock` (drm_prime.c:455-470), so that two exports at once
+ * keep one buffer; the loser's put finds the pointer not its own.
+ */
+static struct dma_buf *prime_export(struct drm_gem_object *obj, uint32_t flags)
+{
+    struct drm_device *dev = obj->dev;
+    struct dma_buf *buf, *won;
+    uint32_t irq = spin_lock_irqsave(&dev->object_lock);
+
+    buf = dma_buf_ref(obj->import ? obj->import : obj->dma_buf);
+    spin_unlock_irqrestore(&dev->object_lock, irq);
+    if (buf) {
+        return buf;
+    }
+    buf = dma_buf_export(obj->size, &prime_ops, obj, obj->resv);
+    if (!buf) {
+        return NULL;
+    }
+    drm_gem_object_get(obj);
+    buf->read_only = !(flags & DRM_RDWR);
+    buf->map_flags = obj->map_wc ? VM_PROT_WC : 0;
+    irq = spin_lock_irqsave(&dev->object_lock);
+    won = dma_buf_ref(obj->dma_buf);
+    if (!won) {
+        obj->dma_buf = buf;
+    }
+    spin_unlock_irqrestore(&dev->object_lock, irq);
+    if (won) {
+        dma_buf_put(buf);
+        return won;
+    }
+    return buf;
+}
+
 /** Export a handle as a dma-buf descriptor, caching its identity until close.
- * Flags accept only DRM_CLOEXEC and DRM_RDWR. Return 0 or -errno. */
+ * Flags accept only DRM_CLOEXEC and DRM_RDWR. Return 0 or -errno: ENOENT
+ * also for a handle closed while the export was made. */
 int32_t drm_prime_handle_to_fd_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
     struct drm_prime_handle *args = data;
-    struct drm_handle *h;
     struct drm_gem_object *obj;
     struct dma_buf *buf;
-    int32_t fd;
+    int32_t fd, rc;
 
     if (args->flags & ~(DRM_CLOEXEC | DRM_RDWR)) {
         return -EINVAL;
@@ -83,35 +121,37 @@ int32_t drm_prime_handle_to_fd_ioctl(struct drm_device *dev, void *data, struct 
     if (!drm_core_check_feature(dev, DRIVER_GEM)) {
         return -EOPNOTSUPP;
     }
-    h = prime_handle(file, args->handle);
-    if (!h) {
+    obj = drm_gem_object_lookup(file, args->handle);
+    if (!obj) {
         return -ENOENT;
     }
-    obj = h->object;
-    if (!h->prime && obj->no_export) {
-        return -EINVAL;
-    }
-    if (!h->prime) {
-        buf = obj->import ? obj->import : obj->dma_buf;
-        if (buf) {
-            dma_buf_ref(buf);
-        } else {
-            buf = dma_buf_export(obj->size, &prime_ops, obj, obj->resv);
-            if (!buf) {
-                return -ENOMEM;
-            }
-            drm_gem_object_get(obj);
-            obj->dma_buf = buf;
-            buf->read_only = !(args->flags & DRM_RDWR);
-            buf->map_flags = obj->map_wc ? VM_PROT_WC : 0;
+    /* A second turn takes the cache that another export set meanwhile. */
+    while ((buf = drm_handle_prime_get(&file->objects, args->handle)) == NULL) {
+        if (obj->no_export) {
+            drm_gem_object_put(obj);
+            return -EINVAL;
         }
-        if (drm_handle_set_prime(&file->objects, h, buf) != 0) {
-            /* A new export's only reference: its put releases the export. */
-            dma_buf_put(buf);
+        buf = prime_export(obj, args->flags);
+        if (!buf) {
+            drm_gem_object_put(obj);
             return -ENOMEM;
         }
+        rc = drm_handle_set_prime(&file->objects, args->handle, obj, dma_buf_ref(buf));
+        if (rc == 0) {
+            break;
+        }
+        /* The set's reference, then the caller's; for a new export the
+         * last, whose put releases it. */
+        dma_buf_put(buf);
+        dma_buf_put(buf);
+        if (rc != -EEXIST) {
+            drm_gem_object_put(obj);
+            return rc;
+        }
     }
-    fd = dma_buf_fd(h->prime, args->flags & DRM_CLOEXEC);
+    drm_gem_object_put(obj);
+    fd = dma_buf_fd(buf, args->flags & DRM_CLOEXEC);
+    dma_buf_put(buf);
     if (fd < 0) {
         return fd;
     }
@@ -121,7 +161,7 @@ int32_t drm_prime_handle_to_fd_ioctl(struct drm_device *dev, void *data, struct 
 
 /** Import shared pages, keeping one buffer reference and its reservation.
  * A self-import returns the original object. Return one object reference,
- * or NULL with *err set; the caller holds the big kernel lock. */
+ * or NULL with *err set. */
 static struct drm_gem_object *prime_import(struct drm_device *dev, struct dma_buf *buf,
                                            int32_t *err)
 {
@@ -174,7 +214,6 @@ static struct drm_gem_object *prime_import(struct drm_device *dev, struct dma_bu
 int32_t drm_prime_fd_to_handle_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
     struct drm_prime_handle *args = data;
-    struct drm_handle *h;
     struct drm_gem_object *obj;
     struct dma_buf *buf;
     uint32_t handle;
@@ -210,8 +249,7 @@ int32_t drm_prime_fd_to_handle_ioctl(struct drm_device *dev, void *data, struct 
         }
         rc = drm_gem_handle_create(file, obj, &handle);
         if (!rc) {
-            h = prime_handle(file, handle);
-            rc = drm_handle_set_prime(&file->objects, h, dma_buf_ref(buf));
+            rc = drm_handle_set_prime(&file->objects, handle, obj, dma_buf_ref(buf));
             if (rc) {
                 dma_buf_put(buf);
                 drm_gem_handle_delete(file, handle);
