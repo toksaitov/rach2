@@ -869,6 +869,15 @@ void rtc_week_and_year_day(const rtc_time_t *t, int32_t *weekday, int32_t *yeard
     unexpected();
 }
 
+/** The days of a month, which no row asks. */
+int32_t rtc_days_in_month(int32_t year, int32_t month)
+{
+    (void)year;
+    (void)month;
+    unexpected();
+    return 0;
+}
+
 /** Random bytes, which no row reads. */
 void krandom_bytes(void *buf, uint32_t count)
 {
