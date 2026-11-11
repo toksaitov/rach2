@@ -1428,6 +1428,7 @@ static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uint
 
     if (init_pid == 0) {
         init_pid = user_proc->pid;
+        user_proc->tg->unkillable = !debug_shell_is_home;
         platform_threads_start();
         evdev_sysfs_start();
     }

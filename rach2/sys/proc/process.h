@@ -902,7 +902,10 @@ void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info);
  * raised, with `info`. A handler that is ignored or blocked could not run,
  * so the disposition then goes back to the default and the signal is
  * unblocked: the process ends unless a handler is installed and not
- * blocked. */
+ * blocked. An init that is not traced loses its protection from a signal
+ * at its default then, so that it ends rather than fault again, as Linux
+ * 6.12.115's `force_sig_info_to_task` clears SIGNAL_UNKILLABLE
+ * (kernel/signal.c:1348-1354). */
 void signal_force(process_t *target, int signo, const struct k_siginfo *info);
 
 /** Make `mask`, less SIGKILL and SIGSTOP, the current thread's blocked mask,
