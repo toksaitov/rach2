@@ -49,6 +49,7 @@
 #include "sys/fs/krffs.h"
 #include "sys/timer.h"
 #include "sys/platform.h"
+#include "sys/pstore/pstore.h"
 #include "sys/boot.h"
 #include "sys/latency.h"
 #include "sys/input.h"
@@ -4138,6 +4139,7 @@ void kernel_main(const struct boot_info *boot)
             }
         }
         platform_memory_reserve(&map);
+        ramoops_reserve(&map, boot);
         init_paging(&map);
         guard_boot_stack();
         map_modules();
@@ -4156,6 +4158,7 @@ void kernel_main(const struct boot_info *boot)
         }
     }
     klog(KLOG_DEBUG, "boot", "paging: ready");
+    ramoops_init();
 
     init_pagecache();
     klog(KLOG_DEBUG, "boot", "page cache: ready");
@@ -4338,6 +4341,7 @@ void kernel_main(const struct boot_info *boot)
     start_network();
 
     drm_start();
+    pstore_start();
 #if defined(__x86_64__)
     kvm_start();
     vfio_start();

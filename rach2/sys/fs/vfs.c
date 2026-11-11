@@ -33,6 +33,7 @@
 #include "tmpfs.h"
 #include "../ipc/mqueue.h"
 #include "debugfs.h"
+#include "../pstore/pstore.h"
 #include "../mm/filecache.h"
 #include "../io/inotify.h"
 
@@ -4179,8 +4180,9 @@ int vfs_root_over_image(const struct vfs_type *type, struct block_device *dev, c
  * `vfs_do_mount` takes the name "proc" itself, and nothing mounts the
  * others by name. */
 static const struct vfs_type *const mount_types[] = {
-    &vfs_vfat_type,  &vfs_exfat_type,  &vfs_ext2_type,    &vfs_krffs_volume_type,
-    &vfs_tmpfs_type, &vfs_mqueue_type, &vfs_debugfs_type, 0};
+    &vfs_vfat_type,         &vfs_exfat_type,  &vfs_ext2_type,
+    &vfs_krffs_volume_type, &vfs_tmpfs_type,  &vfs_mqueue_type,
+    &vfs_debugfs_type,      &vfs_pstore_type, 0};
 
 /* The entries of `mount_types`, its terminator apart, counted from the table
  * so that a type added to it is found with no number to change. */
@@ -4559,6 +4561,31 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
     m->state = VFS_ACTIVE;
     klog(KLOG_INFO, "vfs", "mounted: %s on %s (%s%s)", source, m->covered_path, t->name,
          (flags & VFS_MS_RDONLY) ? ", read-only" : "");
+    return 0;
+}
+
+int vfs_mount_in_sys(const struct vfs_type *t, const char *path, const char *source, uint32_t flags)
+{
+    struct vfs_mount *sys = mounts[5], *m;
+    int rc;
+
+    if (!vfs_root_mounted() || !sys || sys->state != VFS_ACTIVE ||
+        !path_under(path, sys->covered_path, path_below(sys)) || path[path_below(sys)] != '/' ||
+        k_strlen(path) >= VFS_COVERED_PATH_MAX) {
+        return -EINVAL;
+    }
+    m = mount_place(sys, NULL, t, path, source, flags);
+    if (!m) {
+        return -ENOMEM;
+    }
+    rc = t->mount(m, 0, flags, 0);
+    if (rc != 0) {
+        sys->refs--;
+        mount_release(m);
+        return rc;
+    }
+    m->state = VFS_ACTIVE;
+    klog(KLOG_INFO, "vfs", "mounted: %s on %s (%s)", source, m->covered_path, t->name);
     return 0;
 }
 

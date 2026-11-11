@@ -270,6 +270,23 @@ int rtc_time_of_seconds(int64_t seconds, rtc_time_t *t)
     return 0;
 }
 
+void rtc_realtime_unlocked(int64_t *seconds, int32_t *microseconds)
+{
+    int64_t sec;
+    int32_t nsec;
+    uint32_t us = kernel_second_ticks * TICK_US;
+
+    rtc_offset_locked(&sec, &nsec);
+    sec += kernel_uptime_seconds;
+    us += (uint32_t)nsec / 1000u;
+    while (us >= 1000000u) {
+        us -= 1000000u;
+        sec++;
+    }
+    *seconds = sec;
+    *microseconds = (int32_t)us;
+}
+
 int rtc_is_anchored(void)
 {
     return rtc_anchored;

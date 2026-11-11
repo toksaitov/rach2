@@ -74,6 +74,14 @@ int64_t rtc_boot_epoch(void);
 void rtc_offset(int64_t *seconds, int32_t *nanoseconds);
 
 /**
+ * The real time to the last tick, read with no lock and no wait, for a
+ * panic: a processor stopped while it held the real-time lock or wrote the
+ * tick would stop a reader that took either. A change made on another
+ * processor during the read can tear it by that change.
+ */
+void rtc_realtime_unlocked(int64_t *seconds, int32_t *microseconds);
+
+/**
  * The real time now, in seconds since 1970 and nanoseconds within the
  * second: the anchor's time, the time since it to the timer's place within
  * the tick, and the step `rtc_set_realtime` made. While the clock runs from

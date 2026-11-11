@@ -41,6 +41,9 @@ C_SRC_SHARED = kernel.c \
     sys/evdev_sysfs.c \
     sys/rfkill.c \
     sys/panic.c \
+    sys/pstore/inode.c \
+    sys/pstore/ram.c \
+    sys/pstore/ram_core.c \
     sys/block/block.c \
     sys/block/chain.c \
     sys/block/loop.c \
