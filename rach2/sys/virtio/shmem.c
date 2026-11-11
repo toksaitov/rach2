@@ -1476,12 +1476,13 @@ static int vshm_irq_woken(void *arg)
  * Linux's vhost worker runs the work a wakeup queued, so that the reap
  * runs outside the eventfd's lock and while the transport's thread binds.
  * The tick does not switch it, as it does not `vgpu-shm`, so no detach
- * runs between its read of the region and the reap. It holds a reference
- * on the record across the reap and drops it through vs_put: a detach
- * that ran while it slept, or a last put on another processor, leaves the
- * record to this thread's put, as KVM's irqfd_shutdown flushes the irqfd's
- * queued work before it frees the irqfd (virt/kvm/eventfd.c:143 and :157
- * in 6.12.115).
+ * runs between its read of the region and the reap. It reads `vshm_cur`
+ * only after it wakes, and from its vs_get to its vs_put it neither
+ * sleeps nor lets the big lock go, since the reap runs under `irq_lock`,
+ * so no detach and no other put runs inside the hold: the reference only
+ * keeps the record across the reap, as KVM's irqfd_shutdown flushes the
+ * irqfd's queued work before it frees the irqfd (virt/kvm/eventfd.c:143
+ * and :157 in 6.12.115).
  */
 static void vshm_irq_main(void)
 {
