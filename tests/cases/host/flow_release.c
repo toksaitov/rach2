@@ -1,5 +1,6 @@
-/* flow_release.c: resume records, reruns of failures, the trial boot's command
- * line, acceptance order and the preparation of -p. */
+/* flow_release.c: resume records, reruns of failures, the build's results,
+ * the install's move of the kernel slots, the recovery trial's fallback, the
+ * trial boot's command line, acceptance order and the preparation of -p. */
 #define _POSIX_C_SOURCE 200809L
 #include "flow_check.h"
 #include <dirent.h>
@@ -10,12 +11,20 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
-#define H      "1111111111111111111111111111111111111111"
-#define C      "2222222222222222222222222222222222222222"
-#define T      "2026-10-10T00:00:00Z"
-#define BRANCH "milestone/07-seven"
+
+#include "sha256.h"
+#define H          "1111111111111111111111111111111111111111"
+#define C          "2222222222222222222222222222222222222222"
+#define T          "2026-10-10T00:00:00Z"
+#define BRANCH     "milestone/07-seven"
+/* The digests release.sha256 gives the kernel and the root in a row of the
+ * install, which the machine's /dev/shm then holds. */
+#define KERNEL_SUM "3333333333333333333333333333333333333333333333333333333333333333"
+#define ROOT_SUM   "4444444444444444444444444444444444444444444444444444444444444444"
+/* The bootctl the build made, which the recovery trial's fallback sends. */
+#define BOOTCTL    "the build's bootctl\n"
 /* The suites of the mock registry that a machine's run takes, less style. */
-#define SUITES "x86_64:agents i686:fs x86_64:fs x86_64:bigmem i686:gnu x86_64:gnu"
+#define SUITES     "x86_64:agents i686:fs x86_64:fs x86_64:bigmem i686:gnu x86_64:gnu"
 static const char *ev(const char *n)
 {
     const char *v = getenv(n);
@@ -337,6 +346,114 @@ static int release_write(void)
         puts("status 0");
     return 0;
 }
+/** Succeed when RELEASE_TEST_SLOTS is `reset` and the release has asked the
+ * machine to reboot, which then answers from its recovery system. */
+static int rebooted(void)
+{
+    return !strcmp(ev("RELEASE_TEST_SLOTS"), "reset") &&
+           fx_has(ev("RELEASE_TEST_CALLS"), "; reboot\"");
+}
+/** Print the SHA-256 of FILE as sha256sum does for NAME. */
+static int sent_sum(const char *file, const char *name)
+{
+    struct sha256 s;
+    unsigned char digest[32];
+    char hex[65], *text = fx_read(file);
+    if (!text)
+        return 1;
+    sha256_init(&s);
+    sha256_update(&s, (const unsigned char *)text, strlen(text));
+    sha256_final(&s, digest);
+    sha256_hex(digest, hex);
+    printf("%s  %s\n", hex, name);
+    free(text);
+    return 0;
+}
+/**
+ * Answer the commands of the install step on a machine whose installer
+ * RELEASE_TEST_SLOTS describes: `old`, it has no --slots; `move`, --slots
+ * moves the disk to the larger slots; `full`, --slots finds no room; and
+ * `reset`, the slots were moved before a reset that left the old root
+ * running, whose bootctl cannot arm the trial of recovery, and a reboot
+ * comes up in recovery. /dev/shm holds the build's kernel and root, and the
+ * installer, once started, ends 1, which ends the row before the trial boot.
+ */
+static int install_mock(const char *command)
+{
+    const char *how = ev("RELEASE_TEST_SLOTS");
+    char line[20000], b[4096];
+    size_t n;
+    FILE *f;
+    static const char probe[] = "cat /dev/shm/install.status 2> /dev/null\n",
+                      installer[] = "setsid sh -c 'rach2-install --console term --update ";
+    if (!strncmp(command, probe, strlen(probe))) {
+        append(ev("RELEASE_TEST_CALLS"), "machine read\n");
+        puts("answered");
+        return 0;
+    }
+    if (!strcmp(command, "cat /dev/shm/install.status 2> /dev/null; true")) {
+        append(ev("RELEASE_TEST_CALLS"), "machine read\n");
+        puts("1");
+        return 0;
+    }
+    if (!strcmp(command, "sha256sum /dev/shm/root.ext2 /dev/shm/kernel 2> /dev/null")) {
+        append(ev("RELEASE_TEST_CALLS"), "machine read\n");
+        puts(ROOT_SUM "  /dev/shm/root.ext2\n" KERNEL_SUM "  /dev/shm/kernel");
+        return 0;
+    }
+    if (!strcmp(command, "grep -q -e \"--slots DISK\" /bin/rach2-install")) {
+        append(ev("RELEASE_TEST_CALLS"), "machine read\n");
+        return !strcmp(how, "old");
+    }
+    if (!strcmp(command, "rach2-install --slots /dev/disk0")) {
+        append(ev("RELEASE_TEST_CALLS"), "machine write rach2-install --slots /dev/disk0\n");
+        if (!strcmp(how, "full")) {
+            puts("rach2-install: /dev/disk0p1 has no room for the larger slots; the machine stays "
+                 "saved to its recovery system");
+            return 1;
+        }
+        puts(!strcmp(how, "reset")
+                 ? "rach2-install: /dev/disk0p1 has the slots of this version already"
+                 : "rach2-install: moved /dev/disk0p1 to the slots of this version; the saved "
+                   "entry is candidate again");
+        return 0;
+    }
+    if (!strcmp(command, "bootctl kernel /dev/shm/kernel")) {
+        append(ev("RELEASE_TEST_CALLS"), "machine write bootctl kernel\n");
+        puts("bootctl: installed: candidate");
+        return 0;
+    }
+    if (!strcmp(command, "bootctl trial recovery")) {
+        append(ev("RELEASE_TEST_CALLS"), "machine write bootctl trial recovery\n");
+        if (strcmp(how, "reset"))
+            return 0;
+        fputs("bootctl: /dev/disk0p1: a file's size does not match its chain\n", stderr);
+        return 1;
+    }
+    if (!strcmp(command, "cat > /dev/shm/bootctl")) {
+        append(ev("RELEASE_TEST_CALLS"), "machine write cat > /dev/shm/bootctl\n");
+        if ((f = fopen(rp(".bootctl"), "wb")) == NULL)
+            return 1;
+        while ((n = fread(b, 1, sizeof(b), stdin)))
+            fwrite(b, 1, n, f);
+        return fclose(f) != 0;
+    }
+    if (!strcmp(command, "sha256sum /dev/shm/bootctl")) {
+        append(ev("RELEASE_TEST_CALLS"), "machine read\n");
+        return sent_sum(rp(".bootctl"), "/dev/shm/bootctl");
+    }
+    if (!strcmp(command, "chmod 755 /dev/shm/bootctl && /dev/shm/bootctl trial recovery")) {
+        append(ev("RELEASE_TEST_CALLS"), "machine write /dev/shm/bootctl trial recovery\n");
+        return 0;
+    }
+    if (!strncmp(command, installer, strlen(installer))) {
+        append(ev("RELEASE_TEST_CALLS"), "machine write rach2-install --update\n");
+        return 0;
+    }
+    snprintf(line, sizeof(line), "machine write %s\n", command);
+    append(ev("RELEASE_TEST_CALLS"), line);
+    return 1;
+}
 static int ssh_mock(int argc, char **argv)
 {
     const char *host = argc > 2 ? argv[argc - 2] : "", *command = argc > 1 ? argv[argc - 1] : "";
@@ -348,9 +465,15 @@ static int ssh_mock(int argc, char **argv)
         append(ev("RELEASE_TEST_CALLS"), "machine read\n");
         if (!strcmp(ev("RELEASE_TEST_LENOVO"), "off"))
             return 255;
-        printf("28:d2:44:7e:e0:af\n%s\n5000.00 9000.00\nidentity 0 nvme S6P2NX0T381638Z\n",
-               *ev("RELEASE_TEST_CMDLINE") ? ev("RELEASE_TEST_CMDLINE")
-                                           : "root=/dev/disk0p3 rach2.slot=candidate");
+        /* The mock's reboot takes no time, so the new boot's uptime is below
+         * zero: shorter than the time since the release asked for it. */
+        if (rebooted())
+            puts("28:d2:44:7e:e0:af\nroot=/dev/disk0p3 rach2.slot=recovery\n-1.00 1.00\n"
+                 "identity 0 nvme S6P2NX0T381638Z");
+        else
+            printf("28:d2:44:7e:e0:af\n%s\n5000.00 9000.00\nidentity 0 nvme S6P2NX0T381638Z\n",
+                   *ev("RELEASE_TEST_CMDLINE") ? ev("RELEASE_TEST_CMDLINE")
+                                               : "root=/dev/disk0p3 rach2.slot=candidate");
         return 0;
     }
     if (!strncmp(command, "test -f ", 8)) {
@@ -388,6 +511,8 @@ static int ssh_mock(int argc, char **argv)
     if (!strncmp(command, "{ mkdir -p /etc/rach2 && cat > /etc/rach2/release.new &&",
                  strlen("{ mkdir -p /etc/rach2 && cat > /etc/rach2/release.new &&")))
         return release_write();
+    if (*ev("RELEASE_TEST_SLOTS"))
+        return install_mock(command);
     snprintf(line, sizeof(line), "machine write %s\n", command);
     append(ev("RELEASE_TEST_CALLS"), line);
     return 1;
@@ -409,6 +534,12 @@ static int git_ancestor(int argc, char **argv)
 }
 static int git_mock(int argc, char **argv)
 {
+    /* The tree's own .git, whose parent holds build/flow/lenovo, the lock;
+     * a read the rows do not count among the calls. */
+    if (argc == 3 && !strcmp(argv[1], "rev-parse") && !strcmp(argv[2], "--git-common-dir")) {
+        puts(".git");
+        return 0;
+    }
     call("git ", argc, argv, 1);
     if (!*ev("RELEASE_TEST_GIT"))
         return 1;
@@ -500,7 +631,7 @@ struct release {
 struct release_row {
     const char *record, *sha, *writes, *runs, *git, *accept, *machines, *windows, *native,
         *failures, *milestone, *ancestor, *master, *push, *lenovo, *prepare, *hold, *testing,
-        *cmdline, *open;
+        *cmdline, *open, *slots;
     const char *again; /* the machine of -a, or NULL for a release */
     int rerun, preparing, only;
 };
@@ -522,6 +653,8 @@ static int setup(struct release *r, struct fixture *f)
     flow_put(f, "tree/krffs/rach2_demo_ed25519", "");
     flow_put(f, "tree/tools/flow/board.sh", "# native board fixture\n");
     flow_put(f, "tree/tools/flow/sweep.sh", "# native sweep fixture\n");
+    if (!fx_mkdir(flow_path(f, "tree/.git")) || !fx_mkdir(flow_path(f, "tree/build/flow")))
+        return 0;
     for (i = 0; i < 7; i++)
         if (!fx_mock(f, mock[i]))
             return 0;
@@ -560,14 +693,18 @@ static void spec_env(const char *name, const char *value)
 static void run(struct release *r, const struct release_row *spec)
 {
     struct fixture *f = r->f;
-    const char *files[] = {"calls", "calls.release"};
+    const char *files[] = {"calls", "calls.release", "calls.bootctl"};
     const char *a[10] = {"/bin/sh", r->script, "-s", flow_path(f, "state")};
     unsigned i, n = 4;
     fx_remove(flow_path(f, "state"));
     for (i = 0; i < sizeof(files) / sizeof(files[0]); i++)
         fx_remove(flow_path(f, files[i]));
+    fx_remove(flow_path(f, "tree/build/flow/lenovo"));
     flow_put(f, "state/wt/krffs/rach2_demo_ed25519", "");
-    flow_put(f, "state/wt/build/x86_64/images/release.sha256", "");
+    flow_put(f, "state/wt/build/x86_64/images/release.sha256",
+             spec->slots ? KERNEL_SUM "  rach2/kernel\n" ROOT_SUM "  images/os-real-gnu.ext2\n"
+                         : "");
+    flow_put(f, "state/wt/build/x86_64/utils/sbin/bootctl", BOOTCTL);
     flow_put(f, "state/wt/tests/system/accept/metal_accept.sh", "# native acceptance fixture\n");
     flow_put(f, "calls", "");
     flow_put(f, "tree/tools/flow/machines", spec->machines ? spec->machines : "# none\n");
@@ -592,6 +729,7 @@ static void run(struct release *r, const struct release_row *spec)
     spec_env("RELEASE_TEST_TESTING", spec->testing);
     spec_env("RELEASE_TEST_CMDLINE", spec->cmdline);
     spec_env("RELEASE_TEST_OPEN", spec->open);
+    spec_env("RELEASE_TEST_SLOTS", spec->slots);
     if (spec->native) {
         flow_put(f, "state/wt/build/tools/dev/native-hostpeer", "");
         fx_copy(f->self, flow_path(f, "state/wt/build/tools/dev/native-deploy"));
@@ -1096,16 +1234,29 @@ static int build_rows(struct release *r)
 {
     struct fixture *f = r->f;
     char expected[1000];
+    int ok;
     run(r, &(struct release_row){.record = r->head, .git = "yes"});
     snprintf(expected, sizeof(expected),
              "^testing %s/rach2/build/worktrees/release run \\{ cp /etc/rach2/doom1.wad "
              "ports/doom/doom1.wad \\|\\|$",
              FLOW_OWNER_HOME);
-    return check(r,
-                 f->status == 75 && !fx_has(record(r), "build done ") && called(r, expected) &&
-                     called(r, "^ +sh ports/doom/fetch_wad.sh && ARCH=x86_64 make clean && "
-                               "ARCH=x86_64 make machine GNU_AGENTS=all && "),
-                 "machine build takes the host's WAD and starts clean");
+    ok = check(r,
+               f->status == 75 && !fx_has(record(r), "build done ") && called(r, expected) &&
+                   called(r, "^ +sh ports/doom/fetch_wad.sh && ARCH=x86_64 make clean && "
+                             "ARCH=x86_64 make machine GNU_AGENTS=all && "),
+               "machine build takes the host's WAD and starts clean");
+    run(r, &(struct release_row){.record = r->head, .git = "yes", .testing = "pass"});
+    return check(
+               r,
+               f->status == 1 && !fx_has(record(r), "build done ") &&
+                   called(r,
+                          "^ +sha256sum rach2/kernel rach2-recovery/kernel utils/sbin/bootctl ") &&
+                   called(r,
+                          "^testing .* get build/x86_64/rach2/kernel "
+                          "build/x86_64/rach2-recovery/kernel build/x86_64/utils/sbin/bootctl ") &&
+                   last_is(record(r), "failed build: the root did not arrive whole"),
+               "the build sums and fetches its bootctl, which the recovery trial may need") &&
+           ok;
 }
 /** The trial boot goes on only with the slot and the console it was given. */
 static int trial_rows(struct release *r)
@@ -1141,6 +1292,70 @@ static int trial_rows(struct release *r)
                    !called(r, "^(identity|accept|machine write)") && !called(r, " push "),
                "a trial boot without rach2.console=term fails trial and is not committed") &&
          ok;
+    return ok;
+}
+/**
+ * The install step moves a disk to the build's kernel slots before its
+ * bootctl kernel, when the recovery system's rach2-install has --slots, and
+ * a machine whose old root cannot arm the trial of recovery is armed with
+ * the build's bootctl.
+ */
+static int slots_rows(struct release *r)
+{
+    struct fixture *f = r->f;
+    char sent[9000], *line;
+    int ok = 1;
+    const char *recovery = "root=/dev/disk0p3 rach2.slot=recovery";
+    snprintf(sent, sizeof(sent),
+             "%sbuild done %s kernel k root r\nrecovery done %s kernel k image i\ntransfer done %s "
+             "kernel and root in /dev/shm\n",
+             r->head, T, T, T);
+    run(r, &(struct release_row){.record = sent, .cmdline = recovery, .slots = "move"});
+    ok = check(r,
+               f->status == 1 &&
+                   before(r, "machine write rach2-install --slots /dev/disk0\n",
+                          "machine write bootctl kernel\n") &&
+                   before(r, "machine write bootctl kernel\n",
+                          "machine write rach2-install --update\n") &&
+                   count(record(r), "^kernel done .* candidate slot$") == 1 &&
+                   fx_has(flow_path(f, "state/log"), "moved /dev/disk0p1 to the slots") &&
+                   fx_has(record(r), "\nfailed install: rach2-install ended 1") &&
+                   !called(r, "trial recovery$"),
+               "the install moves the disk to the build's slots before bootctl kernel") &&
+         ok;
+    run(r, &(struct release_row){.record = sent, .cmdline = recovery, .slots = "full"});
+    line = last_line(record(r));
+    ok = check(r,
+               f->status == 1 &&
+                   fx_regex(line, "^failed kernel: rach2-install --slots: .*no room for the larger "
+                                  "slots") &&
+                   called(r, "^machine write rach2-install --slots /dev/disk0$") &&
+                   !called(r, "^machine write bootctl kernel$") &&
+                   !fx_has(record(r), "kernel done "),
+               "a move of the slots that fails stops the release before bootctl kernel") &&
+         ok;
+    free(line);
+    run(r, &(struct release_row){.record = sent, .cmdline = recovery, .slots = "old"});
+    ok = check(r,
+               f->status == 1 && !called(r, "--slots /dev/") &&
+                   count(record(r), "^kernel done ") == 1,
+               "a recovery system without --slots goes straight to bootctl kernel") &&
+         ok;
+    run(r, &(struct release_row){.record = sent, .slots = "reset"});
+    ok =
+        check(r,
+              f->status == 1 &&
+                  before(r, "machine write bootctl trial recovery\n",
+                         "machine write cat > /dev/shm/bootctl\n") &&
+                  before(r, "machine write cat > /dev/shm/bootctl\n",
+                         "machine write /dev/shm/bootctl trial recovery\n") &&
+                  before(r, "machine write /dev/shm/bootctl trial recovery\n", "; reboot\"") &&
+                  before(r, "; reboot\"", "machine write rach2-install --slots /dev/disk0\n") &&
+                  fx_equal(flow_path(f, "calls.bootctl"), BOOTCTL) &&
+                  count(record(r), "^kernel done ") == 1 &&
+                  fx_has(record(r), "\nfailed install: rach2-install ended 1"),
+              "an old root that cannot arm the recovery trial is armed with the build's bootctl") &&
+        ok;
     return ok;
 }
 static int acceptance_rows(struct release *r)
@@ -1741,6 +1956,7 @@ int flow_release(struct fixture *f)
     ok = machine_rerun_rows(&r) && ok;
     ok = build_rows(&r) && ok;
     ok = trial_rows(&r) && ok;
+    ok = slots_rows(&r) && ok;
     ok = acceptance_rows(&r) && ok;
     ok = windows_rows(&r) && ok;
     ok = lenovo_off_row(&r) && ok;
