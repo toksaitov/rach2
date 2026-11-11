@@ -3907,7 +3907,7 @@
     },
     {
       "case_id": "machine.virgl.deqp-gles2-sample",
-      "behavior": "every 200th case of dEQP-GLES2 in the dEQP-GLES list for virgl (tests/graphics/deqp-gles-virgl.txt.gz, 17,165 cases of VK-GL-CTS 1.4.1.1's AOSP list for the suite), run by glcts on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform in four processes, gives each case the Debian reference guest's result in the same QEMU",
+      "behavior": "every 200th case of dEQP-GLES2 in the dEQP-GLES list for virgl (tests/graphics/deqp-gles-virgl.txt.gz, all 17,165 cases of VK-GL-CTS 1.4.1.1's AOSP list for the suite), run by glcts on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform in four processes, gives each case the Debian reference guest's result in the same QEMU",
       "units": [
         "tests/graphics/runners/deqp.sh",
         "tests/graphics/runners/judge.py",
@@ -4124,7 +4124,7 @@
     },
     {
       "case_id": "machine.virgl.deqp-gles2-1",
-      "behavior": "every other case from the first of dEQP-GLES2 in the dEQP-GLES list for virgl (tests/graphics/deqp-gles-virgl.txt.gz, 17,165 cases of VK-GL-CTS 1.4.1.1's AOSP list for the suite), run by glcts on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform in four processes, gives each case the Debian reference guest's result in the same QEMU",
+      "behavior": "every other case from the first of dEQP-GLES2 in the dEQP-GLES list for virgl (tests/graphics/deqp-gles-virgl.txt.gz, all 17,165 cases of VK-GL-CTS 1.4.1.1's AOSP list for the suite), run by glcts on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform in four processes, gives each case the Debian reference guest's result in the same QEMU",
       "units": [
         "tests/graphics/runners/deqp.sh",
         "tests/graphics/runners/judge.py",
@@ -4341,7 +4341,7 @@
     },
     {
       "case_id": "machine.virgl.deqp-gles2-2",
-      "behavior": "every other case from the second of dEQP-GLES2 in the dEQP-GLES list for virgl (tests/graphics/deqp-gles-virgl.txt.gz, 17,165 cases of VK-GL-CTS 1.4.1.1's AOSP list for the suite), run by glcts on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform in four processes, gives each case the Debian reference guest's result in the same QEMU",
+      "behavior": "every other case from the second of dEQP-GLES2 in the dEQP-GLES list for virgl (tests/graphics/deqp-gles-virgl.txt.gz, all 17,165 cases of VK-GL-CTS 1.4.1.1's AOSP list for the suite), run by glcts on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform in four processes, gives each case the Debian reference guest's result in the same QEMU",
       "units": [
         "tests/graphics/runners/deqp.sh",
         "tests/graphics/runners/judge.py",
@@ -4558,7 +4558,7 @@
     },
     {
       "case_id": "machine.virgl.deqp-gles3-sample",
-      "behavior": "every 200th case of dEQP-GLES3 in the dEQP-GLES list for virgl (tests/graphics/deqp-gles-virgl.txt.gz, 44,764 cases of VK-GL-CTS 1.4.1.1's AOSP list for the suite), run by glcts on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform in four processes, gives each case the Debian reference guest's result in the same QEMU",
+      "behavior": "every 200th case of dEQP-GLES3 in the dEQP-GLES list for virgl (tests/graphics/deqp-gles-virgl.txt.gz, 43,431 of the 44,764 cases of VK-GL-CTS 1.4.1.1's AOSP list for the suite), run by glcts on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform in four processes, gives each case the Debian reference guest's result in the same QEMU",
       "units": [
         "tests/graphics/runners/deqp.sh",
         "tests/graphics/runners/judge.py",
@@ -4775,7 +4775,7 @@
     },
     {
       "case_id": "machine.virgl.deqp-gles3-1",
-      "behavior": "every 4th case from the first of dEQP-GLES3 in the dEQP-GLES list for virgl (tests/graphics/deqp-gles-virgl.txt.gz, 44,764 cases of VK-GL-CTS 1.4.1.1's AOSP list for the suite), run by glcts on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform in four processes, gives each case the Debian reference guest's result in the same QEMU",
+      "behavior": "every 4th case from the first of dEQP-GLES3 in the dEQP-GLES list for virgl (tests/graphics/deqp-gles-virgl.txt.gz, 43,431 of the 44,764 cases of VK-GL-CTS 1.4.1.1's AOSP list for the suite), run by glcts on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform in four processes, gives each case the Debian reference guest's result in the same QEMU",
       "units": [
         "tests/graphics/runners/deqp.sh",
         "tests/graphics/runners/judge.py",
@@ -4992,7 +4992,7 @@
     },
     {
       "case_id": "machine.virgl.deqp-gles3-2",
-      "behavior": "every 4th case from the second of dEQP-GLES3 in the dEQP-GLES list for virgl (tests/graphics/deqp-gles-virgl.txt.gz, 44,764 cases of VK-GL-CTS 1.4.1.1's AOSP list for the suite), run by glcts on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform in four processes, gives each case the Debian reference guest's result in the same QEMU",
+      "behavior": "every 4th case from the second of dEQP-GLES3 in the dEQP-GLES list for virgl (tests/graphics/deqp-gles-virgl.txt.gz, 43,431 of the 44,764 cases of VK-GL-CTS 1.4.1.1's AOSP list for the suite), run by glcts on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform in four processes, gives each case the Debian reference guest's result in the same QEMU",
       "units": [
         "tests/graphics/runners/deqp.sh",
         "tests/graphics/runners/judge.py",
@@ -5209,7 +5209,7 @@
     },
     {
       "case_id": "machine.virgl.deqp-gles3-3",
-      "behavior": "every 4th case from the third of dEQP-GLES3 in the dEQP-GLES list for virgl (tests/graphics/deqp-gles-virgl.txt.gz, 44,764 cases of VK-GL-CTS 1.4.1.1's AOSP list for the suite), run by glcts on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform in four processes, gives each case the Debian reference guest's result in the same QEMU",
+      "behavior": "every 4th case from the third of dEQP-GLES3 in the dEQP-GLES list for virgl (tests/graphics/deqp-gles-virgl.txt.gz, 43,431 of the 44,764 cases of VK-GL-CTS 1.4.1.1's AOSP list for the suite), run by glcts on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform in four processes, gives each case the Debian reference guest's result in the same QEMU",
       "units": [
         "tests/graphics/runners/deqp.sh",
         "tests/graphics/runners/judge.py",
@@ -5426,7 +5426,7 @@
     },
     {
       "case_id": "machine.virgl.deqp-gles3-4",
-      "behavior": "every 4th case from the fourth of dEQP-GLES3 in the dEQP-GLES list for virgl (tests/graphics/deqp-gles-virgl.txt.gz, 44,764 cases of VK-GL-CTS 1.4.1.1's AOSP list for the suite), run by glcts on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform in four processes, gives each case the Debian reference guest's result in the same QEMU",
+      "behavior": "every 4th case from the fourth of dEQP-GLES3 in the dEQP-GLES list for virgl (tests/graphics/deqp-gles-virgl.txt.gz, 43,431 of the 44,764 cases of VK-GL-CTS 1.4.1.1's AOSP list for the suite), run by glcts on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform in four processes, gives each case the Debian reference guest's result in the same QEMU",
       "units": [
         "tests/graphics/runners/deqp.sh",
         "tests/graphics/runners/judge.py",
@@ -5643,7 +5643,7 @@
     },
     {
       "case_id": "machine.virgl.deqp-gles31-sample",
-      "behavior": "every 200th case of dEQP-GLES31 in the dEQP-GLES list for virgl (tests/graphics/deqp-gles-virgl.txt.gz, 37,793 cases of VK-GL-CTS 1.4.1.1's AOSP list for the suite), run by glcts on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform in four processes, gives each case the Debian reference guest's result in the same QEMU",
+      "behavior": "every 200th case of dEQP-GLES31 in the dEQP-GLES list for virgl (tests/graphics/deqp-gles-virgl.txt.gz, 36,911 of the 37,801 cases of VK-GL-CTS 1.4.1.1's AOSP list for the suite), run by glcts on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform in four processes, gives each case the Debian reference guest's result in the same QEMU",
       "units": [
         "tests/graphics/runners/deqp.sh",
         "tests/graphics/runners/judge.py",
@@ -5860,7 +5860,7 @@
     },
     {
       "case_id": "machine.virgl.deqp-gles31-1",
-      "behavior": "every 4th case from the first of dEQP-GLES31 in the dEQP-GLES list for virgl (tests/graphics/deqp-gles-virgl.txt.gz, 37,793 cases of VK-GL-CTS 1.4.1.1's AOSP list for the suite), run by glcts on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform in four processes, gives each case the Debian reference guest's result in the same QEMU",
+      "behavior": "every 4th case from the first of dEQP-GLES31 in the dEQP-GLES list for virgl (tests/graphics/deqp-gles-virgl.txt.gz, 36,911 of the 37,801 cases of VK-GL-CTS 1.4.1.1's AOSP list for the suite), run by glcts on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform in four processes, gives each case the Debian reference guest's result in the same QEMU",
       "units": [
         "tests/graphics/runners/deqp.sh",
         "tests/graphics/runners/judge.py",
@@ -6077,7 +6077,7 @@
     },
     {
       "case_id": "machine.virgl.deqp-gles31-2",
-      "behavior": "every 4th case from the second of dEQP-GLES31 in the dEQP-GLES list for virgl (tests/graphics/deqp-gles-virgl.txt.gz, 37,793 cases of VK-GL-CTS 1.4.1.1's AOSP list for the suite), run by glcts on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform in four processes, gives each case the Debian reference guest's result in the same QEMU",
+      "behavior": "every 4th case from the second of dEQP-GLES31 in the dEQP-GLES list for virgl (tests/graphics/deqp-gles-virgl.txt.gz, 36,911 of the 37,801 cases of VK-GL-CTS 1.4.1.1's AOSP list for the suite), run by glcts on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform in four processes, gives each case the Debian reference guest's result in the same QEMU",
       "units": [
         "tests/graphics/runners/deqp.sh",
         "tests/graphics/runners/judge.py",
@@ -6294,7 +6294,7 @@
     },
     {
       "case_id": "machine.virgl.deqp-gles31-3",
-      "behavior": "every 4th case from the third of dEQP-GLES31 in the dEQP-GLES list for virgl (tests/graphics/deqp-gles-virgl.txt.gz, 37,793 cases of VK-GL-CTS 1.4.1.1's AOSP list for the suite), run by glcts on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform in four processes, gives each case the Debian reference guest's result in the same QEMU",
+      "behavior": "every 4th case from the third of dEQP-GLES31 in the dEQP-GLES list for virgl (tests/graphics/deqp-gles-virgl.txt.gz, 36,911 of the 37,801 cases of VK-GL-CTS 1.4.1.1's AOSP list for the suite), run by glcts on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform in four processes, gives each case the Debian reference guest's result in the same QEMU",
       "units": [
         "tests/graphics/runners/deqp.sh",
         "tests/graphics/runners/judge.py",
@@ -6511,7 +6511,7 @@
     },
     {
       "case_id": "machine.virgl.deqp-gles31-4",
-      "behavior": "every 4th case from the fourth of dEQP-GLES31 in the dEQP-GLES list for virgl (tests/graphics/deqp-gles-virgl.txt.gz, 37,793 cases of VK-GL-CTS 1.4.1.1's AOSP list for the suite), run by glcts on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform in four processes, gives each case the Debian reference guest's result in the same QEMU",
+      "behavior": "every 4th case from the fourth of dEQP-GLES31 in the dEQP-GLES list for virgl (tests/graphics/deqp-gles-virgl.txt.gz, 36,911 of the 37,801 cases of VK-GL-CTS 1.4.1.1's AOSP list for the suite), run by glcts on virgl over the testing PC's D3D12 adapter on the surfaceless EGL platform in four processes, gives each case the Debian reference guest's result in the same QEMU",
       "units": [
         "tests/graphics/runners/deqp.sh",
         "tests/graphics/runners/judge.py",
