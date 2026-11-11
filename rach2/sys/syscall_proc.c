@@ -2819,6 +2819,29 @@ static void fork_ids(process_t *child, const process_t *parent)
 }
 
 /**
+ * Make the new thread or process `child` runnable. A fatal signal an
+ * interrupt posts after `do_fork`'s test of the caller's end sends every
+ * thread of the process SIGKILL (`sig_complete`), but passes over `child`
+ * while it is still being built; so a thread is sent SIGKILL here when its
+ * process's end has begun, in the same section with interrupts off that
+ * makes it runnable, as Linux 6.12.115's `copy_process` tests a fatal signal
+ * under the lock `complete_signal` holds (kernel/fork.c:2564-2580).
+ */
+static void fork_start(process_t *child)
+{
+    struct k_siginfo info;
+    uint32_t f = kirq_save();
+
+    sched_make_ready(child);
+    if (child->tg->exiting) {
+        k_memset(&info, 0, sizeof(info));
+        info.code = SI_KERNEL;
+        sig_post_own(child, SIGKILL, &info);
+    }
+    kirq_restore(f);
+}
+
+/**
  * The signals of a child of `parent`: under CLONE_THREAD it joins the
  * parent's process, whose dispositions and signals it shares; otherwise its
  * process takes a copy of the dispositions. Either way it has the parent's
@@ -2992,8 +3015,9 @@ static void fork_frame(process_t *child, const isr_params_t *params, const struc
  * SIGKILL is pending for the caller, which an exit_group or an exec by another
  * thread sends, or its process is ending or in another thread's exec, since
  * a child made then would outlive its process's end; nothing between that
- * test and the child's start sleeps. A failure gives back everything built
- * for the child so far.
+ * test and the child's start sleeps, and a new thread whose process's end
+ * an interrupt began meanwhile is sent SIGKILL as it starts (`fork_start`).
+ * A failure gives back everything built for the child so far.
  */
 static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
 {
@@ -3082,7 +3106,7 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
     child->cpu = parent->cpu;
     child->affinity = parent->affinity;
     child->bkl_depth = 1;
-    sched_make_ready(child);
+    fork_start(child);
     if (event) {
         ptrace_event(event, pid);
     }
