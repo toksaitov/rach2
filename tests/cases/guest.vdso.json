@@ -23,10 +23,11 @@
         {"assertion_id": "getcpu", "checks": "pinned to each processor in turn, the vDSO's getcpu and sched_getcpu give that processor, on node 0", "source": "program"},
         {"assertion_id": "ordered", "checks": "a million monotonic readings through the vDSO on one processor, and two thousand on each processor in turn, never go back", "source": "program"},
         {"assertion_id": "write", "checks": "a child's mprotect makes [vdso] rwxp, a store there does not fault and its clock_gettime works, another child's write through /proc/self/mem reads back with the page still r-xp, and the parent's vDSO is unchanged, as Linux copies the page on a write", "source": "program"},
+        {"assertion_id": "vvar", "checks": "a read of [vvar] through /proc/self/mem and a tracer's PTRACE_PEEKDATA of a tracee's [vvar] give EIO, process_vm_readv of it EFAULT, and mprotect of it with PROT_EXEC EACCES, as on Linux", "source": "program"},
         {"assertion_id": "calls", "checks": "100,000 calls of clock_gettime, gettimeofday and time through musl raise /proc/stat's clock_calls by fewer than 1,000", "source": "program"}
       ],
       "branches": [
-        {"group_id": "kernel", "decided_by": "report", "alternatives": [{"alternative_id": "i686", "when": null, "assertions": ["absent"]}, {"alternative_id": "x86-64", "when": null, "assertions": ["auxv", "maps", "symbols", "agree", "resolution", "getcpu", "ordered", "write"]}]}
+        {"group_id": "kernel", "decided_by": "report", "alternatives": [{"alternative_id": "i686", "when": null, "assertions": ["absent"]}, {"alternative_id": "x86-64", "when": null, "assertions": ["auxv", "maps", "symbols", "agree", "resolution", "getcpu", "ordered", "write", "vvar"]}]}
       ],
       "termination": {"end": "exited", "value": 0},
       "progress": [],
@@ -61,10 +62,11 @@
         {"assertion_id": "getcpu", "checks": "pinned to each processor in turn, the vDSO's getcpu and sched_getcpu give that processor, on node 0", "source": "program"},
         {"assertion_id": "ordered", "checks": "a million monotonic readings through the vDSO on one processor, and two thousand on each processor in turn, never go back", "source": "program"},
         {"assertion_id": "write", "checks": "a child's mprotect makes [vdso] rwxp, a store there does not fault and its clock_gettime works, another child's write through /proc/self/mem reads back with the page still r-xp, and the parent's vDSO is unchanged, as Linux copies the page on a write", "source": "program"},
+        {"assertion_id": "vvar", "checks": "a read of [vvar] through /proc/self/mem and a tracer's PTRACE_PEEKDATA of a tracee's [vvar] give EIO, process_vm_readv of it EFAULT, and mprotect of it with PROT_EXEC EACCES, as on Linux", "source": "program"},
         {"assertion_id": "calls", "checks": "100,000 calls of clock_gettime, gettimeofday and time through musl raise /proc/stat's clock_calls by at least 100,000", "source": "program"}
       ],
       "branches": [
-        {"group_id": "kernel", "decided_by": "report", "alternatives": [{"alternative_id": "i686", "when": null, "assertions": ["absent"]}, {"alternative_id": "x86-64", "when": null, "assertions": ["auxv", "maps", "symbols", "agree", "resolution", "getcpu", "ordered", "write"]}]}
+        {"group_id": "kernel", "decided_by": "report", "alternatives": [{"alternative_id": "i686", "when": null, "assertions": ["absent"]}, {"alternative_id": "x86-64", "when": null, "assertions": ["auxv", "maps", "symbols", "agree", "resolution", "getcpu", "ordered", "write", "vvar"]}]}
       ],
       "termination": {"end": "exited", "value": 0},
       "progress": [],

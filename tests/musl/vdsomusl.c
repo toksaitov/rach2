@@ -47,6 +47,11 @@
  * back with the page still read-only; the parent's vDSO, which shared the
  * kernel's page with both, is unchanged.
  *
+ * `vvar`: the data page is the process's own, as on Linux, which maps it
+ * VM_IO | VM_PFNMAP without VM_MAYEXEC: a read of it through
+ * /proc/self/mem and a tracer's PTRACE_PEEKDATA of a tracee's give EIO,
+ * process_vm_readv of it EFAULT, and mprotect of it with PROT_EXEC EACCES.
+ *
  * On the i686 kernel, which has no vDSO, `absent`: there is no
  * AT_SYSINFO_EHDR, and maps names neither region; then `source`.
  *
@@ -67,14 +72,17 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <sched.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/auxv.h>
 #include <sys/mman.h>
+#include <sys/ptrace.h>
 #include <sys/syscall.h>
 #include <sys/time.h>
+#include <sys/uio.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -702,11 +710,88 @@ static int write_row(void)
     return 0;
 }
 
+/** Whether a tracer's PTRACE_PEEKDATA of a stopped child's word at `at`
+ * answers EIO; -1 when the child could not be traced. */
+static int peek_is_eio(unsigned long at)
+{
+    int status;
+    int eio;
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        if (ptrace(PTRACE_TRACEME, 0, 0, 0) == 0) {
+            raise(SIGSTOP);
+        }
+        _exit(0);
+    }
+    if (pid < 0 || waitpid(pid, &status, 0) != pid) {
+        return -1;
+    }
+    if (!WIFSTOPPED(status)) {
+        return -1;
+    }
+    errno = 0;
+    eio = ptrace(PTRACE_PEEKDATA, pid, (void *)at, 0) == -1 && errno == EIO;
+    kill(pid, SIGKILL);
+    waitpid(pid, &status, 0);
+    return eio;
+}
+
+/** Check that no access but the process's own reaches its [vvar], and that
+ * mprotect refuses it PROT_EXEC, as on Linux. */
+static int vvar_row(void)
+{
+    unsigned long lo;
+    unsigned long hi;
+    char perm[5];
+    char byte;
+    struct iovec local;
+    struct iovec remote;
+    int fd;
+    int peek;
+
+    if (maps_region("[vvar]", &lo, &hi, perm) != 0) {
+        return fail("/proc/self/maps has no [vvar]");
+    }
+    fd = open("/proc/self/mem", O_RDONLY);
+    if (fd < 0) {
+        return fail("/proc/self/mem cannot be opened");
+    }
+    errno = 0;
+    if (pread(fd, &byte, 1, (off_t)lo) != -1 || errno != EIO) {
+        close(fd);
+        return fail("a read of [vvar] through /proc/self/mem is not EIO");
+    }
+    close(fd);
+    local.iov_base = &byte;
+    local.iov_len = 1;
+    remote.iov_base = (void *)lo;
+    remote.iov_len = 1;
+    errno = 0;
+    if (process_vm_readv(getpid(), &local, 1, &remote, 1, 0) != -1 || errno != EFAULT) {
+        return fail("process_vm_readv of [vvar] is not EFAULT");
+    }
+    errno = 0;
+    if (mprotect((void *)lo, 4096, PROT_READ | PROT_EXEC) != -1 || errno != EACCES) {
+        return fail("mprotect of [vvar] with PROT_EXEC is not EACCES");
+    }
+    peek = peek_is_eio(lo);
+    if (peek < 0) {
+        return fail("a child could not be stopped under ptrace");
+    }
+    if (!peek) {
+        return fail("PTRACE_PEEKDATA of a tracee's [vvar] is not EIO");
+    }
+    report_held();
+    return 0;
+}
+
 /** The rows of the x86-64 kernel's vDSO, up to `source`. */
 static int vdso_rows(void)
 {
     if (auxv() != 0 || maps() != 0 || symbols() != 0 || source() != 0 || agree() != 0 ||
-        resolution() != 0 || getcpu_row() != 0 || ordered() != 0 || write_row() != 0) {
+        resolution() != 0 || getcpu_row() != 0 || ordered() != 0 || write_row() != 0 ||
+        vvar_row() != 0) {
         return 1;
     }
     return 0;
@@ -731,8 +816,9 @@ static int absent_rows(void)
  * its assertions in the order they are checked. */
 static void plan(void)
 {
-    static const char *const with[] = {"auxv",       "maps",   "symbols", "source", "agree",
-                                       "resolution", "getcpu", "ordered", "write",  "calls"};
+    static const char *const with[] = {"auxv",  "maps",       "symbols", "source",
+                                       "agree", "resolution", "getcpu",  "ordered",
+                                       "write", "vvar",       "calls"};
     static const char *const without[] = {"absent", "source", "calls"};
     const char *const *ids = kernel_x86_64 ? with : without;
     unsigned n =
