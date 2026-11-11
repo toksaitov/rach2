@@ -5,6 +5,7 @@
 
 #include "sleeplock.h"
 
+#include "../arch/arch.h"
 #include "../lib/kstring.h"
 #include "../panic.h"
 #include "../proc/process.h"
@@ -59,7 +60,7 @@ void sleep_lock_init(struct sleep_lock *l, struct sleep_lock_record *record, int
     l->depth = 0;
     l->next = 0;
     l->serving = 0;
-    l->taken_us = 0;
+    l->taken_cycles = 0;
     l->taken_waits = 0;
     l->flags = flags;
     l->record = record;
@@ -116,7 +117,7 @@ void sleep_lock_take(struct sleep_lock *l)
     }
     l->holder = me;
     l->depth = 1;
-    l->taken_us = timer_now_us();
+    l->taken_cycles = arch_cycles();
     l->taken_waits = current_proc ? current_proc->disk_waits : 0;
     spin_unlock_irqrestore(&l->spin, irq);
     if ((l->flags & SLEEP_LOCK_FILE) && current_proc) {
@@ -126,8 +127,10 @@ void sleep_lock_take(struct sleep_lock *l)
 
 /** Count the hold of `l` that is ending in its record when its holder
  * finished a disk wait during it, under the records' lock, since every
- * lock of a kind shares its record. The clock wraps after 71 minutes, so a
- * longer hold reads short. The holder calls it before it gives `l` up. */
+ * lock of a kind shares its record. The hold is converted from processor
+ * cycles here, the one place it is read; it reads 0 where the counter was
+ * not calibrated, and its microseconds are kept in 32 bits, so a hold longer
+ * than 71 minutes reads short. The holder calls it before it gives `l` up. */
 static void sleep_record_hold(const struct sleep_lock *l)
 {
     struct sleep_lock_record *r = l->record;
@@ -136,7 +139,7 @@ static void sleep_record_hold(const struct sleep_lock *l)
     if (!r || !current_proc || current_proc->disk_waits == l->taken_waits) {
         return;
     }
-    held = timer_now_us() - l->taken_us;
+    held = (uint32_t)timer_cycles_us(arch_cycles() - l->taken_cycles);
     irq = spin_lock_irqsave(&records_lock);
     r->crossings++;
     if (held > r->longest_us) {
