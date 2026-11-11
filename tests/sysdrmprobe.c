@@ -565,7 +565,7 @@ static int bar_file_child(void)
 {
     /* capset's header, version 3 with the caller's pid, and its two words
      * of effective, permitted and inheritable sets, all empty. */
-    unsigned int head[2] = {0x20080522u, 0}, sets[6] = {0, 0, 0, 0, 0, 0};
+    static const unsigned int head[2] = {0x20080522u, 0}, sets[6] = {0, 0, 0, 0, 0, 0};
     long fd;
 
     syscall1(SYS_SETFSUID, 1000);
