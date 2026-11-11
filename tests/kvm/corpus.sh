@@ -25,7 +25,8 @@
 #
 # The copy and the directories are under TMPDIR, /tmp by default, and are
 # removed on every exit. Each test's line is `kvm-corpus: NAME: RESULT`, with
-# `as expected` or `expected EXPECT` after it, and each excluded one's
+# `as expected` or `expected EXPECT` after it, and a kvm-unit-test's own log
+# on standard error after the second, and each excluded one's
 # `kvm-corpus: NAME: excluded: REASON`. The last line is `kvm-corpus: result:
 # pass: N as expected, M excluded` or `kvm-corpus: result: fail: K of N:
 # NAME...`, and the exit status 0 on a pass, 1 on a failure and 2 on a usage
@@ -138,6 +139,10 @@ while read -r name expect; do
         echo "kvm-corpus: $name: $got: as expected"
     else
         echo "kvm-corpus: $name: $got: expected $expect"
+        # The runner's log of the test names each subtest's result.
+        log=$work/kut/logs/$name.log
+        [ "$kind" != unit ] || [ ! -f "$log" ] ||
+            sed "s/$(printf '\033')\\[[0-9;]*m//g" "$log" >&2
         bad=$((bad + 1))
         names="$names $name"
     fi
