@@ -1147,7 +1147,7 @@ static int proc_state(int pid)
  * ends first, and 1 when the write fails. Does not return. */
 static void vmsplice_waker(int parent, int fd)
 {
-    long ts[2] = {0, 10000000};
+    static const long ts[2] = {0, 10000000};
     int state;
 
     for (;;) {
@@ -1172,7 +1172,6 @@ static void vmsplice_waker(int parent, int fd)
  */
 static void vmsplice_wait(void)
 {
-    char got[1] = {0};
     long iov[2];
     int w[2] = {-1, -1};
     int made = do_pipe2(w, O_NONBLOCK) == 0, parent = (int)syscall1(SYS_GETPID, 0), pid = -1;
@@ -1185,12 +1184,13 @@ static void vmsplice_wait(void)
         vmsplice_waker(parent, w[1]);
     }
     check(VMSPLICE_WAIT_FORK, made && pid > 0);
+    back[0] = 0;
     if (pid > 0) {
-        iov[0] = (long)got;
+        iov[0] = (long)back;
         iov[1] = 1;
         n = syscall4(SYS_VMSPLICE, w[0], (long)iov, 1, 0);
     }
-    check(VMSPLICE_WAIT_NONBLOCK, pid > 0 && n == 1 && got[0] == 'v' && exited_zero(pid));
+    check(VMSPLICE_WAIT_NONBLOCK, pid > 0 && n == 1 && back[0] == 'v' && exited_zero(pid));
     close_pair(w);
 }
 
