@@ -5,6 +5,7 @@
  *
  * host-deps: rach2/sys/virtio/virtio_pci.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/kirq_none.c
  *
  * The first function is QEMU 10.2.1's virtio-vga-gl with hostmem=4G: its
  * common, ISR, device and notification capabilities in BAR 2, and the
@@ -267,6 +268,13 @@ void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *nam
     (void)vector;
     (void)handler;
     (void)name;
+}
+
+void isr_register_flags(uint8_t vector, isr_handler_t handler, unsigned int flags)
+{
+    (void)vector;
+    (void)handler;
+    (void)flags;
 }
 
 void virtio_interrupt_config(struct virtio_dev *d)

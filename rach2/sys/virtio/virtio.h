@@ -289,6 +289,11 @@ struct virtio_dev {
      * made over it and later calls virtio_put. NULL ignores it. */
     void (*removed)(struct virtio_dev *d);
     void *priv; /* the driver's */
+    /* Set by the driver before virtio_init when its queues' `done` and its
+     * `config_changed` take only locks of their own: virtio-pci then runs
+     * the device's MSI-X handlers without the big lock (ISR_UNLOCKED). A
+     * shared INTx line and the other transports keep it. */
+    int irq_unlocked;
     /* The most bytes one dma_alloc gives, in whole pages that follow each
      * other in the device's addresses; 0 for one page, as on virtio-pci. */
     uint32_t dma_max;
