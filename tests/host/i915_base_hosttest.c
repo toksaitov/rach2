@@ -64,6 +64,11 @@ static int fails;
 
 #define MIB(x) ((uint64_t)(x) << 20)
 
+/* What `mutex_held` answers for the GEM lock, and the give-ways of the
+ * GTT's clears since a row last set it to 0. */
+static int gem_held;
+static unsigned give_ways;
+
 /* ---- the kernel around the driver ---- */
 
 static char last_log[256];
@@ -873,6 +878,40 @@ static void row_ggtt_insert(void)
     done(&m);
 }
 
+/**
+ * The give-ways of a clear of 1,537 entries, three batches of 512 and one
+ * more: three with the GEM lock held and `may_yield` set, none for a
+ * caller that may not sleep, as a userptr object's revoke from an MMU
+ * notifier, and none without the lock. Each clear flushes the GTT once.
+ */
+static void row_ggtt_clear_yield(void)
+{
+    struct i915_model m;
+    struct drm_i915_private *i915 = fresh(&m);
+    uint64_t at = MIB(512), size = (3u * 512u + 1u) * 4096ull;
+
+    (void)i915_power_init(i915);
+    CHECK("clear batches: the GTT up", i915_ggtt_init(i915) == 0);
+    gem_held = 1;
+    give_ways = 0;
+    m.nlog = 0;
+    m.log_lost = 0;
+    CHECK("clear batches: under the GEM lock, a give-way after each 512 entries but the last",
+          i915_ggtt_clear_range(i915, at, size, 1) == 0 && give_ways == 3);
+    CHECK("clear batches: the GTT flushed once, after the last",
+          m.log_lost == 0 && i915_model_count(&m, I915_MODEL_WRITE, GFX_FLSH_CNTL_GEN6) == 1);
+    give_ways = 0;
+    m.nlog = 0;
+    CHECK("clear batches: a notifier's clear gives no way",
+          i915_ggtt_clear_range(i915, at, size, 0) == 0 && give_ways == 0 &&
+              i915_model_count(&m, I915_MODEL_WRITE, GFX_FLSH_CNTL_GEN6) == 1);
+    gem_held = 0;
+    CHECK("clear batches: none without the GEM lock",
+          i915_ggtt_clear_range(i915, at, size, 1) == 0 && give_ways == 0);
+    i915_ggtt_fini(i915);
+    done(&m);
+}
+
 /** The aperture's codes, the firmware's other planes, and the failures. */
 static void row_ggtt_cases(void)
 {
@@ -994,15 +1033,18 @@ static void row_mmio_gtt(void)
     wc = 1;
 }
 
-/** Nothing: one thread has no one to give way to. */
+/** Count a give-way; one thread has no one to give way to. */
 void sched_give_way(void)
-{}
+{
+    give_ways++;
+}
 
-/** No thread holds a lock here: a clear of the GTT gives no way. */
+/** Whether the GEM lock is held, as the row says in `gem_held`; no other
+ *  lock is asked about here. */
 int mutex_held(const struct mutex *m)
 {
     (void)m;
-    return 0;
+    return gem_held;
 }
 
 /** Run every row; 0 when all pass. */
@@ -1021,6 +1063,7 @@ int main(void)
     row_pte();
     row_ggtt_init();
     row_ggtt_insert();
+    row_ggtt_clear_yield();
     row_ggtt_cases();
     row_mmio_gtt();
     if (fails) {
