@@ -156,6 +156,19 @@ void sched_take_preempt(void);
  * thread's sleep. A process is still inside its call when it runs again. */
 void sched_service_point(void);
 
+/**
+ * Give way inside a long walk, between two bounded batches of its work, as
+ * Linux's cond_resched: the service point (`sched_service_point`), which
+ * lets a processor that has claimed the big lock have it and takes the
+ * switch the tick asked for, when interrupts are on outside an interrupt
+ * handler; nothing otherwise, as Linux's __cond_resched tests
+ * irqs_disabled (kernel/sched/core.c:7287-7292). Every spinlock is taken
+ * with interrupts off (lib/spinlock.h), so interrupts on means no spinlock
+ * is held. The caller holds no pointer that another thread could free or
+ * change while the big lock is let go.
+ */
+void sched_give_way(void);
+
 /** Remove `p` from its ready list before it is freed; the big lock is held. */
 void sched_forget(process_t *p);
 

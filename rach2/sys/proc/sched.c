@@ -19,6 +19,7 @@
 
 #include "../lib/kirq.h"
 #include "../lib/spinlock.h"
+#include "../mm/pressure.h"
 #include "smp.h"
 #include "../usb/usb.h"
 #include "../network/ip/ip.h"
@@ -879,6 +880,13 @@ void sched_service_point(void)
     }
     sched_take_preempt();
     kirq_restore(flags);
+}
+
+void sched_give_way(void)
+{
+    if (kirq_enabled() && !in_interrupt()) {
+        sched_service_point();
+    }
 }
 
 /*

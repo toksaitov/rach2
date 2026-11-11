@@ -99,6 +99,18 @@ void kirq_restore(uint32_t flags)
     irq_flags = flags;
 }
 
+/** Whether the model's interrupt flag is set. */
+int kirq_enabled(void)
+{
+    return irq_flags != 0;
+}
+
+/** Nothing runs in an interrupt here. */
+int in_interrupt(void)
+{
+    return 0;
+}
+
 /** Return at once: no row waits for an interrupt. */
 void arch_idle_masked(void)
 {}
