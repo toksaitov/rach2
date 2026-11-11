@@ -55,10 +55,11 @@
  *
  * The rows of the debug exception: a single step over a system call instruction
  * stops after it with the call's result; a system call made on an invalid user
- * stack returns; and a watchpoint that the kernel's access to user memory hits
- * stops the tracee at its return to user mode, or, when the tracee waits for
- * SIGTRAP in sigtimedwait, is taken by the wait. PTRACE_INTERRUPT of a tracee
- * in PTRACE_LISTEN stops it before its next instruction.
+ * stack returns; and a watchpoint that the kernel's access to user memory hits,
+ * in a read, a poll or a sigtimedwait, stops nothing and posts nothing, as on
+ * Linux, while the tracee's own write of the word after it still traps.
+ * PTRACE_INTERRUPT of a tracee in PTRACE_LISTEN stops it before its next
+ * instruction.
  *
  * The program takes no positional argument and runs every row. It prints
  * "PTRACEMUSL OK" and exits 0 when the rows pass, or prints
@@ -95,10 +96,11 @@
  * `tracer-echild`, `killed-sigchld`, `killed-sigchld-info`,
  * `killed-wait-status`, `step-syscall-trap`, `step-syscall-result`,
  * `step-next-trap`, `step-next-one`, `entry-bad-stack-returns`,
- * `entry-bad-stack-result`, `copy-watch-trap`, `copy-watch-result`,
- * `poll-watch-trap`, `poll-watch-eintr`, `poll-watch-returns`, `sigwait-watch`,
- * `interrupt-pause-stop`, `listen-interrupt-before-instruction`,
- * `tp-set-readback` and `tp-tracee-runs`. x86-64 adds `dr7-bit32-einval`,
+ * `entry-bad-stack-result`, `copy-watch-no-stop`, `copy-watch-user-trap`,
+ * `copy-watch-result`, `poll-watch-no-stop`, `poll-watch-returns`,
+ * `sigwait-watch`, `interrupt-pause-stop`,
+ * `listen-interrupt-before-instruction`, `tp-set-readback` and
+ * `tp-tracee-runs`. x86-64 adds `dr7-bit32-einval`,
  * `setoptions-wide-einval`, `ds-kernel-eio`, `ds-kept`, `seize-wide-einval`,
  * `tp-arch-get-fs`, `tp-peekuser-fs`, `tp-arch-prctl-errors`,
  * `tp-arch-set-eperm`, `tp-pokeuser-eio`, `tp-setregs-eio`, `tp-setregset-eio`
@@ -1807,14 +1809,17 @@ static int entry_system_call(void)
 
 /**
  * Check that a write watchpoint on `byte`, which the kernel's copy of a read
- * into it hits, stops the tracee with TRAP_HWBKPT at its return to user mode,
- * and that the read returns its byte. Returns 0, or 1 after the failure is
- * printed.
+ * into it hits, stops nothing, as on Linux, whose ptrace breakpoints exclude
+ * the kernel: the first stop is the child's own write of `byte` after the
+ * read, which still traps with TRAP_HWBKPT, and the read returns its byte.
+ * Returns 0, or 1 after the failure is printed.
  */
 static int watched_copy(void)
 {
     static char byte;
+    static volatile int read_done;
     int p[2], status;
+    long word;
     pid_t pid;
     siginfo_t info;
 
@@ -1825,7 +1830,12 @@ static int watched_copy(void)
     if (pid == 0) {
         ptrace(PTRACE_TRACEME, 0, NULL, NULL);
         raise(SIGSTOP);
-        _exit(read(p[0], &byte, 1) == 1 && byte == 'g' ? 0 : 1);
+        if (read(p[0], &byte, 1) != 1 || byte != 'g') {
+            _exit(1);
+        }
+        read_done = 1;
+        *(volatile char *)&byte = 'h';
+        _exit(0);
     }
     close(p[0]);
     close(p[1]);
@@ -1837,34 +1847,43 @@ static int watched_copy(void)
     }
     if (debug_set(pid, 0, (unsigned long)&byte) != 0 || debug_set(pid, 7, 0x10001) != 0 ||
         ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
-        expect_stop(pid, SIGTRAP, "kernel copy did not trap") || passed() ||
-        ptrace(PTRACE_GETSIGINFO, pid, NULL, &info) != 0 || info.si_code != TRAP_HWBKPT ||
-        debug_set(pid, 7, 0) != 0 || ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
+        expect_stop(pid, SIGTRAP, "watched write after the copy did not trap")) {
+        return 1;
+    }
+    errno = 0;
+    word = ptrace(PTRACE_PEEKDATA, pid, (void *)&read_done, NULL);
+    if (errno != 0 || (int)word != 1) {
+        return abandon(pid, "kernel copy through a watchpoint stopped the tracee");
+    }
+    held();
+    if (ptrace(PTRACE_GETSIGINFO, pid, NULL, &info) != 0 || info.si_code != TRAP_HWBKPT) {
+        return abandon(pid, "watched write after the copy lost TRAP_HWBKPT");
+    }
+    held();
+    if (debug_set(pid, 7, 0) != 0 || ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
         waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        return abandon(pid, "watched kernel copy lost its trap or result");
+        return abandon(pid, "watched kernel copy lost its result");
     }
     held();
     return 0;
 }
 
 /**
- * Check that the kernel's read of a watched word ends a poll that has no other
- * way to end: its one descriptor is negative and never becomes ready, and it
- * has no timeout and takes no other signal. The stop reports TRAP_HWBKPT and
- * the call's EINTR. Returns 0, or 1 after the failure is printed.
+ * Check that the kernel's read of a watched word in poll stops nothing, as on
+ * Linux: a poll of one negative descriptor with a zero timeout returns 0, and
+ * the child exits with no stop between. Returns 0, or 1 after the failure is
+ * printed.
  */
 static int watched_poll(void)
 {
     static struct pollfd pfd = {-1, POLLIN, 0};
-    struct user_regs_struct regs;
-    siginfo_t info;
     int status;
     pid_t pid = fork();
 
     if (pid == 0) {
         ptrace(PTRACE_TRACEME, 0, NULL, NULL);
         raise(SIGSTOP);
-        _exit(syscall(SYS_poll, &pfd, 1, -1) == -1 && errno == EINTR ? 0 : 1);
+        _exit(syscall(SYS_poll, &pfd, 1, 0) == 0 ? 0 : 1);
     }
     if (pid < 0) {
         return fail("fork for watched poll");
@@ -1873,29 +1892,27 @@ static int watched_poll(void)
         return 1;
     }
     if (debug_set(pid, 0, (unsigned long)&pfd.fd) != 0 || debug_set(pid, 7, 0xf0001) != 0 ||
-        ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
-        expect_stop(pid, SIGTRAP, "watched infinite poll did not trap") || passed() ||
-        ptrace(PTRACE_GETSIGINFO, pid, NULL, &info) != 0 || info.si_code != TRAP_HWBKPT ||
-        ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 || (long)R_RET(regs) != -EINTR) {
-        return abandon(pid, "watched poll lost its trap or EINTR result");
+        ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 || waitpid(pid, &status, 0) != pid ||
+        !WIFEXITED(status)) {
+        return abandon(pid, "watched poll stopped the tracee");
     }
     held();
-    if (debug_set(pid, 7, 0) != 0 || ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
-        waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        return abandon(pid, "watched poll did not return EINTR");
+    if (WEXITSTATUS(status) != 0) {
+        return fail("watched poll did not return 0");
     }
     held();
     return 0;
 }
 
 /**
- * Block SIGTRAP, stop for the tracer, then wait, in the raw rt_sigtimedwait
- * with no timeout, for the hit of the watchpoint on the set at `set`. Runs in
- * the forked child and exits 0 when the wait takes SIGTRAP with TRAP_HWBKPT,
- * and 1 otherwise.
+ * Block SIGTRAP, stop for the tracer, then look, in the raw rt_sigtimedwait
+ * with a zero timeout, for a SIGTRAP from the kernel's read of the watched
+ * set at `set`. Runs in the forked child and exits 0 when the wait finds
+ * none (EAGAIN), and 1 otherwise.
  */
 static void sigwait_child(sigset_t *set)
 {
+    struct timespec zero = {0, 0};
     siginfo_t info;
 
     sigemptyset(set);
@@ -1905,15 +1922,13 @@ static void sigwait_child(sigset_t *set)
         raise(SIGSTOP) != 0) {
         _exit(1);
     }
-    _exit(syscall(SYS_rt_sigtimedwait, set, &info, NULL, 8) == SIGTRAP &&
-                  info.si_code == TRAP_HWBKPT
-              ? 0
-              : 1);
+    _exit(syscall(SYS_rt_sigtimedwait, set, &info, &zero, 8) == -1 && errno == EAGAIN ? 0 : 1);
 }
 
 /**
- * Check that a wait on a watched signal set takes the hit itself, so that the
- * tracer sees no SIGTRAP stop. Returns 0, or 1 after the failure is printed.
+ * Check that the kernel's read of a watched signal set posts no SIGTRAP, as
+ * on Linux: a wait for it finds none, and the tracer sees no stop. Returns 0,
+ * or 1 after the failure is printed.
  */
 static int watched_sigwait(void)
 {
@@ -1933,7 +1948,7 @@ static int watched_sigwait(void)
     if (debug_set(pid, 0, (unsigned long)&set) != 0 || debug_set(pid, 7, 0xf0001) != 0 ||
         ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 || waitpid(pid, &status, 0) != pid ||
         !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        return abandon(pid, "watched sigwait did not take SIGTRAP with TRAP_HWBKPT");
+        return abandon(pid, "kernel read of a watched sigwait set posted SIGTRAP or stopped");
     }
     held();
     return 0;
@@ -2343,10 +2358,10 @@ static const char *const later_rows[] = {
     "step-next-one",
     "entry-bad-stack-returns",
     "entry-bad-stack-result",
-    "copy-watch-trap",
+    "copy-watch-no-stop",
+    "copy-watch-user-trap",
     "copy-watch-result",
-    "poll-watch-trap",
-    "poll-watch-eintr",
+    "poll-watch-no-stop",
     "poll-watch-returns",
     "sigwait-watch",
     "interrupt-pause-stop",
