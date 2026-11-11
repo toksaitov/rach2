@@ -237,8 +237,9 @@ struct drm_driver {
  * and its release, which frees the record when the last reference goes;
  * NULL frees it with kfree. The rest may be NULL, as Linux's:
  * `enable_signaling` is called once, the first time anyone waits or adds a
- * callback, for a fence that signals only on request; it returns 0 when
- * the fence has signalled meanwhile. `signaled` answers a query without
+ * callback, for a fence that signals only on request, with interrupts
+ * masked, so it must not sleep; it returns 0 when the fence has signalled
+ * meanwhile. `signaled` answers a query without
  * enabling anything, and returns 1 when the fence may be signalled now.
  * `wait` replaces the default sleep of `dma_fence_wait_until`, after
  * signalling is enabled, with the same deadline and results.

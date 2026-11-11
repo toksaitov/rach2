@@ -279,6 +279,116 @@ static void interrupt_cases(void)
     dma_fence_put(irq_f2);
     irq_f1 = irq_f2 = NULL;
 }
+/* The fences of `enable_cases`: the GPU's fence under the later point of a
+ * timeline, and whether the GPU's interrupt is to come at the first query
+ * of a child of the array under the earlier point. `setup_irq_on` records
+ * whether interrupts were on there. */
+static struct dma_fence *setup_gpu;
+static int setup_armed, setup_irq_on;
+
+/** The GPU's interrupt: its fence completes, and the later point's
+ * chain_done moves on to the array, asking for its signal. */
+static void signal_gpu(void)
+{
+    dma_fence_signal(setup_gpu);
+}
+
+/** A child of the array, unsignalled. Its first query is the first call
+ * the array's signalling setup makes after the fence is marked
+ * `listened`: the GPU raises its interrupt there, taken at once while
+ * interrupts are on, else when they come on again. */
+static int child_signaled(struct dma_fence *f)
+{
+    (void)f;
+    if (setup_armed) {
+        setup_armed = 0;
+        setup_irq_on = irq_on;
+        if (irq_on) {
+            irq_on = 0;
+            signal_gpu();
+            irq_on = 1;
+        } else
+            irq_pending = signal_gpu;
+    }
+    return 0;
+}
+
+/** The children's driver and timeline name. */
+static const char *child_name(struct dma_fence *f)
+{
+    (void)f;
+    return "child";
+}
+
+static const struct dma_fence_ops child_ops = {child_name, child_name,     NULL,
+                                               NULL,       child_signaled, NULL};
+
+/** Allocate an unsignalled child of `enable_cases`'s array. */
+static struct dma_fence *new_child(uint64_t context)
+{
+    struct dma_fence *f = kzalloc(sizeof(*f));
+    dma_fence_init(f, &child_ops, context, 1);
+    return f;
+}
+
+/** Whether `f` has exactly one callback linked. */
+static int one_callback(struct dma_fence *f)
+{
+    return f->cbs && !f->cbs->next;
+}
+
+/**
+ * An interrupt at the first `listened` transition of an array: point c1
+ * holds array a of children x and y, and point c2 after it holds the GPU's
+ * fence g, which an eventfd watches through c2. A process asks for a's
+ * signal, as a wait does first, and the GPU's interrupt comes while a's
+ * setup runs; g completes, and c2's chain_done adds its callback to a,
+ * asking for a's signal again. The setup runs with interrupts masked, as
+ * Linux's under the fence's lock (dma-fence.c:615-617), so the interrupt
+ * comes after it and finds a armed; were it to come between the test of
+ * `listened` and the mark, both would arm a, linking each child's
+ * callback twice and resetting its count, and x alone would complete a.
+ */
+static void enable_cases(void)
+{
+    uint64_t context = dma_fence_context_alloc(3);
+    struct dma_fence_chain *c1 = dma_fence_chain_alloc(), *c2 = dma_fence_chain_alloc();
+    struct dma_fence *x = new_child(context), *y = new_child(context + 1), *a, *inputs[2];
+    struct dma_fence_cb watch;
+    int before = callbacks;
+    setup_gpu = new_fence(context + 2, 1);
+    inputs[0] = x;
+    inputs[1] = y;
+    a = dma_fence_merge(inputs, 2);
+    CHECK(a && a->ops == &array_ops, "two children make an array");
+    dma_fence_chain_init(c1, NULL, a, 1);
+    dma_fence_chain_init(c2, &c1->base, dma_fence_get(setup_gpu), 2);
+    CHECK(!dma_fence_add_callback(&c2->base, &watch, counted) && one_callback(setup_gpu),
+          "the eventfd's watch waits on the GPU's fence");
+    setup_armed = 1;
+    dma_fence_enable_sw_signaling(a);
+    CHECK(!setup_armed && !setup_irq_on,
+          "an array's signalling setup runs with interrupts masked, as Linux's");
+    CHECK(irq_pending == NULL && irq_on && dma_fence_is_signaled(setup_gpu),
+          "the GPU's interrupt is taken once the setup ends");
+    CHECK(one_callback(x) && one_callback(y) && ((struct fence_array *)a)->pending == 2,
+          "the array is armed once: one callback on each child, two pending");
+    CHECK(one_callback(a) && c2->armed == a && !c2->base.signaled,
+          "the later point waits on the array");
+    dma_fence_signal(x);
+    CHECK(!a->signaled && !c2->base.signaled && callbacks == before,
+          "one child does not complete the array of two");
+    dma_fence_signal(y);
+    CHECK(a->signaled && c2->base.signaled && callbacks == before + 1,
+          "the second child completes the array, the point and its watch");
+    dma_fence_put(&c2->base);
+    CHECK(x->refs == 1 && y->refs == 1 && setup_gpu->refs == 1,
+          "both points are freed with the array");
+    dma_fence_put(x);
+    dma_fence_put(y);
+    dma_fence_put(setup_gpu);
+    setup_gpu = NULL;
+}
 /** Test merge flattening, duplicate timelines, errors and callback teardown. */
 static void merge_cases(void)
 {
@@ -597,6 +707,7 @@ int main(int argc, char **argv)
     }
     fence_cases();
     interrupt_cases();
+    enable_cases();
     merge_cases();
     buffer_cases();
     import_cases();
