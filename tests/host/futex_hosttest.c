@@ -299,6 +299,14 @@ int wq_wait_event_as(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *n
     return wq_wait_event(wq, cond, arg);
 }
 
+/** A wait named through a pointer, which the model takes as
+ * `wq_wait_event`. */
+int wq_wait_event_named(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *const *name)
+{
+    (void)name;
+    return wq_wait_event(wq, cond, arg);
+}
+
 /** The model completes a futex owner's exit before its waiter resumes. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {

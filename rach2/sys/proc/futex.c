@@ -122,6 +122,7 @@ struct futex_q {
     const void *target_space;
     uintptr_t target_key; /* the requeue destination expected by the waiter */
     uint32_t owner_tid;   /* an exiting owner, in the caller's PID namespace */
+    const char *wchan;    /* the name of a PI or requeue-PI sleep's stage */
 };
 
 /* One futex of a wait, as the caller named it, and its waiter. */
@@ -253,11 +254,16 @@ static int futex_unqueue(struct futex_vec *v, uint32_t n)
  * and the filing: a wake after the comparison finds the waiter. A page that
  * left while another was brought in starts the round again.
  *
+ * `wchan` names the sleep for /proc/PID/wchan, as Linux's wchan names it:
+ * `futex_wait_queue` for one futex and `futex_wait_multiple` for
+ * futex_waitv, whose static `futex_sleep_multiple` has that one caller.
+ *
  * Returns the index of the woken futex, the last of them when a wake marked
  * more than one; -EAGAIN when a word differs, -ETIMEDOUT at the deadline,
  * -EINTR for a signal, or -EFAULT for a word the process cannot read.
  */
-static int futex_sleep_on(struct futex_vec *v, uint32_t n, struct futex_sleeper *s, uint64_t ticks)
+static int futex_sleep_on(struct futex_vec *v, uint32_t n, struct futex_sleeper *s, uint64_t ticks,
+                          const char *wchan)
 {
     uint32_t i, cur, flags;
     int rc, woken;
@@ -316,7 +322,7 @@ static int futex_sleep_on(struct futex_vec *v, uint32_t n, struct futex_sleeper 
     kirq_restore(flags);
 
     current_proc->wakeup_tick = s->timed ? (s->target != 0 ? s->target : 1u) : 0;
-    rc = wq_wait_event_as(&s->wq, futex_sleeper_done, s, "futex_wait_queue");
+    rc = wq_wait_event_as(&s->wq, futex_sleeper_done, s, wchan);
     current_proc->wakeup_tick = 0;
 
     flags = kirq_save();
@@ -352,7 +358,7 @@ static int32_t futex_wait_until(uintptr_t uaddr, uint32_t val, uint32_t bitset, 
     v.val = val;
     v.shared = !(flags_op & FUTEX_PRIVATE_FLAG);
     v.q.bitset = bitset;
-    rc = futex_sleep_on(&v, 1, s, ticks);
+    rc = futex_sleep_on(&v, 1, s, ticks, "futex_wait_queue");
     if (rc == -EINTR && s->timed) {
         struct restart_block *b = &current_proc->restart;
 
@@ -1067,7 +1073,8 @@ static int pi_fixup(uintptr_t addr, struct futex_pi *pi)
 }
 
 /** Sleep with a queued PI or requeue waiter and then remove its links.
- * A handoff wins over a simultaneous timeout or signal. */
+ * A handoff wins over a simultaneous timeout or signal. The sleep takes its
+ * name from `q->wchan`, which a requeue changes (`pi_requeue_one`). */
 static int pi_sleep(struct futex_q *q, uintptr_t addr)
 {
     struct futex_sleeper *s = q->s;
@@ -1076,7 +1083,7 @@ static int pi_sleep(struct futex_q *q, uintptr_t addr)
     int rc;
 
     current_proc->wakeup_tick = s->timed ? (s->target ? s->target : 1u) : 0;
-    rc = wq_wait_event_as(&s->wq, futex_sleeper_done, s, "rt_mutex_slowlock_block");
+    rc = wq_wait_event_named(&s->wq, futex_sleeper_done, s, &q->wchan);
     current_proc->wakeup_tick = 0;
     flags = kirq_save();
     pi = q->pi;
@@ -1146,6 +1153,7 @@ static int futex_lock_pi(uintptr_t addr, const struct kernel_timespec __user *ut
     q.task = current_proc;
     q.s = &s;
     q.bitset = FUTEX_MATCH_ANY;
+    q.wchan = "futex_lock_pi"; /* rt_mutex_slowlock_block is __sched, skipped */
 retry_owner:
     if (!vm_prefault_range(addr, sizeof(uint32_t), 1)) {
         kfree(spare);
@@ -1240,6 +1248,7 @@ static int futex_wait_requeue_pi(uintptr_t addr, uint32_t val,
     q.s = &s;
     q.bitset = FUTEX_MATCH_ANY;
     q.requeue = 1;
+    q.wchan = "futex_wait_queue"; /* futex_wait_requeue_pi once requeued */
     for (;;) {
         if (!vm_prefault_range(addr2, sizeof(word), 1) ||
             !vm_prefault_range(addr, sizeof(word), 0)) {
@@ -1292,6 +1301,10 @@ static int pi_requeue_one(struct futex_q *q, uintptr_t addr, struct futex_pi **s
         wq_wake_all(&q->s->wq);
     } else {
         futex_enqueue(q);
+        /* Linux's rt_mutex_wait_proxy_lock is __sched, so wchan shows its
+         * caller. */
+        q->wchan = "futex_wait_requeue_pi";
+        q->task->wchan = q->wchan;
     }
     return 0;
 }
@@ -1781,7 +1794,7 @@ long sys_futex_wait(isr_params_t *params)
     v.val = (uint32_t)val;
     v.shared = (flags & FUTEX2_PRIVATE) == 0;
     v.q.bitset = (uint32_t)mask;
-    rc = futex_sleep_on(&v, 1, &s, ticks);
+    rc = futex_sleep_on(&v, 1, &s, ticks, "futex_wait_queue");
     return rc > 0 ? 0 : rc;
 }
 
@@ -1872,7 +1885,7 @@ long sys_futex_waitv(isr_params_t *params)
         }
     }
     if (rc == 0) {
-        rc = futex_sleep_on(v, nr, &s, ticks);
+        rc = futex_sleep_on(v, nr, &s, ticks, "futex_wait_multiple");
     }
     kfree(v);
     return rc;
