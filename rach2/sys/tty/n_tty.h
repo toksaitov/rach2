@@ -207,11 +207,25 @@ int n_tty_stop(struct n_tty *t);
 int n_tty_start(struct n_tty *t);
 
 /**
- * Give the echo held in `echo_buf` to `out` unless output is stopped.
- * Returns the bytes given. The caller has interrupts off, since a byte
- * received from an interrupt may add to the echo meanwhile.
+ * Give at most `max` bytes of the echo held in `echo_buf` to `out`, oldest
+ * first, unless output is stopped; the rest stays held, as Linux's
+ * process_echoes stops at the driver's write room. Returns the bytes given.
+ * The caller has interrupts off, since a byte received from an interrupt may
+ * add to the echo meanwhile.
  */
-int n_tty_echo_flush(struct n_tty *t, n_tty_out_fn out, void *ctx);
+int n_tty_echo_flush(struct n_tty *t, n_tty_out_fn out, void *ctx, unsigned int max);
+
+/** Hold the echo byte `c` in `echo_buf`, behind the echo held, the oldest
+ * byte giving way when it is full: for a sink that has no room for it. */
+void n_tty_hold_echo(struct n_tty *t, unsigned char c);
+
+/**
+ * Drop the echo held since `echo_tail` was `tail`, keeping what was held
+ * before it; when less is held than was added since, all of it. A caller
+ * that feeds a byte with its echo suppressed calls it after the byte, so the
+ * older echo waits for a sink that shows it.
+ */
+void n_tty_echo_cut(struct n_tty *t, unsigned int tail);
 
 /**
  * Whether the terminal is readable to poll(2): nonzero if so, 0 if not.
