@@ -16434,14 +16434,16 @@ static int synth_proc_dirent(const struct synth_dir *sd, int *at, char *name, ui
     static const struct {
         const char *name;
         uint8_t type;
-    } files[] = {
-        {"stat", DT_REG},    {"cmdline", DT_REG},   {"fd", DT_DIR},     {"maps", DT_REG},
-        {"smaps", DT_REG},   {"status", DT_REG},    {"statm", DT_REG},  {"auxv", DT_REG},
-        {"environ", DT_REG}, {"comm", DT_REG},      {"mem", DT_REG},    {"oom_score_adj", DT_REG},
-        {"mounts", DT_REG},  {"mountinfo", DT_REG}, {"limits", DT_REG}, {"uid_map", DT_REG},
-        {"gid_map", DT_REG}, {"setgroups", DT_REG}, {"ns", DT_DIR},     {"fdinfo", DT_DIR},
-        {"exe", DT_LNK},     {"cwd", DT_LNK},       {"root", DT_LNK},   {"numa_maps", DT_REG},
-        {"syscall", DT_REG}, {"wchan", DT_REG},     {"task", DT_DIR}};
+    } files[] = {{"stat", DT_REG},    {"cmdline", DT_REG},   {"fd", DT_DIR},
+                 {"maps", DT_REG},    {"smaps", DT_REG},     {"status", DT_REG},
+                 {"statm", DT_REG},   {"auxv", DT_REG},      {"environ", DT_REG},
+                 {"comm", DT_REG},    {"mem", DT_REG},       {"oom_score_adj", DT_REG},
+                 {"mounts", DT_REG},  {"mountinfo", DT_REG}, {"limits", DT_REG},
+                 {"uid_map", DT_REG}, {"gid_map", DT_REG},   {"setgroups", DT_REG},
+                 {"ns", DT_DIR},      {"fdinfo", DT_DIR},    {"exe", DT_LNK},
+                 {"cwd", DT_LNK},     {"root", DT_LNK},      {"numa_maps", DT_REG},
+                 {"syscall", DT_REG}, {"wchan", DT_REG},     {"schedstat", DT_REG},
+                 {"task", DT_DIR}};
     struct vpath vp;
     process_t *pp;
     int n = *at;

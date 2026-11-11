@@ -1,7 +1,7 @@
 /**
  * procfs_hosttest.c: the files rach2/sys/fs/procfs.c makes: the stat text
  * and its allocation, /proc/uptime, the CPU times of a process and of a
- * thread, task ids, the syscall and wchan files, descriptor links,
+ * thread, task ids, the syscall, wchan and schedstat files, descriptor links,
  * /proc/PID/mem, /proc/PID/exe, the paths of /proc/PID/maps, a read of a
  * process's arguments while the process is reaped, oom_score_adj, the
  * cache, NUMA, clock source and DMI files of /sys, and the /sys entries
@@ -1320,6 +1320,49 @@ static int pid_file_reads(int pid, int wchan, const char *want)
     }
     kfree(text.buf);
     return ok;
+}
+
+/** Whether /proc/`pid`/schedstat reads `want`. */
+static int schedstat_reads(int pid, const char *want)
+{
+    struct procfs_text text;
+    int len, ok;
+
+    procfs_text_init(&text);
+    len = procfs_gen_schedstat(&text, pid);
+    ok = len == (int)__builtin_strlen(want) && text.buf &&
+         __builtin_memcmp(text.buf, want, (unsigned long)len) == 0;
+    if (!ok) {
+        printf("procfs-hosttest: /proc/%d/schedstat read '%.*s'\n", pid, len > 0 ? len : 0,
+               text.buf ? text.buf : "");
+    }
+    kfree(text.buf);
+    return ok;
+}
+
+/** /proc/PID/schedstat: a thread's own time on a processor in ns, its wait
+ * on the run queues in ns and its switches onto a processor, as Linux's
+ * proc_pid_schedstat, which the selftest steal_time reads; the leader's
+ * file is the leader's, not the group's. */
+static void schedstat_rows(void)
+{
+    struct procfs_text text;
+
+    thread.utime = 2;
+    thread.stime = 3;
+    thread.run_delay = 123456789;
+    thread.pcount = 42;
+    process.run_delay = 1000;
+    process.pcount = 1;
+    check(schedstat_reads(9, "5000000 123456789 42\n"),
+          "a thread's schedstat is its run time, its run_delay and its pcount");
+    check(schedstat_reads(7, "0 1000 1\n"), "and the leader's is its own");
+    procfs_text_init(&text);
+    check(procfs_gen_schedstat(&text, 5) == -ENOENT, "a process that is not there has none");
+    kfree(text.buf);
+    thread.utime = thread.stime = 0;
+    thread.run_delay = process.run_delay = 0;
+    thread.pcount = process.pcount = 0;
 }
 
 /**
@@ -3552,6 +3595,7 @@ int main(int argc, char **argv)
     task_ids();
     task_owners();
     syscall_wchan_rows();
+    schedstat_rows();
     mem_descriptor();
     exe_links();
     exe_chroot();

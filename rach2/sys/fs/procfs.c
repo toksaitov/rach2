@@ -1426,6 +1426,29 @@ static int procfs_gen_wchan(struct procfs_text *t, int pid)
     return t->len;
 }
 
+/**
+ * /proc/<pid>/schedstat, as Linux's `proc_pid_schedstat` prints the
+ * thread's sched_info: its time on a processor in nanoseconds, here its
+ * ticks of user and system time, then the nanoseconds it waited ready on a
+ * run queue and the times it was switched onto a processor, which
+ * `schedule` counts (process.h's `run_delay` and `pcount`).
+ */
+static int procfs_gen_schedstat(struct procfs_text *t, int pid)
+{
+    process_t *p = procfs_proc(pid);
+
+    if (!p) {
+        return -ENOENT;
+    }
+    ap_u64(t, (p->utime + p->stime) * TICK_NS);
+    ap_ch(t, ' ');
+    ap_u64(t, p->run_delay);
+    ap_ch(t, ' ');
+    ap_u64(t, (uint64_t)p->pcount);
+    ap_ch(t, '\n');
+    return t->len;
+}
+
 /** The path /proc/<pid>/maps gives region `r` of `mm`: the file it maps,
  * which for the vDSO's two regions is [vvar] or [vdso] (`vdso_map`),
  * [heap], [stack], the program for the segments of its image, which lie
@@ -2355,6 +2378,8 @@ static const char *procfs_pid_file_name(int kind)
         return "syscall";
     case SYNTH_PROC_WCHAN:
         return "wchan";
+    case SYNTH_PROC_SCHEDSTAT:
+        return "schedstat";
     default:
         return "stat";
     }
@@ -8814,6 +8839,8 @@ static int procfs_gen_pid_file(struct procfs_text *t, int pid, const struct vpat
         return procfs_gen_syscall(t, pid);
     case SYNTH_PROC_WCHAN:
         return procfs_gen_wchan(t, pid);
+    case SYNTH_PROC_SCHEDSTAT:
+        return procfs_gen_schedstat(t, pid);
     default:
         return procfs_is_idmap(vp->procfile) ? procfs_gen_idmap(t, pid, vp->procfile)
                                              : procfs_gen_cmdline(t, pid);

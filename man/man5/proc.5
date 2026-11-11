@@ -2205,6 +2205,17 @@ Any other wait reads as Rach2's
 .Ql wq_wait_event_nointr
 or
 .Ql wq_wait_event_idle .
+.It Pa /proc/PID/schedstat
+Three numbers on one line, as Linux prints the thread's scheduler
+statistics: its time on a processor in nanoseconds, counted here in the
+timer's ticks of user and system time; the nanoseconds it waited ready on a
+run queue for a processor, to the microsecond; and the times it was
+switched onto a processor.
+The file of a process is its leader's, and the file under
+.Pa task
+a thread's own.
+.Xr kvm 4
+adds the second number's growth to a guest's steal time.
 .It Pa /proc/PID/fdinfo
 A file for each open descriptor, named by its number, beginning with two lines:
 .Ql pos: ,

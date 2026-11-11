@@ -298,6 +298,15 @@ struct process {
      * voluntary_ctxt_switches and nonvoluntary_ctxt_switches, and getrusage. */
     unsigned long nvcsw;
     unsigned long nivcsw;
+    /* The scheduler's statistics of /proc/<pid>/schedstat, Linux's
+     * sched_info, kept by `schedule`: the nanoseconds it waited ready on a
+     * run queue for a processor, which KVM's steal time also reads, and the
+     * times it was switched onto one. While `run_queued` is set it waits on
+     * a queue since `queued_us`, `waketime_clock`'s microseconds. */
+    uint64_t run_delay;
+    unsigned long pcount;
+    uint32_t queued_us;
+    uint8_t run_queued;
     /* Whether its sleep is one no signal ends (`wq_wait_event_nointr`),
      * which /proc reports as the state D and counts as blocked; a kernel
      * thread's idle wait (`wq_wait_event_idle`) is not marked. */
