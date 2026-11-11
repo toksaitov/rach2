@@ -1470,9 +1470,10 @@ gives them, in the form
 where Linux's line has the builder and the compiler after the release and
 the build's date after the version, which this kernel does not record.
 .It Pa /proc/PID
-A process's directory, and each file and link in it,
-belongs to the process's effective user and group IDs while the process
-is dumpable, and to root otherwise, as on Linux;
+A process's world-readable and executable directories, mode 0555,
+belong to its effective user and group IDs even when it is not dumpable.
+Its other directories, files and links belong to those IDs while the
+process is dumpable, and to root otherwise, as on Linux;
 .Xr ps 1
 and
 .Xr top 1

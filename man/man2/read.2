@@ -31,6 +31,13 @@ A successful call may return fewer bytes than requested; a count past
 0x7ffff000, Linux's
 .Dv MAX_RW_COUNT ,
 reads at most that many, so that the count returned is never negative.
+The descriptor is checked first, then the range with the original count:
+an overflowing range or one past the top of user memory is
+.Er EFAULT .
+On the i686 kernel, a count negative as the kernel's signed size is
+.Er EINVAL
+after that range check, before the transfer is limited.
+An i386 call on x86-64 uses the kernel's 64-bit signed size for this check.
 A zero-length read checks the descriptor as a longer one does, that it
 exists, is open for reading, is open on an object with a read method and
 is no directory, and that the buffer does not pass the top of user
@@ -364,7 +371,9 @@ A signal interrupted a wait, or a background terminal read posted
 .Dv SIGTTIN .
 .It Er EINVAL
 The vector count is outside 0 through 1024, a vector length is negative
-as a signed size, a file system has no read operation, the object the
+as a signed size, a native i686 read count is negative as the kernel's
+signed size after its address range passes, a file system has no read
+operation, the object the
 descriptor is open on, such as an epoll set, has no read method, as on
 Linux, or
 .Fn pread

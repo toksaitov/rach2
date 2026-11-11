@@ -3,21 +3,25 @@
  * and the function it sleeps in, in Linux 6.12's formats.
  *
  * The rows: a process's directory and a thread's directory under task list
- * both files, syscall of mode 0400 and wchan of mode 0444. A thread blocked
+ * both files, syscall, environ and auxv of mode 0400, mem of mode 0600,
+ * and wchan of mode 0444. A thread blocked
  * in a read of an empty pipe reads, in its syscall file, read's number, the
  * descriptor, the buffer and the count, then its stack and instruction
  * pointers, and pipe_read from its wchan file, with no newline. A thread
  * blocked in a FUTEX_WAIT_PRIVATE reads futex's number, the word's address,
  * the operation, the value and the null timeout, and futex_wait_queue. A
  * thread that spins reads "running" and 0. A child of user 1000 gets EACCES
- * from the root parent's syscall file and 0 from its wchan file, once the
+ * from the root parent's syscall, environ, auxv and mem files and 0 from
+ * its wchan file, once the
  * parent's stat shows it asleep in its wait for the child. Against a sleeper
  * of user 1000 in a pipe's read, Linux's ptrace check by file-system ids
  * lets a caller of real and effective ids 1001 and file-system ids 1000
- * read its call and pipe_read; a sleeper that is not dumpable, which root
- * owns, gives a caller of every id 1000 EACCES from the open and 0 from
+ * read its call and pipe_read; a sleeper that is not dumpable, whose files
+ * root owns, gives a caller of every id 1000 EACCES from the open and 0 from
  * wchan; and a caller of user 1000 and group 1001 opens the file its user
- * owns and gets EPERM from the read, and 0 from wchan.
+ * owns and gets EPERM from the read, and 0 from wchan. A process's 0555
+ * directories keep its effective IDs in either dumpable state; its 0500
+ * fd directory and files belong to root when it is not dumpable.
  *
  * Prints `WCHANMUSL OK` and exits 0 on success, and prints `WCHANMUSL FAIL
  * (detail)` and exits 1 otherwise. etude's report (probe_report.h), for the
@@ -25,7 +29,7 @@
  * `modes`, `read-call`, with the thread and the pipe, `read-wchan`,
  * `futex-call`, with its thread, `futex-wchan`, `running`, with its thread,
  * `running-wchan`, `refused-syscall`, with the fork, `refused-wchan`,
- * `fs-ids`, `not-dumpable` and `other-group`.
+ * `directory-owners`, `fs-ids`, `not-dumpable` and `other-group`.
  * The first failure fails its assertion and leaves the rest not run.
  *
  * Needs root, to make children of users 1000 and 1001, or their NEWs when a
@@ -229,20 +233,35 @@ static void *spinner(void *arg)
     return NULL;
 }
 
-/** The directories list both files, with Linux's modes. */
+/** The directories list both files, and both paths give each process
+ * file Linux's mode, including the files only the owner may open. */
 static int listing_rows(void)
 {
+    static const struct {
+        const char *name;
+        mode_t mode;
+    } rows[] = {
+        {"syscall", 0400}, {"wchan", 0444}, {"environ", 0400}, {"auxv", 0400}, {"mem", 0600}};
     char path[64];
     struct stat sc, sw;
+    unsigned i;
 
     snprintf(path, sizeof(path), "/proc/self/task/%d", (int)syscall(SYS_gettid));
     if (!lists_both("/proc/self") || !lists_both(path)) {
         return fail("a process's and a thread's directories list syscall and wchan");
     }
     report_held();
-    if (stat("/proc/self/syscall", &sc) != 0 || stat("/proc/self/wchan", &sw) != 0 ||
-        sc.st_mode != (S_IFREG | 0400) || sw.st_mode != (S_IFREG | 0444)) {
-        return fail("syscall is mode 0400 and wchan 0444");
+    for (i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
+        snprintf(path, sizeof(path), "/proc/self/%s", rows[i].name);
+        if (stat(path, &sc) != 0) {
+            return fail("stat a process's file");
+        }
+        snprintf(path, sizeof(path), "/proc/self/task/%d/%s", (int)syscall(SYS_gettid),
+                 rows[i].name);
+        if (stat(path, &sw) != 0 || sc.st_mode != (S_IFREG | rows[i].mode) ||
+            sw.st_mode != sc.st_mode) {
+            return fail("a process or thread file has the wrong mode");
+        }
     }
     report_held();
     return 0;
@@ -338,11 +357,12 @@ static int running_rows(void)
     return 0;
 }
 
-/** A child of another user may not read root's call, and reads 0 for its
- * wchan while root sleeps in its wait: the child's exit status is 0, or 1
- * for the call, or 2 for the wchan. */
+/** A child of another user may not open root's owner-only files, and
+ * reads 0 for its wchan while root sleeps in its wait: the child's exit
+ * status is 0, or 1 for an open, or 2 for the wchan. */
 static int refused_rows(void)
 {
+    static const char *const names[] = {"syscall", "environ", "auxv", "mem"};
     pid_t parent = getpid(), pid;
     int status;
 
@@ -350,16 +370,19 @@ static int refused_rows(void)
     if (pid == 0) {
         char path[64], buf[64];
         int fd;
+        unsigned i;
 
         if (setgid(OTHER_ID) != 0 || setuid(OTHER_ID) != 0) {
             _exit(3);
         }
         /* A ready parent would read 0 from wchan by right. */
         await_asleep(parent);
-        snprintf(path, sizeof(path), "/proc/%d/syscall", (int)parent);
-        fd = open(path, O_RDONLY);
-        if (fd >= 0 || errno != EACCES) {
-            _exit(1);
+        for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+            snprintf(path, sizeof(path), "/proc/%d/%s", (int)parent, names[i]);
+            fd = open(path, O_RDONLY);
+            if (fd >= 0 || errno != EACCES) {
+                _exit(1);
+            }
         }
         snprintf(path, sizeof(path), "/proc/%d/wchan", (int)parent);
         _exit(read_file(path, buf, (int)sizeof(buf)) == 1 && buf[0] == '0' ? 0 : 2);
@@ -369,7 +392,7 @@ static int refused_rows(void)
         return fail("fork a child of the other user");
     }
     if (WEXITSTATUS(status) == 1) {
-        return fail("another user's open of root's syscall file is EACCES");
+        return fail("another user's open of root's syscall, environ, auxv or mem is EACCES");
     }
     report_held();
     if (WEXITSTATUS(status) != 0) {
@@ -391,6 +414,7 @@ static pid_t sleeper(int dumpable, int *wake)
     pid_t pid;
     char c;
 
+    *wake = -1;
     if (pipe(fds) != 0) {
         return -1;
     }
@@ -405,8 +429,59 @@ static pid_t sleeper(int dumpable, int *wake)
         _exit(0);
     }
     close(fds[0]);
+    if (pid < 0) {
+        close(fds[1]);
+        return -1;
+    }
     *wake = fds[1];
     return pid;
+}
+
+/** Whether `path` has full mode `mode` and both owner IDs equal to `id`. */
+static int owner_is(const char *path, mode_t mode, uid_t id)
+{
+    struct stat st;
+
+    return stat(path, &st) == 0 && st.st_mode == mode && st.st_uid == id && st.st_gid == id;
+}
+
+/** Stat a sleeper's process, task and fdinfo directories and its syscall
+ * file. World-readable directories keep its effective IDs even when it
+ * is not dumpable; the 0500 fd directory and the file then belong to root.
+ * Return 0 after reaping each sleeper, or report the failed row. */
+static int owner_rows(void)
+{
+    static const char *const dirs[] = {"", "/task", "/fdinfo"};
+    char path[80];
+    int dumpable, wake, status, ok;
+    unsigned i;
+    pid_t pid;
+
+    for (dumpable = 0; dumpable <= 1; dumpable++) {
+        pid = sleeper(dumpable, &wake);
+        if (pid < 0) {
+            return fail("fork a sleeper for directory ownership");
+        }
+        await_asleep(pid);
+        ok = 1;
+        for (i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++) {
+            snprintf(path, sizeof(path), "/proc/%d%s", (int)pid, dirs[i]);
+            ok = ok && owner_is(path, S_IFDIR | 0555, OTHER_ID);
+        }
+        snprintf(path, sizeof(path), "/proc/%d/task/%d", (int)pid, (int)pid);
+        ok = ok && owner_is(path, S_IFDIR | 0555, OTHER_ID);
+        snprintf(path, sizeof(path), "/proc/%d/syscall", (int)pid);
+        ok = ok && owner_is(path, S_IFREG | 0400, dumpable ? OTHER_ID : 0);
+        snprintf(path, sizeof(path), "/proc/%d/fd", (int)pid);
+        ok = ok && owner_is(path, S_IFDIR | 0500, dumpable ? OTHER_ID : 0);
+        close(wake);
+        if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0 ||
+            !ok) {
+            return fail("a process directory loses its effective owner when not dumpable");
+        }
+    }
+    report_held();
+    return 0;
 }
 
 /** Take the ids of `how` (`peek`) as root: 0, or -1. */
@@ -529,9 +604,9 @@ static int cred_rows(void)
 static void plan(void)
 {
     static const char *const ids[] = {
-        "listed",      "modes",        "read-call",     "read-wchan",      "futex-call",
-        "futex-wchan", "running",      "running-wchan", "refused-syscall", "refused-wchan",
-        "fs-ids",      "not-dumpable", "other-group"};
+        "listed",           "modes",   "read-call",     "read-wchan",      "futex-call",
+        "futex-wchan",      "running", "running-wchan", "refused-syscall", "refused-wchan",
+        "directory-owners", "fs-ids",  "not-dumpable",  "other-group"};
     unsigned i;
 
     report_begin(report_case(environ, "guest.default.wchanmusl"));
@@ -546,7 +621,7 @@ int main(int argc, char **argv)
     setvbuf(stdout, NULL, _IONBF, 0);
     plan();
     if (listing_rows() != 0 || read_rows() != 0 || futex_rows() != 0 || running_rows() != 0 ||
-        refused_rows() != 0 || cred_rows() != 0) {
+        refused_rows() != 0 || owner_rows() != 0 || cred_rows() != 0) {
         return 1;
     }
     report_end();

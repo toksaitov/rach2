@@ -1324,11 +1324,37 @@ static int iov_append_file(const fd_entry_t *entry)
 /** Write a copied user vector under the file's lock, as defined below. */
 static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long long pos, int append);
 
+/** Import the master's vector once before writing it under the pair's
+ * lock. `entry` is held and open for writing, and `count` is in range.
+ * Return the bytes written or an import, allocation or write error. */
+static long writev_master(fd_entry_t *entry, uintptr_t addr, int count)
+{
+    struct kernel_iovec local[8], *iov = local;
+    long rc;
+
+    if (count > (int)(sizeof(local) / sizeof(local[0]))) {
+        iov = kmalloc((size_t)count * sizeof(*iov));
+        if (!iov) {
+            return -ENOMEM;
+        }
+    }
+    rc = iov_import(iov, addr, count, -1);
+    if (rc > 0) {
+        rc = pty_master_writev(entry, iov, count);
+    }
+    if (iov != local) {
+        kfree(iov);
+    }
+    return rc;
+}
+
 /**
  * writev(2) takes fd, the vector and its count. An O_APPEND mounted file uses
- * iov_file_write's lock across the vector. Otherwise elements are written in
- * order (`writev_elements`); on a tmpfs file the mount's lock is held across
- * them, and a vector that would grow a sealed file is cut to the whole 2 MiB
+ * iov_file_write's lock across the vector. A pty master imports the vector
+ * once and holds its write lock across it (`writev_master`). Otherwise
+ * elements are written in order (`writev_elements`); on a tmpfs file the
+ * mount's lock is held across them, and a vector that would grow a sealed
+ * file is cut to the whole 2 MiB
  * chunks before its end (`writev_begin`). The vector is checked whole first
  * (`iov_import`), and its total cut at MAX_RW_COUNT. The descriptor is
  * checked before the count and the vector, as Linux tests FMODE_WRITE
@@ -1354,6 +1380,10 @@ static long writev(int fd, uintptr_t iov_user, int iovcnt)
     }
     if (iovcnt < 0 || iovcnt > IOV_MAX_LOCAL) {
         return -EINVAL;
+    }
+    entry = fd_get(current_proc->fds, fd);
+    if (entry && entry->type == FD_TYPE_PTM) {
+        return writev_master(entry, iov_user, iovcnt);
     }
     wanted = iov_import(NULL, iov_user, iovcnt, -1);
     if (wanted < 0) {
@@ -6339,11 +6369,13 @@ static int32_t read_allowed(const fd_entry_t *entry)
 }
 
 /**
- * Read up to `count` bytes of descriptor `fd` into the user's `buf`, for
+ * Read up to `requested` bytes of descriptor `fd` into the user's `buf`, for
  * read(2) and readv(2); the bytes read, 0 at the end, or a negative errno:
- * `read_allowed`'s, then -EFAULT for a buffer past the top of user memory,
- * then -EISDIR for a directory, as Linux's vfs_read orders them, then
- * -EFAULT for a NULL or bad buffer. A
+ * `read_allowed`'s, then -EFAULT for the original requested range past the
+ * top of user memory, then -EINVAL for a count negative as the kernel's
+ * ssize_t, then -EISDIR for a directory, as Linux's vfs_read orders them,
+ * then -EFAULT for a NULL or bad buffer. The transfer is capped at
+ * USER_RW_MAX after the original range and count have passed. A
  * read of zero bytes returns 0 once those checks have passed, and `buf`
  * may then be NULL, as POSIX allows; from an anonymous descriptor with a
  * read method it goes to that method, since an eventfd and a timerfd read
@@ -6363,9 +6395,10 @@ static int32_t read_allowed(const fd_entry_t *entry)
  * count, as Linux's generic_read_dir answers, and a descriptor of any other
  * kind -EBADF.
  */
-static int32_t read_fd(int fd, char __user *buf, uint32_t count)
+static int32_t read_fd(int fd, char __user *buf, size_t requested)
 {
     fd_entry_t *entry;
+    uint32_t count;
     int32_t rc;
 
     if (!current_proc) {
@@ -6380,10 +6413,14 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
     /* Linux's access_ok, which vfs_read makes before the file's read, for
      * a count of 0 too: the top of user memory, or a kernel caller's window
      * (user_window_open). */
-    if (!user_span_ok((__force uintptr_t)buf, count) &&
-        !proc_window_covers(current_proc, (__force uintptr_t)buf, count)) {
+    if (!user_span_ok((__force uintptr_t)buf, requested) &&
+        !proc_window_covers(current_proc, (__force uintptr_t)buf, requested)) {
         return -EFAULT;
     }
+    if ((long)requested < 0) {
+        return -EINVAL;
+    }
+    count = USER_RW_LEN(requested);
     if (entry->type == FD_TYPE_DIR || entry->type == FD_TYPE_SYNTH_DIR) {
         return -EISDIR;
     }
@@ -6435,13 +6472,14 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
 /**
  * read(2): read up to the count in argument 2 of the descriptor in argument
  * 0 into the user's buffer in argument 1 (`read_fd`); the bytes read, 0 at
- * the end, or a negative errno. A count past USER_RW_MAX is taken as
- * USER_RW_MAX, as on Linux.
+ * the end, or a negative errno. The descriptor and the whole requested
+ * range are checked before a count past USER_RW_MAX is cut there, as on
+ * Linux. On i686 a count negative as ssize_t is EINVAL after the range
+ * check; a compat call on x86-64 has the kernel's 64-bit ssize_t instead.
  */
 long sys_read(isr_params_t *params)
 {
-    return read_fd((int)SC_ARG(params, 0), (char __user *)SC_ARG(params, 1),
-                   USER_RW_LEN(SC_ARG(params, 2)));
+    return read_fd((int)SC_ARG(params, 0), (char __user *)SC_ARG(params, 1), SC_ARG(params, 2));
 }
 
 /**
@@ -7956,15 +7994,16 @@ static int32_t synth_stat_dev_dir(const struct vpath *vp, struct kstat *kst)
     return 0;
 }
 
-/** Give `kst` the owner of process `pid`'s files under /proc, as Linux's
- * `task_dump_owner` does: the process's effective user and group IDs while
- * it is dumpable, and root otherwise (`procfs_oom_owner`). BusyBox's `ps`
- * and `top` read a process's user from its directory's owner. */
+/** Give `kst` the owner of process `pid`'s node under /proc, for the mode
+ * already in `st_mode`, as Linux's task_dump_owner does: the effective
+ * IDs for a 0555 directory, or for any node of a dumpable process, and
+ * root otherwise (`procfs_pid_owner`). BusyBox's ps and top read a
+ * process's user from its directory's owner. */
 static void synth_pid_owner(int pid, struct kstat *kst)
 {
     uint32_t uid, gid;
 
-    if (procfs_oom_owner(pid, &uid, &gid) == 0) {
+    if (procfs_pid_owner(pid, kst->st_mode, &uid, &gid) == 0) {
         kst->st_uid = uid;
         kst->st_gid = gid;
     }
@@ -8012,8 +8051,8 @@ static int synth_proc_writable(int procfile)
  * and directories are owned as `synth_pid_owner` has it; oom_score_adj,
  * uid_map, gid_map and setgroups are their owner's to write, mode 0644, as
  * on Linux, and so is a /proc/sys file that can be written. /proc/disk and
- * a descriptor's fdinfo file are 0400, as is a process's syscall file, and a
- * process's fd directory 0500.
+ * a descriptor's fdinfo file are 0400, as are a process's syscall, environ
+ * and auxv files; its mem file is 0600 and its fd directory 0500.
  *
  * The /proc links, /proc/self, a process's cwd, root and exe, its namespace
  * links and its descriptors' links, are links of mode 0777 when not

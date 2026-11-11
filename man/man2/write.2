@@ -202,6 +202,9 @@ For an append to a mounted file, the kernel copies the whole vector, then
 brings in its buffers before taking the file lock.
 A bad data page ends the accessible prefix; bytes before it are written
 and returned as a short count.
+A pseudo-terminal master also copies the whole vector, and holds its
+write lock across every element, including waits and user copies, so
+another writer cannot insert bytes between them.
 Other writes read each vector again as they reach it.
 An error found after a positive transfer returns the transferred byte
 count instead of the error.

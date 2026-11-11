@@ -60,6 +60,7 @@ static uint32_t procfs_ino_nettcp(void);
 static uint32_t procfs_fd_ino(struct fd_entry *e);
 static uint32_t procfs_ino_pid(int pid);
 static uint32_t procfs_task_links(int pid);
+static int procfs_pid_owner(int pid, uint32_t mode, uint32_t *uid, uint32_t *gid);
 static int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid);
 static int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid);
 static int procfs_fd_writable(struct fd_entry *e);
@@ -1447,6 +1448,42 @@ static void task_ids(void)
     thread.state = PROC_ZOMBIE;
     check(procfs_resolve_id(&vp) == -1, "an ended thread other than the leader is no task");
     thread.state = PROC_READY;
+}
+
+/** A process's 0555 directories keep its effective IDs in every dumpable
+ * state and after its address space is gone. Other nodes belong to root
+ * while the space is absent or not dumpable. */
+static void task_owners(void)
+{
+    struct mm *saved_mm = process.mm;
+    uint32_t saved_uid = process.euid, saved_gid = process.egid;
+    uint32_t saved_dumpable = space.dumpable, uid, gid;
+    int dumpable;
+
+    process.euid = 1000;
+    process.egid = 1001;
+    process.mm = &space;
+    for (dumpable = 0; dumpable <= 2; dumpable++) {
+        space.dumpable = (uint32_t)dumpable;
+        check(procfs_pid_owner(7, 0040555u, &uid, &gid) == 0 && uid == 1000 && gid == 1001,
+              "a public process directory keeps its effective IDs");
+        check(procfs_pid_owner(7, 0040500u, &uid, &gid) == 0 &&
+                  uid == (dumpable == 1 ? 1000u : 0u) && gid == (dumpable == 1 ? 1001u : 0u),
+              "a private process directory has the dumpable owner");
+        check(procfs_oom_owner(7, &uid, &gid) == 0 && uid == (dumpable == 1 ? 1000u : 0u) &&
+                  gid == (dumpable == 1 ? 1001u : 0u),
+              "a process file has the dumpable owner");
+    }
+    process.mm = NULL;
+    check(procfs_pid_owner(7, 0040555u, &uid, &gid) == 0 && uid == 1000 && gid == 1001,
+          "a public directory keeps its owner after the address space is gone");
+    check(procfs_oom_owner(7, &uid, &gid) == 0 && uid == 0 && gid == 0,
+          "a file belongs to root after the address space is gone");
+    check(procfs_pid_owner(99, 0040555u, &uid, &gid) == -ENOENT, "a missing process has no owner");
+    process.mm = saved_mm;
+    process.euid = saved_uid;
+    process.egid = saved_gid;
+    space.dumpable = saved_dumpable;
 }
 
 /** An open descriptor has its link, and one a close has marked, whose
@@ -3513,6 +3550,7 @@ int main(int argc, char **argv)
     netdev_rows();
     descriptor_links();
     task_ids();
+    task_owners();
     syscall_wchan_rows();
     mem_descriptor();
     exe_links();

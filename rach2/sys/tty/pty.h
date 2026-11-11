@@ -101,6 +101,16 @@ int pty_open_master(int flags);
  */
 int pty_open_slave(int index, int flags);
 
+struct kernel_iovec;
+
+/** Write an imported vector to the held master descriptor `e`, with the
+ * master's write lock held across every element and user copy. `iov` has
+ * `count` kernel-owned elements, range-checked and capped at USER_RW_MAX
+ * in total by `iov_import`. Returns the bytes fed before a short write or
+ * fault, or a negative errno when none were fed, as the master's write
+ * does. No bytes returns 0 without taking the lock. May sleep. */
+int32_t pty_master_writev(struct fd_entry *e, const struct kernel_iovec *iov, int count);
+
 /** Index of the pty whose slave is session `sid`'s controlling terminal, or
  * -1 (always for `sid` 0). /dev/tty opens the caller's controlling pty
  * through this. */

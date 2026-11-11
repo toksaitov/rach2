@@ -628,7 +628,7 @@ static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t a
  * (`device_fault`) or, gone, answers with SIGBUS. An
  * anonymous one gets a zeroed frame, read-only in the PTE when its region
  * is, so a later write faults; a grown stack page stays writable. One a
- * read brings in is marked PTE_ZEROFILL, and stands for Linux's zero page
+ * read brings in is marked PTE_ZEROFILL, and stands for Linux's base zero page
  * until a store sets its dirty bit or the kernel stores into its frame
  * (`page_private`, `cow_fault`, a pin). A file's
  * page is read into its frame, which may sleep, and when the regions
