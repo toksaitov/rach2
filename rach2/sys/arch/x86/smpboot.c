@@ -167,7 +167,7 @@ void smpboot_bios_restart(void)
         return;
     }
     k_memcpy(phys_to_virt(TRAMPOLINE_PHYS), bios_restart,
-             (size_t)(bios_restart_end - bios_restart));
+             (size_t)((uintptr_t)bios_restart_end - (uintptr_t)bios_restart));
     root = trampoline_root();
     cr4 = read_cr4() & ~(uintptr_t)(CR4_PGE | CR4_PCIDE);
     __asm__ __volatile__("mov %0, %%cr4\n\t"
