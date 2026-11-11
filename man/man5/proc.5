@@ -2117,6 +2117,7 @@ The system call the thread is in, in Linux's form: its number, its six
 arguments, and the user stack and instruction pointers, all but the number
 in hexadecimal with
 .Ql 0x ;
+the number and the two pointers alone when the number is negative, and
 .Ql -1
 and the two pointers when the thread entered the kernel by a fault or an
 interrupt;

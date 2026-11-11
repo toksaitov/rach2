@@ -1281,8 +1281,9 @@ static void ap_xlow(struct procfs_text *t, unsigned long v, int width)
  * caller; otherwise, from the frame of the thread's entry to the kernel,
  * "NR A0 A1 A2 A3 A4 A5 SP PC" when that entry was a system call, with the
  * number as a tracer left it (`orig_nr`) and the arguments of the call's
- * ABI, i386's for an `int $0x80` on x86-64, or "-1 SP PC" when it was a
- * fault or an interrupt, or after a signal handler's return. A leader that
+ * ABI, i386's for an `int $0x80` on x86-64; "NR SP PC" when that number is
+ * negative, and "-1 SP PC" when the entry was a fault or an interrupt, or
+ * after a signal handler's return. A leader that
  * has ended reads "-1 0x0 0x0", as Linux's, whose stack is gone, does. A
  * sleeping kernel thread, one with no address space outside an exit, reads
  * number 0 and every other field 0x0: Linux's has a stack, and the frame
@@ -1299,7 +1300,7 @@ static int procfs_gen_syscall(struct procfs_text *t, int pid)
     process_t *p = procfs_proc(pid);
     const isr_params_t *tf;
     unsigned long args[6];
-    int i;
+    int i, nr;
 
     if (!p) {
         return -ENOENT;
@@ -1320,20 +1321,19 @@ static int procfs_gen_syscall(struct procfs_text *t, int pid)
         return t->len;
     }
     tf = proc_user_frame(p);
-    if (FRAME_SYSCALL(tf) && p->orig_nr != -1) {
+    nr = FRAME_SYSCALL(tf) ? (int)p->orig_nr : -1;
+    ap_int(t, nr);
+    if (nr >= 0) {
         args[0] = SC_ARG(tf, 0);
         args[1] = SC_ARG(tf, 1);
         args[2] = SC_ARG(tf, 2);
         args[3] = SC_ARG(tf, 3);
         args[4] = SC_ARG(tf, 4);
         args[5] = SC_ARG(tf, 5);
-        ap_int(t, (int)p->orig_nr);
         for (i = 0; i < 6; i++) {
             ap_str(t, " 0x");
             ap_xlow(t, args[i], 1);
         }
-    } else {
-        ap_str(t, "-1");
     }
     ap_str(t, " 0x");
     ap_xlow(t, (unsigned long)FRAME_SP(tf), 1);
