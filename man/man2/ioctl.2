@@ -200,6 +200,30 @@ Detach the terminal if it belongs to the caller's session.
 Otherwise succeed without action.
 .El
 .Pp
+A process of a background group of the session a terminal controls that
+calls
+.Dv TCSETS
+or its kin,
+.Dv TCFLSH ,
+.Dv TCXONC
+or
+.Dv TIOCSPGRP
+on it is stopped first, as on Linux: the request posts
+.Dv SIGTTOU
+to its process group and fails with
+.Er EINTR ,
+to be restarted once the group is continued.
+A process that blocks or ignores
+.Dv SIGTTOU
+makes the request at once.
+In an orphaned process group, which no member's parent in the session
+can continue, the request fails with
+.Er EIO ,
+and
+.Dv TIOCSPGRP
+with
+.Er ENOTTY .
+.Pp
 The console alone also answers Linux's keyboard requests of
 .In linux/kd.h ,
 .Dv KDGKBTYPE ,
@@ -313,9 +337,8 @@ feed ^S and ^Q to the slave as input, unless the master's writes are
 stopped.
 .El
 .Pp
-A master's write fails with
-.Er EIO
-once every slave description has closed, as Linux's does.
+A master's write goes on after every slave description has closed, as
+Linux's does, until the slave's input is full.
 .Ss Disk requests
 Raw disk windows and loop devices with a file attached accept:
 .Bl -tag -width "BLKGETSIZE64"
@@ -833,6 +856,10 @@ A required argument or buffer cannot be read or written in user memory.
 The sector count requested by
 .Dv BLKGETSIZE
 does not fit 32 bits.
+.It Bq Er EINTR
+A signal ended a wait, or a terminal request from a background process
+group posted
+.Dv SIGTTOU .
 .It Bq Er EINVAL
 The flush selector is outside 0 through 2, the foreground group ID
 is not positive, or an interface address, mask, broadcast address, or
@@ -848,9 +875,10 @@ was given a zero size, or the console's channel is not playing.
 A keyboard request's mode, flag, keymap entry, string or accent count is
 out of range.
 .It Bq Er EIO
-The partition rescan could not read the disk's first sector, or the
+The partition rescan could not read the disk's first sector, the
 sound device failed to start the stream of
-.Dv AUDIO_START .
+.Dv AUDIO_START ,
+or a terminal request came from an orphaned background process group.
 .It Bq Er ENODEV
 The named network interface or index does not exist, or an
 .Dv AUDIO_*
@@ -877,7 +905,8 @@ A bridge or VLAN request was made.
 The object does not support the request, a disk size query has no live
 raw window, or
 .Dv TIOCSPGRP
-selected a terminal outside the caller's session.
+selected a terminal outside the caller's session or came from an
+orphaned background process group.
 .It Bq Er EOPNOTSUPP
 A clone request found nothing else wrong, a route change other than a
 default route or addition of the existing subnet route was requested, or

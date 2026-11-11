@@ -2073,6 +2073,33 @@ static int32_t tty_flush_at(struct tty *t, uintptr_t which)
 }
 
 /**
+ * The job-control check (`tty_job_check`, SIGTTOU) of a terminal request that
+ * changes `t`, as Linux's tty_check_change: TCSETS and its kin, TCFLSH,
+ * TCXONC and TIOCSPGRP, whose EIO for an orphaned group Linux's tiocspgrp
+ * turns into ENOTTY. Returns 0 for any other request.
+ */
+static int32_t tty_job_gate(struct tty *t, uint32_t request)
+{
+    int rc;
+
+    switch (request) {
+    case TCSETS:
+    case TCSETSW:
+    case TCSETSF:
+    case TCSETS2:
+    case TCSETSW2:
+    case TCSETSF2:
+    case TCFLSH:
+    case TCXONC:
+    case TIOCSPGRP:
+        rc = tty_job_check(t, SIGTTOU);
+        return request == TIOCSPGRP && rc == -EIO ? -ENOTTY : rc;
+    default:
+        return 0;
+    }
+}
+
+/**
  * The terminal ioctls of the tty `t`.
  *
  * The termios requests and the session and job-control requests, which the
@@ -2088,6 +2115,12 @@ static int32_t tty_flush_at(struct tty *t, uintptr_t which)
  * just arrived is counted. TCFLSH discards the queues (`tty_flush_at`), and
  * TCXONC stops and restarts output or sends VSTOP and VSTART (`tty_tcflow`).
  *
+ * A process of a background group of the session the terminal controls is
+ * stopped with SIGTTOU before TCSETS and its kin, TCFLSH, TCXONC and
+ * TIOCSPGRP, unless it blocks or ignores the signal (`tty_job_check`), as
+ * Linux's tty_check_change; an orphaned group's call is EIO, and its
+ * TIOCSPGRP ENOTTY, as Linux's tiocspgrp turns that EIO.
+ *
  * TIOCSPGRP needs the caller's session to be the one the terminal controls,
  * checked before the argument, as on Linux (-ENOTTY), and a group in that
  * session (`pgrp_in_session`, -EPERM). TIOCSCTTY lets a session leader take
@@ -2101,7 +2134,12 @@ static int32_t tty_flush_at(struct tty *t, uintptr_t which)
  */
 static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uintptr_t arg, int *handled)
 {
+    int32_t rc = tty_job_gate(t, request);
+
     *handled = 1;
+    if (rc != 0) {
+        return rc;
+    }
     switch (request) {
     case TCGETS:
     case TCGETS2:

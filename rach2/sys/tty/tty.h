@@ -164,6 +164,17 @@ int tty_console_owned_by_leader(int sid, int pid);
 int tty_is_background(struct tty *t, int sid, int pgid);
 
 /**
+ * The job-control check of a background process on its controlling terminal
+ * `t`, as Linux's tty_check_change for `signo` SIGTTOU and the read's check
+ * for SIGTTIN. Returns 0 when the caller is not in the background of `t`, or
+ * blocks or ignores SIGTTOU; -EIO when it blocks or ignores SIGTTIN, or its
+ * group is orphaned; and otherwise sends `signo` to its group and returns
+ * -EINTR. A read of `t` runs it for SIGTTIN; a write under TOSTOP, and
+ * TCSETS and its kin, TCFLSH, TCXONC and TIOCSPGRP, for SIGTTOU.
+ */
+int tty_job_check(struct tty *t, int signo);
+
+/**
  * Run the screen's blanking countdown (`blank_tick`) and service the
  * console's serial port, from the boot processor's timer tick with
  * interrupts off; the port's interrupt services the port alone. Servicing

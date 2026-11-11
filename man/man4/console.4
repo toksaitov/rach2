@@ -156,7 +156,14 @@ A background write generates
 only when
 .Dv TOSTOP
 is set.
-If the applicable signal is blocked or ignored, the operation fails with
+A blocked or ignored
+.Dv SIGTTIN
+fails the read with
+.Er EIO ,
+and a blocked or ignored
+.Dv SIGTTOU
+lets the write go ahead, as on Linux; in an orphaned process group
+either fails with
 .Er EIO .
 .Ss Screen
 The screen is a terminal whose escape sequences the terminfo entry
