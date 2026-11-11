@@ -376,6 +376,12 @@ int serial_rx_service(int budget)
     return 0;
 }
 
+/** 0: the port has no receive interrupt, and the tick reads it each time. */
+int serial_rx_irq_proven(void)
+{
+    return 0;
+}
+
 /** -1: no serial input has a signal character. */
 int serial_rx_find(const unsigned char *set, int n)
 {

@@ -1079,9 +1079,21 @@ void tty_console_counters(struct console_counters *out)
     kirq_restore(flags);
 }
 
+/* The ticks between two readings of the port by the tick once its receive
+ * interrupt has taken a byte: Linux's 8250 backup timer, a fifth of a second
+ * (drivers/tty/serial/8250/8250_core.c:262-285), which reads again a port
+ * whose interrupt edge was lost. Linux reads a port that has an interrupt
+ * from no timer but that one, and a port without one at every poll. */
+#define CONSOLE_BACKUP_TICKS (TICK_HZ / 5)
+
+static void console_deliver(void);
+
 /**
  * The UART's bytes go to the ring first, so a port whose interrupt is not
- * enabled is still served every tick. A reader or poller parked on the
+ * enabled, or has never taken a byte, is still read every tick; once the
+ * interrupt has taken one, the tick reads the port every
+ * CONSOLE_BACKUP_TICKS, and the interrupt takes the rest. A reader or
+ * poller parked on the
  * console, which nothing else would tell of serial input while another
  * process runs, is then only woken: it drains and echoes the ring in its own
  * context (console_pump). With nobody parked and a session owning the
@@ -1094,8 +1106,15 @@ void tty_console_counters(struct console_counters *out)
  */
 void tty_console_poll(void)
 {
+    static uint32_t read_at; /* the low half of `kernel_ticks` at the next reading */
+    uint32_t now = (uint32_t)kernel_ticks;
+
     blank_tick();
-    console_service();
+    if (!serial_rx_irq_proven() || (int32_t)(now - read_at) >= 0) {
+        read_at = now + CONSOLE_BACKUP_TICKS;
+        serial_rx_service(TTY_PUMP_BUDGET);
+    }
+    console_deliver();
 }
 
 /** Service the console's serial port, as `tty_console_poll` describes; the
@@ -1103,6 +1122,14 @@ void tty_console_poll(void)
 static void console_service(void)
 {
     serial_rx_service(TTY_PUMP_BUDGET);
+    console_deliver();
+}
+
+/** Wake a reader or poller parked on the console when the ring holds bytes,
+ * or with none parked and a session owning the console drain the ring into
+ * the discipline, as `tty_console_poll` describes; no port access. */
+static void console_deliver(void)
+{
     if (!serial_data_available() || console_serial_closed()) {
         return;
     }
