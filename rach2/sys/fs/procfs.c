@@ -24,6 +24,7 @@
 
 #include "../latency.h"
 #include "../dmabuf/dmabuf.h"
+#include "../drm/virtio_gpu.h"
 #include "../network/ip/ip.h"
 #include "../network/ip6/ip6.h"
 #include "../network/ip6/route6.h"
@@ -3845,6 +3846,11 @@ static int procfs_gen_statsys(struct procfs_text *t)
     procfs_work_counts(t);
     procfs_kvm_counts(t);
     procfs_assignment_counts(t);
+#ifndef RACH2_HOSTTEST
+    ap_str(t, "virtio_gpu_copied_bytes ");
+    ap_u64(t, virtio_gpu_copied_bytes());
+    ap_ch(t, '\n');
+#endif
     ap_str(t, "latency_timer_us ");
     ap_u32(t, latency_max(LAT_TIMER));
     ap_str(t, "\nlatency_disk_us ");

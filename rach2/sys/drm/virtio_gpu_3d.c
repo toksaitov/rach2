@@ -468,6 +468,48 @@ static void transfer_done(struct virtio_gpu_cmd *cmd)
     drm_gem_object_put(cmd->arg);
 }
 
+/* Bytes the device copied for transfers since boot, both ways, which
+ * /proc/stat reports as virtio_gpu_copied_bytes; under the big lock. */
+static uint64_t vgpu_copied;
+
+/** The bytes of a texel of virgl format `format`, as Mesa's virgl_hw.h
+ * numbers them: the 8-, 16-, 64- and 128-bit formats virgl's transfers
+ * carry, and 4 for any other. */
+static uint32_t texel_bytes(uint32_t format)
+{
+    switch (format) {
+    case 9:  /* L8_UNORM */
+    case 10: /* A8_UNORM */
+    case 23: /* S8_UINT */
+    case 64: /* R8_UNORM, every buffer's */
+        return 1;
+    case 5:  /* B5G5R5A1_UNORM */
+    case 6:  /* B4G4R4A4_UNORM */
+    case 7:  /* B5G6R5_UNORM */
+    case 12: /* L8A8_UNORM */
+    case 13: /* L16_UNORM */
+    case 16: /* Z16_UNORM */
+    case 65: /* R8G8_UNORM */
+        return 2;
+    case 29: /* R32G32_FLOAT */
+        return 8;
+    case 31: /* R32G32B32A32_FLOAT */
+        return 16;
+    default:
+        return 4;
+    }
+}
+
+void vgpu_count_copied(uint64_t bytes)
+{
+    vgpu_copied += bytes;
+}
+
+uint64_t virtio_gpu_copied_bytes(void)
+{
+    return vgpu_copied;
+}
+
 /**
  * Queue an upload or readback, keeping its buffer until completion, as
  * Linux: a blob of guest memory alone has no host copy and is refused, and
@@ -537,6 +579,8 @@ int32_t vgpu_transfer_3d_ioctl(struct drm_device *dev, void *data, struct drm_fi
     vgpu_cmd_prepare(cmd);
     rc = dma_resv_add_fence(obj->resv, cmd->fence, 1);
     if (!rc) {
+        vgpu_count_copied((uint64_t)a->box.w * a->box.h * (a->box.d ? a->box.d : 1) *
+                          texel_bytes(bo->format));
         vgpu_cmd_send(cmd, transfer_done, obj);
         return 0;
     }
