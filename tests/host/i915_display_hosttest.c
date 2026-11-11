@@ -267,6 +267,9 @@ static struct drm_i915_private gpu;
 /* The page flips RPS counts pending, as i915_rps_mark_interactive keeps
  * them, never below none. */
 static int interactive;
+/* The waitboosts asked, and the request of the last. */
+static int boosts_done;
+static struct i915_request *boosted_last;
 static struct drm_driver driver;
 static struct drm_file fa;
 static struct i915_model model;
@@ -812,12 +815,13 @@ static void row_async(void)
 }
 
 /**
- * A commit's interactive mark of RPS, which Linux keeps until each of the
- * commit's flips ends: with pipes B and C both pending, each takes a mark
- * of its own and lets it go when its own flip ends, so the count stays up
- * until the last; a failed commit leaves none. `interactive_handover` is
- * driven directly, the pipes' pending flips set by hand, since the model
- * lights pipe A alone.
+ * A commit's interactive mark of RPS, one a commit as Linux's
+ * state->rps_interactive, kept until each of the commit's flips ends: a
+ * commit on pipes B and C counts one mark, which the later of the two
+ * flips lets go; a second commit, on pipe A, counts one of its own; a
+ * failed commit leaves none. `interactive_handover` is driven directly,
+ * the pipes' pending flips set by hand, since the model lights pipe A
+ * alone and no frame runs meanwhile.
  */
 static void row_interactive(void)
 {
@@ -827,22 +831,77 @@ static void row_interactive(void)
     b->base.flip_pending = c->base.flip_pending = DRM_FLIP_ARMED;
     i915_rps_mark_interactive(&gpu, 1);
     interactive_handover(&gpu, 6u, 0);
-    CHECK(interactive == n0 + 2 && b->rps_interactive && c->rps_interactive,
-          "interactive: each pending pipe of the commit holds a mark");
+    CHECK(interactive == n0 + 1 && b->rps_mark && b->rps_mark == c->rps_mark,
+          "interactive: the commit's pending pipes share one mark");
+    pa->base.flip_pending = DRM_FLIP_ARMED;
+    i915_rps_mark_interactive(&gpu, 1);
+    interactive_handover(&gpu, 1u, 0);
+    CHECK(interactive == n0 + 2 && pa->rps_mark && pa->rps_mark != b->rps_mark,
+          "interactive: a second commit counts a mark of its own");
+    pa->base.flip_pending = DRM_FLIP_NONE;
+    intel_crtc_interactive_end(pa);
+    CHECK(interactive == n0 + 1 && !pa->rps_mark, "interactive: its flip ends, its mark goes");
     b->base.flip_pending = DRM_FLIP_NONE;
     intel_crtc_interactive_end(b);
-    CHECK(interactive == n0 + 1 && !b->rps_interactive && c->rps_interactive,
-          "interactive: pipe B's flip ends, pipe C's mark stays");
+    CHECK(interactive == n0 + 1 && !b->rps_mark && c->rps_mark,
+          "interactive: pipe B's flip ends, the commit's mark stays for pipe C");
     c->base.flip_pending = DRM_FLIP_NONE;
     intel_crtc_interactive_end(c);
-    CHECK(interactive == n0 && !c->rps_interactive,
-          "interactive: the last flip ends, no mark left");
+    CHECK(interactive == n0 && !c->rps_mark, "interactive: the last flip ends, no mark left");
     b->base.flip_pending = c->base.flip_pending = DRM_FLIP_ARMED;
     i915_rps_mark_interactive(&gpu, 1);
     interactive_handover(&gpu, 6u, -EBUSY);
-    CHECK(interactive == n0 && !b->rps_interactive && !c->rps_interactive,
+    CHECK(interactive == n0 && !b->rps_mark && !c->rps_mark,
           "interactive: a failed commit leaves no mark");
     b->base.flip_pending = c->base.flip_pending = DRM_FLIP_NONE;
+}
+
+/**
+ * The boosts at the vblank, Linux's intel_display_rps_boost_after_vblank
+ * and do_rps_boost: a flip whose in-fence is another driver's boosts
+ * nothing and takes no other fence in its place; one whose in-fence is an
+ * i915 request, and a second commit's request before the vblank, keep an
+ * entry each; the vblank boosts the request the chip has not begun and
+ * lets both go; and a pipe whose vblanks go off ends its boosts at once,
+ * as Linux's drm_crtc_vblank_off wakes their waits.
+ */
+static void row_boosts(void)
+{
+    static const struct dma_fence_ops other_ops = {0, 0, 0, 0};
+    struct intel_crtc *b = &gpu.display.crtc[1];
+    struct i915_request rq[3];
+    struct dma_fence other;
+    struct drm_plane_state ps;
+    int n0 = boosts_done, refs0 = fence_refs;
+
+    k_memset(rq, 0, sizeof(rq));
+    k_memset(&other, 0, sizeof(other));
+    k_memset(&ps, 0, sizeof(ps));
+    rq[0].fence.base.ops = rq[1].fence.base.ops = rq[2].fence.base.ops = &i915_fence_ops;
+    other.ops = &other_ops;
+    ps.fence = unsignaled = &other;
+    flip_boost(pa, &ps);
+    CHECK(!pa->boosts && fence_refs == refs0,
+          "boosts: another driver's in-fence boosts nothing, and no other fence in its place");
+    ps.fence = unsignaled = &rq[0].fence.base;
+    flip_boost(pa, &ps);
+    intel_crtc_boost_after_vblank(pa, &rq[1].fence.base);
+    CHECK(pa->boosts && pa->boosts->next && !pa->boosts->next->next && fence_refs == refs0 + 2,
+          "boosts: an i915 in-fence and a second commit's request keep an entry each");
+    rq[1].fence.base.signaled = 1;
+    frame();
+    CHECK(boosts_done == n0 + 1 && boosted_last == &rq[0] && !pa->boosts && fence_refs == refs0,
+          "boosts: the vblank boosts the request not begun alone and lets both go");
+    /* Pipe B's vblanks on as a mode set turns them on; their off leaves
+     * them held off again, as the core's reset made them. */
+    drm_crtc_vblank_on(&b->base);
+    intel_crtc_boost_after_vblank(b, &rq[2].fence.base);
+    CHECK(b->boosts && fence_refs == refs0 + 1, "boosts: one on pipe B");
+    intel_crtc_vblank_off(b);
+    CHECK(!b->boosts && boosts_done == n0 + 2 && boosted_last == &rq[2] && fence_refs == refs0 &&
+              b->base.vblank.inmodeset && b->base.vblank.refs == 1,
+          "boosts: pipe B's vblanks off end it at once, boosted");
+    unsignaled = 0;
 }
 
 /** The vblanks of the frame counter while the interrupt was off are
@@ -1592,10 +1651,11 @@ int i915_request_started(const struct i915_request *rq)
     return rq->fence.base.signaled;
 }
 
-/** The waitboost, RPS's, which no row here measures. */
+/** The waitboost, RPS's, counted. */
 void i915_rps_boost(struct i915_request *rq)
 {
-    (void)rq;
+    boosts_done++;
+    boosted_last = rq;
 }
 
 /** A page flip pending, with `on`, or done, counted in `interactive`. */
@@ -1622,6 +1682,7 @@ int main(void)
     row_flip();
     row_async();
     row_interactive();
+    row_boosts();
     row_count();
     row_primary();
     row_addfb_tiling();

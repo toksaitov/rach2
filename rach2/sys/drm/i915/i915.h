@@ -1265,8 +1265,9 @@ struct intel_boost {
  * interrupts' masking, the requests drawing flips that the next vblank
  * boosts if the chip has not begun them, one entry for each call of
  * `intel_crtc_boost_after_vblank`, Linux's wait_rps_boost;
- * `rps_interactive` says the pipe holds a commit's interactive mark of
- * RPS (`i915_rps_mark_interactive`) until its pending flip ends.
+ * `rps_mark` is 1 more than the slot of the display's `rps_marks` whose
+ * commit's interactive mark of RPS (`i915_rps_mark_interactive`) the pipe
+ * holds until its pending flip ends, 0 for none.
  */
 struct intel_crtc {
     struct drm_crtc base;
@@ -1293,7 +1294,7 @@ struct intel_crtc {
     struct intel_scanout parked[INTEL_NUM_PLANES];
     uint32_t shown_from[INTEL_NUM_PLANES], shown_to[INTEL_NUM_PLANES];
     struct intel_boost *boosts;
-    uint8_t rps_interactive;
+    uint8_t rps_mark;
 };
 
 /*
@@ -1319,11 +1320,16 @@ struct intel_crtc {
  * `bl_min` the least the VBT allows, `bl_dark` says the class asked for its
  * level 0, which Linux shows by turning the backlight off, and `bl_alt` says
  * the PCH counts the PWM in its coarse steps (LPT_PWM_GRANULARITY). `vga_off`
- * says the VGA plane has been turned off. `ready` is set once the device's mode
- * configuration is made, which its release frees.
+ * says the VGA plane has been turned off. `rps_marks` are the interactive
+ * marks of the commits whose flips are pending, one a commit as Linux's
+ * state->rps_interactive, each a bit for every pipe that holds it, 0 when
+ * the slot is free; a pipe holds one at most, so a slot is always free for
+ * a commit, under the interrupts' masking. `ready` is set once the device's
+ * mode configuration is made, which its release frees.
  */
 struct intel_display {
     struct intel_crtc crtc[I915_NUM_PIPES];
+    uint8_t rps_marks[I915_NUM_PIPES];
     struct drm_encoder encoder;
     struct drm_connector connector;
     struct intel_dp dp;
@@ -2793,9 +2799,16 @@ void intel_vblank_fini(struct drm_i915_private *i915);
  * pending. */
 void intel_crtc_send_event(struct intel_crtc *crtc);
 
-/** Let `c`'s interactive mark go once its flip is no longer pending, as
- * Linux's intel_cleanup_plane_fb after the flip. Interrupts masked. */
+/** Let `c` go of its commit's interactive mark once its flip is no longer
+ * pending, and the mark go with the last of the commit's pipes, as Linux's
+ * intel_cleanup_plane_fb after the commit's flips. Interrupts masked. */
 void intel_crtc_interactive_end(struct intel_crtc *c);
+
+/** Turn `c`'s vblanks off as its pipe goes off (`drm_crtc_vblank_off`),
+ * and end its pending boosts as Linux's drm_crtc_vblank_off wakes their
+ * waits: each request the chip has not begun is boosted and let go with
+ * its vblank reference, as do_rps_boost does. Process context. */
+void intel_crtc_vblank_off(struct intel_crtc *c);
 
 /**
  * Boost the GT's clock at the next vblank of `c` for `fence`, the request
