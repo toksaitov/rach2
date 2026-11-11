@@ -39,6 +39,21 @@ void arch_idle_masked(void)
                          : "memory");
 }
 
+/* arch_guest's answer: -1 until read, then 0 or 1. Every processor reads
+ * the same bit, so two that read it at once store the same. */
+static volatile int guest = -1;
+
+int arch_guest(void)
+{
+    uint32_t c = 0;
+
+    if (guest < 0) {
+        kcpu_id(1, NULL, NULL, &c, NULL);
+        guest = (c >> 31) & 1u;
+    }
+    return guest;
+}
+
 void arch_stop(void)
 {
     for (;;) {

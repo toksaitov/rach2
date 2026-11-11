@@ -118,6 +118,34 @@ int klog_inside(void)
     return 0;
 }
 
+/** 0: the model's counter is not measured, so an idle wait does not poll. */
+uint32_t timer_calibrate(void)
+{
+    return 0;
+}
+
+/** 0: the model is no guest, the other reason an idle wait does not poll. */
+int arch_guest(void)
+{
+    return 0;
+}
+
+/** 0: no row reads the cycle counter but an idle wait's poll, which none
+ * runs. */
+uint64_t arch_cycles(void)
+{
+    return 0;
+}
+
+/** `n` divided by `d`, the remainder through `rem` unless it is NULL. */
+uint64_t tick_div(uint64_t n, uint32_t d, uint32_t *rem)
+{
+    if (rem) {
+        *rem = (uint32_t)(n % d);
+    }
+    return n / d;
+}
+
 /** Nothing: no process arms a timer of processor time, which would post a
  * signal. */
 void signal_post(process_t *target, int signo)

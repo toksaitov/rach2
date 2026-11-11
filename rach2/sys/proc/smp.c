@@ -1442,7 +1442,9 @@ void smp_ipi(void)
 
 void smp_kick(int cpu)
 {
-    if (cpu != (int)arch_cpu_id() && cpu_table[cpu].online) {
+    if (cpu != (int)arch_cpu_id() && cpu_table[cpu].online &&
+        arch_atomic_cmpxchg(&cpu_table[cpu].idle_poll, CPU_POLL_ON, CPU_POLL_KICKED) !=
+            CPU_POLL_ON) {
         platform_cpu_ipi(cpu);
     }
 }
