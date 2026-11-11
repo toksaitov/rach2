@@ -59,6 +59,42 @@ static uint64_t bkl_hold_early_cycles[BKL_SAMPLE_MARKS];
 static uint64_t bkl_entry_cycles[BKL_ENTRY_KEYS];
 static uint32_t bkl_entry_holds[BKL_ENTRY_KEYS];
 
+/* What `smp_calls_show` counts for an entry or an ioctl request since boot
+ * or the last zeroing, in TSC cycles. A system call's `calls` and `wall`
+ * count at its return, an interrupt's or an exception's `calls` at its entry;
+ * the holds are counted as `bkl_entry_cycles` counts them. */
+struct bkl_call_count {
+    uint64_t wall;   /* from before the entry's lock to the return */
+    uint64_t held;   /* the holds charged to it */
+    uint64_t waited; /* the waits for the lock that began those holds */
+    uint32_t calls;
+    uint32_t holds;
+};
+static struct bkl_call_count bkl_calls[BKL_ENTRY_KEYS];
+
+/* The ioctl requests by request number, open addressed; a slot once taken
+ * keeps its request until boot, so a charge to it is never misplaced. */
+struct bkl_ioctl_count {
+    uint32_t cmd;
+    uint32_t used;
+    struct bkl_call_count count;
+};
+static struct bkl_ioctl_count bkl_ioctls[BKL_IOCTL_SLOTS];
+static uint32_t bkl_ioctls_lost; /* calls of a request no slot took */
+
+/* The profile of the kernel under the big lock: each sampled instruction
+ * with its caller, open addressed, and the samples taken and lost. */
+struct bkl_profile_slot {
+    uintptr_t pc;
+    uintptr_t caller; /* 0 when the frame chain gave none */
+    uint32_t count;
+};
+static struct bkl_profile_slot bkl_profile[BKL_PROFILE_SLOTS];
+static uint32_t bkl_profile_samples, bkl_profile_lost;
+
+/* The probes an open-addressed table makes before it gives up. */
+#define BKL_PROBES 32
+
 /* Set once the first hold, the boot processor's start-up, has ended. */
 static int bkl_booted;
 
@@ -138,6 +174,7 @@ static void bkl_acquire(struct percpu *cpu)
     waketime_lock(wake_wait);
     k_memset(bkl_early_cycles[arch_cpu_id()], 0, sizeof(bkl_early_cycles[0]));
     waited = cpu->bkl_since - start;
+    cpu->bkl_waited = waited;
     bkl_wait_cycles += waited;
     if (waited > bkl_wait_max_cycles) {
         bkl_wait_max_cycles = waited;
@@ -153,16 +190,28 @@ static void bkl_acquire(struct percpu *cpu)
 /** Count the hold that ends now on `cpu`, which still holds the lock, under
  * its entry and against the longest. The first hold to end, the boot
  * processor's start-up, which nobody waits on, is left out. */
+/** Add a hold of `held` cycles that waited `waited` for the lock to `c`. */
+static void call_hold(struct bkl_call_count *c, uint64_t held, uint64_t waited)
+{
+    c->held += held;
+    c->waited += waited;
+    c->holds++;
+}
+
 static void bkl_hold_end(struct percpu *cpu)
 {
-    uint64_t held = arch_cycles() - cpu->bkl_since;
+    uint64_t held = arch_cycles() - cpu->bkl_since, waited;
     int c = arch_cpu_id();
-    int key;
+    int key, ioctl;
 
     bkl_recent[bkl_releases % BKL_WAIT_HOLDS].cycles = held;
     bkl_recent[bkl_releases % BKL_WAIT_HOLDS].vector = cpu->bkl_vector;
     bkl_recent[bkl_releases % BKL_WAIT_HOLDS].nr = cpu->bkl_nr;
     bkl_releases++;
+    waited = cpu->bkl_waited;
+    ioctl = cpu->bkl_ioctl;
+    cpu->bkl_waited = 0;
+    cpu->bkl_ioctl = 0;
     if (!bkl_booted) {
         bkl_booted = 1;
         return;
@@ -174,6 +223,10 @@ static void bkl_hold_end(struct percpu *cpu)
     }
     bkl_entry_cycles[key] += held;
     bkl_entry_holds[key]++;
+    call_hold(&bkl_calls[key], held, waited);
+    if (ioctl > 0) {
+        call_hold(&bkl_ioctls[ioctl - 1].count, held, waited);
+    }
     if (held > bkl_hold_max_cycles) {
         bkl_hold_max_cycles = held;
         bkl_hold_vector = cpu->bkl_vector;
@@ -190,6 +243,9 @@ void bkl_note_entry(uint32_t vector, int32_t nr)
     if (cpu->bkl_depth == 1) {
         cpu->bkl_vector = vector;
         cpu->bkl_nr = nr;
+        if (nr < 0) {
+            bkl_calls[BKL_ENTRY_SYSCALLS + (int)(vector & 0xffu)].calls++;
+        }
     }
 }
 
@@ -292,6 +348,240 @@ void smp_hold_early(int mark, uint64_t *age_us, uintptr_t pc[BKL_SAMPLE_PCS])
     }
 }
 
+int bkl_note_ioctl(uint32_t cmd)
+{
+    struct percpu *cpu = this_cpu();
+    uint32_t h = (cmd * 2654435761u) % BKL_IOCTL_SLOTS;
+    int i;
+
+    for (i = 0; i < BKL_PROBES; i++) {
+        struct bkl_ioctl_count *s = &bkl_ioctls[(h + (uint32_t)i) % BKL_IOCTL_SLOTS];
+
+        if (!s->used) {
+            s->used = 1;
+            s->cmd = cmd;
+        }
+        if (s->cmd == cmd) {
+            if (cpu->bkl_depth == 1) {
+                cpu->bkl_ioctl = (int)((h + (uint32_t)i) % BKL_IOCTL_SLOTS) + 1;
+            }
+            return (int)((h + (uint32_t)i) % BKL_IOCTL_SLOTS) + 1;
+        }
+    }
+    bkl_ioctls_lost++;
+    return 0;
+}
+
+void smp_call_end(uint32_t nr, int ioctl, uint64_t start)
+{
+    uint64_t wall = arch_cycles() - start;
+    struct bkl_call_count *c = &bkl_calls[nr < BKL_ENTRY_SYSCALLS ? (int)nr : BKL_ENTRY_KEYS - 1];
+
+    c->calls++;
+    c->wall += wall;
+    if (ioctl > 0) {
+        bkl_ioctls[ioctl - 1].count.calls++;
+        bkl_ioctls[ioctl - 1].count.wall += wall;
+    }
+}
+
+void bkl_profile_sample(uintptr_t pc, uintptr_t fp)
+{
+    struct percpu *cpu = this_cpu();
+    uintptr_t chain[BKL_SAMPLE_PCS], h;
+    int i;
+
+    if (cpu->bkl_depth < 2) {
+        return;
+    }
+    sample_chain(chain, pc, fp, cpu->current ? cpu->current->kernel_stack : 0);
+    bkl_profile_samples++;
+    h = (pc ^ (chain[1] * 31u)) >> 2;
+    for (i = 0; i < BKL_PROBES; i++) {
+        struct bkl_profile_slot *s = &bkl_profile[(h + (uintptr_t)i) % BKL_PROFILE_SLOTS];
+
+        if (s->count == 0) {
+            s->pc = pc;
+            s->caller = chain[1];
+        }
+        if (s->pc == pc && s->caller == chain[1]) {
+            s->count++;
+            return;
+        }
+    }
+    bkl_profile_lost++;
+}
+
+/* A text being written into a buffer of `cap` bytes, `len` its whole length
+ * so far, which may pass `cap`; what passes it is counted, not written. */
+struct bkl_text {
+    char *buf;
+    uint32_t cap;
+    uint32_t len;
+};
+
+/** Append the character `c` to `t`. */
+static void text_ch(struct bkl_text *t, char c)
+{
+    if (t->len < t->cap) {
+        t->buf[t->len] = c;
+    }
+    t->len++;
+}
+
+/** Append the string `s` to `t`. */
+static void text_str(struct bkl_text *t, const char *s)
+{
+    while (*s) {
+        text_ch(t, *s++);
+    }
+}
+
+/** Append `v` to `t` in decimal, by subtracting powers of ten, since i686's
+ * kernel has no 64-bit division (no libgcc). */
+static void text_dec(struct bkl_text *t, uint64_t v)
+{
+    uint64_t powers[20];
+    int n, digit, shown = 0;
+
+    powers[0] = 1u;
+    for (n = 1; n < 20; n++) {
+        powers[n] = powers[n - 1] * 10u;
+    }
+    for (n = 19; n >= 0; n--) {
+        for (digit = 0; v >= powers[n]; digit++) {
+            v -= powers[n];
+        }
+        if (digit != 0 || shown || n == 0) {
+            text_ch(t, (char)('0' + digit));
+            shown = 1;
+        }
+    }
+}
+
+/** Append `v` to `t` as `0x` and its hex digits, without leading zeros. */
+static void text_hex(struct bkl_text *t, uint64_t v)
+{
+    char digits[16];
+    int n = 0;
+
+    do {
+        digits[n++] = "0123456789abcdef"[v & 0xfu];
+        v >>= 4;
+    } while (v != 0);
+    text_str(t, "0x");
+    while (n > 0) {
+        text_ch(t, digits[--n]);
+    }
+}
+
+/** Append the line of `c`: `kind`, `number` (in hex for `hex`) and its
+ * counts, the times in microseconds; nothing when `c` counts nothing. */
+static void text_count(struct bkl_text *t, const char *kind, uint64_t number, int hex,
+                       const struct bkl_call_count *c)
+{
+    if (c->calls == 0 && c->holds == 0) {
+        return;
+    }
+    text_str(t, kind);
+    text_ch(t, ' ');
+    if (hex) {
+        text_hex(t, number);
+    } else {
+        text_dec(t, number);
+    }
+    text_ch(t, ' ');
+    text_dec(t, c->calls);
+    text_ch(t, ' ');
+    text_dec(t, timer_cycles_us(c->wall));
+    text_ch(t, ' ');
+    text_dec(t, c->holds);
+    text_ch(t, ' ');
+    text_dec(t, timer_cycles_us(c->held));
+    text_ch(t, ' ');
+    text_dec(t, timer_cycles_us(c->waited));
+    text_ch(t, '\n');
+}
+
+int32_t smp_calls_show(void *data, char *buf, uint32_t cap)
+{
+    struct bkl_text t;
+    int key;
+
+    (void)data;
+    t.buf = buf;
+    t.cap = cap;
+    t.len = 0;
+    text_str(&t, "kind number calls wall_us holds held_us wait_us\n");
+    for (key = 0; key < BKL_ENTRY_SYSCALLS; key++) {
+        text_count(&t, "syscall", (uint64_t)key, 0, &bkl_calls[key]);
+    }
+    text_count(&t, "syscall", BKL_ENTRY_SYSCALLS, 0, &bkl_calls[BKL_ENTRY_KEYS - 1]);
+    for (key = BKL_ENTRY_SYSCALLS; key < BKL_ENTRY_KEYS - 1; key++) {
+        text_count(&t, "vector", (uint64_t)(key - BKL_ENTRY_SYSCALLS), 0, &bkl_calls[key]);
+    }
+    for (key = 0; key < BKL_IOCTL_SLOTS; key++) {
+        if (bkl_ioctls[key].used) {
+            text_count(&t, "ioctl", bkl_ioctls[key].cmd, 1, &bkl_ioctls[key].count);
+        }
+    }
+    text_str(&t, "ioctl_lost ");
+    text_dec(&t, bkl_ioctls_lost);
+    text_ch(&t, '\n');
+    return (int32_t)t.len;
+}
+
+int32_t smp_calls_store(void *data, const char __user *buf, uint32_t len)
+{
+    int i;
+
+    (void)data;
+    (void)buf;
+    k_memset(bkl_calls, 0, sizeof(bkl_calls));
+    for (i = 0; i < BKL_IOCTL_SLOTS; i++) {
+        k_memset(&bkl_ioctls[i].count, 0, sizeof(bkl_ioctls[i].count));
+    }
+    bkl_ioctls_lost = 0;
+    return (int32_t)len;
+}
+
+int32_t smp_profile_show(void *data, char *buf, uint32_t cap)
+{
+    struct bkl_text t;
+    int i;
+
+    (void)data;
+    t.buf = buf;
+    t.cap = cap;
+    t.len = 0;
+    text_str(&t, "samples ");
+    text_dec(&t, bkl_profile_samples);
+    text_str(&t, "\nlost ");
+    text_dec(&t, bkl_profile_lost);
+    text_ch(&t, '\n');
+    for (i = 0; i < BKL_PROFILE_SLOTS; i++) {
+        if (bkl_profile[i].count != 0) {
+            text_hex(&t, bkl_profile[i].pc);
+            text_ch(&t, ' ');
+            text_hex(&t, bkl_profile[i].caller);
+            text_ch(&t, ' ');
+            text_dec(&t, bkl_profile[i].count);
+            text_ch(&t, '\n');
+        }
+    }
+    return (int32_t)t.len;
+}
+
+int32_t smp_profile_store(void *data, const char __user *buf, uint32_t len)
+{
+    (void)data;
+    (void)buf;
+    k_memset(bkl_profile, 0, sizeof(bkl_profile));
+    bkl_profile_samples = 0;
+    bkl_profile_lost = 0;
+    return (int32_t)len;
+}
+
 void bkl_enter(void)
 {
     uint32_t flags = kirq_save();
@@ -315,6 +605,7 @@ int bkl_try_enter(void)
             return 0;
         }
         cpu->bkl_since = arch_cycles();
+        cpu->bkl_waited = 0;
         k_memset(bkl_early_cycles[arch_cpu_id()], 0, sizeof(bkl_early_cycles[0]));
         cpu->bkl_vector = 0;
         cpu->bkl_nr = -1;

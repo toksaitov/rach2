@@ -28,6 +28,7 @@
 #include "sys/mm/modlayout.h"
 #include "sys/block/mbr.h"
 #include "sys/block/loop.h"
+#include "sys/fs/debugfs.h"
 #include "sys/fs/devfs.h"
 #include "sys/fs/procfs.h"
 #include "sys/fs/vfs.h"
@@ -3968,6 +3969,21 @@ static void start_network(void)
     (void)ath9k_probe();
 }
 
+/* debugfs's bkl/calls and bkl/profile, the counts of system calls and
+ * entries with their holds of the big lock, and the samples of the kernel
+ * under it, which a write zeroes (proc/smp.c). */
+static const struct debugfs_text_ops bkl_calls_ops = {smp_calls_show, smp_calls_store};
+static const struct debugfs_text_ops bkl_profile_ops = {smp_profile_show, smp_profile_store};
+
+/** Register bkl/calls and bkl/profile in debugfs; a failure is logged. */
+static void bkl_debugfs_start(void)
+{
+    if (debugfs_create_text("bkl/calls", 0644u, &bkl_calls_ops, NULL) != 0 ||
+        debugfs_create_text("bkl/profile", 0644u, &bkl_profile_ops, NULL) != 0) {
+        klog(KLOG_WARN, "bkl", "debugfs: files not registered");
+    }
+}
+
 /**
  * The order of the boot is the hardware's and the allocator's.
  *
@@ -4357,6 +4373,7 @@ void kernel_main(const struct boot_info *boot)
     }
 
     smp_start();
+    bkl_debugfs_start();
     vclock_start();
 
     rescue_mode = kcmdline_has("rach2.rescue") || kcmdline_has("init=rescue");
