@@ -6079,11 +6079,20 @@ static const int thp_shmem_order[] = {0, 2, 3, 1, 4, 5};
 
 /* The policy as Linux 6.12 boots with CONFIG_TRANSPARENT_HUGEPAGE_NEVER:
  * indexes into the words above for the first three, and flags for the
- * huge zero page and the splitting of underused huge pages. Root's writes
- * change them; no page is ever huge, which every policy permits. The big
- * lock covers them. */
+ * huge zero page and the splitting of underused huge pages, which
+ * `procfs_thp_boot` sets for a small machine. Root's writes change them; no
+ * page is ever huge, which every policy permits. The big lock covers them. */
 static int thp_enabled = 2, thp_defrag = 3, thp_shmem = 1;
 static int thp_zero_page = 1, thp_shrink_underused = 1;
+
+void procfs_thp_boot(void)
+{
+    if (frame_total_count() < (512u << 20) / PAGE_SIZE) {
+        thp_enabled = 2;
+        thp_defrag = 4;
+        thp_zero_page = 0;
+    }
+}
 
 /** Append the word `words[i]` of each `order[k]`, the chosen one in
  * brackets, separated by spaces and ended by a newline. */
@@ -6164,21 +6173,31 @@ static int thp_word(const char *s, const char *const *words, int newline)
     return -EINVAL;
 }
 
+/** Whether the `n` decimal digits at `digits`, with no leading zero, name
+ * a number above the one `max` spells. */
+static int thp_over(const char *digits, int n, const char *max)
+{
+    int len = (int)k_strlen(max), i;
+
+    if (n != len) {
+        return n > len;
+    }
+    for (i = 0; i < n && digits[i] == max[i]; i++) {
+    }
+    return i < n && digits[i] > max[i];
+}
+
 /**
  * Parse `s` as Linux's kstrtoul in base 10: an optional `+`, decimal
- * digits and an optional newline. The value when it is 0 or 1, -ERANGE
- * when it does not fit an unsigned long, and -EINVAL otherwise.
+ * digits and an optional newline. The value when it is 0 or 1; -ERANGE
+ * when the digits pass 64 bits, which Linux's _kstrtoull finds before it
+ * looks at what follows them, or when what is otherwise a number passes an
+ * unsigned long; -EINVAL otherwise.
  */
 static int thp_flag(const char *s)
 {
-#if ELF_CLASS == 2
-    static const char max[] = "18446744073709551615";
-#else
-    static const char max[] = "4294967295";
-#endif
     const char *digits;
     int n = 0;
-    int i;
 
     if (*s == '+') {
         s++;
@@ -6190,19 +6209,17 @@ static int thp_flag(const char *s)
     while (s[n] >= '0' && s[n] <= '9') {
         n++;
     }
+    if (thp_over(digits, n, "18446744073709551615")) {
+        return -ERANGE;
+    }
     if (n == 0 || !(s[n] == '\0' || (s[n] == '\n' && s[n + 1] == '\0'))) {
         return -EINVAL;
     }
-    if (n > (int)sizeof(max) - 1) {
+#if ELF_CLASS != 2
+    if (thp_over(digits, n, "4294967295")) {
         return -ERANGE;
     }
-    if (n == (int)sizeof(max) - 1) {
-        for (i = 0; i < n && digits[i] == max[i]; i++) {
-        }
-        if (i < n && digits[i] > max[i]) {
-            return -ERANGE;
-        }
-    }
+#endif
     return n == 1 && digits[0] <= '1' ? digits[0] - '0' : -EINVAL;
 }
 
@@ -8668,6 +8685,12 @@ static int32_t procfs_thp_write(int attr, const char __user *buf, uint32_t count
     return rc;
 }
 
+/**
+ * Take a write of `count` bytes at `buf` to the writable /sys attribute
+ * `e` names, as its node's store parses it. An empty write is 0 with no
+ * store called, as Linux's sysfs_kf_write answers it. The count taken, or
+ * -errno.
+ */
 static int32_t procfs_sysattr_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
     struct procfs_file *f = (struct procfs_file *)e->priv;
@@ -8678,6 +8701,9 @@ static int32_t procfs_sysattr_write(fd_entry_t *e, const char __user *buf, uint3
     int relative;
     int32_t rc;
 
+    if (count == 0) {
+        return 0;
+    }
     if (f->origin_task >> 8 == SYSFS_REG) {
         return procfs_regattr_write(f->origin_pid, buf, count);
     }

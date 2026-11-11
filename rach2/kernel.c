@@ -29,6 +29,7 @@
 #include "sys/block/mbr.h"
 #include "sys/block/loop.h"
 #include "sys/fs/devfs.h"
+#include "sys/fs/procfs.h"
 #include "sys/fs/vfs.h"
 #include "sys/fs/ext2.h"
 #include "sys/proc/process.h"
@@ -4149,6 +4150,7 @@ void kernel_main(const struct boot_info *boot)
     init_pagecache();
     klog(KLOG_DEBUG, "boot", "page cache: ready");
     init_filecache();
+    procfs_thp_boot();
 
     platform_firmware_init(boot);
 

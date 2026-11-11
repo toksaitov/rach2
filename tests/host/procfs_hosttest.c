@@ -146,10 +146,14 @@ struct wlan *wlan_by_index(unsigned index)
     return NULL;
 }
 
-/** The frame allocator is absent from this model. */
+/* The frames the model's allocator manages, which only the THP boot rows
+ * set. */
+static size_t model_frames;
+
+/** The frame allocator is absent from this model: its count is the rows'. */
 size_t frame_total_count(void)
 {
-    return 0;
+    return model_frames;
 }
 
 /** The clock is absent from this model. */
@@ -2324,7 +2328,8 @@ static int thp_reads(int attr, const char *want)
  * the stores whole up to a page, as Linux's kernfs gives them: 32 zeroes
  * to use_zero_page, kstrtobool's long words to shrink_underused, and a
  * write past a page, whose first PAGE_SIZE bytes alone are parsed and
- * taken. Each store's own limit stays: shmem_enabled refuses 16 bytes.
+ * taken. Each store's own limit stays: shmem_enabled refuses 16 bytes. An
+ * empty write is 0, with no store called.
  */
 static void thp_long_writes(void)
 {
@@ -2345,6 +2350,8 @@ static void thp_long_writes(void)
           "a write past a page gives the store its first page, which it takes");
     k_memcpy(text, "never          \n", 16);
     check(thp_write(4, text, 16) == -EINVAL, "shmem_enabled still refuses 16 bytes");
+    check(thp_write(2, text, 0) == 0 && thp_reads(2, "1\n"),
+          "an empty write is 0 and reaches no store, as Linux's sysfs_kf_write");
     k_memset(text, 0, sizeof(text));
 }
 
@@ -2382,11 +2389,14 @@ static void thp_rows(void)
         {2, "", -EINVAL, "1\n"},
 #if ELF_CLASS == 2
         {2, "18446744073709551616", -ERANGE, "1\n"},
+        {2, "18446744073709551616x", -ERANGE, "1\n"},
         {2, "18446744073709551615", -EINVAL, "1\n"},
 #else
         {2, "4294967296", -ERANGE, "1\n"},
+        {2, "4294967296x", -EINVAL, "1\n"},
         {2, "4294967295", -EINVAL, "1\n"},
 #endif
+        {2, "99999999999999999999x", -ERANGE, "1\n"},
         {3, "1", -EINVAL, 0},
         {4, "within_size\n", 12, "always [within_size] advise never deny force\n"},
         {4, "force", 5, "always within_size advise never deny [force]\n"},
@@ -2427,6 +2437,20 @@ static void thp_rows(void)
     thp_shmem = 1;
     thp_zero_page = 1;
     thp_shrink_underused = 1;
+    model_frames = (512u << 20) / PAGE_SIZE;
+    procfs_thp_boot();
+    check(thp_reads(1, "always defer defer+madvise [madvise] never\n") && thp_reads(2, "1\n"),
+          "with 512 MiB the THP defaults are Linux's");
+    model_frames--;
+    procfs_thp_boot();
+    check(
+        thp_reads(0, "always madvise [never]\n") &&
+            thp_reads(1, "always defer defer+madvise madvise [never]\n") && thp_reads(2, "0\n") &&
+            thp_reads(4, "always within_size advise [never] deny force\n") && thp_reads(5, "1\n"),
+        "under 512 MiB defrag is never and use_zero_page 0, as Linux's hugepage_init leaves them");
+    model_frames = 0;
+    thp_defrag = 3;
+    thp_zero_page = 1;
 }
 
 /** The entry below `dir` named `name`. */
