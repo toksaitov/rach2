@@ -94,9 +94,10 @@ int k_panicking(void);
 int k_panic_reading(void);
 
 /**
- * Called by `k_panic_begin` on the processor that panics, and by a stop on
- * each processor it halts (`smp_stop_nmi`, `smp_service`), with interrupts
- * off, before anything else, to leave the processor as a reset needs it:
+ * Called by `k_panic_begin` on the processor that panics, by `power_stop`
+ * on the processor that stops the machine, and by a stop on each processor
+ * it halts (`smp_stop_nmi`, `smp_service`), with interrupts off, before
+ * anything else, to leave the processor as a reset needs it:
  * vmx.c's turns VMX off, which blocks INIT while on, and svm.c's SVM. It
  * acts on the calling processor alone. NULL when none is set. It must not
  * fault.

@@ -587,11 +587,23 @@ static void power_halt_forever(void)
  * processor for good before it reached SLP_EN. One processor stops the
  * machine; the others stop first, so that none goes on writing to a disk or
  * a device the stop leaves behind.
+ *
+ * Every processor leaves VMX or SVM operation first (`k_panic_hook`): this
+ * one here, the others in their stop. A vCPU's VMCS stays active, and VMX
+ * on, while the vCPU lives, and VMX operation blocks INIT and makes the
+ * trampoline's clear of CR0.PG fault. Linux's `kvm_shutdown` turns
+ * virtualization off on every processor for a power off and a restart alike
+ * (virt/kvm/kvm_main.c:5665-5681), and
+ * `emergency_reboot_disable_virtualization` does it on the calling processor
+ * before the others (arch/x86/kernel/reboot.c:579-600, 636).
  */
 void power_stop(int how)
 {
     klog_set_screen_level(KLOG_INFO);
     arch_irq_disable();
+    if (k_panic_hook) {
+        k_panic_hook();
+    }
     smp_stop_others();
 
     if (how == POWER_OFF) {
