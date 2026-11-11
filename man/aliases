@@ -817,3 +817,6 @@ oldolduname 2 uname
 umount 2 mount
 pkey_free 2 pkey_alloc
 pkey_mprotect 2 pkey_alloc
+hung_task 7 lockup
+nmi_watchdog 7 lockup
+softlockup 7 lockup
