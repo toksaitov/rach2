@@ -262,7 +262,7 @@ is at 2147483647, or a
 .Fn copy_file_range
 range passes the largest offset.
 .It Bq Er EPIPE
-A pipe output has no reader left;
+A pipe output has no reader left, or a TCP output can send no more;
 .Dv SIGPIPE
 is sent too.
 .It Bq Er ESPIPE
