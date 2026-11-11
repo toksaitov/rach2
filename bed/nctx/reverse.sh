@@ -75,7 +75,7 @@ set -- -drive "file=$assets/reverse.qcow2,if=none,id=vm,format=qcow2,snapshot=on
     -chardev "socket,path=$out/ivs.sock,id=ivs" -device ivshmem-doorbell,chardev=ivs,vectors=2 \
     -netdev "user,id=net,hostfwd=tcp:127.0.0.1:$port-:22" \
     -device virtio-net-pci,netdev=net,romfile= -device virtio-rng-pci
-args="root=LABEL=cloudimg-rootfs rw nctx.reverse=$mode"
+args="root=/dev/vda1 rw nctx.reverse=$mode"
 if [ "$mode" = native ]; then
     bash "$tree/tests/assign/gpu.sh" -m 4096 -s 2 -o "$out/gpu" \
         -k "$assets/reverse-vmlinuz" -i "$assets/reverse-initrd.img" -l "$args" -- "$@" \
@@ -96,7 +96,7 @@ fi
 last=0 quiet=0 tries=0
 until guest true 2>/dev/null; do
     kill -0 "$vm" 2>/dev/null || die "the VM ended before SSH answered"
-    size=$(wc -c < "$console" 2>/dev/null || echo 0)
+    size=$({ wc -c < "$console"; } 2>/dev/null || echo 0)
     if [ "$size" = "$last" ]; then quiet=$((quiet + 1)); else quiet=0; last=$size; fi
     [ "$quiet" -lt 120 ] || die "the VM's console stopped before SSH answered"
     tries=$((tries + 1))
