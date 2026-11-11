@@ -133,7 +133,7 @@ static uint64_t global_bit(void)
 
 /** Start the counter counting unhalted cycles in both modes, with its
  * interrupt on overflow when `irq`. The fixed counters' control holds the
- * detector's field alone, as general counter 0's select holds its event. */
+ * detector's field alone, as the general counter's select holds its event. */
 static void start(int irq)
 {
     if (fixed) {

@@ -6,12 +6,12 @@
  *
  * The model is the Lenovo's Core i3-4030U, a Haswell whose Linux reports
  * "Haswell events, full-width counters" and an architectural monitor of
- * version 3, 48 bits wide, with three fixed counters, and seven other
+ * version 3, 48 bits wide, with three fixed counters, and eight other
  * processors the driver must handle: one without the full-width writes, a
  * hypervisor's version 3 without fixed counters, a version 1 monitor
- * without the global registers, AMD's core counters, a hypervisor's counter
- * that takes writes and never moves, and processors without the cycles
- * event or the model-specific registers; and AMD's family 15h. The
+ * without the global registers, AMD's core counters, AMD's family 15h, a
+ * hypervisor's counter that takes writes and never moves, and processors
+ * without the cycles event or the model-specific registers. The
  * detector takes fixed counter 1 where there is one, core counter 2 on
  * family 15h, and general counter 0 otherwise. Each register
  * exists only where the SDM or AMD's manual says it does, and an access to
