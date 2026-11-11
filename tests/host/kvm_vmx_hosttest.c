@@ -1219,6 +1219,20 @@ static int pat_ok(uint64_t pat)
     return 1;
 }
 
+/** The limit `limit` of a segment with the access rights `ar` agrees with
+ * its granularity, as the SDM's 26.3.1.2 asks of a usable segment, and of
+ * TR, which `always` names: G clear when a bit of the limit's low 12 is
+ * clear, G set when a bit of its high 12 is set. */
+static int seg_limit_ok(uint64_t limit, uint64_t ar, int always)
+{
+    int g = (ar & 0x8000u) != 0;
+
+    if ((ar & 0x10000u) && !always) {
+        return 1;
+    }
+    return !((limit & 0xFFFu) != 0xFFFu && g) && !((limit & 0xFFF00000u) && !g);
+}
+
 /** The checks of the guest's segments in the state `f` (SDM 26.3.1.2). */
 static int check_segments(const uint64_t *f)
 {
@@ -1238,6 +1252,12 @@ static int check_segments(const uint64_t *f)
     for (n = SEG_ES; n <= SEG_GS; n++) {
         if (!seg_accessed(f[GUEST_ES_AR_BYTES + 2u * (uint32_t)n])) {
             return fail("a usable segment not accessed");
+        }
+    }
+    for (n = SEG_ES; n <= SEG_TR; n++) {
+        if (!seg_limit_ok(f[GUEST_ES_LIMIT + 2u * (uint32_t)n],
+                          f[GUEST_ES_AR_BYTES + 2u * (uint32_t)n], n == SEG_TR)) {
+            return fail("a segment's limit against its granularity");
         }
     }
     if ((tr & 0x10000u) || ((tr & 15u) != 3u && (tr & 15u) != 11u) || (tr & 0x10u) ||
@@ -3188,6 +3208,46 @@ static void far_rows(int fd)
           "a divisor of zero is #DE at the instruction, with the registers as they were");
 }
 
+/** MOV SS from the device with the null selector in 64-bit mode at CPL 0,
+ * through identity tables at 0x10000 that map RAM and the device's 2 MiB
+ * with large pages: SS is Linux's flat data segment, which the next entry
+ * takes. */
+static void null_ss_rows(int fd)
+{
+    struct kvm_run *rp = run_of(fd);
+    struct kvm_sregs s;
+    uint64_t e;
+
+    emul_start(fd, "\x8e\x13\xf4", 3, 0, 0xD0000200ull, 0);
+    k_memset(&ram[0x10000], 0, 0x4000);
+    e = 0x11003;
+    k_memcpy(&ram[0x10000], &e, 8);
+    e = 0x12003;
+    k_memcpy(&ram[0x11000], &e, 8);
+    e = 0x13003;
+    k_memcpy(&ram[0x11000 + 3 * 8], &e, 8);
+    e = 0x83;
+    k_memcpy(&ram[0x12000], &e, 8);
+    e = 0xD0000083ull;
+    k_memcpy(&ram[0x13000 + 128 * 8], &e, 8);
+    s = sregs_of(fd);
+    s.cr0 = 0x80000011u;
+    s.cr3 = 0x10000;
+    s.cr4 = CR4_PAE;
+    s.efer = GEFER_LME | GEFER_LMA;
+    s.cs.l = 1;
+    s.cs.db = 0;
+    CHECK(fdio(fd, KVM_SET_SREGS, (uintptr_t)&s) == 0, "KVM_SET_SREGS to 64-bit mode");
+    CHECK(mmio_read(fd, 0xD0000200ull, 2), "MOV SS, [RBX] reads its selector on MMIO");
+    k_memset(rp->u.mmio.data, 0, 2);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_HLT, "and the entry after it passes");
+    s = sregs_of(fd);
+    CHECK(s.ss.selector == 0 && s.ss.present && !s.ss.unusable && s.ss.type == 3 && s.ss.s &&
+              s.ss.dpl == 0 && s.ss.db && s.ss.g && s.ss.limit == 0xFFFu,
+          "SS is a flat data segment of DPL 0 with the limit 0xFFF under G");
+}
+
 /** Instructions Linux's emulator runs on device memory that the first
  * decoder refused. */
 static void emul_rows(int fd)
@@ -3200,6 +3260,7 @@ static void emul_rows(int fd)
     string_rows(fd);
     stack_rows(fd);
     far_rows(fd);
+    null_ss_rows(fd);
 }
 
 /** The #UD exit `fd`'s next run ends with, then the runs `after` gives
