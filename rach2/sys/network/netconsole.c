@@ -59,6 +59,8 @@
  */
 
 #include "../klog.h"
+#include "../panic.h"
+#include "../timer.h"
 #include "netconsole.h"
 #include "net.h"
 #include "core/byteorder.h"
@@ -101,6 +103,15 @@ static int nc_held;    /* the last drain stopped: no link or a refused frame */
 
 static const uint8_t nc_broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
+/* How long a link must have been up before a drain sends on it. The
+ * Lenovo's RTL8168 counted no transmit error for the boot log it sent the
+ * moment its link came up, yet none of it reached the Mac, while every
+ * record sent from 0.8 s later on did. The ring holds the records
+ * meanwhile. */
+#define NC_LINK_SETTLE_MS 2000
+static uint32_t nc_settle_ticks = MS_TO_TICKS(NC_LINK_SETTLE_MS);
+static uint64_t nc_frames_up; /* the frames' link: as `nc_link_ready` says */
+
 /* The longest piece of a line one extended datagram carries before escaping:
  * a whole record, KLOG_RECORD_MAX. */
 #define NC_EXT_LINE KLOG_RECORD_MAX
@@ -132,6 +143,7 @@ struct nc_target {
     uint8_t remote_mac[6];
     uint32_t tail;      /* the oldest character not yet sent to it */
     int held;           /* its last drain stopped: no link, no source, refused */
+    uint64_t up_since;  /* its link: as `nc_link_ready` says */
     uint32_t datagrams; /* datagrams the card took */
     uint32_t seq;       /* the next extended record's sequence number */
     int level;          /* the last record's level, for a piece of a longer line */
@@ -246,6 +258,30 @@ void netconsole_putc(char c)
     }
 }
 
+/**
+ * Whether a drain may send on `nd`: its link is up and has been for
+ * `nc_settle_ticks`, or the kernel is panicking, when there is no later and
+ * the tick may have stopped. `*since` is the tick the link was first seen up,
+ * plus one, or 0 while it is down. Under `net_lock`.
+ */
+static int nc_link_ready(struct netdev *nd, uint64_t *since)
+{
+    uint64_t now;
+
+    if (!netdev_running(nd)) {
+        *since = 0;
+        return 0;
+    }
+    if (k_panicking()) {
+        return 1;
+    }
+    now = tick_count() + 1;
+    if (*since == 0) {
+        *since = now;
+    }
+    return now - *since >= nc_settle_ticks;
+}
+
 /** Send the ring to the first interface in broadcast frames, as
  * `netconsole_flush` says. */
 static void nc_flush_frames(void)
@@ -257,7 +293,7 @@ static void nc_flush_frames(void)
         net_unlock(flags);
         return;
     }
-    if (!netdev_running(netdev_first())) {
+    if (!nc_link_ready(netdev_first(), &nc_frames_up)) {
         nc_held = 1;
         net_unlock(flags);
         return;
@@ -669,7 +705,7 @@ static int nc_send_line(struct nc_target *t, uint32_t end)
     uint32_t n, i, from;
     int r;
 
-    if (!netdev_running(t->nd) || !nc_source(t, src)) {
+    if (!nc_link_ready(t->nd, &t->up_since) || !nc_source(t, src)) {
         t->held = 1;
         return 0;
     }

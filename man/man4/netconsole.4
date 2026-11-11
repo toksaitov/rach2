@@ -16,6 +16,9 @@ Every record from the first of the boot is sent, those written before
 the network card started among them: the kernel keeps 32767 characters
 of log until they are sent and drops the newest records whole when that
 store is full.
+A card is sent nothing until its link has been up for two seconds,
+since frames sent the moment a link comes up can be lost beyond the
+card; a kernel that panics sends at once.
 The records are sent by calling the card's transmit with interrupts
 off, which waits for the card by polling and not for an interrupt, so
 the record of a panic goes out too.
