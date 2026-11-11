@@ -53,6 +53,7 @@ struct chip {
 static const struct chip *chip;
 static uint64_t tsc;
 static uint64_t evtsel, counter, global_ctrl, global_status;
+static uint64_t other_evtsel[8]; /* the event selects of counters 1 to 7 */
 static uint32_t lvtpc = LAPIC_LVT_MASKED;
 static int nmi_pending;
 static int msr_writes, last_msr_written;
@@ -102,6 +103,26 @@ static int chip_amd(void)
 static uint64_t chip_mask(void)
 {
     return ((uint64_t)1 << chip_width()) - 1u;
+}
+
+/** The general counters: leaf 0xA's, or AMD's six core counters. */
+static uint32_t chip_counters(void)
+{
+    return chip_amd() ? 6u : (chip->leaf_a_eax >> 8) & 0xFFu;
+}
+
+/** The index of the event select of a counter other than 0 that `msr` is,
+ * or 0 when it is none. */
+static uint32_t other_index(uint32_t msr)
+{
+    if (chip_amd() && msr > AMD_PERF_CTL0 && msr < AMD_PERF_CTL0 + 2u * chip_counters() &&
+        (msr - AMD_PERF_CTL0) % 2u == 0) {
+        return (msr - AMD_PERF_CTL0) / 2u;
+    }
+    if (!chip_amd() && msr > IA32_PERFEVTSEL0 && msr < IA32_PERFEVTSEL0 + chip_counters()) {
+        return msr - IA32_PERFEVTSEL0;
+    }
+    return 0;
 }
 
 /** Whether the counter counts unhalted cycles now. */
@@ -160,10 +181,14 @@ static int msr_exists(uint32_t msr)
         return 0;
     }
     if (chip_amd()) {
-        return (msr == AMD_PERF_CTL0 || msr == AMD_PERF_CTR0) && (chip->ext1_ecx & (1u << 23)) != 0;
+        return (msr == AMD_PERF_CTL0 || msr == AMD_PERF_CTR0 || other_index(msr) != 0) &&
+               (chip->ext1_ecx & (1u << 23)) != 0;
     }
     if (chip->max_leaf < 0xAu || chip_version() == 0) {
         return 0;
+    }
+    if (other_index(msr) != 0) {
+        return 1;
     }
     switch (msr) {
     case IA32_PMC0:
@@ -192,6 +217,8 @@ void kcpu_rdmsr(uint32_t msr, uint32_t *lo, uint32_t *hi)
         v = counter;
     } else if (msr == IA32_PERFEVTSEL0 || msr == AMD_PERF_CTL0) {
         v = evtsel;
+    } else if (other_index(msr) != 0) {
+        v = other_evtsel[other_index(msr)];
     } else if (msr == IA32_PERF_CAPABILITIES) {
         v = chip->perf_cap;
     } else if (msr == IA32_PERF_GLOBAL_STATUS) {
@@ -216,6 +243,10 @@ void kcpu_wrmsr(uint32_t msr, uint32_t lo, uint32_t hi)
     last_value_written = v;
     if (!msr_exists(msr)) {
         gp("wrmsr of absent", msr);
+        return;
+    }
+    if (other_index(msr) != 0) {
+        other_evtsel[other_index(msr)] = v;
         return;
     }
     switch (msr) {
@@ -350,11 +381,15 @@ static void reset(const struct chip *c)
     probed = 0;
     found = 0;
     kind = PMU_NONE;
-    version = width = count_msr = 0;
+    version = counters = width = count_msr = 0;
     max_period = cpu_hz = 0;
     k_memset(pmc, 0, sizeof pmc);
     tsc = 1000000;
     evtsel = counter = global_ctrl = global_status = 0;
+    k_memset(other_evtsel, 0, sizeof other_evtsel);
+    /* The firmware left counter 1 counting cycles with its interrupt on. */
+    other_evtsel[1] = 0x53003Cu;
+    global_ctrl = 3u;
     lvtpc = LAPIC_LVT_MASKED | LAPIC_LVT_NMI;
     nmi_pending = 0;
     msr_writes = 0;
@@ -424,14 +459,15 @@ static void counter_row(const struct chip *c, const char *line, uint32_t want_ev
     check(strstr(logged, line) != NULL, line);
     check(platform_cpu_hz() == c->hz, "the clock is the processor's");
     check(evtsel == 0, "the probe leaves the counter stopped");
+    check(other_evtsel[1] == 0, "the probe stops the counter the firmware left");
 
     platform_pmu_enable(period);
     check(evtsel == want_evtsel, "the event select counts cycles with an interrupt");
     check(last_msr_written == (int)evtsel_msr() && last_value_written == want_evtsel,
           "the enable is the last write");
     check(lvtpc == LAPIC_LVT_NMI, "the counter's entry is an unmasked NMI");
-    check(chip_amd() || chip_version() < 2 || (global_ctrl & 1u) != 0,
-          "the global control enables counter 0");
+    check(chip_amd() || chip_version() < 2 || global_ctrl == 1u,
+          "the global control enables counter 0 alone");
 
     n = drive(25, due_ms, 4, &others, &masked);
     check(n == 2, "two NMIs are due in 25 seconds");
