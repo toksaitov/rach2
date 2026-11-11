@@ -602,28 +602,128 @@ static int cmd_desc_is(const struct cmd_desc *desc, uint32_t cmd)
     return desc->value == (cmd & desc->mask);
 }
 
+/* The buckets of an engine's index of descriptors, a power of two, and the
+ * most descriptors an index takes; an engine with more is scanned whole. */
+#define CMD_HASH_SLOTS 128u
+#define CMD_INDEX_MAX  256u
+
+/*
+ * An engine's descriptors hashed by the opcode bits of their client, Linux's
+ * engine->cmd_hash. A bucket is a chain from the descriptor added last, and
+ * the descriptors are added in the order of the engine's tables, so the
+ * first match along a chain is the last match of a scan of the tables. A
+ * descriptor whose mask leaves out a bit of its key would sit in another
+ * header's bucket, so an engine that has one is scanned whole instead.
+ */
+struct cmd_index {
+    const struct cmd_engine *engine; /* NULL for a free slot */
+    int usable;                      /* 0 when the engine is scanned whole */
+    uint16_t head[CMD_HASH_SLOTS];   /* 1 + the chain's first descriptor, 0 for none */
+    uint16_t next[CMD_INDEX_MAX];    /* 1 + the next along the chain, 0 at its end */
+    const struct cmd_desc *desc[CMD_INDEX_MAX];
+};
+
+/* One index for each engine the parser serves, made at its first batch. */
+static struct cmd_index cmd_indexes[4];
+
+/** The shift of `header`'s opcode bits for its client, Linux's
+ * cmd_header_key: the MI client's for a client it does not name. */
+static uint32_t cmd_key_shift(uint32_t header)
+{
+    switch (header >> INSTR_CLIENT_SHIFT) {
+    case INSTR_RC_CLIENT:
+        return S3D;
+    case INSTR_BC_CLIENT:
+        return S2D;
+    default:
+        return SMI;
+    }
+}
+
+/** The bucket of the header `header`. */
+static uint32_t cmd_bucket(uint32_t header)
+{
+    uint32_t key = header >> cmd_key_shift(header);
+
+    return (key * 0x9E3779B1u) >> 25;
+}
+
+/** Hash the descriptors of `t` into `ix`, or mark `ix` unusable. */
+static void cmd_index_build(struct cmd_index *ix, const struct cmd_engine *t)
+{
+    uint32_t i, j, n = 0, b, keep;
+    const struct cmd_desc *d;
+
+    k_memset(ix, 0, sizeof(*ix));
+    ix->engine = t;
+    for (i = 0; i < t->ncmds; i++) {
+        for (j = 0; j < t->cmds[i].count; j++) {
+            d = &t->cmds[i].desc[j];
+            keep = ~0u << cmd_key_shift(d->value);
+            if (n == CMD_INDEX_MAX || (d->mask & keep) != keep) {
+                return;
+            }
+            b = cmd_bucket(d->value);
+            ix->desc[n] = d;
+            ix->next[n] = ix->head[b];
+            ix->head[b] = (uint16_t)(n + 1u);
+            n++;
+        }
+    }
+    ix->usable = 1;
+}
+
+/** The index of `t`, made at the first call; the big lock serializes it. */
+static const struct cmd_index *cmd_index_of(const struct cmd_engine *t)
+{
+    uint32_t i;
+
+    for (i = 0; i < COUNT(cmd_indexes); i++) {
+        if (cmd_indexes[i].engine == t) {
+            return &cmd_indexes[i];
+        }
+        if (!cmd_indexes[i].engine) {
+            cmd_index_build(&cmd_indexes[i], t);
+            return &cmd_indexes[i];
+        }
+    }
+    return 0;
+}
+
 /**
  * The descriptor of the command whose first dword is `header`, as Linux's
  * find_cmd: `desc`, the last command's, when it matches, which makes a run
  * of one command cheap; else the last of the engine's entries that matches,
- * in the order Linux's hash table gives them; else `def`, filled as a
- * command to pass over whose length field the client's mask gives. NULL
+ * in the order Linux's hash table gives them, from the engine's index or,
+ * for an engine without one, by a scan of its tables; else `def`, filled as
+ * a command to pass over whose length field the client's mask gives. NULL
  * for a client the engine does not run.
  */
 static const struct cmd_desc *find_cmd(const struct cmd_engine *t, uint32_t header,
                                        const struct cmd_desc *desc, struct cmd_desc *def)
 {
+    const struct cmd_index *ix;
     const struct cmd_table *table;
     uint32_t i, j, mask;
 
     if (((header ^ desc->value) & desc->mask) == 0) {
         return desc;
     }
-    for (i = t->ncmds; i-- > 0;) {
-        table = &t->cmds[i];
-        for (j = table->count; j-- > 0;) {
-            if (((header ^ table->desc[j].value) & table->desc[j].mask) == 0) {
-                return &table->desc[j];
+    ix = cmd_index_of(t);
+    if (ix && ix->usable) {
+        for (i = ix->head[cmd_bucket(header)]; i; i = ix->next[i - 1u]) {
+            desc = ix->desc[i - 1u];
+            if (((header ^ desc->value) & desc->mask) == 0) {
+                return desc;
+            }
+        }
+    } else {
+        for (i = t->ncmds; i-- > 0;) {
+            table = &t->cmds[i];
+            for (j = table->count; j-- > 0;) {
+                if (((header ^ table->desc[j].value) & table->desc[j].mask) == 0) {
+                    return &table->desc[j];
+                }
             }
         }
     }
