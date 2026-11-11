@@ -19,8 +19,10 @@
  * frames, and then drops them and the charge; the record stays the
  * holder's, which `pin_live` then answers 0 for, until its `unpin`. A
  * holder with PIN_KEEP_PAST_END is the exception at the end of the
- * address space, for a pin of RAM alone: only the charge goes, and the
- * frames stay the device's until `unpin`. Such a pin also holds each
+ * address space: only the charge goes, and the frames and device pages
+ * stay the device's until `unpin`. Its range is then off the list, so a
+ * later revocation of its device pages is not heard, as Linux's VFIO
+ * type1 hears nothing of its PFN mappings. Such a pin also holds each
  * shared mapping of a disk file its range meets, from the pin to `unpin`,
  * so that the file's pages in memory, the frames pinned among them, stay
  * the file's after the last region mapping it goes and a write(2) of the
@@ -53,11 +55,12 @@ struct pin;
  * never see a device's stores, as Linux's writable_file_mapping_allowed. */
 #define PIN_LONGTERM 0x8u
 
-/* A flag of `pin_holder`: the end of the address space leaves a pin of RAM
- * alone live, with its frames, and drops only the charge, as Linux's VFIO
- * type1 keeps its pinned pages past the process's exit_mm. A process's
- * address space ends before its descriptors close, so a device whose
- * release comes at the close may write to the frames until then. */
+/* A flag of `pin_holder`: the end of the address space leaves the pin live,
+ * with its frames and its device pages, and drops only the charge, as
+ * Linux's VFIO type1, which has no MMU notifier, keeps its pinned pages and
+ * its PFN mappings past the process's exit_mm. A process's address space
+ * ends before its descriptors close, so a device whose release comes at the
+ * close may use them until then. */
 #define PIN_KEEP_PAST_END 0x1u
 
 /*

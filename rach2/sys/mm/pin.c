@@ -124,8 +124,8 @@ static int pin_meets_tracked_file(struct mm *mm, uintptr_t start, uintptr_t end)
  * or the end of the address space, takes the pin back after the holder
  * has stopped the device. A pin with device pages also ends before their
  * revocation or protection change; RAM pins survive those changes. At the
- * end, a pin of RAM whose holder keeps it past the end loses only its
- * charge, its range already off the list. */
+ * end, a pin whose holder keeps it past the end, device pages and all,
+ * loses only its charge, its range already off the list. */
 static void pin_invalidate(struct mmn_range *r, int event, uintptr_t start, uintptr_t end)
 {
     struct pin *pin = (struct pin *)r;
@@ -136,8 +136,7 @@ static void pin_invalidate(struct mmn_range *r, int event, uintptr_t start, uint
         !(pin->ram_pages != pin->count && (event == MMN_TRUNCATE || event == MMN_PROTECT))) {
         return;
     }
-    if (event == MMN_RELEASE && pin->holder && (pin->holder->flags & PIN_KEEP_PAST_END) &&
-        pin->ram_pages == pin->count) {
+    if (event == MMN_RELEASE && pin->holder && (pin->holder->flags & PIN_KEEP_PAST_END)) {
         if (pin->mm) {
             pin->mm->pinned -= pin->ram_pages;
             pin->mm = NULL;
