@@ -3,6 +3,7 @@
  * `cpu.h`, whose structures are 64 bits wide.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/fd_flat.c
  * host-deps: tests/host/compat/spinlock_host.c
  * host-cflags: -DRACH2_HOST_X86_64
  *
