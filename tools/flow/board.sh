@@ -152,8 +152,9 @@
 # `archive [M]` archives the cards of the closed issues of milestone M and of
 # their closed subtasks, and prints the numbers it archived; release.sh runs
 # it once it has closed M. With no M it archives those of every closed
-# milestone and of no milestone; status.sh and stop.sh run it so on every
-# look, so that a card closed after its own release leaves the board at once.
+# milestone and of no milestone updated in the last three days; status.sh and
+# stop.sh run it so on every look, so that a card closed after its own release
+# leaves the board at once.
 # An open issue keeps its card. A card that
 # cannot be archived is reported on stderr and the rest go on, and the exit
 # status is then 1.
@@ -347,17 +348,19 @@ issue_cards()
                                         name } } } } } } } }'
 }
 
-# items [all]: print the issues on the board in the board's order, one a
-# line, as twelve fields separated by tabs: the item's id, the Status or
+# items [all|open|recent]: print the issues on the board in the board's order,
+# one a line, as twelve fields separated by tabs: the item's id, the Status or
 # nothing, the number, the state, the labels joined by commas, the assignees'
-# logins joined by commas, the number of open blockers, the parent's number
-# or nothing, the milestone's number, its state and the branch it names, each
-# or nothing, and the title. GitHub's list of the board's items can lack an
-# item that the issue's own `projectItems` gives, so the repository's open
-# issues, and with `all` the closed ones updated in the last three days, are
-# read as well, and an issue whose
-# item the list lacks follows the others, in the order the issues were
-# opened. Fail when any page of either answer is lost.
+# logins joined by commas, the number of open blockers, the parent's number or
+# nothing, the milestone's number, its state and the branch it names, each or
+# nothing, and the title. GitHub's list of the board's items can lack an item
+# that the issue's own `projectItems` gives, so the repository's open issues,
+# and with `all` or `recent` the closed ones updated in the last three days, are
+# read as well, and an issue whose item the list lacks follows the others, in
+# the order the issues were opened. With `open` or `recent` the board's list
+# holds only its open issues' items, since the closed ones outnumber them many
+# times, at two GraphQL points for each page of a hundred, and every loop's poll
+# reads the list. Fail when any page of either answer is lost.
 items()
 {
     # The issues are read while the board's list is, from a file.
@@ -366,17 +369,18 @@ items()
     items_tmp=$(mktemp "$items_dir/board-items.XXXXXX") || return 1
     {
         issue_cards OPEN || exit 1
-        [ "$1" != all ] || issue_cards CLOSED "$(date -u -v-3d +%Y-%m-%dT%H:%M:%SZ 2> /dev/null ||
+        [ "$1" != all ] && [ "$1" != recent ] || issue_cards CLOSED "$(date -u -v-3d +%Y-%m-%dT%H:%M:%SZ 2> /dev/null ||
             date -u -d '3 days ago' +%Y-%m-%dT%H:%M:%SZ)" || exit 1
     } > "$items_tmp" &
     items_pid=$!
+    case $1 in open|recent) items_only='query: "is:open", ' ;; *) items_only= ;; esac
     listed=$(pages .data.user.projectV2.items '
             select(.content.number != null and (.isArchived | not)) |
             {id, status: (.fieldValueByName.name // ""), issue: .content} |
             '"$FIELDS" -F n="$BOARD" -f o="$OWNER" -f query='
         query($o: String!, $n: Int!, $endCursor: String) {
             user(login: $o) { projectV2(number: $n) {
-                items(first: 100, after: $endCursor,
+                items(first: 100, after: $endCursor, '"$items_only"'
                       orderBy: {field: POSITION, direction: ASC}) {
                     pageInfo { hasNextPage endCursor }
                     nodes { id isArchived
@@ -390,8 +394,8 @@ items()
     printf '%s\n' "$listed" "$found" | awk -F '\t' 'NF > 0 && !seen[$1]++'
 }
 
-# read_board [all]: read the board into `board`, as `items` prints it, or say
-# that it cannot and exit 1.
+# read_board [all|open|recent]: read the board into `board`, as `items`
+# prints it, or say that it cannot and exit 1.
 read_board()
 {
     board=$(items "$1") || {
@@ -422,7 +426,7 @@ lenovo_held()
 next()
 {
     login
-    read_board
+    read_board open
     busy=0
     if [ "$me" = "$OWNER" ]; then
         if lenovo_held || printf '%s\n' "$board" | awk -F '\t' "$LIB"'
@@ -683,7 +687,7 @@ ready()
 
 done_()
 {
-    read_board all
+    read_board recent
     closed=$(printf '%s\n' "$board" | awk -F '\t' '
         $4 == "CLOSED" && $2 != "Done" { print $3 }')
     for n in $closed; do
@@ -701,7 +705,7 @@ done_()
 finish()
 {
     login
-    read_board
+    read_board open
     open=$(printf '%s\n' "$board" | awk -F '\t' -v p="$1" '
         $8 == p && $4 == "OPEN" { printf "%s#%s", sep, $3; sep = " " }')
     if [ -n "$open" ]; then
@@ -782,7 +786,7 @@ settled()
 
 check()
 {
-    read_board all
+    read_board recent
     # The rules on a card's state, Status and assignees are judged on a
     # second reading of each card the first reading finds wrong. The last
     # field says whether the card is a task, which has no parent.
@@ -828,7 +832,7 @@ check()
 
 archive()
 {
-    read_board all
+    if [ -n "$1" ]; then read_board all; else read_board recent; fi
     cards=$(printf '%s\n' "$board" | awk -F '\t' -v m="$1" '
         { id[NR] = $1; n[NR] = $3; closed[NR] = $4 == "CLOSED"; parent[NR] = $8
           if (m != "" ? $9 == m : $9 == "" || $10 == "CLOSED") task[$3] = 1 }
