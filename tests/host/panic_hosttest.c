@@ -140,6 +140,10 @@ void arch_relax(void)
 void platform_pmu_disable(void)
 {}
 
+/** No lockup detector to touch here. */
+void touch_nmi_watchdog(void)
+{}
+
 /* What a write to /proc/sys/kernel/panic that lands while the stop is
  * under way gives `panic_timeout`, or STOP_WRITES_NONE for no write. */
 #define STOP_WRITES_NONE (-1000)
