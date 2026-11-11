@@ -66,6 +66,13 @@ void shmem_free(struct shmem *sh)
     shmem_frees++;
 }
 
+/** Count the release of shared anonymous memory's pages that gives way. */
+void shmem_free_yielding(struct shmem *sh)
+{
+    (void)sh;
+    shmem_frees++;
+}
+
 /** Count the release of a mapped file's descriptor. */
 void fd_release_backing(fd_entry_t *e)
 {

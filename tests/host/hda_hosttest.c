@@ -1048,8 +1048,14 @@ static void row_missed(void)
     model_play(1000000);
     check(model_pos == 480 * 4, "the DMA stopped 480 frames into the first period");
     from = played_count;
+    /* Only the kernel build records a request; the miss path must clear it. */
+    hda_report.service.asked_us = 12345;
+    hda_report.service.asked_valid = 1;
     tick();
     check(missed_revolutions == 14 && lpib_wraps >= 14, "14 revolutions missed");
+    check(hda_report.service.missed == 14 && hda_report.service.revolution_us != 0 &&
+              hda_report.service.asked_valid == 0 && hda_report.service.asked_us == 0,
+          "the report counts the 14 misses and the buffer's duration, no request");
     check(ring_available() == 0 && session_bytes_dropped > 0, "the ring's stale blocks dropped");
     check(hw_period_last == 0, "the service is in step with the period playing");
     run_ticks(30, &next);

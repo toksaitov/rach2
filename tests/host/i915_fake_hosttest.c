@@ -1281,6 +1281,10 @@ static void row_file(void)
     done();
 }
 
+/** Nothing: one thread has no one to give way to. */
+void sched_give_way(void)
+{}
+
 int main(void)
 {
     row_probe();

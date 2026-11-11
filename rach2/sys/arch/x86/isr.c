@@ -1022,7 +1022,7 @@ static void irq_dispatch(isr_params_t *params)
  * (`sched_account_tick`) and, on the boot processor, counts them from the
  * reference (`timer_tick_clock`). Waiting for the lock would take from this
  * processor's user code all the time the holder keeps it, such as the sound
- * mix's, which converts a channel's rate in the device's interrupt; and
+ * mix's, which converts a channel's rate under it in HDA's thread; and
  * once the waits pass a tick, the next tick is pending at the return to user
  * mode and comes before the user code's next instruction, which then makes
  * no progress at all while other processors keep the lock busy. A tick

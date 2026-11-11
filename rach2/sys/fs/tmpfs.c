@@ -217,14 +217,19 @@ static void secret_put(struct secret_user *u)
  * directory has on its parent, which may free the parent in turn. A removed
  * directory some process still holds keeps its removed parent this way, so
  * its `..` stays a directory to list and to walk. The climb is a loop, since
- * a chain of removed directories may be as deep as a tree.
+ * a chain of removed directories may be as deep as a tree. A file's pages
+ * are freed giving way every leaf (`shmem_free_yielding`): no name, hold or
+ * mapping reaches the node then, since a mapping holds its file, and the
+ * parent it holds stays held until the node is gone. A type's unlink and
+ * last put may sleep, as ext2's do, so every caller already lets the big
+ * lock go there.
  */
 static void settle(struct tmpfs_node *n)
 {
     while (n && n->refs == 0 && n->links == 0) {
         struct tmpfs_node *up = is_dir(n) && n->parent != n ? n->parent : NULL;
 
-        shmem_free(&n->data);
+        shmem_free_yielding(&n->data);
         if (n->secret) {
             secret_put(n->secret);
         }

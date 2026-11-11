@@ -435,7 +435,11 @@ static int filemap_share_disk(struct vm_file *f, uint32_t pgoff, uintptr_t *phys
  * A mapping of a disk file's pages through a descriptor open for writing
  * writes them back first, before it takes that lock, and no other
  * write-back takes it for its writer from then on (`going`); a sync of the
- * file waits for the write-back to end (`leaving`).
+ * file waits for the write-back to end (`leaving`). Shared anonymous
+ * memory's own pages go last, giving way every leaf
+ * (`shmem_free_yielding`): the mapping is off the list and its last region
+ * gone by then, and the release runs from `mm_reap`, which holds no
+ * regions' lock and whose callers let it sleep in a write-back.
  */
 static void filemap_release(struct vm_file *f)
 {
@@ -478,7 +482,7 @@ static void filemap_release(struct vm_file *f)
         vfs_ns_unlock(locked);
     }
     if (m->sh == &m->own) {
-        shmem_free(&m->own);
+        shmem_free_yielding(&m->own);
     }
     kfree(m->vf.path);
     kfree(m);

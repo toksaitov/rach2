@@ -1087,6 +1087,10 @@ static void row_model(void)
     done(&m);
 }
 
+/** Nothing: one thread has no one to give way to. */
+void sched_give_way(void)
+{}
+
 /** Run every row; 0 when all pass. */
 int main(void)
 {

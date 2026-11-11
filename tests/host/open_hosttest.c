@@ -1179,6 +1179,13 @@ void shmem_free(struct shmem *sh)
     check(0, "unexpected release of shared pages");
 }
 
+/** Fail the row: no shared pages are released. */
+void shmem_free_yielding(struct shmem *sh)
+{
+    (void)sh;
+    check(0, "unexpected release of shared pages");
+}
+
 /** Fail the row: no row unmaps a range. */
 void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end)
 {

@@ -284,18 +284,21 @@ int mm_get_live(struct mm *mm)
 
 void mm_put(struct mm *mm)
 {
+    struct page_dir *dir;
+
     if (!mm || --mm->users != 0) {
         return;
     }
     mmn_release(mm);
     arch_mm_release(mm);
-    smp_space_release(mm->dir);
-    free_user_pages(mm->dir);
-    mm_resident_add(mm->dir, -(long)mm->resident);
+    dir = mm->dir;
+    smp_space_release(dir);
+    mm_resident_add(dir, -(long)mm->resident);
     dir_forget(mm);
-    free_page_directory(mm->dir);
     mm->dir = NULL;
     mm->space_root = 0;
+    free_user_pages(dir);
+    free_page_directory(dir);
     vm_free(&mm->vm);
     if (mm->interp_file) {
         struct open_file *ofd = mm->interp_file;

@@ -358,7 +358,10 @@ int mem_lock_room(unsigned long have, unsigned long pages);
  * The tables stay, for `free_page_directory`. The last user of an address
  * space calls it (`mm_put`), once no other processor translates through
  * `dir` (`smp_space_release`), so that one flush at the end, on this
- * processor alone, is enough. Each architecture's mmu.c defines it.
+ * processor alone, is enough. The walk gives way to the big lock's waiters
+ * and the tick's switch every bounded batch of pages (`sched_give_way`), so
+ * the caller has made `dir` unreachable first: no thread, address space or
+ * processor names it. Each architecture's mmu.c defines it.
  */
 void free_user_pages(page_dir_t *dir);
 
@@ -419,8 +422,9 @@ void paging_protect_range(page_dir_t *dir, uintptr_t start, uintptr_t end, uint3
 
 /** Give `dir` and its own page tables back, after `free_user_pages` has
  * dropped its pages. The kernel's directory and the one in use are left in
- * place: a caller switches to another first. Each architecture's mmu.c
- * defines it. */
+ * place: a caller switches to another first. It gives way as
+ * `free_user_pages` does, to a caller that has made `dir` unreachable.
+ * Each architecture's mmu.c defines it. */
 void free_page_directory(page_dir_t *dir);
 
 /**

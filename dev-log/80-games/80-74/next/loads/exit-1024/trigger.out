@@ -1,0 +1,12 @@
+trigger: pid: 526 evidence: /tmp/t3703-next-out/exit-1024
+trigger: waiting for a playback period
+trigger: preparing exit 1024 MiB
+trigger: touched 128 MiB
+trigger: touched 256 MiB
+trigger: touched 384 MiB
+trigger: touched 512 MiB
+trigger: touched 640 MiB
+trigger: touched 768 MiB
+trigger: touched 896 MiB
+trigger: freeing exit 1024 MiB
+trigger: result: load completed; read the retained counters

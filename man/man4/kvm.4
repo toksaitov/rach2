@@ -245,6 +245,12 @@ names and writes to it afterwards those that
 .Va kvm_valid_regs
 names.
 Guests run under VMX on Intel processors and SVM with nested paging on AMD processors.
+Under VMX a vCPU's VMCS stays loaded on the processor that last ran it, as
+on Linux: its first entry there is a VMLAUNCH and each one after it a
+VMRESUME.
+A vCPU that moves to another processor, or whose state an ioctl reads on
+another, has its VMCS cleared on the one it left and launched again, and a
+processor is in VMX operation only while some vCPU's VMCS is loaded on it.
 .Ss Memory
 .Dv KVM_SET_USER_MEMORY_REGION ,
 or

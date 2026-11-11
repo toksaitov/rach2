@@ -1,0 +1,5 @@
+clock_us age_us cpu pid comm vector syscall pc[8]
+13740144 469418 0 0 - 0 -1 0xffffffff803b2616 0xffffffff803b055c 0xffffffff803b0594 0xffffffff803b0648 0xffffffff803b069c 0xffffffff801c43ed 0xffffffff801c50e8 0xffffffff8017d5ff
+13850514 17080 0 1 init 128 3 0xffffffff803b2616 0xffffffff80110ade 0xffffffff801de75a 0xffffffff80132e75 0xffffffff8013e190 0xffffffff8013e449 0xffffffff8013e7bd 0xffffffff80119849
+20488288 27609 1 119 oss 128 1 0xffffffff801cf15e 0xffffffff801cf41d 0xffffffff801d3b2a 0xffffffff801d5031 0xffffffff801d7bcd 0xffffffff801d8910 0xffffffff801dad35 0xffffffff801cc2af
+20512797 22170 1 119 oss 128 271 0xffffffff803b2616 0xffffffff8021fffd 0xffffffff80220816 0xffffffff80220a82 0xffffffff802212c6 0xffffffff8022199b 0xffffffff80119849 0xffffffff8038d440

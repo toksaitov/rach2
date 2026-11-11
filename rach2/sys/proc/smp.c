@@ -49,6 +49,26 @@ static int32_t bkl_hold_nr = -1;              /* its entry's system call number,
 static uint64_t bkl_seen_max_cycles;          /* the oldest hold an interrupt has found */
 static uintptr_t bkl_seen_pc[BKL_SAMPLE_PCS]; /* that instruction, then its callers */
 
+#define BKL_LONG_SLOTS 32
+#define BKL_LONG_US    16000u
+/* A nested interrupt's latest sample of a hold older than BKL_LONG_US.
+ * The big lock and disabled local interrupts serialize the ring's writers. */
+struct bkl_long_record {
+    uint64_t clock; /* TSC at the sample, on the processors' shared clock */
+    uint64_t age;   /* cycles since this hold's take */
+    uint32_t cpu;
+    uint32_t pid; /* thread interrupted, 0 when there is none */
+    uint32_t vector;
+    int32_t nr; /* entry system call, -1 for none */
+    char comm[16];
+    uintptr_t pc[BKL_SAMPLE_PCS];
+};
+static struct bkl_long_record bkl_long[BKL_LONG_SLOTS];
+static unsigned int bkl_long_head, bkl_long_count;
+static uint64_t bkl_long_since[NR_CPUS]; /* the hold sampled on this processor */
+static unsigned int bkl_long_slot[NR_CPUS];
+static unsigned char bkl_long_valid[NR_CPUS];
+
 /* Each processor's first sample past 1, 2, 4, 8 and 16 s into its hold under
  * way, each with its age in cycles, 0 until taken, and the longest hold's,
  * kept at its end. */
@@ -132,11 +152,12 @@ static int bkl_booted;
 #define BKL_CLAIM_AFTER 4096u
 #define BKL_PASS_AFTER  (1u << 16)
 
-/* One sender of requests at a time: a TLB request, a barrier or a page
- * directory to give up. Each processor has one slot of each kind, which a
- * sender fills and waits for, so a second sender would overwrite the first's
- * request. A processor that waits for the lock answers its own requests
- * (`spin_lock`), so two senders do not wait on each other. */
+/* One sender of requests at a time: a TLB request, a barrier, a page
+ * directory to give up or a function to run. Each processor has one slot of
+ * each kind, which a sender fills and waits for, so a second sender would
+ * overwrite the first's request. A processor that waits for the lock
+ * answers its own requests (`spin_lock`), so two senders do not wait on each
+ * other. */
 static struct spinlock ipi_lock = SPINLOCK_INIT_NAMED("ipi_lock");
 
 /* The processors online, the boot processor counted (`smp_cpu_count`). */
@@ -335,15 +356,40 @@ void bkl_hold_sample(uintptr_t pc, uintptr_t fp)
     struct percpu *cpu = this_cpu();
     int c = arch_cpu_id(), m;
     uintptr_t top;
-    uint64_t held;
+    uint64_t now, held, held_us;
 
     if (cpu->bkl_depth < 2) {
         return;
     }
-    held = arch_cycles() - cpu->bkl_since;
+    now = arch_cycles();
+    held = now - cpu->bkl_since;
+    held_us = timer_cycles_us(held);
     top = cpu->current ? cpu->current->kernel_stack : 0;
+    if (held_us >= BKL_LONG_US) {
+        struct bkl_long_record *r;
+
+        if (!bkl_long_valid[c] || bkl_long_since[c] != cpu->bkl_since) {
+            bkl_long_slot[c] = bkl_long_head;
+            bkl_long_head = (bkl_long_head + 1u) % BKL_LONG_SLOTS;
+            if (bkl_long_count < BKL_LONG_SLOTS)
+                bkl_long_count++;
+            bkl_long_since[c] = cpu->bkl_since;
+            bkl_long_valid[c] = 1;
+        }
+        r = &bkl_long[bkl_long_slot[c]];
+        r->clock = now;
+        r->age = held;
+        r->cpu = (uint32_t)c;
+        r->pid = cpu->current ? cpu->current->pid : 0;
+        r->vector = cpu->bkl_vector;
+        r->nr = cpu->bkl_nr;
+        k_memset(r->comm, 0, sizeof(r->comm));
+        if (cpu->current)
+            k_memcpy(r->comm, cpu->current->comm, sizeof(r->comm) - 1);
+        sample_chain(r->pc, pc, fp, top);
+    }
     for (m = 0; m < BKL_SAMPLE_MARKS; m++) {
-        if (!bkl_early_cycles[c][m] && timer_cycles_us(held) >= 1000000u << m) {
+        if (!bkl_early_cycles[c][m] && held_us >= 1000000u << m) {
             bkl_early_cycles[c][m] = held;
             sample_chain(bkl_early_pc[c][m], pc, fp, top);
         }
@@ -791,6 +837,79 @@ int32_t smp_profile_store(void *data, const char __user *buf, uint32_t len)
     return (int32_t)len;
 }
 
+/** Render a fixed copy of the last long holds, oldest first. The sizing
+ * call copies the bounded ring with interrupts off; the output call uses
+ * that same copy, as audio_proc_text does. Neither call sleeps, and both
+ * run under the big lock. */
+int32_t smp_long_show(void *data, char *buf, uint32_t cap)
+{
+    static struct bkl_long_record snap[BKL_LONG_SLOTS];
+    static unsigned int count;
+    struct bkl_text t;
+    unsigned int i, j, first;
+    uint32_t flags;
+
+    (void)data;
+    if (!buf) {
+        flags = kirq_save();
+        count = bkl_long_count;
+        first = (bkl_long_head + BKL_LONG_SLOTS - count) % BKL_LONG_SLOTS;
+        for (i = 0; i < count; i++)
+            snap[i] = bkl_long[(first + i) % BKL_LONG_SLOTS];
+        kirq_restore(flags);
+    }
+    t.buf = buf;
+    t.cap = cap;
+    t.len = 0;
+    text_str(&t, "clock_us age_us cpu pid comm vector syscall pc[8]\n");
+    for (i = 0; i < count; i++) {
+        const struct bkl_long_record *r = &snap[i];
+
+        text_dec(&t, timer_cycles_us(r->clock));
+        text_ch(&t, ' ');
+        text_dec(&t, timer_cycles_us(r->age));
+        text_ch(&t, ' ');
+        text_dec(&t, r->cpu);
+        text_ch(&t, ' ');
+        text_dec(&t, r->pid);
+        text_ch(&t, ' ');
+        if (!r->comm[0])
+            text_ch(&t, '-');
+        for (j = 0; j < sizeof(r->comm) && r->comm[j]; j++) {
+            unsigned char ch = (unsigned char)r->comm[j];
+
+            text_ch(&t, ch > ' ' && ch <= '~' ? (char)ch : '?');
+        }
+        text_ch(&t, ' ');
+        text_dec(&t, r->vector);
+        text_ch(&t, ' ');
+        if (r->nr < 0)
+            text_str(&t, "-1");
+        else
+            text_dec(&t, (uint32_t)r->nr);
+        for (j = 0; j < BKL_SAMPLE_PCS; j++) {
+            text_ch(&t, ' ');
+            text_hex(&t, r->pc[j]);
+        }
+        text_ch(&t, '\n');
+    }
+    return (int32_t)t.len;
+}
+
+/** Empty the long-hold ring; `len`. A hold already under way can be
+ * sampled anew. The caller holds the big lock. */
+int32_t smp_long_store(void *data, const char __user *buf, uint32_t len)
+{
+    uint32_t flags = kirq_save();
+
+    (void)data;
+    (void)buf;
+    bkl_long_head = bkl_long_count = 0;
+    k_memset(bkl_long_valid, 0, sizeof(bkl_long_valid));
+    kirq_restore(flags);
+    return (int32_t)len;
+}
+
 /**
  * Name the hold `cpu` begins after the entry its thread is in, the mark
  * `bkl_entry_push` left, so that a hold an entry run without the lock takes
@@ -1009,6 +1128,8 @@ static void smp_stop_here(struct percpu *cpu)
  * was asked to drop, since the sender frees the page once it sees the word
  * clear. A barrier request is answered by the locked exchange that clears
  * it, a full barrier, after a serializing instruction when it asks for one.
+ * A function to run is answered by clearing it after a full barrier, so the
+ * sender sees all the function wrote once it sees the slot clear.
  * A turn of a wait with interrupts off is also the watchdog's
  * (`watchdog_wait`).
  */
@@ -1045,6 +1166,11 @@ void smp_service(void)
             arch_space_load(get_page_dir_phys(_kernel_dir));
         }
         cpu->space_drop = NULL;
+    }
+    if (cpu->call_fn) {
+        cpu->call_fn(cpu->call_arg);
+        sched_mb();
+        cpu->call_fn = NULL;
     }
 }
 
@@ -1211,6 +1337,32 @@ void smp_space_release(const struct page_dir *dir)
     }
     for (c = 0; c < NR_CPUS; c++) {
         while (cpu_table[c].space_drop && cpu_table[c].online) {
+            smp_service();
+            arch_relax();
+        }
+    }
+    spin_unlock_irqrestore(&ipi_lock, flags);
+}
+
+void smp_call(int cpu, void (*fn)(void *), void *arg)
+{
+    uint32_t flags;
+
+    if (cpu == (int)arch_cpu_id()) {
+        flags = kirq_save();
+        fn(arg);
+        kirq_restore(flags);
+        return;
+    }
+    if (cpu < 0 || cpu >= NR_CPUS) {
+        return;
+    }
+    flags = spin_lock_irqsave(&ipi_lock);
+    if (cpu_table[cpu].online) {
+        cpu_table[cpu].call_arg = arg;
+        cpu_table[cpu].call_fn = fn;
+        platform_cpu_ipi(cpu);
+        while (cpu_table[cpu].call_fn && cpu_table[cpu].online) {
             smp_service();
             arch_relax();
         }

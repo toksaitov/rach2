@@ -1276,6 +1276,10 @@ static void row_ban(void)
     done(&m);
 }
 
+/** Nothing: one thread has no one to give way to. */
+void sched_give_way(void)
+{}
+
 int main(void)
 {
     row_engine_reset();

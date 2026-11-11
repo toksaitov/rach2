@@ -361,8 +361,9 @@ uint32_t timer_late_passes(void)
  *
  * Then the handler reschedules through `sched_preempt`: at once when the
  * current process is in user mode, and at the call's exit when it is
- * inside a system call, since timer IRQs stay enabled during a call so HDA
- * streaming keeps running, yet a switch in the middle of one is unsafe.
+ * inside a system call, since a switch in the middle of one is unsafe;
+ * timer IRQs stay enabled during a call to keep the clock, the timers and
+ * the HDA service's wake requests going.
  * A kernel thread defers the switch to its next sleep or service point
  * (`no_tick_switch`), as Linux without CONFIG_PREEMPTION does, since its
  * work changes state that only the big lock guards. Process 0 and the
@@ -1466,6 +1467,7 @@ static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uint
         init_pid = user_proc->pid;
         user_proc->tg->unkillable = !debug_shell_is_home;
         platform_threads_start();
+        hda_thread_start();
         evdev_sysfs_start();
     }
 
@@ -4051,11 +4053,11 @@ static void start_network(void)
     (void)ath9k_probe();
 }
 
-/* debugfs's bkl/calls and bkl/profile, the counts of system calls and
- * entries with their holds of the big lock, and the samples of the kernel
- * under it, which a write zeroes (proc/smp.c). */
+/* debugfs's big-lock counts, profile and long holds, each zeroed by a
+ * write (proc/smp.c). */
 static const struct debugfs_text_ops bkl_calls_ops = {smp_calls_show, smp_calls_store};
 static const struct debugfs_text_ops bkl_profile_ops = {smp_profile_show, smp_profile_store};
+static const struct debugfs_text_ops bkl_long_ops = {smp_long_show, smp_long_store};
 #ifdef RACH2_LOCKDEP
 /* debugfs's lockdep/inject, which makes the checker's two reports on
  * demand (lib/lockdep.c). */
@@ -4065,14 +4067,15 @@ static const struct debugfs_text_ops lockdep_inject_ops = {lockdep_inject_show,
 
 /** Start the processors past the first (`smp_start`) and the lockup
  * detectors on all of them (`watchdog_init`), then register bkl/calls,
- * bkl/profile and, with the checker, lockdep/inject in debugfs; a failure
- * there is logged. */
+ * bkl/profile, bkl/long and, with the checker, lockdep/inject in debugfs; a
+ * failure there is logged. */
 static void start_processors(void)
 {
     smp_start();
     watchdog_init();
     if (debugfs_create_text("bkl/calls", 0644u, &bkl_calls_ops, NULL) != 0 ||
-        debugfs_create_text("bkl/profile", 0644u, &bkl_profile_ops, NULL) != 0) {
+        debugfs_create_text("bkl/profile", 0644u, &bkl_profile_ops, NULL) != 0 ||
+        debugfs_create_text("bkl/long", 0644u, &bkl_long_ops, NULL) != 0) {
         klog(KLOG_WARN, "bkl", "debugfs: files not registered");
     }
 #ifdef RACH2_LOCKDEP

@@ -336,14 +336,19 @@ static volatile int hangcheck_kicked;
 
 #ifndef RACH2_HOSTTEST
 /** The earliest heartbeat or retire pass of the devices on the worker's
- * list whose GT is awake, as a tick, or 0 for none. */
+ * list whose GT is awake, as a tick, or 0 for none. A wedged GT or one whose
+ * hangcheck is off has no heartbeat, since i915_hangcheck returns before it
+ * moves `hc_next`, and a deadline already past would keep the worker from
+ * sleeping; Linux's next_heartbeat queues no beat when the interval is 0
+ * (drivers/gpu/drm/i915/gt/intel_engine_heartbeat.c:56-57 in 6.12.115). */
 static uint64_t hangcheck_deadline(void)
 {
     struct drm_i915_private *i915;
     uint64_t at = 0;
 
     for (i915 = submit_devices; i915; i915 = i915->gt.submit_next) {
-        if (i915->gt.awake && !i915->gt.wedged && (at == 0 || i915->gt.hc_next < at)) {
+        if (i915->gt.awake && !i915->gt.wedged && !i915->params.hangcheck_off &&
+            (at == 0 || i915->gt.hc_next < at)) {
             at = i915->gt.hc_next;
         }
         if (i915->gt.awake && (at == 0 || i915->gt.retire_next < at)) {
@@ -376,7 +381,14 @@ static int submit_ready(void *arg)
  * request waited for signals or the next heartbeat of an unparked GT is
  * due, then give the chip what is ready and beat, holding the big lock as
  * kernel code does. The heartbeat is the driver's hang detection, as
- * Linux's heartbeat worker is (i915_hangcheck.c).
+ * Linux's heartbeat worker is (i915_hangcheck.c). Like every kernel thread,
+ * it is not switched by the tick (`no_tick_switch`, which
+ * `setup_process_stack` sets): a retire's last put of an imported buffer runs
+ * the exporter's free, virtio-gpu's among them, whose state and its
+ * transport's the big lock alone guards, so the worker gives way only
+ * where it sleeps and between passes, as a kworker of Linux without full
+ * preemption gives way only between works (process_one_work's
+ * cond_resched, kernel/workqueue.c:3298-3299 in 6.12.115).
  */
 static void submit_thread_main(void)
 {
@@ -384,6 +396,7 @@ static void submit_thread_main(void)
 
     arch_irq_enable();
     for (;;) {
+        sched_service_point();
         submit_deadline = hangcheck_deadline();
         current_proc->wakeup_tick = submit_deadline;
         (void)wq_wait_event_idle(&submit_wait, submit_ready, 0);

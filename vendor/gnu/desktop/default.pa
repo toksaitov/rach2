@@ -4,4 +4,5 @@ load-module module-oss device=/dev/dsp sink_name=oss_output source_name=oss_inpu
 load-module module-native-protocol-unix
 set-default-sink oss_output
 set-default-source oss_input
+load-module module-suspend-on-idle
 .fail

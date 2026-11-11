@@ -1,0 +1,15 @@
+155.13 558.59
+capture running 0 requested 44100 rate 44100 format 0x4011 period 4096 periods 16 frames 2964480 overruns 0 lpib 61440
+service calls 12335 usec 9253292 max-usec 4481 missed 2 clock-us 162621602 gap-us 91271 asked-us 68692 asked-valid 1 moved-us 22333 revolution-us 69000
+queue fill 0 high 0 delay-ms 66 written 0 dropped 0 periods 148 underruns 0 missed 2 lpib 9728
+32:	595496	LAPIC	timer
+33:	4	IO-APIC	kbd
+41:	28	IO-APIC	acpi
+48:	7265	MSI	hda
+49:	1	MSI	xhci
+50:	19066	MSI	ahci
+51:	2967	MSI	rtl8168
+52:	9961	MSI	ath9k
+53:	307	MSI	i915
+SPU:	0	spurious
+FBK:	0	usb fallback

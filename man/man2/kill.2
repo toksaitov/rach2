@@ -1,4 +1,4 @@
-.Dd November 11, 2026
+.Dd November 12, 2026
 .Dt KILL 2
 .Os
 .Sh NAME
@@ -28,8 +28,9 @@ Select the caller's process group.
 Select the process group whose ID is
 .No - Ns Fa pid .
 .It Fa pid No = -1
-Select every process the caller may signal, except the caller's own
-process and the init of the caller's PID namespace, as on Linux.
+Select every process the caller can see, except the caller's own
+process and the init of the caller's PID namespace, as on Linux; the
+signal is posted only to those the caller may signal.
 An init sends
 .Dv SIGTERM
 and
@@ -62,11 +63,11 @@ A kernel thread takes no signal: a permitted call succeeds and discards
 it, as Linux's kernel threads ignore every signal.
 A group request, and a request with a
 .Fa pid
-of \-1, posts the signal once to each process the caller may signal,
-through its leader, even when the leader has ended while other threads
-run, as on Linux: the leader's credentials decide the permission, its
-mask whether an ignored signal is kept, and any thread that does not
-block the signal takes it.
+of \-1, posts the signal once to each selected process the caller may
+signal, through its leader, even when the leader has ended while other
+threads run, as on Linux: the leader's credentials decide the
+permission, its mask whether an ignored signal is kept, and any thread
+that does not block the signal takes it.
 A signal accepted during a member's fork is kept for its new child too;
 a send to one process or one thread is not.
 A group request succeeds if at least one member is permitted, returns
@@ -77,7 +78,8 @@ if no member exists.
 A request with a
 .Fa pid
 of \-1 succeeds if it selects any process, permitted or not, a process
-whose threads have all ended and a kernel thread included, and returns
+whose threads have all ended and a kernel thread included, posting to
+none when none is permitted, and returns
 .Er ESRCH
 only when it selects none, as on Linux.
 .Pp

@@ -531,6 +531,18 @@ static void row_stop(void)
           "and neither the caller nor the stuck processor runs the hook");
 }
 
+/** Take `lock`: one thread, so nothing waits. */
+void spin_lock(struct spinlock *lock)
+{
+    lock->locked = 1;
+}
+
+/** Give `lock` back. */
+void spin_unlock(struct spinlock *lock)
+{
+    lock->locked = 0;
+}
+
 /** Take `lock` with interrupts off: one thread, so nothing waits. */
 uint32_t spin_lock_irqsave(struct spinlock *lock)
 {
