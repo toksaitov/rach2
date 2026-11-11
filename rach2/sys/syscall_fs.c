@@ -6799,12 +6799,15 @@ int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, net_addr_
  * offset, holding the description's lock across the elements, as Linux holds
  * f_pos_lock across a vector, so that a sharer's seek cannot come between
  * them. The end of the whole vector is checked under that lock
- * (`rw_offset_end`). Returns the bytes read, stopping at the first element
- * not filled, or when none was read 0 at the end of the file or a negative
- * errno: -EBADF for no file, -EIO when a shared mapping's pages of the range
- * cannot be written back first (`filemap_file_reading`), -EINVAL for an end
- * past 2^63-1, or the type's error. A read of a byte or more reports
- * IN_ACCESS to inotify. May sleep.
+ * (`rw_offset_end`). A shared mapping's pages of each element's range are
+ * written back before that element is read (`filemap_file_reading`), so an
+ * element sees what an earlier one stored into a mapping of the file, as
+ * Linux reads the vector from the shared page cache in order. Returns the
+ * bytes read, stopping at the first element not filled, or when none was
+ * read 0 at the end of the file or a negative errno: -EBADF for no file,
+ * -EIO when those pages cannot be written back, -EINVAL for an end past
+ * 2^63-1, or the type's error. A read of a byte or more reports IN_ACCESS to
+ * inotify. May sleep.
  */
 static long readv_file(fd_entry_t *entry, const struct kernel_iovec *iov, int count,
                        uint32_t wanted)
@@ -6817,26 +6820,28 @@ static long readv_file(fd_entry_t *entry, const struct kernel_iovec *iov, int co
     if (!ofd || !ofd->vmnt) {
         return -EBADF;
     }
-    if (filemap_file_reading(ofd->vmnt, ofd->ino, ofd->offset, wanted) != 0) {
-        return -EIO;
-    }
     fd_ofd_lock(ofd);
     if (rw_offset_end(entry, wanted) != 0) {
         fd_ofd_unlock(ofd);
         return -EINVAL;
     }
     for (i = 0; i < count; i++) {
-        if (iov[i].iov_len == 0) {
+        uint32_t len = (uint32_t)iov[i].iov_len;
+
+        if (len == 0) {
             continue;
         }
-        r = file_read_locked(ofd, (char __user *)iov[i].iov_base, (uint32_t)iov[i].iov_len,
-                             ofd->offset);
+        if (filemap_file_reading(ofd->vmnt, ofd->ino, ofd->offset, len) != 0) {
+            r = -EIO;
+            break;
+        }
+        r = file_read_locked(ofd, (char __user *)iov[i].iov_base, len, ofd->offset);
         if (r <= 0) {
             break;
         }
         ofd->offset += (uint64_t)r;
         total += r;
-        if ((unsigned long)r < iov[i].iov_len) {
+        if ((uint32_t)r < len) {
             break;
         }
     }
