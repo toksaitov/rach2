@@ -1093,18 +1093,16 @@ static void console_deliver(void);
 /**
  * The UART's bytes go to the ring first, so a port whose interrupt is not
  * enabled, or has never taken a byte, is still read every tick; once the
- * interrupt has taken one, the tick reads the port every
- * CONSOLE_BACKUP_TICKS, and the interrupt takes the rest. A reader or
- * poller parked on the
- * console, which nothing else would tell of serial input while another
- * process runs, is then only woken: it drains and echoes the ring in its own
- * context (console_pump). With nobody parked and a session owning the
- * console, as when a foreground job runs while its shell waits in wait4, the
- * ring is drained here without echo (console_pump_irq), so a serial ^C/^Z
- * still reaches the foreground group and type-ahead waits for the next
- * reader. With no session the ring is left to the kernel debug shell, which
- * polls it itself and releases the console (tty_set_session 0) whenever it
- * regains control.
+ * interrupt has taken one, the tick reads the port every CONSOLE_BACKUP_TICKS,
+ * and the interrupt takes the rest. A reader or poller parked on the console,
+ * which nothing else would tell of serial input while another process runs, is
+ * then only woken: it drains and echoes the ring in its own context
+ * (console_pump). With nobody parked and a session owning the console, as when
+ * a foreground job runs while its shell waits in wait4, the ring is drained
+ * here without echo (console_pump_irq), so a serial ^C/^Z still reaches the
+ * foreground group and type-ahead waits for the next reader. With no session
+ * the ring is left to the kernel debug shell, which polls it itself and
+ * releases the console (tty_set_session 0) whenever it regains control.
  */
 void tty_console_poll(void)
 {
