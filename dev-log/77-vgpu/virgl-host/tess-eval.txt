@@ -81,9 +81,11 @@ pattern had missed:
 
 ShaderBuiltinConstantCase::iterate checks its constant in all six stages,
 the evaluation stage through the shader executor's isolines program; 25
-of the 59 builtin_constants cases were running at the deaths, and none of
-them passed. The list now leaves out all 59 and the ten evaluation-shader
-cases of the ubo, ssbo and atomic_counter groups. The six
+of the 59 builtin_constants cases were running at the deaths, 28 failed
+and six reported NotSupported, since they need OpenGL ES 3.2 and stop in
+init() before they draw. The list now leaves out the other 53 and the ten
+evaluation-shader cases of the ubo, ssbo and atomic_counter groups, five
+of which were running at the deaths and five failed. The six
 other cases running at the deaths, two of tessellation.tesscoord and four
 of copy_image.non_compressed, then ran one process in one guest, and each
 passed.
