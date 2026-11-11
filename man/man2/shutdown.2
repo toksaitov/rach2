@@ -32,7 +32,8 @@ Close the sending half, as Linux does.
 In the established or close-wait state, queued output is sent and then
 the FIN, so the peer receives end of input after those bytes, and a
 later send fails with
-.Er EPIPE .
+.Er EPIPE ,
+as does one another thread is blocked in, waiting for room.
 The connection stays attached to the socket: the peer's data and its
 FIN still reach a read, which is how a client such as
 .Xr nc 1

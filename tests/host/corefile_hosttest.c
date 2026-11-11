@@ -1,6 +1,7 @@
 /**
  * corefile_hosttest.c: the core file `fs_core_file` writes, its descriptor
- * and its limit, and the limit of an append that brings its buffer in again.
+ * and its limit, the limit of an append that brings its buffer in again,
+ * and the SIGPIPE of a writev to a TCP stream.
  *
  * host-deps: tests/host/compat/vfs_name_none.c tests/host/compat/devtree_none.c
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
@@ -35,6 +36,11 @@
  * must end short without releasing the lock. Only a call that moved no
  * byte may bring the buffer in with the lock let go; another writer then
  * moves the end, so the resumed append must check RLIMIT_FSIZE again.
+ *
+ * The writev row writes a vector of two elements to a TCP stream whose
+ * model send takes the first and fails the second with EPIPE: the call
+ * returns the first's count and posts no SIGPIPE, which only a failure of
+ * the first element posts. Its user pointers are the host's.
  */
 #include "isr.h"
 #include "lib/kuser.h"
@@ -565,6 +571,18 @@ int user_buffer_ok(uintptr_t addr, size_t len, int write)
     return 1;
 }
 
+/** A user range of the model lies in user memory. */
+int user_access_ok(uintptr_t addr, size_t len)
+{
+    (void)addr;
+    (void)len;
+    return 1;
+}
+
+/** Nothing: no row writes to the console, whose writes yield here. */
+void sched_service_point(void)
+{}
+
 /** A user range of the model ends in user space. */
 int user_span_ok(uintptr_t addr, size_t len)
 {
@@ -606,13 +624,17 @@ int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
     return 1;
 }
 
-/** No row copies from a user buffer: -1. */
+static int host_copies; /* nonzero while a row's user pointers are the host's */
+
+/** Copy from a host pointer while `host_copies` is set, as the writev row's
+ * vector is; no other row copies from a user buffer: 0 or -1. */
 int copy_from_user(void *dst, const void __user *src, size_t n)
 {
-    (void)dst;
-    (void)src;
-    (void)n;
-    return -1;
+    if (!host_copies) {
+        return -1;
+    }
+    k_memcpy(dst, (const void __force *)src, n);
+    return 0;
 }
 
 /** No row copies to a user buffer: -1. */
@@ -880,21 +902,33 @@ void socket_unref(struct socket *sock)
     (void)sock;
 }
 
-/** No row writes to a TCP socket, so none posts SIGPIPE: `rc`. */
+/* The writev row's: what `socket_tcp_send` answers to each call, the bytes
+ * sent or -errno, the calls made, and the SIGPIPEs `sock_stream_sent` would
+ * post. */
+static int32_t stream_answer[2];
+static int stream_sends, sigpipes;
+
+/** Count the SIGPIPE a TCP send's EPIPE posts when `post` is set: `rc`. */
 int32_t sock_stream_sent(int32_t rc, int post)
 {
-    (void)post;
+    sigpipes += rc == -EPIPE && post;
     return rc;
 }
 
-/** No row writes to a TCP socket: -EBADF. */
+/** Answer the writev row's next call from `stream_answer`, no more than
+ * `len` bytes, and -EPIPE past its two. */
 int socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblock)
 {
+    int32_t answer;
+
     (void)sock;
     (void)buf;
-    (void)len;
     (void)nonblock;
-    return -EBADF;
+    if (stream_sends >= 2) {
+        return -EPIPE;
+    }
+    answer = stream_answer[stream_sends++];
+    return answer > len ? len : answer;
 }
 
 /** No row writes to a datagram socket: -EBADF. */
@@ -1826,6 +1860,45 @@ void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
  * Set up the dumping process and the process that shares its table, and run the
  * rows; 0 when every check passed, 1 otherwise.
  */
+/**
+ * A writev to a TCP stream posts SIGPIPE only for an error it returns, as
+ * Linux's tcp_sendmsg returns what it copied: one whose first element goes
+ * and whose second fails with EPIPE returns the first's count with no
+ * signal, and one whose first fails posts it.
+ */
+static void stream_writev(void)
+{
+    static uint8_t bytes[8];
+    struct kernel_iovec v[2];
+    struct socket s;
+    int fd = 5;
+
+    row_begin();
+    k_memset(&s, 0, sizeof(s));
+    s.type = SOCK_STREAM;
+    check(fd < files.cap, "the table has a descriptor 5");
+    files.entries[fd].type = FD_TYPE_SOCKET;
+    files.entries[fd].sock = &s;
+    v[0].iov_base = (uintptr_t)bytes;
+    v[0].iov_len = 4;
+    v[1].iov_base = (uintptr_t)(bytes + 4);
+    v[1].iov_len = 4;
+    host_copies = 1;
+    stream_answer[0] = 4;
+    stream_answer[1] = -EPIPE;
+    stream_sends = sigpipes = 0;
+    check(writev_elements(fd, (uintptr_t)v, 2, 8) == 4 && stream_sends == 2 && sigpipes == 0,
+          "a writev whose second element fails returns the first's count with no SIGPIPE");
+    stream_answer[0] = -EPIPE;
+    stream_sends = 0;
+    check(writev_elements(fd, (uintptr_t)v, 2, 8) == -EPIPE && sigpipes == 1,
+          "a writev whose first element fails with EPIPE posts SIGPIPE");
+    host_copies = 0;
+    files.entries[fd].type = FD_TYPE_NONE;
+    files.entries[fd].sock = NULL;
+    row_end();
+}
+
 int main(void)
 {
     self.pid = self.tgid = 3;
@@ -1852,9 +1925,11 @@ int main(void)
     sharer_finds_no_descriptor();
     trailing_zero_limit();
     append_refault_limit();
+    stream_writev();
     if (!failures) {
         printf("corefile-hosttest: result: pass: the core file's descriptor, its trailing "
-               "zero under the limit, and an append's limit across a refault\n");
+               "zero under the limit, an append's limit across a refault, and a writev's "
+               "SIGPIPE\n");
     }
     return failures != 0;
 }

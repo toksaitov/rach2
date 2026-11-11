@@ -658,14 +658,16 @@ void socket_tcp_writable(struct socket *sock)
 }
 
 /** The wait predicate of a stream send: the send ring has room, or the
- * connection has left a sending state, so that a blocked sender stops
- * waiting and reports it. */
+ * connection has left a sending state or was shut down for writing, so
+ * that a blocked sender stops waiting and reports it, as Linux's
+ * sk_stream_wait_memory stops at SEND_SHUTDOWN. */
 static int send_space_ready(void *arg)
 {
     struct socket *sock = (struct socket *)arg;
     struct tcb *tcb = sock->tcb;
 
-    if (!tcb || (tcb->state != TCP_ESTABLISHED && tcb->state != TCP_CLOSE_WAIT)) {
+    if (!tcb || tcb->fin_pending ||
+        (tcb->state != TCP_ESTABLISHED && tcb->state != TCP_CLOSE_WAIT)) {
         return 1;
     }
     return (TCP_RING_SIZE - (tcb->send_tail - tcb->send_ack)) > 0;
