@@ -1864,10 +1864,6 @@ void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
 }
 
 /**
- * Set up the dumping process and the process that shares its table, and run the
- * rows; 0 when every check passed, 1 otherwise.
- */
-/**
  * A writev to a TCP stream posts SIGPIPE only for an error it returns, as
  * Linux's tcp_sendmsg returns what it copied: one whose first element goes
  * and whose second fails with EPIPE returns the first's count with no
@@ -1906,6 +1902,10 @@ static void stream_writev(void)
     row_end();
 }
 
+/**
+ * Set up the dumping process and the process that shares its table, and run the
+ * rows; 0 when every check passed, 1 otherwise.
+ */
 int main(void)
 {
     self.pid = self.tgid = 3;
