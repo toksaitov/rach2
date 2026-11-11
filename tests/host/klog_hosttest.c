@@ -556,7 +556,8 @@ static void bracket_rows(void)
  * write held back: the queue goes out first, and the record after it, not
  * dropped behind it; a record kept behind the full queue goes out between
  * the two; and a record a drain the panic stopped was part way through goes
- * out again whole.
+ * out again whole to the destination that was writing it and those after,
+ * and not to those that had it.
  */
 static void panic_queue_rows(void)
 {
