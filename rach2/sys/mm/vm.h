@@ -95,10 +95,21 @@
 #define VM_PROT_PKEY_SHIFT  15
 #define VM_PROT_PKEY        0x78000u
 #define VM_PROT_KEY(prot)   (((prot) & VM_PROT_PKEY) >> VM_PROT_PKEY_SHIFT)
+/* Kept the same way: the region counts as committed memory, as Linux's
+ * VM_ACCOUNT, which /proc/PID/smaps reports: the stack, the heap, a
+ * writable segment of a program, and a private mapping that was writable
+ * when it was made or that mprotect first makes writable, unless
+ * VM_PROT_NORESERVE is set. The mark stays when the region stops being
+ * writable. This kernel keeps no commit count; only smaps reads it. */
+#define VM_PROT_ACCOUNT     0x80000u
+/* Kept the same way: the mapping was made with MAP_NORESERVE, as Linux's
+ * VM_NORESERVE under overcommit_memory 0, and is never VM_PROT_ACCOUNT. */
+#define VM_PROT_NORESERVE   0x100000u
 /* The bits a change of the access bits keeps. */
 #define VM_PROT_KEPT                                                                             \
     (VM_PROT_NOWRITE | VM_PROT_IO | VM_PROT_WC | VM_PROT_UC | VM_PROT_DONTFORK | VM_PROT_LOCKS | \
-     VM_PROT_GUARD | VM_PROT_SEALED | VM_PROT_SECRET | VM_PROT_WIPEONFORK | VM_PROT_PKEY)
+     VM_PROT_GUARD | VM_PROT_SEALED | VM_PROT_SECRET | VM_PROT_WIPEONFORK | VM_PROT_PKEY |       \
+     VM_PROT_ACCOUNT | VM_PROT_NORESERVE)
 
 /* The kind of a region, which /proc/PID/maps reports and the fault, fork
  * and brk paths read. */

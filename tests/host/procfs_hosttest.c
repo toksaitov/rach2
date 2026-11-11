@@ -1667,13 +1667,19 @@ static void smaps_flags_row(vm_type_t type, uint32_t prot, struct vm_file *file,
 
 /** Possible access respects the region's restrictions; a shared mapping
  * that may not be made writable is ms but not sh, whether it is VM_SHARED
- * or served as a private one; device mappings cannot grow or enter a core;
+ * or served as a private one; the stack and the heap are charged, and a
+ * MAP_NORESERVE mapping is not; device mappings cannot grow or enter a core;
  * the vDSO's pages have the flags of Linux's special mappings; and each
  * flag appears in Linux's order. */
 static void smaps_flags_rows(void)
 {
     smaps_flags_row(VM_ANON, 0, NULL, "VmFlags: mr mw me\n");
-    smaps_flags_row(VM_STACK, VM_PROT_READ | VM_PROT_WRITE, NULL, "VmFlags: rd wr mr mw me gd\n");
+    smaps_flags_row(VM_STACK, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_ACCOUNT, NULL,
+                    "VmFlags: rd wr mr mw me gd ac\n");
+    smaps_flags_row(VM_HEAP, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_ACCOUNT | VM_PROT_LOCKONFAULT,
+                    NULL, "VmFlags: rd wr mr mw me lf ac\n");
+    smaps_flags_row(VM_ANON, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_NORESERVE | VM_PROT_WIPEONFORK,
+                    NULL, "VmFlags: rd wr mr mw me nr wf\n");
     smaps_flags_row(VM_SHARED, VM_PROT_READ, NULL, "VmFlags: rd sh mr mw me ms\n");
     smaps_flags_row(VM_SHARED, VM_PROT_READ | VM_PROT_NOWRITE, NULL, "VmFlags: rd mr me ms\n");
     smaps_flags_row(VM_FILE, VM_PROT_READ | VM_PROT_NOWRITE, NULL, "VmFlags: rd mr me ms\n");

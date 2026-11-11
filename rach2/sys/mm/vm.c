@@ -600,14 +600,36 @@ int vm_remove(vm_space_t *vm, uintptr_t start, uintptr_t end)
 }
 
 /* Options of `vm_change`, above every protection bit: a region with
- * VM_PROT_NOWRITE, or with VM_PROT_SECRET, stops the change; and, with the
- * key k in bits 24 to 27, a region left with key k, the execute-only key,
- * takes key 0. */
+ * VM_PROT_NOWRITE, or with VM_PROT_SECRET, stops the change; a private
+ * region made writable is charged; and, with the key k in bits 24 to 27, a
+ * region left with key k, the execute-only key, takes key 0. */
 #define VM_CHANGE_NOWRITE   0x80000000u
 #define VM_CHANGE_NOEXEC    0x40000000u
+#define VM_CHANGE_ACCOUNT   0x20000000u
 #define VM_CHANGE_XO        0x10000000u
 #define VM_CHANGE_XO_KEY(k) (VM_CHANGE_XO | ((uint32_t)(k) << 24))
 #define VM_CHANGE_OPTS      0xFF000000u
+
+/**
+ * The protection `vm_change` gives the region `r`: `(r->prot & ~mask) | bits`,
+ * with VM_PROT_ACCOUNT added under VM_CHANGE_ACCOUNT to a private region that
+ * was not writable and is not VM_PROT_NORESERVE, as Linux's mprotect_fixup
+ * charges one, and with VM_CHANGE_XO_KEY a key left at the execute-only key
+ * dropped to 0.
+ */
+static uint32_t vm_change_prot(const vma_t *r, uint32_t mask, uint32_t bits, uint32_t opts)
+{
+    uint32_t prot = (r->prot & ~mask) | bits;
+
+    if ((opts & VM_CHANGE_ACCOUNT) && r->type != VM_SHARED &&
+        !(r->prot & (VM_PROT_WRITE | VM_PROT_NORESERVE))) {
+        prot |= VM_PROT_ACCOUNT;
+    }
+    if ((opts & VM_CHANGE_XO) && VM_PROT_KEY(prot) == ((opts >> 24) & 15u)) {
+        prot &= ~(uint32_t)VM_PROT_PKEY;
+    }
+    return prot;
+}
 
 /**
  * Give each region of [start, end) the protection `(prot & ~mask) | bits`, for
@@ -617,7 +639,8 @@ int vm_remove(vm_space_t *vm, uintptr_t start, uintptr_t end)
  * VM_CHANGE_NOWRITE and VM_CHANGE_NOEXEC, with which a region with
  * VM_PROT_NOWRITE, or VM_PROT_SECRET, stops the change with -3, as Linux's
  * mprotect answers EACCES without VM_MAYWRITE or VM_MAYEXEC, and
- * VM_CHANGE_XO_KEY (`vm_protect_key`). An empty range changes nothing. 0,
+ * VM_CHANGE_ACCOUNT and VM_CHANGE_XO_KEY (`vm_change_prot`). An empty range
+ * changes nothing. 0,
  * -1 for a gap, -2 when a split has no room, or -3; of -1 and -3, the one
  * met first in address order, and every error leaves the regions as they
  * were.
@@ -660,12 +683,7 @@ static int vm_change(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t ma
             (void)vm_split(vm, r, end);
         }
         if (!(r->prot & skip)) {
-            uint32_t prot = (r->prot & ~mask) | bits;
-
-            if ((opts & VM_CHANGE_XO) && VM_PROT_KEY(prot) == ((opts >> 24) & 15u)) {
-                prot &= ~(uint32_t)VM_PROT_PKEY;
-            }
-            r->prot = prot;
+            r->prot = vm_change_prot(r, mask, bits, opts);
         }
     }
     r = first->prev ? first->prev : first;
@@ -687,7 +705,7 @@ int vm_protect_key(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot
 {
     uint32_t mask = ~(uint32_t)VM_PROT_KEPT;
     uint32_t bits = prot & ~(uint32_t)VM_PROT_KEPT;
-    uint32_t opts = ((prot & VM_PROT_WRITE) ? VM_CHANGE_NOWRITE : 0u) |
+    uint32_t opts = ((prot & VM_PROT_WRITE) ? VM_CHANGE_NOWRITE | VM_CHANGE_ACCOUNT : 0u) |
                     ((prot & VM_PROT_EXEC) ? VM_CHANGE_NOEXEC : 0u);
 
     if (key >= 0) {
