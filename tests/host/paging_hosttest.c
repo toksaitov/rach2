@@ -49,7 +49,10 @@
  * `kstack_overrun_pid` answers with the thread's pid, it must panic as that
  * stack's overrun, and at the stack's lowest byte, above the guard, with the
  * handler's general panic. Each runs in a forked child, whose exit status
- * says which panic came.
+ * says which panic came. Two more drive it with faults it recovers from, a
+ * page-cache window fault that the fill serves and a user write that
+ * becomes SIGSEGV, and check that neither notes a fault for a panic's
+ * report, which a later plain panic would show.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -176,15 +179,20 @@ void k_panic(const char *str)
     exit(1);
 }
 
-/** Nothing: the fault's note is for the panic's report, which no row reads. */
+static int notes; /* faults noted for a panic's report since a row began */
+
+/** Count the note: the panic's report shows the last one, and panic.c
+ * never clears it, so a note on a path that returns is shown under any
+ * later panic of the processor. */
 void k_panic_note_fault(const char *name, uintptr_t ip, long error)
 {
     (void)name;
     (void)ip;
     (void)error;
+    notes++;
 }
 
-/** Nothing, as `k_panic_note_fault`. */
+/** Nothing: the address belongs to the note `k_panic_note_fault` counts. */
 void k_panic_note_address(uintptr_t address)
 {
     (void)address;
@@ -202,26 +210,31 @@ void tss_set_double_fault_dir(uint32_t dir)
     (void)dir;
 }
 
-/** Nothing: the fault handler calls it on a path no row takes. */
+static int segvs; /* SIGSEGVs the fault handler forced since a row began */
+
+/** Count a SIGSEGV; the process is not touched. */
 void signal_force(process_t *target, int signo, const struct k_siginfo *info)
 {
     (void)target;
-    (void)signo;
     (void)info;
+    segvs += signo == SIGSEGV;
 }
 
-/** 0: the page-cache window is empty. */
+static uint32_t window_bytes; /* the page-cache window's size, 0 for none */
+static int window_fills;      /* what `pc_fault` returns */
+
+/** `window_bytes`. */
 uint32_t pc_window_size(void)
 {
-    return 0;
+    return window_bytes;
 }
 
-/** 0, as for an address the page cache does not back. */
+/** `window_fills`: 1 when a row has the page cache serve the fault. */
 int pc_fault(uintptr_t fault_address, int write)
 {
     (void)fault_address;
     (void)write;
-    return 0;
+    return window_fills;
 }
 
 /** Nothing: no row maps a file. */
@@ -291,7 +304,7 @@ void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *nam
     (void)name;
 }
 
-/** Nothing: no row faults in user mode. */
+/** Nothing: a user fault here is signalled through `signal_force`. */
 void terminate_current_process(int32_t signo)
 {
     (void)signo;
@@ -596,6 +609,51 @@ static void fault_rows(void)
               "a supervisor fault at the stack's lowest byte panics as any kernel fault");
 }
 
+/**
+ * Faults the handler recovers from note nothing for a panic's report, so
+ * that a plain `k_panic` after them reports no exception: a supervisor
+ * fault in the page-cache window that the fill serves, and a user write
+ * that no region holds, which becomes SIGSEGV. The note was once written
+ * before both.
+ */
+static void recovered_rows(void)
+{
+    static process_t proc;
+    static struct mm mm;
+    static struct k_sigaction acts[KSIG_MAX + 1];
+    process_t *was = cpu_table[0].current;
+    isr_params_t params;
+
+    cpu_table[0].current = &proc;
+    k_memset(&params, 0, sizeof(params));
+    params.vector = 14;
+    params.error_code = 0x2; /* a write, from supervisor mode */
+    params.cs = 0x08;
+    fault_cr2 = PCWIN_BASE;
+    window_bytes = PAGE_SIZE;
+    window_fills = 1;
+    notes = 0;
+    _page_fault_handler(&params);
+    check(notes == 0, "a page-cache window fault that the fill serves notes no fault, so a later "
+                      "panic reports no exception");
+    window_bytes = 0;
+    window_fills = 0;
+
+    proc.mm = &mm;
+    proc.sigacts = acts;
+    params.error_code = 0x6; /* a write, from user mode */
+    params.cs = 0x1B;
+    fault_cr2 = USER_ADDR_MIN + 0x1000u;
+    notes = 0;
+    segvs = 0;
+    _page_fault_handler(&params);
+    check(segvs == 1 && notes == 0, "a user fault that becomes SIGSEGV notes no fault, so a later "
+                                    "panic reports no exception");
+    proc.mm = 0;
+    proc.sigacts = 0;
+    cpu_table[0].current = was;
+}
+
 /** The protection keys are off in the host test, as on a processor without
  * them. */
 int fpu_pkeys(void)
@@ -620,6 +678,7 @@ int main(void)
     window_rows();
     temp_rows();
     fault_rows();
+    recovered_rows();
     check(boot_carves == 0, "no row reached the boot allocator after the heap exists");
 
     if (fails) {
