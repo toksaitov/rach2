@@ -327,6 +327,10 @@ static const struct step {
     {"fork for the send that raises SIGPIPE", "shutdown-epipe"},
     {"a send after shutdown without MSG_NOSIGNAL did not end the sender with SIGPIPE",
      "shutdown-epipe"},
+    {"an empty sendmsg after shutdown is not EPIPE", "shutdown-epipe"},
+    {"fork for the empty sendmsg that raises SIGPIPE", "shutdown-epipe"},
+    {"an empty sendmsg after shutdown without MSG_NOSIGNAL did not end the sender with SIGPIPE",
+     "shutdown-epipe"},
     {"a blocking read after shutdown is not the end of input", "shutdown-blocking-eof"},
     {"nonblocking after shutdown", "shutdown-nonblocking-eof"},
     {"a nonblocking read after shutdown is not the end of input", "shutdown-nonblocking-eof"},
@@ -1763,9 +1767,28 @@ static void shutdown_wakes_a_sharer(int cs)
         fail("a reader asleep through a shutdown did not read the end of input");
 }
 
+/** sendmsg on the stream `s` of `count` buffers of no bytes, or of none
+ * when `count` is 0, with `flags`: the count sent or a negated errno. */
+static int sendmsg_empty(int s, size_t count, int flags)
+{
+    static struct iovec_probe iov[2];
+    struct msghdr_probe msg = {0};
+    unsigned long args[3];
+
+    iov[0].iov_base = rm_a;
+    iov[1].iov_base = rm_b;
+    msg.msg_iov = count ? iov : (struct iovec_probe *)0;
+    msg.msg_iovlen = count;
+    args[0] = (unsigned long)s;
+    args[1] = (unsigned long)&msg;
+    args[2] = (unsigned long)flags;
+    return socketcall(SC_SENDMSG, args);
+}
+
 /**
  * A stream this end shut down for writing: a send with MSG_NOSIGNAL is
- * EPIPE, and one without it ends the sender with SIGPIPE, as on Linux; a
+ * EPIPE, and one without it ends the sender with SIGPIPE, as on Linux, and
+ * so is a sendmsg with no byte to send, of no buffer or of empty ones; a
  * read, blocking or not, is the end of input, since the peer has closed
  * its end. A stream that never connected reads ENOTCONN. `cs` is a
  * connected client whose peer has shut down; `sa` is scratch space of a
@@ -1773,8 +1796,12 @@ static void shutdown_wakes_a_sharer(int cs)
  */
 static void shutdown_rows(int cs, uint8_t *sa)
 {
+    /* A zeroed sigaction, handler, flags, restorer and an 8-byte mask:
+     * SIG_DFL, whatever the probe inherited. */
+    static const unsigned long dfl[5] = {0, 0, 0, 0, 0};
     unsigned long args[6];
     int fresh, pid, status = 0;
+    size_t count;
 
     args[0] = (uint32_t)cs;
     args[1] = 1; /* SHUT_WR */
@@ -1792,10 +1819,6 @@ static void shutdown_rows(int cs, uint8_t *sa)
     if (pid < 0)
         fail("fork for the send that raises SIGPIPE");
     if (pid == 0) {
-        /* A zeroed sigaction, handler, flags, restorer and an 8-byte mask:
-         * SIG_DFL, whatever the probe inherited. */
-        static const unsigned long dfl[5] = {0, 0, 0, 0, 0};
-
         syscall4(SYS_RT_SIGACTION, SIGPIPE, (long)dfl, 0, 8);
         args[3] = 0;
         socketcall(SC_SENDTO, args);
@@ -1803,6 +1826,22 @@ static void shutdown_rows(int cs, uint8_t *sa)
     }
     if (sys_waitpid(pid, &status) != pid || (status & 0x7F) != SIGPIPE)
         fail("a send after shutdown without MSG_NOSIGNAL did not end the sender with SIGPIPE");
+    if (sendmsg_empty(cs, 0, MSG_NOSIGNAL) != -EPIPE ||
+        sendmsg_empty(cs, 2, MSG_NOSIGNAL) != -EPIPE)
+        fail("an empty sendmsg after shutdown is not EPIPE");
+    for (count = 0; count <= 2; count += 2) {
+        pid = sys_fork();
+        if (pid < 0)
+            fail("fork for the empty sendmsg that raises SIGPIPE");
+        if (pid == 0) {
+            syscall4(SYS_RT_SIGACTION, SIGPIPE, (long)dfl, 0, 8);
+            sendmsg_empty(cs, count, 0);
+            sys_exit(0);
+        }
+        if (sys_waitpid(pid, &status) != pid || (status & 0x7F) != SIGPIPE)
+            fail("an empty sendmsg after shutdown without MSG_NOSIGNAL did not end the sender "
+                 "with SIGPIPE");
+    }
     if (sys_read(cs, sa, 1) != 0)
         fail("a blocking read after shutdown is not the end of input");
     if (sys_fcntl(cs, F_SETFL, O_NONBLOCK) != 0)

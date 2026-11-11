@@ -152,6 +152,11 @@ or
 to a TCP stream.
 A vector that sent some of its bytes before the failure returns their
 count with no signal.
+A
+.Fn sendmsg
+on a stream whose vector has no byte, of no buffer or only empty ones, is
+a send of 0 bytes, which fails and signals as any send does when the
+stream cannot send.
 .Ss Datagrams
 For an IPv4 datagram socket,
 .Fa addr

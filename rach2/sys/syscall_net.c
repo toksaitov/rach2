@@ -3679,16 +3679,19 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
 /**
  * sendmsg(2) on the stream socket `fd`: its `iovlen` buffers, whose vector
  * is at `iov_user`, sent one after another, stopping at the first that
- * goes short. Returns the bytes sent, or -errno when the first buffer
- * sends none. Only a failure of the first buffer may post SIGPIPE
- * (`sock_stream_sent`), since Linux's send returns what it sent with no
- * signal.
+ * goes short. A vector with no bytes, no buffer or only empty ones, is a
+ * send of 0 bytes, which a socket that cannot send fails as Linux's
+ * tcp_sendmsg fails it, with EPIPE and SIGPIPE after a shutdown. Returns
+ * the bytes sent, or -errno when the first buffer sends none. Only a
+ * failure of the first buffer may post SIGPIPE (`sock_stream_sent`), since
+ * Linux's send returns what it sent with no signal.
  */
 static int32_t sendmsg_stream(int fd, uintptr_t iov_user, uint32_t iovlen, int flags)
 {
     struct kernel_iovec one;
     uint32_t i, total = 0;
     int32_t rc;
+    int tried = 0;
 
     for (i = 0; i < iovlen; i++) {
         if (iov_fetch(&one, iov_user, i) != 0) {
@@ -3697,6 +3700,7 @@ static int32_t sendmsg_stream(int fd, uintptr_t iov_user, uint32_t iovlen, int f
         if (one.iov_len == 0) {
             continue;
         }
+        tried = 1;
         rc = do_sendto(fd, one.iov_base, (int)USER_RW_LEN(one.iov_len),
                        total ? flags | MSG_NOSIGNAL : flags, 0, 0);
         if (rc < 0) {
@@ -3706,6 +3710,9 @@ static int32_t sendmsg_stream(int fd, uintptr_t iov_user, uint32_t iovlen, int f
         if ((uint32_t)rc < one.iov_len) {
             break;
         }
+    }
+    if (!tried) {
+        return do_sendto(fd, 0, 0, flags, 0, 0);
     }
     return (int32_t)total;
 }
