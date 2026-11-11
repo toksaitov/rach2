@@ -1130,10 +1130,19 @@ and
 and
 .Pa shrink_underused
 read 1.
+With less than 512 MiB of memory, as Linux leaves them then,
+.Pa defrag
+reads
+.Ql always defer defer+madvise madvise [never]
+and
+.Pa use_zero_page
+0.
 .Pa hpage_pmd_size
 is the page-directory mapping size in bytes, 2097152 on x86-64 and
 4194304 on i686, and is read-only.
-The other five take root's write as Linux parses it:
+The other five take root's write as Linux parses it, of which the first
+4096 bytes reach the parser, as on Linux; an empty write returns 0 and
+changes nothing:
 .Pa enabled
 and
 .Pa defrag
@@ -1145,7 +1154,8 @@ one of its words in at most 15 bytes, of which a final newline is dropped;
 .Ql +
 and newline, and
 .Er ERANGE
-for a number too large for an unsigned long; and
+for a number too large for an unsigned long, or for digits past 64 bits
+whatever follows them; and
 .Pa shrink_underused
 a boolean as Linux's
 .Fn kstrtobool

@@ -24,6 +24,12 @@ struct vfs_ref;
  * reach, Linux's nsfs's 0:4. */
 #define NSFS_DEV    4u
 
+/** Give the transparent_hugepage files Linux 6.12's boot policy for this
+ * machine's memory, once the frame pool is counted: with less than 512 MiB
+ * managed, as Linux's hugepage_init clears every flag, `defrag` is never
+ * and `use_zero_page` 0. */
+void procfs_thp_boot(void);
+
 /** The kernel's id of the process or thread whose /proc directory has the
  * number `pid` in the caller's PID namespace, or of the caller's process for
  * SYNTH_PID_SELF; -1 when there is none that has not been reaped. */
