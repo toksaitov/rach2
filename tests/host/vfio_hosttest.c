@@ -623,6 +623,8 @@ int pin_user(struct mm *mm, uintptr_t addr, uintptr_t len, uint32_t flags,
 
     (void)mm;
     CHECK((flags & PIN_IO) != 0, "VFIO accepts device pages beside pinned RAM");
+    CHECK(holder->flags == PIN_KEEP_PAST_END,
+          "VFIO keeps a mapping of RAM past the end of the address space");
     if (addr == 0) {
         return -EFAULT;
     }

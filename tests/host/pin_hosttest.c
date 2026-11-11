@@ -28,7 +28,8 @@
  * a fork copies a pinned private page for the child, and a pin of a page
  * shared copy-on-write makes it the parent's own first; an unmap of a
  * pinned page and the end of the address space tell the holder once and
- * drop the frames and the charge, while a pin charged to no one stays.
+ * drop the frames and the charge, while a pin charged to no one stays;
+ * a pin of RAM whose holder keeps it past the end loses only its charge.
  * Device pages accepted by VFIO carry no RAM charge; mixed ranges,
  * protection, revocation and cleanup preserve that distinction.
  * mlock's regions split and merge, count in VmLck, lose their lock in a
@@ -158,7 +159,9 @@ static void on_release(struct pin *pin, void *owner)
 }
 
 static uint32_t holder_count;
-static const struct pin_holder holder = {on_release, &holder_count};
+static const struct pin_holder holder = {on_release, &holder_count, 0};
+/* VFIO's holder, whose pins of RAM outlive the end of the address space. */
+static const struct pin_holder keeper = {on_release, &holder_count, PIN_KEEP_PAST_END};
 
 /** Make A unprivileged with RLIMIT_MEMLOCK `pages` pages, or privileged
  * with no limit when `pages` is 0xFFFFFFFF. */
@@ -361,6 +364,30 @@ static void release_rows(void)
           "unpin gives the rest back and tells no one");
 }
 
+/** A pin of RAM whose holder keeps it past the end of the address space,
+ * VFIO's, loses only its charge there: the holder hears nothing, the frame
+ * stays pinned after its mapping goes, and unpin frees it. */
+static void keep_rows(void)
+{
+    struct pin *p;
+    uintptr_t f;
+    uint32_t before = released;
+
+    check(pin_user(&mm_b, VA, P, PIN_IO | PIN_WRITE, &keeper, &p) == 0 && mm_b.pinned == 1 &&
+              pin_ram_count(p) == 1,
+          "a keeping pin of B's RAM page, charged to B");
+    f = pin_phys(p, 0);
+    mmn_release(&mm_b);
+    check(pin_live(p) && pin_phys(p, 0) == f && released == before && mm_b.pinned == 0 &&
+              mm_b.notify == NULL,
+          "the end of B leaves the keeping pin live, untold, and drops B's charge");
+    unmap_user_range(&dir_b, VA, VA + P);
+    check(frame_word(f) == FRAME_PIN_BIAS, "the frame stays pinned once B's mapping goes");
+    unpin(p);
+    check(frame_word(f) == 0 && mm_b.pinned == 0 && released == before,
+          "unpin frees the frame and charges no one");
+}
+
 /* A BAR mapped into user space; no RAM frame backs its normal address. */
 static struct {
     uintptr_t phys;
@@ -419,10 +446,10 @@ static void io_lifetime(uintptr_t addr, uintptr_t phys, vma_t *vma)
     mmn_notify(&mm_a, MMN_UNMAP, addr, addr + P);
     check(!pin_live(p) && released == before + 2, "unmap drops the BAR pin once");
     unpin(p);
-    check(pin_user(&mm_a, addr, P, PIN_IO, &holder, &p) == 0, "a BAR pin before exit");
+    check(pin_user(&mm_a, addr, P, PIN_IO, &keeper, &p) == 0, "a keeping BAR pin before exit");
     mmn_release(&mm_a);
     check(!pin_live(p) && released == before + 3 && mm_a.pinned == 0,
-          "exit drops the BAR pin without subtracting a RAM charge");
+          "exit drops a BAR pin, kept or not, without subtracting a RAM charge");
     unpin(p);
     vm_remove(&mm_a.vm, addr, addr + 2 * P);
     unmap_user_range(&dir_a, addr, addr + 2 * P);
@@ -728,6 +755,7 @@ int main(void)
     ram_frame_rows();
     fork_rows();
     release_rows();
+    keep_rows();
     io_rows();
     lock_rows();
     stack_rows();

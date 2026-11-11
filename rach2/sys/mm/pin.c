@@ -47,7 +47,9 @@ static void pin_drop(struct pin *pin)
 /** The pin's range heard of a change: an unmap of a page of a user range,
  * or the end of the address space, takes the pin back after the holder
  * has stopped the device. A pin with device pages also ends before their
- * revocation or protection change; RAM pins survive those changes. */
+ * revocation or protection change; RAM pins survive those changes. At the
+ * end, a pin of RAM whose holder keeps it past the end loses only its
+ * charge, its range already off the list. */
 static void pin_invalidate(struct mmn_range *r, int event, uintptr_t start, uintptr_t end)
 {
     struct pin *pin = (struct pin *)r;
@@ -56,6 +58,14 @@ static void pin_invalidate(struct mmn_range *r, int event, uintptr_t start, uint
     (void)end;
     if (event != MMN_UNMAP && event != MMN_RELEASE &&
         !(pin->ram_pages != pin->count && (event == MMN_TRUNCATE || event == MMN_PROTECT))) {
+        return;
+    }
+    if (event == MMN_RELEASE && pin->holder && (pin->holder->flags & PIN_KEEP_PAST_END) &&
+        pin->ram_pages == pin->count) {
+        if (pin->mm) {
+            pin->mm->pinned -= pin->ram_pages;
+            pin->mm = NULL;
+        }
         return;
     }
     if (pin->holder && pin->holder->release) {

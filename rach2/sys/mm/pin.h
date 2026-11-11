@@ -17,8 +17,11 @@
  * user range, or the end of the address space a pin is charged to, first
  * calls the holder's `release`, which stops the device's use of the
  * frames, and then drops them and the charge; the record stays the
- * holder's, which `pin_live` then answers 0 for, until its `unpin`. Every
- * call is made under the big kernel lock.
+ * holder's, which `pin_live` then answers 0 for, until its `unpin`. A
+ * holder with PIN_KEEP_PAST_END is the exception at the end of the
+ * address space, for a pin of RAM alone: only the charge goes, and the
+ * frames stay the device's until `unpin`. Every call is made under the
+ * big kernel lock.
  */
 #ifndef _PIN_H_
 #define _PIN_H_
@@ -39,6 +42,13 @@ struct pin;
  * read whatever its page, with no fast path to take a present one. */
 #define PIN_SLOW  0x4u
 
+/* A flag of `pin_holder`: the end of the address space leaves a pin of RAM
+ * alone live, with its frames, and drops only the charge, as Linux's VFIO
+ * type1 keeps its pinned pages past the process's exit_mm. A process's
+ * address space ends before its descriptors close, so a device whose
+ * release comes at the close may write to the frames until then. */
+#define PIN_KEEP_PAST_END 0x1u
+
 /*
  * The holder of a pin, a record of the driver's that lives as long as the
  * pin: `release` is what it does when the memory manager takes the pin's
@@ -46,10 +56,12 @@ struct pin;
  * every frame before it returns. It is called under the big kernel lock
  * from an unmap or the end of an address space, must not sleep, and must
  * not unpin or pin. A NULL holder, or a NULL `release`, is told nothing.
+ * `flags` is 0 or PIN_KEEP_PAST_END.
  */
 struct pin_holder {
     void (*release)(struct pin *pin, void *owner);
     void *owner;
+    uint32_t flags;
 };
 
 /**
