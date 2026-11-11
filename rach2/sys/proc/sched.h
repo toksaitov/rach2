@@ -145,9 +145,9 @@ void sched_wait_off_cpu(const process_t *p);
  */
 void sched_preempt(void);
 
-/** Take the switch an interrupt asked for (`need_resched`), if one did,
- * clearing the request before the switch. Called with interrupts off, at a
- * call's exit, a fault's end and from `sched_service_point`. */
+/** Take the switch an interrupt asked for (`need_resched`), if one did;
+ * `schedule` clears the request at its selection. Called with interrupts
+ * off, at a call's exit, a fault's end and from `sched_service_point`. */
 void sched_take_preempt(void);
 
 /** Inside a long system call, between two of its pieces, or in a kernel
