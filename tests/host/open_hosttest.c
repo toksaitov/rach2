@@ -10,6 +10,7 @@
  * host-deps: rach2/sys/fs/nodelock.c rach2/sys/mm/notify.c
  * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/bkl_none.c
  * host-deps: tests/host/compat/atomic_host.c
+ * host-deps: tests/host/compat/mmap_lock_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
  * The rows check:
@@ -380,6 +381,12 @@ uint32_t kirq_save(void)
 
     interrupt_flags = 0;
     return flags;
+}
+
+/** 1: the test runs as the one thread, which holds the big lock. */
+int bkl_held(void)
+{
+    return 1;
 }
 
 /** Restore the model's saved flags. */
