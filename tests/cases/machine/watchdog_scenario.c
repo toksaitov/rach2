@@ -1,4 +1,5 @@
-/* Observe a q35 watchdog expiry through QMP; refuse std-vga in gfxtool. */
+/* Observe a q35 watchdog expiry through QMP, keep a panic's record across
+ * the reset the kernel's TCO makes, and refuse std-vga in gfxtool. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -51,6 +52,69 @@ static void expire(struct lc *l)
     lc_quit(l, m, NULL);
 }
 
+/** Whether the console of the q35 machine from `from` to `to` holds `text`;
+ * 0 when it cannot be read, which halts the scenario. */
+static int console_holds(struct lc *l, uint64_t from, uint64_t to, const char *text)
+{
+    char *w = lc_console(l, "q35", from, to);
+    int held = w != NULL && strstr(w, text) != NULL;
+
+    free(w);
+    return held;
+}
+
+/**
+ * Boot with ramoops's region and the TCO started by the kernel, show that
+ * the kernel feeds it for three heartbeats, panic, and let the TCO, unfed
+ * once the tick stops, reset the guest; QEMU keeps the RAM across the
+ * reset, and the second boot reads the record. QEMU runs with -no-reboot,
+ * so the reboot action is set to reset first. pstoreprobe exits 0 only
+ * after its checks, and prints none of the old log, whose records would
+ * read as this boot's.
+ */
+static void crash(struct lc *l)
+{
+    struct etude_case_machine *m;
+    enum etude_status st;
+    uint64_t at = 0, from;
+    char *reply = NULL, *w;
+
+    if ((m = lc_shell(l, "crash", "q35", &at)) == NULL) {
+        return;
+    }
+    st = etude_qmp(m, "set-action", "{\"reboot\":\"reset\",\"watchdog\":\"reset\"}", &reply);
+    free(reply);
+    if (st != ETUDE_OK) {
+        lc_halt(l, st, "select QMP reboot and watchdog reset");
+        return;
+    }
+    lc_assert(
+        l, "armed",
+        console_holds(l, 0, at, "ramoops: ready: 0x100000 bytes at 0x4000000, 14 dmesg zones") &&
+            console_holds(l, 0, at, "running, fed by the kernel until opened, heartbeat 5 s"),
+        "the boot did not record ramoops ready and the TCO fed by the kernel");
+    w = lc_run(l, m, "q35", "exec /pstoreprobe fed 15\r", &at, "fed");
+    if (w == NULL) {
+        return;
+    }
+    free(w);
+    if (!lc_type(l, m, "fault\r") || !lc_wait(l, m, "panic: stopped: ", &at, "panic")) {
+        return;
+    }
+    from = at;
+    if (!lc_wait(l, m, "Type 'help'", &at, NULL) || !lc_wait(l, m, "\n> ", &at, NULL)) {
+        return;
+    }
+    lc_assert(l, "reset", console_holds(l, from, at, "ramoops: found: dmesg-ramoops-0"),
+              "the second boot found no dmesg record");
+    w = lc_run(l, m, "q35", "exec /pstoreprobe read\r", &at, "record");
+    if (w == NULL) {
+        return;
+    }
+    free(w);
+    lc_quit(l, m, NULL);
+}
+
 /** Run the real utility on std-vga, require its refusal and a failed
  * process status, then end the guest through QMP. */
 static void refuse(struct lc *l)
@@ -80,16 +144,20 @@ static void refuse(struct lc *l)
     lc_quit(l, m, NULL);
 }
 
-/** Dispatch the two independent diagnostic boots. */
+/** Dispatch the three independent diagnostic boots. */
 int etude_scenario(struct etude_case *c)
 {
     static const char *const expiry[] = {"armed", "watchdog", NULL};
+    static const char *const record[] = {"armed", "fed", "panic", "reset", "record", NULL};
     static const char *const refusal[] = {"refused", NULL};
     struct lc l;
 
     if (strstr(etude_case_id(c), ".expire")) {
         lc_begin(&l, c, expiry);
         expire(&l);
+    } else if (strstr(etude_case_id(c), ".pstore")) {
+        lc_begin(&l, c, record);
+        crash(&l);
     } else {
         lc_begin(&l, c, refusal);
         refuse(&l);
