@@ -404,6 +404,13 @@ struct tcb {
     uint8_t retx_flags; /* 0 = none, else the control flags       */
     uint8_t ack_owed;   /* a bare acknowledgement the driver refused */
     uint32_t retx_seq;  /* sequence number the control occupies   */
+    /*
+     * 1 while ESTABLISHED after a simultaneous open whose ACK was of
+     * snd_una: the SYN, at snd_una, is unacknowledged and holds the send
+     * ring's slot before the data, so that ring position send_ack is
+     * sequence number snd_una, and `tcp_resend` sends the SYN-ACK for it.
+     */
+    uint8_t syn_unacked;
 
     struct socket *sock; /* owning socket (NULL once detached)     */
 
