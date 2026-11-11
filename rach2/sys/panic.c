@@ -584,7 +584,9 @@ static void draw_report(void)
  * with interrupts off here, so that nothing changes the screen or the state
  * the record describes (`k_panic_begin`). Nothing after the record runs to
  * write out klog's queue, so the record goes out directly
- * (`klog_deliver_directly`).
+ * (`klog_deliver_directly`). The crash record, ramoops's when the line gives
+ * a region, is saved before the wait, as Linux's kmsg_dump comes before its
+ * wait (kernel/panic.c:440).
  *
  * The wait before a reset is Linux's loop of PANIC_TIMER_STEP milliseconds
  * (kernel/panic.c, `panic`), measured by `k_udelay`, which needs no
