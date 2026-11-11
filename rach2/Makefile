@@ -90,12 +90,14 @@ ifdef HARNESS
 CFLAGS += -DRACH2_HARNESS
 endif
 
-# Flags the caller adds to every compile, which is how the other two kernels
-# are built: `make -C rach2 COMPONENT=rach2-metal KEXTRA=-DRACH2_DISK_READONLY`
-# for the kernel whose disk drivers issue no write (sys/block/diskcmd.c), and
+# Flags the caller adds to every compile, which is how the other kernels are
+# built: `make -C rach2 COMPONENT=rach2-metal KEXTRA=-DRACH2_DISK_READONLY`
+# for the kernel whose disk drivers issue no write (sys/block/diskcmd.c),
 # COMPONENT=rach2-recovery with KEXTRA=-DRACH2_RECOVERY for the recovery
-# kernel. mk/build.mk puts each COMPONENT's objects and binary under a
-# directory of its own, so no two kernels share an object. The read-only
+# kernel, and COMPONENT=rach2-lockdep with KEXTRA=-DRACH2_LOCKDEP for the
+# kernel with the lock-order checker (sys/lib/lockdep.h). mk/build.mk puts
+# each COMPONENT's objects and binary under a directory of its own, so no
+# two kernels share an object. The read-only
 # policy is a build switch rather than a boot option because a command line
 # edited at the GRUB prompt cannot undo a build switch.
 KEXTRA ?=

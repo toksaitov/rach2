@@ -210,7 +210,7 @@ STEP_INPUTS     = $(foreach f,$(filter-out gnu-in-copy,$^),$(if $(filter %.stamp
 .PHONY: all clean distclean images musl-programs test preflight check-sources \
         test-image os-simple-image os-real-image os-real-disk \
         rach2-metal rach2-metal-image rach2-term-image \
-        rach2-sealed-disk rach2-recovery rach2-recovery-image \
+        rach2-sealed-disk rach2-recovery rach2-recovery-image rach2-lockdep \
         isos test-iso os-simple-iso os-real-iso rach2-metal-iso \
         check-busybox check-setid check-dropbearmulti check-libc check-tcc \
         check-pdpmake check-e2fsck \
@@ -1516,6 +1516,17 @@ rach2-recovery: krffs rach2 $(RECOVERY_KERNEL) $(BINFIND) $(CHECKRECOVERY)
 	sh tools/inspect/check_recovery.sh $(RECOVERY_KERNEL) recovery
 	sh tools/inspect/check_recovery.sh $(KERNEL) ordinary
 	sh tools/inspect/check_diskpolicy.sh $(RECOVERY_KERNEL) read-write
+
+# The lock-order checker's kernel (rach2/sys/lib/lockdep.Readme.md): the
+# same sources with RACH2_LOCKDEP, in an object tree of its own, so that the
+# release kernel's code and size do not change. The checkpoint boots it in
+# QEMU and the Lenovo's trial may; the target prints its size, which a trial
+# slot of the Lenovo's, 4 MiB until the release installs, bounds.
+LOCKDEP_KERNEL = $(ARCH_BUILD)/rach2-lockdep/kernel
+$(LOCKDEP_KERNEL): ask-the-sub-make
+	@$(MAKE) --no-print-directory -C rach2 COMPONENT=rach2-lockdep KEXTRA=-DRACH2_LOCKDEP
+rach2-lockdep: $(LOCKDEP_KERNEL)
+	@echo "rach2-lockdep: size: $$(wc -c < $(LOCKDEP_KERNEL)) bytes"
 
 # A file target with the components as order-only prerequisites, as
 # $(TEST_IMAGE) above is. A phony target would restage the image on every
