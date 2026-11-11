@@ -59,9 +59,19 @@ def main():
             ], stdin=zero, stdout=log, stderr=log, start_new_session=True)
         print('trigger: waiting for a playback period', flush=True)
         first_period = None
+        # The wait has a deadline and prints each second, since a session
+        # lost without a terminal sends no SIGHUP and a print is what fails.
+        start = time.monotonic()
+        said = 0
         while True:
             if audio.poll() is not None:
                 raise RuntimeError('silent stream ended before a playback period')
+            waited = time.monotonic() - start
+            if waited >= 10:
+                raise RuntimeError('no playback period within 10 s')
+            if int(waited) > said:
+                said = int(waited)
+                print('trigger: waiting:', said, 's', flush=True)
             report = Path('/proc/audio').read_text()
             if 'hda ready 1 playing 1' in report:
                 queue = next(line.split() for line in report.splitlines() if line.startswith('queue '))
