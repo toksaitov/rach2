@@ -136,7 +136,7 @@ The format and index are in [../upstream.md](../upstream.md).
 
 ## Linux's Elantech register files answer a write the pad refused as done
 
-* Project: Linux 6.12, `drivers/input/mouse/elantech.c` at the tag `v6.12` (SHA-256 8c422056eeb241b5cc7b1d8929324371fd8a7a57d662153ff9b6ac36d80b22bb).
+* Project: Linux 6.12.115, `drivers/input/mouse/elantech.c` from the pinned source tarball, kept in `build/research/linux-6.12.115-full` on the Mac (file SHA-256 8c422056eeb241b5cc7b1d8929324371fd8a7a57d662153ff9b6ac36d80b22bb).
 * Fails: `elantech_set_int_attr` (`elantech.c:1288-1315`) keeps the value only when `elantech_write_reg` succeeds, but returns `count` either way, so a write to `reg_07` to `reg_26` that the pad refused or did not answer reports success to the writer; only the kernel log's "failed to write register" says otherwise. `elantech_show_int_attr` (`elantech.c:1271-1283`) prints a failed read as `sprintf("0x%02x\n", -1)`, "0xffffffff", in place of an error.
 * Found: 2026-11-11, on the Mac, milestone 76, by task 3455, which gave Rach2's Elantech pad these files as elantech.c has them.
 * Reproduction: not run on Linux. On an Elantech pad, write a register while the pad leaves its register commands unanswered, for example with its port held by another command, and check the write's return value: it is the byte count.

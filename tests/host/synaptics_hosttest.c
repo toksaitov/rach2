@@ -1043,8 +1043,17 @@ static void packet_rows(void)
     irq_byte(0x00);
     irq_byte(0x14);
     kernel_ticks += MS_TO_TICKS(600);
+    irq_byte(0);
+    CHECK("a pause inside the pad's packet queues a resync",
+          state == STATE_RESYNC && (reconnect_wanted & RESYNC_PORT));
+    ps2mouse_resync();
+    CHECK("the unanswered poll queues a reconnect",
+          state == STATE_IGNORE && (reconnect_wanted & RECONNECT_PORT));
+    ps2mouse_reconnect();
+    CHECK("the pad reports after reconnect", state == STATE_ACTIVE);
+
     send_packet(2000, 2000, 40, 8, 0, 0);
-    CHECK("a packet broken off by a pause is dropped", sync_losses == 2);
+    CHECK("the driver does not count the pause as a malformed packet", sync_losses == 1);
     CHECK("the packet after it is read, a new contact in slot 0",
           take() > 0 && got_events(again, 12));
 }

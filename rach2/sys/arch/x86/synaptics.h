@@ -37,6 +37,11 @@ struct ps2io;
  */
 int synaptics_init(void);
 
+/** Detect and query a Synaptics pad, then select its relative mode.
+ * Returns 1 on success, 0 for no pad, or -1 for a failed setup. Inside
+ * a run of commands; the caller registers the relative event device. */
+int synaptics_init_relative(void);
+
 /* What `synaptics_byte` made of a byte, Linux's `psmouse_ret_t`. */
 #define SYNAPTICS_BAD  -1 /* it broke the packet's form */
 #define SYNAPTICS_GOOD 0  /* the packet goes on */

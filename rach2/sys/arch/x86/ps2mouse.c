@@ -8,23 +8,20 @@
  *   Byte 0: [Yovf|Xovf|Ysign|Xsign|1|Middle|Right|Left]
  *   Byte 1: X movement, the low 8 bits of a 9-bit value, Xsign its sign
  *   Byte 2: Y movement, the low 8 bits of a 9-bit value, Ysign its sign
- * A mouse that answers Microsoft's knocks, sample rates set in a fixed order
- * and then its ID read, sends a fourth: the IntelliMouse (ID 3) its wheel's
- * turn as a signed byte, and the IntelliMouse Explorer (ID 4) a wheel's turn
- * with two more buttons, decoded as Linux's psmouse decodes them. The event
- * device has Linux's name, numbers and capabilities for each protocol.
+ * The IntelliMouse and Explorer answer Microsoft's rate knocks with IDs
+ * 3 and 4 and send a fourth byte for wheels and extra buttons. A Genius
+ * NetMouse also sends four bytes. The event device has Linux's name,
+ * numbers and capabilities for each protocol.
  *
- * Before the knocks the bring-up asks for a Synaptics touchpad, as Linux's
- * psmouse does: one that answers speaks its own absolute protocol from then
- * on, and synaptics.c takes its bytes; one whose setup fails is set back to
- * relative mode and goes on as a mouse named a Synaptics TouchPad. A pad
- * with a pass-through port is asked for the device behind it, the guest: a
- * TrackPoint (trackpoint.c) or a mouse, whose packets the pad carries. When
- * no Synaptics pad answers, the protocol's probe asks for an ALPS touchpad
- * and then an Elantech one, in psmouse's order: alps.c or elantech.c takes
- * the bytes of one that comes up, and one whose setup fails goes on as a
- * mouse named for its vendor. When no touchpad answers at all, it asks for
- * a TrackPoint, which trackpoint.c sets up on the port itself.
+ * The bring-up asks first for a Kensington ThinkingMouse, then for a
+ * Synaptics touchpad. A Synaptics pad that comes up speaks its absolute
+ * protocol; one whose setup fails goes back to relative mode and skips
+ * the other pads' probes. Otherwise ALPS is tried, then Elantech when no
+ * ALPS pad answered. Each pad's driver takes its absolute packets, and a
+ * failed setup falls back to a mouse named for its vendor. Without a
+ * Synaptics or ALPS pad, Genius and TrackPoint are tried, also after an
+ * Elantech setup failed; Microsoft's wheel knocks follow. A Synaptics
+ * pad's pass-through port carries a TrackPoint's or a mouse's packets.
  *
  * After the bring-up the handler owns the port, as Linux's psmouse does in
  * its state PSMOUSE_ACTIVATED. A run of commands, a change of the guest's
@@ -116,6 +113,8 @@
 #define PROTO_TRACKPOINT 10
 #define PROTO_CORTRON    12
 #define PROTO_ELANTECH   14
+#define PROTO_SYNREL     16
+#define PROTO_UNDRIVEN   24 /* a known name whose detect is not implemented */
 #define PROTO_AUTO       23
 #define ID_IMPS          3
 #define ID_IMEX          4
@@ -152,33 +151,39 @@ struct port_settings {
 /* The settings a connect gives, Linux's defaults. */
 static const struct port_settings defaults = {100, 200, 5, 0};
 
-/* The ports whose files a protocol may be written to. */
+/* Ports encoded in the attribute callbacks' arguments. */
 #define ON_AUX   1
 #define ON_GUEST 2
 
-/*
- * The protocols of psmouse's table that Rach2 drives, with the names its
- * `protocol` file shows and takes, and the ports on which it can detect
- * each: the touchpads only on the auxiliary port, whose drivers speak to
- * it alone. Linux's other protocols are refused as names Linux does not
- * know are.
- */
+/* Linux's psmouse names and aliases. A known protocol without a detect
+ * follows the same reset and PS/2 fallback as a detect that fails. */
 static const struct {
     int type;
-    int ports;
     const char *name;
     const char *alias;
-} protocols[] = {{PROTO_PS2, ON_AUX | ON_GUEST, "PS/2", "bare"},
-                 {PROTO_THINKPS, ON_AUX | ON_GUEST, "ThinkPS/2", "thinkps"},
-                 {PROTO_GENPS, ON_AUX | ON_GUEST, "GenPS/2", "genius"},
-                 {PROTO_IMPS, ON_AUX | ON_GUEST, "ImPS/2", "imps"},
-                 {PROTO_IMEX, ON_AUX | ON_GUEST, "ImExPS/2", "exps"},
-                 {PROTO_SYNAPTICS, ON_AUX, "SynPS/2", "synaptics"},
-                 {PROTO_ALPS, ON_AUX, "AlpsPS/2", "alps"},
-                 {PROTO_TRACKPOINT, ON_AUX | ON_GUEST, "TPPS/2", "trackpoint"},
-                 {PROTO_ELANTECH, ON_AUX, "ETPS/2", "elantech"},
-                 {PROTO_CORTRON, ON_AUX | ON_GUEST, "CortronPS/2", "cortps"},
-                 {PROTO_AUTO, ON_AUX | ON_GUEST, "auto", "any"}};
+} protocols[] = {{PROTO_PS2, "PS/2", "bare"},
+                 {PROTO_UNDRIVEN, "PS2++", "logitech"},
+                 {PROTO_THINKPS, "ThinkPS/2", "thinkps"},
+                 {PROTO_UNDRIVEN, "CyPS/2", "cypress"},
+                 {PROTO_GENPS, "GenPS/2", "genius"},
+                 {PROTO_IMPS, "ImPS/2", "imps"},
+                 {PROTO_IMEX, "ImExPS/2", "exps"},
+                 {PROTO_SYNAPTICS, "SynPS/2", "synaptics"},
+                 {PROTO_SYNREL, "SynRelPS/2", "synaptics-relative"},
+                 {PROTO_UNDRIVEN, "SynSMBus", "synaptics-smbus"},
+                 {PROTO_ALPS, "AlpsPS/2", "alps"},
+                 {PROTO_UNDRIVEN, "LBPS/2", "lifebook"},
+                 {PROTO_TRACKPOINT, "TPPS/2", "trackpoint"},
+                 {PROTO_UNDRIVEN, "touchkitPS/2", "touchkit"},
+                 {PROTO_UNDRIVEN, "OLPC HGPK", "hgpk"},
+                 {PROTO_ELANTECH, "ETPS/2", "elantech"},
+                 {PROTO_UNDRIVEN, "ETSMBus", "elantech-smbus"},
+                 {PROTO_UNDRIVEN, "FSPPS/2", "fsp"},
+                 {PROTO_CORTRON, "CortronPS/2", "cortps"},
+                 {PROTO_UNDRIVEN, "FocalTechPS/2", "focaltech"},
+                 {PROTO_UNDRIVEN, "VirtualPS/2", "vmmouse"},
+                 {PROTO_UNDRIVEN, "BYDPS/2", "byd"},
+                 {PROTO_AUTO, "auto", "any"}};
 
 /* The guest's place, as Linux's psmouse names the device of the touchpad's
  * pass-through port. */
@@ -597,16 +602,14 @@ static int is_word(const char *word, const char *buf, uint32_t len)
 /**
  * The protocol named by the `len` bytes at `buf`, a name or an alias of
  * psmouse's table matched whole, as Linux's `psmouse_protocol_by_name`
- * matches the bytes written, a newline among them; -EINVAL for none, or
- * for one Rach2 cannot detect on the port `port`, ON_AUX or ON_GUEST.
+ * matches the bytes written, a newline among them; -EINVAL for none.
  */
-static int proto_lookup(const char *buf, uint32_t len, int port)
+static int proto_lookup(const char *buf, uint32_t len)
 {
     unsigned int i;
 
     for (i = 0; i < sizeof(protocols) / sizeof(protocols[0]); i++) {
-        if ((protocols[i].ports & port) &&
-            (is_word(protocols[i].name, buf, len) || is_word(protocols[i].alias, buf, len))) {
+        if (is_word(protocols[i].name, buf, len) || is_word(protocols[i].alias, buf, len)) {
             return protocols[i].type;
         }
     }
@@ -902,6 +905,13 @@ static int try_protocol(int type)
     case PROTO_CORTRON:
         aux_who = "Cortron PS/2 Trackball";
         return 0;
+    case PROTO_SYNREL:
+        rc = synaptics_init_relative();
+        if (rc != 0) {
+            aux_who = "Synaptics TouchPad";
+            touchpad = -TOUCHPAD_SYNAPTICS;
+        }
+        return rc > 0 ? 0 : -1;
     case PROTO_SYNAPTICS:
         rc = synaptics_init();
         if (rc != 0) {
@@ -1532,11 +1542,10 @@ static void begin_resync(void)
  * A mouse's packet is framed by byte 0, whose bit 3 is always 1: a byte
  * expected as byte 0 with that bit clear is out of step with the stream and
  * is dropped, which brings the stream back in step, and counts as a bad
- * packet. A byte of a mouse's packet more than half a second after the one
+ * packet. A byte of any packet more than half a second after the one
  * before, and the first byte of any packet after the device was idle for
  * `resync_time` seconds, is dropped with the packet and begins a resync, as
- * Linux's `psmouse_receive_byte` does; a touchpad's driver drops a packet
- * cut by such a pause itself.
+ * Linux's `psmouse_receive_byte` does.
  *
  * During a run of commands the handler reads nothing, and after the bad
  * packets `resetafter` allows, or while a resync is due, it drops every
@@ -1561,8 +1570,7 @@ static void mouse_irq_handler(isr_params_t *params)
         return;
     }
     now = (uint32_t)kernel_ticks;
-    if (touchpad <= 0 && alps <= 0 && (bat_held || !packet_start()) &&
-        now - last_tick > MS_TO_TICKS(500)) {
+    if ((bat_held || !packet_start()) && now - last_tick > MS_TO_TICKS(500)) {
         klog(KLOG_INFO, "mouse", "sync: lost: a pause inside a packet: resyncing");
         badbyte = packet_first;
         begin_resync();
@@ -1946,7 +1954,7 @@ static int mouse_reconnect(void)
     } else {
         detect_protocol();
     }
-    return protocol == old && touchpad <= 0 && alps <= 0 ? 0 : -1;
+    return protocol == old && touchpad == 0 && alps <= 0 ? 0 : -1;
 }
 
 /**
@@ -1997,7 +2005,7 @@ void ps2mouse_reconnect(void)
             klog(KLOG_WARN, "mouse", "the device did not enable reporting");
         }
         klog(KLOG_INFO, "mouse", "reconnect: the touchpad reports again");
-    } else if (touchpad <= 0 && alps <= 0 && mouse_dev && mouse_reconnect() == 0) {
+    } else if (touchpad == 0 && alps <= 0 && mouse_dev && mouse_reconnect() == 0) {
         packet_index = 0;
         if (mouse_send_command(MOUSE_CMD_ENABLE) != MOUSE_ACK) {
             klog(KLOG_WARN, "mouse", "the device did not enable reporting");
@@ -2138,7 +2146,7 @@ void ps2mouse_resync(void)
  */
 static int aux_set_protocol(const char *buf, uint32_t len)
 {
-    int type = proto_lookup(buf, len, ON_AUX);
+    int type = proto_lookup(buf, len);
     struct evdev *old;
 
     if (type < 0) {
@@ -2177,7 +2185,7 @@ static int aux_set_protocol(const char *buf, uint32_t len)
  */
 static int guest_set_protocol(const char *buf, uint32_t len)
 {
-    int type = proto_lookup(buf, len, ON_GUEST);
+    int type = proto_lookup(buf, len);
     struct evdev *old;
 
     if (type < 0) {

@@ -398,12 +398,15 @@ read the register from the pad, as
 and two hexadecimal digits, or
 .Ql 0xffffffff
 when the pad does not answer, and a byte in hexadecimal that root writes
-to one is written to the pad and kept, a version 1 pad keeping absolute
-mode in register 0x10 and four-byte packets in register 0x11 whatever is
-written;
+to one is sent to the pad and kept only when the pad accepts it.
+The write is answered whole even when the pad refuses it, as in Linux.
+A version 1 pad keeps absolute mode in register 0x10 and four-byte packets
+in register 0x11 whatever is written.
+The setting
 .Pa debug ,
-1 on a pad past version 1 and 0 on version 1, logs the driver's retries,
-and from 2 every packet;
+1 on a pad past version 1 and 0 on version 1, logs retries, discarded
+jumpy-cursor reports and stick reports out of range, and unexpected stick
+packets; from 2 it logs every packet;
 .Pa paritycheck ,
 1, checks the parity of version 1's packets and the constant bits of
 version 2's;
@@ -428,7 +431,7 @@ while the port waits for its reconnect.
 reads the name of the protocol the device speaks.
 A name or alias of psmouse's table written to it, matched whole as
 written, with no newline, switches the port as psmouse switches it: the
-old protocol's touchpad put back in relative mode, the new protocol's
+old protocol's Synaptics or ALPS pad put back in relative mode, the new protocol's
 own detect and set-up, a device that does not speak it reset
 and set to PS/2, a node registered for it before the old one is removed,
 and the protocol's files; the node's name keeps the vendor and model a
@@ -451,14 +454,27 @@ Both ports take
 and
 .Ql auto
 .Pq Ql any ,
-which probes the port whole; serio1 also takes
+which probes the port whole.
+The touchpad names are
 .Ql SynPS/2
 .Pq Ql synaptics ,
+.Ql SynRelPS/2
+.Pq Ql synaptics-relative ,
 .Ql AlpsPS/2
 .Pq Ql alps
 and
 .Ql ETPS/2
 .Pq Ql elantech .
+On serio1 they select the pad's protocol, with three-byte relative mode
+for SynRelPS/2; on serio2 they reset the guest and fall back to PS/2.
+Both ports also accept the other names and aliases in Linux's table:
+PS2++ (logitech), CyPS/2 (cypress), SynSMBus (synaptics-smbus), LBPS/2
+(lifebook), touchkitPS/2 (touchkit), OLPC HGPK (hgpk), ETSMBus
+(elantech-smbus), FSPPS/2 (fsp), FocalTechPS/2 (focaltech), VirtualPS/2
+(vmmouse) and BYDPS/2 (byd).
+Their detects are not implemented, so they reset the device and fall back
+to PS/2.
+An unknown name fails with EINVAL.
 The switch reserves a replacement event device first; if no slot is free,
 it fails with ENOMEM and keeps the current protocol and devices.
 A switch away from Synaptics removes the pass-through port and its files.
@@ -971,16 +987,5 @@ over PS/2.
 Of Linux's machine quirks for Synaptics pads only the Toshiba rate of 40
 is taken: the Cr-48's profile sensor is read as any pad with the advanced
 gesture mode.
-A serio port's
-.Pa protocol
-refuses with
-.Er EINVAL
-a name of psmouse's table whose detect Rach2 does not have, such as
-.Ql PS2++
-or
-.Ql LBPS/2 ,
-which Linux would try and fall back from to PS/2.
-A pause of half a second inside a Synaptics, ALPS or Elantech pad's packet
-drops the packet in the pad's driver, where Linux resyncs the pad.
 An Elantech pad's register file reads the pad with the pad disabled, where
 Linux reads it while the pad reports.

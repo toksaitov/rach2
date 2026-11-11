@@ -569,6 +569,12 @@ static int warned(const char *text)
 }
 
 /** The Synaptics probe, which runs before ALPS's: the row's answer. */
+/** The relative-mode probe sees the same modeled device. */
+int synaptics_init_relative(void)
+{
+    return synaptics_init();
+}
+
 int synaptics_init(void)
 {
     return synaptics_answer;
@@ -1047,7 +1053,6 @@ static void model_reset(int kind)
     packet_index = 0;
     bare_failed = 0;
     rejected_stick = 0;
-    sync_losses = 0;
     pktcnt = 0;
     out_of_sync = 0;
     flush_armed = 0;
@@ -1894,9 +1899,18 @@ static void v1_packet_rows(void)
     CHECK("the packet after it is read", reads(&n_pad, after_ev, NEV(after_ev)) && !out_of_sync);
     send(after, 3);
     kernel_ticks += MS_TO_TICKS(600);
+    irq_byte(0);
+    CHECK("a pause inside the pad's packet queues a resync",
+          state == STATE_RESYNC && (reconnect_wanted & RESYNC_PORT));
+    ps2mouse_resync();
+    CHECK("the unanswered poll queues a reconnect",
+          state == STATE_IGNORE && (reconnect_wanted & RECONNECT_PORT));
+    ps2mouse_reconnect();
+    CHECK("the pad reports after reconnect", state == STATE_ACTIVE);
+
     send(paused, 6);
     CHECK("a packet a pause cuts is dropped, and the next read",
-          sync_losses == 1 && reads(&n_pad, paused_ev, NEV(paused_ev)));
+          reads(&n_pad, paused_ev, NEV(paused_ev)));
 
     send(ps2, 3);
     CHECK("a mouse's packet on the external port registers PS/2 ALPS Mouse",

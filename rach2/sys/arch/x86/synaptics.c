@@ -239,14 +239,11 @@ static struct hw_state agm;    /* the second finger, from the last AGM packet */
 static unsigned int agm_count; /* the fingers an AGM contact packet counted */
 static int scroll;             /* the middle button's scroll, in steps */
 
-/* The packet being assembled: its bytes, how many have come, and the tick
- * of the last. */
+/* The packet being assembled: its bytes and how many have come. */
 static uint8_t packet[6];
 static int pktcnt;
-static uint32_t last_tick;
 
-/* The packets dropped for a byte out of form or a pause, which psmouse
- * logs as lost synchronization. */
+/* Packets dropped for a byte out of form. */
 static unsigned int sync_losses;
 
 /** Send `cmd` and return 0 when the touchpad acknowledged it, -1 when not. */
@@ -628,6 +625,23 @@ unsigned int synaptics_set_rate(unsigned int rate)
 static void initialize(void)
 {
     ps2mouse_initialize(synaptics_set_rate);
+}
+
+int synaptics_init_relative(void)
+{
+    uint8_t reply[2];
+
+    if (detect() < 0) {
+        return 0;
+    }
+    if (command(CMD_RESET) == 0) {
+        receive(reply, 2);
+    }
+    if (query_hardware(&info) < 0 || mode_cmd(0) < 0) {
+        return -1;
+    }
+    pktcnt = 0;
+    return 1;
 }
 
 int synaptics_init(void)
@@ -1088,13 +1102,6 @@ void synaptics_packet_restart(void)
 
 int synaptics_byte(uint8_t data)
 {
-    uint32_t now = (uint32_t)kernel_ticks;
-
-    if (pktcnt && now - last_tick > MS_TO_TICKS(500)) {
-        sync_losses++;
-        pktcnt = 0;
-    }
-    last_tick = now;
     packet[pktcnt++] = data;
     if (pktcnt < 6) {
         if (!valid_byte(pktcnt - 1, pkt_type)) {

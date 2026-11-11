@@ -981,8 +981,22 @@ static void evdev_repeat(void)
     evdev_close(&f);
 }
 
+/** A stop before the keymap's first use must survive its initialization. */
+static void early_scroll_lock(void)
+{
+    unsigned char flags = 0;
+
+    kd_scroll_lock(1);
+    kd_key_event(&caller, 30, KD_KEY_PRESS);
+    kd_key_event(&caller, 30, KD_KEY_RELEASE);
+    CHECK(kd_ioctl(KDGKBLED, (uintptr_t)&flags) == 0 && (flags & K_SCROLLLOCK),
+          "a key event keeps Scroll Lock set before the first keymap use");
+    kd_scroll_lock(0);
+}
+
 int main(void)
 {
+    early_scroll_lock();
     type_and_screen();
     modes();
     meta();
