@@ -933,10 +933,10 @@ void kvm_steal_prepare(struct kvm_vcpu *v);
 
 /** Mark `v`'s steal time KVM_VCPU_PREEMPTED, as Linux's
  * kvm_steal_time_set_preempted, before the run loop gives the processor
- * away at a slice's end: only when the guest last stopped for a host
- * interrupt (`at_boundary`), and with the steal time on. It counts the
- * preemption in preemption_reported, or in preemption_other when the guest
- * did not stop for an interrupt. In `v`'s thread. */
+ * to another thread at a slice's end: only when the guest last stopped for
+ * a host interrupt (`at_boundary`), and with the steal time on. It counts
+ * the preemption in preemption_reported, or in preemption_other when the
+ * guest did not stop for an interrupt. In `v`'s thread. */
 void kvm_steal_preempted(struct kvm_vcpu *v);
 
 /** KVM_HC_CLOCK_PAIRING of `type` into the guest's `gpa`, as Linux's

@@ -784,7 +784,10 @@ static int32_t run_begin(struct kvm_vcpu *v)
  * every other thread off its processor. It takes no other, as
  * `sched_service_point` would whenever a thread is queued: a guest exits
  * thousands of times a second, and giving the processor away at each exit
- * cost the vCPU up to a slice each time. Returns 0 with `exit_reason` set,
+ * cost the vCPU up to a slice each time. The steal time says preempted
+ * only when that switch goes to another thread (`sched_preempt_due`), as
+ * Linux's kvm_sched_out marks a vCPU only on a real switch away from it.
+ * Returns 0 with `exit_reason` set,
  * -EINTR with it KVM_EXIT_INTR for a signal or a kick, or -errno.
  */
 static int32_t run_loop(struct kvm_vcpu *v)
@@ -799,7 +802,7 @@ static int32_t run_loop(struct kvm_vcpu *v)
         return r;
     }
     for (;;) {
-        if (current_proc->need_resched) {
+        if (sched_preempt_due()) {
             kvm_steal_preempted(v);
         }
         flags = kirq_save();

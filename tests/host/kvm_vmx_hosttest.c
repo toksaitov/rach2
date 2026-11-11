@@ -323,6 +323,11 @@ int signal_pending(void)
 void sched_take_preempt(void)
 {}
 
+int sched_preempt_due(void)
+{
+    return 0;
+}
+
 void signal_set_blocked(uint64_t mask)
 {
     current_proc->sig_blocked = mask;

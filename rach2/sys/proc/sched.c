@@ -708,6 +708,20 @@ void sched_take_preempt(void)
     }
 }
 
+int sched_preempt_due(void)
+{
+    uint32_t held;
+    int due;
+
+    if (!current_proc || !current_proc->need_resched || current_proc == this_cpu()->idle) {
+        return 0;
+    }
+    held = spin_lock_irqsave(&sched_lock);
+    due = run_queues[arch_cpu_id()].count > 0;
+    spin_unlock_irqrestore(&sched_lock, held);
+    return due;
+}
+
 /**
  * A call that loops over a large buffer keeps the processor for the whole
  * loop, since the tick's switch is taken at the call's exit; a reader woken
