@@ -5,6 +5,7 @@
  * host-deps: rach2/sys/lib/kfmt.c rach2/sys/lib/kstd.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/tick.c
+ * host-cflags: -DRACH2_HOST_CPU
  *
  * klog.c is included rather than linked, so each case can put the ring and the
  * recorders back to their initial state; the kernel has one boot per run and
@@ -25,6 +26,10 @@
  * build, the ring append and the look at the queue, and they balance. A host
  * has no interrupts to land in the middle, so the count is what stands in for
  * the case that cannot be staged here.
+ *
+ * `host_cpu` is the processor a call runs on, and processor 0 holds the big
+ * lock (`smp_serialized`), so a row makes a record on processor 1 to have it
+ * kept for later, as a record made in an NMI or without the big lock is.
  */
 
 /* The kernel headers define the fixed-width types themselves, so nothing
@@ -67,6 +72,11 @@ static unsigned ring_at_screen; /* the ring's size when the screen was written *
 static int irq_depth;           /* the brackets of the interrupts now open */
 static int irq_pairs;           /* the brackets closed */
 static int irq_unbalanced;      /* the closes with none open */
+static int kept_then_nested;    /* at the screen: keep a record, then make one */
+static int holder_at_serial;    /* at the port: processor 0 makes a record */
+static int panicking;           /* what `k_panicking` says */
+
+unsigned int host_cpu;
 
 /* The calls of each destination. A destination is noted in `order` at its
  * first call, and not per byte, so a destination that accepted nothing (a
@@ -106,6 +116,13 @@ void k_putc(char c)
     if (reenter_after > 0 && --reenter_after == 0) {
         klog(KLOG_INFO, "usbdisk", "ready: device 4: lun 0");
     }
+    if (kept_then_nested) {
+        kept_then_nested = 0;
+        host_cpu = 1;
+        klog(KLOG_ERR, "nmi", "kept: made in an NMI");
+        host_cpu = 0;
+        klog(KLOG_ERR, "irq", "landed: after the kept one");
+    }
 }
 
 /**
@@ -118,6 +135,14 @@ void serial_out(char c)
         note('U');
     }
     serial_offered++;
+    if (holder_at_serial) {
+        unsigned int was = host_cpu;
+
+        holder_at_serial = 0;
+        host_cpu = 0;
+        klog(KLOG_ERR, "holder", "back: while another writes the kept records");
+        host_cpu = was;
+    }
     if (serial_wedged) {
         return; /* the transmit wait gave up */
     }
@@ -203,12 +228,22 @@ void kirq_restore(unsigned int flags)
 
 volatile uint64_t kernel_ticks;
 
-/** One processor, which holds the big lock: every record is written at
- * once, and none is kept for later. */
+/** Processor 0 holds the big lock: its records are written at once, and
+ * another's are kept for later. */
 int smp_serialized(void)
 {
-    return 1;
+    return host_cpu == 0;
 }
+
+/** Whether this processor has begun a panic: `panicking`. */
+int k_panicking(void)
+{
+    return panicking;
+}
+
+/** The ring's lock is never held by another here. */
+void arch_relax(void)
+{}
 
 /** One processor: the exchange cannot lose. */
 unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, unsigned int value)
@@ -272,9 +307,18 @@ static void reset(void)
     pending_head = pending_count = pending_lost = 0;
     irq_depth = irq_pairs = irq_unbalanced = 0;
     kernel_ticks = 0;
-    ring_head = ring_used = ring_oldest = 0;
+    ring_head = ring_used = ring_oldest = ring_written = 0;
     for (i = 0; i < KLOG_RING_SIZE; i++) {
         ring[i] = 0;
+    }
+    host_cpu = 0;
+    kept_then_nested = holder_at_serial = panicking = 0;
+    defer_head = defer_tail = defer_lost = 0;
+    defer_skip = 0;
+    defer_taking = klog_users = 0;
+    ring_lock = 0;
+    for (i = 0; i < KLOG_DEFER_MAX; i++) {
+        defer_whole[i] = 0;
     }
     screen[0] = serial[0] = net[0] = order[0] = '\0';
 }
@@ -424,6 +468,151 @@ static void console_write_rows(void)
                         "<6>[0.000000] usbdisk: ready: device 4: lun 0\r\n"));
     CHECK("and nothing waits or is held once the formatted line is out",
           pending_count == 0 && klog_delivering == 0 && console_writing == 0);
+}
+
+/** The brackets of the interrupts a record takes, and a read of the ring. */
+static void bracket_rows(void)
+{
+    char text[CAP];
+
+    reset();
+    klog(KLOG_INFO, "b", "check: the brackets");
+    CHECK("a record takes three brackets", irq_pairs == 3);
+    ring_text(text, sizeof(text));
+    CHECK("and a read takes one more", irq_pairs == 4);
+    CHECK("and leaves none open", irq_depth == 0 && irq_unbalanced == 0);
+}
+
+/**
+ * The records kept for later, made in an NMI or by a processor without the
+ * big lock: they reach the ring and the destinations in the order they were
+ * made, ahead of a record made after them, inside another record's delivery
+ * too; and a slot a stopped processor left part built holds back the
+ * records after it until a panic skips it.
+ */
+static void kept_rows(void)
+{
+    char text[CAP];
+
+    /* Kept on one processor, then a record of the holder's. */
+    reset();
+    host_cpu = 1;
+    klog(KLOG_ERR, "watchdog", "first: kept");
+    klog(KLOG_ERR, "watchdog", "second: kept");
+    CHECK("a record without the big lock does not reach the ring", klog_len() == 0);
+    CHECK("and is kept", klog_kept());
+    host_cpu = 0;
+    klog(KLOG_INFO, "holder", "next: a record of the holder's");
+    ring_text(text, sizeof(text));
+    CHECK("the kept records reach the ring first, in the order they were made",
+          streq(text, "<3>[0.000000] watchdog: first: kept\n"
+                      "<3>[0.000000] watchdog: second: kept\n"
+                      "<6>[0.000000] holder: next: a record of the holder's\n"));
+    serial[serial_len] = '\0';
+    CHECK("and the port the same",
+          streq(serial, "<3>[0.000000] watchdog: first: kept\r\n"
+                        "<3>[0.000000] watchdog: second: kept\r\n"
+                        "<6>[0.000000] holder: next: a record of the holder's\r\n"));
+    CHECK("and none is kept or waits after", !klog_kept() && pending_count == 0);
+
+    /* Kept, then a record made, both inside another record's delivery. */
+    reset();
+    kept_then_nested = 1;
+    klog(KLOG_INFO, "outer", "began: the record being delivered");
+    ring_text(text, sizeof(text));
+    CHECK("inside a delivery, the kept record reaches the ring ahead of the one "
+          "made after it",
+          streq(text, "<6>[0.000000] outer: began: the record being delivered\n"
+                      "<3>[0.000000] nmi: kept: made in an NMI\n"
+                      "<3>[0.000000] irq: landed: after the kept one\n"));
+    serial[serial_len] = '\0';
+    CHECK("and the port the same",
+          streq(serial, "<6>[0.000000] outer: began: the record being delivered\r\n"
+                        "<3>[0.000000] nmi: kept: made in an NMI\r\n"
+                        "<3>[0.000000] irq: landed: after the kept one\r\n"));
+
+    /* A slot a processor stopped by the panic left part built. */
+    reset();
+    host_cpu = 1;
+    klog(KLOG_ERR, "a", "kept: before the part-built slot");
+    defer_tail++; /* a writer took the slot and stopped */
+    klog(KLOG_ERR, "b", "kept: after the part-built slot");
+    host_cpu = 0;
+    klog(KLOG_INFO, "c", "made: by the holder");
+    ring_text(text, sizeof(text));
+    CHECK("a part-built slot holds back the kept records after it",
+          streq(text, "<3>[0.000000] a: kept: before the part-built slot\n"
+                      "<6>[0.000000] c: made: by the holder\n") &&
+              klog_kept());
+    klog_deliver_directly();
+    klog(KLOG_CRIT, "panic", "stopped: the row's panic");
+    ring_text(text, sizeof(text));
+    CHECK("the panic skips it and writes the rest out ahead of its own",
+          streq(text, "<3>[0.000000] a: kept: before the part-built slot\n"
+                      "<6>[0.000000] c: made: by the holder\n"
+                      "<3>[0.000000] b: kept: after the part-built slot\n"
+                      "<2>[0.000000] panic: stopped: the row's panic\n") &&
+              !klog_kept());
+}
+
+/**
+ * The records kept for later, when there are more than the queue holds,
+ * which counts the ones it drops; and when the holder of the big lock is
+ * locked up and another processor writes them out (`klog_flush_stuck`),
+ * which stands back while the holder is in the middle of a record, while
+ * the holder, back while it writes them, keeps its own for later.
+ */
+static void kept_stuck_rows(void)
+{
+    char text[CAP];
+    int i;
+
+    /* Two more kept than the queue holds. */
+    reset();
+    host_cpu = 1;
+    for (i = 0; i < KLOG_DEFER_MAX + 2; i++) {
+        klog(KLOG_ERR, "nmi", "kept: %d", i);
+    }
+    host_cpu = 0;
+    klog(KLOG_INFO, "holder", "next: after the full queue");
+    ring_text(text, sizeof(text));
+    CHECK("a full queue keeps the records it has room for", has(text, "nmi: kept: 0\n") &&
+                                                                has(text, "nmi: kept: 127\n") &&
+                                                                !has(text, "nmi: kept: 128\n"));
+    CHECK("and counts the ones it dropped after them, ahead of the holder's record",
+          has(text, "nmi: kept: 127\n"
+                    "<4>[0.000000] klog: dropped: 2 record(s) the queue could not hold\n"
+                    "<6>[0.000000] holder: next: after the full queue\n"));
+    CHECK("and every one reaches the ring once",
+          count_lines(text) == KLOG_DEFER_MAX + 2 && !klog_kept());
+
+    /* Another processor writes them out for a holder locked up. */
+    reset();
+    host_cpu = 1;
+    klog(KLOG_ERR, "watchdog", "report: of the holder");
+    klog_users = 1; /* the holder is in the middle of a record */
+    klog_flush_stuck();
+    CHECK("the writer stands back while the holder is in a record",
+          klog_len() == 0 && klog_kept() && defer_taking == 0);
+    klog_users = 0;
+    holder_at_serial = 1;
+    klog_flush_stuck();
+    ring_text(text, sizeof(text));
+    CHECK("otherwise it writes them out, and a holder back meanwhile keeps its own",
+          streq(text, "<3>[0.000000] watchdog: report: of the holder\n") && klog_kept());
+    serial[serial_len] = '\0';
+    CHECK("and the port has only the report",
+          streq(serial, "<3>[0.000000] watchdog: report: of the holder\r\n"));
+    CHECK("and lets the state go when done",
+          defer_taking == 0 && klog_delivering == 0 && pending_count == 0);
+    host_cpu = 0;
+    klog(KLOG_INFO, "holder", "next: after the writer is done");
+    ring_text(text, sizeof(text));
+    CHECK("the holder's next record writes its kept one out ahead of itself",
+          streq(text, "<3>[0.000000] watchdog: report: of the holder\n"
+                      "<3>[0.000000] holder: back: while another writes the kept records\n"
+                      "<6>[0.000000] holder: next: after the writer is done\n"));
+    CHECK("and the holder leaves klog as it entered", klog_users == 0);
 }
 
 /**
@@ -714,14 +903,10 @@ int main(void)
           has(screen, "klog: dropped: 1 record(s) the queue could not hold\n"));
 
     console_write_rows();
+    kept_rows();
 
-    /* The brackets of the interrupts a record takes. */
-    reset();
-    klog(KLOG_INFO, "b", "check: the brackets");
-    CHECK("a record takes three brackets", irq_pairs == 3);
-    ring_text(text, sizeof(text));
-    CHECK("and a read takes one more", irq_pairs == 4);
-    CHECK("and leaves none open", irq_depth == 0 && irq_unbalanced == 0);
+    kept_stuck_rows();
+    bracket_rows();
 
     if (fails == 0) {
         printf("klog_hosttest: PASS\n");
