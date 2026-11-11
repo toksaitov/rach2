@@ -19,10 +19,11 @@
 #
 # GRAPHICS_DONE=1 marks a run whose result is a Done's: Mesa's shader cache,
 # MESA_SHADER_CACHE_DIR, is emptied as this file is sourced, so that no
-# shader compiled by an earlier run is reused. graphics_xvfb starts Xvfb with
-# -noreset, so that it does not reset when its last client leaves, and
-# graphics_env prints the environment, one `env NAME=VALUE` line each, for
-# the run's record.
+# shader compiled by an earlier run is reused; sourcing fails when it cannot
+# be emptied, as when a running program still writes it. graphics_xvfb
+# starts Xvfb with -noreset, so that it does not reset when its last client
+# leaves, and graphics_env prints the environment, one `env NAME=VALUE` line
+# each, for the run's record.
 
 graphics_cpus()
 {
@@ -61,7 +62,10 @@ export LP_NUM_THREADS GRAPHICS_CLASS GRAPHICS_CPUS
 MESA_SHADER_CACHE_DIR=${MESA_SHADER_CACHE_DIR:-${TMPDIR:-/tmp}/graphics-shader-cache}
 export MESA_SHADER_CACHE_DIR
 if [ "${GRAPHICS_DONE:-0}" = 1 ]; then
-    rm -rf "$MESA_SHADER_CACHE_DIR"
+    rm -rf "$MESA_SHADER_CACHE_DIR" || {
+        echo "guest-env: cannot empty the shader cache $MESA_SHADER_CACHE_DIR" >&2
+        return 1
+    }
 fi
 mkdir -p "$MESA_SHADER_CACHE_DIR"
 GRAPHICS_DONE=${GRAPHICS_DONE:-0}
