@@ -1553,13 +1553,24 @@ An
 into
 .Pa fd
 is judged by that owner.
-A walk through
+Every such node a path reaches updates its retained owner, as Linux's
+walk revalidates each component: one passed on the way, as
 .Pa fd ,
 .Pa fdinfo
 or
 .Pa task
-updates that directory's retained owner before looking up the next
-component, even when that next component is missing.
+is before the next component is looked up, even when that next component
+is missing, and the last, so that
+.Xr readlink 2
+of a link, and a
+.Xr stat 2
+or
+.Xr open 2
+that follows it, update the link's owner.
+A name relative to a directory descriptor or to the working directory is
+walked from the root through the path of that directory, so it updates the
+starting directory's retained owner too, where Linux starts the walk at
+the directory and leaves its owner alone.
 Listing
 .Pa /dev
 does not update the owner of
@@ -1655,8 +1666,9 @@ Its size, as
 .Xr stat 2
 and
 .Xr fstat 2
-report it, is the number of descriptors the process has open, 0 for a
-zombie, and an
+report it, is the number of descriptors the process has open, those an
+open still under way has reserved among them, as a FIFO's open that waits
+for its other end, 0 for a zombie, and an
 .Xr fstat 2
 or
 .Xr statx 2
