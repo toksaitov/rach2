@@ -1193,11 +1193,11 @@ static int32_t nanosleep_interrupted(int rem, uint64_t target)
  * Block until the tick `target`, or until a signal the process acts on.
  *
  * Marks the process PROC_BLOCKED on its wakeup_tick and yields; the timer
- * wakes it at the deadline while other processes run. The deadline and the
- * pending signals are tested, and the process blocked, with interrupts off,
- * so neither a signal nor the deadline's tick can come between the test and
- * the block unseen; the halt after a yield that ran nothing is masked for the
- * same reason.
+ * wakes it at the deadline while other processes run. The process is
+ * marked blocked before the deadline and the pending signals are tested,
+ * with interrupts off, so neither a signal nor the deadline's tick can come
+ * between the test and the block unseen; the halt after a yield that ran
+ * nothing is masked for the same reason.
  *
  * Once the deadline tick has come the sleep is over, and the call returns 0
  * whether or not a signal is pending. A signal the process acts on, found
@@ -1214,18 +1214,21 @@ static int32_t sleep_until(uint64_t target, int rem, const char *wchan)
     for (;;) {
         uint32_t flags = kirq_save();
 
+        /* 0 means not sleeping, so a deadline of 0 is stored as 1. */
+        current_proc->wakeup_tick = target != 0 ? target : 1u;
+        current_proc->wchan = wchan;
+        sched_set_current_state(PROC_BLOCKED);
         if (tick_count() >= target) {
+            current_proc->state = PROC_RUNNING;
             kirq_restore(flags);
             break;
         }
         if (signal_pending()) {
+            current_proc->wakeup_tick = 0;
+            current_proc->state = PROC_RUNNING;
             kirq_restore(flags);
             return nanosleep_interrupted(rem, target);
         }
-        /* 0 means not sleeping, so a deadline of 0 is stored as 1. */
-        current_proc->wakeup_tick = target != 0 ? target : 1u;
-        current_proc->wchan = wchan;
-        current_proc->state = PROC_BLOCKED;
         kirq_restore(flags);
         schedule(); /* yield to any other READY process; the timer wakes us */
         flags = kirq_save();

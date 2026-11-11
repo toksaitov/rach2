@@ -589,11 +589,24 @@ struct process {
      * runs on while it runs (it is that processor's `current`) and the one
      * it last ran on after; the processors it may run on, a bit for each,
      * as sched_setaffinity(2) sets them and a fork passes them on; and its
-     * depth in the big lock when it was switched away, which the switch
-     * gives the processor back (sched.c). */
+     * own depth in the big lock, saved when it switches away and taken back
+     * by the switch's tail when it runs again (sched.c). */
     int cpu;
     uint64_t affinity;
     int bkl_depth;
+    /* 1 from its selection until the switch away from it has saved its
+     * registers, as Linux's `on_cpu`: set by the processor that switches to
+     * it, cleared with a release store by the next thread's tail on the
+     * same processor (`schedule_tail`). Its stack is in use while it is 1,
+     * so no other processor runs the thread or frees its stack and record. */
+    volatile unsigned int on_cpu;
+    /* The interrupt and system call frames on its kernel stack, newest in
+     * bit 0: 1 for one whose router took the big lock, which `isr_leave`
+     * gives back, 0 for one that ran without it (smp.h, `bkl_frame_push`). */
+    uint32_t bkl_frames;
+    /* What a kernel thread runs after its first switch's tail
+     * (`setup_process_stack`). */
+    void (*kthread_entry)(void);
     /* Ready-list links, owned by sched.c; current and idle tasks are absent. */
     struct process *ready_prev, *ready_next;
     int ready_linked;

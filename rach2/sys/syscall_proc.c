@@ -222,10 +222,14 @@ void kstack_overrun_test(void)
  * that ended through `proc_exit_cleanup` gave up then. A release of an
  * address space may sleep, on a file's close or its writeback, and another
  * reaper may run then, so the caller has first taken `p` off the zombies by
- * marking it `PROC_UNUSED`, which no reaper and no wait takes.
+ * marking it `PROC_UNUSED`, which no reaper and no wait takes. A zombie may
+ * still be switching away on its processor, and its stack is in use until
+ * it has (`sched_wait_off_cpu`), as Linux frees a task only after its last
+ * switch (kernel/exit.c:225-239).
  */
 static void proc_release(process_t *p)
 {
+    sched_wait_off_cpu(p);
     mm_drop(p);
     kstack_free(p->kernel_stack);
     free_process(p);
@@ -2108,6 +2112,7 @@ static void exec_take_leader(void)
     current_proc->jc_status = old->jc_status;
     proc_thread_fold(old);
     tg->leader = current_proc;
+    sched_wait_off_cpu(old);
     mm_drop(old);
     kstack_free(old->kernel_stack);
     free_process(old);
@@ -3225,6 +3230,7 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
     child->cpu = parent->cpu;
     child->affinity = parent->affinity;
     child->bkl_depth = 1;
+    child->bkl_frames = 1u;
     fork_start(child, parent, &pending);
     if (event) {
         ptrace_event(event, pid);
@@ -3926,11 +3932,12 @@ static int wait_child(process_t *p, int options, struct wait_report *out)
  *
  * Every selected child is looked at until one has an event. Without WNOHANG
  * the caller then sleeps on its process's child queue, which an exit, a stop
- * or a continue wakes, until a child has an event or a signal interrupts. The
- * test of `signal_pending`, the joining of the queue and the change to
- * PROC_BLOCKED are one step with interrupts off, so a wake or a signal posted
- * from an interrupt is either seen by the test or finds the caller blocked
- * and wakes it.
+ * or a continue wakes, until a child has an event or a signal interrupts. As
+ * Linux's `do_wait` (kernel/exit.c), the caller joins the queue, with a
+ * record on its stack, and is marked PROC_BLOCKED before it looks at the
+ * children and tests `signal_pending`, so a wake or a signal posted after
+ * the look finds it blocked and makes it ready; a child's release that
+ * sleeps meanwhile leaves it RUNNING, and it returns what it found.
  *
  * Returns the pid; 0 with WNOHANG when a selected child has nothing to
  * report; -ECHILD when no child is selected; or -EINTR when a signal the
@@ -3938,48 +3945,59 @@ static int wait_child(process_t *p, int options, struct wait_report *out)
  */
 static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_report *out)
 {
+    struct wq_waiter self;
     process_t *p;
     uint32_t flags;
+    int32_t rc;
 
-    while (1) {
+    self.proc = current_proc;
+    self.next = NULL;
+    for (;;) {
         int have_child = 0;
 
+        flags = sig_irq_save();
+        if (!(options & WNOHANG)) {
+            wq_poll_add(&current_proc->tg->chld, &self);
+            current_proc->wchan = "do_wait";
+            sched_set_current_state(PROC_BLOCKED);
+        }
+        sig_irq_restore(flags);
+        rc = 0;
         for (p = proc_list; p; p = p->next) {
             if (wait_selects_tracee(idtype, id, options, p)) {
                 have_child = 1;
                 if (wait_tracee(p, options, out)) {
-                    return (int32_t)out->pid;
+                    rc = (int32_t)out->pid;
+                    break;
                 }
             }
             if (wait_selects(idtype, id, options, p)) {
                 have_child = 1;
                 if (wait_child(p, options, out)) {
-                    return (int32_t)out->pid;
+                    rc = (int32_t)out->pid;
+                    break;
                 }
             }
         }
-
-        if (!have_child) {
-            return -ECHILD;
-        }
-        if (options & WNOHANG) {
-            return 0;
-        }
         flags = sig_irq_save();
-        if (signal_pending()) {
-            sig_irq_restore(flags);
-            return -EINTR;
+        if (rc == 0 && !have_child) {
+            rc = -ECHILD;
+        } else if (rc == 0 && !(options & WNOHANG) && signal_pending()) {
+            rc = -EINTR;
         }
-        wq_poll_add(&current_proc->tg->chld, &current_proc->waiter);
-        current_proc->wchan = "do_wait";
-        current_proc->state = PROC_BLOCKED;
+        if (rc != 0 || (options & WNOHANG)) {
+            wq_poll_remove(&current_proc->tg->chld, &self);
+            current_proc->state = PROC_RUNNING;
+            sig_irq_restore(flags);
+            return rc;
+        }
         sig_irq_restore(flags);
         schedule();
         flags = sig_irq_save();
         if (current_proc->state == PROC_BLOCKED) {
             idle_wait_irq_off(); /* idle until a waker, then re-scan */
         }
-        wq_poll_remove(&current_proc->tg->chld, &current_proc->waiter);
+        wq_poll_remove(&current_proc->tg->chld, &self);
         current_proc->state = PROC_RUNNING;
         sig_irq_restore(flags);
     }
@@ -4375,12 +4393,15 @@ static void sig_irq_restore(uint32_t flags)
  * A wake for a blocked signal, for a signalfd poll, marks no work.
  * Make `t` runnable if it sleeps, clearing its timed wake: an
  * interruptible wait then calls `signal_pending` to learn whether to end
- * with -EINTR, and any wait that goes on arms its own deadline again. */
+ * with -EINTR, and any wait that goes on arms its own deadline again. A
+ * full barrier comes between the post and the read of the state, which a
+ * sleeper sets before it tests (`sched_set_current_state`). */
 static void sig_wake(process_t *t, uint64_t bits)
 {
     if (t && (bits & ~t->sig_blocked) != 0) {
         t->sig_woken = 1;
     }
+    sched_mb();
     if (t && t->state == PROC_BLOCKED) {
         t->wakeup_tick = 0;
         sched_make_ready(t);
@@ -5353,18 +5374,21 @@ long sys_rt_tgsigqueueinfo(isr_params_t *params)
  * Block the current thread until a deliverable signal is pending, with
  * `name` as its wait's name for /proc/PID/wchan.
  *
- * The test of the pending signals and the move to PROC_BLOCKED are one
- * section with interrupts off, so a signal posted from an interrupt is
- * either seen by the test or finds the thread blocked and wakes it, as in
- * `wait_queue.c`. Interrupts are on only while the thread yields or idles.
+ * The thread is marked PROC_BLOCKED before it tests the pending signals,
+ * with interrupts off, so a signal posted on any processor is either seen by
+ * the test or finds the thread blocked and wakes it, as in `wait_queue.c`.
+ * Interrupts are on only while the thread yields or idles.
  */
 static void sig_wait(const char *name)
 {
     uint32_t flags = sig_irq_save();
 
-    while (!signal_pending()) {
+    for (;;) {
         current_proc->wchan = name;
-        current_proc->state = PROC_BLOCKED;
+        sched_set_current_state(PROC_BLOCKED);
+        if (signal_pending()) {
+            break;
+        }
         sig_irq_restore(flags);
         schedule();
         flags = sig_irq_save();
@@ -5898,9 +5922,12 @@ static void sig_park(void)
 {
     uint32_t flags = sig_irq_save();
 
-    while (current_proc->tg->stop && !(sig_pending_now() & KSIG_BIT(SIGKILL)) &&
-           !(current_proc->ptrace & PT_TRACED)) {
-        current_proc->state = PROC_STOPPED;
+    for (;;) {
+        sched_set_current_state(PROC_STOPPED);
+        if (!current_proc->tg->stop || (sig_pending_now() & KSIG_BIT(SIGKILL)) ||
+            (current_proc->ptrace & PT_TRACED)) {
+            break;
+        }
         schedule();
         if (current_proc->state == PROC_STOPPED) {
             idle_wait_irq_off();
@@ -6131,23 +6158,26 @@ static int32_t sigwait_take(uint64_t set, int timed, uint64_t deadline, struct k
     uint32_t flags = sig_irq_save();
 
     for (;;) {
-        uint64_t hit = sig_pending_now() & set;
+        uint64_t hit;
 
+        current_proc->wakeup_tick = timed ? (deadline != 0 ? deadline : 1u) : 0;
+        current_proc->wchan = "do_sigtimedwait";
+        sched_set_current_state(PROC_BLOCKED);
+        hit = sig_pending_now() & set;
         if (hit) {
             int signo = sig_dequeue(hit, info);
 
             current_proc->wakeup_tick = 0;
+            current_proc->state = PROC_RUNNING;
             sig_irq_restore(flags);
             return signo;
         }
         if (signal_pending() || (timed && tick_count() >= deadline)) {
             current_proc->wakeup_tick = 0;
+            current_proc->state = PROC_RUNNING;
             sig_irq_restore(flags);
             return signal_pending() ? -EINTR : -EAGAIN;
         }
-        current_proc->wakeup_tick = timed ? (deadline != 0 ? deadline : 1u) : 0;
-        current_proc->wchan = "do_sigtimedwait";
-        current_proc->state = PROC_BLOCKED;
         sig_irq_restore(flags);
         schedule();
         flags = sig_irq_save();

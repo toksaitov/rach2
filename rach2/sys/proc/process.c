@@ -764,18 +764,26 @@ void proc_set_comm(process_t *p, const char *path)
     }
 }
 
+/** A kernel thread's first code after its first switch: the switch's tail,
+ * which takes the big lock at the thread's depth, then its entry. */
+static void kthread_start(void)
+{
+    schedule_tail();
+    current_proc->kthread_entry();
+}
+
 /**
  * The architecture lays the stack out as its `switch_context` finds it
- * (`arch_context_init`). The switch passes the big lock to the thread it
- * enters, and `schedule` gives the processor that thread's depth, so the
- * thread begins holding the lock once, as a forked child and an idle task
- * do; with a depth of 0 its first interrupt would wait for the lock its own
- * processor holds.
+ * (`arch_context_init`), returning first to `kthread_start`, which runs the
+ * switch's tail and then `entry_point`. The thread begins holding the big
+ * lock once, as a forked child does: the tail takes it at that depth.
  */
 void setup_process_stack(process_t *proc, void (*entry_point)(void))
 {
     proc->bkl_depth = 1;
-    arch_context_init(proc, entry_point);
+    proc->bkl_frames = 0;
+    proc->kthread_entry = entry_point;
+    arch_context_init(proc, kthread_start);
 }
 
 void proc_child_info(const process_t *child, const process_t *receiver, struct k_siginfo *info)

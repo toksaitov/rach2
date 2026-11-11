@@ -252,6 +252,14 @@ isr128:
     pushl $128
     jmp isr_common_handler
 
+# Where a forked child's first switch lands (arch_fork_frame, context.c),
+# with its frame on the stack: the switch's tail (schedule_tail, sched.c),
+# then the return through the frame.
+.globl ret_from_fork
+ret_from_fork:
+    call schedule_tail
+    jmp isr_return
+
 # The common entry of the exceptions and the system call: it completes the
 # frame of struct isr_params (cpu.h) with the general and segment registers,
 # loads the kernel's selectors, and calls _isr_router (isr.c) with
@@ -285,7 +293,7 @@ isr_common_handler:
     addl $4, %esp
 
 # The return through the frame at the stack pointer, where a forked child's
-# first switch also lands (arch_fork_frame, context.c). isr_leave (isr.c)
+# first switch also comes after its tail. isr_leave (isr.c)
 # delivers a pending signal on a return to user mode, which may rewrite the
 # frame or end the thread, and gives back the big lock the entry took; then
 # the segment registers the entry saved, the TLS selector in gs among them,

@@ -277,6 +277,13 @@ isr31:
     pushq $31
     jmp isr_common_handler
 
+# Where a forked child's first switch lands (arch_fork_frame, context.c),
+# with its frame on the stack: the switch's tail (schedule_tail, sched.c),
+# then the return through the frame.
+.globl ret_from_fork
+ret_from_fork:
+    call schedule_tail
+    jmp isr_return
 
 # The common entry of the exceptions and the interrupts, all but the four
 # exceptions on interrupt stacks and the local vectors: swap GS for an entry
@@ -309,8 +316,8 @@ isr_common_handler:
     call x86_64_route
 
 # The return of the common entry and of a debug exception from user mode,
-# and where a forked child's first switch lands (context.c), with its frame
-# on the stack.
+# and of a forked child after its first switch's tail, with its frame on the
+# stack.
 .globl isr_return
 isr_return:
     movq %rsp, %rdi

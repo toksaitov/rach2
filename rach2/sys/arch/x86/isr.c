@@ -729,6 +729,7 @@ void _isr_router(isr_params_t *params)
     }
     panic_if_reading(params);
     bkl_enter();
+    bkl_frame_push(1);
     if (params->vector == SYSCALL_ENTRY) {
         ioctl = isr_call_ioctl(params);
     }
@@ -785,6 +786,7 @@ void isr_leave(isr_params_t *params)
         cpu->tick_unlocked = 0;
         return;
     }
+    (void)bkl_frame_pop();
     deliver_signals(params);
     if (FRAME_USER(params)) {
         rseq_return(params);
@@ -815,6 +817,7 @@ void isr_local_router(isr_params_t *params)
         if (FRAME_USER(params) && current_proc &&
             (current_proc->need_resched || current_proc->rseq_notify)) {
             bkl_enter();
+            bkl_frame_push(1);
             sched_take_preempt();
             isr_leave(params);
         }
@@ -951,6 +954,7 @@ void _irq_router(isr_params_t *params)
         }
         bkl_enter();
     }
+    bkl_frame_push(1);
     if (params->vector == IRQ_VECTOR(0)) {
         if (arch_cpu_id() == 0) {
             boot_ticks_skipped = 0;

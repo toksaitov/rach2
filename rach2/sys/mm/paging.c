@@ -1736,12 +1736,12 @@ static uint32_t temp_find(struct temp_pool *pool)
 }
 
 /**
- * Unmap every stale slot of `pool` and drop this processor's translations,
- * and have every other drop its own before it next takes the big lock: one
- * change of kernel mappings for all the slots of the pool given back since
- * its last sweep, where unmapping each as it was given back would be one
- * change for each. The pool's lock is held; 0 when no slot was stale, and
- * then nothing changed.
+ * Unmap every stale slot of `pool` and drop every processor's translations
+ * before returning (`smp_kernel_mapping_changed`): one change of kernel
+ * mappings for all the slots of the pool given back since its last sweep,
+ * where unmapping each as it was given back would be one change for each.
+ * The pool's lock is held; 0 when no slot was stale, and then nothing
+ * changed.
  */
 static int temp_sweep(struct temp_pool *pool)
 {
@@ -1770,9 +1770,8 @@ static int temp_sweep(struct temp_pool *pool)
  * processor may hold every slot of the region. The new entry's translation
  * is dropped on this processor, since a sweep by another processor, or of
  * another's pool, left this one's translations of the slot in place. The
- * others need nothing: only the holder reads the slot, and a processor it
- * moves to drops its translations at the switch when a sweep came since
- * (`smp_kernel_flush`).
+ * others need nothing: a sweep drops every processor's translations before
+ * it returns, so none has one of a slot taken after it.
  */
 void *kmap_temp(uintptr_t phys)
 {
@@ -2131,26 +2130,50 @@ size_t frame_free_count(void)
     return _free_frames;
 }
 
+/**
+ * An entry that was not present is in no processor's TLB, since x86 caches
+ * no translation of a page that is not present, so a new mapping is
+ * flushed on this processor alone; a changed one everywhere.
+ */
 void map_kernel_frame(uintptr_t va, uintptr_t phys, int writable)
 {
     pte_t *e = kernel_pte(va);
+    pte_t old;
 
     if (!e) {
         return;
     }
+    old = *e;
     *e = (pte_t)(phys & ~(PAGE_SIZE - 1)) | PTE_P | (writable ? PTE_W : 0);
-    paging_flush_tlb(va);
+    if (old & PTE_P) {
+        paging_flush_tlb(va);
+    } else {
+        arch_tlb_flush_page(va);
+    }
 }
 
 void unmap_kernel_frame(uintptr_t va)
 {
-    pte_t *e = kernel_pte(va);
+    unmap_kernel_frames(va, 1);
+}
 
-    if (!e) {
-        return;
+void unmap_kernel_frames(uintptr_t va, uint32_t count)
+{
+    uint32_t i;
+    int present = 0;
+
+    for (i = 0; i < count; i++) {
+        pte_t *e = kernel_pte(va + (uintptr_t)i * PAGE_SIZE);
+
+        if (e && (*e & PTE_P)) {
+            *e = 0;
+            arch_tlb_flush_page(va + (uintptr_t)i * PAGE_SIZE);
+            present = 1;
+        }
     }
-    *e = 0;
-    paging_flush_tlb(va);
+    if (present) {
+        smp_kernel_flush(va, va + (uintptr_t)count * PAGE_SIZE);
+    }
 }
 
 void paging_set_writable(page_dir_t *dir, uintptr_t addr, bool writable)
@@ -2203,8 +2226,9 @@ void paging_flush_tlb(uintptr_t addr)
 void paging_flush_dir(const page_dir_t *dir, uintptr_t addr)
 {
     if (addr < USER_ADDR_MIN || addr >= USER_ADDR_MAX) {
+        addr &= ~(uintptr_t)(PAGE_SIZE - 1);
         arch_tlb_flush_page(addr);
-        smp_kernel_mapping_changed();
+        smp_kernel_flush(addr, addr + PAGE_SIZE);
         return;
     }
     addr &= ~(uintptr_t)(PAGE_SIZE - 1);
