@@ -145,18 +145,20 @@ readable and executable, each one page, private, one free page above the
 range
 .Xr mmap 2
 places mappings in.
-The data page can never be made writable or executable, and no other
-process reaches it, a tracer neither:
+The data page can never be made writable or executable, and only the
+process's own loads reach it, as on Linux: no access through
 .Xr ptrace 2
+or
+.Pa /proc/PID/mem ,
+the process's own
+.Pa /proc/self/mem
+among them, reaches it, which answer
+.Er EIO ,
 and
-.Pa /proc/PID/mem
-answer
-.Er EIO
-for it and
 .Xr process_vm_readv 2
-.Er EFAULT ,
-as on Linux.
-The library can, as on Linux:
+of it answers
+.Er EFAULT .
+The library, unlike the data page, may be made writable, as on Linux:
 .Xr mprotect 2
 may add
 .Dv PROT_WRITE ,
