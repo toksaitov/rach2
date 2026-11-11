@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Trace one exit or tmpfs unlink under a continuous silent audio stream."""
+import contextlib
 import os
 from pathlib import Path
 import shutil
@@ -10,9 +11,33 @@ import tempfile
 import time
 
 
+# While a scratch directory or a child is made and recorded, a request to
+# stop waits in pending, so that the cleanup always knows what to remove.
+making = False
+pending = False
+
+
 def interrupted(signum, frame):
     """Leave through the cleanup on an interrupt or termination request."""
+    global pending
+    if making:
+        pending = True
+        return
     raise KeyboardInterrupt
+
+
+@contextlib.contextmanager
+def recording():
+    """Defer a stop until the resource made inside is assigned, then honour it."""
+    global making, pending
+    making = True
+    try:
+        yield
+    finally:
+        making = False
+    if pending:
+        pending = False
+        raise KeyboardInterrupt
 
 
 def snapshot(out, name):
@@ -49,14 +74,16 @@ def main():
     try:
         out.mkdir(parents=True, exist_ok=False)
         print("trigger: pid:", os.getpid(), "evidence:", out, flush=True)
-        scratch = Path(tempfile.mkdtemp(prefix='rach2-hda-', dir=tmp))
+        with recording():
+            scratch = Path(tempfile.mkdtemp(prefix='rach2-hda-', dir=tmp))
         with open('/dev/zero', 'rb') as zero, open(out / 'pacat.log', 'wb') as log:
-            audio = subprocess.Popen([
-                'su', '-s', '/bin/sh', 'desktop', '-c',
-                'exec env XDG_RUNTIME_DIR=/run/user/1001 '
-                'PULSE_SERVER=unix:/run/user/1001/pulse/native '
-                'pacat --playback --raw --format=s16le --rate=48000 --channels=2'
-            ], stdin=zero, stdout=log, stderr=log, start_new_session=True)
+            with recording():
+                audio = subprocess.Popen([
+                    'su', '-s', '/bin/sh', 'desktop', '-c',
+                    'exec env XDG_RUNTIME_DIR=/run/user/1001 '
+                    'PULSE_SERVER=unix:/run/user/1001/pulse/native '
+                    'pacat --playback --raw --format=s16le --rate=48000 --channels=2'
+                ], stdin=zero, stdout=log, stderr=log, start_new_session=True)
         print('trigger: waiting for a playback period', flush=True)
         first_period = None
         # The wait has a deadline and prints each second, since a session
@@ -94,8 +121,9 @@ os.write(1, b"ready\\n")
 os.read(0, 1)
 os._exit(0)
 '''
-            child = subprocess.Popen([sys.executable, '-c', code, str(mib)],
-                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+            with recording():
+                child = subprocess.Popen([sys.executable, '-c', code, str(mib)],
+                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE)
             if child.stdout.readline() != b'ready\n':
                 raise RuntimeError('allocation child failed')
         else:
