@@ -613,7 +613,7 @@ static void ap_tty(struct procfs_text *t, const process_t *p)
 static int procfs_gen_stat(struct procfs_text *t, int pid, int whole)
 {
     process_t *p;
-    const struct mm *mm;
+    struct mm *mm;
     uint64_t user;
     uint64_t sys;
     int i;
@@ -668,9 +668,15 @@ static int procfs_gen_stat(struct procfs_text *t, int pid, int whole)
     ap_u64(t, TICKS_TO_CLOCK(p->start_ticks));
     ap_ch(t, ' ');
     mm = p->mm;
+    if (mm) {
+        mm_read_begin(mm);
+    }
     ap_ulong(t, mm ? vm_total(&mm->vm) : 0);
     ap_ch(t, ' ');
     ap_ulong(t, mm ? mm_resident(mm) : 0);
+    if (mm) {
+        mm_read_end(mm);
+    }
     ap_ch(t, '\n');
     if (!t->nomem) {
         t->buf[t->len] = '\0';
@@ -1604,7 +1610,7 @@ static void ap_maps_line(struct procfs_text *t, const struct mm *mm, const vma_t
 static int procfs_gen_maps(struct procfs_text *t, int pid)
 {
     process_t *p;
-    const struct mm *mm;
+    struct mm *mm;
     const vma_t *r;
 
     procfs_maps_names(pid);
@@ -1616,9 +1622,14 @@ static int procfs_gen_maps(struct procfs_text *t, int pid)
         return -EACCES;
     }
     mm = p->mm;
-    for (r = mm ? vm_first(&mm->vm) : NULL; r; r = vm_next(r)) {
+    if (!mm) {
+        return t->len;
+    }
+    mm_read_begin(mm);
+    for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
         ap_maps_line(t, mm, r);
     }
+    mm_read_end(mm);
     return t->len;
 }
 
@@ -1733,7 +1744,7 @@ static void ap_smaps_flags(struct procfs_text *t, const vma_t *r)
 static int procfs_gen_smaps(struct procfs_text *t, int pid)
 {
     process_t *p;
-    const struct mm *mm;
+    struct mm *mm;
     const vma_t *r;
 
     procfs_maps_names(pid);
@@ -1745,7 +1756,11 @@ static int procfs_gen_smaps(struct procfs_text *t, int pid)
         return -EACCES;
     }
     mm = p->mm;
-    for (r = mm ? vm_first(&mm->vm) : NULL; r; r = vm_next(r)) {
+    if (!mm) {
+        return t->len;
+    }
+    mm_read_begin(mm);
+    for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
         unsigned long present, clean, dirty, anon;
         int shared = r->type == VM_SHARED;
         int of_file = r->file || r->type == VM_CODE || r->type == VM_DATA;
@@ -1770,6 +1785,7 @@ static int procfs_gen_smaps(struct procfs_text *t, int pid)
         ap_smaps_key(t, r);
         ap_smaps_flags(t, r);
     }
+    mm_read_end(mm);
     return t->len;
 }
 
@@ -1857,7 +1873,7 @@ static void ap_numa_count(struct procfs_text *t, const char *name, unsigned long
 static int procfs_gen_numa_maps(struct procfs_text *t, int pid)
 {
     process_t *p;
-    const struct mm *mm;
+    struct mm *mm;
     const vma_t *r;
 
     procfs_maps_names(pid);
@@ -1869,7 +1885,11 @@ static int procfs_gen_numa_maps(struct procfs_text *t, int pid)
         return -EACCES;
     }
     mm = p->mm;
-    for (r = mm ? vm_first(&mm->vm) : NULL; r; r = vm_next(r)) {
+    if (!mm) {
+        return t->len;
+    }
+    mm_read_begin(mm);
+    for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
         const struct vm_policy *pol = mempolicy_at(r, r->start);
         int of_file = r->file || r->type == VM_CODE || r->type == VM_DATA;
         struct paging_frame_counts counts;
@@ -1900,6 +1920,7 @@ static int procfs_gen_numa_maps(struct procfs_text *t, int pid)
         }
         ap_ch(t, '\n');
     }
+    mm_read_end(mm);
     return t->len;
 }
 
@@ -2194,7 +2215,7 @@ static void procfs_status_memory(struct procfs_text *t, const struct mm *mm)
 static int procfs_gen_status(struct procfs_text *t, int pid)
 {
     process_t *p = procfs_proc(pid);
-    const struct mm *mm;
+    struct mm *mm;
     uint64_t caps;
     uint32_t i;
 
@@ -2243,7 +2264,9 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
     ap_u32(t, pid_seen(p->sid));
     ap_ch(t, '\n');
     if (mm) {
+        mm_read_begin(mm);
         procfs_status_memory(t, mm);
+        mm_read_end(mm);
     }
     ap_str(t, "Threads:\t");
     ap_u32(t, p->tg->live);
@@ -2283,7 +2306,7 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
 static int procfs_gen_statm(struct procfs_text *t, int pid)
 {
     process_t *p = procfs_proc(pid);
-    const struct mm *mm;
+    struct mm *mm;
 
     if (!p) {
         return -ENOENT;
@@ -2293,6 +2316,7 @@ static int procfs_gen_statm(struct procfs_text *t, int pid)
         ap_str(t, "0 0 0 0 0 0 0\n");
         return t->len;
     }
+    mm_read_begin(mm);
     ap_ulong(t, vm_total(&mm->vm) / PAGE_SIZE);
     ap_ch(t, ' ');
     ap_ulong(t, mm_resident(mm));
@@ -2302,6 +2326,7 @@ static int procfs_gen_statm(struct procfs_text *t, int pid)
     ap_ulong(t, (mm_bytes(mm, VM_DATA) + mm_bytes(mm, VM_HEAP) + mm_bytes(mm, VM_ANON) +
                  mm_bytes(mm, VM_STACK)) /
                     PAGE_SIZE);
+    mm_read_end(mm);
     ap_str(t, " 0\n");
     return t->len;
 }

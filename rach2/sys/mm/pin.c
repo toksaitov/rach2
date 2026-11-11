@@ -190,33 +190,16 @@ static void pin_start(struct pin *pin, struct mm *mm, uintptr_t start, uintptr_t
     }
 }
 
-/** The record is made before the pages are brought in, which may sleep, and
- * the charge and the regions a long-term write pin refuses are checked
- * again after, since another thread of the address space may have pinned
- * or mapped meanwhile. */
-int pin_user(struct mm *mm, uintptr_t addr, uintptr_t len, uint32_t flags,
-             const struct pin_holder *holder, struct pin **out)
+/** The pin of `pin_user`, of the page-aligned [start, end), under `mm`'s
+ * regions' lock held to read once, which the bringing in of a page may let
+ * go and take again. */
+static int pin_user_locked(struct mm *mm, uintptr_t start, uintptr_t end, uint32_t flags,
+                           const struct pin_holder *holder, struct pin **out)
 {
-    uintptr_t start = addr & ~(uintptr_t)(PAGE_SIZE - 1);
-    uintptr_t end = addr + len;
-    uintptr_t pages;
+    uintptr_t pages = (end - start) / PAGE_SIZE;
     struct pin *pin;
     int rc;
 
-    if (len == 0 || end < addr) {
-        return -EINVAL;
-    }
-    end = (end + PAGE_SIZE - 1) & ~(uintptr_t)(PAGE_SIZE - 1);
-    if (end < start) {
-        return -EINVAL;
-    }
-    if (start < USER_ADDR_MIN || end > USER_ADDR_MAX) {
-        return -EFAULT;
-    }
-    pages = (end - start) / PAGE_SIZE;
-    if (pages != (uint32_t)pages) {
-        return -ENOMEM; /* more than a record counts */
-    }
     if ((flags & (PIN_LONGTERM | PIN_WRITE)) == (PIN_LONGTERM | PIN_WRITE) &&
         pin_meets_tracked_file(mm, start, end)) {
         return -EFAULT;
@@ -256,6 +239,39 @@ int pin_user(struct mm *mm, uintptr_t addr, uintptr_t len, uint32_t flags,
     pin_start(pin, mm, start, end);
     *out = pin;
     return 0;
+}
+
+/** The record is made before the pages are brought in, which may sleep, and
+ * the charge and the regions a long-term write pin refuses are checked
+ * again after, since another thread of the address space may have pinned
+ * or mapped meanwhile. The regions' lock is held to read across the pin
+ * (`mm_read_begin`), so the caller holds none of `mm`'s. */
+int pin_user(struct mm *mm, uintptr_t addr, uintptr_t len, uint32_t flags,
+             const struct pin_holder *holder, struct pin **out)
+{
+    uintptr_t start = addr & ~(uintptr_t)(PAGE_SIZE - 1);
+    uintptr_t end = addr + len;
+    uintptr_t pages;
+    int rc;
+
+    if (len == 0 || end < addr) {
+        return -EINVAL;
+    }
+    end = (end + PAGE_SIZE - 1) & ~(uintptr_t)(PAGE_SIZE - 1);
+    if (end < start) {
+        return -EINVAL;
+    }
+    if (start < USER_ADDR_MIN || end > USER_ADDR_MAX) {
+        return -EFAULT;
+    }
+    pages = (end - start) / PAGE_SIZE;
+    if (pages != (uint32_t)pages) {
+        return -ENOMEM; /* more than a record counts */
+    }
+    mm_read_begin(mm);
+    rc = pin_user_locked(mm, start, end, flags, holder, out);
+    mm_read_end(mm);
+    return rc;
 }
 
 int pin_frames(struct mm *mm, const uintptr_t *frames, uint32_t count,

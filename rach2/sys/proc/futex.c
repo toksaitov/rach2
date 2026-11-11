@@ -179,7 +179,8 @@ static uint64_t futex_ticks_until(int64_t at_sec, uint32_t at_nsec, int realtime
  * page's frame and the offset in it, which every process mapping that page
  * names alike. A futex word in memory two processes share, a
  * PTHREAD_PROCESS_SHARED mutex in /dev/shm among them, is named the second
- * way unless the caller passed FUTEX_PRIVATE_FLAG.
+ * way unless the caller passed FUTEX_PRIVATE_FLAG. The region and the frame
+ * are read under the regions' lock held to read, which may sleep.
  */
 static void futex_key(uintptr_t uaddr, int shared, const void **space, uintptr_t *key)
 {
@@ -191,11 +192,10 @@ static void futex_key(uintptr_t uaddr, int shared, const void **space, uintptr_t
     if (!shared || current_proc->mm == NULL) {
         return;
     }
+    mmap_read_lock(current_proc->mm);
     r = vm_find(&current_proc->mm->vm, uaddr);
-    if (r == NULL || r->type != VM_SHARED) {
-        return;
-    }
-    phys = paging_user_phys(current_proc->page_dir, uaddr);
+    phys = r && r->type == VM_SHARED ? paging_user_phys(current_proc->page_dir, uaddr) : 0;
+    mmap_unlock(current_proc->mm);
     if (phys != 0) {
         *space = &futex_shared_space;
         *key = phys;
