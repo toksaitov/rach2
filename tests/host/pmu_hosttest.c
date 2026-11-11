@@ -21,8 +21,10 @@
  * clock, runs the clock for 25 seconds and takes each NMI the counter
  * raises as watchdog_nmi takes it, through platform_pmu_overflow, and
  * checks that the due NMIs come at 10 and 20 seconds, that the APIC's
- * performance-counter entry is unmasked again after each, and that a
- * disabled counter stops.
+ * performance-counter entry is unmasked again after each and after a late
+ * one that finds no overflow, that AMD's window for a late NMI opens after
+ * the overflow's callback, and that a disabled counter stops and keeps its
+ * entry masked.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -407,6 +409,7 @@ static int take_nmis(long ms, long *due_ms, int n, int max, int *others, int *ma
             (*others)++;
             continue;
         }
+        platform_pmu_handled();
         if ((lvtpc & LAPIC_LVT_MASKED) != 0) {
             (*masked)++;
         }
@@ -485,6 +488,27 @@ static void counter_row(const struct chip *c, const char *line, uint32_t want_ev
     check(others == 1 && (chip_amd() || chip_version() < 2 || msr_writes == writes),
           "an NMI of another source is not the counter's");
 
+    /* A late NMI, delivered after the arming cleared the status it set:
+     * the APIC masked the entry, and nothing shows an overflow. */
+    lvtpc |= LAPIC_LVT_MASKED;
+    nmi_pending = 1;
+    drive(0, due_ms, 4, &others, &masked);
+    check(others == 1 && lvtpc == LAPIC_LVT_NMI, "a late NMI unmasks the entry");
+
+    if (chip_amd()) {
+        /* An overflow whose hard-lockup report takes a second. */
+        counter = chip_mask();
+        run(1);
+        nmi_pending = 0;
+        check(platform_pmu_overflow(&n) == 1, "the overflow is the counter's");
+        tsc += c->hz;
+        check(!platform_pmu_late(), "the window is closed during the callback");
+        platform_pmu_handled();
+        check(platform_pmu_late(), "the window opens after the callback");
+        tsc += c->hz / 10u;
+        check(!platform_pmu_late(), "the window closes 100 ms after the callback");
+    }
+
     platform_pmu_disable();
     check(evtsel == 0, "the disable stops the counter");
     check((lvtpc & LAPIC_LVT_MASKED) != 0, "the disable masks the entry");
@@ -492,6 +516,10 @@ static void counter_row(const struct chip *c, const char *line, uint32_t want_ev
           "the disable clears the global enable");
     n = drive(25, due_ms, 4, &others, &masked);
     check(n == 0 && others == 0, "a stopped counter raises nothing");
+    nmi_pending = 1;
+    drive(0, due_ms, 4, &others, &masked);
+    check(others == 1 && (lvtpc & LAPIC_LVT_MASKED) != 0,
+          "an NMI leaves a stopped counter's entry masked");
     check(fault[0] == '\0', fault[0] != '\0' ? fault : "no #GP");
 }
 
