@@ -196,6 +196,9 @@ musl/chrootmusl
 # Paths that go on past /proc/PID/fd/N, cwd and root, and /dev/fd/N, from the
 # file or directory each refers to.
 musl/proclinkmusl
+# /proc/PID/syscall and wchan of threads asleep in a pipe's read and a futex
+# wait, of one that runs, and of another user's process.
+musl/wchanmusl
 # vfork and clone with CLONE_VM|CLONE_VFORK, as posix_spawn, system and popen
 # start their children.
 musl/vforkmusl

@@ -109,6 +109,7 @@ case musl/vfiomusl -- musl/vfiomusl
 case musl/vforkmusl -- musl/vforkmusl
 case musl/vmamusl -- musl/vmamusl
 case musl/waitidmusl -- musl/waitidmusl
+case musl/wchanmusl ids:1000 -- musl/wchanmusl
 case musl/pidfdmusl -- musl/pidfdmusl
 case musl/privatefilemusl -- musl/privatefilemusl
 case musl/wakelatmusl alone -- musl/wakelatmusl 64 3
