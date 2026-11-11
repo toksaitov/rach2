@@ -151,10 +151,13 @@ static uint64_t submit_box_bytes(const struct virtio_gpu_cmd *cmd, const struct 
  * format. A Venus or native context's stream is another protocol and counts
  * nothing. Each copy looks its resource up by binary search in a sorted copy
  * of the buffer list, so a parse costs commands times log buffers; Linux
- * sends the commands unread (virtgpu_submit.c:355, :421). 0, or -ENOMEM.
+ * sends the commands unread and allocates nothing to count them
+ * (virtgpu_submit.c:308, :355, :421 of 6.12.115). The count never fails the
+ * submission: when the sorted copy cannot be allocated, the submission
+ * counts nothing.
  */
-static int32_t submit_copied(struct virtio_gpu_cmd *cmd, const struct vgpu_submit *s,
-                             const struct vgpu_context *ctx, uint32_t size)
+static void submit_copied(struct virtio_gpu_cmd *cmd, const struct vgpu_submit *s,
+                          const struct vgpu_context *ctx, uint32_t size)
 {
     uint32_t n = size / 4u, i = 0, k, nt = 0, hdr, op, len;
     uint32_t capset = ctx->context_init & VIRTIO_GPU_CONTEXT_INIT_CAPSET_ID_MASK;
@@ -164,15 +167,12 @@ static int32_t submit_copied(struct virtio_gpu_cmd *cmd, const struct vgpu_submi
 
     cmd->copied = 0;
     if ((capset != 0 && capset != VIRTIO_GPU_CAPSET_VIRGL && capset != VIRTIO_GPU_CAPSET_VIRGL2) ||
-        !s->nbos) {
-        return 0;
-    }
-    if ((uint64_t)s->nbos * sizeof(*t) > (uint64_t)(size_t)-1) {
-        return -ENOMEM;
+        !s->nbos || (uint64_t)s->nbos * sizeof(*t) > (uint64_t)(size_t)-1) {
+        return;
     }
     t = kmalloc((size_t)s->nbos * sizeof(*t));
     if (!t) {
-        return -ENOMEM;
+        return;
     }
     for (k = 0; k < s->nbos; k++) {
         bo = vgpu_bo(s->bos[k]);
@@ -199,7 +199,6 @@ static int32_t submit_copied(struct virtio_gpu_cmd *cmd, const struct vgpu_submi
     }
     kfree(t);
     cmd->copied = bytes;
-    return 0;
 }
 
 /**
@@ -344,7 +343,8 @@ static int32_t submit_buffers(struct drm_file *file, struct drm_virtgpu_execbuff
             return rc;
         }
     }
-    return submit_copied(cmd, s, file->driver_priv, a->size);
+    submit_copied(cmd, s, file->driver_priv, a->size);
+    return 0;
 }
 
 /** Wait only for foreign producers, then attach each buffer in queue order.
