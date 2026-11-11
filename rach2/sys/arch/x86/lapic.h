@@ -129,9 +129,10 @@ void lapic_set_lint(int lint, uint32_t entry);
 
 /** Write this processor's performance-counter entry, which an overflowing
  * counter raises: `LAPIC_LVT_NMI` for the hard-lockup detector
- * (arch/x86/pmu.c), `LAPIC_LVT_MASKED` to quiet it. The processor sets
- * the entry's mask when it delivers the interrupt, so the handler writes it
- * again. Nothing while the APIC is not enabled. */
+ * (arch/x86/pmu.c), `LAPIC_LVT_MASKED` to quiet it. Intel's processors
+ * set the entry's mask when they deliver the interrupt and AMD's do not;
+ * the handler writes it again on both. Nothing while the APIC is not
+ * enabled. */
 void lapic_set_lvtpc(uint32_t entry);
 
 /** Raise `vector` on this processor by an interprocessor interrupt to

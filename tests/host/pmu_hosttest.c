@@ -6,7 +6,7 @@
  *
  * The model is the Lenovo's Core i3-4030U, a Haswell whose Linux reports
  * "Haswell events, full-width counters" and an architectural monitor of
- * version 3, 48 bits wide, and five other processors the driver must
+ * version 3, 48 bits wide, and six other processors the driver must
  * handle: one without the full-width alias, a version 1 monitor without the
  * global registers, AMD's core counters, a hypervisor's counter that takes
  * writes and never moves, and processors without the cycles event or the
