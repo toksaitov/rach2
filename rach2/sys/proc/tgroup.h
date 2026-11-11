@@ -49,7 +49,9 @@ struct tgroup {
     /* An init, which a signal left at its default does not end, as Linux's
      * SIGNAL_UNKILLABLE: the system's real init and the first process of a
      * PID namespace below the first. A forced signal at its default clears
-     * it (`signal_force`). */
+     * it when the thread it is forced on is not traced (`signal_force`), as
+     * Linux 6.12.115's force_sig_info_to_task does (kernel/signal.c:
+     * 1348-1354). */
     uint32_t unkillable;
     /* A successful exec since this group was made; fork starts at 0. */
     uint32_t execed;
