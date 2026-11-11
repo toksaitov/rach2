@@ -76,7 +76,23 @@ Sparse writes and hole fills drain before returning.
 An I/O error after some bytes were accepted returns their count;
 fsync reports the delayed error even after close and reopen.
 .Ss Pipes and terminals
-A pipe write waits when the pipe is full.
+A pipe of
+.Em n
+pages keeps its bytes in at most
+.Em n
+page buffers, as Linux's does, and is full once
+.Em n
+buffers hold bytes, however few.
+A write's first bytes, its count modulo 4096, join the newest buffer when
+a write made it and they fit in its page; each further page of bytes
+opens a buffer of its own.
+A
+.Fn writev
+to a pipe is one such write of the whole vector, as on Linux: its first
+bytes are its total modulo 4096, and each buffer it opens fills across
+the elements.
+A pipe write waits when the pipe is full and its next byte would open a
+buffer.
 With
 .Dv O_NONBLOCK ,
 it returns the bytes already written, or
@@ -215,13 +231,15 @@ and a range outside user space
 The total is cut at 0x7ffff000, as one write's count is, and the buffer
 that crosses it is written only up to it.
 .Pp
-For an append to a mounted file, the kernel copies the whole vector, then
+For a mounted file, the kernel copies the whole vector, then
 brings in its buffers before taking the file lock.
 A bad data page ends the accessible prefix; bytes before it are written
 and returned as a short count.
 A pseudo-terminal master also copies the whole vector, and holds its
 write lock across every element, including waits and user copies, so
 another writer cannot insert bytes between them.
+A pipe copies the whole vector and writes it as one write, as the
+section on pipes above says.
 Other writes read each vector again as they reach it.
 An error found after a positive transfer returns the transferred byte
 count instead of the error.
@@ -237,8 +255,12 @@ or
 An entry that cannot be read gives
 .Er EFAULT .
 .Pp
-An append to a mounted file holds its write lock across the vector.
-Other vectors are a sequence of separate writes.
+A write to a mounted file holds the open file description and the file's
+write lock across the vector, as Linux holds its position lock, so that a
+seek through a descriptor that shares the description comes before the
+call or after it, never between two buffers, and the end of the whole
+vector at the offset is checked under that hold.
+Other vectors but a pipe's are a sequence of separate writes.
 On a datagram socket, each nonempty entry sends a separate datagram.
 Musl's buffered output uses
 .Fn writev .

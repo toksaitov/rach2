@@ -165,7 +165,11 @@ directory among them.
 .Pp
 The first nonempty buffer uses an ordinary read, which may wait.
 For a regular file, reading continues through successive buffers until
-a short read or error.
+a short read or error, with the open file description held across the
+buffers, as Linux holds its position lock, so that a seek through a
+descriptor that shares it comes before the call or after it, never
+between two buffers; the end of the whole list at the offset is checked
+under that hold.
 For a pipe, stream socket, device, or
 .Pa /proc
 file, later buffers are read only while the descriptor reports read
