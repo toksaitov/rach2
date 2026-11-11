@@ -21,8 +21,9 @@
  * refused with EACCES. Its /proc/PID/fd, mode 0500 and owned by uid and
  * gid 1000, is entered by chdir and by fchdir through an O_PATH descriptor
  * of uid 1000 and gid 1001, as Linux's proc_fd_permission judges the owner
- * whatever its group, and refused to uid 1001 with EACCES both ways; once
- * the holder is gone, fchdir through such a descriptor still enters its fd
+ * whatever its group, and that process lstats a link in it; uid 1001 is
+ * refused with EACCES all three ways. Once the holder is gone, fchdir
+ * through such a descriptor still enters its fd
  * directory and gives ESRCH for its fdinfo directory. A
  * descriptor on a file or a pipe used as a directory is ENOTDIR, a closed one
  * ENOENT, and a descriptor on /dev reaches its devices. The links of a
@@ -565,12 +566,16 @@ static int other_process(void)
 
 /**
  * In a child of uid `uid` and gid `gid`, enter `dir`, another process's
- * /proc/PID/fd, by chdir and by fchdir through an O_PATH descriptor: 0 when
- * both succeed with `want` 0 or fail with errno `want`, 1 when the child
- * cannot be made, its step otherwise.
+ * /proc/PID/fd, by chdir and by fchdir through an O_PATH descriptor, and
+ * lstat its link `fd`: 0 when all three succeed with `want` 0 or fail with
+ * errno `want`, 1 when the child cannot be made, its step otherwise. The
+ * lstat takes only the directory's check, as Linux's link inode has no
+ * permission of its own.
  */
-static int fd_dir_enter(int uid, int gid, const char *dir, int want)
+static int fd_dir_enter(int uid, int gid, const char *dir, int fd, int want)
 {
+    char link[96];
+    struct stat st;
     pid_t pid = fork();
     int o, rc;
 
@@ -590,7 +595,15 @@ static int fd_dir_enter(int uid, int gid, const char *dir, int want)
             _exit(4);
         }
         rc = fchdir(o);
-        _exit(want == 0 ? (rc == 0 ? 0 : 5) : (refused(rc, want) ? 0 : 6));
+        if (want == 0 ? rc != 0 : !refused(rc, want)) {
+            _exit(want == 0 ? 5 : 6);
+        }
+        snprintf(link, sizeof(link), "%s/%d", dir, fd);
+        rc = lstat(link, &st);
+        if (want == 0) {
+            _exit(rc == 0 && S_ISLNK(st.st_mode) ? 0 : 7);
+        }
+        _exit(refused(rc, want) ? 0 : 8);
     }
     return child_status(pid);
 }
@@ -661,8 +674,9 @@ static int fd_dir_ended(pid_t owner, int ready, int go, const char *dir, const c
  * Check the search of another process's /proc/PID/fd, mode 0500, whose
  * owner is a dumpable child of uid and gid 1000: a process of uid 1000 and
  * gid 1001 enters it by chdir and by fchdir, as Linux's proc_fd_permission
- * judges the owner whatever its group, and one of uid 1001 gets EACCES both
- * ways; and once the child is reaped, the fd directory is entered and the
+ * judges the owner whatever its group, and lstats the link of the child's
+ * descriptor `go[0]`, and one of uid 1001 gets EACCES all three ways; and
+ * once the child is reaped, the fd directory is entered and the
  * fdinfo one is ESRCH through descriptors opened before (`fd_dir_ended`).
  * Returns 0, or 1 after printing the failure; the step says which check
  * failed.
@@ -697,10 +711,10 @@ static int fd_dir_search(void)
     }
     snprintf(dir, sizeof(dir), "/proc/%d/fd", (int)pid);
     snprintf(info, sizeof(info), "/proc/%d/fdinfo", (int)pid);
-    st = fd_dir_enter((int)probe_id(1000), (int)probe_id(1001), dir, 0);
+    st = fd_dir_enter((int)probe_id(1000), (int)probe_id(1001), dir, go[0], 0);
     if (st == 0) {
         report_held();
-        st = fd_dir_enter((int)probe_id(1001), (int)probe_id(1001), dir, EACCES);
+        st = fd_dir_enter((int)probe_id(1001), (int)probe_id(1001), dir, go[0], EACCES);
         st = st == 0 ? 0 : 20 + st;
     }
     if (st == 0) {

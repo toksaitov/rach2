@@ -8259,19 +8259,32 @@ static uint32_t synth_pid_dir_mode(const struct vpath *vp)
 }
 
 /**
- * Whether /proc/`rpid`/fd/`fd` and its fdinfo file are there for the caller:
- * 0, -ENOENT when the descriptor is not open (the check readlink makes, so
- * stat and readlink agree), or -EACCES for a caller that may not read the
- * process's descriptors, to whom Linux refuses its fd directory.
+ * Whether /proc/`rpid`/fd/`fd`, or with `info` its fdinfo file, is there for
+ * the caller, judged in the order of Linux's lookup: first its directory's
+ * permission, the search of /proc/PID/fd by its mode and owner, or for
+ * fdinfo Linux's ptrace check (`proc_fd_dir_access`), -EACCES; then -ENOENT
+ * when the descriptor is not open (the check readlink makes, so stat and
+ * readlink agree); then for a link followed, `follow`, the ptrace check that
+ * Linux's `proc_pid_get_link` takes (`procfs_may_read`), -EACCES. An lstat
+ * of a link takes no check past the lookup, as Linux's link inode has no
+ * permission or getattr of its own. Returns 0 when it is there.
  */
-static int32_t synth_fd_visible(int rpid, int fd)
+static int32_t synth_fd_visible(int rpid, int fd, int info, int follow)
 {
     char scratch[16];
+    int32_t rc;
 
-    if (rpid < 0 || procfs_readlink_fd(rpid, fd, scratch, (int)sizeof(scratch)) < 0) {
+    if (rpid < 0) {
         return -ENOENT;
     }
-    return procfs_may_read(rpid) ? 0 : -EACCES;
+    rc = proc_fd_dir_access(info ? VNODE_PROC_FDINFO_DIR : VNODE_PROC_FD_DIR, rpid, CRED_X, NULL);
+    if (rc != 0) {
+        return rc == -ESRCH ? -ENOENT : rc;
+    }
+    if (procfs_readlink_fd(rpid, fd, scratch, (int)sizeof(scratch)) < 0) {
+        return -ENOENT;
+    }
+    return !follow || procfs_may_read(rpid) ? 0 : -EACCES;
 }
 
 /** Whether the file `procfile` of a process's directory takes a write,
@@ -8290,8 +8303,9 @@ static int synth_proc_writable(int procfile)
  * -ENOENT for a node that is not there, a process that has exited, a device
  * that is gone and a pty that is not allocated among them; -ENOTDIR for a
  * name under a node that is not a directory; or -EACCES for a descriptor's
- * entry under /proc/PID/fd or /proc/PID/fdinfo of a process the caller may
- * not read (`synth_fd_visible`), or for a followed namespace link of one.
+ * entry under /proc/PID/fd the caller may not search, a link of it followed
+ * or an entry under /proc/PID/fdinfo of a process the caller may not read
+ * (`synth_fd_visible`), or for a followed namespace link of one.
  *
  * Each node has one link, 4096-byte blocks and the boot time for its times;
  * a task directory has the links `procfs_task_links` counts, and a pty
@@ -8524,7 +8538,7 @@ static int32_t synth_stat(const struct vpath *vp, struct kstat *kst, int follow)
         return 0;
     case VNODE_PROC_FDINFO: {
         int rpid = procfs_resolve_id(vp);
-        int32_t rc = synth_fd_visible(rpid, vp->procfd);
+        int32_t rc = synth_fd_visible(rpid, vp->procfd, 1, 0);
 
         if (rc != 0) {
             return rc;
@@ -8537,7 +8551,7 @@ static int32_t synth_stat(const struct vpath *vp, struct kstat *kst, int follow)
     }
     case VNODE_PROC_FD_LINK: {
         int rpid = procfs_resolve_id(vp);
-        int32_t rc = synth_fd_visible(rpid, vp->procfd);
+        int32_t rc = synth_fd_visible(rpid, vp->procfd, 0, follow);
 
         if (rc != 0) {
             return rc;

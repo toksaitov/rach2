@@ -1575,9 +1575,12 @@ judges them; any other caller but a privileged one gets
 An open with
 .Dv O_PATH ,
 which reads nothing, succeeds for anyone, as Linux's does.
-Each link in it is
+An
+.Xr lstat 2
+of a link in it takes only that check, as on Linux; reading a link, and
+following it, are
 .Er EACCES
-to a caller that may not read
+as well to a caller that may not read
 .Pa environ .
 A symbolic link for each open descriptor N, whose target names what the
 descriptor is open on: a file by its path now, from the reader's root, as
