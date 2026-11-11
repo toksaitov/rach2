@@ -1265,6 +1265,203 @@ static void zero_window_flight_rows(void)
 }
 
 /**
+ * Check the first probe of a window closed over data in flight against
+ * Linux's tcp_retransmit_timer, which counts its give-up from the oldest
+ * data's send when no retransmission came first: with TCP_USER_TIMEOUT
+ * 5000, data sent at 0 and a partial acknowledgement at 4.9 s that closes
+ * the window, the first probe, at 5.9 s, gives the connection up. When the
+ * data the acknowledgement leaves was sent at 4 s, the same probe goes and
+ * the connection stays.
+ */
+static void first_probe_rows(void)
+{
+    struct socket sock;
+    struct tcb *conn;
+    uint32_t peer_seq = 27500, first;
+    uint16_t lport;
+    static uint8_t bytes[100];
+
+    reset_all();
+    conn = open_conn(&sock, 113, &peer_seq, &lport);
+    sock.user_timeout = 5000;
+    conn->rto = TCP_MS(6000);
+    first = (uint32_t)kernel_ticks;
+    CHECK("first probe: 100 bytes go at 0", tcp_send(&sock, bytes, 100) == 100 && n_segs == 1);
+    while (kernel_ticks - first < TCP_MS(4900)) {
+        kernel_ticks++;
+        tcp_tick();
+    }
+    conn->rto = TCP_MS(1000);
+    rx(113, lport, peer_seq, conn->snd_una + 50u, F_ACK, 0, (const char *)0, 0);
+    CHECK("a partial acknowledgement at 4.9 s closes the window over the other 50",
+          conn->snd_wnd == 0 && conn->snd_nxt - conn->snd_una == 50u && conn->retx_stamp == 0);
+    n_segs = 0;
+    while (conn->state == TCP_ESTABLISHED && n_segs == 0 && kernel_ticks - first < TCP_MS(7000)) {
+        kernel_ticks++;
+        tcp_tick();
+    }
+    CHECK("the first probe, at 5.9 s, gives the connection up, counting from the send at 0",
+          conn->state == TCP_CLOSED && conn->so_error == ETIMEDOUT && n_segs <= 1 &&
+              kernel_ticks - first == TCP_MS(5900));
+
+    reset_all();
+    conn = open_conn(&sock, 114, &peer_seq, &lport);
+    sock.user_timeout = 5000;
+    conn->rto = TCP_MS(6000);
+    first = (uint32_t)kernel_ticks;
+    CHECK("first probe: 50 bytes go at 0", tcp_send(&sock, bytes, 50) == 50 && n_segs == 1);
+    while (kernel_ticks - first < TCP_MS(4000)) {
+        kernel_ticks++;
+        tcp_tick();
+    }
+    CHECK("and 50 more at 4 s", tcp_send(&sock, bytes, 50) == 50 && n_segs == 2);
+    while (kernel_ticks - first < TCP_MS(4900)) {
+        kernel_ticks++;
+        tcp_tick();
+    }
+    conn->rto = TCP_MS(1000);
+    conn->rtt_start = 0; /* no round-trip sample, so the timeout stays 1 s */
+    rx(114, lport, peer_seq, conn->snd_una + 50u, F_ACK, 0, (const char *)0, 0);
+    n_segs = 0;
+    while (conn->state == TCP_ESTABLISHED && n_segs == 0 && kernel_ticks - first < TCP_MS(7000)) {
+        kernel_ticks++;
+        tcp_tick();
+    }
+    CHECK(
+        "when the data left was sent at 4 s the first probe goes at 5.9 s and the connection stays",
+        conn->state == TCP_ESTABLISHED && n_segs == 1 && kernel_ticks - first == TCP_MS(5900) &&
+            read32be(segs[0].data + 4) == conn->snd_una);
+}
+
+/**
+ * Check segments outside the receive window, against Linux's
+ * tcp_validate_incoming. An old acknowledgement in a segment
+ * below the receive window moves neither snd_una nor the window, and three
+ * duplicates of snd_una there count no duplicate; such a segment is
+ * answered with an acknowledgement of rcv_nxt once per 500 ms, the answers
+ * held back counted in TCPACKSkippedSeq, while data outside the window is
+ * answered each time, a resend of data taken counted in DelayedACKLost.
+ */
+static void out_of_window_rows(void)
+{
+    struct socket sock;
+    struct tcb *conn;
+    uint32_t peer_seq = 28000, una, wnd, skipped, lost;
+    uint16_t lport;
+    static uint8_t bytes[4 * TCP_MSS];
+    unsigned j, got;
+
+    reset_all();
+    conn = open_conn(&sock, 112, &peer_seq, &lport);
+    CHECK("out of window: four segments go",
+          tcp_send(&sock, bytes, (int)sizeof(bytes)) == (int)sizeof(bytes) && n_segs == 4);
+    una = conn->snd_una;
+    wnd = conn->snd_wnd;
+    skipped = net_mib.tcp_ack_skipped_seq;
+    n_segs = 0;
+    rx(112, lport, peer_seq - 1u, conn->snd_nxt, F_ACK, 1000, (const char *)0, 0);
+    CHECK("an old ACK below the window moves neither snd_una nor the window",
+          conn->snd_una == una && conn->snd_wnd == wnd);
+    CHECK("and is answered with an acknowledgement of rcv_nxt",
+          n_segs == 1 && last_flags() == F_ACK && read32be(segs[0].data + 8) == peer_seq);
+    n_segs = 0;
+    for (j = 0; j < 3; j++) {
+        rx(112, lport, peer_seq - 1u, una, F_ACK, (uint16_t)wnd, (const char *)0, 0);
+    }
+    CHECK("three duplicates of snd_una below the window count none and send nothing",
+          conn->dup_acks == 0 && conn->recovering == 0 && n_segs == 0);
+    CHECK("their answers held back, counted in TCPACKSkippedSeq",
+          net_mib.tcp_ack_skipped_seq == skipped + 3);
+    kernel_ticks += TCP_INVALID_RATELIMIT - 1;
+    rx(112, lport, peer_seq - 1u, una, F_ACK, (uint16_t)wnd, (const char *)0, 0);
+    CHECK("one 499 ms after the answer is not answered", n_segs == 0);
+    kernel_ticks++;
+    rx(112, lport, peer_seq - 1u, una, F_ACK, (uint16_t)wnd, (const char *)0, 0);
+    CHECK("and one 500 ms after it is", n_segs == 1 && last_flags() == F_ACK);
+
+    n_segs = 0;
+    lost = net_mib.tcp_delayed_ack_lost;
+    got = delivered_bytes;
+    rx(112, lport, peer_seq - 8u, una, F_ACK, (uint16_t)wnd, "abcd", 4);
+    rx(112, lport, conn->rcv_adv + 1u, una, F_ACK, (uint16_t)wnd, "efgh", 4);
+    CHECK("data outside the window is answered each time, within the 500 ms",
+          n_segs == 2 && conn->rcv_nxt == peer_seq && delivered_bytes == got);
+    CHECK("and a resend of data taken counts in DelayedACKLost",
+          net_mib.tcp_delayed_ack_lost == lost + 1);
+}
+
+/**
+ * Check segments whose flags or acknowledgement a connection refuses,
+ * against Linux's tcp_validate_incoming and tcp_ack: a SYN draws a
+ * challenge acknowledgement, counted in TCPSYNChallenge, TCPChallengeACK and
+ * InErrs; a segment that acknowledges data never sent is dropped
+ * unanswered in ESTABLISHED and answered with a challenge in CLOSE_WAIT;
+ * one without ACK is dropped; and one whose acknowledgement is further
+ * below snd_una than the peer has acknowledged draws a challenge, while an
+ * old one nearer is taken without its window.
+ */
+static void refused_ack_rows(void)
+{
+    struct socket sock;
+    struct tcb *conn;
+    uint32_t peer_seq = 28500, una, wnd, syns, challenges, inerrs;
+    uint16_t lport;
+    static uint8_t bytes[4 * TCP_MSS];
+    unsigned got;
+
+    reset_all();
+    conn = open_conn(&sock, 115, &peer_seq, &lport);
+    got = delivered_bytes;
+    CHECK("refused acknowledgements: four segments go",
+          tcp_send(&sock, bytes, (int)sizeof(bytes)) == (int)sizeof(bytes) && n_segs == 4);
+    una = conn->snd_una;
+    wnd = conn->snd_wnd;
+    n_segs = 0;
+    syns = net_mib.tcp_syn_challenge;
+    challenges = net_mib.tcp_challenge_ack;
+    inerrs = net_mib.tcp_in_errs;
+    rx(115, lport, peer_seq, una, F_SYN, 1000, (const char *)0, 0);
+    CHECK("a SYN in ESTABLISHED draws a challenge acknowledgement and changes nothing",
+          n_segs == 1 && last_flags() == F_ACK && conn->state == TCP_ESTABLISHED &&
+              conn->snd_wnd == wnd);
+    CHECK("counted in TCPSYNChallenge, TCPChallengeACK and InErrs",
+          net_mib.tcp_syn_challenge == syns + 1 && net_mib.tcp_challenge_ack == challenges + 1 &&
+              net_mib.tcp_in_errs == inerrs + 1);
+
+    kernel_ticks += TCP_INVALID_RATELIMIT;
+    n_segs = 0;
+    rx(115, lport, peer_seq, conn->snd_nxt + 1u, F_ACK, (uint16_t)wnd, "ijkl", 4);
+    CHECK("a segment that acknowledges data never sent is dropped unanswered in ESTABLISHED",
+          n_segs == 0 && conn->rcv_nxt == peer_seq && delivered_bytes == got &&
+              conn->snd_una == una);
+    rx(115, lport, peer_seq, 0, 0, (uint16_t)wnd, "ijkl", 4);
+    CHECK("and so is one without ACK", n_segs == 0 && conn->rcv_nxt == peer_seq);
+
+    rx(115, lport, peer_seq, conn->snd_nxt, F_ACK, (uint16_t)wnd, (const char *)0, 0);
+    n_segs = 0;
+    challenges = net_mib.tcp_challenge_ack;
+    rx(115, lport, peer_seq, conn->iss - 1u, F_ACK, 1000, "ijkl", 4);
+    CHECK("an acknowledgement below snd_una by more than the peer acknowledged draws a challenge",
+          n_segs == 1 && net_mib.tcp_challenge_ack == challenges + 1 && conn->rcv_nxt == peer_seq &&
+              conn->snd_wnd == wnd);
+    rx(115, lport, peer_seq, conn->iss + 1u, F_ACK, 1000, "ijkl", 4);
+    CHECK("an old one nearer is taken with its data and without its window",
+          conn->rcv_nxt == peer_seq + 4u && conn->snd_wnd == wnd);
+    peer_seq += 4u;
+
+    rx(115, lport, peer_seq, conn->snd_nxt, (uint8_t)(F_ACK | F_FIN), (uint16_t)wnd,
+       (const char *)0, 0);
+    peer_seq++;
+    CHECK("the peer's FIN leads to CLOSE_WAIT", conn->state == TCP_CLOSE_WAIT);
+    kernel_ticks += TCP_INVALID_RATELIMIT;
+    n_segs = 0;
+    challenges = net_mib.tcp_challenge_ack;
+    rx(115, lport, peer_seq, conn->snd_nxt + 1u, F_ACK, (uint16_t)wnd, (const char *)0, 0);
+    CHECK("there an acknowledgement of data never sent draws a challenge",
+          n_segs == 1 && last_flags() == F_ACK && net_mib.tcp_challenge_ack == challenges + 1);
+}
+
+/**
  * Check the receiving side of a closed window: once the peer has filled the
  * window offered and the free space left is less than one unit of the
  * window's scale, so that the window offered is 0, a byte sent at rcv_nxt,
@@ -1791,6 +1988,9 @@ int main(void)
     skipped_tick_rows();
     zero_window_rows();
     zero_window_flight_rows();
+    first_probe_rows();
+    out_of_window_rows();
+    refused_ack_rows();
     closed_window_rx_rows();
     giveup_rows();
     blackhole_rows();

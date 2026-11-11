@@ -569,7 +569,7 @@ tests/host/syscall_hosttest.c:clock_sleeps lines 104 a test's rows, each a case,
 tests/host/tables_hosttest.c:main complexity 32 a test's rows, each a case, read as one table
 
 tests/host/tcp_hosttest.c:main complexity 141 a test's rows, each a case, read as one table
-tests/host/tcp_hosttest.c:main lines 698 a test's rows, each a case, read as one table
+tests/host/tcp_hosttest.c:main lines 701 a test's rows, each a case, read as one table
 tests/host/tcp_hosttest.c:main nesting 5 a test's rows, each a case, read as one table
 tests/host/tcp_hosttest.c:rx params 8 a test's rows, each a case, read as one table
 

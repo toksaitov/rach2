@@ -298,6 +298,7 @@ static int fails;
         }                                 \
     } while (0)
 
+#define F_FIN 0x01
 #define F_SYN 0x02
 #define F_RST 0x04
 #define F_ACK 0x10
@@ -348,14 +349,19 @@ static struct tcb *open_conn(struct socket *sock, uint32_t peer_seq)
 /**
  * A reset at the next expected sequence number closes the connection; one
  * elsewhere in the window draws an acknowledgement that carries the numbers
- * the true peer must answer with, and closes nothing; one outside the window,
- * below it or at its end, is dropped without an answer.
+ * the true peer must answer with, and closes nothing, counted in
+ * TCPChallengeACK; a second within 500 ms draws none, counted in
+ * TCPACKSkippedChallenge, and one 500 ms after the first draws one again;
+ * one outside the window, below it or past its end, is dropped without an
+ * answer. A reset at the right edge of the rightmost SACK block this side
+ * sends closes the connection, as Linux's tcp_validate_incoming takes it.
  */
 static void test_established(void)
 {
     struct socket sock;
     struct tcb *conn;
-    uint32_t nxt;
+    uint32_t nxt, challenges = net_mib.tcp_challenge_ack,
+                  skipped = net_mib.tcp_ack_skipped_challenge;
 
     reset_all();
     conn = open_conn(&sock, 5000);
@@ -369,16 +375,80 @@ static void test_established(void)
     CHECK("and draws one acknowledgement at the numbers the peer must answer",
           n_segs == 1 && segs[0].flags == F_ACK && segs[0].seq == conn->snd_nxt &&
               segs[0].ack == nxt);
+    CHECK("counted in TCPChallengeACK", net_mib.tcp_challenge_ack == challenges + 1);
 
     n_segs = 0;
+    kernel_ticks += TCP_INVALID_RATELIMIT - 1;
+    rx(SELF_PORT, nxt + 1000, 0, F_RST);
+    CHECK("a second 499 ms after it draws none, counted in TCPACKSkippedChallenge",
+          n_segs == 0 && net_mib.tcp_ack_skipped_challenge == skipped + 1 &&
+              conn->state == TCP_ESTABLISHED);
+    kernel_ticks++;
+    rx(SELF_PORT, nxt + 1000, 0, F_RST);
+    CHECK("and a third 500 ms after the first draws one again",
+          n_segs == 1 && segs[0].flags == F_ACK && net_mib.tcp_challenge_ack == challenges + 2);
+
+    n_segs = 0;
+    kernel_ticks += TCP_INVALID_RATELIMIT;
     rx(SELF_PORT, nxt - 1, 0, F_RST);
-    rx(SELF_PORT, nxt + conn->rcv_wnd, 0, F_RST);
+    rx(SELF_PORT, conn->rcv_adv + 1, 0, F_RST);
     CHECK("a reset outside the window is dropped without an answer",
           n_segs == 0 && conn->state == TCP_ESTABLISHED && conn->so_error == 0);
 
+    conn->sack_ok = 1;
+    conn->ooo_count = 2;
+    conn->ooo_start[0] = nxt + 100;
+    conn->ooo_end[0] = nxt + 200;
+    conn->ooo_start[1] = nxt + 300;
+    conn->ooo_end[1] = nxt + 400;
+    rx(SELF_PORT, nxt + 200, 0, F_RST);
+    CHECK("a reset at the right edge of a SACK block not the rightmost is challenged",
+          n_segs == 1 && segs[0].flags == F_ACK && conn->state == TCP_ESTABLISHED);
+    rx(SELF_PORT, nxt + 400, 0, F_RST);
+    CHECK("and one at the rightmost block's right edge closes the connection",
+          conn->state == TCP_CLOSED && conn->so_error == ECONNRESET && cb_fin == 1);
+    conn->ooo_count = 0;
+    tcp_close(&sock);
+
+    reset_all();
+    conn = open_conn(&sock, 5000);
+    nxt = conn->rcv_nxt;
     rx(SELF_PORT, nxt, 0, F_RST);
     CHECK("a reset at the next sequence number closes the connection",
           conn->state == TCP_CLOSED && conn->so_error == ECONNRESET && cb_fin == 1 && n_segs == 0);
+    tcp_close(&sock);
+    reset_all();
+}
+
+/**
+ * After the peer's FIN, in CLOSE_WAIT, a reset at the FIN's own number,
+ * the next expected less one, closes the connection, as Linux's
+ * tcp_reset_check takes it, though it is below the window; in ESTABLISHED
+ * one there is dropped. A SYN draws a challenge acknowledgement, counted
+ * in TCPSYNChallenge, and closes nothing.
+ */
+static void test_after_fin(void)
+{
+    struct socket sock;
+    struct tcb *conn;
+    uint32_t nxt, syns = net_mib.tcp_syn_challenge;
+
+    reset_all();
+    conn = open_conn(&sock, 6000);
+    nxt = conn->rcv_nxt;
+    rx(SELF_PORT, nxt - 1, 0, F_RST);
+    CHECK("in ESTABLISHED a reset at the next expected less one is dropped",
+          conn->state == TCP_ESTABLISHED && n_segs == 0);
+    rx(SELF_PORT, nxt, conn->snd_nxt, (uint8_t)(F_SYN | F_ACK));
+    CHECK("a SYN draws a challenge acknowledgement and closes nothing",
+          conn->state == TCP_ESTABLISHED && n_segs == 1 && segs[0].flags == F_ACK &&
+              segs[0].ack == nxt && net_mib.tcp_syn_challenge == syns + 1);
+    rx(SELF_PORT, nxt, conn->snd_nxt, (uint8_t)(F_FIN | F_ACK));
+    CHECK("the peer's FIN leads to CLOSE_WAIT",
+          conn->state == TCP_CLOSE_WAIT && conn->rcv_nxt == nxt + 1);
+    rx(SELF_PORT, nxt, 0, F_RST);
+    CHECK("and there a reset at the FIN's number closes the connection",
+          conn->state == TCP_CLOSED && conn->so_error == ECONNRESET);
     tcp_close(&sock);
     reset_all();
 }
@@ -532,6 +602,7 @@ static void test_isn(void)
 int main(void)
 {
     test_established();
+    test_after_fin();
     test_syn_sent();
     test_listener_gone();
     test_isn();
