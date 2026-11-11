@@ -2600,16 +2600,16 @@ static int proc_fd_xdev(const fd_entry_t *entry, const struct vfs_mount *mnt)
 static int open_want(int flags);
 
 /**
- * Open again, as `open_special` opens a device node, the device node of a
- * mounted file system or of the KRFFS root that the description `held` keeps
- * (`dev_node`): the node is read under the mount's namespace lock, where a
- * relocation of the KRFFS root moves it, and its own mode, owner and group
- * are checked. The caller holds `held`. Returns the new descriptor, -ENOENT
- * for a mount being unmounted, or the check's or the open's negative errno.
+ * Open again, as `open_special` opens a device node, the device node `keep`
+ * of a mounted file system that a device's description names (`dev_node`):
+ * its own mode, owner and group are checked and the device's open runs
+ * again. The caller holds the node and its mount (`proc_fd_reopen_device`).
+ * Returns the new descriptor, -ENOENT for a mount being unmounted, or the
+ * check's or the open's negative errno.
  */
-static int32_t proc_fd_reopen_node(const struct open_file *held, int flags)
+static int32_t proc_fd_reopen_node(const struct vfs_ref *keep, int flags)
 {
-    struct vfs_mount *mnt = held->dev_mnt;
+    struct vfs_mount *mnt = keep->mnt;
     struct vfs_ref ref;
     int32_t rc;
     int fd = fd_alloc(current_proc->fds);
@@ -2624,14 +2624,7 @@ static int32_t proc_fd_reopen_node(const struct open_file *held, int flags)
     if (mnt->type->ns_serialised) {
         vfs_ns_lock(mnt);
     }
-    ref.mnt = mnt;
-    ref.node = held->dev_node;
-    if (!ref.node) {
-        vfs_walk_unlock(mnt);
-        vfs_leave(mnt);
-        fd_free(current_proc->fds, fd);
-        return -ENXIO;
-    }
+    ref = *keep;
     vfs_ref_hold(&ref);
     if (open_special(&ref, fd, flags, &rc)) {
         return rc;
@@ -2648,9 +2641,13 @@ static int32_t proc_fd_reopen_node(const struct open_file *held, int flags)
  * path: the access `flags` ask for is checked against that node's mode, owner
  * and group, whatever access `src` has, and the device's own open runs again,
  * so that the description is a new one and a DRM device gives a new file. A
- * device opened through a node of a mounted file system or of the KRFFS root
- * is opened through the node its description keeps (`proc_fd_reopen_node`),
- * and one opened in /dev through its entry there. Returns the new
+ * device opened through a device node of tmpfs or ext2 is opened through the
+ * node its description names (`proc_fd_reopen_node`), and one opened in /dev
+ * through its entry there. The node and its mount are held here, before
+ * anything sleeps, and not the description: another thread may close the
+ * descriptor meanwhile, and the device's close runs only at the close of a
+ * description's last descriptor (`fd_release_objects`), which a reference
+ * held here would turn into a release that closes nothing. Returns the new
  * descriptor, -ENXIO when the device is gone, or the check's or the open's
  * negative errno.
  */
@@ -2658,13 +2655,17 @@ static int32_t proc_fd_reopen_device(fd_entry_t *src, int flags)
 {
     uint32_t mode = devfs_fd_mode(src), uid, gid;
     const char *name = devfs_name_of((mode & 0170000u) == 0060000u, devfs_rdev(src));
-    struct open_file *held = src->ofd;
+    struct open_file *ofd = src->ofd;
+    struct vfs_ref keep;
     int32_t rc;
 
-    if (held && held->dev_mnt) {
-        fd_ofd_ref(held);
-        rc = proc_fd_reopen_node(held, flags);
-        fd_ofd_unref(held);
+    if (ofd && ofd->dev_mnt) {
+        keep.mnt = ofd->dev_mnt;
+        keep.node = ofd->dev_node;
+        vfs_ref_hold(&keep);
+        vfs_desc_open(keep.mnt);
+        rc = proc_fd_reopen_node(&keep, flags);
+        vfs_desc_close(keep.mnt, keep.node, NULL);
         return rc;
     }
     if (!name) {

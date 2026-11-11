@@ -39,6 +39,9 @@
  * - a seek of a /proc file's or /dev/bootlog's description while a read or
  *   a write of it sleeps, and the log's seeks past the offsets they can
  *   return;
+ * - an open of /proc/PID/fd/N for a device opened through a device node of
+ *   a mounted type while another thread closes descriptor N, the device's
+ *   last;
  * - the release of the last holder of a file of the KRFFS root that lost
  *   its name, by each path a descriptor or a file mapping ends on, while
  *   another process's allocation on the root runs in the reclaim's sleep;
@@ -333,6 +336,15 @@ static int reclaiming, reclaim_parked, extents_taken, extents_in_reclaim;
 
 /* The model of a type that sets `file_locked`, defined before `main`. */
 static struct vfs_mount fl_mount;
+/* The device row: a serialised mounted type, as tmpfs is, whose node
+ * `dev_inode` is a character device, the holds of that node and the
+ * operations entered on its mount that are not given back yet, the closes
+ * of the device, and what runs while the device's open sleeps. */
+static const struct vfs_ops dev_vfs_ops = {0};
+static const struct vfs_type dev_type = {"devnode", 0, &dev_vfs_ops, 1, 0};
+static struct vfs_mount dev_mount;
+static int dev_inode, dev_holds, dev_enters, dev_closes;
+static void (*in_dev_open)(void);
 static int fl_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **found);
 static int fl_getattr(struct vfs_mount *mnt, void *at, struct vfs_stat *st);
 static int fl_resolve(const char *path, int flags, struct vfs_ref *out, char *leaf,
@@ -560,21 +572,28 @@ int32_t fifo_attach(struct fd_entry *e, const void *mnt, uint64_t ino, int flags
     return -ENXIO;
 }
 
-/** Fail the row: no row opens a device node. */
+/** The device row's /dev name, "dri/card0"; any other row fails. */
 const char *devfs_name_of(int block, uint32_t rdev)
 {
     (void)block;
     (void)rdev;
-    check(0, "unexpected device node open");
-    return 0;
+    check(in_dev_open != 0, "unexpected device node open");
+    return "dri/card0";
 }
 
-/** Fail the row: no row opens a device by name. */
+/** The device row's open of its device, which sleeps, running what the row
+ * has happen meanwhile, and then finds the device gone: -ENXIO. Any other
+ * row fails. */
 int devfs_open(const char *name, int flags)
 {
-    (void)name;
+    void (*meanwhile)(void) = in_dev_open;
+
     (void)flags;
-    check(0, "unexpected device open");
+    check(meanwhile && __builtin_strcmp(name, "dri/card0") == 0, "unexpected device open");
+    in_dev_open = 0;
+    if (meanwhile) {
+        meanwhile();
+    }
     return -ENXIO;
 }
 
@@ -737,6 +756,13 @@ int vfs_getattr(struct vfs_mount *mnt, void *at, struct vfs_stat *st)
     if (mnt == &fl_mount) {
         return fl_getattr(mnt, at, st);
     }
+    if (mnt == &dev_mount) {
+        check(at == &dev_inode, "a device's reopen checks the node it was opened through");
+        k_memset(st, 0, sizeof(*st));
+        st->mode = 020666;
+        st->rdev = 0xE200;
+        return 0;
+    }
     if (ns_depth == 0) {
         run_waiting();
     }
@@ -887,6 +913,11 @@ void vfs_ref_release(struct vfs_ref *ref)
     if (ref->mnt == &fl_mount) {
         return;
     }
+    if (ref->mnt == &dev_mount) {
+        dev_holds--;
+        dev_enters--;
+        return;
+    }
     check(ref->mnt == &mount, "failed open releases resolution");
     dropped++;
 }
@@ -901,7 +932,10 @@ void vfs_desc_open(struct vfs_mount *mnt)
 /** Record completion of the resolution's mount operation. */
 void vfs_leave(struct vfs_mount *mnt)
 {
-    (void)mnt;
+    if (mnt == &dev_mount) {
+        dev_enters--;
+        return;
+    }
     leaves++;
 }
 
@@ -910,6 +944,12 @@ void vfs_leave(struct vfs_mount *mnt)
  * descriptions open nothing on the root, and have nothing to close. */
 void vfs_desc_close(struct vfs_mount *mnt, void *at, void *opened)
 {
+    if (mnt == &dev_mount) {
+        check(at == &dev_inode && !opened, "a device's description keeps its node only");
+        dev_holds--;
+        refs--;
+        return;
+    }
     if (orphan_ofd) {
         return;
     }
@@ -1917,18 +1957,27 @@ int vfs_node_path(struct vfs_mount *mnt, void *at, char *out, uint32_t cap)
     return -ENOENT;
 }
 
-/** Fail the row: no row enters a process's root. */
+/** Count an operation on the device row's mount; fail any other row, which
+ * enters no process's root. */
 int vfs_enter(struct vfs_mount *mnt)
 {
-    (void)mnt;
+    if (mnt == &dev_mount) {
+        dev_enters++;
+        return 0;
+    }
     check(0, "unexpected entry to a process's root");
     return -EBUSY;
 }
 
-/** Fail the row: no row holds a process's root. */
+/** Count a hold of the device row's node; fail any other row, which holds no
+ * process's root. */
 void vfs_ref_hold(const struct vfs_ref *r)
 {
-    (void)r;
+    if (r->mnt == &dev_mount) {
+        check(r->node == &dev_inode, "a hold of the device's node");
+        dev_holds++;
+        return;
+    }
     check(0, "unexpected hold of a process's root");
 }
 
@@ -3238,6 +3287,60 @@ static void log_seek_range(void)
     row_end();
 }
 
+/** The close of the device row's device, its description's last. */
+static void dev_close(fd_entry_t *e)
+{
+    (void)e;
+    dev_closes++;
+}
+
+static const struct file_ops dev_ops = {.close = dev_close};
+
+/** The close the caller's other thread makes of the device row's
+ * descriptor 0 while the reopen's open of the device sleeps. */
+static void dev_desc_close(void)
+{
+    check(close_fd(0) == 0, "the close of the device's descriptor");
+}
+
+/**
+ * An open of /proc/PID/fd/0 for a device opened through a device node of a
+ * serialised mounted type, as tmpfs is, whose open of the device sleeps
+ * while the caller's other thread closes descriptor 0, the description's
+ * last: the close runs the device's close, since the reopen holds the node
+ * and its mount and not the description, and the reopen gives back its
+ * holds and its entry to the mount when it ends.
+ */
+static void device_reopen_closed(void)
+{
+    fd_entry_t *e;
+    int32_t rc;
+
+    row_begin();
+    dev_mount.type = &dev_type;
+    dev_holds = dev_enters = dev_closes = 0;
+    proc.rlim[RLIM_NOFILE].cur = FD_TABLE_LIMIT;
+    check(fd_alloc(proc.fds) == 0, "the device row's descriptor");
+    e = &proc.fds->entries[0];
+    e->type = FD_TYPE_DEVICE;
+    e->ops = &dev_ops;
+    e->flags = FD_FLAG_READ | FD_FLAG_WRITE;
+    e->ofd->dev_mnt = &dev_mount;
+    e->ofd->dev_node = &dev_inode;
+    dev_holds = 1;
+    refs++;
+    in_dev_open = dev_desc_close;
+    rc = proc_fd_reopen_device(e, 2 /* O_RDWR */);
+    check(rc == -ENXIO && !in_dev_open, "the reopen opens the device, which is gone");
+    check(proc.fds->entries[0].type == FD_TYPE_NONE, "the device's descriptor is closed");
+    check(dev_closes == 1,
+          "a close of a device's last descriptor while a reopen of it sleeps closes the device");
+    check(dev_holds == 0 && dev_enters == 0 && ns_depth == 0,
+          "the reopen gives back its holds of the device's node and its mount");
+    in_dev_open = 0;
+    row_end();
+}
+
 /** Another process takes an extent of the root, under the root's lock, as
  * every allocation there does, and notes whether a reclaim was under way. */
 static void third_allocates(void)
@@ -3954,6 +4057,7 @@ int main(void)
     lock_keys();
     offset_seek_waits();
     log_seek_range();
+    device_reopen_closed();
     orphan_reclaims();
     mapping_reclaims();
     file_locked_orders();
