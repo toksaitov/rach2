@@ -534,7 +534,8 @@ static struct open_file *ops_offset_held(fd_entry_t *entry)
 
 /** Dispatch an ops-backed write, holding the description of one whose write
  * uses its offset (`ops_offset_held`); -EBADF for a descriptor not open for
- * writing or an object without a write. */
+ * writing, and -EINVAL for an object without a write, such as an epoll set,
+ * as Linux's vfs_write tests FMODE_CAN_WRITE after FMODE_WRITE. */
 static int32_t write_ops(fd_entry_t *entry, const char __user *buf, uint32_t count)
 {
     struct open_file *held = ops_offset_held(entry);
@@ -546,7 +547,7 @@ static int32_t write_ops(fd_entry_t *entry, const char __user *buf, uint32_t cou
     if (held) {
         fd_ofd_lock(held);
     }
-    rc = entry->ops->write ? entry->ops->write(entry, buf, count) : -EBADF;
+    rc = entry->ops->write ? entry->ops->write(entry, buf, count) : -EINVAL;
     if (held) {
         fd_ofd_unlock(held);
     }
@@ -910,7 +911,8 @@ static int32_t console_write(fd_entry_t *entry, const char __user *buf, uint32_t
  *
  * The shared body of write(2) and of each element of writev(2). Returns the
  * bytes written or a negative errno: -EBADF for a descriptor that is not
- * open, not open for writing, or of a kind with no write.
+ * open, not open for writing, or of a kind with no write, and -EINVAL for
+ * one open for writing whose object has no write method (`write_ops`).
  *
  * It dispatches by backing kind. An object with operations (a pipe, a
  * terminal, a pty, a device) writes through them once `write_ops` has
@@ -984,8 +986,10 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
  * to be open for writing and to have a write (`vfs_writev`), never calling
  * the write itself: /dev/full and an unconnected datagram socket return 0
  * there. Returns 0, or -EBADF for a descriptor that is not open, is an
- * O_PATH one, is not open for writing, or is of a kind with no write, the
- * refusals `write_fd` gives before it writes.
+ * O_PATH one, is not open for writing, or is of a kind with no write, and
+ * -EINVAL for one open for writing whose object has no write method, as an
+ * epoll set has none, which Linux tests after the mode (FMODE_CAN_WRITE):
+ * the refusals `write_fd` gives before it writes.
  */
 static int32_t write_check(int fd)
 {
@@ -999,7 +1003,10 @@ static int32_t write_check(int fd)
         return -EBADF;
     }
     if (entry->ops) {
-        return (entry->flags & FD_FLAG_WRITE) && entry->ops->write ? 0 : -EBADF;
+        if (!(entry->flags & FD_FLAG_WRITE)) {
+            return -EBADF;
+        }
+        return entry->ops->write ? 0 : -EINVAL;
     }
     if (entry->type == FD_TYPE_SOCKET) {
         return entry->sock ? 0 : -EBADF;
@@ -1327,11 +1334,11 @@ static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long lo
  * checked before the count and the vector, as Linux tests FMODE_WRITE
  * first, and a vector of no bytes then returns 0 without a write
  * (`write_check`). Returns the bytes written, or a negative errno: -EBADF
- * for a descriptor `write_check` refuses, -EINVAL for a count below 0 or
- * past IOV_MAX_LOCAL or a negative length, -EFAULT for a vector or a range
- * outside user space, -EPERM for a vector of which the seal lets no byte in,
- * or a transfer error when no byte was written. A buffer fault after a
- * positive transfer returns the bytes written before the fault.
+ * or -EINVAL for a descriptor `write_check` refuses, -EINVAL for a count
+ * below 0 or past IOV_MAX_LOCAL or a negative length, -EFAULT for a vector
+ * or a range outside user space, -EPERM for a vector of which the seal lets
+ * no byte in, or a transfer error when no byte was written. A buffer fault
+ * after a positive transfer returns the bytes written before the fault.
  */
 static long writev(int fd, uintptr_t iov_user, int iovcnt)
 {
@@ -6133,8 +6140,9 @@ int sock_is_query(const struct socket *sock)
  * Read up to `count` bytes into `buf` through the read method of the object
  * behind `entry`, holding the description for the length of the read when
  * the read uses its offset (`ops_offset_held`). Returns the method's
- * answer, or -EBADF for a descriptor not open for reading or an object
- * with no read method. May sleep.
+ * answer, -EBADF for a descriptor not open for reading, or -EINVAL for an
+ * object with no read method, as Linux's vfs_read tests FMODE_CAN_READ
+ * after FMODE_READ. May sleep.
  */
 static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count)
 {
@@ -6147,7 +6155,7 @@ static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count)
     if (held) {
         fd_ofd_lock(held);
     }
-    rc = entry->ops->read ? entry->ops->read(entry, buf, count) : -EBADF;
+    rc = entry->ops->read ? entry->ops->read(entry, buf, count) : -EINVAL;
     if (held) {
         fd_ofd_unlock(held);
     }

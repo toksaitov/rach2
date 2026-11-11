@@ -32,7 +32,9 @@
  * negative ssize_t, fails with EINVAL.
  * writev of no bytes returns 0 from /dev/full and an unconnected datagram
  * socket without writing, and refuses a descriptor not open or open only
- * for reading with EBADF before its count and its vector.
+ * for reading with EBADF, and an epoll set, open for writing with no write,
+ * with EINVAL, before its count and its vector; a write to the set is EINVAL
+ * too.
  * pwritev2 with RWF_APPEND writes at the end, moving the descriptor's
  * offset at offset -1 and not at another, and leaves O_APPEND clear;
  * RWF_NOAPPEND overrides O_APPEND for one call at either offset form,
@@ -74,6 +76,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/epoll.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
@@ -917,20 +920,26 @@ static int writev_cut(void)
  * /dev/full, whose write is ENOSPC, and from an unconnected datagram socket,
  * whose send is EDESTADDRREQ, with no elements or one empty element; EBADF
  * for a descriptor not open and one open only for reading, before a count
- * past 1024 or a vector outside user memory.
+ * past 1024 or a vector outside user memory; and EINVAL for an epoll set,
+ * which Linux opens for reading and writing with no write method, before
+ * the same, and for a write of a byte to it.
  */
 static int writev_empty(void)
 {
     struct iovec v[1];
     int full = open("/dev/full", O_WRONLY), sock = socket(AF_INET, SOCK_DGRAM, 0);
-    int rd = open("/dev/null", O_RDONLY), ok;
+    int rd = open("/dev/null", O_RDONLY), ep = epoll_create1(0), ok;
 
     v[0].iov_base = cut_buffer;
     v[0].iov_len = 0;
     ok = full >= 0 && sock >= 0 && rd >= 0 && writev(full, v, 0) == 0 && writev(full, v, 1) == 0 &&
          writev(sock, v, 0) == 0 && writev(sock, v, 1) == 0 && refused(writev(999, v, 0), EBADF) &&
          refused(writev(999, v, 1025), EBADF) && refused(writev(999, KERNEL_ADDRESS, 1), EBADF) &&
-         refused(writev(rd, v, 0), EBADF) && refused(writev(rd, v, 1), EBADF);
+         refused(writev(rd, v, 0), EBADF) && refused(writev(rd, v, 1), EBADF) && ep >= 0 &&
+         refused(writev(ep, v, 0), EINVAL) && refused(writev(ep, v, 1), EINVAL) &&
+         refused(writev(ep, KERNEL_ADDRESS, 1), EINVAL) && refused(writev(ep, v, 1025), EINVAL) &&
+         refused(write(ep, "x", 1), EINVAL);
+    close(ep);
     close(full);
     close(sock);
     close(rd);
