@@ -31,9 +31,12 @@ struct vgem_fence {
 /*
  * An open file's fences, Linux's fence_idr: fence `id` is `fences[id - 1]`,
  * with a reference, until VGEM_FENCE_SIGNAL consumes it and leaves NULL. An
- * id is never given twice, since Linux's idr_replace keeps the slot.
+ * id is never given twice, since Linux's idr_replace keeps the slot. `lock`
+ * keeps the table, as Linux's fence_mutex, since the two ioctls run without
+ * the big lock (DRM_UNLOCKED), as Linux's do.
  */
 struct vgem_file {
+    struct mutex lock;
     struct dma_fence **fences;
     uint32_t count, cap;
 };
@@ -87,20 +90,20 @@ static struct dma_fence *vgem_fence_create(struct drm_device *dev)
 }
 
 /** Signal `fence` and drop its timer's reference with the timer, for a
- * fence its owner signals or leaves. Process context. */
+ * fence its owner signals or leaves; a timer the worker has taken to run
+ * drops its reference itself. Process context. */
 static void vgem_fence_end(struct dma_fence *fence)
 {
     struct vgem_fence *f = (struct vgem_fence *)fence;
 
     (void)dma_fence_signal(fence);
-    if (f->work.queued) {
-        drm_dev_work_cancel(&f->work);
+    if (drm_dev_work_cancel(&f->work)) {
         dma_fence_put(fence);
     }
 }
 
 /** Give `fence` the file's next id, taking the caller's reference: the id,
- * or -ENOMEM. */
+ * or -ENOMEM. The file's `lock` is held. */
 static int32_t vgem_fence_record(struct vgem_file *vf, struct dma_fence *fence)
 {
     struct dma_fence **grown;
@@ -177,7 +180,9 @@ static int32_t vgem_fence_attach_ioctl(struct drm_device *dev, void *data, struc
     dma_resv_unlock(obj->resv);
     dma_fence_put(busy);
     if (ret == 0) {
+        mutex_lock(&vf->lock);
         ret = vgem_fence_record(vf, fence);
+        mutex_unlock(&vf->lock);
         if (ret > 0) {
             arg->out_fence = (uint32_t)ret;
             ret = 0;
@@ -208,11 +213,14 @@ static int32_t vgem_fence_signal_ioctl(struct drm_device *dev, void *data, struc
     if (arg->flags) {
         return -EINVAL;
     }
+    mutex_lock(&vf->lock);
     if (arg->fence == 0 || arg->fence > vf->count || !vf->fences[arg->fence - 1]) {
+        mutex_unlock(&vf->lock);
         return -ENOENT;
     }
     fence = vf->fences[arg->fence - 1];
     vf->fences[arg->fence - 1] = NULL;
+    mutex_unlock(&vf->lock);
     if (dma_fence_is_signaled(fence)) {
         ret = -ETIMEDOUT;
     }
@@ -224,9 +232,15 @@ static int32_t vgem_fence_signal_ioctl(struct drm_device *dev, void *data, struc
 /** The driver's `open`: an empty fence table. 0 or -ENOMEM. */
 static int32_t vgem_open(struct drm_device *dev, struct drm_file *file)
 {
+    struct vgem_file *vf = (struct vgem_file *)kzalloc(sizeof(*vf));
+
     (void)dev;
-    file->driver_priv = kzalloc(sizeof(struct vgem_file));
-    return file->driver_priv ? 0 : -ENOMEM;
+    if (!vf) {
+        return -ENOMEM;
+    }
+    mutex_init(&vf->lock, "vgem_fence_lock");
+    file->driver_priv = vf;
+    return 0;
 }
 
 /** The driver's `postclose`: every fence the file still holds signalled and
@@ -263,8 +277,10 @@ static int32_t vgem_dumb_create(struct drm_file *file, struct drm_device *dev,
 }
 
 static const struct drm_ioctl_desc vgem_ioctls[] = {
-    {DRM_IOCTL_VGEM_FENCE_ATTACH, DRM_RENDER_ALLOW, vgem_fence_attach_ioctl, "VGEM_FENCE_ATTACH"},
-    {DRM_IOCTL_VGEM_FENCE_SIGNAL, DRM_RENDER_ALLOW, vgem_fence_signal_ioctl, "VGEM_FENCE_SIGNAL"}};
+    {DRM_IOCTL_VGEM_FENCE_ATTACH, DRM_RENDER_ALLOW | DRM_UNLOCKED, vgem_fence_attach_ioctl,
+     "VGEM_FENCE_ATTACH"},
+    {DRM_IOCTL_VGEM_FENCE_SIGNAL, DRM_RENDER_ALLOW | DRM_UNLOCKED, vgem_fence_signal_ioctl,
+     "VGEM_FENCE_SIGNAL"}};
 
 /** The driver's `release`, after a failed registration. */
 static void vgem_release(struct drm_device *dev)

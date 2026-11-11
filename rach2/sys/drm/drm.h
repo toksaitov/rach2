@@ -1714,8 +1714,10 @@ void drm_dev_work_later(struct drm_device *dev, struct drm_work *work);
 void drm_dev_work_later_ms(struct drm_device *dev, struct drm_work *work, uint32_t ms);
 
 /** Take `work` off the worker's queue if it waits; for a driver going
- * away. Process context. */
-void drm_dev_work_cancel(struct drm_work *work);
+ * away, or an owner that does the work's job itself. 1 when this call took
+ * it off, 0 when it was not queued, as when the worker has taken it to run.
+ * Any context. */
+int drm_dev_work_cancel(struct drm_work *work);
 
 /* ---- Vblanks, their events and CRCs, in drm_vblank.c ---- */
 

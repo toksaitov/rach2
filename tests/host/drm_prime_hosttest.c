@@ -405,19 +405,21 @@ void drm_dev_work_later_ms(struct drm_device *dev, struct drm_work *work, uint32
     works[i] = work;
 }
 
-/** Take `work` off the queue, dropping its device. */
-void drm_dev_work_cancel(struct drm_work *work)
+/** Take `work` off the queue, dropping its device: 1, or 0 when it was not
+ * queued. */
+int drm_dev_work_cancel(struct drm_work *work)
 {
     int i;
 
     if (!work->queued)
-        return;
+        return 0;
     for (i = 0; i < 8; i++) {
         if (works[i] == work)
             works[i] = NULL;
     }
     work->queued = 0;
     drm_dev_put(work->dev);
+    return 1;
 }
 
 /** Run every queued work, as the worker does once their time has come. */
