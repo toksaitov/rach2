@@ -192,7 +192,6 @@ The code and stack selectors are always the user's. On i686 a data selector stay
 * A signal has one pending instance in each set. One sent again while it is pending merges with it and its siginfo is lost; real-time signals are not queued, so values `sigqueue` sends faster than they are taken are lost.
 * `SA_NOCLDSTOP` and `SA_NOCLDWAIT` have no effect, and ignoring `SIGCHLD` reaps nothing: a parent always collects its children's ends with a wait.
 * `SS_AUTODISARM` is accepted and has no effect.
-* A stop does not wake the process's other threads: a thread asleep in the kernel goes on sleeping, and parks when its call returns.
 * i686 registers none of i386's older `signal`, `sigaction`, `sigsuspend` and `sigpending` calls, and no `rt_sigtimedwait_time64`; each answers `ENOSYS`. x86-64 has no `sigreturn` or `sigprocmask`, as on Linux.
 
 ## Tests
