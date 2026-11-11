@@ -84,6 +84,12 @@ void arch_idle_masked(void)
 void watchdog_sched(void)
 {}
 
+/** Never inside klog here: no row logs from a thread a tick switches. */
+int klog_inside(void)
+{
+    return 0;
+}
+
 /** Nothing: no process arms a timer of processor time, which would post a
  * signal. */
 void signal_post(process_t *target, int signo)
