@@ -2,8 +2,8 @@
 # bed-shm.sh: Rach2's virtio-gpu over the region it shares with the test
 # bed's VM, run under Rach2's KVM (tests/cases/machine.bed-shm.json).
 #
-#   sh bed-shm.sh -d DISK [-p PROBE] [-c CRC] [-k NOCOPY | -w] [-x MEASURE]
-#       [-g BDF] [-o DIR] [-m MIB] [-n CPUS]
+#   sh bed-shm.sh -d DISK [-p PROBE] [-c CRC] [-k NOCOPY | -w [-l LOAD]]
+#       [-x MEASURE [-S SCENES]] [-g BDF] [-o DIR] [-m MIB] [-n CPUS]
 #
 # ivshmemd attaches a region of 32 MiB to /dev/vgpu-shm, and two more
 # attaches are refused; QEMU boots DISK, the VM that `bed/vm/image/vm.sh
@@ -31,14 +31,17 @@
 # session on the VM's GPU: once virtio-gpu has bound over the region,
 # rach2-desktop's session runs Weston on its card with GL through virgl in
 # the VM, SIGHUP starting it there unless the session moved there itself
-# (`session`), and glmark2-wayland draws under it as the desktop user
-# while Rach2's driver rings the VM (`load`). With MEASURE, the directory
-# of bed/measure/measure.sh, the harness's glmark2 scene runs on the
-# session first and its line is printed as a figure. Then QEMU is stopped,
-# four fenced submissions are left pending and QEMU is killed under the
-# load: every fence must fail, glmark2 must end and ivshmemd must detach
-# (`death`); and the session must start again, headless with GL on
-# llvmpipe, where glmark2 draws again (`fallback`). With -g as well, the
+# (`session`), and the load draws under it as the desktop user while
+# Rach2's driver rings the VM (`load`): LOAD is glmark2-wayland, the
+# default, or the harness's scene `piglit`, `webgl` or `game`, which needs
+# MEASURE. With MEASURE, the directory of bed/measure/measure.sh, each scene
+# of SCENES (`glmark2`) runs on the session first, on the rung shm-virgl,
+# or shm-venus for a scene written `venus:SCENE`, whose GL goes through
+# Zink on Venus, and its lines are printed as figures. Then QEMU is
+# stopped, four fenced submissions are left pending and QEMU is killed
+# under the load: every fence must fail, the load must end and ivshmemd
+# must detach (`death`); and the session must start again, headless with
+# GL on llvmpipe, where glmark2 draws again (`fallback`). With -g as well, the
 # session must come back to Rach2's driver on the GPU gpu.sh gave back,
 # with the pipe's CRC stable (`return`).
 #
@@ -54,13 +57,15 @@
 # console of the VM, ivshmemd's output and the counters are kept in DIR.
 set -u
 disk='' probe=./vgshmprobe crc=6e8e217c out=/tmp/bed-shm mib=2048 cpus=2 nocopy='' bdf=''
-desk=0 measure=''
+desk=0 measure='' loadscene=glmark2 scenes=glmark2
 icd=/usr/share/vulkan/icd.d/venus_icd.x86_64.json
 gpush=$(dirname "$0")/gpu.sh
-while getopts d:p:c:k:wx:g:o:m:n: o; do
+while getopts d:p:c:k:wl:x:S:g:o:m:n: o; do
     case $o in
         w) desk=1 ;;
+        l) loadscene=$OPTARG ;;
         x) measure=$OPTARG ;;
+        S) scenes=$OPTARG ;;
         d) disk=$OPTARG ;;
         p) probe=$OPTARG ;;
         c) crc=$OPTARG ;;
@@ -73,9 +78,14 @@ while getopts d:p:c:k:wx:g:o:m:n: o; do
     esac
 done
 [ -n "$disk" ] || {
-    echo "usage: bed-shm.sh -d DISK [-p PROBE] [-c CRC] [-k NOCOPY | -w] [-x MEASURE] [-g BDF] [-o DIR] [-m MIB] [-n CPUS]" >&2
+    echo "usage: bed-shm.sh -d DISK [-p PROBE] [-c CRC] [-k NOCOPY | -w [-l LOAD]] [-x MEASURE [-S SCENES]] [-g BDF] [-o DIR] [-m MIB] [-n CPUS]" >&2
     exit 2
 }
+case $loadscene in
+    glmark2) ;;
+    piglit | webgl | game) [ -n "$measure" ] || { echo "bed-shm: -l $loadscene needs -x" >&2; exit 2; } ;;
+    *) echo "bed-shm: no load $loadscene; glmark2, piglit, webgl or game" >&2; exit 2 ;;
+esac
 [ -z "$bdf" ] || [ -f "$gpush" ] || { echo "bed-shm: no $gpush for -g" >&2; exit 2; }
 [ -z "$nocopy" ] || [ "$desk" = 0 ] || { echo "bed-shm: -k and -w are apart" >&2; exit 2; }
 daemon='' qemu='' gpu='' waiter='' holder='' pid='' load='' bad=0
@@ -439,29 +449,46 @@ desk_rows()
     else
         fail session "$(grep 'rach2-desktop: \|GL renderer\|fatal\|error' "$out/services.txt" | tail -n 4 | tr '\n' ' ')"
     fi
-    if [ -n "$measure" ]; then
-        # shellcheck disable=SC2086 # two assignments
-        env $desktop_env sh "$measure/measure.sh" -r shm-virgl -u desktop -d -t 5 \
-            -o "$out/measure" glmark2 > "$out/measure.out" 2>&1
-        sed 's/^/bed-shm: figure: /' "$out/measure.out"
-    fi
+    for scene in ${measure:+$scenes}; do
+        rung=shm-virgl zink=''
+        case $scene in venus:*) rung=shm-venus scene=${scene#venus:} zink="MESA_LOADER_DRIVER_OVERRIDE=zink VK_DRIVER_FILES=$icd" ;; esac
+        # shellcheck disable=SC2086 # assignments
+        env $desktop_env $zink sh "$measure/measure.sh" -r "$rung" -u desktop -d \
+            -o "$out/measure/$rung-$scene" "$scene" > "$out/measure-$rung-$scene.out" 2>&1
+        sed 's/^/bed-shm: figure: /' "$out/measure-$rung-$scene.out"
+    done
 
-    # The load, until the driver has rung the VM's queue 32 times since
-    # glmark2 named its renderer.
-    glmark --run-forever -b build > "$out/glmark2.out" 2>&1 &
-    load=$!
-    until_line "$out/glmark2.out" 'GL_RENDERER' 600 "$load" || true
+    # The load, until the driver has rung the VM's queue 32 times since it
+    # began to draw: glmark2 once it has named its renderer, a scene of the
+    # harness from its start, for longer than the step will take.
+    if [ "$loadscene" = glmark2 ]; then
+        loadout=$out/glmark2.out
+        glmark --run-forever -b build > "$loadout" 2>&1 &
+        load=$!
+        until_line "$loadout" 'GL_RENDERER' 600 "$load" || true
+    else
+        loadout=$out/load.out
+        # shellcheck disable=SC2086 # two assignments
+        env $desktop_env sh "$measure/measure.sh" -r shm-virgl -u desktop -d -t 600 \
+            -o "$out/load" "$loadscene" > "$loadout" 2>&1 &
+        load=$!
+    fi
     rung0=$(info rung | cut -d/ -f1)
     last=-1 still=0
     until [ "$(($(info rung | cut -d/ -f1) - ${rung0:-0}))" -ge 32 ]; do
         quiet "$console" 600 "$load" || break
     done
     drew=$(($(info rung | cut -d/ -f1) - ${rung0:-0}))
-    if kill -0 "$load" 2>/dev/null && [ "$drew" -ge 32 ] &&
-        grep -q 'GL_RENDERER: *virgl' "$out/glmark2.out"; then
-        pass load "glmark2 on $(sed -n 's/^ *GL_RENDERER: *//p' "$out/glmark2.out" | head -n 1), $drew doorbells"
+    if [ "$loadscene" = glmark2 ]; then
+        named=$(sed -n 's/^ *GL_RENDERER: *//p' "$loadout" | head -n 1)
     else
-        fail load "$drew doorbells: $(tail -n 3 "$out/glmark2.out" | tr '\n' ' ')"
+        named="the session's virgl"
+    fi
+    if kill -0 "$load" 2>/dev/null && [ "$drew" -ge 32 ] &&
+        { [ "$loadscene" != glmark2 ] || grep -q 'GL_RENDERER: *virgl' "$loadout"; }; then
+        pass load "$loadscene on $named, $drew doorbells"
+    else
+        fail load "$loadscene, $drew doorbells: $(tail -n 3 "$loadout" | tr '\n' ' ')"
     fi
 
     # The VM's death under the load, with fences pending.
@@ -477,7 +504,7 @@ desk_rows()
     daemon=''
     last=-1 still=0
     while kill -0 "$load" 2>/dev/null; do
-        quiet "$out/glmark2.out" 300 "$load" || break
+        quiet "$loadout" 300 "$load" || break
     done
     if kill -0 "$load" 2>/dev/null; then
         ended="still running"
@@ -489,9 +516,9 @@ desk_rows()
     fi
     if grep -q 'VGSHMPROBE OK' "$out/pending.out" && [ -z "$load" ] &&
         grep -q 'result: detached: QEMU closed' "$out/ivshmemd.out"; then
-        pass death "$(sed -n 's/^VGSHMPROBE FENCE: //p' "$out/pending.out" | head -n 1); glmark2 $ended"
+        pass death "$(sed -n 's/^VGSHMPROBE FENCE: //p' "$out/pending.out" | head -n 1); $loadscene $ended"
     else
-        fail death "glmark2 $ended: $(grep 'VGSHMPROBE\|result' "$out/pending.out" "$out/ivshmemd.out" | tr '\n' ' ')"
+        fail death "$loadscene $ended: $(grep 'VGSHMPROBE\|result' "$out/pending.out" "$out/ivshmemd.out" | tr '\n' ' ')"
     fi
 
     # The session again, headless on llvmpipe, drawing a client; with -g
