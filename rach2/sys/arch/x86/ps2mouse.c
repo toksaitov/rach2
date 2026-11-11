@@ -589,7 +589,7 @@ static int is_word(const char *word, const char *buf, uint32_t len)
 {
     uint32_t i;
 
-    for (i = 0; i < len && word[i] == buf[i]; i++) {
+    for (i = 0; i < len && word[i] && word[i] == buf[i]; i++) {
     }
     return i == len && word[i] == 0;
 }
