@@ -10,8 +10,9 @@
  * child's copy of the word has the child's id and the parent's copy is
  * unchanged, that the parent's CLONE_PARENT_SETTID word has the child's id,
  * that CLONE_SIGHAND without CLONE_VM fails with EINVAL, and that futex
- * compares, times out on both clocks no sooner than asked, and returns EINVAL
- * or ENOSYS for what it does not take. A
+ * compares, times out on both clocks no sooner than asked, requeues from a
+ * word with no waiter, and returns EINVAL or ENOSYS for what it does not
+ * take. A
  * timed wait that a handler with SA_RESTART interrupts ends with EINTR, as
  * Linux ends one, and is not restarted with its whole timeout again. Of
  * sixteen threads asleep on one word, each wake of one wakes one, and the
@@ -79,7 +80,7 @@ static const char *const assertion_id[] = {"set-tid-address",
                                            "realtime-past",
                                            "zero-bitset",
                                            "unaligned",
-                                           "requeue-enosys",
+                                           "requeue-empty",
                                            "realtime-wait-enosys",
                                            "eintr",
                                            "wake-one-asleep",
@@ -394,12 +395,13 @@ out:
 
 /**
  * The futex rows on `word`, which holds 7: a wake with no waiter, a wait on
- * another value, the timeouts on both clocks, the refusals, and a wait that
- * a handler interrupts. Returns 0, or 1 from `fail` at the first failed
- * check.
+ * another value, the timeouts on both clocks, the refusals, a requeue with
+ * no waiter, and a wait that a handler interrupts. Returns 0, or 1 from
+ * `fail` at the first failed check.
  */
 static int futex_rows(volatile uint32_t *word)
 {
+    static volatile uint32_t other;
     struct kts ts;
     long long start;
     long long deadline;
@@ -445,8 +447,9 @@ static int futex_rows(volatile uint32_t *word)
         return fail("an unaligned address was not refused");
     }
     report_held();
-    if (futex(word, FUTEX_REQUEUE, 1, NULL, 0) != -ENOSYS) {
-        return fail("requeue did not answer ENOSYS");
+    if (raw(SYS_futex, (long)word, FUTEX_REQUEUE | FUTEX_PRIVATE_FLAG, 1, 1, (long)&other, 0) !=
+        0) {
+        return fail("a requeue with no waiter did not return 0");
     }
     report_held();
     if (futex(word, FUTEX_WAIT | FUTEX_CLOCK_REALTIME, 7, NULL, 0) != -ENOSYS) {

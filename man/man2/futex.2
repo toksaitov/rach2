@@ -443,7 +443,8 @@ changes and wakes with
 and checks the refusals Linux 6.12 makes.
 .Pa tests/musl/clonemusl.c
 waits on a word that holds another value, waits out relative and
-absolute deadlines, wakes an address with no waiters, and has a handler
+absolute deadlines, wakes and requeues from an address with no waiters,
+and has a handler
 with
 .Dv SA_RESTART
 end a timed wait with
