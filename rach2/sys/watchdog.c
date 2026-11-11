@@ -229,34 +229,40 @@ void touch_nmi_watchdog(void)
     touch_softlockup_watchdog();
 }
 
-/** Take the reports' serialization, waiting at most a second for another
+/** Take the reports' serialization with interrupts off, and return the
+ * flags `sync_put` restores, waiting at most a second for another
  * processor that holds it, since that one may be the processor locked up.
  * klog builds one record at a time and the detectors run outside the big
  * lock that serializes its other callers, so every report of theirs is
- * logged under it. */
-static void sync_get(void)
+ * logged under it; with interrupts on, a tick could switch the holder to
+ * another processor, whose `sync_put` would then not release it, as
+ * printk_cpu_sync_get_irqsave turns them off. */
+static uint32_t sync_get(void)
 {
+    uint32_t flags = kirq_save();
     unsigned int me = arch_cpu_id() + 1u;
     uint32_t waited;
 
     if (sync_owner == me) {
         sync_depth++;
-        return;
+        return flags;
     }
     for (waited = 0; arch_atomic_cmpxchg(&sync_owner, 0u, me) != 0u && waited < 100000u; waited++) {
         k_udelay(10);
     }
     sync_owner = me;
     sync_depth = 1;
+    return flags;
 }
 
 /** Release the reports' serialization taken by `sync_get`, at its last
- * depth. */
-static void sync_put(void)
+ * depth, and put the interrupt flag back as `flags` has it. */
+static void sync_put(uint32_t flags)
 {
     if (sync_owner == arch_cpu_id() + 1u && --sync_depth == 0) {
         sync_owner = 0;
     }
+    kirq_restore(flags);
 }
 
 /** Copy `t`'s name into `out`, sixteen bytes, each byte not printable as a
@@ -320,11 +326,12 @@ static void show_regs(const char *subsystem, int level, const isr_params_t *regs
 static int nmi_cpu_backtrace(const isr_params_t *regs)
 {
     int cpu = (int)arch_cpu_id();
+    uint32_t sflags;
 
     if (!backtrace_mask[cpu]) {
         return 0;
     }
-    sync_get();
+    sflags = sync_get();
     if (regs && platform_frame_idle(regs)) {
         klog(KLOG_WARN, "nmi_backtrace", "NMI backtrace for cpu %d skipped: idling at 0x%lx", cpu,
              (unsigned long)FRAME_PC(regs));
@@ -332,7 +339,7 @@ static int nmi_cpu_backtrace(const isr_params_t *regs)
         klog(KLOG_WARN, "nmi_backtrace", "NMI backtrace for cpu %d", cpu);
         show_regs("nmi_backtrace", KLOG_WARN, regs);
     }
-    sync_put();
+    sync_put(sflags);
     backtrace_mask[cpu] = 0;
     return 1;
 }
@@ -394,6 +401,7 @@ static void trigger_backtrace(const int want[NR_CPUS], int exclude, const isr_pa
 {
     int me = (int)arch_cpu_id(), c, left, i;
     char list[96];
+    uint32_t sflags;
 
     if (arch_atomic_xchg(&backtrace_flag, 1u) != 0u) {
         return;
@@ -412,9 +420,9 @@ static void trigger_backtrace(const int want[NR_CPUS], int exclude, const isr_pa
     }
     if (left) {
         mask_list(list, sizeof(list));
-        sync_get();
+        sflags = sync_get();
         klog(KLOG_INFO, "nmi_backtrace", "sending NMI from CPU %d to CPUs %s:", me, list);
-        sync_put();
+        sync_put(sflags);
         for (c = 0; c < NR_CPUS; c++) {
             if (backtrace_mask[c]) {
                 platform_cpu_nmi(c);
@@ -482,6 +490,7 @@ static void watchdog_hardlockup_check(int cpu, const isr_params_t *regs)
     struct wd_cpu *w = &wd[cpu];
     unsigned int hrint = w->hrtimer_interrupts;
     int me = (int)arch_cpu_id(), panicking = hardlockup_panic != 0;
+    uint32_t sflags;
 
     if (w->hardlockup_touched) {
         w->hardlockup_touched = 0;
@@ -499,12 +508,12 @@ static void watchdog_hardlockup_check(int cpu, const isr_params_t *regs)
         return;
     }
     deliver_now(panicking);
-    sync_get();
+    sflags = sync_get();
     klog(KLOG_CRIT, "watchdog", "watchdog detected hard LOCKUP on cpu %d", cpu);
     if (cpu == me) {
         show_regs("watchdog", KLOG_ERR, regs);
     }
-    sync_put();
+    sync_put(sflags);
     if (cpu != me) {
         trigger_one(cpu, NULL);
     }
@@ -628,7 +637,7 @@ static void watchdog_enable(struct wd_cpu *w, unsigned int e)
 static void watchdog_timer_fn(struct wd_cpu *w, isr_params_t *regs)
 {
     unsigned int e = watchdog_enabled();
-    uint32_t now, period_ts, duration;
+    uint32_t now, period_ts, duration, sflags;
     int me = (int)arch_cpu_id(), panicking;
     process_t *t;
     char name[16];
@@ -663,11 +672,11 @@ static void watchdog_timer_fn(struct wd_cpu *w, isr_params_t *regs)
     t = current_proc;
     task_name(t, name);
     deliver_now(panicking);
-    sync_get();
+    sflags = sync_get();
     klog(KLOG_CRIT, "watchdog", "BUG: soft lockup - CPU#%d stuck for %us! [%s:%d]", me,
          (unsigned int)duration, name, t ? (int)t->pid : 0);
     show_regs("watchdog", KLOG_ERR, regs);
-    sync_put();
+    sync_put(sflags);
     if (sysctl_softlockup_all_cpu_backtrace) {
         trigger_allbut(me, NULL);
         if (!panicking) {
@@ -850,6 +859,7 @@ static int check_hung_task(process_t *t, uint32_t timeout, uint64_t now)
 {
     unsigned long switch_count = t->nvcsw + t->nivcsw;
     uintptr_t pc, fp;
+    uint32_t sflags;
     char name[16];
 
     if (switch_count == 0) {
@@ -871,7 +881,7 @@ static int check_hung_task(process_t *t, uint32_t timeout, uint64_t now)
     }
     task_name(t, name);
     deliver_now(sysctl_hung_task_panic);
-    sync_get();
+    sflags = sync_get();
     klog(sysctl_hung_task_panic ? KLOG_CRIT : KLOG_ERR, "hung_task",
          "INFO: task %s:%d blocked for more than %u seconds.", name, (int)t->pid,
          (unsigned int)tick_div(now - t->last_switch_time, TICK_HZ, (uint32_t *)0));
@@ -889,18 +899,31 @@ static int check_hung_task(process_t *t, uint32_t timeout, uint64_t now)
         klog(KLOG_INFO, "hung_task",
              "Future hung task reports are suppressed, see sysctl kernel.hung_task_warnings");
     }
-    sync_put();
+    sync_put(sflags);
+    touch_nmi_watchdog();
     return 1;
 }
 
-/** check_hung_uninterruptible_tasks, kernel/hung_task.c:181: every thread
- * blocked in a sleep no signal ends, but one SIGKILL ends (:206-210). The
- * big lock keeps the list still. */
+/**
+ * check_hung_uninterruptible_tasks, kernel/hung_task.c:181: every thread
+ * blocked in a sleep no signal ends, but one SIGKILL ends (:206-210).
+ *
+ * The walk and its reports run with interrupts off. khungtaskd holds the
+ * big lock, but a tick switches a kernel thread at once (`sched_preempt`),
+ * and the thread it switches to may reap a process and free the record the
+ * walk stands on. Linux walks under
+ * `rcu_read_lock` and breaks it only with references held (:195-214,
+ * `rcu_lock_break`); a record here has no count to hold, so the walk does
+ * not break, and `hung_task_check_count` bounds it. Each report touches
+ * the detectors, as Linux's does, since its records go to the serial port
+ * with interrupts off.
+ */
 static void check_hung_uninterruptible_tasks(uint32_t timeout)
 {
     int max_count = sysctl_hung_task_check_count, reported = 0, want[NR_CPUS], c;
     uint64_t now = tick_count();
     process_t *t;
+    uint32_t flags = kirq_save();
 
     for (t = proc_list; t; t = t->next) {
         if (max_count-- <= 0) {
@@ -910,6 +933,7 @@ static void check_hung_uninterruptible_tasks(uint32_t timeout)
             reported |= check_hung_task(t, timeout, now);
         }
     }
+    kirq_restore(flags);
     if (reported && sysctl_hung_task_all_cpu_backtrace) {
         for (c = 0; c < NR_CPUS; c++) {
             want[c] = 1;
