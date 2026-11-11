@@ -42,6 +42,19 @@ or
 A process directory reached through
 .Pa /proc/self
 is recorded with the actual process ID.
+Another process's
+.Pa /proc/PID/fd
+and
+.Pa /proc/PID/fdinfo
+are entered only by a caller that may read its descriptors, as
+.Xr proc 5
+says, and are otherwise
+.Er EACCES ,
+through
+.Fn chdir
+and through
+.Fn fchdir
+alike, as on Linux.
 .Pp
 .Fn fchdir
 makes the directory
