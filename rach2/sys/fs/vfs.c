@@ -16,6 +16,8 @@
 #include "../panic.h"
 #include "../proc/process.h"
 #include "../proc/ns.h"
+#include "../proc/smp.h"
+#include "../lib/spinlock.h"
 #include "../tty/pty.h"
 #include "bcache.h"
 #include "dcache.h"
@@ -48,9 +50,17 @@
  * allocated from the heap when the mount is made and freed when it is
  * unmounted; a NULL slot is free. The first VFS_PERMANENT entries are made
  * at boot and last the life of the kernel.
+ *
+ * The table changes under the big lock. `mount_table_lock` guards the
+ * array, its length and what each slot holds, so that a walk without the
+ * big lock may read the table under it (`resolve_cached`): an old array and
+ * a record that left its slot are freed after the lock is let go of. A
+ * record's fields change under the big lock alone, and such a walk reads
+ * them as single words, seeing a mount being made or unmade either way.
  */
 static struct vfs_mount **mounts;
 static int mount_slots;
+static struct spinlock mount_table_lock = SPINLOCK_INIT;
 /* The `seq` of the last mount made; the permanent entries have their own
  * indexes. */
 static uint32_t mount_seq = VFS_PERMANENT;
@@ -76,53 +86,81 @@ static void mount_table_init(void)
 }
 
 /** The record in slot `idx`, allocated if the slot is empty; NULL when the
- * heap has no room. */
+ * heap has no room. The heap may sleep, so a record another caller put in
+ * the slot meanwhile is taken instead. */
 static struct vfs_mount *mount_record(int idx)
 {
+    struct vfs_mount *m;
+    uint32_t flags;
+
     if (!mounts[idx]) {
-        mounts[idx] = kzalloc(sizeof(struct vfs_mount));
+        m = kzalloc(sizeof(struct vfs_mount));
+        if (!m) {
+            return NULL;
+        }
+        flags = spin_lock_irqsave(&mount_table_lock);
+        if (!mounts[idx]) {
+            mounts[idx] = m;
+            m = NULL;
+        }
+        spin_unlock_irqrestore(&mount_table_lock, flags);
+        kfree(m);
     }
     return mounts[idx];
 }
 
 /** The first free slot past the permanent ones, the array grown by doubling
  * when every slot is taken, with a record in it; -1 when the heap has no
- * room. */
+ * room. The new array is made before the lock is taken, since the heap may
+ * sleep, and the search starts over when the table grew meanwhile. */
 static int mount_new_slot(void)
 {
     int i;
 
-    for (i = VFS_PERMANENT; i < mount_slots; i++) {
-        if (!mounts[i]) {
-            return mount_record(i) ? i : -1;
-        }
-    }
-    {
-        int more = mount_slots * 2;
-        struct vfs_mount **grown = kzalloc(sizeof(*grown) * more);
+    for (;;) {
+        int had = mount_slots;
+        struct vfs_mount **grown;
+        struct vfs_mount **old = NULL;
+        uint32_t flags;
 
+        for (i = VFS_PERMANENT; i < mount_slots; i++) {
+            if (!mounts[i]) {
+                return mount_record(i) ? i : -1;
+            }
+        }
+        grown = kzalloc(sizeof(*grown) * had * 2);
         if (!grown) {
             return -1;
         }
-        k_memcpy(grown, mounts, sizeof(*grown) * mount_slots);
-        kfree(mounts);
-        mounts = grown;
-        i = mount_slots;
-        mount_slots = more;
+        flags = spin_lock_irqsave(&mount_table_lock);
+        if (mount_slots == had) {
+            k_memcpy(grown, mounts, sizeof(*grown) * had);
+            old = mounts;
+            mounts = grown;
+            mount_slots = had * 2;
+        }
+        spin_unlock_irqrestore(&mount_table_lock, flags);
+        if (old) {
+            kfree(old);
+            return mount_record(had) ? had : -1;
+        }
+        kfree(grown);
     }
-    return mount_record(i) ? i : -1;
 }
 
 /** Free the record `m` of a mount placed by mount(2), and empty its slot; a
  * record outside those slots is marked VFS_FREE instead. */
 static void mount_release(struct vfs_mount *m)
 {
+    uint32_t flags;
     int i;
 
     vfs_mount_view_free(m);
     for (i = VFS_PERMANENT; i < mount_slots; i++) {
         if (mounts[i] == m) {
+            flags = spin_lock_irqsave(&mount_table_lock);
             mounts[i] = NULL;
+            spin_unlock_irqrestore(&mount_table_lock, flags);
             kfree(m);
             return;
         }
@@ -1651,6 +1689,201 @@ static int walk_finish(const struct vfs_ref *cur, int flags)
                : 0;
 }
 
+/* The cached walk's answer when the full walk must take the path. */
+#define WALK_FULL 1
+
+/** Whether the cached walk may stand on `mnt`: a type whose names the name
+ * cache keeps, which a walk needs no namespace lock for and which looks
+ * names up one at a time. */
+static int walk_cacheable(const struct vfs_mount *mnt)
+{
+    const struct vfs_type *t = mnt->type;
+
+    return t->name_cache && !t->ns_serialised && !t->ops->lookup_rest && t->ops->hold &&
+           t->ops->put && t->ops->put_unless_last && t->ops->getattr;
+}
+
+/** Drop the cached walk's hold on `node` of `mnt`: without the big lock
+ * when it is not the last, and under it otherwise. May sleep. */
+static void cached_put(struct vfs_mount *mnt, void *node)
+{
+    if (!mnt->type->ops->put_unless_last(mount_base(mnt), node)) {
+        bkl_enter();
+        mnt->type->ops->put(mount_base(mnt), node);
+        bkl_exit();
+    }
+}
+
+/** Enter `mnt` and hold `node` on it for the cached walk, into `cur`, when
+ * the walk may stand there: 0, or WALK_FULL with nothing taken. The caller
+ * holds a lock or a hold that keeps both while this runs, and may hold a
+ * spinlock: nothing here sleeps. */
+static int cached_take(struct vfs_mount *mnt, void *node, struct vfs_ref *cur)
+{
+    if (!mnt || !node || !walk_cacheable(mnt) || vfs_enter(mnt) != 0) {
+        return WALK_FULL;
+    }
+    mnt->type->ops->hold(mount_base(mnt), node);
+    cur->mnt = mnt;
+    cur->node = node;
+    return 0;
+}
+
+/**
+ * Where the cached walk of `path` starts, entered and held into `cur`: the
+ * caller's `start` for a relative path, which the caller holds, else the
+ * calling process's root, read under its lock, or the root mount's, read
+ * under the table's, as Linux's `set_root` reads `fs->root` under its
+ * sequence (fs/namei.c:943-965). 0, or WALK_FULL with nothing taken, for a
+ * path the full walk starts at the root of the root mount, one that begins
+ * with two slashes, among others.
+ */
+static int cached_start(const struct vfs_ref *start, const char *path, struct vfs_ref *cur)
+{
+    struct fs_struct *fs = current_proc ? current_proc->fs : NULL;
+    uint32_t flags;
+    int rc;
+
+    if (path[0] != '/' && start) {
+        return cached_take(start->mnt, start->node, cur);
+    }
+    if (path[0] == '/' && path[1] == '/') {
+        return WALK_FULL;
+    }
+    if (fs) {
+        flags = spin_lock_irqsave(&fs->lock);
+        rc = fs->root_mnt ? cached_take(fs->root_mnt, fs->root_node, cur) : -1;
+        spin_unlock_irqrestore(&fs->lock, flags);
+        if (rc >= 0) {
+            return rc;
+        }
+    }
+    flags = spin_lock_irqsave(&mount_table_lock);
+    rc = cached_take(mounts[0], mounts[0]->root, cur);
+    spin_unlock_irqrestore(&mount_table_lock, flags);
+    return rc;
+}
+
+/** Whether a mount may cover `node` of `mnt`, or be entered by the name
+ * `comp` from it when `comp` is not NULL and `node` is the mount's root: a
+ * search of the table under its lock that judges no namespace's view and
+ * no state but free, so that it errs only toward the full walk. */
+static int cached_mount_near(struct vfs_mount *mnt, void *node, const char *comp)
+{
+    uint32_t flags = spin_lock_irqsave(&mount_table_lock);
+    int i, near = 0;
+
+    for (i = 1; i < mount_slots && !near; i++) {
+        const struct vfs_mount *m = mounts[i];
+
+        if (!m || m->state == VFS_FREE || m->parent != mnt) {
+            continue;
+        }
+        near = comp ? !m->covered && streq(path_last(m->covered_path), comp) : m->covered == node;
+    }
+    spin_unlock_irqrestore(&mount_table_lock, flags);
+    return near;
+}
+
+/**
+ * Resolve `path` from the name cache alone, without the big lock, as Linux
+ * first walks a path under RCU and walks it again with references when that
+ * fails (`filename_lookup`, fs/namei.c:2651-2653). 0 with `out` held and its
+ * mount entered, as the full walk returns it; -ENOENT when the cache has a
+ * negative entry for a name; or WALK_FULL, with nothing held, for the full
+ * walk to take the path whole.
+ *
+ * Each step must stay on one mount of a type `walk_cacheable` admits, find
+ * its name in the cache, pass the search check, which reads the held
+ * directory alone (`name_cache`), and reach no symbolic link it would
+ * follow and no mount. Anything else, `..`, a failed search check among
+ * them, which the full walk may excuse on the way to the working directory
+ * (`toward_cwd`), goes to the full walk, which gives the same answer for
+ * every path this one finishes. The walk takes no namespace lock, since its
+ * type needs none, and a mount it ends on is the one `walk_unlock` leaves.
+ */
+static int resolve_cached(const struct vfs_ref *start, const char *path, int flags,
+                          struct vfs_ref *out)
+{
+    const char *p = path;
+    struct vfs_ref cur;
+    int use_real = (flags & VFS_WALK_REAL_IDS) != 0;
+    uint32_t found_names = 0;
+    int rc;
+
+    if (cached_start(start, path, &cur) != 0) {
+        return WALK_FULL;
+    }
+    for (;;) {
+        char comp[VFS_NAME_MAX + 1];
+        struct vfs_stat st;
+        const char *rest;
+        uint32_t len = 0;
+        void *found;
+
+        while (*p == '/') {
+            p++;
+        }
+        if (*p == '\0') {
+            break;
+        }
+        if (vfs_mount_gone(cur.mnt) || may_search(cur.mnt, cur.node, use_real) != 0) {
+            goto full;
+        }
+        while (p[len] != '\0' && p[len] != '/') {
+            len++;
+        }
+        if (len > VFS_NAME_MAX) {
+            goto full;
+        }
+        k_memcpy(comp, p, len);
+        comp[len] = '\0';
+        p += len;
+        if (streq(comp, ".")) {
+            continue;
+        }
+        if (streq(comp, "..") ||
+            (cur.node == cur.mnt->root && cached_mount_near(cur.mnt, cur.node, comp))) {
+            goto full;
+        }
+        rc = dcache_lookup_hit(mount_base(cur.mnt), cur.node, comp, &found);
+        if (rc == -ENOENT) {
+            dcache_count_hits(found_names + 1);
+            cached_put(cur.mnt, cur.node);
+            vfs_leave(cur.mnt);
+            return rc;
+        }
+        if (rc != 0) {
+            goto full;
+        }
+        found_names++;
+        for (rest = p; *rest == '/'; rest++) {
+        }
+        if (cur.mnt->type->ops->readlink &&
+            (cur.mnt->type->ops->getattr(mount_base(cur.mnt), found, &st) != 0 ||
+             ((st.mode & 0170000u) == 0120000u && (*rest || !(flags & VFS_WALK_NOFOLLOW))))) {
+            cached_put(cur.mnt, found);
+            goto full;
+        }
+        cached_put(cur.mnt, cur.node);
+        cur.node = found;
+        if (cached_mount_near(cur.mnt, cur.node, NULL)) {
+            goto full;
+        }
+    }
+    if (vfs_mount_gone(cur.mnt)) {
+        goto full;
+    }
+    dcache_count_hits(found_names);
+    *out = cur;
+    return 0;
+
+full:
+    cached_put(cur.mnt, cur.node);
+    vfs_leave(cur.mnt);
+    return WALK_FULL;
+}
+
 /**
  * Resolve one path, as `vfs_resolve` says; with WALK_UNMOUNT, for an unmount,
  * the walk may end on a mount whose device has gone, though it looks up no
@@ -1722,7 +1955,7 @@ static int walk_finish(const struct vfs_ref *cur, int flags)
  * named them, and a text link it follows goes on at the mount's root, as the
  * walk does.
  */
-static int resolve_path(const struct vfs_ref *start, const char *path, int flags,
+static int resolve_full(const struct vfs_ref *start, const char *path, int flags,
                         struct vfs_ref *out, char *leaf, uint32_t leafcap,
                         struct walk_record *record)
 {
@@ -2036,6 +2269,33 @@ out_err:
     return rc;
 }
 
+/**
+ * Resolve one path, as `vfs_resolve` says: from the name cache alone
+ * without the big lock (`resolve_cached`) when the walk records nothing,
+ * has no scope, replay or parent and makes nothing, and otherwise, or when
+ * that walk cannot finish, by the full walk under the big lock
+ * (`resolve_full`).
+ */
+static int resolve_path(const struct vfs_ref *start, const char *path, int flags,
+                        struct vfs_ref *out, char *leaf, uint32_t leafcap,
+                        struct walk_record *record)
+{
+    int rc;
+
+    if (path && out && !record && mounts[0]->state == VFS_ACTIVE &&
+        !(flags & ~(VFS_WALK_NOFOLLOW | VFS_WALK_REAL_IDS | VFS_WALK_LOCK)) &&
+        !(current_proc && current_proc->walk_replay)) {
+        rc = resolve_cached(start, path, flags, out);
+        if (rc != WALK_FULL) {
+            return rc;
+        }
+    }
+    bkl_enter();
+    rc = resolve_full(start, path, flags, out, leaf, leafcap, record);
+    bkl_exit();
+    return rc;
+}
+
 int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct vfs_ref *out,
                 char *leaf, uint32_t leafcap)
 {
@@ -2190,15 +2450,21 @@ void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle)
 static void repoint_one(struct vfs_mount *mnt, const void *from, void *to)
 {
     process_t *pr;
+    uint32_t flags;
     int i;
 
     for (pr = proc_list; pr; pr = pr->next) {
-        if (pr->fs && pr->fs->cwd_mnt == mnt && pr->fs->cwd_node == from) {
+        if (!pr->fs) {
+            continue;
+        }
+        flags = spin_lock_irqsave(&pr->fs->lock);
+        if (pr->fs->cwd_mnt == mnt && pr->fs->cwd_node == from) {
             pr->fs->cwd_node = to;
         }
-        if (pr->fs && pr->fs->root_mnt == mnt && pr->fs->root_node == from) {
+        if (pr->fs->root_mnt == mnt && pr->fs->root_node == from) {
             pr->fs->root_node = to;
         }
+        spin_unlock_irqrestore(&pr->fs->lock, flags);
     }
     for (i = 0; i < mount_slots; i++) {
         if (!mounts[i] || mounts[i]->state == VFS_FREE) {
@@ -3319,7 +3585,7 @@ static const struct vfs_ops krffs_ops = {
     0,                           /* shutdown */
     0,                           /* xattr */
     0,                           /* cachestat */
-    0, /* put_unless_last */
+    0,                           /* put_unless_last */
 };
 
 /** The constructor of the root's entry: the mount's root is the image's root
@@ -4253,6 +4519,7 @@ int vfs_root_over_image(const struct vfs_type *type, struct block_device *dev, c
                         const char *place, struct vfs_mount **host)
 {
     struct vfs_mount *old, *m;
+    uint32_t flags;
     int i, j, rc;
 
     if (!vfs_root_mounted()) {
@@ -4285,8 +4552,10 @@ int vfs_root_over_image(const struct vfs_type *type, struct block_device *dev, c
     }
     m->state = VFS_ACTIVE;
     old = mounts[0];
+    flags = spin_lock_irqsave(&mount_table_lock);
     mounts[0] = m;
     mounts[i] = old;
+    spin_unlock_irqrestore(&mount_table_lock, flags);
     for (j = 1; j < VFS_PERMANENT; j++) {
         if (mounts[j] && mounts[j]->parent == old) {
             mounts[j]->parent = m;
@@ -5596,6 +5865,7 @@ void vfs_cwd_set(struct process *p, struct vfs_mount *mnt, void *node)
 {
     struct vfs_mount *was = p->fs->cwd_mnt;
     void *was_node = p->fs->cwd_node;
+    uint32_t flags;
 
     if (mnt && (mnt == mounts[1] || mnt == mounts[2])) {
         mnt = 0;
@@ -5606,8 +5876,10 @@ void vfs_cwd_set(struct process *p, struct vfs_mount *mnt, void *node)
         }
         vfs_mount_get(mnt);
     }
+    flags = spin_lock_irqsave(&p->fs->lock);
     p->fs->cwd_mnt = mnt;
     p->fs->cwd_node = mnt ? node : 0;
+    spin_unlock_irqrestore(&p->fs->lock, flags);
     hold_release(was, was_node);
 }
 
@@ -5621,6 +5893,7 @@ void vfs_root_set(struct process *p, struct vfs_mount *mnt, void *node)
 {
     struct vfs_mount *was = p->fs->root_mnt;
     void *was_node = p->fs->root_node;
+    uint32_t flags;
 
     if (mnt && mnt == mounts[0] && node == mnt->root) {
         mnt = 0;
@@ -5631,8 +5904,10 @@ void vfs_root_set(struct process *p, struct vfs_mount *mnt, void *node)
         }
         vfs_mount_get(mnt);
     }
+    flags = spin_lock_irqsave(&p->fs->lock);
     p->fs->root_mnt = mnt;
     p->fs->root_node = mnt ? node : 0;
+    spin_unlock_irqrestore(&p->fs->lock, flags);
     hold_release(was, was_node);
 }
 

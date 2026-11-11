@@ -90,6 +90,9 @@ struct fs_struct {
      * and `..` stops there. */
     struct vfs_mount *root_mnt;
     void *root_node;
+    /* Guards the two pairs above, which change under the big lock and this,
+     * for a walk that reads the root without the big lock (vfs.c). */
+    struct spinlock lock;
     /* File-creation mask (umask(2)), low 9 bits. */
     uint32_t umask;
     /* The execs in progress, by threads that share this, that apply set-id
