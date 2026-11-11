@@ -227,14 +227,18 @@ void pipe_splice_consume(struct fd_entry *e, uint32_t n);
 /**
  * Copy up to `len` bytes from the pipe of the read end `in` to that of the
  * write end `out`, ring to ring, taking them from `in` when `move` (splice)
- * and leaving them (tee). Waits for a byte in `in` and then for room in
- * `out` unless `nonblock`, and copies what both allow at once, nothing
- * between that sleeps: up to the bytes free in `out` and the buffers of `in`
- * that its free slots take, one each, as Linux links them. Returns the
- * bytes copied, 0 for an empty `in` with no writer left, or a negative
- * errno: -EINVAL for one pipe at both ends, -EAGAIN, -EINTR, -EPIPE with
- * SIGPIPE raised when `out` has no reader, or -ENOMEM when the heap has no
- * room for `out`'s ring.
+ * and leaving them (tee). Waits for a buffer in `in`, an empty one a
+ * faulted write left among them, and then for room in `out` unless
+ * `nonblock`, and links what both allow at once, nothing between that
+ * sleeps: the buffers of `in` from its head, each whole or the part `len`
+ * leaves, one for each free slot of `out`, as Linux's link_pipe and
+ * splice_pipe_to_pipe link them, an empty buffer too while `len` is not
+ * spent. A tee that linked only empty buffers returns 0, as Linux's does; a
+ * splice that moved only empty buffers goes on waiting, or returns -EAGAIN
+ * when `nonblock`. Returns the bytes copied, 0 for an `in` that holds
+ * nothing and has no writer left, or a negative errno: -EINVAL for one pipe
+ * at both ends, -EAGAIN, -EINTR, -EPIPE with SIGPIPE raised when `out` has
+ * no reader, or -ENOMEM when the heap has no room for `out`'s ring.
  */
 int32_t pipe_tee(struct fd_entry *in, struct fd_entry *out, uint32_t len, int nonblock, int move);
 
