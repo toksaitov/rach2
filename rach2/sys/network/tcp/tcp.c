@@ -3156,30 +3156,30 @@ static void tcp_dupack(struct tcb *tcb, uint32_t seq, uint32_t end)
 
 /**
  * Whether the acknowledgement `ack_num` may be taken by `tcb`, as Linux's
- * tcp_ack judges it: not past snd_nxt, which acknowledges data never sent,
- * and not further below snd_una than the largest window the peer has
- * offered (`snd_wnd_max`) or the bytes it has acknowledged (`snd_acked`),
- * whichever is less (RFC 5961, section 5.2). One between that and
- * snd_una is old, and the segment goes on with it. A refused one is
- * answered with a challenge acknowledgement (`tcp_challenge_ack`), but for
- * one past snd_nxt in ESTABLISHED, which Linux's tcp_rcv_established drops
- * with no answer.
+ * tcp_ack judges it, in its order: not further below snd_una than the
+ * largest window the peer has offered (`snd_wnd_max`) or the bytes it has
+ * acknowledged (`snd_acked`), whichever is less (RFC 5961, section 5.2),
+ * and then not past snd_nxt, which acknowledges data never sent. One
+ * between that bound and snd_una is old, and the segment goes on with it.
+ * A refused one is answered with a challenge acknowledgement
+ * (`tcp_challenge_ack`), but for one past snd_nxt in ESTABLISHED, which
+ * Linux's tcp_rcv_established drops with no answer.
  */
 static int tcp_ack_ok(struct tcb *tcb, uint32_t ack_num)
 {
     uint32_t most = tcb->snd_acked;
 
-    if ((int32_t)(ack_num - tcb->snd_nxt) > 0) {
-        if (tcb->state != TCP_ESTABLISHED) {
-            tcp_challenge_ack(tcb);
-        }
-        return 0;
-    }
     if (most > tcb->snd_wnd_max) {
         most = tcb->snd_wnd_max;
     }
     if ((int32_t)(ack_num - (tcb->snd_una - most)) < 0) {
         tcp_challenge_ack(tcb);
+        return 0;
+    }
+    if ((int32_t)(ack_num - tcb->snd_nxt) > 0) {
+        if (tcb->state != TCP_ESTABLISHED) {
+            tcp_challenge_ack(tcb);
+        }
         return 0;
     }
     return 1;
@@ -3188,11 +3188,13 @@ static int tcp_ack_ok(struct tcb *tcb, uint32_t ack_num)
 /**
  * Count in DelayedACKLost a segment of `flags` that starts at `seq` with
  * `len` bytes of data on the synchronized connection `tcb`, which
- * `tcp_rx_check` lets on, when it has data or a FIN and was taken
- * whole before, its end at or before rcv_nxt: the peer sent it again
- * because this side's acknowledgement was lost, as Linux's tcp_data_queue
- * counts it in every state that reaches it, a FIN sent again after the
- * peer's first among them.
+ * `tcp_rx_check` let on, when it has data or a FIN and was taken whole
+ * before, its end at or before rcv_nxt: the peer sent it again because
+ * this side's acknowledgement was lost. Linux's tcp_data_queue counts it,
+ * in ESTABLISHED, the FIN_WAIT states, CLOSE_WAIT, and CLOSING and
+ * LAST_ACK unless the segment acknowledged this side's FIN, which
+ * tcp_rcv_state_process ends the connection at first; the arms of
+ * `tcp_rx_addr` call this in the same places.
  */
 static void tcp_rx_resent(struct tcb *tcb, uint8_t flags, uint32_t seq, uint32_t len)
 {
@@ -3213,9 +3215,12 @@ static void tcp_rx_resent(struct tcb *tcb, uint8_t flags, uint32_t seq, uint32_t
  * in ESTABLISHED in InErrs; one outside the receive window
  * (`tcp_in_window`) is dropped and answered with a duplicate
  * acknowledgement (`tcp_dupack`); and one whose acknowledgement
- * `tcp_ack_ok` refuses is dropped. One that goes on with data or a FIN
- * taken whole before counts in DelayedACKLost (`tcp_rx_resent`). A reset
- * never comes here.
+ * `tcp_ack_ok` refuses is dropped. This is Linux's order: the flags,
+ * tcp_validate_incoming's sequence check and its check of a SYN, then
+ * tcp_ack's checks. A SYN is judged before the window, since Linux takes
+ * one outside the window and one inside it to the same challenge. A reset
+ * never comes here; `tcp_rx_reset` judges it as tcp_validate_incoming's
+ * first two steps do.
  *
  * @return 1 when the segment goes on, 0 when it was dropped.
  */
@@ -3239,11 +3244,7 @@ static int tcp_rx_check(struct tcb *tcb, uint8_t flags, uint32_t seq, uint32_t l
         tcp_dupack(tcb, seq, end);
         return 0;
     }
-    if (!tcp_ack_ok(tcb, ack_num)) {
-        return 0;
-    }
-    tcp_rx_resent(tcb, flags, seq, len);
-    return 1;
+    return tcp_ack_ok(tcb, ack_num);
 }
 
 /**
@@ -3283,6 +3284,26 @@ static void tcp_rx_answers(struct tcb *tcb, uint8_t flags, uint32_t ack_num)
 static int tcp_rx_before_fin(const struct tcb *tcb, uint8_t flags, uint32_t seq, uint32_t len)
 {
     return (len > 0 || (flags & TCP_FIN)) && (int32_t)(seq - tcb->rcv_nxt) < 0;
+}
+
+/**
+ * Take `ack_num`, the acknowledgement of this side's SYN, and the peer's
+ * window `window`, and enter ESTABLISHED, ending the handshake's
+ * retransmission. The bytes acknowledged (`snd_acked`) count the SYN on an
+ * active open, as Linux's tcp_ack moves bytes_acked past it, and not on a
+ * passive one, whose child Linux makes with snd_una past the SYN already.
+ */
+static void tcp_handshake_done(struct tcb *tcb, uint32_t ack_num, uint32_t window)
+{
+    tcb->snd_una = ack_num;
+    tcb->snd_acked = !tcb->passive;
+    tcb->soft_error = 0;
+    tcp_take_wnd(tcb, window);
+    tcb->state = TCP_ESTABLISHED;
+    tcb->retx_flags = 0;
+    tcb->rto_due = 0;
+    tcb->rto_backoff = 0;
+    tcb->retx_stamp = 0;
 }
 
 /**
@@ -3512,16 +3533,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
         if (ack_num != tcb->snd_nxt)
             return;
 
-        tcb->snd_una = ack_num;
-        tcb->snd_acked = !tcb->passive;
-        tcb->soft_error = 0;
-        tcp_take_wnd(tcb, window);
-        tcb->state = TCP_ESTABLISHED;
-        tcb->retx_flags = 0;
-        tcb->rto_due = 0;
-        tcb->rto_backoff = 0;
-        tcb->retx_stamp = 0;
-
+        tcp_handshake_done(tcb, ack_num, window);
         if (tcb->passive) {
             listen_sock = tcb->listener ? tcb->listener->sock : NULL;
             tcb->listener = NULL;
@@ -3551,17 +3563,8 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
 
         tcb->irs = seq;
         tcb->rcv_nxt = seq + 1;
-        tcb->snd_una = ack_num;
-        tcb->snd_acked = 1;
-        tcb->soft_error = 0;
-        tcp_take_wnd(tcb, window);
+        tcp_handshake_done(tcb, ack_num, window);
         tcp_take_options(tcb, data, hdr_len);
-        tcb->state = TCP_ESTABLISHED;
-        tcb->retx_flags = 0;
-        tcb->rto_due = 0;
-        tcb->rto_backoff = 0;
-        tcb->retx_stamp = 0;
-
         tcp_send_flags(tcb, TCP_ACK);
         socket_tcp_connected(tcb->sock);
         break;
@@ -3594,6 +3597,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
             }
         }
 
+        tcp_rx_resent(tcb, flags, seq, payload_len);
         if (payload_len > 0) {
             tcp_take_data(tcb, seq, payload, payload_len);
             needs_ack = 1;
@@ -3630,6 +3634,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
             }
         }
 
+        tcp_rx_resent(tcb, flags, seq, payload_len);
         if (payload_len > 0) {
             tcp_take_data(tcb, seq, payload, payload_len);
             needs_ack = 1;
@@ -3660,6 +3665,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
         const uint8_t *payload = data + hdr_len;
         int needs_ack = 0;
 
+        tcp_rx_resent(tcb, flags, seq, payload_len);
         if (payload_len > 0) {
             tcp_take_data(tcb, seq, payload, payload_len);
             needs_ack = 1;
@@ -3690,6 +3696,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
                 tcp_take_ack(tcb, ack_num, window);
             }
             if (tcp_rx_before_fin(tcb, flags, seq, (uint32_t)(len - hdr_len))) {
+                tcp_rx_resent(tcb, flags, seq, (uint32_t)(len - hdr_len));
                 tcp_send_flags(tcb, TCP_ACK);
             }
         }
@@ -3704,6 +3711,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
                 tcp_take_ack(tcb, ack_num, window);
             }
             if (tcp_rx_before_fin(tcb, flags, seq, (uint32_t)(len - hdr_len))) {
+                tcp_rx_resent(tcb, flags, seq, (uint32_t)(len - hdr_len));
                 tcp_send_flags(tcb, TCP_ACK);
             }
         }
@@ -3711,6 +3719,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
 
     case TCP_CLOSE_WAIT:
         if (tcp_rx_before_fin(tcb, flags, seq, (uint32_t)(len - hdr_len))) {
+            tcp_rx_resent(tcb, flags, seq, (uint32_t)(len - hdr_len));
             tcp_send_flags(tcb, TCP_ACK);
         }
         if ((flags & TCP_ACK) && (int32_t)(ack_num - tcb->snd_una) > 0 &&
