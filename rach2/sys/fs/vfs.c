@@ -3365,7 +3365,9 @@ static struct vfs_mount *mount_deep_at(struct vfs_mount *mnt, const char *text, 
  * names a link the walk follows, to its object (`synth_object_link`) or a
  * link made under /dev to its text, and more of the rest, from `p` to `end`,
  * comes after it: VFS_LINK with a new node of the link held in `*node`, 0
- * when it does not, or -ENOMEM.
+ * when it does not, or -ENOMEM. A process's fd, fdinfo or task directory
+ * passed on the way gets its current owner, as Linux's pid_revalidate
+ * updates each component's inode even if a later lookup fails.
  */
 static int synth_link_part(char *full, uint32_t out, const char *p, const char *end, void **node)
 {
@@ -3380,6 +3382,10 @@ static int synth_link_part(char *full, uint32_t out, const char *p, const char *
     full[out] = '\0';
     synth_classify(full, &vp);
     synth_made(full, &vp);
+    if (vp.kind == VNODE_PROC_FD_DIR || vp.kind == VNODE_PROC_FDINFO_DIR ||
+        vp.kind == VNODE_PROC_TASK_DIR) {
+        procfs_lookup_owner(&vp);
+    }
     if (!synth_object_link(&vp) && !synth_self_link(&vp) &&
         !(vp.kind == VNODE_DEV_MADE && devtree_is_dir(vp.syskey) == 0)) {
         return 0;
