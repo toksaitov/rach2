@@ -2,8 +2,9 @@
  * The PS/2 port's psmouse files, `protocol`, `rate`, `resolution`,
  * `resetafter` and `resync_time` (sys/arch/x86/ps2mouse.c), read and written
  * as sysfs calls them, on the Lenovo's Synaptics touchpad (synaptics.c),
- * against the model of the 8042 and of that pad in synaptics_hosttest.c,
- * with the pad's packets read from its event device (evdev.c).
+ * against a model of the 8042 and of that pad copied from
+ * synaptics_hosttest.c's, with the pad's packets read from its event device
+ * (evdev.c).
  *
  * host-deps: rach2/sys/evdev.c rach2/sys/mouse.c rach2/sys/arch/x86/smbios.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
@@ -61,41 +62,20 @@ static int model_count;
 static uint8_t ctl_config;
 static uint8_t ctl_next;
 
-/* What the auxiliary device is. */
-#define KIND_PAD   1 /* the Lenovo's Synaptics touchpad */
-#define KIND_PLAIN 2 /* a PS/2 mouse of three buttons and no wheel */
-
-/* The device: its kind; a query whose status request it leaves without
- * data, -1 for none; whether it leaves the mode's 0x14 unacknowledged; the
- * command whose argument comes next, 0 for none; the byte the resolutions
- * since the last other command make, and their count; its mode byte,
- * resolution, rate and whether it reports; and every byte it took. */
-static int dev_kind;
-static int silent_query;
-static int refuse_mode;
+/* The Lenovo's Synaptics touchpad: the command whose argument comes next, 0
+ * for none; the byte the resolutions since the last other command make, and
+ * their count; its mode byte, resolution, rate and whether it reports; and
+ * every byte it took. */
 static uint8_t arg_for;
 static uint8_t special;
 static int res_count;
 static uint8_t pad_mode;
-static int modes_set;      /* the mode bytes set since the model's reset */
-static uint8_t first_mode; /* the first of them */
-static int agm_on;
 static uint8_t dev_res;
 static uint8_t dev_rate;
 static int reporting;
 #define TOOK_MAX 512
 static uint8_t took[TOOK_MAX];
 static int n_took;
-
-/* Interrupts as `arch_irq_disable` and `arch_irq_enable` leave them, the
- * port accesses made while they were on, the handler registered, and the
- * warnings logged. */
-static int irq_on = 1;
-static int ports_with_irq_on;
-static isr_handler_t registered_handler;
-static int warnings;
-static const char *last_warning;
-static const char *last_info;
 
 /** Put `data` in the output buffer behind what waits there. */
 static void model_put(uint8_t data)
@@ -123,9 +103,6 @@ static void put3(uint8_t a, uint8_t b, uint8_t c)
 /** Answer the query `q` as the Lenovo's touchpad answers it. */
 static void answer_query(uint8_t q)
 {
-    if (q == silent_query) {
-        return;
-    }
     switch (q) {
     case 0x00: /* identify: minor 1, 0x47, model 1 and major 8 */
         put3(0x01, 0x47, 0x18);
@@ -175,11 +152,6 @@ static void dev_take(uint8_t b)
     if ((ctl_config & 0x20) != 0) {
         return; /* its clock is off */
     }
-    if (refuse_mode && b == 0x14) {
-        arg_for = 0;
-        res_count = 0;
-        return; /* the mode's rate, and every try of it again, unanswered */
-    }
     if (arg_for) {
         cmd = arg_for;
         arg_for = 0;
@@ -191,14 +163,9 @@ static void dev_take(uint8_t b)
             return;
         }
         model_put(0xFA);
-        if (dev_kind == KIND_PAD && res_count >= 4 && b == 0x14) {
+        if (res_count >= 4 && b == 0x14) {
             pad_mode = special;
-            if (modes_set++ == 0) {
-                first_mode = special;
-            }
-        } else if (dev_kind == KIND_PAD && res_count >= 4 && b == 0xC8) {
-            agm_on = 1;
-        } else {
+        } else if (res_count < 4 || b != 0xC8) {
             dev_rate = b;
         }
         res_count = 0;
@@ -211,7 +178,7 @@ static void dev_take(uint8_t b)
         arg_for = b;
         return;
     case 0xE9:
-        if (dev_kind == KIND_PAD && res_count >= 4) {
+        if (res_count >= 4) {
             answer_query(special);
         } else {
             put3(reporting ? 0x20 : 0x00, dev_res, dev_rate);
@@ -224,7 +191,6 @@ static void dev_take(uint8_t b)
         model_put(0xAA);
         model_put(0x00);
         pad_mode = 0;
-        agm_on = 0;
         reporting = 0;
         dev_res = 2;
         dev_rate = 100;
@@ -246,9 +212,6 @@ uint8_t inb(uint16_t port)
 {
     uint8_t data;
 
-    if (irq_on) {
-        ports_with_irq_on++;
-    }
     if (port == PS2_STATUS_PORT) {
         return model_count > 0 ? MOUSE_BYTE : 0;
     }
@@ -265,9 +228,6 @@ void outb(uint16_t port, uint8_t val)
 {
     uint8_t next = ctl_next;
 
-    if (irq_on) {
-        ports_with_irq_on++;
-    }
     if (port == PS2_CMD_PORT) {
         ctl_next = 0;
         if (val == PS2_CMD_ENABLE_MOUSE) {
@@ -288,20 +248,16 @@ void outb(uint16_t port, uint8_t val)
 }
 
 void arch_irq_disable(void)
-{
-    irq_on = 0;
-}
+{}
 
 void arch_irq_enable(void)
-{
-    irq_on = 1;
-}
+{}
 
 void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
 {
     (void)vector;
+    (void)handler;
     (void)name;
-    registered_handler = handler;
 }
 
 /** No Elantech touchpad answers when no Synaptics pad does: its probe is
@@ -338,13 +294,9 @@ void elantech_disconnect(void)
 
 void klog(int level, const char *subsystem, const char *format, ...)
 {
+    (void)level;
     (void)subsystem;
-    if (level == KLOG_WARN) {
-        warnings++;
-        last_warning = format;
-    } else if (level == KLOG_INFO) {
-        last_info = format;
-    }
+    (void)format;
 }
 
 /** No ALPS touchpad answers. */
@@ -654,8 +606,6 @@ static int32_t store(int port, const char *name, const char *text)
     return f->attr.store(f->obj, f->arg, text, (uint32_t)k_strlen(text));
 }
 
-/* The Synaptics driver, a stub: a pad with a pass-through port when the row
- * says, which takes no bytes of its own. */
 /** No table is mapped: the SMBIOS reader reads the row's from memory. */
 uintptr_t map_mmio(uintptr_t phys, size_t size)
 {
@@ -674,8 +624,6 @@ static void model_reset(void)
     model_count = 0;
     ctl_config = FIRMWARE_CONFIG;
     ctl_next = 0;
-    dev_kind = KIND_PAD;
-    silent_query = -1;
     dev_res = 2;
     dev_rate = 100;
     n_took = 0;
