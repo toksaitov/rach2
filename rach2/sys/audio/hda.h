@@ -269,7 +269,7 @@ typedef struct {
     uint64_t max_usec;      /* longest such call, including nested interrupts */
     uint32_t missed;        /* playback revolutions missed across all sessions */
     uint64_t clock_us;      /* TSC of the last miss in us, not uptime */
-    uint32_t gap_us;        /* WALCLK span between that service and its predecessor */
+    uint32_t gap_us;        /* WALCLK span from the preceding service, or the stream's start */
     uint32_t asked_us;      /* WALCLK span from its first pending PLAY request */
     uint32_t asked_valid;   /* the request came from this playback session */
     uint32_t moved_us;      /* position's modular movement, converted to us */

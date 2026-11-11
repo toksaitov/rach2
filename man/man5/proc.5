@@ -217,7 +217,8 @@ is the TSC timestamp in microseconds, on the same clock as debugfs's
 .Pa bkl/long ,
 not uptime;
 .Ql gap-us
-is the WALCLK interval since the preceding playback service;
+is the WALCLK interval since the preceding playback service, or since the
+stream's start for its first service;
 .Ql asked-us
 is the interval since the first pending playback request;
 .Ql asked-valid
