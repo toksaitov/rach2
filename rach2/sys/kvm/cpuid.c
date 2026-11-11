@@ -21,10 +21,12 @@
 #define XFEATURE_YMM    0x4ull
 #define XFEATURE_AVX512 0xE0ull
 
-/* Leaf 0xD, subleaf 1, EAX: XSAVEOPT, XSAVEC, XGETBV1 and XSAVES. A guest
- * has XSAVES with IA32_XSS at 0, its only value (msr.c), as Linux 6.12
- * offers it with no supervisor state; the host's IA32_XSS, which the
- * kernel never writes, is 0 too, so neither is switched around a run. */
+/* Leaf 0xD, subleaf 1, EAX: XSAVEOPT, XSAVEC and XGETBV1, offered where
+ * the host has them, and XSAVES, offered where the backend's `xsaves` also
+ * allows it. A guest has XSAVES with IA32_XSS at 0, its only value
+ * (msr.c), as Linux 6.12 offers it with no supervisor state; the host's
+ * IA32_XSS, which the kernel never writes, is 0 too, so neither is
+ * switched around a run. */
 #define XSAVE_D1_EAX    0x7u
 #define XSAVE_D1_XSAVEC 0x2u
 #define XSAVE_D1_XSAVES 0x8u
