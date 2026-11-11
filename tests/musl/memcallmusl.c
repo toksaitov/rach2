@@ -87,6 +87,11 @@
  * MADV_WIPEONFORK over shared anonymous memory and over a private mapping
  * of a memfd is EINVAL, as Linux takes it on private anonymous memory alone.
  *
+ * `account`: three private anonymous read-write pages show `ac` in smaps;
+ * after mprotect(PROT_READ) the one never touched and the one only read
+ * lose it, and the one written and then dropped with MADV_DONTNEED keeps
+ * it, as Linux drops VM_ACCOUNT only from a region with no anon_vma.
+ *
  * Prints `MEMCALLMUSL OK` and exits 0 when every part held, and prints
  * `MEMCALLMUSL FAIL (detail)` for each failed check and exits 1 otherwise.
  */
@@ -416,6 +421,50 @@ static void wipe_rows(void)
     munmap(shared, PAGE);
     munmap(file, PAGE);
     close(fd);
+}
+
+/**
+ * Private anonymous read-write pages, each between pages of PROT_NONE so
+ * that none merges with a neighbour, show `ac` in smaps, and keep it after
+ * mprotect(PROT_READ) only once a page of theirs was written: not when
+ * never touched, nor when only read, which maps Linux's zero page, but
+ * still when the written page was dropped with MADV_DONTNEED, since Linux
+ * keeps a region's anon_vma after its pages go.
+ */
+static void account_rows(void)
+{
+    static const char *const how[] = {"never touched", "only read", "written and dropped"};
+    char *res = anon(7, PROT_NONE), *m[3], why[96];
+    int i;
+
+    if (res == NULL) {
+        miss("mmap of the reservation");
+        return;
+    }
+    for (i = 0; i < 3; i++) {
+        m[i] = mmap(res + (2 * i + 1) * PAGE, PAGE, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+        if (m[i] != res + (2 * i + 1) * PAGE) {
+            miss("mmap of a page in the reservation");
+            munmap(res, 7 * PAGE);
+            return;
+        }
+        if (!has_flag(m[i], "ac")) {
+            miss("a private read-write page shows ac");
+        }
+    }
+    (void)*(volatile char *)m[1];
+    *(volatile char *)m[2] = 1;
+    expect("MADV_DONTNEED of the written page", madvise(m[2], PAGE, MADV_DONTNEED), 0, 0);
+    for (i = 0; i < 3; i++) {
+        expect("mprotect to PROT_READ", mprotect(m[i], PAGE, PROT_READ), 0, 0);
+        if (has_flag(m[i], "ac") != (i == 2)) {
+            snprintf(why, sizeof(why), "a page %s %s ac after mprotect(PROT_READ)", how[i],
+                     i == 2 ? "keeps" : "drops");
+            miss(why);
+        }
+    }
+    munmap(res, 7 * PAGE);
 }
 
 /** pkey_alloc with no flag: ENOSPC on a processor without the keys, and
@@ -897,6 +946,8 @@ int main(int argc, char **argv)
     mrelease_rows();
     report_part("wipe-on-fork");
     wipe_rows();
+    report_part("account");
+    account_rows();
     report_finish();
     if (failures != 0) {
         return 1;
