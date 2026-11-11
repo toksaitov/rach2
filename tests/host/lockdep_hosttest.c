@@ -458,6 +458,31 @@ static void row_overflow(void)
     free(many);
 }
 
+/** Copy `n` bytes from `src`: the test's user memory is its own. */
+int copy_from_user(void *dst, const void __user *src, size_t n)
+{
+    memcpy(dst, (const void *)src, n);
+    return 0;
+}
+
+/** Copy `n` bytes. */
+void *k_memcpy(void *dest, const void *src, size_t n)
+{
+    return memcpy(dest, src, n);
+}
+
+/** Enter the modelled interrupt. */
+void irq_enter(void)
+{
+    irq_depth++;
+}
+
+/** Leave the modelled interrupt. */
+void irq_leave(void)
+{
+    irq_depth--;
+}
+
 int main(void)
 {
     lockdep_init_map(&mutex_m, "mutex_m", &mutex_key);

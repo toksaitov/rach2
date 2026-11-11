@@ -646,6 +646,10 @@ static int framebuffer(unsigned int w, unsigned int h)
     return fbcon_init(&fb);
 }
 
+/** One processor: nothing to answer. */
+void smp_service(void)
+{}
+
 int main(void)
 {
     k_panic_setup();

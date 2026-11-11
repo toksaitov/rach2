@@ -938,6 +938,20 @@ static void admission_rows(void)
     check(volume.writers == 0 && process.file_locks == 0, "and each leaves the mount and the lock");
 }
 
+/** Take `lock` with interrupts off: one thread, so nothing waits. */
+uint32_t spin_lock_irqsave(struct spinlock *lock)
+{
+    lock->locked = 1;
+    return 0;
+}
+
+/** Give `lock` back. */
+void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
+{
+    (void)flags;
+    lock->locked = 0;
+}
+
 /** Run the rows; 0 when every row passed. */
 int main(void)
 {

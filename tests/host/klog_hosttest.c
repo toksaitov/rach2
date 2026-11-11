@@ -1045,6 +1045,10 @@ static void exclusion_rows(void)
     nested_order_rows();
 }
 
+/** One processor: nothing to answer. */
+void smp_service(void)
+{}
+
 /**
  * Run the rows; the count of failures, at most 255.
  *

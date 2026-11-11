@@ -331,6 +331,34 @@ static void finish(void)
     CHECK(irq_flags == 0x200, "read restores interrupts");
 }
 
+/** One processor: nothing to answer. */
+void smp_service(void)
+{}
+
+/** Store `value` at `p` and return what was there: one thread. */
+unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
+{
+    unsigned int old = *p;
+
+    *p = value;
+    return old;
+}
+
+/** Nothing: there is no big lock. */
+void bkl_take_as(int depth, int key)
+{
+    (void)depth;
+    (void)key;
+}
+
+/** Set `*done` and wake `wq`'s sleepers, as the kernel's does under the
+ * queues' lock. */
+void wq_complete(wait_queue_t *wq, volatile int *done)
+{
+    *done = 1;
+    wq_wake_all(wq);
+}
+
 /**
  * With no argument, run every row and print the result. With a mode (spin,
  * timer, random, pump, work or undispatched), run that one case and print

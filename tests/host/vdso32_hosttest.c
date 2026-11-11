@@ -129,6 +129,14 @@ void isr_leave(isr_params_t *p)
     depth--;
 }
 
+/** Take the big lock, as every i386 entry does in the test. */
+int isr_entry_lock(const isr_params_t *params)
+{
+    (void)params;
+    bkl_enter();
+    return 1;
+}
+
 /** Both fast instructions copy under the lock, including a failed copy. */
 int main(void)
 {

@@ -295,6 +295,15 @@ static void clone_notifications(void)
           "exec generation wrap keeps old children distinct");
 }
 
+/** Store `value` at `p` and return what was there: one thread. */
+unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
+{
+    unsigned int old = *p;
+
+    *p = value;
+    return old;
+}
+
 /**
  * Run every row; 0 when each passes, 1 otherwise. A register-set request
  * rechecks the tracee after each copy that may sleep, the iovec's and a

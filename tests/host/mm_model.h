@@ -255,6 +255,28 @@ void smp_kernel_mapping_changed(void)
     kernel_flushes++;
 }
 
+/** Count, as `smp_kernel_mapping_changed`. */
+void smp_kernel_flush(uintptr_t start, uintptr_t end)
+{
+    (void)start;
+    (void)end;
+    kernel_flushes++;
+}
+
+/** 1: the test runs as the kernel, under the big lock. */
+int bkl_held(void)
+{
+    return 1;
+}
+
+/** Nothing: there is no big lock. */
+void bkl_enter(void)
+{}
+
+/** Nothing: there is no big lock. */
+void bkl_exit(void)
+{}
+
 /** Nothing: the test has no address space that counts its resident pages. */
 void mm_resident_add(const struct page_dir *dir, long pages)
 {
