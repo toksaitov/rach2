@@ -304,7 +304,7 @@ It reads eleven settings from the environment:
 
 `RACH2_ARCH`, or `ARCH`, selects the build tree, and `SOURCE_DATE_EPOCH`, 1700000000 unless set, fixes the FAT timestamps.
 
-`make rach2-sealed-disk` builds the disk the installer writes, `rach2-sealed.disk` (`rach2-sealed-with-key.disk` with a key): a 64 MiB boot partition, a 64 MiB recovery partition with the recovery system, and a 1024 MiB root, 1155 MiB in all. Its rule first runs `cfgcheck sealednet` over `SEALED_ADDRESS`, `SEALED_PREFIX`, `SEALED_MASK` and `SEALED_GATEWAY`, which may be set on the command line, and `krffs/rescue-static.script`. `make os-real-grub-disk` builds a disk of the same shape with the os-real root for `rach2/run_from_disk.sh`, and the suites build their own disks by rules in `tests/system/suites.mk`.
+`make rach2-sealed-disk` builds the disk the installer writes, `rach2-sealed.disk` (`rach2-sealed-with-key.disk` with a key): a 64 MiB boot partition, a 64 MiB recovery partition with the recovery system, and a 1024 MiB root, 1155 MiB in all. Its rule first runs `cfgcheck sealednet` over `SEALED_ADDRESS`, `SEALED_PREFIX`, `SEALED_MASK` and `SEALED_GATEWAY`, which may be set on the command line, and `krffs/rescue-static.script`. Every entry of its menu carries `SEALED_RAMOOPS`, ramoops's region of a megabyte at 1 GiB in the Lenovo's RAM, so that a panic's record survives a warm reset ([pstore(5)](../man/man5/pstore.5)); an empty value leaves it out. `make os-real-grub-disk` builds a disk of the same shape with the os-real root for `rach2/run_from_disk.sh`, and the suites build their own disks by rules in `tests/system/suites.mk`.
 
 The other GRUB files:
 

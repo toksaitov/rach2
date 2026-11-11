@@ -1611,6 +1611,11 @@ SEALED_ADDRESS ?= 192.168.0.105
 SEALED_MASK ?= 255.255.255.0
 SEALED_PREFIX ?= 24
 SEALED_GATEWAY ?= 192.168.0.1
+# ramoops's region on the Lenovo, a megabyte at 1 GiB in its usable RAM, so
+# that a panic's record and the last boot's log survive a warm reset into the
+# next boot's /sys/fs/pstore (pstore(5)).
+SEALED_RAMOOPS ?= ramoops.mem_address=0x40000000 ramoops.mem_size=0x100000 \
+                  ramoops.record_size=0x10000 ramoops.console_size=0x10000 ramoops.ecc=1
 SEALED_DISK = $(IMAGES_DIR)/rach2-sealed$(RECOVERY_KEY_TAG).disk
 
 # The file systems in files a fresh disk carries in /demo, one of each kind
@@ -1694,7 +1699,7 @@ $(SEALED_DISK): $(KERNEL) $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(SEALED_EXT2) \
 	RACH2_DISK_BOOT_MB=64 \
 	RACH2_DISK_CLUSTER=8 \
 	RACH2_DISK_RECOVERY_MB=64 \
-	RACH2_DISK_APPEND="rach2.disk=ahci rach2.netconsole rach2.console=term" \
+	RACH2_DISK_APPEND="rach2.disk=ahci rach2.netconsole rach2.console=term $(SEALED_RAMOOPS)" \
 	RACH2_DISK_DHCP_APPEND="rach2.ip=none" \
 	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
