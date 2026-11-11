@@ -131,17 +131,18 @@ all : $(KERNEL_BIN)
 # tools/inspect/elfcheck, built with the host compiler by the top-level
 # Makefile before each link, so a changed checker is rebuilt first.
 #
-# The kernel every loader reads has no debug sections and no local symbols.
-# The debug sections are more than half of the linked file, and the x86-64
-# kernel with its local symbols does not fit the 4 MiB kernel slot of a boot
-# partition (tools/image/mkdisk_grub.sh, utils/bootctl.c), which it fits
-# without them. The linked file with both
+# The kernel every loader reads has no debug sections and no symbols but
+# `_start` and `_end`, which the checker compares with the entry and the image
+# end. The debug sections are more than half of the linked file, and the
+# x86-64 kernel with its symbols comes within a few percent of the 4 MiB
+# kernel slot of a boot partition (tools/image/mkdisk_grub.sh,
+# utils/bootctl.c). The linked file with every symbol and the debug sections
 # is kept beside the kernel as `kernel.debug`, which debug.sh loads into GDB
-# and which `nm` reads for a static function's address. The kernel keeps its
-# global symbols, which the checker's `_end` test and `nm` read. A kernel
-# larger than the slot fails the link here, since no disk could take it.
-# The rule names this file among its inputs, so a change to how the kernel is
-# made makes it again.
+# and which `nm` and the symbol checks read. No loader reads the symbol
+# table, which lies in no loaded segment, so the two files load the same
+# bytes. A kernel larger than the slot fails the link here, since no disk
+# could take it. The rule names this file among its inputs, so a change to
+# how the kernel is made makes it again.
 KERNEL_SLOT_BYTES = 4194304
 ELFCHECK = ../build/tools/inspect/elfcheck
 # The checker takes the profile from the file: an ELF32 kernel loaded where
@@ -155,7 +156,7 @@ $(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS) $(ACPICA_OBJECTS) $(LINKER_SCRIPT).l
 	@tmp="$@.tmp.$$$$"; trap 'rm -f "$$tmp" "$$tmp.debug"' EXIT; \
 	echo '$(LD) $(LDFLAGS) -o $@.debug ...'; \
 	$(LD) $(LDFLAGS) -o "$$tmp.debug" $(ASM_OBJECTS) $(C_OBJECTS) $(ACPICA_OBJECTS) && \
-	$(CROSS_OBJCOPY) --strip-debug --discard-all "$$tmp.debug" "$$tmp" && \
+	$(CROSS_OBJCOPY) --strip-all --keep-symbol=_start --keep-symbol=_end "$$tmp.debug" "$$tmp" && \
 	$(KERNEL_CHECK) "$$tmp" && \
 	size=$$(($$(wc -c < "$$tmp"))) && \
 	{ [ "$$size" -le $(KERNEL_SLOT_BYTES) ] || \
