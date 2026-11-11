@@ -11,6 +11,7 @@
  * host-deps: tests/host/compat/spinlock_host.c
  * host-deps: tests/host/compat/atomic_host.c
  * host-deps: tests/host/compat/fd_flat.c
+ * host-deps: tests/host/compat/mutex_none.c
  * host-deps: tests/host/compat/mmap_lock_host.c
  *
  * The rows, one for each of 78-5b's subtasks: the call's checks and
@@ -1680,8 +1681,9 @@ int main(void)
     CHECK(i915_driver_open(&dev_a->drm, &file_a) == 0, "setup: the file opened");
     long_lri();
     rings();
-    /* The PPGTT's tables, made as buffers are bound, stay with the rings. */
-    before = allocations - (int)dev_a->gt.ppgtt.tables;
+    /* The PPGTT's tables, made as buffers are bound, stay with the rings,
+     * and the file's PRIME buckets, made at its first export, with the file. */
+    before = allocations - (int)dev_a->gt.ppgtt.tables - (file_a.objects.prime != NULL);
     checks();
     relocations();
     placement();
@@ -1701,9 +1703,13 @@ int main(void)
     /* The pool keeps its shadows past the rows until the GT parks. */
     i915_gem_pool_trim(dev_a, I915_POOL_ALL);
     drm_syncobj_release(&file_a);
-    CHECK(allocations - (int)dev_a->gt.ppgtt.tables == before,
+    CHECK(allocations - (int)dev_a->gt.ppgtt.tables - (file_a.objects.prime != NULL) == before,
           "the end: every record of the calls freed");
     CHECK(irq_depth == 0, "the end: the interrupt flag as it was");
+    CHECK(!mutex_held(&dev_a->gem.lock) &&
+              !mutex_held(&((struct i915_file *)file_a.driver_priv)->lock),
+          "the end: EXECBUFFER2, which runs without the big lock, gave the GEM lock and the "
+          "file's context list lock back");
     printf("%s: %s\n", MODEL_TEST, failures ? "failed" : "ok");
     return failures != 0;
 }

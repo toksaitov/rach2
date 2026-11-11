@@ -20,6 +20,7 @@
  * host-deps: rach2/sys/dmabuf/fence.c rach2/sys/tick.c
  * host-deps: tests/host/i915_model.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/atomic_host.c
  *
  * A row makes a fresh model and a device record over it, brought up as
  * the bind does up to the rings, and a file opened on it. The kernel

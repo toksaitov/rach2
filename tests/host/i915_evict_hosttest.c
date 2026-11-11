@@ -6,6 +6,7 @@
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/atomic_host.c
  * host-deps: tests/host/compat/mmap_lock_host.c tests/host/compat/fd_flat.c
+ * host-deps: tests/host/compat/mutex_none.c
  */
 
 #define MODEL_TEST "i915-evict-test"

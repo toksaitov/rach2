@@ -4,6 +4,7 @@
  * drm_atomic.c and drm_legacy.c, through drm_kms_model.c).
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/resv_host.c
  *
  * A fake device has one CRTC, its primary plane of XRGB8888 and a virtual
  * connector, connected, with 1280x800 preferred, 1024x768 and 800x600; its

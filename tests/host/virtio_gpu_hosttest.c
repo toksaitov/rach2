@@ -6,6 +6,7 @@
  * virtio_gpu64_hosttest.c runs the same rows with x86-64's structures.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/atomic_host.c tests/host/compat/resv_host.c
  *
  * The rows: a bind with EDID, which reads the EDID and then the displays,
  * fences each command with the next id, and lists Linux's 26 modes of
@@ -226,6 +227,19 @@ int sched_is_enabled(void)
 }
 
 static int irq_depth;
+
+/** Take a lock with interrupts already off: one thread, nothing to wait
+ * for. */
+void spin_lock(struct spinlock *lock)
+{
+    (void)lock;
+}
+
+/** Give it back. */
+void spin_unlock(struct spinlock *lock)
+{
+    (void)lock;
+}
 
 /** Count a lock taken with interrupts off. */
 uint32_t spin_lock_irqsave(struct spinlock *lock)
