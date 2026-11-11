@@ -346,7 +346,7 @@ static int kept_drain(void)
             struct kept_run *k = kept[i];
 
             kept[i] = k->next;
-            release_run((uint32_t)(((uintptr_t)k - KVA_HEAP) / PAGE_SIZE), i + 1u);
+            release_run((uint32_t)(((uintptr_t)&k->hdr - KVA_HEAP) / PAGE_SIZE), i + 1u);
             any = 1;
         }
         kept_runs[i] = 0;
