@@ -26,9 +26,16 @@ uint64_t tick_div(uint64_t n, uint32_t d, uint32_t *rem)
     return ((uint64_t)hi << 32) | ((uint64_t)mid << 16) | low;
 }
 
+/**
+ * Long division, one bit at a time. The partial remainder is below `d`
+ * before each shift, so after it it is below 2^65 when `d` is 2^63 or more:
+ * the bit shifted out of the top is kept as `carry`, and the remainder is
+ * then at least `d`, whose subtraction modulo 2^64 leaves the true
+ * remainder.
+ */
 uint64_t tick_div64(uint64_t n, uint64_t d, uint64_t *rem)
 {
-    uint64_t q = 0, r = 0;
+    uint64_t q = 0, r = 0, carry;
     int i;
 
     if ((n >> 32) == 0 && (d >> 32) == 0) {
@@ -36,8 +43,9 @@ uint64_t tick_div64(uint64_t n, uint64_t d, uint64_t *rem)
         r = (uint32_t)n % (uint32_t)d;
     } else {
         for (i = 63; i >= 0; i--) {
+            carry = r >> 63;
             r = (r << 1) | ((n >> i) & 1u);
-            if (r >= d) {
+            if (carry != 0 || r >= d) {
                 r -= d;
                 q |= (uint64_t)1 << i;
             }
