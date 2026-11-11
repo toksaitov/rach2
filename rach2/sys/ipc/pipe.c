@@ -512,29 +512,31 @@ static void pipe_buf_add_pages(pipe_t *p, uint32_t n, uint32_t src, int fresh)
 }
 
 /**
- * Open in `b` a buffer for each buffer of `a` that the first `n` bytes
- * buffered in `a` reach, at the same offset in its page, as Linux's tee and
- * splice between pipes link each buffer, or a part of it, into the other
- * pipe; called before `b`'s tail moves past the `n` bytes. A buffer that a
- * splice, `move`, carries whole keeps taking later writes' bytes if it did,
- * as Linux's `splice_pipe_to_pipe` moves it with its flags; a part of one,
- * and every buffer tee links, takes none.
+ * Open in `b` a buffer for each of the first `k` buffers of `a`, which hold
+ * the first `n` bytes buffered in `a`, at the same offset in its page, an
+ * empty one among them, as Linux's tee and splice between pipes link each
+ * buffer, or a part of it, into the other pipe; the last is linked whole
+ * when `whole`, and otherwise in part. Called before `b`'s tail moves past
+ * the `n` bytes. A buffer that a splice, `move`, carries whole keeps taking
+ * later writes' bytes if it did, as Linux's `splice_pipe_to_pipe` moves it
+ * with its flags; a part of one, and every buffer tee links, takes none. A
+ * pipe `a` that keeps no buffers gives `b` one for each page of the bytes.
  */
-static void pipe_buf_link(const pipe_t *a, pipe_t *b, uint32_t n, int move)
+static void pipe_buf_link(const pipe_t *a, pipe_t *b, uint32_t k, uint32_t n, int move, int whole)
 {
-    uint32_t i, from = 0;
+    uint32_t i;
 
     if (!a->buf_pages) {
         pipe_buf_add_pages(b, n, 0, 1);
         return;
     }
-    for (i = 0; i < a->bufs && from < n; i++) {
+    for (i = 0; i < k; i++) {
         const struct pipe_page *pg = pipe_buf_page(a, i);
         uint32_t read = i == 0 ? a->head - pg->start : 0;
-        uint32_t end = i + 1 < a->bufs ? pipe_buf_at(a, i + 1) - a->head : pipe_available(a);
+        uint32_t from = i == 0 ? 0 : pg->start - a->head;
+        int all = i + 1 < k || whole;
 
-        pipe_buf_open(b, b->tail + from, pg->offset + read, move && end <= n && pg->merge);
-        from = end;
+        pipe_buf_open(b, b->tail + from, pg->offset + read, move && all && pg->merge);
     }
 }
 
@@ -1368,14 +1370,16 @@ int32_t pipe_splice_room(fd_entry_t *e, int nonblock, uint32_t src)
 }
 
 /**
- * Wait until the pipe `p` has bytes, or has no writer left, with the locks
- * of `p` and `q` held and given back for the wait (`pipe_sleep`): the bytes
- * buffered, 0 for none and no writer, -EAGAIN for none with `nonblock`, or
- * -EINTR when a signal ends the wait. The empty buffers at the front, which
- * faulted writes left, are let go of first, as a read lets go of them
- * (`pipe_buf_skip_empty`), so a splice or a tee waits for bytes.
+ * Wait until the pipe `p` has bytes, or has no writer left, with its lock
+ * held and given back for the wait (`pipe_sleep`), for a splice to a file
+ * or a socket and for vmsplice: the bytes buffered, 0 for none and no
+ * writer, -EAGAIN for none with `nonblock`, or -EINTR when a signal ends
+ * the wait. The empty buffers at the front, which faulted writes left, are
+ * let go of first, as a read lets go of them (`pipe_buf_skip_empty`) and as
+ * Linux's `splice_from_pipe_next` eats them (fs/splice.c:495-507 and 551 in
+ * 6.12), so the splice waits for bytes.
  */
-static int32_t pipe_wait_data(pipe_t *p, pipe_t *q, int nonblock)
+static int32_t pipe_wait_data(pipe_t *p, int nonblock)
 {
     for (;;) {
         pipe_buf_skip_empty(p);
@@ -1388,7 +1392,7 @@ static int32_t pipe_wait_data(pipe_t *p, pipe_t *q, int nonblock)
         if (nonblock) {
             return -EAGAIN;
         }
-        if (pipe_sleep(p, q, &p->read_wq, pipe_readable, p, NULL) < 0) {
+        if (pipe_sleep(p, NULL, &p->read_wq, pipe_readable, p, NULL) < 0) {
             return -EINTR;
         }
     }
@@ -1523,7 +1527,7 @@ int32_t pipe_splice_peek(fd_entry_t *e, uint8_t *dst, uint32_t n, int nonblock)
     }
     pipe_lock(p, NULL);
     for (;;) {
-        avail = pipe_wait_data(p, NULL, nonblock);
+        avail = pipe_wait_data(p, nonblock);
         if (avail <= 0) {
             pipe_unlock(p, NULL);
             return avail;
@@ -1563,92 +1567,163 @@ void pipe_splice_consume(fd_entry_t *e, uint32_t n)
     pipe_unlock(p, NULL);
 }
 
-/** How many of the first `n` bytes buffered in `a` another pipe takes in
- * `slots` buffers, one for each buffer of `a` the bytes reach
- * (`pipe_buf_link`), as Linux's tee and splice between pipes stop once the
- * other pipe is full. */
-static uint32_t pipe_tee_slots(const pipe_t *a, uint32_t n, uint32_t slots)
+/**
+ * Wait, with the locks of `a` and `b` held and given back for the waits
+ * (`pipe_sleep`), until a tee or a splice from `a` to `b` can link a
+ * buffer, as Linux's `ipipe_prep` and `opipe_prep` wait
+ * (fs/splice.c:1668-1735 in 6.12): `a` holds a buffer, an empty one a
+ * faulted write left among them (`pipe_holds`), no splice holds `a`'s
+ * bytes, and `b` has a slot and a byte free. Returns 1 then, or 0 for an
+ * `a` that holds nothing and has no writer, -EAGAIN for a wait `nonblock`
+ * forbids, -EPIPE with SIGPIPE raised for a `b` with no reader, or -EINTR.
+ */
+static int32_t pipe_link_ready(pipe_t *a, pipe_t *b, int nonblock)
 {
-    uint32_t end;
-
-    if (!a->buf_pages) {
-        end = slots * PAGE_SIZE;
-    } else if (slots < a->bufs) {
-        end = pipe_buf_at(a, slots) - a->head;
-    } else {
-        return n;
+    for (;;) {
+        if (!pipe_holds(a)) {
+            if (!a->write_open) {
+                return 0;
+            }
+            if (nonblock) {
+                return -EAGAIN;
+            }
+            if (pipe_sleep(a, b, &a->read_wq, pipe_readable, a, NULL) < 0) {
+                return -EINTR;
+            }
+            continue;
+        }
+        if (a->spliced) {
+            if (pipe_wait_unspliced(a, b) < 0) {
+                return -EINTR;
+            }
+            continue;
+        }
+        if (!b->read_open) {
+            pipe_sigpipe();
+            return -EPIPE;
+        }
+        if (pipe_slot_room(b)) {
+            return 1;
+        }
+        if (nonblock) {
+            return -EAGAIN;
+        }
+        if (pipe_sleep(a, b, &b->write_wq, pipe_slot_writable, b, NULL) < 0) {
+            return -EINTR;
+        }
     }
-    return end < n ? end : n;
 }
 
+/**
+ * The buffers of `a` from its head that a link into `b` of at most `len`
+ * bytes takes, as Linux's `link_pipe` and `splice_pipe_to_pipe` walk them
+ * (fs/splice.c:1819-1856 and 1916-1949 in 6.12): each whole, or the part of
+ * it `len` or `b`'s free bytes leave room for, while `b` has a slot for it
+ * and `len` is not spent, an empty buffer among them, which takes a slot
+ * and no byte. Sets `*n` to the bytes, `*k` to the buffers, and `*whole` to
+ * whether the last is taken whole. A pipe that keeps no buffers gives the
+ * bytes its ring and `b`'s slots allow, `*k` 0.
+ */
+static void pipe_link_plan(const pipe_t *a, const pipe_t *b, uint32_t len, uint32_t *n, uint32_t *k,
+                           int *whole)
+{
+    uint32_t slots = pipe_slots_free(b), room = pipe_free_space(b), i;
+
+    *n = 0;
+    *k = 0;
+    *whole = 1;
+    if (!a->buf_pages) {
+        *n = pipe_available(a);
+        if (*n > room) {
+            *n = room;
+        }
+        if (*n > slots * PAGE_SIZE) {
+            *n = slots * PAGE_SIZE;
+        }
+        if (*n > len) {
+            *n = len;
+        }
+        return;
+    }
+    for (i = 0; i < a->bufs && i < slots && *n < len; i++) {
+        uint32_t end = pipe_buf_end(a, i) - a->head, take = end - *n;
+
+        if (take > len - *n) {
+            take = len - *n;
+        }
+        if (take > room - *n) {
+            take = room - *n;
+        }
+        if (take == 0 && end > *n) {
+            break;
+        }
+        *whole = *n + take == end;
+        *n += take;
+        *k = i + 1;
+        if (!*whole) {
+            break;
+        }
+    }
+}
+
+/**
+ * A tee links the buffers of `a` into `b` once and returns, as Linux's
+ * `link_pipe`, 0 when it linked only empty buffers. A splice, `move`, takes
+ * the buffers it links from `a`, the last only in part when `len` or `b`
+ * cuts it; one that moved only empty buffers goes on, as Linux's
+ * `splice_pipe_to_pipe` retries, since 0 would read as the end of input:
+ * it waits for more, or returns -EAGAIN with `nonblock`, or 0 once `a`
+ * holds nothing and has no writer.
+ */
 int32_t pipe_tee(fd_entry_t *in, fd_entry_t *out, uint32_t len, int nonblock, int move)
 {
     pipe_t *a = (pipe_t *)in->priv;
     pipe_t *b = (pipe_t *)out->priv;
-    uint32_t n;
-    int32_t rc = 1;
+    uint32_t n, k, i;
+    int32_t rc;
+    int whole;
 
     if (a == b) {
         return -EINVAL;
     }
     pipe_lock(a, b);
     for (;;) {
-        int32_t avail = pipe_wait_data(a, b, nonblock);
-
-        if (avail <= 0) {
-            rc = avail;
+        rc = pipe_link_ready(a, b, nonblock);
+        if (rc <= 0) {
             break;
         }
-        if (a->spliced) {
-            if (pipe_wait_unspliced(a, b) < 0) {
-                rc = -EINTR;
-                break;
+        if (pipe_ring_ready(b) < 0) {
+            rc = -ENOMEM;
+            break;
+        }
+        pipe_link_plan(a, b, len, &n, &k, &whole);
+        pipe_ring_copy(a, NULL, b, n);
+        pipe_buf_link(a, b, k, n, move, whole);
+        pipe_ring_produce(b, n);
+        if (n > 0) {
+            pipe_wake(b, &b->read_wq, WQ_DATA);
+        }
+        if (move) {
+            pipe_ring_consume(a, n);
+            for (i = 0; i < (whole ? k : k - 1); i++) {
+                pipe_buf_shift(a);
             }
-            continue;
+            pipe_wake(a, &a->write_wq, WQ_ROOM);
         }
-        if (!b->read_open) {
-            pipe_sigpipe();
-            rc = -EPIPE;
+        rc = (int32_t)n;
+        if (n > 0 || !move) {
             break;
         }
-        if (pipe_slot_room(b)) {
+        if (!pipe_holds(a) && !a->write_open) {
             break;
         }
         if (nonblock) {
             rc = -EAGAIN;
             break;
         }
-        if (pipe_sleep(a, b, &b->write_wq, pipe_slot_writable, b, NULL) < 0) {
-            rc = -EINTR;
-            break;
-        }
-    }
-    if (rc > 0 && pipe_ring_ready(b) < 0) {
-        rc = -ENOMEM;
-    }
-    if (rc <= 0) {
-        pipe_unlock(a, b);
-        return rc;
-    }
-    n = pipe_available(a);
-    if (n > pipe_free_space(b)) {
-        n = pipe_free_space(b);
-    }
-    n = pipe_tee_slots(a, n, pipe_slots_free(b));
-    if (n > len) {
-        n = len;
-    }
-    pipe_ring_copy(a, NULL, b, n);
-    pipe_buf_link(a, b, n, move);
-    pipe_ring_produce(b, n);
-    pipe_wake(b, &b->read_wq, WQ_DATA);
-    if (move) {
-        pipe_ring_consume(a, n);
-        pipe_buf_drop(a);
-        pipe_wake(a, &a->write_wq, WQ_ROOM);
     }
     pipe_unlock(a, b);
-    return (int32_t)n;
+    return rc;
 }
 
 /** Make the caller's reserved descriptor `fd` an end of `p` with the access

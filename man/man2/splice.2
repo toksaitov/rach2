@@ -82,6 +82,19 @@ is given or its description has
 the call then fails with
 .Er EAGAIN
 instead.
+An empty buffer that a write whose source faulted left in a pipe counts
+as something to read for
+.Fn tee
+and for a splice to another pipe, as on Linux:
+.Fn tee
+links it into the other pipe, where it takes a slot, and returns 0 when it
+linked nothing else, and
+.Fn splice
+moves it there and then waits for bytes, or fails with
+.Er EAGAIN .
+A splice to anything else and
+.Fn vmsplice
+let such buffers go and wait for bytes, as a read does.
 .Dv SPLICE_F_MOVE ,
 .Dv SPLICE_F_MORE
 and
