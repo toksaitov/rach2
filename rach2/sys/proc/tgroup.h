@@ -38,6 +38,11 @@ struct tgroup {
     uint32_t core_dumping;     /* its core is being written; the others park */
     int32_t exit_code;         /* the wait status the process ends with then */
     struct process *exec_task; /* the thread whose execve ends the others */
+    /* An init, which a signal left at its default does not end, as Linux's
+     * SIGNAL_UNKILLABLE: the system's real init and the first process of a
+     * PID namespace below the first. A forced signal at its default clears
+     * it (`signal_force`). */
+    uint32_t unkillable;
     /* A successful exec since this group was made; fork starts at 0. */
     uint32_t execed;
     /* clone with exit signal zero is reaped with __WCLONE, without SIGCHLD. */

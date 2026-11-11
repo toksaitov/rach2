@@ -78,3 +78,14 @@ Each entry follows [the upstream fault format](../upstream.md).
 * Rach2: nothing. `tests/graphics/runners/deqp.sh` reads each case's result from the process's output, where the case has answered ResourceError before the crash, as in Linux's reference, and starts the process's remaining cases in a new one, so the crash costs no case and is not counted.
 * Status: unreported.
 * Next: build `deqp-vk` with symbols and take the backtrace, to name the object that calls into the unloaded loader; check current upstream's session executor and robustness singletons; run the case on Linux on any driver that refuses that image, to show the same exit.
+
+## Linux ends an init by a signal one of its threads blocks
+
+* Project: Linux 6.12.115, `linux-6.12.115.tar.xz` in `vendor/gnu/kvm/sources.txt`, SHA-256 `0ec90fe4b20422b1b664b77e6d2dde22b40bd41e7eb2cad8ac8739a4749cb1bb`, `kernel/signal.c`.
+* Fails: an init, global or a PID namespace's, with two threads, the one a signal is sent to blocking SIGTERM and the other not, is ended by `kill(init, SIGTERM)` at SIGTERM's default action. `sig_ignored`, lines 104 to 123, keeps the signal because the target blocks it, so `prepare_signal`, line 966, lets it through for SIGNAL_UNKILLABLE. `complete_signal` then finds the other thread at lines 1016 to 1027 and, at lines 1034 to 1056, begins a group exit, since its test of a fatal signal has no SIGNAL_UNKILLABLE clause. Each thread takes the SIGKILL at `get_signal`'s check of SIGNAL_GROUP_EXIT, lines 2772 to 2785, before its own SIGNAL_UNKILLABLE test at lines 2866 to 2868 is reached, and the global init's end panics in `do_exit` (`kernel/exit.c`, lines 907 to 915).
+* Found: 2026-11-11 in a worker's clone under WSL, milestone 78, while reading the protection of init for task 78-40.1, which ports it to Rach2.
+* Reproduction: not run on Linux. In a new PID namespace, an init that starts a second thread, blocks SIGTERM in its main thread, leaves it unblocked in the second and leaves the disposition at SIG_DFL; a `kill` of the namespace's PID 1 with SIGTERM from inside the namespace ends the namespace, where the same init with one thread is untouched.
+* Evidence: Linux 6.12.115's `kernel/signal.c` at the lines above, read from the tarball named in Project.
+* Rach2: `sig_fatal_now` in `rach2/sys/syscall_proc.c` begins no group exit for an init but by SIGKILL, and `deliver_signals` passes over the default action the thread then takes, in the commit that protects init.
+* Status: unreported.
+* Next: run the reproduction on a current kernel, check whether current upstream's `complete_signal` or `sig_ignored` differs, and find whether the SIGNAL_UNKILLABLE clause was left out of `complete_signal` on purpose before proposing it back.
