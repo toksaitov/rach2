@@ -382,6 +382,12 @@ void i915_rps_retire(struct i915_request *rq)
     (void)rq;
 }
 
+/** The waitboost, RPS's, which no row here measures. */
+void i915_rps_boost(struct i915_request *rq)
+{
+    (void)rq;
+}
+
 /* The GTT's allocator for the kernel's own ranges, i915_vma.c's: from
  * 16 MiB up, each range its own, `held` counting those not given back. */
 static uint64_t next_range;
@@ -421,9 +427,6 @@ void i915_vma_revoke_mmap(struct i915_vma *vma)
 {
     (void)vma;
 }
-
-/* The driver's fences, i915_gem.c's. */
-const struct dma_fence_ops i915_fence_ops = {0, 0, 0, 0, 0, 0};
 
 /* The id table: the Lenovo's chip alone. */
 static const struct i915_platform hsw = {"HASWELL", 7, 50, 7, 2, 0xf, 1, 1, 1, 0, 1, 31, 40};

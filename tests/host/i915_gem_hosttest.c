@@ -827,6 +827,72 @@ static void busy_and_wait(void)
     close_handle(&file_a, h);
 }
 
+/* A fence of the test's whose `signaled` answers yes from its `at`th
+ * question on, as a request whose breadcrumb the chip writes between two
+ * of the driver's looks at it. */
+struct late_fence {
+    struct dma_fence base;
+    int asked, at;
+};
+
+/** Whether the late fence has completed: from its `at`th question on. */
+static int late_signaled(struct dma_fence *fence)
+{
+    struct late_fence *l = (struct late_fence *)fence;
+
+    return ++l->asked >= l->at;
+}
+
+static const struct dma_fence_ops late_ops = {0, 0, 0, 0, late_signaled, 0};
+
+/**
+ * 80-61: GEM_WAIT on a timeline imported into the object's reads, as a
+ * sync file of a syncobj's timeline is: its newest point's fence has
+ * signalled, the middle point's completes at its `at`th question, and the
+ * oldest point's is pending. Whenever the middle one completes, in the
+ * driver's walk of the leaves or between two of its looks, the wait still
+ * waits for the oldest and times out, as Linux's waits for every fence of
+ * the reservation (gem/i915_gem_wait.c:66-89).
+ */
+static void wait_chain(void)
+{
+    uint32_t h = create(&file_a, 4096);
+    struct drm_i915_gem_object *obj = object(&file_a, h);
+    struct drm_i915_gem_wait wait = {0};
+    int at, timed_out = 0, idle = 0;
+
+    for (at = 1; at <= 24; at++) {
+        struct dma_fence *a = (struct dma_fence *)kzalloc(sizeof(*a));
+        struct dma_fence *n = (struct dma_fence *)kzalloc(sizeof(*n));
+        struct late_fence *b = (struct late_fence *)kzalloc(sizeof(*b));
+        struct dma_fence_chain *p1 = dma_fence_chain_alloc();
+        struct dma_fence_chain *p2 = dma_fence_chain_alloc();
+        struct dma_fence_chain *p3 = dma_fence_chain_alloc();
+
+        dma_fence_init(a, 0, dma_fence_context_alloc(1), 1);
+        dma_fence_init(&b->base, &late_ops, dma_fence_context_alloc(1), 1);
+        b->at = at;
+        dma_fence_init(n, 0, dma_fence_context_alloc(1), 1);
+        dma_fence_signal(n);
+        dma_fence_chain_init(p1, 0, a, 1);
+        dma_fence_chain_init(p2, &p1->base, &b->base, 2);
+        dma_fence_chain_init(p3, &p2->base, n, 3);
+        CHECK(dma_resv_add_fence(obj->base.resv, &p3->base, 0) == 0, "chain: the timeline read");
+        dma_fence_put(&p3->base);
+        wait.bo_handle = h;
+        wait.flags = 0;
+        wait.timeout_ns = 1000000;
+        timed_out += i915_gem_wait_ioctl(&dev_a->drm, &wait, &file_a) == -ETIME;
+        dma_fence_signal(a);
+        (void)dma_fence_signal(&b->base);
+        wait.timeout_ns = 0;
+        idle += i915_gem_wait_ioctl(&dev_a->drm, &wait, &file_a) == 0;
+    }
+    CHECK(timed_out == 24, "chain: whenever the middle point completes, the wait times out");
+    CHECK(idle == 24, "chain: and once every point has signalled, the object is idle");
+    close_handle(&file_a, h);
+}
+
 /** PRIME: an import of the device's own export and another device's,
  * a dma-buf's mapping and its CPU access sync. */
 static void prime(void)
@@ -1026,11 +1092,15 @@ void i915_rps_boost(struct i915_request *rq)
 
 /** A wait for a request, which here is its fence alone: the fence's default
  * wait until the timeout, for ever when it is negative. */
-int32_t i915_request_wait(struct i915_request *rq, int intr, int64_t timeout_ns)
+int32_t i915_request_wait(struct i915_request *rq, uint32_t flags, int64_t timeout_ns)
 {
-    return dma_fence_default_wait(&rq->fence.base, intr,
+    return dma_fence_default_wait(&rq->fence.base, (flags & I915_WAIT_INTERRUPTIBLE) != 0,
                                   timeout_ns < 0 ? -1 : dma_fence_now() + timeout_ns);
 }
+
+/* The driver's fences, i915_request.c's; no fence here is a request whose
+ * breadcrumb a chip writes, so each signals only when a row signals it. */
+const struct dma_fence_ops i915_fence_ops = {0, 0, 0, 0, 0, 0};
 
 int main(void)
 {
@@ -1052,6 +1122,7 @@ int main(void)
     arithmetic();
     tiling();
     busy_and_wait();
+    wait_chain();
     fault_busy();
     map_access();
     prime();

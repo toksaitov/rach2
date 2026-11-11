@@ -22,7 +22,9 @@
  * numbers, and the sync files of an image's dma-buf (78-11a.2); the
  * command parser's shadow and trampoline on the call's path (78-8b), and
  * the objects held until the request retires, their bindings kept while
- * the object is busy (78-5c); a ring that refuses the commands.
+ * the object is busy (78-5c); a batch whose breadcrumb is written before
+ * its interrupt is taken, idle to WAIT and BUSY with the GT left awake
+ * (80-61); a ring that refuses the commands.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -433,6 +435,22 @@ static void idle(void)
     i915_retire_requests(dev_a);
 }
 
+/** Hold the ring of engine `i` still, so that the requests it is given
+ * stay running until `ring_release`. */
+static void ring_hold(int i)
+{
+    ring_hung[i] = 1;
+}
+
+/** Let the ring of engine `i` run what it was given while it was held. */
+static void ring_release(int i)
+{
+    struct i915_engine *e = &dev_a->gt.engine[i];
+
+    ring_hung[i] = 0;
+    ring_write(&chip_a, RING_TAIL(e->mmio_base), chip_a.regs[RING_TAIL(e->mmio_base) / 4]);
+}
+
 /** Run the submission worker until it moves nothing. */
 static void kick(void)
 {
@@ -587,9 +605,11 @@ static void rings(void)
                   (MI_BATCH_BUFFER_START | MI_BATCH_PPGTT_HSW | MI_BATCH_NON_SECURE_HSW) &&
               starts[0].addr == (uint32_t)offset_of(b),
           "rings: RENDER starts the batch on rcs0, unprivileged through the PPGTT bit");
-    CHECK(i915_gem_object_is_active(obj) && (obj->read_domains & I915_GEM_GPU_DOMAINS) &&
-              !obj->write_domain,
+    CHECK(obj->base.resv->nreads == 1 && obj->base.resv->reads[0]->ops == &i915_fence_ops &&
+              (obj->read_domains & I915_GEM_GPU_DOMAINS) && !obj->write_domain,
           "rings: the request's fence on the object, read by the GPU");
+    CHECK(!i915_gem_object_is_active(obj) && dev_a->gt.engine[I915_RCS0].requests,
+          "rings: idle once the breadcrumb is written, before the interrupt, as Linux's");
     idle();
     CHECK(!i915_gem_object_is_active(obj) && !dev_a->gt.engine[I915_RCS0].requests,
           "rings: retired once the interrupt is taken");
@@ -735,6 +755,7 @@ static void lifetime(void)
     o[1].relocation_count = 1;
     o[1].relocs_ptr = (uintptr_t)&r;
     args_init(&a, o, 2, I915_EXEC_RENDER);
+    ring_hold(I915_RCS0);
     CHECK(execbuf(&a) == 0, "lifetime: the call passes");
     ts = offset_of(t);
     bs = offset_of(b);
@@ -748,6 +769,7 @@ static void lifetime(void)
     CHECK(v && i915_vma_unbind(v) == -EBUSY && i915_gem_object_unbind(obj) == -EAGAIN &&
               chip_a.gtt[ts >> 12] != 0,
           "lifetime: a busy object's binding is not undone");
+    ring_release(I915_RCS0);
     idle();
     CHECK(chip_a.gtt[ts >> 12] == 0 && chip_a.gtt[bs >> 12] == 0,
           "lifetime: both freed and unbound once the request retires");
@@ -906,8 +928,10 @@ static void fences(void)
     CHECK(execbuf(&a) == 0 && (a.rsvd2 & 0xffffffffu) == 0x1234, "fences: FENCE_OUT");
     out_fd = (int32_t)(a.rsvd2 >> 32);
     out = sync_fence(out_fd);
-    CHECK(out && out->ops == &i915_fence_ops && !dma_fence_is_signaled(out),
-          "fences: the out-fence is the request's, not signalled");
+    CHECK(out && out->ops == &i915_fence_ops && !out->signaled,
+          "fences: the out-fence is the request's, not yet signalled");
+    CHECK(out && dma_fence_is_signaled(out) && !out->listened,
+          "fences: asked once its breadcrumb is written, before the interrupt, it has signalled");
     idle();
     CHECK(dma_fence_is_signaled(out) && !out->error, "fences: signalled once it retires");
     (void)fd_free(self.fds, out_fd);
@@ -1094,7 +1118,7 @@ static void timeline_points(uint32_t tl)
     CHECK(execbuf(&a) == 0 && nstarts == 1 && newest_point(tl) == 1,
           "timeline: SIGNAL at point 1 adds the point");
     p = syncobj_fence(tl);
-    CHECK(p && to_dma_fence_chain(p)->fence->ops == &i915_fence_ops && !dma_fence_is_signaled(p),
+    CHECK(p && to_dma_fence_chain(p)->fence->ops == &i915_fence_ops && !p->signaled,
           "timeline: whose fence is the request's");
     idle();
     CHECK(dma_fence_is_signaled(syncobj_fence(tl)), "timeline: the point signals as it retires");
@@ -1331,7 +1355,8 @@ static void wsi_sync_files(void)
     CHECK(e && e->ops->ioctl(e, DMA_BUF_IOCTL_EXPORT_SYNC_FILE, (uintptr_t)&ex) == 0 && ex.fd >= 0,
           "wsi: EXPORT_SYNC_FILE for a reader");
     got = sync_fence(ex.fd);
-    CHECK(got && !dma_fence_is_signaled(got), "wsi: its fence waits for the batch");
+    CHECK(got && got->ops == &i915_fence_ops && !got->signaled,
+          "wsi: its fence is the batch's request");
     idle();
     CHECK(got && dma_fence_is_signaled(got), "wsi: and signals as it retires");
     (void)fd_free(self.fds, ex.fd);
@@ -1451,6 +1476,41 @@ static void parser(void)
 }
 
 /**
+ * 80-61: GEM_WAIT on a batch whose breadcrumb is written, before its
+ * interrupt is taken: a wait of 0 finds the object idle, and a wait
+ * returns at once without asking for the signal, so the request's
+ * retirement leaves the engine held for the retire worker's pass, as
+ * Linux's i915_fence_signaled answers (i915_request.c:88-91,
+ * gem/i915_gem_wait.c:24-25).
+ */
+static void wait_before_interrupt(void)
+{
+    uint32_t b = batch_end();
+    struct drm_i915_gem_object *obj = object(&file_a, b);
+    struct drm_i915_gem_wait w;
+    struct dma_fence *f;
+    int p = parks;
+
+    nstarts = 0;
+    CHECK(exec1(b, I915_EXEC_RENDER) == 0 && nstarts == 1 && obj->base.resv->nreads == 1,
+          "early: a batch run, its interrupt not taken");
+    f = dma_fence_get(obj->base.resv->reads[0]);
+    k_memset(&w, 0, sizeof(w));
+    w.bo_handle = b;
+    CHECK(i915_gem_wait_ioctl(&dev_a->drm, &w, &file_a) == 0 && f->signaled,
+          "early: a wait of 0 finds the object idle");
+    w.timeout_ns = -1;
+    CHECK(i915_gem_wait_ioctl(&dev_a->drm, &w, &file_a) == 0 && !f->listened,
+          "early: a wait returns at once, the signal not asked for");
+    idle();
+    CHECK(!dev_a->gt.engine[I915_RCS0].requests && dev_a->gt.engine[I915_RCS0].unretired &&
+              dev_a->gt.awake && parks == p,
+          "early: retired at the interrupt, the engine held and the GT awake");
+    dma_fence_put(f);
+    close_handle(&file_a, b);
+}
+
+/**
  * GEN7_SOL_RESET zeroes the four stream output offsets before the render
  * batch; on the blitter it fails, the request added without its batch.
  * A ring that refuses the commands fails the call with EIO.
@@ -1548,6 +1608,7 @@ int main(void)
     trace();
     wsi_sync_files();
     parser();
+    wait_before_interrupt();
     sol_and_faults();
     lifetime();
     idle();

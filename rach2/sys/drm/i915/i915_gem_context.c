@@ -933,7 +933,7 @@ int32_t i915_gem_throttle_ioctl(struct drm_device *dev, void *data, struct drm_f
                 }
             }
         }
-        err = rq ? i915_request_wait(rq, 1, -1) : 0;
+        err = rq ? i915_request_wait(rq, I915_WAIT_INTERRUPTIBLE, -1) : 0;
         i915_request_put(rq);
     } while (rq && err == 0);
     return err;

@@ -18,46 +18,6 @@
 #include "../../mm/usercopy.h"
 
 /* ------------------------------------------------------------------------
- * The driver's fences
- */
-
-/** The driver's name, for a sync file's information. */
-static const char *i915_fence_driver(struct dma_fence *fence)
-{
-    (void)fence;
-    return "i915";
-}
-
-/** The timeline's name: the engine's class, as programs number it. */
-static const char *i915_fence_timeline(struct dma_fence *fence)
-{
-    static const char *const names[] = {"rcs", "bcs", "vcs", "vecs"};
-    uint16_t c = ((struct i915_fence *)fence)->uabi_class;
-
-    return c < 4 ? names[c] : "unknown";
-}
-
-/**
- * Wait for a request's fence until the CLOCK_MONOTONIC `deadline_ns`, or
- * for ever when it is negative, through `i915_request_wait`, as Linux's
- * i915_fence_wait, so that every wait on the driver's fence spins first.
- * 0, -ETIME or -EINTR; sleeps.
- */
-static int32_t i915_fence_wait(struct dma_fence *fence, int intr, int64_t deadline_ns)
-{
-    int64_t timeout = -1, now;
-
-    if (deadline_ns >= 0) {
-        now = dma_fence_now();
-        timeout = deadline_ns > now ? deadline_ns - now : 0;
-    }
-    return i915_request_wait((struct i915_request *)fence, intr, timeout);
-}
-
-const struct dma_fence_ops i915_fence_ops = {i915_fence_driver, i915_fence_timeline, 0, 0, 0,
-                                             i915_fence_wait};
-
-/* ------------------------------------------------------------------------
  * Pages
  */
 
@@ -176,43 +136,39 @@ int i915_gem_object_is_active(const struct drm_i915_gem_object *obj)
 
 /**
  * Wait for a fence of a reservation until `deadline`, or for ever when it
- * is negative, as Linux's i915_gem_object_wait_fence: a request of the
- * driver through `i915_request_wait`, which spins before it asks for the
- * signal, and any other fence through `dma_fence_wait_until`. Each fence of
- * a merge is waited for alone, so that the merge, which a wait would arm,
- * asks for no signal. 0, -ETIME or -EINTR; sleeps.
+ * is negative, as Linux's i915_gem_object_wait_fence
+ * (gem/i915_gem_wait.c:17-33): a request of the driver through
+ * `i915_request_wait` with `flags`, which spins before it asks for the
+ * signal, and any other fence through `dma_fence_wait_until`. Each leaf of
+ * a merge or a timeline is waited for alone, in one walk that holds the
+ * point it is at, so that the merge, which a wait would arm, asks for no
+ * signal, and a leaf that signals meanwhile moves no other out of the
+ * walk. 0, -ETIME or -EINTR; sleeps.
  */
-static int32_t object_fence_wait(struct dma_fence *f, int intr, int64_t deadline)
+static int32_t object_fence_wait(struct dma_fence *f, uint32_t flags, int64_t deadline)
 {
+    struct dma_fence_unwrap u;
     struct dma_fence *leaf;
-    uint32_t i, n;
-    int32_t err;
+    int64_t now, timeout;
+    int32_t err = 0;
 
-    while (!dma_fence_is_signaled(f)) {
-        n = dma_fence_count(f);
-        leaf = 0;
-        for (i = 0; i < n && !leaf; i++) {
-            leaf = dma_fence_at(f, i);
-            if (dma_fence_is_signaled(leaf)) {
-                leaf = 0;
-            }
+    for (leaf = dma_fence_unwrap_first(f, &u); leaf && err == 0; leaf = dma_fence_unwrap_next(&u)) {
+        if (dma_fence_is_signaled(leaf)) {
+            continue;
         }
-        if (!leaf) {
-            return 0;
-        }
-        /* A reference of its own, since a chain may drop it meanwhile. */
-        (void)dma_fence_get(leaf);
         if (leaf->ops == &i915_fence_ops) {
-            err = i915_fence_wait(leaf, intr, deadline);
+            timeout = -1;
+            if (deadline >= 0) {
+                now = dma_fence_now();
+                timeout = deadline > now ? deadline - now : 0;
+            }
+            err = i915_request_wait((struct i915_request *)leaf, flags, timeout);
         } else {
-            err = dma_fence_wait_until(leaf, intr, deadline);
-        }
-        dma_fence_put(leaf);
-        if (err != 0) {
-            return err;
+            err = dma_fence_wait_until(leaf, (flags & I915_WAIT_INTERRUPTIBLE) != 0, deadline);
         }
     }
-    return 0;
+    dma_fence_unwrap_end(&u);
+    return err;
 }
 
 int32_t i915_gem_object_wait_idle(struct drm_i915_gem_object *obj, int intr)
@@ -235,7 +191,7 @@ int32_t i915_gem_object_wait_idle(struct drm_i915_gem_object *obj, int intr)
         /* A reference of its own, since the reservation may change while
          * the wait sleeps. */
         (void)dma_fence_get(f);
-        err = object_fence_wait(f, intr, -1);
+        err = object_fence_wait(f, intr ? I915_WAIT_INTERRUPTIBLE : 0u, -1);
         dma_fence_put(f);
         if (err == -EINTR) {
             return err;
@@ -428,13 +384,11 @@ void i915_gem_object_put(struct drm_i915_gem_object *obj)
  * not begun. */
 static void fence_boost(struct dma_fence *f)
 {
-    uint32_t i, n = f ? dma_fence_count(f) : 0;
+    struct dma_fence_unwrap u;
+    struct dma_fence *leaf;
 
-    for (i = 0; i < n; i++) {
-        struct dma_fence *leaf = dma_fence_at(f, i);
-
-        if (leaf && leaf->ops == &i915_fence_ops &&
-            !i915_request_started((struct i915_request *)leaf)) {
+    for (leaf = dma_fence_unwrap_first(f, &u); leaf; leaf = dma_fence_unwrap_next(&u)) {
+        if (leaf->ops == &i915_fence_ops && !i915_request_started((struct i915_request *)leaf)) {
             i915_rps_boost((struct i915_request *)leaf);
         }
     }
@@ -498,7 +452,8 @@ int32_t i915_gem_object_wait(struct drm_i915_gem_object *obj, int all, int64_t t
     }
     for (i = 0; i <= n; i++) {
         if (err == 0 && fences[i]) {
-            err = object_fence_wait(fences[i], 1, deadline);
+            err = object_fence_wait(fences[i], I915_WAIT_INTERRUPTIBLE | I915_WAIT_PRIORITY,
+                                    deadline);
         }
         dma_fence_put(fences[i]);
     }
@@ -1430,16 +1385,12 @@ static uint32_t busy_write_id(uint16_t id)
  * fence adds nothing, as on Linux. */
 static uint32_t busy_check(struct dma_fence *fence, uint32_t (*flag)(uint16_t))
 {
-    uint32_t i, n, busy = 0;
+    struct dma_fence_unwrap u;
+    struct dma_fence *leaf;
+    uint32_t busy = 0;
 
-    if (!fence) {
-        return 0;
-    }
-    n = dma_fence_count(fence);
-    for (i = 0; i < n; i++) {
-        struct dma_fence *leaf = dma_fence_at(fence, i);
-
-        if (leaf && leaf->ops == &i915_fence_ops && !dma_fence_is_signaled(leaf)) {
+    for (leaf = dma_fence_unwrap_first(fence, &u); leaf; leaf = dma_fence_unwrap_next(&u)) {
+        if (leaf->ops == &i915_fence_ops && !dma_fence_is_signaled(leaf)) {
             busy |= flag(((struct i915_fence *)leaf)->uabi_class);
         }
     }
