@@ -33,7 +33,13 @@
  * mode 0555, is its own whether or not it is dumpable; a stat of its status
  * is root's while a change of ids leaves it not dumpable and its own once
  * PR_SET_DUMPABLE makes it so; and a descriptor open on its maps before that
- * stays root's, the owner the open's lookup gave it, as on Linux. mlock,
+ * stays root's, the owner the open's lookup gave it, as on Linux. Normal
+ * and O_PATH descriptors on files and directories keep their user and group
+ * IDs across credential and dumpability changes. A walk, including one to a
+ * missing child, refreshes the directories it crosses; listing /dev does
+ * not. O_PATH descriptors on unfollowed links keep each link's owner until
+ * lstat reaches it. An inherited fd directory's owner governs fchdir from
+ * another process before and after a walk updates it. mlock,
  * mlock2, munlock, mlockall and munlockall accept a mapped range and count
  * in VmLck, a mapping made under MCL_FUTURE is locked, an
  * unprivileged mlock past RLIMIT_MEMLOCK fails with ENOMEM and with a limit
@@ -113,7 +119,9 @@
  * `clock-adjtime`, `listxattr`, `getxattr-absent`, `lsetxattr-enoent`,
  * `readahead-fadvise`, `fadvise-espipe`, `noctty-session`, `maxrss-self`,
  * `maxrss-child`, `udp-refused`, `setgid-file`, `setgid-dir`,
- * `privacy-other-root`, `privacy-own-maps`, `privacy-dumpable`,
+ * `privacy-other-root`, `privacy-own-maps`, `privacy-kept-dirs`,
+ * `privacy-dumpable`, `privacy-kept-files`, `privacy-dev-list`,
+ * `privacy-kept-links`, `privacy-fchdir-owner`, `privacy-fd-walk`,
  * `timer-si-timer`, `timer-overrun`, `timer-delete`, `sigqueue`,
  * `rt-sigqueueinfo`, `pty-nonblock-eagain`, `pty-writer-sleeps`, `pty-64k`,
  * `pty-whole-lines`, `signalfd-eagain`, `signalfd-read`, `itimer-interval`,
@@ -488,27 +496,306 @@ static int setgids(void)
     return 0;
 }
 
+/* Descriptors kept by privacies_child; its exit closes every one. */
+struct privacy_fds {
+    uid_t user;
+    gid_t group;
+    int dirs[3][2];        /* fd, fdinfo, task; each opened for reading and with O_PATH */
+    struct stat before[3]; /* directory owners before the child's IDs change */
+    int maps;
+    int pathmaps;
+    int info[2]; /* the same fdinfo file, opened for reading and with O_PATH */
+    char info_path[64];
+    int links[7];
+    char link_path[7][64];
+};
+
+/** Whether fstat of fd reports the given owner and complete mode. */
+static int privacy_owner(int fd, uid_t user, gid_t group, mode_t mode)
+{
+    struct stat st;
+
+    return fstat(fd, &st) == 0 && st.st_uid == user && st.st_gid == group && st.st_mode == mode;
+}
+
+/** Open the three directories before changing IDs; 0, or 1 on failure. */
+static int privacy_dirs_open(struct privacy_fds *p)
+{
+    static const char *const paths[] = {"/proc/self/fd", "/proc/self/fdinfo", "/proc/self/task"};
+    int i;
+
+    for (i = 0; i < 3; i++) {
+        p->dirs[i][0] = open(paths[i], O_RDONLY | O_DIRECTORY);
+        p->dirs[i][1] = open(paths[i], O_PATH | O_DIRECTORY);
+        if (p->dirs[i][0] < 0 || p->dirs[i][1] < 0 || fstat(p->dirs[i][0], &p->before[i]) != 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /**
- * Run in a child of root: as user 4243, open the root process `parent`'s maps
- * and fd directory and read a link in that directory, which fail with EACCES,
- * open the caller's own maps, and check the owners of its /proc entries
- * before and after PR_SET_DUMPABLE: the 0555 directory is the effective
- * user's throughout, and status is root's until the process is dumpable
- * again, as Linux's task_dump_owner gives them at each stat. The open maps
- * stays root's after it, since Linux sets a file's owner at the lookup of
- * its path (fs/proc/base.c:2693, 2066) and its inode has no getattr to set
- * it again (base.c:776-778), and no path has reached maps since. Returns 0,
- * or the number of the first step that went wrong.
+ * Check that changing IDs leaves each directory's owner alone, and a walk
+ * below fdinfo or task updates it even when the last lookup fails. Returns
+ * 0, or 1 on failure. The caller has changed both IDs since opening them.
+ */
+static int privacy_dirs_kept(struct privacy_fds *p)
+{
+    static const char *const missing[] = {"/proc/self/fdinfo/2147483647",
+                                          "/proc/self/task/2147483647/status"};
+    struct stat st;
+    mode_t mode;
+    int i, j;
+
+    for (i = 0; i < 3; i++) {
+        mode = S_IFDIR | (i == 0 ? 0500 : 0555);
+        for (j = 0; j < 2; j++) {
+            if (!privacy_owner(p->dirs[i][j], p->before[i].st_uid, p->before[i].st_gid, mode)) {
+                return 1;
+            }
+        }
+    }
+    for (i = 1; i < 3; i++) {
+        if (stat(missing[i - 1], &st) != -1 || errno != ENOENT) {
+            return 1;
+        }
+        for (j = 0; j < 2; j++) {
+            if (!privacy_owner(p->dirs[i][j], p->user, p->group, S_IFDIR | 0555)) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/** Open the files and unfollowed links while not dumpable; 0, or 1. */
+static int privacy_leaves_open(struct privacy_fds *p)
+{
+    static const char *const names[] = {"exe", "cwd", "root", "ns/mnt", "ns/uts"};
+    int i;
+
+    p->pathmaps = open("/proc/self/maps", O_PATH);
+    snprintf(p->info_path, sizeof p->info_path, "/proc/self/fdinfo/%d", p->maps);
+    p->info[0] = open(p->info_path, O_RDONLY);
+    p->info[1] = open(p->info_path, O_PATH);
+    if (p->pathmaps < 0 || p->info[0] < 0 || p->info[1] < 0) {
+        return 1;
+    }
+    for (i = 0; i < 7; i++) {
+        if (i < 5) {
+            snprintf(p->link_path[i], sizeof p->link_path[i], "/proc/self/%s", names[i]);
+        } else {
+            snprintf(p->link_path[i], sizeof p->link_path[i], "/proc/self/fd/%d",
+                     i == 5 ? p->maps : p->dirs[0][0]);
+        }
+        p->links[i] = open(p->link_path[i], O_PATH | O_NOFOLLOW);
+        if (p->links[i] < 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Check the directory's 0555 mode and owner and status's changing owner
+ * across PR_SET_DUMPABLE, while maps keeps its old owner. Returns 0, or 1.
+ */
+static int privacy_dumpable(struct privacy_fds *p)
+{
+    struct stat st;
+
+    if (stat("/proc/self/", &st) != 0 || st.st_mode != (S_IFDIR | 0555) || st.st_uid != p->user ||
+        st.st_gid != p->group || stat("/proc/self/status", &st) != 0 || st.st_uid != 0 ||
+        st.st_gid != 0 || !privacy_owner(p->maps, 0, 0, S_IFREG | 0444)) {
+        return 1;
+    }
+    if (prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0 || stat("/proc/self/", &st) != 0 ||
+        st.st_mode != (S_IFDIR | 0555) || st.st_uid != p->user || st.st_gid != p->group ||
+        stat("/proc/self/status", &st) != 0 || st.st_uid != p->user || st.st_gid != p->group ||
+        !privacy_owner(p->maps, 0, 0, S_IFREG | 0444)) {
+        return 1;
+    }
+    return 0;
+}
+
+/**
+ * Check the retained owners of normal and O_PATH files after dumpability
+ * changes, then their update by stat, including fdinfo's 0444 mode. 0, or 1.
+ */
+static int privacy_files_kept(struct privacy_fds *p)
+{
+    struct stat st;
+    int i;
+
+    if (!privacy_owner(p->pathmaps, 0, 0, S_IFREG | 0444)) {
+        return 1;
+    }
+    for (i = 0; i < 2; i++) {
+        if (!privacy_owner(p->info[i], 0, 0, S_IFREG | 0444)) {
+            return 1;
+        }
+    }
+    if (stat("/proc/self/maps", &st) != 0 || st.st_uid != p->user || st.st_gid != p->group ||
+        !privacy_owner(p->maps, p->user, p->group, S_IFREG | 0444) ||
+        !privacy_owner(p->pathmaps, p->user, p->group, S_IFREG | 0444) ||
+        stat(p->info_path, &st) != 0 || st.st_mode != (S_IFREG | 0444) || st.st_uid != p->user ||
+        st.st_gid != p->group) {
+        return 1;
+    }
+    for (i = 0; i < 2; i++) {
+        if (!privacy_owner(p->info[i], p->user, p->group, S_IFREG | 0444)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** List /dev, including fd, without changing /proc/self/fd's owner; 0, or 1. */
+static int privacy_dev_list(struct privacy_fds *p)
+{
+    DIR *d = opendir("/dev");
+    struct dirent *entry;
+    int found = 0, error, i;
+
+    if (!d) {
+        return 1;
+    }
+    errno = 0;
+    while ((entry = readdir(d)) != NULL) {
+        if (strcmp(entry->d_name, "fd") == 0) {
+            found = 1;
+        }
+    }
+    error = errno;
+    if (closedir(d) != 0 || error != 0 || !found) {
+        return 1;
+    }
+    for (i = 0; i < 2; i++) {
+        if (!privacy_owner(p->dirs[0][i], 0, 0, S_IFDIR | 0500)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Check each unfollowed link's old owner, then update it by lstat without
+ * changing any other link's owner, including another namespace or fd link.
+ * Returns 0, or 1 on failure; Linux's fd-link modes depend on the target.
+ */
+static int privacy_links_kept(struct privacy_fds *p)
+{
+    struct stat st;
+    int i, j;
+
+    for (i = 0; i < 7; i++) {
+        for (j = i; j < 7; j++) {
+            if (fstat(p->links[j], &st) != 0 || !S_ISLNK(st.st_mode) || st.st_uid != 0 ||
+                st.st_gid != 0) {
+                return 1;
+            }
+        }
+        if (lstat(p->link_path[i], &st) != 0 || !S_ISLNK(st.st_mode) || st.st_uid != p->user ||
+            st.st_gid != p->group || fstat(p->links[i], &st) != 0 || !S_ISLNK(st.st_mode) ||
+            st.st_uid != p->user || st.st_gid != p->group) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Have a separate process try fchdir on the inherited fd; 0 if it gets
+ * error (0 for success), 1 otherwise. The child exits and is reaped here,
+ * and cannot use Linux's exception that lets a process enter its own fd.
+ */
+static int privacy_chdir(int fd, int error)
+{
+    pid_t pid = fork();
+    int rc, status;
+
+    if (pid == 0) {
+        rc = fchdir(fd);
+        _exit(error == 0 ? rc != 0 : !(rc == -1 && errno == error));
+    }
+    if (pid < 0) {
+        return 1;
+    }
+    do {
+        rc = waitpid(pid, &status, 0);
+    } while (rc < 0 && errno == EINTR);
+    return rc != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0;
+}
+
+/**
+ * Give fd a root owner, then make the process dumpable without another
+ * lookup. Its inherited descriptors must refuse fchdir. Returns 0, or 1.
+ */
+static int privacy_chdir_kept(struct privacy_fds *p)
+{
+    struct stat st;
+    int i;
+
+    if (prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0 || stat("/proc/self/fd", &st) != 0 ||
+        st.st_uid != 0 || st.st_gid != 0 || prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0) {
+        return 1;
+    }
+    for (i = 0; i < 2; i++) {
+        if (!privacy_owner(p->dirs[0][i], 0, 0, S_IFDIR | 0500) ||
+            privacy_chdir(p->dirs[0][i], EACCES)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Walk through fd to update its owner; after clearing dumpability again,
+ * its descriptors keep that owner and allow another process's fchdir.
+ * Returns 0, or 1 on failure.
+ */
+static int privacy_fd_walk(struct privacy_fds *p)
+{
+    struct stat st;
+    char path[64];
+    int i;
+
+    snprintf(path, sizeof path, "/proc/self/fd/%d", p->maps);
+    if (stat(path, &st) != 0) {
+        return 1;
+    }
+    for (i = 0; i < 2; i++) {
+        if (!privacy_owner(p->dirs[0][i], p->user, p->group, S_IFDIR | 0500)) {
+            return 1;
+        }
+    }
+    if (prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0) {
+        return 1;
+    }
+    for (i = 0; i < 2; i++) {
+        if (!privacy_owner(p->dirs[0][i], p->user, p->group, S_IFDIR | 0500) ||
+            privacy_chdir(p->dirs[0][i], 0)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Run the privacy rows in a child of root, changing both IDs to the test's
+ * user and group. All descriptors and the changed credentials die with the
+ * child. Returns 0, or the step that failed, which privacies maps to a row.
  */
 static int privacies_child(pid_t parent)
 {
+    struct privacy_fds p;
     char path[64], link[64];
-    uid_t user = (uid_t)probe_id(4243);
-    struct stat st;
     DIR *d;
-    int fd;
 
-    if (setuid(user) != 0) {
+    p.user = (uid_t)probe_id(4243);
+    p.group = (gid_t)probe_id(4242);
+    if (privacy_dirs_open(&p) || setgid(p.group) != 0 || setuid(p.user) != 0 ||
+        prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0) {
         return 1;
     }
     snprintf(path, sizeof path, "/proc/%d/maps", (int)parent);
@@ -524,53 +811,70 @@ static int privacies_child(pid_t parent)
     if (readlink(path, link, sizeof link) != -1 || errno != EACCES) {
         return 3;
     }
-    fd = open("/proc/self/maps", O_RDONLY);
-    if (fd < 0) {
+    p.maps = open("/proc/self/maps", O_RDONLY);
+    if (p.maps < 0 || read(p.maps, link, sizeof link) <= 0) {
         return 4;
     }
-    if (stat("/proc/self/", &st) != 0 || st.st_uid != user || stat("/proc/self/status", &st) != 0 ||
-        st.st_uid != 0 || fstat(fd, &st) != 0 || st.st_uid != 0 ||
-        prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0 || stat("/proc/self/", &st) != 0 ||
-        st.st_uid != user || stat("/proc/self/status", &st) != 0 || st.st_uid != user ||
-        fstat(fd, &st) != 0 || st.st_uid != 0) {
+    if (privacy_dirs_kept(&p)) {
         return 5;
     }
-    return 0;
+    if (privacy_leaves_open(&p) || privacy_dumpable(&p)) {
+        return 6;
+    }
+    if (privacy_files_kept(&p)) {
+        return 7;
+    }
+    if (privacy_dev_list(&p)) {
+        return 8;
+    }
+    if (privacy_links_kept(&p)) {
+        return 9;
+    }
+    if (privacy_chdir_kept(&p)) {
+        return 10;
+    }
+    return privacy_fd_walk(&p) ? 11 : 0;
 }
 
-/**
- * Run `privacies_child` in a child and judge its exit status, which also says
- * which of the three rows of etude's report failed: another user's opens, the
- * child's own maps, and its /proc directory. Returns 0, or 1 after the
- * failure is printed.
- */
+/** Run the privacy child and report its nine rows in order; 0, or 1. */
 static int privacies(void)
 {
-    int status;
+    static const char *const failures[] = {
+        "privacy setup or another user's access to a root process",
+        "a child of user 4243 could not read its own maps",
+        "retained /proc directory owners across changed IDs and failed walks",
+        "/proc directory mode or owner across PR_SET_DUMPABLE",
+        "retained /proc file owners or fdinfo mode",
+        "listing /dev changed a retained /proc owner",
+        "retained /proc link owners or their separate lookup updates",
+        "fchdir ignored a retained root owner",
+        "a walk through fd did not update its owner, or fchdir lost that owner"};
+    int status, row;
     int base = rows_reported;
-    pid_t pid, parent = getpid();
+    pid_t pid, waited, parent = getpid();
 
     pid = fork();
     if (pid == 0) {
         _exit(privacies_child(parent));
     }
-    if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status)) {
+    if (pid < 0) {
+        return fail("fork for /proc privacy");
+    }
+    do {
+        waited = waitpid(pid, &status, 0);
+    } while (waited < 0 && errno == EINTR);
+    if (waited != pid || !WIFEXITED(status)) {
         return fail("a child of user 4243");
     }
-    if (WEXITSTATUS(status) == 2 || WEXITSTATUS(status) == 3) {
-        return fail("another user opened a root process's maps or fd directory, or read "
-                    "one of its descriptors' links");
-    }
-    if (WEXITSTATUS(status) == 5) {
-        held_to(base + 2);
-        return fail("a /proc entry of a process of user 4243 had an owner Linux does not give, "
-                    "before or after PR_SET_DUMPABLE");
-    }
     if (WEXITSTATUS(status) != 0) {
-        held_to(base + (WEXITSTATUS(status) == 4 ? 1 : 0));
-        return fail("a child of user 4243 could not become it or read its own maps");
+        row = WEXITSTATUS(status) > 3 ? WEXITSTATUS(status) - 3 : 0;
+        if (row >= (int)(sizeof failures / sizeof failures[0])) {
+            return fail("unknown /proc privacy step");
+        }
+        held_to(base + row);
+        return fail(failures[row]);
     }
-    held_to(base + 3);
+    held_to(base + (int)(sizeof failures / sizeof failures[0]));
     return 0;
 }
 
@@ -2370,7 +2674,13 @@ static const char *const after_rows[] = {"clock-adjtime",
                                          "setgid-dir",
                                          "privacy-other-root",
                                          "privacy-own-maps",
+                                         "privacy-kept-dirs",
                                          "privacy-dumpable",
+                                         "privacy-kept-files",
+                                         "privacy-dev-list",
+                                         "privacy-kept-links",
+                                         "privacy-fchdir-owner",
+                                         "privacy-fd-walk",
                                          "timer-si-timer",
                                          "timer-overrun",
                                          "timer-delete",
