@@ -136,7 +136,13 @@ and
 with both halves shut
 .Dv POLLHUP
 too.
-Datagrams are still taken, and a send still goes.
+Datagrams are still taken.
+With the sending half shut, a send on a UDP or ICMP datagram socket fails
+with
+.Er EPIPE
+and posts no
+.Dv SIGPIPE ,
+as on Linux, while a send on a raw socket still goes.
 A socket with no peer set by
 .Xr connect 2
 returns

@@ -563,8 +563,10 @@ on an append-only file, or a write to a memfd sealed with
 would pass its end with no byte of the write before the last 2 MiB
 boundary at or below that end.
 .It Er EPIPE
-A pipe has no reader, or a stream socket can no longer send and has
-no recorded error.
+A pipe has no reader, a stream socket can no longer send and has
+no recorded error, or
+.Xr shutdown 2
+shut the sending half of a connected UDP socket.
 .It Er EROFS
 The mount is read-only or its type has no write operation.
 .It Er ESPIPE
