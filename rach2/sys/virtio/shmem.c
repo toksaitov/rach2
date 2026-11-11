@@ -828,14 +828,36 @@ static int backing_adopt(struct vshm *vs, struct shmem *sh, uint32_t at, uint32_
     return 0;
 }
 
-/** Give the heap back each of the first `n` pages of `sh` that is the
- * region's frame for a heap page. */
-static void backing_give(struct vshm *vs, struct shmem *sh, uint32_t n)
+/** The first page of `sh` from `i` on, short of `end`, in a leaf its
+ * table has, or `end`: a leaf the table lacks holds no page and is passed
+ * whole, as is the table's reach past the pages it adopted. */
+static uint32_t backing_next(const struct shmem *sh, uint32_t i, uint32_t end)
+{
+    uint32_t leaf = i / SHMEM_LEAF;
+
+    if (end > sh->npages) {
+        end = sh->npages;
+    }
+    while (leaf < sh->nleaves && !sh->leaves[leaf]) {
+        leaf++;
+    }
+    if (leaf >= sh->nleaves) {
+        return end;
+    }
+    if (i < leaf * SHMEM_LEAF) {
+        i = leaf * SHMEM_LEAF;
+    }
+    return i < end ? i : end;
+}
+
+/** Give the heap back each page of `sh` in [from, to) that is the region's
+ * frame for a heap page. */
+static void backing_give(struct vshm *vs, struct shmem *sh, uint32_t from, uint32_t to)
 {
     uint32_t i, page;
     uintptr_t frame;
 
-    for (i = 0; i < n; i++) {
+    for (i = from; i < to; i++) {
         frame = shmem_resident(sh, i);
         page = frame ? vshm_page_of(vs, frame) : vs->npages;
         if (page < vs->npages && page >= heap_page(vs, 0) && vs->frames[page] == frame) {
@@ -873,7 +895,7 @@ static int vs_backing_fill(struct virtio_dev *d, struct shmem *sh, uint64_t byte
     }
     if (rc != 0) {
         heap_refused(vs);
-        backing_give(vs, sh, n);
+        backing_give(vs, sh, 0, n);
         shmem_free(sh);
         sh->size = bytes;
     }
@@ -907,31 +929,49 @@ static void gone_give(struct vshm *vs, uintptr_t frame)
     }
 }
 
-/** Give the heap back the pages `vs_backing_fill` gave `sh`: each page that
+/**
+ * Give the heap back the pages `vs_backing_fill` gave `sh`: each page that
  * holds the region's frame for a heap page, the detached region's too.
- * Takes vshm_lock, as vs_dma_free does. */
+ * Only the pages the table reaches and the leaves it has are walked, so a
+ * buffer refused at its fill, which may be as large as SHMEM_MAX_SIZE and
+ * holds no page, costs nothing. vshm_lock, under which the detach moves
+ * the record from its heap to the kept list, is taken for a leaf at a time
+ * and let go between, with the record's state read again at each take, as
+ * Linux breaks a long walk under a spinlock with cond_resched_lock
+ * (kernel/sched/core.c:7353-7369 in 6.12.115); the record outlives the
+ * call by the driver's reference, and its tables by the pages `sh` still
+ * holds, which keep `heap_used` above 0 until the last is given back.
+ */
 static void vs_backing_release(struct virtio_dev *d, struct shmem *sh)
 {
     struct vshm *vs = to_vs(d);
     struct vshm_tables t = {NULL, NULL, NULL};
-    uint32_t n = (uint32_t)(sh->size / VGS_PAGE + (sh->size % VGS_PAGE != 0)), i, flags;
+    uint64_t pages = sh->size / VGS_PAGE + (sh->size % VGS_PAGE != 0);
+    uint32_t end = pages < sh->npages ? (uint32_t)pages : sh->npages, i, j, stop, flags;
     uintptr_t frame;
+    int more = 1;
 
-    flags = spin_lock_irqsave(&vshm_lock);
-    if (vs->attached) {
-        backing_give(vs, sh, n);
-    } else if (vs->gone) {
-        for (i = 0; i < n; i++) {
-            frame = shmem_resident(sh, i);
-            if (frame) {
-                gone_give(vs, frame);
+    for (i = backing_next(sh, 0, end); more && i < end; i = backing_next(sh, stop, end)) {
+        stop = end - i > SHMEM_LEAF ? i + SHMEM_LEAF : end;
+        flags = spin_lock_irqsave(&vshm_lock);
+        if (vs->attached) {
+            backing_give(vs, sh, i, stop);
+        } else if (vs->gone) {
+            for (j = i; j < stop; j++) {
+                frame = shmem_resident(sh, j);
+                if (frame) {
+                    gone_give(vs, frame);
+                }
             }
+            if (vs->heap_used == 0) {
+                vshm_gone_free(vs, &t);
+                more = 0;
+            }
+        } else {
+            more = 0;
         }
-        if (vs->heap_used == 0) {
-            vshm_gone_free(vs, &t);
-        }
+        spin_unlock_irqrestore(&vshm_lock, flags);
     }
-    spin_unlock_irqrestore(&vshm_lock, flags);
     vshm_tables_free(&t);
 }
 
