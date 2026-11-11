@@ -618,6 +618,10 @@ struct process {
      * last_switch_count and last_switch_time. */
     unsigned long last_switch_count;
     uint64_t last_switch_time;
+    /* Signal work assigned to this thread, like Linux's TIF_SIGPENDING.
+     * A post marks only the chosen thread; only that thread recomputes it
+     * after changing its mask or taking signals. */
+    uint32_t sig_woken;
 };
 
 typedef struct process process_t;
@@ -885,8 +889,8 @@ void signal_post(process_t *target, int signo);
 
 /**
  * Post `signo` to the process `target` is a thread of, with the siginfo
- * `info`: set the process's pending bit, keeping `info` when the signal was
- * not pending already, and wake, whatever the signal's disposition,
+ * `info`: unless it is ignored or the process is ending, set the process's
+ * pending bit, keeping `info` when the signal was not pending already, and wake
  * `target` when it can take the signal, else another thread that can, else
  * `target`. Job control acts at once: SIGCONT ends a stop and cancels the
  * pending stop signals, SIGKILL makes the stopped threads ready, and a stop
