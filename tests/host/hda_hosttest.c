@@ -1050,6 +1050,9 @@ static void row_missed(void)
     from = played_count;
     tick();
     check(missed_revolutions == 14 && lpib_wraps >= 14, "14 revolutions missed");
+    check(hda_report.service.missed == 14 && hda_report.service.revolution_us != 0 &&
+              hda_report.service.asked_valid == 0,
+          "the report counts the 14 misses and the buffer's duration, no request");
     check(ring_available() == 0 && session_bytes_dropped > 0, "the ring's stale blocks dropped");
     check(hw_period_last == 0, "the service is in step with the period playing");
     run_ticks(30, &next);
