@@ -26,7 +26,8 @@ but on the 32-bit game, which need only complete its loops.
 `hud` loads SAVE, a checkpoint before the suit's reboot on the first level,
 enters the reboot's trigger at the console and reads the HUD back 35 s later
 from a screenshot, the dialog's line times and a save's GameRules. `save`
-starts the first level, saves as accept_NAME and records the save's SHA-256
+starts the first level, saves as accept_NAME once its opening cinematic, in
+which the game refuses a save, has played, and records the save's SHA-256
 in /data/crysis/accept.json; `load` loads SAVE through PREFIX, the game's own
 prefix unless given, and requires the level loaded and the save's bytes as
 recorded. `restore` gives the game's directory back to its recorded owner.
@@ -293,6 +294,50 @@ class Game:
         say("shot: %s %s" % (name, "written" if new else "missing"))
         return bool(new)
 
+    def prompt(self):
+        """Return whether the loading screen's "PRESS ANY KEY TO CONTINUE"
+        shows: white text across the middle of its box, at 1366x768 a band
+        from (560, 680) to (805, 696), which the level leaves dark."""
+        shots = self.out / "prompt"
+        shots.mkdir(exist_ok=True)
+        os.chown(shots, UID, UID)
+        for old in shots.glob("*.png"):
+            old.unlink()
+        subprocess.run(desktop("XDG_PICTURES_DIR=%s exec weston-screenshooter" % shots),
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        found = sorted(shots.glob("*.png"))
+        if not found:
+            return False
+        width, height, bpp, rows = wm.png_rows(found[-1], 696)
+        if (width, height) != (1366, 768):
+            return False
+        white = 0
+        for y in range(680, 697):
+            row = rows[y]
+            for x in range(560, 806):
+                r, g, b = row[x * bpp:x * bpp + 3]
+                white += r > 200 and g > 200 and b > 200
+        return white > 150
+
+    def go_on(self):
+        """Pass the loading screen's prompt with Return once it shows, and
+        return whether it showed and went; the prompt takes no key before it
+        shows, nor the console a line."""
+        seen = False
+        for _ in range(60):
+            if self.proc.poll() is not None:
+                break
+            if self.prompt():
+                seen = True
+                self.keys("Return", 2)
+            elif seen:
+                say("prompt: passed")
+                return True
+            else:
+                time.sleep(2)
+        say("prompt: %s" % ("still shown" if seen else "never shown"))
+        return False
+
     def end(self):
         """End the game, its Wine server and, on umu, its container, then
         keep its logs and the kernel's lines of missing calls."""
@@ -399,8 +444,8 @@ def load_save(game, save, what):
     ok = game.wait(lambda: game.loaded() is not None, what)
     check(what, ok, "%s: level loaded in %s s" % (save, game.loaded()))
     if ok:
-        # The loading screen waits for a key before the level plays.
-        game.keys(3, "Return", 5)
+        ok = game.go_on()
+        check("prompt", ok, "the loading screen's prompt passed")
     return ok
 
 
@@ -457,18 +502,23 @@ def save(name, route):
     for old in SAVEGAMES.glob("default_%s.*" % tag):
         old.unlink()
     game = Game(out, route, ["+map", "island"])
+    path = SAVEGAMES / ("default_%s.CRYSISJMSF" % tag)
     try:
-        ok = game.wait(lambda: game.loaded() is not None, "load")
-        check("load", ok, "island loaded in %s s" % game.loaded())
-        if ok:
-            game.keys(3, "Return", 20)
-            game.console("save " + tag)
-            game.wait(lambda: any(SAVEGAMES.glob("default_%s.CRYSISJMSF" % tag)), "save")
-            game.keys(5)
+        if load_save(game, "island", "load"):
+            # The level opens with its cinematic, the date card and the night
+            # jump, during which the game refuses a save; try again until
+            # one is written.
+            game.keys(90)
+            for attempt in range(12):
+                game.console("save " + tag)
+                game.keys(10)
+                if path.exists():
+                    say("save: written at attempt %d" % (attempt + 1))
+                    break
+            game.keys(3)
             game.shot("saved")
     finally:
         game.end()
-    path = SAVEGAMES / ("default_%s.CRYSISJMSF" % tag)
     check("saved", path.exists(), str(path))
     if path.exists():
         saves = record()
