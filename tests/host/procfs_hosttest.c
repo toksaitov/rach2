@@ -3349,8 +3349,44 @@ static void input_protocol_rows(void)
           "removing protocol files preserves the port's own files");
 }
 
+/** Make the pass-through port with no device below it, as a pad whose
+ * port has no guest has it, through the real registry: a guest bound later
+ * goes below it, and it outlives the guest until it is removed. The pad's
+ * device, input_devs[0], is published. */
+static void input_unbound_port_rows(void)
+{
+    struct evdev_desc *guest = &input_devs[1];
+    int parent, bus, dir;
+
+    parent = child(child(sysfs_anchor_find(SYSFS_PLATFORM, 0), "i8042"), "serio1");
+    bus = child(child(sysfs_anchor_find(SYSFS_BUS, 0), "serio"), "devices");
+    evdev_sysfs_serio_add(EVDEV_SERIO_PASS_THROUGH);
+    dir = child(parent, "serio2");
+    check(dir > 0 && child(dir, "description") > 0 &&
+              sysfs_node_target(child(bus, "serio2")) == dir,
+          "a port asked for without a device is made at once below serio1");
+    guest->gen++;
+    input_present[1] = 1;
+    evdev_sysfs_serio_files(EVDEV_SERIO_PASS_THROUGH, add_guest_protocol);
+    evdev_sysfs_sync();
+    check(child(parent, "serio2") == dir && child(in_class, "event1") > 0 &&
+              reg_is(child(dir, "sensitivity"), "1\n"),
+          "a guest bound later goes below the same port");
+    input_present[1] = 0;
+    evdev_sysfs_serio_files(EVDEV_SERIO_PASS_THROUGH, NULL);
+    evdev_sysfs_sync();
+    check(child(parent, "serio2") == dir && !child(in_class, "event1") &&
+              !child(dir, "sensitivity"),
+          "the port stays when its guest and the guest's files go");
+    evdev_sysfs_serio_remove(EVDEV_SERIO_PASS_THROUGH);
+    evdev_sysfs_sync();
+    check(!child(parent, "serio2") && !child(bus, "serio2"),
+          "its removal ends the request, and a sync does not make it again");
+}
+
 /** Publish, remove and recreate a pass-through port through the real
- * sysfs registry, including its input and bus links and its callbacks. */
+ * sysfs registry, including its input and bus links and its callbacks, and
+ * make one with no device below it (`input_unbound_port_rows`). */
 static void input_guest_rows(void)
 {
     struct evdev_desc *pad = &input_devs[0], *guest = &input_devs[1];
@@ -3418,6 +3454,7 @@ static void input_guest_rows(void)
           "a new binding recreates the child port with its current callbacks and link");
     input_present[1] = 0;
     evdev_sysfs_serio_remove(EVDEV_SERIO_PASS_THROUGH);
+    input_unbound_port_rows();
     input_present[0] = 0;
     evdev_sysfs_sync();
 }

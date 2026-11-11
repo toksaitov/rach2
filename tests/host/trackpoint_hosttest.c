@@ -645,6 +645,11 @@ void evdev_sysfs_serio_remove(int port)
     (void)port;
 }
 
+void evdev_sysfs_serio_add(int port)
+{
+    (void)port;
+}
+
 /** This model has no competing command caller. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {

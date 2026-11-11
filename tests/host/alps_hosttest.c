@@ -630,6 +630,22 @@ int synaptics_reconnect(void)
 void synaptics_disconnect(void)
 {}
 
+unsigned int synaptics_relative_caps(void)
+{
+    return 0;
+}
+
+uint16_t synaptics_model(void)
+{
+    return 0;
+}
+
+int synaptics_sysfs_add(int dir)
+{
+    (void)dir;
+    return 0;
+}
+
 /* The kind the stub's TrackPoint answered, 0 for none. */
 static uint8_t tp_kind;
 
@@ -677,6 +693,11 @@ int trackpoint_sysfs_add(int dir)
 
 /** No sysfs tree is published by this model. */
 void evdev_sysfs_serio_remove(int port)
+{
+    (void)port;
+}
+
+void evdev_sysfs_serio_add(int port)
 {
     (void)port;
 }

@@ -350,13 +350,13 @@ void klog(int level, const char *subsystem, const char *format, ...)
     }
 }
 
-/** No Synaptics touchpad answers. */
 /** The relative-mode probe sees the same modeled device. */
 int synaptics_init_relative(void)
 {
     return synaptics_init();
 }
 
+/** No Synaptics touchpad answers. */
 int synaptics_init(void)
 {
     return 0;
@@ -412,6 +412,22 @@ int synaptics_reconnect(void)
 void synaptics_disconnect(void)
 {}
 
+unsigned int synaptics_relative_caps(void)
+{
+    return 0;
+}
+
+uint16_t synaptics_model(void)
+{
+    return 0;
+}
+
+int synaptics_sysfs_add(int dir)
+{
+    (void)dir;
+    return 0;
+}
+
 int trackpoint_detect(const struct ps2io *io)
 {
     (void)io;
@@ -448,6 +464,11 @@ int trackpoint_sysfs_add(int dir)
 
 /** No sysfs tree is published by this model. */
 void evdev_sysfs_serio_remove(int port)
+{
+    (void)port;
+}
+
+void evdev_sysfs_serio_add(int port)
 {
     (void)port;
 }
@@ -519,6 +540,12 @@ void evdev_set_prop(struct evdev *dev, unsigned int prop)
 {
     (void)dev;
     (void)prop;
+}
+
+void evdev_set_version(struct evdev *dev, uint16_t version)
+{
+    (void)dev;
+    (void)version;
 }
 
 void evdev_unregister(struct evdev *dev)
