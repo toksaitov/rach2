@@ -29,6 +29,9 @@
 #define MSR_IA32_MCG_CTL       0x17Bu
 #define MSR_IA32_MISC_ENABLE   0x1A0u
 #define MSR_IA32_DEBUGCTL      0x1D9u
+#define DEBUGCTL_LBR           0x1ull
+#define DEBUGCTL_BTF           0x2ull
+#define DEBUGCTL_PINS          0x3Cull /* bits 5:2, which Linux's SVM drops */
 #define MSR_MTRR_PHYS_BASE0    0x200u
 #define MSR_MTRR_FIX_64K       0x250u
 #define MSR_MTRR_FIX_16K_80000 0x258u
@@ -179,11 +182,9 @@ const uint32_t *kvm_msr_list(int feature, uint32_t *n)
     for (i = 0; i < *n; i++) {
         list[i] = index_list[i];
     }
-    /* VMX keeps the guest's DEBUGCTL, which Linux saves among
-     * msrs_to_save_base (arch/x86/kvm/x86.c:323); SVM keeps none. */
-    if (kvm_backend == &kvm_vmx) {
-        list[(*n)++] = MSR_IA32_DEBUGCTL;
-    }
+    /* Linux saves DEBUGCTL among msrs_to_save_base (arch/x86/kvm/x86.c:323)
+     * wherever the host reads it, as every host with VMX or SVM does. */
+    list[(*n)++] = MSR_IA32_DEBUGCTL;
     *n += kvm_pmu_msr_list(list + *n);
     return list;
 }
@@ -440,6 +441,10 @@ int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value, int host)
         }
         *value = 0;
         return 0;
+    case MSR_IA32_DEBUGCTL:
+        /* SVM's, which keeps no bit; VMX's is kvm_pmu_msr's. */
+        *value = 0;
+        return 0;
     default:
         break;
     }
@@ -635,6 +640,13 @@ int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value, int host)
          * Linux 6.12's kvm_caps.supported_xss; Linux lists it with
          * neither the MSRs to save nor the emulated ones. */
         return (host || guest_xsaves(v)) && value == 0 ? 0 : KVM_MSR_INVAL;
+    case MSR_IA32_DEBUGCTL:
+        /* SVM's, reached by the caller and the guest alike, with the checks
+         * of Linux's svm_set_msr (arch/x86/kvm/svm/svm.c:3223-3258): bits
+         * 5:2 and BTF dropped, any bit but LBR refused. LBR is dropped too,
+         * since SVM here does not virtualize the LBR stack, and DEBUGCTL
+         * reads 0, as svm_get_msr without lbrv (svm.c:2966-2968). */
+        return (value & ~(DEBUGCTL_LBR | DEBUGCTL_BTF | DEBUGCTL_PINS)) ? KVM_MSR_INVAL : 0;
     case MSR_IA32_UCODE_REV:
         v->ucode_rev = value;
         break;
