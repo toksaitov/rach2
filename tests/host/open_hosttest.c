@@ -1818,6 +1818,17 @@ uint32_t procfs_ino_pid(int pid)
     return 0;
 }
 
+/** Fail the row: no row's path is of /proc. */
+int procfs_pid_owner(int pid, uint32_t mode, uint32_t *uid, uint32_t *gid)
+{
+    (void)pid;
+    (void)mode;
+    (void)uid;
+    (void)gid;
+    check(0, "unexpected /proc lookup");
+    return -ENOENT;
+}
+
 /** Find the model process for a followed /proc/PID/fd link. */
 process_t *get_process(uint32_t pid)
 {
