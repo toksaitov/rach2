@@ -49,6 +49,19 @@ The peer's final acknowledgement then finds no connection: with no listener
 on the port it is answered with a reset, and a listener opened on the port
 since ignores it, so a connection begun under one listener is never
 accepted by another.
+Each completed connection still queued is ended with a reset, whether
+or not its peer's data was read, as Linux's inet_csk_listen_stop ends
+it, so the peer reads
+.Er ECONNRESET
+rather than end of input.
+A
+.Xr shutdown 2
+with
+.Dv SHUT_RD
+or
+.Dv SHUT_RDWR
+stops a listener the same way and leaves the socket free to listen
+again.
 .Pp
 TCP control blocks are allocated from the kernel heap, with no fixed
 pool size.

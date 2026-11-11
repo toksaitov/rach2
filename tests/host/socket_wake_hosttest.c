@@ -13,8 +13,18 @@
  * frees send-ring space wakes it for room alone; a FIN, a connection that
  * completes or ends, and a connection queued on a listener wake it for every
  * kind. So an edge-triggered epoll registration of a socket for output alone
- * is not told of data that comes, nor one for input alone of room made. The
- * protocol layers are substitutes that no row calls.
+ * is not told of data that comes, nor one for input alone of room made.
+ *
+ * The answers after shutdown(2) and a listener's close are checked with the
+ * same file: a stream shut for receiving whose connection was then reset
+ * reads ECONNRESET once and then 0, as Linux's tcp_recvmsg_locked tests
+ * sk_err before RCV_SHUTDOWN; a send on a socket a shutdown in SYN_SENT left
+ * with no block fails with ECONNRESET once and then EPIPE, as
+ * sk_stream_wait_connect gives sock_error first; a UDP socket shut for
+ * receiving ends a blocking receive with 0 once its queue is empty and polls
+ * POLLIN and POLLRDHUP, and POLLHUP shut both ways, as datagram_poll; and a
+ * closing listener resets each queued connection before releasing it, as
+ * inet_csk_listen_stop. The protocol layers are substitutes.
  */
 #include "network/socket/socket.c"
 #include "ns_first.h"
@@ -83,13 +93,15 @@ void wait_queue_init(wait_queue_t *wq)
     wq->head = NULL;
 }
 
-/** Fail the row and return -EINTR: no row waits. */
+/** Return 0 when `cond` holds already; otherwise fail the row and return
+ * -EINTR, since no process could end the wait in this model. */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
-    (void)cond;
-    (void)arg;
-    CHECK(0, "no row waits");
+    if (cond(arg)) {
+        return 0;
+    }
+    CHECK(0, "no row waits for a condition that does not hold");
     return -EINTR;
 }
 
@@ -174,14 +186,27 @@ uint32_t raw_head_src(struct socket *sock)
     return 0;
 }
 
-/** Fail the row and return 0: no row sends. */
+/** Return -1 for a socket with no block, as the kernel's does; fail the row
+ * otherwise, since no row sends on a connection. */
 int tcp_send(struct socket *sock, const uint8_t *buf, int len)
 {
-    (void)sock;
     (void)buf;
     (void)len;
-    CHECK(0, "no row sends");
+    if (!sock->tcb) {
+        return -1;
+    }
+    CHECK(0, "no row sends on a connection");
     return 0;
+}
+
+static struct socket *forgotten; /* the socket tcp_forget_queued last ended */
+
+/** Record the queued connection ended, and take its block, as the kernel's
+ * does. */
+void tcp_forget_queued(struct socket *sock)
+{
+    forgotten = sock;
+    sock->tcb = NULL;
 }
 
 /** Close a TCP connection: a no-op. */
@@ -272,6 +297,69 @@ int netlink_ready(struct socket *sock)
     return 0;
 }
 
+/**
+ * The answers of a stream, a UDP socket and a listener after shutdown(2) or
+ * a close, as the file's comment lists them.
+ */
+static void shutdown_rows(void)
+{
+    static struct socket tcp, udp;
+    static struct tcb block;
+    static uint8_t ring[TCP_RECV_RING_SMALL];
+    static const uint8_t bytes[4] = {1, 2, 3, 4};
+    static uint8_t buf[8];
+    struct socket *listener, *conn;
+
+    k_memset(&block, 0, sizeof(block));
+    block.recv_buf = ring;
+    block.recv_size = sizeof(ring);
+    block.state = TCP_CLOSED;
+    block.so_error = ECONNRESET;
+    tcp.tcb = &block;
+    tcp.shutdown = SOCK_RCV_SHUTDOWN;
+    CHECK(socket_tcp_try_recv(&tcp, buf, sizeof(buf), 0) == -ECONNRESET,
+          "a read after SHUT_RD of a reset connection gives ECONNRESET");
+    CHECK(socket_tcp_try_recv(&tcp, buf, sizeof(buf), 0) == 0, "and then the end of input");
+
+    tcp.tcb = NULL;
+    tcp.shutdown = 0;
+    tcp.so_error = ECONNRESET;
+    CHECK(socket_tcp_send(&tcp, bytes, sizeof(bytes), 0) == -ECONNRESET,
+          "a send after a shutdown in SYN_SENT gives the recorded ECONNRESET");
+    CHECK(socket_tcp_send(&tcp, bytes, sizeof(bytes), 0) == -EPIPE, "and then EPIPE");
+
+    udp.rcvbuf = SOCK_RCVBUF_DEFAULT;
+    udp.type = SOCK_DGRAM;
+    udp.shutdown = SOCK_RCV_SHUTDOWN;
+    socket_udp_deliver(&udp, net_addr4(0x0A000002u), 7, bytes, sizeof(bytes));
+    CHECK(socket_dgram_wait(&udp) == 0 &&
+              socket_recv(&udp, buf, sizeof(buf), NULL, NULL, 0) == (int)sizeof(bytes),
+          "a UDP socket shut for receiving still gives the datagram queued");
+    CHECK(socket_dgram_wait(&udp) == SOCK_RECV_SHUT, "and then ends the wait at the shutdown");
+    CHECK(socket_recv(&udp, buf, sizeof(buf), NULL, NULL, 0) == 0,
+          "where a blocking receive returns 0");
+    CHECK(socket_try_recv(&udp, buf, sizeof(buf), NULL, NULL, 0) == SOCK_EAGAIN,
+          "and one that does not wait EAGAIN, as Linux's");
+    CHECK(socket_poll(&udp, (short)(POLLIN | POLLOUT | POLLRDHUP), NULL) ==
+              (short)(POLLIN | POLLOUT | POLLRDHUP),
+          "it polls POLLIN and POLLRDHUP");
+    udp.shutdown |= SOCK_SEND_SHUTDOWN;
+    CHECK((socket_poll(&udp, POLLIN, NULL) & POLLHUP) != 0, "and POLLHUP shut both ways");
+
+    listener = socket_alloc(SOCK_STREAM);
+    conn = socket_alloc(SOCK_STREAM);
+    CHECK(listener && conn, "a listener and a connection can be made");
+    if (!listener || !conn) {
+        return;
+    }
+    listener->listening = 1;
+    conn->tcb = &block;
+    forgotten = NULL;
+    socket_tcp_accept(listener, conn);
+    socket_unref(listener);
+    CHECK(forgotten == conn, "a listener's close resets the connection nobody accepted");
+}
+
 /** Run the rows; return 0 when every one passes and 1 otherwise. */
 int main(void)
 {
@@ -314,6 +402,7 @@ int main(void)
     socket_tcp_accept(&listener, &conn);
     CHECK(woken == &listener.waiters && woken_kinds == WQ_ALL,
           "a connection queued on a listener wakes it for every kind");
+    shutdown_rows();
     printf("socket-wake-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
     return failures ? 1 : 0;
 }
