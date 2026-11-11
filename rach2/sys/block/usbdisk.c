@@ -156,8 +156,11 @@ int usbdisk_holds(int n)
  */
 #define SCAN_CACHE_SECTORS 96 /* sector 0, two headers and arrays, the EBR chain */
 
+static int scan_n = -1; /* the record being read, -1 for none */
+
+/* The scan's cache and buffers, left without an initializer so that their
+   73 KB stay in .bss and out of the kernel file. */
 static struct {
-    int n;      /* the record being read, -1 for none */
     int cached; /* the sectors in `lba` and `sector` */
     uint64_t lba[SCAN_CACHE_SECTORS];
     uint8_t sector[SCAN_CACHE_SECTORS][BLOCK_SECTOR_SIZE];
@@ -171,7 +174,7 @@ static struct {
     uint8_t work[PART_WORK_BYTES];
     struct part_table table;
     uint8_t got[BLOCK_REQ_SECTORS * BLOCK_SECTOR_SIZE]; /* what a finished request read */
-} scan = {-1, 0, {0}, {{0}}, 0, 0, 0, 0, 0, 0, 0, {0}, {0}, {0}};
+} scan;
 
 /**
  * The partition service's read, from the cache. Returns 0, or -1 for a read
@@ -246,7 +249,7 @@ static void scan_done(int n)
     struct disk *d = st->disk;
     block_device_t *dev = msc_lun_device(st->slot, st->lun);
 
-    scan.n = -1;
+    scan_n = -1;
     if (!d || !dev) {
         st->state = STICK_CLOSING;
         return;
@@ -270,7 +273,7 @@ static void scan_advance(void)
 {
     int n, rc;
 
-    if (scan.n < 0) {
+    if (scan_n < 0) {
         for (n = 0; n < USBDISK_MAX; n++) {
             if (sticks[n].state == STICK_SCANNING) {
                 break;
@@ -279,11 +282,11 @@ static void scan_advance(void)
         if (n == USBDISK_MAX) {
             return;
         }
-        scan.n = n;
+        scan_n = n;
         scan.cached = 0;
         scan.request = 0;
     }
-    n = scan.n;
+    n = scan_n;
     if (sticks[n].state != STICK_SCANNING) {
         int status = 0;
 
@@ -292,7 +295,7 @@ static void scan_advance(void)
             return;
         }
         scan.request = 0;
-        scan.n = -1;
+        scan_n = -1;
         return;
     }
     if (scan.request) {
@@ -443,7 +446,7 @@ static void settle(void)
         if (!sticks[n].marked) {
             close_down(n);
         }
-        if (scan.n == n || usbdisk_holds(n) != 0) {
+        if (scan_n == n || usbdisk_holds(n) != 0) {
             continue;
         }
         reclaim(n);

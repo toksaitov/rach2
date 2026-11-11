@@ -470,7 +470,7 @@ static int passes(int limit)
     while (n < limit) {
         usbdisk_step();
         n++;
-        if (scan.n < 0 && !pending && !scanning()) {
+        if (scan_n < 0 && !pending && !scanning()) {
             break;
         }
     }
@@ -578,7 +578,7 @@ int main(void)
     CHECK("and its whole window", d && d->whole.present);
     CHECK("its nodes were made and named", nodes_made == 1 && parts_named >= 1);
     CHECK("the model is the inquiry strings", d && d->model[0] == 'Q' && d->model[2] == 'S');
-    CHECK("and nothing is pending", !pending && scan.n < 0);
+    CHECK("and nothing is pending", !pending && scan_n < 0);
     CHECK("one record is taken", usbdisk_free() == USBDISK_MAX - 1);
 
     mount_holds = 1;
@@ -623,7 +623,7 @@ int main(void)
     plug(0, 0);
     usbdisk_step();
     usbdisk_step();
-    CHECK("the scan is in progress", scan.n == 0 && request_live);
+    CHECK("the scan is in progress", scan_n == 0 && request_live);
     usbdisk_left(0);
     passes(8);
     CHECK("a stick pulled mid-scan is reclaimed", releases == 13 && usbdisk_free() == USBDISK_MAX);
