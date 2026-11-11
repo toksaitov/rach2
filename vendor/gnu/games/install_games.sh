@@ -13,8 +13,9 @@
 # libraries against the root. On x86-64 it adds the Proton launcher as
 # /usr/bin/rach2-game, Crysis's installer as /usr/bin/crysis.sh with its
 # checksum manifests in /usr/share/rach2/crysis, umu-launcher with the Steam
-# Linux Runtime's archive and the native games' replays; on a root with
-# /usr/games it puts that directory on the path. With
+# Linux Runtime's archive, the native games' replays and, with the i386
+# layer, the i386 SuperTuxKart; on a root with /usr/games it puts that
+# directory on the path. With
 # GNU_WESTON 1 it puts the rebuilt Weston in place of the desktop closure's.
 #
 
@@ -82,6 +83,27 @@ if [ "$RACH2_ARCH" = x86_64 ]; then
     mkdir -p "$TREE/usr/share/games/rach2"
     cp -R "$DIR/games/replays" "$TREE/usr/share/games/rach2/replays"
     chmod -R u=rwX,go=rX "$TREE/usr/share/games/rach2"
+    # The i386 SuperTuxKart (i386.list), whose libraries the i386 layer
+    # installed: dpkg would keep one architecture's /usr/games/supertuxkart,
+    # so the i386 one goes beside it under the name mesa-utils-bin gives its
+    # i386 programs, and reads the amd64 package's data, of the same version.
+    if [ "${GNU_I386:-}" = 1 ]; then
+        stk=$(awk '$1 == "supertuxkart" { print $2 }' "$OUT/work/debian/i386/closure.txt")
+        stk64=$(awk '$1 == "supertuxkart" { print $2 }' "$OUT/work/debian/games/closure.txt")
+        if [ -z "$stk" ] || [ "$stk" != "$stk64" ] ||
+            [ ! -f "$OUT/debian/i386/usr/games/supertuxkart" ]; then
+            echo "gnu: games: refused: the i386 closure has SuperTuxKart ${stk:-none}, the games closure ${stk64:-none}" >&2
+            exit 1
+        fi
+        if [ -e "$TREE/usr/games/supertuxkart.i386-linux-gnu" ]; then
+            echo 'gnu: games: /usr/games/supertuxkart.i386-linux-gnu already exists' >&2
+            exit 1
+        fi
+        cp "$OUT/debian/i386/usr/games/supertuxkart" "$TREE/usr/games/supertuxkart.i386-linux-gnu"
+        chmod 0755 "$TREE/usr/games/supertuxkart.i386-linux-gnu"
+        needs "the i386 SuperTuxKart" "$TREE/usr/games/supertuxkart.i386-linux-gnu" \
+            usr/lib/i386-linux-gnu
+    fi
 fi
 
 # The rebuilt Weston (Readme.md, Weston): every file the desktop closure's

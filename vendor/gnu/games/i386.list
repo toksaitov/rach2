@@ -1,0 +1,6 @@
+# The x86-64 root's i386 game, which the i386 layer's step resolves with
+# ../debian/i386.list against the i386 indices of the same snapshot: Debian's
+# SuperTuxKart of the version native.list pins for amd64, so that its
+# benchmark race is the 64-bit one's. Its data package is architecture-free
+# and the games layer's own, so the step leaves it out of the i386 closure.
+supertuxkart=1.4+dfsg-5+b1 i386

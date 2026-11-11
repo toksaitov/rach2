@@ -3,3 +3,4 @@
 innoextract innoextract /usr/bin/innoextract
 pyrogenesis 0ad /usr/games/pyrogenesis
 supertuxkart supertuxkart /usr/games/supertuxkart
+supertuxkart.i386-linux-gnu supertuxkart /usr/games/supertuxkart.i386-linux-gnu
