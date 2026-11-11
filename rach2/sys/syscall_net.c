@@ -3576,14 +3576,17 @@ static uint32_t stream_copy(struct socket *sock, const struct kernel_iovec *iov,
  * cannot be written leaves its buffer queued whole and ends the call with
  * the bytes taken before it, or -EFAULT when there are none, as Linux
  * leaves an sk_buff whose copy fails (:2765-2772).
+ *
+ * The caller holds the socket's `recv_lock`, which this gives up only while
+ * it waits for data, as Linux's sk_wait_data gives up the socket lock
+ * (net/core/sock.c); another reader may take bytes during such a wait, so
+ * the end of input is judged again under the lock after it.
  */
-int32_t stream_readv(fd_entry_t *entry, const struct kernel_iovec *iov, uint32_t iovlen, int flags)
+static int32_t stream_readv_locked(struct socket *sock, const struct kernel_iovec *iov,
+                                   uint32_t iovlen, int flags, int nonblock)
 {
-    struct socket *sock = entry->sock;
     uint32_t i, n, want = 0, copied = 0, target;
     int peek = (flags & MSG_PEEK) != 0;
-    int nonblock =
-        (flags & MSG_DONTWAIT) || (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
     int32_t r;
 
     for (i = 0; i < iovlen; i++) {
@@ -3596,14 +3599,24 @@ int32_t stream_readv(fd_entry_t *entry, const struct kernel_iovec *iov, uint32_t
             if (copied >= target || nonblock) {
                 break;
             }
-            if (socket_tcp_wait_more(sock, peek ? copied : 0) <= 0) {
+            sleep_lock_give(&sock->recv_lock);
+            r = socket_tcp_wait_more(sock, peek ? copied : 0);
+            sleep_lock_take(&sock->recv_lock);
+            if (r <= 0) {
                 break;
             }
             continue;
         }
         if (n == 0) {
-            r = nonblock ? socket_tcp_try_recv(sock, (uint8_t *)0, 0, 1)
-                         : socket_tcp_recv(sock, (uint8_t *)0, 0, 1);
+            r = socket_tcp_try_recv(sock, (uint8_t *)0, 0, 1);
+            if (r == SOCK_EAGAIN && !nonblock) {
+                sleep_lock_give(&sock->recv_lock);
+                r = socket_tcp_recv(sock, (uint8_t *)0, 0, 1);
+                sleep_lock_take(&sock->recv_lock);
+                if (r >= 0) {
+                    continue;
+                }
+            }
             if (r < 0 || want == 0) {
                 return r;
             }
@@ -3627,6 +3640,29 @@ int32_t stream_readv(fd_entry_t *entry, const struct kernel_iovec *iov, uint32_t
         }
     }
     return (int32_t)copied;
+}
+
+/**
+ * Read the stream socket of `entry` into the copied vector `iov` of
+ * `iovlen` elements with MSG_PEEK, MSG_DONTWAIT and MSG_WAITALL from
+ * `flags`, for read(2), readv(2), recv(2), recvfrom(2) and recvmsg(2):
+ * `stream_readv_locked` under the socket's `recv_lock`, which keeps a
+ * second reader from taking a buffer while this one brings in its
+ * destination, as Linux's tcp_recvmsg holds lock_sock across
+ * tcp_recvmsg_locked and its copies (net/ipv4/tcp.c:2869-2871). Returns the
+ * bytes read or -errno.
+ */
+int32_t stream_readv(fd_entry_t *entry, const struct kernel_iovec *iov, uint32_t iovlen, int flags)
+{
+    struct socket *sock = entry->sock;
+    int nonblock =
+        (flags & MSG_DONTWAIT) || (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
+    int32_t r;
+
+    sleep_lock_take(&sock->recv_lock);
+    r = stream_readv_locked(sock, iov, iovlen, flags, nonblock);
+    sleep_lock_give(&sock->recv_lock);
+    return r;
 }
 
 /**

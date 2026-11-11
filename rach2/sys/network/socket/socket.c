@@ -97,6 +97,7 @@ struct socket *socket_alloc(int type)
     sock->pmtudisc = IP_PMTUDISC_WANT;
     sock->local_ip = sock->remote_ip = net_addr4(0);
     wait_queue_init(&sock->waiters);
+    sleep_lock_init(&sock->recv_lock, NULL, 0);
 
     flags = net_lock();
     sock->inode = socket_next_inode();

@@ -5,6 +5,7 @@
 #include "address.h"
 #include "../../proc/process.h"
 #include "../../proc/wait_queue.h"
+#include "../../fs/sleeplock.h"
 
 /*
  * socket: the kernel object behind a descriptor of type FD_TYPE_SOCKET, for
@@ -296,6 +297,10 @@ typedef struct socket {
      * accept. A wake from the receive path wakes every one; each checks its
      * own condition again. */
     wait_queue_t waiters;
+    /* Held by a stream receive from its start to its return but for its
+     * waits for data, as Linux's lock_sock, so that no other reader takes
+     * bytes while it brings in a destination (`stream_readv`). */
+    struct sleep_lock recv_lock;
 
     /* AF_NETLINK only: the socket's port id and its queue of answers
      * (netlink.c). */
