@@ -40,10 +40,16 @@
 # interrupt controllers alone. Progress goes to standard output as
 # `vtest-rach2: ACTION` lines, with the triangle's and the relay's lines and
 # the guest's record, and the last line is `vtest-rach2: result: pass: the
-# triangle through the relay equals llvmpipe's, CHECKSUM` or
+# triangle through the relay equals llvmpipe's, CHECKSUM`, or with -g on a
+# display function `vtest-rach2: result: pass: the triangle through the
+# relay checks on RENDERER, CHECKSUM, llvmpipe's CHECKSUM`, or
 # `vtest-rach2: result: fail: REASON`. On a failure the last 30 lines of the
 # console and QEMU's messages come before it. The exit status is
-# 0 on a pass, 1 on a failure and 2 on a usage error.
+# 0 on a pass, 1 on a failure and 2 on a usage error. The triangle and each
+# scene run in the background while the runner waits for them, so that
+# SIGTERM, SIGINT or SIGHUP stops the runner at once: its exit ends the
+# scene's process group, the relay and QEMU, and has gpu.sh give the
+# function back.
 #
 # With -g, the guest has the function BDF, which Rach2's Intel driver has,
 # through gpu.sh (tests/assign/Readme.md), beside this script or in the
@@ -127,11 +133,24 @@ if [ -n "$bdf" ]; then
     [ -e "/sys/bus/pci/devices/$bdf" ] || { echo "vtest-rach2: no function $bdf" >&2; exit 2; }
 fi
 
-# $qemu is QEMU's process, and with -g $gpu is gpu.sh's, which owns it.
-work='' qemu='' relay='' gpu='' gpu_status=''
+# $qemu is QEMU's process, and with -g $gpu is gpu.sh's, which owns it;
+# $drawing is the triangle's and $scene the group of a scene's harness.
+work='' qemu='' relay='' gpu='' gpu_status='' drawing='' scene=''
 # shellcheck disable=SC2317 # the traps call it
 cleanup()
 {
+    [ -z "$drawing" ] || kill -KILL "$drawing" 2>/dev/null
+    if [ -n "$scene" ]; then
+        # The harness ends its own scene's group on TERM.
+        kill -TERM "-$scene" 2>/dev/null
+        n=100
+        while kill -0 "-$scene" 2>/dev/null && [ "$n" -gt 0 ]; do
+            sleep 0.1
+            n=$((n - 1))
+        done
+        kill -KILL "-$scene" 2>/dev/null
+        wait "$scene" 2>/dev/null
+    fi
     [ -z "$relay" ] || kill "$relay" 2>/dev/null
     # gpu.sh, sent SIGTERM, kills its QEMU and gives the function back.
     if [ -n "$gpu" ]; then kill "$gpu" 2>/dev/null; elif [ -n "$qemu" ]; then kill "$qemu" 2>/dev/null; fi
@@ -221,7 +240,10 @@ draw()
 {
     status=0
     LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=$2 "$work/triangle" -o "$work/$1.ppm" \
-        > "$work/$1.out" 2>&1 || status=$?
+        > "$work/$1.out" 2>&1 &
+    drawing=$!
+    wait "$drawing" || status=$?
+    drawing=''
     sed "s/^/vtest-rach2: $1: /" "$work/$1.out"
     return "$status"
 }
@@ -393,13 +415,16 @@ if [ -n "$measure" ]; then
         sleep 1
     done
     measured=0
-    for scene in $scenes; do
-        echo "vtest-rach2: measure $scene through the relay"
+    for name in $scenes; do
+        echo "vtest-rach2: measure $name through the relay"
         status=0
-        GALLIUM_DRIVER=virpipe LIBGL_ALWAYS_SOFTWARE=1 VTEST_SOCKET_NAME=$msock \
+        setsid env GALLIUM_DRIVER=virpipe LIBGL_ALWAYS_SOFTWARE=1 VTEST_SOCKET_NAME="$msock" \
             sh "$measure" -r vtest -p -v "$results/relay.log" ${seconds:+-t "$seconds"} \
-            -o "$results/$scene" "$scene" > "$results/$scene.out" 2>&1 || status=$?
-        tail -n 1 "$results/$scene.out" | sed 's/^/vtest-rach2: measure: /'
+            -o "$results/$name" "$name" > "$results/$name.out" 2>&1 &
+        scene=$!
+        wait "$scene" || status=$?
+        scene=''
+        tail -n 1 "$results/$name.out" | sed 's/^/vtest-rach2: measure: /'
         [ "$status" = 0 ] || measured=$((measured + 1))
     done
     kill "$relay" 2>/dev/null
