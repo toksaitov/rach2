@@ -7,6 +7,7 @@
 #include "ia32.h"
 
 #include "../../fs/fd.h"
+#include "../../fs/file.h"
 #include "../../drm/drm.h"
 #include "../../lib/kstring.h"
 #include "../../mm/kheap.h"
@@ -793,7 +794,9 @@ static const struct family families[] = {
  * one whose arguments differ translates the requests that need it, as
  * Linux's compat handler of the family does. A request of a type no family
  * holds is -ENOTTY, as Linux answers a compat caller on a file with no
- * compat handler; rach2/ia32.md lists the families.
+ * compat handler; rach2/ia32.md lists the families. A family's handler runs
+ * under the big lock unless the descriptor's type runs without it
+ * (`file_ops_lock`); one that passes takes what the native call takes.
  */
 long compat_sys_ioctl(isr_params_t *params)
 {
@@ -812,7 +815,16 @@ long compat_sys_ioctl(isr_params_t *params)
     }
     for (i = 0; i < FAMILIES; i++) {
         if (families[i].type == IOC_TYPE(cmd)) {
-            return families[i].fn ? families[i].fn(e, fd, cmd, arg) : pass(fd, cmd, arg);
+            long rc;
+            int big;
+
+            if (!families[i].fn) {
+                return pass(fd, cmd, arg);
+            }
+            big = file_ops_lock(e);
+            rc = families[i].fn(e, fd, cmd, arg);
+            file_ops_unlock(big);
+            return rc;
         }
     }
     return -ENOTTY;

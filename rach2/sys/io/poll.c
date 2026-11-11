@@ -70,10 +70,8 @@ static void irq_restore(uint32_t flags)
  * opened before a vhangup(2) answers TTY_HUNG_POLL whatever was asked, as
  * Linux's hung_up_tty_poll does.
  */
-short poll_fd(fd_entry_t *e, short events, struct wait_queue **wq)
+static short poll_locked(fd_entry_t *e, short events, struct wait_queue **wq)
 {
-    *wq = NULL;
-
     if (e->ops && e->ops->poll) {
         return e->ops->poll(e, events, wq);
     }
@@ -95,6 +93,19 @@ short poll_fd(fd_entry_t *e, short events, struct wait_queue **wq)
         return tty_poll(&console_tty, want, wq);
     }
     return (short)(events & (POLLIN | POLLOUT));
+}
+
+/** The question runs under the big lock unless the descriptor's type runs
+ * without it (`file_ops_lock`); the caller holds no spinlock. */
+short poll_fd(fd_entry_t *e, short events, struct wait_queue **wq)
+{
+    int big = file_ops_lock(e);
+    short revents;
+
+    *wq = NULL;
+    revents = poll_locked(e, events, wq);
+    file_ops_unlock(big);
+    return revents;
 }
 
 /* A poll's or a select's descriptors, for the scan of `poll_wait`: the

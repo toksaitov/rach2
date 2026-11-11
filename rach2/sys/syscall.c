@@ -21,6 +21,7 @@
 #include "mouse.h"
 #include "proc/process.h"
 #include "proc/sched.h"
+#include "proc/smp.h"
 #include "proc/elf.h"
 #include "proc/uimage.h"
 #include "proc/futex.h"
@@ -118,6 +119,10 @@
 #define FIONREAD 0x541B /* Bytes available to read */
 
 #define FIONBIO 0x5421 /* Set or clear O_NONBLOCK */
+
+#define FIONCLEX 0x5450 /* Clear close-on-exec */
+
+#define FIOCLEX 0x5451 /* Set close-on-exec */
 
 #define TIOCGWINSZ 0x5413 /* Get terminal window size */
 
@@ -2534,8 +2539,10 @@ long sys_vhangup(isr_params_t *params)
  *
  * The descriptor is checked first, so a bad one is -EBADF whatever the
  * request, `ioctl(-1, TCGETS)` included, and an O_PATH one is -EBADF to every
- * request, as on Linux. The requests then go, in order, to: FIONBIO, which
- * every descriptor answers (`fd_ioctl_nbio`); a hung-up terminal description,
+ * request, as on Linux. The requests then go, in order, to: FIOCLEX and
+ * FIONCLEX, which set and clear the descriptor's close-on-exec flag, and
+ * FIONBIO (`fd_ioctl_nbio`), which every descriptor answers, as Linux's
+ * `do_vfs_ioctl` (fs/ioctl.c:809-817); a hung-up terminal description,
  * which answers -EIO, or -ENOTTY to TIOCSPGRP; FS_IOC_GETFLAGS and the other
  * file attribute requests (`fs_flags_ioctl`); FICLONE and FICLONERANGE
  * (`fs_clone_ioctl`); SIOCGSTAMP and SIOCGSTAMPNS on an Internet or packet
@@ -2550,27 +2557,21 @@ long sys_vhangup(isr_params_t *params)
  * requests (`console_ioctl`), by the descriptor's type, so a descriptor 1
  * reopened onto a regular file never reaches the speaker. `ioctl_fd` is the
  * call with its arguments taken out of the frame.
+ *
+ * A type whose operations run without the big lock (`file_ops_unlocked`)
+ * has every request but those three go to its own `ioctl` without it, as
+ * Linux's `unlocked_ioctl`; the type answers the rest of the list itself,
+ * if it is a terminal. Every other type's requests run under the big lock.
  */
 long sys_ioctl(isr_params_t *params)
 {
     return ioctl_fd((int)SC_ARG(params, 0), (uint32_t)SC_ARG(params, 1), SC_ARG(params, 2));
 }
 
-long ioctl_fd(int fd_num, uint32_t request, uintptr_t arg)
+/** The requests of `ioctl_fd` after FIOCLEX, FIONCLEX and FIONBIO, on
+ * `entry`, an open descriptor of the caller's, under the big lock. */
+static long ioctl_locked(fd_entry_t *entry, uint32_t request, uintptr_t arg)
 {
-    fd_entry_t *entry;
-
-    if (!current_proc) {
-        return -ESRCH;
-    }
-
-    entry = fd_get(current_proc->fds, fd_num);
-    if (!entry || (entry->flags & FD_FLAG_PATH)) {
-        return -EBADF;
-    }
-    if (request == FIONBIO) {
-        return fd_ioctl_nbio(entry, arg);
-    }
     if (fd_tty_hung(entry)) {
         return request == TIOCSPGRP ? -ENOTTY : -EIO;
     }
@@ -2627,6 +2628,33 @@ long ioctl_fd(int fd_num, uint32_t request, uintptr_t arg)
     }
 
     return -ENOTTY;
+}
+
+long ioctl_fd(int fd_num, uint32_t request, uintptr_t arg)
+{
+    fd_entry_t *entry;
+    long rc;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+
+    entry = fd_get(current_proc->fds, fd_num);
+    if (!entry || (entry->flags & FD_FLAG_PATH)) {
+        return -EBADF;
+    }
+    if (request == FIOCLEX || request == FIONCLEX) {
+        fd_set_flags(current_proc->fds, entry, request == FIONCLEX ? FD_FLAG_CLOEXEC : 0,
+                     request == FIOCLEX ? FD_FLAG_CLOEXEC : 0);
+        return 0;
+    }
+    if (request != FIONBIO && file_ops_unlocked(entry)) {
+        return entry->ops->ioctl ? entry->ops->ioctl(entry, request, arg) : -ENOTTY;
+    }
+    bkl_enter();
+    rc = request == FIONBIO ? fd_ioctl_nbio(entry, arg) : ioctl_locked(entry, request, arg);
+    bkl_exit();
+    return rc;
 }
 
 /**
