@@ -262,6 +262,13 @@ struct i915_irq {
  * request. `reserved` is the bytes `i915_ring_begin` leaves free for the
  * breadcrumb of the request being built.
  *
+ * Parking. `unretired` is set by each new request and cleared once Linux
+ * would have retired every request of the engine, which on Haswell's ring
+ * submission, one timeline an engine, is when the last request signals to
+ * a listener or when the retire worker, once a second, finds it complete;
+ * the GT parks only when no engine has it set (i915_request.c). It changes
+ * under `lock`.
+ *
  * Hang detection and reset (i915_hangcheck.c, i915_reset.c). `hw_tail` is
  * what RING_TAIL was last given, the end of what the chip may run, which a
  * reset gives it again. `hc_armed` is set by a heartbeat that found the
@@ -315,6 +322,7 @@ struct i915_engine {
     struct i915_request *queued;
     uint8_t kick;
     uint32_t hw_tail;
+    uint8_t unretired;
     uint8_t hc_armed;
     uint32_t hc_seqno;
     uint32_t hc_acthd;
@@ -370,9 +378,13 @@ struct i915_ppgtt {
  * switch write; and `default_state`, the render ring's context image as a
  * fresh context left it with Linux's context workarounds, which every new
  * context starts from (Linux's engine->default_state). `ctx_ready` is set
- * once they are made. `awake` is set while any engine has requests, the
- * GT unparked. `wedged` is set when the GPU cannot run work, and new
- * requests and contexts fail with -EIO, as Linux's wedged GT;
+ * once they are made. `awake` is set from a request made with the GT
+ * parked until the GT parks again, once no engine has a request or one
+ * Linux would not yet have retired; `retire_next` is the tick of the next
+ * pass of the retire worker while it is awake, as Linux's retire_work
+ * runs once a second (i915_request.c). `wedged` is set when the GPU
+ * cannot run work, and new requests and contexts fail with -EIO, as
+ * Linux's wedged GT;
  * `wedged_terminal` says no reset may undo it, as when the default state
  * could not be recorded or the device is gone. `reset_count` counts the
  * whole GPU's resets, which GET_RESET_STATS gives, and
@@ -403,6 +415,7 @@ struct i915_gt {
     uint32_t reset_engine_count[I915_NUM_ENGINES];
     uint32_t wa_lost; /* workarounds the chip did not keep, since the bind */
     uint64_t hc_next;
+    uint64_t retire_next;
     struct i915_gpu_error *error;
     uint8_t submit_listed;
     struct drm_i915_private *submit_next;
@@ -3565,7 +3578,8 @@ struct i915_request {
     uint8_t was_valid;
     uint8_t added;
     uint8_t submitted;
-    uint8_t boosted; /* Linux's I915_FENCE_FLAG_BOOST, under the frequency lock */
+    uint8_t boosted;  /* Linux's I915_FENCE_FLAG_BOOST, under the frequency lock */
+    uint16_t waiters; /* i915_request_wait's callers waiting for it */
     uint32_t awaits;
     struct i915_await *await_list;
     struct i915_await *exec_waiters;
@@ -3770,14 +3784,23 @@ int32_t i915_gt_wait_for_idle(struct drm_i915_private *i915, int intr);
 struct i915_request *i915_request_throttle_target(struct intel_context *ce, int64_t before);
 
 /** Give the chip each request whose last fence signalled outside the big
- * kernel lock, on every device: the submission worker's work, which a host
- * test calls itself. Returns the engines it moved. */
+ * kernel lock, on every device, then run the retire worker's pass where it
+ * is due or a last request signalled to a listener: the submission
+ * worker's work, which a host test calls itself. Returns the engines it
+ * moved. */
 int i915_submit_work(void);
 
 /** Retire every request whose breadcrumb the chip has written, oldest
- * first on each engine, and park the GT once every engine is idle, as
- * Linux's intel_gt_retire_requests. */
+ * first on each engine, and park the GT once no engine has a request on
+ * its list, one being built, or one Linux would not yet have retired
+ * (`unretired`). */
 void i915_retire_requests(struct drm_i915_private *i915);
+
+/** Retire every completed request as Linux's intel_gt_retire_requests
+ * does, all of an engine's once its last request is complete, and park the
+ * GT when that leaves every engine idle: the retire worker's pass, and
+ * what a wait for the GT's idle and debugfs's DROP_RETIRE do. */
+void i915_gt_retire_requests(struct drm_i915_private *i915);
 
 /** The device is unplugged: every request not completed fails with -EIO,
  * all retire, and the GT's own states, scratch page and default state go.
