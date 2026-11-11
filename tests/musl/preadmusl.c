@@ -1229,7 +1229,9 @@ static int vector_refusal_rows(void)
 
     fd = open(FILE_PATH, O_RDWR);
     if (fd < 0 || !pwritev_bad_buffer(fd)) {
-        return fail("pwritev refuses a vector with a bad buffer before it writes");
+        return fail("pwritev of a vector with a buffer outside user memory was not refused with "
+                    "EFAULT before a byte was written, or on the x86-64 kernel did not write the "
+                    "2 bytes before it");
     }
     out[0].iov_base = "XY";
     out[0].iov_len = 2;
