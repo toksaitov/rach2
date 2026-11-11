@@ -104,6 +104,7 @@ static int32_t sync_info(struct sync_file *s, uintptr_t arg)
 {
     struct sync_file_info info;
     struct sync_fence_info *rows;
+    struct dma_fence_unwrap u;
     struct dma_fence *f;
     uint32_t i, n;
     int32_t status, rc = 0;
@@ -123,8 +124,10 @@ static int32_t sync_info(struct sync_file *s, uintptr_t arg)
         if (!rows)
             return -ENOMEM;
         info.status = 1;
-        for (i = 0; i < n; i++) {
-            f = dma_fence_at(s->fence, i);
+        /* One walk, as Linux's second dma_fence_unwrap_for_each: a leaf
+         * signalled since the count may have left, never one added. */
+        i = 0;
+        for (f = dma_fence_unwrap_first(s->fence, &u); f && i < n; f = dma_fence_unwrap_next(&u)) {
             sync_name(rows[i].obj_name, f->ops && f->ops->get_timeline_name
                                             ? f->ops->get_timeline_name(f)
                                             : "dma_fence");
@@ -135,7 +138,10 @@ static int32_t sync_info(struct sync_file *s, uintptr_t arg)
             rows[i].timestamp_ns = status ? f->timestamp_ns : 0;
             if (info.status > 0)
                 info.status = status;
+            i++;
         }
+        dma_fence_unwrap_end(&u);
+        n = i;
         if (info.sync_fence_info > (uintptr_t)-1 ||
             (uint64_t)n * sizeof(*rows) > (uintptr_t)-1 - info.sync_fence_info ||
             copy_to_user((void __user *)(uintptr_t)info.sync_fence_info, rows,

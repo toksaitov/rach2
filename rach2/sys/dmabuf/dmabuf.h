@@ -72,9 +72,37 @@ struct dma_fence *dma_fence_unwrap_merge(struct dma_fence **fences, uint32_t cou
 /** Number of leaf fences in Linux's dma_fence_unwrap order, and the
  * borrowed leaf at index, or NULL: an array's fences, a chain's own fence
  * and those of its earlier points not yet signalled, or the fence itself.
- * The leaves stay put only until the caller sleeps. */
+ * Each call walks the leaves afresh, and an earlier point that signals
+ * between two calls, which an interrupt may make it do, leaves the list
+ * and moves the later leaves down: a caller that visits every leaf walks
+ * them with a `struct dma_fence_unwrap` instead. */
 uint32_t dma_fence_count(struct dma_fence *fence);
 struct dma_fence *dma_fence_at(struct dma_fence *fence, uint32_t index);
+
+/*
+ * A walk over the leaves of a fence in the order of dma_fence_count, as
+ * Linux's struct dma_fence_unwrap and dma_fence_unwrap_for_each: each
+ * leaf is visited once, whatever signals meanwhile, and an earlier point
+ * whose fence has signalled when the walk reaches it is passed over.
+ * `chain` is the point the walk is at, with a reference, so that the
+ * leaf it returned stays while the caller sleeps; `array` is the point's
+ * fence when that is an array, borrowed from the point, and `index` the
+ * array's fence returned last.
+ */
+struct dma_fence_unwrap {
+    struct dma_fence *chain;
+    struct dma_fence *array;
+    uint32_t index;
+};
+/** Begin the walk over the leaves of `head`, a fence or NULL: the first
+ * leaf, borrowed from the walk, or NULL when there is none. */
+struct dma_fence *dma_fence_unwrap_first(struct dma_fence *head, struct dma_fence_unwrap *cursor);
+/** The next leaf, borrowed from the walk, or NULL at the end, where the
+ * walk has let go of what it held. Does not sleep. */
+struct dma_fence *dma_fence_unwrap_next(struct dma_fence_unwrap *cursor);
+/** Let go of what a walk left before its end holds; nothing after the
+ * end. */
+void dma_fence_unwrap_end(struct dma_fence_unwrap *cursor);
 /** Status: 0 active, 1 completed, or the negative producer error. */
 int32_t dma_fence_status(struct dma_fence *fence);
 /** CLOCK_MONOTONIC in nanoseconds, under the big kernel lock. */

@@ -363,51 +363,108 @@ struct dma_fence_chain *to_dma_fence_chain(struct dma_fence *f)
     return f && f->ops == &chain_ops ? (struct dma_fence_chain *)f : NULL;
 }
 
-/**
- * Walk the leaves of `f` in the order of Linux's dma_fence_unwrap: a
- * chain's own fence, then the fence of each earlier point not yet
- * signalled, or `f` alone, each array among them by its fences. Count them
- * in `*count` and return the borrowed leaf `index`, or NULL past the end.
- * Changes nothing but what a signalled test enables; does not sleep.
- */
-static struct dma_fence *unwrap(struct dma_fence *f, uint32_t index, uint32_t *count)
+/** The fence a point of a walk stands for: a chain's own fence, or the
+ * point itself when it is no chain. */
+static struct dma_fence *unwrap_contained(struct dma_fence *node)
 {
-    struct dma_fence_chain *c;
-    struct dma_fence *node, *leaf, *found = NULL;
-    uint32_t n = 0, k;
-    for (node = f; node; node = c ? c->prev : NULL) {
-        c = to_dma_fence_chain(node);
-        leaf = c ? c->fence : node;
-        if (node != f && dma_fence_is_signaled(leaf))
-            continue;
-        k = leaf->ops == &array_ops ? ((struct fence_array *)leaf)->count : 1;
-        if (!found && index >= n && index - n < k)
-            found =
-                leaf->ops == &array_ops ? ((struct fence_array *)leaf)->fences[index - n] : leaf;
-        n += k;
+    struct dma_fence_chain *c = to_dma_fence_chain(node);
+    return c ? c->fence : node;
+}
+
+/** Move the walk to the earlier point whose fence has not signalled, or
+ * to the end, giving back the reference to the point it leaves, as
+ * Linux's dma_fence_chain_walk steps without dropping the points it
+ * passes. */
+static void unwrap_step(struct dma_fence_unwrap *cursor)
+{
+    struct dma_fence_chain *c = to_dma_fence_chain(cursor->chain);
+    struct dma_fence *prev = c ? c->prev : NULL;
+    while (prev && dma_fence_is_signaled(unwrap_contained(prev))) {
+        c = to_dma_fence_chain(prev);
+        prev = c ? c->prev : NULL;
     }
-    *count = n;
-    return found;
+    dma_fence_get(prev);
+    dma_fence_put(cursor->chain);
+    cursor->chain = prev;
+    cursor->array = NULL;
+    cursor->index = 0;
+}
+
+/** The first leaf of the walk's point, an array's first fence or the
+ * point's own, or NULL at the end. */
+static struct dma_fence *unwrap_point(struct dma_fence_unwrap *cursor)
+{
+    struct dma_fence *f;
+    while (cursor->chain) {
+        f = unwrap_contained(cursor->chain);
+        cursor->index = 0;
+        if (f->ops != &array_ops) {
+            cursor->array = NULL;
+            return f;
+        }
+        cursor->array = f;
+        if (((struct fence_array *)f)->count)
+            return ((struct fence_array *)f)->fences[0];
+        unwrap_step(cursor);
+    }
+    return NULL;
+}
+
+/** Begin a walk at `head`, as Linux's dma_fence_unwrap_first. */
+struct dma_fence *dma_fence_unwrap_first(struct dma_fence *head, struct dma_fence_unwrap *cursor)
+{
+    cursor->chain = dma_fence_get(head);
+    cursor->array = NULL;
+    cursor->index = 0;
+    return unwrap_point(cursor);
+}
+
+/** Go on with a walk, as Linux's dma_fence_unwrap_next. */
+struct dma_fence *dma_fence_unwrap_next(struct dma_fence_unwrap *cursor)
+{
+    struct fence_array *a = (struct fence_array *)cursor->array;
+    if (a && ++cursor->index < a->count)
+        return a->fences[cursor->index];
+    if (!cursor->chain)
+        return NULL;
+    unwrap_step(cursor);
+    return unwrap_point(cursor);
+}
+
+/** Give back the point a walk left before its end holds. */
+void dma_fence_unwrap_end(struct dma_fence_unwrap *cursor)
+{
+    dma_fence_put(cursor->chain);
+    cursor->chain = NULL;
+    cursor->array = NULL;
 }
 
 /** Count the leaves that Linux's dma_fence_unwrap visits. */
 uint32_t dma_fence_count(struct dma_fence *f)
 {
-    uint32_t n;
-    unwrap(f, 0, &n);
+    struct dma_fence_unwrap u;
+    struct dma_fence *leaf;
+    uint32_t n = 0;
+    for (leaf = dma_fence_unwrap_first(f, &u); leaf; leaf = dma_fence_unwrap_next(&u))
+        n++;
     return n;
 }
 
 /** Return a borrowed leaf in unwrap order. */
 struct dma_fence *dma_fence_at(struct dma_fence *f, uint32_t index)
 {
-    uint32_t n;
-    return unwrap(f, index, &n);
+    struct dma_fence_unwrap u;
+    struct dma_fence *leaf;
+    for (leaf = dma_fence_unwrap_first(f, &u); leaf && index; leaf = dma_fence_unwrap_next(&u))
+        index--;
+    dma_fence_unwrap_end(&u);
+    return leaf;
 }
 
 /** Build an all-of fence, flattening nested merges and duplicate contexts. */
 struct dma_fence *dma_fence_merge(struct dma_fence **fences, uint32_t count)
 {
+    struct dma_fence_unwrap u;
     struct fence_array *a;
     struct dma_fence *f;
     uint32_t i, j, k, total = 0;
@@ -431,9 +488,11 @@ struct dma_fence *dma_fence_merge(struct dma_fence **fences, uint32_t count)
             return NULL;
         }
     }
+    /* One walk of each fence, since a leaf that signals between two
+     * lookups by index would move the later ones; a walk finds no more
+     * leaves than the count before it. */
     for (i = 0; i < count; i++)
-        for (j = 0; j < dma_fence_count(fences[i]); j++) {
-            f = dma_fence_at(fences[i], j);
+        for (f = dma_fence_unwrap_first(fences[i], &u); f; f = dma_fence_unwrap_next(&u)) {
             for (k = 0; k < a->count; k++)
                 if (a->fences[k]->context == f->context)
                     break;
@@ -441,8 +500,10 @@ struct dma_fence *dma_fence_merge(struct dma_fence **fences, uint32_t count)
                 if ((int64_t)(f->seqno - a->fences[k]->seqno) <= 0)
                     continue;
                 dma_fence_put(a->fences[k]);
-            } else
+            } else if (a->count < total)
                 a->count++;
+            else
+                continue;
             a->fences[k] = dma_fence_get(f);
         }
     if (a->count < 2) {
@@ -463,6 +524,7 @@ struct dma_fence *dma_fence_merge(struct dma_fence **fences, uint32_t count)
  * the newest completion time when nothing is left. */
 struct dma_fence *dma_fence_unwrap_merge(struct dma_fence **fences, uint32_t count)
 {
+    struct dma_fence_unwrap u;
     struct dma_fence **leaves, *f, *out;
     uint32_t i, j, n = 0, total = 0;
     int64_t timestamp = 0;
@@ -478,11 +540,11 @@ struct dma_fence *dma_fence_unwrap_merge(struct dma_fence **fences, uint32_t cou
     if (!leaves)
         return NULL;
     for (i = 0; i < count; i++)
-        for (j = 0; j < dma_fence_count(fences[i]); j++) {
-            f = dma_fence_at(fences[i], j);
-            if (!dma_fence_is_signaled(f))
-                leaves[n++] = f;
-            else if (f->timestamp_ns > timestamp)
+        for (f = dma_fence_unwrap_first(fences[i], &u); f; f = dma_fence_unwrap_next(&u)) {
+            if (!dma_fence_is_signaled(f)) {
+                if (n < total)
+                    leaves[n++] = f;
+            } else if (f->timestamp_ns > timestamp)
                 timestamp = f->timestamp_ns;
         }
     out = dma_fence_merge(leaves, n);
@@ -501,14 +563,15 @@ int64_t dma_fence_deadline(struct dma_fence *f)
 /** Pass a deadline hint to all children without changing completion. */
 void dma_fence_set_deadline(struct dma_fence *f, int64_t deadline)
 {
-    uint32_t i;
+    struct dma_fence_unwrap u;
+    struct dma_fence *leaf;
     if (!f)
         return;
     if (deadline < f->deadline_ns)
         f->deadline_ns = deadline;
     if (f->ops == &array_ops || f->ops == &chain_ops)
-        for (i = 0; i < dma_fence_count(f); i++)
-            dma_fence_set_deadline(dma_fence_at(f, i), deadline);
+        for (leaf = dma_fence_unwrap_first(f, &u); leaf; leaf = dma_fence_unwrap_next(&u))
+            dma_fence_set_deadline(leaf, deadline);
 }
 
 /* ------------------------------------------------------------------------
