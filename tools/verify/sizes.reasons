@@ -47,7 +47,7 @@ rach2/sys/arch/x86_64/ia32_fs.c:ia32_native params 10 the parameters are the six
 
 rach2/sys/arch/x86_64/ia32_fs.c:select_body params 8 the parameters are the arguments of select and pselect6, in the calls' order, and the kind of their timeout
 
-rach2/sys/arch/x86_64/ia32_systab.c:ia32_syscall_init lines 453 a table, one entry per system call number
+rach2/sys/arch/x86_64/ia32_systab.c:ia32_syscall_init lines 454 a table, one entry per system call number
 
 rach2/sys/arch/x86_64/mmu.c:free_user_pages nesting 5 a walk over the four levels of the page tables, each page's case inside it
 
