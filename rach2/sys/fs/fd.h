@@ -387,10 +387,11 @@ int fd_ofd_access(struct open_file *ofd, const struct vfs_ref *ref, int access);
  * required. */
 void fd_ofd_access_drop(struct open_file *ofd);
 
-/** Take or release the description lock (see `busy` above), and with it,
- * taken first and released last, the namespace lock of the description's
- * mount when its type serialises every use. The waits sleep and a signal
- * does not end them; the lock is held for one file operation. */
+/** Take or release the description lock (see `busy` above), and with
+ * it, taken after it and released before it, the namespace lock of the
+ * description's mount when its type serialises every use. The waits
+ * sleep and a signal does not end them; the lock is held for one file
+ * operation. */
 void fd_ofd_lock(struct open_file *ofd);
 void fd_ofd_unlock(struct open_file *ofd);
 

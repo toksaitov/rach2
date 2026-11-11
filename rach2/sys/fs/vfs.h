@@ -47,8 +47,8 @@
  * An operation a type does not have is a NULL pointer, and the wrapper of
  * the operation, below, gives the default answer for it.
  *
- * The lock order is a mount's namespace lock, then an open file
- * description's lock (fd.h), then buffers of the cache by the cache's rules
+ * The lock order is an open file description's lock (fd.h), then a
+ * mount's namespace lock, then buffers of the cache by the cache's rules
  * (bcache.h).
  */
 

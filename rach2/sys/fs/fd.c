@@ -222,24 +222,30 @@ static int ofd_idle(void *arg)
     return ((struct open_file *)arg)->busy == 0;
 }
 
+/**
+ * The description lock comes before the namespace lock, as Linux's
+ * `f_pos_lock` (fs/file.c:1167) comes before `i_rwsem`: a read(2) holds the
+ * description and may fault into a file mapping, whose fill takes the
+ * namespace lock (`fs_read_at`).
+ */
 void fd_ofd_lock(struct open_file *ofd)
 {
-    if (ofd->vmnt && ofd->vmnt->type->ns_serialised) {
-        vfs_ns_lock(ofd->vmnt);
-    }
     while (ofd->busy) {
         wq_wait_event_nointr(&ofd_rec_of(ofd)->wq, ofd_idle, ofd);
     }
     ofd->busy = 1;
+    if (ofd->vmnt && ofd->vmnt->type->ns_serialised) {
+        vfs_ns_lock(ofd->vmnt);
+    }
 }
 
 void fd_ofd_unlock(struct open_file *ofd)
 {
-    ofd->busy = 0;
-    wq_wake_all(&ofd_rec_of(ofd)->wq);
     if (ofd->vmnt && ofd->vmnt->type->ns_serialised) {
         vfs_ns_unlock(ofd->vmnt);
     }
+    ofd->busy = 0;
+    wq_wake_all(&ofd_rec_of(ofd)->wq);
 }
 
 int fd_node_busy(struct vfs_mount *mnt, void *node)
