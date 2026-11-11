@@ -526,6 +526,7 @@ int32_t exit_current(int32_t code)
         return 0;
     }
     ptrace_event(PTRACE_EVENT_EXIT, (uint32_t)code);
+    signal_exit_begin();
     exiting_pid = current_proc->tgid;
     is_init = (exiting_pid == init_pid && init_pid != 0);
     alone = current_proc->tg->live == 1;
@@ -4323,14 +4324,16 @@ static void sig_job_control(process_t *target, int signo)
 
 /**
  * Whether the thread `t` can take one of the signals `bits` now: it has not
- * ended, it is not stopped, and it does not block them all. A stopped thread
- * is passed over, as Linux's `wants_signal` passes it over, since `sig_wake`
- * cannot wake it and a sibling that could take the signal would sleep on.
+ * ended or begun to end (`exit_begun`), it is not stopped, and it does not
+ * block them all. A stopped thread is passed over, as Linux's `wants_signal`
+ * passes it over, since `sig_wake` cannot wake it and a sibling that could
+ * take the signal would sleep on; so is a thread in its exit path, which
+ * takes no signal again (kernel/signal.c:982-983).
  */
 static int sig_wants(const process_t *t, uint64_t bits)
 {
     return t->state != PROC_ZOMBIE && t->state != PROC_UNUSED && t->state != PROC_STOPPED &&
-           (bits & ~t->sig_blocked) != 0;
+           !t->exit_begun && (bits & ~t->sig_blocked) != 0;
 }
 
 /**
@@ -4355,6 +4358,23 @@ static process_t *sig_taker(process_t *target, int signo)
 }
 
 /**
+ * Wake, for the signals `moved` pending for the process of `self` that
+ * `self` will not take, other threads that can take them, one for each, as
+ * Linux's `retarget_shared_pending` does, with interrupts off.
+ */
+static void sig_retarget(const process_t *self, uint64_t moved)
+{
+    process_t *t;
+
+    for (t = proc_list; t && moved != 0; t = t->next) {
+        if (t != self && t->tg == self->tg && sig_wants(t, moved)) {
+            moved &= t->sig_blocked;
+            sig_wake(t);
+        }
+    }
+}
+
+/**
  * A signal sent to the process wakes one thread (`sig_taker`), which may be
  * this one. When the new mask blocks a signal still pending for the process
  * that the old mask did not, this thread will not take it, so another thread
@@ -4368,16 +4388,22 @@ void signal_set_blocked(uint64_t mask)
     process_t *self = current_proc;
     uint32_t flags = sig_irq_save();
     uint64_t moved;
-    process_t *t;
 
     mask &= ~(uint64_t)KSIG_UNCATCHABLE;
     moved = self->tg->pending & mask & ~self->sig_blocked;
     self->sig_blocked = mask;
-    for (t = proc_list; t && moved != 0; t = t->next) {
-        if (t != self && t->tg == self->tg && sig_wants(t, moved)) {
-            moved &= t->sig_blocked;
-            sig_wake(t);
-        }
+    sig_retarget(self, moved);
+    sig_irq_restore(flags);
+}
+
+void signal_exit_begin(void)
+{
+    process_t *self = current_proc;
+    uint32_t flags = sig_irq_save();
+
+    self->exit_begun = 1;
+    if (!self->tg->exiting) {
+        sig_retarget(self, self->tg->pending & ~self->sig_blocked);
     }
     sig_irq_restore(flags);
 }
