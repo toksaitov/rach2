@@ -1,8 +1,8 @@
-== r1
+== attempt 6
 frames: 8370, counted past 2370: 112 over 100 ms, longest 280 ms
 smooth, every frame under 60 ms: 161 readings over 75.0 s, 30.4 frames a second
   big-lock wait: 1.57 s a second
-  processors: user 23% system 65% idle 12%
+  processors: user 23% system 65% idle 11%
   holds: syscall 16 0.305 s/s, syscall 441 0.056 s/s, syscall 0 0.051 s/s, vector 32 0.051 s/s, syscall 262 0.050 s/s, vector 14 0.041 s/s
   shader cache: +0 KiB
   disk: 0.0 MiB read
@@ -14,7 +14,7 @@ stalled, a frame over 150 ms: 14 readings over 9.7 s, 13.3 frames a second
   shader cache: +0 KiB
   disk: 0.0 MiB read
   HDA underruns +0, missed +0
-== r2
+== attempt 7
 frames: 8370, counted past 2370: 319 over 100 ms, longest 391 ms
 smooth, every frame under 60 ms: 21 readings over 12.0 s, 27.5 frames a second
   big-lock wait: 1.92 s a second
@@ -30,7 +30,7 @@ stalled, a frame over 150 ms: 40 readings over 28.2 s, 11.3 frames a second
   shader cache: +0 KiB
   disk: 0.0 MiB read
   HDA underruns +0, missed +0
-== r3
+== attempt 8
 frames: 8370, counted past 2370: 260 over 100 ms, longest 419 ms
 smooth, every frame under 60 ms: 46 readings over 24.5 s, 28.8 frames a second
   big-lock wait: 1.71 s a second
