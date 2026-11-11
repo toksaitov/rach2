@@ -16,7 +16,7 @@
 #include <sys/ioctl.h>
 #include <sys/eventfd.h>
 
-#include <virgl/virglrenderer.h>
+#include <virglrenderer.h>
 
 #include "backend.h"
 #include "vgpushm_uapi.h"
