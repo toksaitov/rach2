@@ -244,28 +244,18 @@ static int _exception_signal(const isr_params_t *params, struct k_siginfo *info)
  * panics.
  *
  * A debug exception in kernel mode, which only i686 takes here, is no
- * fault of the kernel's. The single-step flag is cleared in the saved
- * flags; one at the system call gate's entry is deferred until the system
- * call has built its user frame (`debugreg_defer_user`), as on x86-64; and
- * a data breakpoint elsewhere posts SIGTRAP for the return to user mode and
- * lets the access go on.
+ * fault of the kernel's: a tracer's watchpoint hit by a copy to or from user
+ * memory, or by a `MOV SS` that delayed its exception into the system call
+ * gate. It is dropped, as Linux drops it (`debugreg_drop`), and the
+ * single-step flag is cleared in the saved flags.
  */
 static void _exception_handler(isr_params_t *params)
 {
     const char *name = params->vector < 32 ? _exception_names[params->vector] : "unknown";
 
     if (params->vector == 1 && (params->cs & 3) != 3 && current_proc) {
-        struct k_siginfo info;
-
         FRAME_FLAGS(params) &= ~0x100u;
-        if (debugreg_defer_user(FRAME_PC(params))) {
-            return;
-        }
-        k_memset(&info, 0, sizeof(info));
-        info.code = debugreg_status();
-        if (info.code == TRAP_HWBKPT) {
-            signal_post_thread(current_proc, SIGTRAP, &info);
-        }
+        debugreg_drop();
         return;
     }
 
@@ -758,9 +748,6 @@ void isr_leave(isr_params_t *params)
     if (cpu->tick_unlocked) {
         cpu->tick_unlocked = 0;
         return;
-    }
-    if (FRAME_USER(params)) {
-        debugreg_deliver();
     }
     deliver_signals(params);
     if (FRAME_USER(params)) {

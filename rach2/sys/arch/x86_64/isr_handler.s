@@ -439,14 +439,12 @@ isr_iret:
 # MSR, not the saved CS, decides the swap, as in the paranoid entry. An
 # exception from user mode has its frame copied to the thread's kernel
 # stack, before any C code can stop or switch the thread, and is routed and
-# returned from there. One from kernel mode is only recorded for this
-# processor (debugreg_defer_user, debugreg_defer, x86/debugreg.c), with TF
-# cleared in the saved flags; its signal is posted later on the thread's own
-# stack, at the return to user mode (isr_leave) or before a signal test
-# (arch_debug_deliver). The exception of a single step through the
-# `sysenter` entry, whose instruction leaves TF set, is let through with TF
-# kept (debugreg_defer_sysenter, x86/debugreg.c), so that the entry's frame
-# has the program's TF.
+# returned from there. One from kernel mode, a tracer's watchpoint hit by a
+# copy to or from user memory or delayed past `syscall`, is dropped as Linux
+# drops it (debugreg_drop, x86/debugreg.c), with TF cleared in the saved
+# flags. The exception of a single step through the `sysenter` entry, whose
+# instruction leaves TF set, is let through with TF kept
+# (debugreg_drop_sysenter), so that the entry's frame has the program's TF.
 debug_entry:
     pushq %rax
     pushq %rbx
@@ -486,15 +484,10 @@ debug_entry:
     jmp isr_return
 .debug_from_kernel:
     movq F_RIP(%rsp), %rdi
-    call debugreg_defer_sysenter
+    call debugreg_drop_sysenter
     testl %eax, %eax
     jnz .debug_stepping
-    movq F_RIP(%rsp), %rdi
-    call debugreg_defer_user
-    testl %eax, %eax
-    jnz .debug_deferred
-    call debugreg_defer
-.debug_deferred:
+    call debugreg_drop
     andq $-257, F_RFLAGS(%rsp)
 .debug_stepping:
     testl %ebx, %ebx
