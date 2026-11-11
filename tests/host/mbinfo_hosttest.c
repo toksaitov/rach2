@@ -352,7 +352,9 @@ static void row_mmap_refused(void)
 }
 
 /** Write one EFI memory descriptor of 48 bytes, the size OVMF gives, of
- * `pages` 4 KiB pages from `phys`. */
+ * `pages` 4 KiB pages from `phys`, with EFI_MEMORY_RUNTIME among its
+ * attributes for the runtime services' code and data and memory-mapped I/O,
+ * types 5, 6 and 11, as OVMF marks them. */
 static void efi_desc(uint32_t type, uint64_t phys, uint64_t pages)
 {
     put32(type);
@@ -360,7 +362,7 @@ static void efi_desc(uint32_t type, uint64_t phys, uint64_t pages)
     put64(phys);
     put64(0);
     put64(pages);
-    put64(0xF);
+    put64(type == 5 || type == 6 || type == 11 ? 0x800000000000000Full : 0xFull);
     put64(0);
 }
 
@@ -420,6 +422,10 @@ static void row_efi_mmap(void)
     CHECK(map_is(8, 0x100000000ull, 0x100000, 2), "persistent memory is not the allocator's");
     CHECK(map_is(9, 0x100100000ull, 0x40000000ull, 1), "the memory above 4 GiB");
     CHECK(boot.mmap_len == 10 * BOOT_MMAP_ENTRY, "ten ranges and nothing else");
+    CHECK(boot.efi_runtime_count == 2 && !boot.efi_runtime_lost &&
+              boot.efi_runtime[0].base == 0x6930000 && boot.efi_runtime[0].size == 0x80000 &&
+              boot.efi_runtime[1].base == 0xFEC00000ull && boot.efi_runtime[1].size == 0x1000,
+          "the runtime ranges are kept, code and data joined, for ResetSystem's identity map");
 
     /* The EFI map first and multiboot2's after it: the EFI one stays. */
     list_begin();

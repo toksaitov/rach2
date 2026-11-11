@@ -17,6 +17,7 @@
 #define BOOT_MODULE_MAX         8
 #define BOOT_CMDLINE_MAX        512
 #define BOOT_MODULE_CMDLINE_MAX 128
+#define BOOT_EFI_RUNTIME_MAX    32
 
 /* The bytes of one memory-map entry in the record: Multiboot's form, a
  * 32-bit size of what follows (20), a 64-bit base, a 64-bit length and a
@@ -49,6 +50,12 @@ struct boot_framebuffer {
      * 0 to 255, and how many the loader gave. */
     uint16_t colors;
     uint8_t palette[256][3];
+};
+
+/* A range of physical memory: its first byte and its length in bytes. */
+struct boot_range {
+    uint64_t base;
+    uint64_t size;
 };
 
 /* One boot module: where the loader put it, and its command line. */
@@ -85,6 +92,14 @@ struct boot_info {
      * through it. */
     uint64_t efi_systab;
     int efi_systab_64;
+    /* The EFI memory map's ranges that carry EFI_MEMORY_RUNTIME, which the
+     * firmware's runtime services run in and touch, adjacent ones merged:
+     * `efi_runtime_count` of them, and `efi_runtime_lost` set when the map
+     * had more than BOOT_EFI_RUNTIME_MAX, since a call that reached one left
+     * out would fault. */
+    struct boot_range efi_runtime[BOOT_EFI_RUNTIME_MAX];
+    uint32_t efi_runtime_count;
+    int efi_runtime_lost;
     /* The screen. */
     struct boot_framebuffer fb;
     /* Whether the machine booted by UEFI, which the loader says by passing

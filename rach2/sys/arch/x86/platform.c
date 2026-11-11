@@ -19,6 +19,7 @@
 #include "board.h"
 #include "itco.h"
 #include "diag.h"
+#include "efirt.h"
 #include "i8042.h"
 #include "ioapic.h"
 #include "ps2kbd.h"
@@ -230,6 +231,7 @@ void platform_firmware_init(const struct boot_info *boot)
 
     acpi_init(boot->acpi_rsdp);
     smbios_init(boot->efi_systab, boot->efi_systab_64);
+    efirt_init(boot);
     a = acpi_get();
     ecam_init(a);
     (void)refclock_init(a);

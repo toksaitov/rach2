@@ -18,7 +18,9 @@
 
 #include "smbios.h"
 #include "board.h"
+#include "efirt.h"
 #include "itco.h"
+#include "smpboot.h"
 #include "../../cmdline.h"
 #ifndef RACH2_HOSTTEST
 #include "../arch.h"
@@ -365,6 +367,30 @@ static void reboot_read(struct reboot_options *o)
     }
 }
 
+/* CMOS's index port, whose bit 7 masks the NMI, and its data port; and the
+ * shutdown status byte, which a BIOS reads at its start, 0 for a reset. */
+#define CMOS_INDEX_PORT      0x70
+#define CMOS_DATA_PORT       0x71
+#define CMOS_NMI_OFF         0x80u
+#define CMOS_SHUTDOWN_STATUS 0x0Fu
+
+/**
+ * Restart through the BIOS, as Linux's `machine_real_restart(MRR_BIOS)`
+ * does (arch/x86/kernel/reboot.c:97-131): CMOS's shutdown status set to 0,
+ * a proper reset, with the NMI masked by the same write, then the jump to
+ * the BIOS's reset entry in real mode (`smpboot_bios_restart`). Returns
+ * only when that page below 1 MiB is not free; nothing is written then.
+ */
+static void reboot_bios(void)
+{
+    if (!smpboot_bios_restart_ready()) {
+        return;
+    }
+    outb(CMOS_INDEX_PORT, (uint8_t)(CMOS_NMI_OFF | CMOS_SHUTDOWN_STATUS));
+    outb(CMOS_DATA_PORT, 0x00);
+    smpboot_bios_restart();
+}
+
 /** Log `what`, the method about to be tried, the first time it is tried;
  * `tried` holds a bit for each letter already logged. */
 static void reboot_say(uint32_t *tried, char type, const char *what)
@@ -472,11 +498,15 @@ static void reboot_linux(void)
             }
             break;
         case REBOOT_EFI:
-            reboot_say(&tried, type, "efi: not called by this kernel");
+            reboot_say(&tried, type, efirt_absent() ? efirt_absent() : "efi resetsystem");
+            efirt_reset(warm);
             type = REBOOT_BIOS;
             break;
         case REBOOT_BIOS:
-            reboot_say(&tried, type, "bios: not called by this kernel");
+            reboot_say(&tried, type,
+                       smpboot_bios_restart_ready() ? "bios restart"
+                                                    : "bios: the page below 1 mib is not free");
+            reboot_bios();
             type = REBOOT_CF9_SAFE;
             break;
         case REBOOT_CF9:

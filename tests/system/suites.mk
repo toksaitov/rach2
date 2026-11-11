@@ -696,7 +696,8 @@ $(SERVICELOG_ROOT_DISK): tests/system/mkrootdisk.sh tools/setup/e2fsprogs_path.s
 # `tests/run panic`: a panic that resets the machine as panic= and reboot=
 # ask. Each case of tests/cases/machine.panic.json runs a kernel stack out at
 # boot with panic=5, or -1, and one reboot= method, and the kernel must say
-# when it resets and then reset the machine by that method alone.
+# when it resets and then reset the machine by that method alone. The case
+# of EFI's ResetSystem boots a disk of its own by OVMF, below.
 # `tests/run diskdiag`: a disk read without being mounted and without being
 # written. It is the case of tests/cases/machine.diskdiag.json, which etude
 # runs, and has no target here: the ordinary kernel mounting a copy of the
@@ -1515,6 +1516,18 @@ $(ARCH_CASE_DIR)/termconsole/disk.img: $(KERNEL) $(INSTALLER_EXT2) tools/image/m
 	RACH2_DISK_EXT2_MB=64 \
 	RACH2_DISK_EXT2_IMAGE=$(INSTALLER_EXT2) \
 	RACH2_DISK_APPEND=rach2.console=term \
+	    sh tools/image/mkdisk_grub.sh $(KERNEL) $@
+# `tests/run panic`'s case of EFI's ResetSystem, machine.panic.uefi: a GPT
+# disk as the disk builder makes one for a machine, booted by OVMF, whose
+# menu runs a kernel stack out at boot with panic=5 reboot=e, which no other
+# test disk carries.
+$(ARCH_CASE_DIR)/panic/efi-disk.img: $(KERNEL) $(INSTALLER_EXT2) tools/image/mkdisk_grub.sh \
+                                     $(DISK_TOOLS) $(GRUB_FILES) | rach2
+	@mkdir -p $(@D)
+	RACH2_DISK_RECOVERY_MB=8 \
+	RACH2_DISK_EXT2_MB=64 \
+	RACH2_DISK_EXT2_IMAGE=$(INSTALLER_EXT2) \
+	RACH2_DISK_APPEND="rach2.stackoverrun=fork panic=5 reboot=e" \
 	    sh tools/image/mkdisk_grub.sh $(KERNEL) $@
 # `tests/run usbdisk`: a flash drive as a disk, the cases of
 # tests/cases/machine.usbdisk.json: sticks with an MBR, a GUID table and no

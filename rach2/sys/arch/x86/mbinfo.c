@@ -30,6 +30,10 @@
 #define MB2_TAG_ACPI_NEW 15u
 #define MB2_TAG_EFI_MMAP 17u
 
+/* An EFI memory descriptor's attribute that its range serves the runtime
+ * services (UEFI 2.10, 7.2, EFI_MEMORY_RUNTIME). */
+#define EFI_MEMORY_RUNTIME 0x8000000000000000ULL
+
 /* The framebuffer's types, in both forms. */
 #define MB_FB_INDEXED 0u
 #define MB_FB_RGB     1u
@@ -144,6 +148,26 @@ static void map_clear(struct boot_info *boot, struct boot_store *st)
     st->mmap_cut = 0;
     boot->mmap = NULL;
     boot->mmap_len = 0;
+}
+
+/** Add the runtime range of `size` bytes at `base` to `boot`'s, joined to
+ * the last when it follows it, or note that the record has no room. */
+static void runtime_add(struct boot_info *boot, uint64_t base, uint64_t size)
+{
+    uint32_t n = boot->efi_runtime_count;
+
+    if (size == 0) {
+        return;
+    }
+    if (n > 0 && boot->efi_runtime[n - 1].base + boot->efi_runtime[n - 1].size == base) {
+        boot->efi_runtime[n - 1].size += size;
+    } else if (boot->efi_runtime_count < BOOT_EFI_RUNTIME_MAX) {
+        boot->efi_runtime[boot->efi_runtime_count].base = base;
+        boot->efi_runtime[boot->efi_runtime_count].size = size;
+        boot->efi_runtime_count++;
+    } else {
+        boot->efi_runtime_lost = 1;
+    }
 }
 
 /** Multiboot's memory type for EFI's type `efi`. */
@@ -360,6 +384,8 @@ static void mb2_tag(const uint8_t *t, uint32_t size, struct boot_info *boot, str
         map_clear(boot, st);
         st->mmap_efi = 1;
         boot->uefi = 1;
+        boot->efi_runtime_count = 0;
+        boot->efi_runtime_lost = 0;
         for (i = 16; step <= size - i; i += step) {
             uint64_t pages = le64(t + i + 24);
 
@@ -367,6 +393,9 @@ static void mb2_tag(const uint8_t *t, uint32_t size, struct boot_info *boot, str
                 continue;
             }
             map_add(boot, st, le64(t + i + 8), pages * 4096, efi_type(le32(t + i)));
+            if (le64(t + i + 32) & EFI_MEMORY_RUNTIME) {
+                runtime_add(boot, le64(t + i + 8), pages * 4096);
+            }
         }
         break;
     case MB2_TAG_FB:
