@@ -90,8 +90,11 @@ connector that appears starts it again there, with
 .Dq rach2-desktop: session: display BACKEND CARD RENDERER appeared; starting again ,
 which is how the session comes back to a GPU that Rach2's driver has
 again.
-A card that appears while the session draws on another, or headless since
-boot, changes nothing; SIGHUP chooses the display anew.
+A card that goes away and comes back under the same name and device before
+the supervisor looks counts as gone.
+A start on a card, whichever way it came, ends the wait for one: a card
+that appears while the session draws on another, or headless since boot,
+changes nothing; SIGHUP chooses the display anew.
 Each start logs
 .Dq rach2-desktop: session: started as PID on BACKEND CARD RENDERER .
 udev's events for the cards, which

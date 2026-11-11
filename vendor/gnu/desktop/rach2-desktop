@@ -4,13 +4,17 @@
 set -eu
 udev='' seat='' watch='' session='' restart=0 devices=0
 # The display the session draws on, `BACKEND CARD RENDERER` as display()
-# gives it, the card's device in /sys, and whether the session lost its card
+# gives it, the card's device in /sys, whether udev has reported that card
+# removed since the session started, and whether the session lost its card
 # and waits for another.
-shown='' shown_dev='' lost=0
+shown='' shown_dev='' dropped=0 lost=0
+# The cards udev has reported removed and the loop has not yet read, a name
+# a line.
+removed=/run/rach2-desktop.removed
 cleanup()
 {
     trap - EXIT HUP INT TERM USR1
-    rm -f /run/rach2-desktop.pid
+    rm -f /run/rach2-desktop.pid "$removed" "$removed.taken"
     for child in "$session" "$watch" "$seat" "$udev"; do
         [ -z "$child" ] || kill -TERM "-$child" 2>/dev/null || :
     done
@@ -41,14 +45,22 @@ while [ ! -S /run/seatd.sock ]; do
     sleep 1
 done
 # Each card that appears or goes away, as udev reports it once its rules
-# have run, wakes the loop below with SIGUSR1.
+# have run, wakes the loop below with SIGUSR1; a card that goes away is
+# named in $removed first, since it may be back under the same name and
+# device by the time the loop looks.
+rm -f "$removed" "$removed.taken"
 # shellcheck disable=SC2016 # the child expands its own words
 setsid bash -c 'udevadm monitor --udev --subsystem-match=drm |
     while read -r line; do
         case $line in
-            *" add "*"/card"[0-9]*" (drm)" | *" remove "*"/card"[0-9]*" (drm)") kill -USR1 "$0" ;;
+            *" remove "*"/card"[0-9]*" (drm)")
+                card=${line% (drm)}
+                echo "${card##*/}" >> "$1"
+                kill -USR1 "$0"
+                ;;
+            *" add "*"/card"[0-9]*" (drm)") kill -USR1 "$0" ;;
         esac
-    done' "$$" &
+    done' "$$" "$removed" &
 watch=$!
 echo $$ > /run/rach2-desktop.pid
 
@@ -89,20 +101,41 @@ device()
     readlink -f "/sys/class/drm/$1/device" 2>/dev/null || :
 }
 
-# gone: whether the card of the session's display has gone away.
+# taken: read the cards udev has reported removed since the last read, and
+# set dropped when the session's card is among them.
+taken()
+{
+    local card name
+    card=$(echo "$shown" | cut -d' ' -f2)
+    mv -f "$removed" "$removed.taken" 2>/dev/null || return 0
+    while read -r name; do
+        [ "$name" != "$card" ] || dropped=1
+    done < "$removed.taken"
+    rm -f "$removed.taken"
+}
+
+# gone: whether the card of the session's display has gone away, though a
+# card of the same name and device may have come back since.
 gone()
 {
     local card
+    taken
     card=$(echo "$shown" | cut -d' ' -f2)
     [ "$card" != - ] && [ -n "$card" ] &&
-        { [ ! -c "/dev/dri/$card" ] || [ "$(device "$card")" != "$shown_dev" ]; }
+        { [ "$dropped" = 1 ] || [ ! -c "/dev/dri/$card" ] ||
+            [ "$(device "$card")" != "$shown_dev" ]; }
 }
 
 # The session leads a process group of its own, which a restart ends whole.
+# A start on a card ends the wait for one; the removals read before the
+# start were of the cards drawn on before it.
 start_session()
 {
+    taken
     shown=$(display)
     shown_dev=$(device "$(echo "$shown" | cut -d' ' -f2)")
+    dropped=0
+    [ "$(echo "$shown" | cut -d' ' -f1)" != drm ] || lost=0
     # shellcheck disable=SC2086 # three words
     setsid su -s /bin/bash desktop -c 'exec /usr/libexec/rach2-session "$@"' rach2-session $shown &
     session=$!
@@ -157,7 +190,6 @@ while :; do
         elif [ "$lost" = 1 ] && [ -n "$session" ] && [ "$(display)" != "$shown" ] &&
             [ "$(display | cut -d' ' -f1)" = drm ]; then
             echo "rach2-desktop: session: display $(display) appeared; starting again"
-            lost=0
             stop_session
             start_session
         fi
