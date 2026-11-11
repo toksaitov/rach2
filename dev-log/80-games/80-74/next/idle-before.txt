@@ -1,0 +1,114 @@
+idle: pulseaudio 113 khda 8 ticks 100
+0	module-oss	device=/dev/dsp sink_name=oss_output source_name=oss_input mmap=0	
+1	module-native-protocol-unix		
+2	module-suspend-on-idle		
+idle: listings before
+0	oss_output	module-oss.c	s16le 2ch 44100Hz	SUSPENDED
+0	oss_input	module-oss.c	s16le 2ch 44100Hz	SUSPENDED
+1	oss_output.monitor	module-oss.c	s16le 2ch 44100Hz	SUSPENDED
+idle: sample before
+81.48 282.60
+idle: /proc/113/task/113/stat
+113 (pulseaudio) S 112 110 110 0 -1 0 0 0 0 0 0 66 0 0 20 0 2 0 1234 160178176 1132
+idle: /proc/113/task/119/stat
+119 (oss) S 112 110 110 0 -1 0 0 0 0 0 4 129 0 0 20 0 2 0 1284 160178176 1132
+idle: /proc/8/task/8/stat
+8 (khda) S 0 8 8 0 -1 0 0 0 0 0 0 732 0 0 20 0 1 0 613 0 0
+idle: khda schedstat
+7322000000 51570789 5683
+48:	5820	MSI	hda
+cpu  98 0 2425 28262 0 0 0 0 0 0
+cpu0 50 0 1677 6422 0 0 0 0 0 0
+cpu1 27 0 281 7238 0 0 0 0 0 0
+cpu2 8 0 286 7250 0 0 0 0 0 0
+cpu3 11 0 180 7350 0 0 0 0 0 0
+driver Intel HD Audio
+hda ready 1 playing 0
+codec 0 vendor 0x14F1510F afg 1
+primary pin 23 index 0 mixer 0 index 0 dac 16 enabled 0
+headphone pin 22 index 0 dac 16 enabled 0 mode auto
+jack headphone pin 22 state out polls 320 failed 0 changes 1
+jack mic pin 25 state out polls 320 failed 0 changes 1
+beep widget 18 divider 0 path 0 tones 0
+stream requested 48000 programmed 48000 format 0x0031 dac-format 0x0031 hp-format 0x0031 bits 24
+caps dac 16 source 16 pcm 0x000A0560 formats 0x00000001
+caps dac 16 source 16 pcm 0x000A0560 formats 0x00000001
+input adc 19 index 1 mid 0 index 0 pin 26 int-mic 26 jack-mic 25 inv-dmic 1 level 74 pin-ctl 0x20
+caps adc 19 source 19 pcm 0x000A0160 formats 0x00000001
+capture running 0 requested 44100 rate 44100 format 0x4011 period 4096 periods 16 frames 2964480 overruns 0 lpib 61440
+service calls 9492 usec 6344962 max-usec 2456 missed 0 clock-us 0 gap-us 0 asked-us 0 asked-valid 0 moved-us 0 revolution-us 0
+connections nid 23 long 0 raw 0x10 0x11
+expanded 16 17
+connections nid 22 long 0 raw 0x10 0x11
+expanded 16 17
+queue fill 0 high 0 delay-ms 0 written 0 dropped 0 periods 2925 underruns 0 missed 0 lpib 1024
+gpio count 3 caps 0x40000003
+widget 16 type out caps 0x00000C1D amp-in 0x00000000 amp-out 0x80034A4A conn
+widget 17 type out caps 0x00000C1D amp-in 0x00000000 amp-out 0x80034A4A conn
+widget 18 type beep caps 0x0070000C amp-in 0x00000000 amp-out 0x000F0707 conn
+widget 19 type in caps 0x00100D1B amp-in 0x8003504A amp-out 0x00000000 conn 24 26 25
+widget 20 type in caps 0x00100D1B amp-in 0x8003504A amp-out 0x00000000 conn 25 26 21
+widget 21 type mix caps 0x0020050B amp-in 0x80034A4A amp-out 0x00000000 conn 16 17
+widget 22 type pin caps 0x00400581 amp-in 0x00000000 amp-out 0x00000000 pin-caps 0x0000001C config 0x04211040 sense 0x00000000 conn 16 17
+widget 23 type pin caps 0x00400501 amp-in 0x00000000 amp-out 0x00000000 pin-caps 0x00000010 config 0x94170110 conn 16 17
+widget 24 type pin caps 0x0040048B amp-in 0x002F0300 amp-out 0x00000000 pin-caps 0x00001124 config 0x40F001F0 sense 0x00000000 conn 16 17
+widget 25 type pin caps 0x0040048B amp-in 0x002F0300 amp-out 0x00000000 pin-caps 0x00001124 config 0x04A11030 sense 0x00000000 conn
+widget 26 type pin caps 0x0040048B amp-in 0x002F0300 amp-out 0x00000000 pin-caps 0x00000020 config 0x94A70120 conn
+widget 27 type vendor caps 0x00F00000 amp-in 0x00000000 amp-out 0x00000000 conn
+widget 28 type vendor caps 0x00F00000 amp-in 0x00000000 amp-out 0x00000000 conn
+adcs 19 20
+idle: sample after
+91.51 322.64
+idle: /proc/113/task/113/stat
+113 (pulseaudio) S 112 110 110 0 -1 0 0 0 0 0 0 66 0 0 20 0 2 0 1234 160178176 1132
+idle: /proc/113/task/119/stat
+119 (oss) S 112 110 110 0 -1 0 0 0 0 0 4 129 0 0 20 0 2 0 1284 160178176 1132
+idle: /proc/8/task/8/stat
+8 (khda) S 0 8 8 0 -1 0 0 0 0 0 0 732 0 0 20 0 1 0 613 0 0
+idle: khda schedstat
+7322000000 51570789 5683
+48:	5820	MSI	hda
+cpu  99 0 2431 32267 0 0 0 0 0 0
+cpu0 50 0 1678 7424 0 0 0 0 0 0
+cpu1 28 0 283 8239 0 0 0 0 0 0
+cpu2 9 0 287 8251 0 0 0 0 0 0
+cpu3 11 0 181 8352 0 0 0 0 0 0
+driver Intel HD Audio
+hda ready 1 playing 0
+codec 0 vendor 0x14F1510F afg 1
+primary pin 23 index 0 mixer 0 index 0 dac 16 enabled 0
+headphone pin 22 index 0 dac 16 enabled 0 mode auto
+jack headphone pin 22 state out polls 360 failed 0 changes 1
+jack mic pin 25 state out polls 360 failed 0 changes 1
+beep widget 18 divider 0 path 0 tones 0
+stream requested 48000 programmed 48000 format 0x0031 dac-format 0x0031 hp-format 0x0031 bits 24
+caps dac 16 source 16 pcm 0x000A0560 formats 0x00000001
+caps dac 16 source 16 pcm 0x000A0560 formats 0x00000001
+input adc 19 index 1 mid 0 index 0 pin 26 int-mic 26 jack-mic 25 inv-dmic 1 level 74 pin-ctl 0x20
+caps adc 19 source 19 pcm 0x000A0160 formats 0x00000001
+capture running 0 requested 44100 rate 44100 format 0x4011 period 4096 periods 16 frames 2964480 overruns 0 lpib 61440
+service calls 9492 usec 6344962 max-usec 2456 missed 0 clock-us 0 gap-us 0 asked-us 0 asked-valid 0 moved-us 0 revolution-us 0
+connections nid 23 long 0 raw 0x10 0x11
+expanded 16 17
+connections nid 22 long 0 raw 0x10 0x11
+expanded 16 17
+queue fill 0 high 0 delay-ms 0 written 0 dropped 0 periods 2925 underruns 0 missed 0 lpib 1024
+gpio count 3 caps 0x40000003
+widget 16 type out caps 0x00000C1D amp-in 0x00000000 amp-out 0x80034A4A conn
+widget 17 type out caps 0x00000C1D amp-in 0x00000000 amp-out 0x80034A4A conn
+widget 18 type beep caps 0x0070000C amp-in 0x00000000 amp-out 0x000F0707 conn
+widget 19 type in caps 0x00100D1B amp-in 0x8003504A amp-out 0x00000000 conn 24 26 25
+widget 20 type in caps 0x00100D1B amp-in 0x8003504A amp-out 0x00000000 conn 25 26 21
+widget 21 type mix caps 0x0020050B amp-in 0x80034A4A amp-out 0x00000000 conn 16 17
+widget 22 type pin caps 0x00400581 amp-in 0x00000000 amp-out 0x00000000 pin-caps 0x0000001C config 0x04211040 sense 0x00000000 conn 16 17
+widget 23 type pin caps 0x00400501 amp-in 0x00000000 amp-out 0x00000000 pin-caps 0x00000010 config 0x94170110 conn 16 17
+widget 24 type pin caps 0x0040048B amp-in 0x002F0300 amp-out 0x00000000 pin-caps 0x00001124 config 0x40F001F0 sense 0x00000000 conn 16 17
+widget 25 type pin caps 0x0040048B amp-in 0x002F0300 amp-out 0x00000000 pin-caps 0x00001124 config 0x04A11030 sense 0x00000000 conn
+widget 26 type pin caps 0x0040048B amp-in 0x002F0300 amp-out 0x00000000 pin-caps 0x00000020 config 0x94A70120 conn
+widget 27 type vendor caps 0x00F00000 amp-in 0x00000000 amp-out 0x00000000 conn
+widget 28 type vendor caps 0x00F00000 amp-in 0x00000000 amp-out 0x00000000 conn
+adcs 19 20
+idle: listings after
+0	oss_output	module-oss.c	s16le 2ch 44100Hz	SUSPENDED
+0	oss_input	module-oss.c	s16le 2ch 44100Hz	SUSPENDED
+1	oss_output.monitor	module-oss.c	s16le 2ch 44100Hz	SUSPENDED

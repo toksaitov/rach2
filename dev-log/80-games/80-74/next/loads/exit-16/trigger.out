@@ -1,0 +1,5 @@
+trigger: pid: 378 evidence: /tmp/t3703-next-out/exit-16
+trigger: waiting for a playback period
+trigger: preparing exit 16 MiB
+trigger: freeing exit 16 MiB
+trigger: result: load completed; read the retained counters

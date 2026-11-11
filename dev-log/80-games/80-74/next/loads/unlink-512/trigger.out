@@ -1,0 +1,9 @@
+trigger: pid: 488 evidence: /tmp/t3703-next-out/unlink-512
+trigger: waiting for a playback period
+trigger: preparing unlink 512 MiB
+trigger: wrote 128 MiB
+trigger: wrote 256 MiB
+trigger: wrote 384 MiB
+trigger: wrote 512 MiB
+trigger: freeing unlink 512 MiB
+trigger: result: load completed; read the retained counters
