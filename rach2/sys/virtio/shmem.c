@@ -76,17 +76,18 @@ struct vshm_rev {
  * The transport's record of one attached region. `refs` counts the attach
  * and each bind of virtio-gpu until that bind's virtio_put, each map of
  * the VM's pages until its map_free, and the interrupt thread's reap while
- * it runs, and changes only with interrupts off (vs_get, vs_put), since
- * two kernel threads take and drop references. The record is freed with
- * the last;
- * the detach gives back the region's pages and window, and the driver's
- * and maps' remaining references keep the record until they let go. A
- * record detached while objects still hold pages of its heap, as a buffer
- * whose dma-buf exists does through a reset, keeps its heap's map and table of
- * frames until they give the last back, and a later region over the same
- * memory leaves those frames out of its heap meanwhile.
- * `me` is the driver's block as last stored and `dev` the device's as last
- * read; both are this file's own copies.
+ * it runs, and changes only with interrupts off (vs_get, vs_put), since a
+ * kernel thread that the tick switches may drop the last one, as one that
+ * frees an imported buffer does. The record is freed with the last; the
+ * detach gives back the region's pages and window, and the driver's and
+ * maps' remaining references keep the record until they let go. A record
+ * detached while objects still hold pages of its heap, as a buffer whose
+ * dma-buf exists does through a reset, keeps its heap's map and table of
+ * frames on `vshm_kept` until they give the last back, and a later region
+ * over the same memory leaves those frames out of its heap meanwhile;
+ * `vshm_lock` is over that list and those tables. `me` is the driver's
+ * block as last stored and `dev` the device's as last read; both are this
+ * file's own copies.
  */
 struct vshm {
     struct virtio_dev vdev; /* first, so that the device is the record */
@@ -110,8 +111,9 @@ struct vshm {
     struct eventfd *out[2];
     uint32_t *heap_map; /* a bit for each page of the heap in use */
     uint32_t heap_pages, heap_used, heap_rover;
-    struct vshm *gone_next; /* on vshm_kept, while `gone` */
-    int gone;               /* detached with heap pages objects still hold */
+    struct vshm *gone_next; /* on vshm_kept, while `gone`; under vshm_lock */
+    int gone;               /* detached with heap pages objects still hold;
+                               under vshm_lock */
     uintptr_t window;       /* where the window was, while `gone` */
     struct spinlock heap_lock;
     /* The driver's interrupts, from virtio_ready to virtio_teardown: while
@@ -145,12 +147,33 @@ struct virtio_map {
 
 static struct vshm *vshm_cur;         /* the region attached, or detaching */
 static struct vshm *vshm_kept;        /* detached records whose heap pages objects hold */
+static struct vshm *vshm_marked;      /* the region whose heap leaves out their frames */
 static volatile uint32_t vshm_rang;   /* a bit for each vector rung since the thread looked */
 static wait_queue_t vshm_wq;          /* the thread sleeps here */
 static wait_queue_t vshm_detached_wq; /* a detacher waits here */
 static volatile int vshm_irq_rang;    /* the queue's doorbell rang since the
                                          interrupt thread looked */
 static wait_queue_t vshm_irq_wq;      /* the interrupt thread sleeps here */
+/*
+ * The lock over `vshm_kept`, each kept record's `gone`, `gone_next`, heap
+ * map and tables, and `vshm_marked`, from its attach's marks to its
+ * detach. Pages come back from system calls and from any kernel thread
+ * that frees a buffer, which the tick may switch, so a walk of the list,
+ * a give-back to two heaps or a record's leaving it runs whole, as KVM
+ * keeps its irqfds under irqfds.lock (virt/kvm/eventfd.c:596-605 in
+ * 6.12.115). Taken before a record's `heap_lock`, with interrupts off;
+ * what leaves under it is freed after it is let go (vshm_tables_free), as
+ * irqfd_shutdown frees an irqfd outside the lock (eventfd.c:157).
+ */
+static struct spinlock vshm_lock = SPINLOCK_INIT_NAMED("vshm_kept");
+
+/* A record's tables, taken off it under vshm_lock to be freed after. */
+struct vshm_tables {
+    uintptr_t *frames;
+    struct vshm_rev *rev;
+    uint32_t *heap_map;
+};
+
 #ifndef RACH2_HOSTTEST
 static int vshm_ready; /* the queues are made */
 static process_t *vshm_thread, *vshm_irq_thread;
@@ -728,31 +751,37 @@ static void *vs_dma_alloc(struct virtio_dev *d, uint32_t bytes, uint64_t *addr)
 }
 
 static void gone_give(struct vshm *vs, uintptr_t frame);
-static void vshm_gone_free(struct vshm *vs);
+static void vshm_gone_free(struct vshm *vs, struct vshm_tables *t);
+static void vshm_tables_free(struct vshm_tables *t);
 
 /** Give back the heap pages of `bytes` at `p`, after the detach too, which
  * keeps the record's heap while they are out; nothing for a queue's rings,
- * which the ring area holds. */
+ * which the ring area holds. Takes vshm_lock, under which the detach moves
+ * the record from its heap to the kept list. */
 static void vs_dma_free(struct virtio_dev *d, void *p, uint32_t bytes)
 {
     struct vshm *vs = to_vs(d);
-    uintptr_t at = (uintptr_t)p, base = vs->gone ? vs->window : (uintptr_t)vs->base;
-    uint32_t n = bytes / VGS_PAGE + (bytes % VGS_PAGE != 0), i, first;
+    struct vshm_tables t = {NULL, NULL, NULL};
+    uintptr_t at = (uintptr_t)p, base;
+    uint32_t n = bytes / VGS_PAGE + (bytes % VGS_PAGE != 0), i, first, flags;
 
-    if ((!vs->attached && !vs->gone) || at < base + vs->l.heap_off || at >= base + vs->size) {
-        return;
+    flags = spin_lock_irqsave(&vshm_lock);
+    base = vs->gone ? vs->window : (uintptr_t)vs->base;
+    if ((vs->attached || vs->gone) && at >= base + vs->l.heap_off && at < base + vs->size) {
+        first = (uint32_t)((at - base - vs->l.heap_off) / VGS_PAGE);
+        if (vs->attached) {
+            heap_give(vs, first, n);
+        } else {
+            for (i = first; i < first + n && i < vs->heap_pages; i++) {
+                gone_give(vs, vs->frames[heap_page(vs, i)]);
+            }
+            if (vs->heap_used == 0) {
+                vshm_gone_free(vs, &t);
+            }
+        }
     }
-    first = (uint32_t)((at - base - vs->l.heap_off) / VGS_PAGE);
-    if (vs->attached) {
-        heap_give(vs, first, n);
-        return;
-    }
-    for (i = first; i < first + n && i < vs->heap_pages; i++) {
-        gone_give(vs, vs->frames[heap_page(vs, i)]);
-    }
-    if (vs->heap_used == 0) {
-        vshm_gone_free(vs);
-    }
+    spin_unlock_irqrestore(&vshm_lock, flags);
+    vshm_tables_free(&t);
 }
 
 /** No shared memory region beside the transport's own: -ENOENT, so that
@@ -860,30 +889,31 @@ static uint32_t heap_of(const struct vshm *vs, uintptr_t frame)
 }
 
 /** Give a detached record's heap back its `frame`, which nothing holds
- * now, and the attached region's heap the same frame, which its attach left
- * out for this record (`vshm_gone_reserve`). */
+ * now, and the same frame to the heap of `vshm_marked`, whose attach left
+ * it out for this record (`vshm_gone_reserve`). Under vshm_lock. */
 static void gone_give(struct vshm *vs, uintptr_t frame)
 {
-    struct vshm *cur = vshm_cur;
+    struct vshm *cur = vshm_marked;
 
     if (!heap_drop(vs, heap_of(vs, frame))) {
         return;
     }
-    if (cur && cur != vs && cur->attached) {
+    if (cur && cur != vs) {
         (void)heap_drop(cur, heap_of(cur, frame));
     }
 }
 
 /** Give the heap back the pages `vs_backing_fill` gave `sh`: each page that
- * holds the region's frame for a heap page, the detached region's too. */
+ * holds the region's frame for a heap page, the detached region's too.
+ * Takes vshm_lock, as vs_dma_free does. */
 static void vs_backing_release(struct virtio_dev *d, struct shmem *sh)
 {
     struct vshm *vs = to_vs(d);
-    uint32_t n = (uint32_t)(sh->size / VGS_PAGE + (sh->size % VGS_PAGE != 0));
-
+    struct vshm_tables t = {NULL, NULL, NULL};
+    uint32_t n = (uint32_t)(sh->size / VGS_PAGE + (sh->size % VGS_PAGE != 0)), i, flags;
     uintptr_t frame;
-    uint32_t i;
 
+    flags = spin_lock_irqsave(&vshm_lock);
     if (vs->attached) {
         backing_give(vs, sh, n);
     } else if (vs->gone) {
@@ -894,9 +924,11 @@ static void vs_backing_release(struct virtio_dev *d, struct shmem *sh)
             }
         }
         if (vs->heap_used == 0) {
-            vshm_gone_free(vs);
+            vshm_gone_free(vs, &t);
         }
     }
+    spin_unlock_irqrestore(&vshm_lock, flags);
+    vshm_tables_free(&t);
 }
 
 /** The offset of the region's frame `phys`, which must lie in the heap. */
@@ -919,7 +951,7 @@ static int vs_dma_addr(struct virtio_dev *d, uintptr_t phys, uint64_t *addr)
 /**
  * Take a reference on the record. `refs` changes with interrupts off, so
  * that no tick passes the big lock on inside the load and the store when
- * a kernel thread, which the tick preempts, takes or drops one; it is
+ * a kernel thread that the tick switches takes or drops one; it is
  * kref_get's increment (include/linux/kref.h:43-46 in 6.12.115).
  */
 static void vs_get(struct vshm *vs)
@@ -1132,8 +1164,29 @@ static void vshm_bell_hangup(struct eventfd_hook *h)
  * Attaching and detaching
  */
 
-/** Take a detached record off `vshm_kept` and free the tables it kept. */
-static void vshm_gone_free(struct vshm *vs)
+/** Move `vs`'s tables into `t`, leaving the record none; under vshm_lock
+ * when another context may reach them. */
+static void vshm_tables_take(struct vshm *vs, struct vshm_tables *t)
+{
+    t->frames = vs->frames;
+    vs->frames = NULL;
+    t->rev = vs->rev;
+    vs->rev = NULL;
+    t->heap_map = vs->heap_map;
+    vs->heap_map = NULL;
+}
+
+/** Free the tables vshm_tables_take moved into `t`, outside vshm_lock. */
+static void vshm_tables_free(struct vshm_tables *t)
+{
+    kfree(t->frames);
+    kfree(t->rev);
+    kfree(t->heap_map);
+}
+
+/** Take a detached record off `vshm_kept`, its tables into `t` for the
+ * caller to free once it lets vshm_lock go. Under vshm_lock. */
+static void vshm_gone_free(struct vshm *vs, struct vshm_tables *t)
 {
     struct vshm **p;
 
@@ -1144,19 +1197,15 @@ static void vshm_gone_free(struct vshm *vs)
     }
     vs->gone = 0;
     vs->gone_next = NULL;
-    kfree(vs->frames);
-    vs->frames = NULL;
-    kfree(vs->rev);
-    vs->rev = NULL;
-    kfree(vs->heap_map);
-    vs->heap_map = NULL;
+    vshm_tables_take(vs, t);
 }
 
 /**
  * Leave out of `vs`'s heap, before the region is published, each frame of
  * it that an object of a detached record still holds, so that no two
- * objects share a frame when the same memory is attached again. Does not
- * sleep.
+ * objects share a frame when the same memory is attached again, and make
+ * `vs` the region whose heap gives those frames back (`gone_give`). Under
+ * vshm_lock; does not sleep.
  */
 static void vshm_gone_reserve(struct vshm *vs)
 {
@@ -1178,24 +1227,28 @@ static void vshm_gone_reserve(struct vshm *vs)
         }
         spin_unlock_irqrestore(&g->heap_lock, flags);
     }
+    vshm_marked = vs;
 }
 
 /** Free what the attach took and the record, once nothing refers to it: a
  * detached record's heap pages that were never given back first, since
- * nothing of it holds them now. */
+ * nothing of it holds them now, under vshm_lock as any give-back. */
 static void vshm_free(struct vshm *vs)
 {
-    uint32_t i;
+    struct vshm_tables t;
+    uint32_t i, flags;
 
+    flags = spin_lock_irqsave(&vshm_lock);
     for (i = 0; vs->gone && i < vs->heap_pages; i++) {
         gone_give(vs, vs->frames[heap_page(vs, i)]);
     }
     if (vs->gone) {
-        vshm_gone_free(vs);
+        vshm_gone_free(vs, &t);
+    } else {
+        vshm_tables_take(vs, &t);
     }
-    kfree(vs->frames);
-    kfree(vs->rev);
-    kfree(vs->heap_map);
+    spin_unlock_irqrestore(&vshm_lock, flags);
+    vshm_tables_free(&t);
     kfree(vs);
 }
 
@@ -1203,6 +1256,7 @@ static void vshm_free(struct vshm *vs)
  * Clear from `vs`'s heap each page another detached record holds: the
  * attach left it out for that record (`vshm_gone_reserve`), which alone
  * gives it back, so that only the attached region's heap keeps such marks.
+ * Under vshm_lock.
  */
 static void vshm_unreserve(struct vshm *vs)
 {
@@ -1226,14 +1280,17 @@ static void vshm_unreserve(struct vshm *vs)
 
 /**
  * Give back what the region holds: the doorbells' hooks and references,
- * the window and the frames. Every operation is a no-op from here on, but
- * for giving back the heap pages objects still hold.
+ * the window and the frames. Every operation is a no-op once it has run,
+ * but for giving back the heap pages objects still hold: under vshm_lock, the
+ * record leaves `vshm_marked` and its heap, with what other records hold
+ * cleared from it, either joins `vshm_kept` or has its tables freed, so a
+ * give-back finds it attached or kept, never between.
  */
 static void vshm_release(struct vshm *vs)
 {
-    uint32_t i;
+    struct vshm_tables t = {NULL, NULL, NULL};
+    uint32_t i, flags;
 
-    vs->attached = 0;
     vs->bells = 0;
     for (i = 0; i < 2; i++) {
         if (vs->in[i].ev) {
@@ -1258,6 +1315,11 @@ static void vshm_release(struct vshm *vs)
             frame_unref(vs->frames[i]);
         }
     }
+    flags = spin_lock_irqsave(&vshm_lock);
+    vs->attached = 0;
+    if (vshm_marked == vs) {
+        vshm_marked = NULL;
+    }
     if (vs->heap_map && vs->rev && vs->frames) {
         vshm_unreserve(vs);
     }
@@ -1267,14 +1329,11 @@ static void vshm_release(struct vshm *vs)
         vs->gone = 1;
         vs->gone_next = vshm_kept;
         vshm_kept = vs;
-        return;
+    } else {
+        vshm_tables_take(vs, &t);
     }
-    kfree(vs->frames);
-    vs->frames = NULL;
-    kfree(vs->rev);
-    vs->rev = NULL;
-    kfree(vs->heap_map);
-    vs->heap_map = NULL;
+    spin_unlock_irqrestore(&vshm_lock, flags);
+    vshm_tables_free(&t);
 }
 
 /**
@@ -1407,13 +1466,13 @@ static int vshm_irq_woken(void *arg)
  * region's queues each time their doorbell rings (vshm_irq_run), as
  * Linux's vhost worker runs the work a wakeup queued, so that the reap
  * runs outside the eventfd's lock and while the transport's thread binds.
- * It reads the region and takes a reference on its record with interrupts
- * off, so that no tick passes the big lock on between the two, and drops
- * the reference after the reap through vs_put, whose decrement and test
- * also run with interrupts off: a detach that runs meanwhile, or a last
- * put on another processor, leaves the record to this thread's put, as
- * KVM's irqfd_shutdown flushes the irqfd's queued work before it frees
- * the irqfd (virt/kvm/eventfd.c:143 and :158 in 6.12.115).
+ * The tick does not switch it, as it does not `vgpu-shm`, so no detach
+ * runs between its read of the region and the reap. It holds a reference
+ * on the record across the reap and drops it through vs_put: a detach
+ * that ran while it slept, or a last put on another processor, leaves the
+ * record to this thread's put, as KVM's irqfd_shutdown flushes the irqfd's
+ * queued work before it frees the irqfd (virt/kvm/eventfd.c:143 and :157
+ * in 6.12.115).
  */
 static void vshm_irq_main(void)
 {
@@ -1422,22 +1481,22 @@ static void vshm_irq_main(void)
 
     arch_irq_enable();
     for (;;) {
+        sched_service_point();
         (void)wq_wait_event_idle(&vshm_irq_wq, vshm_irq_woken, NULL);
         flags = kirq_save();
         vshm_irq_rang = 0;
+        kirq_restore(flags);
         vs = vshm_cur;
         if (vs) {
-            vs->refs++;
-        }
-        kirq_restore(flags);
-        if (vs) {
+            vs_get(vs);
             vshm_irq_run(vs);
             vs_put(&vs->vdev);
         }
     }
 }
 
-/** A kernel thread named `comm` that runs `entry`, ready to run, or NULL. */
+/** A kernel thread named `comm` that runs `entry`, ready to run, or NULL;
+ * the tick does not switch it (`no_tick_switch`). */
 static process_t *vshm_kthread(const char *comm, void (*entry)(void))
 {
     process_t *p;
@@ -1459,6 +1518,7 @@ static process_t *vshm_kthread(const char *comm, void (*entry)(void))
     p->page_dir = NULL;
     p->parent_pid = 0;
     proc_set_comm(p, comm);
+    p->no_tick_switch = 1;
     setup_process_stack(p, entry);
     sched_make_ready(p);
     kirq_restore(flags);
@@ -1492,7 +1552,7 @@ static int32_t vshm_take_region(struct vshm *vs, uintptr_t *frames, uint32_t npa
     struct vgs_layout l;
     const uint8_t *src = (const uint8_t *)&l;
     volatile uint8_t *dst;
-    uint32_t i;
+    uint32_t i, flags;
 
     vs->frames = frames;
     vs->npages = npages;
@@ -1513,7 +1573,9 @@ static int32_t vshm_take_region(struct vshm *vs, uintptr_t *frames, uint32_t npa
     }
     vshm_sort(vs->rev, npages);
     vs->l = l;
+    flags = spin_lock_irqsave(&vshm_lock);
     vshm_gone_reserve(vs);
+    spin_unlock_irqrestore(&vshm_lock, flags);
     VGS_LAYOUT(base)->magic = 0;
     VGS_MB();
     k_memset((void *)(uintptr_t)(base + 4), 0, VGS_CTRL_SIZE - 4u);
