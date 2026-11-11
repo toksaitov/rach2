@@ -465,21 +465,49 @@ The touchpad names are
 and
 .Ql ETPS/2
 .Pq Ql elantech .
-On serio1 they select the pad's protocol, with three-byte relative mode
-for SynRelPS/2; on serio2 they reset the guest and fall back to PS/2.
+On serio1 they select the pad's protocol; on serio2 they reset the guest
+and fall back to PS/2.
+SynRelPS/2 sets a Synaptics pad up in its relative mode, which sends a
+mouse's three-byte packets, as Linux's
+.Fn synaptics_init_relative
+does: the mode byte of SynPS/2 without its absolute bit, the pad's own
+tap gestures off on firmware 4 and later, its rate set through the pad's
+mode, and a node
+.Dq SynRelPS/2 Synaptics TouchPad
+whose version is the pad's model and whose buttons are the pad's:
+.Dv BTN_LEFT ,
+.Dv BTN_RIGHT
+but on a ClickPad, and
+.Dv BTN_MIDDLE
+only on a pad that has one.
+A reconnect sets the pad up in relative mode again and keeps its node.
+Its serio1 has the file
+.Pa disable_gesture
+on firmware 4 and later, which reads 1 while the pad's gestures are off;
+0 or 1 written to it sends the mode byte with or without the bit, and any
+other number fails with EINVAL.
+A pad with a pass-through port has serio2 in relative mode too, as
+Linux's has, with no device behind it, since no pass-through packet comes
+in that mode.
 Both ports also accept the other names and aliases in Linux's table:
 PS2++ (logitech), CyPS/2 (cypress), SynSMBus (synaptics-smbus), LBPS/2
-(lifebook), touchkitPS/2 (touchkit), OLPC HGPK (hgpk), ETSMBus
-(elantech-smbus), FSPPS/2 (fsp), FocalTechPS/2 (focaltech), VirtualPS/2
-(vmmouse) and BYDPS/2 (byd).
+(lifebook), touchkitPS/2 (touchkit), ETSMBus (elantech-smbus), FSPPS/2
+(fsp), FocalTechPS/2 (focaltech), VirtualPS/2 (vmmouse) and BYDPS/2
+(byd), and on i686 OLPC HGPK (hgpk), which Linux has only in a 32-bit
+kernel built for the OLPC XO.
 Their detects are not implemented, so they reset the device and fall back
 to PS/2.
 An unknown name fails with EINVAL.
 The switch reserves a replacement event device first; if no slot is free,
 it fails with ENOMEM and keeps the current protocol and devices.
-A switch away from Synaptics removes the pass-through port and its files.
-An Elantech register or setting access that waited through a protocol
-switch fails with ENODEV.
+serio2 stays while serio1's Synaptics pad does, as Linux's serio core
+keeps the port: a device behind it that goes, or fails its reconnect,
+takes only its node and serio2's files with it.
+A switch away from Synaptics removes the pass-through port.
+An Elantech register or setting access, a write of
+.Pa disable_gesture ,
+or a write of a serio2 file, that waited through the switch or probe that
+removed the protocol or device it was for fails with ENODEV.
 .Pa rate
 is the samples a second, 100 at first, set as the first of 200, 100, 80,
 60, 40, 20, 10 and 0 not above the number written, through the protocol's
