@@ -25,10 +25,12 @@
  *       `pipe:[N]`, the two ends of one pipe give the same N and two pipes
  *       different ones, and fstat reports N as the inode, the high word of
  *       its 64-bit field zero;
- *   (g) a read into a buffer whose second page is unmapped returns the bytes
- *       of the first page and leaves the rest in the pipe for the next read,
- *       since the kernel copies to user memory a page at a time and a page
- *       that faults leaves its bytes in the ring;
+ *   (g) a read into a buffer that runs into an unmapped page copies each of
+ *       the pipe's page buffers whole or not at all, as Linux's pipe_read
+ *       does (fs/pipe.c:326-331 in 6.12.115): with two writes of a page
+ *       held, a read whose first buffer crosses the hole is EFAULT and takes
+ *       nothing, a read whose first page fits takes that buffer and returns
+ *       4096 at the second, and the second page is still in the pipe;
  *   (h) one write of three pipefuls and a byte fills the pipe and waits three
  *       times, and the reader, asleep on the empty pipe between refills, is
  *       woken at every refill and not once per write call. The write end
@@ -272,6 +274,7 @@ enum {
     UNMAP_SECOND,
     FAULT_PIPE,
     FAULT_WRITE,
+    CROSS_HOLE,
     READ_BEFORE_HOLE,
     FIRST_BYTES,
     REST_IN_PIPE,
@@ -361,10 +364,11 @@ static const struct {
     {"two-page-map", "an anonymous mapping of two pages"},
     {"unmap-second", "with its second page unmapped"},
     {"fault-pipe", "pipe() for the fault test"},
-    {"fault-write", "a page of bytes written"},
-    {"read-before-hole", "a read across the hole returns the bytes before it"},
-    {"first-bytes", "and they are the first bytes"},
-    {"rest-in-pipe", "and the bytes after the hole are still in the pipe"},
+    {"fault-write", "two pages of bytes written in two writes"},
+    {"cross-hole", "a read whose first buffer crosses the hole -> -EFAULT"},
+    {"read-before-hole", "a read into the page before the hole returns the first buffer"},
+    {"first-bytes", "and they are the first page's bytes"},
+    {"rest-in-pipe", "and the buffer after the hole is still in the pipe"},
     {"rest-in-order", "in order, every one"},
     {"refill-pipes", "two pipes for the refill test"},
     {"refill-fork", "fork for the refill test"},
@@ -760,32 +764,35 @@ static int same_bytes(const char *a, const char *b, int n)
     return 1;
 }
 
-/** Case (g): a read into a buffer that runs into an unmapped page returns the
- * bytes before it and leaves the rest in the pipe. */
+/** Case (g): a read into a buffer that runs into an unmapped page copies
+ * each of the pipe's page buffers whole or not at all, as Linux's pipe_read
+ * advances a buffer only once its copy is whole and returns -EFAULT when no
+ * byte was read (fs/pipe.c:326-331 in 6.12.115). */
 static void case_fault(void)
 {
     long m = mmap_anon(8192);
     char *first = (char *)m;
-    char rest[2048];
+    char rest[4096];
     int p[2], got, i;
 
     check(TWO_PAGE_MAP, m != 0 && !sys_failed(m));
     check(UNMAP_SECOND, syscall2(SYS_MUNMAP, (long)(first + 4096), 4096) == 0);
     check(FAULT_PIPE, do_pipe(p) == 0);
-    /* No period of 2048, so the second half cannot pass for the first. */
-    for (i = 0; i < 4096; i++) {
+    /* No period of 4096, so the second page cannot pass for the first. */
+    for (i = 0; i < 8192; i++) {
         big[i] = (char)(((i * 7 + 3) ^ (i >> 7)) & 0x7f);
     }
-    check(FAULT_WRITE, wr(p[1], big, 4096) == 4096);
-    got = rd(p[0], first + 2048, 4096);
-    check(READ_BEFORE_HOLE, got == 2048);
-    if (got == 2048) {
-        check(FIRST_BYTES, same_bytes(first + 2048, big, 2048));
+    check(FAULT_WRITE, wr(p[1], big, 4096) == 4096 && wr(p[1], big + 4096, 4096) == 4096);
+    check(CROSS_HOLE, rd(p[0], first + 2048, 4096) == -EFAULT);
+    got = rd(p[0], first, 8192);
+    check(READ_BEFORE_HOLE, got == 4096);
+    if (got == 4096) {
+        check(FIRST_BYTES, same_bytes(first, big, 4096));
     }
     got = rd(p[0], rest, sizeof(rest));
-    check(REST_IN_PIPE, got == 2048);
-    if (got == 2048) {
-        check(REST_IN_ORDER, same_bytes(rest, big + 2048, 2048));
+    check(REST_IN_PIPE, got == 4096);
+    if (got == 4096) {
+        check(REST_IN_ORDER, same_bytes(rest, big + 4096, 4096));
     }
     syscall1(SYS_CLOSE, p[0]);
     syscall1(SYS_CLOSE, p[1]);
