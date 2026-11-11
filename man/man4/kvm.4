@@ -120,9 +120,15 @@ and their sets,
 .Dv KVM_SET_LAPIC ,
 .Dv KVM_SET_VAPIC_ADDR ,
 .Dv KVM_SET_GUEST_DEBUG ,
-.Dv KVM_X86_SETUP_MCE
+.Dv KVM_X86_SETUP_MCE ,
+.Dv KVM_X86_SET_MCE ,
 and
-.Dv KVM_X86_SET_MCE .
+.Dv KVM_HAS_DEVICE_ATTR ,
+.Dv KVM_GET_DEVICE_ATTR
+and
+.Dv KVM_SET_DEVICE_ATTR
+of
+.Dv KVM_VCPU_TSC_OFFSET .
 .El
 .Pp
 .Dv KVM_CHECK_EXTENSION
@@ -599,6 +605,7 @@ gives KVM's leaves: 0x40000000, with the signature
 .Ql KVMKVMKVM
 and 0x40000001 in EAX, and 0x40000001, whose EAX names
 .Dv KVM_FEATURE_NOP_IO_DELAY ,
+.Dv KVM_FEATURE_STEAL_TIME ,
 .Dv KVM_FEATURE_PV_UNHALT ,
 .Dv KVM_FEATURE_PV_SEND_IPI ,
 .Dv KVM_FEATURE_POLL_CONTROL
@@ -649,6 +656,51 @@ A vCPU made, and a TSC that
 .Dv KVM_SET_MSRS
 writes within a second of the one the last write would read now, keeps
 the matched TSC.
+.Dv KVM_GET_DEVICE_ATTR
+of
+.Dv KVM_VCPU_TSC_OFFSET
+in group
+.Dv KVM_VCPU_TSC_CTRL ,
+which
+.Dv KVM_CAP_VCPU_ATTRIBUTES
+offers, reads the vCPU's TSC offset, the guest's TSC less the host's, into
+the
+.Vt u64
+at
+.Va addr ,
+and
+.Dv KVM_SET_DEVICE_ATTR
+sets it, so that the guest's TSC reads the host's plus the offset; the same
+offset set on each vCPU keeps the TSC matched.
+.Dv KVM_HAS_DEVICE_ATTR
+answers 0 for it.
+.Pp
+A guest's write of
+.Dv MSR_KVM_STEAL_TIME ,
+which
+.Dv KVM_CAP_STEAL_TIME
+offers, names a
+.Vt struct kvm_steal_time
+of 64 bytes at a 64-byte boundary in its memory, with bit 0 to turn it on;
+a write with any of bits 1 to 5 fails.
+Before the guest runs after it was switched out, and at each
+.Dv KVM_RUN ,
+the kernel adds to
+.Va steal
+the time the vCPU's thread waited for a processor since the last time,
+which
+.Pa /proc/PID/schedstat
+gives as its second field
+.Pq Xr proc 5 , with
+.Va version
+odd while it writes and even after.
+When the thread gives up the processor at the end of its time slice after
+the guest stopped for a host interrupt,
+.Va preempted
+says
+.Dv KVM_VCPU_PREEMPTED
+until the guest runs again.
+A guest's INIT turns the steal time and the kvmclock off.
 .Dv KVM_KVMCLOCK_CTRL
 sets
 .Dv PVCLOCK_GUEST_STOPPED
@@ -928,7 +980,9 @@ or
 on
 .Pa /dev/kvm
 of an attribute other than
-.Dv KVM_X86_XCOMP_GUEST_SUPP .
+.Dv KVM_X86_XCOMP_GUEST_SUPP ,
+or a device attribute ioctl on a vCPU of an attribute other than
+.Dv KVM_VCPU_TSC_OFFSET .
 .It Bq Er EBADF
 .Dv KVM_IRQFD ,
 .Dv KVM_IOEVENTFD
@@ -980,6 +1034,7 @@ ended by a signal before it mapped anything.
 .Xr mremap 2 ,
 .Xr munmap 2 ,
 .Xr read 2 ,
+.Xr proc 5 ,
 .Xr sysfs 5 ,
 .Xr limits 7
 .Sh STANDARDS
@@ -995,10 +1050,8 @@ no enlightened VMCS and no direct TLB flush of Hyper-V's.
 Most statistics of
 .Dv KVM_GET_STATS_FD
 read 0.
-The TSC's rate is scaled only where the processor scales it, and there is no
-.Dv KVM_VCPU_TSC_CTRL .
-Of KVM's paravirtual features there are no asynchronous page faults, steal
-time, paravirtual EOI or TLB flush, and without a measured TSC rate no
-kvmclock.
+The TSC's rate is scaled only where the processor scales it.
+Of KVM's paravirtual features there are no asynchronous page faults,
+paravirtual EOI or TLB flush, and without a measured TSC rate no kvmclock.
 The APIC and PIT timers are checked at each entry, and the host's tick of 1 ms
 makes the guest exit, so an expiry reaches the guest within a tick.

@@ -322,11 +322,12 @@ struct kvm_vm {
     int old_kvmclock;    /* the boot vCPU's guest uses MSR_KVM_SYSTEM_TIME */
     /* The vCPUs' TSCs as Linux's kvm_synchronize_tsc matches them: the
      * generation of matched writes, its offset, the vCPUs that joined it
-     * after its first, and the last write's ns, value and rate. */
+     * after its first, and the last write's ns, value, rate and offset. */
     int user_set_tsc;
     uint32_t tsc_gen;
     uint32_t tsc_matched;
     int64_t tsc_cur_offset;
+    int64_t tsc_last_offset;
     uint64_t tsc_last_ns, tsc_last_write, tsc_last_khz;
     uint64_t tsc_cur_ns, tsc_cur_write; /* the generation's start: a moment, the TSC then */
     uint32_t disable_exits;             /* KVM_CAP_X86_DISABLE_EXITS: KVM_X86_DISABLE_EXITS_* */
@@ -376,6 +377,7 @@ struct kvm_vm {
 #define KVM_REQ_HV_CRASH     0x40u  /* end in KVM_SYSTEM_EVENT_CRASH (hyperv.c) */
 #define KVM_REQ_HV_RESET     0x80u  /* end in KVM_SYSTEM_EVENT_RESET (hyperv.c) */
 #define KVM_REQ_CLOCK_UPDATE 0x100u /* write the kvmclock again (pvclock.c) */
+#define KVM_REQ_STEAL_UPDATE 0x200u /* write the steal time again (pvclock.c) */
 
 /* The most MSRs a vCPU keeps, those of the index list, the MTRRs and the
  * machine-check banks. */
@@ -514,9 +516,18 @@ struct kvm_vcpu {
     uint32_t pv_features;  /* KVM_CPUID_FEATURES' EAX in the CPUID, KVM_FEATURE_* bits */
     int pv_enforce;        /* KVM_CAP_ENFORCE_PV_FEATURE_CPUID: the guest has those alone */
     uint64_t poll_control; /* MSR_KVM_POLL_CONTROL */
-    int pv_stopped;        /* KVM_KVMCLOCK_CTRL: the next write sets PVCLOCK_GUEST_STOPPED */
-    int32_t clock_cpu;     /* the processor the kvmclock was last written on, -1 for none */
-    uint64_t clock_ns;     /* the host's ns at that write */
+    /* The steal time (pvclock.c): MSR_KVM_STEAL_TIME, its address with
+     * KVM_MSR_ENABLED; the run_delay of the thread when it was last added,
+     * Linux's last_steal; the thread's pcount when it was last read, whose
+     * change means the thread was switched out and in; and whether the
+     * guest's record says KVM_VCPU_PREEMPTED. */
+    uint64_t st_msr;
+    uint64_t st_last;
+    unsigned long st_pcount;
+    int st_preempted;
+    int pv_stopped;    /* KVM_KVMCLOCK_CTRL: the next write sets PVCLOCK_GUEST_STOPPED */
+    int32_t clock_cpu; /* the processor the kvmclock was last written on, -1 for none */
+    uint64_t clock_ns; /* the host's ns at that write */
     uint64_t mcg_cap, mcg_status, mcg_ctl;
     uint64_t platform_info;        /* MSR_PLATFORM_INFO, which only the caller writes */
     uint64_t misc_features;        /* MSR_MISC_FEATURES_ENABLES: bit 0, CPUID faults above CPL 0 */
@@ -528,6 +539,10 @@ struct kvm_vcpu {
     /* Set by the backend after each exit, for the run page. */
     int if_flag;     /* RFLAGS.IF */
     int irq_allowed; /* an interrupt can be injected at the next entry */
+    /* Set by the backend after an exit for a host interrupt, cleared at
+     * each entry, Linux's at_instruction_boundary: the guest stopped
+     * between two instructions, so its record may say it was preempted. */
+    int at_boundary;
 
     /* The steps each vector's interrupts reached, by enum kvm_vec_step,
      * which the VM's fdinfo shows; written by the vCPU's thread and by a
@@ -629,7 +644,8 @@ int kvm_vcpu_test_clear(struct kvm_vcpu *v, uint32_t request);
 /** Give `v` the state an INIT leaves, as Linux's kvm_vcpu_reset with
  * `init_event`: the registers, segments, control registers, events and
  * debug registers of a reset, keeping the APIC base, the FPU's state, XCR0,
- * the MSRs and the TSC. vlapic.c resets the APIC itself. */
+ * the MSRs but the kvmclock's and the steal time's, which are turned off,
+ * and the TSC. vlapic.c resets the APIC itself. */
 void kvm_vcpu_init_reset(struct kvm_vcpu *v);
 
 /** The guest's physical address bits, from leaf 0x80000008 of `v`'s CPUID,
@@ -676,8 +692,8 @@ uint64_t kvm_xcr0_supported(void);
 uint64_t kvm_xcr0_guest(const struct kvm_vcpu *v);
 
 /** KVM_GET_SUPPORTED_CPUID's KVM_CPUID_FEATURES bits: the kvmclock's
- * three where the TSC's rate was measured, the I/O delay hint, PV_UNHALT,
- * PV_SEND_IPI, POLL_CONTROL and PV_SCHED_YIELD. */
+ * three where the TSC's rate was measured, the I/O delay hint, STEAL_TIME,
+ * PV_UNHALT, PV_SEND_IPI, POLL_CONTROL and PV_SCHED_YIELD. */
 uint32_t kvm_pv_supported(void);
 
 /** Keep the features of KVM's leaves in `v`'s CPUID, found by their
@@ -792,13 +808,20 @@ int32_t kvm_clock_set(struct kvm_vm *vm, uintptr_t arg);
  * master clock. After the vCPU joined the VM's `vcpus`. */
 void kvm_tsc_sync(struct kvm_vcpu *v, const uint64_t *value);
 
+/** Give `v`'s TSC the offset `offset` from the host's, the vCPU attribute
+ * KVM_VCPU_TSC_OFFSET, as Linux's kvm_arch_tsc_set_attr: the offset joins
+ * the VM's generation of matched TSCs when it is the last one set and the
+ * rate is the last one's, which keeps the master clock. */
+void kvm_tsc_offset_set(struct kvm_vcpu *v, int64_t offset);
+
 /** `v`'s guest moved its own TSC: its kvmclock and the reference TSC page
  * are written again before the next entry, and a TSC kept above the host's
  * rate counts on from here. */
 void kvm_tsc_moved(struct kvm_vcpu *v);
 
 /** Read or write, by `write`, the MSR `index` of `v` when it is one of
- * KVM's own: the kvmclock's four and MSR_KVM_POLL_CONTROL. `host` is 1 for
+ * KVM's own: the kvmclock's four, MSR_KVM_STEAL_TIME and
+ * MSR_KVM_POLL_CONTROL. `host` is 1 for
  * KVM_GET_MSRS and KVM_SET_MSRS. 0; -1 for a fault the guest takes as #GP,
  * which an MSR whose feature its CPUID lacks under
  * KVM_CAP_ENFORCE_PV_FEATURE_CPUID gives, and the caller as a refusal; 1
@@ -814,6 +837,22 @@ void kvm_clock_prepare(struct kvm_vcpu *v);
 /** KVM_KVMCLOCK_CTRL: the guest's next kvmclock says it was stopped. 0, or
  * -EINVAL while the kvmclock is off. */
 int32_t kvm_clock_ctrl(struct kvm_vcpu *v);
+
+/** Write `v`'s steal time into guest memory before an entry, as Linux's
+ * record_steal_time, when it was asked for (KVM_REQ_STEAL_UPDATE), when
+ * the thread was switched out and in since the last entry, as Linux asks
+ * at each vcpu_load, and while the guest's record says it was preempted:
+ * the thread's run-queue wait since the last write is added to `steal`,
+ * and `preempted` cleared. In `v`'s thread. */
+void kvm_steal_prepare(struct kvm_vcpu *v);
+
+/** Mark `v`'s steal time KVM_VCPU_PREEMPTED, as Linux's
+ * kvm_steal_time_set_preempted, before the run loop gives the processor
+ * away at a slice's end: only when the guest last stopped for a host
+ * interrupt (`at_boundary`), and with the steal time on. It counts the
+ * preemption in preemption_reported, or in preemption_other when the guest
+ * did not stop for an interrupt. In `v`'s thread. */
+void kvm_steal_preempted(struct kvm_vcpu *v);
 
 /** KVM_HC_CLOCK_PAIRING of `type` into the guest's `gpa`, as Linux's
  * kvm_pv_clock_pairing: the real time and the guest's TSC at one moment.

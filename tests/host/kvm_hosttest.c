@@ -36,9 +36,12 @@
  * TSCs matched under the master clock, which a write of another TSC stops,
  * the kvmclock in guest memory reading as KVM_GET_CLOCK does, its stop
  * flag, the wall clock, the clock pairing, the old MSR, KVM_SET_CLOCK,
- * KVM_CAP_ENFORCE_PV_FEATURE_CPUID and KVM_CAP_X86_DISABLE_EXITS; and
- * what Linux's selftests ask for: the TSC's rate set on a VM and on a
- * vCPU, on a processor that scales none and with SVM's and VMX's ratios,
+ * KVM_CAP_ENFORCE_PV_FEATURE_CPUID and KVM_CAP_X86_DISABLE_EXITS; the
+ * steal time, its writes of the thread's run_delay and its preempted flag
+ * across a switch at a slice's end inside KVM_RUN; the vCPU attribute
+ * KVM_VCPU_TSC_OFFSET; and what Linux's selftests ask for: the TSC's rate
+ * set on a VM and on a vCPU, on a processor that scales none and with SVM's
+ * and VMX's ratios,
  * the statistics files of a VM and a vCPU, KVM_PRE_FAULT_MEMORY, 1024
  * vCPUs with ids below 4096, the CR4 bits taken before KVM_SET_CPUID2,
  * the VM's capabilities and quirks, and the synchronized registers.
@@ -339,9 +342,23 @@ int signal_pending(void)
     return sig_pending;
 }
 
-/** The run loop's switch at a slice's end: one thread here, no slice ends. */
+/* The run loop's switch at a slice's end, which a row asks for by setting
+ * the caller's need_resched: the thread waits `preempt_wait` ns on a run
+ * queue and is switched in again, and the steal time's `preempted` byte at
+ * `preempt_seen_at` is kept as the switch found it. */
+static uint64_t preempt_wait;
+static const uint8_t *preempt_seen_at;
+static int preempt_seen = -1;
+
 void sched_take_preempt(void)
-{}
+{
+    if (caller.need_resched) {
+        caller.need_resched = 0;
+        caller.run_delay += preempt_wait;
+        caller.pcount++;
+        preempt_seen = preempt_seen_at ? *preempt_seen_at : -1;
+    }
+}
 
 void signal_set_blocked(uint64_t mask)
 {
@@ -512,6 +529,10 @@ static int fake_enter(struct kvm_vcpu *v)
     return refusing ? -EOPNOTSUPP : 0;
 }
 
+/* An exit the kernel takes for a host interrupt, KVM_X_AGAIN, is one at an
+ * instruction boundary whose interrupt asks for a switch, when set. */
+static int tick_exits;
+
 /** The next exit of the script. */
 static int fake_exit(struct kvm_vcpu *v)
 {
@@ -522,6 +543,10 @@ static int fake_exit(struct kvm_vcpu *v)
     v->exit = script[script_at++];
     v->if_flag = 1;
     v->irq_allowed = 1;
+    if (tick_exits && v->exit.kind == KVM_X_AGAIN) {
+        v->at_boundary = 1;
+        caller.need_resched = 1;
+    }
     return 0;
 }
 
@@ -1074,7 +1099,7 @@ static void startup_caps(int vm)
 static void startup_msr_lists(void)
 {
     uint32_t i, nmsrs;
-    int ucode;
+    int ucode, steal;
     int32_t r;
 
     buf.list.nmsrs = 0;
@@ -1084,12 +1109,14 @@ static void startup_msr_lists(void)
     r = dev(KVM_GET_MSR_INDEX_LIST, (uintptr_t)&buf);
     CHECK(r == 0 && buf.list.nmsrs == nmsrs, "KVM_GET_MSR_INDEX_LIST with room");
     n_put = 0;
-    ucode = 0;
+    ucode = steal = 0;
     for (i = 0; i < nmsrs; i++) {
         put_msr(MSR_INDICES[i]);
         ucode |= MSR_INDICES[i] == 0x8B;
+        steal |= MSR_INDICES[i] == MSR_KVM_STEAL_TIME;
     }
     CHECK(ucode, "the index list names UCODE_REV, as Linux's emulated_msrs");
+    CHECK(steal, "and MSR_KVM_STEAL_TIME");
     buf.list.nmsrs = 4;
     r = dev(KVM_GET_MSR_FEATURE_INDEX_LIST, (uintptr_t)&buf);
     CHECK(r == 0 && buf.list.nmsrs == 1 && MSR_INDICES[0] == 0x8B,
@@ -1128,9 +1155,9 @@ static void check_cpuid_entry(const struct kvm_cpuid_entry2 *e)
               "KVM's signature leaf");
     }
     if (e->function == KVM_CPUID_FEATURES) {
-        CHECK(e->eax == ((1u << KVM_FEATURE_NOP_IO_DELAY) | (1u << KVM_FEATURE_PV_UNHALT) |
-                         (1u << KVM_FEATURE_PV_SEND_IPI) | (1u << KVM_FEATURE_POLL_CONTROL) |
-                         (1u << KVM_FEATURE_PV_SCHED_YIELD)),
+        CHECK(e->eax == ((1u << KVM_FEATURE_NOP_IO_DELAY) | (1u << KVM_FEATURE_STEAL_TIME) |
+                         (1u << KVM_FEATURE_PV_UNHALT) | (1u << KVM_FEATURE_PV_SEND_IPI) |
+                         (1u << KVM_FEATURE_POLL_CONTROL) | (1u << KVM_FEATURE_PV_SCHED_YIELD)),
               "KVM's features, with no kvmclock while the TSC's rate is not known");
     }
     CHECK(e->function < 0x40000000u || e->function >= 0x80000000u ||
@@ -1838,9 +1865,10 @@ static void pv_leaf_rows(void)
     int found = 0;
 
     want = (1u << KVM_FEATURE_CLOCKSOURCE) | (1u << KVM_FEATURE_NOP_IO_DELAY) |
-           (1u << KVM_FEATURE_CLOCKSOURCE2) | (1u << KVM_FEATURE_PV_UNHALT) |
-           (1u << KVM_FEATURE_PV_SEND_IPI) | (1u << KVM_FEATURE_POLL_CONTROL) |
-           (1u << KVM_FEATURE_PV_SCHED_YIELD) | (1u << KVM_FEATURE_CLOCKSOURCE_STABLE_BIT);
+           (1u << KVM_FEATURE_CLOCKSOURCE2) | (1u << KVM_FEATURE_STEAL_TIME) |
+           (1u << KVM_FEATURE_PV_UNHALT) | (1u << KVM_FEATURE_PV_SEND_IPI) |
+           (1u << KVM_FEATURE_POLL_CONTROL) | (1u << KVM_FEATURE_PV_SCHED_YIELD) |
+           (1u << KVM_FEATURE_CLOCKSOURCE_STABLE_BIT);
     n = pv_cpuid();
     for (i = 0; i < n; i++) {
         if (CPUID_ENTRIES[i].function == KVM_CPUID_FEATURES) {
@@ -1858,6 +1886,8 @@ static void pv_leaf_rows(void)
           "KVM_CAP_X86_DISABLE_EXITS offers PAUSE and HLT");
     CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_ADJUST_CLOCK) == KVM_CLOCK_VALID_FLAGS,
           "KVM_CAP_ADJUST_CLOCK names KVM_GET_CLOCK's flags");
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_STEAL_TIME) == 1, "KVM_CAP_STEAL_TIME");
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_VCPU_ATTRIBUTES) == 1, "KVM_CAP_VCPU_ATTRIBUTES");
 }
 
 /** The guest's kvmclock at the host's TSC count `now`, by the formula
@@ -1961,6 +1991,132 @@ static void pv_tsc_rows(int vm, int fd0, int fd1)
           "KVM_GET_CLOCK says so");
 }
 
+static int32_t get_msr(int fd, uint32_t index, uint64_t *value);
+
+/* The steal time's record in the guest page, 64-byte aligned. */
+#define ST_GPA (GUEST_PAGE + 0x400u)
+
+/** The steal time of vCPU `fd0`, as the selftest steal_time and Linux's
+ * record_steal_time see it: MSR_KVM_STEAL_TIME refuses its reserved bits,
+ * each write adds the thread's run_delay since the last and keeps the
+ * version even, a switch of the thread asks for a write, and a preemption
+ * at a host interrupt marks the record preempted until the next entry. */
+static void steal_rows(int fd0)
+{
+    struct kvm_vcpu *v0 = entries[fd0].priv;
+    struct kvm_steal_time *st = (void *)(guest_page + (ST_GPA - GUEST_PAGE));
+    struct kvm_run *run = run_of(fd0);
+    uint64_t value = 0, reported;
+
+    CHECK(set_msr(fd0, MSR_KVM_STEAL_TIME, ST_GPA | KVM_STEAL_RESERVED_MASK) == 0,
+          "MSR_KVM_STEAL_TIME refuses its reserved bits");
+    k_memset(st, 0, sizeof(*st));
+    st->version = 7; /* what the guest left there, odd */
+    st->preempted = KVM_VCPU_PREEMPTED;
+    caller.run_delay = 5000;
+    CHECK(set_msr(fd0, MSR_KVM_STEAL_TIME, ST_GPA | KVM_MSR_ENABLED) == 1 &&
+              get_msr(fd0, MSR_KVM_STEAL_TIME, &value) == 1 && value == (ST_GPA | KVM_MSR_ENABLED),
+          "MSR_KVM_STEAL_TIME takes an aligned address and reads it back");
+    kvm_steal_prepare(v0);
+    CHECK(st->version == 10 && st->steal == 5000 && st->preempted == 0,
+          "the first write evens the version, adds the thread's whole run_delay and clears "
+          "preempted");
+    kvm_steal_prepare(v0);
+    CHECK(st->version == 10, "nothing is written again while the thread stays on its processor");
+    caller.run_delay += 3000;
+    caller.pcount++;
+    kvm_steal_prepare(v0);
+    CHECK(st->version == 12 && st->steal == 8000,
+          "a switch of the thread adds the wait since the last write");
+
+    reported = v0->stat[KVM_VCPU_STAT_PREEMPTION_REPORTED];
+    v0->at_boundary = 0;
+    kvm_steal_preempted(v0);
+    CHECK(st->preempted == 0 && v0->stat[KVM_VCPU_STAT_PREEMPTION_OTHER] == 1,
+          "a preemption away from an instruction boundary is not reported");
+    v0->at_boundary = 1;
+    kvm_steal_preempted(v0);
+    CHECK(st->preempted == KVM_VCPU_PREEMPTED &&
+              v0->stat[KVM_VCPU_STAT_PREEMPTION_REPORTED] == reported + 1,
+          "one at a host interrupt marks the record preempted");
+    kvm_steal_prepare(v0);
+    CHECK(st->preempted == 0 && st->version == 14 && st->steal == 8000,
+          "and the next entry clears it, with no switch in between");
+
+    refusing = 0;
+    script_len = 0;
+    script_at = 0;
+    scripted(KVM_X_AGAIN);
+    scripted(KVM_X_HLT);
+    tick_exits = 1;
+    preempt_wait = 2000;
+    preempt_seen_at = &st->preempted;
+    run->immediate_exit = 0;
+    CHECK(fdio(fd0, KVM_RUN, 0) == 0 && run->exit_reason == KVM_EXIT_HLT,
+          "KVM_RUN through a tick that takes the processor, to a HLT");
+    CHECK(preempt_seen == KVM_VCPU_PREEMPTED && st->preempted == 0,
+          "the record says preempted while the thread is switched out, and not after");
+    CHECK(st->steal == 10000 && st->version == 18,
+          "the wait on the run queue is stolen time at the next entry");
+    CHECK(v0->stat[KVM_VCPU_STAT_PREEMPTION_REPORTED] == reported + 2, "and is reported");
+    tick_exits = 0;
+    preempt_wait = 0;
+    preempt_seen_at = NULL;
+    refusing = 1;
+
+    CHECK(set_msr(fd0, MSR_KVM_STEAL_TIME, ST_GPA) == 1, "the guest turns it off");
+    caller.pcount++;
+    kvm_steal_prepare(v0);
+    CHECK(st->version == 18, "and nothing more is written");
+}
+
+/** The vCPU attribute KVM_VCPU_TSC_OFFSET of vCPUs `fd0` and `fd1` of the
+ * VM `vm`, as system_counter_offset_test drives it and Linux's
+ * kvm_arch_tsc_set_attr matches it: the guest's TSC is the host's plus the
+ * offset, a new offset on one vCPU starts a generation without the master
+ * clock, and the same offset on the other joins it and brings the master
+ * clock back. */
+static void tsc_attr_rows(int vm, int fd0, int fd1)
+{
+    struct kvm_vcpu *v0 = entries[fd0].priv, *v1 = entries[fd1].priv;
+    struct kvm_device_attr attr;
+    struct kvm_clock_data clk;
+    uint64_t value = 0, offset = (uint64_t)-180000000000ll;
+
+    k_memset(&attr, 0, sizeof(attr));
+    attr.group = KVM_VCPU_TSC_CTRL;
+    attr.attr = KVM_VCPU_TSC_OFFSET;
+    attr.addr = (uint64_t)(uintptr_t)&value;
+    CHECK(fdio(fd0, KVM_HAS_DEVICE_ATTR, (uintptr_t)&attr) == 0, "a vCPU has KVM_VCPU_TSC_OFFSET");
+    CHECK(fdio(fd0, KVM_GET_DEVICE_ATTR, (uintptr_t)&attr) == 0 &&
+              value == (uint64_t)v0->tsc_offset,
+          "which reads as its TSC's offset");
+    value = offset;
+    CHECK(fdio(fd0, KVM_SET_DEVICE_ATTR, (uintptr_t)&attr) == 0 &&
+              v0->tsc_offset == (int64_t)offset && kvm_tsc_read(v0) == tsc + offset,
+          "setting it makes the guest's TSC the host's plus the offset");
+    CHECK(!v0->vm->master_clock, "a new offset stops the master clock");
+    value = 0;
+    CHECK(fdio(fd0, KVM_GET_DEVICE_ATTR, (uintptr_t)&attr) == 0 && value == offset,
+          "and reads back");
+    value = offset;
+    CHECK(fdio(fd1, KVM_SET_DEVICE_ATTR, (uintptr_t)&attr) == 0 &&
+              v1->tsc_offset == v0->tsc_offset && v0->vm->master_clock,
+          "the same offset on the other vCPU matches it and starts the master clock again");
+    get_clock(vm, &clk);
+    CHECK(clk.flags == (KVM_CLOCK_TSC_STABLE | KVM_CLOCK_REALTIME | KVM_CLOCK_HOST_TSC),
+          "KVM_GET_CLOCK says so");
+    attr.group = 1;
+    CHECK(fdio(fd0, KVM_HAS_DEVICE_ATTR, (uintptr_t)&attr) == -ENXIO &&
+              fdio(fd0, KVM_GET_DEVICE_ATTR, (uintptr_t)&attr) == -ENXIO &&
+              fdio(fd0, KVM_SET_DEVICE_ATTR, (uintptr_t)&attr) == -ENXIO,
+          "another group is ENXIO");
+    attr.group = KVM_VCPU_TSC_CTRL;
+    attr.attr = 1;
+    CHECK(fdio(fd0, KVM_HAS_DEVICE_ATTR, (uintptr_t)&attr) == -ENXIO,
+          "and so is another attribute");
+}
+
 /** KVM_CAP_ENFORCE_PV_FEATURE_CPUID on vCPU `fd1` of the VM `vm`, and
  * KVM_CAP_X86_DISABLE_EXITS: PV_UNHALT dropped at KVM_SET_CPUID2 and HLT
  * left to the guests of vCPUs made after it. */
@@ -2034,7 +2190,9 @@ static void pv_rows(void)
     fd1 = fdio(vm, KVM_CREATE_VCPU, 1);
     pv_tsc_rows(vm, fd0, fd1);
     pv_clock_rows(vm, fd0);
+    tsc_attr_rows(vm, fd0, fd1);
     pv_cap_rows(vm, fd0, fd1);
+    steal_rows(fd0);
     fdclose(fd1);
     fdclose(fd0);
     fdclose(vm);
