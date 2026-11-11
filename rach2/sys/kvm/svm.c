@@ -2729,6 +2729,14 @@ static uint64_t svm_tsc_scaling(uint32_t *frac_bits)
     return caps.tscrate ? TSC_RATIO_MAX : 0;
 }
 
+/** `kvm_backend`'s xsaves: 1, since a guest with XSAVE runs XSAVES where
+ * the host has it, which KVM_GET_SUPPORTED_CPUID then offers, as Linux's
+ * svm_vcpu_after_set_cpuid has it. */
+static int svm_xsaves(void)
+{
+    return 1;
+}
+
 /** The bits of a memory type in a 4 KiB leaf: PCD and PWT for UC, PWT for
  * WT, none for WB, with the guest's PAT combined with them. */
 static uint64_t svm_cache(int type, int ignore_guest_pat)
@@ -2744,4 +2752,4 @@ static const struct kvm_tdp_format svm_tdp = {
 const struct kvm_backend kvm_svm = {
     "svm",     svm_probe,       svm_vm_init,           NULL,     svm_vcpu_init, svm_vcpu_free,
     svm_enter, svm_exit,        svm_complete,          svm_save, svm_inject,    svm_check_extension,
-    &svm_tdp,  svm_tsc_scaling, svm_msr_filter_changed};
+    &svm_tdp,  svm_tsc_scaling, svm_msr_filter_changed, svm_xsaves};

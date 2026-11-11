@@ -93,6 +93,7 @@
 #define VM_ENTRY_MSR_LOAD_ADDR        0x200Au
 #define TSC_OFFSET                    0x2010u
 #define TSC_MULTIPLIER                0x2032u
+#define XSS_EXIT_BITMAP               0x202Cu
 #define EPT_POINTER                   0x201Au
 #define GUEST_PHYSICAL_ADDRESS        0x2400u
 #define VMCS_LINK_POINTER             0x2800u
@@ -206,6 +207,7 @@
 #define PROC2_WBINVD      0x00000040u
 #define PROC2_UG          0x00000080u
 #define PROC2_INVPCID     0x00001000u
+#define PROC2_XSAVES      0x00100000u
 #define PROC2_TSC_SCALING 0x02000000u
 
 /* The TSC multiplier, 16 bits of integer over 48 of fraction: 1. */
@@ -1091,8 +1093,12 @@ static void vmcs_build(struct kvm_vcpu *v)
     vmcs_write(PIN_BASED_VM_EXEC_CONTROL, caps.pin);
     x->proc = caps.proc & ~(v->hlt_in_guest ? PROC_HLT : 0u);
     vmcs_write(CPU_BASED_VM_EXEC_CONTROL, x->proc);
-    x->proc2 = caps.proc2 & ~(PROC2_RDTSCP | PROC2_INVPCID);
+    x->proc2 = caps.proc2 & ~(PROC2_RDTSCP | PROC2_INVPCID | PROC2_XSAVES);
     vmcs_write(SECONDARY_VM_EXEC_CONTROL, x->proc2);
+    if (caps.proc2 & PROC2_XSAVES) {
+        /* No component of IA32_XSS makes XSAVES or XRSTORS exit. */
+        vmcs_write(XSS_EXIT_BITMAP, 0);
+    }
     vmcs_write(VM_EXIT_CONTROLS, caps.exit);
     x->entry = caps.entry & ~ENTRY_IA32E;
     vmcs_write(VM_ENTRY_CONTROLS, x->entry);
@@ -1165,13 +1171,13 @@ static uint64_t table_msr(struct kvm_vcpu *v, uint32_t index)
     return value;
 }
 
-/** The secondary controls `v`'s CPUID allows: RDTSCP and INVPCID only
- * where it offers them, since without the control each is #UD, as Linux's
- * vmx_secondary_exec_control. */
+/** The secondary controls `v`'s CPUID allows: RDTSCP, INVPCID and
+ * XSAVES only where it offers them, XSAVES with XSAVE, since without the
+ * control each is #UD, as Linux's vmx_secondary_exec_control. */
 static uint32_t proc2_for(const struct kvm_vcpu *v)
 {
-    const struct kvm_cpuid_entry2 *e;
-    uint32_t p = caps.proc2 & ~(PROC2_RDTSCP | PROC2_INVPCID);
+    const struct kvm_cpuid_entry2 *e, *d1;
+    uint32_t p = caps.proc2 & ~(PROC2_RDTSCP | PROC2_INVPCID | PROC2_XSAVES);
 
     e = kvm_cpuid_find(v, 0x80000001u, 0);
     if (e && ((e->edx >> 27) & 1u)) {
@@ -1180,6 +1186,11 @@ static uint32_t proc2_for(const struct kvm_vcpu *v)
     e = kvm_cpuid_find(v, 7, 0);
     if (e && ((e->ebx >> 10) & 1u)) {
         p |= caps.proc2 & PROC2_INVPCID;
+    }
+    e = kvm_cpuid_find(v, 1, 0);
+    d1 = kvm_cpuid_find(v, 0xD, 1);
+    if (e && ((e->ecx >> 26) & 1u) && d1 && ((d1->eax >> 3) & 1u)) {
+        p |= caps.proc2 & PROC2_XSAVES;
     }
     return p;
 }
@@ -2716,8 +2727,8 @@ static int controls(uint32_t msr, uint32_t true_msr, uint32_t want, uint32_t nee
  * the backend locks it so; a VMCS of 4 KiB at most, write-back, in 64-bit
  * addresses; EPT of four levels, write-back, with INVEPT; the unrestricted
  * guest; the preemption timer; virtual NMIs; and the exit and entry
- * controls of EFER and PAT. VPID, RDTSCP, INVPCID, WBINVD exiting and TSC
- * scaling are taken where they are. 1 or 0.
+ * controls of EFER and PAT. VPID, RDTSCP, INVPCID, WBINVD exiting, XSAVES
+ * and TSC scaling are taken where they are. 1 or 0.
  */
 static int vmx_probe(void)
 {
@@ -2766,7 +2777,7 @@ static int vmx_probe(void)
     }
     caps.proc2 = (uint32_t)(vmx_op->rdmsr(MSR_IA32_VMX_PROCBASED2) >> 32) &
                  (PROC2_EPT | PROC2_UG | PROC2_VPID | PROC2_RDTSCP | PROC2_INVPCID | PROC2_WBINVD |
-                  PROC2_TSC_SCALING);
+                  PROC2_XSAVES | PROC2_TSC_SCALING);
     if ((caps.proc2 & proc2_need) != proc2_need ||
         controls(MSR_IA32_VMX_EXIT, MSR_IA32_VMX_TRUE_EXIT, exit_need, exit_need, &caps.exit) ||
         controls(MSR_IA32_VMX_ENTRY, MSR_IA32_VMX_TRUE_ENTRY, entry_need, entry_need,
@@ -2806,6 +2817,14 @@ static uint64_t vmx_cache(int type, int ignore_guest_pat)
     return ((uint64_t)type << 3) | (ignore_guest_pat ? 0x40u : 0u);
 }
 
+/** `kvm_backend`'s xsaves: whether the processor has the secondary
+ * control that lets a guest run XSAVES and XRSTORS, as Linux clears
+ * XSAVES from what it offers without it. */
+static int vmx_xsaves(void)
+{
+    return (caps.proc2 & PROC2_XSAVES) != 0;
+}
+
 /** `kvm_backend`'s tsc_scaling: the TSC multiplier's largest value and
  * its 48 bits of fraction, or 0 on a processor without the control. */
 static uint64_t vmx_tsc_scaling(uint32_t *frac_bits)
@@ -2822,4 +2841,4 @@ static const struct kvm_tdp_format vmx_tdp = {
 const struct kvm_backend kvm_vmx = {
     "vmx",     vmx_probe,       vmx_vm_init,           NULL,     vmx_vcpu_init, vmx_vcpu_free,
     vmx_enter, vmx_exit,        vmx_complete,          vmx_save, vmx_inject,    vmx_check_extension,
-    &vmx_tdp,  vmx_tsc_scaling, vmx_msr_filter_changed};
+    &vmx_tdp,  vmx_tsc_scaling, vmx_msr_filter_changed, vmx_xsaves};

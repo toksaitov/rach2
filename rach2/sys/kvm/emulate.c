@@ -701,6 +701,7 @@ int kvm_emul_xsetbv(struct kvm_vcpu *v)
         return -1;
     }
     v->xcr0 = xcr0;
+    kvm_cpuid_xsave_sizes(v, v->cpuid, v->cpuid_nent);
     v->dirty |= KVM_PART_FPU;
     return 0;
 }

@@ -191,6 +191,7 @@ static void vcpu_reset(struct kvm_vcpu *v)
     v->xsave[25] = 0x1F;
     k_memcpy(v->xsave + XSAVE_HDR, &bv, sizeof(bv));
     v->xcr0 = XFEATURE_X87;
+    kvm_cpuid_xsave_sizes(v, v->cpuid, v->cpuid_nent);
     k_memset(&v->guest_debug, 0, sizeof(v->guest_debug));
     v->mp_state = KVM_MP_STATE_RUNNABLE;
     v->tsc_offset = -(int64_t)kvm_tsc_scale(v, arch_cycles());
@@ -1254,6 +1255,7 @@ static int32_t set_xcrs(struct kvm_vcpu *v, uintptr_t arg)
                 return -EINVAL;
             }
             v->xcr0 = ex.xcrs[i].value;
+            kvm_cpuid_xsave_sizes(v, v->cpuid, v->cpuid_nent);
             v->dirty |= KVM_PART_FPU;
             break;
         }
@@ -1321,8 +1323,9 @@ static int bytes_equal(const void *a, const void *b, uint32_t n)
 
 /**
  * KVM_SET_CPUID2: the guest's CPUID, which once the vCPU has run Linux
- * takes only unchanged. 0, -E2BIG past KVM_MAX_CPUID_ENTRIES, -EINVAL for a
- * change after a run, -ENOMEM or -EFAULT.
+ * takes only unchanged, comparing it with leaf 0xD's sizes set for the
+ * vCPU's XCR0 as it keeps its own. 0, -E2BIG past KVM_MAX_CPUID_ENTRIES,
+ * -EINVAL for a change after a run, -ENOMEM or -EFAULT.
  */
 static int32_t set_cpuid(struct kvm_vcpu *v, uintptr_t arg)
 {
@@ -1347,6 +1350,7 @@ static int32_t set_cpuid(struct kvm_vcpu *v, uintptr_t arg)
             return -EFAULT;
         }
     }
+    kvm_cpuid_xsave_sizes(v, ent, head.nent);
     if (v->has_run) {
         int same = head.nent == v->cpuid_nent && bytes_equal(ent, v->cpuid, bytes);
         kfree(ent);

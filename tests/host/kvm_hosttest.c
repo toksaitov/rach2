@@ -606,7 +606,8 @@ const struct kvm_backend kvm_vmx = {"vmx",
                                     fake_backend_cap,
                                     NULL,
                                     fake_tsc_scaling,
-                                    fake_msr_filter_changed};
+                                    fake_msr_filter_changed,
+                                    NULL};
 const struct kvm_backend kvm_svm = {"svm", fake_probe, NULL, NULL, NULL, NULL, NULL,
                                     NULL,  NULL,       NULL, NULL, NULL, NULL};
 

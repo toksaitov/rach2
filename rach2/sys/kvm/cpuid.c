@@ -21,6 +21,14 @@
 #define XFEATURE_YMM    0x4ull
 #define XFEATURE_AVX512 0xE0ull
 
+/* Leaf 0xD, subleaf 1, EAX: XSAVEOPT, XSAVEC, XGETBV1 and XSAVES. A guest
+ * has XSAVES with IA32_XSS at 0, its only value (msr.c), as Linux 6.12
+ * offers it with no supervisor state; the host's IA32_XSS, which the
+ * kernel never writes, is 0 too, so neither is switched around a run. */
+#define XSAVE_D1_EAX    0x7u
+#define XSAVE_D1_XSAVEC 0x2u
+#define XSAVE_D1_XSAVES 0x8u
+
 /*
  * The bits of each leaf a guest may have where the host has them, as
  * Linux's kvm_set_cpu_caps masks them, less what needs a part of KVM that
@@ -112,17 +120,18 @@ uint64_t kvm_xcr0_supported(void)
     return mask;
 }
 
-/** The XSAVE area's bytes for the components `xcr0`, as the standard
- * form places them: the end of the last one, 576 at least. */
-static uint32_t xsave_size(uint64_t xcr0)
+uint32_t kvm_xsave_size(uint64_t features, int compacted)
 {
-    uint32_t a, b, c, d, size = 576, i;
+    uint32_t a, b, c, d, size = 576, off, i;
 
     for (i = 2; i < 64; i++) {
-        if ((xcr0 >> i) & 1u) {
+        if ((features >> i) & 1u) {
+            /* EAX the size, EBX the standard form's offset, ECX bit 1
+             * the compacted form's alignment to 64 bytes. */
             kcpu_id_sub(0xD, i, &a, &b, &c, &d);
-            if (a + b > size) {
-                size = a + b;
+            off = !compacted ? b : (c & 0x2u) ? (size + 63u) & ~63u : size;
+            if (off + a > size) {
+                size = off + a;
             }
         }
     }
@@ -178,12 +187,15 @@ static int filter(struct kvm_cpuid_entry2 *e, uint64_t xcr0)
         if (e->index == 0) {
             e->eax = (uint32_t)xcr0;
             e->edx = (uint32_t)(xcr0 >> 32);
-            e->ebx = e->ecx = xsave_size(xcr0);
+            e->ebx = e->ecx = kvm_xsave_size(xcr0, 0);
             return 1;
         }
         if (e->index == 1) {
-            e->eax &= 0x7u; /* XSAVEOPT, XSAVEC, XGETBV1; no XSAVES */
-            e->ebx = e->ecx = e->edx = 0;
+            e->eax &= XSAVE_D1_EAX |
+                      (kvm_backend && kvm_backend->xsaves && kvm_backend->xsaves() ? XSAVE_D1_XSAVES
+                                                                                   : 0u);
+            e->ebx = (e->eax & (XSAVE_D1_XSAVEC | XSAVE_D1_XSAVES)) ? kvm_xsave_size(xcr0, 1) : 0u;
+            e->ecx = e->edx = 0; /* IA32_XSS names no component */
             return 1;
         }
         return (xcr0 >> e->index) & 1u;
@@ -409,6 +421,22 @@ uint64_t kvm_xcr0_guest(const struct kvm_vcpu *v)
     }
     xcr0 = (uint64_t)e->eax | ((uint64_t)e->edx << 32);
     return (xcr0 & kvm_xcr0_supported()) | 0x1u;
+}
+
+void kvm_cpuid_xsave_sizes(const struct kvm_vcpu *v, struct kvm_cpuid_entry2 *e, uint32_t n)
+{
+    uint32_t i;
+
+    for (i = 0; i < n; i++) {
+        if (e[i].function != 0xDu) {
+            continue;
+        }
+        if (e[i].index == 0) {
+            e[i].ebx = kvm_xsave_size(v->xcr0, 0);
+        } else if (e[i].index == 1 && (e[i].eax & (XSAVE_D1_XSAVEC | XSAVE_D1_XSAVES))) {
+            e[i].ebx = kvm_xsave_size(v->xcr0, 1);
+        }
+    }
 }
 
 /** The entry of `v`'s CPUID for `function` that a caller may change,
