@@ -10,8 +10,10 @@
 #include "../proc/process.h"
 #include "../timer.h"
 
-/* The kinds of lock, in the order a lock first named each. */
+/* The kinds of lock, in the order a lock first named each, and the lock of
+ * the list and of the records' counts. */
 static struct sleep_lock_record *records;
+static struct spinlock records_lock = SPINLOCK_INIT;
 
 /* A waiter's place in the line for `lock`. */
 struct sleep_turn {
@@ -37,7 +39,9 @@ static int sleep_my_turn(void *arg)
 void sleep_lock_init(struct sleep_lock *l, struct sleep_lock_record *record, int flags)
 {
     struct sleep_lock_record **pp;
+    uint32_t irq;
 
+    l->spin.locked = 0;
     l->holder = -1;
     l->depth = 0;
     l->next = 0;
@@ -47,7 +51,11 @@ void sleep_lock_init(struct sleep_lock *l, struct sleep_lock_record *record, int
     l->flags = flags;
     l->record = record;
     wait_queue_init(&l->wq);
-    if (record && !record->listed) {
+    if (!record) {
+        return;
+    }
+    irq = spin_lock_irqsave(&records_lock);
+    if (!record->listed) {
         pp = &records;
         while (*pp) {
             pp = &(*pp)->next;
@@ -56,58 +64,71 @@ void sleep_lock_init(struct sleep_lock *l, struct sleep_lock_record *record, int
         record->listed = 1;
         *pp = record;
     }
+    spin_unlock_irqrestore(&records_lock, irq);
 }
 
 /**
  * The order costs no switch of its own: giving the lock back does not
  * yield, and the waiter whose place is next runs when the scheduler picks
- * it.
+ * it. A waiter tests its turn again under the lock's spinlock before it
+ * takes the lock; the wait's own test is a hint, made with the waiter on
+ * the queue, so that a give between the two wakes it.
  */
 void sleep_lock_take(struct sleep_lock *l)
 {
     int me = sleep_caller();
     struct sleep_turn turn;
+    uint32_t irq = spin_lock_irqsave(&l->spin);
 
     if (l->holder == me && l->depth > 0) {
         l->depth++;
+        spin_unlock_irqrestore(&l->spin, irq);
         return;
     }
     turn.lock = l;
     turn.place = l->next++;
     while (!sleep_my_turn(&turn)) {
+        spin_unlock_irqrestore(&l->spin, irq);
         wq_wait_event_nointr(&l->wq, sleep_my_turn, &turn);
+        irq = spin_lock_irqsave(&l->spin);
     }
     l->holder = me;
     l->depth = 1;
     l->taken_us = timer_now_us();
     l->taken_waits = current_proc ? current_proc->disk_waits : 0;
+    spin_unlock_irqrestore(&l->spin, irq);
     if ((l->flags & SLEEP_LOCK_FILE) && current_proc) {
         current_proc->file_locks++;
     }
 }
 
 /** Count the hold of `l` that is ending in its record when its holder
- * finished a disk wait during it. The clock wraps after 71 minutes, so a
- * longer hold reads short. */
-static void sleep_record_hold(struct sleep_lock *l)
+ * finished a disk wait during it, under the records' lock, since every
+ * lock of a kind shares its record. The clock wraps after 71 minutes, so a
+ * longer hold reads short. The holder calls it before it gives `l` up. */
+static void sleep_record_hold(const struct sleep_lock *l)
 {
     struct sleep_lock_record *r = l->record;
-    uint32_t held;
+    uint32_t held, irq;
 
     if (!r || !current_proc || current_proc->disk_waits == l->taken_waits) {
         return;
     }
     held = timer_now_us() - l->taken_us;
+    irq = spin_lock_irqsave(&records_lock);
     r->crossings++;
     if (held > r->longest_us) {
         r->longest_us = held;
         r->longest_pid = current_proc->pid;
         k_memcpy(r->longest_comm, current_proc->comm, sizeof(r->longest_comm));
     }
+    spin_unlock_irqrestore(&records_lock, irq);
 }
 
 void sleep_lock_give(struct sleep_lock *l)
 {
+    uint32_t irq;
+
     if (!sleep_lock_held(l)) {
         k_panic("sleeplock: a give by a thread that does not hold the lock");
     }
@@ -119,9 +140,11 @@ void sleep_lock_give(struct sleep_lock *l)
     if ((l->flags & SLEEP_LOCK_FILE) && current_proc) {
         current_proc->file_locks--;
     }
+    irq = spin_lock_irqsave(&l->spin);
     l->depth = 0;
     l->holder = -1;
     l->serving++;
+    spin_unlock_irqrestore(&l->spin, irq);
     wq_wake_all(&l->wq);
 }
 

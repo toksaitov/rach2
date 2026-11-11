@@ -109,6 +109,7 @@ C_SRC_SHARED = kernel.c \
     sys/proc/smp.c \
     sys/proc/suspend.c \
     sys/proc/wait_queue.c \
+    sys/proc/mutex.c \
     sys/proc/futex.c \
     sys/proc/ptrace.c \
     sys/proc/seccomp.c \
