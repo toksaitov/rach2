@@ -364,7 +364,11 @@ shows no
 .Xr process_vm_readv 2
 cannot read it, and
 .Xr vmsplice 2
-takes a page of it only once the process has written the page.
+takes a page of it only while the page is present in the mapping and is
+not the shared zero page: an anonymous page once the process has written
+it, and a page of a file once a write, or a read made before
+.Dv PROT_READ
+was taken away, has brought it in.
 On i686, whose page tables have no execute bit, it is not checked
 separately from read on a fault; on x86-64 a page mapped without
 .Dv PROT_EXEC
