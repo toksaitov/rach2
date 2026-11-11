@@ -4,7 +4,7 @@
 # of QEMU through vfio-pci, and take it back when QEMU ends.
 #
 # Usage: gpu.sh [-d BDF] [-f seabios|uefi] [-a kvm|tcg] [-c CPU] [-m MIB]
-#               [-s CPUS] [-t TOKEN] [-K TOKEN] [-w SECONDS] [-o DIR]
+#               [-s CPUS] [-t TOKEN] [-K TOKEN] [-w SECONDS] [-o DIR] [-v]
 #               (-k KERNEL [-i INITRD] [-l ARGS] | -D DISK)
 #               [-- QEMU-ARGUMENT...]
 #
@@ -19,9 +19,12 @@
 #       -device vfio-pci,host=BDF,bus=pcie.0,addr=02.0,x-igd-opregion=on
 #
 # with x-igd-opregion=on only for an Intel display function, which alone
-# has an OpRegion, by the ids /sys shows once the driver has let it go. The
-# guest has no other display, so its console is the serial port, kept in
-# DIR/console.
+# has an OpRegion, by the ids /sys shows once the driver has let it go;
+# while the driver has it, /sys shows the ids the driver reports, which for
+# its fake chip in QEMU are a display's. The guest has no other display, so
+# its console is the serial port, kept in DIR/console; with -v, a function
+# that is not a display has QEMU's standard VGA beside it, for a guest whose
+# boot needs a display adapter.
 #
 # The firmware is SeaBIOS, the default, or UEFI, QEMU's OVMF from OVMF_CODE
 # and OVMF_VARS or Debian's paths. The guest is KERNEL with INITRD, which
@@ -55,15 +58,15 @@
 
 set -eu
 bdf=0000:00:02.0 firmware=seabios accel=kvm cpu='' mib=2048 cpus=2
-token='' kill_token='' silence=600 out='' kernel='' initrd='' args='' disk=''
+token='' kill_token='' silence=600 out='' kernel='' initrd='' args='' disk='' vga=0
 usage()
 {
     echo "usage: gpu.sh [-d BDF] [-f seabios|uefi] [-a kvm|tcg] [-c CPU] [-m MIB] [-s CPUS]" >&2
-    echo "              [-t TOKEN] [-K TOKEN] [-w SECONDS] [-o DIR]" >&2
+    echo "              [-t TOKEN] [-K TOKEN] [-w SECONDS] [-o DIR] [-v]" >&2
     echo "              (-k KERNEL [-i INITRD] [-l ARGS] | -D DISK) [-- ARG...]" >&2
     exit 2
 }
-while getopts d:f:a:c:m:s:t:K:w:o:k:i:l:D: o; do
+while getopts d:f:a:c:m:s:t:K:w:o:k:i:l:D:v o; do
     case $o in
         d) bdf=$OPTARG ;;
         f) firmware=$OPTARG ;;
@@ -79,6 +82,7 @@ while getopts d:f:a:c:m:s:t:K:w:o:k:i:l:D: o; do
         i) initrd=$OPTARG ;;
         l) args=$OPTARG ;;
         D) disk=$OPTARG ;;
+        v) vga=1 ;;
         *) usage ;;
     esac
 done
@@ -246,11 +250,12 @@ echo vfio-pci > "$dev/driver_override"
 echo "$bdf" > "$vfio/bind" || fail "vfio-pci did not take $bdf"
 [ "$(driver)" = vfio-pci ] || fail "$bdf is not vfio-pci's after the bind"
 # The function's own ids, which /sys shows once no driver answers for it.
-opregion=
-if [ "$(cat "$dev/vendor")" = 0x8086 ]; then
-    case $(cat "$dev/class") in 0x03*) opregion=,x-igd-opregion=on ;; esac
-fi
+opregion='' display=0
+echo "gpu: function: $bdf, vendor $(cat "$dev/vendor"), class $(cat "$dev/class")"
+case $(cat "$dev/class") in 0x03*) display=1 ;; esac
+[ "$display" = 0 ] || [ "$(cat "$dev/vendor")" != 0x8086 ] || opregion=,x-igd-opregion=on
 set -- -device "vfio-pci,host=$bdf,bus=pcie.0,addr=02.0$opregion" "$@"
+[ "$vga" = 0 ] || [ "$display" = 1 ] || set -- "$@" -device VGA
 
 qemu=${QEMU:-qemu-system-x86_64}
 echo "gpu: start: $qemu -machine q35,kernel-irqchip=split -accel $accel -cpu $cpu -m $mib" \

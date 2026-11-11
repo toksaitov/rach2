@@ -50,12 +50,13 @@
 # tree's tests/assign: gpu.sh takes it from the driver, boots the guest with
 # it on vfio-pci from a raw copy of the overlay, and gives it back when
 # QEMU ends. A guest without a display function of its own has QEMU's VGA
-# beside it, since the cloud image boots only with one. When BDF is a
-# display function, the guest's server renders on its render node, which
-# the guest reports as `vtest-guest: renderer: gpu ...`, and the run passes
-# when the triangle through the relay checks and draws on no llvmpipe: the
-# GPU's picture may differ from llvmpipe's in its edges, so the checksums
-# are printed and not compared. At the end the runner sends gpu.sh SIGUSR1,
+# beside it, gpu.sh's -v, since the cloud image boots only with one. When
+# BDF is a display function, by the class gpu.sh names once the driver has
+# let it go, the guest's server renders on its render node, which the guest
+# reports as `vtest-guest: renderer: gpu ...`, and the run passes when the
+# triangle through the relay checks and draws on no llvmpipe: the GPU's
+# picture may differ from llvmpipe's in its edges, so the checksums are
+# printed and not compared. At the end the runner sends gpu.sh SIGUSR1,
 # which kills QEMU, and requires gpu.sh's pass, the function back with
 # Rach2's driver, as `vtest-rach2: handoff: pass: ...`.
 #
@@ -123,13 +124,7 @@ if [ -n "$bdf" ]; then
         echo "vtest-rach2: no gpu.sh beside the script or in tests/assign for -g" >&2
         exit 2
     }
-    # The class byte of the function's own configuration space: /sys's
-    # class file gives the one its driver reports, which for the Intel
-    # driver's fake chip in QEMU is a display's.
-    case $(od -A n -t x1 -j 11 -N 1 "/sys/bus/pci/devices/$bdf/config" 2>/dev/null | tr -d ' ') in
-        03) display=1 ;;
-        '') echo "vtest-rach2: no function $bdf" >&2; exit 2 ;;
-    esac
+    [ -e "/sys/bus/pci/devices/$bdf" ] || { echo "vtest-rach2: no function $bdf" >&2; exit 2; }
 fi
 
 # $qemu is QEMU's process, and with -g $gpu is gpu.sh's, which owns it.
@@ -276,8 +271,7 @@ else
         -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:$port-:5555" \
         -device virtio-net-pci,netdev=net0 -device virtio-rng-pci \
         -qmp "tcp:127.0.0.1:$((port + 1)),server,wait=off"
-    [ "$display" = 1 ] || set -- "$@" -device VGA
-    TMPDIR=$work bash "$gpush" -d "$bdf" -a "$accel_option" -m "$mib" -s "$cpus" -w 0 \
+    TMPDIR=$work bash "$gpush" -d "$bdf" -a "$accel_option" -m "$mib" -s "$cpus" -w 0 -v \
         -o "$work/gpu" -D "$work/run.raw" -- "$@" > "$work/gpu.log" 2>&1 < /dev/null &
     gpu=$!
     alive=$gpu
@@ -323,6 +317,8 @@ while :; do
     fi
 done
 echo "vtest-rach2: the guest's server is ready after $waited s"
+# gpu.sh names the function's own class once the driver has let it go.
+! grep -q '^gpu: function: .*, class 0x03' "$work/gpu.log" 2>/dev/null || display=1
 
 # QEMU reads its monitor's socket with recvmsg; QMP must answer past its
 # greeting.
