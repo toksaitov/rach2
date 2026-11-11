@@ -273,6 +273,7 @@ Each slice is a fixed list of cases, given to `tests/run` by `RACH2_CASES`, that
 * `bed-shm:vm-death`: the VM killed under glmark2, every wait failed, Weston back on llvmpipe (83-7).
 * `bed-shm:fuzz`: both parsers' fuzzers for a fixed seed count.
 * Lenovo trial boot, announced: one scene through the VM on the panel with a CRC, Venus read back on hasvk through the VM, the VM killed under load and the panel back under Rach2 with Weston on Rach2's driver.
+* Minutes (83-7.2, [83-7.md](83-7.md#the-slices-minutes)): `vm-death` 276 s, `bed-forward:virgl` 91 to 125 s, `nocopy` about 6.5 minutes; `bed-vtest:triangle` and `bed-shm:virgl` have no recorded time, and `bed-shm:venus` and `bed-shm:fuzz` no case, so the slice runs five cases, the three known in some 13 minutes.
 
 ### Order and parallelism
 

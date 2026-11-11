@@ -1,0 +1,8 @@
+measure: result: glmark2 native-rach2 frames 7133 frame_ms 2.757 p50 2.583 p99 4.793 cpu_ms_per_frame 8.901 latency_ms 1.014 copied_bytes 0 exits 0 round_trips - seconds 22.4
+measure: glmark2: exit 0
+measure: result: piglit native-rach2 frames 10 frame_ms 6412.617 p50 861.204 p99 12575.913 cpu_ms_per_frame 8587.000 latency_ms 1.130 copied_bytes 0 exits 0 round_trips - seconds 71.5
+measure: piglit: exit 0
+measure: webgl: failed: measure: webgl: the page failed: Error: GL error 0x9242, the context lost at frame 1 
+measure: webgl: exit 1
+measure: result: game native-rach2 frames 100 frame_ms 59.502 p50 57.250 p99 151.700 cpu_ms_per_frame 889.400 latency_ms 1.032 copied_bytes 0 exits 0 round_trips - seconds 32.6
+measure: game: exit 0

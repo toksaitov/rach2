@@ -1,0 +1,1 @@
+measure: result: game native-rach2 frames 100 frame_ms 59.502 p50 57.250 p99 151.700 cpu_ms_per_frame 889.400 latency_ms 1.032 copied_bytes 0 exits 0 round_trips - seconds 32.6
