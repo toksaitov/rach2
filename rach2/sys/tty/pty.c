@@ -403,9 +403,9 @@ struct ptm_feed {
  * the last whose look ahead stopped or restarted output, though the slave's
  * discipline has no room for a line, and move `*i` past them. A write that
  * returns has thereby taken every byte it acted on, as Linux's flip buffer
- * holds the bytes its look ahead reads; the line's slack beside a full queue
- * (`n_tty_has_room`) takes them, unless a canonical line is full, whose
- * bytes are dropped as any byte past its end.
+ * holds the bytes its look ahead reads; the read queue stores them, since
+ * the look ahead stops where it would be full (`ptm_look_end`), unless a
+ * canonical line is full, whose bytes are dropped as any byte past its end.
  */
 static void ptm_take_acted(struct ptm_feed *f, uint32_t *i)
 {
@@ -416,14 +416,31 @@ static void ptm_take_acted(struct ptm_feed *f, uint32_t *i)
 }
 
 /**
+ * The end of the look ahead of the master write `f` from byte `i` of its
+ * piece: the piece's end, or sooner where the bytes from `i` would pass what
+ * the slave's read queue can still store beside the bytes the discipline
+ * holds. Every byte up to the last that acts is fed (`ptm_take_acted`), so a
+ * write never acts on, feeds and counts a byte the discipline would drop, as
+ * Linux's look ahead reads only the bytes its flip buffer has taken.
+ */
+static uint32_t ptm_look_end(const struct ptm_feed *f, uint32_t i)
+{
+    unsigned int held = n_tty_held(&f->p->slave.ldisc);
+    uint32_t room = held < N_TTY_READ_MAX ? N_TTY_READ_MAX - held : 0;
+
+    return room < f->chunk - i ? i + room : f->chunk;
+}
+
+/**
  * Wait until the master write `f` can feed byte `*i` of its piece
  * (`ptm_can_feed`). While it cannot, a signal character that flushes is fed
  * at once, the bytes before it discarded and `*i` moved past it, and the
  * VSTOP and VSTART from `f->ahead` on act at once (`tty_lookahead`),
- * `f->ahead` moving to the piece's end. Before it returns without waiting,
- * or after a signal ends its wait, it takes the bytes it acted on
- * (`ptm_take_acted`). Returns 0 to go on feeding, or what `ptm_write`
- * returns: the bytes written, -EAGAIN or -EINTR.
+ * `f->ahead` moving to the piece's end or as far as the read queue can store
+ * (`ptm_look_end`). Before it returns without waiting, or after a signal
+ * ends its wait, it takes the bytes it acted on (`ptm_take_acted`). Returns
+ * 0 to go on feeding, or what `ptm_write` returns: the bytes written,
+ * -EAGAIN or -EINTR.
  */
 static int32_t ptm_wait_feed(struct ptm_feed *f, uint32_t *i)
 {
@@ -441,7 +458,9 @@ static int32_t ptm_wait_feed(struct ptm_feed *f, uint32_t *i)
             continue;
         }
         if (!p->m_stopped) {
-            for (f->ahead = f->ahead > *i ? f->ahead : *i; f->ahead < f->chunk; f->ahead++) {
+            uint32_t end = ptm_look_end(f, *i);
+
+            for (f->ahead = f->ahead > *i ? f->ahead : *i; f->ahead < end; f->ahead++) {
                 if (tty_lookahead(&p->slave, f->kbuf[f->ahead], 1)) {
                     f->acted = f->ahead + 1;
                 }

@@ -52,7 +52,9 @@
  * bytes; a master write goes on after the last slave closes; a VSTART from
  * COM1 drained with no reader keeps the keyboard echo held during the stop;
  * a nonblocking master write behind a full slave counts the flow characters
- * it acts on, and its VSTART gives out the echo held; a background
+ * it acts on, and its VSTART gives out the echo held, and writes of data
+ * that end in a flow character feed no more than the read queue stores and
+ * count only what they feed; a background
  * process's change of its terminal takes SIGTTOU unless it ignores it, its
  * read EIO when it ignores SIGTTIN, and an orphaned group's call EIO, a
  * parent whose leader exited while a thread runs keeping the group joined,
@@ -1477,6 +1479,43 @@ static void lookahead_nonblocking(void)
     master.ofd = NULL;
 }
 
+/**
+ * Nonblocking master writes behind a full raw slave, each 255 data bytes and
+ * a VSTOP or VSTART, act on and feed no more than the read queue can store:
+ * no byte is dropped, and the data bytes each write counts are the bytes the
+ * queue gained.
+ */
+static void lookahead_bounded(void)
+{
+    char piece[256];
+    int queued, n, rc, counted = 0, refused = 0;
+
+    setup_pair();
+    current_proc = &producer;
+    fill_input();
+    queued = n_tty_inq(&pair.slave.ldisc);
+    nonblocking_ofd.status_flags = OFD_NONBLOCK;
+    master.ofd = &nonblocking_ofd;
+    clear(piece, sizeof(piece));
+    for (n = 0; n < 255; n++) {
+        piece[n] = 'x';
+    }
+    for (n = 0; n < 20; n++) {
+        piece[255] = (char)(n % 2 == 0 ? '\023' : '\021');
+        rc = ptm_write(&master, piece, sizeof(piece));
+        if (rc == -EAGAIN) {
+            refused++;
+        } else if (rc > 0) {
+            counted += rc > 255 ? 255 : rc;
+        }
+    }
+    CHECK(pair.slave.ldisc.counters.queue_drops == 0,
+          "mixed data and flow writes behind a full slave drop no byte");
+    CHECK(n_tty_inq(&pair.slave.ldisc) == queued + counted && refused > 0,
+          "each counts only the data bytes the queue gained, and a full queue refuses");
+    master.ofd = NULL;
+}
+
 /* The dispositions of the background process in `job_check`. */
 static struct k_sigaction job_acts[KSIG_MAX + 1];
 /* A thread of the parent's process in `job_check`, alive after its
@@ -1602,6 +1641,7 @@ int main(void)
     master_after_close();
     console_silent_restart();
     lookahead_nonblocking();
+    lookahead_bounded();
     job_check();
     console_tcioff();
     read_claims_nothing();
