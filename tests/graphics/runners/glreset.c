@@ -11,10 +11,11 @@
  * into a 64x64 texture: a clear to a colour of the frame's number, and the
  * read of a pixel back, which waits for the host. Each frame it asks
  * glGetGraphicsResetStatus and glGetError. It prints `glreset: drawing` once
- * the first frame is read back right. Its caller makes the file BEFORE,
- * waits for the `before` line, takes the device away and makes the file
- * AFTER; the program then draws FRAMES frames more, makes a new display and
- * context as a program started after the loss would, and ends. It prints
+ * the first frame is read back right; a first frame read back wrong prints
+ * its `before` line and ends it with status 1. Its caller makes the file
+ * BEFORE, waits for the `before` line, takes the device away and makes the
+ * file AFTER; the program then draws FRAMES frames more, makes a new display
+ * and context as a program started after the loss would, and ends. It prints
  *
  *   glreset: context: KIND
  *   glreset: before: pixels right|wrong, status STATUS, errors ERRORS
@@ -236,6 +237,13 @@ static int frame(unsigned n)
     return memcmp(want, got, 4) == 0;
 }
 
+/** Print the `before` line of the frames drawn so far. */
+static void before(int right, GLenum status, GLenum error)
+{
+    printf("glreset: before: pixels %s, status %s", right ? "right" : "wrong", gl_name(status));
+    printf(", errors %s\n", error == GL_NO_ERROR ? "none" : gl_name(error));
+}
+
 int main(int argc, char **argv)
 {
     EGLDisplay d;
@@ -285,12 +293,15 @@ int main(int argc, char **argv)
         e = glGetError();
         if (error == GL_NO_ERROR)
             error = e;
-        if (n++ == 0 && right)
+        if (n++ == 0) {
+            if (!right) {
+                before(right, status, error);
+                return 1;
+            }
             printf("glreset: drawing\n");
+        }
         if (!marked && stat(argv[1], &st) == 0) {
-            printf("glreset: before: pixels %s, status %s", right ? "right" : "wrong",
-                   gl_name(status));
-            printf(", errors %s\n", error == GL_NO_ERROR ? "none" : gl_name(error));
+            before(right, status, error);
             if (!right)
                 return 1;
             marked = 1;
