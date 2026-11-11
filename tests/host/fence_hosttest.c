@@ -642,6 +642,57 @@ static void buffer_answers(void)
     close_fd(&table, fd);
     dma_buf_put(b);
 }
+/* The model exporter's answer to `sync_cases`, and whether its writer
+ * had been asked for its signal when the exporter's hook ran. */
+static int32_t hook_answer;
+static int hook_runs, hook_saw_listened;
+
+/** The exporter's CPU-access hook: it waits its own way, as i915's spins
+ * on its requests, completing the buffer's writer, unless it fails. */
+static int32_t hook_access(struct dma_buf *b, uint64_t flags)
+{
+    (void)flags;
+    hook_runs++;
+    hook_saw_listened = b->resv->write->listened;
+    if (!hook_answer)
+        dma_fence_signal(b->resv->write);
+    return hook_answer;
+}
+
+static const struct dma_buf_ops hook_ops = {NULL, NULL, hook_access, NULL};
+
+/**
+ * DMA_BUF_IOCTL_SYNC runs the exporter's hook before it waits on the
+ * reservation, as Linux's dma_buf_begin_cpu_access (dma-buf.c:1415-1423):
+ * the hook finds the writer not yet waited for, and the wait after it
+ * finds the writer done. A hook's error returns before the wait, and END
+ * runs the hook alone.
+ */
+static void sync_cases(void)
+{
+    struct dma_buf *b = dma_buf_export(4096, &hook_ops, NULL, NULL);
+    struct dma_fence *w = new_fence(dma_fence_context_alloc(1), 1);
+    struct dma_buf_sync access;
+    int fd = dma_buf_fd(b, 0);
+    fd_entry_t *e = fd_get(&table, fd);
+    CHECK(!dma_resv_add_fence(b->resv, w, 1), "install the exporter's writer");
+    hook_answer = -EINTR;
+    access.flags = DMA_BUF_SYNC_READ;
+    CHECK(e->ops->ioctl(e, DMA_BUF_IOCTL_SYNC, (uintptr_t)&access) == -EINTR && hook_runs == 1 &&
+              !w->listened,
+          "the exporter's error returns before the reservation's wait");
+    hook_answer = 0;
+    CHECK(!e->ops->ioctl(e, DMA_BUF_IOCTL_SYNC, (uintptr_t)&access) && hook_runs == 2 &&
+              !hook_saw_listened && w->signaled,
+          "the exporter's hook runs before the wait, which finds its writer done");
+    access.flags = DMA_BUF_SYNC_READ | DMA_BUF_SYNC_END;
+    CHECK(!e->ops->ioctl(e, DMA_BUF_IOCTL_SYNC, (uintptr_t)&access) && hook_runs == 3,
+          "END runs the exporter's hook");
+    close_fd(&table, fd);
+    dma_buf_put(b);
+    CHECK(w->refs == 1, "the buffer drops its writer");
+    dma_fence_put(w);
+}
 /** Whether two strings are equal. */
 static int same(const char *x, const char *y)
 {
@@ -710,6 +761,7 @@ int main(int argc, char **argv)
     enable_cases();
     merge_cases();
     buffer_cases();
+    sync_cases();
     import_cases();
     timeline_cases();
     copy_out_cases();

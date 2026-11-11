@@ -389,8 +389,9 @@ uint32_t sw_sync_info(char *buf, uint32_t cap);
  * the console's buffer (drm_client.c): valid while the object is scanned
  * out, or NULL when the kernel cannot reach it so; NULL `vmap` is the same.
  * `cpu_access` is the exporter's part of a dma-buf's DMA_BUF_IOCTL_SYNC,
- * with its DMA_BUF_SYNC_ flags, once the fences are waited for: 0 or
- * -errno; NULL does nothing. It may sleep. `open` sees each handle a file
+ * with its DMA_BUF_SYNC_ flags, before the start waits for the fences, so
+ * that it may wait its own way: 0 or -errno, which ends the call without
+ * the wait; NULL does nothing. It may sleep. `open` sees each handle a file
  * gets to the object, by creation, GEM_OPEN or PRIME import, as Linux's
  * drm_gem_object_funcs.open: 0, or -errno, which takes the handle back;
  * NULL does nothing. It may sleep.

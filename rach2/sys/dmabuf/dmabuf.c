@@ -179,23 +179,29 @@ static int32_t buf_mmap(fd_entry_t *e, vma_t *vma)
     return b->ops->mmap(b, vma);
 }
 
-/** Wait on a reservation snapshot, then give the exporter CPU access. */
+/**
+ * Give the exporter CPU access, then, at the start, wait on a reservation
+ * snapshot, as Linux's dma_buf_begin_cpu_access and dma_buf_end_cpu_access
+ * (dma-buf.c:1415-1423, 1450-1451). The exporter's hook comes first so that
+ * it can wait its own way: i915's spins on and boosts its requests, and the
+ * wait after it then finds them done. Returns the hook's error without
+ * waiting, else the wait's.
+ */
 static int32_t buf_sync(struct dma_buf *b, uint64_t flags)
 {
     struct dma_fence *f;
     int32_t rc;
     if ((flags & ~((uint64_t)DMA_BUF_SYNC_VALID_FLAGS_MASK)) || !(flags & DMA_BUF_SYNC_RW))
         return -EINVAL;
-    if (!(flags & DMA_BUF_SYNC_END)) {
-        f = dma_resv_snapshot(b->resv, (flags & DMA_BUF_SYNC_WRITE) != 0);
-        if (!f)
-            return -ENOMEM;
-        rc = dma_fence_wait_until(f, 1, -1);
-        dma_fence_put(f);
-        if (rc)
-            return rc;
-    }
-    return b->ops->cpu_access ? b->ops->cpu_access(b, flags) : 0;
+    rc = b->ops->cpu_access ? b->ops->cpu_access(b, flags) : 0;
+    if (rc || (flags & DMA_BUF_SYNC_END))
+        return rc;
+    f = dma_resv_snapshot(b->resv, (flags & DMA_BUF_SYNC_WRITE) != 0);
+    if (!f)
+        return -ENOMEM;
+    rc = dma_fence_wait_until(f, 1, -1);
+    dma_fence_put(f);
+    return rc;
 }
 
 /** Check sync-file import or export access flags. */
