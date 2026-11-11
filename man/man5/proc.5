@@ -1063,11 +1063,11 @@ which libcap reads to bound its sets;
 .Pa kernel/panic ,
 what a panic does once its record is out, as Linux's
 .Va panic_timeout :
-0 halts the machine; a number of seconds above 0 keeps the record on the
-screen that long and then resets the machine; one below 0 resets it at
-once.
+0 halts the machine; a number of seconds above 0 keeps the panic's
+report on the screen that long, counting down, and then resets the
+machine; one below 0 resets it at once.
 .Ql panic= Ns Ar N
-on the boot line sets it, 0 without, and a write of any int sets it;
+on the boot line sets it, 30 without, and a write of any int sets it;
 .Pa kernel/panic_on_oops ,
 1 with
 .Ql oops=panic

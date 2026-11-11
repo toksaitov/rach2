@@ -195,7 +195,26 @@ $(ASM_OBJECTS) : $(BUILD)/%.o : %.s
 
 $(C_OBJECTS) : $(BUILD)/%.o : %.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -o $@ -c $<
+	$(CC) $(CFLAGS) $(if $(filter $(PANIC_OBJECT),$@),-DRACH2_HEAD_H='"$(abspath $(HEAD_H))"') -o $@ -c $<
+
+# The commit the kernel is built from, which the panic's report names
+# (sys/panic.c): the head's first twelve digits, and a `+` after them when
+# the kernel's sources or the shared makefiles differ from it. The file is
+# written only when that changes, so that a new commit compiles panic.c
+# alone again and links the kernel again; the flag that names the file is
+# panic.c's alone, so that the configuration's fingerprint stays as it is.
+# It waits for the fingerprint, whose purge of the tree would remove it.
+HEAD_H = $(BUILD)/head.h
+PANIC_OBJECT = $(BUILD)/sys/panic.o
+$(PANIC_OBJECT) : $(HEAD_H)
+$(HEAD_H) : $(CONFIG) FORCE
+	@mkdir -p $(dir $@); \
+	head=$$(git rev-parse --short=12 HEAD 2>/dev/null) || head=unknown; \
+	if [ "$$head" != unknown ] && ! git diff --quiet HEAD -- . ../mk 2>/dev/null; then \
+	    head="$$head+"; \
+	fi; \
+	new="#define RACH2_HEAD \"$$head\""; \
+	[ "$$new" = "$$(cat $@ 2>/dev/null)" ] || printf '%s\n' "$$new" > $@
 
 # The extraction runs when the tarball, the patch or the script is newer than
 # its stamp, and leaves the tree alone when its stamp names the same three;

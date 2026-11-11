@@ -1332,6 +1332,8 @@ static void _page_fault_handler(isr_params_t *params)
         return;
     }
 
+    k_panic_note_fault("page fault", (uintptr_t)FRAME_PC(params), (long)params->error_code);
+    k_panic_note_address(fault_address);
     pid = kstack_overrun_pid(fault_address);
     if (pid >= 0) {
         klog(KLOG_CRIT, "vm",

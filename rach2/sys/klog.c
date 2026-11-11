@@ -177,11 +177,6 @@ static void klog_build(struct klog_record *r, int level, const char *subsystem, 
     r->len = (uint32_t)(build_at - r->text);
 }
 
-/* The last `KLOG_CRIT` record, kept whole beside the ring, where a record
-   from another processor could follow it, for `klog_show_crit`; its `len` is
-   0 before the first. */
-static struct klog_record last_crit;
-
 /* ---- destination 1: the ring ---- */
 
 static char ring[KLOG_RING_SIZE];
@@ -355,10 +350,14 @@ static int screen_line_open;
  * stopped. What it drops is `KLOG_DEBUG`. A program that is talking to a
  * person turns it down further for its own run and puts it back: that is what
  * `rach2-install` does, since a routine note arriving in the middle of a
- * question reads as something having gone wrong. `k_panic` raises
- * `KLOG_CRIT`, which no setting can hide.
+ * question reads as something having gone wrong. `KLOG_CRIT`, which a fault
+ * that panics raises, no setting can hide; the panic itself stops the
+ * screen's records (`screen_stopped`) and draws its own report.
  */
 static int screen_level = KLOG_INFO;
+
+/* Whether a panic has stopped the screen's records (`klog_screen_stop`). */
+static int screen_stopped;
 
 /* Whether the boot line named a level. A boot brought up with
    `rach2.loglevel=` asked to watch the machine, and the handover to init
@@ -401,7 +400,7 @@ static void dest_screen(const struct klog_record *r)
 {
     uint32_t i;
 
-    if (r->level > screen_level) {
+    if (r->level > screen_level || screen_stopped) {
         return;
     }
     if (screen_line_open) {
@@ -600,9 +599,6 @@ void klog_v(int level, const char *subsystem, const char *format, va_list ap)
     }
     flags = kirq_save();
     klog_build(&r, level, subsystem, format, ap);
-    if (level == KLOG_CRIT) {
-        last_crit = r;
-    }
     nested = klog_delivering || console_writing;
     if (nested) {
         pending_put(&r);
@@ -683,28 +679,17 @@ void klog_deliver_directly(void)
     kirq_restore(flags);
 }
 
-uint32_t klog_crit_len(void)
+/** Nothing undoes it, since the panic that stops the screen does not
+ * return. */
+void klog_screen_stop(void)
 {
-    return last_crit.len == 0 ? 0 : last_crit.len - last_crit.body - 1;
+    screen_stopped = 1;
 }
 
 /**
- * The screen was cleared for the panic, so no line of the console's is open
- * on it, and the record goes to the screen alone: the other destinations
- * have had it.
- */
-void klog_show_crit(void)
-{
-    screen_line_open = 0;
-    if (last_crit.len != 0) {
-        dest_screen(&last_crit);
-    }
-}
-
-/**
- * `KLOG_CRIT` is the floor so that a panic reaches the screen whatever a
- * caller asks for: a machine that has stopped must be able to say so to the
- * person in front of it.
+ * `KLOG_CRIT` is the floor so that a critical record reaches the screen
+ * whatever a caller asks for: a machine that is about to stop must be able
+ * to say so to the person in front of it.
  */
 void klog_set_screen_level(int level)
 {
