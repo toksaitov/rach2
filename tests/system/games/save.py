@@ -49,12 +49,17 @@ def digest(path):
 
 
 def marked(runner, name, value):
-    """Return whether NAME, a query of KEY's value Save through reg.exe in
-    the runner's prefix, printed VALUE; print what it printed."""
-    status = runner.launch(name, [REG, "query", KEY, "/v", "Save"])
-    text = (runner.out / (name + ".log")).read_text(errors="replace")
-    say("%s: reg query exit %d value %s" % (name, status, value in text))
-    return status == 0 and value in text
+    """Return whether KEY's value Save in the runner's prefix is VALUE, as
+    NAME, through reg.exe's export to a file: what reg.exe prints does not
+    reach the launcher's output through Proton's steam.exe. The export is
+    UTF-16 with a byte-order mark; a key that is missing exports nothing."""
+    export = runner.work / (name + ".reg")
+    status = runner.launch(name, [REG, "export", KEY, dos(export), "/y"])
+    text = export.read_bytes().decode("utf-16", errors="replace") if export.exists() else ""
+    (runner.out / (name + ".reg.txt")).write_text(text)
+    have = '"Save"="%s"' % value in text
+    say("%s: reg export exit %d value %s" % (name, status, have))
+    return status == 0 and have
 
 
 def loaded(runner, name, want):
