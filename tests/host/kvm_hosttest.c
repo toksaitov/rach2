@@ -3420,10 +3420,10 @@ static void selftest_rows(void)
     sync_rows();
 }
 
-/** Run the rows; 0 when every check passed, 1 otherwise. */
 /* The NMI handler's hook, which kvm_pmu_start sets. */
 int (*watchdog_guest_nmi)(void);
 
+/** Run the rows; 0 when every check passed, 1 otherwise. */
 int main(void)
 {
     int vm, vcpu;
