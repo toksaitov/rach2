@@ -119,6 +119,14 @@ void smp_wait_hold(unsigned int index, uint64_t *held_us, uint32_t *vector, int3
  * without the lock. Interrupts are off. */
 void bkl_note_entry(uint32_t vector, int32_t nr, int locked);
 
+/** Begin a kernel thread's own hold of the big lock, when the hold under
+ * way is an entry's that switched to the thread, an interrupt or a system
+ * call on its way out: end that one and take the lock again, as an entry of
+ * none, so that the thread's work counts as a kernel thread's and not as
+ * the entry's that woke it. Nothing when the hold is already an entry of
+ * none's, such as an idle wait's return. Interrupts are off. */
+void bkl_thread_hold(void);
+
 /** Read the longest hold of the big lock since boot, from its take to its
  * give-back or drop, in microseconds, with its entry's vector (0 for none,
  * a kernel thread's) and system call number (-1 for none). The caller holds

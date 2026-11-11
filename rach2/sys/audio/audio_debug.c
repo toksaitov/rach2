@@ -29,9 +29,9 @@ static uint32_t now_ticks(void)
 
 /*
  * State for the kernel-side square-wave test tone. The mixer callback runs in
- * interrupt context and reads these while the shell command writes them, so
- * they are volatile. _tone_half_period is the count of frames in each half of
- * the wave; _tone_phase counts frames within one full period.
+ * the driver's service and reads these while the shell command writes them,
+ * so they are volatile. _tone_half_period is the count of frames in each half
+ * of the wave; _tone_phase counts frames within one full period.
  */
 static volatile uint32_t _tone_phase = 0;
 static volatile uint32_t _tone_half_period = 0;
@@ -48,8 +48,8 @@ static volatile int _tone_channels = 2;
  * three on HDA, and the rest of the one being overwritten, so the buffer
  * never has two notes at once and they are heard in their order however late
  * the refills come. The callback
- * runs in interrupt context while the shell command reads the counts, so they
- * are volatile; _scale_rest_frames is 0 until the first call.
+ * runs in the driver's service while the shell command reads the counts, so
+ * they are volatile; _scale_rest_frames is 0 until the first call.
  */
 static const uint32_t _scale_freqs[] = {262, 294, 330, 349, 392};
 #define SCALE_NOTES (sizeof(_scale_freqs) / sizeof(_scale_freqs[0]))
