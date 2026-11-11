@@ -1009,6 +1009,21 @@ static void map_access(void)
     close_handle(&file_a, h);
 }
 
+/* ---- RPS's waitboost and interactive mode, which the driver calls ---- */
+
+/** Whether the chip has begun `rq`; no request runs here, so only once
+ * it has signalled. */
+int i915_request_started(const struct i915_request *rq)
+{
+    return rq->fence.base.signaled;
+}
+
+/** The waitboost, RPS's, which no row here measures. */
+void i915_rps_boost(struct i915_request *rq)
+{
+    (void)rq;
+}
+
 int main(void)
 {
     model_start();

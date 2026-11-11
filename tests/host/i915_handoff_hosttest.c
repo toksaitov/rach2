@@ -2076,6 +2076,18 @@ static void row_stuck(int k)
     CHECK(releases == r + 1 && pages_live == 0, "stuck: the record and every page freed");
 }
 
+/* ---- RPS's waitboost and interactive mode, which the driver calls ---- */
+
+/* The requests' fences, i915_gem.c's, which no flip here waits on. */
+const struct dma_fence_ops i915_fence_ops = {0, 0, 0, 0};
+
+/** Whether the chip has begun `rq`; no request runs here, so only once
+ * it has signalled. */
+int i915_request_started(const struct i915_request *rq)
+{
+    return rq->fence.base.signaled;
+}
+
 int main(void)
 {
     int base;

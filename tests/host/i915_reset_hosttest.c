@@ -376,6 +376,12 @@ void i915_gt_unpark(struct drm_i915_private *i915)
     unparks++;
 }
 
+/** A request retires: no request here is boosted, so RPS counts nothing. */
+void i915_rps_retire(struct i915_request *rq)
+{
+    (void)rq;
+}
+
 /* The GTT's allocator for the kernel's own ranges, i915_vma.c's: from
  * 16 MiB up, each range its own, `held` counting those not given back. */
 static uint64_t next_range;

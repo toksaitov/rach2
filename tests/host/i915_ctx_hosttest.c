@@ -395,6 +395,12 @@ void i915_gt_unpark(struct drm_i915_private *i915)
     unparks++;
 }
 
+/** A request retires: no request here is boosted, so RPS counts nothing. */
+void i915_rps_retire(struct i915_request *rq)
+{
+    (void)rq;
+}
+
 /* No request here holds a buffer object: execbuffer, which hands them
  * over, is the exec test's. */
 void i915_gem_object_put(struct drm_i915_gem_object *obj)
