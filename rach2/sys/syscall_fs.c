@@ -3021,15 +3021,15 @@ static int32_t proc_ns_dir_read(const struct vpath *vp, int pid, int flags)
     return cred_access_bits(uid, gid, mode, CRED_R, 0);
 }
 
-/** Whether an open with `flags` of the directory `vp` names, of the process
- * `pid`, is refused: another user's /proc/PID/fd and /proc/PID/fdinfo, as
- * Linux keeps a process's descriptors to those who may trace it
- * (`procfs_may_read`), but never with O_PATH, which Linux's `do_o_path`
- * opens with no permission check. 1 or 0. */
-static int proc_fd_dir_refused(const struct vpath *vp, int pid, int flags)
+/** Whether an open with `flags`, or a chdir with 0, of a directory of kind
+ * `kind` of the process `pid` is refused: another user's /proc/PID/fd and
+ * /proc/PID/fdinfo, as Linux keeps a process's descriptors to those who may
+ * trace it (`procfs_may_read`), but never an open with O_PATH, which Linux's
+ * `do_o_path` makes with no permission check. 1 or 0. */
+static int proc_fd_dir_refused(int kind, int pid, int flags)
 {
-    return (vp->kind == VNODE_PROC_FD_DIR || vp->kind == VNODE_PROC_FDINFO_DIR) &&
-           !(flags & O_PATH) && !procfs_may_read(pid);
+    return (kind == VNODE_PROC_FD_DIR || kind == VNODE_PROC_FDINFO_DIR) && !(flags & O_PATH) &&
+           !procfs_may_read(pid);
 }
 
 /**
@@ -3069,7 +3069,7 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
         }
         pid = procfs_resolve_pid(vp->pid);
     }
-    if (proc_fd_dir_refused(vp, pid, flags)) {
+    if (proc_fd_dir_refused(vp->kind, pid, flags)) {
         return -EACCES;
     }
     if ((flags & O_CREAT) && (flags & O_EXCL)) {
@@ -7357,8 +7357,10 @@ static int32_t chdir_mounted(const struct vfs_ref *ref, char *path)
  * other by its kind and its coordinates, with /proc/self resolved to the
  * caller's pid so that a later relative name classifies right. Returns 0;
  * -ENOENT for a /proc directory whose process has exited, a /sys directory
- * whose device is gone or a directory made under /dev that is removed; or
- * -ENOTDIR for anything that is no directory.
+ * whose device is gone or a directory made under /dev that is removed;
+ * -ENOTDIR for anything that is no directory; or -EACCES for another user's
+ * /proc/PID/fd or fdinfo, whose search Linux refuses as it refuses their
+ * open (`proc_fd_dir_refused`).
  */
 static int32_t synth_chdir_path(const struct vpath *vp, char *path)
 {
@@ -7378,6 +7380,9 @@ static int32_t synth_chdir_path(const struct vpath *vp, char *path)
     }
     if (!synth_vp_is_dir(vp)) {
         return -ENOTDIR;
+    }
+    if (synth_dir_of_proc(vp->kind) && proc_fd_dir_refused(vp->kind, at, 0)) {
+        return -EACCES;
     }
     if (vp->kind == VNODE_SYS_DIR || vp->kind == VNODE_SYS_LINK) {
         if (SYSFS_KEYED(vp->sysent) && !sysfs_device_exists(vp->sysent, vp->syskey)) {
@@ -7514,7 +7519,8 @@ long sys_chdir(isr_params_t *params)
  * the caller has, since a root chroot gave it has /dev, /proc or /sys by a
  * bind, which the path from the root of the mount table does not pass
  * through. Entering takes search permission on the directory, which a
- * synthetic one grants everybody, and the mount hold chdir takes. A
+ * synthetic one grants everybody but for another user's /proc/PID/fd and
+ * fdinfo, -EACCES (`proc_fd_dir_refused`), and the mount hold chdir takes. A
  * descriptor opened with O_PATH does as well as any other. A directory
  * outside the process's root, on a descriptor opened before a chroot or a
  * pivot_root, is entered as on Linux: the working directory keeps its path
@@ -7544,6 +7550,9 @@ long sys_fchdir(isr_params_t *params)
         const struct synth_dir *sd = (const struct synth_dir *)entry->priv;
 
         rc = sd ? 0 : -EBADF;
+        if (rc == 0 && proc_fd_dir_refused(sd->kind, procfs_resolve_pid(sd->pid), 0)) {
+            rc = -EACCES;
+        }
         if (rc == 0) {
             synth_dir_path(sd->kind, sd->pid, sd->tid, path, VFS_PATH_MAX);
             rc = cwd_enter(path, NULL, NULL);

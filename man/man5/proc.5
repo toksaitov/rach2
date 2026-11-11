@@ -1563,7 +1563,13 @@ to a caller that may not read
 .Pa environ ,
 but an open of the directory with
 .Dv O_PATH ,
-which reads nothing, succeeds, as Linux's does.
+which reads nothing, succeeds, as Linux's does;
+a change of the working directory into it by
+.Xr chdir 2 ,
+or by
+.Fn fchdir
+through such a descriptor, is
+.Er EACCES .
 A symbolic link for each open descriptor N, whose target names what the
 descriptor is open on: a file by its path now, from the reader's root, as
 Linux's
