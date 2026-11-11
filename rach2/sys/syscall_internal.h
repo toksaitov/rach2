@@ -16,12 +16,14 @@
 extern volatile uint32_t fb_owner_pid;
 
 /**
- * Release what the descriptor `e` holds before its slot is freed: first, for a
- * descriptor of the calling thread's table, the table's record locks on what it
- * is open on (`fd_close_locks`), then its objects (`fd_release_objects`). The
- * caller frees the slot with `fd_free`. The close, the dup2 replacement of an
- * open target, the execve CLOEXEC sweep and the release of a table by its last
- * sharer come here. Nothing when `e` is NULL. May sleep.
+ * Release what the descriptor `e` holds before its slot is freed: first, for
+ * a descriptor of the calling thread's table, the table's record locks on what
+ * it is open on (`fd_close_locks`), then its objects and its reference to its
+ * description (`fd_release_objects`), which this consumes. The caller then
+ * clears the slot with `fd_free_after`, and reads nothing of the description
+ * through `e`. The close, the dup2 replacement of an open target, the execve
+ * CLOEXEC sweep and the release of a table by its last sharer come here.
+ * Nothing when `e` is NULL. May sleep.
  */
 void fd_release_backing(fd_entry_t *e);
 

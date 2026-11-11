@@ -4,8 +4,34 @@
 #include "../mm/usercopy.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
+#include "../proc/mutex.h"
 
-/** Drop every reservation reference and return it to its empty state. */
+/** Make `r` empty, with its lock, of one class for every reservation. */
+void dma_resv_init(struct dma_resv *r)
+{
+    k_memset(r, 0, sizeof(*r));
+    mutex_init(&r->lock, "dma_resv");
+}
+
+/** Take the reservation's lock; may sleep. */
+void dma_resv_lock(struct dma_resv *r)
+{
+    mutex_lock(&r->lock);
+}
+
+int dma_resv_trylock(struct dma_resv *r)
+{
+    return mutex_trylock(&r->lock);
+}
+
+/** Give the reservation's lock back. */
+void dma_resv_unlock(struct dma_resv *r)
+{
+    mutex_unlock(&r->lock);
+}
+
+/** Drop every reservation reference and return it to its empty state, for
+ * its last user, which needs no lock; the lock stays made. */
 void dma_resv_fini(struct dma_resv *r)
 {
     uint32_t i;
@@ -13,14 +39,19 @@ void dma_resv_fini(struct dma_resv *r)
     for (i = 0; i < r->nreads; i++)
         dma_fence_put(r->reads[i]);
     kfree(r->reads);
-    k_memset(r, 0, sizeof(*r));
+    r->write = NULL;
+    r->reads = NULL;
+    r->nreads = 0;
+    r->cap = 0;
 }
 
-/** Retain outstanding writers and readers when adding another producer. */
-int32_t dma_resv_add_fence(struct dma_resv *r, struct dma_fence *f, int write)
+/** Retain outstanding writers and readers when adding another producer,
+ * with the lock held, as Linux's dma_resv_add_fence (dma-resv.c:287-296). */
+int32_t dma_resv_add_fence_locked(struct dma_resv *r, struct dma_fence *f, int write)
 {
     struct dma_fence **p, *inputs[2], *merged;
     uint32_t i, n;
+    lockdep_assert_held(&r->lock);
     if (!f)
         return -EINVAL;
     if (write) {
@@ -57,11 +88,23 @@ int32_t dma_resv_add_fence(struct dma_resv *r, struct dma_fence *f, int write)
     return 0;
 }
 
-/** Snapshot work that must finish before a read or a write may start. */
-struct dma_fence *dma_resv_snapshot(struct dma_resv *r, int write)
+/** `dma_resv_add_fence_locked` under the reservation's lock. */
+int32_t dma_resv_add_fence(struct dma_resv *r, struct dma_fence *f, int write)
+{
+    int32_t rc;
+    dma_resv_lock(r);
+    rc = dma_resv_add_fence_locked(r, f, write);
+    dma_resv_unlock(r);
+    return rc;
+}
+
+/** Snapshot work that must finish before a read or a write may start, with
+ * the lock held. */
+struct dma_fence *dma_resv_snapshot_locked(struct dma_resv *r, int write)
 {
     struct dma_fence **p, *f;
     uint32_t i, n = write ? r->nreads : 0;
+    lockdep_assert_held(&r->lock);
     if (n == 0xffffffffu || ((size_t)n + 1) * sizeof(*p) / sizeof(*p) != (size_t)n + 1)
         return NULL;
     p = kmalloc(((size_t)n + 1) * sizeof(*p));
@@ -75,11 +118,81 @@ struct dma_fence *dma_resv_snapshot(struct dma_resv *r, int write)
     return f;
 }
 
-/** Take a buffer reference. */
+/** `dma_resv_snapshot_locked` under the reservation's lock. */
+struct dma_fence *dma_resv_snapshot(struct dma_resv *r, int write)
+{
+    struct dma_fence *f;
+    dma_resv_lock(r);
+    f = dma_resv_snapshot_locked(r, write);
+    dma_resv_unlock(r);
+    return f;
+}
+
+/**
+ * The fences of `r` now, each with a reference, under its lock, as Linux's
+ * dma_resv_get_fences (dma-resv.c:569-617), which takes them by a read
+ * that restarts when a writer changes the reservation meanwhile; without
+ * RCU the lock is taken for the copy instead. `*fences` is the write
+ * fence, which may be NULL, and with `all` the reads after it, `*count`
+ * in all. 0, or -ENOMEM with nothing taken.
+ */
+int32_t dma_resv_get_fences(struct dma_resv *r, int all, struct dma_fence ***fences,
+                            uint32_t *count)
+{
+    struct dma_fence **p;
+    uint32_t i, n;
+    dma_resv_lock(r);
+    n = all ? r->nreads + 1u : 1u;
+    /* A count whose array's size would wrap is refused. */
+    p = n != 0 && n <= 0xffffffffu / sizeof(*p) ? kmalloc((size_t)n * sizeof(*p)) : NULL;
+    if (!p) {
+        dma_resv_unlock(r);
+        return -ENOMEM;
+    }
+    p[0] = dma_fence_get(r->write);
+    for (i = 1; i < n; i++)
+        p[i] = dma_fence_get(r->reads[i - 1]);
+    dma_resv_unlock(r);
+    *fences = p;
+    *count = n;
+    return 0;
+}
+
+/** Drop the references `dma_resv_get_fences` took and free its array. */
+void dma_resv_put_fences(struct dma_fence **fences, uint32_t count)
+{
+    uint32_t i;
+    for (i = 0; i < count; i++)
+        dma_fence_put(fences[i]);
+    kfree(fences);
+}
+
+/** The reservation's write fence, with a reference, or NULL. */
+struct dma_fence *dma_resv_get_write(struct dma_resv *r)
+{
+    struct dma_fence *f;
+    dma_resv_lock(r);
+    f = dma_fence_get(r->write);
+    dma_resv_unlock(r);
+    return f;
+}
+
+/** Add `delta` to `*refs` atomically and return the old count. */
+static uint32_t refs_add(volatile uint32_t *refs, uint32_t delta)
+{
+    uint32_t old;
+    do {
+        old = *refs;
+    } while (arch_atomic_cmpxchg((volatile unsigned int *)refs, old, old + delta) != old);
+    return old;
+}
+
+/** Take a buffer reference, atomically, as Linux's get_file on the
+ * buffer's file, since PRIME takes and drops them on any processor. */
 struct dma_buf *dma_buf_ref(struct dma_buf *b)
 {
     if (b)
-        b->refs++;
+        refs_add(&b->refs, 1u);
     return b;
 }
 
@@ -87,7 +200,7 @@ struct dma_buf *dma_buf_ref(struct dma_buf *b)
 void dma_buf_put(struct dma_buf *b)
 {
     int i;
-    if (!b || --b->refs)
+    if (!b || refs_add(&b->refs, ~0u) != 1u)
         return;
     for (i = 0; i < 2; i++) {
         dma_fence_remove_callback(b->poll_fences[i], &b->poll_cb[i].cb);
@@ -105,6 +218,8 @@ struct dma_buf *dma_buf_export(uint64_t size, const struct dma_buf_ops *ops, voi
                                struct dma_resv *resv)
 {
     static uint64_t next_ino = 1;
+    static struct spinlock ino_lock = SPINLOCK_INIT_NAMED("dma_buf_ino");
+    uint32_t flags;
     struct dma_buf *b;
     if (!size || size > 0x7fffffffffffffffull || !ops)
         return NULL;
@@ -114,10 +229,14 @@ struct dma_buf *dma_buf_export(uint64_t size, const struct dma_buf_ops *ops, voi
     b->anon.name = "dmabuf";
     b->refs = 1;
     b->size = size;
+    flags = spin_lock_irqsave(&ino_lock);
     b->ino = next_ino++;
+    spin_unlock_irqrestore(&ino_lock, flags);
     b->ops = ops;
     b->priv = priv;
     b->resv = resv ? resv : &b->own;
+    if (!resv)
+        dma_resv_init(&b->own);
     wait_queue_init(&b->wq);
     return b;
 }
@@ -292,7 +411,7 @@ static void buf_close(fd_entry_t *e)
 }
 
 static const struct file_ops buf_ops = {NULL,      NULL,     buf_poll, buf_ioctl,
-                                        buf_close, buf_mmap, buf_seek};
+                                        buf_close, buf_mmap, buf_seek, 0};
 
 /** Identify dma-bufs by their operations, including duplicated descriptors. */
 int is_dma_buf_file(const fd_entry_t *e)
@@ -317,10 +436,11 @@ int32_t dma_buf_fd(struct dma_buf *b, uint32_t flags)
     fd = fd_alloc(current_proc->fds);
     if (fd < 0)
         return fd;
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_ANON;
     e->ops = &buf_ops;
     e->priv = dma_buf_ref(b);
     e->flags = FD_FLAG_READ | (b->read_only ? 0 : FD_FLAG_WRITE) | (flags ? FD_FLAG_CLOEXEC : 0);
+    fd_install(current_proc->fds, fd);
     return fd;
 }

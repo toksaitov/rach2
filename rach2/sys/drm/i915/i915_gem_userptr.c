@@ -15,6 +15,7 @@
 #include "../../mm/usercopy.h"
 #include "../../proc/percpu.h"
 #include "../../proc/process.h"
+#include "../../proc/smp.h"
 
 /* The pins of a userptr object's pages tried before a change to the range
  * during the pin gives -EAGAIN, as Linux's notifier sequence does. */
@@ -35,7 +36,8 @@ void i915_gem_userptr_put_pages(struct drm_i915_gem_object *obj)
 }
 
 /**
- * The range's `invalidate`, before the program's pages there change: an
+ * Revoke a userptr object's view of the program's pages, with the GEM lock
+ * held, before the program's pages there change: an
  * unmap, a change of protection, a fork, which makes them copy-on-write, a
  * copy-on-write break, a page dropped, or the end of the address space.
  * The bindings are revoked first, as Linux's did before the pages went: an
@@ -45,15 +47,11 @@ void i915_gem_userptr_put_pages(struct drm_i915_gem_object *obj)
  * pinned pages of a busy object. Then the frames are let go, or, while a
  * pin still holds them, marked stale, to go with its last. Does not sleep.
  */
-static void userptr_invalidate(struct mmn_range *r, int event, uintptr_t start, uintptr_t end)
+static void userptr_revoke(struct drm_i915_gem_object *obj)
 {
-    struct drm_i915_gem_object *obj = (struct drm_i915_gem_object *)r->owner;
     struct drm_i915_private *i915 = to_i915(obj->base.dev);
     struct i915_vma *v, *next;
 
-    (void)event;
-    (void)start;
-    (void)end;
     if (!obj->frames || obj->userptr.stale) {
         return;
     }
@@ -70,6 +68,89 @@ static void userptr_invalidate(struct mmn_range *r, int event, uintptr_t start, 
         obj->userptr.stale = 1;
     } else {
         i915_gem_userptr_put_pages(obj);
+    }
+}
+
+void i915_gem_userptr_flush(struct drm_i915_private *i915)
+{
+    struct drm_i915_gem_object *obj;
+    uint32_t flags;
+
+    lockdep_assert_held(&i915->gem.lock);
+    for (;;) {
+        flags = spin_lock_irqsave(&i915->gem.userptr_lock);
+        obj = i915->gem.userptr_pending;
+        if (obj) {
+            i915->gem.userptr_pending = obj->userptr.pending_next;
+            obj->userptr.pending_next = 0;
+            obj->userptr.pending = 0;
+        }
+        spin_unlock_irqrestore(&i915->gem.userptr_lock, flags);
+        if (!obj) {
+            return;
+        }
+        userptr_revoke(obj);
+    }
+}
+
+/** Take `obj` off the device's list of invalidations, for its free, once
+ * no invalidation can come. */
+static void userptr_unpend(struct drm_i915_gem_object *obj)
+{
+    struct drm_i915_private *i915 = to_i915(obj->base.dev);
+    struct drm_i915_gem_object **link;
+    uint32_t flags = spin_lock_irqsave(&i915->gem.userptr_lock);
+
+    if (obj->userptr.pending) {
+        for (link = &i915->gem.userptr_pending; *link && *link != obj;
+             link = &(*link)->userptr.pending_next) {
+        }
+        if (*link) {
+            *link = obj->userptr.pending_next;
+        }
+        obj->userptr.pending = 0;
+        obj->userptr.pending_next = 0;
+    }
+    spin_unlock_irqrestore(&i915->gem.userptr_lock, flags);
+}
+
+/**
+ * The range's `invalidate`, under the GEM lock when it can be had without
+ * sleeping. When another holds it, the object goes on the device's list
+ * for the holder, which revokes it as it lets the lock go
+ * (`i915_gem_unlock`), as Linux's invalidation only marks the range
+ * and leaves its pages to the next user (gem/i915_gem_userptr.c:63-87);
+ * meanwhile the frames stay pinned, so no page goes to another use while
+ * the GPU may still read it. Does not sleep.
+ */
+static void userptr_invalidate(struct mmn_range *r, int event, uintptr_t start, uintptr_t end)
+{
+    struct drm_i915_gem_object *obj = (struct drm_i915_gem_object *)r->owner;
+    struct drm_i915_private *i915 = to_i915(obj->base.dev);
+    uint32_t flags;
+
+    (void)event;
+    (void)start;
+    (void)end;
+    if (mutex_held(&i915->gem.lock)) {
+        userptr_revoke(obj);
+        return;
+    }
+    if (mutex_trylock(&i915->gem.lock)) {
+        userptr_revoke(obj);
+        i915_gem_unlock(i915, 1);
+        return;
+    }
+    flags = spin_lock_irqsave(&i915->gem.userptr_lock);
+    if (!obj->userptr.pending) {
+        obj->userptr.pending = 1;
+        obj->userptr.pending_next = i915->gem.userptr_pending;
+        i915->gem.userptr_pending = obj;
+    }
+    spin_unlock_irqrestore(&i915->gem.userptr_lock, flags);
+    /* The holder may have let go between the try and the list. */
+    if (mutex_trylock(&i915->gem.lock)) {
+        i915_gem_unlock(i915, 1);
     }
 }
 
@@ -105,7 +186,9 @@ int32_t i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
     }
     for (tries = 0; tries < USERPTR_PIN_TRIES; tries++) {
         seq = obj->userptr.range.seq;
+        mmap_read_lock(obj->userptr.range.mm);
         err = paging_pin_range(obj->userptr.range.mm, start, end, PIN_WRITE, frames);
+        mmap_unlock(obj->userptr.range.mm);
         if (err != 0) {
             kfree(frames);
             return err;
@@ -140,16 +223,28 @@ int32_t i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
     return obj->userptr.range.mm ? -EAGAIN : -EFAULT;
 }
 
+/* The notifier's list is kept under the big lock (mm/notify.h), which a
+ * free on a processor without it takes for the unregister. */
 void i915_gem_userptr_release(struct drm_i915_gem_object *obj)
 {
+    int big = !bkl_held();
+
+    if (big) {
+        bkl_enter();
+    }
     mmn_unregister(&obj->userptr.range);
+    if (big) {
+        bkl_exit();
+    }
+    userptr_unpend(obj);
     i915_gem_userptr_put_pages(obj);
 }
 
 /**
  * Whether every page of [addr, addr + len) of `mm` lies in a region of
  * memory with pages, none of a device's, as Linux's probe_range: 0, or
- * -EFAULT for a hole or a device's region.
+ * -EFAULT for a hole or a device's region. The caller holds `mm`'s
+ * regions' lock to read.
  */
 static int32_t probe_range(struct mm *mm, uintptr_t addr, uintptr_t len)
 {
@@ -212,7 +307,9 @@ int32_t i915_gem_userptr_ioctl(struct drm_device *dev, void *data, struct drm_fi
         return -ENODEV;
     }
     if (args->flags & I915_USERPTR_PROBE) {
+        mmap_read_lock(mm);
         err = probe_range(mm, (uintptr_t)args->user_ptr, (uintptr_t)args->user_size);
+        mmap_unlock(mm);
         if (err != 0) {
             return err;
         }

@@ -801,7 +801,7 @@ static struct msi_record {
  * which is held across each device's writes so that a remapper starting on
  * another processor never meets a message half written. */
 static const struct pci_msi_remap *msi_remap;
-static struct spinlock msi_lock = SPINLOCK_INIT;
+static struct spinlock msi_lock = SPINLOCK_INIT_NAMED("msi_lock");
 
 /** The record of `dev`'s message of `kind` at `index`, its MSI-X entry,
  * or NULL. */

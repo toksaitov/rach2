@@ -12,6 +12,7 @@
 #include "vfs.h"
 
 #include "../klog.h"
+#include "../lib/lockdep.h"
 #include "../lib/kerrno.h"
 #include "../mm/kheap.h"
 #include "../mm/paging.h"
@@ -1203,6 +1204,7 @@ static struct bbuf *get(block_device_t *dev, uint64_t blk, int blank, int *fresh
     struct bbuf *victim = 0;
     struct bbuf *b;
 
+    bkl_assert_held();
     if (fresh) {
         *fresh = 0;
     }

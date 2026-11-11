@@ -20,6 +20,9 @@
  * host-deps: rach2/sys/dmabuf/fence.c rach2/sys/tick.c
  * host-deps: tests/host/i915_model.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/atomic_host.c
+ * host-deps: tests/host/compat/i915_gem_lock_host.c
+ * host-deps: tests/host/compat/mutex_none.c
  *
  * A row makes a fresh model and a device record over it, brought up as
  * the bind does up to the rings, and a file opened on it. The kernel
@@ -438,6 +441,15 @@ void i915_rps_boost(struct i915_request *rq)
 void i915_gem_object_put(struct drm_i915_gem_object *obj)
 {
     (void)obj;
+}
+
+/** Nothing: execbuffer, which fills the pool of shadow batches, is the exec
+ * test's. No frame is freed. */
+uint32_t i915_gem_pool_trim(struct drm_i915_private *i915, int how)
+{
+    (void)i915;
+    (void)how;
+    return 0;
 }
 
 /* The GTT's allocator for the kernel's own ranges, i915_vma.c's: from
@@ -979,6 +991,10 @@ static void row_create_destroy(void)
     CHECK("create: a banned file is EIO",
           make_context(&file_a) == 0 && create_ext(0, 0, 0) == -EIO);
     fp->ban_score = 0;
+    /* The context calls run without the big lock, under the file's context
+     * list lock, which each gives back on every path above. */
+    CHECK("locks: each call, made or refused, gave the file's context list lock back",
+          !mutex_held(&fp->lock) && !mutex_held(&((struct i915_file *)file_b.driver_priv)->lock));
 
     /* Extensions. */
     memset(ext, 0, sizeof(ext));
@@ -2484,6 +2500,10 @@ static void row_reg_read(void)
     m.on_read = 0;
     done(&m);
 }
+
+/** Nothing: one thread has no one to give way to. */
+void sched_give_way(void)
+{}
 
 int main(void)
 {

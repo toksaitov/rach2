@@ -71,8 +71,11 @@ struct vchan {
  * and is clipped to 24 bits and narrowed to the device's width. `made`
  * counts the frames of the mix made since the stream's start, and `ended`
  * those in the periods the device has ended since. `lock` keeps the list,
- * the channels' state and the counts between process context and the
- * device's interrupt.
+ * the channels' state and the counts between the system calls and the
+ * device's service, HDA's thread or the SB16's interrupt. The service
+ * takes it with interrupts off for one block of VCHAN_BLOCK frames at a
+ * time, so that in HDA's thread, which runs with them on, an interrupt
+ * waits for one block's mix at most, not for a whole period's.
  */
 static void vchan_capture_feed(audio_stream_t *s, uint8_t *buf, size_t size);
 
@@ -256,10 +259,11 @@ static void vchan_mix(struct vchan *c, uint32_t n)
 }
 
 /**
- * The device stream's `transfer`, in the device's interrupt or its start:
+ * The device stream's `transfer`, in the device's service or its start:
  * make `size` bytes of the mix at `buf`, block by block, each the sum of
  * the channels running, clipped to 24 bits and stored as the top 24 bits of
- * 32 or narrowed to 16 (vchan_narrow).
+ * 32 or narrowed to 16 (vchan_narrow). The lock is held, with interrupts
+ * off, for each block alone.
  */
 static void vchan_render(audio_stream_t *s, uint8_t *buf, size_t size)
 {
@@ -269,8 +273,8 @@ static void vchan_render(audio_stream_t *s, uint8_t *buf, size_t size)
     struct vchan *c;
 
     (void)s;
-    flags = spin_lock_irqsave(&mix.lock);
     while (frames > 0) {
+        flags = spin_lock_irqsave(&mix.lock);
         n = frames < VCHAN_BLOCK ? frames : VCHAN_BLOCK;
         k_memset(mix.sum, 0, n * 2u * sizeof(mix.sum[0]));
         for (c = mix.list; c; c = c->next) {
@@ -297,12 +301,12 @@ static void vchan_render(audio_stream_t *s, uint8_t *buf, size_t size)
         vchan_capture_feed(s, block, n * mix.frame);
         mix.made += n;
         frames -= n;
+        spin_unlock_irqrestore(&mix.lock, flags);
     }
-    spin_unlock_irqrestore(&mix.lock, flags);
 }
 
 /**
- * The device stream's `period`, in the device's interrupt: count the
+ * The device stream's `period`, in the device's service: count the
  * period's frames as played, move each channel's count on to them, and call
  * a channel's `period` once for each of its periods played since its last.
  */
@@ -650,8 +654,8 @@ static struct {
     struct spinlock lock;
 } input;
 
-/** The reader of `s`, or NULL; calls in process context are serialized by
- * the kernel lock, and the interrupt's walks hold input.lock. */
+/** The reader of `s`, or NULL; the system calls are serialized by the
+ * kernel lock, and the device's service walks the readers under input.lock. */
 static struct vchan_reader *vchan_reader_find(audio_stream_t *s)
 {
     struct vchan_reader *r;
@@ -726,38 +730,45 @@ static void vchan_capture_put(struct vchan_reader *r, const int32_t *sample)
  * Frames the device lost since the last call were among those a reader
  * that joined meanwhile was to skip, so they count against its skip.
  * Loopback feeds the clipped playback mix; a real input calls this from
- * its interrupt. No caller may call the driver back from either callback.
+ * its service. No caller may call the driver back from either callback.
+ * The lock is held, with interrupts off, for VCHAN_BLOCK frames at a time.
  */
 static void vchan_capture_feed(audio_stream_t *s, uint8_t *buf, size_t size)
 {
     struct vchan_reader *r;
-    uint32_t flags, i, n, bytes, lost;
+    uint32_t flags, i, n, left, bytes, lost;
     int32_t sample[2], frame[2];
 
     if (!input.running || (input.loopback ? s != &mix.stream : s != &input.stream))
         return;
-    flags = spin_lock_irqsave(&input.lock);
     bytes = vchan_frame_bytes(s);
-    n = (uint32_t)size / bytes;
+    left = (uint32_t)size / bytes;
     lost = input.loopback ? 0 : s->lost - input.lost;
-    input.lost += lost;
-    for (r = input.list; r; r = r->next) {
-        if (!r->running)
-            continue;
-        r->skip -= r->skip < lost ? r->skip : lost;
-        i = r->skip < n ? r->skip : n;
-        r->skip -= i;
-        for (; i < n; i++) {
-            vchan_frame(s, buf + i * bytes, sample);
-            resample_put(&r->rs, sample);
-            while (r->rs.owed == 0) {
-                resample_get(&r->rs, frame);
-                vchan_capture_put(r, frame);
+    while (left > 0) {
+        flags = spin_lock_irqsave(&input.lock);
+        n = left < VCHAN_BLOCK ? left : VCHAN_BLOCK;
+        input.lost += lost;
+        for (r = input.list; r; r = r->next) {
+            if (!r->running)
+                continue;
+            r->skip -= r->skip < lost ? r->skip : lost;
+            i = r->skip < n ? r->skip : n;
+            r->skip -= i;
+            for (; i < n; i++) {
+                vchan_frame(s, buf + i * bytes, sample);
+                resample_put(&r->rs, sample);
+                while (r->rs.owed == 0) {
+                    resample_get(&r->rs, frame);
+                    vchan_capture_put(r, frame);
+                }
             }
         }
+        input.frames += n;
+        spin_unlock_irqrestore(&input.lock, flags);
+        lost = 0;
+        buf += n * bytes;
+        left -= n;
     }
-    input.frames += n;
-    spin_unlock_irqrestore(&input.lock, flags);
 }
 
 /** Open a reader, taking the device's input at the first open; in loopback

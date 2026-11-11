@@ -41,13 +41,13 @@ rach2/kernel.c:process_command nesting 6 a dispatcher, one arm per command, read
 rach2/kernel.c:root_spec_matches complexity 31 a parser over an external format, one check per field in the format's order
 rach2/kernel.c:boot_stack params 7 the parameters are the parts of one new image's stack: its space, arguments, environment, image and auxiliary vector
 
-rach2/sys/arch/i686/systab.c:arch_syscall_init lines 337 a table, one entry per system call number
+rach2/sys/arch/i686/systab.c:arch_syscall_init lines 339 a table, one entry per system call number
 
 rach2/sys/arch/x86_64/ia32_fs.c:ia32_native params 10 the parameters are the six registers of one x86-64 call, its handler and the kernel buffer it may reach
 
 rach2/sys/arch/x86_64/ia32_fs.c:select_body params 8 the parameters are the arguments of select and pselect6, in the calls' order, and the kind of their timeout
 
-rach2/sys/arch/x86_64/ia32_systab.c:ia32_syscall_init lines 452 a table, one entry per system call number
+rach2/sys/arch/x86_64/ia32_systab.c:ia32_syscall_init lines 454 a table, one entry per system call number
 
 rach2/sys/arch/x86_64/mmu.c:free_user_pages nesting 5 a walk over the four levels of the page tables, each page's case inside it
 
@@ -152,16 +152,16 @@ rach2/sys/fs/krffs.c:krffs_repair_at nesting 5 one file system operation over th
 rach2/sys/fs/krffs.c:krffs_resize_at complexity 27 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/krffs.c:krffs_walk_err complexity 27 one file system operation over the on-disk format, each step a rule of the format
 
-rach2/sys/fs/procfs.c:procfs_kind_name complexity 32 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_gen_text complexity 35 a dispatcher, one arm per command, read as a table
 
 rach2/sys/fs/synthfs.c:synth_classify_pid complexity 26 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/synthfs.c:synth_sys_path complexity 30 a dispatcher, one arm per command, read as a table
 
-rach2/sys/fs/vfs.c:resolve_path complexity 90 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/vfs.c:resolve_path lines 308 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/vfs.c:resolve_path nesting 5 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/vfs.c:resolve_path params 7 the parameters are one level's cursor in a recursive walk
+rach2/sys/fs/vfs.c:resolve_full complexity 90 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/vfs.c:resolve_full lines 308 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/vfs.c:resolve_full nesting 5 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/vfs.c:resolve_full params 7 the parameters are one level's cursor in a recursive walk
+rach2/sys/fs/vfs.c:resolve_path params 7 the parameters are resolve_full's, which it passes on when the cached walk cannot finish
 rach2/sys/fs/vfs.c:walk_rest_link params 7 the parameters are walk_link's six and the start of the part of the path handed over
 rach2/sys/fs/vfs.c:bind_refs params 7 the parameters are one bind's source and target, each a place and its real path, and the mount a recursive bind skips
 
@@ -253,7 +253,6 @@ rach2/sys/syscall_fs.c:readv_dgram params 7 the parameters are the parts of one 
 rach2/sys/syscall_fs.c:synth_dirent_at complexity 33 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:synth_dirent_at lines 142 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:synth_stat_node lines 252 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:sys_fcntl64 lines 112 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:utimes_node complexity 42 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:copy_from_file params 8 the parameters are one copy's two ends, its count, whether it may wait and its buffer, as splice and copy_file_range give them
 rach2/sys/syscall_fs.c:copy_from_pipe params 7 the parameters are one copy's two ends, its count, whether it may wait and its buffer, as splice and copy_file_range give them
@@ -275,7 +274,6 @@ rach2/sys/syscall_net.c:do_setsockopt lines 133 a dispatcher, one arm per comman
 rach2/sys/syscall_net.c:put_cmsg params 8 the parameters are the fields of one message; a struct for them would be filled and unpacked once
 
 rach2/sys/syscall_proc.c:exec_shebang complexity 30 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_proc.c:do_fork lines 107 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_proc.c:clone_with params 8 the parameters are the arguments of clone or clone3, passed through
 
 rach2/sys/usb/core.c:step_device complexity 78 a state machine, one arm per state, read as a table
@@ -437,7 +435,7 @@ tests/host/i915_reset_hosttest.c:row_engine_reset complexity 33 a test's rows, e
 
 tests/host/kd_hosttest.c:translating lines 102 a test's rows, each a case, read as one table
 
-tests/host/kheap_hosttest.c:main lines 114 a test's rows, each a case, read as one table
+tests/host/kheap_hosttest.c:main lines 115 a test's rows, each a case, read as one table
 
 tests/host/klog_hosttest.c:main lines 266 a test's rows, each a case, read as one table
 
@@ -583,7 +581,7 @@ tests/host/usbdisk_hosttest.c:main complexity 35 a test's rows, each a case, rea
 tests/host/vga_text_hosttest.c:row_widths complexity 30 a test's rows, each a case, read as one table
 
 tests/host/vm_hosttest.c:main complexity 49 a test's rows, each a case, read as one table
-tests/host/vm_hosttest.c:main lines 239 a test's rows, each a case, read as one table
+tests/host/vm_hosttest.c:main lines 243 a test's rows, each a case, read as one table
 
 tests/host/wcrypto_hosttest.c:ccmp_vector params 7 the parameters are one test vector's key, plaintext, ciphertext, counter and key ID, which each row gives
 

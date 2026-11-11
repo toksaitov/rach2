@@ -23,6 +23,14 @@
  */
 struct ktimer;
 
+/* Signals sent to several processes while one fork builds a child. The
+ * record lives on the calling thread's stack, linked under interrupts off
+ * until the child starts or the fork fails, as Linux's multiprocess list. */
+struct fork_pending {
+    struct fork_pending *next;
+    uint64_t pending; /* bit signo-1, with no siginfo, as Linux keeps it */
+};
+
 struct tgroup {
     uint32_t refs;
     uint32_t live;          /* threads that have not ended */
@@ -38,6 +46,13 @@ struct tgroup {
     uint32_t core_dumping;     /* its core is being written; the others park */
     int32_t exit_code;         /* the wait status the process ends with then */
     struct process *exec_task; /* the thread whose execve ends the others */
+    /* An init, which a signal left at its default does not end, as Linux's
+     * SIGNAL_UNKILLABLE: the system's real init and the first process of a
+     * PID namespace below the first. A forced signal at its default clears
+     * it when the thread it is forced on is not traced (`signal_force`), as
+     * Linux 6.12.115's force_sig_info_to_task does (kernel/signal.c:
+     * 1348-1354). */
+    uint32_t unkillable;
     /* A successful exec since this group was made; fork starts at 0. */
     uint32_t execed;
     /* clone with exit signal zero is reaped with __WCLONE, without SIGCHLD. */
@@ -50,6 +65,10 @@ struct tgroup {
     uint64_t stime;
     wait_queue_t chld; /* threads waiting for a child to change state */
     wait_queue_t gone; /* an execve or a core waiting on the other threads */
+    /* The signalfd readers and pollers of every thread, woken by each signal
+     * sent to the process or to one of its threads, as Linux's
+     * sighand->signalfd_wqh (`sig_notify_fd`). */
+    wait_queue_t sigfd;
     /* The CPU time of the children the process has reaped, each with the
      * children it reaped, which a reap adds and wait4, times and getrusage
      * report. The group keeps it, not the leader, since a traced thread's
@@ -102,6 +121,7 @@ struct tgroup {
      * wakes (`pidfd.h`). A pidfd holds a reference to the group, so the
      * queue outlives the process's record. */
     wait_queue_t exited;
+    struct fork_pending *forks; /* children being built by threads of this group */
 };
 
 /** A new group with `leader` as its one thread; NULL when the heap has no

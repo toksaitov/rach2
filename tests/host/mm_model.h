@@ -57,6 +57,18 @@ static void check(int ok, const char *row)
     }
 }
 
+/** `vm_resolve_in` as the fault handler calls it, with `mm`'s regions' lock
+ * held to read once, which a file's or a device's fill lets go. */
+static int resolve_held(struct mm *mm, uintptr_t addr, int write, uintptr_t as_limit)
+{
+    int rc;
+
+    mmap_read_lock(mm);
+    rc = vm_resolve_in(mm, addr, write, as_limit);
+    mmap_unlock(mm);
+    return rc;
+}
+
 /* ---- the user page directory: leaf tables over a window of user space ---- */
 
 #define SPAN       ((uintptr_t)MMU_TABLE_ENTRIES * PAGE_SIZE)
@@ -255,6 +267,28 @@ void smp_kernel_mapping_changed(void)
     kernel_flushes++;
 }
 
+/** Count, as `smp_kernel_mapping_changed`. */
+void smp_kernel_flush(uintptr_t start, uintptr_t end)
+{
+    (void)start;
+    (void)end;
+    kernel_flushes++;
+}
+
+/** 1: the test runs as the kernel, under the big lock. */
+int bkl_held(void)
+{
+    return 1;
+}
+
+/** Nothing: there is no big lock. */
+void bkl_enter(void)
+{}
+
+/** Nothing: there is no big lock. */
+void bkl_exit(void)
+{}
+
 /** Nothing: the test has no address space that counts its resident pages. */
 void mm_resident_add(const struct page_dir *dir, long pages)
 {
@@ -432,6 +466,35 @@ void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *nam
     (void)name;
 }
 
+/** Nothing: the model has no big lock to leave out of an entry. */
+void exception_unlock(uint8_t vector)
+{
+    (void)vector;
+}
+
+/** Nothing: the model's interrupt flag is `kirq_save`'s. */
+void arch_irq_enable(void)
+{}
+
+/** Nothing: the model's address spaces live as long as the test. */
+void mm_get(struct mm *mm)
+{
+    (void)mm;
+}
+
+/** Nothing, as `mm_get`. */
+void mm_put(struct mm *mm)
+{
+    (void)mm;
+}
+
+/** Release the files whose last region went, as mm.c's does with no lock
+ * held. */
+void mm_reap(void)
+{
+    vm_file_reap();
+}
+
 /** Nothing. */
 void terminate_current_process(int32_t signo)
 {
@@ -462,6 +525,12 @@ int k_panic_reading(void)
 /** Nothing: memory is never short. */
 void mem_balance(void)
 {}
+
+/** 0: memory is never short. */
+int mem_short(void)
+{
+    return 0;
+}
 
 /** 1: memory is never short. */
 int mem_may_take(int user_page)

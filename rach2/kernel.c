@@ -29,6 +29,7 @@
 #include "sys/block/mbr.h"
 #include "sys/block/loop.h"
 #include "sys/fs/debugfs.h"
+#include "sys/lib/lockdep.h"
 #include "sys/fs/devfs.h"
 #include "sys/fs/procfs.h"
 #include "sys/fs/vfs.h"
@@ -44,6 +45,7 @@
 #include "sys/evdev.h"
 #include "sys/proc/elf.h"
 #include "sys/proc/uimage.h"
+#include "sys/lib/kirq.h"
 #include "sys/lib/krandom.h"
 #include "sys/lib/ksignal.h"
 #include "sys/rtc.h"
@@ -376,10 +378,17 @@ static void timer_preempt(int nested, uint64_t start)
  * shared buffers require, and nothing it calls waits on hardware.
  *
  * Then the handler reschedules through `sched_preempt`: at once when the
- * current process is not inside a system call, and at the call's exit when
- * it is, since timer IRQs stay enabled during a call so HDA streaming keeps
- * running, yet a switch in the middle of one is unsafe. Kernel threads (no
- * current_proc, or one not in_syscall) are switched at once.
+ * current process is in user mode, and at the call's exit when it is
+ * inside a system call, since a switch in the middle of one is unsafe;
+ * timer IRQs stay enabled during a call to keep the clock, the timers and
+ * the HDA service's wake requests going.
+ * A kernel thread defers the switch to its next sleep or service point
+ * (`no_tick_switch`), as Linux without CONFIG_PREEMPTION does, since its
+ * work changes state that only the big lock guards. Process 0 and the
+ * debug shell's test threads are switched at once, unless inside klog
+ * (`klog_inside`), in a record, a console write or a console byte, as
+ * process 0 is while the debug shell prints a line; such a thread gives way
+ * at a later tick.
  */
 static void timer_handler(isr_params_t *params)
 {
@@ -489,7 +498,11 @@ static void shell_lockup(const char *args)
  * Write the core file of the current process, which the signal `signo`
  * ends, and let the threads parked for it go (`core_release`). Returns the
  * status the process ends with: `signo` with WCOREFLAG, which WCOREDUMP
- * reads, only when the whole file was written, and `signo` otherwise. The
+ * reads, only when the whole file was written and no SIGKILL came during
+ * the dump, and `signo` otherwise. A SIGKILL to the process during the dump
+ * stops the file and makes the process's status SIGKILL's (`sig_complete`),
+ * which WCOREFLAG then is not added to, as Linux 6.12.115's
+ * `coredump_finish` leaves out 0x80 (fs/coredump.c:473-474). The
  * caller has set `in_syscall` and enabled interrupts, as a system call
  * writing the file would: the timer does not switch away in the middle of
  * the file system's work, and a disk that answers only by interrupt, as a
@@ -498,12 +511,16 @@ static void shell_lockup(const char *args)
 static int32_t terminate_core(int32_t signo)
 {
     int32_t rc = fs_core_file(signo, current_proc->rlim[RLIM_CORE].cur);
+    uint32_t flags = kirq_save();
+    int dumped = rc == 0 && !(current_proc->sig_pending & KSIG_BIT(SIGKILL));
 
-    if (rc == 0) {
+    if (dumped) {
         current_proc->tg->exit_code = signo | WCOREFLAG;
     }
+    current_proc->tg->core_dumping = 0;
+    kirq_restore(flags);
     core_release();
-    return rc == 0 ? signo | WCOREFLAG : signo;
+    return dumped ? signo | WCOREFLAG : signo;
 }
 
 /**
@@ -526,7 +543,7 @@ static void terminate_release_session(uint32_t pid)
  * for a signal. The status is the process's, so a thread that exit_group's
  * SIGKILL ends last reports the group's exit.
  */
-static void init_end_line(uint32_t pid, int32_t status)
+void init_end_line(uint32_t pid, int32_t status)
 {
     if ((status & 0x7F) == 0) {
         klog(KLOG_INFO, "sys_exit",
@@ -543,6 +560,12 @@ static void init_end_line(uint32_t pid, int32_t status)
  * (`proc_group_exit`), and whichever thread ends last publishes the death,
  * posts SIGCHLD and wakes a parent blocked in waitpid. The exit code is the
  * wait status of a death by a signal, the signal in its low seven bits.
+ * The thread's exit event comes once its process's end has begun and its
+ * core is written, and reports the status `do_group_exit` would give
+ * Linux 6.12.115's `do_exit` (kernel/exit.c:897-898, 1075-1096): the
+ * process's status before this thread parks for a core, or after writing
+ * one itself, or 0 when another thread's execve ends this one. Only the
+ * dumper's event includes WCOREFLAG (fs/coredump.c:472-476).
  *
  * A core file is written (`terminate_core`) only when no other thread has
  * begun to end the process: the group's `core_dumping` is set before the
@@ -584,12 +607,13 @@ void terminate_current_process(int32_t signo)
     int core;
     int alone;
     int last;
+    int32_t event_status;
+    process_t *dead;
 
     if (!current_proc || current_proc->mm == NULL) {
         return;
     }
 
-    ptrace_event(PTRACE_EVENT_EXIT, (uint32_t)(signo & 0x7F));
     pid = current_proc->tgid;
     is_init = (pid == init_pid && init_pid != 0);
     current_proc->in_syscall = 1;
@@ -601,19 +625,23 @@ void terminate_current_process(int32_t signo)
         current_proc->tg->core_dumping = 1;
     }
     proc_group_exit(signo);
+    event_status = current_proc->tg->exiting ? current_proc->tg->exit_code : 0;
     arch_irq_enable();
     if (core) {
-        signo = terminate_core(signo);
+        (void)terminate_core(signo);
+        event_status = current_proc->tg->exit_code;
     } else if (current_proc->tg->core_dumping) {
         core_park();
     }
+    ptrace_event(PTRACE_EVENT_EXIT, (uint32_t)event_status);
+    signal_exit_begin();
     alone = current_proc->tg->live == 1;
 
     if (alone) {
         terminate_release_session(pid);
     }
 
-    last = proc_exit_cleanup(signo);
+    last = proc_exit_cleanup(event_status);
     arch_irq_disable();
 
     if (!last) {
@@ -634,11 +662,12 @@ void terminate_current_process(int32_t signo)
         init_end_line(pid, current_proc->tg->exit_code);
         console_puts("Init process exited. Returning to kernel debug shell.");
 
-        free_process(current_proc);
-
+        /* The idle task is current before the record is freed, since what
+         * the free calls may read the current record. */
+        dead = current_proc;
         init_pid = 0;
-        current_proc = proc_idle;
-        current_proc->state = PROC_RUNNING;
+        sched_adopt(proc_idle);
+        free_process(dead);
 
         shell_reset_input();
 
@@ -953,8 +982,11 @@ static bool test_usermode(void)
  * when `dir` is NULL, in whatever directory is loaded when it runs. It has
  * the shell's affinity before it is made ready, since `sched_make_ready`
  * queues it on a processor of that affinity and only that processor takes
- * it from its queue. NULL when no record or no stack can be had.
- * `test_process_free` gives back both.
+ * it from its queue. Unlike a kernel thread, it takes the tick's switch
+ * (`no_tick_switch` cleared), since the shell's tests of preemption, the
+ * round-robin turns of machine.smp's preempt case among them, are of that
+ * switch. NULL when no record or no stack can be had. `test_process_free`
+ * gives back both.
  */
 static process_t *test_process(page_dir_t *dir, void (*entry)(void))
 {
@@ -975,6 +1007,7 @@ static process_t *test_process(page_dir_t *dir, void (*entry)(void))
     p->parent_pid = current_proc->pid;
     p->affinity = current_proc->affinity;
     setup_process_stack(p, entry);
+    p->no_tick_switch = 0;
     sched_make_ready(p);
     return p;
 }
@@ -1470,6 +1503,10 @@ static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uint
     user_proc->kernel_stack = (uintptr_t)stack + KERNEL_STACK_SIZE;
     user_proc->parent_pid = current_proc ? current_proc->tgid : 0;
     proc_set_comm(user_proc, name);
+    if (current_proc) {
+        current_proc->on_cpu = 0;
+    }
+    user_proc->on_cpu = 1;
     current_proc = user_proc;
     fpu_restore(user_proc->fpu);
 
@@ -1477,7 +1514,9 @@ static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uint
 
     if (init_pid == 0) {
         init_pid = user_proc->pid;
+        user_proc->tg->unkillable = !debug_shell_is_home;
         platform_threads_start();
+        hda_thread_start();
         evdev_sysfs_start();
     }
 
@@ -3991,19 +4030,21 @@ static void publish_disks(void)
  * Take the boot record's command line `cmdline` into the kernel's buffer
  * (`kcmdline_capture`), and log a line too long to keep whole: the bytes
  * kept, and the bytes the record has, "or more" when the record cut the
- * loader's line at its own limit too.
+ * loader's line at its own limit too. Then read `netpoll.carrier_timeout=`
+ * (`netconsole_read_params`), as Linux's `parse_args` reads its parameters
+ * once the line is in place (init/main.c:912-915).
  */
 static void capture_cmdline(const char *cmdline)
 {
     unsigned int given;
 
-    if (!kcmdline_capture(cmdline)) {
-        return;
+    if (kcmdline_capture(cmdline)) {
+        given = (unsigned int)k_strlen(cmdline);
+        klog(KLOG_WARN, "boot", "command line cut: kept %u of %u%s bytes, at its last whole option",
+             (unsigned int)k_strlen(kcmdline_get()), given,
+             given + 1 >= BOOT_CMDLINE_MAX ? " or more" : "");
     }
-    given = (unsigned int)k_strlen(cmdline);
-    klog(KLOG_WARN, "boot", "command line cut: kept %u of %u%s bytes, at its last whole option",
-         (unsigned int)k_strlen(kcmdline_get()), given,
-         given + 1 >= BOOT_CMDLINE_MAX ? " or more" : "");
+    netconsole_read_params();
 }
 
 /** Start the sound card, unless `rach2.noaudio` says not to, and record
@@ -4061,25 +4102,38 @@ static void start_network(void)
     (void)ath9k_probe();
 }
 
-/* debugfs's bkl/calls, bkl/profile and bkl/tick, the counts of system calls
- * and entries with their holds of the big lock, the samples of the kernel
- * under it and the parts of the tick, which a write zeroes (proc/smp.c). */
+/* debugfs's big-lock counts, profile, long holds and the tick's parts, each
+ * zeroed by a write (proc/smp.c). */
 static const struct debugfs_text_ops bkl_calls_ops = {smp_calls_show, smp_calls_store};
 static const struct debugfs_text_ops bkl_profile_ops = {smp_profile_show, smp_profile_store};
+static const struct debugfs_text_ops bkl_long_ops = {smp_long_show, smp_long_store};
 static const struct debugfs_text_ops bkl_tick_ops = {smp_tick_show, smp_tick_store};
+#ifdef RACH2_LOCKDEP
+/* debugfs's lockdep/inject, which makes the checker's two reports on
+ * demand (lib/lockdep.c). */
+static const struct debugfs_text_ops lockdep_inject_ops = {lockdep_inject_show,
+                                                           lockdep_inject_store};
+#endif
 
 /** Start the processors past the first (`smp_start`) and the lockup
  * detectors on all of them (`watchdog_init`), then register bkl/calls,
- * bkl/profile and bkl/tick in debugfs; a failure there is logged. */
+ * bkl/profile, bkl/long, bkl/tick and, with the checker, lockdep/inject in
+ * debugfs; a failure there is logged. */
 static void start_processors(void)
 {
     smp_start();
     watchdog_init();
     if (debugfs_create_text("bkl/calls", 0644u, &bkl_calls_ops, NULL) != 0 ||
         debugfs_create_text("bkl/profile", 0644u, &bkl_profile_ops, NULL) != 0 ||
+        debugfs_create_text("bkl/long", 0644u, &bkl_long_ops, NULL) != 0 ||
         debugfs_create_text("bkl/tick", 0644u, &bkl_tick_ops, NULL) != 0) {
         klog(KLOG_WARN, "bkl", "debugfs: files not registered");
     }
+#ifdef RACH2_LOCKDEP
+    if (debugfs_create_text("lockdep/inject", 0600u, &lockdep_inject_ops, NULL) != 0) {
+        klog(KLOG_WARN, "lockdep", "debugfs: inject not registered");
+    }
+#endif
 }
 
 /**

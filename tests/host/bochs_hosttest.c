@@ -6,6 +6,9 @@
  * structures.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/resv_host.c
+ * host-deps: tests/host/compat/mutex_none.c
+ * host-deps: tests/host/compat/spinlock_host.c
  *
  * The rows: a function whose DISPI id is not one, refused; a bind with
  * QEMU's EDID, which is Linux's bochs-drm, sets the little-endian byte
@@ -168,7 +171,7 @@ void drm_dev_init(struct drm_device *d, const struct drm_driver *driver)
     d->features = driver->ident.features;
     d->index = -1;
     d->refs = 1;
-    wait_queue_init(&d->commit_wait);
+    mutex_init(&d->mode_lock, "drm_mode_lock");
 }
 
 /** Registration: card 0, or the row's error. */

@@ -5,6 +5,7 @@
  */
 
 #include "i915.h"
+#include "../../proc/smp.h"
 #include "i915_drm.h"
 
 #include "../../lib/kerrno.h"
@@ -624,11 +625,21 @@ void i915_vma_revoke_mmap(struct i915_vma *vma)
 {
     struct drm_i915_gem_object *obj = vma->obj;
     uint32_t pages = (uint32_t)(vma->size >> PAGE_SHIFT);
+    int big;
 
     if (!vma->userfault) {
         return;
     }
+    /* The walk of every address space is the big lock's (mm/paging.c),
+     * which EXECBUFFER2's eviction, under the GEM lock alone, takes. */
+    big = !bkl_held();
+    if (big) {
+        bkl_enter();
+    }
     paging_zap_device(&obj->mmo[I915_MMAP_OFFSET_GTT], vma->view_offset, pages);
+    if (big) {
+        bkl_exit();
+    }
     vma->userfault = 0;
     obj->userfault_count--;
 }

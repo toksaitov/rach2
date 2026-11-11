@@ -39,6 +39,7 @@ struct kernel_pollfd {
 struct isr_params;
 struct wait_queue;
 struct fd_entry;
+struct process;
 
 /** The readiness of one descriptor: a subset of `events` for POLLIN and
  * POLLOUT, with POLLHUP and POLLERR always reported, and in `*wq` the wait
@@ -70,6 +71,14 @@ struct poll_deadline {
  * Sleeps, so it is for system call context.
  */
 int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d, const char *wchan);
+
+/**
+ * Take thread `t`, asleep in `poll_wait`, off every queue it sleeps on, and
+ * set each queue in its array to NULL, so that a close by another thread may
+ * free what the wait sleeps on; the wait scans again once woken. Nothing
+ * when `t` is not asleep there. The caller wakes `t`.
+ */
+void poll_let_go(struct process *t);
 
 /** In `d`, the deadline of a timeout of `timeout_ms` milliseconds: the first
  * tick at or after its end, and its end by time since boot. A negative

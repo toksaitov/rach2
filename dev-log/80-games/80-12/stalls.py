@@ -4,7 +4,7 @@
 Usage: stalls.py SAMPLE FRAMETIMES [SKIP]
 
 SAMPLE is sample.sh's sample.txt and FRAMETIMES Gallium's HUD dump of frame
-times in milliseconds, one a frame. Only the readings past the first SKIP
+times in milliseconds, one a frame; either may be gzipped, named *.gz. Only the readings past the first SKIP
 frames count, by default all but the last 6,000, the flyby's second to
 fourth loops, which follow the load and the first loop's reads from the
 disk. A reading holds the frames the HUD counted since the reading before
@@ -15,13 +15,19 @@ processors' split, the entries whose holds grew most, the growth of Mesa's
 shader cache, the reads from the disk and HDA's underruns, so that the
 cause shows in which of them moves with the stalls.
 """
+import gzip
 import sys
+
+
+def text(path):
+    """Open PATH for reading as text, through gzip when it ends in .gz."""
+    return gzip.open(path, 'rt') if path.endswith('.gz') else open(path)
 
 
 def blocks(path):
     """Yield each reading of sample.txt as a dict."""
     cur = None
-    for line in open(path):
+    for line in text(path):
         w = line.split()
         if not w:
             continue
@@ -108,7 +114,7 @@ def summary(name, ds):
 def main():
     sample, frames = sys.argv[1], sys.argv[2]
     rs = [r for r in blocks(sample) if 'user' in r and 'frames' in r]
-    ft = [float(x) for x in open(frames) if x.strip()]
+    ft = [float(x) for x in text(frames) if x.strip()]
     skip = int(sys.argv[3]) if len(sys.argv) > 3 else len(ft) - 6000
     print(f'frames: {len(ft)}, counted past {skip}: '
           f'{sum(1 for v in ft[skip:] if v > 100)} over 100 ms, '

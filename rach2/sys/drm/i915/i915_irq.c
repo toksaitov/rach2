@@ -299,6 +299,8 @@ void i915_irq_handle(struct drm_i915_private *i915)
     struct i915_irq *irq = &i915->irq;
     uint32_t flags = spin_lock_irqsave(&irq->lock);
     uint32_t de_ier, sde_ier, gt_iir, de_iir, sde_iir, pm_iir;
+    void (*deferred)(struct drm_i915_private *);
+    void (*deferred_display)(struct drm_i915_private *);
     int found = 0;
 
     irq->messages++;
@@ -343,11 +345,13 @@ void i915_irq_handle(struct drm_i915_private *i915)
     if (sde_ier || irq->ier[I915_IRQ_SDE]) {
         i915_write(hw, SDEIER, irq->ier[I915_IRQ_SDE]);
     }
+    deferred = irq->deferred;
+    deferred_display = irq->deferred_display;
     spin_unlock_irqrestore(&irq->lock, flags);
-    if (irq->deferred) {
-        irq->deferred(i915);
+    if (deferred) {
+        deferred(i915);
     }
-    if (irq->deferred_display) {
-        irq->deferred_display(i915);
+    if (deferred_display) {
+        deferred_display(i915);
     }
 }

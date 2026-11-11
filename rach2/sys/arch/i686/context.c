@@ -13,7 +13,7 @@
 
 /* The common entry's return to user mode (isr_handler.s), where a forked
  * child's first switch lands. */
-extern void isr_return(void);
+extern void ret_from_fork(void);
 
 /* The offsets switch.s reads from the process record, as `.set` values
  * there and as numbers here; a field added before one of them stops the
@@ -47,17 +47,15 @@ int arch_context_check(void)
 void switch_space(const process_t *next);
 
 /**
- * Load the page directory `next` runs in, unless it is the one this
- * processor has loaded and no shootdown has marked it stale; switch.s calls
- * it. A
+ * Load the page directory `next` runs in, unless it is the one this processor
+ * has loaded and no shootdown has marked it stale; switch.s calls it. A
  * record with none, an idle task or a kernel thread, runs in whatever is
- * loaded, whose kernel half is every directory's, so a process that blocks
- * and wakes again on this processor finds its directory still loaded
+ * loaded, whose kernel half is every directory's, so a process that blocks and
+ * wakes again on this processor finds its directory still loaded
  * (`smp_space_release` takes it back before it is freed, and
- * `smp_tlb_shootdown` marks it stale meanwhile). The comparison is with
- * what the processor has, never with the outgoing record: a thread that
- * gave up its address space at its end still runs in it until it switches
- * away.
+ * `smp_tlb_shootdown` marks it stale meanwhile). The comparison is with what
+ * the processor has, never with the outgoing record: a thread that gave up its
+ * address space at its end still runs in it until it switches away.
  */
 void switch_space(const process_t *next)
 {
@@ -96,9 +94,10 @@ void arch_context_init(process_t *proc, void (*entry_point)(void))
 /**
  * The child's stack has a copy of the parent's frame at its top, with fork's
  * 0 in EAX and `newsp` as the user stack pointer when it is not 0, and below
- * it the return address `isr_return` (isr_handler.s) and the four registers
- * `switch_context` pops; its first switch returns to isr_return, which takes
- * the frame back to user mode.
+ * it the return address `ret_from_fork` (isr_handler.s) and the four
+ * registers `switch_context` pops; its first switch returns to
+ * ret_from_fork, which runs the switch's tail and takes the frame back to
+ * user mode through isr_return.
  */
 void arch_fork_frame(process_t *child, const isr_params_t *params, uintptr_t newsp)
 {
@@ -112,7 +111,7 @@ void arch_fork_frame(process_t *child, const isr_params_t *params, uintptr_t new
     if (newsp) {
         FRAME_SP(frame) = (uint32_t)newsp;
     }
-    *--sp = (uint32_t)isr_return;
+    *--sp = (uint32_t)ret_from_fork;
     *--sp = 0; /* EBP */
     *--sp = 0; /* EBX */
     *--sp = 0; /* ESI */

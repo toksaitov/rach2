@@ -1,0 +1,19 @@
+[0;;m[0m[info   ] ShaderFilesManager: Compiling shader: /usr/share/games/supertuxkart/data/shaders/alphatest_particle.frag
+[0;;m[0m[info   ] ShaderFilesManager: Compiling shader: /usr/share/games/supertuxkart/data/shaders/degraded_ibl.frag
+[0;;m[0m[info   ] ShaderFilesManager: Compiling shader: /usr/share/games/supertuxkart/data/shaders/sunlight.frag
+[0;;m[0m[info   ] ShaderFilesManager: Compiling shader: /usr/share/games/supertuxkart/data/shaders/pointlight.vert
+[0;;m[0m[info   ] ShaderFilesManager: Compiling shader: /usr/share/games/supertuxkart/data/shaders/pointlight.frag
+[0;;m[0m[info   ] ShaderFilesManager: Compiling shader: /usr/share/games/supertuxkart/data/shaders/combine_diffuse_color.frag
+[0;;m[0m[info   ] ShaderFilesManager: Compiling shader: /usr/share/games/supertuxkart/data/shaders/tonemap.frag
+[0;;m[0m[info   ] [FileManager]: Creating directory(ies) '/tmp/games.TRVxZj/home/.cache/supertuxkart/cached-textures/hd/tracks/hacienda'
+[0;;m[0m[info   ] FileManager: Creating directory '/tmp/games.TRVxZj/home/.cache/supertuxkart/cached-textures/hd/tracks/'.
+[0;;m[0m[info   ] FileManager: Creating directory '/tmp/games.TRVxZj/home/.cache/supertuxkart/cached-textures/hd/tracks/hacienda/'.
+[0;;m[0m[info   ] [FileManager]: Creating directory(ies) '/tmp/games.TRVxZj/home/.cache/supertuxkart/cached-textures/hd/library/stklib_sagebrush_a'
+[0;;m[0m[info   ] FileManager: Creating directory '/tmp/games.TRVxZj/home/.cache/supertuxkart/cached-textures/hd/library/'.
+[0;;m[0m[info   ] FileManager: Creating directory '/tmp/games.TRVxZj/home/.cache/supertuxkart/cached-textures/hd/library/stklib_sagebrush_a/'.
+[0;;m[0m[info   ] Track: Overall scene complexity estimated at 181
+[0;;m[0m[info   ] ShaderFilesManager: Compiling shader: /usr/share/games/supertuxkart/data/shaders/importance_sampling_specular.frag
+[0;;m[0m[info   ] ShaderFilesManager: Compiling shader: /usr/share/games/supertuxkart/data/shaders/pointlightscatter.frag
+[0;;m[0m[info   ] ShaderFilesManager: Compiling shader: /usr/share/games/supertuxkart/data/shaders/gaussian6v.comp
+[0;;m[0m[info   ] ShaderFilesMan-rw-r--r-- 1 desktop desktop 20829 Nov 11 19:08 /tmp/t3703-out/supertuxkart/supertuxkart-1/supertuxkart.log
+queue fill 0 high 0 delay-ms 54 written 0 dropped 0 periods 5137 underruns 0 missed 0 lpib 14496

@@ -7,6 +7,9 @@
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/nodelock_none.c
+ * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/kirq_none.c
+ * host-deps: tests/host/compat/bkl_none.c
+ * host-deps: tests/host/compat/atomic_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
  * `syscall_fs.c` is included whole, its unused exports private so that the
@@ -235,7 +238,7 @@ static int core_fd(void)
     int fd;
 
     for (fd = 0; fd < files.cap; fd++) {
-        if (files.entries[fd].ofd && files.entries[fd].ofd->vnode == &core_node) {
+        if (fd_slot(&files, fd)->ofd && fd_slot(&files, fd)->ofd->vnode == &core_node) {
             return fd;
         }
     }
@@ -383,8 +386,11 @@ int vfs_resolve_real(const char *path, int flags, struct vfs_ref *out, char *rea
 /** This resolver model has no captured entry; its original walk is unchanged.
  */
 int vfs_resolve_entry(const char *path, int flags, struct vfs_ref *out, char *real,
-                      struct vfs_name **entry)
+                      struct vfs_name **entry, struct vfs_stat *dir)
 {
+    if (dir) {
+        k_memset(dir, 0, sizeof(*dir));
+    }
     if (entry) {
         *entry = NULL;
     }
@@ -688,6 +694,19 @@ int filemap_holds(const void *node)
 }
 
 krffs_file_system_t *krffs_fs;
+/* The protections of /proc/sys/fs, at the values rach2/sys/fs/vfs.c gives
+ * them, which the open of the core file meets. */
+int vfs_protected_hardlinks = 1;
+int vfs_protected_symlinks = 1;
+int vfs_protected_fifos = 1;
+int vfs_protected_regular = 2;
+
+/** A pid as the caller's namespace sees it, which no row reads: the open of
+ * a /proc directory names one, and the core file is no such open. */
+uint32_t pid_seen(uint32_t kid)
+{
+    return kid;
+}
 
 /** No node of the KRFFS root is in a row: 0. */
 uint64_t krffs_node_ino(const krffs_node_t *node)
@@ -995,6 +1014,14 @@ int procfs_resolve_pid(int pid)
 int procfs_may_read(int pid)
 {
     (void)pid;
+    return 0;
+}
+
+/** No kind is a system-wide file of /proc here, so the opens and stats
+ * that ask fall through to ENOENT. */
+uint32_t procfs_ino_global(int kind)
+{
+    (void)kind;
     return 0;
 }
 
@@ -1706,7 +1733,7 @@ static void row_end(void)
     int fd;
 
     for (fd = 0; fd < files.cap; fd++) {
-        if (files.entries[fd].type != FD_TYPE_NONE || files.entries[fd].ofd) {
+        if (fd_slot(&files, fd)->type != FD_TYPE_NONE || fd_slot(&files, fd)->ofd) {
             fd_free(&files, fd);
         }
     }
@@ -1893,8 +1920,8 @@ static void stream_writev(void)
     k_memset(&s, 0, sizeof(s));
     s.type = SOCK_STREAM;
     check(fd < files.cap, "the table has a descriptor 5");
-    files.entries[fd].type = FD_TYPE_SOCKET;
-    files.entries[fd].sock = &s;
+    fd_slot(&files, fd)->type = FD_TYPE_SOCKET;
+    fd_slot(&files, fd)->sock = &s;
     v[0].iov_base = (uintptr_t)bytes;
     v[0].iov_len = 4;
     v[1].iov_base = (uintptr_t)(bytes + 4);
@@ -1910,8 +1937,8 @@ static void stream_writev(void)
     check(writev_elements(fd, (uintptr_t)v, 2, 8) == -EPIPE && sigpipes == 1,
           "a writev whose first element fails with EPIPE posts SIGPIPE");
     host_copies = 0;
-    files.entries[fd].type = FD_TYPE_NONE;
-    files.entries[fd].sock = NULL;
+    fd_slot(&files, fd)->type = FD_TYPE_NONE;
+    fd_slot(&files, fd)->sock = NULL;
     row_end();
 }
 

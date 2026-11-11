@@ -47,8 +47,8 @@
  * An operation a type does not have is a NULL pointer, and the wrapper of
  * the operation, below, gives the default answer for it.
  *
- * The lock order is a mount's namespace lock, then an open file
- * description's lock (fd.h), then buffers of the cache by the cache's rules
+ * The lock order is an open file description's lock (fd.h), then a
+ * mount's namespace lock, then buffers of the cache by the cache's rules
  * (bcache.h).
  */
 
@@ -333,6 +333,12 @@ struct vfs_ops {
      * NULL for a type that keeps no file page in memory. */
     void (*cachestat)(struct vfs_mount *mnt, void *node, uint64_t first, uint64_t last,
                       struct vfs_cachestat *cs);
+    /* Drop a hold on `node` without the big lock when it is not the last
+     * and the put has nothing else to do: 1 when it did, 0 with nothing
+     * changed when the caller must `put` under the big lock. A type that
+     * sets `name_cache` has it, for the cached walk (`resolve_path`); NULL
+     * for any other type. */
+    int (*put_unless_last)(struct vfs_mount *mnt, void *node);
 };
 
 /* What cachestat(2) counts over a file's range of pages, in the order and
@@ -368,9 +374,12 @@ struct vfs_type {
      * claims no sectors, and /proc/filesystems marks it `nodev`. */
     int nodev;
     /* Nonzero for a type whose names the name cache keeps (dcache.h): one
-     * whose `hold` keeps a node at one address, whose names compare byte
-     * for byte, and whose namespace changes only through the wrappers of
-     * vfs.c. */
+     * whose `hold` keeps a node at one address, takes no lock and may run
+     * without the big lock on a node already held, whose names compare
+     * byte for byte, and whose namespace changes only through the wrappers
+     * of vfs.c. Its `getattr` of a held node reads only the node, so the
+     * cached walk may judge a search permission without the big lock, and
+     * it has `put_unless_last`. */
     int name_cache;
     /* Nonzero for a type that locks each file on its own (`lock_node`) in
      * place of the mount's namespace lock: a change locks the nodes it
@@ -384,7 +393,9 @@ struct vfs_type {
  * `refs` counts what keeps the mount from being unmounted: the
  * descriptions on it, the working directories and process roots in it, the
  * child mounts under it and the binds that show it. `inprogress` counts
- * operations in flight, which is what unmount drains. */
+ * operations in flight, which is what unmount drains. Both change in one
+ * atomic step (`vfs_mount_get`, `vfs_mount_put`, `vfs_enter`, `vfs_leave`),
+ * and the unmount judges them under the big lock. */
 struct vfs_mount {
     const struct vfs_type *type;
     block_device_t *dev; /* NULL for the KRFFS root and a type with no device */
@@ -614,9 +625,22 @@ int vfs_replay_end(void);
 
 /* Resolve and capture the final regular-file entry in the same walk.
  * The returned name owns its parent and mount; the caller puts or transfers
- * it even if a later open fails. No entry is returned for a mount root. */
+ * it even if a later open fails. No entry is returned for a mount root.
+ * With `dir` not NULL, the attributes of the directory the path's last name
+ * was looked up in go there, after any link at the end is followed, as
+ * Linux's nd->dir_mode and dir_vfsuid; its mode is 0 when the walk ended
+ * on no name of a directory: the root, a mount entered by name, or a node
+ * of /dev, /proc or /sys. */
 int vfs_resolve_entry(const char *path, int flags, struct vfs_ref *out, char *real,
-                      struct vfs_name **entry);
+                      struct vfs_name **entry, struct vfs_stat *dir);
+
+/* The protections of Linux's /proc/sys/fs that Rach2 keeps, each its
+ * sysctl's value: protected_hardlinks and protected_symlinks 0 or 1,
+ * protected_fifos and protected_regular 0, 1 or 2 (fs/namei.c:1048-1085). */
+extern int vfs_protected_hardlinks;
+extern int vfs_protected_symlinks;
+extern int vfs_protected_fifos;
+extern int vfs_protected_regular;
 
 /** Take another hold on `r`'s node, on a type that counts holds. */
 void vfs_ref_hold(const struct vfs_ref *r);
@@ -757,6 +781,14 @@ int vfs_enter(struct vfs_mount *mnt);
 /** End an operation `vfs_enter` counted, and wake an unmount waiting for
  * the count to reach zero. */
 void vfs_leave(struct vfs_mount *mnt);
+
+/** Take a reference to `mnt`, which keeps it from being unmounted, in one
+ * atomic step. */
+void vfs_mount_get(struct vfs_mount *mnt);
+
+/** Drop a reference `vfs_mount_get` took, in one atomic step, and return
+ * how many are left; the caller reaps a detached mount at 0. */
+uint32_t vfs_mount_put(struct vfs_mount *mnt);
 
 /**
  * Whether the calling process holds the namespace lock of any mount, or a

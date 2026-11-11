@@ -1,4 +1,4 @@
-.Dd November 11, 2026
+.Dd November 12, 2026
 .Dt PROC 5
 .Os
 .Sh NAME
@@ -197,6 +197,40 @@ These start again at each stream's start.
 is the position in the DMA buffer, in bytes.
 .Pp
 The
+.Ql service
+line spans stream starts and stops.
+.Ql calls
+counts khda service calls modulo 2^32;
+.Ql usec
+and
+.Ql max-usec
+are the sum and maximum of time measured around those services by the
+TSC, including nested interrupts, in 64-bit microseconds.
+They exclude the thread's wait to run and do not use its tick accounting.
+They are zero without a calibrated TSC.
+.Ql missed
+counts playback revolutions missed since driver initialization, modulo
+2^32, including those before khda starts.
+The remaining fields describe the latest miss, or are zero before one:
+.Ql clock-us
+is the TSC timestamp in microseconds, on the same clock as debugfs's
+.Pa bkl/long ,
+not uptime;
+.Ql gap-us
+is the WALCLK interval since the preceding playback service, or since the
+stream's start for its first service;
+.Ql asked-us
+is the interval since the first pending playback request;
+.Ql asked-valid
+is 1 when that request belongs to this stream start, otherwise 0;
+.Ql moved-us
+is the position's modular movement converted to microseconds; and
+.Ql revolution-us
+is the duration of the DMA buffer.
+The WALCLK intervals wrap after about 179 seconds.
+The timestamp is zero without a calibrated TSC.
+.Pp
+The
 .Ql gpio
 line gives the function group's GPIO count and its whole GPIO Count
 parameter.
@@ -391,6 +425,38 @@ A wait for a lock has no line.
 util-linux's
 .Xr lslocks 8
 reads it.
+.It Pa /proc/lockdep
+In the kernel built with the lock-order checker,
+.Ql make rach2-lockdep ,
+alone: each lock class the checker has seen, in Linux's form:
+.Bd -literal -offset indent
+all lock classes:
+0xKEY FD: 2 BD: 1 +.: NAME
+ -> NAME2
+.Ed
+.Pp
+KEY is the address that keys the class, the lock's own for a static lock
+and its init site's for a lock in an allocated record;
+FD and BD count the orders from and to it;
+.Ql +
+in the first mark says it was taken in an interrupt and
+.Ql \-
+in the second that it was held with interrupts on;
+NAME is the lock's name, with
+.Ql / Ns Ar N
+after it for subclass N.
+A line
+.Ql -> NAME2
+follows for each class taken while it was held.
+The text stops at 128 KiB.
+.It Pa /proc/lockdep_stats
+In the same kernel alone: the classes, orders and chains the checker holds
+against the size of each pool, the reports made and those not made because
+none more could be kept, and
+.Ql checking: on ,
+or
+.Ql checking: off:
+and the pool whose filling stopped the checker.
 .It Pa /proc/swaps
 Linux's header line and no line under it, since the kernel swaps nothing
 and has no
@@ -1005,6 +1071,30 @@ and
 makes without attributes and an unprivileged caller's largest, and
 .Pa queues_max ,
 256, the queues such a caller may make;
+.Pa fs/protected_symlinks ,
+1, under which a symbolic link at the end of a path in a sticky directory
+others may write is followed only by its owner or when the directory's
+owner owns it, else
+.Er EACCES ;
+.Pa fs/protected_hardlinks ,
+1, under which a hard link to a file of another user, without
+.Dv CAP_FOWNER ,
+needs a regular file with no set-user-ID bit, no set-group-ID bit with
+group execute, and read and write permission for the caller, else
+.Er EPERM ;
+.Pa fs/protected_regular ,
+2, and
+.Pa fs/protected_fifos ,
+1, under which an
+.Dv O_CREAT
+open of an existing regular file or FIFO in a sticky directory, owned by
+neither the caller nor the directory's owner, is
+.Er EACCES
+when others may write the directory, or at 2 when its group may; any other
+kind of file there is refused so whatever their values;
+each guards root as well, and a write of 0 turns its rule off; the first
+two take 0 or 1, the others 0 to 2, at the values Debian and Ubuntu set,
+where Linux's own are 0;
 .Pa kernel/msgmax ,
 8192,
 .Pa kernel/msgmnb ,
@@ -1359,12 +1449,16 @@ interrupt came that late.
 Up to 16 lines, one for each kernel entry that held the big kernel lock
 longest since boot, the longest first: the entry's kind,
 .Li syscall
-with its number or
+with its number,
 .Li vector
-with its interrupt vector, then its holds and their sum in microseconds.
-A hold counts under the entry that took the lock, up to the processor's
-next return to user mode or idle halt; vector 0 is a kernel thread or a
-take again after an idle halt, and
+with its interrupt vector, or
+.Li take
+with 0 for a take after an idle wait and 1 for a thread's take after its
+switch, then its holds and their sum in microseconds.
+A hold counts under the entry that took the lock, or under the entry the
+thread was in when it took the lock in a call or an interrupt that runs
+without it, up to the thread's next switch, idle wait or return to user
+mode; vector 0 is a kernel thread, and
 .Li syscall -1
 gathers the system calls numbered 512 and above.
 The boot processor's start-up hold is not counted here or in
@@ -2016,7 +2110,14 @@ for the vDSO's data page and library on x86-64, both private, the data
 page never writable and the library copied on a write
 .Pq Xr vdso 7 ,
 the program for the segments of its image, or the dynamic linker the
-program names for the segments of the linker's.
+program names for the segments of the linker's, by the present path of the
+file exec opened, with
+.Ql " (deleted)"
+once its name is gone, as
+.Pa exe
+reads, and
+.Ql "/dev/zero (deleted)"
+for shared anonymous memory, as on Linux.
 The offset is the file's at the region's first page, and 0 for a region
 that maps no file.
 The device's major and minor numbers, in hexadecimal, and the inode, in
@@ -2026,8 +2127,30 @@ gives the file, and read
 .Ql 00:00 0
 for a region of no file; a segment of the program or of the linker that
 was loaded and not mapped, as the debug shell loads its program, has those
-of the file it names.
+of the file it names, and shared anonymous memory has the device of the
+internal tmpfs mount that holds memfds and System V segments and an inode
+number of its own there, as Linux gives it those of its shmem file.
 A region with no path ends at the space after the inode, as on Linux.
+A mapped file's path is the target of its
+.Pa fd
+link, built at each reading of
+.Pa maps ,
+.Pa smaps
+or
+.Pa numa_maps
+from the reader's root, as Linux's
+.Fn d_path
+builds it.
+A device, a DRM buffer, a dma-buf or a PCI resource file of
+.Pa /sys ,
+which maps itself, is named by its
+.Pa fd
+link's target when it was mapped:
+.Pa /dev/ Ns Ar name ,
+.Ql anon_inode: Ns Ar name
+or the file's path in
+.Pa /sys ,
+which is the same from every root.
 It and
 .Pa smaps
 need what

@@ -4,6 +4,7 @@
 #include "dcache.h"
 #include "vfs.h"
 #include "../lib/kerrno.h"
+#include "../lib/spinlock.h"
 #include "../mm/kheap.h"
 
 #define DCACHE_BUCKETS 4096u /* a power of two, half the entries */
@@ -19,6 +20,12 @@ struct dentry {
     uint32_t len;
     char name[1]; /* `len` bytes and a NUL */
 };
+
+/* Guards every static below: the buckets, the list of ages, `pending`, the
+ * counts and the generation. It is taken with interrupts off and held only
+ * while the lists change or an entry's node gains a hold; a type's `put`,
+ * which may sleep, runs after it is let go of, on an entry already out. */
+static struct spinlock dcache_lock = SPINLOCK_INIT;
 
 static struct dentry *buckets[DCACHE_BUCKETS];
 static struct dentry *newest;
@@ -159,60 +166,93 @@ static void put_entry(struct dentry *e)
  */
 static void release(struct dentry *e)
 {
+    uint32_t flags;
+
     if (vfs_ns_held_other(e->mnt)) {
+        flags = spin_lock_irqsave(&dcache_lock);
         e->hnext = pending;
         pending = e;
+        spin_unlock_irqrestore(&dcache_lock, flags);
         return;
     }
     put_entry(e);
 }
 
-/** Put what `release` left for later, as far as the caller's locks let it.
- * A put may sleep, and the list is read again from its head after each. */
-static void drain(void)
+/** `release` each entry of the list `out`, linked by `hnext`, out of the
+ * cache. May sleep. */
+static void release_list(struct dentry *out)
 {
-    struct dentry **pp = &pending;
-    struct dentry *e;
+    struct dentry *e, *next;
 
+    for (e = out; e; e = next) {
+        next = e->hnext;
+        e->hnext = 0;
+        release(e);
+    }
+}
+
+/** Put what `release` left for later, as far as the caller's locks let it:
+ * the entries the caller may put leave the list under the lock, and are put
+ * after it, since a put may sleep. When `mnt` is not NULL, every entry of
+ * that mount goes, for its unmount. */
+static void drain(const struct vfs_mount *mnt)
+{
+    struct dentry **pp;
+    struct dentry *e;
+    struct dentry *out = 0;
+    uint32_t flags = spin_lock_irqsave(&dcache_lock);
+
+    pp = &pending;
     while ((e = *pp) != 0) {
-        if (vfs_ns_held_other(e->mnt)) {
+        if (mnt ? e->mnt != mnt : vfs_ns_held_other(e->mnt)) {
             pp = &e->hnext;
             continue;
         }
         *pp = e->hnext;
+        e->hnext = out;
+        out = e;
+    }
+    spin_unlock_irqrestore(&dcache_lock, flags);
+    while ((e = out) != 0) {
+        out = e->hnext;
         put_entry(e);
-        pp = &pending;
     }
 }
 
-/** Give back the oldest entries while there are more than DCACHE_LIMIT. */
-static void trim(void)
+/** Take the oldest entries out while there are more than DCACHE_LIMIT, onto
+ * the list `*out` for `release_list`. The caller holds `dcache_lock`. */
+static void trim(struct dentry **out)
 {
     struct dentry *e;
 
     while (entries > DCACHE_LIMIT && oldest) {
         e = oldest;
         take_out(e);
-        release(e);
+        e->hnext = *out;
+        *out = e;
     }
 }
 
 /**
  * Keep the answer of a lookup of `name` in `dir` of `mnt`, `node` or NULL
  * for none, when no forget ran since the lookup began at `gen` and no other
- * walk kept one meanwhile. kmalloc may sleep, so both are judged after it.
+ * walk kept one meanwhile. kmalloc may sleep, so both are judged after it,
+ * under the lock, which the type's `hold` runs under (`name_cache`).
  */
 static void keep(struct vfs_mount *mnt, void *dir, const char *name, uint32_t len, uint32_t h,
                  void *node, uint32_t gen)
 {
     const struct vfs_ops *ops = mnt->type->ops;
     struct dentry *e = kmalloc(sizeof(*e) + len);
-    uint32_t i;
+    struct dentry *out = 0;
+    uint32_t i, flags;
 
     if (!e) {
         return;
     }
+    flags = spin_lock_irqsave(&dcache_lock);
     if (gen != generation || find(mnt, dir, name, len, h)) {
+        spin_unlock_irqrestore(&dcache_lock, flags);
         kfree(e);
         return;
     }
@@ -235,40 +275,66 @@ static void keep(struct vfs_mount *mnt, void *dir, const char *name, uint32_t le
     buckets[h & (DCACHE_BUCKETS - 1)] = e;
     age_push(e);
     entries++;
-    trim();
+    trim(&out);
+    spin_unlock_irqrestore(&dcache_lock, flags);
+    release_list(out);
+}
+
+/**
+ * The entry of `name` in `dir` of `mnt` as `dcache_lookup` answers from the
+ * cache: 0 with the node held in `*node`, -ENOENT for a negative entry, or
+ * -EAGAIN when there is none. The entry becomes the newest; the caller
+ * counts the hit (`dcache_count_hits`). Takes and gives back the lock; the
+ * hold is taken under it, while the entry holds the node, so a node that
+ * gains a hold here already has one.
+ */
+static int hit(struct vfs_mount *mnt, void *dir, const char *name, uint32_t len, uint32_t h,
+               void **node)
+{
+    struct dentry *e;
+    uint32_t flags = spin_lock_irqsave(&dcache_lock);
+    int rc = -EAGAIN;
+
+    e = find(mnt, dir, name, len, h);
+    if (e) {
+        age_unlink(e);
+        age_push(e);
+        rc = -ENOENT;
+        if (e->node) {
+            mnt->type->ops->hold(mnt, e->node);
+            *node = e->node;
+            rc = 0;
+        }
+    }
+    spin_unlock_irqrestore(&dcache_lock, flags);
+    return rc;
 }
 
 int dcache_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node)
 {
     const struct vfs_ops *ops = mnt->type->ops;
-    struct dentry *e;
-    uint32_t len, h, gen;
+    uint32_t len, h, gen, flags;
     int rc;
 
     if (!cacheable(mnt) || dot_name(name)) {
         return ops->lookup(mnt, dir, name, node);
     }
     if (pending) {
-        drain();
+        drain(0);
     }
     if (!dir) {
         dir = mnt->root;
     }
     h = hash_of(dir, name, &len);
-    e = find(mnt, dir, name, len, h);
-    if (e) {
-        hits++;
-        age_unlink(e);
-        age_push(e);
-        if (!e->node) {
-            return -ENOENT;
-        }
-        ops->hold(mnt, e->node);
-        *node = e->node;
-        return 0;
+    rc = hit(mnt, dir, name, len, h, node);
+    if (rc != -EAGAIN) {
+        dcache_count_hits(1);
+        return rc;
     }
+    flags = spin_lock_irqsave(&dcache_lock);
     misses++;
     gen = generation;
+    spin_unlock_irqrestore(&dcache_lock, flags);
     rc = ops->lookup(mnt, dir, name, node);
     if (rc == 0 || rc == -ENOENT) {
         keep(mnt, dir, name, len, h, rc == 0 ? *node : 0, gen);
@@ -278,7 +344,7 @@ int dcache_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **nod
 
 int dcache_lookup_cached(struct vfs_mount *mnt, void *dir, const char *name, void **node)
 {
-    uint32_t len, h;
+    int rc;
 
     if (dot_name(name)) {
         return mnt->type->ops->lookup(mnt, dir, name, node);
@@ -286,29 +352,73 @@ int dcache_lookup_cached(struct vfs_mount *mnt, void *dir, const char *name, voi
     if (!cacheable(mnt)) {
         return mnt->dev ? -EAGAIN : mnt->type->ops->lookup(mnt, dir, name, node);
     }
-    h = hash_of(dir ? dir : mnt->root, name, &len);
-    if (!find(mnt, dir ? dir : mnt->root, name, len, h)) {
-        return -EAGAIN;
+    rc = dcache_lookup_hit(mnt, dir, name, node);
+    if (rc != -EAGAIN) {
+        dcache_count_hits(1);
     }
-    return dcache_lookup(mnt, dir, name, node);
+    return rc;
 }
 
-void dcache_forget(struct vfs_mount *mnt, void *dir, const char *name)
+int dcache_lookup_hit(struct vfs_mount *mnt, void *dir, const char *name, void **node)
 {
-    struct dentry *e;
     uint32_t len, h;
 
-    generation++;
-    if (!cacheable(mnt) || entries == 0) {
-        return;
+    if (!cacheable(mnt) || dot_name(name)) {
+        return -EAGAIN;
     }
     if (!dir) {
         dir = mnt->root;
     }
     h = hash_of(dir, name, &len);
-    e = find(mnt, dir, name, len, h);
+    return hit(mnt, dir, name, len, h, node);
+}
+
+void dcache_count_hits(uint32_t n)
+{
+    uint32_t flags;
+
+    if (n == 0) {
+        return;
+    }
+    flags = spin_lock_irqsave(&dcache_lock);
+    hits += n;
+    spin_unlock_irqrestore(&dcache_lock, flags);
+}
+
+/** Take the entry of `name` in `dir`, a directory, of `mnt` out of the
+ * cache and move the generation, under the lock; the entry, for `release`,
+ * or NULL. */
+static struct dentry *take_name(struct vfs_mount *mnt, void *dir, const char *name)
+{
+    struct dentry *e = 0;
+    uint32_t len, h;
+    uint32_t flags = spin_lock_irqsave(&dcache_lock);
+
+    generation++;
+    if (entries > 0) {
+        h = hash_of(dir, name, &len);
+        e = find(mnt, dir, name, len, h);
+        if (e) {
+            take_out(e);
+        }
+    }
+    spin_unlock_irqrestore(&dcache_lock, flags);
+    return e;
+}
+
+void dcache_forget(struct vfs_mount *mnt, void *dir, const char *name)
+{
+    struct dentry *e;
+    uint32_t flags;
+
+    if (!cacheable(mnt)) {
+        flags = spin_lock_irqsave(&dcache_lock);
+        generation++;
+        spin_unlock_irqrestore(&dcache_lock, flags);
+        return;
+    }
+    e = take_name(mnt, dir ? dir : mnt->root, name);
     if (e) {
-        take_out(e);
         release(e);
     }
 }
@@ -319,6 +429,7 @@ static void forget_where(struct vfs_mount *mnt, const void *dir)
 {
     struct dentry *out = 0;
     struct dentry *e, *next;
+    uint32_t flags = spin_lock_irqsave(&dcache_lock);
 
     generation++;
     for (e = oldest; e; e = next) {
@@ -329,31 +440,31 @@ static void forget_where(struct vfs_mount *mnt, const void *dir)
             out = e;
         }
     }
-    for (e = out; e; e = next) {
-        next = e->hnext;
-        release(e);
-    }
+    spin_unlock_irqrestore(&dcache_lock, flags);
+    release_list(out);
 }
 
 void *dcache_forget_victim(struct vfs_mount *mnt, void *dir, const char *name)
 {
     const struct vfs_ops *ops = mnt->type->ops;
     struct dentry *e;
-    uint32_t len, h;
     void *node = 0;
+    uint32_t flags;
 
-    generation++;
-    if (!cacheable(mnt) || entries == 0 || dot_name(name)) {
+    if (!cacheable(mnt) || dot_name(name)) {
+        flags = spin_lock_irqsave(&dcache_lock);
+        generation++;
+        spin_unlock_irqrestore(&dcache_lock, flags);
         return 0;
     }
     if (!dir) {
         dir = mnt->root;
     }
-    h = hash_of(dir, name, &len);
-    e = find(mnt, dir, name, len, h);
+    e = take_name(mnt, dir, name);
     if (e) {
-        take_out(e);
         node = e->node;
+    } else if (entries == 0) {
+        return 0;
     } else if (ops->lookup(mnt, dir, name, &node) == 0) {
         ops->put(mnt, node);
     } else {
@@ -377,35 +488,27 @@ void dcache_forget_dir(struct vfs_mount *mnt, void *key)
 
 void dcache_forget_mount(struct vfs_mount *mnt)
 {
-    struct dentry **pp = &pending;
-    struct dentry *e;
-
     if (!cacheable(mnt)) {
         return;
     }
     forget_where(mnt, 0);
-    while ((e = *pp) != 0) {
-        if (e->mnt != mnt) {
-            pp = &e->hnext;
-            continue;
-        }
-        *pp = e->hnext;
-        put_entry(e);
-        pp = &pending;
-    }
+    drain(mnt);
 }
 
 void dcache_drain(void)
 {
     if (pending) {
-        drain();
+        drain(0);
     }
 }
 
 void dcache_counts(struct dcache_counts *c)
 {
+    uint32_t flags = spin_lock_irqsave(&dcache_lock);
+
     c->hits = hits;
     c->misses = misses;
     c->entries = entries;
     c->negative = negatives;
+    spin_unlock_irqrestore(&dcache_lock, flags);
 }

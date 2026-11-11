@@ -20,32 +20,69 @@
  * sent SIGKILL, waited for and reaped. The third has such a process running
  * on another processor, which takes its SIGKILL while init waits for an
  * interrupt with the big lock let go (`idle_wait_irq_on`).
+ *
+ * The same rule extracts `exec_alone` and `exec_one_thread`, the end of the
+ * other threads of a process before execve replaces its image, as Linux's
+ * de_thread ends them (Linux 6.12.115, fs/exec.c:1052-1059, 1080-1085 and
+ * 1151-1157). The wait is a model: at each sleep, a thread sent SIGKILL
+ * ends unless it is held in a wait no signal ends, and the caller may be
+ * sent SIGKILL, alone or as the process. A sixteenth sleep ends the run, as
+ * a wait that never ends. The rows: the others end and the exec goes on;
+ * SIGKILL for the caller, and SIGKILL for the process, while a thread is
+ * held, ends the wait with -EAGAIN and clears `exec_task`; an ending
+ * process, and one whose other thread execs already, give -EAGAIN at once,
+ * send nothing and leave `exec_task` alone.
  */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
-#define SIGKILL 9
+#define SIGKILL         9
+#define SI_KERNEL       0x80
+#define KSIG_BIT(signo) (1ULL << ((signo) - 1))
+#ifndef EAGAIN
+#define EAGAIN 11
+#endif
 
 typedef enum { PROC_UNUSED, PROC_READY, PROC_RUNNING, PROC_BLOCKED, PROC_ZOMBIE } proc_state_t;
 
-/* The field of a thread group the extracted code reads. */
-struct thread_group {
+/* A wait queue, which the model's wait only names. */
+typedef struct {
+    int unused;
+} wait_queue_t;
+
+typedef int (*wq_cond_fn)(void *arg);
+
+/* The fields of a thread group the extracted code reads. */
+struct tgroup {
     uint32_t live;
+    uint64_t pending;
+    uint32_t exiting;
+    struct process *exec_task;
+    wait_queue_t gone;
+};
+
+/* The field of a siginfo the extracted code sets. */
+struct k_siginfo {
+    int32_t code;
 };
 
 /* The fields of the kernel's process record the extracted code reads, and
- * the model's own: the signal posted to it and how often it was given back. */
+ * the model's own: the signal posted to it, how often it was given back,
+ * and whether it is held in a wait no signal ends. */
 typedef struct process {
     struct process *next;
-    struct thread_group *tg;
+    struct tgroup *tg;
     proc_state_t state;
     uint32_t pid;
     uint32_t tgid;
     uintptr_t space_root;
     volatile uint32_t in_syscall;
+    uint64_t sig_pending;
     int signalled;
     int released;
+    int held;
 } process_t;
 
 process_t *proc_list;
@@ -118,9 +155,63 @@ static void idle_wait_irq_on(void)
     }
 }
 
+static struct tgroup execs; /* the exec's process */
+static int sleeps;          /* the exec's wait's sleeps */
+static int kill_at;         /* the sleep after which SIGKILL comes, or 0 */
+static int kill_process;    /* that SIGKILL is sent to the process */
+
+/** Clear `s` as the kernel's k_memset does. */
+static void *k_memset(void *s, int c, size_t n)
+{
+    return memset(s, c, n);
+}
+
+/** Set `signo` pending for `t` alone, as the SIGKILL of an exec's end of the
+ * other threads is set, and record it. */
+static void sig_post_own(process_t *t, int signo, const struct k_siginfo *info)
+{
+    check(info->code == SI_KERNEL, "the exec's SIGKILL comes from the kernel");
+    t->sig_pending |= KSIG_BIT(signo);
+    t->signalled = signo;
+}
+
+/** Sleep in the exec's wait until `cond` holds: at each sleep, every other
+ * thread of `execs` sent SIGKILL and not held ends, and after the sleep
+ * `kill_at` the caller, or with `kill_process` its process, is sent
+ * SIGKILL. 0, as the kernel's wait returns once `cond` holds. */
+static int wq_wait_event_killable(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
+{
+    process_t *p;
+
+    check(wq == &execs.gone && arg == &execs, "the exec waits on its own process's queue");
+    (void)name;
+    while (!cond(arg)) {
+        check(execs.exec_task == current_proc, "the exec is its process's exec_task as it waits");
+        if (++sleeps == 16) {
+            printf("endothers: fail: the exec's wait for the other threads never ends\n");
+            exit(1);
+        }
+        for (p = proc_list; p; p = p->next) {
+            if (p->tg == &execs && p != current_proc && p->state != PROC_ZOMBIE && !p->held &&
+                (p->sig_pending & KSIG_BIT(SIGKILL))) {
+                p->state = PROC_ZOMBIE;
+                execs.live--;
+            }
+        }
+        if (sleeps == kill_at) {
+            if (kill_process) {
+                execs.pending |= KSIG_BIT(SIGKILL);
+            } else {
+                current_proc->sig_pending |= KSIG_BIT(SIGKILL);
+            }
+        }
+    }
+    return 0;
+}
+
 #include "endothers.inc"
 
-static struct thread_group groups[5];
+static struct tgroup groups[5];
 static process_t init, idle, kthread, ending, unused, running;
 
 /** Put `p` on the list, alone in thread group `tg`, with `space_root`,
@@ -160,7 +251,75 @@ static void kept(void)
     check(!idle.signalled && !idle.released, "the idle record is left alone");
 }
 
-/** Run the three rows: 0 when every row passes, 1 otherwise. */
+static process_t caller, sibling, held, other;
+
+/** A fresh list of `execs`: `caller` running and `sibling`, which ends on
+ * SIGKILL, with `held`, which no signal ends, when `with_held` is set. */
+static void exec_begin(int with_held)
+{
+    static const process_t none;
+    static const struct tgroup empty;
+    process_t *each[3];
+    int i, n = with_held ? 3 : 2;
+
+    execs = empty;
+    caller = sibling = held = other = none;
+    each[0] = &caller;
+    each[1] = &sibling;
+    each[2] = &held;
+    held.held = 1;
+    proc_list = NULL;
+    for (i = 0; i < n; i++) {
+        each[i]->tg = &execs;
+        each[i]->pid = (uint32_t)(20 + i);
+        each[i]->tgid = 20;
+        each[i]->state = i == 0 ? PROC_RUNNING : PROC_BLOCKED;
+        each[i]->next = proc_list;
+        proc_list = each[i];
+    }
+    execs.live = (uint32_t)n;
+    current_proc = &caller;
+    sleeps = kill_at = kill_process = 0;
+}
+
+/** Run the exec rows. */
+static void exec_rows(void)
+{
+    int kill;
+
+    exec_begin(0);
+    check(exec_one_thread() == 0 && sleeps == 1, "the exec waits once for the others to end");
+    check(sibling.signalled == SIGKILL && sibling.state == PROC_ZOMBIE && execs.live == 1,
+          "the exec sends the others SIGKILL and goes on once they have ended");
+    check(!caller.signalled && execs.exec_task == NULL, "the exec clears exec_task once alone");
+
+    for (kill = 0; kill < 2; kill++) {
+        exec_begin(1);
+        kill_at = 1;
+        kill_process = kill;
+        check(exec_one_thread() == -EAGAIN && sleeps == 1,
+              kill ? "SIGKILL for the process ends the exec's wait with -EAGAIN"
+                   : "SIGKILL for the caller ends the exec's wait with -EAGAIN");
+        check(execs.exec_task == NULL, "the exec a SIGKILL ends clears exec_task");
+        check(held.signalled == SIGKILL && held.state == PROC_BLOCKED && execs.live == 2,
+              "a thread held in a wait no signal ends was sent SIGKILL and has not ended");
+    }
+
+    exec_begin(0);
+    execs.exiting = 1;
+    check(exec_one_thread() == -EAGAIN && sleeps == 0 && !sibling.signalled,
+          "an ending process's exec gives -EAGAIN at once and sends nothing");
+    check(execs.exec_task == NULL, "an ending process's exec leaves exec_task alone");
+
+    exec_begin(0);
+    execs.exec_task = &other;
+    check(exec_one_thread() == -EAGAIN && sleeps == 0 && !sibling.signalled,
+          "a second exec gives -EAGAIN at once and sends nothing");
+    check(execs.exec_task == &other, "a second exec leaves exec_task to the first");
+}
+
+/** Run the three rows of an init's end and the exec rows: 0 when every row
+ * passes, 1 otherwise. */
 int main(void)
 {
     begin();
@@ -189,8 +348,11 @@ int main(void)
           "big lock let go, and is reaped");
     kept();
 
+    exec_rows();
+
     if (!fails) {
-        printf("endothers: result: pass: every other user process ended and reaped\n");
+        printf("endothers: result: pass: every other user process ended and reaped, and an "
+               "exec's wait for the other threads ended\n");
     }
     return fails != 0;
 }

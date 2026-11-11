@@ -40,6 +40,10 @@ void sched_service_point(void)
     service_points++;
 }
 
+/** Nothing: one thread has no one to give way to. */
+void sched_give_way(void)
+{}
+
 /* When positive, the allocation that counts it down to zero fails. */
 static int heap_fails_in;
 

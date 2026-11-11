@@ -52,6 +52,37 @@ uint16_t i915_engine_uabi_class(const struct i915_engine *engine)
     return engine->uabi_class;
 }
 
+/** Add `delta` to `*refs` atomically and return the old count. */
+static uint32_t ctx_refs_add(volatile uint32_t *refs, uint32_t delta)
+{
+    uint32_t old;
+
+    do {
+        old = *refs;
+    } while (arch_atomic_cmpxchg((volatile unsigned int *)refs, old, old + delta) != old);
+    return old;
+}
+
+/** Add 1 to `*refs` unless it is 0, as Linux's kref_get_unless_zero: 1
+ * when it did. */
+static int ctx_refs_get_unless_zero(volatile uint32_t *refs)
+{
+    uint32_t old;
+
+    do {
+        old = *refs;
+        if (old == 0) {
+            return 0;
+        }
+    } while (arch_atomic_cmpxchg((volatile unsigned int *)refs, old, old + 1u) != old);
+    return 1;
+}
+
+/* Over every context's `ce` array, so that EXECBUFFER2, which holds the
+ * context but no list lock, takes a state's reference while the close on
+ * another processor cannot put the array's. Taken with nothing inside. */
+static struct spinlock ce_lock = SPINLOCK_INIT_NAMED("i915_ctx_ce");
+
 struct intel_context *intel_context_create(struct drm_i915_private *i915,
                                            struct i915_engine *engine, struct i915_gem_context *ctx)
 {
@@ -65,7 +96,7 @@ struct intel_context *intel_context_create(struct drm_i915_private *i915,
     ce->refs = 1;
     ce->ctx = ctx;
     if (ctx) {
-        ctx->refs++;
+        ctx_refs_add(&ctx->refs, 1u);
     }
     if (engine == &i915->gt.engine[I915_RCS0]) {
         /* The render ring's slices and EUs are the GT's, as Linux's
@@ -81,29 +112,33 @@ struct intel_context *intel_context_create(struct drm_i915_private *i915,
 struct intel_context *intel_context_get(struct intel_context *ce)
 {
     if (ce) {
-        ce->refs++;
+        ctx_refs_add(&ce->refs, 1u);
     }
     return ce;
 }
 
-/** Unmap and free a state's image; for the last reference. */
+/** Unmap and free a state's image; for the last reference, under the GEM
+ * lock, which keeps the GTT. */
 static void intel_context_image_free(struct intel_context *ce)
 {
     struct drm_i915_private *i915 = ce->i915;
     uint64_t size = (uint64_t)I915_HSW_CXT_PAGES * I915_GTT_PAGE_SIZE;
+    int taken;
 
     if (!ce->image) {
         return;
     }
+    taken = i915_gem_lock(i915);
     (void)i915_ggtt_clear_range(i915, ce->image_ggtt, size);
     i915_ggtt_release(i915, ce->image_ggtt);
+    i915_gem_unlock(i915, taken);
     kfree_pages(ce->image, I915_HSW_CXT_PAGES);
     ce->image = 0;
 }
 
 void intel_context_put(struct intel_context *ce)
 {
-    if (!ce || --ce->refs != 0) {
+    if (!ce || ctx_refs_add(&ce->refs, ~0u) != 1u) {
         return;
     }
     intel_context_image_free(ce);
@@ -195,7 +230,7 @@ static struct i915_gem_context *context_alloc(struct drm_i915_private *i915)
 
 void i915_gem_context_put(struct i915_gem_context *ctx)
 {
-    if (!ctx || --ctx->refs != 0) {
+    if (!ctx || ctx_refs_add(&ctx->refs, ~0u) != 1u) {
         return;
     }
     kfree(ctx->ce);
@@ -204,22 +239,28 @@ void i915_gem_context_put(struct i915_gem_context *ctx)
 }
 
 /**
- * Take `ctx` from its file and give up the file's reference, as Linux's
- * context_close: its states let go of, each staying while the requests
- * made on it hold it. A persistent context's requests run on.
+ * Give up the file's reference to `ctx`, which is off the file's list, as
+ * Linux's context_close: its states let go of, each staying while the
+ * requests made on it hold it. A persistent context's requests run on.
+ * Under the GEM lock, which the hang paths that read `file` hold.
  */
 static void context_close(struct i915_gem_context *ctx)
 {
-    uint32_t i;
+    struct drm_i915_private *i915 = ctx->i915;
+    struct intel_context *ce;
+    uint32_t i, flags;
+    int taken = i915_gem_lock(i915);
 
     ctx->closed = 1;
     ctx->file = 0;
     for (i = 0; i < ctx->nce; i++) {
-        struct intel_context *ce = ctx->ce[i];
-
+        flags = spin_lock_irqsave(&ce_lock);
+        ce = ctx->ce[i];
         ctx->ce[i] = 0;
+        spin_unlock_irqrestore(&ce_lock, flags);
         intel_context_put(ce);
     }
+    i915_gem_unlock(i915, taken);
     i915_gem_context_put(ctx);
 }
 
@@ -266,11 +307,13 @@ static struct i915_file *file_priv(struct drm_file *file)
     return (struct i915_file *)file->driver_priv;
 }
 
-/** The context `id` of `fp`, proto or not, without a reference, or NULL. */
+/** The context `id` of `fp`, proto or not, without a reference, or NULL;
+ * with the list's lock held. */
 static struct i915_gem_context *context_find(struct i915_file *fp, uint32_t id)
 {
     struct i915_gem_context *ctx;
 
+    lockdep_assert_held(&fp->lock);
     for (ctx = fp->contexts; ctx && ctx->id <= id; ctx = ctx->next) {
         if (ctx->id == id) {
             return ctx;
@@ -280,12 +323,14 @@ static struct i915_gem_context *context_find(struct i915_file *fp, uint32_t id)
 }
 
 /** Give `ctx` the lowest id from 1 that `fp` has free and add it to the
- * file's list, as Linux's xa_alloc on context_xa. */
+ * file's list, as Linux's xa_alloc on context_xa, with the list's lock
+ * held. */
 static void context_register(struct i915_file *fp, struct i915_gem_context *ctx)
 {
     struct i915_gem_context **pp = &fp->contexts;
     uint32_t id = 1;
 
+    lockdep_assert_held(&fp->lock);
     /* The list is sorted, 0 first: the first gap is the lowest id free. */
     while (*pp && (*pp)->id < id) {
         pp = &(*pp)->next;
@@ -300,31 +345,45 @@ static void context_register(struct i915_file *fp, struct i915_gem_context *ctx)
     *pp = ctx;
 }
 
+/* Under the list's lock, as Linux's i915_gem_context_lookup finalizes a
+ * proto context under proto_context_lock and takes its reference only
+ * while the count is not 0 (gem/i915_gem_context.c:2310-2375), so that
+ * one caller alone finalizes it. */
 int32_t i915_gem_context_lookup(struct drm_file *file, uint32_t id, struct i915_gem_context **out)
 {
-    struct i915_gem_context *ctx = context_find(file_priv(file), id);
-    int32_t err;
+    struct i915_file *fp = file_priv(file);
+    struct i915_gem_context *ctx;
+    int32_t err = 0;
 
+    mutex_lock(&fp->lock);
+    ctx = context_find(fp, id);
     if (!ctx) {
-        return -ENOENT;
-    }
-    if (ctx->proto) {
+        err = -ENOENT;
+    } else if (ctx->proto) {
         err = context_finalize(ctx);
-        if (err < 0) {
-            return err;
-        }
     }
-    ctx->refs++;
-    *out = ctx;
-    return 0;
+    if (err == 0 && !ctx_refs_get_unless_zero(&ctx->refs)) {
+        err = -ENOENT;
+    }
+    mutex_unlock(&fp->lock);
+    if (err == 0) {
+        *out = ctx;
+    }
+    return err;
 }
 
 struct intel_context *i915_gem_context_engine(struct i915_gem_context *ctx, uint32_t idx)
 {
+    struct intel_context *ce = 0;
+    uint32_t flags;
+
     if (ctx->proto || idx >= ctx->nce) {
         return 0;
     }
-    return intel_context_get(ctx->ce[idx]);
+    flags = spin_lock_irqsave(&ce_lock);
+    ce = intel_context_get(ctx->ce[idx]);
+    spin_unlock_irqrestore(&ce_lock, flags);
+    return ce;
 }
 
 /** The state an SSEU parameter names, with a reference, as Linux's
@@ -775,8 +834,11 @@ int32_t i915_gem_context_create_ioctl(struct drm_device *dev, void *data, struct
             return err;
         }
     }
+    /* Made whole before the list shows it, as Linux's. */
+    mutex_lock(&fp->lock);
     context_register(fp, ext.ctx);
     args->ctx_id = ext.ctx->id;
+    mutex_unlock(&fp->lock);
     return 0;
 }
 
@@ -798,14 +860,18 @@ int32_t i915_gem_context_destroy_ioctl(struct drm_device *dev, void *data, struc
     if (args->ctx_id == 0) {
         return -ENOENT;
     }
+    mutex_lock(&fp->lock);
     for (pp = &fp->contexts; *pp && (*pp)->id != args->ctx_id; pp = &(*pp)->next) {
     }
     ctx = *pp;
+    if (ctx) {
+        *pp = ctx->next;
+        ctx->next = 0;
+    }
+    mutex_unlock(&fp->lock);
     if (!ctx) {
         return -ENOENT;
     }
-    *pp = ctx->next;
-    ctx->next = 0;
     context_close(ctx);
     return 0;
 }
@@ -882,18 +948,20 @@ int32_t i915_gem_context_getparam_ioctl(struct drm_device *dev, void *data, stru
 int32_t i915_gem_context_setparam_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
     struct drm_i915_gem_context_param *args = (struct drm_i915_gem_context_param *)data;
-    struct i915_gem_context *ctx = context_find(file_priv(file), args->ctx_id);
-    int32_t err;
+    struct i915_file *fp = file_priv(file);
+    struct i915_gem_context *ctx;
+    int32_t err = -ENOENT;
 
     (void)dev;
-    if (!ctx) {
-        return -ENOENT;
+    /* Under the list's lock, which keeps a proto context's parameters and
+     * its finalizing apart, as Linux's set_proto_ctx_param runs under
+     * proto_context_lock (gem/i915_gem_context.c:2619-2640). */
+    mutex_lock(&fp->lock);
+    ctx = context_find(fp, args->ctx_id);
+    if (ctx) {
+        err = context_setparam(ctx, args);
     }
-    /* Held across the parameter's copies, which may sleep while another
-     * thread destroys the context. */
-    ctx->refs++;
-    err = context_setparam(ctx, args);
-    i915_gem_context_put(ctx);
+    mutex_unlock(&fp->lock);
     return err;
 }
 
@@ -926,6 +994,7 @@ int32_t i915_gem_throttle_ioctl(struct drm_device *dev, void *data, struct drm_f
     }
     do {
         rq = 0;
+        mutex_lock(&fp->lock);
         for (ctx = fp->contexts; ctx && !rq; ctx = ctx->next) {
             for (i = 0; ctx->ce && i < ctx->nce && !rq; i++) {
                 if (ctx->ce[i]) {
@@ -933,6 +1002,7 @@ int32_t i915_gem_throttle_ioctl(struct drm_device *dev, void *data, struct drm_f
                 }
             }
         }
+        mutex_unlock(&fp->lock);
         err = rq ? i915_request_wait(rq, I915_WAIT_INTERRUPTIBLE, -1) : 0;
         i915_request_put(rq);
     } while (rq && err == 0);
@@ -1052,6 +1122,7 @@ int32_t i915_driver_open(struct drm_device *dev, struct drm_file *file)
         return -ENOMEM;
     }
     fp->i915 = i915;
+    mutex_init(&fp->lock, "i915_ctx_list");
     /* The default context, 0, made whole at once, as Linux's
      * i915_gem_context_open. */
     ctx = context_alloc(i915);
@@ -1070,13 +1141,19 @@ int32_t i915_driver_open(struct drm_device *dev, struct drm_file *file)
 void i915_driver_postclose(struct drm_device *dev, struct drm_file *file)
 {
     struct i915_file *fp = file_priv(file);
-    struct i915_gem_context *ctx;
+    struct i915_gem_context *ctx, *list;
 
     if (!fp) {
         return;
     }
-    while ((ctx = fp->contexts) != 0) {
-        fp->contexts = ctx->next;
+    /* The list is taken whole under its lock and closed after it, since
+     * the close takes the GEM lock, which comes after the list's. */
+    mutex_lock(&fp->lock);
+    list = fp->contexts;
+    fp->contexts = 0;
+    mutex_unlock(&fp->lock);
+    while ((ctx = list) != 0) {
+        list = ctx->next;
         ctx->next = 0;
         context_close(ctx);
     }

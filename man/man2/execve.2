@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 11, 2026
 .Dt EXECVE 2
 .Os
 .Sh NAME
@@ -502,12 +502,29 @@ First every other thread of the process is sent
 and the call waits until they have ended.
 Only a signal fatal to the process ends this wait:
 .Dv SIGKILL ,
-or a signal sent to the process or to one of its threads whose action is
-the default and ends the process without a core dump, such as
+or a signal whose action is the default and ends the process without a
+core dump, such as
 .Dv SIGTERM ,
-when a thread that would take it does not block it and the process is not
-traced, which sends every thread
+under the rule Linux applies as the signal is sent.
+A thread must take it at once: the thread it was sent to, or for a signal
+sent to the process another of its threads when that one does not, takes
+it at once when it does not block the signal, has not begun to end, is not
+stopped, and is running or has neither an unblocked signal of its own
+nor signal work assigned to it by a previous send.
+A shared pending signal assigned to another thread does not exclude it.
+That thread must not wait for the signal in
+.Fn rt_sigtimedwait
+.Pq Xr sigaction 2
+or a read of a
+.Xr signalfd 2 ,
+the thread the signal was sent to must not be traced, and the process must
+not be an init.
+Only
 .Dv SIGKILL
+needs no more than a thread that does not block it and has not begun to
+end.
+Such a signal sends every thread
+.Dv SIGKILL ,
 as on Linux.
 The call then fails with
 .Er EAGAIN
@@ -525,7 +542,8 @@ on Linux.
 The robust futexes the thread holds are released next, as
 .Xr futex 2
 describes, and a thread other than the one that began the process then
-takes that thread's ID, which is the process ID, as on Linux.
+takes that thread's ID, which is the process ID, in every PID namespace,
+as on Linux.
 The old address space is freed, unless the parent of a
 .Xr vfork 2
 child still has it; that parent then runs again.

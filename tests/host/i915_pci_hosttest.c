@@ -15,6 +15,8 @@
  * host-deps: rach2/sys/drm/i915/intel_bios.c
  * host-deps: rach2/sys/drm/i915/intel_opregion.c
  * host-deps: rach2/sys/drm/i915/i915_aperture.c rach2/sys/drm/i915/i915_fence.c
+ * host-deps: tests/host/compat/i915_gem_lock_host.c
+ * host-deps: tests/host/compat/mutex_none.c
  *
  * i915_pci.c is included whole. The bus holds the model's 00:02.0, whose
  * configuration space the PCI calls read and write; the DRM core is a
@@ -416,6 +418,14 @@ void register_isr_handler(uint8_t vector, isr_handler_t h, const char *name)
     (void)name;
     handlers++;
     handler = h;
+}
+
+/** Take the handler's flag, which a test of one thread does not need. */
+void isr_register_flags(uint8_t vector, isr_handler_t handler, unsigned int flags)
+{
+    (void)vector;
+    (void)handler;
+    (void)flags;
 }
 
 /* The display, intel_display.c and the files beside it, which have their
@@ -1076,6 +1086,10 @@ static void row_model(void)
     CHECK("model: the OpRegion's address", i915_model_config(&m, 0xfc, 4) == LENOVO_GPU_ASLS);
     done(&m);
 }
+
+/** Nothing: one thread has no one to give way to. */
+void sched_give_way(void)
+{}
 
 /** Run every row; 0 when all pass. */
 int main(void)

@@ -136,8 +136,21 @@ int smp_serialized(void)
 void arch_relax(void)
 {}
 
+/** A clock that moves on at each read, so a bounded wait for klog's report
+ * lock ends; the lock is never held by another here. */
+uint64_t arch_cycles(void)
+{
+    static uint64_t now;
+
+    return now += 1000u;
+}
+
 /** No performance counter here. */
 void platform_pmu_disable(void)
+{}
+
+/** No lockup detector to touch here. */
+void touch_nmi_watchdog(void)
 {}
 
 /* What a write to /proc/sys/kernel/panic that lands while the stop is
@@ -632,6 +645,10 @@ static int framebuffer(unsigned int w, unsigned int h)
     fb.blue_bits = 8;
     return fbcon_init(&fb);
 }
+
+/** One processor: nothing to answer. */
+void smp_service(void)
+{}
 
 int main(void)
 {

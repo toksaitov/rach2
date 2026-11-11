@@ -78,6 +78,8 @@ typedef struct cpu_regs cpu_regs_t;
 
 /* Resume the frame with interrupts off: clear IF in its saved flags. */
 #define FRAME_IRQ_OFF(p) ((p)->eflags &= ~0x200u)
+/* Whether the frame was taken with interrupts on: IF in its saved flags. */
+#define FRAME_IRQ_ON(p)  (((p)->eflags & 0x200u) != 0)
 
 #define PAGE_SHIFT 12
 #define PAGE_SIZE  0x1000

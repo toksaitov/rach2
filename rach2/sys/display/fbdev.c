@@ -660,4 +660,4 @@ static void fb_close(fd_entry_t *e)
     e->priv = NULL;
 }
 
-const struct file_ops fb_file_ops = {fb_read, fb_write, fb_poll, fb_ioctl, fb_close, NULL, NULL};
+const struct file_ops fb_file_ops = {fb_read, fb_write, fb_poll, fb_ioctl, fb_close, NULL, NULL, 0};

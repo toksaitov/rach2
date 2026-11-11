@@ -5,6 +5,7 @@
 #include "../arch/arch.h"
 #include "../lib/kdef.h"
 #include "../lib/kerrno.h"
+#include "../lib/spinlock.h"
 #include "kheap.h"
 
 #define VM_PAGE_MASK  0xFFFu
@@ -19,6 +20,9 @@ struct vm_chunk {
 int randomize_va_space = ASLR_MMAP_PAGES != 0 ? 2 : 0;
 int vm_max_map_count = VMA_LIMIT;
 static struct vm_file *vm_dead;
+/* Covers `vm_dead`, which a fault's last reference reaches without the
+ * regions' write lock. */
+static struct spinlock vm_dead_lock = SPINLOCK_INIT_NAMED("vm_dead_lock");
 static uint32_t gap_steps;
 
 /** Read the number of gap candidates examined since boot. */
@@ -27,19 +31,42 @@ uint32_t vm_gap_steps(void)
     return gap_steps;
 }
 
+/** Add `delta` to the count at `p` in one step, as a fault holding the
+ * regions' lock to read and another processor's change may both move it;
+ * the count after. */
+static uint32_t ref_add(volatile uint32_t *p, int delta)
+{
+    unsigned int old;
+
+    do {
+        old = *p;
+    } while (arch_atomic_cmpxchg((volatile unsigned int *)p, old, old + (unsigned int)delta) !=
+             old);
+    return (uint32_t)(old + (unsigned int)delta);
+}
+
 void vm_file_get(struct vm_file *f)
 {
     if (f) {
-        f->refs++;
+        (void)ref_add(&f->refs, 1);
     }
 }
 
 void vm_file_put(struct vm_file *f)
 {
-    if (f && --f->refs == 0) {
+    uint32_t flags;
+
+    if (f && ref_add(&f->refs, -1) == 0) {
+        flags = spin_lock_irqsave(&vm_dead_lock);
         f->dead = vm_dead;
         vm_dead = f;
+        spin_unlock_irqrestore(&vm_dead_lock, flags);
     }
+}
+
+int vm_file_dead(void)
+{
+    return vm_dead != NULL;
 }
 
 /* The file of a device region: the object it maps and what the object
@@ -111,14 +138,14 @@ int vm_device_access(struct vm_file *f, uint64_t offset, void *buf, uint32_t len
 struct vm_policy *vm_policy_get(struct vm_policy *p)
 {
     if (p) {
-        p->refs++;
+        (void)ref_add(&p->refs, 1);
     }
     return p;
 }
 
 void vm_policy_put(struct vm_policy *p)
 {
-    if (p && --p->refs == 0) {
+    if (p && ref_add(&p->refs, -1) == 0) {
         kfree(p);
     }
 }
@@ -145,11 +172,19 @@ int vm_policy_equal(const struct vm_policy *a, const struct vm_policy *b)
 void vm_file_reap(void)
 {
     struct vm_file *f;
+    uint32_t flags;
 
-    while (vm_dead) {
+    for (;;) {
+        flags = spin_lock_irqsave(&vm_dead_lock);
         f = vm_dead;
-        vm_dead = f->dead;
-        f->dead = NULL;
+        if (f) {
+            vm_dead = f->dead;
+            f->dead = NULL;
+        }
+        spin_unlock_irqrestore(&vm_dead_lock, flags);
+        if (!f) {
+            return;
+        }
         f->release(f);
     }
 }

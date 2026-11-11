@@ -266,8 +266,9 @@ typedef struct socket {
      * SOCK_SEND_SHUTDOWN, from SHUT_WR, has poll report POLLOUT, where a
      * send fails with EPIPE. On a UDP or ICMP datagram socket
      * SOCK_RCV_SHUTDOWN ends a blocking receive of an empty queue with 0
-     * and has poll report POLLIN and POLLRDHUP, and both bits POLLHUP.
-     * Written under `net_lock`. */
+     * and has poll report POLLIN and POLLRDHUP, SOCK_SEND_SHUTDOWN has a
+     * send fail with EPIPE and no SIGPIPE, and both bits have poll report
+     * POLLHUP. A raw socket's send still goes. Written under `net_lock`. */
     int shutdown;
 
     /*

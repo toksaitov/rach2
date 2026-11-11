@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 12, 2026
 .Dt DEBUGFS 5
 .Os
 .Sh NAME
@@ -118,29 +118,36 @@ ioctl_lost 0
 .Pp
 .Ar calls
 counts a system call at its return and an interrupt or exception at its
-entry from user mode or an idle wait;
+entry, whether or not it takes the lock, each processor on counts of its
+own, which a read sums;
 .Ar wall_us
-is a system call's time from before its entry took the lock to its
+is a system call's time from before its entry chose the lock to its
 return, its waits for the lock and its sleeps included;
 .Ar holds
 and
 .Ar held_us
 are the holds of the lock that the entry began, from the take to the
-give-back, which a call keeps while it sleeps and the processor runs
-others, as the lines
+give-back, as the lines
 .Ql bkl_hold_entry
 of
 .Pa /proc/stat
-count them;
+count them: those of an entry that took the lock, and those a call or an
+interrupt that runs without it took, charged to the entry the thread was
+in;
 .Ar wait_us
 is the time those holds waited for the lock first.
+The lines
+.Ql take 0
+and
+.Ql take 1
+count the holds a thread takes again after an idle wait and after its
+switch, which have no calls.
 The line
 .Ql vector 0
 counts, beside the divide error, the holds of kernel threads and of the
-lock taken again after the kernel gave it up, for an idle halt, a run of a
+lock taken again by a thread in no entry, after a run of a
 .Xr kvm 4
-guest, another processor's claim or a processor's start, which have no
-calls.
+guest, another processor's claim or a processor's start.
 A system call numbered 512 or more counts as 512, a call of the i386 ABI
 under its own number.
 The times are microseconds, and 0 without an invariant time-stamp counter.
@@ -156,21 +163,67 @@ A write of anything zeroes the counts.
 Mode 0644.
 A profile of the kernel under the big lock, a Rach2 file: each processor's
 tick that finds the processor holding the lock, at 1000 Hz, takes a
-sample of the instruction it stopped and that function's caller, from the
-frame chain, 0 when there is none.
-Code that runs with interrupts off is not sampled.
-The text is the samples; those lost, whose instruction and caller found
-none of the 32 slots their hash names among the 2048 free or their own,
-which can happen while most slots are free; and a line for each
-instruction and caller sampled, with its count, in no order:
+sample of the instruction it stopped and the three return addresses above
+it, from the frame chain, 0 past its end, with the entry the running
+process is in; in the whole-kernel mode, which a write of
+.Ql kernel
+chooses, every tick that finds the processor in kernel mode outside an
+idle halt takes one, with or without the lock: its innermost system call, interrupt or exception, as
+.Pa bkl/calls
+names it,
+.Ql ioctl
+and the request for an
+.Xr ioctl 2 ,
+or
+.Ql kernel 0
+for none, as in a kernel thread.
+Code that runs with interrupts off is not sampled, nor is the writing of
+this file's text; the rest of a read, its entry, allocation and copy out,
+is sampled.
+The text is the samples, which the lines' counts and the lost sum to; those lost, whose entry, instruction and callers
+found none of the 32 slots their hash names among the 16384 free or their
+own, which can happen while most slots are free; and a line for each
+entry, instruction and callers sampled, with its count, in no order:
 .Bd -literal -offset indent
 samples 5120
 lost 0
-0xffffffff8012a3c4 0xffffffff80131f08 37
+syscall 9 0xffffffff8012a3c4 0xffffffff80131f08 0xffffffff8013a210 0xffffffff80100e7c 37
+ioctl 0xc0406469 0xffffffff8024b1d0 0xffffffff80250c44 0xffffffff8024e9a8 0xffffffff80245f10 12
 .Ed
 .Pp
 The kernel's symbol table names the functions.
-A write of anything zeroes the profile.
+A write zeroes the profile and chooses its mode: the whole kernel for a
+write that begins with
+.Ql kernel ,
+and the big lock's holds for any other.
+.It Pa bkl/long
+Mode 0644.
+The latest interrupt sample of each of the last 32 holds of the big lock
+sampled at 16 ms or older, oldest first.
+The header names the columns:
+.Bd -literal -offset indent
+clock_us age_us cpu pid comm vector syscall pc[8]
+.Ed
+.Pp
+The first two are the sample's TSC timestamp and the hold's age,
+converted to microseconds at the calibrated invariant TSC rate.
+The timestamp uses the same clock as
+.Pa /proc/audio Ns 's
+service clock-us, not uptime.
+Without calibration there are no records.
+The next columns name the processor, the interrupted thread (0 for none),
+its command (a dash for none, spaces and nonprinting characters replaced
+by question marks), and the hold's entry vector and system call number,
+as
+.Pa bkl/calls
+charges the hold: -1 for none, and vector 0 with -1 for a take after a
+switch or an idle wait.
+The eight hexadecimal PCs are the interrupted instruction and its
+callers, zero after the end of the bounded kernel-stack walk.
+Later interrupts during a hold replace its sample.
+A hold that ends without an interrupt can leave no sample.
+A read snapshots the ring once, before rendering it.
+A write empties it; a hold already under way can be sampled again.
 .It Pa bkl/tick
 Mode 0644.
 The parts of the timer tick, a Rach2 file: for each part, the ticks that
@@ -248,9 +301,11 @@ that of the timer pass one makes when the boot processor's is late.
 is the time from the tick's preemption to the end of its hold of the lock,
 and
 .Ql switch
-the same when the hold ended in another thread, which the tick switched to:
-what that thread did under the lock before it gave the lock back is
-charged to the tick.
+the same when the hold ended at a switch to another thread, which lets
+the lock go; the thread switched to takes it again in a hold of its own,
+which
+.Pa bkl/calls
+counts as a take after a switch.
 .Ql nested
 counts the ticks that came while their processor already held the lock,
 with their handler's time, which the other rows count too and which is the
@@ -265,6 +320,25 @@ charges to vector 32.
 The microseconds are 0 without an invariant time-stamp counter; the cycles
 are not.
 A write of anything zeroes the counts.
+.It Pa lockdep/inject
+Mode 0600, only in the kernel built with
+.Ql make rach2-lockdep .
+Reads
+.Ql abba irq ,
+the words a write takes.
+A write of
+.Ql abba
+takes two locks of its own in one order and then in the other, and
+.Ql irq
+takes one lock in an interrupt's context, a second with interrupts on,
+and then the second while it holds the first, so that the lock-order checker reports a possible deadlock and an interrupt
+inversion in the kernel log and counts them in
+.Pa /proc/lockdep_stats .
+Each report is made once a boot.
+Another text fails with
+.Er EINVAL .
+Linux has no such file; its lib/locking-selftest.c makes such orders at
+boot.
 .It Pa test_lockup
 Mode 0600.
 Reads
@@ -395,6 +469,15 @@ reports
 and
 .Dv POLLRDNORM
 while a line waits.
+.It Pa dri/DEVICE/crtc-N/vblank_backwards
+Mode 0444, for a CRTC with vblanks; Rach2's own, not Linux's.
+How many times a vblank of the CRTC was stamped earlier than one stamped
+before it, as a decimal number and a newline.
+Every vblank, flip and sequence event and every
+.Dv DRM_IOCTL_WAIT_VBLANK
+reply carries the latest stamp, and a compositor such as Weston aborts on
+one that goes back, so the number is 0 unless the driver's scanout
+position read a later vblank as an earlier one.
 .It Pa dri/DEVICE/crtc-N/i915_pipe
 Mode 0444, for a device bound by
 .Xr i915 4 .

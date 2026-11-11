@@ -427,7 +427,11 @@ static uint32_t vshm_take_rang(void)
  * Wait until the device's block answers the driver's epoch in `want`, or
  * for `ticks` at most, 0 for no bound, ending early at a detach. Returns 1
  * with `vs->dev` read when it does, else 0. Called by the thread, which
- * binds the driver.
+ * binds the driver. A doorbell rung while the thread looks ends its next
+ * sleep at once, so a device that keeps ringing without answering would
+ * keep the thread from sleeping; the tick does not switch a kernel thread,
+ * so each look that fails ends at a service point, as vhost's worker calls
+ * cond_resched between works (drivers/vhost/vhost.c:440 in 6.12.115).
  */
 static int vshm_await(struct vshm *vs, uint32_t want, uint32_t ticks)
 {
@@ -442,6 +446,7 @@ static int vshm_await(struct vshm *vs, uint32_t want, uint32_t ticks)
         }
         vshm_sleep(vs, vs->bells ? VSHM_IDLE_TICKS : VSHM_POLL_TICKS);
         (void)vshm_take_rang();
+        sched_service_point();
     }
 }
 
@@ -1258,6 +1263,11 @@ static int vshm_present(void *arg)
  * The transport's thread, `vgpu-shm`: it binds virtio-gpu over an attached
  * region, which waits for the device's offer, serves the bound device on
  * each doorbell, or each tick when it polls, and carries out a detach.
+ * The tick does not switch it (`no_tick_switch`): it gives way where it
+ * sleeps, at the top of each pass and after each look of `vshm_await`
+ * that fails, as vhost's worker calls cond_resched
+ * between works (drivers/vhost/vhost.c:440 in 6.12.115), so the state its
+ * steps change, which the big lock guards, never changes under it.
  */
 static void vshm_main(void)
 {
@@ -1267,6 +1277,7 @@ static void vshm_main(void)
 
     arch_irq_enable();
     for (;;) {
+        sched_service_point();
         vs = vshm_cur;
         if (!vs) {
             (void)wq_wait_event_idle(&vshm_wq, vshm_present, NULL);
@@ -1390,6 +1401,7 @@ static struct vshm *vshm_new(uint32_t peer)
     if (!vs) {
         return NULL;
     }
+    spin_lock_init(&vs->heap_lock, "vshm_heap");
     vs->vdev.ops = &vshm_ops;
     vs->vdev.transport = vs;
     vs->vdev.id = VIRTIO_ID_GPU;
@@ -1603,7 +1615,7 @@ static void vshm_close(fd_entry_t *e)
     e->priv = NULL;
 }
 
-static const struct file_ops vshm_fops = {NULL, NULL, NULL, vshm_ioctl, vshm_close, NULL, NULL};
+static const struct file_ops vshm_fops = {NULL, NULL, NULL, vshm_ioctl, vshm_close, NULL, NULL, 0};
 static struct devfs_node vshm_node = {"vgpu-shm", 10, 243, 0600, &vshm_fops, NULL, NULL};
 
 int32_t vgpu_shm_start(void)

@@ -1,10 +1,13 @@
 /**
  * Check what `proc/futex.c` reads of a thread that may end while it works,
- * the robust futexes a thread's end releases, a wait's deadline, and which
- * interrupted calls are restarted.
+ * the robust futexes a thread's end releases, a wait's deadline, which
+ * interrupted calls are restarted, and the bucket locks: a requeued
+ * waiter's own unqueue, a wake's last store, a word that is not there under
+ * a bucket's lock, and the big lock the PI operations take.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/tick.c
+ * host-deps: tests/host/compat/mmap_lock_host.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
  *
  * The source is included whole, to reach its lists of waiters. User memory
@@ -32,6 +35,13 @@
  * A thread's end clears its CLONE_CHILD_CLEARTID word only when another
  * thread uses its address space, which a hold on the record, as a
  * /proc/PID/mem descriptor has, does not count as.
+ *
+ * A word is read and exchanged under a bucket's lock without a fault; the
+ * model can hold one word's page away until a fault brings it in, as a page
+ * never touched would be, and the call must let its locks go, bring the
+ * page in and start again. The model's spinlocks trap when taken twice,
+ * count the takes of bucket locks and whether the big lock was held, and
+ * note a second lock taken below the first one's address.
  */
 #include "proc/futex.c"
 
@@ -87,7 +97,20 @@ static uint32_t waiters_at;
 static uint32_t slow_at, slow_ticks;
 static uint64_t armed;
 static struct futex_q waiter;
+static struct futex_sleeper waiter_s;
 static int masked, failures, wakes, waits, cmpxchgs;
+/* The address space of the model's thread, which every row has but the
+ * one that gives it another. */
+static struct mm self_mm;
+/* The word whose page is not there until a fault for it, and the faults
+ * that brought it in. */
+static uint32_t absent_at;
+static int absent_faults;
+/* The big lock's depth, the bucket locks taken, those taken under the big
+ * lock, the lock taken last, and the second locks taken out of address
+ * order. */
+static int bkl_depth, hb_takes, hb_takes_bkl, nested_misordered;
+static struct spinlock *last_taken;
 /* The word a thread on another processor sets FUTEX_WAITERS in, once, between
  * a load and the compare-and-exchange after it, whatever the interrupts. */
 static uint32_t raced_at;
@@ -134,20 +157,18 @@ int user_span_ok(uintptr_t addr, size_t len)
     return in_user((uint32_t)addr, (uint32_t)len);
 }
 
-/** Every page of the model's user area is resident. */
-int vm_resident(uintptr_t addr, uintptr_t len, int write)
-{
-    (void)write;
-    return in_user((uint32_t)addr, (uint32_t)len);
-}
-
 /** Bring a range in; a fault for a write taken with interrupts on is a
  * sleep in which the waiter on the word at `waiters_at` sets its bit, and
- * one at `slow_at` a sleep of `slow_ticks` ticks. */
+ * one at `slow_at` a sleep of `slow_ticks` ticks. The page of `absent_at`
+ * is there after it. */
 int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
 {
     if (!in_user(addr, len)) {
         return 0;
+    }
+    if (absent_at != 0 && absent_at == addr) {
+        absent_at = 0;
+        absent_faults++;
     }
     if (write && !masked && waiters_at != 0 && waiters_at == addr) {
         word_set(addr, word_at(addr) | FUTEX_WAITERS);
@@ -195,21 +216,29 @@ int copy_to_user(void __user *dst, const void *src, size_t n)
     return 0;
 }
 
-/** The word at `src`, as one load reads it, through the model's prefault. */
-int get_user_u32(uint32_t *val, uintptr_t src)
+/** Whether the word at `addr` may be reached without a fault: aligned, in
+ * user memory, and not the word whose page is away. */
+static int word_there(uintptr_t addr)
 {
-    if ((src & 3u) != 0 || !vm_prefault_range(src, 4, 0)) {
+    return (addr & 3u) == 0 && in_user((uint32_t)addr, 4) && (absent_at == 0 || absent_at != addr);
+}
+
+/** The word at `src`, as one load reads it, or -EFAULT where it is not
+ * there; nothing is brought in. */
+int get_user_u32_nofault(uint32_t *val, uintptr_t src)
+{
+    if (!word_there(src)) {
         return -EFAULT;
     }
     *val = word_at((uint32_t)src);
     return 0;
 }
 
-/** The word at `dst` exchanged when it holds `old`, through the model's
- * prefault for a write, as one compare-and-exchange; counted. */
-int cmpxchg_user_u32(uintptr_t dst, uint32_t old, uint32_t value, uint32_t *prev)
+/** The word at `dst` exchanged when it holds `old`, as one
+ * compare-and-exchange, or -EFAULT where it is not there; counted. */
+int cmpxchg_user_u32_nofault(uintptr_t dst, uint32_t old, uint32_t value, uint32_t *prev)
 {
-    if ((dst & 3u) != 0 || !vm_prefault_range(dst, 4, 1)) {
+    if (!word_there(dst)) {
         return -EFAULT;
     }
     cmpxchgs++;
@@ -237,6 +266,85 @@ uint32_t kirq_save(void)
 void kirq_restore(uint32_t flags)
 {
     masked = (int)flags;
+}
+
+/** Take the big lock: count the depth. */
+void bkl_enter(void)
+{
+    bkl_depth++;
+}
+
+/** Give the big lock back. */
+void bkl_exit(void)
+{
+    bkl_depth--;
+}
+
+/** Take `lock`, trapping when it is held, which on the machine would spin
+ * for ever; count a bucket's take and whether the big lock was held. */
+static void host_spin_take(struct spinlock *lock)
+{
+    if (lock->locked) {
+        __builtin_trap();
+    }
+    lock->locked = 1;
+    last_taken = lock;
+    hb_takes++;
+    if (bkl_depth > 0) {
+        hb_takes_bkl++;
+    }
+}
+
+/** Take `lock`. */
+void spin_lock(struct spinlock *lock)
+{
+    host_spin_take(lock);
+}
+
+/** Take `lock` as the second of its class, which must lie above the first,
+ * the lock taken last and still held. */
+void spin_lock_nested(struct spinlock *lock, unsigned int subclass)
+{
+    (void)subclass;
+    if (!last_taken || !last_taken->locked || last_taken >= lock) {
+        nested_misordered++;
+    }
+    host_spin_take(lock);
+}
+
+/** Give `lock` back. */
+void spin_unlock(struct spinlock *lock)
+{
+    lock->locked = 0;
+}
+
+/** Mask interrupts and take `lock`; whether they were masked before. */
+uint32_t spin_lock_irqsave(struct spinlock *lock)
+{
+    uint32_t flags = kirq_save();
+
+    host_spin_take(lock);
+    return flags;
+}
+
+/** Give `lock` back and put the interrupt mask back as `flags` says. */
+void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
+{
+    spin_unlock(lock);
+    kirq_restore(flags);
+}
+
+/** Whether every bucket's lock is free, as each call must leave it. */
+static int hb_all_free(void)
+{
+    int i;
+
+    for (i = 0; i < FUTEX_BUCKETS; i++) {
+        if (_futex_hb[i].lock.locked) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 /** The one thread besides the caller, pid 5, while it has not ended. */
@@ -370,21 +478,21 @@ void kfree(void *p)
  * files itself; the caller's address space names it. */
 static void waiter_file(uint32_t uaddr)
 {
-    uint32_t bucket = futex_bucket(self.page_dir, uaddr);
-
     k_memset(&waiter, 0, sizeof(waiter));
+    k_memset(&waiter_s, 0, sizeof(waiter_s));
     waiter.space = self.page_dir;
     waiter.uaddr = uaddr;
     waiter.bitset = FUTEX_MATCH_ANY;
-    waiter.next = _waiters[bucket];
-    _waiters[bucket] = &waiter;
+    waiter.s = &waiter_s;
+    waiter.task = &self;
+    futex_queue(&waiter, futex_hash(waiter.space, waiter.uaddr));
     wakes = 0;
 }
 
 /** Take the model's waiter off its list when no wake did. */
 static void waiter_unfile(void)
 {
-    futex_unlink(&waiter, futex_bucket(waiter.space, waiter.uaddr));
+    (void)futex_unqueue_q(&waiter);
 }
 
 /**
@@ -519,7 +627,7 @@ static void child_tid_cleared(void)
     if (!waiter.woken) {
         waiter_unfile();
     }
-    self.mm = NULL;
+    self.mm = &self_mm;
 }
 
 /** Wait on the word at 600, which holds 7, for `sec` s and `nsec` ns from
@@ -534,6 +642,7 @@ static int32_t timed_wait(uint32_t now, int32_t sec, int32_t nsec, uint32_t faul
     k_memcpy(user + 608, &ts, sizeof(ts));
     word_set(600, 7u);
     kernel_ticks = now;
+    absent_at = 600;
     slow_at = 600;
     slow_ticks = fault;
     waits = 0;
@@ -548,9 +657,9 @@ static int32_t timed_wait(uint32_t now, int32_t sec, int32_t nsec, uint32_t faul
 
 /**
  * A wait's deadline is fixed when the call begins: a wait of one tick whose
- * page takes 50 ticks to come in has passed its deadline and ends without
- * sleeping, and a wait of a second from tick 2000 sleeps until a second and
- * a tick later, 2001 + TICK_HZ, whatever the fault took.
+ * page is not there and takes 50 ticks to come in has passed its deadline
+ * and ends without sleeping, and a wait of a second from tick 2000 sleeps
+ * until a second and a tick later, 2001 + TICK_HZ, whatever the fault took.
  */
 static void deadline_fixed(void)
 {
@@ -643,11 +752,115 @@ static void robust_head_read(void)
     }
 }
 
+/**
+ * A requeue moves a waiter to the second futex's bucket under both buckets'
+ * locks, the lower first, and the waiter's own unqueue then finds it there,
+ * as Linux's futex_unqueue follows lock_ptr. A wake takes a waiter off,
+ * wakes its sleeper and clears its bucket last, so its unqueue finds a wake
+ * took it off.
+ */
+static void bucket_rows(void)
+{
+    isr_params_t p;
+
+    waiter_file(300);
+    k_memset(&p, 0, sizeof(p));
+    p.ebx = 300;
+    p.ecx = FUTEX_REQUEUE | FUTEX_PRIVATE_FLAG;
+    p.edx = 0;
+    p.esi = 1;
+    p.edi = 304;
+    nested_misordered = 0;
+    CHECK(futex_hash(self.page_dir, 300) != futex_hash(self.page_dir, 304),
+          "the two words hash to two buckets");
+    CHECK(sys_futex(&p) == 1 && !waiter.woken && waiter.uaddr == 304 &&
+              waiter.hb == futex_hash(self.page_dir, 304),
+          "a requeue moves the waiter to the second futex's bucket");
+    CHECK(nested_misordered == 0, "and takes the two buckets' locks in address order");
+    CHECK(futex_unqueue_q(&waiter) == 1 && waiter.hb == NULL &&
+              futex_hash(self.page_dir, 304)->head == NULL,
+          "the waiter's unqueue takes it off the bucket it was moved to");
+    waiter_file(400);
+    p.ebx = 400;
+    p.ecx = FUTEX_WAKE | FUTEX_PRIVATE_FLAG;
+    p.edx = 1;
+    CHECK(sys_futex(&p) == 1 && waiter.woken && waiter_s.woken && waiter.hb == NULL && wakes == 1,
+          "a wake marks the waiter and its sleeper and clears its bucket");
+    CHECK(futex_unqueue_q(&waiter) == 0, "and the waiter's unqueue finds a wake took it off");
+    CHECK(hb_all_free() && !masked, "every bucket's lock is free and interrupts are on after");
+}
+
+/**
+ * A word that is not there under its bucket's lock: the call lets its locks
+ * go, brings the page in and starts again, as Linux's callers of
+ * futex_get_value_locked do. A wait on a word that differs is then EAGAIN
+ * with no waiter left filed, and FUTEX_WAKE_OP changes its second word once
+ * and wakes the first word's waiter.
+ */
+static void fault_rows(void)
+{
+    isr_params_t p;
+
+    word_set(500, 3u);
+    absent_at = 500;
+    absent_faults = 0;
+    k_memset(&p, 0, sizeof(p));
+    p.ebx = 500;
+    p.ecx = FUTEX_WAIT | FUTEX_PRIVATE_FLAG;
+    p.edx = 7;
+    CHECK(sys_futex(&p) == -EAGAIN && absent_faults == 1 &&
+              futex_hash(self.page_dir, 500)->head == NULL,
+          "a wait whose word was not there brings it in, compares it and files nothing");
+    word_set(504, 1u);
+    absent_at = 504;
+    absent_faults = 0;
+    waiter_file(500);
+    p.ecx = FUTEX_WAKE_OP | FUTEX_PRIVATE_FLAG;
+    p.edx = 1;
+    p.esi = 1;
+    p.edi = 504;
+    p.ebp = ((uint32_t)FUTEX_OP_ADD << 28) | ((uint32_t)FUTEX_OP_CMP_EQ << 24) | (2u << 12) | 1u;
+    CHECK(sys_futex(&p) == 1 && word_at(504) == 3u && absent_faults == 1 && waiter.woken,
+          "FUTEX_WAKE_OP brings its second word in, changes it once and wakes the first");
+    if (!waiter.woken) {
+        waiter_unfile();
+    }
+    CHECK(hb_all_free() && !masked, "every bucket's lock is free and interrupts are on after");
+    absent_at = 0;
+}
+
+/**
+ * The PI operations take the big lock before a bucket's lock and give it
+ * back, and the others take the bucket's lock alone, so that futex(2) runs
+ * without the big lock except where PI states change.
+ */
+static void bkl_rows(void)
+{
+    isr_params_t p;
+
+    word_set(520, 0u);
+    k_memset(&p, 0, sizeof(p));
+    p.ebx = 520;
+    p.ecx = FUTEX_LOCK_PI | FUTEX_PRIVATE_FLAG;
+    hb_takes = hb_takes_bkl = 0;
+    CHECK(sys_futex(&p) == 0 && word_at(520) == self.pid, "LOCK_PI takes a free word");
+    p.ecx = FUTEX_UNLOCK_PI | FUTEX_PRIVATE_FLAG;
+    CHECK(sys_futex(&p) == 0 && word_at(520) == 0, "UNLOCK_PI frees it");
+    CHECK(hb_takes == 2 && hb_takes_bkl == 2 && bkl_depth == 0,
+          "the PI operations take their buckets under the big lock and give it back");
+    hb_takes = hb_takes_bkl = 0;
+    p.ecx = FUTEX_WAKE | FUTEX_PRIVATE_FLAG;
+    p.edx = 1;
+    CHECK(sys_futex(&p) == 0 && hb_takes == 1 && hb_takes_bkl == 0,
+          "a wake takes its bucket without the big lock");
+}
+
 /** Run the rows; 0 when every check passed, 1 otherwise. */
 int main(void)
 {
     self.pid = self.tgid = 42;
     self.state = PROC_RUNNING;
+    self.mm = &self_mm;
     robust_head_read();
     owner_released();
     owner_raced();
@@ -655,10 +868,13 @@ int main(void)
     child_tid_cleared();
     deadline_fixed();
     restarts();
+    bucket_rows();
+    fault_rows();
+    bkl_rows();
     if (failures) {
         return 1;
     }
     printf("futex-test: pass: the robust head, the robust release, the child's word, the "
-           "deadline and the restarts\n");
+           "deadline, the restarts and the bucket locks\n");
     return 0;
 }

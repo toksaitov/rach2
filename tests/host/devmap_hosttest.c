@@ -6,6 +6,8 @@
  * host-deps: rach2/sys/mm/vm.c rach2/sys/mm/frame.c rach2/sys/mm/notify.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/mmap_lock_host.c
+ * host-deps: tests/host/compat/atomic_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  * host-cflags: -U__UINTPTR_TYPE__ -D__UINTPTR_TYPE__=unsigned
  * host-cflags: -U__INTPTR_TYPE__ -D__INTPTR_TYPE__=int
@@ -30,6 +32,8 @@
  * a moved page faults in at its new frame and a revoked one raises SIGBUS
  * with BUS_ADRERR at the address, from the page fault handler; and
  * paging_access reaches a device region through its object's `access`.
+ * Before them, the index of the free frames is searched up and down over
+ * groups with no free frame.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -146,6 +150,8 @@ static void dir_free(page_dir_t *dir)
 struct percpu cpu_table[NR_CPUS];
 uintptr_t mem_reserved_ptr;
 process_t *proc_list;
+volatile uint32_t init_pid = 1; /* no row faults as init */
+bool debug_shell_is_home;
 
 /* Whether the page attribute table gives write-combining, which a row
  * turns off to see the uncached bits in its place. */
@@ -187,6 +193,39 @@ void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t start, uintptr_t en
 
 /** Nothing. */
 void smp_kernel_mapping_changed(void)
+{}
+
+/** Nothing. */
+void smp_kernel_flush(uintptr_t start, uintptr_t end)
+{
+    (void)start;
+    (void)end;
+}
+
+/** 1: the test runs as the kernel, under the big lock. */
+int bkl_held(void)
+{
+    return 1;
+}
+
+/** Nothing: there is no big lock. */
+void bkl_enter(void)
+{}
+
+/** Nothing: there is no big lock. */
+void bkl_exit(void)
+{}
+
+/** Nothing: the test has no interrupt flag. */
+void arch_irq_enable(void)
+{}
+
+/** Nothing: the test has no interrupt flag. */
+void arch_irq_disable(void)
+{}
+
+/** Nothing: no tick asks for a switch. */
+void sched_take_preempt(void)
 {}
 
 /** Nothing: the test has no address space that counts its resident pages. */
@@ -383,10 +422,53 @@ void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *nam
     (void)name;
 }
 
+/** Nothing: the model has no big lock to leave out of an entry. */
+void exception_unlock(uint8_t vector)
+{
+    (void)vector;
+}
+
+/** Nothing: the model's address spaces live as long as the test. */
+void mm_get(struct mm *mm)
+{
+    (void)mm;
+}
+
+/** Nothing, as `mm_get`. */
+void mm_put(struct mm *mm)
+{
+    (void)mm;
+}
+
+/** Release the files whose last region went, as mm.c's does with no lock
+ * held. */
+void mm_reap(void)
+{
+    vm_file_reap();
+}
+
+/** 0: memory is never short. */
+int mem_short(void)
+{
+    return 0;
+}
+
 /** Nothing. */
 void terminate_current_process(int32_t signo)
 {
     (void)signo;
+}
+
+/** `vm_resolve_in` as the fault handler calls it, with `mm`'s regions' lock
+ * held to read once, which a file's or a device's fill lets go. */
+static int resolve_held(struct mm *mm, uintptr_t addr, int write, uintptr_t as_limit)
+{
+    int rc;
+
+    mmap_read_lock(mm);
+    rc = vm_resolve_in(mm, addr, write, as_limit);
+    mmap_unlock(mm);
+    return rc;
 }
 
 /** Nothing: memory is never short. */
@@ -536,7 +618,7 @@ static void fault_rows(void)
     check(dev_obj.puts == 0 && dev_obj.refs == 1, "the object keeps the mapping's reference");
 
     check(pte_of(&dir_a, VA_DEV) == 0, "nothing is mapped before the first touch");
-    check(vm_resolve_in(&mm_a, VA_DEV + PAGE_SIZE + 8, 1, ~(uintptr_t)0) == 1,
+    check(resolve_held(&mm_a, VA_DEV + PAGE_SIZE + 8, 1, ~(uintptr_t)0) == 1,
           "a write to the device range faults in");
     e = pte_of(&dir_a, VA_DEV + PAGE_SIZE);
     check(PTE_ADDR(e) == (DEV_FRAME + 1) * PAGE_SIZE && (e & PTE_NOCACHE) == PTE_NOCACHE &&
@@ -545,17 +627,17 @@ static void fault_rows(void)
     check(paging_user_phys(&dir_a, VA_DEV + PAGE_SIZE + 8) == (DEV_FRAME + 1) * PAGE_SIZE + 8,
           "a read of the mapping reaches the device's frame");
 
-    check(vm_resolve_in(&mm_a, VA_RAM + 2 * PAGE_SIZE, 0, ~(uintptr_t)0) == 1,
+    check(resolve_held(&mm_a, VA_RAM + 2 * PAGE_SIZE, 0, ~(uintptr_t)0) == 1,
           "a read of the object's frames faults in");
     e = pte_of(&dir_a, VA_RAM + 2 * PAGE_SIZE);
     check(PTE_ADDR(e) == ram_obj.frame[2] && (e & PTE_NOCACHE) == PTE_WC && !(e & PTE_W),
           "the object's page is its frame, write-combining and read-only as its region");
     check(frame_count(ram_obj.frame[2]) == 2, "the mapping holds a reference on a counted frame");
-    check(vm_resolve_in(&mm_a, VA_RAM + 2 * PAGE_SIZE, 1, ~(uintptr_t)0) == 0,
+    check(resolve_held(&mm_a, VA_RAM + 2 * PAGE_SIZE, 1, ~(uintptr_t)0) == 0,
           "a write to a read-only device region is refused");
 
     pat_wc = 0;
-    check(vm_resolve_in(&mm_a, VA_RAM + 3 * PAGE_SIZE, 0, ~(uintptr_t)0) == 1 &&
+    check(resolve_held(&mm_a, VA_RAM + 3 * PAGE_SIZE, 0, ~(uintptr_t)0) == 1 &&
               (pte_of(&dir_a, VA_RAM + 3 * PAGE_SIZE) & PTE_NOCACHE) == PTE_NOCACHE,
           "without write-combining the page is uncached");
     pat_wc = 1;
@@ -604,7 +686,7 @@ static void fork_rows(void)
     vma_t *r;
 
     check(map_obj(&mm_a.vm, VA_DF, 2, RW, &ram_obj, 0) == 0 &&
-              vm_resolve_in(&mm_a, VA_DF, 1, ~(uintptr_t)0) == 1 &&
+              resolve_held(&mm_a, VA_DF, 1, ~(uintptr_t)0) == 1 &&
               frame_count(ram_obj.frame[0]) == 2,
           "a second mapping of the object faults in, cached");
     check((pte_of(&dir_a, VA_DF) & PTE_NOCACHE) == 0, "a cached device page has no cache bits");
@@ -643,9 +725,9 @@ static void zap_rows(void)
 {
     isr_params_t params;
 
-    check(vm_resolve_in(&mm_a, VA_DEV, 0, ~(uintptr_t)0) == 1 &&
-              vm_resolve_in(&mm_b, VA_DEV, 0, ~(uintptr_t)0) == 1 &&
-              vm_resolve_in(&mm_b, VA_DEV + 2 * PAGE_SIZE, 0, ~(uintptr_t)0) == 1,
+    check(resolve_held(&mm_a, VA_DEV, 0, ~(uintptr_t)0) == 1 &&
+              resolve_held(&mm_b, VA_DEV, 0, ~(uintptr_t)0) == 1 &&
+              resolve_held(&mm_b, VA_DEV + 2 * PAGE_SIZE, 0, ~(uintptr_t)0) == 1,
           "both spaces fault device pages in");
     paging_zap_device(&dev_obj, 1, 1);
     check(pte_of(&dir_a, VA_DEV) != 0 && pte_of(&dir_a, VA_DEV + PAGE_SIZE) == 0 &&
@@ -661,7 +743,7 @@ static void zap_rows(void)
               pte_of(&dir_a, VA_RAM + 3 * PAGE_SIZE) == 0 &&
               frame_count((RAM_FRAME0 + 2) * PAGE_SIZE) == 1,
           "a zap to the object's end unmaps its pages and drops their references");
-    check(vm_resolve_in(&mm_a, VA_RAM + 2 * PAGE_SIZE, 0, ~(uintptr_t)0) == 1 &&
+    check(resolve_held(&mm_a, VA_RAM + 2 * PAGE_SIZE, 0, ~(uintptr_t)0) == 1 &&
               PTE_ADDR(pte_of(&dir_a, VA_RAM + 2 * PAGE_SIZE)) == ram_obj.frame[2] &&
               frame_count(ram_obj.frame[2]) == 2,
           "a moved page faults in at its new frame");
@@ -693,7 +775,7 @@ static void zap_rows(void)
     check(sent_signo == 0 && proc_a.fault_retry && !proc_a.bus_fault && pte_of(&dir_a, VA_RAM) == 0,
           "an object that cannot give the page yet: no signal, nothing mapped, the access to run "
           "again");
-    check(vm_resolve_in(&mm_a, VA_RAM, 0, ~(uintptr_t)0) == 0,
+    check(resolve_held(&mm_a, VA_RAM, 0, ~(uintptr_t)0) == 0,
           "and the kernel's own resolution of it fails");
     ram_obj.busy = 0;
 }
@@ -719,6 +801,56 @@ static void exit_rows(void)
     check(frame_count((RAM_FRAME0 + 0) * PAGE_SIZE) == 1 && frame_count(ram_obj.frame[2]) == 1 &&
               frame_count((RAM_FRAME0 + 3) * PAGE_SIZE) == 1,
           "every counted frame is back to the object's own reference");
+}
+
+/* The frames of the index rows: 40 groups, past the 32 that one word of the
+ * index's bits covers. */
+#define INDEX_FRAMES (FRAME_GROUP * 40u)
+
+/**
+ * The index of the free frames (`frame_index_build`), on a table of its own
+ * with every frame taken but one in group 37 and one in group 39: the
+ * search up passes the 37 groups with none, a word of 32 at a time, and
+ * finds the first; the search down from the top finds the second, and from
+ * there the first, passing group 38; a frame taken empties its group and
+ * clears its bit, so that the search up goes on to the next group with
+ * one; a frame put back is found again; and a search with none left in its
+ * range answers its end.
+ */
+static void index_rows(void)
+{
+    uint32_t *saved = _frames;
+    size_t saved_number = _frames_number;
+    uintptr_t first = 37u * FRAME_GROUP + 5u, last = 39u * FRAME_GROUP + 60u, i;
+
+    _frames_number = INDEX_FRAMES;
+    _frames = calloc(frame_index_offset() + frame_index_bytes(), 1);
+    _frame_group_bits = _frames + frame_index_offset() / sizeof(uint32_t);
+    _frame_group_free = (uint8_t *)(_frame_group_bits + frame_index_words());
+    for (i = 0; i < INDEX_FRAMES; i++) {
+        _frames[i] = i != first && i != last;
+    }
+    frame_index_build();
+    check(frame_next_free(0, INDEX_FRAMES) == first,
+          "the index finds the first free frame past 37 groups with none");
+    check(frame_prev_free(1, INDEX_FRAMES) == last, "and the last from the top");
+    check(frame_prev_free(1, last) == first, "and from there the first, passing a group");
+    check(frame_next_free(first + 1u, last) == last, "and none between them");
+    _frames[first] = 1;
+    frame_index_take(first);
+    check(_frame_group_free[37] == 0 && !(_frame_group_bits[1] & (1u << 5)),
+          "a frame taken empties its group and clears its bit");
+    check(frame_next_free(0, INDEX_FRAMES) == last, "and the search goes on to the next group");
+    _frames[first] = 0;
+    frame_index_put(first);
+    check(frame_next_free(0, INDEX_FRAMES) == first, "a frame put back is found again");
+    check(frame_prev_free(1, first) == 0, "and none below it");
+    free(_frames);
+    _frames = saved;
+    _frames_number = saved_number;
+    _frame_group_bits = 0;
+    _frame_group_free = 0;
+    _frame_index_ready = 0;
 }
 
 /** The protection keys are off in the host test, as on a processor without
@@ -758,6 +890,7 @@ int main(void)
     _curr_dir = &dir_a;
     _kernel_dir = &dir_a;
 
+    index_rows();
     fault_rows();
     access_rows();
     fork_rows();

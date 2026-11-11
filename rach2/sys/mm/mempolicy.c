@@ -396,9 +396,12 @@ long sys_mbind(isr_params_t *params)
     if (rc != 0) {
         return rc;
     }
-    rc = current_proc->mm
-             ? range_scan(current_proc->mm, start, end, flags, pol == NULL, !(nodes[0] & 1ul))
-             : -EFAULT;
+    if (!current_proc->mm) {
+        vm_policy_put(pol);
+        return -EFAULT;
+    }
+    mmap_write_lock(current_proc->mm);
+    rc = range_scan(current_proc->mm, start, end, flags, pol == NULL, !(nodes[0] & 1ul));
     if (rc >= 0) {
         long failed = rc;
 
@@ -407,6 +410,7 @@ long sys_mbind(isr_params_t *params)
             rc = -EIO;
         }
     }
+    mmap_unlock(current_proc->mm);
     vm_policy_put(pol);
     return rc;
 }
@@ -464,10 +468,11 @@ long sys_set_mempolicy_home_node(isr_params_t *params)
         SC_ARG(params, 2) >= NR_NODE_IDS || end < start) {
         return -EINVAL;
     }
-    if (end == start) {
+    if (end == start || !mm) {
         return 0;
     }
-    while (mm && at < end && (r = vm_lower(&mm->vm, at)) != NULL && r->start < end) {
+    mmap_write_lock(mm);
+    while (at < end && (r = vm_lower(&mm->vm, at)) != NULL && r->start < end) {
         uintptr_t s = r->start > at ? r->start : at;
         struct vm_policy *pol;
 
@@ -476,11 +481,13 @@ long sys_set_mempolicy_home_node(isr_params_t *params)
             continue;
         }
         if (r->policy->mode != MPOL_BIND && r->policy->mode != MPOL_PREFERRED_MANY) {
-            return -EOPNOTSUPP;
+            rc = -EOPNOTSUPP;
+            break;
         }
         pol = kmalloc(sizeof(*pol));
         if (!pol) {
-            return -ENOMEM;
+            rc = -ENOMEM;
+            break;
         }
         *pol = *r->policy;
         pol->refs = 1;
@@ -491,6 +498,7 @@ long sys_set_mempolicy_home_node(isr_params_t *params)
             break;
         }
     }
+    mmap_unlock(mm);
     return rc;
 }
 
@@ -502,10 +510,14 @@ long sys_set_mempolicy_home_node(isr_params_t *params)
  */
 static int32_t mempolicy_page_node(uintptr_t addr)
 {
-    const vma_t *vma = vm_find(&current_proc->mm->vm, addr);
+    const vma_t *vma;
+    int ok;
 
-    if (!vma || (vma->prot & (VM_PROT_IO | VM_PROT_SECRET)) ||
-        !vm_prefault_range(addr & ~(uintptr_t)(PAGE_SIZE - 1u), 1, 0)) {
+    mmap_read_lock(current_proc->mm);
+    vma = vm_find(&current_proc->mm->vm, addr);
+    ok = vma && !(vma->prot & (VM_PROT_IO | VM_PROT_SECRET));
+    mmap_unlock(current_proc->mm);
+    if (!ok || !vm_prefault_range(addr & ~(uintptr_t)(PAGE_SIZE - 1u), 1, 0)) {
         return -EFAULT;
     }
     return 0;
@@ -599,15 +611,21 @@ long sys_get_mempolicy(isr_params_t *params)
         return -EINVAL;
     }
     if (flags & MPOL_F_ADDR) {
-        vma = current_proc->mm ? vm_find(&current_proc->mm->vm, addr) : NULL;
+        if (!current_proc->mm) {
+            return -EFAULT;
+        }
+        mmap_read_lock(current_proc->mm);
+        vma = vm_find(&current_proc->mm->vm, addr);
+        if (vma) {
+            policy_report(mempolicy_at(vma, addr), &pval, &nodes);
+        }
+        mmap_unlock(current_proc->mm);
         if (!vma) {
             return -EFAULT;
         }
-        pol = mempolicy_at(vma, addr);
     } else if (addr != 0 && !(flags & MPOL_F_MEMS_ALLOWED)) {
         return -EINVAL;
-    }
-    if (!(flags & MPOL_F_MEMS_ALLOWED)) {
+    } else if (!(flags & MPOL_F_MEMS_ALLOWED)) {
         policy_report(pol, &pval, &nodes);
     }
     if ((flags & MPOL_F_NODE) && (flags & MPOL_F_ADDR)) {
@@ -698,21 +716,31 @@ long sys_migrate_pages(isr_params_t *params)
  */
 static int32_t page_status(struct mm *mm, uintptr_t addr, int move)
 {
-    const vma_t *vma = vm_find(&mm->vm, addr);
+    const vma_t *vma;
+    int32_t rc;
 
+    mmap_read_lock(mm);
+    vma = vm_find(&mm->vm, addr);
     if (!vma || (move && (vma->prot & VM_PROT_IO))) {
-        return -EFAULT;
+        rc = -EFAULT;
+    } else {
+        switch (paging_user_page(mm->dir, addr)) {
+        case PAGING_PAGE_FRAME:
+            rc = 0;
+            break;
+        case PAGING_PAGE_NONE:
+            rc = -ENOENT;
+            break;
+        case PAGING_PAGE_DEVICE:
+            rc = move ? -EFAULT : -ENOENT;
+            break;
+        default:
+            rc = -EFAULT;
+            break;
+        }
     }
-    switch (paging_user_page(mm->dir, addr)) {
-    case PAGING_PAGE_FRAME:
-        return 0;
-    case PAGING_PAGE_NONE:
-        return -ENOENT;
-    case PAGING_PAGE_DEVICE:
-        return move ? -EFAULT : -ENOENT;
-    default:
-        return -EFAULT;
-    }
+    mmap_unlock(mm);
+    return rc;
 }
 
 /** Read entry `i` of move_pages' array of addresses at `upages`, of the

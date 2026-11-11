@@ -62,11 +62,12 @@ int32_t vfio_hw_fd_new(const struct file_ops *ops, void *priv)
     if (fd < 0) {
         return fd;
     }
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_ANON;
     e->ops = ops;
     e->priv = priv;
     e->flags = FD_FLAG_READ | FD_FLAG_WRITE | FD_FLAG_CLOEXEC;
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 

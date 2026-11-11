@@ -1,0 +1,6 @@
+games: result: 0ad frames 7418 seconds 150.004 fps 49.45 median 18.87 p90 26.98 p99 43.17 p99.9 91.68 max 598.30 over50 35 end window
+lenovo-games: result: 0ad-1 median 18.87 p90 26.98 p99 43.17 against Linux's 17.06 19.40 36.135: fail
+lenovo-games: result: fail
+bkl: 0ad: 180 lines of calls, samples 103090
+bkl: clock minimum back at 200 MHz
+1

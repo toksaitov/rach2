@@ -593,6 +593,9 @@ static void con_flush(void)
     dev = con.dev;
     fb = con.fb;
     drm_dev_get(dev);
+    /* A framebuffer's references and its flush are the mode lock's, which
+     * a commit on another processor may hold without the big lock. */
+    drm_modeset_lock_nointr(dev);
     drm_framebuffer_get(fb);
     r.x1 = 0;
     r.y1 = (int32_t)top;
@@ -600,6 +603,7 @@ static void con_flush(void)
     r.y2 = (int32_t)end;
     (void)drm_framebuffer_dirty(dev, fb, &r);
     drm_framebuffer_put(fb);
+    drm_modeset_unlock(dev);
     drm_dev_put(dev);
 }
 
@@ -615,11 +619,16 @@ static int con_flush_ready(void *arg)
 static process_t *con_thread;
 
 /** The worker, kdrmcon: while a shadow is in use, flush it every
- * CON_FLUSH_MS; otherwise sleep in an idle wait until one is. */
+ * CON_FLUSH_MS; otherwise sleep in an idle wait until one is. Like every
+ * kernel thread, it is not switched by the tick (`no_tick_switch`, which
+ * `setup_process_stack` sets), so a flush runs a driver's dirty
+ * path as the DIRTYFB call does, with the driver's state holding through
+ * it; it gives way where it sleeps and between flushes. */
 static void con_thread_main(void)
 {
     arch_irq_enable();
     for (;;) {
+        sched_service_point();
         con_deadline = con_shadowed() ? rtc_ticks_now() + CON_FLUSH_MS * TICK_HZ / 1000u : 0;
         current_proc->wakeup_tick = con_deadline;
         (void)wq_wait_event_idle(&con_wake, con_flush_ready, NULL);
@@ -855,7 +864,9 @@ void drm_client_dev_unregister(struct drm_device *dev)
     kfree(con.shadow);
     con.shadow = NULL;
     con.shadow_bytes = 0;
+    drm_modeset_lock_nointr(dev);
     drm_framebuffer_put(con.fb);
+    drm_modeset_unlock(dev);
     drm_gem_object_put(con.obj);
     con.fb = NULL;
     con.obj = NULL;

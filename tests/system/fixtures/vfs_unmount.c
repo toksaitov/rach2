@@ -292,6 +292,26 @@ static void vfs_mount_hide(struct vfs_mount *m)
     failures++;
 }
 
+/** Put one of a mount's references, which vfs.c counts atomically; the
+ * fixture has one thread. Returns the count left. */
+static uint32_t vfs_mount_put(struct vfs_mount *m)
+{
+    return (uint32_t)--m->refs;
+}
+
+/** Store `value` at `*p` and return what was there, as the kernel's full
+ * barrier exchange does for one thread. */
+static unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
+{
+    unsigned int old = *p;
+
+    *p = value;
+    return old;
+}
+
+/* The tree's sequence, which an unmount moves. */
+static uint32_t tree_seq;
+
 static int unmount_mount(struct vfs_mount *m);
 
 #include "unmount.inc"

@@ -95,7 +95,7 @@ struct setting {
  * processor; it is taken with interrupts off, after the big lock, and
  * before the locks of the wait queues and the run queues a firing takes.
  */
-static struct spinlock timer_lock = SPINLOCK_INIT;
+static struct spinlock timer_lock = SPINLOCK_INIT_NAMED("timer_lock");
 static struct ktimer *armed;
 static struct ktimer *cpu_armed;
 
@@ -305,7 +305,7 @@ static void timerfd_close(fd_entry_t *e)
 }
 
 static const struct file_ops timerfd_ops = {timerfd_read,  NULL, timerfd_poll, NULL,
-                                            timerfd_close, NULL, NULL};
+                                            timerfd_close, NULL, NULL,         0};
 
 /** The timer of the caller's descriptor `fd`, or NULL when `fd` is not open
  * or not a timerfd. */
@@ -343,7 +343,7 @@ long sys_timerfd_create(struct isr_params *params)
         kfree(t);
         return fd;
     }
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_ANON;
     e->ops = &timerfd_ops;
     e->priv = t;
@@ -351,6 +351,7 @@ long sys_timerfd_create(struct isr_params *params)
     if (flags & TFD_NONBLOCK) {
         e->ofd->status_flags |= OFD_NONBLOCK;
     }
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 

@@ -3,6 +3,7 @@
 #define _PERCPU_H_
 
 #include "../arch/arch.h"
+#include "../lib/lockdep.h"
 
 struct process;
 struct page_dir;
@@ -32,14 +33,18 @@ struct page_dir;
  * `this_cpu()` is the running processor's record, the entry of `cpu_table`
  * that `arch_cpu_id()` gives, and `current_proc` is its process. A processor
  * changes its own `current`, `space` and depths and no other's, so code that
- * runs on a processor reads that processor's. Another processor reads them
- * only while it holds the big lock, which the owner holds whenever it
- * changes them, except when `smp_service` gives up `space` at a request
- * whose sender waits for it; and it writes only the requests (proc/smp.c).
+ * runs on a processor reads that processor's. The owner changes `current`
+ * with the run queues' lock held (sched.c), and another processor that must
+ * see it settled reads it under that lock. `space` changes at the switch
+ * and when `smp_service` gives it up at a request whose sender waits for
+ * it; another processor reads it to choose whom a shootdown interrupts
+ * (proc/smp.c). Another processor writes only the requests.
  */
 struct percpu {
     struct process *current;                    /* the process this processor runs */
     struct process *idle;                       /* what it runs when nothing else is ready */
+    struct process *switch_prev;                /* the thread a switch here left, for its tail */
+    uint32_t bkl_frames;                        /* `bkl_frames` while it has no current thread */
     struct page_dir *space;                     /* the page directory it translates through */
     int bkl_depth;                              /* entries the big lock covers; >0: it holds it */
     volatile int online;                        /* started, and taking work */
@@ -53,8 +58,9 @@ struct percpu {
     volatile unsigned int barrier_request;      /* pass a barrier: SMP_BARRIER_ */
     volatile unsigned int stopped;              /* it took the stop: no more writes */
     const struct page_dir *volatile space_drop; /* a `space` to give up for the kernel's */
+    void (*volatile call_fn)(void *);           /* a function to run here (`smp_call`) */
+    void *call_arg;                             /* its argument */
     volatile int space_stale;                   /* reload `space`: a shootdown skipped it */
-    uint32_t kernel_gen;                        /* the kernel mappings it last flushed for */
     volatile uint32_t ticks_seq;                /* odd while its tick changes the counts */
     volatile uint64_t idle_ticks;               /* ticks that found it in an idle wait */
     volatile uint64_t busy_ticks;               /* ticks that found it running code */
@@ -75,6 +81,16 @@ struct percpu {
     uint32_t wake_bkl_total;                    /* completed lock waits, microseconds modulo 2^32 */
     uint32_t wake_irq_start;  /* latest serviced timer interrupt before its lock */
     uint32_t wake_irq_locked; /* the same interrupt after taking its lock */
+#ifdef RACH2_LOCKDEP
+    /* The lock-order checker's (lib/lockdep.c): the spinlocks this
+     * processor holds, in interrupts and out, since a spinlock is held
+     * across no switch; the sleeping locks taken before it runs a process;
+     * and how deep it is in the checker, which takes no note of the locks
+     * it takes itself. */
+    struct lockdep_held lockdep_spin;
+    struct lockdep_held lockdep_sleep;
+    unsigned int lockdep_busy;
+#endif
 };
 
 extern struct percpu cpu_table[NR_CPUS];

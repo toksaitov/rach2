@@ -135,6 +135,7 @@ case ownprobe root:krffs ids:1000,2000,3000,4000 -- ownprobe
 case packetprobe peer:network ids:1000 -- packetprobe machine=native
 case pathcanon root:krffs -- pathcanon
 case permprobe root:krffs ids:1000 -- permprobe
+case protectprobe tmpfs:1M ids:1000,1001 -- protectprobe dir=tmpfs
 # machine=native measures the times by CLOCK_MONOTONIC; it leaves out no
 # check.
 case pingtest alone peer:network -- pingtest machine=native

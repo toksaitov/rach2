@@ -6,6 +6,8 @@
  * host-deps: rach2/sys/mm/pin.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/mmap_lock_host.c
+ * host-deps: tests/host/compat/atomic_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  * host-cflags: -U__UINTPTR_TYPE__ -D__UINTPTR_TYPE__=unsigned
  * host-cflags: -U__INTPTR_TYPE__ -D__INTPTR_TYPE__=int
@@ -64,8 +66,8 @@ static void map_rows(void)
 
     check(vm_insert(&mm_a.vm, WIN_BASE, WIN_BASE + 4 * P, RW, VM_ANON) == 0, "a region");
     before = shootdowns;
-    check(vm_resolve_in(&mm_a, WIN_BASE, 1, ~(uintptr_t)0) == 1 &&
-              vm_resolve_in(&mm_a, WIN_BASE + P, 0, ~(uintptr_t)0) == 1,
+    check(resolve_held(&mm_a, WIN_BASE, 1, ~(uintptr_t)0) == 1 &&
+              resolve_held(&mm_a, WIN_BASE + P, 0, ~(uintptr_t)0) == 1,
           "two pages fault in");
     check(alloc_user_page(&dir_a, WIN_BASE + 2 * P) != 0, "a page is allocated");
     check(shootdowns == before, "a page where none was costs no shootdown");
@@ -120,7 +122,7 @@ static void protect_fork_rows(void)
 
     check(vm_insert(&mm_a.vm, WIN_BASE, end, RW, VM_ANON) == 0, "a region of 8 pages");
     for (va = WIN_BASE; va < end; va += P) {
-        check(vm_resolve_in(&mm_a, va, 1, ~(uintptr_t)0) == 1, "a page faults in");
+        check(resolve_held(&mm_a, va, 1, ~(uintptr_t)0) == 1, "a page faults in");
     }
     before = shootdowns;
     paging_protect_range(&dir_a, WIN_BASE, end, VM_PROT_READ);

@@ -12,8 +12,10 @@
  * process, acts and sets it back. A wait with no step left fails the test,
  * since nothing would ever wake the taker. The clock is a variable a row
  * moves, and a disk wait is a step of `disk_waits`, as the block layer
- * counts one. Each panic row runs the violating call in a forked child,
- * whose exit status says whether the panic came and named the rule.
+ * counts one. The spinlocks are counted, so that a row sees that none is
+ * held across a wait or after a take or a give. Each panic row runs the
+ * violating call in a forked child, whose exit status says whether the
+ * panic came and named the rule.
  */
 
 #include <setjmp.h>
@@ -85,6 +87,28 @@ uint32_t timer_now_us(void)
     return now_us;
 }
 
+/** The cycle counter: the clock's microseconds, a cycle each. */
+uint64_t arch_cycles(void)
+{
+    return timer_now_us();
+}
+
+/** A cycle is a microsecond here. */
+uint64_t timer_cycles_us(uint64_t cycles)
+{
+    return cycles;
+}
+
+/* Whether the processors' counters agree, which a row sets: a lock taken
+ * while they do is stamped by the counter, and otherwise by the clock. */
+static int cycles_agree = 1;
+
+/** Whether the processors' counters agree: `cycles_agree`. */
+int timer_cycles_agree(void)
+{
+    return cycles_agree;
+}
+
 /** Clear a wait queue. */
 void wait_queue_init(wait_queue_t *wq)
 {
@@ -99,6 +123,28 @@ void wq_wake_all(wait_queue_t *wq)
 {
     (void)wq;
     wakes++;
+}
+
+/* The spinlocks held now, a lock's own and the records', and the waits
+ * that began with one held, which on the machine would sleep under it. */
+static int spin_depth, spin_at_wait;
+
+/** Take `lock` with interrupts off: one thread, so a lock already held is
+ * the same path taking it twice, which on the machine spins for ever. */
+uint32_t spin_lock_irqsave(struct spinlock *lock)
+{
+    check(!lock->locked, "no spinlock is taken twice");
+    lock->locked = 1;
+    spin_depth++;
+    return 0;
+}
+
+/** Give `lock` back. */
+void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
+{
+    (void)flags;
+    lock->locked = 0;
+    spin_depth--;
 }
 
 /* The steps the waits run, in order, and the next one. */
@@ -121,6 +167,9 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 
     (void)wq;
     waits++;
+    if (spin_depth != 0) {
+        spin_at_wait++;
+    }
     if (cond(arg)) {
         return 0;
     }
@@ -234,6 +283,32 @@ static void row_order(void)
     sleep_lock_give(&lock);
 }
 
+/** A step as process A: give `lock` back and ask for nothing more. */
+static void a_gives_once(void)
+{
+    cpu_table[0].current = &proc_a;
+    sleep_lock_give(&lock);
+}
+
+/** The lock's spinlock keeps its state only inside a take or a give: B
+ * waits for A with no spinlock held, has the lock once A gives it, and no
+ * spinlock is left held after any row. */
+static void row_spin(void)
+{
+    script_clear();
+    sleep_lock_init(&lock, &rec_one, 0);
+    cpu_table[0].current = &proc_a;
+    sleep_lock_take(&lock);
+    check(spin_depth == 0 && !lock.spin.locked, "a take lets the lock's spinlock go");
+    script(a_gives_once);
+    cpu_table[0].current = &proc_b;
+    sleep_lock_take(&lock);
+    check(waits == 1 && spin_at_wait == 0 && sleep_lock_held(&lock),
+          "a taker waits with no spinlock held and has the lock after the give");
+    sleep_lock_give(&lock);
+    check(spin_depth == 0 && !lock.spin.locked, "a give lets every spinlock go");
+}
+
 /** A file lock raises its holder's file_locks once for a hold, whatever
  * its depth, and only its holder's. */
 static void row_file_locks(void)
@@ -257,7 +332,10 @@ static void row_file_locks(void)
 }
 
 /** The record keeps holds that crossed a disk wait, the longest with its
- * holder, and passes over the rest. */
+ * holder, and passes over the rest. A hold stamped by the clock, taken
+ * while the processors' counters disagree, is measured by the clock's
+ * difference across its wrap, and one stamped by the counter that reads the
+ * counter below its stamp, as on another processor, reads 0. */
 static void row_record(void)
 {
     script_clear();
@@ -295,14 +373,26 @@ static void row_record(void)
     check(rec_one.crossings == 2 && rec_one.longest_us == 5000 && rec_one.longest_pid == proc_a.pid,
           "a shorter hold is counted and does not replace the longest");
 
+    cycles_agree = 0;
     now_us = 0xfffff000u;
     sleep_lock_take(&lock);
     proc_b.disk_waits++;
     now_us = 0x1000u;
     sleep_lock_give(&lock);
-    check(rec_one.crossings == 3 && rec_one.longest_us == 0x2000u &&
+    check(lock.taken_by_cycles == 0 && rec_one.crossings == 3 && rec_one.longest_us == 0x2000u &&
               rec_one.longest_pid == proc_b.pid && contains(rec_one.longest_comm, "reader"),
-          "a hold across the clock's wrap is measured by its difference");
+          "a hold the clock stamped is measured across its wrap by its difference");
+
+    cycles_agree = 1;
+    cpu_table[0].current = &proc_a;
+    now_us = 0x5000u;
+    sleep_lock_take(&lock);
+    proc_a.disk_waits++;
+    now_us = 0x4000u;
+    sleep_lock_give(&lock);
+    check(lock.taken_by_cycles == 1 && rec_one.crossings == 4 && rec_one.longest_us == 0x2000u &&
+              rec_one.longest_pid == proc_b.pid,
+          "a counter read below the stamp the counter made reads 0");
 }
 
 /** Each record is listed once, in the order a lock first named it, and a
@@ -396,6 +486,9 @@ int main(void)
     row_record();
     row_listing();
     row_no_process();
+    row_spin();
+    check(spin_at_wait == 0 && spin_depth == 0,
+          "no row waits, or ends, with a spinlock held, the records' among them");
     panic_row(give_free, 0, "does not hold", "a give of a free lock panics");
     panic_row(give_other, 0, "does not hold", "a give by a thread that does not hold it panics");
     panic_row(assert_other, 0, "a change outside the lock",

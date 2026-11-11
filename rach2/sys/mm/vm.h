@@ -149,8 +149,9 @@ typedef enum {
 /*
  * A file a region maps. The record is the first member of its owner's own,
  * which keeps the open file; `refs` counts the regions that map it and the
- * faults reading it, and the last one to go puts the file on the list that
- * `vm_file_reap` empties, calling `release`. A private mapping's `fill`
+ * faults reading it, each change made in one atomic step, and the last one
+ * to go puts the file on the list that `vm_file_reap` empties, under a lock
+ * of its own, calling `release`. A private mapping's `fill`
  * reads the file's page `pgoff` into the frame `phys`, with zeros past the
  * end of the file: 0 when the file cache had the page, 1 when it was read
  * through the file system, which makes the fault a major one, or -1 when
@@ -415,6 +416,10 @@ void vm_file_get(struct vm_file *f);
  * the file but puts it on the list `vm_file_reap` empties, so that a change
  * to the regions never sleeps part way through. */
 void vm_file_put(struct vm_file *f);
+
+/** Whether a file waits for `vm_file_reap`; read without the list's lock,
+ * as a hint. */
+int vm_file_dead(void);
 
 /**
  * Release every file whose last reference went. A release may sleep while

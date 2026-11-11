@@ -1,5 +1,6 @@
 /* PI futex operations on the real futex code over modeled user pages.
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c rach2/sys/tick.c
+ * host-deps: tests/host/compat/mmap_lock_host.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
  */
 #define main ordinary_futex_rows
@@ -14,7 +15,7 @@ static struct futex_sleeper high_s, low_s;
 /** Reset all queues and give four threads one address space. */
 static void pi_reset(void)
 {
-    k_memset(_waiters, 0, sizeof(_waiters));
+    k_memset(_futex_hb, 0, sizeof(_futex_hb));
     k_memset(user, 0, sizeof(user));
     k_memset(&self, 0, sizeof(self));
     k_memset(&owner, 0, sizeof(owner));
@@ -54,7 +55,7 @@ static struct futex_pi *pi_file(process_t *task, struct futex_q *q, struct futex
     CHECK(rc == 0, "attach contended PI waiter");
     kfree(spare);
     if (rc == 0) {
-        futex_enqueue(q);
+        futex_enqueue(q, futex_hash(q->space, q->uaddr));
         futex_pi_recalculate();
     }
     return q->pi;
@@ -63,7 +64,7 @@ static struct futex_pi *pi_file(process_t *task, struct futex_q *q, struct futex
 /** Remove a synthetic waiter and its reference after its test. */
 static void pi_unfile(struct futex_q *q)
 {
-    futex_unlink(q, futex_bucket(q->space, q->uaddr));
+    (void)futex_unqueue_q(q);
     q->task->pi_blocked = NULL;
     pi_put(q->pi);
     futex_pi_recalculate();
@@ -250,7 +251,7 @@ static void pi_requeue_priority_rows(void)
         q->target_key = 32;
         q->requeue = 1;
         q->bitset = FUTEX_MATCH_ANY;
-        futex_enqueue(q);
+        futex_enqueue(q, futex_hash(q->space, q->uaddr));
     }
     CHECK(futex_cmp_requeue_pi(64, 1, 1, 32, 9, FUTEX_PRIVATE_FLAG) == 2,
           "requeue transfers one acquisition and one blocked waiter");

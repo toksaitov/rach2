@@ -56,6 +56,37 @@ struct file_ops {
      * -EINVAL for a negative result or an unknown `whence`, -ESPIPE for an
      * object with no position. */
     int64_t (*llseek)(fd_entry_t *e, int64_t offset, int whence);
+    /* FILE_OPS_* below; 0 for a table that leaves them out. */
+    uint32_t flags;
 };
+
+/*
+ * The operations are called without the big lock: `read`, `write`, `poll`,
+ * `ioctl`, `close` and `llseek` of a descriptor of this table run on any
+ * processor beside any other call, under the object's own locks, and so
+ * does the release of its last descriptor when its description names no
+ * file. The system calls take the big lock around them for every table
+ * without it (`file_ops_lock`), as Linux's `unlocked_ioctl` once replaced
+ * `ioctl` under the BKL one driver at a time.
+ */
+#define FILE_OPS_UNLOCKED 1u
+
+/** Whether a call on `e`, and the release of its last descriptor, may run
+ * without the big lock: its operations are marked FILE_OPS_UNLOCKED, it is
+ * no socket, its description names no file, device node or synthetic node,
+ * and no operation of it moves the description's offset. */
+int file_ops_unlocked(const fd_entry_t *e);
+
+/** Take the big lock for a call on `e` unless `file_ops_unlocked` says
+ * otherwise, and return whether it was taken, for `file_ops_unlock`. */
+int file_ops_lock(const fd_entry_t *e);
+
+/** `file_ops_lock` for descriptor `fd` of the caller's table, looked up and
+ * held for the call (`fd_get`); a descriptor not open takes the lock, and
+ * the call reports its -EBADF under it. */
+int fd_call_lock(int fd);
+
+/** Give back the big lock `file_ops_lock` took when `taken` says so. */
+void file_ops_unlock(int taken);
 
 #endif /* _FILE_H_ */

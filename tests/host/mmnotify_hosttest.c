@@ -7,6 +7,8 @@
  * host-deps: rach2/sys/mm/pressure.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/mmap_lock_host.c
+ * host-deps: tests/host/compat/atomic_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  * host-cflags: -U__UINTPTR_TYPE__ -D__UINTPTR_TYPE__=unsigned
  * host-cflags: -U__INTPTR_TYPE__ -D__INTPTR_TYPE__=int
@@ -25,7 +27,10 @@
  * and a device's taking back of its pages (MMN_TRUNCATE). Below the low
  * mark, reclaim asks the shrinkers, the last registered first, for what the
  * caches did not give, until the high mark, and says whether they may
- * sleep; above it no one is asked.
+ * sleep; above it no one is asked. Two faults of one page interleaved
+ * across a file's fill, which lets the regions' lock go, map it once, and a
+ * device's page taken back during the device's call is asked for again;
+ * `--lock-only` runs those two rows alone.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -221,8 +226,8 @@ static void paging_rows(void)
     vma_t vma;
 
     check(vm_insert(&mm_a.vm, VA, VA + 4 * P, RW, VM_ANON) == 0 &&
-              vm_resolve_in(&mm_a, VA, 1, ~(uintptr_t)0) == 1 &&
-              vm_resolve_in(&mm_a, VA + P, 1, ~(uintptr_t)0) == 1,
+              resolve_held(&mm_a, VA, 1, ~(uintptr_t)0) == 1 &&
+              resolve_held(&mm_a, VA + P, 1, ~(uintptr_t)0) == 1,
           "two pages of a private region are written");
     k_memset(&vma, 0, sizeof(vma));
     vma.end = 4 * P;
@@ -233,7 +238,7 @@ static void paging_rows(void)
                   0,
           "a device's four pages are mapped");
     vm_file_put(vma.file);
-    check(vm_resolve_in(&mm_a, VD + 2 * P, 1, ~(uintptr_t)0) == 1, "a device page faults in");
+    check(resolve_held(&mm_a, VD + 2 * P, 1, ~(uintptr_t)0) == 1, "a device page faults in");
 
     mmn_register(&mm_a, &ra, VA, VA + 4 * P, &ops, NULL);
     mmn_register(&mm_a, &rd, VD, VD + 4 * P, &ops, NULL);
@@ -242,12 +247,12 @@ static void paging_rows(void)
     check(ncalls == 1 && had(0, &ra, MMN_PROTECT, VA, VA + 4 * P),
           "the fork tells the private region's write-protection, and not the shared device's");
     ncalls = 0;
-    check(vm_resolve_in(&mm_a, VA + P, 1, ~(uintptr_t)0) == 1 &&
+    check(resolve_held(&mm_a, VA + P, 1, ~(uintptr_t)0) == 1 &&
               had(0, &ra, MMN_COW, VA + P, VA + 2 * P) && ncalls == 1,
           "a write to a shared page copies it and tells its page");
-    check(vm_resolve_in(&mm_b, VA, 1, ~(uintptr_t)0) == 1 && ncalls == 1,
+    check(resolve_held(&mm_b, VA, 1, ~(uintptr_t)0) == 1 && ncalls == 1,
           "a copy in the child tells the parent's range nothing");
-    check(vm_resolve_in(&mm_a, VA, 1, ~(uintptr_t)0) == 1 && ncalls == 1 &&
+    check(resolve_held(&mm_a, VA, 1, ~(uintptr_t)0) == 1 && ncalls == 1 &&
               !(pte_of(&dir_a, VA) & PTE_COW),
           "a write to a page now the parent's alone makes no copy and tells nothing");
 
@@ -391,11 +396,99 @@ uint32_t fpu_pkru(void)
 }
 
 /** Run every row; 0 when each passes, 1 otherwise. */
-int main(void)
+/* ---- faults that let the regions' lock go across a fill ---- */
+
+#define VF (WIN_BASE + 2 * SPAN)
+#define VZ (WIN_BASE + 3 * SPAN)
+
+static int race_fills, race_inner;
+
+/**
+ * The fill of a file whose first read lets a second fault of the same page
+ * run meanwhile, as another thread's would while the first sleeps in the
+ * disk with the regions' lock let go: the second backs the page first.
+ */
+static int race_fill(struct vm_file *f, uint32_t pgoff, uintptr_t phys)
+{
+    (void)f;
+    (void)pgoff;
+    (void)phys;
+    if (race_fills++ == 0) {
+        race_inner = resolve_held(&mm_a, VF, 0, ~(uintptr_t)0);
+    }
+    return 0;
+}
+
+static struct vm_file race_file = {1, race_fill, NULL, NULL, NULL, NULL, NULL};
+
+static int zobj, zap_calls;
+
+/** The device's page, whose first call takes the object's pages back from
+ * every space, as a driver's move of the page would on another thread
+ * between the call and the fault's mapping. */
+static int zap_page(void *obj, uint32_t pgoff, uintptr_t *phys)
+{
+    (void)obj;
+    if (zap_calls++ == 0) {
+        paging_zap_device(&zobj, 0, 4);
+    }
+    *phys = (uintptr_t)(DEV_FRAME + 2u + pgoff) * PAGE_SIZE;
+    return 0;
+}
+
+static const struct vm_device_ops zap_ops = {zap_page, dev_put, NULL};
+
+/** Two faults of one page interleaved across a file's fill map the page
+ * once, the later finding it backed and giving its own frame back; and a
+ * fault whose device's page was taken back during its call maps nothing
+ * from that call and asks again. */
+static void lock_rows(void)
+{
+    uint32_t free_before = (uint32_t)frame_free_count();
+    uint32_t zaps;
+    pte_t e;
+    vma_t vma;
+    int rc;
+
+    check(vm_insert_file(&mm_a.vm, VF, VF + 2 * P, VM_PROT_READ, VM_FILE, &race_file, 0) == 0,
+          "a file's two pages are mapped");
+    rc = resolve_held(&mm_a, VF, 0, ~(uintptr_t)0);
+    e = pte_of(&dir_a, VF);
+    check(rc == 1 && race_inner == 1 && race_fills == 2 && (e & PTE_P),
+          "two faults of one page across the fill both resolve, the page present");
+    check(frame_free_count() == free_before - 1u && frame_word(PTE_ADDR(e)) == 1u,
+          "the page is mapped once, and the frame of the fault that lost is free again");
+    check(!mmap_held(&mm_a, 0), "no hold of the regions' lock is left");
+
+    k_memset(&vma, 0, sizeof(vma));
+    vma.end = 4 * P;
+    vma.prot = RW;
+    vma.type = VM_SHARED;
+    check(vm_device_map(&vma, &zap_ops, &zobj, VM_PROT_UC) == 0 &&
+              vm_insert_file(&mm_a.vm, VZ, VZ + 4 * P, vma.prot, vma.type, vma.file, vma.pgoff) ==
+                  0,
+          "a device's four pages are mapped");
+    vm_file_put(vma.file);
+    zaps = mm_a.zaps;
+    rc = resolve_held(&mm_a, VZ, 1, ~(uintptr_t)0);
+    check(rc == 1 && zap_calls == 2 && mm_a.zaps == zaps + 1u &&
+              PTE_ADDR(pte_of(&dir_a, VZ)) == (uintptr_t)(DEV_FRAME + 2u) * PAGE_SIZE,
+          "a page taken back during the device's call is asked for again before it is mapped");
+    check(!mmap_held(&mm_a, 0), "no hold of the regions' lock is left after the zap");
+}
+
+/** Run the rows, or with `--lock-only` the faults that let the regions' lock
+ * go alone. */
+int main(int argc, char **argv)
 {
     model_start(NAME);
+    if (argc == 2 && __builtin_strcmp(argv[1], "--lock-only") == 0) {
+        lock_rows();
+        return model_end();
+    }
     notify_rows();
     paging_rows();
     shrinker_rows();
+    lock_rows();
     return model_end();
 }

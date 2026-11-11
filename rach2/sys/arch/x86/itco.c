@@ -483,7 +483,7 @@ static int32_t itco_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 }
 
 static const struct file_ops itco_ops = {NULL,       itco_write, NULL, itco_ioctl,
-                                         itco_close, NULL,       NULL};
+                                         itco_close, NULL,       NULL, 0};
 static struct devfs_node itco_node = {"watchdog", 10, 130, 0600, &itco_ops, itco_open, NULL};
 
 /**
@@ -629,7 +629,9 @@ static int feed_waiting(void *arg)
 }
 
 /** The thread watchdogd: sleep until the tick leaves a feed, then do it,
- * holding the big lock as kernel code does. */
+ * holding the big lock as kernel code does. The tick's switch waits for its
+ * next sleep (`no_tick_switch`), so a feed runs whole under the big lock,
+ * and an open never finds one half done. */
 static void itco_feeder(void)
 {
     arch_irq_enable();

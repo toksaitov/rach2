@@ -99,6 +99,18 @@ void kirq_restore(uint32_t flags)
     irq_flags = flags;
 }
 
+/** Whether the model's interrupt flag is set. */
+int kirq_enabled(void)
+{
+    return irq_flags != 0;
+}
+
+/** Nothing runs in an interrupt here. */
+int in_interrupt(void)
+{
+    return 0;
+}
+
 /** Return at once: no row waits for an interrupt. */
 void arch_idle_masked(void)
 {}
@@ -106,6 +118,12 @@ void arch_idle_masked(void)
 /** Nothing: the host model has no lockup detector. */
 void watchdog_sched(void)
 {}
+
+/** Never inside klog here: no row logs from a thread a tick switches. */
+int klog_inside(void)
+{
+    return 0;
+}
 
 /** Format the record into `record` as the suite receives it, and count it. */
 void klog(int level, const char *subsystem, const char *format, ...)
@@ -323,6 +341,34 @@ static void finish(void)
     irq_flags = 0x200;
     usb_stamp_read();
     CHECK(irq_flags == 0x200, "read restores interrupts");
+}
+
+/** One processor: nothing to answer. */
+void smp_service(void)
+{}
+
+/** Store `value` at `p` and return what was there: one thread. */
+unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
+{
+    unsigned int old = *p;
+
+    *p = value;
+    return old;
+}
+
+/** Nothing: there is no big lock. */
+void bkl_take_as(int depth, int key)
+{
+    (void)depth;
+    (void)key;
+}
+
+/** Set `*done` and wake `wq`'s sleepers, as the kernel's does under the
+ * queues' lock. */
+void wq_complete(wait_queue_t *wq, volatile int *done)
+{
+    *done = 1;
+    wq_wake_all(wq);
 }
 
 /**

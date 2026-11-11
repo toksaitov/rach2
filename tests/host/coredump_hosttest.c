@@ -5,6 +5,7 @@
  * host-deps: tests/host/compat/vm_iter_host.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/tick.c
+ * host-deps: tests/host/compat/mmap_lock_host.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
  *
  * `proc/coredump.c` is included whole. The writer keeps the file in memory,

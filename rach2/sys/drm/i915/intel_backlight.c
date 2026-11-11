@@ -45,8 +45,12 @@ static int bl_scale(int v, int smin, int smax, int tmin, int tmax)
 static int bl_get(void *ctx)
 {
     struct intel_display *d = &((struct drm_i915_private *)ctx)->display;
+    uint32_t flags = spin_lock_irqsave(&d->bl_lock);
+    int level =
+        bl_scale(d->bl_enabled ? intelbl_get(&d->bl) : 0, d->bl_min, d->bl.max, 0, d->bl.max);
 
-    return bl_scale(d->bl_enabled ? intelbl_get(&d->bl) : 0, d->bl_min, d->bl.max, 0, d->bl.max);
+    spin_unlock_irqrestore(&d->bl_lock, flags);
+    return level;
 }
 
 /** The backlight class's `set`: the class's level taken to the PWM's
@@ -57,12 +61,14 @@ static int bl_get(void *ctx)
 static void bl_set(void *ctx, int level)
 {
     struct intel_display *d = &((struct drm_i915_private *)ctx)->display;
+    uint32_t flags = spin_lock_irqsave(&d->bl_lock);
 
     d->bl_dark = level <= 0;
     d->bl_level = bl_scale(level, 0, d->bl.max, d->bl_min, d->bl.max);
     if (d->bl_enabled) {
         intelbl_set(&d->bl, d->bl_dark && !d->bl.switched ? 0 : d->bl_level);
     }
+    spin_unlock_irqrestore(&d->bl_lock, flags);
 }
 
 /** The backlight class's `power`: what it asks is kept, and holds while
@@ -71,9 +77,11 @@ static void bl_set(void *ctx, int level)
 static void bl_power(void *ctx, int on)
 {
     struct intel_display *d = &((struct drm_i915_private *)ctx)->display;
+    uint32_t flags = spin_lock_irqsave(&d->bl_lock);
 
     d->bl_want_on = on != 0;
     intelbl_power(&d->bl, on && d->bl_pipe_on && !d->bl_dark);
+    spin_unlock_irqrestore(&d->bl_lock, flags);
 }
 
 static const struct backlight_ops bl_ops = {bl_get, bl_set, bl_power};
@@ -169,11 +177,12 @@ void intel_backlight_setup(struct drm_i915_private *i915)
 void intel_backlight_enable(struct drm_i915_private *i915)
 {
     struct intel_display *d = &i915->display;
-    uint32_t ctl1;
+    uint32_t ctl1, flags;
 
     if (d->bl_index < 0) {
         return;
     }
+    flags = spin_lock_irqsave(&d->bl_lock);
     /* Linux's __intel_backlight_enable: a level at or below the least
      * comes on at the most, and lit. */
     if (d->bl_level <= d->bl_min) {
@@ -195,16 +204,18 @@ void intel_backlight_enable(struct drm_i915_private *i915)
     /* The level sticks only once the PWM is on. */
     intelbl_set(&d->bl, d->bl_level);
     d->bl_enabled = 1;
+    spin_unlock_irqrestore(&d->bl_lock, flags);
 }
 
 void intel_backlight_disable(struct drm_i915_private *i915)
 {
     struct intel_display *d = &i915->display;
-    uint32_t cpu;
+    uint32_t cpu, flags;
 
     if (d->bl_index < 0) {
         return;
     }
+    flags = spin_lock_irqsave(&d->bl_lock);
     d->bl_enabled = 0;
     /* Linux's lpt_disable_backlight: duty cycle 0, the processor's PWM off
      * should the firmware have left it on, then the PCH's. */
@@ -214,11 +225,13 @@ void intel_backlight_disable(struct drm_i915_private *i915)
         bl_wr(i915, BLC_PWM_CPU_CTL2, cpu & ~BLM_PWM_ENABLE);
     }
     i915_rmw(&i915->hw, BLC_PWM_PCH_CTL1, BLM_PCH_PWM_ENABLE, 0);
+    spin_unlock_irqrestore(&d->bl_lock, flags);
 }
 
 void intel_backlight_pipe(struct drm_i915_private *i915, int on)
 {
     struct intel_display *d = &i915->display;
+    uint32_t flags = spin_lock_irqsave(&d->bl_lock);
 
     d->bl_pipe_on = on != 0;
     if (d->bl_index >= 0 && d->bl.switched) {
@@ -230,6 +243,7 @@ void intel_backlight_pipe(struct drm_i915_private *i915, int on)
                  PANEL_UNLOCK_REGS | (on ? EDP_BLC_ENABLE : 0));
     }
     i915_posting_read(&i915->hw, PP_CONTROL);
+    spin_unlock_irqrestore(&d->bl_lock, flags);
 }
 
 void intel_backlight_fini(struct drm_i915_private *i915)

@@ -8,7 +8,7 @@
  * fuzz-deps: rach2/sys/block/chain.c rach2/sys/fs/sleeplock.c
  * fuzz-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * fuzz-deps: tests/host/compat/kheap_host.c tests/host/compat/blockmax_host.c
- * fuzz-deps: tests/host/compat/pressure_host.c
+ * fuzz-deps: tests/host/compat/pressure_host.c tests/host/compat/atomic_host.c
  */
 #include "../../rach2/sys/fs/ext2.h"
 #include "fs_common.h"
@@ -32,6 +32,25 @@ uint32_t timer_now_us(void)
     return 0;
 }
 
+/** Return 0: the cycle counter does not run here. */
+uint64_t arch_cycles(void)
+{
+    return 0;
+}
+
+/** A cycle is a microsecond here. */
+uint64_t timer_cycles_us(uint64_t cycles)
+{
+    return cycles;
+}
+
+/** The cycles here are the clock's microseconds, the same on every
+ * processor. */
+int timer_cycles_agree(void)
+{
+    return 1;
+}
+
 /** Return 1: every buffer the walk passes is present. */
 int vm_resident(uintptr_t addr, uintptr_t len, int write)
 {
@@ -48,6 +67,20 @@ int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
     (void)len;
     (void)write;
     return 1;
+}
+
+/** Take `lock` with interrupts off: one thread, so nothing waits. */
+uint32_t spin_lock_irqsave(struct spinlock *lock)
+{
+    lock->locked = 1;
+    return 0;
+}
+
+/** Give `lock` back. */
+void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
+{
+    (void)flags;
+    lock->locked = 0;
 }
 
 /** Exercise the driver over the input, cut to `FS_IMAGE_MAX` bytes and

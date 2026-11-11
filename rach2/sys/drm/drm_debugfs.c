@@ -260,18 +260,20 @@ static int32_t clients_show(void *data, char *buf, uint32_t cap)
 }
 
 /** `gem_names`, Linux's drm_gem_name_info: each buffer object with a flink
- * name, by name, with its size, handles and references. */
+ * name, by name, with its size, handles and references, read under the
+ * device's `object_lock` as Linux reads them under `object_name_lock`. */
 static int32_t gem_names_show(void *data, char *buf, uint32_t cap)
 {
-    const struct drm_device *dev = (const struct drm_device *)data;
+    struct drm_device *dev = (struct drm_device *)data;
     const struct drm_gem_object *obj, *next;
     struct emit e;
-    uint32_t last = 0;
+    uint32_t last = 0, flags;
 
     e.buf = buf;
     e.cap = cap;
     e.len = 0;
     emit_str(&e, "  name     size handles refcount\n");
+    flags = spin_lock_irqsave(&dev->object_lock);
     for (;;) {
         next = NULL;
         for (obj = dev->objects; obj; obj = obj->dev_next) {
@@ -292,6 +294,7 @@ static int32_t gem_names_show(void *data, char *buf, uint32_t cap)
         emit_str(&e, "\n");
         last = next->name;
     }
+    spin_unlock_irqrestore(&dev->object_lock, flags);
     return emit_end(&e);
 }
 
@@ -403,7 +406,7 @@ static void fb_info(struct emit *e, uint32_t indent, const struct drm_framebuffe
  * device, newest first, as Linux's list keeps them. */
 static int32_t framebuffer_show(void *data, char *buf, uint32_t cap)
 {
-    const struct drm_device *dev = (const struct drm_device *)data;
+    struct drm_device *dev = (struct drm_device *)data;
     const struct drm_framebuffer *fb;
     struct emit e;
     uint32_t count = 0, i, k;
@@ -411,6 +414,8 @@ static int32_t framebuffer_show(void *data, char *buf, uint32_t cap)
     e.buf = buf;
     e.cap = cap;
     e.len = 0;
+    /* The list is the mode lock's, as Linux's is fb_lock's. */
+    drm_modeset_lock_nointr(dev);
     for (fb = dev->mode_config.fbs; fb; fb = fb->next) {
         count++;
     }
@@ -424,6 +429,7 @@ static int32_t framebuffer_show(void *data, char *buf, uint32_t cap)
         emit_str(&e, "]:\n");
         fb_info(&e, 1, fb);
     }
+    drm_modeset_unlock(dev);
     return emit_end(&e);
 }
 
@@ -580,7 +586,7 @@ static void connector_state(struct emit *e, const struct drm_connector *connecto
  * CRTC's and connector's state, in the order of their indexes. */
 static int32_t state_show(void *data, char *buf, uint32_t cap)
 {
-    const struct drm_device *dev = (const struct drm_device *)data;
+    struct drm_device *dev = (struct drm_device *)data;
     const struct drm_mode_config *mc = &dev->mode_config;
     struct emit e;
     uint32_t i;
@@ -588,6 +594,10 @@ static int32_t state_show(void *data, char *buf, uint32_t cap)
     e.buf = buf;
     e.cap = cap;
     e.len = 0;
+    /* The committed states, under the mode lock, as Linux's
+     * __drm_state_dump takes each object's modeset lock (drm_atomic.c:
+     * 1785-1815). */
+    drm_modeset_lock_nointr(dev);
     for (i = 0; i < mc->num_plane && i < DRM_MAX_PLANES; i++) {
         if (mc->planes[i]->state) {
             plane_state(&e, mc->planes[i]);
@@ -601,6 +611,7 @@ static int32_t state_show(void *data, char *buf, uint32_t cap)
     for (i = 0; i < mc->num_connector && i < DRM_MAX_CONNECTORS; i++) {
         connector_state(&e, mc->connectors[i]);
     }
+    drm_modeset_unlock(dev);
     return emit_end(&e);
 }
 
@@ -682,6 +693,24 @@ static int32_t crc_control_store(void *data, const char __user *buf, uint32_t le
 
 static const struct debugfs_text_ops crc_control_ops = {crc_control_show, crc_control_store};
 
+/** `vblank_backwards`'s text: how many times the CRTC's vblanks were stamped
+ * before a vblank stamped earlier, `drm_vblank`'s `backwards`, which is 0
+ * unless an event or a WAIT_VBLANK reply went back in time. */
+static int32_t vblank_backwards_show(void *data, char *buf, uint32_t cap)
+{
+    const struct drm_crtc *crtc = (const struct drm_crtc *)data;
+    struct emit e;
+
+    e.buf = buf;
+    e.cap = cap;
+    e.len = 0;
+    emit_u(&e, crtc->vblank.backwards, 0);
+    emit_str(&e, "\n");
+    return emit_end(&e);
+}
+
+static const struct debugfs_text_ops vblank_backwards_ops = {vblank_backwards_show, NULL};
+
 /** crc/data's open: start the CRTC's source (`drm_crtc_crc_open`), which
  * may sleep for the commit lock. */
 static int32_t crc_data_open(fd_entry_t *e, int flags)
@@ -731,8 +760,8 @@ static int64_t crc_data_llseek(fd_entry_t *e, int64_t offset, int whence)
     return -ESPIPE;
 }
 
-static const struct file_ops crc_data_ops = {crc_data_read,  NULL, crc_data_poll,  NULL,
-                                             crc_data_close, NULL, crc_data_llseek};
+static const struct file_ops crc_data_ops = {crc_data_read,  NULL, crc_data_poll,   NULL,
+                                             crc_data_close, NULL, crc_data_llseek, 0};
 
 /* ------------------------------------------------------------------------
  * A connector's files, Linux's drm_debugfs_connector_add
@@ -760,6 +789,8 @@ static int32_t force_show(void *data, char *buf, uint32_t cap)
 static int32_t force_store(void *data, const char __user *buf, uint32_t len)
 {
     char copy[12];
+    struct drm_connector *connector = (struct drm_connector *)data;
+    int32_t rc;
 
     if (len > sizeof(copy) - 1u) {
         return -EINVAL;
@@ -767,7 +798,13 @@ static int32_t force_store(void *data, const char __user *buf, uint32_t len)
     if (copy_from_user(copy, buf, len) != 0) {
         return -EFAULT;
     }
-    return drm_connector_force_write((struct drm_connector *)data, copy, len);
+    /* Under the mode lock, which the connector's probe holds while it
+     * reads the force; Linux's connector_write stores it with no lock
+     * (drm_debugfs.c:406-433). */
+    drm_modeset_lock_nointr(connector->dev);
+    rc = drm_connector_force_write(connector, copy, len);
+    drm_modeset_unlock(connector->dev);
+    return rc;
 }
 
 /** `edid_override`'s text, Linux's drm_edid_override_show: the override's
@@ -801,6 +838,10 @@ static int32_t edid_store(void *data, const char __user *buf, uint32_t len)
         kfree(copy);
         return -EFAULT;
     }
+    /* Under the mode lock, which the probe holds while it reads the
+     * override, as Linux's drm_edid_override_set and _reset take the
+     * connector's edid_override_mutex (drm_edid.c:2259-2280). */
+    drm_modeset_lock_nointr(connector->dev);
     if (len == 5 && copy[0] == 'r' && copy[1] == 'e' && copy[2] == 's' && copy[3] == 'e' &&
         copy[4] == 't') {
         drm_edid_override_reset(connector);
@@ -808,6 +849,7 @@ static int32_t edid_store(void *data, const char __user *buf, uint32_t len)
     } else {
         rc = drm_edid_override_set(connector, copy, len);
     }
+    drm_modeset_unlock(connector->dev);
     kfree(copy);
     return rc != 0 ? rc : (int32_t)len;
 }
@@ -925,6 +967,10 @@ static int32_t make_files(struct drm_device *dev)
     for (i = 0; rc == 0 && i < mc->num_crtc && i < DRM_MAX_CRTCS; i++) {
         indexed_path(path, dev, "crtc", i, NULL);
         rc = debugfs_create_dir(path, NULL, NULL);
+        if (rc == 0 && drm_crtc_has_vblank(mc->crtcs[i])) {
+            indexed_path(path, dev, "crtc", i, "vblank_backwards");
+            rc = debugfs_create_text(path, 0444u, &vblank_backwards_ops, mc->crtcs[i]);
+        }
         /* Linux's drm_debugfs_crtc_crc_add: CRC files only with CRCs. */
         if (rc != 0 || !mc->crtcs[i]->funcs->set_crc_source ||
             !mc->crtcs[i]->funcs->verify_crc_source) {

@@ -190,8 +190,11 @@ after a handler, whatever its flags, and when no handler runs it goes on
 through
 .Xr restart_syscall 2
 to the deadline tick fixed at the first call, as Linux's does.
-On i686 i386's time64 form, number 422, is not implemented; x86-64 has no
-such form of its own, and takes 422 from an i386 program, below.
+i386's time64 form, number 422, takes a timespec of 64-bit fields, whose
+nanoseconds' high word is ignored as Linux ignores it; on i686 a count of
+seconds past 2147483647 is held there.
+x86-64 has no such form of its own, and takes 422 from an i386 program,
+below.
 .Ss Priority inheritance
 A PI mutex word is 0 while unlocked; its low 30 bits hold its owner's
 thread ID while locked.

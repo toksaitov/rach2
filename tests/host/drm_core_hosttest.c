@@ -5,6 +5,9 @@
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/atomic_host.c
+ * host-deps: tests/host/compat/fd_flat.c
+ * host-deps: tests/host/compat/mutex_none.c
  *
  * The four files are included whole. A fake driver binds two devices: one
  * with a card and a render node, GEM, dumb buffers of the shmem helper
@@ -24,9 +27,16 @@
  * flags and node and its copies by direction; the master role between two
  * openers, a root caller and a close, with magic and authentication, and
  * the listener's view of each change; dumb buffers created, mapped, written
- * and freed, with their handles, flink names and mmap offsets; events
- * queued, polled, read and left by a closed file; unplug; and kcmp of a
- * dup, a fork's copy and two opens of a node, and its other kinds.
+ * and freed, with their handles, flink names and mmap offsets; a handle
+ * table's growth, its lowest free id and its walk; a handle reserved while
+ * its object's `open` hook runs; references held by the walk over a
+ * device's objects, and an object whose last put is under way passed over
+ * by it and by mmap; events queued, polled, read and left by a closed
+ * file; the locks each row runs under, the big lock and the mode lock, by
+ * its flags and the device's; unplug; and kcmp of a dup, a fork's copy and
+ * two opens of a node, and its other kinds. Each row that ends with the
+ * core's locks free shows that no call left one held or took one twice,
+ * which the host's spinlock traps.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -86,6 +96,53 @@ int32_t udmabuf_start(void)
 int32_t virtio_gpu_probe(void)
 {
     return -ENODEV;
+}
+
+/** The commit worker, which no row here needs. */
+int32_t drm_atomic_worker_start(void)
+{
+    return 0;
+}
+
+/** The commit lock, which the dispatcher takes for a KMS row and the
+ * unplug for its mark: counted, so that a row sees it held and let go. */
+static int mode_lock_depth;
+
+/** The big lock, counted the same way (proc/smp.h). */
+static int bkl_depth;
+
+void bkl_enter(void)
+{
+    bkl_depth++;
+}
+
+void bkl_exit(void)
+{
+    bkl_depth--;
+}
+
+int bkl_held(void)
+{
+    return bkl_depth > 0;
+}
+
+int32_t drm_modeset_lock(struct drm_device *dev)
+{
+    (void)dev;
+    mode_lock_depth++;
+    return 0;
+}
+
+void drm_modeset_lock_nointr(struct drm_device *dev)
+{
+    (void)dev;
+    mode_lock_depth++;
+}
+
+void drm_modeset_unlock(struct drm_device *dev)
+{
+    (void)dev;
+    mode_lock_depth--;
 }
 
 /** No region is shared with a VM here. */
@@ -246,6 +303,19 @@ void dma_fence_put(struct dma_fence *f)
 void dma_buf_put(struct dma_buf *buf)
 {
     CHECK("no PRIME reference in core model", buf == NULL);
+}
+
+/** No PRIME objects are made by the core rows: a table's cache is NULL. */
+struct dma_buf *dma_buf_ref(struct dma_buf *buf)
+{
+    CHECK("no PRIME reference in core model", buf == NULL);
+    return buf;
+}
+
+/** Make a modeled reservation empty. */
+void dma_resv_init(struct dma_resv *r)
+{
+    k_memset(r, 0, sizeof(*r));
 }
 
 /** Release modeled reservation slots at the object's last reference. */
@@ -409,10 +479,10 @@ process_t *proc_named(uint32_t pid)
 
 fd_entry_t *fd_get(fd_table_t *table, int fd)
 {
-    if (!table || fd < 0 || fd >= table->cap || table->entries[fd].type == FD_TYPE_NONE) {
+    if (!table || fd < 0 || fd >= table->cap || table->chunks[0][fd].type == FD_TYPE_NONE) {
         return NULL;
     }
-    return &table->entries[fd];
+    return &table->chunks[0][fd];
 }
 
 /* The epoll set of the model: descriptor 7 of a table, whose one
@@ -546,8 +616,38 @@ static int32_t fake_echo(struct drm_device *dev, void *data, struct drm_file *fi
     return 0;
 }
 
+/* What a row's handler found held: the big lock's and the mode lock's
+ * depths. */
+struct fake_locks {
+    uint32_t big, mode;
+};
+
+#define FAKE_IOCTL_LOCKED   DRM_IOR(DRM_COMMAND_BASE + 1, struct fake_locks)
+#define FAKE_IOCTL_UNLOCKED DRM_IOR(DRM_COMMAND_BASE + 2, struct fake_locks)
+#define FAKE_IOCTL_KMS      DRM_IOR(DRM_COMMAND_BASE + 3, struct fake_locks)
+#define FAKE_IOCTL_READ     DRM_IOR(DRM_COMMAND_BASE + 4, struct fake_locks)
+
+/** A row that reports the locks it runs under. */
+static int32_t fake_locks(struct drm_device *dev, void *data, struct drm_file *file)
+{
+    struct fake_locks *l = (struct fake_locks *)data;
+
+    (void)dev;
+    (void)file;
+    l->big = (uint32_t)bkl_depth;
+    l->mode = (uint32_t)mode_lock_depth;
+    return 0;
+}
+
+/* The flags of the core's kinds of row: a locked one, an unlocked render
+ * row, ATOMIC's, and a KMS read such as GETCRTC. */
 static const struct drm_ioctl_desc fake_ioctls[] = {
     {FAKE_IOCTL_ECHO, DRM_AUTH | DRM_RENDER_ALLOW, fake_echo, "FAKE_ECHO"},
+    {FAKE_IOCTL_LOCKED, DRM_RENDER_ALLOW, fake_locks, "FAKE_LOCKED"},
+    {FAKE_IOCTL_UNLOCKED, DRM_RENDER_ALLOW | DRM_UNLOCKED, fake_locks, "FAKE_UNLOCKED"},
+    {FAKE_IOCTL_KMS, DRM_MASTER | DRM_UNLOCKED | DRM_KMS | DRM_MODESET_LOCK, fake_locks,
+     "FAKE_KMS"},
+    {FAKE_IOCTL_READ, DRM_MODESET_LOCK, fake_locks, "FAKE_READ"},
 };
 
 static int opens, postcloses, unplugs, releases;
@@ -607,7 +707,7 @@ static const struct drm_driver fake_driver = {
     NULL,
     fake_unplug,
     fake_ioctls,
-    1,
+    (int)(sizeof(fake_ioctls) / sizeof(fake_ioctls[0])),
     fake_release};
 
 static const struct drm_driver plain_driver = {
@@ -912,7 +1012,7 @@ static void test_dispatch(void)
     CHECK("a core number past the table",
           ioc(&card, &user_a, DRM_IOWR(0xE0, struct fake_echo), &echo) == -EINVAL);
     CHECK("a driver number past its rows",
-          ioc(&card, &user_a, DRM_IOWR(DRM_COMMAND_BASE + 1, struct fake_echo), &echo) == -EINVAL);
+          ioc(&card, &user_a, DRM_IOWR(DRM_COMMAND_BASE + 5, struct fake_echo), &echo) == -EINVAL);
     CHECK("the driver's ioctl",
           ioc(&card, &user_a, FAKE_IOCTL_ECHO, &echo) == 0 && echo.value == 42);
     CHECK("DRM_AUTH: a render node's client needs none",
@@ -938,6 +1038,45 @@ static void test_dispatch(void)
           ioc(&card, &root_proc, DRM_IOCTL_SET_UNIQUE, &u) == -EINVAL);
     CHECK("BLOCK by a privileged master", ioc(&card, &root_proc, DRM_IOCTL_BLOCK, &u) == 0);
 
+    close_node(&other);
+    close_node(&render);
+    close_node(&card);
+}
+
+/**
+ * The locks a row runs under: the big lock unless the row is DRM_UNLOCKED,
+ * and a KMS row's DRM_UNLOCKED only on a device with DRIVER_KMS_UNLOCKED;
+ * the master rule's check under the big lock, let go before the handler;
+ * the mode lock across a DRM_MODESET_LOCK row; and on an unplugged device
+ * the row refused with both locks let go.
+ */
+static void test_locks(void)
+{
+    fd_entry_t card, render, other;
+    struct fake_locks l;
+
+    open_node("dri/card0", &user_a, 0, &card);
+    open_node("dri/renderD128", &user_b, 0, &render);
+    open_node("dri/card0", &user_b, 0, &other);
+    CHECK("locks: a locked row runs under the big lock alone",
+          ioc(&render, &user_b, FAKE_IOCTL_LOCKED, &l) == 0 && l.big == 1 && l.mode == 0);
+    CHECK("locks: an unlocked render row runs under neither",
+          ioc(&render, &user_b, FAKE_IOCTL_UNLOCKED, &l) == 0 && l.big == 0 && l.mode == 0);
+    CHECK("locks: a KMS read runs under the big lock and the mode lock",
+          ioc(&card, &user_a, FAKE_IOCTL_READ, &l) == 0 && l.big == 1 && l.mode == 1);
+    CHECK("locks: ATOMIC's row keeps the big lock on a driver that does not opt out",
+          ioc(&card, &user_a, FAKE_IOCTL_KMS, &l) == 0 && l.big == 1 && l.mode == 1);
+    fake_dev.features |= DRIVER_KMS_UNLOCKED;
+    CHECK("locks: ATOMIC's row runs under the mode lock alone with DRIVER_KMS_UNLOCKED",
+          ioc(&card, &user_a, FAKE_IOCTL_KMS, &l) == 0 && l.big == 0 && l.mode == 1);
+    CHECK("locks: the master rule refuses a client before the mode lock",
+          ioc(&other, &user_b, FAKE_IOCTL_KMS, &l) == -EACCES);
+    fake_dev.features &= ~DRIVER_KMS_UNLOCKED;
+    fake_dev.unplugged = 1;
+    CHECK("locks: an unplugged device refuses a KMS row",
+          ioc(&card, &user_a, FAKE_IOCTL_READ, &l) == -ENODEV);
+    fake_dev.unplugged = 0;
+    CHECK("locks: every row let both locks go", bkl_depth == 0 && mode_lock_depth == 0);
     close_node(&other);
     close_node(&render);
     close_node(&card);
@@ -1201,6 +1340,158 @@ static void test_dumb_free(void)
     CHECK("each object held the device once", fake_dev.refs == 1);
 }
 
+/** Whether every lock of the core is free, as it is between calls: the
+ * fake device's, and `f`'s tables' when `f` is given. The host's spinlock
+ * traps on a lock taken twice, so a row that ends here also shows that no
+ * call nested one. */
+static int locks_free(const struct drm_file *f)
+{
+    return !fake_dev.object_lock.locked && !fake_dev.event_lock.locked &&
+           (!f || (!f->objects.lock.locked && !f->syncobjs.lock.locked));
+}
+
+/** A handle table past its first 64 slots: the lowest free id, two growths
+ * with the lock let go, finds, removes and a walk, each call leaving the
+ * table's lock free. */
+static void test_handle_table(void)
+{
+    static struct drm_handles t;
+    static int objs[130];
+    uint32_t i, id, n;
+    int ok = 1;
+
+    for (i = 1; i <= 129; i++) {
+        ok &= drm_handle_insert(&t, &objs[i], &id) == 0 && id == i && !t.lock.locked;
+    }
+    CHECK("129 handles in order, past two growths", ok && t.cap == 256);
+    CHECK("a find", drm_handle_find(&t, 100) == &objs[100] && !drm_handle_find(&t, 130) &&
+                        !drm_handle_find(&t, 0) && !t.lock.locked);
+    CHECK("a remove", drm_handle_remove(&t, 64) == &objs[64] && !drm_handle_find(&t, 64) &&
+                          !drm_handle_remove(&t, 64) && !t.lock.locked);
+    CHECK("the id removed is the lowest free", drm_handle_insert(&t, &objs[0], &id) == 0 &&
+                                                   id == 64 && drm_handle_find(&t, 64) == &objs[0]);
+    for (n = 0, i = drm_handle_next(&t, 1); i; i = drm_handle_next(&t, i + 1)) {
+        n++;
+    }
+    CHECK("the walk sees every handle", n == 129 && !t.lock.locked);
+    for (i = drm_handle_next(&t, 1); i; i = drm_handle_next(&t, i + 1)) {
+        drm_handle_remove(&t, i);
+    }
+    CHECK("each removed", drm_handle_next(&t, 1) == 0 && !t.lock.locked);
+    drm_handles_fini(&t);
+}
+
+static int32_t hook_rc;
+static int hook_runs, hook_ok, hook_frees;
+
+/** An object's `open` hook, which sees the handle being made reserved: no
+ * lookup, find or close reaches it, the object already counts it, and no
+ * lock is held while the hook runs, since a driver's hook may sleep. */
+static int32_t hook_open(struct drm_gem_object *obj, struct drm_file *file)
+{
+    hook_runs++;
+    hook_ok = !drm_handle_find(&file->objects, 1) && !drm_gem_object_lookup(file, 1) &&
+              drm_gem_handle_delete(file, 1) == -EINVAL && obj->handle_count == 1 &&
+              locks_free(file);
+    return hook_rc;
+}
+
+/** The free of the hook's object. */
+static void hook_free(struct drm_gem_object *obj)
+{
+    hook_frees++;
+    kfree(obj);
+}
+
+static const struct drm_gem_object_funcs hook_funcs = {hook_free, NULL, NULL, NULL,
+                                                       NULL,      NULL, NULL, hook_open};
+
+/** A handle's id is reserved while the object's `open` hook runs and
+ * published after it, as Linux's drm_gem_handle_create_tail; a failed hook
+ * leaves no handle, count or reference. */
+static void test_handle_open(void)
+{
+    fd_entry_t e;
+    struct drm_file *f;
+    struct drm_gem_object *obj = (struct drm_gem_object *)kzalloc(sizeof(*obj));
+    uint32_t h = 0;
+
+    open_node("dri/card0", &user_a, 0, &e);
+    f = (struct drm_file *)e.priv;
+    drm_gem_object_init(&fake_dev, obj, PAGE_SIZE, &hook_funcs);
+    hook_rc = -EIO;
+    CHECK("a failed open hook leaves no handle",
+          drm_gem_handle_create(f, obj, &h) == -EIO && hook_runs == 1 && hook_ok &&
+              !drm_handle_next(&f->objects, 1) && obj->handle_count == 0 && !obj->handles &&
+              obj->refs == 1 && locks_free(f));
+    hook_rc = 0;
+    CHECK("the handle is published after the hook",
+          drm_gem_handle_create(f, obj, &h) == 0 && h == 1 && hook_runs == 2 && hook_ok &&
+              drm_handle_find(&f->objects, 1) == obj && obj->refs == 2 && locks_free(f));
+    drm_gem_object_put(obj);
+    close_node(&e);
+    CHECK("the close frees it", hook_frees == 1 && !fake_dev.objects && locks_free(NULL));
+}
+
+/** References: the walk holds each object it visits and drops it at the
+ * next; an object whose last put has counted down but not yet taken it
+ * off the device's list is passed over by the walk and refused by mmap, as
+ * Linux's kref_get_unless_zero in drm_gem_mmap. */
+static void test_object_refs(void)
+{
+    fd_entry_t e;
+    struct drm_file *f;
+    struct drm_mode_create_dumb cd;
+    struct drm_mode_map_dumb md;
+    struct drm_gem_object *o1, *o2, *o, *last = NULL;
+    vma_t vma;
+    int n, held = 1;
+
+    open_node("dri/card0", &user_a, 0, &e);
+    f = (struct drm_file *)e.priv;
+    k_memset(&cd, 0, sizeof(cd));
+    cd.bpp = 32;
+    cd.width = 16;
+    cd.height = 16;
+    ioc(&e, &user_a, DRM_IOCTL_MODE_CREATE_DUMB, &cd);
+    ioc(&e, &user_a, DRM_IOCTL_MODE_CREATE_DUMB, &cd);
+    md.handle = 2;
+    md.pad = 0;
+    CHECK("two buffers, the second mapped",
+          cd.handle == 2 && ioc(&e, &user_a, DRM_IOCTL_MODE_MAP_DUMB, &md) == 0);
+    o1 = drm_gem_object_lookup(f, 1);
+    o2 = drm_gem_object_lookup(f, 2);
+    for (n = 0, o = drm_gem_object_next(&fake_dev, NULL); o;
+         o = drm_gem_object_next(&fake_dev, o)) {
+        n++;
+        held &= o->refs == 3 && locks_free(f);
+    }
+    CHECK("the walk holds what it visits, and only that",
+          n == 2 && held && o1->refs == 2 && o2->refs == 2 && locks_free(f));
+
+    o2->refs = 0;
+    for (n = 0, o = drm_gem_object_next(&fake_dev, NULL); o;
+         o = drm_gem_object_next(&fake_dev, o)) {
+        n++;
+        last = o;
+    }
+    CHECK("an object at 0 is passed over", n == 1 && last == o1 && o1->refs == 2);
+    k_memset(&vma, 0, sizeof(vma));
+    vma.end = PAGE_SIZE;
+    vma.type = VM_SHARED;
+    vma.prot = VM_PROT_READ | VM_PROT_WRITE;
+    vma.pgoff = (uint32_t)(md.offset >> PAGE_SHIFT);
+    CHECK("mmap refuses it", e.ops->mmap(&e, &vma) == -EINVAL && !vma.file && locks_free(f));
+    o2->refs = 2;
+    CHECK("and maps it held", e.ops->mmap(&e, &vma) == 0 && o2->refs == 3 && locks_free(f));
+    region_unmap(&vma);
+    CHECK("the unmap drops the region's", o2->refs == 2);
+    drm_gem_object_put(o1);
+    drm_gem_object_put(o2);
+    close_node(&e);
+    CHECK("the close frees both", !fake_dev.objects && !fake_dev.mmap_objects && locks_free(NULL));
+}
+
 /** Events: queued, polled, read whole, and left by a released file. */
 static void test_events(void)
 {
@@ -1220,7 +1511,8 @@ static void test_events(void)
     e1->event.base.type = DRM_EVENT_FLIP_COMPLETE;
     e1->event.base.length = e1->length;
     e1->event.vbl.sequence = 7;
-    CHECK("reserve", drm_event_reserve(f, e1) == 0 && f->event_space == 4096 - 32);
+    CHECK("reserve", drm_event_reserve(f, e1) == 0 && f->event_space == 4096 - 32 &&
+                         e1->dev == &fake_dev && locks_free(f));
     e2 = (struct drm_pending_event *)kzalloc(sizeof(*e2));
     e2->length = 5000;
     CHECK("reserve past the space", drm_event_reserve(f, e2) == -ENOMEM);
@@ -1246,7 +1538,8 @@ static void test_events(void)
     drm_event_reserve(f, e2);
     drm_send_event(e2);
     close_node(&a);
-    CHECK("the release leaves a reserved event unattached", e3->file == NULL);
+    CHECK("the release leaves a reserved event unattached, on its device's lock",
+          e3->file == NULL && e3->dev == &fake_dev && locks_free(NULL));
     drm_send_event(e3); /* frees it; the sanitizer finds a leak or a fault */
 }
 
@@ -1417,9 +1710,9 @@ static void test_kcmp(void)
     dup_node(&parent_fds[3], &child_fds[3]); /* the fork's copy */
     parent_fds[7].type = FD_TYPE_ANON;       /* an epoll set */
     child_fds[7].type = FD_TYPE_ANON;
-    parent_table.entries = parent_fds;
+    parent_table.chunks[0] = parent_fds;
     parent_table.cap = 8;
-    child_table.entries = child_fds;
+    child_table.chunks[0] = child_fds;
     child_table.cap = 8;
     user_a.fds = &parent_table;
     child_proc.fds = &child_table;
@@ -1503,15 +1796,20 @@ int main(void)
     test_identity();
     test_caps();
     test_dispatch();
+    test_locks();
     test_master();
     test_dumb_create();
     test_dumb_map();
     test_dumb_names();
     test_dumb_free();
+    test_handle_table();
+    test_handle_open();
+    test_object_refs();
     test_events();
     test_read_race();
     test_unplug();
     test_kcmp();
+    CHECK("the end: the big lock and the mode lock let go", bkl_depth == 0 && mode_lock_depth == 0);
     if (fails) {
         printf("drm-core-test: %d failed\n", fails);
         return 1;

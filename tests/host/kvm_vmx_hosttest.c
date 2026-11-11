@@ -5,6 +5,7 @@
  * host-deps: rach2/sys/kvm/msr.c rach2/sys/kvm/emulate.c rach2/sys/kvm/decode.c
  * host-deps: rach2/sys/kvm/hyperv.c rach2/sys/kvm/pvclock.c
  * host-deps: rach2/sys/kvm/binstats.c
+ * host-deps: tests/host/compat/fd_flat.c
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
  *
  * vmx.c is the kernel's, included whole, so that its table of operations
@@ -23,8 +24,9 @@
  *
  * The rows run the trial's path start to finish: the probe, refusing a
  * processor without what the backend needs and choosing the Lenovo's controls;
- * a VM and its vCPU; each entry inside VMXON and VMPTRLD and each exit followed
- * by VMCLEAR and VMXOFF with CR4 as it was, on every path; the VMCS built and
+ * a VM and its vCPU; VMX on on a processor exactly while a VMCS is active
+ * there, with CR4 as it was once it is off, on every path; the first entry
+ * a VMLAUNCH and the next VMRESUMEs with no VMPTRLD; the VMCS built and
  * checked by the model; each exit the corpus's guests cause handled in the
  * kernel or given to the caller: CPUID, port I/O and its string form, with
  * RF across a REP cut at a page and a 64-bit address size at offset 0, EPT
@@ -41,9 +43,12 @@
  * interrupt, NMI and machine check, the preemption timer, a triple fault and
  * the two kinds of failed entry; hardware task switches by CALL, IRET, JMP and
  * task gates, to 32-bit, 16-bit and virtual-8086 tasks, and their faults; a
- * move to another processor; a state read between runs; VMXON and VMPTRLD
- * failing; a failed VMWRITE reported once; VPIDs; a panic inside a run,
- * which turns VMX off; and what Linux's selftests ask of the guest's side:
+ * move to another processor, which clears the VMCS on the one it left and
+ * launches it again; a state read between runs on another processor; VMXON
+ * and VMPTRLD failing; a failed VMWRITE reported once; VPIDs; two vCPUs on
+ * one processor, each resumed; a panic inside a run, which clears every
+ * VMCS active there and turns VMX off; the VMCSs cleared as the vCPUs are
+ * freed; and what Linux's selftests ask of the guest's side:
  * AMD's hypercall instruction patched or left as its quirk says, MWAIT's
  * quirk, MSR_PLATFORM_INFO and CPUID faulting, a plain OUT's RIP at its
  * exit and after it with port 0x7E's quirk, an emulation failure above
@@ -94,7 +99,7 @@ static struct mm caller_mm;
 static process_t caller;
 static fd_entry_t entries[64];
 static int reserved[64];
-static fd_table_t table = {entries, 64, 1, 0, NULL};
+static fd_table_t table = {{entries}, 64, 1, 0, SPINLOCK_INIT, NULL};
 struct percpu cpu_table[NR_CPUS] = {{.current = &caller}, {.current = &caller}};
 unsigned int host_cpu;
 
@@ -861,12 +866,21 @@ const struct kvm_backend kvm_svm = {"svm", svm_probe, NULL, NULL, NULL, NULL,   
 #define EXIT_RIP_MODEL 0xFFFFFFFF80123450ull
 #define HOST_CR4_MODEL 0x000406F0ull
 
-/* A VMCS the model knows: its address, launch state and fields by
- * encoding. */
+/* A VMCS the model knows: its address, launch state, the processor where
+ * it is active and fields by encoding. */
 struct mvmcs {
     uint64_t pa;
     int launched;
+    int active; /* the processor where it is active, plus one; 0 for none */
     uint64_t f[0x7000];
+};
+
+/* A processor's VMX state. */
+struct mproc {
+    int on;
+    uint64_t cr4;
+    uint64_t vmxon_pa;
+    struct mvmcs *cur;
 };
 
 /* A guest's run, a row of the script: the exit and what it leaves. */
@@ -887,18 +901,21 @@ static struct {
     uint64_t basic, pin, proc, exit, entry, misc, proc2, ept_vpid;
     uint64_t fc;
     int fc_writes;
-    /* The processor's state. */
+    /* The running processor's state, `host_cpu`'s; `cpus` keeps the
+     * others' (`on_cpu`). */
     int on;
     uint64_t cr4;
     uint64_t vmxon_pa;
     struct mvmcs *cur;
+    struct mproc cpus[2];
+    int calls;                    /* `smp_call`s to another processor */
     struct mvmcs vmcs[MVMCS_MAX]; /* every VMCS the rows used, never forgotten */
     int nvmcs;
     uint64_t dr[8];
     int dr6_writes;
     /* The counts of each instruction, and its failures. */
     int vmxons, vmxoffs, vmclears, vmptrlds, launches, resumes, invepts, invvpids;
-    int ud, gp, bad_writes, bad_reads;
+    int ud, gp, bad_writes, bad_reads, misplaced;
     int nmis, mces, wbinvds, fpu_loads, fpu_stores, restores;
     int fail_vmxon, fail_vmptrld, fail_launch;
     uint32_t refuse; /* a field whose VMWRITE fails as unsupported, or 0 */
@@ -1008,13 +1025,26 @@ static int m_vmxon(uint64_t *pa)
     return VMX_OK;
 }
 
+/** Whether a VMCS is active on the processor `cpu`. */
+static int any_active(int cpu)
+{
+    int i;
+
+    for (i = 0; i < m.nvmcs; i++) {
+        if (m.vmcs[i].active == cpu + 1) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /** VMXOFF: #UD outside VMX operation. */
 static int m_vmxoff(void)
 {
     if (!m.on) {
         return not_on();
     }
-    CHECK(!m.cur, "VMCLEAR writes the VMCS back before VMXOFF");
+    CHECK(!any_active((int)host_cpu), "VMCLEAR writes each active VMCS back before VMXOFF");
     m.vmxoffs++;
     m.on = 0;
     m.cur = NULL;
@@ -1035,14 +1065,20 @@ static int m_vmclear(uint64_t *pa)
         return VMX_FAIL_VALID;
     }
     c = mvmcs_of(*pa);
+    if (c->active && c->active != (int)host_cpu + 1) {
+        m.misplaced++;
+    }
     c->launched = 0;
+    c->active = 0;
     if (m.cur == c) {
         m.cur = NULL;
     }
     return VMX_OK;
 }
 
-/** VMPTRLD: VMfailValid for the VMXON region or the wrong revision. */
+/** VMPTRLD: VMfailValid for the VMXON region or the wrong revision. A VMCS
+ * active on another processor is counted as misplaced, since the SDM leaves
+ * its data undefined until VMCLEAR runs there (24.11.1). */
 static int m_vmptrld(uint64_t *pa)
 {
     if (!m.on) {
@@ -1053,7 +1089,56 @@ static int m_vmptrld(uint64_t *pa)
         return VMX_FAIL_VALID;
     }
     m.cur = mvmcs_of(*pa);
+    if (m.cur->active && m.cur->active != (int)host_cpu + 1) {
+        m.misplaced++;
+    }
+    m.cur->active = (int)host_cpu + 1;
     return VMX_OK;
+}
+
+/** Make `cpu` the running processor, the model's state its own. */
+static void on_cpu(int cpu)
+{
+    struct mproc *o = &m.cpus[host_cpu], *n = &m.cpus[cpu];
+
+    o->on = m.on;
+    o->cr4 = m.cr4;
+    o->vmxon_pa = m.vmxon_pa;
+    o->cur = m.cur;
+    host_cpu = (unsigned int)cpu;
+    m.on = n->on;
+    m.cr4 = n->cr4;
+    m.vmxon_pa = n->vmxon_pa;
+    m.cur = n->cur;
+}
+
+/** Run `fn` on the processor `cpu`, as its interprocessor interrupt would,
+ * with interrupts off there. */
+void smp_call(int cpu, void (*fn)(void *), void *arg)
+{
+    int back = (int)host_cpu, irq = irq_on;
+
+    if (cpu != back) {
+        m.calls++;
+        on_cpu(cpu);
+    }
+    irq_on = 0;
+    fn(arg);
+    irq_on = irq;
+    if (cpu != back) {
+        on_cpu(back);
+    }
+}
+
+/** Whether the processor `cpu` is in VMX operation exactly while a VMCS is
+ * active there, with CR4 as it was but for VMXE, and the backend agrees. */
+static int cpu_ok(int cpu)
+{
+    int on = cpu == (int)host_cpu ? m.on : m.cpus[cpu].on;
+    uint64_t cr4 = cpu == (int)host_cpu ? m.cr4 : m.cpus[cpu].cr4;
+
+    return on == any_active(cpu) && on == vmx_live[cpu] &&
+           cr4 == (HOST_CR4_MODEL | (on ? CR4_VMXE : 0u));
 }
 
 /** VMREAD: VMfailInvalid with no current VMCS, VMfailValid for a field
@@ -1589,17 +1674,20 @@ static void m_fpu_store(void *host, void *guest, uint64_t xcr0)
     m.fpu_stores++;
 }
 
-/** The host's NMI, raised only after VMXOFF and with interrupts off. */
+/** The host's NMI, raised only after the host's state is back, with
+ * interrupts off. */
 static void m_nmi(void)
 {
-    CHECK(!m.on && irq_on == 0, "the host's NMI is raised after VMXOFF, interrupts still off");
+    CHECK(m.restores == m.launches + m.resumes && irq_on == 0,
+          "the host's NMI is raised after the host's state is back, interrupts still off");
     m.nmis++;
 }
 
-/** The host's machine check, raised only after VMXOFF. */
+/** The host's machine check, raised only after the host's state is back. */
 static void m_machine_check(void)
 {
-    CHECK(!m.on, "the host's machine check is raised after VMXOFF");
+    CHECK(m.restores == m.launches + m.resumes,
+          "the host's machine check is raised after the host's state is back");
     m.mces++;
 }
 
@@ -1644,6 +1732,8 @@ static void model_lenovo(void)
     m.ept_vpid = 0x00000F0106734141ull;
     m.fc = 0x5;
     m.cr4 = HOST_CR4_MODEL;
+    m.cpus[0].cr4 = HOST_CR4_MODEL;
+    m.cpus[1].cr4 = HOST_CR4_MODEL;
     m.cr0 = 0x80050033ull;
 }
 
@@ -1706,16 +1796,18 @@ static struct row *script(uint32_t reason, uint64_t qual, uint32_t len)
 }
 
 /** KVM_RUN on `fd`, with the script's rows, then the checks every exit
- * path must pass: VMX off, CR4 as it was, the VMCS clear, the host's state
- * put back after each run, and every row used. Returns KVM_RUN's result. */
+ * path must pass: each processor in VMX operation exactly while a VMCS is
+ * active there, CR4 as it was once VMX is off, no VMCS loaded on one
+ * processor while active on another, the host's state put back after each
+ * run, and every row used. Returns KVM_RUN's result. */
 static int32_t run(int fd)
 {
     int32_t r;
     int runs = m.launches + m.resumes;
 
     r = fdio(fd, KVM_RUN, 0);
-    CHECK(!m.on && m.cr4 == HOST_CR4_MODEL, "VMX is off with CR4 as it was after KVM_RUN");
-    CHECK(m.vmxons == m.vmxoffs, "each VMXON has its VMXOFF");
+    CHECK(cpu_ok(0) && cpu_ok(1), "VMX is on exactly where a VMCS is active, CR4 as it was");
+    CHECK(m.misplaced == 0, "a VMCS is cleared where it is active before it is loaded elsewhere");
     CHECK(m.restores == m.launches + m.resumes, "the host's state is put back after every run");
     CHECK(m.fpu_loads == m.fpu_stores, "the guest's FPU goes back after every run");
     CHECK(m.script_at == m.script_len, "every run the script gives is entered");
@@ -1831,6 +1923,18 @@ static void probe_rows(void)
           "EPT's memory types: write-back with IPAT, without, and uncached");
 }
 
+/** The launch state after the first KVM_RUN of `v`: one VMXON, one
+ * VMPTRLD, a VMLAUNCH and then a VMRESUME, and the VMCS left current. */
+static void launch_state_rows(const struct kvm_vcpu *v)
+{
+    CHECK(m.launches == 1 && m.resumes == 1 && m.vmxons == 1 && m.vmxoffs == 0 && m.vmclears == 1 &&
+              m.vmptrlds == 1 && m.fc_writes == 0,
+          "the first entry is a VMLAUNCH of a cleared VMCS, the next a VMRESUME, in one VMXON "
+          "and one VMPTRLD");
+    CHECK(m.on && m.cur && m.cur->pa == vx(v)->vmcs_pa && m.cur->launched,
+          "VMX stays on after KVM_RUN with the VMCS current and launched");
+}
+
 /** The first entries: the VMCS built and checked, CPUID and HLT. */
 static void launch_rows(int fd)
 {
@@ -1846,8 +1950,7 @@ static void launch_rows(int fd)
     r = regs_of(fd);
     CHECK(r.rbx == 0x756E6547u && r.rdx == 0x49656E69u && r.rip == 0x1003,
           "CPUID answers from the guest's table and both instructions are stepped");
-    CHECK(m.launches == 2 && m.resumes == 0 && m.vmxons == 2 && m.fc_writes == 0,
-          "each entry is a VMLAUNCH of a cleared VMCS inside its own VMXON");
+    launch_state_rows(v);
     CHECK(m.ud == 0 && m.gp == 0 && m.bad_writes == 0 && m.bad_reads == 0,
           "no VMX instruction outside VMX operation and no field the VMCS lacks");
     f = fields(fd);
@@ -2196,11 +2299,12 @@ static void ept_rows(int fd)
               rp->u.mmio.phys_addr == 0xD0000020ull,
           "ADD [BX], AL reads its operand first");
     rp->u.mmio.data[0] = 5;
-    launches = m.launches;
+    launches = m.launches + m.resumes;
     CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_MMIO && rp->u.mmio.is_write &&
               rp->u.mmio.data[0] == 8 && regs_of(fd).rip == 0x1302,
           "then writes the sum at the next KVM_RUN");
-    CHECK(m.launches == launches, "with no guest entered between the read and the write");
+    CHECK(m.launches + m.resumes == launches,
+          "with no guest entered between the read and the write");
     set_ds_bx(fd, 0, 0);
     refused_rows(fd);
 }
@@ -2576,32 +2680,27 @@ static void host_rows(int fd)
     set_shadow(fd, 0);
 }
 
-/** Another processor, a state read between runs, and VMXON and VMPTRLD
- * failing. */
-static void path_rows(int fd)
+/** A state read between runs on another processor, and VMXON and VMPTRLD
+ * failing there. */
+static void read_fail_rows(int fd)
 {
-    int vmxons, invepts = m.invepts, invvpids = m.invvpids;
+    int vmxons;
+    struct mvmcs *c = mvmcs_of(vx(vcpu_of(fd))->vmcs_pa);
 
-    host_cpu = 1;
-    m.fc = 0;
-    script(EXIT_HLT, 0, 1);
-    CHECK(run(fd) == 0 && fields(fd)[HOST_GS_BASE] == 0xFFFFFFFF81001000ull,
-          "on another processor the host's fields are its");
-    CHECK(m.invepts == invepts + 1 && m.invvpids == invvpids + 1,
-          "and the guest's translations are dropped there");
-    CHECK(m.fc_writes == 1 && m.fc == 5, "an unlocked IA32_FEATURE_CONTROL is locked with VMX on");
-    host_cpu = 0;
-    script(EXIT_CPUID, 0, 2);
-    script(EXIT_HLT, 0, 1);
-    run(fd);
-
+    on_cpu(1);
     vmxons = m.vmxons;
-    CHECK(sregs_of(fd).efer == 0x500 && m.vmxons == vmxons + 1 && !m.on,
-          "KVM_GET_SREGS reads the VMCS in a VMXON of its own");
+    CHECK(sregs_of(fd).efer == 0x500 && m.vmxons == vmxons + 1 && m.on && c->active == 2 &&
+              !m.cpus[0].on && m.misplaced == 0,
+          "KVM_GET_SREGS on another processor makes the VMCS current there, as Linux's vcpu_load");
 
+    on_cpu(0);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && c->active == 1 && !m.cpus[1].on && m.cpus[1].cr4 == HOST_CR4_MODEL,
+          "a run back on the first processor clears the VMCS on the second");
+    on_cpu(1);
     m.fail_vmxon = 1;
-    CHECK(run(fd) == -EIO && m.cr4 == HOST_CR4_MODEL,
-          "VMXON failing ends KVM_RUN with EIO, CR4 back");
+    CHECK(run(fd) == -EIO && !m.on && m.cr4 == HOST_CR4_MODEL && !m.cpus[0].on && c->active == 0,
+          "VMXON failing ends KVM_RUN with EIO, CR4 back, the VMCS clear and active nowhere");
     m.fail_vmxon = 0;
     m.fail_vmptrld = 1;
     CHECK(run(fd) == -EIO && !m.on, "VMPTRLD failing turns VMX off and ends KVM_RUN with EIO");
@@ -2610,6 +2709,47 @@ static void path_rows(int fd)
     CHECK(run(fd) == -EIO && m.gp == 0 && !m.on && m.cr4 == HOST_CR4_MODEL,
           "a host CR0 without NE ends KVM_RUN with EIO before VMXON could #GP");
     m.cr0 = 0x80050033ull;
+    on_cpu(0);
+}
+
+/** Another processor, which the VMCS moves to and back from, then
+ * `read_fail_rows`. */
+static void path_rows(int fd)
+{
+    int calls, launches, resumes, vmptrlds;
+    int invepts = m.invepts, invvpids = m.invvpids;
+    struct mvmcs *c = mvmcs_of(vx(vcpu_of(fd))->vmcs_pa);
+
+    script(EXIT_HLT, 0, 1);
+    vmptrlds = m.vmptrlds;
+    resumes = m.resumes;
+    CHECK(run(fd) == 0 && m.vmptrlds == vmptrlds && m.resumes == resumes + 1,
+          "on the processor that holds the VMCS current the entry is a VMRESUME, with no VMPTRLD");
+
+    on_cpu(1);
+    m.fc = 0;
+    calls = m.calls;
+    launches = m.launches;
+    resumes = m.resumes;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && fields(fd)[HOST_GS_BASE] == 0xFFFFFFFF81001000ull,
+          "on another processor the host's fields are its");
+    CHECK(m.calls == calls + 1 && !m.cpus[0].on && m.cpus[0].cr4 == HOST_CR4_MODEL,
+          "the VMCS is cleared on the processor it left, which leaves VMX operation");
+    CHECK(m.launches == launches + 1 && m.resumes == resumes && c->active == 2,
+          "and the entry on the new one is a VMLAUNCH");
+    CHECK(m.invepts == invepts + 1 && m.invvpids == invvpids + 1,
+          "and the guest's translations are dropped there");
+    CHECK(m.fc_writes == 1 && m.fc == 5, "an unlocked IA32_FEATURE_CONTROL is locked with VMX on");
+    on_cpu(0);
+    launches = m.launches;
+    resumes = m.resumes;
+    script(EXIT_CPUID, 0, 2);
+    script(EXIT_HLT, 0, 1);
+    run(fd);
+    CHECK(m.launches == launches + 1 && m.resumes == resumes + 1 && !m.cpus[1].on && c->active == 1,
+          "moved back, the VMCS is launched again and then resumed");
+    read_fail_rows(fd);
 }
 
 /** PAE paging: the PDPTEs loaded at KVM_SET_SREGS, and one with a reserved
@@ -2638,21 +2778,39 @@ static void pae_rows(int fd)
     k_memcpy(&ram[0x4008], &zero, 8);
 }
 
-/** A second vCPU's VPID, and a panic inside a run. */
-static void vpid_panic_rows(int vm)
+/** A second vCPU's VPID, two vCPUs on one processor, and a panic inside a
+ * run. `first` is the first vCPU's descriptor. */
+static void vpid_panic_rows(int vm, int first)
 {
     struct kvm_vcpu *v;
-    int fd = make_vcpu(vm, 1);
+    int fd = make_vcpu(vm, 1), launches, resumes, vmptrlds, vmxons;
+    struct mvmcs *a = mvmcs_of(vx(vcpu_of(first))->vmcs_pa), *b;
 
     v = vcpu_of(fd);
     CHECK(vx(v)->vpid == 2, "the second vCPU has VPID 2");
+    script(EXIT_HLT, 0, 1);
+    run(first);
+    script(EXIT_HLT, 0, 1);
+    launches = m.launches;
+    vmxons = m.vmxons;
+    CHECK(run(fd) == 0 && m.launches == launches + 1 && m.vmxons == vmxons,
+          "a second vCPU on the processor is launched in the same VMXON");
+    b = mvmcs_of(vx(v)->vmcs_pa);
+    resumes = m.resumes;
+    vmptrlds = m.vmptrlds;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(first) == 0 && m.resumes == resumes + 1 && m.vmptrlds == vmptrlds + 1 &&
+              a->active == 1 && b->active == 1 && b->launched,
+          "the first vCPU's VMCS, loaded again over the second's, is resumed, and the second's "
+          "stays active and launched");
     script(EXIT_HLT, 0, 0)->panic = 1;
     if (setjmp(panic_jump) == 0) {
         fdio(fd, KVM_RUN, 0);
         CHECK(0, "the panic row returns through the hook");
     }
-    CHECK(!m.on && m.cr4 == HOST_CR4_MODEL && !vmx_live[0] && m.ud == 0,
-          "a panic in the run clears the VMCS, turns VMX off and puts CR4 back");
+    CHECK(!m.on && m.cr4 == HOST_CR4_MODEL && !vmx_live[0] && m.ud == 0 && !a->active &&
+              !b->active && !vx(vcpu_of(first))->launched && vx(v)->cpu == -1,
+          "a panic in the run clears every VMCS active there, turns VMX off and puts CR4 back");
     irq_on = 1;
     bkl_depth = 1;
     v->mode = KVM_MODE_OUTSIDE;
@@ -4244,7 +4402,7 @@ int main(void)
     host_rows(fd);
     path_rows(fd);
     pae_rows(fd);
-    vpid_panic_rows(vm);
+    vpid_panic_rows(vm, fd);
     ts_rows(vm);
     hv_rows(vm);
     selftest_rows(vm);
@@ -4253,6 +4411,8 @@ int main(void)
     fdclose(fd);
     fdclose(vm);
     CHECK(vpid_used[0] == 0, "the vCPUs' VPIDs are freed with the VM");
+    CHECK(cpu_ok(0) && cpu_ok(1) && !m.on && !m.cpus[1].on && m.vmxons == m.vmxoffs,
+          "the freed vCPUs' VMCSs are cleared, and VMX is off with the last");
     CHECK(live == 4, "the VM's allocations are given back, but for the VMXON regions of the four "
                      "processors, which the backend keeps");
     printf("kvm-vmx-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);

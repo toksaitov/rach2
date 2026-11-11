@@ -8,6 +8,8 @@
  * host-deps: rach2/sys/mm/pin.c
  * host-deps: rach2/sys/pci.c rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/mmap_lock_host.c
+ * host-deps: tests/host/compat/atomic_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  * host-cflags: -U__UINTPTR_TYPE__ -D__UINTPTR_TYPE__=unsigned
  * host-cflags: -U__INTPTR_TYPE__ -D__INTPTR_TYPE__=int
@@ -277,8 +279,8 @@ static void ram_frame_rows(void)
     check(vm_insert(&mm_a.vm, plain, plain + P, RW, VM_ANON) == 0 &&
               vm_insert(&mm_a.vm, secret, secret + P, RW | VM_PROT_SECRET, VM_ANON) == 0,
           "an ordinary and a secret region are made");
-    check(vm_resolve_in(&mm_a, plain, 1, ~(uintptr_t)0) == 1 &&
-              vm_resolve_in(&mm_a, secret, 1, ~(uintptr_t)0) == 1 &&
+    check(resolve_held(&mm_a, plain, 1, ~(uintptr_t)0) == 1 &&
+              resolve_held(&mm_a, secret, 1, ~(uintptr_t)0) == 1 &&
               (pte_of(&dir_a, secret) & (PTE_P | PTE_W)) == (PTE_P | PTE_W),
           "a page of each is in and writable");
     check(paging_user_ram_frame(&mm_a, plain) != 0 &&
@@ -301,7 +303,7 @@ static void fork_rows(void)
     uintptr_t shared, own;
 
     *(uint32_t *)model_frame(pinned) = 0xC0FFEEu;
-    check(vm_resolve_in(&mm_a, VA + 5 * P, 1, ~(uintptr_t)0) == 1, "a sixth page faults in");
+    check(resolve_held(&mm_a, VA + 5 * P, 1, ~(uintptr_t)0) == 1, "a sixth page faults in");
     shared = PTE_ADDR(pte_of(&dir_a, VA + 5 * P));
     *(uint32_t *)model_frame(shared) = 0xBEEFu;
     check(paging_fork_copy(&mm_a, &dir_b) == 0 && vm_copy(&mm_b.vm, &mm_a.vm) == 0, "fork copies");
@@ -669,10 +671,10 @@ static void stack_rows(void)
               vm_lock(vm, VS - 2 * P, VS, VM_PROT_LOCKED) == 0 && vm_locked(vm) == 2 * P,
           "a locked stack of two pages");
     memlock(3);
-    check(vm_resolve_in(&mm_a, VS - 4 * P, 1, ~(uintptr_t)0) == 0 &&
+    check(resolve_held(&mm_a, VS - 4 * P, 1, ~(uintptr_t)0) == 0 &&
               vm_find(vm, VS - P)->start == VS - 2 * P,
           "a growth of two pages past RLIMIT_MEMLOCK is refused");
-    check(vm_resolve_in(&mm_a, VS - 3 * P, 1, ~(uintptr_t)0) == 1 &&
+    check(resolve_held(&mm_a, VS - 3 * P, 1, ~(uintptr_t)0) == 1 &&
               vm_find(vm, VS - P)->start == VS - 3 * P && vm_locked(vm) == 3 * P,
           "a growth of one page within it is made and stays locked");
     memlock(0xFFFFFFFFu);

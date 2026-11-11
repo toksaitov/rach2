@@ -1792,6 +1792,21 @@ static void raw_shutdown(void)
     entry.sock = NULL;
 }
 
+/** Store `value` at `p` and return what was there: one thread. */
+unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
+{
+    unsigned int old = *p;
+
+    *p = value;
+    return old;
+}
+
+/** 0: no USB disk has work. */
+int usbdisk_pending(void)
+{
+    return 0;
+}
+
 int main(void)
 {
     proc.tg = &group;

@@ -69,18 +69,26 @@ void tty_init(struct tty *t, n_tty_out_fn sink, void *sink_ctx)
     t->vhangups = 0;
 }
 
-/** A live user process is one that is not a zombie and still has an address
- * space (space_root), which a kernel thread and a process in teardown lack. */
+/** Signal the processes of `pgid`, with the big lock held, from a call or
+ * an interrupt, each through its leader, zombie or not, as Linux
+ * 6.12.115's __kill_pgrp_info does (kernel/signal.c:1478-1479). A process
+ * whose threads have all ended and a kernel thread take nothing; a
+ * process's unfinished forks get the signal (`signal_post_multi`). */
 void tty_signal_group(int pgid, int signo)
 {
     process_t *p;
+    struct k_siginfo info;
 
     if (pgid == 0) {
         return;
     }
+    k_memset(&info, 0, sizeof(info));
+    info.code = SI_KERNEL;
     for (p = proc_list; p; p = p->next) {
-        if (p->state != PROC_ZOMBIE && p->space_root != 0 && (int)p->pgid == pgid) {
-            signal_post(p, signo);
+        process_t *target = signal_process_target(p);
+
+        if (target && (int)target->pgid == pgid) {
+            signal_post_multi(target, signo, &info);
         }
     }
 }

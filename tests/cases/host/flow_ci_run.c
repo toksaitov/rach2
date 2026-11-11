@@ -174,7 +174,7 @@ static void escaped(FILE *f, const char *text)
 
 static int tests(int argc, char **argv)
 {
-    char line[16384] = "tests/run ";
+    char line[16384] = "tests/run ", arch[160];
     char *keep, *p;
     const char *failed = *env("RACH2_FAILED") ? env("RACH2_FAILED") : "build/tests/failed";
     int i;
@@ -189,7 +189,9 @@ static int tests(int argc, char **argv)
         return 2;
     strcat(line, " with ");
     strcat(line, *env("RACH2_RESULTS") ? env("RACH2_RESULTS") : "no results");
-    if (!append(path("calls"), line) || !append(path("calls.arch"), env("ARCH")))
+    snprintf(arch, sizeof(arch), "%s%s%s", env("ARCH"), *env("RACH2_KERNEL") ? " under " : "",
+             env("RACH2_KERNEL"));
+    if (!append(path("calls"), line) || !append(path("calls.arch"), arch))
         return 2;
     keep = strdup(env("CI_RUN_TEST_KEEP"));
     p = strtok(keep ? keep : "", " ");
@@ -389,7 +391,7 @@ static int lines_rows(struct run_fixture *r)
          "run: runner: PASS in 9s\nrun: result: incomplete\n"},
         {"lines: bigmem alone", "bigmem", "x86_64:bigmem", 1, 0, NULL,
          "run: result: failed: bigmem\n", NULL},
-        {"lines: build", "none", "i686:build x86_64:build", 0, 1, NULL, NULL, NULL}};
+        {"lines: build", "none", "i686:build x86_64:build ia32:build", 0, 1, NULL, NULL, NULL}};
     unsigned i;
     int ok = 1;
     r->suites = "";
@@ -547,15 +549,18 @@ static int both_rows(struct run_fixture *r)
     int ok = 1;
     r->suites = "";
     ok = row(r, &c) && ok;
-    ok =
-        words(r, path("calls"), "tests/run style host default shutdown tcp fpu tests/run bigmem") &&
-        words(r, path("calls.arch"), "i686 x86_64 x86_64") &&
-        words(r, path("calls.make"), "clean i686 clean x86_64 build i686 build x86_64") && ok;
+    ok = words(r, path("calls"),
+               "tests/run style host default shutdown tcp fpu tests/run bigmem tests/run all") &&
+         words(r, path("calls.arch"), "i686 x86_64 x86_64 i686 under ia32") &&
+         words(r, path("calls.make"), "clean i686 clean x86_64 build i686 build x86_64") && ok;
     ok = words(r, output_path(r, "full-i686/failed"), "") &&
          fx_exists(output_path(r, "full-i686/done")) &&
          !fx_exists(output_path(r, "full-i686/skipped")) && ok;
     ok = words(r, output_path(r, "full-x86_64/failed"), "") &&
          fx_exists(output_path(r, "full-x86_64/done")) && ok;
+    ok = words(r, output_path(r, "full-ia32/failed"), "") &&
+         fx_exists(output_path(r, "full-ia32/done")) &&
+         !fx_exists(output_path(r, "full-ia32/skipped")) && ok;
     c.name = "both: failed suite of each";
     c.set = "style";
     c.err =
@@ -576,7 +581,8 @@ static int both_rows(struct run_fixture *r)
 
 static int both_chosen_rows(struct run_fixture *r)
 {
-    struct run_case c = {"both: one build failed", "none", "x86_64:build", 0, 0, NULL, NULL, NULL};
+    struct run_case c = {
+        "both: one build failed", "none", "x86_64:build ia32:build", 0, 0, NULL, NULL, NULL};
     int ok = 1;
     r->suites = "";
     r->broken = "x86_64";
@@ -603,7 +609,61 @@ static int both_chosen_rows(struct run_fixture *r)
          words(r, path("calls.arch"), "i686") &&
          words(r, path("calls.make"), "clean i686 build i686") &&
          fx_exists(output_path(r, "full-x86_64/skipped")) &&
+         fx_exists(output_path(r, "full-ia32/skipped")) &&
          !fx_exists(output_path(r, "full-i686/skipped")) && ok;
+    r->suites = "";
+    return ok;
+}
+
+/** The ia32 profile's run, `RACH2_KERNEL=ia32 ARCH=i686 tests/run`, after
+ * both architectures, and its `ia32:NAME` failures. */
+static int ia32_rows(struct run_fixture *r)
+{
+    static const struct run_case rows[] = {
+        {"ia32: failed suite", "all", "ia32:default", 1, 0, NULL,
+         "run: default: FAIL in 3s\nrun: result: failed: default\n", NULL},
+        {"ia32: runner", "all", "ia32:runner", 1, 0, NULL, "run: result: failed: runner\n", NULL},
+        {"ia32: no suite named", "all", "ia32:all", 1, 0, NULL,
+         "run: result: failed: nothing-such\n", NULL}};
+    struct run_case c = {"ia32: chosen suites", "none", "", 0, 0, NULL, NULL, NULL};
+    unsigned i;
+    int ok = 1;
+    r->suites = "";
+    for (i = 0; i < sizeof(rows) / sizeof(rows[0]); i++)
+        ok = row(r, &rows[i]) && ok;
+    ok = words(r, output_path(r, "full-ia32/failed"), "all") &&
+         words(r, output_path(r, "full-i686/failed"), "") && ok;
+    ok = fx_check(r->f,
+                  fx_has(output_path(r, "full-ia32/err"), "failed: nothing-such") &&
+                      !fx_has(output_path(r, "full-i686/err"), "failed: nothing-such") &&
+                      !fx_has(output_path(r, "full-x86_64/err"), "failed: nothing-such"),
+                  "the profile keeps only its own stderr") &&
+         ok;
+    r->suites = "ia32:default ia32:tcp";
+    r->keep = "tests.i686.T.1.guest.default.boot.r0";
+    ok = row(r, &c) && ok;
+    r->keep = "";
+    ok = words(r, path("calls"), "tests/run default tcp") &&
+         words(r, path("calls.arch"), "i686 under ia32") &&
+         words(r, path("calls.make"), "clean i686 clean x86_64 build i686 build x86_64") &&
+         fx_exists(output_path(r, "full-i686/skipped")) &&
+         fx_exists(output_path(r, "full-x86_64/skipped")) &&
+         !fx_exists(output_path(r, "full-ia32/skipped")) &&
+         directory_words(r, output_path(r, "full-ia32/kept"),
+                         "tests.i686.T.1.guest.default.boot.r0") &&
+         directory_words(r, output_path(r, "full-i686/kept"), "") && ok;
+    c.name = "ia32: chosen suites, a build failed";
+    c.failed = "x86_64:build ia32:build";
+    r->suites = "ia32:default";
+    r->broken = "x86_64";
+    ok = row(r, &c) && ok;
+    r->broken = "";
+    ok = words(r, path("calls"), "") && ok;
+    c.name = "ia32: refused: a suite i686 does not run";
+    c.failed = NULL;
+    c.status = 2;
+    r->suites = "ia32:fpu";
+    ok = row(r, &c) && words(r, path("calls.make"), "") && ok;
     r->suites = "";
     return ok;
 }
@@ -612,6 +672,7 @@ static int prepare(struct fixture *f)
 {
     fx_env("FLOW_CI_RUN", "1");
     fx_env("CI_RUN_WORK", f->work);
+    fx_env("RACH2_KERNEL", NULL);
     if (!flow_copy(f, "tools/ci/run.sh", "tree/tools/ci/run.sh") || !fx_mock(f, "git") ||
         !fx_mock(f, "make") || !fx_mock(f, "ci-run-watch") ||
         !fx_copy(f->self, path("tree/tests/run")))
@@ -636,5 +697,6 @@ int flow_ci_run(struct fixture *f)
     ok = cut_rows(&r) && ok;
     ok = both_rows(&r) && ok;
     ok = both_chosen_rows(&r) && ok;
+    ok = ia32_rows(&r) && ok;
     return ok;
 }

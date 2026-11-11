@@ -81,6 +81,17 @@ int kcmdline_param_bool(const char *key, int dflt);
  */
 int kcmdline_parse_bool(const char *text, int *out);
 
+/**
+ * The `nth` token, counting from zero, that is the parameter `key`, bare or
+ * with a value, so that a caller reads each occurrence in the line's order,
+ * as Linux's `parse_args` meets them (kernel/params.c:161-186).
+ *
+ * @return 1 for `key=value`, with the value in `out`, or empty when it does
+ * not fit; 0 for a bare `key`, with `out` empty; -1 when the line has no
+ * such token.
+ */
+int kcmdline_param_nth(const char *key, int nth, char *out, unsigned int outlen);
+
 /** How many `key=` tokens the line has. */
 int kcmdline_count(const char *key);
 

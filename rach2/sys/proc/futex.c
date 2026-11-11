@@ -18,6 +18,8 @@
 #include "../lib/kirq.h"
 #include "../mm/paging.h"
 #include "../mm/usercopy.h"
+#include "../lib/spinlock.h"
+#include "smp.h"
 #include "../syscall.h"
 #include "../syscall_internal.h"
 #include "../rtc.h"
@@ -95,7 +97,8 @@ struct futex_timespec64 {
 static const char futex_shared_space;
 
 /* Policy: the hash buckets waiters are filed in. A wake walks one bucket, so
- * the count bounds the walk and not the number of waiters. */
+ * the count bounds the walk and not the number of waiters. `_futex_hb`'s
+ * initializer has this many entries. */
 #define FUTEX_BUCKETS 64
 
 /* What a waiting thread sleeps on: one record however many futexes it
@@ -107,8 +110,11 @@ struct futex_sleeper {
     wait_queue_t wq; /* the sleeper's own queue, which only it sleeps on */
 };
 
+struct futex_hb;
+
 /* A waiter filed on one futex, on its thread's kernel stack or in the
- * vector of a futex_waitv call while the thread sleeps. */
+ * vector of a futex_waitv call while the thread sleeps. Its links, key and
+ * marks change under the lock of the bucket that `hb` names. */
 struct futex_q {
     const void *space; /* the address space's page directory, or shared memory */
     uintptr_t uaddr;   /* the address in it, or the frame and offset */
@@ -116,6 +122,12 @@ struct futex_q {
     int woken;         /* a wake marked it and took it off its list */
     struct futex_sleeper *s;
     struct futex_q *next;
+    /* The bucket whose list holds it, NULL while it is on none. A requeue
+     * changes it to the bucket it moves the waiter to, holding both; a
+     * wake sets it NULL after its last touch of the waiter and its
+     * sleeper, so that the waiting thread, which may then return, reads it
+     * without a lock (`futex_unqueue_q`), as Linux's lock_ptr. */
+    struct futex_hb *volatile hb;
     struct futex_pi *pi; /* reference held until this wait returns */
     process_t *task;
     int requeue; /* WAIT_REQUEUE_PI, including before transfer to the mutex */
@@ -133,13 +145,75 @@ struct futex_vec {
     struct futex_q q;
 };
 
-/* Each bucket's waiters, the newest first. */
-static struct futex_q *_waiters[FUTEX_BUCKETS];
+/* A hash bucket, Linux's struct futex_hash_bucket (kernel/futex/futex.h:115):
+ * the waiters of the keys that hash to it, the newest first, and the lock
+ * over that list and its waiters, taken with interrupts off. A futex word is
+ * read or exchanged under its bucket's lock, so a wake that follows a
+ * store to the word finds the waiter that compared it. */
+struct futex_hb {
+    struct spinlock lock;
+    struct futex_q *head;
+};
+
+/* Every bucket's lock is of one class, keyed by `futex_hb_key`, as Linux's
+ * spin_lock_init in futex_init makes them (kernel/futex/core.c:1202); two
+ * are taken at once only in address order (`futex_hb_lock2`). */
+#ifdef RACH2_LOCKDEP
+static struct lockdep_key futex_hb_key;
+#define FUTEX_HB_INIT {{0, {"futex_hb", &futex_hb_key, 0, 0}}, NULL}
+#else
+#define FUTEX_HB_INIT {{0}, NULL}
+#endif
+#define FUTEX_HB_INIT4  FUTEX_HB_INIT, FUTEX_HB_INIT, FUTEX_HB_INIT, FUTEX_HB_INIT
+#define FUTEX_HB_INIT16 FUTEX_HB_INIT4, FUTEX_HB_INIT4, FUTEX_HB_INIT4, FUTEX_HB_INIT4
+
+static struct futex_hb _futex_hb[FUTEX_BUCKETS] = {FUTEX_HB_INIT16, FUTEX_HB_INIT16,
+                                                   FUTEX_HB_INIT16, FUTEX_HB_INIT16};
 
 /** The bucket a futex named `space` and `uaddr` is filed in. */
-static uint32_t futex_bucket(const void *space, uintptr_t uaddr)
+static struct futex_hb *futex_hash(const void *space, uintptr_t uaddr)
 {
-    return (uint32_t)((((uintptr_t)space >> 4) ^ (uaddr >> 2) ^ (uaddr >> 12)) % FUTEX_BUCKETS);
+    return &_futex_hb[(((uintptr_t)space >> 4) ^ (uaddr >> 2) ^ (uaddr >> 12)) % FUTEX_BUCKETS];
+}
+
+/** Take `hb`'s lock with interrupts off; the flags `futex_hb_unlock` puts
+ * back. */
+static uint32_t futex_hb_lock(struct futex_hb *hb)
+{
+    return spin_lock_irqsave(&hb->lock);
+}
+
+/** Give back the lock `futex_hb_lock` took. */
+static void futex_hb_unlock(struct futex_hb *hb, uint32_t flags)
+{
+    spin_unlock_irqrestore(&hb->lock, flags);
+}
+
+/**
+ * Take the locks of two buckets, the one at the lower address first and the
+ * other as the second of its class, or one lock when they are the same
+ * bucket, as Linux's double_lock_hb (kernel/futex/futex.h:322), so that two
+ * requeues in opposite directions cannot each hold the lock the other waits
+ * for. The flags `futex_hb_unlock2` puts back.
+ */
+static uint32_t futex_hb_lock2(struct futex_hb *a, struct futex_hb *b)
+{
+    struct futex_hb *first = a < b ? a : b, *second = a < b ? b : a;
+    uint32_t flags = futex_hb_lock(first);
+
+    if (first != second) {
+        spin_lock_nested(&second->lock, 1);
+    }
+    return flags;
+}
+
+/** Give back the locks `futex_hb_lock2` took of `a` and `b`. */
+static void futex_hb_unlock2(struct futex_hb *a, struct futex_hb *b, uint32_t flags)
+{
+    if (a != b) {
+        spin_unlock(&a->lock);
+    }
+    futex_hb_unlock(b, flags);
 }
 
 /* The ticks from now until the absolute time of `sec` seconds and `nsec`
@@ -174,14 +248,18 @@ static uint64_t futex_ticks_until(int64_t at_sec, uint32_t at_nsec, int realtime
 }
 
 /**
- * The name of the futex at `uaddr`, whose page is resident: its address space
- * and address, or, when `shared` and the page is in a shared mapping, the
- * page's frame and the offset in it, which every process mapping that page
- * names alike. A futex word in memory two processes share, a
- * PTHREAD_PROCESS_SHARED mutex in /dev/shm among them, is named the second
- * way unless the caller passed FUTEX_PRIVATE_FLAG.
+ * The name of the futex at `uaddr`: its address space and address, or, when
+ * `shared` and the word is in a shared mapping, the page's frame and the
+ * offset in it, which every process mapping that page names alike. A futex
+ * word in memory two processes share, a PTHREAD_PROCESS_SHARED mutex in
+ * /dev/shm among them, is named the second way unless the caller passed
+ * FUTEX_PRIVATE_FLAG. For `shared` the caller holds the regions' lock to
+ * read, under which the region and the frame are read with no sleep. 0, or
+ * -EFAULT when the shared mapping's page is not present, which the caller
+ * brings in with its locks let go before it names the futex again, as
+ * Linux's get_futex_key brings the page in (kernel/futex/core.c:210).
  */
-static void futex_key(uintptr_t uaddr, int shared, const void **space, uintptr_t *key)
+static int futex_key(uintptr_t uaddr, int shared, const void **space, uintptr_t *key)
 {
     const vma_t *r;
     uintptr_t phys;
@@ -189,16 +267,43 @@ static void futex_key(uintptr_t uaddr, int shared, const void **space, uintptr_t
     *space = current_proc->page_dir;
     *key = uaddr;
     if (!shared || current_proc->mm == NULL) {
-        return;
+        return 0;
     }
     r = vm_find(&current_proc->mm->vm, uaddr);
-    if (r == NULL || r->type != VM_SHARED) {
-        return;
+    if (!r || r->type != VM_SHARED) {
+        return 0;
     }
     phys = paging_user_phys(current_proc->page_dir, uaddr);
-    if (phys != 0) {
-        *space = &futex_shared_space;
-        *key = phys;
+    if (phys == 0) {
+        return -EFAULT;
+    }
+    *space = &futex_shared_space;
+    *key = phys;
+    return 0;
+}
+
+/**
+ * Name the futex at `uaddr` as `futex_key` does, for a call that reads no
+ * word: the regions' lock is held only while a futex that may be `shared`
+ * is named, and a page that is not there is brought in. 0, or -EFAULT for a
+ * page that cannot be had.
+ */
+static int futex_name(uintptr_t uaddr, int shared, const void **space, uintptr_t *key)
+{
+    struct mm *mm = shared ? current_proc->mm : NULL;
+    int rc;
+
+    for (;;) {
+        if (mm) {
+            mmap_read_lock(mm);
+        }
+        rc = futex_key(uaddr, shared, space, key);
+        if (mm) {
+            mmap_unlock(mm);
+        }
+        if (rc == 0 || !vm_prefault_range(uaddr, sizeof(uint32_t), 0)) {
+            return rc;
+        }
     }
 }
 
@@ -210,12 +315,21 @@ static int futex_sleeper_done(void *arg)
     return s->woken || (s->timed && tick_count() >= s->target);
 }
 
-/* Take q off its bucket's list, when a wake has not already. */
-static void futex_unlink(struct futex_q *q, uint32_t bucket)
+/** File `q` on the list of `hb`, whose lock the caller holds. */
+static void futex_queue(struct futex_q *q, struct futex_hb *hb)
+{
+    q->next = hb->head;
+    hb->head = q;
+    q->hb = hb;
+}
+
+/** Take `q` off the list of its bucket, `q->hb`, whose lock the caller
+ * holds; `q->hb` is left for the caller to change. */
+static void futex_unlink(struct futex_q *q)
 {
     struct futex_q **pp;
 
-    for (pp = &_waiters[bucket]; *pp; pp = &(*pp)->next) {
+    for (pp = &q->hb->head; *pp; pp = &(*pp)->next) {
         if (*pp == q) {
             *pp = q->next;
             return;
@@ -224,8 +338,39 @@ static void futex_unlink(struct futex_q *q, uint32_t bucket)
 }
 
 /**
- * Take the first `n` waiters of `v` off their lists, with interrupts off;
- * the index of the last one a wake had marked, or -1 when none was.
+ * Take `q` off its bucket's list unless a wake has, as Linux's futex_unqueue
+ * (kernel/futex/core.c:589): the bucket is read without a lock and read again
+ * under it, since a requeue may have moved the waiter meanwhile, and a NULL
+ * there means a wake took it off and is done with it. A waiter is taken off
+ * so before its wait returns, since it lives in the waiting thread's memory.
+ * 1 when this call took it off, 0 when a wake had.
+ */
+static int futex_unqueue_q(struct futex_q *q)
+{
+    struct futex_hb *hb;
+    uint32_t flags;
+
+    for (;;) {
+        hb = q->hb;
+        if (hb == NULL) {
+            return 0;
+        }
+        flags = futex_hb_lock(hb);
+        if (hb == q->hb) {
+            break;
+        }
+        futex_hb_unlock(hb, flags);
+    }
+    futex_unlink(q);
+    q->hb = NULL;
+    futex_hb_unlock(hb, flags);
+    return 1;
+}
+
+/**
+ * Take the first `n` waiters of `v` off their lists, as Linux's
+ * futex_unqueue_multiple (kernel/futex/waitwake.c:386): the index of the
+ * last one a wake had marked, or -1 when none was.
  */
 static int futex_unqueue(struct futex_vec *v, uint32_t n)
 {
@@ -233,10 +378,9 @@ static int futex_unqueue(struct futex_vec *v, uint32_t n)
     int last = -1;
 
     for (i = 0; i < n; i++) {
+        (void)futex_unqueue_q(&v[i].q);
         if (v[i].q.woken) {
             last = (int)i;
-        } else {
-            futex_unlink(&v[i].q, futex_bucket(v[i].q.space, v[i].q.uaddr));
         }
     }
     return last;
@@ -248,86 +392,90 @@ static int futex_unqueue(struct futex_vec *v, uint32_t n)
  * futex_wait_multiple does. `s` has `timed` and `target` set, and `ticks`
  * is 0 for a deadline that had passed when the call began.
  *
- * Each word's page is made resident, which may sleep, and with interrupts
- * off every page is then found still resident, each futex named and its word
- * compared, and the waiters filed, so no read sleeps between a comparison
- * and the filing: a wake after the comparison finds the waiter. A page that
- * left while another was brought in starts the round again.
+ * Under the regions' lock held to read, each futex is named, and its word
+ * read and its waiter filed under its bucket's lock, one word at a time, as
+ * Linux's futex_wait_multiple_setup (kernel/futex/waitwake.c:414): a wake
+ * after the comparison finds the waiter. The read does not fault; a word
+ * whose page is not there takes every waiter filed so far off, lets the
+ * lock go, brings the page in and starts again.
  *
  * `wchan` names the sleep for /proc/PID/wchan, as Linux's wchan names it:
  * `futex_wait_queue` for one futex and `futex_wait_multiple` for
  * futex_waitv, whose static `futex_sleep_multiple` has that one caller.
  *
  * Returns the index of the woken futex, the last of them when a wake marked
- * more than one; -EAGAIN when a word differs, -ETIMEDOUT at the deadline,
- * -EINTR for a signal, or -EFAULT for a word the process cannot read.
+ * more than one, also when a word compared afterwards differs; -EAGAIN when
+ * a word differs, -ETIMEDOUT at the deadline, -EINTR for a signal, or
+ * -EFAULT for a word the process cannot read.
  */
 static int futex_sleep_on(struct futex_vec *v, uint32_t n, struct futex_sleeper *s, uint64_t ticks,
                           const char *wchan)
 {
+    struct mm *mm = current_proc->mm;
     uint32_t i, cur, flags;
     int rc, woken;
 
     s->woken = 0;
     wait_queue_init(&s->wq);
+    for (i = 0; i < n; i++) {
+        v[i].q.hb = NULL;
+        v[i].q.woken = 0;
+    }
+    if (mm == NULL) {
+        return -EFAULT;
+    }
     for (;;) {
-        for (i = 0; i < n; i++) {
-            if (!vm_prefault_range(v[i].addr, sizeof(uint32_t), 0)) {
-                return -EFAULT;
+        rc = 0;
+        mmap_read_lock(mm);
+        for (i = 0; i < n && rc == 0; i++) {
+            struct futex_q *q = &v[i].q;
+            struct futex_hb *hb;
+
+            rc = futex_key(v[i].addr, v[i].shared, &q->space, &q->uaddr);
+            if (rc != 0) {
+                break;
             }
-        }
-        flags = kirq_save();
-        for (i = 0; i < n; i++) {
-            if (paging_user_phys(current_proc->page_dir, v[i].addr) == 0) {
+            q->pi = NULL;
+            q->task = current_proc;
+            q->requeue = 0;
+            q->woken = 0;
+            q->s = s;
+            hb = futex_hash(q->space, q->uaddr);
+            flags = futex_hb_lock(hb);
+            rc = get_user_u32_nofault(&cur, v[i].addr);
+            if (rc == 0 && cur != v[i].val) {
+                rc = -EAGAIN;
+            }
+            if (rc == 0) {
+                futex_queue(q, hb);
+            }
+            futex_hb_unlock(hb, flags);
+            if (rc != 0) {
                 break;
             }
         }
-        if (i == n) {
+        mmap_unlock(mm);
+        if (rc == 0) {
             break;
         }
-        kirq_restore(flags);
-    }
-
-    for (i = 0; i < n; i++) {
-        struct futex_q *q = &v[i].q;
-        uint32_t bucket;
-
-        if (get_user_u32(&cur, v[i].addr) != 0) {
-            rc = -EFAULT;
-        } else if (cur != v[i].val) {
-            rc = -EAGAIN;
-        } else {
-            rc = 0;
+        woken = futex_unqueue(v, i);
+        if (woken >= 0) {
+            return woken;
         }
-        if (rc != 0) {
-            (void)futex_unqueue(v, i);
-            kirq_restore(flags);
+        if (rc != -EFAULT || !vm_prefault_range(v[i].addr, sizeof(uint32_t), 0)) {
             return rc;
         }
-        futex_key(v[i].addr, v[i].shared, &q->space, &q->uaddr);
-        q->pi = NULL;
-        q->task = current_proc;
-        q->requeue = 0;
-        q->woken = 0;
-        q->s = s;
-        bucket = futex_bucket(q->space, q->uaddr);
-        q->next = _waiters[bucket];
-        _waiters[bucket] = q;
     }
     if (s->timed && (ticks == 0 || tick_count() >= s->target)) {
-        (void)futex_unqueue(v, n);
-        kirq_restore(flags);
-        return -ETIMEDOUT;
+        woken = futex_unqueue(v, n);
+        return woken >= 0 ? woken : -ETIMEDOUT;
     }
-    kirq_restore(flags);
 
     current_proc->wakeup_tick = s->timed ? (s->target != 0 ? s->target : 1u) : 0;
     rc = wq_wait_event_as(&s->wq, futex_sleeper_done, s, wchan);
     current_proc->wakeup_tick = 0;
 
-    flags = kirq_save();
     woken = futex_unqueue(v, n);
-    kirq_restore(flags);
     if (woken >= 0) {
         return woken;
     }
@@ -456,33 +604,36 @@ static int futex_addr_check(uintptr_t addr, int shared)
 }
 
 /**
- * Wake the waiter `q`, which the caller has taken off its list, with
- * interrupts off: mark it and its sleeper and wake the sleeper's own queue,
- * so the bucket's other sleepers stay asleep.
- *
- * The waiter and its sleeper are in memory the sleeping thread frees once it
- * has left its wait, and the wake comes before interrupts are on again: the
- * thread cannot leave its wait before then, since the big lock keeps it
- * from running on another processor and interrupts off keep the tick from
- * switching to it here.
+ * Wake the waiter `q`, which the caller has taken off the list of its
+ * bucket, whose lock it holds: mark it and its sleeper, wake the sleeper's
+ * own queue, so the bucket's other sleepers stay asleep, and then set its
+ * bucket NULL. The waiter and its sleeper are in the waiting thread's
+ * memory, which it may free once it reads that NULL, so that store comes
+ * last, as Linux's smp_store_release of lock_ptr (kernel/futex/waitwake.c:
+ * 117-123); Linux wakes the thread later through a reference it took, and
+ * this wake is made before the store instead, since the queue it wakes is
+ * the waiter's own.
  */
 static void futex_wake_one(struct futex_q *q)
 {
     q->woken = 1;
     q->s->woken = 1;
     wq_wake_all(&q->s->wq);
+    k_barrier();
+    q->hb = NULL;
 }
 
 /**
- * Wake waiters of the futex `space` and `key`, filed in `bucket`, whose
- * bitset meets `bitset`, as Linux's futex_wake walks its bucket: the first
- * is woken whatever `n` is, and the walk stops once the count reaches `n`.
- * A PI waiter, or one of FUTEX_WAIT_REQUEUE_PI, ends it with -EINVAL, the
- * waiters before it woken. Interrupts are off. The count, or -EINVAL.
+ * Wake waiters of the futex `space` and `key`, filed in `hb`, whose lock the
+ * caller holds, whose bitset meets `bitset`, as Linux's futex_wake walks its
+ * bucket: the first is woken whatever `n` is, and the walk stops once the
+ * count reaches `n`. A PI waiter, or one of FUTEX_WAIT_REQUEUE_PI, ends it
+ * with -EINVAL, the waiters before it woken. The count, or -EINVAL.
  */
-static int futex_wake_key(const void *space, uintptr_t key, uint32_t bucket, int n, uint32_t bitset)
+static int futex_wake_key(struct futex_hb *hb, const void *space, uintptr_t key, int n,
+                          uint32_t bitset)
 {
-    struct futex_q **pp = &_waiters[bucket];
+    struct futex_q **pp = &hb->head;
     int woken = 0;
 
     while (*pp) {
@@ -511,13 +662,15 @@ static int futex_wake_key(const void *space, uintptr_t key, uint32_t bucket, int
 /**
  * Wake up to `n` waiters on the futex at `uaddr` whose bitset meets
  * `bitset`, named as `futex_key` names it with `flags_op`, as Linux's
- * futex_wake: an `n` of 0 or less wakes one, as Linux's FUTEX_WAKE does,
- * but none with `strict`, futex_wake(2)'s FLAGS_STRICT. The number woken;
- * `futex_addr_check`'s errors, or -EINVAL from `futex_wake_key`.
+ * futex_wake (kernel/futex/waitwake.c:155): an `n` of 0 or less wakes one,
+ * as Linux's FUTEX_WAKE does, but none with `strict`, futex_wake(2)'s
+ * FLAGS_STRICT. The number woken; `futex_addr_check`'s errors, or -EINVAL
+ * from `futex_wake_key`.
  */
 static int futex_wake(uintptr_t uaddr, int n, uint32_t bitset, int flags_op, int strict)
 {
     int shared = !(flags_op & FUTEX_PRIVATE_FLAG);
+    struct futex_hb *hb;
     const void *space;
     uint32_t flags;
     int rc;
@@ -529,36 +682,15 @@ static int futex_wake(uintptr_t uaddr, int n, uint32_t bitset, int flags_op, int
     if (strict && n == 0) {
         return 0;
     }
-    futex_key(uaddr, shared, &space, &uaddr);
-    flags = kirq_save();
-    rc = futex_wake_key(space, uaddr, futex_bucket(space, uaddr), n, bitset);
-    kirq_restore(flags);
-    return rc;
-}
-
-/**
- * Bring in the pages a futex operation on `addr1` and `addr2` reads with
- * interrupts off, and turn interrupts off once each is still there: the
- * first word's when `need1`, for a read, and the second's when `need2`, for
- * a write with `write2`. A page that left while another was brought in
- * starts the round again. The saved interrupt state in `*flags`; 0, or
- * -EFAULT for a page that cannot be had, with interrupts as they were.
- */
-static int futex_pin2(uintptr_t addr1, int need1, uintptr_t addr2, int need2, int write2,
-                      uint32_t *flags)
-{
-    for (;;) {
-        if ((need1 && !vm_prefault_range(addr1, sizeof(uint32_t), 0)) ||
-            (need2 && !vm_prefault_range(addr2, sizeof(uint32_t), write2))) {
-            return -EFAULT;
-        }
-        *flags = kirq_save();
-        if ((!need1 || vm_resident(addr1, sizeof(uint32_t), 0)) &&
-            (!need2 || vm_resident(addr2, sizeof(uint32_t), write2))) {
-            return 0;
-        }
-        kirq_restore(*flags);
+    rc = futex_name(uaddr, shared, &space, &uaddr);
+    if (rc != 0) {
+        return rc;
     }
+    hb = futex_hash(space, uaddr);
+    flags = futex_hb_lock(hb);
+    rc = futex_wake_key(hb, space, uaddr, n, bitset);
+    futex_hb_unlock(hb, flags);
+    return rc;
 }
 
 /* The bits of futex_requeue's `shared`: its first futex, or its second,
@@ -566,28 +698,119 @@ static int futex_pin2(uintptr_t addr1, int need1, uintptr_t addr2, int need2, in
 #define FUTEX_SHARED1 1u
 #define FUTEX_SHARED2 2u
 
+/* Two futexes a call names, their keys and their buckets. */
+struct futex_pair {
+    const void *space1, *space2;
+    uintptr_t key1, key2;
+    struct futex_hb *hb1, *hb2;
+};
+
+/**
+ * Name the futexes at `addr1` and `addr2` into `f`, as `futex_key` names
+ * each, the first as one that may be shared when `shared1` and the second
+ * when `shared2`, and find their buckets. 0, or `futex_key`'s -EFAULT.
+ */
+static int futex_pair_name(struct futex_pair *f, uintptr_t addr1, int shared1, uintptr_t addr2,
+                           int shared2)
+{
+    int rc = futex_key(addr1, shared1, &f->space1, &f->key1);
+
+    if (rc == 0) {
+        rc = futex_key(addr2, shared2, &f->space2, &f->key2);
+    }
+    if (rc == 0) {
+        f->hb1 = futex_hash(f->space1, f->key1);
+        f->hb2 = futex_hash(f->space2, f->key2);
+    }
+    return rc;
+}
+
+/** Compare the word at `addr` with `val` under its bucket's lock, without a
+ * fault: 0 when it holds it, -EAGAIN when it does not, -EFAULT when it is
+ * not there now. */
+static int futex_cmp_word(uintptr_t addr, uint32_t val)
+{
+    uint32_t word;
+    int rc = get_user_u32_nofault(&word, addr);
+
+    return rc != 0 ? rc : word != val ? -EAGAIN : 0;
+}
+
+/**
+ * Bring in the words a call needs after a fault under its locks, which it
+ * has let go: the one at `addr1` for a read when `need1`, and the one at
+ * `addr2` when `need2`, for a write with `write2`. 1 when each is there, 0
+ * when one cannot be had, which the call answers with -EFAULT.
+ */
+static int futex_fault_in(uintptr_t addr1, int need1, uintptr_t addr2, int need2, int write2)
+{
+    return (!need1 || vm_prefault_range(addr1, sizeof(uint32_t), 0)) &&
+           (!need2 || vm_prefault_range(addr2, sizeof(uint32_t), write2));
+}
+
+/**
+ * Wake up to `nr_wake` waiters of `f`'s first futex and move up to
+ * `nr_requeue` more to its second, under both buckets' locks, as Linux's
+ * requeue_futex moves one (kernel/futex/requeue.c:76): a moved waiter takes
+ * the second key and, when the buckets differ, the second bucket. The
+ * waiters woken and moved are counted in `*count`. 0, or -EINVAL for a PI
+ * waiter or one of FUTEX_WAIT_REQUEUE_PI, which stops the walk.
+ */
+static int futex_requeue_walk(const struct futex_pair *f, int nr_wake, int nr_requeue, int *count)
+{
+    struct futex_q **pp = &f->hb1->head;
+
+    while (*pp && *count - nr_wake < nr_requeue) {
+        struct futex_q *q = *pp;
+
+        if (q->space != f->space1 || q->uaddr != f->key1) {
+            pp = &q->next;
+            continue;
+        }
+        if (q->pi || q->requeue) {
+            return -EINVAL;
+        }
+        if (++*count <= nr_wake) {
+            *pp = q->next;
+            futex_wake_one(q);
+            continue;
+        }
+        q->space = f->space2;
+        q->uaddr = f->key2;
+        if (f->hb1 == f->hb2) {
+            pp = &q->next;
+        } else {
+            *pp = q->next;
+            futex_queue(q, f->hb2);
+        }
+    }
+    return 0;
+}
+
 /**
  * Wake up to `nr_wake` waiters of the futex at `addr1` and move up to
  * `nr_requeue` more to the futex at `addr2`, as Linux's futex_requeue
- * without PI: each address named as `futex_key` names it, as one that may
- * be shared when `shared` has its FUTEX_SHARED1 or FUTEX_SHARED2 bit, and
- * with `cmp` only while the word at `addr1`
- * holds `*cmp`. The waiters woken and moved; -EINVAL for a negative count,
- * then `futex_addr_check`'s errors for each address, -EFAULT for a word that
+ * without PI (kernel/futex/requeue.c:380): each address named as
+ * `futex_key` names it, as one that may be shared when `shared` has its
+ * FUTEX_SHARED1 or FUTEX_SHARED2 bit, and with `cmp` only while the word at
+ * `addr1` holds `*cmp`, which is read under both buckets' locks. The
+ * waiters woken and moved; -EINVAL for a negative count, then
+ * `futex_addr_check`'s errors for each address, -EFAULT for a word that
  * cannot be read, -EAGAIN when it differs, and -EINVAL for a PI waiter or
  * one of FUTEX_WAIT_REQUEUE_PI, which stops the walk. A moved waiter keeps
  * its sleeper, so a wake of the second futex ends its wait, and its wait
- * takes it off the second futex's list when it ends otherwise.
+ * takes it off the second futex's list when it ends otherwise. A fault
+ * comes before the walk, with no waiter touched, and the call starts again
+ * once the words are in.
  */
 static int futex_requeue(uintptr_t addr1, uintptr_t addr2, unsigned int shared, int nr_wake,
                          int nr_requeue, const uint32_t *cmp)
 {
     int shared1 = (shared & FUTEX_SHARED1) != 0, shared2 = (shared & FUTEX_SHARED2) != 0;
-    const void *space1, *space2;
-    uintptr_t key1, key2;
-    uint32_t b1, b2, flags = 0, word = 0;
-    struct futex_q **pp;
-    int rc, count = 0;
+    struct mm *mm = current_proc->mm;
+    struct futex_pair f;
+    uint32_t flags;
+    int rc, count;
 
     if (nr_wake < 0 || nr_requeue < 0) {
         return -EINVAL;
@@ -596,49 +819,36 @@ static int futex_requeue(uintptr_t addr1, uintptr_t addr2, unsigned int shared, 
     if (rc == 0) {
         rc = futex_addr_check(addr2, shared2);
     }
-    if (rc == 0) {
-        rc = futex_pin2(addr1, cmp != NULL || shared1, addr2, shared2, 0, &flags);
-    }
     if (rc != 0) {
         return rc;
     }
-    futex_key(addr1, shared1, &space1, &key1);
-    futex_key(addr2, shared2, &space2, &key2);
-    if (cmp && get_user_u32(&word, addr1) != 0) {
-        rc = -EFAULT;
-    } else if (cmp && word != *cmp) {
-        rc = -EAGAIN;
+    if (!cmp && !shared1 && !shared2) {
+        mm = NULL;
+    } else if (mm == NULL) {
+        return -EFAULT;
     }
-    b1 = futex_bucket(space1, key1);
-    b2 = futex_bucket(space2, key2);
-    pp = &_waiters[b1];
-    while (rc == 0 && *pp && count - nr_wake < nr_requeue) {
-        struct futex_q *q = *pp;
-
-        if (q->space != space1 || q->uaddr != key1) {
-            pp = &q->next;
-            continue;
+    for (;;) {
+        count = 0;
+        if (mm) {
+            mmap_read_lock(mm);
         }
-        if (q->pi || q->requeue) {
-            rc = -EINVAL;
+        rc = futex_pair_name(&f, addr1, shared1, addr2, shared2);
+        if (rc == 0) {
+            flags = futex_hb_lock2(f.hb1, f.hb2);
+            rc = cmp ? futex_cmp_word(addr1, *cmp) : 0;
+            if (rc == 0) {
+                rc = futex_requeue_walk(&f, nr_wake, nr_requeue, &count);
+            }
+            futex_hb_unlock2(f.hb1, f.hb2, flags);
+        }
+        if (mm) {
+            mmap_unlock(mm);
+        }
+        if (rc != -EFAULT || count != 0 ||
+            !futex_fault_in(addr1, cmp || shared1, addr2, shared2, 0)) {
             break;
         }
-        if (++count <= nr_wake) {
-            *pp = q->next;
-            futex_wake_one(q);
-            continue;
-        }
-        q->space = space2;
-        q->uaddr = key2;
-        if (b1 == b2) {
-            pp = &q->next;
-        } else {
-            *pp = q->next;
-            q->next = _waiters[b2];
-            _waiters[b2] = q;
-        }
     }
-    kirq_restore(flags);
     return rc != 0 ? rc : count;
 }
 
@@ -667,13 +877,15 @@ static int32_t futex_op_field(uint32_t v, int at)
 }
 
 /**
- * Apply FUTEX_WAKE_OP's encoded `op` to the word at `addr`, resident and
- * writable with interrupts off, as Linux's futex_atomic_op_inuser: the
- * operation on its argument, shifted into a bit with FUTEX_OP_OPARG_SHIFT
- * (a shift past 31 taken modulo 32), in one compare-and-exchange, and then
- * the comparison of the old value. 1 or 0, the comparison; -ENOSYS for an
- * unknown operation, which leaves the word, or comparison, which does not;
- * -EFAULT, which asks the caller to bring the page in again.
+ * Apply FUTEX_WAKE_OP's encoded `op` to the word at `addr`, under the
+ * regions' lock and a bucket's lock, as Linux's futex_atomic_op_inuser
+ * (kernel/futex/waitwake.c:203): the operation on its argument, shifted into
+ * a bit with FUTEX_OP_OPARG_SHIFT (a shift past 31 taken modulo 32), in one
+ * compare-and-exchange that does not fault, and then the comparison of the
+ * old value. 1 or 0, the comparison; -ENOSYS for an unknown operation,
+ * which leaves the word, or comparison, which does not; -EFAULT, with the
+ * word as it was, for a page that is not there or not writable now, which
+ * the caller brings in with its locks let go.
  */
 static int futex_op(uintptr_t addr, uint32_t op)
 {
@@ -689,7 +901,7 @@ static int futex_op(uintptr_t addr, uint32_t op)
         return -ENOSYS;
     }
     do {
-        if (get_user_u32(&old, addr) != 0) {
+        if (get_user_u32_nofault(&old, addr) != 0) {
             return -EFAULT;
         }
         value = kind == FUTEX_OP_SET    ? (uint32_t)oparg
@@ -697,7 +909,7 @@ static int futex_op(uintptr_t addr, uint32_t op)
                 : kind == FUTEX_OP_OR   ? old | (uint32_t)oparg
                 : kind == FUTEX_OP_ANDN ? old & ~(uint32_t)oparg
                                         : old ^ (uint32_t)oparg;
-        if (cmpxchg_user_u32(addr, old, value, &seen) != 0) {
+        if (cmpxchg_user_u32_nofault(addr, old, value, &seen) != 0) {
             return -EFAULT;
         }
     } while (seen != old);
@@ -721,56 +933,58 @@ static int futex_op(uintptr_t addr, uint32_t op)
 }
 
 /**
- * FUTEX_WAKE_OP, as Linux's futex_wake_op: change the word at `addr2` by
- * `op` (`futex_op`), wake up to `nr_wake` waiters of `addr1`, and, when
- * the comparison of the second word's old value holds, up to `nr_wake2` of
- * `addr2`, each walk waking one at least. The waiters woken;
- * `futex_addr_check`'s errors for either address, -EFAULT for a second
- * word that cannot be written, `futex_op`'s -ENOSYS, or -EINVAL for a PI
- * waiter.
+ * FUTEX_WAKE_OP, as Linux's futex_wake_op (kernel/futex/waitwake.c:253):
+ * under both buckets' locks, change the word at `addr2` by `op`
+ * (`futex_op`), wake up to `nr_wake` waiters of `addr1`, and, when the
+ * comparison of the second word's old value holds, up to `nr_wake2` of
+ * `addr2`, each walk waking one at least. A second word that is not there
+ * is brought in with the locks let go, and the call starts again. The
+ * waiters woken; `futex_addr_check`'s errors for either address, -EFAULT for
+ * a second word that cannot be written, `futex_op`'s -ENOSYS, or -EINVAL for
+ * a PI waiter.
  */
 static int futex_wake_op(uintptr_t addr1, uintptr_t addr2, int nr_wake, int nr_wake2, uint32_t op,
                          int shared)
 {
-    const void *space1, *space2;
-    uintptr_t key1, key2;
-    uint32_t flags = 0;
+    struct mm *mm = current_proc->mm;
+    struct futex_pair f;
+    uint32_t flags;
     int rc, cond, more;
 
     rc = futex_addr_check(addr1, shared);
     if (rc == 0) {
         rc = futex_addr_check(addr2, shared);
     }
-    for (;;) {
+    if (rc != 0) {
+        return rc;
+    }
+    if (mm == NULL) {
+        return -EFAULT;
+    }
+    do {
+        mmap_read_lock(mm);
+        rc = futex_pair_name(&f, addr1, shared, addr2, shared);
         if (rc == 0) {
-            rc = futex_pin2(addr1, shared, addr2, 1, 1, &flags);
+            flags = futex_hb_lock2(f.hb1, f.hb2);
+            rc = cond = futex_op(addr2, op);
+            if (cond >= 0) {
+                rc = futex_wake_key(f.hb1, f.space1, f.key1, nr_wake, FUTEX_MATCH_ANY);
+            }
+            if (cond > 0 && rc >= 0) {
+                more = futex_wake_key(f.hb2, f.space2, f.key2, nr_wake2, FUTEX_MATCH_ANY);
+                rc = more < 0 ? more : rc + more;
+            }
+            futex_hb_unlock2(f.hb1, f.hb2, flags);
         }
-        if (rc != 0) {
-            return rc;
-        }
-        cond = futex_op(addr2, op);
-        if (cond != -EFAULT) {
-            break;
-        }
-        kirq_restore(flags);
-    }
-    if (cond < 0) {
-        kirq_restore(flags);
-        return cond;
-    }
-    futex_key(addr1, shared, &space1, &key1);
-    futex_key(addr2, shared, &space2, &key2);
-    rc = futex_wake_key(space1, key1, futex_bucket(space1, key1), nr_wake, FUTEX_MATCH_ANY);
-    if (rc >= 0 && cond) {
-        more = futex_wake_key(space2, key2, futex_bucket(space2, key2), nr_wake2, FUTEX_MATCH_ANY);
-        rc = more < 0 ? more : rc + more;
-    }
-    kirq_restore(flags);
+        mmap_unlock(mm);
+    } while (rc == -EFAULT && futex_fault_in(addr1, shared, addr2, 1, 1));
     return rc;
 }
 
-/* PI state exists only while a waiter holds a reference to it. The big
- * lock and masked interrupts serialize its owner and the bucket links. */
+/* PI state exists only while a waiter holds a reference to it. Every PI
+ * operation holds the big lock (`futex_pi_call`), which serializes the
+ * states, their owners and the PI waiters' coming and going; the bucket
+ * locks cover the lists the PI waiters are on beside the others. */
 struct futex_pi {
     const void *space;
     uintptr_t key;
@@ -782,7 +996,7 @@ struct futex_pi {
 static struct futex_pi *pi_states;
 static wait_queue_t pi_exit_queue;
 
-/** Find the PI state of a resident futex key, with interrupts masked. */
+/** Find the PI state of a futex key, under the big lock. */
 static struct futex_pi *pi_find(const void *space, uintptr_t key)
 {
     struct futex_pi *pi;
@@ -795,10 +1009,11 @@ static struct futex_pi *pi_find(const void *space, uintptr_t key)
     return NULL;
 }
 
-/** Queue PI and requeue waiters by priority, FIFO among equal priorities. */
-static void futex_enqueue(struct futex_q *q)
+/** File a PI or requeue waiter on `hb`, whose lock the caller holds, by
+ * priority, FIFO among equal priorities. */
+static void futex_enqueue(struct futex_q *q, struct futex_hb *hb)
 {
-    struct futex_q **pp = &_waiters[futex_bucket(q->space, q->uaddr)];
+    struct futex_q **pp = &hb->head;
 
     while (*pp) {
         struct futex_q *at = *pp;
@@ -811,14 +1026,15 @@ static void futex_enqueue(struct futex_q *q)
     }
     q->next = *pp;
     *pp = q;
+    q->hb = hb;
 }
 
-/** Find the oldest highest-priority waiter of pi, with interrupts masked. */
+/** Find the oldest highest-priority waiter of pi, under its bucket's lock. */
 static struct futex_q *pi_top(struct futex_pi *pi)
 {
     struct futex_q *q, *best = NULL;
 
-    for (q = _waiters[futex_bucket(pi->space, pi->key)]; q; q = q->next) {
+    for (q = futex_hash(pi->space, pi->key)->head; q; q = q->next) {
         if (q->pi == pi && (!best || sched_priority(q->task) > sched_priority(best->task))) {
             best = q;
         }
@@ -826,14 +1042,27 @@ static struct futex_q *pi_top(struct futex_pi *pi)
     return best;
 }
 
-/** Rebuild donations along every blocked-owner chain, without recursion.
- * Removing all donations first also removes a timed-out waiter's boost. */
+/** The priority of pi's top waiter, read under its bucket's lock, or -1
+ * when it has none. */
+static int pi_top_priority(struct futex_pi *pi)
+{
+    struct futex_hb *hb = futex_hash(pi->space, pi->key);
+    uint32_t flags = futex_hb_lock(hb);
+    struct futex_q *q = pi_top(pi);
+    int prio = q ? (int)sched_priority(q->task) : -1;
+
+    futex_hb_unlock(hb, flags);
+    return prio;
+}
+
+/** Rebuild donations along every blocked-owner chain, without recursion,
+ * under the big lock and no bucket's lock. Removing all donations first also
+ * removes a timed-out waiter's boost. */
 void futex_pi_recalculate(void)
 {
     struct futex_pi *pi;
-    struct futex_q *q;
     uint32_t flags = kirq_save();
-    int changed;
+    int changed, prio;
 
     for (pi = pi_states; pi; pi = pi->next) {
         if (pi->owner) {
@@ -846,9 +1075,9 @@ void futex_pi_recalculate(void)
             if (!pi->owner) {
                 continue;
             }
-            q = pi_top(pi);
-            if (q && sched_priority(q->task) > pi->owner->pi_priority) {
-                pi->owner->pi_priority = (uint8_t)sched_priority(q->task);
+            prio = pi_top_priority(pi);
+            if (prio > (int)pi->owner->pi_priority) {
+                pi->owner->pi_priority = (uint8_t)prio;
                 changed = 1;
             }
         }
@@ -896,12 +1125,13 @@ static int pi_deadlock(process_t *task, process_t *owner)
     return 0;
 }
 
-/** Reject an ordinary wait mixed with PI ownership at the same key. */
+/** Reject an ordinary wait mixed with PI ownership at the same key, under
+ * the key's bucket's lock. */
 static int pi_mixed(const void *space, uintptr_t key)
 {
     struct futex_q *q;
 
-    for (q = _waiters[futex_bucket(space, key)]; q; q = q->next) {
+    for (q = futex_hash(space, key)->head; q; q = q->next) {
         if (q->space == space && q->uaddr == key && !q->pi) {
             return 1;
         }
@@ -918,9 +1148,12 @@ static int pi_owner_matches(const struct futex_pi *pi, uint32_t word)
 }
 
 /** Attach q to a PI owner, or acquire a free word for q's task.
- * The word is resident and writable, interrupts are masked, and spare is
- * preallocated. Returns 1 for acquisition, 0 for an attached waiter, or a
- * negative Linux error. A failed atomic exchange asks the caller to retry. */
+ * The caller holds the big lock, the regions' lock to read and the target
+ * key's bucket's lock, and spare is preallocated; the word is read and
+ * exchanged without a fault. Returns 1 for acquisition, 0 for an attached
+ * waiter, or a negative Linux error, -EFAULT for a word not there now,
+ * which the caller brings in with its locks let go. A failed atomic
+ * exchange asks the caller to retry. */
 static int pi_attach(uintptr_t addr, struct futex_q *q, struct futex_pi **spare, int trylock,
                      int force)
 {
@@ -931,7 +1164,7 @@ static int pi_attach(uintptr_t addr, struct futex_q *q, struct futex_pi **spare,
     uint32_t word, seen, tid = pid_seen_by(current_proc, q->task->pid);
     int rc;
 
-    if (get_user_u32(&word, addr) != 0) {
+    if (get_user_u32_nofault(&word, addr) != 0) {
         return -EFAULT;
     }
     if ((word & FUTEX_TID_MASK) == tid) {
@@ -946,14 +1179,14 @@ static int pi_attach(uintptr_t addr, struct futex_q *q, struct futex_pi **spare,
         }
         owner = pi->owner;
     } else if ((word & FUTEX_TID_MASK) == 0) {
-        rc = cmpxchg_user_u32(addr, word,
-                              tid | (word & FUTEX_OWNER_DIED) | (force ? FUTEX_WAITERS : 0), &seen);
+        rc = cmpxchg_user_u32_nofault(
+            addr, word, tid | (word & FUTEX_OWNER_DIED) | (force ? FUTEX_WAITERS : 0), &seen);
         if (rc != 0 || seen != word) {
             return rc != 0 ? -EFAULT : -EAGAIN;
         }
         return 1;
     } else {
-        rc = cmpxchg_user_u32(addr, word, word | FUTEX_WAITERS, &seen);
+        rc = cmpxchg_user_u32_nofault(addr, word, word | FUTEX_WAITERS, &seen);
         if (rc != 0 || seen != word) {
             return rc != 0 ? -EFAULT : -EAGAIN;
         }
@@ -994,23 +1227,28 @@ static int pi_attach(uintptr_t addr, struct futex_q *q, struct futex_pi **spare,
     return 0;
 }
 
-/** Transfer kernel ownership and wake the top waiter; its reference keeps
- * the state alive until it has fixed the user word in its own mapping. */
+/** Transfer kernel ownership and wake the top waiter, under the big lock and
+ * no bucket's lock; its reference keeps the state alive until it has fixed
+ * the user word in its own mapping. */
 static void pi_handoff(struct futex_pi *pi)
 {
-    struct futex_q *q = pi_top(pi);
+    struct futex_hb *hb = futex_hash(pi->space, pi->key);
     process_t *old = pi->owner;
+    struct futex_q *q;
+    uint32_t flags;
 
+    flags = futex_hb_lock(hb);
+    q = pi_top(pi);
     pi->owner = q ? q->task : NULL;
+    if (q) {
+        futex_unlink(q);
+        q->task->pi_blocked = NULL;
+        futex_wake_one(q);
+    }
+    futex_hb_unlock(hb, flags);
     if (old) {
         old->pi_priority = 0;
         sched_priority_changed(old);
-    }
-    if (q) {
-        futex_unlink(q, futex_bucket(q->space, q->uaddr));
-        q->woken = q->s->woken = 1;
-        q->task->pi_blocked = NULL;
-        wq_wake_all(&q->s->wq);
     }
     futex_pi_recalculate();
 }
@@ -1044,51 +1282,55 @@ static int pi_deadline(struct futex_sleeper *s, const struct kernel_timespec __u
 }
 
 /** Repair a handoff's word through the new owner's mapping, including a
- * dead owner whose address space no longer exists. Returns 0 or -EFAULT. */
+ * dead owner whose address space no longer exists, under the big lock and
+ * the regions' lock, the page brought in with that lock let go when it is
+ * not there. Returns 0 or -EFAULT. */
 static int pi_fixup(uintptr_t addr, struct futex_pi *pi)
 {
-    uint32_t word, seen, flags, value;
+    struct mm *mm = current_proc->mm;
+    uint32_t word, seen = 0, value;
+    int rc;
 
-    if (!vm_prefault_range(addr, sizeof(word), 1)) {
+    if (mm == NULL) {
         return -EFAULT;
     }
-    flags = kirq_save();
     for (;;) {
-        if (get_user_u32(&word, addr) != 0) {
-            kirq_restore(flags);
-            return -EFAULT;
-        }
-        value = pid_seen_by(current_proc, current_proc->pid) | FUTEX_WAITERS |
-                ((pi->died || (word & FUTEX_OWNER_DIED)) ? FUTEX_OWNER_DIED : 0);
-        if (cmpxchg_user_u32(addr, word, value, &seen) != 0) {
-            kirq_restore(flags);
-            return -EFAULT;
-        }
-        if (seen == word) {
+        mmap_read_lock(mm);
+        do {
+            rc = get_user_u32_nofault(&word, addr);
+            if (rc == 0) {
+                value = pid_seen_by(current_proc, current_proc->pid) | FUTEX_WAITERS |
+                        ((pi->died || (word & FUTEX_OWNER_DIED)) ? FUTEX_OWNER_DIED : 0);
+                rc = cmpxchg_user_u32_nofault(addr, word, value, &seen);
+            }
+        } while (rc == 0 && seen != word);
+        mmap_unlock(mm);
+        if (rc == 0) {
             pi->died = 0;
-            kirq_restore(flags);
             return 0;
+        }
+        if (!vm_prefault_range(addr, sizeof(word), 1)) {
+            return -EFAULT;
         }
     }
 }
 
-/** Sleep with a queued PI or requeue waiter and then remove its links.
- * A handoff wins over a simultaneous timeout or signal. The sleep takes its
- * name from `q->wchan`. */
+/** Sleep with a queued PI or requeue waiter and then remove its links,
+ * under the big lock, which the sleep lets go and takes back. A handoff
+ * wins over a simultaneous timeout or signal. The sleep takes its name from
+ * `q->wchan`. */
 static int pi_sleep(struct futex_q *q, uintptr_t addr)
 {
     struct futex_sleeper *s = q->s;
     struct futex_pi *pi;
-    uint32_t flags;
     int rc;
 
     current_proc->wakeup_tick = s->timed ? (s->target ? s->target : 1u) : 0;
     rc = wq_wait_event_as(&s->wq, futex_sleeper_done, s, q->wchan);
     current_proc->wakeup_tick = 0;
-    flags = kirq_save();
+    (void)futex_unqueue_q(q);
     pi = q->pi;
     if (!q->woken) {
-        futex_unlink(q, futex_bucket(q->space, q->uaddr));
         current_proc->pi_blocked = NULL;
         rc = rc != 0 ? rc : -ETIMEDOUT;
         if (q->requeue && pi && rc == -EINTR) {
@@ -1103,18 +1345,13 @@ static int pi_sleep(struct futex_q *q, uintptr_t addr)
         current_proc->restart_kind = RESTART_NOINTR;
     }
     futex_pi_recalculate();
-    kirq_restore(flags);
     if (q->woken && pi) {
         rc = pi_fixup(addr, pi);
         if (rc != 0) {
-            flags = kirq_save();
             pi_handoff(pi);
-            kirq_restore(flags);
         }
     }
-    flags = kirq_save();
     pi_put(pi);
-    kirq_restore(flags);
     return rc;
 }
 
@@ -1128,15 +1365,18 @@ static int pi_owner_ready(void *arg)
 }
 
 /** Lock a PI futex, with an absolute real-time deadline for LOCK_PI or
- * the selected clock for LOCK_PI2. TRYLOCK never sleeps. */
+ * the selected clock for LOCK_PI2, under the big lock, as Linux's
+ * futex_lock_pi (kernel/futex/pi.c:918): the word is read and exchanged
+ * under the regions' lock and its bucket's lock, and brought in with both
+ * let go when it is not there. TRYLOCK never sleeps. */
 static int futex_lock_pi(uintptr_t addr, const struct kernel_timespec __user *utime, int op,
                          int trylock)
 {
+    struct mm *mm = current_proc->mm;
     struct futex_q q;
     struct futex_sleeper s;
     struct futex_pi *spare;
-    const void *space;
-    uintptr_t key;
+    struct futex_hb *hb;
     uint32_t flags;
     int rc;
 
@@ -1144,6 +1384,9 @@ static int futex_lock_pi(uintptr_t addr, const struct kernel_timespec __user *ut
                      (op & FUTEX_CLOCK_REALTIME) || (op & 127) == FUTEX_LOCK_PI);
     if (rc != 0) {
         return rc;
+    }
+    if (mm == NULL) {
+        return -EFAULT;
     }
     spare = (struct futex_pi *)kmalloc(sizeof(*spare));
     if (!spare) {
@@ -1154,87 +1397,129 @@ static int futex_lock_pi(uintptr_t addr, const struct kernel_timespec __user *ut
     q.s = &s;
     q.bitset = FUTEX_MATCH_ANY;
     q.wchan = "futex_lock_pi"; /* rt_mutex_slowlock_block is __sched, skipped */
-retry_owner:
-    if (!vm_prefault_range(addr, sizeof(uint32_t), 1)) {
-        kfree(spare);
-        return -EFAULT;
-    }
-    flags = kirq_save();
-    futex_key(addr, !(op & FUTEX_PRIVATE_FLAG), &space, &key);
-    q.target_space = space;
-    q.target_key = key;
-    do {
-        rc = pi_attach(addr, &q, &spare, trylock, 0);
-    } while (rc == -EAGAIN && !trylock);
-    if (rc == 0) {
-        futex_enqueue(&q);
-        futex_pi_recalculate();
-    }
-    kirq_restore(flags);
-    if (rc == -EBUSY) {
-        (void)wq_wait_event_nointr(&pi_exit_queue, pi_owner_ready, &q.owner_tid);
-        goto retry_owner;
+    for (;;) {
+        mmap_read_lock(mm);
+        rc = futex_key(addr, !(op & FUTEX_PRIVATE_FLAG), &q.target_space, &q.target_key);
+        if (rc == 0) {
+            hb = futex_hash(q.target_space, q.target_key);
+            flags = futex_hb_lock(hb);
+            do {
+                rc = pi_attach(addr, &q, &spare, trylock, 0);
+            } while (rc == -EAGAIN && !trylock);
+            if (rc == 0) {
+                futex_enqueue(&q, hb);
+            }
+            futex_hb_unlock(hb, flags);
+        }
+        mmap_unlock(mm);
+        if (rc == -EBUSY) {
+            (void)wq_wait_event_nointr(&pi_exit_queue, pi_owner_ready, &q.owner_tid);
+        } else if (rc != -EFAULT || !vm_prefault_range(addr, sizeof(uint32_t), 1)) {
+            break;
+        }
     }
     kfree(spare);
     if (rc != 0) {
         return rc == 1 ? 0 : rc;
     }
+    futex_pi_recalculate();
     return pi_sleep(&q, addr);
 }
 
-/** Unlock a PI word only for its owner, passing it to the top waiter with
- * WAITERS still set, or atomically clearing it when no waiter remains. */
-static int futex_unlock_pi(uintptr_t addr, int op)
+/**
+ * UNLOCK_PI's step under the regions' lock and the bucket's lock of `space`
+ * and `key`: check that the word at `addr` names the caller, and write the
+ * top waiter's id with FUTEX_WAITERS, or 0 with no waiter, setting
+ * `*handoff` to the state to hand over, or NULL. 0; -EPERM for a word of
+ * another owner; -EINVAL for ordinary waiters on the key or a state of
+ * another owner; -EAGAIN when the word changed, as Linux returns it; or
+ * -EFAULT for a word not there or not writable now.
+ */
+static int pi_unlock_word(uintptr_t addr, const void *space, uintptr_t key,
+                          struct futex_pi **handoff)
 {
-    const void *space;
-    uintptr_t key;
     struct futex_pi *pi;
     struct futex_q *q;
-    uint32_t word, seen, value, flags;
-    int rc = 0;
+    uint32_t word, seen, value;
+    int rc = get_user_u32_nofault(&word, addr);
 
-    if (!vm_prefault_range(addr, sizeof(word), 1)) {
+    if (rc != 0) {
+        return rc;
+    }
+    if ((word & FUTEX_TID_MASK) != pid_seen_by(current_proc, current_proc->pid)) {
+        return -EPERM;
+    }
+    if (pi_mixed(space, key)) {
+        return -EINVAL;
+    }
+    pi = pi_find(space, key);
+    if (pi && pi->owner != current_proc) {
+        return -EINVAL;
+    }
+    q = pi ? pi_top(pi) : NULL;
+    value = q ? FUTEX_WAITERS | pid_seen_by(current_proc, q->task->pid) : 0;
+    rc = cmpxchg_user_u32_nofault(addr, word, value, &seen);
+    if (rc != 0) {
+        return rc;
+    }
+    if (seen != word) {
+        return -EAGAIN;
+    }
+    *handoff = pi;
+    return 0;
+}
+
+/** Unlock a PI word only for its owner, passing it to the top waiter with
+ * WAITERS still set, or atomically clearing it when no waiter remains,
+ * under the big lock, as Linux's futex_unlock_pi (kernel/futex/pi.c:1107).
+ * The top waiter whose id is written stays the top until the handoff, since
+ * PI waiters come and go only under the big lock. */
+static int futex_unlock_pi(uintptr_t addr, int op)
+{
+    struct mm *mm = current_proc->mm;
+    struct futex_pi *handoff;
+    struct futex_hb *hb;
+    const void *space;
+    uintptr_t key;
+    uint32_t flags;
+    int rc;
+
+    if (mm == NULL) {
         return -EFAULT;
     }
-    flags = kirq_save();
-    futex_key(addr, !(op & FUTEX_PRIVATE_FLAG), &space, &key);
-    if (get_user_u32(&word, addr) != 0) {
-        rc = -EFAULT;
-    } else if ((word & FUTEX_TID_MASK) != pid_seen_by(current_proc, current_proc->pid)) {
-        rc = -EPERM;
-    } else if (pi_mixed(space, key)) {
-        rc = -EINVAL;
-    } else {
-        pi = pi_find(space, key);
-        q = pi ? pi_top(pi) : NULL;
-        if (pi && pi->owner != current_proc) {
-            rc = -EINVAL;
-        } else {
-            value = q ? FUTEX_WAITERS | pid_seen_by(current_proc, q->task->pid) : 0;
-            if (cmpxchg_user_u32(addr, word, value, &seen) != 0) {
-                rc = -EFAULT;
-            } else if (seen != word) {
-                rc = -EAGAIN;
-            } else if (pi) {
-                pi->died = 0;
-                pi_handoff(pi);
-            }
+    do {
+        handoff = NULL;
+        mmap_read_lock(mm);
+        rc = futex_key(addr, !(op & FUTEX_PRIVATE_FLAG), &space, &key);
+        if (rc == 0) {
+            hb = futex_hash(space, key);
+            flags = futex_hb_lock(hb);
+            rc = pi_unlock_word(addr, space, key, &handoff);
+            futex_hb_unlock(hb, flags);
         }
+        mmap_unlock(mm);
+    } while (rc == -EFAULT && vm_prefault_range(addr, sizeof(uint32_t), 1));
+    if (handoff) {
+        handoff->died = 0;
+        pi_handoff(handoff);
     }
-    kirq_restore(flags);
     return rc;
 }
 
-/** Wait on a condition word to be requeued to a distinct PI mutex.
- * Both pages are faulted before the source comparison and queue insertion. */
+/** Wait on a condition word to be requeued to a distinct PI mutex, under
+ * the big lock, as Linux's futex_wait_requeue_pi (kernel/futex/requeue.c:
+ * 781): the condition word is compared and the waiter filed under its
+ * bucket's lock. */
 static int futex_wait_requeue_pi(uintptr_t addr, uint32_t val,
                                  const struct kernel_timespec __user *utime, uintptr_t addr2,
                                  int op)
 {
+    struct mm *mm = current_proc->mm;
     struct futex_q q;
     struct futex_sleeper s;
+    struct futex_hb *hb;
     uint32_t flags, word;
-    int rc;
+    int rc, shared = !(op & FUTEX_PRIVATE_FLAG);
 
     if ((addr2 & 3u) || addr == addr2) {
         return -EINVAL;
@@ -1242,6 +1527,9 @@ static int futex_wait_requeue_pi(uintptr_t addr, uint32_t val,
     rc = pi_deadline(&s, utime, (op & FUTEX_CLOCK_REALTIME) != 0);
     if (rc != 0) {
         return rc;
+    }
+    if (mm == NULL || !vm_prefault_range(addr2, sizeof(word), 1)) {
+        return -EFAULT;
     }
     k_memset(&q, 0, sizeof(q));
     q.task = current_proc;
@@ -1253,45 +1541,46 @@ static int futex_wait_requeue_pi(uintptr_t addr, uint32_t val,
      * so the waiter never blocks again in rt_mutex_wait_proxy_lock. */
     q.wchan = "futex_wait_queue";
     for (;;) {
-        if (!vm_prefault_range(addr2, sizeof(word), 1) ||
-            !vm_prefault_range(addr, sizeof(word), 0)) {
-            return -EFAULT;
+        mmap_read_lock(mm);
+        rc = futex_key(addr, shared, &q.space, &q.uaddr);
+        if (rc == 0) {
+            rc = futex_key(addr2, shared, &q.target_space, &q.target_key);
         }
-        flags = kirq_save();
-        if (paging_user_phys(current_proc->page_dir, addr2) != 0) {
+        if (rc == 0 && q.space == q.target_space && q.uaddr == q.target_key) {
+            rc = -EINVAL;
+        } else if (rc == 0) {
+            hb = futex_hash(q.space, q.uaddr);
+            flags = futex_hb_lock(hb);
+            rc = get_user_u32_nofault(&word, addr);
+            if (rc == 0 && word != val) {
+                rc = -EAGAIN;
+            }
+            if (rc == 0) {
+                futex_enqueue(&q, hb);
+            }
+            futex_hb_unlock(hb, flags);
+        }
+        mmap_unlock(mm);
+        if (rc != -EFAULT || !futex_fault_in(addr, 1, addr2, 1, 1)) {
             break;
         }
-        kirq_restore(flags);
     }
-    futex_key(addr, !(op & FUTEX_PRIVATE_FLAG), &q.space, &q.uaddr);
-    futex_key(addr2, !(op & FUTEX_PRIVATE_FLAG), &q.target_space, &q.target_key);
-    if (q.space == q.target_space && q.uaddr == q.target_key) {
-        rc = -EINVAL;
-    } else if (get_user_u32(&word, addr) != 0) {
-        rc = -EFAULT;
-    } else if (word != val) {
-        rc = -EAGAIN;
-    } else {
-        futex_enqueue(&q);
-        rc = 0;
-    }
-    kirq_restore(flags);
     return rc == 0 ? pi_sleep(&q, addr2) : rc;
 }
 
-/** Move one validated condition waiter, retaining the source bucket before
- * attachment replaces its key. Returns 0 or the PI attachment error. */
-static int pi_requeue_one(struct futex_q *q, uintptr_t addr, struct futex_pi **spare)
+/** Move one validated condition waiter from its bucket to `hb2`, whose
+ * locks the caller holds both of, or give it the free mutex and wake it.
+ * Returns 0 or the PI attachment error. */
+static int pi_requeue_one(struct futex_q *q, uintptr_t addr, struct futex_pi **spare,
+                          struct futex_hb *hb2)
 {
-    uint32_t bucket = futex_bucket(q->space, q->uaddr);
     int rc = pi_attach(addr, q, spare, 0, 1);
 
     if (rc < 0) {
         return rc;
     }
-    futex_unlink(q, bucket);
+    futex_unlink(q);
     if (rc == 1) {
-        q->woken = q->s->woken = 1;
         q->pi = *spare;
         *spare = NULL;
         q->pi->space = q->target_space;
@@ -1301,81 +1590,95 @@ static int pi_requeue_one(struct futex_q *q, uintptr_t addr, struct futex_pi **s
         q->pi->died = 0;
         q->pi->next = pi_states;
         pi_states = q->pi;
-        wq_wake_all(&q->s->wq);
+        futex_wake_one(q);
     } else {
-        futex_enqueue(q);
+        futex_enqueue(q, hb2);
+    }
+    return 0;
+}
+
+/**
+ * Move up to `nr_requeue` + 1 condition waiters of `f`'s first futex to
+ * the PI mutex at `addr2`, `f`'s second, under the big lock and both
+ * buckets' locks, counting them in `*count`. 0; -EINVAL for a waiter of
+ * another kind or one that asked for another mutex; or the attachment's
+ * error.
+ */
+static int pi_requeue_walk(const struct futex_pair *f, uintptr_t addr2, uint32_t nr_requeue,
+                           struct futex_pi **spare, int *count)
+{
+    struct futex_q *q, *next;
+    int rc;
+
+    for (q = f->hb1->head; q; q = next) {
+        next = q->next;
+        if (q->space != f->space1 || q->uaddr != f->key1) {
+            continue;
+        }
+        if (!q->requeue || q->pi || q->target_space != f->space2 || q->target_key != f->key2) {
+            return -EINVAL;
+        }
+        rc = pi_requeue_one(q, addr2, spare, f->hb2);
+        if (rc < 0) {
+            return rc;
+        }
+        if ((uint32_t)(++*count - 1) == nr_requeue) {
+            break;
+        }
     }
     return 0;
 }
 
 /** Compare a condition word and move up to nr_requeue + 1 waiters to its
- * PI mutex. The first waiter may acquire it immediately; val must be 1. */
+ * PI mutex, under the big lock and both buckets' locks. The first waiter
+ * may acquire it immediately; val must be 1. A word that is not there is
+ * brought in with the locks let go, which can happen only before the
+ * first waiter moves, since its attachment reads the mutex's word and
+ * leaves it written or a state that later ones only read. */
 static int futex_cmp_requeue_pi(uintptr_t addr, uint32_t val, uint32_t nr_requeue, uintptr_t addr2,
                                 uint32_t cmp, int op)
 {
+    struct mm *mm = current_proc->mm;
     struct futex_pi *spare;
-    struct futex_q *q, *next;
-    const void *space, *space2;
-    uintptr_t key, key2;
-    uint32_t flags, word;
-    int rc = 0, count = 0;
+    struct futex_pair f;
+    uint32_t flags;
+    int rc, count, shared = !(op & FUTEX_PRIVATE_FLAG);
 
     if (val != 1 || addr == addr2 || (addr2 & 3u) || nr_requeue > 0x7FFFFFFFu) {
         return -EINVAL;
+    }
+    if (mm == NULL) {
+        return -EFAULT;
     }
     spare = (struct futex_pi *)kmalloc(sizeof(*spare));
     if (!spare) {
         return -ENOMEM;
     }
-    for (;;) {
-        if (!vm_prefault_range(addr2, sizeof(word), 1) ||
-            !vm_prefault_range(addr, sizeof(word), 0)) {
-            kfree(spare);
-            return -EFAULT;
+    do {
+        count = 0;
+        mmap_read_lock(mm);
+        rc = futex_pair_name(&f, addr, shared, addr2, shared);
+        if (rc == 0 && f.space1 == f.space2 && f.key1 == f.key2) {
+            rc = -EINVAL;
+        } else if (rc == 0) {
+            flags = futex_hb_lock2(f.hb1, f.hb2);
+            rc = futex_cmp_word(addr, cmp);
+            if (rc == 0) {
+                rc = pi_requeue_walk(&f, addr2, nr_requeue, &spare, &count);
+            }
+            futex_hb_unlock2(f.hb1, f.hb2, flags);
         }
-        flags = kirq_save();
-        if (paging_user_phys(current_proc->page_dir, addr2) != 0) {
-            break;
-        }
-        kirq_restore(flags);
-    }
-    futex_key(addr, !(op & FUTEX_PRIVATE_FLAG), &space, &key);
-    futex_key(addr2, !(op & FUTEX_PRIVATE_FLAG), &space2, &key2);
-    if (space == space2 && key == key2) {
-        rc = -EINVAL;
-    } else if (get_user_u32(&word, addr) != 0) {
-        rc = -EFAULT;
-    } else if (word != cmp) {
-        rc = -EAGAIN;
-    } else {
-        for (q = _waiters[futex_bucket(space, key)]; q; q = next) {
-            next = q->next;
-            if (q->space != space || q->uaddr != key) {
-                continue;
-            }
-            if (!q->requeue || q->pi || q->target_space != space2 || q->target_key != key2) {
-                rc = -EINVAL;
-                break;
-            }
-            rc = pi_requeue_one(q, addr2, &spare);
-            if (rc < 0) {
-                break;
-            }
-            count++;
-            if ((uint32_t)(count - 1) == nr_requeue) {
-                break;
-            }
-        }
-    }
+        mmap_unlock(mm);
+    } while (rc == -EFAULT && count == 0 && futex_fault_in(addr, 1, addr2, 1, 1));
     futex_pi_recalculate();
-    kirq_restore(flags);
     kfree(spare);
     return rc == -EBUSY ? -EAGAIN : (rc < 0 ? rc : count);
 }
 
-/** Transfer every contended PI lock of an exiting thread. Robust-list
- * cleanup has already marked accessible words; other mappings are repaired
- * by the new owners before returning from their waits. */
+/** Transfer every contended PI lock of an exiting thread, under the big
+ * lock. Robust-list cleanup has already marked accessible words; other
+ * mappings are repaired by the new owners before returning from their
+ * waits. */
 static void pi_exit(process_t *p)
 {
     struct futex_pi *pi;
@@ -1390,10 +1693,11 @@ static void pi_exit(process_t *p)
 
 /**
  * Release the robust futex whose word is at `uaddr` if thread `tid` holds
- * it, as Linux's `handle_futex_death` does: the word keeps its waiters bit,
- * gains FUTEX_OWNER_DIED in place of the id, and one waiter is woken, so the
- * next owner learns from EOWNERDEAD that the state the lock guarded may be
- * half made. A word that cannot be read or written is left.
+ * it, as Linux's `handle_futex_death` does (kernel/futex/core.c:662): the
+ * word keeps its waiters bit, gains FUTEX_OWNER_DIED in place of the id,
+ * and one waiter is woken, so the next owner learns from EOWNERDEAD that
+ * the state the lock guarded may be half made. A word that cannot be read
+ * or written is left.
  *
  * With `pending`, the word is that of the ordinary futex the thread was
  * taking or giving back when it ended. When that word has no owner, the
@@ -1403,42 +1707,50 @@ static void pi_exit(process_t *p)
  * it would tell the next owner of a death that left the lock's state whole.
  *
  * The word's page is made present and writable first, and the word is then
- * read, compared and written with interrupts off, so no fault sleeps between
- * the read and the write. A waiter that set FUTEX_WAITERS during such a
- * sleep would have its bit written over and would not be woken. The word is
- * read in one load and written in one compare-and-exchange, read again when
- * it changed meanwhile, as Linux's does: a thread on another processor may
- * take the lock or set FUTEX_WAITERS between the two, and a write of its
- * bytes one at a time would let it see a word that is neither.
+ * read, compared and written under the regions' lock with no fault between,
+ * so no sleep comes between the read and the write. A waiter that set
+ * FUTEX_WAITERS during such a sleep would have its bit written over and
+ * would not be woken. The word is read in one load and written in one
+ * compare-and-exchange, read again when it changed meanwhile, as Linux's
+ * does: a thread on another processor may take the lock or set
+ * FUTEX_WAITERS between the two, and a write of its bytes one at a time
+ * would let it see a word that is neither. A page that went meanwhile is
+ * brought in again.
  */
 static void robust_release(uintptr_t uaddr, uint32_t tid, int pending, int pi)
 {
+    struct mm *mm = current_proc->mm;
     uint32_t word, died, seen;
-    uint32_t flags;
-    int wake = 0;
+    int rc, wake = 0;
 
-    if ((uaddr & 3u) != 0 || !vm_prefault_range(uaddr, sizeof(word), 1)) {
+    if ((uaddr & 3u) != 0 || mm == NULL || !vm_prefault_range(uaddr, sizeof(word), 1)) {
         return;
     }
-    flags = kirq_save();
-    while (get_user_u32(&word, uaddr) == 0) {
-        if (pending && (word & FUTEX_TID_MASK) == 0) {
-            wake = 1;
-            break;
+    for (;;) {
+        mmap_read_lock(mm);
+        while ((rc = get_user_u32_nofault(&word, uaddr)) == 0) {
+            if (pending && (word & FUTEX_TID_MASK) == 0) {
+                wake = 1;
+                break;
+            }
+            if ((word & FUTEX_TID_MASK) != tid) {
+                break;
+            }
+            died = (word & FUTEX_WAITERS) | FUTEX_OWNER_DIED;
+            rc = cmpxchg_user_u32_nofault(uaddr, word, died, &seen);
+            if (rc != 0) {
+                break;
+            }
+            if (seen == word) {
+                wake = (died & FUTEX_WAITERS) != 0;
+                break;
+            }
         }
-        if ((word & FUTEX_TID_MASK) != tid) {
-            break;
-        }
-        died = (word & FUTEX_WAITERS) | FUTEX_OWNER_DIED;
-        if (cmpxchg_user_u32(uaddr, word, died, &seen) != 0) {
-            break;
-        }
-        if (seen == word) {
-            wake = (died & FUTEX_WAITERS) != 0;
+        mmap_unlock(mm);
+        if (rc != -EFAULT || !vm_prefault_range(uaddr, sizeof(word), 1)) {
             break;
         }
     }
-    kirq_restore(flags);
     if (wake && !pi) {
         (void)futex_wake(uaddr, 1, FUTEX_MATCH_ANY, 0, 0);
     }
@@ -1525,10 +1837,13 @@ static void robust_walk(process_t *p, uintptr_t list, int narrow)
     }
 }
 
+/** The robust lists and the PI states are released under the big lock,
+ * which every PI operation holds, before a bucket's lock is taken. */
 void proc_thread_gone(process_t *p)
 {
     uint32_t zero = 0;
 
+    bkl_enter();
     p->futex_exit_state = 1;
     if (p->robust_list != 0) {
         robust_walk(p, p->robust_list, 0);
@@ -1536,16 +1851,9 @@ void proc_thread_gone(process_t *p)
     if (p->compat_robust_list != 0) {
         robust_walk(p, p->compat_robust_list, 1);
     }
-    {
-        uint32_t flags = kirq_save();
-
-        pi_exit(p);
-        p->futex_exit_state = 2;
-        if (pi_exit_queue.head) {
-            wq_wake_all(&pi_exit_queue);
-        }
-        kirq_restore(flags);
-    }
+    pi_exit(p);
+    p->futex_exit_state = 2;
+    wq_wake_all(&pi_exit_queue);
     p->robust_list = 0;
     p->compat_robust_list = 0;
     if (p->clear_child_tid != 0 && p->mm != NULL && p->mm->users > 1 &&
@@ -1553,6 +1861,7 @@ void proc_thread_gone(process_t *p)
         (void)futex_wake(p->clear_child_tid, 1, FUTEX_MATCH_ANY, 0, 0);
     }
     p->clear_child_tid = 0;
+    bkl_exit();
 }
 
 long sys_set_robust_list(isr_params_t *params)
@@ -1619,6 +1928,42 @@ long sys_get_robust_list(isr_params_t *params)
     return 0;
 }
 
+/**
+ * Run the PI operation `cmd` of the futex call `params` under the big lock,
+ * which every PI operation and a thread's release of its robust list hold
+ * before they take a bucket's lock, so that the PI states, their owners and
+ * the donations along the blocked-owner chains change one operation at a
+ * time. The other operations take the bucket locks alone.
+ */
+static long futex_pi_call(isr_params_t *params, int cmd)
+{
+    uintptr_t uaddr = SC_ARG(params, 0);
+    int op = (int)SC_ARG(params, 1);
+    uint32_t val = (uint32_t)SC_ARG(params, 2);
+    const struct kernel_timespec __user *utime =
+        (const struct kernel_timespec __user *)SC_ARG(params, 3);
+    long rc;
+
+    bkl_enter();
+    switch (cmd) {
+    case FUTEX_UNLOCK_PI:
+        rc = futex_unlock_pi(uaddr, op);
+        break;
+    case FUTEX_WAIT_REQUEUE_PI:
+        rc = futex_wait_requeue_pi(uaddr, val, utime, SC_ARG(params, 4), op);
+        break;
+    case FUTEX_CMP_REQUEUE_PI:
+        rc = futex_cmp_requeue_pi(uaddr, val, (uint32_t)SC_ARG(params, 3), SC_ARG(params, 4),
+                                  (uint32_t)SC_ARG(params, 5), op);
+        break;
+    default:
+        rc = futex_lock_pi(uaddr, utime, op, cmd == FUTEX_TRYLOCK_PI);
+        break;
+    }
+    bkl_exit();
+    return rc;
+}
+
 long sys_futex(isr_params_t *params)
 {
     uintptr_t uaddr = SC_ARG(params, 0);
@@ -1643,14 +1988,10 @@ long sys_futex(isr_params_t *params)
     case FUTEX_LOCK_PI:
     case FUTEX_LOCK_PI2:
     case FUTEX_TRYLOCK_PI:
-        return futex_lock_pi(uaddr, utime, op, cmd == FUTEX_TRYLOCK_PI);
     case FUTEX_UNLOCK_PI:
-        return futex_unlock_pi(uaddr, op);
     case FUTEX_WAIT_REQUEUE_PI:
-        return futex_wait_requeue_pi(uaddr, val, utime, SC_ARG(params, 4), op);
     case FUTEX_CMP_REQUEUE_PI:
-        return futex_cmp_requeue_pi(uaddr, val, (uint32_t)SC_ARG(params, 3), SC_ARG(params, 4),
-                                    val3, op);
+        return futex_pi_call(params, cmd);
     case FUTEX_WAIT:
         return futex_wait(uaddr, val, utime, FUTEX_MATCH_ANY, 0, op);
     case FUTEX_WAIT_BITSET:

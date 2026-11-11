@@ -15,6 +15,9 @@
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
  * host-deps: tests/host/compat/pressure_host.c tests/host/compat/fixdir_host.c
+ * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/kirq_none.c
+ * host-deps: tests/host/compat/bkl_none.c
+ * host-deps: tests/host/compat/atomic_host.c
  * host-first: its interruption matrices run for minutes
  *
  * The volumes are made here from a staged tree by the host's mke2fs with the
@@ -309,6 +312,25 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 uint32_t timer_now_us(void)
 {
     return 0;
+}
+
+/** The cycle counter: the clock's microseconds, a cycle each. */
+uint64_t arch_cycles(void)
+{
+    return timer_now_us();
+}
+
+/** A cycle is a microsecond here. */
+uint64_t timer_cycles_us(uint64_t cycles)
+{
+    return cycles;
+}
+
+/** The cycles here are the clock's microseconds, the same on every
+ * processor. */
+int timer_cycles_agree(void)
+{
+    return 1;
 }
 
 /* The clock of a deadline, in ticks. */

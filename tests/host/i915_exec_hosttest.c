@@ -9,6 +9,10 @@
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/atomic_host.c
+ * host-deps: tests/host/compat/fd_flat.c
+ * host-deps: tests/host/compat/mutex_none.c
+ * host-deps: tests/host/compat/mmap_lock_host.c
  *
  * The rows, one for each of 78-5b's subtasks: the call's checks and
  * Linux's refusals; relocations as Linux's eb_relocate_entry applies them,
@@ -1393,6 +1397,69 @@ static void wsi_sync_files(void)
 }
 
 /**
+ * The parser's shadow in the GT's pool, after `parser`'s rows, with its batch
+ * `b` and its call `a`: the shadow's pages and a closed batch's live until
+ * the retire; the shadow then stays in the pool, idle, for the next batch,
+ * which takes it with no new page. The shrinker drops an idle shadow
+ * first, and no new shadow goes in the pool of a GT wedged for good. A
+ * retire pass's trim keeps a shadow for a second from when it first finds
+ * it idle, not from its take, and drops it once it has been idle a second,
+ * as Linux's pool_retire and pool_free_older_than
+ * (gt/intel_gt_buffer_pool.c:37-85,98-122): its take 600 ms before the first
+ * trim and a second trim 600 ms after the first keep it, where an age run
+ * from the take would drop it at the second, and a third trim a second after
+ * the first frees it.
+ */
+static void parser_pool(uint32_t b, struct drm_i915_gem_execbuffer2 *a)
+{
+    struct drm_i915_gem_object *kept, *got = 0;
+    uint32_t frames;
+
+    i915_gem_pool_trim(dev_a, I915_POOL_ALL);
+    frames = (uint32_t)frames_live;
+    a->flags = I915_EXEC_RENDER;
+    a->batch_len = 8;
+    CHECK(execbuf(a) == 0 && (uint32_t)frames_live == frames + 1u,
+          "parser: the shadow's page held while the batch runs");
+    idle();
+    kept = dev_a->gt.pool[0];
+    CHECK(kept && kept->pool_next == 0 && kept->base.refs == 1u &&
+              (uint32_t)frames_live == frames + 1u,
+          "parser: the shadow kept in the pool, idle, once the request retires");
+    CHECK(i915_gem_shrinker_scan(&dev_a->gem.shrinker.base, 1u, 0) >= 1u &&
+              dev_a->gt.pool[0] == 0 && (uint32_t)frames_live == frames,
+          "parser: the shrinker frees an idle shadow");
+    dev_a->gt.wedged_terminal = 1;
+    CHECK(pool_get(dev_a, 8u + I915_CMD_PARSER_TRAMPOLINE_SIZE, &got) == -EIO && got == 0 &&
+              dev_a->gt.pool[0] == 0 && (uint32_t)frames_live == frames,
+          "parser: a GT wedged for good takes no new shadow into its pool");
+    dev_a->gt.wedged_terminal = 0;
+    CHECK(execbuf(a) == 0 && (uint32_t)frames_live == frames + 1u,
+          "parser: a new shadow once the GT may run again");
+    idle();
+    kept = dev_a->gt.pool[0];
+    CHECK(kept && kept->pool_next == 0 && kept->base.refs == 1u,
+          "parser: and it is kept in the pool, idle");
+    CHECK(execbuf(a) == 0 && dev_a->gt.pool[0] == kept && kept->pool_next == 0 &&
+              kept->base.refs > 1u && (uint32_t)frames_live == frames + 1u,
+          "parser: the next batch takes the same shadow, with no new page");
+    i915_delay_us(0, 600000u);
+    close_handle(&file_a, b);
+    CHECK((uint32_t)frames_live == frames + 1u, "parser: the closed batch held while it runs");
+    idle();
+    CHECK(i915_gem_pool_trim(dev_a, I915_POOL_STALE) == 0 && dev_a->gt.pool[0] == kept,
+          "parser: a retire pass's trim keeps a shadow it first finds idle, 600 ms after its take");
+    i915_delay_us(0, 600000u);
+    CHECK(i915_gem_pool_trim(dev_a, I915_POOL_STALE) == 0 && dev_a->gt.pool[0] == kept,
+          "parser: and keeps it 600 ms later, its idle time counted from that trim");
+    i915_delay_us(0, 400000u);
+    CHECK(i915_gem_pool_trim(dev_a, I915_POOL_STALE) == 1u && dev_a->gt.pool[0] == 0,
+          "parser: a retire pass's trim frees it once it has been idle a second");
+    CHECK((uint32_t)frames_live == frames - 1u,
+          "parser: both freed once the request retires and the pool is trimmed");
+}
+
+/**
  * 78-8b.2: the command parser on the call's path. A batch whose length the
  * call gives runs from its shadow, privileged, then from the trampoline
  * past its length, unprivileged, whoever calls; one the tables refuse has
@@ -1476,16 +1543,7 @@ static void parser(void)
     dev_a->drm.master = 0;
     idle();
 
-    /* The shadow's pages and a closed batch's live until the retire. */
-    frames = (uint32_t)frames_live;
-    a.flags = I915_EXEC_RENDER;
-    a.batch_len = 8;
-    CHECK(execbuf(&a) == 0 && (uint32_t)frames_live == frames + 1u,
-          "parser: the shadow's page held while the batch runs");
-    close_handle(&file_a, b);
-    CHECK((uint32_t)frames_live == frames + 1u, "parser: the closed batch held while it runs");
-    idle();
-    CHECK((uint32_t)frames_live == frames - 1u, "parser: both freed once the request retires");
+    parser_pool(b, &a);
 }
 
 /**
@@ -1644,8 +1702,9 @@ int main(void)
     CHECK(i915_driver_open(&dev_a->drm, &file_a) == 0, "setup: the file opened");
     long_lri();
     rings();
-    /* The PPGTT's tables, made as buffers are bound, stay with the rings. */
-    before = allocations - (int)dev_a->gt.ppgtt.tables;
+    /* The PPGTT's tables, made as buffers are bound, stay with the rings,
+     * and the file's PRIME buckets, made at its first export, with the file. */
+    before = allocations - (int)dev_a->gt.ppgtt.tables - (file_a.objects.prime != NULL);
     checks();
     relocations();
     placement();
@@ -1662,10 +1721,16 @@ int main(void)
     sol_and_faults();
     lifetime();
     idle();
+    /* The pool keeps its shadows past the rows until the GT parks. */
+    i915_gem_pool_trim(dev_a, I915_POOL_ALL);
     drm_syncobj_release(&file_a);
-    CHECK(allocations - (int)dev_a->gt.ppgtt.tables == before,
+    CHECK(allocations - (int)dev_a->gt.ppgtt.tables - (file_a.objects.prime != NULL) == before,
           "the end: every record of the calls freed");
     CHECK(irq_depth == 0, "the end: the interrupt flag as it was");
+    CHECK(!mutex_held(&dev_a->gem.lock) &&
+              !mutex_held(&((struct i915_file *)file_a.driver_priv)->lock),
+          "the end: EXECBUFFER2, which runs without the big lock, gave the GEM lock and the "
+          "file's context list lock back");
     printf("%s: %s\n", MODEL_TEST, failures ? "failed" : "ok");
     return failures != 0;
 }

@@ -21,12 +21,14 @@
 #include "mouse.h"
 #include "proc/process.h"
 #include "proc/sched.h"
+#include "proc/smp.h"
 #include "proc/elf.h"
 #include "proc/uimage.h"
 #include "proc/futex.h"
 #include "proc/tgroup.h"
 #include "proc/ptrace.h"
 #include "proc/seccomp.h"
+#include "proc/smp.h"
 #include "proc/ns.h"
 #include "lib/krandom.h"
 #include "lib/kerrno.h"
@@ -118,6 +120,10 @@
 
 #define FIONBIO 0x5421 /* Set or clear O_NONBLOCK */
 
+#define FIONCLEX 0x5450 /* Clear close-on-exec */
+
+#define FIOCLEX 0x5451 /* Set close-on-exec */
+
 #define TIOCGWINSZ 0x5413 /* Get terminal window size */
 
 #define TIOCSWINSZ 0x5414 /* Set terminal window size */
@@ -185,6 +191,13 @@ static syscall_fn_t _ia32_syscall_table[IA32_SYSCALL_TABLE_SIZE];
 long compat_sys_ioctl(isr_params_t *params);
 #endif
 
+/* The numbers of each table whose calls run without the big lock
+ * (`syscall_unlock`), a bit each. */
+static uint32_t _syscall_unlocked[(SYSCALL_TABLE_SIZE + 31) / 32];
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+static uint32_t _ia32_syscall_unlocked[(IA32_SYSCALL_TABLE_SIZE + 31) / 32];
+#endif
+
 /** The table the call in `params` is numbered in, and its size in `size`:
  * the compat table for a call SC_COMPAT marks, else the native one. */
 static syscall_fn_t *syscall_table_of(const isr_params_t *params, uint32_t *size)
@@ -198,6 +211,49 @@ static syscall_fn_t *syscall_table_of(const isr_params_t *params, uint32_t *size
     (void)params;
     *size = SYSCALL_TABLE_SIZE;
     return _syscall_table;
+}
+
+void syscall_unlock(int abi, syscall_fn_t handler)
+{
+    syscall_fn_t *table = _syscall_table;
+    uint32_t *bits = _syscall_unlocked;
+    uint32_t size = SYSCALL_TABLE_SIZE, i;
+
+    if (abi == SYSCALL_ABI_IA32) {
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+        table = _ia32_syscall_table;
+        bits = _ia32_syscall_unlocked;
+        size = IA32_SYSCALL_TABLE_SIZE;
+#else
+        return;
+#endif
+    } else if (abi != SYSCALL_ABI_NATIVE) {
+        return;
+    }
+    for (i = 0; i < size; i++) {
+        if (handler != 0 && table[i] == handler) {
+            bits[i / 32] |= 1u << (i % 32);
+        }
+    }
+}
+
+int syscall_entry_locked(const isr_params_t *params)
+{
+    const process_t *p = current_proc;
+    const uint32_t *bits = _syscall_unlocked;
+    uint32_t nr = (uint32_t)SC_NR(params), size;
+    syscall_fn_t *table = syscall_table_of(params, &size);
+
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    if (SC_COMPAT(params)) {
+        bits = _ia32_syscall_unlocked;
+    }
+#endif
+    if (!p || (p->ptrace & (PT_SYSCALL | PT_STEP)) || p->seccomp_mode != SECCOMP_MODE_DISABLED ||
+        p->fd_holding || usbdisk_pending()) {
+        return 1;
+    }
+    return nr >= size || !table[nr] || !(bits[nr / 32] & (1u << (nr % 32)));
 }
 
 int in_compat_syscall(void)
@@ -1193,11 +1249,11 @@ static int32_t nanosleep_interrupted(int rem, uint64_t target)
  * Block until the tick `target`, or until a signal the process acts on.
  *
  * Marks the process PROC_BLOCKED on its wakeup_tick and yields; the timer
- * wakes it at the deadline while other processes run. The deadline and the
- * pending signals are tested, and the process blocked, with interrupts off,
- * so neither a signal nor the deadline's tick can come between the test and
- * the block unseen; the halt after a yield that ran nothing is masked for the
- * same reason.
+ * wakes it at the deadline while other processes run. The process is
+ * marked blocked before the deadline and the pending signals are tested,
+ * with interrupts off, so neither a signal nor the deadline's tick can come
+ * between the test and the block unseen; the halt after a yield that ran
+ * nothing is masked for the same reason.
  *
  * Once the deadline tick has come the sleep is over, and the call returns 0
  * whether or not a signal is pending. A signal the process acts on, found
@@ -1214,18 +1270,21 @@ static int32_t sleep_until(uint64_t target, int rem, const char *wchan)
     for (;;) {
         uint32_t flags = kirq_save();
 
+        /* 0 means not sleeping, so a deadline of 0 is stored as 1. */
+        current_proc->wakeup_tick = target != 0 ? target : 1u;
+        current_proc->wchan = wchan;
+        sched_set_current_state(PROC_BLOCKED);
         if (tick_count() >= target) {
+            current_proc->state = PROC_RUNNING;
             kirq_restore(flags);
             break;
         }
         if (signal_pending()) {
+            current_proc->wakeup_tick = 0;
+            current_proc->state = PROC_RUNNING;
             kirq_restore(flags);
             return nanosleep_interrupted(rem, target);
         }
-        /* 0 means not sleeping, so a deadline of 0 is stored as 1. */
-        current_proc->wakeup_tick = target != 0 ? target : 1u;
-        current_proc->wchan = wchan;
-        current_proc->state = PROC_BLOCKED;
         kirq_restore(flags);
         schedule(); /* yield to any other READY process; the timer wakes us */
         flags = kirq_save();
@@ -2480,8 +2539,10 @@ long sys_vhangup(isr_params_t *params)
  *
  * The descriptor is checked first, so a bad one is -EBADF whatever the
  * request, `ioctl(-1, TCGETS)` included, and an O_PATH one is -EBADF to every
- * request, as on Linux. The requests then go, in order, to: FIONBIO, which
- * every descriptor answers (`fd_ioctl_nbio`); a hung-up terminal description,
+ * request, as on Linux. The requests then go, in order, to: FIOCLEX and
+ * FIONCLEX, which set and clear the descriptor's close-on-exec flag, and
+ * FIONBIO (`fd_ioctl_nbio`), which every descriptor answers, as Linux's
+ * `do_vfs_ioctl` (fs/ioctl.c:809-817); a hung-up terminal description,
  * which answers -EIO, or -ENOTTY to TIOCSPGRP; FS_IOC_GETFLAGS and the other
  * file attribute requests (`fs_flags_ioctl`); FICLONE and FICLONERANGE
  * (`fs_clone_ioctl`); SIOCGSTAMP and SIOCGSTAMPNS on an Internet or packet
@@ -2496,27 +2557,21 @@ long sys_vhangup(isr_params_t *params)
  * requests (`console_ioctl`), by the descriptor's type, so a descriptor 1
  * reopened onto a regular file never reaches the speaker. `ioctl_fd` is the
  * call with its arguments taken out of the frame.
+ *
+ * A type whose operations run without the big lock (`file_ops_unlocked`)
+ * has every request but those three go to its own `ioctl` without it, as
+ * Linux's `unlocked_ioctl`; the type answers the rest of the list itself,
+ * if it is a terminal. Every other type's requests run under the big lock.
  */
 long sys_ioctl(isr_params_t *params)
 {
     return ioctl_fd((int)SC_ARG(params, 0), (uint32_t)SC_ARG(params, 1), SC_ARG(params, 2));
 }
 
-long ioctl_fd(int fd_num, uint32_t request, uintptr_t arg)
+/** The requests of `ioctl_fd` after FIOCLEX, FIONCLEX and FIONBIO, on
+ * `entry`, an open descriptor of the caller's, under the big lock. */
+static long ioctl_locked(fd_entry_t *entry, uint32_t request, uintptr_t arg)
 {
-    fd_entry_t *entry;
-
-    if (!current_proc) {
-        return -ESRCH;
-    }
-
-    entry = fd_get(current_proc->fds, fd_num);
-    if (!entry || (entry->flags & FD_FLAG_PATH)) {
-        return -EBADF;
-    }
-    if (request == FIONBIO) {
-        return fd_ioctl_nbio(entry, arg);
-    }
     if (fd_tty_hung(entry)) {
         return request == TIOCSPGRP ? -ENOTTY : -EIO;
     }
@@ -2573,6 +2628,33 @@ long ioctl_fd(int fd_num, uint32_t request, uintptr_t arg)
     }
 
     return -ENOTTY;
+}
+
+long ioctl_fd(int fd_num, uint32_t request, uintptr_t arg)
+{
+    fd_entry_t *entry;
+    long rc;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+
+    entry = fd_get(current_proc->fds, fd_num);
+    if (!entry || (entry->flags & FD_FLAG_PATH)) {
+        return -EBADF;
+    }
+    if (request == FIOCLEX || request == FIONCLEX) {
+        fd_set_flags(current_proc->fds, entry, request == FIONCLEX ? FD_FLAG_CLOEXEC : 0,
+                     request == FIOCLEX ? FD_FLAG_CLOEXEC : 0);
+        return 0;
+    }
+    if (request != FIONBIO && file_ops_unlocked(entry)) {
+        return entry->ops->ioctl ? entry->ops->ioctl(entry, request, arg) : -ENOTTY;
+    }
+    bkl_enter();
+    rc = request == FIONBIO ? fd_ioctl_nbio(entry, arg) : ioctl_locked(entry, request, arg);
+    bkl_exit();
+    return rc;
 }
 
 /**
@@ -3165,6 +3247,98 @@ static void syscall_missing(uint32_t syscall_num, int compat)
     }
 }
 
+/** Take the big lock for a call's work that needs it when the call runs
+ * without it; nonzero when this took it, for `syscall_relock_end`. */
+static int syscall_relock(void)
+{
+    if (bkl_held()) {
+        return 0;
+    }
+    bkl_enter();
+    return 1;
+}
+
+/** Give back the lock `syscall_relock` took, when `relock` says it did. */
+static void syscall_relock_end(int relock)
+{
+    if (relock) {
+        bkl_exit();
+    }
+}
+
+/** Let go of the descriptors the call held (`fd_holds_release`), when it
+ * held any; each release takes the big lock when its object needs it
+ * (`fd_teardown`). */
+static void syscall_holds_release(void)
+{
+    const process_t *p = current_proc;
+
+    if (p && p->fd_holding) {
+        fd_holds_release();
+    }
+}
+
+/** Deliver what the loopback ring holds at a call's exit, under the big
+ * lock: the call's own, or the lock taken only when it is free, the ring
+ * otherwise left to the holder's exit or the timer. Interrupts are off. */
+static void syscall_loop_drain(void)
+{
+    if (!ip_loop_pending()) {
+        return;
+    }
+    if (bkl_held()) {
+        ip_loop_drain_from(IP_LOOP_FROM_CALL);
+    } else if (bkl_try_enter()) {
+        ip_loop_drain_from(IP_LOOP_FROM_CALL);
+        bkl_exit();
+    }
+}
+
+/**
+ * Mark the mmap family to run without the big lock, native and i386: each
+ * holds its address space's regions' lock to write across its change and
+ * takes the big lock inside it (`regions_begin`, syscall_proc.c), and its
+ * balance and populate run with neither. The i386 table's own mmap and
+ * mmap2 are marked as it is filled (`ia32_syscall_init`).
+ */
+static void syscall_mm_unlock(void)
+{
+    static syscall_fn_t const calls[] = {
+        sys_brk,      sys_mmap,          sys_mmap2,  sys_munmap,
+        sys_mprotect, sys_pkey_mprotect, sys_mremap, sys_madvise,
+    };
+    uint32_t i;
+
+    for (i = 0; i < sizeof(calls) / sizeof(calls[0]); i++) {
+        syscall_unlock(SYSCALL_ABI_NATIVE, calls[i]);
+        syscall_unlock(SYSCALL_ABI_IA32, calls[i]);
+    }
+}
+
+/**
+ * Mark the futex calls to run without the big lock, native and i386, as
+ * Linux's futexes have their bucket locks alone: each names its futex and
+ * reads its word under the address space's regions' lock and the bucket's
+ * spinlock, and the PI operations take the big lock themselves before a
+ * bucket's lock (`futex_pi_call`, proc/futex.c). get_robust_list keeps the
+ * big lock, since it looks another thread up. The i386 forms with their own
+ * timespec are marked as their tables are filled (`arch_syscall_init`,
+ * `ia32_syscall_init`).
+ */
+static void syscall_futex_unlock(void)
+{
+    static syscall_fn_t const calls[] = {
+        sys_futex,      sys_futex_waitv,   sys_futex_wake,
+        sys_futex_wait, sys_futex_requeue, sys_set_robust_list,
+    };
+    uint32_t i;
+
+    for (i = 0; i < sizeof(calls) / sizeof(calls[0]); i++) {
+        syscall_unlock(SYSCALL_ABI_NATIVE, calls[i]);
+        syscall_unlock(SYSCALL_ABI_IA32, calls[i]);
+    }
+}
+
 /**
  * The system call entry's handler: dispatch on the call's number.
  *
@@ -3210,6 +3384,12 @@ static void syscall_missing(uint32_t syscall_num, int compat)
  * a call that was not interrupted, with no other signal work, reaches the
  * program unchanged, as on Linux.
  *
+ * A call that runs without the big lock (`syscall_entry_locked`) takes it
+ * for the work of its entry and exit that needs it, which a tracer that
+ * attached or a filter another thread installed meanwhile may bring: the
+ * tracer's stops, the filters, the descriptors it held. The USB sticks wait
+ * for a call that holds the lock.
+ *
  * At the exit whatever the loopback ring holds is delivered, a lone
  * datagram too, so that a receive that follows the call finds what it sent,
  * as on Linux 6.12.115, where loopback_xmit queues the datagram for the
@@ -3219,7 +3399,9 @@ static void syscall_missing(uint32_t syscall_num, int compat)
  * own. The sender's own frames are gone by then, so no delivery runs under
  * them. Interrupts are off, the drain does not run inside itself, and it
  * takes at most four times the ring's slots in one run; what is left is
- * taken by the next call's exit or by the timer.
+ * taken by the next call's exit or by the timer. A call without the lock
+ * drains only when the lock is free (`bkl_try_enter`), and otherwise leaves
+ * the ring to the holder's exit or the timer.
  */
 static void _syscall_handler(isr_params_t *params)
 {
@@ -3227,7 +3409,7 @@ static void _syscall_handler(isr_params_t *params)
     uint32_t size;
     syscall_fn_t *table = syscall_table_of(params, &size);
     long ret = -ENOSYS;
-    int skip = 0;
+    int skip = 0, relock;
 
     if (current_proc) {
         current_proc->in_syscall = 1;
@@ -3235,19 +3417,26 @@ static void _syscall_handler(isr_params_t *params)
 
     arch_irq_enable();
 
-    usbdisk_service();
+    if (bkl_held()) {
+        usbdisk_service();
+    }
 
     if (current_proc) {
         current_proc->orig_nr = (int32_t)syscall_num;
         if (current_proc->ptrace & PT_SYSCALL) {
+            relock = syscall_relock();
             ptrace_syscall_stop(params, syscall_num, 0);
             syscall_num = (uint32_t)current_proc->orig_nr;
             skip = current_proc->orig_nr == -1;
+            syscall_relock_end(relock);
         }
-        if (!skip && current_proc->seccomp_mode != SECCOMP_MODE_DISABLED &&
-            !seccomp_permit(params, syscall_num, &ret)) {
-            skip = 1;
-            SC_RET(params) = (unsigned long)ret;
+        if (!skip && current_proc->seccomp_mode != SECCOMP_MODE_DISABLED) {
+            relock = syscall_relock();
+            if (!seccomp_permit(params, syscall_num, &ret)) {
+                skip = 1;
+                SC_RET(params) = (unsigned long)ret;
+            }
+            syscall_relock_end(relock);
         }
     }
     if (current_proc) {
@@ -3262,14 +3451,16 @@ static void _syscall_handler(isr_params_t *params)
         syscall_missing(syscall_num, SC_COMPAT(params));
     }
 
-    fd_holds_release();
+    syscall_holds_release();
     if (current_proc) {
         ret = restart_result(params, !skip && syscall_num < size ? table[syscall_num] : NULL, ret);
     }
     if (current_proc && (current_proc->ptrace & (PT_SYSCALL | PT_STEP))) {
+        relock = syscall_relock();
         SC_RET(params) = (unsigned long)ret;
         ptrace_syscall_stop(params, syscall_num, 1);
         ret = (long)SC_RET(params);
+        syscall_relock_end(relock);
     }
 
     arch_irq_disable();
@@ -3277,13 +3468,38 @@ static void _syscall_handler(isr_params_t *params)
     if (current_proc) {
         current_proc->in_syscall = 0;
     }
-    if (ip_loop_pending()) {
-        ip_loop_drain_from(IP_LOOP_FROM_CALL);
-    }
+    syscall_loop_drain();
     sched_take_preempt();
 
     /* The result, in the register the return to user mode restores it from. */
     SC_RET(params) = (unsigned long)ret;
+}
+
+/**
+ * Mark the file calls that every architecture's table maps to these
+ * handlers (`syscall_unlock`): read, write, pread64, pwrite64, ioctl, fstat
+ * and close run a descriptor's operations without the big lock only for a
+ * type that declares FILE_OPS_UNLOCKED (`fd_call_lock`, `file_ops_lock`),
+ * and poll and ppoll scan their descriptors the same way and sleep without
+ * it, taking it for the signal state (`poll_signal_pending`,
+ * `poll_mask_set`). Every other step those calls make takes the locks of
+ * what it touches; the user-memory copies take the big lock until address
+ * spaces have locks of their own. The forms of an architecture's own, i686's
+ * split offsets and the i386 calls of x86-64, are marked as its tables are
+ * filled (`arch_syscall_init`, `ia32_syscall_init`).
+ */
+static void unlock_file_calls(void)
+{
+    static const syscall_fn_t calls[] = {
+        sys_read,    sys_write, sys_pread64, sys_pwrite64, sys_ioctl,
+        sys_fstat64, sys_close, sys_poll,    sys_ppoll,
+    };
+    uint32_t i;
+
+    for (i = 0; i < sizeof(calls) / sizeof(calls[0]); i++) {
+        syscall_unlock(SYSCALL_ABI_NATIVE, calls[i]);
+        syscall_unlock(SYSCALL_ABI_IA32, calls[i]);
+    }
 }
 
 void init_syscall(void)
@@ -3300,6 +3516,12 @@ void init_syscall(void)
     }
     ia32_syscall_init(_ia32_syscall_table);
 #endif
+    /* The calls that take no lock but the scheduler's. */
+    syscall_unlock(SYSCALL_ABI_NATIVE, sys_sched_yield);
+    syscall_unlock(SYSCALL_ABI_IA32, sys_sched_yield);
+    unlock_file_calls();
+    syscall_mm_unlock();
+    syscall_futex_unlock();
 
     _trace_enosys = kcmdline_has("rach2.trace=enosys");
 }

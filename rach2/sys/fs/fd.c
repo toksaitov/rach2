@@ -1,6 +1,7 @@
 /* File descriptor tables and the open file descriptions they share. */
 #include "fd.h"
 #include "../proc/process.h"
+#include "../proc/smp.h"
 
 #include "vfs.h"
 #include "name.h"
@@ -8,6 +9,7 @@
 #include "../io/inotify.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
+#include "../arch/arch.h"
 #include "../mm/kheap.h"
 
 /*
@@ -44,6 +46,13 @@ struct ofd_rec {
     struct access_count *spare;
 };
 
+/*
+ * The list of live descriptions, its count and serials, and the access
+ * counts are under `ofd_lock`, a spinlock taken with interrupts off below a
+ * table's lock; a description's own fields are its holders'. The scans of
+ * the list read only what their callers' locks keep still.
+ */
+static struct spinlock ofd_lock = SPINLOCK_INIT;
 static struct ofd_rec *ofds;
 static uint32_t ofd_serials;
 static unsigned long ofd_count; /* records on `ofds` */
@@ -51,16 +60,22 @@ static unsigned long ofd_count; /* records on `ofds` */
 int fd_nr_open = FD_NR_OPEN;
 unsigned long fd_file_max = ~0ul >> 1;
 
-/* An array a growth replaced, kept until `fd_table_reap` frees it. */
-struct fd_retired {
-    struct fd_retired *next;
-    fd_entry_t *entries;
-    int cap;
-};
-
 unsigned long fd_files_open(void)
 {
     return ofd_count;
+}
+
+/** Add `delta`, 1 or -1, to the count at `p` in one atomic step, and return
+ * the count after it. */
+static uint32_t count_add(uint32_t *p, int delta)
+{
+    unsigned int old;
+
+    do {
+        old = *(volatile unsigned int *)p;
+    } while (arch_atomic_cmpxchg((volatile unsigned int *)p, old, old + (unsigned int)delta) !=
+             old);
+    return old + (unsigned int)delta;
 }
 
 /** The record whose first member is `ofd`. */
@@ -76,6 +91,7 @@ static struct ofd_rec *ofd_rec_of(struct open_file *ofd)
 static struct open_file *ofd_alloc(void)
 {
     struct ofd_rec *rec = kzalloc(sizeof(*rec));
+    uint32_t flags;
 
     if (!rec) {
         return NULL;
@@ -86,11 +102,13 @@ static struct open_file *ofd_alloc(void)
         return NULL;
     }
     rec->ofd.refcount = 1;
-    rec->ofd.serial = ++ofd_serials;
     wait_queue_init(&rec->wq);
+    flags = spin_lock_irqsave(&ofd_lock);
+    rec->ofd.serial = ++ofd_serials;
     rec->next = ofds;
     ofds = rec;
     ofd_count++;
+    spin_unlock_irqrestore(&ofd_lock, flags);
     return &rec->ofd;
 }
 
@@ -179,7 +197,8 @@ static void access_leave(struct ofd_rec *rec, const struct vfs_mount *mnt, const
     rec->spare = a;
 }
 
-void fd_ofd_access_drop(struct open_file *ofd)
+/** `fd_ofd_access_drop` with `ofd_lock` held. */
+static void access_drop_locked(struct open_file *ofd)
 {
     if (ofd->access) {
         access_leave(ofd_rec_of(ofd), ofd->access_mnt, ofd->access_node, ofd->access);
@@ -187,33 +206,57 @@ void fd_ofd_access_drop(struct open_file *ofd)
     }
 }
 
+void fd_ofd_access_drop(struct open_file *ofd)
+{
+    uint32_t flags = spin_lock_irqsave(&ofd_lock);
+
+    access_drop_locked(ofd);
+    spin_unlock_irqrestore(&ofd_lock, flags);
+}
+
 int fd_ofd_access(struct open_file *ofd, const struct vfs_ref *ref, int access)
 {
+    uint32_t flags = spin_lock_irqsave(&ofd_lock);
     struct access_count *a = access_find(ref->mnt, ref->node);
+    int rc = 0;
 
     if (a && a->count[2 - access] > 0) {
-        return -ETXTBSY;
-    }
-    if (a && ofd->access == access && ofd->access_node == ref->node &&
-        vfs_mount_base(ofd->access_mnt) == vfs_mount_base(ref->mnt)) {
+        rc = -ETXTBSY;
+    } else if (a && ofd->access == access && ofd->access_node == ref->node &&
+               vfs_mount_base(ofd->access_mnt) == vfs_mount_base(ref->mnt)) {
         ofd->access_mnt = ref->mnt;
-        return 0;
+    } else {
+        access_drop_locked(ofd);
+        if (access_join(ofd_rec_of(ofd), ref->mnt, ref->node, access) != 0) {
+            rc = -ENOMEM;
+        } else {
+            ofd->access_mnt = ref->mnt;
+            ofd->access_node = ref->node;
+            ofd->access = access;
+        }
     }
-    fd_ofd_access_drop(ofd);
-    if (access_join(ofd_rec_of(ofd), ref->mnt, ref->node, access) != 0) {
-        return -ENOMEM;
-    }
-    ofd->access_mnt = ref->mnt;
-    ofd->access_node = ref->node;
-    ofd->access = access;
-    return 0;
+    spin_unlock_irqrestore(&ofd_lock, flags);
+    return rc;
 }
 
 void fd_ofd_ref(struct open_file *ofd)
 {
     if (ofd) {
-        ofd->refcount++;
+        count_add(&ofd->refcount, 1);
     }
+}
+
+int fd_ofd_unref_unless_last(struct open_file *ofd)
+{
+    unsigned int old;
+
+    do {
+        old = *(volatile unsigned int *)&ofd->refcount;
+        if (old <= 1) {
+            return 0;
+        }
+    } while (arch_atomic_cmpxchg((volatile unsigned int *)&ofd->refcount, old, old - 1) != old);
+    return 1;
 }
 
 /** The wait condition of the description lock: `arg`'s lock is free. */
@@ -222,53 +265,65 @@ static int ofd_idle(void *arg)
     return ((struct open_file *)arg)->busy == 0;
 }
 
+/**
+ * The description lock comes before the namespace lock, as Linux's
+ * `f_pos_lock` (fs/file.c:1167) comes before `i_rwsem`: a read(2) holds the
+ * description and may fault into a file mapping, whose fill takes the
+ * namespace lock (`fs_read_at`).
+ */
 void fd_ofd_lock(struct open_file *ofd)
 {
-    if (ofd->vmnt && ofd->vmnt->type->ns_serialised) {
-        vfs_ns_lock(ofd->vmnt);
-    }
     while (ofd->busy) {
         wq_wait_event_nointr(&ofd_rec_of(ofd)->wq, ofd_idle, ofd);
     }
     ofd->busy = 1;
+    if (ofd->vmnt && ofd->vmnt->type->ns_serialised) {
+        vfs_ns_lock(ofd->vmnt);
+    }
 }
 
 void fd_ofd_unlock(struct open_file *ofd)
 {
-    ofd->busy = 0;
-    wq_wake_all(&ofd_rec_of(ofd)->wq);
     if (ofd->vmnt && ofd->vmnt->type->ns_serialised) {
         vfs_ns_unlock(ofd->vmnt);
     }
+    ofd->busy = 0;
+    wq_wake_all(&ofd_rec_of(ofd)->wq);
 }
 
 int fd_node_busy(struct vfs_mount *mnt, void *node)
 {
+    uint32_t flags = spin_lock_irqsave(&ofd_lock);
     struct ofd_rec *rec;
+    int busy = 0;
 
-    for (rec = ofds; rec; rec = rec->next) {
-        if (rec->ofd.vmnt && vfs_mount_base(rec->ofd.vmnt) == vfs_mount_base(mnt) &&
-            rec->ofd.vnode == node && rec->ofd.busy) {
-            return 1;
-        }
+    for (rec = ofds; rec && !busy; rec = rec->next) {
+        busy = rec->ofd.vmnt && vfs_mount_base(rec->ofd.vmnt) == vfs_mount_base(mnt) &&
+               rec->ofd.vnode == node && rec->ofd.busy;
     }
-    return 0;
+    spin_unlock_irqrestore(&ofd_lock, flags);
+    return busy;
 }
 
 int fd_ofd_live(const struct open_file *ofd, uint32_t serial)
 {
+    uint32_t flags = spin_lock_irqsave(&ofd_lock);
     const struct ofd_rec *rec;
+    int live = 0;
 
     for (rec = ofds; rec; rec = rec->next) {
         if (&rec->ofd == ofd) {
-            return rec->ofd.refcount > 0 && rec->ofd.serial == serial;
+            live = rec->ofd.refcount > 0 && rec->ofd.serial == serial;
+            break;
         }
     }
-    return 0;
+    spin_unlock_irqrestore(&ofd_lock, flags);
+    return live;
 }
 
 int fd_ofd_holders(const struct vfs_mount *mnt, const void *node, const struct open_file *going)
 {
+    uint32_t flags = spin_lock_irqsave(&ofd_lock);
     struct ofd_rec *rec;
     int held = 0;
 
@@ -278,6 +333,7 @@ int fd_ofd_holders(const struct vfs_mount *mnt, const void *node, const struct o
             held++;
         }
     }
+    spin_unlock_irqrestore(&ofd_lock, flags);
     return held;
 }
 
@@ -288,6 +344,7 @@ int fd_ofd_holders(const struct vfs_mount *mnt, const void *node, const struct o
  */
 void fd_ofd_repoint(struct vfs_mount *mnt, const void *from, void *to)
 {
+    uint32_t flags = spin_lock_irqsave(&ofd_lock);
     struct ofd_rec *rec;
 
     for (rec = ofds; rec; rec = rec->next) {
@@ -310,17 +367,34 @@ void fd_ofd_repoint(struct vfs_mount *mnt, const void *from, void *to)
             rec->ofd.fhandle = to;
         }
     }
+    spin_unlock_irqrestore(&ofd_lock, flags);
 }
 
+/**
+ * The count falls in one atomic step, so of two holders that let go at once
+ * on different processors exactly one sees it reach 0 and ends the
+ * description. The end may sleep, in a file system's release. It takes the
+ * big lock, which the file systems, inotify and the record locks still
+ * need, unless the description names no file and no lock exists, as for an
+ * anonymous object's descriptor closed without the big lock.
+ */
 void fd_ofd_unref(struct open_file *ofd)
 {
     if (ofd && ofd->refcount > 0) {
-        ofd->refcount--;
-        if (ofd->refcount == 0) {
+        if (count_add(&ofd->refcount, -1) == 0) {
             struct ofd_rec **link = &ofds;
             struct ofd_rec *rec = ofd_rec_of(ofd);
+            int big = ofd->vmnt || ofd->dev_mnt || ofd->synth_mnt || ofd->name || ofd->pin ||
+                      ofd->access || ofd->dirpath || ofd->leaf || lock_any();
+            uint32_t flags;
 
-            fd_ofd_access_drop(ofd);
+            if (big) {
+                bkl_enter();
+            }
+
+            flags = spin_lock_irqsave(&ofd_lock);
+            access_drop_locked(ofd);
+            spin_unlock_irqrestore(&ofd_lock, flags);
             kfree(rec->spare);
             rec->spare = NULL;
             if (lock_any()) {
@@ -367,6 +441,7 @@ void fd_ofd_unref(struct open_file *ofd)
                 ofd->synth_mnt = NULL;
                 vfs_desc_close(ref.mnt, ref.node, NULL);
             }
+            flags = spin_lock_irqsave(&ofd_lock);
             while (*link && *link != rec) {
                 link = &(*link)->next;
             }
@@ -374,9 +449,88 @@ void fd_ofd_unref(struct open_file *ofd)
                 *link = rec->next;
                 ofd_count--;
             }
+            spin_unlock_irqrestore(&ofd_lock, flags);
             kfree(rec);
+            if (big) {
+                bkl_exit();
+            }
         }
     }
+}
+
+/*
+ * A table's entries are in chunks that never move: chunk 0 holds the first
+ * FD_TABLE_FIRST descriptors and chunk k > 0 the FD_TABLE_FIRST << (k - 1)
+ * after those of the chunks before it, so each growth past a chunk's end
+ * adds one chunk as large as all before it. An entry's address is its slot's
+ * for the table's life, which lets a call keep it across a sleep while
+ * another sharer grows the table, and a chunk is published before the `cap`
+ * that reaches into it, so that a reader of a slot below `cap` needs no
+ * lock to find it.
+ */
+
+/** The chunk that holds descriptor `fd`, and the index of its first. */
+static int chunk_of(int fd, int *first)
+{
+    unsigned int q = (unsigned int)fd / FD_TABLE_FIRST;
+    int k = 0;
+
+    while (q != 0) {
+        q >>= 1;
+        k++;
+    }
+    *first = k == 0 ? 0 : FD_TABLE_FIRST << (k - 1);
+    return k;
+}
+
+/** How many entries chunk `k` holds. */
+static int chunk_size(int k)
+{
+    return k == 0 ? FD_TABLE_FIRST : FD_TABLE_FIRST << (k - 1);
+}
+
+fd_entry_t *fd_slot(const fd_table_t *table, int fd)
+{
+    int first;
+    int k = chunk_of(fd, &first);
+
+    return &table->chunks[k][fd - first];
+}
+
+uint32_t fd_table_lock(fd_table_t *table)
+{
+    return spin_lock_irqsave(&table->lock);
+}
+
+void fd_table_unlock(fd_table_t *table, uint32_t flags)
+{
+    spin_unlock_irqrestore(&table->lock, flags);
+}
+
+/**
+ * Give `table` the chunks that reach descriptor `cap` - 1, publishing each
+ * before the `cap` that covers it, and raise `cap`. The caller holds the
+ * lock, or is the only one that has the table; the heap does not sleep.
+ * 0, or -ENOMEM with `cap` as it was.
+ */
+static int chunks_reach(fd_table_t *table, int cap)
+{
+    int first;
+    int last = chunk_of(cap - 1, &first);
+    int k;
+
+    for (k = 0; k <= last; k++) {
+        if (!table->chunks[k]) {
+            fd_entry_t *c = kzalloc(sizeof(fd_entry_t) * (size_t)chunk_size(k));
+
+            if (!c) {
+                return -ENOMEM;
+            }
+            *(fd_entry_t *volatile *)(void *)&table->chunks[k] = c;
+        }
+    }
+    *(volatile int *)&table->cap = cap;
+    return 0;
 }
 
 int fd_table_init(fd_table_t *table)
@@ -384,63 +538,32 @@ int fd_table_init(fd_table_t *table)
     if (!table) {
         return -1;
     }
-    table->entries = kzalloc(sizeof(fd_entry_t) * FD_TABLE_FIRST);
-    table->cap = table->entries ? FD_TABLE_FIRST : 0;
+    k_memset(table->chunks, 0, sizeof(table->chunks));
+    table->cap = 0;
     table->next_free = 0;
-    table->retired = NULL;
-    return table->entries ? 0 : -1;
-}
-
-/** Free every array on `table`'s retired list. */
-static void retired_free(fd_table_t *table)
-{
-    struct fd_retired *r;
-
-    while ((r = table->retired) != NULL) {
-        table->retired = r->next;
-        kfree(r->entries);
-        kfree(r);
-    }
+    table->sharers = NULL;
+    table->lock.locked = 0;
+    return chunks_reach(table, FD_TABLE_FIRST) == 0 ? 0 : -1;
 }
 
 void fd_table_free(fd_table_t *table)
 {
+    int k;
+
     if (!table) {
         return;
     }
-    retired_free(table);
-    kfree(table->entries);
-    table->entries = NULL;
+    for (k = 0; k < FD_CHUNKS; k++) {
+        kfree(table->chunks[k]);
+        table->chunks[k] = NULL;
+    }
     table->cap = 0;
     table->next_free = 0;
 }
 
-/**
- * A sharer's call that holds a descriptor may sleep with the address of an
- * entry in an array the table has since replaced; a sharer that holds none
- * has no such address, since every call takes its entries by `fd_get` or
- * `fd_alloc`, which hold them. The caller's own call is ending.
- */
-void fd_table_reap(fd_table_t *table)
-{
-    const process_t *t;
-
-    if (!table || !table->retired) {
-        return;
-    }
-    if (table->refs > 1) {
-        for (t = proc_list; t; t = t->next) {
-            if (t != current_proc && t->fds == table && t->fd_holding) {
-                return;
-            }
-        }
-    }
-    retired_free(table);
-}
-
 int fd_table_cap(const fd_table_t *table)
 {
-    return table ? table->cap : 0;
+    return table ? *(const volatile int *)&table->cap : 0;
 }
 
 int fd_limit(const fd_table_t *table)
@@ -462,41 +585,89 @@ fd_table_t *fd_table_new(void)
         return NULL;
     }
     if (fd_table_init(table) != 0) {
-        kfree(table);
+        fd_table_delete(table);
         return NULL;
     }
     table->refs = 1;
     return table;
 }
 
+/** Whether entry `e` is a slot no lookup finds and no copy keeps: free,
+ * reserved by an open that has not finished, or being filled. */
+static int slot_unready(const fd_entry_t *e)
+{
+    return e->type == FD_TYPE_NONE || e->pending;
+}
+
 /**
- * A slot with no type is either free or reserved by an unfinished open of
- * another thread that shares `src`. The copy takes no reference to such a
- * slot's description, so the slot is cleared in the copy.
+ * Copy `src`'s entries into `dst`, a table nobody else has, under `src`'s
+ * lock, first raising `dst` to `src`'s size; with `take`, clear in the copy
+ * each slot that is not ready or is closing and add a reference to each
+ * description the copy names, before the lock goes, so that no closer of a
+ * sharer frees one in between. A slot with no type is free or reserved by
+ * an unfinished open of a sharer, whose description the copy has no
+ * reference to, so it is cleared in the copy either way. 0, or -ENOMEM when
+ * the heap has no room for `dst`'s growth.
  */
-fd_table_t *fd_table_dup(const fd_table_t *src)
+static int entries_copy(fd_table_t *dst, fd_table_t *src, int take)
+{
+    uint32_t flags = fd_table_lock(src);
+    int i;
+
+    if (dst->cap < src->cap && chunks_reach(dst, src->cap) != 0) {
+        fd_table_unlock(src, flags);
+        return -ENOMEM;
+    }
+    for (i = 0; i < src->cap; i++) {
+        fd_entry_t *d = fd_slot(dst, i);
+
+        *d = *fd_slot(src, i);
+        if (d->type == FD_TYPE_NONE || (take && (d->pending || (d->flags & FD_FLAG_CLOSING)))) {
+            k_memset(d, 0, sizeof(*d));
+        } else if (take) {
+            fd_ofd_ref(d->ofd);
+        }
+    }
+    fd_table_unlock(src, flags);
+    return 0;
+}
+
+/** A table from the heap with `src`'s entries and one reference, or NULL
+ * when the heap has no room; `take` as `entries_copy` has it. */
+static fd_table_t *table_copy(fd_table_t *src, int take)
 {
     fd_table_t *table = kzalloc(sizeof(*table));
-    int i;
 
     if (!table) {
         return NULL;
     }
-    table->entries = kzalloc(sizeof(fd_entry_t) * (size_t)src->cap);
-    if (!table->entries) {
-        kfree(table);
+    if (entries_copy(table, src, take) != 0) {
+        fd_table_delete(table);
         return NULL;
     }
-    k_memcpy(table->entries, src->entries, sizeof(fd_entry_t) * (size_t)src->cap);
-    for (i = 0; i < src->cap; i++) {
-        if (table->entries[i].type == FD_TYPE_NONE) {
-            k_memset(&table->entries[i], 0, sizeof(fd_entry_t));
-        }
-    }
-    table->cap = src->cap;
     table->refs = 1;
-    table->next_free = 0;
     return table;
+}
+
+fd_table_t *fd_table_dup(fd_table_t *src)
+{
+    return table_copy(src, 0);
+}
+
+fd_table_t *fd_table_copy(fd_table_t *src)
+{
+    return table_copy(src, 1);
+}
+
+int fd_table_take(fd_table_t *dst, fd_table_t *src)
+{
+    int k;
+
+    for (k = 0; k < FD_CHUNKS && dst->chunks[k]; k++) {
+        k_memset(dst->chunks[k], 0, sizeof(fd_entry_t) * (size_t)chunk_size(k));
+    }
+    dst->next_free = 0;
+    return entries_copy(dst, src, 1);
 }
 
 void fd_table_delete(fd_table_t *table)
@@ -506,7 +677,8 @@ void fd_table_delete(fd_table_t *table)
 }
 
 /** Widen the hold map of `t` to cover `cap` descriptors, its bits kept;
- * 0, or -ENOMEM. */
+ * 0, or -ENOMEM. The caller holds the lock of `t`'s table, or `t` shares
+ * none yet. */
 static int held_fit(process_t *t, int cap)
 {
     int words = (cap + 31) / 32;
@@ -528,14 +700,14 @@ static int held_fit(process_t *t, int cap)
     return 0;
 }
 
-/** Widen the hold map of every thread that shares `table` to `cap`; 0, or
- * -ENOMEM, with the maps widened so far left so, which is harmless. */
+/** Widen the hold map of every sharer of `table` to `cap`, under its lock;
+ * 0, or -ENOMEM, with the maps widened so far left so, which is harmless. */
 static int sharers_fit(fd_table_t *table, int cap)
 {
     process_t *t;
 
-    for (t = proc_list; t; t = t->next) {
-        if (t->fds == table && held_fit(t, cap) != 0) {
+    for (t = table->sharers; t; t = t->fd_sharer_next) {
+        if (held_fit(t, cap) != 0) {
             return -ENOMEM;
         }
     }
@@ -543,43 +715,25 @@ static int sharers_fit(fd_table_t *table, int cap)
 }
 
 /**
- * Move the entries to an array of `cap`, the new ones free, and put the old
- * array on the retired list, where a call that took the address of one of
- * its entries before the move finds it as it was (`fd_table_t`). The maps of
- * a shared table's sharers widen first. Nothing here sleeps. 0, or -ENOMEM
- * when the heap has no room.
+ * Raise `table` to `cap` entries under its lock, the maps of a shared
+ * table's sharers widened first, so that each sharer's map is as wide as
+ * the table. Nothing here sleeps, and no entry moves. 0, or -ENOMEM when the
+ * heap has no room.
  */
 static int fd_table_resize(fd_table_t *table, int cap)
 {
-    fd_entry_t *grown;
-    struct fd_retired *old = NULL;
-
+    if (cap <= table->cap) {
+        return 0;
+    }
     if (table->refs > 1 && sharers_fit(table, cap) != 0) {
         return -ENOMEM;
     }
-    if (table->entries && (old = kmalloc(sizeof(*old))) == NULL) {
-        return -ENOMEM;
-    }
-    grown = kzalloc(sizeof(fd_entry_t) * (size_t)cap);
-    if (!grown) {
-        kfree(old);
-        return -ENOMEM;
-    }
-    if (old) {
-        k_memcpy(grown, table->entries, sizeof(fd_entry_t) * (size_t)table->cap);
-        old->entries = table->entries;
-        old->cap = table->cap;
-        old->next = table->retired;
-        table->retired = old;
-    }
-    table->entries = grown;
-    table->cap = cap;
-    return 0;
+    return chunks_reach(table, cap);
 }
 
-/** Grow the table by doubling to at least `want` entries, and to no more
- * than `fd_nr_open` past that; 0, -EMFILE when `want` is past the caller's
- * limit, or -ENOMEM when the heap has no room. */
+/** Grow the table, under its lock, by doubling to at least `want` entries,
+ * and to no more than `fd_nr_open` past that; 0, -EMFILE when `want` is
+ * past the caller's limit, or -ENOMEM when the heap has no room. */
 static int fd_table_grow(fd_table_t *table, int want)
 {
     int cap = table->cap ? table->cap : FD_TABLE_FIRST;
@@ -596,30 +750,78 @@ static int fd_table_grow(fd_table_t *table, int want)
     return fd_table_resize(table, cap);
 }
 
+void fd_table_join(fd_table_t *table, struct process *p)
+{
+    uint32_t flags = fd_table_lock(table);
+
+    p->fds = table;
+    p->fd_sharer_next = table->sharers;
+    table->sharers = p;
+    fd_table_unlock(table, flags);
+}
+
+int fd_table_put(struct process *p)
+{
+    fd_table_t *table = p->fds;
+    process_t **link;
+    uint32_t flags;
+
+    if (!table) {
+        return 0;
+    }
+    flags = fd_table_lock(table);
+    if (table->refs <= 1) {
+        fd_table_unlock(table, flags);
+        return 1;
+    }
+    for (link = &table->sharers; *link && *link != p; link = &(*link)->fd_sharer_next) {
+    }
+    if (*link) {
+        *link = p->fd_sharer_next;
+    }
+    p->fd_sharer_next = NULL;
+    table->refs--;
+    p->fds = NULL;
+    fd_table_unlock(table, flags);
+    return 0;
+}
+
 /** A table already shared has every sharer's map as wide as itself, since
  * each share and each growth of a shared table widened them, so only its
- * first share walks the processes, for the owner's map that a growth of the
- * unshared table left as it was. */
+ * first share widens the owner's map, which a growth of the unshared table
+ * left as it was. */
 int fd_table_share(fd_table_t *table, struct process *child)
 {
+    uint32_t flags = fd_table_lock(table);
+    int rc = 0;
+
     if ((table->refs == 1 && sharers_fit(table, table->cap) != 0) ||
         held_fit(child, table->cap) != 0) {
-        return -1;
+        rc = -1;
+    } else {
+        table->refs++;
+        child->fds = table;
+        child->fd_sharer_next = table->sharers;
+        table->sharers = child;
     }
-    table->refs++;
-    return 0;
+    fd_table_unlock(table, flags);
+    return rc;
 }
 
 int fd_table_fit(fd_table_t *table, int cap)
 {
-    return table->cap >= cap ? 0 : fd_table_resize(table, cap);
+    uint32_t flags = fd_table_lock(table);
+    int rc = cap <= table->cap ? 0 : chunks_reach(table, cap);
+
+    fd_table_unlock(table, flags);
+    return rc;
 }
 
 /** Mark descriptor `fd` held by the current call when `table` is the
  * caller's and shared, as `fd_get` and `fd_alloc` hold one: a close by
- * another sharer then waits for the call to end, and the arrays a growth
- * replaces stay until it has. `fd_holding` is one more than the highest
- * word of the map with a bit set. */
+ * another sharer then waits for the call to end. `fd_holding` is one more
+ * than the highest word of the map with a bit set. The caller holds the
+ * table's lock. */
 static void fd_hold(fd_table_t *table, int fd)
 {
     process_t *p = current_proc;
@@ -633,27 +835,156 @@ static void fd_hold(fd_table_t *table, int fd)
     }
 }
 
+int fd_held_elsewhere(fd_table_t *table, int fd)
+{
+    const process_t *t;
+
+    if (table->refs < 2) {
+        return 0;
+    }
+    for (t = table->sharers; t; t = t->fd_sharer_next) {
+        if (t != current_proc && fd / 32 < t->fd_holding &&
+            (t->fd_held[fd / 32] & (1u << (fd % 32)))) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int fd_close_claim(fd_table_t *table, int fd)
+{
+    uint32_t flags = fd_table_lock(table);
+    fd_entry_t *e;
+    int rc;
+
+    if (fd < 0 || fd >= table->cap) {
+        fd_table_unlock(table, flags);
+        return -EBADF;
+    }
+    e = fd_slot(table, fd);
+    if (slot_unready(e) || (e->flags & FD_FLAG_CLOSING)) {
+        rc = -EBADF;
+    } else if (fd_held_elsewhere(table, fd)) {
+        e->flags |= FD_FLAG_CLOSING;
+        rc = 0;
+    } else {
+        e->flags |= FD_FLAG_CLOSING | FD_FLAG_RELEASING;
+        rc = 1;
+    }
+    fd_table_unlock(table, flags);
+    return rc;
+}
+
+int fd_close_finish(fd_table_t *table, int fd)
+{
+    uint32_t flags = fd_table_lock(table);
+    fd_entry_t *e;
+    int rc = 0;
+
+    if (fd >= 0 && fd < table->cap) {
+        e = fd_slot(table, fd);
+        if ((e->flags & (FD_FLAG_CLOSING | FD_FLAG_RELEASING)) == FD_FLAG_CLOSING &&
+            !fd_held_elsewhere(table, fd)) {
+            e->flags |= FD_FLAG_RELEASING;
+            rc = 1;
+        }
+    }
+    fd_table_unlock(table, flags);
+    return rc;
+}
+
+int fd_dup_target(fd_table_t *table, int fd)
+{
+    uint32_t flags = fd_table_lock(table);
+    fd_entry_t *e;
+    int rc;
+
+    if (fd < 0 || fd >= table->cap) {
+        fd_table_unlock(table, flags);
+        return -EBADF;
+    }
+    e = fd_slot(table, fd);
+    if (e->type == FD_TYPE_NONE && !e->ofd && !e->pending) {
+        e->pending = 1;
+        fd_hold(table, fd);
+        rc = 0;
+    } else if (slot_unready(e) || (e->flags & FD_FLAG_CLOSING) || fd_held_elsewhere(table, fd)) {
+        rc = -EBUSY;
+    } else {
+        e->flags |= FD_FLAG_CLOSING | FD_FLAG_RELEASING;
+        rc = 1;
+    }
+    fd_table_unlock(table, flags);
+    return rc;
+}
+
+int fd_holds_claim(int from)
+{
+    process_t *p = current_proc;
+    fd_table_t *table = p ? p->fds : NULL;
+    uint32_t flags;
+    int fd;
+
+    if (!table) {
+        if (p) {
+            p->fd_holding = 0;
+        }
+        return -1;
+    }
+    flags = fd_table_lock(table);
+    for (fd = from; fd / 32 < p->fd_holding; fd++) {
+        uint32_t *word = &p->fd_held[fd / 32];
+        fd_entry_t *e;
+
+        if (*word == 0) {
+            fd = (fd / 32) * 32 + 31;
+            continue;
+        }
+        if (!(*word & (1u << (fd % 32)))) {
+            continue;
+        }
+        *word &= ~(1u << (fd % 32));
+        if (fd >= table->cap) {
+            continue;
+        }
+        e = fd_slot(table, fd);
+        if ((e->flags & (FD_FLAG_CLOSING | FD_FLAG_RELEASING)) == FD_FLAG_CLOSING &&
+            !fd_held_elsewhere(table, fd)) {
+            e->flags |= FD_FLAG_RELEASING;
+            fd_table_unlock(table, flags);
+            return fd;
+        }
+    }
+    p->fd_holding = 0;
+    fd_table_unlock(table, flags);
+    return -1;
+}
+
 int fd_table_reach(fd_table_t *table, int fd)
 {
+    uint32_t flags;
+    int rc;
+
     if (!table || fd < 0 || fd >= fd_limit(table)) {
         return -EBADF;
     }
-    if (fd < table->cap) {
-        return 0;
-    }
-    return fd_table_grow(table, fd + 1);
+    flags = fd_table_lock(table);
+    rc = fd < table->cap ? 0 : fd_table_grow(table, fd + 1);
+    fd_table_unlock(table, flags);
+    return rc;
 }
 
 int fd_init_stdio(fd_table_t *table, uint32_t hangups)
 {
     int i;
 
-    if (!table || !table->entries || table->cap <= FD_STDERR) {
+    if (!table || table->cap <= FD_STDERR) {
         return -1;
     }
 
     for (i = FD_STDIN; i <= FD_STDERR; i++) {
         struct open_file *ofd = ofd_alloc();
+        fd_entry_t *e = fd_slot(table, i);
 
         if (!ofd) {
             while (i > FD_STDIN) {
@@ -662,16 +993,29 @@ int fd_init_stdio(fd_table_t *table, uint32_t hangups)
             return -1;
         }
         ofd->tty_hangups = hangups;
-        table->entries[i].type = FD_TYPE_CONSOLE;
-        table->entries[i].node = NULL;
-        table->entries[i].sock = NULL;
-        table->entries[i].ofd = ofd;
-        table->entries[i].ops = NULL;
-        table->entries[i].priv = NULL;
-        table->entries[i].dev = NULL;
-        table->entries[i].flags = FD_FLAG_READ | FD_FLAG_WRITE;
+        k_memset(e, 0, sizeof(*e));
+        e->type = FD_TYPE_CONSOLE;
+        e->ofd = ofd;
+        e->flags = FD_FLAG_READ | FD_FLAG_WRITE;
     }
     return 0;
+}
+
+/** The lowest free slot of `table` at or above `from` and below `limit`,
+ * which may be `cap` when every slot below it is taken; the caller holds the
+ * lock. */
+static int free_slot(fd_table_t *table, int from, int limit)
+{
+    int i;
+
+    for (i = from; i < table->cap && i < limit; i++) {
+        const fd_entry_t *e = fd_slot(table, i);
+
+        if (e->type == FD_TYPE_NONE && e->ofd == NULL && !e->pending) {
+            break;
+        }
+    }
+    return i;
 }
 
 /**
@@ -681,47 +1025,53 @@ int fd_init_stdio(fd_table_t *table, uint32_t hangups)
  * `next_fd`, so that a process that opens many descriptors does not walk
  * them all at every open. fs.file-max binds a caller that is not
  * privileged, as Linux's `alloc_empty_file` does.
+ *
+ * The description comes from the heap before the slot is chosen, and goes
+ * back when there is no slot; the slot is chosen, grown to and reserved
+ * under the table's lock in one step, so that two sharers never reserve
+ * one slot.
  */
 int fd_alloc_from(fd_table_t *table, int minfd)
 {
     int limit = fd_limit(table);
     struct open_file *ofd;
-    int i;
+    fd_entry_t *e;
+    uint32_t flags;
+    int i, rc;
 
     if (!table || minfd < 0 || minfd >= limit) {
         return -EMFILE;
     }
-    for (i = minfd > table->next_free ? minfd : table->next_free; i < table->cap && i < limit;
-         i++) {
-        if (table->entries[i].type == FD_TYPE_NONE && table->entries[i].ofd == NULL) {
-            break;
-        }
-    }
+    flags = fd_table_lock(table);
+    i = free_slot(table, minfd > table->next_free ? minfd : table->next_free, limit);
+    fd_table_unlock(table, flags);
     if (i >= limit) {
         return -EMFILE;
     }
     if (ofd_count >= fd_file_max && current_proc && !proc_privileged(current_proc)) {
         return -ENFILE;
     }
-    if (i >= table->cap) {
-        int rc = fd_table_grow(table, i + 1);
-
-        if (rc != 0) {
-            return rc;
-        }
-    }
     ofd = ofd_alloc();
     if (!ofd) {
         return -ENOMEM;
     }
-    table->entries[i].ofd = ofd;
-    table->entries[i].ops = NULL;
-    table->entries[i].priv = NULL;
-    table->entries[i].dev = NULL;
+    flags = fd_table_lock(table);
+    i = free_slot(table, minfd > table->next_free ? minfd : table->next_free, limit);
+    rc = i >= limit ? -EMFILE : i >= table->cap ? fd_table_grow(table, i + 1) : 0;
+    if (rc != 0) {
+        fd_table_unlock(table, flags);
+        fd_ofd_unref(ofd);
+        return rc;
+    }
+    e = fd_slot(table, i);
+    k_memset(e, 0, sizeof(*e));
+    e->ofd = ofd;
+    e->pending = 1;
     if (minfd <= table->next_free) {
         table->next_free = i + 1;
     }
     fd_hold(table, i);
+    fd_table_unlock(table, flags);
     return i;
 }
 
@@ -730,67 +1080,150 @@ int fd_alloc(fd_table_t *table)
     return fd_alloc_from(table, 0);
 }
 
+void fd_install(fd_table_t *table, int fd)
+{
+    uint32_t flags = fd_table_lock(table);
+
+    fd_slot(table, fd)->pending = 0;
+    fd_table_unlock(table, flags);
+}
+
+/**
+ * The description's reference is dropped first, while the slot still names
+ * it, as the release of a KRFFS file counts the slot among the node's
+ * holders until it ends; the slot is then cleared under the lock.
+ */
 int fd_free(fd_table_t *table, int fd)
 {
-    if (!table || fd < 0 || fd >= table->cap) {
+    struct open_file *ofd;
+    fd_entry_t *e;
+    uint32_t flags;
+
+    if (!table || fd < 0 || fd >= fd_table_cap(table)) {
         return -1;
     }
-
-    if (table->entries[fd].type == FD_TYPE_NONE && table->entries[fd].ofd == NULL) {
+    e = fd_slot(table, fd);
+    flags = fd_table_lock(table);
+    ofd = e->ofd;
+    if (e->type == FD_TYPE_NONE && ofd == NULL && !e->pending) {
+        fd_table_unlock(table, flags);
         return -1;
     }
-
-    fd_ofd_unref(table->entries[fd].ofd);
-    table->entries[fd].type = FD_TYPE_NONE;
-    table->entries[fd].node = NULL;
-    table->entries[fd].sock = NULL;
-    table->entries[fd].ofd = NULL;
-    table->entries[fd].ops = NULL;
-    table->entries[fd].priv = NULL;
-    table->entries[fd].dev = NULL;
-    table->entries[fd].flags = 0;
+    e->pending = 1;
+    fd_table_unlock(table, flags);
+    fd_ofd_unref(ofd);
+    flags = fd_table_lock(table);
+    k_memset(e, 0, sizeof(*e));
     if (fd < table->next_free) {
         table->next_free = fd;
     }
+    fd_table_unlock(table, flags);
     return 0;
+}
+
+void fd_free_after(fd_table_t *table, int fd)
+{
+    fd_entry_t *e = fd_slot(table, fd);
+    uint32_t flags = fd_table_lock(table);
+
+    k_memset(e, 0, sizeof(*e));
+    if (fd < table->next_free) {
+        table->next_free = fd;
+    }
+    fd_table_unlock(table, flags);
 }
 
 fd_entry_t *fd_get(fd_table_t *table, int fd)
 {
-    fd_entry_t *e;
+    fd_entry_t *e = NULL;
+    uint32_t flags;
 
-    if (!table || fd < 0 || fd >= table->cap) {
+    if (!table || fd < 0) {
         return NULL;
     }
-    e = &table->entries[fd];
-    if (e->type == FD_TYPE_NONE || (e->flags & FD_FLAG_CLOSING)) {
-        return NULL;
+    flags = fd_table_lock(table);
+    if (fd < table->cap) {
+        e = fd_slot(table, fd);
+        if (slot_unready(e) || (e->flags & FD_FLAG_CLOSING)) {
+            e = NULL;
+        } else {
+            fd_hold(table, fd);
+        }
     }
-    fd_hold(table, fd);
+    fd_table_unlock(table, flags);
     return e;
 }
 
-/** Whether `e` is the address of one of the `cap` entries at `base`. */
-static int in_array(const fd_entry_t *base, int cap, const fd_entry_t *e)
+int fd_peek(fd_table_t *table, int fd, fd_entry_t *out, int ref)
 {
-    uintptr_t a = (uintptr_t)base, x = (uintptr_t)e;
+    uint32_t flags;
+    int rc = -EBADF;
 
-    return base && x >= a && x < a + sizeof(fd_entry_t) * (size_t)cap &&
-           (x - a) % sizeof(fd_entry_t) == 0;
+    if (!table || fd < 0) {
+        return -EBADF;
+    }
+    flags = fd_table_lock(table);
+    if (fd < table->cap) {
+        const fd_entry_t *e = fd_slot(table, fd);
+
+        if (fd_entry_open(e)) {
+            *out = *e;
+            if (ref == FD_PEEK_REF || (ref == FD_PEEK_MOUNTED && out->ofd && out->ofd->vmnt &&
+                                       (out->type == FD_TYPE_FILE || out->type == FD_TYPE_DIR))) {
+                fd_ofd_ref(out->ofd);
+            }
+            rc = 0;
+        }
+    }
+    fd_table_unlock(table, flags);
+    return rc;
+}
+
+int fd_entry_open(const fd_entry_t *e)
+{
+    return !slot_unready(e) && !(e->flags & FD_FLAG_CLOSING);
+}
+
+int fd_next_open(fd_table_t *table, int from)
+{
+    uint32_t flags;
+    int fd, found = -1;
+
+    if (!table || from < 0) {
+        return -1;
+    }
+    flags = fd_table_lock(table);
+    for (fd = from; fd < table->cap; fd++) {
+        if (fd_entry_open(fd_slot(table, fd))) {
+            found = fd;
+            break;
+        }
+    }
+    fd_table_unlock(table, flags);
+    return found;
+}
+
+void fd_set_flags(fd_table_t *table, fd_entry_t *e, uint32_t clear, uint32_t set)
+{
+    uint32_t flags = fd_table_lock(table);
+
+    e->flags = (e->flags & ~clear) | set;
+    fd_table_unlock(table, flags);
 }
 
 int fd_in_table(const fd_table_t *table, const fd_entry_t *e)
 {
-    const struct fd_retired *r;
+    uintptr_t x = (uintptr_t)e;
+    int k;
 
     if (!table) {
         return 0;
     }
-    if (in_array(table->entries, table->cap, e)) {
-        return 1;
-    }
-    for (r = table->retired; r; r = r->next) {
-        if (in_array(r->entries, r->cap, e)) {
+    for (k = 0; k < FD_CHUNKS && table->chunks[k]; k++) {
+        uintptr_t a = (uintptr_t)table->chunks[k];
+
+        if (x >= a && x < a + sizeof(fd_entry_t) * (size_t)chunk_size(k) &&
+            (x - a) % sizeof(fd_entry_t) == 0) {
             return 1;
         }
     }
@@ -799,58 +1232,32 @@ int fd_in_table(const fd_table_t *table, const fd_entry_t *e)
 
 int fd_is_valid(fd_table_t *table, int fd)
 {
-    if (!table || fd < 0 || fd >= table->cap) {
-        return 0;
-    }
+    fd_entry_t e;
 
-    return table->entries[fd].type != FD_TYPE_NONE && !(table->entries[fd].flags & FD_FLAG_CLOSING);
+    return fd_peek(table, fd, &e, 0) == 0;
 }
 
-int fd_can_alloc(const fd_table_t *table)
+int fd_can_alloc(fd_table_t *table)
 {
     int limit = fd_limit(table);
-    int i;
+    uint32_t flags = fd_table_lock(table);
+    int i = free_slot(table, table->next_free, limit);
 
-    for (i = table->next_free; i < table->cap && i < limit; i++) {
-        if (table->entries[i].type == FD_TYPE_NONE && table->entries[i].ofd == NULL) {
-            return 1;
-        }
-    }
-    return table->cap < limit;
-}
-
-fd_entry_t *fd_entry_now(fd_table_t *table, fd_entry_t *e)
-{
-    const struct fd_retired *r;
-
-    for (r = table ? table->retired : NULL; r; r = r->next) {
-        if (in_array(r->entries, r->cap, e)) {
-            return &table->entries[e - r->entries];
-        }
-    }
-    return e;
-}
-
-/** Repoint each FILE or DIR entry of the `cap` at `entries` that names
- * `from` at `to`. */
-static void entries_repoint(fd_entry_t *entries, int cap, const void *from, void *to)
-{
-    int i;
-
-    for (i = 0; i < cap; i++) {
-        if ((entries[i].type == FD_TYPE_FILE || entries[i].type == FD_TYPE_DIR) &&
-            (const void *)entries[i].node == from) {
-            entries[i].node = to;
-        }
-    }
+    fd_table_unlock(table, flags);
+    return i < limit;
 }
 
 void fd_table_repoint(fd_table_t *table, const void *from, void *to)
 {
-    const struct fd_retired *r;
+    uint32_t flags = fd_table_lock(table);
+    int i;
 
-    entries_repoint(table->entries, table->cap, from, to);
-    for (r = table->retired; r; r = r->next) {
-        entries_repoint(r->entries, r->cap, from, to);
+    for (i = 0; i < table->cap; i++) {
+        fd_entry_t *e = fd_slot(table, i);
+
+        if ((e->type == FD_TYPE_FILE || e->type == FD_TYPE_DIR) && (const void *)e->node == from) {
+            e->node = to;
+        }
     }
+    fd_table_unlock(table, flags);
 }

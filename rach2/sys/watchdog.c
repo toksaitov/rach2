@@ -670,15 +670,27 @@ static void watchdog_enable(struct wd_cpu *w, unsigned int e)
  * the hard-lockup detector, queue the soft-lockup function, which the next
  * schedule runs (`watchdog_sched`), and report a soft lockup when the last
  * one ran more than 2 x `watchdog_thresh` seconds ago.
+ *
+ * The switches and the threshold are read first, and the timer returns
+ * when a write has moved `wd_gen` since its tick checked it: a write moves
+ * it before it stores a new value (procfs.c's `sysctl_int_write`), so a
+ * timer that read the new value sees the move, and no timer compares a
+ * new threshold with timestamps from before it, as Linux stores the
+ * threshold only once every timer has stopped (kernel/watchdog.c:867-880).
  */
 static void watchdog_timer_fn(struct wd_cpu *w, isr_params_t *regs)
 {
     unsigned int e = watchdog_enabled();
+    uint32_t thresh = get_softlockup_thresh();
     uint32_t now, period_ts, duration, sflags;
     int me = (int)arch_cpu_id(), panicking;
     process_t *t;
     char name[16];
 
+    k_barrier();
+    if (w->gen != wd_gen) {
+        return;
+    }
     if (!e) {
         if (w->enabled) {
             w->enabled = 0;
@@ -696,8 +708,7 @@ static void watchdog_timer_fn(struct wd_cpu *w, isr_params_t *regs)
         update_report_ts(w);
         return;
     }
-    if (!(e & WD_SOFT) || now - period_ts <= get_softlockup_thresh() ||
-        (int32_t)(now - period_ts) < 0) {
+    if (!(e & WD_SOFT) || now - period_ts <= thresh || (int32_t)(now - period_ts) < 0) {
         return;
     }
     duration = now - w->touch_ts;
@@ -765,9 +776,12 @@ static void flush_for_holder(int me)
     }
 }
 
+/** The barrier keeps the store of a new setting after the move, which a
+ * timer that reads the setting then sees (`watchdog_timer_fn`). */
 void watchdog_reconfigure(void)
 {
     wd_gen++;
+    k_barrier();
 }
 
 /**
@@ -1046,18 +1060,19 @@ static void hung_task_log(const struct hung_report *rep)
  * thread blocked in a sleep no signal ends, but one SIGKILL ends
  * (:206-210).
  *
- * The walk runs with interrupts off. khungtaskd holds the big lock, but a
- * tick switches a kernel thread at once (`sched_preempt`), and the thread
- * it switches to may reap a process and free the record the walk stands
- * on. Linux walks under `rcu_read_lock` and breaks it every
- * HUNG_TASK_LOCK_BREAK, a tenth of a second, with references held, ending
- * the walk when the task it stands on has gone (`rcu_lock_break`, :40,
- * :160-174, :201-205). A record here has no count to hold, so the walk
- * keeps the thread's id instead, lets interrupts in after each report,
- * which it logs then, and goes on from the record with that id, or ends
- * when there is none. Without a report it does not break: the tick count
- * stands still while khungtaskd holds the big lock with interrupts off,
- * and a walk of every thread's record is short.
+ * The walk runs with interrupts off. khungtaskd holds the big lock, and
+ * the tick does not switch a kernel thread (`no_tick_switch`), so no
+ * thread reaps a process and frees the record the walk stands on unless
+ * khungtaskd sleeps or reaches a service point. Linux walks under
+ * `rcu_read_lock` and breaks it every HUNG_TASK_LOCK_BREAK, a tenth of a
+ * second, with references held, ending the walk when the task it stands on
+ * has gone (`rcu_lock_break`, :40, :160-174, :201-205). A record here has
+ * no count to hold, so the walk keeps the thread's id instead, lets
+ * interrupts in after each report, which it logs then, and goes on from
+ * the record with that id, or ends when there is none. Without a report it
+ * does not break: the tick count stands still while khungtaskd holds the
+ * big lock with interrupts off, and a walk of every thread's record is
+ * short.
  */
 static void check_hung_uninterruptible_tasks(uint32_t timeout)
 {

@@ -6,6 +6,8 @@
  * virtio_gpu64_hosttest.c runs the same rows with x86-64's structures.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/atomic_host.c tests/host/compat/resv_host.c
+ * host-deps: tests/host/compat/mutex_none.c
  *
  * The rows: a bind with EDID, which reads the EDID and then the displays,
  * fences each command with the next id, and lists Linux's 26 modes of
@@ -227,6 +229,19 @@ int sched_is_enabled(void)
 
 static int irq_depth;
 
+/** Take a lock with interrupts already off: one thread, nothing to wait
+ * for. */
+void spin_lock(struct spinlock *lock)
+{
+    (void)lock;
+}
+
+/** Give it back. */
+void spin_unlock(struct spinlock *lock)
+{
+    (void)lock;
+}
+
 /** Count a lock taken with interrupts off. */
 uint32_t spin_lock_irqsave(struct spinlock *lock)
 {
@@ -309,6 +324,13 @@ void drm_send_event(struct drm_pending_event *e)
     events_sent++;
     last_event_type = e->event.base.type;
     event_free(e);
+}
+
+/** `drm_send_event`, with the event lock held, which is the same in one
+ * thread. */
+void drm_send_event_locked(struct drm_pending_event *e)
+{
+    drm_send_event(e);
 }
 
 /** Take back a reserved event. */
@@ -526,8 +548,8 @@ int32_t drm_gem_handle_create(struct drm_file *file, struct drm_gem_object *obj,
 }
 
 /** The handle `id` of the file whose table is `t`, as drm_gem.c's table
- * gives it to PRIME, or NULL. */
-struct drm_handle *drm_handle_get(const struct drm_handles *t, uint32_t id)
+ * keeps it, or NULL. */
+static struct drm_handle *model_handle(const struct drm_handles *t, uint32_t id)
 {
     int i;
 
@@ -539,18 +561,26 @@ struct drm_handle *drm_handle_get(const struct drm_handles *t, uint32_t id)
     return NULL;
 }
 
-/** Make `buf` the PRIME cache of the handle `h`, which the model keeps in
- * place of drm_gem.c's hash: 0. */
-int32_t drm_handle_set_prime(struct drm_handles *t, struct drm_handle *h, struct dma_buf *buf)
+/** Make `buf` the PRIME cache of the handle `id` to `object`, which the
+ * model keeps in place of drm_gem.c's hash: 0, -ENOENT or -EEXIST. */
+int32_t drm_handle_set_prime(struct drm_handles *t, uint32_t id, const void *object,
+                             struct dma_buf *buf)
 {
-    (void)t;
+    struct drm_handle *h = model_handle(t, id);
+
+    if (!h || h->object != object) {
+        return -ENOENT;
+    }
+    if (h->prime) {
+        return -EEXIST;
+    }
     h->prime = buf;
     return 0;
 }
 
 /** The lowest handle of the file whose table is `t` that caches `buf`, or
  * 0. */
-uint32_t drm_handle_prime_find(const struct drm_handles *t, const struct dma_buf *buf)
+uint32_t drm_handle_prime_find(struct drm_handles *t, const struct dma_buf *buf)
 {
     uint32_t best = 0;
     int i;
@@ -565,7 +595,7 @@ uint32_t drm_handle_prime_find(const struct drm_handles *t, const struct dma_buf
 }
 
 /** The lowest handle from `id` of the file whose table is `t`, or 0. */
-uint32_t drm_handle_next(const struct drm_handles *t, uint32_t id)
+uint32_t drm_handle_next(struct drm_handles *t, uint32_t id)
 {
     uint32_t best = 0;
     int i;

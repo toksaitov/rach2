@@ -16,7 +16,7 @@
 
 /* The common entry's return (isr_handler.s), where a forked child's first
  * switch lands. */
-extern void isr_return(void);
+extern void ret_from_fork(void);
 
 /* The stack switch and the entry to user mode (switch.s). */
 extern void x86_64_switch(uint64_t *save_sp, uint64_t load_sp);
@@ -167,7 +167,8 @@ void arch_context_init(process_t *proc, void (*entry_point)(void))
 
 /**
  * The stack, from high to low address: a copy of the parent's frame with 0
- * in RAX and `newsp`, when it is not 0, in RSP; `isr_return`; and the six
+ * in RAX and `newsp`, when it is not 0, in RSP; `ret_from_fork`, which runs
+ * the switch's tail and returns through the frame; and the six
  * registers `x86_64_switch` pops, all zero. The child returns to user mode
  * through `iretq`, with RCX and R11 as the parent's `syscall` left them.
  * Its DS, ES, FS and GS selectors and its GS base are the parent's as they
@@ -188,7 +189,7 @@ void arch_fork_frame(process_t *child, const isr_params_t *params, uintptr_t new
     if (newsp) {
         FRAME_SP(frame) = newsp;
     }
-    *--sp = (uint64_t)(uintptr_t)isr_return;
+    *--sp = (uint64_t)(uintptr_t)ret_from_fork;
     for (i = 0; i < SWITCH_SAVED; i++) {
         *--sp = 0;
     }

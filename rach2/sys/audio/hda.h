@@ -262,6 +262,20 @@ typedef struct {
     uint32_t lpib;      /* the position in the DMA buffer, in bytes */
 } hda_queue_report_t;
 
+/* Service diagnostics since driver initialization, across stream starts. */
+typedef struct {
+    uint32_t calls;         /* khda service calls, including a wake with no refill */
+    uint64_t usec;          /* cycles around khda's services, converted to us */
+    uint64_t max_usec;      /* longest such call, including nested interrupts */
+    uint32_t missed;        /* playback revolutions missed across all sessions */
+    uint64_t clock_us;      /* TSC of the last miss in us, not uptime */
+    uint32_t gap_us;        /* WALCLK span from the preceding service, or the stream's start */
+    uint32_t asked_us;      /* WALCLK span from its first pending PLAY request */
+    uint32_t asked_valid;   /* the request came from this playback session */
+    uint32_t moved_us;      /* position's modular movement, converted to us */
+    uint32_t revolution_us; /* duration of the DMA buffer at that miss */
+} hda_service_report_t;
+
 /*
  * The input path enumeration chose and the input stream's last setup and
  * counters. The node IDs are 0 where there is none. The ADC reads the pin
@@ -344,6 +358,7 @@ typedef struct {
     int widget_count;
     hda_widget_report_t widgets[HDA_MAX_WIDGETS];
     hda_queue_report_t queue;
+    hda_service_report_t service;
     hda_input_report_t input;
     hda_jack_report_t jacks[HDA_JACKS];
     uint8_t beep;         /* the beep widget, or 0 */
@@ -369,17 +384,28 @@ void hda_read_queue(void);
  */
 uint32_t hda_delay_frames(void);
 
-/** Refill the periods the stream has played since the last refill and hand
- * the input stream's finished periods over, each only until the stream's
- * first interrupt or while its next interrupt is late, and every quarter
- * second poll the jacks, moving the output and the microphone recorded as a
- * plug goes in or out. The boot processor's tick calls this, with
- * interrupts off, so playback goes on where the controller's interrupt does
- * not arrive, while a stream whose interrupts come is served by them alone,
- * as Linux's `azx_interrupt` serves it; the jacks' and the beep's clocks
- * count the ticks since the last call, since that tick skips the call while
- * another processor holds the big lock. */
+/** Ask for the refill of the periods the stream has played since the last
+ * refill and the handing over of the input stream's finished periods, for
+ * each stream only until its first interrupt or while its next interrupt is
+ * late, and every quarter second poll the jacks, moving the output and the
+ * microphone recorded as a plug goes in or out. The boot processor's tick
+ * calls this, with interrupts off, so playback goes on where the
+ * controller's interrupt does not arrive, while a stream whose interrupts
+ * come is asked for by them alone, as Linux's `azx_interrupt` acknowledges
+ * the stream and wakes its writer. The service runs in the driver's thread,
+ * which the tick wakes when the stream's position has passed into another
+ * period, and here while the thread does not run it. The jacks' and the
+ * beep's clocks count the ticks since the last call, since that tick skips
+ * the call while another processor holds the big lock. */
 void hda_tick(void);
+
+/** Make the driver's thread, khda, which refills the output stream and
+ * hands the input stream's periods over in process context, under
+ * SCHED_FIFO at priority 50, once the first program has its pid, so that
+ * init is process 1; nothing when no controller is set up or the thread is
+ * made. Until then, and while the scheduler is off, the interrupt and the
+ * tick run the service themselves. Process context, with the big lock. */
+void hda_thread_start(void);
 
 /*
  * The dumps of the `audio hda` shell command. Each prints on the console (the

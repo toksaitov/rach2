@@ -5,6 +5,9 @@
  * vkms64_hosttest.c runs the same rows with x86-64's structures.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/resv_host.c
+ * host-deps: tests/host/compat/mutex_none.c
+ * host-deps: tests/host/compat/spinlock_host.c
  *
  * The rows: no device without `rach2.vkms`; a device with Linux's objects,
  * a primary and a cursor plane of five formats with rotation, a CRTC with
@@ -124,7 +127,7 @@ void drm_dev_init(struct drm_device *d, const struct drm_driver *driver)
     d->features = driver->ident.features;
     d->index = -1;
     d->refs = 1;
-    wait_queue_init(&d->commit_wait);
+    mutex_init(&d->mode_lock, "drm_mode_lock");
 }
 
 /** Registration: card 0, or the row's error. */

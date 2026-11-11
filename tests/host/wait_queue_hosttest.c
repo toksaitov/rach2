@@ -20,7 +20,9 @@
  * waiter blocked with and wakes it as `signal_post` does, clearing that
  * deadline. A wait whose condition is still false must arm the caller's
  * deadline again before it blocks again, or a blocked or ignored signal would
- * leave it asleep with no timer to end it.
+ * leave it asleep with no timer to end it. A wait files itself and is
+ * blocked before it tests its condition, so a wake made during a false
+ * test is not lost, and `wq_complete` sets its flag and wakes together.
  *
  * The test defines WAIT_QUEUE_HOSTTEST, under which wait_queue.c masks no
  * interrupt, takes no lock and does not halt, and a wake marks the process
@@ -209,6 +211,66 @@ static void wake_kinds(void)
     CHECK(wq_wakes(&wq, WQ_DATA) == 2);
 }
 
+/* The queue the rows of `filed_first` wait on, and what their conditions
+ * saw. */
+static wait_queue_t filed_wq;
+static int filed_seen, filed_calls;
+
+/** A condition that notes whether the caller was on `filed_wq` and blocked
+ * when it was tested, and is true. */
+static int filed_test(void *arg)
+{
+    (void)arg;
+    filed_calls++;
+    filed_seen = count_in(&filed_wq, current_proc) == 1 && current_proc->state == PROC_BLOCKED;
+    return 1;
+}
+
+/** A condition whose first test finds it false while a waker on another
+ * processor wakes the queue, and whose second finds it true. */
+static int woken_in_test(void *arg)
+{
+    (void)arg;
+    if (++filed_calls == 1) {
+        wq_wake_all(&filed_wq);
+        return 0;
+    }
+    return 1;
+}
+
+/**
+ * A sleep files itself on its queue and is blocked before it tests its
+ * condition, so a wake that comes after a false test finds it and makes it
+ * ready, and it tests again instead of sleeping; and `wq_complete` sets its
+ * flag and wakes the waiters in one hold of the queues' lock.
+ */
+static void filed_first(void)
+{
+    static process_t sleeper, waiter;
+    volatile int done = 0;
+    int before = blocks;
+
+    wait_queue_init(&filed_wq);
+    sleeper.waiter.proc = &sleeper;
+    sleeper.state = PROC_RUNNING;
+    current_proc = &sleeper;
+    filed_calls = 0;
+    CHECK(wq_wait_event(&filed_wq, filed_test, 0) == 0);
+    CHECK(filed_seen && filed_calls == 1);
+    filed_calls = 0;
+    CHECK(wq_wait_event(&filed_wq, woken_in_test, 0) == 0);
+    CHECK(filed_calls == 2 && blocks == before);
+    CHECK(sleeper.state == PROC_RUNNING && total_queued(&filed_wq) == 0);
+    current_proc = 0;
+
+    wait_queue_init(&filed_wq);
+    waiter.waiter.proc = &waiter;
+    waiter.state = PROC_BLOCKED;
+    enqueue(&filed_wq, &waiter);
+    wq_complete(&filed_wq, &done);
+    CHECK(done == 1 && waiter.state == PROC_READY && total_queued(&filed_wq) == 0);
+}
+
 /** Run every check; the exit status is the count of failed checks, at most
  * 255. */
 int main(void)
@@ -299,5 +361,6 @@ int main(void)
     }
     wake_kinds();
     wake_order();
+    filed_first();
     return fails > 255 ? 255 : fails;
 }

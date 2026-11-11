@@ -481,6 +481,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "filemap",
+          "checks": "tests/host/filemap_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "fixdir",
           "checks": "tests/host/fixdir_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
@@ -722,7 +727,7 @@
         },
         {
           "assertion_id": "itco",
-          "checks": "tests/host/itco_hosttest.c checks the TCO register sequence, two-stage expiry, watchdog file ABI, nowayout and the kernel's feed before an open under ASan and UBSan and exits 0",
+          "checks": "tests/host/itco_hosttest.c checks the TCO register sequence, two-stage expiry, watchdog file ABI, nowayout, the kernel's feed before an open and the refusal records of the command line's options under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {
@@ -878,6 +883,11 @@
         {
           "assertion_id": "lock",
           "checks": "tests/host/lock_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "lockdep",
+          "checks": "tests/host/lockdep_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {
@@ -2988,7 +2998,7 @@
         },
         {
           "assertion_id": "endothers",
-          "checks": "an init's end waits for the processes still ending: its prepared kernel fixture exits 0",
+          "checks": "an init's end waits for the processes still ending, and SIGKILL ends an exec's wait for the other threads: its prepared kernel fixture exits 0",
           "source": "program"
         },
         {

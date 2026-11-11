@@ -823,7 +823,8 @@ static int32_t group_open(struct devfs_node *node, struct fd_entry *e, int flags
 static int32_t group_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg);
 static void group_close(fd_entry_t *e);
 
-static const struct file_ops group_ops = {NULL, NULL, NULL, group_ioctl, group_close, NULL, NULL};
+static const struct file_ops group_ops = {NULL,        NULL, NULL, group_ioctl,
+                                          group_close, NULL, NULL, 0};
 
 int vfio_file_is_valid(const struct fd_entry *e)
 {

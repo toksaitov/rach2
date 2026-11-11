@@ -1,0 +1,3 @@
+19:09:28 supertuxkart-1 100s volume vol 1:1
+6491 /tmp/games.TRVxZj/hud/frametime_(ms)
+queue fill 0 high 0 delay-ms 57 written 0 dropped 0 periods 6981 underruns 0 missed 0 lpib 4256

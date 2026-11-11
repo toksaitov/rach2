@@ -39,12 +39,16 @@ struct drm_gem_object *i915_gem_prime_import(struct drm_device *dev, struct dma_
     return &obj->base;
 }
 
+/* Under the GEM lock, which the domain's wait lets go for its sleep. */
 int32_t i915_gem_object_cpu_access(struct drm_gem_object *base, uint64_t flags)
 {
     struct drm_i915_gem_object *obj = (struct drm_i915_gem_object *)base;
+    struct drm_i915_private *i915 = to_i915(base->dev);
+    int taken = i915_gem_lock(i915);
     int32_t err = i915_gem_object_pin_pages(obj);
 
     if (err != 0) {
+        i915_gem_unlock(i915, taken);
         return err;
     }
     /* Linux's i915_gem_begin_cpu_access and i915_gem_end_cpu_access. */
@@ -54,5 +58,6 @@ int32_t i915_gem_object_cpu_access(struct drm_gem_object *base, uint64_t flags)
         err = i915_gem_object_set_to_cpu_domain(obj, (flags & DMA_BUF_SYNC_WRITE) != 0);
     }
     i915_gem_object_unpin_pages(obj);
+    i915_gem_unlock(i915, taken);
     return err;
 }

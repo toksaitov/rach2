@@ -1,4 +1,4 @@
-.Dd November 1, 2026
+.Dd November 11, 2026
 .Dt PTRACE 2
 .Os
 .Sh NAME
@@ -102,10 +102,20 @@ after an
 .Xr execve 2 ;
 and
 .Dv PTRACE_EVENT_EXIT
-as the thread begins to end.
+as the thread begins to end, once the end of its process, if any, has begun and
+any core file is written.
 .Dv PTRACE_GETEVENTMSG
 reads the new child's ID, the thread's ID before the exec, or the exit
-status.
+status: the thread's own for
+.Xr exit 2 ,
+and otherwise the process's, the wait status that began its end, or 0
+for a thread another thread's
+.Xr execve 2
+ends.
+For a core dump, a thread that waits for the dumper reports the signal
+without the core flag; the dumper reports the status after the dump.
+The final wait reports the process's status once a group exit has begun,
+including the core flag when the dump succeeded.
 Without
 .Dv PTRACE_O_TRACEEXEC ,
 an

@@ -5,6 +5,8 @@
  */
 
 #include "i915.h"
+#include "../../dmabuf/dmabuf.h"
+#include "../../proc/smp.h"
 #include "i915_drm.h"
 
 #include "../../mm/kheap.h"
@@ -14,12 +16,19 @@
 uint32_t i915_gem_object_truncate(struct drm_i915_gem_object *obj)
 {
     uint32_t freed = obj->pages.held;
-    int i;
+    int i, big = !bkl_held();
 
     /* As Linux's __i915_gem_object_put_pages: the programs' maps go first,
-     * so that the next touch faults to an object that has no pages. */
+     * so that the next touch faults to an object that has no pages; the
+     * walk of the address spaces under the big lock (mm/paging.c). */
+    if (big) {
+        bkl_enter();
+    }
     for (i = 0; i < I915_MMAP_TYPES; i++) {
         paging_zap_device(&obj->mmo[i], 0, (uint32_t)(obj->base.size >> PAGE_SHIFT));
+    }
+    if (big) {
+        bkl_exit();
     }
     unpin(obj->pin);
     obj->pin = 0;
@@ -47,7 +56,7 @@ static int purgeable(const struct drm_i915_gem_object *obj)
 
     if (obj->madv != I915_MADV_DONTNEED || obj->base.import || obj->base.dma_buf ||
         i915_gem_object_is_userptr(obj) || !i915_gem_object_has_pages(obj) ||
-        i915_gem_object_is_active(obj)) {
+        i915_gem_object_is_active_locked(obj)) {
         return 0;
     }
     for (v = obj->vmas; v; v = v->obj_next) {
@@ -59,25 +68,36 @@ static int purgeable(const struct drm_i915_gem_object *obj)
     return obj->pages_pin_count == bound;
 }
 
+/* With the GEM lock held. The walk holds the object it is at, since a
+ * last put on another processor takes one off the device's list; a put of
+ * the walk's that is an object's last frees it here, under the lock the
+ * free takes again, and waits on nothing, since a request that has not
+ * retired holds every object it uses. */
 uint32_t i915_gem_shrink_flags(struct drm_i915_private *i915, uint32_t want, uint32_t flags)
 {
     struct drm_gem_object *base;
     uint32_t got = 0;
 
-    for (base = i915->drm.objects; base && got < want; base = base->dev_next) {
+    lockdep_assert_held(&i915->gem.lock);
+    for (base = drm_gem_object_next(&i915->drm, 0); base;
+         base = drm_gem_object_next(&i915->drm, base)) {
         struct drm_i915_gem_object *obj = (struct drm_i915_gem_object *)base;
 
-        if (base->funcs != &i915_gem_object_funcs || !purgeable(obj)) {
+        if (got >= want) {
+            drm_gem_object_put(base);
+            break;
+        }
+        /* The object's lock, which MADVISE takes, only tried, as Linux's
+         * shrinker tries it (gem/i915_gem_shrinker.c:216-220). */
+        if (base->funcs != &i915_gem_object_funcs || !dma_resv_trylock(base->resv)) {
             continue;
         }
-        if (!(flags & (obj->vmas ? I915_SHRINK_BOUND : I915_SHRINK_UNBOUND))) {
-            continue;
+        if (purgeable(obj) && (flags & (obj->vmas ? I915_SHRINK_BOUND : I915_SHRINK_UNBOUND)) &&
+            i915_gem_object_unbind(obj) == 0 && !obj->pages_pin_count) {
+            got += i915_gem_object_truncate(obj);
+            i915->gem.purged++;
         }
-        if (i915_gem_object_unbind(obj) != 0 || obj->pages_pin_count) {
-            continue;
-        }
-        got += i915_gem_object_truncate(obj);
-        i915->gem.purged++;
+        dma_resv_unlock(base->resv);
     }
     return got;
 }
@@ -88,11 +108,32 @@ uint32_t i915_gem_shrink(struct drm_i915_private *i915, uint32_t want)
 }
 
 /** The shrinker's `shrink`, which reclaim calls under the big kernel lock:
- * purging never sleeps, so `may_sleep` changes nothing. */
+ * the pool's idle shadows dropped first, as Linux's pool_retire makes an
+ * idle shadow purgeable for its shrinker (gt/intel_gt_buffer_pool.c:
+ * 107-112), then the purgeable objects purged. Neither sleeps, so
+ * `may_sleep` changes nothing. It only tries the GEM lock, as Linux's
+ * shrinker only tries each object's (gem/i915_gem_shrinker.c:216-220),
+ * and frees nothing while another holds it; a caller that holds it
+ * already, whose allocation reclaims, frees under it. */
 static uint32_t i915_gem_shrinker_scan(struct mem_shrinker *s, uint32_t want, int may_sleep)
 {
+    struct drm_i915_private *i915 = ((struct i915_shrinker *)s)->i915;
+    uint32_t got;
+    int taken = 0;
+
     (void)may_sleep;
-    return i915_gem_shrink(((struct i915_shrinker *)s)->i915, want);
+    if (!mutex_held(&i915->gem.lock)) {
+        if (!mutex_trylock(&i915->gem.lock)) {
+            return 0;
+        }
+        taken = 1;
+    }
+    got = i915_gem_pool_trim(i915, I915_POOL_IDLE);
+    if (got < want) {
+        got += i915_gem_shrink(i915, want - got);
+    }
+    i915_gem_unlock(i915, taken);
+    return got;
 }
 
 void i915_gem_shrinker_register(struct drm_i915_private *i915)

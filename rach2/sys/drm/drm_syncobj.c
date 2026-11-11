@@ -86,7 +86,17 @@ struct drm_syncobj_file {
 
 void drm_syncobj_get(struct drm_syncobj *s)
 {
-    s->refs++;
+    uint32_t old;
+
+    do {
+        old = s->refs;
+    } while (arch_atomic_cmpxchg((volatile unsigned int *)&s->refs, old, old + 1u) != old);
+}
+
+/** drm_syncobj_get for drm_handle_find_get. */
+static void syncobj_get_any(void *s)
+{
+    drm_syncobj_get((struct drm_syncobj *)s);
 }
 
 /** Free an eventfd's record and what it holds. */
@@ -100,8 +110,15 @@ static void eventfd_free(struct syncobj_eventfd *e)
 void drm_syncobj_put(struct drm_syncobj *s)
 {
     struct syncobj_eventfd *e;
+    uint32_t old;
 
-    if (!s || --s->refs) {
+    if (!s) {
+        return;
+    }
+    do {
+        old = s->refs;
+    } while (arch_atomic_cmpxchg((volatile unsigned int *)&s->refs, old, old - 1u) != old);
+    if (old != 1u) {
         return;
     }
     drm_syncobj_replace_fence(s, NULL);
@@ -112,14 +129,21 @@ void drm_syncobj_put(struct drm_syncobj *s)
     kfree(s);
 }
 
+/* The reference is taken under the table's lock, as Linux's
+ * drm_syncobj_find takes it under syncobj_table_lock (drm_syncobj.c:
+ * 247-262), so that a DESTROY on another processor cannot free it first. */
 struct drm_syncobj *drm_syncobj_find(struct drm_file *file, uint32_t handle)
 {
-    struct drm_syncobj *s = (struct drm_syncobj *)drm_handle_find(&file->syncobjs, handle);
+    return (struct drm_syncobj *)drm_handle_find_get(&file->syncobjs, handle, syncobj_get_any);
+}
 
-    if (s) {
-        drm_syncobj_get(s);
-    }
-    return s;
+struct dma_fence *drm_syncobj_fence_get(struct drm_syncobj *s)
+{
+    uint32_t flags = spin_lock_irqsave(&s->lock);
+    struct dma_fence *f = dma_fence_get(s->fence);
+
+    spin_unlock_irqrestore(&s->lock, flags);
+    return f;
 }
 
 /**
@@ -150,7 +174,9 @@ static void waiter_wake(struct waiter *w)
 }
 
 /** Give a listed wait the fence of its point if the point has been
- * submitted, take it off the list and wake its thread. */
+ * submitted, take it off the list and wake its thread. Called with the
+ * syncobj's lock held, as Linux's syncobj_wait_syncobj_func (drm_syncobj.c:
+ * 1010-1035). */
 static void wait_check(struct drm_syncobj *s, struct syncobj_wait *w)
 {
     struct syncobj_wait **link;
@@ -183,7 +209,9 @@ static void eventfd_done(struct dma_fence *f, struct dma_fence_cb *cb)
  * Act for an eventfd on the syncobj's list once its point is submitted, as
  * Linux's syncobj_eventfd_entry_func: take it off the list, then signal
  * the eventfd now if it waits only for the submission or the fence has
- * signalled, else when the fence signals.
+ * signalled, else when the fence signals. Called with the syncobj's lock
+ * held, as Linux's is (drm_syncobj.c:1417-1450), under which the fence's
+ * lock is taken.
  */
 static void eventfd_check(struct drm_syncobj *s, struct syncobj_eventfd *e)
 {
@@ -206,7 +234,7 @@ static void eventfd_check(struct drm_syncobj *s, struct syncobj_eventfd *e)
 }
 
 /** Tell every wait and eventfd on the syncobj's lists that its fence
- * changed. */
+ * changed, with the syncobj's lock held. */
 static void syncobj_changed(struct drm_syncobj *s)
 {
     struct syncobj_wait *w, *wnext;
@@ -222,24 +250,37 @@ static void syncobj_changed(struct drm_syncobj *s)
     }
 }
 
+/* As Linux's (drm_syncobj.c:371-396): the swap and the lists under the
+ * syncobj's lock, the old fence put after. */
 void drm_syncobj_replace_fence(struct drm_syncobj *s, struct dma_fence *fence)
 {
-    struct dma_fence *old = s->fence;
+    struct dma_fence *old;
+    uint32_t flags = spin_lock_irqsave(&s->lock);
 
+    old = s->fence;
     s->fence = dma_fence_get(fence);
     if (fence != old) {
         syncobj_changed(s);
     }
+    spin_unlock_irqrestore(&s->lock, flags);
     dma_fence_put(old);
 }
 
+/* As Linux's (drm_syncobj.c:332-361): the point is linked under the
+ * syncobj's lock, and the walk that drops the signalled points before it
+ * runs after, from a reference of its own. */
 void drm_syncobj_add_point(struct drm_syncobj *s, struct dma_fence_chain *chain,
                            struct dma_fence *fence, uint64_t point)
 {
+    struct dma_fence *head;
+    uint32_t flags = spin_lock_irqsave(&s->lock);
+
     dma_fence_chain_init(chain, s->fence, dma_fence_get(fence), point);
     s->fence = &chain->base;
+    head = dma_fence_get(s->fence);
     syncobj_changed(s);
-    dma_fence_put(dma_fence_chain_walk(dma_fence_get(s->fence)));
+    spin_unlock_irqrestore(&s->lock, flags);
+    dma_fence_put(dma_fence_chain_walk(head));
 }
 
 struct drm_syncobj *drm_syncobj_create(uint32_t flags)
@@ -250,6 +291,7 @@ struct drm_syncobj *drm_syncobj_create(uint32_t flags)
         return NULL;
     }
     s->refs = 1;
+    spin_lock_init(&s->lock, "drm_syncobj");
     if (flags & DRM_SYNCOBJ_CREATE_SIGNALED) {
         struct dma_fence *stub = dma_fence_get_stub();
 
@@ -299,34 +341,47 @@ static int32_t waiter_sleep(struct waiter *w)
 }
 
 /** Put a wait on the syncobj's list unless its point is there already, as
- * Linux's drm_syncobj_fence_add_wait. */
+ * Linux's drm_syncobj_fence_add_wait (drm_syncobj.c:266-289). */
 static void wait_add(struct drm_syncobj *s, struct syncobj_wait *w)
 {
-    if (w->fence) {
-        return;
+    uint32_t flags = spin_lock_irqsave(&s->lock);
+
+    if (!w->fence && point_fence(dma_fence_get(s->fence), w->point, &w->fence)) {
+        w->next = s->waits;
+        s->waits = w;
+        w->listed = 1;
     }
-    if (!point_fence(dma_fence_get(s->fence), w->point, &w->fence)) {
-        return;
-    }
-    w->next = s->waits;
-    s->waits = w;
-    w->listed = 1;
+    spin_unlock_irqrestore(&s->lock, flags);
 }
 
-/** Take a wait off the syncobj's list if it is still there. */
+/** Take a wait off the syncobj's list if it is still there, after which
+ * its fence is the waiter's alone. */
 static void wait_remove(struct drm_syncobj *s, struct syncobj_wait *w)
 {
     struct syncobj_wait **link;
+    uint32_t flags = spin_lock_irqsave(&s->lock);
 
-    if (!w->listed) {
-        return;
+    if (w->listed) {
+        for (link = &s->waits; *link && *link != w; link = &(*link)->next) {
+        }
+        if (*link) {
+            *link = w->next;
+        }
+        w->listed = 0;
     }
-    for (link = &s->waits; *link && *link != w; link = &(*link)->next) {
-    }
-    if (*link) {
-        *link = w->next;
-    }
-    w->listed = 0;
+    spin_unlock_irqrestore(&s->lock, flags);
+}
+
+/** The fence of a wait's point on `s`, which a change of `s` may give it
+ * on another processor at any time, or NULL while it has none; read under
+ * the lock that the change holds. */
+static struct dma_fence *wait_fence(struct drm_syncobj *s, struct syncobj_wait *w)
+{
+    uint32_t flags = spin_lock_irqsave(&s->lock);
+    struct dma_fence *f = w->fence;
+
+    spin_unlock_irqrestore(&s->lock, flags);
+    return f;
 }
 
 /** Count a signalled fence for the thread that waits on it. */
@@ -352,7 +407,7 @@ int32_t drm_syncobj_find_fence(struct drm_file *file, uint32_t handle, uint64_t 
     if (!s) {
         return -ENOENT;
     }
-    rc = point_fence(dma_fence_get(s->fence), point, fence);
+    rc = point_fence(drm_syncobj_fence_get(s), point, fence);
     if (rc == 0 || !(flags & DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT)) {
         drm_syncobj_put(s);
         return rc;
@@ -366,7 +421,7 @@ int32_t drm_syncobj_find_fence(struct drm_file *file, uint32_t handle, uint64_t 
     wait_add(s, &w);
     for (;;) {
         t.seen = t.events;
-        if (w.fence) {
+        if (wait_fence(s, &w)) {
             rc = 0;
             break;
         }
@@ -430,7 +485,7 @@ static int32_t array_wait_start(struct array_wait *a)
         w[i].point = a->points ? a->points[i] : 0;
         w[i].waiter = &a->t;
         w[i].cb.wait = &w[i];
-        if (point_fence(dma_fence_get(a->objs[i]->fence), w[i].point, &w[i].fence)) {
+        if (point_fence(drm_syncobj_fence_get(a->objs[i]), w[i].point, &w[i].fence)) {
             if (a->flags & WAIT_SUBMIT) {
                 continue;
             }
@@ -451,16 +506,18 @@ static int32_t array_wait_start(struct array_wait *a)
 static int array_wait_scan(struct array_wait *a)
 {
     struct syncobj_wait *w;
+    struct dma_fence *f;
     uint32_t i, ready = 0;
 
     a->t.seen = a->t.events;
     for (i = 0; i < a->count; i++) {
         w = &a->w[i];
-        if (!w->fence) {
+        f = wait_fence(a->objs[i], w);
+        if (!f) {
             continue;
         }
-        if ((a->flags & DRM_SYNCOBJ_WAIT_FLAGS_WAIT_AVAILABLE) || dma_fence_is_signaled(w->fence) ||
-            (!w->cb.cb.func && dma_fence_add_callback(w->fence, &w->cb.cb, wait_fence_done))) {
+        if ((a->flags & DRM_SYNCOBJ_WAIT_FLAGS_WAIT_AVAILABLE) || dma_fence_is_signaled(f) ||
+            (!w->cb.cb.func && dma_fence_add_callback(f, &w->cb.cb, wait_fence_done))) {
             if (!(a->flags & DRM_SYNCOBJ_WAIT_FLAGS_WAIT_ALL)) {
                 a->first = i;
                 return 1;
@@ -514,7 +571,7 @@ static int32_t array_wait(struct array_wait *a)
         wait_add(a->objs[i], &a->w[i]);
     }
     for (i = 0; a->hint && i < a->count; i++) {
-        if (a->w[i].fence) {
+        if (wait_fence(a->objs[i], &a->w[i])) {
             dma_fence_set_deadline(a->w[i].fence, *a->hint);
         }
     }
@@ -549,7 +606,7 @@ static void syncobj_file_close(fd_entry_t *e)
 }
 
 static const struct file_ops syncobj_file_ops = {NULL, NULL, NULL, NULL, syncobj_file_close,
-                                                 NULL, NULL};
+                                                 NULL, NULL, 0};
 
 /** A close-on-exec descriptor of the caller's on `s`, holding a reference
  * of its own, shown as anon_inode:syncobj_file as on Linux: the
@@ -575,11 +632,12 @@ static int32_t syncobj_file_install(struct drm_syncobj *s)
     f->anon.name = "syncobj_file";
     f->syncobj = s;
     drm_syncobj_get(s);
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_ANON;
     e->ops = &syncobj_file_ops;
     e->priv = f;
     e->flags = FD_FLAG_READ | FD_FLAG_CLOEXEC;
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 
@@ -954,6 +1012,7 @@ int32_t drm_syncobj_eventfd_ioctl(struct drm_device *dev, void *data, struct drm
     struct drm_syncobj *s;
     struct syncobj_eventfd *e;
     struct eventfd *ev;
+    uint32_t flags;
     int32_t rc;
 
     if (!drm_core_check_feature(dev, DRIVER_SYNCOBJ_TIMELINE)) {
@@ -984,9 +1043,12 @@ int32_t drm_syncobj_eventfd_ioctl(struct drm_device *dev, void *data, struct drm
     e->point = args->point;
     e->flags = args->flags;
     e->cb.entry = e;
+    /* As Linux's drm_syncobj_add_eventfd (drm_syncobj.c:313-321). */
+    flags = spin_lock_irqsave(&s->lock);
     e->next = s->eventfds;
     s->eventfds = e;
     eventfd_check(s, e);
+    spin_unlock_irqrestore(&s->lock, flags);
     drm_syncobj_put(s);
     return 0;
 }
@@ -1097,7 +1159,7 @@ int32_t drm_syncobj_timeline_signal_ioctl(struct drm_device *dev, void *data, st
  */
 static uint64_t query_point(struct drm_syncobj *s, uint32_t flags)
 {
-    struct dma_fence *head = dma_fence_get(s->fence), *iter, *last;
+    struct dma_fence *head = drm_syncobj_fence_get(s), *iter, *last;
     uint64_t point = 0;
 
     if (to_dma_fence_chain(head)) {

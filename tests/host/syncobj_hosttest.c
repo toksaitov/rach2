@@ -3,6 +3,8 @@
  * rows with x86-64's structures. Descriptors, eventfds, handle tables and
  * the scheduler are models, and a sleep runs the producer step a row arms.
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/fd_flat.c
+ * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/atomic_host.c
  */
 #include "dmabuf/fence.c"
 #include "dmabuf/sync_file.c"
@@ -125,10 +127,10 @@ int fd_alloc(fd_table_t *t)
 {
     int i;
     for (i = 0; i < 64; i++)
-        if (t->entries[i].type == FD_TYPE_NONE) {
+        if (t->chunks[0][i].type == FD_TYPE_NONE) {
             k_memset(&descriptions[i], 0, sizeof(descriptions[i]));
-            t->entries[i].ofd = &descriptions[i];
-            t->entries[i].type = FD_TYPE_FILE;
+            t->chunks[0][i].ofd = &descriptions[i];
+            t->chunks[0][i].type = FD_TYPE_FILE;
             return i;
         }
     return -EMFILE;
@@ -136,7 +138,7 @@ int fd_alloc(fd_table_t *t)
 /** Find a live model descriptor. */
 fd_entry_t *fd_get(fd_table_t *t, int fd)
 {
-    return fd >= 0 && fd < 64 && t->entries[fd].type != FD_TYPE_NONE ? &t->entries[fd] : NULL;
+    return fd >= 0 && fd < 64 && t->chunks[0][fd].type != FD_TYPE_NONE ? &t->chunks[0][fd] : NULL;
 }
 /** Close a model descriptor through its operations. */
 int fd_free(fd_table_t *t, int fd)
@@ -212,9 +214,17 @@ int32_t drm_handle_insert(struct drm_handles *t, void *object, uint32_t *id)
     return 0;
 }
 /** Find a handle's object. */
-void *drm_handle_find(const struct drm_handles *t, uint32_t id)
+void *drm_handle_find(struct drm_handles *t, uint32_t id)
 {
     return id < t->cap && t->slot[id] ? t->slot[id]->object : NULL;
+}
+/** Find a handle's object and take a reference with `get`. */
+void *drm_handle_find_get(struct drm_handles *t, uint32_t id, void (*get)(void *object))
+{
+    void *object = drm_handle_find(t, id);
+    if (object)
+        get(object);
+    return object;
 }
 /** Take a handle out and return its object. */
 void *drm_handle_remove(struct drm_handles *t, uint32_t id)
@@ -229,7 +239,7 @@ void *drm_handle_remove(struct drm_handles *t, uint32_t id)
     return object;
 }
 /** The lowest id from `id` in use, or 0. */
-uint32_t drm_handle_next(const struct drm_handles *t, uint32_t id)
+uint32_t drm_handle_next(struct drm_handles *t, uint32_t id)
 {
     for (; id < t->cap; id++)
         if (id && t->slot[id])
@@ -254,7 +264,7 @@ static void ev_close(fd_entry_t *e)
 {
     eventfd_put(e->priv);
 }
-static const struct file_ops ev_ops = {NULL, NULL, NULL, NULL, ev_close, NULL, NULL};
+static const struct file_ops ev_ops = {NULL, NULL, NULL, NULL, ev_close, NULL, NULL, 0};
 /** Take a reference to the eventfd of a descriptor, as eventfd_ctx_fdget. */
 struct eventfd *eventfd_get(int fd, int32_t *err)
 {
@@ -856,7 +866,7 @@ static void chain_cases(void)
 int main(void)
 {
     long base;
-    table.entries = slots;
+    table.chunks[0] = slots;
     table.cap = 64;
     self.fds = &table;
     cpu_table[0].current = &self;

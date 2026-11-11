@@ -789,13 +789,13 @@ static void forcewake_user_close(fd_entry_t *e)
 }
 
 static const struct file_ops forcewake_user_ops = {NULL, NULL, NULL, NULL, forcewake_user_close,
-                                                   NULL, NULL};
+                                                   NULL, NULL, 0};
 
 static const struct file_ops error_state_ops = {
-    state_read, error_state_write, NULL, NULL, state_close, NULL, state_llseek};
+    state_read, error_state_write, NULL, NULL, state_close, NULL, state_llseek, 0};
 
-static const struct file_ops gpu_info_ops = {state_read,  NULL, NULL,        NULL,
-                                             state_close, NULL, state_llseek};
+static const struct file_ops gpu_info_ops = {state_read,  NULL, NULL,         NULL,
+                                             state_close, NULL, state_llseek, 0};
 
 /**
  * Open i915_error_state or, with `fresh`, i915_gpu_info: the text of the
@@ -809,6 +809,7 @@ static int32_t state_open(fd_entry_t *e, int fresh)
     struct i915_gpu_error *err = i915->gt.error;
     struct state_text *t;
     int32_t rc = 0;
+    int taken;
 
     if (fresh && gone(i915)) {
         return -ENODEV;
@@ -819,7 +820,9 @@ static int32_t state_open(fd_entry_t *e, int fresh)
     }
     t->i915 = i915;
     if (fresh) {
+        taken = i915_gem_lock(i915);
         err = i915_gpu_coredump(i915, (1u << I915_NUM_ENGINES) - 1u, 0);
+        i915_gem_unlock(i915, taken);
         rc = err ? state_text_make(t, err) : -ENOMEM;
         kfree(err);
     } else if (err) {
@@ -917,12 +920,15 @@ static int32_t gem_objects_show(void *data, char *buf, uint32_t cap)
     struct drm_i915_private *i915 = (struct drm_i915_private *)data;
     struct drm_gem_object *base;
     uint64_t bytes = 0;
-    uint32_t count = 0;
+    uint32_t count = 0, flags;
     struct emit e;
 
     e.buf = buf;
     e.cap = cap;
     e.len = 0;
+    /* A count, read under the list's lock without the GEM lock, since a
+     * show may not sleep, as Linux's reads its counters. */
+    flags = spin_lock_irqsave(&i915->drm.object_lock);
     for (base = i915->drm.objects; base; base = base->dev_next) {
         struct drm_i915_gem_object *obj = (struct drm_i915_gem_object *)base;
 
@@ -932,6 +938,7 @@ static int32_t gem_objects_show(void *data, char *buf, uint32_t cap)
             bytes += base->size;
         }
     }
+    spin_unlock_irqrestore(&i915->drm.object_lock, flags);
     emitf(&e, "%u shrinkable [0 free] objects, %Lu bytes\n", count, bytes);
     emitf(&e, "system: total:0x%016Lx bytes\n", (uint64_t)frame_total_count() << PAGE_SHIFT);
     if (i915->stolen.size) {
@@ -1276,6 +1283,7 @@ static int32_t wedged_store(void *data, const char __user *buf, uint32_t len)
     struct emit e;
     uint64_t val = 0;
     int32_t rc;
+    int taken;
 
     rc = copy_write(buf, len, text, sizeof(text));
     if (rc >= 0) {
@@ -1293,7 +1301,9 @@ static int32_t wedged_store(void *data, const char __user *buf, uint32_t len)
     emitf(&e, "Manually reset engine mask to %Lx", val);
     (void)emit_end(&e);
     msg[sizeof(msg) - 1u] = '\0';
+    taken = i915_gem_lock(i915);
     i915_handle_error(i915, engines_by_index(i915, val), msg);
+    i915_gem_unlock(i915, taken);
     return (int32_t)len;
 }
 
@@ -1344,6 +1354,8 @@ static int idle_within(struct drm_i915_private *i915, uint32_t ms)
     }
 }
 
+static int32_t drop_caches(struct drm_i915_private *i915, uint64_t val);
+
 /**
  * A write of i915_gem_drop_caches, Linux's i915_drop_caches_set with the
  * DROP_ bits written: RESET_ACTIVE wedges a GPU that does not idle within
@@ -1359,6 +1371,7 @@ static int32_t drop_caches_store(void *data, const char __user *buf, uint32_t le
     char text[24];
     uint64_t val = 0;
     int32_t rc;
+    int taken;
 
     rc = copy_write(buf, len, text, sizeof(text));
     if (rc >= 0) {
@@ -1370,6 +1383,19 @@ static int32_t drop_caches_store(void *data, const char __user *buf, uint32_t le
     if (gone(i915)) {
         return -ENODEV;
     }
+    /* Under the GEM lock, which each wait lets go meanwhile. */
+    taken = i915_gem_lock(i915);
+    rc = drop_caches(i915, val);
+    i915_gem_unlock(i915, taken);
+    return rc < 0 ? rc : (int32_t)len;
+}
+
+/** The work of a write of i915_gem_drop_caches, with the DROP_ bits `val`:
+ * 0, or the wait's -EINTR. */
+static int32_t drop_caches(struct drm_i915_private *i915, uint64_t val)
+{
+    int32_t rc;
+
     if ((val & DROP_RESET_ACTIVE) && !idle_within(i915, DROP_IDLE_WAIT_MS)) {
         i915_gt_set_wedged(i915);
     }
@@ -1394,7 +1420,7 @@ static int32_t drop_caches_store(void *data, const char __user *buf, uint32_t le
     if (val & DROP_SHRINK_ALL) {
         (void)i915_gem_shrink_flags(i915, ~0u, I915_SHRINK_BOUND | I915_SHRINK_UNBOUND);
     }
-    return (int32_t)len;
+    return 0;
 }
 
 /* ------------------------------------------------------------------------

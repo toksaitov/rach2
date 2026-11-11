@@ -477,16 +477,28 @@ static int same_wm(const struct intel_pipe_wm *a, const struct intel_pipe_wm *b)
     return 1;
 }
 
+/** Let a pending `intel_wm_vblank` go; the DRM device's `event_lock` is
+ * held. */
+static void wm_cancel_locked(struct intel_crtc *c)
+{
+    if (c->wm_pending) {
+        c->wm_pending = 0;
+        drm_crtc_vblank_put(&c->base);
+    }
+}
+
 void intel_wm_commit(struct intel_crtc *c, struct drm_atomic_state *state, int modeset)
 {
     struct intel_pipe_wm optimal, wm;
+    uint32_t flags;
 
     if (intel_wm_compute(c, state, &c->cfg, &optimal) != 0) {
         /* The check refused this; keep what the hardware has. */
         return;
     }
     wm = optimal;
-    intel_wm_cancel(c);
+    flags = spin_lock_irqsave(&c->i915->drm.event_lock);
+    wm_cancel_locked(c);
     /* Watermarks safe for the planes before and after the vblank, Linux's
      * intermediate; a mode set takes its own at once. */
     if (!modeset && optimal.pipe_enabled && intel_wm_intermediate(&c->wm_optimal, &wm) != 0) {
@@ -499,11 +511,13 @@ void intel_wm_commit(struct intel_crtc *c, struct drm_atomic_state *state, int m
         c->wm_pending = 1;
         c->wm_frame = intel_get_vblank_counter(&c->base);
     }
+    spin_unlock_irqrestore(&c->i915->drm.event_lock, flags);
 }
 
 void intel_wm_sanitize(struct drm_i915_private *i915)
 {
     struct intel_pipe_wm wm[I915_NUM_PIPES];
+    uint32_t flags;
     int pipe;
 
     for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
@@ -515,6 +529,7 @@ void intel_wm_sanitize(struct drm_i915_private *i915)
             return;
         }
     }
+    flags = spin_lock_irqsave(&i915->drm.event_lock);
     for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
         struct intel_crtc *c = &i915->display.crtc[pipe];
 
@@ -522,14 +537,15 @@ void intel_wm_sanitize(struct drm_i915_private *i915)
         c->wm_active = wm[pipe];
     }
     program(i915);
+    spin_unlock_irqrestore(&i915->drm.event_lock, flags);
 }
 
 void intel_wm_cancel(struct intel_crtc *c)
 {
-    if (c->wm_pending) {
-        c->wm_pending = 0;
-        drm_crtc_vblank_put(&c->base);
-    }
+    uint32_t flags = spin_lock_irqsave(&c->i915->drm.event_lock);
+
+    wm_cancel_locked(c);
+    spin_unlock_irqrestore(&c->i915->drm.event_lock, flags);
 }
 
 void intel_wm_vblank(struct intel_crtc *c)

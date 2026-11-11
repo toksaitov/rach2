@@ -54,19 +54,22 @@ and
 .Va ssi_int ,
 or a fault's address in
 .Va ssi_addr .
-With none pending it waits for one, the mask counting as unblocked
-meanwhile, or fails with
+With none pending it waits for one, or fails with
 .Er EAGAIN
 when non-blocking.
+The wait leaves the caller's signal mask as it is: a signal of the mask
+that another thread does not block goes to that thread, or ends the
+process at its default action, and the read sees only a signal that no
+thread takes, as on Linux; a program blocks the mask's signals in every
+thread.
 .Xr poll 2
 and
 .Xr epoll 2
 report the descriptor readable while a signal of its mask is pending for
 the caller.
-A signal sent while a thread of several sleeps in
-.Fn poll
-wakes the thread the signal would go to, which is not the poller when
-another thread does not block it.
+Every signal sent to the process or to one of its threads wakes each
+thread that reads or polls a signalfd, whichever thread the signal goes
+to.
 .Pa /proc/ Ns Ar pid Ns Pa /fd
 names it
 .Dq anon_inode:[signalfd] .

@@ -157,7 +157,8 @@ static int32_t reset_write(fd_entry_t *e, const char __user *buf, uint32_t count
     return (int32_t)count;
 }
 
-static const struct file_ops reset_ops = {NULL, reset_write, NULL, NULL, reset_close, NULL, NULL};
+static const struct file_ops reset_ops = {NULL,        reset_write, NULL, NULL,
+                                          reset_close, NULL,        NULL, 0};
 
 /** Register the root-only reset trigger in the device's debugfs directory,
  * which `dri/N` links to; return 0 or the debugfs error. */

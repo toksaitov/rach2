@@ -41,6 +41,8 @@
 #define _MM_H_
 
 #include "../lib/kint.h"
+#include "../lib/spinlock.h"
+#include "../proc/mutex.h"
 #include "vm.h"
 
 struct page_dir;
@@ -56,6 +58,18 @@ struct vfs_ref;
 struct mm {
     uint32_t users;
     uint32_t holds;
+    /* The regions' lock, as Linux's mmap_lock: held to read by a fault, a
+     * copy, a pin and a walk of the regions, and to write by every change
+     * of the regions (`mmap_read_lock`, `mmap_write_lock`). */
+    struct rwsem mmap_lock;
+    /* The page-table lock, as Linux's page_table_lock: held, with interrupts
+     * off, by a holder of `mmap_lock` to read that changes an entry, over the
+     * second phase of the change (`mm_ptl_lock`). */
+    struct spinlock ptl;
+    /* Changed by `paging_zap_device` and a truncation's cut, under the
+     * write lock: a fault that let the lock go across a file's or a
+     * device's operation maps nothing if it moved meanwhile. */
+    uint32_t zaps;
     struct page_dir *dir; /* NULL once the last user has gone */
     uintptr_t space_root; /* the directory's physical address; 0 with `dir` */
     vm_space_t vm;
@@ -113,9 +127,12 @@ struct mm {
     /* The present user pages of the page tables, VmRSS, which every change
      * of an entry's present bit keeps (`mm_resident_add`), and the most
      * there were before any went, as Linux's hiwater_rss; a fork's copy
-     * counts its own from none. */
+     * counts its own from none. `rss_lock` covers their writers, which
+     * processors faulting in the space at once are; a reader reads each
+     * word once without it. */
     unsigned long resident;
     unsigned long resident_peak;
+    struct spinlock rss_lock;
     /* Whether process_mrelease has freed the private pages of the space of
      * a dying process, as Linux's MMF_OOM_SKIP: a second call then has
      * nothing to do and answers 0. 0 in a new space and in a fork's copy. */
@@ -187,12 +204,20 @@ void mm_get(struct mm *mm);
  * one: 1 when taken, 0 once the last user's put has freed the pages. */
 int mm_get_live(struct mm *mm);
 
-/** Drop a user's count; the last tells the ranges drivers registered and
+/**
+ * Drop a user's count; the last tells the ranges drivers registered and
  * releases the pins charged to the space (`mmn_release`), frees the pages,
  * the page tables, the directory and the regions, lets go of the program's
  * file and releases the files its regions mapped, either of which may
  * sleep, and then drops the users' hold. Its directory must not be the one
- * in use, which the caller switches away from first. */
+ * in use, which the caller switches away from first. The directory leaves
+ * the space, its count and the table of spaces by directory before its
+ * pages are freed, so that the walks, which give way every bounded batch
+ * (`free_user_pages`), work on tables nothing else reaches: a holder that
+ * is not a user finds no directory, as after the put. Linux's exit_mmap
+ * likewise frees the regions with preemption on and the space unreachable
+ * (mm/mmap.c:1957-1969).
+ */
 void mm_put(struct mm *mm);
 
 /** Keep the record of `mm`, and nothing of its memory. */
@@ -200,6 +225,84 @@ void mm_hold(struct mm *mm);
 
 /** Let go of a hold `mm_hold` took; the last frees the record. */
 void mm_unhold(struct mm *mm);
+
+/*
+ * The locks of an address space, in the order of rach2/sys/proc/Readme.md:
+ * `mmap_lock` after the file locks and before the page-table lock.
+ *
+ * A thread counts its own holds (`struct process`'s `mmap_holds`), so a
+ * hold taken again by a thread that has one, of either kind, only counts,
+ * as a fault inside a copy that holds the lock does, and never waits
+ * behind a writer that waits for the first hold. Only the first hold of a
+ * thread takes the rwsem and only its last gives it back. A thread holds
+ * at most two address spaces' locks at once. A write hold wanted by a
+ * thread that holds the lock to read is a panic, since it would wait for
+ * itself. With no current thread, at boot, the calls do nothing.
+ *
+ * The holder of the lock alone, to read at a depth of one, may let it go
+ * and take it again around a sleep that may wait for a file (`mmap_may_drop`),
+ * as Linux's fault drops it around a read of a file; it finds what it
+ * looked up again after.
+ *
+ * Every change of the regions holds the lock to write and the big lock
+ * too, and every removal or downgrade of a present page holds the big
+ * lock, so that code under the big lock that does not sleep may still read
+ * the regions and the page tables without the regions' lock, as the older
+ * callers of `vm_resident` and KVM's fault do. Code that may sleep between
+ * its look and its use takes the regions' lock.
+ */
+
+/** Take `mm`'s regions' lock to read, sleeping while a writer holds it or
+ * waits for it, unless the thread holds it already. */
+void mmap_read_lock(struct mm *mm);
+
+/** Take `mm`'s regions' lock to read if that needs no wait: 1 when held
+ * now, as a thread that holds it already always is, or 0. Any context but
+ * an interrupt. */
+int mmap_read_trylock(struct mm *mm);
+
+/** Take `mm`'s regions' lock to write, sleeping until no other thread holds
+ * it; a thread that holds it to write already only counts the hold. */
+void mmap_write_lock(struct mm *mm);
+
+/** Take `mm`'s regions' lock to write if that needs no wait: 1 when held
+ * now, as a thread that holds it to write already always is, or 0, as a
+ * thread that holds it only to read always gets. */
+int mmap_write_trylock(struct mm *mm);
+
+/** Give back one hold of `mm`'s regions' lock, of either kind; the last
+ * gives the rwsem back. The caller then lets go of the files a change left
+ * (`mm_reap`), once it holds no regions' lock. */
+void mmap_unlock(struct mm *mm);
+
+/** Hold `mm`, another thread's address space or the caller's, and take its
+ * regions' lock to read, for a walk of its regions from outside it: /proc,
+ * a core dump, a pin. The reference keeps the record across the wait. */
+void mm_read_begin(struct mm *mm);
+
+/** End what `mm_read_begin` began. */
+void mm_read_end(struct mm *mm);
+
+/** Whether the calling thread holds `mm`'s regions' lock, to write when
+ * `write`, or of either kind. */
+int mmap_held(const struct mm *mm, int write);
+
+/** Whether the calling thread holds `mm`'s regions' lock to read and once,
+ * so that it may let it go around a sleep and take it again. */
+int mmap_may_drop(const struct mm *mm);
+
+/** Take `mm`'s page-table lock with interrupts off; the saved flags, for
+ * `mm_ptl_unlock`. */
+uint32_t mm_ptl_lock(struct mm *mm);
+
+/** Give back the page-table lock `mm_ptl_lock` took. */
+void mm_ptl_unlock(struct mm *mm, uint32_t flags);
+
+/** Release the files whose last region went (`vm_file_reap`), under the big
+ * lock, which their release needs, unless the calling thread holds a
+ * regions' lock: a release may unmap a device object's pages from every
+ * space (`paging_zap_device`), which takes their locks. May sleep. */
+void mm_reap(void);
 
 struct process;
 
@@ -231,15 +334,17 @@ void mm_drop(struct process *p);
 unsigned long mm_resident(const struct mm *mm);
 
 /** The most pages `mm` has had in memory at once, VmHWM and what
- * `ru_maxrss` reports of it. */
+ * `ru_maxrss` reports of it. Needs no lock. */
 unsigned long mm_resident_peak(const struct mm *mm);
 
 /**
  * Count `pages` more present user pages, or fewer for a negative count, in
  * the address space whose directory is `dir`. Each writer of a user entry
- * calls it for the present bits it set or cleared, under the big lock, so
- * that `getrusage` and /proc read the size without walking the tables.
- * Nothing for a directory no address space has.
+ * calls it for the present bits it set or cleared, so that `getrusage` and
+ * /proc read the size without walking the tables. Takes the lock of the
+ * table of spaces by directory, when `dir` is not the running thread's, and
+ * then the space's count lock; both are below every other lock. Any
+ * context. Nothing for a directory no address space has.
  */
 void mm_resident_add(const struct page_dir *dir, long pages);
 

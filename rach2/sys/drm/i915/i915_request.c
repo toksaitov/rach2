@@ -24,6 +24,7 @@
 #include "../../arch/arch.h"
 #include "../../proc/process.h"
 #include "../../proc/sched.h"
+#include "../../proc/smp.h"
 #endif
 
 /* The dwords of the commands a request takes: the render ring's flush
@@ -87,7 +88,7 @@ int i915_request_started(const struct i915_request *rq)
 /* The lock of every request's `awaits` and `added` and every engine's
  * `kick`, innermost of all, since a fence may signal in any interrupt and
  * with an engine's lock held. */
-static struct spinlock submit_lock = SPINLOCK_INIT;
+static struct spinlock submit_lock = SPINLOCK_INIT_NAMED("submit_lock");
 
 /* The devices whose requests may wait for fences, by their GT's
  * `submit_next`; and whether an engine has a request to give the chip,
@@ -252,12 +253,16 @@ void i915_request_set_error_once(struct i915_request *rq, int32_t err)
  * Linux's __i915_request_submit fails one whose context may not run, a
  * request whose fence holds an error keeps only its breadcrumb, and the
  * requests that waited to see one given to the chip are told. Under the
- * big kernel lock.
+ * engine's lock, held throughout, so that the worker and an add on
+ * another processor give the chip their requests one after the other and
+ * RING_TAIL never moves back, as Linux's i915_request_submit holds the
+ * engine's sched_engine lock (i915_request.c:604-612, 697-707).
  */
 static void engine_submit(struct drm_i915_private *i915, struct i915_engine *e)
 {
     struct i915_request *first, *last = 0, *rq;
     struct i915_await *w, *next;
+    uint32_t elock = spin_lock_irqsave(&e->lock);
     uint32_t flags = spin_lock_irqsave(&submit_lock);
 
     first = e->queued;
@@ -268,6 +273,7 @@ static void engine_submit(struct drm_i915_private *i915, struct i915_engine *e)
     }
     spin_unlock_irqrestore(&submit_lock, flags);
     if (!last) {
+        spin_unlock_irqrestore(&e->lock, elock);
         return;
     }
     for (rq = first;; rq = rq->next) {
@@ -292,6 +298,7 @@ static void engine_submit(struct drm_i915_private *i915, struct i915_engine *e)
     arch_dma_fence();
     i915_uncore_write(i915, RING_TAIL(e->mmio_base), last->tail);
     e->hw_tail = last->tail;
+    spin_unlock_irqrestore(&e->lock, elock);
 }
 
 int i915_submit_work(void)
@@ -329,14 +336,19 @@ static volatile int hangcheck_kicked;
 
 #ifndef RACH2_HOSTTEST
 /** The earliest heartbeat or retire pass of the devices on the worker's
- * list whose GT is awake, as a tick, or 0 for none. */
+ * list whose GT is awake, as a tick, or 0 for none. A wedged GT or one whose
+ * hangcheck is off has no heartbeat, since i915_hangcheck returns before it
+ * moves `hc_next`, and a deadline already past would keep the worker from
+ * sleeping; Linux's next_heartbeat queues no beat when the interval is 0
+ * (drivers/gpu/drm/i915/gt/intel_engine_heartbeat.c:56-57 in 6.12.115). */
 static uint64_t hangcheck_deadline(void)
 {
     struct drm_i915_private *i915;
     uint64_t at = 0;
 
     for (i915 = submit_devices; i915; i915 = i915->gt.submit_next) {
-        if (i915->gt.awake && !i915->gt.wedged && (at == 0 || i915->gt.hc_next < at)) {
+        if (i915->gt.awake && !i915->gt.wedged && !i915->params.hangcheck_off &&
+            (at == 0 || i915->gt.hc_next < at)) {
             at = i915->gt.hc_next;
         }
         if (i915->gt.awake && (at == 0 || i915->gt.retire_next < at)) {
@@ -369,7 +381,14 @@ static int submit_ready(void *arg)
  * request waited for signals or the next heartbeat of an unparked GT is
  * due, then give the chip what is ready and beat, holding the big lock as
  * kernel code does. The heartbeat is the driver's hang detection, as
- * Linux's heartbeat worker is (i915_hangcheck.c).
+ * Linux's heartbeat worker is (i915_hangcheck.c). Like every kernel thread,
+ * it is not switched by the tick (`no_tick_switch`, which
+ * `setup_process_stack` sets): a retire's last put of an imported buffer runs
+ * the exporter's free, virtio-gpu's among them, whose state and its
+ * transport's the big lock alone guards, so the worker gives way only
+ * where it sleeps and between passes, as a kworker of Linux without full
+ * preemption gives way only between works (process_one_work's
+ * cond_resched, kernel/workqueue.c:3298-3299 in 6.12.115).
  */
 static void submit_thread_main(void)
 {
@@ -377,6 +396,7 @@ static void submit_thread_main(void)
 
     arch_irq_enable();
     for (;;) {
+        sched_service_point();
         submit_deadline = hangcheck_deadline();
         current_proc->wakeup_tick = submit_deadline;
         (void)wq_wait_event_idle(&submit_wait, submit_ready, 0);
@@ -391,7 +411,31 @@ static void submit_thread_main(void)
 
 /** Start the worker the first time a request waits for a fence: 0, or
  * -ENOMEM. */
+static int32_t submit_worker_spawn(void);
+
+/* The process list is the big lock's, which EXECBUFFER2, under the GEM lock
+ * alone, takes for the spawn. */
 static int32_t submit_worker_start(void)
+{
+    int32_t rc;
+    int big;
+
+    if (submit_thread) {
+        return 0;
+    }
+    big = !bkl_held();
+    if (big) {
+        bkl_enter();
+    }
+    rc = submit_worker_spawn();
+    if (big) {
+        bkl_exit();
+    }
+    return rc;
+}
+
+/** Make and start the worker unless it runs: 0, or -ENOMEM. */
+static int32_t submit_worker_spawn(void)
 {
     process_t *p;
     uintptr_t base;
@@ -779,7 +823,8 @@ static void request_release(struct i915_request *rq)
 }
 
 /** Park the GT, which is awake, and count the ticks it was awake, as
- * Linux's __gt_park adds to its awake time. */
+ * Linux's __gt_park adds to its awake time. The pool's idle shadows go,
+ * since no retire pass runs to age them while the GT sleeps. */
 static void gt_park(struct drm_i915_private *i915)
 {
     struct i915_gt *gt = &i915->gt;
@@ -787,6 +832,7 @@ static void gt_park(struct drm_i915_private *i915)
     gt->awake = 0;
     gt->awake_ticks += rtc_ticks_now() - gt->unpark_ticks;
     i915_gt_park(i915);
+    i915_gem_pool_trim(i915, I915_POOL_IDLE);
 }
 
 /**
@@ -850,10 +896,12 @@ static void engine_retire(struct drm_i915_private *i915, struct i915_engine *e, 
     }
 }
 
+/* Under the GEM lock, since a request's release lets go of its objects
+ * and their bindings. */
 void i915_retire_requests(struct drm_i915_private *i915)
 {
     struct i915_gt *gt = &i915->gt;
-    int i, held = 0;
+    int i, held = 0, taken = i915_gem_lock(i915);
 
     for (i = 0; i < I915_NUM_ENGINES; i++) {
         engine_retire(i915, &gt->engine[i], 0);
@@ -862,6 +910,7 @@ void i915_retire_requests(struct drm_i915_private *i915)
     if (gt->awake && !held) {
         gt_park(i915);
     }
+    i915_gem_unlock(i915, taken);
 }
 
 void i915_gt_retire_requests(struct drm_i915_private *i915)
@@ -882,6 +931,7 @@ void i915_gt_retire_requests(struct drm_i915_private *i915)
         spin_unlock_irqrestore(&e->lock, flags);
     }
     i915_retire_requests(i915);
+    i915_gem_pool_trim(i915, I915_POOL_STALE);
 }
 
 /**
@@ -1180,6 +1230,7 @@ static int32_t request_new(struct intel_context *ce, struct i915_request **out)
     uint32_t flags;
     int32_t err;
 
+    lockdep_assert_held(&i915->gem.lock);
     err = intel_context_pin_image(ce);
     if (err < 0) {
         return err;
@@ -1245,6 +1296,7 @@ int32_t i915_request_add(struct i915_request *rq)
     struct i915_engine *e = rq->engine;
     uint32_t *cs, flags, i, n;
 
+    lockdep_assert_held(&i915->gem.lock);
     e->reserved = 0;
     rq->postfix = e->tail;
     rq->emitted = rtc_ticks_now();
@@ -1350,13 +1402,17 @@ int32_t i915_request_wait(struct i915_request *rq, uint32_t flags, int64_t timeo
 {
     struct drm_i915_private *i915 = rq->i915;
     struct i915_engine *e = rq->engine;
-    int intr = (flags & I915_WAIT_INTERRUPTIBLE) != 0;
+    int intr = (flags & I915_WAIT_INTERRUPTIBLE) != 0, dropped;
     int64_t deadline, slice, now;
     int32_t err = 0;
+    uint32_t irq;
 
     if (!i915_request_completed(rq) && timeout_ns == 0) {
         return -ETIME;
     }
+    /* The wait never holds the GEM lock, which the heartbeat's reset and
+     * the retirement it waits on take (i915.h's Locking rule). */
+    dropped = i915_gem_lock_drop(i915);
     deadline = timeout_ns < 0 ? -1 : dma_fence_now() + timeout_ns;
     /* Linux's optimistic spin (i915_request.c:2030-2032): a request the
      * chip has begun is polled before the wait asks for its signal, and
@@ -1372,7 +1428,9 @@ int32_t i915_request_wait(struct i915_request *rq, uint32_t flags, int64_t timeo
         }
         dma_fence_enable_sw_signaling(&rq->fence.base);
     }
+    irq = spin_lock_irqsave(&e->lock);
     rq->waiters++;
+    spin_unlock_irqrestore(&e->lock, irq);
     while (!i915_request_completed(rq)) {
         now = dma_fence_now();
         if (deadline >= 0 && now >= deadline) {
@@ -1402,7 +1460,10 @@ int32_t i915_request_wait(struct i915_request *rq, uint32_t flags, int64_t timeo
         i915_request_signal(i915, e);
         (void)i915_hangcheck(i915);
     }
+    irq = spin_lock_irqsave(&e->lock);
     rq->waiters--;
+    spin_unlock_irqrestore(&e->lock, irq);
+    i915_gem_lock_retake(i915, dropped);
     if (err == 0) {
         i915_retire_requests(i915);
     }
@@ -1663,6 +1724,7 @@ void i915_requests_unplug(struct drm_i915_private *i915)
     if (gt->awake) {
         gt_park(i915);
     }
+    i915_gem_pool_trim(i915, I915_POOL_ALL);
     i915_gt_pages_unmap(i915, gt->scratch, 1, gt->scratch_ggtt);
     gt->scratch = 0;
     kfree(gt->default_state);

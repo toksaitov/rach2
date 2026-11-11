@@ -3,6 +3,7 @@
  * user page is resolved.
  *
  * host-deps:
+ * host-deps: tests/host/compat/fd_flat.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
  * Pipe, ring and checked-copy code are the kernel's. User addresses refer to
@@ -205,6 +206,39 @@ int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
     return 1;
 }
 
+/** `vm_user_begin` over the model: the range brought in by
+ * `vm_prefault_range`, 1 as with the regions' lock held, which the model
+ * does not keep; 0 for an empty range and -1 where the prefault fails. */
+int vm_user_begin(uintptr_t addr, uintptr_t len, int write)
+{
+    if (len == 0) {
+        return 0;
+    }
+    return vm_prefault_range(addr, len, write) ? 1 : -1;
+}
+
+/** End what `vm_user_begin` began: nothing to give back. */
+void vm_user_end(void)
+{}
+
+/** `vm_prefault_held`: the model's prefault. */
+int vm_prefault_held(uintptr_t addr, uintptr_t len, int write)
+{
+    return vm_prefault_range(addr, len, write);
+}
+
+/** The regions' lock of the string copies: the model has none. */
+void mmap_read_lock(struct mm *mm)
+{
+    (void)mm;
+}
+
+/** Give back what `mmap_read_lock` took: nothing. */
+void mmap_unlock(struct mm *mm)
+{
+    (void)mm;
+}
+
 /** Whether the page of `addr` is present for a read, or with `write` for
  * a write, with no resolve: 1 or 0, 0 also outside the model. A check must
  * stay in one page. */
@@ -218,6 +252,13 @@ int vm_resident(uintptr_t addr, uintptr_t len, int write)
     }
     page = (addr - USER_BASE) / PAGE_SIZE;
     return pages[page] >= (write ? 2 : 1);
+}
+
+/** `vm_ready_held`, which the futex word accesses of usercopy.c ask: the
+ * model's `vm_resident`, with no sleep either way. */
+int vm_ready_held(uintptr_t addr, uintptr_t len, int write)
+{
+    return vm_resident(addr, len, write);
 }
 
 /** Whether a pin may take the page of `addr`: always, since the model has
@@ -759,6 +800,20 @@ static void link_ends(void)
               "a link from an ended empty pipe into a read one is 0");
     }
 }
+
+/** 1: the test runs as the kernel, under the big lock. */
+int bkl_held(void)
+{
+    return 1;
+}
+
+/** Nothing: there is no big lock. */
+void bkl_enter(void)
+{}
+
+/** Nothing: there is no big lock. */
+void bkl_exit(void)
+{}
 
 /** Run every case; 0 when each passes, 1 otherwise. */
 int main(void)

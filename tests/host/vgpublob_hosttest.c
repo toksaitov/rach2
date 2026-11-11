@@ -6,6 +6,8 @@
  * rows with x86-64's structures.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/atomic_host.c tests/host/compat/resv_host.c
+ * host-deps: tests/host/compat/mutex_none.c
  *
  * The rows: the parameters a device with blobs, UUIDs, context
  * initialization and a host-visible region gives; blobs of host memory,
@@ -52,11 +54,21 @@ struct dma_buf *dma_buf_export(uint64_t size, const struct dma_buf_ops *ops, voi
     return b;
 }
 
-/** Take a reference. */
+/** Take a reference; NULL is allowed and returned, as dmabuf.c's. */
 struct dma_buf *dma_buf_ref(struct dma_buf *buf)
 {
-    buf->refs++;
+    if (buf) {
+        buf->refs++;
+    }
     return buf;
+}
+
+/** The PRIME cache of the handle `id`, with a reference, or NULL. */
+struct dma_buf *drm_handle_prime_get(struct drm_handles *t, uint32_t id)
+{
+    struct drm_handle *h = model_handle(t, id);
+
+    return h ? dma_buf_ref(h->prime) : NULL;
 }
 
 /** Drop one; the last releases the exporter's hold and frees the buffer. */

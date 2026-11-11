@@ -373,7 +373,7 @@ static int32_t get_supported_cpuid(uintptr_t arg, int emulated)
 static int32_t vm_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg);
 static void vm_close(fd_entry_t *e);
 
-static const struct file_ops vm_ops = {NULL, NULL, NULL, vm_ioctl, vm_close, NULL, NULL};
+static const struct file_ops vm_ops = {NULL, NULL, NULL, vm_ioctl, vm_close, NULL, NULL, 0};
 
 /** KVM_CREATE_VM of the machine type `type`, which on x86 is 0: a VM and
  * a descriptor of the caller's on it, "anon_inode:kvm-vm", read-write and
@@ -430,11 +430,12 @@ static int32_t create_vm(uintptr_t type)
     }
     vm->next_vm = live_vms;
     live_vms = vm;
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_ANON;
     e->ops = &vm_ops;
     e->priv = vm;
     e->flags = FD_FLAG_READ | FD_FLAG_WRITE | FD_FLAG_CLOEXEC;
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 
@@ -820,7 +821,7 @@ const char *kvm_vm_irqchip_name(void *arg)
     return vm->irqchip == KVM_IRQCHIP_SPLIT ? "split" : "none";
 }
 
-static const struct file_ops dev_ops = {NULL, NULL, NULL, dev_ioctl, NULL, NULL, NULL};
+static const struct file_ops dev_ops = {NULL, NULL, NULL, dev_ioctl, NULL, NULL, NULL, 0};
 
 /* /dev/kvm, the misc device 10:232, read and written by everyone, as
  * udev's rule for the kvm group gives it on a machine with one user. */

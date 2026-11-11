@@ -8,6 +8,9 @@
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c tests/host/compat/park_host.c
  * host-deps: rach2/sys/fs/nodelock.c rach2/sys/mm/notify.c
+ * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/bkl_none.c
+ * host-deps: tests/host/compat/atomic_host.c
+ * host-deps: tests/host/compat/mmap_lock_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
  * The rows check:
@@ -50,7 +53,11 @@
  * - on a model type that sets `file_locked`, with the node locks of
  *   rach2/sys/fs/nodelock.c, the order of the locks a create, an unlink,
  *   an rmdir and a rename in one directory and between two take, and a
- *   mount against an rmdir of the directory it covers.
+ *   mount against an rmdir of the directory it covers;
+ * - on the same model, fs.protected_hardlinks on a hard link to another
+ *   user's file, and fs.protected_regular and fs.protected_fifos on an
+ *   O_CREAT open of an existing file in a sticky directory, at each level,
+ *   as Linux 6.12's may_linkat and may_create_in_sticky judge them.
  *
  * The static declarations before the includes make the unused exports of
  * the three sources private, so the compiler drops them and the hardware
@@ -258,6 +265,12 @@ struct percpu cpu_table[NR_CPUS] = {{.current = &proc}};
 process_t *proc_list;
 volatile uint32_t fb_owner_pid;
 krffs_file_system_t *krffs_fs;
+/* The protections of /proc/sys/fs, at the values rach2/sys/fs/vfs.c gives
+ * them. */
+int vfs_protected_hardlinks = 1;
+int vfs_protected_symlinks = 1;
+int vfs_protected_fifos = 1;
+int vfs_protected_regular = 2;
 static int root_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **found);
 static const struct vfs_ops root_ops = {.lookup = root_lookup};
 const struct vfs_type vfs_krffs_type = {"krffs", 0, &root_ops, 1, 0};
@@ -368,6 +381,12 @@ uint32_t kirq_save(void)
 
     interrupt_flags = 0;
     return flags;
+}
+
+/** 1: the test runs as the one thread, which holds the big lock. */
+int bkl_held(void)
+{
+    return 1;
 }
 
 /** Restore the model's saved flags. */
@@ -832,8 +851,8 @@ int vfs_open_node(struct vfs_mount *mnt, void *at, int flags, void **out)
     (void)flags;
     check(mnt == &mount && at == &node, "open uses node identity");
     check(installing < 0 || (fd_get(proc.fds, installing) == NULL &&
-                             proc.fds->entries[installing].type == FD_TYPE_NONE &&
-                             proc.fds->entries[installing].ofd),
+                             fd_slot(proc.fds, installing)->type == FD_TYPE_NONE &&
+                             fd_slot(proc.fds, installing)->ofd),
           "an open's descriptor is a reservation while the file system opens it");
     if (open_error) {
         return open_error;
@@ -906,7 +925,7 @@ int vfs_truncate(struct vfs_mount *mnt, void *at, uint64_t size)
     check(mnt == &mount && at == &handle && opens == releases + 1 && size == 0,
           "mounted truncation uses a live open handle");
     check(installing < 0 || (fd_get(proc.fds, installing) == NULL &&
-                             proc.fds->entries[installing].type == FD_TYPE_NONE),
+                             fd_slot(proc.fds, installing)->type == FD_TYPE_NONE),
           "an open's descriptor is not published while it truncates");
     fd_ofd_repoint(mnt, &node, &moved);
     relocate = 1;
@@ -1160,6 +1179,13 @@ void shmem_free(struct shmem *sh)
     check(0, "unexpected release of shared pages");
 }
 
+/** Fail the row: no shared pages are released. */
+void shmem_free_yielding(struct shmem *sh)
+{
+    (void)sh;
+    check(0, "unexpected release of shared pages");
+}
+
 /** Fail the row: no row unmaps a range. */
 void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end)
 {
@@ -1339,6 +1365,14 @@ NO_PROC_INO(procfs_ino_acpidir)
 NO_PROC_INO(procfs_ino_acpicall)
 NO_PROC_INO(procfs_ino_fsdir)
 NO_PROC_INO(procfs_ino_lockwait)
+
+/** No kind is a system-wide file of /proc here, so the opens and stats
+ * that ask fall through to ENOENT. */
+uint32_t procfs_ino_global(int kind)
+{
+    (void)kind;
+    return 0;
+}
 
 /** Fail the row: no row stats a file of /proc. */
 uint32_t procfs_ino_sysvipc(int origin)
@@ -1588,10 +1622,9 @@ int vfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, struct vf
 }
 
 /** No row sleeps in epoll_wait, so a close finds no poller to let go of. */
-void wq_poll_remove(wait_queue_t *wq, struct wq_waiter *w)
+void poll_let_go(process_t *t)
 {
-    (void)wq;
-    (void)w;
+    (void)t;
 }
 
 /** No row sleeps in epoll_wait, so nothing is woken for a closed hold. */
@@ -1741,15 +1774,24 @@ int vfs_resolve_real(const char *path, int flags, struct vfs_ref *out, char *rea
     return vfs_resolve(0, path, flags, out, 0, 0);
 }
 
-/** This resolver model has no captured entry; its original walk is unchanged.
- */
+static void fl_dir_attrs(const struct vfs_ref *ref, struct vfs_stat *dir);
+
+/** This resolver model has no captured entry; its original walk is
+ * unchanged. The directory a file of /fl is in gives its attributes, and
+ * any other path none. */
 int vfs_resolve_entry(const char *path, int flags, struct vfs_ref *out, char *real,
-                      struct vfs_name **entry)
+                      struct vfs_name **entry, struct vfs_stat *dir)
 {
+    int rc;
+
     if (entry) {
         *entry = NULL;
     }
-    return vfs_resolve_real(path, flags, out, real);
+    rc = vfs_resolve_real(path, flags, out, real);
+    if (rc == 0 && dir) {
+        fl_dir_attrs(out, dir);
+    }
+    return rc;
 }
 
 /** Give back the lock a locked walk took. */
@@ -2171,7 +2213,7 @@ static void truncation(void)
               "mounted node checks do not truncate before open");
         installing = fd_alloc(proc.fds);
         rc = open_install(&ref, installing, "target", 2 | (mode == 3 ? 0 : O_TRUNC));
-        check(rc < 0 || (rc == installing && fd_get(proc.fds, rc) == &proc.fds->entries[rc]),
+        check(rc < 0 || (rc == installing && fd_get(proc.fds, rc) == fd_slot(proc.fds, rc)),
               "a finished open publishes the descriptor it reserved");
         installing = -1;
         if (mode == 0 || mode == 3) {
@@ -2215,7 +2257,7 @@ static void row_end(void)
     int fd;
 
     for (fd = 0; fd < fd_table_cap(proc.fds); fd++) {
-        if (proc.fds->entries[fd].type != FD_TYPE_NONE || proc.fds->entries[fd].ofd) {
+        if (fd_slot(proc.fds, fd)->type != FD_TYPE_NONE || fd_slot(proc.fds, fd)->ofd) {
             fd_free(proc.fds, fd);
         }
     }
@@ -2278,8 +2320,8 @@ static void open_publishes(void)
 
     check(fd >= 0, "the waiting open reserves a descriptor");
     if (fd >= 0) {
-        proc.fds->entries[fd].node = &victim;
-        proc.fds->entries[fd].type = FD_TYPE_FILE;
+        fd_slot(proc.fds, fd)->node = &victim;
+        fd_slot(proc.fds, fd)->type = FD_TYPE_FILE;
     }
 }
 
@@ -2344,7 +2386,7 @@ static int program_close_removals = -1;
  * for the root's lock while the release of the program's file held it. */
 static void program_desc_closes(void)
 {
-    orphan_ofd = proc.fds->entries[program_fd].ofd;
+    orphan_ofd = fd_slot(proc.fds, program_fd)->ofd;
     check(close_fd(program_fd) == 0, "the close of the program file's descriptor");
     program_close_removals = removals;
 }
@@ -2491,7 +2533,7 @@ static void orphan_locks(void)
             root_row_end();
             continue;
         }
-        e = &proc.fds->entries[fd];
+        e = fd_slot(proc.fds, fd);
         victim.name[0] = '\0';
         if (fifo) {
             victim.mode = KRFFS_S_IFIFO | 0600;
@@ -2523,7 +2565,7 @@ static int made_desc(int path)
     if (fd < 0) {
         return fd;
     }
-    e = &proc.fds->entries[fd];
+    e = fd_slot(proc.fds, fd);
     e->ofd->vmnt = &mount;
     e->ofd->vnode = &made_dir;
     e->node = &made_dir;
@@ -2537,7 +2579,7 @@ static int made_desc(int path)
 static void made_desc_close(int fd)
 {
     if (fd >= 0) {
-        proc.fds->entries[fd].ofd->vmnt = 0;
+        fd_slot(proc.fds, fd)->ofd->vmnt = 0;
         fd_free(proc.fds, fd);
     }
 }
@@ -2796,8 +2838,8 @@ static void proc_fd_stat_errors(void)
         fd = model_open();
         check(fd >= 0, "open a descriptor for a followed stat");
         if (fd >= 0) {
-            proc.fds->entries[fd].type = directory ? FD_TYPE_DIR : FD_TYPE_FILE;
-            ofd = proc.fds->entries[fd].ofd;
+            fd_slot(proc.fds, fd)->type = directory ? FD_TYPE_DIR : FD_TYPE_FILE;
+            ofd = fd_slot(proc.fds, fd)->ofd;
             getattr_error = -EIO;
             check(synth_fd_stat((int)proc.pid, fd, &st) == -EIO,
                   "a followed descriptor stat returns the getattr error");
@@ -2882,7 +2924,7 @@ static void open_last_slot(void)
     other.fds = &files;
     for (fd = 0; fd < 3; fd++) {
         check(fd_alloc(proc.fds) == fd, "the table is full but for its last slot");
-        proc.fds->entries[fd].type = FD_TYPE_FILE;
+        fd_slot(proc.fds, fd)->type = FD_TYPE_FILE;
     }
     mount.type = &locked_type;
     installing = 3;
@@ -2905,7 +2947,7 @@ static void open_last_slot(void)
 static void release_closed(void)
 {
     check(fd_get(proc.fds, releasing) == NULL &&
-              (proc.fds->entries[releasing].flags & FD_FLAG_RELEASING),
+              (fd_slot(proc.fds, releasing)->flags & FD_FLAG_RELEASING),
           "a descriptor being released is closed to lookups");
     check(dup_clear(releasing) == -EBUSY, "dup2 onto a descriptor being released is busy");
 }
@@ -2923,7 +2965,7 @@ static void close_sleeping(void)
         in_release = release_closed;
         check(close_fd(fd) == 0 && in_release == 0 && refs == 0, "close releases the description");
         check(lock_closes == 1 && lock_closer == &proc, "the close drops the closer's locks once");
-        check(proc.fds->entries[fd].type == FD_TYPE_NONE && !proc.fds->entries[fd].ofd,
+        check(fd_slot(proc.fds, fd)->type == FD_TYPE_NONE && !fd_slot(proc.fds, fd)->ofd,
               "the slot is free after the release");
     }
     row_end();
@@ -2939,7 +2981,7 @@ static void third_call_ends(void)
     hold_fd(&third, releasing);
     fd_holds_release();
     current_proc = self;
-    check(proc.fds->entries[releasing].type == FD_TYPE_FILE && proc.fds->entries[releasing].ofd,
+    check(fd_slot(proc.fds, releasing)->type == FD_TYPE_FILE && fd_slot(proc.fds, releasing)->ofd,
           "a release under way is not begun again");
 }
 
@@ -2960,18 +3002,18 @@ static void deferred_release(void)
     check(fd >= 0, "open a descriptor two calls hold");
     if (fd >= 0) {
         hold_fd(&other, fd);
-        check(close_fd(fd) == 0 && (proc.fds->entries[fd].flags & FD_FLAG_CLOSING) && refs == 1,
+        check(close_fd(fd) == 0 && (fd_slot(proc.fds, fd)->flags & FD_FLAG_CLOSING) && refs == 1,
               "a close of a descriptor another call holds leaves it to that call");
         check(lock_closes == 1 && lock_closer == &proc,
               "that close drops the closer's record locks at once");
         fd_holds_release();
-        check(proc.fds->entries[fd].type == FD_TYPE_FILE, "the closer's call end leaves it");
+        check(fd_slot(proc.fds, fd)->type == FD_TYPE_FILE, "the closer's call end leaves it");
         current_proc = &other;
         releasing = fd;
         in_release = third_call_ends;
         fd_holds_release();
         current_proc = &proc;
-        check(proc.fds->entries[fd].type == FD_TYPE_NONE && refs == 0 && in_release == 0,
+        check(fd_slot(proc.fds, fd)->type == FD_TYPE_NONE && refs == 0 && in_release == 0,
               "the holder's call end releases it");
         check(lock_closes == 1, "that release drops no process's record locks");
     }
@@ -2985,7 +3027,7 @@ static int dup_source = -1;
 static void other_closes_source(void)
 {
     current_proc = &other;
-    check(close_fd(dup_source) == 0 && (proc.fds->entries[dup_source].flags & FD_FLAG_CLOSING),
+    check(close_fd(dup_source) == 0 && (fd_slot(proc.fds, dup_source)->flags & FD_FLAG_CLOSING),
           "a close of the source the dup2 holds leaves it to the dup2's call");
     current_proc = &proc;
 }
@@ -3011,16 +3053,16 @@ static void dup2_source_closed(void)
         params.ecx = (uint32_t)target;
         in_release = other_closes_source;
         check(sys_dup2(&params) == target && in_release == 0, "dup2 replaces its target");
-        check(fd_get(proc.fds, target) == &proc.fds->entries[target] &&
-                  !(proc.fds->entries[target].flags & (FD_FLAG_CLOSING | FD_FLAG_RELEASING)),
+        check(fd_get(proc.fds, target) == fd_slot(proc.fds, target) &&
+                  !(fd_slot(proc.fds, target)->flags & (FD_FLAG_CLOSING | FD_FLAG_RELEASING)),
               "the copy is an open descriptor");
         fd_holds_release();
         current_proc = &other;
         fd_holds_release();
         current_proc = &proc;
-        check(proc.fds->entries[dup_source].type == FD_TYPE_NONE &&
-                  proc.fds->entries[target].type == FD_TYPE_FILE &&
-                  proc.fds->entries[target].ofd->refcount == 1 && refs == 1,
+        check(fd_slot(proc.fds, dup_source)->type == FD_TYPE_NONE &&
+                  fd_slot(proc.fds, target)->type == FD_TYPE_FILE &&
+                  fd_slot(proc.fds, target)->ofd->refcount == 1 && refs == 1,
               "the source's release leaves the copy its description");
     }
     dup_source = -1;
@@ -3167,7 +3209,7 @@ static void sharer_llseeks(void)
 {
     current_proc = &other;
     sharer_seek =
-        llseek_bootlog(&sharer_files.entries[0], 16, 1, (long long __user *)&sharer_result);
+        llseek_bootlog(fd_slot(&sharer_files, 0), 16, 1, (long long __user *)&sharer_result);
     if (sharer_seek == 0) {
         sharer_seek = (int32_t)sharer_result;
     }
@@ -3208,7 +3250,7 @@ static int32_t mem_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     return mem_transfer(e, count);
 }
 
-static const struct file_ops mem_ops = {mem_read, mem_write, 0, 0, 0, NULL, NULL};
+static const struct file_ops mem_ops = {mem_read, mem_write, 0, 0, 0, NULL, NULL, 0};
 
 /** A read of /dev/bootlog as `dev_bootlog_read` makes it: from the offset,
  * through the copy to the caller's buffer, whose page fault sleeps, and the
@@ -3223,7 +3265,7 @@ static int32_t log_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return (int32_t)count;
 }
 
-static const struct file_ops log_ops = {log_read, 0, 0, 0, 0, NULL, NULL};
+static const struct file_ops log_ops = {log_read, 0, 0, 0, 0, NULL, NULL, 0};
 
 /* A transfer a row makes through the dispatch of read(2), or of write(2)
  * when `writing` is set, on a descriptor of `type` with `ops`; the seek of
@@ -3271,14 +3313,14 @@ static void offset_seek_waits(void)
             row_end();
             return;
         }
-        e = &proc.fds->entries[0];
+        e = fd_slot(proc.fds, 0);
         e->type = cases[i].type;
         e->ops = cases[i].ops;
         e->flags = FD_FLAG_READ | FD_FLAG_WRITE;
         e->ofd->offset = 0x1000;
         log_len = 0x2000;
         sharer_files.refs = 1;
-        sharer_files.entries[0] = *e;
+        (*fd_slot(&sharer_files, 0)) = *e;
         e->ofd->refcount++;
         other.fds = &sharer_files;
         parked_on = 0;
@@ -3322,7 +3364,7 @@ static void log_seek_range(void)
 
     row_begin();
     check(fd_alloc(proc.fds) == 0, "the log row's descriptor");
-    e = &proc.fds->entries[0];
+    e = fd_slot(proc.fds, 0);
     e->type = FD_TYPE_DEVICE;
     e->ops = &log_ops;
     e->flags = FD_FLAG_READ;
@@ -3387,7 +3429,7 @@ static void device_reopen_closed(void)
     dev_holds = dev_enters = dev_closes = 0;
     proc.rlim[RLIM_NOFILE].cur = FD_TABLE_LIMIT;
     check(fd_alloc(proc.fds) == 0, "the device row's descriptor");
-    e = &proc.fds->entries[0];
+    e = fd_slot(proc.fds, 0);
     e->type = FD_TYPE_DEVICE;
     e->ops = &dev_ops;
     e->flags = FD_FLAG_READ | FD_FLAG_WRITE;
@@ -3398,7 +3440,7 @@ static void device_reopen_closed(void)
     in_dev_open = dev_desc_close;
     rc = proc_fd_reopen_device(e, 2 /* O_RDWR */);
     check(rc == -ENXIO && !in_dev_open, "the reopen opens the device, which is gone");
-    check(proc.fds->entries[0].type == FD_TYPE_NONE, "the device's descriptor is closed");
+    check(fd_slot(proc.fds, 0)->type == FD_TYPE_NONE, "the device's descriptor is closed");
     check(dev_closes == 1,
           "a close of a device's last descriptor while a reopen of it sleeps closes the device");
     check(dev_holds == 0 && dev_enters == 0 && ns_depth == 0,
@@ -3429,7 +3471,7 @@ static int orphan_desc(int fifo)
     if (fd < 0) {
         return fd;
     }
-    e = &proc.fds->entries[fd];
+    e = fd_slot(proc.fds, fd);
     victim.name[0] = '\0';
     if (fifo) {
         victim.mode = KRFFS_S_IFIFO | 0600;
@@ -3466,7 +3508,7 @@ static void orphan_dup2(void)
  * and an exec's of each close-on-exec one (`close_cloexec_fds`). */
 static void orphan_table_end(void)
 {
-    fd_release_backing(&proc.fds->entries[orphan_fd]);
+    fd_release_backing(fd_slot(proc.fds, orphan_fd));
     fd_free(proc.fds, orphan_fd);
 }
 
@@ -3475,7 +3517,7 @@ static void orphan_table_end(void)
 static void orphan_held_close(void)
 {
     hold_fd(&other, orphan_fd);
-    check(close_fd(orphan_fd) == 0 && proc.fds->entries[orphan_fd].type != FD_TYPE_NONE,
+    check(close_fd(orphan_fd) == 0 && fd_slot(proc.fds, orphan_fd)->type != FD_TYPE_NONE,
           "a close of the orphan's descriptor another call holds leaves it to that call");
     fd_holds_release();
     current_proc = &other;
@@ -3575,7 +3617,7 @@ static void mapping_reclaims(void)
 
     root_row_begin();
     mapped_fd = orphan_desc(0);
-    vf = mapped_fd >= 0 ? filemap_new(&proc.fds->entries[mapped_fd]) : NULL;
+    vf = mapped_fd >= 0 ? filemap_new(fd_slot(proc.fds, mapped_fd)) : NULL;
     check(vf != NULL, "a mapping of the orphan");
     if (vf) {
         removals_at_close = -1;
@@ -3663,6 +3705,10 @@ static const struct fl_node fl_tree[FL_NODES] = {
     {"d", 30, FL_B, 1, 2, 0, 0}, {"w", 12, FL_B, 0, 1, 0, 0},    {"", 40, -1, 0, 0, 0, 0},
 };
 static struct fl_node fl_nodes[FL_NODES];
+/* The mode and owner a protection row gives a node, a mode of 0 leaving the
+ * model's own; and the node a link was made to. */
+static uint32_t fl_mode[FL_NODES], fl_uid[FL_NODES];
+static const struct fl_node *fl_linked;
 static char fl_log[512];
 /* The node a mount covers, or NULL; the call another process makes when the
  * row's call first looks `fl_hook_name` up, or while its change sleeps; and
@@ -3752,16 +3798,44 @@ static int fl_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **
     return 0;
 }
 
-/** A directory of mode 0777, or a file of 0666, owned by root. */
+/** A directory of mode 0777, or a file of 0666, owned by root, unless a
+ * protection row gave the node a mode and an owner. */
 static int fl_getattr(struct vfs_mount *mnt, void *at, struct vfs_stat *st)
 {
     const struct fl_node *n = at ? at : &fl_nodes[FL_ROOT];
+    int i = (int)(n - fl_nodes);
 
     (void)mnt;
     k_memset(st, 0, sizeof(*st));
     st->ino = n->ino;
     st->nlink = n->nlink;
-    st->mode = n->dir ? 040777u : 0100666u;
+    st->mode = fl_mode[i] ? fl_mode[i] : n->dir ? 040777u : 0100666u;
+    st->uid = fl_uid[i];
+    return 0;
+}
+
+/** The attributes of the directory the node `ref` holds is in, a mode of 0
+ * for the model's root or a node of another mount. */
+static void fl_dir_attrs(const struct vfs_ref *ref, struct vfs_stat *dir)
+{
+    const struct fl_node *n = ref->node;
+
+    if (ref->mnt != &fl_mount || n->parent < 0) {
+        k_memset(dir, 0, sizeof(*dir));
+        return;
+    }
+    fl_getattr(&fl_mount, &fl_nodes[n->parent], dir);
+}
+
+/** Make `name` in the directory `dir` a link to `at`, which the model
+ * records and does not name. */
+int vfs_link(struct vfs_mount *mnt, void *dir, const char *name, void *at)
+{
+    check(mnt == &fl_mount && fl_holds(dir) && fl_holds(at),
+          "a link holds its directory's lock and its file's");
+    check(!fl_child_named(dir, name), "a link's name is new");
+    fl_note("link");
+    fl_linked = at;
     return 0;
 }
 
@@ -3965,6 +4039,9 @@ static void fl_row_begin(void)
 {
     row_begin();
     k_memcpy(fl_nodes, fl_tree, sizeof(fl_nodes));
+    k_memset(fl_mode, 0, sizeof(fl_mode));
+    k_memset(fl_uid, 0, sizeof(fl_uid));
+    fl_linked = 0;
     k_memset(&fl_mount, 0, sizeof(fl_mount));
     fl_mount.type = &fl_type;
     fl_mount.root = &fl_nodes[FL_ROOT];
@@ -4137,6 +4214,146 @@ static void resident_unmapped(void)
     dshares = NULL;
 }
 
+/* The uids of the protection rows: the caller and another user. */
+#define PR_USER  1000u
+#define PR_OTHER 1001u
+
+/** End a protection row: no lock order is asked of it, and the caller's
+ * group goes back to root's. */
+static void pr_row_end(const char *what)
+{
+    fl_log[0] = '\0';
+    fl_row_end("", what);
+    proc.egid = 0;
+}
+
+/**
+ * Link /fl/a/x, of `mode` and owned by `uid`, to the new name /fl/b/y, as
+ * the caller `euid` in the group of the same number: the link's result. The
+ * new name's directory is root's of mode 0777, so a link the protection lets
+ * through is made.
+ */
+static int32_t pr_link(uint32_t mode, uint32_t uid, uint32_t euid)
+{
+    int32_t rc;
+
+    fl_row_begin();
+    proc.euid = euid;
+    proc.egid = euid;
+    fl_mode[FL_X] = mode;
+    fl_uid[FL_X] = uid;
+    rc = do_link("/fl/a/x", "/fl/b/y", 0, 0, 0);
+    check(rc == 0 ? fl_linked == &fl_nodes[FL_X] : fl_linked == 0,
+          "a link is made exactly when it is allowed");
+    pr_row_end("a link gives back every lock");
+    return rc;
+}
+
+/**
+ * fs.protected_hardlinks, as Linux's may_linkat: a link to a file of another
+ * user is EPERM unless the file is a regular one with no setuid bit, no
+ * setgid bit with group execute, and both read and write open to the caller;
+ * its owner and a caller with CAP_FOWNER link anything, and at 0 the rule is
+ * off.
+ */
+static void protected_links(void)
+{
+    check(pr_link(0100644, PR_OTHER, PR_USER) == -EPERM,
+          "a link to another user's file the caller may not write is EPERM");
+    check(pr_link(0100666, PR_OTHER, PR_USER) == 0,
+          "a link to another user's file the caller may read and write is made");
+    check(pr_link(0104666, PR_OTHER, PR_USER) == -EPERM,
+          "a link to another user's setuid file is EPERM");
+    check(pr_link(0102676, PR_OTHER, PR_USER) == -EPERM,
+          "a link to another user's setgid, group-executable file is EPERM");
+    check(pr_link(0102666, PR_OTHER, PR_USER) == 0,
+          "a link to another user's setgid file without group execute is made");
+    check(pr_link(0010666, PR_OTHER, PR_USER) == -EPERM, "a link to another user's FIFO is EPERM");
+    check(pr_link(0100400, PR_USER, PR_USER) == 0,
+          "a link to the caller's own file it may not write is made");
+    check(pr_link(0104600, PR_OTHER, 0) == 0, "root links another user's setuid file");
+    vfs_protected_hardlinks = 0;
+    check(pr_link(0100644, PR_OTHER, PR_USER) == 0,
+          "with fs.protected_hardlinks at 0 any file is linked");
+    vfs_protected_hardlinks = 1;
+}
+
+/**
+ * Open /fl/b/w, of `mode` and owned by `uid`, with O_CREAT, O_DIRECTORY and
+ * `extra`, as the caller `euid` in the group of the same number, with /fl/b
+ * of `dmode` and owned by `duid`: the open's result. An open the protections
+ * let through stops at O_DIRECTORY on a file that is no directory, ENOTDIR,
+ * before anything is opened.
+ */
+static int32_t pr_create(uint32_t dmode, uint32_t duid, uint32_t mode, uint32_t uid, uint32_t euid,
+                         int extra)
+{
+    int32_t rc;
+
+    fl_row_begin();
+    proc.euid = euid;
+    proc.egid = euid;
+    fl_mode[FL_B] = dmode;
+    fl_uid[FL_B] = duid;
+    fl_mode[FL_W] = mode;
+    fl_uid[FL_W] = uid;
+    rc = do_open("/fl/b/w", O_CREAT | O_DIRECTORY | extra, 0644);
+    pr_row_end("an O_CREAT open gives back every lock");
+    return rc;
+}
+
+/**
+ * fs.protected_regular and fs.protected_fifos, as Linux's
+ * may_create_in_sticky: an O_CREAT open of an existing file in a sticky
+ * directory others may write is EACCES, for root too, when neither the
+ * caller nor the directory's owner owns the file; at level 2 a directory its
+ * group may write is enough; at 0 the rule is off for the kind; and a file
+ * of another kind is judged whatever the levels.
+ */
+static void protected_creates(void)
+{
+    check(pr_create(041777, 0, 0100644, PR_OTHER, PR_USER, 0) == -EACCES,
+          "O_CREAT on another user's file in /tmp is EACCES");
+    check(pr_create(041777, 0, 0100644, PR_OTHER, 0, 0) == -EACCES,
+          "O_CREAT on another user's file in /tmp is EACCES for root");
+    check(pr_create(041777, 0, 0100644, PR_OTHER, PR_USER, O_EXCL) == -EEXIST,
+          "O_CREAT|O_EXCL on another user's file is EEXIST");
+    check(pr_create(041777, 0, 0100644, PR_USER, PR_USER, 0) == -ENOTDIR,
+          "O_CREAT on the caller's own file in /tmp opens it");
+    check(pr_create(041777, PR_OTHER, 0100644, PR_OTHER, PR_USER, 0) == -ENOTDIR,
+          "O_CREAT on the directory owner's file opens it");
+    check(pr_create(040777, 0, 0100644, PR_OTHER, PR_USER, 0) == -ENOTDIR,
+          "O_CREAT on another user's file in a directory that is not sticky opens it");
+    check(pr_create(041775, 0, 0100644, PR_OTHER, PR_USER, 0) == -EACCES,
+          "O_CREAT on a file in a group-writable sticky directory is EACCES at level 2");
+    vfs_protected_regular = 1;
+    check(pr_create(041775, 0, 0100644, PR_OTHER, PR_USER, 0) == -ENOTDIR,
+          "level 1 lets a group-writable sticky directory's file open");
+    check(pr_create(041777, 0, 0100644, PR_OTHER, PR_USER, 0) == -EACCES,
+          "level 1 still refuses a world-writable sticky directory's file");
+    vfs_protected_regular = 0;
+    check(pr_create(041777, 0, 0100644, PR_OTHER, PR_USER, 0) == -ENOTDIR,
+          "fs.protected_regular at 0 lets the file open");
+    vfs_protected_regular = 2;
+
+    check(pr_create(041777, 0, 0010666, PR_OTHER, PR_USER, 0) == -EACCES,
+          "O_CREAT on another user's FIFO in /tmp is EACCES");
+    check(pr_create(041775, 0, 0010666, PR_OTHER, PR_USER, 0) == -ENOTDIR,
+          "level 1 lets a group-writable sticky directory's FIFO open");
+    vfs_protected_fifos = 2;
+    check(pr_create(041775, 0, 0010666, PR_OTHER, PR_USER, 0) == -EACCES,
+          "level 2 refuses a group-writable sticky directory's FIFO");
+    vfs_protected_fifos = 0;
+    check(pr_create(041777, 0, 0010666, PR_OTHER, PR_USER, 0) == -ENOTDIR,
+          "fs.protected_fifos at 0 lets the FIFO open");
+
+    vfs_protected_regular = 0;
+    check(pr_create(041777, 0, 0020666, PR_OTHER, PR_USER, 0) == -EACCES,
+          "O_CREAT on another user's device node in /tmp is EACCES at any level");
+    vfs_protected_regular = 2;
+    vfs_protected_fifos = 1;
+}
+
 int main(void)
 {
     mount.type = &mounted_type;
@@ -4169,6 +4386,8 @@ int main(void)
     file_locked_orders();
     file_locked_mount_rmdir();
     resident_unmapped();
+    protected_links();
+    protected_creates();
     if (!failures) {
         printf("open-hosttest: result: pass: mounted truncation, loop handles and root removals\n");
     }

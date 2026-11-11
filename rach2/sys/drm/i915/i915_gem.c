@@ -118,20 +118,28 @@ static int fence_busy(struct dma_fence *f)
     return f && !dma_fence_is_signaled(f);
 }
 
-int i915_gem_object_is_active(const struct drm_i915_gem_object *obj)
+int i915_gem_object_is_active_locked(const struct drm_i915_gem_object *obj)
 {
     struct dma_resv *r = obj->base.resv;
     uint32_t i;
+    int busy;
 
-    if (fence_busy(r->write)) {
-        return 1;
+    lockdep_assert_held(&r->lock);
+    busy = fence_busy(r->write);
+    for (i = 0; !busy && i < r->nreads; i++) {
+        busy = fence_busy(r->reads[i]);
     }
-    for (i = 0; i < r->nreads; i++) {
-        if (fence_busy(r->reads[i])) {
-            return 1;
-        }
-    }
-    return 0;
+    return busy;
+}
+
+int i915_gem_object_is_active(const struct drm_i915_gem_object *obj)
+{
+    int busy;
+
+    dma_resv_lock(obj->base.resv);
+    busy = i915_gem_object_is_active_locked(obj);
+    dma_resv_unlock(obj->base.resv);
+    return busy;
 }
 
 /**
@@ -143,14 +151,16 @@ int i915_gem_object_is_active(const struct drm_i915_gem_object *obj)
  * a merge or a timeline is waited for alone, in one walk that holds the
  * point it is at, so that the merge, which a wait would arm, asks for no
  * signal, and a leaf that signals meanwhile moves no other out of the
- * walk. 0, -ETIME or -EINTR; sleeps.
+ * walk. Each sleep lets `i915`'s GEM lock go. 0, -ETIME or -EINTR.
  */
-static int32_t object_fence_wait(struct dma_fence *f, uint32_t flags, int64_t deadline)
+static int32_t object_fence_wait(struct drm_i915_private *i915, struct dma_fence *f, uint32_t flags,
+                                 int64_t deadline)
 {
     struct dma_fence_unwrap u;
     struct dma_fence *leaf;
     int64_t now, timeout;
     int32_t err = 0;
+    int dropped;
 
     for (leaf = dma_fence_unwrap_first(f, &u); leaf && err == 0; leaf = dma_fence_unwrap_next(&u)) {
         if (dma_fence_is_signaled(leaf)) {
@@ -164,7 +174,9 @@ static int32_t object_fence_wait(struct dma_fence *f, uint32_t flags, int64_t de
             }
             err = i915_request_wait((struct i915_request *)leaf, flags, timeout);
         } else {
+            dropped = i915_gem_lock_drop(i915);
             err = dma_fence_wait_until(leaf, (flags & I915_WAIT_INTERRUPTIBLE) != 0, deadline);
+            i915_gem_lock_retake(i915, dropped);
         }
     }
     dma_fence_unwrap_end(&u);
@@ -194,37 +206,38 @@ static void object_fence_arm(struct dma_fence *f)
 
 int32_t i915_gem_object_wait_idle(struct drm_i915_gem_object *obj, int intr)
 {
-    struct dma_resv *r = obj->base.resv;
-    struct dma_fence *f;
-    uint32_t i;
+    struct dma_fence **fences, *f;
+    uint32_t i, n;
     int32_t err;
 
     /* Every fence busy now is armed before any wait, as Linux's unbind; one
      * added while the wait sleeps is waited for but not armed. */
-    if (fence_busy(r->write)) {
-        object_fence_arm(r->write);
+    if (dma_resv_get_fences(obj->base.resv, 1, &fences, &n) < 0) {
+        return -ENOMEM;
     }
-    for (i = 0; i < r->nreads; i++) {
-        if (fence_busy(r->reads[i])) {
-            object_fence_arm(r->reads[i]);
+    for (i = 0; i < n; i++) {
+        if (fence_busy(fences[i])) {
+            object_fence_arm(fences[i]);
         }
     }
+    dma_resv_put_fences(fences, n);
     for (;;) {
-        f = fence_busy(r->write) ? r->write : 0;
-        for (i = 0; !f && i < r->nreads; i++) {
-            if (fence_busy(r->reads[i])) {
-                f = r->reads[i];
+        /* A snapshot with references of its own, since the reservation may
+         * change while the wait sleeps. */
+        if (dma_resv_get_fences(obj->base.resv, 1, &fences, &n) < 0) {
+            return -ENOMEM;
+        }
+        f = 0;
+        for (i = 0; !f && i < n; i++) {
+            if (fence_busy(fences[i])) {
+                f = fences[i];
             }
         }
-        if (!f) {
-            return 0;
-        }
-        /* A reference of its own, since the reservation may change while
-         * the wait sleeps. */
-        (void)dma_fence_get(f);
-        err = object_fence_wait(f, intr ? I915_WAIT_INTERRUPTIBLE : 0u, -1);
-        dma_fence_put(f);
-        if (err == -EINTR) {
+        err = f ? object_fence_wait(to_i915(obj->base.dev), f, intr ? I915_WAIT_INTERRUPTIBLE : 0u,
+                                    -1)
+                : 0;
+        dma_resv_put_fences(fences, n);
+        if (!f || err == -EINTR) {
             return err;
         }
     }
@@ -312,7 +325,8 @@ void i915_gem_object_set_cache_coherency(struct drm_i915_gem_object *obj, int le
 static void i915_gem_object_free(struct drm_gem_object *base)
 {
     struct drm_i915_gem_object *obj = (struct drm_i915_gem_object *)base;
-    int i;
+    struct drm_i915_private *i915 = to_i915(base->dev);
+    int i, taken = i915_gem_lock(i915);
 
     (void)i915_gem_object_unbind(obj);
     if (i915_gem_object_is_userptr(obj)) {
@@ -324,16 +338,24 @@ static void i915_gem_object_free(struct drm_gem_object *base)
     unpin(obj->pin);
     kfree(obj->frames);
     shmem_free(&obj->pages);
+    i915_gem_unlock(i915, taken);
     kfree(obj);
 }
 
 /** The `page` of an object for another device's import: its frame. */
 static uintptr_t i915_gem_object_page_for_import(struct drm_gem_object *base, uint32_t pgoff)
 {
+    struct drm_i915_private *i915 = to_i915(base->dev);
+    uintptr_t frame;
+    int taken;
+
     if (base->dev->unplugged) {
         return 0;
     }
-    return i915_gem_object_frame((struct drm_i915_gem_object *)base, pgoff);
+    taken = i915_gem_lock(i915);
+    frame = i915_gem_object_frame((struct drm_i915_gem_object *)base, pgoff);
+    i915_gem_unlock(i915, taken);
+    return frame;
 }
 
 const struct drm_gem_object_funcs i915_gem_object_funcs = {i915_gem_object_free,
@@ -426,69 +448,53 @@ static void fence_boost(struct dma_fence *f)
 }
 
 /**
- * Boost the GT's clock for every request of the object's reservation that
- * the chip has not begun, its writes and with `all` its reads too, before
- * a wait, as Linux's i915_gem_object_boost: all of them first, so that the
- * boost does not hang on the order the wait meets them.
+ * Boost the GT's clock for every request of `n` fences, a snapshot of an
+ * object's reservation, that the chip has not begun, before a wait, as
+ * Linux's i915_gem_object_boost: all of them first, so that the boost does
+ * not hang on the order the wait meets them.
  */
-static void object_boost(struct drm_i915_gem_object *obj, int all)
+static void object_boost(struct dma_fence **fences, uint32_t n)
 {
-    struct dma_resv *r = obj->base.resv;
     uint32_t i;
 
-    fence_boost(r->write);
-    for (i = 0; all && i < r->nreads; i++) {
-        fence_boost(r->reads[i]);
+    for (i = 0; i < n; i++) {
+        fence_boost(fences[i]);
     }
 }
 
 int32_t i915_gem_object_wait(struct drm_i915_gem_object *obj, int all, int64_t timeout_ns)
 {
-    struct dma_resv *r = obj->base.resv;
     struct dma_fence **fences;
     int64_t deadline = -1;
-    uint32_t i, n = all ? r->nreads : 0;
+    uint32_t i, n;
     int32_t err = 0;
 
-    object_boost(obj, all);
+    /* The fences of now, each with a reference, since the reservation may
+     * change while a wait sleeps, as Linux's iterator walks a snapshot. */
+    if (dma_resv_get_fences(obj->base.resv, all, &fences, &n) < 0) {
+        return -ENOMEM;
+    }
+    object_boost(fences, n);
     if (timeout_ns == 0) {
         /* A test, which asks for no signal. */
-        if (fence_busy(r->write)) {
-            return -ETIME;
+        for (i = 0; i < n && !err; i++) {
+            err = fence_busy(fences[i]) ? -ETIME : 0;
         }
-        for (i = 0; i < n; i++) {
-            if (fence_busy(r->reads[i])) {
-                return -ETIME;
-            }
-        }
-        return 0;
+        dma_resv_put_fences(fences, n);
+        return err;
     }
     if (timeout_ns > 0) {
         int64_t now = dma_fence_now();
 
         deadline = timeout_ns > (int64_t)0x7fffffffffffffffLL - now ? -1 : now + timeout_ns;
     }
-    /* The fences of now, each with a reference, since the reservation may
-     * change while a wait sleeps, as Linux's iterator walks a snapshot. */
-    if (n == 0xffffffffu || ((size_t)n + 1) * sizeof(*fences) / sizeof(*fences) != (size_t)n + 1) {
-        return -ENOMEM;
-    }
-    fences = (struct dma_fence **)kmalloc(((size_t)n + 1) * sizeof(*fences));
-    if (!fences) {
-        return -ENOMEM;
-    }
-    fences[0] = dma_fence_get(r->write);
-    for (i = 0; i < n; i++) {
-        fences[i + 1] = dma_fence_get(r->reads[i]);
-    }
-    for (i = 0; i <= n; i++) {
-        if (err == 0 && fences[i]) {
-            err = object_fence_wait(fences[i], I915_WAIT_INTERRUPTIBLE | I915_WAIT_PRIORITY,
-                                    deadline);
+    for (i = 0; i < n && err == 0; i++) {
+        if (fences[i]) {
+            err = object_fence_wait(to_i915(obj->base.dev), fences[i],
+                                    I915_WAIT_INTERRUPTIBLE | I915_WAIT_PRIORITY, deadline);
         }
-        dma_fence_put(fences[i]);
     }
-    kfree(fences);
+    dma_resv_put_fences(fences, n);
     return err;
 }
 
@@ -1435,19 +1441,26 @@ int32_t i915_gem_busy_ioctl(struct drm_device *dev, void *data, struct drm_file 
 {
     struct drm_i915_gem_busy *args = (struct drm_i915_gem_busy *)data;
     struct drm_i915_gem_object *obj = i915_gem_object_lookup(file, args->handle);
-    struct dma_resv *resv;
-    uint32_t i;
+    struct dma_fence **fences;
+    uint32_t i, n;
+    int32_t err;
 
     (void)dev;
     if (!obj) {
         return -ENOENT;
     }
-    resv = obj->base.resv;
-    args->busy = busy_check(resv->write, busy_write_id);
-    for (i = 0; i < resv->nreads; i++) {
-        args->busy |= busy_check(resv->reads[i], busy_read_flag);
-    }
+    /* A snapshot under the reservation's lock, where Linux's iterator reads
+     * without one and restarts (i915_gem_busy.c:145-157). */
+    err = dma_resv_get_fences(obj->base.resv, 1, &fences, &n);
     i915_gem_object_put(obj);
+    if (err < 0) {
+        return err;
+    }
+    args->busy = busy_check(fences[0], busy_write_id);
+    for (i = 1; i < n; i++) {
+        args->busy |= busy_check(fences[i], busy_read_flag);
+    }
+    dma_resv_put_fences(fences, n);
     return 0;
 }
 
@@ -1531,9 +1544,10 @@ int32_t i915_gem_get_aperture_ioctl(struct drm_device *dev, void *data, struct d
 int32_t i915_gem_madvise_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
     struct drm_i915_gem_madvise *args = (struct drm_i915_gem_madvise *)data;
+    struct drm_i915_private *i915 = to_i915(dev);
     struct drm_i915_gem_object *obj;
+    int purge, taken;
 
-    (void)dev;
     if (args->madv != I915_MADV_DONTNEED && args->madv != I915_MADV_WILLNEED) {
         return -EINVAL;
     }
@@ -1541,12 +1555,24 @@ int32_t i915_gem_madvise_ioctl(struct drm_device *dev, void *data, struct drm_fi
     if (!obj) {
         return -ENOENT;
     }
+    /* Under the object's lock, its reservation's, as Linux's
+     * (i915_gem.c:1049-1099), which the shrinker tries before it purges. */
+    dma_resv_lock(obj->base.resv);
     if (obj->madv != __I915_MADV_PURGED) {
         obj->madv = (uint8_t)args->madv;
     }
-    if (obj->madv == I915_MADV_DONTNEED && !i915_gem_object_has_pages(obj) && !obj->base.import &&
-        !i915_gem_object_is_userptr(obj)) {
-        (void)i915_gem_object_truncate(obj);
+    purge = obj->madv == I915_MADV_DONTNEED && !i915_gem_object_has_pages(obj) &&
+            !obj->base.import && !i915_gem_object_is_userptr(obj);
+    dma_resv_unlock(obj->base.resv);
+    if (purge) {
+        /* The purge changes the pages, the GEM lock's, which comes first. */
+        taken = i915_gem_lock(i915);
+        dma_resv_lock(obj->base.resv);
+        if (obj->madv == I915_MADV_DONTNEED && !i915_gem_object_has_pages(obj)) {
+            (void)i915_gem_object_truncate(obj);
+        }
+        dma_resv_unlock(obj->base.resv);
+        i915_gem_unlock(i915, taken);
     }
     args->retained = obj->madv != __I915_MADV_PURGED;
     i915_gem_object_put(obj);
@@ -1557,14 +1583,64 @@ int32_t i915_gem_madvise_ioctl(struct drm_device *dev, void *data, struct drm_fi
  * The device's buffers
  */
 
+int i915_gem_lock(struct drm_i915_private *i915)
+{
+    if (mutex_held(&i915->gem.lock)) {
+        return 0;
+    }
+    mutex_lock(&i915->gem.lock);
+    return 1;
+}
+
+/**
+ * Let go of the GEM lock, which the caller holds, after the invalidations
+ * that found it held, and look once more after: an invalidation that came
+ * after the flush and found it still held left its object for whoever
+ * takes it next, which may be no one but this holder.
+ */
+static void gem_release(struct drm_i915_private *i915)
+{
+    i915_gem_userptr_flush(i915);
+    mutex_unlock(&i915->gem.lock);
+    if (i915->gem.userptr_pending && mutex_trylock(&i915->gem.lock)) {
+        i915_gem_userptr_flush(i915);
+        mutex_unlock(&i915->gem.lock);
+    }
+}
+
+void i915_gem_unlock(struct drm_i915_private *i915, int taken)
+{
+    if (taken) {
+        gem_release(i915);
+    }
+}
+
+int i915_gem_lock_drop(struct drm_i915_private *i915)
+{
+    if (!mutex_held(&i915->gem.lock)) {
+        return 0;
+    }
+    gem_release(i915);
+    return 1;
+}
+
+void i915_gem_lock_retake(struct drm_i915_private *i915, int dropped)
+{
+    if (dropped) {
+        mutex_lock(&i915->gem.lock);
+    }
+}
+
 void i915_gem_unplug(struct drm_i915_private *i915)
 {
     struct drm_gem_object *base;
     int i;
 
     /* Every program's mapping goes, so that its next access faults to a
-     * device that refuses it. */
-    for (base = i915->drm.objects; base; base = base->dev_next) {
+     * device that refuses it. The walk holds each object it is at, since
+     * a last put on another processor takes one off the list. */
+    for (base = drm_gem_object_next(&i915->drm, 0); base;
+         base = drm_gem_object_next(&i915->drm, base)) {
         struct drm_i915_gem_object *obj = (struct drm_i915_gem_object *)base;
 
         if (base->funcs != &i915_gem_object_funcs) {
@@ -1576,50 +1652,94 @@ void i915_gem_unplug(struct drm_i915_private *i915)
     }
 }
 
+/**
+ * A row of the table below under the GEM lock: `fn##_gem` runs the row's
+ * handler `fn` with the lock held, which each wait inside lets go for its
+ * sleep (i915.h's Locking rule).
+ */
+#define I915_GEM_LOCKED(fn)                                                            \
+    static int32_t fn##_gem(struct drm_device *dev, void *data, struct drm_file *file) \
+    {                                                                                  \
+        int taken = i915_gem_lock(to_i915(dev));                                       \
+        int32_t rc = fn(dev, data, file);                                              \
+                                                                                       \
+        i915_gem_unlock(to_i915(dev), taken);                                          \
+        return rc;                                                                     \
+    }
+
+I915_GEM_LOCKED(i915_gem_create_ioctl)
+I915_GEM_LOCKED(i915_gem_create_ext_ioctl)
+I915_GEM_LOCKED(i915_gem_pread_ioctl)
+I915_GEM_LOCKED(i915_gem_pwrite_ioctl)
+I915_GEM_LOCKED(i915_gem_mmap_ioctl)
+I915_GEM_LOCKED(i915_gem_mmap_offset_ioctl)
+I915_GEM_LOCKED(i915_gem_set_domain_ioctl)
+I915_GEM_LOCKED(i915_gem_sw_finish_ioctl)
+I915_GEM_LOCKED(i915_gem_set_tiling_ioctl)
+I915_GEM_LOCKED(i915_gem_get_tiling_ioctl)
+I915_GEM_LOCKED(i915_gem_wait_ioctl)
+I915_GEM_LOCKED(i915_gem_set_caching_ioctl)
+I915_GEM_LOCKED(i915_gem_get_caching_ioctl)
+I915_GEM_LOCKED(i915_gem_get_aperture_ioctl)
+I915_GEM_LOCKED(i915_gem_userptr_ioctl)
+
 /* The driver's own ioctls, with Linux's flags: a render node may call each
- * but GET_PIPE_FROM_CRTC_ID. */
+ * but GET_PIPE_FROM_CRTC_ID, which looks the CRTC up under the mode lock.
+ * Each row of the buffers runs under the GEM lock; EXECBUFFER2 takes it
+ * itself between its copies, and THROTTLE, which takes a file's context
+ * list lock, which comes before it, and waits, takes none. DRM_UNLOCKED
+ * marks the rows that need no big lock: BUSY, under the handle table's and
+ * the reservation's locks, MADVISE, under the reservation's and then the
+ * GEM lock, EXECBUFFER2, and the context calls, under the file's context
+ * list lock. The device's DRIVER_KMS_UNLOCKED lets the core's ATOMIC,
+ * PAGE_FLIP and WAIT_VBLANK run without the big lock too: the display's
+ * hooks take the mode lock's state, the GEM lock for the framebuffers'
+ * bindings and pages, the event and vblank locks for what the interrupt
+ * shares, and the backlight's lock. */
 const struct drm_ioctl_desc i915_ioctls[I915_NUM_IOCTLS] = {
     {DRM_IOCTL_I915_GETPARAM, DRM_RENDER_ALLOW, i915_getparam_ioctl, "I915_GETPARAM"},
-    {DRM_IOCTL_I915_GET_PIPE_FROM_CRTC_ID, 0, intel_get_pipe_from_crtc_id_ioctl,
+    {DRM_IOCTL_I915_GET_PIPE_FROM_CRTC_ID, DRM_MODESET_LOCK, intel_get_pipe_from_crtc_id_ioctl,
      "I915_GET_PIPE_FROM_CRTC_ID"},
-    {DRM_IOCTL_I915_GEM_CONTEXT_CREATE_EXT, DRM_RENDER_ALLOW, i915_gem_context_create_ioctl,
-     "I915_GEM_CONTEXT_CREATE"},
-    {DRM_IOCTL_I915_GEM_CONTEXT_DESTROY, DRM_RENDER_ALLOW, i915_gem_context_destroy_ioctl,
-     "I915_GEM_CONTEXT_DESTROY"},
+    {DRM_IOCTL_I915_GEM_CONTEXT_CREATE_EXT, DRM_RENDER_ALLOW | DRM_UNLOCKED,
+     i915_gem_context_create_ioctl, "I915_GEM_CONTEXT_CREATE"},
+    {DRM_IOCTL_I915_GEM_CONTEXT_DESTROY, DRM_RENDER_ALLOW | DRM_UNLOCKED,
+     i915_gem_context_destroy_ioctl, "I915_GEM_CONTEXT_DESTROY"},
     {DRM_IOCTL_I915_REG_READ, DRM_RENDER_ALLOW, i915_reg_read_ioctl, "I915_REG_READ"},
-    {DRM_IOCTL_I915_GET_RESET_STATS, DRM_RENDER_ALLOW, i915_gem_context_reset_stats_ioctl,
-     "I915_GET_RESET_STATS"},
-    {DRM_IOCTL_I915_GEM_CONTEXT_GETPARAM, DRM_RENDER_ALLOW, i915_gem_context_getparam_ioctl,
-     "I915_GEM_CONTEXT_GETPARAM"},
-    {DRM_IOCTL_I915_GEM_CONTEXT_SETPARAM, DRM_RENDER_ALLOW, i915_gem_context_setparam_ioctl,
-     "I915_GEM_CONTEXT_SETPARAM"},
+    {DRM_IOCTL_I915_GET_RESET_STATS, DRM_RENDER_ALLOW | DRM_UNLOCKED,
+     i915_gem_context_reset_stats_ioctl, "I915_GET_RESET_STATS"},
+    {DRM_IOCTL_I915_GEM_CONTEXT_GETPARAM, DRM_RENDER_ALLOW | DRM_UNLOCKED,
+     i915_gem_context_getparam_ioctl, "I915_GEM_CONTEXT_GETPARAM"},
+    {DRM_IOCTL_I915_GEM_CONTEXT_SETPARAM, DRM_RENDER_ALLOW | DRM_UNLOCKED,
+     i915_gem_context_setparam_ioctl, "I915_GEM_CONTEXT_SETPARAM"},
     {DRM_IOCTL_I915_QUERY, DRM_RENDER_ALLOW, i915_query_ioctl, "I915_QUERY"},
-    {DRM_IOCTL_I915_GEM_BUSY, DRM_RENDER_ALLOW, i915_gem_busy_ioctl, "I915_GEM_BUSY"},
+    {DRM_IOCTL_I915_GEM_BUSY, DRM_RENDER_ALLOW | DRM_UNLOCKED, i915_gem_busy_ioctl,
+     "I915_GEM_BUSY"},
     {DRM_IOCTL_I915_GEM_THROTTLE, DRM_RENDER_ALLOW, i915_gem_throttle_ioctl, "I915_GEM_THROTTLE"},
-    {DRM_IOCTL_I915_GEM_CREATE, DRM_RENDER_ALLOW, i915_gem_create_ioctl, "I915_GEM_CREATE"},
-    {DRM_IOCTL_I915_GEM_CREATE_EXT, DRM_RENDER_ALLOW, i915_gem_create_ext_ioctl,
+    {DRM_IOCTL_I915_GEM_CREATE, DRM_RENDER_ALLOW, i915_gem_create_ioctl_gem, "I915_GEM_CREATE"},
+    {DRM_IOCTL_I915_GEM_CREATE_EXT, DRM_RENDER_ALLOW, i915_gem_create_ext_ioctl_gem,
      "I915_GEM_CREATE_EXT"},
-    {DRM_IOCTL_I915_GEM_PREAD, DRM_RENDER_ALLOW, i915_gem_pread_ioctl, "I915_GEM_PREAD"},
-    {DRM_IOCTL_I915_GEM_PWRITE, DRM_RENDER_ALLOW, i915_gem_pwrite_ioctl, "I915_GEM_PWRITE"},
-    {DRM_IOCTL_I915_GEM_MMAP, DRM_RENDER_ALLOW, i915_gem_mmap_ioctl, "I915_GEM_MMAP"},
-    {DRM_IOCTL_I915_GEM_MMAP_OFFSET, DRM_RENDER_ALLOW, i915_gem_mmap_offset_ioctl,
+    {DRM_IOCTL_I915_GEM_PREAD, DRM_RENDER_ALLOW, i915_gem_pread_ioctl_gem, "I915_GEM_PREAD"},
+    {DRM_IOCTL_I915_GEM_PWRITE, DRM_RENDER_ALLOW, i915_gem_pwrite_ioctl_gem, "I915_GEM_PWRITE"},
+    {DRM_IOCTL_I915_GEM_MMAP, DRM_RENDER_ALLOW, i915_gem_mmap_ioctl_gem, "I915_GEM_MMAP"},
+    {DRM_IOCTL_I915_GEM_MMAP_OFFSET, DRM_RENDER_ALLOW, i915_gem_mmap_offset_ioctl_gem,
      "I915_GEM_MMAP_OFFSET"},
-    {DRM_IOCTL_I915_GEM_SET_DOMAIN, DRM_RENDER_ALLOW, i915_gem_set_domain_ioctl,
+    {DRM_IOCTL_I915_GEM_SET_DOMAIN, DRM_RENDER_ALLOW, i915_gem_set_domain_ioctl_gem,
      "I915_GEM_SET_DOMAIN"},
-    {DRM_IOCTL_I915_GEM_SW_FINISH, DRM_RENDER_ALLOW, i915_gem_sw_finish_ioctl,
+    {DRM_IOCTL_I915_GEM_SW_FINISH, DRM_RENDER_ALLOW, i915_gem_sw_finish_ioctl_gem,
      "I915_GEM_SW_FINISH"},
-    {DRM_IOCTL_I915_GEM_EXECBUFFER2_WR, DRM_RENDER_ALLOW, i915_gem_execbuffer2_ioctl,
+    {DRM_IOCTL_I915_GEM_EXECBUFFER2_WR, DRM_RENDER_ALLOW | DRM_UNLOCKED, i915_gem_execbuffer2_ioctl,
      "I915_GEM_EXECBUFFER2"},
-    {DRM_IOCTL_I915_GEM_SET_TILING, DRM_RENDER_ALLOW, i915_gem_set_tiling_ioctl,
+    {DRM_IOCTL_I915_GEM_SET_TILING, DRM_RENDER_ALLOW, i915_gem_set_tiling_ioctl_gem,
      "I915_GEM_SET_TILING"},
-    {DRM_IOCTL_I915_GEM_GET_TILING, DRM_RENDER_ALLOW, i915_gem_get_tiling_ioctl,
+    {DRM_IOCTL_I915_GEM_GET_TILING, DRM_RENDER_ALLOW, i915_gem_get_tiling_ioctl_gem,
      "I915_GEM_GET_TILING"},
-    {DRM_IOCTL_I915_GEM_WAIT, DRM_RENDER_ALLOW, i915_gem_wait_ioctl, "I915_GEM_WAIT"},
-    {DRM_IOCTL_I915_GEM_SET_CACHING, DRM_RENDER_ALLOW, i915_gem_set_caching_ioctl,
+    {DRM_IOCTL_I915_GEM_WAIT, DRM_RENDER_ALLOW, i915_gem_wait_ioctl_gem, "I915_GEM_WAIT"},
+    {DRM_IOCTL_I915_GEM_SET_CACHING, DRM_RENDER_ALLOW, i915_gem_set_caching_ioctl_gem,
      "I915_GEM_SET_CACHING"},
-    {DRM_IOCTL_I915_GEM_GET_CACHING, DRM_RENDER_ALLOW, i915_gem_get_caching_ioctl,
+    {DRM_IOCTL_I915_GEM_GET_CACHING, DRM_RENDER_ALLOW, i915_gem_get_caching_ioctl_gem,
      "I915_GEM_GET_CACHING"},
-    {DRM_IOCTL_I915_GEM_GET_APERTURE, DRM_RENDER_ALLOW, i915_gem_get_aperture_ioctl,
+    {DRM_IOCTL_I915_GEM_GET_APERTURE, DRM_RENDER_ALLOW, i915_gem_get_aperture_ioctl_gem,
      "I915_GEM_GET_APERTURE"},
-    {DRM_IOCTL_I915_GEM_MADVISE, DRM_RENDER_ALLOW, i915_gem_madvise_ioctl, "I915_GEM_MADVISE"},
-    {DRM_IOCTL_I915_GEM_USERPTR, DRM_RENDER_ALLOW, i915_gem_userptr_ioctl, "I915_GEM_USERPTR"}};
+    {DRM_IOCTL_I915_GEM_MADVISE, DRM_RENDER_ALLOW | DRM_UNLOCKED, i915_gem_madvise_ioctl,
+     "I915_GEM_MADVISE"},
+    {DRM_IOCTL_I915_GEM_USERPTR, DRM_RENDER_ALLOW, i915_gem_userptr_ioctl_gem, "I915_GEM_USERPTR"}};

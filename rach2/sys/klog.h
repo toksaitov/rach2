@@ -36,8 +36,12 @@
 /** The longest record the logger will build, including its newline. */
 #define KLOG_RECORD_MAX 256
 
-/** The machine's own copy of its records. */
-#define KLOG_RING_SIZE 16384
+/**
+ * The machine's own copy of its records: 128 KiB, Linux's default, which is
+ * `__LOG_BUF_LEN` (kernel/printk/printk.c:498), 1 << CONFIG_LOG_BUF_SHIFT,
+ * whose default is 17 (init/Kconfig:768). The ring is in .bss.
+ */
+#define KLOG_RING_SIZE 131072
 
 /**
  * Format and deliver one record.
@@ -62,19 +66,56 @@
  * processor may add to, until a processor that holds the big lock makes a
  * record, writes the console or takes the boot processor's tick, or the
  * panic writes its own (`klog_flush`); it then reaches the ring and the
- * destinations, in the order the records were made.
+ * destinations, in the order the records were made. A record made inside
+ * a delivery or a console write while kept records wait for room in the
+ * full queue is kept behind them, so the ring has it after them too.
  */
 void klog(int level, const char *subsystem, const char *format, ...);
 
 /** As `klog`, with the arguments in `ap`, which the call consumes. */
 void klog_v(int level, const char *subsystem, const char *format, va_list ap);
 
+/* Where `klog_report_begin` sends a report: the ring and the serial port,
+ * under the report lock; the ring alone, when this processor holds that
+ * lock already, as an interrupt of its holder does, or another held it
+ * longer than KLOG_REPORT_WAIT_MS; or both without the lock, in a panic
+ * that found it held by a processor it stopped. */
+#define KLOG_REPORT_LOCKED 1
+#define KLOG_REPORT_RING   0
+#define KLOG_REPORT_PANIC  2
+
+/* The longest a report waits for the report lock. The holder may be an
+ * ordinary record's write to a port that has stopped draining, or may be
+ * interrupted by a handler that spins on a spinlock the reporter holds. */
+#define KLOG_REPORT_WAIT_MS 100UL
+
+/**
+ * Begin a report that cannot wait for the big lock, the lock-order
+ * checker's: its records go to the ring at once, from any processor, and
+ * to the serial port under klog's report lock, which a record written to
+ * the port by the usual path also holds, so that two never mix. The screen
+ * and netconsole, which the big lock guards, do not have them, nor
+ * ramoops's console. Interrupts are off from the begin to
+ * `klog_report_end`, and the caller takes no lock in between. Returns a
+ * KLOG_REPORT_ number, for `klog_report` and `klog_report_end`.
+ */
+int klog_report_begin(void);
+
+/** Make one record of the report `how` began, as `klog` makes one. */
+void klog_report(int how, int level, const char *subsystem, const char *format, ...);
+
+/** End the report `how` began. */
+void klog_report_end(int how);
+
 /** Write out the records kept for later, oldest first, when this processor
  * may (`smp_serialized`) and no other is writing them out for it
- * (`klog_flush_stuck`); inside another record's delivery or a console
- * write, put them in the ring and the queue, ahead of what comes next, for
- * that delivery or write to write out when it ends. Nothing otherwise, and
- * nothing, with no interrupt bracket, while none is kept. */
+ * (`klog_flush_stuck`), after the records a delivery the panic stopped left
+ * in the queue; inside another record's delivery or a console write, put
+ * them in the ring and the queue, ahead of what comes next, for that
+ * delivery or write to write out when it ends; outside them, send
+ * netconsole the records `klog_flush_stuck` held for it. Nothing
+ * otherwise, and nothing, with no interrupt bracket, while none is kept
+ * or held. */
 void klog_flush(void);
 
 /** Whether records are kept for later. */
@@ -86,11 +127,22 @@ int klog_kept(void);
  * reported the holder of the big lock locked up: that one would never
  * write them, and Linux writes such a report from the processor that found
  * it. One processor at a time does, and only the records kept when it
- * began. It does nothing while the holder is writing klog's state itself,
- * a record or the end of a console write, and the holder, should it come
- * back meanwhile, keeps its records for later until this is done.
+ * began. They go to the ring, the screen and the serial port; netconsole's
+ * share is held for the next processor that may write klog's state, or the
+ * panic, since netconsole and the network stack below it have no guard but
+ * the big lock. It does nothing while the holder is writing klog's state
+ * itself, a record, a console write or a console byte, and the holder,
+ * should it come back meanwhile, keeps its records for later until this is
+ * done and waits for it before a console byte goes out.
  */
 void klog_flush_stuck(void);
+
+/** Whether this processor, which holds the big lock, is writing klog's
+ * state: a record, a console write or a console byte. A switch to another
+ * thread waits until it is not (`sched_preempt`), since the count would
+ * stay up while the big lock passes on and `klog_flush_stuck` would stand
+ * back for good. */
+int klog_inside(void);
 
 /**
  * Read out of the ring, oldest byte first.
@@ -134,7 +186,9 @@ uint32_t klog_read_from(char *buf, uint32_t cap, uint32_t *at);
  * queue: for a machine about to stop, which never comes back to write the
  * queue out. It clears what would have queued the record, which is safe only
  * because nothing after it is expected to run. The records it leaves in the
- * queue go out ahead of the next record, which a full queue cannot drop.
+ * queue go out ahead of the kept records and the next record, which a full
+ * queue cannot drop; one a delivery was part way through goes out again
+ * whole.
  */
 void klog_deliver_directly(void);
 
@@ -191,9 +245,9 @@ void console_putc_raw(char c);
  * Bracket a console write, a program's chunk or a call of the debug shell's
  * `console_puts` or `console_printf`: a record raised inside it waits for its
  * end, and the screen's cursor is held and placed once at the end. Brackets
- * nest, and no writer sleeps inside one. `console_write_end` writes out the
- * records that waited, unless a record's delivery is in progress, which
- * writes them itself.
+ * nest, and no writer sleeps inside one, nor is switched out
+ * (`klog_inside`). `console_write_end` writes out the records that waited,
+ * unless a record's delivery is in progress, which writes them itself.
  */
 void console_write_begin(void);
 void console_write_end(void);

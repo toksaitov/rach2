@@ -25,14 +25,32 @@
  * wait, goes through the device's `hw` (i915_hw.h); no file maps BAR 0 or
  * reads it by address but i915_hw.c.
  *
- * Locking. Everything runs under the big kernel lock, as sys/drm/drm.h
- * says, and the order of the locks the driver takes beside it, outermost
- * first, is: a DRM device's `commit_lock`; the driver's locks of objects
- * and contexts, which may sleep; then the locks of the hardware, which a
- * holder takes with interrupts off and never sleeps under: the frequency
- * lock of RPS, then the register lock of forcewake and of any read and
- * write the interrupt handler also makes, then the interrupt mask's. The
- * interrupt handler takes only the hardware locks.
+ * Locking. The GEM lock, `gem.lock`, a sleeping lock as Linux's
+ * struct_mutex was before its object locks, keeps the buffer state whole
+ * on every processor: the GTT and its bindings, the PPGTT, the fence
+ * registers, each object's pages, domains, tiling and bindings, eviction,
+ * and the build of a request from its creation to its add. Whatever
+ * reaches that state takes it with `i915_gem_lock`, which a holder may
+ * call again, as an object's free, a fault on a mapping or reclaim does
+ * under a call that holds it: each ioctl row of a buffer, EXECBUFFER2
+ * between its copies in and out, an object's free and hooks, a fault,
+ * the display's pins, retirement, the heartbeat and reset, debugfs, a
+ * file's release and the unplug. Every wait for the GPU or a fence lets
+ * it go for the sleep and takes it back after (`i915_gem_lock_drop`), as
+ * the big lock goes at every sleep, so that what a waiter waits on, the
+ * heartbeat's reset among it, never waits on the waiter; so a holder looks
+ * again after a wait at what it found before. Reclaim only tries it, as
+ * Linux's shrinker only tries its locks. The engines' requests, rings and
+ * submission are under each engine's `lock`.
+ *
+ * The order, outermost first: the big lock; a DRM device's `mode_lock`;
+ * a file's context list lock (`struct i915_file`); the GEM lock, then the
+ * other locks of objects, which may sleep; a reservation's lock; then the
+ * locks of the hardware, which a holder takes with interrupts off and never
+ * sleeps under: an engine's lock, the frequency lock of RPS, then the register
+ * lock of forcewake and of any read and write the interrupt handler also
+ * makes, then the interrupt mask's. The interrupt handler takes only the
+ * hardware locks.
  *
  * Interrupts. Every source is masked and its enable cleared before the
  * device's message is enabled, and a source is unmasked only once the
@@ -211,6 +229,7 @@ struct i915_irq {
     uint8_t installed;
     void (*deferred)(struct drm_i915_private *i915);
     void (*deferred_display)(struct drm_i915_private *i915);
+    uint32_t inflight; /* handlers running now, under i915_pci.c's table lock */
 };
 
 /* The engines the driver starts, by index into `engine`: the render,
@@ -405,6 +424,10 @@ struct i915_ppgtt {
  * was awake before its last park, and `unpark_ticks` is the tick of its
  * last unpark, as Linux's intel_gt_get_awake_time adds them.
  */
+/* The buckets of the GT's pool of shadow batches, Linux's
+ * intel_gt_buffer_pool's four. */
+#define I915_POOL_BUCKETS 4
+
 struct i915_gt {
     uint64_t ggtt_top;
     uint64_t ggtt_bottom;
@@ -428,6 +451,11 @@ struct i915_gt {
     uint64_t init_ticks;
     uint64_t awake_ticks;
     uint64_t unpark_ticks;
+    /* The command parser's shadow batches, kept for the next batch their
+     * bucket fits, as Linux's intel_gt_buffer_pool: `pool[n]` lists objects
+     * of 2^n pages, the last bucket those of 8 pages or more, each with the
+     * pool's reference (`i915_gem_pool_trim`). */
+    struct drm_i915_gem_object *pool[I915_POOL_BUCKETS];
 };
 
 /*
@@ -673,6 +701,11 @@ struct i915_userptr {
     struct mmn_range range;
     uint8_t set;
     uint8_t stale;
+    /* On the device's `userptr_pending` while an invalidation that found
+     * the GEM lock held waits for its holder; both under `userptr_lock`.
+     * The free takes it off after the range's unregister. */
+    uint8_t pending;
+    struct drm_i915_gem_object *pending_next;
 };
 
 /*
@@ -718,6 +751,11 @@ struct drm_i915_gem_object {
     uint8_t madv;
     uint8_t dumb;
     struct i915_userptr userptr;
+    /* The next shadow batch of its bucket in the GT's `pool`, and the tick
+     * at which a trim of the pool first found it idle, 0 while it is taken
+     * and until a trim finds it idle; for an object of the pool alone. */
+    struct drm_i915_gem_object *pool_next;
+    uint64_t pool_idle;
 };
 
 /* Whether `obj` was made by GEM_USERPTR. */
@@ -760,6 +798,11 @@ struct i915_shrinker {
  * purged.
  */
 struct i915_gem {
+    struct mutex lock; /* the GEM lock of the Locking rule above */
+    /* The userptr objects whose invalidation waits for the GEM lock's
+     * holder (i915_gem_userptr.c), and the spinlock over that list. */
+    struct drm_i915_gem_object *userptr_pending;
+    struct spinlock userptr_lock;
     struct i915_vma *bound;
     struct i915_vma *lru_head;
     struct i915_vma *lru_tail;
@@ -1323,7 +1366,11 @@ struct intel_crtc {
  * pipe's enable leaves it, `bl_level` is the PWM's level it shows then,
  * `bl_min` the least the VBT allows, `bl_dark` says the class asked for its
  * level 0, which Linux shows by turning the backlight off, and `bl_alt` says
- * the PCH counts the PWM in its coarse steps (LPT_PWM_GRANULARITY). `vga_off`
+ * the PCH counts the PWM in its coarse steps (LPT_PWM_GRANULARITY). The
+ * backlight class calls under a spinlock of its own and a commit under the
+ * mode lock, so `bl_lock`, taken after the class's, keeps the PWM and the
+ * `bl_` fields, as Linux's update_status holds the connection lock
+ * (intel_backlight.c:859-882). `vga_off`
  * says the VGA plane has been turned off. `rps_marks` are the interactive
  * marks of the commits whose flips are pending, one a commit as Linux's
  * state->rps_interactive, each a bit for every pipe that holds it, 0 when
@@ -1352,6 +1399,7 @@ struct intel_display {
     uint32_t underruns;
     uint32_t crc_done;
     struct intelbl bl;
+    struct spinlock bl_lock; /* the bl_ fields and the PWM's registers */
     int bl_index;
     uint8_t bl_want_on;
     uint8_t bl_pipe_on;
@@ -1646,7 +1694,9 @@ int32_t i915_ggtt_insert(struct drm_i915_private *i915, uint64_t offset, const u
                          uint32_t n, int cache);
 
 /** Point the entries of [offset, offset + size) at the scratch page and
- * flush the GTT's cache: 0, or `i915_ggtt_insert`'s errors. */
+ * flush the GTT's cache once, after the last: 0, or `i915_ggtt_insert`'s
+ * errors. A caller that holds the GEM lock and keeps the range reserved
+ * until the clear returns lets the big lock go every 512 entries. */
 int32_t i915_ggtt_clear_range(struct drm_i915_private *i915, uint64_t offset, uint64_t size);
 
 /** The entry that maps the GTT offset `offset`; all ones past the GTT. */
@@ -1708,6 +1758,15 @@ void i915_irq_mask_locked(struct drm_i915_private *i915, int bank, uint32_t bits
  * disables. Any context the handler runs in.
  */
 void i915_irq_handle(struct drm_i915_private *i915);
+
+/**
+ * Wait until no handler of `i915`'s message runs on another processor,
+ * Linux's synchronize_irq: the message's handler runs without the big
+ * lock, so a teardown that clears a hook or frees what a handler reaches
+ * waits here after it has made the handler stop reaching it. Process
+ * context.
+ */
+void i915_irq_sync(struct drm_i915_private *i915);
 
 /* ---- i915_ring.c ---- */
 
@@ -2151,6 +2210,9 @@ int i915_gem_object_has_pages(const struct drm_i915_gem_object *obj);
 /** Whether a fence of the object's reservation has not signalled, so that
  * the GPU may still read or write its pages. */
 int i915_gem_object_is_active(const struct drm_i915_gem_object *obj);
+/** `i915_gem_object_is_active` for a caller that holds the reservation's
+ * lock, as the shrinker does. */
+int i915_gem_object_is_active_locked(const struct drm_i915_gem_object *obj);
 
 /**
  * Wait until no fence of the object's reservation is busy, so that the GPU
@@ -2286,6 +2348,24 @@ int32_t i915_gem_userptr_ioctl(struct drm_device *dev, void *data, struct drm_fi
 /** Revoke every program's mapping of every object, once the device is
  * unplugged, so that the next access faults to a device that refuses it. */
 void i915_gem_unplug(struct drm_i915_private *i915);
+
+/* What `i915_gem_pool_trim` drops: a shadow idle for a second, every idle
+ * one, or every one. */
+#define I915_POOL_STALE 0
+#define I915_POOL_IDLE  1
+#define I915_POOL_ALL   2
+
+/**
+ * Drop the pool's reference to the shadow batches `how` names, as Linux's
+ * pool_free_older_than frees the nodes idle for HZ: a shadow whose only
+ * reference is the pool's is idle, since a request holds its batch's
+ * objects until the chip is past it, and its idle time runs from the first
+ * trim that found it so. The retire pass drops the stale ones, the GT's
+ * park and the shrinker every idle one, and the unplug all. Returns the
+ * frames freed with the idle shadows dropped. A dropped shadow is unbound
+ * and freed as the shrinker's purge unbinds and truncates an object.
+ */
+uint32_t i915_gem_pool_trim(struct drm_i915_private *i915, int how);
 
 /**
  * GEM_EXECBUFFER2 and its _WR form, as Linux 6.12's
@@ -2517,6 +2597,20 @@ uint32_t i915_gem_object_truncate(struct drm_i915_gem_object *obj);
  * Does not sleep. Returns the frames freed.
  */
 uint32_t i915_gem_shrink(struct drm_i915_private *i915, uint32_t want);
+
+/** Take the GEM lock (the Locking rule above) unless the caller holds it
+ * already: whether it was taken, for `i915_gem_unlock`. May sleep. */
+int i915_gem_lock(struct drm_i915_private *i915);
+/** Give back the GEM lock `i915_gem_lock` took when `taken` says so,
+ * after the userptr invalidations that waited for it. */
+void i915_gem_unlock(struct drm_i915_private *i915, int taken);
+/** Revoke the bindings and frames of each userptr object whose
+ * invalidation found the GEM lock held, with the lock held. */
+void i915_gem_userptr_flush(struct drm_i915_private *i915);
+/** Let go of the GEM lock for a wait when the caller holds it: whether it
+ * did, for `i915_gem_lock_retake`, which takes it back after the wait. */
+int i915_gem_lock_drop(struct drm_i915_private *i915);
+void i915_gem_lock_retake(struct drm_i915_private *i915, int dropped);
 
 /* Which objects `i915_gem_shrink_flags` purges, Linux's I915_SHRINK_
  * bits: those with no binding, and those with bindings, undone first. */
@@ -2756,7 +2850,8 @@ void intel_wm_commit(struct intel_crtc *crtc, struct drm_atomic_state *state, in
 
 /** Program `crtc`'s new planes' watermarks once the frame counter passed
  * the commit's frame, Linux's ilk_optimize_watermarks. From the deferred
- * vblank work. */
+ * vblank work, with the DRM device's `event_lock` held, which keeps every
+ * pipe's watermarks and their registers. */
 void intel_wm_vblank(struct intel_crtc *crtc);
 
 /**
@@ -2766,7 +2861,8 @@ void intel_wm_vblank(struct intel_crtc *crtc);
  */
 void intel_wm_sanitize(struct drm_i915_private *i915);
 
-/** Let a pending `intel_wm_vblank` go, with its vblank reference. */
+/** Let a pending `intel_wm_vblank` go, with its vblank reference. Takes
+ * the DRM device's `event_lock`. */
 void intel_wm_cancel(struct intel_crtc *crtc);
 
 /** Unmask the flip done of `crtc` when its new state in `state` is an
@@ -2804,14 +2900,15 @@ int32_t intel_vblank_init(struct drm_i915_private *i915);
  * dropped. */
 void intel_vblank_fini(struct drm_i915_private *i915);
 
-/** Send `crtc`'s held event now, as a pipe that goes off does, with
- * interrupts off; the pipe's interactive mark goes once no flip is
- * pending. */
+/** Send `crtc`'s held event now, as a pipe that goes off does, with the
+ * DRM device's `event_lock` held; the pipe's interactive mark goes once no
+ * flip is pending. */
 void intel_crtc_send_event(struct intel_crtc *crtc);
 
 /** Let `c` go of its commit's interactive mark once its flip is no longer
  * pending, and the mark go with the last of the commit's pipes, as Linux's
- * intel_cleanup_plane_fb after the commit's flips. Interrupts masked. */
+ * intel_cleanup_plane_fb after the commit's flips. The DRM device's
+ * `event_lock` is held. */
 void intel_crtc_interactive_end(struct intel_crtc *c);
 
 /** Turn `c`'s vblanks off as its pipe goes off (`drm_crtc_vblank_off`),
@@ -2850,9 +2947,9 @@ void intel_display_irq_work(struct drm_i915_private *i915);
 void intel_fifo_underrun_reporting(struct intel_crtc *c, int on);
 
 /*
- * The eDP panel's AUX channel (intel_dp_aux.c), under the big lock in
- * process context; a transfer may sleep a millisecond while the channel
- * is busy, and holds the panel's VDD while it runs.
+ * The eDP panel's AUX channel (intel_dp_aux.c), under the device's mode
+ * lock in process context; a transfer may sleep a millisecond while the
+ * channel is busy, and holds the panel's VDD while it runs.
  */
 
 /* A message on the AUX channel, Linux's drm_dp_aux_msg: `request`
@@ -2903,9 +3000,9 @@ void intel_dp_i2c_bus(struct intel_dp *dp, struct intel_i2c_bus *bus);
 
 /*
  * The panel power sequencer (intel_pps.c), Linux's intel_pps.c for one
- * panel on a Lynx Point PCH, under the big lock in process context. The
- * waits sleep: on the panel's timings, at most the 500 ms of a power cycle
- * and the 5 s the sequencer is given to finish.
+ * panel on a Lynx Point PCH, under the device's mode lock in process
+ * context. The waits sleep: on the panel's timings, at most the 500 ms of
+ * a power cycle and the 5 s the sequencer is given to finish.
  */
 
 /** Sleep `ms` milliseconds, as Linux's msleep: on the scheduler's clock in
@@ -3365,7 +3462,8 @@ const char *const *intel_crtc_get_crc_sources(struct drm_crtc *crtc, uint32_t *c
 
 /** Enter `crc`, the CRC the error interrupt read at `crtc`'s CRC done,
  * while a source runs, past the first, as Linux's
- * display_pipe_crc_irq_handler; from the deferred interrupt work. */
+ * display_pipe_crc_irq_handler; from the deferred interrupt work, with the
+ * DRM device's `event_lock` held. */
 void intel_crtc_crc_frame(struct intel_crtc *crtc, uint32_t crc);
 
 /**
@@ -3468,7 +3566,7 @@ struct intel_context {
     struct drm_i915_private *i915;
     struct i915_gem_context *ctx;
     struct i915_engine *engine;
-    uint32_t refs;
+    volatile uint32_t refs; /* changed atomically */
     uint32_t *image;
     uint32_t image_ggtt;
     uint8_t image_valid;
@@ -3507,7 +3605,7 @@ struct intel_context {
 struct i915_gem_context {
     struct drm_i915_private *i915;
     uint32_t id;
-    uint32_t refs;
+    volatile uint32_t refs; /* changed atomically */
     uint32_t flags;
     uint8_t proto;
     uint8_t closed;
@@ -3529,10 +3627,15 @@ struct i915_gem_context {
  * default context 0 first, and `ban_score`, the score of its contexts'
  * hangs and bans, at which it may make no more contexts
  * (I915_CLIENT_SCORE_BANNED). `hang_ticks` is the tick of its last hang,
- * 0 for none.
+ * 0 for none. `lock`, Linux's proto_context_lock, a sleeping lock, keeps
+ * the list, each of its proto contexts' parameters and their finalizing,
+ * so that one caller alone makes a proto context's states; a holder may
+ * fault on a mapping, which takes the GEM lock, so it comes before that.
+ * The hang paths change `ban_score` and `hang_ticks` under the GEM lock.
  */
 struct i915_file {
     struct drm_i915_private *i915;
+    struct mutex lock;
     struct i915_gem_context *contexts;
     uint32_t ban_score;
     uint64_t hang_ticks;

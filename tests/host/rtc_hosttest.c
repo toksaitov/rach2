@@ -262,6 +262,16 @@ void host_tsc_read(uint32_t *lo, uint32_t *hi)
     CHECK(0);
 }
 
+/** No row asks whether the processors' counters agree: a call fails the
+ * test. */
+int tsc_synced(int *cpu, uint64_t *behind)
+{
+    *cpu = 0;
+    *behind = 0;
+    CHECK(0);
+    return 1;
+}
+
 /**
  * Literal answers exercise the same latch and real-time path as file writes.
  * A pending wrap must count once, including at the end of a second; dropping

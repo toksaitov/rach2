@@ -7,6 +7,7 @@
 #include "arch/arch.h"
 #include "arch/uabi.h"
 #include "fpu.h"
+#include "lib/lockdep.h"
 #include "../kernel.h"
 #include "mm/filecache.h"
 #include "mm/kheap.h"
@@ -222,20 +223,18 @@ void kstack_overrun_test(void)
  * that ended through `proc_exit_cleanup` gave up then. A release of an
  * address space may sleep, on a file's close or its writeback, and another
  * reaper may run then, so the caller has first taken `p` off the zombies by
- * marking it `PROC_UNUSED`, which no reaper and no wait takes.
+ * marking it `PROC_UNUSED`, which no reaper and no wait takes. A zombie may
+ * still be switching away on its processor, and its stack is in use until
+ * it has (`sched_wait_off_cpu`), as Linux frees a task only after its last
+ * switch (kernel/exit.c:225-239).
  */
 static void proc_release(process_t *p)
 {
+    sched_wait_off_cpu(p);
     mm_drop(p);
     kstack_free(p->kernel_stack);
     free_process(p);
 }
-
-/*
- * Init process tracking from kernel.c. A real init's death is fatal
- * (panic_init_died); an init exiting under the debug shell returns to it.
- */
-extern volatile uint32_t init_pid;
 
 /* The debug shell's loop, in kernel.c, reached when an init exits while the
  * debug shell is the supervisor (rescue mode or the no-init test image). */
@@ -243,15 +242,10 @@ extern void shell_loop(void);
 
 extern void shell_reset_input(void);
 
-/* Boot-home policy from kernel.c. debug_shell_is_home is true when the debug
- * shell supervises (an exited init returns to it); false when a real /sbin/init
- * is PID 1, in which case its death is fatal (panic_init_died, never returns).
- */
-extern bool debug_shell_is_home;
-
 extern void panic_init_died(uint32_t pid);
 
 static void sig_post_own(process_t *t, int signo, const struct k_siginfo *info);
+static void sig_recalc(void);
 
 /**
  * Each descriptor drops its socket reference and its open file description
@@ -269,12 +263,19 @@ void release_fd_table(fd_table_t *table)
         return;
     }
     for (fdi = 0; fdi < fd_table_cap(table); fdi++) {
-        fd_entry_t *e = &table->entries[fdi];
-        if (e->type == FD_TYPE_NONE) {
+        fd_entry_t *e = fd_slot(table, fdi);
+        uint32_t flags = fd_table_lock(table);
+        int open = e->type != FD_TYPE_NONE && !(e->flags & FD_FLAG_RELEASING);
+
+        if (open) {
+            e->flags |= FD_FLAG_CLOSING | FD_FLAG_RELEASING;
+        }
+        fd_table_unlock(table, flags);
+        if (!open) {
             continue;
         }
         fd_release_backing(e);
-        fd_free(table, fdi);
+        fd_free_after(table, fdi);
     }
 }
 
@@ -282,16 +283,11 @@ void proc_files_put(process_t *p)
 {
     fd_table_t *table = p->fds;
 
-    if (!table) {
-        return;
-    }
-    if (table->refs == 1) {
+    if (table && fd_table_put(p)) {
         release_fd_table(table);
         fd_table_delete(table);
-    } else {
-        table->refs--;
+        p->fds = NULL;
     }
-    p->fds = NULL;
 }
 
 void proc_fs_put(process_t *p)
@@ -313,29 +309,23 @@ void proc_fs_put(process_t *p)
 }
 
 /**
- * Make `table`, whose entries were copied from another table, a table of its
- * own: each descriptor names the same open file description, which gains a
- * reference, so a seek in one process is seen by the other, as POSIX says,
- * and a socket gains one too, so that the two release it independently. A
- * descriptor a sharer closed, which a call of another still holds, is
- * dropped from the copy, and so is a slot a sharer's call has reserved and
- * not yet given a type, whose description the copy has no reference to, as
- * Linux's `dup_fd` frees a descriptor not yet installed.
+ * Make `table`, a copy `fd_table_copy` or `fd_table_take` made of another
+ * table, a table of its own: each descriptor names the same open file
+ * description, which the copy gave a reference, so a seek in one process is
+ * seen by the other, as POSIX says, and a socket gains one here, so that
+ * the two release it independently. The copy has dropped a descriptor a
+ * sharer closed, which a call of another still holds, and a slot a sharer's
+ * call has reserved and not yet published. The sockets are taken under the
+ * big lock, which a socket's release takes (`file_ops_unlocked`), with no
+ * sleep since the copy.
  */
 static void files_take(fd_table_t *table)
 {
     int fdi;
 
     for (fdi = 0; fdi < table->cap; fdi++) {
-        fd_entry_t *e = &table->entries[fdi];
+        fd_entry_t *e = fd_slot(table, fdi);
 
-        if ((e->flags & FD_FLAG_CLOSING) || (e->type == FD_TYPE_NONE && e->ofd != NULL)) {
-            k_memset(e, 0, sizeof(*e));
-        }
-        if (e->type == FD_TYPE_NONE) {
-            continue;
-        }
-        fd_ofd_ref(e->ofd);
         if (e->type == FD_TYPE_SOCKET && e->sock) {
             socket_ref(e->sock);
         }
@@ -344,9 +334,9 @@ static void files_take(fd_table_t *table)
 
 /** A copy of the descriptor table `src` for a child that does not share it,
  * as `files_take` makes one; NULL when the heap has no room. */
-static fd_table_t *files_copy(const fd_table_t *src)
+static fd_table_t *files_copy(fd_table_t *src)
 {
-    fd_table_t *table = fd_table_dup(src);
+    fd_table_t *table = fd_table_copy(src);
 
     if (table) {
         files_take(table);
@@ -450,25 +440,45 @@ static void __attribute__((noreturn)) exit_schedule_away(void)
     }
 }
 
-void proc_group_exit(int32_t code)
+/**
+ * Begin the end of the process `tg` with the wait status `code`, with
+ * interrupts off: mark it ending, clear a stop in effect and a continue its
+ * parent has not collected, and send SIGKILL to every thread, the current
+ * one too only when `self_too` is set, since exit_group and a default
+ * action end the current thread themselves, as Linux 6.12.115's
+ * `complete_signal` and `do_group_exit` replace the group's flags with
+ * SIGNAL_GROUP_EXIT and clear its stop (kernel/signal.c:1044-1056,
+ * 1372-1392; kernel/exit.c:1070-1098). No stop or continue of the process
+ * is reported after it, and `sig_prepare` drops every later signal but a
+ * SIGKILL during a core dump.
+ */
+static void sig_group_end(struct tgroup *tg, int32_t code, int self_too)
 {
-    struct tgroup *tg = current_proc->tg;
     struct k_siginfo info;
-    uint32_t flags = kirq_save();
     process_t *t;
 
-    if (tg->exiting || tg->exec_task) {
-        kirq_restore(flags);
-        return;
-    }
     tg->exiting = 1;
     tg->exit_code = code;
+    tg->stop = 0;
+    if (tg->leader->jc_status == 0xffff) {
+        tg->leader->jc_status = 0;
+    }
     k_memset(&info, 0, sizeof(info));
     info.code = SI_KERNEL;
     for (t = proc_list; t; t = t->next) {
-        if (t->tg == tg && t != current_proc && t->state != PROC_ZOMBIE) {
+        if (t->tg == tg && (self_too || t != current_proc)) {
             sig_post_own(t, SIGKILL, &info);
         }
+    }
+}
+
+void proc_group_exit(int32_t code)
+{
+    struct tgroup *tg = current_proc->tg;
+    uint32_t flags = kirq_save();
+
+    if (!tg->exiting && !tg->exec_task) {
+        sig_group_end(tg, code, 0);
     }
     kirq_restore(flags);
 }
@@ -488,7 +498,10 @@ void proc_group_exit(int32_t code)
  * every process exit would print it, a forked child's included, and the shell
  * already answers the question through `$?`. The line that hands the shell
  * back is printed whenever an init returns to the shell: the probe runner
- * scores probes from that one.
+ * scores probes from that one. The line and the harness use the process's
+ * status when its end has begun, as Linux 6.12.115's do_exit reports for
+ * init (kernel/exit.c:913-915); a signal gives the harness 128 plus its
+ * number, never an exit status of zero.
  *
  * In the harness build an init's exit reports its status to QEMU's
  * isa-debug-exit device at once, before the scheduler can switch to a child
@@ -516,16 +529,18 @@ void proc_group_exit(int32_t code)
  */
 int32_t exit_current(int32_t code)
 {
-    int status = (code >> 8) & 0xFF;
+    int status;
     bool is_init;
     int alone;
     uint32_t exiting_pid;
+    process_t *dead;
 
     if (!current_proc) {
         arch_stop();
         return 0;
     }
     ptrace_event(PTRACE_EVENT_EXIT, (uint32_t)code);
+    signal_exit_begin();
     exiting_pid = current_proc->tgid;
     is_init = (exiting_pid == init_pid && init_pid != 0);
     alone = current_proc->tg->live == 1;
@@ -541,8 +556,16 @@ int32_t exit_current(int32_t code)
     if (!alone) {
         exit_release_session();
     }
+    if (current_proc->tg->exiting) {
+        code = current_proc->tg->exit_code;
+    }
+    status = (code & 0x7F) != 0 ? 128 + (code & 0x7F) : (code >> 8) & 0xFF;
     if (debug_shell_is_home) {
-        klog(KLOG_INFO, "process", "exited with status %d", status);
+        if ((code & 0x7F) != 0) {
+            klog(KLOG_INFO, "process", "killed by signal %d", code & 0x7F);
+        } else {
+            klog(KLOG_INFO, "process", "exited with status %d", status);
+        }
     }
 
 #ifdef RACH2_HARNESS
@@ -559,17 +582,16 @@ int32_t exit_current(int32_t code)
         exit_schedule_away();
     }
 
-    klog(KLOG_INFO, "sys_exit", "init process %d exited with status %d, returning to kernel shell",
-         exiting_pid, status);
+    init_end_line(exiting_pid, code);
     console_puts("Init process exited. Returning to kernel debug shell.");
 
     arch_irq_disable();
-    free_process(current_proc);
-
+    /* The idle task is current before the record is freed, since what the
+     * free calls may read the current record. */
+    dead = current_proc;
     init_pid = 0;
-
-    current_proc = proc_idle;
-    current_proc->state = PROC_RUNNING;
+    sched_adopt(proc_idle);
+    free_process(dead);
 
     shell_reset_input();
     arch_irq_enable();
@@ -592,7 +614,10 @@ long sys_exit(isr_params_t *params)
 
 /**
  * exit_group: end every thread of the process, the process with the status
- * its argument has.
+ * its argument has. The thread ends with the process's status, another's
+ * when another thread began the process's end first, or 0 when another
+ * thread's execve ends it, as Linux 6.12.115's `do_group_exit` takes it
+ * (kernel/exit.c:1070-1098), which its exit event reports.
  */
 long sys_exit_group(isr_params_t *params)
 {
@@ -600,6 +625,7 @@ long sys_exit_group(isr_params_t *params)
 
     if (current_proc) {
         proc_group_exit(code);
+        code = current_proc->tg->exiting ? current_proc->tg->exit_code : 0;
     }
     return exit_current(code);
 }
@@ -618,11 +644,13 @@ static void close_cloexec_fds(void)
 
     for (fd = 0; fd < fd_table_cap(current_proc->fds); fd++) {
         fd_entry_t *entry = fd_get(current_proc->fds, fd);
-        if (!entry || !(entry->flags & FD_FLAG_CLOEXEC)) {
+
+        if (!entry || !(entry->flags & FD_FLAG_CLOEXEC) ||
+            fd_close_claim(current_proc->fds, fd) != 1) {
             continue;
         }
         fd_release_backing(entry);
-        fd_free(current_proc->fds, fd);
+        fd_free_after(current_proc->fds, fd);
     }
 }
 
@@ -736,7 +764,7 @@ static void exec_file_close(struct exec_file *f)
     if (f->map) {
         vm_file_put(f->map);
         f->map = NULL;
-        vm_file_reap();
+        mm_reap();
     }
     if (f->ref.mnt) {
         vfs_release(f->ref.mnt, f->handle);
@@ -845,7 +873,7 @@ static void exec_release(void)
     mm_put(s->mm);
     vm_file_put(s->img.file);
     vm_file_put(s->iimg.file);
-    vm_file_reap();
+    mm_reap();
     if (s->files != NULL) {
         fd_table_delete(s->files);
     }
@@ -2085,6 +2113,7 @@ static void exec_take_leader(void)
     current_proc->jc_status = old->jc_status;
     proc_thread_fold(old);
     tg->leader = current_proc;
+    sched_wait_off_cpu(old);
     mm_drop(old);
     kstack_free(old->kernel_stack);
     free_process(old);
@@ -2143,7 +2172,9 @@ static int32_t exec_one_thread(void)
  * The entries copied into it now name descriptions it holds no references
  * to, and the commit writes over them. A table never shrinks, but another
  * sharer may grow it while the exec sleeps, so `exec_files_fit` widens the
- * storage again after the last sleep. 0, or -ENOMEM.
+ * storage again after the last sleep, and the commit's copy grows it once
+ * more if a sharer that runs without the big lock grew the table since.
+ * 0, or -ENOMEM.
  */
 static int32_t exec_files_stage(struct exec_state *s)
 {
@@ -2155,9 +2186,7 @@ static int32_t exec_files_stage(struct exec_state *s)
 }
 
 /** Widen the storage `exec_files_stage` set aside to the shared table as it
- * is now, after `exec_one_thread`, the exec's last sleep; nothing between
- * here and the commit sleeps, so no sharer grows the table again. 0, or
- * -ENOMEM. */
+ * is now, after `exec_one_thread`, the exec's last sleep. 0, or -ENOMEM. */
 static int32_t exec_files_fit(struct exec_state *s)
 {
     if (s->files == NULL || current_proc->fds->refs == 1) {
@@ -2173,22 +2202,22 @@ static int32_t exec_files_fit(struct exec_state *s)
  * makes one, so the close-on-exec descriptors are closed for the new image
  * alone and the other sharers keep the table. A caller whose other sharers
  * have all gone keeps the table, and the storage goes back with the
- * workspace.
+ * workspace; so does a caller whose sharer grew the table since the storage
+ * was fitted, when the heap has no room for the growth, which keeps the
+ * shared table, since the exec can no longer fail.
  */
 static void exec_files(struct exec_state *s)
 {
     fd_table_t *shared = current_proc->fds;
     fd_table_t *own = s->files;
 
-    if (own == NULL || shared->refs == 1) {
+    if (own == NULL || shared->refs == 1 || fd_table_take(own, shared) != 0) {
         return;
     }
-    k_memcpy(own->entries, shared->entries, sizeof(fd_entry_t) * (size_t)shared->cap);
-    own->next_free = 0;
     files_take(own);
     s->files = NULL;
     proc_files_put(current_proc);
-    current_proc->fds = own;
+    fd_table_join(own, current_proc);
 }
 
 /**
@@ -2343,7 +2372,7 @@ int32_t proc_files_unshare(void)
         return -ENOMEM;
     }
     proc_files_put(current_proc);
-    current_proc->fds = own;
+    fd_table_join(own, current_proc);
     return 0;
 }
 
@@ -2680,27 +2709,33 @@ void proc_vfork_release(process_t *p)
  * The address space of the child `do_fork` makes: `mm` itself, with one
  * more reference, under CLONE_VM, and otherwise a copy-on-write copy of its
  * pages and regions; an empty one for a kernel thread's child. NULL when no
- * memory was left for a copy.
+ * memory was left for a copy. The copy holds `mm`'s regions' lock to write,
+ * as Linux's dup_mmap holds the parent's (kernel/fork.c:644), so that no
+ * other thread changes the regions or faults a page in between the two.
  */
 static struct mm *fork_mm(struct mm *mm, uint32_t flags)
 {
     struct mm *copy;
+    int failed;
 
     if ((flags & CLONE_VM) && mm) {
         mm_get(mm);
         return mm;
     }
     copy = mm_new();
-    if (copy && mm && (paging_fork_copy(mm, copy->dir) != 0 || vm_copy(&copy->vm, &mm->vm) != 0)) {
+    if (!copy || !mm) {
+        return copy;
+    }
+    mmap_write_lock(mm);
+    failed = paging_fork_copy(mm, copy->dir) != 0 || vm_copy(&copy->vm, &mm->vm) != 0;
+    if (!failed) {
+        mm_copy_info(copy, mm);
+        failed = arch_mm_copy(copy, mm) != 0;
+    }
+    mmap_unlock(mm);
+    if (failed) {
         mm_put(copy);
         return NULL;
-    }
-    if (copy && mm) {
-        mm_copy_info(copy, mm);
-        if (arch_mm_copy(copy, mm) != 0) {
-            mm_put(copy);
-            return NULL;
-        }
     }
     return copy;
 }
@@ -2818,11 +2853,81 @@ static void fork_ids(process_t *child, const process_t *parent)
     child->mempolicy = vm_policy_get(parent->mempolicy);
 }
 
+/** Link the calling thread's fork record `pending` into `parent`'s group
+ * before any construction can sleep, unless `flags` has CLONE_THREAD,
+ * as Linux 6.12.115's copy_process does (kernel/fork.c:2234-2244). Recompute
+ * the caller's signal work and return nonzero when it must be taken before
+ * the fork. The big lock is held; an interrupt may post a group signal. */
+static int fork_delay_begin(process_t *parent, struct fork_pending *pending, uint32_t flags)
+{
+    uint32_t f = kirq_save();
+    int work;
+
+    pending->pending = 0;
+    pending->next = NULL;
+    if (!(flags & CLONE_THREAD)) {
+        pending->next = parent->tg->forks;
+        parent->tg->forks = pending;
+    }
+    sig_recalc();
+    work = parent->sig_woken != 0;
+    kirq_restore(f);
+    return work;
+}
+
+/** Unlink the fork's stack record `pending` from `parent`'s group, if it
+ * was linked, before the call returns or sleeps after starting its child.
+ * The caller holds the big lock; the list changes with interrupts off. */
+static void fork_delay_end(process_t *parent, struct fork_pending *pending)
+{
+    struct fork_pending **at;
+    uint32_t f = kirq_save();
+
+    for (at = &parent->tg->forks; *at && *at != pending; at = &(*at)->next) {
+    }
+    if (*at) {
+        *at = pending->next;
+    }
+    kirq_restore(f);
+}
+
+/**
+ * Make `parent`'s new thread or process `child` runnable. A fatal signal
+ * an interrupt posts after `do_fork`'s test of the caller's end sends every
+ * thread of the process SIGKILL (`sig_complete`), but passes over `child`
+ * while it is still being built; so every child is sent SIGKILL here when
+ * its caller's process's end has begun, with interrupts off as it becomes
+ * runnable, as Linux 6.12.115's `copy_process` tests a fatal signal
+ * under the lock `complete_signal` holds (kernel/fork.c:2564-2580).
+ * A new process also takes the multiprocess signals that arrived during
+ * its build from `pending`, as copy_process copies delayed.signal
+ * (kernel/fork.c:2605, 2633). Their zeroed siginfo is SI_USER with pid and
+ * uid 0, as collect_signal supplies for a bare bit (kernel/signal.c:598-608).
+ */
+static void fork_start(process_t *child, process_t *parent, struct fork_pending *pending)
+{
+    struct k_siginfo info;
+    uint32_t f = kirq_save();
+
+    if (child->tg != parent->tg) {
+        child->tg->pending = pending->pending;
+        child->sig_woken = (pending->pending & ~child->sig_blocked) != 0;
+    }
+    fork_delay_end(parent, pending);
+    sched_make_ready(child);
+    if (parent->tg->exiting) {
+        k_memset(&info, 0, sizeof(info));
+        info.code = SI_KERNEL;
+        sig_post_own(child, SIGKILL, &info);
+    }
+    kirq_restore(f);
+}
+
 /**
  * The signals of a child of `parent`: under CLONE_THREAD it joins the
  * parent's process, whose dispositions and signals it shares; otherwise its
  * process takes a copy of the dispositions. Either way it has the parent's
- * blocked mask and no pending signal, as POSIX says of fork, and the
+ * blocked mask and no inherited pending signal, as POSIX says of fork, and the
  * alternate stack unless it shares the memory and runs beside the parent, as
  * Linux's child does.
  */
@@ -2899,15 +3004,17 @@ static int32_t fork_pidfd(process_t *child, uintptr_t at, struct pidfd **pf)
  * CLONE_FILES, a copy otherwise. 0, or -ENOMEM. */
 static int32_t fork_files(process_t *child, process_t *parent, uint32_t flags)
 {
+    fd_table_t *own;
+
     if (flags & CLONE_FILES) {
-        if (fd_table_share(parent->fds, child) != 0) {
-            return -ENOMEM;
-        }
-        child->fds = parent->fds;
-        return 0;
+        return fd_table_share(parent->fds, child) != 0 ? -ENOMEM : 0;
     }
-    child->fds = files_copy(parent->fds);
-    return child->fds ? 0 : -ENOMEM;
+    own = files_copy(parent->fds);
+    if (!own) {
+        return -ENOMEM;
+    }
+    fd_table_join(own, child);
+    return 0;
 }
 
 /** Give `child` the directories and the descriptor table of `parent`, each
@@ -2931,10 +3038,14 @@ static void fork_store_ids(process_t *child, const struct fork_req *req)
 {
     uint32_t pid = pid_seen_by(child, child->pid);
     const vma_t *r;
+    int writable;
 
     if (req->settid) {
+        mmap_read_lock(child->mm);
         r = vm_find(&child->mm->vm, req->settid);
-        if (r && (r->prot & VM_PROT_WRITE)) {
+        writable = r && (r->prot & VM_PROT_WRITE);
+        mmap_unlock(child->mm);
+        if (writable) {
             (void)paging_access(child->mm, req->settid, &pid, sizeof(pid), 1);
         }
     }
@@ -2961,6 +3072,78 @@ static void fork_frame(process_t *child, const isr_params_t *params, const struc
         ia32_clone_tls_set(child, req->tls_entry, req->tls_desc);
     }
 #endif
+}
+
+/** Give back every part of a child whose fork failed, with the big lock
+ * held. The child has not run; the last steps release any allocated PID
+ * numbers and free its record without an intervening sleep. */
+static void fork_discard(process_t *child)
+{
+    proc_files_put(child);
+    proc_fs_put(child);
+    kstack_free(child->kernel_stack);
+    mm_drop(child);
+    ns_fork_abort(child);
+    free_process(child);
+}
+
+/** Build the memory, stack, identities, namespaces and shared or copied
+ * files of a child of `parent`, as `req` asks, without starting it. The
+ * caller holds the big lock and may sleep. Return the child, or NULL with
+ * negative errno in `*error` and every partial allocation released. */
+static process_t *fork_build(process_t *parent, const struct fork_req *req, int32_t *error)
+{
+    process_t *child;
+    uintptr_t child_kstack_base;
+    int32_t rc;
+
+    child =
+        alloc_process_fork(parent, (req->flags & CLONE_THREAD) != 0, (req->flags & CLONE_FS) != 0);
+    if (!child) {
+        *error = -ENOMEM;
+        return NULL;
+    }
+
+    child->mm = fork_mm(parent->mm, req->flags);
+    if (!child->mm) {
+        free_process(child);
+        *error = -ENOMEM;
+        return NULL;
+    }
+    child->space_root = child->mm->space_root;
+    child->page_dir = child->mm->dir;
+
+    child_kstack_base = kstack_alloc();
+    if (!child_kstack_base) {
+        mm_drop(child);
+        free_process(child);
+        *error = -ENOMEM;
+        return NULL;
+    }
+    child->kernel_stack = child_kstack_base + KERNEL_STACK_SIZE;
+    /* A thread's or a CLONE_PARENT child's parent is the caller's parent. */
+    child->parent_pid =
+        (req->flags & (CLONE_THREAD | CLONE_PARENT)) ? parent->parent_pid : parent->tgid;
+    fork_ids(child, parent);
+    rseq_fork(child, parent, (req->flags & CLONE_VM) != 0);
+    child->tls_base = (req->flags & CLONE_SETTLS) && !req->tls_desc_set ? req->tls : arch_tls_get();
+    fpu_save(child->fpu);
+
+    rc = fork_shares(child, parent, req->flags);
+    if (rc != 0) {
+        goto fail;
+    }
+    rc = ns_fork(child, parent, req->flags);
+    if (rc != 0) {
+        goto fail;
+    }
+    fork_store_ids(child, req);
+    return child;
+
+fail:
+    fork_discard(child);
+    *error = rc;
+    return NULL;
 }
 
 /**
@@ -2992,66 +3175,40 @@ static void fork_frame(process_t *child, const isr_params_t *params, const struc
  * SIGKILL is pending for the caller, which an exit_group or an exec by another
  * thread sends, or its process is ending or in another thread's exec, since
  * a child made then would outlive its process's end; nothing between that
- * test and the child's start sleeps. A failure gives back everything built
- * for the child so far.
+ * test and the child's start sleeps, and a child whose caller's process's
+ * end an interrupt began meanwhile is sent SIGKILL as it starts (`fork_start`).
+ * A new process also takes the signals sent to several processes during
+ * its build (`fork_delay_begin`, `fork_start`).
+ * A failure gives back everything built for the child so far.
  */
 static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
 {
     process_t *parent = current_proc;
     process_t *child;
     struct pidfd *pf = NULL;
+    struct fork_pending pending;
     int32_t pidfd = -1;
     uint32_t pid, kid;
-    uintptr_t child_kstack_base;
     int32_t rc;
     int event;
 
     if (!parent) {
         return -ESRCH;
     }
+    if (fork_delay_begin(parent, &pending, req->flags)) {
+        parent->restart_kind = RESTART_NOINTR;
+        rc = -EINTR;
+        goto out_delay;
+    }
     mem_balance();
     rc = fork_nproc(parent);
     if (rc != 0) {
-        return rc;
+        goto out_delay;
     }
-    child =
-        alloc_process_fork(parent, (req->flags & CLONE_THREAD) != 0, (req->flags & CLONE_FS) != 0);
+    child = fork_build(parent, req, &rc);
     if (!child) {
-        return -ENOMEM;
+        goto out_delay;
     }
-
-    child->mm = fork_mm(parent->mm, req->flags);
-    if (!child->mm) {
-        free_process(child);
-        return -ENOMEM;
-    }
-    child->space_root = child->mm->space_root;
-    child->page_dir = child->mm->dir;
-
-    child_kstack_base = kstack_alloc();
-    if (!child_kstack_base) {
-        mm_drop(child);
-        free_process(child);
-        return -ENOMEM;
-    }
-    child->kernel_stack = child_kstack_base + KERNEL_STACK_SIZE;
-    /* A thread's or a CLONE_PARENT child's parent is the caller's parent. */
-    child->parent_pid =
-        (req->flags & (CLONE_THREAD | CLONE_PARENT)) ? parent->parent_pid : parent->tgid;
-    fork_ids(child, parent);
-    rseq_fork(child, parent, (req->flags & CLONE_VM) != 0);
-    rc = ns_fork(child, parent, req->flags);
-    if (rc != 0) {
-        goto fail_built;
-    }
-    child->tls_base = (req->flags & CLONE_SETTLS) && !req->tls_desc_set ? req->tls : arch_tls_get();
-    fpu_save(child->fpu);
-
-    rc = fork_shares(child, parent, req->flags);
-    if (rc != 0) {
-        goto fail_built;
-    }
-    fork_store_ids(child, req);
     if (req->flags & CLONE_PIDFD) {
         pidfd = fork_pidfd(child, req->pidfd, &pf);
         if (pidfd < 0) {
@@ -3062,6 +3219,10 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
     if (((parent->sig_pending | parent->tg->pending) & KSIG_BIT(SIGKILL)) || parent->tg->exiting ||
         parent->tg->exec_task) {
         rc = -EINTR;
+        goto fail_pidfd;
+    }
+    rc = ns_fork_commit(child);
+    if (rc != 0) {
         goto fail_pidfd;
     }
     if (pf) {
@@ -3082,7 +3243,8 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
     child->cpu = parent->cpu;
     child->affinity = parent->affinity;
     child->bkl_depth = 1;
-    sched_make_ready(child);
+    child->bkl_frames = 1u;
+    fork_start(child, parent, &pending);
     if (event) {
         ptrace_event(event, pid);
     }
@@ -3098,11 +3260,9 @@ fail_pidfd:
         pidfd_free(pf);
     }
 fail_built:
-    proc_files_put(child);
-    proc_fs_put(child);
-    kstack_free(child->kernel_stack);
-    mm_drop(child);
-    free_process(child);
+    fork_discard(child);
+out_delay:
+    fork_delay_end(parent, &pending);
     return rc;
 }
 
@@ -3723,7 +3883,7 @@ static int wait_tracee(process_t *p, int options, struct wait_report *out)
         return 0;
     }
     if (p->pid != p->tgid) {
-        wait_fill_exit(out, p, p->exit_code);
+        wait_fill_exit(out, p, p->tg->exiting ? p->tg->exit_code : p->exit_code);
         wait_hold(out, p, WAIT_FREE, options);
         return 1;
     }
@@ -3785,11 +3945,12 @@ static int wait_child(process_t *p, int options, struct wait_report *out)
  *
  * Every selected child is looked at until one has an event. Without WNOHANG
  * the caller then sleeps on its process's child queue, which an exit, a stop
- * or a continue wakes, until a child has an event or a signal interrupts. The
- * test of `signal_pending`, the joining of the queue and the change to
- * PROC_BLOCKED are one step with interrupts off, so a wake or a signal posted
- * from an interrupt is either seen by the test or finds the caller blocked
- * and wakes it.
+ * or a continue wakes, until a child has an event or a signal interrupts. As
+ * Linux's `do_wait` (kernel/exit.c), the caller joins the queue, with a
+ * record on its stack, and is marked PROC_BLOCKED before it looks at the
+ * children and tests `signal_pending`, so a wake or a signal posted after
+ * the look finds it blocked and makes it ready; a child's release that
+ * sleeps meanwhile leaves it RUNNING, and it returns what it found.
  *
  * Returns the pid; 0 with WNOHANG when a selected child has nothing to
  * report; -ECHILD when no child is selected; or -EINTR when a signal the
@@ -3797,48 +3958,59 @@ static int wait_child(process_t *p, int options, struct wait_report *out)
  */
 static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_report *out)
 {
+    struct wq_waiter self;
     process_t *p;
     uint32_t flags;
+    int32_t rc;
 
-    while (1) {
+    self.proc = current_proc;
+    self.next = NULL;
+    for (;;) {
         int have_child = 0;
 
+        flags = sig_irq_save();
+        if (!(options & WNOHANG)) {
+            wq_poll_add(&current_proc->tg->chld, &self);
+            current_proc->wchan = "do_wait";
+            sched_set_current_state(PROC_BLOCKED);
+        }
+        sig_irq_restore(flags);
+        rc = 0;
         for (p = proc_list; p; p = p->next) {
             if (wait_selects_tracee(idtype, id, options, p)) {
                 have_child = 1;
                 if (wait_tracee(p, options, out)) {
-                    return (int32_t)out->pid;
+                    rc = (int32_t)out->pid;
+                    break;
                 }
             }
             if (wait_selects(idtype, id, options, p)) {
                 have_child = 1;
                 if (wait_child(p, options, out)) {
-                    return (int32_t)out->pid;
+                    rc = (int32_t)out->pid;
+                    break;
                 }
             }
         }
-
-        if (!have_child) {
-            return -ECHILD;
-        }
-        if (options & WNOHANG) {
-            return 0;
-        }
         flags = sig_irq_save();
-        if (signal_pending()) {
-            sig_irq_restore(flags);
-            return -EINTR;
+        if (rc == 0 && !have_child) {
+            rc = -ECHILD;
+        } else if (rc == 0 && !(options & WNOHANG) && signal_pending()) {
+            rc = -EINTR;
         }
-        wq_poll_add(&current_proc->tg->chld, &current_proc->waiter);
-        current_proc->wchan = "do_wait";
-        current_proc->state = PROC_BLOCKED;
+        if (rc != 0 || (options & WNOHANG)) {
+            wq_poll_remove(&current_proc->tg->chld, &self);
+            current_proc->state = PROC_RUNNING;
+            sig_irq_restore(flags);
+            return rc;
+        }
         sig_irq_restore(flags);
         schedule();
         flags = sig_irq_save();
         if (current_proc->state == PROC_BLOCKED) {
             idle_wait_irq_off(); /* idle until a waker, then re-scan */
         }
-        wq_poll_remove(&current_proc->tg->chld, &current_proc->waiter);
+        wq_poll_remove(&current_proc->tg->chld, &self);
         current_proc->state = PROC_RUNNING;
         sig_irq_restore(flags);
     }
@@ -4195,6 +4367,14 @@ static enum ksig_default ksig_default_action(int signo)
     }
 }
 
+/** Whether `handler` ignores `signo`, explicitly or by its default, as
+ * Linux 6.12.115's sig_handler_ignored (kernel/signal.c:75-80). */
+static int sig_handler_ignored(uintptr_t handler, int signo)
+{
+    return handler == KSIG_IGN ||
+           (handler == KSIG_DFL && ksig_default_action(signo) == KSIG_DEFAULT_IGNORE);
+}
+
 /** The 64-bit sa_mask the user installed (two 32-bit words, signals 1..64). */
 static uint64_t sigact_mask(const struct k_sigaction *sa)
 {
@@ -4220,15 +4400,36 @@ static void sig_irq_restore(uint32_t flags)
 /* The stop signals, which SIGCONT cancels and which cancel SIGCONT. */
 #define SIG_STOPS (KSIG_BIT(SIGSTOP) | KSIG_BIT(SIGTSTP) | KSIG_BIT(SIGTTIN) | KSIG_BIT(SIGTTOU))
 
-/** Make `t` runnable if it sleeps, clearing its timed wake: an
+/** Mark signal work for `t` alone for the unblocked signals in `bits`, as
+ * Linux 6.12.115's signal_wake_up_state marks TIF_SIGPENDING
+ * (kernel/signal.c:759-773).
+ * A wake for a blocked signal marks no work.
+ * Make `t` runnable if it sleeps, clearing its timed wake: an
  * interruptible wait then calls `signal_pending` to learn whether to end
- * with -EINTR, and any wait that goes on arms its own deadline again. */
-static void sig_wake(process_t *t)
+ * with -EINTR, and any wait that goes on arms its own deadline again. A
+ * full barrier comes between the post and the read of the state, which a
+ * sleeper sets before it tests (`sched_set_current_state`). */
+static void sig_wake(process_t *t, uint64_t bits)
 {
+    if (t && (bits & ~t->sig_blocked) != 0) {
+        t->sig_woken = 1;
+    }
+    sched_mb();
     if (t && t->state == PROC_BLOCKED) {
         t->wakeup_tick = 0;
         sched_make_ready(t);
     }
+}
+
+/** Recompute the current thread's signal-work flag with interrupts off,
+ * as Linux 6.12.115's recalc_sigpending (kernel/signal.c:157-178). No
+ * other thread's flag is cleared, even when this one took its signal. */
+static void sig_recalc(void)
+{
+    process_t *self = current_proc;
+
+    self->sig_woken = ((self->sig_pending | self->tg->pending) & ~self->sig_blocked) != 0 ||
+                      (self->tg->stop && !self->stop_seen) || (self->ptrace & PT_INTERRUPT);
 }
 
 /** Clear the signals `bits` from the process of `target` and from each of
@@ -4299,14 +4500,16 @@ static void sig_job_control(process_t *target, int signo)
 
 /**
  * Whether the thread `t` can take one of the signals `bits` now: it has not
- * ended, it is not stopped, and it does not block them all. A stopped thread
- * is passed over, as Linux's `wants_signal` passes it over, since `sig_wake`
- * cannot wake it and a sibling that could take the signal would sleep on.
+ * ended or begun to end (`exit_begun`), it is not stopped, and it does not
+ * block them all. A stopped thread is passed over, as Linux's `wants_signal`
+ * passes it over, since `sig_wake` cannot wake it and a sibling that could
+ * take the signal would sleep on; so is a thread in its exit path, which
+ * takes no signal again (kernel/signal.c:982-983).
  */
 static int sig_wants(const process_t *t, uint64_t bits)
 {
     return t->state != PROC_ZOMBIE && t->state != PROC_UNUSED && t->state != PROC_STOPPED &&
-           (bits & ~t->sig_blocked) != 0;
+           !t->exit_begun && (bits & ~t->sig_blocked) != 0;
 }
 
 /**
@@ -4331,6 +4534,23 @@ static process_t *sig_taker(process_t *target, int signo)
 }
 
 /**
+ * Wake, for the signals `moved` pending for the process of `self` that
+ * `self` will not take, other threads that can take them, one for each, as
+ * Linux's `retarget_shared_pending` does, with interrupts off.
+ */
+static void sig_retarget(const process_t *self, uint64_t moved)
+{
+    process_t *t;
+
+    for (t = proc_list; t && moved != 0; t = t->next) {
+        if (t != self && t->tg == self->tg && sig_wants(t, moved)) {
+            sig_wake(t, moved);
+            moved &= t->sig_blocked;
+        }
+    }
+}
+
+/**
  * A signal sent to the process wakes one thread (`sig_taker`), which may be
  * this one. When the new mask blocks a signal still pending for the process
  * that the old mask did not, this thread will not take it, so another thread
@@ -4344,47 +4564,110 @@ void signal_set_blocked(uint64_t mask)
     process_t *self = current_proc;
     uint32_t flags = sig_irq_save();
     uint64_t moved;
-    process_t *t;
 
     mask &= ~(uint64_t)KSIG_UNCATCHABLE;
     moved = self->tg->pending & mask & ~self->sig_blocked;
     self->sig_blocked = mask;
-    for (t = proc_list; t && moved != 0; t = t->next) {
-        if (t != self && t->tg == self->tg && sig_wants(t, moved)) {
-            moved &= t->sig_blocked;
-            sig_wake(t);
-        }
+    sig_retarget(self, moved);
+    sig_recalc();
+    sig_irq_restore(flags);
+}
+
+void signal_exit_begin(void)
+{
+    process_t *self = current_proc;
+    uint32_t flags = sig_irq_save();
+
+    self->exit_begun = 1;
+    if (!self->tg->exiting) {
+        sig_retarget(self, self->tg->pending & ~self->sig_blocked);
     }
     sig_irq_restore(flags);
 }
 
 /**
+ * Whether the thread `t` would take the signal `signo` now, in the sense of
+ * Linux 6.12.115's `wants_signal` (kernel/signal.c:977-993), which decides
+ * whether a signal ends the process at its post: `t` does not block it and
+ * has not ended or begun to end, and either the signal is SIGKILL, or `t` is
+ * not stopped and is running on a processor or has no signal work of its
+ * own: its unblocked pending set and its wake flag, not every signal in the
+ * process's set. The caller tests this before posting the new signal.
+ * A thread asleep with signal work already takes that first, and its
+ * handler may change what `signo` does.
+ */
+static int sig_wants_now(const process_t *t, int signo)
+{
+    uint64_t bit = KSIG_BIT(signo);
+
+    if (t->state == PROC_ZOMBIE || t->state == PROC_UNUSED || t->exit_begun ||
+        (t->sig_blocked & bit)) {
+        return 0;
+    }
+    if (signo == SIGKILL) {
+        return 1;
+    }
+    return t->state != PROC_STOPPED &&
+           (t->state == PROC_RUNNING || (!t->sig_woken && (t->sig_pending & ~t->sig_blocked) == 0));
+}
+
+/**
+ * The thread that takes the signal `signo`, sent to the thread `target`,
+ * for the test of whether it ends the process (`sig_fatal_now`), as Linux
+ * 6.12.115's `complete_signal` chooses it (kernel/signal.c:1003-1029):
+ * `target` when it would take the signal now (`sig_wants_now`); for a
+ * signal sent to the process (`whole`), else the first thread that would;
+ * NULL when none would, and the signal then ends nothing at its post.
+ */
+static process_t *sig_fatal_taker(process_t *target, int signo, int whole)
+{
+    process_t *t;
+
+    if (sig_wants_now(target, signo)) {
+        return target;
+    }
+    for (t = proc_list; t && whole; t = t->next) {
+        if (t->tg == target->tg && sig_wants_now(t, signo)) {
+            return t;
+        }
+    }
+    return NULL;
+}
+
+/**
  * Whether the signal `signo`, sent to the thread `target` and to be taken by
- * the thread `taker` of its process, ends the process at once, as Linux
- * 6.12.115's `complete_signal` judges it (kernel/signal.c:1034-1043): the
- * disposition is SIG_DFL and the default action ends the process without a
- * core dump, `taker` can take the signal now (`sig_wants`) and does not
- * wait for it in rt_sigtimedwait or a signalfd read (`sig_real_blocked`),
- * the process is not ending already, and `target` is not traced, unless the
- * signal is SIGKILL. Such a waiter takes the signal as its result, a traced
- * thread's tracer sees the signal first, and a signal that dumps core is
- * left to the thread that takes it, which writes the core before the others
- * end.
+ * the thread `taker` of its process (`sig_fatal_taker`), ends the process at
+ * once, as Linux 6.12.115's `complete_signal` judges it (kernel/signal.c:
+ * 1034-1043): there is such a thread, the disposition is SIG_DFL and the
+ * default action ends the process without a core dump, `taker` does not
+ * wait for the signal in rt_sigtimedwait (`sig_real_blocked`), the process
+ * is not ending already, or is writing its core and the signal is SIGKILL,
+ * which stops the core (kernel/signal.c:908-910, 1035), and `target` is not
+ * traced, unless the signal is SIGKILL. Such a waiter takes the signal as
+ * its result, a traced thread's tracer sees the signal first, and a
+ * signal that dumps core is left to the thread that takes it, which writes
+ * the core before the others end. An init (`unkillable`) ends only by
+ * SIGKILL here: Linux leaves this test out (kernel/signal.c:1034-1037), so
+ * that a signal one of init's threads blocks, which `sig_ignored` lets
+ * through, ends init when another thread does not block it, and the
+ * system's init panics.
  */
 static int sig_fatal_now(const process_t *target, const process_t *taker, int signo)
 {
     return taker != NULL && target->tg->action[signo].handler == KSIG_DFL &&
-           ksig_default_action(signo) == KSIG_DEFAULT_TERM && sig_wants(taker, KSIG_BIT(signo)) &&
-           !(taker->sig_real_blocked & KSIG_BIT(signo)) && !target->tg->exiting &&
-           (signo == SIGKILL || !(target->ptrace & PT_TRACED));
+           ksig_default_action(signo) == KSIG_DEFAULT_TERM &&
+           !(taker->sig_real_blocked & KSIG_BIT(signo)) &&
+           (!target->tg->exiting || (target->tg->core_dumping && signo == SIGKILL)) &&
+           (signo == SIGKILL || (!(target->ptrace & PT_TRACED) && !target->tg->unkillable));
 }
 
 /**
  * Set the signal `signo` pending for the thread `t` alone, keeping `info`
- * when it was not pending already, apply its job-control effect and wake
- * `t`, with nothing of `sig_complete`: the SIGKILL of a group exit and of
- * execve's end of the other threads, which end each thread without starting
- * another group exit, as Linux's `zap_other_threads` sets SIGKILL directly.
+ * when it was not pending already, and wake `t`, from a stop too when the
+ * signal is SIGKILL, with nothing of `sig_prepare` or `sig_complete`: the
+ * SIGKILL of a group exit and of execve's end of the other threads, which
+ * end each thread without starting another group exit, as Linux's
+ * `zap_other_threads` sets SIGKILL directly and wakes the thread.
  */
 static void sig_post_own(process_t *t, int signo, const struct k_siginfo *info)
 {
@@ -4398,14 +4681,18 @@ static void sig_post_own(process_t *t, int signo, const struct k_siginfo *info)
         t->sig_info[signo] = *info;
     }
     t->sig_pending |= KSIG_BIT(signo);
-    sig_job_control(t, signo);
-    sig_wake(t);
+    if (signo == SIGKILL && t->state == PROC_STOPPED) {
+        sched_make_ready(t);
+    }
+    sig_wake(t, KSIG_BIT(signo));
     sig_irq_restore(f);
 }
 
 /**
  * Finish posting `signo` to `target` once it is pending, with interrupts
- * off: wake `taker`, or, when the signal ends the process (`sig_fatal_now`),
+ * off: wake a thread, or, when the signal ends the process (`sig_fatal_now`
+ * of `taker`, chosen before the post by `sig_fatal_taker`, `whole` for a
+ * signal sent to the process),
  * begin the process's end, as Linux 6.12.115's `complete_signal` does
  * (kernel/signal.c:1044-1056). The process will end with the wait status of
  * a death by `signo`, and every thread is sent SIGKILL and woken, so that a
@@ -4414,43 +4701,152 @@ static void sig_post_own(process_t *t, int signo, const struct k_siginfo *info)
  * Each thread then takes the SIGKILL, and the process's status stays
  * `signo`'s (`proc_exit_cleanup`).
  */
-static void sig_complete(process_t *target, process_t *taker, int signo)
+static void sig_complete(process_t *target, process_t *taker, int signo, int whole)
 {
-    struct tgroup *tg = target->tg;
-    struct k_siginfo info;
-    process_t *t;
-
     if (!sig_fatal_now(target, taker, signo)) {
-        sig_wake(taker);
+        if (taker) {
+            sig_wake(taker, KSIG_BIT(signo));
+        } else if (whole) {
+            sig_wake(sig_taker(target, signo), 0);
+        }
         return;
     }
-    tg->exiting = 1;
-    tg->exit_code = signo;
-    k_memset(&info, 0, sizeof(info));
-    info.code = SI_KERNEL;
-    for (t = proc_list; t; t = t->next) {
-        if (t->tg == tg) {
-            sig_post_own(t, SIGKILL, &info);
+    sig_group_end(target->tg, signo, 1);
+}
+
+/**
+ * Whether the signal `signo` with the siginfo `info`, sent to the thread
+ * `t`, is forced past an init's protection when it is SIGKILL or SIGSTOP,
+ * as Linux 6.12.115's `send_signal_locked` judges it (kernel/signal.c:
+ * 1214-1252): the kernel sent it, or a process sent it from a PID namespace
+ * above `t`'s, which `t`'s namespace cannot see. A process's send carries
+ * a code of 0 or below, which the sender's call runs under, so the sender
+ * is the current process; a timer's carries SI_TIMER, which no sender has.
+ */
+static int sig_forced(const process_t *t, const struct k_siginfo *info)
+{
+    if (info->code == SI_KERNEL) {
+        return 1;
+    }
+    return info->code <= 0 && info->code != SI_TIMER && current_proc != NULL &&
+           current_proc != proc_idle && pid_seen_by(t, current_proc->tgid) == 0;
+}
+
+/**
+ * Whether the signal `signo` with the siginfo `info` is ignored by
+ * its thread `t`, as Linux 6.12.115's `sig_ignored` and `sig_task_ignored`
+ * judge it (kernel/signal.c:82-123): a signal `t` blocks or waits for stays
+ * pending, since its disposition may change before it is taken, and so does
+ * one a tracer would see, any but SIGKILL; otherwise the system's real init
+ * drops SIGKILL and SIGSTOP, an init (`unkillable`) drops a signal left
+ * at its default, unless it is SIGKILL or SIGSTOP and forced (`sig_forced`).
+ * Any process drops an ignored disposition, explicit or default.
+ * An init under the debug shell, which a probe or a rescue shell runs as,
+ * is an ordinary process, as its end returns to the shell.
+ */
+static int sig_ignored(const process_t *t, int signo, const struct k_siginfo *info)
+{
+    int kernel_only = signo == SIGKILL || signo == SIGSTOP;
+
+    if ((t->sig_blocked | t->sig_real_blocked) & KSIG_BIT(signo)) {
+        return 0;
+    }
+    if ((t->ptrace & PT_TRACED) && signo != SIGKILL) {
+        return 0;
+    }
+    if (kernel_only && t->tgid == init_pid && !debug_shell_is_home) {
+        return 1;
+    }
+    if (t->tg->unkillable && t->tg->action[signo].handler == KSIG_DFL &&
+        !(kernel_only && sig_forced(t, info))) {
+        return 1;
+    }
+    return sig_handler_ignored(t->tg->action[signo].handler, signo);
+}
+
+/**
+ * What a signal `signo` with the siginfo `info`, sent to the thread `target`,
+ * does before it is set pending, with interrupts off, as Linux 6.12.115's
+ * `prepare_signal` (kernel/signal.c:902-967): its job-control effect
+ * (`sig_job_control`), and whether it is set pending at all. A process
+ * whose end has begun drops it, with no effect, unless it is SIGKILL and
+ * the process is writing its core, which the SIGKILL stops. An ignored
+ * signal is dropped (`sig_ignored`), with the blocked, waiting and tracing
+ * exceptions; an init also drops signals it is protected from. A dropped
+ * SIGKILL wakes no stopped thread. Returns 1 when the signal is to be set
+ * pending, 0 when it is dropped.
+ */
+static int sig_prepare(process_t *target, int signo, const struct k_siginfo *info)
+{
+    if (target->tg->exiting) {
+        return target->tg->core_dumping && signo == SIGKILL;
+    }
+    if (signo != SIGKILL) {
+        sig_job_control(target, signo);
+    }
+    if (sig_ignored(target, signo, info)) {
+        return 0;
+    }
+    if (signo == SIGKILL) {
+        sig_job_control(target, signo);
+    }
+    return 1;
+}
+
+/**
+ * Wake the signalfd readers and pollers of the process `tg` for a signal just
+ * set pending for it or for one of its threads, as Linux 6.12.115's
+ * `signalfd_notify` (include/linux/signalfd.h:19-23), which
+ * `__send_signal_locked` calls for every signal it queues (kernel/signal.c:
+ * 1166-1167). A reader keeps its mask, so no thread need be chosen to take
+ * the signal for the reader to see it. The wake comes after the pending bit
+ * is set, since the reader tests the bit after it files itself on the queue.
+ */
+static void sig_notify_fd(struct tgroup *tg)
+{
+    wq_wake(&tg->sigfd, WQ_DATA);
+}
+
+/** Keep a signal sent to several processes for each fork under way in
+ * `tg`, with interrupts off, as Linux 6.12.115's __send_signal_locked
+ * keeps it on the multiprocess list (kernel/signal.c:1170-1181).
+ * A stop and a continue cancel each other in these sets too. */
+static void sig_fork_pending(struct tgroup *tg, int signo)
+{
+    struct fork_pending *p;
+
+    for (p = tg->forks; p; p = p->next) {
+        if (signo == SIGCONT) {
+            p->pending &= ~SIG_STOPS;
+        } else if (KSIG_BIT(signo) & SIG_STOPS) {
+            p->pending &= ~KSIG_BIT(SIGCONT);
         }
+        p->pending |= KSIG_BIT(signo);
     }
 }
 
 /**
  * Post signal `signo` to the process `target` is a thread of, with the
- * siginfo `info`: set the process's pending bit, keeping `info` when the
- * signal was not already pending, and wake the thread `sig_taker` chooses,
- * whatever the signal's disposition and mask, or end the whole process when
- * the signal is fatal to it (`sig_complete`). Any thread that does not block
- * the signal may take it. A process whose threads have all ended takes
- * nothing. SIGKILL and SIGSTOP cannot be caught, so a pending SIGKILL is
- * honored even before delivery by leaving it pending for the default path.
+ * siginfo `info`: unless `sig_prepare` drops it, set the process's pending
+ * bit, keeping `info` when the signal was not already pending, and wake the
+ * thread chosen before the post, or
+ * end the whole process when the signal is fatal to it (`sig_complete`).
+ * Any thread that does not block the signal may take it. A process whose
+ * threads have all ended takes nothing, and neither does a kernel thread
+ * (`proc_is_kthread`). SIGKILL and SIGSTOP cannot be
+ * caught, so a pending SIGKILL is honored even before delivery by leaving
+ * it pending for the default path. A multiprocess send (`multi`) also
+ * reaches children being built (`sig_fork_pending`); a single-process
+ * send does not. The caller holds the big lock, and may be an interrupt.
  */
-void signal_post_info(process_t *target, int signo, const struct k_siginfo *info)
+static void sig_post_process(process_t *target, int signo, const struct k_siginfo *info, int multi)
 {
     struct tgroup *tg;
+    process_t *taker;
     uint32_t f;
 
-    if (!target || signo < 1 || signo > KSIG_MAX || target->state == PROC_UNUSED) {
+    if (!target || signo < 1 || signo > KSIG_MAX || target->state == PROC_UNUSED ||
+        proc_is_kthread(target)) {
         return;
     }
     tg = target->tg;
@@ -4458,31 +4854,60 @@ void signal_post_info(process_t *target, int signo, const struct k_siginfo *info
         return;
     }
     f = sig_irq_save();
-    if (!(tg->pending & KSIG_BIT(signo))) {
+    if (sig_prepare(target, signo, info) && !(tg->pending & KSIG_BIT(signo))) {
+        taker = sig_fatal_taker(target, signo, 1);
         tg->info[signo] = *info;
+        tg->pending |= KSIG_BIT(signo);
+        if (multi) {
+            sig_fork_pending(tg, signo);
+        }
+        sig_notify_fd(tg);
+        sig_complete(target, taker, signo, 1);
     }
-    tg->pending |= KSIG_BIT(signo);
-    sig_job_control(target, signo);
-    sig_complete(target, sig_taker(target, signo), signo);
     sig_irq_restore(f);
+}
+
+void signal_post_info(process_t *target, int signo, const struct k_siginfo *info)
+{
+    sig_post_process(target, signo, info, 0);
+}
+
+void signal_post_multi(process_t *target, int signo, const struct k_siginfo *info)
+{
+    sig_post_process(target, signo, info, 1);
+}
+
+/** Select the leader, zombie or not, for a multiprocess send, or NULL for
+ * a record that is not a published leader; process.h gives the contract. */
+process_t *signal_process_target(process_t *p)
+{
+    return p->state != PROC_UNUSED && p->pid == p->tgid ? p : NULL;
 }
 
 /**
  * Post signal `signo` to the thread `t` alone, which alone may take it, with
- * the siginfo `info`, and end the whole process when the signal is fatal to
- * it and `t` can take it now, as Linux's `complete_signal` does for a signal
- * sent to one thread (`sig_complete`).
+ * the siginfo `info`, unless `sig_prepare` drops it, and end the whole
+ * process when the signal is fatal to it and `t` can take it now, as
+ * Linux's `complete_signal` does for a signal sent to one thread
+ * (`sig_complete`). A kernel thread takes nothing (`proc_is_kthread`).
  */
 void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
 {
     uint32_t f;
+    process_t *taker;
 
-    if (!t || signo < 1 || signo > KSIG_MAX || t->state == PROC_ZOMBIE || t->state == PROC_UNUSED) {
+    bkl_assert_held();
+    if (!t || signo < 1 || signo > KSIG_MAX || t->state == PROC_ZOMBIE || t->state == PROC_UNUSED ||
+        proc_is_kthread(t)) {
         return;
     }
     f = sig_irq_save();
-    sig_post_own(t, signo, info);
-    sig_complete(t, sig_wants(t, KSIG_BIT(signo)) ? t : NULL, signo);
+    if (sig_prepare(t, signo, info) && !(t->sig_pending & KSIG_BIT(signo))) {
+        taker = sig_fatal_taker(t, signo, 0);
+        sig_post_own(t, signo, info);
+        sig_notify_fd(t->tg);
+        sig_complete(t, taker, signo, 0);
+    }
     sig_irq_restore(f);
 }
 
@@ -4503,6 +4928,9 @@ void signal_force(process_t *target, int signo, const struct k_siginfo *info)
     if (sa->handler == KSIG_IGN || (target->sig_blocked & KSIG_BIT(signo))) {
         sa->handler = KSIG_DFL;
         target->sig_blocked &= ~KSIG_BIT(signo);
+    }
+    if (sa->handler == KSIG_DFL && !(target->ptrace & PT_TRACED)) {
+        target->tg->unkillable = 0;
     }
     sig_irq_restore(f);
     signal_post_thread(target, signo, info);
@@ -4537,42 +4965,53 @@ static void sender_info(struct k_siginfo *info, int32_t code, const process_t *t
  * (`ptrace_return_stops`). A traced thread counts an ignored signal too, as
  * Linux's sig_ignored does, since its tracer sees each signal at a
  * signal-delivery stop, where a wait it cut short is restarted. Blocking
- * syscall loops call this on the thread's stack with the big lock held. No
- * wait queue is changed. */
+ * syscall loops call this on the thread's stack with the big lock held. A
+ * group stop not yet taken also ends the wait, as Linux 6.12.115's pending
+ * job control does (kernel/signal.c:157-164). Before a wait goes back to
+ * sleep, discard the ignored signals it passed over, from the thread and
+ * from its process, as get_signal discards each it dequeues after the wait
+ * ends (kernel/signal.c:2821, 2838-2839, 2853-2854), and recompute the
+ * signal-work flag, as recalc_sigpending then does (kernel/signal.c:
+ * 173-178); kept, they would mark the thread again, and a later signal to
+ * the process would pass over it (`sig_wants_now`). No wait queue is
+ * changed. */
 int signal_pending(void)
 {
     uint64_t deliverable;
+    uint64_t ignored = 0;
     uint32_t flags;
     int signo;
+    int pending = 0;
 
     if (!current_proc) {
         return 0;
     }
-    if (current_proc->ptrace & PT_INTERRUPT) {
+    flags = sig_irq_save();
+    if ((current_proc->ptrace & PT_INTERRUPT) ||
+        (current_proc->tg->stop && !current_proc->stop_seen)) {
+        sig_irq_restore(flags);
         return 1;
     }
-    flags = sig_irq_save();
     deliverable = sig_pending_now() & ~current_proc->sig_blocked;
-    sig_irq_restore(flags);
     for (signo = 1; signo <= KSIG_MAX; signo++) {
-        struct k_sigaction *sa;
-
         if (!(deliverable & KSIG_BIT(signo))) {
             continue;
         }
-        sa = &current_proc->sigacts[signo];
-        if (current_proc->ptrace & PT_TRACED) {
-            return 1;
-        }
-        if (sa->handler == KSIG_IGN) {
+        if (!(current_proc->ptrace & PT_TRACED) &&
+            sig_handler_ignored(current_proc->sigacts[signo].handler, signo)) {
+            ignored |= KSIG_BIT(signo);
             continue;
         }
-        if (sa->handler == KSIG_DFL && ksig_default_action(signo) == KSIG_DEFAULT_IGNORE) {
-            continue;
-        }
-        return 1;
+        pending = 1;
+        break;
     }
-    return 0;
+    if (!pending) {
+        current_proc->sig_pending &= ~ignored;
+        current_proc->tg->pending &= ~ignored;
+        sig_recalc();
+    }
+    sig_irq_restore(flags);
+    return pending;
 }
 
 /**
@@ -4614,11 +5053,14 @@ static int cred_may_signal(const process_t *target, int signo)
 }
 
 /** Post `signo` to every member of the process group `pgid` the caller may
- * signal, which kill(2) selects with a pid of 0 or below -1. The POSIX
- * outcome: 0 if any member may be signalled, -EPERM if members exist but none
- * may be, -ESRCH if the group is empty. signo 0 only probes. A member that
- * has ended and is not yet reaped counts and discards the signal, as on
- * Linux. */
+ * signal, which kill(2) selects with a pid of 0 or below -1, as Linux
+ * 6.12.115's __kill_pgrp_info does (kernel/signal.c:1478-1488): each
+ * member through its leader (`signal_process_target`), whose credentials
+ * the permission check reads. 0 if any member may be signalled, -EPERM if
+ * members exist but none may be, -ESRCH if the group is empty. signo 0
+ * only probes. A member that has ended and is not yet reaped counts and
+ * discards the signal, as on Linux. A kernel thread is in no group of a
+ * process. */
 static int32_t kill_group(int pgid, int signo)
 {
     int found = 0;
@@ -4626,19 +5068,21 @@ static int32_t kill_group(int pgid, int signo)
     process_t *p;
 
     for (p = proc_list; p; p = p->next) {
-        if (p->state == PROC_UNUSED || (int)p->pgid != pgid) {
+        process_t *target = signal_process_target(p);
+
+        if (!target || proc_is_kthread(target) || (int)target->pgid != pgid) {
             continue;
         }
         found = 1;
-        if (!cred_may_signal(p, signo)) {
+        if (!cred_may_signal(target, signo)) {
             continue;
         }
         allowed = 1;
-        if (signo != 0 && p->state != PROC_ZOMBIE) {
+        if (signo != 0) {
             struct k_siginfo info;
 
-            sender_info(&info, SI_USER, p);
-            signal_post_info(p, signo, &info);
+            sender_info(&info, SI_USER, target);
+            signal_post_multi(target, signo, &info);
         }
     }
     if (!found) {
@@ -4648,44 +5092,42 @@ static int32_t kill_group(int pgid, int signo)
 }
 
 /** Post `signo` to every process the caller sees and may signal, but its
- * own, the init of its PID namespace and the kernel's threads, which
- * kill(2) selects with a pid of -1, as Linux does; an init ends the others
- * so at a shutdown. Each thread of a process is posted to, and the posts
- * merge in the one pending set. The outcome is `kill_group`'s: 0, -EPERM
- * or -ESRCH. */
+ * own and the init of its PID namespace, which kill(2) selects with a pid
+ * of -1; an init ends the others so at a shutdown. Each process is posted
+ * to once, through its leader (`signal_process_target`), whose
+ * credentials the permission check reads. As Linux 6.12.115's
+ * kill_something_info counts each such process, a zombie and a kernel
+ * thread included, and fails only when it counts none (kernel/signal.c:
+ * 1632-1645), the result is 0 when any process is found, permitted or
+ * not, and -ESRCH when none is. A kernel thread and a process whose
+ * threads have all ended take nothing. */
 static int32_t kill_all(int signo)
 {
     int found = 0;
-    int allowed = 0;
     process_t *p;
 
     for (p = proc_list; p; p = p->next) {
-        if (p->state == PROC_UNUSED || p->state == PROC_ZOMBIE || p == proc_idle ||
-            p->space_root == 0 || p->tg == current_proc->tg || pid_seen(p->tgid) <= 1) {
+        process_t *target = signal_process_target(p);
+
+        if (!target || target == proc_idle || target->tg == current_proc->tg ||
+            pid_seen(target->tgid) <= 1) {
             continue;
         }
         found = 1;
-        if (!cred_may_signal(p, signo)) {
-            continue;
-        }
-        allowed = 1;
-        if (signo != 0) {
+        if (signo != 0 && cred_may_signal(target, signo)) {
             struct k_siginfo info;
 
-            sender_info(&info, SI_USER, p);
-            signal_post_info(p, signo, &info);
+            sender_info(&info, SI_USER, target);
+            signal_post_multi(target, signo, &info);
         }
     }
-    if (!found) {
-        return -ESRCH;
-    }
-    return allowed ? 0 : -EPERM;
+    return found ? 0 : -ESRCH;
 }
 
 /** kill(2): pid > 0 a single process, which the id of any of its threads
  * names; pid == 0 the caller's process group; pid < -1 the group (-pid);
- * pid == -1 every process the caller may signal but itself and its PID
- * namespace's init (`kill_all`).
+ * pid == -1 every process the caller sees but its own and its PID
+ * namespace's init, posting only to those it may signal (`kill_all`).
  * signo 0 just probes existence and permission. A process whose threads
  * have all ended exists until its parent reaps it, and takes a signal and
  * discards it, as on Linux, where `kill -0` of a zombie succeeds. 0,
@@ -4961,18 +5403,21 @@ long sys_rt_tgsigqueueinfo(isr_params_t *params)
  * Block the current thread until a deliverable signal is pending, with
  * `name` as its wait's name for /proc/PID/wchan.
  *
- * The test of the pending signals and the move to PROC_BLOCKED are one
- * section with interrupts off, so a signal posted from an interrupt is
- * either seen by the test or finds the thread blocked and wakes it, as in
- * `wait_queue.c`. Interrupts are on only while the thread yields or idles.
+ * The thread is marked PROC_BLOCKED before it tests the pending signals,
+ * with interrupts off, so a signal posted on any processor is either seen by
+ * the test or finds the thread blocked and wakes it, as in `wait_queue.c`.
+ * Interrupts are on only while the thread yields or idles.
  */
 static void sig_wait(const char *name)
 {
     uint32_t flags = sig_irq_save();
 
-    while (!signal_pending()) {
+    for (;;) {
         current_proc->wchan = name;
-        current_proc->state = PROC_BLOCKED;
+        sched_set_current_state(PROC_BLOCKED);
+        if (signal_pending()) {
+            break;
+        }
         sig_irq_restore(flags);
         schedule();
         flags = sig_irq_save();
@@ -5060,7 +5505,7 @@ long signal_action(int signo, const struct k_sigaction *act, struct k_sigaction 
             current_proc->sigacts[signo].flags |= SA_IA32_ABI;
         }
 #endif
-        if (act->handler == KSIG_IGN) {
+        if (sig_handler_ignored(act->handler, signo)) {
             uint32_t f = sig_irq_save();
             sig_discard(current_proc, KSIG_BIT(signo));
             sig_irq_restore(f);
@@ -5452,7 +5897,9 @@ static void reap_threads(void)
  * `signo`: the first thread to stop records the stop for the parent's
  * wait4(WUNTRACED) and sends it SIGCHLD, and every thread parks as it next
  * returns to user mode, until a SIGCONT, or a SIGKILL to die, makes it
- * runnable. The real init (PID 1) is unstoppable, like Unix init: stopping
+ * runnable. Mark and wake each sibling to leave its interruptible wait,
+ * as Linux 6.12.115's do_signal_stop does (kernel/signal.c:2499-2511).
+ * The real init (PID 1) is unstoppable, like Unix init: stopping
  * it would freeze the system with no reaper and no way back, so a
  * job-control stop aimed at it is dropped.
  */
@@ -5460,6 +5907,7 @@ static void sig_group_stop(int signo)
 {
     struct tgroup *tg = current_proc->tg;
     process_t *parent;
+    process_t *t;
 
     if (current_proc->tgid == init_pid && !debug_shell_is_home) {
         return;
@@ -5468,6 +5916,13 @@ static void sig_group_stop(int signo)
         return;
     }
     tg->stop = (uint32_t)signo;
+    for (t = proc_list; t; t = t->next) {
+        if (t != current_proc && t->tg == tg && t->state != PROC_UNUSED &&
+            t->state != PROC_ZOMBIE) {
+            t->sig_woken = 1;
+            sig_wake(t, 0);
+        }
+    }
     tg->leader->jc_status = (uint32_t)(((signo & 0xff) << 8) | 0x7f);
     ptrace_group_change(tg);
     parent = get_process(tg->leader->parent_pid);
@@ -5496,9 +5951,12 @@ static void sig_park(void)
 {
     uint32_t flags = sig_irq_save();
 
-    while (current_proc->tg->stop && !(sig_pending_now() & KSIG_BIT(SIGKILL)) &&
-           !(current_proc->ptrace & PT_TRACED)) {
-        current_proc->state = PROC_STOPPED;
+    for (;;) {
+        sched_set_current_state(PROC_STOPPED);
+        if (!current_proc->tg->stop || (sig_pending_now() & KSIG_BIT(SIGKILL)) ||
+            (current_proc->ptrace & PT_TRACED)) {
+            break;
+        }
         schedule();
         if (current_proc->state == PROC_STOPPED) {
             idle_wait_irq_off();
@@ -5533,6 +5991,7 @@ static int sig_dequeue(uint64_t wanted, struct k_siginfo *info)
         current_proc->tg->pending &= ~KSIG_BIT(signo);
         *info = current_proc->tg->info[signo];
     }
+    sig_recalc();
     sig_irq_restore(flags);
     return signo;
 }
@@ -5558,6 +6017,47 @@ static int group_stop_taken(void)
 }
 
 /**
+ * Take SIGKILL off the current thread's pending set and its process's as
+ * the thread acts on it, as Linux 6.12.115's `get_signal` takes it off the
+ * thread's (kernel/signal.c:2772-2777), so that the thread's exit event
+ * stops it for its tracer: `ptrace_stop` ends at a SIGKILL pending in
+ * either set. Every other thread of a process whose end has begun has a
+ * SIGKILL of its own (`sig_complete`, `proc_group_exit`).
+ */
+static void sig_take_kill(void)
+{
+    uint32_t flags = sig_irq_save();
+
+    current_proc->sig_pending &= ~KSIG_BIT(SIGKILL);
+    current_proc->tg->pending &= ~KSIG_BIT(SIGKILL);
+    sig_irq_restore(flags);
+}
+
+/**
+ * Act on the default action of the signal `signo` the current thread took:
+ * ignore it, stop the process (`sig_group_stop`), or end the process, with
+ * a core file for a signal that dumps core (`terminate_current_process`),
+ * which does not return. An init (`unkillable`) passes over the default
+ * action of any signal but SIGKILL and SIGSTOP, one `sig_ignored` let
+ * through because the thread blocked it or was traced, as Linux 6.12.115's
+ * `get_signal` does (kernel/signal.c:2857-2868).
+ */
+static void sig_act_default(int signo)
+{
+    enum ksig_default def = ksig_default_action(signo);
+
+    if (def == KSIG_DEFAULT_IGNORE ||
+        (current_proc->tg->unkillable && signo != SIGKILL && signo != SIGSTOP)) {
+        return;
+    }
+    if (def == KSIG_DEFAULT_STOP) {
+        sig_group_stop(signo);
+        return;
+    }
+    terminate_current_process(def == KSIG_DEFAULT_CORE ? signo | WCOREFLAG : signo);
+}
+
+/**
  * Only a frame that returns to user mode is acted on, and one handler at most
  * is given a frame on each return. A pending SIGKILL ends the process before
  * anything else is taken, as Linux 6.12.115's get_signal ends a thread of a
@@ -5566,16 +6066,16 @@ static int group_stop_taken(void)
  * signal that has a handler. Otherwise a deliverable signal, one pending for
  * the thread or for its process and not blocked, is taken (`sig_dequeue`), the
  * lowest-numbered of the thread's own or, when it has none, of its process's,
- * and is ignored, ends the process (a default that terminates), stops the
- * process, or gets a handler frame. The handler runs with its sa_mask blocked
- * as well, and its own signal unless SA_NODEFER; the signals still pending
- * are acted on when its sigreturn comes back through here. SA_RESETHAND
- * resets the action after the frame has the handler. A thread whose process
- * is stopped parks here first; a traced one reports the stop to its tracer
- * instead and looks at the stop again when it resumes, so one its tracer
- * detached meanwhile parks, as Linux's detach leaves a tracee to its group's
- * stop. The records of ended threads are freed here too, a point every
- * running process passes where none of them is in use.
+ * and is ignored, gets its default action (`sig_act_default`), or gets a
+ * handler frame. The handler runs with its sa_mask blocked as well, and its
+ * own signal unless SA_NODEFER; the signals still pending are acted on when
+ * its sigreturn comes back through here. SA_RESETHAND resets the action
+ * after the frame has the handler. A thread whose process is stopped parks
+ * here first; a traced one reports the stop to its tracer instead and looks
+ * at the stop again when it resumes, so one its tracer detached meanwhile
+ * parks, as Linux's detach leaves a tracee to its group's stop. The records
+ * of ended threads are freed here too, a point every running process passes
+ * where none of them is in use.
  *
  * After signal work, `signal_restart` reads the live result and orig_nr to
  * restart a call or give it EINTR, after the tracer has made its changes. A
@@ -5620,9 +6120,11 @@ void deliver_signals(isr_params_t *tf)
         }
         deliverable = sig_pending_now() & ~current_proc->sig_blocked;
         if (deliverable == 0) {
+            sig_recalc();
             break;
         }
         if (deliverable & KSIG_BIT(SIGKILL)) {
+            sig_take_kill();
             terminate_current_process(SIGKILL);
             return; /* not reached */
         }
@@ -5640,16 +6142,8 @@ void deliver_signals(isr_params_t *tf)
             continue;
         }
         if (sa->handler == KSIG_DFL) {
-            enum ksig_default def = ksig_default_action(signo);
-            if (def == KSIG_DEFAULT_TERM || def == KSIG_DEFAULT_CORE) {
-                terminate_current_process(def == KSIG_DEFAULT_CORE ? signo | WCOREFLAG : signo);
-                return; /* not reached */
-            }
-            if (def == KSIG_DEFAULT_STOP) {
-                sig_group_stop(signo);
-                continue;
-            }
-            continue; /* default ignore (SIGCHLD/SIGCONT/SIGURG/SIGWINCH) */
+            sig_act_default(signo);
+            continue;
         }
 
         handler_flags = (uint32_t)sa->flags;
@@ -5682,6 +6176,17 @@ void deliver_signals(isr_params_t *tf)
     }
 }
 
+int signal_return_work(const isr_params_t *tf)
+{
+    const process_t *p = current_proc;
+
+    if (!p || !FRAME_USER(tf)) {
+        return 0;
+    }
+    return proc_dead_threads != 0 || p->restart_due || p->ptrace || p->sigmask_saved ||
+           p->sig_woken || p->tg->stop || (sig_pending_now() & ~p->sig_blocked) != 0;
+}
+
 /**
  * Wait, as rt_sigtimedwait does, for a signal of `set` to be pending for the
  * current thread or its process until the tick `deadline` when `timed`, and
@@ -5693,23 +6198,26 @@ static int32_t sigwait_take(uint64_t set, int timed, uint64_t deadline, struct k
     uint32_t flags = sig_irq_save();
 
     for (;;) {
-        uint64_t hit = sig_pending_now() & set;
+        uint64_t hit;
 
+        current_proc->wakeup_tick = timed ? (deadline != 0 ? deadline : 1u) : 0;
+        current_proc->wchan = "do_sigtimedwait";
+        sched_set_current_state(PROC_BLOCKED);
+        hit = sig_pending_now() & set;
         if (hit) {
             int signo = sig_dequeue(hit, info);
 
             current_proc->wakeup_tick = 0;
+            current_proc->state = PROC_RUNNING;
             sig_irq_restore(flags);
             return signo;
         }
         if (signal_pending() || (timed && tick_count() >= deadline)) {
             current_proc->wakeup_tick = 0;
+            current_proc->state = PROC_RUNNING;
             sig_irq_restore(flags);
             return signal_pending() ? -EINTR : -EAGAIN;
         }
-        current_proc->wakeup_tick = timed ? (deadline != 0 ? deadline : 1u) : 0;
-        current_proc->wchan = "do_sigtimedwait";
-        current_proc->state = PROC_BLOCKED;
         sig_irq_restore(flags);
         schedule();
         flags = sig_irq_save();
@@ -5864,14 +6372,27 @@ static void sigfd_fill(uint8_t *out, int signo, const struct k_siginfo *info)
     }
 }
 
+/** Whether a signal of the signalfd `arg`'s mask is pending for the current
+ * thread or its process: the end of a signalfd read's wait. */
+static int sigfd_ready(void *arg)
+{
+    const struct sigfd *sf = (const struct sigfd *)arg;
+
+    return (sig_pending_now() & sf->mask) != 0;
+}
+
 /**
  * read(2) of a signalfd: the pending signals of its mask, a 128-byte record
  * each, as many as fit, taken off the thread's or the process's pending set
- * as sigtimedwait takes them. With none pending it waits for one, the mask
- * counting as unblocked meanwhile, as sigtimedwait's set does, or fails with
- * EAGAIN when non-blocking, and with EINTR when another signal ends the wait;
- * EINVAL for a buffer shorter than a record, EFAULT when no record could be
- * copied.
+ * as sigtimedwait takes them. With none pending it fails with EAGAIN when
+ * non-blocking, or else sleeps on its process's signalfd queue, which every
+ * signal sent wakes (`sig_notify_fd`), until one is pending, and fails with
+ * EINTR when a signal the thread acts on ends the wait, as Linux 6.12.115's
+ * `signalfd_dequeue` (fs/signalfd.c:154-194). The thread's mask stays as it
+ * is: a signal of the mask that the thread blocks goes to another thread
+ * that does not block it, or ends the process, as on Linux; only one that
+ * no thread takes is left for the read. EINVAL for a buffer shorter than a
+ * record, EFAULT when no record could be copied.
  */
 static int32_t sigfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
@@ -5894,16 +6415,13 @@ static int32_t sigfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
         } else if (e->ofd && (e->ofd->status_flags & OFD_NONBLOCK)) {
             return -EAGAIN;
         } else {
-            uint64_t saved = current_proc->sig_blocked;
+            int rc =
+                wq_wait_event_as(&current_proc->tg->sigfd, sigfd_ready, sf, "signalfd_dequeue");
 
-            current_proc->sig_real_blocked = saved;
-            signal_set_blocked(saved & ~sf->mask);
-            signo = sigwait_take(sf->mask, 0, 0, &info);
-            signal_set_blocked(saved);
-            current_proc->sig_real_blocked = 0;
-            if (signo < 0) {
-                return signo;
+            if (rc < 0) {
+                return rc;
             }
+            continue;
         }
         sigfd_fill(one, (int)signo, &info);
         if (copy_to_user((void __user *)(buf + done), one, sizeof(one)) != 0) {
@@ -5914,14 +6432,16 @@ static int32_t sigfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return (int32_t)done;
 }
 
-/** Readable while a signal of the mask is pending for the poller. A signal
- * sent while it sleeps wakes it as the thread the signal would go to. */
+/** Readable while a signal of the mask is pending for the poller; its queue
+ * is the poller's process's signalfd queue, which every signal sent wakes,
+ * as Linux 6.12.115's `signalfd_poll` waits on `signalfd_wqh`
+ * (fs/signalfd.c:51-65). */
 static short sigfd_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     struct sigfd *sf = (struct sigfd *)e->priv;
 
     if (wq) {
-        *wq = NULL;
+        *wq = &current_proc->tg->sigfd;
     }
     return (short)((sig_pending_now() & sf->mask) ? (events & POLLIN) : 0);
 }
@@ -5934,7 +6454,7 @@ static void sigfd_close(fd_entry_t *e)
 }
 
 static const struct file_ops sigfd_ops = {sigfd_read,  NULL, sigfd_poll, NULL,
-                                          sigfd_close, NULL, NULL};
+                                          sigfd_close, NULL, NULL,       0};
 
 /**
  * signalfd and signalfd4 take -1 for a new signalfd or the descriptor of one to
@@ -5980,7 +6500,7 @@ static int32_t signalfd_common(isr_params_t *params, uint32_t flags)
         kfree(sf);
         return fd;
     }
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_ANON;
     e->ops = &sigfd_ops;
     e->priv = sf;
@@ -5988,6 +6508,7 @@ static int32_t signalfd_common(isr_params_t *params, uint32_t flags)
     if (flags & SFD_NONBLOCK) {
         e->ofd->status_flags |= OFD_NONBLOCK;
     }
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 
@@ -6965,6 +7486,92 @@ static int mlock_allowed(void)
 }
 
 /**
+ * Begin a change of the current address space's regions, by a call of the
+ * mmap family, which runs without the big lock: the regions' lock to
+ * write, as Linux's mmap family takes mmap_lock (mm/mmap.c), and then the
+ * big lock, which the files, the counts of committed and locked memory and
+ * the code that reads user memory under it still need. The space, for
+ * `regions_end`.
+ */
+static struct mm *regions_begin(void)
+{
+    struct mm *mm = current_proc->mm;
+
+    mmap_write_lock(mm);
+    bkl_enter();
+    return mm;
+}
+
+/** End what `regions_begin` began, and let go of the files whose last
+ * region the change removed (`mm_reap`). */
+static void regions_end(struct mm *mm)
+{
+    bkl_exit();
+    mmap_unlock(mm);
+    mm_reap();
+}
+
+/** Have the caches give frames back before a call maps memory, under the
+ * big lock, which they need, and before the regions' lock is taken, since
+ * a write back may wait for a file (`mem_balance`). */
+static void regions_balance(void)
+{
+    bkl_enter();
+    mem_balance();
+    bkl_exit();
+}
+
+/**
+ * The change of `sys_brk` to the break `req` of the regions `vm`, under
+ * the regions' lock held to write: the break the call returns, with
+ * `*populate` set when [*old_top, *new_top) is to be brought in once the
+ * lock is let go.
+ */
+static long brk_change(vm_space_t *vm, uintptr_t req, uintptr_t *old_top_out,
+                       uintptr_t *new_top_out, int *populate)
+{
+    uintptr_t old_top, new_top;
+
+    if (req < vm->heap_start || req > vm->stack_limit) {
+        return (long)vm->brk;
+    }
+
+    old_top = PAGE_UP(vm->brk);
+    new_top = PAGE_UP(req);
+    *old_top_out = old_top;
+    *new_top_out = new_top;
+
+    if (new_top > old_top) {
+        if (vm_overlaps(vm, old_top, new_top)) {
+            return (long)vm->brk;
+        }
+        if (vm_total(vm) + (new_top - old_top) > current_proc->rlim[RLIM_AS].cur) {
+            return (long)vm->brk; /* RLIMIT_AS: brk reports the break unchanged */
+        }
+        if ((vm->def_prot & VM_PROT_LOCKED) &&
+            !mem_lock_room(vm_locked(vm) / PAGE_SIZE, (new_top - old_top) / PAGE_SIZE)) {
+            return (long)vm->brk;
+        }
+        if (vm_insert(vm, old_top, new_top,
+                      VM_PROT_READ | VM_PROT_WRITE | VM_PROT_ACCOUNT | vm->def_prot,
+                      VM_HEAP) != 0) {
+            return (long)vm->brk;
+        }
+        *populate = (vm->def_prot & VM_PROT_LOCKS) == VM_PROT_LOCKED;
+    } else if (new_top < old_top) {
+        mm_note_anon(current_proc->mm, new_top, old_top);
+        if (vm_sealed_at(vm, new_top, old_top) < old_top || vm_remove(vm, new_top, old_top) != 0) {
+            return (long)vm->brk;
+        }
+        mmn_notify(current_proc->mm, MMN_UNMAP, new_top, old_top);
+        unmap_user_range(_curr_dir, new_top, old_top);
+    }
+
+    vm->brk = req;
+    return (long)req;
+}
+
+/**
  * Set the program break, the heap's top (brk(2)). Its argument is the
  * requested break. Returns the resulting break: the new value on success, or
  * the unchanged current break if the request is below the heap's start or into
@@ -6983,55 +7590,22 @@ static int mlock_allowed(void)
 long sys_brk(isr_params_t *params)
 {
     uintptr_t req = SC_ARG(params, 0);
-    vm_space_t *vm;
+    struct mm *mm;
+    long rc;
+    int populate = 0;
     uintptr_t old_top, new_top;
 
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
-    mem_balance();
-    vm = &current_proc->mm->vm;
-
-    if (req < vm->heap_start || req > vm->stack_limit) {
-        return (long)vm->brk;
+    regions_balance();
+    mm = regions_begin();
+    rc = brk_change(&mm->vm, req, &old_top, &new_top, &populate);
+    regions_end(mm);
+    if (populate) {
+        (void)vm_populate(old_top, new_top);
     }
-
-    old_top = PAGE_UP(vm->brk);
-    new_top = PAGE_UP(req);
-
-    if (new_top > old_top) {
-        if (vm_overlaps(vm, old_top, new_top)) {
-            return (long)vm->brk;
-        }
-        if (vm_total(vm) + (new_top - old_top) > current_proc->rlim[RLIM_AS].cur) {
-            return (long)vm->brk; /* RLIMIT_AS: brk reports the break unchanged */
-        }
-        if ((vm->def_prot & VM_PROT_LOCKED) &&
-            !mem_lock_room(vm_locked(vm) / PAGE_SIZE, (new_top - old_top) / PAGE_SIZE)) {
-            return (long)vm->brk;
-        }
-        if (vm_insert(vm, old_top, new_top,
-                      VM_PROT_READ | VM_PROT_WRITE | VM_PROT_ACCOUNT | vm->def_prot,
-                      VM_HEAP) != 0) {
-            return (long)vm->brk;
-        }
-        if ((vm->def_prot & VM_PROT_LOCKS) == VM_PROT_LOCKED) {
-            vm->brk = req;
-            (void)vm_populate(old_top, new_top);
-            return (long)req;
-        }
-    } else if (new_top < old_top) {
-        mm_note_anon(current_proc->mm, new_top, old_top);
-        if (vm_sealed_at(vm, new_top, old_top) < old_top || vm_remove(vm, new_top, old_top) != 0) {
-            return (long)vm->brk;
-        }
-        mmn_notify(current_proc->mm, MMN_UNMAP, new_top, old_top);
-        unmap_user_range(_curr_dir, new_top, old_top);
-    }
-
-    vm->brk = req;
-    vm_file_reap();
-    return (long)req;
+    return rc;
 }
 
 /**
@@ -7252,9 +7826,10 @@ static int32_t mmap_secret(const fd_entry_t *e, struct shmem *sh, int shared,
  * written. A shared mapping served as a private one, or made through a
  * descriptor not open for writing, is given VM_PROT_NOWRITE, so that mprotect
  * cannot make it writable later. A file of memfd_secret maps as
- * `mmap_secret` says. It may sleep, finding the file's path.
+ * `mmap_secret` says. The file's path is built at each reading of
+ * /proc/PID/maps (`procfs_maps_names`), as Linux's d_path at that read.
  */
-static int32_t mmap_file(fd_entry_t *e, int fd, int shared, struct map_source *src)
+static int32_t mmap_file(fd_entry_t *e, int shared, struct map_source *src)
 {
     struct shmem *sh;
     int disk;
@@ -7283,9 +7858,6 @@ static int32_t mmap_file(fd_entry_t *e, int fd, int shared, struct map_source *s
                 : disk  ? filemap_disk_shared(e)
                         : filemap_new(e);
     src->type = shared && (sh || disk) ? VM_SHARED : VM_FILE;
-    if (src->file) {
-        src->file->path = fd_path_copy(fd);
-    }
     return src->file ? 0 : -ENOMEM;
 }
 
@@ -7297,8 +7869,13 @@ static int32_t mmap_file(fd_entry_t *e, int fd, int shared, struct map_source *s
  * protection, and those go into `src`. A shared mapping through a
  * descriptor not open for writing is given VM_PROT_NOWRITE, as `mmap_file`
  * gives it. The region the call builds is not in the address space, so
- * its start is 0 and its end the length. The operation's error, or
- * `mmap_file_check`'s; ENOMEM with no memory for the path.
+ * its start is 0 and its end the length. The region is named for
+ * /proc/PID/maps by the descriptor's link target now, once: every kind of
+ * descriptor with its own mmap, a device, an anonymous inode or a file of
+ * /sys, has a target that names the object and is the same from every
+ * root, so a reader with another root would build the same path; with no
+ * room for the path the region has none. The operation's error, or
+ * `mmap_file_check`'s.
  */
 static int32_t mmap_object(fd_entry_t *e, int fd, int shared, uintptr_t len, struct map_source *src)
 {
@@ -7335,7 +7912,8 @@ static int32_t mmap_object(fd_entry_t *e, int fd, int shared, uintptr_t len, str
  * anonymous memory (VM_SHARED), or NULL for private anonymous memory
  * (VM_ANON). /dev/zero maps as anonymous memory.
  * Anonymous memory has its pages from its own first on, so its offset is
- * set to 0, as Linux ignores it. It may sleep, finding a file's path.
+ * set to 0, as Linux ignores it. It may sleep, finding the path of an
+ * object that maps itself.
  */
 static int32_t mmap_backing(uint32_t flags, int fd, uintptr_t len, struct map_source *src)
 {
@@ -7353,7 +7931,7 @@ static int32_t mmap_backing(uint32_t flags, int fd, uintptr_t len, struct map_so
             return mmap_object(e, fd, shared, len, src);
         }
         if (devfs_rdev(e) != ((1u << 8) | 5u)) { /* /dev/zero, 1:5, maps as anonymous memory */
-            return mmap_file(e, fd, shared, src);
+            return mmap_file(e, shared, src);
         }
     }
     src->pgoff = 0;
@@ -7458,15 +8036,17 @@ static int32_t mmap_place(vm_space_t *vm, uintptr_t addr, uintptr_t len, uint32_
  * Put the region `src` describes, `len` bytes, where `mmap_place` finds for
  * `addr` and `flags`, replacing what a MAP_FIXED range held, or failing with
  * EPERM when a region of that range is sealed (mseal). The region takes its
- * own reference to the file, and the caller's is put here. Returns the
- * address, or -errno.
+ * own reference to the file, and the caller's is put here.
+ * The regions' lock is held to write across the placing and the insertion
+ * (`regions_begin`). Returns the address, or -errno.
  * Under MAP_FIXED the two entries that a split in the removal and the new
  * region take are reserved before the old mapping is removed, so that a
  * failure leaves the old mapping in place.
  */
 static long mmap_install(uintptr_t addr, uintptr_t len, uint32_t flags, struct map_source *src)
 {
-    vm_space_t *vm = &current_proc->mm->vm;
+    struct mm *mm = regions_begin();
+    vm_space_t *vm = &mm->vm;
     uintptr_t base = 0;
     int32_t rc = mmap_place(vm, addr, len, flags, &base);
 
@@ -7490,7 +8070,7 @@ static long mmap_install(uintptr_t addr, uintptr_t len, uint32_t flags, struct m
         vma_exhausted("mmap");
     }
     vm_file_put(src->file);
-    vm_file_reap();
+    regions_end(mm);
     return rc == 0 ? (long)base : rc;
 }
 
@@ -7581,14 +8161,23 @@ long ksys_mmap_pgoff(uintptr_t addr, uintptr_t length, uint32_t prot, uint32_t f
         }
         locks = VM_PROT_LOCKED;
     }
-    if ((locks & VM_PROT_LOCKED) &&
-        !mem_lock_room(vm_locked(&current_proc->mm->vm) / PAGE_SIZE, len / PAGE_SIZE)) {
-        return -EAGAIN;
+    if (locks & VM_PROT_LOCKED) {
+        struct mm *mm = current_proc->mm;
+        int room;
+
+        mmap_read_lock(mm);
+        room = mem_lock_room(vm_locked(&mm->vm) / PAGE_SIZE, len / PAGE_SIZE);
+        mmap_unlock(mm);
+        if (!room) {
+            return -EAGAIN;
+        }
     }
-    mem_balance();
+    regions_balance();
     src.prot = vm_prot_of(prot) | mmap_key(prot);
     src.pgoff = (uint32_t)pgoff;
+    bkl_enter();
     rc = mmap_backing(flags, fd, len, &src);
+    bkl_exit();
     if (rc != 0) {
         return rc;
     }
@@ -7685,9 +8274,11 @@ long mmap_device(uintptr_t len, uint32_t prot, int32_t (*map)(vma_t *vma, void *
     return mmap_install(0, PAGE_UP(len), MAP_SHARED, &src);
 }
 
-int32_t munmap_shm(uintptr_t addr, const struct shmem *sh, size_t size)
+/** The unmap of `munmap_shm` in the regions `vm`, whose lock the caller
+ * holds to write. */
+static int32_t munmap_shm_locked(vm_space_t *vm, uintptr_t addr, const struct shmem *sh,
+                                 size_t size)
 {
-    vm_space_t *vm = &current_proc->mm->vm;
     vma_t *r = vm_find(vm, addr);
     uintptr_t end = addr;
     int32_t rc = -EPERM;
@@ -7716,7 +8307,15 @@ int32_t munmap_shm(uintptr_t addr, const struct shmem *sh, size_t size)
         rc = 0;
         addr = next;
     }
-    vm_file_reap();
+    return rc;
+}
+
+int32_t munmap_shm(uintptr_t addr, const struct shmem *sh, size_t size)
+{
+    struct mm *mm = regions_begin();
+    int32_t rc = munmap_shm_locked(&mm->vm, addr, sh, size);
+
+    regions_end(mm);
     return rc;
 }
 
@@ -7752,8 +8351,10 @@ long sys_munmap(isr_params_t *params)
 {
     uintptr_t addr = SC_ARG(params, 0);
     uintptr_t length = SC_ARG(params, 1);
+    struct mm *mm;
     vm_space_t *vm;
     uintptr_t start, end;
+    long rc;
 
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
@@ -7770,18 +8371,22 @@ long sys_munmap(isr_params_t *params)
     start = addr;
     end = PAGE_UP(addr + length);
 
+    mm = regions_begin();
+    rc = 0;
     if (vm_sealed_at(vm, start, end) < end) {
-        return -EPERM;
+        rc = -EPERM;
+    } else {
+        mm_note_anon(mm, start, end);
+        if (vm_remove(vm, start, end) != 0) {
+            vma_exhausted("munmap");
+            rc = -ENOMEM;
+        } else {
+            mmn_notify(mm, MMN_UNMAP, start, end);
+            unmap_user_range(_curr_dir, start, end);
+        }
     }
-    mm_note_anon(current_proc->mm, start, end);
-    if (vm_remove(vm, start, end) != 0) {
-        vma_exhausted("munmap");
-        return -ENOMEM;
-    }
-    mmn_notify(current_proc->mm, MMN_UNMAP, start, end);
-    unmap_user_range(_curr_dir, start, end);
-    vm_file_reap();
-    return 0;
+    regions_end(mm);
+    return rc;
 }
 
 /** Bring the resident pages of [start, end) to their regions' protection,
@@ -7856,9 +8461,10 @@ static long mprotect_refused(const struct mm *mm, uintptr_t addr, uintptr_t leng
  * key where the keys are on (`pkey_exec_only`), once the range is known to
  * begin in a region, any other protection moves a region of that key back
  * to key 0, and every other region keeps its own, as Linux's
- * arch_override_mprotect_pkey chooses.
+ * arch_override_mprotect_pkey chooses. The caller holds the regions' lock
+ * to write.
  */
-static long mprotect_key(isr_params_t *params, int key)
+static long mprotect_key_locked(isr_params_t *params, int key)
 {
     uintptr_t addr = SC_ARG(params, 0);
     uintptr_t length = SC_ARG(params, 1);
@@ -7916,6 +8522,22 @@ static long mprotect_key(isr_params_t *params, int key)
         protect_resident(addr, stop, vmprot);
     }
     return why == -1 ? -ENOMEM : why == -3 ? -EACCES : why == -4 ? -EPERM : 0;
+}
+
+/** `mprotect_key_locked` under the regions' lock held to write
+ * (`regions_begin`). */
+static long mprotect_key(isr_params_t *params, int key)
+{
+    struct mm *mm;
+    long rc;
+
+    if (!current_proc || !current_proc->mm) {
+        return -ESRCH;
+    }
+    mm = regions_begin();
+    rc = mprotect_key_locked(params, key);
+    regions_end(mm);
+    return rc;
 }
 
 /** Change the protection of a range (mprotect(2)): `mprotect_key` with no
@@ -8072,39 +8694,19 @@ static long remap_resize(vma_t *r, uintptr_t addr, uintptr_t old_len, uintptr_t 
     return remap_move(vm, r, addr, old_len, to, new_len);
 }
 
-/**
- * Resize a mapping, or move it (mremap(2)). Its arguments are old address, old
- * length, new length, flags and new address with MREMAP_FIXED. The old range
- * must lie in one region. With MREMAP_FIXED the mapping moves, pages and all,
- * to the new address, whatever was there going first (`remap_fixed`). Otherwise
- * a shrink cuts its end, and a growth takes the range after it when that is
- * free, or with MREMAP_MAYMOVE moves the whole mapping to a free range of the
- * new length. Returns the mapping's address, or -errno: EINVAL for arguments
- * that fail `remap_args_valid`, and for a mapping of a file whose last page at
- * the new length would not fit in 32 bits; EFAULT for a range not in one
- * region, or for a growth of device memory; EPERM when the region at the old
- * address is sealed (mseal), or under MREMAP_FIXED a region of the new range
- * is; ENOMEM when it cannot grow in place and may not move, when no range is
- * free, or past RLIMIT_AS; EAGAIN when the growth of a locked mapping would
- * take the locked pages past RLIMIT_MEMLOCK. The growth of a locked mapping is
- * locked and brought in, unless it was locked on fault, as on Linux.
- * MREMAP_DONTUNMAP is not implemented, and is EINVAL.
- */
-long sys_mremap(isr_params_t *params)
+/** The change of `sys_mremap` in the regions `vm`, under their lock held
+ * to write: the call's answer, with `*populate` set when the grown part of
+ * a locked region is to be brought in once the lock is let go. */
+static long mremap_locked(isr_params_t *params, vm_space_t *vm, int *populate)
 {
     uintptr_t addr = SC_ARG(params, 0);
     uint32_t flags = (uint32_t)SC_ARG(params, 3);
     uintptr_t to = SC_ARG(params, 4);
     uintptr_t old_len, new_len;
-    vm_space_t *vm;
     vma_t *r;
     int locked;
     long rc;
 
-    if (!current_proc || !current_proc->mm) {
-        return -ESRCH;
-    }
-    vm = &current_proc->mm->vm;
     if (!remap_args_valid(addr, SC_ARG(params, 1), SC_ARG(params, 2), flags)) {
         return -EINVAL;
     }
@@ -8132,8 +8734,43 @@ long sys_mremap(isr_params_t *params)
         return -EAGAIN;
     }
     rc = remap_resize(r, addr, old_len, new_len, flags, to);
-    vm_file_reap();
-    if (locked && new_len > old_len && (unsigned long)rc < (unsigned long)-4095L) {
+    *populate = locked && new_len > old_len;
+    return rc;
+}
+
+/**
+ * Resize a mapping, or move it (mremap(2)). Its arguments are old address, old
+ * length, new length, flags and new address with MREMAP_FIXED. The old range
+ * must lie in one region. With MREMAP_FIXED the mapping moves, pages and all,
+ * to the new address, whatever was there going first (`remap_fixed`). Otherwise
+ * a shrink cuts its end, and a growth takes the range after it when that is
+ * free, or with MREMAP_MAYMOVE moves the whole mapping to a free range of the
+ * new length. Returns the mapping's address, or -errno: EINVAL for arguments
+ * that fail `remap_args_valid`, and for a mapping of a file whose last page at
+ * the new length would not fit in 32 bits; EFAULT for a range not in one
+ * region, or for a growth of device memory; EPERM when the region at the old
+ * address is sealed (mseal), or under MREMAP_FIXED a region of the new range
+ * is; ENOMEM when it cannot grow in place and may not move, when no range is
+ * free, or past RLIMIT_AS; EAGAIN when the growth of a locked mapping would
+ * take the locked pages past RLIMIT_MEMLOCK. The growth of a locked mapping is
+ * locked and brought in, unless it was locked on fault, as on Linux.
+ * MREMAP_DONTUNMAP is not implemented, and is EINVAL.
+ */
+long sys_mremap(isr_params_t *params)
+{
+    uintptr_t old_len = PAGE_UP(SC_ARG(params, 1));
+    uintptr_t new_len = PAGE_UP(SC_ARG(params, 2));
+    struct mm *mm;
+    int populate = 0;
+    long rc;
+
+    if (!current_proc || !current_proc->mm) {
+        return -ESRCH;
+    }
+    mm = regions_begin();
+    rc = mremap_locked(params, &mm->vm, &populate);
+    regions_end(mm);
+    if (populate && (unsigned long)rc < (unsigned long)-4095L) {
         (void)vm_populate((uintptr_t)rc + old_len, (uintptr_t)rc + new_len);
     }
     return rc;
@@ -8252,50 +8889,14 @@ static uint32_t madvise_mark_bit(uint32_t advice)
     }
 }
 
-/**
- * Advice about a range (madvise(2)). Its arguments are address, length and
- * advice. MADV_DONTNEED, MADV_DONTNEED_LOCKED and MADV_FREE let the resident
- * pages go: a private anonymous page reads as zeros again, a private page of a
- * file reads the file again, and a shared page reads what the shared memory
- * holds. Those three are EINVAL over device memory, which has no pages to read
- * again, as on Linux for VM_PFNMAP, and MADV_DONTNEED and MADV_FREE are EINVAL
- * over a locked region, whose pages MADV_DONTNEED_LOCKED alone drops, as on
- * Linux for VM_LOCKED; MADV_COLD and MADV_PAGEOUT, which change nothing here,
- * are EINVAL over either, as Linux's can_madv_lru_vma refuses them. Over a
- * sealed region of anonymous memory without write (mseal) the advice that
- * discards pages stops with EPERM, the regions below it in the range advised
- * first, as Linux advises region by region. MADV_DONTFORK marks the regions so
- * that a fork's child does not get them, and MADV_DOFORK clears the mark;
- * DOFORK is EINVAL over device memory, as on Linux for VM_IO, and either is
- * ENOMEM when a region cannot be split. MADV_WIPEONFORK marks the regions so
- * that a fork's child gets them without their pages, reading zeros, and
- * MADV_KEEPONFORK clears the mark (VM_PROT_WIPEONFORK, vm.h); WIPEONFORK is
- * EINVAL over a region that is not private anonymous memory, as on Linux,
- * and either is ENOMEM when a region cannot be split. MADV_GUARD_INSTALL
- * makes the range a guard (VM_PROT_GUARD, vm.h), whose pages go and whose every
- * access is SIGSEGV with SEGV_MAPERR, and MADV_GUARD_REMOVE ends the guard,
- * leaving pages that read as zeros; both are EINVAL over a region that may not
- * hold a guard (`madvise_guard_allowed`) and ENOMEM when a region cannot be
- * split. Linux marks a guard's pages in its page tables and splits no region,
- * so a guard shows in /proc/PID/maps here as a region of its own, with the
- * protection of the region it was cut from. Any other advice `madvise_known`
- * takes changes nothing, and the rest is EINVAL, as Linux refuses an advice it
- * does not define. A range with a page in no region is ENOMEM, as in Linux. A
- * range that runs past user space is EINVAL, judged by the length as given: a
- * length within a page of 4 GiB rounds up to 0, which would pass for an empty
- * range.
- */
-long sys_madvise(isr_params_t *params)
+/** The change of `sys_madvise` in the regions `vm`, under their lock held
+ * to write. */
+static long madvise_locked(isr_params_t *params, vm_space_t *vm)
 {
     uintptr_t addr = SC_ARG(params, 0);
     uint32_t advice = (uint32_t)SC_ARG(params, 2);
-    vm_space_t *vm;
     uintptr_t len, end;
 
-    if (!current_proc || !current_proc->mm) {
-        return -ESRCH;
-    }
-    vm = &current_proc->mm->vm;
     if ((addr & (PAGE_SIZE - 1)) != 0 || addr > USER_ADDR_MAX ||
         SC_ARG(params, 1) > USER_ADDR_MAX - addr || !madvise_known(advice)) {
         return -EINVAL;
@@ -8334,6 +8935,53 @@ long sys_madvise(isr_params_t *params)
 }
 
 /**
+ * Advice about a range (madvise(2)). Its arguments are address, length and
+ * advice. MADV_DONTNEED, MADV_DONTNEED_LOCKED and MADV_FREE let the resident
+ * pages go: a private anonymous page reads as zeros again, a private page of a
+ * file reads the file again, and a shared page reads what the shared memory
+ * holds. Those three are EINVAL over device memory, which has no pages to read
+ * again, as on Linux for VM_PFNMAP, and MADV_DONTNEED and MADV_FREE are EINVAL
+ * over a locked region, whose pages MADV_DONTNEED_LOCKED alone drops, as on
+ * Linux for VM_LOCKED; MADV_COLD and MADV_PAGEOUT, which change nothing here,
+ * are EINVAL over either, as Linux's can_madv_lru_vma refuses them. Over a
+ * sealed region of anonymous memory without write (mseal) the advice that
+ * discards pages stops with EPERM, the regions below it in the range advised
+ * first, as Linux advises region by region. MADV_DONTFORK marks the regions so
+ * that a fork's child does not get them, and MADV_DOFORK clears the mark;
+ * DOFORK is EINVAL over device memory, as on Linux for VM_IO, and either is
+ * ENOMEM when a region cannot be split. MADV_WIPEONFORK marks the regions so
+ * that a fork's child gets them without their pages, reading zeros, and
+ * MADV_KEEPONFORK clears the mark (VM_PROT_WIPEONFORK, vm.h); WIPEONFORK is
+ * EINVAL over a region that is not private anonymous memory, as on Linux,
+ * and either is ENOMEM when a region cannot be split. MADV_GUARD_INSTALL
+ * makes the range a guard (VM_PROT_GUARD, vm.h), whose pages go and whose every
+ * access is SIGSEGV with SEGV_MAPERR, and MADV_GUARD_REMOVE ends the guard,
+ * leaving pages that read as zeros; both are EINVAL over a region that may not
+ * hold a guard (`madvise_guard_allowed`) and ENOMEM when a region cannot be
+ * split. Linux marks a guard's pages in its page tables and splits no region,
+ * so a guard shows in /proc/PID/maps here as a region of its own, with the
+ * protection of the region it was cut from. Any other advice `madvise_known`
+ * takes changes nothing, and the rest is EINVAL, as Linux refuses an advice it
+ * does not define. A range with a page in no region is ENOMEM, as in Linux. A
+ * range that runs past user space is EINVAL, judged by the length as given: a
+ * length within a page of 4 GiB rounds up to 0, which would pass for an empty
+ * range.
+ */
+long sys_madvise(isr_params_t *params)
+{
+    struct mm *mm;
+    long rc;
+
+    if (!current_proc || !current_proc->mm) {
+        return -ESRCH;
+    }
+    mm = regions_begin();
+    rc = madvise_locked(params, &mm->vm);
+    regions_end(mm);
+    return rc;
+}
+
+/**
  * Seal a range (mseal(2)), as Linux 6.12's mm/mseal.c does. Its arguments are
  * address, length and flags. Each region of the range takes VM_PROT_SEALED
  * (vm.h), split at the range's ends; sealing a sealed region again is no
@@ -8348,8 +8996,10 @@ long sys_mseal(isr_params_t *params)
 {
     uintptr_t start = SC_ARG(params, 0);
     uintptr_t len_in = SC_ARG(params, 1);
+    struct mm *mm;
     vm_space_t *vm;
     uintptr_t len;
+    long rc;
 
     if (sizeof(uintptr_t) < 8u) {
         return -EPERM;
@@ -8368,15 +9018,19 @@ long sys_mseal(isr_params_t *params)
     if (len == 0) {
         return 0;
     }
+    mm = regions_begin();
+    rc = 0;
     if (vm_covered(vm, start, start + len) != len) {
-        return -ENOMEM;
+        rc = -ENOMEM;
+    } else {
+        mm_note_anon(mm, start, start + len);
+        if (vm_advise(vm, start, start + len, VM_PROT_SEALED, 0u) != 0) {
+            vma_exhausted("mseal");
+            rc = -ENOMEM;
+        }
     }
-    mm_note_anon(current_proc->mm, start, start + len);
-    if (vm_advise(vm, start, start + len, VM_PROT_SEALED, 0u) != 0) {
-        vma_exhausted("mseal");
-        return -ENOMEM;
-    }
-    return 0;
+    regions_end(mm);
+    return rc;
 }
 
 /**
@@ -8407,6 +9061,7 @@ long sys_pkey_mprotect(isr_params_t *params)
 long sys_pkey_alloc(isr_params_t *params)
 {
     uintptr_t rights = SC_ARG(params, 1);
+    struct mm *mm;
     int key;
 
     if (SC_ARG(params, 0) != 0 || (rights & ~(uintptr_t)PKEY_ACCESS_MASK) != 0) {
@@ -8415,7 +9070,9 @@ long sys_pkey_alloc(isr_params_t *params)
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
-    key = pkey_take(current_proc->mm);
+    mm = regions_begin();
+    key = pkey_take(mm);
+    regions_end(mm);
     if (key < 0) {
         return -ENOSPC;
     }
@@ -8432,15 +9089,20 @@ long sys_pkey_alloc(isr_params_t *params)
 long sys_pkey_free(isr_params_t *params)
 {
     int key = (int32_t)SC_ARG(params, 0);
+    struct mm *mm;
+    long rc = 0;
 
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
-    if (!pkey_named(current_proc->mm, key)) {
-        return -EINVAL;
+    mm = regions_begin();
+    if (!pkey_named(mm, key)) {
+        rc = -EINVAL;
+    } else {
+        mm->pkeys &= ~(1u << key);
     }
-    current_proc->mm->pkeys &= ~(1u << key);
-    return 0;
+    regions_end(mm);
+    return rc;
 }
 
 /**
@@ -8461,31 +9123,41 @@ long sys_map_shadow_stack(isr_params_t *params)
  * Write back the shared mappings of disk files among the regions of
  * [addr, end), which the caller found covered: each region's file whole
  * (`filemap_msync`), and with `flush` the file system's fsync of it after.
- * The writes sleep, so each region is found again by address and its file
- * held across its write. 0, or -EIO when a write failed.
+ * The writes sleep and may wait for a file's lock, which comes before the
+ * regions' lock, so each region is found again by address under the
+ * regions' lock held to read and its file held across its write, with the
+ * lock let go. 0, or -EIO when a write failed.
  */
 static int32_t msync_range(uintptr_t addr, uintptr_t end, int flush)
 {
+    struct mm *mm = current_proc->mm;
     int32_t rc = 0;
 
     while (addr < end) {
-        const vma_t *r = vm_find(&current_proc->mm->vm, addr);
+        const vma_t *r;
         struct vm_file *f;
 
+        mmap_read_lock(mm);
+        r = vm_find(&mm->vm, addr);
+        f = r && r->type == VM_SHARED ? r->file : NULL;
+        if (r) {
+            addr = r->end;
+        }
+        if (f) {
+            vm_file_get(f);
+        }
+        mmap_unlock(mm);
         if (!r) {
             break;
         }
-        addr = r->end;
-        f = r->type == VM_SHARED ? r->file : NULL;
         if (f) {
-            vm_file_get(f);
             if (filemap_msync(f, flush) != 0) {
                 rc = -EIO;
             }
             vm_file_put(f);
         }
     }
-    vm_file_reap();
+    mm_reap();
     return rc;
 }
 
@@ -8504,7 +9176,7 @@ long sys_msync(isr_params_t *params)
 {
     uintptr_t addr = SC_ARG(params, 0);
     uint32_t flags = (uint32_t)SC_ARG(params, 2);
-    uintptr_t len;
+    uintptr_t len, covered;
 
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
@@ -8514,7 +9186,10 @@ long sys_msync(isr_params_t *params)
         return -EINVAL;
     }
     len = PAGE_UP(SC_ARG(params, 1));
-    if (vm_covered(&current_proc->mm->vm, addr, addr + len) != len) {
+    mmap_read_lock(current_proc->mm);
+    covered = vm_covered(&current_proc->mm->vm, addr, addr + len);
+    mmap_unlock(current_proc->mm);
+    if (covered != len) {
         return -ENOMEM;
     }
     return msync_range(addr, addr + len, (flags & 4u) != 0); /* MS_SYNC */
@@ -9486,24 +10161,31 @@ static int32_t lock_range(uintptr_t addr, uintptr_t len, uintptr_t *start, uintp
  */
 static int lock_populate(uintptr_t start, uintptr_t end, int go_on)
 {
+    struct mm *mm = current_proc->mm;
     uintptr_t at = start;
     int rc = 0;
 
     while (at < end) {
-        const vma_t *r = vm_lower(&current_proc->mm->vm, at);
+        const vma_t *r;
         uintptr_t stop;
+        uint32_t prot;
         int got = 0;
 
+        mmap_read_lock(mm);
+        r = vm_lower(&mm->vm, at);
         if (!r || r->start >= end) {
+            mmap_unlock(mm);
             break;
         }
         if (r->start > at) {
             at = r->start;
         }
         stop = r->end < end ? r->end : end;
-        if ((r->prot & VM_PROT_SECRET) && !(r->prot & VM_PROT_LOCKONFAULT)) {
+        prot = r->prot;
+        mmap_unlock(mm);
+        if ((prot & VM_PROT_SECRET) && !(prot & VM_PROT_LOCKONFAULT)) {
             got = -2;
-        } else if ((r->prot & VM_PROT_LOCKS) == VM_PROT_LOCKED && vm_populate(at, stop) != 0) {
+        } else if ((prot & VM_PROT_LOCKS) == VM_PROT_LOCKED && vm_populate(at, stop) != 0) {
             got = -1;
         }
         if (got != 0 && rc == 0) {
@@ -9515,6 +10197,32 @@ static int lock_populate(uintptr_t start, uintptr_t end, int go_on)
         at = stop;
     }
     return rc;
+}
+
+/** The change of `do_mlock` in the regions `vm`, under their lock held to
+ * write: 0 or -errno, with the range, page-aligned, in `*start` and
+ * `*end`. */
+static int32_t mlock_change(vm_space_t *vm, uintptr_t addr, uintptr_t len, uint32_t bits,
+                            uintptr_t *start, uintptr_t *end)
+{
+    uintptr_t have;
+    int32_t rc = lock_range(addr, len, start, end);
+
+    if (rc != 0 || *start == *end) {
+        return rc;
+    }
+    if (bits) {
+        have = (vm_locked(vm) - vm_locked_in(vm, *start, *end)) / PAGE_SIZE;
+        if (!mem_lock_room(have, (*end - *start) / PAGE_SIZE)) {
+            return -ENOMEM;
+        }
+    }
+    mm_note_anon(current_proc->mm, *start, *end);
+    rc = vm_lock(vm, *start, *end, bits);
+    if (rc == -2) {
+        vma_exhausted("mlock");
+    }
+    return rc != 0 ? -ENOMEM : 0;
 }
 
 /**
@@ -9532,40 +10240,27 @@ static int lock_populate(uintptr_t start, uintptr_t end, int go_on)
  */
 static long do_mlock(uintptr_t addr, uintptr_t len, uint32_t bits)
 {
-    vm_space_t *vm;
-    uintptr_t start, end, have;
+    uintptr_t start = 0, end = 0;
+    struct mm *mm;
     int32_t rc;
 
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
-    vm = &current_proc->mm->vm;
     if (bits && !mlock_allowed()) {
         return -EPERM;
     }
-    rc = lock_range(addr, len, &start, &end);
-    if (rc != 0 || start == end) {
+    mm = current_proc->mm;
+    mmap_write_lock(mm);
+    rc = mlock_change(&mm->vm, addr, len, bits, &start, &end);
+    mmap_unlock(mm);
+    mm_reap();
+    if (rc != 0 || start == end || !bits) {
         return rc;
     }
-    if (bits) {
-        have = (vm_locked(vm) - vm_locked_in(vm, start, end)) / PAGE_SIZE;
-        if (!mem_lock_room(have, (end - start) / PAGE_SIZE)) {
-            return -ENOMEM;
-        }
-    }
-    mm_note_anon(current_proc->mm, start, end);
-    rc = vm_lock(vm, start, end, bits);
-    if (rc == -2) {
-        vma_exhausted("mlock");
-    }
+    rc = lock_populate(start, end, 0);
     if (rc != 0) {
-        return -ENOMEM;
-    }
-    if (bits) {
-        rc = lock_populate(start, end, 0);
-        if (rc != 0) {
-            return rc == -2 ? -ENOMEM : -EAGAIN;
-        }
+        return rc == -2 ? -ENOMEM : -EAGAIN;
     }
     return 0;
 }
@@ -9616,6 +10311,7 @@ long sys_mlockall(isr_params_t *params)
 {
     uint32_t flags = (uint32_t)SC_ARG(params, 0);
     uint32_t bits = VM_PROT_LOCKED | ((flags & 4u) ? VM_PROT_LOCKONFAULT : 0u);
+    struct mm *mm;
     vm_space_t *vm;
 
     if (!current_proc || !current_proc->mm) {
@@ -9627,16 +10323,20 @@ long sys_mlockall(isr_params_t *params)
     if (!mlock_allowed()) {
         return -EPERM;
     }
-    vm = &current_proc->mm->vm;
+    mm = current_proc->mm;
+    vm = &mm->vm;
+    mmap_write_lock(mm);
     if ((flags & 1u) && !mem_lock_room(0, vm_total(vm) / PAGE_SIZE)) {
+        mmap_unlock(mm);
         return -ENOMEM;
     }
     vm->def_prot = (flags & 2u) ? bits : 0u;
     if (flags & 1u) {
         vm_lock_all(vm, bits);
-        if (!(flags & 4u)) {
-            (void)lock_populate(USER_ADDR_MIN, USER_ADDR_MAX, 1);
-        }
+    }
+    mmap_unlock(mm);
+    if ((flags & 1u) && !(flags & 4u)) {
+        (void)lock_populate(USER_ADDR_MIN, USER_ADDR_MAX, 1);
     }
     return 0;
 }
@@ -9648,8 +10348,10 @@ long sys_munlockall(isr_params_t *params)
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
+    mmap_write_lock(current_proc->mm);
     current_proc->mm->vm.def_prot = 0;
     vm_lock_all(&current_proc->mm->vm, 0);
+    mmap_unlock(current_proc->mm);
     return 0;
 }
 
@@ -9663,7 +10365,7 @@ long sys_mincore(isr_params_t *params)
 {
     uintptr_t addr = SC_ARG(params, 0);
     uintptr_t pages;
-    uintptr_t i, start, end;
+    uintptr_t i, start, end, covered;
     int32_t rc;
 
     if (!current_proc || !current_proc->mm) {
@@ -9676,7 +10378,10 @@ long sys_mincore(isr_params_t *params)
     if (rc != 0) {
         return rc;
     }
-    if (vm_covered(&current_proc->mm->vm, start, end) != end - start) {
+    mmap_read_lock(current_proc->mm);
+    covered = vm_covered(&current_proc->mm->vm, start, end);
+    mmap_unlock(current_proc->mm);
+    if (covered != end - start) {
         return -ENOMEM;
     }
     pages = (SC_ARG(params, 1) + PAGE_SIZE - 1) / PAGE_SIZE;

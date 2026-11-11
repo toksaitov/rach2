@@ -1,7 +1,7 @@
 /*
  * kheap_hosttest.c: the heap's size, its page runs, the reserve for large
  * ones, the guarded runs kernel stacks come from, and the two ends the
- * cache's pages and the rest are taken from.
+ * cache's pages and the rest are taken from, and the freed runs it keeps.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
@@ -158,6 +158,23 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)subsystem;
     (void)format;
     klogs++;
+}
+
+/* The shrinker the heap registered, which the kept rows call as reclaim. */
+static struct mem_shrinker *shrinker;
+
+/** Keep `s` as the one shrinker. */
+void mem_shrinker_register(struct mem_shrinker *s)
+{
+    shrinker = s;
+}
+
+/** Forget `s` when it is the one kept. */
+void mem_shrinker_unregister(struct mem_shrinker *s)
+{
+    if (shrinker == s) {
+        shrinker = 0;
+    }
 }
 
 #include "../../rach2/sys/mm/kheap.c"
@@ -401,6 +418,67 @@ static void region_rows(void)
     CHECK(kmalloc((size_t)KVA_HEAP_SIZE) == 0, "an object the size of the region is refused");
 }
 
+/* A large object of three pages with its header. */
+#define THREE_PAGES (3u * PAGE_SIZE - KHEAP_HDR)
+
+/**
+ * The kept runs. A freed object of three pages keeps its run mapped, the
+ * next object of its length takes the same run with no new frame, and the
+ * heap's shrinker, which reclaim asks, gives the run's frames back. With no
+ * frame left, a buffer cache page and a kernel stack each give the kept runs
+ * back and are served from their frames, as an allocation of `take_pages`
+ * is.
+ */
+static void kept_rows(void)
+{
+    unsigned base;
+    void *a, *b;
+
+    frames_out = 0;
+    kheap_init(SMALL_REGION);
+    base = frames_out;
+    CHECK(shrinker == &kept_shrinker, "the heap registers its shrinker");
+    a = kmalloc(THREE_PAGES);
+    kfree(a);
+    CHECK(frames_out == base + 3 && kept_runs[2] == 1, "a freed run of three pages is kept mapped");
+    b = kmalloc(THREE_PAGES);
+    CHECK(b == a && frames_out == base + 3 && kept_runs[2] == 0,
+          "and the next object of its length takes it, with no new frame");
+    kfree(b);
+    CHECK(shrinker && shrinker->shrink(shrinker, 1, 0) == 3, "reclaim gets its three frames");
+    CHECK(frames_out == base && kept[2] == 0 && kept_runs[2] == 0, "and the run goes back");
+    CHECK(shrinker && shrinker->shrink(shrinker, 1, 0) == 0, "and none after");
+
+    a = kmalloc(THREE_PAGES);
+    kfree(a);
+    frame_limit = frames_out;
+    a = kalloc_cache_page();
+    CHECK(a != 0 && kept_runs[2] == 0, "a cache page with no frame left gives the kept runs back");
+    CHECK(frames_out == base + 1, "and is served from their frames");
+    frame_limit = 0xffffffffu;
+    kfree_pages(a, 1);
+
+    a = kmalloc(THREE_PAGES);
+    kfree(a);
+    frame_limit = frames_out;
+    a = kalloc_guarded(2);
+    CHECK(a != 0 && kept_runs[2] == 0, "a kernel stack with no frame left gives them back too");
+    CHECK(frames_out == base + 2, "and is served from their frames");
+    frame_limit = 0xffffffffu;
+    kfree_guarded(a, 2);
+    CHECK(frames_out == base, "and every frame went back after the kept rows");
+}
+
+/** Unmap the `count` pages from `va`, a page at a time. */
+void unmap_kernel_frames(uintptr_t va, uint32_t count)
+{
+    uint32_t i;
+
+    for (i = 0; i < count; i++) {
+        unmap_kernel_frame(va + (uintptr_t)i * PAGE_SIZE);
+    }
+}
+
 /**
  * Run the rows of the reserve on the small region, then the guard, ends, size
  * and region rows; the count of failures, at most 255.
@@ -527,6 +605,7 @@ int main(void)
     give_singles(n);
     CHECK(frames_out == 0, "and every frame went back after the shortage");
     guard_rows();
+    kept_rows();
     ends_rows();
     size_rows();
     region_rows();

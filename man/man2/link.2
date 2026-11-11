@@ -23,8 +23,16 @@ creates
 .Fa newpath
 as another name for the file at
 .Fa oldpath .
-Hard links are implemented only on ext2, within one mount, and cannot
-refer to directories.
+Hard links are implemented on ext2 and tmpfs, within one mount, and
+cannot refer to directories.
+A link to a file the caller does not own needs, unless the caller is
+root, a regular file with no set-user-ID bit and no set-group-ID bit with
+group execute, which the caller may both read and write, else
+.Er EPERM ,
+as under Linux's
+.Pa /proc/sys/fs/protected_hardlinks ,
+which is 1 and takes 0 to turn the rule off
+.Pq Xr proc 5 .
 The destination must not already exist.
 Both paths and the source are checked before the kernel reports that
 the file system does not support hard links.
@@ -298,8 +306,10 @@ selected a directory that is not empty, or a path whose last component
 is
 .Pa \&.. .
 .It Bq Er EPERM
-A hard link was requested to a directory, to a synthetic object, or on
-a writable file system without hard links, the sticky-directory rule
+A hard link was requested to a directory, to a synthetic object, on a
+writable file system without hard links, or to another user's file that
+.Pa protected_hardlinks
+refuses, the sticky-directory rule
 forbids removal, the file is immutable or append-only, or the directory
 of the new name is immutable.
 The KRFFS boot root refuses hard links before checking read-only state.
@@ -315,4 +325,5 @@ The hard-link source and destination are on different mounts.
 .Xr rename 2 ,
 .Xr rmdir 2 ,
 .Xr symlink 2 ,
-.Xr loop 4
+.Xr loop 4 ,
+.Xr proc 5

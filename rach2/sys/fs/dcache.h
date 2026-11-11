@@ -22,9 +22,12 @@ struct vfs_mount;
  * type lets the mount go. A lookup that sleeps while a mutator runs
  * keeps its answer out of the cache (`dcache_lookup`).
  *
- * Every function runs under the big kernel lock; the cache's lists change
- * only between sleeps, and a `put`, which may sleep, comes after the entry
- * has left them.
+ * The cache's lists and counts are under its own spinlock, placed in the
+ * order vfs.Readme.md's Locks gives, held only while they change or a
+ * found node gains a hold. `dcache_lookup_hit`, `dcache_count_hits` and
+ * `dcache_counts` may run without the big lock; every other function runs
+ * under it, since it calls the type's `lookup` or `put`, which may sleep
+ * and come after the entry has left the lists.
  */
 
 #define DCACHE_LIMIT 8192u
@@ -45,6 +48,20 @@ struct dcache_counts {
  * `name_cache`, and the names "." and "..", go to the type every time.
  */
 int dcache_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node);
+
+/**
+ * The answer of the cache alone for `name` in `dir` of `mnt`, a mount's
+ * base, without the big lock: 0 with the node held in `*node`, -ENOENT for
+ * a negative entry, or -EAGAIN when the cache has no entry, the type keeps
+ * no names there, or the name is "." or "..". The answer is not counted
+ * (`dcache_count_hits`). Does not sleep; the caller holds no spinlock.
+ */
+int dcache_lookup_hit(struct vfs_mount *mnt, void *dir, const char *name, void **node);
+
+/** Count `n` answers of `dcache_lookup_hit` as hits, once the walk that
+ * asked has used them, so that a walk begun again under the big lock
+ * counts each name once. */
+void dcache_count_hits(uint32_t n);
 
 /**
  * `dcache_lookup` for a walk with RESOLVE_CACHED, which may not wait for a

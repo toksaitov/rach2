@@ -12,6 +12,7 @@
 #include "usercopy.h"
 #include "../irq.h"
 #include "../fs/krffs.h"
+#include "../fs/tmpfs.h"
 #include "../fs/vfs.h"
 #include "../block/block.h"
 #include "../block/loop.h"
@@ -57,6 +58,9 @@ struct filemap {
     struct dshare *ds;
     int shared; /* stores may change the file, and may be written back */
     int going;  /* being released, and no writer for its file's pages */
+    /* Shared anonymous memory's inode number on the mount
+     * `vfs_memfd_mount` has; 0 for any other. */
+    uint64_t anon_ino;
 };
 
 static struct filemap *maps;
@@ -431,7 +435,11 @@ static int filemap_share_disk(struct vm_file *f, uint32_t pgoff, uintptr_t *phys
  * A mapping of a disk file's pages through a descriptor open for writing
  * writes them back first, before it takes that lock, and no other
  * write-back takes it for its writer from then on (`going`); a sync of the
- * file waits for the write-back to end (`leaving`).
+ * file waits for the write-back to end (`leaving`). Shared anonymous
+ * memory's own pages go last, giving way every leaf
+ * (`shmem_free_yielding`): the mapping is off the list and its last region
+ * gone by then, and the release runs from `mm_reap`, which holds no
+ * regions' lock and whose callers let it sleep in a write-back.
  */
 static void filemap_release(struct vm_file *f)
 {
@@ -469,13 +477,12 @@ static void filemap_release(struct vm_file *f)
     if (m->entry.ofd) {
         m->entry.node = filemap_node(m);
         fd_release_backing(&m->entry);
-        fd_ofd_unref(m->entry.ofd);
     }
     if (locked) {
         vfs_ns_unlock(locked);
     }
     if (m->sh == &m->own) {
-        shmem_free(&m->own);
+        shmem_free_yielding(&m->own);
     }
     kfree(m->vf.path);
     kfree(m);
@@ -507,6 +514,19 @@ struct shmem *filemap_shmem(const struct vm_file *f)
 const struct open_file *filemap_ofd(const struct vm_file *f)
 {
     return f && f->release == filemap_release ? ((const struct filemap *)f)->entry.ofd : NULL;
+}
+
+uint64_t filemap_anon_ino(const struct vm_file *f)
+{
+    return f && f->release == filemap_release ? ((const struct filemap *)f)->anon_ino : 0u;
+}
+
+const fd_entry_t *filemap_entry(const struct vm_file *f)
+{
+    if (!f || f->release != filemap_release || !((const struct filemap *)f)->entry.ofd) {
+        return NULL;
+    }
+    return &((const struct filemap *)f)->entry;
 }
 
 int filemap_in_memory(const struct vm_file *f)
@@ -732,6 +752,10 @@ int filemap_msync(struct vm_file *f, int flush)
     return f->share == filemap_share_disk ? dshare_sync(m->ds, 0, 0xFFFFFFFFu, flush) : 0;
 }
 
+/* The name /proc/PID/maps gives shared anonymous memory, Linux's for the
+ * shmem file shmem_zero_setup makes (mm/shmem.c:5383). */
+static const char anon_shared_name[] = "/dev/zero (deleted)";
+
 struct vm_file *filemap_anon_shared(void)
 {
     struct filemap *m = kzalloc(sizeof(*m));
@@ -742,37 +766,47 @@ struct vm_file *filemap_anon_shared(void)
     m->vf.refs = 1;
     m->vf.share = filemap_share;
     m->vf.release = filemap_release;
+    if ((m->vf.path = kmalloc(sizeof(anon_shared_name))) != NULL) {
+        k_memcpy(m->vf.path, anon_shared_name, sizeof(anon_shared_name));
+    }
     m->sh = &m->own;
     m->own.maps = 1;
+    m->anon_ino = tmpfs_new_ino(vfs_memfd_mount());
     m->next = maps;
     maps = m;
     return &m->vf;
 }
 
+/** What `filemap_shmem_cut` unmaps: the pages of `sh` from `first`. */
+struct shmem_cut {
+    const struct shmem *sh;
+    uint32_t first;
+};
+
+/** The `paging_zap_where` match of `filemap_shmem_cut`: the part of the
+ * region `r` that maps the cut pages of `arg`, a `struct shmem_cut`. */
+static int shmem_cut_match(const vma_t *r, void *arg, uintptr_t *lo, uintptr_t *hi)
+{
+    const struct shmem_cut *c = arg;
+    uintptr_t pages = (r->end - r->start) / PAGE_SIZE;
+
+    if (!r->file || (r->file->share != filemap_share && r->file->share != filemap_share_disk) ||
+        ((const struct filemap *)r->file)->sh != c->sh ||
+        (r->pgoff < c->first && pages <= c->first - r->pgoff)) {
+        return 0;
+    }
+    *lo = r->pgoff < c->first ? r->start + (uintptr_t)(c->first - r->pgoff) * PAGE_SIZE : r->start;
+    *hi = r->end;
+    return 1;
+}
+
 void filemap_shmem_cut(struct shmem *sh, uint32_t first)
 {
-    process_t *p;
-    const vma_t *r;
+    struct shmem_cut c;
 
-    for (p = proc_list; p; p = p->next) {
-        const vm_space_t *vm = p->mm ? &p->mm->vm : NULL;
-
-        for (r = vm ? vm_first(vm) : NULL; r; r = vm_next(r)) {
-            uintptr_t pages = (r->end - r->start) / PAGE_SIZE;
-            uintptr_t from;
-
-            if (!r->file ||
-                (r->file->share != filemap_share && r->file->share != filemap_share_disk) ||
-                ((const struct filemap *)r->file)->sh != sh ||
-                (r->pgoff < first && pages <= first - r->pgoff)) {
-                continue;
-            }
-            from =
-                r->pgoff < first ? r->start + (uintptr_t)(first - r->pgoff) * PAGE_SIZE : r->start;
-            mmn_notify(p->mm, MMN_TRUNCATE, from, r->end);
-            unmap_user_range(p->mm->dir, from, r->end);
-        }
-    }
+    c.sh = sh;
+    c.first = first;
+    paging_zap_where(shmem_cut_match, &c);
 }
 
 int filemap_holds(const void *node)

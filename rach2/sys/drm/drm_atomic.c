@@ -20,6 +20,7 @@
 #ifndef RACH2_HOSTTEST
 #include "../arch/arch.h"
 #include "../proc/sched.h"
+#include "../proc/smp.h"
 #endif
 
 #define DRM_INT_MAX 0x7fffffffL
@@ -28,35 +29,36 @@
  * The commit lock
  */
 
-/** Whether the commit lock of `arg`, a device, is free. */
-static int commit_free(void *arg)
-{
-    return !((struct drm_device *)arg)->commit_held;
-}
-
 int32_t drm_modeset_lock(struct drm_device *dev)
 {
-    while (dev->commit_held) {
-        if (wq_wait_event(&dev->commit_wait, commit_free, dev) != 0) {
-            return -EINTR;
-        }
+    if (mutex_held(&dev->mode_lock)) {
+        dev->mode_lock_depth++;
+        return 0;
     }
-    dev->commit_held = 1;
-    return 0;
+    return mutex_lock_interruptible(&dev->mode_lock);
 }
 
 void drm_modeset_lock_nointr(struct drm_device *dev)
 {
-    while (dev->commit_held) {
-        wq_wait_event_nointr(&dev->commit_wait, commit_free, dev);
+    if (mutex_held(&dev->mode_lock)) {
+        dev->mode_lock_depth++;
+        return;
     }
-    dev->commit_held = 1;
+    mutex_lock(&dev->mode_lock);
 }
 
 void drm_modeset_unlock(struct drm_device *dev)
 {
-    dev->commit_held = 0;
-    wq_wake_all(&dev->commit_wait);
+    if (dev->mode_lock_depth != 0) {
+        dev->mode_lock_depth--;
+        return;
+    }
+    mutex_unlock(&dev->mode_lock);
+}
+
+int drm_modeset_held(const struct drm_device *dev)
+{
+    return mutex_held(&dev->mode_lock);
 }
 
 /* ------------------------------------------------------------------------
@@ -1411,6 +1413,19 @@ struct commit_work {
     struct commit_work *next;
 };
 
+/*
+ * `work_lock` keeps the three queues below (`works`, `hotplugs` and
+ * `dev_works`), their counts and each queued commit's wait state
+ * (`waiting`, `waited`, `deadline`, `timed_out`, `running`), against the
+ * fence callbacks and the interrupt handlers that queue works, on any
+ * processor. It is taken with interrupts off, and no fence is called and
+ * no queue woken under it, since a fence's enabling takes the signaller's
+ * locks, under which the callbacks run. A queued commit's waits advance
+ * and its tail runs only under its device's commit lock, whoever runs
+ * them, the worker or a blocking commit of the same objects, so that one
+ * at a time does.
+ */
+static struct spinlock work_lock = SPINLOCK_INIT_NAMED("drm_work_lock");
 static struct commit_work *works;
 /* The worker sleeps here; static storage starts it empty. */
 static wait_queue_t work_wait;
@@ -1422,94 +1437,125 @@ static wait_queue_t work_done_wait;
 static void work_fence_done(struct dma_fence *fence, struct dma_fence_cb *cb);
 
 /**
+ * Arm `w`'s wait on plane `i`'s fence, `fence`: the wait recorded first,
+ * since the callback may run at once on another processor and must find
+ * it, then the callback added and the fence handed to the driver's
+ * `commit_fence_wait`. 1 once armed, or 0 when the fence had signalled.
+ */
+static int work_fence_arm(struct commit_work *w, int i, struct dma_fence *fence)
+{
+    const struct drm_mode_config *mc = &w->state.dev->mode_config;
+    uint32_t flags;
+
+    w->cbs[i].work = w;
+    flags = spin_lock_irqsave(&work_lock);
+    w->waiting = 1;
+    w->waited = i;
+    w->deadline = mc->commit_fence_timeout_ms
+                      ? rtc_ticks_now() + MS_TO_TICKS(mc->commit_fence_timeout_ms) + 1u
+                      : 0;
+    spin_unlock_irqrestore(&work_lock, flags);
+    if (dma_fence_add_callback(fence, &w->cbs[i].cb, work_fence_done) != 0) {
+        return 0;
+    }
+    if (mc->commit_fence_wait) {
+        mc->commit_fence_wait(w->state.dev, fence);
+    }
+    return 1;
+}
+
+/**
  * Move `w`'s tail to the first plane after `from` whose fence has not
  * signalled, arm only that fence's callback, hand it to the driver's
  * `commit_fence_wait` and start its timeout, as Linux's
  * intel_atomic_commit_fence_wait (intel_display.c:7262-7280) waits for
  * each plane's fence in turn, at the start of the tail that Linux queues
- * at once. Process context without driver locks, interrupts masked; the
- * previous callback is no longer armed.
+ * at once. Process context under the device's commit lock, without
+ * `work_lock`; the previous callback is no longer armed.
  */
 static void work_fence_next(struct commit_work *w, int from)
 {
-    const struct drm_mode_config *mc = &w->state.dev->mode_config;
+    uint32_t flags;
     int i;
 
-    w->waiting = 0;
-    w->waited = DRM_MAX_PLANES;
-    w->deadline = 0;
     for (i = from + 1; i < DRM_MAX_PLANES; i++) {
         struct drm_plane_state *ps = w->state.planes_new[i];
 
-        if (!ps || !ps->fence) {
-            continue;
+        if (ps && ps->fence && work_fence_arm(w, i, ps->fence)) {
+            return;
         }
-        w->cbs[i].work = w;
-        if (dma_fence_add_callback(ps->fence, &w->cbs[i].cb, work_fence_done) != 0) {
-            continue;
-        }
-        w->waiting = 1;
-        w->waited = i;
-        if (mc->commit_fence_timeout_ms) {
-            w->deadline = rtc_ticks_now() + MS_TO_TICKS(mc->commit_fence_timeout_ms) + 1u;
-        }
-        if (mc->commit_fence_wait) {
-            mc->commit_fence_wait(w->state.dev, ps->fence);
-        }
-        return;
     }
+    flags = spin_lock_irqsave(&work_lock);
+    w->waiting = 0;
+    w->waited = DRM_MAX_PLANES;
+    w->deadline = 0;
+    spin_unlock_irqrestore(&work_lock, flags);
 }
 
 /** Whether `w` may advance its waits or run its tail at tick `now`: it has
  * not begun the tail, and no callback is armed or the current wait timed
- * out, after which Linux's tail waits for no other plane. */
+ * out, after which Linux's tail waits for no other plane. `work_lock` is
+ * held. */
+static int work_due_locked(const struct commit_work *w, uint64_t now)
+{
+    return !w->running && (!w->waiting || (w->deadline && now >= w->deadline));
+}
+
+/** `work_due_locked` under `work_lock`. */
 static int work_due(const struct commit_work *w, uint64_t now)
 {
-    uint32_t flags = kirq_save();
-    int due = !w->running && (!w->waiting || (w->deadline && now >= w->deadline));
+    uint32_t flags = spin_lock_irqsave(&work_lock);
+    int due = work_due_locked(w, now);
 
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&work_lock, flags);
     return due;
 }
 
 /** Record completion and whether it missed the deadline, then wake the
  * worker to advance in process context without the signaller's locks.
- * dma_fence_signal runs this with interrupts masked and the big lock held. */
+ * dma_fence_signal runs this with interrupts masked, perhaps under the
+ * signaller's locks and without the big lock. */
 static void work_fence_done(struct dma_fence *fence, struct dma_fence_cb *cb)
 {
     struct commit_fence_cb *fcb = (struct commit_fence_cb *)cb;
     struct commit_work *w = fcb->work;
+    uint32_t flags = spin_lock_irqsave(&work_lock);
 
     (void)fence;
     w->timed_out = w->deadline && rtc_ticks_now() >= w->deadline;
     w->deadline = 0;
     w->waiting = 0;
+    spin_unlock_irqrestore(&work_lock, flags);
     wq_wake_all(&work_wait);
     wq_wake_all(&work_done_wait);
 }
 
-/** Advance a runnable commit's waits in process context, without driver
- * locks. Return 1 once every wait is over or one timed out, 0 while the
- * current callback is armed. The big lock and interrupt mask exclude a
- * completion during each change of the current wait. */
+/** Advance a runnable commit's waits in process context, under its
+ * device's commit lock and without driver locks. Return 1 once every wait
+ * is over or one timed out, 0 while the current callback is armed. */
 static int work_fence_progress(struct commit_work *w)
 {
-    uint32_t flags = kirq_save();
-    int done;
+    uint32_t flags;
+    int from, done;
 
-    if (w->deadline && rtc_ticks_now() >= w->deadline) {
-        w->timed_out = 1;
+    for (;;) {
+        flags = spin_lock_irqsave(&work_lock);
+        if (w->deadline && rtc_ticks_now() >= w->deadline) {
+            w->timed_out = 1;
+        }
+        if (w->timed_out || w->waiting || w->waited >= DRM_MAX_PLANES) {
+            done = w->timed_out || w->waited >= DRM_MAX_PLANES;
+            spin_unlock_irqrestore(&work_lock, flags);
+            return done;
+        }
+        from = w->waited;
+        spin_unlock_irqrestore(&work_lock, flags);
+        work_fence_next(w, from);
     }
-    while (!w->timed_out && !w->waiting && w->waited < DRM_MAX_PLANES) {
-        work_fence_next(w, w->waited);
-    }
-    done = w->timed_out || w->waited == DRM_MAX_PLANES;
-    kirq_restore(flags);
-    return done;
 }
 
 /* The connectors whose hotplug event waits for the worker, each with a
- * hold on its device, under the interrupt flag; static storage starts it
+ * hold on its device, under `work_lock`; static storage starts it
  * empty. */
 #define HOTPLUG_QUEUE 8
 static struct drm_connector *hotplugs[HOTPLUG_QUEUE];
@@ -1519,30 +1565,28 @@ static int32_t commit_worker_start(void);
 
 void drm_connector_hotplug_later(struct drm_connector *connector)
 {
-    uint32_t flags = kirq_save();
+    uint32_t flags = spin_lock_irqsave(&work_lock);
     int i;
 
     for (i = 0; i < nhotplugs; i++) {
         if (hotplugs[i] == connector) {
-            kirq_restore(flags);
+            spin_unlock_irqrestore(&work_lock, flags);
             return;
         }
     }
     if (nhotplugs == HOTPLUG_QUEUE) {
-        kirq_restore(flags);
+        spin_unlock_irqrestore(&work_lock, flags);
         klog(KLOG_WARN, "drm", "%s: hotplug event lost: the queue is full", connector->name);
         return;
     }
     drm_dev_get(connector->dev);
     hotplugs[nhotplugs++] = connector;
-    kirq_restore(flags);
-    if (commit_worker_start() == 0) {
-        wq_wake_all(&work_wait);
-    }
+    spin_unlock_irqrestore(&work_lock, flags);
+    wq_wake_all(&work_wait);
 }
 
 /* The drivers' works that wait for the worker, in the order queued, under
- * the interrupt flag; static storage starts it empty. */
+ * `work_lock`; static storage starts it empty. */
 static struct drm_work *dev_works, **dev_works_tail = &dev_works;
 
 /* Counts the works queued, the drivers' and the commits', so that the
@@ -1553,14 +1597,14 @@ static uint32_t dev_works_gen;
 void drm_dev_work_later_ms(struct drm_device *dev, struct drm_work *work, uint32_t ms)
 {
     uint64_t due = ms ? rtc_ticks_now() + MS_TO_TICKS(ms) + 1u : 0;
-    uint32_t flags = kirq_save();
+    uint32_t flags = spin_lock_irqsave(&work_lock);
 
     if (work->queued) {
         if (work->due > due) {
             work->due = due;
             dev_works_gen++;
         }
-        kirq_restore(flags);
+        spin_unlock_irqrestore(&work_lock, flags);
         if (due == 0) {
             wq_wake_all(&work_wait);
         }
@@ -1574,10 +1618,8 @@ void drm_dev_work_later_ms(struct drm_device *dev, struct drm_work *work, uint32
     *dev_works_tail = work;
     dev_works_tail = &work->next;
     dev_works_gen++;
-    kirq_restore(flags);
-    if (commit_worker_start() == 0) {
-        wq_wake_all(&work_wait);
-    }
+    spin_unlock_irqrestore(&work_lock, flags);
+    wq_wake_all(&work_wait);
 }
 
 void drm_dev_work_later(struct drm_device *dev, struct drm_work *work)
@@ -1591,8 +1633,8 @@ static int dev_work_due(const struct drm_work *work, uint64_t now)
     return work->due == 0 || work->due <= now;
 }
 
-/** Unlink `work` from the queue; the caller holds the interrupt flag and
- * `work` is queued. */
+/** Unlink `work` from the queue; the caller holds `work_lock` and `work`
+ * is queued. */
 static void dev_work_unlink(struct drm_work *work)
 {
     struct drm_work **link = &dev_works;
@@ -1607,18 +1649,19 @@ static void dev_work_unlink(struct drm_work *work)
     work->queued = 0;
 }
 
-void drm_dev_work_cancel(struct drm_work *work)
+int drm_dev_work_cancel(struct drm_work *work)
 {
-    uint32_t flags = kirq_save();
+    uint32_t flags = spin_lock_irqsave(&work_lock);
     struct drm_device *dev = work->dev;
 
     if (!work->queued) {
-        kirq_restore(flags);
-        return;
+        spin_unlock_irqrestore(&work_lock, flags);
+        return 0;
     }
     dev_work_unlink(work);
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&work_lock, flags);
     drm_dev_put(dev);
+    return 1;
 }
 
 /** Run the queued drivers' works whose time has come, each once; the
@@ -1631,21 +1674,21 @@ static int dev_work_run(void)
     uint32_t flags;
     int n = 0, todo = 0;
 
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&work_lock);
     for (work = dev_works; work; work = work->next) {
         todo += dev_work_due(work, now);
     }
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&work_lock, flags);
     while (n < todo) {
-        flags = kirq_save();
+        flags = spin_lock_irqsave(&work_lock);
         for (work = dev_works; work && !dev_work_due(work, now); work = work->next) {
         }
         if (!work) {
-            kirq_restore(flags);
+            spin_unlock_irqrestore(&work_lock, flags);
             break;
         }
         dev_work_unlink(work);
-        kirq_restore(flags);
+        spin_unlock_irqrestore(&work_lock, flags);
         dev = work->dev;
         if (!dev->unplugged) {
             work->fn(work);
@@ -1665,15 +1708,15 @@ static int hotplug_work(void)
     int n = 0;
 
     for (;;) {
-        flags = kirq_save();
+        flags = spin_lock_irqsave(&work_lock);
         if (nhotplugs == 0) {
-            kirq_restore(flags);
+            spin_unlock_irqrestore(&work_lock, flags);
             return n;
         }
         connector = hotplugs[0];
         nhotplugs--;
         k_memmove(hotplugs, hotplugs + 1, (uint32_t)nhotplugs * sizeof(hotplugs[0]));
-        kirq_restore(flags);
+        spin_unlock_irqrestore(&work_lock, flags);
         if (!connector->dev->unplugged) {
             drm_sysfs_connector_hotplug_event(connector);
             drm_client_dev_hotplug(connector->dev);
@@ -1685,7 +1728,8 @@ static int hotplug_work(void)
 
 /** Run the tail of `w`, a queued commit that `work_due` lets run, its
  * callbacks on fences that have not signalled taken back, then take it off
- * the queue and free it. May sleep in the drivers' hooks. */
+ * the queue and free it. Under its device's commit lock; may sleep in the
+ * drivers' hooks. */
 static void work_finish(struct commit_work *w)
 {
     struct commit_work **link;
@@ -1693,51 +1737,80 @@ static void work_finish(struct commit_work *w)
     uint32_t flags;
     int i;
 
+    flags = spin_lock_irqsave(&work_lock);
     w->running = 1;
+    spin_unlock_irqrestore(&work_lock, flags);
     for (i = 0; i < DRM_MAX_PLANES; i++) {
         struct drm_plane_state *ps = w->state.planes_new[i];
 
-        if (ps && ps->fence) {
-            flags = kirq_save();
-            if (dma_fence_remove_callback(ps->fence, &w->cbs[i].cb)) {
-                w->waiting--;
-            }
-            kirq_restore(flags);
+        if (ps && ps->fence && dma_fence_remove_callback(ps->fence, &w->cbs[i].cb)) {
+            flags = spin_lock_irqsave(&work_lock);
+            w->waiting--;
+            spin_unlock_irqrestore(&work_lock, flags);
         }
     }
     commit_tail(&w->state);
+    flags = spin_lock_irqsave(&work_lock);
     for (link = &works; *link != w; link = &(*link)->next) {
     }
     *link = w->next;
+    spin_unlock_irqrestore(&work_lock, flags);
     drm_dev_put(dev);
     kfree(w);
     wq_wake_all(&work_done_wait);
 }
 
 /** The first queued commit whose waits may advance or whose tail may run
- * now (`work_due`), or NULL. This only reads state; a wait predicate may
- * call it from interrupt context. */
-static struct commit_work *work_next_ready(void)
+ * now (`work_due`), or NULL, with a hold on its device in `*dev` when `dev`
+ * is not NULL; a pointer that only its device's commit lock, taken after,
+ * keeps from being finished and freed. A wait predicate may call it. */
+static struct commit_work *work_next_ready(struct drm_device **dev)
 {
     struct commit_work *w;
     uint64_t now = rtc_ticks_now();
+    uint32_t flags = spin_lock_irqsave(&work_lock);
 
-    for (w = works; w && !work_due(w, now); w = w->next) {
+    for (w = works; w && !work_due_locked(w, now); w = w->next) {
     }
+    if (w && dev) {
+        *dev = w->state.dev;
+        drm_dev_get(*dev);
+    }
+    spin_unlock_irqrestore(&work_lock, flags);
     return w;
+}
+
+/** Whether `w` is still on the queue: a work found without the commit
+ * lock may have been finished by a blocking commit since. */
+static int work_queued(const struct commit_work *w)
+{
+    const struct commit_work *q;
+    uint32_t flags = spin_lock_irqsave(&work_lock);
+
+    for (q = works; q && q != w; q = q->next) {
+    }
+    spin_unlock_irqrestore(&work_lock, flags);
+    return q != NULL;
 }
 
 int drm_atomic_commit_work(void)
 {
     struct commit_work *w;
+    struct drm_device *dev;
     int n = dev_work_run();
 
     n += hotplug_work();
-    while ((w = work_next_ready()) != NULL) {
-        if (work_fence_progress(w)) {
+    while ((w = work_next_ready(&dev)) != NULL) {
+        /* The commit lock orders this with a blocking commit of the device,
+         * which may finish the work meanwhile; the hold keeps the device. */
+        drm_modeset_lock_nointr(dev);
+        if (work_queued(w) && w->state.dev == dev && work_due(w, rtc_ticks_now()) &&
+            work_fence_progress(w)) {
             work_finish(w);
             n++;
         }
+        drm_modeset_unlock(dev);
+        drm_dev_put(dev);
     }
     return n;
 }
@@ -1761,20 +1834,24 @@ static int work_ready(void *arg)
     const struct worker_wait *ww = (const struct worker_wait *)arg;
     const struct drm_work *dw;
     uint64_t now = rtc_ticks_now();
+    uint32_t flags = spin_lock_irqsave(&work_lock);
+    int ready = nhotplugs != 0 || dev_works_gen != ww->gen || (ww->tick && now >= ww->tick);
 
-    if (nhotplugs != 0 || dev_works_gen != ww->gen || (ww->tick && now >= ww->tick)) {
-        return 1;
+    for (dw = dev_works; dw && !ready; dw = dw->next) {
+        ready = dev_work_due(dw, now);
     }
-    for (dw = dev_works; dw; dw = dw->next) {
-        if (dev_work_due(dw, now)) {
-            return 1;
-        }
-    }
-    return work_next_ready() != NULL;
+    spin_unlock_irqrestore(&work_lock, flags);
+    return ready || work_next_ready(NULL) != NULL;
 }
 
 /** The worker, kdrm: sleep in an idle wait until a queued commit may run,
- * then finish what is ready, holding the big lock as kernel code does. */
+ * then finish what is ready, holding the big lock as kernel code does. Like
+ * every kernel thread, it is not switched by the tick (`no_tick_switch`,
+ * which `setup_process_stack` sets): a commit's tail and a
+ * driver's work run here as they run inline in a system call, and give way
+ * only where they sleep, so a driver's state, such as the transport a
+ * virtio-gpu card sits on, never changes under them; the worker also gives
+ * way between passes. */
 static void commit_thread_main(void)
 {
     const struct drm_work *dw;
@@ -1784,9 +1861,10 @@ static void commit_thread_main(void)
 
     arch_irq_enable();
     for (;;) {
+        sched_service_point();
         /* Sleep until the soonest delayed work's tick or commit's fence
          * timeout at the latest. */
-        flags = kirq_save();
+        flags = spin_lock_irqsave(&work_lock);
         ww.gen = dev_works_gen;
         ww.tick = 0;
         for (dw = dev_works; dw; dw = dw->next) {
@@ -1799,15 +1877,17 @@ static void commit_thread_main(void)
                 ww.tick = w->deadline;
             }
         }
+        spin_unlock_irqrestore(&work_lock, flags);
         current_proc->wakeup_tick = ww.tick;
-        kirq_restore(flags);
         (void)wq_wait_event_idle(&work_wait, work_ready, &ww);
         current_proc->wakeup_tick = 0;
         (void)drm_atomic_commit_work();
     }
 }
 
-/** Start the worker on the first commit that needs it: 0, or -ENOMEM. */
+/** Start the worker, once, under the big lock, which keeps the process
+ * table: 0, or -ENOMEM. Process context; `drm_dev_register` starts it,
+ * and a commit that defers to it tries again if that failed. */
 static int32_t commit_worker_start(void)
 {
     process_t *p;
@@ -1815,6 +1895,11 @@ static int32_t commit_worker_start(void)
     uint32_t flags;
 
     if (commit_thread) {
+        return 0;
+    }
+    bkl_enter();
+    if (commit_thread) {
+        bkl_exit();
         return 0;
     }
     flags = kirq_save();
@@ -1825,6 +1910,7 @@ static int32_t commit_worker_start(void)
             kstack_free(base + KERNEL_STACK_SIZE);
         }
         kirq_restore(flags);
+        bkl_exit();
         klog(KLOG_ERR, "drm", "worker: refused: no record or stack for it");
         return -ENOMEM;
     }
@@ -1837,6 +1923,7 @@ static int32_t commit_worker_start(void)
     commit_thread = p;
     sched_make_ready(p);
     kirq_restore(flags);
+    bkl_exit();
     klog(KLOG_DEBUG, "drm", "worker: kdrm is pid %d", (int)p->pid);
     return 0;
 }
@@ -1847,6 +1934,11 @@ static int32_t commit_worker_start(void)
     return 0;
 }
 #endif
+
+int32_t drm_atomic_worker_start(void)
+{
+    return commit_worker_start();
+}
 
 /** Queue the commit `state`, swapped in, for the worker: its states move
  * to `w`, and the worker begins its fence waits in process context. */
@@ -1863,15 +1955,15 @@ static void work_queue(struct commit_work *w, struct drm_atomic_state *state)
     k_memset(state->connectors_old, 0, sizeof(state->connectors_old));
     k_memset(state->connectors_new, 0, sizeof(state->connectors_new));
     w->waited = -1;
-    flags = kirq_save();
+    drm_dev_get(w->state.dev);
+    flags = spin_lock_irqsave(&work_lock);
     /* The worker's sleep looks again, to begin this commit's waits. */
     dev_works_gen++;
-    kirq_restore(flags);
-    drm_dev_get(w->state.dev);
     for (link = &works; *link; link = &(*link)->next) {
     }
     w->next = NULL;
     *link = w;
+    spin_unlock_irqrestore(&work_lock, flags);
     wq_wake_all(&work_wait);
 }
 
@@ -1936,10 +2028,12 @@ static int32_t wait_for_fences(struct drm_atomic_state *state, int intr)
 
 /** The first queued commit of `state`'s device that holds a state of a
  * CRTC, plane or connector `state` changes, whose tail reads the states
- * that `state`'s tail would free as old; or NULL. */
+ * that `state`'s tail would free as old; or NULL. The caller holds the
+ * device's commit lock, which keeps the work it finds queued. */
 static struct commit_work *work_overlapping(const struct drm_atomic_state *state)
 {
     struct commit_work *w;
+    uint32_t flags = spin_lock_irqsave(&work_lock);
     int i, hit;
 
     for (w = works; w; w = w->next) {
@@ -1957,10 +2051,11 @@ static struct commit_work *work_overlapping(const struct drm_atomic_state *state
             hit |= state->connectors_new[i] && w->state.connectors_new[i];
         }
         if (hit) {
-            return w;
+            break;
         }
     }
-    return NULL;
+    spin_unlock_irqrestore(&work_lock, flags);
+    return w;
 }
 
 /* What a commit stalled on a queued one waits with: its state and the
@@ -2009,9 +2104,9 @@ static int32_t stall_on_works(struct drm_atomic_state *state, int nonblock)
             continue;
         }
         ow.state = state;
-        flags = kirq_save();
+        flags = spin_lock_irqsave(&work_lock);
         ow.tick = w->running ? 0 : w->deadline;
-        kirq_restore(flags);
+        spin_unlock_irqrestore(&work_lock, flags);
         if (current_proc) {
             saved = current_proc->wakeup_tick;
             current_proc->wakeup_tick = ow.tick;
@@ -2085,18 +2180,26 @@ static int32_t implicit_fences(struct drm_atomic_state *state)
         n = 0;
         for (j = 0; j < 4; j++) {
             struct drm_gem_object *obj = ps->fb->obj[j];
-            struct dma_fence *f = obj ? obj->resv->write : NULL;
+            struct dma_fence *f = obj ? dma_resv_get_write(obj->resv) : NULL;
 
             for (k = 0; f && k < n && w[k] != f; k++) {
             }
             if (f && k == n) {
                 w[n++] = f;
+            } else {
+                dma_fence_put(f);
             }
         }
         if (n == 1) {
-            ps->fence = dma_fence_get(w[0]);
-        } else if (n > 1 && !(ps->fence = dma_fence_merge(w, (uint32_t)n))) {
-            return -ENOMEM;
+            ps->fence = w[0];
+        } else if (n > 1) {
+            ps->fence = dma_fence_merge(w, (uint32_t)n);
+            for (k = 0; k < n; k++) {
+                dma_fence_put(w[k]);
+            }
+            if (!ps->fence) {
+                return -ENOMEM;
+            }
         }
     }
     return 0;

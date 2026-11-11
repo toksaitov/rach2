@@ -13,6 +13,7 @@
 #undef main
 #include "fs/synthfs.h"
 #include "fs/name.h"
+#include "proc/smp.h"
 #include "panic.h"
 
 extern void exit(int status);
@@ -46,6 +47,25 @@ void k_panic(const char *message)
 uint32_t timer_now_us(void)
 {
     return 0;
+}
+
+/** The cycle counter: the clock's microseconds, a cycle each. */
+uint64_t arch_cycles(void)
+{
+    return timer_now_us();
+}
+
+/** A cycle is a microsecond here. */
+uint64_t timer_cycles_us(uint64_t cycles)
+{
+    return cycles;
+}
+
+/** The cycles here are the clock's microseconds, the same on every
+ * processor. */
+int timer_cycles_agree(void)
+{
+    return 1;
 }
 
 /** No device is removed in these rows. */
@@ -183,6 +203,41 @@ static void dcache_forget(struct vfs_mount *mnt, void *dir, const char *name)
 static void dcache_drain(void)
 {}
 
+/** RESOLVE_CACHED finds no KRFFS name in the cache. */
+static int dcache_lookup_cached(struct vfs_mount *mnt, void *dir, const char *name, void **node)
+{
+    (void)mnt;
+    (void)dir;
+    (void)name;
+    (void)node;
+    return -EAGAIN;
+}
+
+/** The cached walk never reaches the cache: KRFFS keeps no names there. */
+static int dcache_lookup_hit(struct vfs_mount *mnt, void *dir, const char *name, void **node)
+{
+    return dcache_lookup_cached(mnt, dir, name, node);
+}
+
+/** The cached walk's hits are not counted here. */
+static void dcache_count_hits(uint32_t n)
+{
+    (void)n;
+}
+
+/* The lock the cached walk reads the table under, and the tree's sequence,
+ * which no row moves. */
+static struct spinlock mount_table_lock = SPINLOCK_INIT;
+static uint32_t tree_seq;
+
+/* The lock over the sleeping locks' records, which sleeplock.c defines. */
+static struct spinlock records_lock = SPINLOCK_INIT;
+
+/* The protection of /proc/sys/fs that a final link meets, at its default,
+ * and the debugfs type, which no row opens. */
+int vfs_protected_symlinks = 1;
+const struct vfs_type vfs_debugfs_type;
+
 /** No fixture mount is detached, so a closed description reaps nothing. */
 static void reap_if_detached(const struct vfs_mount *mnt)
 {
@@ -250,7 +305,7 @@ static int32_t cred_access_node(const krffs_node_t *node, int want, int real)
 }
 
 /** Root does not clear set-id bits. */
-static int cred_privileged(void)
+static int cred_fs_privileged(void)
 {
     return 1;
 }
@@ -375,6 +430,35 @@ static int mount_permanent_at(const struct vfs_mount *mnt)
     return 0;
 }
 
+/** Reject recording a synthetic mount; every row uses mounted KRFFS. */
+static void synth_mount_record(int fd, const struct vfs_ref *ref, const struct vpath *vp, int flags)
+{
+    (void)fd;
+    (void)ref;
+    (void)vp;
+    (void)flags;
+    check(0, "unexpected synthetic mount record");
+}
+
+/** No row opens a file of debugfs. */
+static int32_t debugfs_bind(void *node, fd_entry_t *e, int flags)
+{
+    (void)node;
+    (void)e;
+    (void)flags;
+    check(0, "unexpected debugfs open");
+    return -EINVAL;
+}
+
+/** No row creates in a sticky directory, whose rule the fixture does not
+ * model. */
+static int32_t may_create_in_sticky(const struct vfs_ref *ref, const struct vfs_stat *dir)
+{
+    (void)ref;
+    check(!(dir->mode & 01000u), "unexpected sticky directory");
+    return 0;
+}
+
 /** Reject recording a synthetic directory; every row uses mounted KRFFS. */
 static void synth_dir_record(int fd, int permanent, const char *name)
 {
@@ -450,14 +534,14 @@ static void publication_open(int flags, int before)
     fd = do_open("hole", 2, 0);
     check(fd >= 0, "open free-extent fixture");
     k_memset(payload, 'H', 4096);
-    check(kv_write(&mount, writer.fds->entries[fd].ofd->fhandle, payload, 4096, 0) == 4096,
+    check(kv_write(&mount, fd_slot(writer.fds, fd)->ofd->fhandle, payload, 4096, 0) == 4096,
           "size free-extent fixture");
     fd_free(writer.fds, fd);
     create("separator");
     original = create("target");
     fd = do_open("target", 2, 0);
     check(fd >= 0, "open original target");
-    first = writer.fds->entries[fd].ofd;
+    first = fd_slot(writer.fds, fd)->ofd;
     check(kv_write(&mount, first->fhandle, "A", 1, 0) == 1, "seed concurrent target");
     create("blocker");
     vfs_ns_lock(&mount);
@@ -483,7 +567,7 @@ static void publication_open(int flags, int before)
     if (opened_fd < 0) {
         exit(2);
     }
-    second = reader.fds->entries[opened_fd].ofd;
+    second = fd_slot(reader.fds, opened_fd)->ofd;
     check(first->vnode == hole, "first relocation uses earlier free extent");
     moved = first->vnode;
     k_memset(payload, 'C', sizeof(payload));
@@ -494,7 +578,7 @@ static void publication_open(int flags, int before)
     check(reused == moved, "first copy offset reused");
     reuse = do_open("reuse-copy", 2, 0);
     check(reuse >= 0, "open reused copy offset");
-    check(kv_write(&mount, writer.fds->entries[reuse].ofd->fhandle, "R", 1, 0) == 1,
+    check(kv_write(&mount, fd_slot(writer.fds, reuse)->ofd->fhandle, "R", 1, 0) == 1,
           "write reused copy offset");
     check(kv_read(&mount, first->fhandle, &byte, 1, 0) == 1 && byte == 'C',
           "original open follows second move despite copy reuse");

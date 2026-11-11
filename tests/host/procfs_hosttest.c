@@ -16,6 +16,8 @@
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/lib/kstd.c
  * host-deps: rach2/sys/tick.c
+ * host-deps: tests/host/compat/fd_flat.c
+ * host-deps: tests/host/compat/mmap_lock_host.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
  *
  * The test includes the source whole, with its exports declared static
@@ -637,7 +639,7 @@ int fd_is_valid(fd_table_t *t, int fd)
     if (!t || fd < 0 || fd >= t->cap) {
         return 0;
     }
-    return t->entries[fd].type != FD_TYPE_NONE && !(t->entries[fd].flags & FD_FLAG_CLOSING);
+    return t->chunks[0][fd].type != FD_TYPE_NONE && !(t->chunks[0][fd].flags & FD_FLAG_CLOSING);
 }
 
 /** The link rows use a pipe end, which names no device, terminal, socket,
@@ -734,6 +736,7 @@ static const struct vfs_ops entry_ops = {
     .lookup = entry_lookup, .hold = entry_hold, .put = entry_put};
 static const struct vfs_type entry_type = {"entries", NULL, &entry_ops, 1, 0};
 static char exec_path[] = "/tmp/a";
+static char named_path[] = "/srv/named";
 static char interp_path[] = "/lib/ld-linux.so.2";
 
 /** The root mount, the model KRFFS root. */
@@ -1613,7 +1616,7 @@ static void descriptor_links(void)
     char buf[32];
 
     process.fds = &table;
-    table.entries = entries;
+    table.chunks[0] = entries;
     table.cap = 1;
     entries[0].type = FD_TYPE_PIPE;
     entries[0].flags = FD_FLAG_READ;
@@ -1645,7 +1648,7 @@ static void mem_descriptor(void)
     space.dumpable = 1;
     process.mm = &space;
     process.fds = &table;
-    table.entries = entries;
+    table.chunks[0] = entries;
     table.cap = 1;
     k_memset(&entries[0], 0, sizeof(entries[0]));
     entries[0].ofd = &mem_ofd;
@@ -1908,11 +1911,11 @@ static void image_paths(void)
     r.start = 0x08048000u;
     r.end = 0x08049000u;
     r.type = VM_CODE;
-    check(maps_path(&space, &r) == exec_path, "a segment below the heap is the program's");
+    check(maps_path(&space, &r, NULL) == exec_path, "a segment below the heap is the program's");
     r.start = 0xaffc2000u;
     r.end = 0xaffc3000u;
     r.type = VM_DATA;
-    check(maps_path(&space, &r) == interp_path, "one above it is the dynamic linker's");
+    check(maps_path(&space, &r, NULL) == interp_path, "one above it is the dynamic linker's");
 }
 
 /* Stand-ins for the vDSO's two files, for the VmFlags rows. */
@@ -1995,17 +1998,71 @@ const struct open_file *filemap_ofd(const struct vm_file *f)
     return NULL;
 }
 
-/** The mount table the identity of a maps line searches, empty here. */
-int vfs_mount_slots(void)
+/* The mount of memfds and shared anonymous memory, which the mount table
+ * of these rows does not hold, so that its device reads 00:00. */
+static struct vfs_mount memfd_mount;
+
+/** The mount of memfds and shared anonymous memory. */
+struct vfs_mount *vfs_memfd_mount(void)
 {
-    return 0;
+    return &memfd_mount;
 }
 
-/** No entry of the empty mount table. */
+/* Shared anonymous memory for the identity row, with inode 7. */
+static char anon_shared_path[] = "/dev/zero (deleted)";
+static struct vm_file anon_shared_file = {1, 0, 0, 0, anon_shared_path, 0, 0};
+
+/** Inode 7 for the identity row's shared anonymous memory; 0 for any
+ * other file. */
+uint64_t filemap_anon_ino(const struct vm_file *f)
+{
+    return f == &anon_shared_file ? 7u : 0u;
+}
+
+/* The mapped files of the naming row: one an mmap made and one of the
+ * program's image, both open on the same description, whose mount's type
+ * keeps no path, so that its link target is the path it was opened by. */
+static struct vfs_mount named_mount;
+static struct open_file named_ofd;
+static fd_entry_t named_entry;
+static struct vm_file named_file, image_file;
+static int file_refs;
+
+/** The entry of the naming row's two files; none for any other, as for
+ * shared anonymous memory. */
+const fd_entry_t *filemap_entry(const struct vm_file *f)
+{
+    return f == &named_file || f == &image_file ? &named_entry : NULL;
+}
+
+/** Count a reference a reading of maps takes on a file to name. */
+void vm_file_get(struct vm_file *f)
+{
+    (void)f;
+    file_refs++;
+}
+
+/** Count one given back. */
+void vm_file_put(struct vm_file *f)
+{
+    (void)f;
+    file_refs--;
+}
+
+/* Whether the mount table holds the mount of memfds, in place 4, where
+ * vfs.c puts it; empty otherwise. */
+static int memfd_mounted;
+
+/** The places of the mount table the identity of a maps line searches. */
+int vfs_mount_slots(void)
+{
+    return memfd_mounted ? 5 : 0;
+}
+
+/** The mount of memfds in place 4 while `memfd_mounted`; none elsewhere. */
 struct vfs_mount *vfs_mount_at(int idx)
 {
-    (void)idx;
-    return NULL;
+    return memfd_mounted && idx == 4 ? &memfd_mount : NULL;
 }
 
 /** Compare the first 22 bytes of the maps line of a region of `type` and
@@ -2024,8 +2081,135 @@ static void maps_line_row(vm_type_t type, uint32_t prot, struct vm_file *file, c
     r.prot = prot;
     r.file = file;
     procfs_text_init(&t);
-    ap_maps_line(&t, &space, &r);
+    ap_maps_line(&t, &space, &r, NULL);
     check(!t.nomem && t.buf && t.len > 22 && __builtin_memcmp(t.buf, want, 22) == 0, want);
+    kfree(t.buf);
+}
+
+/** Whether the `len` bytes of `text` hold `want`. */
+static int text_has(const char *text, int len, const char *want)
+{
+    int n = (int)__builtin_strlen(want), i;
+
+    for (i = 0; i + n <= len; i++) {
+        if (__builtin_memcmp(text + i, want, (size_t)n) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** A reading of maps names a mapped file by its link's target, from the
+ * reader's root, as Linux's d_path at each reading, and keeps the name in
+ * no file, so that a reader with another root builds its own; the
+ * segments of the program are named by the present path of the program's
+ * file, and once its name is gone by the path exec recorded with
+ * " (deleted)", as the exe link reads, though their file has an entry too;
+ * a shared region with no entry and no inode is named by no target; and
+ * every reference taken, to a file or to the address space, goes back. */
+static void maps_names_row(void)
+{
+    struct mm *saved_mm = process.mm;
+    struct open_file saved_ofd = exe_ofd;
+    struct procfs_text t;
+    vma_t code, file, shared;
+    static struct vm_file shared_file;
+
+    k_memset(&space, 0, sizeof(space));
+    krffs_fs = &root_fs;
+    root_fs.node = &root_dir;
+    root_mount.type = &vfs_krffs_type;
+    k_memset(&exe_ofd, 0, sizeof(exe_ofd));
+    exe_ofd.vmnt = &root_mount;
+    exe_ofd.vnode = &program;
+    k_strncpy((char *)program.name, "b", sizeof(program.name));
+    program_path = "/tmp/b";
+    space.exe_file = &exe_ofd;
+    space.holds = 1;
+    k_memset(&code, 0, sizeof(code));
+    k_memset(&file, 0, sizeof(file));
+    k_memset(&shared, 0, sizeof(shared));
+    space.exe = exec_path;
+    space.vm.heap_start = 0x0804d000u;
+    code.start = 0x08048000u;
+    code.end = 0x08049000u;
+    code.type = VM_CODE;
+    code.prot = VM_PROT_READ | VM_PROT_EXEC;
+    code.file = &image_file;
+    code.next = &file;
+    file.start = 0x40000000u;
+    file.end = 0x40001000u;
+    file.type = VM_FILE;
+    file.prot = VM_PROT_READ;
+    file.file = &named_file;
+    file.next = &shared;
+    shared.start = 0x40001000u;
+    shared.end = 0x40002000u;
+    shared.type = VM_SHARED;
+    shared.prot = VM_PROT_READ | VM_PROT_WRITE;
+    shared.file = &shared_file;
+    space.vm.first = &code;
+    named_mount.type = &entry_type;
+    named_ofd.vmnt = &named_mount;
+    named_ofd.dirpath = named_path;
+    named_entry.ofd = &named_ofd;
+    process.mm = &space;
+    procfs_text_init(&t);
+    check(procfs_gen_maps(&t, 7) > 0 && !t.nomem, "maps with a mapped file is read");
+    check(text_has(t.buf, t.len, "40000000-40001000 r--p 00000000 00:00 0") &&
+              text_has(t.buf, t.len, " /srv/named\n40001000"),
+          "a mapped file is named by its link's target at the reading");
+    check(text_has(t.buf, t.len, " /tmp/b\n40000000"),
+          "the program's segment is named by its file's present path at the reading");
+    check(text_has(t.buf, t.len, "40001000-40002000 rw-s 00000000 00:00 0 \n"),
+          "shared memory with no entry has no name");
+    check(named_file.path == NULL && image_file.path == NULL, "and no file keeps the name");
+    check(file_refs == 0 && space.holds == 1 && file_holds == 0 && mount_locks == 0,
+          "and every reference taken goes back");
+    kfree(t.buf);
+    program.name[0] = '\0';
+    program_path = NULL;
+    procfs_text_init(&t);
+    check(procfs_gen_maps(&t, 7) > 0 && !t.nomem &&
+              text_has(t.buf, t.len, " /tmp/a (deleted)\n40000000"),
+          "a program whose name is gone is named by its exec's path, deleted");
+    check(space.holds == 1 && file_holds == 0 && mount_locks == 0,
+          "and the second reading gives back what it took");
+    kfree(t.buf);
+    exe_ofd = saved_ofd;
+    krffs_fs = NULL;
+    process.mm = saved_mm;
+    k_memset(&space, 0, sizeof(space));
+}
+
+/** Shared anonymous memory reads the device of the mount of memfds, in
+ * place 4 of the mount table, 0x14 by `procfs_mount_dev`'s count, and its
+ * own inode, as Linux's line shows the shmem file's of shm_mnt; with the
+ * mount not in the table, its device reads 00:00 and the inode stays. */
+static void maps_anon_identity_rows(void)
+{
+    struct procfs_text t;
+    vma_t r;
+
+    k_memset(&space, 0, sizeof(space));
+    k_memset(&r, 0, sizeof(r));
+    r.start = 0x40000000u;
+    r.end = 0x40001000u;
+    r.type = VM_SHARED;
+    r.prot = VM_PROT_READ | VM_PROT_WRITE;
+    r.file = &anon_shared_file;
+    memfd_mounted = 1;
+    procfs_text_init(&t);
+    ap_maps_line(&t, &space, &r, NULL);
+    check(!t.nomem && t.len > 0 && text_has(t.buf, t.len, "rw-s 00000000 00:14 7 ") &&
+              text_has(t.buf, t.len, "/dev/zero (deleted)\n"),
+          "shared anonymous memory reads the memfd mount's device and its inode");
+    kfree(t.buf);
+    memfd_mounted = 0;
+    procfs_text_init(&t);
+    ap_maps_line(&t, &space, &r, NULL);
+    check(!t.nomem && t.len > 0 && text_has(t.buf, t.len, "rw-s 00000000 00:00 7 "),
+          "with the mount not in the table its device reads 00:00");
     kfree(t.buf);
 }
 
@@ -2620,6 +2804,11 @@ int32_t drm_modeset_lock(struct drm_device *dev)
     return 0;
 }
 
+void drm_modeset_lock_nointr(struct drm_device *dev)
+{
+    (void)dev;
+}
+
 void drm_modeset_unlock(struct drm_device *dev)
 {
     (void)dev;
@@ -2868,7 +3057,7 @@ static void pci_config_rows(void)
     vp.procfile = SYSFS_PCI_CONFIG;
     vp.syskey = 0x20;
     process.fds = &table;
-    table.entries = entries;
+    table.chunks[0] = entries;
     table.cap = 1;
     k_memset(e, 0, sizeof(*e));
     k_memset(&mem_ofd, 0, sizeof(mem_ofd));
@@ -2939,7 +3128,7 @@ static int bar_file_open(int attr, int flags)
     vp.procfile = attr;
     vp.syskey = 0x20;
     process.fds = &table;
-    table.entries = entries;
+    table.chunks[0] = entries;
     table.cap = 1;
     k_memset(e, 0, sizeof(*e));
     k_memset(&mem_ofd, 0, sizeof(mem_ofd));
@@ -3932,6 +4121,8 @@ int main(int argc, char **argv)
     image_paths();
     smaps_flags_rows();
     maps_shared_rows();
+    maps_names_row();
+    maps_anon_identity_rows();
     reaped_during_read();
     system_rows();
     oom_values();

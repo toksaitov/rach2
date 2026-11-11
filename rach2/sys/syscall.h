@@ -18,6 +18,32 @@ void init_syscall(void);
  */
 int in_compat_syscall(void);
 
+/* The ABIs of `syscall_unlock`: the kernel's own table, and on x86-64 the
+ * i386 table of a call SC_COMPAT marks. */
+#define SYSCALL_ABI_NATIVE 0
+#define SYSCALL_ABI_IA32   1
+
+/**
+ * Run the calls of `abi` that dispatch to `handler` without the big lock,
+ * as Linux runs every call: the handler takes the locks of what it touches.
+ * Every number the table gives `handler` is marked, so the call is made
+ * once the table is filled: in `init_syscall`, or at the end of the
+ * architecture's fill (`arch_syscall_init`, `ia32_syscall_init`). A
+ * handler on no number, or an ABI this kernel does not have, marks nothing.
+ */
+void syscall_unlock(int abi, syscall_fn_t handler);
+
+/**
+ * Whether the system call in `params` takes the big lock at its entry:
+ * nonzero unless its handler is marked (`syscall_unlock`) and the thread
+ * has nothing at the entry that needs the lock, a tracer's stop, a seccomp
+ * filter, descriptor holds left from before, or USB sticks to publish
+ * (`usbdisk_pending`). A thread with none of these runs the call the
+ * number names, so the judgment is that of the handler the call runs after
+ * the tracer's entry stop. Interrupts are off.
+ */
+int syscall_entry_locked(const isr_params_t *params);
+
 /**
  * ioctl(2) of the request `request` with the argument `arg` on the
  * descriptor `fd`, as `sys_ioctl` answers it from a frame. The compat

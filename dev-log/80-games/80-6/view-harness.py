@@ -2,8 +2,9 @@
 # island checkpoint there, and keep the guest up for screenshots until the
 # stop file appears.  Usage: view-harness.py rach2|linux TURN [KERNEL]
 # The guest's key and frame helpers, 2653-key.py and 2653-screen.py, it
-# copies from O on the testing host, where the runs kept them; they are not
-# in this directory. ../80-12/key.py is the key helper's later form.
+# copies from this directory to the guest's /tmp; the rest of what it boots
+# and stages it reads from O on the testing host, where the runs kept them.
+# ../80-12/key.py is the key helper's later form.
 import hashlib, os, pathlib, shlex, signal, socket, subprocess as S, sys, time
 
 w = pathlib.Path(__file__).resolve().parent
@@ -114,7 +115,7 @@ try:
         cmd('sync; umount /tmp/runtime; umount /data', check=False)
         raise SystemExit(r.returncode)
     for name in ('2653-key.py', '2653-screen.py'):
-        cmd('cat > /tmp/' + name, (o / name).read_bytes())
+        cmd('cat > /tmp/' + name, (w / name).read_bytes())
     say(cmd('chown -R test:test /data/crysis; LD_LIBRARY_PATH=/tmp/runtime/xvfb/lib /tmp/runtime/xvfb/Xvfb :99 -ac -noreset -screen 0 640x480x24 -nolisten tcp > /tmp/xvfb.log 2>&1 < /dev/null &').stdout.decode())
     for _ in range(30):
         if cmd('test -S /tmp/.X11-unix/X99', check=False).returncode == 0:

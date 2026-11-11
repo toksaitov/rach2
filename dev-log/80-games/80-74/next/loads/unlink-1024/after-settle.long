@@ -1,0 +1,2 @@
+clock_us age_us cpu pid comm vector syscall pc[8]
+148741178 36762 0 565 python3 128 87 0xffffffff803b2616 0xffffffff802ef62e 0xffffffff801e3c7e 0xffffffff801e2c4d 0xffffffff801ed255 0xffffffff801ed826 0xffffffff8023c6c6 0xffffffff8023d7ce

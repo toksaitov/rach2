@@ -193,6 +193,25 @@ uint32_t timer_now_us(void)
     return 0;
 }
 
+/** The cycle counter: the clock's microseconds, a cycle each. */
+uint64_t arch_cycles(void)
+{
+    return timer_now_us();
+}
+
+/** A cycle is a microsecond here. */
+uint64_t timer_cycles_us(uint64_t cycles)
+{
+    return cycles;
+}
+
+/** The cycles here are the clock's microseconds, the same on every
+ * processor. */
+int timer_cycles_agree(void)
+{
+    return 1;
+}
+
 /** A panic of the lock, a give by a thread that does not hold it: print
  * it and exit 2. */
 void k_panic(const char *message)
@@ -215,6 +234,9 @@ static krffs_node_t *watched_next_node(krffs_file_system_t *fs, krffs_node_t *no
     at_image();
     return krffs_node_of(next >= fs->size ? next - fs->size : next);
 }
+
+/* The lock over the sleeping locks' records, which sleeplock.c defines. */
+static struct spinlock records_lock = SPINLOCK_INIT;
 
 #define krffs_get_next_node watched_next_node
 #include "kfs_data.inc"

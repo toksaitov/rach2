@@ -46,6 +46,16 @@ struct shmem *filemap_shmem(const struct vm_file *f);
  * region object that is not a mapped file. */
 const struct open_file *filemap_ofd(const struct vm_file *f);
 
+/** The inode number of shared anonymous memory `f` on the mount
+ * `vfs_memfd_mount` has (`filemap_anon_shared`); 0 for any other mapped
+ * file and for a region object that is not one. */
+uint64_t filemap_anon_ino(const struct vm_file *f);
+
+/** The descriptor entry the mapped file `f` keeps, whose /proc link target
+ * names the file; NULL for shared anonymous memory and for a region object
+ * that is not a mapped file. It lives as long as a reference to `f`. */
+const fd_entry_t *filemap_entry(const struct vm_file *f);
+
 /** Whether the pages `f` maps are memory's own, with no file on a disk
  * behind them: a tmpfs file's, a memfd's, shared anonymous memory's. Linux
  * counts such pages in a process's RssShmem, and a disk file's in RssFile. */
@@ -130,7 +140,12 @@ int filemap_msync(struct vm_file *f, int flush);
 /**
  * Shared anonymous memory, for MAP_SHARED|MAP_ANONYMOUS: pages of its own
  * that every region mapping it, in this process and the children it forks,
- * maps; freed with the last region. NULL when the heap has no room.
+ * maps; freed with the last region. Its path is "/dev/zero (deleted)", the
+ * name Linux's /proc/PID/maps gives it, or none when the heap has no room
+ * for the name, and its device and inode those of a file of the mount
+ * `vfs_memfd_mount` has, with an inode number of its own (`tmpfs_new_ino`),
+ * as Linux's are of the shmem file shmem_zero_setup makes on shm_mnt. NULL
+ * when the heap has no room. The caller holds the big lock.
  */
 struct vm_file *filemap_anon_shared(void);
 

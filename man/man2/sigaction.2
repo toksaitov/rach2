@@ -69,9 +69,20 @@ The dispositions belong to the process and are shared by its threads.
 The blocked mask, the alternate stack and a set of pending signals belong
 to each thread; a signal sent to the process is pending for the process,
 and any thread that does not block it may take it.
-The thread woken to take it is the thread the sender named, or else the
-first thread, that does not block it and is not stopped by job control or
-by a tracer.
+The thread woken to take it is the thread the sender named when that
+thread would take it now, or else the first thread that would, as Linux's
+.Fn complete_signal
+chooses it: the thread does not block the signal, has not begun to end,
+and either the signal is
+.Dv SIGKILL ,
+or the thread is not stopped by job control or by a tracer and is running
+or has neither an unblocked signal of its own nor signal work assigned to
+it by a previous send.
+A shared pending signal assigned to another thread does not exclude it.
+When no thread would, one thread is still woken from a sleep in the
+kernel, without new signal work: the named thread when it does not block the
+signal, has not begun to end and is not stopped, or else the first thread
+that so qualifies, or else the named thread.
 When a thread's mask comes to block such a signal while it is pending,
 through
 .Fn sigprocmask ,
@@ -85,9 +96,20 @@ selects
 .Dv SIG_IGN ,
 or a handler address.
 Installing
-.Dv SIG_IGN
-also discards an instance already pending, the process's and each
-thread's.
+.Dv SIG_IGN ,
+or
+.Dv SIG_DFL
+for a signal whose default action is to ignore it, also discards an
+instance already pending, the process's and each thread's, as Linux's
+.Fn do_sigaction
+does.
+A signal so ignored is dropped when it is sent, unless the thread it is
+sent to blocks it, waits for it in
+.Fn rt_sigtimedwait ,
+or is traced and the signal is not
+.Dv SIGKILL ;
+see
+.Xr kill 2 .
 The default actions are:
 .Bl -tag -width "Terminate"
 .It Ignore

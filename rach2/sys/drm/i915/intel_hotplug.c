@@ -297,7 +297,8 @@ static uint64_t sooner(uint64_t a, uint64_t b)
     return a == 0 ? b : b == 0 || a < b ? a : b;
 }
 
-void intel_hotplug_work(struct drm_work *work)
+/** intel_hotplug_work's body, under the device's mode_lock. */
+static void hotplug_work_locked(struct drm_work *work)
 {
     struct drm_i915_private *i915 = to_i915(work->dev);
     struct intel_hotplug *hp = &i915->display.hotplug;
@@ -380,6 +381,17 @@ void intel_hotplug_work(struct drm_work *work)
     if (next) {
         drm_dev_work_later_ms(&i915->drm, &hp->work, next > now ? (uint32_t)(next - now) : 1u);
     }
+}
+
+/* Under the mode lock, as Linux's i915_hotplug_work_func takes
+ * mode_config.mutex (intel_hotplug.c:431-495) and its probes the connection
+ * lock: the probes, the connectors' status and the retrains' commits are
+ * the mode state, which MODE_ATOMIC changes without the big lock. */
+void intel_hotplug_work(struct drm_work *work)
+{
+    drm_modeset_lock_nointr(work->dev);
+    hotplug_work_locked(work);
+    drm_modeset_unlock(work->dev);
 }
 
 int intel_hotplug_live(struct drm_i915_private *i915, int pin)

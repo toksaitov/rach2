@@ -7,6 +7,7 @@
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/fs/sleeplock.c rach2/sys/fs/ext2xattr.c
+ * host-deps: tests/host/compat/atomic_host.c
  *
  * The test includes ext2.c whole. The mount, a group of 64 blocks and an
  * inode are built in memory, over a cache model with one buffer for each
@@ -224,6 +225,25 @@ int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
 uint32_t timer_now_us(void)
 {
     return 0;
+}
+
+/** The cycle counter: the clock's microseconds, a cycle each. */
+uint64_t arch_cycles(void)
+{
+    return timer_now_us();
+}
+
+/** A cycle is a microsecond here. */
+uint64_t timer_cycles_us(uint64_t cycles)
+{
+    return cycles;
+}
+
+/** The cycles here are the clock's microseconds, the same on every
+ * processor. */
+int timer_cycles_agree(void)
+{
+    return 1;
 }
 
 /** Nothing: there is no scheduler here. */
@@ -936,6 +956,20 @@ static void admission_rows(void)
     check(admit_setattr(&mount, &file, VFS_SET_MODE, &st) == 0 && writers_at_wait == 0,
           "a change of attributes sleeps on the file's lock before admission");
     check(volume.writers == 0 && process.file_locks == 0, "and each leaves the mount and the lock");
+}
+
+/** Take `lock` with interrupts off: one thread, so nothing waits. */
+uint32_t spin_lock_irqsave(struct spinlock *lock)
+{
+    lock->locked = 1;
+    return 0;
+}
+
+/** Give `lock` back. */
+void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
+{
+    (void)flags;
+    lock->locked = 0;
 }
 
 /** Run the rows; 0 when every row passed. */

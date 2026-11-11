@@ -42,9 +42,11 @@ typedef enum {
 
 /*
  * Pull callback: the driver calls it when it needs more samples to play, to
- * fill `size` bytes at `buffer`. It runs from the driver's interrupt handler
- * or the timer tick with interrupts off, and from `start` to fill the first
- * buffers.
+ * fill `size` bytes at `buffer`. It runs from the driver's service: on HDA
+ * in the driver's thread, khda, with interrupts on, once the thread runs,
+ * and before that and while the scheduler is off in the controller's
+ * interrupt or the tick with them off; on the SB16 in its interrupt
+ * handler; and from `start` to fill the first buffers. It may not sleep.
  */
 typedef void (*audio_callback_t)(void *buffer, size_t size);
 
@@ -73,9 +75,13 @@ typedef enum { AUDIO_PLAYBACK, AUDIO_CAPTURE } audio_dir_t;
  * transfer fills all `size` bytes, with silence for what the caller lacks,
  * so the stream runs on while the caller is late. The driver calls `period`
  * each time the device finishes a period, after the transfers that period
- * made room for. Both run from the driver's interrupt handler or the timer
- * tick with interrupts off, and from `stream_start` to fill the first
- * periods; neither may sleep, and neither may call the driver back.
+ * made room for. Both run from the driver's service: on HDA in the driver's
+ * thread, khda, once the thread runs, `transfer` with interrupts on and
+ * `period` with them off, and before that and while the scheduler is off in
+ * the controller's interrupt or the tick, both with them off; on the SB16 in
+ * its interrupt handler. `transfer` also runs from `stream_start` to fill
+ * the first periods. Neither may sleep, and neither may call the driver
+ * back.
  */
 typedef struct audio_stream {
     audio_dir_t dir;

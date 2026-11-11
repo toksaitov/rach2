@@ -211,8 +211,16 @@ static int32_t dgram_sent(int r, int32_t len)
  * an ephemeral port when it has none. Returns `len`, or the socket's pending
  * error, -EACCES for a broadcast address without `SO_BROADCAST`, -EMSGSIZE
  * past 65,507 IPv4 or 65,527 IPv6 bytes (`UDP_PAYLOAD_MAX`), -EAGAIN when
- * no ephemeral port is free, or the error of `udp_tx` that `dgram_sent`
- * reports.
+ * no ephemeral port is free, -EPIPE when shutdown(2) shut the sending half,
+ * or the error of `udp_tx` that `dgram_sent` reports.
+ *
+ * The EPIPE comes after the other checks and the bind, and posts no
+ * SIGPIPE, as Linux's: udp_sendmsg and udpv6_sendmsg build the datagram
+ * with a UDP header (net/ipv4/udp.c:1332-1334, net/ipv6/udp.c:1632-1633 in
+ * 6.12.115), so __ip_append_data and __ip6_append_data allocate it with
+ * sock_alloc_send_skb (net/ipv4/ip_output.c:1135-1137,
+ * net/ipv6/ip6_output.c:1664-1666), which fails with -EPIPE at
+ * SEND_SHUTDOWN after a pending error (net/core/sock.c:2929-2935).
  *
  * A datagram to a broadcast address reaches every machine on the wire, so a
  * program must set `SO_BROADCAST` on the socket before it can send one: a
@@ -245,6 +253,9 @@ static int32_t dgram_send_opt(struct socket *sock, net_addr_t dst_ip, uint16_t d
     if (sock->local_port == 0 && udp_bind_ephemeral(sock) == 0) {
         return -EAGAIN;
     }
+    if (sock->shutdown & SOCK_SEND_SHUTDOWN) {
+        return -EPIPE;
+    }
     return dgram_sent(udp_tx(sock, dst_ip, dst_port, buf, len, opt), (int32_t)len);
 }
 
@@ -256,6 +267,36 @@ static int32_t dgram_send_opt(struct socket *sock, net_addr_t dst_ip, uint16_t d
  * send, which goes through the transmit buffers an interrupt also builds
  * in. */
 static uint8_t raw_send_buf[1500];
+
+/**
+ * Ready the ICMP message of `len` bytes at `msg` for a send on the raw
+ * socket `sock`: on an ICMP datagram socket, check that it is an echo
+ * request of type `request` and write the socket's identifier in
+ * (`raw_echo_stamp`). Returns 1 for an echo request so stamped, whose
+ * checksum the caller writes, 0 on a raw socket, which sends what it was
+ * given, -EINVAL for a message an ICMP datagram socket does not send, or
+ * -EPIPE when shutdown(2) shut its sending half, with no SIGPIPE.
+ *
+ * Linux's ping_v4_sendmsg and ping_v6_sendmsg append the message with an
+ * ICMP header (net/ipv4/ping.c:834-836, net/ipv6/ping.c:177-178 in
+ * 6.12.115), so it meets sock_alloc_send_skb's SEND_SHUTDOWN check, as
+ * `dgram_send` says. A raw socket still sends after SHUT_WR: raw_sendmsg
+ * and rawv6_sendmsg pass no transport header (net/ipv4/raw.c:651-653,
+ * net/ipv6/raw.c:913-914), and __ip_append_data and __ip6_append_data then
+ * allocate with alloc_skb, which reads no shutdown.
+ */
+static int raw_echo_send(struct socket *sock, uint8_t *msg, int len, uint8_t request)
+{
+    int echo = raw_echo_stamp(sock, msg, len, request);
+
+    if (echo < 0) {
+        return -EINVAL;
+    }
+    if (echo && (sock->shutdown & SOCK_SEND_SHUTDOWN)) {
+        return -EPIPE;
+    }
+    return echo;
+}
 
 /** Count the ICMP message of `len` bytes at `msg` that a raw socket sent,
  * when IP took it (`r` is 0), as Linux counts one. */
@@ -736,7 +777,7 @@ static int32_t do_socket(int domain, int type, int protocol)
         return fd;
     }
 
-    entry = &current_proc->fds->entries[fd];
+    entry = fd_slot(current_proc->fds, fd);
     entry->type = FD_TYPE_SOCKET;
     entry->sock = sock;
     entry->node = NULL;
@@ -761,7 +802,8 @@ static int32_t socket_with_flags(int domain, int type, int protocol)
     }
     fd = do_socket(domain, type & SOCK_TYPE_MASK, protocol);
     if (fd >= 0) {
-        sock_fd_flags(&current_proc->fds->entries[fd], flags);
+        sock_fd_flags(fd_slot(current_proc->fds, fd), flags);
+        fd_install(current_proc->fds, fd);
     }
     return fd;
 }
@@ -998,17 +1040,19 @@ static int32_t do_bind(int fd, uintptr_t sa_ptr, int addrlen)
  * toward the address, as `ip6_tx_whole` says, whatever the options.
  *
  * An ICMP datagram socket sends only an echo request, with its own
- * identifier written in (`raw_echo_stamp`).
+ * identifier written in, and none once shutdown(2) shuts its sending half
+ * (`raw_echo_send`).
  *
  * Returns `len`, the error of `sockaddr_in6_in`, or the error of `icmp6_send`
  * or `ip6_tx_whole` that `dgram_sent` reports, -EINVAL for a message too
  * short to hold its checksum, or from an ICMP datagram socket one that is no
- * echo request, a source in `opt` that is not this machine's or an interface
- * that disagrees with the address's scope, -EMSGSIZE past the largest
- * payload, 65535 bytes, or past one 1500-byte datagram for IPPROTO_RAW,
- * -ENOMEM when no block holds a message past `raw_send_buf`, or -EFAULT. The
- * copy runs with interrupts on, and the send under the network lock, as an
- * IPv4 raw send does.
+ * echo request, -EPIPE from an ICMP datagram socket shut for sending, a
+ * source in `opt` that is not this machine's or an interface that disagrees
+ * with the address's scope, -EMSGSIZE past the largest payload, 65535
+ * bytes, or past one 1500-byte datagram for IPPROTO_RAW, -ENOMEM when no
+ * block holds a message past `raw_send_buf`, or -EFAULT. The copy runs with
+ * interrupts on, and the send under the network lock, as an IPv4 raw send
+ * does.
  */
 static int32_t raw6_sendto(struct socket *sock, uintptr_t buf_ptr, int len, uintptr_t sa_ptr,
                            int addrlen, const struct net_txopt *opt)
@@ -1067,9 +1111,7 @@ static int32_t raw6_sendto(struct socket *sock, uintptr_t buf_ptr, int len, uint
     }
     if (copy_from_user(buf, (const void __user *)buf_ptr, (uint32_t)len) != 0) {
         r = -EFAULT;
-    } else if (raw_echo_stamp(sock, buf, len, ICMP6_ECHO_REQUEST) < 0) {
-        r = -EINVAL;
-    } else {
+    } else if ((r = raw_echo_send(sock, buf, len, ICMP6_ECHO_REQUEST)) >= 0) {
         netflags = net_lock();
         if (whole) {
             r = ip6_tx_whole(buf, (uint32_t)len, dst, scope);
@@ -1293,13 +1335,15 @@ int32_t sock_stream_sent(int32_t rc, int post)
  * sending a wrong checksum on purpose is testing something. An ICMP
  * datagram socket sends only an echo request, whose identifier and checksum
  * the kernel writes (`raw_echo_stamp`), and -EINVAL for any other message, as
- * on Linux; with no address a connected one sends to its peer. A raw send
- * with no address and no peer is -EDESTADDRREQ, and one with an address
- * shorter than a sockaddr_in -EINVAL. A raw or ICMP datagram socket sends
- * from the address it is bound to, if any, and by the card SO_BINDTODEVICE
- * names, if any (`ip_tx_opts`). A message past one frame leaves in
- * fragments under the socket's IP_MTU_DISCOVER, up to the largest IPv4
- * payload. An AF_INET6 one sends as `raw6_sendto` says.
+ * on Linux; with no address a connected one sends to its peer. Once
+ * shutdown(2) shuts its sending half, it is -EPIPE where a raw socket still
+ * sends (`raw_echo_send`). A raw send with no address and no peer is
+ * -EDESTADDRREQ, and one with an address shorter than a sockaddr_in
+ * -EINVAL. A raw or ICMP datagram socket sends from the address it is bound
+ * to, if any, and by the card SO_BINDTODEVICE names, if any (`ip_tx_opts`).
+ * A message past one frame leaves in fragments under the socket's
+ * IP_MTU_DISCOVER, up to the largest IPv4 payload. An AF_INET6 one sends as
+ * `raw6_sendto` says.
  * The copy into `raw_send_buf`, or a block of the heap, runs with interrupts
  * on, since bringing in the caller's pages may sleep; the send then holds the
  * network lock against a receive
@@ -1377,8 +1421,8 @@ static int32_t do_sendto_opt(int fd, uintptr_t buf_ptr, int len, int flags, uint
         }
         if (copy_from_user(msg, (const void __user *)buf_ptr, (uint32_t)len) != 0) {
             r = -EFAULT;
-        } else if ((echo = raw_echo_stamp(entry->sock, msg, len, ICMP_ECHO_REQUEST)) < 0) {
-            r = -EINVAL;
+        } else if ((echo = raw_echo_send(entry->sock, msg, len, ICMP_ECHO_REQUEST)) < 0) {
+            r = echo;
         } else {
             uint32_t netflags = net_lock();
 
@@ -1992,13 +2036,14 @@ static int32_t do_accept(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr, uint32_t
         socket_unref(conn_sock);
         return -EFAULT;
     }
-    new_entry = &current_proc->fds->entries[new_fd];
+    new_entry = fd_slot(current_proc->fds, new_fd);
     new_entry->sock = conn_sock;
     new_entry->node = NULL;
     new_entry->ofd->offset = 0;
     new_entry->flags = FD_FLAG_READ | FD_FLAG_WRITE;
     sock_fd_flags(new_entry, flags);
     new_entry->type = FD_TYPE_SOCKET;
+    fd_install(current_proc->fds, new_fd);
     return new_fd;
 }
 

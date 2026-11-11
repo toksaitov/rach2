@@ -9,6 +9,7 @@
 #include "../panic.h"
 #include "../mm/kheap.h"
 #include "../lib/kirq.h"
+#include "../lib/lockdep.h"
 #include "sched.h"
 #include "tgroup.h"
 #include "seccomp.h"
@@ -93,16 +94,25 @@ static int pid_reserve(void)
     return 0;
 }
 
-/** Exchange indexed thread ids without exposing a partial exchange. */
+/** Exchange the kernel and namespace thread ids of `a` and `b` from the
+ * same PID namespace, with the big lock held and interrupts masked during
+ * the exchange, as Linux 6.12.115's de_thread exchanges the whole PID
+ * objects (fs/exec.c:1112). Neither allocation nor namespace counts change. */
 void proc_exchange_pids(process_t *a, process_t *b)
 {
     uint32_t pid = a->pid;
     uint32_t flags = kirq_save();
+    uint32_t i;
 
     pid_remove(a);
     pid_remove(b);
     a->pid = b->pid;
     b->pid = pid;
+    for (i = 0; i < NS_LEVELS; i++) {
+        pid = a->nspid[i];
+        a->nspid[i] = b->nspid[i];
+        b->nspid[i] = pid;
+    }
     pid_insert(a);
     pid_insert(b);
     kirq_restore(flags);
@@ -351,12 +361,14 @@ static struct fs_struct *fs_new(void)
  */
 static process_t *process_alloc(const process_t *parent, int thread, int share_fs)
 {
-    process_t *p = kmalloc(sizeof(*p));
+    process_t *p;
     struct tgroup *group = NULL;
     struct fs_struct *dirs = NULL;
     uint32_t tgid = 0, ruid = 0;
     int fd;
 
+    bkl_assert_held();
+    p = kmalloc(sizeof(*p));
     if (!p) {
         return NULL;
     }
@@ -404,7 +416,11 @@ static process_t *process_alloc(const process_t *parent, int thread, int share_f
         dirs->refs++;
     }
     if (!parent) {
-        p->fds = fd_table_new();
+        fd_table_t *fds = fd_table_new();
+
+        if (fds) {
+            fd_table_join(fds, p);
+        }
         if (!p->fds || fd_init_stdio(p->fds, tty_console_vhangups()) != 0) {
             goto fail_parts;
         }
@@ -459,6 +475,7 @@ void free_process(process_t *proc)
     if (!proc) {
         return;
     }
+    bkl_assert_held();
     proc->state = PROC_UNUSED;
     proc_timer_update(proc);
     pid_remove(proc);
@@ -481,7 +498,7 @@ void free_process(process_t *proc)
     if (proc == proc_idle) {
         proc_idle = NULL;
     }
-    if (proc->fds && --proc->fds->refs == 0) {
+    if (proc->fds && fd_table_put(proc)) {
         fd_table_delete(proc->fds);
     }
     kfree(proc->fd_held);
@@ -549,6 +566,7 @@ struct tgroup *tgroup_new(struct process *leader)
         tg->leader = leader;
         wait_queue_init(&tg->chld);
         wait_queue_init(&tg->gone);
+        wait_queue_init(&tg->sigfd);
         wait_queue_init(&tg->exited);
     }
     return tg;
@@ -624,6 +642,7 @@ process_t *get_process(uint32_t pid)
 {
     process_t *p;
 
+    bkl_assert_held();
     if (!pid_capacity) {
         return NULL;
     }
@@ -634,6 +653,12 @@ process_t *get_process(uint32_t pid)
         }
     }
     return NULL;
+}
+
+int proc_is_kthread(const process_t *p)
+{
+    return p->state != PROC_UNUSED && p->state != PROC_ZOMBIE && p->space_root == 0 &&
+           !p->in_syscall;
 }
 
 isr_params_t *proc_user_frame(const process_t *t)
@@ -749,18 +774,33 @@ void proc_set_comm(process_t *p, const char *path)
     }
 }
 
+/** A kernel thread's first code after its first switch: the switch's tail,
+ * which takes the big lock at the thread's depth, then its entry. */
+static void kthread_start(void)
+{
+    schedule_tail();
+    current_proc->kthread_entry();
+}
+
 /**
  * The architecture lays the stack out as its `switch_context` finds it
- * (`arch_context_init`). The switch passes the big lock to the thread it
- * enters, and `schedule` gives the processor that thread's depth, so the
- * thread begins holding the lock once, as a forked child and an idle task
- * do; with a depth of 0 its first interrupt would wait for the lock its own
- * processor holds.
+ * (`arch_context_init`), returning first to `kthread_start`, which runs the
+ * switch's tail and then `entry_point`. The thread begins holding the big
+ * lock once, as a forked child does: the tail takes it at that depth.
+ *
+ * The thread defers the tick's switch to its sleeps and service points
+ * (`no_tick_switch`), as a Linux kernel thread does without
+ * CONFIG_PREEMPTION: an interrupt in the middle of its work would otherwise
+ * switch it with state that only the big lock guards half changed, and the
+ * switch lets the lock go.
  */
 void setup_process_stack(process_t *proc, void (*entry_point)(void))
 {
+    proc->no_tick_switch = 1;
     proc->bkl_depth = 1;
-    arch_context_init(proc, entry_point);
+    proc->bkl_frames = 0;
+    proc->kthread_entry = entry_point;
+    arch_context_init(proc, kthread_start);
 }
 
 void proc_child_info(const process_t *child, const process_t *receiver, struct k_siginfo *info)

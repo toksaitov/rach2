@@ -217,14 +217,19 @@ static void secret_put(struct secret_user *u)
  * directory has on its parent, which may free the parent in turn. A removed
  * directory some process still holds keeps its removed parent this way, so
  * its `..` stays a directory to list and to walk. The climb is a loop, since
- * a chain of removed directories may be as deep as a tree.
+ * a chain of removed directories may be as deep as a tree. A file's pages
+ * are freed giving way every leaf (`shmem_free_yielding`): no name, hold or
+ * mapping reaches the node then, since a mapping holds its file, and the
+ * parent it holds stays held until the node is gone. A type's unlink and
+ * last put may sleep, as ext2's do, so every caller already lets the big
+ * lock go there.
  */
 static void settle(struct tmpfs_node *n)
 {
     while (n && n->refs == 0 && n->links == 0) {
         struct tmpfs_node *up = is_dir(n) && n->parent != n ? n->parent : NULL;
 
-        shmem_free(&n->data);
+        shmem_free_yielding(&n->data);
         if (n->secret) {
             secret_put(n->secret);
         }
@@ -1277,6 +1282,11 @@ int tmpfs_memfd(struct vfs_mount *mnt, const char *name, uint32_t mode, uint32_t
     return 0;
 }
 
+uint64_t tmpfs_new_ino(struct vfs_mount *mnt)
+{
+    return ++((struct tmpfs_mount *)mnt->priv)->next_ino;
+}
+
 int tmpfs_secret_file(struct vfs_mount *mnt, void **node)
 {
     struct tmpfs_node *n = new_node(mnt, NULL, T_IFREG | 0600u);
@@ -1420,6 +1430,7 @@ static const struct vfs_ops tmpfs_ops = {
     0, /* shutdown */
     0, /* xattr */
     tmpfs_cachestat,
+    0, /* put_unless_last */
 };
 
 const struct vfs_type vfs_tmpfs_type = {"tmpfs", tmpfs_mount, &tmpfs_ops, 1, 1, 0, 0};
