@@ -28,10 +28,18 @@ waiting for the card's carrier, for at most
 of
 .Sy netpoll.carrier_timeout= ,
 4 unless the boot line gives another number.
-When the link comes up in that wait, the records held until then are
-sent two seconds later, since frames sent the moment a link comes up can
-be lost beyond the card.
-Later records are sent when they are written, while the link is up; a
+The number is read as Linux reads it: in decimal, in hexadecimal after
+.Ql 0x ,
+or in octal after another leading 0, and of several the last valid one
+counts.
+When the wait finds the link up with records held, at once or later,
+those records and every one written in the next two seconds are sent
+when the two seconds end, in order, since frames sent the moment a link
+comes up can be lost beyond the card.
+The wait holds its records even when the link was up from the start,
+as on a virtual card.
+After the wait, records are sent when they are written, while the link
+is up; a
 record written while it is down waits for the next record after the
 link comes back.
 A kernel that panics or stops sends what it holds at once.
@@ -112,7 +120,8 @@ after
 puts the kernel's release and a comma before each message.
 In the plain form, the first record after a loss comes after the line
 .Ql ** N printk messages dropped ** ,
-as Linux sends it.
+in the same datagram, as Linux sends it; the record is then cut so that
+both fit 1000 bytes, and the rest follows in the next datagram.
 .Pp
 A target that cannot be read, or whose interface does not exist, is
 logged and left out; the others are kept.
