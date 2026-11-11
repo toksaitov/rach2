@@ -133,3 +133,14 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: nothing in its own code. The virgl family's dEQP list leaves the 15 cases out, for both guests, as its header says.
 * Status: unreported.
 * Next: run two contexts on the host alone, without a guest, through Mesa's D3D12 driver with the same buffer sizes, to see whether virglrenderer is needed; take a trace with `D3D12_DEBUG=debuglayer` from a Mesa built for debugging, and report to Mesa's issue tracker under the d3d12 label.
+
+## A geometry shader that emits no vertex leaves the host's copies of its context wrong
+
+* Project: Mesa 26.0.8, Ubuntu 26.04's 26.0.8-1ubuntu0.3 (build ID b089ec2f62ded38e9327502246aa4ccfb7929b24), its D3D12 gallium driver under WSL2 on an NVIDIA GeForce RTX 4080 SUPER, as the host renderer of virglrenderer 1.2.0-2ubuntu2 in QEMU 10.2.1; which of virglrenderer, Mesa's driver, Direct3D 12 and NVIDIA's driver is at fault was not traced.
+* Fails: after a guest draw whose geometry shader emits no vertex, as VK-GL-CTS's `geometry_shading.emit.*_emit_0_end_*` cases make, the draw itself passes, and every `glCopyImageSubData` of the same guest context then copies wrong data; after some hundreds of such copies, one of them makes Direct3D 12 remove the device, "D3D12: Removing Device.", and QEMU ends. Draws after it pass. A shader whose invocations emit no vertex only some of the time, as in `geometry_shading.basic.output_0_and_128`, leaves the copies right.
+* Found: 2026-11-11, the testing PC's WSL, milestone 77, task 77-5, taking the Debian guest's dEQP-GLES31 reference on virgl: deqp.sh's first part died in its `copy_image` cases in one process as in four, and a bisection of the cases before them, each half run in one process before the part's 3,044 copies, came down to these nine.
+* Reproduction: on that host, in a Linux guest on virgl, run VK-GL-CTS 1.4.1.1's glcts in one process with the case list `dEQP-GLES31.functional.geometry_shading.emit.points_emit_0_end_0` and then any 100 `dEQP-GLES31.functional.copy_image.non_compressed.*` cases: the first passes and each copy fails, each time; without the first case, each copy passes.
+* Evidence: `virgl-host/gs-emit-0.txt`, the bisection's runs and each of the nine cases' run before the 100 copies.
+* Rach2: nothing in its own code. The virgl family's dEQP list leaves the nine cases out, for both guests, as its header says.
+* Status: unreported.
+* Next: run the pair on the host alone, without a guest, through Mesa's D3D12 driver, to see whether virglrenderer is needed, and read `d3d12_draw_vbo`'s handling of a geometry shader with no output and `d3d12_resource_copy_region` for state the first leaves for the second.
