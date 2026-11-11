@@ -1187,6 +1187,36 @@ static int scalar_raw_count(void)
 }
 
 /**
+ * Whether pwritev of "XY" and a buffer at KERNEL_ADDRESS to `fd` at offset 0
+ * behaves as Linux's: the address fails access_ok in __import_iovec, so the
+ * call is EFAULT before it writes; for an i386 program on the x86-64 kernel
+ * it is unmapped user memory, which access_ok takes, and
+ * generic_perform_write writes the buffer before it and returns its 2 bytes.
+ * `fd` is open for reading and writing and begins with "01".
+ */
+static int pwritev_bad_buffer(int fd)
+{
+    char two[2];
+    struct iovec out[2];
+    long want = -1;
+    const char *head = "01";
+
+#if !defined __x86_64__
+    if (getenv("ETUDE_KERNEL") != NULL && strcmp(getenv("ETUDE_KERNEL"), "x86_64") == 0) {
+        want = 2;
+        head = "XY";
+    }
+#endif
+    out[0].iov_base = "XY";
+    out[0].iov_len = 2;
+    out[1].iov_base = KERNEL_ADDRESS;
+    out[1].iov_len = 4;
+    errno = 0;
+    return pwritev(fd, out, 2, 0) == want && (want >= 0 || errno == EFAULT) &&
+           pread(fd, two, 2, 0) == 2 && memcmp(two, head, 2) == 0;
+}
+
+/**
  * Check the refusals of preadv and pwritev on the file vector_rows makes,
  * writev's cut of a vector past 2 GiB (`writev_cut`) and its vector of no
  * bytes (`writev_empty`). Returns 0, or 1 once the failure is reported.
@@ -1194,18 +1224,15 @@ static int scalar_raw_count(void)
 static int vector_refusal_rows(void)
 {
     char two[2];
-    struct iovec out[2], in[1];
+    struct iovec out[1], in[1];
     int fd, pipefd[2], ok;
 
     fd = open(FILE_PATH, O_RDWR);
-    out[0].iov_base = "XY";
-    out[0].iov_len = 2;
-    out[1].iov_base = KERNEL_ADDRESS;
-    out[1].iov_len = 4;
-    if (fd < 0 || !refused(pwritev(fd, out, 2, 0), EFAULT) || pread(fd, two, 2, 0) != 2 ||
-        memcmp(two, "01", 2) != 0) {
+    if (fd < 0 || !pwritev_bad_buffer(fd)) {
         return fail("pwritev refuses a vector with a bad buffer before it writes");
     }
+    out[0].iov_base = "XY";
+    out[0].iov_len = 2;
     report_held();
     in[0].iov_base = two;
     in[0].iov_len = sizeof(two);
