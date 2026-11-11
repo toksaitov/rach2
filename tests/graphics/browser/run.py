@@ -310,8 +310,13 @@ def pages(b, url):
     return result
 
 
-def diagnostics(b, url):
-    """Read the browsers' own sandbox diagnostics and each Chromium child's kernel state."""
+def diagnostics(b, url, ready="Sandboxed"):
+    """Read the browsers' own sandbox diagnostics and each Chromium child's kernel state.
+
+    chrome://gpu is read once its text holds READY. Its sandbox line comes
+    with the page, but Dawn's adapter list comes later, so a case that judges
+    Dawn passes "Vulkan backend", which that list has and the page lacks.
+    """
     b.navigate(url + "/page.html")
     b.script("storage()")
     b.script("draw()")
@@ -332,7 +337,7 @@ def diagnostics(b, url):
     result["chrome://sandbox"] = b.until(lambda: b.script("document.body.innerText"))
     b.navigate("chrome://gpu/")
     text = """(() => { const read = root => Array.from(root.querySelectorAll('*')).filter(e => e.shadowRoot).map(e => e.shadowRoot.textContent + read(e.shadowRoot)).join('\\n'); return document.body.innerText + read(document); })()"""
-    result["chrome://gpu"] = b.until(lambda: (lambda s: s if "Sandboxed" in s else None)(b.script(text)))
+    result["chrome://gpu"] = b.until(lambda: (lambda s: s if "Sandboxed" in s and ready in s else None)(b.script(text)))
     return result
 
 
@@ -491,7 +496,7 @@ def webgpu_hasvk(b, url):
     assert len(pictures) == 1, "screenshooter did not capture one panel"
     shutil.copyfile(pictures[0], b.out / "panel.png")
     save(b.out / "gpu-info.json", b.client.call("SystemInfo.getInfo"))
-    result.update(diagnostics(b, url))
+    result.update(diagnostics(b, url, "Vulkan backend"))
     return result
 
 
