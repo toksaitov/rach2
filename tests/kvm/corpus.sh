@@ -9,10 +9,12 @@
 # LIST is unit-tests.list or selftests.list of this directory: a test a line,
 # its name and EXPECT, `pass`, `skip`, `fail` or `excluded`, or FLAG?A:B for a
 # test whose result is the processor's: A where the `flags` of /proc/cpuinfo
-# have FLAG, or where FLAG is `kvm_cap_vm_tsc_control` and /dev/kvm answers
-# KVM_CAP_VM_TSC_CONTROL with a value above 0, which perl asks it, and B
-# otherwise. Each test whose EXPECT is not `excluded` runs, in the order of
-# the list:
+# have FLAG, and B otherwise; A and B may each be FLAG?A:B. Three FLAGs are
+# not the processor's flags: `kvm_cap_vm_tsc_control`, where /dev/kvm answers
+# KVM_CAP_VM_TSC_CONTROL with a value above 0, which perl asks it;
+# `kvm_pmu`, where /sys/module/kvm/parameters/enable_pmu reads Y; and
+# `intel`, where /proc/cpuinfo's vendor_id is GenuineIntel. Each test whose
+# EXPECT is not `excluded` runs, in the order of the list:
 #
 # * `unit`: kvm-unit-tests' run_tests.sh, from a copy of /opt/kvm-unit-tests,
 #   with ACCEL `kvm,kernel-irqchip=split`, as in the Linux reference,
@@ -62,15 +64,34 @@ if perl -e 'open(my $f, "<", "/dev/kvm") or exit 1;
         exit !(ioctl($f, 0xAE03, 214) + 0)' 2> /dev/null; then
     flags="$flags kvm_cap_vm_tsc_control"
 fi
+pmu=
+[ ! -r /sys/module/kvm/parameters/enable_pmu ] ||
+    read -r pmu < /sys/module/kvm/parameters/enable_pmu
+[ "$pmu" != Y ] || flags="$flags kvm_pmu"
+! grep -q '^vendor_id[[:space:]]*: GenuineIntel' /proc/cpuinfo 2> /dev/null ||
+    flags="$flags intel"
 awk -v flags=" $flags " '
-    !/^#/ && NF >= 2 {
-        q = index($2, "?")
-        if (q) {
-            rest = substr($2, q + 1)
-            c = index(rest, ":")
-            has = index(flags, " " substr($2, 1, q - 1) " ")
-            $2 = has ? substr(rest, 1, c - 1) : substr(rest, c + 1)
+    # settle(E): the result E names, where E is a result or FLAG?A:B, and
+    # A and B are each the same again.
+    function settle(e,    q, rest, i, d, ch) {
+        q = index(e, "?")
+        if (q == 0)
+            return e
+        rest = substr(e, q + 1)
+        d = 0
+        for (i = 1; i <= length(rest); i++) {
+            ch = substr(rest, i, 1)
+            if (ch == "?")
+                d++
+            else if (ch == ":" && d-- == 0)
+                break
         }
+        if (index(flags, " " substr(e, 1, q - 1) " "))
+            return settle(substr(rest, 1, i - 1))
+        return settle(substr(rest, i + 1))
+    }
+    !/^#/ && NF >= 2 {
+        $2 = settle($2)
         print
     }' "$list" > "$work/list"
 
@@ -79,18 +100,6 @@ awk '$2 != "excluded" { print $1, $2 }' "$work/list" > "$work/run"
 awk '$2 == "excluded" {
     r = $0; sub(/^[^ ]+ [^ ]+ [^ ]+ ?/, "", r); print "kvm-corpus: " $1 ": excluded: " r }' "$work/list"
 excluded=$(awk '$2 == "excluded"' "$work/list" | wc -l | tr -d ' ')
-
-# PMU expectations follow the machine that runs the corpus. AMD has no
-# legacy PMU presence bit, so its unit test fails when the host has none;
-# the selftests read enable_pmu and skip. The Intel selftests skip on AMD.
-pmu_enabled=
-if [ -r /sys/module/kvm/parameters/enable_pmu ]; then
-    read -r pmu_enabled < /sys/module/kvm/parameters/enable_pmu
-fi
-pmu_intel=0
-if grep -q 'GenuineIntel' /proc/cpuinfo; then
-    pmu_intel=1
-fi
 
 # results: write NAME RESULT a line to $work/got, RESULT pass, skip or fail.
 : > "$work/got"
@@ -122,14 +131,6 @@ fi
 # Judge each test that ran against the list.
 total=0 bad=0 names=''
 while read -r name expect; do
-    case "$pmu_enabled:$pmu_intel:$name" in
-        N:0:pmu) expect=fail ;;
-        N:1:pmu) expect=skip ;;
-        N:*:x86_64/pmu_counters_test|N:*:x86_64/pmu_event_filter_test|N:*:x86_64/vmx_pmu_caps_test)
-            expect=skip ;;
-        Y:1:x86_64/pmu_counters_test|Y:1:x86_64/vmx_pmu_caps_test)
-            expect=pass ;;
-    esac
     got=$(awk -v n="$name" '$1 == n { print $2; exit }' "$work/got")
     got=${got:-missing}
     total=$((total + 1))
