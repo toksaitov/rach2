@@ -1648,7 +1648,7 @@ static int vmx_enter(struct kvm_vcpu *v)
         (x->debugctl & DEBUGCTL_LBR)) {
         /* A #DB in the guest clears DEBUGCTL.LBR, and the exit saved it. */
         x->debugctl &= vmcs_read(GUEST_IA32_DEBUGCTL);
-        v->pmu.debugctl = x->debugctl;
+        v->pmu.debugctl = x->debugctl & ~KVM_DEBUGCTL_FREEZE_IN_SMM;
     }
     if (x->ex.failed == VMX_OK) {
         nmi = exit_is_nmi(&x->ex);

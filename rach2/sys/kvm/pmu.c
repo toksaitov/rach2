@@ -44,6 +44,7 @@
 #define EV_GUEST       (1ull << 40)
 #define EV_TX          (1ull << 32)
 #define EV_TXCP        (1ull << 33)
+#define SMM_FREEZE     (1ull << 12)
 #define FW_WRITES      (1ull << 13)
 #define LBR_FORMAT     0x3Full
 #define DEBUGCTL_LBR   (1ull << 0)
@@ -59,6 +60,7 @@
 #define EV_RAW         (0xFFFFull | EV_EDGE | EV_INVERT | EV_CMASK)
 #define AMD_MERGE      (0xF000000FFull | EV_ENABLE)
 #define FIXED_BIT(j)   (1ull << (32u + (j)))
+#define FIXED_PMI      8ull
 #define AMD_EVENT      0xF000000FFull
 #define FILTER_EXCLUDE (1ull << 55)
 #define FILTER_MASK    (0xFFull << 56)
@@ -238,9 +240,10 @@ static const struct {
  * `fixed0_last` places a guest counter on fixed counter 0 only when no
  * general counter it may use is free: Haswell's fixed counter 0, counting
  * retired instructions with no general counter counting them beside it,
- * overcounts a guest's window now and then. */
+ * overcounts a guest's window now and then. `fw_writes` and `smm_freeze`
+ * are PERF_CAPABILITIES' full-width counter writes and FREEZE_WHILE_SMM. */
 struct pmu_host {
-    int intel, core_ext, pdcm;
+    int intel, core_ext, pdcm, fw_writes, smm_freeze;
     uint32_t version, nr_gp, nr_fixed, width, fixed_width;
     uint32_t event_length, unavailable;
     const struct constraint *table;
@@ -251,6 +254,9 @@ struct pmu_host {
     int lbr_info, lbr_quirk;
 };
 static struct pmu_host pmu_host;
+
+/* The measuring knob, KVM_PMU_STEP_* of pmu.h; each entry reads it once. */
+static volatile uint32_t pmu_steps;
 
 /* Header values are copied once, then the event words, so a caller cannot
  * change the allocation's bound between the two copies. */
@@ -424,6 +430,7 @@ static void intel_table(void)
 void kvm_pmu_start(void)
 {
     uint32_t a, b, c, d, top;
+    uint64_t cap;
 
     k_memset(&pmu_host, 0, sizeof(pmu_host));
     if (!kvm_backend) {
@@ -456,6 +463,10 @@ void kvm_pmu_start(void)
         }
         kcpu_id(1, &a, &b, &c, &d);
         pmu_host.pdcm = (c & PDCM) != 0;
+        if (pmu_host.pdcm && kcpu_rdmsr_safe(PERF_CAP, &cap) == 0) {
+            pmu_host.fw_writes = (cap & FW_WRITES) != 0;
+            pmu_host.smm_freeze = (cap & SMM_FREEZE) != 0;
+        }
         intel_table();
         if (pmu_host.width) {
             lbr_probe();
@@ -483,6 +494,63 @@ void kvm_pmu_start(void)
     if (!pmu_host.width) {
         pmu_host.version = pmu_host.nr_gp = pmu_host.nr_fixed = 0;
     }
+    pmu_steps = 0;
+}
+
+int32_t kvm_pmu_steps_show(void *obj, int arg, char *buf, uint32_t cap)
+{
+    static const char digits[] = "0123456789abcdef";
+    uint32_t steps = pmu_steps;
+
+    (void)obj;
+    (void)arg;
+    if (cap >= 5u) {
+        buf[0] = '0';
+        buf[1] = 'x';
+        buf[2] = digits[(steps >> 4) & 0xFu];
+        buf[3] = digits[steps & 0xFu];
+        buf[4] = '\n';
+    }
+    return 5;
+}
+
+int32_t kvm_pmu_steps_store(void *obj, int arg, const char *buf, uint32_t len)
+{
+    uint32_t steps = 0, i = 0, n = len, base = 10, digit;
+
+    (void)obj;
+    (void)arg;
+    /* A number of at most two hex or three decimal digits, then at most one
+     * newline: the knob's bits are few. */
+    if (n > 0 && buf[n - 1u] == '\n') {
+        n--;
+    }
+    if (n > 2u && buf[0] == '0' && (buf[1] == 'x' || buf[1] == 'X')) {
+        base = 16;
+        i = 2;
+    }
+    if (i == n || n - i > (base == 16u ? 2u : 3u)) {
+        return -EINVAL;
+    }
+    for (; i < n; i++) {
+        if (buf[i] >= '0' && buf[i] <= '9') {
+            digit = (uint32_t)(buf[i] - '0');
+        } else if (base == 16u && (buf[i] | 0x20) >= 'a' && (buf[i] | 0x20) <= 'f') {
+            digit = (uint32_t)((buf[i] | 0x20) - 'a') + 10u;
+        } else {
+            return -EINVAL;
+        }
+        if (digit >= base) {
+            return -EINVAL;
+        }
+        steps = steps * base + digit;
+    }
+    if ((steps & ~KVM_PMU_STEPS) || ((steps & KVM_PMU_STEP_SMM) && !pmu_host.smm_freeze) ||
+        ((steps & KVM_PMU_STEP_PMI) && !(steps & KVM_PMU_STEP_WRITE))) {
+        return -EINVAL;
+    }
+    pmu_steps = steps;
+    return (int32_t)len;
 }
 
 int kvm_pmu_enabled(void)
@@ -974,8 +1042,12 @@ int kvm_pmu_debugctl(struct kvm_vcpu *v, int write, uint64_t *value, int host)
 uint64_t kvm_pmu_vmcs_debugctl(const struct kvm_vcpu *v)
 {
     const struct kvm_pmu *p = &v->pmu;
+    uint64_t value = p->lbr_nr ? p->debugctl : p->debugctl & ~(DEBUGCTL_LBR | DEBUGCTL_FRZ);
 
-    return p->lbr_nr ? p->debugctl : p->debugctl & ~(DEBUGCTL_LBR | DEBUGCTL_FRZ);
+    /* Linux keeps the host's FREEZE_WHILE_SMM, which its perf sets by
+     * default, in the guest's (arch/x86/kvm/vmx/vmx.h:441-462,
+     * arch/x86/events/intel/core.c:5153-5154 and 5463). */
+    return (p->steps & KVM_PMU_STEP_SMM) ? value | KVM_DEBUGCTL_FREEZE_IN_SMM : value;
 }
 
 int kvm_pmu_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, int host)
@@ -1420,12 +1492,10 @@ static int slot_running(const struct kvm_pmu *p, uint32_t s)
 
 /** The counter after `n` in the order of preference: Linux's, fixed
  * counters first and then general ones from 0 (arch/x86/events/core.c:
- * 880-905), but with fixed counter 0 after the general ones where
- * `fixed0_last` says; 64 after the last, and the first after 64. */
-static uint32_t counter_after(uint32_t n)
+ * 880-905), but with fixed counter 0 after the general ones where `last`
+ * says; 64 after the last, and the first after 64. */
+static uint32_t counter_after(uint32_t n, int last)
 {
-    int last = pmu_host.fixed0_last;
-
     if (n == 64u) {
         return last ? 33u : 32u;
     }
@@ -1441,12 +1511,13 @@ static uint32_t counter_after(uint32_t n)
     return n + 1u;
 }
 
-/** The next of `want`'s counters after `n` in the order of preference; 64
- * after the last. Begin with 64. */
-static uint32_t next_counter(uint64_t want, uint32_t n)
+/** The next of `want`'s counters after `n` in the order of preference,
+ * with fixed counter 0 last where `last` says; 64 after the last. Begin
+ * with 64. */
+static uint32_t next_counter(uint64_t want, uint32_t n, int last)
 {
     for (;;) {
-        n = counter_after(n);
+        n = counter_after(n, last);
         if (n == 64u || (want & (1ull << n))) {
             return n;
         }
@@ -1458,24 +1529,26 @@ static uint32_t next_counter(uint64_t want, uint32_t n)
  * owner can move to another of its own, an augmenting path of a bipartite
  * matching, which finds a place for every counter whenever one exists.
  * `owner` maps a physical counter to its slot, 0xFF when free; `seen`
- * holds the counters this search has tried. */
-static int augment(const uint64_t *want, uint8_t *owner, uint8_t *phys, uint32_t s, uint64_t *seen)
+ * holds the counters this search has tried; `last` puts fixed counter 0
+ * last in the order. */
+static int augment(const uint64_t *want, uint8_t *owner, uint8_t *phys, uint32_t s, uint64_t *seen,
+                   int last)
 {
     uint32_t n;
 
-    for (n = next_counter(want[s], 64u); n != 64u; n = next_counter(want[s], n)) {
+    for (n = next_counter(want[s], 64u, last); n != 64u; n = next_counter(want[s], n, last)) {
         if (owner[n] == 0xFFu) {
             owner[n] = (uint8_t)s;
             phys[s] = (uint8_t)n;
             return 1;
         }
     }
-    for (n = next_counter(want[s], 64u); n != 64u; n = next_counter(want[s], n)) {
+    for (n = next_counter(want[s], 64u, last); n != 64u; n = next_counter(want[s], n, last)) {
         if (*seen & (1ull << n)) {
             continue;
         }
         *seen |= 1ull << n;
-        if (augment(want, owner, phys, owner[n], seen)) {
+        if (augment(want, owner, phys, owner[n], seen, last)) {
             owner[n] = (uint8_t)s;
             phys[s] = (uint8_t)n;
             return 1;
@@ -1491,14 +1564,17 @@ static int augment(const uint64_t *want, uint8_t *owner, uint8_t *phys, uint32_t
  * 940-1010). An AMD pair event takes an even counter and the odd one after
  * it first, as only family 17h's unconstrained events share its counters.
  * A counter left without one does not count, as a pinned perf event that
- * cannot be scheduled does not, and leaves the run masks. Return the
- * physical counters given.
+ * cannot be scheduled does not, and leaves the run masks. Fixed counter 0
+ * comes after the general ones where `fixed0_last` says, unless the knob's
+ * KVM_PMU_STEP_ORDER asks for Linux's order. Return the physical counters
+ * given.
  */
 static uint64_t place(struct kvm_pmu *p, uint64_t free)
 {
     uint64_t want[KVM_PMU_SLOTS], seen, used = 0;
     uint8_t owner[32u + KVM_PMU_FIXED_MAX], order[KVM_PMU_SLOTS];
     uint32_t s, k, n = 0, t;
+    int last = pmu_host.fixed0_last && !(p->steps & KVM_PMU_STEP_ORDER);
 
     k_memset(owner, 0xFF, sizeof(owner));
     p->pair = 0;
@@ -1539,7 +1615,7 @@ static uint64_t place(struct kvm_pmu *p, uint64_t free)
     }
     for (k = 0; k < n; k++) {
         seen = 0;
-        (void)augment(want, owner, p->phys, order[k], &seen);
+        (void)augment(want, owner, p->phys, order[k], &seen, last);
     }
     for (k = 0; k < n; k++) {
         s = order[k];
@@ -1633,6 +1709,39 @@ void kvm_pmu_svm_exit(struct kvm_vcpu *v)
     }
 }
 
+/**
+ * The physical count that starts guest slot `s` with Linux's period: the
+ * counts left before its guest count wraps, at least 2 and at most perf's
+ * max_period, negated (arch/x86/kvm/pmu.c:167-174 and 256-272,
+ * arch/x86/events/core.c:1397-1413, arch/x86/events/intel/core.c:7357-7358).
+ */
+static uint64_t start_count(const struct kvm_pmu *p, uint32_t s)
+{
+    uint64_t mask, left, most;
+    uint32_t width;
+
+    if (s < KVM_PMU_GP_MAX) {
+        mask = p->gp_mask;
+        left = (0 - p->counter[s]) & mask;
+        width = pmu_host.width;
+    } else {
+        mask = p->fixed_mask;
+        left = (0 - p->fixed[s - KVM_PMU_GP_MAX]) & mask;
+        width = pmu_host.fixed_width;
+    }
+    if (!left) {
+        left = mask + 1u;
+    }
+    most = pmu_host.fw_writes ? mask_bits(pmu_host.width) >> 1 : (1ull << 31) - 1u;
+    if (left < 2u) {
+        left = 2;
+    }
+    if (left > most) {
+        left = most;
+    }
+    return (0 - left) & mask_bits(width);
+}
+
 /** Append one VMX MSR entry, including its required zero reserved word. */
 static void list_add(struct kvm_pmu_msr *list, uint32_t *n, uint32_t index, uint64_t value)
 {
@@ -1647,13 +1756,16 @@ static void list_add(struct kvm_pmu_msr *list, uint32_t *n, uint32_t index, uint
  * count. Linux writes no counter at an entry and switches only the global
  * control; the selectors are set here where the host's global control
  * keeps them stopped, or by the lists on a version 1 PMU, and each count is
- * read now and again once the exit has stopped it. Return the guest's
- * fields of FIXED_CTRL, which the caller writes with the host's.
+ * read now and again once the exit has stopped it. The knob's
+ * KVM_PMU_STEP_WRITE writes each counter first, as Linux's perf starts an
+ * event, and KVM_PMU_STEP_PMI sets the interrupt bits Linux's perf sets
+ * (arch/x86/events/intel/core.c:2853-2855). Return the guest's fields of
+ * FIXED_CTRL, which the caller writes with the host's.
  */
 static uint64_t program_slots(struct kvm_pmu *p, struct kvm_pmu_msr *guest,
                               struct kvm_pmu_msr *host, uint32_t *ng, uint32_t *nh)
 {
-    uint64_t fixed = 0, select;
+    uint64_t fixed = 0, select, field;
     uint32_t s, n;
 
     for (s = 0; s < KVM_PMU_SLOTS; s++) {
@@ -1662,11 +1774,21 @@ static uint64_t program_slots(struct kvm_pmu *p, struct kvm_pmu_msr *guest,
         }
         n = p->phys[s];
         select = slot_select(p, s);
+        if (p->steps & KVM_PMU_STEP_PMI) {
+            select |= EV_INT;
+        }
         if (n >= 32u) {
             n -= 32u;
-            fixed |= (((select & EV_OS) ? 1ull : 0) | ((select & EV_USR) ? 2ull : 0)) << (4u * n);
+            field = ((select & EV_OS) ? 1ull : 0) | ((select & EV_USR) ? 2ull : 0);
+            fixed |= (field | ((select & EV_INT) ? FIXED_PMI : 0)) << (4u * n);
+            if (p->steps & KVM_PMU_STEP_WRITE) {
+                pmu_write(FIXED0 + n, start_count(p, s));
+            }
             p->base[s] = pmu_read(FIXED0 + n);
             continue;
+        }
+        if (p->steps & KVM_PMU_STEP_WRITE) {
+            pmu_write((pmu_host.fw_writes ? FULL_PMC0 : PMC0) + n, start_count(p, s));
         }
         if (kvm_pmu_global()) {
             pmu_write(EVENTSEL0 + n, select);
@@ -1709,6 +1831,7 @@ void kvm_pmu_vmx_enter(struct kvm_vcpu *v, struct kvm_pmu_msr *guest, struct kvm
 
     *ng = *nh = 0;
     p->lbr_list = ~0u;
+    p->steps = pmu_steps;
     if (global) {
         global[0] = global[1] = 0;
     }
@@ -1763,6 +1886,7 @@ void kvm_pmu_vmx_exit(struct kvm_vcpu *v, const struct kvm_pmu_msr *guest, int r
 {
     struct kvm_pmu *p = &v->pmu;
     uint32_t i, s, k = p->lbr_list;
+    uint64_t fields = 0, fixed;
 
     p->lbr_list = ~0u;
     if (!pmu_host.intel || !pmu_host.version) {
@@ -1777,6 +1901,17 @@ void kvm_pmu_vmx_exit(struct kvm_vcpu *v, const struct kvm_pmu_msr *guest, int r
         }
         if (kvm_pmu_global() && p->phys[s] < 32u) {
             pmu_write(EVENTSEL0 + p->phys[s], 0);
+        } else if (p->phys[s] >= 32u) {
+            fields |= 0xFull << (4u * (p->phys[s] - 32u));
+        }
+    }
+    /* Linux's perf clears a fixed field when the guest disables its counter
+     * (arch/x86/events/intel/core.c:2551); the knob clears it at each exit,
+     * and the next entry sets it again. */
+    if ((p->steps & KVM_PMU_STEP_FIELD) && kvm_pmu_global() && fields) {
+        fixed = pmu_read(FIXED_CTRL);
+        if (fixed & fields) {
+            pmu_write(FIXED_CTRL, fixed & ~fields);
         }
     }
     if (ran && k != ~0u) {
