@@ -1,8 +1,8 @@
 #!/bin/sh
 # candidate.sh WORD...: stage on the running release, by hand, a menu block
 # that boots the candidate slot once with this boot's line and the WORDs
-# after it (78-20's `netconsole=6665@192.168.0.106/,6666@MAC/`), for a kernel
-# that `bootctl kernel` has just staged and armed.
+# after it (78-20's `netconsole=6665@192.168.0.106/,6666@IP/STATION`), for
+# a kernel that `bootctl kernel` has just staged and armed.
 #
 # The block runs when `next_entry` is `candidate`, before the stub's own test
 # of it, and consumes it as the stub does, so the boot after it takes the
