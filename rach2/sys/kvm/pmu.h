@@ -91,10 +91,21 @@ int32_t kvm_pmu_steps_show(void *obj, int arg, char *buf, uint32_t cap);
 /** Write the measuring knob from text, as sysfs's store: KVM_PMU_STEP_*
  * bits in decimal or after 0x in hex. `len`, or -EINVAL for other text, a
  * bit outside KVM_PMU_STEPS, FREEZE_WHILE_SMM where PERF_CAPABILITIES does
- * not offer it, or the PMI bits without the counters' writes, which keep a
- * physical count of unknown origin from raising a PMI the host would not
- * claim. */
+ * not offer it, or the PMI bits without the counters' writes, which start
+ * each count at its guest's period, or without Intel's global status, by
+ * which `kvm_pmu_nmi` claims the PMI. */
 int32_t kvm_pmu_steps_store(void *obj, int arg, const char *buf, uint32_t len);
+
+/** Read pmu_placed, as sysfs's show: the physical counters the last Intel
+ * entry gave its guest's counters, bit n general counter n and bit 32 + j
+ * fixed counter j, in hex and a newline; 0x0 before any. */
+int32_t kvm_pmu_placed_show(void *obj, int arg, char *buf, uint32_t cap);
+
+/** From the NMI handler (`watchdog_guest_nmi`): acknowledge the overflow
+ * of each counter the host does not hold, which only a guest runs. 1 when
+ * there was one, which claims the NMI; 0 before any entry has set a
+ * physical PMI bit. */
+int kvm_pmu_nmi(void);
 
 /** Whether the host has usable performance counters. */
 int kvm_pmu_enabled(void);

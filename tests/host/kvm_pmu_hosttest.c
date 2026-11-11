@@ -6,6 +6,7 @@
 extern int printf(const char *format, ...);
 extern void *malloc(unsigned long n);
 extern void free(void *p);
+extern int memcmp(const void *a, const void *b, unsigned long n);
 
 static int failures, live, alloc_fail, copy_fail, pmi_count, fault_count;
 static int model_intel, model_ext, model_v2, model_missing, model_ignored, model_lbr, model_notsx;
@@ -564,6 +565,9 @@ static void intel_placement(void)
     kvm_pmu_vmx_exit(&v, guest, 1);
 }
 
+/* The NMI handler's hook, which kvm_pmu_start sets. */
+int (*watchdog_guest_nmi)(void);
+
 /** Write `text` to the measuring knob; its return. */
 static int32_t steps(const char *text)
 {
@@ -576,14 +580,15 @@ static int32_t steps(const char *text)
 
 /** Drive kvm_intel's pmu_steps: its text, the bits it refuses, and each
  * step on the switching: Linux's order, the counters written to minus
- * their periods, the interrupt bits, the fixed field cleared at the exit,
- * and FREEZE_WHILE_SMM in the VMCS's DEBUGCTL alone. */
+ * their periods with the model's limits, the interrupt bits and the NMI
+ * they raise, the fixed field cleared at the exit, and FREEZE_WHILE_SMM in
+ * the VMCS's DEBUGCTL alone; and pmu_placed. */
 static void intel_steps(void)
 {
     struct kvm_pmu_msr guest[KVM_PMU_LIST_MAX], host[KVM_PMU_LIST_MAX];
     uint64_t global[2], watch_global = FIXED_BIT(1), value;
     uint32_t ng, nh;
-    char text[8];
+    char text[24];
     setup(1, 0, 0);
     CHECK(steps("0x08") < 0, "FREEZE_WHILE_SMM is refused where PERF_CAPABILITIES lacks it");
     *reg(PERF_CAP) = FW_WRITES | SMM_FREEZE;
@@ -598,6 +603,13 @@ static void intel_steps(void)
               text[2] == '1' && text[3] == '5',
           "it takes decimal and reads back in hex");
     CHECK(steps("0x1F") == 4, "and takes every step at once");
+    pmu_host.version = 1;
+    CHECK(steps("0x05") < 0, "it refuses the PMI bits without the global status");
+    pmu_host.version = 2;
+    CHECK(watchdog_guest_nmi == kvm_pmu_nmi && !kvm_pmu_nmi(),
+          "the NMI handler calls KVM, which claims nothing before a PMI bit is set");
+    CHECK(kvm_pmu_placed_show(NULL, 0, text, sizeof(text)) == 4 && !memcmp(text, "0x0\n", 4),
+          "pmu_placed reads 0x0 before any entry");
     CHECK(steps("0x17") == 4, "and Linux's order, the writes, the PMI bits and the field");
     *reg(GLOBAL_CTRL) = watch_global;
     *reg(FIXED_CTRL) = 0xB0u;
@@ -612,8 +624,12 @@ static void intel_steps(void)
     kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
     CHECK(v.pmu.phys[KVM_PMU_GP_MAX] == 32u && v.pmu.phys[0] == 0,
           "Linux's order puts fixed counter 0 on its own counter on Haswell");
-    CHECK(*reg(FIXED0) == 0x800000000001ull && *reg(PMC0) == mask_bits(48) - 3u,
-          "each counter starts at minus its period, perf's max_period at most");
+    CHECK(*reg(FIXED0) == 0x800000000001ull && *reg(PMC0) == mask_bits(48) - 31u,
+          "each counter starts at minus its period, perf's max_period at most and Haswell's "
+          "32 at least");
+    CHECK(kvm_pmu_placed_show(NULL, 0, text, sizeof(text)) == 12 &&
+              !memcmp(text, "0x100000001\n", 12),
+          "pmu_placed gives fixed counter 0 and general counter 0");
     CHECK(*reg(FIXED_CTRL) == 0xBAu && *reg(EVENTSEL0) == (0xC4u | EV_ENABLE | EV_OS | EV_INT),
           "and has its interrupt bit");
     *reg(FIXED0) += 5;
@@ -622,6 +638,28 @@ static void intel_steps(void)
     CHECK(v.pmu.fixed[0] == 5 && v.pmu.counter[0] == v.pmu.gp_mask - 1,
           "the deltas count from the written values");
     CHECK(*reg(FIXED_CTRL) == 0xB0u, "the exit clears the guest's field and keeps the host's");
+    *reg(GLOBAL_STATUS) = FIXED_BIT(1);
+    *reg(GLOBAL_OVF) = 0;
+    CHECK(!kvm_pmu_nmi() && !*reg(GLOBAL_OVF),
+          "KVM leaves the NMI of the host's counter's overflow to the detector");
+    *reg(GLOBAL_STATUS) = FIXED_BIT(1) | FIXED_BIT(0) | 1u;
+    CHECK(kvm_pmu_nmi() && *reg(GLOBAL_OVF) == (FIXED_BIT(0) | 1u),
+          "and claims a guest counter's, acknowledging only the counters the host does not hold");
+    *reg(GLOBAL_STATUS) = 0;
+    v.pmu.eventsel[1] = 0x1C0u | EV_ENABLE | EV_OS;
+    v.pmu.counter[1] = v.pmu.gp_mask - 3;
+    CHECK(start_count(&v.pmu, 1) == mask_bits(48) - 127u,
+          "INST_RETIRED.ALL starts 128 counts from its overflow at least on Haswell");
+    pmu_host.table = c_bdw;
+    CHECK(start_count(&v.pmu, 0) == mask_bits(48) - 1u &&
+              start_count(&v.pmu, 1) == mask_bits(48) - 127u,
+          "on Broadwell only INST_RETIRED.ALL is limited, to 128 at least");
+    v.pmu.counter[1] = v.pmu.gp_mask - 199;
+    CHECK(start_count(&v.pmu, 1) == mask_bits(48) - 191u, "with its low six bits clear");
+    pmu_host.table = c_nehalem;
+    CHECK(start_count(&v.pmu, 0) == mask_bits(48) - 31u, "and on Nehalem every event to 32");
+    pmu_host.table = c_hsw;
+    v.pmu.eventsel[1] = 0;
     CHECK(steps("0x08") == 4, "FREEZE_WHILE_SMM is taken where PERF_CAPABILITIES offers it");
     kvm_pmu_prepare(&v);
     kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
