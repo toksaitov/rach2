@@ -1,0 +1,31 @@
+# The previous worker's trace, commit 30dc69535's isr.c patch, on the milestone branch's kernel of 2026-11-11 07:23 UTC+6:
+# each ticktrace line is a run of timer ticks the boot processor took in user mode at one instruction, ended by the system call named.
+spliceloadmusl: begin: read mib 16 load 0 mode 2
+spliceloadmusl: result: read mib 16 load 0 mode 2 us 24619 calls 32 longest_pair_us 1776 disk_kib 0 voluntary 0 involuntary 0
+spliceloadmusl: begin: splice mib 16 load 0 mode 2
+spliceloadmusl: result: splice mib 16 load 0 mode 2 us 172273 calls 512 longest_pair_us 1833 disk_kib 0 voluntary 0 involuntary 0
+spliceloadmusl: begin: read mib 16 load 3 mode 2
+<4>[4.887000] ticktrace: user pc 0x000000000040928d: 177 ticks in 634460 us before syscall 9
+<4>[5.811000] ticktrace: user pc 0x0000000000409be7: 249 ticks in 918935 us before syscall 0
+<4>[6.662000] ticktrace: user pc 0x0000000000406229: 189 ticks in 684703 us before syscall 0
+<4>[12.169000] ticktrace: user pc 0x0000000000409be7: 1693 ticks in 5453434 us before syscall 0
+spliceloadmusl: result: read mib 16 load 3 mode 2 us 828844 calls 32 longest_pair_us 693120 disk_kib 0 voluntary 0 involuntary 0
+spliceloadmusl: begin: splice mib 16 load 3 mode 2
+<4>[13.550000] ticktrace: user pc 0x000000000040928d: 377 ticks in 1223924 us before syscall 9
+<4>[21.523000] ticktrace: user pc 0x0000000000409be7: 2321 ticks in 7675550 us before syscall 0
+<4>[23.368000] ticktrace: user pc 0x00000000004013d1: 251 ticks in 861953 us before syscall 275
+<4>[35.300000] ticktrace: user pc 0x00007f00000028bf: 3588 ticks in 11915306 us before syscall 275
+<4>[40.422000] ticktrace: user pc 0x0000000000409be7: 1163 ticks in 3811108 us before syscall 0
+spliceloadmusl: result: splice mib 16 load 3 mode 2 us 15005579 calls 512 longest_pair_us 11923290 disk_kib 0 voluntary 0 involuntary 0
+spliceloadmusl: begin: read mib 16 load 3 mode 2
+<4>[55.593000] ticktrace: user pc 0x000000000040928d: 4410 ticks in 15035406 us before syscall 9
+<4>[56.036000] ticktrace: user pc 0x000000000040ae1b: 118 ticks in 446249 us before syscall 8
+<4>[60.638000] ticktrace: user pc 0x0000000000409be7: 1324 ticks in 4403655 us before syscall 0
+spliceloadmusl: result: read mib 16 load 3 mode 2 us 136104 calls 32 longest_pair_us 10742 disk_kib 0 voluntary 0 involuntary 0
+spliceloadmusl: begin: splice mib 16 load 3 mode 2
+<4>[66.689000] ticktrace: user pc 0x000000000040928d: 1832 ticks in 5913377 us before syscall 9
+<4>[67.155000] ticktrace: user pc 0x0000000000409be7: 142 ticks in 461201 us before syscall 0
+<4>[70.949000] ticktrace: user pc 0x00000000004013d1: 980 ticks in 3188668 us before syscall 275
+<4>[76.164000] ticktrace: user pc 0x00000000004013d1: 1143 ticks in 3641639 us before syscall 275
+<4>[80.186000] ticktrace: user pc 0x0000000000409be7: 1194 ticks in 3882564 us before syscall 0
+spliceloadmusl: result: splice mib 16 load 3 mode 2 us 9080735 calls 512 longest_pair_us 3646871 disk_kib 0 voluntary 0 involuntary 0

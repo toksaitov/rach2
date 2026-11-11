@@ -1,0 +1,62 @@
+spliceload: begin: read mib 16 load 0 mode 2
+ctxt 0
+timer_passes_late 13
+bkl_wait_us 7520251
+ctxt 0
+timer_passes_late 13
+bkl_wait_us 7630518
+spliceload: result: read mib 16 load 0 mode 2 us 33352 calls 32 longest_pair_us 2561 disk_kib 0 voluntary 0 involuntary 0
+spliceload: begin: splice mib 16 load 0 mode 2
+ctxt 0
+timer_passes_late 13
+bkl_wait_us 7667084
+ctxt 0
+timer_passes_late 13
+bkl_wait_us 7910218
+spliceload: result: splice mib 16 load 0 mode 2 us 193292 calls 512 longest_pair_us 2164 disk_kib 0 voluntary 0 involuntary 0
+spliceload: begin: read mib 16 load 3 mode 2
+spliceload: load: cpu 1 calls 80
+spliceload: load: cpu 2 calls 61
+spliceload: load: cpu 3 calls 53
+ctxt 0
+timer_passes_late 42
+bkl_wait_us 8350403
+ctxt 0
+timer_passes_late 93
+bkl_wait_us 9034133
+spliceload: result: read mib 16 load 3 mode 2 us 194480 calls 32 longest_pair_us 17795 disk_kib 0 voluntary 0 involuntary 0
+spliceload: begin: splice mib 16 load 3 mode 2
+spliceload: load: cpu 1 calls 555
+spliceload: load: cpu 2 calls 546
+spliceload: load: cpu 3 calls 522
+ctxt 0
+timer_passes_late 137
+bkl_wait_us 9655712
+ctxt 0
+timer_passes_late 950
+bkl_wait_us 18795624
+spliceload: result: splice mib 16 load 3 mode 2 us 3010482 calls 512 longest_pair_us 24127 disk_kib 0 voluntary 0 involuntary 0
+spliceload: begin: read mib 16 load 3 mode 2
+spliceload: load: cpu 1 calls 81
+spliceload: load: cpu 2 calls 78
+spliceload: load: cpu 3 calls 57
+ctxt 0
+timer_passes_late 994
+bkl_wait_us 19415210
+ctxt 0
+timer_passes_late 1045
+bkl_wait_us 20129730
+spliceload: result: read mib 16 load 3 mode 2 us 200125 calls 32 longest_pair_us 17672 disk_kib 0 voluntary 0 involuntary 0
+spliceload: begin: splice mib 16 load 3 mode 2
+spliceload: load: cpu 1 calls 553
+spliceload: load: cpu 2 calls 530
+spliceload: load: cpu 3 calls 523
+ctxt 0
+timer_passes_late 1087
+bkl_wait_us 20759011
+ctxt 0
+timer_passes_late 1905
+bkl_wait_us 29822740
+spliceload: result: splice mib 16 load 3 mode 2 us 2994041 calls 512 longest_pair_us 24298 disk_kib 0 voluntary 0 involuntary 0
+SPLICELOAD OK
+<6>[12.881000] poweroff: powering off

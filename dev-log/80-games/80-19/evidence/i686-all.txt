@@ -1,0 +1,50 @@
+spliceload: begin: read mib 16 load 0 mode 2 pipe 524288
+timer_passes_late 7
+bkl_wait_us 6104831
+timer_passes_late 7
+bkl_wait_us 6174517
+spliceload: result: read mib 16 load 0 mode 2 us 23063 calls 32 longest_pair_us 1660 disk_kib 0 voluntary 0 involuntary 0
+spliceload: begin: splice mib 16 load 0 mode 2 pipe 524288
+timer_passes_late 7
+bkl_wait_us 6208284
+timer_passes_late 7
+bkl_wait_us 6270735
+spliceload: result: splice mib 16 load 0 mode 2 us 39797 calls 64 longest_pair_us 2650 disk_kib 0 voluntary 0 involuntary 0
+spliceload: begin: read mib 16 load 3 mode 2 pipe 524288
+spliceload: load: cpu 1 calls 114
+spliceload: load: cpu 2 calls 84
+spliceload: load: cpu 3 calls 97
+timer_passes_late 10
+bkl_wait_us 6613047
+timer_passes_late 22
+bkl_wait_us 7573070
+spliceload: result: read mib 16 load 3 mode 2 us 281813 calls 32 longest_pair_us 18990 disk_kib 0 voluntary 0 involuntary 0
+spliceload: begin: splice mib 16 load 3 mode 2 pipe 524288
+spliceload: load: cpu 1 calls 168
+spliceload: load: cpu 2 calls 150
+spliceload: load: cpu 3 calls 142
+timer_passes_late 32
+bkl_wait_us 8049298
+timer_passes_late 54
+bkl_wait_us 9802898
+spliceload: result: splice mib 16 load 3 mode 2 us 557341 calls 64 longest_pair_us 18255 disk_kib 0 voluntary 0 involuntary 0
+spliceload: begin: read mib 16 load 3 mode 2 pipe 524288
+spliceload: load: cpu 1 calls 108
+spliceload: load: cpu 2 calls 113
+spliceload: load: cpu 3 calls 80
+timer_passes_late 61
+bkl_wait_us 10341769
+timer_passes_late 71
+bkl_wait_us 11262024
+spliceload: result: read mib 16 load 3 mode 2 us 276703 calls 32 longest_pair_us 17244 disk_kib 0 voluntary 0 involuntary 0
+spliceload: begin: splice mib 16 load 3 mode 2 pipe 524288
+spliceload: load: cpu 1 calls 165
+spliceload: load: cpu 2 calls 157
+spliceload: load: cpu 3 calls 142
+timer_passes_late 81
+bkl_wait_us 11754543
+timer_passes_late 95
+bkl_wait_us 13508556
+spliceload: result: splice mib 16 load 3 mode 2 us 551266 calls 64 longest_pair_us 17144 disk_kib 0 voluntary 0 involuntary 0
+SPLICELOAD OK
+<6>[7.831000] poweroff: powering off
