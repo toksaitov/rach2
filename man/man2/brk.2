@@ -277,6 +277,16 @@ and the others as a read would, and stops at the first page no memory can
 be had for, leaving the rest to their first touch.
 A device object's pages are always mapped at their first touch.
 .Pp
+.Dv MAP_NORESERVE
+reserves nothing, and nothing else does, since the kernel keeps no commit
+count; it marks the mapping
+.Ql nr
+and never
+.Ql ac
+in the VmFlags of
+.Pa /proc/PID/smaps ,
+as Linux's default overcommit policy does.
+.Pp
 Shared memory, anonymous, a file on tmpfs or the pages in memory of a file
 on ext2, has pages up to 16 TiB less a page, the most a file in memory
 holds, and a shared mapping of a file on tmpfs has the pages its size
