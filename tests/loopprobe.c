@@ -19,16 +19,17 @@
  * the machine's interface address, a bind to an address the machine lacks
  * is refused, and a connect to a closed port is refused by the reset that
  * answers its SYN. The rows of TCP ports check a client's bound source port,
- * the one listener a port may have, ephemeral ports and a shutdown, and two
- * sockets that dial each other at once open one connection.
+ * the one listener a port may have, ephemeral ports and a shutdown, and a
+ * socket that dials its own port opens a connection to itself by a
+ * simultaneous open.
  *
  * A row that waits for a datagram or a connection blocks in the receive or
  * in poll(2) until it comes, and judges what came; the case's watchdog ends
  * one that never does.
  *
- * The probe uses UDP ports 7100 to 7102 and TCP ports 7200 to 7207 and 7300
- * to 7325, and 7300 is the closed port until its rows listen on it. A native
- * run maps them with `ports=OLD:NEW,...` (probe_args.h). With
+ * The probe uses UDP ports 7100 to 7102 and TCP ports 7200 to 7207, 7300,
+ * 7301 and 7310, and 7300 is the closed port until its rows listen on it. A
+ * native run maps them with `ports=OLD:NEW,...` (probe_args.h). With
  * `machine=native` the probe leaves out the two checks of counts that every
  * loopback datagram of the machine moves, no datagram dropped in the bulk
  * transfer and no round trip left for the timer by an idle machine.
@@ -66,17 +67,15 @@ typedef unsigned char uint8_t;
 #define SOCK_STREAM 1
 #define SOCK_DGRAM  2
 
-/* The ports, 7100 to 7102, 7200 to 7207 and 7300 to 7325, or the values
+/* The ports, 7100 to 7102, 7200 to 7207, 7300, 7301 and 7310, or the values
  * `ports=` gives in their place: `udp_port`, `nolen_port` for the recvfrom
  * given no length pointer, `peek_port` for the peek rows' datagram and
  * connection, `tcp_port[N]` for 7200 + N, the bound-port rows' two of
- * `tcp_ports`, and the simultaneous-open case's SIM_PAIRS pairs, taken in
- * turn, a pair a round. `closed_port` is the bound-port rows' listener's;
- * `tcp_refused` runs before those rows, while nothing listens on it. */
-#define SIM_PAIRS 8
+ * `tcp_ports`, and `sim_port`, the simultaneous-open case's. `closed_port`
+ * is the bound-port rows' listener's; `tcp_refused` runs before those rows,
+ * while nothing listens on it. */
 static uint16_t udp_port, nolen_port, peek_port, tcp_port[8];
-static uint16_t bound_listen_port, bound_client_port, closed_port;
-static uint16_t sim_port[2 * SIM_PAIRS];
+static uint16_t bound_listen_port, bound_client_port, closed_port, sim_port;
 
 /* The round trips of `tcp_loop_pingpong`, a byte each way. */
 #define PINGPONG_ROUNDS 200
@@ -337,14 +336,12 @@ static const struct step {
     {"fresh stream socket", "never-connected-enotconn"},
     {"nonblocking on the fresh socket", "never-connected-enotconn"},
     {"a read of a stream that never connected is not ENOTCONN", "never-connected-enotconn"},
-    {"simultaneous sockets", "simultaneous-open"},
-    {"simultaneous bind a", "simultaneous-open"},
-    {"simultaneous bind b", "simultaneous-open"},
+    {"simultaneous socket", "simultaneous-open"},
+    {"simultaneous bind", "simultaneous-open"},
     {"simultaneous nonblock", "simultaneous-open"},
-    {"simultaneous connect a", "simultaneous-open"},
-    {"simultaneous connect b", "simultaneous-open"},
-    {"crossing SYNs in flight at once opened no connection that carries data",
-     "simultaneous-open"}};
+    {"simultaneous connect", "simultaneous-open"},
+    {"a socket that dialed its own port is not connected", "simultaneous-open"},
+    {"a socket that dialed its own port did not receive what it sent", "simultaneous-open"}};
 
 #define STEPS ((int)(sizeof(steps) / sizeof(steps[0])))
 
@@ -589,6 +586,7 @@ static int sys_fcntl(int fd, int cmd, int arg)
 #define POLLIN  0x001
 #define POLLOUT 0x004
 #define POLLERR 0x008
+#define POLLHUP 0x010
 
 struct pollfd_probe {
     int fd;
@@ -999,7 +997,7 @@ static int recvmsg_vec(int s, struct iovec_probe *iov, size_t count, int flags)
  * destination, for blocking, nonblocking and peeking reads on `cs` from
  * `as`. The replacement is writable too, so the unfixed kernel fails the
  * contents check without faulting. The nonblocking read comes right after
- * the write, and finds its bytes, since a receive first delivers the
+ * the write, and finds its bytes, since the write's exit delivered the
  * loopback ring, as Linux's loopback delivers within the sender's call. */
 static void tcp_recvmsg_overlap(int cs, int as)
 {
@@ -1406,10 +1404,10 @@ static void bulk_transfer(int cs, int as)
  *
  * A write offers up to 64 KiB, so that a call puts the most it can in the
  * ring: a window's worth, 65535 bytes, is 45 segments of 1460 bytes, of the
- * ring's 64 slots, and a system call's exit delivers the ring once it holds
- * three or more. The ring's high-water mark is kept since boot, so it can
- * show that the ring was pressed but not that this transfer pressed it: the
- * row requires LOOP_PEAK_FLOOR of it and prints it.
+ * ring's 64 slots, and the call's exit delivers the ring. The ring's
+ * high-water mark is kept since boot, so it can show that the ring was
+ * pressed but not that this transfer pressed it: the row requires
+ * LOOP_PEAK_FLOOR of it and prints it.
  */
 static void tcp_loop_bulk(void)
 {
@@ -1528,17 +1526,13 @@ static int pipe_pingpong_ms(void)
  * of the datagrams a tick found on the ring while every processor was idle
  * (`loopback_left_idle` in /proc/stat).
  *
- * Each leg queues one datagram, below the three at which a system call's exit
- * delivers the ring, and the sender then blocks in its read with nothing else
- * runnable, so the processor goes to its idle wait, which delivers the ring
- * before it halts. A tick may still deliver a leg first, when it comes
- * between the write and the idle wait, and a slower processor makes that
- * likelier; the count does not see those, since the processor was running.
- * It sees a leg the idle wait left on the ring and halted over, which then
- * waited for the timer: a connection that does turns over one window a tick.
- * No leg may, so the count must not rise. The legs each path delivered and
- * the times of these rounds and of the same rounds over pipes are printed for
- * a person and not judged.
+ * Each leg queues one datagram, which the write's exit delivers, or a tick
+ * that comes first, and the sender then blocks in its read. The count sees a
+ * leg left on the ring while every processor halted in an idle wait, which
+ * then waited for the timer: a connection that does turns over one window a
+ * tick. No leg may, so the count must not rise. The legs each path delivered
+ * and the times of these rounds and of the same rounds over pipes are printed
+ * for a person and not judged.
  */
 static void tcp_loop_pingpong(void)
 {
@@ -2055,120 +2049,75 @@ static void tcp_ports(void)
     sys_close(ls);
 }
 
-/** The datagrams the loopback ring has delivered since boot, by the tick, the
- * idle wait and system calls' exits together. */
-static uint32_t loop_delivered_now(void)
-{
-    return proc_stat_u32("loopback_delivered_tick ", 24) +
-           proc_stat_u32("loopback_delivered_idle ", 24) +
-           proc_stat_u32("loopback_delivered_call ", 24);
-}
-
 /**
- * Simultaneous open (RFC 793): both ends send a SYN and neither has seen an
- * ACK. Two sockets, each bound to the port the other dials, connect without
- * blocking, so that both SYNs are in flight at once from one process and
- * each arrives at a socket that has sent its own. Each end answers with a
- * SYN-ACK at its `iss`, the sequence the peer expects, and the two establish
- * a connection that carries a message from `a` to `b`.
+ * Simultaneous open (RFC 793, figure 8): a SYN reaches a socket in SYN_SENT,
+ * which answers with a SYN-ACK at its `iss` and waits in SYN_RCVD for the
+ * peer's. A socket bound to 127.0.0.1 at `sim_port` dials that same address
+ * and port, so its own SYN is the one that reaches it in SYN_SENT, and the
+ * SYN-ACK it answers with is the peer's; the connection it opens to itself
+ * carries a message back to it. Two sockets of one thread cannot cross two
+ * SYNs over the loopback, since each send is delivered before its call
+ * returns, as on Linux; a socket's SYN to itself is crossed every time.
  *
- * A round waits in poll for `a` to connect or be refused, and is decided by
- * the message, which `b` waits for in poll as well. A round may lose: a tick
- * of the 100 Hz timer between the two connects delivers the first SYN
- * before `b` has a block, and the reset refuses it. The kernel's count of
- * the datagrams the ring delivered, read before the first connect and after
- * the second, says whether that can have happened: a round that loses with
- * the count unchanged had both SYNs on the ring at once, and fails the
- * probe; one that loses after a delivery is tried again on the next pair of
- * ports, SIM_PAIRS pairs in turn.
+ * The connect is nonblocking and is decided in poll, as a crossing between
+ * two machines would be: POLLOUT with neither POLLERR nor POLLHUP is the
+ * open connection, and a reset would have refused it.
  */
 static void tcp_simultaneous(void)
 {
     unsigned long args[6];
     uint8_t sa[16];
-    int a, b, rc, round, crossed = 0;
-    uint16_t port_a, port_b;
-    uint32_t before, delivered;
+    int a, rc, n;
     const char *msg = "simultaneous";
     char rbuf[32];
-    int n;
 
-    for (round = 0; !crossed; round++) {
-        port_a = sim_port[(round % SIM_PAIRS) * 2];
-        port_b = sim_port[(round % SIM_PAIRS) * 2 + 1];
-        args[0] = AF_INET;
-        args[1] = SOCK_STREAM;
-        args[2] = 0;
-        a = socketcall(SC_SOCKET, args);
-        args[0] = AF_INET;
-        args[1] = SOCK_STREAM;
-        args[2] = 0;
-        b = socketcall(SC_SOCKET, args);
-        if (a < 0 || b < 0)
-            fail("simultaneous sockets");
+    args[0] = AF_INET;
+    args[1] = SOCK_STREAM;
+    args[2] = 0;
+    a = socketcall(SC_SOCKET, args);
+    if (a < 0)
+        fail("simultaneous socket");
 
-        make_sockaddr(sa, port_a, 0, 0, 0, 0);
+    make_sockaddr(sa, sim_port, 127, 0, 0, 1);
+    args[0] = (uint32_t)a;
+    args[1] = (unsigned long)sa;
+    args[2] = 16;
+    if (socketcall(SC_BIND, args) != 0)
+        fail("simultaneous bind");
+
+    if (sys_fcntl(a, F_SETFL, O_NONBLOCK) < 0)
+        fail("simultaneous nonblock");
+
+    args[0] = (uint32_t)a;
+    args[1] = (unsigned long)sa;
+    args[2] = 16;
+    rc = socketcall(SC_CONNECT, args);
+    if (rc != -EINPROGRESS && rc != 0)
+        fail("simultaneous connect");
+
+    if ((wait_for(a, POLLOUT) & (POLLOUT | POLLERR | POLLHUP)) != POLLOUT)
+        fail("a socket that dialed its own port is not connected");
+
+    n = 0;
+    args[0] = (uint32_t)a;
+    args[1] = (unsigned long)msg;
+    args[2] = (uint32_t)strlen(msg);
+    args[3] = 0;
+    args[4] = 0;
+    args[5] = 0;
+    if (socketcall(SC_SENDTO, args) == (int)strlen(msg)) {
+        (void)wait_for(a, POLLIN);
         args[0] = (uint32_t)a;
-        args[1] = (unsigned long)sa;
-        args[2] = 16;
-        if (socketcall(SC_BIND, args) != 0)
-            fail("simultaneous bind a");
-        make_sockaddr(sa, port_b, 0, 0, 0, 0);
-        args[0] = (uint32_t)b;
-        args[1] = (unsigned long)sa;
-        args[2] = 16;
-        if (socketcall(SC_BIND, args) != 0)
-            fail("simultaneous bind b");
-
-        if (sys_fcntl(a, F_SETFL, O_NONBLOCK) < 0 || sys_fcntl(b, F_SETFL, O_NONBLOCK) < 0)
-            fail("simultaneous nonblock");
-
-        before = loop_delivered_now();
-        make_sockaddr(sa, port_b, 127, 0, 0, 1);
-        args[0] = (uint32_t)a;
-        args[1] = (unsigned long)sa;
-        args[2] = 16;
-        rc = socketcall(SC_CONNECT, args);
-        if (rc != -EINPROGRESS && rc != 0)
-            fail("simultaneous connect a");
-
-        make_sockaddr(sa, port_a, 127, 0, 0, 1);
-        args[0] = (uint32_t)b;
-        args[1] = (unsigned long)sa;
-        args[2] = 16;
-        rc = socketcall(SC_CONNECT, args);
-        if (rc != -EINPROGRESS && rc != 0)
-            fail("simultaneous connect b");
-        delivered = loop_delivered_now() - before;
-
-        (void)wait_for(a, POLLOUT);
-
-        /* The round crossed when a message reaches `b`. */
-        n = 0;
-        args[0] = (uint32_t)a;
-        args[1] = (unsigned long)msg;
-        args[2] = (uint32_t)strlen(msg);
-        args[3] = 0;
+        args[1] = (unsigned long)rbuf;
+        args[2] = sizeof(rbuf);
+        args[3] = MSG_DONTWAIT;
         args[4] = 0;
         args[5] = 0;
-        if (socketcall(SC_SENDTO, args) == (int)strlen(msg)) {
-            (void)wait_for(b, POLLIN);
-            args[0] = (uint32_t)b;
-            args[1] = (unsigned long)rbuf;
-            args[2] = sizeof(rbuf);
-            args[3] = MSG_DONTWAIT;
-            args[4] = 0;
-            args[5] = 0;
-            n = socketcall(SC_RECVFROM, args);
-        }
-        if (n == (int)strlen(msg) && mem_eq((const uint8_t *)rbuf, (const uint8_t *)msg, n)) {
-            crossed = 1;
-        } else if (delivered == 0) {
-            fail("crossing SYNs in flight at once opened no connection that carries data");
-        }
-        sys_close(a);
-        sys_close(b);
+        n = socketcall(SC_RECVFROM, args);
     }
+    if (n != (int)strlen(msg) || !mem_eq((const uint8_t *)rbuf, (const uint8_t *)msg, n))
+        fail("a socket that dialed its own port did not receive what it sent");
+    sys_close(a);
 }
 
 /** A server that closes a connection at once after accept: the client's
@@ -2244,9 +2193,7 @@ static void take_ports(void)
     bound_listen_port = (uint16_t)probe_port(7300);
     bound_client_port = (uint16_t)probe_port(7301);
     closed_port = bound_listen_port;
-    for (i = 0; i < 2 * SIM_PAIRS; i++) {
-        sim_port[i] = (uint16_t)probe_port(7310 + i);
-    }
+    sim_port = (uint16_t)probe_port(7310);
 }
 
 void probe_main(unsigned long *sp);
@@ -2284,7 +2231,7 @@ void probe_main(unsigned long *sp)
     tcp_refused();
     rows_enter("bound-port listen socket");
     tcp_ports();
-    rows_enter("simultaneous sockets");
+    rows_enter("simultaneous socket");
     tcp_simultaneous();
     rows_report(STEPS, 0);
     print("LOOPPROBE OK\n");

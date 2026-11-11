@@ -2480,7 +2480,7 @@
         {"assertion_id": "shutdown-blocking-eof", "checks": "a blocking read after the shutdown returns the end of input", "source": "program"},
         {"assertion_id": "shutdown-nonblocking-eof", "checks": "a non-blocking read after the shutdown returns the end of input", "source": "program"},
         {"assertion_id": "never-connected-enotconn", "checks": "a read of a stream socket that never connected fails with ENOTCONN", "source": "program"},
-        {"assertion_id": "simultaneous-open", "checks": "two sockets that connect to each other at once open one connection that carries data", "source": "program"}
+        {"assertion_id": "simultaneous-open", "checks": "a socket that connects to its own port opens a connection to itself by a simultaneous open, which carries data", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
