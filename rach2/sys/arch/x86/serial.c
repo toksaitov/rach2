@@ -250,10 +250,11 @@ int serial_rx_service(int budget)
 }
 
 /* The passes of `_serial_rx_handler` before it gives up on a port whose
- * receive line stays high. A pass moves up to 128 bytes, 64 into the ring
- * and 64 more that the notify's console service takes from it, so 256
- * passes move up to 32 KiB, more than the ring and the console's discipline
- * together take, and a full ring masks the interrupt first. A console that
+ * receive line stays high. A pass moves up to 128 bytes from the UART into
+ * the ring, each through `serial_rx_service`: 64 that the handler reads and
+ * 64 more that the notify's console service reads, so 256 passes move up
+ * to 32 KiB, more than the ring and the console's discipline together
+ * take, and a full ring masks the interrupt first. A console that
  * discards COM1's input, as one in a raw keyboard mode does, empties the
  * ring at each pass, so its flood is bounded by the passes alone, and the
  * 200 ms reading takes what is left. Linux's PASS_LIMIT of 512 bounds its
