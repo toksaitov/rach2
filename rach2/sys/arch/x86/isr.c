@@ -19,6 +19,7 @@
 #include "../../proc/ptrace.h"
 #include "../../proc/rseq.h"
 #include "../../proc/smp.h"
+#include "../../timer.h"
 #include "debugreg.h"
 #if !defined(__x86_64__)
 #include "../i686/tss.h"
@@ -618,9 +619,6 @@ static void _dispatch(isr_params_t *params)
  * architecture's sysnr.h). */
 #define SYSCALL_ENTRY 0x80u
 
-static uintptr_t trace_pc;
-static uint32_t trace_ticks, trace_start;
-
 /**
  * Mark an entry from user mode that is not a system call with -1 in the
  * interrupted thread's `orig_nr`, as Linux writes -1 in `orig_ax` on every
@@ -651,13 +649,6 @@ void _isr_router(isr_params_t *params)
 /** Dispatch a saved frame with the big lock held; isr_leave releases it. */
 void isr_router_locked(isr_params_t *params)
 {
-    if (arch_cpu_id() == 0 && params->vector == SYSCALL_ENTRY) {
-        if (trace_ticks >= 64) {
-            klog(KLOG_WARN, "ticktrace", "user pc %p: %u ticks in %u us before syscall %d",
-                 (void *)trace_pc, trace_ticks, waketime_clock() - trace_start, (int)SC_NR(params));
-        }
-        trace_ticks = 0;
-    }
     bkl_note_entry((uint32_t)params->vector,
                    params->vector == SYSCALL_ENTRY ? (int32_t)SC_NR(params) : -1);
 #ifdef DEBUG
@@ -735,6 +726,31 @@ void isr_local_router(isr_params_t *params)
     lapic_spurious();
 }
 
+/* The boot processor's ticks in a row that found the big lock held and
+ * ended without it, and the count at which its tick waits for the lock all
+ * the same, so that its periodic work (`timer_handler`, kernel.c) runs at
+ * most this many ticks late. */
+static uint32_t boot_ticks_skipped;
+#define BOOT_TICK_SKIPS 4u
+
+/**
+ * Whether a tick that found the big lock held by another processor must
+ * wait for it: when `sched_tick_waits` says a process queued here has
+ * waited long enough, and on the boot processor also when no reference
+ * keeps the clock, since its tick alone counts the clock then, or when its
+ * last BOOT_TICK_SKIPS - 1 ticks ended without the lock. Interrupts are
+ * off.
+ */
+static int tick_waits(void)
+{
+    int waits = sched_tick_waits();
+
+    if (arch_cpu_id() != 0) {
+        return waits;
+    }
+    return waits || !timer_tick_shared() || ++boot_ticks_skipped >= BOOT_TICK_SKIPS;
+}
+
 /**
  * Run the chain of a device's interrupt with the depth `in_interrupt` reads
  * kept around it: an allocation made by a handler is the kernel's, whoever
@@ -779,17 +795,23 @@ static void irq_dispatch(isr_params_t *params)
  * disk's caller that slept for its command would get one command a
  * scheduler round. The tick's own handler makes its switch itself.
  *
- * The tick of a processor past the first charges the tick and switches, and
- * makes the timer pass only when the boot processor's is late (kernel.c);
- * when another processor holds the big lock it does none of these:
- * it is ended and counted on this processor's record and returns, and the
- * next tick that finds the lock free charges the ticks since
- * (`sched_account_tick`). Waiting for the lock would take from this
+ * A tick that finds another processor holding the big lock does nothing
+ * else: it is ended and counted on this processor's record and returns, and
+ * the next tick that takes the lock charges the ticks since
+ * (`sched_account_tick`) and, on the boot processor, counts them from the
+ * reference (`timer_tick_clock`). Waiting for the lock would take from this
  * processor's user code all the time the holder keeps it, such as the sound
- * mix's, which converts a channel's rate in the device's interrupt. It does
- * wait once `sched_tick_waits` says that a process on this processor's queue
- * has waited long enough: with the lock always held no tick would end the
- * running process's slice, and a busy processor does not steal.
+ * mix's, which converts a channel's rate in the device's interrupt; and
+ * once the waits pass a tick, the next tick is pending at the return to user
+ * mode and comes before the user code's next instruction, which then makes
+ * no progress at all while other processors keep the lock busy. A tick
+ * waits for the lock only when `tick_waits` says so: a process on this
+ * processor's queue has waited long enough, since with the lock always held
+ * no tick would end the running process's slice, and a busy processor does
+ * not steal; or the boot processor's periodic work has waited enough
+ * ticks, or only its tick keeps the clock. Meanwhile the timer pass that
+ * wakes the sleepers is made by whichever processor's tick has the lock
+ * (`timer_pass_late`, kernel.c).
  *
  * An interrupt that ended a halt, which it knows by the frame's address,
  * resumes with interrupts off. Otherwise a tick already pending at the
@@ -806,11 +828,15 @@ void _irq_router(isr_params_t *params)
     if (FRAME_PC(params) == (unsigned long)arch_idle_resume) {
         FRAME_IRQ_OFF(params);
     }
-    if (params->vector != IRQ_VECTOR(0) || arch_cpu_id() == 0) {
+    if (params->vector != IRQ_VECTOR(0)) {
         bkl_enter();
     } else if (!bkl_try_enter()) {
-        if (!sched_tick_waits()) {
-            lapic_eoi();
+        if (!tick_waits()) {
+            if (lines_apic || arch_cpu_id() != 0) {
+                lapic_eoi();
+            } else {
+                reset_master_pic();
+            }
             cpu->ticks_unlocked++;
             cpu->tick_unlocked = 1;
             return;
@@ -818,16 +844,11 @@ void _irq_router(isr_params_t *params)
         bkl_enter();
     }
     if (params->vector == IRQ_VECTOR(0)) {
+        if (arch_cpu_id() == 0) {
+            boot_ticks_skipped = 0;
+        }
         cpu->wake_irq_start = wake_irq;
         cpu->wake_irq_locked = waketime_clock();
-        if (arch_cpu_id() == 0 && FRAME_USER(params)) {
-            if (!trace_ticks || trace_pc != (uintptr_t)FRAME_PC(params)) {
-                trace_pc = (uintptr_t)FRAME_PC(params);
-                trace_ticks = 0;
-                trace_start = wake_irq;
-            }
-            trace_ticks++;
-        }
     }
     bkl_note_entry((uint32_t)params->vector, -1);
 #if defined(__x86_64__)
