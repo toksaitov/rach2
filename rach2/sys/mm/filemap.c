@@ -12,6 +12,7 @@
 #include "usercopy.h"
 #include "../irq.h"
 #include "../fs/krffs.h"
+#include "../fs/tmpfs.h"
 #include "../fs/vfs.h"
 #include "../block/block.h"
 #include "../block/loop.h"
@@ -57,6 +58,9 @@ struct filemap {
     struct dshare *ds;
     int shared; /* stores may change the file, and may be written back */
     int going;  /* being released, and no writer for its file's pages */
+    /* Shared anonymous memory's inode number on the mount
+     * `vfs_memfd_mount` has; 0 for any other. */
+    uint64_t anon_ino;
 };
 
 static struct filemap *maps;
@@ -508,6 +512,11 @@ const struct open_file *filemap_ofd(const struct vm_file *f)
     return f && f->release == filemap_release ? ((const struct filemap *)f)->entry.ofd : NULL;
 }
 
+uint64_t filemap_anon_ino(const struct vm_file *f)
+{
+    return f && f->release == filemap_release ? ((const struct filemap *)f)->anon_ino : 0u;
+}
+
 const fd_entry_t *filemap_entry(const struct vm_file *f)
 {
     if (!f || f->release != filemap_release || !((const struct filemap *)f)->entry.ofd) {
@@ -758,6 +767,7 @@ struct vm_file *filemap_anon_shared(void)
     }
     m->sh = &m->own;
     m->own.maps = 1;
+    m->anon_ino = tmpfs_new_ino(vfs_memfd_mount());
     m->next = maps;
     maps = m;
     return &m->vf;
