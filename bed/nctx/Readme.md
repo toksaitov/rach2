@@ -126,3 +126,16 @@ A new Mesa or virglrenderer takes its line in `pins` with its size and digest, t
 * Over native context a robust context learns of a GPU reset only after two more submissions ([upstream fault](../../dev-log/83-testbed/upstream.md#crocus-asks-for-reset-statistics-past-the-virtio-path-so-a-guest-learns-of-a-reset-late)).
 * After that failed initialization the bed's QEMU aborts in libepoxy when its guest powers off ([upstream fault](../../dev-log/83-testbed/upstream.md#qemu-aborts-in-libepoxy-on-exit-after-virgl-fails-to-initialize)).
 * The stack is research: Mesa's option and virglrenderer's renderer are marked experimental upstream, and no build is staged into the root's image.
+
+## Tests
+
+`fencecheck.c` exercises the backend's asynchronous fence callbacks without a GPU: callbacks on another thread, separate contexts and rings, the global counter's wrap, rejected creation, immediate callbacks and slot reuse. With the matched virglrenderer headers installed, run it alone on Linux from the tree's root:
+
+    mkdir -p build/bed/nctx
+    cc -std=c99 -O2 -Wall -Wextra -ffunction-sections -fdata-sections -pthread \
+        -Wl,--gc-sections -I/opt/rach2-nctx/virglrenderer/include/virgl \
+        -Irach2/sys/virtio -Ibed/vm/module \
+        -o build/bed/nctx/fencecheck bed/nctx/fencecheck.c
+    build/bed/nctx/fencecheck
+
+The expected result is `fencecheck: result: pass`. The [reversed fallback run](../../dev-log/83-testbed/83-6.md#the-reversed-path-on-the-testing-pc-83-6c1) checks the transport, Mesa's selection, pixels and fences on Rach2; the native-context path needs the Lenovo's assigned GPU.
