@@ -109,6 +109,10 @@
 #define TCP_RETRIES2_DEFAULT     15
 #define TCP_MODEL_RTO_BASE_MS    200u
 #define TCP_MODEL_RTO_MAX_MS     120000u
+/* The longest wait between zero-window probes, Linux's TCP_RTO_MAX of 120 s,
+ * the cap of its tcp_probe0_when, so that `tcp_retries2` unanswered probes
+ * take Linux's 924.6 s from the first. */
+#define TCP_PROBE_MAX            TCP_MS(TCP_MODEL_RTO_MAX_MS)
 
 /*
  * Keepalive, as Linux's: a connection with SO_KEEPALIVE set and nothing
@@ -226,6 +230,11 @@ struct tcb {
     uint32_t irs;
     uint32_t rcv_nxt; /* next expected sequence number          */
     uint32_t rcv_wnd; /* the window last offered, in bytes      */
+    /* The right edge of the windows offered, the farthest sequence number
+     * a segment sent has offered, which data may not start at or past, as
+     * Linux's rcv_wup + rcv_wnd; valid once `rcv_adv_set`. */
+    uint32_t rcv_adv;
+    uint8_t rcv_adv_set;
 
     /* Data that arrived past a hole, kept in the receive ring past
      * `recv_tail`, where it belongs, and not yet readable: the ranges
@@ -286,6 +295,9 @@ struct tcb {
     /* ticks+1 at the sending of what the first of the timeouts in a row
      * found unacknowledged, which the give-up counts from; 0 = none. */
     uint32_t retx_stamp;
+    /* The tick of the last segment received, as Linux's rcv_tstamp, which
+     * a closed window over data in flight is given up by. */
+    uint32_t rcv_stamp;
 
     /* Keepalive. `ka_armed` is set once the tick has seen SO_KEEPALIVE on
      * the socket, and `ka_since` is the tick of the last segment received

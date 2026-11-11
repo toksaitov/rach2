@@ -1068,13 +1068,15 @@ static struct tcb *zero_window_conn(struct socket *sock, uint16_t port, uint32_t
 }
 
 /** The wait Linux's tcp_probe0_when gives after `k` probes from `base`:
- * `base` doubled `k` times, up to TCP_RTO_MAX. */
+ * `base` doubled `k` times, up to its TCP_RTO_MAX of 120 s. */
 static uint32_t probe_wait(uint32_t base, unsigned k)
 {
-    while (k-- > 0 && base < TCP_RTO_MAX) {
+    uint32_t most = TCP_MS(120000);
+
+    while (k-- > 0 && base < most) {
         base <<= 1;
     }
-    return base < TCP_RTO_MAX ? base : TCP_RTO_MAX;
+    return base < most ? base : most;
 }
 
 /**
@@ -1101,8 +1103,9 @@ static unsigned tick_until_closed(struct tcb *conn, uint16_t port, uint16_t lpor
 
 /**
  * Check zero-window probing against Linux's tcp_probe_timer: to a silent
- * peer the first probe goes a timeout after the window closed and each
- * later one after twice the wait before it, up to TCP_RTO_MAX; once
+ * peer the first probe, an acknowledgement of no data at snd_una less one,
+ * goes a timeout after the window closed and each later one after twice the
+ * wait before it, up to 120 s; once
  * tcp_retries2, 15, probes have gone unanswered, the next expiry gives the
  * connection up with ETIMEDOUT, counted in TCPAbortOnTimeout, and sends no
  * reset. A peer that answers each probe with the window still closed keeps
@@ -1123,16 +1126,17 @@ static void zero_window_rows(void)
     conn = zero_window_conn(&sock, 101, &peer_seq, &lport);
     base = conn->rto > TCP_RTO_MIN ? conn->rto : TCP_RTO_MIN;
     for (k = 0; k < 15; k++) {
-        wait = tick_until_sent(k, 2 * TCP_RTO_MAX);
+        wait = tick_until_sent(k, 2 * TCP_PROBE_MAX);
         doubling &= wait == (k == 0 ? conn->rto : probe_wait(base, k));
     }
-    CHECK("silent peer: each probe is one byte at snd_una",
-          segs[0].len == TCP_HDR_SIZE + 1 && read32be(segs[0].data + 4) == conn->snd_una);
+    CHECK("silent peer: each probe is an acknowledgement of no data at snd_una less one",
+          segs[14].len == TCP_HDR_SIZE && read32be(segs[14].data + 4) == conn->snd_una - 1u);
     CHECK("the first a timeout after the window closed, each later one twice the wait before it",
           doubling);
+    CHECK("up to 120 s", probe_wait(base, 14) == TCP_MS(120000));
     CHECK("fifteen probes go unanswered",
           n_segs == 15 && conn->state == TCP_ESTABLISHED && conn->zwp_probes == 15);
-    wait = tick_until_closed(conn, 101, lport, peer_seq, 0, 2 * TCP_RTO_MAX);
+    wait = tick_until_closed(conn, 101, lport, peer_seq, 0, 2 * TCP_PROBE_MAX);
     CHECK("the next expiry gives the connection up with ETIMEDOUT",
           wait == probe_wait(base, 15) && conn->state == TCP_CLOSED && conn->so_error == ETIMEDOUT);
     CHECK("counted as an abort on timeout, with no reset sent",
@@ -1141,7 +1145,7 @@ static void zero_window_rows(void)
     conn = zero_window_conn(&sock, 102, &peer_seq, &lport);
     doubling = 1;
     for (k = 0; k < 20; k++) {
-        wait = tick_until_sent(k, 2 * TCP_RTO_MAX);
+        wait = tick_until_sent(k, 2 * TCP_PROBE_MAX);
         doubling &= wait == (k == 0 ? conn->rto : probe_wait(base, k));
         rx(102, lport, peer_seq, conn->snd_una, F_ACK, 0, (const char *)0, 0);
     }
@@ -1156,7 +1160,7 @@ static void zero_window_rows(void)
 
     conn = zero_window_conn(&sock, 103, &peer_seq, &lport);
     sock.user_timeout = 5000;
-    (void)tick_until_sent(0, 2 * TCP_RTO_MAX);
+    (void)tick_until_sent(0, 2 * TCP_PROBE_MAX);
     first = (uint32_t)kernel_ticks;
     rx(103, lport, peer_seq, conn->snd_una, F_ACK, 0, (const char *)0, 0);
     (void)tick_until_closed(conn, 103, lport, peer_seq, 1, 60u * TICK_HZ);
@@ -1173,6 +1177,104 @@ static void zero_window_rows(void)
     }
     CHECK("calls four ticks apart send the first probe within four ticks of its deadline",
           n_segs == 1 && kernel_ticks - first >= conn->rto && kernel_ticks - first < conn->rto + 4);
+}
+
+/**
+ * Open a connection to `port`, send 100 bytes into the peer's open window,
+ * and take the peer's acknowledgement of 50 of them with its window closed,
+ * so that 50 bytes are in flight behind a closed window. Returns the
+ * control block.
+ */
+static struct tcb *zero_window_flight(struct socket *sock, uint16_t port, uint32_t *peer_seq,
+                                      uint16_t *lport)
+{
+    static uint8_t bytes[100];
+    struct tcb *conn;
+
+    reset_all();
+    conn = open_conn(sock, port, peer_seq, lport);
+    CHECK("closed over data in flight: 100 bytes go", tcp_send(sock, bytes, 100) == 100);
+    rx(port, *lport, *peer_seq, conn->snd_una + 50u, F_ACK, 0, (const char *)0, 0);
+    CHECK("and 50 of them are acknowledged with the window closed",
+          conn->snd_wnd == 0 && conn->snd_nxt - conn->snd_una == 50u);
+    n_segs = 0;
+    return conn;
+}
+
+/**
+ * Check a window closed over data in flight against Linux's
+ * tcp_retransmit_timer and tcp_rtx_probe0_timed_out: each timeout sends an
+ * acknowledgement of no data at snd_una less one, counts in no TCPTimeouts,
+ * and a peer that answers each one with its window still closed keeps the
+ * connection past the 924.6 s the retransmissions of unanswered data give
+ * up after. A peer that then goes silent ends it once nothing has been
+ * received for 240 s before a timeout's deadline, at the first timeout
+ * after that. With TCP_USER_TIMEOUT 5000, an answering peer's connection
+ * is given up just past five seconds after the data was acknowledged last.
+ */
+static void zero_window_flight_rows(void)
+{
+    struct socket sock;
+    struct tcb *conn;
+    uint32_t peer_seq = 26500, timeouts, last, sent;
+    uint16_t lport;
+
+    conn = zero_window_flight(&sock, 106, &peer_seq, &lport);
+    timeouts = net_mib.tcp_timeouts;
+    (void)tick_until_sent(0, 2 * TCP_RTO_MAX);
+    CHECK("the timeout probes with no data at snd_una less one",
+          n_segs == 1 && segs[0].len == TCP_HDR_SIZE &&
+              read32be(segs[0].data + 4) == conn->snd_una - 1u);
+    rx(106, lport, peer_seq, conn->snd_una, F_ACK, 0, (const char *)0, 0);
+    (void)tick_until_closed(conn, 106, lport, peer_seq, 1, 1200u * TICK_HZ);
+    CHECK("a peer that answers every probe keeps the connection for 1200 s",
+          conn->state == TCP_ESTABLISHED && conn->snd_nxt - conn->snd_una == 50u);
+    CHECK("and the probes count in no TCPTimeouts", net_mib.tcp_timeouts == timeouts);
+    last = conn->rcv_stamp;
+    (void)tick_until_closed(conn, 106, lport, peer_seq, 0, 2 * TCP_PROBE_MAX + 2 * TCP_RTO_MAX);
+    CHECK("a peer gone silent ends it at the first timeout 240 s after its last answer",
+          conn->state == TCP_CLOSED && conn->so_error == ETIMEDOUT &&
+              kernel_ticks - last > 2 * TCP_PROBE_MAX &&
+              kernel_ticks - last <= 2 * TCP_PROBE_MAX + TCP_RTO_MAX);
+
+    conn = zero_window_flight(&sock, 107, &peer_seq, &lport);
+    sent = (uint32_t)kernel_ticks;
+    sock.user_timeout = 5000;
+    (void)tick_until_closed(conn, 107, lport, peer_seq, 1, 60u * TICK_HZ);
+    CHECK("TCP_USER_TIMEOUT ends an answered probing just past five seconds from the last ack",
+          conn->state == TCP_CLOSED && conn->so_error == ETIMEDOUT &&
+              kernel_ticks - sent > TCP_MS(5000) && kernel_ticks - sent <= TCP_MS(5000) + 2u);
+}
+
+/**
+ * Check the receiving side of a closed window: once the peer has filled the
+ * window offered and the free space left is less than one unit of the
+ * window's scale, so that the window offered is 0, a byte sent at rcv_nxt,
+ * as a stack that probes with data sends it, is dropped, as Linux drops
+ * it, and acknowledged with the window still closed.
+ */
+static void closed_window_rx_rows(void)
+{
+    struct socket sock;
+    struct tcb *conn;
+    uint32_t peer_seq = 27000, nxt;
+    uint16_t lport;
+    unsigned got;
+
+    reset_all();
+    peer_wscale = 7;
+    conn = open_conn(&sock, 108, &peer_seq, &lport);
+    peer_wscale = -1;
+    conn->recv_tail = conn->recv_head + conn->recv_size - ((1u << conn->rcv_wscale) - 1u);
+    conn->rcv_adv = conn->rcv_nxt; /* the window offered is full */
+    nxt = conn->rcv_nxt;
+    got = delivered_bytes;
+    rx(108, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, "x", 1);
+    CHECK("closed receive window: a byte at rcv_nxt is dropped",
+          delivered_bytes == got && conn->rcv_nxt == nxt);
+    CHECK("and acknowledged with the window still closed",
+          n_segs == 1 && read32be(segs[0].data + 8) == nxt && read16be(segs[0].data + 14) == 0);
+    conn->recv_tail = conn->recv_head;
 }
 
 /**
@@ -1619,6 +1721,8 @@ int main(void)
     keepalive_rows();
     skipped_tick_rows();
     zero_window_rows();
+    zero_window_flight_rows();
+    closed_window_rx_rows();
     giveup_rows();
     blackhole_rows();
 
@@ -1933,9 +2037,9 @@ int main(void)
             tcp_tick();
             ticks++;
         }
-        CHECK("the probe goes out, one byte at the oldest unacknowledged",
-              n_segs == 1 && segs[0].len == TCP_HDR_SIZE + 1 &&
-                  read32be(segs[0].data + 4) == lost_from + TCP_MSS);
+        CHECK("the timeout probes, with no data below the oldest unacknowledged",
+              n_segs == 1 && segs[0].len == TCP_HDR_SIZE &&
+                  read32be(segs[0].data + 4) == lost_from + TCP_MSS - 1u);
         n_segs = 0;
         rx(88, lport, peer_seq, lost_from + TCP_MSS, F_ACK, 65535, (const char *)0, 0);
         CHECK("the window's reopening resumes the recovery",

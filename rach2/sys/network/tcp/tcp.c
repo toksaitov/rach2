@@ -265,13 +265,26 @@ static uint32_t tcp_rcv_window(const struct tcb *tcb)
     return free_space > most ? most : free_space;
 }
 
-/** The window field of a segment: the window shifted by the connection's
- * scale, except in a SYN, whose field is never scaled (RFC 7323). */
-static uint16_t tcp_wnd_field(const struct tcb *tcb, int syn)
+/**
+ * The window field of a segment about to be sent: the window shifted by the
+ * connection's scale, except in a SYN, whose field is never scaled (RFC
+ * 7323). The right edge the field offers moves `rcv_adv` forward, never
+ * back, past SYN_SENT, where `rcv_nxt` is not yet known.
+ */
+static uint16_t tcp_wnd_field(struct tcb *tcb, int syn)
 {
     uint32_t field = syn ? tcb->rcv_wnd : tcb->rcv_wnd >> tcb->rcv_wscale;
+    uint32_t edge;
 
-    return field > TCP_WINDOW_SIZE ? (uint16_t)TCP_WINDOW_SIZE : (uint16_t)field;
+    if (field > TCP_WINDOW_SIZE) {
+        field = TCP_WINDOW_SIZE;
+    }
+    edge = tcb->rcv_nxt + (syn ? field : field << tcb->rcv_wscale);
+    if (tcb->state != TCP_SYN_SENT && (!tcb->rcv_adv_set || (int32_t)(edge - tcb->rcv_adv) > 0)) {
+        tcb->rcv_adv = edge;
+        tcb->rcv_adv_set = 1;
+    }
+    return (uint16_t)field;
 }
 
 /**
@@ -1493,18 +1506,19 @@ static int tcp_send_byte(struct tcb *tcb, uint32_t seq, uint32_t at)
 }
 
 /**
- * Send a zero-window probe, one byte at `snd_una`, which the peer answers
- * with its window.
- *
- * The byte probed is the oldest unacknowledged one, at `send_ack`, which the
- * ring has whether it has unsent bytes or only sent ones; an empty ring sends
- * nothing. Returns what `tcp_send_byte` returned, or 0 for nothing sent.
+ * Send a zero-window probe as Linux's tcp_xmit_probe_skb does: an
+ * acknowledgement with no data at `snd_una` less one, a number the peer has
+ * had, which it answers with its window whether or not that window would
+ * take a byte. A probe that carried a byte at `snd_una` would be taken by a
+ * receiver whose free space rounds down to a window of 0, and its answer,
+ * past `snd_nxt`, would answer no probe. An empty ring sends nothing.
+ * Returns what `tcp_emit_flags` returned, or 0 for nothing sent.
  */
 static int tcp_send_zwp(struct tcb *tcb)
 {
     if (tcb->send_tail == tcb->send_ack)
         return 0;
-    return tcp_send_byte(tcb, tcb->snd_una, tcb->send_ack);
+    return tcp_emit_flags(tcb, TCP_ACK, tcb->snd_una - 1u);
 }
 
 /**
@@ -1742,25 +1756,67 @@ static uint32_t tcp_zwp_clamp(const struct tcb *tcb, uint32_t when)
 /**
  * The wait before the next zero-window probe, as Linux's tcp_probe0_when:
  * the timeout, at least TCP_RTO_MIN, doubled `zwp_backoff` times, up to
- * TCP_RTO_MAX.
+ * TCP_PROBE_MAX.
  */
 static uint32_t tcp_zwp_when(const struct tcb *tcb)
 {
     uint32_t when = tcb->rto > TCP_RTO_MIN ? tcb->rto : TCP_RTO_MIN;
     uint32_t i;
 
-    for (i = 0; i < tcb->zwp_backoff && when < TCP_RTO_MAX; i++) {
+    for (i = 0; i < tcb->zwp_backoff && when < TCP_PROBE_MAX; i++) {
         when <<= 1;
     }
-    return when < TCP_RTO_MAX ? when : TCP_RTO_MAX;
+    return when < TCP_PROBE_MAX ? when : TCP_PROBE_MAX;
+}
+
+/**
+ * Whether the retransmission timer of `tcb`, due at `due`, probes a closed
+ * window rather than counts a timeout, as Linux's tcp_retransmit_timer
+ * does: the peer's window is 0 over data or a FIN in flight, in a
+ * synchronized state, and a socket holds the block. A detached block is
+ * given up as any other (`tcp_orphan_expired`).
+ */
+static int tcp_zwp_in_flight(const struct tcb *tcb)
+{
+    return tcb->snd_wnd == 0 && tcb->sock && tcb->state >= TCP_ESTABLISHED &&
+           tcb->snd_una != tcb->snd_nxt;
+}
+
+/**
+ * Whether the probing of a closed window over data in flight, which the
+ * retransmission timer due at `due` does, has run out, as Linux's
+ * tcp_rtx_probe0_timed_out says: with TCP_USER_TIMEOUT set, once that long
+ * has passed since what the timeouts in a row found was sent; otherwise
+ * only once nothing was received for twice TCP_PROBE_MAX before the
+ * timer's deadline and the timeouts have lasted that long, or the user
+ * timeout if shorter. A peer that answers the probes keeps the connection.
+ */
+static int tcp_zwp_rtx_expired(const struct tcb *tcb, uint32_t due)
+{
+    uint32_t limit = 2u * TCP_PROBE_MAX, rtx = TCP_NOW() + 1 - tcb->retx_stamp, user;
+
+    if (tcb->sock->user_timeout) {
+        user = tcp_ms_ticks(tcb->sock->user_timeout);
+        if (rtx > user) {
+            return 1;
+        }
+        if (user < limit) {
+            limit = user;
+        }
+    }
+    if ((int32_t)(due - tcb->rcv_stamp) <= (int32_t)limit) {
+        return 0;
+    }
+    return rtx > limit;
 }
 
 /**
  * Run the zero-window probe timer of `tcb`, which has expired, as Linux's
  * tcp_probe_timer and tcp_send_probe0 do. With the window open or nothing
- * left to send, nothing goes. With bytes in flight, whose retransmission
- * timer gives the connection up, the probe goes at twice the timeout and
- * the probes are not counted. Otherwise each probe counts in `zwp_probes`,
+ * left to send, nothing goes. With bytes in flight, the retransmission
+ * timer probes (`tcp_zwp_in_flight`), and this timer stops until an
+ * acknowledgement of them all starts it again. Otherwise each probe
+ * (`tcp_send_zwp`) counts in `zwp_probes`,
  * which any acknowledgement clears (`tcp_rx_addr`), and doubles the wait
  * before the next (`tcp_zwp_when`), or waits TCP_RESOURCE_PROBE_TICKS when
  * the driver refused it, each wait clamped by `tcp_zwp_clamp`. The
@@ -1782,11 +1838,9 @@ static int tcp_zwp_expire(struct tcb *tcb)
         tcb->zwp_stamp = 0;
         return 0;
     }
-    if (tcb->send_head != tcb->send_ack) {
+    if (tcb->snd_una != tcb->snd_nxt) {
         tcb->zwp_probes = 0;
         tcb->zwp_stamp = 0;
-        (void)tcp_send_zwp(tcb);
-        tcb->zwp_due = tcp_due(tcb->rto << 1 < TCP_RTO_MAX ? tcb->rto << 1 : TCP_RTO_MAX);
         return 0;
     }
     if (tcb->zwp_stamp == 0) {
@@ -1812,6 +1866,65 @@ static int tcp_zwp_expire(struct tcb *tcb)
         when = tcp_zwp_when(tcb);
     }
     tcb->zwp_due = tcp_due(tcp_zwp_clamp(tcb, when));
+    return 0;
+}
+
+/**
+ * Run the retransmission timer of `tcb`, which has expired. The first of
+ * the timeouts in a row marks when what it found unacknowledged was sent
+ * (`retx_stamp`), the connection is given up when `tcp_retx_expired` says
+ * so, and otherwise the timeout doubles, up to TCP_RTO_MAX, and no further
+ * than TCP_USER_TIMEOUT allows. Data sent and unacknowledged may lower the
+ * segment size (`tcp_blackhole`) and starts a timeout's recovery from the
+ * oldest byte, even with a FIN sent behind it, since otherwise a lost data
+ * segment is never sent again and the close stalls; the FIN's own
+ * retransmission resumes once the data is acknowledged (`send_ack` reaches
+ * `send_head`). With no data outstanding, the control segment (SYN, SYN-ACK
+ * or FIN) is sent again. A peer's window closed over data in flight makes
+ * the timeout a probe instead (`tcp_zwp_in_flight`), as on Linux: it is not
+ * counted in TCPTimeouts, lowers no segment size, sends a zero-window probe
+ * besides the recovery, which the closed window holds back, and gives the
+ * connection up only as `tcp_zwp_rtx_expired` says. Returns 1 when the
+ * connection was given up, and `tcb` may be gone.
+ */
+static int tcp_rto_expire(struct tcb *tcb)
+{
+    uint32_t due = tcb->rto_due;
+    int zwp = tcp_zwp_in_flight(tcb);
+
+    tcb->rto_due = 0;
+    if (tcb->rto_backoff == 0) {
+        tcb->retx_stamp = due + 1 - tcb->rto; /* the send's tick + 1 */
+        if (tcb->retx_stamp == 0)
+            tcb->retx_stamp = 1;
+    }
+    if (tcb->rto_backoff < 255)
+        tcb->rto_backoff++;
+    if (zwp ? tcp_zwp_rtx_expired(tcb, due) : tcp_retx_expired(tcb)) {
+        if (tcb->state >= TCP_ESTABLISHED)
+            net_mib.tcp_abort_on_timeout++;
+        tcp_giveup(tcb);
+        return 1;
+    }
+    if (!zwp)
+        net_mib.tcp_timeouts++;
+
+    tcb->rto <<= 1;
+    if (tcb->rto > TCP_RTO_MAX)
+        tcb->rto = TCP_RTO_MAX;
+
+    if (tcb->send_head != tcb->send_ack) {
+        if (zwp)
+            (void)tcp_send_zwp(tcb);
+        else
+            tcp_blackhole(tcb);
+        tcp_enter_rto_recovery(tcb);
+    } else if (tcb->retx_flags) {
+        net_mib.tcp_retrans_segs += tcp_emit_flags(tcb, tcb->retx_flags, tcb->retx_seq) == 0;
+        tcb->retransmits++;
+        tcb->rto_due = tcp_due(tcb->rto);
+    }
+    tcp_user_timeout_clamp(tcb);
     return 0;
 }
 
@@ -1892,17 +2005,8 @@ static void tcp_keepalive(struct tcb *tcb)
  * (`tcp_due`), so a call that follows ticks the boot processor's tick passed
  * over while another processor held the big lock still fires them on time.
  *
- * When the retransmission timer expires, the first of the timeouts in a row
- * marks when what it found unacknowledged was sent (`retx_stamp`), the
- * connection is given up when `tcp_retx_expired` says so, and otherwise the
- * timeout doubles, up to TCP_RTO_MAX, and no further than TCP_USER_TIMEOUT
- * allows. Data sent and unacknowledged may lower the segment size
- * (`tcp_blackhole`) and starts a timeout's recovery from the oldest byte,
- * even with a FIN sent behind it, since otherwise a lost data segment is
- * never sent again and the close stalls; the FIN's own retransmission
- * resumes once the data is acknowledged (`send_ack` reaches `send_head`).
- * With no data outstanding, the control segment (SYN, SYN-ACK or FIN) is
- * sent again. The zero-window probe timer sends a probe while the peer's
+ * The retransmission timer runs as `tcp_rto_expire` says. The zero-window
+ * probe timer, with nothing in flight, sends a probe while the peer's
  * window stays closed, backs off and gives up as `tcp_zwp_expire` says.
  * Then the keepalive runs (`tcp_keepalive`). Last, `tcp_tick_pumps` sends
  * what refused transmits left in the rings. Each block's successor is read
@@ -1947,39 +2051,8 @@ void tcp_tick(void)
             continue;
         }
 
-        if (tcb->rto_due != 0 && tcp_expired(tcb->rto_due)) {
-            uint32_t due = tcb->rto_due;
-
-            tcb->rto_due = 0;
-            if (tcb->rto_backoff == 0) {
-                tcb->retx_stamp = due + 1 - tcb->rto; /* the send's tick + 1 */
-                if (tcb->retx_stamp == 0)
-                    tcb->retx_stamp = 1;
-            }
-            if (tcb->rto_backoff < 255)
-                tcb->rto_backoff++;
-            if (tcp_retx_expired(tcb)) {
-                if (tcb->state >= TCP_ESTABLISHED)
-                    net_mib.tcp_abort_on_timeout++;
-                tcp_giveup(tcb);
-                continue;
-            }
-            net_mib.tcp_timeouts++;
-
-            tcb->rto <<= 1;
-            if (tcb->rto > TCP_RTO_MAX)
-                tcb->rto = TCP_RTO_MAX;
-
-            if (tcb->send_head != tcb->send_ack) {
-                tcp_blackhole(tcb);
-                tcp_enter_rto_recovery(tcb);
-            } else if (tcb->retx_flags) {
-                net_mib.tcp_retrans_segs +=
-                    tcp_emit_flags(tcb, tcb->retx_flags, tcb->retx_seq) == 0;
-                tcb->retransmits++;
-                tcb->rto_due = tcp_due(tcb->rto);
-            }
-            tcp_user_timeout_clamp(tcb);
+        if (tcb->rto_due != 0 && tcp_expired(tcb->rto_due) && tcp_rto_expire(tcb)) {
+            continue;
         }
 
         if (tcb->zwp_due != 0 && tcp_expired(tcb->zwp_due) && tcp_zwp_expire(tcb)) {
@@ -2573,10 +2646,15 @@ static void tcp_sack_note(struct tcb *tcb, uint32_t seq)
 /**
  * Take the data of a segment that starts at `seq` (RFC 9293, section
  * 3.10.7.4). Bytes before rcv_nxt were taken already and are skipped. Data
- * at rcv_nxt is delivered, with the kept ranges it reaches; data past it,
- * which a lost segment left a hole before, is kept in the receive ring, so
- * that the resend of the lost segment makes the whole run readable and the
- * peer, whose acknowledgement then covers it, does not send it again.
+ * that starts at or past the right edge of the windows offered (`rcv_adv`)
+ * is dropped, as Linux's tcp_data_queue drops it, a closed window's above
+ * all: free space that rounds down to a window of 0 takes no zero-window
+ * probe of one byte. Data at rcv_nxt is
+ * delivered, with the kept ranges it reaches; data past it, which a lost
+ * segment left a hole before, is kept in the receive ring, so that the
+ * resend of the lost segment makes the whole run readable and the peer,
+ * whose acknowledgement then covers it, does not send it again. The caller
+ * acknowledges the segment either way.
  */
 static void tcp_take_data(struct tcb *tcb, uint32_t seq, const uint8_t *payload, uint16_t len)
 {
@@ -2591,6 +2669,9 @@ static void tcp_take_data(struct tcb *tcb, uint32_t seq, const uint8_t *payload,
         payload += skip;
         len = (uint16_t)(len - skip);
         seq = tcb->rcv_nxt;
+    }
+    if (tcb->rcv_adv_set && (int32_t)(seq - tcb->rcv_adv) >= 0) {
+        return;
     }
     if (seq != tcb->rcv_nxt) {
         if (tcb->sock) {
@@ -2769,8 +2850,9 @@ static uint16_t tcp_seg_check(net_addr_t src_ip, net_addr_t dst_ip, const uint8_
 
 /**
  * Note what a segment of `flags` acknowledging `ack_num` answers on the
- * connection `tcb`, which is not a listener's: any segment answers the
- * keepalive's probes (`tcp_keepalive`), and an acknowledgement inside
+ * connection `tcb`, which is not a listener's: any segment is stamped in
+ * `rcv_stamp` and answers the keepalive's probes (`tcp_keepalive`), and an
+ * acknowledgement inside
  * [snd_una, snd_nxt], a duplicate among them, the zero-window probes, as
  * Linux's tcp_ack clears icsk_probes_out (`tcp_zwp_expire`).
  */
@@ -2779,7 +2861,8 @@ static void tcp_rx_answers(struct tcb *tcb, uint8_t flags, uint32_t ack_num)
     if (tcb->state == TCP_LISTEN) {
         return;
     }
-    tcb->ka_since = TCP_NOW();
+    tcb->rcv_stamp = TCP_NOW();
+    tcb->ka_since = tcb->rcv_stamp;
     tcb->ka_probes = 0;
     if ((flags & TCP_ACK) && (int32_t)(ack_num - tcb->snd_una) >= 0 &&
         (int32_t)(ack_num - tcb->snd_nxt) <= 0) {
