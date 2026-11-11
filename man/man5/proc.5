@@ -1606,6 +1606,20 @@ read ends it early.
 .It Pa /proc/PID/fd/N
 The directory has mode 0500 and is owned by the process's effective IDs
 while it is dumpable and by root otherwise.
+Its size, as
+.Xr stat 2
+and
+.Xr fstat 2
+report it, is the number of descriptors the process has open, 0 for a
+zombie, and an
+.Xr fstat 2
+or
+.Xr statx 2
+of a descriptor open on it fails with
+.Er ENOENT
+once the process is gone, as Linux's
+.Fn proc_fd_getattr
+does.
 An open of it for reading, and a change of the working directory into it
 by
 .Xr chdir 2
