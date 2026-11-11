@@ -2087,6 +2087,16 @@ static void check_port_scan(void)
     xhci_events(hc);
     CHECK("a quarter second on, the ports are read again", portsc_reads != 0);
     CHECK("and the device's leaving is seen", xhci_port_connected(hc, 1) == 0);
+    /* The model keeps the reset bit as written: a write without it reads
+     * back clear, where a controller would keep the reset going. */
+    port_reset_completes = 0;
+    reg[M_PORTSC(2)] |= M_PORTSC_CCS | M_PORTSC_PR | M_PORTSC_CSC;
+    post_event(TRB_TYPE_PORT_CHANGE, TRB_COMPLETION_SUCCESS, 0, 3u << 24);
+    xhci_events(hc);
+    CHECK("a scan clears a resetting port's connect change",
+          (reg[M_PORTSC(2)] & M_PORTSC_CSC) == 0);
+    CHECK("without writing its reset bit again", (reg[M_PORTSC(2)] & M_PORTSC_PR) == 0);
+    port_reset_completes = 1;
     CHECK("a port the controller does not have is not connected", xhci_port_connected(hc, 99) == 0);
 }
 

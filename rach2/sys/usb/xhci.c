@@ -1191,6 +1191,11 @@ int xhci_scratchpads(struct xhci_ctrl *hc)
 /* The change bits a scan clears: all but the reset's, which
  * `xhci_port_reset_done` reads and clears. */
 #define PORTSC_SCAN_CLEARS (PORTSC_CHANGES & ~PORTSC_PRC)
+/* The bits that, written back as read, leave the port as it is: the
+ * read-only ones and those a write of 0 clears and of 1 sets, and none that a
+ * write of 1 acts on, the reset and the enable among them. Linux's
+ * `xhci_port_state_to_neutral` (drivers/usb/host/xhci-hub.c:392-449). */
+#define PORTSC_NEUTRAL     0x4E00FFE9u
 
 /* How long a port is given to settle after a connect, and to finish a reset.
  * The debounce is the interval the USB specification requires between seeing a
@@ -1727,7 +1732,10 @@ static void event_dispatch(struct xhci_ctrl *hc, const uint32_t *trb)
  *
  * The controller raises a port change event only when the change bits of a
  * port go from all clear to one set (xHCI 1.2, 4.19.2), so a reading clears
- * the bits it finds set, but the reset's, which the reset reads. This is
+ * the bits it finds set, but the reset's, which the reset reads, over the
+ * neutral bits as Linux's `xhci_clear_port_change_bit` writes them
+ * (drivers/usb/host/xhci-hub.c:580-623), so that a reset under way is not
+ * written again. This is
  * Linux's root hub: polled from a port change event until no change is left
  * (drivers/usb/host/xhci-ring.c:2124-2137, xhci-hub.c:1705-1708), and every
  * quarter second by its timer while it polls (drivers/usb/core/hcd.c:
@@ -1751,7 +1759,7 @@ static void port_scan(struct xhci_ctrl *hc)
 
         if (value & PORTSC_SCAN_CLEARS) {
             w32(hc, portsc_offset(hc, (int)i),
-                (value & ~(PORTSC_CHANGES | PORTSC_PED)) | (value & PORTSC_SCAN_CLEARS));
+                (value & PORTSC_NEUTRAL) | (value & PORTSC_SCAN_CLEARS));
         }
         if (now_connected != hc->port_connected[i]) {
             hc->port_connected[i] = (uint8_t)now_connected;
