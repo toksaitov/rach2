@@ -120,7 +120,10 @@ static int set_msi(struct kvm_vm *vm, const struct route *r, uint32_t level)
     return kvm_lapic_deliver(vm, NULL, &irq);
 }
 
-/** Raise all controller destinations of a route, or its one MSI/SINT. */
+/** Raise all controller destinations of a route, or its one MSI/SINT:
+ * the APICs or pins that took it, or -1 when none did, as Linux's
+ * kvm_set_irq skips each negative result, so that an MSI `msi_invalid`
+ * refuses is -1 here and -EINVAL only for KVM_SIGNAL_MSI. */
 static int set_route(struct kvm_vm *vm, const struct route *r, uint32_t source, uint32_t level,
                      int status)
 {
@@ -128,7 +131,8 @@ static int set_route(struct kvm_vm *vm, const struct route *r, uint32_t source, 
     int n, result = -1;
 
     if (!r->chips) {
-        return set_msi(vm, r, level);
+        n = set_msi(vm, r, level);
+        return n < 0 ? -1 : n;
     }
     for (chip = 0; chip < 3u; chip++) {
         if (!(r->chips & (1u << chip))) {
