@@ -118,7 +118,8 @@
  * `itimer-signals`, `ptimer-gettime`, `ptimer-signals`, `devmem-low`,
  * `devmem-ram-eperm`, `devmem-private-einval`, `devmem-apic`, `klog-size`,
  * `klog-records`, `klog-clear`, `dev-log-link`, `rtc-alarm-range`,
- * `rtc-alarm-readback`, `rtc-read-af`, `rtc-wakeup-enabled`,
+ * `rtc-aie-on-past`, `rtc-alarm-readback`, `rtc-alarm-invalid`,
+ * `rtc-read-af`, `rtc-wakealarm-empty`, `rtc-wakeup-enabled`,
  * `power-state-mode`, `freeze-wakes` and `freeze-holds`. `ids-unsigned`,
  * `recvmmsg-wide-count` and `socket-wide-domain` are x86-64's alone, and the
  * branch of the group `arch`, `i686` or `x86-64`, says whether they ran. A
@@ -2046,6 +2047,7 @@ static int klogs(void)
 
 /* Linux's RTC ioctls, which no header of this build has, with the wake
    alarm's struct: enabled, pending and a struct rtc_time of nine ints. */
+#define RTC_AIE_ON    0x7001u
 #define RTC_RD_TIME   0x80247009u
 #define RTC_WKALM_SET 0x4028700Fu
 #define RTC_WKALM_RD  0x80287010u
@@ -2193,15 +2195,94 @@ static int freezes(int fd)
     return 0;
 }
 
+/** Whether the alarm read back in `back` has the date and time of `w`, the
+ * second to the year. */
+static int same_alarm_time(const struct wkalrm *back, const struct wkalrm *w)
+{
+    return memcmp(back->tm, w->tm, 6 * sizeof(int)) == 0;
+}
+
 /**
- * Check the clock's wake alarm and suspend to idle: an alarm in the past
- * comes at once and is then off, as Linux's rtc_timer_enqueue raises it, and
- * one two days ahead is EINVAL; one two seconds ahead reads back
- * enabled and ends a read of /dev/rtc0 with RTC_AF; the device may wake the
- * machine; a descriptor open on /sys/power/state has mode 0644, as its path
- * does; and a write of freeze to it, with the alarm set again, returns at
- * the alarm with a spinning child given no processor time meanwhile, which
- * the kernel counts. Returns 0, or 1 after the failure is printed.
+ * Check that RTC_WKALM_SET refuses with EINVAL each date and time Linux's
+ * rtc_valid_tm refuses, from the alarm `w` set on /dev/rtc0, open as `fd`,
+ * and keeps that alarm, which then reads back with its time, enabled or come.
+ * Returns 0, or 1 after the failure is printed.
+ */
+static int refuses_bad_alarms(int fd, const struct wkalrm *w)
+{
+    /* The field of struct rtc_time each case changes, and its value: a
+       second, minute and hour past their range, day 0, February 31, month 12,
+       a year before 1970 and one past INT_MAX - 1900. */
+    static const int field[] = {0, 1, 2, 3, 3, 4, 5, 5};
+    static const int value[] = {60, -1, 24, 0, 31, 12, 69, 0x7fffffff - 1899};
+    struct wkalrm bad, back;
+    char why[80];
+    unsigned i;
+
+    for (i = 0; i < sizeof field / sizeof field[0]; i++) {
+        bad = *w;
+        bad.tm[field[i]] = value[i];
+        if (field[i] == 3 && value[i] == 31) {
+            bad.tm[4] = 1;
+        }
+        if (ioctl(fd, RTC_WKALM_SET, &bad) != -1 || errno != EINVAL) {
+            snprintf(why, sizeof why, "RTC_WKALM_SET took field %d of struct rtc_time as %d",
+                     field[i], value[i]);
+            return fail(why);
+        }
+    }
+    if (ioctl(fd, RTC_WKALM_RD, &back) != 0 || !(back.enabled || back.pending) ||
+        !same_alarm_time(&back, w)) {
+        return fail("a refused RTC_WKALM_SET did not keep the alarm set before it");
+    }
+    return 0;
+}
+
+/**
+ * Check alarms past on /dev/rtc0, open as `fd`: one set comes at once, is
+ * then off and reads back with its whole date and time, as Linux's
+ * rtc_timer_enqueue raises it and keeps its expiry, and one two days ahead
+ * is EINVAL; and RTC_AIE_ON with the alarm's time past raises it at once.
+ * Returns 0, or 1 after the failure is printed.
+ */
+static int past_alarms(int fd)
+{
+    struct wkalrm w, back;
+    unsigned long data = 0;
+    struct pollfd p;
+
+    if (wake_in(fd, -10, &w) != 0 || read(fd, &data, sizeof data) != (ssize_t)sizeof data ||
+        !(data & 0x20) || ioctl(fd, RTC_WKALM_RD, &back) != 0 || back.enabled ||
+        !same_alarm_time(&back, &w)) {
+        return fail("a wake alarm in the past did not come at once and keep its date and time");
+    }
+    if (wake_in(fd, 2 * 86400, &w) != -1 || errno != EINVAL) {
+        return fail("a wake alarm two days ahead was taken");
+    }
+    held();
+    p.fd = fd;
+    p.events = POLLIN;
+    p.revents = 0;
+    if (wake_in(fd, -10, &w) != 0 || read(fd, &data, sizeof data) != (ssize_t)sizeof data ||
+        ioctl(fd, RTC_AIE_ON, 0) != 0 || poll(&p, 1, 0) != 1 || !(p.revents & POLLIN) ||
+        read(fd, &data, sizeof data) != (ssize_t)sizeof data || !(data & 0x20) ||
+        ioctl(fd, RTC_WKALM_RD, &back) != 0 || back.enabled || !same_alarm_time(&back, &w)) {
+        return fail("RTC_AIE_ON with an alarm past did not raise it at once");
+    }
+    held();
+    return 0;
+}
+
+/**
+ * Check the clock's wake alarm and suspend to idle: the alarms past
+ * (`past_alarms`); one two seconds ahead reads back enabled, an invalid
+ * date and time is EINVAL and keeps it, and it ends a read of /dev/rtc0
+ * with RTC_AF, after which /sys/class/rtc/rtc0/wakealarm reads empty; the
+ * device may wake the machine; a descriptor open on /sys/power/state has
+ * mode 0644, as its path does; and a write of freeze to it, with the alarm
+ * set again, returns at the alarm with a spinning child given no processor
+ * time meanwhile, which the kernel counts. Returns 0, or 1 after the
+ * failure is printed.
  */
 static int rtcs(void)
 {
@@ -2213,22 +2294,27 @@ static int rtcs(void)
     if (fd < 0) {
         return fail("open /dev/rtc0");
     }
-    if (wake_in(fd, -10, &w) != 0 || read(fd, &data, sizeof data) != (ssize_t)sizeof data ||
-        !(data & 0x20) || ioctl(fd, RTC_WKALM_RD, &back) != 0 || back.enabled) {
-        return fail("a wake alarm in the past did not come at once");
+    if (past_alarms(fd) != 0) {
+        return 1;
     }
-    if (wake_in(fd, 2 * 86400, &w) != -1 || errno != EINVAL) {
-        return fail("a wake alarm two days ahead was taken");
+    if (wake_in(fd, 2, &w) != 0 || ioctl(fd, RTC_WKALM_RD, &back) != 0 || !back.enabled ||
+        !same_alarm_time(&back, &w)) {
+        return fail("a wake alarm two seconds ahead did not read back");
     }
     held();
-    if (wake_in(fd, 2, &w) != 0 || ioctl(fd, RTC_WKALM_RD, &back) != 0 || !back.enabled ||
-        back.tm[0] != w.tm[0] || back.tm[1] != w.tm[1]) {
-        return fail("a wake alarm two seconds ahead did not read back");
+    if (refuses_bad_alarms(fd, &w) != 0) {
+        return 1;
     }
     held();
     if (read(fd, &data, sizeof data) != (ssize_t)sizeof data || !(data & 0x20) || data >> 8 < 1) {
         return fail("a read of /dev/rtc0 did not end at the alarm with RTC_AF");
     }
+    held();
+    state = open("/sys/class/rtc/rtc0/wakealarm", O_RDONLY);
+    if (state < 0 || read(state, text, sizeof text) != 0) {
+        return fail("the wakealarm file did not read empty after the alarm came");
+    }
+    close(state);
     held();
     state = open("/sys/class/rtc/rtc0/device/power/wakeup", O_RDONLY);
     if (state < 0 || read(state, text, sizeof text) != 8 || memcmp(text, "enabled\n", 8) != 0) {
@@ -2252,6 +2338,56 @@ static void plan_rows(const char *const *ids, unsigned n)
 }
 
 #define PLAN(ids) plan_rows(ids, sizeof(ids) / sizeof(ids[0]))
+
+/* The rows checked after `adjtimex`, in their order. */
+static const char *const after_rows[] = {"clock-adjtime",
+                                         "listxattr",
+                                         "getxattr-absent",
+                                         "lsetxattr-enoent",
+                                         "readahead-fadvise",
+                                         "fadvise-espipe",
+                                         "noctty-session",
+                                         "maxrss-self",
+                                         "maxrss-child",
+                                         "udp-refused",
+                                         "setgid-file",
+                                         "setgid-dir",
+                                         "privacy-other-root",
+                                         "privacy-own-maps",
+                                         "privacy-dumpable",
+                                         "timer-si-timer",
+                                         "timer-overrun",
+                                         "timer-delete",
+                                         "sigqueue",
+                                         "rt-sigqueueinfo",
+                                         "pty-nonblock-eagain",
+                                         "pty-writer-sleeps",
+                                         "pty-64k",
+                                         "pty-whole-lines",
+                                         "signalfd-eagain",
+                                         "signalfd-read",
+                                         "itimer-interval",
+                                         "itimer-signals",
+                                         "ptimer-gettime",
+                                         "ptimer-signals",
+                                         "devmem-low",
+                                         "devmem-ram-eperm",
+                                         "devmem-private-einval",
+                                         "devmem-apic",
+                                         "klog-size",
+                                         "klog-records",
+                                         "klog-clear",
+                                         "dev-log-link",
+                                         "rtc-alarm-range",
+                                         "rtc-aie-on-past",
+                                         "rtc-alarm-readback",
+                                         "rtc-alarm-invalid",
+                                         "rtc-read-af",
+                                         "rtc-wakealarm-empty",
+                                         "rtc-wakeup-enabled",
+                                         "power-state-mode",
+                                         "freeze-wakes",
+                                         "freeze-holds"};
 
 /**
  * Begin the report, with the branch of the architecture, and plan its
@@ -2305,22 +2441,6 @@ static void plan(void)
                                          "fallocate-mode",
                                          "fallocate-proc",
                                          "fallocate-shm"};
-    static const char *const after[] = {
-        "clock-adjtime",      "listxattr",         "getxattr-absent",
-        "lsetxattr-enoent",   "readahead-fadvise", "fadvise-espipe",
-        "noctty-session",     "maxrss-self",       "maxrss-child",
-        "udp-refused",        "setgid-file",       "setgid-dir",
-        "privacy-other-root", "privacy-own-maps",  "privacy-dumpable",
-        "timer-si-timer",     "timer-overrun",     "timer-delete",
-        "sigqueue",           "rt-sigqueueinfo",   "pty-nonblock-eagain",
-        "pty-writer-sleeps",  "pty-64k",           "pty-whole-lines",
-        "signalfd-eagain",    "signalfd-read",     "itimer-interval",
-        "itimer-signals",     "ptimer-gettime",    "ptimer-signals",
-        "devmem-low",         "devmem-ram-eperm",  "devmem-private-einval",
-        "devmem-apic",        "klog-size",         "klog-records",
-        "klog-clear",         "dev-log-link",      "rtc-alarm-range",
-        "rtc-alarm-readback", "rtc-read-af",       "rtc-wakeup-enabled",
-        "power-state-mode",   "freeze-wakes",      "freeze-holds"};
 
     report_begin(report_case(environ, "guest.default.callsmusl"));
 #if defined __x86_64__
@@ -2343,7 +2463,7 @@ static void plan(void)
     } else {
         plan_row("adjtimex");
     }
-    PLAN(after);
+    PLAN(after_rows);
 }
 
 int main(int argc, char **argv)
