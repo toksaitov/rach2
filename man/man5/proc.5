@@ -2088,6 +2088,14 @@ for a region of no file; a segment of the program or of the linker that
 was loaded and not mapped, as the debug shell loads its program, has those
 of the file it names.
 A region with no path ends at the space after the inode, as on Linux.
+A mapped file's path is the target of its
+.Pa fd
+link when the first reading of
+.Pa maps ,
+.Pa smaps
+or
+.Pa numa_maps
+names it, and stays the same after.
 It and
 .Pa smaps
 need what

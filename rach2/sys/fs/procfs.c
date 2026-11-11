@@ -1453,6 +1453,64 @@ static const char *maps_path(const struct mm *mm, const vma_t *r)
     return NULL;
 }
 
+static void procfs_file_target(struct procfs_text *t, const fd_entry_t *e);
+
+/**
+ * Give each mapped file of process `pid` that has no path yet the path of
+ * its file, as its /proc link target gives it: mmap leaves the name to the
+ * first reader of maps, smaps or numa_maps, as Linux builds it with d_path
+ * only when maps is read (fs/proc/task_mmu.c, show_map_vma), since building
+ * an ext2 file's path reads each of its directories. Building a path may
+ * sleep and the regions may change meanwhile, so the files are gathered
+ * first, each with a reference, and named after; a file a region gained
+ * since, or one the heap had no room to name, is shown without a path. The
+ * caller looks the process up again afterwards. Nothing for a caller
+ * `procfs_may_read_mem` refuses.
+ */
+static void procfs_maps_names(int pid)
+{
+    process_t *p = procfs_proc(pid);
+    struct vm_file **files;
+    const vma_t *r;
+    uint32_t n = 0, i;
+
+    if (!p || !p->mm || !procfs_may_read_mem(p)) {
+        return;
+    }
+    for (r = vm_first(&p->mm->vm); r; r = vm_next(r)) {
+        n += r->file && !r->file->path && filemap_entry(r->file);
+    }
+    if (n == 0 || (files = kmalloc(n * sizeof(*files))) == NULL) {
+        return;
+    }
+    n = 0;
+    for (r = vm_first(&p->mm->vm); r; r = vm_next(r)) {
+        if (r->file && !r->file->path && filemap_entry(r->file)) {
+            vm_file_get(r->file);
+            files[n++] = r->file;
+        }
+    }
+    for (i = 0; i < n; i++) {
+        struct procfs_text name;
+
+        if (files[i]->path) {
+            continue;
+        }
+        procfs_text_init(&name);
+        procfs_file_target(&name, filemap_entry(files[i]));
+        if (!name.nomem && name.len > 0 && !files[i]->path &&
+            (files[i]->path = kmalloc((uint32_t)name.len + 1u)) != NULL) {
+            k_memcpy(files[i]->path, name.buf, (uint32_t)name.len);
+            files[i]->path[name.len] = '\0';
+        }
+        kfree(name.buf);
+    }
+    for (i = 0; i < n; i++) {
+        vm_file_put(files[i]);
+    }
+    kfree(files);
+}
+
 /** Append the device and inode of the file region `r` of `mm` maps, as stat
  * gives them (`vfs_fill_stat64`): the major and minor numbers in hex, a space
  * and the inode in decimal, or "00:00 0" for a region of no file. A segment
@@ -1536,10 +1594,12 @@ static void ap_maps_line(struct procfs_text *t, const struct mm *mm, const vma_t
  */
 static int procfs_gen_maps(struct procfs_text *t, int pid)
 {
-    process_t *p = procfs_proc(pid);
+    process_t *p;
     const struct mm *mm;
     const vma_t *r;
 
+    procfs_maps_names(pid);
+    p = procfs_proc(pid);
     if (!p) {
         return -ENOENT;
     }
@@ -1663,10 +1723,12 @@ static void ap_smaps_flags(struct procfs_text *t, const vma_t *r)
  */
 static int procfs_gen_smaps(struct procfs_text *t, int pid)
 {
-    process_t *p = procfs_proc(pid);
+    process_t *p;
     const struct mm *mm;
     const vma_t *r;
 
+    procfs_maps_names(pid);
+    p = procfs_proc(pid);
     if (!p) {
         return -ENOENT;
     }
@@ -1785,10 +1847,12 @@ static void ap_numa_count(struct procfs_text *t, const char *name, unsigned long
  */
 static int procfs_gen_numa_maps(struct procfs_text *t, int pid)
 {
-    process_t *p = procfs_proc(pid);
+    process_t *p;
     const struct mm *mm;
     const vma_t *r;
 
+    procfs_maps_names(pid);
+    p = procfs_proc(pid);
     if (!p) {
         return -ENOENT;
     }

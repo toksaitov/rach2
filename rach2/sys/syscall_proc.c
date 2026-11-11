@@ -7735,9 +7735,10 @@ static int32_t mmap_secret(const fd_entry_t *e, struct shmem *sh, int shared,
  * written. A shared mapping served as a private one, or made through a
  * descriptor not open for writing, is given VM_PROT_NOWRITE, so that mprotect
  * cannot make it writable later. A file of memfd_secret maps as
- * `mmap_secret` says. It may sleep, finding the file's path.
+ * `mmap_secret` says. The file's path is left to the first reader of
+ * /proc/PID/maps (`procfs_maps_names`), as Linux's d_path at that read.
  */
-static int32_t mmap_file(fd_entry_t *e, int fd, int shared, struct map_source *src)
+static int32_t mmap_file(fd_entry_t *e, int shared, struct map_source *src)
 {
     struct shmem *sh;
     int disk;
@@ -7766,9 +7767,6 @@ static int32_t mmap_file(fd_entry_t *e, int fd, int shared, struct map_source *s
                 : disk  ? filemap_disk_shared(e)
                         : filemap_new(e);
     src->type = shared && (sh || disk) ? VM_SHARED : VM_FILE;
-    if (src->file) {
-        src->file->path = fd_path_copy(fd);
-    }
     return src->file ? 0 : -ENOMEM;
 }
 
@@ -7818,7 +7816,8 @@ static int32_t mmap_object(fd_entry_t *e, int fd, int shared, uintptr_t len, str
  * anonymous memory (VM_SHARED), or NULL for private anonymous memory
  * (VM_ANON). /dev/zero maps as anonymous memory.
  * Anonymous memory has its pages from its own first on, so its offset is
- * set to 0, as Linux ignores it. It may sleep, finding a file's path.
+ * set to 0, as Linux ignores it. It may sleep, finding the path of an
+ * object that maps itself.
  */
 static int32_t mmap_backing(uint32_t flags, int fd, uintptr_t len, struct map_source *src)
 {
@@ -7836,7 +7835,7 @@ static int32_t mmap_backing(uint32_t flags, int fd, uintptr_t len, struct map_so
             return mmap_object(e, fd, shared, len, src);
         }
         if (devfs_rdev(e) != ((1u << 8) | 5u)) { /* /dev/zero, 1:5, maps as anonymous memory */
-            return mmap_file(e, fd, shared, src);
+            return mmap_file(e, shared, src);
         }
     }
     src->pgoff = 0;
