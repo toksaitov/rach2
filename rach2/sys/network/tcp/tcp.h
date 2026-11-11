@@ -101,8 +101,8 @@
  * The give-up of a synchronized connection is Linux's: the time that
  * `tcp_retries2` retransmissions take when the first waits 200 ms and each
  * doubles up to 120 s, about 924.6 s for the default of 15, measured from
- * the first timeout, as Linux measures it from the first retransmission
- * (`tcp_retx_limit`). These are Linux's figures
+ * the first retransmission of the loss, a fast one or a timeout's, as
+ * Linux measures it (`tcp_retx_limit`). These are Linux's figures
  * and not this stack's own bounds above, so that a connection to a peer
  * that went away lasts as long as on Linux. TCP_USER_TIMEOUT replaces the
  * figure with the socket's own, in milliseconds, in every state.
@@ -237,6 +237,9 @@ struct tcb {
      * Linux's rcv_wup + rcv_wnd; valid once `rcv_adv_set`. */
     uint32_t rcv_adv;
     uint8_t rcv_adv_set;
+    /* rcv_nxt as the last segment sent with an ACK had it, as Linux's
+     * rcv_wup: a segment that ends before it is old (`tcp_seq_ok`). */
+    uint32_t rcv_wup;
 
     /* Data that arrived past a hole, kept in the receive ring past
      * `recv_tail`, where it belongs, and not yet readable: the ranges
@@ -295,12 +298,15 @@ struct tcb {
     uint32_t tx_refused;    /* transmits the driver refused, a count */
     uint32_t refused_since; /* ticks+1 at the first refusal still unresolved; 0 = none */
     /* ticks+1 at what the give-up of the timeouts in a row counts from, as
-     * Linux's retrans_stamp: in a synchronized state the first timeout, in
-     * the handshake the send; 0 = none (`tcp_rto_expire`). */
+     * Linux's retrans_stamp: in a synchronized state the first
+     * retransmission of data since the last recovery ended, kept through
+     * the recovery (`tcp_resend`), or the first timeout when it sends no
+     * data; in the handshake the send; 0 = none (`tcp_rto_expire`). */
     uint32_t retx_stamp;
     /* The tick of the last acknowledgement received inside [snd_una,
-     * snd_nxt], as Linux's rcv_tstamp, which a closed window over data in
-     * flight is given up by. */
+     * snd_nxt] on a segment inside the receive window, as Linux's
+     * rcv_tstamp, which a closed window over data in flight is given up by
+     * (`tcp_rx_answers`). */
     uint32_t rcv_stamp;
 
     /* Keepalive. `ka_armed` is set once the tick has seen SO_KEEPALIVE on

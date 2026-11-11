@@ -68,9 +68,11 @@ A connection whose data or FIN goes unacknowledged is given up with
 when Linux would give it up with
 .Pa /proc/sys/net/ipv4/tcp_retries2
 of 15: after the time 16 timeouts take when the first is 200 milliseconds
-and each doubles up to 120 seconds, 924.6 seconds, counted from the first
-timeout, as Linux counts it from the first retransmission.
-The first timeout never gives a connection up.
+and each doubles up to 120 seconds, 924.6 seconds, counted, as on Linux,
+from the first retransmission of the loss, a fast retransmission or a
+timeout's, until an acknowledgement ends the recovery.
+The first timeout since data was last acknowledged never gives a
+connection up.
 This side's own timeout doubles only up to 60 seconds, so it sends more
 retransmissions in that time than Linux does.
 A connection whose local address goes, by a change of address or its
@@ -96,17 +98,23 @@ A window closed over data in flight is probed at each retransmission
 timeout instead, which then counts in no TCPTimeouts and lowers no segment
 size, by sending up to a segment of the oldest data unacknowledged past the
 closed window, counted in TCPRetransSegs, which a peer whose window has
-opened takes; the connection is given up only once no acknowledgement of
-data in flight has been received for 240 seconds before a timeout and the
-probes have lasted as long, as on Linux.
+opened takes; the connection is given up only once no acknowledgement
+inside the data sent, a duplicate among them, in a segment inside the
+window this side offers, has been received for 240 seconds before a
+timeout and the probes have lasted as long, as on Linux.
 Data that starts at or past the right edge of the window this side
 offered, a closed window's included, is dropped and acknowledged.
 .Dv TCP_USER_TIMEOUT ,
 a count of milliseconds, replaces that time, in the handshake as well,
 ends the keepalive's probing that long after the last segment received,
 and ends a closed window's probing that long after its first probe,
-answered or not, or over data in flight, just past that long after its
-first probe, as Linux does; 0 restores the default.
+answered or not, or over data in flight, just past that long after the
+loss's first retransmission, as Linux does; 0 restores the default.
+When the first probe over data in flight is that first retransmission,
+it gives up at once if that long has passed since the retransmission
+timer was last started, by the send of the oldest data unacknowledged or
+by an acknowledgement of new data since, where Linux counts from the
+oldest data's send.
 A frame the card refuses is kept and sent again at the next tick; a
 connection whose every frame the card has refused for 30 seconds, with
 nothing sent between, is given up, but the wait does not run while the card
