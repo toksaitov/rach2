@@ -124,6 +124,10 @@ void kcpu_rdmsr(uint32_t msr, uint32_t *lo, uint32_t *hi)
     (void)msr;
     *lo = *hi = 0;
 }
+int kcpu_xsaves_usable(void)
+{
+    return 1;
+}
 void kfree(void *p)
 {
     (void)p;

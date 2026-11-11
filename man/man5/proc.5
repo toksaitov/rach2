@@ -250,9 +250,12 @@ the last-level cache's,
 .Li flags ,
 the feature bits by Linux's names, among them
 .Li pku
-where the processor has protection keys and
+where the processor has protection keys,
 .Li ospke
-where the kernel turned them on,
+where the kernel turned them on, and
+.Li xsaves
+except on an AMD Zen 1 or Zen 2 without the microcode that fixes its
+Erratum 1386, as Linux,
 .Li clflush size
 and
 .Li address sizes ,
