@@ -707,7 +707,7 @@
     },
     {
       "case_id": "machine.bed-shm.console",
-      "behavior": "bed-shm.sh -u on the x86-64 GNU root first has the console lose a card of the host's own, as on the Lenovo when the GPU goes to its VM: Weston stopped, the host's virtio-vga card opened and closed so that the console takes it back onto a buffer of its own, and the card unplugged through its debugfs virtio_gpu_reset; then it attaches the region, boots the test bed's VM under Rach2's KVM, and virtio-gpu binds over the region with the console placing itself on the new card inside the bind, on the transport's thread, which must return; then the draw, the doorbells and the death as in the case virgl",
+      "behavior": "bed-shm.sh -u on the x86-64 GNU root first has the console lose a card of the host's own, as on the Lenovo when the GPU goes to its VM: Weston stopped, the host's virtio-vga-gl card, which has virgl and so a reset in debugfs, opened and closed so that the console takes it back onto a buffer of its own, and the card unplugged through its debugfs virtio_gpu_reset; then it attaches the region, boots the test bed's VM under Rach2's KVM, and virtio-gpu binds over the region with the console placing itself on the new card inside the bind, on the transport's thread, which must return; then the draw, the doorbells and the death as in the case virgl",
       "units": [
         "rach2/sys/virtio/shmem.c",
         "rach2/sys/virtio/virtqueue.c",
@@ -760,7 +760,7 @@
           "step_id": "boot",
           "stage": "boot",
           "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and a virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+          "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and a virtio-vga-gl display with virgl, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
         },
         {
           "step_id": "stage",
@@ -809,7 +809,7 @@
             "boot_options": [
               "rach2.root=ext2"
             ],
-            "display": "virtio-vga"
+            "display": "virgl"
           },
           "console": "serial",
           "qmp": true,
