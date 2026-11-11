@@ -6910,20 +6910,34 @@ static int32_t procfs_pcibar_read(fd_entry_t *e, char __user *buf, uint32_t coun
     return n;
 }
 
-/** write of a resourceN file, its bytes little-endian: the count, clipped
- * to the file, `pcibar_span`'s result, or -EFAULT. */
+/**
+ * write of a resourceN file, its bytes little-endian: the count, clipped
+ * to the file, `pcibar_span`'s result, or -EFAULT. As Linux's kernfs, the
+ * first `count` bytes, up to a page, are copied before anything else is
+ * judged, so that a source not readable to that length is -EFAULT with no
+ * port written, though the access the file clips it to would read less.
+ */
 static int32_t procfs_pcibar_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
     struct pci_resource r;
     uint8_t bytes[4] = {0, 0, 0, 0};
-    uint32_t value;
-    int32_t n = pcibar_span(e, count, 1, &r);
+    uint8_t chunk[64];
+    uint32_t value, done, len = count < PAGE_SIZE ? count : PAGE_SIZE;
+    int32_t n;
 
+    for (done = 0; done < len; done += sizeof(chunk)) {
+        uint32_t piece = len - done < sizeof(chunk) ? len - done : sizeof(chunk);
+
+        if (copy_from_user(chunk, buf + done, piece)) {
+            return -EFAULT;
+        }
+        if (done == 0) {
+            k_memcpy(bytes, chunk, piece < sizeof(bytes) ? piece : sizeof(bytes));
+        }
+    }
+    n = pcibar_span(e, len, 1, &r);
     if (n <= 0) {
         return n;
-    }
-    if (copy_from_user(bytes, buf, (uint32_t)n)) {
-        return -EFAULT;
     }
     value = (uint32_t)bytes[0] | (uint32_t)bytes[1] << 8 | (uint32_t)bytes[2] << 16 |
             (uint32_t)bytes[3] << 24;

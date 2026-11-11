@@ -529,10 +529,17 @@ int copy_to_user(void __user *dst, const void *src, size_t n)
     return 0;
 }
 
-/** Copy from the caller's buffer, which is host memory. Returns 0. */
+/* Bytes a row makes unreadable to copy_from_user, [fault_from, fault_end),
+ * or none while fault_from is NULL. */
+static const char *fault_from, *fault_end;
+
+/** Copy from the caller's buffer, which is host memory. Returns 0, or
+ * -EFAULT for NULL or a range that reaches the unreadable bytes. */
 int copy_from_user(void *dst, const void __user *src, size_t n)
 {
-    if (!src) {
+    const char *from = (const char __force *)src;
+
+    if (!src || (fault_from && n > 0 && from < fault_end && from + n > fault_from)) {
         return -EFAULT;
     }
     k_memcpy(dst, (const void __force *)src, n);
@@ -2507,7 +2514,7 @@ static void pci_bar_io_rows(void)
 static void pci_bar_clip_rows(void)
 {
     fd_entry_t *e = &entries[0];
-    char got[4], put[2] = {0x34, 0x12};
+    char got[4], put[4] = {0x34, 0x12, 0, 0};
 
     pci_io_bar = 1;
     check(bar_file_open(SYSFS_PCI_RESOURCE0 + 2, 2) == 0, "root opens the I/O BAR's file");
@@ -2522,6 +2529,14 @@ static void pci_bar_clip_rows(void)
     check(procfs_pcibar_write(e, put, 4) == 1 && port_at == 0xC01Fu && port_width == 1 &&
               port_value == 0x34u,
           "a write of 4 bytes 1 before the end is clipped to its first byte");
+    e->ofd->offset = 0x1F;
+    port_at = 0;
+    fault_from = put + 1;
+    fault_end = put + sizeof(put);
+    check(procfs_pcibar_write(e, put, 4) == -EFAULT && port_at == 0 && e->ofd->offset == 0x1F,
+          "but one whose last 3 bytes cannot be read is -EFAULT with no port written, as "
+          "kernfs copies the whole count before sysfs clips it");
+    fault_from = fault_end = NULL;
     e->ofd->offset = 0x20;
     check(procfs_pcibar_read(e, got, 4) == 0 && procfs_pcibar_write(e, put, 2) == -EFBIG &&
               procfs_pcibar_write(e, put, 0) == -EFBIG && e->ofd->offset == 0x20,
