@@ -65,6 +65,30 @@ static uint32_t pages_held;
 static size_t bytes_used;
 static uint32_t class_pages[KHEAP_CLASSES]; /* pages carved into each class */
 static uint32_t class_live[KHEAP_CLASSES];  /* blocks of each class in use */
+/* A class's pages with no block in use, which stay carved with their blocks
+ * on the free list, up to KHEAP_CLASS_SPARE, as SLUB keeps min_partial empty
+ * slabs (mm/slub.c, __slab_free): a kmalloc and kfree of the last block of
+ * a class neither maps a page nor unmaps one. */
+#define KHEAP_CLASS_SPARE 2u
+static uint32_t class_spare[KHEAP_CLASSES];
+
+/* A freed large object's run of up to KHEAP_KEEP_PAGES pages, kept mapped
+ * for the next kmalloc of its length, as Linux serves kmalloc up to
+ * KMALLOC_MAX_CACHE_SIZE from caches whose slabs stay (include/linux/slab.h)
+ * and pages up to PAGE_ALLOC_COSTLY_ORDER from per-CPU lists
+ * (mm/page_alloc.c, pcp_allowed_order). `kept[n - 1]` heads the runs of n
+ * pages, at most KHEAP_KEEP_RUNS of them. A kept run's header has magic 0,
+ * so a second kfree is refused; its pages stay counted in `pages_held`, and
+ * `take_pages` gives every kept run back to the region when it finds no
+ * room or no frame, as Linux drains its per-CPU lists before it reclaims. */
+#define KHEAP_KEEP_PAGES 8u
+#define KHEAP_KEEP_RUNS  8u
+struct kept_run {
+    struct page_hdr hdr;
+    struct kept_run *next;
+};
+static struct kept_run *kept[KHEAP_KEEP_PAGES];
+static uint32_t kept_runs[KHEAP_KEEP_PAGES];
 
 /** Whether page `page` of the region is taken in the map. */
 static int page_taken(uint32_t page)
@@ -310,10 +334,29 @@ static void release_run(uint32_t page, uint32_t count)
     }
 }
 
-/** `count` pages, mapped, from the ordinary region or, for a run of
- * KHEAP_RUN_LEAST or more that it cannot give, from the reserve; `heap_pages`
- * when neither has them or the frames ran out. `heap_lock` is held. */
-static uint32_t take_pages(uint32_t count)
+/** Give every kept run back to the region: 1 when there was one, else 0.
+ * `heap_lock` is held. */
+static int kept_drain(void)
+{
+    uint32_t i;
+    int any = 0;
+
+    for (i = 0; i < KHEAP_KEEP_PAGES; i++) {
+        while (kept[i]) {
+            struct kept_run *k = kept[i];
+
+            kept[i] = k->next;
+            release_run((uint32_t)(((uintptr_t)k - KVA_HEAP) / PAGE_SIZE), i + 1u);
+            any = 1;
+        }
+        kept_runs[i] = 0;
+    }
+    return any;
+}
+
+/** `count` pages, mapped, as `take_pages` gives them, without draining the
+ * kept runs. `heap_lock` is held. */
+static uint32_t take_pages_once(uint32_t count)
 {
     uint32_t page = find_run(count);
 
@@ -325,6 +368,21 @@ static uint32_t take_pages(uint32_t count)
         }
     } else if (page < heap_pages && map_run(page, count) != 0) {
         page = heap_pages;
+    }
+    return page;
+}
+
+/** `count` pages, mapped, from the ordinary region or, for a run of
+ * KHEAP_RUN_LEAST or more that it cannot give, from the reserve, the kept
+ * runs given back and the search made again when neither has them;
+ * `heap_pages` when they still do not or the frames ran out. `heap_lock` is
+ * held. */
+static uint32_t take_pages(uint32_t count)
+{
+    uint32_t page = take_pages_once(count);
+
+    if (page >= heap_pages && kept_drain()) {
+        page = take_pages_once(count);
     }
     return page;
 }
@@ -448,13 +506,13 @@ void kfree_guarded(void *p, uint32_t count)
  * free list: 0, or -1 when no page could be had. `heap_lock` is held. */
 static int add_class_page(uint32_t cls)
 {
-    uint32_t page = find_run(1);
+    uint32_t page = take_pages(1);
     struct page_hdr *hdr;
     uintptr_t base;
     uint32_t size = class_size[cls];
     uint32_t off;
 
-    if (page >= heap_pages || map_run(page, 1) != 0) {
+    if (page >= heap_pages) {
         return -1;
     }
     base = KVA_HEAP + (uintptr_t)page * PAGE_SIZE;
@@ -468,6 +526,7 @@ static int add_class_page(uint32_t cls)
         free_list[cls] = (void *)(base + off);
     }
     class_pages[cls]++;
+    class_spare[cls]++;
     return 0;
 }
 
@@ -502,9 +561,21 @@ void *kmalloc(size_t size)
     }
     if (size > class_size[KHEAP_CLASSES - 1]) {
         uint32_t count = (uint32_t)((size + KHEAP_HDR + PAGE_SIZE - 1) / PAGE_SIZE);
-        void *base = kalloc_pages(count, NULL);
+        void *base = NULL;
         struct page_hdr *hdr;
 
+        if (count <= KHEAP_KEEP_PAGES) {
+            flags = spin_lock_irqsave(&heap_lock);
+            if (kept[count - 1]) {
+                base = kept[count - 1];
+                kept[count - 1] = kept[count - 1]->next;
+                kept_runs[count - 1]--;
+            }
+            spin_unlock_irqrestore(&heap_lock, flags);
+        }
+        if (!base) {
+            base = kalloc_pages(count, NULL);
+        }
         if (!base) {
             return NULL;
         }
@@ -528,7 +599,9 @@ void *kmalloc(size_t size)
     }
     block = free_list[cls];
     free_list[cls] = *(void **)block;
-    ((struct page_hdr *)((uintptr_t)block & ~(PAGE_SIZE - 1)))->used++;
+    if (((struct page_hdr *)((uintptr_t)block & ~(PAGE_SIZE - 1)))->used++ == 0) {
+        class_spare[cls]--;
+    }
     bytes_used += class_size[cls];
     class_live[cls]++;
     spin_unlock_irqrestore(&heap_lock, flags);
@@ -570,7 +643,15 @@ void kfree(void *p)
 
         bytes_used -= hdr->used;
         hdr->magic = 0;
-        release_run((uint32_t)(((uintptr_t)hdr - KVA_HEAP) / PAGE_SIZE), count);
+        if (count <= KHEAP_KEEP_PAGES && kept_runs[count - 1] < KHEAP_KEEP_RUNS) {
+            struct kept_run *k = (void *)hdr;
+
+            k->next = kept[count - 1];
+            kept[count - 1] = k;
+            kept_runs[count - 1]++;
+        } else {
+            release_run((uint32_t)(((uintptr_t)hdr - KVA_HEAP) / PAGE_SIZE), count);
+        }
         spin_unlock_irqrestore(&heap_lock, flags);
         return;
     }
@@ -584,7 +665,9 @@ void kfree(void *p)
     hdr->used--;
     bytes_used -= class_size[hdr->cls];
     class_live[hdr->cls]--;
-    if (hdr->used == 0) {
+    if (hdr->used == 0 && class_spare[hdr->cls] < KHEAP_CLASS_SPARE) {
+        class_spare[hdr->cls]++;
+    } else if (hdr->used == 0) {
         drop_class_page(hdr, hdr->cls);
         class_pages[hdr->cls]--;
         hdr->magic = 0;
