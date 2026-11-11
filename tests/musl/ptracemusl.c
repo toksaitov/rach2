@@ -1812,7 +1812,9 @@ static int entry_system_call(void)
  * into it hits, stops nothing, as on Linux, whose ptrace breakpoints exclude
  * the kernel: the first stop is the child's own write of `byte` after the
  * read, which still traps with TRAP_HWBKPT, and the read returns its byte.
- * Returns 0, or 1 after the failure is printed.
+ * A child that exits untrapped held copy-watch-no-stop and fails
+ * copy-watch-user-trap, since its breakpoint was not loaded again after the
+ * kernel's hit. Returns 0, or 1 after the failure is printed.
  */
 static int watched_copy(void)
 {
@@ -1846,9 +1848,18 @@ static int watched_copy(void)
         return 1;
     }
     if (debug_set(pid, 0, (unsigned long)&byte) != 0 || debug_set(pid, 7, 0x10001) != 0 ||
-        ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
-        expect_stop(pid, SIGTRAP, "watched write after the copy did not trap")) {
-        return 1;
+        ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 || waitpid(pid, &status, 0) != pid) {
+        return abandon(pid, "watched copy child did not resume");
+    }
+    if (WIFEXITED(status)) {
+        held();
+        return fail("watched write after the copy did not trap; the child exited");
+    }
+    if (!WIFSTOPPED(status)) {
+        return fail("watched copy child was killed");
+    }
+    if (status >> 8 != SIGTRAP) {
+        return abandon(pid, "watched copy child stopped without SIGTRAP");
     }
     errno = 0;
     word = ptrace(PTRACE_PEEKDATA, pid, (void *)&read_done, NULL);
