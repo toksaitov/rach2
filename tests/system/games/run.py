@@ -423,8 +423,8 @@ class Runner:
         on the same machine, or None when this run records them: each sum must
         equal Linux's, and each renderer that ran Linux's round trips to a zero
         exit must run them too, exiting 0. Each Direct3D probe's adapter must
-        name the GPU, as hardware checks. The times are recorded beside Linux's and
-        judge nothing.
+        name the GPU, as hardware checks. The times are recorded beside
+        Linux's and judge nothing.
         """
         self.make_prefix()
         ok = True
