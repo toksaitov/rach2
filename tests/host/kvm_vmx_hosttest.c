@@ -3839,6 +3839,87 @@ static void failure_rows(int vm, int fd)
     guest_debug(fd, 0, 0, 0);
 }
 
+/** KVM_X86_SET_MSR_FILTER with the ranges `deny` of one MSR each, whose
+ * accesses of `flags` it refuses; 0 or the ioctl's error. */
+static int32_t msr_filter(int vm, const uint32_t *deny, uint32_t n, uint32_t flags)
+{
+    static uint64_t none;
+    struct kvm_msr_filter f;
+    uint32_t i;
+
+    k_memset(&f, 0, sizeof(f));
+    for (i = 0; i < n; i++) {
+        f.ranges[i].flags = flags;
+        f.ranges[i].nmsrs = 1;
+        f.ranges[i].base = deny[i];
+        f.ranges[i].bitmap = (uintptr_t)&none;
+    }
+    return fdio(vm, KVM_X86_SET_MSR_FILTER, (uintptr_t)&f);
+}
+
+/** The caller's MSR exits through the backend, as Linux's
+ * userspace_msr_exit_test: a filtered access and an unknown MSR are
+ * KVM_EXIT_X86_RDMSR or WRMSR, the caller's answer completes the
+ * instruction or is #GP, and the bitmap follows the filter for the MSRs
+ * it passes to the guest, on the vCPU `fd` of `vm`. */
+static void user_msr_rows(int vm, int fd)
+{
+    uint32_t gpe = GP_VECTOR | (TYPE_HW_EXC << 8) | INTR_ERRCODE | INTR_VALID;
+    uint32_t deny[2] = {0xDA0u, 0xC0000100u};
+    struct kvm_vcpu *v = vcpu_of(fd);
+    struct kvm_run *rp = run_of(fd);
+
+    CHECK(msr_filter(vm, deny, 2, KVM_MSR_FILTER_READ | KVM_MSR_FILTER_WRITE) == 0 &&
+              vm_cap(vm, KVM_CAP_X86_USER_SPACE_MSR,
+                     KVM_MSR_EXIT_REASON_FILTER | KVM_MSR_EXIT_REASON_UNKNOWN) == 0,
+          "a filter of XSS and FS_BASE, with the caller's exits for both reasons");
+    set_regs(fd, 0x1000, 0, 0xDA0u, 0);
+    script(EXIT_MSR_READ, 0, 2);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_X86_RDMSR &&
+              rp->u.msr.reason == KVM_MSR_EXIT_REASON_FILTER && rp->u.msr.index == 0xDA0u &&
+              regs_of(fd).rip == 0x1000,
+          "a filtered RDMSR is KVM_EXIT_X86_RDMSR for the filter");
+    CHECK((vx(v)->msr_bitmap[1024 + 0x20] & 1u) && (vx(v)->msr_bitmap[3072 + 0x20] & 1u),
+          "the run took the filter: FS_BASE's accesses exit");
+    rp->u.msr.data = 0x1122334455667788ull;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && m.injected == 0 && regs_of(fd).rax == 0x55667788u &&
+              regs_of(fd).rdx == 0x11223344u && regs_of(fd).rip == 0x1003,
+          "the caller's answer is EDX:EAX, past the RDMSR");
+
+    set_regs(fd, 0x1000, 0x9u, 0xDA0u, 0x1u);
+    script(EXIT_MSR_WRITE, 0, 2);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_X86_WRMSR &&
+              rp->u.msr.data == 0x100000009ull && rp->u.msr.index == 0xDA0u,
+          "a filtered WRMSR is KVM_EXIT_X86_WRMSR with EDX:EAX");
+    rp->u.msr.error = 1;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && m.injected == gpe && regs_of(fd).rip == 0x1001,
+          "and the caller's error is #GP at it");
+
+    set_regs(fd, 0x1000, 0, 0xDEADBEEFu, 0);
+    script(EXIT_MSR_READ, 0, 2);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_X86_RDMSR &&
+              rp->u.msr.reason == KVM_MSR_EXIT_REASON_UNKNOWN,
+          "an unknown MSR is the caller's, for KVM_MSR_EXIT_REASON_UNKNOWN");
+    rp->u.msr.error = 1;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && m.injected == gpe, "and its error is #GP");
+    CHECK(vm_cap(vm, KVM_CAP_X86_USER_SPACE_MSR, KVM_MSR_EXIT_REASON_FILTER) == 0,
+          "the caller's exits for the filter alone");
+    set_regs(fd, 0x1000, 0, 0xDEADBEEFu, 0);
+    CHECK(exits(fd, EXIT_MSR_READ, 0, 2) == 0 && m.injected == gpe && regs_of(fd).rip == 0x1001,
+          "and the unknown MSR is the guest's #GP");
+
+    CHECK(msr_filter(vm, deny, 0, 0) == 0 && vm_cap(vm, KVM_CAP_X86_USER_SPACE_MSR, 0) == 0,
+          "a filter that allows all, without the caller's exits");
+    set_regs(fd, 0x1000, 0, 0xC0000100u, 0);
+    CHECK(exits(fd, EXIT_MSR_READ, 0, 2) == 0 && m.injected == 0 && regs_of(fd).rip == 0x1001,
+          "an exit of FS_BASE under the old bitmap enters again, not stepped");
+    CHECK(!(vx(v)->msr_bitmap[1024 + 0x20] & 7u) && !(vx(v)->msr_bitmap[3072 + 0x20] & 7u),
+          "and FS_BASE, GS_BASE and KERNEL_GS_BASE pass to the guest again");
+}
+
 /** TSC scaling: the Haswell has none, and on a model with the control a
  * vCPU of `vm` runs under it with the multiplier of its ratio, 1 for a
  * TSC at the host's rate. */
@@ -3882,6 +3963,7 @@ static void selftest_rows(int vm)
     platform_rows(vm, fd);
     out_rows(vm, fd);
     failure_rows(vm, fd);
+    user_msr_rows(vm, fd);
     fdclose(fd);
     tsc_scale_rows(vm);
 }
@@ -3921,8 +4003,8 @@ int main(void)
     fdclose(fd);
     fdclose(vm);
     CHECK(vpid_used[0] == 0, "the vCPUs' VPIDs are freed with the VM");
-    CHECK(live == 5, "the VM's allocations are given back, but for the VMXON regions of the four "
-                     "processors and the MSR bitmap, which the backend keeps");
+    CHECK(live == 4, "the VM's allocations are given back, but for the VMXON regions of the four "
+                     "processors, which the backend keeps");
     printf("kvm-vmx-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
     return failures ? 1 : 0;
 }
