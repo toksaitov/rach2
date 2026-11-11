@@ -147,7 +147,8 @@ static void rps_set_power(struct drm_i915_private *i915, int mode)
 }
 
 /** Choose the power mode for the frequency `val`, as Linux's
- * gen6_rps_set_thresholds. Under the frequency lock. */
+ * gen6_rps_set_thresholds: high power while a flip is pending. Under the
+ * frequency lock. */
 static void rps_set_thresholds(struct drm_i915_private *i915, int val)
 {
     struct i915_rps *rps = &i915->rps;
@@ -178,6 +179,9 @@ static void rps_set_thresholds(struct drm_i915_private *i915, int val)
         mode = I915_RPS_LOW_POWER;
     }
     if (val >= rps->max_freq_softlimit) {
+        mode = I915_RPS_HIGH_POWER;
+    }
+    if (rps->interactive) {
         mode = I915_RPS_HIGH_POWER;
     }
     rps_set_power(i915, mode);
@@ -483,27 +487,36 @@ void i915_rps_work(struct drm_i915_private *i915)
 {
     struct i915_rps *rps = &i915->rps;
     uint32_t flags, pm_iir;
-    int adj, new_freq;
+    int adj, new_freq, max, client_boost, queued;
 
     flags = spin_lock_irqsave(&i915->irq.lock);
     pm_iir = rps->pm_iir & rps->pm_events;
     rps->pm_iir = 0;
+    queued = rps->boost_queued;
+    rps->boost_queued = 0;
     spin_unlock_irqrestore(&i915->irq.lock, flags);
-    if (pm_iir == 0) {
+    if (pm_iir == 0 && !queued) {
         return;
     }
     flags = spin_lock_irqsave(&rps->lock);
-    if (!rps->active) {
+    client_boost = rps->num_waiters > 0;
+    if (!rps->active || (pm_iir == 0 && !client_boost)) {
         spin_unlock_irqrestore(&rps->lock, flags);
         return;
     }
     adj = rps->last_adj;
     new_freq = rps->cur_freq;
-    if (pm_iir & GEN6_PM_RP_UP_THRESHOLD) {
+    max = client_boost ? rps->max_freq : rps->max_freq_softlimit;
+    if (client_boost && new_freq < rps->boost_freq) {
+        new_freq = rps->boost_freq;
+        adj = 0;
+    } else if (pm_iir & GEN6_PM_RP_UP_THRESHOLD) {
         adj = adj > 0 ? adj * 2 : 1;
         if (new_freq >= rps->max_freq_softlimit) {
             adj = 0;
         }
+    } else if (client_boost) {
+        adj = 0;
     } else if (pm_iir & GEN6_PM_RP_DOWN_TIMEOUT) {
         if (rps->cur_freq > rps->efficient_freq) {
             new_freq = rps->efficient_freq;
@@ -519,7 +532,7 @@ void i915_rps_work(struct drm_i915_private *i915)
     } else {
         adj = 0;
     }
-    new_freq = rps_clamp(new_freq + adj, rps->min_freq_softlimit, rps->max_freq_softlimit);
+    new_freq = rps_clamp(new_freq + adj, rps->min_freq_softlimit, max);
     if (i915_rps_set_locked(i915, new_freq) < 0) {
         adj = 0;
     }
@@ -577,19 +590,88 @@ int32_t i915_rps_set_min_mhz(struct drm_i915_private *i915, uint32_t mhz)
     return err;
 }
 
+/** Ask for the work as Linux's queue_work of rps_work, and run it, since
+ * nothing here defers it. No lock of the driver held. */
+static void rps_queue_work(struct drm_i915_private *i915)
+{
+    uint32_t flags = spin_lock_irqsave(&i915->irq.lock);
+
+    i915->rps.boost_queued = 1;
+    spin_unlock_irqrestore(&i915->irq.lock, flags);
+    i915_rps_work(i915);
+}
+
 int32_t i915_rps_set_boost_mhz(struct drm_i915_private *i915, uint32_t mhz)
 {
     struct i915_rps *rps = &i915->rps;
     uint32_t flags;
-    int val = rps_opcode(mhz);
+    int val = rps_opcode(mhz), boost = 0;
 
     if (val < rps->min_freq || val > rps->max_freq) {
         return -EINVAL;
     }
     flags = spin_lock_irqsave(&rps->lock);
-    rps->boost_freq = val;
+    if (val != rps->boost_freq) {
+        rps->boost_freq = val;
+        boost = rps->num_waiters > 0;
+    }
     spin_unlock_irqrestore(&rps->lock, flags);
+    if (boost) {
+        rps_queue_work(i915);
+    }
     return 0;
+}
+
+void i915_rps_boost(struct i915_request *rq)
+{
+    struct drm_i915_private *i915 = rq->i915;
+    struct i915_rps *rps = &i915->rps;
+    uint32_t flags;
+    int queue = 0;
+
+    if (rq->fence.base.signaled || rq->boosted) {
+        return;
+    }
+    /* The mark is tested and set under the lock the retire takes. */
+    flags = spin_lock_irqsave(&rps->lock);
+    if (!rq->boosted) {
+        rq->boosted = 1;
+        if (rps->num_waiters++ == 0 && rps->active) {
+            queue = rps->cur_freq < rps->boost_freq;
+            rps->boosts++;
+        }
+    }
+    spin_unlock_irqrestore(&rps->lock, flags);
+    if (queue) {
+        rps_queue_work(i915);
+    }
+}
+
+void i915_rps_retire(struct i915_request *rq)
+{
+    struct i915_rps *rps = &rq->i915->rps;
+    uint32_t flags = spin_lock_irqsave(&rps->lock);
+
+    if (rq->boosted) {
+        rps->num_waiters--;
+    }
+    rq->boosted = 1;
+    spin_unlock_irqrestore(&rps->lock, flags);
+}
+
+void i915_rps_mark_interactive(struct drm_i915_private *i915, int on)
+{
+    struct i915_rps *rps = &i915->rps;
+    uint32_t flags = spin_lock_irqsave(&rps->lock);
+
+    if (on) {
+        if (rps->interactive++ == 0 && rps->active) {
+            rps_set_power(i915, I915_RPS_HIGH_POWER);
+        }
+    } else if (rps->interactive > 0) {
+        rps->interactive--;
+    }
+    spin_unlock_irqrestore(&rps->lock, flags);
 }
 
 /* ---- the /sys files ---- */

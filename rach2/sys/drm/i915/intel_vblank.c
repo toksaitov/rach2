@@ -127,11 +127,22 @@ void intel_disable_vblank(struct drm_crtc *crtc)
     c->vbl_on = 0;
 }
 
+/** Let `c`'s interactive mark go once its flip is no longer pending, as
+ * Linux's intel_cleanup_plane_fb after the flip. Interrupts masked. */
+static void interactive_end(struct intel_crtc *c)
+{
+    if (c->rps_interactive && !c->base.flip_pending) {
+        c->rps_interactive = 0;
+        i915_rps_mark_interactive(c->i915, 0);
+    }
+}
+
 void intel_crtc_send_event(struct intel_crtc *c)
 {
     struct drm_pending_event *e = c->event;
 
     if (!e) {
+        interactive_end(c);
         return;
     }
     c->event = NULL;
@@ -141,6 +152,47 @@ void intel_crtc_send_event(struct intel_crtc *c)
     }
     drm_crtc_send_vblank_event(&c->base, e);
     drm_crtc_vblank_put(&c->base);
+    interactive_end(c);
+}
+
+void intel_crtc_boost_after_vblank(struct intel_crtc *c, int slot, struct dma_fence *fence)
+{
+    struct i915_request *old;
+    uint32_t flags;
+
+    if (!fence || fence->ops != &i915_fence_ops || drm_crtc_vblank_get(&c->base) != 0) {
+        return;
+    }
+    flags = kirq_save();
+    old = c->boost_rq[slot];
+    c->boost_rq[slot] = (struct i915_request *)dma_fence_get(fence);
+    kirq_restore(flags);
+    if (old) {
+        dma_fence_put(&old->fence.base);
+        drm_crtc_vblank_put(&c->base);
+    }
+}
+
+/** Take `c`'s boosts after a vblank, each with its references let go; at
+ * the vblank (`boost`) the requests the chip has not begun are boosted, as
+ * Linux's do_rps_boost, since one that runs may be taken to end before
+ * the next. Interrupts masked. */
+static void vblank_boost(struct intel_crtc *c, int boost)
+{
+    struct i915_request *rq;
+    int slot;
+
+    for (slot = 0; slot < INTEL_NUM_PLANES; slot++) {
+        if ((rq = c->boost_rq[slot]) == NULL) {
+            continue;
+        }
+        c->boost_rq[slot] = NULL;
+        if (boost && !i915_request_started(rq)) {
+            i915_rps_boost(rq);
+        }
+        dma_fence_put(&rq->fence.base);
+        drm_crtc_vblank_put(&c->base);
+    }
 }
 
 void intel_crtc_arm_flip_done(struct intel_crtc *c, struct drm_atomic_state *state)
@@ -188,6 +240,7 @@ void intel_crtc_arm_event(struct intel_crtc *c, struct drm_atomic_state *state)
             i915_irq_mask(c->i915, I915_IRQ_DE, DE_PLANE_FLIP_DONE_IVB(c->pipe));
         }
         drm_crtc_send_vblank_event(&c->base, e);
+        interactive_end(c);
     }
     kirq_restore(flags);
 }
@@ -288,6 +341,7 @@ void intel_display_irq_work(struct drm_i915_private *i915)
         if (iir & DE_PIPE_VBLANK_IVB(pipe)) {
             (void)drm_crtc_handle_vblank(&c->base);
             intel_wm_vblank(c);
+            vblank_boost(c, 1);
             /* The writes latch at the vblank that ends the frame they were
              * made in, so the event goes once the counter has moved past
              * the frame read after them. */
@@ -295,6 +349,8 @@ void intel_display_irq_work(struct drm_i915_private *i915)
                 intel_get_vblank_counter(&c->base) != c->event_frame) {
                 intel_crtc_send_event(c);
             }
+            /* A flip whose event the core sent ends here too. */
+            interactive_end(c);
         }
         if ((iir & DE_PLANE_FLIP_DONE_IVB(pipe)) && c->event && c->event_async) {
             intel_crtc_send_event(c);
@@ -326,6 +382,7 @@ void intel_vblank_fini(struct drm_i915_private *i915)
     flags = kirq_save();
     for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
         intel_crtc_send_event(&i915->display.crtc[pipe]);
+        vblank_boost(&i915->display.crtc[pipe], 0);
     }
     kirq_restore(flags);
 }

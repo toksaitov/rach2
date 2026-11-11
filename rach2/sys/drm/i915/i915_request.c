@@ -65,6 +65,11 @@ int i915_request_completed(const struct i915_request *rq)
     return rq->fence.base.signaled || i915_engine_passed(rq->engine, rq->seqno);
 }
 
+int i915_request_started(const struct i915_request *rq)
+{
+    return rq->fence.base.signaled || i915_engine_passed(rq->engine, rq->seqno - 1u);
+}
+
 /* ------------------------------------------------------------------------
  * Submission
  */
@@ -631,10 +636,11 @@ static void gt_park(struct drm_i915_private *i915)
 
 /**
  * Take from `e`'s list each request that `done` says is finished, oldest
- * first, its fence signalled, and release it; the user interrupt is let go
- * once the list is empty.  Each finished request moves the ring's head to
- * its end, as Linux's i915_request_retire, so that the room it took is free
- * again; a cancel (`all`) leaves the head to the ring's restart.
+ * first, its fence signalled, its waitboost let go, and release it; the
+ * user interrupt is let go once the list is empty.  Each finished request
+ * moves the ring's head to its end, as Linux's i915_request_retire, so
+ * that the room it took is free again; a cancel (`all`) leaves the head to
+ * the ring's restart.
  */
 static void engine_retire(struct drm_i915_private *i915, struct i915_engine *e, int all)
 {
@@ -670,6 +676,7 @@ static void engine_retire(struct drm_i915_private *i915, struct i915_engine *e, 
     while ((rq = done) != 0) {
         done = rq->next;
         rq->next = 0;
+        i915_rps_retire(rq);
         request_release(rq);
     }
 }

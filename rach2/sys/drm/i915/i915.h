@@ -474,8 +474,18 @@ struct i915_rc6 {
  * holds the events the interrupt latched and the deferred work has yet to
  * take, under the interrupt mask's lock. `enabled` is set once RPS runs,
  * `active` while the GT is unparked, `interrupts` once the up and down
- * interrupts drive it. `lock` is the frequency lock of i915.h's order,
- * over the rest. `work_runs` counts the events the work acted on.
+ * interrupts drive it. `boost_queued` says a waitboost or a new boost
+ * frequency asked for the work, Linux's queue_work of rps_work, under the
+ * interrupt mask's lock with `pm_iir`. `lock` is the frequency lock of
+ * i915.h's order, over the rest. `work_runs` counts the events the work
+ * acted on.
+ *
+ * The waitboost, Linux's: `num_waiters` counts the requests boosted that
+ * have yet to retire, each marked by its `boosted`, and while any is
+ * there the work asks for `boost_freq` at least, up to `max_freq`;
+ * `boosts` counts the boosts that found RPS active, as Linux's debug
+ * count. `interactive` counts the page flips pending, Linux's
+ * power.interactive, which hold the power mode at high power.
  */
 struct i915_rps {
     struct spinlock lock;
@@ -498,9 +508,13 @@ struct i915_rps {
     uint32_t pm_intrmsk_mbz;
     uint32_t pm_iir;
     uint32_t work_runs;
+    int num_waiters;
+    int interactive;
+    uint32_t boosts;
     uint8_t enabled;
     uint8_t active;
     uint8_t interrupts;
+    uint8_t boost_queued;
 };
 
 /*
@@ -1222,7 +1236,13 @@ struct intel_scanout {
  * `planes_on` has bit INTEL_PLANE_ for each plane the hardware shows.
  * `underrun_off` says its FIFO underruns are not reported, Linux's
  * cpu_fifo_underrun_disabled, and `inherited` that it shows what the
- * firmware lit, with no commit of its own yet.
+ * firmware lit, with no commit of its own yet. `boost_rq` holds, with a
+ * fence reference and a vblank reference each, the request drawing a
+ * plane's flip that the next vblank boosts if the chip has not begun it,
+ * Linux's intel_display_rps_boost_after_vblank, NULL for none, under the
+ * interrupts' masking; `rps_interactive` says the pipe holds a commit's
+ * interactive mark of RPS (`i915_rps_mark_interactive`) until its pending
+ * flip ends.
  */
 struct intel_crtc {
     struct drm_crtc base;
@@ -1248,6 +1268,8 @@ struct intel_crtc {
     struct intel_scanout shown[INTEL_NUM_PLANES];
     struct intel_scanout parked[INTEL_NUM_PLANES];
     uint32_t shown_from[INTEL_NUM_PLANES], shown_to[INTEL_NUM_PLANES];
+    struct i915_request *boost_rq[INTEL_NUM_PLANES];
+    uint8_t rps_interactive;
 };
 
 /*
@@ -1970,11 +1992,13 @@ void i915_rps_unpark(struct drm_i915_private *i915);
 void i915_rps_park(struct drm_i915_private *i915);
 
 /**
- * Act on the up and down interrupts the handler latched, as Linux's
- * rps_work: step the frequency up or down, or to RPe or RPn on the down
- * timeout, within the softlimits, then unmask the events again. Runs as
- * the interrupt's `deferred` work, with no lock of the driver held, and
- * may be called from anywhere else; it takes the frequency lock.
+ * Act on the up and down interrupts the handler latched and on a waitboost
+ * queued, as Linux's rps_work: with waiters, to `boost_freq` at least and
+ * held there, up to `max_freq`; otherwise step the frequency up or down,
+ * or to RPe or RPn on the down timeout, within the softlimits; then
+ * unmask the events again. Runs as the interrupt's `deferred` work, with
+ * no lock of the driver held, and may be called from anywhere else; it
+ * takes the frequency lock.
  */
 void i915_rps_work(struct drm_i915_private *i915);
 
@@ -2003,9 +2027,33 @@ uint32_t i915_rps_read_actual_mhz(struct drm_i915_private *i915);
 int32_t i915_rps_set_max_mhz(struct drm_i915_private *i915, uint32_t val);
 int32_t i915_rps_set_min_mhz(struct drm_i915_private *i915, uint32_t val);
 
-/** Set the boost frequency, gt_boost_freq_mhz, `val` in MHz: 0, or
- * -EINVAL outside [min_freq, max_freq]. */
+/** Set the boost frequency, gt_boost_freq_mhz, `val` in MHz, and run the
+ * work again for the waiters while it changes, as Linux's
+ * rps_set_boost_freq: 0, or -EINVAL outside [min_freq, max_freq]. */
 int32_t i915_rps_set_boost_mhz(struct drm_i915_private *i915, uint32_t val);
+
+/**
+ * Boost the GT's clock for a client waiting on `rq`, as Linux's
+ * intel_rps_boost: nothing for a request signalled or boosted already;
+ * otherwise `rq` is marked and counted a waiter until it retires, and the
+ * first waiter, while RPS is active and asks for less than `boost_freq`,
+ * runs the work, which asks for `boost_freq`. The callers boost only a
+ * request the chip has not begun (`i915_request_started`). Any context
+ * where the work may run: no lock of the driver held.
+ */
+void i915_rps_boost(struct i915_request *rq);
+
+/** `rq` retires: its waitboost, if any, is no longer counted, and none
+ * asked after is, as Linux's i915_request_retire. Any context. */
+void i915_rps_retire(struct i915_request *rq);
+
+/**
+ * Count a page flip pending, with `on`, or one done, as Linux's
+ * intel_rps_mark_interactive: while any is pending the power mode is high
+ * power, with its shorter evaluation interval, and the first switches to
+ * it at once while RPS is active. Any context; takes the frequency lock.
+ */
+void i915_rps_mark_interactive(struct drm_i915_private *i915, int on);
 
 /**
  * Add the device's /sys files below its card's directory, as Linux's
@@ -2108,7 +2156,8 @@ void i915_gem_object_put(struct drm_i915_gem_object *obj);
 /**
  * Wait for the object's writers, or with `all` for its readers too, for
  * `timeout_ns`, for ever when it is negative, as Linux's
- * i915_gem_object_wait.
+ * i915_gem_object_wait, after a waitboost for each of their requests the
+ * chip has not begun, timeout 0 too.
  *
  * @return 0, -ETIME when one is busy at the timeout (at once for 0),
  *         -EINTR for a signal, or -ENOMEM.
@@ -2711,18 +2760,30 @@ int intel_crtc_get_vblank_timestamp(struct drm_crtc *crtc, int64_t *time_ns, int
  */
 int32_t intel_vblank_init(struct drm_i915_private *i915);
 
-/** Unhook them, with every held event sent. */
+/** Unhook them, with every held event sent and every boost after a vblank
+ * dropped. */
 void intel_vblank_fini(struct drm_i915_private *i915);
 
 /** Send `crtc`'s held event now, as a pipe that goes off does, with
- * interrupts off. */
+ * interrupts off; the pipe's interactive mark goes once no flip is
+ * pending. */
 void intel_crtc_send_event(struct intel_crtc *crtc);
 
 /**
+ * Boost the GT's clock at the next vblank of `c` for `fence`, the request
+ * drawing the flip of plane `slot`, if the chip has not begun it by then,
+ * as Linux's intel_display_rps_boost_after_vblank: nothing for a fence of
+ * another driver or a merge, or a pipe whose vblanks cannot be had; a
+ * boost the plane waited for already is replaced. May be called with
+ * interrupts on.
+ */
+void intel_crtc_boost_after_vblank(struct intel_crtc *c, int slot, struct dma_fence *fence);
+
+/**
  * The display's deferred interrupt work, `irq.deferred_display`: each
- * pipe's vblank counted by the DRM core, the events whose frame has come
- * sent, and the CRC of each frame entered. In the interrupt, after the
- * mask's lock is let go.
+ * pipe's vblank counted by the DRM core, its flips' requests boosted, the
+ * events whose frame has come sent, and the CRC of each frame entered. In
+ * the interrupt, after the mask's lock is let go.
  */
 void intel_display_irq_work(struct drm_i915_private *i915);
 
@@ -3493,6 +3554,7 @@ struct i915_request {
     uint8_t was_valid;
     uint8_t added;
     uint8_t submitted;
+    uint8_t boosted; /* Linux's I915_FENCE_FLAG_BOOST, under the frequency lock */
     uint32_t awaits;
     struct i915_await *await_list;
     struct i915_await *exec_waiters;
@@ -3647,6 +3709,10 @@ int32_t i915_request_add(struct i915_request *rq);
 
 /** Whether the chip has written the request's breadcrumb. */
 int i915_request_completed(const struct i915_request *rq);
+
+/** Whether the chip has begun the request: it has signalled, or its engine
+ * has passed the request before it, as Linux's i915_request_started. */
+int i915_request_started(const struct i915_request *rq);
 
 /**
  * Wait for the request for `timeout_ns`, for ever when it is negative, as

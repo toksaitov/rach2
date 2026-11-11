@@ -1540,6 +1540,31 @@ static void row_fini(void)
           "fini: every scanout unpinned");
 }
 
+/* ---- RPS's waitboost and interactive mode, which the driver calls ---- */
+
+/* The requests' fences, i915_gem.c's, which no flip here waits on. */
+const struct dma_fence_ops i915_fence_ops = {0, 0, 0, 0};
+
+/** Whether the chip has begun `rq`; no request runs here, so only once
+ * it has signalled. */
+int i915_request_started(const struct i915_request *rq)
+{
+    return rq->fence.base.signaled;
+}
+
+/** The waitboost, RPS's, which no row here measures. */
+void i915_rps_boost(struct i915_request *rq)
+{
+    (void)rq;
+}
+
+/** A page flip pending or done, which RPS counts; no row here reads it. */
+void i915_rps_mark_interactive(struct drm_i915_private *i915, int on)
+{
+    (void)i915;
+    (void)on;
+}
+
 int main(void)
 {
     model_start("i915-display-test");

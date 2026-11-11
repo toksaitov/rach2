@@ -365,6 +365,39 @@ void i915_gem_object_put(struct drm_i915_gem_object *obj)
  * Waits
  */
 
+/** Boost the GT's clock for each request of `f`'s leaves that the chip has
+ * not begun. */
+static void fence_boost(struct dma_fence *f)
+{
+    uint32_t i, n = f ? dma_fence_count(f) : 0;
+
+    for (i = 0; i < n; i++) {
+        struct dma_fence *leaf = dma_fence_at(f, i);
+
+        if (leaf && leaf->ops == &i915_fence_ops &&
+            !i915_request_started((struct i915_request *)leaf)) {
+            i915_rps_boost((struct i915_request *)leaf);
+        }
+    }
+}
+
+/**
+ * Boost the GT's clock for every request of the object's reservation that
+ * the chip has not begun, its writes and with `all` its reads too, before
+ * a wait, as Linux's i915_gem_object_boost: all of them first, so that the
+ * boost does not hang on the order the wait meets them.
+ */
+static void object_boost(struct drm_i915_gem_object *obj, int all)
+{
+    struct dma_resv *r = obj->base.resv;
+    uint32_t i;
+
+    fence_boost(r->write);
+    for (i = 0; all && i < r->nreads; i++) {
+        fence_boost(r->reads[i]);
+    }
+}
+
 int32_t i915_gem_object_wait(struct drm_i915_gem_object *obj, int all, int64_t timeout_ns)
 {
     struct dma_fence *f = dma_resv_snapshot(obj->base.resv, all);
@@ -374,6 +407,7 @@ int32_t i915_gem_object_wait(struct drm_i915_gem_object *obj, int all, int64_t t
     if (!f) {
         return -ENOMEM;
     }
+    object_boost(obj, all);
     if (timeout_ns == 0) {
         err = dma_fence_is_signaled(f) ? 0 : -ETIME;
     } else {

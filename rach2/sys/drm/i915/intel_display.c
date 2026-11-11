@@ -407,13 +407,54 @@ static void scanout_rotate(struct intel_crtc *c, int slot, struct intel_scanout 
     c->shown_to[slot] = to;
 }
 
+/** Boost the request drawing `ps`'s framebuffer, its object's pending
+ * write, at the next vblank of `c`, plane `slot`, as Linux's
+ * intel_prepare_plane_fb; a flip with an in-fence is not boosted. */
+static void flip_boost(struct intel_crtc *c, int slot, const struct drm_plane_state *ps)
+{
+    struct drm_framebuffer *fb = ps->fb;
+    struct dma_fence *f;
+
+    if (ps->fence || fb_is_firmware(fb) || fb->obj[0]->funcs != &i915_gem_object_funcs) {
+        return;
+    }
+    f = fb->obj[0]->resv->write;
+    if (f && !dma_fence_is_signaled(f)) {
+        intel_crtc_boost_after_vblank(c, slot, f);
+    }
+}
+
+/**
+ * Hand the commit's interactive mark to a pipe of `pipes` whose flip is
+ * pending, which lets it go once the flip ends, as Linux's
+ * intel_cleanup_plane_fb after the flip; or let it go now, when the commit
+ * failed (`err`), waited for its flips, or has no event to wait for.
+ */
+static void interactive_handover(struct drm_i915_private *i915, uint32_t pipes, int32_t err)
+{
+    uint32_t flags = kirq_save();
+    int pipe;
+
+    for (pipe = 0; err == 0 && pipe < I915_NUM_PIPES; pipe++) {
+        struct intel_crtc *c = &i915->display.crtc[pipe];
+
+        if ((pipes & (1u << pipe)) && c->base.flip_pending && !c->rps_interactive) {
+            c->rps_interactive = 1;
+            kirq_restore(flags);
+            return;
+        }
+    }
+    kirq_restore(flags);
+    i915_rps_mark_interactive(i915, 0);
+}
+
 int32_t intel_atomic_commit(struct drm_device *dev, struct drm_atomic_state *state, int nonblock)
 {
     struct drm_i915_private *i915 = to_i915(dev);
     struct i915_vma *pinned[DRM_MAX_PLANES];
     struct drm_framebuffer *fbs[DRM_MAX_PLANES];
     struct drm_plane *planes[DRM_MAX_PLANES];
-    uint32_t from[DRM_MAX_PLANES];
+    uint32_t from[DRM_MAX_PLANES], pipes = 0;
     int32_t err = 0;
     int i, slot = 0;
 
@@ -430,11 +471,25 @@ int32_t intel_atomic_commit(struct drm_device *dev, struct drm_atomic_state *sta
             if (err == 0) {
                 fbs[i] = ps->fb;
                 drm_framebuffer_get(fbs[i]);
+                /* Linux's legacy cursor update neither marks nor boosts. */
+                if (c && !state->legacy_cursor_update) {
+                    pipes |= 1u << c->pipe;
+                    flip_boost(c, slot, ps);
+                }
             }
         }
     }
+    /* Page flips are interactive, as Linux's prepare_fb marks them: high
+     * power's shorter interval while the commit waits and its flip is
+     * pending. */
+    if (pipes) {
+        i915_rps_mark_interactive(i915, 1);
+    }
     if (err == 0) {
         err = drm_atomic_helper_commit(dev, state, nonblock);
+    }
+    if (pipes) {
+        interactive_handover(i915, pipes, err);
     }
     for (i = 0; i < DRM_MAX_PLANES; i++) {
         struct intel_crtc *c = planes[i] ? plane_slot(i915, planes[i], &slot) : NULL;

@@ -1507,6 +1507,20 @@ static void long_lri(void)
 }
 
 /** Run the request, submission and ring-model rows. */
+/* ---- RPS's waitboost and interactive mode, which the driver calls ---- */
+
+/** The waitboost, RPS's, which no row here measures. */
+void i915_rps_boost(struct i915_request *rq)
+{
+    (void)rq;
+}
+
+/** A request retires: no request here is boosted, so RPS counts nothing. */
+void i915_rps_retire(struct i915_request *rq)
+{
+    (void)rq;
+}
+
 int main(void)
 {
     uint32_t tl;
