@@ -37,6 +37,9 @@ wait; the holder is.
 .It hung task
 A thread in uninterruptible sleep, the state D of
 .Xr ps 1 ,
+other than one SIGKILL would end, as a
+.Xr vfork 2
+parent's wait for its child,
 whose switch count has not moved for
 .Va hung_task_timeout_secs
 seconds, 120 by default:
@@ -55,18 +58,28 @@ Each setting is a file of
 .Pa /proc/sys/kernel
 and a boot option of the same name, or
 .Ql sysctl.kernel.NAME= ;
-a write takes effect within a sample period, 2 x
+a write that changes
+.Pa watchdog ,
+.Pa soft_watchdog ,
+.Pa nmi_watchdog
+or
+.Pa watchdog_thresh
+restarts the detectors at each processor's next tick, and another takes
+effect within a sample period, 2 x
 .Va watchdog_thresh
 / 5 seconds.
 .Bl -tag -width "hung_task_check_interval_secs"
 .It Pa watchdog
-1 runs the soft and hard detectors, 0 stops both.
+1 runs the soft and hard detectors, 0 stops both; it reads 1 while either
+is on.
 .It Pa soft_watchdog
 1 runs the soft-lockup detector.
 .It Pa nmi_watchdog
-1 runs the hard-lockup detector; a write fails with
-.Er EACCES
-where it cannot run, with no counter and one processor.
+1 runs the hard-lockup detector.
+Where it cannot run, with no counter and one processor, the file is mode
+0444, an open for writing fails with
+.Er EACCES ,
+and it reads 0.
 .It Pa watchdog_thresh
 The hard-lockup threshold in seconds, 0 to 60, 10 by default; 0 stops
 both detectors.
@@ -86,7 +99,8 @@ detector.
 .It Pa hung_task_check_interval_secs
 Seconds between checks, 0 for the timeout.
 .It Pa hung_task_check_count
-The most threads a check reads.
+The most threads a check reads, 32768 on i686 and 4194304 on x86-64 by
+default.
 .It Pa hung_task_warnings
 The reports left, 10 by default; each counts it down, and -1 never stops
 them.

@@ -2,7 +2,8 @@
  * netconsole_hosttest.c: drive the kernel log's network console, netconsole.c,
  * on the host, with the Ethernet layer replaced by a recorder.
  *
- * host-deps:
+ * host-deps: rach2/sys/lib/kstd.c rach2/sys/lib/kstring.c
+ * host-deps: rach2/sys/lib/kctypes.c
  *
  * netconsole.c is compiled natively and driven through the same entry points
  * the kernel uses. This covers the cases the QEMU capture (`tests/run
@@ -47,12 +48,22 @@ static unsigned tx_max_depth; /* the most transmits under way at once */
 
 static void log_putc(char c);
 
-/** Discard a kernel log record; no row reads netconsole's own report. */
+/* When set, a kernel log record reaches netconsole as `klog` delivers one,
+   its subsystem and a newline standing for the whole record. */
+static int klog_feeds;
+
+/** Discard a kernel log record, or with `klog_feeds` give its subsystem and
+ * a newline to netconsole; no row reads netconsole's own report. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
-    (void)subsystem;
     (void)format;
+    if (klog_feeds) {
+        while (*subsystem) {
+            log_putc(*subsystem++);
+        }
+        log_putc('\n');
+    }
 }
 
 /* The interface a frame leaves by, which this model does not look
@@ -146,14 +157,50 @@ int k_panicking(void)
     return host_panicking;
 }
 
-/** Give no boot option: the carrier timeout keeps Linux's default. */
-int kcmdline_value(const char *key, char *out, unsigned int outlen)
+/* The values of `netpoll.carrier_timeout=` the boot line gives, in order;
+   none unless a row sets them. */
+static const char *host_carrier[4];
+static int host_ncarrier;
+
+/** Whether `key` is the one option the model's boot line has. */
+static int host_carrier_key(const char *key)
 {
-    (void)key;
+    const char *want = "netpoll.carrier_timeout";
+
+    while (*key && *key == *want) {
+        key++;
+        want++;
+    }
+    return *key == '\0' && *want == '\0';
+}
+
+/** Count the `key=` tokens of the model's boot line. */
+int kcmdline_count(const char *key)
+{
+    return host_carrier_key(key) ? host_ncarrier : 0;
+}
+
+/** Copy the `nth` value of `key=` into `out`, 0 when there is none or it
+ * does not fit, as the kernel's lookup does. */
+int kcmdline_value_nth(const char *key, int nth, char *out, unsigned int outlen)
+{
+    unsigned int i;
+
     if (outlen > 0) {
         out[0] = '\0';
     }
-    return 0;
+    if (!host_carrier_key(key) || nth < 0 || nth >= host_ncarrier) {
+        return 0;
+    }
+    for (i = 0; host_carrier[nth][i] != '\0'; i++) {
+        if (i + 1 >= outlen) {
+            out[0] = '\0';
+            return 0;
+        }
+        out[i] = host_carrier[nth][i];
+    }
+    out[i] = '\0';
+    return 1;
 }
 
 /** Take the network lock: count it and return 0 as the saved flags, since no
@@ -346,6 +393,9 @@ static void nc_reset(void)
     nc_lost = 0;
     nc_targets = 0;
     nc_setup_done = 0;
+    nc_attached = 0;
+    klog_feeds = 0;
+    host_ncarrier = 0;
     pool_used = 0;
     the_iface.ip = 0;
     host_ticks = 0;
@@ -674,10 +724,11 @@ static void target_rows(void)
     put_string("next\n");
     CHECK(frame_count > 3 && frame_type[0] == NETCONSOLE_ETHERTYPE && frame_type[1] == ETH_TYPE_IP,
           "the frames' line goes first, then the target's datagrams");
-    CHECK(datagram_is(1, "** 89 printk messages dropped **\n"),
-          "the target is told what it lost, as Linux's line");
+    CHECK(datagram_begins(1, "** 89 printk messages dropped **\nfff") &&
+              frame_len[1] == NC_IP4_HDR + NC_UDP_HDR + 33 + 64,
+          "the target is told what it lost, as Linux's line in its next record's datagram");
     CHECK(frame_len[2] == NC_IP4_HDR + NC_UDP_HDR + 64 && nc_targets->lost == 0 &&
-              nc_targets->datagrams == 1 + 511 + 1,
+              nc_targets->datagrams == 511 + 1,
           "and is then sent every line it kept, and the new one");
 
     nc_reset();
@@ -701,10 +752,73 @@ static void target_rows(void)
           "a new target is sent the lines before the gap, and counts it");
     frame_count = 0;
     put_string("\n");
-    CHECK(frame_count == 2 && datagram_is(0, "** 2 printk messages dropped **\n") &&
-              datagram_is(1, "tail\n"),
-          "and is told of it before the next line");
+    CHECK(frame_count == 1 && datagram_is(0, "** 2 printk messages dropped **\ntail\n"),
+          "and is told of it in the next line's datagram");
     CHECK(lock_depth == 0 && !lock_ever_negative, "the target rows released every lock");
+}
+
+/**
+ * Check that the records `netconsole_setup` logs before it attaches its
+ * targets, which reach the ring as `klog` delivers them, keep every run of
+ * drops counted before setup for those targets.
+ */
+static void setup_gap_row(void)
+{
+    static char alone[] = "@/,@10.0.0.1/";
+
+    /* 511 lines fill all but 63 places, the 512th is taken back out at its
+       newline, and "x" then notes that run before setup. The next line is
+       taken back out at its 62nd character, which leaves a run the record
+       setup logs notes during setup, before the targets are attached. */
+    nc_reset();
+    put_lines(512);
+    put_string("x\n");
+    put_lines(1);
+    CHECK(nc_gap_end == 1 && nc_lost == 1, "two runs of drops are counted before setup");
+    klog_feeds = 1;
+    (void)netconsole_setup(alone, 0);
+    klog_feeds = 0;
+    CHECK(nc_targets && nc_gap_end == 2 && nc_gap_first == 0 && nc_targets->gap == 0,
+          "a record setup logs keeps the runs counted before it for the new target");
+    the_iface.ip = 0x0A000002u;
+    put_string("y\n");
+    CHECK(nc_targets && nc_targets->gap == 2 && nc_targets->lost == 0 &&
+              nc_targets->datagrams == 511 + 1 + 2 + 1,
+          "and the target counts both runs as it passes them");
+    CHECK(lock_depth == 0 && !lock_ever_negative, "the setup row released every lock");
+}
+
+/**
+ * Check that `netpoll.carrier_timeout=` is read as Linux reads a uint module
+ * parameter: kstrtouint with base 0, each occurrence in order, a value it
+ * refuses changing nothing.
+ */
+static void carrier_option_rows(void)
+{
+    static const struct {
+        const char *values[2];
+        int n;
+        unsigned seconds;
+        const char *what;
+    } rows[] = {
+        {{"010", 0}, 1, 8, "a leading 0 is octal"},
+        {{"0x10", "bad"}, 2, 16, "0x is hexadecimal, and a later bad value changes nothing"},
+        {{"x", "+3"}, 2, 3, "a bad first value does not hide a valid later one"},
+        {{"7", "4294967296"}, 2, 7, "a value past 32 bits is refused"},
+        {{"5", "2"}, 2, 2, "the last valid value counts"},
+        {{"-1", 0}, 1, 4, "a negative value leaves Linux's default"},
+    };
+    unsigned i;
+
+    for (i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
+        nc_reset();
+        host_carrier[0] = rows[i].values[0];
+        host_carrier[1] = rows[i].values[1];
+        host_ncarrier = rows[i].n;
+        netconsole_enable();
+        CHECK(nc_carrier_ticks == (uint64_t)rows[i].seconds * TICK_HZ, rows[i].what);
+    }
+    nc_reset();
 }
 
 /** Check that a zero random draw does not become a zero boot id. */
@@ -756,6 +870,8 @@ int main(void)
 
     link_rows();
     target_rows();
+    setup_gap_row();
+    carrier_option_rows();
     boot_id_row();
 
     nc_reset();

@@ -714,15 +714,19 @@ static int send_connect_ready(void *arg)
 
 /**
  * What a read of the stream socket `sock`, which has no block, answers:
- * the error a shutdown in SYN_SENT recorded, ECONNRESET, once, and then
- * -ENOTCONN, as Linux's tcp_recvmsg gives sk_err before TCP_CLOSE's
- * ENOTCONN (net/ipv4/tcp.c:2687-2700).
+ * the error a shutdown in SYN_SENT recorded, ECONNRESET, once, then 0, the
+ * end of input, when the socket was shut for receiving, and otherwise
+ * -ENOTCONN, as Linux's tcp_recvmsg tests sk_err, then RCV_SHUTDOWN, then
+ * TCP_CLOSE (net/ipv4/tcp.c:2687-2700 in 6.12.115).
  */
 static int tcp_unconnected_error(struct socket *sock)
 {
     int err = socket_dgram_error(sock);
 
-    return err != 0 ? err : -ENOTCONN;
+    if (err != 0) {
+        return err;
+    }
+    return (sock->shutdown & SOCK_RCV_SHUTDOWN) ? 0 : -ENOTCONN;
 }
 
 /**
@@ -1247,11 +1251,12 @@ static short socket_dgram_poll(struct socket *sock, short events)
  *
  * A listener is ready for input when a connection waits to be accepted. A
  * stream with no block, never connected or disconnected by a shutdown in
- * SYN_SENT, is Linux's TCP_CLOSE: POLLHUP and POLLOUT, and POLLERR while
- * an error waits. A connected stream answers as Linux's tcp_poll does
- * (net/ipv4/tcp.c:559-596), with the halves shut counted as its
- * sk_shutdown counts them: the receiving half by SHUT_RD or the peer's
- * FIN, both by a closed or reset connection. A receiving half shut adds
+ * SYN_SENT, is Linux's TCP_CLOSE: POLLHUP and POLLOUT, POLLIN and
+ * POLLRDHUP once shut for receiving, and POLLERR while an error waits, as
+ * tcp_poll judges TCP_CLOSE. A connected stream answers as Linux's tcp_poll
+ * does (net/ipv4/tcp.c:559-596 in 6.12.115), with the halves shut counted
+ * as its sk_shutdown counts them: the receiving half by SHUT_RD or the
+ * peer's FIN, both by a closed or reset connection. A receiving half shut adds
  * POLLIN and POLLRDHUP, since a receive answers at once, and both halves
  * shut, or a closed connection, add POLLHUP. Bytes buffered add POLLIN. A
  * sending half shut adds POLLOUT past the handshake, since a send fails at
@@ -1288,6 +1293,9 @@ short socket_poll(struct socket *sock, short events, struct wait_queue **wq)
     }
     if (!sock->tcb) {
         revents = (short)(POLLHUP | (events & POLLOUT));
+        if (sock->shutdown & SOCK_RCV_SHUTDOWN) {
+            revents |= (short)(events & (POLLIN | POLLRDHUP));
+        }
         if (sock->so_error != 0) {
             revents |= POLLERR;
         }

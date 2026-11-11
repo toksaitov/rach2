@@ -434,8 +434,9 @@ struct lockup_kind {
     const char *reason;
 };
 
-/* The hard lockup is held longest, since without a counter the buddy check
- * takes three checks, three sample periods apart, to report it. */
+/* Each lockup is held 30 seconds, long enough for the buddy check, which
+ * without a counter takes three checks, three sample periods apart, to
+ * report a hard lockup. */
 static const struct lockup_kind lockup_kinds[] = {
     {"softlockup", "lockup soft 30\r", "watchdog: BUG: soft lockup - CPU#",
      "panic: stopped: softlockup: hung tasks"},

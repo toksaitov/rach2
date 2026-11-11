@@ -59,6 +59,9 @@ int32_t drm_handle_insert(struct drm_handles *t, void *object, uint32_t *id)
     h->id = want;
     h->object = object;
     h->prime = NULL;
+    h->prime_next = NULL;
+    h->file = NULL;
+    h->obj_next = NULL;
     t->slot[want] = h;
     t->free = want + 1u;
     *id = want;
@@ -77,15 +80,95 @@ void *drm_handle_find(const struct drm_handles *t, uint32_t id)
     return h ? h->object : NULL;
 }
 
+/* The buckets the PRIME hash of a table starts with, and the most it grows
+ * to; it doubles when it holds twice as many caches as buckets. */
+#define PRIME_BUCKETS_FIRST 16u
+#define PRIME_BUCKETS_MAX   0x10000u
+
+/** The bucket of `buf` among `buckets`, a power of two. */
+static uint32_t prime_bucket(const struct dma_buf *buf, uint32_t buckets)
+{
+    uintptr_t k = (uintptr_t)buf >> 4;
+
+    return (uint32_t)(k ^ (k >> 8) ^ (k >> 16)) & (buckets - 1u);
+}
+
+/** Double `t`'s PRIME buckets, keeping them when the heap has no room. */
+static void prime_grow(struct drm_handles *t)
+{
+    uint32_t n = t->prime_buckets * 2u, i, k;
+    struct drm_handle **b, *h, *next;
+
+    b = (struct drm_handle **)kzalloc(n * sizeof(*b));
+    if (!b) {
+        return;
+    }
+    for (i = 0; i < t->prime_buckets; i++) {
+        for (h = t->prime[i]; h; h = next) {
+            next = h->prime_next;
+            k = prime_bucket(h->prime, n);
+            h->prime_next = b[k];
+            b[k] = h;
+        }
+    }
+    kfree(t->prime);
+    t->prime = b;
+    t->prime_buckets = n;
+}
+
+int32_t drm_handle_set_prime(struct drm_handles *t, struct drm_handle *h, struct dma_buf *buf)
+{
+    struct drm_handle **b;
+
+    if (!t->prime) {
+        t->prime = (struct drm_handle **)kzalloc(PRIME_BUCKETS_FIRST * sizeof(*t->prime));
+        if (!t->prime) {
+            return -ENOMEM;
+        }
+        t->prime_buckets = PRIME_BUCKETS_FIRST;
+    } else if (t->prime_count >= 2u * t->prime_buckets && t->prime_buckets < PRIME_BUCKETS_MAX) {
+        prime_grow(t);
+    }
+    b = &t->prime[prime_bucket(buf, t->prime_buckets)];
+    h->prime = buf;
+    h->prime_next = *b;
+    *b = h;
+    t->prime_count++;
+    return 0;
+}
+
+uint32_t drm_handle_prime_find(const struct drm_handles *t, const struct dma_buf *buf)
+{
+    const struct drm_handle *h;
+    uint32_t id = 0;
+
+    if (!t->prime) {
+        return 0;
+    }
+    for (h = t->prime[prime_bucket(buf, t->prime_buckets)]; h; h = h->prime_next) {
+        if (h->prime == buf && (!id || h->id < id)) {
+            id = h->id;
+        }
+    }
+    return id;
+}
+
 void *drm_handle_remove(struct drm_handles *t, uint32_t id)
 {
-    struct drm_handle *h = drm_handle_get(t, id);
+    struct drm_handle *h = drm_handle_get(t, id), **p;
     void *object;
 
     if (!h || id == 0) {
         return NULL;
     }
     object = h->object;
+    if (h->prime) {
+        for (p = &t->prime[prime_bucket(h->prime, t->prime_buckets)]; *p != h;
+             p = &(*p)->prime_next) {
+        }
+        *p = h->prime_next;
+        t->prime_count--;
+    }
     t->slot[id] = NULL;
     if (id < t->free) {
         t->free = id;
@@ -111,6 +194,10 @@ void drm_handles_fini(struct drm_handles *t)
     t->slot = NULL;
     t->cap = 0;
     t->free = 0;
+    kfree(t->prime);
+    t->prime = NULL;
+    t->prime_buckets = 0;
+    t->prime_count = 0;
 }
 
 /* ------------------------------------------------------------------------
@@ -180,10 +267,15 @@ void drm_gem_object_put(struct drm_gem_object *obj)
 int32_t drm_gem_handle_create(struct drm_file *file, struct drm_gem_object *obj, uint32_t *handle)
 {
     int32_t rc = drm_handle_insert(&file->objects, obj, handle);
+    struct drm_handle *h;
 
     if (rc != 0) {
         return rc;
     }
+    h = drm_handle_get(&file->objects, *handle);
+    h->file = file;
+    h->obj_next = obj->handles;
+    obj->handles = h;
     obj->handle_count++;
     drm_gem_object_get(obj);
     rc = obj->funcs && obj->funcs->open ? obj->funcs->open(obj, file) : 0;
@@ -213,11 +305,19 @@ static void handle_put(struct drm_gem_object *obj)
 
 int32_t drm_gem_handle_delete(struct drm_file *file, uint32_t handle)
 {
-    struct drm_gem_object *obj = (struct drm_gem_object *)drm_handle_remove(&file->objects, handle);
+    struct drm_handle *h = handle ? drm_handle_get(&file->objects, handle) : NULL, **p;
+    struct drm_gem_object *obj;
 
-    if (!obj) {
+    if (!h) {
         return -EINVAL;
     }
+    obj = (struct drm_gem_object *)h->object;
+    for (p = &obj->handles; *p && *p != h; p = &(*p)->obj_next) {
+    }
+    if (*p) {
+        *p = h->obj_next;
+    }
+    drm_handle_remove(&file->objects, handle);
     handle_put(obj);
     return 0;
 }
@@ -332,13 +432,14 @@ void drm_mmap_node_remove(struct drm_mmap_node *node)
 }
 
 /** Whether `file` has a handle to `obj`, which Linux's mmap asks
- * (drm_vma_node_is_allowed). */
+ * (drm_vma_node_is_allowed): a walk over the object's handles, not the
+ * file's. */
 static int file_has_handle(const struct drm_file *file, const struct drm_gem_object *obj)
 {
-    uint32_t i;
+    const struct drm_handle *h;
 
-    for (i = drm_handle_next(&file->objects, 1); i; i = drm_handle_next(&file->objects, i + 1)) {
-        if (drm_handle_get(&file->objects, i)->object == obj) {
+    for (h = obj->handles; h; h = h->obj_next) {
+        if (h->file == file) {
             return 1;
         }
     }

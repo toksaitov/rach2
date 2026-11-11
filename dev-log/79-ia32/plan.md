@@ -456,3 +456,12 @@ The Codex and Fable reviews of 79-10's fixes at `838212926` raised the findings 
 ### Documents and comments
 
 The comments of `synth_getdents`, `dirent_put`, `ksys_sync_file_range`'s declaration, `ia32_msghdr_put`, `wow64probe`'s `on_alarm` and `vm_hosttest`'s `main` say what the code does now. The read page lists RWF_APPEND among the flags both `preadv2` forms take and ignore; the read, write, sync and nanosleep pages and the call lists give the i386 numbers of the new calls and the new orders and remainders.
+
+## Review fixes, 79-45
+
+Round 80's review of `c4c58e38b..7c707842d` (79-44, 79-43, 78-32 and 80-79) found 79-44's drop of a kernel-mode debug exception complete and raised the low findings below. Task 79-45 fixes them. `ptracemusl` compiles on both architectures; no test or suite ran in this task. The fixes still need both reviews and the checkpoint's proof.
+
+* `signal_pending`'s declaration in `process.h`, the x86 Readme and `isr_handler.s`'s summary of `debug_entry` said a kernel debug exception is deferred; they now say it is dropped. The architectures' Readme no longer says `ptracemusl` covers the exception after `MOV SS`, which it has no row for.
+* When the enables are not loaded again after the kernel's hit, `watched_copy`'s child exits untrapped. `ptracemusl` now reports `copy-watch-no-stop` held and fails `copy-watch-user-trap`, where it failed `copy-watch-no-stop`.
+* `release_resume`'s four rows of the kernel slots and its row of the build's bootctl fetch (`tests/cases/host/flow_release.c`, from 80-79) test the `release.sh` of master's `e30144148` and `c05b79d3c`, which the milestone branch does not have. The case copies the tree's own `release.sh`, so those rows fail on the branch and hold only after the end's rebase onto master; a failure of them before that rebase is not a fault. The test stays on the branch, since master's copy of `flow_release.c` lacks the branch's other changes to the fixture.
+* The `DISK_SCENARIOS` rule in the Makefile has its space after the target list again.

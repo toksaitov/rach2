@@ -11,6 +11,7 @@
 #include "lib/kstd.h"
 #include "lib/kstring.h"
 #include "network/netconsole.h"
+#include "platform.h"
 #include "power.h"
 #include "proc/percpu.h"
 #include "proc/process.h"
@@ -221,6 +222,13 @@ void k_panic_note_address(uintptr_t address)
  * NMI that no masking keeps out can panic the owner again between any two of
  * its steps: the nested panic finds itself the owner, and stops the others
  * if the first has not yet.
+ *
+ * The watchdog's counter is stopped first, on the owner as on any other
+ * that panics, as Linux's `native_stop_other_cpus` masks the caller's
+ * counter entry (arch/x86/kernel/smp.c:232-235): the panicked processor
+ * takes no ticks, and the counter's next NMI would report it as a hard
+ * lockup, and with `nmi_watchdog=panic` panic it again under another
+ * reason.
  */
 void k_panic_begin(void)
 {
@@ -228,6 +236,7 @@ void k_panic_begin(void)
     unsigned int owner;
 
     arch_irq_disable();
+    platform_pmu_disable();
     if (k_panic_hook) {
         k_panic_hook();
     }

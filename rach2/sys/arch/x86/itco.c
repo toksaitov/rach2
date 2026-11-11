@@ -307,6 +307,7 @@ static int itco_status(struct itco *t)
 #include "../../fs/file.h"
 #include "../../mm/paging.h"
 #include "../../mm/usercopy.h"
+#include "../../boot.h"
 #include "../../cmdline.h"
 #include "../../klog.h"
 #include "../../lib/kirq.h"
@@ -488,13 +489,15 @@ static struct devfs_node itco_node = {"watchdog", 10, 130, 0600, &itco_ops, itco
 /**
  * The number option `key`: `dflt` when the line lacks it, else the last of
  * its values that is a number in [`lo`, `hi`], with a record for each that
- * is not. Linux's parse_args applies each occurrence in order (Linux 6.12,
- * kernel/params.c:117 to 158 and 161 to 212), and one its parser refuses
- * leaves the value as it was.
+ * is not and for each bare `key`, which has no value. Linux's parse_args
+ * applies each occurrence in order (Linux 6.12, kernel/params.c:117 to 158
+ * and 161 to 212), refuses a bare one for a parameter that takes a value
+ * (:136-138) and logs each refusal (:203-205), and one refused leaves the
+ * value as it was.
  */
 static long itco_option(const char *key, long dflt, long lo, long hi)
 {
-    char text[24];
+    char text[BOOT_CMDLINE_MAX];
     long long v;
     long value = dflt;
     int i, n = kcmdline_count(key);
@@ -507,7 +510,29 @@ static long itco_option(const char *key, long dflt, long lo, long hi)
         }
         value = (long)v;
     }
+    for (i = kcmdline_bare_count(key); i > 0; i--) {
+        klog(KLOG_WARN, "watchdog", "refused: %s", key);
+    }
     return value;
+}
+
+/**
+ * The boolean option `key`, read as `kcmdline_param_bool` reads it, a bare
+ * `key` true, with a record for each value that is no boolean, as Linux's
+ * parse_args logs a value param_set_bool refuses (Linux 6.12,
+ * kernel/params.c:203-205, 312-319), which leaves the option as it was.
+ */
+static int itco_bool(const char *key, int dflt)
+{
+    char text[BOOT_CMDLINE_MAX];
+    int i, v, n = kcmdline_count(key);
+
+    for (i = 0; i < n; i++) {
+        if (!kcmdline_value_nth(key, i, text, sizeof(text)) || kcmdline_parse_bool(text, &v) != 0) {
+            klog(KLOG_WARN, "watchdog", "refused: %s=%s", key, text);
+        }
+    }
+    return kcmdline_param_bool(key, dflt);
 }
 
 /**
@@ -542,8 +567,8 @@ static void itco_options(int *heartbeat, int *arm)
     *heartbeat =
         (int)itco_option("iTCO_wdt.heartbeat", ITCO_DEFAULT_TIMEOUT, -0x7fffffffL, 0x7fffffffL);
     *arm = kcmdline_has("rach2.itco.arm");
-    watchdog.nowayout = kcmdline_param_bool("iTCO_wdt.nowayout", 0);
-    watchdog.boot_feed = kcmdline_param_bool("watchdog.handle_boot_enabled", 1);
+    watchdog.nowayout = itco_bool("iTCO_wdt.nowayout", 0);
+    watchdog.boot_feed = itco_bool("watchdog.handle_boot_enabled", 1);
     watchdog.hz = TICK_HZ;
     watchdog.open_limited = open_timeout != 0;
     watchdog.open_left = (uint32_t)open_timeout * TICK_HZ;

@@ -1,9 +1,10 @@
 /**
  * Host test of system calls of syscall.c and syscall_net.c: a connect whose
  * handshake ended, a datagram a full queue lost, a stream's sendmsg and the
- * SIGPIPE it posts, the clocks past 2^32 ticks and their resolutions, and
- * the sleeps and the interval timer, with their deadlines, masks,
- * remainders, clamps and checks of arguments.
+ * SIGPIPE it posts, the shutdown of a raw and a packet socket, the clocks
+ * past 2^32 ticks and their resolutions, and the sleeps and the interval
+ * timer, with their deadlines, masks, remainders, clamps and checks of
+ * arguments.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/network/socket/address.c rach2/sys/network/ip6/addr6.c
@@ -172,6 +173,7 @@ static int halts, unmasked_halts, blocks;
 static uint64_t first_blocked_until, wakeup_at_unmask;
 static int unarmed_unmasks, switch_back, tick_at_save, tick_after_yield, halt_without_tick;
 static int sibling_runs;
+static int wakes_all; /* the calls of wq_wake_all */
 
 #define CHECK(c, detail)                                    \
     do {                                                    \
@@ -475,6 +477,22 @@ int wq_wait_event(wait_queue_t *q, int (*ready)(void *), void *arg)
     control.state = completion;
     CHECK(ready(arg), "completed handshake wakes caller");
     return ready(arg) ? 0 : -EINTR;
+}
+
+/** Count a wake of every waiter, which a shutdown makes. */
+void wq_wake_all(wait_queue_t *wq)
+{
+    (void)wq;
+    wakes_all++;
+}
+
+/** 0: no row shuts down a stream. */
+int tcp_shutdown(struct socket *s, int rd, int wr)
+{
+    (void)s;
+    (void)rd;
+    (void)wr;
+    return 0;
 }
 
 /**
@@ -1737,6 +1755,43 @@ static void stream_sendmsg(void)
     entry.sock = NULL;
 }
 
+/**
+ * shutdown(2) of a raw IPv4 or IPv6 socket is Linux's inet_shutdown, as
+ * inet_sockraw_ops and inet6_sockraw_ops name it: the halves are taken,
+ * ENOTCONN with no peer and 0 with one, and EINVAL for another `how`; a
+ * packet socket's sock_no_shutdown is EOPNOTSUPP and takes nothing.
+ */
+static void raw_shutdown(void)
+{
+    k_memset(&sock, 0, sizeof(sock));
+    sock.type = SOCK_RAW;
+    sock.family = AF_INET;
+    sock.protocol = 1;
+    entry.type = FD_TYPE_SOCKET;
+    entry.sock = &sock;
+    wakes_all = 0;
+    CHECK(do_shutdown(3, SHUT_RD) == -ENOTCONN && sock.shutdown == SOCK_RCV_SHUTDOWN &&
+              wakes_all == 1,
+          "a raw socket with no peer takes SHUT_RD, wakes its waiters and is ENOTCONN");
+    sock.connected = 1;
+    CHECK(do_shutdown(3, SHUT_WR) == 0 && sock.shutdown == (SOCK_RCV_SHUTDOWN | SOCK_SEND_SHUTDOWN),
+          "and one with a peer takes SHUT_WR and succeeds");
+    CHECK(do_shutdown(3, 3) == -EINVAL, "and another how is EINVAL");
+    k_memset(&sock, 0, sizeof(sock));
+    sock.type = SOCK_RAW;
+    sock.family = AF_INET6;
+    sock.protocol = 58;
+    CHECK(do_shutdown(3, SHUT_RDWR) == -ENOTCONN &&
+              sock.shutdown == (SOCK_RCV_SHUTDOWN | SOCK_SEND_SHUTDOWN),
+          "a raw IPv6 socket with no peer takes both halves and is ENOTCONN");
+    k_memset(&sock, 0, sizeof(sock));
+    sock.type = SOCK_DGRAM;
+    sock.family = AF_PACKET;
+    CHECK(do_shutdown(3, SHUT_RD) == -EOPNOTSUPP && sock.shutdown == 0,
+          "a packet socket is EOPNOTSUPP and takes nothing");
+    entry.sock = NULL;
+}
+
 int main(void)
 {
     proc.tg = &group;
@@ -1754,9 +1809,10 @@ int main(void)
     sleep_held_clock();
     timer_first_expiry();
     stream_sendmsg();
+    raw_shutdown();
     if (failures)
         return 1;
-    printf("syscall-test: pass: connect, datagram, sendmsg, clocks, sleeps and timer\n");
+    printf("syscall-test: pass: connect, datagram, sendmsg, shutdown, clocks, sleeps and timer\n");
     return 0;
 }
 

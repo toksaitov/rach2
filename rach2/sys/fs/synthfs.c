@@ -11,6 +11,7 @@
 #include "sysfs.h"
 #include "devtree.h"
 #include "../dmi.h"
+#include "../watchdog.h"
 
 /* A path component as a (pointer, length) slice; the path is not modified. */
 struct comp {
@@ -374,7 +375,8 @@ int synth_sys_writable(int entry)
            entry == SYNTH_SYS_RANDOMIZE_VA_SPACE || entry == SYNTH_SYS_MAX_MNT_NAMESPACES ||
            (entry >= SYNTH_SYS_PIPE_MAX_SIZE && entry <= SYNTH_SYS_PIPE_USER_PAGES_SOFT) ||
            entry == SYNTH_SYS_PANIC || entry == SYNTH_SYS_PANIC_ON_OOPS ||
-           (entry >= SYNTH_SYS_WATCHDOG && entry <= SYNTH_SYS_HUNG_TASK_WARNINGS) ||
+           (entry >= SYNTH_SYS_WATCHDOG && entry <= SYNTH_SYS_HUNG_TASK_WARNINGS &&
+            (entry != SYNTH_SYS_NMI_WATCHDOG || watchdog_hardlockup_available())) ||
            (entry >= SYNTH_SYS_TCP_KEEPALIVE_TIME && entry <= SYNTH_SYS_TCP_RETRIES2);
 }
 

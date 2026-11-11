@@ -949,6 +949,8 @@ $(LIFECYCLE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 	@mkdir -p $(@D)
 	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Iutils
+# The selfbuild scenario pads the kernel to the slot utils/bootslot.h sets.
+build/tests/cases/machine/selfbuild_scenario: utils/bootslot.h
 $(DISK_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
                    tests/cases/machine/fileio.c tests/cases/machine/fileio.h \
                    tools/image/host_io.h \

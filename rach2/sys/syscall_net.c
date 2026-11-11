@@ -1916,14 +1916,14 @@ static int32_t do_listen(int fd, int backlog)
  * The descriptor is reserved before the connection is dequeued, under
  * `net_lock` with the listener checked again, so a sharer that took the
  * connection or stopped the listener meanwhile sends the call back to wait
- * or fail, and a caller
- * with none free leaves it queued, and gets its socket only after the
- * address is copied out: the copy can sleep, and a thread sharing the table
- * must find nothing it could use or close. A copy that fails frees the slot
- * and the connection, and so does an address with no length pointer, which
- * is EFAULT, as in Linux. The address is truncated to the caller's declared
- * length (`copy_sockaddr_to_user`). The queued socket has the reference it
- * was queued with (`socket_tcp_accept`), which the new descriptor takes over.
+ * or fail, and a caller with none free leaves it queued, and gets its
+ * socket only after the address is copied out: the copy can sleep, and a
+ * thread sharing the table must find nothing it could use or close. A copy
+ * that fails frees the slot and the connection, and so does an address
+ * with no length pointer, which is EFAULT, as in Linux. The address is
+ * truncated to the caller's declared length (`copy_sockaddr_to_user`). The
+ * queued socket has the reference it was queued with (`socket_tcp_accept`),
+ * which the new descriptor takes over.
  */
 static int32_t do_accept(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr, uint32_t flags)
 {
@@ -2227,13 +2227,16 @@ static int32_t do_getpeername(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr)
  * waiting, and poll reports POLLIN and POLLRDHUP; data past rcv_nxt once
  * this side's FIN has gone ends the connection with a reset. SHUT_RDWR does
  * both. The socket keeps its connection until its close. A connection still
- * in SYN_SENT is disconnected and records ECONNRESET, and a listener shut
- * for receiving stops listening. A UDP or ICMP datagram socket takes the
- * flags, which end a blocking receive with 0 and show in poll, and the call
- * is ENOTCONN when the socket has no peer, as Linux's TCP_CLOSE case
- * (net/ipv4/af_inet.c:915-924 in 6.12.115). A packet or netlink socket is
- * EOPNOTSUPP, as their sock_no_shutdown answers. Returns 0, -EINVAL for
- * another `how`, -ENOTCONN or -EOPNOTSUPP.
+ * in SYN_SENT is disconnected and records ECONNRESET, a listener shut for
+ * receiving stops listening, and a stream with no block takes the flags and
+ * is ENOTCONN. A UDP socket and a raw IPv4 or IPv6 socket, ICMP
+ * datagram sockets among them, take the flags, which end a blocking receive
+ * with 0 and show in poll, and the call is ENOTCONN when the socket has no
+ * peer, as Linux's TCP_CLOSE case (net/ipv4/af_inet.c:915-924 in 6.12.115),
+ * since inet_sockraw_ops and inet6_sockraw_ops shut down with inet_shutdown
+ * (net/ipv4/af_inet.c:1132, net/ipv6/raw.c:1288). A packet or netlink
+ * socket is EOPNOTSUPP, as their sock_no_shutdown answers. Returns 0,
+ * -EINVAL for another `how`, -ENOTCONN or -EOPNOTSUPP.
  *
  * Every waiter is woken to judge the socket again, after a failure too, as
  * Linux calls sk_state_change whatever the outcome: a sharer asleep in
@@ -2249,7 +2252,7 @@ static int32_t do_shutdown(int fd, int how)
         return not_a_socket(entry);
     }
     sock = entry->sock;
-    if (sock->type == SOCK_RAW || sock->family == AF_PACKET || sock->family == AF_NETLINK) {
+    if (sock->family == AF_PACKET || sock->family == AF_NETLINK) {
         return -EOPNOTSUPP;
     }
     if (how < SHUT_RD || how > SHUT_RDWR) {

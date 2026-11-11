@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd November 11, 2026
 .Dt ACCEPT 2
 .Os
 .Sh NAME
@@ -193,9 +193,9 @@ is null.
 A signal interrupted the wait.
 .It Er EINVAL
 The socket is a TCP datagram socket, or a stream or sequenced-packet
-socket that is not listening, a TCP listener stopped by
+socket that is not listening, as is a TCP listener that
 .Xr shutdown 2
-while the call waited among them; an
+stopped while the call waited; an
 .Dv AF_UNIX
 listener shut down for reading has no connection queued; or
 .Fa flags

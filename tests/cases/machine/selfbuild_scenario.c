@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "bootslot.h"
 #include "lifecycle.h"
 
 /* The root's partition on the ext2 disk: 96 MiB at LBA 2048. */
@@ -36,8 +37,8 @@
 #define KERNEL_FLOOR 200000L
 
 /* The size of a kernel slot of the boot partition of mkdisk_grub.sh, to
- * which the kernel is padded. */
-#define SLOT_BYTES 4194304L
+ * which the kernel is padded: BOOTSLOT_SLOT_BYTES, the slot's one home. */
+#define SLOT_BYTES ((long)BOOTSLOT_SLOT_BYTES)
 
 /* The most probes the counter witness `probe` counts in one attempt. */
 #define PROBE_LIMIT 256

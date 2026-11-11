@@ -73,8 +73,19 @@ void watchdog_sched(void);
  * overflow, which runs the hard-lockup check, or the stop of a panic that
  * the interprocessor interrupt did not reach (`smp_stop_others`), which
  * `smp_stop_nmi` takes and does not return from. 1 when the NMI was the
- * watchdog's, 0 for one of another source, which the caller reports as a
- * fault of the machine.
+ * watchdog's or came late for it, 0 for one of another source, which the
+ * caller reports as a fault of the machine.
+ *
+ * The processor latches one NMI while it handles another. When an NMI
+ * handles two sources, a backtrace request and the counter's overflow, the
+ * second may have latched one of its own, which then finds nothing to do;
+ * so an NMI that finds nothing, back to back with one that handled more
+ * than one source at the same program counter, is claimed, as Linux's
+ * `default_do_nmi` swallows it (arch/x86/kernel/nmi.c:404-405, 472-475).
+ * One the counter raised just before it was armed again or stopped, or
+ * that AMD's counter raised late after an overflow it handled, finds
+ * nothing either, and is claimed within the counter's window
+ * (`platform_pmu_late`).
  */
 int watchdog_nmi(isr_params_t *params);
 
@@ -90,6 +101,19 @@ void touch_nmi_watchdog(void);
 /** Whether the hard-lockup detector can run here: a counter that raises an
  * NMI, or the buddy check, which needs two processors. */
 int watchdog_hardlockup_available(void);
+
+/** A write changed `watchdog`, `soft_watchdog`, `nmi_watchdog` or
+ * `watchdog_thresh`: each processor stops its detectors and starts them
+ * again with the new settings at its next tick, or its next sample period
+ * in a wait, as Linux's `proc_watchdog_update` does. */
+void watchdog_reconfigure(void);
+
+/** The value a read of /proc/sys/kernel/watchdog (`which` 0),
+ * soft_watchdog (1) or nmi_watchdog (2) gives: 1 when a detector it names
+ * is on by the switches, whatever the threshold, as Linux reads its
+ * `watchdog_enabled` (kernel/watchdog.c:980-985), so that nmi_watchdog
+ * reads 0 where the hard detector cannot run. */
+int watchdog_sysctl_value(int which);
 
 /** A /proc/sys/kernel file of the hung-task detector was written: wake
  * `khungtaskd` to read its timeout and interval again, as Linux's

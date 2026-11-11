@@ -167,7 +167,10 @@ int platform_pmu_probe(void);
  */
 void platform_pmu_enable(uint64_t cycles);
 
-/** Stop this processor's counter and mask its APIC entry. */
+/** Stop this processor's counter and mask its APIC entry, as Linux's
+ * `clear_local_APIC` masks APIC_LVTPC; nothing when it is not running.
+ * Called with interrupts off, by the detector, at a panic and on each
+ * processor a stop halts. */
 void platform_pmu_disable(void);
 
 /**
@@ -177,6 +180,14 @@ void platform_pmu_disable(void);
  * part of a wide one did.
  */
 int platform_pmu_overflow(int *due);
+
+/**
+ * In the NMI handler, for an NMI no source claimed: 1 while this
+ * processor's counter may still raise one late, for 100 ms of TSC after it
+ * was armed or stopped and, on AMD, after an overflow it handled, which the
+ * handler then claims; 0 otherwise, and always without a counter.
+ */
+int platform_pmu_late(void);
 
 /** The processor's clock in cycles a second, as Linux's `cpu_khz` gives it
  * times 1000: the TSC's measured rate, which on Intel's processors since

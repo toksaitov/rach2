@@ -17,6 +17,16 @@ void spin_lock(struct spinlock *lock)
     lock->locked = 1;
 }
 
+/** Take `lock` when it is free: 1, or 0 when it is held. */
+int spin_trylock(struct spinlock *lock)
+{
+    if (lock->locked) {
+        return 0;
+    }
+    lock->locked = 1;
+    return 1;
+}
+
 /** Release `lock`. */
 void spin_unlock(struct spinlock *lock)
 {

@@ -30,6 +30,14 @@
 #include "../i686/tss.h"
 #endif
 
+/* ioctl's number in the table of the call in `p`: i386's 54 for a compat
+ * call on x86-64, whose names ../x86_64/ia32_sysnr.h would redefine. */
+#if defined(__x86_64__) && RACH2_IA32
+#define CALL_IOCTL_NR(p) (SC_COMPAT(p) ? 54u : (uint32_t)SYS_IOCTL)
+#else
+#define CALL_IOCTL_NR(p) ((uint32_t)SYS_IOCTL)
+#endif
+
 #include "../../../kernel.h"
 
 #if defined(__x86_64__)
@@ -89,6 +97,7 @@ static uint16_t lines_pci;
  * first two through `x86_64_route` (x86_64/idt.c). */
 void _isr_router(isr_params_t *params);
 void isr_router_locked(isr_params_t *params);
+int isr_call_ioctl(const isr_params_t *params);
 
 void _irq_router(isr_params_t *params);
 
@@ -244,28 +253,18 @@ static int _exception_signal(const isr_params_t *params, struct k_siginfo *info)
  * panics.
  *
  * A debug exception in kernel mode, which only i686 takes here, is no
- * fault of the kernel's. The single-step flag is cleared in the saved
- * flags; one at the system call gate's entry is deferred until the system
- * call has built its user frame (`debugreg_defer_user`), as on x86-64; and
- * a data breakpoint elsewhere posts SIGTRAP for the return to user mode and
- * lets the access go on.
+ * fault of the kernel's: a tracer's watchpoint hit by a copy to or from user
+ * memory, or by a `MOV SS` that delayed its exception into the system call
+ * gate. It is dropped, as Linux drops it (`debugreg_drop`), and the
+ * single-step flag is cleared in the saved flags.
  */
 static void _exception_handler(isr_params_t *params)
 {
     const char *name = params->vector < 32 ? _exception_names[params->vector] : "unknown";
 
     if (params->vector == 1 && (params->cs & 3) != 3 && current_proc) {
-        struct k_siginfo info;
-
         FRAME_FLAGS(params) &= ~0x100u;
-        if (debugreg_defer_user(FRAME_PC(params))) {
-            return;
-        }
-        k_memset(&info, 0, sizeof(info));
-        info.code = debugreg_status();
-        if (info.code == TRAP_HWBKPT) {
-            signal_post_thread(current_proc, SIGTRAP, &info);
-        }
+        debugreg_drop();
         return;
     }
 
@@ -323,15 +322,24 @@ static void _exception_handler(isr_params_t *params)
  * request or its counter's overflow, is the watchdog's (`watchdog_nmi`), and
  * returns; so is the NMI of another processor's stop, which this processor
  * takes there, leaving VMX or SVM operation and halting (`smp_stop_nmi`), as
- * Linux's `smp_stop_nmi_callback` does. The paranoid router holds no lock,
+ * Linux's `smp_stop_nmi_callback` does. The NMI is counted on the
+ * processor while the watchdog takes it, so that klog keeps its records
+ * for later (`smp_serialized`). The paranoid router holds no lock,
  * so no signal may be posted here, and the panic begins before the record
  * is written, so that the console's lock, which the interrupted code may
  * hold, is not taken (`k_panic_begin`).
  */
 static void _hardware_fault_handler(isr_params_t *params)
 {
-    if (params->vector == 2 && watchdog_nmi(params)) {
-        return;
+    int ours;
+
+    if (params->vector == 2) {
+        this_cpu()->in_nmi++;
+        ours = watchdog_nmi(params);
+        this_cpu()->in_nmi--;
+        if (ours) {
+            return;
+        }
     }
     k_panic_begin();
     klog_deliver_directly();
@@ -687,6 +695,21 @@ static void panic_if_reading(const isr_params_t *params)
 }
 
 /**
+ * Charge the hold under way to the ioctl(2) request of the system call in
+ * `params`, of either ABI, for bkl/calls. Returns the request's slot plus
+ * one, which `smp_call_end` takes, or 0 for another call or a request no
+ * slot took. The caller holds the big lock; `ia32_fast_syscall` (vdso32.c)
+ * calls it as `_isr_router` does.
+ */
+int isr_call_ioctl(const isr_params_t *params)
+{
+    if ((uint32_t)SC_NR(params) != CALL_IOCTL_NR(params)) {
+        return 0;
+    }
+    return bkl_note_ioctl((uint32_t)SC_ARG(params, 1));
+}
+
+/**
  * Take the big lock and run the handler chain of a processor exception or
  * a system call; `isr_leave` gives the lock back. `params` is the saved
  * register frame, so that a handler can change the saved registers, a
@@ -696,20 +719,18 @@ static void panic_if_reading(const isr_params_t *params)
 void _isr_router(isr_params_t *params)
 {
     uint64_t start = 0;
-    uint32_t nr = 0, cmd = 0;
-    int is_ioctl = 0, ioctl = 0;
+    uint32_t nr = 0;
+    int ioctl = 0;
 
     user_entry(params);
     if (params->vector == SYSCALL_ENTRY) {
         start = arch_cycles();
         nr = (uint32_t)SC_NR(params);
-        is_ioctl = !SC_COMPAT(params) && nr == SYS_IOCTL;
-        cmd = (uint32_t)SC_ARG(params, 1);
     }
     panic_if_reading(params);
     bkl_enter();
-    if (is_ioctl) {
-        ioctl = bkl_note_ioctl(cmd);
+    if (params->vector == SYSCALL_ENTRY) {
+        ioctl = isr_call_ioctl(params);
     }
     isr_router_locked(params);
     if (params->vector == SYSCALL_ENTRY) {
@@ -758,9 +779,6 @@ void isr_leave(isr_params_t *params)
     if (cpu->tick_unlocked) {
         cpu->tick_unlocked = 0;
         return;
-    }
-    if (FRAME_USER(params)) {
-        debugreg_deliver();
     }
     deliver_signals(params);
     if (FRAME_USER(params)) {

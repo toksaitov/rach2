@@ -356,8 +356,9 @@ static void timer_preempt(int nested, uint64_t start)
  * delivery, the USB controller's event ring, the
  * keyboards' repeat, after the USB reports that may press or release a key,
  * the block layer's lagged requests and deadlines, the platform's devices,
- * vkms's vblank timer, the end of a speaker's tone, and the console's serial
- * port.
+ * vkms's vblank timer, the end of a speaker's tone and the console's serial
+ * port; last it writes out the log records kept for a holder of the big lock
+ * (`klog_flush`).
  *
  * The tick is accounted as idle or busy first, before anything below can
  * wake a process: the accounting records what the processor was doing when
@@ -447,7 +448,9 @@ static void timer_handler(isr_params_t *params)
     speaker_tick();
     t = bkl_tick_charge(BKL_TICK_SPEAKER, t);
     tty_console_poll();
-    (void)bkl_tick_charge(BKL_TICK_CONSOLE, t);
+    t = bkl_tick_charge(BKL_TICK_CONSOLE, t);
+    klog_flush();
+    (void)bkl_tick_charge(BKL_TICK_KLOG, t);
 
     timer_preempt(nested, start);
 }

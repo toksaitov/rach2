@@ -45,6 +45,7 @@ struct percpu {
     volatile int online;                        /* started, and taking work */
     volatile unsigned int admit;                /* CPU_STARTING, ADMITTED or REFUSED */
     volatile int idle_wait;                     /* halted in an idle wait, for a tick to see */
+    volatile int in_nmi;                        /* NMIs it is handling, nested */
     volatile unsigned int tlb_request;          /* drop the translations from `tlb_page` */
     volatile uintptr_t tlb_page;                /* a user page, or CPU_TLB_ALL */
     volatile uintptr_t tlb_end;                 /* the end of the pages from `tlb_page` */

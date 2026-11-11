@@ -90,9 +90,9 @@
  * oldest record, so that one that cannot send costs the others nothing.
  * Otherwise, before any sender exists or while a drain runs, the character
  * is dropped with the rest of its record, so that the ring holds whole
- * records. A target is told of the records it lost before its next one: a
- * gap in the extended form's `seq`, or Linux's line
- * `** N printk messages dropped **` in the plain form.
+ * records. A target is told of the records it lost with its next one: a
+ * gap in the extended form's `seq`, or in the plain form Linux's line
+ * `** N printk messages dropped **` in front of it in its datagram.
  *
  * Any context, interrupt handlers and the panic path included: it allocates
  * nothing, waits for nothing, and takes `net_lock`.
@@ -137,11 +137,13 @@ void netconsole_enable(void);
  * Each sender begins with a start, Linux's wait for carrier at
  * `netpoll_setup`: while its interface is not running (`netdev_running`), for
  * at most `netpoll.carrier_timeout=` seconds, 4 unless the boot line gives
- * another, and, when the link comes up in that time with records held, for
- * two seconds more, the settle, since a card can lose what it sends the
- * moment its link comes up. `netconsole_tick` ends the start and sends the
- * held records; a panic and `netconsole_shutdown` end it at once. After the
- * start a sender sends whenever its link is up.
+ * another, and, when the start finds the link up with records held, at its
+ * first check or later, for two seconds more, the settle, since a card can
+ * lose what it sends the moment its link comes up. Every record written
+ * before the settle ends waits with the held ones, so the records go out in
+ * order. `netconsole_tick` ends the start and sends the held records; a panic
+ * and `netconsole_shutdown` end it at once. After the start a sender sends
+ * whenever its link is up.
  *
  * Does nothing while a frame or datagram is being sent. While a sender is in
  * its start, while its link is down, while a target's source address is not

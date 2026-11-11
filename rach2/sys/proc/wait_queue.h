@@ -93,6 +93,17 @@ int wq_wait_event_as(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *n
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg);
 
 /**
+ * The same wait as `wq_wait_event_nointr` where Linux sleeps in
+ * TASK_KILLABLE, a wait that SIGKILL ends: the vfork parent's, whose
+ * condition a pending SIGKILL makes true, and execve's for the threads it
+ * has sent SIGKILL. /proc reports the sleeper in the state D, and the
+ * hung-task detector skips it, as Linux's skips a sleeper with
+ * TASK_WAKEKILL (kernel/hung_task.c:206-210). `name` is the wait's name
+ * for /proc/PID/wchan.
+ */
+int wq_wait_event_killable(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name);
+
+/**
  * The same wait as `wq_wait_event_nointr` for a kernel thread that has no
  * work: /proc reports the sleeper in the state S and does not count it in
  * `procs_blocked`, as Linux does not count a thread in TASK_IDLE. A kernel

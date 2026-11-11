@@ -48,7 +48,9 @@ enum pmu_kind { PMU_NONE, PMU_INTEL, PMU_AMD };
 /* What `platform_pmu_probe` found: whether it ran and found a counter, the
  * kind, the architectural version (Intel's), the number of general
  * counters, the counter's width in bits, the register a write of the count
- * goes to, the longest period one load counts, and the processor's clock. */
+ * goes to, the longest period one load counts, the processor's clock, and
+ * the window in which an NMI of no known source is taken for the counter's
+ * late one (`platform_pmu_late`), 100 ms in TSC counts. */
 static int probed, found;
 static enum pmu_kind kind;
 static uint32_t version;
@@ -57,15 +59,18 @@ static uint32_t width;
 static uint32_t count_msr;
 static uint64_t max_period;
 static uint64_t cpu_hz;
+static uint64_t late_window;
 
 /* Each processor's period and what is left of it: a period longer than
  * `max_period` is counted in loads of at most that, as Linux's
- * x86_perf_event_set_period counts `period_left`. */
+ * x86_perf_event_set_period counts `period_left`; and the TSC at which its
+ * window for a late NMI closes (`platform_pmu_late`). */
 static struct {
     uint64_t period;
     uint64_t left;
     uint64_t chunk;
     int on;
+    uint64_t late_until;
 } pmc[NR_CPUS];
 
 /** Write the 64-bit `v` to model-specific register `msr`. */
@@ -107,6 +112,12 @@ static uint64_t width_mask(void)
 static void load_count(uint64_t n)
 {
     wrmsr64(count_msr, (0 - n) & width_mask());
+}
+
+/** Open this processor's window for a late NMI of the counter. */
+static void open_window(int me)
+{
+    pmc[me].late_until = arch_cycles() + late_window;
 }
 
 /** Whether `vendor`, the twelve bytes of `cpuid` leaf 0, names `name`. */
@@ -251,6 +262,7 @@ int platform_pmu_probe(void)
         return 0;
     }
     found = 1;
+    late_window = tick_div(cpu_hz, 10u, (uint32_t *)0);
     klog(KLOG_INFO, "nmi_watchdog", "counter: %s version %u, %u bits, %u MHz",
          kind == PMU_AMD ? "amd core" : "intel arch", version, width,
          (unsigned int)tick_div(tick_div(cpu_hz, 1000u, (uint32_t *)0), 1000u, (uint32_t *)0));
@@ -269,6 +281,7 @@ void platform_pmu_enable(uint64_t cycles)
     if (kind == PMU_NONE || cycles == 0) {
         return;
     }
+    open_window(me);
     wrmsr64(evtsel_msr(), 0);
     pmc[me].period = cycles;
     pmc[me].left = cycles;
@@ -290,6 +303,7 @@ void platform_pmu_disable(void)
     if (kind == PMU_NONE || !pmc[me].on) {
         return;
     }
+    open_window(me);
     pmc[me].on = 0;
     wrmsr64(evtsel_msr(), 0);
     if (kind == PMU_INTEL && version >= 2) {
@@ -305,8 +319,11 @@ void platform_pmu_disable(void)
  * (arch/x86/events/intel/core.c, `intel_pmu_handle_irq`); version 1 and
  * AMD say nothing, and a counter loaded with the negative of its period has
  * overflowed once its top bit is clear (arch/x86/events/core.c,
- * `x86_pmu_handle_irq`). The APIC masks the counter's entry as it delivers
- * the NMI, so the entry is written again, as `intel_pmu_handle_irq` does.
+ * `x86_pmu_handle_irq`). Intel's APIC masks the counter's entry as it
+ * delivers the NMI, and AMD's does not (arch/x86/events/amd/core.c,
+ * `amd_pmu_v2_handle_irq`); the entry is written again on both, as
+ * `intel_pmu_handle_irq` and `x86_pmu_handle_irq` do. On AMD a handled
+ * overflow opens the window for a late NMI, as `amd_pmu_handle_irq` does.
  */
 int platform_pmu_overflow(int *due)
 {
@@ -337,5 +354,25 @@ int platform_pmu_overflow(int *due)
     pmc[me].chunk = pmc[me].left < max_period ? pmc[me].left : max_period;
     load_count(pmc[me].chunk);
     lapic_set_lvtpc(LAPIC_LVT_NMI);
+    if (kind == PMU_AMD) {
+        open_window(me);
+    }
     return 1;
+}
+
+/**
+ * An NMI the counter raised may come after the code that would have taken
+ * it: one in flight as the counter is loaded again or stopped finds no
+ * overflow, and on AMD the overflow is seen late, which Linux allows for by
+ * claiming every NMI of no known source for 100 ms after a handled overflow
+ * (arch/x86/events/amd/core.c:856-889, 1420, `perf_nmi_window`). The same
+ * window here follows each arming and stop of the counter, on Intel too,
+ * whose global status the arming clears.
+ */
+int platform_pmu_late(void)
+{
+    if (kind == PMU_NONE) {
+        return 0;
+    }
+    return arch_cycles() < pmc[arch_cpu_id()].late_until;
 }

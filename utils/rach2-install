@@ -1136,15 +1136,20 @@ if [ -n "$slots_disk" ]; then
     finish_slots "$slots_boot"
     slots_status=$(bootctl --target "$slots_boot" status) ||
         die "$slots_boot is not a boot partition bootctl reads"
+    slots_saved=$(echo "$slots_status" | sed -n 's/^bootctl: saved_entry: //p')
     if ! echo "$slots_status" | grep -q '^bootctl: slot size: the kernel slots are smaller'; then
-        say "$slots_boot has the slots of this version already"
+        # A stop after both slots grew, before the default was put back.
+        if [ "$slots_saved" = recovery ]; then
+            say "$slots_boot has the slots of this version already; the saved entry is recovery, and bootctl --target $slots_boot env saved_entry candidate starts the installed system"
+        else
+            say "$slots_boot has the slots of this version already"
+        fi
         exit 0
     fi
     case "$(echo "$slots_status" | sed -n 's/^bootctl: next_entry: //p')" in
         empty* | absent) ;;
         *) die "a trial is armed on $slots_boot; boot it, or cancel it with bootctl --target $slots_boot cancel, and run this again" ;;
     esac
-    slots_saved=$(echo "$slots_status" | sed -n 's/^bootctl: saved_entry: //p')
     if [ "$slots_saved" != recovery ]; then
         bootctl --target "$slots_boot" env saved_entry recovery > /dev/null ||
             die "the saved boot entry could not be moved to recovery; nothing was written"

@@ -11,16 +11,10 @@
 #include "../../lib/kstring.h"
 #include "../../proc/percpu.h"
 
-/* The first instruction after the user's system-call instruction. */
 #if defined(__x86_64__) && !defined(RACH2_HOSTTEST)
-extern void syscall_entry(void);
-#define DEBUG_SYSCALL_ENTRY syscall_entry
 /* The `sysenter` entry's first instruction, and the first one a single
  * step through it reaches with TF clear (isr_handler.s). */
 extern const char sysenter_entry[], sysenter_stepped[];
-#else
-extern void isr128(void);
-#define DEBUG_SYSCALL_ENTRY isr128
 #endif
 
 /* DR7: the enable bits of the four breakpoints, and the bits a tracer may
@@ -33,10 +27,6 @@ extern void isr128(void);
 /* DR6: the four breakpoints' bits and the single-step bit. */
 #define DR6_HITS 0x0000000Fu
 #define DR6_BS   0x00004000u
-
-/* A deferred hit from user code, delayed across a system call. This software
- * bit follows DR6 through a switch, but is never exposed as debug status. */
-#define DEFER_USER 0x80000000ul
 
 /*
  * The debug registers, as bytes: TinyCC's assembler has no mnemonic for
@@ -59,24 +49,14 @@ extern void isr128(void);
  * clear a running tracee's saved DR7 without changing that processor's DR7. */
 static volatile unsigned char dr7_live[NR_CPUS];
 
-/* The DR6 bits of the exceptions each processor deferred, with DEFER_USER
- * for a user hit, until a switch or `debugreg_deliver` takes them. Only its
- * own processor changes an entry. */
-static volatile unsigned long deferred[NR_CPUS];
-
-/** The processor's deferred bits go to the outgoing thread, so that they
- * follow it to another processor. DR7 is written only when the incoming
- * thread has enables or the processor still has some loaded, so a switch
- * between threads without breakpoints writes no debug register. */
-void arch_debug_switch(process_t *old, const process_t *next)
+/** DR7 is written only when the incoming thread has enables or the
+ * processor still has some loaded, so a switch between threads without
+ * breakpoints writes no debug register. */
+void arch_debug_switch(const process_t *next)
 {
     unsigned int cpu = arch_cpu_id();
     unsigned long v;
 
-    if (old) {
-        old->debug_pending |= deferred[cpu];
-    }
-    deferred[cpu] = 0;
     if (next && (next->debugreg[7] & DR7_ENABLES)) {
         v = next->debugreg[0];
         DR_WRITE(DR0_MODRM, v);
@@ -131,63 +111,26 @@ int32_t debugreg_status(void)
     return debugreg_code(dr6);
 }
 
-void debugreg_defer(void)
+void debugreg_drop(void)
 {
-    unsigned int cpu = arch_cpu_id();
-    unsigned long dr6;
     unsigned long v = 0;
 
-    DR_READ(DR6_MODRM, dr6);
     DR_WRITE(DR6_MODRM, v);
     v = DR7_ONE;
     DR_WRITE(DR7_MODRM, v);
-    dr7_live[cpu] = 0;
-    deferred[cpu] |= dr6 & (DR6_HITS | DR6_BS);
-}
-
-/** Intel can report this delayed hit without a DR6 status bit. With the
- * thread's enables saved it is a user data breakpoint: TF is clear at the
- * entry (the i686 interrupt gate clears it, and x86-64's FMASK masks it),
- * and `dr7_valid` forbids kernel addresses and GD. The mark stays with the
- * thread across switches until the system call returns to user mode. */
-int debugreg_defer_user(uintptr_t pc)
-{
-    unsigned int cpu;
-
-    if (pc != (uintptr_t)&DEBUG_SYSCALL_ENTRY) {
-        return 0;
-    }
-    cpu = arch_cpu_id();
-    debugreg_defer();
-    if (current_proc && (current_proc->debugreg[7] & DR7_ENABLES)) {
-        deferred[cpu] |= DEFER_USER;
-    }
-    return 1;
+    dr7_live[arch_cpu_id()] = 0;
 }
 
 /** A single step through the `sysenter` entry is the program's TF, which
  * the instruction leaves set, and goes on until the entry clears it; the
- * step's DR6 bit is dropped. At the first instruction a user data
- * breakpoint the processor delayed past `sysenter` is marked as at
- * `syscall_entry`, where DR6 shows a breakpoint or no step. */
-int debugreg_defer_sysenter(uintptr_t pc)
+ * trap comes at the return to user mode. */
+int debugreg_drop_sysenter(uintptr_t pc)
 {
 #if defined(__x86_64__) && !defined(RACH2_HOSTTEST)
-    unsigned int cpu;
-    unsigned long before, fresh;
-
     if (pc < (uintptr_t)sysenter_entry || pc > (uintptr_t)sysenter_stepped) {
         return 0;
     }
-    cpu = arch_cpu_id();
-    before = deferred[cpu];
-    debugreg_defer();
-    fresh = deferred[cpu] & ~before;
-    deferred[cpu] &= ~(fresh & DR6_BS);
-    if (pc == (uintptr_t)sysenter_entry && ((fresh & DR6_HITS) || !(fresh & DR6_BS)) &&
-        current_proc && (current_proc->debugreg[7] & DR7_ENABLES)) {
-        deferred[cpu] |= DEFER_USER;
-    }
+    debugreg_drop();
     return 1;
 #else
     (void)pc;
@@ -195,69 +138,11 @@ int debugreg_defer_sysenter(uintptr_t pc)
 #endif
 }
 
-/** The system call's exit reports a single step in the kernel, so only a
- * hardware hit with the thread's enables saved posts a signal here, as in
- * i686's kernel debug handler. Both records are cleared even when a detach
- * made the hit stale. A user hit is TRAP_HWBKPT even without a DR6 status
- * bit; the thread's saved DR6 has only the bits the processor reported. */
-void debugreg_deliver(void)
-{
-    unsigned int cpu = arch_cpu_id();
-    unsigned long dr6;
-    struct k_siginfo info;
-
-    if (!current_proc) {
-        deferred[cpu] = 0;
-        return;
-    }
-    dr6 = deferred[cpu] | current_proc->debug_pending;
-    deferred[cpu] = 0;
-    current_proc->debug_pending = 0;
-    if (dr6 == 0) {
-        return;
-    }
-    k_memset(&info, 0, sizeof(info));
-    info.code = debugreg_code(dr6 & ~DEFER_USER);
-    if (dr6 & DEFER_USER) {
-        info.code = TRAP_HWBKPT;
-    }
-    if (info.code == TRAP_HWBKPT && (current_proc->debugreg[7] & DR7_ENABLES)) {
-        info.addr = FRAME_PC(proc_user_frame(current_proc));
-        if (dr6 & DEFER_USER) {
-            signal_force(current_proc, SIGTRAP, &info);
-        } else {
-            signal_post_thread(current_proc, SIGTRAP, &info);
-        }
-    }
-}
-
-/** A stale hit, of a thread whose enables a tracer cleared, no longer
- * forces a signal, and does not interrupt a wait. */
-int arch_debug_pending(void)
-{
-    if (!current_proc || !(current_proc->debugreg[7] & DR7_ENABLES)) {
-        return 0;
-    }
-    return ((deferred[arch_cpu_id()] | current_proc->debug_pending) & DEFER_USER) != 0;
-}
-
-/** A live user hit stays deferred until the return to user mode, so that a
- * signal wait can neither take it nor restore a blocked mask after it was
- * forced; while one is pending nothing is posted, since the kernel hits
- * share its record. */
-void arch_debug_deliver(void)
-{
-    if (!arch_debug_pending()) {
-        debugreg_deliver();
-    }
-}
-
-/** `arch_debug_switch` from the thread to itself does the work, and moves
- * the processor's deferred bits into the thread. */
+/** `arch_debug_switch` to the current thread does the work. */
 void debugreg_resume(void)
 {
     if (!dr7_live[arch_cpu_id()] || !current_proc || !(current_proc->debugreg[7] & DR7_ENABLES)) {
-        arch_debug_switch(current_proc, current_proc);
+        arch_debug_switch(current_proc);
     }
 }
 

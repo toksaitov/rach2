@@ -105,7 +105,7 @@ The divide error, the invalid opcode, the floating-point errors and the debug ex
 
 ### Waits
 
-`signal_pending` returns nonzero when the thread has a signal pending, its own or its process's, that it does not block and does not ignore: one with a handler, or one whose default action ends or stops the process. A signal ignored by `SIG_IGN` or by a default of ignoring ends no wait. It also returns nonzero when a tracer requested a stop with `PTRACE_INTERRUPT`, and for a hardware breakpoint hit deferred in the kernel ([ptrace](ptrace.Readme.md)).
+`signal_pending` returns nonzero when the thread has a signal pending, its own or its process's, that it does not block and does not ignore: one with a handler, or one whose default action ends or stops the process. A signal ignored by `SIG_IGN` or by a default of ignoring ends no wait. It also returns nonzero when a tracer requested a stop with `PTRACE_INTERRUPT`.
 
 The interruptible waits call it: `wq_wait_event` (`proc/wait_queue.h`), which pipes, sockets and terminals sleep in, `poll_wait` (`io/poll.c`), the sleeps, the wait for a child (`wait_find`), and the waits for a signal. `wq_wait_event` tests its condition first, so a wait whose event has happened returns its result with a signal pending, and a call that moved bytes before the signal returns their count. `wq_wait_event_nointr`, for a lock another process has or a transfer a device has in flight, does not call it. Each call's page gives its own rule.
 

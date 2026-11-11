@@ -63,6 +63,14 @@ void bkl_take(int depth);
 /** The processors started and taking work, the boot processor counted. */
 int smp_cpu_count(void);
 
+/**
+ * Whether this processor may write what the big lock guards from where it
+ * runs: it has begun a panic, which stopped the others; or it is not in an
+ * NMI and holds the big lock or is the only processor started. klog keeps
+ * a record made elsewhere for a processor that may (klog.c).
+ */
+int smp_serialized(void);
+
 /** Read the sum and longest big-lock acquisition in microseconds
  * elapsed since boot, and the outer holds completed during that longest
  * wait, modulo 2^32. The caller holds the big lock. Wait times are zero
@@ -201,6 +209,7 @@ enum bkl_tick_row {
     BKL_TICK_VKMS,
     BKL_TICK_SPEAKER,
     BKL_TICK_CONSOLE,
+    BKL_TICK_KLOG,
     BKL_TICK_AP_ACCOUNT,
     BKL_TICK_AP_LATE_PASS,
     BKL_TICK_RETURN,

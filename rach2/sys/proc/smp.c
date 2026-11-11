@@ -102,10 +102,10 @@ struct bkl_tick_count {
 };
 static struct bkl_tick_count bkl_ticks[BKL_TICK_ROWS];
 static const char *const bkl_tick_names[BKL_TICK_ROWS] = {
-    "entry",      "clock",        "account",       "wake",     "hda",     "netdev",  "netconsole",
-    "ath9k",      "tcp",          "ip_frag",       "ip6",      "netlink", "ip_loop", "usb",
-    "input",      "block_lag",    "block_request", "platform", "vkms",    "speaker", "console",
-    "ap_account", "ap_late_pass", "return",        "switch",   "nested"};
+    "entry", "clock",      "account",       "wake",     "hda",     "netdev",  "netconsole",
+    "ath9k", "tcp",        "ip_frag",       "ip6",      "netlink", "ip_loop", "usb",
+    "input", "block_lag",  "block_request", "platform", "vkms",    "speaker", "console",
+    "klog",  "ap_account", "ap_late_pass",  "return",   "switch",  "nested"};
 
 /* The probes an open-addressed table makes before it gives up. */
 #define BKL_PROBES 32
@@ -202,9 +202,6 @@ static void bkl_acquire(struct percpu *cpu)
     bkl_flush(cpu);
 }
 
-/** Count the hold that ends now on `cpu`, which still holds the lock, under
- * its entry and against the longest. The first hold to end, the boot
- * processor's start-up, which nobody waits on, is left out. */
 /** Add a hold of `held` cycles that waited `waited` for the lock to `c`. */
 static void call_hold(struct bkl_call_count *c, uint64_t held, uint64_t waited)
 {
@@ -213,6 +210,9 @@ static void call_hold(struct bkl_call_count *c, uint64_t held, uint64_t waited)
     c->holds++;
 }
 
+/** Count the hold that ends now on `cpu`, which still holds the lock, under
+ * its entry and against the longest. The first hold to end, the boot
+ * processor's start-up, which nobody waits on, is left out. */
 static void bkl_hold_end(struct percpu *cpu)
 {
     uint64_t now = arch_cycles(), held = now - cpu->bkl_since, waited;
@@ -746,20 +746,35 @@ int smp_cpu_count(void)
     return cpus_online;
 }
 
+int smp_serialized(void)
+{
+    struct percpu *cpu = this_cpu();
+
+    if (k_panicking()) {
+        return 1;
+    }
+    return !cpu->in_nmi && (cpu->bkl_depth > 0 || cpus_online < 2);
+}
+
 /**
  * Stop this processor for good: leave VMX or SVM operation first
- * (`k_panic_hook`), then mark it stopped, which is what `smp_stop_others`
- * waits for, and halt. Linux's `smp_stop_nmi_callback` and
- * `sysvec_reboot` call `cpu_emergency_disable_virtualization` before
- * `stop_this_cpu` in the same order (arch/x86/kernel/smp.c:121-141), since
- * a processor left in VMX operation blocks INIT, and the restart that
- * follows the stop may need it (arch/x86/kernel/reboot.c:556-599).
+ * (`k_panic_hook`), stop the watchdog's counter, then mark it stopped,
+ * which is what `smp_stop_others` waits for, and halt. Linux's
+ * `smp_stop_nmi_callback` and `sysvec_reboot` call
+ * `cpu_emergency_disable_virtualization` before `stop_this_cpu` in the same
+ * order (arch/x86/kernel/smp.c:121-141), since a processor left in VMX
+ * operation blocks INIT, and the restart that follows the stop may need it
+ * (arch/x86/kernel/reboot.c:556-599). `stop_this_cpu` masks the counter's
+ * APIC entry (`disable_local_APIC`, arch/x86/kernel/process.c:822), since
+ * its NMI would wake the halt and the stopped processor, taking no ticks,
+ * would be reported as a hard lockup.
  */
 static void smp_stop_here(struct percpu *cpu)
 {
     if (k_panic_hook) {
         k_panic_hook();
     }
+    platform_pmu_disable();
     cpu->online = 0;
     cpu->stopped = 1;
     arch_stop();

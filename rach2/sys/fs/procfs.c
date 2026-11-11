@@ -771,9 +771,12 @@ uint32_t procfs_task_links(int pid)
 }
 
 /**
- * The count is Linux's `proc_readfd_count` (fs/proc/fd.c:286-308): the
- * weight of the open-descriptor bitmap, which a close clears at once, so
- * that a descriptor whose release is still under way is not counted.
+ * The count is Linux's `proc_readfd_count` (Linux 6.12 fs/proc/fd.c:299):
+ * the weight of the open-descriptor bitmap. An open sets its bit when it
+ * reserves the number (fs/file.c:531), before an open that may block, such
+ * as a FIFO's (fs/open.c:1419), so a slot reserved and not yet given its
+ * object counts; a close clears the bit at once, so a descriptor whose
+ * release is still under way does not.
  */
 int procfs_fd_count(int pid)
 {
@@ -784,7 +787,9 @@ int procfs_fd_count(int pid)
         return -ENOENT;
     }
     for (fd = 0; fd < fd_table_cap(p->fds); fd++) {
-        if (fd_is_valid(p->fds, fd)) {
+        const fd_entry_t *e = &p->fds->entries[fd];
+
+        if ((e->type != FD_TYPE_NONE || e->ofd != NULL) && !(e->flags & FD_FLAG_CLOSING)) {
             n++;
         }
     }
@@ -8367,19 +8372,17 @@ static int sysctl_int(int entry)
 /**
  * Store `v`, written to the /proc/sys file `entry`, in the variable of its
  * row of `sysctl_ints`: -EINVAL out of the row's range, and for a file
- * without a row, 0, its only value, is taken and any other is -EINVAL.
- * nmi_watchdog is -EACCES where the hard-lockup detector cannot run, whose
- * file Linux makes 0444 (kernel/watchdog.c, `watchdog_sysctl_init`), and a
- * write of the hung-task detector's timeout or interval wakes it. `count`
- * on success.
+ * without a row, 0, its only value, is taken and any other is -EINVAL. A
+ * write that changes `watchdog`, `soft_watchdog`, `nmi_watchdog` or
+ * `watchdog_thresh` restarts the lockup detectors, as Linux's
+ * `proc_watchdog_common` and `proc_watchdog_thresh` do (kernel/watchdog.c,
+ * :1034-1050), and a write of the hung-task detector's timeout or interval
+ * wakes it. `count` on success.
  */
 static int32_t sysctl_int_write(int entry, int32_t v, uint32_t count)
 {
-    int i;
+    int i, old;
 
-    if (entry == SYNTH_SYS_NMI_WATCHDOG && !watchdog_hardlockup_available()) {
-        return -EACCES;
-    }
     i = sysctl_int(entry);
     if (i < 0) {
         return v == 0 ? (int32_t)count : -EINVAL;
@@ -8387,7 +8390,11 @@ static int32_t sysctl_int_write(int entry, int32_t v, uint32_t count)
     if (v < sysctl_ints[i].min || v > sysctl_ints[i].max) {
         return -EINVAL;
     }
+    old = *sysctl_ints[i].var;
     *sysctl_ints[i].var = (int)v;
+    if (entry >= SYNTH_SYS_WATCHDOG && entry <= SYNTH_SYS_WATCHDOG + 3 && old != (int)v) {
+        watchdog_reconfigure();
+    }
     if (entry == SYNTH_SYS_HUNG_TASK_TIMEOUT || entry == SYNTH_SYS_HUNG_TASK_INTERVAL) {
         watchdog_sysctl_changed();
     }
@@ -8502,6 +8509,9 @@ static int procfs_sysctl_text(struct procfs_text *t, int entry)
         ap_ch(t, '\n');
     } else if (entry == SYNTH_SYS_MAX_MNT_NAMESPACES) {
         ap_int(t, ns_max_mnt(proc_userns(current_proc)));
+        ap_ch(t, '\n');
+    } else if (entry >= SYNTH_SYS_WATCHDOG && entry <= SYNTH_SYS_NMI_WATCHDOG) {
+        ap_int(t, watchdog_sysctl_value(entry - SYNTH_SYS_WATCHDOG));
         ap_ch(t, '\n');
     } else if (i >= 0) {
         ap_int(t, *sysctl_ints[i].var);
