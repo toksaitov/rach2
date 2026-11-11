@@ -882,7 +882,7 @@ has RtoAlgorithm 1, the retransmission bounds in milliseconds, MaxConn -1
 for no fixed limit, the connects and accepted handshakes, the handshakes and
 open connections a reset or a timeout ended, CurrEstab, the connections
 ESTABLISHED or in CLOSE_WAIT, and the segments received, sent, retransmitted
-and dropped as malformed, and the resets sent.
+and dropped as malformed or as a SYN in ESTABLISHED, and the resets sent.
 .Ql Udp:
 counts the IPv4 datagrams delivered, those for a port no socket has, the
 malformed ones, those with a bad checksum and those a full queue dropped

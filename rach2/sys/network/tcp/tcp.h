@@ -169,8 +169,9 @@
 #define TCP_DUP_ACKS     3
 #define TCP_RECOVER_RTO  1
 #define TCP_RECOVER_FAST 2
-/* The runs of data in flight whose send tick a connection keeps
- * (`sent_tick`): a run is the bytes sent in one tick. */
+/* The runs of data in flight whose send tick a connection keeps in the
+ * control block itself (`sent_first`): a run is the bytes sent in one
+ * tick. */
 #define TCP_SENT_RUNS    16
 
 /* TCP connection states (RFC 793). */
@@ -190,9 +191,17 @@ typedef enum {
 
 struct socket; /* defined in socket/socket.h */
 
-/* A connection's control block, or a listener's. */
 struct netns;
 
+/* A run of the send history (`struct tcb`'s `sent_first`): the bytes before
+ * `end` that the run before it does not hold, sent at the tick before
+ * `tick`, ticks+1 as `retx_stamp` keeps it, never 0. */
+struct tcp_sent_run {
+    uint32_t end;
+    uint32_t tick;
+};
+
+/* A connection's control block, or a listener's. */
 struct tcb {
     struct tcb *next; /* the list of live control blocks */
     int in_use;
@@ -221,10 +230,14 @@ struct tcb {
     uint32_t snd_una; /* oldest unacknowledged sequence number  */
     uint32_t snd_nxt; /* next sequence number to send           */
     uint32_t snd_wnd; /* remote's receive window, in bytes      */
-    /* The largest window the remote has offered, as Linux's max_window: an
-     * acknowledgement further than that below snd_una is refused
-     * (`tcp_ack_ok`). */
+    /* The largest window the remote has offered, as Linux's max_window. */
     uint32_t snd_wnd_max;
+    /* The bytes the remote has acknowledged, as Linux's bytes_acked: the
+     * data, the FIN, and the SYN of an active open but not of a passive
+     * one. It stops at 0xFFFFFFFF, above every window, where Linux's
+     * counter has 64 bits; the lesser of it and `snd_wnd_max` bounds an
+     * old acknowledgement (`tcp_ack_ok`). */
+    uint32_t snd_acked;
     uint16_t snd_mss; /* largest segment the remote takes       */
     /* Window scaling (RFC 7323): the shifts of the remote's window field and
      * of this side's, 0 when either SYN lacked the option, and whether this
@@ -314,37 +327,42 @@ struct tcb {
      * Linux's retrans_stamp: in a synchronized state the first
      * retransmission of data since the last recovery ended, kept through
      * the recovery (`tcp_resend`), the send of the oldest data in flight
-     * (`sent_tick`) at a closed window's first probe, as Linux's
+     * (`sent_first`) at a closed window's first probe, as Linux's
      * tcp_retransmit_timer takes the head segment's stamp, or the first
      * timeout when it sends no data; in the handshake the send; 0 = none
      * (`tcp_rto_expire`). */
     uint32_t retx_stamp;
     /* The send tick of the data in flight, as Linux stamps each segment it
-     * sends: `sent_runs` runs, the oldest first, run i the bytes before
-     * `sent_end[i]` that its predecessor does not hold, sent at the tick
-     * before `sent_tick[i]`, ticks+1 as `retx_stamp` keeps it, never 0. An
-     * acknowledgement drops the runs it covers. When TCP_SENT_RUNS are in
-     * flight, the newest run takes in the bytes sent after it and their
-     * tick, so that a stamp is never earlier than its bytes' send; the
-     * oldest run is never merged into. The FIN counts as a byte. Only
-     * `tcp_rto_expire` reads it, for a closed window's first probe. */
-    uint8_t sent_runs;
-    uint32_t sent_end[TCP_SENT_RUNS];
-    uint32_t sent_tick[TCP_SENT_RUNS];
+     * sends: `sent_runs` runs (`struct tcp_sent_run`), the oldest first,
+     * held in `sent_first` and, once more than TCP_SENT_RUNS are in flight,
+     * in `sent_more`, a heap array of `sent_cap` runs that doubles when it
+     * fills and is freed when the history empties. An acknowledgement
+     * drops the runs it covers. Only when the heap refuses a larger array
+     * does the newest run take in the bytes sent after it and their tick,
+     * so that a stamp is never earlier than its bytes' send. The FIN counts
+     * as a byte. Only `tcp_rto_expire` reads it, for a closed window's
+     * first probe. */
+    uint32_t sent_runs;
+    uint32_t sent_cap;
+    struct tcp_sent_run *sent_more;
+    struct tcp_sent_run sent_first[TCP_SENT_RUNS];
     /* ticks+1 at the last acknowledgement sent to answer a segment this
      * side could not accept, as Linux's last_oow_ack_time; 0 = none
      * (`tcp_oow_limited`). */
     uint32_t oow_stamp;
     /* The tick of the last acknowledgement received inside [snd_una,
-     * snd_nxt] on a segment inside the receive window, as Linux's
-     * rcv_tstamp, which a closed window over data in flight is given up by
+     * snd_nxt] on a segment `tcp_rx_check` let on, as Linux's rcv_tstamp,
+     * which a closed window over data in flight is given up by
      * (`tcp_rx_answers`). */
     uint32_t rcv_stamp;
 
     /* Keepalive. `ka_armed` is set once the tick has seen SO_KEEPALIVE on
-     * the socket, and `ka_since` is the tick of the last segment received
-     * or of that arming; `ka_probes` counts the probes unanswered since,
-     * the last sent at the tick `ka_probe_at`. */
+     * the socket, and `ka_since` is the tick of that arming, of the last
+     * `rcv_stamp` or of the last in-order data taken, whichever is
+     * latest, as Linux's keepalive counts from rcv_tstamp and lrcvtime;
+     * `ka_probes` counts the probes sent since an acknowledgement last
+     * answered them, as icsk_probes_out, the last sent at the tick
+     * `ka_probe_at`. */
     uint8_t ka_armed;
     uint8_t ka_probes;
     uint32_t ka_since;
@@ -627,7 +645,7 @@ struct tcp_counts {
     int tw;         /* in TIME_WAIT */
     int alloc;      /* every block not in TIME_WAIT */
     int estab;      /* ESTABLISHED or CLOSE_WAIT, Linux's CurrEstab */
-    uint32_t bytes; /* the blocks and their receive rings */
+    uint32_t bytes; /* the blocks, their receive rings and send histories */
 };
 
 /** Count the control blocks into `c`, under `net_lock`. */

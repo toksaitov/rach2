@@ -87,7 +87,7 @@ struct net_mib {
     uint32_t tcp_in_segs;
     uint32_t tcp_out_segs;
     uint32_t tcp_retrans_segs;
-    uint32_t tcp_in_errs; /* a bad length, header length or checksum */
+    uint32_t tcp_in_errs; /* a bad length, header length or checksum, or a SYN in ESTABLISHED */
     uint32_t tcp_out_rsts;
     /* The TcpExt counts of /proc/net/netstat, as Linux names them: the
      * segments of data received again whole (DelayedACKLost), the
