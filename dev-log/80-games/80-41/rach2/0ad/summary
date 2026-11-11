@@ -1,0 +1,14 @@
+window 251 7195
+seconds 150.018
+frames 6944
+fps 46.29
+median 19.54
+p90 29.46
+p99 47.70
+p99.9 124.70
+max 659.40
+over16.7 5571
+over33.3 415
+over50 55
+over100 8
+end window
