@@ -1,0 +1,80 @@
+The Debian 13 guest on the virgl profile, 8 CPUs and 8192 MiB, ran each case
+of VK-GL-CTS 1.4.1.1 named below in a glcts process of its own:
+
+    EGL_PLATFORM=surfaceless ./glcts --deqp-case=CASE --deqp-surface-type=pbuffer \
+        --deqp-gl-config-name=rgba8888d24s8ms0 --deqp-surface-width=256 --deqp-surface-height=256 \
+        --deqp-watchdog=enable --deqp-log-images=disable --deqp-log-shader-sources=disable
+
+over the 92 cases of dEQP-GLES3.functional.shaders.texture_functions whose
+names hold `shadow`, and the 64 of dEQP-GLES31's
+shaders.opaque_type_indexing.sampler with a shadow sampler outside the
+tessellation stages. These failed, each with QEMU 10.2.1's
+virglrenderer 1.2.0 printing a context error; every other case passed:
+
+    dEQP-GLES3.functional.shaders.texture_functions.texture.samplercubeshadow_bias_fragment Fail
+    dEQP-GLES3.functional.shaders.texture_functions.texturegrad.sampler2darrayshadow_vertex Fail
+    dEQP-GLES3.functional.shaders.texture_functions.texturegrad.sampler2darrayshadow_fragment Fail
+    dEQP-GLES3.functional.shaders.texture_functions.texturegradoffset.sampler2darrayshadow_vertex Fail
+    dEQP-GLES3.functional.shaders.texture_functions.texturegradoffset.sampler2darrayshadow_fragment Fail
+    dEQP-GLES31.functional.shaders.opaque_type_indexing.sampler.const_literal.vertex.samplercubearrayshadow Fail
+    dEQP-GLES31.functional.shaders.opaque_type_indexing.sampler.const_literal.fragment.samplercubearrayshadow Fail
+    dEQP-GLES31.functional.shaders.opaque_type_indexing.sampler.const_literal.compute.samplercubearrayshadow Fail
+    dEQP-GLES31.functional.shaders.opaque_type_indexing.sampler.const_literal.geometry.samplercubearrayshadow Fail
+    dEQP-GLES31.functional.shaders.opaque_type_indexing.sampler.const_expression.vertex.samplercubearrayshadow Fail
+    dEQP-GLES31.functional.shaders.opaque_type_indexing.sampler.const_expression.fragment.samplercubearrayshadow Fail
+    dEQP-GLES31.functional.shaders.opaque_type_indexing.sampler.const_expression.compute.samplercubearrayshadow Fail
+    dEQP-GLES31.functional.shaders.opaque_type_indexing.sampler.const_expression.geometry.samplercubearrayshadow Fail
+    dEQP-GLES31.functional.shaders.opaque_type_indexing.sampler.uniform.vertex.samplercubearrayshadow Fail
+    dEQP-GLES31.functional.shaders.opaque_type_indexing.sampler.uniform.fragment.samplercubearrayshadow Fail
+    dEQP-GLES31.functional.shaders.opaque_type_indexing.sampler.uniform.compute.samplercubearrayshadow Fail
+    dEQP-GLES31.functional.shaders.opaque_type_indexing.sampler.uniform.geometry.samplercubearrayshadow Fail
+    dEQP-GLES31.functional.shaders.opaque_type_indexing.sampler.dynamically_uniform.vertex.samplercubearrayshadow Fail
+    dEQP-GLES31.functional.shaders.opaque_type_indexing.sampler.dynamically_uniform.fragment.samplercubearrayshadow Fail
+    dEQP-GLES31.functional.shaders.opaque_type_indexing.sampler.dynamically_uniform.compute.samplercubearrayshadow Fail
+    dEQP-GLES31.functional.shaders.opaque_type_indexing.sampler.dynamically_uniform.geometry.samplercubearrayshadow Fail
+
+The first case's lines from QEMU:
+
+    vrend_compile_shader: context error reported 2 "glcts" Illegal shader 0
+    Shader failed to compile
+    0:3(12): error: extension `GL_EXT_texture_shadow_lod' unsupported in fragment shader
+
+and one of dEQP-GLES31's in each stage:
+
+    0:4(12): error: extension `GL_EXT_texture_shadow_lod' unsupported in fragment shader
+    0:4(12): error: extension `GL_EXT_texture_shadow_lod' unsupported in vertex shader
+    0:5(12): error: extension `GL_EXT_texture_shadow_lod' unsupported in fragment shader
+    0:5(12): error: extension `GL_EXT_texture_shadow_lod' unsupported in geometry shader
+    0:5(12): error: extension `GL_EXT_texture_shadow_lod' unsupported in vertex shader
+    0:6(12): error: extension `GL_EXT_texture_shadow_lod' unsupported in compute shader
+    0:7(12): error: extension `GL_EXT_texture_shadow_lod' unsupported in compute shader
+
+Two cases that pass alone, then the same two after the first case above in
+one glcts process (--deqp-caselist-file, which runs its cases in the
+suite's order):
+
+    pair: start alone
+    pair: Test case 'dEQP-GLES3.functional.shaders.texture_functions.textureoffset.sampler2d_fixed_fragment'..
+    pair:   Pass (Pass)
+    pair: Test case 'dEQP-GLES3.functional.shaders.texture_functions.texturelod.sampler2d_fixed_fragment'..
+    pair:   Pass (Pass)
+    pair: end alone
+    pair: start after
+    vrend_compile_shader: context error reported 2 "glcts" Illegal shader 0
+    0:3(12): error: extension `GL_EXT_texture_shadow_lod' unsupported in fragment shader
+    context 2 failed to dispatch DRAW_VBO: 131
+    pair: Test case 'dEQP-GLES3.functional.shaders.texture_functions.texture.samplercubeshadow_bias_fragment'..
+    pair:   Fail (Fail)
+    pair: Test case 'dEQP-GLES3.functional.shaders.texture_functions.textureoffset.sampler2d_fixed_fragment'..
+    pair:   Fail (Fail)
+    pair: Test case 'dEQP-GLES3.functional.shaders.texture_functions.texturelod.sampler2d_fixed_fragment'..
+    pair:   Fail (Fail)
+    pair: end after
+
+In the whole dEQP-GLES3 list of the time, in four parts of four glcts
+processes each, the parts held 0, 1, 2 and 2 of the five dEQP-GLES3 cases
+above, QEMU printed 0, 2, 4 and 4 context errors (each case run twice, the
+second time as the runner's rerun of a failure), and 145, 1,415, 2,644 and
+2,629 cases failed, of which 0, 946, 1,258 and 1,255 passed when run again
+in new processes. The first part of dEQP-GLES31, with four of the cases
+above in it, one in each stage, printed eight.
