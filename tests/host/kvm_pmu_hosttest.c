@@ -425,13 +425,14 @@ static void intel_switch(void)
     uint32_t ng, nh;
     int before = pmi_count;
     setup(1, 0, 0);
-    CHECK(pmu_host.table == c_hsw && pmu_host.cp, "Haswell's model takes Haswell's table");
+    CHECK(pmu_host.table == c_hsw && pmu_host.cp && pmu_host.fixed0_last,
+          "Haswell's model takes Haswell's table, with fixed counter 0 placed last");
     *reg(GLOBAL_CTRL) = watch_global;
     *reg(FIXED_CTRL) = 0xB0u;
     *reg(FIXED0 + 1u) = 1000;
     *reg(PMC0) = 300;
+    *reg(PMC0 + 1u) = 200;
     *reg(PMC0 + 2u) = 100;
-    *reg(FIXED0) = 200;
     /* L1D_PEND_MISS.PENDING counts only on counter 2. */
     v.pmu.eventsel[0] = 0x148u | EV_ENABLE | EV_OS | EV_INT;
     v.pmu.counter[0] = v.pmu.gp_mask - 3;
@@ -442,24 +443,27 @@ static void intel_switch(void)
     kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
     CHECK(!ng && !nh, "the VMCS switches the global control without lists");
     CHECK(v.pmu.phys[0] == 2, "a constrained event runs on the counter it may use");
-    CHECK(v.pmu.phys[KVM_PMU_GP_MAX] == 32u, "fixed counter 0 runs on its own counter");
     CHECK(v.pmu.phys[KVM_PMU_GP_MAX + 1u] == 0,
           "fixed counter 1, which the host holds, runs on a general counter");
-    CHECK(global[0] == (watch_global | FIXED_BIT(0) | 5u) && global[1] == watch_global,
+    CHECK(v.pmu.phys[KVM_PMU_GP_MAX] == 1,
+          "and fixed counter 0, on Haswell, on a free general counter before its own");
+    CHECK(global[0] == (watch_global | 7u) && global[1] == watch_global,
           "the guest's counters run beside the host's fixed counter 1");
     CHECK(*reg(FIXED0 + 1u) == 1000, "the host's counter is left alone");
     CHECK(*reg(EVENTSEL0 + 2u) == (0x148u | EV_ENABLE | EV_OS) &&
-              *reg(EVENTSEL0) == (0x3Cu | EV_ENABLE | EV_OS | EV_USR) && *reg(FIXED_CTRL) == 0xB1u,
-          "selectors and fields are set without a physical performance interrupt");
-    CHECK(*reg(PMC0 + 2u) == 100 && *reg(PMC0) == 300 && *reg(FIXED0) == 200,
+              *reg(EVENTSEL0) == (0x3Cu | EV_ENABLE | EV_OS | EV_USR) &&
+              *reg(EVENTSEL0 + 1u) == (0xC0u | EV_ENABLE | EV_OS) && *reg(FIXED_CTRL) == 0xB0u,
+          "selectors are set without a physical performance interrupt, and the host's field kept");
+    CHECK(*reg(PMC0 + 2u) == 100 && *reg(PMC0) == 300 && *reg(PMC0 + 1u) == 200,
           "no counter is written at an entry");
     *reg(PMC0 + 2u) += 5;
-    *reg(FIXED0) += 7;
+    *reg(PMC0 + 1u) += 7;
     *reg(PMC0) += 11;
     kvm_pmu_vmx_exit(&v, guest, 1);
     CHECK(v.pmu.counter[0] == 1 && v.pmu.fixed[0] == 4 && v.pmu.fixed[1] == 11,
           "deltas wrap at the guest widths");
-    CHECK(!*reg(EVENTSEL0 + 2u) && !*reg(EVENTSEL0) && (*reg(FIXED_CTRL) & 0xF0u) == 0xB0u,
+    CHECK(!*reg(EVENTSEL0 + 2u) && !*reg(EVENTSEL0) && !*reg(EVENTSEL0 + 1u) &&
+              (*reg(FIXED_CTRL) & 0xF0u) == 0xB0u,
           "the exit releases KVM's selectors and keeps the host's field");
     CHECK(v.pmu.global_status == (FIXED_BIT(0) | 1) && pmi_count == before,
           "exit queues status but does not deliver outside the big lock");
@@ -469,8 +473,7 @@ static void intel_switch(void)
     CHECK(pmi_count == before + 1, "one overflow batch sends one PMI");
     kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, NULL);
     CHECK(list_find(guest, ng, GLOBAL_CTRL) >= 0 && list_find(host, nh, GLOBAL_CTRL) >= 0 &&
-              guest[list_find(guest, ng, GLOBAL_CTRL)].value ==
-                  (watch_global | FIXED_BIT(0) | 5u) &&
+              guest[list_find(guest, ng, GLOBAL_CTRL)].value == (watch_global | 7u) &&
               host[list_find(host, nh, GLOBAL_CTRL)].value == watch_global,
           "without the VMCS's controls the lists switch the global control");
     *reg(PMC0 + 2u) += 9;
@@ -484,8 +487,9 @@ static void intel_switch(void)
 }
 
 /** Drive the placement beside the host's fixed counter 1: a constrained
- * event that finds its counter taken, instructions on fixed counter 0, an
- * inverted count kept off it, and counters the host does not hold. */
+ * event that finds its counter taken, instructions on Haswell's general
+ * counters before fixed counter 0 and on fixed counter 0 first elsewhere,
+ * an inverted count kept off it, and counters the host does not hold. */
 static void intel_placement(void)
 {
     struct kvm_pmu_msr guest[KVM_PMU_LIST_MAX], host[KVM_PMU_LIST_MAX];
@@ -504,16 +508,29 @@ static void intel_placement(void)
     kvm_pmu_vmx_exit(&v, guest, 1);
     v.pmu.eventsel[0] = v.pmu.eventsel[1] = 0xC0u | EV_ENABLE | EV_USR;
     v.pmu.eventsel[2] = 0xC0u | EV_ENABLE | EV_USR | EV_INVERT;
-    v.pmu.global_ctrl = 7u | FIXED_BIT(0);
+    v.pmu.eventsel[3] = 0xC0u | EV_ENABLE | EV_USR;
+    v.pmu.global_ctrl = 15u | FIXED_BIT(0);
     v.pmu.fixed_ctrl = 2;
+    kvm_pmu_prepare(&v);
+    kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
+    CHECK(v.pmu.run_gp == 15 && v.pmu.run_fixed == 1 && v.pmu.phys[2] == 0 && v.pmu.phys[0] == 1 &&
+              v.pmu.phys[1] == 2 && v.pmu.phys[3] == 3 && v.pmu.phys[KVM_PMU_GP_MAX] == 32u,
+          "on Haswell instructions take the general counters first and fixed counter 0 last, "
+          "and an inverted count a general one");
+    CHECK(*reg(FIXED_CTRL) == 0xB2u, "the guest's fixed field counts in its modes");
+    kvm_pmu_vmx_exit(&v, guest, 1);
+    pmu_host.fixed0_last = 0;
+    v.pmu.global_ctrl = 7u | FIXED_BIT(0);
     kvm_pmu_prepare(&v);
     kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
     CHECK(v.pmu.run_gp == 7 && v.pmu.run_fixed == 1 && v.pmu.phys[2] == 0 && v.pmu.phys[0] == 32u &&
               v.pmu.phys[1] == 1 && v.pmu.phys[KVM_PMU_GP_MAX] == 2,
-          "instructions take fixed counter 0 first, and an inverted count a general one");
+          "elsewhere instructions take fixed counter 0 first, as Linux's perf places them");
     CHECK(*reg(FIXED_CTRL) == 0xB2u,
           "a general counter's event counts in its modes on a fixed one");
     kvm_pmu_vmx_exit(&v, guest, 1);
+    pmu_host.fixed0_last = 1;
+    v.pmu.eventsel[3] = 0;
     *reg(GLOBAL_CTRL) = watch_global | 15u | FIXED_BIT(0);
     *reg(FIXED_CTRL) = 0;
     v.pmu.eventsel[0] = 0xC4u | EV_ENABLE | EV_OS;
