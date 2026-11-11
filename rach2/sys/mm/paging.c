@@ -1253,23 +1253,11 @@ static void note_fault(const isr_params_t *params, uintptr_t fault_address)
 }
 
 /**
- * Panic at once for a fault while the panic reads the running process
- * (`k_panic_reading`), before the handler reads that process's record,
- * which may be what the fault is about; return otherwise.
- */
-static void panic_if_reading(const isr_params_t *params, uintptr_t fault_address)
-{
-    if (k_panic_reading()) {
-        note_fault(params, fault_address);
-        k_panic("page fault: in the panic's read of the process");
-    }
-}
-
-/**
  * Resolve a page fault, or end what caused it.
  *
  * Tried in order. A fault while the panic reads the running process
- * panics at once (`panic_if_reading`). Any fault at a user-space address of
+ * never gets here: the router panics for it before it takes the big lock
+ * (`panic_if_reading` in isr.c). Any fault at a user-space address of
  * a live user process goes to `vm_resolve_in`, but an instruction fetch
  * from a region without
  * execute (`fetch_refused`) and a data access that the thread's protection
@@ -1315,7 +1303,6 @@ static void _page_fault_handler(isr_params_t *params)
     int write, user_mode, have_user_proc, in_user_range, pid, key = -1;
 
     fault_address = arch_fault_address();
-    panic_if_reading(params, fault_address);
 
     write = FAULT_WRITE(params);
     user_mode = FAULT_USER(params);
