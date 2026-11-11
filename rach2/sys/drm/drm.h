@@ -1137,15 +1137,13 @@ struct drm_atomic_state {
  * fb_create does: it may give a legacy framebuffer its object's modifier,
  * and an error refuses it; `fb_destroy` lets go what it took, before the
  * last put of the framebuffer drops its objects. `commit_fence_wait`, when
- * set, is told of each plane fence a nonblocking commit deferred to the
- * worker would wait for in Linux's commit tail, which Linux queues at
- * once: the first plane's not yet signalled as the commit is queued, and
- * each next one's as the one before signals, so that the driver can do
- * what its wait would, as i915's boosts the request. With interrupts
- * masked, maybe in an interrupt; it may not sleep, and the fence is
- * borrowed. `commit_fence_timeout_ms`, when nonzero, bounds the commit's
- * wait for each plane's fence in turn, uninterruptible, at that many
- * milliseconds from the moment the wait reaches it, and on a timeout the
+ * set, is called for each pending plane fence when the commit worker
+ * reaches it, in Linux's wait order, so the driver can do what its wait
+ * would, as i915's boosts the request. Called in process context without
+ * the driver's interrupt or engine locks, with interrupts masked. It may
+ * not sleep, and the fence is borrowed.
+ * `commit_fence_timeout_ms`, when nonzero, bounds each plane's wait to that
+ * many milliseconds from when it begins, uninterruptibly. On timeout the
  * commit stops waiting for the rest and programs the planes, as Linux's
  * intel_atomic_commit_fence_wait with i915_fence_timeout
  * (intel_display.c:7262-7280); 0 waits as Linux's
@@ -1569,11 +1567,10 @@ int32_t drm_atomic_helper_set_config(struct drm_mode_set *set);
  * no flush (`fb_dirty` unset), or the commit's error. May sleep. */
 int32_t drm_framebuffer_dirty(struct drm_device *dev, struct drm_framebuffer *fb,
                               const struct drm_mode_rect *rect);
-/** Send the queued hotplug events, then run every nonblocking commit
- * whose in-fences have all signalled, in the order they were made: its
- * planes and CRTCs programmed and its events armed for the next vblank. The
- * commit worker's body, and the host tests' stand-in for it; returns how
- * many events and commits ran. May sleep in the drivers' hooks. */
+/** Run the queued device work and hotplug events, then advance each
+ * nonblocking commit's plane waits in order and finish those whose waits
+ * ended. Process context under the big lock, without driver locks; returns
+ * how many works, events and commit tails ran. May sleep in driver hooks. */
 int drm_atomic_commit_work(void);
 /** Have the commit worker send `connector`'s hotplug event, to user space
  * and the console, as Linux's modeset retry work does after a link failed

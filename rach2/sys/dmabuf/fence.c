@@ -64,6 +64,8 @@ void dma_fence_set_error(struct dma_fence *f, int32_t error)
 }
 
 /** Stamp completion, run each callback and wake all.
+ * The big kernel lock serializes device interrupts and process context
+ * across processors (_irq_router takes it before dispatching a device).
  * The mark is made and every callback runs with interrupts masked, as
  * Linux's dma_fence_signal runs them under the fence's lock with
  * interrupts off: a callback may free the owner of another callback that
@@ -173,7 +175,9 @@ int32_t dma_fence_add_callback(struct dma_fence *f, struct dma_fence_cb *cb,
     return 0;
 }
 
-/** Detach a still-pending callback, returning whether it was found. */
+/** Detach a still-pending callback, returning whether it was found.
+ * The caller holds the big lock, as a device interrupt that signals does;
+ * with local interrupts masked too, no callback can still be running. */
 int dma_fence_remove_callback(struct dma_fence *f, struct dma_fence_cb *cb)
 {
     struct dma_fence_cb **p;
