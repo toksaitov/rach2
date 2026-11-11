@@ -135,6 +135,7 @@ int32_t dma_fence_add_callback(struct dma_fence *f, struct dma_fence_cb *cb,
     cb->func = func;
     cb->next = f->cbs;
     f->cbs = cb;
+    f->listened = 1;
     kirq_restore(flags);
     return 0;
 }
@@ -186,6 +187,7 @@ int32_t dma_fence_wait_until(struct dma_fence *f, int intr, int64_t deadline_ns)
         return -EINVAL;
     w.fence = dma_fence_get(f);
     w.deadline = deadline_ns;
+    f->listened = 1;
     saved = current_proc->wakeup_tick;
     if (deadline_ns >= 0) {
         left = deadline_ns - dma_fence_now();

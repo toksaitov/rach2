@@ -40,7 +40,9 @@
  * fences signalled from the interrupt, retirement, the GT parked, waits
  * with timeouts, a lost interrupt, polling, refused commands taken back,
  * the unplug); 80-47's parking, when Linux's retirement would let the GT
- * park and not between a client's requests; GETPARAM and I915_QUERY row
+ * park and not between a client's requests, with 80-50's signal of an
+ * older request while a newer one is built and its listener that left
+ * before the signal; GETPARAM and I915_QUERY row
  * by row; GET_RESET_STATS; 78-5c's THROTTLE, which IGT calls at each open;
  * and 78-11a.2's REG_READ of the render ring's timestamp, which the model
  * counts on at each read of a half.
@@ -371,8 +373,16 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return 0;
 }
 
+/* Whether the next interruptible sleep ends at once with -EINTR, as one
+ * a signal ends. */
+static int intr_next;
+
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
+    if (intr_next) {
+        intr_next = 0;
+        return -EINTR;
+    }
     return wq_wait_event_nointr(wq, cond, arg);
 }
 
@@ -455,15 +465,26 @@ static const struct i915_platform hsw = {"HASWELL", 7, 50, 7, 2, 0xf, 1, 1, 1, 0
 static const struct i915_id lenovo_id = {0x0A16, 1, 0, &hsw};
 
 /* A fault the row arms: the submission that fails after `submit_after`
- * more pass, when it is not negative. */
-static int submit_after = -1;
+ * more pass, when it is not negative. `inject_after`, when not negative,
+ * is the submissions that pass before the model's clock moves a
+ * millisecond inside the next, taking the messages due as an interrupt
+ * there would; `injected` counts those moves. */
+static int submit_after = -1, inject_after = -1, injected;
 static struct i915_hw_ops test_ops;
 
-/** i915_hw.h's fault hook: -EIO for the submission the row armed. */
+/** i915_hw.h's fault hook: the interrupt the row armed, then -EIO for the
+ * submission the row armed. */
 static int32_t test_fault(struct i915_hw *hw, int point)
 {
     (void)hw;
-    if (point != I915_FAULT_SUBMIT || submit_after < 0) {
+    if (point != I915_FAULT_SUBMIT) {
+        return 0;
+    }
+    if (inject_after >= 0 && inject_after-- == 0) {
+        injected++;
+        i915_delay_us(&dev.hw, 1000);
+    }
+    if (submit_after < 0) {
         return 0;
     }
     if (submit_after-- == 0) {
@@ -537,7 +558,8 @@ static struct drm_i915_private *fresh(struct i915_model *m)
     next_phys = 0x50000000ull;
     next_range = 0x1000000u;
     ranges_held = ranges_refuse = 0;
-    submit_after = -1;
+    submit_after = inject_after = -1;
+    injected = intr_next = 0;
     parks = unparks = 0;
     memset(&caller, 0, sizeof(caller));
     caller.euid = 1000;
@@ -1602,6 +1624,149 @@ static void row_park_building(void)
     done(&m);
 }
 
+/**
+ * 80-50: an older request that signals to a listener while the engine's
+ * next request is being created leaves the engine held, as on Linux, where
+ * the next request is on the timeline from its creation under the
+ * timeline's mutex, and the older one is no longer its last; the next,
+ * done with no listener, then keeps the GT awake to the worker's pass.
+ */
+static void row_park_signal_creating(void)
+{
+    struct i915_model m;
+    struct drm_i915_private *i915 = fresh(&m);
+    struct i915_engine *rcs = &i915->gt.engine[I915_RCS0];
+    struct intel_context *r = engine_of(&file_a, 0, I915_RCS0);
+    struct i915_request *old, *rq = 0;
+    struct dma_fence_cb cb;
+    int32_t err;
+    int p;
+
+    old = submit(r, 0, 0);
+    CHECK("creating: a callback on the engine's last request",
+          old && dma_fence_add_callback(&old->fence.base, &cb, park_listener) == 0);
+    p = parks;
+    inject_after = 0; /* the invalidation, the creation's first commands */
+    err = i915_request_create(r, &rq);
+    CHECK("creating: its signal while the next is created leaves the engine held",
+          err == 0 && injected == 1 && old && old->fence.base.signaled && rcs->unretired);
+    CHECK("creating: the next is added", rq && i915_request_add(rq) == 0);
+    run_ms(1);
+    (void)i915_submit_work();
+    i915_retire_requests(i915);
+    CHECK("creating: done with no listener, it keeps the GT awake to the worker's pass",
+          rq && rq->fence.base.signaled && !rcs->requests && rcs->unretired && i915->gt.awake &&
+              parks == p);
+    i915_request_put(old);
+    i915_request_put(rq);
+    intel_context_put(r);
+    done(&m);
+}
+
+/**
+ * 80-50: an older request that signals to a listener while the engine's
+ * next request is being added, between its breadcrumb's room let go and
+ * its place at the end of the engine's list, leaves the engine held, as
+ * Linux holds the timeline's mutex until i915_request_add has put the
+ * request on the timeline.
+ */
+static void row_park_signal_adding(void)
+{
+    struct i915_model m;
+    struct drm_i915_private *i915 = fresh(&m);
+    struct i915_engine *rcs = &i915->gt.engine[I915_RCS0];
+    struct intel_context *r = engine_of(&file_a, 0, I915_RCS0);
+    struct i915_request *old, *rq = 0;
+    struct dma_fence_cb cb;
+    int32_t err;
+    int p;
+
+    old = submit(r, 0, 0);
+    CHECK("adding: a callback on the engine's last request",
+          old && dma_fence_add_callback(&old->fence.base, &cb, park_listener) == 0);
+    err = i915_request_create(r, &rq);
+    CHECK("adding: the next is created, the older not yet signalled",
+          err == 0 && rq && old && !old->fence.base.signaled);
+    p = parks;
+    inject_after = 0; /* the breadcrumb, the add's first commands */
+    CHECK("adding: its signal while the next is added leaves the engine held",
+          rq && i915_request_add(rq) == 0 && injected == 1 && old && old->fence.base.signaled &&
+              rcs->unretired);
+    run_ms(1);
+    (void)i915_submit_work();
+    i915_retire_requests(i915);
+    CHECK("adding: the next, done with no listener, keeps the GT awake to the worker's pass",
+          rq && rq->fence.base.signaled && !rcs->requests && rcs->unretired && i915->gt.awake &&
+              parks == p);
+    i915_request_put(old);
+    i915_request_put(rq);
+    intel_context_put(r);
+    done(&m);
+}
+
+/**
+ * 80-50: a wait that timed out, a wait a signal interrupted and a callback
+ * taken back, each on the engine's last request before it signalled, still
+ * let the engine go when it signals, and the worker parks the GT at once,
+ * as Linux keeps a request's signalling enabled once a callback or a wait
+ * has enabled it.
+ */
+static void row_park_listener_left(void)
+{
+    struct i915_model m;
+    struct drm_i915_private *i915 = fresh(&m);
+    struct i915_engine *rcs = &i915->gt.engine[I915_RCS0];
+    struct i915_model_ring *rr = i915_model_ring_state(&m, 0);
+    struct intel_context *r = engine_of(&file_a, 0, I915_RCS0);
+    struct i915_request *rq;
+    struct dma_fence_cb cb;
+    int p;
+
+    rr->stuck = 1;
+    rq = submit(r, 0, 0);
+    p = parks;
+    CHECK("left: a wait for the engine's last request times out",
+          rq && i915_request_wait(rq, 0, 5000000) == -ETIME && rq->waiters == 0);
+    rr->stuck = 0;
+    run_ms(1);
+    CHECK("left: its signal after the timeout lets the engine go",
+          rq && rq->fence.base.signaled && !rcs->unretired);
+    (void)i915_submit_work();
+    CHECK("left: and the worker parks the GT", !i915->gt.awake && parks == p + 1);
+    i915_request_put(rq);
+
+    rr->stuck = 1;
+    rq = submit(r, 0, 0);
+    p = parks;
+    intr_next = 1;
+    CHECK("left: a wait for the engine's last request is interrupted",
+          rq && i915_request_wait(rq, 1, -1) == -EINTR && rq->waiters == 0);
+    rr->stuck = 0;
+    run_ms(1);
+    CHECK("left: its signal after the interruption lets the engine go",
+          rq && rq->fence.base.signaled && !rcs->unretired);
+    (void)i915_submit_work();
+    CHECK("left: and the worker parks the GT again", !i915->gt.awake && parks == p + 1);
+    i915_request_put(rq);
+
+    rr->stuck = 1;
+    rq = submit(r, 0, 0);
+    p = parks;
+    CHECK("left: a callback on the engine's last request is taken back",
+          rq && dma_fence_add_callback(&rq->fence.base, &cb, park_listener) == 0 &&
+              dma_fence_remove_callback(&rq->fence.base, &cb) == 1);
+    rr->stuck = 0;
+    run_ms(1);
+    CHECK("left: its signal after the removal lets the engine go",
+          rq && rq->fence.base.signaled && !rcs->unretired);
+    (void)i915_submit_work();
+    CHECK("left: and the worker parks the GT a third time", !i915->gt.awake && parks == p + 1);
+    i915_request_put(rq);
+    CHECK("left: no sleep reached its bound", stuck_sleeps == 0);
+    intel_context_put(r);
+    done(&m);
+}
+
 /* ---- 78-5a.4: GETPARAM and I915_QUERY ---- */
 
 /* GETPARAM's answers on the Lenovo, as Linux 6.18.58 gave them, which are
@@ -2009,6 +2174,9 @@ int main(void)
     row_park_unwatched();
     row_park_watched();
     row_park_building();
+    row_park_signal_creating();
+    row_park_signal_adding();
+    row_park_listener_left();
     row_ring_room();
     row_getparam();
     row_query();

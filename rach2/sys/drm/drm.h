@@ -271,6 +271,11 @@ struct dma_fence {
     struct dma_fence_cb *cbs;
     wait_queue_t wq;
     int signaling_enabled;
+    /* A callback, a sleeper or a poller has asked for the signal, as
+     * Linux's DMA_FENCE_FLAG_ENABLE_SIGNAL_BIT is set by
+     * dma_fence_add_callback and dma_fence_default_wait; it stays set when
+     * they leave. `signaling_enabled` is also set by a mere query. */
+    int listened;
 };
 
 /** The first of `num` new timeline contexts. Any context. */
@@ -290,17 +295,19 @@ void dma_fence_set_error(struct dma_fence *fence, int32_t error);
 int32_t dma_fence_signal(struct dma_fence *fence);
 /** Whether the fence has signalled, asking the driver if need be. */
 int dma_fence_is_signaled(struct dma_fence *fence);
-/** Run `func` when `fence` signals: 0, or -ENOENT, with nothing added, when
- * it has signalled already. */
+/** Run `func` when `fence` signals: 0, with the fence marked `listened`,
+ * or -ENOENT, with nothing added, when it has signalled already. */
 int32_t dma_fence_add_callback(struct dma_fence *fence, struct dma_fence_cb *cb,
                                void (*func)(struct dma_fence *, struct dma_fence_cb *));
-/** Take a callback back: 1 when it was pending, 0 when it ran. */
+/** Take a callback back: 1 when it was pending, 0 when it ran. The fence
+ * stays `listened`. */
 int dma_fence_remove_callback(struct dma_fence *fence, struct dma_fence_cb *cb);
 /**
  * Wait for the fence until the CLOCK_MONOTONIC time `deadline_ns`, or for
  * ever when it is negative; sleeps. Returns 0 once signalled (the fence's
  * error is read from it), -ETIME at the deadline, or -EINTR for a
- * signal when `intr` is set.
+ * signal when `intr` is set. A wait that sleeps marks the fence
+ * `listened`.
  */
 int32_t dma_fence_wait_until(struct dma_fence *fence, int intr, int64_t deadline_ns);
 
