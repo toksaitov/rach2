@@ -726,11 +726,14 @@ static int range_ready(struct mm *mm, uintptr_t start, uintptr_t end, int write)
  * the kernel's own memory, which a file system's caller passes for a read
  * into a page or a program's image, and is always present; a user pointer
  * there never gets past `user_range_ok`. A range that starts in user space
- * and ends past it is not resident.
+ * and ends past it is not resident. The walk of the regions is made under
+ * the big lock, taken when the caller runs without it, until an address
+ * space has a lock of its own.
  */
 int vm_resident(uintptr_t addr, uintptr_t len, int write)
 {
     uintptr_t end = addr + len;
+    int taken, ready;
 
     if (len == 0 || (current_proc && proc_window_covers(current_proc, addr, len))) {
         return 1;
@@ -741,7 +744,15 @@ int vm_resident(uintptr_t addr, uintptr_t len, int write)
     if (end < addr || end > USER_ADDR_MAX || !current_proc || !current_proc->mm) {
         return 0;
     }
-    return range_ready(current_proc->mm, addr, end, write);
+    taken = !bkl_held();
+    if (taken) {
+        bkl_enter();
+    }
+    ready = range_ready(current_proc->mm, addr, end, write);
+    if (taken) {
+        bkl_exit();
+    }
+    return ready;
 }
 
 /**
@@ -752,11 +763,15 @@ int vm_resident(uintptr_t addr, uintptr_t len, int write)
  * nothing that sleeps, and brought in again when a page went. A range that
  * wraps is refused, since the loop would end early and leave its tail
  * unbacked. A kernel buffer the thread opened to the checks
- * (`user_window_open`) is present already.
+ * (`user_window_open`) is present already. The resolution is made under the
+ * big lock, taken when the caller runs without it, until an address space
+ * has a lock of its own; a caller that touches the range after the return
+ * holds the lock across both, as the copies do (usercopy.c).
  */
 int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
 {
     uintptr_t page, end;
+    int taken, ok = 1;
 
     if (!current_proc || current_proc->mm == NULL) {
         return 0;
@@ -769,14 +784,19 @@ int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
     if (end < addr) {
         return 0;
     }
+    taken = !bkl_held();
+    if (taken) {
+        bkl_enter();
+    }
     do {
-        for (page = addr & ~(PAGE_SIZE - 1); page < end; page += PAGE_SIZE) {
-            if (!vm_resolve(page, write)) {
-                return 0;
-            }
+        for (page = addr & ~(PAGE_SIZE - 1); ok && page < end; page += PAGE_SIZE) {
+            ok = vm_resolve(page, write);
         }
-    } while (!range_ready(current_proc->mm, addr, end, write));
-    return 1;
+    } while (ok && !range_ready(current_proc->mm, addr, end, write));
+    if (taken) {
+        bkl_exit();
+    }
+    return ok;
 }
 
 /**
