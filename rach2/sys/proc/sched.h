@@ -106,9 +106,10 @@ void sched_preempt(void);
 void sched_take_preempt(void);
 
 /** Whether `sched_take_preempt` would now switch to another thread: the
- * current one is asked to switch and this processor's queue holds another
- * that is ready, since a running thread takes no other processor's. The
- * current thread is inside a system call, so its processor stays. */
+ * current one is asked to switch and the selection's own rules would leave
+ * it, for a queued thread that may run here and that a real-time current
+ * thread does not outrank, or for its affinity or a suspend. The current
+ * thread is inside a system call, so its processor stays. */
 int sched_preempt_due(void);
 
 /** Inside a long system call, between two of its pieces, with nothing half

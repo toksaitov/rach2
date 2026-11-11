@@ -463,6 +463,16 @@ void sched_set_affinity(process_t *p, uint64_t mask)
     kirq_restore(flags);
 }
 
+/** Whether selection keeps `old`, a running thread, over `next`, the best
+ * queued real-time candidate or NULL: `old` is real-time and outranks
+ * `next`, or ties with it and is neither SCHED_RR nor yielding. */
+static int sched_keeps(const process_t *old, const process_t *next)
+{
+    return sched_priority(old) != 0 && (!next || sched_priority(old) > sched_priority(next) ||
+                                        (sched_priority(old) == sched_priority(next) &&
+                                         old->sched_policy != SCHED_RR && !old->sched_yielded));
+}
+
 /** Select a real-time thread first, then apply ordinary wake preference.
  * The run queue lock is held and old's state already reflects blocking,
  * affinity and suspension. NULL means there is no queued candidate. */
@@ -470,10 +480,7 @@ static process_t *sched_select(int me, process_t *old)
 {
     process_t *next = sched_find_rt(me);
     struct percpu *cpu = &cpu_table[me];
-    if (old != cpu->idle && old->state == PROC_RUNNING && sched_priority(old) != 0 &&
-        (!next || sched_priority(old) > sched_priority(next) ||
-         (sched_priority(old) == sched_priority(next) && old->sched_policy != SCHED_RR &&
-          !old->sched_yielded))) {
+    if (old != cpu->idle && old->state == PROC_RUNNING && sched_keeps(old, next)) {
         old->sched_yielded = 0;
         return old;
     }
@@ -708,6 +715,36 @@ void sched_take_preempt(void)
     }
 }
 
+/**
+ * Whether a selection on processor `me` now would leave `old`, its running
+ * current thread, by `sched_prepare_old`'s and `sched_select`'s rules,
+ * changing no queue: `old` must move for its affinity or a suspend, or a
+ * queued thread may run here and `sched_keeps` does not keep `old` over it.
+ * A running thread steals from no other queue. sched_lock is held.
+ */
+static int sched_switch_due(int me, const process_t *old)
+{
+    const process_t *p;
+    const process_t *next;
+
+    if (cpu_table[me].idle && (!((old->affinity >> me) & 1u) || !suspend_lets_run(old))) {
+        return 1;
+    }
+    next = sched_find_rt(me);
+    if (sched_keeps(old, next)) {
+        return 0;
+    }
+    if (next) {
+        return 1;
+    }
+    for (p = run_queues[me].head; p; p = p->ready_next) {
+        if (sched_may_run(p, me)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int sched_preempt_due(void)
 {
     uint32_t held;
@@ -717,7 +754,7 @@ int sched_preempt_due(void)
         return 0;
     }
     held = spin_lock_irqsave(&sched_lock);
-    due = run_queues[arch_cpu_id()].count > 0;
+    due = sched_switch_due((int)arch_cpu_id(), current_proc);
     spin_unlock_irqrestore(&sched_lock, held);
     return due;
 }
