@@ -2044,7 +2044,8 @@ static int tcp_rto_expire(struct tcb *tcb)
  * ESTABLISHED, CLOSE_WAIT or FIN_WAIT_2, with nothing queued or in flight,
  * a probe goes when nothing has been received for the idle time, and
  * another each interval while none is answered; a segment received answers
- * them (`tcp_rx_addr`). When the count of probes went unanswered, or with
+ * them, after the handshake one inside the receive window
+ * (`tcp_rx_answers`). When the count of probes went unanswered, or with
  * TCP_USER_TIMEOUT set, when a probe is out and that long has passed since
  * the last segment received, the peer is sent a reset and the connection
  * is given up with ETIMEDOUT, as Linux gives it up. The socket's values and
@@ -3196,12 +3197,15 @@ static int tcp_rx_check(struct tcb *tcb, uint8_t flags, uint32_t seq, uint32_t l
 /**
  * Note what a segment of `flags` that starts at `seq` with `len` bytes of
  * data and acknowledges `ack_num` answers on the connection `tcb`, which is
- * not a listener's: any segment answers the keepalive's probes
- * (`tcp_keepalive`), and an acknowledgement inside [snd_una, snd_nxt], a
- * duplicate among them, on a segment that a synchronized connection finds
- * acceptable (`tcp_seq_ok`), is stamped in `rcv_stamp` and answers the
- * zero-window probes, as Linux's tcp_ack sets rcv_tstamp and clears
- * icsk_probes_out only for a segment that has passed
+ * not a listener's. A segment that a synchronized connection finds
+ * acceptable (`tcp_seq_ok`), and any segment before that, answers the
+ * keepalive's probes (`tcp_keepalive`); one outside the receive window
+ * answers nothing, as Linux's keepalive counts from rcv_tstamp and
+ * lrcvtime and gives up on icsk_probes_out, which only a segment that has
+ * passed tcp_sequence moves. An acknowledgement inside [snd_una, snd_nxt],
+ * a duplicate among them, on an acceptable segment is stamped in
+ * `rcv_stamp` and answers the zero-window probes, as Linux's tcp_ack sets
+ * rcv_tstamp and clears icsk_probes_out only for a segment that has passed
  * tcp_validate_incoming, and only past its checks of the acknowledgement
  * (`tcp_zwp_expire`, `tcp_zwp_rtx_expired`).
  */
@@ -3211,11 +3215,11 @@ static void tcp_rx_answers(struct tcb *tcb, uint8_t flags, uint32_t seq, uint32_
     if (tcb->state == TCP_LISTEN) {
         return;
     }
-    tcb->ka_since = TCP_NOW();
-    tcb->ka_probes = 0;
     if (tcb->state >= TCP_ESTABLISHED && !tcp_seq_ok(tcb, flags, seq, len)) {
         return;
     }
+    tcb->ka_since = TCP_NOW();
+    tcb->ka_probes = 0;
     if ((flags & TCP_ACK) && (int32_t)(ack_num - tcb->snd_una) >= 0 &&
         (int32_t)(ack_num - tcb->snd_nxt) <= 0) {
         tcb->rcv_stamp = tcb->ka_since;
@@ -3232,7 +3236,8 @@ static void tcp_rx_answers(struct tcb *tcb, uint8_t flags, uint32_t seq, uint32_
  * A reset goes to `tcp_rx_reset`, which takes it only at the next expected
  * sequence number or the few others `tcp_rst_verdict` allows, or in
  * SYN_SENT only when it acknowledges the SYN. Any other segment for a
- * connection answers its keepalive probes. After the handshake and before
+ * connection answers its keepalive probes, after the handshake only one
+ * inside the receive window (`tcp_rx_answers`). After the handshake and before
  * TIME_WAIT, `tcp_rx_check` then drops a segment without ACK, a SYN, one
  * outside the receive window and one whose acknowledgement is refused,
  * before anything in it is taken, answering each as Linux does: a peer's

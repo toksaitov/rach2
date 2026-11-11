@@ -49,7 +49,8 @@ seconds, and when
 probes have gone unanswered the peer is sent a reset and the connection
 ends with
 .Er ETIMEDOUT .
-Any segment received answers the probes.
+Any segment received inside the receive window answers the probes;
+one outside it, which is dropped, does not.
 The defaults, 7200 seconds, 75 seconds and 9 probes, are those of
 .Pa /proc/sys/net/ipv4/tcp_keepalive_time ,
 .Pa tcp_keepalive_intvl
