@@ -646,11 +646,16 @@ int32_t smp_profile_show(void *data, char *buf, uint32_t cap)
 
 int32_t smp_profile_store(void *data, const char __user *buf, uint32_t len)
 {
+    uint32_t flags;
+
     (void)data;
     (void)buf;
+    /* This processor's tick samples under the lock it holds. */
+    flags = kirq_save();
     k_memset(bkl_profile, 0, sizeof(bkl_profile));
     bkl_profile_samples = 0;
     bkl_profile_lost = 0;
+    kirq_restore(flags);
     return (int32_t)len;
 }
 
