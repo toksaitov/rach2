@@ -325,6 +325,10 @@ struct xhci_ctrl {
     uint32_t *port_deadline;
     uint32_t *port_connect_at;
     uint8_t *port_connected;
+    /* 1 from `xhci_port_reset_begin` until `xhci_port_reset_done` answers or
+     * the scan sees the port disconnected, which ends the core's reset; the
+     * scan clears the reset's change bit only on a port where this is 0. */
+    uint8_t *port_resetting;
     /* When the ports are read again (`port_scan`): a port change event has
      * come since the last scan, a connect is inside its debounce, or the
      * clock has reached `port_scan_at`. */
@@ -975,9 +979,11 @@ static void ctrl_free_tables(struct xhci_ctrl *hc)
     kfree(hc->port_deadline);
     kfree(hc->port_connect_at);
     kfree(hc->port_connected);
+    kfree(hc->port_resetting);
     hc->port_deadline = 0;
     hc->port_connect_at = 0;
     hc->port_connected = 0;
+    hc->port_resetting = 0;
     hc->nslots = 0;
 }
 
@@ -1056,7 +1062,8 @@ int xhci_read_caps(struct xhci_ctrl *hc)
     hc->port_deadline = (uint32_t *)kzalloc(hc->caps.max_ports * sizeof(uint32_t));
     hc->port_connect_at = (uint32_t *)kzalloc(hc->caps.max_ports * sizeof(uint32_t));
     hc->port_connected = (uint8_t *)kzalloc(hc->caps.max_ports);
-    if (!hc->port_deadline || !hc->port_connect_at || !hc->port_connected) {
+    hc->port_resetting = (uint8_t *)kzalloc(hc->caps.max_ports);
+    if (!hc->port_deadline || !hc->port_connect_at || !hc->port_connected || !hc->port_resetting) {
         hc->err = "the port state could not be allocated";
         return -1;
     }
@@ -1188,8 +1195,9 @@ int xhci_scratchpads(struct xhci_ctrl *hc)
 #define PORTSC_CHANGES     0x00FE0000u
 #define PORTSC_CSC         0x00020000u
 #define PORTSC_PRC         0x00200000u
-/* The change bits a scan clears: all but the reset's, which
- * `xhci_port_reset_done` reads and clears. */
+/* The change bits a scan clears on a port with a reset under way: all but
+ * the reset's, which `xhci_port_reset_done` reads and clears. On any other
+ * port the scan clears the reset's too. */
 #define PORTSC_SCAN_CLEARS (PORTSC_CHANGES & ~PORTSC_PRC)
 /* The bits that, written back as read, leave the port as it is: the
  * read-only ones and those a write of 0 clears and of 1 sets, and none that a
@@ -1392,8 +1400,12 @@ int xhci_port_reset_begin(struct xhci_ctrl *hc, int port)
     if (!(value & PORTSC_CCS)) {
         return -1;
     }
-    portsc_write(hc, port, PORTSC_PR);
+    /* A reset change bit an abandoned reset left is cleared by the write that
+     * starts this one, so that the first poll does not take it for this
+     * reset's end. */
+    portsc_write(hc, port, PORTSC_PR | (value & PORTSC_PRC));
     hc->port_deadline[port] = hc->now_ms + PORT_RESET_MS;
+    hc->port_resetting[port] = 1;
     return 0;
 }
 
@@ -1408,9 +1420,11 @@ int xhci_port_reset_done(struct xhci_ctrl *hc, int port)
     if (value & PORTSC_PRC) {
         /* Clear the change and nothing else. */
         w32(hc, portsc_offset(hc, port), (value & ~(PORTSC_CHANGES | PORTSC_PED)) | PORTSC_PRC);
+        hc->port_resetting[port] = 0;
         return (value & PORTSC_PED) ? 1 : -1;
     }
     if (past(hc, hc->port_deadline[port])) {
+        hc->port_resetting[port] = 0;
         return -1;
     }
     return 0;
@@ -1548,7 +1562,7 @@ int xhci_command_free(struct xhci_ctrl *hc)
  * Stopped event follows earlier command completions and gives the dequeue
  * pointer, which need not be the outstanding command's address. It ends an
  * unanswered abort without replacing a completed result. A port change event
- * is dropped: `port_scan` reads each port's connect bit after the drain.
+ * marks the ports for `port_scan`, which reads them at the end of the drain.
  *
  * A transfer event gives its block's physical address; the block's ring
  * index finds the transfer, and the transfer's record says what the block was
@@ -1732,15 +1746,18 @@ static void event_dispatch(struct xhci_ctrl *hc, const uint32_t *trb)
  *
  * The controller raises a port change event only when the change bits of a
  * port go from all clear to one set (xHCI 1.2, 4.19.2), so a reading clears
- * the bits it finds set, but the reset's, which the reset reads, over the
- * neutral bits as Linux's `xhci_clear_port_change_bit` writes them
- * (drivers/usb/host/xhci-hub.c:580-623), so that a reset under way is not
- * written again. This is
- * Linux's root hub: polled from a port change event until no change is left
- * (drivers/usb/host/xhci-ring.c:2124-2137, xhci-hub.c:1705-1708), and every
- * quarter second by its timer while it polls (drivers/usb/core/hcd.c:
- * 764-770). The quarter-second reading here does not stop, so that a change
- * the reset's bit hid from the events is still read.
+ * the bits it finds set over the neutral bits, as Linux's
+ * `xhci_clear_port_change_bit` writes them (drivers/usb/host/xhci-hub.c:
+ * 580-623), so that a reset under way is not written again. It leaves the
+ * reset's bit to `xhci_port_reset_done` while a reset is under way, and on
+ * any other port clears it too, as Linux's `port_event` clears a stray
+ * C_RESET (drivers/usb/core/hub.c:5811-5813), since a bit left set would hold
+ * back the port's later events. This is Linux's root hub: polled from a port
+ * change event until no change is left (drivers/usb/host/xhci-ring.c:
+ * 2124-2137, xhci-hub.c:1705-1708), and every quarter second by its timer
+ * while it polls (drivers/usb/core/hcd.c:764-770). The quarter-second reading
+ * here does not stop, so that a change the reset's bit hid from the events
+ * is still read.
  */
 static void port_scan(struct xhci_ctrl *hc)
 {
@@ -1756,10 +1773,14 @@ static void port_scan(struct xhci_ctrl *hc)
     for (i = 0; i < limit; i++) {
         uint32_t value = r32(hc, portsc_offset(hc, (int)i));
         int now_connected = (value & PORTSC_CCS) ? 1 : 0;
+        uint32_t clears;
 
-        if (value & PORTSC_SCAN_CLEARS) {
-            w32(hc, portsc_offset(hc, (int)i),
-                (value & PORTSC_NEUTRAL) | (value & PORTSC_SCAN_CLEARS));
+        if (!now_connected) {
+            hc->port_resetting[i] = 0;
+        }
+        clears = hc->port_resetting[i] ? PORTSC_SCAN_CLEARS : PORTSC_CHANGES;
+        if (value & clears) {
+            w32(hc, portsc_offset(hc, (int)i), (value & PORTSC_NEUTRAL) | (value & clears));
         }
         if (now_connected != hc->port_connected[i]) {
             hc->port_connected[i] = (uint8_t)now_connected;
@@ -2027,6 +2048,7 @@ int xhci_start(struct xhci_ctrl *hc)
         hc->port_deadline[i] = 0;
         hc->port_connect_at[i] = 0;
         hc->port_connected[i] = 0;
+        hc->port_resetting[i] = 0;
     }
     hc->port_change = 1;
     hc->port_settling = 0;

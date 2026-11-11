@@ -2029,8 +2029,10 @@ void mmio_unmap(uintptr_t va, size_t size)
  * Check the debounce of a connect, and when a drain reads the root ports:
  * after a port change event, while a connect settles and every
  * PORT_POLL_MS, and at no other drain; that a reading clears the connect's
- * change bit and leaves the reset's; and that `xhci_port_connected` gives
- * the last reading.
+ * change bit, leaves the reset's on a port with a reset under way and clears
+ * it on any other; that a reset's start clears a reset change bit an
+ * abandoned reset left; and that `xhci_port_connected` gives the last
+ * reading.
  */
 static void check_port_scan(void)
 {
@@ -2063,13 +2065,23 @@ static void check_port_scan(void)
     portsc_reads = 0;
     xhci_events(hc);
     CHECK("a drain with no port change event reads no port", portsc_reads == 0);
-    reg[M_PORTSC(1)] |= M_PORTSC_CCS | M_PORTSC_CSC | M_PORTSC_PRC;
+    /* The model keeps the reset bit as written, so the reset's end is set by
+     * hand. */
+    port_reset_completes = 0;
+    reg[M_PORTSC(1)] |= M_PORTSC_CCS;
+    CHECK("a reset is begun on a port", xhci_port_reset_begin(hc, 1) == 0);
+    reg[M_PORTSC(1)] &= ~M_PORTSC_PR;
+    reg[M_PORTSC(1)] |= M_PORTSC_PED | M_PORTSC_CSC | M_PORTSC_PRC;
+    portsc_reads = 0;
     post_event(TRB_TYPE_PORT_CHANGE, TRB_COMPLETION_SUCCESS, 0, 2u << 24);
     xhci_events(hc);
     CHECK("a port change event has the drain read the ports", portsc_reads != 0);
     CHECK("which records the connect", xhci_port_connected(hc, 1) == 1);
     CHECK("and clears the connect's change bit", (reg[M_PORTSC(1)] & M_PORTSC_CSC) == 0);
-    CHECK("but not the reset's, which the reset reads", (reg[M_PORTSC(1)] & M_PORTSC_PRC) != 0);
+    CHECK("but not the reset's while the reset is under way",
+          (reg[M_PORTSC(1)] & M_PORTSC_PRC) != 0);
+    CHECK("which the reset then reads as its end", xhci_port_reset_done(hc, 1) == 1);
+    port_reset_completes = 1;
     xhci_advance(hc, 10);
     portsc_reads = 0;
     xhci_events(hc);
@@ -2096,6 +2108,29 @@ static void check_port_scan(void)
     CHECK("a scan clears a resetting port's connect change",
           (reg[M_PORTSC(2)] & M_PORTSC_CSC) == 0);
     CHECK("without writing its reset bit again", (reg[M_PORTSC(2)] & M_PORTSC_PR) == 0);
+
+    /* A reset abandoned by the device's leaving: the scan that sees the
+     * port empty ends it, and clears the reset change bit that comes after,
+     * which would hold back the port's later events. */
+    reg[M_PORTSC(3)] |= M_PORTSC_CCS;
+    CHECK("a reset is begun on another port", xhci_port_reset_begin(hc, 3) == 0);
+    reg[M_PORTSC(3)] &= ~(M_PORTSC_CCS | M_PORTSC_PR);
+    reg[M_PORTSC(3)] |= M_PORTSC_CSC;
+    post_event(TRB_TYPE_PORT_CHANGE, TRB_COMPLETION_SUCCESS, 0, 4u << 24);
+    xhci_events(hc);
+    CHECK("the device's leaving is seen", xhci_port_connected(hc, 3) == 0);
+    reg[M_PORTSC(3)] |= M_PORTSC_PRC;
+    post_event(TRB_TYPE_PORT_CHANGE, TRB_COMPLETION_SUCCESS, 0, 4u << 24);
+    xhci_events(hc);
+    CHECK("and the reset change bit that follows is cleared by the scan",
+          (reg[M_PORTSC(3)] & M_PORTSC_PRC) == 0);
+
+    /* A stale reset change bit left where no scan has read it yet is
+     * cleared by the write that starts the next reset. */
+    reg[M_PORTSC(3)] |= M_PORTSC_CCS | M_PORTSC_PRC;
+    CHECK("a new reset is begun", xhci_port_reset_begin(hc, 3) == 0);
+    CHECK("which clears the stale reset change bit", (reg[M_PORTSC(3)] & M_PORTSC_PRC) == 0);
+    CHECK("so it is not taken for this reset's end", xhci_port_reset_done(hc, 3) == 0);
     port_reset_completes = 1;
     CHECK("a port the controller does not have is not connected", xhci_port_connected(hc, 99) == 0);
 }
