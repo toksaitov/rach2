@@ -2373,8 +2373,39 @@ static void guest_debug(int fd, uint32_t control, uint64_t dr0, uint64_t dr7)
     CHECK(fdio(fd, KVM_SET_GUEST_DEBUG, (uintptr_t)&d) == 0, "KVM_SET_GUEST_DEBUG");
 }
 
+/** The caller's single step over STI, which exits in the STI shadow, and
+ * the next step, which must enter under TF with the shadow ended, as
+ * Linux's vmx_vcpu_run ends it; the registers back after. */
+static void sti_step_rows(int fd)
+{
+    struct kvm_run *rp = run_of(fd);
+    struct kvm_regs r, saved;
+    struct row *w;
+
+    saved = regs_of(fd);
+    r = saved;
+    r.rflags |= RFLAGS_IF;
+    CHECK(fdio(fd, KVM_SET_REGS, (uintptr_t)&r) == 0, "KVM_SET_REGS with IF");
+    w = script(EXIT_EXCEPTION_NMI, 0x4000, 0);
+    w->intr_info = DB_VECTOR | (TYPE_HW_EXC << 8) | INTR_VALID;
+    w->rip = 0x1004;
+    w->intr_state = INTR_STI;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_DEBUG && rp->u.debug.pc == 0x1004,
+          "a single step over STI exits in the STI shadow");
+    guest_debug(fd, KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_SINGLESTEP | KVM_GUESTDBG_BLOCKIRQ, 0, 0);
+    w = script(EXIT_EXCEPTION_NMI, 0x4000, 0);
+    w->intr_info = DB_VECTOR | (TYPE_HW_EXC << 8) | INTR_VALID;
+    w->rip = 0x1006;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_DEBUG && rp->u.debug.pc == 0x1006 &&
+              (m.entry_rflags & RFLAGS_TF) && !(m.entry_intr & (INTR_STI | INTR_MOV_SS)),
+          "and the next step enters under TF with the shadow ended, as Linux's vmx_vcpu_run "
+          "ends it, which the entry's check without a pending single step asks for");
+    CHECK(fdio(fd, KVM_SET_REGS, (uintptr_t)&saved) == 0, "KVM_SET_REGS back");
+}
+
 /** The caller's debugging: a single step, one over an instruction the
- * kernel runs, software and hardware breakpoints, interrupts held, and
+ * kernel runs, steps over STI and on out of its shadow, software and
+ * hardware breakpoints, interrupts held, and
  * the guest's own state back after. */
 static void debug_rows(int fd)
 {
@@ -2396,6 +2427,8 @@ static void debug_rows(int fd)
     script(EXIT_CPUID, 0, 2);
     CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_DEBUG && rp->u.debug.pc == 0x1003,
           "an instruction the kernel runs is a step too");
+
+    sti_step_rows(fd);
 
     guest_debug(fd, KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_USE_SW_BP, 0, 0);
     w = script(EXIT_EXCEPTION_NMI, 0, 1);

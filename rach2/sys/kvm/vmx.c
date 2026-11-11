@@ -1551,9 +1551,12 @@ static void after_run(struct kvm_vcpu *v)
  * from the host reaches the host's own handler after VMX is off, as
  * Linux's vmx_do_nmi_irqoff and kvm_machine_check pass them on; the host's
  * interrupt that ended the run waits until the run loop turns interrupts
- * on. While `v->emul.resume` is set no guest runs: the next step of the
- * instruction under way is `exit`'s. 0, or -EIO when VMX cannot be turned
- * on here.
+ * on. Under the caller's single step the STI and MOV SS shadow ends before
+ * the entry, as Linux's vmx_vcpu_run ends it: the step over STI or MOV SS
+ * has been taken by the caller, and the shadow under TF would make the
+ * entry fail for want of a pending single-step trap. While
+ * `v->emul.resume` is set no guest runs: the next step of the instruction
+ * under way is `exit`'s. 0, or -EIO when VMX cannot be turned on here.
  */
 static int vmx_enter(struct kvm_vcpu *v)
 {
@@ -1584,6 +1587,11 @@ static int vmx_enter(struct kvm_vcpu *v)
     vmcs_write(HOST_FS_BASE, host.fs_base);
     eptp = eptp_of(v);
     vmcs_write(EPT_POINTER, eptp);
+    if (debugging(v, KVM_GUESTDBG_SINGLESTEP) && v->events.interrupt.shadow) {
+        /* Under the step's TF the entry would ask for a pending step. */
+        v->events.interrupt.shadow = 0;
+        x->vdirty |= VX_INTR;
+    }
     load_dirty(v);
     if (tlb || x->flush_vpid) {
         flush(v, tlb ? eptp : 0, x->flush_vpid);
