@@ -1983,7 +1983,7 @@
     },
     {
       "case_id": "guest.default.pipeprobe",
-      "behavior": "The anonymous-pipe contract: round trip and EOF, O_NONBLOCK and the 64 KiB capacity, SIGPIPE and EPIPE, blocking across a fork, no heap leak over a hundred pipes, the pipe:[N] identity in /proc/self/fd and fstat, a read that faults part way, a reader woken at every refill, and every length and alignment of the copies.",
+      "behavior": "The anonymous-pipe contract: round trip and EOF, O_NONBLOCK, the 64 KiB capacity and its change by F_SETPIPE_SZ, SIGPIPE and EPIPE, blocking across a fork, no heap leak over a hundred pipes, the pipe:[N] identity in /proc/self/fd and fstat, a read that faults part way, a reader woken at every refill, and every length and alignment of the copies.",
       "units": ["default", "pipeprobe"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
@@ -2001,6 +2001,9 @@
         {"assertion_id": "fill-64k", "checks": "(b) one write of 64 KiB is taken whole.", "source": "program"},
         {"assertion_id": "write-eagain", "checks": "(b) a nonblocking write to the full pipe is EAGAIN.", "source": "program"},
         {"assertion_id": "drain", "checks": "(b) eight bytes read from the full pipe.", "source": "program"},
+        {"assertion_id": "setpipe-busy", "checks": "(b) F_SETPIPE_SZ of 4096 on the pipe that holds 65528 bytes is EBUSY.", "source": "program"},
+        {"assertion_id": "setpipe-grow", "checks": "(b) F_SETPIPE_SZ of 300000 returns 524288, F_GETPIPE_SZ at the read end reports it, and a nonblocking write of 64 KiB more is taken whole.", "source": "program"},
+        {"assertion_id": "setpipe-kept", "checks": "(b) the 65528 bytes the pipe held before it grew read back in order.", "source": "program"},
         {"assertion_id": "sigpipe-pipe", "checks": "(c) pipe succeeds.", "source": "program"},
         {"assertion_id": "epipe-write", "checks": "(c) a write with the read end closed is EPIPE.", "source": "program"},
         {"assertion_id": "sigpipe-raised", "checks": "(c) that write raises SIGPIPE, which the handler catches.", "source": "program"},

@@ -257,7 +257,7 @@ rach2/sys/syscall_fs.c:readv_dgram params 7 the parameters are the parts of one 
 rach2/sys/syscall_fs.c:synth_dirent_at complexity 33 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:synth_dirent_at lines 142 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:synth_stat lines 268 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:sys_fcntl64 lines 111 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall_fs.c:sys_fcntl64 lines 112 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:readv complexity 29 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:utimes_node complexity 42 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:synth_stat complexity 32 a dispatcher, one arm per command, read as a table
@@ -536,7 +536,7 @@ tests/host/partition_hosttest.c:main lines 165 a test's rows, each a case, read 
 tests/host/pcimsi_hosttest.c:main complexity 37 a test's rows, each a case, read as one table
 tests/host/pcimsi_hosttest.c:main lines 167 a test's rows, each a case, read as one table
 
-tests/host/pipe_ring_hosttest.c:main lines 103 a test's rows, each a case, read as one table
+tests/host/pipe_ring_hosttest.c:main lines 104 a test's rows, each a case, read as one table
 
 tests/host/poll_select_hosttest.c:main lines 183 a test's rows, each a case, read as one table
 

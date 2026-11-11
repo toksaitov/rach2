@@ -964,6 +964,13 @@ write up to that sets;
 the open files, 0 and
 .Pa fs/file-max ,
 separated by tabs;
+.Pa fs/pipe-max-size ,
+1048576, the largest capacity
+.Dv F_SETPIPE_SZ
+of
+.Xr fcntl 2
+gives a caller without privilege, which a write of 4096 or more sets
+as written, where Linux rounds it up to a power of two;
 .Pa fs/mqueue/msg_default
 and
 .Pa msg_max ,

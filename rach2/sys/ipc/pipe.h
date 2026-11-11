@@ -17,7 +17,8 @@
  * difference is the count buffered (pipe_ring.c). The ring has 64 KiB,
  * Linux's default capacity, so a write of that much to an empty pipe does
  * not wait, as a program that writes a child's input before it reads the
- * child's output needs. It comes from the heap at the pipe's first write, so
+ * child's output needs; fcntl's F_SETPIPE_SZ makes it larger or smaller
+ * (`pipe_set_size`). It comes from the heap at the pipe's first write, so
  * a pipe never written costs only its record.
  */
 #ifndef _PIPE_H_
@@ -27,13 +28,19 @@
 #include "../lib/kuser.h"
 #include "../proc/wait_queue.h"
 
-#define PIPE_BUF_SIZE 65536 /* a power of two, for the ring mask */
+#define PIPE_BUF_SIZE 65536   /* a new pipe's ring, a power of two */
+#define PIPE_MAX_SIZE 1048576 /* fs/pipe-max-size at boot, Linux's */
+
+/* The largest ring F_SETPIPE_SZ gives an unprivileged caller, which
+ * /proc/sys/fs/pipe-max-size reads and sets. */
+extern int pipe_max_size;
 
 typedef struct pipe {
     struct pipe *next;     /* the list of live pipes */
     int in_use;            /* 1 from allocation on; no code reads it */
     uint32_t inode;        /* nonzero, unlike every other live pipe's */
     uint8_t *buf;          /* the ring, NULL until the first write */
+    uint32_t size;         /* the ring's bytes, a power of two, a page or more */
     uint32_t head;         /* total bytes consumed by the read end */
     uint32_t tail;         /* total bytes produced by the write end */
     int read_open;         /* descriptions open on the read end */
@@ -134,6 +141,24 @@ void pipe_splice_consume(struct fd_entry *e, uint32_t n);
  * -ENOMEM when the heap has no room for `out`'s ring.
  */
 int32_t pipe_tee(struct fd_entry *in, struct fd_entry *out, uint32_t len, int nonblock, int move);
+
+/** The bytes the ring of the pipe end `e` holds, which F_GETPIPE_SZ gives. */
+int32_t pipe_get_size(const struct fd_entry *e);
+
+/**
+ * Give the ring of the pipe end `e` at least `size` bytes, as F_SETPIPE_SZ
+ * does: a power of two from a page up, the bytes buffered kept. Returns the
+ * size given, or -EINVAL for a size past 2^31, -EPERM for a growth past
+ * `pipe_max_size`, or one that would take the rings grown past their first
+ * size over PIPE_GROWN_MAX bytes in all, unless `privileged`, -EBUSY for a
+ * size below the bytes buffered, or -ENOMEM.
+ */
+int32_t pipe_set_size(struct fd_entry *e, uint32_t size, int privileged);
+
+/* The bytes all pipes' rings may hold past PIPE_BUF_SIZE each for an
+ * unprivileged F_SETPIPE_SZ: Linux's pipe-user-pages-soft, 16384 pages, for
+ * one user, here for all of them. */
+#define PIPE_GROWN_MAX (16384u * 4096u)
 
 struct isr_params;
 /* The handlers of pipe(2) and pipe2(2), which arch_syscall_init enters in

@@ -6,7 +6,10 @@
  *       other, and once the write end closes the drained read end returns 0;
  *   (b) O_NONBLOCK: a read of an empty pipe and a write to a full one return
  *       -EAGAIN instead of blocking, and the FIFO holds 64 KiB, Linux's
- *       capacity, which F_GETPIPE_SZ reports at both ends;
+ *       capacity, which F_GETPIPE_SZ reports at both ends; F_SETPIPE_SZ
+ *       refuses a size below what the pipe holds with EBUSY, rounds 300000
+ *       up to 512 KiB, which F_GETPIPE_SZ then reports and a write fills
+ *       further, and keeps the bytes held, in order;
  *   (c) SIGPIPE / -EPIPE: a write with the read end closed raises SIGPIPE and
  *       (with the signal caught) returns -EPIPE;
  *   (d) blocking across a fork: a writer of more than one buffer blocks until
@@ -59,6 +62,7 @@
 #define PROT_WRITE    0x2
 #define MAP_PRIVATE   0x02
 #define MAP_ANONYMOUS 0x20
+#define F_SETPIPE_SZ  1031
 #define F_GETPIPE_SZ  1032
 
 #define O_NONBLOCK 04000
@@ -67,6 +71,7 @@
 #define CYCLE_TRIES 5   /* tries of case (e) before its heap check fails */
 
 #define EAGAIN      11
+#define EBUSY       16
 #define EPIPE       32
 #define SIGPIPE     13
 #define SA_SIGINFO  0x00000004
@@ -170,6 +175,9 @@ enum {
     FILL_64K,
     WRITE_EAGAIN,
     DRAIN,
+    SETPIPE_BUSY,
+    SETPIPE_GROW,
+    SETPIPE_KEPT,
     SIGPIPE_PIPE,
     EPIPE_WRITE,
     SIGPIPE_RAISED,
@@ -219,6 +227,9 @@ static const struct {
     {"fill-64k", "a write of 64 KiB fills the pipe"},
     {"write-eagain", "nonblocking write of a full pipe -> -EAGAIN"},
     {"drain", "drain 8 bytes from the full pipe"},
+    {"setpipe-busy", "F_SETPIPE_SZ below the bytes held -> -EBUSY"},
+    {"setpipe-grow", "F_SETPIPE_SZ of 300000 gives 512 KiB, a 64 KiB write fits"},
+    {"setpipe-kept", "the bytes held before the growth read back in order"},
     {"sigpipe-pipe", "pipe() for SIGPIPE test"},
     {"epipe-write", "write to reader-closed pipe -> -EPIPE"},
     {"sigpipe-raised", "SIGPIPE was raised"},
@@ -354,9 +365,10 @@ static void sigpipe_handler(int sig)
 }
 
 /* A pattern buffer of more than a pipe holds, for the fill and blocking
- * tests. */
+ * tests, and one a pipeful is read back into. */
 #define BIG 70000
 static char big[BIG];
+static char back[PIPE_BUF_SIZE];
 
 /** Wait for the child `pid` and return whether it exited with status 0. */
 static int exited_zero(int pid)
@@ -395,6 +407,12 @@ static void case_nonblock(void)
     check(FILL_64K, wr(p[1], big, PIPE_BUF_SIZE) == PIPE_BUF_SIZE);
     check(WRITE_EAGAIN, wr(p[1], "x", 1) == -EAGAIN);
     check(DRAIN, rd(p[0], buf, 8) == 8);
+    check(SETPIPE_BUSY, syscall3(SYS_FCNTL, p[1], F_SETPIPE_SZ, 4096) == -EBUSY);
+    check(SETPIPE_GROW, syscall3(SYS_FCNTL, p[1], F_SETPIPE_SZ, 300000) == 524288 &&
+                            syscall3(SYS_FCNTL, p[0], F_GETPIPE_SZ, 0) == 524288 &&
+                            wr(p[1], big, PIPE_BUF_SIZE) == PIPE_BUF_SIZE);
+    check(SETPIPE_KEPT, rd(p[0], back, PIPE_BUF_SIZE - 8) == PIPE_BUF_SIZE - 8 &&
+                            eqn(back, big + 8, PIPE_BUF_SIZE - 8));
     syscall1(SYS_CLOSE, p[0]);
     syscall1(SYS_CLOSE, p[1]);
 }
