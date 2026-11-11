@@ -172,8 +172,16 @@ static int32_t show_connector(void *obj, int arg, char *buf, uint32_t cap)
     const struct drm_display_mode *m;
     struct emit e;
     uint32_t n;
+    /* The routing, the committed states, the modes and the EDID are the
+     * mode lock's, which a probe or a commit holds while it replaces them,
+     * as Linux's modes_show takes mode_config.mutex (drm_sysfs.c:276-292);
+     * its dpms_show and enabled_show read a word the commit keeps. */
+    int locked = arg == CONN_ENABLED || arg == CONN_DPMS || arg == CONN_MODES || arg == CONN_EDID;
 
     emit_init(&e, buf, cap);
+    if (locked) {
+        drm_modeset_lock_nointr(c->dev);
+    }
     switch (arg) {
     case CONN_STATUS:
         emit_str(&e, c->status == DRM_CONNECTOR_CONNECTED      ? "connected\n"
@@ -206,6 +214,9 @@ static int32_t show_connector(void *obj, int arg, char *buf, uint32_t cap)
     default:
         emit_str(&e, "DEVTYPE=drm_connector\n");
         break;
+    }
+    if (locked) {
+        drm_modeset_unlock(c->dev);
     }
     return (int32_t)e.len;
 }

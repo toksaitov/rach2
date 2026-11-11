@@ -43,7 +43,7 @@
  * Linux's shrinker only tries its locks. The engines' requests, rings and
  * submission are under each engine's `lock`.
  *
- * The order, outermost first: the big lock; a DRM device's `commit_lock`;
+ * The order, outermost first: the big lock; a DRM device's `mode_lock`;
  * a file's context list lock (`struct i915_file`); the GEM lock, then the
  * other locks of objects, which may sleep; a reservation's lock; then the
  * locks of the hardware, which a holder takes with interrupts off and never
@@ -1366,7 +1366,11 @@ struct intel_crtc {
  * pipe's enable leaves it, `bl_level` is the PWM's level it shows then,
  * `bl_min` the least the VBT allows, `bl_dark` says the class asked for its
  * level 0, which Linux shows by turning the backlight off, and `bl_alt` says
- * the PCH counts the PWM in its coarse steps (LPT_PWM_GRANULARITY). `vga_off`
+ * the PCH counts the PWM in its coarse steps (LPT_PWM_GRANULARITY). The
+ * backlight class calls under a spinlock of its own and a commit under the
+ * mode lock, so `bl_lock`, taken after the class's, keeps the PWM and the
+ * `bl_` fields, as Linux's update_status holds the connection lock
+ * (intel_backlight.c:859-882). `vga_off`
  * says the VGA plane has been turned off. `rps_marks` are the interactive
  * marks of the commits whose flips are pending, one a commit as Linux's
  * state->rps_interactive, each a bit for every pipe that holds it, 0 when
@@ -1395,6 +1399,7 @@ struct intel_display {
     uint32_t underruns;
     uint32_t crc_done;
     struct intelbl bl;
+    struct spinlock bl_lock; /* the bl_ fields and the PWM's registers */
     int bl_index;
     uint8_t bl_want_on;
     uint8_t bl_pipe_on;
@@ -2940,9 +2945,9 @@ void intel_display_irq_work(struct drm_i915_private *i915);
 void intel_fifo_underrun_reporting(struct intel_crtc *c, int on);
 
 /*
- * The eDP panel's AUX channel (intel_dp_aux.c), under the big lock in
- * process context; a transfer may sleep a millisecond while the channel
- * is busy, and holds the panel's VDD while it runs.
+ * The eDP panel's AUX channel (intel_dp_aux.c), under the device's mode
+ * lock in process context; a transfer may sleep a millisecond while the
+ * channel is busy, and holds the panel's VDD while it runs.
  */
 
 /* A message on the AUX channel, Linux's drm_dp_aux_msg: `request`
@@ -2993,9 +2998,9 @@ void intel_dp_i2c_bus(struct intel_dp *dp, struct intel_i2c_bus *bus);
 
 /*
  * The panel power sequencer (intel_pps.c), Linux's intel_pps.c for one
- * panel on a Lynx Point PCH, under the big lock in process context. The
- * waits sleep: on the panel's timings, at most the 500 ms of a power cycle
- * and the 5 s the sequencer is given to finish.
+ * panel on a Lynx Point PCH, under the device's mode lock in process
+ * context. The waits sleep: on the panel's timings, at most the 500 ms of
+ * a power cycle and the 5 s the sequencer is given to finish.
  */
 
 /** Sleep `ms` milliseconds, as Linux's msleep: on the scheduler's clock in

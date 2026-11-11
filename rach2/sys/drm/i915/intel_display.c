@@ -280,6 +280,8 @@ uint32_t intel_fb_ggtt(const struct drm_framebuffer *fb)
 {
     struct drm_i915_private *i915 = to_i915(fb->dev);
     const struct i915_vma *vma;
+    uint32_t addr = 0;
+    int taken;
 
     if (fb_is_firmware(fb)) {
         return i915->display.fw_ggtt;
@@ -287,30 +289,41 @@ uint32_t intel_fb_ggtt(const struct drm_framebuffer *fb)
     if (fb->obj[0]->funcs != &i915_gem_object_funcs) {
         return 0;
     }
+    /* The object's bindings are the GEM lock's, which a submission on
+     * another processor holds while it binds the object. */
+    taken = i915_gem_lock(i915);
     for (vma = ((const struct drm_i915_gem_object *)fb->obj[0])->vmas; vma; vma = vma->obj_next) {
         if (vma->view_pages == 0 && vma->pin_count > 0) {
-            return (uint32_t)vma->start;
+            addr = (uint32_t)vma->start;
+            break;
         }
     }
-    return 0;
+    i915_gem_unlock(i915, taken);
+    return addr;
 }
 
 uint32_t intel_fb_ggtt_remapped(const struct drm_framebuffer *fb,
                                 const struct i915_remap_info *remap)
 {
+    struct drm_i915_private *i915 = to_i915(fb->dev);
     const struct i915_vma *vma;
+    uint32_t addr = 0;
+    int taken;
 
     if (fb->obj[0]->funcs != &i915_gem_object_funcs) {
         return 0;
     }
+    taken = i915_gem_lock(i915);
     for (vma = ((const struct drm_i915_gem_object *)fb->obj[0])->vmas; vma; vma = vma->obj_next) {
         if (vma->pin_count > 0 && vma->remap.width == remap->width &&
             vma->remap.height == remap->height && vma->remap.offset == remap->offset &&
             vma->remap.src_stride == remap->src_stride) {
-            return (uint32_t)vma->start;
+            addr = (uint32_t)vma->start;
+            break;
         }
     }
-    return 0;
+    i915_gem_unlock(i915, taken);
+    return addr;
 }
 
 /** Pin the framebuffer of the plane state `ps` for scanout, through the
@@ -1601,6 +1614,7 @@ int32_t intel_display_init(struct drm_i915_private *i915)
     int pipe;
 
     d->bl_index = -1;
+    spin_lock_init(&d->bl_lock, "intel_backlight_lock");
     /* The PLLs first, as Linux's intel_shared_dpll_init comes before its
      * readout: a WRPLL's port clock needs the non-SSC reference. */
     intel_dpll_init(i915);

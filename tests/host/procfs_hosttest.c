@@ -2724,6 +2724,11 @@ int32_t drm_modeset_lock(struct drm_device *dev)
     return 0;
 }
 
+void drm_modeset_lock_nointr(struct drm_device *dev)
+{
+    (void)dev;
+}
+
 void drm_modeset_unlock(struct drm_device *dev)
 {
     (void)dev;

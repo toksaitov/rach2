@@ -1684,16 +1684,21 @@ I915_GEM_LOCKED(i915_gem_get_aperture_ioctl)
 I915_GEM_LOCKED(i915_gem_userptr_ioctl)
 
 /* The driver's own ioctls, with Linux's flags: a render node may call each
- * but GET_PIPE_FROM_CRTC_ID. Each row of the buffers runs under the GEM
- * lock; EXECBUFFER2 takes it itself between its copies, and THROTTLE, which
- * takes a file's context list lock, which comes before it, and waits,
- * takes none. DRM_UNLOCKED marks the rows that need no big lock: BUSY,
- * under the handle table's and the reservation's locks, MADVISE, under the
- * reservation's and then the GEM lock, EXECBUFFER2, and the context calls,
- * under the file's context list lock. */
+ * but GET_PIPE_FROM_CRTC_ID, which looks the CRTC up under the mode lock.
+ * Each row of the buffers runs under the GEM lock; EXECBUFFER2 takes it
+ * itself between its copies, and THROTTLE, which takes a file's context
+ * list lock, which comes before it, and waits, takes none. DRM_UNLOCKED
+ * marks the rows that need no big lock: BUSY, under the handle table's and
+ * the reservation's locks, MADVISE, under the reservation's and then the
+ * GEM lock, EXECBUFFER2, and the context calls, under the file's context
+ * list lock. The device's DRIVER_KMS_UNLOCKED lets the core's ATOMIC,
+ * PAGE_FLIP and WAIT_VBLANK run without the big lock too: the display's
+ * hooks take the mode lock's state, the GEM lock for the framebuffers'
+ * bindings and pages, the event and vblank locks for what the interrupt
+ * shares, and the backlight's lock. */
 const struct drm_ioctl_desc i915_ioctls[I915_NUM_IOCTLS] = {
     {DRM_IOCTL_I915_GETPARAM, DRM_RENDER_ALLOW, i915_getparam_ioctl, "I915_GETPARAM"},
-    {DRM_IOCTL_I915_GET_PIPE_FROM_CRTC_ID, 0, intel_get_pipe_from_crtc_id_ioctl,
+    {DRM_IOCTL_I915_GET_PIPE_FROM_CRTC_ID, DRM_MODESET_LOCK, intel_get_pipe_from_crtc_id_ioctl,
      "I915_GET_PIPE_FROM_CRTC_ID"},
     {DRM_IOCTL_I915_GEM_CONTEXT_CREATE_EXT, DRM_RENDER_ALLOW | DRM_UNLOCKED,
      i915_gem_context_create_ioctl, "I915_GEM_CONTEXT_CREATE"},
