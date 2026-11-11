@@ -46,7 +46,10 @@ while getopts d:p:c:k:o:m:n: o; do
         *) exit 2 ;;
     esac
 done
-[ -n "$disk" ] || { echo "usage: bed-shm.sh -d DISK [-p PROBE] [-c CRC] [-o DIR]" >&2; exit 2; }
+[ -n "$disk" ] || {
+    echo "usage: bed-shm.sh -d DISK [-p PROBE] [-c CRC] [-k NOCOPY] [-o DIR] [-m MIB] [-n CPUS]" >&2
+    exit 2
+}
 daemon='' qemu='' waiter='' holder='' pid='' bad=0
 trap 'kill -9 $qemu $waiter $holder $pid 2>/dev/null; kill $daemon 2>/dev/null; wait 2>/dev/null' EXIT
 rm -rf "$out"
@@ -129,18 +132,16 @@ if until_line "$out/ivshmemd.out" 'QEMU connected' 60 "$qemu"; then
 fi
 ivshmemd -i > "$out/info-bound.txt" 2>&1
 
-# nc ARGS: nocopy on Venus.
-nc() { VK_DRIVER_FILES=$icd "$out/nocopy" "$@"; }
-
 # figure COMMAND...: one measurement, its lines added to DIR/measure.txt
 # and printed, each as `bed-shm: figure: LINE`, after `bed-shm: measuring:
-# COMMAND`; ok=0 when it fails, with ivshmemd's counts. Every 30 s while
+# COMMAND`; Venus is selected for nocopy; ok=0 when it fails, with
+# ivshmemd's counts. Every 30 s while
 # it runs, ivshmemd's counts and the VM's last lines show how far it has
 # got.
 figure()
 {
     echo "bed-shm: measuring: $*"
-    "$@" > "$out/figure.out" 2>&1 &
+    VK_DRIVER_FILES=$icd "$@" > "$out/figure.out" 2>&1 &
     pid=$! s=0
     while kill -0 "$pid" 2>/dev/null; do
         sleep 1
@@ -149,7 +150,10 @@ figure()
         echo "bed-shm: running: $s s: $(ivshmemd -i 2>&1 | tr '\n' ' ')"
         tr -d '\r' < "$out/console.log" | tail -n 3 | sed 's/^/bed-shm: running: vm: /'
     done
-    wait "$pid" || { ok=0; echo "bed-shm: failed: $(ivshmemd -i 2>&1 | tr '\n' ' ')"; }
+    figure_status=0
+    wait "$pid" || figure_status=$?
+    pid=''
+    [ "$figure_status" -eq 0 ] || { ok=0; echo "bed-shm: failed: $(ivshmemd -i 2>&1 | tr '\n' ' ')"; }
     cat "$out/figure.out" >> "$out/measure.txt"
     sed 's/^/bed-shm: figure: /' "$out/figure.out"
 }
@@ -170,10 +174,16 @@ nocopy_rows()
         fail build "$(head -n 3 "$out/build.out" | tr '\n' ' ')"
     fi
     maps0=$(stat kvm_gpa_maps) pages0=$(stat kvm_gpa_map_pages)
-    nc rounds 16 1048576 > "$out/rounds.out" 2>&1
+    round_bytes=1048576
+    VK_DRIVER_FILES=$icd "$out/nocopy" rounds 16 "$round_bytes" > "$out/rounds.out" 2>&1
     ivshmemd -i > "$out/info-rounds.txt" 2>&1
     pins=$(grep -c 'backend: pin: resource' "$out/console.log")
-    if grep -q '^NOCOPY MAPPED' "$out/rounds.out" && [ "$pins" -gt 0 ]; then
+    if awk -v maps="$maps0" -v pages="$pages0" -v bytes="$round_bytes" '
+        /^NOCOPY MAPPED: kvm_gpa_maps [0-9]+, kvm_gpa_map_pages [0-9]+$/ {
+            held = $4 + 0 > maps && $6 >= pages + 2 * bytes / 4096
+        }
+        END { exit !(held && maps ~ /^[0-9]+$/ && pages ~ /^[0-9]+$/) }
+        ' "$out/rounds.out" && [ "$pins" -gt 0 ]; then
         pass pages "$pins blobs pinned, $(info maps) maps, $(sed -n 's/^NOCOPY MAPPED: //p' "$out/rounds.out")"
     else
         fail pages "pins $pins: $(grep 'NOCOPY' "$out/rounds.out" | tr '\n' ' ')"
@@ -203,10 +213,10 @@ nocopy_rows()
     sed 's/^/bed-shm: figure: /' "$out/measure.txt"
     ok=1
     for b in 4096 65536 1048576 16777216 67108864; do
-        figure nc serial 8 "$b"
+        figure "$out/nocopy" serial 8 "$b"
     done
-    figure nc held 32 65536
-    figure nc bandwidth 67108864
+    figure "$out/nocopy" held 32 65536
+    figure "$out/nocopy" bandwidth 67108864
     for b in 4096 1048576 4194304; do
         figure "$probe" measure "$b"
     done
@@ -217,7 +227,7 @@ nocopy_rows()
     fi
 
     # The VM's death with a mapping live and touched.
-    nc hold 1048576 > "$out/hold.out" 2>&1 &
+    VK_DRIVER_FILES=$icd "$out/nocopy" hold 1048576 > "$out/hold.out" 2>&1 &
     holder=$!
     until_line "$out/hold.out" 'NOCOPY HELD\|NOCOPY FAIL' 120 "$holder" || true
     ivshmemd -i > "$out/info-held.txt" 2>&1
