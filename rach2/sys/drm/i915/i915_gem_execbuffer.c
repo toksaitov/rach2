@@ -1300,9 +1300,9 @@ uint32_t i915_gem_pool_trim(struct drm_i915_private *i915, int how)
  * bound in the global GTT, which runs in its place (i915_cmd_parser); any
  * other batch runs as it is.
  *
- * @return 0; the parser's -EINVAL; -ENOMEM; -ENODEV for a batch that is an
- *         import; -ENOSPC without room in the GTT; or the errors of the
- *         wait for the batch's writers.
+ * @return 0; the parser's -EINVAL; -ENOMEM; -EIO once the device is
+ *         unplugged; -ENODEV for a batch that is an import; -ENOSPC without
+ *         room in the GTT; or the errors of the wait for the batch's writers.
  */
 static int32_t eb_parse(struct eb *eb)
 {

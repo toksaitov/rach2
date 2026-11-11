@@ -1396,6 +1396,48 @@ static void wsi_sync_files(void)
 }
 
 /**
+ * The parser's shadow in the GT's pool, after `parser`'s rows, with its batch
+ * `b` and its call `a`: the shadow's pages and a closed batch's live until
+ * the retire; the shadow then stays in the pool, idle, for the next batch,
+ * which takes it with no new page. A retire pass's trim keeps it for a
+ * second from when it first finds it idle, and a trim of the idle ones
+ * frees it, as Linux's pool_retire and pool_free_older_than
+ * (gt/intel_gt_buffer_pool.c:37-85,98-122).
+ */
+static void parser_pool(uint32_t b, struct drm_i915_gem_execbuffer2 *a)
+{
+    struct drm_i915_gem_object *kept;
+    uint32_t frames;
+
+    i915_gem_pool_trim(dev_a, I915_POOL_ALL);
+    frames = (uint32_t)frames_live;
+    a->flags = I915_EXEC_RENDER;
+    a->batch_len = 8;
+    CHECK(execbuf(a) == 0 && (uint32_t)frames_live == frames + 1u,
+          "parser: the shadow's page held while the batch runs");
+    idle();
+    kept = dev_a->gt.pool[0];
+    CHECK(kept && kept->pool_next == 0 && kept->base.refs == 1u &&
+              (uint32_t)frames_live == frames + 1u,
+          "parser: the shadow kept in the pool, idle, once the request retires");
+    CHECK(execbuf(a) == 0 && dev_a->gt.pool[0] == kept && kept->pool_next == 0 &&
+              kept->base.refs > 1u && (uint32_t)frames_live == frames + 1u,
+          "parser: the next batch takes the same shadow, with no new page");
+    close_handle(&file_a, b);
+    CHECK((uint32_t)frames_live == frames + 1u, "parser: the closed batch held while it runs");
+    idle();
+    CHECK(i915_gem_pool_trim(dev_a, I915_POOL_STALE) == 0 && dev_a->gt.pool[0] == kept,
+          "parser: a retire pass's trim keeps a shadow it first finds idle");
+    i915_delay_us(0, 999000u);
+    CHECK(i915_gem_pool_trim(dev_a, I915_POOL_STALE) == 0 && dev_a->gt.pool[0] == kept,
+          "parser: and keeps it while it has been idle less than a second");
+    CHECK(i915_gem_pool_trim(dev_a, I915_POOL_IDLE) == 1u && dev_a->gt.pool[0] == 0,
+          "parser: a trim of the idle ones frees its page");
+    CHECK((uint32_t)frames_live == frames - 1u,
+          "parser: both freed once the request retires and the pool is trimmed");
+}
+
+/**
  * 78-8b.2: the command parser on the call's path. A batch whose length the
  * call gives runs from its shadow, privileged, then from the trampoline
  * past its length, unprivileged, whoever calls; one the tables refuse has
@@ -1479,20 +1521,7 @@ static void parser(void)
     dev_a->drm.master = 0;
     idle();
 
-    /* The shadow's pages and a closed batch's live until the retire; the
-     * shadow then goes back to the GT's pool, which a trim empties. */
-    i915_gem_pool_trim(dev_a, I915_POOL_ALL);
-    frames = (uint32_t)frames_live;
-    a.flags = I915_EXEC_RENDER;
-    a.batch_len = 8;
-    CHECK(execbuf(&a) == 0 && (uint32_t)frames_live == frames + 1u,
-          "parser: the shadow's page held while the batch runs");
-    close_handle(&file_a, b);
-    CHECK((uint32_t)frames_live == frames + 1u, "parser: the closed batch held while it runs");
-    idle();
-    i915_gem_pool_trim(dev_a, I915_POOL_IDLE);
-    CHECK((uint32_t)frames_live == frames - 1u,
-          "parser: both freed once the request retires and the pool is trimmed");
+    parser_pool(b, &a);
 }
 
 /**
