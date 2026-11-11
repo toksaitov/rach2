@@ -14,12 +14,11 @@
  * takes it. A stream receive into an address below user space fails with every
  * byte kept, one whose later segment cannot be written returns the segments
  * before it and keeps that one, past 32 segments as before them, and one with
- * MSG_WAITALL waits until its
- * buffers are full. recv and recvfrom into a buffer whose second page cannot
- * be written return the bytes queued, and into a page they cannot write at all
- * fail with EAGAIN on an empty nonblocking stream and return 0 at the end of
- * input. A send on a nonblocking socket still connecting fails with EAGAIN.
- * A TCP connection to the probe's own listener completes its
+ * MSG_WAITALL waits until its buffers are full. recv and recvfrom into a buffer
+ * whose second page cannot be written return the bytes queued, and into a page
+ * they cannot write at all fail with EAGAIN on an empty nonblocking stream and
+ * return 0 at the end of input. A send on a nonblocking socket still connecting
+ * fails with EAGAIN. A TCP connection to the probe's own listener completes its
  * handshake, moves data both ways and reports the peer 127.0.0.1, and one the
  * server closes at once after accept still connects; a nonblocking accept right
  * after the connect finds the connection, and a poll with a zero timeout right
