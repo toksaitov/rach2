@@ -629,7 +629,9 @@ static int feed_waiting(void *arg)
 }
 
 /** The thread watchdogd: sleep until the tick leaves a feed, then do it,
- * holding the big lock as kernel code does. */
+ * holding the big lock as kernel code does. The tick's switch waits for its
+ * next sleep (`no_tick_switch`), so a feed runs whole under the big lock,
+ * and an open never finds one half done. */
 static void itco_feeder(void)
 {
     arch_irq_enable();

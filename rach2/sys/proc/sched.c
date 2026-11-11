@@ -590,13 +590,19 @@ static int sched_prepare_old(process_t *old, struct percpu *cpu, int me)
  * it switches to it. A
  * current process a suspend to idle holds is made ready where it is: on
  * one processor the suspend's writer was the only one to run, and on
- * several the others' next tick stops what they run.
+ * several the others stop what they run at its next switch: the tick's,
+ * a call's exit, or a kernel thread's next sleep or service point.
  *
  * Selection and publication run with interrupts disabled and the run
  * queues' lock held, so a wake cannot race the mark's consumption or a
  * timer re-enter partially updated state. A current process that has
  * already resumed after an idle wait loses its mark before yielding, so
- * that wake cannot prefer it again later.
+ * that wake cannot prefer it again later. The outgoing thread's request
+ * (`need_resched`) is cleared in the same hold, once selection is done
+ * and before either return without a switch, as Linux's __schedule
+ * clears it (kernel/sched/core.c:6705-6707): a request made after the
+ * selection is kept, and one the selection has answered is not taken
+ * again.
  *
  * The switch runs with interrupts disabled: a timer interrupt between the
  * publication of the new current process and the change of stacks inside
