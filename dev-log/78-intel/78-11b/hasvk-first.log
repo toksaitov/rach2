@@ -1,0 +1,19 @@
+hasvk: action: su -s /bin/sh desktop -c 'exec sh -c '"'"'. /data/trial/t2660/tests/graphics/guest-env.sh && graphics_env'"'"''
+hasvk: child: /data/trial/t2660/out/environment.log: exit 0
+hasvk: action: su -s /bin/sh desktop -c 'exec sh -c '"'"'. /data/trial/t2660/tests/graphics/guest-env.sh && exec vkcube --wsi wayland --c 300'"'"''
+hasvk: child: /data/trial/t2660/out/cube-0.log: exit 0
+hasvk: action: su -s /bin/sh desktop -c 'exec sh -c '"'"'. /data/trial/t2660/tests/graphics/guest-env.sh && exec vkcube --wsi wayland --c 900'"'"''
+hasvk: child: /data/trial/t2660/out/cube-1.log: exit 0
+hasvk: action: su -s /bin/sh desktop -c 'exec sh -c '"'"'. /data/trial/t2660/tests/graphics/guest-env.sh && exec vkcube --wsi wayland --c 300'"'"''
+hasvk: child: /data/trial/t2660/out/cube-2.log: exit 0
+hasvk: action: su -s /bin/sh desktop -c 'exec sh -c '"'"'. /data/trial/t2660/tests/graphics/guest-env.sh && exec vkcube --wsi wayland --c 900'"'"''
+hasvk: child: /data/trial/t2660/out/cube-3.log: exit 0
+hasvk: action: su -s /bin/sh desktop -c 'exec sh -c '"'"'. /data/trial/t2660/tests/graphics/guest-env.sh && sh /data/trial/t2660/tests/graphics/runners/vkcube.sh -d -i /usr/share/vulkan/icd.d/intel_hasvk_icd.json -o /data/trial/t2660/out/cube'"'"''
+hasvk: child: /data/trial/t2660/out/cube-capture.log: exit 0
+hasvk: action: python3 /data/trial/t2660/tests/graphics/browser/sandbox.py desktop chromium /data/trial/t2660/out/webgpu webgpu-hasvk
+hasvk: child: /data/trial/t2660/out/webgpu.log: exit 0
+hasvk: rates: {"vkcube": [{"linux_fps": 60.07208650380457, "rach2_fps": 61.72059133113543}, {"linux_fps": 60.06006006006006, "rach2_fps": 59.91547370622966}], "webgpu": {"linux_fps": 59.92658992733344, "rach2_fps": 57.98151839101287}}
+hasvk: result: pass: vkcube, WebGPU compute, pixels, panel and sandbox
+hasvk: evidence: /data/trial/t2660/out
+ssh exit 0
+Wed Nov 11 07:54:59 +06 2026

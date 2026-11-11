@@ -1,0 +1,26 @@
+hasvk: action: su -s /bin/sh desktop -c 'exec sh -c '"'"'. /data/trial/t2660/tests/graphics/guest-env.sh && graphics_env'"'"''
+hasvk: child: /data/trial/t2660/out2/environment.log: exit 0
+hasvk: action: su -s /bin/sh desktop -c 'exec sh -c '"'"'. /data/trial/t2660/tests/graphics/guest-env.sh && exec vkcube --wsi wayland --c 300'"'"''
+hasvk: child: /data/trial/t2660/out2/cube-0.log: exit 0
+hasvk: action: su -s /bin/sh desktop -c 'exec sh -c '"'"'. /data/trial/t2660/tests/graphics/guest-env.sh && exec vkcube --wsi wayland --c 900'"'"''
+hasvk: child: /data/trial/t2660/out2/cube-1.log: exit 0
+hasvk: action: su -s /bin/sh desktop -c 'exec sh -c '"'"'. /data/trial/t2660/tests/graphics/guest-env.sh && exec vkcube --wsi wayland --c 300'"'"''
+hasvk: child: /data/trial/t2660/out2/cube-2.log: exit 0
+hasvk: action: su -s /bin/sh desktop -c 'exec sh -c '"'"'. /data/trial/t2660/tests/graphics/guest-env.sh && exec vkcube --wsi wayland --c 900'"'"''
+hasvk: child: /data/trial/t2660/out2/cube-3.log: exit 0
+hasvk: action: su -s /bin/sh desktop -c 'exec sh -c '"'"'. /data/trial/t2660/tests/graphics/guest-env.sh && sh /data/trial/t2660/tests/graphics/runners/vkcube.sh -d -i /usr/share/vulkan/icd.d/intel_hasvk_icd.json -o /data/trial/t2660/out2/cube'"'"''
+hasvk: child: /data/trial/t2660/out2/cube-capture.log: exit 0
+hasvk: action: python3 /data/trial/t2660/tests/graphics/browser/sandbox.py desktop chromium /data/trial/t2660/out2/webgpu webgpu-hasvk
+hasvk: child: /data/trial/t2660/out2/webgpu.log: exit 0
+hasvk: evidence: /data/trial/t2660/out2
+Traceback (most recent call last):
+  File "/data/trial/t2660/tests/graphics/lenovo/hasvk.py", line 194, in <module>
+    main()
+    ~~~~^^
+  File "/data/trial/t2660/tests/graphics/lenovo/hasvk.py", line 184, in main
+    judge(out)
+    ~~~~~^^^^^
+  File "/data/trial/t2660/tests/graphics/lenovo/hasvk.py", line 86, in judge
+    assert re.search(r"Vulkan backend[^\n]*HD Graphics 4400", dawn), "Dawn did not name hasvk"
+           ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Dawn did not name hasvk
