@@ -429,10 +429,12 @@ static void flip_boost(struct intel_crtc *c, const struct drm_plane_state *ps)
 }
 
 /**
- * Hand the commit's interactive mark to a pipe of `pipes` whose flip is
- * pending, which lets it go once the flip ends, as Linux's
- * intel_cleanup_plane_fb after the flip; or let it go now, when the commit
- * failed (`err`), waited for its flips, or has no event to wait for.
+ * Give each pipe of `pipes` whose flip is pending a mark of its own in
+ * RPS's interactive count, which it lets go once its flip ends, as Linux's
+ * intel_cleanup_plane_fb after the commit's flips; then let the commit's
+ * own mark go. So the count stays up until the last pipe of the commit has
+ * flipped, and a commit that failed (`err`), waited for its flips, or has
+ * no event to wait for leaves no mark.
  */
 static void interactive_handover(struct drm_i915_private *i915, uint32_t pipes, int32_t err)
 {
@@ -449,8 +451,7 @@ static void interactive_handover(struct drm_i915_private *i915, uint32_t pipes, 
 
         if ((pipes & (1u << pipe)) && c->base.flip_pending && !c->rps_interactive) {
             c->rps_interactive = 1;
-            kirq_restore(flags);
-            return;
+            i915_rps_mark_interactive(i915, 1);
         }
     }
     kirq_restore(flags);
