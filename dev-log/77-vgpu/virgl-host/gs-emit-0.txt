@@ -1,0 +1,51 @@
+The Debian 13 guest on the virgl profile, 8 CPUs and 8192 MiB, under QEMU
+10.2.1 with virglrenderer 1.2.0 over Mesa 26.0.8's D3D12 driver on the
+testing PC, ran VK-GL-CTS 1.4.1.1's glcts on surfaceless EGL as deqp.sh
+runs it, with each case's start and end streamed to the host.
+
+1. deqp.sh's first part of dEQP-GLES31, every fourth case of the virgl
+list, 9,171 cases, in one process: 7,173 cases ran, and QEMU printed
+"D3D12: Removing Device." and ended as
+copy_image.non_compressed.viewclass_32_bits.rgb10_a2ui_rg16f.cubemap_to_texture2d_array
+started. Of its 1,080 copy_image cases before that, every one but the
+first failed. In four processes the same part ended at 7,171 cases, also
+in copy_image. The part's 12,179 copy_image cases with no other case
+before them, in four processes, all passed.
+
+2. A bisection over the part's 6,127 other cases: each slice ran in one
+process, followed by the part's 3,044 copy_image cases, and a copy that
+passed in the copy-only run and failed here counted as worse.
+
+    lines    1-3063    worse    0
+    lines 3064-6127    worse 3044
+    lines 4596-6127    worse    0
+    lines 3064-3829    worse    0
+    lines 3830-4595    worse 3044
+    lines 3830-3931    worse 3044
+    lines 3830-3880    worse    0
+    lines 3881-3905    worse 1194, and QEMU ended at a copy
+    lines 3893-3905    worse    0
+    lines 3881-3886    worse    0
+    lines 3887-3892    worse 3044
+    lines 3887-3889    worse 3044
+    line  3887         worse 3044   geometry_shading.emit.points_emit_0_end_1
+    line  3888         worse 3044   geometry_shading.emit.line_strip_emit_0_end_0
+
+3. Each case below alone, then 100 of the part's copy_image cases, in one
+process of a guest of its own. The case passed each time.
+
+    geometry_shading.emit.points_emit_0_end_0                    worse 100
+    geometry_shading.emit.points_emit_0_end_2                    worse 100
+    geometry_shading.emit.line_strip_emit_0_end_1                worse 100
+    geometry_shading.emit.line_strip_emit_0_end_2                worse 100
+    geometry_shading.emit.triangle_strip_emit_0_end_0            worse 100
+    geometry_shading.emit.triangle_strip_emit_0_end_1            worse 100
+    geometry_shading.emit.triangle_strip_emit_0_end_2            worse 100
+    geometry_shading.basic.output_0_and_128                      worse   0
+    geometry_shading.basic.output_128_and_0                      worse   0
+    geometry_shading.varying.vertex_out_1_geometry_out_0         worse   0
+    geometry_shading.emit.line_strip_emit_2_end_2_emit_2_end_0   worse   0
+    geometry_shading.emit.triangle_strip_emit_3_end_2_emit_3_end_0 worse 0
+    geometry_shading.emit.points_emit_1_end_1                    worse   0
+
+with points_emit_0_end_1 and line_strip_emit_0_end_0 as in 2.
