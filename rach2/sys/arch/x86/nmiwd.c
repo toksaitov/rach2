@@ -36,7 +36,7 @@ static void hex(char *out, unsigned long v, int digits)
  */
 void platform_show_regs(const char *subsystem, int level, const isr_params_t *p)
 {
-    char a[W + 1], b[W + 1], c[W + 1], d[W + 1];
+    char a[W + 1], b[W + 1], c[W + 1];
     process_t *cur = current_proc;
     uintptr_t top = cur ? cur->kernel_stack : 0;
 
@@ -66,9 +66,9 @@ void platform_show_regs(const char *subsystem, int level, const isr_params_t *p)
     hex(b, p->r14, 16);
     hex(c, p->r15, 16);
     klog(level, subsystem, "R13: %s R14: %s R15: %s", a, b, c);
-    (void)d;
 #else
     uintptr_t sp = FRAME_USER(p) ? p->user_esp : (uintptr_t)&p->user_esp;
+    char d[W + 1];
 
     hex(a, p->eip, 8);
     klog(level, subsystem, "EIP: %04x:0x%s", p->cs & 0xFFFFu, a);
