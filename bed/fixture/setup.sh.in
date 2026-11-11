@@ -44,11 +44,41 @@ say "installing"
 apt-get -q -y install @PACKAGES@
 apt-get -q -y clean
 
-# The server renders on llvmpipe: the guest's display has no render node,
-# and LIBGL_ALWAYS_SOFTWARE keeps a later one with a GPU on the same driver.
-# It forks a child for each client; socat forks one for each connection.
-# Both write their diagnostics to the serial console, which a run reads.
-useradd --system --no-create-home --shell /usr/sbin/nologin vtest
+# The server renders on llvmpipe, unless a GPU was given to the guest
+# through vfio-pci: then on the GPU's render node, which vtest-serve waits
+# for. QEMU's VGA, the display a guest without one has, has no render node.
+# The server forks a child for each client; socat forks one for each
+# connection. Both write their diagnostics to the serial console, which a
+# run reads.
+useradd --system --no-create-home --shell /usr/sbin/nologin --groups render,video vtest
+cat > /usr/local/sbin/vtest-serve <<'SERVE'
+#!/bin/sh
+# vtest-serve: run virglrenderer's vtest server on the render node of a
+# display function other than QEMU's VGA, once its driver has made one, or
+# on llvmpipe, and write what it renders on to /run/vtest/renderer.
+gpu=''
+for f in /sys/bus/pci/devices/*; do
+    case $(cat "$f/class") in 0x03*) ;; *) continue ;; esac
+    [ "$(cat "$f/vendor")" = 0x1234 ] || gpu=$f
+done
+node=''
+if [ -n "$gpu" ]; then
+    i=0
+    while [ -z "$node" ] && [ "$i" -lt 60 ]; do
+        for n in "$gpu"/drm/renderD*; do [ -e "$n" ] && node=/dev/dri/${n##*/}; done
+        [ -n "$node" ] || { sleep 1; i=$((i + 1)); }
+    done
+fi
+if [ -n "$node" ]; then
+    echo "gpu ${gpu##*/} $(basename "$(readlink "$gpu/driver")") $node" > /run/vtest/renderer
+else
+    echo "llvmpipe${gpu:+, no render node for ${gpu##*/}}" > /run/vtest/renderer
+    LIBGL_ALWAYS_SOFTWARE=1
+    export LIBGL_ALWAYS_SOFTWARE
+fi
+exec /usr/bin/virgl_test_server --use-egl-surfaceless --socket-path /run/vtest/vtest.sock
+SERVE
+chmod 755 /usr/local/sbin/vtest-serve
 cat > /etc/systemd/system/vtest-server.service <<'UNIT'
 [Unit]
 Description=virglrenderer's vtest server on /run/vtest/vtest.sock
@@ -56,10 +86,9 @@ Description=virglrenderer's vtest server on /run/vtest/vtest.sock
 [Service]
 User=vtest
 RuntimeDirectory=vtest
-Environment=LIBGL_ALWAYS_SOFTWARE=1
 StandardOutput=journal+console
 StandardError=journal+console
-ExecStart=/usr/bin/virgl_test_server --use-egl-surfaceless --socket-path /run/vtest/vtest.sock
+ExecStart=/usr/local/sbin/vtest-serve
 
 [Install]
 WantedBy=multi-user.target
@@ -95,6 +124,7 @@ for p in virgl-server libgl1-mesa-dri socat; do
     echo "vtest-guest: version: $p $(dpkg-query -W -f '${Version}' $p)" > /dev/ttyS0
 done
 echo "vtest-guest: version: kernel $(uname -r)" > /dev/ttyS0
+echo "vtest-guest: renderer: $(cat /run/vtest/renderer)" > /dev/ttyS0
 echo "vtest-guest: ready on port @PORT@" > /dev/ttyS0
 READY
 chmod 755 /usr/local/sbin/vtest-ready
