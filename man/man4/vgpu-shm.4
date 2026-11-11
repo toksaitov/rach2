@@ -59,9 +59,9 @@ Either way the driver unplugs the display, fails every pending fence with
 .Er ENODEV ,
 frees every resource and gives the region back; the call returns once it
 has.
-A buffer exported as a dma-buf keeps its pages of the heap until it is
-freed, and a region attached meanwhile over the same memory leaves them out
-of its heap until then.
+A buffer whose exported dma-buf still exists at the detach keeps its pages
+of the heap until it is freed, and a region attached meanwhile over the same
+memory leaves them out of its heap until then.
 Only the descriptor that attached may detach.
 Its last close detaches as
 .Dv VGS_DETACH_LOST
