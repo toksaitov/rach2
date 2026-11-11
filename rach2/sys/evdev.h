@@ -569,6 +569,16 @@ void evdev_sysfs_serio_firmware_id(int port, const char *id);
 void evdev_sysfs_serio_remove(int port);
 
 /**
+ * Make serio port `port` with no event device below it, as Linux's serio
+ * core registers a port before any driver binds: at once when its parent,
+ * serio1 for the pass-through port, is in /sys, else at the sync that
+ * makes the parent. It stays until `evdev_sysfs_serio_remove`. Under the
+ * big lock, in process context, as `evdev_sysfs_sync`, or before /sys is
+ * started. Defined in evdev_sysfs.c.
+ */
+void evdev_sysfs_serio_add(int port);
+
+/**
  * Have `add` put a driver's own files below the directory of the serio
  * port `port` when /sys makes it, where they stay, as Linux's serio core
  * adds a driver's `dev_groups` to its port: `add` gets the directory and

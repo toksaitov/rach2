@@ -107,12 +107,15 @@ static struct {
     int serio_link[SERIO_PORTS];
 } parents;
 
-/* Each serio port's firmware ID, NULL for none; the functions that add its
- * driver's own files to its directory, which stay while it does, and its
- * protocol's, which a change of protocol replaces, NULL for none; and the
- * entries the protocol's function made, 0 past the last. */
+/* Each serio port's firmware ID, NULL for none; whether its driver made it
+ * without a device below it, which `evdev_sysfs_serio_add` says; the
+ * functions that add its driver's own files to its directory, which stay
+ * while it does, and its protocol's, which a change of protocol replaces,
+ * NULL for none; and the entries the protocol's function made, 0 past the
+ * last. */
 #define SERIO_FILES_MAX 24
 static const char *serio_firmware[SERIO_PORTS];
+static int serio_wanted[SERIO_PORTS];
 static int (*serio_driver[SERIO_PORTS])(int dir);
 static int (*serio_files[SERIO_PORTS])(int dir);
 static int serio_made[SERIO_PORTS][SERIO_FILES_MAX];
@@ -1174,9 +1177,35 @@ void evdev_sysfs_serio_remove(int port)
     }
     parents.serio[port] = parents.serio_link[port] = 0;
     serio_firmware[port] = NULL;
+    serio_wanted[port] = 0;
     serio_driver[port] = NULL;
     serio_files[port] = NULL;
     k_memset(serio_made[port], 0, sizeof(serio_made[port]));
+}
+
+/** Make the ports `evdev_sysfs_serio_add` asked for whose parent is
+ * there: the i8042's ports once the i8042 is, the pass-through port once
+ * serio1 is. */
+static void make_wanted_ports(void)
+{
+    int port, parent;
+
+    for (port = 0; port < SERIO_PORTS; port++) {
+        parent = port == EVDEV_SERIO_PASS_THROUGH ? parents.serio[1] : parents.i8042;
+        if (serio_wanted[port] && sysfs_node_kind(parents.serio[port]) != SYSFS_NODE_DIR &&
+            sysfs_node_kind(parent) == SYSFS_NODE_DIR && serio_dir(port) < 0) {
+            klog(KLOG_WARN, "input", "serio%d: the port was not made", port);
+        }
+    }
+}
+
+void evdev_sysfs_serio_add(int port)
+{
+    if (port < 0 || port >= SERIO_PORTS) {
+        return;
+    }
+    serio_wanted[port] = 1;
+    make_wanted_ports();
 }
 
 void evdev_sysfs_serio_driver(int port, int (*add)(int dir))
@@ -1248,6 +1277,7 @@ void evdev_sysfs_sync(void)
         }
         records[next].failed = rc < 0 ? d.gen : 0;
     }
+    make_wanted_ports();
 }
 
 #ifndef RACH2_HOSTTEST

@@ -51,6 +51,7 @@ void mouse_push_packet(uint8_t buttons, int dx, int dy);
 #define MOUSE_SIDE      0x08 /* the side and extra buttons, BTN_SIDE and BTN_EXTRA */
 #define MOUSE_POINTER   0x10 /* INPUT_PROP_POINTER, which Linux's PS/2 driver sets */
 #define MOUSE_NO_MIDDLE 0x20 /* no BTN_MIDDLE, as a TrackPoint of two buttons */
+#define MOUSE_NO_RIGHT  0x40 /* no BTN_RIGHT, as a Synaptics ClickPad in relative mode */
 
 /* The buttons of `mouse_report`, a bit each. */
 #define MOUSE_LEFT         0x01
@@ -62,8 +63,9 @@ void mouse_push_packet(uint8_t buttons, int dx, int dy);
 /**
  * Register a mouse as an event device: `name`, `phys`, `bustype`, `vendor`
  * and `product` as `evdev_register` and `evdev_describe` take them, and
- * `caps` MOUSE_*. The device has REL_X, REL_Y, BTN_LEFT, BTN_RIGHT and,
- * without MOUSE_NO_MIDDLE, BTN_MIDDLE, and what `caps` adds. Any context.
+ * `caps` MOUSE_*. The device has REL_X, REL_Y, BTN_LEFT, BTN_RIGHT without
+ * MOUSE_NO_RIGHT, BTN_MIDDLE without MOUSE_NO_MIDDLE, and what `caps` adds.
+ * Any context.
  * Returns the device, or NULL when every node is taken, which
  * `mouse_report` takes as well.
  */
