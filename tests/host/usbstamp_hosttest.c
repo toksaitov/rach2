@@ -107,6 +107,12 @@ void arch_idle_masked(void)
 void watchdog_sched(void)
 {}
 
+/** Never inside klog here: no row logs from a thread a tick switches. */
+int klog_inside(void)
+{
+    return 0;
+}
+
 /** Format the record into `record` as the suite receives it, and count it. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {

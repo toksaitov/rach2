@@ -62,7 +62,9 @@
  * processor may add to, until a processor that holds the big lock makes a
  * record, writes the console or takes the boot processor's tick, or the
  * panic writes its own (`klog_flush`); it then reaches the ring and the
- * destinations, in the order the records were made.
+ * destinations, in the order the records were made. A record made inside
+ * a delivery or a console write while kept records wait for room in the
+ * full queue is kept behind them, so the ring has it after them too.
  */
 void klog(int level, const char *subsystem, const char *format, ...);
 
@@ -87,10 +89,18 @@ int klog_kept(void);
  * write them, and Linux writes such a report from the processor that found
  * it. One processor at a time does, and only the records kept when it
  * began. It does nothing while the holder is writing klog's state itself,
- * a record or the end of a console write, and the holder, should it come
- * back meanwhile, keeps its records for later until this is done.
+ * a record, a console write or a console byte, and the holder, should it
+ * come back meanwhile, keeps its records for later until this is done and
+ * waits for it before a console byte goes out.
  */
 void klog_flush_stuck(void);
+
+/** Whether this processor, which holds the big lock, is writing klog's
+ * state: a record, a console write or a console byte. A switch to another
+ * thread waits until it is not (`sched_preempt`), since the count would
+ * stay up while the big lock passes on and `klog_flush_stuck` would stand
+ * back for good. */
+int klog_inside(void);
 
 /**
  * Read out of the ring, oldest byte first.
@@ -191,9 +201,9 @@ void console_putc_raw(char c);
  * Bracket a console write, a program's chunk or a call of the debug shell's
  * `console_puts` or `console_printf`: a record raised inside it waits for its
  * end, and the screen's cursor is held and placed once at the end. Brackets
- * nest, and no writer sleeps inside one. `console_write_end` writes out the
- * records that waited, unless a record's delivery is in progress, which
- * writes them itself.
+ * nest, and no writer sleeps inside one, nor is switched out
+ * (`klog_inside`). `console_write_end` writes out the records that waited,
+ * unless a record's delivery is in progress, which writes them itself.
  */
 void console_write_begin(void);
 void console_write_end(void);

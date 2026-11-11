@@ -13,6 +13,7 @@
 #include "../io/timerfd.h"
 #include "../timer.h"
 #include "../watchdog.h"
+#include "../klog.h"
 #include "../rtc.h"
 #include "../lib/ksignal.h"
 
@@ -704,14 +705,19 @@ void sched_idle_loop(void)
  * its own state is half changed, and `sys_exit`, for one, publishes the
  * zombie its parent may reap, kernel stack and all, before it calls
  * `schedule`. The request is kept on the process, so a process that is
- * always inside a call still gives way once per call.
+ * always inside a call still gives way once per call. Nor is a kernel
+ * thread inside klog (`klog_inside`), in a record or a console write, whose
+ * count of klog's users would stay up while the big lock passed on; it
+ * gives way at a later tick, as Linux writes each console record with
+ * interrupts off and gives way only between records
+ * (kernel/printk/printk.c:3073-3088).
  */
 void sched_preempt(void)
 {
     if (current_proc && current_proc == this_cpu()->idle) {
         return;
     }
-    if (current_proc && current_proc->in_syscall) {
+    if (current_proc && (current_proc->in_syscall || klog_inside())) {
         current_proc->need_resched = 1;
         return;
     }
