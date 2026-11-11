@@ -26,7 +26,8 @@ shift $((OPTIND - 1))
 [ "$(id -u)" -eq 0 ] || { echo 'gpu: run as root' >&2; exit 2; }
 here=$(cd "$(dirname "$0")" && pwd)
 out=$1
-# The row runs in OUT, so LINUX and PROTON are made absolute from here.
+# The row runs in OUT, so LINUX and PROTON are made absolute from the
+# caller's working directory.
 case $linux in
     '' | /*) ;;
     *) linux=$(pwd)/$linux ;;

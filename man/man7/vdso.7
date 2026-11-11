@@ -146,20 +146,20 @@ range
 .Xr mmap 2
 places mappings in.
 The data page can never be made writable or executable, and only the
-process's own loads reach it, as on Linux: no access through
+process's own loads reach it, as on Linux.
 .Xr ptrace 2
-or
+and
 .Pa /proc/PID/mem ,
 the process's own
 .Pa /proc/self/mem
-among them, reaches it, which answer
-.Er EIO ,
-and
+among them, answer
+.Er EIO
+for it;
 .Xr process_vm_readv 2
-of it answers
-.Er EFAULT ,
-and so does
-.Xr vmsplice 2 .
+and
+.Xr vmsplice 2
+answer
+.Er EFAULT .
 The library, unlike the data page, may be made writable, as on Linux:
 .Xr mprotect 2
 may add
