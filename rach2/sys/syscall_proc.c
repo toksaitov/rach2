@@ -4786,7 +4786,8 @@ static void sig_fork_pending(struct tgroup *tg, int signo)
  * thread chosen before the post, or
  * end the whole process when the signal is fatal to it (`sig_complete`).
  * Any thread that does not block the signal may take it. A process whose
- * threads have all ended takes nothing. SIGKILL and SIGSTOP cannot be
+ * threads have all ended takes nothing, and neither does a kernel thread
+ * (`proc_is_kthread`). SIGKILL and SIGSTOP cannot be
  * caught, so a pending SIGKILL is honored even before delivery by leaving
  * it pending for the default path. A multiprocess send (`multi`) also
  * reaches children being built (`sig_fork_pending`); a single-process
@@ -4798,7 +4799,8 @@ static void sig_post_process(process_t *target, int signo, const struct k_siginf
     process_t *taker;
     uint32_t f;
 
-    if (!target || signo < 1 || signo > KSIG_MAX || target->state == PROC_UNUSED) {
+    if (!target || signo < 1 || signo > KSIG_MAX || target->state == PROC_UNUSED ||
+        proc_is_kthread(target)) {
         return;
     }
     tg = target->tg;
@@ -4828,23 +4830,11 @@ void signal_post_multi(process_t *target, int signo, const struct k_siginfo *inf
     sig_post_process(target, signo, info, 1);
 }
 
-/** Select the leader's live replacement for a multiprocess send, or NULL
- * for a record that is not a published leader; process.h gives the contract. */
+/** Select the leader, zombie or not, for a multiprocess send, or NULL for
+ * a record that is not a published leader; process.h gives the contract. */
 process_t *signal_process_target(process_t *p)
 {
-    process_t *t;
-
-    if (p->state == PROC_UNUSED || p->pid != p->tgid) {
-        return NULL;
-    }
-    if (p->state == PROC_ZOMBIE) {
-        for (t = proc_list; t; t = t->next) {
-            if (t->tg == p->tg && t->state != PROC_UNUSED && t->state != PROC_ZOMBIE) {
-                return t;
-            }
-        }
-    }
-    return p;
+    return p->state != PROC_UNUSED && p->pid == p->tgid ? p : NULL;
 }
 
 /**
@@ -4852,14 +4842,15 @@ process_t *signal_process_target(process_t *p)
  * the siginfo `info`, unless `sig_prepare` drops it, and end the whole
  * process when the signal is fatal to it and `t` can take it now, as
  * Linux's `complete_signal` does for a signal sent to one thread
- * (`sig_complete`).
+ * (`sig_complete`). A kernel thread takes nothing (`proc_is_kthread`).
  */
 void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
 {
     uint32_t f;
     process_t *taker;
 
-    if (!t || signo < 1 || signo > KSIG_MAX || t->state == PROC_ZOMBIE || t->state == PROC_UNUSED) {
+    if (!t || signo < 1 || signo > KSIG_MAX || t->state == PROC_ZOMBIE || t->state == PROC_UNUSED ||
+        proc_is_kthread(t)) {
         return;
     }
     f = sig_irq_save();
@@ -5013,11 +5004,14 @@ static int cred_may_signal(const process_t *target, int signo)
 }
 
 /** Post `signo` to every member of the process group `pgid` the caller may
- * signal, which kill(2) selects with a pid of 0 or below -1. The POSIX
- * outcome: 0 if any member may be signalled, -EPERM if members exist but none
- * may be, -ESRCH if the group is empty. signo 0 only probes. A member that
- * has ended and is not yet reaped counts and discards the signal, as on
- * Linux. */
+ * signal, which kill(2) selects with a pid of 0 or below -1, as Linux
+ * 6.12.115's __kill_pgrp_info does (kernel/signal.c:1478-1488): each
+ * member through its leader (`signal_process_target`), whose credentials
+ * the permission check reads. 0 if any member may be signalled, -EPERM if
+ * members exist but none may be, -ESRCH if the group is empty. signo 0
+ * only probes. A member that has ended and is not yet reaped counts and
+ * discards the signal, as on Linux. A kernel thread is in no group of a
+ * process. */
 static int32_t kill_group(int pgid, int signo)
 {
     int found = 0;
@@ -5027,45 +5021,7 @@ static int32_t kill_group(int pgid, int signo)
     for (p = proc_list; p; p = p->next) {
         process_t *target = signal_process_target(p);
 
-        if (!target || (int)target->pgid != pgid) {
-            continue;
-        }
-        found = 1;
-        if (!cred_may_signal(target, signo)) {
-            continue;
-        }
-        allowed = 1;
-        if (signo != 0 && target->state != PROC_ZOMBIE) {
-            struct k_siginfo info;
-
-            sender_info(&info, SI_USER, target);
-            signal_post_multi(target, signo, &info);
-        }
-    }
-    if (!found) {
-        return -ESRCH;
-    }
-    return allowed ? 0 : -EPERM;
-}
-
-/** Post `signo` to every process the caller sees and may signal, but its
- * own, the init of its PID namespace and the kernel's threads, which
- * kill(2) selects with a pid of -1, as Linux does; an init ends the others
- * so at a shutdown. Each process is posted to once, through its leader
- * or its first live thread. The outcome is `kill_group`'s: 0, -EPERM
- * or -ESRCH. */
-static int32_t kill_all(int signo)
-{
-    int found = 0;
-    int allowed = 0;
-    process_t *p;
-
-    for (p = proc_list; p; p = p->next) {
-        process_t *target = signal_process_target(p);
-
-        if (!target || target->state == PROC_ZOMBIE || target == proc_idle ||
-            target->space_root == 0 || target->tg == current_proc->tg ||
-            pid_seen(target->tgid) <= 1) {
+        if (!target || proc_is_kthread(target) || (int)target->pgid != pgid) {
             continue;
         }
         found = 1;
@@ -5084,6 +5040,39 @@ static int32_t kill_all(int signo)
         return -ESRCH;
     }
     return allowed ? 0 : -EPERM;
+}
+
+/** Post `signo` to every process the caller sees and may signal, but its
+ * own and the init of its PID namespace, which kill(2) selects with a pid
+ * of -1; an init ends the others so at a shutdown. Each process is posted
+ * to once, through its leader (`signal_process_target`), whose
+ * credentials the permission check reads. As Linux 6.12.115's
+ * kill_something_info counts each such process, a zombie and a kernel
+ * thread included, and fails only when it counts none (kernel/signal.c:
+ * 1632-1645), the result is 0 when any process is found, permitted or
+ * not, and -ESRCH when none is. A kernel thread and a process whose
+ * threads have all ended take nothing. */
+static int32_t kill_all(int signo)
+{
+    int found = 0;
+    process_t *p;
+
+    for (p = proc_list; p; p = p->next) {
+        process_t *target = signal_process_target(p);
+
+        if (!target || target == proc_idle || target->tg == current_proc->tg ||
+            pid_seen(target->tgid) <= 1) {
+            continue;
+        }
+        found = 1;
+        if (signo != 0 && cred_may_signal(target, signo)) {
+            struct k_siginfo info;
+
+            sender_info(&info, SI_USER, target);
+            signal_post_multi(target, signo, &info);
+        }
+    }
+    return found ? 0 : -ESRCH;
 }
 
 /** kill(2): pid > 0 a single process, which the id of any of its threads

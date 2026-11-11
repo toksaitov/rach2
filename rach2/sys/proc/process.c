@@ -645,6 +645,12 @@ process_t *get_process(uint32_t pid)
     return NULL;
 }
 
+int proc_is_kthread(const process_t *p)
+{
+    return p->state != PROC_UNUSED && p->state != PROC_ZOMBIE && p->space_root == 0 &&
+           !p->in_syscall;
+}
+
 isr_params_t *proc_user_frame(const process_t *t)
 {
     return (isr_params_t *)(t->kernel_stack - sizeof(isr_params_t));
