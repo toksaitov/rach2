@@ -371,10 +371,12 @@ static struct dma_fence *unwrap_contained(struct dma_fence *node)
     return c ? c->fence : node;
 }
 
-/** Move the walk to the earlier point whose fence has not signalled, or
- * to the end, giving back the reference to the point it leaves, as
- * Linux's dma_fence_chain_walk steps without dropping the points it
- * passes. */
+/** Move the walk to the nearest earlier point whose fence has not
+ * signalled, or to the end, giving back the reference to the point it
+ * leaves. The signalled points passed stay in the chain: Linux's
+ * dma_fence_unwrap_next steps with dma_fence_chain_walk, which unlinks
+ * each by cmpxchg on `prev` and puts it (dma-fence-chain.c:50-72), as
+ * Rach2's dma_fence_chain_walk does for the syncobjs. */
 static void unwrap_step(struct dma_fence_unwrap *cursor)
 {
     struct dma_fence_chain *c = to_dma_fence_chain(cursor->chain);
