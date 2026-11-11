@@ -1036,14 +1036,15 @@ static int32_t write_allowed(const fd_entry_t *entry)
  * terminal, a pty, a device) writes through them once `write_ops` has
  * checked that the descriptor was opened for writing, as Linux does. A stream
  * socket's send copies from the user buffer itself and sleeps for room in
- * its ring unless the description is non-blocking. A datagram socket sends
+ * its ring unless the description is non-blocking, and its EPIPE posts
+ * SIGPIPE when `sigpipe` is set (`sock_stream_sent`). A datagram socket sends
  * to the peer it connected to, -EDESTADDRREQ without one, and a datagram
  * past 65535 bytes is -EMSGSIZE; a socket of another type is -EOPNOTSUPP.
  * A file of a mount or of the KRFFS root is `file_write`'s. The framebuffer
  * has operations of its own (display/fbdev.c), and the console is
  * `console_write`'s.
  */
-static int32_t write_fd(int fd, const char __user *buf, size_t requested)
+static int32_t write_fd(int fd, const char __user *buf, size_t requested, int sigpipe)
 {
     fd_entry_t *entry;
     uint32_t count;
@@ -1079,8 +1080,10 @@ static int32_t write_fd(int fd, const char __user *buf, size_t requested)
             if (!user_buffer_ok((__force uintptr_t)buf, count, 0)) {
                 return -EFAULT;
             }
-            return socket_tcp_send(entry->sock, (const uint8_t __force *)buf, (int)count,
-                                   entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
+            return sock_stream_sent(
+                socket_tcp_send(entry->sock, (const uint8_t __force *)buf, (int)count,
+                                entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK)),
+                sigpipe);
         }
         if (entry->sock->type == SOCK_DGRAM) {
             if (!entry->sock->connected) {
@@ -1217,7 +1220,7 @@ long sys_ftruncate(isr_params_t *params)
 long sys_write(isr_params_t *params)
 {
     return write_fd((int)SC_ARG(params, 0), (const char __user *)SC_ARG(params, 1),
-                    SC_ARG(params, 2));
+                    SC_ARG(params, 2), 1);
 }
 
 /** Element `i` of the vector of struct iovec at `uvec`, in the caller's
@@ -1356,7 +1359,7 @@ static int32_t writev_elements(int fd, uintptr_t iov_user, int iovcnt, uint32_t 
         if (!user_access_ok(iov.iov_base, len)) {
             return (total > 0) ? total : -EFAULT;
         }
-        r = write_fd(fd, (const char __user *)iov.iov_base, len);
+        r = write_fd(fd, (const char __user *)iov.iov_base, len, total == 0);
         if (r < 0) {
             return (total > 0) ? total : r;
         }
@@ -13907,7 +13910,7 @@ static int32_t copy_put(fd_entry_t *out, int out_fd, const char *buf, uint32_t n
     if (at) {
         return file_write(out, (const char __force __user *)buf, n, at, n);
     }
-    return write_fd(out_fd, (const char __force __user *)buf, n);
+    return write_fd(out_fd, (const char __force __user *)buf, n, 1);
 }
 
 /**

@@ -133,19 +133,25 @@ If it cannot send, a pending TCP error is returned and cleared.
 If the stream is outside those states and has no pending TCP error, the
 call fails with
 .Er EPIPE .
-A TCP send generates no
-.Dv SIGPIPE .
-An
-.Dv AF_UNIX
-stream or sequenced-packet send that fails with
+A TCP send that fails with
 .Er EPIPE ,
-its peer gone or the connection shut down in its direction, posts
+its own or a reset's after the peer's FIN, and an
+.Dv AF_UNIX
+stream or sequenced-packet send that fails with it, its peer gone or the
+connection shut down in its direction, post
 .Dv SIGPIPE
 to the sending thread, whose default action ends the process, unless
 .Fa flags
 has
 .Dv MSG_NOSIGNAL ,
-as in Linux.
+as in Linux; so does a
+.Xr write 2 ,
+.Xr sendfile 2
+or
+.Xr splice 2
+to a TCP stream.
+A vector that sent some of its bytes before the failure returns their
+count with no signal.
 .Ss Datagrams
 For an IPv4 datagram socket,
 .Fa addr

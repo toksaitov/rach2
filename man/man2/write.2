@@ -153,9 +153,15 @@ A short return counts only the bytes queued.
 A connection no longer able to send returns its recorded error, or
 .Er EPIPE
 when no error was recorded.
-This write path does not generate
+An
+.Er EPIPE
+posts
 .Dv SIGPIPE
-for a socket.
+to the writing thread, as Linux's
+.Fn tcp_sendmsg
+does, except for an element of
+.Fn writev
+after one that wrote.
 .Pp
 A datagram socket must have a connected peer.
 Each write sends one datagram, with at most 65507 payload bytes over IPv4

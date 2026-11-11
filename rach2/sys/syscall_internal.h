@@ -277,6 +277,15 @@ uint32_t sock_tstamp_put(uint8_t bits, int64_t sec, int32_t nsec, int *type, uin
  */
 int32_t socket_gettstamp(const struct socket *sock, uint32_t request, uintptr_t arg, int *handled);
 
+/**
+ * Return `rc`, the result of a send on a TCP stream, after posting SIGPIPE
+ * to the calling thread when it is -EPIPE and `post` is set, as Linux's
+ * sk_stream_error does for send, sendmsg, write and sendfile: `post` is
+ * clear for MSG_NOSIGNAL, and for a vector's element after one that sent,
+ * since Linux's send returns what it sent with no signal.
+ */
+int32_t sock_stream_sent(int32_t rc, int post);
+
 /* Format: the vectors readv, writev and sendmsg accept, the Linux IOV_MAX. */
 #define IOV_MAX_LOCAL 1024
 

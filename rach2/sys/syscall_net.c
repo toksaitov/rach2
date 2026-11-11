@@ -272,6 +272,8 @@ static void raw_count_sent(const struct socket *sock, int r, const uint8_t *msg,
 #define MSG_PEEK     0x2
 #define MSG_TRUNC    0x20
 #define MSG_DONTWAIT 0x40
+/* A send flag: an EPIPE posts no SIGPIPE (`sock_stream_sent`). */
+#define MSG_NOSIGNAL 0x4000
 
 #define IPPROTO_RAW 255
 
@@ -1237,6 +1239,21 @@ static int32_t netlink_addr_to_user(const uint8_t *nl, uintptr_t sa_ptr, uintptr
     return copy_to_user((void __user *)salen_ptr, &cap, sizeof(cap)) == 0 ? 0 : -EFAULT;
 }
 
+/** Post SIGPIPE after a TCP send's EPIPE (syscall_internal.h). */
+int32_t sock_stream_sent(int32_t rc, int post)
+{
+    struct k_siginfo info;
+
+    if (rc == -EPIPE && post) {
+        k_memset(&info, 0, sizeof(info));
+        info.code = SI_USER;
+        info.pid = current_proc->tgid;
+        info.uid = current_proc->ruid;
+        signal_post_thread(current_proc, SIGPIPE, &info);
+    }
+    return rc;
+}
+
 /**
  * sendto(2): a stream socket ignores the destination and behaves like send; a
  * datagram socket sends to the sockaddr, binding an ephemeral source port
@@ -1363,8 +1380,10 @@ static int32_t do_sendto_opt(int fd, uintptr_t buf_ptr, int len, int flags, uint
     if (entry->sock->type == SOCK_STREAM) {
         int nonblock =
             (flags & MSG_DONTWAIT) || (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
-        return (int32_t)socket_tcp_send(
-            entry->sock, (const uint8_t __force *)(const void __user *)buf_ptr, len, nonblock);
+        return sock_stream_sent(
+            socket_tcp_send(entry->sock, (const uint8_t __force *)(const void __user *)buf_ptr, len,
+                            nonblock),
+            !(flags & MSG_NOSIGNAL));
     }
 
     if (entry->sock->family == AF_PACKET) {
@@ -1922,8 +1941,10 @@ static int32_t do_send(int fd, uintptr_t buf_ptr, int len, int flags)
         return do_sendto(fd, buf_ptr, len, flags, 0, 0);
     }
     nonblock = (flags & MSG_DONTWAIT) || (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
-    return (int32_t)socket_tcp_send(
-        entry->sock, (const uint8_t __force *)(const void __user *)buf_ptr, len, nonblock);
+    return sock_stream_sent(socket_tcp_send(entry->sock,
+                                            (const uint8_t __force *)(const void __user *)buf_ptr,
+                                            len, nonblock),
+                            !(flags & MSG_NOSIGNAL));
 }
 
 /**
@@ -3656,6 +3677,40 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
 }
 
 /**
+ * sendmsg(2) on the stream socket `fd`: its `iovlen` buffers, whose vector
+ * is at `iov_user`, sent one after another, stopping at the first that
+ * goes short. Returns the bytes sent, or -errno when the first buffer
+ * sends none. Only a failure of the first buffer may post SIGPIPE
+ * (`sock_stream_sent`), since Linux's send returns what it sent with no
+ * signal.
+ */
+static int32_t sendmsg_stream(int fd, uintptr_t iov_user, uint32_t iovlen, int flags)
+{
+    struct kernel_iovec one;
+    uint32_t i, total = 0;
+    int32_t rc;
+
+    for (i = 0; i < iovlen; i++) {
+        if (iov_fetch(&one, iov_user, i) != 0) {
+            return total ? (int32_t)total : -EFAULT;
+        }
+        if (one.iov_len == 0) {
+            continue;
+        }
+        rc = do_sendto(fd, one.iov_base, (int)USER_RW_LEN(one.iov_len),
+                       total ? flags | MSG_NOSIGNAL : flags, 0, 0);
+        if (rc < 0) {
+            return total ? (int32_t)total : rc;
+        }
+        total += (uint32_t)rc;
+        if ((uint32_t)rc < one.iov_len) {
+            break;
+        }
+    }
+    return (int32_t)total;
+}
+
+/**
  * sendmsg(2) on an AF_INET, packet or netlink socket: the caller's buffers in
  * order, as one send. A stream sends them one after another and stops at the
  * first that goes short; a UDP or netlink socket gathers at most eight into
@@ -3709,25 +3764,7 @@ static int32_t do_sendmsg(int fd, uintptr_t msg_ptr, int flags)
         opt = &txopt;
     }
     if (entry->sock->type == SOCK_STREAM) {
-        for (i = 0; i < iovlen; i++) {
-            struct kernel_iovec one;
-
-            if (iov_fetch(&one, iov_user, i) != 0) {
-                return total ? (int32_t)total : -EFAULT;
-            }
-            if (one.iov_len == 0) {
-                continue;
-            }
-            rc = do_sendto(fd, one.iov_base, (int)USER_RW_LEN(one.iov_len), flags, 0, 0);
-            if (rc < 0) {
-                return total ? (int32_t)total : rc;
-            }
-            total += (uint32_t)rc;
-            if ((uint32_t)rc < one.iov_len) {
-                break;
-            }
-        }
-        return (int32_t)total;
+        return sendmsg_stream(fd, iov_user, iovlen, flags);
     }
     if (iovlen > sizeof(iov) / sizeof(iov[0])) {
         return -EMSGSIZE;
