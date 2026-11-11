@@ -1,0 +1,5 @@
+trigger: pid: 411 evidence: /tmp/t3703-next-out/unlink-16
+trigger: waiting for a playback period
+trigger: preparing unlink 16 MiB
+trigger: freeing unlink 16 MiB
+trigger: result: load completed; read the retained counters
