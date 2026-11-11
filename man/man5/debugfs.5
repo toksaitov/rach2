@@ -198,7 +198,7 @@ write that begins with
 and the big lock's holds for any other.
 .It Pa bkl/long
 Mode 0644.
-The latest interrupt sample of each of the last 32 big-lock hold records
+The latest interrupt sample of each of the last 32 holds of the big lock
 sampled at 16 ms or older, oldest first.
 The header names the columns:
 .Bd -literal -offset indent
@@ -213,11 +213,13 @@ service clock-us, not uptime.
 Without calibration there are no records.
 The next columns name the processor, the interrupted thread (0 for none),
 its command (a dash for none, spaces and nonprinting characters replaced
-by question marks), the hold's entry vector and system call number
-(-1 for none).
+by question marks), and the hold's entry vector and system call number,
+as
+.Pa bkl/calls
+charges the hold: -1 for none, and vector 0 with -1 for a take after a
+switch or an idle wait.
 The eight hexadecimal PCs are the interrupted instruction and its
 callers, zero after the end of the bounded kernel-stack walk.
-A hold may span a switch, so its entry need not belong to that thread.
 Later interrupts during a hold replace its sample.
 A hold that ends without an interrupt can leave no sample.
 A read snapshots the ring once, before rendering it.
