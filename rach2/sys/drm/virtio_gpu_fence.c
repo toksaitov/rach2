@@ -51,32 +51,28 @@ void vgpu_cmd_prepare(struct virtio_gpu_cmd *cmd)
 
 /**
  * Wait interruptibly for each leaf of `fence` on a fence context other than
- * `context`, as Linux's virtio_gpu_do_fence_wait: the device keeps the
- * order of one context's fences, those of the control queue or of one ring,
- * and of nothing across them.
+ * `context`, as Linux's virtio_gpu_dma_fence_wait and
+ * virtio_gpu_do_fence_wait: the device keeps the order of one context's
+ * fences, those of the control queue or of one ring, and of nothing across
+ * them. The walk holds the point it is at, so the leaf stays across the
+ * sleep and a leaf that signals meanwhile moves no other out of the walk.
  */
 int32_t vgpu_wait_dependency(struct virtio_gpu_device *vg, struct dma_fence *fence,
                              uint64_t context)
 {
-    struct dma_fence *leaf, *stable;
-    uint32_t i, n;
+    struct dma_fence_unwrap u;
+    struct dma_fence *leaf;
     int32_t rc = 0;
 
-    stable = dma_fence_unwrap_merge(&fence, 1);
-    if (!stable) {
-        return -ENOMEM;
-    }
-    n = dma_fence_count(stable);
-    for (i = 0; i < n; i++) {
-        leaf = dma_fence_at(stable, i);
-        if (leaf && leaf->context != context) {
+    for (leaf = dma_fence_unwrap_first(fence, &u); leaf; leaf = dma_fence_unwrap_next(&u)) {
+        if (leaf->context != context) {
             rc = dma_fence_wait_until(leaf, 1, 0x7fffffffffffffffll);
             if (rc) {
                 break;
             }
         }
     }
-    dma_fence_put(stable);
+    dma_fence_unwrap_end(&u);
     return rc ? rc : (vg->dead ? -ENODEV : 0);
 }
 
