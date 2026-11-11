@@ -30,7 +30,10 @@ bytes from socket
 .Fa fd
 to
 .Fa buf .
-A stream receive returns available bytes and may return less than requested.
+A stream receive returns available bytes and may return less than
+requested, unless
+.Dv MSG_WAITALL
+is set.
 After a peer's FIN, buffered data is returned before end of input.
 A datagram receive takes one message and discards bytes beyond the
 buffer capacity.
@@ -71,9 +74,12 @@ makes the call return the datagram's whole length, even when its buffers
 took less, as Linux does; netlink's programs ask it with
 .Dv MSG_PEEK
 and no buffer to learn how large a buffer to give.
-Other flag bits are ignored:
 .Dv MSG_WAITALL
-does not wait to fill the buffer.
+makes a stream receive wait until its buffers are full, as Linux's does;
+it returns less at the end of input, on an error or a signal, which ends
+the wait with the bytes already taken, or when nonblocking and no more has
+come.
+A datagram socket ignores it, and other flag bits are ignored.
 .Pp
 A datagram socket queues what it receives within its receive budget,
 .Dv SO_RCVBUF ,
@@ -128,9 +134,20 @@ If receiving the data fails, no source address or length is written.
 .Pp
 A receive that waits checks the data buffer again when the wait ends,
 since another thread may have unmapped it meanwhile.
-A buffer that can no longer be written fails the call with
-.Er EFAULT ,
-and the datagram or the stream bytes stay queued for the next receive.
+On a datagram socket,
+.Fn recv
+and
+.Fn recvfrom
+fail with
+.Er EFAULT
+when the buffer can no longer be written, and the datagram stays queued
+for the next receive;
+.Fn recvmsg
+checks its buffers as it copies into them, and fails with the datagram
+taken, as described below.
+On a stream, each receive buffer of the connection is checked before it is
+copied, and one whose destination cannot be written stays queued, as
+described below.
 .Pp
 An IPv4 socket returns a 16-byte
 .Vt sockaddr_in
@@ -191,22 +208,36 @@ reads as
 .Fn recv
 does, with
 .Dv MSG_DONTWAIT ,
-.Dv O_NONBLOCK
-and
+.Dv O_NONBLOCK ,
 .Dv MSG_PEEK
+and
+.Dv MSG_WAITALL
 honoured, and fills the buffers of
 .Fa msg Ns ->msg_iov
-in order: the first that is not empty waits for input as
+in order, as one receive into their concatenation: it waits for input as
 .Fn recv
-would, and each later one takes only what has already come, the call
-returning at the first buffer left short.
+would, then takes what has come, as much as the buffers hold.
 With
 .Dv MSG_PEEK
-the later buffers receive the bytes that follow the earlier ones', and
 nothing is taken.
+The bytes are taken one receive buffer of the connection at a time, as
+Linux's tcp_recvmsg takes the buffers of its receive queue: each segment
+that arrived in order is one, and so are the bytes a filled hole releases
+at once; past 32 queued, a new one joins the last, as Linux joins
+segments.
+When the destination of a buffer, as much of it as the vector takes,
+cannot be written, or lies outside user space, the buffer stays queued
+whole and the call returns the bytes of the buffers before it, or fails
+with
+.Er EFAULT
+when there are none.
+.Fn recv ,
+.Fn recvfrom
+and
+.Xr readv 2
+read a stream the same way.
 The vector list is copied once, so a buffer that overlaps it cannot
 replace a later destination.
-Each buffer is checked again before use after an earlier receive waited.
 With no vectors, or only zero-length buffers, the call waits for input
 too, or returns
 .Er EAGAIN
@@ -273,9 +304,22 @@ the address is truncated.
 It receives zero when
 .Va msg_name
 is null.
-The message header, vector entries, nonempty data buffers, and the
-portion of the address buffer to be written are checked before input
-is consumed.
+The message header, the vector entries, the portion of the address buffer
+to be written and, on a socket that asked for control messages, the control
+buffer are checked before input is consumed.
+The data buffers are checked only to lie below the top of user space, as
+Linux's import_iovec checks them, and are written as the datagram is copied
+into them: a buffer the datagram reaches that cannot be written fails the
+call with
+.Er EFAULT
+and the datagram taken, unless
+.Dv MSG_PEEK
+leaves it queued, as Linux's udp_recvmsg drops it; a buffer the datagram
+does not reach is not touched, so that a call on an empty socket with
+.Dv MSG_DONTWAIT
+returns
+.Er EAGAIN
+whatever its buffers.
 .Pp
 A UDP, raw or packet socket, or an AF_UNIX one as
 .Xr unix 7
