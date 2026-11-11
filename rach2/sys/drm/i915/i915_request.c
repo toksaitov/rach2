@@ -54,6 +54,10 @@
 #define I915_RECORD_TIMEOUT_NS 200000000ll
 #define I915_WAIT_SLICE_NS     1000000000ll
 
+/* How long a wait polls a request the chip runs before it asks for the
+ * signal, Linux's CONFIG_DRM_I915_MAX_REQUEST_BUSYWAIT, 8000 ns. */
+#define I915_BUSYWAIT_US 8u
+
 /* How often the retire worker passes while the GT is awake, as Linux's
  * retire_work_handler queues itself round_jiffies_up_relative(HZ) on. */
 #define I915_RETIRE_INTERVAL_MS 1000u
@@ -1233,9 +1237,16 @@ int32_t i915_request_wait(struct i915_request *rq, int intr, int64_t timeout_ns)
         return -ETIME;
     }
     deadline = timeout_ns < 0 ? -1 : dma_fence_now() + timeout_ns;
-    /* Linux's wait adds a callback, which enables signalling for good
-     * (i915_request.c:2050). */
-    rq->fence.base.listened = 1;
+    /* Linux's optimistic spin (i915_request.c:2030-2032): a request the
+     * chip has begun is polled before the wait asks for its signal, and
+     * one done by then is not listened for. Otherwise the wait adds a
+     * callback, which enables signalling for good (i915_request.c:2050). */
+    if (!i915_request_completed(rq) && rq->submitted && i915_request_started(rq)) {
+        request_poll(rq, I915_BUSYWAIT_US);
+    }
+    if (!i915_request_completed(rq)) {
+        rq->fence.base.listened = 1;
+    }
     rq->waiters++;
     while (!i915_request_completed(rq)) {
         now = dma_fence_now();

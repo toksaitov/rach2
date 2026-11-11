@@ -3747,7 +3747,10 @@ int i915_request_started(const struct i915_request *rq);
 /**
  * Wait for the request for `timeout_ns`, for ever when it is negative, as
  * Linux's i915_request_wait; the breadcrumb is read again at each second
- * and at the timeout, in case an interrupt was lost.
+ * and at the timeout, in case an interrupt was lost. A request the chip
+ * has begun is polled for 8 us first, and one done by then is not
+ * listened for; otherwise the wait marks its fence `listened`, which
+ * retires the engine at its signal when it is the engine's last.
  *
  * @return 0 once it completed, -ETIME at the timeout (at once for 0), or
  *         -EINTR for a signal when `intr` is set.
