@@ -16,54 +16,101 @@
  * Handle tables
  */
 
-int32_t drm_handle_insert(struct drm_handle **list, void *object, uint32_t *id)
+/** Make room in `t` for the id `id`, doubling the slots: 0, or -ENOMEM. */
+static int32_t handles_grow(struct drm_handles *t, uint32_t id)
 {
-    struct drm_handle *h = (struct drm_handle *)kmalloc(sizeof(*h));
-    struct drm_handle **link = list;
-    uint32_t want = 1;
+    uint32_t cap = t->cap ? t->cap : 64u;
+    struct drm_handle **slot;
 
-    if (!h) {
+    while (cap <= id) {
+        if (cap > 0x7FFFFFFFu / sizeof(*slot) / 2u) {
+            return -ENOMEM;
+        }
+        cap *= 2u;
+    }
+    slot = (struct drm_handle **)kzalloc(cap * sizeof(*slot));
+    if (!slot) {
         return -ENOMEM;
     }
-    while (*link && (*link)->id == want) {
+    if (t->slot) {
+        k_memcpy(slot, t->slot, t->cap * sizeof(*slot));
+        kfree(t->slot);
+    }
+    t->slot = slot;
+    t->cap = cap;
+    return 0;
+}
+
+int32_t drm_handle_insert(struct drm_handles *t, void *object, uint32_t *id)
+{
+    struct drm_handle *h;
+    uint32_t want = t->free ? t->free : 1u;
+
+    while (want < t->cap && t->slot[want]) {
         want++;
-        link = &(*link)->next;
+    }
+    if (want >= t->cap && handles_grow(t, want) != 0) {
+        return -ENOMEM;
+    }
+    h = (struct drm_handle *)kmalloc(sizeof(*h));
+    if (!h) {
+        return -ENOMEM;
     }
     h->id = want;
     h->object = object;
     h->prime = NULL;
-    h->next = *link;
-    *link = h;
+    t->slot[want] = h;
+    t->free = want + 1u;
     *id = want;
     return 0;
 }
 
-void *drm_handle_find(struct drm_handle *list, uint32_t id)
+struct drm_handle *drm_handle_get(const struct drm_handles *t, uint32_t id)
 {
-    for (; list && list->id <= id; list = list->next) {
-        if (list->id == id) {
-            return list->object;
-        }
-    }
-    return NULL;
+    return id < t->cap ? t->slot[id] : NULL;
 }
 
-void *drm_handle_remove(struct drm_handle **list, uint32_t id)
+void *drm_handle_find(const struct drm_handles *t, uint32_t id)
 {
-    struct drm_handle **link;
+    struct drm_handle *h = drm_handle_get(t, id);
 
-    for (link = list; *link && (*link)->id <= id; link = &(*link)->next) {
-        if ((*link)->id == id) {
-            struct drm_handle *h = *link;
-            void *object = h->object;
+    return h ? h->object : NULL;
+}
 
-            *link = h->next;
-            dma_buf_put(h->prime);
-            kfree(h);
-            return object;
+void *drm_handle_remove(struct drm_handles *t, uint32_t id)
+{
+    struct drm_handle *h = drm_handle_get(t, id);
+    void *object;
+
+    if (!h || id == 0) {
+        return NULL;
+    }
+    object = h->object;
+    t->slot[id] = NULL;
+    if (id < t->free) {
+        t->free = id;
+    }
+    dma_buf_put(h->prime);
+    kfree(h);
+    return object;
+}
+
+uint32_t drm_handle_next(const struct drm_handles *t, uint32_t id)
+{
+    for (; id < t->cap; id++) {
+        if (id && t->slot[id]) {
+            return id;
         }
     }
-    return NULL;
+    return 0;
+}
+
+void drm_handles_fini(struct drm_handles *t)
+{
+    kfree(t->slot);
+    t->slot = NULL;
+    t->cap = 0;
+    t->free = 0;
 }
 
 /* ------------------------------------------------------------------------
@@ -148,7 +195,7 @@ int32_t drm_gem_handle_create(struct drm_file *file, struct drm_gem_object *obj,
 
 struct drm_gem_object *drm_gem_object_lookup(struct drm_file *file, uint32_t handle)
 {
-    struct drm_gem_object *obj = (struct drm_gem_object *)drm_handle_find(file->objects, handle);
+    struct drm_gem_object *obj = (struct drm_gem_object *)drm_handle_find(&file->objects, handle);
 
     drm_gem_object_get(obj);
     return obj;
@@ -177,9 +224,12 @@ int32_t drm_gem_handle_delete(struct drm_file *file, uint32_t handle)
 
 void drm_gem_release(struct drm_file *file)
 {
-    while (file->objects) {
-        drm_gem_handle_delete(file, file->objects->id);
+    uint32_t i;
+
+    for (i = drm_handle_next(&file->objects, 1); i; i = drm_handle_next(&file->objects, i + 1)) {
+        drm_gem_handle_delete(file, i);
     }
+    drm_handles_fini(&file->objects);
 }
 
 /**
@@ -285,10 +335,10 @@ void drm_mmap_node_remove(struct drm_mmap_node *node)
  * (drm_vma_node_is_allowed). */
 static int file_has_handle(const struct drm_file *file, const struct drm_gem_object *obj)
 {
-    const struct drm_handle *h;
+    uint32_t i;
 
-    for (h = file->objects; h; h = h->next) {
-        if (h->object == obj) {
+    for (i = drm_handle_next(&file->objects, 1); i; i = drm_handle_next(&file->objects, i + 1)) {
+        if (drm_handle_get(&file->objects, i)->object == obj) {
             return 1;
         }
     }

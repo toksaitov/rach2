@@ -496,10 +496,10 @@ static void sharing(void)
     CHECK(slots[again].flags & FD_FLAG_WRITE, "reexport preserves first export access");
     CHECK(import_fd(&a, fd) == handle, "self-import returns original handle");
     other = import_fd(&b, fd);
-    CHECK(drm_handle_find(b.objects, other) == obj, "same device returns original object");
+    CHECK(drm_handle_find(&b.objects, other) == obj, "same device returns original object");
     CHECK(import_fd(&b, again) == other, "repeated import returns same handle");
     cross = import_fd(&c, fd);
-    imported = drm_handle_find(c.objects, cross);
+    imported = drm_handle_find(&c.objects, cross);
     CHECK(imported != obj && imported->import == buf, "other device imports buffer");
     CHECK(imported->resv == obj->resv, "both objects share implicit fences");
     dma_fence_init(f, NULL, dma_fence_context_alloc(1), 1);
@@ -563,7 +563,7 @@ static void caches(void)
     CHECK(!drm_gem_handle_create(&c, different, &replacement) && replacement == imported,
           "closed handle number can be reused");
     imported = import_fd(&c, fd);
-    CHECK(imported != replacement && drm_handle_find(c.objects, imported) != different,
+    CHECK(imported != replacement && drm_handle_find(&c.objects, imported) != different,
           "cache never returns reused unrelated handle");
     drm_gem_release(&a);
     back = export_fd(&c, imported, DRM_RDWR);
@@ -593,7 +593,7 @@ static void udmabuf_import(void)
     CHECK(fd >= 0 && pins == 2, "udmabuf pins both memfd pages");
     handle = import_fd(&c, fd);
     CHECK(import_fd(&c, fd) == handle, "udmabuf import cache");
-    obj = drm_handle_find(c.objects, handle);
+    obj = drm_handle_find(&c.objects, handle);
     CHECK(obj->resv == obj->import->resv, "udmabuf reservation shared");
     CHECK(!drm_gem_create_mmap_offset(obj), "udmabuf GEM offset");
     mapping(&vma, (uint32_t)(obj->mmap_offset >> PAGE_SHIFT));
@@ -659,7 +659,7 @@ static void failures_and_flags(void)
         fail_after = i;
         rc = drm_prime_fd_to_handle_ioctl(&importer, &args, &c);
         fail_after = -1;
-        CHECK(rc == -ENOMEM && !c.objects && !importer.objects,
+        CHECK(rc == -ENOMEM && !drm_handle_next(&c.objects, 1) && !importer.objects,
               "import allocation failure unwinds all references");
     }
     CHECK(!drm_prime_fd_to_handle_ioctl(&importer, &args, &c), "retry failed import");
@@ -734,7 +734,8 @@ static void concurrent_import(void)
     importer.driver = &custom;
     hook_fd = export_fd(&a, source, DRM_RDWR);
     handle = import_fd(&c, hook_fd);
-    CHECK(handle == raced_handle && c.objects && !c.objects->next,
+    CHECK(handle == raced_handle && drm_handle_next(&c.objects, 1) == handle &&
+              !drm_handle_next(&c.objects, handle + 1),
           "concurrent import returns the handle already published");
     CHECK(importer.objects && !importer.objects->dev_next,
           "discarded concurrent object releases its buffer reference");
@@ -813,7 +814,7 @@ static void vgem_fences(void)
     CHECK(!vgem_dumb_create(&v, &vdev, &dumb) && dumb.size == PAGE_SIZE && dumb.pitch == 4,
           "dumb buffer of one pixel takes a page");
     handle = dumb.handle;
-    obj = drm_handle_find(v.objects, handle);
+    obj = drm_handle_find(&v.objects, handle);
     CHECK(obj && obj->map_wc, "vgem maps its buffers write-combined");
 
     CHECK(vgem_attach(&v, handle, 2, NULL) == -EINVAL, "unknown flag is EINVAL");
@@ -829,7 +830,7 @@ static void vgem_fences(void)
 
     fd = export_fd(&v, handle, DRM_RDWR);
     cross = import_fd(&c, fd);
-    imported = drm_handle_find(c.objects, cross);
+    imported = drm_handle_find(&c.objects, cross);
     CHECK(imported && imported->resv == obj->resv, "importer shares vgem's reservation");
 
     CHECK(!vgem_attach(&v, handle, VGEM_FENCE_WRITE, &id) && id == 1, "write fence is id 1");

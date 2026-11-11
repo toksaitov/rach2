@@ -58,14 +58,20 @@ static const struct dma_buf_ops prime_ops = {prime_mmap, prime_release, prime_cp
 /** Find a GEM handle's cache entry; the big kernel lock protects the table. */
 static struct drm_handle *prime_handle(struct drm_file *file, uint32_t handle)
 {
-    struct drm_handle *h;
+    return drm_handle_get(&file->objects, handle);
+}
 
-    for (h = file->objects; h; h = h->next) {
-        if (h->id == handle) {
-            return h;
+/** The handle of `file` whose PRIME cache holds `buf`, or 0 for none. */
+static uint32_t prime_cached(struct drm_file *file, const struct dma_buf *buf)
+{
+    uint32_t i;
+
+    for (i = drm_handle_next(&file->objects, 1); i; i = drm_handle_next(&file->objects, i + 1)) {
+        if (drm_handle_get(&file->objects, i)->prime == buf) {
+            return i;
         }
     }
-    return NULL;
+    return 0;
 }
 
 /** Export a handle as a dma-buf descriptor, caching its identity until close.
@@ -184,23 +190,21 @@ int32_t drm_prime_fd_to_handle_ioctl(struct drm_device *dev, void *data, struct 
     if (!buf) {
         return current_proc && fd_get(current_proc->fds, args->fd) ? -EINVAL : -EBADF;
     }
-    for (h = file->objects; h; h = h->next) {
-        if (h->prime == buf) {
-            args->handle = h->id;
-            dma_buf_put(buf);
-            return 0;
-        }
+    handle = prime_cached(file, buf);
+    if (handle) {
+        args->handle = handle;
+        dma_buf_put(buf);
+        return 0;
     }
     obj = prime_import(dev, buf, &rc);
     if (obj) {
         /* A driver import may sleep while another thread imports this fd. */
-        for (h = file->objects; h; h = h->next) {
-            if (h->prime == buf) {
-                args->handle = h->id;
-                drm_gem_object_put(obj);
-                dma_buf_put(buf);
-                return 0;
-            }
+        handle = prime_cached(file, buf);
+        if (handle) {
+            args->handle = handle;
+            drm_gem_object_put(obj);
+            dma_buf_put(buf);
+            return 0;
         }
         if (dev->unplugged) {
             drm_gem_object_put(obj);

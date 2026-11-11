@@ -179,48 +179,69 @@ void kfree(void *p)
     free(p);
 }
 
-/* The handle table, as drm_gem.c keeps it: ids from 1, the lowest free,
- * in order. */
-int32_t drm_handle_insert(struct drm_handle **list, void *object, uint32_t *id)
+/* The handle table, as drm_gem.c keeps it: slots indexed by id, ids from
+ * 1, the lowest free. */
+int32_t drm_handle_insert(struct drm_handles *t, void *object, uint32_t *id)
 {
-    struct drm_handle *h = kmalloc(sizeof(*h)), **link = list;
+    struct drm_handle *h, **slot;
     uint32_t want = 1;
+    while (want < t->cap && t->slot[want])
+        want++;
+    if (want >= t->cap) {
+        uint32_t cap = t->cap ? t->cap * 2 : 64;
+        while (cap <= want)
+            cap *= 2;
+        slot = kmalloc(cap * sizeof(*slot));
+        if (!slot)
+            return -ENOMEM;
+        k_memset(slot, 0, cap * sizeof(*slot));
+        if (t->slot)
+            k_memcpy(slot, t->slot, t->cap * sizeof(*slot));
+        kfree(t->slot);
+        t->slot = slot;
+        t->cap = cap;
+    }
+    h = kmalloc(sizeof(*h));
     if (!h)
         return -ENOMEM;
-    while (*link && (*link)->id == want) {
-        want++;
-        link = &(*link)->next;
-    }
     h->id = want;
     h->object = object;
     h->prime = NULL;
-    h->next = *link;
-    *link = h;
+    t->slot[want] = h;
     *id = want;
     return 0;
 }
 /** Find a handle's object. */
-void *drm_handle_find(struct drm_handle *list, uint32_t id)
+void *drm_handle_find(const struct drm_handles *t, uint32_t id)
 {
-    for (; list; list = list->next)
-        if (list->id == id)
-            return list->object;
-    return NULL;
+    return id < t->cap && t->slot[id] ? t->slot[id]->object : NULL;
 }
 /** Take a handle out and return its object. */
-void *drm_handle_remove(struct drm_handle **list, uint32_t id)
+void *drm_handle_remove(struct drm_handles *t, uint32_t id)
 {
-    struct drm_handle **link, *h;
+    struct drm_handle *h = id && id < t->cap ? t->slot[id] : NULL;
     void *object;
-    for (link = list; *link; link = &(*link)->next)
-        if ((*link)->id == id) {
-            h = *link;
-            object = h->object;
-            *link = h->next;
-            kfree(h);
-            return object;
-        }
-    return NULL;
+    if (!h)
+        return NULL;
+    object = h->object;
+    t->slot[id] = NULL;
+    kfree(h);
+    return object;
+}
+/** The lowest id from `id` in use, or 0. */
+uint32_t drm_handle_next(const struct drm_handles *t, uint32_t id)
+{
+    for (; id < t->cap; id++)
+        if (id && t->slot[id])
+            return id;
+    return 0;
+}
+/** Free the slots. */
+void drm_handles_fini(struct drm_handles *t)
+{
+    kfree(t->slot);
+    t->slot = NULL;
+    t->cap = 0;
 }
 
 /* An eventfd: its references and the count of its signals. */
@@ -446,7 +467,7 @@ static int same(const char *x, const char *y)
 /** The fence a handle holds, borrowed. */
 static struct dma_fence *held(struct drm_file *f, uint32_t handle)
 {
-    return ((struct drm_syncobj *)drm_handle_find(f->syncobjs, handle))->fence;
+    return ((struct drm_syncobj *)drm_handle_find(&f->syncobjs, handle))->fence;
 }
 
 /** Create, destroy, convert, wait, reset and signal binary syncobjs. */
@@ -533,7 +554,7 @@ static void binary_cases(void)
     CHECK(convert(&b, 0, 0, 0, out, NULL) == -EINVAL, "fd to handle refuses a sync file");
     fd_free(&table, out);
     CHECK(!convert(&b, 0, 0, 0, fd, &h), "fd to handle");
-    CHECK(drm_handle_find(b.syncobjs, h.handle) == drm_handle_find(a.syncobjs, hs[0]),
+    CHECK(drm_handle_find(&b.syncobjs, h.handle) == drm_handle_find(&a.syncobjs, hs[0]),
           "both files hold one syncobj");
     d.handle = hs[0];
     d.pad = 1;
@@ -575,7 +596,7 @@ static void submit_cases(void)
     CHECK(!wait(&a, &h, 1, DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT, now_ns + 1000000000ll, &first) &&
               first == 0 && sleeps >= 2,
           "wait for submission, then for the fence");
-    CHECK(!((struct drm_syncobj *)drm_handle_find(a.syncobjs, h))->waits, "wait left the list");
+    CHECK(!((struct drm_syncobj *)drm_handle_find(&a.syncobjs, h))->waits, "wait left the list");
     fd_free(&table, submit_fd);
 }
 
@@ -771,9 +792,11 @@ static void feature_cases(void)
               "binary-only driver refuses the timeline calls alone");
     }
     c.flags = 0;
-    CHECK(!drm_syncobj_create_ioctl(&binary_only, &c, &fb) && fb.syncobjs, "binary driver creates");
+    CHECK(!drm_syncobj_create_ioctl(&binary_only, &c, &fb) && drm_handle_next(&fb.syncobjs, 1),
+          "binary driver creates");
     drm_syncobj_release(&fb);
-    CHECK(!fa.syncobjs && !fb.syncobjs, "nothing left on the refused files");
+    CHECK(!drm_handle_next(&fa.syncobjs, 1) && !drm_handle_next(&fb.syncobjs, 1),
+          "nothing left on the refused files");
 }
 
 /** Allocation failures leave nothing changed. */
@@ -810,7 +833,7 @@ static void chain_cases(void)
 {
     long before = allocations;
     uint32_t h = create(&a, 0), i;
-    struct drm_syncobj *s = drm_handle_find(a.syncobjs, h);
+    struct drm_syncobj *s = drm_handle_find(&a.syncobjs, h);
     struct drm_syncobj_destroy d;
     struct dma_fence *f;
     for (i = 1; i <= 1000; i++)

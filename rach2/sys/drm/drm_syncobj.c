@@ -114,7 +114,7 @@ void drm_syncobj_put(struct drm_syncobj *s)
 
 struct drm_syncobj *drm_syncobj_find(struct drm_file *file, uint32_t handle)
 {
-    struct drm_syncobj *s = (struct drm_syncobj *)drm_handle_find(file->syncobjs, handle);
+    struct drm_syncobj *s = (struct drm_syncobj *)drm_handle_find(&file->syncobjs, handle);
 
     if (s) {
         drm_syncobj_get(s);
@@ -600,10 +600,12 @@ static struct drm_syncobj *syncobj_file_get(int32_t fd)
 
 void drm_syncobj_release(struct drm_file *file)
 {
-    while (file->syncobjs) {
-        drm_syncobj_put(
-            (struct drm_syncobj *)drm_handle_remove(&file->syncobjs, file->syncobjs->id));
+    uint32_t i;
+
+    for (i = drm_handle_next(&file->syncobjs, 1); i; i = drm_handle_next(&file->syncobjs, i + 1)) {
+        drm_syncobj_put((struct drm_syncobj *)drm_handle_remove(&file->syncobjs, i));
     }
+    drm_handles_fini(&file->syncobjs);
 }
 
 /* ------------------------------------------------------------------------
