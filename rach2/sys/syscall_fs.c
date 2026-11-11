@@ -6341,9 +6341,11 @@ static int32_t read_allowed(const fd_entry_t *entry)
 /**
  * Read up to `count` bytes of descriptor `fd` into the user's `buf`, for
  * read(2) and readv(2); the bytes read, 0 at the end, or a negative errno:
- * `read_allowed`'s, -EISDIR for a directory, -EFAULT for a NULL or bad
- * buffer. A read of zero bytes returns 0 once those checks have passed and
- * does not look at `buf`, which may then be NULL, as POSIX allows.
+ * `read_allowed`'s, then -EFAULT for a buffer past the top of user memory,
+ * then -EISDIR for a directory, as Linux's vfs_read orders them, then
+ * -EFAULT for a NULL or bad buffer. A
+ * read of zero bytes returns 0 once those checks have passed and does not
+ * look at `buf`, which may then be NULL, as POSIX allows.
  *
  * The read goes by what is behind the descriptor. An object with a vtable,
  * a pipe, a pty, a device or a /proc file among them, reads through it
@@ -6370,6 +6372,12 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
     rc = read_allowed(entry);
     if (rc != 0) {
         return rc;
+    }
+    /* Linux's access_ok, which vfs_read makes before the file's read: the
+     * top of user memory, or a kernel caller's window (user_window_open). */
+    if (count != 0 && !user_span_ok((__force uintptr_t)buf, count) &&
+        !user_access_ok((__force uintptr_t)buf, count)) {
+        return -EFAULT;
     }
     if (entry->type == FD_TYPE_DIR || entry->type == FD_TYPE_SYNTH_DIR) {
         return -EISDIR;
