@@ -710,7 +710,8 @@ its seconds since 1970;
 .Pa hctosys ,
 1, since the boot set the system's time from it; and
 .Pa wakealarm ,
-the wake alarm in seconds since 1970, empty when none is set, which takes a
+the wake alarm in seconds since 1970 while it is enabled, empty while it is
+not, which takes a
 write of seconds since 1970, of
 .Ql + Ns Ar N
 for
@@ -726,8 +727,9 @@ A time after now sets the alarm, and a new time while one is set is
 a push with none set, or to a time before 1970, is
 .Er EINVAL ,
 and a push to a time not after now raises the alarm at once; any other
-time, such as 0, clears it, as on Linux.
-The alarm comes once, and then reads as none and takes a new time.
+time, such as 0, disables it, as on Linux.
+The alarm comes once, and then reads empty and takes a new time; see
+.Xr rtc 4 .
 .It Pa /sys/class/rtc/rtc0/device/power/wakeup
 .Ql enabled :
 the clock's alarm may wake the machine.

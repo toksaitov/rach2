@@ -372,11 +372,14 @@ void devfs_window_alias(const struct block_device *view, const struct block_devi
 /**
  * The wake alarm of /dev/rtc0, as /sys/class/rtc/rtc0/wakealarm reads and
  * writes it: `devfs_rtc_wakealarm` gives the seconds since 1970 it is set
- * for, -1 for none or once it has come; `devfs_rtc_set_wakealarm` sets it to
- * `at`, which must be within a day ahead, -EINVAL for one further and -EIO
- * when the clock cannot be read, raises it at once for a time not after
- * now, as Linux's rtc_timer_enqueue does, or clears it for a negative `at`,
- * and enables the clock's alarm interrupt while it is set.
+ * for while it is enabled, -1 while it is not, as before it is set or once
+ * it has come; `devfs_rtc_set_wakealarm` sets it to `at` and enables it,
+ * -EINVAL for a time further than a day less a second ahead, which leaves
+ * it disabled, or for one whose year passes 2^31 - 1, which leaves it as it
+ * was, and -EIO when the clock cannot be read; it raises the alarm at once
+ * for a time not after now, as Linux's rtc_timer_enqueue does, and for a
+ * negative `at` disables it with a time five minutes ahead, as Linux's
+ * wakealarm_store does.
  */
 int64_t devfs_rtc_wakealarm(void);
 int32_t devfs_rtc_set_wakealarm(int64_t at);

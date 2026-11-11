@@ -1,4 +1,4 @@
-.Dd October 1, 2026
+.Dd November 11, 2026
 .Dt RTC 4
 .Os
 .Sh NAME
@@ -28,22 +28,36 @@ with its updates held while the registers are written, and the day of the
 week with them.
 The time the kernel keeps is not changed; see
 .Xr clock_settime 2 .
-.It Dv RTC_ALM_SET , RTC_ALM_READ
-Set and read the alarm's time of day, the second, minute and hour of the
-struct; the clock raises its interrupt, IRQ 8, at that time each day while
-the alarm's interrupt is enabled.
+.It Dv RTC_ALM_SET
+Set the alarm to a time of day, the second, minute and hour of the struct,
+on today's date, or tomorrow's when the time is before now, and disable it,
+as Linux does.
+.It Dv RTC_ALM_READ
+Read the alarm's date and time.
 .It Dv RTC_AIE_ON , RTC_AIE_OFF
-Enable and disable the alarm's interrupt.
+Enable and disable the alarm.
+An alarm whose time is not after now comes at once when it is enabled, as
+on Linux.
 .It Dv RTC_WKALM_SET , RTC_WKALM_RD
 Set and read the wake alarm, a
 .Vt struct rtc_wkalrm :
-a byte that enables it, a byte that says it has come, and its date and
-time.
-The CMOS clock has no day alarm, so the time must lie within a day ahead,
-as Linux's driver requires; a time not after now raises the alarm at once,
-as on Linux.
-An alarm comes once: then its interrupt is off and no wake alarm is set.
+a byte that enables it, a byte that says it has come since the last
+.Xr read 2 ,
+and its date and time.
+A set with the first byte 0 sets the time and disables the alarm.
 .El
+.Pp
+The alarm is a date and time, which the clock raises its interrupt, IRQ 8,
+at while the alarm is enabled.
+The CMOS clock has no day alarm, so an enabled alarm must lie within a day
+ahead, as Linux's driver requires.
+An alarm comes once: then it is disabled, its interrupt off, and
+.Dv RTC_WKALM_RD
+and
+.Dv RTC_ALM_READ
+still give its date and time, which only a set changes.
+Before the first set, the alarm is disabled at the clock's own alarm's time
+of day, on the next day that time falls on.
 .Pp
 A
 .Xr read 2
@@ -72,8 +86,17 @@ The device is root's to open, mode 0600, as Linux's is.
 A setting ioctl by a caller without privilege, as Linux answers it.
 .It Bq Er EINVAL
 .Dv RTC_SET_TIME
-with a time out of range or a year outside 2000 to 2099; a wake alarm more
-than a day ahead; a read of another count below an unsigned long's; or a
+with a time out of range or a year outside 2000 to 2099;
+.Dv RTC_WKALM_SET
+or
+.Dv RTC_ALM_SET
+with a date or time that is not one, as Linux's
+.Fn rtc_valid_tm
+judges: a year before 1970 or past 2147483647, a month outside 0 to 11, a
+day outside the month, an hour past 23, or a minute or second past 59,
+which leaves the alarm as it was; an alarm enabled for more than a day less
+a second ahead, which leaves it disabled; a read of another count below an
+unsigned long's; or a
 .Xr write 2
 of the device.
 The clock's update and periodic interrupts are not given.
@@ -81,11 +104,10 @@ The clock's update and periodic interrupts are not given.
 A non-blocking read with no alarm come.
 .It Bq Er EIO
 .Dv RTC_RD_TIME ,
-.Dv RTC_ALM_READ ,
-or
-.Dv RTC_WKALM_RD
-with no wake alarm set, of a clock that holds no time, such as one whose
-battery went; or a wake alarm set while the clock holds none.
+or the first use of the alarm, of a clock that holds no time, such as one
+whose battery went; or an alarm enabled or
+.Dv RTC_ALM_SET
+while the clock holds none.
 .It Bq Er ENOTTY
 Another ioctl.
 .El
