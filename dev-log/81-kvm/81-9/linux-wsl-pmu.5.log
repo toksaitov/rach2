@@ -1,0 +1,93 @@
+/usr/bin/qemu-system-x86_64 --no-reboot -nodefaults -global kvm-pit.lost_tick_policy=discard -device pc-testdev -device isa-debug-exit,iobase=0xf4,iosize=0x4 -display none -serial stdio -device pci-testdev -machine accel=kvm,kernel-irqchip=split -kernel x86/pmu.flat -smp 1 -cpu max # -initrd /tmp/tmp.BfhsYHPLSh
+enabling apic
+smp: waiting for 0 APs
+paging enabled
+cr0 = 80010011
+cr3 = 1047000
+cr4 = 20
+PASS: Expected #GP on RDPMC(64)
+PMU version:         0
+GP counters:         6
+GP counter width:    48
+Event Mask length:   32
+Arch Events (mask):  0xffffffff
+Fixed counters:      0
+Fixed counter width: 0
+PASS: AMD: core cycles-0
+PASS: AMD: core cycles-1
+PASS: AMD: core cycles-2
+PASS: AMD: core cycles-3
+PASS: AMD: core cycles-4
+PASS: AMD: core cycles-5
+PASS: AMD: instructions-0
+PASS: AMD: instructions-1
+PASS: AMD: instructions-2
+PASS: AMD: instructions-3
+PASS: AMD: instructions-4
+PASS: AMD: instructions-5
+PASS: AMD: branches-0
+PASS: AMD: branches-1
+PASS: AMD: branches-2
+PASS: AMD: branches-3
+PASS: AMD: branches-4
+PASS: AMD: branches-5
+PASS: AMD: branch misses-0
+PASS: AMD: branch misses-1
+PASS: AMD: branch misses-2
+PASS: AMD: branch misses-3
+PASS: AMD: branch misses-4
+PASS: AMD: branch misses-5
+PASS: AMD: rdpmc: cntr-0
+SKIP: AMD: rdpmc: fast-0
+PASS: AMD: rdpmc: cntr-1
+SKIP: AMD: rdpmc: fast-1
+PASS: AMD: rdpmc: cntr-2
+SKIP: AMD: rdpmc: fast-2
+PASS: AMD: rdpmc: cntr-3
+SKIP: AMD: rdpmc: fast-3
+PASS: AMD: rdpmc: cntr-4
+SKIP: AMD: rdpmc: fast-4
+PASS: AMD: rdpmc: cntr-5
+SKIP: AMD: rdpmc: fast-5
+PASS: AMD: all counters
+FAIL: AMD: overflow: cntr-0
+FAIL: AMD: overflow: cntr-1
+FAIL: AMD: overflow: cntr-2
+FAIL: AMD: overflow: cntr-3
+FAIL: AMD: overflow: cntr-4
+FAIL: AMD: overflow: cntr-5
+PASS: AMD: cmask
+PASS: AMD: running counter wrmsr: cntr
+PASS: AMD: K7: core cycles-0
+PASS: AMD: K7: core cycles-1
+PASS: AMD: K7: core cycles-2
+PASS: AMD: K7: core cycles-3
+PASS: AMD: K7: instructions-0
+PASS: AMD: K7: instructions-1
+PASS: AMD: K7: instructions-2
+PASS: AMD: K7: instructions-3
+PASS: AMD: K7: branches-0
+PASS: AMD: K7: branches-1
+PASS: AMD: K7: branches-2
+PASS: AMD: K7: branches-3
+PASS: AMD: K7: branch misses-0
+PASS: AMD: K7: branch misses-1
+PASS: AMD: K7: branch misses-2
+PASS: AMD: K7: branch misses-3
+PASS: AMD: K7: rdpmc: cntr-0
+SKIP: AMD: K7: rdpmc: fast-0
+PASS: AMD: K7: rdpmc: cntr-1
+SKIP: AMD: K7: rdpmc: fast-1
+PASS: AMD: K7: rdpmc: cntr-2
+SKIP: AMD: K7: rdpmc: fast-2
+PASS: AMD: K7: rdpmc: cntr-3
+SKIP: AMD: K7: rdpmc: fast-3
+PASS: AMD: K7: all counters
+FAIL: AMD: K7: overflow: cntr-0
+PASS: AMD: K7: overflow: cntr-1
+PASS: AMD: K7: overflow: cntr-2
+FAIL: AMD: K7: overflow: cntr-3
+PASS: AMD: K7: cmask
+PASS: AMD: K7: running counter wrmsr: cntr
+SUMMARY: 77 tests, 8 unexpected failures, 10 skipped
+
