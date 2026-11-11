@@ -73,9 +73,10 @@ void klog_v(int level, const char *subsystem, const char *format, va_list ap);
 
 /** Write out the records kept for later, oldest first, when this processor
  * may (`smp_serialized`) and no other is writing them out for it
- * (`klog_flush_stuck`); inside another record's delivery or a console
- * write, put them in the ring and the queue, ahead of what comes next, for
- * that delivery or write to write out when it ends. Nothing otherwise, and
+ * (`klog_flush_stuck`), after the records a delivery the panic stopped left
+ * in the queue; inside another record's delivery or a console write, put
+ * them in the ring and the queue, ahead of what comes next, for that
+ * delivery or write to write out when it ends. Nothing otherwise, and
  * nothing, with no interrupt bracket, while none is kept. */
 void klog_flush(void);
 
@@ -144,7 +145,9 @@ uint32_t klog_read_from(char *buf, uint32_t cap, uint32_t *at);
  * queue: for a machine about to stop, which never comes back to write the
  * queue out. It clears what would have queued the record, which is safe only
  * because nothing after it is expected to run. The records it leaves in the
- * queue go out ahead of the next record, which a full queue cannot drop.
+ * queue go out ahead of the kept records and the next record, which a full
+ * queue cannot drop; one a delivery was part way through goes out again
+ * whole.
  */
 void klog_deliver_directly(void);
 
