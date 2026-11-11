@@ -50,6 +50,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/mount.h>
@@ -764,12 +765,22 @@ static void plan(void)
     }
 }
 
+/**
+ * Mount the tmpfs, run the rows in order, remove the tmpfs and print the
+ * result.
+ *
+ * SIGPIPE is ignored: a held child that has died leaves the write that
+ * releases it with no reader, and Linux sends SIGPIPE before EPIPE, which
+ * would kill the probe before it reaps the child, removes the tmpfs and
+ * prints its failure. Ignored, the write fails and the row says why.
+ */
 int main(int argc, char **argv)
 {
     int d;
     int bad;
 
     probe_args(argc, argv);
+    signal(SIGPIPE, SIG_IGN);
     plan();
     if (!is_dir("/proc/self/fd")) {
         return fail("/proc/self/fd is not a directory");
