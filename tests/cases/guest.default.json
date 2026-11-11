@@ -2447,6 +2447,8 @@
         {"assertion_id": "tcp-recvmsg-zero-ready", "checks": "both empty vector forms return zero with data ready and leave the byte queued", "source": "program"},
         {"assertion_id": "tcp-recvmsg-zero-eof", "checks": "both empty vector forms return zero after input is shut down, blocking and nonblocking", "source": "program"},
         {"assertion_id": "tcp-connect", "checks": "a TCP listener on 127.0.0.1 takes a connection from a client", "source": "program"},
+        {"assertion_id": "tcp-accept-now", "checks": "a nonblocking accept right after the connect returns the connection, not EAGAIN", "source": "program"},
+        {"assertion_id": "tcp-poll-now", "checks": "a poll with a zero timeout right after the client's write reports the server's end readable", "source": "program"},
         {"assertion_id": "tcp-client-to-server", "checks": "bytes the client writes reach the server", "source": "program"},
         {"assertion_id": "tcp-server-to-client", "checks": "bytes the server writes reach the client", "source": "program"},
         {"assertion_id": "tcp-peer-address", "checks": "getpeername on the server's side gives 127.0.0.1", "source": "program"},

@@ -12,10 +12,13 @@
  * for the next one, and recvmsg reads a stream into its buffers in order,
  * peeking or taking. A TCP connection to the probe's own listener completes
  * its handshake, moves data both ways and reports the peer 127.0.0.1, and
- * one the server closes at once after accept still connects. A transfer
- * larger than the ring arrives whole with no datagram dropped, and no leg of
- * the round trips between two processes is left on the ring for the timer
- * while the machine idles. A listener bound to 127.0.0.1 is not reached at
+ * one the server closes at once after accept still connects; a nonblocking
+ * accept right after the connect finds the connection, and a poll with a
+ * zero timeout right after a write finds the bytes. A transfer larger than
+ * the ring arrives whole with no datagram dropped, and the legs of the round
+ * trips between two processes are delivered at the exits of the calls that
+ * sent them, none left on the ring for the timer while the machine idles.
+ * A listener bound to 127.0.0.1 is not reached at
  * the machine's interface address, a bind to an address the machine lacks
  * is refused, and a connect to a closed port is refused by the reset that
  * answers its SYN. The rows of TCP ports check a client's bound source port,
@@ -233,9 +236,12 @@ static const struct step {
     {"tcp bind", "tcp-connect"},
     {"tcp listen", "tcp-connect"},
     {"tcp client socket", "tcp-connect"},
+    {"tcp listener non-blocking", "tcp-connect"},
     {"tcp connect", "tcp-connect"},
-    {"tcp accept", "tcp-connect"},
-    {"tcp client write", "tcp-client-to-server"},
+    {"tcp accept", "tcp-accept-now"},
+    {"a nonblocking accept right after the connect found no connection", "tcp-accept-now"},
+    {"tcp client write", "tcp-poll-now"},
+    {"a zero-timeout poll right after the write found nothing to read", "tcp-poll-now"},
     {"tcp server read", "tcp-client-to-server"},
     {"tcp server write", "tcp-server-to-client"},
     {"tcp client read", "tcp-server-to-client"},
@@ -601,6 +607,13 @@ struct pollfd_probe {
 static int sys_poll_wait(struct pollfd_probe *fds, unsigned int n)
 {
     return syscall3(SYS_POLL, (long)fds, (long)n, (long)-1);
+}
+
+/** poll(2) with a zero timeout: how many descriptors of `fds` are ready now,
+ * without waiting, or a negated errno. */
+static int sys_poll_now(struct pollfd_probe *fds, unsigned int n)
+{
+    return syscall3(SYS_POLL, (long)fds, (long)n, 0);
 }
 
 /** Block until `fd` reports one of `events`, or an error or hangup, which
@@ -1187,11 +1200,22 @@ static void tcp_peek(void)
     sys_close(ls);
 }
 
-/** A TCP connection to the probe's own listener on 127.0.0.1 completes its
+/**
+ * A TCP connection to the probe's own listener on 127.0.0.1 completes its
  * handshake, carries a message each way, and reports its peer as
- * 127.0.0.1:tcp_port[0]. */
+ * 127.0.0.1:tcp_port[0].
+ *
+ * Each step finds what the call before it sent with no wait, as on Linux
+ * 6.12.115, whose loopback delivers within the sender's call: the connect's
+ * last acknowledgement (net/ipv4/tcp_input.c:6639) puts the connection in
+ * the listener's queue, where a nonblocking accept finds it instead of
+ * EAGAIN (net/ipv4/inet_connection_sock.c:666-672), and the client's write
+ * puts its bytes in the server's receive queue, which a poll with a zero
+ * timeout reports readable (net/ipv4/tcp.c:576-577).
+ */
 static void tcp_loop(void)
 {
+    struct pollfd_probe pfd;
     unsigned long args[6];
     uint8_t sa[16], peer[16];
     uint32_t salen = 16;
@@ -1218,6 +1242,8 @@ static void tcp_loop(void)
     args[1] = 2;
     if (socketcall(SC_LISTEN, args) != 0)
         fail("tcp listen");
+    if (sys_fcntl(ls, F_SETFL, O_NONBLOCK) != 0)
+        fail("tcp listener non-blocking");
 
     args[0] = AF_INET;
     args[1] = SOCK_STREAM;
@@ -1237,11 +1263,19 @@ static void tcp_loop(void)
     args[1] = 0;
     args[2] = 0;
     as = socketcall(SC_ACCEPT, args);
+    if (as == -EAGAIN)
+        fail("a nonblocking accept right after the connect found no connection");
     if (as < 0)
         fail("tcp accept");
 
     if (sys_write(cs, ping, strlen(ping)) != (int)strlen(ping)) {
         fail("tcp client write");
+    }
+    pfd.fd = as;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+    if (sys_poll_now(&pfd, 1) != 1 || !(pfd.revents & POLLIN)) {
+        fail("a zero-timeout poll right after the write found nothing to read");
     }
     n = sys_read(as, rbuf, sizeof(rbuf));
     if (n != (int)strlen(ping) || !mem_eq((const uint8_t *)rbuf, (const uint8_t *)ping, n)) {
