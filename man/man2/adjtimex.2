@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd November 12, 2026
 .Dt ADJTIMEX 2
 .Os
 .Sh NAME
@@ -33,29 +33,82 @@ which must be
 The modes are Linux's, and any but
 .Dv ADJ_OFFSET_SS_READ
 needs a privileged caller.
-This clock has no slew: an offset of
-.Dv ADJ_OFFSET ,
-at most the half second Linux takes one to be, a single-shot adjustment of
-.Dv ADJ_OFFSET_SINGLESHOT ,
-and the offset of
-.Dv ADJ_SETOFFSET
-step the real time at once, so none is left in progress and
+The clock keeps Linux's NTP state and slews real time by it, as Linux 6.12
+does: at each second the next second's ticks take the length that the tick
+and the frequency give, plus a share of the offset left and of
+.Fn adjtime Ns 's
+slew, and real time runs at that rate from where it is, so that it neither
+jumps nor goes back.
+.Bl -tag -width ADJ_OFFSET_SINGLESHOT
+.It Dv ADJ_OFFSET
+With
+.Dv STA_PLL
+set, the offset, at most half a second either way, goes to the
+phase-locked loop: from the next second it slews 2^-(2 +
+.Fa constant )
+of what is left each second, and it changes the frequency by the offset
+times the seconds since the last offset, at most 2^(3 +
+.Fa constant ) .
+With
+.Dv STA_FLL
+set and 256 seconds or more since the last offset, or with over 2048
+seconds since it, the frequency-locked loop's change, the offset over
+those seconds, is added too, and
+.Dv STA_MODE
+is set.
+.Dv STA_FREQHOLD
+keeps the frequency.
 .Fa offset
-reads 0.
-Every step counts the timers and sleeps of real time again, but only
-.Dv ADJ_SETOFFSET
-cancels a timerfd set with
-.Dv TFD_TIMER_CANCEL_ON_SET ,
-since Linux slews the other two and does not count them as settings of the
-clock.
-.Dv ADJ_FREQUENCY ,
+reads what is left.
+.It Dv ADJ_FREQUENCY
+The frequency, in units of 2^-16 ppm, at most 500 ppm either way, which
+changes the rate at once and which settings of the clock keep.
+.It Dv ADJ_TIMECONST
+The loop's time constant, from 0 to 10, plus 4 without
+.Dv STA_NANO .
+.It Dv ADJ_TICK
+The length of a tick of USER_HZ, from 9000 to 11000 microseconds; 10000 is
+the timer's own rate, whatever the timer's frequency, and another length
+runs real time faster or slower by its ratio.
+.It Dv ADJ_OFFSET_SINGLESHOT
+.Fn adjtime Ns 's
+offset, in microseconds, which musl and glibc pass in this mode: from the
+next second it is slewed at 500 microseconds a second, and
+.Fa offset
+returns what was left of the one before.
+.Dv ADJ_OFFSET_SS_READ
+returns what is left and changes nothing.
+.It Dv ADJ_SETOFFSET
+Steps real time by
+.Fa time ,
+as
+.Xr clock_settime 2
+does.
+.El
+.Pp
+A step, by
+.Dv ADJ_SETOFFSET ,
+.Xr clock_settime 2
+or
+.Xr settimeofday 2 ,
+forgets the offset and
+.Fn adjtime Ns 's
+slew in progress, keeps the frequency and sets
+.Dv STA_UNSYNC ;
+it counts the timers and sleeps of real time again and cancels a timerfd
+set with
+.Dv TFD_TIMER_CANCEL_ON_SET .
+A slew cancels nothing, and each change of its rate counts the timers and
+sleeps of real time again at the new rate.
 .Dv ADJ_MAXERROR ,
 .Dv ADJ_ESTERROR ,
-.Dv ADJ_TIMECONST ,
 .Dv ADJ_TAI
 and
 .Dv ADJ_STATUS
-are kept and read back but change nothing the clock does;
+are kept and read back; the maximum error grows by 500 microseconds a
+second, and
+.Dv STA_UNSYNC
+is set once it passes 16 seconds.
 .Dv ADJ_NANO
 and
 .Dv ADJ_MICRO
@@ -63,9 +116,8 @@ choose the unit of
 .Fa offset
 and of
 .Fa time.tv_usec .
-The tick is 10000 microseconds, a tick of USER_HZ as Linux reports it,
-whatever the timer's own rate; the precision is 1 microsecond and the
-tolerance Linux's 500 ppm.
+The precision is 1 microsecond and the tolerance Linux's 500 ppm; the
+fields of PPS read 0.
 .Pp
 While
 .Dv STA_UNSYNC
@@ -117,9 +169,17 @@ of
 is not readable and writable.
 .It Bq Er EINVAL
 .Dv ADJ_TICK
-asks for a tick other than 10000 microseconds, the fraction of
+asks for a tick outside 9000 to 11000 microseconds,
+.Dv ADJ_FREQUENCY
+for a frequency whose product by 65536000, its scaled form, does not fit
+64 bits,
 .Dv ADJ_SETOFFSET
-is not under a second, or
+for a fraction not under a second or a time before the time since boot or
+past the year 2232, the bit of
+.Fn adjtime Ns 's
+modes, 0x8000, is given without
+.Dv ADJ_OFFSET ,
+or
 .Fa clock
 is not a clock.
 .It Bq Er EOPNOTSUPP
@@ -131,4 +191,15 @@ A mode other than reading was asked for by a caller without privilege.
 .El
 .Sh SEE ALSO
 .Xr clock_settime 2 ,
-.Xr gettimeofday 2
+.Xr gettimeofday 2 ,
+.Xr timerfd 2
+.Sh BUGS
+Linux slews
+.Dv CLOCK_MONOTONIC
+with real time; here it keeps the timer's rate, so the two part by the
+slew.
+.Dv STA_INS
+and
+.Dv STA_DEL
+are kept, and no leap second is inserted or deleted.
+There is no PPS signal.

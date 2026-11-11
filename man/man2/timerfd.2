@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd November 12, 2026
 .Dt TIMERFD 2
 .Os
 .Sh NAME
@@ -48,13 +48,7 @@ with
 on a timer of
 .Dv CLOCK_REALTIME ,
 makes the timer canceled at each setting of the clock, until a setting of
-the timer without them, though not at the offsets of
-.Fn adjtimex
-that Linux slews,
-.Dv ADJ_OFFSET
-and
-.Dv ADJ_OFFSET_SINGLESHOT :
-its next read fails with
+the timer without them: its next read fails with
 .Er ECANCELED ,
 and its next
 .Fn timerfd_settime
@@ -62,6 +56,15 @@ that arms it arms it and fails with
 .Er ECANCELED ,
 without writing
 .Fa old .
+The offsets of
+.Xr adjtimex 2
+that slew the clock,
+.Dv ADJ_OFFSET
+and
+.Dv ADJ_OFFSET_SINGLESHOT ,
+cancel nothing; each change of the slew's rate counts every timer of
+.Dv CLOCK_REALTIME
+again at the new rate.
 .Fn timerfd_gettime ,
 number 326 on i386 and 287 on x86-64, reports the time to the next expiration and the interval:
 a disarmed timer has no time left and keeps the interval it was last set
