@@ -939,7 +939,9 @@ static int klog_enter(void)
  * (`console_trylock_spinning`, kernel/printk/printk.c:1956) and its serial
  * console's waits touch the NMI watchdog (drivers/tty/serial/8250/
  * 8250_port.c:2083). The writer's work is bounded: the records kept when it
- * began. Interrupts off. 1 when in; 0 when this processor may not write
+ * began. Interrupts off, so the wait answers other processors' requests
+ * (`smp_service`), since the writer may itself wait for this processor to
+ * drop a translation. 1 when in; 0 when this processor may not write
  * klog's state at all, and writes its bytes without it, as before the big
  * lock was taken.
  */
@@ -951,6 +953,7 @@ static int klog_enter_wait(void)
         }
         while (defer_taking != 0u && !k_panicking()) {
             touch_nmi_watchdog();
+            smp_service();
             arch_relax();
         }
     }
