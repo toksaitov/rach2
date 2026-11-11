@@ -80,7 +80,13 @@
  *       written, which Linux's get_user_pages refuses for want of
  *       VM_READ, and takes a byte of a page written first; a private
  *       mapping of a memfd made so is EFAULT for its untouched page too,
- *       though the file's page is in memory.
+ *       though the file's page is in memory. A write stops at the same
+ *       sixteen buffers, as Linux's pipe_write stops at pipe_full: after
+ *       sixteen one-byte vmsplices a nonblocking write of a byte is EAGAIN,
+ *       and after a write of a byte and fifteen of 4096 a sixteenth of 4096
+ *       is EAGAIN. vmsplice without SPLICE_F_NONBLOCK waits on an empty
+ *       pipe whose read end has O_NONBLOCK, until a child that saw the probe
+ *       asleep writes a byte.
  *
  * Given `machine=native` (probe_args.h), the probe leaves out the heap's
  * comparison of (e), since the kernel's heap is shared with every process of
@@ -283,6 +289,10 @@ enum {
     PAGES_SLOTS_UNALIGNED,
     PAGES_WRONLY,
     PAGES_WRONLY_FILE,
+    PAGES_WRITE_SLOTS,
+    PAGES_WRITE_PAGES,
+    VMSPLICE_WAIT_FORK,
+    VMSPLICE_WAIT_NONBLOCK,
     MAX_ROUND,
     MAX_EINVAL,
     SYSCTL_PLUS,
@@ -369,6 +379,11 @@ static const struct {
      "a vmsplice of an untouched PROT_WRITE page -> -EFAULT, and of a written one returns 1"},
     {"pages-wronly-file",
      "a vmsplice of an untouched PROT_WRITE private page of a memfd -> -EFAULT"},
+    {"pages-write-slots", "after 16 vmsplices of a byte a nonblocking write of a byte -> -EAGAIN"},
+    {"pages-write-pages", "after writes of 1 and 15 x 4096 a nonblocking write of 4096 -> -EAGAIN"},
+    {"vmsplice-wait-fork", "fork for the vmsplice wait"},
+    {"vmsplice-wait-nonblock",
+     "vmsplice without SPLICE_F_NONBLOCK from an empty O_NONBLOCK pipe waits for the child's byte"},
     {"max-round", "pipe-max-size takes 600000 as 1048576, 1 as 4096 and 2^31 as written"},
     {"max-einval", "pipe-max-size refuses 2^31 + 1 with EINVAL"},
     {"sysctl-plus", "pipe-user-pages-soft and -hard refuse +64 with EINVAL and keep their values"},
@@ -1063,6 +1078,123 @@ static void pages_wronly_file(void)
 }
 
 /**
+ * The rows of case (l) that fill a nonblocking pipe of 64 KiB by its sixteen
+ * buffers and then write: a write opens a buffer only while one is free, as
+ * Linux's pipe_write stops at pipe_full, so a byte after sixteen one-byte
+ * vmsplices, whose buffers take no write, and 4096 bytes after a byte and
+ * fifteen pages, which fill sixteen buffers with 61441 bytes, are EAGAIN.
+ */
+static void pages_write_slots(void)
+{
+    long map = mmap_anon(4096);
+    int w[2] = {-1, -1};
+    int made = do_pipe2(w, O_NONBLOCK) == 0, mapped = map != 0 && !sys_failed(map);
+    int i, took = 0;
+
+    for (i = 0; made && mapped && i < 16; i++) {
+        took += vmsplice_one(w[1], map, 1, SPLICE_F_NONBLOCK) == 1;
+    }
+    check(PAGES_WRITE_SLOTS,
+          made && mapped && took == 16 && wr(w[1], "x", 1) == -EAGAIN && rd(w[0], back, 64) == 16);
+    took = made && wr(w[1], big, 1) == 1;
+    for (i = 0; took && i < 15; i++) {
+        took = wr(w[1], big, 4096) == 4096;
+    }
+    check(PAGES_WRITE_PAGES, took && wr(w[1], big, 4096) == -EAGAIN);
+    close_pair(w);
+    if (mapped) {
+        syscall2(SYS_MUNMAP, map, 4096);
+    }
+}
+
+/** Append the string `s` to `buf` at `*at`, moving `*at` past it. */
+static void put_str(char *buf, int *at, const char *s)
+{
+    while (*s) {
+        buf[(*at)++] = *s++;
+    }
+}
+
+/** The state letter of process `pid` in /proc/PID/stat, the one after the
+ * name's closing parenthesis, or 0 when the file cannot be read. */
+static int proc_state(int pid)
+{
+    char path[32], line[256];
+    int fd, n, i = 0, d = 1;
+
+    put_str(path, &i, "/proc/");
+    while (d <= pid / 10) {
+        d *= 10;
+    }
+    for (; d > 0; d /= 10) {
+        path[i++] = (char)('0' + pid / d % 10);
+    }
+    put_str(path, &i, "/stat");
+    path[i] = '\0';
+    fd = (int)syscall3(SYS_OPEN, (long)path, 0, 0);
+    if (fd < 0) {
+        return 0;
+    }
+    n = rd(fd, line, (int)sizeof(line) - 1);
+    syscall1(SYS_CLOSE, fd);
+    for (i = n - 1; i > 0 && line[i] != ')'; i--) {
+    }
+    return i > 0 && i + 2 < n && line[i + 1] == ' ' ? line[i + 2] : 0;
+}
+
+/** The child of `vmsplice_wait`: once `parent` is asleep, state S, looked
+ * at every 10 ms, write a byte to `fd` and exit 0; exit 2 when the parent
+ * ends first, and 1 when the write fails. Does not return. */
+static void vmsplice_waker(int parent, int fd)
+{
+    long ts[2] = {0, 10000000};
+    int state;
+
+    for (;;) {
+        state = proc_state(parent);
+        if (state == 'S') {
+            sys_exit(wr(fd, "v", 1) == 1 ? 0 : 1);
+        }
+        if (state == 0 || state == 'Z') {
+            sys_exit(2);
+        }
+        /* interval: the parent's state is looked at again every 10 ms */
+        syscall2(SYS_NANOSLEEP, (long)ts, 0);
+    }
+}
+
+/**
+ * The row of case (l) that vmsplices from the read end of an empty pipe made
+ * with O_NONBLOCK, without SPLICE_F_NONBLOCK: Linux's vmsplice passes the
+ * caller's flags alone, so the call waits, and a child that sees the probe
+ * asleep writes the byte it returns. A kernel that took the description's
+ * O_NONBLOCK answers EAGAIN.
+ */
+static void vmsplice_wait(void)
+{
+    char got[1] = {0};
+    long iov[2];
+    int w[2] = {-1, -1};
+    int made = do_pipe2(w, O_NONBLOCK) == 0, parent = (int)syscall1(SYS_GETPID, 0), pid = -1;
+    long n = -1;
+
+    if (made) {
+        pid = (int)syscall1(SYS_FORK, 0);
+    }
+    if (pid == 0) {
+        vmsplice_waker(parent, w[1]);
+    }
+    check(VMSPLICE_WAIT_FORK, made && pid > 0);
+    if (pid > 0) {
+        iov[0] = (long)got;
+        iov[1] = 1;
+        n = syscall4(SYS_VMSPLICE, w[0], (long)iov, 1, 0);
+    }
+    check(VMSPLICE_WAIT_NONBLOCK, pid > 0 && n == 1 && got[0] == 'v' && exited_zero(pid));
+    close_pair(w);
+}
+
+/**
  * Case (l): a shrink is refused below the page buffers that hold bytes, as
  * Linux counts them, however few bytes they hold. A write's first `count`
  * mod 4096 bytes join the newest buffer only when they fit in its page after
@@ -1096,6 +1228,8 @@ static void case_pages(void)
     pages_file(q);
     pages_slots();
     pages_wronly_file();
+    pages_write_slots();
+    vmsplice_wait();
     close_pair(p);
     close_pair(q);
 }

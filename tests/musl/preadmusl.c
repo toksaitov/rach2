@@ -45,7 +45,10 @@
  * an overflowing range is EFAULT, and on the i686 kernel a count negative
  * as ssize_t is EINVAL once its range has passed the address check.
  * Positioned I/O checks the end before that cut too, and checks the range
- * before an overflowing end. /dev/null lets large writes finish without
+ * before an overflowing end. At a file's offset one short of LLONG_MAX, a
+ * read, write, readv or writev of two bytes is EINVAL and leaves the offset;
+ * /proc/self/mem and /dev/mem, which take unsigned offsets, are not refused
+ * so. /dev/null lets large writes finish without
  * touching the buffer.
  * pwritev2 with RWF_APPEND writes at the end, moving the descriptor's
  * offset at offset -1 and not at another, and leaves O_APPEND clear;
@@ -175,7 +178,9 @@ static const char *const assertion_id[] = {"make-file",
                                            "append-later-fault",
                                            "append-buffer-fault",
                                            "append-first-fault",
-                                           "append-demand-buffer"};
+                                           "append-demand-buffer",
+                                           "offset-end",
+                                           "mem-offset-end"};
 
 /* chattr's requests and its append-only flag, which musl's headers do not
  * name: _IOR and _IOW of 'f' with a long, whose argument is an int. */
@@ -1296,13 +1301,65 @@ static int vector_rows(void)
     return vector_refusal_rows() != 0 ? 1 : vector_flag_rows();
 }
 
+/** The largest offset, LLONG_MAX, which an end may reach and not pass. */
+#define OFFSET_MAX ((off_t)0x7FFFFFFFFFFFFFFFLL)
+
+/** Whether `rc` and errno are anything but -1 with EINVAL. */
+static int not_einval(long rc)
+{
+    return rc != -1 || errno != EINVAL;
+}
+
+/**
+ * Check the end of a transfer at the description's offset, as Linux's
+ * rw_verify_area checks it for read, write, readv and writev: with the
+ * file's offset one short of LLONG_MAX each of two bytes is EINVAL and
+ * leaves the offset. Then /proc/self/mem, which takes unsigned offsets, and
+ * /dev/mem where the probe may open it, are not refused EINVAL at that
+ * offset. Returns 0, or 1 once the failure is reported.
+ */
+static int offset_end_rows(void)
+{
+    char buf[2];
+    struct iovec v[1];
+    int fd, ok;
+
+    v[0].iov_base = buf;
+    v[0].iov_len = sizeof(buf);
+    fd = open(FILE_PATH, O_RDWR);
+    ok = fd >= 0 && lseek(fd, OFFSET_MAX - 1, SEEK_SET) == OFFSET_MAX - 1 &&
+         refused(read(fd, buf, 2), EINVAL) && refused(write(fd, "ab", 2), EINVAL) &&
+         refused(readv(fd, v, 1), EINVAL) && refused(writev(fd, v, 1), EINVAL) &&
+         offset_is(fd, OFFSET_MAX - 1);
+    close(fd);
+    if (!ok) {
+        return fail("an end past LLONG_MAX at the description's offset is not EINVAL");
+    }
+    report_held();
+    fd = open("/proc/self/mem", O_RDONLY);
+    ok = fd >= 0 && lseek(fd, OFFSET_MAX - 1, SEEK_SET) == OFFSET_MAX - 1 &&
+         not_einval(read(fd, buf, 2));
+    close(fd);
+    fd = open("/dev/mem", O_RDONLY);
+    if (fd >= 0) {
+        ok = ok && lseek(fd, OFFSET_MAX - 1, SEEK_SET) == OFFSET_MAX - 1 &&
+             not_einval(read(fd, buf, 2));
+        close(fd);
+    }
+    if (!ok) {
+        return fail("/proc/self/mem or /dev/mem refused an end past LLONG_MAX");
+    }
+    report_held();
+    return 0;
+}
+
 int main(void)
 {
     report_start();
     if (file_rows() != 0 || device_rows() != 0 || proc_seek_rows() != 0 || wide_proc_rows() != 0 ||
         refusal_rows() != 0 || seek_refusal_rows() != 0 || vector_rows() != 0 ||
         vector_noappend_rows() != 0 || noappend_seal_row() != 0 || append_fault_rows() != 0 ||
-        append_only_rows() != 0) {
+        offset_end_rows() != 0 || append_only_rows() != 0) {
         unlink(FILE_PATH);
         return 1;
     }
