@@ -2,7 +2,7 @@
 # bed-shm.sh: Rach2's virtio-gpu over the region it shares with the test
 # bed's VM, run under Rach2's KVM (tests/cases/machine.bed-shm.json).
 #
-#   sh bed-shm.sh -d DISK [-p PROBE] [-c CRC] [-k NOCOPY | -w [-l LOAD]]
+#   sh bed-shm.sh -d DISK [-p PROBE] [-c CRC] [-k NOCOPY | -w [-l LOAD] | -u]
 #       [-x MEASURE [-S SCENES]] [-g BDF] [-o DIR] [-m MIB] [-n CPUS]
 #
 # ivshmemd attaches a region of 32 MiB to /dev/vgpu-shm, and two more
@@ -53,6 +53,20 @@
 # its return. Each load and each figure runs in a process group of its
 # own, which the script ends with the run.
 #
+# With -u the console first loses a card of the host's own, as it does on
+# the Lenovo when gpu.sh takes the GPU from the Intel driver: Weston is
+# stopped, the host's virtio-gpu card is opened and closed, so that the
+# console takes it back from that master onto a buffer of its own, and the
+# card is unplugged through its debugfs `virtio_gpu_reset`; the console
+# must have taken the card back and left it (`unplug`). With no card, the
+# console takes the region's card as virtio-gpu binds over the region,
+# inside the bind on the transport's thread, and commits its buffer there;
+# the bind must return within 60 s of the card's registration, and the
+# log must show the console on the region's card with its screen set
+# (`console`), before the draw. A bind that has not returned fails the
+# row with where the transport's thread sleeps and whether an open of the
+# card, which reaps the device's queues, let it go on.
+#
 # With -g the VM also has the host's PCI function BDF, the Lenovo's GPU:
 # gpu.sh, beside this script, takes it from Rach2's Intel driver, starts
 # QEMU with it on vfio-pci and the disk on AHCI, kills QEMU when this
@@ -68,12 +82,13 @@
 # groups, TERM and then KILL.
 set -u
 disk='' probe=./vgshmprobe crc=6e8e217c out=/tmp/bed-shm mib=2048 cpus=2 nocopy='' bdf=''
-desk=0 measure='' loadscene=glmark2 scenes=glmark2
+desk=0 unplug=0 measure='' loadscene=glmark2 scenes=glmark2
 icd=/usr/share/vulkan/icd.d/venus_icd.x86_64.json
 gpush=$(dirname "$0")/gpu.sh
-while getopts d:p:c:k:wl:x:S:g:o:m:n: o; do
+while getopts d:p:c:k:wul:x:S:g:o:m:n: o; do
     case $o in
         w) desk=1 ;;
+        u) unplug=1 ;;
         l) loadscene=$OPTARG ;;
         x) measure=$OPTARG ;;
         S) scenes=$OPTARG ;;
@@ -89,7 +104,7 @@ while getopts d:p:c:k:wl:x:S:g:o:m:n: o; do
     esac
 done
 [ -n "$disk" ] || {
-    echo "usage: bed-shm.sh -d DISK [-p PROBE] [-c CRC] [-k NOCOPY | -w [-l LOAD]] [-x MEASURE [-S SCENES]] [-g BDF] [-o DIR] [-m MIB] [-n CPUS]" >&2
+    echo "usage: bed-shm.sh -d DISK [-p PROBE] [-c CRC] [-k NOCOPY | -w [-l LOAD] | -u] [-x MEASURE [-S SCENES]] [-g BDF] [-o DIR] [-m MIB] [-n CPUS]" >&2
     exit 2
 }
 case $loadscene in
@@ -99,6 +114,8 @@ case $loadscene in
 esac
 [ -z "$bdf" ] || [ -f "$gpush" ] || { echo "bed-shm: no $gpush for -g" >&2; exit 2; }
 [ -z "$nocopy" ] || [ "$desk" = 0 ] || { echo "bed-shm: -k and -w are apart" >&2; exit 2; }
+[ "$unplug" = 0 ] || { [ -z "$nocopy$bdf" ] && [ "$desk" = 0 ]; } ||
+    { echo "bed-shm: -u is apart from -k, -w and -g" >&2; exit 2; }
 daemon='' qemu='' gpu='' waiter='' holder='' pid='' load='' figpid='' bad=0
 
 # end_group PID: end the process group that PID leads, which setsid made,
@@ -167,6 +184,51 @@ until_line()
         quiet "$1" "$3" "${4:-}" || return 1
     done
 }
+
+# klog_count PATTERN: how many lines of the kernel's log match PATTERN.
+klog_count() { dmesg | grep -c "$1"; }
+
+# klog_more PATTERN COUNT: wait until more than COUNT lines of the kernel's
+# log match PATTERN, looking once a second, 60 times at most.
+klog_more()
+{
+    n=60
+    while [ "$(klog_count "$1")" -le "$2" ]; do
+        n=$((n - 1))
+        [ "$n" -gt 0 ] || return 1
+        sleep 1
+    done
+}
+
+# With -u, the console onto the host's virtio-gpu card and the card away.
+if [ "$unplug" = 1 ]; then
+    reset='' host=''
+    for f in /sys/kernel/debug/dri/*/virtio_gpu_reset; do
+        [ -e "$f" ] || continue
+        reset=$f
+        host=${f#/sys/kernel/debug/dri/}
+        host=card${host%%/*}
+        break
+    done
+    pkill -x weston 2>/dev/null || :
+    n=30
+    while pgrep -x weston > /dev/null && [ "$n" -gt 0 ]; do
+        sleep 1
+        n=$((n - 1))
+    done
+    took=$(klog_count "console: $host: taken back from a master")
+    left=$(klog_count "console: $host: left")
+    # The first opener of a card with no master becomes its master; at the
+    # close the console takes the card back onto a buffer of its own.
+    [ -z "$host" ] || : <> "/dev/dri/$host"
+    if [ -n "$reset" ] && klog_more "console: $host: taken back from a master" "$took" &&
+        echo 1 > "$reset" && klog_more "console: $host: left" "$left"; then
+        pass unplug "the console took $host back from a master, and $host left"
+    else
+        fail unplug "card '$host': $(dmesg | grep 'console: ' | tail -n 3 | tr '\n' ' ')"
+    fi
+    klog_from=$(dmesg | wc -l)
+fi
 
 # The attach, once, and two refused.
 ivshmemd -s 32M "$out/ivs.sock" > "$out/ivshmemd.out" 2>&1 &
@@ -241,13 +303,51 @@ handoff()
 }
 # The VM's backend binds virtio-gpu once its service starts, before the
 # VM's boot has ended.
+# With -u the bind must return within 60 s of the region's card's
+# registration, since the VM keeps QEMU busy whether or not it does.
 if until_line "$out/ivshmemd.out" 'QEMU connected' 60 "$qemu"; then
-    last=-1 still=0
+    last=-1 still=0 registered=0
     until [ "$(info bound)" = 1 ]; do
         quiet "$console" 600 "$qemu" || break
+        [ "$unplug" = 1 ] || continue
+        dmesg | tail -n "+$((klog_from + 1))" | grep -q 'drm: virtio_gpu: card' || continue
+        registered=$((registered + 1))
+        [ "$registered" -lt 60 ] || break
     done
 fi
 ivshmemd -i > "$out/info-bound.txt" 2>&1
+# With -u, the console's place on the region's card, inside the bind.
+if [ "$unplug" = 1 ]; then
+    dmesg | tail -n "+$((klog_from + 1))" > "$out/dmesg-bind.txt"
+    card=$(sed -n 's/^.*drm: virtio_gpu: \(card[0-9]*\)$/\1/p' "$out/dmesg-bind.txt" | tail -n 1)
+    stuck=''
+    if [ "$(info bound)" != 1 ] && [ -n "$card" ]; then
+        # The bind has not returned: where the transport's thread sleeps,
+        # then whether an open of the card, which reaps the device's
+        # queues, lets it go on.
+        t=$(pgrep -x vgpu-shm | head -n 1)
+        stuck="vgpu-shm sleeps in $(cat "/proc/$t/wchan" 2>/dev/null || echo '?')"
+        : <> "/dev/dri/$card"
+        n=60
+        until [ "$(info bound)" = 1 ] || [ "$n" -eq 0 ]; do
+            sleep 1
+            n=$((n - 1))
+        done
+        if [ "$(info bound)" = 1 ]; then
+            stuck="$stuck, and the bind returned once $card was opened, whose open reaps the queues"
+        else
+            stuck="$stuck, and an open of $card did not end the bind"
+        fi
+        dmesg | tail -n "+$((klog_from + 1))" > "$out/dmesg-bind.txt"
+    fi
+    if [ -z "$stuck" ] && [ "$(info bound)" = 1 ] && [ -n "$card" ] &&
+        grep -q "console: $card: a native display" "$out/dmesg-bind.txt" &&
+        ! grep -q "console: $card: screen not set" "$out/dmesg-bind.txt"; then
+        pass console "virtio-gpu bound over the region as $card with the console placed on it"
+    else
+        fail console "${stuck:+$stuck; }bound $(info bound), card '$card': $(grep 'console: \|virtio_gpu: command' "$out/dmesg-bind.txt" | tail -n 3 | tr '\n' ' ')"
+    fi
+fi
 
 # figure COMMAND...: one measurement, its lines added to DIR/measure.txt
 # and printed, each as `bed-shm: figure: LINE`, after `bed-shm: measuring:
