@@ -78,8 +78,8 @@ struct vshm_rev {
  * the VM's pages until its map_free, and the interrupt thread's reap while
  * it runs, and changes only with interrupts off (vs_get, vs_put), as
  * kref's count is atomic. Every thread that takes or drops one, a system
- * call or a kernel thread marked `no_tick_switch` such as ki915 freeing an
- * imported buffer, runs unswitched by the tick; the count stays whole even
+ * call or a kernel thread such as ki915 freeing an imported buffer, runs
+ * unswitched by the tick (`no_tick_switch`); the count stays whole even
  * without that rule. The record is freed with the last; the
  * detach gives back the region's pages and window, and the driver's and
  * maps' remaining references keep the record until they let go. A record
@@ -1546,7 +1546,8 @@ static void vshm_irq_main(void)
 }
 
 /** A kernel thread named `comm` that runs `entry`, ready to run, or NULL;
- * the tick does not switch it (`no_tick_switch`). */
+ * as every kernel thread, the tick does not switch it (`no_tick_switch`,
+ * which `setup_process_stack` sets). */
 static process_t *vshm_kthread(const char *comm, void (*entry)(void))
 {
     process_t *p;
@@ -1568,7 +1569,6 @@ static process_t *vshm_kthread(const char *comm, void (*entry)(void))
     p->page_dir = NULL;
     p->parent_pid = 0;
     proc_set_comm(p, comm);
-    p->no_tick_switch = 1;
     setup_process_stack(p, entry);
     sched_make_ready(p);
     kirq_restore(flags);
