@@ -136,6 +136,21 @@ int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
     return 1;
 }
 
+/** Whether the page of `addr` is present for a read, or with `write` for
+ * a write, with no resolve: 1 or 0, 0 also outside the model. A check must
+ * stay in one page. */
+int vm_resident(uintptr_t addr, uintptr_t len, int write)
+{
+    uint32_t page;
+
+    CHECK(len > 0 && len <= PAGE_SIZE - (addr & (PAGE_SIZE - 1)), "one user page per check");
+    if (addr < USER_BASE || addr - USER_BASE >= sizeof(memory)) {
+        return 0;
+    }
+    page = (addr - USER_BASE) / PAGE_SIZE;
+    return pages[page] >= (write ? 2 : 1);
+}
+
 /** Whether a pin may take the page of `addr`: always, since the model has
  * no region that Linux's get_user_pages refuses. */
 int paging_pin_allows(struct mm *mm, uintptr_t addr, int write)
@@ -478,8 +493,14 @@ static void write_with_data(void)
           "a write into a ring that has data wakes the readers for data");
 }
 
-/** A transfer over two pages whose second faults, or whose resolve lets a
- * peer drain the ring or close the reader, returns the bytes of the first. */
+/**
+ * A read over two pages whose second faults, or whose resolve lets a peer
+ * drain the ring, returns the bytes of the first. A write of fewer bytes
+ * than a page is one group, which a write commits whole, as Linux's
+ * pipe_write commits a page: when its second page faults it is -EFAULT
+ * with no byte added and no reader woken, and when the reader closes while
+ * that page is resolved it is -EPIPE with SIGPIPE and no byte added.
+ */
 static void later_page(void)
 {
     setup(0);
@@ -491,8 +512,10 @@ static void later_page(void)
 
     setup(0);
     pages[1] = -1;
-    CHECK(pipe_write(&writer, user_at(PAGE_SIZE - 2), 6) == 2, "write fault returns partial count");
-    CHECK(pipe_available(&ring) == 2 && read_wakes == 1, "write fault publishes completed bytes");
+    CHECK(pipe_write(&writer, user_at(PAGE_SIZE - 2), 6) == -EFAULT,
+          "a write fault in the first group returns efault");
+    CHECK(pipe_available(&ring) == 0 && read_wakes == 0,
+          "a write fault publishes no byte of its group");
 
     setup(0);
     pipe_ring_put(&ring, memory, 6);
@@ -505,8 +528,10 @@ static void later_page(void)
     setup(0);
     pages[1] = 0;
     resolve_action = close_reader;
-    CHECK(pipe_write(&writer, user_at(PAGE_SIZE - 2), 6) == 2, "later close returns partial count");
-    CHECK(signals == 1 && pipe_available(&ring) == 2, "later close posts signal without copying");
+    CHECK(pipe_write(&writer, user_at(PAGE_SIZE - 2), 6) == -EPIPE,
+          "a close during the group's resolve returns epipe");
+    CHECK(signals == 1 && pipe_available(&ring) == 0,
+          "a close during the group's resolve posts the signal and adds no byte");
 }
 
 /** Run every case; 0 when each passes, 1 otherwise. */
