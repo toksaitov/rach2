@@ -50,7 +50,8 @@
  * `vvar`: the data page is the process's own, as on Linux, which maps it
  * VM_IO | VM_PFNMAP without VM_MAYEXEC: a read of it through
  * /proc/self/mem and a tracer's PTRACE_PEEKDATA of a tracee's give EIO,
- * process_vm_readv of it EFAULT, and mprotect of it with PROT_EXEC EACCES.
+ * process_vm_readv of it and a vmsplice of a byte of it into a pipe EFAULT,
+ * and mprotect of it with PROT_EXEC EACCES.
  *
  * On the i686 kernel, which has no vDSO, `absent`: there is no
  * AT_SYSINFO_EHDR, and maps names neither region; then `source`.
@@ -749,6 +750,9 @@ static int vvar_row(void)
     struct iovec remote;
     int fd;
     int peek;
+    int p[2];
+    ssize_t spliced;
+    int err;
 
     if (maps_region("[vvar]", &lo, &hi, perm) != 0) {
         return fail("/proc/self/maps has no [vvar]");
@@ -770,6 +774,16 @@ static int vvar_row(void)
     errno = 0;
     if (process_vm_readv(getpid(), &local, 1, &remote, 1, 0) != -1 || errno != EFAULT) {
         return fail("process_vm_readv of [vvar] is not EFAULT");
+    }
+    if (pipe(p) != 0) {
+        return fail("no pipe for vmsplice");
+    }
+    spliced = vmsplice(p[1], &remote, 1, SPLICE_F_NONBLOCK);
+    err = errno;
+    close(p[0]);
+    close(p[1]);
+    if (spliced != -1 || err != EFAULT) {
+        return fail("vmsplice of a byte of [vvar] is not EFAULT");
     }
     errno = 0;
     if (mprotect((void *)lo, 4096, PROT_READ | PROT_EXEC) != -1 || errno != EACCES) {
