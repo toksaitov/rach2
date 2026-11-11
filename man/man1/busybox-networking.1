@@ -1,4 +1,4 @@
-.Dd November 6, 2026
+.Dd November 12, 2026
 .Dt BUSYBOX-NETWORKING 1
 .Os
 .Sh NAME
@@ -406,7 +406,7 @@ The client sets the clock through
 .Xr clock_settime 2
 and
 .Xr adjtimex 2 ,
-which steps it where Linux would slew it;
+which steps a large offset and slews a small one, as on Linux;
 .Fl q
 sets it once and exits, and
 .Fl w

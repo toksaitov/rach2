@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 12, 2026
 .Dt GETTIMEOFDAY 2
 .Os
 .Sh NAME
@@ -46,9 +46,11 @@ The
 argument is ignored.
 Real time is the CMOS clock reading taken at boot plus
 .Dv CLOCK_MONOTONIC ,
-the time since, to the microsecond.
+the time since, to the microsecond, at the rate that
+.Xr adjtimex 2
+gives it, by which an NTP daemon slews it.
 If the clock could not be read, the result is time since boot.
-The hardware clock is read once; no service corrects the clock afterward.
+The hardware clock is read once.
 .Fn time
 returns the seconds of the same real time, and stores them at
 .Fa tloc
@@ -65,6 +67,9 @@ The difference from the time the clock keeps becomes a step that every
 later reading of real time adds, so the clock goes on from the new time at
 the same rate, and a reading after a step back may be earlier than one
 before it.
+A setting forgets the offset that
+.Xr adjtimex 2
+was slewing, and keeps its frequency.
 The boot time that
 .Pa /proc/stat
 gives moves with the step, as on Linux.
@@ -482,7 +487,8 @@ or there is no current process.
 .Fn clock_settime
 was given a clock other than
 .Dv CLOCK_REALTIME ,
-or a time-setting call a time before 1970 or a fraction outside a second;
+or a time-setting call a time before 1970, before the time since boot or
+past the year 2232, or a fraction outside a second;
 or
 .Fa clockid
 is 8 or greater, including Linux's alarm clocks and
