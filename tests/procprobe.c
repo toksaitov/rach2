@@ -92,6 +92,7 @@
 #define ECONNREFUSED 111
 #define SIGKILL      9
 #define ESRCH        3
+#define ENOENT       2
 
 #if defined __x86_64__
 #define SYS_MEMFD_CREATE 319
@@ -143,12 +144,14 @@ static const struct row {
             {"snapshot-open", ROW_PLAIN},
             {"child-state-s", ROW_PLAIN},
             {"procs-blocked-zero", ROW_MACHINE},
+            {"fd-dir-size", ROW_PLAIN},
             {"snapshot-kill", ROW_PLAIN},
             {"snapshot-reap", ROW_PLAIN},
             {"snapshot-entry-gone", ROW_PLAIN},
             {"snapshot-reads", ROW_PLAIN},
             {"snapshot-starts-with-pid", ROW_PLAIN},
             {"snapshot-reread-gone", ROW_PLAIN},
+            {"fd-dir-gone", ROW_PLAIN},
             {"cmdline-newline", ROW_PLAIN},
             {"net-dev-newline", ROW_PLAIN},
             {"loop-intr-stat", ROW_PLAIN},
@@ -2229,7 +2232,9 @@ static void pool_full_rows(void)
  */
 static void snapshot_rows(void)
 {
-    int pid, status, fd, n;
+    static unsigned char st_path[KSTAT_SIZE], st_fd[KSTAT_SIZE];
+    static char fd_dir[40], names[1024];
+    int pid, status, fd, dir_fd = -1, n, i;
 
     pid = syscall1(SYS_FORK, 0);
     check("snapshot-fork", pid >= 0, "fork");
@@ -2243,6 +2248,27 @@ static void snapshot_rows(void)
         fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
         check("snapshot-open", fd >= 0, "open /proc/<child>/stat while the child is alive");
         sleeping_child_rows(path);
+        /* The fd directory's size is its count of open descriptors, as
+         * Linux's proc_fd_getattr gives it, by path and by descriptor. */
+        for (i = 0; path[i]; i++) {
+            fd_dir[i] = path[i];
+        }
+        fd_dir[i - 4] = 'f';
+        fd_dir[i - 3] = 'd';
+        fd_dir[i - 2] = '\0';
+        dir_fd = syscall3(SYS_OPEN, (long)fd_dir, O_RDONLY, 0);
+        n = 0;
+        if (listing(fd_dir, names, (int)sizeof(names)) == 0) {
+            for (i = 0; names[i]; i++) {
+                n += names[i] == ' ';
+            }
+        }
+        check("fd-dir-size",
+              n > 0 && dir_fd >= 0 && syscall3(SYS_STAT, (long)fd_dir, (long)st_path, 0) == 0 &&
+                  syscall3(SYS_FSTAT, dir_fd, (long)st_fd, 0) == 0 &&
+                  *(long long *)(st_path + KSTAT_SIZE_AT) == n &&
+                  *(long long *)(st_fd + KSTAT_SIZE_AT) == n,
+              "stat and fstat of /proc/<child>/fd give the number of its open descriptors");
         check("snapshot-kill", syscall3(SYS_KILL, pid, SIGKILL, 0) == 0, "kill the child");
         check("snapshot-reap", syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid,
               "reap the child");
@@ -2261,6 +2287,11 @@ static void snapshot_rows(void)
             check("snapshot-reread-gone", probe_pread(fd, buf, 64, 0) == -ESRCH,
                   "and a read from offset 0, which makes the text again, is ESRCH");
             syscall1(SYS_CLOSE, fd);
+        }
+        check("fd-dir-gone", dir_fd >= 0 && syscall3(SYS_FSTAT, dir_fd, (long)st_fd, 0) == -ENOENT,
+              "and fstat of a descriptor on it is ENOENT once the child is gone");
+        if (dir_fd >= 0) {
+            syscall1(SYS_CLOSE, dir_fd);
         }
     }
 }
