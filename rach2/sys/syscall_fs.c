@@ -6502,34 +6502,41 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
 }
 
 /**
- * Read up to `count` bytes of the socket of `entry` into the user's `buf`,
- * for `read_fd`, by the socket's type: a datagram or raw socket one
- * datagram and a stream socket its bytes, straight into the checked user
- * buffer, and without waiting under O_NONBLOCK, a status flag of the
- * description, as recv(2) does. A bad buffer is -EFAULT and the query
- * socket -EOPNOTSUPP.
+ * Read the socket of the network behind `entry` into the `count` elements
+ * of the copied vector `iov`, for read(2) and readv(2), by the socket's
+ * type, as Linux's sock_read_iter gives the vector to the socket's recvmsg
+ * (net/socket.c:1110-1130 in 6.12): a datagram or raw socket one datagram
+ * (`readv_dgram`), anything else its bytes (`stream_readv`), without
+ * waiting under O_NONBLOCK, a status flag of the description. The wait, the
+ * end of input and -EAGAIN come before the copy, so a buffer that cannot be
+ * written, NULL among them, is found by the copy, as Linux's tcp_recvmsg
+ * returns 0 at the end of input before it copies (net/ipv4/tcp.c:2683-2692).
+ * Returns the bytes read, or -errno: -EOPNOTSUPP for the query socket, and
+ * the receive's errors.
  */
-static int32_t socket_read(fd_entry_t *entry, char __user *buf, uint32_t count)
+static int32_t socket_readv(fd_entry_t *entry, const struct kernel_iovec *iov, int count)
 {
-    int sock_nonblock;
-
-    if (!entry->sock || !user_buffer_ok((__force uintptr_t)buf, count, 1)) {
-        return -EFAULT;
-    }
     if (sock_is_query(entry->sock)) {
         return -EOPNOTSUPP;
     }
-    sock_nonblock = entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK);
     if (entry->sock->type == SOCK_DGRAM || entry->sock->type == SOCK_RAW) {
-        if (sock_nonblock) {
-            return socket_try_recv(entry->sock, (uint8_t __force *)buf, (int)count, NULL, NULL, 0);
-        }
-        return socket_recv(entry->sock, (uint8_t __force *)buf, (int)count, NULL, NULL, 0);
+        return readv_dgram(entry, iov, count, 0, 0, 0, 0);
     }
-    if (sock_nonblock) {
-        return socket_tcp_try_recv(entry->sock, (uint8_t __force *)buf, (int)count, 0);
+    return stream_readv(entry, iov, (uint32_t)count, 0);
+}
+
+/** Read up to `count` bytes of the socket of `entry` into the user's `buf`,
+ * for `read_fd`: a vector of one (`socket_readv`). */
+static int32_t socket_read(fd_entry_t *entry, char __user *buf, uint32_t count)
+{
+    struct kernel_iovec one;
+
+    if (!entry->sock) {
+        return -EFAULT;
     }
-    return socket_tcp_recv(entry->sock, (uint8_t __force *)buf, (int)count, 0);
+    one.iov_base = (__force uintptr_t)buf;
+    one.iov_len = count;
+    return socket_readv(entry, &one, 1);
 }
 
 /**
@@ -6633,9 +6640,13 @@ static int32_t read_allowed(const fd_entry_t *entry)
  * top of user memory, then -EINVAL for a count negative as the kernel's
  * ssize_t or for an end at the description's offset past 2^63-1
  * (`rw_offset_end`), then -EISDIR for a directory, as Linux's vfs_read
- * orders them,
- * then -EFAULT for a NULL or bad buffer, which a file of a mount judges
- * only after its end (`file_read`). The transfer is capped at
+ * orders them. A NULL or bad buffer is -EFAULT only once the object's read
+ * finds it in its copy, after its end of input, its wait and -EAGAIN, as
+ * Linux's vfs_read checks only access_ok, which NULL passes
+ * (fs/read_write.c:557 in 6.12): a file of a mount judges it after its end
+ * (`file_read`), and an object with a read method, a pipe among them, and a
+ * socket in their copies; only the console and the mouse, which have no
+ * read method, refuse NULL first. The transfer is capped at
  * USER_RW_MAX after the original range and count have passed. A
  * read of zero bytes returns 0 once those checks have passed, and `buf`
  * may then be NULL, as POSIX allows; from an anonymous descriptor with a
@@ -6690,16 +6701,14 @@ static int32_t read_fd(int fd, char __user *buf, size_t requested)
     if (entry->type == FD_TYPE_FILE && !entry->ops) {
         return file_read(entry, buf, count, NULL, requested);
     }
-    if (!buf) {
-        return -EFAULT;
-    }
-
     if (entry->ops) {
         return read_ops(entry, buf, count, requested);
     }
-
     if (entry->type == FD_TYPE_SOCKET) {
         return socket_read(entry, buf, count);
+    }
+    if (!buf) {
+        return -EFAULT;
     }
     if (entry->type == FD_TYPE_CONSOLE) {
         return console_read(entry, buf, count);
@@ -6830,8 +6839,10 @@ static int32_t dgram_spread(const struct kernel_iovec *iov, int iovcnt, const ui
  * kernel stack, or past that into a block of the heap, without which the
  * call is -ENOMEM with the datagram left queued. The rest of a longer
  * datagram is dropped, and `whole` gets its whole length, so that the caller
- * reports it truncated. A netlink socket notes the sum as the size of a
- * read, which sizes its answers (`netlink_note_recv`).
+ * reports it truncated. A netlink socket notes the sum, before the cut to
+ * the datagram, as the size of a read, which sizes its answers
+ * (`netlink_note_recv`), as Linux's netlink_recvmsg notes the reader's
+ * length (net/netlink/af_netlink.c:1944-1947 in 6.12).
  *
  * The spread runs with interrupts on, through `copy_to_user`, over the
  * vector copied before the wait, as Linux copies the native or compat
@@ -6847,7 +6858,7 @@ int32_t readv_dgram(fd_entry_t *entry, const struct kernel_iovec *iov, int iovcn
 {
     uint8_t small[READV_DGRAM_STACK];
     uint8_t *message = small;
-    uint32_t want = 0;
+    uint32_t want = 0, room;
     int32_t total;
     uint32_t held;
     int nonblock;
@@ -6858,6 +6869,7 @@ int32_t readv_dgram(fd_entry_t *entry, const struct kernel_iovec *iov, int iovcn
     for (i = 0; i < iovcnt; i++) {
         want += (uint32_t)iov[i].iov_len;
     }
+    room = want;
 
     nonblock = entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK);
     if (nonblock) {
@@ -6893,7 +6905,7 @@ int32_t readv_dgram(fd_entry_t *entry, const struct kernel_iovec *iov, int iovcn
         length = taken;
     }
     if (entry->sock->family == AF_NETLINK) {
-        netlink_note_recv(entry->sock, want);
+        netlink_note_recv(entry->sock, room);
     }
     if (peek) {
         socket_dgram_sender(entry->sock, src_ip, src_port);
@@ -6938,17 +6950,18 @@ static uint32_t readv_room(const struct kernel_iovec *iov, uint32_t left)
  * on anything but a file of a mount: the bytes read or a negative errno.
  *
  * How depends on what is behind the descriptor, since a second read is not
- * always reading on. A datagram, raw or packet socket is read once
- * (`readv_dgram`): one datagram is one message, and a second read would
- * take the next one. An AF_UNIX socket of any type is one receive into the
- * whole vector (`unix_readv`), as Linux's sock_read_iter gives it to
- * unix_recvmsg: a datagram or sequenced-packet socket takes one message
- * across the elements (net/unix/af_unix.c:2496-2501 in 6.12), and a stream
- * socket's copy that faults keeps its message queued (af_unix.c:2921-2927).
- * A stream socket of the network (`stream_readv`) and a pipe (`pipe_readv`)
- * read the vector as one read, as Linux's tcp_recvmsg and pipe_read take an
- * iov_iter: the wait, the end of input and -EAGAIN come first, and a copy
- * that faults leaves its bytes queued.
+ * always reading on. A socket of the network is read as its read(2) reads
+ * it (`socket_readv`): a datagram, raw or packet socket once
+ * (`readv_dgram`), since one datagram is one message and a second read
+ * would take the next one, and any other as a stream. An AF_UNIX socket of
+ * any type is one receive into the whole vector (`unix_readv`), as Linux's
+ * sock_read_iter gives it to unix_recvmsg: a datagram or sequenced-packet
+ * socket takes one message across the elements (net/unix/af_unix.c:2496-2501
+ * in 6.12), and a stream socket's copy that faults keeps its message queued
+ * (af_unix.c:2921-2927). A stream socket of the network (`stream_readv`)
+ * and a pipe (`pipe_readv`) read the vector as one read, as Linux's
+ * tcp_recvmsg and pipe_read take an iov_iter: the wait, the end of input
+ * and -EAGAIN come first, and a copy that faults leaves its bytes queued.
  *
  * Anything else, a device or a /proc file among them, is read for the first
  * buffer by the ordinary read, which waits if it must, and for each later
@@ -6974,15 +6987,7 @@ static long readv_elements(fd_entry_t *entry, int fd, const struct kernel_iovec 
     int i;
 
     if (entry->type == FD_TYPE_SOCKET && entry->sock && !entry->ops) {
-        if (sock_is_query(entry->sock)) {
-            return -EOPNOTSUPP;
-        }
-        if (entry->sock->type == SOCK_DGRAM || entry->sock->type == SOCK_RAW) {
-            return readv_dgram(entry, iov, count, 0, 0, 0, 0);
-        }
-        if (entry->sock->type == SOCK_STREAM) {
-            return stream_readv(entry, iov, (uint32_t)count, 0);
-        }
+        return socket_readv(entry, iov, count);
     }
     if (entry->type == FD_TYPE_UNIX) {
         return unix_readv(entry, iov, count, wanted);

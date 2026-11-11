@@ -57,6 +57,16 @@ with
 as Linux does, while
 .Fn readv
 of zero bytes returns zero for them, as Linux's does.
+A buffer that cannot be written, a null pointer among them, is found only
+by the object's copy, since Linux checks no more than that the range lies
+in user space: a pipe or a socket at its end of input returns zero, and an
+empty one under
+.Dv O_NONBLOCK
+gives
+.Er EAGAIN ,
+before it would copy, and a pipe or a stream socket whose copy fails keeps
+its bytes queued; only the console and the mouse refuse a null buffer
+first.
 .Pp
 Regular files are read at the open file description's offset.
 A positive result advances that offset by the number of bytes read.
