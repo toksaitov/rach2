@@ -343,19 +343,15 @@ int signal_pending(void)
 }
 
 /* The run loop's switch at a slice's end, which a row asks for by setting
- * the caller's need_resched: the thread waits `preempt_wait` ns on a run
- * queue and is switched in again, and the steal time's `preempted` byte at
+ * the caller's need_resched: the switch calls the thread's `sched_out`, as
+ * `schedule` does, the thread waits `preempt_wait` ns on a run queue and is
+ * switched in again, and the steal time's `preempted` byte at
  * `preempt_seen_at` is kept as the switch found it. With `preempt_alone`
  * no other thread is queued, so the request switches to none. */
 static uint64_t preempt_wait;
 static const uint8_t *preempt_seen_at;
 static int preempt_seen = -1;
 static int preempt_alone;
-
-int sched_preempt_due(void)
-{
-    return caller.need_resched && !preempt_alone;
-}
 
 void sched_take_preempt(void)
 {
@@ -364,6 +360,9 @@ void sched_take_preempt(void)
         if (preempt_alone) {
             return;
         }
+        CHECK(caller.sched_out != NULL, "a vCPU's thread has its sched_out across KVM_RUN");
+        caller.nivcsw++;
+        caller.sched_out(caller.sched_out_arg);
         caller.run_delay += preempt_wait;
         caller.pcount++;
         preempt_seen = preempt_seen_at ? *preempt_seen_at : -1;
@@ -887,6 +886,21 @@ int kvm_guest_phys_rw(struct kvm_vcpu *v, uint64_t gpa, void *buf, uint32_t n, i
     } else {
         memcpy(buf, guest_page + (gpa - GUEST_PAGE), n);
     }
+    return 0;
+}
+
+/* The no-fault write of the steal time's preempted byte, into the same
+ * page; `nofault_refuse` stands for a page that is not present. */
+static int nofault_refuse;
+
+int kvm_tdp_write_nofault(struct kvm_vm *vm, uint64_t gpa, const void *buf, uint32_t n)
+{
+    (void)vm;
+    if (nofault_refuse || !guest_mem || gpa < GUEST_PAGE ||
+        gpa + n > GUEST_PAGE + sizeof(guest_page)) {
+        return 1;
+    }
+    memcpy(guest_page + (gpa - GUEST_PAGE), buf, n);
     return 0;
 }
 
@@ -2102,6 +2116,13 @@ static void steal_rows(int fd0)
     kvm_steal_prepare(v0);
     CHECK(st->preempted == 0 && st->version == 14 && st->steal == 8000,
           "and the next entry clears it, with no switch in between");
+    nofault_refuse = 1;
+    kvm_steal_preempted(v0);
+    CHECK(st->preempted == 0 && !v0->st_preempted &&
+              v0->stat[KVM_VCPU_STAT_PREEMPTION_REPORTED] == reported + 2,
+          "a record that cannot be written without a fault is not marked, and the preemption is "
+          "still reported, as Linux's");
+    nofault_refuse = 0;
 
     refusing = 0;
     script_len = 0;
@@ -2118,7 +2139,8 @@ static void steal_rows(int fd0)
           "the record says preempted while the thread is switched out, and not after");
     CHECK(st->steal == 10000 && st->version == 18,
           "the wait on the run queue is stolen time at the next entry");
-    CHECK(v0->stat[KVM_VCPU_STAT_PREEMPTION_REPORTED] == reported + 2, "and is reported");
+    CHECK(v0->stat[KVM_VCPU_STAT_PREEMPTION_REPORTED] == reported + 3 && caller.sched_out == NULL,
+          "and is reported, and the thread has no sched_out after KVM_RUN");
     script_len = 0;
     script_at = 0;
     scripted(KVM_X_AGAIN);
@@ -2128,7 +2150,7 @@ static void steal_rows(int fd0)
     CHECK(fdio(fd0, KVM_RUN, 0) == 0 && run->exit_reason == KVM_EXIT_HLT,
           "KVM_RUN through a tick whose request finds no other thread, to a HLT");
     CHECK(preempt_seen == -1 && st->preempted == 0 && st->version == 18 &&
-              v0->stat[KVM_VCPU_STAT_PREEMPTION_REPORTED] == reported + 2 &&
+              v0->stat[KVM_VCPU_STAT_PREEMPTION_REPORTED] == reported + 3 &&
               v0->stat[KVM_VCPU_STAT_PREEMPTION_OTHER] == 1,
           "the vCPU is not marked preempted, nor counted, when nothing switches it out");
     preempt_alone = 0;

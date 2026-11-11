@@ -932,11 +932,13 @@ int32_t kvm_clock_ctrl(struct kvm_vcpu *v);
 void kvm_steal_prepare(struct kvm_vcpu *v);
 
 /** Mark `v`'s steal time KVM_VCPU_PREEMPTED, as Linux's
- * kvm_steal_time_set_preempted, before the run loop gives the processor
- * to another thread at a slice's end: only when the guest last stopped for
- * a host interrupt (`at_boundary`), and with the steal time on. It counts
- * the preemption in preemption_reported, or in preemption_other when the
- * guest did not stop for an interrupt. In `v`'s thread. */
+ * kvm_steal_time_set_preempted, when `schedule` switches the vCPU's thread
+ * away while it can still run (its `sched_out` across KVM_RUN): only when
+ * the guest last stopped for a host interrupt (`at_boundary`), with the
+ * steal time on, and where `kvm_tdp_write_nofault` can write the record.
+ * It counts the preemption in preemption_reported, or in preemption_other
+ * when the guest did not stop for an interrupt. In `v`'s thread, under the
+ * run queues' lock with interrupts off; does not sleep. */
 void kvm_steal_preempted(struct kvm_vcpu *v);
 
 /** KVM_HC_CLOCK_PAIRING of `type` into the guest's `gpa`, as Linux's
@@ -1026,6 +1028,17 @@ uint64_t kvm_tdp_frames(void);
  * -ENOMEM.
  */
 int kvm_tdp_fault(struct kvm_vm *vm, uint64_t gfn, int write);
+
+/**
+ * Write the `n` bytes at `buf` to `vm`'s guest-physical `gpa`, within one
+ * page, without a fault or a sleep, as Linux's copy_to_user_nofault through
+ * a vCPU's cache of the page: only where the current thread is in the VM's
+ * address space and its page is present, writable and already stored into,
+ * in a slot that is not read-only. The frame is marked in the dirty log.
+ * 0, or 1 with nothing written. Under the big lock; for a context that may
+ * not sleep, such as a thread's `sched_out`.
+ */
+int kvm_tdp_write_nofault(struct kvm_vm *vm, uint64_t gpa, const void *buf, uint32_t n);
 
 /**
  * KVM_PRE_FAULT_MEMORY's work, as Linux's kvm_vcpu_pre_fault_memory: map
