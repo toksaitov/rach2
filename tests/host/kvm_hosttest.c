@@ -922,6 +922,11 @@ void kvm_emul_skip(struct kvm_vcpu *v, uint32_t len)
     v->regs.rip += len;
 }
 
+void kvm_emul_stepped(struct kvm_vcpu *v)
+{
+    v->emul.step_trap = 0;
+}
+
 struct eventfd *eventfd_get(int fd, int32_t *err)
 {
     (void)fd;

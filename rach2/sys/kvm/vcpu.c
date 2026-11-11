@@ -739,7 +739,8 @@ static int32_t run_resume(struct kvm_vcpu *v)
  * Begin KVM_RUN: take CR8 from the run page with no local APIC in the
  * kernel, give the backend the answer to the last exit's read and finish
  * the instruction it was for, or the caller's hypercall or MSR access,
- * then end at once under immediate_exit, as
+ * reporting a step over it under the caller's single step, then end at
+ * once under immediate_exit, as
  * Linux's kvm_arch_vcpu_ioctl_run tests it only after
  * complete_userspace_io. 1 to enter the guest, or what KVM_RUN returns:
  * 0 with `exit_reason` set, -EINTR, or -errno.
@@ -761,6 +762,7 @@ static int32_t run_begin(struct kvm_vcpu *v)
     }
     kvm_hv_complete(v);
     kvm_msr_complete(v);
+    kvm_emul_stepped(v);
     r = run_resume(v);
     if (r != 0) {
         return r > 0 ? 0 : r;

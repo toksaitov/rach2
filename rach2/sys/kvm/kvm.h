@@ -1599,6 +1599,15 @@ int kvm_emul_pio(struct kvm_vcpu *v, const struct kvm_pio *p);
  * error or -EFAULT, as `kvm_emul_pio` reports a string OUT's. 0. */
 int kvm_emul_complete(struct kvm_vcpu *v);
 
+/** An instruction ended outside the backend's `exit`, which reads
+ * `v->emul.step_trap`: a port instruction in `kvm_emul_complete`, or an
+ * RDMSR, WRMSR or Hyper-V hypercall the caller answered. Under the
+ * caller's single step, set `v->emul.resume` for `kvm_emul_resume` to
+ * report the step at this KVM_RUN, as Linux's
+ * kvm_skip_emulated_instruction does from a completion; clear
+ * `step_trap` either way. */
+void kvm_emul_stepped(struct kvm_vcpu *v);
+
 /** The exit of the step `v->emul.resume` asked for, into `v->exit`, from
  * the backend's `exit` with no guest entered: the instruction run again,
  * its next MMIO write, `v->emul.step_trap` set for a port instruction
