@@ -255,16 +255,40 @@ host_line()
     echo $? > "$out/scene.status"
 ) &
 scene=$!
+# The before mark is read only on a look that finds the after mark absent
+# both before and after the reading: a look that first finds both, as when
+# the scene ran within a second or the harness still summarizes, would take
+# both readings after the work, so that look reads neither, and the line
+# gives `-`.
+late=0
 while [ ! -f "$out/scene.status" ]; do
-    [ -z "$measure" ] || marks before after
+    if [ -n "$measure" ]; then
+        case " $marked " in
+            *" before "*) marks after ;;
+            *)
+                if [ "$late" = 0 ] && ! grep -q '^measure: counts: after' "$out/scene.log" &&
+                    grep -q '^measure: counts: before' "$out/scene.log"; then
+                    reading=$(host_counts)
+                    if grep -q '^measure: counts: after' "$out/scene.log"; then
+                        late=1
+                    else
+                        printf 'before\n%s\n' "$reading" >> "$out/host-counts"
+                        marked=' before'
+                    fi
+                elif grep -q '^measure: counts: after' "$out/scene.log"; then
+                    late=1
+                fi
+                ;;
+        esac
+    fi
     quiet "the scene ran"
 done
 wait "$scene"
 if [ -n "$measure" ]; then
     # The after mark read now is a second late at most, as one read in the
-    # loop; a before mark the loop missed would span nothing, and is left
+    # loop; a before mark the loop did not read spans nothing, and is left
     # unread, so that the line gives `-`.
-    marks after
+    case " $marked " in *" before "*) marks after ;; esac
     case " $marked " in
         *" before "*) ;;
         *) echo "bed-forward: host: the harness's before mark was not read while the scene ran; its counts are -" ;;
