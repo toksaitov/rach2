@@ -109,12 +109,23 @@ start_session()
     echo "rach2-desktop: session: started as $session on $shown"
 }
 
-# stop_session: end the session's group and wait for it.
+# stop_session: end the session's group and wait until none of it is left,
+# since Weston still holds its socket's lock after su and dbus-run-session
+# have gone, and a new Weston would fail on it; KILL after 10 seconds.
 stop_session()
 {
+    local left=100
     if [ -n "$session" ]; then
         kill -TERM "-$session" 2>/dev/null || :
         wait "$session" 2>/dev/null || :
+        while kill -0 "-$session" 2>/dev/null; do
+            if [ "$left" -eq 0 ]; then
+                kill -KILL "-$session" 2>/dev/null || :
+            else
+                left=$((left - 1))
+            fi
+            sleep 0.1
+        done
         session=''
     fi
 }
@@ -124,6 +135,8 @@ while :; do
     ended=''
     [ "$restart" = 1 ] || [ "$devices" = 1 ] ||
         wait -n -p ended "$udev" "$seat" "$watch" ${session:+"$session"} || :
+    # wait leaves the name unset when a signal ends it.
+    ended=${ended:-}
     if [ "$restart" = 1 ]; then
         restart=0 devices=0
         if [ "$ended" = "$session" ]; then session=''; fi
