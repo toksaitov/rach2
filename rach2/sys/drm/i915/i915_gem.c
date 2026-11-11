@@ -328,7 +328,7 @@ static void i915_gem_object_free(struct drm_gem_object *base)
     struct drm_i915_private *i915 = to_i915(base->dev);
     int i, taken = i915_gem_lock(i915);
 
-    (void)i915_gem_object_unbind(obj);
+    (void)i915_gem_object_unbind(obj, 0);
     if (i915_gem_object_is_userptr(obj)) {
         i915_gem_userptr_release(obj);
     }
@@ -664,7 +664,7 @@ int32_t i915_gem_object_set_cache_level(struct drm_i915_gem_object *obj, int lev
     i915_gem_object_set_cache_coherency(obj, level);
     obj->cache_dirty = 1;
     /* The entries hold the level: the next binding writes the new one. */
-    return i915_gem_object_unbind(obj);
+    return i915_gem_object_unbind(obj, 1);
 }
 
 int32_t i915_gem_object_prepare_read(struct drm_i915_gem_object *obj, uint32_t *needs_clflush)
@@ -843,7 +843,7 @@ static int32_t gtt_prepare(struct drm_i915_gem_object *obj, int write, struct i9
         if (*vma) {
             i915_vma_unpin(*vma);
         } else {
-            (void)i915_ggtt_clear_range(i915, *node, I915_GTT_PAGE_SIZE);
+            (void)i915_ggtt_clear_range(i915, *node, I915_GTT_PAGE_SIZE, 0);
             i915_ggtt_release(i915, *node);
         }
     }
@@ -859,7 +859,7 @@ static void gtt_cleanup(struct drm_i915_gem_object *obj, struct i915_vma *vma, u
     if (vma) {
         i915_vma_unpin(vma);
     } else {
-        (void)i915_ggtt_clear_range(i915, node, I915_GTT_PAGE_SIZE);
+        (void)i915_ggtt_clear_range(i915, node, I915_GTT_PAGE_SIZE, 0);
         i915_ggtt_release(i915, node);
     }
 }

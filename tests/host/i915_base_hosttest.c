@@ -840,7 +840,7 @@ static void row_ggtt_insert(void)
     CHECK("insert: the GTT's cache flushed once",
           i915_model_count(&m, I915_MODEL_WRITE, GFX_FLSH_CNTL_GEN6) == flushes + 1);
     CHECK("clear: back to the scratch page",
-          i915_ggtt_clear_range(i915, at, 3 * 4096u) == 0 &&
+          i915_ggtt_clear_range(i915, at, 3 * 4096u, 0) == 0 &&
               i915_ggtt_pte(i915, at) == i915->ggtt.scratch_pte &&
               i915_ggtt_pte(i915, at + 8192u) == i915->ggtt.scratch_pte);
     CHECK("clear: flushed",
@@ -850,7 +850,7 @@ static void row_ggtt_insert(void)
           i915_ggtt_insert(i915, 0x1000u, pages, 1, I915_CACHE_NONE) == -EBUSY);
     CHECK("refuse: across its end",
           i915_ggtt_insert(i915, LENOVO_FW_FB_BYTES - 4096u, pages, 2, I915_CACHE_NONE) == -EBUSY);
-    CHECK("refuse: clearing it", i915_ggtt_clear_range(i915, 0, LENOVO_FW_FB_BYTES) == -EBUSY);
+    CHECK("refuse: clearing it", i915_ggtt_clear_range(i915, 0, LENOVO_FW_FB_BYTES, 0) == -EBUSY);
     CHECK("refuse: just past it is allowed",
           i915_ggtt_insert(i915, LENOVO_FW_FB_BYTES, pages, 1, I915_CACHE_NONE) == 0);
     writes = m.writes;
@@ -867,7 +867,7 @@ static void row_ggtt_insert(void)
           i915_ggtt_insert(i915, i915->ggtt.total - 4096u, pages, 2, I915_CACHE_NONE) == -EINVAL);
     CHECK("refuse: nothing at all",
           i915_ggtt_insert(i915, at, pages, 0, I915_CACHE_NONE) == -EINVAL);
-    CHECK("refuse: a clear of no bytes", i915_ggtt_clear_range(i915, at, 0) == -EINVAL);
+    CHECK("refuse: a clear of no bytes", i915_ggtt_clear_range(i915, at, 0, 0) == -EINVAL);
     CHECK("refuse: none of them wrote", m.writes == writes);
     i915_ggtt_fini(i915);
     done(&m);

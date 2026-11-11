@@ -1696,9 +1696,12 @@ int32_t i915_ggtt_insert(struct drm_i915_private *i915, uint64_t offset, const u
 
 /** Point the entries of [offset, offset + size) at the scratch page and
  * flush the GTT's cache once, after the last: 0, or `i915_ggtt_insert`'s
- * errors. A caller that holds the GEM lock and keeps the range reserved
- * until the clear returns lets the big lock go every 512 entries. */
-int32_t i915_ggtt_clear_range(struct drm_i915_private *i915, uint64_t offset, uint64_t size);
+ * errors. With `may_yield` set, a caller that holds the GEM lock and keeps
+ * the range reserved until the clear returns lets the big lock go every
+ * 512 entries; only a caller that may sleep sets it, never one inside an
+ * MMU notifier's callback, its deferred revoke or the shrinker. */
+int32_t i915_ggtt_clear_range(struct drm_i915_private *i915, uint64_t offset, uint64_t size,
+                              int may_yield);
 
 /** The entry that maps the GTT offset `offset`; all ones past the GTT. */
 uint32_t i915_ggtt_pte(struct drm_i915_private *i915, uint64_t offset);
@@ -2512,16 +2515,20 @@ void i915_vma_flush_writes(struct i915_vma *vma);
  * freed. A binding whose object the GPU may still use is kept, since its
  * entries and pages must stay until the work is done: a caller that may
  * sleep waits with `i915_gem_object_wait_idle` first, where Linux's
- * unbind waits itself. Never sleeps.
+ * unbind waits itself. Never sleeps. `may_yield` is the clear's
+ * (`i915_ggtt_clear_range`): set by a caller that may sleep, the ioctls
+ * and eviction, and clear in an MMU notifier's revoke, an object's free,
+ * an unpin and the shrinker, as Linux's shrinker and notifier never reach
+ * a cond_resched.
  *
  * @return 0, -EAGAIN while it is pinned, or -EBUSY while its object is
  *         active.
  */
-int32_t i915_vma_unbind(struct i915_vma *vma);
+int32_t i915_vma_unbind(struct i915_vma *vma, int may_yield);
 
-/** Undo every binding of the object: 0, or -EAGAIN when one is pinned or
- * the object is active. */
-int32_t i915_gem_object_unbind(struct drm_i915_gem_object *obj);
+/** Undo every binding of the object, each with `i915_vma_unbind`'s
+ * `may_yield`: 0, or -EAGAIN when one is pinned or the object is active. */
+int32_t i915_gem_object_unbind(struct drm_i915_gem_object *obj, int may_yield);
 
 /** The object's binding inside the aperture that maps page `pgoff`, or
  * NULL; a remapped view is never one. */

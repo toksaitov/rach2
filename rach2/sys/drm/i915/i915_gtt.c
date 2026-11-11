@@ -170,14 +170,19 @@ int32_t i915_ggtt_insert(struct drm_i915_private *i915, uint64_t offset, const u
  * after the last entry, so that no translation of a page it unmaps
  * outlives it in the GPU's TLB. The entries go through a write-combining
  * mapping, as Linux's ggtt_probe_common maps them (1167-1170), and the
- * flush's posting read waits for them all. A holder of the GEM lock with
- * interrupts on gives way after each I915_GGTT_CLEAR_BATCH entries
- * (`sched_give_way`): the lock keeps the GTT and its bindings whole for
- * every other thread (i915.h), and the range stays reserved to its caller,
- * which releases it only after the clear, so no other thread reaches the
- * entries between two batches.
+ * flush's posting read waits for them all. With `may_yield` set, a holder
+ * of the GEM lock with interrupts on gives way after each
+ * I915_GGTT_CLEAR_BATCH entries (`sched_give_way`): the lock keeps the GTT
+ * and its bindings whole for every other thread (i915.h), and the range
+ * stays reserved to its caller, which releases it only after the clear, so
+ * no other thread reaches the entries between two batches. Only a caller
+ * that may sleep sets it, as only such a caller of Linux's unbind reaches a
+ * cond_resched (i915_gem_evict.c:270): a give-way lets the big lock go, and
+ * an MMU notifier's callback, the shrinker and whatever runs inside them
+ * hold it across a change that must look whole to every other thread.
  */
-int32_t i915_ggtt_clear_range(struct drm_i915_private *i915, uint64_t offset, uint64_t size)
+int32_t i915_ggtt_clear_range(struct drm_i915_private *i915, uint64_t offset, uint64_t size,
+                              int may_yield)
 {
     uint32_t i, n, first = (uint32_t)(offset / I915_GTT_PAGE_SIZE);
     int32_t err = i915_ggtt_check(&i915->ggtt, offset, size);
@@ -187,7 +192,7 @@ int32_t i915_ggtt_clear_range(struct drm_i915_private *i915, uint64_t offset, ui
         return err;
     }
     n = (uint32_t)(size / I915_GTT_PAGE_SIZE);
-    yield = mutex_held(&i915->gem.lock);
+    yield = may_yield && mutex_held(&i915->gem.lock);
     for (i = 0; i < n; i++) {
         i915_gtt_write(&i915->hw, first + i, i915->ggtt.scratch_pte);
         if (yield && (i + 1u) % I915_GGTT_CLEAR_BATCH == 0 && i + 1u < n) {

@@ -103,7 +103,7 @@ void i915_ppgtt_fini(struct drm_i915_private *i915)
     uint32_t pde;
 
     if (pp->ready) {
-        (void)i915_ggtt_clear_range(i915, pp->pd_ggtt, I915_PPGTT_PD_BYTES);
+        (void)i915_ggtt_clear_range(i915, pp->pd_ggtt, I915_PPGTT_PD_BYTES, 0);
         if (pp->pd_ggtt == i915->gt.ggtt_bottom) {
             i915->gt.ggtt_bottom += pp->pd_take;
         }

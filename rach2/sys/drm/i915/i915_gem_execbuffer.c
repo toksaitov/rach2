@@ -380,7 +380,7 @@ static int32_t eb_pin_first(struct eb_vma *ev)
     ev->flags |= EB_HAS_PIN;
     if (eb_misplaced(ev)) {
         eb_unpin(ev);
-        (void)i915_vma_unbind(ev->vma);
+        (void)i915_vma_unbind(ev->vma, 1);
         return -ENOSPC;
     }
     return 0;
@@ -537,7 +537,7 @@ static void eb_reloc_finish(struct eb_reloc_cache *c)
     }
     if (c->gtt) {
         i915 = to_i915(c->obj->base.dev);
-        (void)i915_ggtt_clear_range(i915, c->node, I915_GTT_PAGE_SIZE);
+        (void)i915_ggtt_clear_range(i915, c->node, I915_GTT_PAGE_SIZE, 0);
         i915_ggtt_release(i915, c->node);
     } else {
         if (c->clflush & I915_CLFLUSH_AFTER) {

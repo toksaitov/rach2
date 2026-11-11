@@ -45,7 +45,10 @@ void i915_gem_userptr_put_pages(struct drm_i915_gem_object *obj)
  * until its last pin goes. A binding the GPU still uses keeps its entries,
  * and with them the frames, until the work is done, as Linux keeps the
  * pinned pages of a busy object. Then the frames are let go, or, while a
- * pin still holds them, marked stale, to go with its last. Does not sleep.
+ * pin still holds them, marked stale, to go with its last. Does not sleep,
+ * and its clears and unbinds give no way (`i915_ggtt_clear_range`), since
+ * a notifier's caller holds the big lock between a change to the regions
+ * and its change to the page tables.
  */
 static void userptr_revoke(struct drm_i915_gem_object *obj)
 {
@@ -58,10 +61,10 @@ static void userptr_revoke(struct drm_i915_gem_object *obj)
     for (v = obj->vmas; v; v = next) {
         next = v->obj_next;
         if (v->pin_count) {
-            (void)i915_ggtt_clear_range(i915, v->start, v->node_size);
+            (void)i915_ggtt_clear_range(i915, v->start, v->node_size, 0);
             i915_ppgtt_clear_range(i915, v->start, v->node_size);
         } else {
-            (void)i915_vma_unbind(v);
+            (void)i915_vma_unbind(v, 0);
         }
     }
     if (obj->pages_pin_count) {
@@ -119,9 +122,10 @@ static void userptr_unpend(struct drm_i915_gem_object *obj)
  * sleeping. When another holds it, the object goes on the device's list
  * for the holder, which revokes it as it lets the lock go
  * (`i915_gem_unlock`), as Linux's invalidation only marks the range
- * and leaves its pages to the next user (gem/i915_gem_userptr.c:63-87);
+ * and leaves its pages to the next user (gem/i915_gem_userptr.c:59-65);
  * meanwhile the frames stay pinned, so no page goes to another use while
- * the GPU may still read it. Does not sleep.
+ * the GPU may still read it. Does not sleep or give way, as a notifier's
+ * callback must not (mm/notify.h).
  */
 static void userptr_invalidate(struct mmn_range *r, int event, uintptr_t start, uintptr_t end)
 {
@@ -172,7 +176,7 @@ int32_t i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
         if (err != 0) {
             return err;
         }
-        (void)i915_gem_object_unbind(obj);
+        (void)i915_gem_object_unbind(obj, 1);
         if (obj->userptr.stale) {
             return -EAGAIN;
         }
