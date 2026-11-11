@@ -67,7 +67,13 @@
  * and allows one within its size. The four append-fault rows use writev,
  * pwritev and pwritev2:
  * later and mid-buffer faults return the completed prefix, an initial
- * fault returns EFAULT, and a demand-paged buffer is brought in.
+ * fault returns EFAULT, and a demand-paged buffer is brought in. A read,
+ * readv or pread into a buffer at NULL or in an unmapped page is 0 at a
+ * file's end, EINVAL with its end past LLONG_MAX and EFAULT short of the
+ * end; a read of a file that runs into an unmapped page, by read and
+ * readv, returns the bytes before it, as Linux's copy stops at its first
+ * fault, and so does a readv of a pipe whose page buffer the buffers before
+ * the unmapped one take whole.
  *
  * Prints `PREADMUSL OK` and exits 0 on success, and prints
  * `PREADMUSL FAIL (detail)` and exits 1 otherwise.
@@ -180,7 +186,10 @@ static const char *const assertion_id[] = {"make-file",
                                            "append-first-fault",
                                            "append-demand-buffer",
                                            "offset-end",
-                                           "mem-offset-end"};
+                                           "mem-offset-end",
+                                           "read-unwritable-end",
+                                           "read-unwritable-prefix",
+                                           "readv-pipe-prefix"};
 
 /* chattr's requests and its append-only flag, which musl's headers do not
  * name: _IOR and _IOW of 'f' with a long, whose argument is an int. */
@@ -1353,13 +1362,112 @@ static int offset_end_rows(void)
     return 0;
 }
 
+/** Whether reads of the four-byte file `fd` into a buffer at NULL or at
+ * `hole`, an unmapped page, are 0 at its end, EFAULT short of it with the
+ * offset left, and EINVAL with the read's end past LLONG_MAX. */
+static int read_unwritable_end(int fd, char *hole)
+{
+    struct iovec v[1];
+
+    v[0].iov_base = hole;
+    v[0].iov_len = 10;
+    return lseek(fd, 4, SEEK_SET) == 4 && read(fd, NULL, 10) == 0 && read(fd, hole, 10) == 0 &&
+           readv(fd, v, 1) == 0 && pread(fd, hole, 10, 4) == 0 && offset_is(fd, 4) &&
+           lseek(fd, 0, SEEK_SET) == 0 && refused(read(fd, NULL, 10), EFAULT) &&
+           refused(readv(fd, v, 1), EFAULT) && refused(pread(fd, hole, 10, 1), EFAULT) &&
+           offset_is(fd, 0) && lseek(fd, OFFSET_MAX - 1, SEEK_SET) == OFFSET_MAX - 1 &&
+           refused(readv(fd, v, 1), EINVAL) && refused(read(fd, hole, 10), EINVAL);
+}
+
+/** Whether a read of the file `fd`, "abcd", into the last two bytes of
+ * `pages` before the unmapped page after them returns 2, and a readv of a
+ * byte and then of that page returns 1, each moving the offset so. */
+static int read_unwritable_prefix(int fd, char *pages)
+{
+    struct iovec v[2];
+    char got[1];
+
+    v[0].iov_base = got;
+    v[0].iov_len = 1;
+    v[1].iov_base = pages + 4096;
+    v[1].iov_len = 2;
+    return lseek(fd, 0, SEEK_SET) == 0 && read(fd, pages + 4094, 4) == 2 &&
+           memcmp(pages + 4094, "ab", 2) == 0 && offset_is(fd, 2) && readv(fd, v, 2) == 1 &&
+           got[0] == 'c' && offset_is(fd, 3);
+}
+
+/** Whether, with "12345" in the pipe `p`, a readv of five bytes and then of
+ * `hole`, an unmapped page, returns 5, and with "67" written after, a readv
+ * into `hole` is EFAULT and leaves both bytes queued. */
+static int readv_pipe_prefix(const int *p, char *hole)
+{
+    struct iovec v[2];
+    char got[8];
+
+    v[0].iov_base = got;
+    v[0].iov_len = 5;
+    v[1].iov_base = hole;
+    v[1].iov_len = 5;
+    if (readv(p[0], v, 2) != 5 || memcmp(got, "12345", 5) != 0 || write(p[1], "67", 2) != 2) {
+        return 0;
+    }
+    v[0].iov_base = hole;
+    return refused(readv(p[0], v, 1), EFAULT) && read(p[0], got, sizeof(got)) == 2 &&
+           memcmp(got, "67", 2) == 0;
+}
+
+/**
+ * Check reads whose buffers the caller cannot all write, as Linux's read and
+ * readv check only that their ranges lie in user space and stop at the first
+ * fault of their copy (`read_unwritable_end`, `read_unwritable_prefix`,
+ * `readv_pipe_prefix`). Of a pipe, Linux's pipe_read copies each of its page
+ * buffers whole or not at all. Returns 0, or 1 once the failure is reported.
+ */
+static int read_fault_rows(void)
+{
+    static const char *const why[] = {
+        "a read into an unmapped buffer is not 0 at the end, EINVAL past LLONG_MAX or EFAULT",
+        "a read that runs into an unmapped page does not return the bytes before it",
+        "a readv of a pipe into an unmapped buffer does not keep the bytes before it"};
+    char *pages = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    int fd = -1, p[2] = {-1, -1}, row, ok = 0;
+    const char *error = "make the file, the pipe and the unmapped page";
+
+    if (pages != MAP_FAILED && munmap(pages + 4096, 4096) == 0) {
+        fd = open(FILE_PATH, O_RDWR | O_CREAT | O_TRUNC, 0600);
+    }
+    if (fd >= 0 && write(fd, "abcd", 4) == 4 && pipe(p) == 0 && write(p[1], "12345", 5) == 5) {
+        for (row = 0; row < 3; row++) {
+            error = why[row];
+            if (!(row == 0   ? read_unwritable_end(fd, pages + 4096)
+                  : row == 1 ? read_unwritable_prefix(fd, pages)
+                             : readv_pipe_prefix(p, pages + 4096))) {
+                break;
+            }
+            report_held();
+        }
+        ok = row == 3;
+    }
+    if (pages != MAP_FAILED) {
+        munmap(pages, 4096);
+    }
+    if (fd >= 0) {
+        close(fd);
+    }
+    if (p[0] >= 0) {
+        close(p[0]);
+        close(p[1]);
+    }
+    return ok ? 0 : fail(error);
+}
+
 int main(void)
 {
     report_start();
     if (file_rows() != 0 || device_rows() != 0 || proc_seek_rows() != 0 || wide_proc_rows() != 0 ||
         refusal_rows() != 0 || seek_refusal_rows() != 0 || vector_rows() != 0 ||
         vector_noappend_rows() != 0 || noappend_seal_row() != 0 || append_fault_rows() != 0 ||
-        offset_end_rows() != 0 || append_only_rows() != 0) {
+        offset_end_rows() != 0 || read_fault_rows() != 0 || append_only_rows() != 0) {
         unlink(FILE_PATH);
         return 1;
     }
