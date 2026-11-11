@@ -427,7 +427,6 @@ void init_paging(struct frame_map *map)
 
     register_isr_handler(PAGE_FAULT_VECTOR, &_page_fault_handler, "page fault");
     exception_unlock(PAGE_FAULT_VECTOR);
-
     mmu_start();
 
     mmu_heap_ready();
@@ -1449,7 +1448,7 @@ static int cow_fault(struct mm *mm, uintptr_t addr)
     if (page_change_begin(mm, &c, new_phys ? MMN_COW : 0, addr) != 0) {
         rc = -1;
     } else {
-        if (*e != pte) {
+        if (*(volatile pte_t *)e != pte) { /* another fault may have changed it */
             rc = -1;
         } else if (!new_phys) {
             frame_make_anon(old_phys);
@@ -1878,7 +1877,7 @@ static int fault_resolve(isr_params_t *params, uintptr_t addr, int write, int *k
 static void page_fault(isr_params_t *params, uintptr_t fault_address)
 {
     int write, user_mode, have_user_proc, in_user_range, pid, key = -1;
-    int resolved = 0, mapped = 0, bkl;
+    int resolved, mapped = 0, bkl;
 
     write = FAULT_WRITE(params);
     user_mode = FAULT_USER(params);
