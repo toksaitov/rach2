@@ -355,14 +355,23 @@ void wait_queue_init(wait_queue_t *wq)
     wq->head = 0;
 }
 
+/* A ring the row holds stuck until the next sleep begins, so that a wait
+ * finds its request running past its spin; NULL for none. */
+static struct i915_model_ring *unstick;
+
 /** A sleep: the model's clock moves a millisecond at a time until `cond`
- * holds; one that never would ends after a minute of the model's clock. */
+ * holds; one that never would ends after a minute of the model's clock.
+ * The ring `unstick` names runs again first. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     int steps = 0;
 
     (void)wq;
     sleeps++;
+    if (unstick) {
+        unstick->stuck = 0;
+        unstick = 0;
+    }
     while (!cond(arg)) {
         if (++steps > 60000) {
             stuck_sleeps++;
@@ -560,6 +569,7 @@ static struct drm_i915_private *fresh(struct i915_model *m)
     ranges_held = ranges_refuse = 0;
     submit_after = inject_after = -1;
     injected = intr_next = 0;
+    unstick = 0;
     parks = unparks = 0;
     memset(&caller, 0, sizeof(caller));
     caller.euid = 1000;
@@ -636,6 +646,17 @@ static struct i915_request *submit(struct intel_context *ce, uint32_t reg, uint3
         return 0;
     }
     return rq;
+}
+
+/** Wait `timeout_ns` for `rq` on the ring `rr` as for a request still
+ * running when the wait begins: the ring runs nothing until the wait
+ * sleeps, so that its spin does not find the request done and it asks for
+ * the signal. */
+static int32_t wait_running(struct i915_model_ring *rr, struct i915_request *rq, int64_t timeout_ns)
+{
+    rr->stuck = 1;
+    unstick = rr;
+    return rq ? i915_request_wait(rq, 0, timeout_ns) : -EINVAL;
 }
 
 /** The index of the first `want` in the ring of `e` between the offsets
@@ -1436,7 +1457,7 @@ static void row_requests(void)
     rq = submit(r, 0, 0);
     t0 = m.now_us;
     CHECK("requests: with the interrupt lost, the wait reads the page again within a second",
-          rq && i915_request_wait(rq, 0, -1) == 0 && m.now_us - t0 >= 1000000u &&
+          rq && wait_running(rr, rq, -1) == 0 && m.now_us - t0 >= 1000000u &&
               m.now_us - t0 < 1100000u);
     i915_request_put(rq);
     irq_on = 1;
@@ -1550,6 +1571,7 @@ static void row_park_watched(void)
     struct i915_model m;
     struct drm_i915_private *i915 = fresh(&m);
     struct i915_engine *rcs = &i915->gt.engine[I915_RCS0], *bcs = &i915->gt.engine[I915_BCS0];
+    struct i915_model_ring *rr = i915_model_ring_state(&m, 0);
     struct intel_context *r = engine_of(&file_a, 0, I915_RCS0);
     struct intel_context *b = engine_of(&file_a, 0, I915_BCS0);
     struct i915_request *rq, *rq2, *rq3;
@@ -1559,7 +1581,7 @@ static void row_park_watched(void)
     rq = submit(r, 0, 0);
     p = parks;
     CHECK("park: a wait for the engine's last request parks the GT when it signals",
-          rq && i915_request_wait(rq, 0, 100000000) == 0 && rq->waiters == 0 && !i915->gt.awake &&
+          rq && wait_running(rr, rq, 100000000) == 0 && rq->waiters == 0 && !i915->gt.awake &&
               parks == p + 1);
     i915_request_put(rq);
     p = parks;
@@ -1586,8 +1608,8 @@ static void row_park_watched(void)
     rq = submit(b, 0, 0);
     rq2 = submit(r, 0, 0);
     CHECK("park: a wait for the render ring's last leaves the GT to the blitter's request",
-          rq && rq2 && i915_request_wait(rq2, 0, 100000000) == 0 && !rcs->unretired &&
-              bcs->unretired && i915->gt.awake && parks == p);
+          rq && rq2 && wait_running(rr, rq2, 100000000) == 0 && !rcs->unretired && bcs->unretired &&
+              i915->gt.awake && parks == p);
     CHECK("park: which the wait for the GT's idle retires, parking it",
           i915_gt_wait_for_idle(i915, 0) == 0 && !bcs->unretired && !i915->gt.awake &&
               parks == p + 1);
@@ -1598,6 +1620,31 @@ static void row_park_watched(void)
     done(&m);
 }
 
+/** 80-50: a wait whose request the chip finishes within the wait's first
+ * 8 us asks for no signal, as Linux's optimistic spin, and the GT stays
+ * awake to the worker's pass. */
+static void row_park_spin(void)
+{
+    struct i915_model m;
+    struct drm_i915_private *i915 = fresh(&m);
+    struct i915_engine *rcs = &i915->gt.engine[I915_RCS0];
+    struct intel_context *r = engine_of(&file_a, 0, I915_RCS0);
+    struct i915_request *rq;
+    int p, s;
+
+    rq = submit(r, 0, 0);
+    p = parks;
+    s = sleeps;
+    CHECK("spin: a wait for a request done within its spin returns without a sleep",
+          rq && rq->submitted && i915_request_wait(rq, 0, 100000000) == 0 && sleeps == s);
+    CHECK("spin: asks for no signal, the request retired, the engine held and the GT awake",
+          rq && !rq->fence.base.listened && rq->fence.base.signaled && !rcs->requests &&
+              rcs->unretired && i915->gt.awake && parks == p);
+    i915_request_put(rq);
+    intel_context_put(r);
+    done(&m);
+}
+
 /** 80-47: a request being built holds the GT awake past the retire
  * worker's pass, as Linux's request holds its engine from its creation. */
 static void row_park_building(void)
@@ -1605,6 +1652,7 @@ static void row_park_building(void)
     struct i915_model m;
     struct drm_i915_private *i915 = fresh(&m);
     struct i915_engine *rcs = &i915->gt.engine[I915_RCS0];
+    struct i915_model_ring *rr = i915_model_ring_state(&m, 0);
     struct intel_context *r = engine_of(&file_a, 0, I915_RCS0);
     struct i915_request *rq = 0;
     int32_t err;
@@ -1618,7 +1666,7 @@ static void row_park_building(void)
     (void)i915_submit_work();
     CHECK("park: holds the GT awake past the worker's pass", i915->gt.awake && parks == p);
     CHECK("park: and once added and waited for, parks it",
-          rq && i915_request_add(rq) == 0 && i915_request_wait(rq, 0, 100000000) == 0 &&
+          rq && i915_request_add(rq) == 0 && wait_running(rr, rq, 100000000) == 0 &&
               !i915->gt.awake && parks == p + 1);
     i915_request_put(rq);
     intel_context_put(r);
@@ -2175,6 +2223,7 @@ int main(void)
     row_park_unwatched();
     row_park_watched();
     row_park_building();
+    row_park_spin();
     row_park_signal_creating();
     row_park_signal_adding();
     row_park_listener_left();
