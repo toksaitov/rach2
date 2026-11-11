@@ -827,7 +827,7 @@ static void ld_print_one(int how, struct percpu *cpu, const struct ld_report *r)
         put_str(&t, " under ");
         put_class(&t, r->b);
         put_at(&t, r->ip_b);
-        put_str(&t, ", which is taken under it");
+        put_str(&t, ", against the order before");
         break;
     case LD_RECURSION:
         put_str(&t, "recursive lock: ");
