@@ -325,6 +325,12 @@ struct xhci_ctrl {
     uint32_t *port_deadline;
     uint32_t *port_connect_at;
     uint8_t *port_connected;
+    /* When the ports are read again (`port_scan`): a port change event has
+     * come since the last scan, a connect is inside its debounce, or the
+     * clock has reached `port_scan_at`. */
+    int port_change;
+    int port_settling;
+    uint32_t port_scan_at;
 
     struct usb_completion completions[XHCI_COMPLETIONS];
     uint32_t completion_head;
@@ -1182,12 +1188,18 @@ int xhci_scratchpads(struct xhci_ctrl *hc)
 #define PORTSC_CHANGES     0x00FE0000u
 #define PORTSC_CSC         0x00020000u
 #define PORTSC_PRC         0x00200000u
+/* The change bits a scan clears: all but the reset's, which
+ * `xhci_port_reset_done` reads and clears. */
+#define PORTSC_SCAN_CLEARS (PORTSC_CHANGES & ~PORTSC_PRC)
 
 /* How long a port is given to settle after a connect, and to finish a reset.
  * The debounce is the interval the USB specification requires between seeing a
  * connect and driving a reset. */
 #define PORT_DEBOUNCE_MS 100u
 #define PORT_RESET_MS    500u
+/* The period of the scan that no port change event asked for: Linux's root
+ * hub timer, a quarter second (drivers/usb/core/hcd.c:764-770). */
+#define PORT_POLL_MS     250u
 
 /**
  * Whether a moment has passed, in a way that survives the clock wrapping.
@@ -1605,6 +1617,10 @@ static void event_dispatch(struct xhci_ctrl *hc, const uint32_t *trb)
         }
         return;
     }
+    if (type == TRB_TYPE_PORT_CHANGE) {
+        hc->port_change = 1;
+        return;
+    }
     if (type == TRB_TYPE_TRANSFER_EVENT) {
         int device = (int)((trb[3] >> TRB_SLOT_SHIFT) & 0xFFu);
         uint32_t dci = (trb[3] >> 16) & 0x1Fu;
@@ -1703,23 +1719,57 @@ static void event_dispatch(struct xhci_ctrl *hc, const uint32_t *trb)
 
 /**
  * Read each root port's connect bit, and for a port whose bit changed record
- * the time, by the driver's clock.
- * `xhci_port_settled` measures the debounce from that time. Called at the end
- * of every drain.
+ * the time, by the driver's clock; `xhci_port_settled` measures the debounce
+ * from that time. Called at the end of every drain, it reads the ports only
+ * when a port change event has come since its last reading, while a connect
+ * is inside its debounce, or PORT_POLL_MS after its last reading, and
+ * otherwise costs no register access.
+ *
+ * The controller raises a port change event only when the change bits of a
+ * port go from all clear to one set (xHCI 1.2, 4.19.2), so a reading clears
+ * the bits it finds set, but the reset's, which the reset reads. This is
+ * Linux's root hub: polled from a port change event until no change is left
+ * (drivers/usb/host/xhci-ring.c:2124-2137, xhci-hub.c:1705-1708), and every
+ * quarter second by its timer while it polls (drivers/usb/core/hcd.c:
+ * 764-770). The quarter-second reading here does not stop, so that a change
+ * the reset's bit hid from the events is still read.
  */
 static void port_scan(struct xhci_ctrl *hc)
 {
     uint32_t i;
     uint32_t limit = hc->caps.max_ports;
+    int settling = 0;
 
+    if (!hc->port_change && !hc->port_settling && !past(hc, hc->port_scan_at)) {
+        return;
+    }
+    hc->port_change = 0;
+    hc->port_scan_at = hc->now_ms + PORT_POLL_MS;
     for (i = 0; i < limit; i++) {
-        int now_connected = (r32(hc, portsc_offset(hc, (int)i)) & PORTSC_CCS) ? 1 : 0;
+        uint32_t value = r32(hc, portsc_offset(hc, (int)i));
+        int now_connected = (value & PORTSC_CCS) ? 1 : 0;
 
+        if (value & PORTSC_SCAN_CLEARS) {
+            w32(hc, portsc_offset(hc, (int)i),
+                (value & ~(PORTSC_CHANGES | PORTSC_PED)) | (value & PORTSC_SCAN_CLEARS));
+        }
         if (now_connected != hc->port_connected[i]) {
             hc->port_connected[i] = (uint8_t)now_connected;
             hc->port_connect_at[i] = hc->now_ms;
         }
+        if (now_connected && !past(hc, hc->port_connect_at[i] + PORT_DEBOUNCE_MS)) {
+            settling = 1;
+        }
     }
+    hc->port_settling = settling;
+}
+
+int xhci_port_connected(struct xhci_ctrl *hc, int port)
+{
+    if (port < 0 || (uint32_t)port >= hc->caps.max_ports) {
+        return 0;
+    }
+    return hc->port_connected[port];
 }
 
 int xhci_port_settled(struct xhci_ctrl *hc, int port)
@@ -1856,10 +1906,12 @@ void xhci_interrupt_ack(struct xhci_ctrl *hc)
  * acknowledgement would wait for the timer's pump with no interrupt coming
  * for it.
  */
+static int events_drain(struct xhci_ctrl *hc, int from_interrupt);
+
 int xhci_interrupt_take(struct xhci_ctrl *hc)
 {
     xhci_interrupt_ack(hc);
-    return xhci_events(hc);
+    return events_drain(hc, 1);
 }
 
 /**
@@ -1870,13 +1922,24 @@ int xhci_interrupt_take(struct xhci_ctrl *hc)
  * that never comes. One drain takes at most one ring's worth.
  *
  * The event ring's dequeue pointer is then written back with the busy bit,
- * after a drain that took events and after any drain while the interrupter
- * is on: the controller sets that bit when it raises an interrupt and raises
- * no other until the bit is written back as one, so a handler that drained
- * nothing, because the timer's pump took the event first, would otherwise
- * leave the controller silent from then on.
+ * after a drain that took events and after the interrupt handler's drain
+ * while the interrupter is on: the controller sets that bit when it raises
+ * an interrupt and raises no other until the bit is written back as one, so
+ * a handler that drained nothing, because the timer's pump took the event
+ * first, would otherwise leave the controller silent from then on. A timer's
+ * drain that took nothing writes nothing: the bit it would clear is set only
+ * by an interrupt whose events a drain took, which wrote it, or whose
+ * handler is still to run and will. Linux writes the pointer in its
+ * interrupt handler alone (drivers/usb/host/xhci-ring.c:3139-3187).
  */
 int xhci_events(struct xhci_ctrl *hc)
+{
+    return events_drain(hc, 0);
+}
+
+/** The drain of `xhci_events`, from the interrupt handler when
+ * `from_interrupt`, from a timer otherwise. */
+static int events_drain(struct xhci_ctrl *hc, int from_interrupt)
 {
     uint32_t taken = 0;
     uint32_t *trb;
@@ -1909,7 +1972,7 @@ int xhci_events(struct xhci_ctrl *hc)
 
     port_scan(hc);
 
-    if (taken != 0 || hc->msi_on || hc->line_on) {
+    if (taken != 0 || (from_interrupt && (hc->msi_on || hc->line_on))) {
         uint64_t erdp = trb_addr(trb_at(hc->event_ring, hc->event_index));
 
         w32(hc, hc->caps.rtsoff + XHCI_IR0 + IR_ERDP, (uint32_t)erdp | ERDP_HANDLER);
@@ -1957,6 +2020,9 @@ int xhci_start(struct xhci_ctrl *hc)
         hc->port_connect_at[i] = 0;
         hc->port_connected[i] = 0;
     }
+    hc->port_change = 1;
+    hc->port_settling = 0;
+    hc->port_scan_at = hc->now_ms;
 
     /* Entry 0 of the context base array is the scratchpad array's address. */
     if (hc->caps.scratchpads != 0) {

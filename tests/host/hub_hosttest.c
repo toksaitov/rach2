@@ -447,6 +447,13 @@ int xhci_port_status(struct xhci_ctrl *hc, int port, struct usb_port_status *out
     return 0;
 }
 
+/** Whether the hub is on root port `port`, as `xhci_port_status` says. */
+int xhci_port_connected(struct xhci_ctrl *hc, int port)
+{
+    (void)hc;
+    return port == 0 && model.root_connected;
+}
+
 /** Return 1: a root port is settled at once. */
 int xhci_port_settled(struct xhci_ctrl *hc, int port)
 {

@@ -155,6 +155,8 @@ static int becomes_ready;
 /* How many times the capability list's head was read: a walk that never ends
  * reads it without limit, and one that gives up reads it a few times. */
 static unsigned xecp_reads;
+/* The reads of any port's PORTSC, which a drain makes only when it scans. */
+static unsigned portsc_reads;
 
 /** Read the register at byte offset `off`: all ones in D3, 0 past the model. */
 static uint32_t model_r32(struct xhci_ctrl *hc, uint32_t off)
@@ -164,6 +166,9 @@ static uint32_t model_r32(struct xhci_ctrl *hc, uint32_t off)
     }
     if (off == XECP || off == XECP + 8) {
         xecp_reads++;
+    }
+    if (off >= M_PORTSC(0) && off < M_PORTSC(16) && ((off - M_PORTSC(0)) % 0x10u) == 0) {
+        portsc_reads++;
     }
     if (pm_state != 0) {
         return 0xFFFFFFFFu; /* a function in D3, answering nothing useful */
@@ -2021,6 +2026,71 @@ void mmio_unmap(uintptr_t va, size_t size)
 }
 
 /**
+ * Check the debounce of a connect, and when a drain reads the root ports:
+ * after a port change event, while a connect settles and every
+ * PORT_POLL_MS, and at no other drain; that a reading clears the connect's
+ * change bit and leaves the reset's; and that `xhci_port_connected` gives
+ * the last reading.
+ */
+static void check_port_scan(void)
+{
+    /* A contact bounces, so a connect is not acted on the moment it appears. */
+    model_reset();
+    CHECK("the capability registers are read", xhci_read_caps(hc) == 0);
+    CHECK("halted and reset", xhci_halt_reset(hc) == 0);
+    CHECK("started", xhci_start(hc) == 0);
+    reg[M_PORTSC(0)] |= M_PORTSC_CCS;
+    xhci_events(hc);
+    CHECK("a connect is not settled the moment it appears", xhci_port_settled(hc, 0) == 0);
+    xhci_advance(hc, 50);
+    CHECK("nor half way through the interval", xhci_port_settled(hc, 0) == 0);
+    xhci_advance(hc, 60);
+    CHECK("and is settled once the interval has passed", xhci_port_settled(hc, 0) == 1);
+    reg[M_PORTSC(0)] &= ~M_PORTSC_CCS;
+    xhci_events(hc);
+    CHECK("a port with nothing on it is never settled", xhci_port_settled(hc, 0) == 0);
+
+    /* The ports are read after a port change event, while a connect settles
+     * and every PORT_POLL_MS; any other drain reads none. */
+    model_reset();
+    CHECK("the capability registers are read", xhci_read_caps(hc) == 0);
+    CHECK("halted and reset", xhci_halt_reset(hc) == 0);
+    CHECK("started", xhci_start(hc) == 0);
+    portsc_reads = 0;
+    xhci_events(hc);
+    CHECK("the first drain after the start reads the ports", portsc_reads != 0);
+    xhci_advance(hc, 1);
+    portsc_reads = 0;
+    xhci_events(hc);
+    CHECK("a drain with no port change event reads no port", portsc_reads == 0);
+    reg[M_PORTSC(1)] |= M_PORTSC_CCS | M_PORTSC_CSC | M_PORTSC_PRC;
+    post_event(TRB_TYPE_PORT_CHANGE, TRB_COMPLETION_SUCCESS, 0, 2u << 24);
+    xhci_events(hc);
+    CHECK("a port change event has the drain read the ports", portsc_reads != 0);
+    CHECK("which records the connect", xhci_port_connected(hc, 1) == 1);
+    CHECK("and clears the connect's change bit", (reg[M_PORTSC(1)] & M_PORTSC_CSC) == 0);
+    CHECK("but not the reset's, which the reset reads", (reg[M_PORTSC(1)] & M_PORTSC_PRC) != 0);
+    xhci_advance(hc, 10);
+    portsc_reads = 0;
+    xhci_events(hc);
+    CHECK("a drain reads the ports while the connect settles", portsc_reads != 0);
+    xhci_advance(hc, PORT_DEBOUNCE_MS);
+    xhci_events(hc);
+    CHECK("until it has settled", xhci_port_settled(hc, 1) == 1);
+    reg[M_PORTSC(1)] &= ~M_PORTSC_CCS;
+    xhci_advance(hc, 1);
+    portsc_reads = 0;
+    xhci_events(hc);
+    CHECK("then a drain with no event reads no port", portsc_reads == 0);
+    CHECK("and the connect stands as last read", xhci_port_connected(hc, 1) == 1);
+    xhci_advance(hc, PORT_POLL_MS);
+    xhci_events(hc);
+    CHECK("a quarter second on, the ports are read again", portsc_reads != 0);
+    CHECK("and the device's leaving is seen", xhci_port_connected(hc, 1) == 0);
+    CHECK("a port the controller does not have is not connected", xhci_port_connected(hc, 99) == 0);
+}
+
+/**
  * Run the rows and print the result; return 1 when a row failed.
  *
  * Bring-up. The scratchpad count is five bits in each half of one word, the
@@ -2560,21 +2630,7 @@ int main(void)
     CHECK("with its change bit cleared afterwards", (reg[M_PORTSC(0)] & M_PORTSC_PRC) == 0);
     CHECK("a port with nothing on it is not reset", xhci_port_reset_begin(hc, 1) != 0);
 
-    /* A contact bounces, so a connect is not acted on the moment it appears. */
-    model_reset();
-    CHECK("the capability registers are read", xhci_read_caps(hc) == 0);
-    CHECK("halted and reset", xhci_halt_reset(hc) == 0);
-    CHECK("started", xhci_start(hc) == 0);
-    reg[M_PORTSC(0)] |= M_PORTSC_CCS;
-    xhci_events(hc);
-    CHECK("a connect is not settled the moment it appears", xhci_port_settled(hc, 0) == 0);
-    xhci_advance(hc, 50);
-    CHECK("nor half way through the interval", xhci_port_settled(hc, 0) == 0);
-    xhci_advance(hc, 60);
-    CHECK("and is settled once the interval has passed", xhci_port_settled(hc, 0) == 1);
-    reg[M_PORTSC(0)] &= ~M_PORTSC_CCS;
-    xhci_events(hc);
-    CHECK("a port with nothing on it is never settled", xhci_port_settled(hc, 0) == 0);
+    check_port_scan();
 
     /* A controller with more ports than the machines here have. */
     model_reset();
@@ -3257,8 +3313,10 @@ int main(void)
     CHECK("and leaves the enable set", (reg[M_IMAN] & M_IMAN_IE) != 0);
     CHECK("the drain takes the event", xhci_events(hc) == 1);
     reg[M_ERDP] = 0;
-    CHECK("an empty drain on the line still writes the dequeue pointer with the busy bit",
-          xhci_events(hc) == 0 && (reg[M_ERDP] & M_ERDP_EHB) != 0);
+    CHECK("an empty drain by the timer takes nothing", xhci_events(hc) == 0);
+    CHECK("and writes no dequeue pointer", reg[M_ERDP] == 0);
+    CHECK("an empty drain by the handler on the line still writes it with the busy bit",
+          xhci_interrupt_take(hc) == 0 && (reg[M_ERDP] & M_ERDP_EHB) != 0);
     xhci_interrupts_disable(hc);
     CHECK("stopped, the controller is off its line", xhci_interrupts_on(hc) == 0);
     CHECK("with the interrupter's enable clear", (reg[M_IMAN] & M_IMAN_IE) == 0);

@@ -157,10 +157,14 @@ struct xhci_ctrl;
  * the hub. `status` fills `out` and returns 0, or -1 when the port cannot be
  * read; `settled` is 1 once a connection has held long enough to reset;
  * `reset_begin` returns 0 when the reset began; `reset_done` returns 1 when
- * the reset finished, 0 while it runs and -1 when it failed.
+ * the reset finished, 0 while it runs and -1 when it failed. `connected` is
+ * 1 when the port had a device at its last reading, with no register access:
+ * the controller's scan for a root port (`xhci_port_connected`), the hub's
+ * last status for a hub's.
  */
 struct usb_port_ops {
     int (*status)(struct xhci_ctrl *hc, int owner, int port, struct usb_port_status *out);
+    int (*connected)(struct xhci_ctrl *hc, int owner, int port);
     int (*settled)(struct xhci_ctrl *hc, int owner, int port);
     int (*reset_begin)(struct xhci_ctrl *hc, int owner, int port);
     int (*reset_done)(struct xhci_ctrl *hc, int owner, int port);
