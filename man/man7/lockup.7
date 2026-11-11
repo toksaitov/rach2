@@ -1,0 +1,119 @@
+.Dd November 11, 2026
+.Dt LOCKUP 7
+.Os
+.Sh NAME
+.Nm lockup
+.Nd the soft-lockup, hard-lockup and hung-task detectors
+.Sh DESCRIPTION
+The kernel watches for three hangs, as Linux's lockup watchdogs and
+hung-task detector do, and logs a report of each:
+.Bl -tag -width "hard lockup"
+.It soft lockup
+A processor that has not scheduled for 2 x
+.Va watchdog_thresh
+seconds, 20 by default, a loop in the kernel with interrupts on:
+.Bd -literal -offset indent
+watchdog: BUG: soft lockup - CPU#0 stuck for 22s! [name:pid]
+.Ed
+.It hard lockup
+A processor whose timer interrupts have stopped for
+.Va watchdog_thresh
+seconds, a loop with interrupts off:
+.Bd -literal -offset indent
+watchdog: watchdog detected hard LOCKUP on cpu 1
+.Ed
+.Pp
+A processor with a cycles counter, Intel's architectural performance
+monitor or AMD's core counters, gives up its counter 0 to raise an NMI
+each
+.Va watchdog_thresh
+seconds, which checks the processor itself; the boot logs
+.Ql nmi_watchdog: enabled: permanently consumes one hw-PMU counter .
+Without one, each processor checks the next, the buddy check, and the
+boot logs
+.Ql watchdog: hard lockup: buddy check of the next processor .
+A processor that waits for the kernel's big lock is not reported for its
+wait; the holder is.
+.It hung task
+A thread in uninterruptible sleep, the state D of
+.Xr ps 1 ,
+whose switch count has not moved for
+.Va hung_task_timeout_secs
+seconds, 120 by default:
+.Bd -literal -offset indent
+hung_task: INFO: task name:pid blocked for more than 120 seconds.
+.Ed
+.El
+.Pp
+Each report gives the processor and thread, the registers and the
+return addresses of the stack.
+The kernel has no symbol table;
+.Ic addr2line -f -e kernel.debug ADDRESS
+on the build host names an address.
+.Sh FILES
+Each setting is a file of
+.Pa /proc/sys/kernel
+and a boot option of the same name, or
+.Ql sysctl.kernel.NAME= ;
+a write takes effect within a sample period, 2 x
+.Va watchdog_thresh
+/ 5 seconds.
+.Bl -tag -width "hung_task_check_interval_secs"
+.It Pa watchdog
+1 runs the soft and hard detectors, 0 stops both.
+.It Pa soft_watchdog
+1 runs the soft-lockup detector.
+.It Pa nmi_watchdog
+1 runs the hard-lockup detector; a write fails with
+.Er EACCES
+where it cannot run, with no counter and one processor.
+.It Pa watchdog_thresh
+The hard-lockup threshold in seconds, 0 to 60, 10 by default; 0 stops
+both detectors.
+.It Pa softlockup_panic , Pa hardlockup_panic , Pa hung_task_panic
+1 ends a report of that kind in a panic:
+.Ql softlockup: hung tasks ,
+.Ql Hard LOCKUP
+or
+.Ql hung_task: blocked tasks .
+.It Pa softlockup_all_cpu_backtrace , Pa hardlockup_all_cpu_backtrace , Pa hung_task_all_cpu_backtrace
+1 adds every other processor's registers and stack to a report of that
+kind, from an NMI; a processor halted in its idle wait is named and
+skipped.
+.It Pa hung_task_timeout_secs
+Seconds in D before a thread is reported, 120 by default; 0 stops the
+detector.
+.It Pa hung_task_check_interval_secs
+Seconds between checks, 0 for the timeout.
+.It Pa hung_task_check_count
+The most threads a check reads.
+.It Pa hung_task_warnings
+The reports left, 10 by default; each counts it down, and -1 never stops
+them.
+.El
+.Pp
+The boot options
+.Cm nmi_watchdog=panic ,
+.Cm nopanic ,
+.Cm 0
+or
+.Cm 1 ,
+.Cm softlockup_panic= ,
+.Cm nowatchdog ,
+.Cm nosoftlockup
+and
+.Cm watchdog_thresh=
+read as Linux's do.
+.Sh EXAMPLES
+The kernel's debug shell holds a lockup of each kind for a test:
+.Ic lockup soft 30 ,
+.Ic lockup hard 30
+or
+.Ic lockup hung 300 .
+.Sh SEE ALSO
+.Xr watchdog 4 ,
+.Xr proc 5 ,
+.Xr rach2 7
+.Sh STANDARDS
+The messages, settings and defaults are Linux 6.12's, with the first
+letter of a message in lower case where Linux has a capital.
