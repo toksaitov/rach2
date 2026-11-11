@@ -4196,7 +4196,8 @@ static void resident_unmapped(void)
     ds.sh.npages = 2;
     k_memset(resident_pages[0], 'a', PAGE_SIZE);
     k_memset(resident_pages[1], 'b', PAGE_SIZE);
-    dshares = &ds;
+    *dshare_bucket(ds.ino) = &ds;
+    dshare_count = 1;
     resident_row = 1;
 
     resident_fail = (uintptr_t)resident_pages[1];
@@ -4211,7 +4212,8 @@ static void resident_unmapped(void)
 
     resident_row = 0;
     resident_fail = 0;
-    dshares = NULL;
+    *dshare_bucket(ds.ino) = NULL;
+    dshare_count = 0;
 }
 
 /* The uids of the protection rows: the caller and another user. */
