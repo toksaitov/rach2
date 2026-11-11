@@ -173,7 +173,7 @@ The vDSO is one page of code that every new image maps and calls for the clock, 
 
 `vdso32.c` builds the i386 programs' image the same way at boot, `vdso_build` calling `vdso32_build`: an ELF32 shared object of `EM_386`, `linux-gate.so.1`, with the versions `LINUX_2.6` and `LINUX_2.5` and the code of `vdso32code.s`, between `vdso32_text_start` and `vdso32_text_end`, which is 32-bit code. It has no weak names, as Linux's has none. The clock functions find the data page by `call` and `pop`, since 32-bit code has no `%rip` addressing, and do the 64-bit arithmetic of the 64-bit ones in pairs of registers. `__kernel_vsyscall` makes the call by `int $0x80`, or by the instruction `vsyscall_patch` writes before it, and `__kernel_sigreturn` and `__kernel_rt_sigreturn` are Linux's restorers, whose addresses `ia32_vdso_sigreturn` gives the i386 signal frames.
 
-`proc/vdso.c` maps the two pages of the program's ABI (`VDSO_NATIVE` or `VDSO_IA32`) into each new image, one free page above the range `mmap` places mappings in (`vdso_map`), as regions of `VM_SHARED` whose file hands out the kernel's frames, with `VM_PROT_NOWRITE` so that neither can be made writable; a fork shares them. `/proc/PID/maps` names them `[vvar]` and `[vdso]`.
+`proc/vdso.c` maps the two pages of the program's ABI (`VDSO_NATIVE` or `VDSO_IA32`) into each new image, one free page above the range `mmap` places mappings in (`vdso_map`), as regions whose files hand out the kernel's frames, and a fork shares them. `[vvar]` is of `VM_SHARED` with `VM_PROT_NOWRITE`, so that it can never be made writable, as Linux maps it without `VM_MAYWRITE`. `[vdso]` is a private mapping, `VM_FILE`, as Linux's is with `VM_MAYWRITE`: `mprotect` may make it writable, and a write, or a tracer's through `ptrace` or `/proc/PID/mem`, copies the page into that address space alone. The kernel keeps its own reference to the frame, so even its last mapping is copied and never written in place. `/proc/PID/maps` names them `[vvar]` and `[vdso]`.
 
 ### The rules of the shared code
 
@@ -206,7 +206,7 @@ The shared code is written to pass them: an address is a `uintptr_t`, a length a
 * The i686 kernel uses no PAE: it reaches the first 4 GiB of physical memory, and every page it maps is executable.
 * On i686 a program makes a system call by `int 0x80` alone; the kernel has no `sysenter`. On x86-64 it makes one by `syscall`, or an i386 call by `int $0x80`, as [ia32(7)](../../../man/man7/ia32.7) describes.
 * The i686 kernel has no vDSO: every call, `clock_gettime` among them, enters the kernel.
-* The x86-64 vDSO has no unwind tables, and a tracer cannot write into its pages, so no breakpoint can be set there; its clock calls enter the kernel on a machine whose TSC does not run at one rate unless `rach2.tscreliable` is given.
+* The x86-64 vDSO has no unwind tables; its clock calls enter the kernel on a machine whose TSC does not run at one rate unless `rach2.tscreliable` is given.
 
 ## Tests
 

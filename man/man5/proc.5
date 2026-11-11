@@ -1858,8 +1858,8 @@ for a shared one, and from column 73 the file the region maps,
 .Ql [vvar]
 and
 .Ql [vdso]
-for the vDSO's data page and library on x86-64, private and never
-writable
+for the vDSO's data page and library on x86-64, both private, the data
+page never writable and the library copied on a write
 .Pq Xr vdso 7 ,
 the program for the segments of its image, or the dynamic linker the
 program names for the segments of the linker's.

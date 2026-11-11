@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 11, 2026
 .Dt VDSO 7
 .Os
 .Sh NAME
@@ -145,6 +145,17 @@ readable and executable, each one page, private, one free page above the
 range
 .Xr mmap 2
 places mappings in.
+The data page can never be made writable.
+The library can, as on Linux:
+.Xr mprotect 2
+may add
+.Dv PROT_WRITE ,
+and a write, or one a tracer makes through
+.Xr ptrace 2
+or
+.Pa /proc/PID/mem
+to set a breakpoint, copies the page into that process alone; every other
+process keeps the kernel's.
 .It Pa /proc/stat
 .Li vdso_tsc ,
 1 where the vDSO reads the TSC and 0 where it makes the system call, and
@@ -164,9 +175,10 @@ $ grep clock_calls /proc/stat; date; grep clock_calls /proc/stat
 .Sh SEE ALSO
 .Xr execve 2 ,
 .Xr gettimeofday 2 ,
+.Xr mprotect 2 ,
+.Xr ptrace 2 ,
 .Xr sched_setscheduler 2 ,
 .Xr proc 5
 .Sh BUGS
 The library has no unwind tables, so a debugger cannot step out of its
 functions by them.
-A tracer cannot write into its pages, so a breakpoint cannot be set there.

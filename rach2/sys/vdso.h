@@ -141,8 +141,9 @@ uintptr_t vdso_span(int abi);
 /**
  * Add the data page at `at` and the image for the ABI `abi` after it to
  * `vm`, each a region of its own whose pages come from the kernel's frames
- * when first touched, the data page read-only and the image read and
- * execute, neither ever writable. Returns the image's address,
+ * when first touched: the data page read-only and never writable, and the
+ * image read and execute, a private mapping that mprotect may make writable
+ * and that a write, or a tracer's, copies. Returns the image's address,
  * AT_SYSINFO_EHDR; 0 where there is no vDSO; -1 when a region cannot be
  * added, with `vm` as it was.
  */
