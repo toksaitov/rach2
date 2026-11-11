@@ -44,10 +44,10 @@
  * submission are under each engine's `lock`.
  *
  * The order, outermost first: the big lock; a DRM device's `commit_lock`;
- * the GEM lock, then a context list's lock and the other locks of objects
- * and contexts, which may sleep; a reservation's lock; then the locks of
- * the hardware, which a holder takes with interrupts off and never sleeps
- * under: an engine's lock, the frequency lock of RPS, then the register
+ * a file's context list lock (`struct i915_file`); the GEM lock, then the
+ * other locks of objects, which may sleep; a reservation's lock; then the
+ * locks of the hardware, which a holder takes with interrupts off and never
+ * sleeps under: an engine's lock, the frequency lock of RPS, then the register
  * lock of forcewake and of any read and write the interrupt handler also
  * makes, then the interrupt mask's. The interrupt handler takes only the
  * hardware locks.
@@ -3542,7 +3542,7 @@ struct intel_context {
     struct drm_i915_private *i915;
     struct i915_gem_context *ctx;
     struct i915_engine *engine;
-    uint32_t refs;
+    volatile uint32_t refs; /* changed atomically */
     uint32_t *image;
     uint32_t image_ggtt;
     uint8_t image_valid;
@@ -3581,7 +3581,7 @@ struct intel_context {
 struct i915_gem_context {
     struct drm_i915_private *i915;
     uint32_t id;
-    uint32_t refs;
+    volatile uint32_t refs; /* changed atomically */
     uint32_t flags;
     uint8_t proto;
     uint8_t closed;
@@ -3603,10 +3603,15 @@ struct i915_gem_context {
  * default context 0 first, and `ban_score`, the score of its contexts'
  * hangs and bans, at which it may make no more contexts
  * (I915_CLIENT_SCORE_BANNED). `hang_ticks` is the tick of its last hang,
- * 0 for none.
+ * 0 for none. `lock`, Linux's proto_context_lock, a sleeping lock, keeps
+ * the list, each of its proto contexts' parameters and their finalizing,
+ * so that one caller alone makes a proto context's states; a holder may
+ * fault on a mapping, which takes the GEM lock, so it comes before that.
+ * The hang paths change `ban_score` and `hang_ticks` under the GEM lock.
  */
 struct i915_file {
     struct drm_i915_private *i915;
+    struct mutex lock;
     struct i915_gem_context *contexts;
     uint32_t ban_score;
     uint64_t hang_ticks;
