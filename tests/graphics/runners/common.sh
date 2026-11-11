@@ -204,8 +204,13 @@ runner_switches()
 # runner_prefs: Firefox's profile, user.js: no first-run pages, no slow
 # script dialog, which would stop a page, no session restored after a
 # crash, WebGL on whatever renderer the guest has, and autoplay allowed.
+# Under Weston's GL renderer the renderer's name also goes to the page as
+# the driver gives it, where Firefox would say `Generic Renderer`, so that
+# the record names the GPU.
 runner_prefs()
 {
+    [ "${RUNNER_RENDERER:-pixman}" != gl ] ||
+        echo 'user_pref("webgl.sanitize-unmasked-renderer", false);'
     cat << 'EOF'
 user_pref("browser.shell.checkDefaultBrowser", false);
 user_pref("browser.startup.homepage_override.mstone", "ignore");
