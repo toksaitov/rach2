@@ -49,12 +49,17 @@
 /* How the batch starts: privileged, as Linux's I915_DISPATCH_SECURE. */
 #define EB_DISPATCH_SECURE 0x1u
 
-/* An object of the call: its entry, a reference to it, and its binding. */
+/* An object of the call: its entry, a reference to it, and its binding.
+ * `relocs` is the kernel's copy of its relocations, made before the GEM
+ * lock is taken, NULL for none, and `moved` marks, one byte to an entry,
+ * the relocations written, whose presumed offsets go back after it. */
 struct eb_vma {
     struct drm_i915_gem_exec_object2 *exec;
     struct drm_i915_gem_object *obj;
     struct i915_vma *vma;
     uint32_t flags; /* the entry's EXEC_OBJECT_ flags and the EB_ ones */
+    struct drm_i915_gem_relocation_entry *relocs;
+    uint8_t *moved; /* in the same allocation as `relocs` */
 };
 
 /*
@@ -113,6 +118,7 @@ struct eb {
     struct drm_i915_gem_object *shadow;
     struct i915_vma *shadow_vma;
     struct eb_hold *hold;
+    struct sync_file *out; /* the out-fence's file, attached after the lock */
 };
 
 /* ------------------------------------------------------------------------
@@ -639,45 +645,91 @@ static int32_t eb_relocate_entry(struct eb *eb, struct eb_vma *ev,
 }
 
 /**
- * Apply the relocations of `ev`'s object, as Linux's eb_relocate_vma: read
- * EB_RELOC_CHUNK at a time, each written one's presumed offset given back
- * to the program, an error there ignored, as Linux ignores it.
+ * Copy in the relocations of every object, before the GEM lock is taken,
+ * as Linux's eb_copy_relocations (gem/i915_gem_execbuffer.c:1644-1714),
+ * so that no fault on a mapping of the device's objects, which takes the
+ * lock, comes while it is held.
  *
  * @return 0; -EINVAL for a count whose bytes pass the address space;
- *         -EFAULT for an array outside user space; or a relocation's error.
+ *         -EFAULT for an array outside user space or that cannot be read;
+ *         -ENOMEM.
  */
-static int32_t eb_relocate_vma(struct eb *eb, struct eb_vma *ev)
+static int32_t eb_relocs_copy(struct eb *eb)
 {
-    struct drm_i915_gem_relocation_entry r[EB_RELOC_CHUNK];
-    struct eb_reloc_cache c;
-    uint64_t user = ev->exec->relocs_ptr, bytes, presumed;
-    uint32_t remain = ev->exec->relocation_count, n, i;
-    int32_t err = 0;
+    struct eb_vma *ev;
+    uint64_t user, bytes;
+    uint32_t i, n;
 
-    bytes = (uint64_t)remain * sizeof(r[0]);
-    if (bytes > (uint64_t)(uintptr_t)-1) {
-        return -EINVAL;
-    }
-    if (user > (uint64_t)(uintptr_t)-1 || !user_range_ok((uintptr_t)user, (size_t)bytes)) {
-        return -EFAULT;
-    }
-    k_memset(&c, 0, sizeof(c));
-    while (remain && err == 0) {
-        n = remain < EB_RELOC_CHUNK ? remain : EB_RELOC_CHUNK;
-        if (copy_from_user(r, EB_USER_PTR(user), n * sizeof(r[0])) != 0) {
-            err = -EFAULT;
-            break;
+    for (i = 0; i < eb->count; i++) {
+        ev = &eb->ev[i];
+        n = ev->exec->relocation_count;
+        user = ev->exec->relocs_ptr;
+        if (n == 0) {
+            continue;
         }
-        for (i = 0; i < n && err == 0; i++) {
-            err = eb_relocate_entry(eb, ev, &r[i], &c, &presumed);
-            if (err == 1) {
-                err = 0;
-                (void)copy_to_user(EB_USER_PTR(user + i * sizeof(r[0]) + EB_PRESUMED_AT), &presumed,
-                                   sizeof(presumed));
+        bytes = (uint64_t)n * (sizeof(ev->relocs[0]) + 1u);
+        if (bytes > (uint64_t)(uintptr_t)-1) {
+            return -EINVAL;
+        }
+        if (user > (uint64_t)(uintptr_t)-1 ||
+            !user_range_ok((uintptr_t)user, (size_t)n * sizeof(ev->relocs[0]))) {
+            return -EFAULT;
+        }
+        ev->relocs = (struct drm_i915_gem_relocation_entry *)kmalloc((size_t)bytes);
+        if (!ev->relocs) {
+            return -ENOMEM;
+        }
+        ev->moved = (uint8_t *)(void *)(ev->relocs + n);
+        k_memset(ev->moved, 0, n);
+        if (copy_from_user(ev->relocs, EB_USER_PTR(user), (size_t)n * sizeof(ev->relocs[0])) != 0) {
+            return -EFAULT;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Give the program the presumed offset of each relocation written, after
+ * the GEM lock is let go, as Linux's eb_relocate_vma gives it with the
+ * fault handler kept out (gem/i915_gem_execbuffer.c:1575-1590); a fault
+ * ends the object's, an error there ignored, as Linux ignores it.
+ */
+static void eb_relocs_out(struct eb *eb)
+{
+    struct eb_vma *ev;
+    uint32_t i, j;
+
+    for (i = 0; eb->ev && i < eb->count; i++) {
+        ev = &eb->ev[i];
+        for (j = 0; ev->relocs && j < ev->exec->relocation_count; j++) {
+            if (ev->moved[j] &&
+                copy_to_user(
+                    EB_USER_PTR(ev->exec->relocs_ptr + j * sizeof(ev->relocs[0]) + EB_PRESUMED_AT),
+                    &ev->relocs[j].presumed_offset, sizeof(uint64_t)) != 0) {
+                break;
             }
         }
-        remain -= n;
-        user += (uint64_t)n * sizeof(r[0]);
+    }
+}
+
+/** Apply the relocations of `ev`'s object from the call's copy, as Linux's
+ * eb_relocate_vma: each one written marked for `eb_relocs_out`, with the
+ * target's offset as its presumed one. 0 or a relocation's error. */
+static int32_t eb_relocate_vma(struct eb *eb, struct eb_vma *ev)
+{
+    struct eb_reloc_cache c;
+    uint64_t presumed;
+    uint32_t i, n = ev->exec->relocation_count;
+    int32_t err = 0;
+
+    k_memset(&c, 0, sizeof(c));
+    for (i = 0; i < n && err == 0; i++) {
+        err = eb_relocate_entry(eb, ev, &ev->relocs[i], &c, &presumed);
+        if (err == 1) {
+            err = 0;
+            ev->relocs[i].presumed_offset = presumed;
+            ev->moved[i] = 1;
+        }
     }
     eb_reloc_finish(&c);
     return err;
@@ -694,7 +746,7 @@ static int32_t eb_relocate(struct eb *eb)
         return 0;
     }
     for (i = 0; i < eb->count; i++) {
-        if (eb->ev[i].exec->relocation_count) {
+        if (eb->ev[i].relocs) {
             err = eb_relocate_vma(eb, &eb->ev[i]);
             if (err != 0) {
                 return err;
@@ -794,10 +846,10 @@ static int32_t eb_fence_array(struct eb *eb)
         f->flags = uf.flags;
         eb->nfences++;
         if (uf.flags & I915_EXEC_FENCE_WAIT) {
-            if (!f->syncobj->fence) {
+            f->fence = drm_syncobj_fence_get(f->syncobj);
+            if (!f->fence) {
                 return -EINVAL;
             }
-            f->fence = dma_fence_get(f->syncobj->fence);
         }
     }
     return 0;
@@ -826,7 +878,7 @@ static int32_t eb_timeline_fence(struct eb *eb, uint32_t handle, uint64_t point,
     if (!s) {
         return -ENOENT;
     }
-    fence = dma_fence_get(s->fence);
+    fence = drm_syncobj_fence_get(s);
     if (!fence && flags && !(flags & I915_EXEC_FENCE_SIGNAL)) {
         drm_syncobj_put(s);
         return -EINVAL;
@@ -1005,18 +1057,19 @@ static int32_t eb_move_to_gpu(struct eb *eb, struct i915_request *rq)
         int write = !!(ev->flags & EXEC_OBJECT_WRITE);
 
         i915_gem_object_flush_for_gpu(obj);
+        /* The wait and the add under the reservation's lock, so that a
+         * producer of another device adds nothing between them. */
+        err = 0;
+        dma_resv_lock(obj->base.resv);
         if (!(ev->flags & EXEC_OBJECT_ASYNC)) {
-            f = dma_resv_snapshot(obj->base.resv, write);
-            if (!f) {
-                return -ENOMEM;
-            }
-            err = i915_request_await_fence(rq, f, 0);
+            f = dma_resv_snapshot_locked(obj->base.resv, write);
+            err = f ? i915_request_await_fence(rq, f, 0) : -ENOMEM;
             dma_fence_put(f);
-            if (err < 0) {
-                return err;
-            }
         }
-        err = dma_resv_add_fence(obj->base.resv, &rq->fence.base, write);
+        if (err == 0) {
+            err = dma_resv_add_fence_locked(obj->base.resv, &rq->fence.base, write);
+        }
+        dma_resv_unlock(obj->base.resv);
         if (err < 0) {
             return err;
         }
@@ -1387,9 +1440,10 @@ static int32_t eb_hold_make(struct eb *eb)
  * Build and add the call's request, as the second half of Linux's
  * i915_gem_do_execbuffer: once the request exists it is added whatever
  * happens, a failure set on its fence so that its batch does not run, and
- * the fence array is signalled with it; the out-fence's sync file goes to
- * the program only when all went well. Nothing between the request's
- * creation and its add sleeps.
+ * the fence array is signalled with it; the out-fence's sync file is made
+ * with the request, as Linux's eb_requests_create makes it, and goes to
+ * the program after the GEM lock, only when all went well. Under the GEM
+ * lock, which nothing between the request's creation and its add lets go.
  *
  * The request takes the call's hold, made first.
  *
@@ -1402,6 +1456,7 @@ static int32_t eb_submit(struct eb *eb, struct dma_fence *in, int32_t out_fd)
     struct i915_request *rq;
     int32_t err, err2;
 
+    lockdep_assert_held(&eb->i915->gem.lock);
     err = eb_hold_make(eb);
     if (err < 0) {
         return err;
@@ -1412,7 +1467,14 @@ static int32_t eb_submit(struct eb *eb, struct dma_fence *in, int32_t out_fd)
     }
     rq->hold = &eb->hold->base;
     eb->hold = 0;
-    err = eb_await_fences(eb, rq, in);
+    err = 0;
+    if (out_fd >= 0) {
+        eb->out = sync_file_new(&rq->fence.base, NULL);
+        err = eb->out ? 0 : -ENOMEM;
+    }
+    if (err == 0) {
+        err = eb_await_fences(eb, rq, in);
+    }
     if (err == 0) {
         err = eb_move_to_gpu(eb, rq);
     }
@@ -1430,12 +1492,6 @@ static int32_t eb_submit(struct eb *eb, struct dma_fence *in, int32_t out_fd)
         err = err2;
     }
     eb_signal_fences(eb, rq);
-    if (err == 0 && out_fd >= 0) {
-        err = sync_file_install(out_fd, &rq->fence.base, NULL);
-        if (err == 0) {
-            eb->args->rsvd2 = (eb->args->rsvd2 & 0xffffffffu) | ((uint64_t)(uint32_t)out_fd << 32);
-        }
-    }
     i915_request_put(rq);
     return err;
 }
@@ -1457,6 +1513,7 @@ static void eb_release(struct eb *eb)
     for (i = 0; eb->ev && i < eb->count; i++) {
         eb_unpin(&eb->ev[i]);
         i915_gem_object_put(eb->ev[i].obj);
+        eb->ev[i].obj = 0;
     }
     intel_context_put(eb->ce);
     if (eb->ctx) {
@@ -1467,19 +1524,45 @@ static void eb_release(struct eb *eb)
 }
 
 /**
+ * The part of the call under the GEM lock, `err` the error of what came
+ * before: the objects placed and relocated, the batch checked, and its
+ * request built and added. A failure before relocations are done clears
+ * `has_reloc`, since a program that presumes offsets must not see new ones
+ * in its entries.
+ */
+static int32_t eb_locked(struct eb *eb, int32_t err, struct dma_fence *in, int32_t out_fd)
+{
+    if (err == 0) {
+        err = eb_reserve(eb);
+    }
+    if (err == 0) {
+        err = eb_relocate(eb);
+    }
+    if (err == 0) {
+        err = eb_parse(eb);
+    }
+    if (err != 0) {
+        eb->has_reloc = 0;
+        return err;
+    }
+    return eb_submit(eb, in, out_fd);
+}
+
+/**
  * The call once its objects' entries are copied in, as Linux's
  * i915_gem_do_execbuffer: secure batches, extensions, the fence array and
  * the in-fence checked, the out-fence's descriptor kept, the context and
- * its state on the engine found, the objects looked up, placed and
- * relocated, the batch checked, and its request built and added. A
- * failure before relocations are done clears `has_reloc`, since a program
- * that presumes offsets must not see new ones in its entries.
+ * its state on the engine found, the objects looked up and their
+ * relocations copied in, all before the GEM lock is taken, as Linux's
+ * (gem/i915_gem_execbuffer.c:3438-3450); then `eb_locked`'s part and the
+ * call's release under it, and the out-fence's descriptor after.
  */
 static int32_t eb_do(struct eb *eb)
 {
     struct drm_i915_gem_execbuffer2 *args = eb->args;
     struct dma_fence *in = 0;
     int32_t err, out_fd = -1;
+    int taken;
 
     eb->has_reloc = !(args->flags & I915_EXEC_NO_RELOC);
     eb->batch_start = args->batch_start_offset;
@@ -1519,22 +1602,22 @@ static int32_t eb_do(struct eb *eb)
         err = eb_lookup(eb);
     }
     if (err == 0) {
-        err = eb_reserve(eb);
+        err = eb_relocs_copy(eb);
     }
-    if (err == 0) {
-        err = eb_relocate(eb);
-    }
-    if (err == 0) {
-        err = eb_parse(eb);
-    }
-    if (err != 0) {
-        eb->has_reloc = 0;
+    taken = i915_gem_lock(eb->i915);
+    err = eb_locked(eb, err, in, out_fd);
+    eb_release(eb);
+    i915_gem_unlock(eb->i915, taken);
+    /* The out-fence's descriptor goes in after the lock, as Linux's
+     * fd_install (gem/i915_gem_execbuffer.c:3496-3505). */
+    if (eb->out && err == 0) {
+        sync_file_attach(out_fd, eb->out);
+        args->rsvd2 = (args->rsvd2 & 0xffffffffu) | ((uint64_t)(uint32_t)out_fd << 32);
+        out_fd = -1;
     } else {
-        err = eb_submit(eb, in, out_fd);
-        if (err == 0) {
-            out_fd = -1;
-        }
+        sync_file_drop(eb->out);
     }
+    eb->out = 0;
     if (out_fd >= 0) {
         (void)fd_free(current_proc->fds, out_fd);
     }
@@ -1582,9 +1665,10 @@ int32_t i915_gem_execbuffer2_ioctl(struct drm_device *dev, void *data, struct dr
         return -EFAULT;
     }
     err = eb_do(&eb);
-    eb_release(&eb);
-    /* The offsets of the objects that moved go back to the program, as
-     * Linux's, even when the request failed; a fault stops them. */
+    /* The offsets of the objects that moved go back to the program after
+     * the GEM lock, as Linux's (gem/i915_gem_execbuffer.c:3620-3637), even
+     * when the request failed; a fault stops them. */
+    eb_relocs_out(&eb);
     for (i = 0; eb.has_reloc && i < eb.count; i++) {
         if (!(eb.exec[i].offset & EB_UPDATE)) {
             continue;
@@ -1593,6 +1677,9 @@ int32_t i915_gem_execbuffer2_ioctl(struct drm_device *dev, void *data, struct dr
         if (copy_to_user(&user[i].offset, &offset, sizeof(offset)) != 0) {
             break;
         }
+    }
+    for (i = 0; i < eb.count; i++) {
+        kfree(eb.ev[i].relocs);
     }
     kfree(eb.exec);
     return err;

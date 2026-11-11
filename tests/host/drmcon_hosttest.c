@@ -4,6 +4,8 @@
  * drm_atomic.c and drm_legacy.c, through drm_kms_model.c).
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/resv_host.c
+ * host-deps: tests/host/compat/spinlock_host.c
  *
  * A fake device has one CRTC, its primary plane of XRGB8888 and a virtual
  * connector, connected, with 1280x800 preferred, 1024x768 and 800x600; its
@@ -627,6 +629,66 @@ static void row_screen_gone(void)
     CHECK(dev.refs == 0, "the device is let go");
 }
 
+/* ---- the commit lock: one thread's mutex, whose waits the model runs ---- */
+
+/* Set while a row has another thread hold the commit lock; a take then
+ * waits, through the model's wait, until the row lets it go. */
+static int lock_other;
+
+/** Whether `arg`, a mutex, is free of this thread and the row's other. */
+static int mutex_free_model(void *arg)
+{
+    return !lock_other && ((struct mutex *)arg)->owner == 0;
+}
+
+/** Make `m` free. */
+void mutex_init_key(struct mutex *m, const char *name, const struct lockdep_key *key)
+{
+    (void)name;
+    (void)key;
+    m->owner = 0;
+}
+
+/** Take `m`, waiting through the model while the row's other holds it. */
+void mutex_lock(struct mutex *m)
+{
+    if (!mutex_free_model(m)) {
+        (void)wq_wait_event_nointr(&m->wq, mutex_free_model, m);
+    }
+    CHECK(m->owner == 0, "the commit lock is not taken twice");
+    m->owner = m;
+}
+
+/** The same; no signal comes to the test. */
+int mutex_lock_interruptible(struct mutex *m)
+{
+    mutex_lock(m);
+    return 0;
+}
+
+/** Take `m` if it is free. */
+int mutex_trylock(struct mutex *m)
+{
+    if (!mutex_free_model(m)) {
+        return 0;
+    }
+    m->owner = m;
+    return 1;
+}
+
+/** Give `m` back. */
+void mutex_unlock(struct mutex *m)
+{
+    CHECK(m->owner != 0, "the commit lock is held when let go");
+    m->owner = 0;
+}
+
+/** Whether this thread holds `m`. */
+int mutex_held(const struct mutex *m)
+{
+    return m->owner != 0;
+}
+
 /** While the console waits for the commit lock, a master comes and the
  * lock is let go. */
 static void lock_wait_master(wq_cond_fn cond, void *arg)
@@ -635,7 +697,7 @@ static void lock_wait_master(wq_cond_fn cond, void *arg)
     (void)arg;
     model_wait = NULL;
     open_as_self(&fc);
-    dev.commit_held = 0;
+    lock_other = 0;
 }
 
 /** A master that comes while the console waits for the commit lock to
@@ -649,11 +711,12 @@ static void row_late_master(void)
     a = attaches;
     p = plane_updates;
     c = dumb_creates;
-    dev.commit_held = 1;
+    lock_other = 1;
     model_wait = lock_wait_master;
     drm_mode_file_release(&fa);
     drm_master_release(&fa);
-    CHECK(dev.master == &fc && con.handed && !dev.commit_held, "the newcomer holds the screen");
+    CHECK(dev.master == &fc && con.handed && !lock_other && !mutex_held(&dev.mode_lock),
+          "the newcomer holds the screen");
     CHECK(plane_updates == p && dumb_creates == c && attaches == a,
           "the console neither commits nor draws over the newcomer");
     drm_mode_file_release(&fc);

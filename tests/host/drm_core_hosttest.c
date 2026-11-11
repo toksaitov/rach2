@@ -7,6 +7,7 @@
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
  * host-deps: tests/host/compat/atomic_host.c
  * host-deps: tests/host/compat/fd_flat.c
+ * host-deps: tests/host/compat/mutex_none.c
  *
  * The four files are included whole. A fake driver binds two devices: one
  * with a card and a render node, GEM, dumb buffers of the shmem helper
@@ -31,10 +32,11 @@
  * its object's `open` hook runs; references held by the walk over a
  * device's objects, and an object whose last put is under way passed over
  * by it and by mmap; events queued, polled, read and left by a closed
- * file; unplug; and kcmp of a dup, a fork's copy and two opens of a node,
- * and its other kinds. Each row that ends with the core's locks free shows
- * that no call left one held or took one twice, which the host's spinlock
- * traps.
+ * file; the locks each row runs under, the big lock and the mode lock, by
+ * its flags and the device's; unplug; and kcmp of a dup, a fork's copy and
+ * two opens of a node, and its other kinds. Each row that ends with the
+ * core's locks free shows that no call left one held or took one twice,
+ * which the host's spinlock traps.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -94,6 +96,53 @@ int32_t udmabuf_start(void)
 int32_t virtio_gpu_probe(void)
 {
     return -ENODEV;
+}
+
+/** The commit worker, which no row here needs. */
+int32_t drm_atomic_worker_start(void)
+{
+    return 0;
+}
+
+/** The commit lock, which the dispatcher takes for a KMS row and the
+ * unplug for its mark: counted, so that a row sees it held and let go. */
+static int mode_lock_depth;
+
+/** The big lock, counted the same way (proc/smp.h). */
+static int bkl_depth;
+
+void bkl_enter(void)
+{
+    bkl_depth++;
+}
+
+void bkl_exit(void)
+{
+    bkl_depth--;
+}
+
+int bkl_held(void)
+{
+    return bkl_depth > 0;
+}
+
+int32_t drm_modeset_lock(struct drm_device *dev)
+{
+    (void)dev;
+    mode_lock_depth++;
+    return 0;
+}
+
+void drm_modeset_lock_nointr(struct drm_device *dev)
+{
+    (void)dev;
+    mode_lock_depth++;
+}
+
+void drm_modeset_unlock(struct drm_device *dev)
+{
+    (void)dev;
+    mode_lock_depth--;
 }
 
 /** No region is shared with a VM here. */
@@ -261,6 +310,12 @@ struct dma_buf *dma_buf_ref(struct dma_buf *buf)
 {
     CHECK("no PRIME reference in core model", buf == NULL);
     return buf;
+}
+
+/** Make a modeled reservation empty. */
+void dma_resv_init(struct dma_resv *r)
+{
+    k_memset(r, 0, sizeof(*r));
 }
 
 /** Release modeled reservation slots at the object's last reference. */
@@ -561,8 +616,38 @@ static int32_t fake_echo(struct drm_device *dev, void *data, struct drm_file *fi
     return 0;
 }
 
+/* What a row's handler found held: the big lock's and the mode lock's
+ * depths. */
+struct fake_locks {
+    uint32_t big, mode;
+};
+
+#define FAKE_IOCTL_LOCKED   DRM_IOR(DRM_COMMAND_BASE + 1, struct fake_locks)
+#define FAKE_IOCTL_UNLOCKED DRM_IOR(DRM_COMMAND_BASE + 2, struct fake_locks)
+#define FAKE_IOCTL_KMS      DRM_IOR(DRM_COMMAND_BASE + 3, struct fake_locks)
+#define FAKE_IOCTL_READ     DRM_IOR(DRM_COMMAND_BASE + 4, struct fake_locks)
+
+/** A row that reports the locks it runs under. */
+static int32_t fake_locks(struct drm_device *dev, void *data, struct drm_file *file)
+{
+    struct fake_locks *l = (struct fake_locks *)data;
+
+    (void)dev;
+    (void)file;
+    l->big = (uint32_t)bkl_depth;
+    l->mode = (uint32_t)mode_lock_depth;
+    return 0;
+}
+
+/* The flags of the core's kinds of row: a locked one, an unlocked render
+ * row, ATOMIC's, and a KMS read such as GETCRTC. */
 static const struct drm_ioctl_desc fake_ioctls[] = {
     {FAKE_IOCTL_ECHO, DRM_AUTH | DRM_RENDER_ALLOW, fake_echo, "FAKE_ECHO"},
+    {FAKE_IOCTL_LOCKED, DRM_RENDER_ALLOW, fake_locks, "FAKE_LOCKED"},
+    {FAKE_IOCTL_UNLOCKED, DRM_RENDER_ALLOW | DRM_UNLOCKED, fake_locks, "FAKE_UNLOCKED"},
+    {FAKE_IOCTL_KMS, DRM_MASTER | DRM_UNLOCKED | DRM_KMS | DRM_MODESET_LOCK, fake_locks,
+     "FAKE_KMS"},
+    {FAKE_IOCTL_READ, DRM_MODESET_LOCK, fake_locks, "FAKE_READ"},
 };
 
 static int opens, postcloses, unplugs, releases;
@@ -622,7 +707,7 @@ static const struct drm_driver fake_driver = {
     NULL,
     fake_unplug,
     fake_ioctls,
-    1,
+    (int)(sizeof(fake_ioctls) / sizeof(fake_ioctls[0])),
     fake_release};
 
 static const struct drm_driver plain_driver = {
@@ -927,7 +1012,7 @@ static void test_dispatch(void)
     CHECK("a core number past the table",
           ioc(&card, &user_a, DRM_IOWR(0xE0, struct fake_echo), &echo) == -EINVAL);
     CHECK("a driver number past its rows",
-          ioc(&card, &user_a, DRM_IOWR(DRM_COMMAND_BASE + 1, struct fake_echo), &echo) == -EINVAL);
+          ioc(&card, &user_a, DRM_IOWR(DRM_COMMAND_BASE + 5, struct fake_echo), &echo) == -EINVAL);
     CHECK("the driver's ioctl",
           ioc(&card, &user_a, FAKE_IOCTL_ECHO, &echo) == 0 && echo.value == 42);
     CHECK("DRM_AUTH: a render node's client needs none",
@@ -953,6 +1038,45 @@ static void test_dispatch(void)
           ioc(&card, &root_proc, DRM_IOCTL_SET_UNIQUE, &u) == -EINVAL);
     CHECK("BLOCK by a privileged master", ioc(&card, &root_proc, DRM_IOCTL_BLOCK, &u) == 0);
 
+    close_node(&other);
+    close_node(&render);
+    close_node(&card);
+}
+
+/**
+ * The locks a row runs under: the big lock unless the row is DRM_UNLOCKED,
+ * and a KMS row's DRM_UNLOCKED only on a device with DRIVER_KMS_UNLOCKED;
+ * the master rule's check under the big lock, let go before the handler;
+ * the mode lock across a DRM_MODESET_LOCK row; and on an unplugged device
+ * the row refused with both locks let go.
+ */
+static void test_locks(void)
+{
+    fd_entry_t card, render, other;
+    struct fake_locks l;
+
+    open_node("dri/card0", &user_a, 0, &card);
+    open_node("dri/renderD128", &user_b, 0, &render);
+    open_node("dri/card0", &user_b, 0, &other);
+    CHECK("locks: a locked row runs under the big lock alone",
+          ioc(&render, &user_b, FAKE_IOCTL_LOCKED, &l) == 0 && l.big == 1 && l.mode == 0);
+    CHECK("locks: an unlocked render row runs under neither",
+          ioc(&render, &user_b, FAKE_IOCTL_UNLOCKED, &l) == 0 && l.big == 0 && l.mode == 0);
+    CHECK("locks: a KMS read runs under the big lock and the mode lock",
+          ioc(&card, &user_a, FAKE_IOCTL_READ, &l) == 0 && l.big == 1 && l.mode == 1);
+    CHECK("locks: ATOMIC's row keeps the big lock on a driver that does not opt out",
+          ioc(&card, &user_a, FAKE_IOCTL_KMS, &l) == 0 && l.big == 1 && l.mode == 1);
+    fake_dev.features |= DRIVER_KMS_UNLOCKED;
+    CHECK("locks: ATOMIC's row runs under the mode lock alone with DRIVER_KMS_UNLOCKED",
+          ioc(&card, &user_a, FAKE_IOCTL_KMS, &l) == 0 && l.big == 0 && l.mode == 1);
+    CHECK("locks: the master rule refuses a client before the mode lock",
+          ioc(&other, &user_b, FAKE_IOCTL_KMS, &l) == -EACCES);
+    fake_dev.features &= ~DRIVER_KMS_UNLOCKED;
+    fake_dev.unplugged = 1;
+    CHECK("locks: an unplugged device refuses a KMS row",
+          ioc(&card, &user_a, FAKE_IOCTL_READ, &l) == -ENODEV);
+    fake_dev.unplugged = 0;
+    CHECK("locks: every row let both locks go", bkl_depth == 0 && mode_lock_depth == 0);
     close_node(&other);
     close_node(&render);
     close_node(&card);
@@ -1672,6 +1796,7 @@ int main(void)
     test_identity();
     test_caps();
     test_dispatch();
+    test_locks();
     test_master();
     test_dumb_create();
     test_dumb_map();
@@ -1684,6 +1809,7 @@ int main(void)
     test_read_race();
     test_unplug();
     test_kcmp();
+    CHECK("the end: the big lock and the mode lock let go", bkl_depth == 0 && mode_lock_depth == 0);
     if (fails) {
         printf("drm-core-test: %d failed\n", fails);
         return 1;

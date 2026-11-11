@@ -205,6 +205,13 @@ uint64_t timer_cycles_us(uint64_t cycles)
     return cycles;
 }
 
+/** The cycles here are the clock's microseconds, the same on every
+ * processor. */
+int timer_cycles_agree(void)
+{
+    return 1;
+}
+
 /** A panic of the lock, a give by a thread that does not hold it: print
  * it and exit 2. */
 void k_panic(const char *message)

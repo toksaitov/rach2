@@ -1757,6 +1757,9 @@ void drm_mode_file_release(struct drm_file *file)
     if (!drm_core_check_feature(dev, DRIVER_MODESET)) {
         return;
     }
+    /* The framebuffers, the blobs and their references are the mode
+     * lock's. */
+    drm_modeset_lock_nointr(dev);
     while ((fb = file->fbs) != NULL) {
         fb_disown(file, fb);
         fb_remove(fb);
@@ -1770,6 +1773,7 @@ void drm_mode_file_release(struct drm_file *file)
             drm_property_blob_put(blob);
         }
     }
+    drm_modeset_unlock(dev);
 }
 
 /* ------------------------------------------------------------------------

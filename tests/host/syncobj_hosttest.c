@@ -4,6 +4,7 @@
  * the scheduler are models, and a sleep runs the producer step a row arms.
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/fd_flat.c
+ * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/atomic_host.c
  */
 #include "dmabuf/fence.c"
 #include "dmabuf/sync_file.c"
@@ -216,6 +217,14 @@ int32_t drm_handle_insert(struct drm_handles *t, void *object, uint32_t *id)
 void *drm_handle_find(struct drm_handles *t, uint32_t id)
 {
     return id < t->cap && t->slot[id] ? t->slot[id]->object : NULL;
+}
+/** Find a handle's object and take a reference with `get`. */
+void *drm_handle_find_get(struct drm_handles *t, uint32_t id, void (*get)(void *object))
+{
+    void *object = drm_handle_find(t, id);
+    if (object)
+        get(object);
+    return object;
 }
 /** Take a handle out and return its object. */
 void *drm_handle_remove(struct drm_handles *t, uint32_t id)

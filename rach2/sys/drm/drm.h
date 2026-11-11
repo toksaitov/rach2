@@ -14,6 +14,7 @@
 #include "../mm/shmem.h"
 #include "../mm/vm.h"
 #include "../pci.h"
+#include "../proc/mutex.h"
 #include "../proc/wait_queue.h"
 #include "uapi.h"
 
@@ -23,25 +24,41 @@ struct sysfs_pci_ident;
  * rach2/sys/drm/Readme.md tells the design; this header is its contract.
  * The rules every file of sys/drm/ and sys/dmabuf/ keeps:
  *
- * Locking. Everything here runs under the big kernel lock, which a system
- * call, an interrupt and a fault take on entry, and which a sleep lets go.
- * So what changes between two sleeps is atomic, and the only rule is what
- * may change across a sleep. A function that may sleep says so: the waits
- * on fences and vblanks, a blocking atomic commit, the copies to and from
- * user memory and a driver's commands to its device. Before sleeping, a
- * caller takes a reference on every object it uses after the sleep; an
+ * Locking. A row runs under the big kernel lock unless it is marked to run
+ * without it (DRM_UNLOCKED, below); so does an interrupt handler unless it
+ * is registered ISR_UNLOCKED, the i915's and virtio-gpu's are. The big
+ * lock goes at every sleep, so a function that may sleep says so: the
+ * waits on fences and vblanks, a blocking atomic commit, the copies to and
+ * from user memory and a driver's commands to its device. Before sleeping,
+ * a caller takes a reference on every object it uses after the sleep; an
  * object it found by ID or handle is found again or held, never assumed.
- * A device's `commit_lock`, a sleeping lock, orders commits on one device:
- * a commit takes it before it reads the state it replaces and keeps it
- * until the new state is the device's. An interrupt handler takes no
- * sleeping lock and may only signal fences, count vblanks and queue
- * events. The order, outermost first, is a device's `commit_lock`, then
- * any lock a driver keeps for its own hardware.
+ *
+ * A device's `mode_lock`, the commit lock, a mutex its holder may take again
+ * (`drm_modeset_lock`), keeps the mode state: the mode objects and their
+ * table, the framebuffers' and blobs' references, the committed states,
+ * the connectors' probes, modes and EDIDs, and the leases, as Linux's
+ * mode_config.mutex and modeset locks do. Each KMS row holds it
+ * (DRM_MODESET_LOCK), as do the commit worker, the console client, the
+ * probes of hotplug, sysfs and debugfs, a file's release of its
+ * framebuffers and blobs, and the unplug's mark. A commit takes it before
+ * it reads the state it replaces and keeps it until the new state is the
+ * device's. ATOMIC and PAGE_FLIP hold it without the big lock on a device
+ * whose driver declares DRIVER_KMS_UNLOCKED (DRM_KMS), whose display hooks
+ * then take only their own locks. WAIT_VBLANK holds none of it: the
+ * vblanks are under the two locks below, as Linux's drm_wait_vblank_ioctl
+ * takes no modeset lock (drm_vblank.c:1733-1873). User memory is copied
+ * under it, so it comes before an address space's `mmap_lock`, as Linux's
+ * modeset locks do; nothing takes it under `mmap_lock`.
+ *
+ * An interrupt handler takes no sleeping lock and may only signal fences,
+ * count vblanks and queue events. The order, outermost first, is a
+ * device's `mode_lock`, the locks of a driver's buffers (the i915 GEM lock),
+ * then the spinlocks below and those a driver keeps for its own hardware.
  *
  * Spinlocks, as Linux's, keep the structures that DRM_UNLOCKED ioctls and
  * other processors reach whole without the big lock. Each is taken with
  * interrupts off, for a region that neither sleeps nor allocates, and no
- * two of them nest:
+ * two of the first three nest:
  *   * a handle table's `lock` (`struct drm_handles`) over its slots, its
  *     PRIME hash and each handle's PRIME cache, Linux's `table_lock` and
  *     `syncobj_table_lock` (include/drm/drm_file.h:309-315);
@@ -50,13 +67,27 @@ struct sysfs_pci_ident;
  *     and the device's mmap space, Linux's `object_name_lock` and the
  *     offset manager's `vm_lock`;
  *   * a device's `event_lock` over each file's queued and reserved events
- *     and its event space, Linux's `event_lock` (drm_device.h:276).
+ *     and its event space, Linux's `event_lock` (drm_device.h:276), and
+ *     over each CRTC's queued vblank events and pending flip and a
+ *     driver's per-pipe events; a fence's lock may be taken under it, and
+ *     a device's `vbl_lock` after it, over each CRTC's vblank holds,
+ *     counts, times and the driver's vblank hooks, Linux's `vbl_lock`
+ *     (drm_device.h:242), then the driver's interrupt locks;
+ *   * a CRTC's CRC `lock` (`struct drm_crtc_crc`) over its entries,
+ *     alone or after `event_lock`, Linux's `crc->lock`;
+ *   * the commit worker's `work_lock` over its queues of commits, device
+ *     work and hotplug events, under which no fence is called and no
+ *     sleeper woken (drm_atomic.c);
+ *   * a syncobj's `lock` over its fence and its lists of waits and
+ *     eventfds, Linux's (drm_syncobj.c:266-396), under which a fence's lock
+ *     and the chain lock of dmabuf/fence.c may be taken, as Linux's are.
  * A buffer object's `refs` change atomically, as Linux's kref: a walk that
  * meets an object under `object_lock` takes a reference only while the
  * count is not 0 (`drm_gem_object_next`, as Linux's drm_gem.c:1177), since
  * the last put takes the object off the device's lists under that lock
- * before it frees it. Everything else here, dma-buf references and the
- * syncobj table's objects among them, still relies on the big lock.
+ * before it frees it. A device's, a syncobj's, a fence's and a dma-buf's
+ * `refs` change atomically too, and a lookup by handle takes its reference
+ * under the table's lock (`drm_handle_find_get`).
  *
  * References. Each object counts its holders in `refs`, and the last put
  * frees it:
@@ -119,6 +150,10 @@ struct sysfs_pci_ident;
 #define DRIVER_COMPUTE_ACCEL    (1u << 7)
 #define DRIVER_GEM_GPUVA        (1u << 8)
 #define DRIVER_CURSOR_HOTSPOT   (1u << 9)
+/* Rach2's: the driver's display hooks take only their own locks and the
+ * device's `mode_lock`, so the KMS rows marked DRM_UNLOCKED run without the
+ * big lock on its device (DRM_KMS). Linux has no big lock to leave. */
+#define DRIVER_KMS_UNLOCKED     (1u << 31)
 
 /* The bus of a device, by libdrm's DRM_BUS_* numbers. virtio-gpu is on the
  * virtio bus under its PCI function, which libdrm follows to the PCI
@@ -152,7 +187,7 @@ struct drm_ident {
      6,                                                                             \
      0,                                                                             \
      DRIVER_GEM | DRIVER_RENDER | DRIVER_MODESET | DRIVER_ATOMIC | DRIVER_SYNCOBJ | \
-         DRIVER_SYNCOBJ_TIMELINE,                                                   \
+         DRIVER_SYNCOBJ_TIMELINE | DRIVER_KMS_UNLOCKED,                             \
      DRM_BUS_PCI}
 #define DRM_IDENT_VIRTIO_GPU                                                        \
     {"virtio_gpu",                                                                  \
@@ -206,11 +241,26 @@ struct dma_fence;
 typedef int32_t (*drm_ioctl_t)(struct drm_device *dev, void *data, struct drm_file *file);
 
 /* Who may call an ioctl, Linux's flags: an authenticated client, the
- * master, root, and a render node's client. */
+ * master, root, and a render node's client. DRM_UNLOCKED runs the
+ * handler without the big lock, under the locks its row names, and the
+ * dispatcher takes the big lock around every other handler. Linux 6.12
+ * runs every row unlocked (drm_ioctl.c:728-746) and has dropped the flag,
+ * which once marked such a row against drm_global_mutex; Rach2 keeps it,
+ * at its old value, while its rows leave the big lock one at a time.
+ *
+ * Rach2's own two: DRM_MODESET_LOCK has the dispatcher hold the device's
+ * `mode_lock` across the handler, for a row that reads or changes the mode
+ * objects, their table or their committed states, as Linux's handlers take
+ * mode_config.mutex and the modeset locks themselves; DRM_KMS marks a row
+ * that reaches the driver's display hooks, whose DRM_UNLOCKED holds only on
+ * a device with DRIVER_KMS_UNLOCKED. */
 #define DRM_AUTH         (1u << 0)
 #define DRM_MASTER       (1u << 1)
 #define DRM_ROOT_ONLY    (1u << 2)
+#define DRM_UNLOCKED     (1u << 4)
 #define DRM_RENDER_ALLOW (1u << 5)
+#define DRM_MODESET_LOCK (1u << 8)
+#define DRM_KMS          (1u << 9)
 
 /* An ioctl of the core's table or a driver's own (numbers DRM_COMMAND_BASE
  * to DRM_COMMAND_END - 1). `cmd` is the full number, whose size is the most
@@ -291,12 +341,19 @@ struct dma_fence {
     const struct dma_fence_ops *ops;
     uint64_t context;
     uint64_t seqno;
-    uint32_t refs;
-    int signaled;
+    volatile uint32_t refs; /* changed atomically */
+    /* Over `signaled`, `listened`, `cbs` and `running`, as Linux's fence
+     * lock; never held while a callback or `enable_signaling` runs. */
+    struct spinlock lock;
+    volatile int signaled;
     int32_t error; /* 0, or the -errno the work failed with */
     int64_t timestamp_ns;
     int64_t deadline_ns; /* earliest requested completion hint, INT64_MAX if none */
     struct dma_fence_cb *cbs;
+    /* The callback a signal runs, taken off `cbs`, and the processor
+     * record of the signaller, or NULL between callbacks. */
+    struct dma_fence_cb *running;
+    const void *running_cpu;
     wait_queue_t wq;
     /* A callback, a sleeper or a poller has asked for the signal, and
      * `enable_signaling` has run, as Linux's
@@ -357,6 +414,9 @@ int32_t dma_fence_default_wait(struct dma_fence *fence, int intr, int64_t deadli
  * when it is imported, so that every device and the CPU see one set.
  */
 struct dma_resv {
+    /* Over the rest, as Linux's reservation's ww_mutex: a sleeping lock,
+     * taken after the driver's object locks (dmabuf/Readme.md). */
+    struct mutex lock;
     struct dma_fence *write; /* all pending writers, or NULL */
     struct dma_fence **reads;
     uint32_t nreads, cap;
@@ -638,6 +698,9 @@ int32_t drm_handle_insert(struct drm_handles *t, void *object, uint32_t *id);
 /** The object of `id` in `t`, or NULL; no reference is taken, so the
  * caller keeps the object alive by other means. */
 void *drm_handle_find(struct drm_handles *t, uint32_t id);
+/** The object of `id` in `t`, or NULL, with a reference that `get` takes
+ * under the table's lock, so that no removal frees it first. */
+void *drm_handle_find_get(struct drm_handles *t, uint32_t id, void (*get)(void *object));
 /** Take `id` out of `t`, drop its PRIME cache reference and return its
  * object, or NULL for none. */
 void *drm_handle_remove(struct drm_handles *t, uint32_t id);
@@ -725,6 +788,10 @@ struct drm_file {
 int32_t drm_event_reserve(struct drm_file *file, struct drm_pending_event *e);
 /** Send `e`, reserved; it is the file's, or freed. Any context. */
 void drm_send_event(struct drm_pending_event *e);
+/** Send `e` as `drm_send_event` does, with its device's `event_lock`
+ * held, under which its fence is signalled, as Linux's
+ * drm_send_event_locked; an event never reserved is freed. */
+void drm_send_event_locked(struct drm_pending_event *e);
 /** Take back `e`, reserved and not sent, give back its space and free
  * it. */
 void drm_event_cancel_free(struct drm_pending_event *e);
@@ -742,7 +809,10 @@ void drm_mode_file_release(struct drm_file *file);
  * number of another type, EINVAL for a number no row names, EACCES for a
  * caller the row's flags refuse, EFAULT, ENOMEM, or the handler's answer.
  * The argument is copied back by the direction the number and the row
- * share, whatever the handler answered. May sleep.
+ * share, whatever the handler answered. Called without the big lock, since
+ * a node's operations are FILE_OPS_UNLOCKED: the copies run without it,
+ * and the handler of a row without DRM_UNLOCKED, with the permission
+ * check, under it. May sleep.
  */
 int32_t drm_ioctl(struct drm_file *file, uint32_t cmd, uintptr_t arg);
 
@@ -1054,7 +1124,8 @@ struct drm_crtc_crc {
     struct drm_crtc_crc_entry *entries; /* DRM_CRC_ENTRIES_NR while open, else NULL */
     uint32_t head, tail;
     uint32_t values;
-    wait_queue_t wait; /* wakes the reader at each entry */
+    wait_queue_t wait;    /* wakes the reader at each entry */
+    struct spinlock lock; /* `entries`, `head` and `tail`, Linux's crc->lock */
 };
 
 /* A commit's flip on a CRTC, from the swap of its state until its event is
@@ -1483,16 +1554,27 @@ int drm_edid_parse_modes(const uint8_t *edid, uint32_t len,
 
 /* ---- The commit lock and the atomic commit, in drm_atomic.c ---- */
 
-/** Take `dev`'s commit lock, sleeping while another commit holds it:
- * 0, or -EINTR for a signal. */
+/** Start the commit worker, kdrm, which runs the queued commits, the
+ * hotplug events and the drivers' works, once: 0, or -ENOMEM. Process
+ * context; `drm_dev_register` calls it, so that an interrupt handler that
+ * queues a work only wakes it. */
+int32_t drm_atomic_worker_start(void);
+/** Take `dev`'s commit lock, its `mode_lock`, sleeping while another
+ * thread holds it: 0, or -EINTR for a signal. A holder may take it again,
+ * and lets it go as often, as Linux's acquire context takes a modeset lock
+ * it holds already; so a handler the dispatcher runs under the lock, or
+ * the worker under a work's device's lock, takes it as any caller does. */
 int32_t drm_modeset_lock(struct drm_device *dev);
 /** Take the commit lock with signals ignored, as Linux's acquire context
  * without DRM_MODESET_ACQUIRE_INTERRUPTIBLE: for a release that must take
  * a framebuffer off the display whatever the caller's signals, and for a
  * driver's commit of its own. */
 void drm_modeset_lock_nointr(struct drm_device *dev);
-/** Let the commit lock go and wake the next taker. */
+/** Let the commit lock go once, and at the holder's last take wake the
+ * next taker. */
 void drm_modeset_unlock(struct drm_device *dev);
+/** Whether the calling thread holds `dev`'s commit lock. */
+int drm_modeset_held(const struct drm_device *dev);
 
 /** A new empty atomic state of `dev`, with ALLOW_MODESET; NULL with no
  * memory. Freed with `drm_atomic_state_free`. */
@@ -1671,8 +1753,10 @@ void drm_dev_work_later(struct drm_device *dev, struct drm_work *work);
 void drm_dev_work_later_ms(struct drm_device *dev, struct drm_work *work, uint32_t ms);
 
 /** Take `work` off the worker's queue if it waits; for a driver going
- * away. Process context. */
-void drm_dev_work_cancel(struct drm_work *work);
+ * away, or an owner that does the work's job itself. 1 when this call took
+ * it off, 0 when it was not queued, as when the worker has taken it to run.
+ * Any context. */
+int drm_dev_work_cancel(struct drm_work *work);
 
 /* ---- Vblanks, their events and CRCs, in drm_vblank.c ---- */
 
@@ -1741,6 +1825,8 @@ void drm_crtc_arm_vblank_event(struct drm_crtc *crtc, struct drm_pending_event *
  * the last vblank's count and time on a device with vblanks, else count 0
  * and the time now. */
 void drm_crtc_send_vblank_event(struct drm_crtc *crtc, struct drm_pending_event *e);
+/** `drm_crtc_send_vblank_event` with the device's `event_lock` held. */
+void drm_crtc_send_vblank_event_locked(struct drm_crtc *crtc, struct drm_pending_event *e);
 /** Turn `crtc`'s vblanks off, sending its queued events with the count
  * reached and waking its waiters, and keep them off until
  * `drm_crtc_vblank_on`. */
@@ -1818,14 +1904,15 @@ void drm_edid_override_reset(struct drm_connector *connector);
  * for that function in place of its own, as a driver that stands in for
  * another chip sets it before registering (sysfs.h's
  * `sysfs_pci_virtual_add`). `master` is the file that holds the master role,
- * or NULL. `commit_lock` orders commits, and `object_lock` and
- * `event_lock` keep the objects and the events (the lock rules above).
+ * or NULL. `mode_lock`, the commit lock, keeps the mode state, and
+ * `object_lock`, `event_lock` and `vbl_lock` keep the objects, the events
+ * and the vblanks (the lock rules above).
  */
 struct drm_device {
     const struct drm_driver *driver;
     uint32_t features;
     int index;
-    uint32_t refs;
+    volatile uint32_t refs; /* changed atomically, as each object holds one */
     int registered;
     int unplugged;
     char unique[32];
@@ -1839,11 +1926,12 @@ struct drm_device {
     struct drm_gem_object *objects;      /* its buffer objects, through `dev_next` */
     struct drm_gem_object *mmap_objects; /* those with an mmap offset, by offset */
     struct drm_mmap_node *mmap_nodes;    /* drivers' further offsets, by offset */
-    struct spinlock event_lock;          /* its files' events */
+    struct spinlock event_lock;          /* its files' events, its CRTCs' queued events and flips */
+    struct spinlock vbl_lock;            /* its CRTCs' vblank counts, holds and interrupts */
     struct drm_mode_config mode_config;
-    int debugfs;     /* its debugfs directory is made (drm_debugfs.c) */
-    int commit_held; /* the commit lock: 1 while a commit holds it */
-    wait_queue_t commit_wait;
+    int debugfs;              /* its debugfs directory is made (drm_debugfs.c) */
+    struct mutex mode_lock;   /* the commit lock, `drm_modeset_lock`'s */
+    uint32_t mode_lock_depth; /* the holder's takes past its first */
     void *driver_priv;
 };
 
@@ -2269,7 +2357,8 @@ struct syncobj_wait;
 struct syncobj_eventfd;
 struct dma_fence_chain;
 struct drm_syncobj {
-    uint32_t refs;
+    volatile uint32_t refs;           /* atomic */
+    struct spinlock lock;             /* the three members below */
     struct dma_fence *fence;          /* NULL, a binary fence or the newest point */
     struct syncobj_wait *waits;       /* threads waiting for a point to be submitted */
     struct syncobj_eventfd *eventfds; /* eventfds waiting for a point to be submitted */
@@ -2284,6 +2373,9 @@ void drm_syncobj_get(struct drm_syncobj *syncobj);
 void drm_syncobj_put(struct drm_syncobj *syncobj);
 /** The syncobj of `file`'s `handle`, with a reference, or NULL. */
 struct drm_syncobj *drm_syncobj_find(struct drm_file *file, uint32_t handle);
+/** The syncobj's fence, with a reference, or NULL, as Linux's
+ * drm_syncobj_fence_get. */
+struct dma_fence *drm_syncobj_fence_get(struct drm_syncobj *syncobj);
 /** Make `fence`, which may be NULL, the syncobj's, with a reference of its
  * own, and tell its waiters and eventfds. Does not sleep. */
 void drm_syncobj_replace_fence(struct drm_syncobj *syncobj, struct dma_fence *fence);

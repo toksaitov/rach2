@@ -11,6 +11,7 @@
 #include "../pci.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
+#include "../lib/spinlock.h"
 #include "../mm/paging.h"
 
 /* The vendor of every virtio-pci function, and its device ids (virtio 1.2,
@@ -120,14 +121,20 @@ struct virtio_pci {
     char name[8];
 };
 
-/* An interrupt slot: which device and target its vector serves. */
+/* An interrupt slot: which device and target its vector serves, and how
+ * many of its handlers run now, which vp_msix_free waits out. */
 struct vp_slot {
     struct virtio_pci *vp;
     int target;
+    uint32_t inflight;
 };
 
 static struct virtio_pci vp_devs[VP_DEVICES];
 static struct vp_slot vp_slots[VP_SLOTS];
+
+/* The slots' owners and counts, which a handler without the big lock reads
+ * while vp_msix_free, under it, gives a slot back. */
+static struct spinlock vp_slots_lock = SPINLOCK_INIT_NAMED("virtio_slots_lock");
 
 /** The record behind `d`. */
 static struct virtio_pci *vp_of(struct virtio_dev *d)
@@ -348,15 +355,23 @@ static void vp_notify(struct virtio_dev *d, struct virtqueue *vq)
     mmio_write16(vq->notify, vq->index);
 }
 
-/** Take the interrupt for slot `k`'s target. */
+/** Take the interrupt for slot `k`'s target, counted in the slot while it
+ * runs, as Linux's synchronize_irq waits for a handler in flight
+ * (kernel/irq/manage.c:134-151). */
 static void vp_fire(int k)
 {
-    struct virtio_pci *vp = vp_slots[k].vp;
-    int target = vp_slots[k].target;
+    struct virtio_pci *vp;
+    int target;
+    uint32_t flags = spin_lock_irqsave(&vp_slots_lock);
 
+    vp = vp_slots[k].vp;
+    target = vp_slots[k].target;
     if (!vp) {
+        spin_unlock_irqrestore(&vp_slots_lock, flags);
         return;
     }
+    vp_slots[k].inflight++;
+    spin_unlock_irqrestore(&vp_slots_lock, flags);
     if (target == VP_TARGET_CONFIG) {
         virtio_interrupt_config(&vp->dev);
     } else if (target == VP_TARGET_QUEUES) {
@@ -364,6 +379,9 @@ static void vp_fire(int k)
     } else if (target >= 0 && target < VIRTIO_MAX_QUEUES) {
         virtio_interrupt_queue(vp->dev.queues[target]);
     }
+    flags = spin_lock_irqsave(&vp_slots_lock);
+    vp_slots[k].inflight--;
+    spin_unlock_irqrestore(&vp_slots_lock, flags);
 }
 
 /* A handler is given only the saved registers, so each slot has a handler
@@ -440,10 +458,13 @@ static void vp_intx_disable(struct virtio_pci *vp, int off)
 }
 
 /** Mask MSI-X and release its remapping entries before `vp`'s vectors and
- * slots. Also undoes a partial setup. */
+ * slots, waiting for each slot's handlers still running on other
+ * processors, which may run without the big lock. Also undoes a partial
+ * setup. */
 static void vp_msix_free(struct virtio_pci *vp)
 {
     int e;
+    uint32_t flags, n;
 
     pci_msix_disable(&vp->pci);
     for (e = 0; e <= VIRTIO_MAX_QUEUES; e++) {
@@ -451,7 +472,14 @@ static void vp_msix_free(struct virtio_pci *vp)
             isr_free_vector(vp->vector[e]);
         }
         if (vp->slot[e] >= 0) {
+            flags = spin_lock_irqsave(&vp_slots_lock);
             vp_slots[vp->slot[e]].vp = 0;
+            spin_unlock_irqrestore(&vp_slots_lock, flags);
+            do {
+                flags = spin_lock_irqsave(&vp_slots_lock);
+                n = vp_slots[vp->slot[e]].inflight;
+                spin_unlock_irqrestore(&vp_slots_lock, flags);
+            } while (n != 0);
         }
         vp->vector[e] = -1;
         vp->slot[e] = -1;
@@ -497,6 +525,7 @@ static uint32_t vp_msix_map(struct virtio_pci *vp)
 static int vp_msix_take(struct virtio_pci *vp, int n)
 {
     int e, k = 0, vector;
+    uint32_t flags;
 
     if (pci_msix_hold(&vp->pci) != 0) {
         return -1;
@@ -510,14 +539,19 @@ static int vp_msix_take(struct virtio_pci *vp, int n)
         while (vp_slots[k].vp) {
             k++;
         }
-        vp_slots[k].vp = vp;
+        flags = spin_lock_irqsave(&vp_slots_lock);
         vp_slots[k].target = e == 0                    ? VP_TARGET_CONFIG
                              : vp->mode == VP_IRQ_MSIX ? e - 1
                                                        : VP_TARGET_QUEUES;
+        vp_slots[k].vp = vp;
+        spin_unlock_irqrestore(&vp_slots_lock, flags);
         vp->vector[e] = vector;
         vp->slot[e] = k;
         vp->nentries = e + 1;
         register_isr_handler((uint8_t)vector, vp_slot_handler[k], vp->name);
+        if (vp->dev.irq_unlocked) {
+            isr_register_flags((uint8_t)vector, vp_slot_handler[k], ISR_UNLOCKED);
+        }
         if (pci_msix_entry_set(&vp->pci, vp->msix_table, (unsigned int)e, (uint8_t)vector) != 0) {
             vp_msix_free(vp);
             return -1;

@@ -6,6 +6,8 @@
  * rows with x86-64's structures.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/atomic_host.c tests/host/compat/resv_host.c
+ * host-deps: tests/host/compat/mutex_none.c
  *
  * The rows: the parameters a device with blobs, UUIDs, context
  * initialization and a host-visible region gives; blobs of host memory,

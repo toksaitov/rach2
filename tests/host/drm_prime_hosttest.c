@@ -1,10 +1,12 @@
 /* PRIME sharing, cache identity and lifetimes over the real GEM and dma-buf
  * code, the cache's set by handle id and its hash's growth, and vgem's
- * fences on a buffer another device imports; frames, descriptor tables,
- * device regions and the commit worker are host models.
+ * fences on a buffer another device imports, with their calls' locks;
+ * frames, descriptor tables, device regions and the commit worker are host
+ * models.
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/atomic_host.c
  * host-deps: tests/host/compat/fd_flat.c
+ * host-deps: tests/host/compat/mutex_none.c
  */
 #include "drm/drm_gem.c"
 #include "drm/drm_prime.c"
@@ -404,19 +406,21 @@ void drm_dev_work_later_ms(struct drm_device *dev, struct drm_work *work, uint32
     works[i] = work;
 }
 
-/** Take `work` off the queue, dropping its device. */
-void drm_dev_work_cancel(struct drm_work *work)
+/** Take `work` off the queue, dropping its device: 1, or 0 when it was not
+ * queued. */
+int drm_dev_work_cancel(struct drm_work *work)
 {
     int i;
 
     if (!work->queued)
-        return;
+        return 0;
     for (i = 0; i < 8; i++) {
         if (works[i] == work)
             works[i] = NULL;
     }
     work->queued = 0;
     drm_dev_put(work->dev);
+    return 1;
 }
 
 /** Run every queued work, as the worker does once their time has come. */
@@ -940,6 +944,10 @@ static void vgem_fences(void)
 
     CHECK(!vgem_attach(&v, handle, VGEM_FENCE_WRITE, &id) && id == 4, "write fence is id 4");
     CHECK(resv_busy(imported, 0), "importer waits for the new writer");
+    CHECK((vgem_ioctls[0].flags & DRM_UNLOCKED) && (vgem_ioctls[1].flags & DRM_UNLOCKED),
+          "both fence calls run without the big lock, as Linux's");
+    CHECK(!mutex_held(&((struct vgem_file *)v.driver_priv)->lock),
+          "each call gives the file's fence lock back");
     fd_free(&table, fd);
     drm_gem_release(&c);
     drm_gem_release(&v);

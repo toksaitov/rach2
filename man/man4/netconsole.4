@@ -1,4 +1,4 @@
-.Dd November 11, 2026
+.Dd November 12, 2026
 .Dt NETCONSOLE 4
 .Os
 .Sh NAME
@@ -35,7 +35,10 @@ counts.
 A value that is no such number, or above 4294967295, and a bare
 .Sy netpoll.carrier_timeout
 with no value, change nothing and are logged as
-.Ql netconsole: refused: .
+.Ql netconsole: refused:
+in the order of the line.
+The number is read once, early in every boot, whether or not netconsole
+starts.
 When the wait finds the link up with records held, at once or later,
 those records and every one written in the next two seconds are sent
 when the two seconds end, in order, since frames sent the moment a link

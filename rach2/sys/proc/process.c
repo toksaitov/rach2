@@ -566,6 +566,7 @@ struct tgroup *tgroup_new(struct process *leader)
         tg->leader = leader;
         wait_queue_init(&tg->chld);
         wait_queue_init(&tg->gone);
+        wait_queue_init(&tg->sigfd);
         wait_queue_init(&tg->exited);
     }
     return tg;

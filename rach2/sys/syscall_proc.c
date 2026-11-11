@@ -4403,7 +4403,7 @@ static void sig_irq_restore(uint32_t flags)
 /** Mark signal work for `t` alone for the unblocked signals in `bits`, as
  * Linux 6.12.115's signal_wake_up_state marks TIF_SIGPENDING
  * (kernel/signal.c:759-773).
- * A wake for a blocked signal, for a signalfd poll, marks no work.
+ * A wake for a blocked signal marks no work.
  * Make `t` runnable if it sleeps, clearing its timed wake: an
  * interruptible wait then calls `signal_pending` to learn whether to end
  * with -EINTR, and any wait that goes on arms its own deadline again. A
@@ -4640,12 +4640,11 @@ static process_t *sig_fatal_taker(process_t *target, int signo, int whole)
  * once, as Linux 6.12.115's `complete_signal` judges it (kernel/signal.c:
  * 1034-1043): there is such a thread, the disposition is SIG_DFL and the
  * default action ends the process without a core dump, `taker` does not
- * wait for the signal in rt_sigtimedwait or a signalfd read
- * (`sig_real_blocked`), the process is not ending already, or is writing
- * its core and the signal is SIGKILL, which stops the core (kernel/signal.c:
- * 908-910, 1035), and `target` is not traced, unless the signal is SIGKILL.
- * Such a waiter takes the signal
- * as its result, a traced thread's tracer sees the signal first, and a
+ * wait for the signal in rt_sigtimedwait (`sig_real_blocked`), the process
+ * is not ending already, or is writing its core and the signal is SIGKILL,
+ * which stops the core (kernel/signal.c:908-910, 1035), and `target` is not
+ * traced, unless the signal is SIGKILL. Such a waiter takes the signal as
+ * its result, a traced thread's tracer sees the signal first, and a
  * signal that dumps core is left to the thread that takes it, which writes
  * the core before the others end. An init (`unkillable`) ends only by
  * SIGKILL here: Linux leaves this test out (kernel/signal.c:1034-1037), so
@@ -4794,6 +4793,20 @@ static int sig_prepare(process_t *target, int signo, const struct k_siginfo *inf
     return 1;
 }
 
+/**
+ * Wake the signalfd readers and pollers of the process `tg` for a signal just
+ * set pending for it or for one of its threads, as Linux 6.12.115's
+ * `signalfd_notify` (include/linux/signalfd.h:19-23), which
+ * `__send_signal_locked` calls for every signal it queues (kernel/signal.c:
+ * 1166-1167). A reader keeps its mask, so no thread need be chosen to take
+ * the signal for the reader to see it. The wake comes after the pending bit
+ * is set, since the reader tests the bit after it files itself on the queue.
+ */
+static void sig_notify_fd(struct tgroup *tg)
+{
+    wq_wake(&tg->sigfd, WQ_DATA);
+}
+
 /** Keep a signal sent to several processes for each fork under way in
  * `tg`, with interrupts off, as Linux 6.12.115's __send_signal_locked
  * keeps it on the multiprocess list (kernel/signal.c:1170-1181).
@@ -4848,6 +4861,7 @@ static void sig_post_process(process_t *target, int signo, const struct k_siginf
         if (multi) {
             sig_fork_pending(tg, signo);
         }
+        sig_notify_fd(tg);
         sig_complete(target, taker, signo, 1);
     }
     sig_irq_restore(f);
@@ -4891,6 +4905,7 @@ void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
     if (sig_prepare(t, signo, info) && !(t->sig_pending & KSIG_BIT(signo))) {
         taker = sig_fatal_taker(t, signo, 0);
         sig_post_own(t, signo, info);
+        sig_notify_fd(t->tg);
         sig_complete(t, taker, signo, 0);
     }
     sig_irq_restore(f);
@@ -6357,14 +6372,27 @@ static void sigfd_fill(uint8_t *out, int signo, const struct k_siginfo *info)
     }
 }
 
+/** Whether a signal of the signalfd `arg`'s mask is pending for the current
+ * thread or its process: the end of a signalfd read's wait. */
+static int sigfd_ready(void *arg)
+{
+    const struct sigfd *sf = (const struct sigfd *)arg;
+
+    return (sig_pending_now() & sf->mask) != 0;
+}
+
 /**
  * read(2) of a signalfd: the pending signals of its mask, a 128-byte record
  * each, as many as fit, taken off the thread's or the process's pending set
- * as sigtimedwait takes them. With none pending it waits for one, the mask
- * counting as unblocked meanwhile, as sigtimedwait's set does, or fails with
- * EAGAIN when non-blocking, and with EINTR when another signal ends the wait;
- * EINVAL for a buffer shorter than a record, EFAULT when no record could be
- * copied.
+ * as sigtimedwait takes them. With none pending it fails with EAGAIN when
+ * non-blocking, or else sleeps on its process's signalfd queue, which every
+ * signal sent wakes (`sig_notify_fd`), until one is pending, and fails with
+ * EINTR when a signal the thread acts on ends the wait, as Linux 6.12.115's
+ * `signalfd_dequeue` (fs/signalfd.c:154-194). The thread's mask stays as it
+ * is: a signal of the mask that the thread blocks goes to another thread
+ * that does not block it, or ends the process, as on Linux; only one that
+ * no thread takes is left for the read. EINVAL for a buffer shorter than a
+ * record, EFAULT when no record could be copied.
  */
 static int32_t sigfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
@@ -6387,16 +6415,13 @@ static int32_t sigfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
         } else if (e->ofd && (e->ofd->status_flags & OFD_NONBLOCK)) {
             return -EAGAIN;
         } else {
-            uint64_t saved = current_proc->sig_blocked;
+            int rc =
+                wq_wait_event_as(&current_proc->tg->sigfd, sigfd_ready, sf, "signalfd_dequeue");
 
-            current_proc->sig_real_blocked = saved;
-            signal_set_blocked(saved & ~sf->mask);
-            signo = sigwait_take(sf->mask, 0, 0, &info);
-            signal_set_blocked(saved);
-            current_proc->sig_real_blocked = 0;
-            if (signo < 0) {
-                return signo;
+            if (rc < 0) {
+                return rc;
             }
+            continue;
         }
         sigfd_fill(one, (int)signo, &info);
         if (copy_to_user((void __user *)(buf + done), one, sizeof(one)) != 0) {
@@ -6407,14 +6432,16 @@ static int32_t sigfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return (int32_t)done;
 }
 
-/** Readable while a signal of the mask is pending for the poller. A signal
- * sent while it sleeps wakes it as the thread the signal would go to. */
+/** Readable while a signal of the mask is pending for the poller; its queue
+ * is the poller's process's signalfd queue, which every signal sent wakes,
+ * as Linux 6.12.115's `signalfd_poll` waits on `signalfd_wqh`
+ * (fs/signalfd.c:51-65). */
 static short sigfd_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     struct sigfd *sf = (struct sigfd *)e->priv;
 
     if (wq) {
-        *wq = NULL;
+        *wq = &current_proc->tg->sigfd;
     }
     return (short)((sig_pending_now() & sf->mask) ? (events & POLLIN) : 0);
 }
@@ -7799,7 +7826,7 @@ static int32_t mmap_secret(const fd_entry_t *e, struct shmem *sh, int shared,
  * written. A shared mapping served as a private one, or made through a
  * descriptor not open for writing, is given VM_PROT_NOWRITE, so that mprotect
  * cannot make it writable later. A file of memfd_secret maps as
- * `mmap_secret` says. The file's path is left to the first reader of
+ * `mmap_secret` says. The file's path is built at each reading of
  * /proc/PID/maps (`procfs_maps_names`), as Linux's d_path at that read.
  */
 static int32_t mmap_file(fd_entry_t *e, int shared, struct map_source *src)
@@ -7842,8 +7869,13 @@ static int32_t mmap_file(fd_entry_t *e, int shared, struct map_source *src)
  * protection, and those go into `src`. A shared mapping through a
  * descriptor not open for writing is given VM_PROT_NOWRITE, as `mmap_file`
  * gives it. The region the call builds is not in the address space, so
- * its start is 0 and its end the length. The operation's error, or
- * `mmap_file_check`'s; ENOMEM with no memory for the path.
+ * its start is 0 and its end the length. The region is named for
+ * /proc/PID/maps by the descriptor's link target now, once: every kind of
+ * descriptor with its own mmap, a device, an anonymous inode or a file of
+ * /sys, has a target that names the object and is the same from every
+ * root, so a reader with another root would build the same path; with no
+ * room for the path the region has none. The operation's error, or
+ * `mmap_file_check`'s.
  */
 static int32_t mmap_object(fd_entry_t *e, int fd, int shared, uintptr_t len, struct map_source *src)
 {

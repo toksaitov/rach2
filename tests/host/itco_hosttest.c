@@ -1,7 +1,11 @@
-/* Intel TCO register sequencing, two-stage expiry, watchdog file ABI and
- * the kernel's feed before a program opens the device.
- * host-deps:
+/* Intel TCO register sequencing, two-stage expiry, watchdog file ABI, the
+ * kernel's feed before a program opens the device, and the options the
+ * driver reads from the command line through cmdline.c.
+ * host-deps: rach2/sys/cmdline.c rach2/sys/lib/kstd.c
+ * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  */
+#include <stdarg.h>
+
 extern int printf(const char *format, ...);
 
 #undef RACH2_HOSTTEST
@@ -19,6 +23,8 @@ struct model {
 static int failures;
 static struct model model;
 static const void *bad_user;
+static const char *refused_keys[8]; /* the options of the first refusals */
+static int refused;                 /* the `refused:` records since `setup` */
 
 #define CHECK(test)                                                  \
     do {                                                             \
@@ -129,6 +135,7 @@ static void setup(void)
     watchdog.feed_left = watchdog.open_left = 0;
     watchdog.threaded = watchdog.feed_due = 0;
     bad_user = NULL;
+    refused = 0;
 }
 
 /** Copy valid model user bytes, or fail the designated fault address. */
@@ -201,54 +208,6 @@ int32_t devfs_node_register(struct devfs_node *node)
     (void)node;
     return 0;
 }
-/** No command line here: the rows set the options' fields. */
-int kcmdline_count(const char *key)
-{
-    (void)key;
-    return 0;
-}
-/** No command line here. */
-int kcmdline_value_nth(const char *key, int nth, char *out, unsigned int outlen)
-{
-    (void)key;
-    (void)nth;
-    (void)out;
-    (void)outlen;
-    return 0;
-}
-/** No command line here. */
-int kcmdline_has(const char *flag)
-{
-    (void)flag;
-    return 0;
-}
-/** No command line here. */
-int kcmdline_param_bool(const char *key, int dflt)
-{
-    (void)key;
-    return dflt;
-}
-/** No command line here, so no token is bare. */
-int kcmdline_bare_count(const char *flag)
-{
-    (void)flag;
-    return 0;
-}
-/** No command line here, so nothing is parsed. */
-int kcmdline_parse_bool(const char *text, int *out)
-{
-    (void)text;
-    (void)out;
-    return -1;
-}
-/** No command line here, so nothing is parsed. */
-int k_strtoll(const char *text, size_t len, long long *out)
-{
-    (void)text;
-    (void)len;
-    *out = 0;
-    return -1;
-}
 /** No thread is made here: the rows call `itco_feed_work` for watchdogd. */
 uintptr_t kstack_alloc(void)
 {
@@ -312,12 +271,43 @@ void wq_wake_all(wait_queue_t *wq)
 {
     (void)wq;
 }
-/** Diagnostics have no side effect in the model. */
+/** Record the option each `refused: KEY` or `refused: KEY=VALUE` names;
+ * other diagnostics have no side effect in the model. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
+    static const char prefix[] = "refused: %s";
+    va_list ap;
+    unsigned i;
+
     (void)level;
     (void)subsystem;
-    (void)format;
+    for (i = 0; prefix[i] != '\0' && format[i] == prefix[i]; i++) {
+        /* compare the format with the refusal's */
+    }
+    if (prefix[i] != '\0') {
+        return;
+    }
+    va_start(ap, format);
+    if (refused < (int)(sizeof(refused_keys) / sizeof(refused_keys[0]))) {
+        refused_keys[refused] = va_arg(ap, const char *);
+    }
+    refused++;
+    va_end(ap);
+}
+
+/** How many of the refusals since `setup` name `key`. */
+static int refusals(const char *key)
+{
+    int i, n = 0;
+    size_t j;
+
+    for (i = 0; i < refused && i < (int)(sizeof(refused_keys) / sizeof(refused_keys[0])); i++) {
+        for (j = 0; key[j] != '\0' && refused_keys[i][j] == key[j]; j++) {
+            /* compare the refused option's name with `key` */
+        }
+        n += key[j] == '\0' && refused_keys[i][j] == '\0';
+    }
+    return n;
 }
 
 /** GETSTATUS reports a pending magic close and a feed since the last call,
@@ -553,6 +543,75 @@ static void options(void)
     CHECK(model.resets == 1);
 }
 
+/** The parser's counts and booleans that the options below rest on: a bare
+ * token counts only when it is the whole flag, with no `=`, and a boolean is
+ * read from its first two bytes as Linux's kstrtobool reads it (Linux
+ * 6.12.115, lib/kstrtox.c:348-388), refusing the rest and leaving the
+ * value alone. */
+static void parser(void)
+{
+    static const char *const yes[] = {"y", "Y", "t", "T", "1", "on", "ON", "oN", "yes", "1x"};
+    static const char *const no[] = {"n", "N", "f", "F", "0", "off", "OFF", "oF", "no", "0x"};
+    static const char *const neither[] = {"", "o", "ox", "x", "2", "-1", " y", "e", "d"};
+    unsigned i;
+    int v;
+
+    CHECK(kcmdline_capture("a a=1 ab xa\ta  a=  a b=a") == 0);
+    CHECK(kcmdline_bare_count("a") == 3 && kcmdline_has("a"));
+    CHECK(kcmdline_bare_count("b") == 0 && !kcmdline_has("b"));
+    CHECK(kcmdline_bare_count("ab") == 1 && kcmdline_bare_count("x") == 0);
+    CHECK(kcmdline_count("a") == 2);
+    for (i = 0; i < sizeof(yes) / sizeof(yes[0]); i++) {
+        v = 0;
+        CHECK(kcmdline_parse_bool(yes[i], &v) == 0 && v == 1);
+    }
+    for (i = 0; i < sizeof(no) / sizeof(no[0]); i++) {
+        v = 1;
+        CHECK(kcmdline_parse_bool(no[i], &v) == 0 && v == 0);
+    }
+    for (i = 0; i < sizeof(neither) / sizeof(neither[0]); i++) {
+        v = 7;
+        CHECK(kcmdline_parse_bool(neither[i], &v) == -1 && v == 7);
+    }
+    (void)kcmdline_capture(0);
+}
+
+/** The options the command line gives, as the driver reads them at boot: a
+ * bare number option and a value that is no boolean are each refused with
+ * a record and leave the option as it was, as Linux's parse_args refuses a
+ * parameter that takes a value given none and logs each refusal (Linux
+ * 6.12.115, kernel/params.c:136-138 and 203-205), and param_set_bool refuses
+ * what kstrtobool does (:312-319); a bare boolean is true. */
+static void line(void)
+{
+    int heartbeat = 0, arm = 1;
+
+    setup();
+    CHECK(kcmdline_capture("iTCO_wdt.heartbeat iTCO_wdt.nowayout=x") == 0);
+    itco_options(&heartbeat, &arm);
+    CHECK(heartbeat == ITCO_DEFAULT_TIMEOUT && !arm);
+    CHECK(!watchdog.nowayout && watchdog.boot_feed && !watchdog.open_limited);
+    CHECK(refused == 2 && refusals("iTCO_wdt.heartbeat") == 1);
+    CHECK(refusals("iTCO_wdt.nowayout") == 1);
+
+    setup();
+    CHECK(kcmdline_capture("iTCO_wdt.heartbeat=10 iTCO_wdt.heartbeat iTCO_wdt.nowayout=on "
+                           "iTCO_wdt.nowayout=x watchdog.handle_boot_enabled=n "
+                           "rach2.itco.arm") == 0);
+    itco_options(&heartbeat, &arm);
+    CHECK(heartbeat == 10 && arm && watchdog.nowayout && !watchdog.boot_feed);
+    CHECK(refused == 2 && refusals("iTCO_wdt.heartbeat") == 1);
+    CHECK(refusals("iTCO_wdt.nowayout") == 1);
+
+    setup();
+    CHECK(kcmdline_capture("iTCO_wdt.nowayout watchdog.handle_boot_enabled=off "
+                           "watchdog.open_timeout=7") == 0);
+    itco_options(&heartbeat, &arm);
+    CHECK(heartbeat == ITCO_DEFAULT_TIMEOUT && !arm && watchdog.nowayout && !watchdog.boot_feed);
+    CHECK(watchdog.open_limited && watchdog.open_left == 7u * TICK_HZ && refused == 0);
+    (void)kcmdline_capture(0);
+}
+
 /** Check actual writes, expiry, failures, exclusive open and the ioctl ABI. */
 int main(void)
 {
@@ -629,6 +688,8 @@ int main(void)
     threaded();
     deadline();
     options();
+    parser();
+    line();
     setup();
     model.absent = 1;
     CHECK(itco_attach(&watchdog, 30) == -EIO && model.writes == 0);

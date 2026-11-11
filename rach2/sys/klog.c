@@ -645,8 +645,61 @@ static void dest_serial(const struct klog_record *r)
 
 /* ---- destination 4: netconsole ---- */
 
+/*
+ * Netconsole's share of the records that a processor without the big lock
+ * writes out for a holder that is locked up (`klog_flush_stuck`), whole
+ * records in the order written, which the next processor that may write
+ * klog's state sends ahead of anything of its own (`net_send_owed`).
+ * Netconsole, the Ethernet frame buffer and each driver's transmit ring
+ * have no guard but the big lock (network/net.h), and the holder that comes
+ * back runs them while that writer is still at work, so the writer leaves
+ * them alone. Linux's writer likewise leaves a console it cannot lock to
+ * the lock's holder, which writes each console from that console's own
+ * place in the ring when it unlocks (`console_trylock`,
+ * kernel/printk/printk.c:4511-4512; `con->seq`, :3081-3086), and
+ * netconsole's send only trylocks the device's queue
+ * (`HARD_TX_TRYLOCK`, net/core/netpoll.c:340-374). The room holds the
+ * hundred or so records of a hard-lockup report with backtraces; a record
+ * that does not fit is counted (`net_owed_lost`) and reported once the
+ * rest are sent.
+ */
+#define KLOG_NET_OWED 16384
+
+static char net_owed[KLOG_NET_OWED];
+static uint32_t net_owed_len;  /* bytes held */
+static uint32_t net_owed_sent; /* bytes of them netconsole has had */
+static int net_owed_lost;      /* records that did not fit */
+
+/* The records of `net_owed_lost` that a send of the held records found,
+ * which the drain reports (`klog_drain`). */
+static int net_owed_dropped;
+
+/* 1 while `klog_flush_stuck` writes the records out; only one processor
+ * writes klog's state at a time (`klog_enter`), so it is that one's. */
+static int net_stuck;
+
 /**
- * Offer the record to netconsole, whether or not it has a device yet.
+ * Give netconsole the records held for it, from where a send that a panic
+ * stopped left off. The caller may write klog's state and is not
+ * `klog_flush_stuck`.
+ */
+static void net_send_owed(void)
+{
+    uint32_t i;
+
+    for (i = net_owed_sent; i < net_owed_len; i++) {
+        netconsole_putc(net_owed[i]);
+        net_owed_sent = i + 1u;
+    }
+    net_owed_dropped += net_owed_lost;
+    net_owed_lost = 0;
+    net_owed_len = 0;
+    net_owed_sent = 0;
+}
+
+/**
+ * Offer the record to netconsole, whether or not it has a device yet, after
+ * the records held for it; from `klog_flush_stuck`, hold it instead.
  *
  * This deliberately does not ask `netconsole_is_enabled`. Netconsole holds
  * what it is given before a device exists and sends it when one arrives, and
@@ -659,6 +712,20 @@ static void dest_net(const struct klog_record *r)
 {
     uint32_t i;
 
+    if (net_stuck) {
+        if (r->len > KLOG_NET_OWED - net_owed_len) {
+            net_owed_lost++;
+            return;
+        }
+        for (i = 0; i < r->len; i++) {
+            net_owed[net_owed_len + i] = r->text[i];
+        }
+        net_owed_len += r->len;
+        return;
+    }
+    if (net_owed_len != 0) {
+        net_send_owed();
+    }
     for (i = 0; i < r->len; i++) {
         netconsole_putc(r->text[i]);
     }
@@ -810,26 +877,38 @@ static void pending_put(const struct klog_record *r, uint32_t kept)
  * kernel/printk/printk.c:3081-3086); it walks each console from its own
  * number (`console_flush_one_record`, :3144-3186), and its panic writes
  * from there on (`console_flush_on_panic`, :3449-3482), so only the
- * console that was writing has the record again.
+ * console that was writing has the record again. Records held for
+ * netconsole while a holder was locked up (`net_owed`) go to it first.
  */
 static void klog_drain(void)
 {
+    if (!net_stuck && net_owed_len != 0) {
+        net_send_owed();
+    }
     for (;;) {
         struct klog_record r;
         uint32_t flags;
         unsigned int n, had;
-        int lost;
+        int lost, net_lost;
         int i;
 
         flags = kirq_save();
         if (pending_count() == 0) {
             lost = pending_lost;
             pending_lost = 0;
+            net_lost = net_stuck ? 0 : net_owed_dropped;
+            net_owed_dropped -= net_lost;
             klog_delivering = 0;
             kirq_restore(flags);
             if (lost > 0) {
                 klog(KLOG_WARN, "klog", "dropped: %d record(s) the queue could not hold",
                      (int)lost);
+            }
+            if (net_lost > 0) {
+                klog(KLOG_WARN, "klog",
+                     "dropped: %d record(s) for netconsole written while the big lock's "
+                     "holder was locked up",
+                     net_lost);
             }
             return;
         }
@@ -1046,7 +1125,9 @@ int klog_inside(void)
 
 /**
  * The exchange of `defer_taking` is from 0, so a processor that finds
- * another writing leaves that one's number in place. The records kept when
+ * another writing leaves that one's number in place. Netconsole's share is
+ * held for the holder (`net_owed`), since the network stack has no guard
+ * but the big lock, which this processor does not hold. The records kept when
  * it began are those before the `defer_tail` it reads once it has the
  * kept records to itself: before then the holder, back, may still move
  * `defer_head` past an earlier reading.
@@ -1066,6 +1147,7 @@ void klog_flush_stuck(void)
         return;
     }
     end = defer_tail;
+    net_stuck = 1;
     do {
         flags = kirq_save();
         moved = defer_collect(end);
@@ -1073,6 +1155,7 @@ void klog_flush_stuck(void)
         kirq_restore(flags);
         klog_drain();
     } while (moved > 0 && (int)(end - defer_head) > 0);
+    net_stuck = 0;
     k_barrier();
     defer_taking = 0;
 }
@@ -1103,7 +1186,23 @@ void klog_flush(void)
         }
         nested = klog_delivering || console_writing;
         moved = defer_collect(defer_tail);
-        if (nested || (moved == 0 && pending_count() == 0)) {
+        if (nested || (moved == 0 && pending_count() == 0 && net_owed_len == 0)) {
+            klog_leave();
+            kirq_restore(flags);
+            return;
+        }
+        klog_delivering = 1;
+        kirq_restore(flags);
+        klog_drain();
+        klog_leave();
+    }
+    if (net_owed_len != 0) {
+        flags = kirq_save();
+        if (!klog_enter()) {
+            kirq_restore(flags);
+            return;
+        }
+        if (klog_delivering || console_writing || net_owed_len == 0) {
             klog_leave();
             kirq_restore(flags);
             return;
@@ -1340,6 +1439,7 @@ void klog_deliver_directly(void)
     }
     klog_users = 0;
     defer_taking = 0;
+    net_stuck = 0;
     defer_skip = 1;
     kirq_restore(flags);
 }

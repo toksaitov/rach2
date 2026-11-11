@@ -61,6 +61,13 @@ uint64_t timer_cycles_us(uint64_t cycles)
     return cycles;
 }
 
+/** The cycles here are the clock's microseconds, the same on every
+ * processor. */
+int timer_cycles_agree(void)
+{
+    return 1;
+}
+
 /** No device is removed in these rows. */
 uint32_t block_flags(block_device_t *dev)
 {

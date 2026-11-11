@@ -169,6 +169,19 @@ void *drm_handle_find(struct drm_handles *t, uint32_t id)
     return object;
 }
 
+void *drm_handle_find_get(struct drm_handles *t, uint32_t id, void (*get)(void *object))
+{
+    uint32_t flags = spin_lock_irqsave(&t->lock);
+    struct drm_handle *h = handle_at(t, id);
+    void *object = h ? h->object : NULL;
+
+    if (object) {
+        get(object);
+    }
+    spin_unlock_irqrestore(&t->lock, flags);
+    return object;
+}
+
 /* The buckets the PRIME hash of a table starts with, and the most it grows
  * to; it doubles when it holds twice as many caches as buckets. */
 #define PRIME_BUCKETS_FIRST 16u
@@ -385,6 +398,7 @@ void drm_gem_object_init(struct drm_device *dev, struct drm_gem_object *obj, uin
     obj->size = size;
     obj->funcs = funcs;
     obj->resv = &obj->resv_own;
+    dma_resv_init(&obj->resv_own);
     drm_dev_get(dev);
     flags = spin_lock_irqsave(&dev->object_lock);
     obj->dev_next = dev->objects;

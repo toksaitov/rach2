@@ -6,6 +6,8 @@
  * virtio_gpu64_hosttest.c runs the same rows with x86-64's structures.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/atomic_host.c tests/host/compat/resv_host.c
+ * host-deps: tests/host/compat/mutex_none.c
  *
  * The rows: a bind with EDID, which reads the EDID and then the displays,
  * fences each command with the next id, and lists Linux's 26 modes of
@@ -227,6 +229,19 @@ int sched_is_enabled(void)
 
 static int irq_depth;
 
+/** Take a lock with interrupts already off: one thread, nothing to wait
+ * for. */
+void spin_lock(struct spinlock *lock)
+{
+    (void)lock;
+}
+
+/** Give it back. */
+void spin_unlock(struct spinlock *lock)
+{
+    (void)lock;
+}
+
 /** Count a lock taken with interrupts off. */
 uint32_t spin_lock_irqsave(struct spinlock *lock)
 {
@@ -309,6 +324,13 @@ void drm_send_event(struct drm_pending_event *e)
     events_sent++;
     last_event_type = e->event.base.type;
     event_free(e);
+}
+
+/** `drm_send_event`, with the event lock held, which is the same in one
+ * thread. */
+void drm_send_event_locked(struct drm_pending_event *e)
+{
+    drm_send_event(e);
 }
 
 /** Take back a reserved event. */

@@ -3972,19 +3972,21 @@ static void publish_disks(void)
  * Take the boot record's command line `cmdline` into the kernel's buffer
  * (`kcmdline_capture`), and log a line too long to keep whole: the bytes
  * kept, and the bytes the record has, "or more" when the record cut the
- * loader's line at its own limit too.
+ * loader's line at its own limit too. Then read `netpoll.carrier_timeout=`
+ * (`netconsole_read_params`), as Linux's `parse_args` reads its parameters
+ * once the line is in place (init/main.c:912-915).
  */
 static void capture_cmdline(const char *cmdline)
 {
     unsigned int given;
 
-    if (!kcmdline_capture(cmdline)) {
-        return;
+    if (kcmdline_capture(cmdline)) {
+        given = (unsigned int)k_strlen(cmdline);
+        klog(KLOG_WARN, "boot", "command line cut: kept %u of %u%s bytes, at its last whole option",
+             (unsigned int)k_strlen(kcmdline_get()), given,
+             given + 1 >= BOOT_CMDLINE_MAX ? " or more" : "");
     }
-    given = (unsigned int)k_strlen(cmdline);
-    klog(KLOG_WARN, "boot", "command line cut: kept %u of %u%s bytes, at its last whole option",
-         (unsigned int)k_strlen(kcmdline_get()), given,
-         given + 1 >= BOOT_CMDLINE_MAX ? " or more" : "");
+    netconsole_read_params();
 }
 
 /** Start the sound card, unless `rach2.noaudio` says not to, and record

@@ -47,8 +47,10 @@ const struct i915_id i915_ids[] = {
     {0x0D1B, 0, 0, &hsw_gt2}, {0x0D1E, 0, 0, &hsw_gt2}};
 const int i915_nids = (int)(sizeof(i915_ids) / sizeof(i915_ids[0]));
 
-/* The devices bound, for the interrupt handler to find by vector. */
+/* The devices bound, for the interrupt handler to find by vector, and the
+ * spinlock over the table and each device's `irq.inflight`. */
 static struct drm_i915_private *i915_devices[4];
+static struct spinlock i915_devices_lock = SPINLOCK_INIT_NAMED("i915_devices_lock");
 
 static void i915_unplug(struct drm_device *dev);
 static void i915_release(struct drm_device *dev);
@@ -73,18 +75,43 @@ const struct i915_id *i915_id_lookup(uint16_t device_id)
 
 /**
  * The device's message: counted, then handled by i915_irq.c, which hands
- * each source to the handler its owner registered.
+ * each source to the handler its owner registered. It runs without the big
+ * lock (ISR_UNLOCKED), taking only the driver's spinlocks and the DRM
+ * core's, so a device is found and counted as running under the table's
+ * lock, which `i915_irq_sync` waits on.
  */
 static void i915_irq_handler(isr_params_t *params)
 {
+    struct drm_i915_private *i915;
+    uint32_t flags;
     unsigned i;
 
     for (i = 0; i < sizeof(i915_devices) / sizeof(i915_devices[0]); i++) {
-        if (i915_devices[i] && i915_devices[i]->msi_vector == (int)params->vector) {
-            i915_devices[i]->irqs++;
-            i915_irq_handle(i915_devices[i]);
+        flags = spin_lock_irqsave(&i915_devices_lock);
+        i915 = i915_devices[i];
+        if (!i915 || i915->msi_vector != (int)params->vector) {
+            spin_unlock_irqrestore(&i915_devices_lock, flags);
+            continue;
         }
+        i915->irq.inflight++;
+        i915->irqs++;
+        spin_unlock_irqrestore(&i915_devices_lock, flags);
+        i915_irq_handle(i915);
+        flags = spin_lock_irqsave(&i915_devices_lock);
+        i915->irq.inflight--;
+        spin_unlock_irqrestore(&i915_devices_lock, flags);
     }
+}
+
+void i915_irq_sync(struct drm_i915_private *i915)
+{
+    uint32_t flags, n;
+
+    do {
+        flags = spin_lock_irqsave(&i915_devices_lock);
+        n = i915->irq.inflight;
+        spin_unlock_irqrestore(&i915_devices_lock, flags);
+    } while (n != 0);
 }
 
 /**
@@ -103,6 +130,7 @@ static void i915_msi_start(struct drm_i915_private *i915)
     }
     i915->msi_vector = vector;
     register_isr_handler((uint8_t)vector, i915_irq_handler, "i915");
+    isr_register_flags((uint8_t)vector, i915_irq_handler, ISR_UNLOCKED);
     if (pci_msi_enable(&i915->pci, (uint8_t)vector) != 0) {
         isr_free_vector(vector);
         i915->msi_vector = -1;
@@ -126,20 +154,26 @@ static void i915_msi_stop(struct drm_i915_private *i915)
 /** Add a bound device to the handler's table; 0, or -ENOSPC when full. */
 static int32_t i915_devices_add(struct drm_i915_private *i915)
 {
+    uint32_t flags = spin_lock_irqsave(&i915_devices_lock);
     unsigned i;
 
     for (i = 0; i < sizeof(i915_devices) / sizeof(i915_devices[0]); i++) {
         if (!i915_devices[i]) {
             i915_devices[i] = i915;
+            spin_unlock_irqrestore(&i915_devices_lock, flags);
             return 0;
         }
     }
+    spin_unlock_irqrestore(&i915_devices_lock, flags);
     return -ENOSPC;
 }
 
-/** Take a device out of the handler's table. */
+/** Take a device out of the handler's table, and wait for a handler of
+ * it that another processor runs, so that nothing torn down after reaches
+ * it. */
 static void i915_devices_remove(struct drm_i915_private *i915)
 {
+    uint32_t flags = spin_lock_irqsave(&i915_devices_lock);
     unsigned i;
 
     for (i = 0; i < sizeof(i915_devices) / sizeof(i915_devices[0]); i++) {
@@ -147,6 +181,8 @@ static void i915_devices_remove(struct drm_i915_private *i915)
             i915_devices[i] = 0;
         }
     }
+    spin_unlock_irqrestore(&i915_devices_lock, flags);
+    i915_irq_sync(i915);
 }
 
 /** Give back the MMIO backend's mapping of the GTT's entries (`gsm`);
@@ -179,6 +215,7 @@ void i915_pci_unmap(struct i915_hw *hw)
 static void i915_unplug(struct drm_device *dev)
 {
     struct drm_i915_private *i915 = to_i915(dev);
+    int taken = i915_gem_lock(i915);
 
     i915_handoff_unbound(i915);
     i915_requests_unplug(i915);
@@ -192,6 +229,7 @@ static void i915_unplug(struct drm_device *dev)
     i915_devices_remove(i915);
     i915_gt_fini(i915);
     i915_gem_unplug(i915);
+    i915_gem_unlock(i915, taken);
 }
 
 /** The DRM core's release hook: take the shrinker off, free the display's
@@ -378,12 +416,14 @@ static void bind_unwind(struct drm_i915_private *i915, uint16_t command)
     kfree(i915);
 }
 
-/** Make the spinlocks of a new device record, each of one class for every
- * device (lib/spinlock.h). */
+/** Make the locks of a new device record, each of one class for every
+ * device (lib/spinlock.h, proc/mutex.h). */
 static void i915_locks_init(struct drm_i915_private *i915)
 {
     unsigned e;
 
+    mutex_init(&i915->gem.lock, "i915_gem");
+    spin_lock_init(&i915->gem.userptr_lock, "i915_userptr");
     spin_lock_init(&i915->uncore.lock, "i915_uncore");
     spin_lock_init(&i915->irq.lock, "i915_irq");
     spin_lock_init(&i915->rps.lock, "i915_rps");

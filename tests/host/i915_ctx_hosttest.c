@@ -20,6 +20,9 @@
  * host-deps: rach2/sys/dmabuf/fence.c rach2/sys/tick.c
  * host-deps: tests/host/i915_model.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/atomic_host.c
+ * host-deps: tests/host/compat/i915_gem_lock_host.c
+ * host-deps: tests/host/compat/mutex_none.c
  *
  * A row makes a fresh model and a device record over it, brought up as
  * the bind does up to the rings, and a file opened on it. The kernel
@@ -988,6 +991,10 @@ static void row_create_destroy(void)
     CHECK("create: a banned file is EIO",
           make_context(&file_a) == 0 && create_ext(0, 0, 0) == -EIO);
     fp->ban_score = 0;
+    /* The context calls run without the big lock, under the file's context
+     * list lock, which each gives back on every path above. */
+    CHECK("locks: each call, made or refused, gave the file's context list lock back",
+          !mutex_held(&fp->lock) && !mutex_held(&((struct i915_file *)file_b.driver_priv)->lock));
 
     /* Extensions. */
     memset(ext, 0, sizeof(ext));

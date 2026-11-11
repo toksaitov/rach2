@@ -126,7 +126,7 @@ endif
 
 $(HOST_FIXTURE_PREFIX)/endothers-sources/endothers.inc: rach2/sys/syscall_proc.c $(HOST_EXTRACT)
 	@mkdir -p $(@D)
-	$(HOST_EXTRACT) $@ -f rach2/sys/syscall_proc.c proc_end_others
+	$(HOST_EXTRACT) $@ -f rach2/sys/syscall_proc.c proc_end_others exec_alone exec_one_thread
 
 $(HOST_FIXTURE_PREFIX)/endothers: tests/host/fixtures/endothers.c $(HOST_FIXTURE_PREFIX)/endothers-sources/endothers.inc $(HOST_EXTRACT) rach2/sys/syscall_proc.c $(HOST_KERNEL_FIXTURE_INPUTS)
 	@mkdir -p $(HOST_FIXTURE_PREFIX)/endothers-sources

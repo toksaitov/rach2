@@ -9,6 +9,7 @@
 #include "i915_drm.h"
 #include "i915_reg.h"
 
+#include "../../dmabuf/dmabuf.h"
 #include "../../klog.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/kirq.h"
@@ -279,6 +280,8 @@ uint32_t intel_fb_ggtt(const struct drm_framebuffer *fb)
 {
     struct drm_i915_private *i915 = to_i915(fb->dev);
     const struct i915_vma *vma;
+    uint32_t addr = 0;
+    int taken;
 
     if (fb_is_firmware(fb)) {
         return i915->display.fw_ggtt;
@@ -286,30 +289,41 @@ uint32_t intel_fb_ggtt(const struct drm_framebuffer *fb)
     if (fb->obj[0]->funcs != &i915_gem_object_funcs) {
         return 0;
     }
+    /* The object's bindings are the GEM lock's, which a submission on
+     * another processor holds while it binds the object. */
+    taken = i915_gem_lock(i915);
     for (vma = ((const struct drm_i915_gem_object *)fb->obj[0])->vmas; vma; vma = vma->obj_next) {
         if (vma->view_pages == 0 && vma->pin_count > 0) {
-            return (uint32_t)vma->start;
+            addr = (uint32_t)vma->start;
+            break;
         }
     }
-    return 0;
+    i915_gem_unlock(i915, taken);
+    return addr;
 }
 
 uint32_t intel_fb_ggtt_remapped(const struct drm_framebuffer *fb,
                                 const struct i915_remap_info *remap)
 {
+    struct drm_i915_private *i915 = to_i915(fb->dev);
     const struct i915_vma *vma;
+    uint32_t addr = 0;
+    int taken;
 
     if (fb->obj[0]->funcs != &i915_gem_object_funcs) {
         return 0;
     }
+    taken = i915_gem_lock(i915);
     for (vma = ((const struct drm_i915_gem_object *)fb->obj[0])->vmas; vma; vma = vma->obj_next) {
         if (vma->pin_count > 0 && vma->remap.width == remap->width &&
             vma->remap.height == remap->height && vma->remap.offset == remap->offset &&
             vma->remap.src_stride == remap->src_stride) {
-            return (uint32_t)vma->start;
+            addr = (uint32_t)vma->start;
+            break;
         }
     }
-    return 0;
+    i915_gem_unlock(i915, taken);
+    return addr;
 }
 
 /** Pin the framebuffer of the plane state `ps` for scanout, through the
@@ -319,7 +333,10 @@ uint32_t intel_fb_ggtt_remapped(const struct drm_framebuffer *fb,
 static int32_t fb_pin(const struct drm_plane_state *ps, struct i915_vma **vma)
 {
     struct drm_framebuffer *fb = ps->fb;
+    struct drm_i915_private *i915;
     struct i915_remap_info remap;
+    int32_t rc;
+    int taken;
 
     *vma = NULL;
     if (fb_is_firmware(fb)) {
@@ -328,16 +345,26 @@ static int32_t fb_pin(const struct drm_plane_state *ps, struct i915_vma **vma)
     if (fb->obj[0]->funcs != &i915_gem_object_funcs) {
         return -EINVAL;
     }
-    return i915_gem_object_pin_to_display((struct drm_i915_gem_object *)fb->obj[0],
-                                          intel_plane_remap(ps, &remap) ? &remap : NULL,
-                                          INTEL_SCANOUT_ALIGN, vma);
+    i915 = to_i915(fb->obj[0]->dev);
+    taken = i915_gem_lock(i915);
+    rc = i915_gem_object_pin_to_display((struct drm_i915_gem_object *)fb->obj[0],
+                                        intel_plane_remap(ps, &remap) ? &remap : NULL,
+                                        INTEL_SCANOUT_ALIGN, vma);
+    i915_gem_unlock(i915, taken);
+    return rc;
 }
 
 /** Let a scanout go: its pin and its hold on the framebuffer. */
 static void scanout_put(struct intel_scanout *s)
 {
+    struct drm_i915_private *i915;
+    int taken;
+
     if (s->vma) {
+        i915 = to_i915(s->vma->obj->base.dev);
+        taken = i915_gem_lock(i915);
         i915_vma_unpin(s->vma);
+        i915_gem_unlock(i915, taken);
     }
     drm_framebuffer_put(s->fb);
     s->fb = NULL;
@@ -415,17 +442,18 @@ static void scanout_rotate(struct intel_crtc *c, int slot, struct intel_scanout 
 static void flip_boost(struct intel_crtc *c, const struct drm_plane_state *ps)
 {
     struct drm_framebuffer *fb = ps->fb;
-    struct dma_fence *f = ps->fence;
+    struct dma_fence *f = dma_fence_get(ps->fence);
 
     if (!f) {
         if (fb_is_firmware(fb) || fb->obj[0]->funcs != &i915_gem_object_funcs) {
             return;
         }
-        f = fb->obj[0]->resv->write;
+        f = dma_resv_get_write(fb->obj[0]->resv);
     }
     if (f && !dma_fence_is_signaled(f)) {
         intel_crtc_boost_after_vblank(c, f);
     }
+    dma_fence_put(f);
 }
 
 /**
@@ -461,7 +489,7 @@ static void commit_fence_wait(struct drm_device *dev, struct dma_fence *fence)
 static void interactive_handover(struct drm_i915_private *i915, uint32_t pipes, int32_t err)
 {
     struct intel_display *d = &i915->display;
-    uint32_t flags = kirq_save();
+    uint32_t flags = spin_lock_irqsave(&i915->drm.event_lock);
     int pipe, slot;
 
     /* A flip the core ended with no vblank, on a pipe a queued commit
@@ -482,7 +510,7 @@ static void interactive_handover(struct drm_i915_private *i915, uint32_t pipes, 
     if (slot < I915_NUM_PIPES && d->rps_marks[slot]) {
         i915_rps_mark_interactive(i915, 1);
     }
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&i915->drm.event_lock, flags);
     i915_rps_mark_interactive(i915, 0);
 }
 
@@ -1084,9 +1112,9 @@ static void intel_crtc_disable(struct drm_crtc *crtc, struct drm_atomic_state *s
     if (!state->crtcs_new[crtc->index]->active) {
         intel_wm_commit(c, state, 1);
     }
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&i915->drm.event_lock);
     intel_crtc_send_event(c);
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&i915->drm.event_lock, flags);
 }
 
 /** Before the planes: a pipe that comes on turned on, as Linux's commit
@@ -1586,6 +1614,7 @@ int32_t intel_display_init(struct drm_i915_private *i915)
     int pipe;
 
     d->bl_index = -1;
+    spin_lock_init(&d->bl_lock, "intel_backlight_lock");
     /* The PLLs first, as Linux's intel_shared_dpll_init comes before its
      * readout: a WRPLL's port clock needs the non-SSC reference. */
     intel_dpll_init(i915);

@@ -182,15 +182,31 @@ static int32_t check_surface(const struct drm_plane_state *ps)
     return 0;
 }
 
+static int32_t fb_attach(struct drm_framebuffer *fb, struct drm_i915_gem_object *obj);
+
+/* The object's tiling and `fb_refs` are read and changed under the GEM
+ * lock, as SET_TILING changes them. */
 int32_t intel_fb_create(struct drm_device *dev, struct drm_framebuffer *fb)
 {
     struct drm_i915_gem_object *obj = (struct drm_i915_gem_object *)fb->obj[0];
-    uint32_t rows;
+    int32_t rc;
+    int taken;
 
-    (void)dev;
     if (!obj || obj->base.funcs != &i915_gem_object_funcs) {
         return 0;
     }
+    taken = i915_gem_lock(to_i915(dev));
+    rc = fb_attach(fb, obj);
+    i915_gem_unlock(to_i915(dev), taken);
+    return rc;
+}
+
+/** The checks of `intel_fb_create` of `fb` on `obj`, and its count on the
+ * object, under the GEM lock: 0 or -EINVAL. */
+static int32_t fb_attach(struct drm_framebuffer *fb, struct drm_i915_gem_object *obj)
+{
+    uint32_t rows;
+
     if (fb->flags & DRM_MODE_FB_MODIFIERS) {
         /* The planes take linear and X tiles alone, so the core let no
          * other modifier through. */
@@ -223,8 +239,12 @@ void intel_fb_destroy(struct drm_framebuffer *fb)
 {
     struct drm_i915_gem_object *obj = (struct drm_i915_gem_object *)fb->obj[0];
 
+    int taken;
+
     if (obj && obj->base.funcs == &i915_gem_object_funcs) {
+        taken = i915_gem_lock(to_i915(obj->base.dev));
         obj->fb_refs--;
+        i915_gem_unlock(to_i915(obj->base.dev), taken);
     }
 }
 
@@ -374,12 +394,15 @@ static void flush_damage(const struct drm_plane_state *ps)
     const struct drm_framebuffer *fb = ps->fb;
     const struct drm_mode_rect *r;
     uint32_t i, n;
+    int taken;
 
     if (!ps->fb_damage_clips || fb->obj[0]->funcs != &i915_gem_object_funcs) {
         return;
     }
     r = (const struct drm_mode_rect *)ps->fb_damage_clips->data;
     n = ps->fb_damage_clips->length / (uint32_t)sizeof(*r);
+    /* The object's pages are the GEM lock's. */
+    taken = i915_gem_lock(to_i915(fb->dev));
     for (i = 0; i < n; i++) {
         if (r[i].y2 <= r[i].y1 || r[i].y1 < 0) {
             continue;
@@ -388,6 +411,7 @@ static void flush_damage(const struct drm_plane_state *ps)
                                     fb->offsets[0] + (uint64_t)r[i].y1 * fb->pitches[0],
                                     fb->offsets[0] + (uint64_t)r[i].y2 * fb->pitches[0]);
     }
+    i915_gem_unlock(to_i915(fb->dev), taken);
 }
 
 /* ------------------------------------------------------------------------

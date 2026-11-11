@@ -21,6 +21,7 @@
 #include "../mm/usercopy.h"
 #include "../proc/percpu.h"
 #include "../proc/process.h"
+#include "../proc/smp.h"
 
 /* Linux's O_EXCL, which an open of a node refuses with EBUSY. */
 #define DRM_O_EXCL 0200
@@ -117,17 +118,32 @@ void drm_dev_init(struct drm_device *dev, const struct drm_driver *driver)
     dev->refs = 1;
     spin_lock_init(&dev->object_lock, "drm_object_lock");
     spin_lock_init(&dev->event_lock, "drm_event_lock");
-    wait_queue_init(&dev->commit_wait);
+    spin_lock_init(&dev->vbl_lock, "drm_vbl_lock");
+    mutex_init(&dev->mode_lock, "drm_mode_lock");
 }
 
 void drm_dev_get(struct drm_device *dev)
 {
-    dev->refs++;
+    uint32_t old;
+
+    do {
+        old = dev->refs;
+    } while (arch_atomic_cmpxchg((volatile unsigned int *)&dev->refs, old, old + 1u) != old);
 }
 
+/* Atomic, as Linux's kref (drm_drv.c:810-829), since a buffer object's
+ * last reference, which holds the device, may go on any processor. */
 void drm_dev_put(struct drm_device *dev)
 {
-    if (!dev || --dev->refs > 0) {
+    uint32_t old;
+
+    if (!dev) {
+        return;
+    }
+    do {
+        old = dev->refs;
+    } while (arch_atomic_cmpxchg((volatile unsigned int *)&dev->refs, old, old - 1u) != old);
+    if (old != 1u) {
         return;
     }
     if (dev->index >= 0 && devices[dev->index] == dev) {
@@ -239,6 +255,7 @@ int32_t drm_dev_register(struct drm_device *dev)
     if (i == DRM_MAX_DEVICES) {
         return -ENOSPC;
     }
+    (void)drm_atomic_worker_start();
     if (!dev->unique[0]) {
         default_unique(dev);
     }
@@ -303,7 +320,15 @@ void drm_dev_unplug(struct drm_device *dev)
     if (dev->unplugged) {
         return;
     }
-    dev->unplugged = 1;
+    /* Set under the mode lock, which a KMS row holds when it tests it, so
+     * that a row under way ends before the display goes. */
+    if (drm_core_check_feature(dev, DRIVER_MODESET)) {
+        drm_modeset_lock_nointr(dev);
+        dev->unplugged = 1;
+        drm_modeset_unlock(dev);
+    } else {
+        dev->unplugged = 1;
+    }
     if (dev->registered) {
         drm_debugfs_unregister(dev);
         drm_sysfs_unregister(dev);
@@ -465,14 +490,19 @@ static void drm_file_release(struct drm_file *file)
     drm_dev_put(dev);
 }
 
-/** The close of a node's last descriptor of an open file description. */
+/** The close of a node's last descriptor of an open file description,
+ * which the descriptor's release calls without the big lock: the release
+ * of the file reaches the display, the syncobjs and the driver, and takes
+ * it. */
 static void drm_node_close(fd_entry_t *e)
 {
     struct drm_file *file = (struct drm_file *)e->priv;
 
     if (file) {
         e->priv = NULL;
+        bkl_enter();
         drm_file_release(file);
+        bkl_exit();
     }
 }
 
@@ -509,6 +539,28 @@ static void pending_unlink(struct drm_pending_event *e)
     e->pending_next = NULL;
 }
 
+/** Queue `e`, whose fence is already taken off, on its file and wake the
+ * reader, or free it when it has no file. The event lock of `e`'s device
+ * is held. */
+static void event_queue_locked(struct drm_pending_event *e)
+{
+    struct drm_file *file = e->dev ? e->file : NULL;
+
+    if (!file) {
+        kfree(e);
+        return;
+    }
+    pending_unlink(e);
+    e->next = NULL;
+    if (file->events_tail) {
+        file->events_tail->next = e;
+    } else {
+        file->events = e;
+    }
+    file->events_tail = e;
+    wq_wake(&file->event_wait, WQ_DATA);
+}
+
 /**
  * As Linux's drm_send_event_helper (drm_file.c:727-760): the event's file
  * is read, and its reader woken, under the event lock of the device it was
@@ -518,7 +570,6 @@ static void pending_unlink(struct drm_pending_event *e)
  */
 void drm_send_event(struct drm_pending_event *e)
 {
-    struct drm_file *file;
     struct drm_device *dev = e->dev;
     struct dma_fence *fence = e->fence;
     uint32_t flags;
@@ -533,22 +584,20 @@ void drm_send_event(struct drm_pending_event *e)
         return;
     }
     flags = spin_lock_irqsave(&dev->event_lock);
-    file = e->file;
-    if (file) {
-        pending_unlink(e);
-        e->next = NULL;
-        if (file->events_tail) {
-            file->events_tail->next = e;
-        } else {
-            file->events = e;
-        }
-        file->events_tail = e;
-        wq_wake(&file->event_wait, WQ_DATA);
-    }
+    event_queue_locked(e);
     spin_unlock_irqrestore(&dev->event_lock, flags);
-    if (!file) {
-        kfree(e);
+}
+
+void drm_send_event_locked(struct drm_pending_event *e)
+{
+    struct dma_fence *fence = e->fence;
+
+    e->fence = NULL;
+    if (fence) {
+        dma_fence_signal(fence);
+        dma_fence_put(fence);
     }
+    event_queue_locked(e);
 }
 
 void drm_event_cancel_free(struct drm_pending_event *e)
@@ -691,8 +740,11 @@ static int32_t drm_node_mmap(fd_entry_t *e, struct vma *vma)
     return drm_gem_mmap((struct drm_file *)e->priv, vma);
 }
 
-static const struct file_ops drm_fops = {drm_read,       NULL,          drm_poll, drm_node_ioctl,
-                                         drm_node_close, drm_node_mmap, NULL,     0};
+/* read and poll take only the event lock; ioctl takes the big lock for a
+ * row without DRM_UNLOCKED, and close for the file's release. */
+static const struct file_ops drm_fops = {
+    drm_read,       NULL,          drm_poll, drm_node_ioctl,
+    drm_node_close, drm_node_mmap, NULL,     FILE_OPS_UNLOCKED};
 
 /** Whether the held descriptor belongs to this DRM core's node operations. */
 int drm_is_file(const fd_entry_t *entry)
@@ -729,50 +781,55 @@ static const struct drm_ioctl_desc drm_ioctls[] = {
     DRM_IOCTL_DEF(DRM_IOCTL_ADD_DRAW, drm_noop, DRM_AUTH | DRM_MASTER | DRM_ROOT_ONLY),
     DRM_IOCTL_DEF(DRM_IOCTL_RM_DRAW, drm_noop, DRM_AUTH | DRM_MASTER | DRM_ROOT_ONLY),
     DRM_IOCTL_DEF(DRM_IOCTL_FINISH, drm_noop, DRM_AUTH),
-    DRM_IOCTL_DEF(DRM_IOCTL_WAIT_VBLANK, drm_wait_vblank_ioctl, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_WAIT_VBLANK, drm_wait_vblank_ioctl, DRM_UNLOCKED | DRM_KMS),
     DRM_IOCTL_DEF(DRM_IOCTL_UPDATE_DRAW, drm_noop, DRM_AUTH | DRM_MASTER | DRM_ROOT_ONLY),
 
     DRM_IOCTL_DEF(DRM_IOCTL_GEM_CLOSE, drm_gem_close_ioctl, DRM_RENDER_ALLOW),
     DRM_IOCTL_DEF(DRM_IOCTL_GEM_FLINK, drm_gem_flink_ioctl, DRM_AUTH),
     DRM_IOCTL_DEF(DRM_IOCTL_GEM_OPEN, drm_gem_open_ioctl, DRM_AUTH),
 
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETRESOURCES, drm_mode_getresources, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETRESOURCES, drm_mode_getresources, DRM_MODESET_LOCK),
 
     DRM_IOCTL_DEF(DRM_IOCTL_PRIME_HANDLE_TO_FD, drm_prime_handle_to_fd_ioctl, DRM_RENDER_ALLOW),
     DRM_IOCTL_DEF(DRM_IOCTL_PRIME_FD_TO_HANDLE, drm_prime_fd_to_handle_ioctl, DRM_RENDER_ALLOW),
 
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETPLANERESOURCES, drm_mode_getplane_res, 0),
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETCRTC, drm_mode_getcrtc, 0),
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_SETCRTC, drm_mode_setcrtc, DRM_MASTER),
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETPLANE, drm_mode_getplane, 0),
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_SETPLANE, drm_mode_setplane, DRM_MASTER),
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_CURSOR, drm_mode_cursor_ioctl, DRM_MASTER),
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETGAMMA, drm_mode_gamma_get_ioctl, 0),
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_SETGAMMA, drm_mode_gamma_set_ioctl, DRM_MASTER),
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETENCODER, drm_mode_getencoder, 0),
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETCONNECTOR, drm_mode_getconnector, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETPLANERESOURCES, drm_mode_getplane_res, DRM_MODESET_LOCK),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETCRTC, drm_mode_getcrtc, DRM_MODESET_LOCK),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_SETCRTC, drm_mode_setcrtc, DRM_MASTER | DRM_MODESET_LOCK),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETPLANE, drm_mode_getplane, DRM_MODESET_LOCK),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_SETPLANE, drm_mode_setplane, DRM_MASTER | DRM_MODESET_LOCK),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_CURSOR, drm_mode_cursor_ioctl, DRM_MASTER | DRM_MODESET_LOCK),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETGAMMA, drm_mode_gamma_get_ioctl, DRM_MODESET_LOCK),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_SETGAMMA, drm_mode_gamma_set_ioctl, DRM_MASTER | DRM_MODESET_LOCK),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETENCODER, drm_mode_getencoder, DRM_MODESET_LOCK),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETCONNECTOR, drm_mode_getconnector, DRM_MODESET_LOCK),
     DRM_IOCTL_DEF(DRM_IOCTL_MODE_ATTACHMODE, drm_noop, DRM_MASTER),
     DRM_IOCTL_DEF(DRM_IOCTL_MODE_DETACHMODE, drm_noop, DRM_MASTER),
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETPROPERTY, drm_mode_getproperty_ioctl, 0),
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_SETPROPERTY, drm_connector_property_set_ioctl, DRM_MASTER),
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETPROPBLOB, drm_mode_getblob_ioctl, 0),
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETFB, drm_mode_getfb, 0),
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETFB2, drm_mode_getfb2_ioctl, 0),
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_ADDFB, drm_mode_addfb_ioctl, 0),
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_ADDFB2, drm_mode_addfb2_ioctl, 0),
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_RMFB, drm_mode_rmfb_ioctl, 0),
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_CLOSEFB, drm_mode_closefb_ioctl, 0),
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_PAGE_FLIP, drm_mode_page_flip_ioctl, DRM_MASTER),
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_DIRTYFB, drm_mode_dirtyfb_ioctl, DRM_MASTER),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETPROPERTY, drm_mode_getproperty_ioctl, DRM_MODESET_LOCK),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_SETPROPERTY, drm_connector_property_set_ioctl,
+                  DRM_MASTER | DRM_MODESET_LOCK),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETPROPBLOB, drm_mode_getblob_ioctl, DRM_MODESET_LOCK),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETFB, drm_mode_getfb, DRM_MODESET_LOCK),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETFB2, drm_mode_getfb2_ioctl, DRM_MODESET_LOCK),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_ADDFB, drm_mode_addfb_ioctl, DRM_MODESET_LOCK),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_ADDFB2, drm_mode_addfb2_ioctl, DRM_MODESET_LOCK),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_RMFB, drm_mode_rmfb_ioctl, DRM_MODESET_LOCK),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_CLOSEFB, drm_mode_closefb_ioctl, DRM_MODESET_LOCK),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_PAGE_FLIP, drm_mode_page_flip_ioctl,
+                  DRM_MASTER | DRM_UNLOCKED | DRM_KMS | DRM_MODESET_LOCK),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_DIRTYFB, drm_mode_dirtyfb_ioctl, DRM_MASTER | DRM_MODESET_LOCK),
     DRM_IOCTL_DEF(DRM_IOCTL_MODE_CREATE_DUMB, drm_mode_create_dumb_ioctl, 0),
     DRM_IOCTL_DEF(DRM_IOCTL_MODE_MAP_DUMB, drm_mode_mmap_dumb_ioctl, 0),
     DRM_IOCTL_DEF(DRM_IOCTL_MODE_DESTROY_DUMB, drm_mode_destroy_dumb_ioctl, 0),
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_OBJ_GETPROPERTIES, drm_mode_obj_get_properties_ioctl, 0),
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_OBJ_SETPROPERTY, drm_mode_obj_set_property_ioctl, DRM_MASTER),
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_CURSOR2, drm_mode_cursor2_ioctl, DRM_MASTER),
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_ATOMIC, drm_mode_atomic_ioctl, DRM_MASTER),
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_CREATEPROPBLOB, drm_mode_createblob_ioctl, 0),
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_DESTROYPROPBLOB, drm_mode_destroyblob_ioctl, 0),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_OBJ_GETPROPERTIES, drm_mode_obj_get_properties_ioctl,
+                  DRM_MODESET_LOCK),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_OBJ_SETPROPERTY, drm_mode_obj_set_property_ioctl,
+                  DRM_MASTER | DRM_MODESET_LOCK),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_CURSOR2, drm_mode_cursor2_ioctl, DRM_MASTER | DRM_MODESET_LOCK),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_ATOMIC, drm_mode_atomic_ioctl,
+                  DRM_MASTER | DRM_UNLOCKED | DRM_KMS | DRM_MODESET_LOCK),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_CREATEPROPBLOB, drm_mode_createblob_ioctl, DRM_MODESET_LOCK),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_DESTROYPROPBLOB, drm_mode_destroyblob_ioctl, DRM_MODESET_LOCK),
 
     DRM_IOCTL_DEF(DRM_IOCTL_SYNCOBJ_CREATE, drm_syncobj_create_ioctl, DRM_RENDER_ALLOW),
     DRM_IOCTL_DEF(DRM_IOCTL_SYNCOBJ_DESTROY, drm_syncobj_destroy_ioctl, DRM_RENDER_ALLOW),
@@ -788,12 +845,16 @@ static const struct drm_ioctl_desc drm_ioctls[] = {
     DRM_IOCTL_DEF(DRM_IOCTL_SYNCOBJ_TIMELINE_SIGNAL, drm_syncobj_timeline_signal_ioctl,
                   DRM_RENDER_ALLOW),
     DRM_IOCTL_DEF(DRM_IOCTL_SYNCOBJ_QUERY, drm_syncobj_query_ioctl, DRM_RENDER_ALLOW),
-    DRM_IOCTL_DEF(DRM_IOCTL_CRTC_GET_SEQUENCE, drm_crtc_get_sequence_ioctl, 0),
-    DRM_IOCTL_DEF(DRM_IOCTL_CRTC_QUEUE_SEQUENCE, drm_crtc_queue_sequence_ioctl, 0),
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_CREATE_LEASE, drm_mode_create_lease_ioctl, DRM_MASTER),
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_LIST_LESSEES, drm_mode_list_lessees_ioctl, DRM_MASTER),
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GET_LEASE, drm_mode_get_lease_ioctl, DRM_MASTER),
-    DRM_IOCTL_DEF(DRM_IOCTL_MODE_REVOKE_LEASE, drm_mode_revoke_lease_ioctl, DRM_MASTER),
+    DRM_IOCTL_DEF(DRM_IOCTL_CRTC_GET_SEQUENCE, drm_crtc_get_sequence_ioctl, DRM_MODESET_LOCK),
+    DRM_IOCTL_DEF(DRM_IOCTL_CRTC_QUEUE_SEQUENCE, drm_crtc_queue_sequence_ioctl, DRM_MODESET_LOCK),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_CREATE_LEASE, drm_mode_create_lease_ioctl,
+                  DRM_MASTER | DRM_MODESET_LOCK),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_LIST_LESSEES, drm_mode_list_lessees_ioctl,
+                  DRM_MASTER | DRM_MODESET_LOCK),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_GET_LEASE, drm_mode_get_lease_ioctl,
+                  DRM_MASTER | DRM_MODESET_LOCK),
+    DRM_IOCTL_DEF(DRM_IOCTL_MODE_REVOKE_LEASE, drm_mode_revoke_lease_ioctl,
+                  DRM_MASTER | DRM_MODESET_LOCK),
 };
 
 #define DRM_CORE_IOCTLS ((int)(sizeof(drm_ioctls) / sizeof(drm_ioctls[0])))
@@ -831,6 +892,54 @@ static int32_t ioctl_permit(uint32_t flags, const struct drm_file *file)
         return -EACCES;
     }
     return 0;
+}
+
+/**
+ * Call `row`'s handler on `kdata` for `file` if the file may call it. The
+ * master rules and every handler not marked DRM_UNLOCKED run under the big
+ * lock, and so does a DRM_KMS row on a device without DRIVER_KMS_UNLOCKED;
+ * an unlocked row takes it only to ask whether the file is master, as
+ * Linux's drm_is_current_master takes master_mutex. A DRM_MODESET_LOCK row
+ * then holds the device's `mode_lock`, taken after the big lock and with
+ * a signal ending the wait for it (-EINTR), and finds the device unplugged
+ * only while it holds it, so that an unplug waits for it to end.
+ */
+static int32_t ioctl_call(struct drm_device *dev, const struct drm_ioctl_desc *row, void *kdata,
+                          struct drm_file *file)
+{
+    int unlocked = (row->flags & DRM_UNLOCKED) &&
+                   (!(row->flags & DRM_KMS) || drm_core_check_feature(dev, DRIVER_KMS_UNLOCKED));
+    int big = !unlocked || (row->flags & DRM_MASTER);
+    int mode = (row->flags & DRM_MODESET_LOCK) != 0;
+    int32_t rc;
+
+    if (big) {
+        bkl_enter();
+    }
+    /* Linux's drm_file_update_pid: a file passed on is the user's now,
+     * unless it was master, whose owner the master rules keep. */
+    if (!file->was_master && current_proc) {
+        file->pid = current_proc->tgid;
+    }
+    rc = dev->unplugged ? -ENODEV : ioctl_permit(row->flags, file);
+    if (big && unlocked) {
+        bkl_exit();
+        big = 0;
+    }
+    if (rc == 0 && mode && (rc = drm_modeset_lock(dev)) == 0 && dev->unplugged) {
+        rc = -ENODEV;
+        drm_modeset_unlock(dev);
+    }
+    if (rc == 0) {
+        rc = row->func(dev, kdata, file);
+        if (mode) {
+            drm_modeset_unlock(dev);
+        }
+    }
+    if (big) {
+        bkl_exit();
+    }
+    return rc;
 }
 
 int32_t drm_ioctl(struct drm_file *file, uint32_t cmd, uintptr_t arg)
@@ -880,15 +989,7 @@ int32_t drm_ioctl(struct drm_file *file, uint32_t cmd, uintptr_t arg)
     if (ksize > in_size) {
         k_memset(kdata + in_size, 0, ksize - in_size);
     }
-    /* Linux's drm_file_update_pid: a file passed on is the user's now,
-     * unless it was master, whose owner the master rules keep. */
-    if (!file->was_master && current_proc) {
-        file->pid = current_proc->tgid;
-    }
-    rc = dev->unplugged ? -ENODEV : ioctl_permit(row->flags, file);
-    if (rc == 0) {
-        rc = row->func(dev, kdata, file);
-    }
+    rc = ioctl_call(dev, row, kdata, file);
     if (out_size && copy_to_user((void __user *)arg, kdata, out_size) != 0) {
         rc = -EFAULT;
     }

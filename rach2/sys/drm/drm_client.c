@@ -593,6 +593,9 @@ static void con_flush(void)
     dev = con.dev;
     fb = con.fb;
     drm_dev_get(dev);
+    /* A framebuffer's references and its flush are the mode lock's, which
+     * a commit on another processor may hold without the big lock. */
+    drm_modeset_lock_nointr(dev);
     drm_framebuffer_get(fb);
     r.x1 = 0;
     r.y1 = (int32_t)top;
@@ -600,6 +603,7 @@ static void con_flush(void)
     r.y2 = (int32_t)end;
     (void)drm_framebuffer_dirty(dev, fb, &r);
     drm_framebuffer_put(fb);
+    drm_modeset_unlock(dev);
     drm_dev_put(dev);
 }
 
@@ -855,7 +859,9 @@ void drm_client_dev_unregister(struct drm_device *dev)
     kfree(con.shadow);
     con.shadow = NULL;
     con.shadow_bytes = 0;
+    drm_modeset_lock_nointr(dev);
     drm_framebuffer_put(con.fb);
+    drm_modeset_unlock(dev);
     drm_gem_object_put(con.obj);
     con.fb = NULL;
     con.obj = NULL;

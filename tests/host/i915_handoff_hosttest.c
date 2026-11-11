@@ -18,6 +18,9 @@
  * host-deps: rach2/sys/drm/i915/i915_rc6.c rach2/sys/drm/i915/i915_rps.c
  * host-deps: rach2/sys/drm/i915/intel_opregion.c
  * host-deps: rach2/sys/drm/i915/i915_aperture.c rach2/sys/drm/i915/i915_fence.c
+ * host-deps: tests/host/compat/resv_host.c
+ * host-deps: tests/host/compat/i915_gem_lock_host.c
+ * host-deps: tests/host/compat/mutex_none.c
  * host-inputs: tests/fixtures/lenovo-gpu/i915_opregion.bin
  *
  * The whole driver stands on the model: the bind of i915_pci.c with its
@@ -627,6 +630,14 @@ void register_isr_handler(uint8_t vector, isr_handler_t h, const char *name)
     handler_vector = vector;
 }
 
+/** Take the handler's flag, which a test of one thread does not need. */
+void isr_register_flags(uint8_t vector, isr_handler_t handler, unsigned int flags)
+{
+    (void)vector;
+    (void)handler;
+    (void)flags;
+}
+
 /* ---- /sys: the entries drivers add, as fs/sysfs.h has them ---- */
 
 #define SYS_NODES 32
@@ -937,7 +948,7 @@ void drm_dev_init(struct drm_device *dev, const struct drm_driver *driver)
     dev->features = driver->ident.features;
     dev->index = -1;
     dev->refs = 1;
-    wait_queue_init(&dev->commit_wait);
+    mutex_init(&dev->mode_lock, "drm_mode_lock");
 }
 
 void drm_dev_get(struct drm_device *dev)

@@ -1409,33 +1409,31 @@ static void nc_choose_boot_id(void)
 }
 
 /**
- * Read `netpoll.carrier_timeout=`, in seconds, into `nc_carrier_ticks`, as
- * Linux reads that uint module parameter: each occurrence in order, as
- * `parse_args` applies them (kernel/params.c:161-186), each value read by
+ * Linux reads that uint module parameter on every boot, in
+ * `parse_args("Booting kernel", ...)` (init/main.c:912-915): each
+ * occurrence in the line's order (kernel/params.c:161-186), each value by
  * `param_set_uint`, which is `kstrtouint` with base 0 (kernel/params.c:238),
- * so `0x10` is 16 and `010` is 8, at any length. A value it refuses changes
- * nothing and is logged, as `parse_args` logs it (kernel/params.c:202-205),
- * and so is each bare `netpoll.carrier_timeout`, which `parse_one` refuses
- * for a parameter that takes a value (kernel/params.c:136-138). The last
- * value taken counts; with none, Linux's default of 4 stays.
+ * so `0x10` is 16 and `010` is 8, at any length. A value it refuses, and a
+ * bare `netpoll.carrier_timeout`, which `parse_one` refuses for a parameter
+ * that takes a value (kernel/params.c:136-138), change nothing and are
+ * logged where they are met (kernel/params.c:202-205). The last value taken
+ * counts; with none, Linux's default of 4 stays.
  */
-static void nc_read_carrier_timeout(void)
+void netconsole_read_params(void)
 {
     static const char key[] = "netpoll.carrier_timeout";
     char value[BOOT_CMDLINE_MAX];
     unsigned long v;
-    int n = kcmdline_count(key), i;
+    int i, kind;
 
-    for (i = 0; i < n; i++) {
-        if (!kcmdline_value_nth(key, i, value, sizeof(value)) ||
-            k_strtoul(value, sizeof(value), &v) != 0 || v > 0xFFFFFFFFul) {
+    for (i = 0; (kind = kcmdline_param_nth(key, i, value, sizeof(value))) >= 0; i++) {
+        if (kind == 0) {
+            klog(KLOG_ERR, "netconsole", "refused: %s", key);
+        } else if (k_strtoul(value, sizeof(value), &v) != 0 || v > 0xFFFFFFFFul) {
             klog(KLOG_ERR, "netconsole", "refused: %s=%s", key, value);
-            continue;
+        } else {
+            nc_carrier_ticks = (uint64_t)v * TICK_HZ;
         }
-        nc_carrier_ticks = (uint64_t)v * TICK_HZ;
-    }
-    for (i = kcmdline_bare_count(key); i > 0; i--) {
-        klog(KLOG_ERR, "netconsole", "refused: %s", key);
     }
 }
 
@@ -1494,7 +1492,6 @@ int netconsole_setup(const char *config, int frames)
     if (frames && !nc_enabled) {
         nc_choose_boot_id();
     }
-    nc_read_carrier_timeout();
 
     flags = net_lock();
     for (t = first; t; t = t->next) {
@@ -1519,7 +1516,6 @@ void netconsole_enable(void)
         return;
     }
     nc_choose_boot_id();
-    nc_read_carrier_timeout();
     nc_begin(&nc_frames_start);
     nc_enabled = 1;
     netconsole_flush();

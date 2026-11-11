@@ -9,6 +9,9 @@
  * host-deps: rach2/sys/lib/kstd.c
  * host-deps: rach2/sys/lib/kctypes.c tests/host/compat/spinlock_host.c
  * host-deps: rach2/sys/drm/i915/intel_bios.c rach2/sys/drm/i915/i915_power.c
+ * host-deps: tests/host/compat/resv_host.c
+ * host-deps: tests/host/compat/i915_gem_lock_host.c
+ * host-deps: tests/host/compat/mutex_none.c
  * host-inputs: tests/fixtures/lenovo-gpu/i915_vbt.bin
  *
  * The rows follow the trial's step in its order: the bind's adoption of
@@ -1196,4 +1199,10 @@ int main(void)
         printf("i915-kms-trial-test: ok\n");
     }
     return failures != 0;
+}
+
+/** Nothing to wait for: the model's handler runs only when a row calls it. */
+void i915_irq_sync(struct drm_i915_private *i915)
+{
+    (void)i915;
 }

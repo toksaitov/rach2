@@ -9,3 +9,9 @@ void bkl_enter(void)
 /** Release the big lock. */
 void bkl_exit(void)
 {}
+
+/** Whether this processor holds the big lock: never, with nothing taken. */
+int bkl_held(void)
+{
+    return 0;
+}

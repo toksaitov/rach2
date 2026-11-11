@@ -112,8 +112,10 @@ void klog_report_end(int how);
  * (`klog_flush_stuck`), after the records a delivery the panic stopped left
  * in the queue; inside another record's delivery or a console write, put
  * them in the ring and the queue, ahead of what comes next, for that
- * delivery or write to write out when it ends. Nothing otherwise, and
- * nothing, with no interrupt bracket, while none is kept. */
+ * delivery or write to write out when it ends; outside them, send
+ * netconsole the records `klog_flush_stuck` held for it. Nothing
+ * otherwise, and nothing, with no interrupt bracket, while none is kept
+ * or held. */
 void klog_flush(void);
 
 /** Whether records are kept for later. */
@@ -125,10 +127,13 @@ int klog_kept(void);
  * reported the holder of the big lock locked up: that one would never
  * write them, and Linux writes such a report from the processor that found
  * it. One processor at a time does, and only the records kept when it
- * began. It does nothing while the holder is writing klog's state itself,
- * a record, a console write or a console byte, and the holder, should it
- * come back meanwhile, keeps its records for later until this is done and
- * waits for it before a console byte goes out.
+ * began. They go to the ring, the screen and the serial port; netconsole's
+ * share is held for the next processor that may write klog's state, or the
+ * panic, since netconsole and the network stack below it have no guard but
+ * the big lock. It does nothing while the holder is writing klog's state
+ * itself, a record, a console write or a console byte, and the holder,
+ * should it come back meanwhile, keeps its records for later until this is
+ * done and waits for it before a console byte goes out.
  */
 void klog_flush_stuck(void);
 

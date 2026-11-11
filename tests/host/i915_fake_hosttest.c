@@ -15,6 +15,8 @@
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/mm/frame.c tests/host/compat/spinlock_host.c
  * host-deps: rach2/sys/drm/i915/i915_aperture.c rach2/sys/drm/i915/i915_fence.c
+ * host-deps: tests/host/compat/i915_gem_lock_host.c
+ * host-deps: tests/host/compat/mutex_none.c
  *
  * i915_fake.c is included whole, which reaches its record and its
  * debugfs file's operations. The bus holds one edu function, 00:04.0,
@@ -458,6 +460,14 @@ void register_isr_handler(uint8_t vector, isr_handler_t h, const char *name)
     (void)vector;
     (void)h;
     (void)name;
+}
+
+/** Take the handler's flag, which a test of one thread does not need. */
+void isr_register_flags(uint8_t vector, isr_handler_t handler, unsigned int flags)
+{
+    (void)vector;
+    (void)handler;
+    (void)flags;
 }
 
 /* No process waits on a ring in these rows. */
