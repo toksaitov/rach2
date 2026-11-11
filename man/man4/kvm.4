@@ -940,6 +940,8 @@ hard-lockup detector does not hold, each on one its event may use by
 Linux's event constraints for the processor's model, and a guest fixed
 counter may run on a general counter with the fixed counter's event;
 one left without a counter does not count.
+On Haswell a guest counter takes fixed counter 0 only when no general
+counter its event may use is free.
 Intel's PERF_CAPABILITIES offers full-width counter writes and, on a
 processor with a legacy LBR stack of format 4 or later, the host's LBR
 format.

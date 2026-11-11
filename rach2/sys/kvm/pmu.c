@@ -234,13 +234,17 @@ static const struct {
  * 17h and later merge a counter pair for a large-increment event. The LBR
  * stack is Intel's legacy one, of `lbr_nr` records, with information MSRs
  * when `lbr_info`; `lbr_quirk` is Linux's lbr_from_signext_quirk_wr, and
- * `model` the processor's, which a guest with the stack must have. */
+ * `model` the processor's, which a guest with the stack must have.
+ * `fixed0_last` places a guest counter on fixed counter 0 only when no
+ * general counter it may use is free: Haswell's fixed counter 0, counting
+ * retired instructions with no general counter counting them beside it,
+ * overcounts a guest's window now and then. */
 struct pmu_host {
     int intel, core_ext, pdcm;
     uint32_t version, nr_gp, nr_fixed, width, fixed_width;
     uint32_t event_length, unavailable;
     const struct constraint *table;
-    int cp;
+    int cp, fixed0_last;
     uint32_t family;
     uint64_t lbr_format;
     uint32_t lbr_nr, model;
@@ -412,6 +416,7 @@ static void intel_table(void)
         if (intel_tables[i].model == cpu_model(a)) {
             pmu_host.table = intel_tables[i].table;
             pmu_host.cp = intel_tables[i].cp;
+            pmu_host.fixed0_last = pmu_host.table == c_hsw;
         }
     }
 }
@@ -1413,13 +1418,35 @@ static int slot_running(const struct kvm_pmu *p, uint32_t s)
     return (p->run_fixed & (1u << (s - KVM_PMU_GP_MAX))) != 0;
 }
 
-/** The next of `want`'s counters after `n`, in Linux's order of
- * preference: fixed counters first, then general ones from 0
- * (arch/x86/events/core.c:880-905); 64 after the last. Begin with 64. */
+/** The counter after `n` in the order of preference: Linux's, fixed
+ * counters first and then general ones from 0 (arch/x86/events/core.c:
+ * 880-905), but with fixed counter 0 after the general ones where
+ * `fixed0_last` says; 64 after the last, and the first after 64. */
+static uint32_t counter_after(uint32_t n)
+{
+    int last = pmu_host.fixed0_last;
+
+    if (n == 64u) {
+        return last ? 33u : 32u;
+    }
+    if (n == 63u) {
+        return 0;
+    }
+    if (n == 31u) {
+        return last ? 32u : 64u;
+    }
+    if (n == 32u && last) {
+        return 64u;
+    }
+    return n + 1u;
+}
+
+/** The next of `want`'s counters after `n` in the order of preference; 64
+ * after the last. Begin with 64. */
 static uint32_t next_counter(uint64_t want, uint32_t n)
 {
     for (;;) {
-        n = n == 64u ? 32u : n == 31u ? 64u : n == 63u ? 0u : n + 1u;
+        n = counter_after(n);
         if (n == 64u || (want & (1ull << n))) {
             return n;
         }
