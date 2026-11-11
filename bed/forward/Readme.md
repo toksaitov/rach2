@@ -12,11 +12,11 @@ On the x86-64 GNU root, as root, with the guest's disk, the key of its user and 
 
 `forward.sh` boots the guest in the root's `qemu-system-x86_64` with `virtio-vga-gl` on `-display egl-headless,rendernode=/dev/dri/renderD128`, waits for the guest's SSH server on port 2222 of the loopback address (`-p`), copies the archive in, runs `scene.sh` as the guest's user `gfx`, copies the scene's output out and powers the guest off. `-a` is the accelerator, `kvm` by default and `tcg` for QEMU's emulator; `-c` and `-m` are the guest's processors and memory, 4 and 4096 MiB; `-o` is the directory that gets the guest's console, QEMU's messages, the scene's output and its logs, the working directory by default. `-f` is the disk's format, `raw` for a device and by default, or `qcow2` for the guest's image file itself. `-r` names, for `venus`, the frames file of `vkcube.sh` whose checksums vkcube's frames must have, in place of the archive's `vkcube.ref`, or is `none`, which records the frames and judges none. `RENDER_NODE` names another render node, `QEMU` another QEMU, and for `venus` `VK_DRIVER_FILES` the Vulkan driver the guest's calls are made on, by default Venus's, and `HOSTMEM` the size of the window blobs are mapped in, 4G.
 
-On a machine with a GPU of its own, such as the Lenovo, the runner runs under KVM, the default, and the guest's disk is the image file; `venus` names the GPU's own Vulkan driver, hasvk on the Lenovo, and the frames that Debian in Rach2's place drew on that GPU, since a frame's checksum depends on the GPU that draws it; the Lenovo's are [tests/graphics/ref/lenovo/forward/vkcube.frames](../../tests/graphics/ref/lenovo/forward/vkcube.frames):
+On a machine with a GPU of its own, such as the Lenovo, the runner runs under KVM, the default, and the guest's disk is the image file; `venus` names the GPU's own Vulkan driver, hasvk on the Lenovo, and the frames that Debian in Rach2's place drew on that GPU, since a frame's checksum depends on the GPU that draws it; the Lenovo's are [tests/graphics/ref/lenovo/forward/vkcube.frames](../../tests/graphics/ref/lenovo/forward/vkcube.frames), which the second line passes as a copy in the working directory:
 
     sh forward.sh -f qcow2 -d guest.qcow2 -k id_ed25519 -g guest.tar virgl
     VK_DRIVER_FILES=/usr/share/vulkan/icd.d/intel_hasvk_icd.json \
-        sh forward.sh -f qcow2 -r lenovo.frames -d guest.qcow2 -k id_ed25519 -g guest.tar venus
+        sh forward.sh -f qcow2 -r vkcube.frames -d guest.qcow2 -k id_ed25519 -g guest.tar venus
 
 The same lines run on Debian in Rach2's place, with `-r none` for `venus` when they take the reference.
 
