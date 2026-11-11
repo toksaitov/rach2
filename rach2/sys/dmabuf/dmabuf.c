@@ -130,7 +130,27 @@ static void buf_ready(struct dma_fence *f, struct dma_fence_cb *cb)
     wq_wake_all(&b->wq);
 }
 
-/** Poll snapshots of the reservation, arming callbacks before sleeping. */
+/**
+ * Add the poll callback to the first leaf of a snapshot that accepts it,
+ * as Linux's dma_buf_poll_add_cb (dma-buf.c:234-251): one leaf is
+ * listened for, and the next only when the program polls again, so that
+ * a poll arms no other producer's signal. Returns that leaf with a
+ * reference, or NULL when every leaf has signalled.
+ */
+static struct dma_fence *buf_poll_add_cb(struct dma_fence *snapshot, struct dma_buf_poll_cb *cb)
+{
+    struct dma_fence_unwrap u;
+    struct dma_fence *leaf;
+    for (leaf = dma_fence_unwrap_first(snapshot, &u); leaf; leaf = dma_fence_unwrap_next(&u))
+        if (!dma_fence_add_callback(leaf, &cb->cb, buf_ready)) {
+            dma_fence_get(leaf);
+            dma_fence_unwrap_end(&u);
+            return leaf;
+        }
+    return NULL;
+}
+
+/** Poll snapshots of the reservation, arming a callback before sleeping. */
 static short buf_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     struct dma_buf *b = e->priv;
@@ -149,9 +169,10 @@ static short buf_poll(fd_entry_t *e, short events, struct wait_queue **wq)
         }
         dma_fence_remove_callback(b->poll_fences[i], &b->poll_cb[i].cb);
         dma_fence_put(b->poll_fences[i]);
-        b->poll_fences[i] = f;
         b->poll_cb[i].buf = b;
-        if (dma_fence_add_callback(f, &b->poll_cb[i].cb, buf_ready))
+        b->poll_fences[i] = buf_poll_add_cb(f, &b->poll_cb[i]);
+        dma_fence_put(f);
+        if (!b->poll_fences[i])
             mask |= i ? 4 : 1;
     }
     return mask;

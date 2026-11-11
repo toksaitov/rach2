@@ -34,7 +34,7 @@ struct dma_buf {
     struct dma_resv *resv;
     struct dma_resv own;
     wait_queue_t wq;
-    struct dma_fence *poll_fences[2];
+    struct dma_fence *poll_fences[2]; /* leaf each poll listens on, or NULL */
     struct dma_buf_poll_cb poll_cb[2];
 };
 
