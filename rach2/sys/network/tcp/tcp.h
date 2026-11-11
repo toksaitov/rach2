@@ -257,7 +257,7 @@ struct tcb {
 
     /* Retransmission and congestion control (RFC 6298 / RFC 5681). */
     uint32_t rto;        /* current retransmit timeout (ticks)     */
-    uint32_t rto_timer;  /* countdown to next retransmit; 0 = off  */
+    uint32_t rto_due;    /* tick the retransmit is due, never 0; 0 = off */
     uint32_t srtt;       /* smoothed RTT x 8 (fixed point)         */
     uint32_t rttvar;     /* RTT variance x 4 (fixed point)         */
     uint32_t rtt_start;  /* ticks+1 at RTT sample start; 0 = none  */
@@ -269,7 +269,7 @@ struct tcb {
      * the limit of any other detached block, which each acknowledgement of
      * new data moves TCP_ORPHAN_TICKS ahead. */
     uint32_t timewait_until;
-    uint32_t zwp_timer;     /* zero-window probe countdown; 0 = off   */
+    uint32_t zwp_due;       /* tick the zero-window probe is due; 0 = off */
     uint32_t tx_refused;    /* transmits the driver refused, a count */
     uint32_t refused_since; /* ticks+1 at the first refusal still unresolved; 0 = none */
     /* ticks+1 at the sending of what the first of the timeouts in a row
@@ -507,7 +507,8 @@ struct tcp_row {
     uint32_t inode;
     /* This stack's own view, after Linux's columns: the peer's window, the
      * congestion window, the bytes in flight, the bytes not yet sent, the
-     * retransmission and zero-window timers, the transmits the driver
+     * retransmission and zero-window timers, the ticks left on each, at
+     * least 1 while it runs and 0 when it is off, the transmits the driver
      * refused and how long ago the standing refusal began, in ticks. */
     uint32_t snd_wnd;
     uint32_t cwnd;
