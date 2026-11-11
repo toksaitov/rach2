@@ -7,10 +7,11 @@
 # build must relink nothing, and a changed input must relink all three with its
 # new marker. The kernel is linked with a private linker script, whose edit must
 # reach the kernel, and the kernel a loader reads must have no debug sections
-# and no local symbols while kernel.debug keeps them. The fixture is for the
-# architecture ARCH names, i686 when it is unset, which tests/run gives each
-# case: its compiler, linker script and musl (mk/arch.sh). Each make below is
-# given that architecture, and no flags of a make above.
+# and no symbols but _start and _end while kernel.debug keeps them. The
+# fixture is for the architecture ARCH names, i686 when it is unset, which
+# tests/run gives each case: its compiler, linker script and musl
+# (mk/arch.sh). Each make below is given that architecture, and no flags of a
+# make above.
 set -eu
 RACH2_ARCH=${ARCH:-i686}
 unset ARCH MAKEFLAGS MFLAGS
@@ -114,21 +115,23 @@ if [ "${1:-all}" != libraries ]; then
     touch -t "${future}01010001" "$WORK/link.ld"
     make --no-print-directory -C rach2 -f "$REPO/rach2/Makefile" "ARCH=$RACH2_ARCH" "BUILD=$WORK/kernel" \
         "LINKER_SCRIPT=$WORK/link"
-    "${CROSS}nm" "$WORK/kernel/kernel" | grep -Eq '^0+1234 A review_link_marker$' ||
+    "${CROSS}nm" "$WORK/kernel/kernel.debug" | grep -Eq '^0+1234 A review_link_marker$' ||
         fail "linker script edit did not reach the kernel"
     echo "build-inputs-test: passed: linker script edit reaches the validated kernel"
-    # The loaders read a kernel without debug sections and local symbols, which
-    # is what keeps it inside a boot slot's 4 MiB; GDB reads kernel.debug, which
-    # has them. nm prints a local symbol's type in lowercase.
+    # The loaders read a kernel without debug sections and with no symbols but
+    # _start and _end, which elfcheck compares with the entry and the image
+    # end; that is what keeps it inside a boot slot's 4 MiB. GDB and nm read
+    # kernel.debug, which has them all. nm prints a local symbol's type in
+    # lowercase.
     if "${CROSS}readelf" -S "$WORK/kernel/kernel" | grep -q '\.debug_'; then
         fail "the kernel a loader reads carries debug sections"
     fi
-    if "${CROSS}nm" "$WORK/kernel/kernel" | grep -q ' [a-z] '; then
-        fail "the kernel a loader reads carries local symbols"
-    fi
+    kept=$("${CROSS}nm" "$WORK/kernel/kernel" | awk '{ print $NF }' | sort | tr '\n' ' ')
+    [ "$kept" = "_end _start " ] ||
+        fail "the kernel a loader reads keeps the symbols $kept, not _end and _start alone"
     "${CROSS}readelf" -S "$WORK/kernel/kernel.debug" | grep -q '\.debug_info' ||
         fail "kernel.debug lacks the debug sections"
     "${CROSS}nm" "$WORK/kernel/kernel.debug" | grep -q ' [a-z] ' ||
         fail "kernel.debug lacks the local symbols"
-    echo "build-inputs-test: passed: the kernel has no debug sections or local symbols and kernel.debug keeps them"
+    echo "build-inputs-test: passed: the kernel has no debug sections and no symbols but _start and _end, and kernel.debug keeps them"
 fi
