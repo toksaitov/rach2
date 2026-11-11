@@ -991,6 +991,10 @@ static void row_create_destroy(void)
     CHECK("create: a banned file is EIO",
           make_context(&file_a) == 0 && create_ext(0, 0, 0) == -EIO);
     fp->ban_score = 0;
+    /* The context calls run without the big lock, under the file's context
+     * list lock, which each gives back on every path above. */
+    CHECK("locks: each call, made or refused, gave the file's context list lock back",
+          !mutex_held(&fp->lock) && !mutex_held(&((struct i915_file *)file_b.driver_priv)->lock));
 
     /* Extensions. */
     memset(ext, 0, sizeof(ext));
