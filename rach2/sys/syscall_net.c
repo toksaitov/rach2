@@ -1435,11 +1435,16 @@ static int32_t do_sendto(int fd, uintptr_t buf_ptr, int len, int flags, uintptr_
 
 /**
  * Receive on the stream socket of `entry` into the `len` bytes at
- * `buf_ptr`, which the caller has checked and cut at MAX_RW_COUNT, for
- * recv(2) and recvfrom(2): one buffer read as `stream_readv` reads a vector,
- * with MSG_PEEK, MSG_DONTWAIT and MSG_WAITALL from `flags`, as Linux's recv
- * reads a stream through tcp_recvmsg with the buffer as an iov_iter.
- * Returns the bytes read or -errno.
+ * `buf_ptr`, cut at MAX_RW_COUNT and checked only to end in user space
+ * (`user_span_ok`), for recv(2) and recvfrom(2): one buffer read as
+ * `stream_readv` reads a vector, with MSG_PEEK, MSG_DONTWAIT and
+ * MSG_WAITALL from `flags`, as Linux's recv reads a stream through
+ * tcp_recvmsg with the buffer as an iov_iter that import_ubuf checked with
+ * access_ok alone (net/socket.c:2232, lib/iov_iter.c:1527-1535). The wait,
+ * the end of input and -EAGAIN come before any page of the buffer is
+ * touched, and each queued buffer's destination is checked as it is copied,
+ * so a buffer whose later pages cannot be written still takes what fits
+ * before them. Returns the bytes read or -errno.
  */
 static int32_t stream_recv(fd_entry_t *entry, uintptr_t buf_ptr, int len, int flags)
 {
@@ -1478,8 +1483,10 @@ static int32_t stream_recv(fd_entry_t *entry, uintptr_t buf_ptr, int len, int fl
  * for a datagram that cannot arrive (-EOPNOTSUPP). A connected stream socket
  * receives as recv does, from the connection's peer, so the address is not
  * written and a null sockaddr is fine; this is the path musl's recv() takes,
- * recvfrom with a null address. The receive writes into the buffer
- * `user_buffer_ok` checked, as the `__force` casts mark.
+ * recvfrom with a null address. A stream's buffer is checked only to end
+ * in user space and is reached a queued buffer at a time (`stream_recv`); a
+ * datagram's is checked and brought in whole (`user_buffer_ok`) before the
+ * receive writes into it, as the `__force` casts mark.
  */
 static int32_t do_recvfrom(int fd, uintptr_t buf_ptr, int len, int flags, uintptr_t sa_ptr,
                            uintptr_t salen_ptr)
@@ -1495,7 +1502,7 @@ static int32_t do_recvfrom(int fd, uintptr_t buf_ptr, int len, int flags, uintpt
     int peek = (flags & MSG_PEEK) != 0;
     int how = (peek ? SOCK_RECV_PEEK : 0) | ((flags & MSG_TRUNC) ? SOCK_RECV_TRUNC : 0);
 
-    if (len < 0 || !user_buffer_ok(buf_ptr, (uint32_t)len, 1)) {
+    if (len < 0 || !user_span_ok(buf_ptr, (uint32_t)len)) {
         return -EFAULT;
     }
     entry = fd_get(current_proc->fds, fd);
@@ -1525,6 +1532,9 @@ static int32_t do_recvfrom(int fd, uintptr_t buf_ptr, int len, int flags, uintpt
 
     if (entry->sock->type == SOCK_STREAM) {
         return stream_recv(entry, buf_ptr, len, flags);
+    }
+    if (!user_buffer_ok(buf_ptr, (uint32_t)len, 1)) {
+        return -EFAULT;
     }
 
     if (nonblock) {
@@ -1990,8 +2000,10 @@ static int32_t do_send(int fd, uintptr_t buf_ptr, int len, int flags)
  * A datagram or raw socket reads one message with no sender reported, which is
  * what `recv` is: `recvfrom` without the address. Failing it here would leave
  * one of the four ways of reading a socket disagreeing with the other three
- * about whether the same queued datagram exists. The receive writes into the
- * buffer `user_buffer_ok` checked.
+ * about whether the same queued datagram exists. A stream's buffer is checked
+ * only to end in user space and is reached a queued buffer at a time
+ * (`stream_recv`); a datagram's is checked and brought in whole
+ * (`user_buffer_ok`) before the receive writes into it.
  */
 static int32_t do_recv(int fd, uintptr_t buf_ptr, int len, int flags)
 {
@@ -1999,7 +2011,7 @@ static int32_t do_recv(int fd, uintptr_t buf_ptr, int len, int flags)
     int nonblock;
     int peek = (flags & MSG_PEEK) != 0;
 
-    if (len < 0 || !user_buffer_ok(buf_ptr, (uint32_t)len, 1)) {
+    if (len < 0 || !user_span_ok(buf_ptr, (uint32_t)len)) {
         return -EFAULT;
     }
 
@@ -2015,6 +2027,9 @@ static int32_t do_recv(int fd, uintptr_t buf_ptr, int len, int flags)
     if (entry->sock->type == SOCK_DGRAM || entry->sock->type == SOCK_RAW) {
         int how = (peek ? SOCK_RECV_PEEK : 0) | ((flags & MSG_TRUNC) ? SOCK_RECV_TRUNC : 0);
 
+        if (!user_buffer_ok(buf_ptr, (uint32_t)len, 1)) {
+            return -EFAULT;
+        }
         if (nonblock) {
             return (int32_t)socket_try_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr,
                                             len, 0, 0, how);
