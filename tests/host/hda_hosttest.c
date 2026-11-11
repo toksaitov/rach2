@@ -1058,6 +1058,33 @@ static void row_missed(void)
     hda_stop();
 }
 
+/**
+ * Once the output stream's interrupt has come, the tick leaves its periods
+ * to the interrupt and fills nothing, until more than a period and a half
+ * has passed since that interrupt (`hda_irq_late`); then it fills the
+ * period played itself.
+ */
+static void row_play_gate(void)
+{
+    unsigned next = 1;
+
+    row = "play-irq-gate";
+    model_start(1u << 6, 48000, AUDIO_S16LE, 2);
+    write_blocks(&next);
+    model_play(25000);
+    hda_test_write(HDA_INTSTS, 1u << output_stream_index, 32);
+    hda_irq_handler(NULL);
+    check(play_irq_seen && hw_fill_count == 1,
+          "the output stream's interrupt fills the period played");
+    model_play(24000);
+    tick();
+    check(hw_fill_count == 1, "the tick leaves a period played to the interrupt that is due");
+    kernel_ticks += 36; /* a period and a half of 23.3 ms, and a tick more */
+    tick();
+    check(hw_fill_count == 2, "the tick fills the period itself once the interrupt is late");
+    hda_stop();
+}
+
 /** Allocate a procfs snapshot, or inject allocation failure. */
 void *kmalloc(size_t size)
 {
@@ -2253,6 +2280,7 @@ int main(void)
     row_fill();
     row_writer_stall();
     row_missed();
+    row_play_gate();
     row_shutdown();
     row_mix_width();
     row_capture_path();

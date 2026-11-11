@@ -369,17 +369,25 @@ int serial_data_available(void)
     return serial_pos < serial_len;
 }
 
-/** 0: the test puts whole transfers in the serial input. */
+/* The readings of the port, `serial_rx_service`'s calls, and whether its
+ * receive interrupt has taken a byte (`serial_rx_irq_proven`); a row sets
+ * the second. */
+static int serial_services, serial_irq_proven;
+
+/** Count a reading of the port; 0: the test puts whole transfers in the
+ * serial input. */
 int serial_rx_service(int budget)
 {
     (void)budget;
+    serial_services++;
     return 0;
 }
 
-/** 0: the port has no receive interrupt, and the tick reads it each time. */
+/** Whether the port's receive interrupt has taken a byte, as the row set
+ * it; 0 by default, and the tick reads the port each time. */
 int serial_rx_irq_proven(void)
 {
-    return 0;
+    return serial_irq_proven;
 }
 
 /** -1: no serial input has a signal character. */
@@ -676,6 +684,45 @@ static void raw_serial(void)
     irq_enabled = 1;
     CHECK(tty_read(&console_tty, out, sizeof(out), 0) == 1 && out[0] == 'e',
           "a translating console reads COM1 again");
+}
+
+/**
+ * The tick reads COM1 at every call until the port's receive interrupt has
+ * taken a byte, and then every CONSOLE_BACKUP_TICKS, a fifth of a second.
+ */
+static void console_poll_backup(void)
+{
+    int i;
+
+    setup_pair();
+    tty_console_init();
+    serial_pos = serial_len = 0;
+    serial_irq_proven = 0;
+    serial_services = 0;
+    irq_enabled = 0;
+    for (i = 0; i < 3; i++) {
+        kernel_ticks++;
+        tty_console_poll();
+    }
+    CHECK(serial_services == 3, "the tick reads a port whose interrupt took nothing at each call");
+    serial_irq_proven = 1;
+    serial_services = 0;
+    for (i = 0; i < TICK_HZ / 5 - 1; i++) {
+        kernel_ticks++;
+        tty_console_poll();
+    }
+    CHECK(serial_services == 0,
+          "once the interrupt took a byte the tick waits a fifth of a second");
+    kernel_ticks++;
+    tty_console_poll();
+    CHECK(serial_services == 1, "and then reads the port");
+    for (i = 0; i < 2 * (TICK_HZ / 5); i++) {
+        kernel_ticks++;
+        tty_console_poll();
+    }
+    CHECK(serial_services == 3, "and again every fifth of a second");
+    serial_irq_proven = 0;
+    irq_enabled = 1;
 }
 
 /** Each wake of a pair names the kind of change it is to the pollers of its
@@ -1833,6 +1880,7 @@ int main(void)
     partial_wakes_reader(1);
     latency_read();
     raw_serial();
+    console_poll_backup();
     wake_kinds();
     input_room();
     packet_mode();
