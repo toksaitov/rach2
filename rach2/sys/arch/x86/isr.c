@@ -745,8 +745,8 @@ void isr_router_locked(isr_params_t *params)
     struct bkl_entry_saved saved;
 
     bkl_note_entry((uint32_t)params->vector, nr);
-    bkl_entry_push(&saved, (uint32_t)params->vector, nr, nr == SYS_IOCTL && !SC_COMPAT(params),
-                   (uint32_t)SC_ARG(params, 1));
+    bkl_entry_push(&saved, (uint32_t)params->vector, nr,
+                   nr >= 0 && (uint32_t)nr == CALL_IOCTL_NR(params), (uint32_t)SC_ARG(params, 1));
 #ifdef DEBUG
     klog(KLOG_DEBUG, "isr", "interrupt: vector 0x%X", params->vector);
 #endif
