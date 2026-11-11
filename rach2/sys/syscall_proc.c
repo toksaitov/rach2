@@ -1136,6 +1136,37 @@ static uintptr_t exec_stack_window(const struct exec_state *s, uintptr_t bottom,
     return s->stack_top - PAGE_SIZE - floor;
 }
 
+/** The stack's growth at an exec below the pages its arguments took. */
+#define EXEC_STACK_EXPAND 131072UL
+
+/**
+ * The page the stack of the new image in `s` starts at once the exec ends:
+ * `EXEC_STACK_EXPAND` bytes below `bottom`, where the pages its arguments
+ * took start, while the whole stack stays within the soft RLIMIT_STACK
+ * `limit`, as Linux 6.12's `setup_arg_pages` (fs/exec.c) expands it, and
+ * never below `floor`, the bottom of the window `exec_stack_window` gives.
+ * A program's first frames then lie in the stack's region and need no
+ * growth, which an accessible mapping within the guard gap below them would
+ * refuse; an i386 Wine maps the address space below its stack to within
+ * 128 KiB of its stack pointer.
+ */
+static uintptr_t exec_stack_base(const struct exec_state *s, uintptr_t bottom, unsigned long limit,
+                                 uintptr_t floor)
+{
+    uintptr_t size = s->stack_top - bottom + EXEC_STACK_EXPAND;
+    uintptr_t rlim = limit & ~(unsigned long)(PAGE_SIZE - 1);
+    uintptr_t base;
+
+    if (size > rlim) {
+        size = rlim;
+    }
+    base = s->stack_top - size;
+    if (base < floor) {
+        base = floor;
+    }
+    return base < bottom ? base : bottom;
+}
+
 /**
  * Read pointer `i` of the user vector `vec` into `*ptr`: a pointer of the
  * caller's ABI, 4 bytes for an i386 call, as Linux's `get_user_arg_ptr`
@@ -1945,6 +1976,7 @@ static int32_t exec_build(struct exec_state *s)
     uintptr_t bottom = uimage_bottom(&s->args);
     uintptr_t vdso_at = s->mmap_base + PAGE_SIZE;
     unsigned long limit = current_proc->rlim[RLIM_STACK].cur;
+    uintptr_t window, base;
     uintptr_t dyn_floor = ELF_ET_DYN_BASE;
     int abi = s->compat ? VDSO_IA32 : VDSO_NATIVE;
     uint8_t random16[16];
@@ -1978,12 +2010,13 @@ static int32_t exec_build(struct exec_state *s)
     if (s->secure && limit > RLIM_STACK_DEFAULT) {
         limit = RLIM_STACK_DEFAULT;
     }
+    window = exec_stack_window(s, bottom, limit);
+    base = exec_stack_base(s, bottom, limit, s->stack_top - PAGE_SIZE - window);
     if (elf_setup_vmas(&s->mm->vm, &s->img, s->img.image_end + s->heap_shift,
-                       s->stack_top - PAGE_SIZE, exec_stack_window(s, bottom, limit),
-                       s->mmap_base) != 0 ||
+                       s->stack_top - PAGE_SIZE, window, s->mmap_base) != 0 ||
         (s->layout.interp[0] != '\0' && elf_add_vmas(&s->mm->vm, &s->iimg) != 0) ||
         (ehdr = vdso_map(&s->mm->vm, vdso_at, abi)) < 0 ||
-        (bottom < s->stack_top - PAGE_SIZE && !vm_grow_stack(&s->mm->vm, bottom, RLIM_INFINITY)) ||
+        (base < s->stack_top - PAGE_SIZE && !vm_grow_stack(&s->mm->vm, base, RLIM_INFINITY)) ||
         vm_total(&s->mm->vm) > current_proc->rlim[RLIM_AS].cur) {
         return -ENOMEM;
     }
