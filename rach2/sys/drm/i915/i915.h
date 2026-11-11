@@ -266,8 +266,12 @@ struct i915_irq {
  * would have retired every request of the engine, which on Haswell's ring
  * submission, one timeline an engine, is when the last request signals to
  * a listener or when the retire worker, once a second, finds it complete;
- * the GT parks only when no engine has it set (i915_request.c). It changes
- * under `lock`.
+ * the GT parks only when no engine has it set (i915_request.c).
+ * `building` is set from a request's creation to its publication on
+ * `requests`, as Linux holds the timeline's mutex from i915_request_create
+ * to i915_request_add: while it is set the engine's last request is not
+ * the last of its timeline, and neither its signal nor the retire worker
+ * clears `unretired`. Both change under `lock`.
  *
  * Hang detection and reset (i915_hangcheck.c, i915_reset.c). `hw_tail` is
  * what RING_TAIL was last given, the end of what the chip may run, which a
@@ -323,6 +327,7 @@ struct i915_engine {
     uint8_t kick;
     uint32_t hw_tail;
     uint8_t unretired;
+    uint8_t building;
     uint8_t hc_armed;
     uint32_t hc_seqno;
     uint32_t hc_acthd;
