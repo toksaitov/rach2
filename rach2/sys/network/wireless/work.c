@@ -105,9 +105,8 @@ void wlan_cancel_work(struct wlan_work *work)
     }
     spin_unlock_irqrestore(&queue_lock, flags);
 #ifndef RACH2_HOSTTEST
-    /* A callback may sleep, and the thread may be switched away at a
-       service point; once scheduling is off it never runs again, and a
-       wait for its end would not end. */
+    /* A callback may sleep, and once scheduling is off the thread never
+       runs again, so a wait for the callback's end would not end. */
     if (current_proc != thread && sched_is_enabled()) {
         (void)wq_wait_event_nointr(&idle_wq, work_not_running, work);
     }
