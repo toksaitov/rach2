@@ -493,6 +493,59 @@ static void clock_write_rows(void)
     CHECK(rtc_write_clock(&late) == -1 && cmos[0x09] == 0x28);
 }
 
+/** Whether `a` and `b` are the same date and time, the year to the second. */
+static int same_time(const rtc_time_t *a, const rtc_time_t *b)
+{
+    return a->year == b->year && a->month == b->month && a->day == b->day && a->hour == b->hour &&
+           a->minute == b->minute && a->second == b->second;
+}
+
+/**
+ * Check `rtc_time_of_seconds` and `rtc_seconds_of` on dates and times worked
+ * out by hand, from 1970 to the calendar's last second, with the leap years
+ * before a year y counted as y/4 - y/100 + y/400 of y - 1, which is not how
+ * clock.c counts them.
+ *
+ * 2000-02-29 is 10957 days from 1970 and 59 into 2000, 951782400 seconds.
+ * 2400-02-29 is 10957 days to 2000, a cycle of 146097 to 2400 and 59 into
+ * the year: day 157113, 13574563200 seconds, and a Tuesday, as 2000-02-29
+ * was, since a cycle is 20871 weeks. 2371-03-01 12:34:56 lies past 2370,
+ * where the cycles clock.c counts from 1970 turn: 146097 days to 2370, 365
+ * in 2370 and 59 into 2371, day 146521, and 12659459696 seconds, a Monday.
+ * The last second, 2147483647-12-31 23:59:59, is 365 days for each of the
+ * 2147481678 years from 1970 and one for each of their 520764307 leap years,
+ * 784351576777 days, less a second: 67767976233532799. One second more is a
+ * year past INT_MAX, which `rtc_time_of_seconds` refuses with -1, leaving
+ * `*t` as it was.
+ */
+static void calendar_rows(void)
+{
+    static const long long seconds[] = {
+        0LL,           951782400LL,   1790000000LL,       4102444799LL,
+        12659459696LL, 13574563200LL, 67767976233532799LL};
+    static const rtc_time_t times[] = {{1970, 1, 1, 0, 0, 0},
+                                       {2000, 2, 29, 0, 0, 0},
+                                       {2026, 9, 21, 14, 13, 20},
+                                       {2099, 12, 31, 23, 59, 59},
+                                       {2371, 3, 1, 12, 34, 56},
+                                       {2400, 2, 29, 0, 0, 0},
+                                       {2147483647L, 12, 31, 23, 59, 59}};
+    rtc_time_t back, kept = {2026, 11, 11, 1, 2, 3};
+    int32_t weekday, yearday;
+    unsigned i;
+
+    for (i = 0; i < sizeof seconds / sizeof seconds[0]; i++) {
+        CHECK(rtc_time_of_seconds(seconds[i], &back) == 0 && same_time(&back, &times[i]));
+        CHECK(rtc_seconds_of(&times[i]) == seconds[i]);
+    }
+    rtc_week_and_year_day(&times[4], &weekday, &yearday);
+    CHECK(weekday == 1 && yearday == 59);
+    rtc_week_and_year_day(&times[5], &weekday, &yearday);
+    CHECK(weekday == 2 && yearday == 59);
+    back = kept;
+    CHECK(rtc_time_of_seconds(67767976233532800LL, &back) == -1 && same_time(&back, &kept));
+}
+
 /** Fill a BCD, 24-hour sample of a running clock with a good battery; `year`
  * is the two digits the clock keeps. */
 static void bcd_sample(rtc_snapshot_t *raw, int year, int month, int day, int hour, int minute,
@@ -602,17 +655,7 @@ int main(void)
     rtc_time_t when;
     long long seconds;
 
-    rtc_time_of_seconds(0, &when);
-    CHECK(when.year == 1970 && when.month == 1 && when.day == 1 && when.hour == 0 &&
-          when.minute == 0 && when.second == 0);
-    rtc_time_of_seconds(951782400u, &when);
-    CHECK(when.year == 2000 && when.month == 2 && when.day == 29 && when.hour == 0);
-    rtc_time_of_seconds(1790000000u, &when);
-    CHECK(when.year == 2026 && when.month == 9 && when.day == 21 && when.hour == 14 &&
-          when.minute == 13 && when.second == 20);
-    rtc_time_of_seconds(4102444799u, &when);
-    CHECK(when.year == 2099 && when.month == 12 && when.day == 31 && when.hour == 23 &&
-          when.minute == 59 && when.second == 59);
+    calendar_rows();
 
     CHECK(timer_clock_check());
 
