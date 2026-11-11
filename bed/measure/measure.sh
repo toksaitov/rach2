@@ -9,7 +9,8 @@
 # The scenes, each the same work on every rung:
 #
 #   glmark2  glmark2-wayland's build, texture, shading (Phong) and bump
-#            (normals) scenes on screen at 1280x800, each for SECONDS (10)
+#            (normals) scenes on screen at 1280x800, or fullscreen with -d,
+#            each for SECONDS (10)
 #   piglit   the tests of piglit.txt, beside this script, one at a time on
 #            the device EGL's surfaceless platform finds (piglit.sh -g)
 #   webgl    webgl.html in Chromium, fullscreen at 1280x800, for SECONDS
@@ -18,8 +19,8 @@
 #            race's own time when -t gives them
 #
 # glmark2 and webgl draw under a headless Weston of the script's own, with
-# its GL renderer unless -p asks for Pixman, or with -d under the caller's
-# Wayland display; the game too, through games.sh. A scene's frame times
+# its GL renderer unless -p asks for Pixman, which webgl always has, or with
+# -d under the caller's Wayland display; the game too, through games.sh. A scene's frame times
 # come from Mesa's Gallium HUD for glmark2 and the game, the time between
 # the page's frames for webgl, and each test's time for piglit, whose test
 # counts as one frame.
@@ -99,9 +100,12 @@ scene_glmark2()
 {
     d=${seconds:-10}
     mkdir -p "$RUNNER_WORK/hud"
+    # On the caller's display, the whole output, as Linux's references ran.
+    if [ "$own" = 1 ]; then size="-s ${RUNNER_WIDTH}x$RUNNER_HEIGHT"; else size=--fullscreen; fi
+    # shellcheck disable=SC2086 # one or two words
     GALLIUM_HUD=frametime GALLIUM_HUD_VISIBLE=false GALLIUM_HUD_PERIOD=0 \
         GALLIUM_HUD_DUMP_DIR=$RUNNER_WORK/hud \
-        glmark2-wayland -s "${RUNNER_WIDTH}x$RUNNER_HEIGHT" --results fps:cpu \
+        glmark2-wayland $size --results fps:cpu \
         -b "build:duration=$d" -b "texture:duration=$d" \
         -b "shading:shading=phong:duration=$d" -b "bump:bump-render=normals:duration=$d" \
         > "$out/glmark2.log" 2>&1 ||
@@ -177,6 +181,9 @@ if [ "$inner" = 1 ]; then
     runner_start plain
     runner_record "scene $scene rung $rung"
     if [ "$own" = 1 ]; then
+        # Chromium's GPU process, not the DRM master, loses every context
+        # under Weston's GL (tests/graphics/Readme.md, Browser runners).
+        [ "$scene" != webgl ] || renderer=pixman
         # shellcheck disable=SC2034 # runner_weston reads it
         RUNNER_RENDERER=$renderer
         runner_weston

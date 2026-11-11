@@ -5,9 +5,10 @@
 <canvas id="scene"></canvas>
 <script>
 // The test bed's WebGL scene (bed/measure/Readme.md): a grid of 32 by 32
-// lit cubes turning in one draw of 36,864 vertices, over a full-window
-// quad whose fragment shader runs 24 rounds of a hash, drawn for `frames`
-// frames of requestAnimationFrame (600 unless the query gives another).
+// lit cubes turning in one instanced draw of 36,864 vertices, over a
+// full-window quad whose fragment shader runs 24 rounds of a hash, drawn for
+// `frames` frames of requestAnimationFrame (600 unless the query gives
+// another).
 // Each frame's draw is the same work, so that its time measures the path
 // and not the content. The page then reads back one pixel, which waits for
 // the last frame, and posts {kind: "done", frames, times, renderer, ok}
@@ -18,10 +19,12 @@
 const post = event => fetch('/event', {method: 'POST', body: JSON.stringify(event), keepalive: true});
 (async () => {
  const result = {kind: 'done', ok: false};
+ const times = [];
  const ticker = setInterval(() => post({kind: 'tick'}), 10000);
  try {
   const frames = Number(new URLSearchParams(location.search).get('frames') || 600);
   const canvas = document.getElementById('scene');
+  canvas.addEventListener('webglcontextlost', () => post({kind: 'lost', frames: times.length}));
   canvas.width = canvas.clientWidth * devicePixelRatio;
   canvas.height = canvas.clientHeight * devicePixelRatio;
   const gl = canvas.getContext('webgl', {antialias: false, preserveDrawingBuffer: true});
@@ -59,29 +62,36 @@ const post = event => fetch('/event', {method: 'POST', body: JSON.stringify(even
      gl_Position = vec4(r.xy * 0.025 + (o / 16.0 - 1.0 + 1.0 / 32.0), r.z * 0.025 + 0.5, 1.0);
     }`,
    'precision mediump float; varying float l; void main() { gl_FragColor = vec4(l, 0.6 * l, 0.2, 1.0); }');
-  // One cube's 36 vertices with their normals, then the grid of offsets.
-  const face = [[0, 1, 2], [0, 2, 3]], data = [];
+  // One cube's 36 vertices with their normals, and the grid's 1024 offsets,
+  // one an instance. Chromium 156 on llvmpipe loses the context after a
+  // vertex buffer of 294,912 bytes, the grid's whole, where one of 73,728
+  // draws (dev-log/83-testbed/upstream.md), so each buffer stays small.
+  const inst = gl.getExtension('ANGLE_instanced_arrays');
+  if (!inst) throw Error('no ANGLE_instanced_arrays');
+  const face = [[0, 1, 2], [0, 2, 3]], data = [], grid = [];
   const sides = [[[1, -1, -1], [1, 1, -1], [1, 1, 1], [1, -1, 1], [1, 0, 0]],
    [[-1, -1, 1], [-1, 1, 1], [-1, 1, -1], [-1, -1, -1], [-1, 0, 0]],
    [[-1, 1, -1], [-1, 1, 1], [1, 1, 1], [1, 1, -1], [0, 1, 0]],
    [[-1, -1, 1], [-1, -1, -1], [1, -1, -1], [1, -1, 1], [0, -1, 0]],
    [[-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1], [0, 0, 1]],
    [[1, -1, -1], [-1, -1, -1], [-1, 1, -1], [1, 1, -1], [0, 0, -1]]];
+  for (const s of sides)
+   for (const tri of face)
+    for (const k of tri) data.push(...s[k], ...s[4]);
   for (let y = 0; y < 32; y++)
-   for (let x = 0; x < 32; x++)
-    for (const s of sides)
-     for (const tri of face)
-      for (const k of tri) data.push(...s[k], ...s[4], x, y);
+   for (let x = 0; x < 32; x++) grid.push(x, y);
   const vbo = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
+  const offsets = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, offsets);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(grid), gl.STATIC_DRAW);
   const quad = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, quad);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
-  const vertices = data.length / 8;
+  const vertices = data.length / 6, instances = grid.length / 2;
   gl.enable(gl.DEPTH_TEST);
   gl.viewport(0, 0, canvas.width, canvas.height);
-  const times = [];
   let start = null;
   await new Promise((resolve, reject) => {
    function draw(now) {
@@ -103,13 +113,22 @@ const post = event => fetch('/event', {method: 'POST', body: JSON.stringify(even
      gl.useProgram(cubes);
      gl.uniform1f(gl.getUniformLocation(cubes, 't'), t);
      gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-     [['p', 3, 0], ['n', 3, 12], ['o', 2, 24]].forEach(([name, size, off]) => {
-      const at = gl.getAttribLocation(cubes, name);
-      gl.enableVertexAttribArray(at);
-      gl.vertexAttribPointer(at, size, gl.FLOAT, false, 32, off);
+     const at = {};
+     [['p', 3, 0], ['n', 3, 12]].forEach(([name, size, off]) => {
+      at[name] = gl.getAttribLocation(cubes, name);
+      gl.enableVertexAttribArray(at[name]);
+      gl.vertexAttribPointer(at[name], size, gl.FLOAT, false, 24, off);
      });
-     gl.drawArrays(gl.TRIANGLES, 0, vertices);
-     if (gl.getError() !== gl.NO_ERROR) throw Error('GL error ' + gl.getError());
+     gl.bindBuffer(gl.ARRAY_BUFFER, offsets);
+     at.o = gl.getAttribLocation(cubes, 'o');
+     gl.enableVertexAttribArray(at.o);
+     gl.vertexAttribPointer(at.o, 2, gl.FLOAT, false, 8, 0);
+     inst.vertexAttribDivisorANGLE(at.o, 1);
+     inst.drawArraysInstancedANGLE(gl.TRIANGLES, 0, vertices, instances);
+     inst.vertexAttribDivisorANGLE(at.o, 0);
+     for (const name in at) gl.disableVertexAttribArray(at[name]);
+     const error = gl.getError();
+     if (error !== gl.NO_ERROR) throw Error('GL error 0x' + error.toString(16) + (gl.isContextLost() ? ', the context lost' : '') + ' at frame ' + times.length);
      if (times.length < frames) requestAnimationFrame(draw); else resolve();
     } catch (error) { reject(error); }
    }
