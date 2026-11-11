@@ -72,7 +72,13 @@
  *       succeeds where one to 4096 is refused; and a vmsplice of 128 KiB of
  *       page-aligned memory into an empty pipe that may wait takes the
  *       64 KiB that fit and returns, as Linux waits only before the first
- *       byte.
+ *       byte. A pipe of 64 KiB is full at sixteen buffers, as Linux's
+ *       pipe_full counts them: sixteen vmsplices of a byte fill it and the
+ *       seventeenth is EAGAIN, and a vmsplice of 128 KiB from byte 1 of a
+ *       page takes 65535 bytes in sixteen buffers. A vmsplice from a
+ *       mapping made with PROT_WRITE alone is EFAULT for a page never
+ *       written, which Linux's get_user_pages refuses for want of
+ *       VM_READ, and takes a byte of a page written first.
  *
  * Given `machine=native` (probe_args.h), the probe leaves out the heap's
  * comparison of (e), since the kernel's heap is shared with every process of
@@ -107,6 +113,7 @@
 
 #define EPERM             1
 #define EAGAIN            11
+#define EFAULT            14
 #define EBUSY             16
 #define EINVAL            22
 #define EPIPE             32
@@ -270,6 +277,9 @@ enum {
     PAGES_VMSPLICE,
     PAGES_FILE,
     PAGES_VMSPLICE_WAIT,
+    PAGES_SLOTS,
+    PAGES_SLOTS_UNALIGNED,
+    PAGES_WRONLY,
     MAX_ROUND,
     MAX_EINVAL,
     SYSCTL_PLUS,
@@ -350,6 +360,10 @@ static const struct {
     {"pages-file", "a splice of 32769 bytes from a memfd's offset 1 and a read of 28671 leave two "
                    "pages: a shrink to 8192 succeeds and to 4096 -> -EBUSY"},
     {"pages-vmsplice-wait", "a vmsplice of 128 KiB into an empty pipe that may wait returns 65536"},
+    {"pages-slots", "16 vmsplices of a byte fill a pipe of 64 KiB: the 17th -> -EAGAIN"},
+    {"pages-slots-unaligned", "a vmsplice of 128 KiB from byte 1 of a page returns 65535"},
+    {"pages-wronly",
+     "a vmsplice of an untouched PROT_WRITE page -> -EFAULT, and of a written one returns 1"},
     {"max-round", "pipe-max-size takes 600000 as 1048576, 1 as 4096 and 2^31 as written"},
     {"max-einval", "pipe-max-size refuses 2^31 + 1 with EINVAL"},
     {"sysctl-plus", "pipe-user-pages-soft and -hard refuse +64 with EINVAL and keep their values"},
@@ -977,6 +991,46 @@ static void pages_file(const int q[2])
 }
 
 /**
+ * The rows of case (l) that fill a pipe by its buffers, sixteen in a pipe of
+ * 64 KiB however few bytes they hold, and vmsplice from memory mapped with
+ * PROT_WRITE alone, whose page Linux's get_user_pages takes only once a
+ * write has brought it in.
+ */
+static void pages_slots(void)
+{
+    long map = mmap_anon(2 * PIPE_BUF_SIZE + 4096);
+    long wo = probe_mmap(0, 8192, PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    int mapped = map != 0 && !sys_failed(map), wmapped = wo != 0 && !sys_failed(wo);
+    int w[2] = {-1, -1};
+    int made = do_pipe(w) == 0, i, took = 0;
+
+    for (i = 0; made && mapped && i < 16; i++) {
+        took += vmsplice_one(w[1], map, 1, SPLICE_F_NONBLOCK) == 1;
+    }
+    check(PAGES_SLOTS, made && mapped && took == 16 &&
+                           vmsplice_one(w[1], map, 1, SPLICE_F_NONBLOCK) == -EAGAIN &&
+                           rd(w[0], back, 64) == 16);
+    check(PAGES_SLOTS_UNALIGNED, made && mapped &&
+                                     vmsplice_one(w[1], map + 1, 2 * PIPE_BUF_SIZE,
+                                                  SPLICE_F_NONBLOCK) == PIPE_BUF_SIZE - 1 &&
+                                     rd(w[0], back, PIPE_BUF_SIZE) == PIPE_BUF_SIZE - 1);
+    if (wmapped) {
+        ((char *)wo)[4096] = 'w';
+    }
+    check(PAGES_WRONLY, made && wmapped &&
+                            vmsplice_one(w[1], wo, 1, SPLICE_F_NONBLOCK) == -EFAULT &&
+                            vmsplice_one(w[1], wo + 4096, 1, SPLICE_F_NONBLOCK) == 1 &&
+                            rd(w[0], back, 2) == 1 && back[0] == 'w');
+    close_pair(w);
+    if (mapped) {
+        syscall2(SYS_MUNMAP, map, 2 * PIPE_BUF_SIZE + 4096);
+    }
+    if (wmapped) {
+        syscall2(SYS_MUNMAP, wo, 8192);
+    }
+}
+
+/**
  * Case (l): a shrink is refused below the page buffers that hold bytes, as
  * Linux counts them, however few bytes they hold. A write's first `count`
  * mod 4096 bytes join the newest buffer only when they fit in its page after
@@ -1008,6 +1062,7 @@ static void case_pages(void)
                          rd(q[0], back, 2) == 2 && back[0] == 'a' && back[1] == 'b');
     pages_splices(p, q);
     pages_file(q);
+    pages_slots();
     close_pair(p);
     close_pair(q);
 }
