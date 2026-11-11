@@ -4467,8 +4467,10 @@ static process_t *sig_fatal_taker(process_t *target, int signo, int whole)
  * 1034-1043): there is such a thread, the disposition is SIG_DFL and the
  * default action ends the process without a core dump, `taker` does not
  * wait for the signal in rt_sigtimedwait or a signalfd read
- * (`sig_real_blocked`), the process is not ending already, and `target` is
- * not traced, unless the signal is SIGKILL. Such a waiter takes the signal
+ * (`sig_real_blocked`), the process is not ending already, or is writing
+ * its core and the signal is SIGKILL, which stops the core (kernel/signal.c:
+ * 908-910, 1035), and `target` is not traced, unless the signal is SIGKILL.
+ * Such a waiter takes the signal
  * as its result, a traced thread's tracer sees the signal first, and a
  * signal that dumps core is left to the thread that takes it, which writes
  * the core before the others end. An init (`unkillable`) ends only by
@@ -4481,7 +4483,8 @@ static int sig_fatal_now(const process_t *target, const process_t *taker, int si
 {
     return taker != NULL && target->tg->action[signo].handler == KSIG_DFL &&
            ksig_default_action(signo) == KSIG_DEFAULT_TERM &&
-           !(taker->sig_real_blocked & KSIG_BIT(signo)) && !target->tg->exiting &&
+           !(taker->sig_real_blocked & KSIG_BIT(signo)) &&
+           (!target->tg->exiting || (target->tg->core_dumping && signo == SIGKILL)) &&
            (signo == SIGKILL || (!(target->ptrace & PT_TRACED) && !target->tg->unkillable));
 }
 

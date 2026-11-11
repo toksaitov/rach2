@@ -68,6 +68,12 @@ and
 reports
 .Dv CLD_DUMPED ,
 only when the whole file was written.
+A
+.Dv SIGKILL
+sent to the process while the file is written stops the file where it
+is, and the process ends with
+.Dv SIGKILL
+and without the core bit, as on Linux.
 .Pp
 Linux names the file by
 .Pa /proc/sys/kernel/core_pattern

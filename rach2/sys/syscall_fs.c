@@ -15694,12 +15694,19 @@ struct core_file {
 
 /** The core file's writer for `core_write`: `len` bytes of `buf` at the
  * file's place, or a hole of `len` bytes for a null `buf`. Returns 0 or the
- * write's error; a short write is a full disk, -ENOSPC. */
+ * write's error; a short write is a full disk, -ENOSPC. A SIGKILL sent to
+ * the dumping thread, which a SIGKILL to its process during the dump sends
+ * it (`sig_complete`), stops the file with -EINTR before each piece, as
+ * Linux 6.12.115's `dump_interrupted` stops it (fs/coredump.c:495-499,
+ * 859-860, 876-877). */
 static int32_t core_file_put(void *ctx, const void *buf, uint32_t len)
 {
     struct core_file *cf = ctx;
     int32_t n;
 
+    if (current_proc->sig_pending & KSIG_BIT(SIGKILL)) {
+        return -EINTR;
+    }
     if (buf) {
         n = vfs_write(cf->ofd->vmnt, cf->ofd->fhandle, buf, len, cf->pos);
         if (n < 0) {
