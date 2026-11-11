@@ -23,9 +23,9 @@
 #define ITCO_DEFAULT_TIMEOUT 30
 
 /* All callbacks are synchronous and do not sleep; the big lock serializes
- * the device, and the tick's feed (`itco_feed_tick`) reads only words that
- * one store changes. The host test supplies the same boundary over a TCO
- * model. */
+ * the device, and the tick's half of the feed (`itco_feed_tick`) reads only
+ * words that one store changes. The host test supplies the same boundary
+ * over a TCO model. */
 struct itco {
     uint16_t (*rd)(void *ctx, unsigned reg);
     void (*wr)(void *ctx, unsigned reg, uint16_t value);
@@ -46,6 +46,10 @@ struct itco {
     uint32_t feed_left; /* calls until the kernel's next feed */
     int open_limited;   /* a program must open the device in `open_left` calls */
     uint32_t open_left; /* Linux's open_deadline, counted down */
+    /* the tick leaves each feed to the thread watchdogd: set while the
+     * thread exists and the scheduler runs it */
+    int threaded;
+    volatile int feed_due; /* set by the tick, cleared by `itco_feed_work` */
 };
 
 /** Set NO_REBOOT to `on`; 0 or -EIO when firmware refuses the change. */
@@ -144,8 +148,7 @@ static int itco_attach(struct itco *t, int heartbeat)
 {
     uint16_t cnt = t->rd(t->ctx, TCO1_CNT);
 
-    if (cnt == 0xFFFFu || t->rd(t->ctx, TCO_TMR) == 0xFFFFu ||
-        t->gcs_rd(t->ctx) == 0xFFFFFFFFu) {
+    if (cnt == 0xFFFFu || t->rd(t->ctx, TCO_TMR) == 0xFFFFu || t->gcs_rd(t->ctx) == 0xFFFFFFFFu) {
         return -EIO;
     }
     if (itco_noreboot(t, 0) != 0) {
@@ -178,36 +181,67 @@ static int itco_boot_arm(struct itco *t)
     return result;
 }
 
+/** Whether the kernel's feed is for `t` now: a running timer that no
+ * program holds, before the open deadline, as watchdog_need_worker and
+ * watchdog_worker_should_ping decide (Linux 6.12, watchdog_dev.c:76 to 97
+ * and 204 to 215). */
+static int itco_feeding(const struct itco *t)
+{
+    return !t->running && t->hw_running && t->boot_feed && !(t->open_limited && t->open_left == 0);
+}
+
 /**
  * One tick of the kernel's feed of a running timer that no program holds,
- * as watchdog_dev.c's hrtimer and worker do (watchdog_need_worker,
- * watchdog_next_keepalive and watchdog_worker_should_ping, lines 76 to 214):
- * a feed every half timeout until a program opens the device or the open
- * deadline passes, the last one a timeout before the deadline. From the
+ * as watchdog_dev.c's hrtimer does (watchdog_next_keepalive and
+ * watchdog_timer_expired, lines 99 to 127 and 229 to 237): a feed every
+ * half timeout until a program opens the device or the open deadline
+ * passes, the last one a timeout before the deadline. A feed that falls due
+ * is left to `itco_feed_work` in the thread watchdogd, as the hrtimer
+ * queues watchdog_ping_work on the kthread worker of that name, so that a
+ * kernel whose tick runs but whose threads no longer do is reset too; while
+ * `threaded` is clear, during boot and in the kernel debug shell, where
+ * the scheduler runs no thread, the tick feeds the timer itself. From the
  * boot processor's tick, with interrupts off.
  */
 static void itco_feed_tick(struct itco *t)
 {
     uint32_t heartbeat;
 
-    if (t->running || !t->hw_running || !t->boot_feed) {
+    if (!itco_feeding(t)) {
         return;
     }
     if (t->open_limited) {
-        if (t->open_left == 0) {
-            return;
-        }
         t->open_left--;
     }
     if (t->feed_left > 0) {
         t->feed_left--;
         return;
     }
-    itco_ping(t);
+    if (t->threaded) {
+        t->feed_due = 1;
+    } else {
+        t->feed_due = 0;
+        itco_ping(t);
+    }
     heartbeat = (uint32_t)t->timeout * t->hz;
     t->feed_left = heartbeat / 2u;
     if (t->open_limited && t->open_left < heartbeat + t->feed_left) {
         t->feed_left = t->open_left > heartbeat ? t->open_left - heartbeat : t->open_left;
+    }
+}
+
+/** The feed the tick left due, as watchdog_ping_work does it (Linux 6.12,
+ * watchdog_dev.c:217 to 227): the timer is fed only if the kernel's feed is
+ * still for it, since a program may have opened the device meanwhile. In
+ * watchdogd, under the big lock. */
+static void itco_feed_work(struct itco *t)
+{
+    if (!t->feed_due) {
+        return;
+    }
+    t->feed_due = 0;
+    if (itco_feeding(t)) {
+        itco_ping(t);
     }
 }
 
@@ -275,13 +309,21 @@ static int itco_status(struct itco *t)
 #include "../../mm/usercopy.h"
 #include "../../cmdline.h"
 #include "../../klog.h"
+#include "../../lib/kirq.h"
 #include "../../lib/kstd.h"
+#include "../../proc/process.h"
+#include "../../proc/sched.h"
+#include "../../proc/wait_queue.h"
 #include "../../timer.h"
+#include "../arch.h"
 
 static struct itco watchdog;
 static uint16_t tco_base;
 static uintptr_t gcs_address;
 static int registered;
+/* watchdogd, which sleeps on `feed_wq` until the tick leaves it a feed */
+static process_t *feeder;
+static wait_queue_t feed_wq;
 
 /** Read a TCO word at `reg` in the validated I/O window. */
 static uint16_t itco_rd(void *ctx, unsigned reg)
@@ -554,10 +596,72 @@ void itco_init(void)
          watchdog.timeout, watchdog.nowayout);
 }
 
+/** Whether the tick left watchdogd a feed; the condition of its wait. */
+static int feed_waiting(void *arg)
+{
+    (void)arg;
+    return watchdog.feed_due;
+}
+
+/** The thread watchdogd: sleep until the tick leaves a feed, then do it,
+ * holding the big lock as kernel code does. */
+static void itco_feeder(void)
+{
+    arch_irq_enable();
+    for (;;) {
+        (void)wq_wait_event_idle(&feed_wq, feed_waiting, NULL);
+        itco_feed_work(&watchdog);
+    }
+}
+
+void itco_thread_start(void)
+{
+    process_t *p;
+    uintptr_t base;
+    uint32_t flags;
+
+    if (feeder || !registered) {
+        return;
+    }
+    flags = kirq_save();
+    base = kstack_alloc();
+    p = base ? alloc_process() : NULL;
+    if (!p) {
+        if (base) {
+            kstack_free(base + KERNEL_STACK_SIZE);
+        }
+        kirq_restore(flags);
+        klog(KLOG_ERR, "watchdog", "refused: watchdogd: no record or stack for it");
+        return;
+    }
+    p->kernel_stack = base + KERNEL_STACK_SIZE;
+    p->space_root = 0;
+    p->page_dir = NULL;
+    p->parent_pid = 0;
+    /* sched_set_fifo's MAX_RT_PRIO / 2, as watchdog_dev_init gives
+     * watchdogd (Linux 6.12, watchdog_dev.c:1232 to 1237, and
+     * kernel/sched/syscalls.c:873 to 877). */
+    p->sched_policy = SCHED_FIFO;
+    p->rt_priority = 50;
+    proc_set_comm(p, "watchdogd");
+    setup_process_stack(p, itco_feeder);
+    feeder = p;
+    sched_make_ready(p);
+    kirq_restore(flags);
+    klog(KLOG_DEBUG, "watchdog", "worker: watchdogd is pid %d", (int)p->pid);
+}
+
 void itco_tick(void)
 {
+    int was;
+
     if (registered) {
+        was = watchdog.feed_due;
+        watchdog.threaded = feeder != NULL && sched_is_enabled();
         itco_feed_tick(&watchdog);
+        if (!was && watchdog.feed_due) {
+            wq_wake_all(&feed_wq);
+        }
     }
 }
 
