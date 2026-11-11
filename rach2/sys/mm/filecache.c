@@ -258,12 +258,16 @@ static void fc_unlink(struct fc_page *p)
     }
 }
 
-/** Free `p`, and its file's record when it was the file's last page. */
-static void fc_drop(struct fc_page *p)
+/** Free `p`, and its file's record when it was the file's last page; 1 when
+ * its frame went back to the pool, 0 when a reader still holds it. */
+static int fc_drop(struct fc_page *p)
 {
+    uint32_t left;
+
     fc_unlink(p);
-    free_frame((uintptr_t)p->pfn * PAGE_SIZE);
+    left = frame_unref((uintptr_t)p->pfn * PAGE_SIZE);
     kfree(p);
+    return left == 0;
 }
 
 /** Drop every page of `file`, and with the last of them the record. */
@@ -550,12 +554,18 @@ int filecache_file_read(struct open_file *ofd, char __user *buf, uint32_t count,
     uint32_t done = 0;
     int32_t n = 0;
 
-    if (!buckets || count == 0 || !fc_file_of(ofd->vmnt, ofd->vnode, &f) ||
-        (offset < f.size && (f.size - 1u) / PAGE_SIZE > 0xFFFFFFFFu)) {
+    if (!buckets || count == 0 || !fc_file_of(ofd->vmnt, ofd->vnode, &f)) {
+        return 0;
+    }
+    if (offset >= f.size) {
+        *got = 0;
+        return 1;
+    }
+    if ((f.size - 1u) / PAGE_SIZE > 0xFFFFFFFFu) {
         return 0;
     }
     if (count > f.size - offset) {
-        count = offset < f.size ? (uint32_t)(f.size - offset) : 0;
+        count = (uint32_t)(f.size - offset);
     }
     while (done < count) {
         uint32_t in = (uint32_t)((offset + done) % PAGE_SIZE);
@@ -648,8 +658,7 @@ uint32_t filecache_shrink(uint32_t want)
     uint32_t given = 0, flags = kirq_save();
 
     while (oldest && given < want) {
-        fc_drop(oldest);
-        given++;
+        given += (uint32_t)fc_drop(oldest);
     }
     kirq_restore(flags);
     return given;
