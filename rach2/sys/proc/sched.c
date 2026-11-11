@@ -121,9 +121,14 @@ static uint64_t sched_clock_ns(void)
     return (uint64_t)sec * 1000000000u + (uint64_t)ns;
 }
 
+/* Set while a suspend to idle holds every thread but the suspender: no wait
+ * on a run queue is counted, as Linux's frozen tasks leave their queues. */
+static int waits_held;
+
 /** Append a noncurrent ready process once, with sched_lock held. A move
  * from one queue to another keeps the moment its wait began; a wait begun
- * before the scheduler is on, which has no clock to read, is not counted. */
+ * before the scheduler is on, which has no clock to read, or while
+ * `waits_held` is set, is not counted. */
 static void sched_append(process_t *p)
 {
     struct ready_queue *q = &run_queues[p->cpu];
@@ -131,7 +136,7 @@ static void sched_append(process_t *p)
     if (p->ready_linked || p == cpu_table[p->cpu].idle) {
         return;
     }
-    if (!p->run_queued && _sched_enabled) {
+    if (!p->run_queued && _sched_enabled && !waits_held) {
         p->run_queued = 1;
         p->queued_ns = sched_clock_ns();
     }
@@ -159,6 +164,28 @@ static void sched_arrive(process_t *p)
         p->run_queued = 0;
         p->run_delay += sched_clock_ns() - p->queued_ns;
     }
+}
+
+void sched_hold_waits(int hold)
+{
+    uint32_t flags = spin_lock_irqsave(&sched_lock);
+    uint64_t now = sched_clock_ns();
+    process_t *p;
+    int c;
+
+    waits_held = hold;
+    for (c = 0; c < NR_CPUS; c++) {
+        for (p = run_queues[c].head; p; p = p->ready_next) {
+            if (hold && p->run_queued) {
+                p->run_queued = 0;
+                p->run_delay += now - p->queued_ns;
+            } else if (!hold && !p->run_queued && _sched_enabled) {
+                p->run_queued = 1;
+                p->queued_ns = now;
+            }
+        }
+    }
+    spin_unlock_irqrestore(&sched_lock, flags);
 }
 
 void sched_forget(process_t *p)
@@ -225,6 +252,7 @@ void init_sched(void)
     int c;
 
     _sched_enabled = 0;
+    waits_held = 0;
     pick_count = pick_steps = 0;
     for (c = 0; c < NR_CPUS; c++) {
         run_queues[c].head = run_queues[c].tail = NULL;
