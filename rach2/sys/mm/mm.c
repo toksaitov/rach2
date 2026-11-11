@@ -19,10 +19,12 @@
 static struct mm *exe_list;
 
 /* The address spaces by their directory, in chains linked by `dir_next`,
- * for `mm_resident_add`, whose callers have the directory alone. */
+ * for `mm_resident_add`, whose callers have the directory alone. `dir_lock`
+ * covers the chains; it comes before a space's `rss_lock`. */
 #define DIR_CHAINS 64u
 
 static struct mm *dir_table[DIR_CHAINS];
+static struct spinlock dir_lock = SPINLOCK_INIT;
 
 /** The chain of `dir_table` for the directory `dir`, by its page's number. */
 static struct mm **dir_chain(const struct page_dir *dir)
@@ -33,6 +35,7 @@ static struct mm **dir_chain(const struct page_dir *dir)
 /** Take `mm` off the chain of its directory, before the directory goes. */
 static void dir_forget(struct mm *mm)
 {
+    uint32_t flags = spin_lock_irqsave(&dir_lock);
     struct mm **link = dir_chain(mm->dir);
 
     while (*link && *link != mm) {
@@ -41,11 +44,13 @@ static void dir_forget(struct mm *mm)
     if (*link) {
         *link = mm->dir_next;
     }
+    spin_unlock_irqrestore(&dir_lock, flags);
 }
 
 struct mm *mm_new(void)
 {
     struct mm *mm = kzalloc(sizeof(*mm));
+    uint32_t flags;
 
     if (!mm) {
         return NULL;
@@ -61,8 +66,10 @@ struct mm *mm_new(void)
     mm->dumpable = 1;
     mm->pkeys = 1;
     mm->pkey_exec = -1;
+    flags = spin_lock_irqsave(&dir_lock);
     mm->dir_next = *dir_chain(mm->dir);
     *dir_chain(mm->dir) = mm;
+    spin_unlock_irqrestore(&dir_lock, flags);
     return mm;
 }
 
@@ -256,27 +263,21 @@ unsigned long mm_resident(const struct mm *mm)
     return mm->resident;
 }
 
+/** Each word is read once, without the lock, as Linux's
+ * get_mm_hiwater_rss reads its counts: the peak never falls, so the larger
+ * of the two is one the space has had. */
 unsigned long mm_resident_peak(const struct mm *mm)
 {
-    return mm->resident > mm->resident_peak ? mm->resident : mm->resident_peak;
+    unsigned long now = mm->resident;
+    unsigned long peak = mm->resident_peak;
+
+    return now > peak ? now : peak;
 }
 
-void mm_resident_add(const struct page_dir *dir, long pages)
+/** Count `pages` more, or fewer, present pages in `mm`; its `rss_lock` is
+ * held. The peak is kept when pages go, as Linux's update_hiwater_rss. */
+static void rss_add(struct mm *mm, long pages)
 {
-    struct mm *mm = current_proc ? current_proc->mm : NULL;
-
-    if (pages == 0) {
-        return;
-    }
-    if (!mm || mm->dir != dir) {
-        mm = *dir_chain(dir);
-        while (mm && mm->dir != dir) {
-            mm = mm->dir_next;
-        }
-        if (!mm) {
-            return;
-        }
-    }
     if (pages > 0) {
         mm->resident += (unsigned long)pages;
         return;
@@ -285,6 +286,38 @@ void mm_resident_add(const struct page_dir *dir, long pages)
         mm->resident_peak = mm->resident;
     }
     mm->resident -= (unsigned long)-pages < mm->resident ? (unsigned long)-pages : mm->resident;
+}
+
+/**
+ * The running thread's space is found without the table, since it cannot go
+ * while the thread runs; another is found under `dir_lock`, which is held
+ * across the count so that the space found is not freed meanwhile.
+ */
+void mm_resident_add(const struct page_dir *dir, long pages)
+{
+    struct mm *mm = current_proc ? current_proc->mm : NULL;
+    uint32_t flags;
+
+    if (pages == 0) {
+        return;
+    }
+    if (mm && mm->dir == dir) {
+        flags = spin_lock_irqsave(&mm->rss_lock);
+        rss_add(mm, pages);
+        spin_unlock_irqrestore(&mm->rss_lock, flags);
+        return;
+    }
+    flags = spin_lock_irqsave(&dir_lock);
+    mm = *dir_chain(dir);
+    while (mm && mm->dir != dir) {
+        mm = mm->dir_next;
+    }
+    if (mm) {
+        spin_lock(&mm->rss_lock);
+        rss_add(mm, pages);
+        spin_unlock(&mm->rss_lock);
+    }
+    spin_unlock_irqrestore(&dir_lock, flags);
 }
 
 void mm_note_anon(struct mm *mm, uintptr_t start, uintptr_t end)
