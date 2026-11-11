@@ -272,12 +272,10 @@ load_env
 #
 #   0 candidate   1 fallback   2 recovery   3 text
 #
-# The candidate's lines carry `panic=10`: a kernel that panics keeps its
-# record on the screen ten seconds and then resets the machine, as Linux's
-# panic_timeout does, so that a trial that panics comes back through the
-# firmware to the saved default, the fallback, with nobody at the machine.
-# The fallback's and recovery's lines halt on a panic, so that a panic there
-# stays on the screen and no two kernels reset each other in turn.
+# No line names `panic=`: the kernel's default, 30 seconds, keeps a panic's
+# report on the screen that long and then resets the machine, so that a
+# trial that panics comes back through the firmware to the saved default,
+# the fallback, with nobody at the machine (rach2/cmdline.md).
 #
 # The kernel draws its console on a framebuffer when the loader gives one,
 # and on the VGA's text mode when it does not. GRUB sets the mode that
@@ -290,7 +288,7 @@ load_env
 
 menuentry "Start Rach2" --id candidate {
     search --no-floppy --fs-uuid --set=root RACH2_BOOT_SERIAL
-    RACH2_MULTIBOOT /boot/kernel rach2.root=RACH2_CANDIDATE_ROOT rach2.boot=RACH2_BOOT_PART rach2.slot=candidate panic=10 RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
+    RACH2_MULTIBOOT /boot/kernel rach2.root=RACH2_CANDIDATE_ROOT rach2.boot=RACH2_BOOT_PART rach2.slot=candidate RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
     if [ "$grub_platform" = pc ]; then set gfxpayload=auto; fi
     boot
 }
@@ -327,7 +325,7 @@ menuentry "RACH2_RECOVERY_TITLE" --id recovery {
 # text mode, so there it starts the kernel as the first entry does.
 menuentry "Start Rach2 in text mode" --id text {
     search --no-floppy --fs-uuid --set=root RACH2_BOOT_SERIAL
-    RACH2_MULTIBOOT /boot/kernel rach2.root=RACH2_CANDIDATE_ROOT rach2.boot=RACH2_BOOT_PART rach2.slot=candidate panic=10 RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
+    RACH2_MULTIBOOT /boot/kernel rach2.root=RACH2_CANDIDATE_ROOT rach2.boot=RACH2_BOOT_PART rach2.slot=candidate RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
     if [ "$grub_platform" = pc ]; then set gfxpayload=text; fi
     boot
 }
