@@ -13,6 +13,7 @@ static int model_intel, model_ext, model_v2, model_missing, model_ignored, model
 static int model_hybrid, model_bld;
 static uint32_t model_amd_sig; /* AMD's leaf 1 signature, 0 for family 0 */
 static uint32_t irq_flags = 0x200u;
+unsigned int host_cpu; /* the processor the model runs as, for `arch_cpu_id` */
 static uint64_t physical[160];
 static uint32_t physical_index[160], physical_n;
 const struct kvm_backend kvm_vmx, kvm_svm;
@@ -647,29 +648,42 @@ static void intel_steps(void)
           "and has its interrupt bit");
     *reg(FIXED0) += 5;
     *reg(PMC0) += 2;
+    *reg(GLOBAL_STATUS) = FIXED_BIT(1) | FIXED_BIT(0) | 1u;
+    *reg(GLOBAL_OVF) = 0;
     kvm_pmu_vmx_exit(&v, guest, 1);
+    CHECK(!*reg(GLOBAL_OVF),
+          "with the detector on, the exit leaves the overflows of the guest counters that have "
+          "their interrupt bits to their NMIs, which come after it");
     CHECK(v.pmu.fixed[0] == 5 && v.pmu.counter[0] == v.pmu.gp_mask - 1,
           "the deltas count from the written values");
     CHECK(*reg(FIXED_CTRL) == 0xB0u, "the exit clears the guest's field and keeps the host's");
     *reg(GLOBAL_STATUS) = FIXED_BIT(1);
-    *reg(GLOBAL_OVF) = 0;
     CHECK(!kvm_pmu_nmi() && !*reg(GLOBAL_OVF),
           "KVM leaves the NMI of the host's counter's overflow to the detector");
-    *reg(GLOBAL_STATUS) = FIXED_BIT(1) | FIXED_BIT(0) | 1u;
+    *reg(GLOBAL_STATUS) = FIXED_BIT(1) | FIXED_BIT(0) | 2u | 1u;
+    host_cpu = 1;
+    CHECK(!kvm_pmu_nmi() && !*reg(GLOBAL_OVF),
+          "an NMI on another processor claims none of the counters this one gave the bits");
+    host_cpu = 0;
     CHECK(kvm_pmu_nmi() == 2 && *reg(GLOBAL_OVF) == (FIXED_BIT(0) | 1u),
-          "and claims a guest counter's, acknowledging only the counters the host does not hold "
+          "and here KVM claims only the counters the last entry gave the bits, acknowledging "
           "and counting each, so that the NMI a second latched is swallowed");
-    *reg(GLOBAL_STATUS) = 0;
+    *reg(GLOBAL_STATUS) = FIXED_BIT(1) | FIXED_BIT(0) | 1u;
+    *reg(GLOBAL_OVF) = 0;
     model_armed = 0;
     kvm_pmu_prepare(&v);
     kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
+    CHECK(*reg(GLOBAL_OVF) == (FIXED_BIT(0) | 1u),
+          "the next entry acknowledges an overflow with the bit whose NMI never came");
     CHECK(*reg(FIXED_CTRL) == 0xB2u && *reg(EVENTSEL0) == (0xC4u | EV_ENABLE | EV_OS),
           "with the detector's counter stopped the entry sets no interrupt bit");
-    *reg(GLOBAL_STATUS) = FIXED_BIT(1) | FIXED_BIT(0) | 1u;
     *reg(GLOBAL_OVF) = 0;
     kvm_pmu_vmx_exit(&v, guest, 1);
     CHECK(*reg(GLOBAL_OVF) == (FIXED_BIT(0) | 1u),
           "and the exit acknowledges the guest counters' overflows, which raise no NMI");
+    *reg(GLOBAL_OVF) = 0;
+    CHECK(!kvm_pmu_nmi() && !*reg(GLOBAL_OVF),
+          "nor does an NMI after such an entry claim any overflow");
     model_armed = 1;
     *reg(GLOBAL_STATUS) = 0;
 }
