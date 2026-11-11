@@ -58,6 +58,10 @@ void usbdisk_step(void);
  */
 void usbdisk_service(void);
 
+/** Nonzero when `usbdisk_service` has work, for a system call's entry to
+ * take the big lock for it (`syscall_entry_locked`). Any context. */
+int usbdisk_pending(void);
+
 /**
  * How many holds are left on the stick of record `n`: the descriptions open
  * on its nodes, and on the whole device and on each view its mounts and

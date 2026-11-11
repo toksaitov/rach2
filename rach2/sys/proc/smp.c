@@ -669,6 +669,15 @@ void bkl_enter(void)
     kirq_restore(flags);
 }
 
+int bkl_held(void)
+{
+    uint32_t flags = kirq_save();
+    int held = this_cpu()->bkl_depth > 0;
+
+    kirq_restore(flags);
+    return held;
+}
+
 int bkl_try_enter(void)
 {
     struct percpu *cpu = this_cpu();

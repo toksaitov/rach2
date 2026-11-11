@@ -11,6 +11,7 @@
 #include "isr.h"
 #include "../../panic.h"
 #include "../../serial.h"
+#include "../../syscall.h"
 #include "../../mm/pressure.h"
 
 #include "../../lib/ksignal.h"
@@ -78,6 +79,14 @@ static isr_handler_t _isr_handlers[256][ISR_MAX_VECTOR_HANDLERS];
  * two devices on one line are two names on it. */
 static const char *_isr_names[256][ISR_MAX_VECTOR_HANDLERS];
 
+/* Each handler's flags (ISR_UNLOCKED), indexed as the chain is. */
+static uint8_t _isr_flags[256][ISR_MAX_VECTOR_HANDLERS];
+
+/* Nonzero for a vector whose chain has a handler and only handlers marked
+ * ISR_UNLOCKED, which its router runs without the big lock. A change of a
+ * chain clears it before the new handler goes on (`vector_unlocked`). */
+static volatile uint8_t _isr_unlocked[256];
+
 /*
  * How lines 0 to 15 reach the processor: through the 8259 pair, or through
  * the I/O APIC once `isr_lines_to_apic` has run. With the I/O APIC a line is
@@ -98,6 +107,7 @@ static uint16_t lines_pci;
 void _isr_router(isr_params_t *params);
 void isr_router_locked(isr_params_t *params);
 int isr_call_ioctl(const isr_params_t *params);
+int isr_entry_lock(const isr_params_t *params);
 
 void _irq_router(isr_params_t *params);
 
@@ -447,6 +457,7 @@ void init_isr(void)
     int vector;
 
     k_memset(&_isr_handlers, 0, sizeof(_isr_handlers));
+    k_memset(&_isr_flags, 0, sizeof(_isr_flags));
 
     for (vector = 0; vector < 32; vector++) {
         if (vector != 2 && vector != 8 && vector != 14 && vector != 18) {
@@ -473,6 +484,41 @@ static void line_route(int line)
     }
     (void)ioapic_route_line(line, (lines_pci & bit) != 0, (uint8_t)IRQ_VECTOR(line),
                             (uint8_t)lapic_id());
+}
+
+/** Count one more in `*count`, which processors without the big lock count
+ * too. */
+static void count_up(volatile uint32_t *count)
+{
+    uint32_t n;
+
+    do {
+        n = *count;
+    } while (arch_atomic_cmpxchg(count, n, n + 1u) != n);
+}
+
+/** Set `vector`'s mark from its chain: nonzero when it has a handler and
+ * every handler on it carries ISR_UNLOCKED. Called with the big lock held,
+ * after a change of the chain or its flags. */
+static void vector_unlocked(uint8_t vector)
+{
+    int i, n = 0, all = 1;
+
+    for (i = 0; i < ISR_MAX_VECTOR_HANDLERS; i++) {
+        if (_isr_handlers[vector][i] != 0) {
+            n++;
+            all = all && (_isr_flags[vector][i] & ISR_UNLOCKED) != 0;
+        }
+    }
+    _isr_unlocked[vector] = (uint8_t)(n > 0 && all);
+}
+
+/** Clear `vector`'s mark before a handler without ISR_UNLOCKED goes on its
+ * chain, so that no router runs the new handler without the big lock. */
+static void vector_relock(uint8_t vector)
+{
+    _isr_unlocked[vector] = 0;
+    sched_mb();
 }
 
 /** A handler went on `vector`: when it is a line's, route the line. */
@@ -571,9 +617,11 @@ void isr_free_vector(int vector)
     if (!vector_give(vector)) {
         return;
     }
+    vector_relock((uint8_t)vector);
     for (i = 0; i < ISR_MAX_VECTOR_HANDLERS; i++) {
         _isr_handlers[vector][i] = 0;
         _isr_names[vector][i] = 0;
+        _isr_flags[vector][i] = 0;
     }
 }
 
@@ -597,6 +645,8 @@ void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *nam
     }
     for (i = 0; i < ISR_MAX_VECTOR_HANDLERS; i++) {
         if (_isr_handlers[vector][i] == 0) {
+            vector_relock(vector);
+            _isr_flags[vector][i] = 0;
             _isr_handlers[vector][i] = handler;
             _isr_names[vector][i] = name;
             vector_registered(vector);
@@ -604,6 +654,35 @@ void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *nam
         }
     }
     klog(KLOG_ERR, "isr", "handler: vector %d chain full", vector);
+}
+
+void isr_register_flags(uint8_t vector, isr_handler_t handler, unsigned int flags)
+{
+    int i;
+
+    for (i = 0; i < ISR_MAX_VECTOR_HANDLERS; i++) {
+        if (_isr_handlers[vector][i] == handler && handler != 0) {
+            _isr_flags[vector][i] = (uint8_t)flags;
+            vector_unlocked(vector);
+            return;
+        }
+    }
+    klog(KLOG_ERR, "isr", "handler: not on vector %d's chain", vector);
+}
+
+void exception_unlock(uint8_t vector)
+{
+    int i;
+
+    if (vector >= 32) {
+        return;
+    }
+    for (i = 0; i < ISR_MAX_VECTOR_HANDLERS; i++) {
+        if (_isr_handlers[vector][i] != 0) {
+            _isr_flags[vector][i] |= ISR_UNLOCKED;
+        }
+    }
+    vector_unlocked(vector);
 }
 
 /**
@@ -617,11 +696,14 @@ void set_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
 {
     int i;
 
+    vector_relock(vector);
+    _isr_flags[vector][0] = 0;
     _isr_handlers[vector][0] = handler;
     _isr_names[vector][0] = name;
     for (i = 1; i < ISR_MAX_VECTOR_HANDLERS; i++) {
         _isr_handlers[vector][i] = 0;
         _isr_names[vector][i] = 0;
+        _isr_flags[vector][i] = 0;
     }
     vector_registered(vector);
 }
@@ -710,11 +792,32 @@ int isr_call_ioctl(const isr_params_t *params)
 }
 
 /**
- * Take the big lock and run the handler chain of a processor exception or
- * a system call; `isr_leave` gives the lock back. `params` is the saved
- * register frame, so that a handler can change the saved registers, a
- * system call's result for one. An exception during the panic's read of
- * the process panics before the lock is taken (`panic_if_reading`).
+ * Take the big lock for the exception or system call in `params` unless it
+ * runs without it, and record which in the thread's frame records
+ * (`bkl_frame_push`), for `isr_leave`. A system call is judged by its
+ * handler and ABI and the thread's state (`syscall_entry_locked`), an
+ * exception by its chain (`exception_unlock`). Returns nonzero when the lock
+ * was taken. `ia32_fast_syscall` (vdso32.c) calls it as `_isr_router` does.
+ */
+int isr_entry_lock(const isr_params_t *params)
+{
+    int locked = params->vector == SYSCALL_ENTRY ? syscall_entry_locked(params)
+                                                 : !_isr_unlocked[params->vector];
+
+    if (locked) {
+        bkl_enter();
+    }
+    bkl_frame_push(locked);
+    return locked;
+}
+
+/**
+ * Run the handler chain of a processor exception or a system call, under
+ * the big lock unless the entry runs without it (`isr_entry_lock`);
+ * `isr_leave` gives the lock back. `params` is the saved register frame, so
+ * that a handler can change the saved registers, a system call's result for
+ * one. An exception during the panic's read of the process panics before
+ * the lock is taken (`panic_if_reading`).
  */
 void _isr_router(isr_params_t *params)
 {
@@ -728,9 +831,7 @@ void _isr_router(isr_params_t *params)
         nr = (uint32_t)SC_NR(params);
     }
     panic_if_reading(params);
-    bkl_enter();
-    bkl_frame_push(1);
-    if (params->vector == SYSCALL_ENTRY) {
+    if (isr_entry_lock(params) && params->vector == SYSCALL_ENTRY) {
         ioctl = isr_call_ioctl(params);
     }
     isr_router_locked(params);
@@ -739,7 +840,8 @@ void _isr_router(isr_params_t *params)
     }
 }
 
-/** Dispatch a saved frame with the big lock held; isr_leave releases it. */
+/** Dispatch a saved frame, with the big lock held when its entry took it
+ * (`isr_entry_lock`); isr_leave releases it. */
 void isr_router_locked(isr_params_t *params)
 {
     int32_t nr = params->vector == SYSCALL_ENTRY ? (int32_t)SC_NR(params) : -1;
@@ -773,10 +875,13 @@ void isr_paranoid_router(isr_params_t *params)
 /**
  * The return to the interrupted code, after its router: deliver a signal
  * pending for a return to user mode, update the thread's rseq area
- * (`rseq_return`), and give back the big lock the router
- * took; a tick the router took without the lock returns as it came.
- * Interrupts are off. A forked child's first return comes here too,
- * with the depth its fork gave it.
+ * (`rseq_return`), and give back the big lock the router took; a tick the
+ * router took without the lock returns as it came. An entry that ran
+ * without the lock takes it here only for a return to user mode with signal
+ * work (`signal_return_work`) or the rseq area to update, as Linux's
+ * `exit_to_user_mode_loop` acts only on the work its flags name
+ * (kernel/entry/common.c:90-127). Interrupts are off. A forked child's
+ * first return comes here too, with the depth its fork gave it.
  */
 void isr_leave(isr_params_t *params)
 {
@@ -786,7 +891,17 @@ void isr_leave(isr_params_t *params)
         cpu->tick_unlocked = 0;
         return;
     }
-    (void)bkl_frame_pop();
+    if (!bkl_frame_pop()) {
+        if (!FRAME_USER(params)) {
+            return;
+        }
+        if (!signal_return_work(params) && !current_proc->rseq_notify) {
+            debugreg_resume();
+            waketime_return();
+            return;
+        }
+        bkl_enter();
+    }
     deliver_signals(params);
     if (FRAME_USER(params)) {
         rseq_return(params);
@@ -802,11 +917,12 @@ void isr_leave(isr_params_t *params)
  * spurious vector, which needs no end-of-interrupt.
  *
  * An interprocessor interrupt that finds user mode with a requested
- * reschedule or its thread's rseq marked takes the big lock after its end
- * of interrupt. It takes the switch, then returns through `isr_leave`, so
- * that a move updates the rseq area and a barrier aborts its section before
- * user code resumes. An interrupt in kernel mode leaves the request for
- * the system call's next scheduling point.
+ * reschedule or its thread's rseq marked takes the switch after its end of
+ * interrupt, without the big lock, then returns through `isr_leave`, which
+ * takes the lock for signal work or the rseq area, so that a move updates
+ * the area and a barrier aborts its section before user code resumes. An
+ * interrupt in kernel mode leaves the request for the system call's next
+ * scheduling point.
  */
 void isr_local_router(isr_params_t *params)
 {
@@ -816,8 +932,7 @@ void isr_local_router(isr_params_t *params)
         lapic_eoi();
         if (FRAME_USER(params) && current_proc &&
             (current_proc->need_resched || current_proc->rseq_notify)) {
-            bkl_enter();
-            bkl_frame_push(1);
+            bkl_frame_push(0);
             sched_take_preempt();
             isr_leave(params);
         }
@@ -868,8 +983,9 @@ static void irq_dispatch(isr_params_t *params)
 }
 
 /**
- * Take the big lock, count a device's interrupt, run its vector's chain and
- * end it at the controller it came through; `isr_leave` gives the lock
+ * Take the big lock, unless every handler of the chain runs without it
+ * (`isr_register_flags`), count a device's interrupt, run its vector's chain
+ * and end it at the controller it came through; `isr_leave` gives the lock
  * back.
  *
  * A message from a PCI device, vector 48 and up, has no 8259 line to
@@ -931,6 +1047,7 @@ void _irq_router(isr_params_t *params)
 {
     struct percpu *cpu = this_cpu();
     uint32_t wake_irq = params->vector == IRQ_VECTOR(0) ? waketime_clock() : 0;
+    int locked = 1;
 
     user_entry(params);
     if (FRAME_PC(params) == (unsigned long)arch_idle_resume) {
@@ -940,7 +1057,10 @@ void _irq_router(isr_params_t *params)
         watchdog_tick(params);
     }
     if (params->vector != IRQ_VECTOR(0)) {
-        bkl_enter();
+        locked = !_isr_unlocked[params->vector];
+        if (locked) {
+            bkl_enter();
+        }
     } else if (!bkl_try_enter()) {
         if (!tick_waits()) {
             if (lines_apic || arch_cpu_id() != 0) {
@@ -954,7 +1074,7 @@ void _irq_router(isr_params_t *params)
         }
         bkl_enter();
     }
-    bkl_frame_push(1);
+    bkl_frame_push(locked);
     if (params->vector == IRQ_VECTOR(0)) {
         if (arch_cpu_id() == 0) {
             boot_ticks_skipped = 0;
@@ -962,21 +1082,23 @@ void _irq_router(isr_params_t *params)
         cpu->wake_irq_start = wake_irq;
         cpu->wake_irq_locked = waketime_clock();
     }
-    bkl_note_entry((uint32_t)params->vector, -1);
+    if (locked) {
+        bkl_note_entry((uint32_t)params->vector, -1);
 #if defined(__x86_64__)
-    bkl_hold_sample((uintptr_t)FRAME_PC(params), (uintptr_t)params->rbp);
-    if (params->vector == IRQ_VECTOR(0)) {
-        bkl_profile_sample((uintptr_t)FRAME_PC(params), (uintptr_t)params->rbp);
-    }
+        bkl_hold_sample((uintptr_t)FRAME_PC(params), (uintptr_t)params->rbp);
+        if (params->vector == IRQ_VECTOR(0)) {
+            bkl_profile_sample((uintptr_t)FRAME_PC(params), (uintptr_t)params->rbp);
+        }
 #else
-    bkl_hold_sample((uintptr_t)FRAME_PC(params), (uintptr_t)params->ebp);
-    if (params->vector == IRQ_VECTOR(0)) {
-        bkl_profile_sample((uintptr_t)FRAME_PC(params), (uintptr_t)params->ebp);
-    }
+        bkl_hold_sample((uintptr_t)FRAME_PC(params), (uintptr_t)params->ebp);
+        if (params->vector == IRQ_VECTOR(0)) {
+            bkl_profile_sample((uintptr_t)FRAME_PC(params), (uintptr_t)params->ebp);
+        }
 #endif
-    irq_count++;
+    }
+    count_up(&irq_count);
     if (params->vector >= 32 && params->vector <= ISR_MSI_LAST) {
-        vector_count[params->vector - 32]++;
+        count_up(&vector_count[params->vector - 32]);
     }
 
 #ifdef DEBUG

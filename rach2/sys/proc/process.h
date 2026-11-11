@@ -1022,6 +1022,19 @@ struct isr_params;
 void deliver_signals(struct isr_params *tf);
 
 /**
+ * Nonzero when a return to user mode through `tf` has work for
+ * `deliver_signals`: a signal deliverable or a stop to take, the thread's
+ * signal flag set (`sig_woken`), a call to restart, a mask to put back, a
+ * tracer, or ended threads to free. `isr_leave` asks it for an entry that ran
+ * without the big lock, and takes the lock only for this work, as Linux's
+ * exit to user mode acts only on its work flags. Read with interrupts off,
+ * without the lock: a signal posted after the read is acted on at the
+ * thread's next entry, as one posted while it runs user code is. Defined in
+ * syscall_proc.c.
+ */
+int signal_return_work(const struct isr_params *tf);
+
+/**
  * Save the running thread's kernel registers in `old` and resume
  * `new_proc` where its last switch left it, or at the return its first
  * frame has (`setup_process_stack`, `arch_fork_frame`). It also gives the

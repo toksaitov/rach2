@@ -6147,6 +6147,17 @@ void deliver_signals(isr_params_t *tf)
     }
 }
 
+int signal_return_work(const isr_params_t *tf)
+{
+    const process_t *p = current_proc;
+
+    if (!p || !FRAME_USER(tf)) {
+        return 0;
+    }
+    return proc_dead_threads != 0 || p->restart_due || p->ptrace || p->sigmask_saved ||
+           p->sig_woken || p->tg->stop || (sig_pending_now() & ~p->sig_blocked) != 0;
+}
+
 /**
  * Wait, as rt_sigtimedwait does, for a signal of `set` to be pending for the
  * current thread or its process until the tick `deadline` when `timed`, and

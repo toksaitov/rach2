@@ -27,10 +27,12 @@ struct page_dir;
 
 /** Take the big lock on an entry to the kernel, or once more when this
  * processor holds it. While it spins, with interrupts off, it answers this
- * processor's requests (`smp_service`), and once it has the lock it drops
- * every translation when a kernel mapping changed since this processor
- * last held it. */
+ * processor's requests (`smp_service`). Never under a spinlock. */
 void bkl_enter(void);
+
+/** Nonzero when the running thread holds the big lock: this processor's
+ * depth, which goes with the thread across a switch. Any context. */
+int bkl_held(void);
 
 /** Take the big lock as `bkl_enter` does when it is free or this processor
  * holds it, and return 1; return 0 at once, taking nothing, when another
@@ -39,11 +41,11 @@ int bkl_try_enter(void);
 
 /**
  * Let a processor that has claimed the big lock have it, and take it back at
- * the same depth; nothing when none has. `schedule` calls
- * this for the process it has just resumed, whose kernel state may be seen as
- * at any sleep: a processor that goes from one process inside the kernel to
- * the next never returns to user mode and would keep the lock across a whole
- * run queue. Interrupts are off.
+ * the same depth; nothing when none has. `sched_service_point` calls it in
+ * a long call on a processor with no switch to make, and the mouse's
+ * command runs between their waits, since a thread that never sleeps and
+ * never returns to user mode would keep the lock across them. Interrupts are
+ * off.
  */
 void bkl_yield(void);
 
