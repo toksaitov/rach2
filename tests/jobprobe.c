@@ -42,8 +42,8 @@
 #define SIGTTIN 21
 #define SIGTTOU 22
 
-#define SIG_DFL ((void (*)(int))0)
-#define SIG_IGN ((void (*)(int))1)
+#define SIG_DFL 0ul
+#define SIG_IGN 1ul
 
 #define WNOHANG    1
 #define WUNTRACED  2
@@ -149,17 +149,18 @@ static int pause(void)
 {
     return syscall1(SYS_PAUSE, 0);
 }
-/* The sigaction rt_sigaction takes, with a 64-bit mask. */
+/* The sigaction rt_sigaction takes, with a 64-bit mask; the handler is a
+ * disposition, SIG_DFL or SIG_IGN, held in a word the size of a pointer. */
 struct k_sigaction {
-    void (*handler)(int);
+    unsigned long handler;
     unsigned long flags;
-    void (*restorer)(void);
+    unsigned long restorer;
     unsigned long long mask;
 };
 
 /** Set the disposition of `sig` to SIG_DFL or SIG_IGN: 0, or a negated
  * errno. */
-static int signal_set(int sig, void (*handler)(int))
+static int signal_set(int sig, unsigned long handler)
 {
     struct k_sigaction ka;
 
