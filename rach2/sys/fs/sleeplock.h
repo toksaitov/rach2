@@ -32,10 +32,17 @@ struct sleep_lock_record {
     char longest_comm[16]; /* its holder's name, NUL-padded */
     struct sleep_lock_record *next;
     int listed; /* nonzero once on the list */
+#ifdef RACH2_LOCKDEP
+    struct lockdep_key key; /* the checker's class of the kind's locks */
+#endif
 };
 
 /* A record with nothing counted yet, of the kind named `kind`. */
+#ifdef RACH2_LOCKDEP
+#define SLEEP_LOCK_RECORD(kind) {(kind), 0, 0, 0, {0}, 0, 0, {0}}
+#else
 #define SLEEP_LOCK_RECORD(kind) {(kind), 0, 0, 0, {0}, 0, 0}
+#endif
 
 /* A lock that counts in its holder's `file_locks` (process.h): a node's
  * lock and a mount's allocator lock, under which reclaim must not enter a
@@ -63,7 +70,26 @@ struct sleep_lock {
     int flags;                        /* SLEEP_LOCK_FILE or 0 */
     struct sleep_lock_record *record; /* its kind's, or NULL */
     wait_queue_t wq;
+#ifdef RACH2_LOCKDEP
+    struct lockdep_map dep; /* its class: its kind's, for the checker */
+#endif
 };
+
+/* Take the next sleeping lock the calling thread takes at subclass `n` of
+ * its class, for the checker: a rename's second directory and the nodes
+ * under its two, of one class with the first, as Linux's
+ * `inode_lock_nested` names them (include/linux/fs.h). Nothing without the
+ * checker. */
+#ifdef RACH2_LOCKDEP
+#define sleep_lock_subclass(n)                    \
+    do {                                          \
+        if (current_proc) {                       \
+            current_proc->lockdep_subclass = (n); \
+        }                                         \
+    } while (0)
+#else
+#define sleep_lock_subclass(n) ((void)0)
+#endif
 
 /** Make `l` a free lock of the kind `record`, which may be NULL for a lock
  * whose holds are not recorded, with `flags` SLEEP_LOCK_FILE or 0. The

@@ -92,6 +92,11 @@ void lockdep_release(struct lockdep_map *map, uintptr_t ip);
  * interrupts off or in an interrupt (`might_sleep`). */
 void lockdep_might_sleep(uintptr_t ip);
 
+/** Report, once for each site, a switch at `ip` while this processor holds
+ * a spinlock, which `schedule` checks with interrupts on or off: a switch
+ * with them off is how every sleep ends, so only the spinlock is wrong. */
+void lockdep_switch(uintptr_t ip);
+
 /** Report, once for each site, the big lock taken at `ip` while this
  * processor holds a spinlock. A trylock of the big lock does not wait and
  * is not checked. */
@@ -135,6 +140,7 @@ int lockdep_stats_text(char *buf, int cap);
 #define lockdep_acquire(map, subclass, how, ip) ((void)0)
 #define lockdep_release(map, ip)                ((void)0)
 #define lockdep_might_sleep(ip)                 ((void)0)
+#define lockdep_switch(ip)                      ((void)0)
 #define lockdep_bkl_acquire(ip)                 ((void)0)
 #define lockdep_irqs_on(ip)                     ((void)0)
 #define lockdep_assert_held(lock)               ((void)(lock))

@@ -298,10 +298,14 @@ static int rename_children(const struct rename_names *r, struct vfs_rename_hold 
     h->child[0] = c.node ? c : t;
     h->child[1] = c.node ? t : c;
     if (h->child[0].node) {
+        sleep_lock_subclass(2);
         vfs_node_lock(&h->child[0]);
+        sleep_lock_subclass(0);
     }
     if (h->child[1].node) {
+        sleep_lock_subclass(3);
         vfs_node_lock(&h->child[1]);
+        sleep_lock_subclass(0);
     }
     return 0;
 }
@@ -346,7 +350,9 @@ int vfs_rename_lock(const struct vfs_ref *opar, const char *oleaf, const struct 
         }
         vfs_node_lock(&h->dir[0]);
         if (h->dir[1].mnt) {
+            sleep_lock_subclass(1);
             vfs_node_lock(&h->dir[1]);
+            sleep_lock_subclass(0);
         }
         if (rename_children(&r, h, &seen) == 0) {
             return 0;
