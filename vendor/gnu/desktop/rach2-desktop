@@ -8,13 +8,13 @@ udev='' seat='' watch='' session='' restart=0 devices=0
 # removed since the session started, and whether the session lost its card
 # and waits for another.
 shown='' shown_dev='' dropped=0 lost=0
-# The cards udev has reported removed and the loop has not yet read, a name
-# a line.
-removed=/run/rach2-desktop.removed
+# The cards udev has reported removed, a name a line, which only the monitor
+# below writes, by appending, and the lines of it the loop has read.
+removed=/run/rach2-desktop.removed seen=0
 cleanup()
 {
     trap - EXIT HUP INT TERM USR1
-    rm -f /run/rach2-desktop.pid "$removed" "$removed.taken"
+    rm -f /run/rach2-desktop.pid "$removed"
     for child in "$session" "$watch" "$seat" "$udev"; do
         [ -z "$child" ] || kill -TERM "-$child" 2>/dev/null || :
     done
@@ -48,7 +48,7 @@ done
 # have run, wakes the loop below with SIGUSR1; a card that goes away is
 # named in $removed first, since it may be back under the same name and
 # device by the time the loop looks.
-rm -f "$removed" "$removed.taken"
+rm -f "$removed"
 # shellcheck disable=SC2016 # the child expands its own words
 setsid bash -c 'udevadm monitor --udev --subsystem-match=drm |
     while read -r line; do
@@ -102,16 +102,21 @@ device()
 }
 
 # taken: read the cards udev has reported removed since the last read, and
-# set dropped when the session's card is among them.
+# set dropped when the session's card is among them. The file is never
+# renamed or cut, so that no append can land where the loop does not read; a
+# last line without its newline is still being written, and waits for the
+# next read.
 taken()
 {
-    local card name
+    local card name n=0
     card=$(echo "$shown" | cut -d' ' -f2)
-    mv -f "$removed" "$removed.taken" 2>/dev/null || return 0
-    while read -r name; do
+    [ -f "$removed" ] || return 0
+    while IFS= read -r name; do
+        n=$((n + 1))
+        [ "$n" -gt "$seen" ] || continue
+        seen=$n
         [ "$name" != "$card" ] || dropped=1
-    done < "$removed.taken"
-    rm -f "$removed.taken"
+    done < "$removed"
 }
 
 # gone: whether the card of the session's display has gone away, though a
