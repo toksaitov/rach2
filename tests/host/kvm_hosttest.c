@@ -564,6 +564,16 @@ static void fake_inject(struct kvm_vcpu *v)
     injects++;
 }
 
+/* The calls of the backend's msr_filter_changed. */
+static int filter_changes;
+
+/** The backend's msr_filter_changed: counted. */
+static void fake_msr_filter_changed(struct kvm_vcpu *v)
+{
+    (void)v;
+    filter_changes++;
+}
+
 /** The capabilities a backend makes true: single-stepping and guest
  * debugging. */
 static int32_t fake_backend_cap(long cap)
@@ -582,10 +592,21 @@ static uint64_t fake_tsc_scaling(uint32_t *frac_bits)
     return scale_bits == 32 ? 0xFFFFFFFFFFull : scale_bits ? ~0ull : 0;
 }
 
-const struct kvm_backend kvm_vmx = {
-    "vmx",      fake_probe,      NULL,          NULL, NULL,        NULL,
-    fake_enter, fake_exit,       fake_complete, NULL, fake_inject, fake_backend_cap,
-    NULL,       fake_tsc_scaling};
+const struct kvm_backend kvm_vmx = {"vmx",
+                                    fake_probe,
+                                    NULL,
+                                    NULL,
+                                    NULL,
+                                    NULL,
+                                    fake_enter,
+                                    fake_exit,
+                                    fake_complete,
+                                    NULL,
+                                    fake_inject,
+                                    fake_backend_cap,
+                                    NULL,
+                                    fake_tsc_scaling,
+                                    fake_msr_filter_changed};
 const struct kvm_backend kvm_svm = {"svm", fake_probe, NULL, NULL, NULL, NULL, NULL,
                                     NULL,  NULL,       NULL, NULL, NULL, NULL};
 
@@ -864,12 +885,23 @@ int kvm_lapic_hv_msr(struct kvm_vcpu *v, uint32_t reg, int write, uint64_t *valu
     return 1;
 }
 
+/* The vector of the last exception queued, -1 for none. */
+static int queued = -1;
+
 void kvm_queue_exception(struct kvm_vcpu *v, uint8_t nr, int has_error, uint32_t error)
 {
     (void)v;
-    (void)nr;
     (void)has_error;
     (void)error;
+    queued = nr;
+}
+
+/** emulate.c's: whether the CPUID names AMD, "AuthenticAMD". */
+int kvm_guest_amd(const struct kvm_vcpu *v)
+{
+    const struct kvm_cpuid_entry2 *e = kvm_cpuid_find(v, 0, 0);
+
+    return e && e->ebx == 0x68747541u && e->edx == 0x69746E65u && e->ecx == 0x444D4163u;
 }
 
 int kvm_emul_cpl(const struct kvm_vcpu *v)
@@ -1112,10 +1144,12 @@ static void startup_msr_lists(void)
     ucode = steal = 0;
     for (i = 0; i < nmsrs; i++) {
         put_msr(MSR_INDICES[i]);
-        ucode |= MSR_INDICES[i] == 0x8B;
+        ucode |= MSR_INDICES[i] == 0x8B ? 1 : MSR_INDICES[i] == 0x1FC ? 2 : 0;
+        ucode |= MSR_INDICES[i] == 0xC0010015u ? 4 : 0;
         steal |= MSR_INDICES[i] == MSR_KVM_STEAL_TIME;
     }
-    CHECK(ucode, "the index list names UCODE_REV, as Linux's emulated_msrs");
+    CHECK(ucode == 7,
+          "the index list names UCODE_REV, POWER_CTL and HWCR, as Linux's emulated_msrs");
     CHECK(steal, "and MSR_KVM_STEAL_TIME");
     buf.list.nmsrs = 4;
     r = dev(KVM_GET_MSR_FEATURE_INDEX_LIST, (uintptr_t)&buf);
@@ -2830,6 +2864,200 @@ static void stats_rows(void)
     CHECK(live == before, "the last file's close frees the VM");
 }
 
+/**
+ * The machine-check MSRs, HWCR and POWER_CTL as the caller and the guest
+ * reach them, by Linux's host_initiated: MCG_CTL without MCG_CTL_P, which
+ * state_test saves and restores; each bit of HWCR on an Intel model, as
+ * hwcr_msr_test sets it; and a bank's STATUS, which the guest writes
+ * nonzero only on AMD with McStatusWrEn.
+ */
+static void mce_hwcr_rows(void)
+{
+    const uint64_t legal = (1ull << 3) | (1ull << 6) | (1ull << 8) | (1ull << 18) | (1ull << 24);
+    const uint64_t valid = (1ull << 18) | (1ull << 24);
+    int vm = dev(KVM_CREATE_VM, 0), fd = fdio(vm, KVM_CREATE_VCPU, 0);
+    struct kvm_vcpu *v = (struct kvm_vcpu *)entries[fd].priv;
+    uint64_t value = 1, val;
+    uint32_t bit;
+    int32_t r;
+    int ok = 1;
+
+    CHECK(!(v->mcg_cap & MCG_CTL_P) && get_msr(fd, 0x17B, &value) == 1 && value == 0,
+          "the caller reads MCG_CTL without MCG_CTL_P, as state_test saves it");
+    CHECK(set_msr(fd, 0x17B, 0) == 1 && set_msr(fd, 0x17B, ~0ull) == 0,
+          "and writes 0 to it, but not all ones");
+    CHECK(kvm_msr_get(v, 0x17B, &value, 0) == KVM_MSR_INVAL &&
+              kvm_msr_set(v, 0x17B, 0, 0) == KVM_MSR_INVAL,
+          "the guest neither reads nor writes it");
+    for (bit = 0; bit < 64; bit++) {
+        val = 1ull << bit;
+        r = set_msr(fd, 0xC0010015u, val);
+        ok &= (val & ~legal) ? r == 0 : r == 1;
+        ok &= get_msr(fd, 0xC0010015u, &value) == 1 && value == (val & valid);
+        ok &= set_msr(fd, 0xC0010015u, 0) == 1;
+    }
+    CHECK(ok, "HWCR keeps McStatusWrEn and TscFreqSel, drops three bits and refuses the rest");
+    CHECK(set_msr(fd, 0x1FC, 0x1234) == 1 && get_msr(fd, 0x1FC, &value) == 1 && value == 0x1234 &&
+              kvm_msr_get(v, 0x1FC, &value, 0) == 0 && value == 0x1234,
+          "POWER_CTL keeps what is written, and the guest reads it");
+
+    value = MCG_CTL_P | 10;
+    CHECK(fdio(fd, KVM_X86_SETUP_MCE, (uintptr_t)&value) == 0, "KVM_X86_SETUP_MCE, 10 banks");
+    CHECK(kvm_msr_set(v, 0x401, 5, 0) == KVM_MSR_INVAL && kvm_msr_set(v, 0x401, 0, 0) == 0 &&
+              set_msr(fd, 0x401, 5) == 1,
+          "the guest only clears a bank's STATUS, which the caller writes as it likes");
+    CHECK(set_msr(fd, 0xC0010015u, 1ull << 18) == 1 && kvm_msr_set(v, 0x401, 5, 0) == KVM_MSR_INVAL,
+          "McStatusWrEn does not let an Intel guest write it");
+    k_memset(CPUID_ENTRIES, 0, sizeof(*CPUID_ENTRIES));
+    CPUID_ENTRIES[0].eax = 0xD;
+    CPUID_ENTRIES[0].ebx = 0x68747541u; /* "AuthenticAMD" */
+    CPUID_ENTRIES[0].edx = 0x69746E65u;
+    CPUID_ENTRIES[0].ecx = 0x444D4163u;
+    buf.cpuid.nent = 1;
+    CHECK(fdio(fd, KVM_SET_CPUID2, (uintptr_t)&buf) == 0 && kvm_msr_set(v, 0x401, 6, 0) == 0 &&
+              v->mce_banks[1] == 6,
+          "an AMD guest with McStatusWrEn does, as Linux's can_set_mci_status");
+    CHECK(kvm_msr_get(v, 0x400 + 4 * 10, &value, 1) == KVM_MSR_INVAL &&
+              kvm_msr_get(v, 0x400 + 4 * 32, &value, 1) == KVM_MSR_UNKNOWN,
+          "a bank past MCG_CAP's count is refused, one past KVM's 32 unknown");
+    fdclose(fd);
+    fdclose(vm);
+}
+
+/* The bitmaps of user_msr_rows' filter: reads of 0 to 0x2FFF but 0x10,
+ * writes of them but POWER_CTL, and one MSR at 0xDEADBEEF. */
+static uint8_t read_bits[KVM_MSR_FILTER_MAX_BITMAP_SIZE],
+    write_bits[KVM_MSR_FILTER_MAX_BITMAP_SIZE];
+static uint64_t one_bit = 1;
+
+/** KVM_X86_SET_MSR_FILTER of `f` on the VM `vm`. */
+static int32_t set_filter(int vm, struct kvm_msr_filter *f)
+{
+    return fdio(vm, KVM_X86_SET_MSR_FILTER, (uintptr_t)f);
+}
+
+/** KVM_CAP_X86_USER_SPACE_MSR's and KVM_X86_SET_MSR_FILTER's flags, as
+ * userspace_msr_exit_test's user_exit_msr_flags tries each bit. */
+static void user_msr_flag_rows(int vm)
+{
+    struct kvm_msr_filter f;
+    uint64_t deny = 0;
+    uint32_t i;
+    int32_t r;
+    int ok = 1;
+
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_X86_USER_SPACE_MSR) == 1 &&
+              dev(KVM_CHECK_EXTENSION, KVM_CAP_X86_MSR_FILTER) == 1,
+          "KVM_CAP_X86_USER_SPACE_MSR and KVM_CAP_X86_MSR_FILTER");
+    for (i = 0; i < 64; i++) {
+        r = vm_cap(vm, KVM_CAP_X86_USER_SPACE_MSR, 1ull << i);
+        ok &= (1ull << i) & KVM_MSR_EXIT_REASON_VALID_MASK ? r == 0 : r == -EINVAL;
+    }
+    CHECK(ok, "KVM_CAP_X86_USER_SPACE_MSR takes INVAL, UNKNOWN and FILTER alone");
+    k_memset(&f, 0, sizeof(f));
+    f.ranges[0].flags = KVM_MSR_FILTER_READ;
+    f.ranges[0].nmsrs = 1;
+    f.ranges[0].bitmap = (uintptr_t)&deny;
+    for (i = 0; i < 32; i++) {
+        f.flags = 1u << i;
+        r = set_filter(vm, &f);
+        ok &= (1u << i) & KVM_MSR_FILTER_VALID_MASK ? r == 0 : r == -EINVAL;
+    }
+    f.flags = KVM_MSR_FILTER_DEFAULT_ALLOW;
+    for (i = 0; i < 32; i++) {
+        f.ranges[0].flags = 1u << i;
+        r = set_filter(vm, &f);
+        ok &= (1u << i) & KVM_MSR_FILTER_RANGE_VALID_MASK ? r == 0 : r == -EINVAL;
+    }
+    CHECK(ok, "KVM_X86_SET_MSR_FILTER takes DEFAULT_DENY, and READ and WRITE in a range");
+    k_memset(&f, 0, sizeof(f));
+    f.flags = KVM_MSR_FILTER_DEFAULT_DENY;
+    CHECK(set_filter(vm, &f) == -EINVAL, "a filter that denies all with no range");
+    f.ranges[0].flags = KVM_MSR_FILTER_READ;
+    f.ranges[0].nmsrs = KVM_MSR_FILTER_MAX_BITMAP_SIZE * 8u + 1u;
+    f.ranges[0].bitmap = (uintptr_t)read_bits;
+    CHECK(set_filter(vm, &f) == -EINVAL, "a bitmap past KVM_MSR_FILTER_MAX_BITMAP_SIZE");
+}
+
+/**
+ * The guest's RDMSR and WRMSR under KVM_X86_SET_MSR_FILTER and
+ * KVM_CAP_X86_USER_SPACE_MSR, as userspace_msr_exit_test's filter_deny
+ * sets them: which accesses the filter allows, the request each vCPU gets
+ * when it changes, and the exits through the run page with the caller's
+ * answers at the next KVM_RUN, a read's value or #GP.
+ */
+static void user_msr_rows(void)
+{
+    int vm = dev(KVM_CREATE_VM, 0), fd = fdio(vm, KVM_CREATE_VCPU, 0);
+    struct kvm_vcpu *v = (struct kvm_vcpu *)entries[fd].priv;
+    struct kvm_run *run = run_of(fd);
+    struct kvm_msr_filter f;
+    struct kvm_regs regs;
+
+    user_msr_flag_rows(vm);
+    k_memset(read_bits, 0xFF, sizeof(read_bits));
+    k_memset(write_bits, 0xFF, sizeof(write_bits));
+    read_bits[0x10 / 8] &= (uint8_t)~(1u << (0x10 % 8));
+    write_bits[0x1FC / 8] &= (uint8_t)~(1u << (0x1FC % 8));
+    k_memset(&f, 0, sizeof(f));
+    f.flags = KVM_MSR_FILTER_DEFAULT_DENY;
+    f.ranges[0].flags = KVM_MSR_FILTER_READ;
+    f.ranges[0].nmsrs = KVM_MSR_FILTER_MAX_BITMAP_SIZE * 8u;
+    f.ranges[0].bitmap = (uintptr_t)read_bits;
+    f.ranges[1].flags = KVM_MSR_FILTER_WRITE;
+    f.ranges[1].nmsrs = KVM_MSR_FILTER_MAX_BITMAP_SIZE * 8u;
+    f.ranges[1].bitmap = (uintptr_t)write_bits;
+    f.ranges[2].flags = KVM_MSR_FILTER_READ | KVM_MSR_FILTER_WRITE;
+    f.ranges[2].nmsrs = 1;
+    f.ranges[2].base = 0xDEADBEEFu;
+    f.ranges[2].bitmap = (uintptr_t)&one_bit;
+    v->requests = 0;
+    CHECK(set_filter(vm, &f) == 0 && (v->requests & KVM_REQ_MSR_FILTER),
+          "a new filter asks each vCPU to bring its bitmap up to date");
+    CHECK(!kvm_msr_allowed(v, 0x10, 0) && kvm_msr_allowed(v, 0x11, 0) &&
+              kvm_msr_allowed(v, 0x10, 1) && !kvm_msr_allowed(v, 0x1FC, 1) &&
+              kvm_msr_allowed(v, 0x1FC, 0),
+          "a range's bitmap decides the accesses its flags name");
+    CHECK(!kvm_msr_allowed(v, 0xC0000100u, 0) && kvm_msr_allowed(v, 0xDEADBEEFu, 1) &&
+              kvm_msr_allowed(v, 0x830, 1),
+          "an MSR no range names is denied, but the x2APIC's are never filtered");
+
+    CHECK(vm_cap(vm, KVM_CAP_X86_USER_SPACE_MSR,
+                 KVM_MSR_EXIT_REASON_UNKNOWN | KVM_MSR_EXIT_REASON_FILTER) == 0 &&
+              kvm_msr_user_exit(v, 0x10, 0, 0, KVM_MSR_INVAL, 2) == 0,
+          "a failure whose reason the caller did not ask for stays #GP");
+    script_len = 0;
+    script_at = 0;
+    CHECK(kvm_msr_user_exit(v, 0xDEADBEEFu, 0, 0, KVM_MSR_UNKNOWN, 2) == 1,
+          "an unknown MSR's read goes to the caller");
+    script[script_len++] = v->exit;
+    CHECK(kvm_msr_user_exit(v, 0x1FC, 1, 0x1234, KVM_MSR_FILTERED, 3) == 1, "and a filtered write");
+    script[script_len++] = v->exit;
+    refusing = 0;
+    filter_changes = 0;
+    v->regs.rip = 0x1000;
+    CHECK(fdio(fd, KVM_RUN, 0) == 0 && run->exit_reason == KVM_EXIT_X86_RDMSR &&
+              run->u.msr.index == 0xDEADBEEFu && run->u.msr.reason == KVM_MSR_EXIT_REASON_UNKNOWN &&
+              run->u.msr.error == 0 && filter_changes == 1,
+          "KVM_EXIT_X86_RDMSR with its index and reason, after the bitmap was brought up to date");
+    run->u.msr.data = 0x1122334455667788ull;
+    CHECK(fdio(fd, KVM_RUN, 0) == 0 && run->exit_reason == KVM_EXIT_X86_WRMSR &&
+              run->u.msr.index == 0x1FC && run->u.msr.data == 0x1234 &&
+              run->u.msr.reason == KVM_MSR_EXIT_REASON_FILTER,
+          "KVM_EXIT_X86_WRMSR with the value written");
+    CHECK(fdio(fd, KVM_GET_REGS, (uintptr_t)&regs) == 0 && regs.rax == 0x55667788u &&
+              regs.rdx == 0x11223344u && regs.rip == 0x1002,
+          "the caller's answer to the read is in EDX:EAX, past the instruction");
+    run->u.msr.error = 1;
+    queued = -1;
+    CHECK(fdio(fd, KVM_RUN, 0) == -EIO && queued == 13 && v->regs.rip == 0x1002,
+          "the caller's error is #GP, at the instruction");
+    refusing = 1;
+    fdclose(fd);
+    fdclose(vm);
+    CHECK(live == 0, "the VM frees its filter");
+}
+
 /** The capabilities and bounds Linux's selftests ask for, each in VMs of
  * its own. */
 static void selftest_rows(void)
@@ -2841,6 +3069,8 @@ static void selftest_rows(void)
     cr4_rows();
     vm_cap_rows();
     feature_msr_rows();
+    mce_hwcr_rows();
+    user_msr_rows();
     attr_rows();
     sync_rows();
 }

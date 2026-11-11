@@ -173,7 +173,8 @@ enum kvm_exit_kind {
     KVM_X_FAIL_ENTRY,   /* the processor refused the entry */
     KVM_X_DEBUG,        /* a debug exception under KVM_SET_GUEST_DEBUG */
     KVM_X_SYSTEM_EVENT, /* a reset or shutdown the guest asked for */
-    KVM_X_HYPERV        /* a Hyper-V hypercall the caller answers */
+    KVM_X_HYPERV,       /* a Hyper-V hypercall the caller answers */
+    KVM_X_MSR           /* an RDMSR or WRMSR the caller answers */
 };
 
 /*
@@ -182,9 +183,10 @@ enum kvm_exit_kind {
  * port I/O page; for KVM_X_MMIO, `mmio`; for KVM_X_INTERNAL, `internal`
  * as Linux's kvm_run.internal; for KVM_X_FAIL_ENTRY, the processor's reason
  * in `hw_reason`; for KVM_X_DEBUG, `debug`; for KVM_X_SYSTEM_EVENT,
- * `system_event`; for KVM_X_HYPERV, `hyperv`. A port or MMIO read the
- * caller answers comes back to the backend through `complete` before the
- * next entry.
+ * `system_event`; for KVM_X_HYPERV, `hyperv`; for KVM_X_MSR, `msr`. A
+ * port or MMIO read the caller answers comes back to the backend through
+ * `complete` before the next entry; an MSR's answer goes to
+ * `kvm_msr_complete`.
  */
 struct kvm_exit {
     enum kvm_exit_kind kind;
@@ -194,6 +196,13 @@ struct kvm_exit {
     struct kvm_run_debug debug;
     struct kvm_run_system_event system_event;
     struct kvm_hyperv_exit hyperv;
+    struct {
+        int write;       /* WRMSR, else RDMSR */
+        uint32_t index;  /* ECX */
+        uint32_t reason; /* KVM_MSR_EXIT_REASON_* */
+        uint32_t len;    /* the instruction's bytes, which the answer skips */
+        uint64_t data;   /* EDX:EAX of a WRMSR */
+    } msr;
     uint64_t hw_reason;
     uint8_t data[4096]; /* the bytes of an OUT, or of an IN once answered */
 };
@@ -270,6 +279,12 @@ struct kvm_tdp_format {
  * the processor scales a guest's TSC by, with the width of its fraction
  * in `*frac_bits`, or 0 when the processor does not scale; a backend that
  * scales loads the vCPU's `tsc_ratio`, or 1 for none, with KVM_PART_TSC.
+ * `msr_filter_changed`, which the run loop calls before an entry after
+ * KVM_X86_SET_MSR_FILTER replaced the VM's filter (KVM_REQ_MSR_FILTER),
+ * and which `vcpu_init` does itself, has the guest's access exit for each
+ * MSR the processor lets it reach directly that the filter denies, as
+ * Linux's msr_filter_changed; an exit for such an MSR the filter allows
+ * came before the change, and the instruction runs again unanswered.
  */
 struct kvm_backend {
     const char *name;
@@ -286,6 +301,7 @@ struct kvm_backend {
     int32_t (*check_extension)(long cap);
     const struct kvm_tdp_format *tdp;
     uint64_t (*tsc_scaling)(uint32_t *frac_bits);
+    void (*msr_filter_changed)(struct kvm_vcpu *v);
 };
 
 /* The two backends, svm.c's and vmx.c's. */
@@ -335,6 +351,10 @@ struct kvm_vm {
     uint32_t disabled_quirks;    /* KVM_X86_QUIRK_* turned off (KVM_QUIRK) */
     int exit_on_emulation_error; /* KVM_CAP_EXIT_ON_EMULATION_FAILURE */
     int platform_info_hidden;    /* KVM_CAP_MSR_PLATFORM_INFO 0: the guest's read is #GP */
+    uint32_t user_space_msr;     /* KVM_CAP_X86_USER_SPACE_MSR: KVM_MSR_EXIT_REASON_* */
+    void *msr_filter;            /* KVM_X86_SET_MSR_FILTER's, msr.c's; NULL for none */
+    int x2apic_format;           /* KVM_X2APIC_API_USE_32BIT_IDS */
+    int x2apic_no_broadcast;     /* KVM_X2APIC_API_DISABLE_BROADCAST_QUIRK */
     uint64_t apic_bus_ns;        /* KVM_CAP_X86_APIC_BUS_CYCLES_NS: an APIC timer's tick in ns */
     uint32_t default_tsc_khz;    /* KVM_SET_TSC_KHZ of the VM: the rate a new vCPU's TSC has */
     int irqchip;                 /* KVM_IRQCHIP_*: which interrupt controller is in the kernel */
@@ -378,6 +398,7 @@ struct kvm_vm {
 #define KVM_REQ_HV_RESET     0x80u  /* end in KVM_SYSTEM_EVENT_RESET (hyperv.c) */
 #define KVM_REQ_CLOCK_UPDATE 0x100u /* write the kvmclock again (pvclock.c) */
 #define KVM_REQ_STEAL_UPDATE 0x200u /* write the steal time again (pvclock.c) */
+#define KVM_REQ_MSR_FILTER   0x400u /* the backend's `msr_filter_changed` */
 
 /* The most MSRs a vCPU keeps, those of the index list, the MTRRs and the
  * machine-check banks. */
@@ -485,6 +506,7 @@ struct kvm_vcpu {
     int has_run;      /* KVM_RUN has entered the guest */
     wait_queue_t wq;  /* the ioctls that wait for `busy` to clear */
     int pending;      /* `exit` is a read the caller answers in the run page */
+    int msr_pending;  /* `exit` is KVM_X_MSR, which the caller answers */
     int has_sigmask;
     uint64_t sigmask; /* KVM_SET_SIGNAL_MASK, less SIGKILL and SIGSTOP */
     uint32_t dirty;   /* KVM_PART_* the backend has yet to load */
@@ -532,6 +554,8 @@ struct kvm_vcpu {
     uint64_t platform_info;        /* MSR_PLATFORM_INFO, which only the caller writes */
     uint64_t misc_features;        /* MSR_MISC_FEATURES_ENABLES: bit 0, CPUID faults above CPL 0 */
     uint64_t ucode_rev;            /* MSR_IA32_UCODE_REV, which only the caller writes */
+    uint64_t hwcr;                 /* MSR_K7_HWCR: McStatusWrEn and TscFreqSel alone */
+    uint64_t power_ctl;            /* MSR_IA32_POWER_CTL, which nothing reads */
     uint64_t stat[KVM_VCPU_STATS]; /* by enum kvm_vcpu_stat */
     char stats_id[KVM_STATS_NAME_SIZE];        /* "kvm-PID/vcpu-ID", its maker's */
     uint64_t mce_banks[KVM_MAX_MCE_BANKS * 4]; /* CTL, STATUS, ADDR, MISC of each */
@@ -726,18 +750,55 @@ void kvm_msr_reset(struct kvm_vcpu *v);
  * kvm_update_cpuid_runtime. */
 int kvm_msr_guest_mwait(const struct kvm_vcpu *v);
 
-/** Whether `index` is the STATUS register of a machine-check bank `v`
- * has, which the guest itself may only clear. */
-int kvm_msr_mce_status(const struct kvm_vcpu *v, uint32_t index);
+/* The failures of an MSR's access, as Linux's KVM_MSR_RET_*: a value or
+ * an access refused (Linux's 1), an MSR not kept (KVM_MSR_RET_UNSUPPORTED)
+ * and an access KVM_X86_SET_MSR_FILTER denies (KVM_MSR_RET_FILTERED). */
+#define KVM_MSR_INVAL    (-1)
+#define KVM_MSR_UNKNOWN  (-2)
+#define KVM_MSR_FILTERED (-3)
 
-/** Read the MSR `index` of `v` as the caller of KVM_GET_MSRS: 0, or -1
- * for an MSR it does not keep. */
-int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value);
+/** Read the MSR `index` of `v`, as the caller of KVM_GET_MSRS when `host`
+ * is set and as the guest otherwise, which Linux's host_initiated tells
+ * apart: 0, KVM_MSR_INVAL or KVM_MSR_UNKNOWN. */
+int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value, int host);
 
-/** Write the MSR `index` of `v` as the caller of KVM_SET_MSRS, with the
- * checks Linux makes of a write from the host: 0, or -1 for an MSR it does
- * not keep or a value it refuses. Marks KVM_PART_MSRS dirty. */
-int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value);
+/** Write the MSR `index` of `v`, as `kvm_msr_get` reads it, with the
+ * checks Linux makes of a write from the host or from the guest: 0,
+ * KVM_MSR_INVAL or KVM_MSR_UNKNOWN. Marks KVM_PART_MSRS dirty. */
+int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value, int host);
+
+/** Whether the guest of `v` may access the MSR `index`, a write when
+ * `write` is set, under the VM's KVM_X86_SET_MSR_FILTER, as Linux's
+ * kvm_msr_allowed: 1, or 0 when the filter denies it. The x2APIC's MSRs
+ * are never filtered. */
+int kvm_msr_allowed(const struct kvm_vcpu *v, uint32_t index, int write);
+
+/**
+ * Give the caller the guest's RDMSR or WRMSR of `index` that failed with
+ * `r`, a KVM_MSR_* failure, when KVM_CAP_X86_USER_SPACE_MSR asked for that
+ * reason, as Linux's kvm_msr_user_space: `v->exit` becomes KVM_X_MSR with
+ * the write's `value` and the instruction's `len` bytes, and 1 is
+ * returned; else 0, and the backend raises #GP.
+ */
+int kvm_msr_user_exit(struct kvm_vcpu *v, uint32_t index, int write, uint64_t value, int r,
+                      uint32_t len);
+
+/** At KVM_RUN, finish the RDMSR or WRMSR the last exit gave the caller:
+ * #GP for the caller's `error`, else a read's `data` in EDX:EAX and the
+ * instruction skipped, as Linux's complete_fast_rdmsr and
+ * complete_fast_msr_access. Nothing when no MSR exit waits. */
+void kvm_msr_complete(struct kvm_vcpu *v);
+
+/** KVM_X86_SET_MSR_FILTER of `vm`, as Linux's
+ * kvm_vm_ioctl_set_msr_filter: the filter `arg` replaces the VM's, and
+ * each vCPU is kicked with KVM_REQ_MSR_FILTER. 0; -EINVAL for an
+ * unknown flag, a deny-all filter with no range, a range with no flag or
+ * an unknown one, or a bitmap above KVM_MSR_FILTER_MAX_BITMAP_SIZE;
+ * -ENOMEM; -EFAULT. */
+int32_t kvm_msr_set_filter(struct kvm_vm *vm, uintptr_t arg);
+
+/** Free the VM's MSR filter, when the VM is freed. */
+void kvm_msr_free_filter(struct kvm_vm *vm);
 
 /* pvclock.c: the kvmclock, its master clock, the wall clock and the
  * matching of the vCPUs' TSCs, as Linux's x86.c keeps them. Each runs
@@ -1451,8 +1512,13 @@ int kvm_emul_xsetbv(struct kvm_vcpu *v);
  * identity MSRs, those of particular processors that Linux's KVM reads as
  * zero or whose writes it drops, and those msr.c keeps, of which
  * MSR_PLATFORM_INFO is the caller's to write and, after
- * KVM_CAP_MSR_PLATFORM_INFO with 0, to read. 0, or -1 for #GP. */
+ * KVM_CAP_MSR_PLATFORM_INFO with 0, to read. 0, or a KVM_MSR_* failure,
+ * which is #GP unless `kvm_msr_user_exit` gives it to the caller. */
 int kvm_emul_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value);
+
+/** Whether `v`'s CPUID names AMD or Hygon as its vendor, as Linux's
+ * guest_cpuid_is_amd_compatible. */
+int kvm_guest_amd(const struct kvm_vcpu *v);
 
 /**
  * Carry out the instruction of `v` whose access to memory in no slot

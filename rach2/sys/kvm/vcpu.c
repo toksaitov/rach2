@@ -556,6 +556,20 @@ static void run_complete(struct kvm_vcpu *v)
     }
 }
 
+/** Give the caller the RDMSR or WRMSR of the KVM_X_MSR exit in `v->exit`,
+ * which `kvm_msr_complete` finishes with its answer. */
+static void run_msr(struct kvm_vcpu *v)
+{
+    struct kvm_run *run = v->run;
+
+    run->exit_reason = v->exit.msr.write ? KVM_EXIT_X86_WRMSR : KVM_EXIT_X86_RDMSR;
+    k_memset(&run->u.msr, 0, sizeof(run->u.msr));
+    run->u.msr.reason = v->exit.msr.reason;
+    run->u.msr.index = v->exit.msr.index;
+    run->u.msr.data = v->exit.msr.data;
+    v->msr_pending = 1;
+}
+
 /**
  * Give the caller the exit in `v->exit`: 1 when it goes to the caller,
  * with the run page filled, 0 when the kernel took it and the guest enters
@@ -651,6 +665,9 @@ static int32_t run_exit(struct kvm_vcpu *v)
         run->exit_reason = KVM_EXIT_HYPERV;
         run->u.hyperv = ex->hyperv;
         return 1;
+    case KVM_X_MSR:
+        run_msr(v);
+        return 1;
     default:
         break;
     }
@@ -720,7 +737,8 @@ static int32_t run_resume(struct kvm_vcpu *v)
 /**
  * Begin KVM_RUN: take CR8 from the run page with no local APIC in the
  * kernel, give the backend the answer to the last exit's read and finish
- * the instruction it was for, then end at once under immediate_exit, as
+ * the instruction it was for, or the caller's hypercall or MSR access,
+ * then end at once under immediate_exit, as
  * Linux's kvm_arch_vcpu_ioctl_run tests it only after
  * complete_userspace_io. 1 to enter the guest, or what KVM_RUN returns:
  * 0 with `exit_reason` set, -EINTR, or -errno.
@@ -741,6 +759,7 @@ static int32_t run_begin(struct kvm_vcpu *v)
         run_complete(v);
     }
     kvm_hv_complete(v);
+    kvm_msr_complete(v);
     r = run_resume(v);
     if (r != 0) {
         return r > 0 ? 0 : r;
@@ -808,6 +827,9 @@ static int32_t run_loop(struct kvm_vcpu *v)
         }
         kvm_clock_prepare(v);
         kvm_steal_prepare(v);
+        if (kvm_vcpu_test_clear(v, KVM_REQ_MSR_FILTER) && kvm_backend->msr_filter_changed) {
+            kvm_backend->msr_filter_changed(v);
+        }
         if (kvm_vcpu_test_clear(v, KVM_REQ_EVENT)) {
             if (kvm_backend->inject) {
                 kvm_backend->inject(v);
@@ -1269,8 +1291,8 @@ static int32_t msrs_io(struct kvm_vcpu *v, uintptr_t arg, int set)
      * registers the backend loads whole. */
     vcpu_save(v, KVM_PART_MSRS | KVM_PART_TSC | KVM_PART_SREGS);
     for (i = 0; i < head.nmsrs; i++) {
-        if (set ? kvm_msr_set(v, ent[i].index, ent[i].data) != 0
-                : kvm_msr_get(v, ent[i].index, &ent[i].data) != 0) {
+        if (set ? kvm_msr_set(v, ent[i].index, ent[i].data, 1) != 0
+                : kvm_msr_get(v, ent[i].index, &ent[i].data, 1) != 0) {
             break;
         }
     }

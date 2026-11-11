@@ -67,6 +67,7 @@
 #define KVM_ENABLE_CAP                KVM_IOW(0xA3u, 104u)
 #define KVM_SIGNAL_MSI                KVM_IOW(0xA5u, 32u)
 #define KVM_HYPERV_EVENTFD            KVM_IOW(0xBDu, 24u)
+#define KVM_X86_SET_MSR_FILTER        KVM_IOW(0xC6u, 392u)
 #define KVM_CLEAR_DIRTY_LOG           KVM_IOWR(0xC0u, 24u)
 #define KVM_CREATE_DEVICE             KVM_IOWR(0xE0u, 12u)
 /* KVM_SET_TSC_KHZ and KVM_GET_TSC_KHZ are also ioctls of a VM, for the rate
@@ -192,6 +193,8 @@
 #define KVM_CAP_GET_MSR_FEATURES            153
 #define KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2   168
 #define KVM_CAP_STEAL_TIME                  187
+#define KVM_CAP_X86_USER_SPACE_MSR          188
+#define KVM_CAP_X86_MSR_FILTER              189
 #define KVM_CAP_ENFORCE_PV_FEATURE_CPUID    190
 #define KVM_CAP_HYPERV_TIME                 96
 #define KVM_CAP_HYPERV_SYNIC                123
@@ -236,6 +239,8 @@
 #define KVM_EXIT_SYSTEM_EVENT    24
 #define KVM_EXIT_IOAPIC_EOI      26
 #define KVM_EXIT_HYPERV          27
+#define KVM_EXIT_X86_RDMSR       29
+#define KVM_EXIT_X86_WRMSR       30
 
 /* The types of KVM_EXIT_SYSTEM_EVENT. */
 #define KVM_SYSTEM_EVENT_SHUTDOWN 1
@@ -1004,6 +1009,57 @@ struct kvm_run_system_event {
     uint64_t data[16];
 };
 
+/* KVM_EXIT_X86_RDMSR and KVM_EXIT_X86_WRMSR: a guest's access to the MSR
+ * `index` that the caller asked to see (KVM_CAP_X86_USER_SPACE_MSR) for
+ * the `reason` KVM_MSR_EXIT_REASON_*; the caller answers a read in `data`,
+ * and either with `error` set for a #GP, at the next KVM_RUN. */
+#define KVM_MSR_EXIT_REASON_INVAL      (1u << 0)
+#define KVM_MSR_EXIT_REASON_UNKNOWN    (1u << 1)
+#define KVM_MSR_EXIT_REASON_FILTER     (1u << 2)
+#define KVM_MSR_EXIT_REASON_VALID_MASK 0x7u
+
+struct kvm_run_msr {
+    uint8_t error;
+    uint8_t pad[7];
+    uint32_t reason;
+    uint32_t index;
+    uint64_t data;
+};
+
+/* KVM_X86_SET_MSR_FILTER: up to 16 ranges, each `nmsrs` MSRs from `base`
+ * with a bit each in `bitmap`, 1 to allow the accesses `flags` names and
+ * 0 to deny them; an access no range names is allowed unless the filter
+ * is KVM_MSR_FILTER_DEFAULT_DENY. */
+#define KVM_MSR_FILTER_MAX_BITMAP_SIZE  0x600u
+#define KVM_MSR_FILTER_MAX_RANGES       16u
+#define KVM_MSR_FILTER_READ             (1u << 0)
+#define KVM_MSR_FILTER_WRITE            (1u << 1)
+#define KVM_MSR_FILTER_RANGE_VALID_MASK 0x3u
+#define KVM_MSR_FILTER_DEFAULT_ALLOW    0u
+#define KVM_MSR_FILTER_DEFAULT_DENY     (1u << 0)
+#define KVM_MSR_FILTER_VALID_MASK       0x1u
+
+struct kvm_msr_filter_range {
+    uint32_t flags;
+    uint32_t nmsrs;
+    uint32_t base;
+    uint32_t pad;
+    uint64_t bitmap; /* the caller's pointer */
+};
+
+struct kvm_msr_filter {
+    uint32_t flags;
+    uint32_t pad;
+    struct kvm_msr_filter_range ranges[KVM_MSR_FILTER_MAX_RANGES];
+};
+
+/* KVM_CAP_X2APIC_API's flags: x2APIC ids of 32 bits in KVM_GET_LAPIC,
+ * KVM_SET_LAPIC and an MSI's address, and no broadcast of a device's
+ * interrupt to 0xFF in x2APIC mode. */
+#define KVM_X2APIC_API_USE_32BIT_IDS           (1u << 0)
+#define KVM_X2APIC_API_DISABLE_BROADCAST_QUIRK (1u << 1)
+#define KVM_X2APIC_API_VALID_FLAGS             0x3u
+
 /* KVM_EXIT_HYPERV: a write of the guest's to a SynIC MSR (`synic`), a
  * hypercall the kernel leaves to the caller, which writes its `result`
  * (`hcall`), or a write to a synthetic debugger MSR (`syndbg`). */
@@ -1062,6 +1118,7 @@ struct kvm_run {
         struct kvm_run_system_event system_event;
         struct kvm_run_eoi eoi;
         struct kvm_hyperv_exit hyperv;
+        struct kvm_run_msr msr;
         char padding[KVM_RUN_EXIT_BYTES];
     } u;
     uint64_t kvm_valid_regs; /* KVM_SYNC_X86_*: the sets KVM_RUN writes to `s` */

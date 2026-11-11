@@ -732,11 +732,6 @@ static void *vmxon_region[NR_CPUS];
 static uint64_t vmxon_pa[NR_CPUS];
 static int fc_checked[NR_CPUS];
 
-/* The MSR bitmap every vCPU shares: every MSR exits but FS_BASE,
- * GS_BASE and KERNEL_GS_BASE, which the guest reaches directly. */
-static uint8_t *msr_bitmap;
-static uintptr_t msr_bitmap_pa;
-
 /* The VPIDs in use, 1 to 65535, a bit each; 0 is the host's. */
 static uint8_t vpid_used[8192];
 
@@ -769,6 +764,8 @@ struct vmx_vcpu {
     uint64_t vmcs_pa;
     uint64_t *msrs; /* the MSR area: the guest's list, then at HOST_LIST the host's */
     uintptr_t msrs_pa;
+    uint8_t *msr_bitmap; /* every MSR exits but those `vmx_msr_filter_changed` passes */
+    uintptr_t msr_bitmap_pa;
     void *host_fpu;
     uint16_t vpid;
     int built;       /* the VMCS's lasting fields are written */
@@ -1104,7 +1101,7 @@ static void vmcs_build(struct kvm_vcpu *v)
     vmcs_write(PAGE_FAULT_ERROR_CODE_MASK, 0);
     vmcs_write(PAGE_FAULT_ERROR_CODE_MATCH, 0);
     vmcs_write(CR3_TARGET_COUNT, 0);
-    vmcs_write(MSR_BITMAP, msr_bitmap_pa);
+    vmcs_write(MSR_BITMAP, x->msr_bitmap_pa);
     vmcs_write(VM_ENTRY_MSR_LOAD_ADDR, x->msrs_pa);
     vmcs_write(VM_ENTRY_MSR_LOAD_COUNT, n);
     vmcs_write(VM_EXIT_MSR_STORE_ADDR, x->msrs_pa);
@@ -1162,7 +1159,7 @@ static uint64_t table_msr(struct kvm_vcpu *v, uint32_t index)
 {
     uint64_t value = 0;
 
-    if (kvm_msr_get(v, index, &value) != 0) {
+    if (kvm_msr_get(v, index, &value, 1) != 0) {
         return 0;
     }
     return value;
@@ -1985,14 +1982,47 @@ static void kgs_sync(struct kvm_vcpu *v)
     struct vmx_vcpu *x = vx(v);
 
     if (!x->kgs_table) {
-        (void)kvm_msr_set(v, MSR_KERNEL_GS_BASE, x->msrs[KGS_SLOT * 2u + 1u]);
+        (void)kvm_msr_set(v, MSR_KERNEL_GS_BASE, x->msrs[KGS_SLOT * 2u + 1u], 1);
         x->kgs_table = 1;
     }
 }
 
-/** RDMSR and WRMSR (exits 31 and 32): EFER and DEBUGCTL here, the rest
- * through `kvm_emul_msr`; #GP for an MSR neither knows or a value they
- * refuse, as Linux's default without ignore_msrs. */
+/** The guest's RDMSR or WRMSR of `index`, by `write`, with `*value` its
+ * EDX:EAX: EFER and DEBUGCTL here, the rest through `kvm_emul_msr`. 0, with
+ * a read's value in `*value`, or a KVM_MSR_* failure. */
+static int msr_access(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value)
+{
+    struct vmx_vcpu *x = vx(v);
+
+    switch (index) {
+    case MSR_EFER:
+        if (write) {
+            return set_efer(v, *value);
+        }
+        *value = v->sregs.efer;
+        return 0;
+    case MSR_IA32_DEBUGCTL:
+        /* No LBR and no BTF, which Linux drops with a note; any other bit
+         * is #GP. */
+        if (write) {
+            if (*value & ~(DEBUGCTL_LBR | DEBUGCTL_BTF)) {
+                return KVM_MSR_INVAL;
+            }
+            x->debugctl = 0;
+            return 0;
+        }
+        *value = x->debugctl;
+        return 0;
+    default:
+        return kvm_emul_msr(v, index, write, value);
+    }
+}
+
+/** RDMSR and WRMSR (exits 31 and 32), as Linux's kvm_emulate_rdmsr and
+ * kvm_emulate_wrmsr: an access KVM_X86_SET_MSR_FILTER denies fails at
+ * once, any other is `msr_access`'s. A failure goes to the caller when
+ * KVM_CAP_X86_USER_SPACE_MSR asked for its reason, and is #GP otherwise,
+ * as Linux's default without ignore_msrs. */
 static int exit_msr(struct kvm_vcpu *v, int write)
 {
     struct vmx_vcpu *x = vx(v);
@@ -2001,38 +2031,19 @@ static int exit_msr(struct kvm_vcpu *v, int write)
     int r;
 
     v->exit.kind = KVM_X_AGAIN;
+    if (index - MSR_FS_BASE < 3u && kvm_msr_allowed(v, index, write)) {
+        /* The bitmap predates the filter, and KVM_REQ_MSR_FILTER brings it
+         * up to date before the instruction runs again. */
+        return 0;
+    }
     if (write) {
         kgs_sync(v);
     }
-    switch (index) {
-    case MSR_EFER:
-        if (write) {
-            r = set_efer(v, value);
-        } else {
-            value = v->sregs.efer;
-            r = 0;
-        }
-        break;
-    case MSR_IA32_DEBUGCTL:
-        /* No LBR and no BTF, which Linux drops with a note; any other bit
-         * is #GP. */
-        if (write) {
-            value &= ~(DEBUGCTL_LBR | DEBUGCTL_BTF);
-            r = value ? -1 : 0;
-            if (r == 0) {
-                x->debugctl = 0;
-            }
-        } else {
-            value = x->debugctl;
-            r = 0;
-        }
-        break;
-    default:
-        r = kvm_emul_msr(v, index, write, &value);
-        break;
-    }
+    r = kvm_msr_allowed(v, index, write) ? msr_access(v, index, write, &value) : KVM_MSR_FILTERED;
     if (r != 0) {
-        gp(v);
+        if (!kvm_msr_user_exit(v, index, write, value, r, x->ex.insn_len)) {
+            gp(v);
+        }
         return 0;
     }
     if (!write) {
@@ -2588,25 +2599,14 @@ static void vpid_free(uint16_t vpid)
     }
 }
 
-/** The backend's share of a new VM: the VMXON regions of the processors
- * and the MSR bitmap, made at the first VM and kept. 0 or -ENOMEM. */
+/** The backend's share of a new VM: the VMXON regions of the processors,
+ * made at the first VM and kept. 0 or -ENOMEM. */
 static int vmx_vm_init(struct kvm_vm *vm)
 {
     uintptr_t pa;
     uint32_t i, ncpu = (uint32_t)smp_cpu_count();
 
     vm->backend = NULL;
-    if (!msr_bitmap) {
-        msr_bitmap = kalloc_pages(1, &msr_bitmap_pa);
-        if (!msr_bitmap) {
-            return -ENOMEM;
-        }
-        k_memset(msr_bitmap, 0xFF, 4096);
-        /* The high MSRs' read bitmap at 1024 and write bitmap at 3072:
-         * FS_BASE, GS_BASE and KERNEL_GS_BASE, bits 0x100 to 0x102. */
-        msr_bitmap[1024 + 0x100 / 8] &= (uint8_t)~0x07u;
-        msr_bitmap[3072 + 0x100 / 8] &= (uint8_t)~0x07u;
-    }
     for (i = 0; i < ncpu && i < NR_CPUS; i++) {
         if (vmxon_region[i]) {
             continue;
@@ -2622,8 +2622,29 @@ static int vmx_vm_init(struct kvm_vm *vm)
     return 0;
 }
 
-/** Make the backend's share of `v`: the VMCS, the MSR area, the host's
- * FPU area and the VPID. 0 or -ENOMEM. */
+/**
+ * Have the guest of `v` reach FS_BASE, GS_BASE and KERNEL_GS_BASE
+ * directly but for the accesses KVM_X86_SET_MSR_FILTER denies, which exit,
+ * as Linux's vmx_msr_filter_changed. The high MSRs' read bitmap is at byte
+ * 1024 and their write bitmap at 3072, where the three are bits 0x100 to
+ * 0x102.
+ */
+static void vmx_msr_filter_changed(struct kvm_vcpu *v)
+{
+    uint8_t *b = vx(v)->msr_bitmap;
+    uint8_t rd = 0, wr = 0;
+    uint32_t i;
+
+    for (i = 0; i < 3u; i++) {
+        rd |= (uint8_t)((kvm_msr_allowed(v, MSR_FS_BASE + i, 0) ? 0u : 1u) << i);
+        wr |= (uint8_t)((kvm_msr_allowed(v, MSR_FS_BASE + i, 1) ? 0u : 1u) << i);
+    }
+    b[1024 + 0x100 / 8] = (uint8_t)((b[1024 + 0x100 / 8] & ~0x07u) | rd);
+    b[3072 + 0x100 / 8] = (uint8_t)((b[3072 + 0x100 / 8] & ~0x07u) | wr);
+}
+
+/** Make the backend's share of `v`: the VMCS, the MSR area and bitmap,
+ * the host's FPU area and the VPID. 0 or -ENOMEM. */
 static int vmx_vcpu_init(struct kvm_vcpu *v)
 {
     struct vmx_vcpu *x = kzalloc(sizeof(*x));
@@ -2636,13 +2657,16 @@ static int vmx_vcpu_init(struct kvm_vcpu *v)
     x->vmcs = kalloc_pages(1, &pa);
     x->vmcs_pa = pa;
     x->msrs = kalloc_pages(1, &x->msrs_pa);
+    x->msr_bitmap = kalloc_pages(1, &x->msr_bitmap_pa);
     x->host_fpu = fpu_area_alloc();
-    if (!x->vmcs || !x->msrs || !x->host_fpu) {
+    if (!x->vmcs || !x->msrs || !x->msr_bitmap || !x->host_fpu) {
         return -ENOMEM;
     }
     k_memset(x->vmcs, 0, 4096);
     *(uint32_t *)x->vmcs = caps.revision;
     k_memset(x->msrs, 0, 4096);
+    k_memset(x->msr_bitmap, 0xFF, 4096);
+    vmx_msr_filter_changed(v);
     x->vpid = vpid_alloc();
     x->last_cpu = -1;
     x->kgs_table = 1;
@@ -2663,6 +2687,9 @@ static void vmx_vcpu_free(struct kvm_vcpu *v)
     }
     if (x->msrs) {
         kfree_pages(x->msrs, 1);
+    }
+    if (x->msr_bitmap) {
+        kfree_pages(x->msr_bitmap, 1);
     }
     fpu_area_free(x->host_fpu);
     vpid_free(x->vpid);
@@ -2792,7 +2819,7 @@ static uint64_t vmx_tsc_scaling(uint32_t *frac_bits)
 static const struct kvm_tdp_format vmx_tdp = {
     0x7u, 0x1u, 0x2u, 0x4u, 0, 0, 0x80u, 0x000FFFFFFFFFF000ull, 0x100u, 0x200u, vmx_cache};
 
-const struct kvm_backend kvm_vmx = {"vmx",         vmx_probe,      vmx_vm_init, NULL,
-                                    vmx_vcpu_init, vmx_vcpu_free,  vmx_enter,   vmx_exit,
-                                    vmx_complete,  vmx_save,       vmx_inject,  vmx_check_extension,
-                                    &vmx_tdp,      vmx_tsc_scaling};
+const struct kvm_backend kvm_vmx = {
+    "vmx",     vmx_probe,       vmx_vm_init,           NULL,     vmx_vcpu_init, vmx_vcpu_free,
+    vmx_enter, vmx_exit,        vmx_complete,          vmx_save, vmx_inject,    vmx_check_extension,
+    &vmx_tdp,  vmx_tsc_scaling, vmx_msr_filter_changed};

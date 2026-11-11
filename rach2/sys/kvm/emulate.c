@@ -596,6 +596,13 @@ static int cpuid_vendor_amd(const struct kvm_cpuid_entry2 *basic)
            (basic->ebx == 0x6F677948u && basic->edx == 0x6E65476Eu && basic->ecx == 0x656E6975u);
 }
 
+int kvm_guest_amd(const struct kvm_vcpu *v)
+{
+    const struct kvm_cpuid_entry2 *basic = kvm_cpuid_find(v, 0, 0);
+
+    return basic && cpuid_vendor_amd(basic);
+}
+
 /**
  * The entry a CPUID of `*function` that `v`'s table lacks reads, as Linux's
  * get_out_of_range_cpuid_entry: past the highest leaf of its range, the
@@ -789,14 +796,14 @@ static int tsc_write(struct kvm_vcpu *v, uint32_t index, uint64_t value)
     const struct kvm_cpuid_entry2 *e;
     uint64_t adjust = 0, before = (uint64_t)v->tsc_offset;
 
-    (void)kvm_msr_get(v, MSR_IA32_TSC_ADJUST, &adjust);
+    (void)kvm_msr_get(v, MSR_IA32_TSC_ADJUST, &adjust, 0);
     if (index == MSR_IA32_TSC_ADJUST) {
         e = kvm_cpuid_find(v, 7, 0);
         if (!e || !(e->ebx & CPUID_7_EBX_TSC_ADJUST)) {
             return 0;
         }
-        if (kvm_msr_set(v, index, value) != 0) {
-            return -1;
+        if (kvm_msr_set(v, index, value, 0) != 0) {
+            return KVM_MSR_INVAL;
         }
         v->tsc_offset = (int64_t)(before + (value - adjust));
         v->dirty |= KVM_PART_TSC;
@@ -806,7 +813,7 @@ static int tsc_write(struct kvm_vcpu *v, uint32_t index, uint64_t value)
     v->tsc_offset = (int64_t)(value - kvm_tsc_scale(v, arch_cycles()));
     v->dirty |= KVM_PART_TSC;
     kvm_tsc_moved(v);
-    return kvm_msr_set(v, MSR_IA32_TSC_ADJUST, adjust + ((uint64_t)v->tsc_offset - before));
+    return kvm_msr_set(v, MSR_IA32_TSC_ADJUST, adjust + ((uint64_t)v->tsc_offset - before), 0);
 }
 
 int kvm_emul_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value)
@@ -850,14 +857,9 @@ int kvm_emul_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value)
         return tsc_write(v, index, *value);
     }
     if (index == MSR_PLATFORM_INFO && (write || v->vm->platform_info_hidden)) {
-        return -1;
+        return KVM_MSR_INVAL;
     }
-    /* A guest writes only 0 to a bank's STATUS, as Linux's set_msr_mce
-     * without AMD's McStatusWrEn, which no guest is given. */
-    if (write && *value != 0 && kvm_msr_mce_status(v, index)) {
-        return -1;
-    }
-    return write ? kvm_msr_set(v, index, *value) : kvm_msr_get(v, index, value);
+    return write ? kvm_msr_set(v, index, *value, 0) : kvm_msr_get(v, index, value, 0);
 }
 
 /* ---- PAE's PDPTEs ---- */
@@ -3640,16 +3642,14 @@ static uint64_t x_msr(struct xc *x, uint32_t index)
 {
     uint64_t value = 0;
 
-    return kvm_msr_get(x->v, index, &value) == 0 ? value : 0;
+    return kvm_msr_get(x->v, index, &value, 0) == 0 ? value : 0;
 }
 
 /** Whether the guest's CPUID names AMD or Hygon, whose processors take
  * SYSCALL outside 64-bit mode and no SYSENTER in compatibility mode. */
 static int x_amd(const struct xc *x)
 {
-    const struct kvm_cpuid_entry2 *basic = kvm_cpuid_find(x->v, 0, 0);
-
-    return basic && cpuid_vendor_amd(basic);
+    return kvm_guest_amd(x->v);
 }
 
 /**
