@@ -285,6 +285,10 @@ struct kvm_tdp_format {
  * MSR the processor lets it reach directly that the filter denies, as
  * Linux's msr_filter_changed; an exit for such an MSR the filter allows
  * came before the change, and the instruction runs again unanswered.
+ * `xsaves`, NULL for a backend that cannot give it, is 1 where a guest
+ * whose CPUID offers XSAVES may run XSAVES and XRSTORS: VMX's secondary
+ * control, or on SVM the host's XSAVES alone, which the guest runs
+ * whenever it has XSAVE, as no intercept or control stops it.
  */
 struct kvm_backend {
     const char *name;
@@ -302,6 +306,7 @@ struct kvm_backend {
     const struct kvm_tdp_format *tdp;
     uint64_t (*tsc_scaling)(uint32_t *frac_bits);
     void (*msr_filter_changed)(struct kvm_vcpu *v);
+    int (*xsaves)(void);
 };
 
 /* The two backends, svm.c's and vmx.c's. */
@@ -714,6 +719,19 @@ uint64_t kvm_xcr0_supported(void);
 /** The XCR0 bits `v`'s CPUID allows: leaf 0xD's within the host's, and
  * x87 always. */
 uint64_t kvm_xcr0_guest(const struct kvm_vcpu *v);
+
+/** The bytes of an XSAVE area that holds the components `features`, as
+ * the host's CPUID 0xD places them in the standard form, or with
+ * `compacted` in the compacted form of XSAVEC and XSAVES; 576 at least,
+ * the legacy area and the header. */
+uint32_t kvm_xsave_size(uint64_t features, int compacted);
+
+/** Set the sizes of the `n` entries `e` of a CPUID for `v` that follow
+ * its XCR0, as Linux's kvm_update_cpuid_runtime: EBX of leaf 0xD's
+ * subleaf 0, and of subleaf 1 where it offers XSAVEC or XSAVES. A caller
+ * calls it on `v`'s own entries whenever XCR0 changes, and on entries
+ * KVM_SET_CPUID2 gives before it takes or compares them. */
+void kvm_cpuid_xsave_sizes(const struct kvm_vcpu *v, struct kvm_cpuid_entry2 *e, uint32_t n);
 
 /** KVM_GET_SUPPORTED_CPUID's KVM_CPUID_FEATURES bits: the kvmclock's
  * three where the TSC's rate was measured, the I/O delay hint, STEAL_TIME,

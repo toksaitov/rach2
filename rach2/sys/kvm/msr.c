@@ -33,6 +33,7 @@
 #define MSR_MTRR_FIX_4K_C0000  0x268u
 #define MSR_IA32_CR_PAT        0x277u
 #define MSR_IA32_TSC_DEADLINE  0x6E0u
+#define MSR_IA32_XSS           0xDA0u
 #define MSR_MTRR_DEF_TYPE      0x2FFu
 #define MSR_IA32_MC0_CTL       0x400u
 #define MSR_STAR               0xC0000081u
@@ -67,6 +68,9 @@
 /* The x2APIC's MSRs, which no filter denies. */
 #define MSR_X2APIC_FIRST 0x800u
 #define MSR_X2APIC_LAST  0x8FFu
+
+/* CPUID leaf 0xD's subleaf 1, EAX's bit for XSAVES. */
+#define CPUID_D1_XSAVES 0x8u
 
 /* MISC_ENABLE's MWAIT bit; PLATFORM_INFO's bit that offers CPUID
  * faulting, and MISC_FEATURES_ENABLES' that turns it on. */
@@ -330,6 +334,16 @@ static int mci_status_writable(const struct kvm_vcpu *v)
     return kvm_guest_amd(v) && (v->hwcr & HWCR_MCSTATUSWREN);
 }
 
+/** Whether `v`'s CPUID offers XSAVES, in leaf 0xD's subleaf 1, without
+ * which IA32_XSS is not the guest's, as Linux's kvm_get_msr_common and
+ * kvm_set_msr_common have it. */
+static int guest_xsaves(const struct kvm_vcpu *v)
+{
+    const struct kvm_cpuid_entry2 *e = kvm_cpuid_find(v, 0xD, 1);
+
+    return e && (e->eax & CPUID_D1_XSAVES);
+}
+
 int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value, int host)
 {
     uint32_t bank, reg;
@@ -384,6 +398,12 @@ int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value, int host)
         return 0;
     case MSR_IA32_UCODE_REV:
         *value = v->ucode_rev;
+        return 0;
+    case MSR_IA32_XSS:
+        if (!host && !guest_xsaves(v)) {
+            return KVM_MSR_INVAL;
+        }
+        *value = 0;
         return 0;
     default:
         break;
@@ -559,6 +579,11 @@ int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value, int host)
     switch (index) {
     case MSR_AMD64_NB_CFG:
         return 0;
+    case MSR_IA32_XSS:
+        /* No supervisor state is offered, so 0 is its only value, as
+         * Linux 6.12's kvm_caps.supported_xss; Linux lists it with
+         * neither the MSRs to save nor the emulated ones. */
+        return (host || guest_xsaves(v)) && value == 0 ? 0 : KVM_MSR_INVAL;
     case MSR_IA32_UCODE_REV:
         v->ucode_rev = value;
         break;
