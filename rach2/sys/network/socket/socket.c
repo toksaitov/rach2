@@ -810,31 +810,93 @@ static void recv_ring_get(uint8_t *dst, struct tcb *tcb, uint32_t at, uint32_t n
     }
 }
 
+/** The table of receive-buffer ends of `tcb`, the heap's or the block's
+ * own, with its entries in `*cap`. */
+static uint32_t *recv_seg_table(struct tcb *tcb, uint32_t *cap)
+{
+    if (tcb->recv_seg_heap) {
+        *cap = tcb->recv_seg_cap;
+        return tcb->recv_seg_heap;
+    }
+    *cap = TCP_RECV_SEGS;
+    return tcb->recv_seg_end;
+}
+
+/** The end of the `i`th oldest receive buffer of `tcb`. */
+static uint32_t recv_seg_at(struct tcb *tcb, uint32_t i)
+{
+    uint32_t cap;
+    const uint32_t *table = recv_seg_table(tcb, &cap);
+
+    return table[(tcb->recv_seg_first + i) % cap];
+}
+
 /** Drop the ends of the receive buffers of `tcb` that `recv_head` has
- * passed. With interrupts off. */
+ * passed, and give back the heap's table once none is left. With
+ * interrupts off. */
 static void recv_seg_trim(struct tcb *tcb)
 {
-    while (tcb->recv_seg_count > 0 &&
-           (int32_t)(tcb->recv_seg_end[tcb->recv_seg_first] - tcb->recv_head) <= 0) {
-        tcb->recv_seg_first = (uint8_t)((tcb->recv_seg_first + 1u) % TCP_RECV_SEGS);
+    uint32_t cap;
+
+    (void)recv_seg_table(tcb, &cap);
+    while (tcb->recv_seg_count > 0 && (int32_t)(recv_seg_at(tcb, 0) - tcb->recv_head) <= 0) {
+        tcb->recv_seg_first = (tcb->recv_seg_first + 1u) % cap;
         tcb->recv_seg_count--;
+    }
+    if (tcb->recv_seg_count == 0 && tcb->recv_seg_heap) {
+        kfree(tcb->recv_seg_heap);
+        tcb->recv_seg_heap = NULL;
+        tcb->recv_seg_cap = 0;
+        tcb->recv_seg_first = 0;
     }
 }
 
-/** End a receive buffer of `tcb` at `recv_tail`, or move the last one's end
- * there when every entry is in use. With interrupts off. */
+/** Double the table of receive-buffer ends of `tcb` on the heap, its
+ * entries kept in order from the first; refused when the table would take
+ * more bytes than the receive ring, or the heap has no room. Returns 1, or
+ * 0 when refused. With interrupts off, as the heap allows. */
+static int recv_seg_grow(struct tcb *tcb)
+{
+    uint32_t cap, i, *bigger;
+    uint32_t *table = recv_seg_table(tcb, &cap);
+
+    if (cap > tcb->recv_size / (2u * (uint32_t)sizeof(uint32_t))) {
+        return 0;
+    }
+    bigger = kmalloc((size_t)cap * 2u * sizeof(uint32_t));
+    if (!bigger) {
+        return 0;
+    }
+    for (i = 0; i < tcb->recv_seg_count; i++) {
+        bigger[i] = table[(tcb->recv_seg_first + i) % cap];
+    }
+    if (tcb->recv_seg_heap) {
+        kfree(tcb->recv_seg_heap);
+    }
+    tcb->recv_seg_heap = bigger;
+    tcb->recv_seg_cap = cap * 2u;
+    tcb->recv_seg_first = 0;
+    return 1;
+}
+
+/** End a receive buffer of `tcb` at `recv_tail`, in a table grown when it
+ * is full, or move the last one's end there when it cannot grow. With
+ * interrupts off. */
 static void recv_seg_add(struct tcb *tcb)
 {
-    uint32_t at;
+    uint32_t cap, *table;
 
     recv_seg_trim(tcb);
-    if (tcb->recv_seg_count == TCP_RECV_SEGS) {
-        at = (tcb->recv_seg_first + TCP_RECV_SEGS - 1u) % TCP_RECV_SEGS;
-    } else {
-        at = (tcb->recv_seg_first + tcb->recv_seg_count) % TCP_RECV_SEGS;
-        tcb->recv_seg_count++;
+    table = recv_seg_table(tcb, &cap);
+    if (tcb->recv_seg_count == cap) {
+        if (!recv_seg_grow(tcb)) {
+            table[(tcb->recv_seg_first + cap - 1u) % cap] = tcb->recv_tail;
+            return;
+        }
+        table = recv_seg_table(tcb, &cap);
     }
-    tcb->recv_seg_end[at] = tcb->recv_tail;
+    table[(tcb->recv_seg_first + tcb->recv_seg_count) % cap] = tcb->recv_tail;
+    tcb->recv_seg_count++;
 }
 
 /**
@@ -1045,7 +1107,7 @@ uint32_t socket_tcp_buffer(struct socket *sock, uint32_t off)
         n = tcb->recv_tail - at;
         recv_seg_trim(tcb);
         for (i = 0; i < tcb->recv_seg_count; i++) {
-            uint32_t end = tcb->recv_seg_end[(tcb->recv_seg_first + i) % TCP_RECV_SEGS];
+            uint32_t end = recv_seg_at(tcb, i);
 
             if ((int32_t)(end - at) > 0) {
                 n = end - at;

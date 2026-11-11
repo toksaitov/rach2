@@ -64,11 +64,8 @@
 /* The SACK blocks an acknowledgement names at most: four, 36 bytes of
  * options, when a segment has no timestamps (RFC 2018). */
 #define TCP_SACK_BLOCKS     4
-/* Policy: the receive ring keeps the bounds of up to 32 receive buffers,
- * which a stream receive copies whole or not at all; past that a new one
- * joins the last. Linux joins an in-order segment to its queue's tail
- * whenever tcp_try_coalesce can, which depends on how the sk_buffs are laid
- * out and shared, so it may keep fewer bounds than these. */
+/* The ends of receive buffers a block keeps in itself; more go to a table
+ * on the heap (`recv_seg_heap`). */
 #define TCP_RECV_SEGS       32
 
 /* The timers are written in milliseconds and kept in ticks of the kernel's
@@ -299,18 +296,26 @@ struct tcb {
     uint32_t recv_head, recv_tail; /* head = next to read, tail = next to fill */
     /*
      * The receive buffers of the bytes in the receive ring, as Linux's
-     * receive queue holds them in its sk_buffs: the end of each, a count
-     * like `recv_tail`, the oldest at `recv_seg_first` of the circle of
-     * TCP_RECV_SEGS entries. Each in-order segment the ring takes is a
-     * buffer, and so are the bytes past a hole that its filling makes
-     * readable at once; with every entry in use a new buffer joins the
-     * last. Linux joins an in-order segment to the queue's tail whenever
-     * tcp_try_coalesce can (net/ipv4/tcp_input.c:4930-4963, 5208-5216), so
-     * it may keep fewer bounds (TCP_RECV_SEGS). An end at or before
-     * `recv_head` has been read, and is dropped when next looked at.
-     * Changed with interrupts off.
+     * receive queue holds them in its sk_buffs, which a stream receive
+     * copies whole or not at all: the end of each, a count like
+     * `recv_tail`, the oldest at `recv_seg_first` of a circle of entries,
+     * the TCP_RECV_SEGS of `recv_seg_end` or, once more are queued, the
+     * `recv_seg_cap` of `recv_seg_heap`, which doubles as needed and is
+     * given back when every buffer has been read. Each in-order segment the
+     * ring takes is a buffer, and so are the bytes past a hole that its
+     * filling makes readable at once. Only when the table would take more
+     * bytes than the ring, or the heap has no room, does a new buffer join
+     * the last, as Linux's tcp_prune_queue has tcp_collapse join the queue's
+     * buffers once their overhead passes the receive buffer. Linux also
+     * joins an in-order segment to the queue's tail whenever
+     * tcp_try_coalesce can (net/ipv4/tcp_input.c:4930-4963, 5208-5216),
+     * which depends on how the sk_buffs are laid out and shared, so it may
+     * keep fewer bounds than these. An end at or before `recv_head` has been
+     * read, and is dropped when next looked at. Changed with interrupts off.
      */
-    uint8_t recv_seg_first, recv_seg_count;
+    uint32_t recv_seg_first, recv_seg_count;
+    uint32_t recv_seg_cap;   /* entries of `recv_seg_heap`; 0 while unused */
+    uint32_t *recv_seg_heap; /* the table on the heap, or NULL */
     uint32_t recv_seg_end[TCP_RECV_SEGS];
 
     int fin_received; /* the peer's FIN was taken: a read sees the end */

@@ -556,6 +556,9 @@ void tcb_free(struct tcb *tcb)
     if (tcb->recv_buf) {
         kfree(tcb->recv_buf);
     }
+    if (tcb->recv_seg_heap) {
+        kfree(tcb->recv_seg_heap);
+    }
     if (tcb->sent_more) {
         kfree(tcb->sent_more);
     }
@@ -2535,6 +2538,12 @@ static void tcp_time_wait_trim(struct tcb *tcb)
         (!tcb->sock || tcb->recv_tail == tcb->recv_head)) {
         kfree(tcb->recv_buf);
         tcb->recv_buf = NULL;
+        if (tcb->recv_seg_heap) {
+            kfree(tcb->recv_seg_heap);
+            tcb->recv_seg_heap = NULL;
+            tcb->recv_seg_cap = 0;
+        }
+        tcb->recv_seg_first = tcb->recv_seg_count = 0;
     }
 }
 
