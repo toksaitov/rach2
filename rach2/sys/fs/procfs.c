@@ -18,6 +18,7 @@
 
 #include "../fpu.h"
 #include "../klog.h"
+#include "../panic.h"
 #include "../irq.h"
 #include "procfs.h"
 
@@ -8241,7 +8242,9 @@ static int procfs_open_oom(const struct vpath *vp, int pid, int flags)
 #define SYSCTL_SECONDS_MAX (0x7FFFFFFF / TICK_HZ)
 
 /* The /proc/sys files whose values are their owners' variables, and the
- * range a write must fall in, as Linux's `proc_dointvec_minmax` takes one. */
+ * range a write must fall in, as Linux's `proc_dointvec_minmax` takes one;
+ * kernel/panic and kernel/panic_on_oops take any int, as Linux's
+ * `proc_dointvec` does (kernel/sysctl.c). */
 static const struct {
     int entry;
     int *var;
@@ -8259,7 +8262,9 @@ static const struct {
                    {SYNTH_SYS_TCP_KEEPALIVE_TIME + 1, &tcp_keepalive_intvl, 1, SYSCTL_SECONDS_MAX},
                    {SYNTH_SYS_TCP_KEEPALIVE_TIME + 2, &tcp_keepalive_probes, 0, 255},
                    {SYNTH_SYS_TCP_KEEPALIVE_TIME + 3, &tcp_mtu_probing, 0, 2},
-                   {SYNTH_SYS_TCP_RETRIES2, &tcp_retries2, 0, 255}};
+                   {SYNTH_SYS_TCP_RETRIES2, &tcp_retries2, 0, 255},
+                   {SYNTH_SYS_PANIC, &panic_timeout, -0x7FFFFFFF - 1, 0x7FFFFFFF},
+                   {SYNTH_SYS_PANIC_ON_OOPS, &panic_on_oops, -0x7FFFFFFF - 1, 0x7FFFFFFF}};
 
 /** The index in `sysctl_ints` of the /proc/sys file `entry`, or -1. */
 static int sysctl_int(int entry)
