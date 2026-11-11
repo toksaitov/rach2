@@ -350,7 +350,7 @@ static void stack_expand(unsigned long sp)
     unsigned long bottom = 0, top = stack_range(&bottom), p;
     int pid, status = -1;
 
-    if (syscall4(SYS_PRLIMIT64, 0, 3, 0, (long)&rl) != 0 ||
+    if (syscall4(SYS_PRLIMIT64, 0, 3, 0, (long)&rl) != 0 || rl.max < rl.cur ||
         rl.cur < top - sp + EXEC_STACK_EXPAND + PAGE || top == 0 || bottom < PAGE) {
         report_notrun("stack-expand", "RLIMIT_STACK or the stack's region is not known");
         return;
