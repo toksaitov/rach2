@@ -488,12 +488,46 @@ static void settle_rows(void)
 }
 
 /**
+ * Check that held records go out with no record after them: the tick sends
+ * them when the carrier comes back during the start, and, with a settle, when
+ * the settle ends. Before the tick drove the start, both waited for the next
+ * newline.
+ */
+static void carrier_rows(void)
+{
+    nc_reset();
+    link_down = 1;
+    netconsole_enable();
+    put_string("boot\n");
+    CHECK(frame_count == 0, "a link down at the start holds the boot log");
+    link_down = 0;
+    host_ticks = 50;
+    netconsole_tick();
+    CHECK(frame_count == 1 && nc_pending() == 0,
+          "the tick sends it when the carrier comes back, with no later record");
+
+    nc_reset();
+    nc_settle_ticks = MS_TO_TICKS(NC_LINK_SETTLE_MS);
+    link_down = 1;
+    netconsole_enable();
+    put_string("boot\n");
+    link_down = 0;
+    host_ticks = 50;
+    netconsole_tick();
+    CHECK(frame_count == 0, "with a settle, the tick that sees the carrier sends nothing yet");
+    host_ticks = 50 + nc_settle_ticks;
+    netconsole_tick();
+    CHECK(frame_count == 1 && nc_pending() == 0,
+          "and the tick at the settle's end sends it, with no later record");
+}
+
+/**
  * Check that the lines wait in the ring while the card has no link: before
  * it first comes up, when the ring fills meanwhile, and when it goes down in
  * the middle of a drain, where the drain held back goes out with the next
  * newline. A card that drops every frame is offered one frame by a long line
  * and one by its newline, and gets all of it once it takes frames. The
- * start rows follow.
+ * start rows and the carrier rows follow.
  */
 static void link_rows(void)
 {
@@ -570,6 +604,7 @@ static void link_rows(void)
     }
 
     settle_rows();
+    carrier_rows();
 }
 
 /** Whether the payload of datagram `f`, after its IPv4 and UDP headers, is
