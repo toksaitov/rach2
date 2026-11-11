@@ -7884,7 +7884,6 @@ static const struct {
                    {SYNTH_SYS_OVERFLOWGID, &ns_overflowgid, 0, 65535},
                    {SYNTH_SYS_OVERFLOWUID, &ns_overflowuid, 0, 65535},
                    {SYNTH_SYS_NR_OPEN, &fd_nr_open, FD_NR_OPEN_MIN, FD_NR_OPEN_MAX},
-                   {SYNTH_SYS_PIPE_MAX_SIZE, &pipe_max_size, PAGE_SIZE, 0x7FFFFFFF},
                    {SYNTH_SYS_RANDOMIZE_VA_SPACE, &randomize_va_space, 0, 2},
                    {SYNTH_SYS_TCP_KEEPALIVE_TIME, &tcp_keepalive_time, 1, SYSCTL_SECONDS_MAX},
                    {SYNTH_SYS_TCP_KEEPALIVE_TIME + 1, &tcp_keepalive_intvl, 1, SYSCTL_SECONDS_MAX},
@@ -8020,6 +8019,13 @@ static int procfs_sysctl_text(struct procfs_text *t, int entry)
     } else if (entry == SYNTH_SYS_FILE_MAX) {
         ap_ulong(t, fd_file_max);
         ap_ch(t, '\n');
+    } else if (entry == SYNTH_SYS_PIPE_MAX_SIZE) {
+        ap_ulong(t, pipe_max_size);
+        ap_ch(t, '\n');
+    } else if (entry == SYNTH_SYS_PIPE_USER_PAGES_HARD || entry == SYNTH_SYS_PIPE_USER_PAGES_SOFT) {
+        ap_ulong(t, entry == SYNTH_SYS_PIPE_USER_PAGES_HARD ? pipe_user_pages_hard
+                                                            : pipe_user_pages_soft);
+        ap_ch(t, '\n');
     } else if (entry == SYNTH_SYS_FILE_NR) {
         ap_ulong(t, fd_files_open());
         ap_str(t, "\t0\t");
@@ -8071,15 +8077,16 @@ static int32_t procfs_sysctl_read(fd_entry_t *e, char __user *buf, uint32_t coun
 
 /**
  * Store the number of the NUL-ended text `s` in `*v`, as Linux's
- * `proc_doulongvec_minmax` takes a write to fs/file-max: spaces stripped at
- * both ends, an optional `+`, then a number in base 0, as `oom_parse` reads
- * one, from 0 to LONG_MAX. 0, or -EINVAL for a sign, text that is no
- * number, or a number out of range, which leaves `*v` as it was.
+ * `proc_doulongvec_minmax` takes a write to fs/file-max and
+ * `proc_douintvec` one to fs/pipe-max-size: spaces stripped at both ends,
+ * an optional `+`, then a number in base 0, as `oom_parse` reads one, from
+ * 0 to `limit`. 0, or -EINVAL for a sign, text that is no number, or a
+ * number out of range, which leaves `*v` as it was.
  */
-static int sysctl_parse_ulong(const char *s, unsigned long *v)
+static int sysctl_parse_ulong(const char *s, unsigned long limit, unsigned long *v)
 {
     const char *end = s + k_strlen(s);
-    unsigned long base = 10, mag = 0, limit = ~0ul >> 1, d;
+    unsigned long base = 10, mag = 0, d;
     int digits = 0;
 
     while (oom_space(*s)) {
@@ -8111,6 +8118,41 @@ static int sysctl_parse_ulong(const char *s, unsigned long *v)
     return 0;
 }
 
+/**
+ * Write the NUL-ended text `text` to the /proc/sys file `entry` when its
+ * value is an unsigned long: fs/file-max, up to LONG_MAX; fs/pipe-max-size,
+ * up to 2^31 and rounded (`pipe_round_size`); fs/pipe-user-pages-hard and
+ * fs/pipe-user-pages-soft, any. Returns 0 for any other file, and otherwise
+ * 1, with 0 or -EINVAL in `*rc`.
+ */
+static int sysctl_ulong_write(int entry, const char *text, int *rc)
+{
+    unsigned long v;
+
+    switch (entry) {
+    case SYNTH_SYS_FILE_MAX:
+        *rc = sysctl_parse_ulong(text, ~0ul >> 1, &fd_file_max);
+        return 1;
+    case SYNTH_SYS_PIPE_MAX_SIZE:
+        *rc = sysctl_parse_ulong(text, ~0ul, &v);
+        if (*rc == 0 && v > 0x80000000ul) {
+            *rc = -EINVAL;
+        }
+        if (*rc == 0) {
+            pipe_max_size = pipe_round_size((uint32_t)v);
+        }
+        return 1;
+    case SYNTH_SYS_PIPE_USER_PAGES_HARD:
+        *rc = sysctl_parse_ulong(text, ~0ul, &pipe_user_pages_hard);
+        return 1;
+    case SYNTH_SYS_PIPE_USER_PAGES_SOFT:
+        *rc = sysctl_parse_ulong(text, ~0ul, &pipe_user_pages_soft);
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 /** Set the caller's user namespace's user/max_mnt_namespaces to `v`:
  * `count`, or -EINVAL out of its range. */
 static int32_t sysctl_max_mnt_write(int32_t v, uint32_t count)
@@ -8125,11 +8167,13 @@ static int32_t sysctl_max_mnt_write(int32_t v, uint32_t count)
  *
  * kernel/hostname and kernel/domainname become the text up to its first
  * newline, at most 64 bytes, as sethostname(2) and setdomainname(2) would
- * set them; the whole count is taken. fs/file-max takes an unsigned long
- * up to LONG_MAX (`sysctl_parse_ulong`). A write to another file is an
- * integer, read as `oom_parse` reads one. A file of `sysctl_ints` stores it
- * in its owner's variable, which the owner reads at its next use, and a
- * value out of the file's range is -EINVAL. user/max_mnt_namespaces is the
+ * set them; the whole count is taken. fs/file-max and the pipe limits take
+ * an unsigned long (`sysctl_ulong_write`), and fs/pipe-max-size rounds it
+ * as Linux's `round_pipe_size` does, so that 1 sets a page. A write to
+ * another file is an integer, read as `oom_parse` reads one. A file of
+ * `sysctl_ints` stores it in its owner's variable, which the owner reads at
+ * its next use, and a value out of the file's range is -EINVAL.
+ * user/max_mnt_namespaces is the
  * limit of the caller's user namespace, from 0 to INT_MAX
  * (`ns_set_max_mnt`). To net/ipv4/ip_forward 0, its
  * value, is taken, and any other value is -EINVAL, since the stack forwards
@@ -8166,8 +8210,7 @@ static int32_t procfs_sysctl_write(fd_entry_t *e, const char __user *buf, uint32
         }
         return (int32_t)count;
     }
-    if (f->origin_pid == SYNTH_SYS_FILE_MAX) {
-        rc = sysctl_parse_ulong(text, &fd_file_max);
+    if (sysctl_ulong_write(f->origin_pid, text, &rc)) {
         return rc != 0 ? rc : (int32_t)count;
     }
     if (synth_sys_ipv6(f->origin_pid, &dir, &key) && key == SYNTH_IPV6_STABLE_SECRET) {

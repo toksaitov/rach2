@@ -655,18 +655,22 @@ The process has no free descriptor below its limit.
 A copied path, directory prefix, component, reconstructed directory
 path, or symbolic-link expansion is too long.
 .It Bq Er ENFILE
-The kernel cannot allocate a synthetic-directory record, a
-pseudo-terminal, or the pipe of a FIFO.
+The kernel cannot allocate a synthetic-directory record or a
+pseudo-terminal.
 .It Bq Er ENODEV
 The special mouse device was requested but no mouse is available.
 .It Bq Er ENOENT
 The path is empty, a required component does not exist, or a synthetic
 entry or process no longer exists.
 .It Bq Er ENOMEM
-A file-system node, per-open handle, proc snapshot, open file description
-or larger descriptor table cannot be allocated, or the copy of the table
+A file-system node, per-open handle, proc snapshot, open file description,
+the pipe of a FIFO or larger descriptor table cannot be allocated, or the
+copy of the table
 .Dv CLOSE_RANGE_UNSHARE
-asks for.
+asks for; or the caller of the first open of a FIFO has no privilege and
+the pipes of its real user would pass
+.Pa /proc/sys/fs/pipe-user-pages-hard ,
+as on Linux.
 .It Bq Er ENOSPC
 The file system has no room to create the file or its directory entry.
 .It Bq Er ENOTDIR

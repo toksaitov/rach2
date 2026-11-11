@@ -18,8 +18,9 @@
  * Linux's default capacity, so a write of that much to an empty pipe does
  * not wait, as a program that writes a child's input before it reads the
  * child's output needs; fcntl's F_SETPIPE_SZ makes it larger or smaller
- * (`pipe_set_size`). It comes from the heap at the pipe's first write, so
- * a pipe never written costs only its record.
+ * (`pipe_set_size`). A new pipe's ring comes from the heap at its first
+ * write, so a pipe never written costs only its record. Each pipe's pages
+ * are charged to the real user that made it, as Linux charges them.
  */
 #ifndef _PIPE_H_
 #define _PIPE_H_
@@ -31,14 +32,30 @@
 #define PIPE_BUF_SIZE 65536   /* a new pipe's ring, a power of two */
 #define PIPE_MAX_SIZE 1048576 /* fs/pipe-max-size at boot, Linux's */
 
-/* The largest ring F_SETPIPE_SZ gives an unprivileged caller, which
+/* fs/pipe-user-pages-soft at boot, Linux's. */
+#define PIPE_USER_PAGES_SOFT 16384u
+/* A new pipe's pages once its user's pipes pass `pipe_user_pages_soft`,
+ * Linux's PIPE_MIN_DEF_BUFFERS. */
+#define PIPE_MIN_PAGES       2u
+
+/* The pages one real user's pipes may hold, each pipe's whole ring counted,
+ * before an unprivileged caller's new pipe gets PIPE_MIN_PAGES and its
+ * F_SETPIPE_SZ growth fails, and before its new pipe fails and its growth
+ * fails: /proc/sys/fs/pipe-user-pages-soft and pipe-user-pages-hard, as on
+ * Linux, where 0 is no limit. */
+extern unsigned long pipe_user_pages_soft;
+extern unsigned long pipe_user_pages_hard;
+
+/* The largest ring F_SETPIPE_SZ gives an unprivileged caller, and the
+ * largest a new pipe of one has: a power of two from a page to 2^31, which
  * /proc/sys/fs/pipe-max-size reads and sets. */
-extern int pipe_max_size;
+extern uint32_t pipe_max_size;
 
 typedef struct pipe {
     struct pipe *next;     /* the list of live pipes */
     int in_use;            /* 1 from allocation on; no code reads it */
     uint32_t inode;        /* nonzero, unlike every other live pipe's */
+    uint32_t user;         /* the real user charged with its pages */
     uint8_t *buf;          /* the ring, NULL until the first write */
     uint32_t size;         /* the ring's bytes, a power of two, a page or more */
     uint32_t head;         /* total bytes consumed by the read end */
@@ -84,8 +101,9 @@ struct fd_entry;
  * O_NONBLOCK a reader does not wait and a writer with no reader fails with
  * ENXIO; O_RDWR opens both ends and never waits. Returns 0, or -errno with
  * `e` as it was, for the caller to free: -EINVAL for the access mode 3,
- * -ENFILE when the heap has no room for a pipe, -EINTR when a signal ends
- * the wait. May sleep.
+ * -ENOMEM when the heap has no room for a pipe or the caller's user is at
+ * `pipe_user_pages_hard`, as Linux's `fifo_open` answers both, -EINTR when
+ * a signal ends the wait. May sleep.
  */
 int32_t fifo_attach(struct fd_entry *e, const void *mnt, uint64_t ino, int flags);
 
@@ -147,18 +165,18 @@ int32_t pipe_get_size(const struct fd_entry *e);
 
 /**
  * Give the ring of the pipe end `e` at least `size` bytes, as F_SETPIPE_SZ
- * does: a power of two from a page up, the bytes buffered kept. Returns the
- * size given, or -EINVAL for a size past 2^31, -EPERM for a growth past
- * `pipe_max_size`, or one that would take the rings grown past their first
- * size over PIPE_GROWN_MAX bytes in all, unless `privileged`, -EBUSY for a
- * size below the bytes buffered, or -ENOMEM.
+ * does: a power of two from a page up, the bytes buffered kept, in a ring
+ * allocated now. Returns the size given, or -EINVAL for a size past 2^31,
+ * -EPERM for a growth past `pipe_max_size`, or one that would take the
+ * pages of the pipe's user past either limit, unless `privileged`,
+ * -ENOMEM when the heap has no room for the ring, or -EBUSY for a size
+ * below the bytes buffered.
  */
 int32_t pipe_set_size(struct fd_entry *e, uint32_t size, int privileged);
 
-/* The bytes all pipes' rings may hold past PIPE_BUF_SIZE each for an
- * unprivileged F_SETPIPE_SZ: Linux's pipe-user-pages-soft, 16384 pages, for
- * one user, here for all of them. */
-#define PIPE_GROWN_MAX (16384u * 4096u)
+/** Round `size` as Linux's `round_pipe_size` does: a page for less, the
+ * next power of two otherwise; 0 for a size past 2^31. */
+uint32_t pipe_round_size(uint32_t size);
 
 struct isr_params;
 /* The handlers of pipe(2) and pipe2(2), which arch_syscall_init enters in
