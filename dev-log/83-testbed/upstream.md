@@ -111,3 +111,14 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: nothing. The guest is the reference guest, and the warning comes after its work and its last write to disk.
 * Status: unreported.
 * Next: read Linux's master for a stop of the fbdev damage worker, or a `drm_dev_unplug`, in virtio-gpu's shutdown path; check whether Debian's patch set adds `virtio_dev_shutdown`'s break and reset to 6.12, and report it to the virtio-gpu maintainers with the console's trace.
+
+## Chromium on llvmpipe loses a WebGL context after a large vertex buffer
+
+* Project: Chromium 156.0.8078.79 as Debian 13 builds it ("built on Debian GNU/Linux 13 (trixie)"), its WebGL on ANGLE over Mesa 25.0.7-2+deb13u1's llvmpipe (LLVM 19.1.7, 256 bits), "ANGLE (Mesa, llvmpipe (LLVM 19.1.7 256 bits), OpenGL ES 3.2)"; Chromium's source was not read.
+* Fails: a WebGL 1 page that fills one vertex buffer with `bufferData` and draws from it loses its context, `getError` answering `CONTEXT_LOST_WEBGL` (0x9242) one or two frames after the first draw, when the buffer holds 294,912 bytes or more; with 73,728 bytes it draws 120 frames. The GPU process lives on, and nothing in its log says why; the command log that `--enable-gpu-service-logging` gives stops at Chromium's cap of messages before the loss. Drawing 36 vertices out of the large buffer fails as drawing all of it does, so the buffer's size, not the draw's, decides.
+* Found: 2026-11-11, the testing PC, milestone 83, task 83-7, while checking the test bed's WebGL scene, `bed/measure/webgl.html`, in the graphics tests' Debian reference guest under the `virtio-vga` profile, Chromium under a headless Weston 14.0.2 with Pixman.
+* Reproduction: `debian-ref.sh run -p virtio-vga -c 4 -m 8192` with `bed/measure` and the graphics runners, then `measure.sh webgl` on a page whose cubes come from one buffer: the grid of 16 by 16 cubes, 294,912 bytes, or one cube's 1,152 bytes padded to 1,179,648, loses the context; 8 by 8, 73,728 bytes, draws. Where between the two sizes the limit lies was not measured.
+* Evidence: the page's variants and their lines were kept only in the testing PC's `build/tmp/t2670-diag`, not committed; [83-7.md](83-7.md#the-webgl-scene).
+* Rach2: the scene draws one cube's 36 vertices 1,024 times with ANGLE_instanced_arrays, from buffers of 864 and 8,192 bytes, which Debian's Chromium draws 300 frames of.
+* Status: unreported.
+* Next: repeat with Chromium's current stable on Linux with llvmpipe and on another GL driver, read the passthrough decoder's handling of a large `BufferData` to find what marks the context lost, and report it on Chromium's tracker with the page.
