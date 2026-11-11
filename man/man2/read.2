@@ -154,9 +154,16 @@ signed size, which for a 32-bit program is one past 2147483647.
 The total is cut at 0x7ffff000, as one read's count is, and the buffer
 that crosses it is filled only up to it.
 The kernel checks every length first, then that every range lies in user
-space and write access to every nonempty destination, before taking
+space.
+For a file of a mounted file system it then brings the destinations in
+for writing and keeps those before the first page that cannot be written:
+the read ends there with the bytes before it, or
+.Er EFAULT
+when the first destination cannot be written, as Linux's read stops at
+the first fault of its copy.
+For anything else it checks write access to every nonempty destination
+before taking input, so an invalid destination fails before consuming
 input.
-An invalid destination therefore fails before consuming input.
 The descriptor is checked before the list, as for
 .Fn read ,
 so a list requesting no bytes returns zero only from a descriptor that
@@ -170,6 +177,10 @@ buffers, as Linux holds its position lock, so that a seek through a
 descriptor that shares it comes before the call or after it, never
 between two buffers; the end of the whole list at the offset is checked
 under that hold.
+A page of an ext2 file that a mapping holds in memory is read from that
+page, as Linux reads its page cache, so a read sees a shared mapping's
+stores before they are written back, and a buffer sees what an earlier
+buffer of the same call stored into a mapping of the file.
 For a pipe, stream socket, device, or
 .Pa /proc
 file, later buffers are read only while the descriptor reports read
@@ -284,9 +295,13 @@ reads one, each at the place the ones before it reached, from
 and leaves the descriptor's offset where it was; the offset and the
 descriptor are checked first, as
 .Fn pread
-checks them, then the vector whole, as
+checks them, then the vector, as
 .Fn readv
-checks it, before a byte is read, and a short read ends the call.
+checks it, and a short read ends the call.
+A file of a mounted file system is read under one hold of the open file
+description, as
+.Fn readv
+reads it.
 .Pp
 The x86-64 kernel runs, for a program that enters it by
 .Ql int $0x80 ,

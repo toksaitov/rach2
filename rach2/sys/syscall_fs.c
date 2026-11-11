@@ -1385,6 +1385,10 @@ static int iov_append_file(const fd_entry_t *entry)
 /** Write a copied user vector under the file's lock, as defined below. */
 static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long long pos, int append);
 
+/** Read a copied user vector under the description's lock, as defined
+ * below. */
+static long iov_file_read(fd_entry_t *entry, uintptr_t addr, int count, long long pos);
+
 /** Import the vector once and write it whole to a pty master, under the
  * pair's lock (`pty_master_writev`), or to a pipe end as one write
  * (`pipe_writev`). `entry` is held and open for writing, and `count` is in
@@ -6323,11 +6327,10 @@ static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count, siz
 }
 
 /** Read up to `count` bytes of the file of `ofd` at `pos` into the user's
- * `buf`, with the description's lock held: through the file page cache
- * (`filecache_file_read`) or the file system. The bytes read, 0 at the end,
- * or the type's error. */
-static int32_t file_read_locked(struct open_file *ofd, char __user *buf, uint32_t count,
-                                uint64_t pos)
+ * `buf` through the file page cache (`filecache_file_read`) or the file
+ * system. The bytes read, 0 at the end, or the type's error. */
+static int32_t file_read_plain(struct open_file *ofd, char __user *buf, uint32_t count,
+                               uint64_t pos)
 {
     int32_t bytes_read;
 
@@ -6335,6 +6338,58 @@ static int32_t file_read_locked(struct open_file *ofd, char __user *buf, uint32_
         bytes_read = vfs_read(ofd->vmnt, ofd->fhandle, (char __force *)buf, count, pos);
     }
     return bytes_read;
+}
+
+/**
+ * Read up to `count` bytes of the file of `ofd` at `pos` into the user's
+ * `buf`, with the description's lock held. A file that mappings hold pages
+ * of (`filemap_disk_mapped`) is read a page at a time, each page from the
+ * mappings' page in memory when there is one (`filemap_read_resident`), up
+ * to the size the file has at the call, as Linux's filemap_read reads the
+ * shared folio, so that the read sees their stores, those an earlier buffer
+ * of the same readv made among them; any other page, and any other file, is
+ * read by `file_read_plain`. The bytes read, which stop at the first page
+ * that fails after some were read, 0 at the end, or the type's error.
+ */
+static int32_t file_read_locked(struct open_file *ofd, char __user *buf, uint32_t count,
+                                uint64_t pos)
+{
+    struct vfs_stat st;
+    uint32_t done = 0;
+    int32_t r = 0;
+
+    if (count == 0 || !filemap_disk_mapped(ofd->vmnt, ofd->ino)) {
+        return file_read_plain(ofd, buf, count, pos);
+    }
+    r = vfs_getattr(ofd->vmnt, ofd->vnode, &st);
+    if (r != 0) {
+        return r;
+    }
+    if (pos >= st.size) {
+        return 0;
+    }
+    if (count > st.size - pos) {
+        count = (uint32_t)(st.size - pos);
+    }
+    while (done < count) {
+        uint32_t piece = PAGE_SIZE - (uint32_t)((pos + done) % PAGE_SIZE);
+
+        if (piece > count - done) {
+            piece = count - done;
+        }
+        r = filemap_read_resident(ofd->vmnt, ofd->ino, pos + done, buf + done, piece);
+        if (r == 0) {
+            r = file_read_plain(ofd, buf + done, piece, pos + done);
+        }
+        if (r <= 0) {
+            break;
+        }
+        done += (uint32_t)r;
+        if ((uint32_t)r < piece) {
+            break;
+        }
+    }
+    return done > 0 ? (int32_t)done : r;
 }
 
 /**
@@ -6348,10 +6403,9 @@ static int32_t file_read_locked(struct open_file *ofd, char __user *buf, uint32_
  * position lock; `asked` is unused with `at`. Returns the bytes read, 0 at
  * the end of the file, or a negative errno: -EBADF for a descriptor not open
  * for reading or on no file, -EFAULT for a buffer the caller cannot write,
- * -EIO when a shared mapping's pages of the range cannot be written back
- * first (`filemap_file_reading`), -EINVAL for that end past 2^63-1, or the
- * type's error. A read of a byte or more
- * reports IN_ACCESS to inotify.
+ * -EINVAL for that end past 2^63-1, or the type's error. A read of a byte or
+ * more reports IN_ACCESS to inotify. The pages mappings of the file hold are
+ * read from memory (`file_read_locked`).
  *
  * A regular ext2 file is read through the file page cache
  * (`filecache_file_read`), which keeps each page it reads. Otherwise the
@@ -6375,9 +6429,6 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
     }
     if (!user_buffer_ok((__force uintptr_t)buf, count, 1)) {
         return -EFAULT;
-    }
-    if (filemap_file_reading(ofd->vmnt, ofd->ino, at ? *at : ofd->offset, count) != 0) {
-        return -EIO;
     }
     fd_ofd_lock(ofd);
     if (!at && rw_offset_end(entry, asked) != 0) {
@@ -6824,97 +6875,16 @@ int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, net_addr_
 }
 
 /**
- * Read the imported vector `iov` of `count` elements, `wanted` bytes in all,
- * from the file of a mount that `entry` is open on, at the description's
- * offset, holding the description's lock across the elements, as Linux holds
- * f_pos_lock across a vector, so that a sharer's seek cannot come between
- * them. The end of the whole vector is checked under that lock
- * (`rw_offset_end`). A shared mapping's pages of each element's range are
- * written back before that element is read (`filemap_file_reading`), so an
- * element sees what an earlier one stored into a mapping of the file, as
- * Linux reads the vector from the shared page cache in order. Returns the
- * bytes read, stopping at the first element not filled, or when none was
- * read 0 at the end of the file or a negative errno: -EBADF for no file,
- * -EIO when those pages cannot be written back, -EINVAL for an end past
- * 2^63-1, or the type's error. A read of a byte or more reports IN_ACCESS to
- * inotify. May sleep.
- */
-static long readv_file(fd_entry_t *entry, const struct kernel_iovec *iov, int count,
-                       uint32_t wanted)
-{
-    struct open_file *ofd = entry->ofd;
-    long total = 0;
-    int32_t r = 0;
-    int i;
-
-    if (!ofd || !ofd->vmnt) {
-        return -EBADF;
-    }
-    fd_ofd_lock(ofd);
-    if (rw_offset_end(entry, wanted) != 0) {
-        fd_ofd_unlock(ofd);
-        return -EINVAL;
-    }
-    for (i = 0; i < count; i++) {
-        uint32_t len = (uint32_t)iov[i].iov_len;
-
-        if (len == 0) {
-            continue;
-        }
-        if (filemap_file_reading(ofd->vmnt, ofd->ino, ofd->offset, len) != 0) {
-            r = -EIO;
-            break;
-        }
-        r = file_read_locked(ofd, (char __user *)iov[i].iov_base, len, ofd->offset);
-        if (r <= 0) {
-            break;
-        }
-        ofd->offset += (uint64_t)r;
-        total += r;
-        if ((uint32_t)r < len) {
-            break;
-        }
-    }
-    fd_ofd_unlock(ofd);
-    if (total > 0 && inotify_watches) {
-        inotify_desc(ofd, IN_ACCESS);
-    }
-    return total > 0 ? total : r;
-}
-
-/** Import the vector of `count` elements at `iov_user` for a readv(2) of
- * the file of a mount `entry` is open on, faulting its buffers in for
- * writing (`iov_import`), and read it under one lock (`readv_file`). The
- * bytes read, or -ENOMEM, an import error or the read's. */
-static long readv_mount_file(fd_entry_t *entry, uintptr_t iov_user, int count)
-{
-    struct kernel_iovec local[8], *iov = local;
-    long rc;
-
-    if (count > (int)(sizeof(local) / sizeof(local[0]))) {
-        iov = kmalloc((size_t)count * sizeof(*iov));
-        if (!iov) {
-            return -ENOMEM;
-        }
-    }
-    rc = iov_import(iov, iov_user, count, 1);
-    if (rc > 0) {
-        rc = readv_file(entry, iov, count, (uint32_t)rc);
-    }
-    if (iov != local) {
-        kfree(iov);
-    }
-    return rc;
-}
-
-/**
  * readv(2): read from the descriptor in argument 0 into the buffers of the
  * user's iovec array in argument 1, of the count in argument 2, in order;
  * the total bytes read, or a negative errno. musl's stdio reads through
  * this call whenever it asks for more than one byte, so `fgets`, `fread`
  * and `scanf` depend on it.
  *
- * The whole array is checked before a byte is taken, since a read cannot be
+ * A file of a mount is read by `iov_file_read`, which takes the vector whole,
+ * as Linux's vfs_iter_read takes an iov_iter: a buffer that cannot be
+ * written ends the read with the bytes before it. For anything else the
+ * whole array is checked before a byte is taken, since a read cannot be
  * undone (`iov_import`): a count past IOV_MAX_LOCAL, or a negative length,
  * is -EINVAL, and an iovec the caller cannot read or a buffer it cannot
  * write is -EFAULT, with the input still queued; the total is cut at
@@ -6930,9 +6900,10 @@ static long readv_mount_file(fd_entry_t *entry, uintptr_t iov_user, int count)
  *
  * The buffers are filled in order, and how depends on what is behind the
  * descriptor, since a second read is not always reading on. A file of a
- * mount is read again for each buffer, since its bytes have no message
+ * mount is read on into each buffer, since its bytes have no message
  * boundary, under the description's lock held across the vector and the
- * check of its end at the offset (`readv_file`), as Linux holds f_pos_lock. A
+ * check of its end at the offset (`iov_file_read`), as Linux holds
+ * f_pos_lock. A
  * datagram socket is read once (`readv_dgram`): one datagram is one
  * message, and a second read would take the next one. Anything else, a
  * pipe, a stream socket, a device or a /proc file, is read for the first
@@ -6963,7 +6934,7 @@ static long readv(int fd, uintptr_t iov_user, int iovcnt)
     }
     entry = current_proc ? fd_get(current_proc->fds, fd) : (fd_entry_t *)0;
     if (iov_mount_file(entry)) {
-        return readv_mount_file(entry, iov_user, iovcnt);
+        return iov_file_read(entry, iov_user, iovcnt, -1);
     }
     wanted = iov_import(NULL, iov_user, iovcnt, 1);
     if (wanted <= 0) {
@@ -12939,28 +12910,31 @@ static long iov_at_move(int fd, uintptr_t iov_user, int iovcnt, long long pos, i
  * to `fd` at the position `pos`, which the descriptor's own offset does not
  * follow. The position and the descriptor are checked first (`pio_entry`), as
  * Linux's do_preadv and vfs_readv, or do_pwritev and vfs_writev, test them
- * before the vector, a directory's EISDIR left to its read. An O_APPEND
- * mounted file goes through iov_file_write, with one lock across the vector.
- * Other transfers check the vector whole (`iov_import`), so a bad element is
- * refused before a byte moves, its total cut at MAX_RW_COUNT, and then move
- * it (`iov_at_move`), a write cut to the whole 2 MiB chunks a sealed tmpfs
- * file lets in (`iov_seal_grow`). A vector of no bytes has the descriptor
- * checked again by the transfer, but for a directory's, which is 0, as
- * Linux's vfs_readv returns before the read. Returns the bytes moved or a
- * negative errno:
- * -EINVAL for a negative position, a count past IOV_MAX_LOCAL or below 0, a
- * negative length, or a vector whose end would pass 2^63-1; -EBADF or
- * -ESPIPE for a descriptor `pio_entry` refuses; -EFAULT for a vector or a
- * buffer the caller cannot reach; -EPERM, with nothing written, for a write to
- * a file sealed against growth of which no whole 2 MiB chunk before the end
- * fits, as Linux takes the vector as one stream; or the first element's error.
+ * before the vector, a directory's EISDIR left to its read. A file of a
+ * mount takes the vector whole, as Linux's vfs_iter_read and
+ * vfs_iter_write take an iov_iter, with one lock across it and a bad buffer
+ * ending the transfer with the bytes before it: a write through
+ * iov_file_write, which an O_APPEND description takes before the vector is
+ * imported, and cuts to the whole 2 MiB chunks a sealed tmpfs file lets in,
+ * and a read through iov_file_read. Other transfers check the vector whole
+ * (`iov_import`), so a bad element is refused before a byte moves, its
+ * total cut at MAX_RW_COUNT, and then move it (`iov_at_move`). A vector of
+ * no bytes has the descriptor checked again by the transfer, but for a
+ * directory's, which is 0, as Linux's vfs_readv returns before the read.
+ * Returns the bytes moved or a negative errno: -EINVAL for a negative
+ * position, a count past IOV_MAX_LOCAL or below 0, a negative length, or a
+ * vector whose end would pass 2^63-1; -EBADF or -ESPIPE for a descriptor
+ * `pio_entry` refuses; -EFAULT for a vector or a first buffer the caller
+ * cannot reach; -EPERM, with nothing written, for a write to a file sealed
+ * against growth of which no whole 2 MiB chunk before the end fits, as
+ * Linux takes the vector as one stream; or the first element's error.
  */
 static long iov_at(int fd, uintptr_t iov_user, int iovcnt, long long pos, int write)
 {
     fd_entry_t *entry = NULL, *held;
-    uint32_t wanted, room;
+    uint32_t wanted;
     long rc = pio_entry(fd, write, 0, 0, pos, &entry);
-    int dir = rc == -EISDIR;
+    int dir = rc == -EISDIR, mounted;
 
     if (rc != 0 && !dir) {
         return rc;
@@ -12973,7 +12947,8 @@ static long iov_at(int fd, uintptr_t iov_user, int iovcnt, long long pos, int wr
     if (iov_append_file(entry)) {
         return iov_file_write(entry, iov_user, iovcnt, pos, 1);
     }
-    rc = iov_import(NULL, iov_user, iovcnt, !write);
+    mounted = !dir && iov_mount_file(held);
+    rc = iov_import(NULL, iov_user, iovcnt, mounted ? -1 : !write);
     if (rc < 0) {
         return rc;
     }
@@ -12987,13 +12962,9 @@ static long iov_at(int fd, uintptr_t iov_user, int iovcnt, long long pos, int wr
     if (rw_end_past(held, (uint64_t)pos, (uint64_t)wanted)) {
         return -EINVAL;
     }
-    if (entry && entry->type == FD_TYPE_FILE && (entry->flags & FD_FLAG_WRITE) &&
-        !(entry->flags & FD_FLAG_PATH) && !entry->ops && entry->ofd && entry->ofd->vmnt) {
-        rc = iov_seal_grow(entry->ofd, (uint64_t)pos, wanted, 0, &room);
-        if (rc != 0) {
-            return rc;
-        }
-        wanted = room;
+    if (mounted) {
+        return write ? iov_file_write(held, iov_user, iovcnt, pos, 0)
+                     : iov_file_read(held, iov_user, iovcnt, pos);
     }
     return iov_at_move(fd, iov_user, iovcnt, pos, write, wanted);
 }
@@ -13013,12 +12984,15 @@ long sys_pwritev(isr_params_t *params)
                   pos_from_hilo(SC_ARG(params, 4), SC_ARG(params, 3)), 1);
 }
 
-/** Bring in an imported write vector before taking file locks. At the first
- * bad data page keep only the prefix before it, including a partial element,
- * and clear the lengths after it. Return the accessible byte count. A later
- * buffer fault must not discard earlier bytes; faults may sleep and take
- * another file's lock, so this step precedes the destination's locks. */
-static uint32_t iov_write_prefix(struct kernel_iovec *iov, int count)
+/** Bring in the buffers of an imported vector before taking file locks, for
+ * writing when `into`, as a read fills them, or for reading, as a write
+ * takes them. At the first bad data page keep only the prefix before it,
+ * including a partial element, and clear the lengths after it, so that the
+ * transfer ends there with the bytes before it, as Linux's copy to or from
+ * an iov_iter stops at the first fault. Return the accessible byte count.
+ * Faults may sleep and take another file's lock, so this step precedes the
+ * file's locks. */
+static uint32_t iov_prefix(struct kernel_iovec *iov, int count, int into)
 {
     uint32_t total = 0;
     int i;
@@ -13027,7 +13001,7 @@ static uint32_t iov_write_prefix(struct kernel_iovec *iov, int count)
         uintptr_t addr = iov[i].iov_base;
         uint32_t len = (uint32_t)iov[i].iov_len, have = 0;
 
-        if (!len || user_buffer_ok(addr, len, 0)) {
+        if (!len || user_buffer_ok(addr, len, into)) {
             total += len;
             continue;
         }
@@ -13037,7 +13011,7 @@ static uint32_t iov_write_prefix(struct kernel_iovec *iov, int count)
             if (piece > len - have) {
                 piece = len - have;
             }
-            if (!user_buffer_ok(addr + have, piece, 0)) {
+            if (!user_buffer_ok(addr + have, piece, into)) {
                 break;
             }
             have += piece;
@@ -13052,10 +13026,12 @@ static uint32_t iov_write_prefix(struct kernel_iovec *iov, int count)
     return total;
 }
 
-/** Import a write vector (`iov_import`), its total in `*wanted`, and
- * retain its accessible prefix before locking. Return 0, an import error,
- * or EFAULT when no requested byte is readable. */
-static long iov_copy_in(struct kernel_iovec *iov, uintptr_t addr, int count, uint32_t *wanted)
+/** Import a vector (`iov_import`), its total in `*wanted`, and retain its
+ * prefix accessible for writing, when `into`, or for reading before
+ * locking (`iov_prefix`). Return 0, an import error, or EFAULT when no
+ * requested byte is accessible. */
+static long iov_copy_in(struct kernel_iovec *iov, uintptr_t addr, int count, uint32_t *wanted,
+                        int into)
 {
     long rc = iov_import(iov, addr, count, -1);
 
@@ -13063,7 +13039,7 @@ static long iov_copy_in(struct kernel_iovec *iov, uintptr_t addr, int count, uin
         return rc;
     }
     *wanted = (uint32_t)rc;
-    return *wanted && iov_write_prefix(iov, count) == 0 ? -EFAULT : 0;
+    return *wanted && iov_prefix(iov, count, into) == 0 ? -EFAULT : 0;
 }
 
 /** Cut the imported vector `iov` of `count` elements to its first `room`
@@ -13159,7 +13135,7 @@ static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long lo
     if (!iov) {
         return -ENOMEM;
     }
-    rc = iov_copy_in(iov, addr, count, &wanted);
+    rc = iov_copy_in(iov, addr, count, &wanted, 0);
     if (rc != 0) {
         goto out;
     }
@@ -13203,6 +13179,104 @@ static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long lo
     }
 out:
     kfree(iov);
+    return rc;
+}
+
+/** Read the elements of the imported vector `iov` of `count` from the file
+ * of `ofd`, whose description's lock the caller holds, at the description's
+ * offset, which moves past the bytes read, for `pos` -1, or at `pos`, each
+ * element where the one before it ended (`file_read_locked`). Return the
+ * bytes read, stopping at the first element not filled, or when none was
+ * read 0 at the end of the file or the read's error. */
+static long iov_file_elements_read(struct open_file *ofd, const struct kernel_iovec *iov, int count,
+                                   long long pos)
+{
+    uint64_t at = (uint64_t)pos;
+    long total = 0;
+    int32_t r = 0;
+    int i;
+
+    for (i = 0; i < count; i++) {
+        uint32_t len = (uint32_t)iov[i].iov_len;
+
+        if (len == 0) {
+            continue;
+        }
+        r = file_read_locked(ofd, (char __user *)iov[i].iov_base, len,
+                             pos == -1 ? ofd->offset : at);
+        if (r <= 0) {
+            break;
+        }
+        if (pos == -1) {
+            ofd->offset += (uint64_t)r;
+        }
+        at += (uint64_t)r;
+        total += r;
+        if ((uint32_t)r < len) {
+            break;
+        }
+    }
+    return total > 0 ? total : r;
+}
+
+/**
+ * Read the vector of `count` elements at `addr` from the file of a mount
+ * that the descriptor `entry`, held by the caller, is open on, as Linux's
+ * vfs_iter_read reads an iov_iter whole: at the description's offset for
+ * `pos` -1, which moves past the bytes read, or at `pos`, which leaves it.
+ * The vector is copied and range-checked once (`iov_import`), and its
+ * buffers are brought in for writing before the lock, keeping the bytes
+ * before the first that cannot be written (`iov_prefix`), so that the read
+ * ends there with the bytes before it, as Linux's copy to an iov_iter stops
+ * at its first fault. The description's lock is held across the elements
+ * and the check of the vector's end at the offset, as Linux holds
+ * f_pos_lock, so that a sharer's seek cannot come between them. Each
+ * element is read from where the one before it ended (`file_read_locked`),
+ * which reads the pages mappings of the file hold from memory, so that an
+ * element sees what an earlier one stored into a mapping of the file, as
+ * Linux's filemap_read reads the shared folio. Returns the bytes read,
+ * stopping at the first element not filled, or when none was read 0 at the
+ * end of the file or a negative errno: -EINVAL for a count below 0 or past
+ * IOV_MAX_LOCAL, a negative length or an end past 2^63-1, -EFAULT for a
+ * vector the caller cannot read or a first buffer it cannot write,
+ * -ENOMEM, -EBADF for no file, or the type's error. A read of a byte or
+ * more reports IN_ACCESS to inotify. May sleep.
+ */
+static long iov_file_read(fd_entry_t *entry, uintptr_t addr, int count, long long pos)
+{
+    struct kernel_iovec local[8], *iov = local;
+    struct open_file *ofd = entry->ofd;
+    uint32_t wanted = 0;
+    long rc;
+
+    if (count < 0 || count > IOV_MAX_LOCAL) {
+        return -EINVAL;
+    }
+    if (count > (int)(sizeof(local) / sizeof(local[0]))) {
+        iov = kmalloc((size_t)count * sizeof(*iov));
+        if (!iov) {
+            return -ENOMEM;
+        }
+    }
+    rc = iov_copy_in(iov, addr, count, &wanted, 1);
+    if (rc == 0 && wanted > 0 && (!ofd || !ofd->vmnt)) {
+        rc = -EBADF;
+    } else if (rc == 0 && wanted > 0 && pos >= 0 &&
+               (uint64_t)wanted > 0x7FFFFFFFFFFFFFFFull - (uint64_t)pos) {
+        rc = -EINVAL;
+    } else if (rc == 0 && wanted > 0) {
+        fd_ofd_lock(ofd);
+        rc = pos == -1 && rw_offset_end(entry, wanted) != 0
+                 ? -EINVAL
+                 : iov_file_elements_read(ofd, iov, count, pos);
+        fd_ofd_unlock(ofd);
+        if (rc > 0 && inotify_watches) {
+            inotify_desc(ofd, IN_ACCESS);
+        }
+    }
+    if (iov != local) {
+        kfree(iov);
+    }
     return rc;
 }
 

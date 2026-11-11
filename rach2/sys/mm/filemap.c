@@ -9,6 +9,7 @@
 #include "notify.h"
 #include "paging.h"
 #include "shmem.h"
+#include "usercopy.h"
 #include "../irq.h"
 #include "../fs/krffs.h"
 #include "../fs/vfs.h"
@@ -596,15 +597,35 @@ int filemap_disk_mapped(const struct vfs_mount *mnt, uint64_t ino)
     return dshare_of(mnt, ino) != NULL;
 }
 
-int filemap_file_reading(const struct vfs_mount *mnt, uint64_t ino, uint64_t off, uint32_t len)
+int32_t filemap_read_resident(const struct vfs_mount *mnt, uint64_t ino, uint64_t off,
+                              char __user *dst, uint32_t count)
 {
     struct dshare *ds = dshares ? dshare_of(mnt, ino) : NULL;
+    uint32_t in = (uint32_t)(off % PAGE_SIZE);
+    uintptr_t phys;
+    uint8_t *page;
+    int rc;
 
-    if (!ds || len == 0) {
+    if (!ds || count == 0 || off / PAGE_SIZE >= ds->sh.npages) {
         return 0;
     }
-    return dshare_sync(ds, (uint32_t)(off / PAGE_SIZE),
-                       (uint32_t)((off + len + PAGE_SIZE - 1) / PAGE_SIZE), 0);
+    phys = shmem_resident(&ds->sh, (uint32_t)(off / PAGE_SIZE));
+    if (!phys) {
+        return 0;
+    }
+    if (count > PAGE_SIZE - in) {
+        count = PAGE_SIZE - in;
+    }
+    frame_ref(phys);
+    page = kmap_temp(phys);
+    if (!page) {
+        free_frame(phys);
+        return 0;
+    }
+    rc = copy_to_user(dst, page + in, count);
+    kunmap_temp(page);
+    free_frame(phys);
+    return rc == 0 ? (int32_t)count : -EFAULT;
 }
 
 void filemap_file_written(fd_entry_t *e, uint64_t off, uint32_t len)
