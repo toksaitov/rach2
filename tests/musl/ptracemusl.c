@@ -22,9 +22,11 @@
  * returns the parent's id, and a write made -1 is not run and returns the eax
  * the tracer set; on x86-64 a DS selector the tracer sets there is the
  * child's at the next stop, and the kernel's data selector is refused. A
- * tracee that SIGKILL reaches at the entry stop of a write writes nothing. At
- * the exit stop of a read a signal interrupted, -1 in orig_eax keeps the read
- * from being restarted after a handler with SA_RESTART.
+ * tracee that SIGKILL reaches at the entry stop of a write writes nothing. The
+ * exit stop of a read a signal interrupted has -ERESTARTSYS, -512, in eax, as
+ * Linux's, whose exit stop comes before signal delivery; -1 in orig_eax there
+ * keeps the read from being restarted after a handler with SA_RESTART, and the
+ * read returns the code the tracer left, errno 512.
  * PTRACE_O_TRACEEXEC stops the child after an execve with the exec event, which
  * waitid reports in si_status above the signal, and a /proc/PID/mem descriptor
  * opened before the execve reads nothing of the new image. A debug register set
@@ -677,11 +679,20 @@ static void interrupt_only(int sig)
     (void)sig;
 }
 
+/* Linux's restart code for a call a handler with SA_RESTART restarts, which
+ * a tracer reads at the exit stop (include/linux/errno.h); no user header
+ * defines it. */
+#define ERESTARTSYS 512
+
 /**
- * Check that a tracer's -1 in orig_eax at the exit stop of a read a signal
- * interrupted keeps the read from being restarted, though the handler that
- * runs has SA_RESTART: the read returns EINTR, and a byte written after it is
- * not read. Returns 0, or 1 after the failure is printed.
+ * Check that a tracer reads -ERESTARTSYS at the exit stop of a read a signal
+ * interrupted, as on Linux 6.12, whose exit stop (kernel/entry/common.c:176)
+ * comes before the signal's delivery decides the restart, and that its -1 in
+ * orig_eax there keeps the read from being restarted, though the handler that
+ * runs has SA_RESTART: Linux's handle_signal then leaves the result register
+ * alone (arch/x86/kernel/signal.c:264), so the read returns -1 with errno
+ * ERESTARTSYS, and a byte written after it is not read. Returns 0, or 1 after
+ * the failure is printed.
  */
 static int restart_cancelled(void)
 {
@@ -705,7 +716,7 @@ static int restart_cancelled(void)
         close(p[1]);
         ptrace(PTRACE_TRACEME, 0, NULL, NULL);
         raise(SIGSTOP);
-        _exit(read(p[0], &c, 1) == -1 && errno == EINTR ? 0 : 1);
+        _exit(read(p[0], &c, 1) == -1 && errno == ERESTARTSYS ? 0 : 1);
     }
     if (!stopped_by(pid, SIGSTOP) || syscall_entry(pid, SYS_read, &regs) != 0) {
         return fail("the entry stop of read");
@@ -713,7 +724,7 @@ static int restart_cancelled(void)
     held();
     if (ptrace(PTRACE_SYSCALL, pid, NULL, NULL) != 0 || kill(pid, SIGUSR1) != 0 ||
         !stopped_by(pid, SIGTRAP) || ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 ||
-        R_NR(regs) != SYS_read || (long)R_RET(regs) != -EINTR) {
+        R_NR(regs) != SYS_read || (long)R_RET(regs) != -ERESTARTSYS) {
         return fail("the exit stop of the interrupted read");
     }
     held();
