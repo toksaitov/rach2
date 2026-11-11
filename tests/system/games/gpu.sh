@@ -27,12 +27,15 @@ shift $((OPTIND - 1))
 here=$(cd "$(dirname "$0")" && pwd)
 out=$1
 made=
-trap '[ -z "$made" ] || rm -f /opt/proton' EXIT
+home=
+trap '[ -z "$made" ] || rm -f /opt/proton
+      [ -z "$home" ] || rm -rf "$home"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
 mkdir -p "$out"
+out=$(cd "$out" && pwd)
 chown "$user" "$out"
 # HDA starts at 100 on Rach2; nothing here plays, but the level is kept low.
 # Linux has no mixer(1), and a machine without a sound card no /dev/mixer.
@@ -59,13 +62,13 @@ fi
     readlink -f /opt/proton
     cat /opt/proton/version
 } > "$out/identity.txt" 2>&1
-mkdir -p "$out/home"
-chown "$user" "$out/home"
+home=$out/home
+mkdir -p "$home"
+chown "$user" "$home"
 status=0
 su -s /bin/sh "$user" -c "cd '$out' && HOME='$out/home' TMPDIR='$out' GAMES_RENDERER='$renderer' \
     GAMES_COMPARE='$linux' GAMES_LAUNCHER='$launcher' python3 '$here/run.py' gpu '$out/gpu'" \
     || status=$?
-rm -rf "${out:?}/home"
 # The kernel's log: the GPU's resets and faults, and on Rach2 with
 # rach2.trace=enosys each call it lacks, once for each program that asked,
 # with the number of lines that named it.
