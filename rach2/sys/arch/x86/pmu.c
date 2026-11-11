@@ -330,8 +330,7 @@ void platform_pmu_disable(void)
  * entry and masked it. The write comes after the counter is loaded again,
  * as Linux's late acknowledgement for Haswell and later
  * (arch/x86/events/intel/core.c:3168-3175); a stopped counter's entry
- * stays masked. On AMD a handled overflow opens the window for a late NMI,
- * as `amd_pmu_handle_irq` does.
+ * stays masked.
  */
 int platform_pmu_overflow(int *due)
 {
@@ -363,10 +362,21 @@ int platform_pmu_overflow(int *due)
         load_count(pmc[me].chunk);
     }
     lapic_set_lvtpc(LAPIC_LVT_NMI);
-    if (hit && kind == PMU_AMD) {
-        open_window(me);
-    }
     return hit;
+}
+
+/**
+ * On AMD, open the window for a late NMI once the handler has run the
+ * overflow's callback, which may take seconds to report a lockup, as
+ * `amd_pmu_handle_irq` opens it after `x86_pmu_handle_irq` and the
+ * callbacks it runs (arch/x86/events/amd/core.c:874-882, 911-918;
+ * arch/x86/events/core.c:1713).
+ */
+void platform_pmu_handled(void)
+{
+    if (kind == PMU_AMD) {
+        open_window((int)arch_cpu_id());
+    }
 }
 
 /**
@@ -374,7 +384,8 @@ int platform_pmu_overflow(int *due)
  * it: one in flight as the counter is loaded again or stopped finds no
  * overflow, and on AMD the overflow is seen late, which Linux allows for by
  * claiming every NMI of no known source for 100 ms after a handled overflow
- * (arch/x86/events/amd/core.c:856-889, 1420, `perf_nmi_window`). The same
+ * (arch/x86/events/amd/core.c:856-889, 1420, `perf_nmi_window`), which
+ * `platform_pmu_handled` opens. The same
  * window here follows each arming and stop of the counter, on Intel too,
  * whose global status the arming clears.
  */

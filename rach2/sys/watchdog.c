@@ -900,6 +900,7 @@ int watchdog_nmi(isr_params_t *params)
         if (due && (watchdog_enabled() & WD_HARD) && watchdog_check_timestamp(w)) {
             watchdog_hardlockup_check(cpu, params);
         }
+        platform_pmu_handled();
     }
     if (smp_stop_nmi()) {
         handled++;

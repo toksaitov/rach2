@@ -85,7 +85,8 @@ void watchdog_sched(void);
  * One the counter raised just before it was armed again or stopped, or
  * that AMD's counter raised late after an overflow it handled, finds
  * nothing either, and is claimed within the counter's window
- * (`platform_pmu_late`).
+ * (`platform_pmu_late`), which on AMD opens once the hard-lockup check of
+ * the overflow has run.
  */
 int watchdog_nmi(isr_params_t *params);
 
