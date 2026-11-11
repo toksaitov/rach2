@@ -723,9 +723,11 @@ seconds later, the number read as Linux's kstrtos64 reads it with base 0,
 with one newline at most after it.
 A time after now sets the alarm, and a new time while one is set is
 .Er EBUSY ;
-a push with none set is
-.Er EINVAL ;
-any other time, such as 0, clears it, as on Linux.
+a push with none set, or to a time before 1970, is
+.Er EINVAL ,
+and a push to a time not after now raises the alarm at once; any other
+time, such as 0, clears it, as on Linux.
+The alarm comes once, and then reads as none and takes a new time.
 .It Pa /sys/class/rtc/rtc0/device/power/wakeup
 .Ql enabled :
 the clock's alarm may wake the machine.

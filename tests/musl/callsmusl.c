@@ -80,9 +80,9 @@
  * /dev/mem reads the first megabyte and maps the local APIC, and fails with
  * EPERM for RAM and with EINVAL for a private mapping. klogctl gives the log
  * ring's size, its records whole, and after a clear none of those before;
- * /dev/log leads to /var/run/log. The clock's wake alarm fails with ETIME for a
- * time past and EINVAL for one two days ahead, ends a read at the alarm, and
- * wakes a suspend to idle that gives no process time meanwhile.
+ * /dev/log leads to /var/run/log. The clock's wake alarm comes at once for a
+ * time past and fails with EINVAL for one two days ahead, ends a read at the
+ * alarm, and wakes a suspend to idle that gives no process time meanwhile.
  *
  * It prints "CALLSMUSL OK" and exits 0 on success, or prints "CALLSMUSL FAIL
  * (detail: errno N)" and exits 1 at the first failure.
@@ -117,7 +117,7 @@
  * `pty-whole-lines`, `signalfd-eagain`, `signalfd-read`, `itimer-interval`,
  * `itimer-signals`, `ptimer-gettime`, `ptimer-signals`, `devmem-low`,
  * `devmem-ram-eperm`, `devmem-private-einval`, `devmem-apic`, `klog-size`,
- * `klog-records`, `klog-clear`, `dev-log-link`, `rtc-alarm-refused`,
+ * `klog-records`, `klog-clear`, `dev-log-link`, `rtc-alarm-range`,
  * `rtc-alarm-readback`, `rtc-read-af`, `rtc-wakeup-enabled`,
  * `power-state-mode`, `freeze-wakes` and `freeze-holds`. `ids-unsigned`,
  * `recvmmsg-wide-count` and `socket-wide-domain` are x86-64's alone, and the
@@ -2190,8 +2190,9 @@ static int freezes(int fd)
 }
 
 /**
- * Check the clock's wake alarm and suspend to idle: an alarm in the past is
- * ETIME and one two days ahead EINVAL; one two seconds ahead reads back
+ * Check the clock's wake alarm and suspend to idle: an alarm in the past
+ * comes at once and is then off, as Linux's rtc_timer_enqueue raises it, and
+ * one two days ahead is EINVAL; one two seconds ahead reads back
  * enabled and ends a read of /dev/rtc0 with RTC_AF; the device may wake the
  * machine; a descriptor open on /sys/power/state has mode 0644, as its path
  * does; and a write of freeze to it, with the alarm set again, returns at
@@ -2208,9 +2209,12 @@ static int rtcs(void)
     if (fd < 0) {
         return fail("open /dev/rtc0");
     }
-    if (wake_in(fd, -10, &w) != -1 || errno != ETIME || wake_in(fd, 2 * 86400, &w) != -1 ||
-        errno != EINVAL) {
-        return fail("a wake alarm in the past or two days ahead was taken");
+    if (wake_in(fd, -10, &w) != 0 || read(fd, &data, sizeof data) != (ssize_t)sizeof data ||
+        !(data & 0x20) || ioctl(fd, RTC_WKALM_RD, &back) != 0 || back.enabled) {
+        return fail("a wake alarm in the past did not come at once");
+    }
+    if (wake_in(fd, 2 * 86400, &w) != -1 || errno != EINVAL) {
+        return fail("a wake alarm two days ahead was taken");
     }
     held();
     if (wake_in(fd, 2, &w) != 0 || ioctl(fd, RTC_WKALM_RD, &back) != 0 || !back.enabled ||
@@ -2310,7 +2314,7 @@ static void plan(void)
         "itimer-signals",     "ptimer-gettime",    "ptimer-signals",
         "devmem-low",         "devmem-ram-eperm",  "devmem-private-einval",
         "devmem-apic",        "klog-size",         "klog-records",
-        "klog-clear",         "dev-log-link",      "rtc-alarm-refused",
+        "klog-clear",         "dev-log-link",      "rtc-alarm-range",
         "rtc-alarm-readback", "rtc-read-af",       "rtc-wakeup-enabled",
         "power-state-mode",   "freeze-wakes",      "freeze-holds"};
 

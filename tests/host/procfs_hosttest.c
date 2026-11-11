@@ -158,8 +158,9 @@ size_t frame_total_count(void)
 }
 
 /* The clock, which only the wakealarm rows start: whether it reads, the
- * seconds since 1970 it reads, and the alarm set, -1 for none. */
-static int clock_up;
+ * seconds since 1970 it reads, the alarm set, -1 for none, and the alarms
+ * that came. */
+static int clock_up, clock_came;
 static int64_t clock_now, clock_alarm = -1;
 
 /** The clock reads only while a row has it up. */
@@ -182,14 +183,15 @@ int64_t devfs_rtc_wakealarm(void)
     return clock_alarm;
 }
 
-/** Set the alarm, or clear it for a negative `at`; -EIO while the clock
- * is down. */
+/** Set the alarm, raise it at once for a time not after now, or clear it
+ * for a negative `at`, as devfs's does; -EIO while the clock is down. */
 int32_t devfs_rtc_set_wakealarm(int64_t at)
 {
     if (!clock_up) {
         return -EIO;
     }
-    clock_alarm = at < 0 ? -1 : at;
+    clock_came += at >= 0 && at <= clock_now;
+    clock_alarm = at < 0 || at <= clock_now ? -1 : at;
     return 0;
 }
 
@@ -2431,6 +2433,13 @@ static void wakealarm_writes(void)
           "wakealarm: a new time while one is set is EBUSY");
     check(wakealarm_write("+=0x3c") == 6 && clock_alarm == 1000120,
           "wakealarm: +=N pushes the alarm set, its number in hexadecimal");
+    check(wakealarm_write("+=-1000121") == -EINVAL && clock_alarm == 1000120 && !clock_came,
+          "wakealarm: a push to before 1970 is EINVAL and keeps the alarm, as Linux's "
+          "rtc_valid_tm");
+    check(wakealarm_write("+=-120") == 6 && clock_alarm == -1 && clock_came == 1,
+          "wakealarm: a push to a time not after now raises the alarm at once");
+    check(wakealarm_write("+60") == 3 && clock_alarm == 1000060,
+          "wakealarm: and then takes a new one");
     check(wakealarm_write("0") == 1 && clock_alarm == -1, "wakealarm: 0 clears it");
     check(wakealarm_write("+=5") == -EINVAL && clock_alarm == -1,
           "wakealarm: a push with none set is EINVAL");
@@ -2448,6 +2457,7 @@ static void wakealarm_writes(void)
     clock_up = 0;
     clock_now = 0;
     clock_alarm = -1;
+    clock_came = 0;
 }
 
 /** Read the THP files at Linux 6.12's defaults with the policy never, and

@@ -1336,7 +1336,8 @@ static const struct file_ops screenlog_ops = {
  * RTC_AIE_ON and RTC_AIE_OFF enable and disable its interrupt, and
  * RTC_WKALM_SET and RTC_WKALM_RD set and read a date and time with the
  * interrupt's state in a `struct rtc_wkalrm`, which as on Linux without a
- * day alarm must lie within a day ahead, and not in the past. A read waits
+ * day alarm must lie within a day ahead; one not after now comes at once.
+ * An alarm comes once, which turns its interrupt off. A read waits
  * for an alarm and gives an unsigned long, as Linux's: the alarms since the
  * last read in the bits above the low eight, with RTC_AF and RTC_IRQF. An
  * alarm is a wake event of a suspend to idle (`suspend_wake`). The clock's
@@ -1354,22 +1355,36 @@ static const struct file_ops screenlog_ops = {
 #define RTC_IRQF      0x80u
 
 /* The alarm's state: the interrupts since the last read, and the date and
- * time RTC_WKALM_SET last set, -1 for none, which RTC_WKALM_RD gives back
- * and /sys/class/rtc/rtc0/wakealarm reads. */
+ * time RTC_WKALM_SET last set, -1 for none or once it has come, which
+ * RTC_WKALM_RD gives back and /sys/class/rtc/rtc0/wakealarm reads. */
 static wait_queue_t rtc_wq;
 static volatile uint32_t rtc_alarms;
 static int64_t rtc_wake_at = -1;
 static int rtc_irq_ready; /* the alarm interrupt is attached (`rtc_irq_setup`) */
 
-/** The clock's alarm interrupt: an alarm counted, its readers woken, and a
- * suspend to idle ended. */
+/** Count an alarm that has come, which ends it, wake its readers and end
+ * a suspend to idle. The alarm is one-shot, as Linux's aie_timer, which
+ * its expiry disables, and with no timer left the alarm interrupt
+ * (drivers/rtc/interface.c:955 and rtc_alarm_disable): the wake alarm reads
+ * as none again and takes a new time. Any context. */
+static void rtc_alarm_came(void)
+{
+    uint32_t flags = kirq_save();
+
+    rtc_alarm_interrupts(0);
+    rtc_wake_at = -1;
+    rtc_alarms++;
+    kirq_restore(flags);
+    wq_wake_all(&rtc_wq);
+    suspend_wake();
+}
+
+/** The clock's alarm interrupt: an alarm that has come. */
 static void rtc_alarm_irq(isr_params_t *params)
 {
     (void)params;
     if (rtc_alarm_ack()) {
-        rtc_alarms++;
-        wq_wake_all(&rtc_wq);
-        suspend_wake();
+        rtc_alarm_came();
     }
 }
 
@@ -1384,7 +1399,7 @@ static void rtc_irq_setup(void)
 }
 
 /** The wait condition of a read: an alarm has come since the last read. */
-static int rtc_alarm_came(void *arg)
+static int rtc_alarm_pending(void *arg)
 {
     (void)arg;
     return rtc_alarms != 0;
@@ -1411,7 +1426,7 @@ static int32_t dev_rtc_read(fd_entry_t *e, char __user *buf, uint32_t count)
         if (e->ofd->status_flags & OFD_NONBLOCK) {
             return -EAGAIN;
         }
-        if (wq_wait_event(&rtc_wq, rtc_alarm_came, NULL) < 0) {
+        if (wq_wait_event(&rtc_wq, rtc_alarm_pending, NULL) < 0) {
             return -EINTR;
         }
     }
@@ -1457,7 +1472,11 @@ int32_t devfs_rtc_set_wakealarm(int64_t at)
     }
     now_s = rtc_seconds_of(&now);
     if (at <= now_s) {
-        return -ETIME;
+        /* Linux's rtc_timer_enqueue takes a time not after now and raises
+         * the alarm at once from its irqwork (drivers/rtc/interface.c:
+         * 858-861). */
+        rtc_alarm_came();
+        return 0;
     }
     if (at - now_s > 86400) {
         return -EINVAL; /* a time of day: no further than a day ahead */
