@@ -906,13 +906,55 @@ static int32_t console_write(fd_entry_t *entry, const char __user *buf, uint32_t
     return (int32_t)count;
 }
 
+/** Check a scalar I/O request before its count is cut at USER_RW_MAX.
+ * Return -EFAULT for a range outside user memory and the current kernel
+ * caller's window, then -EINVAL for a count negative as the kernel's
+ * ssize_t, or 0. This is Linux's access_ok and rw_verify_area order;
+ * neither check touches the buffer. */
+static int32_t rw_buffer_range(uintptr_t addr, size_t count)
+{
+    if (!user_span_ok(addr, count) && !proc_window_covers(current_proc, addr, count)) {
+        return -EFAULT;
+    }
+    return (long)count < 0 ? -EINVAL : 0;
+}
+
+/** Check the descriptor's write access before its buffer or vector.
+ * Return -EBADF for a missing descriptor, O_PATH, no write access or an
+ * unsupported kind, -EINVAL for an object without a write method, or 0.
+ * A socket's send checks its protocol after this, as Linux's does. */
+static int32_t write_allowed(const fd_entry_t *entry)
+{
+    if (!entry || (entry->flags & FD_FLAG_PATH)) {
+        return -EBADF;
+    }
+    if (entry->ops) {
+        if (!(entry->flags & FD_FLAG_WRITE)) {
+            return -EBADF;
+        }
+        return entry->ops->write ? 0 : -EINVAL;
+    }
+    if (entry->type == FD_TYPE_SOCKET) {
+        return entry->sock ? 0 : -EBADF;
+    }
+    if (entry->type == FD_TYPE_CONSOLE) {
+        return (entry->flags & FD_FLAG_WRITE) ? 0 : -EBADF;
+    }
+    if (entry->type == FD_TYPE_FILE) {
+        return (entry->flags & FD_FLAG_WRITE) && entry->ofd && entry->ofd->vmnt ? 0 : -EBADF;
+    }
+    return -EBADF;
+}
+
 /**
- * Write `count` bytes of user buffer `buf` to descriptor `fd`.
+ * Write up to `requested` bytes of user buffer `buf` to descriptor `fd`.
  *
  * The shared body of write(2) and of each element of writev(2). Returns the
  * bytes written or a negative errno: -EBADF for a descriptor that is not
  * open, not open for writing, or of a kind with no write, and -EINVAL for
  * one open for writing whose object has no write method (`write_ops`).
+ * After those checks, rw_buffer_range checks the original range and count
+ * before USER_RW_MAX limits the transfer.
  *
  * It dispatches by backing kind. An object with operations (a pipe, a
  * terminal, a pty, a device) writes through them once `write_ops` has
@@ -925,18 +967,26 @@ static int32_t console_write(fd_entry_t *entry, const char __user *buf, uint32_t
  * has operations of its own (display/fbdev.c), and the console is
  * `console_write`'s.
  */
-static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
+static int32_t write_fd(int fd, const char __user *buf, size_t requested)
 {
     fd_entry_t *entry;
+    uint32_t count;
+    int32_t rc;
 
     if (!current_proc) {
         return -ESRCH;
     }
 
     entry = fd_get(current_proc->fds, fd);
-    if (!entry) {
-        return -EBADF;
+    rc = write_allowed(entry);
+    if (rc != 0) {
+        return rc;
     }
+    rc = rw_buffer_range((__force uintptr_t)buf, requested);
+    if (rc != 0) {
+        return rc;
+    }
+    count = USER_RW_LEN(requested);
 
     if (entry->ops) {
         return write_ops(entry, buf, count);
@@ -993,31 +1043,10 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
  */
 static int32_t write_check(int fd)
 {
-    fd_entry_t *entry;
-
     if (!current_proc) {
         return -ESRCH;
     }
-    entry = fd_get(current_proc->fds, fd);
-    if (!entry || (entry->flags & FD_FLAG_PATH)) {
-        return -EBADF;
-    }
-    if (entry->ops) {
-        if (!(entry->flags & FD_FLAG_WRITE)) {
-            return -EBADF;
-        }
-        return entry->ops->write ? 0 : -EINVAL;
-    }
-    if (entry->type == FD_TYPE_SOCKET) {
-        return entry->sock ? 0 : -EBADF;
-    }
-    if (entry->type == FD_TYPE_CONSOLE) {
-        return (entry->flags & FD_FLAG_WRITE) ? 0 : -EBADF;
-    }
-    if (entry->type == FD_TYPE_FILE) {
-        return (entry->flags & FD_FLAG_WRITE) && entry->ofd && entry->ofd->vmnt ? 0 : -EBADF;
-    }
-    return -EBADF;
+    return write_allowed(fd_get(current_proc->fds, fd));
 }
 
 static int size_guarded(struct vfs_mount *mnt, void *node);
@@ -1104,13 +1133,12 @@ long sys_ftruncate(isr_params_t *params)
     return ksys_ftruncate((int)SC_ARG(params, 0), SC_SIGNED(params, 1));
 }
 
-/** write(2) takes fd, buf and count, a count past Linux's MAX_RW_COUNT
- * taken as that (`USER_RW_LEN`); the bytes written, or -errno
- * (`write_fd`). */
+/** write(2) takes fd, buf and the raw count, which write_fd checks before
+ * cutting it at Linux's MAX_RW_COUNT; the bytes written, or -errno. */
 long sys_write(isr_params_t *params)
 {
     return write_fd((int)SC_ARG(params, 0), (const char __user *)SC_ARG(params, 1),
-                    USER_RW_LEN(SC_ARG(params, 2)));
+                    SC_ARG(params, 2));
 }
 
 /** Element `i` of the vector of struct iovec at `uvec`, in the caller's
@@ -6410,15 +6438,9 @@ static int32_t read_fd(int fd, char __user *buf, size_t requested)
     if (rc != 0) {
         return rc;
     }
-    /* Linux's access_ok, which vfs_read makes before the file's read, for
-     * a count of 0 too: the top of user memory, or a kernel caller's window
-     * (user_window_open). */
-    if (!user_span_ok((__force uintptr_t)buf, requested) &&
-        !proc_window_covers(current_proc, (__force uintptr_t)buf, requested)) {
-        return -EFAULT;
-    }
-    if ((long)requested < 0) {
-        return -EINVAL;
+    rc = rw_buffer_range((__force uintptr_t)buf, requested);
+    if (rc != 0) {
+        return rc;
     }
     count = USER_RW_LEN(requested);
     if (entry->type == FD_TYPE_DIR || entry->type == FD_TYPE_SYNTH_DIR) {
@@ -8009,6 +8031,20 @@ static void synth_pid_owner(int pid, struct kstat *kst)
     }
 }
 
+/** Return the type and permissions of a process directory under /proc.
+ * Linux gives fd mode 0500, ns 0511 and the public directories 0555;
+ * procfs_pid_owner uses these bits to choose the owner. */
+static uint32_t synth_pid_dir_mode(const struct vpath *vp)
+{
+    if (vp->kind == VNODE_PROC_FD_DIR) {
+        return S_IFDIR | 0500;
+    }
+    if (vp->kind == VNODE_PROC_NS_DIR) {
+        return S_IFDIR | 0511;
+    }
+    return S_IFDIR | 0555;
+}
+
 /**
  * Whether /proc/`rpid`/fd/`fd` and its fdinfo file are there for the caller:
  * 0, -ENOENT when the descriptor is not open (the check readlink makes, so
@@ -8252,7 +8288,7 @@ static int32_t synth_stat(const struct vpath *vp, struct kstat *kst, int follow)
             return 0;
         }
         kst->st_dev = PROCFS_FSID;
-        kst->st_mode = S_IFDIR | (vp->kind == VNODE_PROC_FD_DIR ? 0500 : 0555);
+        kst->st_mode = synth_pid_dir_mode(vp);
         kst->st_ino = procfs_ino_pid(procfs_resolve_id(vp));
         synth_pid_owner(procfs_resolve_id(vp), kst);
         if (vp->kind == VNODE_PROC_TASK_DIR) {
@@ -12472,20 +12508,24 @@ long sys__llseek(isr_params_t *params)
  * The refusals pread64 and pwrite64 share, in Linux's order: a negative
  * offset is -EINVAL before the descriptor is looked at, a descriptor that is
  * not open or is an O_PATH one is -EBADF, one that cannot seek is -ESPIPE,
- * one not open for the direction (`write` or not) is -EBADF, a count or an
- * end past the signed range is -EINVAL, and a directory is -EISDIR.
+ * one not open for the direction (`write` or not) is -EBADF, one with no
+ * method for it is -EINVAL, a buffer outside user memory is -EFAULT, a
+ * count or an end past the signed range is -EINVAL, and a directory is
+ * -EISDIR. The buffer and count are the original request, before its cut.
  *
  * What cannot seek is a pipe, a socket, a terminal or pseudoterminal, the
- * mouse, a device other than a raw disk window, the log and the three
+ * mouse, a device other than a raw disk window, the log or the three
  * whose seek always lands at 0, /dev/null, /dev/zero and /dev/full, and an
  * anonymous object with no `llseek`. A /proc snapshot is read at an
  * offset, as Linux reads one, the framebuffer written at one, and an
  * anonymous object with a position, a VFIO device's, both.
  * Returns 0 with the descriptor in `*out`, or the errno.
  */
-static int32_t pio_entry(int fd, int write, uint32_t count, long long pos, fd_entry_t **out)
+static int32_t pio_entry(int fd, int write, uintptr_t buf, size_t count, long long pos,
+                         fd_entry_t **out)
 {
     fd_entry_t *entry;
+    int32_t rc;
 
     if (pos < 0) {
         return -EINVAL;
@@ -12511,10 +12551,15 @@ static int32_t pio_entry(int fd, int write, uint32_t count, long long pos, fd_en
                entry->type != FD_TYPE_FRAMEBUFFER) {
         return -ESPIPE;
     }
-    if (!(entry->flags & (write ? FD_FLAG_WRITE : FD_FLAG_READ))) {
-        return -EBADF;
+    rc = write ? write_allowed(entry) : read_allowed(entry);
+    if (rc != 0) {
+        return rc;
     }
-    if (count > 0x7FFFFFFFu || (uint64_t)count > 0x7FFFFFFFFFFFFFFFull - (uint64_t)pos) {
+    rc = rw_buffer_range(buf, count);
+    if (rc != 0) {
+        return rc;
+    }
+    if ((uint64_t)count > 0x7FFFFFFFFFFFFFFFull - (uint64_t)pos) {
         return -EINVAL;
     }
     if (entry->type == FD_TYPE_DIR || entry->type == FD_TYPE_SYNTH_DIR) {
@@ -12552,13 +12597,14 @@ static void pio_view(fd_entry_t *entry, uint64_t at, fd_entry_t *view, struct op
  * reads it, and a device, a /proc snapshot or a debugfs file, whose
  * operations read, through `pio_view`.
  */
-long ksys_pread64(int fd, char __user *buf, uint32_t count, long long pos)
+long ksys_pread64(int fd, char __user *buf, size_t requested, long long pos)
 {
     uint64_t at = (uint64_t)pos;
     fd_entry_t *entry = NULL;
     fd_entry_t view;
     struct open_file desc;
-    int32_t rc = pio_entry(fd, 0, count, pos, &entry);
+    int32_t rc = pio_entry(fd, 0, (__force uintptr_t)buf, requested, pos, &entry);
+    uint32_t count = USER_RW_LEN(requested);
 
     if (rc != 0 || count == 0) {
         return rc;
@@ -12573,13 +12619,16 @@ long ksys_pread64(int fd, char __user *buf, uint32_t count, long long pos)
     return entry->ops->read(&view, buf, count);
 }
 
-long ksys_pwrite64(int fd, const char __user *buf, uint32_t count, long long pos)
+/** Write at the offset through file_write or a device's private view,
+ * after checking the original request as pread64 does. */
+long ksys_pwrite64(int fd, const char __user *buf, size_t requested, long long pos)
 {
     uint64_t at = (uint64_t)pos;
     fd_entry_t *entry = NULL;
     fd_entry_t view;
     struct open_file desc;
-    int32_t rc = pio_entry(fd, 1, count, pos, &entry);
+    int32_t rc = pio_entry(fd, 1, (__force uintptr_t)buf, requested, pos, &entry);
+    uint32_t count = USER_RW_LEN(requested);
 
     if (rc != 0 || count == 0) {
         return rc;
@@ -12601,15 +12650,15 @@ long ksys_pwrite64(int fd, const char __user *buf, uint32_t count, long long pos
  */
 long sys_pread64(isr_params_t *params)
 {
-    return ksys_pread64((int)SC_ARG(params, 0), (char __user *)SC_ARG(params, 1),
-                        USER_RW_LEN(SC_ARG(params, 2)), SC_SIGNED(params, 3));
+    return ksys_pread64((int)SC_ARG(params, 0), (char __user *)SC_ARG(params, 1), SC_ARG(params, 2),
+                        SC_SIGNED(params, 3));
 }
 
 /** pwrite64(2) as a 64-bit architecture has it, pread64's arguments. */
 long sys_pwrite64(isr_params_t *params)
 {
     return ksys_pwrite64((int)SC_ARG(params, 0), (const char __user *)SC_ARG(params, 1),
-                         USER_RW_LEN(SC_ARG(params, 2)), SC_SIGNED(params, 3));
+                         SC_ARG(params, 2), SC_SIGNED(params, 3));
 }
 
 /** The position preadv(2) and pwritev(2) take as two registers, low first:
@@ -12685,7 +12734,7 @@ static long iov_at(int fd, uintptr_t iov_user, int iovcnt, long long pos, int wr
 {
     fd_entry_t *entry = NULL;
     uint32_t wanted, room;
-    long rc = pio_entry(fd, write, 0, pos, &entry);
+    long rc = pio_entry(fd, write, 0, 0, pos, &entry);
     int dir = rc == -EISDIR;
 
     if (rc != 0 && !dir) {
@@ -12947,7 +12996,7 @@ static long rwv2_entry(int fd, long long pos, int write, fd_entry_t **entry)
         return -ESRCH;
     }
     if (pos != -1) {
-        rc = pio_entry(fd, write, 0, pos, entry);
+        rc = pio_entry(fd, write, 0, 0, pos, entry);
         if (rc == -EISDIR) {
             *entry = NULL;
             return 0;

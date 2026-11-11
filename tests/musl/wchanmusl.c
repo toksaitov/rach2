@@ -21,7 +21,8 @@
  * wchan; and a caller of user 1000 and group 1001 opens the file its user
  * owns and gets EPERM from the read, and 0 from wchan. A process's 0555
  * directories keep its effective IDs in either dumpable state; its 0500
- * fd directory and files belong to root when it is not dumpable.
+ * fd directory, 0511 ns directory and files belong to root when it is not
+ * dumpable.
  *
  * Prints `WCHANMUSL OK` and exits 0 on success, and prints `WCHANMUSL FAIL
  * (detail)` and exits 1 otherwise. etude's report (probe_report.h), for the
@@ -445,9 +446,10 @@ static int owner_is(const char *path, mode_t mode, uid_t id)
     return stat(path, &st) == 0 && st.st_mode == mode && st.st_uid == id && st.st_gid == id;
 }
 
-/** Stat a sleeper's process, task and fdinfo directories and its syscall
+/** Stat a sleeper's process, task, fdinfo and ns directories and its syscall
  * file. World-readable directories keep its effective IDs even when it
- * is not dumpable; the 0500 fd directory and the file then belong to root.
+ * is not dumpable; the 0500 fd and 0511 ns directories and the file then
+ * belong to root. The thread's ns directory has the same mode and owner.
  * Return 0 after reaping each sleeper, or report the failed row. */
 static int owner_rows(void)
 {
@@ -474,10 +476,14 @@ static int owner_rows(void)
         ok = ok && owner_is(path, S_IFREG | 0400, dumpable ? OTHER_ID : 0);
         snprintf(path, sizeof(path), "/proc/%d/fd", (int)pid);
         ok = ok && owner_is(path, S_IFDIR | 0500, dumpable ? OTHER_ID : 0);
+        snprintf(path, sizeof(path), "/proc/%d/ns", (int)pid);
+        ok = ok && owner_is(path, S_IFDIR | 0511, dumpable ? OTHER_ID : 0);
+        snprintf(path, sizeof(path), "/proc/%d/task/%d/ns", (int)pid, (int)pid);
+        ok = ok && owner_is(path, S_IFDIR | 0511, dumpable ? OTHER_ID : 0);
         close(wake);
         if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0 ||
             !ok) {
-            return fail("a process directory loses its effective owner when not dumpable");
+            return fail("a process directory has the wrong mode or dumpable owner");
         }
     }
     report_held();

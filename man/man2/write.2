@@ -31,6 +31,14 @@ A successful call may write fewer bytes than requested; a count past
 0x7ffff000, Linux's
 .Dv MAX_RW_COUNT ,
 writes at most that many, so that the count returned is never negative.
+The descriptor is checked first, then the range with the original count:
+an overflowing range or one past the top of user memory is
+.Er EFAULT ,
+even for a count of zero.
+On the i686 kernel, a count negative as the kernel's signed size is
+.Er EINVAL
+after that range check, before the transfer is limited.
+An i386 call on x86-64 uses the kernel's 64-bit signed size for this check.
 The operation depends on the descriptor's backing object.
 .Ss Regular files
 A regular file is written through its mounted file system at the
@@ -428,7 +436,8 @@ A stream connection was reset.
 .It Er EDESTADDRREQ
 A datagram socket has no connected peer.
 .It Er EFAULT
-The buffer or vector list cannot be read as required.
+The original buffer range passes the top of user memory, or the buffer
+or vector list cannot be read as required.
 .It Er EFBIG
 A file write exceeds the file system's size or addressing limit, or a
 framebuffer write starts past the mode's end.
@@ -440,8 +449,11 @@ The descriptor is open for writing on an object with no write method,
 such as an epoll set, as on Linux.
 The vector count is outside 0 through 1024, or a vector length is
 negative as a signed size.
+A native i686 write count is negative as the kernel's signed size after
+its address range passes.
 .Fn pwrite
-was given a negative offset or an end past the signed 64-bit range.
+was given a negative offset or an end past the signed 64-bit range,
+computed with the original count before the transfer is limited.
 A raw write has an offset or length not divisible by 512.
 A device control write has an invalid argument or command.
 .It Er EIO

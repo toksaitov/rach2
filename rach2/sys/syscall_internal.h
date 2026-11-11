@@ -97,10 +97,12 @@ long ksys_truncate(const char __user *upath, long long length);
 /**
  * The core of pread64(2) in every form: `count` bytes of `fd` at `pos` into
  * `buf`, leaving the descriptor's own offset where it was; `pio_entry` has what
- * it refuses. Returns the bytes read, 0 at the end of the file and for a
- * `count` of 0, whose descriptor is still checked, or a negative errno.
+ * it refuses. The original range, signed count and end position are checked
+ * before USER_RW_MAX limits the transfer. Returns the bytes read, 0 at the
+ * end of the file and for a `count` of 0, whose descriptor is still checked,
+ * or a negative errno.
  */
-long ksys_pread64(int fd, char __user *buf, uint32_t count, long long pos);
+long ksys_pread64(int fd, char __user *buf, size_t count, long long pos);
 
 /**
  * The core of pwrite64(2) in every form: pread64's, with the buffer written
@@ -110,7 +112,7 @@ long ksys_pread64(int fd, char __user *buf, uint32_t count, long long pos);
  * A device is written as pread64 reads it. Returns the bytes written, 0 for a
  * `count` of 0, whose descriptor is still checked, or a negative errno.
  */
-long ksys_pwrite64(int fd, const char __user *buf, uint32_t count, long long pos);
+long ksys_pwrite64(int fd, const char __user *buf, size_t count, long long pos);
 
 /**
  * The core of fadvise64 in every form: check one advice of posix_fadvise(3) and

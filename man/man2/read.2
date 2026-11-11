@@ -200,10 +200,15 @@ and
 are among them, which Linux reads.
 A descriptor not open for reading returns
 .Er EBADF ,
-an end past the signed 64-bit range
+a buffer range past the top of user memory
+.Er EFAULT ,
+a count negative as the kernel's signed size or an end past the signed 64-bit range
 .Er EINVAL ,
 and a directory
 .Er EISDIR .
+The range, count and end checks use the original request before
+.Dv MAX_RW_COUNT
+limits the transfer, including for a count of zero.
 .Pp
 A regular file, a raw disk window,
 .Pa /dev/bootlog
@@ -371,13 +376,14 @@ A signal interrupted a wait, or a background terminal read posted
 .Dv SIGTTIN .
 .It Er EINVAL
 The vector count is outside 0 through 1024, a vector length is negative
-as a signed size, a native i686 read count is negative as the kernel's
+as a signed size, a native i686 read or pread count is negative as the kernel's
 signed size after its address range passes, a file system has no read
 operation, the object the
 descriptor is open on, such as an epoll set, has no read method, as on
 Linux, or
 .Fn pread
-was given a negative offset or an end past the signed 64-bit range.
+was given a negative offset or an end past the signed 64-bit range,
+computed with the original count before the transfer is limited.
 A boot window,
 .Pa /dev/bootpart
 or

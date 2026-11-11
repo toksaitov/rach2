@@ -2263,7 +2263,8 @@ is.
 to it gives the caller a root that holds nothing, the empty root of a
 file system no path reaches.
 .It Pa /proc/PID/ns
-A directory of six links,
+A directory of mode 0511, owned by the process's effective IDs while it
+is dumpable and by root otherwise, with six links,
 .Pa user ,
 .Pa pid ,
 .Pa mnt ,
