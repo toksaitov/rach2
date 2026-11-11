@@ -865,7 +865,7 @@ static void case_wrap(void)
 static void case_pages(void)
 {
     int p[2], q[2];
-    char two[2] = {'a', 'b'};
+    const char two[2] = {'a', 'b'};
 
     check(PAGES_PIPES, do_pipe2(p, O_NONBLOCK) == 0 && do_pipe2(q, O_NONBLOCK) == 0);
     check(PAGES_BUSY, wr(p[1], big, 4096) == 4096 && rd(p[0], back, 4095) == 4095 &&
