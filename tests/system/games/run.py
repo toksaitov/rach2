@@ -421,8 +421,10 @@ class Runner:
         own GPU, then time the 64-bit Direct3D 11 round trips on WineD3D's GL
         and Vulkan renderers. LINUX is the results of the same row under Linux
         on the same machine, or None when this run records them: each sum must
-        equal Linux's, and each renderer that ran Linux's round trips must run
-        them too. The times are recorded beside Linux's and judge nothing.
+        equal Linux's, and each renderer that ran Linux's round trips to a zero
+        exit must run them too, exiting 0. Each Direct3D probe's adapter must
+        name the GPU, as hardware checks. The times are recorded beside Linux's and
+        judge nothing.
         """
         self.make_prefix()
         ok = True
@@ -435,6 +437,10 @@ class Runner:
                 ok = False
             elif linux is not None:
                 say("%s: crc32 %s equals linux's" % (name, want))
+            if name.startswith("d3d9") and not self.hardware(
+                    name, results[name]["renderer"],
+                    linux.get(name, {}).get("renderer") if linux is not None else None):
+                ok = False
         for renderer in TRIP_RENDERERS:
             name = "trip-" + renderer
             status, text = self.probe(name, {"WINEDEBUG": "-all,err+all"}, program="trip64",
@@ -453,10 +459,34 @@ class Runner:
                 name, status, results[name]["ms"], results[name]["renderer"],
                 results[name]["adapter"], want and want.get("ms")))
             expect = "OpenGL" if renderer == "gl" else "Vulkan"
-            if (want is None or want.get("ok")) and not (results[name]["ok"] and
-                                                         results[name]["renderer"] == expect):
+            ran = want is None or (want.get("ok") and want.get("exit") == 0)
+            if ran and not (status == 0 and results[name]["ok"] and
+                            results[name]["renderer"] == expect and
+                            self.hardware(name, results[name]["adapter"],
+                                          want and want.get("adapter"))):
                 ok = False
         return ok
+
+    @staticmethod
+    def hardware(name, adapter, linux):
+        """
+        Return whether ADAPTER, the line a Direct3D probe NAME printed for its
+        adapter, names the GPU the row runs on: RENDERER, and the PCI vendor and
+        device of LINUX, the same probe's line under Linux, when it is given.
+        This keeps a software adapter, such as lavapipe for WineD3D's Vulkan
+        renderer, from passing the row for the hardware.
+        """
+        ident = re.compile(r"vendor 0x[0-9a-f]+ device 0x[0-9a-f]+$")
+        if RENDERER not in (adapter or ""):
+            say("%s: the adapter %s is not %s" % (name, adapter, RENDERER))
+            return False
+        have = ident.search(adapter)
+        want = ident.search(linux or "")
+        if linux is not None and (have is None or want is None or
+                                  have.group(0) != want.group(0)):
+            say("%s: the adapter %s is not linux's %s" % (name, adapter, linux))
+            return False
+        return True
 
     def row_maps(self, results, ref):
         """Read each hold program's maps and compare the preloader's ranges."""
