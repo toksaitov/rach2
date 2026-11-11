@@ -22,8 +22,13 @@
  * which leave the context as it was, and its name; rings, each its own
  * fence context, whose answers retire only their own ring's fences, whose
  * polled ring alone sends an event, and whose dependencies across rings
- * are waited for; PRIME export and import of a blob; and a blob as the
- * scanout. Each row ends with nothing allocated and no window mapped.
+ * are waited for; PRIME export and import of a blob; a blob as the
+ * scanout; and the copies a submission counts, the boxes of TRANSFER3D,
+ * COPY_TRANSFER3D and RESOURCE_INLINE_WRITE at their resources' formats,
+ * found in an unsorted buffer list with repeats, on a virgl context, none
+ * on a Venus one, and none, with the submission still taken, when the
+ * count's table cannot be allocated. Each row ends with nothing allocated
+ * and no window mapped.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -1058,6 +1063,120 @@ static void row_scanout_blob(void)
     blob_unbind("the scanout row leaves nothing");
 }
 
+/** A resource of `format`, a 16 by 16 texture, in `f`: its handle. */
+static uint32_t copy_res(struct drm_file *f, uint32_t format)
+{
+    struct drm_virtgpu_resource_create a;
+
+    k_memset(&a, 0, sizeof(a));
+    a.target = 2;
+    a.format = format;
+    a.width = a.height = 16;
+    a.depth = a.array_size = 1;
+    a.size = PAGE_SIZE;
+    CHECK(vgpu_resource_create_ioctl(dev, &a, f) == 0, "a texture to copy is made");
+    return a.bo_handle;
+}
+
+/** The resource id of `handle` in `f`. */
+static uint32_t res_of(struct drm_file *f, uint32_t handle)
+{
+    struct drm_gem_object *obj = drm_gem_object_lookup(f, handle);
+    uint32_t id = obj ? vgpu_bo(obj)->res_id : 0;
+
+    if (obj) {
+        drm_gem_object_put(obj);
+    }
+    return id;
+}
+
+/** Write a copy command `op` of `len` dwords at `w[at]`, on resource `res`
+ * with the box `box`, its width, height and depth: the dword after it. */
+static uint32_t copy_cmd(uint32_t *w, uint32_t at, uint32_t op, uint32_t len, uint32_t res,
+                         const uint32_t *box)
+{
+    k_memset(&w[at], 0, (1 + len) * sizeof(*w));
+    w[at] = op | len << 16;
+    w[at + 1] = res;
+    w[at + 6] = 1;
+    w[at + 9] = box[0];
+    w[at + 10] = box[1];
+    w[at + 11] = box[2];
+    return at + 1 + len;
+}
+
+/** Submit, in `f` after its CONTEXT_INIT of `capset`, copies of three
+ * resources listed out of order and twice, and one of a resource not
+ * listed, with the `fail`-th allocation of the ioctl alone refused when
+ * `fail` is not negative: the bytes counted once every answer is in, or
+ * (uint64_t)-1 when the submission fails. */
+static uint64_t copy_submit(struct drm_file *f, uint32_t capset, int fail)
+{
+    /* 7 x 3 x 1 at 4 bytes: 84; 10 x 5 x 2 in 3 x 2 x 2 blocks of 8: 96;
+     * 100 x 1, depth 0 as 1, at a byte, its data after the box: 100; a
+     * resource not listed. A CREATE_OBJECT between copies nothing. */
+    static const uint32_t boxes[4][3] = {{7, 3, 1}, {10, 5, 2}, {100, 1, 0}, {64, 64, 1}};
+    uint64_t p = VIRTGPU_CONTEXT_PARAM_CAPSET_ID, v = capset, before;
+    static uint32_t w[96];
+    uint32_t h[5], ha, hb, hc, n = 0;
+    struct drm_virtgpu_execbuffer a;
+    int32_t rc;
+
+    open_file(f);
+    CHECK(context_init(f, 1, &p, &v) == 0, "a context for the copies");
+    ha = copy_res(f, 1);   /* B8G8R8A8_UNORM, 4 bytes a texel */
+    hb = copy_res(f, 105); /* DXT1_RGB, 8 bytes a 4 by 4 block */
+    hc = copy_res(f, 64);  /* R8_UNORM, a byte a texel */
+    h[0] = hc;
+    h[1] = ha;
+    h[2] = hc;
+    h[3] = hb;
+    h[4] = ha;
+    n = copy_cmd(w, n, VIRGL_CCMD_TRANSFER3D, 13, res_of(f, ha), boxes[0]);
+    k_memset(&w[n], 0, 4 * sizeof(*w));
+    w[n] = 1u | 3u << 16;
+    n += 4;
+    n = copy_cmd(w, n, VIRGL_CCMD_COPY_TRANSFER3D, 14, res_of(f, hb), boxes[1]);
+    n = copy_cmd(w, n, VIRGL_CCMD_TRANSFER3D, 13, 9999, boxes[3]);
+    n = copy_cmd(w, n, VIRGL_CCMD_RESOURCE_INLINE_WRITE, 11 + 25, res_of(f, hc), boxes[2]);
+    k_memset(&a, 0, sizeof(a));
+    a.command = UPTR(w);
+    a.size = n * 4;
+    a.bo_handles = UPTR(h);
+    a.num_bo_handles = 5;
+    answer_all();
+    before = virtio_gpu_copied_bytes();
+    fail_one = fail;
+    rc = vgpu_execbuffer_ioctl(dev, &a, f);
+    fail_one = -1;
+    answer_all();
+    close_file(f);
+    answer_all();
+    return rc == 0 ? virtio_gpu_copied_bytes() - before : (uint64_t)-1;
+}
+
+/** The copies a submission counts, by protocol, and with no memory for the
+ * count's table. */
+static void row_copied(void)
+{
+    uint64_t got = (uint64_t)-1;
+    int k;
+
+    blob_bind(VIRGL | ALL_FEATURES, HOSTMEM_LEN);
+    CHECK(copy_submit(&file2, 1, -1) == 84 + 96 + 100,
+          "a virgl submission counts each listed resource's box at its format");
+    CHECK(copy_submit(&file2, 2, -1) == 84 + 96 + 100, "a virgl2 submission counts the same");
+    CHECK(copy_submit(&file2, 4, -1) == 0, "a Venus submission counts nothing");
+    /* The ioctl's allocations refused one at a time, the first, then the
+     * second, until one is refused that the submission does without: the
+     * count's table, whose submission is taken and counts nothing. */
+    for (k = 0; k < 16 && got == (uint64_t)-1; k++) {
+        got = copy_submit(&file2, 1, k);
+    }
+    CHECK(got == 0, "without memory for the table the submission is taken and counts nothing");
+    blob_unbind("the copy row leaves nothing");
+}
+
 /** Run the blob rows against the real driver, fence and PRIME code. */
 int main(void)
 {
@@ -1070,6 +1189,7 @@ int main(void)
     row_rings();
     row_prime();
     row_scanout_blob();
+    row_copied();
     printf("vgpublob-test: %s\n", failures ? "FAIL" : "PASS");
     return failures ? 1 : 0;
 }

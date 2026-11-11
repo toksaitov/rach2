@@ -98,13 +98,17 @@ static const uint8_t qemu_edid[256] = {
  * The kernel around the driver
  */
 
-static int allocations, fail_after = -1;
+static int allocations, fail_after = -1, fail_one = -1;
 
-/** Zeroed host memory, counted; the `fail_after`-th next call fails. */
+/** Zeroed host memory, counted; the `fail_after`-th next call fails, and
+ * every one after it, and the `fail_one`-th next call alone. */
 void *kmalloc(size_t size)
 {
     void *p;
 
+    if (fail_one >= 0 && fail_one-- == 0) {
+        return NULL;
+    }
     if (fail_after == 0) {
         return NULL;
     }
@@ -896,7 +900,8 @@ void drm_dev_unplug(struct drm_device *d)
 static const struct dma_fence_ops model_fence_ops = {fence_driver, fence_timeline, NULL,
                                                      NULL,         NULL,           NULL};
 
-/** The first unsignalled fence of `resv`, held, or a signalled one. */
+/** The first unsignalled fence of `resv`, held, or a signalled one; NULL
+ * when that cannot be allocated, as the kernel's gives for no memory. */
 struct dma_fence *dma_resv_snapshot(struct dma_resv *resv, int write)
 {
     struct dma_fence *f;
@@ -909,6 +914,9 @@ struct dma_fence *dma_resv_snapshot(struct dma_resv *resv, int write)
         }
     }
     f = (struct dma_fence *)kzalloc(sizeof(*f));
+    if (!f) {
+        return NULL;
+    }
     dma_fence_init(f, &model_fence_ops, 0, 0);
     dma_fence_signal(f);
     return f;
