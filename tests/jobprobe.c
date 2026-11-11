@@ -11,6 +11,9 @@
  *   * the session leader claims the console as its controlling terminal,
  *     and TIOCSPGRP moves the foreground to a group of the session, one of
  *     a single unreaped zombie included, and refuses any other;
+ *   * the probe's own group, which is orphaned because it leads its session,
+ *     gets -ENOTTY from TIOCSPGRP once it is in the background, and goes
+ *     ahead while it ignores SIGTTOU, as a shell does;
  *   * the stop, continue and kill cycle, a signal to a group, and the
  *     SIGTTIN stop of a background read behave as on Linux;
  *   * the error contract has: setsid by a group leader is -EPERM, getpgid of
@@ -37,6 +40,10 @@
 #define SIGCONT 18
 #define SIGSTOP 19
 #define SIGTTIN 21
+#define SIGTTOU 22
+
+#define SIG_DFL ((void (*)(int))0)
+#define SIG_IGN ((void (*)(int))1)
 
 #define WNOHANG    1
 #define WUNTRACED  2
@@ -141,6 +148,26 @@ static int kill(int pid, int sig)
 static int pause(void)
 {
     return syscall1(SYS_PAUSE, 0);
+}
+/* The sigaction rt_sigaction takes, with a 64-bit mask. */
+struct k_sigaction {
+    void (*handler)(int);
+    unsigned long flags;
+    void (*restorer)(void);
+    unsigned long long mask;
+};
+
+/** Set the disposition of `sig` to SIG_DFL or SIG_IGN: 0, or a negated
+ * errno. */
+static int signal_set(int sig, void (*handler)(int))
+{
+    struct k_sigaction ka;
+
+    ka.handler = handler;
+    ka.flags = 0;
+    ka.restorer = 0;
+    ka.mask = 0;
+    return syscall4(SYS_RT_SIGACTION, sig, (long)&ka, 0, 8);
 }
 /** The read call: the count read, 0 at the end, or a negated errno. */
 static int read(int fd, void *buf, int n)
@@ -258,17 +285,55 @@ static int run_child(int (*body)(void))
 }
 
 /**
+ * The rows of a zombie's group, run while the probe's group is the
+ * foreground of the console it controls, which it is again at the end.
+ *
+ * A group whose only member has exited but has not been reaped is still a
+ * group, and a shell that puts a pipeline in the foreground depends on it:
+ * the first member can exit before the shell claims the terminal for the
+ * job. The probe waits until a child that does nothing but exit has done
+ * so, leaving it unreaped, claims the terminal for the child's group, and
+ * only then reaps it; once it is reaped, the group is gone and the same
+ * claim is -EPERM.
+ *
+ * Once the zombie's group is in front, the probe is a background process,
+ * and its own group is orphaned: the probe leads its session, so no member's
+ * parent is in the session outside the group. Its TIOCSPGRP is therefore
+ * -ENOTTY, as on Linux, and it ignores SIGTTOU for the claims that follow,
+ * as a shell does when it takes the terminal back from a job.
+ */
+static void zombie_group(void)
+{
+    int child = fork();
+    int status = 0;
+    int pgrp = getpgrp();
+
+    if (child == 0) {
+        setpgid(0, 0);
+        sys_exit(0);
+    }
+    check(child > 0, "fork for the zombie group");
+    setpgid(child, child);
+    /* The child is seen exited, and is reaped after the claim. */
+    check(wait_exited(child), "the child of the zombie group exits");
+    check(ioctl(0, TIOCSPGRP, &child) == 0, "TIOCSPGRP to a group holding only an unreaped zombie");
+    check(ioctl(0, TIOCSPGRP, &pgrp) == -ENOTTY,
+          "TIOCSPGRP from the orphaned background group -> -ENOTTY");
+    check(signal_set(SIGTTOU, SIG_IGN) == 0, "ignore SIGTTOU");
+    check(waitpid(child, &status, 0) == child, "the zombie is reaped");
+    /* Once reaped, the group is gone and the same claim is refused. */
+    check(ioctl(0, TIOCSPGRP, &child) == -EPERM,
+          "TIOCSPGRP to a group whose zombie was reaped -> -EPERM");
+    check(ioctl(0, TIOCSPGRP, &pgrp) == 0, "the terminal comes back to us");
+    check(signal_set(SIGTTOU, SIG_DFL) == 0, "SIGTTOU back to its default");
+}
+
+/**
  * The probe: the rows of the opening comment in order, each counted by
  * `check`.
  *
  * The probe leads its session, so it may claim the console as its
- * controlling terminal. A group whose only member has exited but has not
- * been reaped is still a group, and a shell that puts a pipeline in the
- * foreground depends on it: the first member can exit before the shell
- * claims the terminal for the job. The probe sleeps 50 ms, long enough for
- * a child that does nothing but exit to have done so, claims the terminal
- * for that child's group, and only then reaps it; once it is reaped, the
- * group is gone and the same claim is -EPERM.
+ * controlling terminal, and gives it to a zombie's group (`zombie_group`).
  *
  * For the group signal, the parent sets the child's group as the child
  * does, the usual fork and setpgid idiom, so that the signal cannot come
@@ -309,28 +374,7 @@ PROBE_START void _start(void)
             bad = -7;
             check(ioctl(0, TIOCSPGRP, &bad) == -EINVAL, "TIOCSPGRP negative pgrp -> -EINVAL");
         }
-        /* A group of one unreaped zombie may still be the foreground. */
-        {
-            int child = fork();
-            int status = 0;
-
-            if (child == 0) {
-                setpgid(0, 0);
-                sys_exit(0);
-            }
-            check(child > 0, "fork for the zombie group");
-            setpgid(child, child);
-            /* The child is seen exited, and is reaped after the claim. */
-            check(wait_exited(child), "the child of the zombie group exits");
-            check(ioctl(0, TIOCSPGRP, &child) == 0,
-                  "TIOCSPGRP to a group holding only an unreaped zombie");
-            check(waitpid(child, &status, 0) == child, "the zombie is reaped");
-            /* Once reaped, the group is gone and the same claim is refused. */
-            check(ioctl(0, TIOCSPGRP, &child) == -EPERM,
-                  "TIOCSPGRP to a group whose zombie was reaped -> -EPERM");
-            pgrp = getpgrp();
-            check(ioctl(0, TIOCSPGRP, &pgrp) == 0, "the terminal comes back to us");
-        }
+        zombie_group();
 
         /* Detach, then a foreground query finds no controlling session. */
         check(ioctl(0, TIOCNOTTY, 0) == 0, "TIOCNOTTY detaches");
