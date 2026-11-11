@@ -181,6 +181,14 @@ void platform_pmu_disable(void);
  */
 int platform_pmu_overflow(int *due);
 
+/**
+ * In the NMI handler, for an NMI no source claimed: 1 while this
+ * processor's counter may still raise one late, for 100 ms of TSC after it
+ * was armed or stopped and, on AMD, after an overflow it handled, which the
+ * handler then claims; 0 otherwise, and always without a counter.
+ */
+int platform_pmu_late(void);
+
 /** The processor's clock in cycles a second, as Linux's `cpu_khz` gives it
  * times 1000: the TSC's measured rate, which on Intel's processors since
  * Nehalem is the nominal clock, measured by `platform_pmu_probe` with or
