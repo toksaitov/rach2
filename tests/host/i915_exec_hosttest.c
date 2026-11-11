@@ -11,6 +11,7 @@
  * host-deps: tests/host/compat/spinlock_host.c
  * host-deps: tests/host/compat/atomic_host.c
  * host-deps: tests/host/compat/fd_flat.c
+ * host-deps: tests/host/compat/mmap_lock_host.c
  *
  * The rows, one for each of 78-5b's subtasks: the call's checks and
  * Linux's refusals; relocations as Linux's eb_relocate_entry applies them,

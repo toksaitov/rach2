@@ -581,7 +581,7 @@ tests/host/usbdisk_hosttest.c:main complexity 35 a test's rows, each a case, rea
 tests/host/vga_text_hosttest.c:row_widths complexity 30 a test's rows, each a case, read as one table
 
 tests/host/vm_hosttest.c:main complexity 49 a test's rows, each a case, read as one table
-tests/host/vm_hosttest.c:main lines 239 a test's rows, each a case, read as one table
+tests/host/vm_hosttest.c:main lines 243 a test's rows, each a case, read as one table
 
 tests/host/wcrypto_hosttest.c:ccmp_vector params 7 the parameters are one test vector's key, plaintext, ciphertext, counter and key ID, which each row gives
 

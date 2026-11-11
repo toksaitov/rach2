@@ -1,5 +1,6 @@
 /* PI futex operations on the real futex code over modeled user pages.
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c rach2/sys/tick.c
+ * host-deps: tests/host/compat/mmap_lock_host.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
  */
 #define main ordinary_futex_rows

@@ -1,7 +1,8 @@
 /**
  * Check the two counts of an address space: the users, whose last put frees
- * the memory, and the holds, which keep only the record; and the program's
- * file it keeps.
+ * the memory, and the holds, which keep only the record; the program's
+ * file it keeps; and a thread's holds of its regions' lock, which
+ * `--lock-only` runs alone.
  *
  * host-deps: tests/host/compat/vm_iter_host.c rach2/sys/mm/notify.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
@@ -29,6 +30,7 @@
 extern void *calloc(unsigned long count, unsigned long size);
 extern void free(void *ptr);
 extern int printf(const char *format, ...);
+extern void exit(int status);
 
 page_dir_t *_kernel_dir;
 struct percpu cpu_table[NR_CPUS];
@@ -122,6 +124,92 @@ uint32_t kirq_save(void)
 void kirq_restore(uint32_t flags)
 {
     (void)flags;
+}
+
+/* The rwsem calls the regions' lock makes: a thread's first hold takes it
+ * and its last gives it back, and the nested ones only count. */
+static int rw_downs, rw_ups, rw_trylock_refuse;
+
+/** Count the rwsem's making. */
+void rwsem_init_key(struct rwsem *s, const char *name, const struct lockdep_key *key)
+{
+    (void)s;
+    (void)name;
+    (void)key;
+}
+
+/** Count a read take. */
+void down_read(struct rwsem *s)
+{
+    (void)s;
+    rw_downs++;
+}
+
+/** Count a read take that needs no wait. */
+int down_read_trylock(struct rwsem *s)
+{
+    (void)s;
+    rw_downs++;
+    return 1;
+}
+
+/** Count a write take. */
+void down_write(struct rwsem *s)
+{
+    (void)s;
+    rw_downs++;
+}
+
+/** Count a write take, or refuse it when the row says another holds it. */
+int down_write_trylock(struct rwsem *s)
+{
+    (void)s;
+    if (rw_trylock_refuse) {
+        return 0;
+    }
+    rw_downs++;
+    return 1;
+}
+
+/** Count a read release. */
+void up_read(struct rwsem *s)
+{
+    (void)s;
+    rw_ups++;
+}
+
+/** Count a write release. */
+void up_write(struct rwsem *s)
+{
+    (void)s;
+    rw_ups++;
+}
+
+/** 1: the test is the one thread, under the big lock. */
+int bkl_held(void)
+{
+    return 1;
+}
+
+/** Nothing: the test runs under the big lock throughout. */
+void bkl_enter(void)
+{}
+
+/** Nothing, as `bkl_enter`. */
+void bkl_exit(void)
+{}
+
+/** 1: a file may wait, so that `mm_reap` reaches `vm_file_reap`. */
+int vm_file_dead(void)
+{
+    return 1;
+}
+
+/** Stop the test: a panic is a failure of the row that made it. */
+void k_panic(const char *str)
+{
+    printf("mm-test: panic: %s\n", str);
+    exit(1);
 }
 
 /** Load `dir`. */
@@ -348,19 +436,80 @@ static void program_file(void)
     rows++;
 }
 
-/** Run the rows; 0 when every check passed, 1 otherwise. */
-int main(void)
+/* The thread whose holds of the regions' locks `lock_holds` counts. */
+static process_t lock_thread;
+
+/** A thread's holds of the regions' locks: a hold taken again of either
+ * kind only counts, and the rwsem is taken by the first and given back by
+ * the last; one read hold alone may be let go around a sleep; a write
+ * wanted by a reader is refused, since it would wait for itself; a second
+ * address space has a record of its own; and the files are reaped only
+ * once the thread holds no regions' lock. */
+static void lock_holds(void)
+{
+    struct mm *a = mm_new();
+    struct mm *b = mm_new();
+    int before;
+
+    if (!a || !b) {
+        CHECK(0, "two address spaces");
+        return;
+    }
+    cpu_table[0].current = &lock_thread;
+    rw_downs = rw_ups = 0;
+    mmap_read_lock(a);
+    mmap_read_lock(a);
+    CHECK(rw_downs == 1 && mmap_held(a, 0) && !mmap_held(a, 1) && !mmap_may_drop(a),
+          "a read hold taken again only counts, and may not be let go");
+    mmap_unlock(a);
+    CHECK(rw_ups == 0 && mmap_may_drop(a),
+          "the inner release gives nothing back, and the one hold left may be let go");
+    CHECK(mmap_write_trylock(a) == 0 && rw_downs == 1 && !mmap_held(a, 1),
+          "a write hold is refused to a reader of the same space");
+    mmap_write_lock(b);
+    mmap_read_lock(b);
+    CHECK(rw_downs == 2 && mmap_held(b, 1) && !mmap_may_drop(b),
+          "a writer's read takes nothing more, in a record of the second space's own");
+    before = reaps;
+    mm_reap();
+    CHECK(reaps == before, "no file is reaped while the thread holds a regions' lock");
+    mmap_unlock(b);
+    mmap_unlock(b);
+    mmap_unlock(a);
+    CHECK(rw_ups == 2 && !mmap_held(a, 0) && !mmap_held(b, 0),
+          "the last release of each space gives its rwsem back");
+    mm_reap();
+    CHECK(reaps == before + 1, "with no hold left the files are reaped");
+    rw_trylock_refuse = 1;
+    CHECK(mmap_write_trylock(a) == 0 && !mmap_held(a, 0),
+          "a write trylock that finds the lock taken holds nothing");
+    rw_trylock_refuse = 0;
+    cpu_table[0].current = NULL;
+    mm_put(a);
+    mm_put(b);
+    rows++;
+}
+
+/** Run the rows, or with `--lock-only` the holds of the regions' locks
+ * alone; 0 when every check passed, 1 otherwise. */
+int main(int argc, char **argv)
 {
     _kernel_dir = &kernel_dir;
     _curr_dir = _kernel_dir;
+    if (argc == 2 && __builtin_strcmp(argv[1], "--lock-only") == 0) {
+        lock_holds();
+        return failures ? 1 : 0;
+    }
     hold_keeps_record();
     live_user();
     drop_switches();
     program_file();
-    CHECK(rows == 4 && dirs == 6, "every row ran");
+    lock_holds();
+    CHECK(rows == 5 && dirs == 8, "every row ran");
     if (failures) {
         return 1;
     }
-    printf("mm-test: pass: a hold keeps the record, a user the memory and the program's file\n");
+    printf("mm-test: pass: a hold keeps the record, a user the memory and the program's file, "
+           "and a thread's lock holds count\n");
     return 0;
 }

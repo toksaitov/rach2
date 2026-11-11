@@ -519,6 +519,20 @@ uintptr_t shmem_resident(const struct shmem *sh, uint32_t page)
     return sh->leaves && page < sh->npages ? sh->leaves[0][page] : 0;
 }
 
+/** 1: the model is the one thread, under the big lock throughout. */
+int bkl_held(void)
+{
+    return 1;
+}
+
+/** Nothing: the model runs under the big lock throughout. */
+void bkl_enter(void)
+{}
+
+/** Nothing, as `bkl_enter`. */
+void bkl_exit(void)
+{}
+
 /** Give [off, off + len) of `sh` zeroed pages, in one leaf as long as the
  * file. */
 int shmem_allocate(struct shmem *sh, uint64_t off, uint64_t len)

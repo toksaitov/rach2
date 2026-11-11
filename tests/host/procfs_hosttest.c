@@ -17,6 +17,7 @@
  * host-deps: rach2/sys/lib/kstd.c
  * host-deps: rach2/sys/tick.c
  * host-deps: tests/host/compat/fd_flat.c
+ * host-deps: tests/host/compat/mmap_lock_host.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
  *
  * The test includes the source whole, with its exports declared static

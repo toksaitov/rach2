@@ -7,6 +7,7 @@
  * host-deps: rach2/sys/mm/frame.c rach2/sys/mm/notify.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/mmap_lock_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  * host-cflags: -U__UINTPTR_TYPE__ -D__UINTPTR_TYPE__=unsigned
  * host-cflags: -U__INTPTR_TYPE__ -D__INTPTR_TYPE__=int
@@ -317,6 +318,41 @@ void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *nam
     (void)vector;
     (void)handler;
     (void)name;
+}
+
+/** Nothing: the model has no big lock to leave out of an entry. */
+void exception_unlock(uint8_t vector)
+{
+    (void)vector;
+}
+
+/** Nothing: the model keeps no interrupt flag. */
+void arch_irq_enable(void)
+{}
+
+/** Nothing: the model's address spaces live as long as the test. */
+void mm_get(struct mm *mm)
+{
+    (void)mm;
+}
+
+/** Nothing, as `mm_get`. */
+void mm_put(struct mm *mm)
+{
+    (void)mm;
+}
+
+/** Release the files whose last region went, as mm.c's does with no lock
+ * held. */
+void mm_reap(void)
+{
+    vm_file_reap();
+}
+
+/** 0: memory is never short. */
+int mem_short(void)
+{
+    return 0;
 }
 
 /** Nothing: a user fault here is signalled through `signal_force`. */
