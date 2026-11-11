@@ -406,6 +406,15 @@ without
 in
 .Dv MSR_IA32_MCG_CAP
 reads 0 for the caller and takes its 0, and is #GP to the guest.
+.Dv MSR_IA32_MCG_CAP
+is not the guest's to write.
+.Dv MSR_IA32_P5_MC_ADDR
+and
+.Dv MSR_IA32_P5_MC_TYPE
+read 0 and take no write.
+A bank's CTL2, from 0x280, holds 0 alone, since no
+.Dv MCG_CMCI_P
+is offered: the caller reads 0 and writes 0, and it is #GP to the guest.
 A machine-check bank's STATUS takes any value from the caller, and from the
 guest only 0, unless the guest's CPUID vendor is AMD or Hygon and
 .Dv MSR_K7_HWCR
@@ -756,8 +765,9 @@ at
 .Va addr ,
 and
 .Dv KVM_SET_DEVICE_ATTR
-sets it, so that the guest's TSC reads the host's plus the offset; the same
-offset set on each vCPU keeps the TSC matched.
+sets it, so that the guest's TSC reads the host's, scaled to the vCPU's
+rate, plus the offset; the same offset set on vCPUs of the same rate keeps
+the TSC matched.
 .Dv KVM_HAS_DEVICE_ATTR
 answers 0 for it.
 .Pp
@@ -777,11 +787,12 @@ the time the vCPU's thread waited for a processor since the last time,
 which
 .Pa /proc/PID/schedstat
 gives as its second field
-.Pq Xr proc 5 , with
+.Pq Xr proc 5 ,
+with
 .Va version
 odd while it writes and even after.
-When the thread gives up the processor at the end of its time slice after
-the guest stopped for a host interrupt,
+When the thread gives up the processor to another thread at the end of its
+time slice after the guest stopped for a host interrupt,
 .Va preempted
 says
 .Dv KVM_VCPU_PREEMPTED
@@ -798,7 +809,8 @@ Under
 which
 .Dv KVM_ENABLE_CAP
 sets on a vCPU, the guest's access to an MSR of a feature its CPUID does
-not name raises #GP; the caller's
+not name raises #GP, or goes to the caller as an MSR KVM does not have; the
+caller's
 .Dv KVM_GET_MSRS
 reads it as 0, and
 .Dv KVM_SET_MSRS
@@ -1014,7 +1026,8 @@ without a local APIC in the kernel;
 .Dv KVM_HYPERV_EVENTFD
 of a connection past 0xffffff;
 .Dv KVM_X86_SET_MSR_FILTER
-of a flag it does not name, a bitmap past 0x600 bytes, or
+of a flag it does not name, a range of MSRs with no flag, a bitmap past
+0x600 bytes, or
 .Dv KVM_MSR_FILTER_DEFAULT_DENY
 with no range;
 .Dv KVM_CAP_X86_USER_SPACE_MSR
