@@ -21,6 +21,7 @@
 #include "../mm/usercopy.h"
 #include "../proc/percpu.h"
 #include "../proc/process.h"
+#include "../proc/smp.h"
 
 /* Linux's O_EXCL, which an open of a node refuses with EBUSY. */
 #define DRM_O_EXCL 0200
@@ -465,14 +466,19 @@ static void drm_file_release(struct drm_file *file)
     drm_dev_put(dev);
 }
 
-/** The close of a node's last descriptor of an open file description. */
+/** The close of a node's last descriptor of an open file description,
+ * which the descriptor's release calls without the big lock: the release
+ * of the file reaches the display, the syncobjs and the driver, and takes
+ * it. */
 static void drm_node_close(fd_entry_t *e)
 {
     struct drm_file *file = (struct drm_file *)e->priv;
 
     if (file) {
         e->priv = NULL;
+        bkl_enter();
         drm_file_release(file);
+        bkl_exit();
     }
 }
 
@@ -691,8 +697,11 @@ static int32_t drm_node_mmap(fd_entry_t *e, struct vma *vma)
     return drm_gem_mmap((struct drm_file *)e->priv, vma);
 }
 
-static const struct file_ops drm_fops = {drm_read,       NULL,          drm_poll, drm_node_ioctl,
-                                         drm_node_close, drm_node_mmap, NULL,     0};
+/* read and poll take only the event lock; ioctl takes the big lock for a
+ * row without DRM_UNLOCKED, and close for the file's release. */
+static const struct file_ops drm_fops = {
+    drm_read,       NULL,          drm_poll, drm_node_ioctl,
+    drm_node_close, drm_node_mmap, NULL,     FILE_OPS_UNLOCKED};
 
 /** Whether the held descriptor belongs to this DRM core's node operations. */
 int drm_is_file(const fd_entry_t *entry)
@@ -833,6 +842,40 @@ static int32_t ioctl_permit(uint32_t flags, const struct drm_file *file)
     return 0;
 }
 
+/**
+ * Call `row`'s handler on `kdata` for `file` if the file may call it. The
+ * master rules and every handler not marked DRM_UNLOCKED run under the big
+ * lock; an unlocked row takes it only to ask whether the file is master,
+ * as Linux's drm_is_current_master takes master_mutex.
+ */
+static int32_t ioctl_call(struct drm_device *dev, const struct drm_ioctl_desc *row, void *kdata,
+                          struct drm_file *file)
+{
+    int big = !(row->flags & DRM_UNLOCKED) || (row->flags & DRM_MASTER);
+    int32_t rc;
+
+    if (big) {
+        bkl_enter();
+    }
+    /* Linux's drm_file_update_pid: a file passed on is the user's now,
+     * unless it was master, whose owner the master rules keep. */
+    if (!file->was_master && current_proc) {
+        file->pid = current_proc->tgid;
+    }
+    rc = dev->unplugged ? -ENODEV : ioctl_permit(row->flags, file);
+    if (big && (row->flags & DRM_UNLOCKED)) {
+        bkl_exit();
+        big = 0;
+    }
+    if (rc == 0) {
+        rc = row->func(dev, kdata, file);
+    }
+    if (big) {
+        bkl_exit();
+    }
+    return rc;
+}
+
 int32_t drm_ioctl(struct drm_file *file, uint32_t cmd, uintptr_t arg)
 {
     struct drm_device *dev = file->dev;
@@ -880,15 +923,7 @@ int32_t drm_ioctl(struct drm_file *file, uint32_t cmd, uintptr_t arg)
     if (ksize > in_size) {
         k_memset(kdata + in_size, 0, ksize - in_size);
     }
-    /* Linux's drm_file_update_pid: a file passed on is the user's now,
-     * unless it was master, whose owner the master rules keep. */
-    if (!file->was_master && current_proc) {
-        file->pid = current_proc->tgid;
-    }
-    rc = dev->unplugged ? -ENODEV : ioctl_permit(row->flags, file);
-    if (rc == 0) {
-        rc = row->func(dev, kdata, file);
-    }
+    rc = ioctl_call(dev, row, kdata, file);
     if (out_size && copy_to_user((void __user *)arg, kdata, out_size) != 0) {
         rc = -EFAULT;
     }
