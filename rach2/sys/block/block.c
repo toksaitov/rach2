@@ -213,9 +213,9 @@ uint64_t block_drains(void)
     return drain_count;
 }
 
-void block_count_wait_tick(void)
+void block_count_wait_ticks(uint32_t n)
 {
-    wait_tick_count++;
+    wait_tick_count += n;
 }
 
 uint64_t block_polls(void)

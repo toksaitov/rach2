@@ -55,7 +55,8 @@ struct lag_entry {
 static block_device_t lag_device;
 static block_device_t *lag_backing;
 static struct lag_entry queue[LAG_QUEUE];
-static uint32_t lag_ticks;
+static uint32_t lag_ticks; /* the lag clock, in ticks */
+static uint32_t lag_seen;  /* `kernel_ticks` at the last tick's call */
 static uint32_t lag_delay;
 static int lag_held;             /* explicit completion control for kernel test fixtures */
 static uint32_t lag_completions; /* answers delivered after their lag, for /proc/disk */
@@ -211,17 +212,21 @@ int block_lag_answer(uint32_t generation, int duplicate)
 
 /**
  * Deliver ready answers at their due tick, and error duplicates two ticks
- * later. Explicitly held fixtures use `block_lag_answer` instead; timer
- * ticks then change neither the lag clock nor its queue.
+ * later. The lag clock advances by the ticks counted since the last call,
+ * since the boot processor's tick does not call this on every tick
+ * (`tick_waits`, isr.c). Explicitly held fixtures use `block_lag_answer`
+ * instead; timer ticks then change neither the lag clock nor its queue.
  */
 void block_lag_tick(void)
 {
+    uint32_t now = (uint32_t)kernel_ticks, passed = now - lag_seen;
     int i;
 
+    lag_seen = now;
     if (!lag_backing || lag_held) {
         return;
     }
-    lag_ticks++;
+    lag_ticks += passed;
     for (i = 0; i < LAG_QUEUE; i++) {
         struct lag_entry *e = &queue[i];
 

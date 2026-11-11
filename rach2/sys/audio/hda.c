@@ -1620,7 +1620,7 @@ static void hda_capture_stop(audio_stream_t *s);
 static bool hda_input_ready(void);
 static void hda_find_jacks(void);
 static void hda_find_beep(void);
-static void hda_beep_tick(void);
+static void hda_beep_tick(uint32_t passed);
 
 /* The PCI subsystem, vendor in the high half, which names a machine's
  * quirks; hda_init reads it. */
@@ -3357,14 +3357,18 @@ static int8_t hda_jack_sense(int j)
  * plays in the automatic mode and the headphones' routing differs from the
  * jack, and capture after a change of the microphone jack. Nothing is done
  * while code outside the tick holds the jacks, and what a failed verb left
- * undone is done again at the next poll.
+ * undone is done again at the next poll. `passed` is the ticks since the
+ * last call (hda_tick).
  */
-static void hda_poll_jacks(void)
+static void hda_poll_jacks(uint32_t passed)
 {
     uint32_t flags;
     int j;
 
-    if (!hda_base || !hda_report.ready || ++jack_ticks < HDA_JACK_TICKS)
+    if (!hda_base || !hda_report.ready)
+        return;
+    jack_ticks += passed;
+    if (jack_ticks < HDA_JACK_TICKS)
         return;
     jack_ticks = 0;
     flags = kirq_save();
@@ -3897,10 +3901,14 @@ void hda_read_queue(void)
 
 void hda_tick(void)
 {
+    static uint32_t seen; /* `kernel_ticks` at the last call */
+    uint32_t now = (uint32_t)kernel_ticks, passed = now - seen;
+
+    seen = now;
     hda_service_stream();
     hda_service_capture();
-    hda_poll_jacks();
-    hda_beep_tick();
+    hda_poll_jacks(passed);
+    hda_beep_tick(passed);
 }
 
 /** Whether playback is running. */
@@ -4935,9 +4943,10 @@ static int hda_beep(uint32_t hz, int tick)
  * From the tick: once a stream plays, leave the pins a beep turned on to it;
  * with none, turn them and EAPD off when the generator has been silent for
  * HDA_BEEP_IDLE_TICKS, in tries, and try again at the next tick when a verb
- * fails or code outside the tick holds the jacks.
+ * fails or code outside the tick holds the jacks. `passed` is the ticks
+ * since the last call (hda_tick).
  */
-static void hda_beep_tick(void)
+static void hda_beep_tick(uint32_t passed)
 {
     uint32_t flags;
     bool ok = true;
@@ -4950,7 +4959,8 @@ static void hda_beep_tick(void)
         hda_report.beep_path = 0;
         return;
     }
-    if (++beep_quiet < HDA_BEEP_IDLE_TICKS)
+    beep_quiet += passed;
+    if (beep_quiet < HDA_BEEP_IDLE_TICKS)
         return;
     flags = kirq_save();
     if (!spin_trylock(&jack_lock)) {

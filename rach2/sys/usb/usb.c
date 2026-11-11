@@ -524,11 +524,15 @@ static void usb_interrupts_start(void)
 
 void usb_poll(void)
 {
+    static uint32_t seen; /* `kernel_ticks` at the last call */
+    uint32_t now = (uint32_t)kernel_ticks, passed = now - seen;
+
+    seen = now;
     if (!usb_up) {
         return;
     }
     pump_saw_pending = 0;
-    if (usb_pump(1000u / TICK_HZ, 0) > 0 && interrupts_started && !pump_saw_pending) {
+    if (usb_pump(passed * (1000u / TICK_HZ), 0) > 0 && interrupts_started && !pump_saw_pending) {
         usb_fallback++;
     }
 }

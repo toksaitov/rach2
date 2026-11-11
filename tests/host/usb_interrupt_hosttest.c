@@ -117,6 +117,9 @@ void kirq_restore(uint32_t flags)
     irq_flags = flags;
 }
 
+/* The tick count `usb_poll` reads; no row reads the time it passes on. */
+volatile uint64_t kernel_ticks;
+
 /** Return 0: no row reads the clock. */
 uint32_t timer_now_us(void)
 {
