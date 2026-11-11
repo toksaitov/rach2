@@ -84,7 +84,13 @@
  *       sixteen buffers, as Linux's pipe_write stops at pipe_full: after
  *       sixteen one-byte vmsplices a nonblocking write of a byte is EAGAIN,
  *       and after a write of a byte and fifteen of 4096 a sixteenth of 4096
- *       is EAGAIN. vmsplice without SPLICE_F_NONBLOCK waits on an empty
+ *       is EAGAIN. A writev is one pipe write: repeated writevs of a byte
+ *       and a page into an empty nonblocking pipe of 64 KiB take 45066 bytes
+ *       before EAGAIN, as Linux's pipe_write merges each vector's first
+ *       total mod 4096 bytes and fills each page across the elements; and
+ *       a writev of a page and then of 10 bytes at address 0 into an empty
+ *       pipe returns 4096, the page written before the fault, as Linux's
+ *       does. vmsplice without SPLICE_F_NONBLOCK waits on an empty
  *       pipe whose read end has O_NONBLOCK, until a child that saw the probe
  *       asleep writes a byte.
  *
@@ -291,6 +297,8 @@ enum {
     PAGES_WRONLY_FILE,
     PAGES_WRITE_SLOTS,
     PAGES_WRITE_PAGES,
+    PAGES_WRITEV_FILL,
+    PAGES_WRITEV_PREFIX,
     VMSPLICE_WAIT_FORK,
     VMSPLICE_WAIT_NONBLOCK,
     MAX_ROUND,
@@ -381,6 +389,9 @@ static const struct {
      "a vmsplice of an untouched PROT_WRITE private page of a memfd -> -EFAULT"},
     {"pages-write-slots", "after 16 vmsplices of a byte a nonblocking write of a byte -> -EAGAIN"},
     {"pages-write-pages", "after writes of 1 and 15 x 4096 a nonblocking write of 4096 -> -EAGAIN"},
+    {"pages-writev-fill",
+     "writevs of 1 and 4096 bytes take 45066 bytes of a nonblocking pipe of 64 KiB"},
+    {"pages-writev-prefix", "a writev of 4096 bytes and 10 at address 0 returns 4096"},
     {"vmsplice-wait-fork", "fork for the vmsplice wait"},
     {"vmsplice-wait-nonblock",
      "vmsplice without SPLICE_F_NONBLOCK from an empty O_NONBLOCK pipe waits for the child's byte"},
@@ -1107,6 +1118,47 @@ static void pages_write_slots(void)
     }
 }
 
+/**
+ * A writev is one pipe write, as Linux's is: writevs of a byte and a page
+ * fill a nonblocking pipe of 64 KiB with 45066 bytes, two of them taking
+ * three buffers, since the second merges its byte into the first's last
+ * buffer, until the eleventh takes the sixteenth buffer's page and the
+ * twelfth is EAGAIN; and a writev whose second element lies at address 0
+ * returns the page of the first, as Linux's pipe_write keeps the page it
+ * filled before the fault.
+ */
+static void pages_writev(void)
+{
+    long iov[4];
+    int w[2] = {-1, -1};
+    int made = do_pipe2(w, O_NONBLOCK) == 0;
+    long n = 0, total = 0;
+    int i;
+
+    iov[0] = (long)big;
+    iov[1] = 1;
+    iov[2] = (long)(big + 1);
+    iov[3] = 4096;
+    for (i = 0; made && i < 32; i++) {
+        n = syscall3(SYS_WRITEV, w[1], (long)iov, 2);
+        if (n < 0) {
+            break;
+        }
+        total += n;
+    }
+    check(PAGES_WRITEV_FILL, made && n == -EAGAIN && total == 45066);
+    close_pair(w);
+
+    made = do_pipe2(w, O_NONBLOCK) == 0;
+    iov[0] = (long)big;
+    iov[1] = 4096;
+    iov[2] = 0;
+    iov[3] = 10;
+    check(PAGES_WRITEV_PREFIX, made && syscall3(SYS_WRITEV, w[1], (long)iov, 2) == 4096 &&
+                                   rd(w[0], back, PIPE_BUF_SIZE) == 4096 && eqn(back, big, 4096));
+    close_pair(w);
+}
+
 /** Append the string `s` to `buf` at `*at`, moving `*at` past it. */
 static void put_str(char *buf, int *at, const char *s)
 {
@@ -1229,6 +1281,7 @@ static void case_pages(void)
     pages_slots();
     pages_wronly_file();
     pages_write_slots();
+    pages_writev();
     vmsplice_wait();
     close_pair(p);
     close_pair(q);
