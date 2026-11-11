@@ -71,8 +71,8 @@ struct vchan {
  * and is clipped to 24 bits and narrowed to the device's width. `made`
  * counts the frames of the mix made since the stream's start, and `ended`
  * those in the periods the device has ended since. `lock` keeps the list,
- * the channels' state and the counts between process context and the
- * device's interrupt.
+ * the channels' state and the counts between the system calls and the
+ * device's service, HDA's thread or the SB16's interrupt.
  */
 static void vchan_capture_feed(audio_stream_t *s, uint8_t *buf, size_t size);
 
@@ -256,7 +256,7 @@ static void vchan_mix(struct vchan *c, uint32_t n)
 }
 
 /**
- * The device stream's `transfer`, in the device's interrupt or its start:
+ * The device stream's `transfer`, in the device's service or its start:
  * make `size` bytes of the mix at `buf`, block by block, each the sum of
  * the channels running, clipped to 24 bits and stored as the top 24 bits of
  * 32 or narrowed to 16 (vchan_narrow).
@@ -302,7 +302,7 @@ static void vchan_render(audio_stream_t *s, uint8_t *buf, size_t size)
 }
 
 /**
- * The device stream's `period`, in the device's interrupt: count the
+ * The device stream's `period`, in the device's service: count the
  * period's frames as played, move each channel's count on to them, and call
  * a channel's `period` once for each of its periods played since its last.
  */
@@ -650,8 +650,8 @@ static struct {
     struct spinlock lock;
 } input;
 
-/** The reader of `s`, or NULL; calls in process context are serialized by
- * the kernel lock, and the interrupt's walks hold input.lock. */
+/** The reader of `s`, or NULL; the system calls are serialized by the
+ * kernel lock, and the device's service walks the readers under input.lock. */
 static struct vchan_reader *vchan_reader_find(audio_stream_t *s)
 {
     struct vchan_reader *r;
@@ -726,7 +726,7 @@ static void vchan_capture_put(struct vchan_reader *r, const int32_t *sample)
  * Frames the device lost since the last call were among those a reader
  * that joined meanwhile was to skip, so they count against its skip.
  * Loopback feeds the clipped playback mix; a real input calls this from
- * its interrupt. No caller may call the driver back from either callback.
+ * its service. No caller may call the driver back from either callback.
  */
 static void vchan_capture_feed(audio_stream_t *s, uint8_t *buf, size_t size)
 {

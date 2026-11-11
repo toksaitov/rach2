@@ -369,14 +369,25 @@ void hda_read_queue(void);
  */
 uint32_t hda_delay_frames(void);
 
-/** Refill the periods the stream has played since the last refill, hand the
- * input stream's finished periods over, and every quarter second poll the
- * jacks, moving the output and the microphone recorded as a plug goes in or
- * out. The boot processor's tick calls this, with interrupts off, so
- * playback goes on where the controller's interrupt does not arrive; the
- * jacks' and the beep's clocks count the ticks since the last call, since
- * that tick skips the call while another processor holds the big lock. */
+/** Ask for the refill of the periods the stream has played since the last
+ * refill and the handing over of the input stream's finished periods, when
+ * either stream's position has passed into another period, and every quarter
+ * second poll the jacks, moving the output and the microphone recorded as a
+ * plug goes in or out. The boot processor's tick calls this, with interrupts
+ * off, so playback goes on where the controller's interrupt does not arrive;
+ * the service runs in the driver's thread, and here, at every call, while
+ * the thread does not run it. The jacks' and the beep's clocks count the
+ * ticks since the last call, since that tick skips the call while another
+ * processor holds the big lock. */
 void hda_tick(void);
+
+/** Make the driver's thread, khda, which refills the output stream and
+ * hands the input stream's periods over in process context, under
+ * SCHED_FIFO at priority 50, once the first program has its pid, so that
+ * init is process 1; nothing when no controller is set up or the thread is
+ * made. Until then, and while the scheduler is off, the interrupt and the
+ * tick run the service themselves. Process context, with the big lock. */
+void hda_thread_start(void);
 
 /*
  * The dumps of the `audio hda` shell command. Each prints on the console (the

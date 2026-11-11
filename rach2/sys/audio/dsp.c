@@ -101,7 +101,7 @@ struct dsp_count_info {
  * DSP_BUFFER_MAX for capture, of which the first `size` are the buffer in
  * use, a circle of `used` bytes from `head` on; it is NULL in a direction
  * the open does not have. The program adds at the tail and the driver's
- * interrupt takes from the head (playback), or the driver adds and the
+ * service takes from the head (playback), or the driver adds and the
  * program takes (capture), each under the open's lock.
  * While `running` the driver's stream is started.
  */
@@ -211,7 +211,7 @@ static void ring_get(struct dsp_chan *c, uint8_t *dst, uint32_t n)
 }
 
 /**
- * Playback's `transfer`, in the driver's interrupt: fill `size` bytes at
+ * Playback's `transfer`, in the driver's service: fill `size` bytes at
  * `buf` with the whole frames queued, and the rest with silence. A partial
  * frame stays for the write that completes it.
  */
@@ -236,7 +236,7 @@ static void dsp_transfer(audio_stream_t *s, uint8_t *buf, size_t size)
 }
 
 /**
- * Capture's `transfer`, in the driver's interrupt: add the `size` bytes
+ * Capture's `transfer`, in the driver's service: add the `size` bytes
  * recorded at `buf` to the buffer. What does not fit is dropped in whole
  * frames, the newest first, so the program reads the oldest it missed none
  * of; the buffer's tail stays on a frame's edge, even after a read that took
@@ -257,7 +257,7 @@ static void dsp_record(audio_stream_t *s, uint8_t *buf, size_t size)
     spin_unlock_irqrestore(&d->lock, flags);
 }
 
-/** The streams' `period`, in the driver's interrupt: count the period and
+/** The streams' `period`, in the driver's service: count the period and
  * wake the readers or writers, the pollers and a drain. */
 static void dsp_period(audio_stream_t *s)
 {

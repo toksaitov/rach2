@@ -954,6 +954,15 @@ void bkl_take_as(int depth, int key)
     }
 }
 
+void bkl_thread_hold(void)
+{
+    struct percpu *cpu = this_cpu();
+
+    if (cpu->bkl_depth > 0 && (cpu->bkl_vector != 0 || cpu->bkl_nr >= 0)) {
+        bkl_take(bkl_drop());
+    }
+}
+
 void bkl_yield(void)
 {
     struct percpu *cpu = this_cpu();
