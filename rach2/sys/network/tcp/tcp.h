@@ -64,6 +64,10 @@
 /* The SACK blocks an acknowledgement names at most: four, 36 bytes of
  * options, when a segment has no timestamps (RFC 2018). */
 #define TCP_SACK_BLOCKS     4
+/* Policy: the receive ring keeps the boundaries of up to 32 receive buffers,
+ * which a stream receive copies whole or not at all; past that a new one
+ * joins the last, as Linux joins a segment to the queue's tail. */
+#define TCP_RECV_SEGS       32
 
 /* The timers are written in milliseconds and kept in ticks of the kernel's
  * clock; TCP_MS rounds up, so that no timer is shorter than asked or 0. */
@@ -288,6 +292,20 @@ struct tcb {
     uint8_t *recv_buf;
     uint32_t recv_size;
     uint32_t recv_head, recv_tail; /* head = next to read, tail = next to fill */
+    /*
+     * The receive buffers of the bytes in the receive ring, as Linux's
+     * receive queue holds them in its sk_buffs: the end of each, a count
+     * like `recv_tail`, the oldest at `recv_seg_first` of the circle of
+     * TCP_RECV_SEGS entries. Each in-order segment the ring takes is a
+     * buffer, and so are the bytes past a hole that its filling makes
+     * readable at once; with every entry in use a new buffer joins the
+     * last, as Linux's tcp_try_coalesce joins a segment to the queue's tail
+     * (net/ipv4/tcp_input.c:4930-4963, 5214-5216). An end at or before
+     * `recv_head` has been read, and is dropped when next looked at.
+     * Changed with interrupts off.
+     */
+    uint8_t recv_seg_first, recv_seg_count;
+    uint32_t recv_seg_end[TCP_RECV_SEGS];
 
     int fin_received; /* the peer's FIN was taken: a read sees the end */
     int fin_pending;  /* a close or shutdown asked for a FIN after the data */

@@ -268,10 +268,12 @@ static void raw_count_sent(const struct socket *sock, int r, const uint8_t *msg,
 
 /* recv flags honored: MSG_PEEK leaves what it copies for the next receive,
  * MSG_TRUNC has a receive on a datagram socket answer the datagram's whole
- * length, and MSG_DONTWAIT does not wait. */
+ * length, MSG_DONTWAIT does not wait, and MSG_WAITALL has a stream receive
+ * wait until its buffers are full (`stream_readv`). */
 #define MSG_PEEK     0x2
 #define MSG_TRUNC    0x20
 #define MSG_DONTWAIT 0x40
+#define MSG_WAITALL  0x100
 /* A send flag: an EPIPE posts no SIGPIPE (`sock_stream_sent`). */
 #define MSG_NOSIGNAL 0x4000
 
@@ -1432,13 +1434,31 @@ static int32_t do_sendto(int fd, uintptr_t buf_ptr, int len, int flags, uintptr_
 }
 
 /**
+ * Receive on the stream socket of `entry` into the `len` bytes at
+ * `buf_ptr`, which the caller has checked and cut at MAX_RW_COUNT, for
+ * recv(2) and recvfrom(2): one buffer read as `stream_readv` reads a vector,
+ * with MSG_PEEK, MSG_DONTWAIT and MSG_WAITALL from `flags`, as Linux's recv
+ * reads a stream through tcp_recvmsg with the buffer as an iov_iter.
+ * Returns the bytes read or -errno.
+ */
+static int32_t stream_recv(fd_entry_t *entry, uintptr_t buf_ptr, int len, int flags)
+{
+    struct kernel_iovec one;
+
+    one.iov_base = buf_ptr;
+    one.iov_len = (unsigned long)(uint32_t)len;
+    return stream_readv(entry, &one, 1, flags);
+}
+
+/**
  * recvfrom(2): a stream socket behaves like recv (no source writeback); a
  * datagram socket reports the source address, truncated to the caller's
  * capacity. An address with no length pointer is EFAULT before anything is
  * taken, so the message stays queued; Linux fails the call only after it
  * has taken the message. Honors MSG_PEEK, MSG_DONTWAIT and O_NONBLOCK, the
- * last a status flag of the open file description, which dup and fork share.
- * Returns the bytes received or -errno.
+ * last a status flag of the open file description, which dup and fork share,
+ * and on a stream MSG_WAITALL (`stream_recv`). Returns the bytes received or
+ * -errno.
  *
  * Where the source address will land is settled before a datagram is taken:
  * taking one destroys it, and a fault found afterwards would report an error
@@ -1504,12 +1524,7 @@ static int32_t do_recvfrom(int fd, uintptr_t buf_ptr, int len, int flags, uintpt
     nonblock = (flags & MSG_DONTWAIT) || (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
 
     if (entry->sock->type == SOCK_STREAM) {
-        if (nonblock) {
-            return (int32_t)socket_tcp_try_recv(
-                entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len, peek);
-        }
-        return (int32_t)socket_tcp_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len,
-                                        peek);
+        return stream_recv(entry, buf_ptr, len, flags);
     }
 
     if (nonblock) {
@@ -1949,8 +1964,9 @@ static int32_t do_send(int fd, uintptr_t buf_ptr, int len, int flags)
 
 /**
  * recv(2): read from a connected stream socket, or one message from a
- * datagram socket. Honors MSG_PEEK, MSG_DONTWAIT and O_NONBLOCK, and on a
- * datagram socket MSG_TRUNC, which answers the datagram's whole length.
+ * datagram socket. Honors MSG_PEEK, MSG_DONTWAIT and O_NONBLOCK, on a stream
+ * MSG_WAITALL (`stream_recv`), and on a datagram socket MSG_TRUNC, which
+ * answers the datagram's whole length.
  * Returns the bytes received or -errno, -EOPNOTSUPP for the query
  * descriptor, which takes only ioctls.
  *
@@ -1992,12 +2008,7 @@ static int32_t do_recv(int fd, uintptr_t buf_ptr, int len, int flags)
     if (entry->sock->type != SOCK_STREAM) {
         return -EOPNOTSUPP;
     }
-    if (nonblock) {
-        return (int32_t)socket_tcp_try_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr,
-                                            len, peek);
-    }
-    return (int32_t)socket_tcp_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len,
-                                    peek);
+    return stream_recv(entry, buf_ptr, len, flags);
 }
 
 /**
@@ -3429,20 +3440,38 @@ static int32_t get_tx_control(const struct socket *sock, uintptr_t control, uint
 }
 
 /**
- * Whether the first `n` bytes of the copied vector `iov` of `count` elements
- * lie in pages that are present and may be written (`vm_resident`), found
- * with no sleep: 1. Otherwise the first page that is not is brought in,
- * which may sleep, and the answer is 0, or -EFAULT when it cannot be had.
+ * Whether the `n` bytes of the copied vector `iov` of `count` elements that
+ * begin `skip` bytes into it lie in user space and in pages that are
+ * present and may be written, found with no sleep: 1. A range outside user
+ * space, below USER_ADDR_MIN among them, is -EFAULT (`user_range_ok`),
+ * since `vm_resident` takes a kernel address for present and the copy would
+ * write the kernel. Otherwise the first page that is not present and
+ * writable is brought in, which may sleep, and the answer is 0, or -EFAULT
+ * when it cannot be had.
  */
-static int stream_room_resident(const struct kernel_iovec *iov, uint32_t count, uint32_t n)
+static int stream_room_resident(const struct kernel_iovec *iov, uint32_t count, uint32_t skip,
+                                uint32_t n)
 {
     uint32_t i;
 
     for (i = 0; i < count && n > 0; i++) {
         uintptr_t addr = iov[i].iov_base;
-        uint32_t len = iov[i].iov_len < n ? (uint32_t)iov[i].iov_len : n;
+        uint32_t len = (uint32_t)iov[i].iov_len;
 
+        if (skip >= len) {
+            skip -= len;
+            continue;
+        }
+        addr += skip;
+        len -= skip;
+        skip = 0;
+        if (len > n) {
+            len = n;
+        }
         n -= len;
+        if (!user_range_ok(addr, len)) {
+            return -EFAULT;
+        }
         while (len > 0) {
             uint32_t piece = PAGE_SIZE - (uint32_t)(addr & (PAGE_SIZE - 1));
 
@@ -3460,19 +3489,65 @@ static int stream_room_resident(const struct kernel_iovec *iov, uint32_t count, 
 }
 
 /**
- * The stream's bytes are taken as one segment: the wait, the end of input
- * and -EAGAIN come first, then the destination of the bytes queued, as many
- * as the vector takes, is brought in for writing, which may sleep, and the
- * queue is judged again after any sleep; with no sleep between, the bytes
- * are then copied and taken. A page that cannot be written ends the call
- * with -EFAULT and every byte queued, as Linux's tcp_recvmsg_locked leaves
- * a segment whose copy fails (net/ipv4/tcp.c:2765-2772); the ring keeps no
- * segment boundaries, so the bytes queued at the call are that segment.
+ * Copy `n` queued bytes of the stream `sock` into the copied vector `iov` of
+ * `count` elements from `skip` bytes into it, which `stream_room_resident`
+ * has found present and writable with no sleep since: taken, or with `peek`
+ * copied from `skip` bytes past the next unread one and left queued.
+ * Never sleeps. Returns the bytes copied.
+ */
+static uint32_t stream_copy(struct socket *sock, const struct kernel_iovec *iov, uint32_t count,
+                            uint32_t skip, uint32_t n, int peek)
+{
+    uint32_t i, at = skip, done = 0;
+    int r;
+
+    for (i = 0; i < count && done < n; i++) {
+        uint32_t len = (uint32_t)iov[i].iov_len;
+        uint8_t *buf;
+
+        if (at >= len) {
+            at -= len;
+            continue;
+        }
+        buf = (uint8_t __force *)(void __user *)(iov[i].iov_base + at);
+        len -= at;
+        at = 0;
+        if (len > n - done) {
+            len = n - done;
+        }
+        r = peek ? socket_tcp_peek_at(sock, skip + done, buf, (int)len)
+                 : socket_tcp_try_recv(sock, buf, (int)len, 0);
+        if (r <= 0) {
+            break;
+        }
+        done += (uint32_t)r;
+        if ((uint32_t)r < len) {
+            break;
+        }
+    }
+    return done;
+}
+
+/**
+ * The stream is read as Linux's tcp_recvmsg_locked reads it, one receive
+ * buffer at a time (`socket_tcp_buffer`), until the vector is full or no
+ * buffer is queued and `target` bytes are taken: one, or the vector's whole
+ * length with MSG_WAITALL (net/ipv4/tcp.c:2628). With nothing taken, the
+ * wait, the end of input and -EAGAIN come first; with some taken, the call
+ * returns them where it would wait without MSG_WAITALL, and with it on a
+ * nonblocking socket, at the end of input, an error or a signal
+ * (:2673-2712). The destination of each buffer, as much of it as the vector
+ * takes, is checked and brought in for writing, which may sleep, and the
+ * queue is judged again after any sleep; with no sleep between, the buffer
+ * is then copied and taken (:2737-2739, 2798-2800). A destination that
+ * cannot be written leaves its buffer queued whole and ends the call with
+ * the bytes taken before it, or -EFAULT when there are none, as Linux
+ * leaves an sk_buff whose copy fails (:2765-2772).
  */
 int32_t stream_readv(fd_entry_t *entry, const struct kernel_iovec *iov, uint32_t iovlen, int flags)
 {
     struct socket *sock = entry->sock;
-    uint32_t i, n, want = 0, done = 0;
+    uint32_t i, n, want = 0, copied = 0, target;
     int peek = (flags & MSG_PEEK) != 0;
     int nonblock =
         (flags & MSG_DONTWAIT) || (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
@@ -3481,42 +3556,44 @@ int32_t stream_readv(fd_entry_t *entry, const struct kernel_iovec *iov, uint32_t
     for (i = 0; i < iovlen; i++) {
         want += (uint32_t)iov[i].iov_len;
     }
+    target = (flags & MSG_WAITALL) && want > 0 ? want : 1u;
     for (;;) {
-        r = nonblock ? socket_tcp_try_recv(sock, (uint8_t *)0, 0, 1)
-                     : socket_tcp_recv(sock, (uint8_t *)0, 0, 1);
-        if (r < 0 || want == 0) {
-            return r;
-        }
-        n = socket_tcp_queued(sock);
-        if (n == 0) {
-            return 0;
-        }
-        if (n > want) {
-            n = want;
-        }
-        r = stream_room_resident(iov, iovlen, n);
-        if (r < 0) {
-            return -EFAULT;
-        }
-        if (r > 0) {
-            break;
-        }
-    }
-    for (i = 0; i < iovlen && done < n; i++) {
-        uint8_t *buf = (uint8_t __force *)(void __user *)iov[i].iov_base;
-        int take = (int)(iov[i].iov_len < n - done ? iov[i].iov_len : n - done);
-
-        if (take == 0) {
+        n = socket_tcp_buffer(sock, peek ? copied : 0);
+        if (n == 0 && copied > 0) {
+            if (copied >= target || nonblock) {
+                break;
+            }
+            if (socket_tcp_wait_more(sock, peek ? copied : 0) <= 0) {
+                break;
+            }
             continue;
         }
-        r = peek ? socket_tcp_peek_at(sock, done, buf, take)
-                 : socket_tcp_try_recv(sock, buf, take, 0);
-        if (r <= 0) {
+        if (n == 0) {
+            r = nonblock ? socket_tcp_try_recv(sock, (uint8_t *)0, 0, 1)
+                         : socket_tcp_recv(sock, (uint8_t *)0, 0, 1);
+            if (r < 0 || want == 0) {
+                return r;
+            }
+            if (socket_tcp_queued(sock) == 0) {
+                return 0;
+            }
+            continue;
+        }
+        if (copied == want) {
             break;
         }
-        done += (uint32_t)r;
+        if (n > want - copied) {
+            n = want - copied;
+        }
+        r = stream_room_resident(iov, iovlen, copied, n);
+        if (r < 0) {
+            return copied > 0 ? (int32_t)copied : -EFAULT;
+        }
+        if (r > 0) {
+            copied += stream_copy(sock, iov, iovlen, copied, n, peek);
+        }
     }
-    return (int32_t)done;
+    return (int32_t)copied;
 }
 
 /**
@@ -3598,8 +3675,8 @@ static int32_t recvmsg_dgram(fd_entry_t *entry, const struct kernel_msghdr *hdr,
  * socketcall 17).
  *
  * A connected stream socket is read as recv(2) reads it, the buffers filled
- * in order by `recvmsg_stream`, with MSG_DONTWAIT, O_NONBLOCK and MSG_PEEK
- * honoured, and no address or control data reported (`recvmsg_stream`).
+ * in order by `recvmsg_stream`, with MSG_DONTWAIT, O_NONBLOCK, MSG_PEEK and
+ * MSG_WAITALL honoured, and no address or control data reported.
  * QEMU reads its socket channels, QMP's among them, this way.
  *
  * The DHCP client is what needs this: it reads its packet socket through

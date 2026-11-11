@@ -571,6 +571,19 @@ int socket_tcp_peek_at(struct socket *sock, uint32_t off, uint8_t *buf, int len)
 /** The stream bytes queued for a read of `sock`, which a read takes without
  * waiting; 0 for a socket with no connection or a listener. */
 uint32_t socket_tcp_queued(const struct socket *sock);
+/** The bytes from `off` past the next unread one of `sock` to the end of the
+ * receive buffer they lie in, the most a stream receive takes from there
+ * as one copy, as Linux's tcp_recvmsg_locked copies one sk_buff at a time;
+ * 0 when no byte lies past `off`. Never waits. */
+uint32_t socket_tcp_buffer(struct socket *sock, uint32_t off);
+/**
+ * Wait, for a stream receive that has taken bytes and wants more
+ * (MSG_WAITALL), until more than `have` bytes are queued: 1 when they are;
+ * 0 when the input ended, the connection closed or has an error, or the
+ * socket has no connection, which the receive leaves for the next call;
+ * -EINTR or the wait's error on a signal.
+ */
+int socket_tcp_wait_more(struct socket *sock, uint32_t have);
 /** Wake every waiter of `sock` on the peer's FIN or the connection's end. */
 void socket_tcp_fin(struct socket *sock);
 
