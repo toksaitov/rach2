@@ -1907,11 +1907,18 @@ static int32_t do_listen(int fd, int backlog)
  * accept(2) and accept4(2): dequeue a completed connection (blocking, or
  * -EAGAIN on a non-blocking listener), give a new descriptor for it the
  * creation flags `flags`, and report the peer address. A flag other than
- * SOCK_CLOEXEC and SOCK_NONBLOCK is EINVAL. Raw sockets return EOPNOTSUPP;
- * other sockets must be listening streams. A listener stopped by
- * shutdown(2) while the call waits fails it with EINVAL, as Linux's
- * inet_csk_wait_for_connect ends once the socket leaves TCP_LISTEN
- * (net/ipv4/inet_connection_sock.c:631-633 in 6.12.115).
+ * SOCK_CLOEXEC and SOCK_NONBLOCK is EINVAL. A socket that is not a stream,
+ * raw, datagram, packet or netlink, is EOPNOTSUPP, as Linux's
+ * sock_no_accept answers for each (net/core/sock.c:3403-3407 in 6.12.115,
+ * the accept of inet_dgram_ops and inet_sockraw_ops at
+ * net/ipv4/af_inet.c:1094 and 1126, of inet6_dgram_ops at
+ * net/ipv6/af_inet6.c:726, of inet6_sockraw_ops at net/ipv6/raw.c:1282, of
+ * the packet ops at net/packet/af_packet.c:4835 and 4854, and of
+ * netlink_ops at net/netlink/af_netlink.c:2813); a stream that is not
+ * listening is EINVAL. A listener stopped by shutdown(2) while the call
+ * waits fails it with EINVAL, as Linux's inet_csk_wait_for_connect ends once
+ * the socket leaves TCP_LISTEN (net/ipv4/inet_connection_sock.c:631-633 in
+ * 6.12.115).
  *
  * The descriptor is reserved before the connection is dequeued, under
  * `net_lock` with the listener checked again, so a sharer that took the
@@ -1940,11 +1947,11 @@ static int32_t do_accept(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr, uint32_t
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return not_a_socket(entry);
     }
-    if (entry->sock->type == SOCK_RAW) {
+    listen_sock = entry->sock;
+    if (listen_sock->type != SOCK_STREAM) {
         return -EOPNOTSUPP;
     }
-    listen_sock = entry->sock;
-    if (listen_sock->type != SOCK_STREAM || !listen_sock->listening) {
+    if (!listen_sock->listening) {
         return -EINVAL;
     }
 
