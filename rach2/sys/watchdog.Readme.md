@@ -39,7 +39,7 @@ Linux has no big lock, and Rach2's waiters for it spin with interrupts off, the 
 
 ### Hung task
 
-The kernel thread `khungtaskd` wakes every `hung_task_check_interval_secs`, or every timeout when that is 0, and walks the processes for one blocked uninterruptibly whose switch count has not moved for the timeout (kernel/hung_task.c:93, :172 and :359). Each report counts down `hung_task_warnings`; at 0 the reports stop, and -1 never stops them. The thread's stack is read from the frame its switch saved.
+The kernel thread `khungtaskd` wakes every `hung_task_check_interval_secs`, or every timeout when that is 0, and walks the processes for one blocked uninterruptibly whose switch count has not moved for the timeout (kernel/hung_task.c:91, :181 and :361). Each report counts down `hung_task_warnings`; at 0 the reports stop, and -1 never stops them. The thread's stack is read from the frame its switch saved.
 
 ### Reports and the panic
 
