@@ -6318,9 +6318,10 @@ static int32_t console_read(fd_entry_t *entry, char __user *buf, uint32_t count)
  * Read up to `count` bytes of descriptor `fd` into the user's `buf`, for
  * read(2) and readv(2); the bytes read, 0 at the end, or a negative errno:
  * -EBADF for a descriptor that is not open, was opened with O_PATH or is not
- * open for reading, -EFAULT for a NULL or bad buffer. A read of zero bytes
- * returns 0 once the descriptor is known to be valid and does not look at
- * `buf`, which may then be NULL, as POSIX allows.
+ * open for reading, -EISDIR for a directory, -EFAULT for a NULL or bad
+ * buffer. A read of zero bytes returns 0 once the descriptor is known to be
+ * valid and not a directory and does not look at `buf`, which may then be
+ * NULL, as POSIX allows.
  *
  * The read goes by what is behind the descriptor. An object with a vtable,
  * a pipe, a pty, a device or a /proc file among them, reads through it
@@ -6330,7 +6331,9 @@ static int32_t console_read(fd_entry_t *entry, char __user *buf, uint32_t count)
  *
  * A mouse read returns the whole `struct mouse_packet`s waiting that fit in
  * `count`, without waiting, and 0 when `count` is less than one packet. A
- * descriptor of any other kind is -EBADF.
+ * directory, of a mount or of the synthetic trees, is -EISDIR whatever the
+ * count, as Linux's generic_read_dir answers, and a descriptor of any other
+ * kind -EBADF.
  */
 static int32_t read_fd(int fd, char __user *buf, uint32_t count)
 {
@@ -6343,6 +6346,9 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
     entry = fd_get(current_proc->fds, fd);
     if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
+    }
+    if (entry->type == FD_TYPE_DIR || entry->type == FD_TYPE_SYNTH_DIR) {
+        return -EISDIR;
     }
 
     if (count == 0) {
@@ -6602,6 +6608,20 @@ int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, net_addr_
 }
 
 /**
+ * readv(2) of a vector of no bytes from `fd`, whose entry is `entry` or
+ * NULL: 0 for a directory, as Linux's vfs_readv returns before the read that
+ * would be EISDIR, and otherwise what a read of no bytes gives (`read_fd`).
+ */
+static long readv_none(int fd, const fd_entry_t *entry)
+{
+    if (entry && !(entry->flags & FD_FLAG_PATH) &&
+        (entry->type == FD_TYPE_DIR || entry->type == FD_TYPE_SYNTH_DIR)) {
+        return 0;
+    }
+    return read_fd(fd, (char __user *)0, 0);
+}
+
+/**
  * readv(2): read from the descriptor in argument 0 into the buffers of the
  * user's iovec array in argument 1, of the count in argument 2, in order;
  * the total bytes read, or a negative errno. musl's stdio reads through
@@ -6616,8 +6636,9 @@ int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, net_addr_
  * with write access, which faults their pages in, so an address inside the
  * user window that is unmapped or read-only fails here and not half way
  * through. An array that asks for nothing still checks the descriptor, so a
- * closed one is -EBADF. Once a byte has been read, a later failure ends the
- * call with the total.
+ * closed one is -EBADF, and returns 0 for a directory, as Linux's vfs_readv
+ * does. Once a byte has been read, a later failure ends the call with the
+ * total.
  *
  * The buffers are filled in order, and how depends on what is behind the
  * descriptor, since a second read is not always reading on. A regular file
@@ -6650,11 +6671,11 @@ static long readv(int fd, uintptr_t iov_user, int iovcnt)
     if (wanted < 0) {
         return wanted;
     }
+    entry = current_proc ? fd_get(current_proc->fds, fd) : (fd_entry_t *)0;
     if (wanted == 0) {
-        return read_fd(fd, (char __user *)0, 0);
+        return readv_none(fd, entry);
     }
 
-    entry = current_proc ? fd_get(current_proc->fds, fd) : (fd_entry_t *)0;
     if (entry && entry->type == FD_TYPE_SOCKET && entry->sock && entry->sock->type == SOCK_DGRAM) {
         return readv_dgram(entry, iov_user, iovcnt, 0, 0, 0, 0);
     }
@@ -12597,7 +12618,9 @@ static long iov_at_move(int fd, uintptr_t iov_user, int iovcnt, long long pos, i
  * refused before a byte moves, its total cut at MAX_RW_COUNT, and then move
  * it (`iov_at_move`), a write cut to the whole 2 MiB chunks a sealed tmpfs
  * file lets in (`iov_seal_grow`). A vector of no bytes has the descriptor
- * checked again by the transfer. Returns the bytes moved or a negative errno:
+ * checked again by the transfer, but for a directory's, which is 0, as
+ * Linux's vfs_readv returns before the read. Returns the bytes moved or a
+ * negative errno:
  * -EINVAL for a negative position, a count past IOV_MAX_LOCAL or below 0, a
  * negative length, or a vector whose end would pass 2^63-1; -EBADF or
  * -ESPIPE for a descriptor `pio_entry` refuses; -EFAULT for a vector or a
@@ -12610,8 +12633,9 @@ static long iov_at(int fd, uintptr_t iov_user, int iovcnt, long long pos, int wr
     fd_entry_t *entry = NULL;
     uint32_t wanted, room;
     long rc = pio_entry(fd, write, 0, pos, &entry);
+    int dir = rc == -EISDIR;
 
-    if (rc != 0 && rc != -EISDIR) {
+    if (rc != 0 && !dir) {
         return rc;
     }
     if (iovcnt < 0 || iovcnt > IOV_MAX_LOCAL) {
@@ -12627,6 +12651,9 @@ static long iov_at(int fd, uintptr_t iov_user, int iovcnt, long long pos, int wr
     }
     wanted = (uint32_t)rc;
     if (wanted == 0) {
+        if (dir) {
+            return 0;
+        }
         return write ? ksys_pwrite64(fd, NULL, 0, pos) : ksys_pread64(fd, NULL, 0, pos);
     }
     if ((uint64_t)wanted > 0x7FFFFFFFFFFFFFFFull - (uint64_t)pos) {

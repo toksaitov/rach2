@@ -16,7 +16,9 @@
  * reads nothing at 4 GiB. Then each error, in Linux's order: a negative offset
  * before the descriptor, a pipe, a socket and the terminal that cannot seek, a
  * descriptor open for the other direction, an end past the signed range, and
- * a directory. lseek of a socket and of a pseudo-terminal master is ESPIPE, by
+ * a directory, which read refuses with EISDIR too, while preadv and readv of
+ * no bytes return 0 from it and of bytes EISDIR. lseek of a socket and of a
+ * pseudo-terminal master is ESPIPE, by
  * _llseek and by call 19 (lseek, call 8, on x86-64), as on Linux.
  *
  * preadv and pwritev move a vector at an offset and leave the descriptor's
@@ -26,7 +28,8 @@
  * whole offset in the fourth, it is not read. A vector with a buffer
  * outside user memory is refused before a byte is written, and a negative
  * offset, a count past 1024, a pipe, a descriptor open for the other
- * direction and one not open are refused, the last with no buffers too.
+ * direction and one not open are refused, the last with no buffers too, and
+ * the last two before a count past 1024 or a vector outside user memory.
  * writev to /dev/null of a vector past 2 GiB returns 0x7ffff000, Linux's
  * MAX_RW_COUNT, on x86-64, and on i686, where a length of 2 GiB is a
  * negative ssize_t, fails with EINVAL.
@@ -411,6 +414,35 @@ static int wide_proc_rows(void)
 }
 
 /**
+ * Whether a directory, / and /dev, is refused as Linux refuses it: pread
+ * and read fail with EISDIR for one byte and for none, and pread with an end
+ * past the signed range with EINVAL; preadv and readv return 0 for no bytes
+ * and fail with EISDIR for one.
+ */
+static int directory_refused(void)
+{
+    char buf[8];
+    struct iovec v[1];
+    int dirfd, ok;
+
+    dirfd = open("/", O_RDONLY | O_DIRECTORY);
+    v[0].iov_base = buf;
+    v[0].iov_len = 0;
+    ok = dirfd >= 0 && refused(pread(dirfd, buf, 1, 0), EISDIR) &&
+         refused(pread(dirfd, buf, 0, 0), EISDIR) &&
+         refused(PREAD_WIDE(dirfd, buf, 2, 0xFFFFFFFFL, 0x7FFFFFFFL), EINVAL) &&
+         refused(read(dirfd, buf, 1), EISDIR) && refused(read(dirfd, buf, 0), EISDIR) &&
+         preadv(dirfd, v, 1, 0) == 0 && preadv(dirfd, v, 0, 0) == 0 && readv(dirfd, v, 1) == 0;
+    v[0].iov_len = 1;
+    ok = ok && refused(preadv(dirfd, v, 1, 0), EISDIR) && refused(readv(dirfd, v, 1), EISDIR);
+    close(dirfd);
+    dirfd = open("/dev", O_RDONLY | O_DIRECTORY);
+    ok = ok && dirfd >= 0 && refused(pread(dirfd, buf, 1, 0), EISDIR);
+    close(dirfd);
+    return ok;
+}
+
+/**
  * Check each error, in the order Linux checks for them. Returns 0, or 1 once
  * the failure is reported.
  */
@@ -418,7 +450,7 @@ static int refusal_rows(void)
 {
     char buf[8];
     int pipefd[2];
-    int fd, dirfd;
+    int fd;
     int ok;
 
     if (!refused(pread(999, buf, 1, -1), EINVAL) || !refused(pread(999, buf, 1, 0), EBADF)) {
@@ -465,15 +497,7 @@ static int refusal_rows(void)
         return fail("the other direction, or an end past the signed range");
     }
     report_held();
-    dirfd = open("/", O_RDONLY | O_DIRECTORY);
-    ok = dirfd >= 0 && refused(pread(dirfd, buf, 1, 0), EISDIR) &&
-         refused(pread(dirfd, buf, 0, 0), EISDIR) &&
-         refused(PREAD_WIDE(dirfd, buf, 2, 0xFFFFFFFFL, 0x7FFFFFFFL), EINVAL);
-    close(dirfd);
-    dirfd = open("/dev", O_RDONLY | O_DIRECTORY);
-    ok = ok && dirfd >= 0 && refused(pread(dirfd, buf, 1, 0), EISDIR);
-    close(dirfd);
-    if (!ok) {
+    if (!directory_refused()) {
         return fail("a directory");
     }
     report_held();
@@ -935,8 +959,9 @@ static int writev_empty(void)
     ok = full >= 0 && sock >= 0 && rd >= 0 && writev(full, v, 0) == 0 && writev(full, v, 1) == 0 &&
          writev(sock, v, 0) == 0 && writev(sock, v, 1) == 0 && refused(writev(999, v, 0), EBADF) &&
          refused(writev(999, v, 1025), EBADF) && refused(writev(999, KERNEL_ADDRESS, 1), EBADF) &&
-         refused(writev(rd, v, 0), EBADF) && refused(writev(rd, v, 1), EBADF) && ep >= 0 &&
-         refused(writev(ep, v, 0), EINVAL) && refused(writev(ep, v, 1), EINVAL) &&
+         refused(writev(rd, v, 0), EBADF) && refused(writev(rd, v, 1), EBADF) &&
+         refused(writev(rd, v, 1025), EBADF) && refused(writev(rd, KERNEL_ADDRESS, 1), EBADF) &&
+         ep >= 0 && refused(writev(ep, v, 0), EINVAL) && refused(writev(ep, v, 1), EINVAL) &&
          refused(writev(ep, KERNEL_ADDRESS, 1), EINVAL) && refused(writev(ep, v, 1025), EINVAL) &&
          refused(write(ep, "x", 1), EINVAL);
     close(ep);
@@ -971,10 +996,11 @@ static int vector_refusal_rows(void)
     in[0].iov_len = sizeof(two);
     ok = refused(preadv(fd, in, 1, -1), EINVAL) && refused(preadv(fd, in, -1, 0), EINVAL) &&
          refused(preadv(fd, in, 1025, 0), EINVAL) && refused(preadv(999, in, 1, 0), EBADF) &&
-         refused(preadv(999, in, 0, 0), EBADF);
+         refused(preadv(999, in, 0, 0), EBADF) && refused(preadv(999, in, 1025, 0), EBADF);
     close(fd);
     fd = open(FILE_PATH, O_RDONLY);
-    ok = ok && fd >= 0 && refused(pwritev(fd, out, 1, 0), EBADF);
+    ok = ok && fd >= 0 && refused(pwritev(fd, out, 1, 0), EBADF) &&
+         refused(pwritev(fd, KERNEL_ADDRESS, 1, 0), EBADF);
     close(fd);
     ok = ok && pipe(pipefd) == 0 && refused(preadv(pipefd[0], in, 1, 0), ESPIPE) &&
          refused(pwritev(pipefd[1], out, 1, 0), ESPIPE);
