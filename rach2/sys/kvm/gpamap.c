@@ -111,9 +111,10 @@ static const struct mmn_ops map_ops = {map_invalidate};
 #define GPAMAP_MAX_PAGES 0x7FFFFFFFu
 
 /** Check the runs and count their pages and the parts the slots cut them
- * into: 0 with the counts in `*pages` and `*parts`, -EINVAL or -EFAULT as
- * `kvm_gpamap_new` says, or -ENOMEM when the parts would reach 2^32 - 1,
- * more than `nruns` counts. */
+ * into: 0 with the counts in `*pages` and `*parts`, or -EINVAL or -EFAULT
+ * as `kvm_gpamap_new` says. A part holds a page at least, and a map at most
+ * GPAMAP_MAX_PAGES, so the parts cannot reach 2^32 - 1; the -ENOMEM at that
+ * count only guards `*parts` against overflow. */
 static int count_parts(struct kvm_vm *vm, const struct kvm_gpa_run *runs, uint32_t n,
                        uint64_t *pages, uint32_t *parts)
 {
@@ -136,7 +137,7 @@ static int count_parts(struct kvm_vm *vm, const struct kvm_gpa_run *runs, uint32
             take = v.base_gfn + v.npages - gfn;
             take = take < left ? take : left;
             if (*parts == 0xFFFFFFFFu) {
-                return -ENOMEM;
+                return -ENOMEM; /* overflow guard; GPAMAP_MAX_PAGES keeps it unreached */
             }
             (*parts)++;
         }

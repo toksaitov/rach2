@@ -1538,8 +1538,7 @@ struct kvm_gpa_run {
  * -EFAULT for a page in no slot, in a read-only one, not present, not
  * ordinary RAM or in a memfd_secret region, which cannot be shared, and
  * for every page once the maker's address space has ended, which leaves no
- * range on its notice; -ENOMEM, also when the slots cut the runs into
- * 2^32 - 1 parts or more.
+ * range on its notice; -ENOMEM.
  */
 int kvm_gpamap_new(struct kvm_vm *vm, const struct kvm_gpa_run *runs, uint32_t n,
                    void (*revoke)(void *owner), void *owner, struct kvm_gpamap **out);
