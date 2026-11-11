@@ -500,12 +500,20 @@ Only then does the process take the new address space.
 First every other thread of the process is sent
 .Dv SIGKILL ,
 and the call waits until they have ended.
-Only
+Only a signal fatal to the process ends this wait:
+.Dv SIGKILL ,
+or a signal sent to the process or to one of its threads whose action is
+the default and ends the process without a core dump, such as
+.Dv SIGTERM ,
+when a thread that would take it does not block it and the process is not
+traced, which sends every thread
 .Dv SIGKILL
-ends this wait: the call fails with
+as on Linux.
+The call then fails with
 .Er EAGAIN
 and the caller dies before returning to user mode, without committing the
-new image, as on Linux.
+new image, and the process ends with the status of the signal that ended
+it, as on Linux.
 A process that is ending, or one in which another thread's
 .Fn execve
 has begun that wait, has sent the caller
@@ -640,9 +648,8 @@ mount other than to a link of
 whose descriptor is open on a file, or another user's descriptor was
 named so.
 .It Bq Er EAGAIN
-The caller received
-.Dv SIGKILL
-while waiting for the other threads to end, the process is ending, or
+A signal fatal to the process arrived
+while the caller waited for the other threads to end, the process is ending, or
 another thread's
 .Fn execve
 is waiting for the process's other threads to end; the caller has
