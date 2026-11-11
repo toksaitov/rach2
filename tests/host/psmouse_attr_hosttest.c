@@ -1396,6 +1396,8 @@ static void protocol_rows(void)
           store(1, "protocol", "lifebook") == -EINVAL && store(1, "protocol", "PS2++") == -EINVAL);
     CHECK("a protocol write keeps its embedded NUL in the length",
           store_bytes(1, "protocol", "bare\0junk", 9) == -EINVAL);
+    CHECK("a protocol write cannot include its terminating NUL",
+          store_bytes(1, "protocol", "bare", 5) == -EINVAL);
     CHECK("a refused name leaves the protocol", protocol == PROTO_IMEX && aux_mouse.reporting);
     CHECK("the alias imps is taken", store(1, "protocol", "imps") == 4);
     CHECK("and the mouse speaks ImPS/2",
