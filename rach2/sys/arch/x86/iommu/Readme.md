@@ -20,7 +20,7 @@ Words of the boot line change this, as Linux's do ([the command line](../../../.
 
 With both words, as on Linux, no unit is programmed: each unit's version, capabilities and status are read and logged, translation is turned off only if the firmware left it on, and nothing else is written. The log says `vtd: off by intel_iommu=off intremap=off: N units read`.
 
-A blocked DMA request or interrupt is logged with Linux's words for its reason, up to 32 for each unit, and every one is counted in `/proc/stat` (`iommu_dma_faults`, `iommu_irq_faults`):
+A blocked DMA request or interrupt is logged with Linux's words for its reason, up to 32 for each unit, and every one recorded is counted in `/proc/stat` (`iommu_dma_faults`, `iommu_irq_faults`). The handler reads records while they stay full, as Linux's `dmar_fault`, so that a fault recorded while it runs is read in the same pass. A fault that finds every record full is lost; the unit says so only by its overflow bit, which counts as one DMA fault and is logged as `vtd: fault: dmarN: faults lost, every record full: K times, so F DMA faults is a floor`:
 
     vtd: fault: dmar0: dma write from 0:2.0 at 0x200000: reason 0x5, PTE Write access is not set
     vtd: fault: dmar0: interrupt from 0:1f.2, index 0x3: reason 0x26, Blocked an interrupt request due to source-id verification failure
