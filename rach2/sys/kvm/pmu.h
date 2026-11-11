@@ -8,6 +8,10 @@
 #define KVM_PMU_GP_MAX    8u
 #define KVM_PMU_FIXED_MAX 3u
 
+/* A guest counter's slot: general counter i is slot i, and fixed counter j
+ * slot KVM_PMU_GP_MAX + j. */
+#define KVM_PMU_SLOTS (KVM_PMU_GP_MAX + KVM_PMU_FIXED_MAX)
+
 /* The most last-branch records a legacy LBR stack has: Skylake's 32. */
 #define KVM_LBR_MAX 32u
 
@@ -30,11 +34,13 @@ struct kvm_pmu {
     uint32_t run_gp, run_fixed; /* counters enabled for the next entry */
     int core_ext;               /* AMD's extended CTL/CTR aliases */
     int pmi;                    /* an overflow waits for delivery under the big lock */
-    /* The physical counter each running general counter has during an
-     * entry, and the physical counts read before it, for the deltas the
-     * exit adds; fixed counters are their own. */
-    uint8_t phys[KVM_PMU_GP_MAX];
-    uint64_t base[KVM_PMU_GP_MAX], fixed_base[KVM_PMU_FIXED_MAX];
+    /* The physical counter each running counter has during an entry, by
+     * slot: general counter n, or fixed counter n - 32 from 32 on; the
+     * physical counts read before it, for the deltas the exit adds; and
+     * the guest's general counters whose AMD counter merges the next. */
+    uint8_t phys[KVM_PMU_SLOTS];
+    uint64_t base[KVM_PMU_SLOTS];
+    uint32_t pair;
     uint64_t host_global; /* AMD's PerfMonV2 global control before an entry */
     /* VMX's IA32_DEBUGCTL: only LBR, FREEZE_LBRS_ON_PMI, BUS_LOCK_DETECT
      * and RTM_DEBUG are kept. */
@@ -53,9 +59,10 @@ struct kvm_pmu_msr {
     uint64_t value;
 };
 
-/** Discover the host PMU and its LBR stack once at boot, after the backend
- * is chosen. The host's own user, the hard-lockup detector, keeps the
- * counter it has enabled; a guest's counters run on the others. */
+/** Discover the host PMU, its event constraints and its LBR stack once at
+ * boot, after the backend is chosen. The host's own user, the hard-lockup
+ * detector, keeps the counter it has enabled; a guest's counters run on
+ * the others that their events may use. */
 void kvm_pmu_start(void);
 
 /** Whether the host has usable performance counters. */
@@ -121,7 +128,8 @@ uint64_t kvm_pmu_vmcs_debugctl(const struct kvm_vcpu *v);
 
 /** Load/stop AMD's physical counters with interrupts off, outside the
  * big lock. Selectors use GuestOnly and never enable a physical PMI; a
- * counter the host has enabled is left alone. */
+ * counter the host has enabled is left alone, and each guest counter runs
+ * on one its event may use. */
 void kvm_pmu_svm_enter(struct kvm_vcpu *v);
 void kvm_pmu_svm_exit(struct kvm_vcpu *v);
 
@@ -132,13 +140,15 @@ void kvm_pmu_svm_exit(struct kvm_vcpu *v);
 /**
  * Program Intel's counters for an entry, with interrupts off, and build the
  * guest's load/store list and the host's load list, of at most
- * KVM_PMU_LIST_MAX entries each; their lengths go to `*ng` and `*nh`. The
- * selectors and FIXED_CTRL are written here, gated by the global control,
- * and no counter is written: each running counter's count is read now and
- * again after the exit. `global`, when not NULL, receives the guest's and
- * the host's IA32_PERF_GLOBAL_CTRL for the VMCS's load controls; otherwise
- * the lists switch it. The guest's LBR stack is in the lists while its
- * DEBUGCTL.LBR is set.
+ * KVM_PMU_LIST_MAX entries each; their lengths go to `*ng` and `*nh`. Each
+ * running guest counter, general or fixed, takes a physical counter the
+ * host does not hold and its event may use. The selectors and FIXED_CTRL,
+ * whose host fields are kept, are written here, gated by the global
+ * control, and no counter is written: each running counter's count is read
+ * now and again after the exit. `global`, when not NULL, receives the
+ * guest's and the host's IA32_PERF_GLOBAL_CTRL for the VMCS's load
+ * controls; otherwise the lists switch it. The guest's LBR stack is in the
+ * lists while its DEBUGCTL.LBR is set.
  */
 void kvm_pmu_vmx_enter(struct kvm_vcpu *v, struct kvm_pmu_msr *guest, struct kvm_pmu_msr *host,
                        uint32_t *ng, uint32_t *nh, uint64_t *global);
