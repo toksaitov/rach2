@@ -2094,8 +2094,8 @@ static int dir_next(struct ext2_mount *em, struct ext2_node *d, uint32_t *cursor
         if (sc.ino == 0) {
             continue;
         }
-        k_strncpy(ent->name, sc.name, sizeof(ent->name));
-        ent->name[sizeof(ent->name) - 1] = '\0';
+        /* name_len bytes and the NUL, as Linux's dir_emit, fs/ext2/dir.c:311 */
+        k_memcpy(ent->name, sc.name, sc.name_len + 1);
         ent->ino = sc.ino;
         if (em->incompat & EXT2_INCOMPAT_FILETYPE) {
             ent->is_dir = sc.type == EXT2_FT_DIR;
