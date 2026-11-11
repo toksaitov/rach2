@@ -1400,14 +1400,19 @@ static void wsi_sync_files(void)
  * The parser's shadow in the GT's pool, after `parser`'s rows, with its batch
  * `b` and its call `a`: the shadow's pages and a closed batch's live until
  * the retire; the shadow then stays in the pool, idle, for the next batch,
- * which takes it with no new page. A retire pass's trim keeps it for a
- * second from when it first finds it idle, and a trim of the idle ones
- * frees it, as Linux's pool_retire and pool_free_older_than
- * (gt/intel_gt_buffer_pool.c:37-85,98-122).
+ * which takes it with no new page. The shrinker drops an idle shadow
+ * first, and no new shadow goes in the pool of a GT wedged for good. A
+ * retire pass's trim keeps a shadow for a second from when it first finds
+ * it idle, not from its take, and drops it once it has been idle a second,
+ * as Linux's pool_retire and pool_free_older_than
+ * (gt/intel_gt_buffer_pool.c:37-85,98-122): its take 600 ms before the first
+ * trim and a second trim 600 ms after the first keep it, where an age run
+ * from the take would drop it at the second, and a third trim a second after
+ * the first frees it.
  */
 static void parser_pool(uint32_t b, struct drm_i915_gem_execbuffer2 *a)
 {
-    struct drm_i915_gem_object *kept;
+    struct drm_i915_gem_object *kept, *got = 0;
     uint32_t frames;
 
     i915_gem_pool_trim(dev_a, I915_POOL_ALL);
@@ -1421,19 +1426,35 @@ static void parser_pool(uint32_t b, struct drm_i915_gem_execbuffer2 *a)
     CHECK(kept && kept->pool_next == 0 && kept->base.refs == 1u &&
               (uint32_t)frames_live == frames + 1u,
           "parser: the shadow kept in the pool, idle, once the request retires");
+    CHECK(i915_gem_shrinker_scan(&dev_a->gem.shrinker.base, 1u, 0) >= 1u &&
+              dev_a->gt.pool[0] == 0 && (uint32_t)frames_live == frames,
+          "parser: the shrinker frees an idle shadow");
+    dev_a->gt.wedged_terminal = 1;
+    CHECK(pool_get(dev_a, 8u + I915_CMD_PARSER_TRAMPOLINE_SIZE, &got) == -EIO && got == 0 &&
+              dev_a->gt.pool[0] == 0 && (uint32_t)frames_live == frames,
+          "parser: a GT wedged for good takes no new shadow into its pool");
+    dev_a->gt.wedged_terminal = 0;
+    CHECK(execbuf(a) == 0 && (uint32_t)frames_live == frames + 1u,
+          "parser: a new shadow once the GT may run again");
+    idle();
+    kept = dev_a->gt.pool[0];
+    CHECK(kept && kept->pool_next == 0 && kept->base.refs == 1u,
+          "parser: and it is kept in the pool, idle");
     CHECK(execbuf(a) == 0 && dev_a->gt.pool[0] == kept && kept->pool_next == 0 &&
               kept->base.refs > 1u && (uint32_t)frames_live == frames + 1u,
           "parser: the next batch takes the same shadow, with no new page");
+    i915_delay_us(0, 600000u);
     close_handle(&file_a, b);
     CHECK((uint32_t)frames_live == frames + 1u, "parser: the closed batch held while it runs");
     idle();
     CHECK(i915_gem_pool_trim(dev_a, I915_POOL_STALE) == 0 && dev_a->gt.pool[0] == kept,
-          "parser: a retire pass's trim keeps a shadow it first finds idle");
-    i915_delay_us(0, 999000u);
+          "parser: a retire pass's trim keeps a shadow it first finds idle, 600 ms after its take");
+    i915_delay_us(0, 600000u);
     CHECK(i915_gem_pool_trim(dev_a, I915_POOL_STALE) == 0 && dev_a->gt.pool[0] == kept,
-          "parser: and keeps it while it has been idle less than a second");
-    CHECK(i915_gem_pool_trim(dev_a, I915_POOL_IDLE) == 1u && dev_a->gt.pool[0] == 0,
-          "parser: a trim of the idle ones frees its page");
+          "parser: and keeps it 600 ms later, its idle time counted from that trim");
+    i915_delay_us(0, 400000u);
+    CHECK(i915_gem_pool_trim(dev_a, I915_POOL_STALE) == 1u && dev_a->gt.pool[0] == 0,
+          "parser: a retire pass's trim frees it once it has been idle a second");
     CHECK((uint32_t)frames_live == frames - 1u,
           "parser: both freed once the request retires and the pool is trimmed");
 }
