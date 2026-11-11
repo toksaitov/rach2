@@ -2084,6 +2084,22 @@ include tests/system/games/rules.mk
 # bus, and no refused call in pressure-vessel's log that the stored Linux
 # reference's lacks. It reads the payload games-wine makes.
 
+# `tests/run save-update`: a Wine prefix and a save that rach2-game writes on
+# a data partition made as rach2-install --data makes it, kept across a cold
+# restart into a new copy of the GNU root: the prefix used again with its
+# registry value, the save loaded through it and through a new prefix, and the
+# volume clean. Its payload is save.py with the runner it imports.
+$(GAMES_DIR)/save.ext2: tests/system/games/save.py tests/system/games/run.py \
+                        tests/system/games/wm.py
+	@set -e; work=; \
+	trap '[ -z "$$work" ] || rm -rf "$$work"; rm -f "$@.tmp"' EXIT; \
+	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; \
+	mkdir -p build/tmp $(@D); work=$$(mktemp -d build/tmp/rach2-save-image.XXXXXX); \
+	cp $^ "$$work/"; \
+	mke2fs -q -t ext2 -F -b 4096 -O none,filetype,sparse_super,large_file \
+	    -d "$$work" $@.tmp 1024; \
+	mv $@.tmp $@
+
 # `tests/run desktop`: an ordinary headless Weston session at boot, input
 # discovery, and browser and ALSA tones measured through OSS loopback; Weston
 # at boot on bochs with Pixman and on virtio-gpu with GL, the browsers taking
