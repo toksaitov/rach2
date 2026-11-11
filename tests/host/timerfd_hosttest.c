@@ -97,6 +97,13 @@ uint64_t rtc_ticks_now(void)
 {
     return kernel_ticks + tick_pending;
 }
+
+/** Real time's nanoseconds as the monotonic clock's
+ * (`rtc_real_to_mono_ns`): the same, since no row slews the clock. */
+int64_t rtc_real_to_mono_ns(int64_t ns)
+{
+    return ns;
+}
 /* How far into its tick the clock is, which the phase rows set; half a
  * tick otherwise. */
 static uint32_t model_phase_ns = NS_PER_TICK / 2;

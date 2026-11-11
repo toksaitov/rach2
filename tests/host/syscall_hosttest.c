@@ -352,13 +352,18 @@ int64_t rtc_boot_epoch(void)
     return model_epoch;
 }
 
-/** Real time less time since boot, which a deadline of real time is counted
- * from; with `step_after_offset`, the clock is set once this reading is
- * taken. */
-void rtc_offset(int64_t *seconds, int32_t *nanoseconds)
+/** The time since boot at which real time reaches `sec` and `nsec`
+ * (`rtc_mono_of_real`): that time less the offset, real time less time
+ * since boot, since no row slews the clock; with `step_after_offset`, the
+ * clock is set once this reading is taken. */
+void rtc_mono_of_real(int64_t sec, int32_t nsec, int64_t *mono_sec, int32_t *mono_nsec)
 {
-    *seconds = model_epoch;
-    *nanoseconds = model_epoch_ns;
+    *mono_sec = sec - model_epoch;
+    *mono_nsec = nsec - model_epoch_ns;
+    if (*mono_nsec < 0) {
+        *mono_nsec += 1000000000;
+        (*mono_sec)--;
+    }
     if (step_after_offset != 0) {
         model_step(step_after_offset);
         step_after_offset = 0;
@@ -1842,12 +1847,13 @@ static void ask_rt_sleep(isr_params_t *p, uint64_t tick)
  * 1000001 s, until 10 ms past that: a step back of a second during the sleep
  * wakes it at the next tick, which counts its tick again and sleeps on to
  * 2010; a step forward of a second past the time ends it at that tick; and a
- * step right after the sleep reads the clock's offset, before it blocks,
- * sends it to count again without a block, so that it blocks once, until
- * 2010. A sleep until 1000012 s counts the offset to the nanosecond, as
- * Linux subtracts its base's whole offset (kernel/time/hrtimer.c:922, 2140):
- * after a step of half a second forward it sleeps on to tick 11500, and
- * after one of half a second back to tick 12500.
+ * step right after the sleep turns its time into time since boot
+ * (`rtc_mono_of_real`), before it blocks, sends it to count again without
+ * a block, so that it blocks once, until 2010. A sleep until 1000012 s
+ * counts the offset to the nanosecond, as Linux subtracts its base's whole
+ * offset (kernel/time/hrtimer.c:922, 2140): after a step of half a second
+ * forward it sleeps on to tick 11500, and after one of half a second back
+ * to tick 12500.
  */
 static void realtime_steps(void)
 {

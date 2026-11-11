@@ -15,8 +15,9 @@
  * the clock wakes the sleep at the next tick, which the model takes as now;
  * a condition that does not see the setting sends the sleep on to the tick
  * it was armed for. Setting the clock moves its time and its step count
- * (`rtc_step_count`). A wait called a hundred times fails its row and
- * ends with EINTR, so that a sleep that never ends cannot hang the test.
+ * (`rtc_step_count`); otherwise real time goes on with the tick. A wait
+ * called a hundred times fails its row and ends with EINTR, so that a sleep
+ * that never ends cannot hang the test.
  */
 #include "ipc/mqueue.c"
 
@@ -32,11 +33,13 @@ static int calls; /* the calls of the wait since the row began */
 /* The tick and the step count the last wait was armed with. */
 static uint64_t armed;
 static uint32_t armed_steps;
-/* The real-time clock's time in seconds and its step count, and the seconds
- * a setting moves it by in the next wait; 0 for none. */
+/* The real-time clock's time in seconds at tick 2000 and its step count,
+ * the seconds a setting moves it by in the next wait, 0 for none, and how
+ * far real time falls behind the tick, for the slew row. */
 static int64_t rt_sec = 100;
 static uint32_t rt_steps = 1u;
 static int64_t step_in_wait;
+static int64_t rt_lag_ns;
 
 /** Count and print a failure when `c` is false. */
 #define CHECK(c, detail)                               \
@@ -59,11 +62,31 @@ uint32_t rtc_step_count(void)
     return rt_steps;
 }
 
-/** The real time: `rt_sec`, on the second. */
+/** The real time: `rt_sec` at tick 2000, where each row starts, and on
+ * with the tick from there, `rt_lag_ns` behind it once the tick has moved,
+ * as a clock slewed slower than the tick falls behind during a wait. */
 void get_current_time(int64_t *seconds, int64_t *nanoseconds)
 {
-    *seconds = rt_sec;
-    *nanoseconds = 0;
+    int64_t ns = ((int64_t)kernel_ticks - 2000) * TICK_NS;
+
+    if (ns > 0) {
+        ns -= rt_lag_ns;
+    }
+
+    *seconds = rt_sec + ns / 1000000000;
+    *nanoseconds = ns % 1000000000;
+    if (*nanoseconds < 0) {
+        *nanoseconds += 1000000000;
+        (*seconds)--;
+    }
+}
+
+/** The ticks in which real time goes on by `sec` and `nsec`
+ * (`rtc_real_span`): the tick's own, since no row slews the clock's rate
+ * as the kernel counts it. */
+uint64_t rtc_real_span(int64_t sec, uint32_t nsec)
+{
+    return tick_span(sec, nsec);
 }
 
 /** A setting of the real-time clock `sec` seconds on from where it is, as
@@ -145,6 +168,8 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
         if (!cond(arg)) {
             kernel_ticks = armed;
         }
+    } else {
+        kernel_ticks = armed;
     }
     return 0;
 }
@@ -261,7 +286,10 @@ static void deadline(struct mq_wait *w, int64_t at)
  * sleep is counted before the sleep: back, the wait sleeps to the time as
  * set; forward past it, it ends without a sleep. Each is Linux's hrtimer of
  * CLOCK_REALTIME, which clock_was_set moves (ipc/mqueue.c:728-729,
- * kernel/time/hrtimer.c:951-987).
+ * kernel/time/hrtimer.c:951-987). A wait whose tick comes while a clock
+ * slewed slower than the tick is still short of the time counts again and
+ * sleeps on, since Linux's hrtimer never expires before its clock reaches
+ * its time.
  */
 static void realtime_steps(void)
 {
@@ -299,6 +327,14 @@ static void realtime_steps(void)
     CHECK(mq_sleep(&q, &w) == -ETIMEDOUT && waits == 0,
           "a step forward past the time before the sleep ends it without one");
     CHECK(self.wakeup_tick == 0 && self.rt_steps == 0, "the wait leaves no deadline behind");
+
+    rt_sec = 100;
+    rt_lag_ns = 1500000;
+    deadline(&w, 101);
+    w.q = &q;
+    CHECK(mq_sleep(&q, &w) == -ETIMEDOUT && waits == 2 && armed == 3002u,
+          "a wait whose tick comes before a slewed clock reaches its time sleeps on to it");
+    rt_lag_ns = 0;
 }
 
 /** Run the rows; 0 when every check passed, 1 otherwise. */
