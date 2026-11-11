@@ -229,6 +229,7 @@ struct i915_irq {
     uint8_t installed;
     void (*deferred)(struct drm_i915_private *i915);
     void (*deferred_display)(struct drm_i915_private *i915);
+    uint32_t inflight; /* handlers running now, under i915_pci.c's table lock */
 };
 
 /* The engines the driver starts, by index into `engine`: the render,
@@ -1750,6 +1751,15 @@ void i915_irq_mask_locked(struct drm_i915_private *i915, int bank, uint32_t bits
  * disables. Any context the handler runs in.
  */
 void i915_irq_handle(struct drm_i915_private *i915);
+
+/**
+ * Wait until no handler of `i915`'s message runs on another processor,
+ * Linux's synchronize_irq: the message's handler runs without the big
+ * lock, so a teardown that clears a hook or frees what a handler reaches
+ * waits here after it has made the handler stop reaching it. Process
+ * context.
+ */
+void i915_irq_sync(struct drm_i915_private *i915);
 
 /* ---- i915_ring.c ---- */
 

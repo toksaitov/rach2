@@ -399,7 +399,10 @@ void intel_vblank_fini(struct drm_i915_private *i915)
     int pipe;
 
     i915_irq_unregister(i915, I915_IRQ_DE, de_bits());
+    flags = spin_lock_irqsave(&i915->irq.lock);
     i915->irq.deferred_display = 0;
+    spin_unlock_irqrestore(&i915->irq.lock, flags);
+    i915_irq_sync(i915);
     flags = spin_lock_irqsave(&i915->drm.event_lock);
     for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
         intel_crtc_send_event(&i915->display.crtc[pipe]);

@@ -1639,18 +1639,19 @@ static void dev_work_unlink(struct drm_work *work)
     work->queued = 0;
 }
 
-void drm_dev_work_cancel(struct drm_work *work)
+int drm_dev_work_cancel(struct drm_work *work)
 {
     uint32_t flags = spin_lock_irqsave(&work_lock);
     struct drm_device *dev = work->dev;
 
     if (!work->queued) {
         spin_unlock_irqrestore(&work_lock, flags);
-        return;
+        return 0;
     }
     dev_work_unlink(work);
     spin_unlock_irqrestore(&work_lock, flags);
     drm_dev_put(dev);
+    return 1;
 }
 
 /** Run the queued drivers' works whose time has come, each once; the

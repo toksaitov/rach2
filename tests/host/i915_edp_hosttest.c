@@ -872,3 +872,9 @@ int main(void)
     }
     return failures != 0;
 }
+
+/** Nothing to wait for: the model's handler runs only when a row calls it. */
+void i915_irq_sync(struct drm_i915_private *i915)
+{
+    (void)i915;
+}

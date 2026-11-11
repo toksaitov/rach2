@@ -630,6 +630,14 @@ void register_isr_handler(uint8_t vector, isr_handler_t h, const char *name)
     handler_vector = vector;
 }
 
+/** Take the handler's flag, which a test of one thread does not need. */
+void isr_register_flags(uint8_t vector, isr_handler_t handler, unsigned int flags)
+{
+    (void)vector;
+    (void)handler;
+    (void)flags;
+}
+
 /* ---- /sys: the entries drivers add, as fs/sysfs.h has them ---- */
 
 #define SYS_NODES 32
