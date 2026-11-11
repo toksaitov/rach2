@@ -656,9 +656,12 @@ int kd_translates(void)
 
 void kd_scroll_lock(int stopped)
 {
-    uint32_t flags = spin_lock_irqsave(&kd_lock);
-    unsigned int old = kd_kb.ledflags, now;
+    uint32_t flags;
+    unsigned int old, now;
 
+    kd_init();
+    flags = spin_lock_irqsave(&kd_lock);
+    old = kd_kb.ledflags;
     if (stopped) {
         kd_kb.ledflags |= KM_LED_SCROLL;
     } else {
