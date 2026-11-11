@@ -336,7 +336,11 @@ int tty_lookahead(struct tty *t, unsigned char c, int echo)
  * input or write does, as on Linux. TCIOFF and TCION give their character
  * to the sink without output processing, as the driver's write does, and
  * restart and stop output again around it when VSTOP stopped it, which a
- * pty's master in packet mode sees as TIOCPKT_START and TIOCPKT_STOP.
+ * pty's master in packet mode sees as TIOCPKT_START and TIOCPKT_STOP. Under
+ * TCOOFF's stop, which start_tty does not lift, a sink with a `room`, a
+ * pty's, takes nothing, as Linux's pty_write refuses while stopped, and the
+ * console's screen and COM1 take the character, as Linux's con_write and
+ * uart_send_xchar write through any stop.
  */
 int tty_tcflow(struct tty *t, int action)
 {
@@ -358,15 +362,17 @@ int tty_tcflow(struct tty *t, int action)
         n_tty_start(ld);
     } else if (action == TTY_TCIOFF || action == TTY_TCION) {
         c = ld->tio.c_cc[action == TTY_TCIOFF ? VSTOP : VSTART];
-        if (c != 0 && !ld->tco_stopped) {
-            if (was && t->flow) {
+        if (c != 0 && (!ld->tco_stopped || !t->room)) {
+            int lift = was && !ld->tco_stopped;
+
+            if (lift && t->flow) {
                 t->flow(t, TTY_FLOW_START);
             }
             t->sink(t->sink_ctx, c);
             if (t->flow) {
                 t->flow(t, TTY_FLOW_DATA);
             }
-            if (was && t->flow) {
+            if (lift && t->flow) {
                 t->flow(t, TTY_FLOW_STOP);
             }
         }

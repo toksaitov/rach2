@@ -138,9 +138,11 @@ made.
 and
 .Dv VSTART
 characters as output, also while output is stopped by
-.Dv VSTOP ,
-but not while it is stopped by
-.Dv TCOOFF ;
+.Dv VSTOP .
+While it is stopped by
+.Dv TCOOFF ,
+the console still sends them, as Linux's console and serial line do, and
+a pseudo-terminal slave sends nothing, as Linux's does;
 a disabled character sends nothing.
 Other values are
 .Er EINVAL .
