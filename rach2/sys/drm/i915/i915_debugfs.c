@@ -1516,14 +1516,19 @@ static int32_t hangcheck_show(void *data, char *buf, uint32_t cap)
     return emit_end(&e);
 }
 
-/** A write of i915_params/enable_hangcheck, as debugfs's bool:
- * kstrtobool's words, or -EINVAL. */
+/**
+ * A write of i915_params/enable_hangcheck, as debugfs's bool: kstrtobool's
+ * words, or -EINVAL. Turned on, it disarms every engine under the GEM lock,
+ * so that no beat judges a request armed before hangcheck went off: Linux's
+ * heartbeat drops its request while the parameter is off
+ * (gt/intel_engine_heartbeat.c:234-238 in 6.12.115).
+ */
 static int32_t hangcheck_store(void *data, const char __user *buf, uint32_t len)
 {
     struct drm_i915_private *i915 = (struct drm_i915_private *)data;
     char text[24];
     int32_t rc;
-    int b = 0;
+    int b = 0, i, taken;
 
     rc = copy_write(buf, len, text, sizeof(text));
     if (rc >= 0) {
@@ -1532,7 +1537,14 @@ static int32_t hangcheck_store(void *data, const char __user *buf, uint32_t len)
     if (rc < 0) {
         return rc;
     }
+    taken = i915_gem_lock(i915);
+    if (b && i915->params.hangcheck_off) {
+        for (i = 0; i < I915_NUM_ENGINES; i++) {
+            i915->gt.engine[i].hc_armed = 0;
+        }
+    }
     i915->params.hangcheck_off = (uint8_t)!b;
+    i915_gem_unlock(i915, taken);
     return (int32_t)len;
 }
 
