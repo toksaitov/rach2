@@ -44,8 +44,9 @@
 # until they make the race's time, each giving at most 50 ms of it, as its main
 # loop gives.
 #
-# OUT (.) gets the record, the game's log, `hud`, every frame time the HUD
-# wrote, one a line, `frametimes`, the window's, and `summary`, a line each:
+# OUT (.) gets the record, the game's log, 0 A.D.'s own logs in `0ad-logs`,
+# `hud`, every frame time the HUD wrote, one a line, `frametimes`, the
+# window's, and `summary`, a line each:
 # the window's first and last frame of the dump and its seconds, the frames,
 # the mean frame rate, the median, 90th, 99th and 99.9th percentiles and the
 # largest frame time, in milliseconds, and the frames over 16.7, 33.3, 50 and
@@ -230,9 +231,18 @@ case $game in
         done
         game_stop
         end=window
+        # The engine names the GL renderer in its own logs, not on its
+        # output: system_info.txt's "Video Card" line.
+        if [ -d "$HOME/.config/0ad/logs" ]; then
+            cp -R "$HOME/.config/0ad/logs" "$out/0ad-logs"
+        fi
         ;;
 esac
-runner_record "renderer $(sed -n 's/.*\(GL_RENDERER\|OpenGL renderer\)[^:=]*[:=] *//p' "$log" | head -n 1)"
+renderer=$(sed -n 's/.*\(GL_RENDERER\|OpenGL renderer\)[^:=]*[:=] *//p' "$log" | head -n 1)
+if [ -z "$renderer" ] && [ -r "$out/0ad-logs/system_info.txt" ]; then
+    renderer=$(sed -n 's/^Video Card *: *//p' "$out/0ad-logs/system_info.txt" | head -n 1)
+fi
+runner_record "renderer $renderer"
 runner_finish
 
 [ -n "$(ls "$RUNNER_WORK/hud")" ] || runner_die "the HUD wrote no frame times"
