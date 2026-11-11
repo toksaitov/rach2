@@ -236,6 +236,7 @@ C_SRC_SHARED = kernel.c \
     sys/lib/kstring.c \
     sys/lib/idset.c \
     sys/lib/spinlock.c \
+    sys/lib/lockdep.c \
     sys/lib/krandom.c \
     sys/lib/ksha256.c \
     $(DRM_C_SRC) \

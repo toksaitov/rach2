@@ -622,6 +622,12 @@ struct process {
      * A post marks only the chosen thread; only that thread recomputes it
      * after changing its mask or taking signals. */
     uint32_t sig_woken;
+#ifdef RACH2_LOCKDEP
+    /* The sleeping locks this thread holds, which it keeps across its
+     * sleeps, for the lock-order checker (lib/lockdep.c); its spinlocks are
+     * its processor's (`percpu.lockdep_spin`). */
+    struct lockdep_held lockdep;
+#endif
 };
 
 typedef struct process process_t;
