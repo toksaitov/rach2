@@ -23,7 +23,8 @@ The line is a list of words separated by spaces and tabs (`sys/cmdline.c`). A fl
 | `rach2.fsck` | Read by the recovery image's `init`, not by the kernel: run `e2fsck -p` on every ext2 partition first. The kernel reads it only to keep its records on the screen while that runs. |
 | `rach2.console=term` | Read by `init-login` and `init-metal`, not by the kernel: run the console's login inside `term` on the whole framebuffer, and on the kernel console when the screen has none or `term` fails ([init(8)](../man/man8/init.8)). The sealed disk's menu carries it; no test image does, so the machine cases keep their login on COM1. |
 | `rach2.ip=A.B.C.D/PREFIX`, `rach2.ip=none`, `rach2.gateway=A.B.C.D`, `rach2.ifaddr=MAC,ADDR/PREFIX[,GATEWAY]` | The interfaces' addresses ([the network Readme](sys/network/Readme.md)). Without them the first interface takes QEMU's user-network defaults. |
-| `rach2.netconsole` | Broadcast the log in Ethernet frames once a card is up. |
+| `netconsole=[+][r][src-port]@[src-ip]/[dev],[tgt-port]@<tgt-ip>/[tgt-macaddr]` | Send the log, each record as one UDP datagram, to each target, several separated by `;`, as Linux's netconsole does; of several `netconsole=`, the last ([netconsole(4)](../man/man4/netconsole.4)). |
+| `rach2.netconsole` | Broadcast the log in Ethernet frames once a card is up ([netconsole(4)](../man/man4/netconsole.4)). |
 | `rach2.loglevel=N` | Show records of level `N`, one digit, and more urgent on the screen, in place of `INFO` and more urgent during the boot and `CRIT` alone once init starts. |
 | `consoleblank=N` | Blank the screen and turn its backlights off after `N` seconds without a key or a mouse move, 600 when it is not given and never for 0, as on Linux ([console(4)](../man/man4/console.4)). A value that is not a number of seconds is refused and logged. |
 | `rach2.diag` | Print the boot's diagnostic report again before the first program, and wait for a key. |
