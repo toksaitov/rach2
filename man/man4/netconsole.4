@@ -8,17 +8,33 @@
 .Sy netconsole Ns = Ns Oo Cm + Oc Ns Oo Cm r Oc Ns Oo Ar src-port Oc Ns Cm @ Ns Oo Ar src-ip Oc Ns Cm / Ns Oo Ar dev Oc Ns Cm \&, Ns Oo Ar tgt-port Oc Ns Cm @ Ns Ar tgt-ip Ns Cm / Ns Op Ar tgt-macaddr
 .Pp
 .Sy rach2.netconsole
+.Pp
+.Sy netpoll.carrier_timeout Ns = Ns Ar seconds
 .Sh DESCRIPTION
 The kernel sends the records of its log over the network, so that a
 machine with no serial port leaves a record of its boot and of a panic
 on another machine.
 Every record from the first of the boot is sent, those written before
 the network card started among them: the kernel keeps 32767 characters
-of log until they are sent and drops the newest records whole when that
-store is full.
-A card is sent nothing until its link has been up for two seconds,
-since frames sent the moment a link comes up can be lost beyond the
-card; a kernel that panics sends at once.
+of log until they are sent.
+When that store is full, a target or the frames held for want of a link
+or an address lose their own oldest records, and the others lose none;
+before netconsole starts, the newest records are dropped whole, which
+keeps the boot log.
+.Pp
+Each target and the frames start as Linux's netconsole does, by
+waiting for the card's carrier, for at most
+.Ar seconds
+of
+.Sy netpoll.carrier_timeout= ,
+4 unless the boot line gives another number.
+When the link comes up in that wait, the records held until then are
+sent two seconds later, since frames sent the moment a link comes up can
+be lost beyond the card.
+Later records are sent when they are written, while the link is up; a
+record written while it is down waits for the next record after the
+link comes back.
+A kernel that panics or stops sends what it holds at once.
 The records are sent by calling the card's transmit with interrupts
 off, which waits for the card by polling and not for an interrupt, so
 the record of a panic goes out too.
@@ -73,7 +89,8 @@ sends Linux's extended form instead:
 .Ql level,seq,usec,flags;text ,
 where
 .Ar seq
-counts the records sent to the target from 0,
+numbers the records from 0, those the target lost among them, so that a
+loss shows as a gap,
 .Ar usec
 is the record's time since boot in microseconds,
 .Ar flags
@@ -93,6 +110,9 @@ before its
 after
 .Cm +
 puts the kernel's release and a comma before each message.
+In the plain form, the first record after a loss comes after the line
+.Ql ** N printk messages dropped ** ,
+as Linux sends it.
 .Pp
 A target that cannot be read, or whose interface does not exist, is
 logged and left out; the others are kept.
