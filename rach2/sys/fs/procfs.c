@@ -1446,15 +1446,55 @@ static int procfs_gen_schedstat(struct procfs_text *t, int pid)
     return t->len;
 }
 
-/** The path /proc/<pid>/maps gives region `r` of `mm`: the file it maps,
- * which for the vDSO's two regions is [vvar] or [vdso] (`vdso_map`),
- * [heap], [stack], the program for the segments of its image, which lie
- * below the heap, the dynamic linker for the segments of its own, above it,
- * or none. */
-static const char *maps_path(const struct mm *mm, const vma_t *r)
+/** One mapped file's name for one reading of maps, smaps or numa_maps. */
+struct maps_name {
+    struct vm_file *file; /* held by a reference until `maps_names_free` */
+    char *path;           /* its /proc link target, or NULL with no room */
+};
+
+/** The names `procfs_maps_names` built for the mapped files of a process,
+ * in the order of their regions, so that each region's file is found at or
+ * just before `next`, the entry after the last one found. */
+struct maps_names {
+    struct maps_name *v;
+    uint32_t n;
+    uint32_t next;
+};
+
+/** The name in `mn` of the mapped file `f`, or NULL when it has none. */
+static const char *maps_name_of(struct maps_names *mn, const struct vm_file *f)
 {
+    uint32_t i;
+
+    if (mn->next < mn->n && mn->v[mn->next].file == f) {
+        return mn->v[mn->next++].path;
+    }
+    if (mn->next > 0 && mn->v[mn->next - 1].file == f) {
+        return mn->v[mn->next - 1].path;
+    }
+    for (i = 0; i < mn->n; i++) {
+        if (mn->v[i].file == f) {
+            mn->next = i + 1;
+            return mn->v[i].path;
+        }
+    }
+    return NULL;
+}
+
+/** The path /proc/<pid>/maps gives region `r` of `mm`: the path its object
+ * was given, the name `mn` holds for the file it maps, which for the vDSO's
+ * two regions is [vvar] or [vdso] (`vdso_map`), [heap], [stack], the
+ * program for the segments of its image, which lie below the heap, the
+ * dynamic linker for the segments of its own, above it, or none. */
+static const char *maps_path(const struct mm *mm, const vma_t *r, struct maps_names *mn)
+{
+    const char *name;
+
     if (r->file && r->file->path) {
         return r->file->path;
+    }
+    if (r->file && mn && (name = maps_name_of(mn, r->file)) != NULL) {
+        return name;
     }
     if (r->type == VM_HEAP) {
         return "[heap]";
@@ -1470,60 +1510,91 @@ static const char *maps_path(const struct mm *mm, const vma_t *r)
 
 static void procfs_file_target(struct procfs_text *t, const fd_entry_t *e);
 
+/** Whether `procfs_maps_names` names the file region `r` maps: a mapped
+ * file with an open description and no path of its own. The segments of the
+ * program and of the dynamic linker are left to `maps_path`, which gives
+ * them the paths exec recorded, as their file has no path of its own. */
+static int maps_named(const vma_t *r)
+{
+    return r->file && !r->file->path && r->type != VM_CODE && r->type != VM_DATA &&
+           filemap_entry(r->file);
+}
+
 /**
- * Give each mapped file of process `pid` that has no path yet the path of
- * its file, as its /proc link target gives it: mmap leaves the name to the
- * first reader of maps, smaps or numa_maps, as Linux builds it with d_path
- * only when maps is read (fs/proc/task_mmu.c, show_map_vma), since building
- * an ext2 file's path reads each of its directories. Building a path may
- * sleep and the regions may change meanwhile, so the files are gathered
- * first, each with a reference, and named after; a file a region gained
- * since, or one the heap had no room to name, is shown without a path. The
- * caller looks the process up again afterwards. Nothing for a caller
- * `procfs_may_read_mem` refuses.
+ * Name into `mn` each mapped file of process `pid` that has no path of its
+ * own, with the path its /proc link target gives it from the reader's root,
+ * as Linux's show_map_vma names a region's file with d_path at each reading
+ * (fs/proc/task_mmu.c:258-268, fs/d_path.c:265-286). The names are built for
+ * each reading and kept by none, since a reader with another root sees
+ * another path. Building a path may sleep and the regions may change
+ * meanwhile, so the files are gathered first under the regions' lock, each
+ * with a reference, and named after; a file a region gained since, or one the
+ * heap had no room to name, is shown without a path. `mn` is empty for a
+ * caller `procfs_may_read_mem` refuses and when the heap has no room. The
+ * caller looks the process up again afterwards and frees `mn` with
+ * `maps_names_free`.
  */
-static void procfs_maps_names(int pid)
+static void procfs_maps_names(int pid, struct maps_names *mn)
 {
     process_t *p = procfs_proc(pid);
-    struct vm_file **files;
+    struct mm *mm;
     const vma_t *r;
     uint32_t n = 0, i;
 
+    k_memset(mn, 0, sizeof(*mn));
     if (!p || !p->mm || !procfs_may_read_mem(p)) {
         return;
     }
-    for (r = vm_first(&p->mm->vm); r; r = vm_next(r)) {
-        n += r->file && !r->file->path && filemap_entry(r->file);
+    mm = p->mm;
+    mm_read_begin(mm);
+    for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
+        n += maps_named(r);
     }
-    if (n == 0 || (files = kmalloc(n * sizeof(*files))) == NULL) {
+    mm_read_end(mm);
+    if (n == 0 || (mn->v = kmalloc(n * sizeof(*mn->v))) == NULL) {
         return;
     }
-    n = 0;
-    for (r = vm_first(&p->mm->vm); r; r = vm_next(r)) {
-        if (r->file && !r->file->path && filemap_entry(r->file)) {
+    p = procfs_proc(pid);
+    if (!p || p->mm != mm) {
+        kfree(mn->v);
+        mn->v = NULL;
+        return;
+    }
+    mm_read_begin(mm);
+    for (r = vm_first(&mm->vm); r && mn->n < n; r = vm_next(r)) {
+        if (maps_named(r) && (mn->n == 0 || mn->v[mn->n - 1].file != r->file)) {
             vm_file_get(r->file);
-            files[n++] = r->file;
+            mn->v[mn->n].file = r->file;
+            mn->v[mn->n].path = NULL;
+            mn->n++;
         }
     }
-    for (i = 0; i < n; i++) {
+    mm_read_end(mm);
+    for (i = 0; i < mn->n; i++) {
         struct procfs_text name;
 
-        if (files[i]->path) {
-            continue;
-        }
         procfs_text_init(&name);
-        procfs_file_target(&name, filemap_entry(files[i]));
-        if (!name.nomem && name.len > 0 && !files[i]->path &&
-            (files[i]->path = kmalloc((uint32_t)name.len + 1u)) != NULL) {
-            k_memcpy(files[i]->path, name.buf, (uint32_t)name.len);
-            files[i]->path[name.len] = '\0';
+        procfs_file_target(&name, filemap_entry(mn->v[i].file));
+        if (!name.nomem && name.len > 0 &&
+            (mn->v[i].path = kmalloc((uint32_t)name.len + 1u)) != NULL) {
+            k_memcpy(mn->v[i].path, name.buf, (uint32_t)name.len);
+            mn->v[i].path[name.len] = '\0';
         }
         kfree(name.buf);
     }
-    for (i = 0; i < n; i++) {
-        vm_file_put(files[i]);
+}
+
+/** Free the names of `mn` and drop its references to the files. */
+static void maps_names_free(struct maps_names *mn)
+{
+    uint32_t i;
+
+    for (i = 0; i < mn->n; i++) {
+        kfree(mn->v[i].path);
+        vm_file_put(mn->v[i].file);
     }
-    kfree(files);
+    kfree(mn->v);
+    k_memset(mn, 0, sizeof(*mn));
 }
 
 /** Append the device and inode of the file region `r` of `mm` maps, as stat
@@ -1569,10 +1640,12 @@ static int maps_shared(const vma_t *r)
            (r->type == VM_SHARED || (r->type == VM_FILE && (r->prot & VM_PROT_NOWRITE)));
 }
 
-/** Append region `r` of `mm` as its line of /proc/<pid>/maps. */
-static void ap_maps_line(struct procfs_text *t, const struct mm *mm, const vma_t *r)
+/** Append region `r` of `mm` as its line of /proc/<pid>/maps, naming its
+ * file from `mn` (`maps_path`). */
+static void ap_maps_line(struct procfs_text *t, const struct mm *mm, const vma_t *r,
+                         struct maps_names *mn)
 {
-    const char *path = maps_path(mm, r);
+    const char *path = maps_path(mm, r, mn);
     int start = t->len;
 
     ap_xlow(t, r->start, 8);
@@ -1609,27 +1682,26 @@ static void ap_maps_line(struct procfs_text *t, const struct mm *mm, const vma_t
  */
 static int procfs_gen_maps(struct procfs_text *t, int pid)
 {
+    struct maps_names names;
     process_t *p;
+    int rc;
     struct mm *mm;
     const vma_t *r;
 
-    procfs_maps_names(pid);
+    procfs_maps_names(pid, &names);
     p = procfs_proc(pid);
-    if (!p) {
-        return -ENOENT;
-    }
-    if (!procfs_may_read_mem(p)) {
-        return -EACCES;
+    rc = !p ? -ENOENT : !procfs_may_read_mem(p) ? -EACCES : t->len;
+    if (rc < 0 || !p->mm) {
+        maps_names_free(&names);
+        return rc;
     }
     mm = p->mm;
-    if (!mm) {
-        return t->len;
-    }
     mm_read_begin(mm);
     for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
-        ap_maps_line(t, mm, r);
+        ap_maps_line(t, mm, r, &names);
     }
     mm_read_end(mm);
+    maps_names_free(&names);
     return t->len;
 }
 
@@ -1743,22 +1815,20 @@ static void ap_smaps_flags(struct procfs_text *t, const vma_t *r)
  */
 static int procfs_gen_smaps(struct procfs_text *t, int pid)
 {
+    struct maps_names names;
     process_t *p;
+    int rc;
     struct mm *mm;
     const vma_t *r;
 
-    procfs_maps_names(pid);
+    procfs_maps_names(pid, &names);
     p = procfs_proc(pid);
-    if (!p) {
-        return -ENOENT;
-    }
-    if (!procfs_may_read_mem(p)) {
-        return -EACCES;
+    rc = !p ? -ENOENT : !procfs_may_read_mem(p) ? -EACCES : t->len;
+    if (rc < 0 || !p->mm) {
+        maps_names_free(&names);
+        return rc;
     }
     mm = p->mm;
-    if (!mm) {
-        return t->len;
-    }
     mm_read_begin(mm);
     for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
         unsigned long present, clean, dirty, anon;
@@ -1767,7 +1837,7 @@ static int procfs_gen_smaps(struct procfs_text *t, int pid)
 
         paging_user_count(mm->dir, r->start, r->end, &present, &dirty, &anon);
         clean = present - dirty;
-        ap_maps_line(t, mm, r);
+        ap_maps_line(t, mm, r, &names);
         ap_smaps_kb(t, "Size:", (r->end - r->start) / PAGE_SIZE);
         ap_smaps_kb(t, "KernelPageSize:", 1);
         ap_smaps_kb(t, "MMUPageSize:", 1);
@@ -1786,6 +1856,7 @@ static int procfs_gen_smaps(struct procfs_text *t, int pid)
         ap_smaps_flags(t, r);
     }
     mm_read_end(mm);
+    maps_names_free(&names);
     return t->len;
 }
 
@@ -1821,9 +1892,10 @@ static void ap_numa_policy(struct procfs_text *t, const struct vm_policy *pol)
  * a tab, a space and an equals sign each written as a backslash and three
  * octal digits, as Linux's seq_path writes them; nothing for anonymous
  * memory and for the vDSO's two regions. */
-static void ap_numa_place(struct procfs_text *t, const struct mm *mm, const vma_t *r)
+static void ap_numa_place(struct procfs_text *t, const struct mm *mm, const vma_t *r,
+                          struct maps_names *mn)
 {
-    const char *path = maps_path(mm, r);
+    const char *path = maps_path(mm, r, mn);
 
     if (r->type == VM_HEAP || r->type == VM_STACK) {
         ap_str(t, r->type == VM_HEAP ? " heap" : " stack");
@@ -1872,22 +1944,20 @@ static void ap_numa_count(struct procfs_text *t, const char *name, unsigned long
  */
 static int procfs_gen_numa_maps(struct procfs_text *t, int pid)
 {
+    struct maps_names names;
     process_t *p;
+    int rc;
     struct mm *mm;
     const vma_t *r;
 
-    procfs_maps_names(pid);
+    procfs_maps_names(pid, &names);
     p = procfs_proc(pid);
-    if (!p) {
-        return -ENOENT;
-    }
-    if (!procfs_may_read_mem(p)) {
-        return -EACCES;
+    rc = !p ? -ENOENT : !procfs_may_read_mem(p) ? -EACCES : t->len;
+    if (rc < 0 || !p->mm) {
+        maps_names_free(&names);
+        return rc;
     }
     mm = p->mm;
-    if (!mm) {
-        return t->len;
-    }
     mm_read_begin(mm);
     for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
         const struct vm_policy *pol = mempolicy_at(r, r->start);
@@ -1898,7 +1968,7 @@ static int procfs_gen_numa_maps(struct procfs_text *t, int pid)
         ap_xlow(t, r->start, 8);
         ap_ch(t, ' ');
         ap_numa_policy(t, pol ? pol : p->mempolicy);
-        ap_numa_place(t, mm, r);
+        ap_numa_place(t, mm, r, &names);
         paging_user_frames(mm->dir, r->start, r->end, &counts);
         frames = counts.frames;
         dirty = counts.dirty;
@@ -1921,6 +1991,7 @@ static int procfs_gen_numa_maps(struct procfs_text *t, int pid)
         ap_ch(t, '\n');
     }
     mm_read_end(mm);
+    maps_names_free(&names);
     return t->len;
 }
 

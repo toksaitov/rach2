@@ -135,7 +135,9 @@ int filemap_msync(struct vm_file *f, int flush);
 /**
  * Shared anonymous memory, for MAP_SHARED|MAP_ANONYMOUS: pages of its own
  * that every region mapping it, in this process and the children it forks,
- * maps; freed with the last region. NULL when the heap has no room.
+ * maps; freed with the last region. Its path is "/dev/zero (deleted)", the
+ * name Linux's /proc/PID/maps gives it, or none when the heap has no room
+ * for the name. NULL when the heap has no room.
  */
 struct vm_file *filemap_anon_shared(void);
 
