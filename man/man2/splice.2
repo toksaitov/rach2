@@ -109,9 +109,11 @@ Linux hands the pipe the caller's pages; this kernel copies the bytes,
 which a caller that leaves a buffer alone after
 .Dv SPLICE_F_GIFT
 cannot tell apart.
-The pipe end waits as
-.Fn splice
-does: writing, the call takes what fits once it has copied a byte;
+The pipe end waits unless
+.Dv SPLICE_F_NONBLOCK
+is given, whatever its description's
+.Dv O_NONBLOCK ,
+as Linux's does: writing, the call takes what fits once it has copied a byte;
 reading, only the first buffer waits, and the call stops at an empty pipe
 once it has copied a byte.
 A page Linux would not hand the pipe, as its
