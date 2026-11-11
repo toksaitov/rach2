@@ -774,8 +774,9 @@ static uintptr_t pipe_iov_at(const struct kernel_iovec *iov, int *k, uint32_t *o
 /**
  * Whether the `n` bytes of `iov` from `off` bytes into element `k` lie in
  * pages that are present now and may be read (`vm_resident`), found with no
- * sleep: 1. Otherwise the first range that is not is brought in, which may
- * sleep, and the result is 0, or -EFAULT when a page of it cannot be had.
+ * sleep, a page at a time: 1. Otherwise the first page that is not is
+ * brought in, which may sleep, and the result is 0, or -EFAULT when it
+ * cannot be had.
  */
 static int pipe_iov_resident(const struct kernel_iovec *iov, int k, uint32_t off, uint32_t n)
 {
@@ -783,9 +784,7 @@ static int pipe_iov_resident(const struct kernel_iovec *iov, int k, uint32_t off
         uint32_t left;
         uintptr_t addr = pipe_iov_at(iov, &k, &off, &left);
 
-        if (left > n) {
-            left = n;
-        }
+        left = page_piece(addr, left < n ? left : n);
         if (!vm_resident(addr, left, 0)) {
             return vm_prefault_range(addr, left, 0) ? 0 : -EFAULT;
         }
@@ -798,8 +797,9 @@ static int pipe_iov_resident(const struct kernel_iovec *iov, int k, uint32_t off
 /**
  * Copy the `n` bytes of `iov` from `*off` bytes into element `*k` into the
  * ring of `p` at its tail, which has room for them, moving `*k` and `*off`
- * past them; the tail does not move. Returns 0, or -EFAULT when a byte
- * cannot be read. The caller has found the bytes resident
+ * past them, a page of the source at a time; the tail does not move.
+ * Returns 0, or -EFAULT when a byte cannot be read. The caller has found
+ * the bytes resident
  * (`pipe_iov_resident`) with no sleep since, so the copy brings nothing in
  * and does not sleep.
  */
@@ -812,9 +812,7 @@ static int32_t pipe_iov_copy(pipe_t *p, const struct kernel_iovec *iov, int *k, 
         uint32_t left, slot = at & (p->size - 1);
         uintptr_t addr = pipe_iov_at(iov, k, off, &left);
 
-        if (left > n) {
-            left = n;
-        }
+        left = page_piece(addr, left < n ? left : n);
         if (left > p->size - slot) {
             left = p->size - slot;
         }

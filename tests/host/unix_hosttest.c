@@ -321,6 +321,30 @@ int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
     return 1;
 }
 
+/** Whether every page of [addr, addr + len) is present, with no sleep: 1,
+ * or 0 for a page outside the model or not present, which the caller then
+ * brings in (`vm_prefault_range`). */
+int vm_resident(uintptr_t addr, uintptr_t len, int write)
+{
+    uint32_t page, last;
+
+    (void)write;
+    if (len == 0) {
+        return 1;
+    }
+    if (addr < USER_BASE || addr - USER_BASE >= sizeof(memory) ||
+        len > sizeof(memory) - (addr - USER_BASE)) {
+        return 0;
+    }
+    last = (addr - USER_BASE + len - 1u) / PAGE_SIZE;
+    for (page = (addr - USER_BASE) / PAGE_SIZE; page <= last; page++) {
+        if (pages[page] != PAGE_PRESENT) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 /** Whether a pin may take the page of `addr`: always, since the model has
  * no region that Linux's get_user_pages refuses. */
 int paging_pin_allows(struct mm *mm, uintptr_t addr, int write)
