@@ -60,8 +60,7 @@
  * expires it at the next tick, and a step back keeps it waiting until the
  * clock reaches the time again, while a relative timer of CLOCK_REALTIME
  * does not move. A timerfd set with TFD_TIMER_CANCEL_ON_SET becomes readable
- * at a step, and its read fails with ECANCELED and finds nothing after; a
- * slew of adjtimex's ADJ_OFFSET counts its tick again and cancels nothing. A
+ * at a step, and its read fails with ECANCELED and finds nothing after. A
  * periodic one whose expiration nothing touched stays disarmed after that
  * read and reports its interval; one that timerfd_gettime touched runs on.
  * A canceled timerfd set to disarmed is not readable: a blocking read waits,
@@ -98,12 +97,6 @@ uint64_t rtc_ticks_now(void)
     return kernel_ticks + tick_pending;
 }
 
-/** Real time's nanoseconds as the monotonic clock's
- * (`rtc_real_to_mono_ns`): the same, since no row slews the clock. */
-int64_t rtc_real_to_mono_ns(int64_t ns)
-{
-    return ns;
-}
 /* How far into its tick the clock is, which the phase rows set; half a
  * tick otherwise. */
 static uint32_t model_phase_ns = NS_PER_TICK / 2;
@@ -487,15 +480,7 @@ static void reset(void)
 static void step_clock(int64_t ns)
 {
     real_step_ns += ns;
-    timerfd_clock_was_set(1);
-}
-
-/** A step of `ns` nanoseconds that stands for adjtimex's ADJ_OFFSET, which
- * Linux slews and does not count as a setting of the clock. */
-static void slew_clock(int64_t ns)
-{
-    real_step_ns += ns;
-    timerfd_clock_was_set(0);
+    timerfd_clock_was_set();
 }
 
 /** An absolute timer of real time for 2 s, armed at 1 s: a step forward
@@ -589,26 +574,6 @@ static void cancel_read_rows(void)
     CHECK(!polls_readable() && timerfd_read(&entry, (char *)user, 8) == -EAGAIN,
           "the next finds nothing");
     CHECK(timer.armed, "a timer that has not expired runs on");
-}
-
-/** A timerfd canceled by a setting of the clock, for 10 s, and an NTP slew of
- * half a second forward, as BusyBox ntpd's adjtimex with ADJ_OFFSET makes:
- * its tick moves to 9.5 s, since this clock jumps, but it is not canceled
- * and stays unreadable, as Linux's ADJ_OFFSET feeds the PLL and calls no
- * clock_was_set (kernel/time/ntp.c:754-755, kernel/time/timekeeping.c:
- * 2490-2532). */
-static void slew_rows(void)
-{
-    struct setting at10 = {0, 0, 10, 0};
-
-    cancel_arm(&at10, 1);
-    slew_clock((int64_t)NS_PER_SEC / 2);
-    CHECK(timer.due == 9500u, "a slew counts its tick again");
-    CHECK(!polls_readable() && timerfd_read(&entry, (char *)user, 8) == -EAGAIN,
-          "a slew does not cancel it");
-    CHECK(timer.armed && !timer.canceled, "it runs on uncanceled");
-    tick(9500);
-    CHECK(timer.count == 1, "it expires at its time by the slewed clock");
 }
 
 /** A timerfd canceled by a setting of the clock, every tick from 1.001 s,
@@ -1815,7 +1780,6 @@ int main(void)
     long_rows();
     step_rows();
     cancel_read_rows();
-    slew_rows();
     cancel_periodic_rows();
     cancel_setting_rows();
     reading_rows();

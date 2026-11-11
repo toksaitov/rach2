@@ -555,7 +555,6 @@ tests/host/synthfs_hosttest.c:main complexity 43 a test's rows, each a case, rea
 tests/host/syscall_hosttest.c:icmp6_send_opts params 7 a stub of the kernel's, whose parameters are the fields of one packet
 tests/host/syscall_hosttest.c:ip_tx_opts params 8 a stub of the kernel's, whose parameters are the fields of one packet
 tests/host/syscall_hosttest.c:clock_ids complexity 32 a test's rows, each a case, read as one table
-tests/host/syscall_hosttest.c:clock_sleeps lines 104 a test's rows, each a case, read as one table
 
 tests/host/tables_hosttest.c:main complexity 32 a test's rows, each a case, read as one table
 
