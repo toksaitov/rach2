@@ -69,10 +69,17 @@ static int dead_set;
 /** The lag clock as it stands now: `lag_ticks` and the ticks `kernel_ticks`
  * has counted since the tick's last call, which a boot processor's tick
  * that found the big lock held left out; `lag_ticks` alone while a fixture
- * holds the queue, since the tick then does not advance it. */
+ * holds the queue, since the tick then does not advance it. Interrupts are
+ * masked across the reads, so that the tick, run by a timer interrupt on
+ * this processor, cannot mix one call's `lag_ticks` with the next call's
+ * `lag_seen`. */
 static uint32_t lag_clock(void)
 {
-    return lag_held ? lag_ticks : lag_ticks + ((uint32_t)kernel_ticks - lag_seen);
+    uint32_t flags = kirq_save();
+    uint32_t now = lag_held ? lag_ticks : lag_ticks + ((uint32_t)kernel_ticks - lag_seen);
+
+    kirq_restore(flags);
+    return now;
 }
 
 /**

@@ -407,14 +407,38 @@ static void ata_release(struct ata_channel *ch)
     wq_wake_all(&ch->wq);
 }
 
-/** The clock of channel `ch` as it stands now: its `ticks` and the ticks
+/**
+ * The clock of channel `ch` as it stands now: its `ticks` and the ticks
  * `kernel_ticks` has counted since `ata_tick` last ran, which a boot
- * processor's tick that found the big lock held left out. A read that
- * races the tick may be off by the ticks that call adds, so a caller
- * compares two readings as signed. */
+ * processor's tick that found the big lock held left out. Interrupts are
+ * masked across the three reads, since the tick, which a timer interrupt
+ * runs on this processor inside the big lock, would otherwise mix one
+ * call's `ticks` with the next call's `ata_seen`; a caller that publishes
+ * what it read masks them across both.
+ */
 static uint32_t ata_clock(const struct ata_channel *ch)
 {
-    return ch->ticks + ((uint32_t)kernel_ticks - ata_seen);
+    uint32_t flags = kirq_save();
+    uint32_t now = ch->ticks + ((uint32_t)kernel_ticks - ata_seen);
+
+    kirq_restore(flags);
+    return now;
+}
+
+/**
+ * Interrupts masked. Count toward `disk-wait-ticks` the ticks the last
+ * sleeper of channel `ch`, waking now, slept since `ata_tick` last counted
+ * them: from the later of `sleep_from` and that call to the clock now,
+ * which the next call, finding no sleeper, would leave out.
+ */
+static void ata_count_rest(const struct ata_channel *ch)
+{
+    uint32_t from = (int32_t)(ch->sleep_from - ch->ticks) > 0 ? ch->sleep_from : ch->ticks;
+    uint32_t now = ata_clock(ch);
+
+    if ((int32_t)(now - from) > 0) {
+        block_count_wait_ticks(now - from);
+    }
 }
 
 /** The sleeping wait's condition: the status says the wait is over, or the
@@ -469,6 +493,7 @@ static void ata_pause(void)
 static int ata_wait_for(struct ata_channel *ch, int want)
 {
     struct ata_wait w;
+    uint32_t flags;
     int spin, rc;
 
     for (spin = 0; spin < ATA_SPIN_BEFORE_SLEEP; spin++) {
@@ -497,13 +522,19 @@ static int ata_wait_for(struct ata_channel *ch, int want)
     }
     w.ch = ch;
     w.want = want;
-    w.t0 = ata_clock(ch);
     w.rc = -EIO;
+    flags = kirq_save();
+    w.t0 = ata_clock(ch);
     if (ch->sleepers++ == 0) {
         ch->sleep_from = w.t0;
     }
+    kirq_restore(flags);
     wq_wait_event_nointr(&ch->wq, ata_wait_cond, &w);
-    ch->sleepers--;
+    flags = kirq_save();
+    if (--ch->sleepers == 0) {
+        ata_count_rest(ch);
+    }
+    kirq_restore(flags);
     ata_count_wait();
     return w.rc;
 }
@@ -567,7 +598,8 @@ static void ata_irq(isr_params_t *params)
  * the ticks its requests wait. Both count the ticks since the last call,
  * since the boot processor's tick does not call this on every tick
  * (`tick_waits`, isr.c), but no more than have passed since the channel's
- * sleepers began (`sleep_from`).
+ * sleepers began (`sleep_from`); the last sleeper to wake counts the ticks
+ * since this call (`ata_count_rest`).
  */
 void ata_tick(void)
 {
