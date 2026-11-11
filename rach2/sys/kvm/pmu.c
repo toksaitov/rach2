@@ -48,7 +48,11 @@
 #define LBR_FORMAT     0x3Full
 #define DEBUGCTL_LBR   (1ull << 0)
 #define DEBUGCTL_BTF   (1ull << 1)
+#define DEBUGCTL_BLD   (1ull << 2)
 #define DEBUGCTL_FRZ   (1ull << 11)
+#define DEBUGCTL_RTM   (1ull << 15)
+#define L7_RTM         (1u << 11)
+#define L7_BLD         (1u << 24)
 #define PDCM           (1u << 15)
 #define CORE_EXT       (1u << 23)
 #define AMD_EVENT      0xF000000FFull
@@ -675,11 +679,14 @@ static int fixed_io(struct kvm_pmu *p, uint32_t index, int write, uint64_t *valu
  * another MSR. A write is tried on the processor's register first, which
  * holds no host state and which the next entry with the stack loads again,
  * so that it faults where the guest's own WRMSR would under Linux, whose
- * guest writes the registers themselves.
+ * guest writes the registers themselves. The caller's write of an LBR_FROM
+ * value a read returned is tried as the entry loads it, with its sign
+ * bits, since Linux's host-initiated write does not fail
+ * (arch/x86/kvm/vmx/pmu_intel.c:264-296).
  */
-static int lbr_io(struct kvm_pmu *p, uint32_t index, int write, uint64_t *value)
+static int lbr_io(struct kvm_pmu *p, uint32_t index, int write, uint64_t *value, int host)
 {
-    uint64_t *slot;
+    uint64_t *slot, tried;
     uint32_t flags;
     int r;
 
@@ -703,8 +710,9 @@ static int lbr_io(struct kvm_pmu *p, uint32_t index, int write, uint64_t *value)
         *value = *slot;
         return 0;
     }
+    tried = host && index - LBR_FROM < p->lbr_nr ? lbr_from_value(*value) : *value;
     flags = kirq_save();
-    r = kcpu_wrmsr_safe(index, *value);
+    r = kcpu_wrmsr_safe(index, tried);
     kirq_restore(flags);
     if (r != 0) {
         return -1;
@@ -715,21 +723,45 @@ static int lbr_io(struct kvm_pmu *p, uint32_t index, int write, uint64_t *value)
 
 int kvm_pmu_debugctl(struct kvm_vcpu *v, int write, uint64_t *value, int host)
 {
+    const struct kvm_cpuid_entry2 *e = kvm_cpuid_find(v, 7, 0);
     struct kvm_pmu *p = &v->pmu;
+    uint32_t a, b = 0, c = 0, d;
     uint64_t allowed = 0;
 
     if (!write) {
         *value = p->debugctl;
         return 0;
     }
+    /* Linux's vmx_get_supported_debugctl (arch/x86/kvm/vmx/vmx.c:2195-2213):
+     * bus-lock detection and RTM debugging where the host has them and the
+     * guest's CPUID offers them, or for the caller. */
+    kcpu_id(0, &a, &b, &c, &d);
+    if (a >= 7u) {
+        kcpu_id_sub(7, 0, &a, &b, &c, &d);
+    } else {
+        b = c = 0;
+    }
+    if ((c & L7_BLD) && (host || (e && (e->ecx & L7_BLD)))) {
+        allowed |= DEBUGCTL_BLD;
+    }
     if (pmu_host.lbr_nr && (host || p->lbr_nr)) {
-        allowed = DEBUGCTL_LBR | DEBUGCTL_FRZ;
+        allowed |= DEBUGCTL_LBR | DEBUGCTL_FRZ;
+    }
+    if ((b & L7_RTM) && (host || (e && (e->ebx & L7_RTM)))) {
+        allowed |= DEBUGCTL_RTM;
     }
     if (*value & ~(allowed | DEBUGCTL_LBR | DEBUGCTL_BTF)) {
         return -1;
     }
     p->debugctl = *value & allowed;
     return 0;
+}
+
+uint64_t kvm_pmu_vmcs_debugctl(const struct kvm_vcpu *v)
+{
+    const struct kvm_pmu *p = &v->pmu;
+
+    return p->lbr_nr ? p->debugctl : p->debugctl & ~(DEBUGCTL_LBR | DEBUGCTL_FRZ);
 }
 
 int kvm_pmu_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, int host)
@@ -743,7 +775,7 @@ int kvm_pmu_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, 
     if (index == DEBUGCTL && pmu_host.intel) {
         return kvm_pmu_debugctl(v, write, value, host);
     }
-    r = lbr_io(p, index, write, value);
+    r = lbr_io(p, index, write, value, host);
     if (r != 1) {
         return r;
     }

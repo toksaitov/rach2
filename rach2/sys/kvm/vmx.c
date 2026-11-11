@@ -1227,7 +1227,7 @@ static void vmcs_build(struct kvm_vcpu *v)
     vmcs_write(HOST_RIP, vmx_op->exit_rip());
     vmcs_write(GUEST_ACTIVITY_STATE, 0);
     vmcs_write(GUEST_PENDING_DBG_EXCEPTIONS, 0);
-    x->debugctl = v->pmu.lbr_nr ? v->pmu.debugctl : 0;
+    x->debugctl = kvm_pmu_vmcs_debugctl(v);
     vmcs_write(GUEST_IA32_DEBUGCTL, x->debugctl);
     x->built = 1;
     x->vdirty = VX_ALL;
@@ -1722,8 +1722,8 @@ static int vmx_enter(struct kvm_vcpu *v)
         vmcs_write(GUEST_IA32_PERF_GLOBAL_CTRL, global[0]);
         vmcs_write(HOST_IA32_PERF_GLOBAL_CTRL, global[1]);
     }
-    if (x->debugctl != (v->pmu.lbr_nr ? v->pmu.debugctl : 0)) {
-        x->debugctl = v->pmu.lbr_nr ? v->pmu.debugctl : 0;
+    if (x->debugctl != (kvm_pmu_vmcs_debugctl(v))) {
+        x->debugctl = kvm_pmu_vmcs_debugctl(v);
         vmcs_write(GUEST_IA32_DEBUGCTL, x->debugctl);
     }
     vmcs_write(VM_ENTRY_MSR_LOAD_COUNT, gbase + ng);
