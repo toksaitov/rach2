@@ -133,6 +133,9 @@ struct n_tty {
     unsigned char echo_buf[N_TTY_ECHO_MAX];
     unsigned int echo_head; /* monotonic; slot = head & (SIZE-1) */
     unsigned int echo_tail;
+    /* Nonzero while a drain that shows no echo feeds a byte: its echo is
+     * dropped before it can reach `echo_buf`, so the echo held stays whole. */
+    int echo_muted;
     struct n_tty_counters counters;
 };
 
@@ -218,14 +221,6 @@ int n_tty_echo_flush(struct n_tty *t, n_tty_out_fn out, void *ctx, unsigned int 
 /** Hold the echo byte `c` in `echo_buf`, behind the echo held, the oldest
  * byte giving way when it is full: for a sink that has no room for it. */
 void n_tty_hold_echo(struct n_tty *t, unsigned char c);
-
-/**
- * Drop the echo held since `echo_tail` was `tail`, keeping what was held
- * before it; when less is held than was added since, all of it. A caller
- * that feeds a byte with its echo suppressed calls it after the byte, so the
- * older echo waits for a sink that shows it.
- */
-void n_tty_echo_cut(struct n_tty *t, unsigned int tail);
 
 /**
  * Whether the terminal is readable to poll(2): nonzero if so, 0 if not.

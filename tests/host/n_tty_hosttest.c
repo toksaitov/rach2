@@ -500,7 +500,8 @@ static void flow_stops(void)
     CHECK(n_tty_echo_flush(&t, sink, &cp, ~0u) == 2 && cap_is(&cp, "^C", 2));
 
     /* The echo held goes out at most `max` bytes at a time, the rest held;
-     * a cut drops what was held since its mark and keeps what came before. */
+     * a byte fed muted holds no echo, even behind a full buffer, whose
+     * oldest byte stays. */
     n_tty_init(&t);
     cap_reset(&cp);
     feed(&t, &cp, 023);
@@ -509,16 +510,23 @@ static void flow_stops(void)
     CHECK(n_tty_echo_flush(&t, sink, &cp, 2) == 2 && cap_is(&cp, "ab", 2));
     CHECK(t.echo_tail - t.echo_head == 1);
     {
-        unsigned int mark = t.echo_tail;
+        int k, signo;
 
-        n_tty_hold_echo(&t, 'd');
-        n_tty_echo_cut(&t, mark);
-        CHECK(t.echo_tail - t.echo_head == 1);
-        t.echo_head = t.echo_tail;
-        n_tty_echo_cut(&t, mark - 1);
-        CHECK(t.echo_tail == t.echo_head);
+        t.echo_muted = 1;
+        n_tty_receive(&t, 'd', sink, &cp, &signo);
+        t.echo_muted = 0;
+        CHECK(t.echo_tail - t.echo_head == 1 && cp.len == 2);
+        CHECK(n_tty_echo_flush(&t, sink, &cp, ~0u) == 1 && cap_is(&cp, "abc", 3));
+        feed(&t, &cp, 023);
+        for (k = 0; k < N_TTY_ECHO_MAX; k++) {
+            n_tty_hold_echo(&t, (unsigned char)('a' + k % 26));
+        }
+        t.echo_muted = 1;
+        n_tty_receive(&t, 'z', sink, &cp, &signo);
+        t.echo_muted = 0;
+        CHECK(t.echo_tail - t.echo_head == N_TTY_ECHO_MAX &&
+              t.echo_buf[t.echo_head & (N_TTY_ECHO_MAX - 1)] == 'a');
     }
-    CHECK(n_tty_echo_flush(&t, sink, &cp, ~0u) == 0 && cap_is(&cp, "ab", 2));
 }
 
 /**

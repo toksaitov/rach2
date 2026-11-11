@@ -137,9 +137,13 @@ void n_tty_hold_echo(struct n_tty *t, unsigned char c)
 }
 
 /** Give the echo byte `c` to `out`, or hold it behind the echo already held
- * or, with `hold` nonzero or output stopped, for later. */
+ * or, with `hold` nonzero or output stopped, for later; drop it while
+ * `echo_muted` is set. */
 static void put_echo(struct n_tty *t, n_tty_out_fn out, void *ctx, unsigned char c, int hold)
 {
+    if (t->echo_muted) {
+        return;
+    }
     if (hold || t->stopped || t->echo_tail != t->echo_head) {
         n_tty_hold_echo(t, c);
     } else {
@@ -197,15 +201,6 @@ int n_tty_echo_flush(struct n_tty *t, n_tty_out_fn out, void *ctx, unsigned int 
         n++;
     }
     return n;
-}
-
-void n_tty_echo_cut(struct n_tty *t, unsigned int tail)
-{
-    if (t->echo_tail - tail >= t->echo_tail - t->echo_head) {
-        t->echo_tail = t->echo_head;
-    } else {
-        t->echo_tail = tail;
-    }
 }
 
 int n_tty_stop(struct n_tty *t)

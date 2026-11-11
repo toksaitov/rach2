@@ -253,10 +253,11 @@ static void tty_room_sink(void *ctx, unsigned char c)
  * queued is discarded before the signal character's echo; then a change of
  * output flow goes to `flow`. Echo to the terminal's sink stops at its room,
  * and the echo held then goes as far as the room allows. With another
- * `out`, the null sink of a drain that suppresses echo, only this byte's
- * echo is dropped: the echo held before it waits for a sink that shows it,
- * as a restart this byte makes would otherwise throw away the echo held
- * while output was stopped.
+ * `out`, the null sink of a drain that suppresses echo, this byte's echo is
+ * dropped before it reaches the echo held (`echo_muted`), which waits whole
+ * for a sink that shows it, though it fills `echo_buf`: a restart this byte
+ * makes would otherwise throw it away, and a byte held behind a full buffer
+ * would push out its oldest. A signal character's flush still discards it.
  */
 static void tty_receive(struct tty *t, unsigned char c, n_tty_out_fn out, void *ctx, int looked)
 {
@@ -264,12 +265,12 @@ static void tty_receive(struct tty *t, unsigned char c, n_tty_out_fn out, void *
     int signo = 0;
     int shown = out == t->sink;
     uint32_t flags = kirq_save();
-    unsigned int tail = t->ldisc.echo_tail;
 
     if (shown && t->room) {
         out = tty_room_sink;
         ctx = t;
     }
+    t->ldisc.echo_muted = !shown;
     if (looked) {
         n_tty_receive_looked(&t->ldisc, c, out, ctx, &signo);
     } else {
@@ -281,10 +282,9 @@ static void tty_receive(struct tty *t, unsigned char c, n_tty_out_fn out, void *
             t->flush(t, TTY_FLUSH_IN | TTY_FLUSH_OUT);
         }
     }
+    t->ldisc.echo_muted = 0;
     if (shown) {
         n_tty_echo_flush(&t->ldisc, t->sink, t->sink_ctx, tty_room(t));
-    } else {
-        n_tty_echo_cut(&t->ldisc, tail);
     }
     tty_flow_changed(t, was);
     kirq_restore(flags);
