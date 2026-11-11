@@ -66,7 +66,9 @@ static int console_holds(struct lc *l, uint64_t from, uint64_t to, const char *t
 /**
  * Boot with ramoops's region and the TCO started by the kernel, show that
  * the kernel feeds it for three heartbeats, panic, and let the TCO, unfed
- * once the tick stops, reset the guest; QEMU keeps the RAM across the
+ * once the tick stops, reset the guest; panic=0 halts the panic, so that
+ * only the TCO can reset it, which the absence of the panic's countdown
+ * shows; QEMU keeps the RAM across the
  * reset, and the second boot reads the record. QEMU runs with -no-reboot,
  * so the reboot action is set to reset first. pstoreprobe exits 0 only
  * after its checks, and prints none of the old log, whose records would
@@ -105,8 +107,11 @@ static void crash(struct lc *l)
     if (!lc_wait(l, m, "Type 'help'", &at, NULL) || !lc_wait(l, m, "\n> ", &at, NULL)) {
         return;
     }
-    lc_assert(l, "reset", console_holds(l, from, at, "ramoops: found: dmesg-ramoops-0"),
-              "the second boot found no dmesg record");
+    lc_assert(l, "reset",
+              !console_holds(l, from, at, "panic: rebooting in") &&
+                  console_holds(l, from, at, "ramoops: found: dmesg-ramoops-0"),
+              "the panic counted down to its own restart, or the second boot found no dmesg "
+              "record");
     w = lc_run(l, m, "q35", "exec /pstoreprobe read\r", &at, "record");
     if (w == NULL) {
         return;
