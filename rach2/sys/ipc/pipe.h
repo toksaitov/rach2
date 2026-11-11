@@ -51,6 +51,13 @@ extern unsigned long pipe_user_pages_hard;
  * /proc/sys/fs/pipe-max-size reads and sets. */
 extern uint32_t pipe_max_size;
 
+/* One of Linux's page buffers over a pipe's ring (`pipe_set_size`). */
+struct pipe_page {
+    uint32_t start;  /* the counter value of its first byte */
+    uint16_t offset; /* that byte's offset in its page, Linux's buf->offset */
+    uint16_t merge;  /* nonzero when a later write's bytes may join it */
+};
+
 typedef struct pipe {
     struct pipe *next;     /* the list of live pipes */
     int in_use;            /* 1 from allocation on; no code reads it */
@@ -86,15 +93,13 @@ typedef struct pipe {
     int spliced;
     wait_queue_t splice_wq;
     /* Linux's page buffers over the ring, which its shrink rule counts
-     * (`pipe_set_size`): the counter value at which each buffer that still
-     * holds bytes began, oldest first, `bufs` of them from `buf_first` in the
-     * `buf_cap` slots of `buf_start`, allocated with the ring; and whether
-     * the newest takes a later write's bytes. A NULL `buf_start` keeps none. */
-    uint32_t *buf_start;
+     * (`pipe_set_size`): each buffer that still holds bytes, oldest first,
+     * `bufs` of them from `buf_first` in the `buf_cap` slots of `buf_pages`,
+     * allocated with the ring. A NULL `buf_pages` keeps none. */
+    struct pipe_page *buf_pages;
     uint32_t buf_cap;
     uint32_t buf_first;
     uint32_t bufs;
-    int buf_merge;
 } pipe_t;
 
 /** Empty the list of live pipes; called once at boot. Each pipe comes from
@@ -128,9 +133,13 @@ int pipe_is(const struct fd_entry *e);
  * the user-copy checks, to the write end `e`, as a write(2) of it does but
  * without waiting for room when `nonblock`, the descriptor's O_NONBLOCK or
  * not; the bytes written or a negative errno, -EAGAIN, -EPIPE with SIGPIPE
- * raised, -EINTR, -EBADF, -EFAULT or -ENOMEM.
+ * raised, -EINTR, -EBADF, -EFAULT or -ENOMEM. The bytes take a page buffer
+ * for each page of their source they come from, as Linux's vmsplice and
+ * splice link the source's pages, the first byte lying `src` bytes into its
+ * page, and no later write joins them.
  */
-int32_t pipe_splice_write(struct fd_entry *e, const char __user *buf, uint32_t count, int nonblock);
+int32_t pipe_splice_write(struct fd_entry *e, const char __user *buf, uint32_t count, int nonblock,
+                          uint32_t src);
 
 /**
  * Wait for room in the pipe of the write end `e` unless `nonblock`: the
