@@ -1,5 +1,6 @@
 /**
- * Check the fast i386 entry's lock across its saved-EBP user copy.
+ * Check the fast i386 entry's lock across its saved-EBP user copy, and its
+ * count of the call for bkl/calls.
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-cflags: -DRACH2_HOST_X86_64
  */
@@ -9,7 +10,7 @@ extern int printf(const char *format, ...);
 struct percpu cpu_table[NR_CPUS];
 static process_t proc;
 static struct mm space;
-static int depth, bad, routed, fault;
+static int depth, bad, routed, fault, counted;
 
 /* Image labels stand in for the linked assembler; this test builds no image. */
 const char vdso32_text_start[1] = {0};
@@ -91,6 +92,33 @@ void isr_router_locked(isr_params_t *p)
     p->rax = 17;
 }
 
+/** The entry reads the clock before it takes the lock, for bkl/calls. */
+uint64_t arch_cycles(void)
+{
+    if (depth != 0) {
+        bad++;
+    }
+    return 1000;
+}
+
+/** The entry notes the ioctl request of a routed call under the lock. */
+int isr_call_ioctl(const isr_params_t *p)
+{
+    if (depth != 1 || p->rax != 192 || p->rbp != 0x12345678u) {
+        bad++;
+    }
+    return 0;
+}
+
+/** Every call is counted once, under its own number, before the return. */
+void smp_call_end(uint32_t nr, int ioctl, uint64_t start)
+{
+    if (depth != 1 || nr != 192 || ioctl != 0 || start != 1000) {
+        bad++;
+    }
+    counted++;
+}
+
 /** Return to user mode releases the entry's one lock. */
 void isr_leave(isr_params_t *p)
 {
@@ -120,8 +148,9 @@ int main(void)
             p.rsp = entry ? 0 : 0x40001000u;
             p.rbp = entry ? 0x40001000u : 0;
             routed = 0;
+            counted = 0;
             ia32_fast_syscall(&p, entry);
-            if (depth || routed != !fault || p.rsp != 0x40001000u ||
+            if (depth || routed != !fault || counted != 1 || p.rsp != 0x40001000u ||
                 (fault && ((int64_t)p.rax != -EFAULT || proc.orig_nr != 192))) {
                 bad++;
             }
