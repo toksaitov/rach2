@@ -342,8 +342,9 @@ static void trace_log(const char *subsystem, int level, const uintptr_t *frames,
 void watchdog_show_trace(const char *subsystem, int level, uintptr_t fp, uintptr_t top)
 {
     uintptr_t frames[TRACE_MAX];
+    int n = trace_walk(fp, top, frames);
 
-    trace_log(subsystem, level, frames, trace_walk(fp, top, frames));
+    trace_log(subsystem, level, frames, n);
 }
 
 /** Linux's `show_regs`: the processor, the running thread and the frame
