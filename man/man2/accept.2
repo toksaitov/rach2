@@ -192,8 +192,7 @@ is null.
 .It Er EINTR
 A signal interrupted the wait.
 .It Er EINVAL
-The socket is a TCP datagram socket, or a stream or sequenced-packet
-socket that is not listening, as is a TCP listener that
+The socket is a stream or sequenced-packet socket that is not listening, as is a TCP listener that
 .Xr shutdown 2
 stopped while the call waited; an
 .Dv AF_UNIX
@@ -214,7 +213,7 @@ connection's open file description; the connection stays queued.
 does not refer to a socket.
 .It Er EOPNOTSUPP
 .Fa fd
-refers to a raw socket or an
+refers to a raw, datagram, packet or netlink socket, or an
 .Dv AF_UNIX
 datagram socket.
 .El

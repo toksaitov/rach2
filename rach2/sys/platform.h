@@ -175,17 +175,25 @@ void platform_pmu_disable(void);
 
 /**
  * In the NMI handler: 1 when this processor's counter raised the NMI, which
- * it acknowledges, loads again and unmasks; 0 otherwise, for an NMI of
- * another source. `*due` is set to 1 when the whole period passed, 0 when a
- * part of a wide one did.
+ * it acknowledges and loads again; 0 otherwise, for an NMI of another
+ * source or a late one. `*due` is set to 1 when the whole period passed, 0
+ * when a part of a wide one did. The counter's APIC entry is unmasked on
+ * every call while the counter runs, overflow or not, since a late NMI
+ * masked it too.
  */
 int platform_pmu_overflow(int *due);
+
+/** In the NMI handler, after the callback of an overflow that
+ * `platform_pmu_overflow` took has run: on AMD, open the window for a late
+ * NMI (`platform_pmu_late`) from now. */
+void platform_pmu_handled(void);
 
 /**
  * In the NMI handler, for an NMI no source claimed: 1 while this
  * processor's counter may still raise one late, for 100 ms of TSC after it
- * was armed or stopped and, on AMD, after an overflow it handled, which the
- * handler then claims; 0 otherwise, and always without a counter.
+ * was armed or stopped and, on AMD, after the handler finished with an
+ * overflow (`platform_pmu_handled`), which the handler then claims; 0
+ * otherwise, and always without a counter.
  */
 int platform_pmu_late(void);
 

@@ -132,6 +132,10 @@ int smp_serialized(void)
     return 1;
 }
 
+/** klog's ring lock is never held by another here. */
+void arch_relax(void)
+{}
+
 /** No performance counter here. */
 void platform_pmu_disable(void)
 {}

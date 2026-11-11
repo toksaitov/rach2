@@ -64,8 +64,12 @@ the child should do nothing else before one of the two.
 An
 .Xr execve 2
 that fails returns to the child, and the parent still waits.
-A signal to the parent does not end its wait, except
+A signal to the parent does not end its wait unless it is fatal to the
+process:
 .Dv SIGKILL ,
+or a signal whose action is the default and ends the process without a
+core dump, such as
+.Dv SIGTERM ,
 after which the parent dies, as Linux's killable wait lets it.
 musl's and GNU libc's
 .Fn vfork

@@ -198,6 +198,10 @@ struct process {
     struct k_sigaction *sigacts;
     uint64_t sig_pending;
     uint64_t sig_blocked;
+    /* The mask rt_sigtimedwait or a signalfd read put back when it ends, while
+     * it waits with its set unblocked, as Linux's real_blocked; 0 otherwise.
+     * A signal it holds is not fatal at its post (`sig_fatal_now`). */
+    uint64_t sig_real_blocked;
     /* Program name (basename of the execve'd path, truncated, padded with
      * NULs to the end): the "comm" /proc/<pid>/stat reports and ps shows.
      * Set at execve and by prctl's PR_SET_NAME. */

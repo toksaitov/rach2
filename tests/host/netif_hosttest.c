@@ -798,7 +798,7 @@ static void invalid_accept(void)
     for (nonblock = 0; nonblock <= 1; nonblock++) {
         description.status_flags = nonblock ? OFD_NONBLOCK : 0;
         sock.type = SOCK_DGRAM;
-        CHECK(do_accept(3, 0, 0, 0) == -EINVAL, "datagram accept returns einval");
+        CHECK(do_accept(3, 0, 0, 0) == -EOPNOTSUPP, "datagram accept returns eopnotsupp");
         sock.type = SOCK_STREAM;
         CHECK(do_accept(3, 0, 0, 0) == -EINVAL, "nonlistener accept returns einval");
         sock.type = SOCK_RAW;

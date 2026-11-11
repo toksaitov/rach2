@@ -251,6 +251,8 @@ extern bool debug_shell_is_home;
 
 extern void panic_init_died(uint32_t pid);
 
+static void sig_post_own(process_t *t, int signo, const struct k_siginfo *info);
+
 /**
  * Each descriptor drops its socket reference and its open file description
  * (the seek offset), and its slot is cleared. `proc_files_put` calls it when
@@ -452,9 +454,11 @@ void proc_group_exit(int32_t code)
 {
     struct tgroup *tg = current_proc->tg;
     struct k_siginfo info;
+    uint32_t flags = kirq_save();
     process_t *t;
 
     if (tg->exiting || tg->exec_task) {
+        kirq_restore(flags);
         return;
     }
     tg->exiting = 1;
@@ -463,9 +467,10 @@ void proc_group_exit(int32_t code)
     info.code = SI_KERNEL;
     for (t = proc_list; t; t = t->next) {
         if (t->tg == tg && t != current_proc && t->state != PROC_ZOMBIE) {
-            signal_post_thread(t, SIGKILL, &info);
+            sig_post_own(t, SIGKILL, &info);
         }
     }
+    kirq_restore(flags);
 }
 
 /**
@@ -2091,7 +2096,9 @@ static void exec_take_leader(void)
  * image, as Linux's `de_thread` does: every other thread is sent SIGKILL and
  * the caller waits until they have ended or it has SIGKILL pending. A
  * SIGKILL ends the wait with -EAGAIN after clearing `exec_task`, as Linux
- * 6.12.115's fs/exec.c:1052-1059,1080-1085,1151-1157 does. While
+ * 6.12.115's fs/exec.c:1052-1059,1080-1085,1151-1157 does, and so does any
+ * signal fatal to the process, which sends every thread SIGKILL
+ * (`sig_complete`), when a sibling is held in a wait no signal ends. While
  * `exec_task` is set, a thread the SIGKILL ends ends alone and does not
  * make the process end.
  *
@@ -2117,7 +2124,7 @@ static int32_t exec_one_thread(void)
         info.code = SI_KERNEL;
         for (t = proc_list; t; t = t->next) {
             if (t->tg == tg && t != current_proc && t->state != PROC_ZOMBIE) {
-                signal_post_thread(t, SIGKILL, &info);
+                sig_post_own(t, SIGKILL, &info);
             }
         }
         (void)wq_wait_event_killable(&tg->gone, exec_alone, tg, "de_thread");
@@ -2651,9 +2658,10 @@ static int vfork_done(void *arg)
 
 /**
  * The child runs on the parent's memory, its stack included, until it calls
- * execve or ends, so the parent must not run before. A signal other than
- * SIGKILL does not end the wait; SIGKILL does, as in Linux's killable wait,
- * and the parent then dies on its way out.
+ * execve or ends, so the parent must not run before. Only a signal fatal to
+ * the process ends the wait, as Linux's killable wait ends: SIGKILL, or one
+ * whose default action ends the process without a core dump, which sends
+ * every thread SIGKILL (`sig_complete`). The parent then dies on its way out.
  */
 void proc_vfork_wait(uint32_t pid)
 {
@@ -4351,16 +4359,91 @@ void signal_set_blocked(uint64_t mask)
 }
 
 /**
+ * Whether the signal `signo`, sent to the thread `target` and to be taken by
+ * the thread `taker` of its process, ends the process at once, as Linux
+ * 6.12.115's `complete_signal` judges it (kernel/signal.c:1034-1043): the
+ * disposition is SIG_DFL and the default action ends the process without a
+ * core dump, `taker` can take the signal now (`sig_wants`) and does not
+ * wait for it in rt_sigtimedwait or a signalfd read (`sig_real_blocked`),
+ * the process is not ending already, and `target` is not traced, unless the
+ * signal is SIGKILL. Such a waiter takes the signal as its result, a traced
+ * thread's tracer sees the signal first, and a signal that dumps core is
+ * left to the thread that takes it, which writes the core before the others
+ * end.
+ */
+static int sig_fatal_now(const process_t *target, const process_t *taker, int signo)
+{
+    return taker != NULL && target->tg->action[signo].handler == KSIG_DFL &&
+           ksig_default_action(signo) == KSIG_DEFAULT_TERM && sig_wants(taker, KSIG_BIT(signo)) &&
+           !(taker->sig_real_blocked & KSIG_BIT(signo)) && !target->tg->exiting &&
+           (signo == SIGKILL || !(target->ptrace & PT_TRACED));
+}
+
+/**
+ * Set the signal `signo` pending for the thread `t` alone, keeping `info`
+ * when it was not pending already, apply its job-control effect and wake
+ * `t`, with nothing of `sig_complete`: the SIGKILL of a group exit and of
+ * execve's end of the other threads, which end each thread without starting
+ * another group exit, as Linux's `zap_other_threads` sets SIGKILL directly.
+ */
+static void sig_post_own(process_t *t, int signo, const struct k_siginfo *info)
+{
+    uint32_t f;
+
+    if (t->state == PROC_ZOMBIE || t->state == PROC_UNUSED) {
+        return;
+    }
+    f = sig_irq_save();
+    if (!(t->sig_pending & KSIG_BIT(signo))) {
+        t->sig_info[signo] = *info;
+    }
+    t->sig_pending |= KSIG_BIT(signo);
+    sig_job_control(t, signo);
+    sig_wake(t);
+    sig_irq_restore(f);
+}
+
+/**
+ * Finish posting `signo` to `target` once it is pending, with interrupts
+ * off: wake `taker`, or, when the signal ends the process (`sig_fatal_now`),
+ * begin the process's end, as Linux 6.12.115's `complete_signal` does
+ * (kernel/signal.c:1044-1056). The process will end with the wait status of
+ * a death by `signo`, and every thread is sent SIGKILL and woken, so that a
+ * killable wait ends as well: execve's for the other threads, which another
+ * of them may hold in a wait no signal ends, and vfork's for the child.
+ * Each thread then takes the SIGKILL, and the process's status stays
+ * `signo`'s (`proc_exit_cleanup`).
+ */
+static void sig_complete(process_t *target, process_t *taker, int signo)
+{
+    struct tgroup *tg = target->tg;
+    struct k_siginfo info;
+    process_t *t;
+
+    if (!sig_fatal_now(target, taker, signo)) {
+        sig_wake(taker);
+        return;
+    }
+    tg->exiting = 1;
+    tg->exit_code = signo;
+    k_memset(&info, 0, sizeof(info));
+    info.code = SI_KERNEL;
+    for (t = proc_list; t; t = t->next) {
+        if (t->tg == tg) {
+            sig_post_own(t, SIGKILL, &info);
+        }
+    }
+}
+
+/**
  * Post signal `signo` to the process `target` is a thread of, with the
  * siginfo `info`: set the process's pending bit, keeping `info` when the
  * signal was not already pending, and wake the thread `sig_taker` chooses,
- * whatever the signal's disposition and mask. SIGKILL also wakes an exec
- * waiting for the other threads: the selected thread may be in a wait
- * no signal ends. Linux 6.12.115's kernel/signal.c:1048-1055 wakes every
- * thread on SIGKILL. Any thread that does not block the signal may take
- * it. A process whose threads have all ended takes nothing. SIGKILL and
- * SIGSTOP cannot be caught, so a pending SIGKILL is honored even before
- * delivery by leaving it pending for the default path.
+ * whatever the signal's disposition and mask, or end the whole process when
+ * the signal is fatal to it (`sig_complete`). Any thread that does not block
+ * the signal may take it. A process whose threads have all ended takes
+ * nothing. SIGKILL and SIGSTOP cannot be caught, so a pending SIGKILL is
+ * honored even before delivery by leaving it pending for the default path.
  */
 void signal_post_info(process_t *target, int signo, const struct k_siginfo *info)
 {
@@ -4380,13 +4463,16 @@ void signal_post_info(process_t *target, int signo, const struct k_siginfo *info
     }
     tg->pending |= KSIG_BIT(signo);
     sig_job_control(target, signo);
-    sig_wake(sig_taker(target, signo));
-    if (signo == SIGKILL) {
-        sig_wake(tg->exec_task);
-    }
+    sig_complete(target, sig_taker(target, signo), signo);
     sig_irq_restore(f);
 }
 
+/**
+ * Post signal `signo` to the thread `t` alone, which alone may take it, with
+ * the siginfo `info`, and end the whole process when the signal is fatal to
+ * it and `t` can take it now, as Linux's `complete_signal` does for a signal
+ * sent to one thread (`sig_complete`).
+ */
 void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
 {
     uint32_t f;
@@ -4395,12 +4481,8 @@ void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
         return;
     }
     f = sig_irq_save();
-    if (!(t->sig_pending & KSIG_BIT(signo))) {
-        t->sig_info[signo] = *info;
-    }
-    t->sig_pending |= KSIG_BIT(signo);
-    sig_job_control(t, signo);
-    sig_wake(t);
+    sig_post_own(t, signo, info);
+    sig_complete(t, sig_wants(t, KSIG_BIT(signo)) ? t : NULL, signo);
     sig_irq_restore(f);
 }
 
@@ -5477,8 +5559,12 @@ static int group_stop_taken(void)
 
 /**
  * Only a frame that returns to user mode is acted on, and one handler at most
- * is given a frame on each return. A deliverable signal, one pending for the
- * thread or for its process and not blocked, is taken (`sig_dequeue`), the
+ * is given a frame on each return. A pending SIGKILL ends the process before
+ * anything else is taken, as Linux 6.12.115's get_signal ends a thread of a
+ * process whose end has begun (kernel/signal.c:2772-2784), since the SIGKILL
+ * of a fatal signal (`sig_complete`) may share the pending set with a lower
+ * signal that has a handler. Otherwise a deliverable signal, one pending for
+ * the thread or for its process and not blocked, is taken (`sig_dequeue`), the
  * lowest-numbered of the thread's own or, when it has none, of its process's,
  * and is ignored, ends the process (a default that terminates), stops the
  * process, or gets a handler frame. The handler runs with its sa_mask blocked
@@ -5535,6 +5621,10 @@ void deliver_signals(isr_params_t *tf)
         deliverable = sig_pending_now() & ~current_proc->sig_blocked;
         if (deliverable == 0) {
             break;
+        }
+        if (deliverable & KSIG_BIT(SIGKILL)) {
+            terminate_current_process(SIGKILL);
+            return; /* not reached */
         }
         signal_work = 1;
         signo = sig_dequeue(deliverable, &info);
@@ -5713,9 +5803,11 @@ long signal_timedwait(unsigned long setsize, uintptr_t uset, uintptr_t uinfo, ui
     }
     set &= ~(uint64_t)KSIG_UNCATCHABLE;
     saved = current_proc->sig_blocked;
+    current_proc->sig_real_blocked = saved;
     signal_set_blocked(saved & ~set);
     rc = sigwait_set(set, timed, deadline, (void __user *)uinfo);
     signal_set_blocked(saved);
+    current_proc->sig_real_blocked = 0;
     return rc;
 }
 
@@ -5804,9 +5896,11 @@ static int32_t sigfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
         } else {
             uint64_t saved = current_proc->sig_blocked;
 
+            current_proc->sig_real_blocked = saved;
             signal_set_blocked(saved & ~sf->mask);
             signo = sigwait_take(sf->mask, 0, 0, &info);
             signal_set_blocked(saved);
+            current_proc->sig_real_blocked = 0;
             if (signo < 0) {
                 return signo;
             }

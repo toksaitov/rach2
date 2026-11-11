@@ -70,9 +70,11 @@ void klog(int level, const char *subsystem, const char *format, ...);
 void klog_v(int level, const char *subsystem, const char *format, va_list ap);
 
 /** Write out the records kept for later, oldest first, when this processor
- * may (`smp_serialized`) and is not writing another record or the console;
- * nothing otherwise, and nothing, with no interrupt bracket, while none is
- * kept. */
+ * may (`smp_serialized`) and no other is writing them out for it
+ * (`klog_flush_stuck`); inside another record's delivery or a console
+ * write, put them in the ring and the queue, ahead of what comes next, for
+ * that delivery or write to write out when it ends. Nothing otherwise, and
+ * nothing, with no interrupt bracket, while none is kept. */
 void klog_flush(void);
 
 /** Whether records are kept for later. */
@@ -83,8 +85,10 @@ int klog_kept(void);
  * klog's shared state, outside an NMI, once the hard-lockup detector has
  * reported the holder of the big lock locked up: that one would never
  * write them, and Linux writes such a report from the processor that found
- * it. The caller takes klog's state over, as the panic does
- * (`klog_deliver_directly`); one processor at a time does.
+ * it. One processor at a time does, and only the records kept when it
+ * began. It does nothing while the holder is writing klog's state itself,
+ * a record or the end of a console write, and the holder, should it come
+ * back meanwhile, keeps its records for later until this is done.
  */
 void klog_flush_stuck(void);
 
@@ -129,7 +133,8 @@ uint32_t klog_read_from(char *buf, uint32_t cap, uint32_t *at);
  * record's delivery or a console write, where it would otherwise wait in the
  * queue: for a machine about to stop, which never comes back to write the
  * queue out. It clears what would have queued the record, which is safe only
- * because nothing after it is expected to run.
+ * because nothing after it is expected to run. The records it leaves in the
+ * queue go out ahead of the next record, which a full queue cannot drop.
  */
 void klog_deliver_directly(void);
 

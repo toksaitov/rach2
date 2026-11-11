@@ -299,13 +299,20 @@ static void task_name(const process_t *t, char out[16])
     out[i] = '\0';
 }
 
-void watchdog_show_trace(const char *subsystem, int level, uintptr_t fp, uintptr_t top)
+/* The most frames a trace gives. */
+#define TRACE_MAX 32
+
+/**
+ * Copy into `out`, TRACE_MAX long, the return address of each frame from
+ * the frame pointer `fp` up, reading only the KERNEL_STACK_SIZE bytes below
+ * `top`, and only upward. The number copied, 0 for a `top` of 0.
+ */
+static int trace_walk(uintptr_t fp, uintptr_t top, uintptr_t *out)
 {
     uintptr_t low = fp, ret;
-    int i;
+    int n;
 
-    klog(level, subsystem, "Call Trace:");
-    for (i = 0; i < 32; i++) {
+    for (n = 0; n < TRACE_MAX; n++) {
         if (top < KERNEL_STACK_SIZE || fp < top - KERNEL_STACK_SIZE ||
             fp > top - 2 * sizeof(uintptr_t) || fp % sizeof(uintptr_t) != 0 || fp < low) {
             break;
@@ -314,10 +321,30 @@ void watchdog_show_trace(const char *subsystem, int level, uintptr_t fp, uintptr
         if (ret == 0) {
             break;
         }
-        klog(level, subsystem, " 0x%lx", (unsigned long)ret);
+        out[n] = ret;
         low = fp + 2 * sizeof(uintptr_t);
         fp = ((const uintptr_t *)fp)[0];
     }
+    return n;
+}
+
+/** Log "Call Trace:" and the `n` return addresses in `frames`. */
+static void trace_log(const char *subsystem, int level, const uintptr_t *frames, int n)
+{
+    int i;
+
+    klog(level, subsystem, "Call Trace:");
+    for (i = 0; i < n; i++) {
+        klog(level, subsystem, " 0x%lx", (unsigned long)frames[i]);
+    }
+}
+
+void watchdog_show_trace(const char *subsystem, int level, uintptr_t fp, uintptr_t top)
+{
+    uintptr_t frames[TRACE_MAX];
+    int n = trace_walk(fp, top, frames);
+
+    trace_log(subsystem, level, frames, n);
 }
 
 /** Linux's `show_regs`: the processor, the running thread and the frame
@@ -717,7 +744,12 @@ void watchdog_sched(void)
  * for a sample period since: the reports of the detectors, made in an NMI
  * or without the big lock, wait for a processor that holds it
  * (`klog_flush`), and that one is locked up. One that took a tick has come
- * back, and writes them out itself.
+ * back, and writes them out itself. A tick runs it, and so does each
+ * sample period of a wait for the big lock (`watchdog_wait`), since under
+ * load every other processor soon waits there with interrupts off and
+ * takes no tick. Linux has no lock that every waiter spins on: its buddy
+ * report runs in a processor that still takes interrupts, and printk's
+ * irq_work writes it out there (kernel/printk/printk.c:4524-4583).
  */
 static void flush_for_holder(int me)
 {
@@ -856,6 +888,9 @@ void watchdog_wait(void)
     if (this_cpu()->wake_bkl_waiting) {
         update_touch_ts(w);
         watchdog_hardlockup_kick(w, e);
+        if (klog_kept()) {
+            flush_for_holder((int)arch_cpu_id());
+        }
     } else if ((e & WD_HARD) && !wd_perf && ++w->wait_periods % 3u == 0) {
         buddy_check(w);
     }
@@ -900,6 +935,7 @@ int watchdog_nmi(isr_params_t *params)
         if (due && (watchdog_enabled() & WD_HARD) && watchdog_check_timestamp(w)) {
             watchdog_hardlockup_check(cpu, params);
         }
+        platform_pmu_handled();
     }
     if (smp_stop_nmi()) {
         handled++;
@@ -925,13 +961,30 @@ void watchdog_sysctl_changed(void)
     wq_wake_all(&hung_wait);
 }
 
-/** check_hung_task, kernel/hung_task.c:91. */
-static int check_hung_task(process_t *t, uint32_t timeout, uint64_t now)
+/* One hung task's report, copied out of its record with interrupts off and
+ * logged with them on (`hung_task_log`). */
+struct hung_report {
+    char name[16];
+    int pid, tgid, ppid;
+    const char *wchan; /* a static string, or NULL */
+    unsigned int secs; /* how long it has been blocked */
+    uintptr_t pc;      /* where it blocked, 0 when not known */
+    uintptr_t frames[TRACE_MAX];
+    int nframes;
+    int last; /* the warnings ran out with this report */
+};
+
+/**
+ * check_hung_task, kernel/hung_task.c:90-149: whether `t`, blocked in a
+ * sleep that no signal ends, has not been switched for `timeout` seconds
+ * at the tick `now` and is to be reported; when it is, its report is
+ * copied into `rep`. Interrupts are off, and `t` is only safe to read
+ * while they stay off.
+ */
+static int check_hung_task(process_t *t, uint32_t timeout, uint64_t now, struct hung_report *rep)
 {
     unsigned long switch_count = t->nvcsw + t->nivcsw;
-    uintptr_t pc, fp;
-    uint32_t sflags;
-    char name[16];
+    uintptr_t fp;
 
     if (switch_count == 0) {
         return 0;
@@ -950,57 +1003,87 @@ static int check_hung_task(process_t *t, uint32_t timeout, uint64_t now)
     if (sysctl_hung_task_warnings > 0) {
         sysctl_hung_task_warnings--;
     }
-    task_name(t, name);
-    sflags = sync_get();
-    klog(sysctl_hung_task_panic ? KLOG_CRIT : KLOG_ERR, "hung_task",
-         "INFO: task %s:%d blocked for more than %u seconds.", name, (int)t->pid,
-         (unsigned int)tick_div(now - t->last_switch_time, TICK_HZ, (uint32_t *)0));
-    klog(KLOG_ERR, "hung_task", "      Not tainted %s #1", UTS_RELEASE);
-    klog(KLOG_ERR, "hung_task",
-         "\"echo 0 > /proc/sys/kernel/hung_task_timeout_secs\" disables this message.");
-    platform_blocked_frame(t, &pc, &fp);
-    klog(KLOG_INFO, "hung_task", "task:%s state:D pid:%d tgid:%d ppid:%d wchan:%s", name,
-         (int)t->pid, (int)t->tgid, (int)t->parent_pid, t->wchan ? t->wchan : "0");
-    if (pc) {
-        klog(KLOG_INFO, "hung_task", " 0x%lx", (unsigned long)pc);
-    }
-    watchdog_show_trace("hung_task", KLOG_INFO, fp, t->kernel_stack);
-    if (!sysctl_hung_task_warnings) {
-        klog(KLOG_INFO, "hung_task",
-             "Future hung task reports are suppressed, see sysctl kernel.hung_task_warnings");
-    }
-    sync_put(sflags);
-    touch_nmi_watchdog();
+    task_name(t, rep->name);
+    rep->pid = (int)t->pid;
+    rep->tgid = (int)t->tgid;
+    rep->ppid = (int)t->parent_pid;
+    rep->wchan = t->wchan;
+    rep->secs = (unsigned int)tick_div(now - t->last_switch_time, TICK_HZ, (uint32_t *)0);
+    platform_blocked_frame(t, &rep->pc, &fp);
+    rep->nframes = trace_walk(fp, t->kernel_stack, rep->frames);
+    rep->last = !sysctl_hung_task_warnings;
     return 1;
 }
 
 /**
- * check_hung_uninterruptible_tasks, kernel/hung_task.c:181: every thread
- * blocked in a sleep no signal ends, but one SIGKILL ends (:206-210).
+ * Log a hung task's report, as check_hung_task and sched_show_task do
+ * (kernel/hung_task.c:131-145), with interrupts on, so that the ticks of
+ * this processor go on while its forty records go out; and touch the
+ * detectors, as Linux's does.
+ */
+static void hung_task_log(const struct hung_report *rep)
+{
+    klog(sysctl_hung_task_panic ? KLOG_CRIT : KLOG_ERR, "hung_task",
+         "INFO: task %s:%d blocked for more than %u seconds.", rep->name, rep->pid, rep->secs);
+    klog(KLOG_ERR, "hung_task", "      Not tainted %s #1", UTS_RELEASE);
+    klog(KLOG_ERR, "hung_task",
+         "\"echo 0 > /proc/sys/kernel/hung_task_timeout_secs\" disables this message.");
+    klog(KLOG_INFO, "hung_task", "task:%s state:D pid:%d tgid:%d ppid:%d wchan:%s", rep->name,
+         rep->pid, rep->tgid, rep->ppid, rep->wchan ? rep->wchan : "0");
+    if (rep->pc) {
+        klog(KLOG_INFO, "hung_task", " 0x%lx", (unsigned long)rep->pc);
+    }
+    trace_log("hung_task", KLOG_INFO, rep->frames, rep->nframes);
+    if (rep->last) {
+        klog(KLOG_INFO, "hung_task",
+             "Future hung task reports are suppressed, see sysctl kernel.hung_task_warnings");
+    }
+    touch_nmi_watchdog();
+}
+
+/**
+ * check_hung_uninterruptible_tasks, kernel/hung_task.c:181-229: every
+ * thread blocked in a sleep no signal ends, but one SIGKILL ends
+ * (:206-210).
  *
- * The walk and its reports run with interrupts off. khungtaskd holds the
- * big lock, but a tick switches a kernel thread at once (`sched_preempt`),
- * and the thread it switches to may reap a process and free the record the
- * walk stands on. Linux walks under
- * `rcu_read_lock` and breaks it only with references held (:195-214,
- * `rcu_lock_break`); a record here has no count to hold, so the walk does
- * not break, and `hung_task_check_count` bounds it. Each report touches
- * the detectors, as Linux's does, since its records go to the serial port
- * with interrupts off.
+ * The walk runs with interrupts off. khungtaskd holds the big lock, but a
+ * tick switches a kernel thread at once (`sched_preempt`), and the thread
+ * it switches to may reap a process and free the record the walk stands
+ * on. Linux walks under `rcu_read_lock` and breaks it every
+ * HUNG_TASK_LOCK_BREAK, a tenth of a second, with references held, ending
+ * the walk when the task it stands on has gone (`rcu_lock_break`, :40,
+ * :160-174, :201-205). A record here has no count to hold, so the walk
+ * keeps the thread's id instead, lets interrupts in after each report,
+ * which it logs then, and goes on from the record with that id, or ends
+ * when there is none. Without a report it does not break: the tick count
+ * stands still while khungtaskd holds the big lock with interrupts off,
+ * and a walk of every thread's record is short.
  */
 static void check_hung_uninterruptible_tasks(uint32_t timeout)
 {
     int max_count = sysctl_hung_task_check_count, reported = 0, want[NR_CPUS], c;
     uint64_t now = tick_count();
+    struct hung_report rep;
     process_t *t;
-    uint32_t flags = kirq_save();
+    uint32_t pid, flags = kirq_save();
 
     for (t = proc_list; t; t = t->next) {
         if (max_count-- <= 0) {
             break;
         }
-        if (t->state == PROC_BLOCKED && t->uninterruptible && !t->killable) {
-            reported |= check_hung_task(t, timeout, now);
+        if (t->state != PROC_BLOCKED || !t->uninterruptible || t->killable ||
+            !check_hung_task(t, timeout, now, &rep)) {
+            continue;
+        }
+        pid = t->pid;
+        kirq_restore(flags);
+        hung_task_log(&rep);
+        reported = 1;
+        flags = kirq_save();
+        now = tick_count();
+        t = get_process(pid);
+        if (!t) {
+            break;
         }
     }
     kirq_restore(flags);

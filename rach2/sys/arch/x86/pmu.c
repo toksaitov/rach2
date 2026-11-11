@@ -291,8 +291,9 @@ void platform_pmu_enable(uint64_t cycles)
         wrmsr64(IA32_PERF_GLOBAL_OVF_CTRL, 1u);
     }
     own_counters();
-    lapic_set_lvtpc(LAPIC_LVT_NMI);
+    /* On before the unmask, so that an NMI after it unmasks it again. */
     pmc[me].on = 1;
+    lapic_set_lvtpc(LAPIC_LVT_NMI);
     wrmsr64(evtsel_msr(), EVTSEL_WATCH(event()));
 }
 
@@ -316,18 +317,25 @@ void platform_pmu_disable(void)
 /**
  * Intel's version 2 says which counter overflowed in its global status,
  * cleared through the overflow-clear register
- * (arch/x86/events/intel/core.c, `intel_pmu_handle_irq`); version 1 and
- * AMD say nothing, and a counter loaded with the negative of its period has
- * overflowed once its top bit is clear (arch/x86/events/core.c,
- * `x86_pmu_handle_irq`). Intel's APIC masks the counter's entry as it
- * delivers the NMI, and AMD's does not (arch/x86/events/amd/core.c,
- * `amd_pmu_v2_handle_irq`); the entry is written again on both, as
- * `intel_pmu_handle_irq` and `x86_pmu_handle_irq` do. On AMD a handled
- * overflow opens the window for a late NMI, as `amd_pmu_handle_irq` does.
+ * (arch/x86/events/intel/core.c:3183-3190, `intel_pmu_handle_irq`); version
+ * 1 and AMD say nothing, and a counter loaded with the negative of its
+ * period has overflowed once its top bit is clear
+ * (arch/x86/events/core.c:1690-1699, `x86_pmu_handle_irq`). Intel's APIC
+ * masks the counter's entry as it delivers the NMI, and AMD's does not. The
+ * entry is written again on every NMI while the counter runs, whether or
+ * not it overflowed, as Linux's handlers write it on every NMI while an
+ * event is active (arch/x86/events/core.c:1688 and 1745-1746,
+ * arch/x86/events/intel/core.c:3176-3177 and 3226-3227): a late NMI that
+ * finds the status the arming cleared was still delivered through the
+ * entry and masked it. The write comes after the counter is loaded again,
+ * as Linux's late acknowledgement for Haswell and later
+ * (arch/x86/events/intel/core.c:3168-3175); a stopped counter's entry
+ * stays masked.
  */
 int platform_pmu_overflow(int *due)
 {
     int me = (int)arch_cpu_id();
+    int hit;
     uint64_t count;
 
     *due = 0;
@@ -335,29 +343,40 @@ int platform_pmu_overflow(int *due)
         return 0;
     }
     if (kind == PMU_INTEL && version >= 2) {
-        if ((rdmsr64(IA32_PERF_GLOBAL_STATUS) & 1u) == 0) {
-            return 0;
+        hit = (rdmsr64(IA32_PERF_GLOBAL_STATUS) & 1u) != 0;
+        if (hit) {
+            wrmsr64(IA32_PERF_GLOBAL_OVF_CTRL, 1u);
         }
-        wrmsr64(IA32_PERF_GLOBAL_OVF_CTRL, 1u);
     } else {
         count = rdmsr64(kind == PMU_AMD ? AMD_PERF_CTR0 : IA32_PMC0) & width_mask();
-        if ((count & ((uint64_t)1 << (width - 1))) != 0) {
-            return 0;
+        hit = (count & ((uint64_t)1 << (width - 1))) == 0;
+    }
+    if (hit) {
+        if (pmc[me].left <= pmc[me].chunk) {
+            *due = 1;
+            pmc[me].left = pmc[me].period;
+        } else {
+            pmc[me].left -= pmc[me].chunk;
         }
+        pmc[me].chunk = pmc[me].left < max_period ? pmc[me].left : max_period;
+        load_count(pmc[me].chunk);
     }
-    if (pmc[me].left <= pmc[me].chunk) {
-        *due = 1;
-        pmc[me].left = pmc[me].period;
-    } else {
-        pmc[me].left -= pmc[me].chunk;
-    }
-    pmc[me].chunk = pmc[me].left < max_period ? pmc[me].left : max_period;
-    load_count(pmc[me].chunk);
     lapic_set_lvtpc(LAPIC_LVT_NMI);
+    return hit;
+}
+
+/**
+ * On AMD, open the window for a late NMI once the handler has run the
+ * overflow's callback, which may take seconds to report a lockup, as
+ * `amd_pmu_handle_irq` opens it after `x86_pmu_handle_irq` and the
+ * callbacks it runs (arch/x86/events/amd/core.c:874-882, 911-918;
+ * arch/x86/events/core.c:1713).
+ */
+void platform_pmu_handled(void)
+{
     if (kind == PMU_AMD) {
-        open_window(me);
+        open_window((int)arch_cpu_id());
     }
-    return 1;
 }
 
 /**
@@ -365,9 +384,10 @@ int platform_pmu_overflow(int *due)
  * it: one in flight as the counter is loaded again or stopped finds no
  * overflow, and on AMD the overflow is seen late, which Linux allows for by
  * claiming every NMI of no known source for 100 ms after a handled overflow
- * (arch/x86/events/amd/core.c:856-889, 1420, `perf_nmi_window`). The same
- * window here follows each arming and stop of the counter, on Intel too,
- * whose global status the arming clears.
+ * (arch/x86/events/amd/core.c:856-889, 1420, `perf_nmi_window`), which
+ * `platform_pmu_handled` opens. The same window here follows each arming
+ * and stop of the counter, on Intel too, whose global status the arming
+ * clears.
  */
 int platform_pmu_late(void)
 {
