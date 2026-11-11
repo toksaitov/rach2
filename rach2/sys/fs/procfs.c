@@ -1422,7 +1422,7 @@ static void ap_maps_identity(struct procfs_text *t, const struct mm *mm, const v
 /** Whether region `r` is a shared mapping, Linux's VM_MAYSHARE: a VM_SHARED
  * region, or a read-only shared mapping served as a private one, VM_FILE
  * with VM_PROT_NOWRITE, which only a shared mapping is given; the vDSO's
- * pages, which Linux maps private, are not. */
+ * data page, which Linux maps private, is not. */
 static int maps_shared(const vma_t *r)
 {
     return !vdso_region_name(r->file) &&
@@ -1528,17 +1528,16 @@ static void ap_smaps_key(struct procfs_text *t, const vma_t *r)
  * sh, mr, mw, me and ms. A shared mapping is ms (`maps_shared`), and sh too
  * only when it may be made writable, as Linux clears VM_SHARED for a file
  * opened without write. The vDSO's pages have what Linux's special mappings
- * have: [vdso] mr mw me, and [vvar] mr.
+ * have: [vdso] mr mw me, and [vvar], which is VM_PROT_NOWRITE, mr.
  */
 static void ap_smaps_may(struct procfs_text *t, const vma_t *r)
 {
-    int vdso = vdso_region_name(r->file) != NULL;
-    int vvar = vdso && vdso_is_data(r->file);
+    int vvar = vdso_is_data(r->file);
     int shared = maps_shared(r);
 
     ap_str(t, shared && !(r->prot & VM_PROT_NOWRITE) ? " sh" : "");
     ap_str(t, " mr");
-    ap_str(t, (vdso && !vvar) || !(r->prot & VM_PROT_NOWRITE) ? " mw" : "");
+    ap_str(t, !(r->prot & VM_PROT_NOWRITE) ? " mw" : "");
     ap_str(t, vvar || (r->prot & VM_PROT_SECRET) ? "" : " me");
     ap_str(t, shared ? " ms" : "");
 }

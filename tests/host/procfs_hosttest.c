@@ -1807,10 +1807,70 @@ static void smaps_flags_rows(void)
                     VM_PROT_READ | VM_PROT_LOCKED | VM_PROT_LOCKONFAULT | VM_PROT_WIPEONFORK |
                         VM_PROT_SEALED,
                     NULL, "VmFlags: rd mr mw me lo lf wf sl\n");
-    smaps_flags_row(VM_SHARED, VM_PROT_READ | VM_PROT_EXEC | VM_PROT_NOWRITE, &vdso_text_file,
+    smaps_flags_row(VM_FILE, VM_PROT_READ | VM_PROT_EXEC, &vdso_text_file,
                     "VmFlags: rd ex mr mw me de\n");
     smaps_flags_row(VM_SHARED, VM_PROT_READ | VM_PROT_NOWRITE, &vdso_vvar_file,
                     "VmFlags: rd mr pf io de dd\n");
+}
+
+/* A file of no file system for the maps rows, which `filemap_ofd` gives
+ * no description, so that its identity is "00:00 0". */
+static char maps_file_path[] = "/mnt/f";
+static struct vm_file maps_file = {1, 0, 0, 0, maps_file_path, 0, 0};
+
+/** No region of the maps rows maps a file of the page cache. */
+const struct open_file *filemap_ofd(const struct vm_file *f)
+{
+    (void)f;
+    return NULL;
+}
+
+/** The mount table the identity of a maps line searches, empty here. */
+int vfs_mount_slots(void)
+{
+    return 0;
+}
+
+/** No entry of the empty mount table. */
+struct vfs_mount *vfs_mount_at(int idx)
+{
+    (void)idx;
+    return NULL;
+}
+
+/** Compare the first 22 bytes of the maps line of a region of `type` and
+ * `prot` that maps `file`, the range, the rights and the p or s, with
+ * `want`. */
+static void maps_line_row(vm_type_t type, uint32_t prot, struct vm_file *file, const char *want)
+{
+    struct procfs_text t;
+    vma_t r;
+
+    k_memset(&space, 0, sizeof(space));
+    k_memset(&r, 0, sizeof(r));
+    r.start = 0x40000000u;
+    r.end = 0x40001000u;
+    r.type = type;
+    r.prot = prot;
+    r.file = file;
+    procfs_text_init(&t);
+    ap_maps_line(&t, &space, &r);
+    check(!t.nomem && t.buf && t.len > 22 && __builtin_memcmp(t.buf, want, 22) == 0, want);
+    kfree(t.buf);
+}
+
+/** The maps line's s column is Linux's VM_MAYSHARE: s for a shared region
+ * and for a read-only shared mapping served as a private one, VM_FILE with
+ * VM_PROT_NOWRITE, and p for a private mapping of a file and for both of
+ * the vDSO's regions, as Linux maps them private. */
+static void maps_shared_rows(void)
+{
+    maps_line_row(VM_SHARED, VM_PROT_READ | VM_PROT_WRITE, &maps_file, "40000000-40001000 rw-s");
+    maps_line_row(VM_FILE, VM_PROT_READ | VM_PROT_NOWRITE, &maps_file, "40000000-40001000 r--s");
+    maps_line_row(VM_FILE, VM_PROT_READ, &maps_file, "40000000-40001000 r--p");
+    maps_line_row(VM_FILE, VM_PROT_READ | VM_PROT_EXEC, &vdso_text_file, "40000000-40001000 r-xp");
+    maps_line_row(VM_SHARED, VM_PROT_READ | VM_PROT_NOWRITE, &vdso_vvar_file,
+                  "40000000-40001000 r--p");
 }
 
 /* The descriptor the oom_score_adj rows read and write, on process 7. */
@@ -3410,6 +3470,7 @@ int main(int argc, char **argv)
     exe_entries();
     image_paths();
     smaps_flags_rows();
+    maps_shared_rows();
     reaped_during_read();
     system_rows();
     oom_values();
