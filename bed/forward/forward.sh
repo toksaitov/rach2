@@ -17,7 +17,9 @@
 # server over its user network. OUT, the working directory by default, gets
 # the guest's console as console.log, QEMU's own messages as qemu.log, the
 # scene's output as scene.log, and for a scene that ran, the guest's /tmp/out
-# as out.tar. REF is for venus: a frames file of vkcube.sh that the scene
+# as out.tar, and as shader-cache the Mesa shader cache of QEMU's renderer,
+# new and empty for each run, so that the host's compiles start cold as the
+# native rungs' do. REF is for venus: a frames file of vkcube.sh that the scene
 # judges vkcube's frames by in place of the archive's vkcube.ref, copied into
 # the guest, or `none`, which records the frames without judging them.
 # SCENE, with SECONDS, has scene.sh run the test bed's measurement harness
@@ -142,6 +144,8 @@ mkdir -p "$out" || fail "cannot make $out"
 out=$(cd "$out" && pwd) || fail "cannot enter $out"
 : > "$out/console.log"
 : > "$out/scene.log"
+rm -rf "$out/shader-cache"
+mkdir -p "$out/shader-cache" || fail "cannot make $out/shader-cache"
 
 # The guest's account, reached through the forwarded port with its key
 # alone; the guest's host key is new with each image, so none is kept.
@@ -155,7 +159,7 @@ guest()
 
 echo "bed-forward: start: $qemu -accel $accel_option -cpu $cpu -smp $cpus -m $mib -device $gpu" \
     "-display egl-headless,rendernode=$node"
-TMPDIR=$out "$qemu" -nodefaults -no-reboot -machine q35 -accel "$accel_option" -cpu "$cpu" \
+TMPDIR=$out MESA_SHADER_CACHE_DIR=$out/shader-cache "$qemu" -nodefaults -no-reboot -machine q35 -accel "$accel_option" -cpu "$cpu" \
     -smp "$cpus" -m "${mib}M" "$@" -drive "file=$disk,format=$format,if=virtio,snapshot=on" \
     -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:$port-:22" -device virtio-net-pci,netdev=net0 \
     -device virtio-rng-pci -device "$gpu" -display "egl-headless,rendernode=$node" \
