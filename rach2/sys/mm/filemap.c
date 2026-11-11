@@ -64,7 +64,13 @@ struct filemap {
 };
 
 static struct filemap *maps;
-static struct dshare *dshares;
+/* The disk files shared mappings hold pages of, in buckets by inode
+ * number, since every read and write of a disk file asks whether its file
+ * is among them: Linux reaches a file's pages from its inode
+ * (`inode->i_mapping`) without a search. */
+#define DSHARE_BUCKETS 256u
+static struct dshare *dshares[DSHARE_BUCKETS];
+static uint32_t dshare_count; /* how many are in the buckets */
 
 /**
  * Whether a page of a file on `mnt` can be read with interrupts off, for a
@@ -178,16 +184,39 @@ static void *filemap_node(const struct filemap *m)
     return fd_root_node(&m->entry);
 }
 
+/** The bucket of `dshares` that holds the file of inode number `ino`. */
+static struct dshare **dshare_bucket(uint64_t ino)
+{
+    return &dshares[(uint32_t)(ino ^ (ino >> 32)) % DSHARE_BUCKETS];
+}
+
 /** The pages in memory of the file `ino` of `mnt`, or NULL when no shared
  * mapping has them. */
 static struct dshare *dshare_of(const struct vfs_mount *mnt, uint64_t ino)
 {
     struct dshare *ds;
 
+    if (dshare_count == 0) {
+        return NULL;
+    }
     mnt = vfs_mount_base(mnt);
-    for (ds = dshares; ds && !(ds->mnt == mnt && ds->ino == ino); ds = ds->next) {
+    for (ds = *dshare_bucket(ino); ds && !(ds->mnt == mnt && ds->ino == ino); ds = ds->next) {
     }
     return ds;
+}
+
+/** Take `ds`, which is in its bucket, out of it; nothing here sleeps. */
+static void dshare_unlink(struct dshare *ds)
+{
+    struct dshare **link = dshare_bucket(ds->ino);
+
+    while (*link && *link != ds) {
+        link = &(*link)->next;
+    }
+    if (*link) {
+        *link = ds->next;
+        dshare_count--;
+    }
 }
 
 /** A mapping of `ds`, through a descriptor open for writing when `writer`,
@@ -209,17 +238,10 @@ static struct filemap *dshare_mapping(const struct dshare *ds, int writer)
  * with the last. Nothing here sleeps. */
 static void dshare_put(struct dshare *ds)
 {
-    struct dshare **link = &dshares;
-
     if (--ds->users != 0) {
         return;
     }
-    while (*link && *link != ds) {
-        link = &(*link)->next;
-    }
-    if (*link) {
-        *link = ds->next;
-    }
+    dshare_unlink(ds);
     shmem_free(&ds->sh);
     kfree(ds);
 }
@@ -561,13 +583,14 @@ struct vm_file *filemap_disk_shared(const fd_entry_t *e)
         ds->mnt = vfs_mount_base(e->ofd->vmnt);
         ds->ino = e->ofd->ino;
         wait_queue_init(&ds->left);
-        ds->next = dshares;
-        dshares = ds;
+        ds->next = *dshare_bucket(ds->ino);
+        *dshare_bucket(ds->ino) = ds;
+        dshare_count++;
     }
     m = (struct filemap *)filemap_new(e);
     if (!m) {
         if (ds->users == 0) {
-            dshares = ds->next;
+            dshare_unlink(ds);
             kfree(ds);
         }
         return NULL;
@@ -625,7 +648,7 @@ int filemap_disk_mapped(const struct vfs_mount *mnt, uint64_t ino)
 int32_t filemap_read_resident(const struct vfs_mount *mnt, uint64_t ino, uint64_t off,
                               char __user *dst, uint32_t count)
 {
-    struct dshare *ds = dshares ? dshare_of(mnt, ino) : NULL;
+    struct dshare *ds = dshare_of(mnt, ino);
     uint32_t in = (uint32_t)(off % PAGE_SIZE);
     uintptr_t phys;
     uint8_t *page;
@@ -655,7 +678,7 @@ int32_t filemap_read_resident(const struct vfs_mount *mnt, uint64_t ino, uint64_
 
 void filemap_file_written(fd_entry_t *e, uint64_t off, uint32_t len)
 {
-    struct dshare *ds = dshares && e->ofd ? dshare_of(e->ofd->vmnt, e->ofd->ino) : NULL;
+    struct dshare *ds = e->ofd ? dshare_of(e->ofd->vmnt, e->ofd->ino) : NULL;
     uint64_t stop = off + len;
     uint8_t buf[512];
     uint32_t i;
@@ -719,7 +742,7 @@ void filemap_disk_written(const struct vfs_mount *mnt, uint64_t ino, uint64_t of
 
 void filemap_file_truncated(const struct vfs_mount *mnt, uint64_t ino, uint64_t size)
 {
-    struct dshare *ds = dshares ? dshare_of(mnt, ino) : NULL;
+    struct dshare *ds = dshare_of(mnt, ino);
 
     if (ds) {
         (void)shmem_truncate(&ds->sh, size);
@@ -728,7 +751,7 @@ void filemap_file_truncated(const struct vfs_mount *mnt, uint64_t ino, uint64_t 
 
 int filemap_sync_file(const struct vfs_mount *mnt, uint64_t ino)
 {
-    struct dshare *ds = dshares ? dshare_of(mnt, ino) : NULL;
+    struct dshare *ds = dshare_of(mnt, ino);
 
     return ds ? dshare_sync(ds, 0, 0xFFFFFFFFu, 0) : 0;
 }
@@ -736,12 +759,15 @@ int filemap_sync_file(const struct vfs_mount *mnt, uint64_t ino)
 void filemap_sync_all(void)
 {
     struct dshare *ds, *next;
+    uint32_t i;
 
-    for (ds = dshares; ds; ds = next) {
-        ds->users++;
-        (void)dshare_sync(ds, 0, 0xFFFFFFFFu, 0);
-        next = ds->next;
-        dshare_put(ds);
+    for (i = 0; i < DSHARE_BUCKETS; i++) {
+        for (ds = dshares[i]; ds; ds = next) {
+            ds->users++;
+            (void)dshare_sync(ds, 0, 0xFFFFFFFFu, 0);
+            next = ds->next;
+            dshare_put(ds);
+        }
     }
 }
 
