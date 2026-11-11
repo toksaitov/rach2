@@ -18,11 +18,16 @@ pulse() {
 pulse modules
 pulse sink-inputs
 pulse source-outputs
-read_sample() {
-    echo "idle: sample $1"
-    cat /proc/uptime
+# The sink and source states, each a pactl client of PulseAudio.
+listings() {
+    echo "idle: listings $1"
     pulse sinks
     pulse sources
+}
+# The /proc counters the ten seconds are judged by.
+counters() {
+    echo "idle: sample $1"
+    cat /proc/uptime
     for f in /proc/"$pa"/task/*/stat /proc/"$khda"/task/*/stat; do
         echo "idle: $f"
         cat "$f"
@@ -33,6 +38,10 @@ read_sample() {
     head -n 5 /proc/stat
     cat /proc/audio
 }
-read_sample before
+# The listings come before the first counters and after the second, so that
+# no pactl client of this script runs inside the window.
+listings before
+counters before
 sleep 10
-read_sample after
+counters after
+listings after
