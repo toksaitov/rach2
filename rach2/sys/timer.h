@@ -75,6 +75,11 @@ void tick_now(uint32_t *seconds, uint32_t *second_ticks, uint64_t *ticks);
  */
 uint64_t tick_div(uint64_t n, uint32_t d, uint32_t *rem);
 
+/** `n` divided by `d`, which is not 0, with the remainder in `*rem` when it
+ * is not NULL, for any divisor: one bit of the quotient at a time where
+ * either is past 32 bits, so slower than `tick_div`. */
+uint64_t tick_div64(uint64_t n, uint64_t d, uint64_t *rem);
+
 /**
  * A span of `sec` seconds and `nsec` nanoseconds, neither negative and
  * `nsec` under a second, as whole ticks, a partial tick counted as one. The
