@@ -103,9 +103,11 @@ empties the console zone, this boot's log in it too, as on Linux.
 .Pp
 The root directory is root's with mode 0750, and each file root's with
 mode 0444, as Linux makes them.
-A file's size is its record's, and its times the time in its header, or
-the time of the first mount for the console's, as Linux makes the files at
-mount.
+A file's size is its record's.
+Its access time is the time of the first mount, when the file is made, as
+Linux makes the files at mount; its modification and change times are the
+time in its record's header, or the time of the first mount for the
+console's, which has none.
 Nothing else makes, writes or renames a file.
 .Xr statfs 2
 reports
