@@ -31,8 +31,9 @@ A successful call may return fewer bytes than requested; a count past
 0x7ffff000, Linux's
 .Dv MAX_RW_COUNT ,
 reads at most that many, so that the count returned is never negative.
-A zero-length read checks that the descriptor exists, then returns zero
-without inspecting the buffer or checking the descriptor's read mode;
+A zero-length read checks the descriptor as a longer one does, that it
+exists, is open for reading, is no directory and is open on an object with
+a read method, then returns zero without inspecting the buffer;
 an eventfd and a timerfd, which read whole eight-byte counts, refuse it
 with
 .Er EINVAL ,
@@ -43,8 +44,8 @@ of zero bytes returns zero for them, as Linux's does.
 Regular files are read at the open file description's offset.
 A positive result advances that offset by the number of bytes read.
 Descriptors shared through duplication or fork share the offset.
-Directories cannot be read with these calls: a nonzero read returns
-.Er EBADF .
+Directories cannot be read with these calls: a read of any count returns
+.Er EISDIR .
 Use
 .Xr getdents64 2
 to read directory entries.
@@ -135,8 +136,11 @@ The kernel checks every length first, then that every range lies in user
 space and write access to every nonempty destination, before taking
 input.
 An invalid destination therefore fails before consuming input.
-A list requesting no bytes still checks the descriptor and returns zero
-only if it exists.
+The descriptor is checked before the list, as for
+.Fn read ,
+so a list requesting no bytes returns zero only from a descriptor that
+exists and is open for reading on an object with a read method, a
+directory among them.
 .Pp
 The first nonempty buffer uses an ordinary read, which may wait.
 For a regular file, reading continues through successive buffers until
