@@ -55,13 +55,183 @@
 #define L7_BLD         (1u << 24)
 #define PDCM           (1u << 15)
 #define CORE_EXT       (1u << 23)
+#define L7_HYBRID      (1u << 15)
+#define EV_RAW         (0xFFFFull | EV_EDGE | EV_INVERT | EV_CMASK)
+#define AMD_MERGE      (0xF000000FFull | EV_ENABLE)
+#define FIXED_BIT(j)   (1ull << (32u + (j)))
 #define AMD_EVENT      0xF000000FFull
 #define FILTER_EXCLUDE (1ull << 55)
 #define FILTER_MASK    (0xFFull << 56)
 #define FILTER_MAX     300u
 
+/*
+ * A row of Linux's event constraints (arch/x86/events/perf_event.h:359-460):
+ * a selector whose bits under `match` lie in `code` to `code + size` may
+ * run on the counters of `mask`, general ones in its low 32 bits and fixed
+ * counter j at bit 32 + j. The first row that matches is the event's; an
+ * event no row matches may run on any general counter.
+ */
+struct constraint {
+    uint64_t match;
+    uint16_t code, size;
+    uint64_t mask;
+};
+
+/* The rows' match masks: the event code, the code and unit mask, the code
+ * and the unit-mask bits of `code`, and the whole of a fixed event, which
+ * edge, invert, a counter mask or a TSX flag keeps off its fixed counter
+ * (perf_event.h:413-460, FIXED_EVENT_FLAGS). */
+#define M_EVENT 0xFFull
+#define M_UMASK 0xFFFFull
+#define M_FIXED (EV_RAW | EV_TX | EV_TXCP)
+
+#define C_EVENT(c, n)    {M_EVENT, (c), 0, (n)}
+#define C_RANGE(c, e, n) {M_EVENT, (c), (e) - (c), (n)}
+#define C_UEVENT(c, n)   {M_UMASK, (c), 0, (n)}
+#define C_UBIT(c, n)     {M_EVENT | (c), (c), 0, (n)}
+#define C_FIXED(c, j)    {M_FIXED, (c), 0, 1ull << (32 + (j))}
+#define C_METRIC(c)      {M_UMASK, (c), 0, 0}
+#define C_END            {0, 0, 0, 0}
+
+/* Linux 6.12.115's tables of arch/x86/events/intel/core.c, by its lines:
+ * Yonah's (44), Core 2's (55), Nehalem's (73), Westmere's (97), Sandy
+ * Bridge's (109), Ivy Bridge's (136), the generic version 2's (178),
+ * Silvermont's and its successors' (207), Gracemont's (215), Skylake's
+ * (234), Ice Lake's (286), Golden Cove's (332), Haswell's (504) and
+ * Broadwell's (530). A metric event runs on no counter KVM has. */
+static const struct constraint c_core[] = {C_EVENT(0x11, 0x2),
+                                           C_EVENT(0x12, 0x2),
+                                           C_EVENT(0x13, 0x2),
+                                           C_EVENT(0x14, 0x1),
+                                           C_EVENT(0x19, 0x2),
+                                           C_EVENT(0xc1, 0x1),
+                                           C_END};
+static const struct constraint c_core2[] = {C_FIXED(0x00c0, 0), C_FIXED(0x003c, 1),
+                                            C_FIXED(0x0300, 2), C_EVENT(0x10, 0x1),
+                                            C_EVENT(0x11, 0x2), C_EVENT(0x12, 0x2),
+                                            C_EVENT(0x13, 0x2), C_EVENT(0x14, 0x1),
+                                            C_EVENT(0x18, 0x1), C_EVENT(0x19, 0x2),
+                                            C_EVENT(0xa1, 0x1), C_EVENT(0xc9, 0x1),
+                                            C_EVENT(0xcb, 0x1), C_END};
+static const struct constraint c_nehalem[] = {
+    C_FIXED(0x00c0, 0), C_FIXED(0x003c, 1), C_FIXED(0x0300, 2), C_EVENT(0x40, 0x3),
+    C_EVENT(0x41, 0x3), C_EVENT(0x42, 0x3), C_EVENT(0x43, 0x3), C_EVENT(0x48, 0x3),
+    C_EVENT(0x4e, 0x3), C_EVENT(0x51, 0x3), C_EVENT(0x63, 0x3), C_END};
+static const struct constraint c_westmere[] = {
+    C_FIXED(0x00c0, 0), C_FIXED(0x003c, 1), C_FIXED(0x0300, 2), C_EVENT(0x51, 0x3),
+    C_EVENT(0x60, 0x1), C_EVENT(0x63, 0x3), C_EVENT(0xb3, 0x1), C_END};
+static const struct constraint c_snb[] = {C_FIXED(0x00c0, 0),
+                                          C_FIXED(0x003c, 1),
+                                          C_FIXED(0x0300, 2),
+                                          C_UEVENT(0x04a3, 0xf),
+                                          C_UEVENT(0x05a3, 0xf),
+                                          C_UEVENT(0x02a3, 0x4),
+                                          C_UEVENT(0x06a3, 0x4),
+                                          C_EVENT(0x48, 0x4),
+                                          C_UEVENT(0x01c0, 0x2),
+                                          C_EVENT(0xcd, 0x8),
+                                          C_UEVENT(0x04a3, 0xf),
+                                          C_UEVENT(0x02a3, 0x4),
+                                          C_EVENT(0xd0, 0xf),
+                                          C_EVENT(0xd1, 0xf),
+                                          C_EVENT(0xd2, 0xf),
+                                          C_EVENT(0xd3, 0xf),
+                                          C_END};
+static const struct constraint c_ivb[] = {
+    C_FIXED(0x00c0, 0),    C_FIXED(0x003c, 1),    C_FIXED(0x0300, 2),
+    C_UEVENT(0x0148, 0x4), C_UEVENT(0x0279, 0xf), C_UEVENT(0x019c, 0xf),
+    C_UEVENT(0x02a3, 0xf), C_UEVENT(0x04a3, 0xf), C_UEVENT(0x05a3, 0xf),
+    C_UEVENT(0x06a3, 0xf), C_UEVENT(0x08a3, 0x4), C_UEVENT(0x0ca3, 0x4),
+    C_UEVENT(0x01c0, 0x2), C_EVENT(0xd0, 0xf),    C_EVENT(0xd1, 0xf),
+    C_EVENT(0xd2, 0xf),    C_EVENT(0xd3, 0xf),    C_END};
+static const struct constraint c_gen[] = {C_FIXED(0x00c0, 0), C_FIXED(0x003c, 1),
+                                          C_FIXED(0x0300, 2), C_END};
+static const struct constraint c_grt[] = {C_FIXED(0x00c0, 0), C_FIXED(0x003c, 1),
+                                          C_FIXED(0x0300, 2), C_FIXED(0x013c, 2), C_END};
+static const struct constraint c_skl[] = {C_FIXED(0x00c0, 0), C_FIXED(0x003c, 1),
+                                          C_FIXED(0x0300, 2), C_UEVENT(0x1c0, 0x2),
+                                          C_EVENT(0xd0, 0xf), C_EVENT(0xd1, 0xf),
+                                          C_EVENT(0xd2, 0xf), C_EVENT(0xcd, 0xf),
+                                          C_EVENT(0xc6, 0xf), C_END};
+static const struct constraint c_icl[] = {C_FIXED(0x00c0, 0),
+                                          C_FIXED(0x01c0, 0),
+                                          C_FIXED(0x0100, 0),
+                                          C_FIXED(0x003c, 1),
+                                          C_FIXED(0x0300, 2),
+                                          C_FIXED(0x0400, 3),
+                                          C_METRIC(0x8000),
+                                          C_METRIC(0x8100),
+                                          C_METRIC(0x8200),
+                                          C_METRIC(0x8300),
+                                          C_RANGE(0x03, 0x0a, 0xf),
+                                          C_RANGE(0x1f, 0x28, 0xf),
+                                          C_EVENT(0x32, 0xf),
+                                          C_RANGE(0x48, 0x56, 0xf),
+                                          C_RANGE(0x60, 0x8b, 0xf),
+                                          C_UEVENT(0x04a3, 0xff),
+                                          C_UEVENT(0x10a3, 0xff),
+                                          C_UEVENT(0x14a3, 0xff),
+                                          C_EVENT(0xa3, 0xf),
+                                          C_RANGE(0xa8, 0xb0, 0xf),
+                                          C_RANGE(0xb7, 0xbd, 0xf),
+                                          C_RANGE(0xd0, 0xe6, 0xf),
+                                          C_EVENT(0xef, 0xf),
+                                          C_RANGE(0xf0, 0xf4, 0xf),
+                                          C_END};
+static const struct constraint c_glc[] = {
+    C_FIXED(0x00c0, 0),       C_FIXED(0x0100, 0),        C_FIXED(0x003c, 1),
+    C_FIXED(0x0300, 2),       C_FIXED(0x013c, 2),        C_FIXED(0x0400, 3),
+    C_METRIC(0x8000),         C_METRIC(0x8100),          C_METRIC(0x8200),
+    C_METRIC(0x8300),         C_METRIC(0x8400),          C_METRIC(0x8500),
+    C_METRIC(0x8600),         C_METRIC(0x8700),          C_EVENT(0x2e, 0xff),
+    C_EVENT(0x3c, 0xff),      C_RANGE(0x01, 0x8f, 0xf),  C_UEVENT(0x01a3, 0xf),
+    C_UEVENT(0x02a3, 0xf),    C_UEVENT(0x08a3, 0xf),     C_UEVENT(0x04a4, 0x1),
+    C_UEVENT(0x08a4, 0x1),    C_UEVENT(0x02cd, 0x1),     C_EVENT(0xce, 0x1),
+    C_RANGE(0xd0, 0xdf, 0xf), C_RANGE(0x90, 0xfe, 0xff), C_END};
+static const struct constraint c_hsw[] = {C_FIXED(0x00c0, 0),    C_FIXED(0x003c, 1),
+                                          C_FIXED(0x0300, 2),    C_UEVENT(0x148, 0x4),
+                                          C_UEVENT(0x01c0, 0x2), C_EVENT(0xcd, 0x8),
+                                          C_UEVENT(0x08a3, 0x4), C_UEVENT(0x0ca3, 0x4),
+                                          C_UEVENT(0x04a3, 0xf), C_EVENT(0xd0, 0xf),
+                                          C_EVENT(0xd1, 0xf),    C_EVENT(0xd2, 0xf),
+                                          C_EVENT(0xd3, 0xf),    C_END};
+static const struct constraint c_bdw[] = {C_FIXED(0x00c0, 0), C_FIXED(0x003c, 1),
+                                          C_FIXED(0x0300, 2), C_UEVENT(0x148, 0x4),
+                                          C_UBIT(0x8a3, 0x4), C_EVENT(0xd0, 0xf),
+                                          C_EVENT(0xd1, 0xf), C_EVENT(0xd2, 0xf),
+                                          C_EVENT(0xcd, 0xf), C_END};
+
+/* Intel's models, family 6, and their tables, as `intel_pmu_init` sets them
+ * (arch/x86/events/intel/core.c:6591-7290); `cp` is Haswell's and its
+ * successors' rule that a TSX-checkpointed event counts only on counter 2
+ * (`hsw_get_event_constraints`, :4522-4538). Another model with version 2
+ * to 4 has the generic table, and one with version 1 none. */
+static const struct {
+    uint8_t model, cp;
+    const struct constraint *table;
+} intel_tables[] = {
+    {0x0E, 0, c_core},     {0x0F, 0, c_core2},    {0x16, 0, c_core2},   {0x17, 0, c_core2},
+    {0x1D, 0, c_core2},    {0x1E, 0, c_nehalem},  {0x1A, 0, c_nehalem}, {0x2E, 0, c_nehalem},
+    {0x1C, 0, c_gen},      {0x26, 0, c_gen},      {0x36, 0, c_gen},     {0x27, 0, c_gen},
+    {0x35, 0, c_gen},      {0x37, 0, c_gen},      {0x4D, 0, c_gen},     {0x4A, 0, c_gen},
+    {0x4C, 0, c_gen},      {0x5A, 0, c_gen},      {0x5C, 0, c_gen},     {0x5F, 0, c_gen},
+    {0x7A, 0, c_gen},      {0x86, 0, c_gen},      {0x96, 0, c_gen},     {0x9C, 0, c_gen},
+    {0xBE, 0, c_grt},      {0xB6, 0, c_grt},      {0xAF, 0, c_grt},     {0x25, 0, c_westmere},
+    {0x2C, 0, c_westmere}, {0x2F, 0, c_westmere}, {0x2A, 0, c_snb},     {0x2D, 0, c_snb},
+    {0x3A, 0, c_ivb},      {0x3E, 0, c_ivb},      {0x3C, 1, c_hsw},     {0x3F, 1, c_hsw},
+    {0x45, 1, c_hsw},      {0x46, 1, c_hsw},      {0x3D, 1, c_bdw},     {0x56, 1, c_bdw},
+    {0x47, 1, c_bdw},      {0x4F, 1, c_bdw},      {0x57, 0, c_gen},     {0x85, 0, c_gen},
+    {0x55, 1, c_skl},      {0x4E, 1, c_skl},      {0x5E, 1, c_skl},     {0x8E, 1, c_skl},
+    {0x9E, 1, c_skl},      {0xA6, 1, c_skl},      {0xA5, 1, c_skl},     {0x6A, 1, c_icl},
+    {0x6C, 1, c_icl},      {0x7E, 1, c_icl},      {0x7D, 1, c_icl},     {0x8C, 1, c_icl},
+    {0x8D, 1, c_icl},      {0xA7, 1, c_icl},      {0x8F, 1, c_glc},     {0xCF, 1, c_glc},
+    {0xAD, 1, c_glc},      {0xAE, 1, c_glc}};
+
 /* The backend's physical counters. Linux caps the architectural PMU at
- * version 2 and the fixed counters at three; AMD has at most six. The LBR
+ * version 2 and the fixed counters at three; AMD has at most six. `table`
+ * is Intel's model's event constraints and `cp` its TSX rule; `family` is
+ * AMD's, whose family 15h restricts events to counters and whose family
+ * 17h and later merge a counter pair for a large-increment event. The LBR
  * stack is Intel's legacy one, of `lbr_nr` records, with information MSRs
  * when `lbr_info`; `lbr_quirk` is Linux's lbr_from_signext_quirk_wr, and
  * `model` the processor's, which a guest with the stack must have. */
@@ -69,6 +239,9 @@ struct pmu_host {
     int intel, core_ext, pdcm;
     uint32_t version, nr_gp, nr_fixed, width, fixed_width;
     uint32_t event_length, unavailable;
+    const struct constraint *table;
+    int cp;
+    uint32_t family;
     uint64_t lbr_format;
     uint32_t lbr_nr, model;
     int lbr_info, lbr_quirk;
@@ -216,6 +389,33 @@ static void lbr_probe(void)
     }
 }
 
+/** The family of a CPUID leaf 1 signature, the extended family added to
+ * family 15, as Linux's x86_family. */
+static uint32_t cpu_family(uint32_t signature)
+{
+    uint32_t family = (signature >> 8) & 0xFu;
+
+    return family == 0xFu ? family + ((signature >> 20) & 0xFFu) : family;
+}
+
+/** Choose Intel's table of event constraints by the processor's model. */
+static void intel_table(void)
+{
+    uint32_t a, b, c, d, i;
+
+    kcpu_id(1, &a, &b, &c, &d);
+    pmu_host.table = pmu_host.version > 1u ? c_gen : NULL;
+    if (cpu_family(a) != 6u) {
+        return;
+    }
+    for (i = 0; i < sizeof(intel_tables) / sizeof(intel_tables[0]); i++) {
+        if (intel_tables[i].model == cpu_model(a)) {
+            pmu_host.table = intel_tables[i].table;
+            pmu_host.cp = intel_tables[i].cp;
+        }
+    }
+}
+
 void kvm_pmu_start(void)
 {
     uint32_t a, b, c, d, top;
@@ -228,6 +428,12 @@ void kvm_pmu_start(void)
     if (pmu_host.intel) {
         kcpu_id(0, &a, &b, &c, &d);
         if (a < 0xAu) {
+            return;
+        }
+        /* Linux gives a hybrid processor's guests no PMU
+         * (arch/x86/kvm/pmu.h:188-195). */
+        kcpu_id_sub(7, 0, &a, &b, &c, &d);
+        if (d & L7_HYBRID) {
             return;
         }
         kcpu_id(0xA, &a, &b, &c, &d);
@@ -245,10 +451,13 @@ void kvm_pmu_start(void)
         }
         kcpu_id(1, &a, &b, &c, &d);
         pmu_host.pdcm = (c & PDCM) != 0;
+        intel_table();
         if (pmu_host.width) {
             lbr_probe();
         }
     } else {
+        kcpu_id(1, &a, &b, &c, &d);
+        pmu_host.family = cpu_family(a);
         kcpu_id(0x80000000u, &top, &b, &c, &d);
         kcpu_id(0x80000001u, &a, &b, &c, &d);
         pmu_host.version = 1;
@@ -1014,6 +1223,129 @@ void kvm_pmu_retired(struct kvm_vcpu *v)
     }
 }
 
+/** The number of bits set in `m`. */
+static uint32_t weight(uint64_t m)
+{
+    uint32_t n = 0;
+
+    for (; m; m &= m - 1u) {
+        n++;
+    }
+    return n;
+}
+
+/** The physical counters, general and fixed, of the host's PMU. */
+static uint64_t all_counters(void)
+{
+    return mask_bits(pmu_host.nr_gp) | (mask_bits(pmu_host.nr_fixed) << 32);
+}
+
+/**
+ * The physical counters Intel's event `select` may run on, as Linux's
+ * `x86_get_event_constraints` (arch/x86/events/core.c:1569-1583) reads the
+ * model's table, with a fixed row widened to the general counters unless
+ * its code is a pseudo-encoding (arch/x86/events/intel/core.c:6343-6361),
+ * and the TSX-checkpoint rule of `hsw_get_event_constraints`.
+ */
+static uint64_t intel_constraint(uint64_t select)
+{
+    const struct constraint *c;
+    uint64_t mask = mask_bits(pmu_host.nr_gp);
+
+    for (c = pmu_host.table; c && c->match; c++) {
+        if ((select & c->match) - c->code <= c->size) {
+            mask = c->mask;
+            if (c->match == M_FIXED && (c->code & 0xFFu)) {
+                mask |= mask_bits(pmu_host.nr_gp);
+            }
+            break;
+        }
+    }
+    if (pmu_host.cp && (select & EV_TXCP)) {
+        mask &= 1ull << 2;
+    }
+    return mask & all_counters();
+}
+
+/** The number of unit-mask bits AMD's `select` sets. */
+static uint32_t amd_umask_bits(uint64_t select)
+{
+    return weight((select >> 8) & 0xFFu);
+}
+
+/**
+ * The counters AMD's event `select` may run on: family 15h's by Linux's
+ * `amd_get_event_constraints_f15h` (arch/x86/events/amd/core.c:1161-1229),
+ * and any counter on the others. A pair event of family 17h and later is
+ * `amd_pair`'s.
+ */
+static uint64_t amd_constraint(uint64_t select)
+{
+    uint32_t code = (uint32_t)(((select >> 24) & 0xF00u) | (select & 0xFFu));
+    uint64_t pmc0 = 0x01, pmc20 = 0x07, pmc3 = 0x08, pmc30 = 0x09, pmc50 = 0x3F, pmc53 = 0x38;
+    uint64_t mask = mask_bits(pmu_host.nr_gp);
+
+    if (pmu_host.family != 0x15u) {
+        return mask;
+    }
+    switch (code & 0xF0u) {
+    case 0x00:
+    case 0x10:
+        if ((code == 0x000 && (select & 0xF000u) && (select & 0x0F00u)) ||
+            (code == 0x004 && amd_umask_bits(select) > 1u) || code == 0x003 || code == 0x00B ||
+            code == 0x00D) {
+            return mask & pmc3;
+        }
+        return mask & pmc53;
+    case 0x20:
+    case 0x30:
+    case 0x40:
+    case 0x50:
+    case 0xC0:
+        switch (code) {
+        case 0x023:
+        case 0x043:
+        case 0x045:
+        case 0x046:
+        case 0x054:
+        case 0x055:
+            return mask & pmc20;
+        case 0x02D:
+            return mask & pmc3;
+        case 0x02E:
+            return mask & pmc30;
+        case 0x031:
+            return amd_umask_bits(select) <= 1u ? mask & pmc20 : 0;
+        case 0x1C0:
+            return mask & pmc53;
+        default:
+            return mask & pmc50;
+        }
+    case 0x60:
+    case 0x70:
+    case 0x80:
+    case 0x90:
+    case 0xD0:
+        if (code == 0x08F || code == 0x187 || code == 0x188) {
+            return mask & pmc0;
+        }
+        if ((code >= 0x0DB && code <= 0x0DF) || code == 0x1D6 || code == 0x1D8) {
+            return mask & pmc50;
+        }
+        return mask & pmc20;
+    default:
+        return 0;
+    }
+}
+
+/** Whether AMD's `select` is a large-increment event, Retired SSE/AVX
+ * FLOPs, which family 17h and later count on an even counter merged with
+ * the odd one after it (arch/x86/events/amd/core.c:351-360 and 1474-1484). */
+static int amd_pair(uint64_t select)
+{
+    return pmu_host.family >= 0x17u && (((select >> 24) & 0xF00u) | (select & 0xFFu)) == 0x003u;
+}
+
 /** A general counter's physical selector or count. */
 static uint32_t gp_msr(uint32_t i, int counter)
 {
@@ -1024,73 +1356,216 @@ static uint32_t gp_msr(uint32_t i, int counter)
 }
 
 /**
- * The general counters the host holds on this processor: those whose
- * selector is enabled, where Intel's global control, `global`, enables
- * them too. KVM clears its own selectors at every exit, so these are the
- * host's, the hard-lockup detector's counter among them.
+ * The counters the host holds on this processor, general ones in the low
+ * bits and Intel's fixed ones from bit 32: a general counter whose selector
+ * is enabled and a fixed counter whose field of `fixed_ctrl`, FIXED_CTRL,
+ * counts, where Intel's global control, `global`, enables them too. KVM
+ * clears its own selectors at every exit, and its fixed fields are gated
+ * off by the host's global control, so these are the host's, the
+ * hard-lockup detector's counter among them.
  */
-static uint32_t host_counters(uint64_t global)
+static uint64_t host_counters(uint64_t global, uint64_t fixed_ctrl)
 {
-    uint32_t i, held = 0;
+    uint64_t held = 0;
+    uint32_t i;
 
     for (i = 0; i < pmu_host.nr_gp; i++) {
         if (kvm_pmu_global() && !(global & (1ull << i))) {
             continue;
         }
         if (pmu_read(gp_msr(i, 0)) & EV_ENABLE) {
-            held |= 1u << i;
+            held |= 1ull << i;
+        }
+    }
+    for (i = 0; kvm_pmu_global() && i < pmu_host.nr_fixed; i++) {
+        if ((global & FIXED_BIT(i)) && (fixed_ctrl & (3ull << (4u * i)))) {
+            held |= FIXED_BIT(i);
         }
     }
     return held;
 }
 
-/**
- * Give each running general counter, in order, a physical counter the host
- * does not hold, in `p->phys`. A counter left without one does not count,
- * as Linux's pinned perf event that cannot be scheduled does not, and
- * leaves the run mask. Return the physical counters given.
- */
-static uint32_t map_counters(struct kvm_pmu *p, uint32_t held)
+/** The selector a running guest counter counts by: a general counter's
+ * own, without the physical interrupt, or the event of fixed counter j, as
+ * Linux's `intel_get_fixed_pmc_eventsel` names it, in the modes its field
+ * of FIXED_CTRL gives (arch/x86/kvm/vmx/pmu_intel.c:433-450,
+ * arch/x86/kvm/pmu.c:469-478). */
+static uint64_t slot_select(const struct kvm_pmu *p, uint32_t s)
 {
-    uint32_t i, next = 0, used = 0;
+    static const uint16_t fixed_event[KVM_PMU_FIXED_MAX] = {0x00c0, 0x003c, 0x0300};
+    uint64_t field;
 
-    for (i = 0; i < p->nr_gp; i++) {
-        if (!(p->run_gp & (1u << i))) {
+    if (s < KVM_PMU_GP_MAX) {
+        return p->eventsel[s] & ~(EV_INT | EV_PIN);
+    }
+    s -= KVM_PMU_GP_MAX;
+    field = p->fixed_ctrl >> (4u * s);
+    return fixed_event[s] | EV_ENABLE | ((field & 1u) ? EV_OS : 0) | ((field & 2u) ? EV_USR : 0);
+}
+
+/** Whether guest slot `s` runs at this entry, by the run masks. */
+static int slot_running(const struct kvm_pmu *p, uint32_t s)
+{
+    if (s < KVM_PMU_GP_MAX) {
+        return (p->run_gp & (1u << s)) != 0;
+    }
+    return (p->run_fixed & (1u << (s - KVM_PMU_GP_MAX))) != 0;
+}
+
+/** The next of `want`'s counters after `n`, in Linux's order of
+ * preference: fixed counters first, then general ones from 0
+ * (arch/x86/events/core.c:880-905); 64 after the last. Begin with 64. */
+static uint32_t next_counter(uint64_t want, uint32_t n)
+{
+    for (;;) {
+        n = n == 64u ? 32u : n == 31u ? 64u : n == 63u ? 0u : n + 1u;
+        if (n == 64u || (want & (1ull << n))) {
+            return n;
+        }
+    }
+}
+
+/** Give guest slot `s` one of `want[s]`'s physical counters: a free one
+ * if there is one, as Linux's scheduler takes it, and otherwise one whose
+ * owner can move to another of its own, an augmenting path of a bipartite
+ * matching, which finds a place for every counter whenever one exists.
+ * `owner` maps a physical counter to its slot, 0xFF when free; `seen`
+ * holds the counters this search has tried. */
+static int augment(const uint64_t *want, uint8_t *owner, uint8_t *phys, uint32_t s, uint64_t *seen)
+{
+    uint32_t n;
+
+    for (n = next_counter(want[s], 64u); n != 64u; n = next_counter(want[s], n)) {
+        if (owner[n] == 0xFFu) {
+            owner[n] = (uint8_t)s;
+            phys[s] = (uint8_t)n;
+            return 1;
+        }
+    }
+    for (n = next_counter(want[s], 64u); n != 64u; n = next_counter(want[s], n)) {
+        if (*seen & (1ull << n)) {
             continue;
         }
-        while (next < pmu_host.nr_gp && (held & (1u << next))) {
-            next++;
+        *seen |= 1ull << n;
+        if (augment(want, owner, phys, owner[n], seen)) {
+            owner[n] = (uint8_t)s;
+            phys[s] = (uint8_t)n;
+            return 1;
         }
-        if (next >= pmu_host.nr_gp) {
-            p->run_gp &= ~(1u << i);
+    }
+    return 0;
+}
+
+/**
+ * Give each running counter of `p` a physical counter in `free` that its
+ * event may use, in `p->phys`, the most constrained first, as Linux's
+ * scheduler places a vCPU's pinned perf events (arch/x86/events/core.c:
+ * 940-1010). An AMD pair event takes an even counter and the odd one after
+ * it first, as only family 17h's unconstrained events share its counters.
+ * A counter left without one does not count, as a pinned perf event that
+ * cannot be scheduled does not, and leaves the run masks. Return the
+ * physical counters given.
+ */
+static uint64_t place(struct kvm_pmu *p, uint64_t free)
+{
+    uint64_t want[KVM_PMU_SLOTS], seen, used = 0;
+    uint8_t owner[32u + KVM_PMU_FIXED_MAX], order[KVM_PMU_SLOTS];
+    uint32_t s, k, n = 0, t;
+
+    k_memset(owner, 0xFF, sizeof(owner));
+    p->pair = 0;
+    for (s = 0; !pmu_host.intel && s < p->nr_gp; s++) {
+        if (!(p->run_gp & (1u << s)) || !amd_pair(p->eventsel[s])) {
             continue;
         }
-        p->phys[i] = (uint8_t)next;
-        used |= 1u << next++;
+        for (k = 0; k + 1u < pmu_host.nr_gp; k += 2u) {
+            if (((free >> k) & 3u) == 3u) {
+                free &= ~(3ull << k);
+                p->phys[s] = (uint8_t)k;
+                p->pair |= 1u << s;
+                used |= 3ull << k;
+                break;
+            }
+        }
+        if (!(p->pair & (1u << s))) {
+            p->run_gp &= ~(1u << s);
+        }
+    }
+    for (s = 0; s < KVM_PMU_SLOTS; s++) {
+        want[s] = 0;
+        if (!slot_running(p, s) || (p->pair & (1u << s))) {
+            continue;
+        }
+        want[s] = (pmu_host.intel ? intel_constraint(slot_select(p, s))
+                                  : amd_constraint(p->eventsel[s])) &
+                  free;
+        order[n++] = (uint8_t)s;
+    }
+    /* By weight, stable, as Linux's perf_assign_events orders them. */
+    for (s = 1; s < n; s++) {
+        for (k = s; k > 0 && weight(want[order[k - 1u]]) > weight(want[order[k]]); k--) {
+            t = order[k];
+            order[k] = order[k - 1u];
+            order[k - 1u] = (uint8_t)t;
+        }
+    }
+    for (k = 0; k < n; k++) {
+        seen = 0;
+        (void)augment(want, owner, p->phys, order[k], &seen);
+    }
+    for (k = 0; k < n; k++) {
+        s = order[k];
+        if (owner[p->phys[s]] == s && (want[s] & (1ull << p->phys[s]))) {
+            used |= 1ull << p->phys[s];
+        } else if (s < KVM_PMU_GP_MAX) {
+            p->run_gp &= ~(1u << s);
+        } else {
+            p->run_fixed &= ~(1u << (s - KVM_PMU_GP_MAX));
+        }
     }
     return used;
+}
+
+/** Add the count physical counter `n` gained since `base` to slot `s`. */
+static void collect(struct kvm_pmu *p, uint32_t s, uint32_t n, uint64_t base)
+{
+    uint64_t now = n < 32u ? pmu_read(gp_msr(n, 1)) : pmu_read(FIXED0 + n - 32u);
+    uint32_t width = n < 32u ? pmu_host.width : pmu_host.fixed_width;
+
+    if (s < KVM_PMU_GP_MAX) {
+        accumulate(p, s, 0, (now - base) & mask_bits(width));
+    } else {
+        accumulate(p, s - KVM_PMU_GP_MAX, 1, (now - base) & mask_bits(width));
+    }
 }
 
 void kvm_pmu_svm_enter(struct kvm_vcpu *v)
 {
     struct kvm_pmu *p = &v->pmu;
-    uint32_t i, used;
+    uint32_t i, n;
+    uint64_t used;
 
     if (pmu_host.intel || !p->version || !p->run_gp) {
         return;
     }
-    used = map_counters(p, host_counters(0));
+    used = place(p, mask_bits(pmu_host.nr_gp) & ~host_counters(0, 0));
     /* Each counter starts as late as it can and stops as early, at the
      * global control when there is one: GuestOnly keeps it from counting
-     * the host, unless an outer hypervisor ignores the bit. */
+     * the host, unless an outer hypervisor ignores the bit. A pair's odd
+     * counter takes the merge before its even one starts, as Linux's
+     * `__x86_pmu_enable_event` writes it (perf_event.h:1198-1214). */
     if (pmu_host.version > 1u) {
         p->host_global = pmu_read(AMD_GLOBAL);
-        pmu_write(AMD_GLOBAL, p->host_global & ~(uint64_t)used);
+        pmu_write(AMD_GLOBAL, p->host_global & ~used);
     }
     for (i = 0; i < p->nr_gp; i++) {
         if (p->run_gp & (1u << i)) {
-            p->base[i] = pmu_read(amd_index(p->phys[i], 1));
-            pmu_write(amd_index(p->phys[i], 0), (p->eventsel[i] & ~(EV_INT | EV_PIN)) | EV_GUEST);
+            n = p->phys[i];
+            if (p->pair & (1u << i)) {
+                pmu_write(amd_index(n + 1u, 0), AMD_MERGE);
+            }
+            p->base[i] = pmu_read(amd_index(n, 1));
+            pmu_write(amd_index(n, 0), (p->eventsel[i] & ~(EV_INT | EV_PIN)) | EV_GUEST);
         }
     }
     if (pmu_host.version > 1u) {
@@ -1101,25 +1576,28 @@ void kvm_pmu_svm_enter(struct kvm_vcpu *v)
 void kvm_pmu_svm_exit(struct kvm_vcpu *v)
 {
     struct kvm_pmu *p = &v->pmu;
-    uint32_t i, used = 0;
+    uint32_t i, n;
+    uint64_t used = 0;
 
     if (pmu_host.intel || !p->version || !p->run_gp) {
         return;
     }
     for (i = 0; i < p->nr_gp; i++) {
         if (p->run_gp & (1u << i)) {
-            used |= 1u << p->phys[i];
+            used |= ((p->pair & (1u << i)) ? 3ull : 1ull) << p->phys[i];
         }
     }
     if (pmu_host.version > 1u) {
-        pmu_write(AMD_GLOBAL, p->host_global & ~(uint64_t)used);
+        pmu_write(AMD_GLOBAL, p->host_global & ~used);
     }
     for (i = 0; i < p->nr_gp; i++) {
         if (p->run_gp & (1u << i)) {
-            pmu_write(amd_index(p->phys[i], 0), 0);
-            accumulate(p, i, 0,
-                       (pmu_read(amd_index(p->phys[i], 1)) - p->base[i]) &
-                           mask_bits(pmu_host.width));
+            n = p->phys[i];
+            pmu_write(amd_index(n, 0), 0);
+            if (p->pair & (1u << i)) {
+                pmu_write(amd_index(n + 1u, 0), 0);
+            }
+            collect(p, i, n, p->base[i]);
         }
     }
     if (pmu_host.version > 1u) {
@@ -1136,12 +1614,70 @@ static void list_add(struct kvm_pmu_msr *list, uint32_t *n, uint32_t index, uint
     (*n)++;
 }
 
+/**
+ * Set each running guest counter's selector or fixed field and read its
+ * count. Linux writes no counter at an entry and switches only the global
+ * control; the selectors are set here where the host's global control
+ * keeps them stopped, or by the lists on a version 1 PMU, and each count is
+ * read now and again once the exit has stopped it. Return the guest's
+ * fields of FIXED_CTRL, which the caller writes with the host's.
+ */
+static uint64_t program_slots(struct kvm_pmu *p, struct kvm_pmu_msr *guest,
+                              struct kvm_pmu_msr *host, uint32_t *ng, uint32_t *nh)
+{
+    uint64_t fixed = 0, select;
+    uint32_t s, n;
+
+    for (s = 0; s < KVM_PMU_SLOTS; s++) {
+        if (!slot_running(p, s)) {
+            continue;
+        }
+        n = p->phys[s];
+        select = slot_select(p, s);
+        if (n >= 32u) {
+            n -= 32u;
+            fixed |= (((select & EV_OS) ? 1ull : 0) | ((select & EV_USR) ? 2ull : 0)) << (4u * n);
+            p->base[s] = pmu_read(FIXED0 + n);
+            continue;
+        }
+        if (kvm_pmu_global()) {
+            pmu_write(EVENTSEL0 + n, select);
+        } else {
+            list_add(guest, ng, EVENTSEL0 + n, select);
+            list_add(host, nh, EVENTSEL0 + n, 0);
+        }
+        p->base[s] = pmu_read(PMC0 + n);
+    }
+    return fixed;
+}
+
+/** Append the guest's LBR stack to its entry list, which the exit's store
+ * list also is, while its DEBUGCTL.LBR is set. */
+static void lbr_lists(struct kvm_pmu *p, struct kvm_pmu_msr *guest, uint32_t *ng)
+{
+    uint32_t i;
+
+    if (!p->lbr_nr || !(p->debugctl & DEBUGCTL_LBR)) {
+        return;
+    }
+    p->lbr_list = *ng;
+    list_add(guest, ng, LBR_SELECT, p->lbr_select);
+    list_add(guest, ng, LBR_TOS, p->lbr_tos);
+    for (i = 0; i < p->lbr_nr; i++) {
+        list_add(guest, ng, LBR_FROM + i, lbr_from_value(p->lbr_from[i]));
+        list_add(guest, ng, LBR_TO + i, p->lbr_to[i]);
+        if (pmu_host.lbr_info) {
+            list_add(guest, ng, LBR_INFO + i, p->lbr_info[i]);
+        }
+    }
+}
+
 void kvm_pmu_vmx_enter(struct kvm_vcpu *v, struct kvm_pmu_msr *guest, struct kvm_pmu_msr *host,
                        uint32_t *ng, uint32_t *nh, uint64_t *global)
 {
     struct kvm_pmu *p = &v->pmu;
-    uint64_t host_global = 0, guest_global, spare, fixed = 0, select;
-    uint32_t i, n, held, used = 0;
+    uint64_t host_global = 0, host_fixed = 0, fixed = 0, held, used = 0, spare;
+    uint32_t i;
 
     *ng = *nh = 0;
     p->lbr_list = ~0u;
@@ -1153,100 +1689,66 @@ void kvm_pmu_vmx_enter(struct kvm_vcpu *v, struct kvm_pmu_msr *guest, struct kvm
     }
     if (kvm_pmu_global()) {
         host_global = pmu_read(GLOBAL_CTRL);
+        if (pmu_host.nr_fixed) {
+            host_fixed = pmu_read(FIXED_CTRL);
+        }
     }
-    held = host_counters(host_global);
+    held = host_counters(host_global, host_fixed);
     if (p->version) {
-        used = map_counters(p, held);
+        used = place(p, all_counters() & ~held);
     } else {
         p->run_gp = p->run_fixed = 0;
     }
     if (kvm_pmu_global()) {
         /* The counters a guest may have stop in the host, once: the host
-         * keeps only the counters it holds enabled. */
-        spare =
-            (mask_bits(pmu_host.nr_gp) & ~(uint64_t)held) | (mask_bits(pmu_host.nr_fixed) << 32);
+         * keeps only the counters it holds enabled, and the fields of the
+         * fixed ones it holds. */
+        spare = all_counters() & ~held;
         if (host_global & spare) {
             host_global &= ~spare;
             pmu_write(GLOBAL_CTRL, host_global);
         }
-    }
-    /* Linux writes no counter at an entry and switches only the global
-     * control; a guest counter's selector and FIXED_CTRL are set here,
-     * where the host's global control keeps them stopped, and each count
-     * is read now and again once the exit has stopped it. */
-    for (i = 0; i < p->nr_gp; i++) {
-        if (!(p->run_gp & (1u << i))) {
-            continue;
-        }
-        n = p->phys[i];
-        select = p->eventsel[i] & ~(EV_INT | EV_PIN);
-        if (kvm_pmu_global()) {
-            pmu_write(EVENTSEL0 + n, select);
-        } else {
-            list_add(guest, ng, EVENTSEL0 + n, select);
-            list_add(host, nh, EVENTSEL0 + n, 0);
-        }
-        p->base[i] = pmu_read(PMC0 + n);
-    }
-    if (kvm_pmu_global()) {
-        for (i = 0; i < p->nr_fixed; i++) {
-            if (p->run_fixed & (1u << i)) {
-                fixed |= p->fixed_ctrl & (3ull << (4u * i));
-                p->fixed_base[i] = pmu_read(FIXED0 + i);
+        for (i = 0; i < pmu_host.nr_fixed; i++) {
+            if (held & FIXED_BIT(i)) {
+                fixed |= host_fixed & (0xFull << (4u * i));
             }
         }
-        if (fixed) {
+    }
+    fixed |= program_slots(p, guest, host, ng, nh);
+    if (kvm_pmu_global()) {
+        if (pmu_host.nr_fixed && fixed != host_fixed) {
             pmu_write(FIXED_CTRL, fixed);
         }
         /* The host's counters count in the guest too, as Linux's do. */
-        guest_global = host_global | used | ((uint64_t)p->run_fixed << 32);
         if (global) {
-            global[0] = guest_global;
+            global[0] = host_global | used;
             global[1] = host_global;
-        } else if (guest_global != host_global) {
-            list_add(guest, ng, GLOBAL_CTRL, guest_global);
+        } else if (used) {
+            list_add(guest, ng, GLOBAL_CTRL, host_global | used);
             list_add(host, nh, GLOBAL_CTRL, host_global);
         }
     }
-    if (p->lbr_nr && (p->debugctl & DEBUGCTL_LBR)) {
-        p->lbr_list = *ng;
-        list_add(guest, ng, LBR_SELECT, p->lbr_select);
-        list_add(guest, ng, LBR_TOS, p->lbr_tos);
-        for (i = 0; i < p->lbr_nr; i++) {
-            list_add(guest, ng, LBR_FROM + i, lbr_from_value(p->lbr_from[i]));
-            list_add(guest, ng, LBR_TO + i, p->lbr_to[i]);
-            if (pmu_host.lbr_info) {
-                list_add(guest, ng, LBR_INFO + i, p->lbr_info[i]);
-            }
-        }
-    }
+    lbr_lists(p, guest, ng);
 }
 
 void kvm_pmu_vmx_exit(struct kvm_vcpu *v, const struct kvm_pmu_msr *guest, int ran)
 {
     struct kvm_pmu *p = &v->pmu;
-    uint32_t i, k = p->lbr_list;
+    uint32_t i, s, k = p->lbr_list;
 
     p->lbr_list = ~0u;
     if (!pmu_host.intel || !pmu_host.version) {
         return;
     }
-    for (i = 0; i < p->nr_gp; i++) {
-        if (!(p->run_gp & (1u << i))) {
+    for (s = 0; s < KVM_PMU_SLOTS; s++) {
+        if (!slot_running(p, s)) {
             continue;
         }
         if (ran) {
-            accumulate(p, i, 0,
-                       (pmu_read(PMC0 + p->phys[i]) - p->base[i]) & mask_bits(pmu_host.width));
+            collect(p, s, p->phys[s], p->base[s]);
         }
-        if (kvm_pmu_global()) {
-            pmu_write(EVENTSEL0 + p->phys[i], 0);
-        }
-    }
-    for (i = 0; ran && i < p->nr_fixed; i++) {
-        if (p->run_fixed & (1u << i)) {
-            accumulate(p, i, 1,
-                       (pmu_read(FIXED0 + i) - p->fixed_base[i]) & mask_bits(pmu_host.fixed_width));
+        if (kvm_pmu_global() && p->phys[s] < 32u) {
+            pmu_write(EVENTSEL0 + p->phys[s], 0);
         }
     }
     if (ran && k != ~0u) {

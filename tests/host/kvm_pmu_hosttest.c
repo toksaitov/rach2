@@ -9,6 +9,8 @@ extern void free(void *p);
 
 static int failures, live, alloc_fail, copy_fail, pmi_count, fault_count;
 static int model_intel, model_ext, model_v2, model_missing, model_ignored, model_lbr, model_notsx;
+static int model_hybrid;
+static uint32_t model_amd_sig; /* AMD's leaf 1 signature, 0 for family 0 */
 static uint32_t irq_flags = 0x200u;
 static uint64_t physical[160];
 static uint32_t physical_index[160], physical_n;
@@ -107,12 +109,16 @@ void kcpu_id_sub(uint32_t leaf, uint32_t sub, uint32_t *a, uint32_t *b, uint32_t
         *a = 0x40651u; /* the Lenovo's Haswell: family 6, model 0x45 */
         *c = PDCM;
     }
+    if (leaf == 1 && !model_intel) {
+        *a = model_amd_sig;
+    }
     if (leaf == 0xA && model_intel) {
         *a = 0x07300403u;
         *d = 3u | (48u << 5);
     }
     if (leaf == 7 && model_intel) {
         *b = model_notsx ? 0 : 1u << 11;
+        *d = model_hybrid ? L7_HYBRID : 0;
     }
     if (leaf == 0x80000000u) {
         *a = model_v2 ? 0x80000022u : 0x80000008u;
@@ -402,40 +408,53 @@ static int list_find(const struct kvm_pmu_msr *list, uint32_t n, uint32_t index)
     return -1;
 }
 
-/** Drive VMX's switching beside the host's watchdog on counter 0: the
- * VMCS's global control, no counter written, deltas read after the exit. */
+/** Drive VMX's switching beside the host's watchdog on fixed counter 1:
+ * the VMCS's global control, no counter written, deltas read after the
+ * exit, and each guest counter on a physical counter its event may use. */
 static void intel_switch(void)
 {
     struct kvm_pmu_msr guest[KVM_PMU_LIST_MAX], host[KVM_PMU_LIST_MAX];
-    uint64_t global[2], watch = 0x3Cu | EV_USR | EV_OS | EV_INT | EV_ENABLE;
+    uint64_t global[2], watch_global = FIXED_BIT(1);
     uint32_t ng, nh;
     int before = pmi_count;
     setup(1, 0, 0);
-    *reg(GLOBAL_CTRL) = 1;
-    *reg(EVENTSEL0) = watch;
-    *reg(PMC0) = 1000;
-    *reg(PMC0 + 1u) = 100;
+    CHECK(pmu_host.table == c_hsw && pmu_host.cp, "Haswell's model takes Haswell's table");
+    *reg(GLOBAL_CTRL) = watch_global;
+    *reg(FIXED_CTRL) = 0xB0u;
+    *reg(FIXED0 + 1u) = 1000;
+    *reg(PMC0) = 300;
+    *reg(PMC0 + 2u) = 100;
     *reg(FIXED0) = 200;
-    v.pmu.eventsel[0] = 0xC0u | EV_ENABLE | EV_OS | EV_INT;
+    /* L1D_PEND_MISS.PENDING counts only on counter 2. */
+    v.pmu.eventsel[0] = 0x148u | EV_ENABLE | EV_OS | EV_INT;
     v.pmu.counter[0] = v.pmu.gp_mask - 3;
-    v.pmu.global_ctrl |= 1ull << 32;
-    v.pmu.fixed_ctrl = 9;
+    v.pmu.global_ctrl |= FIXED_BIT(0) | FIXED_BIT(1);
+    v.pmu.fixed_ctrl = 9u | (3u << 4);
     v.pmu.fixed[0] = v.pmu.fixed_mask - 2;
     kvm_pmu_prepare(&v);
     kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
     CHECK(!ng && !nh, "the VMCS switches the global control without lists");
-    CHECK(global[0] == ((1ull << 32) | 3u) && global[1] == 1,
-          "the guest runs its counter on physical counter 1 beside the host's 0");
-    CHECK(*reg(EVENTSEL0) == watch && *reg(PMC0) == 1000, "the host's counter is left alone");
-    CHECK(*reg(EVENTSEL0 + 1u) == (0xC0u | EV_ENABLE | EV_OS) && *reg(FIXED_CTRL) == 1,
-          "selectors are set without a physical performance interrupt");
-    CHECK(*reg(PMC0 + 1u) == 100 && *reg(FIXED0) == 200, "no counter is written at an entry");
-    *reg(PMC0 + 1u) += 5;
+    CHECK(v.pmu.phys[0] == 2, "a constrained event runs on the counter it may use");
+    CHECK(v.pmu.phys[KVM_PMU_GP_MAX] == 32u, "fixed counter 0 runs on its own counter");
+    CHECK(v.pmu.phys[KVM_PMU_GP_MAX + 1u] == 0,
+          "fixed counter 1, which the host holds, runs on a general counter");
+    CHECK(global[0] == (watch_global | FIXED_BIT(0) | 5u) && global[1] == watch_global,
+          "the guest's counters run beside the host's fixed counter 1");
+    CHECK(*reg(FIXED0 + 1u) == 1000, "the host's counter is left alone");
+    CHECK(*reg(EVENTSEL0 + 2u) == (0x148u | EV_ENABLE | EV_OS) &&
+              *reg(EVENTSEL0) == (0x3Cu | EV_ENABLE | EV_OS | EV_USR) && *reg(FIXED_CTRL) == 0xB1u,
+          "selectors and fields are set without a physical performance interrupt");
+    CHECK(*reg(PMC0 + 2u) == 100 && *reg(PMC0) == 300 && *reg(FIXED0) == 200,
+          "no counter is written at an entry");
+    *reg(PMC0 + 2u) += 5;
     *reg(FIXED0) += 7;
+    *reg(PMC0) += 11;
     kvm_pmu_vmx_exit(&v, guest, 1);
-    CHECK(v.pmu.counter[0] == 1 && v.pmu.fixed[0] == 4, "deltas wrap at the guest widths");
-    CHECK(!*reg(EVENTSEL0 + 1u) && *reg(EVENTSEL0) == watch, "the exit releases KVM's selector");
-    CHECK(v.pmu.global_status == ((1ull << 32) | 1) && pmi_count == before,
+    CHECK(v.pmu.counter[0] == 1 && v.pmu.fixed[0] == 4 && v.pmu.fixed[1] == 11,
+          "deltas wrap at the guest widths");
+    CHECK(!*reg(EVENTSEL0 + 2u) && !*reg(EVENTSEL0) && (*reg(FIXED_CTRL) & 0xF0u) == 0xB0u,
+          "the exit releases KVM's selectors and keeps the host's field");
+    CHECK(v.pmu.global_status == (FIXED_BIT(0) | 1) && pmi_count == before,
           "exit queues status but does not deliver outside the big lock");
     kvm_pmu_prepare(&v);
     CHECK(pmi_count == before + 1, "next preparation delivers the pending PMI");
@@ -443,22 +462,54 @@ static void intel_switch(void)
     CHECK(pmi_count == before + 1, "one overflow batch sends one PMI");
     kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, NULL);
     CHECK(list_find(guest, ng, GLOBAL_CTRL) >= 0 && list_find(host, nh, GLOBAL_CTRL) >= 0 &&
-              guest[list_find(guest, ng, GLOBAL_CTRL)].value == ((1ull << 32) | 3u) &&
-              host[list_find(host, nh, GLOBAL_CTRL)].value == 1,
+              guest[list_find(guest, ng, GLOBAL_CTRL)].value ==
+                  (watch_global | FIXED_BIT(0) | 5u) &&
+              host[list_find(host, nh, GLOBAL_CTRL)].value == watch_global,
           "without the VMCS's controls the lists switch the global control");
-    *reg(PMC0 + 1u) += 9;
+    *reg(PMC0 + 2u) += 9;
     kvm_pmu_vmx_exit(&v, guest, 0);
-    CHECK(v.pmu.counter[0] == 1 && !*reg(EVENTSEL0 + 1u),
+    CHECK(v.pmu.counter[0] == 1 && !*reg(EVENTSEL0 + 2u),
           "a failed entry counts nothing and still releases the selector");
+    model_hybrid = 1;
+    setup(1, 0, 0);
+    CHECK(!kvm_pmu_enabled() && !v.pmu.version, "a hybrid processor's guests have no PMU");
+    model_hybrid = 0;
+}
+
+/** Drive the placement beside the host's fixed counter 1: a constrained
+ * event that finds its counter taken, instructions on fixed counter 0, an
+ * inverted count kept off it, and counters the host does not hold. */
+static void intel_placement(void)
+{
+    struct kvm_pmu_msr guest[KVM_PMU_LIST_MAX], host[KVM_PMU_LIST_MAX];
+    uint64_t global[2], watch_global = FIXED_BIT(1);
+    uint32_t ng, nh;
+    setup(1, 0, 0);
+    *reg(GLOBAL_CTRL) = watch_global;
+    *reg(FIXED_CTRL) = 0xB0u;
+    v.pmu.eventsel[0] = 0x148u | EV_ENABLE | EV_OS | EV_INT;
     v.pmu.eventsel[1] = v.pmu.eventsel[2] = v.pmu.eventsel[3] = v.pmu.eventsel[0];
     v.pmu.global_ctrl = 15;
     kvm_pmu_prepare(&v);
     kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
-    CHECK(v.pmu.run_gp == 7 && global[0] == 15,
-          "a counter left without a physical one does not run");
+    CHECK(v.pmu.run_gp == 1 && global[0] == (watch_global | 4u),
+          "a counter left without a counter its event may use does not run");
     kvm_pmu_vmx_exit(&v, guest, 1);
-    *reg(GLOBAL_CTRL) = 15;
-    *reg(EVENTSEL0) = 0;
+    v.pmu.eventsel[0] = v.pmu.eventsel[1] = 0xC0u | EV_ENABLE | EV_USR;
+    v.pmu.eventsel[2] = 0xC0u | EV_ENABLE | EV_USR | EV_INVERT;
+    v.pmu.global_ctrl = 7u | FIXED_BIT(0);
+    v.pmu.fixed_ctrl = 2;
+    kvm_pmu_prepare(&v);
+    kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
+    CHECK(v.pmu.run_gp == 7 && v.pmu.run_fixed == 1 && v.pmu.phys[2] == 0 && v.pmu.phys[0] == 32u &&
+              v.pmu.phys[1] == 1 && v.pmu.phys[KVM_PMU_GP_MAX] == 2,
+          "instructions take fixed counter 0 first, and an inverted count a general one");
+    CHECK(*reg(FIXED_CTRL) == 0xB2u,
+          "a general counter's event counts in its modes on a fixed one");
+    kvm_pmu_vmx_exit(&v, guest, 1);
+    *reg(GLOBAL_CTRL) = watch_global | 15u | FIXED_BIT(0);
+    *reg(FIXED_CTRL) = 0;
+    v.pmu.eventsel[0] = 0xC4u | EV_ENABLE | EV_OS;
     v.pmu.global_ctrl = 1;
     kvm_pmu_prepare(&v);
     kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
@@ -596,14 +647,51 @@ static void amd_switch(void)
     CHECK(!kvm_pmu_enabled(), "ignored TCG MSRs do not advertise working counters");
 }
 
+/** Drive AMD's event constraints: family 15h's counters and family 17h's
+ * merged pair, beside the host's counter 0. */
+static void amd_constraints(void)
+{
+    uint64_t watch = 0x76u | EV_ENABLE | EV_INT;
+    model_amd_sig = 0x00600F12u; /* family 15h */
+    setup(0, 1, 0);
+    CHECK(pmu_host.family == 0x15u, "family 15h is read from leaf 1");
+    *reg(amd_index(0, 0)) = watch;
+    v.pmu.eventsel[0] = 0x02Du | EV_ENABLE | EV_OS;
+    v.pmu.eventsel[1] = 0x87u | (1ull << 32) | EV_ENABLE | EV_OS; /* event 0x187 */
+    v.pmu.eventsel[2] = 0x076u | EV_ENABLE | EV_OS;
+    kvm_pmu_prepare(&v);
+    kvm_pmu_svm_enter(&v);
+    CHECK(v.pmu.run_gp == 5 && v.pmu.phys[0] == 3 && v.pmu.phys[2] == 1,
+          "family 15h's events run on their counters, and one restricted to the host's does not");
+    kvm_pmu_svm_exit(&v);
+    CHECK(*reg(amd_index(0, 0)) == watch && !*reg(amd_index(3, 0)), "the host's counter is kept");
+    model_amd_sig = 0x00800F11u; /* family 17h */
+    setup(0, 1, 0);
+    *reg(amd_index(0, 0)) = watch;
+    v.pmu.eventsel[0] = 0x0C0u | EV_ENABLE | EV_OS;
+    v.pmu.eventsel[1] = 0x003u | EV_ENABLE | EV_OS;
+    kvm_pmu_prepare(&v);
+    kvm_pmu_svm_enter(&v);
+    CHECK(v.pmu.phys[1] == 2 && v.pmu.pair == 2 && *reg(amd_index(3, 0)) == AMD_MERGE &&
+              v.pmu.phys[0] == 1,
+          "a large-increment event takes an even counter merged with the next");
+    *reg(amd_index(2, 1)) += 40;
+    kvm_pmu_svm_exit(&v);
+    CHECK(v.pmu.counter[1] == 40 && !*reg(amd_index(3, 0)) && !*reg(amd_index(2, 0)),
+          "the pair's even counter is read and both are released");
+    model_amd_sig = 0;
+}
+
 /** Run each model and leave no heap allocation. */
 int main(void)
 {
     intel_registers();
     filters();
     intel_switch();
+    intel_placement();
     intel_lbr();
     amd_switch();
+    amd_constraints();
     kvm_pmu_vm_free(&vm);
     CHECK(!live, "all allocations returned");
     printf("kvm-pmu-hosttest: result: %s\n", failures ? "fail" : "pass");
