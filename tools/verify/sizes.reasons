@@ -642,7 +642,6 @@ tests/musl/catfile.c:main complexity 30 a test's rows, each a case, read as one 
 tests/musl/catfile.c:main lines 130 a test's rows, each a case, read as one table
 
 tests/musl/clockidmusl.c:sleeps complexity 29 a test's rows, each a case, read as one table
-tests/musl/clockidmusl.c:clocks complexity 26 a test's rows, each a case, read as one table
 
 tests/musl/clonemusl.c:raw params 7 the parameters are the arguments of one call the test makes, passed through
 
