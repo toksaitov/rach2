@@ -116,6 +116,16 @@
  * get_user_pages refuses the region, and mprotect answers EACCES to
  * PROT_EXEC. */
 #define VM_PROT_VVAR        0x200000u
+/* Given with the access bits, which a change of them replaces: mmap or
+ * mprotect gave the region write or execute without PROT_READ, so it has
+ * VM_PROT_READ only because x86 paging cannot withhold a read from either.
+ * Linux keeps such a region without VM_READ, which /proc/PID/maps, smaps and
+ * a core file's program header show, and its get_user_pages refuses it a
+ * read: process_vm_readv's always, and a pin's, vmsplice's among them,
+ * unless the page is present and not the zero page (`paging_pin_allows`). */
+#define VM_PROT_NOREAD      0x400000u
+/* Whether the protection `prot` has Linux's VM_READ: PROT_READ was asked. */
+#define VM_READABLE(prot)   (((prot) & (VM_PROT_READ | VM_PROT_NOREAD)) == VM_PROT_READ)
 /* The bits a change of the access bits keeps. */
 #define VM_PROT_KEPT                                                                             \
     (VM_PROT_NOWRITE | VM_PROT_IO | VM_PROT_WC | VM_PROT_UC | VM_PROT_DONTFORK | VM_PROT_LOCKS | \

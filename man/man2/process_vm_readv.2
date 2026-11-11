@@ -36,7 +36,12 @@ process whose real, effective and saved user and group IDs are each the
 caller's real user and group ID, which is dumpable and not privileged.
 Unlike a tracer's access, the copy reads only what the target may read
 and writes only what it may write: a page of a mapping without that
-access, of a guard region or of device memory ends the copy.
+access, one mapped without
+.Dv PROT_READ
+for a read, as Linux's
+.Fn get_user_pages
+refuses it whatever x86 paging allows, of a guard region or of device
+memory ends the copy.
 .Pp
 Each side has at most 1024 buffers, and the total of the caller's is cut
 to 2147479552 bytes, as Linux cuts a read or write.

@@ -7012,10 +7012,12 @@ static uint32_t mmap_key(uint32_t prot)
 }
 
 /** The VMA protection of an mmap or mprotect `prot`. Write and execute each
- * grant read, which x86 paging cannot withhold from them. */
+ * grant read, which x86 paging cannot withhold from them, and without
+ * PROT_READ the region is marked VM_PROT_NOREAD, as Linux's lacks VM_READ. */
 static uint32_t vm_prot_of(uint32_t prot)
 {
-    uint32_t vmprot = 0;
+    uint32_t vmprot =
+        (prot & (PROT_WRITE | PROT_EXEC)) && !(prot & PROT_READ) ? VM_PROT_NOREAD : 0u;
 
     if (prot & PROT_READ) {
         vmprot |= VM_PROT_READ;

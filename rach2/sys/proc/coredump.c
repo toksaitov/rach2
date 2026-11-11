@@ -651,7 +651,7 @@ static void load_write(struct core_out *o, const struct core_elf *f, const struc
     uint8_t phdr[CORE_HDR_MAX];
     uint32_t flags = 0;
 
-    if (r->prot & VM_PROT_READ) {
+    if (VM_READABLE(r->prot)) {
         flags |= PF_R;
     }
     if (r->prot & VM_PROT_WRITE) {

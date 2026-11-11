@@ -141,7 +141,8 @@ static int pvm_may_access(const process_t *t)
  * Move `n` bytes, within one page on each side, between the caller's `laddr`
  * and `raddr` of `mm`: a read into the caller with `write` 0, a write into
  * `mm` otherwise. The remote page must lie in a region that allows the
- * access itself, since the copy has no tracer's force; one that does not,
+ * access itself, since the copy has no tracer's force, a read PROT_READ
+ * (`VM_READABLE`), as Linux's get_user_pages asks VM_READ; one that does not,
  * and one `paging_access` cannot reach, a guard, device memory, a mapping
  * of memfd_secret or the vDSO's data page, are -EFAULT, as is a fault in
  * the caller's buffer. 0 or -errno.
@@ -152,7 +153,7 @@ static int32_t pvm_move(struct mm *mm, uintptr_t laddr, uintptr_t raddr, uint32_
     unsigned char buf[PVM_CHUNK];
     int32_t rc;
 
-    if (!vma || !(vma->prot & (write ? VM_PROT_WRITE : VM_PROT_READ))) {
+    if (!vma || !(write ? (vma->prot & VM_PROT_WRITE) != 0 : VM_READABLE(vma->prot))) {
         return -EFAULT;
     }
     if (write) {

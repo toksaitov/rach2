@@ -620,6 +620,19 @@ static int pipe_put_room(const pipe_t *p, uint32_t how, int opens)
     return (how & PUT_MERGE) || !opens || pipe_slots_free(p) != 0;
 }
 
+/** Make present the page of the caller's memory at `addr` that the next of
+ * `n` bytes of a `pipe_put` with `how` come from, as `pipe_read` does: 1,
+ * or 0 for a page the caller cannot read or, with PUT_PINNED, one a pin may
+ * not take before it is brought in, since a page of a mapping without
+ * PROT_READ passes only when it is there already (`paging_pin_allows`). */
+static int pipe_put_fault(uintptr_t addr, uint32_t n, uint32_t how)
+{
+    if ((how & PUT_PINNED) && !paging_pin_allows(current_proc->mm, addr, 0)) {
+        return 0;
+    }
+    return vm_prefault_range(addr, page_piece(addr, n), 0);
+}
+
 /** Copy the `n` bytes at `from`, within one page, to `at` for a `pipe_put`
  * with `how`: 0, or -EFAULT for a page the caller cannot read or, with
  * PUT_PINNED, one a pin may not take. Takes no page in before the check. */
@@ -659,8 +672,9 @@ static int32_t pipe_put_copy(uint8_t *at, const char __user *from, uint32_t n, u
  * `pipe_wait_writable`, returning what fitted once the ring fills, as
  * Linux's `wait_for_space` and `iter_to_pipe` do. With PUT_PINNED, a source
  * page that Linux's get_user_pages refuses, such as `[vvar]`, ends the copy
- * with -EFAULT or the count written, judged after the last sleep before its
- * copy.
+ * with -EFAULT or the count written, judged before the page is brought in,
+ * since a page of a mapping without PROT_READ passes only when it was
+ * there already, and again after the last sleep before its copy.
  */
 static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, uint32_t how,
                         uint32_t src)
@@ -698,7 +712,7 @@ static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, u
             continue;
         }
 
-        if (!vm_prefault_range(addr, page_piece(addr, count - done), 0)) {
+        if (!pipe_put_fault(addr, count - done, how)) {
             return (done > 0) ? (int32_t)done : -EFAULT;
         }
         if (!p->read_open) {
