@@ -118,6 +118,9 @@ samplerCubeArrayShadow (es31fShaderStateQueryTests.cpp:326). Its process
 went on through state queries that draw nothing, then started
 geometry_shading.query.primitives_generated_partial_primitives at 2471.35
 and ended no case after it; at 2581.81 QEMU printed "D3D12: Removing
-Device." and ended. That case and the seven copy_image cases running in
-the other three processes at the removal then passed, each alone in one
-process.
+Device." and ended. The next guest, started on the cases left, ran 3,307
+of them in 79 seconds with no context error, and QEMU printed the same line
+and ended while four copy_image cases ran. That query case, the three
+copy_image cases beside it and those four then passed, each alone in one
+process, and the 12,179 copy_image cases of the list ran in four processes
+of one guest with no error and no removal, and each passed.
