@@ -23,6 +23,16 @@ Three more steps, outside `all`, carry the stack to another host and prepare the
 
 The cache is `build/cache/nctx` of the main clone, shared by its worktrees, or `NCTX_CACHE`. The builder has 16 CPUs and 16 GiB unless `NCTX_CPUS` and `NCTX_MIB` say otherwise.
 
+### The reversed path
+
+On Rach2's GNU root, `sh bed/nctx/reverse.sh fallback ASSETS OUTPUT` starts the backend VM under Rach2's KVM, attaches its shared region with ivshmemd, and selects the transport's render node. It requires the DRM capset to be absent and the matched Mesa to select virgl, then checks the triangle, fences and glmark2's validated build scene. `native` in place of `fallback` gives the VM the Lenovo's GPU through `tests/assign/gpu.sh`, requires the DRM capset and Crocus, and measures i915's relocation time during the glmark2 scene. Both modes power the VM off, reap it and ivshmemd, and retain their logs and results in the new directory OUTPUT. ASSETS is `build.sh reverse`'s cache with the VM's `id_ed25519`.
+
+The runner unpacks the matched Mesa into `/opt/rach2-nctx`, so run it on a disposable root or a trial root. The native step requires the Lenovo's lock, the manager's go for its trial, and the screen notice ten minutes before the boot: giving the GPU away turns the panel off until the handoff script returns it. It plays no sound; set `mixer vol 1` after the boot.
+
+On the testing PC, `python3 bed/nctx/fallback.py KERNEL GNU_DISK ASSETS OUTPUT` runs the fallback on Rach2 in QEMU under the `host-svm` processor profile, with four processors and 8 GiB. KERNEL is `build/x86_64/rach2/kernel` and GNU_DISK is `build/x86_64/images/gnu-test.disk`; the check builds neither. It makes an overlay of the root and a data disk under `build/tmp`, exposes the backend image's bytes as Rach2's third disk, and runs `reverse.sh fallback` over SSH. It keeps the command, kernel digest, consoles and results in OUTPUT, powers Rach2 off and removes the scratch on exit. The installed launcher admits this command as `legacy` on the testing host.
+
+`relocations.sh start` and `stop`, in the backend VM as root, use Linux's function profiler for `eb_relocate` and `i915_gem_execbuffer2_ioctl`. The result counts batches and relocation calls, sums the relocation functions' inclusive time in microseconds, and divides it by the batch count. The raw per-processor records are printed before the result; no batches or no relocation calls is a failure.
+
 On a machine that holds the stack, by `nctx.qcow2` or by the three tars unpacked at `/`:
 
 * `/opt/rach2-nctx/qemu-nctx` is the bed's QEMU. Its `virtio-gpu-gl-pci` takes `drm_native_context=on`, which needs `blob=true`, a `hostmem` size and a GL display; blob resources need a shared memory backend.
