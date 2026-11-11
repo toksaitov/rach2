@@ -22,6 +22,7 @@ C_SRC = $(C_SRC_SHARED) $(ARCH_C_SRC)
 
 C_SRC_SHARED = kernel.c \
     sys/clock.c \
+    sys/ntp.c \
     sys/tick.c \
     sys/kbd.c \
     sys/mouse.c \

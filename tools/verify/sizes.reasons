@@ -245,7 +245,6 @@ rach2/sys/proc/elf.c:elf_load_image_at lines 157 one program loaded and entered,
 rach2/sys/arch/x86/cmos.c:rtc_decode complexity 31 a parser over an external format, one check per field in the format's order
 
 
-rach2/sys/syscall.c:ktimex_adjust complexity 27 one arm per mode of adjtimex, in the order Linux applies them
 rach2/sys/syscall.c:tty_common_ioctl lines 111 a dispatcher, one arm per command, read as a table
 
 rach2/sys/syscall_fs.c:fstat_fill_attrs complexity 40 one system call's contract, its checks in the order the manual page lists the errors

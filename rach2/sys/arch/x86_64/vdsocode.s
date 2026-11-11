@@ -20,10 +20,14 @@
 .set D_MULT,       16
 .set D_SHIFT,      20
 .set D_MONO_SEC,   24
-.set D_REAL_SEC,   40
-.set D_RES_NS,     56
-.set D_GETCPU,     60
-.set D_COARSE_NS,  64
+.set D_REAL_MULT,  40
+.set D_REAL_SEC,   48
+.set D_RES_NS,     64
+.set D_GETCPU,     68
+.set D_COARSE_NS,  72
+# Each clock's rate is 8 bytes before its seconds: D_MULT before D_MONO_SEC
+# and D_REAL_MULT before D_REAL_SEC.
+.set D_RATE_BACK,  8
 
 # VCLOCK_TSC, and the system calls each function stands for.
 .set VCLOCK_TSC,         1
@@ -41,9 +45,10 @@
 vdso_text_start:
 
 # A reading of the clock whose base seconds are at %rdi in the data page
-# at %r8, the nanoseconds after them, from the TSC: the seconds in %rax and
-# the nanoseconds, below 10^9, in %rdx. It reads the page's sequence count
-# before and after, and again while it is odd or has moved; the TSC is
+# at %r8, the nanoseconds after them and its rate before them, from the
+# TSC: the seconds in %rax and the nanoseconds, below 10^9, in %rdx. It
+# reads the page's sequence count before and after, and again while it is
+# odd or has moved; the TSC is
 # read between two lfences, so that it is taken after the loads before it
 # and before the count's second load. A count behind the base, as another
 # processor's can be by a few counts, reads as the base. Changes %rcx and
@@ -63,7 +68,7 @@ vdso_fine:
     jae 1f
     xorl %eax, %eax
 1:
-    movl D_MULT(%r8), %edx
+    movl -D_RATE_BACK(%r8,%rdi), %edx
     mulq %rdx
     movl D_SHIFT(%r8), %ecx
     shrdq %cl, %rdx, %rax

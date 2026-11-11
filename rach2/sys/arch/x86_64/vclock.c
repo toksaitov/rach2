@@ -29,6 +29,7 @@ typedef char
                     __builtin_offsetof(struct vdso_data, shift) == VDSO_DATA_SHIFT &&
                     __builtin_offsetof(struct vdso_data, mono_sec) == VDSO_DATA_MONO_SEC &&
                     __builtin_offsetof(struct vdso_data, mono_nsec) == VDSO_DATA_MONO_NSEC &&
+                    __builtin_offsetof(struct vdso_data, real_mult) == VDSO_DATA_REAL_MULT &&
                     __builtin_offsetof(struct vdso_data, real_sec) == VDSO_DATA_REAL_SEC &&
                     __builtin_offsetof(struct vdso_data, real_nsec) == VDSO_DATA_REAL_NSEC &&
                     __builtin_offsetof(struct vdso_data, res_ns) == VDSO_DATA_RES_NS &&
@@ -57,17 +58,18 @@ typedef char
 
 /*
  * The clock: whether it runs, the data page in the kernel's map, the rate
- * measured, the monotonic clock at the page's base in nanoseconds whole,
- * and real time's offset from it. The page's fields and these change under
- * `vclock_lock`, the page's between the increments of its sequence count.
+ * measured, the monotonic clock and real time at the page's base in
+ * nanoseconds whole, and the course real time follows (rtc.h). The page's
+ * fields and these change under `vclock_lock`, the page's between the
+ * increments of its sequence count.
  */
 static int running;
 static struct vdso_data *data;
 static uintptr_t data_phys;
 static uint32_t mult_measured;
 static uint64_t mono_base_ns;
-static int64_t offset_sec;
-static uint32_t offset_nsec;
+static uint64_t real_base_ns;
+static struct rtc_course course;
 static struct spinlock vclock_lock = SPINLOCK_INIT_NAMED("vclock_lock");
 
 /** `delta` counts of the TSC at `mult` / 2^`shift` nanoseconds a count, for
@@ -89,21 +91,56 @@ static uint64_t vclock_at(uint64_t cycles)
     return mono_base_ns + vclock_scale(delta, data->mult, data->shift);
 }
 
-/** Write the page's times for the base `mono_base_ns`: the monotonic clock
- * in seconds and nanoseconds, and real time, the offset added. */
+/** Real time at the TSC's count `cycles`, by the page's base and real
+ * time's rate; a count behind the base reads as the base. */
+static uint64_t vclock_real_at(uint64_t cycles)
+{
+    uint64_t delta = cycles >= data->cycle_base ? cycles - data->cycle_base : 0;
+
+    return real_base_ns + vclock_scale(delta, data->real_mult, data->shift);
+}
+
+/** Real time that the course gives at the monotonic time `mono_ns`. */
+static uint64_t vclock_course_ns(uint64_t mono_ns)
+{
+    int64_t off_sec;
+    int32_t off_nsec;
+    uint64_t frac;
+
+    rtc_course_at(&course, (int64_t)(mono_ns / NSEC_PER_SEC), (int64_t)(mono_ns % NSEC_PER_SEC),
+                  &off_sec, &off_nsec, &frac);
+    return mono_ns + (uint64_t)(off_sec * NSEC_PER_SEC + off_nsec);
+}
+
+/** Real time's rate for the monotonic clock's `mult`: that times the
+ * course's, plus the steering of `error`, the course less the page's real
+ * time at the base, made good over 2^SLEW_SHIFT nanoseconds and cut to
+ * SLEW_MAX_NS, as the monotonic clock's own. Under 2^32: `mult` is under
+ * 2^31 and the course's rate under a quarter. */
+static uint32_t vclock_real_rate(uint32_t mult, int64_t error)
+{
+    int64_t r32 = course.rate / ((int64_t)1 << (RTC_RATE_SHIFT - 32));
+    uint64_t part = ((uint64_t)mult * (uint64_t)(r32 < 0 ? -r32 : r32)) >> 32;
+    uint64_t rate = r32 < 0 ? mult - part : mult + part;
+    uint64_t steer;
+
+    if (error > SLEW_MAX_NS) {
+        error = SLEW_MAX_NS;
+    } else if (error < -SLEW_MAX_NS) {
+        error = -SLEW_MAX_NS;
+    }
+    steer = ((uint64_t)mult * (uint64_t)(error < 0 ? -error : error)) >> SLEW_SHIFT;
+    return (uint32_t)(error < 0 ? rate - steer : rate + steer);
+}
+
+/** Write the page's times for the bases `mono_base_ns` and `real_base_ns`,
+ * in seconds and nanoseconds. */
 static void vclock_write_times(void)
 {
-    uint64_t real_nsec;
-
     data->mono_sec = (int64_t)(mono_base_ns / NSEC_PER_SEC);
     data->mono_nsec = mono_base_ns % NSEC_PER_SEC;
-    data->real_sec = data->mono_sec + offset_sec;
-    real_nsec = data->mono_nsec + offset_nsec;
-    if (real_nsec >= NSEC_PER_SEC) {
-        real_nsec -= NSEC_PER_SEC;
-        data->real_sec++;
-    }
-    data->real_nsec = real_nsec;
+    data->real_sec = (int64_t)(real_base_ns / NSEC_PER_SEC);
+    data->real_nsec = real_base_ns % NSEC_PER_SEC;
 }
 
 /** Begin and end a change of the page, under `vclock_lock`. The fence
@@ -191,7 +228,6 @@ void vclock_start(void)
     const char *why;
     uint64_t cycles;
     uint32_t flags;
-    int32_t nsec;
 
     tsc_cpu_setup(0);
     if (vclock_page() != 0 || vdso_build() != 0) {
@@ -203,14 +239,15 @@ void vclock_start(void)
         klog(KLOG_INFO, "vdso", "clock: the system call; %s", why);
         return;
     }
-    rtc_offset(&offset_sec, &nsec);
+    rtc_get_course(&course);
     flags = spin_lock_irqsave(&vclock_lock);
-    offset_nsec = (uint32_t)nsec;
     vclock_rate(tsc_counts_per_tick(), &mult_measured, &data->shift);
     vclock_write_begin();
     mono_base_ns = vclock_reference(&cycles);
+    real_base_ns = vclock_course_ns(mono_base_ns);
     data->cycle_base = cycles;
     data->mult = mult_measured;
+    data->real_mult = vclock_real_rate(mult_measured, 0);
     data->res_ns = vclock_resolution_ns();
     vclock_write_times();
     data->mode = VCLOCK_TSC;
@@ -230,10 +267,14 @@ int vclock_running(void)
  * TSC count taken after the page's count went odd, so that a reading that
  * used the old rate was of a count before the new base, and the clock is
  * continuous there: the base's time is the old rate's time at that count.
+ * Real time is carried on the same way, by its own rate, and steered toward
+ * the course at the monotonic clock's new base; a step of the monotonic
+ * clock forward moves it as far, and so does one of more than STEP_NS
+ * behind the course.
  */
 void vclock_tick(void)
 {
-    uint64_t at_ref, cycles, ref_ns, clock_ns;
+    uint64_t at_ref, cycles, ref_ns, clock_ns, target;
     uint32_t error, adjust;
     int ahead;
 
@@ -247,8 +288,10 @@ void vclock_tick(void)
     vclock_write_begin();
     cycles = tsc_ordered();
     mono_base_ns = vclock_at(cycles);
+    real_base_ns = vclock_real_at(cycles);
     if (!ahead && ref_ns - clock_ns > STEP_NS) {
         mono_base_ns += ref_ns - clock_ns;
+        real_base_ns += ref_ns - clock_ns;
         error = 0;
     } else {
         error = (uint32_t)(ahead ? clock_ns - ref_ns : ref_ns - clock_ns);
@@ -259,6 +302,11 @@ void vclock_tick(void)
     adjust = (uint32_t)(((uint64_t)mult_measured * error) >> SLEW_SHIFT);
     data->mult = ahead ? mult_measured - adjust : mult_measured + adjust;
     data->cycle_base = cycles;
+    target = vclock_course_ns(mono_base_ns);
+    if (target > real_base_ns + STEP_NS) {
+        real_base_ns = target;
+    }
+    data->real_mult = vclock_real_rate(data->mult, (int64_t)(target - real_base_ns));
     vclock_write_times();
     vclock_write_end();
     spin_unlock(&vclock_lock);
@@ -283,7 +331,7 @@ int vclock_read(int real, int coarse, int64_t *sec, int64_t *nsec)
         if (!coarse) {
             cycles = tsc_ordered();
             delta = cycles >= data->cycle_base ? cycles - data->cycle_base : 0;
-            ns += vclock_scale(delta, data->mult, data->shift);
+            ns += vclock_scale(delta, real ? data->real_mult : data->mult, data->shift);
         }
         __asm__ __volatile__("" : : : "memory");
     } while (data->seq != seq);
@@ -316,7 +364,7 @@ int vclock_read_cycles(int real, uint64_t *ns, uint64_t *cycles)
         }
         c = tsc_ordered();
         delta = c >= data->cycle_base ? c - data->cycle_base : 0;
-        base += vclock_scale(delta, data->mult, data->shift);
+        base += vclock_scale(delta, real ? data->real_mult : data->mult, data->shift);
         __asm__ __volatile__("" : : : "memory");
     } while (data->seq != seq);
     *ns = base;
@@ -324,17 +372,22 @@ int vclock_read_cycles(int real, uint64_t *ns, uint64_t *cycles)
     return 1;
 }
 
-void vclock_set_offset(int64_t sec, int32_t nsec)
+void vclock_set_course(const struct rtc_course *c, int step)
 {
+    uint64_t cycles;
     uint32_t flags;
 
     if (!running) {
         return;
     }
     flags = spin_lock_irqsave(&vclock_lock);
-    offset_sec = sec;
-    offset_nsec = (uint32_t)nsec;
+    course = *c;
     vclock_write_begin();
+    cycles = tsc_ordered();
+    mono_base_ns = vclock_at(cycles);
+    real_base_ns = step ? vclock_course_ns(mono_base_ns) : vclock_real_at(cycles);
+    data->cycle_base = cycles;
+    data->real_mult = vclock_real_rate(data->mult, 0);
     vclock_write_times();
     vclock_write_end();
     spin_unlock_irqrestore(&vclock_lock, flags);
