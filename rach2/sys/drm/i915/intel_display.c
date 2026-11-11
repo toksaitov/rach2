@@ -435,6 +435,11 @@ static void interactive_handover(struct drm_i915_private *i915, uint32_t pipes, 
     uint32_t flags = kirq_save();
     int pipe;
 
+    /* A flip the core ended with no vblank, on a pipe a queued commit
+     * turned off, lets its mark go here. */
+    for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
+        intel_crtc_interactive_end(&i915->display.crtc[pipe]);
+    }
     for (pipe = 0; err == 0 && pipe < I915_NUM_PIPES; pipe++) {
         struct intel_crtc *c = &i915->display.crtc[pipe];
 
