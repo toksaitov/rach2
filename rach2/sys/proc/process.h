@@ -206,8 +206,9 @@ struct process {
      * is not fatal at its post (`sig_fatal_now`). */
     uint64_t sig_real_blocked;
     /* Set once the thread has begun to end, after its exit event, as Linux's
-     * PF_EXITING: no signal sent to its process picks it to take it, and no
-     * signal sent to it alone begins its process's end (`sig_wants`). */
+     * PF_EXITING: no signal sent to its process picks it to take it
+     * (`sig_wants`), and no signal sent to it alone begins its process's end
+     * (`sig_wants_now`). */
     uint32_t exit_begun;
     /* Program name (basename of the execve'd path, truncated, padded with
      * NULs to the end): the "comm" /proc/<pid>/stat reports and ps shows.
