@@ -62,13 +62,19 @@ static void sched_remove(process_t *p)
     p->ready_linked = 0;
 }
 
-/** Append a noncurrent ready process once, with sched_lock held. */
+/** Append a noncurrent ready process once, with sched_lock held. A move
+ * from one queue to another keeps the moment its wait began; a wait begun
+ * before the scheduler is on, which has no clock to read, is not counted. */
 static void sched_append(process_t *p)
 {
     struct ready_queue *q = &run_queues[p->cpu];
 
     if (p->ready_linked || p == cpu_table[p->cpu].idle) {
         return;
+    }
+    if (!p->run_queued && _sched_enabled) {
+        p->run_queued = 1;
+        p->queued_us = waketime_clock();
     }
     waketime_state(p, 1, p->cpu);
     p->ready_prev = q->tail;
@@ -83,6 +89,17 @@ static void sched_append(process_t *p)
     p->ready_rt = sched_priority(p) != 0;
     q->rt_count += p->ready_rt;
     p->ready_linked = 1;
+}
+
+/** Count the wait of `p`, which now runs, on the run queues since it was
+ * made ready, as Linux's sched_info_arrive adds it to run_delay, with
+ * sched_lock held. A wait is under 2^32 microseconds, some 71 minutes. */
+static void sched_arrive(process_t *p)
+{
+    if (p->run_queued) {
+        p->run_queued = 0;
+        p->run_delay += (uint64_t)(waketime_clock() - p->queued_us) * 1000u;
+    }
 }
 
 void sched_forget(process_t *p)
@@ -378,6 +395,7 @@ static int sched_prepare_old(process_t *old, struct percpu *cpu, int me)
     int kick = -1;
 
     sched_remove(old);
+    sched_arrive(old);
     proc_timer_update(old);
     old->woken = 0;
     if (old->state == PROC_READY) {
@@ -481,6 +499,7 @@ void schedule(void)
     }
 
     sched_remove(next);
+    sched_arrive(next);
     waketime_state(next, 2, me);
     usb_stamp_dispatch(next->pid);
     next->woken = 0;
@@ -509,6 +528,7 @@ void schedule(void)
     rseq_preempt(old);
     next->state = PROC_RUNNING;
     next->cpu = me;
+    next->pcount++;
 
     if (old != cpu->idle) {
         fpu_save(old->fpu);

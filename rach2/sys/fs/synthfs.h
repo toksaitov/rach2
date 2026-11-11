@@ -171,6 +171,9 @@ const char *synth_ns_name(int kind);
  * in. */
 #define SYNTH_PROC_SYSCALL     68
 #define SYNTH_PROC_WCHAN       69
+/* /proc/<pid>/schedstat, the thread's run time, its wait for a processor
+ * and its switches onto one. */
+#define SYNTH_PROC_SCHEDSTAT   70
 
 /* The pid of /proc/self and /dev/fd, which procfs takes as the caller's
  * (`procfs_resolve_pid`). */
