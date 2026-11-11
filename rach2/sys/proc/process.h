@@ -645,6 +645,10 @@ struct process {
      * sleeps, for the lock-order checker (lib/lockdep.c); its spinlocks are
      * its processor's (`percpu.lockdep_spin`). */
     struct lockdep_held lockdep;
+    /* The subclass of the next sleeping lock this thread takes, 0 after it:
+     * a rename's second directory and its children, of one class with the
+     * first (`sleep_lock_subclass`). */
+    unsigned int lockdep_subclass;
 #endif
 };
 

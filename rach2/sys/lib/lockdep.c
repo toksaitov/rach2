@@ -1111,6 +1111,23 @@ void lockdep_might_sleep(uintptr_t ip)
     ld_leave(flags);
 }
 
+void lockdep_switch(uintptr_t ip)
+{
+    struct percpu *cpu;
+    uint32_t flags;
+
+    if (!ld_enter(&flags)) {
+        return;
+    }
+    cpu = this_cpu();
+    if (cpu->lockdep_spin.depth != 0) {
+        raw_spin_lock(&graph_lock);
+        ld_check_sleep(cpu, LD_NONE, ip, 1, 0);
+        raw_spin_unlock(&graph_lock);
+    }
+    ld_leave(flags);
+}
+
 void lockdep_bkl_acquire(uintptr_t ip)
 {
     struct lockdep_held *sp;

@@ -114,7 +114,7 @@ static uint32_t bkl_profile_samples, bkl_profile_lost;
  * zeroes it, so that no tick changes the table and totals meanwhile; a tick
  * reads it under `profile_lock`, which keeps the table. */
 static volatile int bkl_profile_showing;
-static struct spinlock profile_lock = SPINLOCK_INIT;
+static struct spinlock profile_lock = SPINLOCK_INIT_NAMED("bkl_profile");
 /* Nonzero for the whole-kernel mode: every tick in kernel mode samples,
  * with or without the big lock. */
 static volatile int bkl_profile_whole;
@@ -137,7 +137,7 @@ static int bkl_booted;
  * sender fills and waits for, so a second sender would overwrite the first's
  * request. A processor that waits for the lock answers its own requests
  * (`spin_lock`), so two senders do not wait on each other. */
-static struct spinlock ipi_lock = SPINLOCK_INIT;
+static struct spinlock ipi_lock = SPINLOCK_INIT_NAMED("ipi_lock");
 
 /* The processors online, the boot processor counted (`smp_cpu_count`). */
 static int cpus_online = 1;
@@ -827,6 +827,7 @@ void bkl_enter(void)
     struct percpu *cpu = this_cpu();
 
     if (cpu->bkl_depth == 0) {
+        lockdep_bkl_acquire((uintptr_t)(const char *)__builtin_return_address(0));
         bkl_acquire(cpu);
         bkl_mark_hold(cpu);
     }
@@ -931,6 +932,7 @@ void bkl_take(int depth)
     struct percpu *cpu = this_cpu();
 
     if (depth > 0) {
+        lockdep_bkl_acquire((uintptr_t)(const char *)__builtin_return_address(0));
         bkl_acquire(cpu);
         bkl_mark_hold(cpu);
         cpu->bkl_depth = depth;
@@ -942,6 +944,7 @@ void bkl_take_as(int depth, int key)
     struct percpu *cpu = this_cpu();
 
     if (depth > 0) {
+        lockdep_bkl_acquire((uintptr_t)(const char *)__builtin_return_address(0));
         bkl_acquire(cpu);
         bkl_mark_hold(cpu);
         cpu->bkl_vector = 0;

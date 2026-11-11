@@ -654,6 +654,7 @@ void schedule(void)
     if (!_sched_enabled || !current_proc) {
         return;
     }
+    lockdep_switch((uintptr_t)(const char *)__builtin_return_address(0));
 
     saved_flags = spin_lock_irqsave(&sched_lock);
     me = (int)arch_cpu_id();

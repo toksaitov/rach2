@@ -13,7 +13,16 @@
 /* The kinds of lock, in the order a lock first named each, and the lock of
  * the list and of the records' counts. */
 static struct sleep_lock_record *records;
-static struct spinlock records_lock = SPINLOCK_INIT;
+static struct spinlock records_lock = SPINLOCK_INIT_NAMED("sleep_lock_records");
+
+#ifdef RACH2_LOCKDEP
+/* The checker's class of the locks of no kind. */
+static struct lockdep_key unrecorded_key;
+#endif
+
+/* The checker's notes of a take and a give, from the caller of the function
+ * that makes them. */
+#define DEP_CALLER ((uintptr_t)(const char *)__builtin_return_address(0))
 
 /* A waiter's place in the line for `lock`. */
 struct sleep_turn {
@@ -41,7 +50,11 @@ void sleep_lock_init(struct sleep_lock *l, struct sleep_lock_record *record, int
     struct sleep_lock_record **pp;
     uint32_t irq;
 
-    l->spin.locked = 0;
+    spin_lock_init(&l->spin, "sleep_lock.spin");
+#ifdef RACH2_LOCKDEP
+    lockdep_init_map(&l->dep, record ? record->kind : "sleep_lock",
+                     record ? &record->key : &unrecorded_key);
+#endif
     l->holder = -1;
     l->depth = 0;
     l->next = 0;
@@ -85,6 +98,15 @@ void sleep_lock_take(struct sleep_lock *l)
         spin_unlock_irqrestore(&l->spin, irq);
         return;
     }
+#ifdef RACH2_LOCKDEP
+    spin_unlock_irqrestore(&l->spin, irq);
+    lockdep_acquire(&l->dep, current_proc ? current_proc->lockdep_subclass : 0, LOCKDEP_SLEEPING,
+                    DEP_CALLER);
+    if (current_proc) {
+        current_proc->lockdep_subclass = 0;
+    }
+    irq = spin_lock_irqsave(&l->spin);
+#endif
     turn.lock = l;
     turn.place = l->next++;
     while (!sleep_my_turn(&turn)) {
@@ -145,6 +167,9 @@ void sleep_lock_give(struct sleep_lock *l)
     l->holder = -1;
     l->serving++;
     spin_unlock_irqrestore(&l->spin, irq);
+#ifdef RACH2_LOCKDEP
+    lockdep_release(&l->dep, DEP_CALLER);
+#endif
     wq_wake_all(&l->wq);
 }
 
