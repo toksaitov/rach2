@@ -407,6 +407,13 @@ unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, uns
 static int cpuid_vmx = 1;
 static uint32_t cpuid_sig = 0x000306C3u;
 
+/* Whether the model has Haswell's PMU, leaf 0xA's version 3 with four
+ * general and three fixed counters of 48 bits, and PERF_CAPABILITIES of
+ * full-width writes, FREEZE_WHILE_SMM and LBR format 4, whose LBR MSRs
+ * read 0 and take any value; without it the model has no PMU. */
+static int model_pmu;
+#define MODEL_PERF_CAP 0x3004ull
+
 void kcpu_id_sub(uint32_t leaf, uint32_t sub, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
 {
     uint32_t r[4] = {0, 0, 0, 0};
@@ -428,6 +435,12 @@ void kcpu_id_sub(uint32_t leaf, uint32_t sub, uint32_t *a, uint32_t *b, uint32_t
         if (sub == 0) {
             r[1] = 0x000027ABu;
             r[3] = 0x9C000400u;
+        }
+        break;
+    case 0xA:
+        if (model_pmu) {
+            r[0] = 0x07300403u;
+            r[3] = 0x603u;
         }
         break;
     case 0xD:
@@ -480,20 +493,24 @@ void kcpu_wrmsr(uint32_t msr, uint32_t lo, uint32_t hi)
     (void)hi;
 }
 
-/** The model has no AMD PMU. */
+/** The model has no AMD PMU; with `model_pmu`, PERF_CAPABILITIES and
+ * the LBR MSRs read. */
 int kcpu_rdmsr_safe(uint32_t msr, uint64_t *value)
 {
-    (void)msr;
-    (void)value;
-    return -1;
+    if (!model_pmu) {
+        return -1;
+    }
+    *value = msr == 0x345u ? MODEL_PERF_CAP : 0;
+    return 0;
 }
 
-/** The model has no AMD PMU. */
+/** The model has no AMD PMU; with `model_pmu`, the LBR MSRs take any
+ * value. */
 int kcpu_wrmsr_safe(uint32_t msr, uint64_t value)
 {
     (void)msr;
     (void)value;
-    return -1;
+    return model_pmu ? 0 : -1;
 }
 
 /* The NMI handler's hook, which kvm_pmu_start sets. */
@@ -4254,6 +4271,48 @@ static void xsaves_rows(int vm)
     caps.proc2 = had;
 }
 
+/** FREEZE_WHILE_SMM under pmu_steps' 0x08, on a vCPU of its own on `vm`
+ * on the model with Haswell's PMU and LBR stack: the VMCS's guest DEBUGCTL
+ * carries it beside DEBUGCTL.LBR, and the exit, which takes LBR back from
+ * that field, leaves it out of the guest's DEBUGCTL, as Linux's
+ * vmx_guest_debugctl_read masks it (arch/x86/kvm/vmx/vmx.h:449-452). The
+ * host's PMU is probed again before and after. */
+static void smm_freeze_rows(int vm)
+{
+    struct {
+        struct kvm_msrs h;
+        struct kvm_msr_entry e[2];
+    } msrs;
+    int fd;
+
+    model_pmu = 1;
+    kvm_pmu_start();
+    fd = make_vcpu(vm, 12);
+    msrs.h.nmsrs = 2;
+    msrs.h.pad = 0;
+    k_memset(msrs.e, 0, sizeof(msrs.e));
+    msrs.e[0].index = 0x345u;
+    msrs.e[0].data = 4;
+    msrs.e[1].index = MSR_IA32_DEBUGCTL;
+    msrs.e[1].data = DEBUGCTL_LBR;
+    CHECK(fdio(fd, KVM_SET_MSRS, (uintptr_t)&msrs) == 2 && vcpu_of(fd)->pmu.lbr_nr == 16u,
+          "the caller gives the guest the LBR stack and sets its DEBUGCTL.LBR");
+    CHECK(kvm_pmu_steps_store(NULL, 0, "0x08", 4) == 4, "pmu_steps takes 0x08");
+    CHECK(exits(fd, EXIT_CPUID, 0, 2) == 0 &&
+              fields(fd)[GUEST_IA32_DEBUGCTL] == (DEBUGCTL_LBR | KVM_DEBUGCTL_FREEZE_IN_SMM),
+          "with 0x08 the VMCS's guest DEBUGCTL has LBR and FREEZE_WHILE_SMM");
+    msrs.h.nmsrs = 1;
+    msrs.e[0].index = MSR_IA32_DEBUGCTL;
+    msrs.e[0].data = ~0ull;
+    CHECK(fdio(fd, KVM_GET_MSRS, (uintptr_t)&msrs) == 1 && msrs.e[0].data == DEBUGCTL_LBR &&
+              vcpu_of(fd)->pmu.debugctl == DEBUGCTL_LBR,
+          "the exit leaves FREEZE_WHILE_SMM out of the guest's DEBUGCTL and keeps LBR");
+    CHECK(kvm_pmu_steps_store(NULL, 0, "0", 1) == 1, "pmu_steps takes 0 again");
+    fdclose(fd);
+    model_pmu = 0;
+    kvm_pmu_start();
+}
+
 /** What Linux's selftests ask of the guest's side, on a vCPU of its own
  * on `vm` in protected mode. The rows change the VM's capabilities, so
  * they come last. */
@@ -4270,6 +4329,7 @@ static void selftest_rows(int vm)
     fdclose(fd);
     tsc_scale_rows(vm);
     xsaves_rows(vm);
+    smm_freeze_rows(vm);
 }
 
 /** Run the rows; 0 when every check passed, 1 otherwise. */
