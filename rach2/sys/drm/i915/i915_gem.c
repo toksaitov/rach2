@@ -1645,7 +1645,6 @@ void i915_gem_unplug(struct drm_i915_private *i915)
         return rc;                                                                     \
     }
 
-I915_GEM_LOCKED(i915_gem_throttle_ioctl)
 I915_GEM_LOCKED(i915_gem_create_ioctl)
 I915_GEM_LOCKED(i915_gem_create_ext_ioctl)
 I915_GEM_LOCKED(i915_gem_pread_ioctl)
@@ -1665,7 +1664,9 @@ I915_GEM_LOCKED(i915_gem_userptr_ioctl)
 
 /* The driver's own ioctls, with Linux's flags: a render node may call each
  * but GET_PIPE_FROM_CRTC_ID. Each row of the buffers runs under the GEM
- * lock; EXECBUFFER2 takes it itself between its copies. */
+ * lock; EXECBUFFER2 takes it itself between its copies, and THROTTLE, which
+ * takes a file's context list lock, which comes before it, and waits,
+ * takes none. */
 const struct drm_ioctl_desc i915_ioctls[I915_NUM_IOCTLS] = {
     {DRM_IOCTL_I915_GETPARAM, DRM_RENDER_ALLOW, i915_getparam_ioctl, "I915_GETPARAM"},
     {DRM_IOCTL_I915_GET_PIPE_FROM_CRTC_ID, 0, intel_get_pipe_from_crtc_id_ioctl,
@@ -1683,8 +1684,7 @@ const struct drm_ioctl_desc i915_ioctls[I915_NUM_IOCTLS] = {
      "I915_GEM_CONTEXT_SETPARAM"},
     {DRM_IOCTL_I915_QUERY, DRM_RENDER_ALLOW, i915_query_ioctl, "I915_QUERY"},
     {DRM_IOCTL_I915_GEM_BUSY, DRM_RENDER_ALLOW, i915_gem_busy_ioctl, "I915_GEM_BUSY"},
-    {DRM_IOCTL_I915_GEM_THROTTLE, DRM_RENDER_ALLOW, i915_gem_throttle_ioctl_gem,
-     "I915_GEM_THROTTLE"},
+    {DRM_IOCTL_I915_GEM_THROTTLE, DRM_RENDER_ALLOW, i915_gem_throttle_ioctl, "I915_GEM_THROTTLE"},
     {DRM_IOCTL_I915_GEM_CREATE, DRM_RENDER_ALLOW, i915_gem_create_ioctl_gem, "I915_GEM_CREATE"},
     {DRM_IOCTL_I915_GEM_CREATE_EXT, DRM_RENDER_ALLOW, i915_gem_create_ext_ioctl_gem,
      "I915_GEM_CREATE_EXT"},
