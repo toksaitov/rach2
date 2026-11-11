@@ -111,6 +111,12 @@ struct vshm {
     int gone;               /* detached with heap pages objects still hold */
     uintptr_t window;       /* where the window was, while `gone` */
     struct spinlock heap_lock;
+    /* The driver's interrupts, from virtio_ready to virtio_teardown: while
+     * `irq_on`, the queue's doorbell reaps the queues in its hook, as an
+     * interrupt does on PCI; `irq_lock` lets the release wait out a hook
+     * that runs. */
+    struct spinlock irq_lock;
+    int irq_on;
     uint32_t binds, failures;
     uint64_t rung[2], woken[2], polls, refused;
     uint64_t maps, map_pages, map_live, revoked; /* as struct vgs_info has them */
@@ -660,16 +666,33 @@ static int vs_irq_setup(struct virtio_dev *d, uint16_t nqueues)
     return nqueues <= VGS_QUEUES ? 0 : -EINVAL;
 }
 
-/** Nothing to start: the thread serves the doorbells. */
+/**
+ * Start the driver's interrupts: from now on the queue's doorbell reaps the
+ * queues in its hook (vshm_bell_signal), as virtio-pci's interrupt does and
+ * as Linux's transports call vring_interrupt, so that an answer reaches its
+ * waiter while the thread is busy. The thread binds the driver, and the
+ * bind may wait on an answer: the console's first commit of the new card
+ * waits on its buffer's fences, with the thread inside it. Without
+ * doorbells the thread polls, and the driver's own waits poll the queue.
+ */
 static void vs_irq_start(struct virtio_dev *d)
 {
-    (void)d;
+    struct vshm *vs = to_vs(d);
+    uint32_t flags = spin_lock_irqsave(&vs->irq_lock);
+
+    vs->irq_on = 1;
+    spin_unlock_irqrestore(&vs->irq_lock, flags);
 }
 
-/** Nothing to stop: the doorbells are given back at the detach. */
+/** Stop the driver's interrupts before its queues are freed, waiting for a
+ * hook that reaps them now, as Linux's free_irq does. */
 static void vs_irq_release(struct virtio_dev *d)
 {
-    (void)d;
+    struct vshm *vs = to_vs(d);
+    uint32_t flags = spin_lock_irqsave(&vs->irq_lock);
+
+    vs->irq_on = 0;
+    spin_unlock_irqrestore(&vs->irq_lock, flags);
 }
 
 /** Zeroed pages of the heap that follow each other, `bytes` rounded up to
@@ -1019,14 +1042,24 @@ static const struct virtio_ops vshm_ops = {
  * The doorbells the device rings
  */
 
-/** The device rang vector `b->vector`: note it and wake the thread, taking
- * the count as a read would. With the eventfd's lock held and interrupts
- * off. */
+/** The device rang vector `b->vector`: note it, reap the queues for the
+ * queue's vector while the driver's interrupts are on (vs_irq_start), and
+ * wake the thread, taking the count as a read would. With the eventfd's
+ * lock held and interrupts off, as an interrupt handler. */
 static int vshm_bell_signal(struct eventfd_hook *h)
 {
     struct vshm_bell *b = (struct vshm_bell *)h;
+    struct vshm *vs = b->vs;
+    uint32_t flags;
 
-    b->vs->woken[b->vector]++;
+    vs->woken[b->vector]++;
+    if (b->vector == VGS_VEC_QUEUE) {
+        flags = spin_lock_irqsave(&vs->irq_lock);
+        if (vs->irq_on) {
+            virtio_interrupt_queues(&vs->vdev);
+        }
+        spin_unlock_irqrestore(&vs->irq_lock, flags);
+    }
     vshm_rang |= 1u << b->vector;
     wq_wake_all(&vshm_wq);
     return 1;

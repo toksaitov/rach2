@@ -1117,9 +1117,13 @@ void vgpu_obj_init(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, u
  * `width` by `height` pixels over its pages, which are given now, or with
  * `virgl` the 3D resource `params` describes: the RESOURCE_CREATE and the
  * ATTACH_BACKING are queued without a wait, as Linux's
- * virtio_gpu_object_create, and the attach's fence is put in the object's
- * reservation, so that a wait on the object waits for both, however slow
- * the host. An error answer is logged, as Linux does, and the object's
+ * virtio_gpu_object_create. A 3D resource's attach has its fence put in
+ * the object's reservation, so that a wait on the object waits for both,
+ * however slow the host; a 2D resource's has none, as Linux's dumb
+ * buffers pass none (virtgpu_gem.c:42 and 90 in Linux 6.12), since a
+ * commit's implicit wait for it would rest on a reap of the queue, which
+ * over the shared region the waiting thread may be the one to do. An
+ * error answer is logged, as Linux does, and the object's
  * UNREF undoes the id. One reference, the caller's; NULL with *err -ENODEV
  * for a dead device, -EINVAL for a size of 0 or past the shmem helper's
  * reach, -ENOSPC when every resource id is taken, -ENOMEM or -E2BIG. May
@@ -1199,8 +1203,11 @@ struct virtio_gpu_object *vgpu_obj_create(struct virtio_gpu_device *vg, uint64_t
      * the create, and any command on the object follows both. */
     vgpu_cmd_send(create, NULL, NULL);
     bo->res_id = id;
-    vgpu_cmd_prepare(attach);
-    *err = dma_resv_add_fence(bo->shmem.base.resv, attach->fence, 1);
+    *err = 0;
+    if (r3d) {
+        vgpu_cmd_prepare(attach);
+        *err = dma_resv_add_fence(bo->shmem.base.resv, attach->fence, 1);
+    }
     vgpu_cmd_send(attach, NULL, NULL);
     if (*err != 0) {
         drm_gem_object_put(&bo->shmem.base);
