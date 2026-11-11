@@ -47,8 +47,10 @@ with
 .Dv TFD_TIMER_ABSTIME
 on a timer of
 .Dv CLOCK_REALTIME ,
-makes the timer canceled at each setting of the clock, until a setting of
-the timer without them: its next read fails with
+makes the timer canceled at each setting of the clock that changes real
+time against
+.Dv CLOCK_MONOTONIC ,
+until a setting of the timer without them: its next read fails with
 .Er ECANCELED ,
 and its next
 .Fn timerfd_settime
@@ -56,6 +58,11 @@ that arms it arms it and fails with
 .Er ECANCELED ,
 without writing
 .Fa old .
+A setting the kernel refuses, or an
+.Dv ADJ_SETOFFSET
+of zero, leaves real time where it was and cancels nothing, as in Linux,
+which compares the offset recorded when the timer was made or last
+reported canceled with the clock's.
 The offsets of
 .Xr adjtimex 2
 that slew the clock,

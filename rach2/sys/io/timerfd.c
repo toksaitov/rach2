@@ -137,8 +137,15 @@ struct ktimer {
     struct ktimer *cnext;     /* the next timer on `cancelable` */
     int on_cancel;            /* on it: last set with TFD_TIMER_ABSTIME and
                                * TFD_TIMER_CANCEL_ON_SET on CLOCK_REALTIME */
-    int canceled;             /* the real-time clock was set while it was on
-                               * it, and no read or setting has said so */
+    int canceled;             /* real time's offset changed while it was on
+                               * it, and no read or setting has said so:
+                               * Linux's moffs of KTIME_MAX */
+    int64_t moffs_sec;        /* real time less the monotonic clock, seconds */
+    int32_t moffs_nsec;       /* and nanoseconds, when the timerfd was made or
+                               * last said it was canceled: Linux's moffs
+                               * (fs/timerfd.c:155, 449), against which a
+                               * setting of the clock is told from a refused
+                               * one */
     int stepped;              /* the clock was set while it was on it, since
                                * the last read or setting: Linux's tick for the
                                * step (fs/timerfd.c:108-111), which makes it
@@ -234,6 +241,15 @@ static void disarm(struct ktimer *t)
 {
     unlist(t);
     t->armed = 0;
+}
+
+/** Record in `t` real time less the monotonic clock now (`rtc_offset`),
+ * as Linux's timerfd_create and timerfd_canceled record ktime_mono_to_real(0)
+ * in `moffs` (fs/timerfd.c:155, 449). Takes the clock's lock, which comes
+ * after `timer_lock`. */
+static void note_offset(struct ktimer *t)
+{
+    rtc_offset(&t->moffs_sec, &t->moffs_nsec);
 }
 
 /** Put `t` on `cancelable` when `on` and take it off otherwise, as Linux's
@@ -803,18 +819,25 @@ void timerfd_due(void)
  * past its end expires it at once and a step back keeps it waiting, with
  * the interrupt between ticks programmed once for them all
  * (`timer_wake_hold`), as clock_was_set reprograms each processor once; and
- * each timerfd on `cancelable` is marked canceled and stepped, which makes
- * it readable as Linux's tick for the step does,
+ * each timerfd on `cancelable` that is canceled already, or whose recorded
+ * offset (`moffs_sec`) is not real time's offset now, is marked canceled
+ * and stepped, which makes it readable as Linux's tick for the step does,
  * and its readers woken, so that its next read or setting fails with
- * ECANCELED.
+ * ECANCELED. A refused setting leaves the offset as it was and so cancels
+ * none, as Linux's leaves offs_real (kernel/time/timekeeping.c:1356-1376,
+ * 1401-1426).
  */
 void timerfd_clock_was_set(void)
 {
-    uint32_t irq = spin_lock_irqsave(&timer_lock);
+    uint32_t irq;
     struct reading r;
     struct ktimer *t;
+    int64_t moffs_sec;
+    int32_t moffs_nsec;
     int have = 0;
 
+    rtc_offset(&moffs_sec, &moffs_nsec);
+    irq = spin_lock_irqsave(&timer_lock);
     timer_wake_hold();
     for (t = armed; t; t = t->next) {
         if (t->base == CLOCK_REALTIME) {
@@ -827,9 +850,11 @@ void timerfd_clock_was_set(void)
     }
     timer_wake_release();
     for (t = cancelable; t; t = t->cnext) {
-        t->canceled = 1;
-        t->stepped = 1;
-        wq_wake_all(&t->wq);
+        if (t->canceled || t->moffs_sec != moffs_sec || t->moffs_nsec != moffs_nsec) {
+            t->canceled = 1;
+            t->stepped = 1;
+            wq_wake_all(&t->wq);
+        }
     }
     spin_unlock_irqrestore(&timer_lock, irq);
 }
@@ -861,7 +886,9 @@ static void to_wait(int64_t sec, int32_t nsec, uint32_t *s, uint32_t *sub)
 
 /** Whether `t`'s next read or setting fails with ECANCELED, as Linux's
  * timerfd_canceled answers (fs/timerfd.c:151-157): the real-time clock was
- * set while `t` was on `cancelable`, and it is on it still. */
+ * set while `t` was on `cancelable`, and it is on it still. The caller that
+ * reports the cancel clears `canceled` and records the offset now
+ * (`note_offset`), as timerfd_canceled does. */
 static int is_canceled(const struct ktimer *t)
 {
     return t->on_cancel && t->canceled;
@@ -920,6 +947,7 @@ static int32_t timerfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
 
         if (is_canceled(t) && (readable(t) || nonblock || rc != 0)) {
             t->canceled = 0;
+            note_offset(t);
             if (t->expired && t->armed) {
                 disarm(t);
             }
@@ -1026,6 +1054,7 @@ long sys_timerfd_create(struct isr_params *params)
     }
     t->anon.name = "[timerfd]";
     t->clock = clock;
+    note_offset(t);
     wait_queue_init(&t->wq);
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
@@ -1152,6 +1181,7 @@ static int32_t list_clock(struct ktimer *t, int base, int flags, const struct se
     armed = t;
     if (is_canceled(t)) {
         t->canceled = 0;
+        note_offset(t);
         return -ECANCELED;
     }
     return 0;

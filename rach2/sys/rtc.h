@@ -178,11 +178,14 @@ uint64_t rtc_ticks_now(void);
  * time unchanged, for a time Linux refuses (kernel/time/timekeeping.c:
  * 1350-1364): before 1970, at or past its TIME_SETTOD_SEC_MAX, or before the
  * monotonic clock; else 0. On a refusal for the monotonic clock, as on a
- * step, the NTP state forgets its offsets and adjtime's slew (`ntp_clear`),
- * the timers of real time are told (`timerfd_clock_was_set`), which cancels
- * each TFD_TIMER_CANCEL_ON_SET timerfd, and the step count moves on
- * (`rtc_step_count`). The machine's clock is not written
- * (`rtc_write_clock`).
+ * step, the NTP state forgets its offsets and adjtime's slew (`ntp_clear`)
+ * and the timers of real time are told (`timerfd_clock_was_set`), as
+ * Linux's clock_was_set tells them on both paths (kernel/time/
+ * timekeeping.c:1369-1376); a TFD_TIMER_CANCEL_ON_SET timerfd is canceled,
+ * and the step count moves on (`rtc_step_count`), only when the offset of
+ * real time changed, which a refusal leaves, as Linux's timerfd_clock_was_set
+ * compares each timerfd's moffs with it (fs/timerfd.c:97-116). The
+ * machine's clock is not written (`rtc_write_clock`).
  */
 int rtc_set_realtime(int64_t seconds, int32_t nanoseconds);
 
@@ -226,11 +229,12 @@ void rtc_mono_of_real(int64_t sec, int32_t nsec, int64_t *mono_sec, int32_t *mon
 
 /**
  * The count of the steps of real time, its settings and its leap seconds,
- * never 0, which moves on at `rtc_set_realtime`, `rtc_shift_realtime` and a
- * leap second. A sleep to an absolute time of real time reads it before
- * the clock, counts its tick from the clock, and keeps it in `rt_steps`
- * (proc/process.h); a later step makes the two differ, the timer tick
- * wakes the sleep, and the sleep counts its tick again, as Linux's
+ * never 0, which moves on at a leap second and at a `rtc_set_realtime` or
+ * `rtc_shift_realtime` that changes real time's offset. A sleep to an
+ * absolute time of real time reads it before the clock, counts its tick
+ * from the clock, and keeps it in `rt_steps` (proc/process.h); a later step
+ * makes the two differ, the timer tick wakes the sleep, and the sleep counts
+ * its tick again, as Linux's
  * clock_was_set moves the hrtimers of the real-time base
  * (kernel/time/hrtimer.c:951-987). A slew changes no offset and counts no
  * step, since real time and the ticks run at its rate alike.

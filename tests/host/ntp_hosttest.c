@@ -18,9 +18,10 @@
  * second offset; a frequency, kept across a setting of the clock, with the
  * raw clock unslewed and the place within the tick slewed at 100 and 500
  * ppm; adjtime's offset slewed at 500 ppm and read back; a shift of the
- * clock, which steps it, forgets the offset and cancels the timers that ask
- * for it, and is refused, though it cancels still, for a time before the
- * monotonic clock or before 1970; and a leap second inserted at midnight,
+ * clock, which steps it, forgets the offset, counts a step and tells the
+ * timers, and is refused, though it forgets and tells them still and counts
+ * no step, for a time before the monotonic clock or before 1970, as is a
+ * shift of nothing; and a leap second inserted at midnight,
  * as adjtimex reads it before and after the tick that inserts it, and one
  * deleted.
  *
@@ -98,7 +99,8 @@ void vclock_set_wall(int64_t sec, int32_t nsec)
     (void)nsec;
 }
 
-/** Count the timers' cancels. */
+/** Count the calls that tell the timers of a setting, whose cancels
+ * timerfd.c decides by real time's offset. */
 void timerfd_clock_was_set(void)
 {
     cancels++;
@@ -381,13 +383,16 @@ static void singleshot_row(void)
 
 /** ADJ_SETOFFSET's shift steps real time at once, the boot time with it,
  * forgets the PLL's offset, whose tick length the tick in progress keeps,
- * and cancels; a shift to a time before the monotonic clock, though after
- * 1970, is refused, and so is one before 1970, and each still forgets and
- * cancels, as Linux's does (kernel/time/timekeeping.c:1409-1426). */
+ * counts a step and tells the timers; a shift to a time before the
+ * monotonic clock, though after 1970, is refused, and so is one before
+ * 1970, and each still forgets and tells the timers, as Linux's does
+ * (kernel/time/timekeeping.c:1409-1426), but counts no step, since the
+ * offset is as it was; a shift of nothing counts none either. */
 static void setoffset_row(void)
 {
     struct ktimex tx;
     int64_t before, base, epoch;
+    uint32_t steps;
     int c;
 
     restart(1700000800);
@@ -397,18 +402,23 @@ static void setoffset_row(void)
     c = cancels;
     epoch = rtc_boot_epoch();
     before = real_now();
+    steps = rtc_step_count();
     CHECK(rtc_shift_realtime(5, 0) == 0);
     CHECK(real_now() - before == 5 * NS && cancels == c + 1 && rtc_boot_epoch() == epoch + 5);
+    CHECK(rtc_step_count() != steps);
     base = last_real = real_now();
     pass(1000);
     CHECK(real_now() - base == 1000031250);
     adj(&tx, 0, 0, 0, 0);
     CHECK(tx.offset == 0 && (tx.status & STA_UNSYNC));
     before = real_now();
+    steps = rtc_step_count();
     CHECK(rtc_shift_realtime(50 - 1700000806, 0) == -1);
     CHECK(real_now() == before && cancels == c + 2);
     CHECK(rtc_shift_realtime(-1800000000, 0) == -1);
     CHECK(real_now() == before && cancels == c + 3);
+    CHECK(rtc_shift_realtime(0, 0) == 0);
+    CHECK(cancels == c + 4 && rtc_step_count() == steps);
 }
 
 /** STA_INS announces a leap second at the end of the day, 1700006400 s,
