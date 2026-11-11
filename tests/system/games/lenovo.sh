@@ -26,7 +26,8 @@
 #
 # OUT gets the record of the session, `session`, the volume's log, `volume`,
 # and for each run a directory GAME-N with games.sh's output, its summary
-# and frame times, `freq`, the clock's samples, and `dmesg`, the kernel's log
+# and frame times, `freq`, the clock's samples, `rps-boost-info`, the GPU's
+# boost counters when i915 exposes them, and `dmesg`, the kernel's log
 # at the run's end, which holds the lines of rach2.trace=enosys before the
 # log's 16 KiB turn over. Each run prints its
 # games.sh result line and then one line:
@@ -149,6 +150,9 @@ for game in "$@"; do
         stop
         echo "$(date +%T) $game-$n end, status $status, volume $(mixer vol)" >> "$out/volume"
         dmesg > "$dir/dmesg" 2>&1 || :
+        if [ -r /sys/kernel/debug/dri/0/i915_rps_boost_info ]; then
+            cat /sys/kernel/debug/dri/0/i915_rps_boost_info > "$dir/rps-boost-info"
+        fi
         line=$(grep 'games: result: ' "$dir/lenovo.out" | tail -n 1) || line=''
         if [ "$status" -ne 0 ] || [ -z "$line" ]; then
             echo "lenovo-games: result: $game-$n fail: games.sh status $status: $(tail -n 3 "$dir/lenovo.out")"
