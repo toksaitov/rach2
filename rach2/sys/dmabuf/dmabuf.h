@@ -23,7 +23,7 @@ struct dma_buf_poll_cb {
 
 struct dma_buf {
     struct anon_obj anon;
-    uint32_t refs;
+    volatile uint32_t refs; /* changed atomically */
     uint64_t size, ino;
     const struct dma_buf_ops *ops;
     void *priv;
@@ -166,7 +166,7 @@ void dma_fence_set_deadline(struct dma_fence *fence, int64_t deadline);
  * context, else 0, and a point that does not come after its predecessor
  * gets a context of its own and the predecessor's seqno. The chain holds
  * `prev` and `fence`; a walk drops the earlier points whose fences have
- * signalled. `armed` is the fence its callback waits on, or NULL.
+ * signalled.
  */
 struct dma_fence_chain;
 struct dma_fence_chain_cb {
@@ -175,9 +175,12 @@ struct dma_fence_chain_cb {
 };
 struct dma_fence_chain {
     struct dma_fence base;
+    /* The earlier point, with a reference; read and swapped only under
+     * fence.c's chain lock, since a walk unlinks signalled points. */
     struct dma_fence *prev;
     uint64_t prev_seqno;
     struct dma_fence *fence;
+    /* The fence the callback waits on, with a reference, or NULL. */
     struct dma_fence *armed;
     struct dma_fence_chain_cb cb;
 };

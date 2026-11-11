@@ -794,10 +794,10 @@ static int32_t eb_fence_array(struct eb *eb)
         f->flags = uf.flags;
         eb->nfences++;
         if (uf.flags & I915_EXEC_FENCE_WAIT) {
-            if (!f->syncobj->fence) {
+            f->fence = drm_syncobj_fence_get(f->syncobj);
+            if (!f->fence) {
                 return -EINVAL;
             }
-            f->fence = dma_fence_get(f->syncobj->fence);
         }
     }
     return 0;
@@ -826,7 +826,7 @@ static int32_t eb_timeline_fence(struct eb *eb, uint32_t handle, uint64_t point,
     if (!s) {
         return -ENOENT;
     }
-    fence = dma_fence_get(s->fence);
+    fence = drm_syncobj_fence_get(s);
     if (!fence && flags && !(flags & I915_EXEC_FENCE_SIGNAL)) {
         drm_syncobj_put(s);
         return -EINVAL;

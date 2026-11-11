@@ -218,6 +218,14 @@ void *drm_handle_find(struct drm_handles *t, uint32_t id)
 {
     return id < t->cap && t->slot[id] ? t->slot[id]->object : NULL;
 }
+/** Find a handle's object and take a reference with `get`. */
+void *drm_handle_find_get(struct drm_handles *t, uint32_t id, void (*get)(void *object))
+{
+    void *object = drm_handle_find(t, id);
+    if (object)
+        get(object);
+    return object;
+}
 /** Take a handle out and return its object. */
 void *drm_handle_remove(struct drm_handles *t, uint32_t id)
 {

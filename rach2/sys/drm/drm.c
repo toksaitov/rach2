@@ -123,12 +123,26 @@ void drm_dev_init(struct drm_device *dev, const struct drm_driver *driver)
 
 void drm_dev_get(struct drm_device *dev)
 {
-    dev->refs++;
+    uint32_t old;
+
+    do {
+        old = dev->refs;
+    } while (arch_atomic_cmpxchg((volatile unsigned int *)&dev->refs, old, old + 1u) != old);
 }
 
+/* Atomic, as Linux's kref (drm_drv.c:810-829), since a buffer object's
+ * last reference, which holds the device, may go on any processor. */
 void drm_dev_put(struct drm_device *dev)
 {
-    if (!dev || --dev->refs > 0) {
+    uint32_t old;
+
+    if (!dev) {
+        return;
+    }
+    do {
+        old = dev->refs;
+    } while (arch_atomic_cmpxchg((volatile unsigned int *)&dev->refs, old, old - 1u) != old);
+    if (old != 1u) {
         return;
     }
     if (dev->index >= 0 && devices[dev->index] == dev) {

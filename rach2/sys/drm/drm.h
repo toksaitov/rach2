@@ -51,13 +51,17 @@ struct sysfs_pci_ident;
  *     and the device's mmap space, Linux's `object_name_lock` and the
  *     offset manager's `vm_lock`;
  *   * a device's `event_lock` over each file's queued and reserved events
- *     and its event space, Linux's `event_lock` (drm_device.h:276).
+ *     and its event space, Linux's `event_lock` (drm_device.h:276);
+ *   * a syncobj's `lock` over its fence and its lists of waits and
+ *     eventfds, Linux's (drm_syncobj.c:266-396), under which a fence's lock
+ *     and the chain lock of dmabuf/fence.c may be taken, as Linux's are.
  * A buffer object's `refs` change atomically, as Linux's kref: a walk that
  * meets an object under `object_lock` takes a reference only while the
  * count is not 0 (`drm_gem_object_next`, as Linux's drm_gem.c:1177), since
  * the last put takes the object off the device's lists under that lock
- * before it frees it. Everything else here, dma-buf references and the
- * syncobj table's objects among them, still relies on the big lock.
+ * before it frees it. A device's, a syncobj's, a fence's and a dma-buf's
+ * `refs` change atomically too, and a lookup by handle takes its reference
+ * under the table's lock (`drm_handle_find_get`).
  *
  * References. Each object counts its holders in `refs`, and the last put
  * frees it:
@@ -655,6 +659,9 @@ int32_t drm_handle_insert(struct drm_handles *t, void *object, uint32_t *id);
 /** The object of `id` in `t`, or NULL; no reference is taken, so the
  * caller keeps the object alive by other means. */
 void *drm_handle_find(struct drm_handles *t, uint32_t id);
+/** The object of `id` in `t`, or NULL, with a reference that `get` takes
+ * under the table's lock, so that no removal frees it first. */
+void *drm_handle_find_get(struct drm_handles *t, uint32_t id, void (*get)(void *object));
 /** Take `id` out of `t`, drop its PRIME cache reference and return its
  * object, or NULL for none. */
 void *drm_handle_remove(struct drm_handles *t, uint32_t id);
@@ -1845,7 +1852,7 @@ struct drm_device {
     const struct drm_driver *driver;
     uint32_t features;
     int index;
-    uint32_t refs;
+    volatile uint32_t refs; /* changed atomically, as each object holds one */
     int registered;
     int unplugged;
     char unique[32];
@@ -2289,7 +2296,8 @@ struct syncobj_wait;
 struct syncobj_eventfd;
 struct dma_fence_chain;
 struct drm_syncobj {
-    uint32_t refs;
+    volatile uint32_t refs;           /* atomic */
+    struct spinlock lock;             /* the three members below */
     struct dma_fence *fence;          /* NULL, a binary fence or the newest point */
     struct syncobj_wait *waits;       /* threads waiting for a point to be submitted */
     struct syncobj_eventfd *eventfds; /* eventfds waiting for a point to be submitted */
@@ -2304,6 +2312,9 @@ void drm_syncobj_get(struct drm_syncobj *syncobj);
 void drm_syncobj_put(struct drm_syncobj *syncobj);
 /** The syncobj of `file`'s `handle`, with a reference, or NULL. */
 struct drm_syncobj *drm_syncobj_find(struct drm_file *file, uint32_t handle);
+/** The syncobj's fence, with a reference, or NULL, as Linux's
+ * drm_syncobj_fence_get. */
+struct dma_fence *drm_syncobj_fence_get(struct drm_syncobj *syncobj);
 /** Make `fence`, which may be NULL, the syncobj's, with a reference of its
  * own, and tell its waiters and eventfds. Does not sleep. */
 void drm_syncobj_replace_fence(struct drm_syncobj *syncobj, struct dma_fence *fence);
