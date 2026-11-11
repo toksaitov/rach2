@@ -11,8 +11,9 @@
  * hypervisor's version 3 without fixed counters, a version 1 monitor
  * without the global registers, AMD's core counters, a hypervisor's counter
  * that takes writes and never moves, and processors without the cycles
- * event or the model-specific registers. The detector takes fixed counter
- * 1 where there is one, and general counter 0 otherwise. Each register
+ * event or the model-specific registers; and AMD's family 15h. The
+ * detector takes fixed counter 1 where there is one, core counter 2 on
+ * family 15h, and general counter 0 otherwise. Each register
  * exists only where the SDM or AMD's manual says it does, and an access to
  * any other, a write of a read-only register, or a write of bits past a
  * counter's width is a #GP, which fails the row. A legacy write of
@@ -54,13 +55,14 @@ struct chip {
     int measured; /* the TSC's rate was measured against the PIT */
     uint64_t hz;
     uint32_t leaf_a_edx; /* the fixed counters' number and width */
+    uint32_t leaf1_eax;  /* the family, model and stepping */
 };
 
 static const struct chip *chip;
 static uint64_t tsc;
-static uint64_t evtsel, counter, global_ctrl, global_status;
+static uint64_t evtsel, counter, global_ctrl, global_status; /* the detector's */
 static uint64_t fixed_ctrl, fixed1; /* the fixed counters' control, counter 1 */
-static uint64_t other_evtsel[8];    /* the event selects of counters 1 to 7 */
+static uint64_t other_evtsel[8];    /* the other general counters' selects */
 static uint32_t lvtpc = LAPIC_LVT_MASKED;
 static int nmi_pending;
 static int msr_writes, last_msr_written;
@@ -118,18 +120,41 @@ static uint32_t chip_counters(void)
     return chip_amd() ? 6u : (chip->leaf_a_eax >> 8) & 0xFFu;
 }
 
-/** The index of the event select of a counter other than 0 that `msr` is,
- * or 0 when it is none. */
+/** The general counter the detector takes when it takes one: AMD's core
+ * counter 2 on family 15h, counter 0 otherwise. */
+static uint32_t chip_gp(void)
+{
+    return chip_amd() && (chip->leaf1_eax & 0x0FF00F00u) == 0x00600F00u ? 2u : 0u;
+}
+
+/** The detector's general counter's register on AMD's chips: its count
+ * when `count`, else its event select. */
+static uint32_t amd_msr(int count)
+{
+    return AMD_PERF_CTL0 + 2u * chip_gp() + (count ? 1u : 0u);
+}
+
+/** The index of the event select of a general counter other than the
+ * detector's that `msr` is, or 0 when it is none: counter i is i + 1, so
+ * that AMD's counter 0 beside family 15h's detector has an index. */
 static uint32_t other_index(uint32_t msr)
 {
-    if (chip_amd() && msr > AMD_PERF_CTL0 && msr < AMD_PERF_CTL0 + 2u * chip_counters() &&
-        (msr - AMD_PERF_CTL0) % 2u == 0) {
-        return (msr - AMD_PERF_CTL0) / 2u;
+    if (chip_amd() && msr >= AMD_PERF_CTL0 && msr < AMD_PERF_CTL0 + 2u * chip_counters() &&
+        (msr - AMD_PERF_CTL0) % 2u == 0 && msr != amd_msr(0)) {
+        return (msr - AMD_PERF_CTL0) / 2u + 1u;
     }
     if (!chip_amd() && msr > IA32_PERFEVTSEL0 && msr < IA32_PERFEVTSEL0 + chip_counters()) {
-        return msr - IA32_PERFEVTSEL0;
+        return msr - IA32_PERFEVTSEL0 + 1u;
     }
     return 0;
+}
+
+/** Whether `msr` is the count of an AMD core counter other than the
+ * detector's, which the model reads as 0 and lets be written. */
+static int other_count(uint32_t msr)
+{
+    return chip_amd() && msr > AMD_PERF_CTL0 && msr < AMD_PERF_CTL0 + 2u * chip_counters() &&
+           (msr - AMD_PERF_CTL0) % 2u == 1 && msr != amd_msr(1);
 }
 
 /** Whether the chip has Intel's fixed counter 1, by leaf 0xA's EDX. */
@@ -223,7 +248,7 @@ static int msr_exists(uint32_t msr)
         return 0;
     }
     if (chip_amd()) {
-        return (msr == AMD_PERF_CTL0 || msr == AMD_PERF_CTR0 || other_index(msr) != 0) &&
+        return msr >= AMD_PERF_CTL0 && msr < AMD_PERF_CTL0 + 2u * chip_counters() &&
                (chip->ext1_ecx & (1u << 23)) != 0;
     }
     if (chip->max_leaf < 0xAu || chip_version() == 0) {
@@ -258,12 +283,14 @@ void kcpu_rdmsr(uint32_t msr, uint32_t *lo, uint32_t *hi)
 
     if (!msr_exists(msr)) {
         gp("rdmsr of absent", msr);
-    } else if (msr == IA32_PMC0 || msr == IA32_A_PMC0 || msr == AMD_PERF_CTR0) {
-        v = counter;
-    } else if (msr == IA32_PERFEVTSEL0 || msr == AMD_PERF_CTL0) {
-        v = evtsel;
     } else if (other_index(msr) != 0) {
-        v = other_evtsel[other_index(msr)];
+        v = other_evtsel[other_index(msr) - 1u];
+    } else if (other_count(msr)) {
+        v = 0;
+    } else if (msr == IA32_PMC0 || msr == IA32_A_PMC0 || (chip_amd() && msr == amd_msr(1))) {
+        v = counter;
+    } else if (msr == IA32_PERFEVTSEL0 || (chip_amd() && msr == amd_msr(0))) {
+        v = evtsel;
     } else if (msr == IA32_PERF_CAPABILITIES) {
         v = chip->perf_cap;
     } else if (msr == IA32_PERF_GLOBAL_STATUS) {
@@ -295,8 +322,15 @@ void kcpu_wrmsr(uint32_t msr, uint32_t lo, uint32_t hi)
         return;
     }
     if (other_index(msr) != 0) {
-        other_evtsel[other_index(msr)] = v;
+        other_evtsel[other_index(msr) - 1u] = v;
         return;
+    }
+    if (other_count(msr)) {
+        return;
+    }
+    if (chip_amd()) {
+        /* The detector's counter is counter 0's in the switch. */
+        msr = msr == amd_msr(1) ? AMD_PERF_CTR0 : AMD_PERF_CTL0;
     }
     switch (msr) {
     case IA32_PMC0:
@@ -358,6 +392,7 @@ void kcpu_id(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
         r[3] = (uint32_t)v[4] | (uint32_t)v[5] << 8 | (uint32_t)v[6] << 16 | (uint32_t)v[7] << 24;
         r[2] = (uint32_t)v[8] | (uint32_t)v[9] << 8 | (uint32_t)v[10] << 16 | (uint32_t)v[11] << 24;
     } else if (leaf == 1) {
+        r[0] = chip->leaf1_eax;
         r[2] = chip->leaf1_ecx;
     } else if (leaf == 0xAu && leaf <= chip->max_leaf) {
         r[0] = chip->leaf_a_eax;
@@ -444,6 +479,7 @@ static void reset(const struct chip *c)
     found = 0;
     kind = PMU_NONE;
     fixed = 0;
+    counter_index = 0;
     version = counters = width = count_msr = 0;
     max_period = cpu_hz = 0;
     k_memset(pmc, 0, sizeof pmc);
@@ -519,7 +555,8 @@ static int drive(int seconds, long *due_ms, int max, int *others, int *masked)
 /**
  * A probe that finds a counter, and the counter at work and stopped.
  * `want_ctl` is the value the enable writes last, to fixed counter 1's
- * control when `want_fixed` and to counter 0's event select otherwise.
+ * control when `want_fixed` and to the detector's general counter's event
+ * select otherwise.
  */
 static void counter_row(const struct chip *c, const char *line, int want_fixed, uint32_t want_ctl,
                         int want_loads)
@@ -533,7 +570,9 @@ static void counter_row(const struct chip *c, const char *line, int want_fixed, 
     reset(c);
     check(platform_pmu_probe() == 1, "the probe finds the counter");
     check(strstr(logged, line) != NULL, line);
-    check(fixed == want_fixed, want_fixed ? "the counter is fixed counter 1" : "the counter is 0");
+    check(fixed == want_fixed,
+          want_fixed ? "the counter is fixed counter 1" : "the counter is general");
+    check(counter_index == chip_gp(), "the general counter is the chip's");
     check(platform_cpu_hz() == c->hz, "the clock is the processor's");
     check(evtsel == 0 && fixed_ctrl == 0, "the probe leaves the counters stopped");
     check(other_evtsel[1] == 0, "the probe stops the counter the firmware left");
@@ -624,8 +663,8 @@ static void none_row(const struct chip *c, const char *line)
 #define HYPERVISOR   (1u << 31)
 
 static const struct chip haswell = {
-    "i3-4030U", "GenuineIntel", 0xDu, HSW_LEAF_A, 0, PDCM,        0x80000008u,
-    0,          0x32C4u,        1,    0,          1, 1895611000u, HSW_LEAF_A_D};
+    "i3-4030U", "GenuineIntel", 0xDu,         HSW_LEAF_A, 0, PDCM, 0x80000008u, 0, 0x32C4u, 1, 0,
+    1,          1895611000u,    HSW_LEAF_A_D, 0};
 static const struct chip no_fw = {"version 3 without full-width writes",
                                   "GenuineIntel",
                                   0xDu,
@@ -639,7 +678,8 @@ static const struct chip no_fw = {"version 3 without full-width writes",
                                   0,
                                   0,
                                   2400000000u,
-                                  HSW_LEAF_A_D};
+                                  HSW_LEAF_A_D,
+                                  0};
 static const struct chip no_fixed = {"a hypervisor's version 3 without fixed counters",
                                      "GenuineIntel",
                                      0xDu,
@@ -653,10 +693,23 @@ static const struct chip no_fixed = {"a hypervisor's version 3 without fixed cou
                                      0,
                                      1,
                                      1895611000u,
+                                     0,
                                      0};
-static const struct chip v1 = {
-    "version 1", "GenuineIntel", 0xAu, 0x07280201u, 0, 0, 0x80000008u, 0, 0, 1, 0,
-    1,           1600000000u,    0};
+static const struct chip v1 = {"version 1",
+                               "GenuineIntel",
+                               0xAu,
+                               0x07280201u,
+                               0,
+                               0,
+                               0x80000008u,
+                               0,
+                               0,
+                               1,
+                               0,
+                               1,
+                               1600000000u,
+                               0,
+                               0};
 static const struct chip ryzen = {"AMD core counters",
                                   "AuthenticAMD",
                                   0x10u,
@@ -670,7 +723,23 @@ static const struct chip ryzen = {"AMD core counters",
                                   0,
                                   1,
                                   3800000000u,
+                                  0,
                                   0};
+static const struct chip piledriver = {"AMD family 15h",
+                                       "AuthenticAMD",
+                                       0xDu,
+                                       0,
+                                       0,
+                                       0,
+                                       0x8000001Eu,
+                                       1u << 23,
+                                       0,
+                                       1,
+                                       0,
+                                       1,
+                                       3500000000u,
+                                       0,
+                                       0x00600F20u};
 static const struct chip dead = {"a hypervisor's counter that does not count",
                                  "GenuineIntel",
                                  0xDu,
@@ -684,13 +753,14 @@ static const struct chip dead = {"a hypervisor's counter that does not count",
                                  1,
                                  1,
                                  1895611000u,
-                                 HSW_LEAF_A_D};
+                                 HSW_LEAF_A_D,
+                                 0};
 static const struct chip no_cycles = {
     "no cycles event", "GenuineIntel", 0xDu, HSW_LEAF_A, 1u, PDCM, 0x80000008u, 0, 0x32C4u, 1, 0, 1,
-    1895611000u,       HSW_LEAF_A_D};
+    1895611000u,       HSW_LEAF_A_D,   0};
 static const struct chip no_msr = {
-    "no msrs", "GenuineIntel", 0xDu, HSW_LEAF_A, 0, PDCM,        0x80000008u,
-    0,         0x32C4u,        0,    0,          1, 1895611000u, HSW_LEAF_A_D};
+    "no msrs", "GenuineIntel", 0xDu,         HSW_LEAF_A, 0, PDCM, 0x80000008u, 0, 0x32C4u, 0, 0,
+    1,         1895611000u,    HSW_LEAF_A_D, 0};
 
 int main(void)
 {
@@ -708,6 +778,8 @@ int main(void)
                 8);
     counter_row(&ryzen, "counter: amd core version 0, counter 0, 48 bits, 3800 MHz", 0, 0x530076u,
                 1);
+    counter_row(&piledriver, "counter: amd core version 0, counter 2, 48 bits, 3500 MHz", 0,
+                0x530076u, 1);
     none_row(&dead, "no counter: fixed counter 1 does not count");
     none_row(&no_cycles, "no counter: the processor lists no cycles counter");
     none_row(&no_msr, "no counter: no local apic or no msrs");

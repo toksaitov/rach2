@@ -647,24 +647,26 @@ static void amd_switch(void)
     CHECK(!kvm_pmu_enabled(), "ignored TCG MSRs do not advertise working counters");
 }
 
-/** Drive AMD's event constraints: family 15h's counters and family 17h's
- * merged pair, beside the host's counter 0. */
+/** Drive AMD's event constraints: family 15h's counters beside the
+ * detector's core counter 2, and family 17h's merged pair beside its
+ * counter 0. */
 static void amd_constraints(void)
 {
     uint64_t watch = 0x76u | EV_ENABLE | EV_INT;
     model_amd_sig = 0x00600F12u; /* family 15h */
     setup(0, 1, 0);
     CHECK(pmu_host.family == 0x15u, "family 15h is read from leaf 1");
-    *reg(amd_index(0, 0)) = watch;
+    *reg(amd_index(2, 0)) = watch;
     v.pmu.eventsel[0] = 0x02Du | EV_ENABLE | EV_OS;
     v.pmu.eventsel[1] = 0x87u | (1ull << 32) | EV_ENABLE | EV_OS; /* event 0x187 */
     v.pmu.eventsel[2] = 0x076u | EV_ENABLE | EV_OS;
     kvm_pmu_prepare(&v);
     kvm_pmu_svm_enter(&v);
-    CHECK(v.pmu.run_gp == 5 && v.pmu.phys[0] == 3 && v.pmu.phys[2] == 1,
-          "family 15h's events run on their counters, and one restricted to the host's does not");
+    CHECK(v.pmu.run_gp == 7 && v.pmu.phys[0] == 3 && v.pmu.phys[1] == 0 && v.pmu.phys[2] == 1,
+          "family 15h's events run on their counters, counter 0's beside the detector");
     kvm_pmu_svm_exit(&v);
-    CHECK(*reg(amd_index(0, 0)) == watch && !*reg(amd_index(3, 0)), "the host's counter is kept");
+    CHECK(*reg(amd_index(2, 0)) == watch && !*reg(amd_index(3, 0)) && !*reg(amd_index(0, 0)),
+          "the host's counter is kept");
     model_amd_sig = 0x00800F11u; /* family 17h */
     setup(0, 1, 0);
     *reg(amd_index(0, 0)) = watch;
