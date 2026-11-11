@@ -5,6 +5,7 @@
  * vkms64_hosttest.c runs the same rows with x86-64's structures.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/resv_host.c
  *
  * The rows: no device without `rach2.vkms`; a device with Linux's objects,
  * a primary and a cursor plane of five formats with rotation, a CRTC with

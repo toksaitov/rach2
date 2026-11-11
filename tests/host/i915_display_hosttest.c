@@ -10,6 +10,7 @@
  * host-deps: rach2/sys/lib/kstd.c
  * host-deps: rach2/sys/lib/kctypes.c tests/host/compat/spinlock_host.c
  * host-deps: rach2/sys/drm/i915/intel_bios.c rach2/sys/drm/i915/i915_power.c
+ * host-deps: tests/host/compat/resv_host.c
  * host-inputs: tests/fixtures/lenovo-gpu/i915_vbt.bin
  *
  * The rows: the readout of pipe A, the eDP transcoder, DDI A, the plane and the

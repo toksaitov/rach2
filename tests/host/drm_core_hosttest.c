@@ -263,6 +263,12 @@ struct dma_buf *dma_buf_ref(struct dma_buf *buf)
     return buf;
 }
 
+/** Make a modeled reservation empty. */
+void dma_resv_init(struct dma_resv *r)
+{
+    k_memset(r, 0, sizeof(*r));
+}
+
 /** Release modeled reservation slots at the object's last reference. */
 void dma_resv_fini(struct dma_resv *r)
 {

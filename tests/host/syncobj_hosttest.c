@@ -4,6 +4,7 @@
  * the scheduler are models, and a sleep runs the producer step a row arms.
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/fd_flat.c
+ * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/atomic_host.c
  */
 #include "dmabuf/fence.c"
 #include "dmabuf/sync_file.c"

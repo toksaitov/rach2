@@ -6,6 +6,7 @@
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c tests/host/compat/atomic_host.c
  * host-deps: tests/host/compat/mmap_lock_host.c tests/host/compat/fd_flat.c
+ * host-deps: tests/host/compat/mutex_none.c
  */
 
 #include "i915_gem_model.c"
@@ -31,7 +32,9 @@ static void objects(void)
     uint8_t out[8192], in[8192];
     uint32_t h, i;
     struct drm_i915_gem_object *obj;
-    int before = allocations;
+    /* The file's handle table keeps its slots until the file closes, as
+     * Linux's idr keeps its nodes, so the first handle leaves one record. */
+    int before = allocations + (file_a.objects.slot == NULL);
 
     CHECK(i915_gem_create_ioctl(&dev_a->drm, &c, &file_a) == -EINVAL, "create: 0 bytes, EINVAL");
     c.size = SHMEM_MAX_SIZE + 1u;
@@ -964,9 +967,10 @@ static void table_and_unplug(void)
     vma_t gtt;
 
     for (i = 0; i < I915_NUM_IOCTLS; i++) {
-        /* GET_PIPE_FROM_CRTC_ID is the display's, flags 0 as on Linux. */
+        /* GET_PIPE_FROM_CRTC_ID is the display's, flags 0 as on Linux, and
+         * looks the CRTC up under the mode lock. */
         bad += !i915_ioctls[i].func || (i915_ioctls[i].cmd == DRM_IOCTL_I915_GET_PIPE_FROM_CRTC_ID
-                                            ? i915_ioctls[i].flags != 0
+                                            ? i915_ioctls[i].flags != DRM_MODESET_LOCK
                                             : !(i915_ioctls[i].flags & DRM_RENDER_ALLOW));
         for (j = 0; j < i; j++) {
             dup += UAPI_IOC_NR(i915_ioctls[i].cmd) == UAPI_IOC_NR(i915_ioctls[j].cmd);
@@ -975,6 +979,20 @@ static void table_and_unplug(void)
     CHECK(
         !bad && !dup,
         "ioctls: each has a handler, a render node may call each but the display's, numbers apart");
+    for (i = 0, bad = 0; i < I915_NUM_IOCTLS; i++) {
+        uint32_t cmd = i915_ioctls[i].cmd;
+        int unlocked = cmd == DRM_IOCTL_I915_GEM_BUSY || cmd == DRM_IOCTL_I915_GEM_MADVISE ||
+                       cmd == DRM_IOCTL_I915_GEM_EXECBUFFER2_WR ||
+                       cmd == DRM_IOCTL_I915_GEM_CONTEXT_CREATE_EXT ||
+                       cmd == DRM_IOCTL_I915_GEM_CONTEXT_DESTROY ||
+                       cmd == DRM_IOCTL_I915_GEM_CONTEXT_GETPARAM ||
+                       cmd == DRM_IOCTL_I915_GEM_CONTEXT_SETPARAM ||
+                       cmd == DRM_IOCTL_I915_GET_RESET_STATS;
+
+        bad += unlocked != ((i915_ioctls[i].flags & DRM_UNLOCKED) != 0);
+    }
+    CHECK(!bad, "ioctls: BUSY, MADVISE, EXECBUFFER2 and the context calls run without the big "
+                "lock, the rest under it");
     CHECK(UAPI_IOC_NR(DRM_IOCTL_I915_GEM_MMAP_GTT) == UAPI_IOC_NR(DRM_IOCTL_I915_GEM_MMAP_OFFSET) &&
               UAPI_IOC_SIZE(DRM_IOCTL_I915_GEM_MMAP_OFFSET) == 32,
           "ioctls: MMAP_OFFSET extends MMAP_GTT's number");
@@ -1132,6 +1150,8 @@ int main(void)
     CHECK(!dev_a->drm.objects && !dev_b->drm.objects && !dev_a->gem.bound && !frames_live &&
               !pins_live,
           "the end: no object, binding, page or pin left");
+    CHECK(!mutex_held(&dev_a->gem.lock) && !mutex_held(&dev_b->gem.lock),
+          "the end: every row gave the GEM lock back");
     printf("i915-gem-test: %s\n", failures ? "failed" : "ok");
     return failures != 0;
 }

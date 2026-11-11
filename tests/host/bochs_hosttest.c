@@ -6,6 +6,7 @@
  * structures.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/resv_host.c
  *
  * The rows: a function whose DISPI id is not one, refused; a bind with
  * QEMU's EDID, which is Linux's bochs-drm, sets the little-endian byte
