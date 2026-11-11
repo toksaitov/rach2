@@ -8,8 +8,12 @@
  * the faulting page or interrupt index in the low quadword and, in the high
  * one, the F bit that marks it full, the access type, the reason and the
  * requester id. The fault status register gives the first full record; the
- * handler reads records from it until one is empty, clearing each by
- * writing its F bit as one, as Linux's dmar_fault does.
+ * handler reads records from it, round the ring, until one is empty,
+ * clearing each by writing its F bit as one, as Linux's dmar_fault does
+ * (drivers/iommu/intel/dmar.c:1958-2035 in 6.12.115), so that a fault
+ * recorded while the handler runs is read in the same pass. A fault that
+ * finds every record full is lost, and the unit says so only by PFO, once
+ * however many were lost.
  */
 
 #include "vtd.h"
@@ -95,15 +99,18 @@ static void fault_one(struct vtd_unit *u, uint64_t lo, uint64_t hi)
 }
 
 /**
- * Read and clear every fault `u` has recorded, and the status bits that
- * say so. An error of a device's invalidation is counted and cleared; a
- * refused descriptor of the queue is left to the queue's submitter, which
- * waits on it. Takes `u->lock`; may run in the fault event's interrupt.
+ * Read and clear every fault `u` has recorded, while records stay full,
+ * and the status bits that say so. A lost fault (PFO) counts as one DMA
+ * fault, since the unit does not say how many it lost, and the log says
+ * the count is then a floor. An error of a device's invalidation is
+ * counted and cleared; a refused descriptor of the queue is left to the
+ * queue's submitter, which waits on it. Takes `u->lock`; may run in the
+ * fault event's interrupt.
  */
 void vtd_fault_unit(struct vtd_unit *u)
 {
     uint32_t flags, fsts;
-    unsigned int index, fro = VTD_CAP_FRO(u->cap), nfr = VTD_CAP_NFR(u->cap), n;
+    unsigned int index, fro = VTD_CAP_FRO(u->cap), nfr = VTD_CAP_NFR(u->cap);
 
     if (u->regs == 0) {
         return;
@@ -116,14 +123,10 @@ void vtd_fault_unit(struct vtd_unit *u)
         u->errors++;
         vtd_hw_write32(u->regs, VTD_FSTS, fsts & (VTD_FSTS_ICE | VTD_FSTS_ITE));
     }
-    if ((fsts & VTD_FSTS_PFO) != 0) {
-        klog(KLOG_ERR, "vtd", "fault: dmar%d: faults lost, every record full", u->index);
-        u->dma_faults++;
-    }
     if ((fsts & VTD_FSTS_PPF) != 0) {
-        index = (fsts >> 8) & 0xFFu;
-        for (n = 0; n < nfr; n++) {
-            unsigned int at = fro + (index % nfr) * 16u;
+        index = ((fsts >> 8) & 0xFFu) % nfr;
+        for (;;) {
+            unsigned int at = fro + index * 16u;
             uint64_t hi = vtd_hw_read64(u->regs, at + 8u), lo;
 
             if ((hi >> 63) == 0) {
@@ -132,10 +135,20 @@ void vtd_fault_unit(struct vtd_unit *u)
             lo = vtd_hw_read64(u->regs, at);
             vtd_hw_write32(u->regs, at + 12u, 0x80000000u);
             fault_one(u, lo, hi);
-            index++;
+            index = (index + 1u) % nfr;
         }
     }
-    vtd_hw_write32(u->regs, VTD_FSTS, VTD_FSTS_PFO | VTD_FSTS_PPF | VTD_FSTS_PRO);
+    /* Read again: PFO may have been set while the records were read. */
+    fsts = vtd_hw_read32(u->regs, VTD_FSTS);
+    if ((fsts & VTD_FSTS_PFO) != 0) {
+        u->overflows++;
+        u->dma_faults++;
+        klog(KLOG_ERR, "vtd",
+             "fault: dmar%d: faults lost, every record full: %lu times, so %lu DMA faults is a "
+             "floor",
+             u->index, u->overflows, u->dma_faults);
+    }
+    vtd_hw_write32(u->regs, VTD_FSTS, (fsts & VTD_FSTS_PFO) | VTD_FSTS_PPF | VTD_FSTS_PRO);
     spin_unlock_irqrestore(&u->lock, flags);
 }
 
