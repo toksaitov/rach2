@@ -17659,7 +17659,7 @@ static int synth_dev_dirent(int n, char *name, uint64_t *ino, uint8_t *dtype)
             name[i] = fdnames[n][i];
         }
         name[i] = '\0';
-        *ino = synth_stat(&fvp, &fst, 0) == 0 ? fst.st_ino : 1u;
+        *ino = synth_stat_node(&fvp, &fst, 0) == 0 ? fst.st_ino : 1u;
         *dtype = n == 0 ? DT_DIR : DT_LNK;
         return 1;
     }
