@@ -99,11 +99,14 @@ uint64_t timer_cycles_us(uint64_t cycles)
     return cycles;
 }
 
-/** The cycles here are the clock's microseconds, the same on every
- * processor. */
+/* Whether the processors' counters agree, which a row sets: a lock taken
+ * while they do is stamped by the counter, and otherwise by the clock. */
+static int cycles_agree = 1;
+
+/** Whether the processors' counters agree: `cycles_agree`. */
 int timer_cycles_agree(void)
 {
-    return 1;
+    return cycles_agree;
 }
 
 /** Clear a wait queue. */
@@ -329,7 +332,10 @@ static void row_file_locks(void)
 }
 
 /** The record keeps holds that crossed a disk wait, the longest with its
- * holder, and passes over the rest. */
+ * holder, and passes over the rest. A hold stamped by the clock, taken
+ * while the processors' counters disagree, is measured by the clock's
+ * difference across its wrap, and one stamped by the counter that reads the
+ * counter below its stamp, as on another processor, reads 0. */
 static void row_record(void)
 {
     script_clear();
@@ -367,14 +373,26 @@ static void row_record(void)
     check(rec_one.crossings == 2 && rec_one.longest_us == 5000 && rec_one.longest_pid == proc_a.pid,
           "a shorter hold is counted and does not replace the longest");
 
+    cycles_agree = 0;
     now_us = 0xfffff000u;
     sleep_lock_take(&lock);
     proc_b.disk_waits++;
     now_us = 0x1000u;
     sleep_lock_give(&lock);
-    check(rec_one.crossings == 3 && rec_one.longest_us == 0x2000u &&
+    check(lock.taken_by_cycles == 0 && rec_one.crossings == 3 && rec_one.longest_us == 0x2000u &&
               rec_one.longest_pid == proc_b.pid && contains(rec_one.longest_comm, "reader"),
-          "a hold across the clock's wrap is measured by its difference");
+          "a hold the clock stamped is measured across its wrap by its difference");
+
+    cycles_agree = 1;
+    cpu_table[0].current = &proc_a;
+    now_us = 0x5000u;
+    sleep_lock_take(&lock);
+    proc_a.disk_waits++;
+    now_us = 0x4000u;
+    sleep_lock_give(&lock);
+    check(lock.taken_by_cycles == 1 && rec_one.crossings == 4 && rec_one.longest_us == 0x2000u &&
+              rec_one.longest_pid == proc_b.pid,
+          "a counter read below the stamp the counter made reads 0");
 }
 
 /** Each record is listed once, in the order a lock first named it, and a
