@@ -705,10 +705,11 @@ void sched_idle_loop(void)
  * its own state is half changed, and `sys_exit`, for one, publishes the
  * zombie its parent may reap, kernel stack and all, before it calls
  * `schedule`. The request is kept on the process, so a process that is
- * always inside a call still gives way once per call. Nor is a kernel
- * thread inside klog (`klog_inside`), in a record or a console write, whose
- * count of klog's users would stay up while the big lock passed on; it
- * gives way at a later tick, as Linux writes each console record with
+ * always inside a call still gives way once per call. Nor is a thread
+ * inside klog (`klog_inside`), in a record or a console write, as process
+ * 0 is while the debug shell prints a line: klog's count of its users
+ * would stay up while the big lock passed on, so the thread gives way at a
+ * later tick, as Linux writes each console record with
  * interrupts off and gives way only between records
  * (kernel/printk/printk.c:3074-3089).
  */
