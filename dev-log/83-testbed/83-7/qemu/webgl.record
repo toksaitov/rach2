@@ -1,0 +1,112 @@
+runner measure
+system Rach2 1.0.0 with the GNU system
+kernel Linux 6.18.0-rach2
+cpus 4
+memory_kib 8367756
+mesa 25.0.7-2+deb13u1
+iommu units none groups 0 cmdline none
+cache mesa 0 files in none, emptied at start: 0
+load start 1.05 0.45 0.17
+processes start 34
+kernel_before cpu  7606 0 9832 26082 0 0 0 0 0 0
+kernel_before cpu0 1371 0 3542 6700 0 0 0 0 0 0
+kernel_before cpu1 781 0 2178 7677 0 0 0 0 0 0
+kernel_before cpu2 669 0 2049 7916 0 0 0 0 0 0
+kernel_before cpu3 4783 0 2061 3788 0 0 0 0 0 0
+kernel_before intr 438924
+kernel_before ctxt 0
+kernel_before btime 1794409884
+kernel_before processes 570
+kernel_before sleeps_interrupted 0
+kernel_before process_pid_steps 24499
+kernel_before process_uid_steps 958
+kernel_before process_timer_steps 392418
+kernel_before process_timer_passes 84820
+kernel_before timer_passes_late 8478
+kernel_before tlb_shootdowns 129
+kernel_before tlb_shootdown_ipis 201
+kernel_before scheduler_picks 634837
+kernel_before scheduler_steps 154561
+kernel_before vm_gap_steps 382544
+kernel_before clock_calls 32362
+kernel_before vdso_tsc 0
+kernel_before bkl_wait_us 0
+kernel_before bkl_wait_max_us 0
+kernel_before bkl_wait_max_holds 1
+kernel_before bkl_wait_max_hold 14 -1 0
+kernel_before bkl_hold_max_us 0
+kernel_before bkl_hold_max_entry 0 -1
+kernel_before bkl_hold_sample_us 0
+kernel_before bkl_hold_sample_pc ffffffff80387d3d ffffffff80389f9e ffffffff80389fca ffffffff8038a1b5 ffffffff801126ba ffffffff80112ea3 ffffffff80112f13 ffffffff8037f804
+kernel_before bkl_hold_max_mark 1 0
+kernel_before bkl_hold_max_mark 2 0
+kernel_before bkl_hold_max_mark 4 0
+kernel_before bkl_hold_max_mark 8 0
+kernel_before bkl_hold_max_mark 16 0
+kernel_before bkl_hold_entry syscall 0 114232 0
+kernel_before bkl_hold_entry syscall 1 9712 0
+kernel_before bkl_hold_entry syscall 2 288 0
+kernel_before bkl_hold_entry syscall 3 51339 0
+kernel_before bkl_hold_entry syscall 4 3 0
+kernel_before bkl_hold_entry syscall 5 68753 0
+kernel_before bkl_hold_entry syscall 6 8 0
+kernel_before bkl_hold_entry syscall 7 7728 0
+kernel_before bkl_hold_entry syscall 8 109181 0
+kernel_before bkl_hold_entry syscall 9 12455 0
+kernel_before bkl_hold_entry syscall 10 3820 0
+kernel_before bkl_hold_entry syscall 11 1982 0
+kernel_before bkl_hold_entry syscall 12 6794 0
+kernel_before bkl_hold_entry syscall 13 8156 0
+kernel_before bkl_hold_entry syscall 14 6726 0
+kernel_before bkl_hold_entry syscall 15 276 0
+kernel_before kvm_vms 0
+kernel_before kvm_vcpus 0
+kernel_before kvm_slots 0
+kernel_before kvm_tdp_pages 0
+kernel_before kvm_run_mappings 0
+kernel_before kvm_gpa_maps 0
+kernel_before kvm_gpa_map_pages 0
+kernel_before kvm_ioeventfd_signals 0
+kernel_before kvm_irqfd_raises 0
+kernel_before vfio_groups 0
+kernel_before vfio_devices 0
+kernel_before vfio_dma_mappings 0
+kernel_before vfio_dma_pages 0
+kernel_before vfio_dma_io_pages 0
+kernel_before kvm_exits 0
+kernel_before iommu_dma_faults 0
+kernel_before iommu_irq_faults 0
+kernel_before msi_vectors_free 187
+kernel_before virtio_gpu_copied_bytes 4096000
+kernel_before latency_timer_us 3010439
+kernel_before latency_disk_us 21363
+kernel_before latency_diskwait_us 0
+kernel_before latency_console_us 0
+kernel_before wlan_refused_tcp 0
+kernel_before wlan_refused_ack 0
+kernel_before wlan_refused_other 0
+kernel_before wlan_rx_held 0
+kernel_before wlan_rx_wait_most 0
+kernel_before wlan_tx_status_lost 0
+kernel_before wlan_rescue_key 0
+kernel_before wlan_rescue_message4 0
+kernel_before wlan_rescue_silent 0
+kernel_before wlan_rescue_saved 0
+kernel_before wlan_rx_old_far 0
+kernel_before loopback_dropped 0
+kernel_before loopback_peak 0
+kernel_before loopback_delivered_tick 0
+kernel_before loopback_delivered_idle 0
+kernel_before loopback_delivered_call 0
+kernel_before loopback_left_idle 0
+kernel_before namecache_hits 541298
+kernel_before namecache_misses 2518
+kernel_before namecache_entries 2012
+kernel_before namecache_negative 538
+kernel_before ext2_node_visits 110579
+kernel_before procs_running 2
+kernel_before procs_blocked 0
+scene webgl rung native-rach2
+compositor weston 14.0.2 (Rach2 14.0.2-1+rach2.1: kiosk-active-tree, kiosk-fullscreen-centre, xwm-emulated-mode, xwm-mapped-managed, pointer-constraint-view) headless pixman kiosk no-config
+browser Chromium 156.0.8078.79 built on Debian GNU/Linux 13 (trixie)
+switches --ozone-platform=wayland --no-first-run --no-default-browser-check --password-store=basic --start-fullscreen --ignore-gpu-blocklist --disable-gpu-process-crash-limit --js-flags=--expose-gc --disable-background-timer-throttling --disable-renderer-backgrounding --disable-background-networking --disable-hang-monitor --autoplay-policy=no-user-gesture-required

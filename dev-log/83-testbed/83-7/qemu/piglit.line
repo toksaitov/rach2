@@ -1,0 +1,1 @@
+measure: result: piglit native-rach2 frames 10 frame_ms 6412.617 p50 861.204 p99 12575.913 cpu_ms_per_frame 8587.000 latency_ms 1.130 copied_bytes 0 exits 0 round_trips - seconds 71.5

@@ -1,0 +1,1 @@
+measure: result: glmark2 native-rach2 frames 7133 frame_ms 2.757 p50 2.583 p99 4.793 cpu_ms_per_frame 8.901 latency_ms 1.014 copied_bytes 0 exits 0 round_trips - seconds 22.4
