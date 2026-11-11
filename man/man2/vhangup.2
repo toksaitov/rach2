@@ -32,9 +32,14 @@ first.
 It takes the terminal from that session: no process has it as its
 controlling terminal any longer, and it has no foreground process group.
 .It
-It discards input not yet read and a pseudo-terminal slave's output not
-yet read by its master, and leaves the master no packet status pending,
-as Linux does.
+It discards input not yet read and leaves a pseudo-terminal's master no
+packet status pending, as Linux does.
+It discards all of the slave's output that the master has not read, which
+is one of the two answers Linux gives: Linux frees only the output still
+in the master's flip buffers and keeps what has already reached the
+master's read buffer, which the master then reads.
+A writer of the slave that waits for room when the hangup comes returns
+the count it wrote.
 It gives the terminal the termios a new terminal has, as Linux resets a
 pseudo-terminal's and a virtual console's:
 .Dv ICRNL
@@ -112,15 +117,21 @@ A caller with no controlling terminal gets 0, and nothing is hung up.
 The default suite's
 .Pa tests/vhangprobe.c
 opens a pseudo-terminal, makes its slave the controlling terminal of a
-new session, turns its echo off, calls
-.Fn vhangup
-with
+new session, turns its echo off, blocks
 .Dv SIGHUP
-ignored, and checks the old descriptor's read, write, ioctl and poll,
-that the session has no controlling terminal, that a new open of the
-slave works and has the default termios, and that a process of another
-user gets
-.Er EPERM .
+and
+.Dv SIGCONT ,
+fills the master's ring through a writer that then waits for room, and
+calls
+.Fn vhangup .
+It checks that both signals are left pending, the old descriptor's read,
+write, ioctl and poll, that the session has no controlling terminal, that
+a new open of the slave works and has the default termios, that a process
+of another user gets
+.Er EPERM ,
+that the waiting writer returns the count it wrote, and that the master
+in packet mode has no status pending and at most a prefix of the output
+left to read.
 .Sh ERRORS
 .Bl -tag -width Er
 .It Bq Er EPERM
