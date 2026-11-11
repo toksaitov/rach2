@@ -618,9 +618,11 @@ static int ordered(void)
  * In a child, write `value` over the image's byte EI_PAD, which a valid
  * header leaves 0: after mprotect makes the page writable, or with
  * `through_mem` through /proc/self/mem with the page read-only, as a tracer
- * sets a breakpoint. The status the child exits with: 0 when the byte reads
- * back and, after mprotect, maps says rwxp and the vDSO's clock_gettime
- * still works; 1 when the mprotect or the write is refused; 2 otherwise.
+ * sets a breakpoint. The status the child exits with: 0 when the write
+ * through /proc/self/mem reads back and leaves the page r-xp, or when the
+ * store after mprotect leaves it rwxp and the vDSO's clock_gettime still
+ * works; 1 when the mprotect or the write is refused; 2 otherwise. A store
+ * that faults ends the child by its signal.
  */
 static int patch(int through_mem, unsigned char value)
 {
@@ -646,14 +648,14 @@ static int patch(int through_mem, unsigned char value)
         return 1;
     }
     *at = value;
-    return *at == value && maps_region("[vdso]", &lo, &hi, perm) == 0 &&
-                   strcmp(perm, "rwxp") == 0 && vdso_clock_gettime(CLOCK_MONOTONIC, &ts) == 0
+    return maps_region("[vdso]", &lo, &hi, perm) == 0 && strcmp(perm, "rwxp") == 0 &&
+                   vdso_clock_gettime(CLOCK_MONOTONIC, &ts) == 0
                ? 0
                : 2;
 }
 
-/** Run `patch` in a child; its exit status, or -1 when it could not be run
- * or did not exit. */
+/** Run `patch` in a child; its exit status, 1 when a signal ended it, as a
+ * refused store does, or -1 when it could not be run. */
 static int patch_in_child(int through_mem, unsigned char value)
 {
     int status;
@@ -662,10 +664,10 @@ static int patch_in_child(int through_mem, unsigned char value)
     if (pid == 0) {
         _exit(patch(through_mem, value));
     }
-    if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status)) {
+    if (pid < 0 || waitpid(pid, &status, 0) != pid) {
         return -1;
     }
-    return WEXITSTATUS(status);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
 }
 
 /** Check that a child may write its vDSO, as Linux lets mprotect and a
@@ -683,7 +685,7 @@ static int write_row(void)
         return fail("mprotect refused to make the vDSO writable, or a write to it faulted");
     }
     if (rc != 0) {
-        return fail("the vDSO after mprotect is not rwxp, lost the byte or its clock");
+        return fail("the vDSO after mprotect and a store is not rwxp or lost its clock");
     }
     rc = patch_in_child(1, (unsigned char)(was ^ 0xa5));
     if (rc == 1) {
