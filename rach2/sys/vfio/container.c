@@ -396,11 +396,13 @@ static int32_t get_info(struct vfio_container *c, uintptr_t arg)
     return copy_to_user((void __user *)arg, &info, minsz) != 0 ? -EFAULT : 0;
 }
 
-/** What a mapping does when an unmap, or for device pages the end of the
- * address space, takes its pages back: the device no longer reaches them,
- * as the pin requires. A mapping of RAM outlives the end of the address
- * space (PIN_KEEP_PAST_END) until the container's release, after the
- * device's own release at the close of its descriptor has reset it. */
+/** What a mapping does when an unmap, a revocation of its device pages or a
+ * protection change takes its pages back: the device no longer reaches
+ * them, as the pin requires. A mapping outlives the end of the address
+ * space (PIN_KEEP_PAST_END), device pages and all, until the container's
+ * release, after the device's own release at the close of its descriptor
+ * has reset it, so that no unmap or IOTLB invalidation reaches the domain
+ * while the device runs, as Linux's type1 (vfio_iommu_type1.c:2589). */
 static void dma_released(struct pin *pin, void *owner)
 {
     struct vfio_dma *dma = (struct vfio_dma *)owner;
