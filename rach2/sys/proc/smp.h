@@ -121,10 +121,11 @@ void bkl_note_entry(uint32_t vector, int32_t nr, int locked);
 
 /** Begin a kernel thread's own hold of the big lock, when the hold under
  * way is an entry's that switched to the thread, an interrupt or a system
- * call on its way out: end that one and take the lock again, as an entry of
- * none, so that the thread's work counts as a kernel thread's and not as
- * the entry's that woke it. Nothing when the hold is already an entry of
- * none's, such as an idle wait's return. Interrupts are off. */
+ * call on its way out: count that hold as ended and start a new one, as an
+ * entry of none, without giving the lock up, so that the thread's work
+ * counts as a kernel thread's and not as the entry's that woke it. Nothing
+ * when the hold is already an entry of none's, such as an idle wait's
+ * return. The caller holds the big lock; any interrupt state. */
 void bkl_thread_hold(void);
 
 /** Read the longest hold of the big lock since boot, from its take to its
