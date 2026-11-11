@@ -205,6 +205,25 @@ static int skipped_row(struct fixture *f)
     return fx_check(f, ok, "a skipped architecture passes");
 }
 
+/** Check that a run with full-ia32 reports the profile beside both
+ * architectures, its failures as `ia32:ITEM`. */
+static int ia32_row(struct fixture *f)
+{
+    int ok = start(f) && result(f, "i686", "pass", "") && result(f, "x86_64", "pass", "") &&
+             result(f, "ia32", "pass", "") && full(f) == 0 && fx_equal(path("failures"), "") &&
+             strstr(f->out, "ci: report: result: passed on i686, x86_64 and ia32") &&
+             fx_has(path("summary"), "ia32 passed.");
+    ok = ok && result(f, "ia32", "fail", "default\n") &&
+         flow_put(f, "results/full-ia32/err",
+                  "run: default: FAIL in 3s\nrun: result: failed: default\n") &&
+         full(f) == 1 && fx_equal(path("failures"), "ia32:default\n") &&
+         fx_has(path("summary"), "ia32 failed: default.") &&
+         fx_has(path("summary"),
+                "```\nrun: default: FAIL in 3s\nrun: result: failed: default\n```") &&
+         fx_has(path("summary"), "Logs: `gh run download 1 --repo test/rach2 --name full-ia32`");
+    return fx_check(f, ok, "the ia32 profile's failures are written as ia32:ITEM");
+}
+
 static int usage_row(struct fixture *f)
 {
     const char *words[] = {"bad", path("results"), NULL};
@@ -279,6 +298,7 @@ int flow_ci(struct fixture *f)
     ok = unfinished_row(f, "unfinished") && ok;
     ok = unfinished_row(f, "unlisted") && ok;
     ok = skipped_row(f) && ok;
+    ok = ia32_row(f) && ok;
     ok = usage_row(f) && ok;
     ok = native_row(f, "pass") && ok;
     ok = native_row(f, "budget") && ok;
