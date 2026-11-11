@@ -34,6 +34,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
+#include <sys/utsname.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -175,13 +176,29 @@ static int all_of(const char *s, size_t n, char c)
 }
 
 /**
+ * Return the size of the kernel's pointer, which the budget charges for each
+ * argument and variable: 8 bytes on an x86-64 kernel, an i386 program's
+ * included, as Linux's bprm_stack_limits counts sizeof(void *), and the
+ * program's own on an i686 kernel.
+ */
+static size_t kernel_word(void)
+{
+    struct utsname u;
+
+    if (uname(&u) == 0 && strcmp(u.machine, "x86_64") == 0) {
+        return 8;
+    }
+    return sizeof(char *);
+}
+
+/**
  * Return the length of the one variable, `E=` included, that with the path,
- * the three arguments of the budget case and four pointers fills a budget of
- * 256 KiB.
+ * the three arguments of the budget case and four of the kernel's pointers
+ * fills a budget of 256 KiB.
  */
 static size_t budget_env_len(void)
 {
-    size_t fixed = 2 * (strlen(SELF) + 1) + strlen("budget") + 1 + 4 * sizeof(char *);
+    size_t fixed = 2 * (strlen(SELF) + 1) + strlen("budget") + 1 + 4 * kernel_word();
 
     return 256 * KIB - fixed - (LONGEST + 1) - 1;
 }
@@ -344,9 +361,9 @@ static int one_string(void)
 
 /**
  * Check the budget under a stack limit of 1 MiB, which is 256 KiB: the path,
- * four strings and four pointers fill it to the byte, split across argv and
- * envp, and are delivered whole; a byte more fails with E2BIG. Returns 0, or
- * 1 after the failure is printed.
+ * four strings and four of the kernel's pointers fill it to the byte, split
+ * across argv and envp, and are delivered whole; a byte more fails with
+ * E2BIG. Returns 0, or 1 after the failure is printed.
  */
 static int budget(void)
 {
