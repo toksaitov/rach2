@@ -230,7 +230,13 @@ nothing is taken.
 The bytes are taken one receive buffer of the connection at a time, as
 Linux's tcp_recvmsg takes the buffers of its receive queue: each segment
 that arrived in order is one, and so are the bytes a filled hole releases
-at once; past 32 queued, a new one joins the last.
+at once; a new one joins the last only when the kernel's table of them
+would take more memory than the connection's receive ring, as Linux joins
+its buffers once their overhead passes the receive buffer.
+A receive holds the socket's receive lock while it brings in a
+destination, and gives it up only to wait for data, as Linux does, so the
+bytes one call returns are adjacent in the stream even when another thread
+reads the same socket.
 Linux joins an in-order segment to the last buffer of its queue whenever
 its tcp_try_coalesce can, which depends on how the two buffers are laid
 out and shared, so it may keep fewer: where Rach2 returns the buffers
