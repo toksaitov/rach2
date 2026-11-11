@@ -1,0 +1,87 @@
+games: prefix: status 0 rach2-game: prefix: made /work/rach2-trip.n53kbodq/compat/pfx
+games: trip-gl-0: feature level: 0xb000
+games: trip-gl-0: tripprobe: 1000 round trips in 116.9 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-0: TRIP OK
+games: trip-gl-0: window 117.3 ms
+games: trip-gl-0: ctxt 20848
+games: trip-gl-0: thread 371 trip64.exe: utime 2 stime 9 voluntary 0 involuntary 1
+games: trip-gl-0: thread 388 llvmpipe-0: utime 0 stime 1 voluntary 2393 involuntary 418
+games: trip-gl-0: thread 389 llvmpipe-1: utime 0 stime 1 voluntary 2587 involuntary 284
+games: trip-gl-0: thread 390 llvmpipe-2: utime 0 stime 1 voluntary 2666 involuntary 221
+games: trip-gl-0: thread 391 llvmpipe-3: utime 0 stime 1 voluntary 2503 involuntary 352
+games: trip-gl-0: thread 392 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-0: thread 393 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-0: thread 394 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-0: thread 395 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-0: thread 396 trip64.:disk$0: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-0: thread 398 wined3d_cs: utime 2 stime 5 voluntary 1594 involuntary 1006
+games: trip-gl-0: exit 0 ms 116.9
+games: trip-gl-1: feature level: 0xb000
+games: trip-gl-1: tripprobe: 1000 round trips in 115.6 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-1: TRIP OK
+games: trip-gl-1: window 114.8 ms
+games: trip-gl-1: ctxt 18880
+games: trip-gl-1: thread 371 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-1: thread 505 trip64.exe: utime 4 stime 7 voluntary 0 involuntary 2
+games: trip-gl-1: thread 522 llvmpipe-0: utime 0 stime 1 voluntary 2465 involuntary 418
+games: trip-gl-1: thread 523 llvmpipe-1: utime 0 stime 1 voluntary 2682 involuntary 265
+games: trip-gl-1: thread 524 llvmpipe-2: utime 0 stime 1 voluntary 2680 involuntary 202
+games: trip-gl-1: thread 525 llvmpipe-3: utime 0 stime 1 voluntary 2517 involuntary 371
+games: trip-gl-1: thread 526 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-1: thread 527 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-1: thread 528 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-1: thread 529 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-1: thread 530 trip64.:disk$0: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-1: thread 535 wined3d_cs: utime 4 stime 4 voluntary 1661 involuntary 891
+games: trip-gl-1: exit 0 ms 115.6
+games: trip-gl-strace: feature level: 0xb000
+games: trip-gl-strace: tripprobe: 1000 round trips in 2422.8 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-strace: TRIP OK
+games: trip-gl-strace: window 2434.1 ms
+games: trip-gl-strace: ctxt 394250
+games: trip-gl-strace: thread 371 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-strace: thread 505 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-strace: thread 639 trip64.exe: utime 3 stime 32 voluntary 39233 involuntary 623
+games: trip-gl-strace: thread 655 llvmpipe-0: utime 0 stime 15 voluntary 16714 involuntary 8
+games: trip-gl-strace: thread 656 llvmpipe-1: utime 0 stime 15 voluntary 17071 involuntary 12
+games: trip-gl-strace: thread 657 llvmpipe-2: utime 1 stime 15 voluntary 17218 involuntary 19
+games: trip-gl-strace: thread 658 llvmpipe-3: utime 0 stime 18 voluntary 14822 involuntary 9
+games: trip-gl-strace: thread 659 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-strace: thread 660 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-strace: thread 661 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-strace: thread 662 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-strace: thread 663 trip64.:disk$0: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-strace: thread 666 wined3d_cs: utime 8 stime 36 voluntary 29229 involuntary 35
+games: trip-gl-strace: exit 0 ms 2422.8
+games: trip-gl-ioctl: feature level: 0xb000
+games: trip-gl-ioctl: tripprobe: 1000 round trips in 2243.3 ms, last pixel 0 255 0 255, 0 wrong
+games: trip-gl-ioctl: TRIP OK
+games: trip-gl-ioctl: window 2253.6 ms
+games: trip-gl-ioctl: ctxt 388990
+games: trip-gl-ioctl: thread 371 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-ioctl: thread 505 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-ioctl: thread 639 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-ioctl: thread 775 trip64.exe: utime 3 stime 33 voluntary 38573 involuntary 689
+games: trip-gl-ioctl: thread 791 llvmpipe-0: utime 1 stime 14 voluntary 16745 involuntary 11
+games: trip-gl-ioctl: thread 792 llvmpipe-1: utime 0 stime 15 voluntary 17133 involuntary 18
+games: trip-gl-ioctl: thread 793 llvmpipe-2: utime 0 stime 16 voluntary 16969 involuntary 29
+games: trip-gl-ioctl: thread 794 llvmpipe-3: utime 0 stime 18 voluntary 14999 involuntary 21
+games: trip-gl-ioctl: thread 795 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-ioctl: thread 796 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-ioctl: thread 797 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-ioctl: thread 798 trip64.exe: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-ioctl: thread 799 trip64.:disk$0: utime 0 stime 0 voluntary 0 involuntary 0
+games: trip-gl-ioctl: thread 802 wined3d_cs: utime 12 stime 32 voluntary 29101 involuntary 65
+games: trip-gl-ioctl: exit 0 ms 2243.3
+games: ioctl VFAT_IOCTL_READDIR_BOTH 847
+games: ioctl FS_IOC_GETFLAGS 549
+games: ioctl TCGETS2 39
+games: ioctl UFFDIO_API 14
+games: ioctl TIOCGPGRP 2
+games: ioctl SIOCGIFHWADDR 2
+games: ioctl SIOCGIFFLAGS 2
+games: ioctl SIOCGIFMTU 2
+games: ioctl TIOCGWINSZ 1
+games: ioctl FIOCLEX 1
+games: ioctl SIOCGIWNAME 1
+TRIPS OK
