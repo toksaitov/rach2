@@ -53,6 +53,22 @@ image, and the slots, the menu and the trial boot work there as they do on
 an MBR disk, since GRUB opens the same menu under either firmware.
 The volume must be FAT32 with two FATs of at most 1024 sectors and at most
 131070 clusters, which a 64 MiB partition at one sector to a cluster has.
+Each kernel slot,
+.Pa /boot/kernel
+and
+.Pa /boot/fallback ,
+is a file of fixed size that
+.Nm
+rewrites in place and never grows: 16 MiB on the disks this version
+builds.
+.Cm kernel
+and
+.Cm fallback
+refuse a disk whose slots are smaller, as a disk installed before the slots
+grew has them;
+.Ql rach2-install --slots DISK ,
+run from the recovery system, moves it to the larger slots
+.Pq Xr rach2-install 8 .
 The
 .Cm grub
 and
@@ -120,7 +136,15 @@ line reports
 .Ql trialroot, the candidate's kernel on a root image ,
 or
 .Ql not from a slot (no rach2.slot= on /proc/cmdline) .
+The last line gives the size of the slots on this version's disks,
+which
+.Xr rach2-install 8
+reads:
+.Dl bootctl: slot size: 16777216 bytes
+On a disk whose slots are smaller, a further line says so:
+.Dl bootctl: slot size: the kernel slots are smaller than this version's; move the disk to them with rach2-install --slots DISK
 .It Cm kernel Ar FILE
+Refuse a disk whose slots are smaller than this version's.
 Validate the file and the fallback kernel's header prefix.
 The file must be a kernel that runs the programs of the architecture
 .Nm
@@ -192,6 +216,7 @@ Success is reported as:
 .Dl bootctl: cancelled: the next boot takes the saved default
 .It Cm fallback
 Copy the candidate into the fallback slot and read it back.
+Refuse a disk whose slots are smaller than this version's.
 Require
 .Ql saved_entry=candidate ,
 no nonempty
@@ -352,11 +377,18 @@ A kernel file that cannot be opened or read is reported as
 .Ql bootctl: cannot open 'FILE'
 or
 .Ql bootctl: reading 'FILE' failed .
-A file too large for any slot is reported as
-.Ql bootctl: 'FILE' is larger than any slot ,
+A file too large for a slot is reported as
+.Ql bootctl: 'FILE' is larger than a kernel slot, 16777216 bytes ,
 and a kernel that cannot run this system's programs as
 .Ql bootctl: 'FILE' is not a kernel that runs this system's i686 programs ,
 or the same with x86-64.
+A disk whose slots are smaller than this version's is refused by
+.Cm kernel
+and
+.Cm fallback
+with:
+.Dl bootctl: the kernel slots are smaller than this version's; move the disk to them with rach2-install --slots DISK
+.Dl bootctl: the candidate slot is N bytes and the fallback N; this version's are 16777216
 Without a recognized boot slot, installation reports:
 .Dl bootctl: this boot did not come from a kernel slot (no rach2.slot= on /proc/cmdline)
 A commit from another boot reports:

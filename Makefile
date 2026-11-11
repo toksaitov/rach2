@@ -1584,9 +1584,11 @@ os-real-disk: krffs rach2 $(MANIFEST_PARTS_os_real)
 
 # `make rach2-sealed-disk`: the disk the installer writes to a machine and the
 # machine boots from. Its geometry is a contract the builder checks against the
-# built image: a 64 MiB FAT32 boot partition at 1 MiB, at 4 KiB clusters (one
-# sector per cluster puts a 64 MiB volume past both of bootslot's bounds), a
-# 64 MiB recovery partition after it whose kernel and RAM image GRUB reaches
+# built image: a 64 MiB FAT32 boot partition at 1 MiB, the EFI system
+# partition of its GUID table, at one sector per cluster, about 130000
+# clusters, which UEFI firmware needs and bootslot's bounds take, with the two
+# 16 MiB kernel slots; a 64 MiB recovery partition after it, at 4 KiB
+# clusters, whose kernel and RAM image GRUB reaches
 # when partition 1 cannot be read at all, and the ext2 root, 1 GiB at 130 MiB,
 # the same manifest as an ext2 volume, which the candidate and the fallback
 # entries both boot. The image is 1155 MiB. Its recovery partition carries the
