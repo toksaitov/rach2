@@ -21,6 +21,7 @@
 #include "../../proc/sched.h"
 #include "../../proc/smp.h"
 #include "../../timer.h"
+#include "../../watchdog.h"
 #include "debugreg.h"
 #if defined(__x86_64__)
 #include "../x86_64/sysnr.h"
@@ -318,19 +319,18 @@ static void _exception_handler(isr_params_t *params)
 /**
  * The NMI, vector 2, or the machine check, vector 18, which report a fault
  * of the machine and not of what was running: print it and stop, in user
- * mode as in kernel mode. The paranoid router holds no lock, so no signal
- * may be posted here, and the panic begins before the record is written,
- * so that the console's lock, which the interrupted code may hold, is not
- * taken (`k_panic_begin`).
- *
- * An NMI that another processor's stop sent, to a processor that did not
- * take the interprocessor interrupt, is the stop, and this processor leaves
- * VMX or SVM operation and halts (`smp_stop_nmi`), as Linux's
- * `smp_stop_nmi_callback` does.
+ * mode as in kernel mode. An NMI the watchdog sent or raised, a backtrace
+ * request or its counter's overflow, is the watchdog's (`watchdog_nmi`), and
+ * returns; so is the NMI of another processor's stop, which this processor
+ * takes there, leaving VMX or SVM operation and halting (`smp_stop_nmi`), as
+ * Linux's `smp_stop_nmi_callback` does. The paranoid router holds no lock, so no
+ * signal may be posted here, and the panic begins before the record is
+ * written, so that the console's lock, which the interrupted code may hold,
+ * is not taken (`k_panic_begin`).
  */
 static void _hardware_fault_handler(isr_params_t *params)
 {
-    if (params->vector == 2 && smp_stop_nmi()) {
+    if (params->vector == 2 && watchdog_nmi(params)) {
         return;
     }
     k_panic_begin();
@@ -855,6 +855,10 @@ static void irq_dispatch(isr_params_t *params)
  * wakes the sleepers is made by whichever processor's tick has the lock
  * (`timer_pass_late`, kernel.c).
  *
+ * Every tick runs the lockup detectors' part first (`watchdog_tick`), with
+ * or without the lock, since a processor locked up with interrupts off may
+ * hold it for good.
+ *
  * An interrupt that ended a halt, which it knows by the frame's address,
  * resumes with interrupts off. Otherwise a tick already pending at the
  * `iret`, which a wait for the big lock longer than a tick makes likely,
@@ -869,6 +873,9 @@ void _irq_router(isr_params_t *params)
     user_entry(params);
     if (FRAME_PC(params) == (unsigned long)arch_idle_resume) {
         FRAME_IRQ_OFF(params);
+    }
+    if (params->vector == IRQ_VECTOR(0)) {
+        watchdog_tick(params);
     }
     if (params->vector != IRQ_VECTOR(0)) {
         bkl_enter();

@@ -12,6 +12,7 @@
 #include "wait_queue.h"
 #include "../io/timerfd.h"
 #include "../timer.h"
+#include "../watchdog.h"
 #include "../rtc.h"
 #include "../lib/ksignal.h"
 
@@ -584,6 +585,9 @@ static int sched_prepare_old(process_t *old, struct percpu *cpu, int me)
  * nothing between the load and the switch can disturb the loaded state. An
  * idle task has none to keep, and the registers are left as they are
  * around it.
+ *
+ * Each selection runs the soft-lockup detector's function when its timer
+ * queued it (`watchdog_sched`), where Linux's stopper thread would run.
  */
 void schedule(void)
 {
@@ -603,6 +607,7 @@ void schedule(void)
     cpu = &cpu_table[me];
     old = cpu->current;
     pick_count++;
+    watchdog_sched();
     kick = sched_prepare_old(old, cpu, me);
     next = sched_select(me, old);
 
@@ -735,12 +740,15 @@ void sched_take_preempt(void)
  * first to any processor that has claimed it (`bkl_yield`). The tick skips
  * a processor while another holds the lock, so a call that shares the lock
  * would seldom see a request: what is queued here counts as one. The caller
- * is at a point where it could have slept.
+ * is at a point where it could have slept, which the soft-lockup detector
+ * counts as a schedule (`watchdog_sched`), as Linux's cond_resched would
+ * switch to the stopper thread the watchdog queued.
  */
 void sched_service_point(void)
 {
     uint32_t flags = kirq_save();
 
+    watchdog_sched();
     bkl_yield();
     if (current_proc && current_proc != this_cpu()->idle) {
         uint32_t held = spin_lock_irqsave(&sched_lock);
