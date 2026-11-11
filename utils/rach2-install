@@ -772,9 +772,12 @@ grow_slots() { # grow_slots BOOT
         die "$1, its slots grown, is not a boot partition bootctl reads"
 }
 
-# Give the installed root's boot lines one console token on BOOT. Write
-# beside the menu, sync and rename it, then unmount and let bootctl read the
-# partition before the caller arms a trial. Recovery lines keep their bytes.
+# Give the installed root's boot lines one console token on BOOT, and the
+# candidate's lines `panic=10` where they have no `panic=`, as
+# tools/image/mkdisk_grub.sh writes them, so that a menu installed before it
+# resets after a panic of a trial too. Write beside the menu, sync and rename
+# it, then unmount and let bootctl read the partition before the caller arms
+# a trial. Recovery lines keep their bytes.
 set_update_console() { # set_update_console BOOT
     mkdir -p "$BOOT_MNT" || die "the boot mount directory could not be made"
     mount -t vfat "$1" "$BOOT_MNT" || die "$1 would not mount to set its console"
@@ -788,6 +791,8 @@ set_update_console() { # set_update_console BOOT
                 $0 = substr($0, 1, RSTART - 1) substr($0, RSTART + RLENGTH)
             sub(/[ \t]+$/, "")
             $0 = $0 " rach2.console=term"
+            if ($0 ~ /[ \t]rach2.slot=candidate([ \t]|$)/ && $0 !~ /[ \t]panic=/)
+                $0 = $0 " panic=10"
             roots++
         }
         { print }

@@ -272,7 +272,13 @@ sets the installed root's candidate, fallback and text boot lines in
 .Pa /boot/grub/grub.cfg
 on partition 1 to carry
 .Ql rach2.console=term
-exactly once, replacing any previous console setting on those lines.
+exactly once, replacing any previous console setting on those lines,
+and gives the candidate and text lines
+.Ql panic=10
+when they have no
+.Ql panic= ,
+as a new disk's menu has them, so that a candidate that panics resets the
+machine ten seconds later and the next boot takes the saved default.
 Recovery lines are unchanged.
 The new menu is written beside the old one, synced and renamed over it,
 then the partition is unmounted and checked with
