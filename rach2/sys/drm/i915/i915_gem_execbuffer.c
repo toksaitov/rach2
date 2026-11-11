@@ -1005,18 +1005,19 @@ static int32_t eb_move_to_gpu(struct eb *eb, struct i915_request *rq)
         int write = !!(ev->flags & EXEC_OBJECT_WRITE);
 
         i915_gem_object_flush_for_gpu(obj);
+        /* The wait and the add under the reservation's lock, so that a
+         * producer of another device adds nothing between them. */
+        err = 0;
+        dma_resv_lock(obj->base.resv);
         if (!(ev->flags & EXEC_OBJECT_ASYNC)) {
-            f = dma_resv_snapshot(obj->base.resv, write);
-            if (!f) {
-                return -ENOMEM;
-            }
-            err = i915_request_await_fence(rq, f, 0);
+            f = dma_resv_snapshot_locked(obj->base.resv, write);
+            err = f ? i915_request_await_fence(rq, f, 0) : -ENOMEM;
             dma_fence_put(f);
-            if (err < 0) {
-                return err;
-            }
         }
-        err = dma_resv_add_fence(obj->base.resv, &rq->fence.base, write);
+        if (err == 0) {
+            err = dma_resv_add_fence_locked(obj->base.resv, &rq->fence.base, write);
+        }
+        dma_resv_unlock(obj->base.resv);
         if (err < 0) {
             return err;
         }

@@ -162,14 +162,19 @@ static int32_t vgem_fence_attach_ioctl(struct drm_device *dev, void *data, struc
         drm_gem_object_put(obj);
         return -ENOMEM;
     }
-    busy = dma_resv_snapshot(obj->resv, write);
+    /* The add under the reservation's lock, as Linux's
+     * vgem_fence_attach_ioctl (vgem_fence.c:162-167), with the test too, so
+     * that no fence is added between them. */
+    dma_resv_lock(obj->resv);
+    busy = dma_resv_snapshot_locked(obj->resv, write);
     if (!busy) {
         ret = -ENOMEM;
     } else if (!dma_fence_is_signaled(busy)) {
         ret = -EBUSY;
     } else {
-        ret = dma_resv_add_fence(obj->resv, fence, write);
+        ret = dma_resv_add_fence_locked(obj->resv, fence, write);
     }
+    dma_resv_unlock(obj->resv);
     dma_fence_put(busy);
     if (ret == 0) {
         ret = vgem_fence_record(vf, fence);

@@ -122,16 +122,15 @@ int i915_gem_object_is_active(const struct drm_i915_gem_object *obj)
 {
     struct dma_resv *r = obj->base.resv;
     uint32_t i;
+    int busy;
 
-    if (fence_busy(r->write)) {
-        return 1;
+    dma_resv_lock(r);
+    busy = fence_busy(r->write);
+    for (i = 0; !busy && i < r->nreads; i++) {
+        busy = fence_busy(r->reads[i]);
     }
-    for (i = 0; i < r->nreads; i++) {
-        if (fence_busy(r->reads[i])) {
-            return 1;
-        }
-    }
-    return 0;
+    dma_resv_unlock(r);
+    return busy;
 }
 
 /**
@@ -194,37 +193,36 @@ static void object_fence_arm(struct dma_fence *f)
 
 int32_t i915_gem_object_wait_idle(struct drm_i915_gem_object *obj, int intr)
 {
-    struct dma_resv *r = obj->base.resv;
-    struct dma_fence *f;
-    uint32_t i;
+    struct dma_fence **fences, *f;
+    uint32_t i, n;
     int32_t err;
 
     /* Every fence busy now is armed before any wait, as Linux's unbind; one
      * added while the wait sleeps is waited for but not armed. */
-    if (fence_busy(r->write)) {
-        object_fence_arm(r->write);
+    if (dma_resv_get_fences(obj->base.resv, 1, &fences, &n) < 0) {
+        return -ENOMEM;
     }
-    for (i = 0; i < r->nreads; i++) {
-        if (fence_busy(r->reads[i])) {
-            object_fence_arm(r->reads[i]);
+    for (i = 0; i < n; i++) {
+        if (fence_busy(fences[i])) {
+            object_fence_arm(fences[i]);
         }
     }
+    dma_resv_put_fences(fences, n);
     for (;;) {
-        f = fence_busy(r->write) ? r->write : 0;
-        for (i = 0; !f && i < r->nreads; i++) {
-            if (fence_busy(r->reads[i])) {
-                f = r->reads[i];
+        /* A snapshot with references of its own, since the reservation may
+         * change while the wait sleeps. */
+        if (dma_resv_get_fences(obj->base.resv, 1, &fences, &n) < 0) {
+            return -ENOMEM;
+        }
+        f = 0;
+        for (i = 0; !f && i < n; i++) {
+            if (fence_busy(fences[i])) {
+                f = fences[i];
             }
         }
-        if (!f) {
-            return 0;
-        }
-        /* A reference of its own, since the reservation may change while
-         * the wait sleeps. */
-        (void)dma_fence_get(f);
-        err = object_fence_wait(f, intr ? I915_WAIT_INTERRUPTIBLE : 0u, -1);
-        dma_fence_put(f);
-        if (err == -EINTR) {
+        err = f ? object_fence_wait(f, intr ? I915_WAIT_INTERRUPTIBLE : 0u, -1) : 0;
+        dma_resv_put_fences(fences, n);
+        if (!f || err == -EINTR) {
             return err;
         }
     }
@@ -426,69 +424,53 @@ static void fence_boost(struct dma_fence *f)
 }
 
 /**
- * Boost the GT's clock for every request of the object's reservation that
- * the chip has not begun, its writes and with `all` its reads too, before
- * a wait, as Linux's i915_gem_object_boost: all of them first, so that the
- * boost does not hang on the order the wait meets them.
+ * Boost the GT's clock for every request of `n` fences, a snapshot of an
+ * object's reservation, that the chip has not begun, before a wait, as
+ * Linux's i915_gem_object_boost: all of them first, so that the boost does
+ * not hang on the order the wait meets them.
  */
-static void object_boost(struct drm_i915_gem_object *obj, int all)
+static void object_boost(struct dma_fence **fences, uint32_t n)
 {
-    struct dma_resv *r = obj->base.resv;
     uint32_t i;
 
-    fence_boost(r->write);
-    for (i = 0; all && i < r->nreads; i++) {
-        fence_boost(r->reads[i]);
+    for (i = 0; i < n; i++) {
+        fence_boost(fences[i]);
     }
 }
 
 int32_t i915_gem_object_wait(struct drm_i915_gem_object *obj, int all, int64_t timeout_ns)
 {
-    struct dma_resv *r = obj->base.resv;
     struct dma_fence **fences;
     int64_t deadline = -1;
-    uint32_t i, n = all ? r->nreads : 0;
+    uint32_t i, n;
     int32_t err = 0;
 
-    object_boost(obj, all);
+    /* The fences of now, each with a reference, since the reservation may
+     * change while a wait sleeps, as Linux's iterator walks a snapshot. */
+    if (dma_resv_get_fences(obj->base.resv, all, &fences, &n) < 0) {
+        return -ENOMEM;
+    }
+    object_boost(fences, n);
     if (timeout_ns == 0) {
         /* A test, which asks for no signal. */
-        if (fence_busy(r->write)) {
-            return -ETIME;
+        for (i = 0; i < n && !err; i++) {
+            err = fence_busy(fences[i]) ? -ETIME : 0;
         }
-        for (i = 0; i < n; i++) {
-            if (fence_busy(r->reads[i])) {
-                return -ETIME;
-            }
-        }
-        return 0;
+        dma_resv_put_fences(fences, n);
+        return err;
     }
     if (timeout_ns > 0) {
         int64_t now = dma_fence_now();
 
         deadline = timeout_ns > (int64_t)0x7fffffffffffffffLL - now ? -1 : now + timeout_ns;
     }
-    /* The fences of now, each with a reference, since the reservation may
-     * change while a wait sleeps, as Linux's iterator walks a snapshot. */
-    if (n == 0xffffffffu || ((size_t)n + 1) * sizeof(*fences) / sizeof(*fences) != (size_t)n + 1) {
-        return -ENOMEM;
-    }
-    fences = (struct dma_fence **)kmalloc(((size_t)n + 1) * sizeof(*fences));
-    if (!fences) {
-        return -ENOMEM;
-    }
-    fences[0] = dma_fence_get(r->write);
-    for (i = 0; i < n; i++) {
-        fences[i + 1] = dma_fence_get(r->reads[i]);
-    }
-    for (i = 0; i <= n; i++) {
-        if (err == 0 && fences[i]) {
+    for (i = 0; i < n && err == 0; i++) {
+        if (fences[i]) {
             err = object_fence_wait(fences[i], I915_WAIT_INTERRUPTIBLE | I915_WAIT_PRIORITY,
                                     deadline);
         }
-        dma_fence_put(fences[i]);
     }
-    kfree(fences);
+    dma_resv_put_fences(fences, n);
     return err;
 }
 
@@ -1435,19 +1417,26 @@ int32_t i915_gem_busy_ioctl(struct drm_device *dev, void *data, struct drm_file 
 {
     struct drm_i915_gem_busy *args = (struct drm_i915_gem_busy *)data;
     struct drm_i915_gem_object *obj = i915_gem_object_lookup(file, args->handle);
-    struct dma_resv *resv;
-    uint32_t i;
+    struct dma_fence **fences;
+    uint32_t i, n;
+    int32_t err;
 
     (void)dev;
     if (!obj) {
         return -ENOENT;
     }
-    resv = obj->base.resv;
-    args->busy = busy_check(resv->write, busy_write_id);
-    for (i = 0; i < resv->nreads; i++) {
-        args->busy |= busy_check(resv->reads[i], busy_read_flag);
-    }
+    /* A snapshot under the reservation's lock, where Linux's iterator reads
+     * without one and restarts (i915_gem_busy.c:145-157). */
+    err = dma_resv_get_fences(obj->base.resv, 1, &fences, &n);
     i915_gem_object_put(obj);
+    if (err < 0) {
+        return err;
+    }
+    args->busy = busy_check(fences[0], busy_write_id);
+    for (i = 1; i < n; i++) {
+        args->busy |= busy_check(fences[i], busy_read_flag);
+    }
+    dma_resv_put_fences(fences, n);
     return 0;
 }
 

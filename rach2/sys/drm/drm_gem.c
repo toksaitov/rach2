@@ -385,6 +385,7 @@ void drm_gem_object_init(struct drm_device *dev, struct drm_gem_object *obj, uin
     obj->size = size;
     obj->funcs = funcs;
     obj->resv = &obj->resv_own;
+    dma_resv_init(&obj->resv_own);
     drm_dev_get(dev);
     flags = spin_lock_irqsave(&dev->object_lock);
     obj->dev_next = dev->objects;
