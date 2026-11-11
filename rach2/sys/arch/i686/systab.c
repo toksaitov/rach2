@@ -85,6 +85,15 @@
 #include "../../ipc/mqueue.h"
 #include "../../syscall_internal.h"
 
+/** Mark i386's pread64 and pwrite64, whose offsets are split over two
+ * registers, to run without the big lock, as the shared handlers do
+ * (`unlock_file_calls` in syscall.c); the table is filled. */
+static void unlock_split_calls(void)
+{
+    syscall_unlock(SYSCALL_ABI_NATIVE, sys_ia32_pread64);
+    syscall_unlock(SYSCALL_ABI_NATIVE, sys_ia32_pwrite64);
+}
+
 void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *params))
 {
     table[SYS_RESTART_SYSCALL] = sys_restart_syscall;
@@ -423,6 +432,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_TIMER_DELETE] = sys_timer_delete;
     table[SYS_TIMER_SETTIME64] = sys_timer_settime64;
     table[SYS_TIMER_GETTIME64] = sys_timer_gettime64;
+    unlock_split_calls();
 
     register_isr_handler(SYSCALL_VECTOR, dispatch, "syscall");
 }

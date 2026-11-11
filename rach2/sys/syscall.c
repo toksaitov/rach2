@@ -3266,19 +3266,15 @@ static void syscall_relock_end(int relock)
     }
 }
 
-/** Let go of the descriptors the call held (`fd_holds_release`), under the
- * big lock: at once when the call holds it, and otherwise only when there
- * is something to let go, a hold or a table's replaced arrays. */
+/** Let go of the descriptors the call held (`fd_holds_release`), when it
+ * held any; each release takes the big lock when its object needs it
+ * (`fd_teardown`). */
 static void syscall_holds_release(void)
 {
     const process_t *p = current_proc;
 
-    if (bkl_held()) {
+    if (p && p->fd_holding) {
         fd_holds_release();
-    } else if (p && (p->fd_holding || (p->fds && p->fds->retired))) {
-        bkl_enter();
-        fd_holds_release();
-        bkl_exit();
     }
 }
 
@@ -3434,6 +3430,33 @@ static void _syscall_handler(isr_params_t *params)
     SC_RET(params) = (unsigned long)ret;
 }
 
+/**
+ * Mark the file calls that every architecture's table maps to these
+ * handlers (`syscall_unlock`): read, write, pread64, pwrite64, ioctl, fstat
+ * and close run a descriptor's operations without the big lock only for a
+ * type that declares FILE_OPS_UNLOCKED (`fd_call_lock`, `file_ops_lock`),
+ * and poll and ppoll scan their descriptors the same way and sleep without
+ * it, taking it for the signal state (`poll_signal_pending`,
+ * `poll_mask_set`). Every other step those calls make takes the locks of
+ * what it touches; the user-memory copies take the big lock until address
+ * spaces have locks of their own. The forms of an architecture's own, i686's
+ * split offsets and the i386 calls of x86-64, are marked as its tables are
+ * filled (`arch_syscall_init`, `ia32_syscall_init`).
+ */
+static void unlock_file_calls(void)
+{
+    static const syscall_fn_t calls[] = {
+        sys_read,    sys_write, sys_pread64, sys_pwrite64, sys_ioctl,
+        sys_fstat64, sys_close, sys_poll,    sys_ppoll,
+    };
+    uint32_t i;
+
+    for (i = 0; i < sizeof(calls) / sizeof(calls[0]); i++) {
+        syscall_unlock(SYSCALL_ABI_NATIVE, calls[i]);
+        syscall_unlock(SYSCALL_ABI_IA32, calls[i]);
+    }
+}
+
 void init_syscall(void)
 {
     uint32_t i;
@@ -3451,6 +3474,7 @@ void init_syscall(void)
     /* The calls that take no lock but the scheduler's. */
     syscall_unlock(SYSCALL_ABI_NATIVE, sys_sched_yield);
     syscall_unlock(SYSCALL_ABI_IA32, sys_sched_yield);
+    unlock_file_calls();
 
     _trace_enosys = kcmdline_has("rach2.trace=enosys");
 }
