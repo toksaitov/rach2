@@ -1,7 +1,8 @@
 /**
  * A model of what mm/paging.c reaches outside itself, for the host tests
- * that include it whole: pin_hosttest.c and mmnotify_hosttest.c, each on
- * i686's `cpu.h` and, with RACH2_HOST_X86_64, on x86-64's.
+ * that include it whole: pin_hosttest.c, mmnotify_hosttest.c and
+ * tlb_hosttest.c, each on i686's `cpu.h` and, with RACH2_HOST_X86_64, on
+ * x86-64's.
  *
  * A user page directory is a run of leaf tables over a window of user
  * space, which is all `mmu_user_table` and `mmu_user_skip` are asked for.
@@ -435,6 +436,20 @@ void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *nam
 void terminate_current_process(int32_t signo)
 {
     (void)signo;
+}
+
+/** Nothing: the fault's note is for the panic's report, which no row reads. */
+void k_panic_note_fault(const char *name, uintptr_t ip, long error)
+{
+    (void)name;
+    (void)ip;
+    (void)error;
+}
+
+/** Nothing, as `k_panic_note_fault`. */
+void k_panic_note_address(uintptr_t address)
+{
+    (void)address;
 }
 
 #ifndef MM_MODEL_PRESSURE
