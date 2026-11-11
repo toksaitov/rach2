@@ -31,7 +31,8 @@
  * mode,
  * as Linux follows the descriptor's path: uid 1000, which inherits the
  * descriptor, is refused with EACCES though /dev/null is 0666, and root
- * opens it again once the node has lost its name.
+ * opens it again once the node has lost its name. User 1000 is the NEW of
+ * 1000 when a native run gives `ids=OLD:NEW,...` (tests/native/Readme.md).
  *
  * Prints `FDCALLMUSL OK` and exits 0 on success, and prints
  * `FDCALLMUSL FAIL (detail)` and exits 1 otherwise.
@@ -50,6 +51,8 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "../probe_args.h"
 
 /* The file and the directory the time rows make and remove. */
 #define FILE_PATH "/fdcall.tmp"
@@ -439,7 +442,7 @@ static int node_link_rows(void)
     snprintf(path, sizeof(path), "/proc/self/fd/%d", f);
     pid = fork();
     if (pid == 0) {
-        if (setuid(1000) != 0) {
+        if (setuid((uid_t)probe_id(1000)) != 0) {
             _exit(2);
         }
         g = open(path, O_RDONLY);
@@ -464,11 +467,13 @@ static int node_link_rows(void)
     return 0;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
-    int rc = stat_rows();
+    int rc;
     int fd;
 
+    probe_args(argc, argv);
+    rc = stat_rows();
     if (rc == 0) {
         rc = fd_link_rows();
     }

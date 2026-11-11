@@ -29,7 +29,7 @@ case musl/direntmusl.krffs root:krffs ids:1000 -- musl/direntmusl
 case musl/epollmusl ports:7470 -- musl/epollmusl
 case musl/execargmusl root:ext2-dir -- musl/execargmusl
 # On KRFFS: ext2 keeps a time as whole seconds, and this sets nanoseconds.
-case musl/fdcallmusl root:krffs stage:native/hello.txt pty -- musl/fdcallmusl
+case musl/fdcallmusl root:krffs stage:native/hello.txt pty ids:1000 -- musl/fdcallmusl
 case musl/fdexecmusl root:ext2-dir ids:1000 -- musl/fdexecmusl
 case musl/fifomusl root:krffs -- musl/fifomusl
 # Left out: the enumerated report, the codec and the tone.
