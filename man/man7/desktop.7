@@ -91,6 +91,11 @@ PulseAudio runs
 alone, which loads module-oss over
 .Pa /dev/dsp
 without mmap as the sink oss_output and the source oss_input.
+The module-suspend-on-idle module suspends each after five seconds
+without a client that needs it.
+When both suspend, PulseAudio closes
+.Pa /dev/dsp ;
+the next client resumes its endpoint.
 Browsers use the user's native PulseAudio socket.
 ALSA's default PCM converts formats with plug and opens its OSS plugin;
 its control device is
