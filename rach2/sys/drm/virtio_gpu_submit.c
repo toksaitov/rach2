@@ -54,6 +54,75 @@ static void submit_done(struct virtio_gpu_cmd *cmd)
     submit_free(s);
 }
 
+/* The virgl commands that copy a box between a resource and memory, whose
+ * first eleven dwords after the header are the same: the resource, its
+ * level, usage, stride and layer stride, and the box's x, y, z, width,
+ * height and depth (Mesa's virgl_protocol.h). */
+#define VIRGL_CCMD_RESOURCE_INLINE_WRITE 9u
+#define VIRGL_CCMD_TRANSFER3D            43u
+#define VIRGL_CCMD_COPY_TRANSFER3D       45u
+#define VIRGL_BOX_DWORDS                 11u
+
+/** Dword `i` of the command buffer in `cmd`'s payload, which holds it a page
+ * at a time. */
+static uint32_t payload_dword(const struct virtio_gpu_cmd *cmd, uint32_t i)
+{
+    uint32_t off = i * 4u;
+
+    return *(const uint32_t *)(const void *)((const uint8_t *)cmd->payload[off / PAGE_SIZE].page +
+                                             off % PAGE_SIZE);
+}
+
+/** The bytes of the box of the copy whose header is dword `i` of `cmd`'s
+ * command buffer, at the format of its resource, which must be one of the
+ * submission's buffers `s`; 0 otherwise. */
+static uint64_t submit_box_bytes(const struct virtio_gpu_cmd *cmd, const struct vgpu_submit *s,
+                                 uint32_t i)
+{
+    uint32_t res = payload_dword(cmd, i + 1), k;
+    struct virtio_gpu_object *bo;
+
+    for (k = 0; k < s->nbos; k++) {
+        bo = vgpu_bo(s->bos[k]);
+        if (bo && bo->res_id == res) {
+            return vgpu_box_bytes(bo->format, payload_dword(cmd, i + 9), payload_dword(cmd, i + 10),
+                                  payload_dword(cmd, i + 11));
+        }
+    }
+    return 0;
+}
+
+/**
+ * The bytes that virgl submission `s`, whose `size` bytes of commands are in
+ * `cmd`'s payload, has the device copy. Mesa's virgl encodes its uploads and
+ * readbacks in the submission when the host offers encoded transfers, as
+ * TRANSFER3D from a resource's backing or COPY_TRANSFER3D from a staging
+ * buffer, and small ones as RESOURCE_INLINE_WRITE; each box counts at its
+ * resource's format.
+ */
+static uint64_t submit_copied(const struct virtio_gpu_cmd *cmd, const struct vgpu_submit *s,
+                              uint32_t size)
+{
+    uint32_t n = size / 4u, i = 0, hdr, op, len;
+    uint64_t bytes = 0, box;
+
+    while (i < n) {
+        hdr = payload_dword(cmd, i);
+        op = hdr & 0xffu;
+        len = hdr >> 16;
+        if ((op == VIRGL_CCMD_TRANSFER3D || op == VIRGL_CCMD_COPY_TRANSFER3D ||
+             op == VIRGL_CCMD_RESOURCE_INLINE_WRITE) &&
+            len >= VIRGL_BOX_DWORDS && len < n - i) {
+            box = submit_box_bytes(cmd, s, i);
+            if (bytes + box >= bytes) {
+                bytes += box;
+            }
+        }
+        i += 1u + len;
+    }
+    return bytes;
+}
+
 /**
  * Reserve the event of a submission on a polled ring, Linux's
  * virtio_gpu_fence_event_create: a bare VIRTGPU_EVENT_FENCE_SIGNALED the
@@ -339,6 +408,7 @@ int32_t vgpu_execbuffer_ioctl(struct drm_device *dev, void *data, struct drm_fil
     if (rc) {
         goto out;
     }
+    cmd->copied = submit_copied(cmd, s, a->size);
     rc = submit_fence_in(vg, a, context);
     if (!rc) {
         rc = sync_parse(vg, file, a, 1, context, &outs);
