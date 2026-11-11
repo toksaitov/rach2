@@ -596,6 +596,12 @@ The transparent huge-page policy and page-directory mapping size.
 .It Pa /sys/kernel/debug
 The directory where the kernel mounts debugfs; see
 .Xr debugfs 5 .
+.It Pa /sys/fs/pstore
+With the
+.Cm ramoops.
+options, the directory where the kernel mounts the records the last boot
+left; see
+.Xr pstore 5 .
 .It Pa /sys/kernel/uevent_seqnum
 The number of the last uevent sent.
 .It Pa /sys/module/kvm/parameters
@@ -1318,6 +1324,10 @@ The Intel graphics driver's files.
 The transparent huge-page policy and page-directory mapping size.
 .It Pa /sys/kernel/debug
 Where debugfs is mounted.
+.It Pa /sys/fs/pstore
+Where pstore is mounted, with the
+.Cm ramoops.
+options.
 .It Pa /sys/kernel/uevent_seqnum
 The number of the last uevent.
 .It Pa /sys/module
@@ -1340,4 +1350,5 @@ MODALIAS=pci:v00008086d00000A04sv000017AAsd00003978bc06sc00i00
 .Xr vfio 4 ,
 .Xr debugfs 5 ,
 .Xr proc 5 ,
+.Xr pstore 5 ,
 .Xr netlink 7

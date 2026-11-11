@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 11, 2026
 .Dt WATCHDOG 4
 .Os
 .Sh NAME
@@ -12,7 +12,50 @@ machine when an armed timer is left unfed through both expiry stages.
 The kernel identifies the chipset before accessing PMBASE plus 0x60
 and the NO_REBOOT bit of RCBA plus 0x3410.
 Other chipsets have no device node.
-The timer is halted at boot and at an orderly shutdown.
+The timer is halted at boot, unless the firmware left it counting toward
+a reset or the kernel's command line has
+.Cm rach2.itco.arm ,
+and it is halted at an orderly shutdown.
+.Pp
+A timer running at boot is fed by the kernel every half timeout, from the
+boot processor's tick, until a program opens the device, as Linux's
+watchdog core feeds a watchdog that runs before user space takes it over.
+The tick stops with the kernel, at a panic or when the boot processor
+hangs with its interrupts off, and the chipset then resets the machine
+after both stages of the timer, twice the timeout after the last feed.
+.Cm rach2.itco.arm
+starts the timer at boot for that purpose, as firmware that leaves it
+running would.
+These options of Linux's are read from the command line:
+.Bl -tag -width Ds
+.It Cm iTCO_wdt.heartbeat Ns = Ns Ar SECONDS
+The timeout at boot, 3 through 614 seconds; 30 when not given or out of
+range.
+.It Cm iTCO_wdt.nowayout Ns = Ns Ar BOOL
+With a true value, the timer cannot be stopped once a program has
+started it: a magic close and
+.Dv WDIOS_DISABLECARD
+fail with
+.Er EBUSY
+and leave it running, as on Linux.
+The kernel feeds it no more, so a program that stops feeding it lets the
+machine reset.
+.It Cm iTCO_wdt.turn_SMI_watchdog_clear_off Ns = Ns Ar N
+With
+.Ar N
+2 or more, clear TCO_EN in SMI_EN at PMBASE plus 0x30 at boot, so that
+the first stage's expiry raises no SMI to the firmware and the second
+stage resets the machine through the chipset alone.
+The default, 1, leaves TCO_EN as the firmware set it, as Linux does on
+version 2; on the Lenovo the firmware's SMI handler then leaves the
+machine down at the first expiry, not reset.
+.It Cm watchdog.handle_boot_enabled Ns = Ns Ar BOOL
+With a false value, the kernel does not feed a timer running at boot.
+.It Cm watchdog.open_timeout Ns = Ns Ar SECONDS
+The kernel feeds a timer running at boot only until this many seconds
+after the device is registered, the last feed a timeout before the end,
+unless a program opens the device first; 0, the default, for no limit.
+.El
 .Pp
 Opening the device arms the timer.
 Only one open file description may hold it; a second open fails with
@@ -28,7 +71,10 @@ A timer halted by
 .Dv WDIOC_SETOPTIONS
 stays halted at close.
 The timer may be opened again.
-There is no nowayout mode.
+Once a program has opened the device, the kernel no longer feeds the
+timer; it stays with the program until a magic close or
+.Dv WDIOS_DISABLECARD
+halts it.
 .Pp
 The interface uses Linux's ioctl numbers and structures from
 .In linux/watchdog.h :
@@ -77,8 +123,10 @@ Bad user pointers fail with
 .Er EFAULT ;
 an invalid timeout, or a timer register that refuses it, with
 .Er EINVAL ;
-and a halt or NO_REBOOT bit that refuses a change with
-.Er EIO .
+a halt or NO_REBOOT bit that refuses a change with
+.Er EIO ;
+and a stop under nowayout with
+.Er EBUSY .
 There are no unbounded waits in the driver.
 .Sh FILES
 .Pa /dev/watchdog
@@ -87,4 +135,5 @@ is a character device, major 10, minor 130, mode 0600, owned by root.
 .Xr ioctl 2 ,
 .Xr open 2 ,
 .Xr write 2 ,
-.Xr acpi 4
+.Xr acpi 4 ,
+.Xr pstore 5
