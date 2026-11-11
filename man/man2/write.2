@@ -290,8 +290,10 @@ as
 .Fn pwrite
 writes one, each at the place the ones before it reached, from
 .Fa offset ;
-the vector is checked whole before a byte is written, and a short write
-ends the call.
+the offset and the descriptor are checked first, as
+.Fn pwrite
+checks them, then the vector whole before a byte is written, and a short
+write ends the call.
 On an O_APPEND file the whole vector goes to the end under one lock,
 leaving the shared offset alone, and a bad data page returns the bytes
 written before it, as an append through writev does.
