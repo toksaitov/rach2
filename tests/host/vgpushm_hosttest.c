@@ -20,8 +20,10 @@
  * doorbells' hooks, the reap a ring of the queue's doorbell has the
  * interrupt thread make while the driver's interrupts are on, the control
  * node's report, a device that stops running,
- * a refused setup, the detach, and a backing held through a detach while
- * the same frames are attached, detached and attached again.
+ * a refused setup, the detach, a backing held through a detach while
+ * the same frames are attached, detached and attached again, and a
+ * backing released across a missing leaf of its table while the region
+ * detaches between its leaves.
  */
 
 #define REGION_PAGES 16u
@@ -664,6 +666,66 @@ static void held_through_detach(void)
     check(vshm_cur == NULL && vshm_kept == NULL, "held: the new region detached with none kept");
 }
 
+/* What `detach_between_leaves` saw: the record attached, and its heap's
+ * pages in use. */
+static int hook_attached;
+static uint32_t hook_used;
+
+/** The detach of `vs` that another processor makes while a backing's
+ * release has let vshm_lock go between leaves, with the driver's bind. */
+static void detach_between_leaves(void)
+{
+    hook_attached = vs->attached;
+    hook_used = vs->heap_used;
+    vs->refs++; /* the driver's bind */
+    vs->stop = 1 + (int)VGS_DETACH_ORDERLY;
+    vshm_cur = vs;
+    vshm_finish(vs);
+}
+
+/** A backing whose pages lie in leaf 0 and in leaf 2 of its table, leaf 1
+ * missing, released while the region detaches between the leaves: the
+ * release walks no page of the missing leaf, gives leaf 0's page to the
+ * attached heap, and the far page to the detached record, which it frees
+ * with the record's last page. */
+static void release_across_leaves(void)
+{
+    struct shmem sh;
+    uint32_t page, far_page;
+
+    attach();
+    vshm_cur = vs;
+    k_memset(&sh, 0, sizeof(sh));
+    sh.size = 2 * VGS_PAGE;
+    check(virtio_backing_fill(&vs->vdev, &sh, sh.size) == 0 && vs->heap_used == 2 &&
+              sh.nleaves == 1,
+          "leaves: a backing of two pages in leaf 0");
+    page = vshm_page_of(vs, sh_frames[0]);
+    far_page = vshm_page_of(vs, sh_frames[1]);
+    sh_far[0] = sh_frames[1];
+    sh_frames[1] = 0;
+    sh_dir[SH_LEAVES - 1u] = sh_far;
+    sh.nleaves = SH_LEAVES;
+    sh.npages = SH_LEAVES * SHMEM_LEAF;
+    sh.size = ((SH_LEAVES - 1u) * SHMEM_LEAF + 1u) * (uint64_t)VGS_PAGE;
+    hook_attached = 0;
+    hook_used = 0;
+    sh_lookups = 0;
+    irq_on_hook = detach_between_leaves;
+    virtio_backing_release(&vs->vdev, &sh);
+    check(irq_on_hook == NULL && hook_attached && hook_used == 1,
+          "leaves: the lock let go after leaf 0, its page given back and the far page held");
+    check(sh_lookups < 2u * SHMEM_LEAF, "leaves: no page of the missing leaf walked");
+    check(vs->heap_used == 0 && !vs->gone && vshm_kept == NULL && vs->heap_map == NULL &&
+              vs->frames == NULL,
+          "leaves: the far page given to the detached record, which is freed with it");
+    shmem_free(&sh);
+    check(frame_refs[page] == 0 && frame_refs[far_page] == 0,
+          "leaves: both pages' references given back");
+    vs_put(&vs->vdev);
+    check(vshm_cur == NULL && vshm_kept == NULL, "leaves: no region attached and none kept");
+}
+
 /** Run the rows. */
 int main(void)
 {
@@ -681,11 +743,13 @@ int main(void)
     refused_setup();
     detach();
     held_through_detach();
+    release_across_leaves();
     if (!failures) {
         printf("vgpushm-hosttest: result: pass: layout, handshake, ring area, round trip, "
                "merged and refused chains, a full region, backing in one run and in pieces, "
                "partial adoption, doorbells, the doorbell's reap, info, a lost device, "
-               "a refused setup, the detach and a backing held through it\n");
+               "a refused setup, the detach, a backing held through it and one released "
+               "across a missing leaf and a detach\n");
     }
     return failures != 0;
 }
