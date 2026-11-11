@@ -1668,8 +1668,9 @@ static int work_pending(void *arg)
 
 #ifndef RACH2_HOSTTEST
 /** The worker: serve each device's display change, then free what its
- * queues answered, and sleep in an idle wait until the next change. The
- * tick does not switch it (`no_tick_switch`), so the driver's and its
+ * queues answered, and sleep in an idle wait until the next change. Like
+ * every kernel thread, it is not switched by the tick (`no_tick_switch`,
+ * which `setup_process_stack` sets), so the driver's and its
  * transport's state, which the big lock guards, holds through each pass,
  * as in a system call; it gives way where it sleeps and between passes.
  * A display query sleeps, and an unplug meanwhile may drop every other
@@ -1728,7 +1729,6 @@ static void vgpu_worker_start(void)
     p->page_dir = NULL;
     p->parent_pid = 0;
     proc_set_comm(p, "virtio_gpu");
-    p->no_tick_switch = 1;
     setup_process_stack(p, vgpu_worker);
     vgpu_thread = p;
     sched_make_ready(p);

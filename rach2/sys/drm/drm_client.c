@@ -664,7 +664,6 @@ static void con_worker_start(void)
     p->page_dir = NULL;
     p->parent_pid = 0;
     proc_set_comm(p, "kdrmcon");
-    p->no_tick_switch = 1;
     setup_process_stack(p, con_thread_main);
     con_thread = p;
     sched_make_ready(p);
