@@ -736,6 +736,7 @@ static const struct vfs_ops entry_ops = {
     .lookup = entry_lookup, .hold = entry_hold, .put = entry_put};
 static const struct vfs_type entry_type = {"entries", NULL, &entry_ops, 1, 0};
 static char exec_path[] = "/tmp/a";
+static char named_path[] = "/srv/named";
 static char interp_path[] = "/lib/ld-linux.so.2";
 
 /** The root mount, the model KRFFS root. */
@@ -1910,11 +1911,11 @@ static void image_paths(void)
     r.start = 0x08048000u;
     r.end = 0x08049000u;
     r.type = VM_CODE;
-    check(maps_path(&space, &r) == exec_path, "a segment below the heap is the program's");
+    check(maps_path(&space, &r, NULL) == exec_path, "a segment below the heap is the program's");
     r.start = 0xaffc2000u;
     r.end = 0xaffc3000u;
     r.type = VM_DATA;
-    check(maps_path(&space, &r) == interp_path, "one above it is the dynamic linker's");
+    check(maps_path(&space, &r, NULL) == interp_path, "one above it is the dynamic linker's");
 }
 
 /* Stand-ins for the vDSO's two files, for the VmFlags rows. */
@@ -1997,23 +1998,34 @@ const struct open_file *filemap_ofd(const struct vm_file *f)
     return NULL;
 }
 
-/** No entry either, so the maps rows name no file when they are read. */
+/* The mapped files of the naming row: one an mmap made and one of the
+ * program's image, both open on the same description, whose mount's type
+ * keeps no path, so that its link target is the path it was opened by. */
+static struct vfs_mount named_mount;
+static struct open_file named_ofd;
+static fd_entry_t named_entry;
+static struct vm_file named_file, image_file;
+static int file_refs;
+
+/** The entry of the naming row's two files; none for any other, as for
+ * shared anonymous memory. */
 const fd_entry_t *filemap_entry(const struct vm_file *f)
 {
-    (void)f;
-    return NULL;
+    return f == &named_file || f == &image_file ? &named_entry : NULL;
 }
 
-/** Nothing: no maps row gathers a file to name. */
+/** Count a reference a reading of maps takes on a file to name. */
 void vm_file_get(struct vm_file *f)
 {
     (void)f;
+    file_refs++;
 }
 
-/** Nothing, as `vm_file_get`. */
+/** Count one given back. */
 void vm_file_put(struct vm_file *f)
 {
     (void)f;
+    file_refs--;
 }
 
 /** The mount table the identity of a maps line searches, empty here. */
@@ -2045,9 +2057,80 @@ static void maps_line_row(vm_type_t type, uint32_t prot, struct vm_file *file, c
     r.prot = prot;
     r.file = file;
     procfs_text_init(&t);
-    ap_maps_line(&t, &space, &r);
+    ap_maps_line(&t, &space, &r, NULL);
     check(!t.nomem && t.buf && t.len > 22 && __builtin_memcmp(t.buf, want, 22) == 0, want);
     kfree(t.buf);
+}
+
+/** Whether the `len` bytes of `text` hold `want`. */
+static int text_has(const char *text, int len, const char *want)
+{
+    int n = (int)__builtin_strlen(want), i;
+
+    for (i = 0; i + n <= len; i++) {
+        if (__builtin_memcmp(text + i, want, (size_t)n) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** A reading of maps names a mapped file by its link's target, from the
+ * reader's root, as Linux's d_path at each reading, and keeps the name in
+ * no file, so that a reader with another root builds its own; the
+ * segments of the program keep the path exec recorded, though their file
+ * has an entry too; a shared region with no entry, shared anonymous
+ * memory's, is named by no target; and every reference taken goes back. */
+static void maps_names_row(void)
+{
+    struct mm *saved_mm = process.mm;
+    struct procfs_text t;
+    vma_t code, file, shared;
+    static struct vm_file shared_file;
+
+    k_memset(&space, 0, sizeof(space));
+    k_memset(&code, 0, sizeof(code));
+    k_memset(&file, 0, sizeof(file));
+    k_memset(&shared, 0, sizeof(shared));
+    space.exe = exec_path;
+    space.vm.heap_start = 0x0804d000u;
+    code.start = 0x08048000u;
+    code.end = 0x08049000u;
+    code.type = VM_CODE;
+    code.prot = VM_PROT_READ | VM_PROT_EXEC;
+    code.file = &image_file;
+    code.next = &file;
+    file.start = 0x40000000u;
+    file.end = 0x40001000u;
+    file.type = VM_FILE;
+    file.prot = VM_PROT_READ;
+    file.file = &named_file;
+    file.next = &shared;
+    shared.start = 0x40001000u;
+    shared.end = 0x40002000u;
+    shared.type = VM_SHARED;
+    shared.prot = VM_PROT_READ | VM_PROT_WRITE;
+    shared.file = &shared_file;
+    space.vm.first = &code;
+    named_mount.type = &entry_type;
+    named_ofd.vmnt = &named_mount;
+    named_ofd.dirpath = named_path;
+    named_entry.ofd = &named_ofd;
+    process.mm = &space;
+    procfs_text_init(&t);
+    check(procfs_gen_maps(&t, 7) > 0 && !t.nomem, "maps with a mapped file is read");
+    check(text_has(t.buf, t.len, "40000000-40001000 r--p 00000000 00:00 0") &&
+              text_has(t.buf, t.len, " /srv/named\n40001000"),
+          "a mapped file is named by its link's target at the reading");
+    check(text_has(t.buf, t.len, " /tmp/a\n40000000"),
+          "the program's segment keeps the path exec recorded");
+    check(text_has(t.buf, t.len, "40001000-40002000 rw-s 00000000 00:00 0 \n"),
+          "shared memory with no entry has no name");
+    check(named_file.path == NULL && image_file.path == NULL, "and no file keeps the name");
+    check(file_refs == 0, "and every reference taken goes back");
+    kfree(t.buf);
+    process.mm = saved_mm;
+    k_memset(&space, 0, sizeof(space));
 }
 
 /** The maps line's s column is Linux's VM_MAYSHARE: s for a shared region
@@ -3953,6 +4036,7 @@ int main(int argc, char **argv)
     image_paths();
     smaps_flags_rows();
     maps_shared_rows();
+    maps_names_row();
     reaped_during_read();
     system_rows();
     oom_values();
