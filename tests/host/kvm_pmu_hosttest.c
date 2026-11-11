@@ -139,10 +139,14 @@ void kcpu_id(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
     kcpu_id_sub(leaf, 0, a, b, c, d);
 }
 
-/** Find a physical register in a bounded table. */
+/** Find a physical register in a bounded table. The full-width aliases
+ * of the general counters are the counters themselves. */
 static uint64_t *reg(uint32_t index)
 {
     uint32_t i;
+    if (index - FULL_PMC0 < 8u) {
+        index = index - FULL_PMC0 + PMC0;
+    }
     for (i = 0; i < physical_n; i++) {
         if (physical_index[i] == index) {
             return &physical[i];
@@ -560,6 +564,81 @@ static void intel_placement(void)
     kvm_pmu_vmx_exit(&v, guest, 1);
 }
 
+/** Write `text` to the measuring knob; its return. */
+static int32_t steps(const char *text)
+{
+    uint32_t n = 0;
+    while (text[n]) {
+        n++;
+    }
+    return kvm_pmu_steps_store(NULL, 0, text, n);
+}
+
+/** Drive kvm_intel's pmu_steps: its text, the bits it refuses, and each
+ * step on the switching: Linux's order, the counters written to minus
+ * their periods, the interrupt bits, the fixed field cleared at the exit,
+ * and FREEZE_WHILE_SMM in the VMCS's DEBUGCTL alone. */
+static void intel_steps(void)
+{
+    struct kvm_pmu_msr guest[KVM_PMU_LIST_MAX], host[KVM_PMU_LIST_MAX];
+    uint64_t global[2], watch_global = FIXED_BIT(1), value;
+    uint32_t ng, nh;
+    char text[8];
+    setup(1, 0, 0);
+    CHECK(steps("0x08") < 0, "FREEZE_WHILE_SMM is refused where PERF_CAPABILITIES lacks it");
+    *reg(PERF_CAP) = FW_WRITES | SMM_FREEZE;
+    kvm_pmu_start();
+    CHECK(kvm_pmu_steps_show(NULL, 0, text, sizeof(text)) == 5 && text[2] == '0' &&
+              text[3] == '0' && text[4] == '\n',
+          "pmu_steps reads 0x00 at boot");
+    CHECK(steps("0x04") < 0 && steps("0x20") < 0 && steps("0x") < 0 && steps("0x123") < 0 &&
+              steps("1 ") < 0 && steps("") < 0,
+          "it refuses the PMI bits alone, an unknown bit and other text");
+    CHECK(steps("21\n") == 3 && kvm_pmu_steps_show(NULL, 0, text, sizeof(text)) == 5 &&
+              text[2] == '1' && text[3] == '5',
+          "it takes decimal and reads back in hex");
+    CHECK(steps("0x1F") == 4, "and takes every step at once");
+    CHECK(steps("0x17") == 4, "and Linux's order, the writes, the PMI bits and the field");
+    *reg(GLOBAL_CTRL) = watch_global;
+    *reg(FIXED_CTRL) = 0xB0u;
+    *reg(FIXED0) = 77;
+    *reg(PMC0) = 300;
+    v.pmu.fixed_ctrl = 2;
+    v.pmu.fixed[0] = 0;
+    v.pmu.eventsel[0] = 0xC4u | EV_ENABLE | EV_OS;
+    v.pmu.counter[0] = v.pmu.gp_mask - 3;
+    v.pmu.global_ctrl = 1u | FIXED_BIT(0);
+    kvm_pmu_prepare(&v);
+    kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
+    CHECK(v.pmu.phys[KVM_PMU_GP_MAX] == 32u && v.pmu.phys[0] == 0,
+          "Linux's order puts fixed counter 0 on its own counter on Haswell");
+    CHECK(*reg(FIXED0) == 0x800000000001ull && *reg(PMC0) == mask_bits(48) - 3u,
+          "each counter starts at minus its period, perf's max_period at most");
+    CHECK(*reg(FIXED_CTRL) == 0xBAu && *reg(EVENTSEL0) == (0xC4u | EV_ENABLE | EV_OS | EV_INT),
+          "and has its interrupt bit");
+    *reg(FIXED0) += 5;
+    *reg(PMC0) += 2;
+    kvm_pmu_vmx_exit(&v, guest, 1);
+    CHECK(v.pmu.fixed[0] == 5 && v.pmu.counter[0] == v.pmu.gp_mask - 1,
+          "the deltas count from the written values");
+    CHECK(*reg(FIXED_CTRL) == 0xB0u, "the exit clears the guest's field and keeps the host's");
+    CHECK(steps("0x08") == 4, "FREEZE_WHILE_SMM is taken where PERF_CAPABILITIES offers it");
+    kvm_pmu_prepare(&v);
+    kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
+    CHECK(kvm_pmu_vmcs_debugctl(&v) & KVM_DEBUGCTL_FREEZE_IN_SMM,
+          "and the VMCS's DEBUGCTL carries it");
+    CHECK(kvm_pmu_debugctl(&v, 0, &value, 0) == 0 && !(value & KVM_DEBUGCTL_FREEZE_IN_SMM),
+          "while the guest's DEBUGCTL does not");
+    CHECK(v.pmu.phys[KVM_PMU_GP_MAX] == 1u && *reg(FIXED_CTRL) == 0xB0u,
+          "without 0x10 Haswell's fixed counter 0 is placed last again");
+    kvm_pmu_vmx_exit(&v, guest, 1);
+    CHECK(steps("0") == 1, "and 0 takes no step");
+    kvm_pmu_prepare(&v);
+    kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
+    CHECK(!(kvm_pmu_vmcs_debugctl(&v) & KVM_DEBUGCTL_FREEZE_IN_SMM), "nor FREEZE_WHILE_SMM");
+    kvm_pmu_vmx_exit(&v, guest, 1);
+}
+
 /** Drive the guest's LBR stack: PERF_CAPABILITIES, DEBUGCTL, its MSRs,
  * the lists while DEBUGCTL.LBR is set, and the freeze on a PMI. */
 static void intel_lbr(void)
@@ -759,6 +838,7 @@ int main(void)
     filters();
     intel_switch();
     intel_placement();
+    intel_steps();
     intel_lbr();
     amd_switch();
     amd_constraints();
