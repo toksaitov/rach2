@@ -1,0 +1,39 @@
+qemu: root /home/testing/rach2/build/runs/t2665s/root.ext2 sha256 00bccfe5c1cb7b74f8bf2451feb5f8cd9601cd24911ff9a57f57395ac41effbf
+eb1ef163093c80b82c3e8824e38cb807772a33f3f79ceac8952524b22815a4e9  build/tests/system/games/bundle.tar
+66b47e6cf0887058c0b49168fbaa590e2b1444ae84016021452bde56fa8b9cc7  build/x86_64/rach2/kernel
+Disk /home/testing/rach2/build/worktrees/m1/build/tmp/rach2-t2665.djHvOl/disk.img: 85983232 sectors, 41.0 GiB
+Sector size (logical): 512 bytes
+Disk identifier (GUID): 1ACEF00D-0F1E-4D2C-8B3A-C0FFEE000001
+Partition table holds up to 128 entries
+Main partition table begins at sector 2 and ends at sector 33
+First usable sector is 34, last usable sector is 85983198
+Partitions will be aligned on 2048-sector boundaries
+Total free space is 2097085 sectors (1024.0 MiB)
+
+Number  Start (sector)    End (sector)  Size       Code  Name
+   6            2048        83888127   40.0 GiB    8300  Rach2 data
+
+qemu: root /home/testing/rach2/build/runs/t2665v/root.ext2 sha256 00bccfe5c1cb7b74f8bf2451feb5f8cd9601cd24911ff9a57f57395ac41effbf
+fb9e4d8885da8341a33a52199101e6df8ac51e4760c5fa299fcc8cc64a5b5822  build/tests/system/games/bundle.tar
+7ddcb5d942271efc653d91cf97429ae445c42ddde0c50ca58b1e69a1cc1ce875  build/x86_64/rach2/kernel
+Disk /home/testing/rach2/build/worktrees/m1/build/tmp/rach2-t2665.izBeNP/disk.img: 85983232 sectors, 41.0 GiB
+Sector size (logical): 512 bytes
+Disk identifier (GUID): 1ACEF00D-0F1E-4D2C-8B3A-C0FFEE000001
+Partition table holds up to 128 entries
+Main partition table begins at sector 2 and ends at sector 33
+First usable sector is 34, last usable sector is 85983198
+Partitions will be aligned on 2048-sector boundaries
+Total free space is 2097085 sectors (1024.0 MiB)
+
+Number  Start (sector)    End (sector)  Size       Code  Name
+   6            2048        83888127   40.0 GiB    8300  Rach2 data
+
+build/x86_64/rach2/kernel rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial2665/root-00bccfe5c1cb7b74.img rach2.slot=trialroot rach2.trace=enosys
+/dev/loop0 / ext2 rw,relatime 0 0
+/dev/disk0p6 /data ext2 rw 0 0
+total 12417632
+drwxr-xr-x 4 test test        4096 Nov 11 14:47 probes
+-rw-r--r-- 1 test test 25769803776 Nov 11 14:48 root-00bccfe5c1cb7b74.img
+Filesystem     1K-blocks     Used Available Use% Mounted on
+/dev/disk0p6    41284928 12470828  26716948  32% /data
+/dev/disk1      10321208  8481416   1315504  87% /data/crysis/game

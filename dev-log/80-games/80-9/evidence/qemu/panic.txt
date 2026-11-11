@@ -1,0 +1,15 @@
+<2>[678.891000] vm: fault: in kernel mode at 0xFFFFC00007DB28B0 (err 0x0), pc 0xFFFFFFFF8030FCE7
+<2>[678.891000] vm: fault: called from 0xFFFFFFFF80320A66
+<2>[678.891000] vm: fault: called from 0xFFFFFFFF8030FE6C
+<2>[678.891000] vm: fault: called from 0xFFFFFFFF80312E4D
+<2>[678.891000] vm: fault: called from 0x0
+<2>[678.891000] panic: stopped: Unrecoverable error: page fault while in kernel mode.
+<2>[678.891000] panic: report: build cfbe632dc893
+<2>[678.891000] panic: report: cpu 1  pid 49
+<2>[678.891000] panic: report: cmd virtio_gpu
+<2>[678.891000] panic: report: ip 0xffffffff8030fce7
+<2>[678.891000] panic: report: addr 0xffffc00007db28b0
+<2>[678.891000] panic: report: page fault, error 0x0
+<2>[678.891000] panic: rebooting in 30 seconds..
+<2>[678.891000] watchdog: watchdog detected hard LOCKUP on cpu 1
+<3>[678.891000] watchdog: CPU: 1 PID: 49 Comm: virtio_gpu Not tainted 6.18.0-rach2

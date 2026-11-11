@@ -1,0 +1,5 @@
+crysis: owner: 1000 1000, recorded in /data/crysis/accept-owner
+wm: result: mode: ok output Virtual-1 mode 1366x768 by name
+crysis: session: output Virtual-1, renderer virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER))
+crysis: volume: vol 1:1
+CRYSIS PREPARED
