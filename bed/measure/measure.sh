@@ -310,7 +310,18 @@ fi
 # its KILL, longer than the scene's half takes to end its browser, 5
 # seconds, before it sends its server and Weston, which lead groups of their
 # own, TERM, so that the half's own cleanup runs.
-scene_pid='' under_su=0
+scene_pid='' copy_pid='' under_su=0
+
+# stop_copy: end the current reader, including su's child. util-linux's
+# su forwards TERM and then KILL to its child; BusyBox's su execs it.
+# shellcheck disable=SC2317 # the EXIT trap calls it
+stop_copy()
+{
+    [ -n "$copy_pid" ] || return 0
+    kill -TERM "$copy_pid" 2>/dev/null || true
+    wait "$copy_pid" 2>/dev/null || true
+    copy_pid=''
+}
 
 # inner_group: print the group of su's child when the child leads it, or
 # nothing. BusyBox's su, Rach2's, execs USER's shell in its own process, whose
@@ -351,7 +362,7 @@ stop_scene()
     wait "$scene_pid" 2>/dev/null || true
     scene_pid=''
 }
-trap stop_scene EXIT
+trap 'stop_copy; stop_scene' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -371,20 +382,23 @@ if [ -n "$user" ] && [ "$(id -u)" = 0 ]; then
     cp "$here/measure.sh" "$here/piglit.txt" "$here/webgl.html" "$out/harness/"
     cp -R "$runners/." "$out/harness/runners/"
     [ ! -d "$replays" ] || cp -R "$replays/." "$out/harness/replays/"
-    # su's command line names `start`, never measure.sh, so that
-    # `pkill -f measure.sh` reaches both halves and not su, which would
-    # kill the scene's half 2 seconds after its own TERM.
+    # su runs `start`; measure\.sh in a stop pattern must have its dot
+    # escaped, since measure/shm in OUT would also match an unescaped dot.
     harness=$out/harness inner_runners=$out/harness/runners inner_replays=$out/harness/replays
-    printf "MEASURE_RUNNERS='%s' exec sh '%s/measure.sh' -I -r '%s' -o '%s' -R '%s' %s %s %s\n" \
-        "$inner_runners" "$harness" "$rung" "$out" "$inner_replays" "${seconds:+-t $seconds}" \
-        "$flags" "$scene" > "$harness/start"
+    cat > "$harness/start" << 'EOF'
+MEASURE_RUNNERS=$1
+export MEASURE_RUNNERS
+shift
+exec sh "${MEASURE_RUNNERS%/runners}/measure.sh" "$@"
+EOF
     # The files root writes from here on exist before USER may write OUT.
     for f in counts line scene.log; do : > "$out/$f"; done
     chown -hR "$user" "$out/harness"
     chgrp "$(id -g "$user")" "$out"
     chmod 1770 "$out"
     under_su=1
-    su -s /bin/sh "$user" -c "test -r '$harness/start'" 2>/dev/null || {
+    # shellcheck disable=SC2016 # USER's shell expands its own argument
+    su -s /bin/sh -c 'test -r "$1"' -- "$user" sh "$harness/start" 2>/dev/null || {
         echo "measure: $scene: failed: $user cannot read $harness; give OUT a path $user can reach" >&2
         exit 1
     }
@@ -395,7 +409,11 @@ fi
 start=$(date +%s.%N)
 status=0
 if [ "$harness" != "$here" ]; then
-    setsid su -s /bin/sh "$user" -c "sh '$harness/start'" > "$out/scene.log" 2>&1 &
+    # su parses options among its arguments too; -- ends its options.
+    # shellcheck disable=SC2086 # the flags are words
+    setsid su -s /bin/sh -c 'exec sh "$@"' -- "$user" sh "$harness/start" "$inner_runners" \
+        -I -r "$rung" -o "$out" -R "$inner_replays" ${seconds:+-t "$seconds"} $flags "$scene" \
+        > "$out/scene.log" 2>&1 &
 else
     # shellcheck disable=SC2086 # the flags are words
     MEASURE_RUNNERS=$inner_runners setsid sh "$here/measure.sh" -I -r "$rung" -o "$out" -R "$inner_replays" \
@@ -413,15 +431,21 @@ end=$(date +%s.%N)
 # with root's rights on what USER chose. Linux's protected_symlinks guards
 # only a sticky directory that others may write (fs/namei.c:1127 of
 # 6.12.115), and OUT is not one. A file the scene did not write is left out
-# of OUT/taken.
+# of OUT/taken. A swapped-in FIFO can block the reader; wait, unlike a
+# foreground command, lets a trapped signal interrupt it (POSIX XCU 2.11).
+# The EXIT trap ends that reader before returning.
 for f in frametimes cpuframes passes; do
     g="$out/$f" rc=0
-    take="if [ -h '$g' ] || { [ -e '$g' ] && [ ! -f '$g' ]; }; then exit 3; fi; [ -e '$g' ] || exit 4; exec cat '$g'"
+    # shellcheck disable=SC2016 # the reader's shell expands its argument
+    take='if [ -h "$1" ] || { [ -e "$1" ] && [ ! -f "$1" ]; }; then exit 3; fi; [ -e "$1" ] || exit 4; exec cat "$1"'
     if [ "$under_su" = 1 ]; then
-        su -s /bin/sh "$user" -c "$take" > "$out/taken/$f" 2>/dev/null || rc=$?
+        su -s /bin/sh -c "$take" -- "$user" sh "$g" > "$out/taken/$f" 2>/dev/null &
     else
-        sh -c "$take" > "$out/taken/$f" 2>/dev/null || rc=$?
+        sh -c "$take" sh "$g" > "$out/taken/$f" 2>/dev/null &
     fi
+    copy_pid=$!
+    wait "$copy_pid" || rc=$?
+    copy_pid=''
     case $rc in
         0) ;;
         4) rm -f "$out/taken/$f" ;;
