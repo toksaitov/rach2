@@ -883,8 +883,9 @@ void signal_post(process_t *target, int signo);
  * `target`. Job control acts at once: SIGCONT ends a stop and cancels the
  * pending stop signals, SIGKILL makes the stopped threads ready, and a stop
  * signal cancels a pending SIGCONT. A process whose threads have all ended
- * takes nothing. An interrupt handler may call it. The signal is delivered
- * at a return to user mode (`deliver_signals`).
+ * takes nothing. SIGKILL also wakes a thread in execve's wait for the other
+ * threads. An interrupt handler may call it. The signal is delivered at a
+ * return to user mode (`deliver_signals`).
  */
 void signal_post_info(process_t *target, int signo, const struct k_siginfo *info);
 
