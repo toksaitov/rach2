@@ -2165,8 +2165,13 @@ main()
                 ! grep -q '^install started ' "$state/record" ||
                     fail install "the machine runs $now after the installer was started, so a reboot came before the release saw its result; check the root by hand"
                 note "touched $(date -u '+%FT%TZ')"
-                lenovo 'bootctl trial recovery' > /dev/null ||
-                    fail recovery "a trial of recovery could not be armed"
+                # A reset just after the slots were moved leaves the old root,
+                # whose bootctl cannot walk the larger slots; the build's can.
+                if ! lenovo 'bootctl trial recovery' > /dev/null; then
+                    send "$files/../utils/sbin/bootctl" /dev/shm/bootctl
+                    lenovo 'chmod 755 /dev/shm/bootctl && /dev/shm/bootctl trial recovery' > /dev/null ||
+                        fail recovery "a trial of recovery could not be armed"
+                fi
                 reboot_into recovery ;;
             *) later "the machine does not answer" ;;
         esac
