@@ -338,7 +338,7 @@ and requires 6 and the bytes in turn.
 A nonblocking input would have to wait.
 .It Er EBADF
 The descriptor is invalid, is not open for reading, is of a kind with no
-read, refers to a directory, or was opened with
+read, or was opened with
 .Dv O_PATH .
 .It Er ECONNREFUSED
 A stream connection was refused.
@@ -375,8 +375,17 @@ A background terminal read also gives this error when
 .Dv SIGTTIN
 is blocked or ignored, or its process group is orphaned.
 .It Er EISDIR
+The descriptor is open on a directory, as on Linux, whose entries
+.Xr getdents64 2
+reads.
+.Fn read
+and
 .Fn pread
-was given a descriptor on a directory.
+give it for a count of zero too;
+.Fn readv
+and
+.Fn preadv
+give it only for a vector with bytes, and return zero for one without.
 .It Er ENETUNREACH
 A stream connection timed out while its local address was gone.
 .It Er ENOTCONN
