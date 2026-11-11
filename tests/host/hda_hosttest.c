@@ -1792,6 +1792,12 @@ static void row_jack_switch(void)
     hda_set_output_mode(0);
     poll_jacks(1);
     check(pin_ctl[22] == 0xC0 && pin_ctl[23] == 0, "the automatic mode follows the jack again");
+    n = verbs;
+    i = hp->polls;
+    kernel_ticks += HDA_JACK_TICKS - 1;
+    tick();
+    check(verbs == n + 2 && hp->polls == i + 1,
+          "one tick after a gap of a quarter second polls the jacks");
     hda_stop();
     clock_stopped = 0;
 }
@@ -2104,8 +2110,10 @@ static void beep_during_playback(void)
     check(pin_ctl[23] == 0x40 && r->beep_path, "a stop during the tone leaves the pin on");
     beep_ticks(100);
     check(beep_ctl[18] == 0x100 && pin_ctl[23] == 0x40, "the tick ends the tone");
-    beep_ticks(HDA_BEEP_IDLE_TICKS);
-    check(pin_ctl[23] == 0 && !r->beep_path, "and the pin goes off a second after");
+    kernel_ticks += HDA_BEEP_IDLE_TICKS - 1;
+    beep_ticks(1);
+    check(pin_ctl[23] == 0 && !r->beep_path,
+          "and the pin goes off at the one tick after a gap of a second");
     clock_stopped = 0;
 }
 
