@@ -58,6 +58,8 @@ struct percpu {
     volatile unsigned int barrier_request;      /* pass a barrier: SMP_BARRIER_ */
     volatile unsigned int stopped;              /* it took the stop: no more writes */
     const struct page_dir *volatile space_drop; /* a `space` to give up for the kernel's */
+    void (*volatile call_fn)(void *);           /* a function to run here (`smp_call`) */
+    void *call_arg;                             /* its argument */
     volatile int space_stale;                   /* reload `space`: a shootdown skipped it */
     volatile uint32_t ticks_seq;                /* odd while its tick changes the counts */
     volatile uint64_t idle_ticks;               /* ticks that found it in an idle wait */

@@ -244,8 +244,8 @@ int32_t smp_profile_show(void *data, char *buf, uint32_t cap);
 int32_t smp_profile_store(void *data, const char __user *buf, uint32_t len);
 
 /** Answer the requests other processors left this one: stop for good, drop
- * a translation or every one, or give up a page directory for the
- * kernel's. Called with interrupts off. */
+ * a translation or every one, give up a page directory for the kernel's,
+ * or run a function (`smp_call`). Called with interrupts off. */
 void smp_service(void);
 
 /** The interprocessor interrupt's handler, which the platform runs without
@@ -303,6 +303,18 @@ uint32_t smp_tlb_count(int which);
  * while it waits. The caller holds the big lock.
  */
 void smp_barrier(uint64_t cpus, int sync_core);
+
+/**
+ * Run `fn(arg)` on processor `cpu`, with interrupts off there, and wait
+ * until it has returned, as Linux's smp_call_function_single with `wait`
+ * (kernel/smp.c:630-690). On this processor `fn` runs at once; on a
+ * processor that is not online it does not run. Another processor runs it
+ * in the interprocessor interrupt, or in a wait with interrupts off, which
+ * answers requests: `fn` neither sleeps nor takes the big lock or a
+ * spinlock its caller may hold. Any context but an NMI; interrupts are off
+ * while the caller waits.
+ */
+void smp_call(int cpu, void (*fn)(void *), void *arg);
 
 /**
  * Note that a kernel mapping changed, after the caller dropped its own
