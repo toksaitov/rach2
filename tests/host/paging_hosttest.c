@@ -83,6 +83,8 @@ static void check(int ok, const char *row)
 
 struct percpu cpu_table[NR_CPUS];
 uintptr_t mem_reserved_ptr;
+volatile uint32_t init_pid = 1; /* no row faults as init */
+bool debug_shell_is_home;
 
 static int tables_given;   /* page tables the heap gave since a row began */
 static int boot_carves;    /* calls to the boot allocator, which must be none */

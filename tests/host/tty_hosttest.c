@@ -123,6 +123,17 @@ static void clear(void *ptr, unsigned long size)
     }
 }
 
+/** Fill `n` bytes at `ptr` with `c`, as the kernel's string helper does. */
+void *k_memset(void *ptr, int c, size_t n)
+{
+    unsigned char *p = ptr;
+
+    while (n--) {
+        *p++ = (unsigned char)c;
+    }
+    return ptr;
+}
+
 /** Clear the model's interrupt flag and return what it was. */
 uint32_t kirq_save(void)
 {
@@ -192,6 +203,13 @@ void signal_post(process_t *p, int signo)
         return;
     }
     CHECK(0, "no signal substitutes for a readiness wake");
+}
+
+/** Count a terminal process-group signal through the same stub. */
+void signal_post_multi(process_t *p, int signo, const struct k_siginfo *info)
+{
+    (void)info;
+    signal_post(p, signo);
 }
 
 /** The test's pair, zeroed, for `pty_alloc`; a request of another size is

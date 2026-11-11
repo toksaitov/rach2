@@ -50,6 +50,9 @@
  * end, and then tells the parent; or, when a process other than the parent
  * traces the leader, the tracer, whose wait reports the end first and then
  * tells the parent (`ptrace_exit_release`).
+ * Each thread keeps the group's status once a group exit has begun, as
+ * Linux 6.12.115's wait_task_zombie selects it (kernel/exit.c:1241-1242),
+ * even if a signal began the group exit while this cleanup slept.
  */
 int proc_exit_cleanup(int32_t status)
 {
@@ -71,7 +74,7 @@ int proc_exit_cleanup(int32_t status)
     kirq_restore(flags);
     proc_fs_put(self);
     proc_vfork_release(self);
-    self->exit_code = status;
+    self->exit_code = tg->exiting ? tg->exit_code : status;
     tg->live--;
     if (tg->live == 0) {
         ptimer_delete_all(tg);

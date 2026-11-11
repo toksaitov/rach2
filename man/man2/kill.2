@@ -42,11 +42,17 @@ so at a shutdown; see
 A signal to a process is pending for the process as a whole, and any of
 its threads that does not block it takes it: the kernel wakes the first
 such thread, the one the ID names if it qualifies.
+An ignored signal is dropped before it is queued, unless the target thread
+blocks it, waits for it through a signal wait, or is traced and the signal
+is not
+.Dv SIGKILL .
 A process whose threads have all ended remains a target until its parent
 reaps it, as on Linux: the signal is discarded and the call succeeds.
 A group request, and a request with a
 .Fa pid
 of \-1, posts the signal to every member the caller may signal.
+A signal accepted during a member's fork is kept for its new child too;
+a send to one process or one thread is not.
 It succeeds if at least one member is permitted, returns
 .Er EPERM
 if members exist but none is permitted, and returns
