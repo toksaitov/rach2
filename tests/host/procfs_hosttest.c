@@ -1,13 +1,13 @@
 /**
  * procfs_hosttest.c: the files rach2/sys/fs/procfs.c makes: the stat text
  * and its allocation, /proc/uptime, the CPU times of a process and of a
- * thread, task ids, descriptor links, /proc/PID/mem, /proc/PID/exe, the
- * paths of /proc/PID/maps, a read of a process's arguments while the process
- * is reaped, oom_score_adj, the cache, NUMA, clock source and DMI files of
- * /sys, and the /sys entries and uevents of a DRM device and of a
- * driver's own attributes, links, PCI identity and resources, a PCI
- * function's resourceN files, and those of a PS/2 keyboard and a USB mouse
- * (evdev_sysfs.c).
+ * thread, task ids, the syscall and wchan files, descriptor links,
+ * /proc/PID/mem, /proc/PID/exe, the paths of /proc/PID/maps, a read of a
+ * process's arguments while the process is reaped, oom_score_adj, the
+ * cache, NUMA, clock source and DMI files of /sys, and the /sys entries
+ * and uevents of a DRM device and of a driver's own attributes, links, PCI
+ * identity and resources, a PCI function's resourceN files, and those of a
+ * PS/2 keyboard and a USB mouse (evdev_sysfs.c).
  *
  * host-deps: tests/host/compat/vm_iter_host.c
  * host-deps: rach2/sys/fs/sysfs.c rach2/sys/drm/drm_sysfs.c
@@ -359,6 +359,16 @@ process_t *get_process(uint32_t pid)
         return reading;
     }
     return pid == 7 ? &process : NULL;
+}
+
+/* The user frame of every thread in the syscall and wchan rows. */
+static isr_params_t user_frame;
+
+/** The frame of thread `t`'s entry to the kernel: `user_frame` for all. */
+isr_params_t *proc_user_frame(const process_t *t)
+{
+    (void)t;
+    return &user_frame;
 }
 
 /** The process the PID `pid` names, its kernel id in the first PID
@@ -1290,6 +1300,103 @@ static void thread_times(void)
           "the leader's stat under task has the leader's own time");
     kfree(text.buf);
     process.utime = process.stime = thread.utime = thread.stime = 0;
+}
+
+/** Whether the syscall file of `pid`, or its wchan file when `wchan`,
+ * reads `want`. */
+static int pid_file_reads(int pid, int wchan, const char *want)
+{
+    struct procfs_text text;
+    int len, ok;
+
+    procfs_text_init(&text);
+    len = wchan ? procfs_gen_wchan(&text, pid) : procfs_gen_syscall(&text, pid);
+    ok = len == (int)__builtin_strlen(want) && text.buf &&
+         __builtin_memcmp(text.buf, want, (unsigned long)len) == 0;
+    if (!ok) {
+        printf("procfs-hosttest: /proc/%d/%s read '%.*s'\n", pid, wchan ? "wchan" : "syscall",
+               len > 0 ? len : 0, text.buf ? text.buf : "");
+    }
+    kfree(text.buf);
+    return ok;
+}
+
+/**
+ * /proc/PID/syscall and wchan: a thread blocked in a call shows the call's
+ * number as a tracer left it, its six arguments, its stack and instruction
+ * pointers, and the name its wait recorded; one blocked in a fault, or past
+ * a handler's return, -1 and the two pointers; a ready thread "running" and
+ * 0; a stopped one its stop's function; a kernel thread -1 with no
+ * pointers; and a caller that may not read the process EACCES and 0.
+ */
+static void syscall_wchan_rows(void)
+{
+    process.pid = 7;
+    thread.pid = 9;
+    thread.tg = &group;
+    thread.state = PROC_BLOCKED;
+    thread.space_root = 0x1000;
+    thread.orig_nr = 3;
+    thread.wchan = "pipe_read";
+    user_frame.vector = 0x80;
+    user_frame.ebx = 4;
+    user_frame.ecx = 0x804a000u;
+    user_frame.edx = 0x100;
+    user_frame.ebp = 0xbffff000u;
+    user_frame.user_esp = 0xbfffefd0u;
+    user_frame.eip = 0x8048123u;
+    check(pid_file_reads(9, 0, "3 0x4 0x804a000 0x100 0x0 0x0 0xbffff000 0xbfffefd0 0x8048123\n"),
+          "a thread blocked in read shows the call, its arguments and its pointers");
+    check(pid_file_reads(9, 1, "pipe_read"), "its wchan names its wait, with no newline");
+    user_frame.vector = 14;
+    check(pid_file_reads(9, 0, "-1 0xbfffefd0 0x8048123\n"),
+          "a thread blocked in a page fault shows -1 and its pointers");
+    user_frame.vector = 0x80;
+    thread.orig_nr = -1;
+    check(pid_file_reads(9, 0, "-1 0xbfffefd0 0x8048123\n"),
+          "a thread past a handler's return shows -1 and its pointers");
+    thread.orig_nr = 240;
+    thread.state = PROC_STOPPED;
+    check(pid_file_reads(9, 0, "240 0x4 0x804a000 0x100 0x0 0x0 0xbffff000 0xbfffefd0 0x8048123\n"),
+          "a stopped thread shows the call it stopped in");
+    check(pid_file_reads(9, 1, "do_signal_stop"), "a job-control stop is do_signal_stop");
+    thread.ptrace_status = 0x137f;
+    check(pid_file_reads(9, 1, "ptrace_stop"), "a ptrace stop is ptrace_stop");
+    thread.ptrace_status = 0;
+    thread.state = PROC_READY;
+    check(pid_file_reads(9, 0, "running\n"), "a ready thread is running");
+    check(pid_file_reads(9, 1, "0"), "a ready thread has no wchan");
+    thread.state = PROC_BLOCKED;
+    thread.space_root = 0;
+    check(pid_file_reads(9, 0, "-1 0x0 0x0\n"), "a kernel thread has no user frame");
+    thread.space_root = 0x1000;
+    stranger.pid = 11;
+    stranger.tg = &other_group;
+    stranger.state = PROC_BLOCKED;
+    stranger.space_root = 0x1000;
+    stranger.wchan = "futex_wait_queue";
+    stranger.ruid = 2000;
+    stranger.euid = 2000;
+    process.ruid = 1000;
+    process.euid = 1000;
+    {
+        struct procfs_text text;
+
+        procfs_text_init(&text);
+        check(procfs_gen_syscall(&text, 11) == -EACCES,
+              "another user's process refuses its syscall file");
+        kfree(text.buf);
+    }
+    check(pid_file_reads(11, 1, "0"), "another user's process reads 0 from wchan");
+    process.ruid = process.euid = 0;
+    check(pid_file_reads(11, 1, "futex_wait_queue"), "a privileged caller reads its wchan");
+    stranger.ruid = stranger.euid = 0;
+    stranger.state = PROC_READY;
+    stranger.space_root = 0;
+    thread.state = PROC_READY;
+    thread.space_root = 0;
+    thread.orig_nr = 0;
+    k_memset(&user_frame, 0, sizeof(user_frame));
 }
 
 /** A path under a task directory needs its process and a thread of it,
@@ -3125,6 +3232,7 @@ int main(int argc, char **argv)
     netdev_rows();
     descriptor_links();
     task_ids();
+    syscall_wchan_rows();
     mem_descriptor();
     exe_links();
     exe_chroot();
@@ -3161,7 +3269,8 @@ int main(int argc, char **argv)
                "sum, an interface's counts, a DRM device's /sys entries and uevents, and a "
                "driver's attribute, link and PCI identity, a PCI function's BARs mapped and read "
                "through its resource files, writes of a PCI function's uevent, and an input "
-               "device's /sys entries, capability masks and uevents\n");
+               "device's /sys entries, capability masks and uevents, and the syscall and wchan "
+               "files of blocked, stopped and running threads\n");
     }
     return failures != 0;
 }
