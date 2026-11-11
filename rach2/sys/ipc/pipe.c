@@ -665,13 +665,18 @@ static int32_t pipe_put_copy(uint8_t *at, const char __user *from, uint32_t n, u
     return copy_from_user(at, (const void __user *)from, n) != 0 ? -EFAULT : 0;
 }
 
-/** Whether every range of the `n` elements of `iov` passes `user_range_ok`. */
+/** Whether every range of the `n` elements of `iov` lies in user space, as
+ * Linux's access_ok judges it (`user_span_ok`), or in the thread's window
+ * (`user_range_ok`). An address below USER_ADDR_MIN passes, since its page
+ * fails in the transfer, after the bytes before it are written, as Linux's
+ * `pipe_write` returns the bytes copied before a fault. */
 static int pipe_iov_ok(const struct kernel_iovec *iov, int n)
 {
     int i;
 
     for (i = 0; i < n; i++) {
-        if (!user_range_ok(iov[i].iov_base, iov[i].iov_len)) {
+        if (!user_span_ok(iov[i].iov_base, iov[i].iov_len) &&
+            !user_range_ok(iov[i].iov_base, iov[i].iov_len)) {
             return 0;
         }
     }
