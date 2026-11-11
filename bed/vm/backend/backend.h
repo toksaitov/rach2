@@ -30,7 +30,7 @@ struct vr_pin_counts {
 };
 
 /* The renderer, after vr_init; ops and cookie go to vd_init. */
-struct vr *vr_init(struct vd *dev, int gbm_fd, int venus, int verbose);
+struct vr *vr_init(struct vd *dev, int gbm_fd, int venus, int native, int verbose);
 extern const struct vd_ops vr_ops;
 int vr_poll_fd(struct vr *r);
 void vr_poll(struct vr *r);
