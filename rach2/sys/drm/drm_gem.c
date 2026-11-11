@@ -604,10 +604,7 @@ int32_t drm_gem_create_mmap_offset(struct drm_gem_object *obj)
     uint32_t flags = spin_lock_irqsave(&dev->object_lock);
     int32_t rc = 0;
 
-    if (!obj->mmap_offset) {
-        rc = mmap_space_find(dev, obj->size >> PAGE_SHIFT, &start);
-    }
-    if (!obj->mmap_offset && rc == 0) {
+    if (!obj->mmap_offset && (rc = mmap_space_find(dev, obj->size >> PAGE_SHIFT, &start)) == 0) {
         while (*link && (*link)->mmap_offset < start << PAGE_SHIFT) {
             link = &(*link)->mmap_next;
         }
@@ -627,10 +624,7 @@ int32_t drm_mmap_node_add(struct drm_mmap_node *node)
     uint32_t flags = spin_lock_irqsave(&dev->object_lock);
     int32_t rc = 0;
 
-    if (!node->offset) {
-        rc = mmap_space_find(dev, node->obj->size >> PAGE_SHIFT, &start);
-    }
-    if (!node->offset && rc == 0) {
+    if (!node->offset && (rc = mmap_space_find(dev, node->obj->size >> PAGE_SHIFT, &start)) == 0) {
         while (*link && (*link)->offset < start << PAGE_SHIFT) {
             link = &(*link)->next;
         }
