@@ -4184,10 +4184,20 @@ static int cmsg_compat_refused(int call, const unsigned long *args)
     return (flags & MSG_CMSG_COMPAT) != 0;
 }
 
+/** Whether the sub-call `call` takes from a socket's queues: a receive or an
+ * accept. */
+static int sock_call_takes(int call)
+{
+    return call == SC_RECV || call == SC_RECVFROM || call == SC_RECVMSG || call == SC_RECVMMSG ||
+           call == SC_ACCEPT || call == SC_ACCEPT4;
+}
+
 /**
  * Run socket sub-call `call` with its arguments `args`, for socketcall and
  * for the direct socket calls. A call on an AF_UNIX socket, or one that
- * makes one, goes to ipc/unix.c; the rest to the calls above. Returns the
+ * makes one, goes to ipc/unix.c; the rest to the calls above. A receive
+ * or an accept first has the loopback ring delivered (`ip_loop_settle`), so
+ * that it finds what a local send gave before it, as on Linux. Returns the
  * sub-call's result, -EOPNOTSUPP for a socketpair of another family, or
  * -EINVAL for an unknown sub-call or for a native message call whose flags
  * have MSG_CMSG_COMPAT (`cmsg_compat_refused`).
@@ -4198,6 +4208,9 @@ int32_t socket_call(int call, unsigned long *args)
 
     if (cmsg_compat_refused(call, args)) {
         return -EINVAL;
+    }
+    if (sock_call_takes(call)) {
+        ip_loop_settle();
     }
     if ((call == SC_SOCKET || call == SC_SOCKETPAIR) && (uint32_t)args[0] == AF_UNIX) {
         return unix_make(call, args);

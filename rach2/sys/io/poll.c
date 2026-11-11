@@ -29,6 +29,7 @@
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
+#include "../network/ip/ip.h"
 #include "../network/socket/socket.h"
 
 /* The timespec of longs ppoll and pselect6 take, 32 bits each on i686 and
@@ -246,6 +247,10 @@ static int deadline_passed(struct poll_deadline *d)
  * them all, with each queue set to NULL, before it frees what an epoll
  * wait sleeps on (`epoll_waits_let_go`); the process looks at the arrays
  * again only with the big lock, which that close holds.
+ *
+ * The loopback ring is delivered first (`ip_loop_settle`), so that a socket
+ * is ready for what a local send gave it before the wait, as on Linux, also
+ * for a wait of no timeout.
  */
 int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d, const char *wchan)
 {
@@ -255,6 +260,7 @@ int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d,
     int rc;
     uint32_t i;
 
+    ip_loop_settle();
     wqs = kzalloc(sizeof(*wqs) * (n ? n : 1));
     recs = kzalloc(sizeof(*recs) * (n ? n : 1));
     if (!wqs || !recs) {

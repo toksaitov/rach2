@@ -6485,13 +6485,15 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
  * for `read_fd`, by the socket's type: a datagram or raw socket one
  * datagram and a stream socket its bytes, straight into the checked user
  * buffer, and without waiting under O_NONBLOCK, a status flag of the
- * description, as recv(2) does. A bad buffer is -EFAULT and the query
- * socket -EOPNOTSUPP.
+ * description, as recv(2) does, after the loopback ring is delivered
+ * (`ip_loop_settle`). A bad buffer is -EFAULT and the query socket
+ * -EOPNOTSUPP.
  */
 static int32_t socket_read(fd_entry_t *entry, char __user *buf, uint32_t count)
 {
     int sock_nonblock;
 
+    ip_loop_settle();
     if (!entry->sock || !user_buffer_ok((__force uintptr_t)buf, count, 1)) {
         return -EFAULT;
     }
@@ -7016,6 +7018,7 @@ static long readv(int fd, uintptr_t iov_user, int iovcnt)
     }
 
     if (entry && entry->type == FD_TYPE_SOCKET && entry->sock && entry->sock->type == SOCK_DGRAM) {
+        ip_loop_settle();
         return readv_dgram(entry, iov_user, iovcnt, 0, 0, 0, 0);
     }
     walk = entry && !entry->ops && entry->type == FD_TYPE_FILE;
