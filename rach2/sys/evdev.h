@@ -580,10 +580,13 @@ void evdev_sysfs_serio_add(int port);
 
 /**
  * Have `add` put a driver's own files below the directory of the serio
- * port `port` when /sys makes it, where they stay, as Linux's serio core
- * adds a driver's `dev_groups` to its port: `add` gets the directory and
- * returns 0 or -errno. NULL for none. Called once, before the first event
- * device of the port is published. Defined in evdev_sysfs.c.
+ * port `port`, where they stay while the driver is bound, across changes
+ * of protocol, as Linux's driver core adds a driver's `dev_groups` to the
+ * port it binds and removes them when it unbinds: `add` gets the directory
+ * and returns 0 or -errno. NULL for none, as the driver unbinds. Before
+ * /sys makes the directory, the call only keeps `add` for it; after, it
+ * removes the files the last `add` made and calls `add` at once, under the
+ * big lock in process context. Defined in evdev_sysfs.c.
  */
 void evdev_sysfs_serio_driver(int port, int (*add)(int dir));
 

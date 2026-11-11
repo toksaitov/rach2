@@ -436,6 +436,8 @@ own detect and set-up, a device that does not speak it reset
 and set to PS/2, a node registered for it before the old one is removed,
 and the protocol's files; the node's name keeps the vendor and model a
 detect gave before, as psmouse keeps them.
+The port's own five files stay across a switch, as psmouse's do, and
+only the protocol's files are replaced.
 Both ports take
 .Ql PS/2
 .Pq Ql bare ,

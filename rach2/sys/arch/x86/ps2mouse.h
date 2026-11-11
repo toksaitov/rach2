@@ -137,8 +137,9 @@ void ps2mouse_guest_buttons(uint8_t buttons);
  * `psmouse_attr_set_helper` begins one: a run of commands, the touchpad and
  * then the guest disabled, or the port's device alone when it is the
  * TrackPoint. Returns the stick's line, or NULL, having begun nothing, when
- * no guest reports and the port's device is no TrackPoint. Process
- * context.
+ * no guest reports and the port's device is no TrackPoint, or when the
+ * stick the file was made for was unbound, or its protocol replaced, while
+ * the call waited for the command lock. Process context.
  */
 const struct ps2io *ps2mouse_guest_change_begin(void);
 
