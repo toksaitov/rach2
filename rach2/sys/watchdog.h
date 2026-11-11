@@ -93,12 +93,13 @@ int watchdog_nmi(isr_params_t *params);
 
 /**
  * Set by KVM where a guest's counters may raise a PMI (kvm/pmu.c's
- * `kvm_pmu_nmi`), NULL otherwise: called first by `watchdog_nmi` on every
- * NMI, it acknowledges the overflow of each counter the host does not hold
- * and returns how many there were, each a handled source of the NMI, so
- * that two let the next NMI, which finds nothing, be swallowed. It runs before
- * the counter's APIC entry is unmasked again, as Linux acknowledges every
- * counter's overflow first (arch/x86/events/intel/core.c:3190, 3226-3227).
+ * `kvm_pmu_nmi`), NULL otherwise: called by `watchdog_nmi` on every NMI
+ * before the detector's `platform_pmu_overflow`, it acknowledges the
+ * overflow of each counter the host does not hold and returns how many
+ * there were, each a handled source of the NMI, so that two let the next
+ * NMI, which finds nothing, be swallowed. It runs before the counter's APIC
+ * entry is unmasked again, as Linux acknowledges every counter's overflow
+ * first (arch/x86/events/intel/core.c:3190, 3226-3227).
  * It takes no lock and must not fault.
  */
 extern int (*watchdog_guest_nmi)(void);
