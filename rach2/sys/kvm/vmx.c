@@ -1,10 +1,10 @@
 /*
- * vmx.c: Intel's VMX backend: VMX turned on around each guest run, the
- * VMCS built from the capability MSRs, EPT, VPID and the unrestricted
- * guest, the preemption timer bounding every run, the exits, and the
- * events injected. Every VMX instruction and every other touch of the
- * processor goes through `vmx_op`, one table of operations, which the host
- * test's model of the Lenovo's processor stands in for.
+ * vmx.c: Intel's VMX backend: VMX on while a vCPU's VMCS is active on the
+ * processor, the VMCS built from the capability MSRs, EPT, VPID and the
+ * unrestricted guest, the preemption timer bounding every run, the exits,
+ * and the events injected. Every VMX instruction and every other touch of
+ * the processor goes through `vmx_op`, one table of operations, which the
+ * host test's model of the Lenovo's processor stands in for.
  */
 
 #include "kvm.h"
@@ -758,7 +758,7 @@ struct vmx_exit {
     uint32_t insn_len, insn_info;
     uint32_t interruptibility;
     uint32_t insn_error; /* VM_INSTRUCTION_ERROR of a failed entry */
-    int failed;          /* VMLAUNCH failed: VMX_FAIL_* */
+    int failed;          /* VMLAUNCH or VMRESUME failed: VMX_FAIL_* */
 };
 
 struct vmx_vcpu {
@@ -770,12 +770,15 @@ struct vmx_vcpu {
     uintptr_t msr_bitmap_pa;
     void *host_fpu;
     uint16_t vpid;
-    int built;       /* the VMCS's lasting fields are written */
-    int last_cpu;    /* the processor whose host fields the VMCS holds, or -1 */
-    int fresh;       /* the record's special registers are the VMCS's */
-    int kgs_table;   /* msr.c's KERNEL_GS_BASE is the guest's, after `save` */
-    int flush_vpid;  /* drop the guest's linear translations at the entry */
-    uint32_t vdirty; /* VX_* */
+    int built;                    /* the VMCS's lasting fields are written */
+    int last_cpu;                 /* the processor whose host fields the VMCS holds, or -1 */
+    int cpu;                      /* the processor where the VMCS is active, or -1 */
+    int launched;                 /* the VMCS's launch state: the next entry is VMRESUME */
+    struct vmx_vcpu *next_loaded; /* the next VMCS active on `cpu` (`vmx_loaded`) */
+    int fresh;                    /* the record's special registers are the VMCS's */
+    int kgs_table;                /* msr.c's KERNEL_GS_BASE is the guest's, after `save` */
+    int flush_vpid;               /* drop the guest's linear translations at the entry */
+    uint32_t vdirty;              /* VX_* */
     uint32_t proc, proc2, entry, exc_bitmap; /* the controls as the VMCS has them */
     uint32_t proc_want;                      /* the primary controls for the next entry */
     uint32_t inj_info, inj_error, inj_len;   /* the event the next entry injects */
@@ -977,35 +980,52 @@ static int pdpte_load(struct kvm_vcpu *v)
 
 /* ---- VMX on and off ---- */
 
-/* Whether each processor is in VMX operation, and its CR4 from before,
- * for the panic hook. A processor's flag is set after its VMXON succeeds
- * and cleared before its VMXOFF, so the hook never runs VMXOFF outside VMX
- * operation, which is #UD. */
+/*
+ * A vCPU's VMCS stays active and current on the processor that last loaded
+ * it, and VMX stays on on a processor while a VMCS is active there, as
+ * Linux keeps them (vmx_vcpu_load_vmcs, arch/x86/kvm/vmx/vmx.c:1449-1513):
+ * entries on one processor follow each other with VMRESUME and no VMPTRLD.
+ * A load on another processor first has the VMCS cleared where it is active
+ * (`vmcs_clear`), as Linux's loaded_vmcs_clear (812-818), which makes the
+ * next entry a VMLAUNCH. The processor that clears its last active VMCS
+ * leaves VMX operation, so one with no vCPU's VMCS on it is out of it.
+ *
+ * `vmx_live` says whether each processor is in VMX operation, and
+ * `vmx_cr4` is its CR4 from before, for the panic hook. A processor's flag
+ * is set after its VMXON succeeds and cleared before its VMXOFF, so the
+ * hook never runs VMXOFF outside VMX operation, which is #UD. Only the
+ * processor itself changes its entries, with interrupts off.
+ */
 static volatile int vmx_live[NR_CPUS];
 static uint64_t vmx_cr4[NR_CPUS];
-static uint64_t *vmx_vmcs[NR_CPUS]; /* the VMCS current there, or NULL */
+static struct vmx_vcpu *vmx_current[NR_CPUS]; /* whose VMCS is current there, or NULL */
+static struct vmx_vcpu *vmx_loaded[NR_CPUS];  /* the VMCSs active there, by `next_loaded` */
 
 /** Leave VMX operation on `cpu` and put CR4 back to `cr4`. */
 static void vmx_leave(int cpu, uint64_t cr4)
 {
     vmx_live[cpu] = 0;
-    vmx_vmcs[cpu] = NULL;
+    vmx_current[cpu] = NULL;
     (void)vmx_op->vmxoff();
     vmx_op->write_cr4(cr4);
 }
 
-/** The panic hook: VMX off on the processor that panics, when a panic
- * comes inside a run's section, from an NMI or a machine check taken in
- * VMX root operation or from a fault there; the current VMCS is cleared
- * first, as Linux's vmx_emergency_disable_virtualization_cpu does. */
+/** The panic hook: VMX off on the processor that panics, and on each
+ * processor a panic's or a restart's stop halts, with every VMCS active
+ * there cleared first, as Linux's vmx_emergency_disable_virtualization_cpu
+ * (vmx.c:757-781) does. */
 static void vmx_panic(void)
 {
     int cpu = (int)arch_cpu_id();
+    struct vmx_vcpu *x;
 
     if (cpu < NR_CPUS && vmx_live[cpu]) {
-        if (vmx_vmcs[cpu]) {
-            (void)vmx_op->vmclear(vmx_vmcs[cpu]);
+        for (x = vmx_loaded[cpu]; x; x = x->next_loaded) {
+            (void)vmx_op->vmclear(&x->vmcs_pa);
+            x->cpu = -1;
+            x->launched = 0;
         }
+        vmx_loaded[cpu] = NULL;
         vmx_leave(cpu, vmx_cr4[cpu]);
     }
 }
@@ -1017,17 +1037,20 @@ static int fixed_ok(uint64_t cr, uint64_t fixed0, uint64_t fixed1)
 }
 
 /**
- * Turn VMX on on this processor and make `x`'s VMCS current, with
- * interrupts off: CR4.VMXE, IA32_FEATURE_CONTROL locked with VMX on where
- * the firmware left it unlocked, VMXON, and VMPTRLD. 0, or -EIO when an
- * instruction fails, with VMX left off; `*cr4` is CR4 before.
+ * Turn VMX on on this processor, `cpu`, unless it is on, with interrupts
+ * off: CR4.VMXE, IA32_FEATURE_CONTROL locked with VMX on where the firmware
+ * left it unlocked, and VMXON. 0, or -EIO when an instruction fails, with
+ * VMX left off and CR4 as it was.
  */
-static int vmx_on(struct vmx_vcpu *x, int cpu, uint64_t *cr4)
+static int vmx_cpu_on(int cpu)
 {
-    uint64_t fc;
+    uint64_t fc, cr4;
 
     if (cpu >= NR_CPUS || !vmxon_region[cpu]) {
         return -EIO;
+    }
+    if (vmx_live[cpu]) {
+        return 0;
     }
     if (!fc_checked[cpu]) {
         fc = vmx_op->rdmsr(MSR_IA32_FEATURE_CONTROL);
@@ -1038,43 +1061,108 @@ static int vmx_on(struct vmx_vcpu *x, int cpu, uint64_t *cr4)
         }
         fc_checked[cpu] = 1;
     }
-    *cr4 = vmx_op->read_cr(4);
+    cr4 = vmx_op->read_cr(4);
     /* CR0 or CR4 outside the fixed bits makes VMXON #GP, which Linux's
      * kvm_cpu_vmxon catches from its exception table; refuse it before. */
     if (!fixed_ok(vmx_op->read_cr(0), caps.cr0_fixed0, caps.cr0_fixed1) ||
-        !fixed_ok(*cr4 | CR4_VMXE, caps.cr4_fixed0, caps.cr4_fixed1)) {
+        !fixed_ok(cr4 | CR4_VMXE, caps.cr4_fixed0, caps.cr4_fixed1)) {
         return -EIO;
     }
-    vmx_cr4[cpu] = *cr4;
-    if (!(*cr4 & CR4_VMXE)) {
-        vmx_op->write_cr4(*cr4 | CR4_VMXE);
+    vmx_cr4[cpu] = cr4;
+    if (!(cr4 & CR4_VMXE)) {
+        vmx_op->write_cr4(cr4 | CR4_VMXE);
     }
     if (vmx_op->vmxon(&vmxon_pa[cpu]) != VMX_OK) {
-        vmx_op->write_cr4(*cr4);
+        vmx_op->write_cr4(cr4);
         return -EIO;
     }
+    vmx_current[cpu] = NULL;
     vmx_live[cpu] = 1;
-    if ((!x->built && vmx_op->vmclear(&x->vmcs_pa) != VMX_OK) ||
-        vmx_op->vmptrld(&x->vmcs_pa) != VMX_OK) {
-        vmx_leave(cpu, *cr4);
-        return -EIO;
-    }
-    vmx_vmcs[cpu] = &x->vmcs_pa;
     return 0;
 }
 
 /**
- * Write `x`'s VMCS back to memory and turn VMX off on `cpu`, with
- * interrupts off: VMCLEAR, so that the next entry, on whichever processor,
- * loads it anew, then VMXOFF and CR4 as it was. Every path out of
- * `vmx_on`'s section ends here, so VMX is never on outside it, and an INIT
- * after it finds the processor out of VMX operation.
+ * Clear `arg`'s VMCS on this processor, where it is active, with interrupts
+ * off, as Linux's __loaded_vmcs_clear (vmx.c:783-810): VMCLEAR writes it
+ * back to memory with its launch state clear, so that its next entry, on
+ * whichever processor, is a VMLAUNCH, and the processor leaves VMX
+ * operation when no other VMCS is active there. `arg` is a vCPU's
+ * `struct vmx_vcpu`; nothing is done when its VMCS is not active here.
+ * `smp_call`'s function.
  */
-static void vmx_off(struct vmx_vcpu *x, int cpu, uint64_t cr4)
+static void vmcs_clear_here(void *arg)
 {
-    vmx_vmcs[cpu] = NULL;
+    struct vmx_vcpu *x = (struct vmx_vcpu *)arg, **p;
+    int cpu = (int)arch_cpu_id();
+
+    if (x->cpu != cpu) {
+        return;
+    }
+    if (vmx_current[cpu] == x) {
+        vmx_current[cpu] = NULL;
+    }
     (void)vmx_op->vmclear(&x->vmcs_pa);
-    vmx_leave(cpu, cr4);
+    for (p = &vmx_loaded[cpu]; *p; p = &(*p)->next_loaded) {
+        if (*p == x) {
+            *p = x->next_loaded;
+            break;
+        }
+    }
+    x->launched = 0;
+    x->cpu = -1;
+    if (!vmx_loaded[cpu]) {
+        vmx_leave(cpu, vmx_cr4[cpu]);
+    }
+}
+
+/** Clear `x`'s VMCS on the processor where it is active, if any, and wait
+ * until it is, as Linux's loaded_vmcs_clear. A processor stopped for good
+ * keeps it; it is then active nowhere that runs. Not in an NMI. */
+static void vmcs_clear(struct vmx_vcpu *x)
+{
+    if (x->cpu >= 0) {
+        smp_call(x->cpu, vmcs_clear_here, x);
+        x->cpu = -1;
+        x->launched = 0;
+    }
+}
+
+/**
+ * Make `x`'s VMCS current on this processor, `cpu`, with interrupts off, as
+ * Linux's vmx_vcpu_load_vmcs: a VMCS active on another processor is
+ * cleared there first, VMX is turned on here, a VMCS never loaded is
+ * cleared to start its launch state, and VMPTRLD runs unless the VMCS is
+ * current already. 0, or -EIO when VMX cannot be turned on or an
+ * instruction fails, with VMX off here unless another VMCS is active here.
+ */
+static int vmx_load(struct vmx_vcpu *x, int cpu)
+{
+    if (x->cpu != cpu) {
+        vmcs_clear(x);
+        if (vmx_cpu_on(cpu) != 0) {
+            return -EIO;
+        }
+        if (!x->built && vmx_op->vmclear(&x->vmcs_pa) != VMX_OK) {
+            goto fail;
+        }
+    }
+    if (vmx_current[cpu] != x) {
+        if (vmx_op->vmptrld(&x->vmcs_pa) != VMX_OK) {
+            goto fail;
+        }
+        vmx_current[cpu] = x;
+    }
+    if (x->cpu != cpu) {
+        x->next_loaded = vmx_loaded[cpu];
+        vmx_loaded[cpu] = x;
+        x->cpu = cpu;
+    }
+    return 0;
+fail:
+    if (!vmx_loaded[cpu]) {
+        vmx_leave(cpu, vmx_cr4[cpu]);
+    }
+    return -EIO;
 }
 
 /* ---- the VMCS built ---- */
@@ -1553,11 +1641,15 @@ static void after_run(struct kvm_vcpu *v)
 
 /**
  * Run the guest until its next exit, with interrupts off and without the
- * big lock: VMX on, the VMCS current and brought up to date, the guest's
- * FPU, debug registers and MSRs in, VMLAUNCH; at the exit the host's state
- * back, the exit read, and VMX off. An NMI or a machine check the run took
- * from the host reaches the host's own handler after VMX is off, as
- * Linux's vmx_do_nmi_irqoff and kvm_machine_check pass them on; the host's
+ * big lock: the VMCS current (`vmx_load`) and brought up to date, the
+ * guest's FPU, debug registers and MSRs in, VMLAUNCH, or VMRESUME once an
+ * entry of the VMCS succeeded, as Linux's __vmx_vcpu_run_flags chooses
+ * (vmx.c:948-953); at the exit the host's state back and the exit read,
+ * with the VMCS left current and VMX on. The launch state is set after an
+ * exit that is no failed entry, as Linux's vmx_vcpu_run sets `launched`
+ * (vmx.c:7476-7488). An NMI or a machine check the run took from the host
+ * reaches the host's own handler after the exit is read, as Linux's
+ * vmx_do_nmi_irqoff and kvm_machine_check pass them on; the host's
  * interrupt that ended the run waits until the run loop turns interrupts
  * on. Under the caller's single step the STI and MOV SS shadow ends before
  * the entry, as Linux's vmx_vcpu_run ends it: the step over STI or MOV SS
@@ -1570,14 +1662,14 @@ static int vmx_enter(struct kvm_vcpu *v)
 {
     struct vmx_vcpu *x = vx(v);
     struct vmx_host host;
-    uint64_t cr4, eptp, host_dr7 = 0, host_db[4] = {0, 0, 0, 0};
+    uint64_t eptp, host_dr7 = 0, host_db[4] = {0, 0, 0, 0};
     int cpu = (int)arch_cpu_id(), r, tlb, nmi = 0, mce = 0;
 
     if (v->emul.resume) {
         return 0;
     }
     tlb = kvm_vcpu_test_clear(v, KVM_REQ_TLB_FLUSH);
-    r = vmx_on(x, cpu, &cr4);
+    r = vmx_load(x, cpu);
     if (r != 0) {
         return r;
     }
@@ -1608,7 +1700,7 @@ static int vmx_enter(struct kvm_vcpu *v)
     entry_fields(v);
     vmx_op->fpu_load(x->host_fpu, v->xsave, v->xcr0);
     dr_load(v, &host_dr7, host_db);
-    x->ex.failed = vmx_op->run(&v->regs, &v->sregs.cr2, 0);
+    x->ex.failed = vmx_op->run(&v->regs, &v->sregs.cr2, x->launched);
     dr_store(v, host_dr7, host_db);
     vmx_op->fpu_store(x->host_fpu, v->xsave, v->xcr0);
     vmx_op->restore_host(&host);
@@ -1616,8 +1708,10 @@ static int vmx_enter(struct kvm_vcpu *v)
     if (x->ex.failed == VMX_OK) {
         nmi = exit_is_nmi(&x->ex);
         mce = exit_is_mce(&x->ex);
+        if (!(x->ex.reason & EXIT_FAILED_ENTRY)) {
+            x->launched = 1;
+        }
     }
-    vmx_off(x, cpu, cr4);
     if (nmi) {
         vmx_op->nmi();
     }
@@ -2424,22 +2518,19 @@ static void vmx_complete(struct kvm_vcpu *v)
 }
 
 /** Write back the parts `parts` of the guest's state: the special
- * registers and DR7 from the VMCS, read in a section of their own when the
- * last exit did not, and KERNEL_GS_BASE from the MSR list. The rest the
- * record holds already. */
+ * registers and DR7 from the VMCS, read with interrupts off and the VMCS
+ * made current on this processor, as Linux's vcpu_load makes it for each
+ * vCPU ioctl, when the last exit did not; and KERNEL_GS_BASE from the MSR
+ * list. The rest the record holds already. */
 static void vmx_save(struct kvm_vcpu *v, uint32_t parts)
 {
     struct vmx_vcpu *x = vx(v);
-    uint64_t cr4;
     uint32_t flags;
-    int cpu;
 
     if ((parts & (KVM_PART_SREGS | KVM_PART_DEBUG)) && !x->fresh && x->built) {
         flags = kirq_save();
-        cpu = (int)arch_cpu_id();
-        if (vmx_on(x, cpu, &cr4) == 0) {
+        if (vmx_load(x, (int)arch_cpu_id()) == 0) {
             read_sregs(v);
-            vmx_off(x, cpu, cr4);
         }
         kirq_restore(flags);
     }
@@ -2665,6 +2756,7 @@ static int vmx_vcpu_init(struct kvm_vcpu *v)
         return -ENOMEM;
     }
     v->backend = x;
+    x->cpu = -1;
     x->vmcs = kalloc_pages(1, &pa);
     x->vmcs_pa = pa;
     x->msrs = kalloc_pages(1, &x->msrs_pa);
@@ -2685,7 +2777,9 @@ static int vmx_vcpu_init(struct kvm_vcpu *v)
     return 0;
 }
 
-/** Free the backend's share of `v`. */
+/** Free the backend's share of `v`, its VMCS cleared first on the
+ * processor where it is active, as Linux's free_loaded_vmcs (vmx.c:2951).
+ * Not in an NMI, since the clear may wait for another processor. */
 static void vmx_vcpu_free(struct kvm_vcpu *v)
 {
     struct vmx_vcpu *x = vx(v);
@@ -2694,6 +2788,7 @@ static void vmx_vcpu_free(struct kvm_vcpu *v)
         return;
     }
     if (x->vmcs) {
+        vmcs_clear(x);
         kfree_pages(x->vmcs, 1);
     }
     if (x->msrs) {
