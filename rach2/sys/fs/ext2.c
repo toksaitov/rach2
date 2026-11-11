@@ -43,6 +43,7 @@
 #include "ext2.h"
 #include "ext2xattr.h"
 
+#include "../arch/arch.h"
 #include "../mm/kheap.h"
 #include "../mm/paging.h"
 
@@ -156,7 +157,7 @@ struct ext2_node {
     struct ext2_node *next;  /* the mount's list of nodes in memory */
     struct ext2_node *prev;  /* the node before it on that list, or NULL */
     struct ext2_node *hnext; /* the next node in its bucket of the mount's hash */
-    uint32_t refs;           /* holds; the last put frees the node */
+    uint32_t refs;           /* holds, changed atomically (`node_ref`); the last put frees it */
     uint32_t ino;
     uint32_t mode;
     uint32_t uid, gid;
@@ -431,6 +432,25 @@ static struct ext2_node *node_find(struct ext2_mount *em, uint32_t ino)
     return 0;
 }
 
+/**
+ * Add `delta` to the holds of `n` in one atomic step and return the new
+ * count. A walk that runs without the big lock takes a hold on a node a
+ * name cache entry holds and gives back one that is not the last
+ * (`ext2_put_unless_last`), beside callers that hold the lock, so every
+ * change of the count is atomic; the count reaches 0, and leaves it, only
+ * under the big lock.
+ */
+static uint32_t node_ref(struct ext2_node *n, int delta)
+{
+    volatile unsigned int *p = (volatile unsigned int *)&n->refs;
+    unsigned int old;
+
+    do {
+        old = *p;
+    } while (arch_atomic_cmpxchg(p, old, old + (unsigned int)delta) != old);
+    return old + (unsigned int)delta;
+}
+
 /** A new node from the heap, zeroed, N_LOADING and held once by the caller,
  * on no list and with no number, or NULL when the heap has none. The heap
  * may sleep, so a caller that looked a number up looks again afterwards. */
@@ -503,8 +523,7 @@ static void node_drop(struct ext2_mount *em, struct ext2_node *n)
  * free the node with the last: a load that failed, or a new inode's. */
 static void node_unhold(struct ext2_mount *em, struct ext2_node *n)
 {
-    n->refs--;
-    if (n->refs == 0) {
+    if (node_ref(n, -1) == 0) {
         node_drop(em, n);
     }
 }
@@ -1168,7 +1187,7 @@ static struct ext2_node *node_join(struct ext2_mount *em, struct ext2_node *n, i
         *rc = n->load_error;
         return 0;
     }
-    n->refs++;
+    node_ref(n, 1);
     while (n->state == N_LOADING) {
         wq_wait_event_nointr(&em->node_wq, node_settled, n);
     }
@@ -1224,11 +1243,13 @@ static struct ext2_node *node_for(struct ext2_mount *em, uint32_t ino, int *rc)
     return *rc == 0 ? fresh : 0;
 }
 
-/** The `hold` of `vfs_ops`: one more hold on `node`. */
+/** The `hold` of `vfs_ops`: one more hold on `node`, which takes no lock
+ * and may run without the big lock on a node the caller or the name cache
+ * holds. */
 static void ext2_hold(struct vfs_mount *mnt, void *node)
 {
     (void)mnt;
-    ((struct ext2_node *)node)->refs++;
+    node_ref((struct ext2_node *)node, 1);
 }
 
 static int release_inode(struct ext2_mount *em, struct ext2_node *n);
@@ -1308,9 +1329,9 @@ static void em_reap(struct ext2_mount *em)
 }
 
 /**
- * The `put` of `vfs_ops`: drop a hold on `node`, and free the node with the
- * last, in one step, since a reference changes only between sleeps; it
- * takes no lock but those of an unlinked inode's free.
+ * The `put` of `vfs_ops`, under the big lock: drop a hold on `node`, and
+ * free the node with the last; it takes no lock but those of an unlinked
+ * inode's free.
  *
  * An unlinked inode keeps its blocks until its last holder goes, which is
  * what makes an open unlinked file work, and a put of one by a caller with
@@ -1326,10 +1347,7 @@ static void ext2_put(struct vfs_mount *mnt, void *node)
     if (n->unlinked && !file_locks_held() && em->wb && em->wb->count) {
         (void)writeback_drain(em);
     }
-    if (n->refs > 0) {
-        n->refs--;
-    }
-    if (n->refs == 0) {
+    if (n->refs == 0 || node_ref(n, -1) == 0) {
         if (n->unlinked) {
             node_final(em, n);
         } else {
@@ -1337,6 +1355,30 @@ static void ext2_put(struct vfs_mount *mnt, void *node)
         }
     }
     em_reap(em);
+}
+
+/**
+ * The `put_unless_last` of `vfs_ops`: drop a hold on `node` without the big
+ * lock when another hold stays and the inode is linked, as Linux's dput
+ * drops a count above one without the dentry's lock (`fast_dput`,
+ * fs/dcache.c:758-784). 1 when it did; 0 with nothing changed when the
+ * caller must `put` under the big lock, for the last hold or an unlinked
+ * inode's, whose put drains the batch and may free blocks.
+ */
+static int ext2_put_unless_last(struct vfs_mount *mnt, void *node)
+{
+    struct ext2_node *n = node;
+    volatile unsigned int *p = (volatile unsigned int *)&n->refs;
+    unsigned int old;
+
+    (void)mnt;
+    do {
+        old = *p;
+        if (old < 2 || n->unlinked) {
+            return 0;
+        }
+    } while (arch_atomic_cmpxchg(p, old, old - 1u) != old);
+    return 1;
 }
 
 /* ---- block mapping ---- */
@@ -1691,7 +1733,7 @@ static int ext2_lookup(struct vfs_mount *mnt, void *dir, const char *name, void 
             return rc < 0 ? rc : -ENOENT;
         }
         if (ino == d->ino) {
-            d->refs++;
+            node_ref(d, 1);
             *node = d;
             return 0;
         }
@@ -1776,7 +1818,7 @@ static int ext2_open(struct vfs_mount *mnt, void *node, int flags, void **handle
     if (type == S_IFCHR_ || type == S_IFBLK_) {
         return -EACCES;
     }
-    n->refs++;
+    node_ref(n, 1);
     *handle = node;
     return 0;
 }
@@ -4534,7 +4576,7 @@ static void writeback_commit(struct ext2_mount *em, struct ext2_node *n, uint64_
     if (plan->node_index == wb->count) {
         wb->nodes[plan->node_index] = n;
         wb->count++;
-        n->refs++;
+        node_ref(n, 1);
     }
     n->block[plan->root_slot] = plan->root;
     n->blocks += (uint32_t)plan->allocs * 8;
@@ -5759,7 +5801,7 @@ static int table_write_ready(struct ext2_mount *em, struct ext2_node *n, uint64_
         if (m->shared_over || m->unlisted || (m->mode & S_IFMT_) != S_IFREG_) {
             break;
         }
-        m->refs++;
+        node_ref(m, 1);
         rc = 0;
         if (m->writing) {
             node_writes_wait(em, m);
@@ -8651,6 +8693,7 @@ static const struct vfs_ops ext2_ops = {
     ext2_shutdown,
     ext2_xattr,
     ext2_cachestat,
+    ext2_put_unless_last,
 };
 
 const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops, 0, 0, 1, 1};

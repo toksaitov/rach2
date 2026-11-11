@@ -333,6 +333,12 @@ struct vfs_ops {
      * NULL for a type that keeps no file page in memory. */
     void (*cachestat)(struct vfs_mount *mnt, void *node, uint64_t first, uint64_t last,
                       struct vfs_cachestat *cs);
+    /* Drop a hold on `node` without the big lock when it is not the last
+     * and the put has nothing else to do: 1 when it did, 0 with nothing
+     * changed when the caller must `put` under the big lock. A type that
+     * sets `name_cache` has it, for the cached walk (`resolve_path`); NULL
+     * for any other type. */
+    int (*put_unless_last)(struct vfs_mount *mnt, void *node);
 };
 
 /* What cachestat(2) counts over a file's range of pages, in the order and
@@ -368,9 +374,12 @@ struct vfs_type {
      * claims no sectors, and /proc/filesystems marks it `nodev`. */
     int nodev;
     /* Nonzero for a type whose names the name cache keeps (dcache.h): one
-     * whose `hold` keeps a node at one address, whose names compare byte
-     * for byte, and whose namespace changes only through the wrappers of
-     * vfs.c. */
+     * whose `hold` keeps a node at one address, takes no lock and may run
+     * without the big lock on a node already held, whose names compare
+     * byte for byte, and whose namespace changes only through the wrappers
+     * of vfs.c. Its `getattr` of a held node reads only the node, so the
+     * cached walk may judge a search permission without the big lock, and
+     * it has `put_unless_last`. */
     int name_cache;
     /* Nonzero for a type that locks each file on its own (`lock_node`) in
      * place of the mount's namespace lock: a change locks the nodes it
