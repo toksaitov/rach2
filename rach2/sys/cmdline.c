@@ -197,6 +197,36 @@ int kcmdline_param_bool(const char *key, int dflt)
     return cmdline_bool(key, dflt, 1);
 }
 
+int kcmdline_param_nth(const char *key, int nth, char *out, unsigned int outlen)
+{
+    size_t klen = k_strlen(key);
+    const char *p = kcmdline;
+    const char *tok;
+    size_t len, vlen, i;
+    int seen = 0;
+
+    if (outlen > 0) {
+        out[0] = '\0';
+    }
+    while (next_token(&p, &tok, &len)) {
+        if (len == klen && token_is(tok, key, klen)) {
+            if (seen++ == nth) {
+                return 0;
+            }
+        } else if (token_has_key(tok, len, key, klen) && seen++ == nth) {
+            vlen = len - klen - 1;
+            if (vlen + 1 <= (size_t)outlen) {
+                for (i = 0; i < vlen; i++) {
+                    out[i] = tok[klen + 1 + i];
+                }
+                out[vlen] = '\0';
+            }
+            return 1;
+        }
+    }
+    return -1;
+}
+
 int kcmdline_count(const char *key)
 {
     size_t klen = k_strlen(key);

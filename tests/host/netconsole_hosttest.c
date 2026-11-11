@@ -54,9 +54,13 @@ static int klog_feeds;
 
 static unsigned klog_refusals; /* records whose format begins "refused:" */
 
-/** Count a record of a refusal, then discard it, or with `klog_feeds` give
- * its subsystem and a newline to netconsole; no row reads the rest of
- * netconsole's own report. */
+/* The refusals in the order logged, `v` for a value and `b` for a bare key,
+ * as many as fit. */
+static char klog_refused[8];
+
+/** Count a record of a refusal and note its kind, then discard it, or with
+ * `klog_feeds` give its subsystem and a newline to netconsole; no row reads
+ * the rest of netconsole's own report. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     const char *want = "refused:";
@@ -68,6 +72,10 @@ void klog(int level, const char *subsystem, const char *format, ...)
         want++;
     }
     if (*want == '\0') {
+        if (klog_refusals + 1 < sizeof(klog_refused)) {
+            klog_refused[klog_refusals] = f[2] == '\0' ? 'b' : 'v';
+            klog_refused[klog_refusals + 1] = '\0';
+        }
         klog_refusals++;
     }
     if (klog_feeds) {
@@ -169,11 +177,13 @@ int k_panicking(void)
     return host_panicking;
 }
 
-/* The values of `netpoll.carrier_timeout=` the boot line gives, in order;
-   none unless a row sets them. */
+/* The `netpoll.carrier_timeout` tokens of the model's boot line, in order:
+   each one's value, or `HOST_BARE` for the key with none; none unless a row
+   sets them. */
 static const char *host_carrier[4];
 static int host_ncarrier;
-static int host_carrier_bare; /* bare `netpoll.carrier_timeout` tokens */
+
+static const char HOST_BARE[] = "(bare)";
 
 /** Whether `key` is the one option the model's boot line has. */
 static int host_carrier_key(const char *key)
@@ -187,21 +197,10 @@ static int host_carrier_key(const char *key)
     return *key == '\0' && *want == '\0';
 }
 
-/** Count the `key=` tokens of the model's boot line. */
-int kcmdline_count(const char *key)
-{
-    return host_carrier_key(key) ? host_ncarrier : 0;
-}
-
-/** Count the tokens of the model's boot line that are `flag` whole. */
-int kcmdline_bare_count(const char *flag)
-{
-    return host_carrier_key(flag) ? host_carrier_bare : 0;
-}
-
-/** Copy the `nth` value of `key=` into `out`, 0 when there is none or it
- * does not fit, as the kernel's lookup does. */
-int kcmdline_value_nth(const char *key, int nth, char *out, unsigned int outlen)
+/** Give the `nth` token of the model's boot line that is `key`, bare or with
+ * a value, as the kernel's lookup does: 1 with the value in `out`, empty
+ * when it does not fit; 0 for a bare key; -1 for none. */
+int kcmdline_param_nth(const char *key, int nth, char *out, unsigned int outlen)
 {
     unsigned int i;
 
@@ -209,12 +208,15 @@ int kcmdline_value_nth(const char *key, int nth, char *out, unsigned int outlen)
         out[0] = '\0';
     }
     if (!host_carrier_key(key) || nth < 0 || nth >= host_ncarrier) {
+        return -1;
+    }
+    if (host_carrier[nth] == HOST_BARE) {
         return 0;
     }
     for (i = 0; host_carrier[nth][i] != '\0'; i++) {
         if (i + 1 >= outlen) {
             out[0] = '\0';
-            return 0;
+            return 1;
         }
         out[i] = host_carrier[nth][i];
     }
@@ -415,8 +417,8 @@ static void nc_reset(void)
     nc_attached = 0;
     klog_feeds = 0;
     klog_refusals = 0;
+    klog_refused[0] = '\0';
     host_ncarrier = 0;
-    host_carrier_bare = 0;
     pool_used = 0;
     the_iface.ip = 0;
     host_ticks = 0;
@@ -811,41 +813,52 @@ static void setup_gap_row(void)
 
 /**
  * Check that `netpoll.carrier_timeout=` is read as Linux reads a uint module
- * parameter: kstrtouint with base 0, at any length, each occurrence in order,
- * a value it refuses changing nothing and logged, as parse_args logs it, and
- * so each bare key.
+ * parameter at boot: kstrtouint with base 0, at any length, each occurrence
+ * in order, a value it refuses changing nothing and logged where it is met,
+ * as parse_args logs it, and so each bare key; and that netconsole's start
+ * reads nothing more.
  */
 static void carrier_option_rows(void)
 {
     static const struct {
-        const char *values[2];
+        const char *tokens[3];
         int n;
-        int bare;
         unsigned seconds;
-        unsigned refusals;
+        const char *refused;
         const char *what;
     } rows[] = {
-        {{"010", 0}, 1, 0, 8, 0, "a leading 0 is octal"},
-        {{"0x10", "bad"}, 2, 0, 16, 1, "0x is hexadecimal, and a later bad value changes nothing"},
-        {{"x", "+3"}, 2, 0, 3, 1, "a bad first value does not hide a valid later one"},
-        {{"7", "4294967296"}, 2, 0, 7, 1, "a value past 32 bits is refused"},
-        {{"5", "2"}, 2, 0, 2, 0, "the last valid value counts"},
-        {{"-1", 0}, 1, 0, 4, 1, "a negative value leaves Linux's default"},
-        {{"0000000000000000000000000012", 0}, 1, 0, 10, 0, "a value of 28 digits is read"},
-        {{"6", 0}, 1, 2, 6, 2, "each bare key is refused and leaves the value"},
-        {{"", 0}, 1, 0, 4, 1, "an empty value is refused"},
+        {{"010", 0, 0}, 1, 8, "", "a leading 0 is octal"},
+        {{"0x10", "bad", 0},
+         2,
+         16,
+         "v",
+         "0x is hexadecimal, and a later bad value changes nothing"},
+        {{"x", "+3", 0}, 2, 3, "v", "a bad first value does not hide a valid later one"},
+        {{"7", "4294967296", 0}, 2, 7, "v", "a value past 32 bits is refused"},
+        {{"5", "2", 0}, 2, 2, "", "the last valid value counts"},
+        {{"-1", 0, 0}, 1, 4, "v", "a negative value leaves Linux's default"},
+        {{"0000000000000000000000000012", 0, 0}, 1, 10, "", "a value of 28 digits is read"},
+        {{HOST_BARE, "6", HOST_BARE}, 3, 6, "bb", "each bare key is refused and leaves the value"},
+        {{"", 0, 0}, 1, 4, "v", "an empty value is refused"},
+        {{"x", HOST_BARE, "y"}, 3, 4, "vbv", "the refusals are logged in the line's order"},
     };
-    unsigned i;
+    unsigned i, k;
 
     for (i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
         nc_reset();
-        host_carrier[0] = rows[i].values[0];
-        host_carrier[1] = rows[i].values[1];
+        for (k = 0; k < 3; k++) {
+            host_carrier[k] = rows[i].tokens[k];
+        }
         host_ncarrier = rows[i].n;
-        host_carrier_bare = rows[i].bare;
-        netconsole_enable();
+        netconsole_read_params();
         CHECK(nc_carrier_ticks == (uint64_t)rows[i].seconds * TICK_HZ, rows[i].what);
-        CHECK(klog_refusals == rows[i].refusals, rows[i].what);
+        for (k = 0; rows[i].refused[k] != '\0' && klog_refused[k] == rows[i].refused[k]; k++) {
+            /* count the kinds logged that match the row's */
+        }
+        CHECK(klog_refusals == k && klog_refused[k] == rows[i].refused[k], rows[i].what);
+        netconsole_enable();
+        CHECK(klog_refusals == k && nc_carrier_ticks == (uint64_t)rows[i].seconds * TICK_HZ,
+              "netconsole's start reads the option no more");
     }
     nc_reset();
 }
