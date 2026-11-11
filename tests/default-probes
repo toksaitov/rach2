@@ -41,6 +41,7 @@ permprobe
 fsidprobe
 oldfsprobe
 openat2probe
+protectprobe
 sockettest
 # The YMM registers across switches, signals, an exec and ptrace, with XSAVE's
 # frame and register set; without AVX its rows say they did not run.
