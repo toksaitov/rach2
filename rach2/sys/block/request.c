@@ -43,6 +43,7 @@
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
 #include "../mm/paging.h"
+#include "../mm/pressure.h"
 #include "../panic.h"
 #include "../timer.h"
 #include "../proc/process.h"
@@ -82,6 +83,22 @@ static uint32_t release_total;
 static uint32_t release_tick;
 static uint32_t pool_size;  /* the limit: REQ_LIMIT, or rach2.blockpool=N */
 static uint32_t device_cap; /* the most requests one device may hold */
+
+/* Buffers of REQ_KEEP_PAGES heap pages that freed requests left, kept
+ * mapped for the next request of more than a page and at most that many,
+ * up to REQ_KEEP of them, in `kept_bufs[0..keep_count)`. A buffer mapped
+ * for each request and unmapped after it, which flushes every processor's
+ * TLB, costs more than the transfer itself under a hypervisor; Linux reads
+ * into the page cache's own pages and maps none, and its mempools keep
+ * freed elements in the same way (mm/mempool.c:560-561). Reclaim takes the
+ * kept buffers back (`req_keep_shrink`). The list is under the big lock
+ * and interrupts off, as the list of live requests is. */
+#define REQ_KEEP_PAGES 32u
+#define REQ_KEEP       4u
+static void *kept_bufs[REQ_KEEP];
+static uint32_t keep_count;
+static uint32_t req_keep_shrink(struct mem_shrinker *s, uint32_t want, int may_sleep);
+static struct mem_shrinker keep_shrinker = {req_keep_shrink, NULL};
 
 /** The deadlines' clock as it stands now: `req_ticks` and the ticks
  * `kernel_ticks` has counted since the tick's last call, which a boot
@@ -165,6 +182,7 @@ void block_request_init(void)
     if (cap == 0) {
         cap = 1;
     }
+    mem_shrinker_register(&keep_shrinker);
     device_cap = cap;
     pool_size = n;
 }
@@ -182,7 +200,40 @@ static int req_is_live(const struct block_request *r)
     return 0;
 }
 
-/** Interrupts off. Take `r` off the list and give its page and record back. */
+/** Interrupts off. A kept buffer, or NULL when none is kept. */
+static void *keep_take(void)
+{
+    return keep_count ? kept_bufs[--keep_count] : NULL;
+}
+
+/**
+ * Reclaim's call of the request pool (`struct mem_shrinker`): every kept
+ * buffer given back, whatever `want` is, since they are few; the frames
+ * that came back. It does not sleep.
+ */
+static uint32_t req_keep_shrink(struct mem_shrinker *s, uint32_t want, int may_sleep)
+{
+    uint32_t pages = 0;
+
+    (void)s;
+    (void)want;
+    (void)may_sleep;
+    for (;;) {
+        uint32_t flags = irq_save();
+        void *buf = keep_take();
+
+        irq_restore(flags);
+        if (!buf) {
+            return pages;
+        }
+        kfree_pages(buf, REQ_KEEP_PAGES);
+        pages += REQ_KEEP_PAGES;
+    }
+}
+
+/** Interrupts off. Take `r` off the list and give its page and record back:
+ * a buffer of REQ_KEEP_PAGES to the kept ones while they are fewer than
+ * REQ_KEEP. */
 static void req_drop(struct block_request *r)
 {
     struct block_request **link;
@@ -191,7 +242,9 @@ static void req_drop(struct block_request *r)
     }
     *link = r->next;
     live--;
-    if (r->pages > 1) {
+    if (r->pages == REQ_KEEP_PAGES && keep_count < REQ_KEEP) {
+        kept_bufs[keep_count++] = r->page;
+    } else if (r->pages > 1) {
         kfree_pages(r->page, r->pages);
     } else {
         free_kernel_frame(r->page);
@@ -275,6 +328,8 @@ static int nothing_pending(void)
  * below `HARD_MEMORY_LIMIT`, whose address every device can reach; a larger
  * one takes heap pages, which the devices that describe a buffer page by page
  * take: AHCI and NVMe, up to 2048 sectors, and USB mass storage, up to 1024.
+ * One of REQ_KEEP_PAGES or fewer takes a kept buffer of REQ_KEEP_PAGES, or a
+ * new one of that size, and only when the heap has none its own length.
  *
  * The caller sets the generation, which rises with every request and is what
  * a late completion is matched against. It is 32 bits and wraps; a wrong
@@ -291,6 +346,16 @@ static struct block_request *req_new(uint32_t count)
     if (pages <= 1) {
         r->page = (uint8_t *)alloc_kernel_frame();
         pages = 1;
+    } else if (pages <= REQ_KEEP_PAGES) {
+        r->page = keep_take();
+        if (!r->page) {
+            r->page = kalloc_pages_try(REQ_KEEP_PAGES, 0);
+        }
+        if (r->page) {
+            pages = REQ_KEEP_PAGES;
+        } else {
+            r->page = kalloc_pages_try(pages, 0);
+        }
     } else {
         r->page = kalloc_pages_try(pages, 0); /* the caller halves and asks again */
     }

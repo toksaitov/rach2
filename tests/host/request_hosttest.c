@@ -179,6 +179,12 @@ void kfree_pages(void *p, uint32_t count)
     abort();
 }
 
+/** Reclaim never runs in these rows. */
+void mem_shrinker_register(struct mem_shrinker *s)
+{
+    (void)s;
+}
+
 /** The model clock, advanced only by explicit request ticks. */
 uint32_t timer_now_us(void)
 {
