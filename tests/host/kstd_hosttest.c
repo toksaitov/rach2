@@ -16,7 +16,9 @@
  * plus sign, one newline, leading zeros past 31 bytes, the end of the text
  * at a NUL, junk, a number past 64 bits before junk and one past 32 bits
  * with and without it, which i686's unsigned long cannot hold, with `*out`
- * left alone on an error. Exits with the count of failed checks, at most 120.
+ * left alone on an error. k_strtoll is checked against Linux's kstrtos64:
+ * both ends of 64 signed bits and one past each, a minus with a plus after
+ * it, and junk. Exits with the count of failed checks, at most 120.
  */
 
 #include "kerrno.h"
@@ -40,6 +42,16 @@ static int reads(const char *s, int want, unsigned long value)
     int rc = k_strtoul(s, k_strlen(s), &out);
 
     return rc == want && out == (want == 0 ? value : 12345ul);
+}
+
+/** Whether k_strtoll reads the text `s` as `want`, an error code or 0,
+ * with the value `value` on success and `*out` untouched on an error. */
+static int reads_signed(const char *s, int want, long long value)
+{
+    long long out = 12345;
+    int rc = k_strtoll(s, k_strlen(s), &out);
+
+    return rc == want && out == (want == 0 ? value : 12345ll);
 }
 
 /** Whether the strings `a` and `b` are equal. */
@@ -133,6 +145,18 @@ int main(void)
      * as on i686. */
     CHECK(sizeof(unsigned long) == 4 ? reads("4294967296", -ERANGE, 0)
                                      : reads("4294967296", 0, (unsigned long)4294967296ull));
+    /* k_strtoll, as Linux's kstrtos64 with base 0. */
+    CHECK(reads_signed("1700000000\n", 0, 1700000000ll));
+    CHECK(reads_signed("+0x3c", 0, 60));
+    CHECK(reads_signed("-010", 0, -8));
+    CHECK(reads_signed("9223372036854775807", 0, 0x7fffffffffffffffll));
+    CHECK(reads_signed("-9223372036854775808", 0, -0x7fffffffffffffffll - 1));
+    CHECK(reads_signed("9223372036854775808", -ERANGE, 0));
+    CHECK(reads_signed("-9223372036854775809", -ERANGE, 0));
+    CHECK(reads_signed("-+1", -EINVAL, 0));
+    CHECK(reads_signed("-", -EINVAL, 0));
+    CHECK(reads_signed("1700000000abc", -EINVAL, 0));
+    CHECK(reads_signed("=5", -EINVAL, 0));
     {
         unsigned long out = 0;
 

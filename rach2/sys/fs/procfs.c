@@ -97,6 +97,7 @@
 #include "../io/anon.h"
 #include "../io/inotify.h"
 #include "../lib/krandom.h"
+#include "../lib/kstd.h"
 #include "../mm/vm.h"
 #include "../ipc/unix.h"
 #include "../acpicall.h"
@@ -8567,23 +8568,63 @@ static int sysattr_is(const char *s, uint32_t len, const char *word)
     return i == len && word[i] == '\0';
 }
 
-/** The decimal number at the start of the `len` bytes at `s`, with a
- * leading `+` noted in `*relative`; -1 when no digit begins them. Reading
- * stops at the first other byte, or once the value reaches 2^31 - 1. */
-static int64_t sysattr_number(const char *s, uint32_t len, int *relative)
+/**
+ * Take a write of the `count` bytes at `text`, NUL-terminated, to rtc0's
+ * wakealarm, as Linux's wakealarm_store (drivers/rtc/sysfs.c:152-213):
+ * the clock read first; then seconds since 1970, `+N` for N seconds from
+ * now, or `+=N` to move a set alarm N seconds later, the number read as
+ * kstrtos64 with base 0 reads it (`k_strtoll`). A time after now, or any
+ * push, sets the alarm: -EBUSY while one is set but for a push, and
+ * -EINVAL for a push with none set; any other time clears it. The count,
+ * -EIO when the clock cannot be read, the parse's error, or the error of
+ * `devfs_rtc_set_wakealarm`.
+ */
+static int32_t wakealarm_store(const char *text, uint32_t count)
 {
-    int64_t v = 0;
-    uint32_t i = 0;
+    const char *p = text;
+    rtc_time_t now_tm;
+    long long alarm;
+    int64_t now, set;
+    int adjust = 0, push = 0;
+    int32_t rc;
 
-    *relative = len > 0 && s[0] == '+';
-    i = (uint32_t)*relative;
-    if (i == len || s[i] < '0' || s[i] > '9') {
-        return -1;
+    if (rtc_read_clock(&now_tm) != 0) {
+        return -EIO;
     }
-    for (; i < len && s[i] >= '0' && s[i] <= '9' && v < 0x7FFFFFFF; i++) {
-        v = v * 10 + (s[i] - '0');
+    now = rtc_seconds_of(&now_tm);
+    if (*p == '+') {
+        p++;
+        if (*p == '=') {
+            p++;
+            push = 1;
+        } else {
+            adjust = 1;
+        }
     }
-    return v;
+    rc = k_strtoll(p, count - (uint32_t)(p - text), &alarm);
+    if (rc != 0) {
+        return rc;
+    }
+    /* The sums wrap, as Linux's time64_t arithmetic does. */
+    if (adjust) {
+        alarm = (long long)((uint64_t)alarm + (uint64_t)now);
+    }
+    if (alarm > now || push) {
+        set = devfs_rtc_wakealarm();
+        if (set >= 0 && !push) {
+            return -EBUSY;
+        }
+        if (set < 0 && push) {
+            return -EINVAL;
+        }
+        if (push) {
+            alarm = (long long)((uint64_t)alarm + (uint64_t)set);
+        }
+        rc = devfs_rtc_set_wakealarm(alarm);
+    } else {
+        rc = devfs_rtc_set_wakealarm(-1);
+    }
+    return rc != 0 ? rc : (int32_t)count;
 }
 
 /**
@@ -8639,13 +8680,9 @@ static int32_t procfs_uevent_write(int node, int key, int attr, const char *text
  * and bl_power take what `backlight_store` takes, and a radio switch's
  * soft and state what `rfkill_store` takes, with their errors, given the
  * text whole, as Linux gives the buffer to kstrtoul, which takes one
- * newline. The rest have their final newlines and spaces cut first.
- * rtc0's wakealarm takes
- * seconds since 1970, or `+N` for N seconds from now, and 0 to clear it; a
- * new time while an alarm is set is -EBUSY, as on Linux, which wants the
- * alarm cleared first, and a time `devfs_rtc_set_wakealarm` does not set
- * has its error; text that is no number is -EINVAL, and a clock that
- * cannot be read or cleared -EIO. /sys/power/state takes `freeze` or
+ * newline; rtc0's wakealarm goes whole to `wakealarm_store`.
+ * /sys/power/state has its final newlines and spaces cut, then takes
+ * `freeze` or
  * `mem`, both suspend to idle, which the write waits in until a wake
  * event, or has the error of `suspend_to_idle`; another state is -EINVAL.
  * The count taken, or -errno.
@@ -8654,9 +8691,6 @@ static int32_t procfs_sysattr_store(const struct procfs_file *f, char *text, uin
 {
     int node = f->origin_task >> 8, attr = f->origin_task & 255;
     uint32_t n = count;
-    rtc_time_t now;
-    int64_t v;
-    int relative;
     int32_t rc;
 
     if (node == SYSFS_REG) {
@@ -8676,33 +8710,16 @@ static int32_t procfs_sysattr_store(const struct procfs_file *f, char *text, uin
         rc = rfkill_store(f->origin_pid, attr, text, (int)count);
         return rc != 0 ? rc : (int32_t)count;
     }
+    if (node != SYSFS_POWER) {
+        return wakealarm_store(text, count);
+    }
     while (n > 0 && (text[n - 1] == '\n' || text[n - 1] == ' ')) {
         text[--n] = '\0';
     }
-    if (node == SYSFS_POWER) {
-        if (!sysattr_is(text, n, "freeze") && !sysattr_is(text, n, "mem")) {
-            return -EINVAL;
-        }
-        rc = suspend_to_idle();
-        return rc != 0 ? rc : (int32_t)count;
-    }
-    v = sysattr_number(text, n, &relative);
-    if (v < 0) {
+    if (!sysattr_is(text, n, "freeze") && !sysattr_is(text, n, "mem")) {
         return -EINVAL;
     }
-    if (v == 0) {
-        return devfs_rtc_set_wakealarm(-1) == 0 ? (int32_t)count : -EIO;
-    }
-    if (devfs_rtc_wakealarm() >= 0) {
-        return -EBUSY;
-    }
-    if (relative) {
-        if (rtc_read_clock(&now) != 0) {
-            return -EIO;
-        }
-        v += rtc_seconds_of(&now);
-    }
-    rc = devfs_rtc_set_wakealarm(v);
+    rc = suspend_to_idle();
     return rc != 0 ? rc : (int32_t)count;
 }
 

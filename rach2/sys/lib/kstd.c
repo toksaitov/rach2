@@ -126,16 +126,14 @@ static unsigned int digit_value(char c)
 #define KSTD_U64_MAX (~(uint64_t)0)
 
 /**
- * The base is chosen as Linux's _parse_integer_fixup_radix chooses it: a
- * leading 0 means octal, and hexadecimal only when a hex digit follows the
- * `x`, so that "0x" alone is a 0 followed by junk. The number is read in
- * 64 bits and its end checked before it is held to an unsigned long, as
- * Linux's kstrtoul calls _kstrtoull first (lib/kstrtox.c:181-190): on
- * i686 "4294967296x" is then -EINVAL for its junk, and a 64-bit overflow
- * is -ERANGE whatever follows it. The limits are constants, so that i686
- * needs no 64-bit division.
+ * Read the unsigned 64-bit number at the `len` bytes of `s`, which end
+ * sooner at a NUL, as Linux's _kstrtoull with base 0 (lib/kstrtox.c:
+ * 93-110): hexadecimal after a 0x whose next byte is a hex digit, octal
+ * after another leading 0, else decimal, then at most one newline. An
+ * overflow is -ERANGE whatever follows it; junk, or no digit, -EINVAL.
+ * The limits are constants, so that i686 needs no 64-bit division.
  */
-int k_strtoul(const char *s, size_t len, unsigned long *out)
+static int parse_u64(const char *s, size_t len, uint64_t *out)
 {
     uint64_t v = 0, lim;
     unsigned int base = 10, d, last;
@@ -144,9 +142,6 @@ int k_strtoul(const char *s, size_t len, unsigned long *out)
     for (start = 0; start < len && s[start] != '\0'; start++) {
     }
     len = start;
-    if (i < len && s[i] == '+') {
-        i++;
-    }
     if (i < len && s[i] == '0') {
         base = 8;
         if (i + 2 < len && (s[i + 1] == 'x' || s[i + 1] == 'X') && digit_value(s[i + 2]) < 16) {
@@ -171,9 +166,69 @@ int k_strtoul(const char *s, size_t len, unsigned long *out)
     if (i < len) {
         return -EINVAL;
     }
+    *out = v;
+    return 0;
+}
+
+/** parse_u64 after an optional `+`, as Linux's kstrtoull. */
+static int parse_plus_u64(const char *s, size_t len, uint64_t *out)
+{
+    if (len > 0 && s[0] == '+') {
+        s++;
+        len--;
+    }
+    return parse_u64(s, len, out);
+}
+
+/**
+ * The number is read in 64 bits and its end checked before it is held to
+ * an unsigned long, as Linux's kstrtoul calls kstrtoull first
+ * (lib/kstrtox.c:181-190): on i686 "4294967296x" is then -EINVAL for its
+ * junk, and a 64-bit overflow is -ERANGE whatever follows it.
+ */
+int k_strtoul(const char *s, size_t len, unsigned long *out)
+{
+    uint64_t v;
+    int rc = parse_plus_u64(s, len, &v);
+
+    if (rc != 0) {
+        return rc;
+    }
     if (v > (uint64_t)~0ul) {
         return -ERANGE;
     }
     *out = (unsigned long)v;
+    return 0;
+}
+
+/**
+ * As Linux's kstrtoll (lib/kstrtox.c:156-177): a `-` takes the magnitude
+ * with no `+` after it, up to 2^63; otherwise the value up to 2^63 - 1.
+ */
+int k_strtoll(const char *s, size_t len, long long *out)
+{
+    uint64_t v, half = (uint64_t)1 << 63;
+    int rc;
+
+    if (len > 0 && s[0] == '-') {
+        rc = parse_u64(s + 1, len - 1, &v);
+        if (rc != 0) {
+            return rc;
+        }
+        if (v > half) {
+            return -ERANGE;
+        }
+        /* -2^63 too: the conversion of 2^63 wraps, as the compilers do. */
+        *out = (long long)(0 - v);
+        return 0;
+    }
+    rc = parse_plus_u64(s, len, &v);
+    if (rc != 0) {
+        return rc;
+    }
+    if (v >= half) {
+        return -ERANGE;
+    }
+    *out = (long long)v;
     return 0;
 }
