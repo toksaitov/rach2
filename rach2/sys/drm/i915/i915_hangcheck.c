@@ -57,9 +57,16 @@ uint32_t i915_hangcheck(struct drm_i915_private *i915)
     struct i915_request *rq;
     uint32_t hung = 0, hws, acthd;
     uint64_t now = rtc_ticks_now();
-    int i;
+    int i, taken;
 
     if (!gt->awake || gt->wedged || i915->params.hangcheck_off || now < gt->hc_next) {
+        return 0;
+    }
+    /* One beat at a time, under the GEM lock that its reset needs, since
+     * the worker and every waiter call it; the test again under it. */
+    taken = i915_gem_lock(i915);
+    if (!gt->awake || gt->wedged || now < gt->hc_next) {
+        i915_gem_unlock(i915, taken);
         return 0;
     }
     gt->hc_next = now + MS_TO_TICKS(I915_HEARTBEAT_INTERVAL_MS);
@@ -96,5 +103,6 @@ uint32_t i915_hangcheck(struct drm_i915_private *i915)
             i915_handle_error(i915, 1u << i, heartbeat_msg[i]);
         }
     }
+    i915_gem_unlock(i915, taken);
     return hung;
 }

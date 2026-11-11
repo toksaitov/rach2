@@ -179,6 +179,7 @@ void i915_pci_unmap(struct i915_hw *hw)
 static void i915_unplug(struct drm_device *dev)
 {
     struct drm_i915_private *i915 = to_i915(dev);
+    int taken = i915_gem_lock(i915);
 
     i915_handoff_unbound(i915);
     i915_requests_unplug(i915);
@@ -192,6 +193,7 @@ static void i915_unplug(struct drm_device *dev)
     i915_devices_remove(i915);
     i915_gt_fini(i915);
     i915_gem_unplug(i915);
+    i915_gem_unlock(i915, taken);
 }
 
 /** The DRM core's release hook: take the shrinker off, free the display's
@@ -378,12 +380,14 @@ static void bind_unwind(struct drm_i915_private *i915, uint16_t command)
     kfree(i915);
 }
 
-/** Make the spinlocks of a new device record, each of one class for every
- * device (lib/spinlock.h). */
+/** Make the locks of a new device record, each of one class for every
+ * device (lib/spinlock.h, proc/mutex.h). */
 static void i915_locks_init(struct drm_i915_private *i915)
 {
     unsigned e;
 
+    mutex_init(&i915->gem.lock, "i915_gem");
+    spin_lock_init(&i915->gem.userptr_lock, "i915_userptr");
     spin_lock_init(&i915->uncore.lock, "i915_uncore");
     spin_lock_init(&i915->irq.lock, "i915_irq");
     spin_lock_init(&i915->rps.lock, "i915_rps");

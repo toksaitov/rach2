@@ -320,7 +320,10 @@ uint32_t intel_fb_ggtt_remapped(const struct drm_framebuffer *fb,
 static int32_t fb_pin(const struct drm_plane_state *ps, struct i915_vma **vma)
 {
     struct drm_framebuffer *fb = ps->fb;
+    struct drm_i915_private *i915;
     struct i915_remap_info remap;
+    int32_t rc;
+    int taken;
 
     *vma = NULL;
     if (fb_is_firmware(fb)) {
@@ -329,16 +332,26 @@ static int32_t fb_pin(const struct drm_plane_state *ps, struct i915_vma **vma)
     if (fb->obj[0]->funcs != &i915_gem_object_funcs) {
         return -EINVAL;
     }
-    return i915_gem_object_pin_to_display((struct drm_i915_gem_object *)fb->obj[0],
-                                          intel_plane_remap(ps, &remap) ? &remap : NULL,
-                                          INTEL_SCANOUT_ALIGN, vma);
+    i915 = to_i915(fb->obj[0]->dev);
+    taken = i915_gem_lock(i915);
+    rc = i915_gem_object_pin_to_display((struct drm_i915_gem_object *)fb->obj[0],
+                                        intel_plane_remap(ps, &remap) ? &remap : NULL,
+                                        INTEL_SCANOUT_ALIGN, vma);
+    i915_gem_unlock(i915, taken);
+    return rc;
 }
 
 /** Let a scanout go: its pin and its hold on the framebuffer. */
 static void scanout_put(struct intel_scanout *s)
 {
+    struct drm_i915_private *i915;
+    int taken;
+
     if (s->vma) {
+        i915 = to_i915(s->vma->obj->base.dev);
+        taken = i915_gem_lock(i915);
         i915_vma_unpin(s->vma);
+        i915_gem_unlock(i915, taken);
     }
     drm_framebuffer_put(s->fb);
     s->fb = NULL;
