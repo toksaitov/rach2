@@ -201,9 +201,16 @@ int32_t devfs_node_register(struct devfs_node *node)
     return 0;
 }
 /** No command line here: the rows set the options' fields. */
-int kcmdline_value(const char *key, char *out, unsigned int outlen)
+int kcmdline_count(const char *key)
 {
     (void)key;
+    return 0;
+}
+/** No command line here. */
+int kcmdline_value_nth(const char *key, int nth, char *out, unsigned int outlen)
+{
+    (void)key;
+    (void)nth;
     (void)out;
     (void)outlen;
     return 0;
@@ -215,7 +222,7 @@ int kcmdline_has(const char *flag)
     return 0;
 }
 /** No command line here. */
-int kcmdline_bool(const char *key, int dflt)
+int kcmdline_param_bool(const char *key, int dflt)
 {
     (void)key;
     return dflt;
