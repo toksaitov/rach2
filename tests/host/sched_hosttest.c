@@ -670,13 +670,17 @@ static void migration(void)
 /**
  * A thread made ready while the scheduler is on is credited, when it is
  * selected, with its whole wait on the run queue in nanoseconds, as Linux's
- * sched_info: a wait of 2^32 + 10^6 microseconds, past any 32-bit count of
- * microseconds, counts whole, and a wait begun before the scheduler is on
- * counts nothing.
+ * sched_info, and each switch onto a processor counts in pcount: a wait of
+ * 2^32 + 10^6 microseconds, past any 32-bit count of microseconds, counts
+ * whole; a wait begun before the scheduler is on counts nothing; a move to
+ * another processor's queue keeps the wait, which counts whole when an idle
+ * processor steals the thread; and a suspend's hold adds the wait so far,
+ * counts none while it lasts, and starts each queued thread's wait again.
  */
 static void run_delay(void)
 {
     const uint64_t wait = ((uint64_t)1 << 32) * 1000u + 1000000000u;
+    unsigned int i;
 
     clock_ns = (uint64_t)7 * 1000000000u + 123u;
     setup();
@@ -687,8 +691,42 @@ static void run_delay(void)
           "a wait past 2^32 microseconds counts whole in run_delay");
     clock_ns += 5000u;
     schedule();
-    CHECK(current_proc == &procs[1] && procs[1].run_delay == 0,
+    CHECK(current_proc == &procs[1] && procs[1].run_delay == 0 && procs[1].pcount == 1,
           "a wait begun before the scheduler was on counts nothing");
+
+    setup();
+    cpu_table[1].online = 1;
+    cpu_table[1].current = cpu_table[1].idle = NULL;
+    wake(&procs[4]);
+    clock_ns += 1000u;
+    for (i = 1; i < 7; i++) {
+        sched_set_affinity(&procs[i], 2);
+    }
+    clock_ns += 2000u;
+    sched_set_affinity(&procs[4], 3);
+    current_proc->state = PROC_BLOCKED;
+    schedule();
+    CHECK(current_proc == &procs[4] && procs[4].run_delay == 3000u && procs[4].pcount == 1,
+          "a wait moved to another queue counts whole when an idle processor steals it");
+    cpu_table[1].online = 0;
+    init_sched();
+
+    setup();
+    wake(&procs[6]);
+    clock_ns += 1000u;
+    sched_hold_waits(1);
+    CHECK(procs[6].run_delay == 1000u && !procs[6].run_queued,
+          "a suspend's hold adds the wait so far and ends it");
+    clock_ns += 1000000000u;
+    sched_hold_waits(0);
+    clock_ns += 500u;
+    schedule();
+    CHECK(current_proc == &procs[6] && procs[6].run_delay == 1500u,
+          "the suspend counts nothing and the wait starts again at its end");
+    clock_ns += 700u;
+    schedule();
+    CHECK(current_proc == &procs[1] && procs[1].run_delay == 1200u,
+          "every queued thread's wait starts at the suspend's end");
     clock_ns = 0;
 }
 

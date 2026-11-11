@@ -113,6 +113,12 @@ void sched_service_point(void);
 /** Remove `p` from its ready list before it is freed; the big lock is held. */
 void sched_forget(process_t *p);
 
+/** With `hold` set, add each queued thread's wait so far to its `run_delay`
+ * and count no wait until called with `hold` clear, which starts each
+ * queued thread's wait again: a suspend to idle's bounds, as Linux's frozen
+ * tasks leave their run queues and their sched_info stops. */
+void sched_hold_waits(int hold);
+
 /** Read selection attempts (index 0) or ready entries examined (1), modulo
  * 2^32. Other indices return zero. The caller holds the big lock. */
 uint32_t sched_work_count(unsigned int index);
