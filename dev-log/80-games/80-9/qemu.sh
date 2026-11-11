@@ -5,7 +5,8 @@
 # under KVM with the root image as the Lenovo's trial boot names it, on virgl
 # with HDA, mount GAME, crysis-game.ext2, at /data/crysis/game through a
 # throwaway overlay, and run the Lenovo step's commands of crysis.py over
-# SSH, then power the guest off. OUT receives the serial log, the boot's
+# SSH, then power the guest off; STEPS, steps separated by `|`, runs those
+# instead of the whole procedure. OUT receives the serial log, the boot's
 # mounts and each command's output and files. The rates are not judged
 # (CRYSIS_GATE=0): virgl on the testing PC is not the Lenovo's GPU.
 set -eu
@@ -78,10 +79,17 @@ P='CRYSIS_GATE=0 python3 /data/trial2665/probes/crysis.py'
 status=0
 # Each step as the Lenovo's procedure runs it; a failed step does not stop
 # the rest, and its status is kept.
-for step in "prepare /data/trial2665/out" "flyby direct direct" "flyby umu umu 1" \
-            "flyby 32 bits32 1" "save s1" "load l-old default_accept_s1.CRYSISJMSF umu" \
-            "load l-new default_accept_s1.CRYSISJMSF direct /data/crysis/compat-new" \
-            "hud h1 default_accept_s1.CRYSISJMSF umu" "restore"; do
+all='prepare /data/trial2665/out|flyby direct direct|flyby umu umu 1|flyby 32 bits32 1|save s1'
+all="$all|load l-old default_accept_s1.CRYSISJMSF umu"
+all="$all|load l-new default_accept_s1.CRYSISJMSF direct /data/crysis/compat-new"
+all="$all|hud h1 default_accept_s1.CRYSISJMSF umu|restore"
+IFS='|'
+set -f
+# shellcheck disable=SC2086 # the steps are split at `|` alone
+set -- ${STEPS:-$all}
+set +f
+unset IFS
+for step in "$@"; do
     name=$(echo "$step" | tr ' /' '__')
     echo "qemu: step: $step at $(date +%T)"
     s=0
