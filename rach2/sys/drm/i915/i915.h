@@ -387,9 +387,9 @@ struct i915_ppgtt {
  * parked until the GT parks again, once no engine has a request or one
  * Linux would not yet have retired; `retire_next` is the tick of the next
  * pass of the retire worker while it is awake, as Linux's retire_work
- * runs once a second (i915_request.c). `wedged` is set when the GPU
- * cannot run work, and new requests and contexts fail with -EIO, as
- * Linux's wedged GT;
+ * runs on the first whole second after a second on (i915_request.c).
+ * `wedged` is set when the GPU cannot run work, and new requests and
+ * contexts fail with -EIO, as Linux's wedged GT;
  * `wedged_terminal` says no reset may undo it, as when the default state
  * could not be recorded or the device is gone. `reset_count` counts the
  * whole GPU's resets, which GET_RESET_STATS gives, and
