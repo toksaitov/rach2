@@ -38,6 +38,15 @@ On the i686 kernel, a count negative as the kernel's signed size is
 .Er EINVAL
 after that range check, before the transfer is limited.
 An i386 call on x86-64 uses the kernel's 64-bit signed size for this check.
+Then a read at the open file description's offset whose end would pass
+the signed 64-bit range is
+.Er EINVAL ,
+as Linux's rw_verify_area has it, with the original count; a stream,
+which has no offset, a directory, and
+.Pa /proc/ Ns Ar pid Ns Pa /mem
+and
+.Pa /dev/mem ,
+whose offsets are unsigned, are never refused for it.
 A zero-length read checks the descriptor as a longer one does, that it
 exists, is open for reading, is open on an object with a read method and
 is no directory, and that the buffer does not pass the top of user
@@ -206,6 +215,11 @@ a count negative as the kernel's signed size or an end past the signed 64-bit ra
 .Er EINVAL ,
 and a directory
 .Er EISDIR .
+The end check passes
+.Pa /proc/ Ns Ar pid Ns Pa /mem
+and
+.Pa /dev/mem ,
+whose offsets are unsigned.
 The range, count and end checks use the original request before
 .Dv MAX_RW_COUNT
 limits the transfer, including for a count of zero.
@@ -382,8 +396,14 @@ operation, the object the
 descriptor is open on, such as an epoll set, has no read method, as on
 Linux, or
 .Fn pread
-was given a negative offset or an end past the signed 64-bit range,
-computed with the original count before the transfer is limited.
+was given a negative offset.
+A read at the description's offset or at that of
+.Fn pread
+would end past the signed 64-bit range, computed with the original count
+before the transfer is limited, on a file other than
+.Pa /proc/ Ns Ar pid Ns Pa /mem
+and
+.Pa /dev/mem .
 A boot window,
 .Pa /dev/bootpart
 or

@@ -919,6 +919,63 @@ static int32_t rw_buffer_range(uintptr_t addr, size_t count)
     return (long)count < 0 ? -EINVAL : 0;
 }
 
+/** Whether pread64 can read `entry` at an offset, or it is a stream that
+ * pread64 refuses with -ESPIPE: a pipe, a socket, a terminal or
+ * pseudoterminal, the mouse, a device other than a raw window, the log or
+ * /dev/null, /dev/zero and /dev/full, and an anonymous object with no
+ * `llseek`. 1 or 0. */
+static int pio_seekable(fd_entry_t *entry)
+{
+    if (entry->type == FD_TYPE_DEVICE) {
+        return devfs_fd_is_raw(entry) || devfs_fd_log_size(entry, NULL) || devfs_lseek_zero(entry);
+    }
+    if (entry->type == FD_TYPE_ANON) {
+        return entry->ops && entry->ops->llseek;
+    }
+    return entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR ||
+           entry->type == FD_TYPE_SYNTH_DIR || entry->type == FD_TYPE_PROC ||
+           entry->type == FD_TYPE_FRAMEBUFFER;
+}
+
+/**
+ * Whether a transfer of `count` bytes at `pos` of `entry` would end past
+ * 2^63-1, which Linux's rw_verify_area refuses with EINVAL: 1 or 0. `count`
+ * is the request before its cut at USER_RW_MAX. /proc/PID/mem and /dev/mem
+ * take unsigned offsets, as Linux's FMODE_UNSIGNED_OFFSET makes them, and
+ * are never refused; a NULL `entry` is a directory, whose offsets are
+ * signed.
+ */
+static int rw_end_past(fd_entry_t *entry, uint64_t pos, uint64_t count)
+{
+    const uint64_t max = 0x7FFFFFFFFFFFFFFFull;
+
+    if (entry && (procfs_is_mem(entry) || devfs_fd_is_mem(entry))) {
+        return 0;
+    }
+    return pos > max || count > max - pos;
+}
+
+/**
+ * Check a read or write of `count` bytes, the request before its cut, at
+ * the offset of the description `entry` is open on: -EINVAL when its end
+ * would pass 2^63-1 (`rw_end_past`), as Linux's ksys_read and ksys_write
+ * check every file that is not a stream through rw_verify_area, or 0. A
+ * stream, what pread64 refuses (`pio_seekable`), has no offset to check,
+ * and a directory's is its listing's cursor, whose read is -EISDIR. A raw
+ * window moves an offset of its own, `raw_offset`. A NULL `entry` passes.
+ */
+static int32_t rw_offset_end(fd_entry_t *entry, size_t count)
+{
+    uint64_t pos;
+
+    if (!entry || !entry->ofd || !pio_seekable(entry) || entry->type == FD_TYPE_DIR ||
+        entry->type == FD_TYPE_SYNTH_DIR) {
+        return 0;
+    }
+    pos = devfs_fd_is_raw(entry) ? entry->ofd->raw_offset : entry->ofd->offset;
+    return rw_end_past(entry, pos, (uint64_t)count) ? -EINVAL : 0;
+}
+
 /** Check the descriptor's write access before its buffer or vector.
  * Return -EBADF for a missing descriptor, O_PATH, no write access or an
  * unsupported kind, -EINVAL for an object without a write method, or 0.
@@ -953,8 +1010,9 @@ static int32_t write_allowed(const fd_entry_t *entry)
  * bytes written or a negative errno: -EBADF for a descriptor that is not
  * open, not open for writing, or of a kind with no write, and -EINVAL for
  * one open for writing whose object has no write method (`write_ops`).
- * After those checks, rw_buffer_range checks the original range and count
- * before USER_RW_MAX limits the transfer.
+ * After those checks, rw_buffer_range checks the original range and count,
+ * and rw_offset_end the end at the description's offset, -EINVAL past
+ * 2^63-1, before USER_RW_MAX limits the transfer.
  *
  * It dispatches by backing kind. An object with operations (a pipe, a
  * terminal, a pty, a device) writes through them once `write_ops` has
@@ -983,6 +1041,9 @@ static int32_t write_fd(int fd, const char __user *buf, size_t requested)
         return rc;
     }
     rc = rw_buffer_range((__force uintptr_t)buf, requested);
+    if (rc == 0) {
+        rc = rw_offset_end(entry, requested);
+    }
     if (rc != 0) {
         return rc;
     }
@@ -1389,10 +1450,12 @@ static long writev_master(fd_entry_t *entry, uintptr_t addr, int count)
  * first, and a vector of no bytes then returns 0 without a write
  * (`write_check`). Returns the bytes written, or a negative errno: -EBADF
  * or -EINVAL for a descriptor `write_check` refuses, -EINVAL for a count
- * below 0 or past IOV_MAX_LOCAL or a negative length, -EFAULT for a vector
- * or a range outside user space, -EPERM for a vector of which the seal lets
- * no byte in, or a transfer error when no byte was written. A buffer fault
- * after a positive transfer returns the bytes written before the fault.
+ * below 0 or past IOV_MAX_LOCAL, a negative length or a total whose end at
+ * the description's offset passes 2^63-1 (`rw_offset_end`), -EFAULT for a
+ * vector or a range outside user space, -EPERM for a vector of which the
+ * seal lets no byte in, or a transfer error when no byte was written. A
+ * buffer fault after a positive transfer returns the bytes written before
+ * the fault.
  */
 static long writev(int fd, uintptr_t iov_user, int iovcnt)
 {
@@ -1419,6 +1482,10 @@ static long writev(int fd, uintptr_t iov_user, int iovcnt)
     }
     if (wanted == 0) {
         return 0;
+    }
+    rc = rw_offset_end(fd_get(current_proc->fds, fd), (size_t)wanted);
+    if (rc != 0) {
+        return rc;
     }
     rc = writev_begin(fd, iov_user, iovcnt, (uint32_t)wanted, &held, &cap);
     if (rc == 0) {
@@ -6401,7 +6468,9 @@ static int32_t read_allowed(const fd_entry_t *entry)
  * read(2) and readv(2); the bytes read, 0 at the end, or a negative errno:
  * `read_allowed`'s, then -EFAULT for the original requested range past the
  * top of user memory, then -EINVAL for a count negative as the kernel's
- * ssize_t, then -EISDIR for a directory, as Linux's vfs_read orders them,
+ * ssize_t or for an end at the description's offset past 2^63-1
+ * (`rw_offset_end`), then -EISDIR for a directory, as Linux's vfs_read
+ * orders them,
  * then -EFAULT for a NULL or bad buffer. The transfer is capped at
  * USER_RW_MAX after the original range and count have passed. A
  * read of zero bytes returns 0 once those checks have passed, and `buf`
@@ -6439,6 +6508,9 @@ static int32_t read_fd(int fd, char __user *buf, size_t requested)
         return rc;
     }
     rc = rw_buffer_range((__force uintptr_t)buf, requested);
+    if (rc == 0) {
+        rc = rw_offset_end(entry, requested);
+    }
     if (rc != 0) {
         return rc;
     }
@@ -6705,13 +6777,15 @@ int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, net_addr_
  * undone (`iov_import`): a count past IOV_MAX_LOCAL, or a negative length,
  * is -EINVAL, and an iovec the caller cannot read or a buffer it cannot
  * write is -EFAULT, with the input still queued; the total is cut at
- * MAX_RW_COUNT, as Linux's is. The buffers are checked by `user_buffer_ok`
- * with write access, which faults their pages in, so an address inside the
- * user window that is unmapped or read-only fails here and not half way
- * through. The descriptor is checked before the array (`read_allowed`), as
- * Linux's vfs_readv checks it, so an array that asks for nothing returns 0
- * only from a descriptor a read could use, a directory among them. Once a
- * byte has been read, a later failure ends the call with the total.
+ * MAX_RW_COUNT, as Linux's is, and that total ending past 2^63-1 at the
+ * description's offset is -EINVAL (`rw_offset_end`). The buffers are
+ * checked by `user_buffer_ok` with write access, which faults their pages
+ * in, so an address inside the user window that is unmapped or read-only
+ * fails here and not half way through. The descriptor is checked before
+ * the array (`read_allowed`), as Linux's vfs_readv checks it, so an array
+ * that asks for nothing returns 0 only from a descriptor a read could use,
+ * a directory among them. Once a byte has been read, a later failure ends
+ * the call with the total.
  *
  * The buffers are filled in order, and how depends on what is behind the
  * descriptor, since a second read is not always reading on. A regular file
@@ -6749,6 +6823,9 @@ static long readv(int fd, uintptr_t iov_user, int iovcnt)
         return wanted;
     }
     entry = current_proc ? fd_get(current_proc->fds, fd) : (fd_entry_t *)0;
+    if (rw_offset_end(entry, (size_t)wanted) != 0) {
+        return -EINVAL;
+    }
 
     if (entry && entry->type == FD_TYPE_SOCKET && entry->sock && entry->sock->type == SOCK_DGRAM) {
         return readv_dgram(entry, iov_user, iovcnt, 0, 0, 0, 0);
@@ -12510,13 +12587,11 @@ long sys__llseek(isr_params_t *params)
  * not open or is an O_PATH one is -EBADF, one that cannot seek is -ESPIPE,
  * one not open for the direction (`write` or not) is -EBADF, one with no
  * method for it is -EINVAL, a buffer outside user memory is -EFAULT, a
- * count or an end past the signed range is -EINVAL, and a directory is
- * -EISDIR. The buffer and count are the original request, before its cut.
+ * count or an end past the signed range is -EINVAL (`rw_end_past`), and a
+ * directory is -EISDIR. The buffer and count are the original request,
+ * before its cut.
  *
- * What cannot seek is a pipe, a socket, a terminal or pseudoterminal, the
- * mouse, a device other than a raw disk window, the log or the three
- * whose seek always lands at 0, /dev/null, /dev/zero and /dev/full, and an
- * anonymous object with no `llseek`. A /proc snapshot is read at an
+ * What cannot seek is `pio_seekable`'s list. A /proc snapshot is read at an
  * offset, as Linux reads one, the framebuffer written at one, and an
  * anonymous object with a position, a VFIO device's, both.
  * Returns 0 with the descriptor in `*out`, or the errno.
@@ -12537,18 +12612,7 @@ static int32_t pio_entry(int fd, int write, uintptr_t buf, size_t count, long lo
     if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
-    if (entry->type == FD_TYPE_DEVICE) {
-        if (!devfs_fd_is_raw(entry) && !devfs_fd_log_size(entry, NULL) &&
-            !devfs_lseek_zero(entry)) {
-            return -ESPIPE;
-        }
-    } else if (entry->type == FD_TYPE_ANON) {
-        if (!entry->ops || !entry->ops->llseek) {
-            return -ESPIPE;
-        }
-    } else if (entry->type != FD_TYPE_FILE && entry->type != FD_TYPE_DIR &&
-               entry->type != FD_TYPE_SYNTH_DIR && entry->type != FD_TYPE_PROC &&
-               entry->type != FD_TYPE_FRAMEBUFFER) {
+    if (!pio_seekable(entry)) {
         return -ESPIPE;
     }
     rc = write ? write_allowed(entry) : read_allowed(entry);
@@ -12559,7 +12623,7 @@ static int32_t pio_entry(int fd, int write, uintptr_t buf, size_t count, long lo
     if (rc != 0) {
         return rc;
     }
-    if ((uint64_t)count > 0x7FFFFFFFFFFFFFFFull - (uint64_t)pos) {
+    if (rw_end_past(entry, (uint64_t)pos, (uint64_t)count)) {
         return -EINVAL;
     }
     if (entry->type == FD_TYPE_DIR || entry->type == FD_TYPE_SYNTH_DIR) {
@@ -12732,7 +12796,7 @@ static long iov_at_move(int fd, uintptr_t iov_user, int iovcnt, long long pos, i
  */
 static long iov_at(int fd, uintptr_t iov_user, int iovcnt, long long pos, int write)
 {
-    fd_entry_t *entry = NULL;
+    fd_entry_t *entry = NULL, *held;
     uint32_t wanted, room;
     long rc = pio_entry(fd, write, 0, 0, pos, &entry);
     int dir = rc == -EISDIR;
@@ -12743,6 +12807,7 @@ static long iov_at(int fd, uintptr_t iov_user, int iovcnt, long long pos, int wr
     if (iovcnt < 0 || iovcnt > IOV_MAX_LOCAL) {
         return -EINVAL;
     }
+    held = entry;
     entry = write ? entry : NULL;
     if (iov_append_file(entry)) {
         return iov_file_write(entry, iov_user, iovcnt, pos, 1);
@@ -12758,7 +12823,7 @@ static long iov_at(int fd, uintptr_t iov_user, int iovcnt, long long pos, int wr
         }
         return write ? ksys_pwrite64(fd, NULL, 0, pos) : ksys_pread64(fd, NULL, 0, pos);
     }
-    if ((uint64_t)wanted > 0x7FFFFFFFFFFFFFFFull - (uint64_t)pos) {
+    if (rw_end_past(held, (uint64_t)pos, (uint64_t)wanted)) {
         return -EINVAL;
     }
     if (entry && entry->type == FD_TYPE_FILE && (entry->flags & FD_FLAG_WRITE) &&
@@ -13110,7 +13175,8 @@ static long rwv2(isr_params_t *params, int write)
     if (rc <= 0) {
         goto out;
     }
-    if (pos >= 0 && (uint64_t)rc > 0x7FFFFFFFFFFFFFFFull - (uint64_t)pos) {
+    if (pos == -1 ? rw_offset_end(entry, (size_t)rc) != 0
+                  : rw_end_past(entry, (uint64_t)pos, (uint64_t)rc)) {
         rc = -EINVAL;
         goto out;
     }

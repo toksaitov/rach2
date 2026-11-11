@@ -219,6 +219,11 @@ void devfs_disk_withdraw(void);
  */
 int devfs_fd_is_raw(struct fd_entry *e);
 
+/** Whether `e` is open on `/dev/mem`, whose offsets are unsigned, as Linux's
+ * FMODE_UNSIGNED_OFFSET makes them, so that no transfer is refused for
+ * ending past 2^63-1: 1 or 0. */
+int devfs_fd_is_mem(struct fd_entry *e);
+
 /**
  * Whether `e` is a raw disk window whose backing is published, `/dev/mem`, or
  * a loop device's node with a file attached; if so, `*size` gets its byte
