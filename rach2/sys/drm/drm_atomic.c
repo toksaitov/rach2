@@ -1437,6 +1437,34 @@ static wait_queue_t work_done_wait;
 static void work_fence_done(struct dma_fence *fence, struct dma_fence_cb *cb);
 
 /**
+ * Arm `w`'s wait on plane `i`'s fence, `fence`: the wait recorded first,
+ * since the callback may run at once on another processor and must find
+ * it, then the callback added and the fence handed to the driver's
+ * `commit_fence_wait`. 1 once armed, or 0 when the fence had signalled.
+ */
+static int work_fence_arm(struct commit_work *w, int i, struct dma_fence *fence)
+{
+    const struct drm_mode_config *mc = &w->state.dev->mode_config;
+    uint32_t flags;
+
+    w->cbs[i].work = w;
+    flags = spin_lock_irqsave(&work_lock);
+    w->waiting = 1;
+    w->waited = i;
+    w->deadline = mc->commit_fence_timeout_ms
+                      ? rtc_ticks_now() + MS_TO_TICKS(mc->commit_fence_timeout_ms) + 1u
+                      : 0;
+    spin_unlock_irqrestore(&work_lock, flags);
+    if (dma_fence_add_callback(fence, &w->cbs[i].cb, work_fence_done) != 0) {
+        return 0;
+    }
+    if (mc->commit_fence_wait) {
+        mc->commit_fence_wait(w->state.dev, fence);
+    }
+    return 1;
+}
+
+/**
  * Move `w`'s tail to the first plane after `from` whose fence has not
  * signalled, arm only that fence's callback, hand it to the driver's
  * `commit_fence_wait` and start its timeout, as Linux's
@@ -1447,33 +1475,15 @@ static void work_fence_done(struct dma_fence *fence, struct dma_fence_cb *cb);
  */
 static void work_fence_next(struct commit_work *w, int from)
 {
-    const struct drm_mode_config *mc = &w->state.dev->mode_config;
     uint32_t flags;
     int i;
 
     for (i = from + 1; i < DRM_MAX_PLANES; i++) {
         struct drm_plane_state *ps = w->state.planes_new[i];
 
-        if (!ps || !ps->fence) {
-            continue;
+        if (ps && ps->fence && work_fence_arm(w, i, ps->fence)) {
+            return;
         }
-        w->cbs[i].work = w;
-        /* Armed before the callback is added, which may run at once on
-         * another processor and must find the wait to end. */
-        flags = spin_lock_irqsave(&work_lock);
-        w->waiting = 1;
-        w->waited = i;
-        w->deadline = mc->commit_fence_timeout_ms
-                          ? rtc_ticks_now() + MS_TO_TICKS(mc->commit_fence_timeout_ms) + 1u
-                          : 0;
-        spin_unlock_irqrestore(&work_lock, flags);
-        if (dma_fence_add_callback(ps->fence, &w->cbs[i].cb, work_fence_done) != 0) {
-            continue;
-        }
-        if (mc->commit_fence_wait) {
-            mc->commit_fence_wait(w->state.dev, ps->fence);
-        }
-        return;
     }
     flags = spin_lock_irqsave(&work_lock);
     w->waiting = 0;

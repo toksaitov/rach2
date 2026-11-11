@@ -142,8 +142,9 @@ int32_t dma_resv_get_fences(struct dma_resv *r, int all, struct dma_fence ***fen
     struct dma_fence **p;
     uint32_t i, n;
     dma_resv_lock(r);
-    n = (all ? r->nreads : 0) + 1u;
-    p = n != 0 && (size_t)n * sizeof(*p) / sizeof(*p) == n ? kmalloc((size_t)n * sizeof(*p)) : NULL;
+    n = all ? r->nreads + 1u : 1u;
+    /* A count whose array's size would wrap is refused. */
+    p = n != 0 && n <= 0xffffffffu / sizeof(*p) ? kmalloc((size_t)n * sizeof(*p)) : NULL;
     if (!p) {
         dma_resv_unlock(r);
         return -ENOMEM;
