@@ -4108,10 +4108,14 @@ static int hda_service_asked(void *arg)
  * call runs on this processor in the middle of a service, and none on
  * another, since the thread holds the big lock throughout.
  *
- * The thread takes the big lock in the tail of each switch to it
- * (schedule_tail), so that `bkl/calls` counts the service as a thread's take
- * after its switch, under no entry; the scheduler counts its time in
- * /proc/PID/schedstat.
+ * A service counts in `bkl/calls` under the hold it runs in, under no entry:
+ * `take 1` when the thread took the big lock in the tail of a switch to it
+ * (schedule_tail), after its sleep or at a service point that switched, and
+ * `vector 0` when the service point let the lock go to another processor's
+ * claim and took it back without a switch (bkl_yield), as when the thread's
+ * FIFO priority keeps it selected. A service asked for during the last one
+ * runs in the same hold, since the wait finds its condition true at once.
+ * The scheduler counts the thread's time in /proc/PID/schedstat.
  */
 static void hda_service_thread(void)
 {
