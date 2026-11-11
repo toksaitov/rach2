@@ -25,6 +25,12 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 mkdir -p "$out"
 RUNNER_WORK=$(mktemp -d "${TMPDIR:-/tmp}/browser.XXXXXX")
+if [ "$mode" = webgpu-hasvk ]; then
+    # The caller's DRM Weston drives the Lenovo's panel at its 1366x768 mode,
+    # which the record's size must name.
+    # shellcheck disable=SC2034 # runner_start records them
+    RUNNER_WIDTH=1366 RUNNER_HEIGHT=768
+fi
 runner_start
 runner_record "case $browser $mode"
 case $mode in
