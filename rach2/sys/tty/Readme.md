@@ -12,6 +12,8 @@ Inside the kernel, `tty.h` is the terminal. `tty_input_char` gives a terminal on
 
 ### The line discipline
 
+Process-group signals from the terminal use `signal_post_multi`, so a child being built by a member receives a signal sent during its fork ([signals](../proc/signal.Readme.md#sending)).
+
 `n_tty.c` is pure logic over a `struct n_tty` and makes no kernel calls, so the kernel and a host test compile the same file. Echo and output leave through a sink function the caller supplies: the console's sink writes the screen and COM1, and a pseudo-terminal slave's writes its master's ring.
 
 The state is the termios (`struct ktermios`, Linux's 36-byte kernel layout with 19 control characters, the same on both architectures), the line under edit (`N_TTY_LINE_MAX`, 4096 bytes, Linux's `N_TTY_BUF_SIZE`), and the read queue, a ring of `N_TTY_READ_MAX` (8192) bytes, two lines, beside an array that marks the last byte of each committed line.

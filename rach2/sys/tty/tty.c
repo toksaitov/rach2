@@ -69,18 +69,22 @@ void tty_init(struct tty *t, n_tty_out_fn sink, void *sink_ctx)
     t->vhangups = 0;
 }
 
-/** A live user process is one that is not a zombie and still has an address
- * space (space_root), which a kernel thread and a process in teardown lack. */
+/** Signal the live user processes of `pgid`, with the big lock held,
+ * from a call or an interrupt. A process still has an address space;
+ * its unfinished forks get the signal through signal_post_multi. */
 void tty_signal_group(int pgid, int signo)
 {
     process_t *p;
+    struct k_siginfo info;
 
     if (pgid == 0) {
         return;
     }
+    k_memset(&info, 0, sizeof(info));
+    info.code = SI_KERNEL;
     for (p = proc_list; p; p = p->next) {
         if (p->state != PROC_ZOMBIE && p->space_root != 0 && (int)p->pgid == pgid) {
-            signal_post(p, signo);
+            signal_post_multi(p, signo, &info);
         }
     }
 }

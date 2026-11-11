@@ -194,6 +194,13 @@ void signal_post(process_t *p, int signo)
     CHECK(0, "no signal substitutes for a readiness wake");
 }
 
+/** Count a terminal process-group signal through the same stub. */
+void signal_post_multi(process_t *p, int signo, const struct k_siginfo *info)
+{
+    (void)info;
+    signal_post(p, signo);
+}
+
 /** The test's pair, zeroed, for `pty_alloc`; a request of another size is
  * a failure. */
 void *kzalloc(size_t size)
