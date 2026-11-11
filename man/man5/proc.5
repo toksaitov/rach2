@@ -1075,6 +1075,10 @@ on the boot line sets it, 30 without, and a write of any int sets it;
 on the boot line and 0 without, which a write of any int sets; an
 exception the kernel takes in its own code panics whatever the value, as
 Linux's oops does with it set;
+.Pa kernel/nmi_watchdog ,
+0 and read-only, as on a Linux built without the hard lockup detector,
+since no NMI watchdog takes the performance counters, which KVM's guests
+have; kvm-unit-tests' PMU tests run only where it reads 0;
 .Pa crypto/fips_enabled ,
 0, since the kernel is not in FIPS mode, which libgcrypt and OpenSSL read;
 .Pa user/max_mnt_namespaces ,

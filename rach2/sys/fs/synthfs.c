@@ -311,7 +311,8 @@ static const struct {
                {1, "pipe-user-pages-hard", ""},
                {1, "pipe-user-pages-soft", ""},
                {6, "panic", ""},
-               {6, "panic_on_oops", ""}};
+               {6, "panic_on_oops", ""},
+               {6, "nmi_watchdog", "0\n"}};
 
 /* The entries of the table. */
 #define SYNTH_SYS_TABLE ((int)(sizeof(sysents) / sizeof(sysents[0])))
