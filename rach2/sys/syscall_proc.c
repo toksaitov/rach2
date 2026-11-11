@@ -7826,7 +7826,7 @@ static int32_t mmap_secret(const fd_entry_t *e, struct shmem *sh, int shared,
  * written. A shared mapping served as a private one, or made through a
  * descriptor not open for writing, is given VM_PROT_NOWRITE, so that mprotect
  * cannot make it writable later. A file of memfd_secret maps as
- * `mmap_secret` says. The file's path is left to the first reader of
+ * `mmap_secret` says. The file's path is built at each reading of
  * /proc/PID/maps (`procfs_maps_names`), as Linux's d_path at that read.
  */
 static int32_t mmap_file(fd_entry_t *e, int shared, struct map_source *src)
@@ -7869,8 +7869,13 @@ static int32_t mmap_file(fd_entry_t *e, int shared, struct map_source *src)
  * protection, and those go into `src`. A shared mapping through a
  * descriptor not open for writing is given VM_PROT_NOWRITE, as `mmap_file`
  * gives it. The region the call builds is not in the address space, so
- * its start is 0 and its end the length. The operation's error, or
- * `mmap_file_check`'s; ENOMEM with no memory for the path.
+ * its start is 0 and its end the length. The region is named for
+ * /proc/PID/maps by the descriptor's link target now, once: every kind of
+ * descriptor with its own mmap, a device, an anonymous inode or a file of
+ * /sys, has a target that names the object and is the same from every
+ * root, so a reader with another root would build the same path; with no
+ * room for the path the region has none. The operation's error, or
+ * `mmap_file_check`'s.
  */
 static int32_t mmap_object(fd_entry_t *e, int fd, int shared, uintptr_t len, struct map_source *src)
 {
