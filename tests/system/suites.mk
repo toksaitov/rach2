@@ -2085,7 +2085,7 @@ include tests/system/games/rules.mk
 # reference's lacks. It reads the payload games-wine makes.
 
 # `tests/run save-update`: a Wine prefix and a save that rach2-game writes on
-# a data partition made as rach2-install --data makes it, kept across a cold
+# a data partition made with rach2-install --data's options, kept across a cold
 # restart into a new copy of the GNU root: the prefix used again with its
 # registry value, the save loaded through it and through a new prefix, and the
 # volume clean. Its payload is save.py with the runner it imports.
@@ -2098,6 +2098,16 @@ $(GAMES_DIR)/save.ext2: tests/system/games/save.py tests/system/games/run.py \
 	cp $^ "$$work/"; \
 	mke2fs -q -t ext2 -F -b 4096 -O none,filetype,sparse_super,large_file \
 	    -d "$$work" $@.tmp 1024; \
+	mv $@.tmp $@
+
+# The empty data volume, 6 GiB and sparse, with rach2-install --data's options
+# and Rach2's mke2fs.conf, made here since the ordinary kernel refuses raw
+# writes to a disk.
+$(GAMES_DIR)/save-volume.ext2: vendor/e2fsprogs/mke2fs.conf
+	@mkdir -p $(@D)
+	rm -f $@.tmp
+	MKE2FS_CONFIG=vendor/e2fsprogs/mke2fs.conf mke2fs -q -t ext2 -b 4096 -T huge -L 'Rach2 data' \
+	    -F $@.tmp 1572864
 	mv $@.tmp $@
 
 # `tests/run desktop`: an ordinary headless Weston session at boot, input
