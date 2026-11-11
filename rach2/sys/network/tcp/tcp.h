@@ -67,33 +67,36 @@
 
 /* The timers are written in milliseconds and kept in ticks of the kernel's
  * clock; TCP_MS rounds up, so that no timer is shorter than asked or 0. */
-#define TCP_MS(ms)              (((uint32_t)(ms) * TICK_HZ + 999u) / 1000u)
+#define TCP_MS(ms)               (((uint32_t)(ms) * TICK_HZ + 999u) / 1000u)
 /* The retransmission timeout: 1 s before a round trip is measured (RFC
  * 6298), then the smoothed round trip plus four deviations, at least 200 ms,
  * Linux's floor, which covers a peer's delayed acknowledgement, and at most
  * 60 s after doubling. */
-#define TCP_RTO_INIT            TCP_MS(1000)
-#define TCP_RTO_MIN             TCP_MS(200)
-#define TCP_RTO_MAX             TCP_MS(60000)
+#define TCP_RTO_INIT             TCP_MS(1000)
+#define TCP_RTO_MIN              TCP_MS(200)
+#define TCP_RTO_MAX              TCP_MS(60000)
 /* Policy: TIME_WAIT lasts 2 s, short for a local network, and a detached
  * block in FIN_WAIT_2, whose peer may go with neither a FIN nor a reset,
  * 10 s (cf. Linux's tcp_fin_timeout). */
-#define TCP_2MSL_TICKS          TCP_MS(2000)
-#define TCP_FIN_WAIT2_TICKS     TCP_MS(10000)
+#define TCP_2MSL_TICKS           TCP_MS(2000)
+#define TCP_FIN_WAIT2_TICKS      TCP_MS(10000)
 /* Policy: a detached block that still has data or a FIN to deliver, in
  * ESTABLISHED, CLOSE_WAIT, FIN_WAIT_1, CLOSING or LAST_ACK, is given up when
  * its peer has acknowledged nothing for 30 s, rather than after the minutes
  * TCP_MAX_RETX doublings can take, since no program waits on it (cf. Linux's
  * tcp_orphan_retries). */
-#define TCP_ORPHAN_TICKS        TCP_MS(30000)
+#define TCP_ORPHAN_TICKS         TCP_MS(30000)
 /* How long queued bytes may wait from the first transmit the driver refused
  * to the last, with no segment sent between and the link up, before the
  * connection is given up: 30 s. While the link is down the wait does not
  * run, so a cable out for a minute ends nothing. */
-#define TCP_REFUSE_GIVEUP_TICKS TCP_MS(30000)
+#define TCP_REFUSE_GIVEUP_TICKS  TCP_MS(30000)
+/* The wait before the next zero-window probe when the driver refused the
+ * last, as Linux's TCP_RESOURCE_PROBE_INTERVAL: 500 ms. */
+#define TCP_RESOURCE_PROBE_TICKS TCP_MS(500)
 /* A handshake is given up after this many retransmissions of its SYN or
  * SYN-ACK. */
-#define TCP_SYN_RETRIES         7
+#define TCP_SYN_RETRIES          7
 /*
  * The give-up of a synchronized connection is Linux's: the time that
  * `tcp_retries2` retransmissions take when the first waits 200 ms and each
@@ -103,9 +106,9 @@
  * that went away lasts as long as on Linux. TCP_USER_TIMEOUT replaces the
  * figure with the socket's own, in milliseconds, in every state.
  */
-#define TCP_RETRIES2_DEFAULT    15
-#define TCP_MODEL_RTO_BASE_MS   200u
-#define TCP_MODEL_RTO_MAX_MS    120000u
+#define TCP_RETRIES2_DEFAULT     15
+#define TCP_MODEL_RTO_BASE_MS    200u
+#define TCP_MODEL_RTO_MAX_MS     120000u
 
 /*
  * Keepalive, as Linux's: a connection with SO_KEEPALIVE set and nothing
@@ -269,7 +272,15 @@ struct tcb {
      * the limit of any other detached block, which each acknowledgement of
      * new data moves TCP_ORPHAN_TICKS ahead. */
     uint32_t timewait_until;
-    uint32_t zwp_due;       /* tick the zero-window probe is due; 0 = off */
+    uint32_t zwp_due; /* tick the zero-window probe is due; 0 = off */
+    /* Zero-window probing with nothing in flight, as Linux's
+     * icsk_probes_out, icsk_backoff and icsk_probes_tstamp: the probes sent
+     * since an acknowledgement was last taken, the doublings of the
+     * interval since the window last opened, at most `tcp_retries2`, and
+     * ticks+1 at the first probe since then; 0 = none. */
+    uint8_t zwp_probes;
+    uint8_t zwp_backoff;
+    uint32_t zwp_stamp;
     uint32_t tx_refused;    /* transmits the driver refused, a count */
     uint32_t refused_since; /* ticks+1 at the first refusal still unresolved; 0 = none */
     /* ticks+1 at the sending of what the first of the timeouts in a row
@@ -381,7 +392,8 @@ int tcp_in_flight(net_addr_t local_ip, uint16_t local_port, net_addr_t remote_ip
  * again an acknowledgement the driver refused, retransmit when the
  * retransmission timer runs out and give up with ETIMEDOUT at the limit of
  * `tcp_retx_limit`, give up a detached block whose peer acknowledged
- * nothing for TCP_ORPHAN_TICKS, probe a closed window, send keepalive
+ * nothing for TCP_ORPHAN_TICKS, probe a closed window and give up one
+ * whose probes go unanswered (`tcp_zwp_expire`), send keepalive
  * probes and reset a connection that answers none, and send what refused
  * transmits left in the send rings.
  */

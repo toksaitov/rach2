@@ -1049,6 +1049,133 @@ static void skipped_tick_rows(void)
 }
 
 /**
+ * Open a connection to `port`, close the peer's window and queue 100 bytes
+ * behind it, so that nothing is in flight and the zero-window probe timer
+ * runs. Returns the control block.
+ */
+static struct tcb *zero_window_conn(struct socket *sock, uint16_t port, uint32_t *peer_seq,
+                                    uint16_t *lport)
+{
+    static uint8_t bytes[100];
+    struct tcb *conn;
+
+    reset_all();
+    conn = open_conn(sock, port, peer_seq, lport);
+    rx(port, *lport, *peer_seq, conn->snd_nxt, F_ACK, 0, (const char *)0, 0);
+    CHECK("zero window: 100 bytes are queued behind it",
+          tcp_send(sock, bytes, 100) == 100 && n_segs == 0 && conn->zwp_due != 0);
+    return conn;
+}
+
+/** The wait Linux's tcp_probe0_when gives after `k` probes from `base`:
+ * `base` doubled `k` times, up to TCP_RTO_MAX. */
+static uint32_t probe_wait(uint32_t base, unsigned k)
+{
+    while (k-- > 0 && base < TCP_RTO_MAX) {
+        base <<= 1;
+    }
+    return base < TCP_RTO_MAX ? base : TCP_RTO_MAX;
+}
+
+/**
+ * Tick the clock, one call of `tcp_tick` a tick, for at most `most` ticks
+ * or until `conn` leaves ESTABLISHED; each segment the stack sends is
+ * answered with an acknowledgement of snd_una and a closed window when
+ * `answer` is set. Returns the ticks taken.
+ */
+static unsigned tick_until_closed(struct tcb *conn, uint16_t port, uint16_t lport,
+                                  uint32_t peer_seq, int answer, unsigned most)
+{
+    unsigned j, before;
+
+    for (j = 0; j < most && conn->state == TCP_ESTABLISHED; j++) {
+        before = n_segs;
+        kernel_ticks++;
+        tcp_tick();
+        if (answer && n_segs != before && conn->state == TCP_ESTABLISHED) {
+            rx(port, lport, peer_seq, conn->snd_una, F_ACK, 0, (const char *)0, 0);
+        }
+    }
+    return j;
+}
+
+/**
+ * Check zero-window probing against Linux's tcp_probe_timer: to a silent
+ * peer the first probe goes a timeout after the window closed and each
+ * later one after twice the wait before it, up to TCP_RTO_MAX; once
+ * tcp_retries2, 15, probes have gone unanswered, the next expiry gives the
+ * connection up with ETIMEDOUT, counted in TCPAbortOnTimeout, and sends no
+ * reset. A peer that answers each probe with the window still closed keeps
+ * the connection past that many, the waits still doubling, and its opened
+ * window sends the data and ends the back-off. With TCP_USER_TIMEOUT 5000,
+ * an answering peer's connection is given up five seconds after the first
+ * probe. With a call of `tcp_tick` every fourth tick, the first probe goes
+ * within four ticks of its deadline.
+ */
+static void zero_window_rows(void)
+{
+    struct socket sock;
+    struct tcb *conn;
+    uint32_t peer_seq = 26000, base, first, aborts = net_mib.tcp_abort_on_timeout;
+    uint16_t lport;
+    unsigned k, wait, doubling = 1, calls = 0;
+
+    conn = zero_window_conn(&sock, 101, &peer_seq, &lport);
+    base = conn->rto > TCP_RTO_MIN ? conn->rto : TCP_RTO_MIN;
+    for (k = 0; k < 15; k++) {
+        wait = tick_until_sent(k, 2 * TCP_RTO_MAX);
+        doubling &= wait == (k == 0 ? conn->rto : probe_wait(base, k));
+    }
+    CHECK("silent peer: each probe is one byte at snd_una",
+          segs[0].len == TCP_HDR_SIZE + 1 && read32be(segs[0].data + 4) == conn->snd_una);
+    CHECK("the first a timeout after the window closed, each later one twice the wait before it",
+          doubling);
+    CHECK("fifteen probes go unanswered",
+          n_segs == 15 && conn->state == TCP_ESTABLISHED && conn->zwp_probes == 15);
+    wait = tick_until_closed(conn, 101, lport, peer_seq, 0, 2 * TCP_RTO_MAX);
+    CHECK("the next expiry gives the connection up with ETIMEDOUT",
+          wait == probe_wait(base, 15) && conn->state == TCP_CLOSED && conn->so_error == ETIMEDOUT);
+    CHECK("counted as an abort on timeout, with no reset sent",
+          net_mib.tcp_abort_on_timeout == aborts + 1 && n_segs == 15);
+
+    conn = zero_window_conn(&sock, 102, &peer_seq, &lport);
+    doubling = 1;
+    for (k = 0; k < 20; k++) {
+        wait = tick_until_sent(k, 2 * TCP_RTO_MAX);
+        doubling &= wait == (k == 0 ? conn->rto : probe_wait(base, k));
+        rx(102, lport, peer_seq, conn->snd_una, F_ACK, 0, (const char *)0, 0);
+    }
+    CHECK("answering peer: twenty probes, each answered, keep the connection",
+          n_segs == 20 && conn->state == TCP_ESTABLISHED && conn->zwp_probes == 0);
+    CHECK("while the waits double as to a silent peer", doubling);
+    n_segs = 0;
+    rx(102, lport, peer_seq, conn->snd_una, F_ACK, 65535, (const char *)0, 0);
+    CHECK("the opened window sends the data and ends the back-off",
+          n_segs == 1 && segs[0].len == TCP_HDR_SIZE + 100 && conn->zwp_backoff == 0 &&
+              conn->zwp_stamp == 0 && conn->zwp_due == 0);
+
+    conn = zero_window_conn(&sock, 103, &peer_seq, &lport);
+    sock.user_timeout = 5000;
+    (void)tick_until_sent(0, 2 * TCP_RTO_MAX);
+    first = (uint32_t)kernel_ticks;
+    rx(103, lport, peer_seq, conn->snd_una, F_ACK, 0, (const char *)0, 0);
+    (void)tick_until_closed(conn, 103, lport, peer_seq, 1, 60u * TICK_HZ);
+    CHECK("TCP_USER_TIMEOUT ends an answered probing five seconds after its first probe",
+          conn->state == TCP_CLOSED && conn->so_error == ETIMEDOUT &&
+              kernel_ticks - first == TCP_MS(5000));
+
+    conn = zero_window_conn(&sock, 104, &peer_seq, &lport);
+    first = (uint32_t)kernel_ticks;
+    while (n_segs == 0 && calls < 2 * TCP_RTO_MAX) {
+        kernel_ticks += 4;
+        tcp_tick();
+        calls++;
+    }
+    CHECK("calls four ticks apart send the first probe within four ticks of its deadline",
+          n_segs == 1 && kernel_ticks - first >= conn->rto && kernel_ticks - first < conn->rto + 4);
+}
+
+/**
  * Check the give-up: a peer that answers nothing ends an established
  * connection when Linux's tcp_retries2 of 15 would, after 924.6 s and not
  * before, counted in TCPAbortOnTimeout; TCP_USER_TIMEOUT 5000 ends one five
@@ -1491,6 +1618,7 @@ int main(void)
     path_mtu_row();
     keepalive_rows();
     skipped_tick_rows();
+    zero_window_rows();
     giveup_rows();
     blackhole_rows();
 
