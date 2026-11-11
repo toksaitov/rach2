@@ -9,6 +9,7 @@
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
 #include "../mm/usercopy.h"
+#include "../platform.h"
 #include "../watchdog.h"
 
 #define PMC0          0x0C1u
@@ -1895,6 +1896,12 @@ void kvm_pmu_vmx_enter(struct kvm_vcpu *v, struct kvm_pmu_msr *guest, struct kvm
     *ng = *nh = 0;
     p->lbr_list = ~0u;
     p->steps = pmu_steps;
+    /* A counter's interrupt bit raises an NMI only while the detector keeps
+     * the counters' APIC entry unmasked; without it the overflow raises
+     * none, and the exit acknowledges it instead. */
+    if (!platform_pmu_armed()) {
+        p->steps &= ~KVM_PMU_STEP_PMI;
+    }
     if (global) {
         global[0] = global[1] = 0;
     }
@@ -1950,7 +1957,7 @@ void kvm_pmu_vmx_exit(struct kvm_vcpu *v, const struct kvm_pmu_msr *guest, int r
 {
     struct kvm_pmu *p = &v->pmu;
     uint32_t i, s, k = p->lbr_list;
-    uint64_t fields = 0, fixed;
+    uint64_t fields = 0, fixed, placed = 0, status;
 
     p->lbr_list = ~0u;
     if (!pmu_host.intel || !pmu_host.version) {
@@ -1963,6 +1970,7 @@ void kvm_pmu_vmx_exit(struct kvm_vcpu *v, const struct kvm_pmu_msr *guest, int r
         if (ran) {
             collect(p, s, p->phys[s], p->base[s]);
         }
+        placed |= 1ull << p->phys[s];
         if (kvm_pmu_global() && p->phys[s] < 32u) {
             pmu_write(EVENTSEL0 + p->phys[s], 0);
         } else if (p->phys[s] >= 32u) {
@@ -1976,6 +1984,16 @@ void kvm_pmu_vmx_exit(struct kvm_vcpu *v, const struct kvm_pmu_msr *guest, int r
         fixed = pmu_read(FIXED_CTRL);
         if (fixed & fields) {
             pmu_write(FIXED_CTRL, fixed & ~fields);
+        }
+    }
+    /* Once `kvm_pmu_nmi` reads the global status, an overflow of a counter
+     * that ran without its interrupt bit, which raises no NMI, is
+     * acknowledged here, so that no unrelated NMI finds it and is claimed.
+     * One with the bit is left to its NMI, which may come after this. */
+    if (pmu_pmi && kvm_pmu_global() && !(p->steps & KVM_PMU_STEP_PMI) && placed) {
+        status = pmu_read(GLOBAL_STATUS) & placed;
+        if (status) {
+            pmu_write(GLOBAL_OVF, status);
         }
     }
     if (ran && k != ~0u) {

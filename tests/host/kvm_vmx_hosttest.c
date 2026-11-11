@@ -516,6 +516,12 @@ int kcpu_wrmsr_safe(uint32_t msr, uint64_t value)
 /* The NMI handler's hook, which kvm_pmu_start sets. */
 int (*watchdog_guest_nmi)(void);
 
+/** The hard-lockup detector's counter does not run here. */
+int platform_pmu_armed(void)
+{
+    return 0;
+}
+
 /** No virtual APIC is armed for a performance interrupt here. */
 void kvm_lapic_pmi(struct kvm_vcpu *v)
 {
