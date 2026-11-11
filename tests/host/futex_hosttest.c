@@ -78,14 +78,25 @@ uint64_t rtc_ticks_now(void)
 }
 
 /* The real-time clock's step count and its time in seconds, which the
- * step rows move (`model_step`). */
+ * step rows move (`model_step`); and, for the slew row, whether real time
+ * goes on with the tick from tick 2000, and how far behind it falls. */
 static uint32_t rt_steps = 1u;
 static int64_t rt_sec = 100;
+static int rt_ticking;
+static int64_t rt_lag_ns;
 
 /** The real-time clock's step count (`rtc_step_count`). */
 uint32_t rtc_step_count(void)
 {
     return rt_steps;
+}
+
+/** The ticks in which real time goes on by `sec` and `nsec`
+ * (`rtc_real_span`): the tick's own, since no row slews the clock's rate
+ * as the kernel counts it. */
+uint64_t rtc_real_span(int64_t sec, uint32_t nsec)
+{
+    return tick_span(sec, nsec);
 }
 
 /** The tick's counts as one reading, with interrupts off as the kernel's
@@ -431,6 +442,8 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
         if (!cond(arg)) {
             kernel_ticks = armed;
         }
+    } else if (rt_ticking && !cond(arg)) {
+        kernel_ticks = armed;
     }
     if (pi_wait_step) {
         void (*step)(void) = pi_wait_step;
@@ -489,11 +502,24 @@ void wait_queue_init(wait_queue_t *wq)
     (void)wq;
 }
 
-/** The wall clock: 100 s, or where a step row set it. */
+/** The wall clock: 100 s, or where a step row set it; for the slew row,
+ * on with the tick from tick 2000, `rt_lag_ns` behind it once the tick has
+ * moved, as a clock slewed slower than the tick falls behind during a
+ * wait. */
 void get_current_time(int64_t *seconds, int64_t *nanoseconds)
 {
-    *seconds = rt_sec;
-    *nanoseconds = 0;
+    int64_t ns = rt_ticking ? ((int64_t)kernel_ticks - 2000) * TICK_NS : 0;
+
+    if (ns > 0) {
+        ns -= rt_lag_ns;
+    }
+
+    *seconds = rt_sec + ns / 1000000000;
+    *nanoseconds = ns % 1000000000;
+    if (*nanoseconds < 0) {
+        *nanoseconds += 1000000000;
+        (*seconds)--;
+    }
 }
 
 /** The model has no regions: NULL. */
@@ -819,6 +845,9 @@ static int32_t rt_wait(uint32_t now, int32_t at)
  * to the time; forward, past the time, it ends without a sleep. A wait on
  * real time that a signal cut short files the time, and its restart counts
  * the tick from the clock as set then, not from the tick it was first given.
+ * A wait whose tick comes while a clock slewed slower than the tick is
+ * still short of the time counts again and sleeps on, since Linux's hrtimer
+ * never expires before its clock reaches its time.
  */
 static void realtime_steps(void)
 {
@@ -861,6 +890,13 @@ static void realtime_steps(void)
               !self.restart.fn,
           "the resumed wait on real time counts its tick from the clock as set");
     rt_sec = 100;
+
+    rt_ticking = 1;
+    rt_lag_ns = 1500000;
+    CHECK(rt_wait(2000, 101) == -ETIMEDOUT && waits == 2 && armed == 3003u,
+          "a wait whose tick comes before a slewed clock reaches its time sleeps on to it");
+    rt_ticking = 0;
+    rt_lag_ns = 0;
 }
 
 /**
