@@ -34,8 +34,9 @@ struct itco {
     void *ctx;
     int timeout; /* requested seconds, as Linux reports GETTIMEOUT */
     int opened;
-    int magic;          /* the last nonempty write contained V */
-    int running;        /* started by a program and not since stopped: Linux's WDOG_ACTIVE */
+    int magic; /* the last nonempty write contained V */
+    /* started by a program and not since stopped: Linux's WDOG_ACTIVE */
+    int running;
     int pinged;         /* started or fed since the last GETSTATUS */
     int hw_running;     /* counting toward a reset: Linux's WDOG_HW_RUNNING */
     int nowayout;       /* a stop is refused: Linux's WDOG_NO_WAY_OUT */
@@ -128,30 +129,35 @@ static int itco_timeleft(struct itco *t)
 }
 
 /**
- * Check the register block, clear old status and set the timeout to
- * `heartbeat` seconds, or to 30 when the chip refuses it, as iTCO_wdt_probe
- * does (iTCO_wdt.c:593 to 612); 0, 1 when 30 was taken in place of
- * `heartbeat`, or -EIO. A timer firmware left counting toward a reset,
- * neither halted nor kept from resetting, is left running and fed, as
- * iTCO_wdt_set_running (iTCO_wdt.c:444) leaves it for the watchdog core to
- * feed; any other is halted with NO_REBOOT set. All writes are bounded
- * register accesses, with no wait loop.
+ * Check the register block, clear NO_REBOOT and old status, and set the
+ * timeout to `heartbeat` seconds, or to 30 when the chip refuses it, as
+ * iTCO_wdt_probe does (Linux 6.12, iTCO_wdt.c:534 to 612); 0, 1 when 30 was
+ * taken in place of `heartbeat`, -ENODEV when NO_REBOOT will not clear, as
+ * Linux refuses the device there (iTCO_wdt.c:534 to 539), or -EIO. A timer
+ * that is not halted is running whatever NO_REBOOT was, as
+ * iTCO_wdt_set_running (iTCO_wdt.c:444 to 453) finds it: it is left
+ * counting, now toward a reset, for the kernel to feed. A halted one gets
+ * NO_REBOOT again (iTCO_wdt.c:593 to 599). All writes are bounded register
+ * accesses, with no wait loop.
  */
 static int itco_attach(struct itco *t, int heartbeat)
 {
     uint16_t cnt = t->rd(t->ctx, TCO1_CNT);
-    uint32_t gcs = t->gcs_rd(t->ctx);
 
-    if (cnt == 0xFFFFu || t->rd(t->ctx, TCO_TMR) == 0xFFFFu || gcs == 0xFFFFFFFFu) {
+    if (cnt == 0xFFFFu || t->rd(t->ctx, TCO_TMR) == 0xFFFFu ||
+        t->gcs_rd(t->ctx) == 0xFFFFFFFFu) {
         return -EIO;
     }
-    t->hw_running = !(cnt & TCO_HALT) && !(gcs & TCO_NO_REBOOT);
-    if (!t->hw_running && itco_stop(t) != 0) {
-        return -EIO;
+    if (itco_noreboot(t, 0) != 0) {
+        return -ENODEV;
     }
     t->wr(t->ctx, TCO1_STS, 8);
     t->wr(t->ctx, TCO2_STS, 2);
     t->wr(t->ctx, TCO2_STS, 4);
+    t->hw_running = !(cnt & TCO_HALT);
+    if (!t->hw_running && itco_stop(t) != 0) {
+        return -EIO;
+    }
     if (itco_timeout(t, heartbeat) == 0) {
         return 0;
     }
@@ -523,12 +529,17 @@ void itco_init(void)
     watchdog.gcs_wr = itco_gcs_wr;
     itco_options(&heartbeat, &arm);
     result = itco_attach(&watchdog, heartbeat);
+    if (result == -ENODEV) {
+        klog(KLOG_WARN, "watchdog", "refused: NO_REBOOT will not clear");
+        return;
+    }
     if (result < 0 || devfs_node_register(&itco_node) != 0) {
         klog(KLOG_WARN, "watchdog", "refused: the TCO registers or device node");
         return;
     }
     if (result == 1) {
-        klog(KLOG_INFO, "watchdog", "timeout value out of range, using %d", ITCO_DEFAULT_TIMEOUT);
+        klog(KLOG_INFO, "watchdog", "refused: iTCO_wdt.heartbeat=%d: out of range, using %d",
+             heartbeat, ITCO_DEFAULT_TIMEOUT);
     }
     itco_smi_option(pm);
     registered = 1;
