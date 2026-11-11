@@ -1400,7 +1400,9 @@ whole blocks of its virgl format, whether a transfer ioctl or a
 TRANSFER3D, COPY_TRANSFER3D or RESOURCE_INLINE_WRITE command of a virgl
 submission carried it.
 A box whose format has no block size, a planar or 3D ASTC one, or whose
-resource the submission does not list counts nothing.
+resource the submission does not list counts nothing, and so does a
+submission on a context of another capability set, Venus or a native
+context.
 .It Li iommu_dma_faults , iommu_irq_faults
 DMA and interrupt faults reported by VT-d since boot, on x86-64.
 .It Li vfio_groups , vfio_devices , vfio_dma_mappings , vfio_dma_pages , vfio_dma_io_pages
