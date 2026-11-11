@@ -409,6 +409,19 @@ static int not_dirs(void)
 }
 
 /**
+ * Release and reap the held child `pid`: close `ready`, the read end of the
+ * pipe it signals on, and `go`, the write end of the one it waits on, so that
+ * a child still waiting reads end of file and exits. Returns the child's exit
+ * status, or -1 when `pid` is a failed fork's or the child did not exit.
+ */
+static int let_go(pid_t pid, int ready, int go)
+{
+    close(ready);
+    close(go);
+    return pid > 0 ? child_status(pid) : -1;
+}
+
+/**
  * Check /proc/PID/cwd and root of a child whose working directory is
  * TOP/d2/sub2 and whose root is TOP/d2: a file through each, and ".." after
  * cwd, which climbs from the directory. Two pipes hold the child in place
@@ -439,18 +452,18 @@ static int cwd_root(void)
     }
     close(ready[1]);
     close(go[0]);
-    if (read(ready[0], &c, 1) != 1) {
+    if (pid < 0 || read(ready[0], &c, 1) != 1) {
+        let_go(pid, ready[0], go[1]);
         return fail("the child's start");
     }
     ok = holds(at(a, "/proc", pid, "cwd/../f"), "one") &&
          holds(at(a, "/proc", pid, "root/f"), "one") &&
          same_file(at(a, "/proc", pid, "root/sub2"), TOP "/d2/sub2");
-    if (write(go[1], &c, 1) != 1 || child_status(pid) != 0 || !ok) {
+    ok = write(go[1], &c, 1) == 1 && ok;
+    if (let_go(pid, ready[0], go[1]) != 0 || !ok) {
         return fail("another process's cwd and root");
     }
     report_held();
-    close(ready[0]);
-    close(go[1]);
     if (chdir(TOP "/d2/sub2") != 0 || !holds("/proc/self/cwd/../f", "one") ||
         !holds("/proc/self/root" TOP "/d2/f", "one") || chdir("/") != 0) {
         return fail("the caller's cwd and root");
@@ -461,14 +474,17 @@ static int cwd_root(void)
 
 /**
  * Fork a child that takes the uid and gid `id` and opens the file at `path`:
- * 0 when that succeeds with `want` 0 or fails with errno `want`, its step
- * otherwise.
+ * 0 when that succeeds with `want` 0 or fails with errno `want`, 1 when the
+ * child cannot be made, its step otherwise.
  */
 static int as_user(int id, const char *path, int want)
 {
     pid_t pid = fork();
     int fd;
 
+    if (pid < 0) {
+        return 1;
+    }
     if (pid == 0) {
         if (setgid((gid_t)id) != 0 || setuid((uid_t)id) != 0) {
             _exit(2);
@@ -496,7 +512,7 @@ static int other_process(void)
     int ready[2], go[2];
     char c = 0;
     pid_t pid;
-    int d = -1, st;
+    int d = -1, st, sent;
 
     if (pipe(ready) != 0 || pipe(go) != 0) {
         return fail("the pipes");
@@ -516,7 +532,8 @@ static int other_process(void)
     }
     close(ready[1]);
     close(go[0]);
-    if (read(ready[0], &d, sizeof(d)) != sizeof(d)) {
+    if (pid < 0 || read(ready[0], &d, sizeof(d)) != sizeof(d)) {
+        let_go(pid, ready[0], go[1]);
         return fail("the child's start");
     }
     snprintf(a, sizeof(a), "/proc/%d/fd/%d/f", (int)pid, d);
@@ -529,11 +546,10 @@ static int other_process(void)
             st = st == 0 ? 0 : 20 + st;
         }
     }
-    if (write(go[1], &c, 1) != 1 || child_status(pid) != 0) {
+    sent = write(go[1], &c, 1) == 1;
+    if (let_go(pid, ready[0], go[1]) != 0 || !sent) {
         return fail("the holder of the descriptor");
     }
-    close(ready[0]);
-    close(go[1]);
     if (st != 10) {
         report_held();
     }
@@ -549,13 +565,17 @@ static int other_process(void)
 /**
  * In a child of uid `uid` and gid `gid`, enter `dir`, another process's
  * /proc/PID/fd, by chdir and by fchdir through an O_PATH descriptor: 0 when
- * both succeed with `want` 0 or fail with errno `want`, its step otherwise.
+ * both succeed with `want` 0 or fail with errno `want`, 1 when the child
+ * cannot be made, its step otherwise.
  */
 static int fd_dir_enter(int uid, int gid, const char *dir, int want)
 {
     pid_t pid = fork();
     int o, rc;
 
+    if (pid < 0) {
+        return 1;
+    }
     if (pid == 0) {
         if (setgid((gid_t)gid) != 0 || setuid((uid_t)uid) != 0) {
             _exit(2);
@@ -574,24 +594,38 @@ static int fd_dir_enter(int uid, int gid, const char *dir, int want)
     return child_status(pid);
 }
 
-/** In a child of uid 1000 and gid 1001, open O_PATH descriptors of `dir`
- * and `info`, the fd and fdinfo directories of the process `owner`, then
- * write to `go`, which ends `owner`, reap `owner`, and fchdir through each:
- * 0 when the fd directory is entered and the fdinfo one is ESRCH, 40 plus
- * the child's step otherwise, or -1 when the child could not be made or
- * `owner` did not end well. */
-static int fd_dir_ended(pid_t owner, const char *dir, const char *info, int go)
+/**
+ * In a child of uid 1000 and gid 1001, open O_PATH descriptors of `dir` and
+ * `info`, the fd and fdinfo directories of the held child `owner`, then
+ * release and reap `owner` (`let_go` on `ready` and `go`) and fchdir through
+ * each: 0 when the fd directory is entered and the fdinfo one is ESRCH, 40
+ * plus the child's step otherwise, or -1 when the child could not be made or
+ * `owner` did not end well. `owner` is released and reaped, and `ready` and
+ * `go` closed, on every path.
+ */
+static int fd_dir_ended(pid_t owner, int ready, int go, const char *dir, const char *info)
 {
     int seen[2], gone[2];
     char c = 0;
     pid_t late;
-    int st, fo, io;
+    int st, fo, io, opened, ended;
 
-    if (pipe(seen) != 0 || pipe(gone) != 0) {
+    if (pipe(seen) != 0) {
+        let_go(owner, ready, go);
+        return -1;
+    }
+    if (pipe(gone) != 0) {
+        close(seen[0]);
+        close(seen[1]);
+        let_go(owner, ready, go);
         return -1;
     }
     late = fork();
     if (late == 0) {
+        close(ready);
+        close(go);
+        close(seen[0]);
+        close(gone[1]);
         if (setgid((gid_t)probe_id(1001)) != 0 || setuid((uid_t)probe_id(1000)) != 0) {
             _exit(2);
         }
@@ -605,17 +639,21 @@ static int fd_dir_ended(pid_t owner, const char *dir, const char *info, int go)
         }
         _exit(refused(fchdir(io), ESRCH) ? 0 : 5);
     }
-    st = -1;
-    if (late > 0 && read(seen[0], &c, 1) == 1 && write(go, &c, 1) == 1 &&
-        child_status(owner) == 0 && write(gone[1], &c, 1) == 1) {
-        st = child_status(late);
-        st = st == 0 ? 0 : 40 + st;
-    }
-    close(seen[0]);
     close(seen[1]);
     close(gone[0]);
+    opened = late > 0 && read(seen[0], &c, 1) == 1;
+    ended = write(go, &c, 1) == 1;
+    ended = let_go(owner, ready, go) == 0 && ended;
+    if (opened && ended && write(gone[1], &c, 1) != 1) {
+        ended = 0;
+    }
+    close(seen[0]);
     close(gone[1]);
-    return st;
+    st = late > 0 ? child_status(late) : -1;
+    if (late < 0 || !ended) {
+        return -1;
+    }
+    return st == 0 ? 0 : 40 + st;
 }
 
 /**
@@ -634,13 +672,15 @@ static int fd_dir_search(void)
     int ready[2], go[2];
     char c = 0;
     pid_t pid;
-    int st;
+    int st, sent;
 
     if (pipe(ready) != 0 || pipe(go) != 0) {
         return fail("the pipes of the fd directory's search");
     }
     pid = fork();
     if (pid == 0) {
+        close(ready[0]);
+        close(go[1]);
         if (setgid((gid_t)probe_id(1000)) != 0 || setuid((uid_t)probe_id(1000)) != 0 ||
             prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0 || write(ready[1], &c, 1) != 1 ||
             read(go[0], &c, 1) != 1) {
@@ -648,7 +688,10 @@ static int fd_dir_search(void)
         }
         _exit(0);
     }
-    if (read(ready[0], &c, 1) != 1) {
+    close(ready[1]);
+    close(go[0]);
+    if (pid < 0 || read(ready[0], &c, 1) != 1) {
+        let_go(pid, ready[0], go[1]);
         return fail("the fd directory's owner");
     }
     snprintf(dir, sizeof(dir), "/proc/%d/fd", (int)pid);
@@ -661,14 +704,13 @@ static int fd_dir_search(void)
     }
     if (st == 0) {
         report_held();
-        st = fd_dir_ended(pid, dir, info, go[1]);
-    } else if (write(go[1], &c, 1) != 1 || child_status(pid) != 0) {
-        st = -1;
+        st = fd_dir_ended(pid, ready[0], go[1], dir, info);
+    } else {
+        sent = write(go[1], &c, 1) == 1;
+        if (let_go(pid, ready[0], go[1]) != 0 || !sent) {
+            st = -1;
+        }
     }
-    close(ready[0]);
-    close(ready[1]);
-    close(go[0]);
-    close(go[1]);
     if (st < 0) {
         return fail("the fd directory's owner's end");
     }
