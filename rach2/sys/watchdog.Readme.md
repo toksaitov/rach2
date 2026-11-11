@@ -29,7 +29,7 @@ The hard lockup's headline is `watchdog: watchdog detected hard LOCKUP on cpu N`
 
 ### Soft lockup
 
-Each processor counts its ticks and runs `watchdog_timer_fn` every sample period, from the tick's router before it takes the big lock (kernel/watchdog.c:675-775). The timer queues the soft-lockup function, which Linux runs in a stopper thread and which here runs at the processor's next schedule point: `schedule`, `sched_service_point`, which is Rach2's `cond_resched`, a tick that finds user mode, or a tick that finds the processor halted in an idle wait. The function stores the time, and a timer that finds it more than 2 x `watchdog_thresh` seconds old reports. Times are seconds of the TSC at the rate `platform_pmu_probe` measured, Linux's `running_clock`, since the kernel's tick count moves only with the holder of the big lock.
+Each processor counts its ticks and runs `watchdog_timer_fn` every sample period of ticks or of the TSC, whichever ends first, from the tick's router before it takes the big lock (kernel/watchdog.c:675-775), so that the first tick after a spin with interrupts off runs it at once, in the context of the spin, as Linux's expired hrtimer does. The timer queues the soft-lockup function, which Linux runs in a stopper thread and which here runs at the processor's next schedule point: `schedule`, `sched_service_point`, which is Rach2's `cond_resched`, a tick that finds user mode, or a tick that finds the processor halted in an idle wait. The function stores the time, and a timer that finds it more than 2 x `watchdog_thresh` seconds old reports. Times are seconds of the TSC at the rate `platform_pmu_probe` measured, Linux's `running_clock`, since the kernel's tick count moves only with the holder of the big lock.
 
 ### Hard lockup
 

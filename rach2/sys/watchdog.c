@@ -55,7 +55,8 @@ int sysctl_hung_task_warnings = 10;
 /* Each processor's state, Linux's per-cpu variables of the same names:
  * the watchdog timer's count, `hrtimer_interrupts`, and the count the last
  * hard-lockup check saw; a touch that skips the next check and whether this
- * lockup was reported; the ticks since the timer last fired; whether the
+ * lockup was reported; the ticks since the timer last fired and its TSC
+ * then; whether the
  * soft-lockup function is queued (its completion not done); the timestamps
  * of the last schedule and the last report, in seconds of uptime; the
  * period the counter was armed with, 0 for none; whether the processor's
@@ -72,6 +73,7 @@ struct wd_cpu {
     volatile int hardlockup_touched;
     int hardlockup_warned;
     uint32_t ticks;
+    uint64_t timer_tsc;
     volatile int kicked;
     volatile uint32_t touch_ts;
     volatile uint32_t report_ts;
@@ -667,12 +669,17 @@ void watchdog_sched(void)
  * preempted the one and been chosen by the other, and here the tick that
  * finds another processor holding the big lock does not schedule at all.
  * The first tick after `watchdog_init` arms the processor's counter, so
- * that a lockup within the first sample period is caught.
+ * that a lockup within the first sample period is caught. The timer fires
+ * after a sample period of ticks or of the TSC, whichever comes first, so
+ * that the first tick after a wait with interrupts off fires it at once, as
+ * Linux's hrtimer fires as soon as interrupts let it, in the context that
+ * held them off.
  */
 void watchdog_tick(isr_params_t *params)
 {
     struct wd_cpu *w = &wd[arch_cpu_id()];
     uint32_t period = sample_ticks();
+    uint64_t cycles = sample_cycles();
 
     if (!wd_ready) {
         return;
@@ -685,10 +692,12 @@ void watchdog_tick(isr_params_t *params)
     if (FRAME_USER(params) || this_cpu()->idle_wait) {
         softlockup_fn(w);
     }
-    if (period == 0 || ++w->ticks < period) {
+    if (period == 0 ||
+        (++w->ticks < period && (cycles == 0 || w->tick_tsc - w->timer_tsc < cycles))) {
         return;
     }
     w->ticks = 0;
+    w->timer_tsc = w->tick_tsc;
     watchdog_timer_fn(w, params);
 }
 
