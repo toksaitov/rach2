@@ -143,10 +143,10 @@ void platform_cpu_nmi(int cpu);
 
 /*
  * The lockup detectors' part of the machine (watchdog.c), which
- * arch/x86/nmiwd.c defines for a PC: the hard-lockup detector's source of
- * NMIs, a performance counter of unhalted core cycles that raises one each
- * `watchdog_thresh` seconds, as Linux's perf event for the NMI watchdog
- * does, and what the reports read of the processor and its frames.
+ * arch/x86/pmu.c and nmiwd.c define for a PC: the hard-lockup detector's
+ * source of NMIs, a performance counter of unhalted core cycles that raises
+ * one each `watchdog_thresh` seconds, as Linux's perf event for the NMI
+ * watchdog does, and what the reports read of the processor and its frames.
  */
 
 /**
