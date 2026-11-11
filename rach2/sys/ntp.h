@@ -1,6 +1,7 @@
 /*
- * ntp.h: the real-time clock's NTP state, Linux's, which adjtimex reads and
- * changes, and the length of a tick it gives, which real time runs at.
+ * ntp.h: the clock's NTP state, Linux's, which adjtimex reads and changes,
+ * the length of a tick it gives, which the clocks since boot and real time
+ * run at, and the leap seconds it announces.
  */
 #ifndef _NTP_H_
 #define _NTP_H_
@@ -29,6 +30,8 @@
 
 /* The status bits and states, Linux's. */
 #define STA_PLL      0x0001
+#define STA_INS      0x0010
+#define STA_DEL      0x0020
 #define STA_FLL      0x0008
 #define STA_UNSYNC   0x0040
 #define STA_FREQHOLD 0x0080
@@ -37,6 +40,10 @@
 #define STA_MODE     0x4000
 #define STA_RONLY    0xff00 /* the PPS, error, nano, mode and clock bits */
 #define TIME_OK      0
+#define TIME_INS     1
+#define TIME_DEL     2
+#define TIME_OOP     3
+#define TIME_WAIT    4
 #define TIME_ERROR   5
 
 /* The ticks adjtimex accepts, in microseconds of a tick of USER_HZ: Linux's
@@ -60,32 +67,39 @@ struct ktimex {
 
 /**
  * The NTP part of adjtimex, Linux's __do_adjtimex (kernel/time/ntp.c:
- * 769-853) without PPS and leap seconds: with ADJ_ADJTIME, adjtime(3)'s
- * offset to slew, in microseconds, and the one left read back; otherwise
- * the modes of `tx`, then its offset, frequency, errors, status, time
- * constant, precision, tolerance, tick and TAI offset filled in. `now_sec`
- * is real time's seconds, which the PLL counts its interval in. The caller
- * has checked the modes (syscall.c's `ktimex_adjust`), holds the clock's
- * lock and applies the tick length after (`ntp_tick_length`). Returns
- * TIME_ERROR while STA_UNSYNC or STA_CLOCKERR is set, else TIME_OK.
+ * 769-853) without PPS: with ADJ_ADJTIME, adjtime(3)'s offset to slew, in
+ * microseconds, and the one left read back; otherwise the modes of `tx`,
+ * then its offset, frequency, errors, status, time constant, precision,
+ * tolerance, tick and TAI offset filled in. `tx->sec` and `tx->usec` hold
+ * the real time read before the call, whose seconds the PLL counts its
+ * interval in; at or past a leap second the tick has not yet made, they
+ * and `tx->tai` read as the leap second's own (ntp.c:835-850). The caller
+ * has checked the modes (syscall.c's `ktimex_adjust`) and holds the
+ * clock's lock; the next tick takes the tick length (`ntp_tick_length`).
+ * Returns TIME_ERROR while STA_UNSYNC or STA_CLOCKERR is set, else the
+ * leap second's state, TIME_OK while none is announced.
  */
-int32_t ntp_adjtimex(struct ktimex *tx, int64_t now_sec);
+int32_t ntp_adjtimex(struct ktimex *tx);
 
 /**
- * The clock's second, Linux's second_overflow (kernel/time/ntp.c:400-495)
- * without leap seconds: the maximum error grows by the tolerance, and
- * STA_UNSYNC is set once it reaches its limit; and the next second's tick
- * length is the base, the frequency's, plus a share of the PLL's offset,
- * which shrinks by it, plus adjtime's slew of 500 ppm while one is left.
- * The caller holds the clock's lock.
+ * The clock's second, Linux's second_overflow (kernel/time/ntp.c:400-495),
+ * at the real time `secs`, the second that has just begun: a leap second
+ * that STA_INS or STA_DEL announces is inserted or deleted at the end of
+ * the day in UTC; the maximum error grows by the tolerance, and STA_UNSYNC
+ * is set once it reaches its limit; and the next second's tick length is
+ * the base, the frequency's, plus a share of the PLL's offset, which
+ * shrinks by it, plus adjtime's slew of 500 ppm while one is left. Returns
+ * the step real time takes, -1 for a second inserted, 1 for one deleted,
+ * else 0; the TAI offset has moved the other way. The caller holds the
+ * clock's lock.
  */
-void ntp_second_overflow(void);
+int ntp_second_overflow(int64_t secs);
 
 /**
  * Forget an offset or adjtime's slew in progress, as a setting of the clock
  * does, Linux's ntp_clear (kernel/time/ntp.c:351-366): STA_UNSYNC set, the
- * errors at their limit, and the tick length the frequency's alone. The
- * caller holds the clock's lock.
+ * errors at their limit, the tick length the frequency's alone, and no
+ * leap second due. The caller holds the clock's lock.
  */
 void ntp_clear(void);
 

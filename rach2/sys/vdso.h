@@ -9,7 +9,6 @@
 
 #include "lib/kint.h"
 
-struct rtc_course;
 struct vm_space;
 struct vm_file;
 
@@ -26,11 +25,13 @@ struct vm_file;
  * meanwhile; a reader reads `seq`, the fields and the TSC, then `seq`
  * again, and reads again when it was odd or has moved. At `cycle_base`
  * counts of the TSC the monotonic clock was `mono_sec` seconds and
- * `mono_nsec` nanoseconds and real time `real_sec` and `real_nsec`; each
- * count since adds `mult` / 2^`shift` nanoseconds to the first and
- * `real_mult` / 2^`shift` to the second, which the NTP state's slew makes
- * faster or slower. Each clock's rate is 8 bytes before its seconds. The
- * coarse clocks are those two times as they are, without the counts since.
+ * `mono_nsec` nanoseconds, real time `real_sec` and `real_nsec`, and the
+ * raw clock `raw_sec` and `raw_nsec`; each count since adds `mult` /
+ * 2^`shift` nanoseconds to the first, `real_mult` / 2^`shift`, the same, to
+ * the second, and `raw_mult` / 2^`shift` to the third, the TSC's measured
+ * rate, which the NTP state's slew does not change. Each clock's rate is 8
+ * bytes before its seconds. The coarse clocks are the first two times as
+ * they are, without the counts since.
  */
 struct vdso_data {
     volatile uint32_t seq; /* odd while the kernel changes the page */
@@ -47,6 +48,11 @@ struct vdso_data {
     uint32_t res_ns;    /* the resolution clock_getres gives the two */
     uint32_t getcpu;    /* 1 when `rdtscp` gives the processor's number */
     uint32_t coarse_ns; /* the coarse clocks' resolution, the tick */
+    uint32_t pad2;
+    uint32_t raw_mult; /* the raw clock's nanoseconds a count, times 2^shift */
+    uint32_t pad3;
+    int64_t raw_sec;   /* CLOCK_MONOTONIC_RAW at cycle_base */
+    uint64_t raw_nsec; /* below 10^9 */
 };
 
 /* The offsets the vDSO reads the page at. */
@@ -63,6 +69,14 @@ struct vdso_data {
 #define VDSO_DATA_RES_NS     64
 #define VDSO_DATA_GETCPU     68
 #define VDSO_DATA_COARSE_NS  72
+#define VDSO_DATA_RAW_MULT   80
+#define VDSO_DATA_RAW_SEC    88
+#define VDSO_DATA_RAW_NSEC   96
+
+/* The clocks `vclock_read` and `vclock_read_cycles` read. */
+#define VCLOCK_READ_MONO 0
+#define VCLOCK_READ_REAL 1
+#define VCLOCK_READ_RAW  2
 
 /*
  * The clock behind the page, which the kernel's own clock calls read as
@@ -85,41 +99,43 @@ int vclock_running(void);
 
 /**
  * Carry the clock on at the boot processor's tick, with interrupts off: the
- * page's times are moved to the TSC's count now, the monotonic clock's rate
- * is steered toward the reference that keeps the tick, and real time's
- * toward the course (`vclock_set_course`), each by at most one part in
- * 2000, so that neither drifts from what it follows and no reading is
- * earlier than one before it.
+ * page's times are moved to the TSC's count now, and the monotonic clock's
+ * rate, the measured one at the rate of the NTP state's tick length
+ * (`rtc_mono_rate`), and the raw clock's, the measured one, are each steered
+ * toward the same clock of the tick (`rtc_tick_both`) by at most one part
+ * in 2000, so that neither drifts from what it follows and no reading is
+ * earlier than one before it. Real time is the monotonic clock plus the
+ * offset (`vclock_set_wall`).
  */
 void vclock_tick(void);
 
 /**
- * The clock now, from the TSC, or with `coarse` as of the last tick: real
- * time when `real` is set, the monotonic clock otherwise, in `*sec` and
- * `*nsec`, which is below 10^9. 0 with nothing read when the clock does not
- * run from the TSC. Any processor and any context may call it.
+ * The clock `which` now, VCLOCK_READ_MONO, VCLOCK_READ_REAL or
+ * VCLOCK_READ_RAW, from the TSC, or with `coarse` as of the last tick, in
+ * `*sec` and `*nsec`, which is below 10^9; the raw clock has no coarse
+ * reading. 0 with nothing read when the clock does not run from the TSC.
+ * Any processor and any context may call it.
  */
-int vclock_read(int real, int coarse, int64_t *sec, int64_t *nsec);
+int vclock_read(int which, int coarse, int64_t *sec, int64_t *nsec);
 
 /**
- * The clock now in nanoseconds into `*ns`, real time when `real` is set and
- * the monotonic clock otherwise, with the TSC count it was read at in
- * `*cycles`, so that the two are one moment, as Linux's
- * kvm_get_time_and_clockread pairs them for KVM's master clock. 1, or 0
- * with nothing read when the clock does not run from the TSC.
+ * The clock `which`, as for `vclock_read`, now in nanoseconds into `*ns`,
+ * with the TSC count it was read at in `*cycles`, so that the two are one
+ * moment, as Linux's kvm_get_time_and_clockread pairs them for KVM's master
+ * clock. 1, or 0 with nothing read when the clock does not run from the
+ * TSC.
  */
-int vclock_read_cycles(int real, uint64_t *ns, uint64_t *cycles);
+int vclock_read_cycles(int which, uint64_t *ns, uint64_t *cycles);
 
 /**
- * Make real time follow the course `c` (rtc.h), which clock.c gives at the
- * anchor, at each setting with `step`, and at each change of its rate: the
- * page's base moves to the TSC's count now, real time there is the
- * course's with `step` and the page's own otherwise, so that a change of
- * rate makes no jump, and its rate is the monotonic clock's times the
- * course's. Interrupts may be on or off; the caller may hold clock.c's
- * lock.
+ * Make real time the monotonic clock plus `sec` seconds and `nsec`
+ * nanoseconds, from 0 to 10^9 - 1, the offset clock.c gives at the anchor,
+ * each setting and each leap second (`rtc_offset`): the page's base moves to
+ * the TSC's count now and real time there is the monotonic clock's plus the
+ * offset. The offset is kept for the clock's start when it does not run
+ * yet. Interrupts may be on or off; the caller may hold clock.c's lock.
  */
-void vclock_set_course(const struct rtc_course *c, int step);
+void vclock_set_wall(int64_t sec, int32_t nsec);
 
 /** The resolution of the clock from the TSC, in nanoseconds: a count,
  * rounded up. */

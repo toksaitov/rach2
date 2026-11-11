@@ -1,7 +1,7 @@
 /*
- * rtc.h: the time of day, kept from one reading of the machine's clock at
- * boot and the tick since, slewed as the NTP state asks, and the machine's
- * clock read, set and its alarm.
+ * rtc.h: the clocks since boot and the time of day, kept from the tick and
+ * one reading of the machine's clock at boot, slewed as the NTP state asks,
+ * and the machine's clock read, set and its alarm.
  */
 #ifndef _RTC_H_
 #define _RTC_H_
@@ -65,47 +65,56 @@ void rtc_init(void);
 int rtc_is_anchored(void);
 
 /*
- * Real time's course against the monotonic clock: at the monotonic time
- * `mono_sec` and `mono_nsec` real time was `off_sec` seconds, `off_nsec`
- * nanoseconds and `frac` 2^-RTC_RATE_SHIFT nanoseconds ahead of it, and it
- * gains `rate` 2^-RTC_RATE_SHIFT nanoseconds a nanosecond since, fewer
- * than a quarter of a nanosecond, or loses them while `rate` is negative.
- * The anchor and each setting start a course of the rate there is; each
- * change of the NTP state's tick length starts one at its rate from where
- * the last has brought real time. The vDSO's clock keeps a copy
- * (`vclock_set_course`).
+ * The clocks since boot. The raw clock, CLOCK_MONOTONIC_RAW, is the ticks
+ * the timer counts and its place within the tick. The monotonic clock,
+ * which CLOCK_MONOTONIC and CLOCK_BOOTTIME read, the machine never being
+ * suspended, gains the NTP state's tick length in each raw tick, as Linux's
+ * tkr_mono follows the tick length and tkr_raw does not
+ * (kernel/time/timekeeping.c:2054-2107, 2164-2193); its whole ticks are the
+ * kernel's tick count, `kernel_ticks`, and the uptime, so that a deadline of
+ * ticks is a time of the monotonic clock. Real time is the monotonic clock
+ * plus an offset (`rtc_offset`) that only a step changes. The rate of a tick
+ * length, what the monotonic clock gains or loses in a nanosecond of the raw
+ * clock, is in 2^-RTC_RATE_SHIFT nanoseconds, under a quarter of a
+ * nanosecond either way.
  */
 #define RTC_RATE_SHIFT 45
-struct rtc_course {
-    int64_t mono_sec;
-    int32_t mono_nsec; /* 0 to 10^9 - 1, as `off_nsec` */
-    int32_t off_nsec;
-    int64_t off_sec;
-    uint64_t frac; /* below 2^RTC_RATE_SHIFT */
-    int64_t rate;
-};
+
+/** `ns` nanoseconds of the raw clock, below 2^62, as the monotonic clock's
+ * at `rate`; a pure function, for the vDSO's clock and a host test. */
+uint64_t rtc_slewed(uint64_t ns, int64_t rate);
+
+/** The NTP state's tick length now (`ntp_tick_length`), which the timer
+ * pass reads before it changes the tick, for `rtc_tick_advance`. */
+int64_t rtc_tick_length(void);
 
 /**
- * The offset of real time over the monotonic clock that the course `c`
- * gives at the monotonic time `sec` and `nsec`, which may be before its
- * start and whose nanoseconds may pass a second: in `*off_sec`,
- * `*off_nsec`, from 0 to 10^9 - 1, and `*frac`. A pure function, for the
- * vDSO's clock and a host test.
+ * Count `raw` ticks of the timer, from the timer pass (kernel.c) between
+ * `tick_write_begin` and `tick_write_end`: each moves the monotonic clock on
+ * by the tick length the last pass took, and its whole ticks move
+ * `kernel_ticks` and the uptime; the ticks after these take `length`, from
+ * `rtc_tick_length`. Returns the seconds of real time begun, which the pass
+ * gives `rtc_seconds` once the tick is written.
  */
-void rtc_course_at(const struct rtc_course *c, int64_t sec, int64_t nsec, int64_t *off_sec,
-                   int32_t *off_nsec, uint64_t *frac);
+uint32_t rtc_tick_advance(uint32_t raw, int64_t length);
 
-/** The course now, for the vDSO's clock as it starts. */
-void rtc_get_course(struct rtc_course *c);
+/** The rate the monotonic clock runs at now against the raw clock, from
+ * the tick length the last pass took, for the vDSO's clock. */
+int64_t rtc_mono_rate(void);
+
+/** The monotonic and the raw clock now in nanoseconds, from the tick and
+ * the timer's place within it, read together with interrupts off: the
+ * reference the vDSO's clock follows. */
+void rtc_tick_both(uint64_t *mono_ns, uint64_t *raw_ns);
 
 /** The real time of uptime zero, which /proc/stat gives as `btime` and a
  * node with no times of its own reports (a device, a /proc file, a pipe):
- * the seconds of `rtc_offset`. */
+ * the seconds of `rtc_offset`, which a slew does not move. */
 int64_t rtc_boot_epoch(void);
 
-/** Real time less the monotonic clock now, in `*seconds` and
- * `*nanoseconds`, which is 0 to 10^9 - 1: the anchor less the uptime it was
- * read at, with what each setting and the slew since have added. */
+/** Real time less the monotonic clock, in `*seconds` and `*nanoseconds`,
+ * which is 0 to 10^9 - 1: the anchor less the uptime it was read at, with
+ * what each setting and leap second since have added. */
 void rtc_offset(int64_t *seconds, int32_t *nanoseconds);
 
 /**
@@ -118,11 +127,11 @@ void rtc_realtime_unlocked(int64_t *seconds, int32_t *microseconds);
 
 /**
  * The real time now, in seconds since 1970 and nanoseconds within the
- * second: the monotonic clock to the timer's place within the tick plus the
- * course's offset there. While the clock runs from the TSC it is that
- * clock's real time (vdso.h's `vclock_read`), so a reading here and the
- * vDSO's agree. No reading is earlier than the one before it until the
- * clock is set again. Interrupts are off while it reads.
+ * second: the monotonic clock to the timer's place within the tick, or the
+ * TSC's clock while it runs (vdso.h's `vclock_read`), plus the offset, so a
+ * reading here and the vDSO's agree. No reading is earlier than the one
+ * before it until the clock is set again. Interrupts are off while it
+ * reads.
  */
 void rtc_realtime(int64_t *seconds, int64_t *nanoseconds);
 
@@ -131,7 +140,7 @@ void rtc_realtime(int64_t *seconds, int64_t *nanoseconds);
  * the TSC's clock as of its last tick while that one runs. */
 void rtc_coarse_realtime(int64_t *seconds, int64_t *nanoseconds);
 
-/** The time since boot, to the timer's place within the tick, or by the
+/** The monotonic clock, to the timer's place within the tick, or by the
  * TSC's clock while it runs, never earlier than the reading before it.
  * Setting the clock does not move it. */
 void rtc_monotonic(int64_t *seconds, int64_t *nanoseconds);
@@ -139,14 +148,19 @@ void rtc_monotonic(int64_t *seconds, int64_t *nanoseconds);
 /** `rtc_monotonic` as nanoseconds since boot. */
 int64_t rtc_monotonic_ns(void);
 
-/** The time since boot to the last tick, without the timer's place within
+/** The raw clock, CLOCK_MONOTONIC_RAW, as `rtc_monotonic` reads the
+ * monotonic one, which the NTP state does not slew. */
+void rtc_raw_monotonic(int64_t *seconds, int64_t *nanoseconds);
+
+/** The monotonic clock at the last tick, without the timer's place within
  * it: the coarse monotonic clock, which reads no timer; the TSC's clock as
  * of its last tick while that one runs. */
 void rtc_coarse_monotonic(int64_t *seconds, int64_t *nanoseconds);
 
-/** The tick count, with the ticks that have passed and the handler has not
- * counted (`timer_phase`), and how far into the next tick the timer is, in
- * nanoseconds, read together with interrupts off. */
+/** The tick count of the monotonic clock now, with the ticks that have
+ * passed and the handler has not counted (`timer_phase`), and how far into
+ * the next tick the clock is, in nanoseconds, read together with interrupts
+ * off. */
 void rtc_tick_phase(uint64_t *ticks, uint32_t *phase_ns);
 
 /** The tick count as the clocks count it, with the ticks the handler has
@@ -184,50 +198,42 @@ int rtc_shift_realtime(int64_t seconds, int32_t nanoseconds);
 
 /**
  * The NTP part of adjtimex on `tx`, whose modes the caller has checked
- * (`ntp_adjtimex`), with the clock's lock held, then the rate the tick
- * length gives taken at once: no step, and no TFD_TIMER_CANCEL_ON_SET
- * timerfd canceled, as Linux slews ADJ_OFFSET and adjtime's offsets and
- * calls clock_was_set for neither (kernel/time/ntp.c:754-755,
- * kernel/time/timekeeping.c:2490-2532). `tx->sec` and `tx->usec` get the
- * real time read before, in the unit STA_NANO chooses. Returns the clock's
- * state.
+ * (`ntp_adjtimex`), with the clock's lock held, whose tick length the next
+ * tick takes: no step, and no TFD_TIMER_CANCEL_ON_SET timerfd canceled, as
+ * Linux slews ADJ_OFFSET and adjtime's offsets and calls clock_was_set for
+ * neither (kernel/time/ntp.c:754-755, kernel/time/timekeeping.c:2490-2532).
+ * `tx->sec` and `tx->usec` get the real time read before, in the unit
+ * STA_NANO chooses. Returns the clock's state.
  */
 int32_t rtc_adjtimex(struct ktimex *tx);
 
 /**
- * The timer's `n` seconds since the last call, each the NTP state's
- * second (`ntp_second_overflow`), whose tick length real time takes as
- * `rtc_adjtimex` does; the boot processor's timer pass calls it, or a late
- * pass on another (kernel.c).
+ * The `n` seconds of real time begun at the last timer pass
+ * (`rtc_tick_advance`), each the NTP state's second (`ntp_second_overflow`),
+ * whose tick length the next tick takes, and which inserts or deletes a
+ * leap second: a step of real time a second back or on, counted as a
+ * setting is (`rtc_step_count`), with the timers of real time told
+ * (`timerfd_clock_was_set`). The boot processor's timer pass calls it, or a
+ * late pass on another (kernel.c), with the big lock held and interrupts
+ * off, once the tick is written, since it writes the tick's length.
  */
 void rtc_seconds(uint32_t n);
 
-/** `ns` nanoseconds of real time as the nanoseconds of the monotonic clock
- * they take at the present rate; 0 or less is itself. */
-int64_t rtc_real_to_mono_ns(int64_t ns);
-
-/** The whole ticks, a partial one counted as one, in which real time goes
- * on by `sec` seconds and `nsec` nanoseconds at the present rate, as
- * `tick_span` counts the monotonic clock's. */
-uint64_t rtc_real_span(int64_t sec, uint32_t nsec);
-
-/** The monotonic time at which real time reaches `sec` and `nsec` at the
- * present rate, in `*mono_sec` and `*mono_nsec`, from 0 to 10^9 - 1: a time
- * past is one before the monotonic clock now. */
+/** The monotonic time at which real time reaches `sec` and `nsec`, real
+ * time less the offset, in `*mono_sec` and `*mono_nsec`, from 0 to
+ * 10^9 - 1: a time past is one before the monotonic clock now. */
 void rtc_mono_of_real(int64_t sec, int32_t nsec, int64_t *mono_sec, int32_t *mono_nsec);
 
 /**
- * The count of the settings of the real-time clock and of the changes of
- * its rate, never 0, which moves on as `rtc_set_realtime`,
- * `rtc_shift_realtime` or a new tick length changes the course. A sleep to
- * an absolute time of real time reads it before the clock, counts its tick
- * from the clock at the present rate, and keeps it in `rt_steps`
- * (proc/process.h); a later change makes the two differ, the timer tick
+ * The count of the steps of real time, its settings and its leap seconds,
+ * never 0, which moves on at `rtc_set_realtime`, `rtc_shift_realtime` and a
+ * leap second. A sleep to an absolute time of real time reads it before
+ * the clock, counts its tick from the clock, and keeps it in `rt_steps`
+ * (proc/process.h); a later step makes the two differ, the timer tick
  * wakes the sleep, and the sleep counts its tick again, as Linux's
  * clock_was_set moves the hrtimers of the real-time base
- * (kernel/time/hrtimer.c:951-987) and as Linux's real-time hrtimers follow
- * the slewed clock. A sleep woken at its tick before real time has reached
- * its time counts again too.
+ * (kernel/time/hrtimer.c:951-987). A slew changes no offset and counts no
+ * step, since real time and the ticks run at its rate alike.
  */
 uint32_t rtc_step_count(void);
 

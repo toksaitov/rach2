@@ -1,11 +1,12 @@
 /*
- * clock.c: the kernel's clocks: time since boot, from the tick, and real
- * time, that clock plus an offset from one reading of the machine's clock
- * at boot (the anchor, which the platform's clock driver sets through
- * `rtc_anchor`) and from each setting, which runs at the rate the NTP
- * state's tick length gives (ntp.c); with the calendar arithmetic the clock
- * drivers and the clock calls share, and the sequence count by which another
- * processor reads the tick whole.
+ * clock.c: the kernel's clocks: the raw clock, the timer's ticks since boot;
+ * the monotonic clock, each of those ticks the length the NTP state gives it
+ * (ntp.c), whose ticks are the kernel's tick count; and real time, the
+ * monotonic clock plus an offset from one reading of the machine's clock at
+ * boot (the anchor, which the platform's clock driver sets through
+ * `rtc_anchor`), which only a setting or a leap second moves; with the
+ * calendar arithmetic the clock drivers and the clock calls share, and the
+ * sequence count by which another processor reads the tick whole.
  */
 
 #include "ntp.h"
@@ -145,24 +146,40 @@ void rtc_time_from_anchor(int64_t anchor_seconds, uint32_t anchor_uptime, uint32
 /* Whether the boot read the clock and anchored real time to it. */
 static int rtc_anchored;
 
+/* A tick of the monotonic clock in 2^-32 nanoseconds, the unit of the NTP
+ * state's tick length. */
+#define RTC_TICK_ONE ((uint64_t)TICK_NS << 32)
+
 /*
- * Real time's course against the monotonic clock (`struct rtc_course`),
- * which the anchor, each setting and each change of the NTP state's tick
- * length make; the tick length its rate was made from; and the rate's
- * inverse, the monotonic nanoseconds a nanosecond of real time takes at
- * it, times 2^31. Each reading of real time is the monotonic clock plus
- * the course's offset there. The last reading is kept too, before which no
- * later one may fall until the clock is set.
+ * The clocks since boot, which the timer pass changes within the tick's
+ * sequence count (`rtc_tick_advance`): the raw ticks the timer has counted;
+ * how far the monotonic clock is past the edge of its tick `kernel_ticks`,
+ * in 2^-32 nanoseconds, below RTC_TICK_ONE; the length each raw tick adds to
+ * the monotonic clock, the NTP state's tick length as the last pass took it;
+ * and the rate that length gives, the nanoseconds the monotonic clock gains
+ * in a nanosecond of the raw clock, times 2^RTC_RATE_SHIFT, negative while
+ * it loses them.
  */
-static struct rtc_course rtc_course_now;
-static int64_t rtc_applied_length = (int64_t)TICK_NS << 32;
-static uint64_t rtc_inverse = (uint64_t)1 << 31;
+static volatile uint64_t rtc_raw_ticks;
+static volatile uint64_t rtc_part;
+static volatile int64_t rtc_applied = (int64_t)RTC_TICK_ONE;
+static volatile int64_t rtc_rate;
+
+/*
+ * Real time less the monotonic clock, Linux's offs_real, the negated
+ * wall_to_monotonic (kernel/time/timekeeping.c:151-164), in seconds and in
+ * nanoseconds from 0 to 10^9 - 1, which the anchor, each setting and each
+ * leap second move and nothing else; and the last reading of real time,
+ * before which no later one may fall until the clock is set.
+ */
+static int64_t rtc_wall_sec;
+static volatile int32_t rtc_wall_nsec;
 static int64_t rtc_last_seconds;
 static int64_t rtc_last_nanoseconds;
-/* Protect the course, the NTP state and the real-time floor across
+/* Protect the offset, the NTP state and the real-time floor across
  * processors. */
 static struct spinlock rtc_realtime_lock = SPINLOCK_INIT_NAMED("rtc_realtime_lock");
-/* The settings of the clock and the changes of its rate since boot, plus
+/* The steps of real time since boot, its settings and leap seconds, plus
  * one, modulo 2^32 with 0 left out (`rtc_step_count`). */
 static volatile uint32_t rtc_steps = 1;
 
@@ -205,55 +222,29 @@ static void rtc_mul128(uint64_t a, uint64_t b, uint64_t *hi, uint64_t *lo)
     *hi = p11 + (p01 >> 32) + (p10 >> 32) + (mid >> 32);
 }
 
-/**
- * The slew is the time since the course's start times its rate, both of
- * either sign, in 2^-RTC_RATE_SHIFT nanoseconds, plus the course's own
- * fraction; its floor in nanoseconds goes to the offset and the rest is
- * the fraction, so that a course started from this one's offset and
- * fraction at any time gives the same offsets after it.
- */
-void rtc_course_at(const struct rtc_course *c, int64_t sec, int64_t nsec, int64_t *off_sec,
-                   int32_t *off_nsec, uint64_t *frac)
+uint64_t rtc_slewed(uint64_t ns, int64_t rate)
 {
-    const uint64_t one = (uint64_t)1 << RTC_RATE_SHIFT;
-    int64_t e = (sec - c->mono_sec) * 1000000000 + (nsec - c->mono_nsec);
-    uint64_t hi, lo, whole, part;
-    int64_t ns;
+    uint64_t hi, lo, gain;
 
-    rtc_mul128(e < 0 ? (uint64_t)-e : (uint64_t)e,
-               c->rate < 0 ? (uint64_t)-c->rate : (uint64_t)c->rate, &hi, &lo);
-    whole = (hi << (64 - RTC_RATE_SHIFT)) | (lo >> RTC_RATE_SHIFT);
-    part = lo & (one - 1u);
-    if ((e < 0) == (c->rate < 0)) {
-        part += c->frac;
-        ns = (int64_t)(whole + (part >> RTC_RATE_SHIFT));
-        *frac = part & (one - 1u);
-    } else if (part <= c->frac) {
-        ns = -(int64_t)whole;
-        *frac = c->frac - part;
-    } else {
-        ns = -(int64_t)whole - 1;
-        *frac = c->frac + one - part;
+    if (rate == 0) {
+        return ns;
     }
-    rtc_normalize(c->off_sec, c->off_nsec + ns, off_sec, off_nsec);
+    rtc_mul128(ns, rate < 0 ? (uint64_t)-rate : (uint64_t)rate, &hi, &lo);
+    gain = (hi << (64 - RTC_RATE_SHIFT)) | (lo >> RTC_RATE_SHIFT);
+    return rate < 0 ? ns - gain : ns + gain;
 }
 
-/** Start the course again at the monotonic time `sec` and `nsec`, from its
- * offset and fraction there, with the lock held: the offsets it gives are
- * the same, and the time since its start, which every reading multiplies,
- * stays short. */
-static void rtc_course_rebase(int64_t sec, int64_t nsec)
+/** The rate (`rtc_rate`) of the tick length `length`, what a tick of
+ * TICK_NS nanoseconds gains or loses in each of its nanoseconds. */
+static int64_t rtc_rate_of(int64_t length)
 {
-    struct rtc_course *c = &rtc_course_now;
-    int64_t off_sec;
-    int32_t off_nsec;
-    uint64_t frac;
+    int64_t d = length - (int64_t)RTC_TICK_ONE;
+    uint64_t rate;
 
-    rtc_course_at(c, sec, nsec, &off_sec, &off_nsec, &frac);
-    rtc_normalize(sec, nsec, &c->mono_sec, &c->mono_nsec);
-    c->off_sec = off_sec;
-    c->off_nsec = off_nsec;
-    c->frac = frac;
+    /* under 2^63: a tick is at most 23% longer or shorter, under 2^50 */
+    rate = tick_div64((d < 0 ? (uint64_t)-d : (uint64_t)d) << (RTC_RATE_SHIFT - 32), TICK_NS,
+                      (uint64_t *)0);
+    return d < 0 ? -(int64_t)rate : (int64_t)rate;
 }
 
 /** Move the step count on, past 0. */
@@ -262,39 +253,130 @@ static void rtc_count_step(void)
     rtc_steps = rtc_steps % 0xffffffffu + 1u; /* 1 to 2^32-1, never 0 */
 }
 
-/**
- * Take the NTP state's tick length, with the lock held and the monotonic
- * clock at `sec` and `nsec`, when it changed: the course starts again
- * there at the rate the length gives, what a tick of TICK_NS nanoseconds
- * gains or loses, so that real time runs on from where it is at the new
- * rate, as Linux's timekeeping_adjust steers the clock to the tick length
- * (kernel/time/timekeeping.c:2054-2107); the vDSO's clock takes the course,
- * and the step count moves on, so that every wait for a time of real time
- * counts its tick again at the new rate. Returns 1 when the length
- * changed, for the caller to have the timers counted again
- * (`timerfd_clock_was_set`) once the lock is let go.
- */
-static int rtc_take_rate(int64_t sec, int64_t nsec)
+int64_t rtc_tick_length(void)
 {
+    uint32_t flags = spin_lock_irqsave(&rtc_realtime_lock);
     int64_t length = ntp_tick_length();
-    int64_t d = length - ((int64_t)TICK_NS << 32);
-    uint64_t rate;
 
-    if (length == rtc_applied_length) {
-        return 0;
+    spin_unlock_irqrestore(&rtc_realtime_lock, flags);
+    return length;
+}
+
+/** The second of real time the monotonic clock is in at the last pass,
+ * modulo 2^32, with real time `wall_nsec` nanoseconds past the monotonic
+ * clock's second; the caller writes the tick. */
+static uint32_t rtc_real_second(int32_t wall_nsec)
+{
+    uint32_t ns = kernel_second_ticks * RTC_NANOSECONDS_PER_TICK + (uint32_t)(rtc_part >> 32) +
+                  (uint32_t)wall_nsec;
+
+    return kernel_uptime_seconds + (ns >= 1000000000u ? 1u : 0u);
+}
+
+/**
+ * Each raw tick adds the tick length to the monotonic clock, as Linux's
+ * logarithmic_accumulation adds xtime_interval for each cycle_interval
+ * (kernel/time/timekeeping.c:2164-2193), and the whole ticks of the sum
+ * move `kernel_ticks` and the uptime; a length from the NTP state is taken
+ * only here, for the ticks after this one, as Linux's timekeeping_adjust
+ * takes it at the end of timekeeping_advance (timekeeping.c:2054-2107,
+ * 2245-2246), so that the coarse clocks, the monotonic clock at the last
+ * tick, never go back. The seconds of real time are counted at real time's
+ * own second, which is what Linux's accumulate_nsecs_to_secs counts
+ * (timekeeping.c:2115-2153); the offset's nanoseconds are read once, so a
+ * setting between two passes moves the count by at most one.
+ */
+uint32_t rtc_tick_advance(uint32_t raw, int64_t length)
+{
+    int32_t wall_nsec = rtc_wall_nsec;
+    uint32_t before = rtc_real_second(wall_nsec);
+
+    rtc_raw_ticks += raw;
+    while (raw-- > 0) {
+        rtc_part += (uint64_t)rtc_applied;
+        while (rtc_part >= RTC_TICK_ONE) {
+            rtc_part -= RTC_TICK_ONE;
+            ++kernel_ticks;
+            if (++kernel_second_ticks >= RTC_TICKS_PER_SECOND) {
+                kernel_second_ticks = 0;
+                ++kernel_uptime_seconds;
+            }
+        }
     }
-    rtc_applied_length = length;
-    rtc_course_rebase(sec, nsec);
-    /* under 2^63: a tick is at most 23% longer or shorter, under 2^50 */
-    rate = tick_div64((d < 0 ? (uint64_t)-d : (uint64_t)d) << (RTC_RATE_SHIFT - 32), TICK_NS,
-                      (uint64_t *)0);
-    rtc_course_now.rate = d < 0 ? -(int64_t)rate : (int64_t)rate;
-    rtc_inverse = tick_div64((uint64_t)1 << 62,
-                             (uint64_t)(((int64_t)1 << RTC_RATE_SHIFT) + rtc_course_now.rate) >> 14,
-                             (uint64_t *)0);
-    vclock_set_course(&rtc_course_now, 0);
-    rtc_count_step();
-    return 1;
+    if (length != rtc_applied) {
+        rtc_applied = length;
+        rtc_rate = rtc_rate_of(length);
+    }
+    return rtc_real_second(wall_nsec) - before;
+}
+
+int64_t rtc_mono_rate(void)
+{
+    uint32_t flags = kirq_save();
+    uint32_t seq;
+    int64_t rate;
+
+    do {
+        seq = tick_read_begin();
+        rate = rtc_rate;
+    } while (tick_read_retry(seq));
+    kirq_restore(flags);
+    return rate;
+}
+
+/* One reading of the clocks since boot from the tick (`rtc_tick_read`). */
+struct rtc_reading {
+    uint64_t ticks;        /* kernel_ticks */
+    uint64_t raw_ticks;    /* rtc_raw_ticks */
+    uint32_t uptime;       /* kernel_uptime_seconds */
+    uint32_t second_ticks; /* kernel_second_ticks */
+    uint64_t mono_past;    /* the monotonic clock's ns past `ticks`' edge */
+    uint64_t raw_past;     /* the raw clock's ns past `raw_ticks`' edge */
+};
+
+/**
+ * Read the clocks since boot from the tick into `*r`, to the timer's place
+ * within it, with interrupts off. The ticks the handler has not counted yet
+ * belong to the time now (`timer_phase`): they and the place within the
+ * tick are raw time, which the rate the last pass took (`rtc_rate`) makes
+ * the monotonic clock's.
+ */
+static void rtc_tick_read(struct rtc_reading *r)
+{
+    uint32_t seq, phase_ns;
+    uint64_t part;
+    int64_t rate;
+    int pending;
+
+    do {
+        seq = tick_read_begin();
+        r->ticks = kernel_ticks;
+        r->raw_ticks = rtc_raw_ticks;
+        r->uptime = kernel_uptime_seconds;
+        r->second_ticks = kernel_second_ticks;
+        part = rtc_part;
+        rate = rtc_rate;
+        timer_phase(&pending, &phase_ns);
+    } while (tick_read_retry(seq));
+    r->raw_past = (uint64_t)(uint32_t)pending * RTC_NANOSECONDS_PER_TICK + phase_ns;
+    r->mono_past = (part >> 32) + rtc_slewed(r->raw_past, rate);
+}
+
+/** The monotonic clock at the last pass, with interrupts off: the uptime's
+ * seconds in `*seconds` and the nanoseconds past them in `*nanoseconds`. */
+static void rtc_coarse_since_boot(int64_t *seconds, int64_t *nanoseconds)
+{
+    uint32_t seq, uptime, ticks;
+    uint64_t part;
+
+    do {
+        seq = tick_read_begin();
+        uptime = kernel_uptime_seconds;
+        ticks = kernel_second_ticks;
+        part = rtc_part;
+    } while (tick_read_retry(seq));
+    *seconds = uptime;
+    *nanoseconds = (int64_t)ticks * RTC_NANOSECONDS_PER_TICK + (int64_t)(part >> 32);
 }
 
 void rtc_anchor(int64_t seconds, uint32_t uptime)
@@ -302,16 +384,8 @@ void rtc_anchor(int64_t seconds, uint32_t uptime)
     uint32_t flags = spin_lock_irqsave(&rtc_realtime_lock);
 
     rtc_anchored = 1;
-    rtc_course_now.off_sec += seconds - (int64_t)uptime;
-    vclock_set_course(&rtc_course_now, 1);
-    spin_unlock_irqrestore(&rtc_realtime_lock, flags);
-}
-
-void rtc_get_course(struct rtc_course *c)
-{
-    uint32_t flags = spin_lock_irqsave(&rtc_realtime_lock);
-
-    *c = rtc_course_now;
+    rtc_wall_sec += seconds - (int64_t)uptime;
+    vclock_set_wall(rtc_wall_sec, rtc_wall_nsec);
     spin_unlock_irqrestore(&rtc_realtime_lock, flags);
 }
 
@@ -401,14 +475,12 @@ int rtc_time_of_seconds(int64_t seconds, rtc_time_t *t)
 
 void rtc_realtime_unlocked(int64_t *seconds, int32_t *microseconds)
 {
-    int64_t off_sec, ns;
-    int32_t off_nsec;
-    uint64_t frac;
+    int64_t ns = (int64_t)kernel_second_ticks * RTC_NANOSECONDS_PER_TICK +
+                 (int64_t)(rtc_part >> 32) + rtc_wall_nsec;
+    int32_t nsec;
 
-    ns = (int64_t)kernel_second_ticks * TICK_NS;
-    rtc_course_at(&rtc_course_now, kernel_uptime_seconds, ns, &off_sec, &off_nsec, &frac);
-    rtc_normalize((int64_t)kernel_uptime_seconds + off_sec, ns + off_nsec, seconds, &off_nsec);
-    *microseconds = off_nsec / 1000;
+    rtc_normalize((int64_t)kernel_uptime_seconds + rtc_wall_sec, ns, seconds, &nsec);
+    *microseconds = nsec / 1000;
 }
 
 int rtc_is_anchored(void)
@@ -416,42 +488,15 @@ int rtc_is_anchored(void)
     return rtc_anchored;
 }
 
-/**
- * Time since boot now: the uptime seconds, the ticks of this second and the
- * timer's place within the tick; the caller has interrupts off.
- *
- * Ticks can have passed that the handler has not counted, the one of a
- * pending interrupt or, with a reference, those of a late one, and they
- * belong to the time now before the handler counts them (`timer_phase`).
- */
-static void rtc_since_boot(uint32_t *uptime, uint32_t *ticks, uint32_t *phase_ns)
-{
-    uint32_t seq;
-    int pending;
-
-    do {
-        seq = tick_read_begin();
-        *uptime = kernel_uptime_seconds;
-        *ticks = kernel_second_ticks;
-        timer_phase(&pending, phase_ns);
-    } while (tick_read_retry(seq));
-    *ticks += (uint32_t)pending;
-    *uptime += *ticks / RTC_TICKS_PER_SECOND;
-    *ticks %= RTC_TICKS_PER_SECOND;
-}
-
 void rtc_tick_phase(uint64_t *ticks, uint32_t *phase_ns)
 {
     uint32_t flags = kirq_save();
-    uint32_t seq;
-    int pending;
+    struct rtc_reading r;
+    uint64_t rem;
 
-    do {
-        seq = tick_read_begin();
-        *ticks = kernel_ticks;
-        timer_phase(&pending, phase_ns);
-    } while (tick_read_retry(seq));
-    *ticks += (uint32_t)pending;
+    rtc_tick_read(&r);
+    *ticks = r.ticks + tick_div64(r.mono_past, RTC_NANOSECONDS_PER_TICK, &rem);
+    *phase_ns = (uint32_t)rem;
     kirq_restore(flags);
 }
 
@@ -464,60 +509,57 @@ uint64_t rtc_ticks_now(void)
     return ticks;
 }
 
+void rtc_tick_both(uint64_t *mono_ns, uint64_t *raw_ns)
+{
+    uint32_t flags = kirq_save();
+    struct rtc_reading r;
+
+    rtc_tick_read(&r);
+    *mono_ns = r.ticks * RTC_NANOSECONDS_PER_TICK + r.mono_past;
+    *raw_ns = r.raw_ticks * RTC_NANOSECONDS_PER_TICK + r.raw_past;
+    kirq_restore(flags);
+}
+
 /** The monotonic clock now, to the timer's place within the tick, or by
  * the clock from the TSC while it runs, without `rtc_monotonic`'s floor,
  * with nanoseconds that may pass a second; the caller has interrupts off. */
 static void rtc_mono_now(int64_t *seconds, int64_t *nanoseconds)
 {
-    uint32_t uptime, ticks, phase_ns;
+    struct rtc_reading r;
 
-    if (vclock_read(0, 0, seconds, nanoseconds)) {
+    if (vclock_read(VCLOCK_READ_MONO, 0, seconds, nanoseconds)) {
         return;
     }
-    rtc_since_boot(&uptime, &ticks, &phase_ns);
-    *seconds = uptime;
-    *nanoseconds = (int64_t)ticks * RTC_NANOSECONDS_PER_TICK + phase_ns;
+    rtc_tick_read(&r);
+    *seconds = r.uptime;
+    *nanoseconds = (int64_t)r.second_ticks * RTC_NANOSECONDS_PER_TICK + (int64_t)r.mono_past;
 }
 
-/** Real time at the monotonic time `msec` and `mnsec`, by the course, with
- * the lock held, in `*seconds` and `*nanoseconds`, under a second. */
+/** Real time at the monotonic time `msec` and `mnsec`, whose nanoseconds
+ * may pass a second, with the lock held, in `*seconds` and `*nanoseconds`,
+ * under a second. */
 static void rtc_real_of_mono(int64_t msec, int64_t mnsec, int64_t *seconds, int64_t *nanoseconds)
 {
-    int64_t off_sec;
-    int32_t off_nsec;
-    uint64_t frac;
+    int32_t nsec;
 
-    rtc_course_at(&rtc_course_now, msec, mnsec, &off_sec, &off_nsec, &frac);
-    rtc_normalize(msec + off_sec, mnsec + off_nsec, seconds, &off_nsec);
-    *nanoseconds = off_nsec;
-}
-
-/** The monotonic clock and real time now, with the lock held: real time
- * from the TSC's clock while it runs, the reading the vDSO gives, and by
- * the course otherwise. */
-static void rtc_now_locked(int64_t *msec, int64_t *mnsec, int64_t *seconds, int64_t *nanoseconds)
-{
-    rtc_mono_now(msec, mnsec);
-    if (!vclock_read(1, 0, seconds, nanoseconds)) {
-        rtc_real_of_mono(*msec, *mnsec, seconds, nanoseconds);
-    }
+    rtc_normalize(msec + rtc_wall_sec, mnsec + rtc_wall_nsec, seconds, &nsec);
+    *nanoseconds = nsec;
 }
 
 void rtc_offset(int64_t *seconds, int32_t *nanoseconds)
 {
     uint32_t flags = spin_lock_irqsave(&rtc_realtime_lock);
-    int64_t msec, mnsec;
-    uint64_t frac;
 
-    rtc_mono_now(&msec, &mnsec);
-    rtc_course_at(&rtc_course_now, msec, mnsec, seconds, nanoseconds, &frac);
+    *seconds = rtc_wall_sec;
+    *nanoseconds = rtc_wall_nsec;
     spin_unlock_irqrestore(&rtc_realtime_lock, flags);
 }
 
 /**
  * The anchor is the moment of the read, some way into the boot; this is that
  * reading less the uptime it was taken at, uptime zero, which is what `btime`
- * means.
+ * means, Linux's getboottime64 (kernel/time/timekeeping.c:2296-2301), which
+ * only a setting or a leap second moves.
  */
 int64_t rtc_boot_epoch(void)
 {
@@ -539,7 +581,8 @@ void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
     uint32_t flags = spin_lock_irqsave(&rtc_realtime_lock);
     int64_t msec, mnsec;
 
-    rtc_now_locked(&msec, &mnsec, seconds, nanoseconds);
+    rtc_mono_now(&msec, &mnsec);
+    rtc_real_of_mono(msec, mnsec, seconds, nanoseconds);
     if (*seconds < rtc_last_seconds ||
         (*seconds == rtc_last_seconds && *nanoseconds < rtc_last_nanoseconds)) {
         *seconds = rtc_last_seconds;
@@ -550,10 +593,31 @@ void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
     spin_unlock_irqrestore(&rtc_realtime_lock, flags);
 }
 
-/* The last reading of time since boot, which no later one is earlier than. */
+/* The last readings of the monotonic and raw clocks, which no later one is
+ * earlier than. */
 static int64_t rtc_mono_seconds;
 static int64_t rtc_mono_nanoseconds;
+static int64_t rtc_raw_seconds;
+static int64_t rtc_raw_nanoseconds;
 static struct spinlock rtc_mono_lock = SPINLOCK_INIT_NAMED("rtc_mono_lock");
+
+/** Hold `*seconds` and `*nanoseconds`, whose nanoseconds may pass a second,
+ * to the floor `*floor_sec` and `*floor_nsec` and make them the floor, with
+ * `rtc_mono_lock` held. */
+static void rtc_floor(int64_t *seconds, int64_t *nanoseconds, int64_t *floor_sec,
+                      int64_t *floor_nsec)
+{
+    while (*nanoseconds >= 1000000000) {
+        *nanoseconds -= 1000000000;
+        (*seconds)++;
+    }
+    if (*seconds < *floor_sec || (*seconds == *floor_sec && *nanoseconds < *floor_nsec)) {
+        *seconds = *floor_sec;
+        *nanoseconds = *floor_nsec;
+    }
+    *floor_sec = *seconds;
+    *floor_nsec = *nanoseconds;
+}
 
 /** The floor is `rtc_realtime`'s, for the same reasons, kept apart from it
  * since setting the clock moves that one and not this. */
@@ -562,18 +626,27 @@ void rtc_monotonic(int64_t *seconds, int64_t *nanoseconds)
     uint32_t flags = kirq_save();
 
     rtc_mono_now(seconds, nanoseconds);
-    while (*nanoseconds >= 1000000000) {
-        *nanoseconds -= 1000000000;
-        (*seconds)++;
+    spin_lock(&rtc_mono_lock);
+    rtc_floor(seconds, nanoseconds, &rtc_mono_seconds, &rtc_mono_nanoseconds);
+    spin_unlock(&rtc_mono_lock);
+    kirq_restore(flags);
+}
+
+/** The raw clock is the timer's ticks and its place within the tick, or the
+ * TSC's raw clock while that runs, with a floor of its own. */
+void rtc_raw_monotonic(int64_t *seconds, int64_t *nanoseconds)
+{
+    uint32_t flags = kirq_save();
+    struct rtc_reading r;
+    uint32_t rem;
+
+    if (!vclock_read(VCLOCK_READ_RAW, 0, seconds, nanoseconds)) {
+        rtc_tick_read(&r);
+        *seconds = (int64_t)tick_div(r.raw_ticks, RTC_TICKS_PER_SECOND, &rem);
+        *nanoseconds = (int64_t)rem * RTC_NANOSECONDS_PER_TICK + (int64_t)r.raw_past;
     }
     spin_lock(&rtc_mono_lock);
-    if (*seconds < rtc_mono_seconds ||
-        (*seconds == rtc_mono_seconds && *nanoseconds < rtc_mono_nanoseconds)) {
-        *seconds = rtc_mono_seconds;
-        *nanoseconds = rtc_mono_nanoseconds;
-    }
-    rtc_mono_seconds = *seconds;
-    rtc_mono_nanoseconds = *nanoseconds;
+    rtc_floor(seconds, nanoseconds, &rtc_raw_seconds, &rtc_raw_nanoseconds);
     spin_unlock(&rtc_mono_lock);
     kirq_restore(flags);
 }
@@ -586,32 +659,33 @@ int64_t rtc_monotonic_ns(void)
     return sec * 1000000000ll + nsec;
 }
 
+void rtc_coarse_monotonic(int64_t *seconds, int64_t *nanoseconds)
+{
+    uint32_t flags;
+    int32_t nsec;
+
+    if (vclock_read(VCLOCK_READ_MONO, 1, seconds, nanoseconds)) {
+        return;
+    }
+    flags = kirq_save();
+    rtc_coarse_since_boot(seconds, nanoseconds);
+    kirq_restore(flags);
+    rtc_normalize(*seconds, *nanoseconds, seconds, &nsec);
+    *nanoseconds = nsec;
+}
+
 void rtc_coarse_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
     uint32_t flags;
-    uint32_t uptime, ticks;
-    uint64_t total;
+    int64_t msec, mnsec;
 
-    if (vclock_read(1, 1, seconds, nanoseconds)) {
+    if (vclock_read(VCLOCK_READ_REAL, 1, seconds, nanoseconds)) {
         return;
     }
     flags = spin_lock_irqsave(&rtc_realtime_lock);
-    tick_now(&uptime, &ticks, &total);
-    rtc_real_of_mono(uptime, (int64_t)ticks * RTC_NANOSECONDS_PER_TICK, seconds, nanoseconds);
+    rtc_coarse_since_boot(&msec, &mnsec);
+    rtc_real_of_mono(msec, mnsec, seconds, nanoseconds);
     spin_unlock_irqrestore(&rtc_realtime_lock, flags);
-}
-
-void rtc_coarse_monotonic(int64_t *seconds, int64_t *nanoseconds)
-{
-    uint32_t uptime, ticks;
-    uint64_t total;
-
-    if (vclock_read(0, 1, seconds, nanoseconds)) {
-        return;
-    }
-    tick_now(&uptime, &ticks, &total);
-    *seconds = uptime;
-    *nanoseconds = (int64_t)ticks * RTC_NANOSECONDS_PER_TICK;
 }
 
 /**
@@ -619,42 +693,38 @@ void rtc_coarse_monotonic(int64_t *seconds, int64_t *nanoseconds)
  * `mnsec`: real time becomes `seconds` and `nanoseconds` there, and its
  * floor that time, unless `valid` is clear or the time is before the
  * monotonic clock, which Linux refuses (kernel/time/timekeeping.c:1361-
- * 1364, 1410-1414); and either way the NTP state forgets its offsets and
- * the course takes its rate, the vDSO's clock takes the course, and the
- * step count moves on, as Linux updates the clock with TK_CLEAR_NTP and
- * calls clock_was_set on both paths (kernel/time/timekeeping.c:1369-1376,
+ * 1364, 1410-1414); and either way the NTP state forgets its offsets, which
+ * the next tick takes, the vDSO's clock takes the offset, and the step
+ * count moves on, as Linux updates the clock with TK_CLEAR_NTP and calls
+ * clock_was_set on both paths (kernel/time/timekeeping.c:1369-1376,
  * 1419-1426). 0, or -1 for a time refused.
  */
 static int rtc_step_locked(int64_t msec, int64_t mnsec, int64_t seconds, int32_t nanoseconds,
                            int valid)
 {
-    struct rtc_course *c = &rtc_course_now;
-    int32_t ns;
+    int32_t ns, wall_nsec;
     int rc = -1;
 
     rtc_normalize(msec, mnsec, &msec, &ns);
     if (valid && (seconds > msec || (seconds == msec && nanoseconds >= ns))) {
-        c->mono_sec = msec;
-        c->mono_nsec = ns;
-        rtc_normalize(seconds - msec, (int64_t)nanoseconds - ns, &c->off_sec, &c->off_nsec);
-        c->frac = 0;
+        rtc_normalize(seconds - msec, (int64_t)nanoseconds - ns, &rtc_wall_sec, &wall_nsec);
+        rtc_wall_nsec = wall_nsec;
         rtc_last_seconds = seconds;
         rtc_last_nanoseconds = nanoseconds;
         rc = 0;
     }
     ntp_clear();
-    (void)rtc_take_rate(msec, ns);
-    vclock_set_course(c, 1);
+    vclock_set_wall(rtc_wall_sec, rtc_wall_nsec);
     rtc_count_step();
     return rc;
 }
 
 /**
- * The difference between the course's offset now and the one asked for
- * becomes its offset, so the clock goes on from the new time at the rate it
- * had. A reading after a step back may be earlier than one before it, and
- * the boot epoch moves with the step, as Linux's does, so that a process's
- * start time read from it stays where it was against the clock.
+ * The offset becomes the time asked for less the monotonic clock now, so
+ * the clock goes on from the new time at the rate it had. A reading after
+ * a step back may be earlier than one before it, and the boot epoch moves
+ * with the step, as Linux's does, so that a process's start time read from
+ * it stays where it was against the clock.
  */
 int rtc_set_realtime(int64_t seconds, int32_t nanoseconds)
 {
@@ -670,7 +740,7 @@ int rtc_set_realtime(int64_t seconds, int32_t nanoseconds)
     rtc_mono_now(&msec, &mnsec);
     rc = rtc_step_locked(msec, mnsec, seconds, nanoseconds, 1);
     spin_unlock_irqrestore(&rtc_realtime_lock, flags);
-    timerfd_clock_was_set(1);
+    timerfd_clock_was_set();
     return rc;
 }
 
@@ -682,118 +752,85 @@ int rtc_shift_realtime(int64_t seconds, int32_t nanoseconds)
     int valid;
     int rc;
 
-    rtc_now_locked(&msec, &mnsec, &now, &now_ns);
+    rtc_mono_now(&msec, &mnsec);
+    rtc_real_of_mono(msec, mnsec, &now, &now_ns);
     valid = seconds > -RTC_SETTOD_SEC_MAX && seconds < RTC_SETTOD_SEC_MAX;
     rtc_normalize(valid ? now + seconds : 0, now_ns + nanoseconds, &now, &nsec);
     valid = valid && now >= 0 && now < RTC_SETTOD_SEC_MAX;
     rc = rtc_step_locked(msec, mnsec, now, nsec, valid);
     spin_unlock_irqrestore(&rtc_realtime_lock, flags);
-    timerfd_clock_was_set(1);
+    timerfd_clock_was_set();
     return rc;
 }
 
 /**
  * Linux reads the time before it takes its lock (kernel/time/timekeeping.c:
  * 2504-2509), so the time reported is the one before the modes changed
- * anything.
+ * anything; the next tick takes the tick length they give
+ * (`rtc_tick_advance`).
  */
 int32_t rtc_adjtimex(struct ktimex *tx)
 {
     uint32_t flags;
-    int64_t sec, nsec, msec, mnsec;
+    int64_t sec, nsec;
     int32_t rc;
-    int changed;
 
     rtc_realtime(&sec, &nsec);
     flags = spin_lock_irqsave(&rtc_realtime_lock);
-    rc = ntp_adjtimex(tx, sec);
-    rtc_mono_now(&msec, &mnsec);
-    changed = rtc_take_rate(msec, mnsec);
-    spin_unlock_irqrestore(&rtc_realtime_lock, flags);
-    if (changed) {
-        timerfd_clock_was_set(0);
-    }
     tx->sec = sec;
+    rc = ntp_adjtimex(tx);
+    spin_unlock_irqrestore(&rtc_realtime_lock, flags);
     tx->usec = (tx->status & STA_NANO) ? nsec : (int64_t)((int32_t)nsec / 1000);
     return rc;
 }
 
 /**
- * A course whose rate is not 0 starts again at each second, though its
- * rate stays, so that the time since its start, which every reading
- * multiplies, stays near a second.
+ * The seconds are those of real time at the last pass, the latest last, as
+ * Linux's accumulate_nsecs_to_secs gives second_overflow the seconds just
+ * begun (kernel/time/timekeeping.c:2121-2150); the tick length they leave
+ * is taken for the ticks after this one, within the tick's sequence count,
+ * as Linux's timekeeping_adjust takes it in the same timekeeping_advance
+ * (timekeeping.c:2245-2251), which the caller, the timer pass, may write
+ * since it holds the big lock with interrupts off; a leap second moves the
+ * offset, and the seconds after it, by its step, and the floor with it, so
+ * that real time can go back the second inserted, and the timers of real
+ * time are told, as Linux's clock_was_set_delayed tells them
+ * (timekeeping.c:2279-2283).
  */
 void rtc_seconds(uint32_t n)
 {
     uint32_t flags = spin_lock_irqsave(&rtc_realtime_lock);
-    int64_t msec, mnsec;
-    int changed;
+    int64_t msec, mnsec, secs, shift = 0;
+    int32_t nsec;
 
+    rtc_coarse_since_boot(&msec, &mnsec);
+    rtc_normalize(msec + rtc_wall_sec, mnsec + rtc_wall_nsec, &secs, &nsec);
+    secs -= n;
     while (n-- > 0) {
-        ntp_second_overflow();
+        secs++;
+        shift += ntp_second_overflow(secs + shift);
     }
-    rtc_mono_now(&msec, &mnsec);
-    changed = rtc_take_rate(msec, mnsec);
-    if (!changed && rtc_course_now.rate != 0) {
-        rtc_course_rebase(msec, mnsec);
+    tick_write_begin();
+    rtc_applied = ntp_tick_length();
+    rtc_rate = rtc_rate_of(rtc_applied);
+    tick_write_end();
+    if (shift != 0) {
+        rtc_wall_sec += shift;
+        rtc_last_seconds += shift;
+        vclock_set_wall(rtc_wall_sec, rtc_wall_nsec);
+        rtc_count_step();
     }
     spin_unlock_irqrestore(&rtc_realtime_lock, flags);
-    if (changed) {
-        timerfd_clock_was_set(0);
+    if (shift != 0) {
+        timerfd_clock_was_set();
     }
-}
-
-/** `ns` nanoseconds of real time as nanoseconds of the monotonic clock at
- * the course's rate (`rtc_inverse`), with the lock held; 0 or less is
- * itself, and so is 2^62 or more, over 146 years, which the product could
- * carry past 2^63. */
-static int64_t rtc_to_mono_locked(int64_t ns)
-{
-    uint64_t hi, lo;
-
-    if (ns <= 0 || ns >= ((int64_t)1 << 62)) {
-        return ns;
-    }
-    rtc_mul128((uint64_t)ns, rtc_inverse, &hi, &lo);
-    return (int64_t)((hi << 33) | (lo >> 31));
-}
-
-int64_t rtc_real_to_mono_ns(int64_t ns)
-{
-    uint32_t flags = spin_lock_irqsave(&rtc_realtime_lock);
-
-    ns = rtc_to_mono_locked(ns);
-    spin_unlock_irqrestore(&rtc_realtime_lock, flags);
-    return ns;
-}
-
-uint64_t rtc_real_span(int64_t sec, uint32_t nsec)
-{
-    int64_t ns;
-
-    if (sec < 0) {
-        return 0;
-    }
-    if (sec >= ((int64_t)1 << 32)) {
-        return tick_span(sec, nsec);
-    }
-    ns = rtc_real_to_mono_ns(sec * 1000000000 + nsec);
-    return tick_div64((uint64_t)ns + TICK_NS - 1u, TICK_NS, (uint64_t *)0);
 }
 
 void rtc_mono_of_real(int64_t sec, int32_t nsec, int64_t *mono_sec, int32_t *mono_nsec)
 {
     uint32_t flags = spin_lock_irqsave(&rtc_realtime_lock);
-    int64_t msec, mnsec, now, now_ns, d;
 
-    rtc_now_locked(&msec, &mnsec, &now, &now_ns);
-    d = sec - now;
-    if (d > -((int64_t)1 << 32) && d < ((int64_t)1 << 32)) {
-        d = rtc_to_mono_locked(d * 1000000000 + (nsec - now_ns));
-        rtc_normalize(msec, mnsec + d, mono_sec, mono_nsec);
-    } else {
-        rtc_normalize(msec + d, mnsec + (nsec - now_ns), mono_sec, mono_nsec);
-    }
+    rtc_normalize(sec - rtc_wall_sec, (int64_t)nsec - rtc_wall_nsec, mono_sec, mono_nsec);
     spin_unlock_irqrestore(&rtc_realtime_lock, flags);
 }
 

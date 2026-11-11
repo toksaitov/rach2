@@ -246,9 +246,9 @@ static void futex_hb_unlock2(struct futex_hb *a, struct futex_hb *b, uint32_t fl
 }
 
 /* The ticks from now until the absolute time of `sec` seconds and `nsec`
- * nanoseconds, under a second, on the real-time clock at its present rate
- * (`rtc_real_span`), or on the monotonic clock without `realtime`; 0 when
- * it has passed. */
+ * nanoseconds, under a second, on the real-time clock, which goes on as the
+ * ticks do, or on the monotonic clock without `realtime`; 0 when it has
+ * passed. */
 static uint64_t futex_ticks_until(int64_t at_sec, uint32_t at_nsec, int realtime)
 {
     int64_t sec;
@@ -274,7 +274,7 @@ static uint64_t futex_ticks_until(int64_t at_sec, uint32_t at_nsec, int realtime
     if (dsec < 0 || (dsec == 0 && dnsec == 0)) {
         return 0;
     }
-    return realtime ? rtc_real_span(dsec, (uint32_t)dnsec) : tick_span(dsec, (uint32_t)dnsec);
+    return tick_span(dsec, (uint32_t)dnsec);
 }
 
 /**
@@ -358,14 +358,13 @@ static uint64_t futex_rt_deadline(struct futex_sleeper *s, int64_t sec, uint32_t
 
 /**
  * Count the tick of `s`'s deadline on real time again when the clock has
- * been set or its rate changed since it was counted, as Linux's
- * clock_was_set retriggers the hrtimer of a futex wait with FLAGS_CLOCKRT
- * (kernel/futex/core.c:143-145, kernel/time/hrtimer.c:951-987): a step
- * forward past the time ends the wait, and a step back keeps it waiting
- * until the clock reaches the time; and when its tick has come, since a
- * slewed clock can reach the tick before the time, and Linux's hrtimer
- * never expires before its clock reaches its time. 1 when it counted again
- * and the time is still to come, else 0.
+ * been stepped since it was counted, as Linux's clock_was_set retriggers the
+ * hrtimer of a futex wait with FLAGS_CLOCKRT (kernel/futex/core.c:143-145,
+ * kernel/time/hrtimer.c:951-987): a step forward past the time ends the
+ * wait, and a step back keeps it waiting until the clock reaches the time;
+ * and when its tick has come, since the clock read then may still be short
+ * of the time, and Linux's hrtimer never expires before its clock reaches
+ * its time. 1 when it counted again and the time is still to come, else 0.
  */
 static int futex_rt_count(struct futex_sleeper *s)
 {

@@ -244,7 +244,7 @@ static void master_update(struct kvm_vm *vm)
             arch_relax();
         }
     }
-    pair = khz != 0 && vclock_read_cycles(0, &ns, &tsc);
+    pair = khz != 0 && vclock_read_cycles(VCLOCK_READ_RAW, &ns, &tsc);
     vm->master_clock = pair && tsc_all_matched(vm) && !vm->old_kvmclock;
     if (pair) {
         vm->master_ns = ns;
@@ -267,7 +267,7 @@ int32_t kvm_clock_get(struct kvm_vm *vm, uintptr_t arg)
 
     k_memset(&d, 0, sizeof(d));
     if (vm->master_clock) {
-        if (vclock_read_cycles(1, &real, &d.host_tsc)) {
+        if (vclock_read_cycles(VCLOCK_READ_REAL, &real, &d.host_tsc)) {
             d.realtime = real;
             d.flags = KVM_CLOCK_REALTIME | KVM_CLOCK_HOST_TSC;
         } else {
@@ -419,7 +419,7 @@ static uint64_t wall_epoch(const struct kvm_vm *vm)
     uint64_t real, tsc;
     int64_t s, ns;
 
-    if (vm->master_clock && vclock_read_cycles(1, &real, &tsc)) {
+    if (vm->master_clock && vclock_read_cycles(VCLOCK_READ_REAL, &real, &tsc)) {
         return real - master_at(vm, tsc);
     }
     rtc_realtime(&s, &ns);
@@ -483,7 +483,7 @@ static void pvclock_write(struct kvm_vcpu *v)
     if (vm->master_clock) {
         host_tsc = vm->master_tsc;
         ns = vm->master_ns;
-    } else if (!vclock_read_cycles(0, &ns, &host_tsc)) {
+    } else if (!vclock_read_cycles(VCLOCK_READ_RAW, &ns, &host_tsc)) {
         host_tsc = arch_cycles();
         ns = kvm_host_ns();
     }
@@ -729,7 +729,7 @@ uint64_t kvm_clock_pairing(struct kvm_vcpu *v, uint64_t gpa, uint64_t type)
     struct kvm_clock_pairing p;
     uint64_t real, tsc;
 
-    if (type != KVM_CLOCK_PAIRING_WALLCLOCK || !vclock_read_cycles(1, &real, &tsc)) {
+    if (type != KVM_CLOCK_PAIRING_WALLCLOCK || !vclock_read_cycles(VCLOCK_READ_REAL, &real, &tsc)) {
         return (uint64_t)-(int64_t)KVM_EOPNOTSUPP;
     }
     k_memset(&p, 0, sizeof(p));

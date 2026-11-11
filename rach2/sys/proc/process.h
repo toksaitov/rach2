@@ -702,8 +702,8 @@ struct process {
     uint32_t sig_woken;
     /* With `wakeup_tick` counted to an absolute time of real time, the
      * clock's step count it was counted at (`rtc_step_count`), else 0: the
-     * timer tick wakes the sleep once the clock is set, so that it counts
-     * its tick again. */
+     * timer tick wakes the sleep once the clock is stepped, by a setting
+     * or a leap second, so that it counts its tick again. */
     uint32_t rt_steps;
     /* With `wakeup_tick`, the time of the monotonic clock in nanoseconds
      * since boot at which the sleep ends, before that tick, or 0 for a

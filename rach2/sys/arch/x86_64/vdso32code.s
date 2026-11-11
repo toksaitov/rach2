@@ -30,8 +30,10 @@
 .set D_RES_NS,     64
 .set D_GETCPU,     68
 .set D_COARSE_NS,  72
-# Each clock's rate is 8 bytes before its seconds: D_MULT before D_MONO_SEC
-# and D_REAL_MULT before D_REAL_SEC.
+.set D_RAW_MULT,   80
+.set D_RAW_SEC,    88
+# Each clock's rate is 8 bytes before its seconds: D_MULT before D_MONO_SEC,
+# D_REAL_MULT before D_REAL_SEC and D_RAW_MULT before D_RAW_SEC.
 .set D_RATE_BACK,  8
 
 # VCLOCK_TSC, and the i386 system calls the code makes.
@@ -226,8 +228,8 @@ vdso32_coarse:
 
 # The clock whose id is in EAX, read into EDX:EAX and ECX as `vdso32_fine`
 # gives it, with the carry flag clear: CLOCK_REALTIME and its coarse form,
-# and CLOCK_MONOTONIC, whose reading CLOCK_MONOTONIC_RAW and
-# CLOCK_BOOTTIME share, as in the kernel's clock_read, and its coarse form.
+# CLOCK_MONOTONIC, whose reading CLOCK_BOOTTIME shares, as in the kernel's
+# clock_read, and its coarse form, and CLOCK_MONOTONIC_RAW.
 # The carry flag is set, with nothing read, for any other clock and while
 # the clock does not run from the TSC.
 vdso32_clock:
@@ -239,7 +241,7 @@ vdso32_clock:
     cmpl $1, %eax
     je 2f
     cmpl $4, %eax
-    je 2f
+    je 5f
     cmpl $7, %eax
     je 2f
     cmpl $5, %eax
@@ -248,6 +250,11 @@ vdso32_clock:
     je 4f
 9:
     stc
+    ret
+5:
+    movl $D_RAW_SEC, %eax
+    call vdso32_fine
+    clc
     ret
 1:
     movl $D_REAL_SEC, %eax

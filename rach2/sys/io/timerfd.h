@@ -172,12 +172,12 @@ void ptimer_rearm(struct tgroup *tg, int signo, struct k_siginfo *info);
  * interrupts off. */
 void timerfd_due(void);
 
-/** Count the ticks of the timers of CLOCK_REALTIME again, and with `cancel`
- * cancel the timerfds set to be canceled, after a step of that clock or,
- * without `cancel`, a change of the rate adjtimex's slew runs it at, which
- * Linux does not count as a setting; called by clock.c, with interrupts on
- * or off, after it lets go of the clock's lock. */
-void timerfd_clock_was_set(int cancel);
+/** Count the ticks of the timers of CLOCK_REALTIME again and cancel the
+ * timerfds set to be canceled, after a step of that clock, a setting or a
+ * leap second; a slew is none, since real time and the ticks run at its
+ * rate alike. Called by clock.c, with interrupts on or off, after it lets
+ * go of the clock's lock. */
+void timerfd_clock_was_set(void);
 
 /**
  * The clocks' part, in syscall.c: the time on clock `clk` as clock_gettime

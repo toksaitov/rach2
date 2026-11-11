@@ -25,8 +25,10 @@
 .set D_RES_NS,     64
 .set D_GETCPU,     68
 .set D_COARSE_NS,  72
-# Each clock's rate is 8 bytes before its seconds: D_MULT before D_MONO_SEC
-# and D_REAL_MULT before D_REAL_SEC.
+.set D_RAW_MULT,   80
+.set D_RAW_SEC,    88
+# Each clock's rate is 8 bytes before its seconds: D_MULT before D_MONO_SEC,
+# D_REAL_MULT before D_REAL_SEC and D_RAW_MULT before D_RAW_SEC.
 .set D_RATE_BACK,  8
 
 # VCLOCK_TSC, and the system calls each function stands for.
@@ -107,9 +109,9 @@ vdso_coarse:
 
 # int clock_gettime(clockid_t clk, struct timespec *ts)
 #
-# CLOCK_REALTIME and its coarse form, and CLOCK_MONOTONIC, whose reading
-# CLOCK_MONOTONIC_RAW and CLOCK_BOOTTIME share, as in the kernel's
-# clock_read, and its coarse form; any other clock is the kernel's.
+# CLOCK_REALTIME and its coarse form, CLOCK_MONOTONIC, whose reading
+# CLOCK_BOOTTIME shares, as in the kernel's clock_read, and its coarse
+# form, and CLOCK_MONOTONIC_RAW; any other clock is the kernel's.
 .globl vdso_clock_gettime
 vdso_clock_gettime:
     leaq vdso_text_start-VDSO_BACK(%rip), %r8
@@ -120,7 +122,7 @@ vdso_clock_gettime:
     cmpl $1, %edi
     je 2f
     cmpl $4, %edi
-    je 2f
+    je 6f
     cmpl $7, %edi
     je 2f
     cmpl $5, %edi
@@ -128,6 +130,10 @@ vdso_clock_gettime:
     cmpl $6, %edi
     je 4f
     jmp 9f
+6:
+    movl $D_RAW_SEC, %edi
+    call vdso_fine
+    jmp 5f
 1:
     movl $D_REAL_SEC, %edi
     call vdso_fine
