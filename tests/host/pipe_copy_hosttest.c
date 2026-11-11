@@ -760,6 +760,20 @@ static void link_ends(void)
     }
 }
 
+/** 1: the test runs as the kernel, under the big lock. */
+int bkl_held(void)
+{
+    return 1;
+}
+
+/** Nothing: there is no big lock. */
+void bkl_enter(void)
+{}
+
+/** Nothing: there is no big lock. */
+void bkl_exit(void)
+{}
+
 /** Run every case; 0 when each passes, 1 otherwise. */
 int main(void)
 {

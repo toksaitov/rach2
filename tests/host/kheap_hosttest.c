@@ -401,6 +401,16 @@ static void region_rows(void)
     CHECK(kmalloc((size_t)KVA_HEAP_SIZE) == 0, "an object the size of the region is refused");
 }
 
+/** Unmap the `count` pages from `va`, a page at a time. */
+void unmap_kernel_frames(uintptr_t va, uint32_t count)
+{
+    uint32_t i;
+
+    for (i = 0; i < count; i++) {
+        unmap_kernel_frame(va + (uintptr_t)i * PAGE_SIZE);
+    }
+}
+
 /**
  * Run the rows of the reserve on the small region, then the guard, ends, size
  * and region rows; the count of failures, at most 255.

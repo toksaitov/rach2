@@ -5279,6 +5279,20 @@ static const struct {
     {"--xattr-only", xattr_rows},
 };
 
+/** Take `lock` with interrupts off: one thread, so nothing waits. */
+uint32_t spin_lock_irqsave(struct spinlock *lock)
+{
+    lock->locked = 1;
+    return 0;
+}
+
+/** Give `lock` back. */
+void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
+{
+    (void)flags;
+    lock->locked = 0;
+}
+
 /**
  * Make the native fixture tree using the prepared independent tools,
  * and run the rows: the reads at 4 KiB blocks with 128- and 256-byte inodes
