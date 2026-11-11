@@ -33,8 +33,11 @@
  * connector forcing, the EDID override, and the CRC files' source,
  * entries, lines and overflow (76-5b.4); times of vblanks that never go
  * back, from a frame counter and a scanout position whose second reading
- * of a frame lies before its first (80-86); and an unplug that sends what
- * is queued with -ENODEV on its fences. Every allocation is given back.
+ * of a frame lies before its first (80-86), with the count of times that
+ * went back read from debugfs's crtc-N/vblank_backwards, through
+ * drm_debugfs.c and fs/debugfs.c, which are included whole (80-88); and an
+ * unplug that sends what is queued with -ENODEV on its fences. Every
+ * allocation is given back.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -44,6 +47,8 @@
 #include "dmabuf/fence.c"
 #include "dmabuf/sync_file.c"
 #include "dmabuf/sw_sync.c"
+#include "fs/debugfs.c"
+#include "drm/drm_debugfs.c"
 
 extern int memcmp(const void *a, const void *b, unsigned long n);
 
@@ -127,6 +132,21 @@ int fd_free(fd_table_t *t, int fd)
     }
     k_memset(e, 0, sizeof(*e));
     return 0;
+}
+
+/** A fixed wall clock for debugfs's nodes. */
+void get_current_time(int64_t *seconds, int64_t *nanoseconds)
+{
+    *seconds = 1700000000;
+    *nanoseconds = 0;
+}
+
+/** No process table: debugfs's clients file, which no row reads, names
+ * none. */
+process_t *get_process(uint32_t pid)
+{
+    (void)pid;
+    return NULL;
 }
 
 /** Host arithmetic for the kernel's division helper. */
@@ -1284,6 +1304,50 @@ static int64_t query1(uint32_t *seq)
  * drm_reset_vblank_timestamp do; a driver's time before an earlier one is
  * counted in `backwards`.
  */
+/**
+ * Read dri/fake/crtc-`i`/vblank_backwards as a read(2) of it does, through
+ * debugfs's lookup of each name, its open and its read, into `buf` with
+ * its NUL: the bytes read, or -1 when a name is not there.
+ */
+static int32_t read_backwards(uint32_t i, char *buf, uint32_t cap)
+{
+    const char *names[4] = {"dri", "fake", NULL, "vblank_backwards"};
+    char crtc_name[8] = "crtc-0";
+    struct open_file ofd;
+    fd_entry_t e;
+    void *n = NULL, *up[4];
+    int32_t got = 0, rc = 0;
+    int depth, found;
+
+    crtc_name[5] = (char)('0' + i);
+    names[2] = crtc_name;
+    for (depth = 0; depth < 4; depth++) {
+        if (dfs_lookup(NULL, n, names[depth], &up[depth]) != 0) {
+            break;
+        }
+        n = up[depth];
+    }
+    found = depth == 4;
+    if (found) {
+        k_memset(&ofd, 0, sizeof(ofd));
+        k_memset(&e, 0, sizeof(e));
+        e.type = FD_TYPE_FILE;
+        e.ofd = &ofd;
+        if (debugfs_bind(n, &e, 0) == 0) {
+            while (rc >= 0 && (uint32_t)got + 1u < cap &&
+                   (rc = e.ops->read(&e, buf + got, cap - 1u - (uint32_t)got)) > 0) {
+                got += rc;
+            }
+            e.ops->close(&e);
+        }
+    }
+    buf[got] = '\0';
+    while (depth-- > 0) {
+        dfs_put(NULL, up[depth]);
+    }
+    return !found || rc < 0 ? -1 : got;
+}
+
 static void row_stamps(void)
 {
     static const struct drm_crtc_funcs stamp_funcs = {NULL, NULL,          NULL,       NULL, NULL,
@@ -1292,7 +1356,12 @@ static void row_stamps(void)
     struct drm_crtc *c = &crtc[1];
     uint32_t seq, seq2;
     int64_t t, t2;
+    char text[16];
 
+    k_memcpy(dev.unique, "fake", 5);
+    drm_debugfs_init();
+    drm_debugfs_register(&dev);
+    CHECK(dev.debugfs, "the device's debugfs files are made");
     c->funcs = &stamp_funcs;
     hw_frame = hw_frame0 = c->vblank.last;
     hw_stamp0 = model_now_ns + FRAME_NS;
@@ -1324,13 +1393,23 @@ static void row_stamps(void)
     t2 = query1(&seq2);
     CHECK(seq2 == seq && t2 == t, "and that vblank's interrupt keeps it");
     CHECK(c->vblank.backwards == 0, "no time went back");
+    CHECK(read_backwards(1, text, sizeof(text)) == 2 && memcmp(text, "0\n", 3) == 0,
+          "crtc-1/vblank_backwards reads 0");
     hw_frame++;
     hw_back = 1;
     (void)drm_crtc_handle_vblank(c);
     CHECK(c->vblank.backwards == 1, "a driver's time before an earlier one is counted");
+    CHECK(read_backwards(1, text, sizeof(text)) == 2 && memcmp(text, "1\n", 3) == 0,
+          "and crtc-1/vblank_backwards reads 1");
+    CHECK(read_backwards(0, text, sizeof(text)) == 2 && memcmp(text, "0\n", 3) == 0,
+          "while crtc-0's reads 0");
     hw_back = 0;
     drm_crtc_vblank_put(c);
     c->funcs = &crtc1_funcs;
+    drm_debugfs_unregister(&dev);
+    debugfs_remove("dri");
+    CHECK(read_backwards(1, text, sizeof(text)) == -1 && dev.refs == 1,
+          "the files go with the device's unregistration, and their holds on it");
 }
 
 /** An unplug turns the CRTCs off: what was queued is sent, its fences
