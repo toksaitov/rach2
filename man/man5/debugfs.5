@@ -175,14 +175,37 @@ A write of anything zeroes the profile.
 Mode 0644.
 The parts of the timer tick, a Rach2 file: for each part, the ticks that
 ran it, their time in time-stamp counter cycles and in microseconds, and
-the longest in microseconds:
+the longest in microseconds.
+Every row is printed, in the order the tick runs the parts; ten seconds of
+an idle machine of four processors read:
 .Bd -literal -offset indent
 part calls cycles us max_us
-entry 31953 2475066768 434969 65
-clock 10006 598556256 252350 85
-usb 10006 5557749730 1423123 320
-return 31938 155080449 28190 26
-switch 15 2403240 222 120
+entry 39982 1484853454 495777 61
+clock 10000 778701115 260000 88
+account 10000 9285615 3100 9
+wake 10000 3595115 1200 6
+hda 10000 5691615 1900 7
+netdev 10000 6290615 2100 8
+netconsole 10000 600115 200 1
+ath9k 10000 300615 100 1
+tcp 10000 10483615 3500 11
+ip_frag 10000 600115 200 1
+ip6 10000 5392115 1800 6
+netlink 10000 899615 300 1
+ip_loop 10000 1498615 500 2
+usb 10000 71881115 24000 140
+input 10000 1798115 600 3
+block_lag 10000 1199115 400 2
+block_request 10000 2696615 900 4
+platform 10000 28453615 9500 23
+vkms 10000 600115 200 1
+speaker 10000 600115 200 1
+console 10000 6590115 2200 61
+klog 10000 899615 300 2
+ap_account 29982 26041749 8695 8
+ap_late_pass 29982 3591229 1199 30
+return 39960 32314240 10789 25
+switch 22 2701644 902 118
 nested 0 0 0 0
 .Ed
 .Pp
@@ -219,7 +242,8 @@ in that order; another processor's runs
 .Ql ap_account
 and
 .Ql ap_late_pass ,
-the timer pass it makes when the boot processor's is late.
+whose calls count every tick of the other processors and whose time is
+that of the timer pass one makes when the boot processor's is late.
 .Ql return
 is the time from the tick's preemption to the end of its hold of the lock,
 and
