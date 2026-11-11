@@ -61,8 +61,8 @@
 # for each client gives its commands and bytes. With -u, the script reads
 # the counts as its caller, root where ivshmemd and debugfs need it, and
 # runs the scene as USER, as Chromium needs, from a copy of the harness, its
-# runners and REPLAYS under OUT, which USER is given, since USER may not
-# read the caller's directories. REPLAYS (/usr/share/games/rach2/replays)
+# runners and REPLAYS under OUT, which USER may write through its group,
+# since USER may not read the caller's directories. REPLAYS (/usr/share/games/rach2/replays)
 # holds the games layer's replays, vendor/gnu/games/replays of the tree.
 # With -c the script prints `measure: counts: before` and `measure: counts:
 # after` as it reads the counts, for a caller that reads its own around the
@@ -112,6 +112,18 @@ case $seconds in *[!0-9]* | 0*) usage ;; esac
 [ -n "$out" ] || out=./measure-$scene
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
+
+# With -u as root, OUT stays root's, and USER, who runs the scene's half,
+# writes there only through its group once the scene is about to start. The
+# sticky bit keeps USER from removing or renaming root's own files, so that
+# root never writes, runs or signals through a name USER chose. Until then
+# USER may not write OUT, and what an earlier run left in root's names goes.
+mine='counts line scene.log latency latency.build latency.out'
+if [ "$inner" = 0 ] && [ -n "$user" ] && [ "$(id -u)" = 0 ]; then
+    chown 0:0 "$out"
+    chmod 700 "$out"
+    for f in $mine; do rm -rf "${out:?}/$f"; done
+fi
 
 # scene_glmark2: glmark2's scenes on screen, frame times from the HUD.
 scene_glmark2()
@@ -209,9 +221,6 @@ scene_game()
 # The scene's half, -I, as the user who runs it: Weston, the scene and its
 # frames, with its scratch under OUT, which the caller gave the user.
 if [ "$inner" = 1 ]; then
-    # This half's process group, which the other half ends on a stop: util-
-    # linux's su -c, Debian's, starts the shell in a session of its own.
-    sed 's/^.*) [^ ]* [0-9]* \([0-9]*\) .*$/\1/' "/proc/$$/stat" > "$out/scene.pgid"
     TMPDIR=$out/tmp
     # A new empty shader cache, so that no rung starts warm from an earlier
     # run: guest-env.sh's GRAPHICS_DONE, which the record names.
@@ -280,36 +289,55 @@ if [ -n "$latency" ] && "$latency" 200 > "$out/latency.out" 2>&1; then
 fi
 
 # The scene's half runs in a process group of its own, which a stop of this
-# half ends whole: its Weston, its scene and their children. Under util-
-# linux's su that half leads a group of its own in another session, which
-# it names in OUT/scene.pgid, and the stop ends that group too. The stop
-# waits 15 seconds before its KILL, longer than the scene's half takes to
-# end its browser, 5 seconds, so that the half's own cleanup runs.
-scene_pid=''
+# half ends whole: its Weston, its scene and their children. util-linux's su
+# -c, Debian's, starts USER's shell in a session of its own, setsid() in the
+# child it forks (login-utils/su-common.c:583, :1241-1244 of 2.42.4), and on
+# SIGTERM sends that child TERM and, 2 seconds later, KILL (:634-647), which
+# would cut the half's cleanup short. So when su's child leads a group of
+# its own, the stop sends TERM to that group alone and leaves su waiting for
+# its child; su's group gets only the final KILL. The group is read from
+# /proc, never from OUT, which USER writes. The stop waits 15 seconds before
+# its KILL, longer than the scene's half takes to end its browser, 5
+# seconds, before it sends its server and Weston, which lead groups of their
+# own, TERM, so that the half's own cleanup runs.
+scene_pid='' under_su=0
+
+# inner_group: print the group of su's child when the child leads it, or
+# nothing. BusyBox's su, Rach2's, execs USER's shell in its own process, whose
+# children, Weston among them, lead groups of their own, so the scene's
+# process must still be su. comm, the second field of /proc/PID/stat, may
+# hold spaces, parentheses and newlines, so it ends at the last parenthesis.
+inner_group()
+{
+    st=$(tr '\n' ' ' 2>/dev/null < "/proc/$scene_pid/stat") || return 0
+    st=${st#*\(}
+    [ "${st%) *}" = su ] || return 0
+    for d in /proc/[0-9]*; do
+        st=$(tr '\n' ' ' 2>/dev/null < "$d/stat") || continue
+        # shellcheck disable=SC2086 # state, ppid, pgrp and the rest are words
+        set -- ${st##*) }
+        if [ "${2:-}" = "$scene_pid" ] && [ "${3:-}" = "${d#/proc/}" ]; then
+            echo "$3"
+            return 0
+        fi
+    done
+}
+
 # shellcheck disable=SC2317 # the traps call it
 stop_scene()
 {
     [ -n "$scene_pid" ] || return 0
-    groups="-$scene_pid"
-    pgid=$(cat "$out/scene.pgid" 2>/dev/null) || pgid=''
-    case $pgid in
-        '' | *[!0-9]* | "$scene_pid") ;;
-        *) groups="$groups -$pgid" ;;
-    esac
-    # shellcheck disable=SC2086 # the groups are words
-    kill -TERM $groups 2>/dev/null || true
+    group=''
+    [ "$under_su" = 0 ] || group=$(inner_group)
+    if [ -n "$group" ]; then term=-$group; else term=-$scene_pid; fi
+    kill -TERM "$term" 2>/dev/null || true
     n=150
-    while [ "$n" -gt 0 ]; do
-        live=0
-        for g in $groups; do
-            ! kill -0 "$g" 2>/dev/null || live=1
-        done
-        [ "$live" = 1 ] || break
+    while [ "$n" -gt 0 ] && kill -0 "$term" 2>/dev/null; do
         sleep 0.1
         n=$((n - 1))
     done
-    # shellcheck disable=SC2086 # the groups are words
-    kill -KILL $groups 2>/dev/null || true
+    if kill -0 "$term" 2>/dev/null; then kill -KILL "$term" 2>/dev/null || true; fi
+    kill -KILL "-$scene_pid" 2>/dev/null || true
     wait "$scene_pid" 2>/dev/null || true
     scene_pid=''
 }
@@ -319,7 +347,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 # What an earlier run into OUT left, which this run's line would read.
-rm -f "$out/scene.pgid" "$out/frametimes" "$out/cpuframes" "$out/passes"
+rm -f "$out/frametimes" "$out/cpuframes" "$out/passes"
 
 flags=''
 [ "$own" = 1 ] || flags=-d
@@ -333,7 +361,16 @@ if [ -n "$user" ] && [ "$(id -u)" = 0 ]; then
     cp "$here/measure.sh" "$here/piglit.txt" "$here/webgl.html" "$out/harness/"
     cp -R "$runners/." "$out/harness/runners/"
     [ ! -d "$replays" ] || cp -R "$replays/." "$out/harness/replays/"
-    chown -R "$user" "$out"
+    # root's files exist before USER may write OUT, and the rest is USER's;
+    # -h, so that a link an earlier run left is changed, never its target.
+    for f in $mine; do [ -e "$out/$f" ] || : > "$out/$f"; done
+    for e in "$out"/*; do
+        case " $mine " in *" ${e##*/} "*) continue ;; esac
+        [ ! -e "$e" ] && [ ! -h "$e" ] || chown -hR "$user" "$e"
+    done
+    chgrp "$(id -g "$user")" "$out"
+    chmod 1770 "$out"
+    under_su=1
     harness=$out/harness inner_runners=$out/harness/runners inner_replays=$out/harness/replays
     su -s /bin/sh "$user" -c "test -r '$harness/measure.sh'" 2>/dev/null || {
         echo "measure: $scene: failed: $user cannot read $harness; give OUT a path $user can reach" >&2
@@ -359,6 +396,13 @@ scene_pid=''
 end=$(date +%s.%N)
 { echo after; counts; } >> "$out/counts"
 [ "$marks" = 0 ] || echo "measure: counts: after"
+# The scene's files, USER's under -u, are read only as plain files.
+for f in frametimes cpuframes passes; do
+    if [ -h "$out/$f" ] || { [ -e "$out/$f" ] && [ ! -f "$out/$f" ]; }; then
+        echo "measure: $scene: failed: OUT/$f is not a plain file" >&2
+        exit 1
+    fi
+done
 if [ "$status" -ne 0 ] || [ ! -s "$out/frametimes" ]; then
     echo "measure: $scene: failed: $(tail -n 3 "$out/scene.log" | tr '\n' ' ')" >&2
     exit 1
