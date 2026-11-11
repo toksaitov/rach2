@@ -127,9 +127,7 @@ void n_tty_output(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx)
     out(ctx, c);
 }
 
-/** Hold the echo byte `c` in `echo_buf`, the oldest byte giving way when it
- * is full. */
-static void hold_echo(struct n_tty *t, unsigned char c)
+void n_tty_hold_echo(struct n_tty *t, unsigned char c)
 {
     if (t->echo_tail - t->echo_head == N_TTY_ECHO_MAX) {
         t->echo_head++;
@@ -143,7 +141,7 @@ static void hold_echo(struct n_tty *t, unsigned char c)
 static void put_echo(struct n_tty *t, n_tty_out_fn out, void *ctx, unsigned char c, int hold)
 {
     if (hold || t->stopped || t->echo_tail != t->echo_head) {
-        hold_echo(t, c);
+        n_tty_hold_echo(t, c);
     } else {
         out(ctx, c);
     }
@@ -186,19 +184,28 @@ static void echo(struct n_tty *t, n_tty_out_fn out, void *ctx, unsigned char c, 
     }
 }
 
-int n_tty_echo_flush(struct n_tty *t, n_tty_out_fn out, void *ctx)
+int n_tty_echo_flush(struct n_tty *t, n_tty_out_fn out, void *ctx, unsigned int max)
 {
     int n = 0;
 
     if (t->stopped) {
         return 0;
     }
-    while (t->echo_head != t->echo_tail) {
+    while (t->echo_head != t->echo_tail && (unsigned int)n < max) {
         out(ctx, t->echo_buf[t->echo_head & (N_TTY_ECHO_MAX - 1)]);
         t->echo_head++;
         n++;
     }
     return n;
+}
+
+void n_tty_echo_cut(struct n_tty *t, unsigned int tail)
+{
+    if (t->echo_tail - tail >= t->echo_tail - t->echo_head) {
+        t->echo_tail = t->echo_head;
+    } else {
+        t->echo_tail = tail;
+    }
 }
 
 int n_tty_stop(struct n_tty *t)

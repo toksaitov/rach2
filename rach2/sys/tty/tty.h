@@ -33,10 +33,13 @@ struct tty {
     wait_queue_t input_wq; /* readers parked until input is ready */
     /* Woken with WQ_ROOM when input leaves the discipline; NULL for none. */
     wait_queue_t *space_wq;
-    uint32_t ready_us;           /* timer_now_us() when input became readable; 0 once read */
-    struct tty_winsize winsize;  /* TIOCGWINSZ window size */
-    n_tty_out_fn sink;           /* echo/output byte sink; a NULL at tty_init discards */
-    void *sink_ctx;              /* opaque context handed to sink */
+    uint32_t ready_us;          /* timer_now_us() when input became readable; 0 once read */
+    struct tty_winsize winsize; /* TIOCGWINSZ window size */
+    n_tty_out_fn sink;          /* echo/output byte sink; a NULL at tty_init discards */
+    void *sink_ctx;             /* opaque context handed to sink */
+    /* The bytes `sink` can take now, as Linux's tty_write_room: echo and
+     * output stop there and wait; NULL for a sink that takes every byte. */
+    unsigned int (*room)(struct tty *t);
     void (*pump)(struct tty *t); /* optional polled input drain (NULL = none) */
     /* A pty slave's flush (`TTY_FLUSH_*`); NULL for a terminal with no
      * master. */
@@ -193,10 +196,13 @@ void tty_input_looked(struct tty *t, unsigned char c);
 /**
  * Act now on a byte that waits for room in `t`'s discipline: a VSTOP or
  * VSTART under IXON (`n_tty_lookahead`), as Linux looks ahead in the bytes
- * its discipline cannot take yet. The byte is later fed with
- * `tty_input_looked`. Takes interrupts off itself.
+ * its discipline cannot take yet. A restart with `echo` nonzero gives the
+ * echo held to the sink, as far as its room allows, as Linux's VSTART runs
+ * process_echoes; with `echo` 0 the echo waits for the next input or write.
+ * The byte is later fed with `tty_input_looked`. Returns nonzero when the
+ * byte stopped or restarted output. Takes interrupts off itself.
  */
-void tty_lookahead(struct tty *t, unsigned char c);
+int tty_lookahead(struct tty *t, unsigned char c, int echo);
 
 /**
  * tcflow(3), TCXONC with `action` one of TTY_TC*: TCOOFF stops output until
@@ -248,7 +254,9 @@ int tty_read_rest(struct tty *t, unsigned char *kbuf, int count);
  * Write `count` bytes of `kbuf` through output processing (OPOST, ONLCR) to
  * the sink, after the echo held. Returns the bytes written, fewer than
  * `count` when output is stopped, where the caller waits
- * (`tty_wait_output`); a tty write does not wait itself. On the
+ * (`tty_wait_output`), or when the sink's `room` cannot take a byte at its
+ * largest; a tty write does not wait itself. The echo held goes only as far
+ * as the room allows, and the rest stays held. On the
  * console the write is bracketed by console_write_begin and
  * console_write_end, so a kernel log record raised during it waits and is not
  * printed inside the program's output, and the screen's answers to queries in

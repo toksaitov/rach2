@@ -104,8 +104,10 @@ static uint32_t pts_growth(const struct pty *p)
 /**
  * Push one byte from the slave's output into the master ring.
  *
- * Drops the byte when the ring is full, which only echo can find, since a
- * slave writer waits for room (`pts_write`). The caller wakes master readers
+ * Drops the byte when the ring is full, which echo and output never find,
+ * since both stop at the slave's `room` (`pty_room`); a TCIOFF or TCION
+ * character is dropped there, as Linux's pty_write drops what finds no
+ * room. The caller wakes master readers
  * once per write op (ptm_write echo, pts_write output), not per byte. Runs
  * in thread context, since no IRQ feeds a pty.
  */
@@ -120,6 +122,12 @@ static void pty_slave_sink(void *ctx, unsigned char c)
         p->m_tail++;
     }
     kirq_restore(flags);
+}
+
+/** The slave `t`'s `room`: the bytes the master ring can still take. */
+static unsigned int pty_room(struct tty *t)
+{
+    return pty_m_room((const struct pty *)t->sink_ctx);
 }
 
 /** The wall clock's second, which a pty's times record. */
@@ -233,6 +241,7 @@ static struct pty *pty_alloc(void)
     p->atime = p->mtime = pty_now();
     p->mode = 0620; /* crw--w----, the Unix98 slave default */
     tty_init(&p->slave, pty_slave_sink, p);
+    p->slave.room = pty_room;
     p->slave.flush = pty_flush;
     p->slave.flow = pty_flow;
     wait_queue_init(&p->m_read_wq);
@@ -338,22 +347,21 @@ static int32_t ptm_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return (int32_t)(lead + got);
 }
 
-/** Whether the master can feed the slave a byte: no TCOOFF stopped it, the
- * slave's discipline can take a line, and a slave description is open, or
- * none has opened yet. */
+/** Whether the master can feed the slave a byte: no TCOOFF stopped it and
+ * the slave's discipline can take a line. Whether a slave description is
+ * open does not matter, as on Linux, where the master holds a count of the
+ * slave's own and its writes fill the slave's buffer after the slave
+ * closes. */
 static int ptm_can_feed(const struct pty *p)
 {
-    return !p->m_stopped && !p->hung_up && n_tty_has_room(&p->slave.ldisc);
+    return !p->m_stopped && n_tty_has_room(&p->slave.ldisc);
 }
 
-/** Whether a master writer's wait ends: it can feed the slave
- * (`ptm_can_feed`), or every slave description has closed, which ends the
- * write with EIO. */
+/** A master writer's wait predicate: it can feed the slave
+ * (`ptm_can_feed`). */
 static int ptm_has_room(void *arg)
 {
-    const struct pty *p = (const struct pty *)arg;
-
-    return ptm_can_feed(p) || p->hung_up;
+    return ptm_can_feed((const struct pty *)arg);
 }
 
 /** The offset of the first signal character in `bytes` that flushes the
@@ -386,24 +394,44 @@ struct ptm_feed {
     uint32_t chunk;      /* its bytes */
     uint32_t done;       /* the bytes of the write before it */
     uint32_t pushed;     /* m_tail when the master's readers were last woken */
+    uint32_t ahead;      /* the bytes of the piece the look ahead has seen */
+    uint32_t acted;      /* those up to the last one that stopped or restarted output */
 };
+
+/**
+ * Feed the bytes of the master write `f`'s piece from `*i` up to `f->acted`,
+ * the last whose look ahead stopped or restarted output, though the slave's
+ * discipline has no room for a line, and move `*i` past them. A write that
+ * returns has thereby taken every byte it acted on, as Linux's flip buffer
+ * holds the bytes its look ahead reads; the line's slack beside a full queue
+ * (`n_tty_has_room`) takes them, unless a canonical line is full, whose
+ * bytes are dropped as any byte past its end.
+ */
+static void ptm_take_acted(struct ptm_feed *f, uint32_t *i)
+{
+    while (*i < f->acted) {
+        tty_input_looked(&f->p->slave, f->kbuf[*i]);
+        (*i)++;
+    }
+}
 
 /**
  * Wait until the master write `f` can feed byte `*i` of its piece
  * (`ptm_can_feed`). While it cannot, a signal character that flushes is fed
  * at once, the bytes before it discarded and `*i` moved past it, and the
- * VSTOP and VSTART from `*ahead` on act at once (`tty_lookahead`), `*ahead`
- * moving to the piece's end. Returns 0 to go on feeding, or what
- * `ptm_write` returns: the bytes written, -EAGAIN, -EIO or -EINTR.
+ * VSTOP and VSTART from `f->ahead` on act at once (`tty_lookahead`),
+ * `f->ahead` moving to the piece's end. Before it returns without waiting,
+ * or after a signal ends its wait, it takes the bytes it acted on
+ * (`ptm_take_acted`). Returns 0 to go on feeding, or what `ptm_write`
+ * returns: the bytes written, -EAGAIN or -EINTR.
  */
-static int32_t ptm_wait_feed(struct ptm_feed *f, uint32_t *i, uint32_t *ahead)
+static int32_t ptm_wait_feed(struct ptm_feed *f, uint32_t *i)
 {
     struct pty *p = f->p;
 
     while (!ptm_can_feed(p)) {
-        int at = p->m_stopped || p->hung_up
-                     ? -1
-                     : signal_char_at(&p->slave.ldisc, f->kbuf + *i, (int)(f->chunk - *i));
+        int at =
+            p->m_stopped ? -1 : signal_char_at(&p->slave.ldisc, f->kbuf + *i, (int)(f->chunk - *i));
 
         if (at >= 0) {
             p->slave.ldisc.counters.flush_bytes += (unsigned int)at;
@@ -413,16 +441,22 @@ static int32_t ptm_wait_feed(struct ptm_feed *f, uint32_t *i, uint32_t *ahead)
             continue;
         }
         if (!p->m_stopped) {
-            for (*ahead = *ahead > *i ? *ahead : *i; *ahead < f->chunk; (*ahead)++) {
-                tty_lookahead(&p->slave, f->kbuf[*ahead]);
+            for (f->ahead = f->ahead > *i ? f->ahead : *i; f->ahead < f->chunk; f->ahead++) {
+                if (tty_lookahead(&p->slave, f->kbuf[f->ahead], 1)) {
+                    f->acted = f->ahead + 1;
+                }
             }
         }
-        wake_master(p, &f->pushed);
-        if (f->done + *i > 0 || p->hung_up || fd_is_nonblock(f->e)) {
-            return f->done + *i > 0 ? (int32_t)(f->done + *i) : p->hung_up ? -EIO : -EAGAIN;
+        if (f->done + *i > 0 || fd_is_nonblock(f->e)) {
+            ptm_take_acted(f, i);
+            wake_master(p, &f->pushed);
+            return f->done + *i > 0 ? (int32_t)(f->done + *i) : -EAGAIN;
         }
+        wake_master(p, &f->pushed);
         if (wq_wait_event(&p->m_read_wq, ptm_has_room, p) < 0) {
-            return -EINTR;
+            ptm_take_acted(f, i);
+            wake_master(p, &f->pushed);
+            return f->done + *i > 0 ? (int32_t)(f->done + *i) : -EINTR;
         }
     }
     return 0;
@@ -436,14 +470,17 @@ static int32_t ptm_wait_feed(struct ptm_feed *f, uint32_t *i, uint32_t *ahead)
  * The discipline takes input only while a whole line more fits
  * (`n_tty_has_room`), and none while TCOOFF on the master stops it. A write
  * that fills it returns short; one that has fed nothing waits for the slave
- * to read or for TCOON, or fails with -EAGAIN when non-blocking, and with
- * -EIO once every slave description has closed, as Linux's n_tty_write. A
- * signal character among the waiting bytes is fed at once and the bytes
- * before it are discarded, since the signal would discard them, unless
- * NOFLSH keeps them; a VSTOP or VSTART among them acts at once
- * (`tty_lookahead`) and is fed later without acting again, as Linux looks
- * ahead in its flip buffer. Master readers are woken before every return
- * that fed bytes, a failed copy included, so they see the echo.
+ * to read or for TCOON, or fails with -EAGAIN when non-blocking, as Linux's
+ * n_tty_write. It goes on after every slave description has closed, as on
+ * Linux, until the discipline fills. A signal character among the waiting
+ * bytes is fed at once and the bytes before it are discarded, since the
+ * signal would discard them, unless NOFLSH keeps them; a VSTOP or VSTART
+ * among them acts at once (`tty_lookahead`) and is fed later without acting
+ * again, as Linux looks ahead in its flip buffer, and a write that returns
+ * before it feeds them takes the bytes up to the last that acted
+ * (`ptm_take_acted`), so that it never acts on a byte it does not count.
+ * Master readers are woken before every return that fed bytes, a failed
+ * copy included, so they see the echo.
  */
 static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
@@ -462,9 +499,10 @@ static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     f.done = 0;
     f.pushed = f.p->m_tail;
     while (f.done < count) {
-        uint32_t i, ahead = 0;
+        uint32_t i;
         int32_t rc;
 
+        f.ahead = f.acted = 0;
         f.chunk = count - f.done;
         if (f.chunk > sizeof(kbuf)) {
             f.chunk = sizeof(kbuf);
@@ -474,14 +512,14 @@ static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
             return (f.done > 0) ? (int32_t)f.done : -EFAULT;
         }
         for (i = 0; i < f.chunk; i++) {
-            rc = ptm_wait_feed(&f, &i, &ahead);
+            rc = ptm_wait_feed(&f, &i);
             if (rc != 0) {
                 return rc;
             }
             if (i >= f.chunk) {
                 break;
             }
-            if (i < ahead) {
+            if (i < f.ahead) {
                 tty_input_looked(&f.p->slave, kbuf[i]);
             } else {
                 tty_input_char(&f.p->slave, kbuf[i]);
@@ -805,7 +843,11 @@ static int pts_write_free(void *arg)
  * fails. The copy from the user may sleep on a page fault, so after it the
  * hangup and the master's close are tested again, as n_tty_write tests
  * tty_hung_up_p just before it writes, and the piece is fitted again, since
- * echo of the master's input may have filled the ring meanwhile.
+ * echo of the master's input may have filled the ring meanwhile. The echo
+ * held goes out ahead of each piece as far as the ring has room
+ * (`tty_write`), which then writes only what still fits; the rest of the
+ * piece waits for room, as Linux's n_tty_write writes only into
+ * pty_write_room, and is never dropped.
  */
 static int32_t pts_write_out(fd_entry_t *e, struct pts_waiter *w, const char __user *buf,
                              uint32_t count)
@@ -920,10 +962,11 @@ static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
  * master ring has room for a byte of it, and POLLHUP once the master has
  * closed.
  *
- * tty_poll sets the wait queue only for a POLLIN query, but a master close
- * wakes that same input queue (tty_hangup), and a master read wakes it with
- * room, so a poller waiting only for the hangup or for room is parked on it
- * too; otherwise it would sleep through ptm_close or the read.
+ * tty_poll sets the wait queue for a POLLIN query, or a POLLOUT one on
+ * stopped output, but a master close wakes that same input queue
+ * (tty_hangup), and a master read wakes it with room, so a poller waiting
+ * only for the hangup or for room is parked on it too; otherwise it would
+ * sleep through ptm_close or the read.
  */
 static short pts_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {

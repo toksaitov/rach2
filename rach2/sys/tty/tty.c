@@ -58,6 +58,7 @@ void tty_init(struct tty *t, n_tty_out_fn sink, void *sink_ctx)
     t->winsize.ws_ypixel = 0;
     t->sink = sink ? sink : null_sink;
     t->sink_ctx = sink_ctx;
+    t->room = NULL;
     t->pump = NULL;
     t->flush = NULL;
     t->flow = NULL;
@@ -147,12 +148,33 @@ static void tty_flow_changed(struct tty *t, int was)
     }
 }
 
-/** Give the echo held to the sink, unless output is stopped, and tell
- * `flow` when any went. Interrupts off. */
+/** The bytes `t`'s sink can take now (`room`). */
+static unsigned int tty_room(struct tty *t)
+{
+    return t->room ? t->room(t) : ~0u;
+}
+
+/** Give the echo held to the sink, unless output is stopped, as far as its
+ * room allows, and tell `flow` when any went. Interrupts off. */
 static void tty_echo_out(struct tty *t)
 {
-    if (n_tty_echo_flush(&t->ldisc, t->sink, t->sink_ctx) > 0 && t->flow) {
+    if (n_tty_echo_flush(&t->ldisc, t->sink, t->sink_ctx, tty_room(t)) > 0 && t->flow) {
         t->flow(t, TTY_FLOW_DATA);
+    }
+}
+
+/** The echo sink of a receive on a terminal whose sink has a `room`: the
+ * sink while it has room for the byte, and the echo held otherwise, so that
+ * echo waits for room as Linux's does and is never dropped. `ctx` is the
+ * terminal. */
+static void tty_room_sink(void *ctx, unsigned char c)
+{
+    struct tty *t = (struct tty *)ctx;
+
+    if (t->room(t) > 0) {
+        t->sink(t->sink_ctx, c);
+    } else {
+        n_tty_hold_echo(&t->ldisc, c);
     }
 }
 
@@ -160,15 +182,26 @@ static void tty_echo_out(struct tty *t)
  * Run `c` through the discipline with echo to `out`, `looked` nonzero for a
  * byte `tty_lookahead` has seen, as Linux's n_tty_receive_char_special and
  * isig: a signal goes to the foreground group, and without NOFLSH the output
- * queued is discarded before the signal character's echo; then the echo the
- * discipline holds goes to `out`, and a change of output flow to `flow`.
+ * queued is discarded before the signal character's echo; then a change of
+ * output flow goes to `flow`. Echo to the terminal's sink stops at its room,
+ * and the echo held then goes as far as the room allows. With another
+ * `out`, the null sink of a drain that suppresses echo, only this byte's
+ * echo is dropped: the echo held before it waits for a sink that shows it,
+ * as a restart this byte makes would otherwise throw away the echo held
+ * while output was stopped.
  */
 static void tty_receive(struct tty *t, unsigned char c, n_tty_out_fn out, void *ctx, int looked)
 {
     int was = t->ldisc.stopped;
     int signo = 0;
+    int shown = out == t->sink;
     uint32_t flags = kirq_save();
+    unsigned int tail = t->ldisc.echo_tail;
 
+    if (shown && t->room) {
+        out = tty_room_sink;
+        ctx = t;
+    }
     if (looked) {
         n_tty_receive_looked(&t->ldisc, c, out, ctx, &signo);
     } else {
@@ -180,7 +213,11 @@ static void tty_receive(struct tty *t, unsigned char c, n_tty_out_fn out, void *
             t->flush(t, TTY_FLUSH_IN | TTY_FLUSH_OUT);
         }
     }
-    n_tty_echo_flush(&t->ldisc, out, ctx);
+    if (shown) {
+        n_tty_echo_flush(&t->ldisc, t->sink, t->sink_ctx, tty_room(t));
+    } else {
+        n_tty_echo_cut(&t->ldisc, tail);
+    }
     tty_flow_changed(t, was);
     kirq_restore(flags);
 }
@@ -216,14 +253,18 @@ void tty_input_looked(struct tty *t, unsigned char c)
     tty_input(t, c, 1);
 }
 
-void tty_lookahead(struct tty *t, unsigned char c)
+int tty_lookahead(struct tty *t, unsigned char c, int echo)
 {
     uint32_t flags = kirq_save();
     int was = t->ldisc.stopped;
+    int changed = n_tty_lookahead(&t->ldisc, c);
 
-    n_tty_lookahead(&t->ldisc, c);
     tty_flow_changed(t, was);
+    if (echo && was && !t->ldisc.stopped) {
+        tty_echo_out(t);
+    }
     kirq_restore(flags);
+    return changed;
 }
 
 /**
@@ -524,10 +565,20 @@ static void console_answer(struct tty *t)
     kirq_restore(flags);
 }
 
+/** Whether `t`'s sink has room for one byte of output at its largest: two
+ * under OPOST, where `n_tty_output` makes ONLCR's CR LF of a newline, and
+ * one for raw output. */
+static int tty_output_fits(struct tty *t)
+{
+    return !t->room || t->room(t) >= ((t->ldisc.tio.c_oflag & OPOST) ? 2u : 1u);
+}
+
 /**
- * The echo held goes first, as Linux's n_tty_write begins with
- * process_echoes, and the bytes then go one at a time while output runs: a
- * VSTOP from the keyboard's interrupt stops the write between two bytes.
+ * The echo held goes first, as far as the sink's room allows, as Linux's
+ * n_tty_write begins with process_echoes, and the bytes then go one at a
+ * time while output runs and the sink has room: a VSTOP from the keyboard's
+ * interrupt stops the write between two bytes, and echo that took room the
+ * caller counted on makes the write short instead of dropping its bytes.
  */
 int tty_write(struct tty *t, const unsigned char *kbuf, int count)
 {
@@ -538,9 +589,9 @@ int tty_write(struct tty *t, const unsigned char *kbuf, int count)
         console_write_begin();
     }
     flags = kirq_save();
-    n_tty_echo_flush(&t->ldisc, t->sink, t->sink_ctx);
+    n_tty_echo_flush(&t->ldisc, t->sink, t->sink_ctx, tty_room(t));
     kirq_restore(flags);
-    for (i = 0; i < count && !t->ldisc.stopped; i++) {
+    for (i = 0; i < count && !t->ldisc.stopped && tty_output_fits(t); i++) {
         n_tty_output(&t->ldisc, kbuf[i], t->sink, t->sink_ctx);
     }
     if (t->sink == console_sink) {
@@ -777,8 +828,9 @@ static int console_signal_through(struct tty *t, n_tty_out_fn out, void *ctx)
 /** When the discipline has no room for a line, act on the VSTOP and VSTART
  * among the bytes that wait in the ring (`tty_lookahead`), so that a full
  * console still stops and restarts its output, as Linux's
- * n_tty_lookahead_flow_ctrl. Interrupts off. */
-static void console_lookahead(struct tty *t)
+ * n_tty_lookahead_flow_ctrl; a restart gives the echo held to the screen
+ * when `echo` is nonzero. Interrupts off. */
+static void console_lookahead(struct tty *t, int echo)
 {
     unsigned char ahead[64];
     int n, i;
@@ -788,7 +840,7 @@ static void console_lookahead(struct tty *t)
     }
     while ((n = serial_rx_lookahead(ahead, (int)sizeof(ahead))) > 0) {
         for (i = 0; i < n; i++) {
-            tty_lookahead(t, ahead[i]);
+            tty_lookahead(t, ahead[i], echo);
         }
     }
 }
@@ -847,7 +899,7 @@ static void console_pump(struct tty *t)
             if (console_signal_through(t, echo ? t->sink : null_sink, echo ? t->sink_ctx : NULL)) {
                 continue;
             }
-            console_lookahead(t);
+            console_lookahead(t, echo);
             break;
         }
         looked = serial_rx_looked();
@@ -896,7 +948,7 @@ static void console_pump_irq(struct tty *t)
             if (console_signal_through(t, null_sink, NULL)) {
                 continue;
             }
-            console_lookahead(t);
+            console_lookahead(t, 0);
             break;
         }
         looked = serial_rx_looked();
