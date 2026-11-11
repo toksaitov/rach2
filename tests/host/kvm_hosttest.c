@@ -2133,6 +2133,40 @@ static void steal_rows(int fd0)
     CHECK(st->version == 18, "and nothing more is written");
 }
 
+/** A guest's INIT on vCPU `fd0`, as Linux's kvm_vcpu_reset: the steal
+ * time and the kvmclock, both on, are turned off, and neither is written
+ * at the next entry. */
+static void init_pv_rows(int fd0)
+{
+    struct kvm_vcpu *v0 = entries[fd0].priv;
+    struct kvm_steal_time *st = (void *)(guest_page + (ST_GPA - GUEST_PAGE));
+    const struct pvclock_vcpu_time_info *pv = (const void *)guest_page;
+    uint64_t value = 0;
+    uint32_t pv_version, st_version;
+
+    CHECK(set_msr(fd0, MSR_KVM_STEAL_TIME, ST_GPA | KVM_MSR_ENABLED) == 1 &&
+              set_msr(fd0, MSR_KVM_SYSTEM_TIME_NEW, GUEST_PAGE | KVM_MSR_ENABLED) == 1,
+          "the steal time and the kvmclock on again");
+    kvm_steal_prepare(v0);
+    kvm_clock_prepare(v0);
+    pv_version = pv->version;
+    st_version = st->version;
+    CHECK(st_version == 20 && (v0->pv_time & KVM_MSR_ENABLED) && pv_version % 2u == 0,
+          "both are written at the next entry");
+    kvm_vcpu_init_reset(v0);
+    CHECK(get_msr(fd0, MSR_KVM_STEAL_TIME, &value) == 1 && value == 0 &&
+              get_msr(fd0, MSR_KVM_SYSTEM_TIME_NEW, &value) == 1 && value == 0,
+          "a guest's INIT turns the steal time and the kvmclock off, as Linux's kvm_vcpu_reset");
+    caller.pcount++;
+    kvm_vcpu_kick(v0, KVM_REQ_STEAL_UPDATE);
+    kvm_vcpu_kick(v0, KVM_REQ_CLOCK_UPDATE);
+    kvm_steal_prepare(v0);
+    kvm_clock_prepare(v0);
+    CHECK(st->version == st_version && pv->version == pv_version,
+          "and neither is written at the next entry, a switch and requests for both "
+          "notwithstanding");
+}
+
 /** The vCPU attribute KVM_VCPU_TSC_OFFSET of vCPUs `fd0` and `fd1` of the
  * VM `vm`, as system_counter_offset_test drives it and Linux's
  * kvm_arch_tsc_set_attr matches it: the guest's TSC is the host's plus the
@@ -2256,6 +2290,7 @@ static void pv_rows(void)
     tsc_attr_rows(vm, fd0, fd1);
     pv_cap_rows(vm, fd0, fd1);
     steal_rows(fd0);
+    init_pv_rows(fd0);
     fdclose(fd1);
     fdclose(fd0);
     fdclose(vm);
