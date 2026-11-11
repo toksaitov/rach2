@@ -2090,6 +2090,21 @@ static long cpu_ticks(pid_t pid)
     return u + s;
 }
 
+/** The seconds since the epoch of the struct rtc_time `tm`, a time in UTC. */
+static time_t rtc_seconds(const int *tm)
+{
+    struct tm t;
+
+    memset(&t, 0, sizeof t);
+    t.tm_sec = tm[0];
+    t.tm_min = tm[1];
+    t.tm_hour = tm[2];
+    t.tm_mday = tm[3];
+    t.tm_mon = tm[4];
+    t.tm_year = tm[5];
+    return timegm(&t);
+}
+
 /**
  * Set the wake alarm of /dev/rtc0, open as `fd`, `ahead` seconds from the
  * clock's time. Returns ioctl's result, with the alarm's date and time in
@@ -2104,14 +2119,7 @@ static int wake_in(int fd, int ahead, struct wkalrm *w)
     if (ioctl(fd, RTC_RD_TIME, w->tm) != 0) {
         return -1;
     }
-    memset(&t, 0, sizeof t);
-    t.tm_sec = w->tm[0];
-    t.tm_min = w->tm[1];
-    t.tm_hour = w->tm[2];
-    t.tm_mday = w->tm[3];
-    t.tm_mon = w->tm[4];
-    t.tm_year = w->tm[5];
-    at = timegm(&t) + ahead;
+    at = rtc_seconds(w->tm) + ahead;
     gmtime_r(&at, &t);
     w->enabled = 1;
     w->tm[0] = t.tm_sec;
@@ -2141,7 +2149,9 @@ static int unfreeze(pid_t spinner, int state, const char *why)
     return why ? fail(why) : 0;
 }
 
-/** Check that freeze waits for the wake alarm while the spinner is held.
+/** Check that freeze waits for the wake alarm while the spinner is held:
+ * the clock has reached the alarm's time when the write returns. RTC_WKALM_RD
+ * gives `pending` as 0, as on Linux, so the alarm is judged by the clock.
  * The spinner writes a byte to a pipe before it spins, and the freeze waits
  * for the byte. The caller owns the RTC descriptor `fd`; return 0, or report
  * a failure. */
@@ -2149,7 +2159,7 @@ static int freezes(int fd)
 {
     struct wkalrm w, back;
     struct stat st;
-    int started[2], spun, state, woke;
+    int started[2], spun, state, woke, now[9];
     long before, after;
     pid_t spinner;
     char c;
@@ -2177,14 +2187,14 @@ static int freezes(int fd)
     }
     held();
     before = cpu_ticks(spinner);
-    if (ioctl(fd, RTC_WKALM_RD, &back) != 0 || back.pending) {
-        return unfreeze(spinner, state, "the wake alarm was already pending before suspend");
+    if (ioctl(fd, RTC_WKALM_RD, &back) != 0 || !back.enabled) {
+        return unfreeze(spinner, state, "the wake alarm came before suspend");
     }
     if (write(state, "freeze", 6) != 6) {
         return unfreeze(spinner, state, "a write of freeze to /sys/power/state");
     }
     after = cpu_ticks(spinner);
-    woke = ioctl(fd, RTC_WKALM_RD, &back) == 0 && back.pending;
+    woke = ioctl(fd, RTC_RD_TIME, now) == 0 && rtc_seconds(now) >= rtc_seconds(w.tm);
     unfreeze(spinner, state, 0);
     if (!woke) {
         return fail("suspend to idle returned before the wake alarm");
@@ -2207,8 +2217,9 @@ static int same_alarm_time(const struct wkalrm *back, const struct wkalrm *w)
 /**
  * Check that RTC_WKALM_SET refuses with EINVAL each date and time Linux's
  * rtc_valid_tm refuses, from the alarm `w` set on /dev/rtc0, open as `fd`,
- * and keeps that alarm, which then reads back with its time, enabled or come.
- * Returns 0, or 1 after the failure is printed.
+ * and keeps that alarm, which then reads back enabled with its time. `w` is
+ * an hour ahead, so that it cannot come meanwhile; `pending` is not read,
+ * since Linux gives it as 0. Returns 0, or 1 after the failure is printed.
  */
 static int refuses_bad_alarms(int fd, const struct wkalrm *w)
 {
@@ -2233,19 +2244,21 @@ static int refuses_bad_alarms(int fd, const struct wkalrm *w)
             return fail(why);
         }
     }
-    if (ioctl(fd, RTC_WKALM_RD, &back) != 0 || !(back.enabled || back.pending) ||
-        !same_alarm_time(&back, w)) {
+    if (ioctl(fd, RTC_WKALM_RD, &back) != 0 || !back.enabled || !same_alarm_time(&back, w)) {
         return fail("a refused RTC_WKALM_SET did not keep the alarm set before it");
     }
     return 0;
 }
 
 /**
- * Check alarms past on /dev/rtc0, open as `fd`: one set comes at once, is
- * then off and reads back with its whole date and time, as Linux's
- * rtc_timer_enqueue raises it and keeps its expiry, and one two days ahead
- * is EINVAL; and RTC_AIE_ON with the alarm's time past raises it at once.
- * Returns 0, or 1 after the failure is printed.
+ * Check alarms past on /dev/rtc0, open as `fd`: one set comes, is then off
+ * and reads back with its whole date and time, as Linux's rtc_timer_enqueue
+ * raises it and keeps its expiry, and one two days ahead is EINVAL; and
+ * RTC_AIE_ON with the alarm's time past raises it. Linux raises such an
+ * alarm from work queued by the set or the ioctl (drivers/rtc/interface.c:
+ * 858-861, 939-957), which may run after the call returns, so each check
+ * waits for the alarm before it reads it. Returns 0, or 1 after the failure
+ * is printed.
  */
 static int past_alarms(int fd)
 {
@@ -2266,10 +2279,10 @@ static int past_alarms(int fd)
     p.events = POLLIN;
     p.revents = 0;
     if (wake_in(fd, -10, &w) != 0 || read(fd, &data, sizeof data) != (ssize_t)sizeof data ||
-        ioctl(fd, RTC_AIE_ON, 0) != 0 || poll(&p, 1, 0) != 1 || !(p.revents & POLLIN) ||
+        ioctl(fd, RTC_AIE_ON, 0) != 0 || poll(&p, 1, -1) != 1 || !(p.revents & POLLIN) ||
         read(fd, &data, sizeof data) != (ssize_t)sizeof data || !(data & 0x20) ||
         ioctl(fd, RTC_WKALM_RD, &back) != 0 || back.enabled || !same_alarm_time(&back, &w)) {
-        return fail("RTC_AIE_ON with an alarm past did not raise it at once");
+        return fail("RTC_AIE_ON with an alarm past did not raise it");
     }
     held();
     return 0;
@@ -2277,14 +2290,14 @@ static int past_alarms(int fd)
 
 /**
  * Check the clock's wake alarm and suspend to idle: the alarms past
- * (`past_alarms`); one two seconds ahead reads back enabled, an invalid
- * date and time is EINVAL and keeps it, and it ends a read of /dev/rtc0
- * with RTC_AF, after which /sys/class/rtc/rtc0/wakealarm reads empty; the
- * device may wake the machine; a descriptor open on /sys/power/state has
- * mode 0644, as its path does; and a write of freeze to it, with the alarm
- * set again, returns at the alarm with a spinning child given no processor
- * time meanwhile, which the kernel counts. Returns 0, or 1 after the
- * failure is printed.
+ * (`past_alarms`); one an hour ahead reads back enabled, and an invalid
+ * date and time is EINVAL and keeps it; one two seconds ahead ends a read of
+ * /dev/rtc0 with RTC_AF, after which /sys/class/rtc/rtc0/wakealarm reads
+ * empty; the device may wake the machine; a descriptor open on
+ * /sys/power/state has mode 0644, as its path does; and a write of freeze to
+ * it, with the alarm set again, returns at the alarm with a spinning child
+ * given no processor time meanwhile, which the kernel counts. Returns 0, or
+ * 1 after the failure is printed.
  */
 static int rtcs(void)
 {
@@ -2299,16 +2312,17 @@ static int rtcs(void)
     if (past_alarms(fd) != 0) {
         return 1;
     }
-    if (wake_in(fd, 2, &w) != 0 || ioctl(fd, RTC_WKALM_RD, &back) != 0 || !back.enabled ||
+    if (wake_in(fd, 3600, &w) != 0 || ioctl(fd, RTC_WKALM_RD, &back) != 0 || !back.enabled ||
         !same_alarm_time(&back, &w)) {
-        return fail("a wake alarm two seconds ahead did not read back");
+        return fail("a wake alarm an hour ahead did not read back");
     }
     held();
     if (refuses_bad_alarms(fd, &w) != 0) {
         return 1;
     }
     held();
-    if (read(fd, &data, sizeof data) != (ssize_t)sizeof data || !(data & 0x20) || data >> 8 < 1) {
+    if (wake_in(fd, 2, &w) != 0 || read(fd, &data, sizeof data) != (ssize_t)sizeof data ||
+        !(data & 0x20) || data >> 8 < 1) {
         return fail("a read of /dev/rtc0 did not end at the alarm with RTC_AF");
     }
     held();
