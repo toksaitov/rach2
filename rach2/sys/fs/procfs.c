@@ -8640,6 +8640,34 @@ static int32_t procfs_uevent_write(int node, int key, int attr, const char __use
     return rc < 0 ? rc : (int32_t)count;
 }
 
+/**
+ * Give the first PAGE_SIZE bytes at most of a write of `count` bytes at
+ * `buf` to the transparent_hugepage attribute `attr`, NUL-terminated, as
+ * Linux's kernfs gives a write to a sysfs store, whose own checks then
+ * apply. The count `thp_store` takes, or its error, -EFAULT or -ENOMEM.
+ */
+static int32_t procfs_thp_write(int attr, const char __user *buf, uint32_t count)
+{
+    char *text;
+    int32_t rc;
+
+    if (count > PAGE_SIZE) {
+        count = PAGE_SIZE;
+    }
+    text = kmalloc(count + 1u);
+    if (!text) {
+        return -ENOMEM;
+    }
+    if (copy_from_user(text, buf, count) != 0) {
+        rc = -EFAULT;
+    } else {
+        text[count] = '\0';
+        rc = thp_store(attr, text, count);
+    }
+    kfree(text);
+    return rc;
+}
+
 static int32_t procfs_sysattr_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
     struct procfs_file *f = (struct procfs_file *)e->priv;
@@ -8657,15 +8685,15 @@ static int32_t procfs_sysattr_write(fd_entry_t *e, const char __user *buf, uint3
         return procfs_uevent_write(f->origin_task >> 8, f->origin_pid, f->origin_task & 255, buf,
                                    count);
     }
+    if (f->origin_task >> 8 == SYSFS_THP) {
+        return procfs_thp_write(f->origin_task & 255, buf, count);
+    }
     if (count > sizeof(text) - 1) {
         return -EINVAL;
     }
     k_memset(text, 0, sizeof(text));
     if (copy_from_user(text, buf, n) != 0) {
         return -EFAULT;
-    }
-    if (f->origin_task >> 8 == SYSFS_THP) {
-        return thp_store(f->origin_task & 255, text, count);
     }
     while (n > 0 && (text[n - 1] == '\n' || text[n - 1] == ' ')) {
         text[--n] = '\0';
