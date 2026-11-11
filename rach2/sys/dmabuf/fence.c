@@ -419,6 +419,35 @@ static const struct dma_fence_ops array_ops = {array_driver_name,      array_tim
 
 static const struct dma_fence_ops chain_ops;
 
+/* Over every chain's `prev`, which a walk unlinks while others read it, as
+ * Linux's cmpxchg and RCU keep it (dma-fence-chain.c:24-72). A reader takes
+ * a reference to the point under it, a writer swaps the link under it and
+ * puts what it unlinked after; no fence's lock is taken under it. */
+static struct spinlock chain_lock = SPINLOCK_INIT_NAMED("dma_fence_chain");
+
+/** `c`'s earlier point with a reference, or NULL. */
+static struct dma_fence *chain_prev_get(struct dma_fence_chain *c)
+{
+    struct dma_fence *prev;
+    uint32_t flags = spin_lock_irqsave(&chain_lock);
+    prev = dma_fence_get(c->prev);
+    spin_unlock_irqrestore(&chain_lock, flags);
+    return prev;
+}
+
+/** Make `next` `c`'s earlier point if `old` still is: 1 when it did, and
+ * the link's reference to `old` is the caller's to put. */
+static int chain_prev_swap(struct dma_fence_chain *c, struct dma_fence *old, struct dma_fence *next)
+{
+    int swapped;
+    uint32_t flags = spin_lock_irqsave(&chain_lock);
+    swapped = c->prev == old;
+    if (swapped)
+        c->prev = next;
+    spin_unlock_irqrestore(&chain_lock, flags);
+    return swapped;
+}
+
 /** Return a fence's chain record, or NULL for any other fence. */
 struct dma_fence_chain *to_dma_fence_chain(struct dma_fence *f)
 {
@@ -442,12 +471,13 @@ static struct dma_fence *unwrap_contained(struct dma_fence *node)
 static void unwrap_step(struct dma_fence_unwrap *cursor)
 {
     struct dma_fence_chain *c = to_dma_fence_chain(cursor->chain);
-    struct dma_fence *prev = c ? c->prev : NULL;
+    struct dma_fence *prev = c ? chain_prev_get(c) : NULL, *next;
     while (prev && dma_fence_is_signaled(unwrap_contained(prev))) {
         c = to_dma_fence_chain(prev);
-        prev = c ? c->prev : NULL;
+        next = c ? chain_prev_get(c) : NULL;
+        dma_fence_put(prev);
+        prev = next;
     }
-    dma_fence_get(prev);
     dma_fence_put(cursor->chain);
     cursor->chain = prev;
     cursor->array = NULL;
@@ -662,21 +692,26 @@ static void chain_done(struct dma_fence *f, struct dma_fence_cb *cb);
  * Wait on the first fence of the chain from `c` back that has not
  * signalled: its own, then each earlier point's. Return 1 with the
  * callback armed, or 0 when every one has signalled. `armed` names the
- * fence before its callback is added, and nothing here writes it after, so
- * that the callback, which may run on another processor at once, is its
- * only writer from then on.
+ * fence, with a reference, before its callback is added, and nothing here
+ * writes it after, so that the callback, which may run on another
+ * processor at once, is its only writer from then on.
  */
 static int chain_arm(struct dma_fence_chain *c)
 {
     struct dma_fence_chain *p;
-    struct dma_fence *node = &c->base, *f;
+    struct dma_fence *node = dma_fence_get(&c->base), *f, *next;
     while (node) {
         p = to_dma_fence_chain(node);
-        f = p ? p->fence : node;
+        f = dma_fence_get(p ? p->fence : node);
         c->armed = f;
-        if (!dma_fence_add_callback(f, &c->cb.cb, chain_done))
+        if (!dma_fence_add_callback(f, &c->cb.cb, chain_done)) {
+            dma_fence_put(node);
             return 1;
-        node = p ? p->prev : NULL;
+        }
+        dma_fence_put(f);
+        next = p ? chain_prev_get(p) : NULL;
+        dma_fence_put(node);
+        node = next;
     }
     c->armed = NULL;
     return 0;
@@ -688,7 +723,8 @@ static int chain_arm(struct dma_fence_chain *c)
 static void chain_done(struct dma_fence *f, struct dma_fence_cb *cb)
 {
     struct dma_fence_chain *c = ((struct dma_fence_chain_cb *)cb)->chain;
-    (void)f;
+    /* The signal holds `f` while its callbacks run. */
+    dma_fence_put(f);
     if (chain_arm(c))
         return;
     dma_fence_signal(&c->base);
@@ -713,11 +749,16 @@ static int chain_enable_signaling(struct dma_fence *f)
 static int chain_signaled(struct dma_fence *f)
 {
     struct dma_fence_chain *p;
-    struct dma_fence *node;
-    for (node = f; node; node = p ? p->prev : NULL) {
+    struct dma_fence *node = dma_fence_get(f), *next;
+    while (node) {
         p = to_dma_fence_chain(node);
-        if (!dma_fence_is_signaled(p ? p->fence : node))
+        if (!dma_fence_is_signaled(p ? p->fence : node)) {
+            dma_fence_put(node);
             return 0;
+        }
+        next = p ? chain_prev_get(p) : NULL;
+        dma_fence_put(node);
+        node = next;
     }
     return 1;
 }
@@ -774,23 +815,29 @@ void dma_fence_chain_init(struct dma_fence_chain *c, struct dma_fence *prev,
 }
 
 /** Step back from `f`, dropping the earlier points whose fences have
- * signalled, as Linux's dma_fence_chain_walk does. */
+ * signalled, as Linux's dma_fence_chain_walk does (dma-fence-chain.c:
+ * 39-72): each unlink is a swap of the link that another walk may have
+ * made first. Returns the earlier point with a reference, or NULL, and
+ * puts `f`. */
 struct dma_fence *dma_fence_chain_walk(struct dma_fence *f)
 {
     struct dma_fence_chain *c = to_dma_fence_chain(f), *p;
-    struct dma_fence *prev;
+    struct dma_fence *prev, *next;
     if (!c) {
         dma_fence_put(f);
         return NULL;
     }
-    while ((prev = c->prev) != NULL) {
+    while ((prev = chain_prev_get(c)) != NULL) {
         p = to_dma_fence_chain(prev);
         if (!dma_fence_is_signaled(p ? p->fence : prev))
             break;
-        c->prev = p ? dma_fence_get(p->prev) : NULL;
+        next = p ? chain_prev_get(p) : NULL;
+        if (chain_prev_swap(c, prev, next))
+            dma_fence_put(prev);
+        else
+            dma_fence_put(next);
         dma_fence_put(prev);
     }
-    dma_fence_get(prev);
     dma_fence_put(f);
     return prev;
 }

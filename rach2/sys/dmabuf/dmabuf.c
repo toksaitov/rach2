@@ -171,11 +171,22 @@ struct dma_fence *dma_resv_get_write(struct dma_resv *r)
     return f;
 }
 
-/** Take a buffer reference. */
+/** Add `delta` to `*refs` atomically and return the old count. */
+static uint32_t refs_add(volatile uint32_t *refs, uint32_t delta)
+{
+    uint32_t old;
+    do {
+        old = *refs;
+    } while (arch_atomic_cmpxchg((volatile unsigned int *)refs, old, old + delta) != old);
+    return old;
+}
+
+/** Take a buffer reference, atomically, as Linux's get_file on the
+ * buffer's file, since PRIME takes and drops them on any processor. */
 struct dma_buf *dma_buf_ref(struct dma_buf *b)
 {
     if (b)
-        b->refs++;
+        refs_add(&b->refs, 1u);
     return b;
 }
 
@@ -183,7 +194,7 @@ struct dma_buf *dma_buf_ref(struct dma_buf *b)
 void dma_buf_put(struct dma_buf *b)
 {
     int i;
-    if (!b || --b->refs)
+    if (!b || refs_add(&b->refs, ~0u) != 1u)
         return;
     for (i = 0; i < 2; i++) {
         dma_fence_remove_callback(b->poll_fences[i], &b->poll_cb[i].cb);
@@ -201,6 +212,8 @@ struct dma_buf *dma_buf_export(uint64_t size, const struct dma_buf_ops *ops, voi
                                struct dma_resv *resv)
 {
     static uint64_t next_ino = 1;
+    static struct spinlock ino_lock = SPINLOCK_INIT_NAMED("dma_buf_ino");
+    uint32_t flags;
     struct dma_buf *b;
     if (!size || size > 0x7fffffffffffffffull || !ops)
         return NULL;
@@ -210,7 +223,9 @@ struct dma_buf *dma_buf_export(uint64_t size, const struct dma_buf_ops *ops, voi
     b->anon.name = "dmabuf";
     b->refs = 1;
     b->size = size;
+    flags = spin_lock_irqsave(&ino_lock);
     b->ino = next_ino++;
+    spin_unlock_irqrestore(&ino_lock, flags);
     b->ops = ops;
     b->priv = priv;
     b->resv = resv ? resv : &b->own;
