@@ -71,7 +71,7 @@ struct percpu {
     uint32_t ticks_passed;                      /* of those in a row, with work queued */
     uint64_t bkl_since;                         /* cycle count when it last took the big lock */
     uint32_t bkl_vector;                        /* the vector of the entry that holds it, or 0 */
-    int32_t bkl_nr;                             /* that entry's system call number, or -1 */
+    int32_t bkl_nr;                             /* its system call, -1 or BKL_NR_* (smp.h) */
     uint64_t bkl_waited;                        /* cycles the hold under way waited for the lock */
     int bkl_ioctl;                              /* its ioctl request's slot plus one, or 0 */
     volatile uint32_t wake_bkl_start;           /* current lock wait's clock, microseconds */
