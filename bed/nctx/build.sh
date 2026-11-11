@@ -264,11 +264,13 @@ reverse()
     echo "nctx: building the reversed VM; console in $work/console.log"
     put "$here/reverse-vm.sh" "$here/relocations.sh" "$here/nctxcheck.c" "$here/pins" "$work/snapshot"
     # shellcheck disable=SC2086 # opts are words
-    (cd "$tree" && tar cf - bed/vm/module bed/vm/backend rach2/sys/virtio/vgpushm.h) |
+    (cd "$tree" && tar cf - bed/vm/module bed/vm/backend bed/ivshmemd.c rach2/sys/virtio/vgpushm.h) |
         ssh $opts -p "$port" gfx@127.0.0.1 'mkdir -p nctx/build/source && tar xf - -C nctx/build/source'
     in_guest 'sudo sh reverse-vm.sh prepare build/source'
     in_guest 'cc -std=c99 -O2 -Wall -Wextra -o nctxcheck nctxcheck.c -ldl'
+    in_guest 'cc -std=c99 -O2 -Wall -Wextra -o ivshmemd build/source/bed/ivshmemd.c'
     get nctxcheck
+    get ivshmemd
     release=$(in_guest 'uname -r')
     for name in vmlinuz initrd.img; do
         # shellcheck disable=SC2086 # opts are words
@@ -278,7 +280,7 @@ reverse()
     halt
     qemu-img convert -O qcow2 "$work/reverse.qcow2" "$cache/reverse.qcow2.part"
     mv "$cache/reverse.qcow2.part" "$cache/reverse.qcow2"
-    (cd "$cache" && sha256sum reverse.qcow2 reverse-vmlinuz reverse-initrd.img mesa-nctx.tar.xz nctxcheck \
+    (cd "$cache" && sha256sum reverse.qcow2 reverse-vmlinuz reverse-initrd.img mesa-nctx.tar.xz nctxcheck ivshmemd \
         > reverse.sha256)
     echo "nctx: result: $cache/reverse.qcow2, reverse-vmlinuz, reverse-initrd.img and reverse.sha256"
 }
