@@ -147,8 +147,10 @@ The times are microseconds, and 0 without an invariant time-stamp counter.
 An
 .Xr ioctl 2
 request counts beside its system call, in 256 slots; the calls of a
-request that finds none free count in
-.Ql ioctl_lost .
+request for which none of the 32 slots its hash names is free or its own
+count in
+.Ql ioctl_lost ,
+which can count while most slots are free.
 A write of anything zeroes the counts.
 .It Pa bkl/profile
 Mode 0644.
@@ -157,8 +159,10 @@ tick that finds the processor holding the lock, at 1000 Hz, takes a
 sample of the instruction it stopped and that function's caller, from the
 frame chain, 0 when there is none.
 Code that runs with interrupts off is not sampled.
-The text is the samples, those lost to a full table of 2048 slots, and a
-line for each instruction and caller sampled, with its count, in no order:
+The text is the samples; those lost, whose instruction and caller found
+none of the 32 slots their hash names among the 2048 free or their own,
+which can happen while most slots are free; and a line for each
+instruction and caller sampled, with its count, in no order:
 .Bd -literal -offset indent
 samples 5120
 lost 0
