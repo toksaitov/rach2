@@ -1,0 +1,194 @@
+[ 4396.332000] vfs: remounted: /tmp/newroot/etc/protocols (read-only)
+[ 4396.333000] vfs: bound: /tmp/oldroot/home/desktop/.local/share/umu/steamrt4/var/tmp-NY2YY3/usr/etc/pulse on /tmp/newroot/etc/pulse
+[ 4396.335000] vfs: remounted: /tmp/newroot/etc/pulse (read-only)
+[ 4396.335000] vfs: bound: /tmp/oldroot/home/desktop/.local/share/umu/steamrt4/var/tmp-NY2YY3/usr/etc/python3 on /tmp/newroot/etc/python3
+[ 4396.337000] vfs: remounted: /tmp/newroot/etc/python3 (read-only)
+[ 4396.340000] vfs: bound: /tmp/oldroot/home/desktop/.local/share/umu/steamrt4/var/tmp-NY2YY3/usr/etc/python3.13 on /tmp/newroot/etc/python3.13
+[ 4396.342000] vfs: remounted: /tmp/newroot/etc/python3.13 (read-only)
+[ 4396.343000] vfs: bound: /tmp/oldroot/home/desktop/.local/share/umu/steamrt4/var/tmp-NY2YY3/usr/etc/sensors.d on /tmp/newroot/etc/sensors.d
+[ 4396.345000] vfs: remounted: /tmp/newroot/etc/sensors.d (read-only)
+[ 4396.345000] vfs: bound: /tmp/oldroot/home/desktop/.local/share/umu/steamrt4/var/tmp-NY2YY3/usr/etc/sensors3.conf on /tmp/newroot/etc/sensors3.conf
+[ 4396.347000] vfs: remounted: /tmp/newroot/etc/sensors3.conf (read-only)
+[ 4396.347000] vfs: bound: /tmp/oldroot/home/desktop/.local/share/umu/steamrt4/var/tmp-NY2YY3/usr/etc/services on /tmp/newroot/etc/services
+[ 4396.349000] vfs: remounted: /tmp/newroot/etc/services (read-only)
+[ 4396.350000] vfs: bound: /tmp/oldroot/home/desktop/.local/share/umu/steamrt4/var/tmp-NY2YY3/usr/etc/ssl on /tmp/newroot/etc/ssl
+[ 4396.352000] vfs: remounted: /tmp/newroot/etc/ssl (read-only)
+[ 4396.353000] vfs: bound: /tmp/oldroot/home/desktop/.local/share/umu/steamrt4/var/tmp-NY2YY3/usr/etc/vdpau_wrapper.cfg on /tmp/newroot/etc/vdpau_wrapper.cfg
+[ 4396.355000] vfs: remounted: /tmp/newroot/etc/vdpau_wrapper.cfg (read-only)
+[ 4396.355000] vfs: bound: /tmp/oldroot/home/desktop/.local/share/umu/steamrt4/var/tmp-NY2YY3/usr/etc/vulkan on /tmp/newroot/etc/vulkan
+[ 4396.357000] vfs: remounted: /tmp/newroot/etc/vulkan (read-only)
+[ 4396.358000] vfs: bound: /tmp/oldroot/home/desktop/.local/share/umu/steamrt4/var/tmp-NY2YY3/usr/etc/xattr.conf on /tmp/newroot/etc/xattr.conf
+[ 4396.360000] vfs: remounted: /tmp/newroot/etc/xattr.conf (read-only)
+[ 4396.360000] vfs: bound: /tmp/oldroot/etc/machine-id on /tmp/newroot/etc/machine-id
+[ 4396.365000] vfs: remounted: /tmp/newroot/etc/machine-id (read-only)
+[ 4396.365000] vfs: bound: /tmp/oldroot/etc/hosts on /tmp/newroot/etc/hosts
+[ 4396.368000] vfs: remounted: /tmp/newroot/etc/hosts (read-only)
+[ 4396.368000] vfs: bound: /tmp/oldroot/etc/resolv.conf on /tmp/newroot/etc/resolv.conf
+[ 4396.371000] vfs: remounted: /tmp/newroot/etc/resolv.conf (read-only)
+[ 4396.371000] vfs: bound: /tmp/bindfileQnoT41 on /tmp/newroot/etc/passwd
+[ 4396.375000] vfs: remounted: /tmp/newroot/etc/passwd (read-only)
+[ 4396.376000] vfs: bound: /tmp/bindfile6bD2xF on /tmp/newroot/etc/group
+[ 4396.380000] vfs: remounted: /tmp/newroot/etc/group (read-only)
+[ 4396.380000] vfs: mounted: tmpfs on /tmp/newroot/var/pressure-vessel/ldso (tmpfs)
+[ 4396.381000] vfs: bound: /tmp/oldroot/home/desktop/.local/share/umu/steamrt4/var/tmp-NY2YY3/usr/etc/ld.so.cache on /tmp/newroot/var/pressure-vessel/ldso/runtime-ld.so.cache
+[ 4396.388000] vfs: remounted: /tmp/newroot/var/pressure-vessel/ldso/runtime-ld.so.cache (read-only)
+[ 4396.389000] vfs: bound: /tmp/oldroot/home/desktop/.local/share/umu/steamrt4/var/tmp-NY2YY3/usr/etc/ld.so.conf on /tmp/newroot/var/pressure-vessel/ldso/runtime-ld.so.conf
+[ 4396.394000] vfs: remounted: /tmp/newroot/var/pressure-vessel/ldso/runtime-ld.so.conf (read-only)
+[ 4396.396000] vfs: bound: /tmp/bindfileyXCIfc on /tmp/newroot/etc/timezone
+[ 4396.400000] vfs: remounted: /tmp/newroot/etc/timezone (read-only)
+[ 4396.400000] vfs: bound: /tmp/oldroot/usr/share/fonts on /tmp/newroot/run/host/fonts
+[ 4396.404000] vfs: remounted: /tmp/newroot/run/host/fonts (read-only)
+[ 4396.405000] vfs: mounted: tmpfs on /tmp/newroot/run/host/fonts-cache (tmpfs)
+[ 4396.410000] vfs: remounted: /tmp/newroot/run/host/fonts-cache (read-only)
+[ 4396.411000] vfs: bound: /tmp/oldroot/home/desktop/.cache/fontconfig on /tmp/newroot/run/host/user-fonts-cache
+[ 4396.415000] vfs: remounted: /tmp/newroot/run/host/user-fonts-cache (read-only)
+[ 4396.416000] vfs: bound: /tmp/bindfileX29ELg on /tmp/newroot/run/host/font-dirs.xml
+[ 4396.419000] vfs: remounted: /tmp/newroot/run/host/font-dirs.xml (read-only)
+[ 4396.419000] vfs: bound: /tmp/oldroot/usr/share/icons on /tmp/newroot/run/host/share/icons
+[ 4396.422000] vfs: remounted: /tmp/newroot/run/host/share/icons (read-only)
+[ 4396.423000] vfs: bound: /tmp/oldroot/var/run/user/1001/wayland-0 on /tmp/newroot/run/pressure-vessel/wayland-0
+[ 4396.425000] vfs: remounted: /tmp/newroot/run/pressure-vessel/wayland-0 (read-only)
+[ 4396.426000] vfs: mounted: tmpfs on /tmp/newroot/tmp/.X11-unix (tmpfs)
+[ 4396.426000] vfs: bound: /tmp/oldroot/tmp/.X11-unix/X0 on /tmp/newroot/tmp/.X11-unix/X0
+[ 4396.429000] vfs: remounted: /tmp/newroot/tmp/.X11-unix/X0 (read-only)
+[ 4396.430000] vfs: bound: /tmp/bindfilevC1eS4 on /tmp/newroot/run/pressure-vessel/Xauthority
+[ 4396.434000] vfs: remounted: /tmp/newroot/run/pressure-vessel/Xauthority (read-only)
+[ 4396.435000] vfs: bound: /tmp/bindfilekp0kFj on /tmp/newroot/run/pressure-vessel/pulse/config
+[ 4396.439000] vfs: remounted: /tmp/newroot/run/pressure-vessel/pulse/config (read-only)
+[ 4396.439000] vfs: bound: /tmp/oldroot/var/run/user/1001/pulse/native on /tmp/newroot/run/pressure-vessel/pulse/native
+[ 4396.442000] vfs: remounted: /tmp/newroot/run/pressure-vessel/pulse/native (read-only)
+[ 4396.443000] vfs: bound: /tmp/oldroot/var/run/dbus/system_bus_socket on /tmp/newroot/run/dbus/system_bus_socket
+[ 4396.445000] vfs: remounted: /tmp/newroot/run/dbus/system_bus_socket (read-only)
+[ 4396.446000] vfs: bound: /tmp/bindfile9VsTPH on /tmp/newroot/etc/asound.conf
+[ 4396.451000] vfs: remounted: /tmp/newroot/etc/asound.conf (read-only)
+[ 4396.452000] vfs: bound: /tmp/bindfileJMb7la on /tmp/newroot/run/host/container-manager
+[ 4396.459000] vfs: remounted: /tmp/newroot/run/host/container-manager (read-only)
+[ 4396.459000] vfs: detached: /tmp/oldroot
+[ 4396.459000] vfs: unmounted /tmp/oldroot/proc: 0 opens, 0 releases
+[ 4396.459000] vfs: unmounted /tmp/oldroot/data: 0 opens, 0 releases
+[ 4396.459000] vfs: unmounted /tmp/oldroot/dev/shm: 0 opens, 0 releases
+[ 4396.459000] vfs: unmounted /tmp/oldroot/dev/mqueue: 0 opens, 0 releases
+[ 4396.459000] vfs: unmounted /tmp/oldroot/sys/kernel/debug: 0 opens, 0 releases
+[ 4396.459000] vfs: unmounted /tmp/oldroot/dev: 0 opens, 0 releases
+[ 4396.459000] vfs: unmounted /tmp/oldroot/sys: 0 opens, 0 releases
+[ 4396.459000] vfs: unmounted /tmp/oldroot: 0 opens, 0 releases
+[ 4396.459000] vfs: pivoted: /tmp/newroot
+[ 4396.459000] vfs: detached: /tmp
+[ 4403.452000] syscall: 323: not implemented (asked for by wine)
+[ 4403.585000] syscall: 323: not implemented (asked for by wine64)
+[ 4403.763000] syscall: 323: not implemented (asked for by wine64)
+[ 4404.264000] syscall: 323: not implemented (asked for by wine64)
+[ 4404.483000] syscall: 323: not implemented (asked for by wine64)
+[ 4410.856000] syscall: 323: not implemented (asked for by wine64)
+[ 4411.117000] syscall: 323: not implemented (asked for by wine64)
+[ 4414.591000] syscall: 323: not implemented (asked for by wine64)
+[ 4416.679000] syscall: 323: not implemented (asked for by wine64)
+[ 4417.968000] syscall: 323: not implemented (asked for by wine64)
+[ 4418.183000] syscall: 323: not implemented (asked for by wine64)
+[ 4420.170000] syscall: 323: not implemented (asked for by wine64)
+[ 4543.927000] i915: gmbus dpb: NAK for addr 0050 w(1)
+[ 4543.927000] i915: gmbus dpb: NAK on first message, retry
+[ 4543.927000] i915: gmbus dpb: NAK for addr 0050 w(1)
+[ 4543.927000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[ 4543.927000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+[ 4543.927000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+[ 4543.927000] i915: gmbus dpc: NAK for addr 0050 w(1)
+[ 4543.927000] i915: gmbus dpc: NAK on first message, retry
+[ 4543.929000] i915: gmbus dpc: NAK for addr 0050 w(1)
+[ 4543.929000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[ 4543.929000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+[ 4543.929000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+[ 4543.948000] console: card0: taken back from a master, the keyboard on
+[ 4543.948000] console: card0: 1366x768, the font at 2x
+[ 4544.376000] vfs: unmounted /tmp/newroot/run/host/usr: 462 opens, 462 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/run/host/bin: 0 opens, 0 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/run/host/lib: 72 opens, 72 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/run/host/lib64: 37 opens, 37 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/run/host/sbin: 2 opens, 2 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/data/crysis/compat/shadercache: 0 opens, 0 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/data/crysis/game/Bin64: 347 opens, 347 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/data/crysis/logs: 1 opens, 1 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/home/desktop/.cache: 64 opens, 64 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/home/desktop/.config: 2 opens, 2 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/home/desktop/.local/share/umu/steamrt4: 1 opens, 1 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/opt/proton: 3020 opens, 3020 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/run/host/os-release: 0 opens, 0 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/dev/shm: 13 opens, 13 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/dev/mqueue: 0 opens, 0 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/proc: 0 opens, 0 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/sys/kernel/debug: 0 opens, 0 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/run/host/etc: 0 opens, 0 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/usr: 1291 opens, 1291 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/etc/X11: 0 opens, 0 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/etc/alsa: 0 opens, 0 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/etc/bash.bashrc: 0 opens, 0 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/etc/ca-certificates: 0 opens, 0 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/etc/ca-certificates.conf: 0 opens, 0 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/etc/dconf: 0 opens, 0 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/etc/debian_chroot: 0 opens, 0 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/etc/debian_version: 0 opens, 0 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/etc/environment: 0 opens, 0 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/etc/ethertypes: 0 opens, 0 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/etc/fonts: 105 opens, 105 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/etc/glvnd: 0 opens, 0 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/etc/gss: 0 opens, 0 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/etc/inputrc: 0 opens, 0 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/etc/krb5.conf.d: 0 opens, 0 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/etc/ld.so.conf.d: 4 opens, 4 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/etc/locale.alias: 0 opens, 0 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/etc/locale.conf: 0 opens, 0 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/etc/locale.gen: 0 opens, 0 releases
+[ 4544.376000] vfs: unmounted /tmp/newroot/etc/magic: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/etc/magic.mime: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/etc/mime.types: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/etc/nsswitch.conf: 2 opens, 2 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/etc/openal: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/etc/pkcs11: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/etc/profile: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/etc/profile.d: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/etc/protocols: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/etc/pulse: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/etc/python3: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/etc/python3.13: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/etc/sensors.d: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/etc/sensors3.conf: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/etc/services: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/etc/ssl: 1 opens, 1 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/etc/vdpau_wrapper.cfg: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/etc/vulkan: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/etc/xattr.conf: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/etc/machine-id: 5 opens, 5 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/etc/hosts: 3 opens, 3 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/etc/resolv.conf: 2 opens, 2 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/etc/passwd: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/etc/group: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/var/pressure-vessel/ldso/runtime-ld.so.cache: 1 opens, 1 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/var/pressure-vessel/ldso/runtime-ld.so.conf: 1 opens, 1 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/etc/timezone: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/run/host/fonts: 3503 opens, 3503 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/run/host/fonts-cache: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/run/host/user-fonts-cache: 42 opens, 42 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/run/host/font-dirs.xml: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/run/host/share/icons: 3 opens, 3 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/run/pressure-vessel/wayland-0: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/tmp/.X11-unix/X0: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/run/pressure-vessel/Xauthority: 25 opens, 25 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/run/pressure-vessel/pulse/config: 2 opens, 2 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/run/pressure-vessel/pulse/native: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/run/dbus/system_bus_socket: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/etc/asound.conf: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/run/host/container-manager: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/data/crysis/compat: 2431 opens, 2431 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/data/crysis/game: 107060 opens, 107060 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/home/desktop/.local/share: 3 opens, 3 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/opt: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/dev: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/sys: 0 opens, 0 releases
+[ 4544.379000] vfs: unmounted /tmp/newroot/var/pressure-vessel/ldso: 28 opens, 28 releases
+[ 4544.388000] vfs: unmounted /tmp/newroot/tmp/.X11-unix: 1 opens, 1 releases
+[ 4544.388000] vfs: unmounted /tmp/newroot/data: 5332 opens, 5332 releases
+[ 4544.388000] vfs: unmounted /tmp/newroot/home/desktop: 1 opens, 1 releases
+[ 4544.388000] vfs: unmounted /tmp/newroot/tmp: 12 opens, 12 releases
+[ 4544.388000] vfs: unmounted /tmp/newroot/home: 0 opens, 0 releases
+[ 4544.388000] vfs: unmounted /tmp/newroot: 190 opens, 190 releases
+[ 4544.388000] vfs: unmounted /tmp: 9 opens, 9 releases

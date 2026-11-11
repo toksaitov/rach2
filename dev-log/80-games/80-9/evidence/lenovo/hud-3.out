@@ -1,0 +1,15 @@
+crysis: save: default_00_Contact_01m_18s.CRYSISJMSF copied as default_accept_src_hud-3.CRYSISJMSF, sha256 d6458decf5183b9a4dae47b82ed546889b8ab8638b6f793c3f238d47d9ce392b
+crysis: started: crysis.sh run --umu -devmode +load default_accept_src_hud-3.CRYSISJMSF +log_verbosity 4 +ds_loglevel 4
+crysis: check: load: ok default_accept_src_hud-3.CRYSISJMSF: level loaded in 295.60 s
+crysis: prompt: passed
+crysis: check: prompt: ok the loading screen's prompt passed
+crysis: shot: loaded written
+crysis: shot: after written
+crysis: check: after: ok the HUD 35 s after the trigger, to read
+crysis: shot: flash written
+crysis: enosys: syscall: 323: not implemented (asked for by wine)
+crysis: enosys: syscall: 323: not implemented (asked for by wine64)
+crysis: ended after 477 s, status 0
+crysis: check: lines: FAILED the reboot's two dialog lines played
+crysis: check: gamerules: FAILED GameRules hudShow="1" hudBroken="1"
+crysis: result: hud-3: FAILED lines, gamerules

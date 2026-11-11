@@ -1,0 +1,41 @@
+2040:[2026-11-11 17:16:05.600][xwm-wm-x11] XCB_PROPERTY_NOTIFY: window 31457281, _WINE_HWND_STYLE: CARDINAL/32, length 4 (value_len 1): [80674816]
+2041:[2026-11-11 17:16:05.600][xwm-wm-x11] XCB_PROPERTY_NOTIFY: window 31457281, _WINE_HWND_EXSTYLE: CARDINAL/32, length 4 (value_len 1): [256]
+2042:[2026-11-11 17:16:05.602][xwm-wm-x11] XCB_PROPERTY_NOTIFY: window 31457281, WM_NAME: STRING/8, length 19 (value_len 19): "WineD3D fake window"
+2043:[2026-11-11 17:16:05.605][xwm-wm-x11] XCB_PROPERTY_NOTIFY: window 31457281, WM_ICON_NAME: STRING/8, length 19 (value_len 19): "WineD3D fake window"
+2044:[2026-11-11 17:16:05.606][xwm-wm-x11] XCB_PROPERTY_NOTIFY: window 31457281, _NET_WM_NAME: UTF8_STRING/8, length 19 (value_len 19): "WineD3D fake window"
+2045:[2026-11-11 17:16:05.608][xwm-wm-x11] XCB_PROPERTY_NOTIFY: window 31457281, _WINE_ALLOW_FLIP: CARDINAL/32, length 4 (value_len 1): [0]
+2046:[2026-11-11 17:16:05.609][xwm-wm-x11] XCB_PROPERTY_NOTIFY: window 31457281, WM_NORMAL_HINTS: WM_SIZE_HINTS/32, length 72 (value_len 18): huh?
+2047:[2026-11-11 17:16:05.610][xwm-wm-x11] XCB_PROPERTY_NOTIFY: window 31457281, _MOTIF_WM_HINTS: _MOTIF_WM_HINTS/32, length 20 (value_len 5): huh?
+2048:[2026-11-11 17:16:05.611][xwm-wm-x11] XCB_PROPERTY_NOTIFY: window 31457281, WM_NAME: STRING/8, length 19 (value_len 19): "WineD3D fake window"
+2049:[2026-11-11 17:16:05.613][xwm-wm-x11] XCB_PROPERTY_NOTIFY: window 31457281, WM_ICON_NAME: STRING/8, length 19 (value_len 19): "WineD3D fake window"
+2050:[2026-11-11 17:16:05.615][xwm-wm-x11] XCB_PROPERTY_NOTIFY: window 31457281, _NET_WM_NAME: UTF8_STRING/8, length 19 (value_len 19): "WineD3D fake window"
+2051:[2026-11-11 17:16:05.616][xwm-wm-x11] XCB_CREATE_NOTIFY (window 31457282, at (0, 0), width 1, height 1, override)
+2052:[2026-11-11 17:16:05.617][xwm-wm-x11] XCB_PROPERTY_NOTIFY: window 31457281, WM_NORMAL_HINTS: WM_SIZE_HINTS/32, length 72 (value_len 18): huh?
+2053:[2026-11-11 17:16:05.618][xwm-wm-x11] XCB_PROPERTY_NOTIFY: window 31457281, _MOTIF_WM_HINTS: _MOTIF_WM_HINTS/32, length 20 (value_len 5): huh?
+2054:[2026-11-11 17:16:05.619][xwm-wm-x11] XCB_CONFIGURE_REQUEST (window 31457281) 14,33 @ 104x1
+2055:[2026-11-11 17:16:05.619][xwm-wm-x11] XWM: configure window 31457281: x=32 y=32 width=104 height=1 border_width=0
+2056:[2026-11-11 17:16:05.620][xwm-wm-x11] XCB_CONFIGURE_NOTIFY (window 31457281) 32,32 @ 104x1
+2057:[2026-11-11 17:16:05.635][xwm-wm-x11] XCB_DESTROY_NOTIFY, win 25165836, event 473
+2058:[2026-11-11 17:16:05.639][xwm-wm-x11] XCB_DESTROY_NOTIFY, win 31457282, event 473
+2059:[2026-11-11 17:16:05.641][xwm-wm-x11] XCB_DESTROY_NOTIFY, win 31457281, event 473
+2060:[2026-11-11 17:16:09.188][xwm-wm-x11] XCB_CONFIGURE_REQUEST (window 25165831) 0,0 @ 1366x768
+2061:[2026-11-11 17:16:09.193][xwm-wm-x11] XCB_CLIENT_MESSAGE (_NET_ACTIVE_WINDOW 2 0 0 0 0 win 25165831)
+2062:[2026-11-11 17:16:09.203][xwm-wm-x11] XCB_CLIENT_MESSAGE (_NET_WM_FULLSCREEN_MONITORS 0 0 0 0 1 win 25165831)
+2063:[2026-11-11 17:16:09.214][xwm-wm-x11] XCB_CONFIGURE_NOTIFY (window 6291457) 0,0 @ 1366x768, override
+2064:[2026-11-11 17:16:09.217][xwm-wm-x11] XCB_MAP_NOTIFY (window 6291457, override)
+2065:ntpd: timed out waiting for 89.161.47.139, reach 0xf6, next query in 530s
+2066:[2026-11-11 17:17:17.490][xwm-wm-x11] XCB_PROPERTY_NOTIFY: window 25165831, _WINE_HWND_STYLE: CARDINAL/32, length 4 (value_len 1): [2483552256]
+2067:[2026-11-11 17:17:17.491][xwm-wm-x11] XCB_PROPERTY_NOTIFY: window 25165831, _WINE_HWND_EXSTYLE: CARDINAL/32, length 4 (value_len 1): [8]
+2068:[2026-11-11 17:17:33.581][xwm-wm-x11] XCB_PROPERTY_NOTIFY: window 25165831, _NET_WM_USER_TIME: CARDINAL/32, length 4 (value_len 1): [4517545]
+2069:weston: ../libweston/compositor.c:4081: weston_output_finish_frame: Assertion `timespec_sub_to_nsec(stamp, &output->frame_time) >= 0' failed.
+2070:01:12:13.209 [INFO] [seatd/client.c:496] Client disconnected
+2071:/usr/libexec/rach2-session: line 46:   202 Aborted                    weston --debug --logger-scopes=log,xwm-wm-x11 --backend="$backend" --renderer="$renderer" --socket=wayland-0 --config=/etc/xdg/weston/weston.ini
+2072:(EE) failed to read Wayland events: Broken pipe
+2073:01:12:13.260 [INFO] [seatd/seat.c:158] No clients on seat0 to activate
+2074:01:12:13.263 [INFO] [seatd/seat.c:290] Removed client 0 from seat0
+2075:rach2-desktop: session: ended; SIGHUP starts it again
+2076:Received disconnect from 192.168.0.100 port 65078:11: disconnected by user
+2077:Disconnected from user root 192.168.0.100 port 65078
+2078:Accepted publickey for root from 192.168.0.100 port 65435 ssh2: ED25519 SHA256:413NBsqJRWVwqwhEHaiVn/6V2HytsHId2xhPwJ8JBq8
+2079:Received disconnect from 192.168.0.100 port 65435:11: disconnected by user
+2080:Disconnected from user root 192.168.0.100 port 65435

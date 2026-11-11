@@ -1,0 +1,25 @@
+crysis: started: crysis.sh run --umu -devmode +load default_Contact_crysis.CRYSISJMSF
+crysis: check: load: ok default_Contact_crysis.CRYSISJMSF: level loaded in 49.04 s
+crysis: prompt: passed
+crysis: check: prompt: ok the loading screen's prompt passed
+crysis: shot: loaded written
+crysis: shot: after written
+crysis: check: after: ok the HUD 35 s after the trigger, to read
+crysis: shot: flash written
+crysis: enosys: syscall: 323: not implemented (asked for by wine)
+crysis: enosys: syscall: 323: not implemented (asked for by wine64)
+crysis: ended after 1124 s, status 0
+Traceback (most recent call last):
+  File "/data/trial2665/probes/crysis.py", line 644, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/data/trial2665/probes/crysis.py", line 626, in main
+    hud(name, rest[1], rest[2] if len(rest) == 3 else "umu")
+    ~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/trial2665/probes/crysis.py", line 469, in hud
+    game.wait(lambda: any(SAVEGAMES.glob("default_%s.*" % tag)), "save")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/trial2665/probes/crysis.py", line 244, in wait
+    time.sleep(0.5)
+    ~~~~~~~~~~^^^^^
+KeyboardInterrupt

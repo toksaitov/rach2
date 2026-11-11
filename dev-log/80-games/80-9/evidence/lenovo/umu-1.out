@@ -1,0 +1,17 @@
+crysis: started: crysis.sh run --umu -devmode +map island +exec benchmark_gpu
+crysis: loaded in 43.65 s
+crysis: loop 0 finished at frame 2364
+crysis: loop 1 finished at frame 4364
+crysis: loop 2 finished at frame 6365
+crysis: loop 3 finished at frame 8364
+crysis: enosys: syscall: 323: not implemented (asked for by wine)
+crysis: enosys: syscall: 323: not implemented (asked for by wine64)
+crysis: ended after 649 s, status 0
+crysis: check: loop0: FAILED 12.33 fps (gate 24) linux 45.02, play 162.17 s, median 25.6 p99 969.4 max 3509.0 >50ms 210 >100ms 195
+crysis: check: loop1: ok 28.02 fps (gate 24) linux 46.49, play 71.39 s, median 25.6 p99 326.5 max 3776.0 >50ms 72 >100ms 40
+crysis: check: loop2: FAILED 22.33 fps (gate 24) linux 45.78, play 89.57 s, median 27.0 p99 488.8 max 1784.0 >50ms 178 >100ms 100
+crysis: check: loop3: ok 33.20 fps (gate 24) linux 45.66, play 60.24 s, median 25.7 p99 175.7 max 1951.0 >50ms 30 >100ms 26
+crysis: check: loops: ok 4 of 4 loops finished
+crysis: check: wined3d: ok WineD3D's OpenGL renderer
+crysis: check: fsync: ok Wine's fsync
+crysis: result: umu-1: FAILED loop0, loop2
