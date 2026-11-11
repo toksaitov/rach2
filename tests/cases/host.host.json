@@ -722,7 +722,7 @@
         },
         {
           "assertion_id": "itco",
-          "checks": "tests/host/itco_hosttest.c checks the TCO register sequence, two-stage expiry, watchdog file ABI, nowayout and the kernel's feed before an open under ASan and UBSan and exits 0",
+          "checks": "tests/host/itco_hosttest.c checks the TCO register sequence, two-stage expiry, watchdog file ABI, nowayout, the kernel's feed before an open and the refusal records of the command line's options under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {
