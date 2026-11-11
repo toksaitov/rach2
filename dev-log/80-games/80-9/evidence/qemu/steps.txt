@@ -1,0 +1,10 @@
+qemu: step: prepare /data/trial2665/out: status 0 at 19:11:55
+qemu: step: flyby direct direct: status 0 at 19:25:50
+qemu: step: flyby umu umu 1: status 0 at 19:30:39
+qemu: step: flyby 32 bits32 1: status 0 at 19:33:38
+qemu: step: prepare /data/trial2665/out: status 0 at 19:49:04
+qemu: step: save s1: status 0 at 19:58:33
+qemu: step: load l-old default_accept_s1.CRYSISJMSF umu: status 0 at 20:00:14
+qemu: step: load l-new default_accept_s1.CRYSISJMSF direct /data/crysis/compat-new: status 0 at 20:02:16
+qemu: step: hud h1 default_accept_s1.CRYSISJMSF umu: status 0 at 20:04:59
+qemu: step: restore: status 0 at 20:05:00

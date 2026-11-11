@@ -1,0 +1,25 @@
+e2fsck 1.47.4 (6-Mar-2025)
+games: weston: renderer virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER)) display :0
+games: load: state sha256 0bdc6bb2a3990b34c0178b66a42bee45eb0f62d12174483fbb3f44eccd358a0c, save 4194304 bytes
+games: old-reg: reg export exit 0 value True
+games: old-reg: prefix made again False
+games: old-load: copy exit 0 sha256 0bdc6bb2a3990b34c0178b66a42bee45eb0f62d12174483fbb3f44eccd358a0c want 0bdc6bb2a3990b34c0178b66a42bee45eb0f62d12174483fbb3f44eccd358a0c
+games: prefix: status 0 rach2-game: prefix: made /data/games/compat-new/pfx
+games: new-load: copy exit 0 sha256 0bdc6bb2a3990b34c0178b66a42bee45eb0f62d12174483fbb3f44eccd358a0c want 0bdc6bb2a3990b34c0178b66a42bee45eb0f62d12174483fbb3f44eccd358a0c
+games: new-reg: reg export exit 1 value False
+games: load: old prefix value True save True; new prefix save True value False
+SAVEROW OK load
+Pass 1: Checking inodes, blocks, and sizes
+Pass 2: Checking directory structure
+Pass 3: Checking directory connectivity
+Pass 4: Checking reference counts
+Pass 5: Checking group summary information
+Rach2_data: 4345/98304 files (0.6% non-contiguous), 135244/1572864 blocks
+@etude 1 machine after.1 qemu_exited
+@etude 1 assert load pass
+@etude 1 progress stage 2
+@etude 1 end 2
+etude check: result: unchanged: 6 files
+etude run: result: ran: 1 suites, 1 passed
+run: save-update: PASS in 301s
+run: result: all 1 suites passed

@@ -1,0 +1,13 @@
+games: weston: renderer virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER)) display :0
+games: prefix: status 1 not made
+games: prefix.log: ProtonFixes[62] WARN: Skipping fix execution. Execution conditions are not satisfied.
+games: prefix.log: Proton: Upgrading prefix from None to 11.0-100 with GE-Proton11-12 (/data/games/compat/)
+games: prefix.log: ProtonFixes[62] WARN: Skipping upscaler setup. Execution conditions are not satisfied.
+games: prefix.log: ProtonFixes[62] WARN: Skipping fix execution. Execution conditions are not satisfied.
+games: prefix.log: rach2-game: prefix: wineboot failed: status 247
+games: weston.log: [14:48:17.370] GL vendor: Mesa
+games: weston.log: [14:48:17.370] GL renderer: virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER))
+games: weston.log: [14:48:17.502] GL ES 3.1 - renderer features:
+games: weston.log:                read-back format: ARGB8888
+games: weston.log:                glReadPixels supports y-flip: yes
+games: weston.log:                glReadPixels supports PBO: yes

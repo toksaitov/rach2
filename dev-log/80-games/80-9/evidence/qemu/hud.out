@@ -1,0 +1,15 @@
+crysis: started: crysis.sh run --umu -devmode +load default_accept_s1.CRYSISJMSF
+crysis: check: load: ok default_accept_s1.CRYSISJMSF: level loaded in 33.54 s
+crysis: prompt: passed
+crysis: check: prompt: ok the loading screen's prompt passed
+crysis: shot: loaded written
+crysis: shot: after written
+crysis: check: after: ok the HUD 35 s after the trigger, to read
+crysis: shot: flash written
+crysis: enosys: syscall: 323: not implemented (asked for by wine)
+crysis: enosys: syscall: 323: not implemented (asked for by wine64)
+crysis: ended after 163 s, status 0
+crysis: dialog: line 1 at 1.640489 s, line 2 at 8.312292 s, Show after BootSeq 4672 ms
+crysis: check: lines: ok the reboot's two dialog lines played
+crysis: check: gamerules: ok GameRules hudShow="1"
+crysis: result: h1: ok

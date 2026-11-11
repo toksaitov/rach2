@@ -1,0 +1,11 @@
+crysis: check: bytes: ok default_accept_s1.CRYSISJMSF sha256 46e212884283b54d2bf5621f8cf80a709549555227e11dea639e70982b523d54, recorded 46e212884283b54d2bf5621f8cf80a709549555227e11dea639e70982b523d54
+crysis: started: crysis.sh run --umu -devmode +load default_accept_s1.CRYSISJMSF
+crysis: check: load: ok default_accept_s1.CRYSISJMSF: level loaded in 32.76 s
+crysis: prompt: passed
+crysis: check: prompt: ok the loading screen's prompt passed
+crysis: shot: loaded written
+crysis: enosys: syscall: 323: not implemented (asked for by wine)
+crysis: enosys: syscall: 323: not implemented (asked for by wine64)
+crysis: ended after 100 s, status 0
+crysis: check: prefix: ok /data/crysis/compat, used as it was
+crysis: result: l-old: ok

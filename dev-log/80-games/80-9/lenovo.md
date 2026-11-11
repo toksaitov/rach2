@@ -21,7 +21,7 @@ C='python3 /data/trial2665/probes/crysis.py'
 
 ## Build
 
-1. The kernel and bootctl on the Mac; the trial root and the bundle, which only an x86-64 Linux host makes, on the testing host in a copy of the loop's own, from the shared caches (the rehearsal's took 14 minutes):
+1. The kernel and bootctl on the Mac; the trial root and the bundle, which only an x86-64 Linux host makes, on the testing host in a copy of the loop's own, from the shared caches; the rehearsal's builds came from the caches in seconds, and a build after the go's changes is not measured:
 
 ```
 git fetch origin && git worktree add $T HEAD-OF-THE-GO
