@@ -5,6 +5,7 @@
  * host-deps: tests/host/compat/park_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  * host-deps: rach2/sys/tick.c
+ * host-deps: rach2/sys/fs/sleeplock.c
  *
  * `ipc/unix.c`, `ipc/pipe.c` and the checked user copy are the kernel's,
  * included whole to reach their static state. The descriptor table the
@@ -40,7 +41,8 @@
  * frees the file; and a descriptor the receive has installed is no longer
  * counted in flight. A descriptor in flight while its file moves is counted,
  * installed and released by the node the move gave its description. Each
- * row ends with nothing allocated.
+ * row ends with nothing allocated. A pipe's sleeping lock is the kernel's
+ * (`fs/sleeplock.c`), which a sibling waits for as for any other.
  */
 #include "ipc/unix.c"
 #include "ipc/pipe.c"
@@ -70,6 +72,20 @@ int park_resume(void);
 int park_active(void);
 int park_waiting(void);
 void park(void);
+
+/** Print the panic's message, such as a sleeping lock given by a thread
+ * that does not hold it, and exit with status 1. */
+void k_panic(const char *message)
+{
+    dprintf(2, "unix-hosttest: fail: panic: %s\n", message);
+    exit(1);
+}
+
+/** Return 0: no hold of a sleeping lock here is timed. */
+uint32_t timer_now_us(void)
+{
+    return 0;
+}
 
 #define USER_BASE 0x04000000u
 #define PAGES     8
