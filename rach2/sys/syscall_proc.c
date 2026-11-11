@@ -240,6 +240,7 @@ extern void shell_reset_input(void);
 extern void panic_init_died(uint32_t pid);
 
 static void sig_post_own(process_t *t, int signo, const struct k_siginfo *info);
+static void sig_recalc(void);
 
 /**
  * Each descriptor drops its socket reference and its open file description
@@ -2843,11 +2844,13 @@ static void fork_ids(process_t *child, const process_t *parent)
 
 /** Link the calling thread's fork record `pending` into `parent`'s group
  * before any construction can sleep, unless `flags` has CLONE_THREAD,
- * as Linux 6.12.115's copy_process does (kernel/fork.c:2234-2241). The
- * big lock is held; an interrupt may post a group signal. */
-static void fork_delay_begin(process_t *parent, struct fork_pending *pending, uint32_t flags)
+ * as Linux 6.12.115's copy_process does (kernel/fork.c:2234-2244). Recompute
+ * the caller's signal work and return nonzero when it must be taken before
+ * the fork. The big lock is held; an interrupt may post a group signal. */
+static int fork_delay_begin(process_t *parent, struct fork_pending *pending, uint32_t flags)
 {
     uint32_t f = kirq_save();
+    int work;
 
     pending->pending = 0;
     pending->next = NULL;
@@ -2855,7 +2858,10 @@ static void fork_delay_begin(process_t *parent, struct fork_pending *pending, ui
         pending->next = parent->tg->forks;
         parent->tg->forks = pending;
     }
+    sig_recalc();
+    work = parent->sig_woken != 0;
     kirq_restore(f);
+    return work;
 }
 
 /** Unlink the fork's stack record `pending` from `parent`'s group, if it
@@ -3172,7 +3178,11 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
     if (!parent) {
         return -ESRCH;
     }
-    fork_delay_begin(parent, &pending, req->flags);
+    if (fork_delay_begin(parent, &pending, req->flags)) {
+        parent->restart_kind = RESTART_NOINTR;
+        rc = -EINTR;
+        goto out_delay;
+    }
     mem_balance();
     rc = fork_nproc(parent);
     if (rc != 0) {
@@ -4818,6 +4828,25 @@ void signal_post_multi(process_t *target, int signo, const struct k_siginfo *inf
     sig_post_process(target, signo, info, 1);
 }
 
+/** Select the leader's live replacement for a multiprocess send, or NULL
+ * for a record that is not a published leader; process.h gives the contract. */
+process_t *signal_process_target(process_t *p)
+{
+    process_t *t;
+
+    if (p->state == PROC_UNUSED || p->pid != p->tgid) {
+        return NULL;
+    }
+    if (p->state == PROC_ZOMBIE) {
+        for (t = proc_list; t; t = t->next) {
+            if (t->tg == p->tg && t->state != PROC_UNUSED && t->state != PROC_ZOMBIE) {
+                return t;
+            }
+        }
+    }
+    return p;
+}
+
 /**
  * Post signal `signo` to the thread `t` alone, which alone may take it, with
  * the siginfo `info`, unless `sig_prepare` drops it, and end the whole
@@ -4896,23 +4925,28 @@ static void sender_info(struct k_siginfo *info, int32_t code, const process_t *t
  * (`ptrace_return_stops`). A traced thread counts an ignored signal too, as
  * Linux's sig_ignored does, since its tracer sees each signal at a
  * signal-delivery stop, where a wait it cut short is restarted. Blocking
- * syscall loops call this on the thread's stack with the big lock held. No
- * wait queue is changed. */
+ * syscall loops call this on the thread's stack with the big lock held. A
+ * group stop not yet taken also ends the wait, as Linux 6.12.115's pending
+ * job control does (kernel/signal.c:157-164). Before a wait goes back to
+ * sleep, recompute its signal-work flag, as recalc_sigpending does after a
+ * restart (kernel/signal.c:173-178). No wait queue is changed. */
 int signal_pending(void)
 {
     uint64_t deliverable;
     uint32_t flags;
     int signo;
+    int pending = 0;
 
     if (!current_proc) {
         return 0;
     }
-    if (current_proc->ptrace & PT_INTERRUPT) {
+    flags = sig_irq_save();
+    if ((current_proc->ptrace & PT_INTERRUPT) ||
+        (current_proc->tg->stop && !current_proc->stop_seen)) {
+        sig_irq_restore(flags);
         return 1;
     }
-    flags = sig_irq_save();
     deliverable = sig_pending_now() & ~current_proc->sig_blocked;
-    sig_irq_restore(flags);
     for (signo = 1; signo <= KSIG_MAX; signo++) {
         struct k_sigaction *sa;
 
@@ -4921,7 +4955,8 @@ int signal_pending(void)
         }
         sa = &current_proc->sigacts[signo];
         if (current_proc->ptrace & PT_TRACED) {
-            return 1;
+            pending = 1;
+            break;
         }
         if (sa->handler == KSIG_IGN) {
             continue;
@@ -4929,9 +4964,14 @@ int signal_pending(void)
         if (sa->handler == KSIG_DFL && ksig_default_action(signo) == KSIG_DEFAULT_IGNORE) {
             continue;
         }
-        return 1;
+        pending = 1;
+        break;
     }
-    return 0;
+    if (!pending) {
+        sig_recalc();
+    }
+    sig_irq_restore(flags);
+    return pending;
 }
 
 /**
@@ -4985,19 +5025,21 @@ static int32_t kill_group(int pgid, int signo)
     process_t *p;
 
     for (p = proc_list; p; p = p->next) {
-        if (p->state == PROC_UNUSED || (int)p->pgid != pgid) {
+        process_t *target = signal_process_target(p);
+
+        if (!target || (int)target->pgid != pgid) {
             continue;
         }
         found = 1;
-        if (!cred_may_signal(p, signo)) {
+        if (!cred_may_signal(target, signo)) {
             continue;
         }
         allowed = 1;
-        if (signo != 0 && p->state != PROC_ZOMBIE) {
+        if (signo != 0 && target->state != PROC_ZOMBIE) {
             struct k_siginfo info;
 
-            sender_info(&info, SI_USER, p);
-            signal_post_multi(p, signo, &info);
+            sender_info(&info, SI_USER, target);
+            signal_post_multi(target, signo, &info);
         }
     }
     if (!found) {
@@ -5009,8 +5051,8 @@ static int32_t kill_group(int pgid, int signo)
 /** Post `signo` to every process the caller sees and may signal, but its
  * own, the init of its PID namespace and the kernel's threads, which
  * kill(2) selects with a pid of -1, as Linux does; an init ends the others
- * so at a shutdown. Each thread of a process is posted to, and the posts
- * merge in the one pending set. The outcome is `kill_group`'s: 0, -EPERM
+ * so at a shutdown. Each process is posted to once, through its leader
+ * or its first live thread. The outcome is `kill_group`'s: 0, -EPERM
  * or -ESRCH. */
 static int32_t kill_all(int signo)
 {
@@ -5019,20 +5061,23 @@ static int32_t kill_all(int signo)
     process_t *p;
 
     for (p = proc_list; p; p = p->next) {
-        if (p->state == PROC_UNUSED || p->state == PROC_ZOMBIE || p == proc_idle ||
-            p->space_root == 0 || p->tg == current_proc->tg || pid_seen(p->tgid) <= 1) {
+        process_t *target = signal_process_target(p);
+
+        if (!target || target->state == PROC_ZOMBIE || target == proc_idle ||
+            target->space_root == 0 || target->tg == current_proc->tg ||
+            pid_seen(target->tgid) <= 1) {
             continue;
         }
         found = 1;
-        if (!cred_may_signal(p, signo)) {
+        if (!cred_may_signal(target, signo)) {
             continue;
         }
         allowed = 1;
         if (signo != 0) {
             struct k_siginfo info;
 
-            sender_info(&info, SI_USER, p);
-            signal_post_multi(p, signo, &info);
+            sender_info(&info, SI_USER, target);
+            signal_post_multi(target, signo, &info);
         }
     }
     if (!found) {
@@ -5811,7 +5856,9 @@ static void reap_threads(void)
  * `signo`: the first thread to stop records the stop for the parent's
  * wait4(WUNTRACED) and sends it SIGCHLD, and every thread parks as it next
  * returns to user mode, until a SIGCONT, or a SIGKILL to die, makes it
- * runnable. The real init (PID 1) is unstoppable, like Unix init: stopping
+ * runnable. Mark and wake each sibling to leave its interruptible wait,
+ * as Linux 6.12.115's do_signal_stop does (kernel/signal.c:2499-2511).
+ * The real init (PID 1) is unstoppable, like Unix init: stopping
  * it would freeze the system with no reaper and no way back, so a
  * job-control stop aimed at it is dropped.
  */
@@ -5819,6 +5866,7 @@ static void sig_group_stop(int signo)
 {
     struct tgroup *tg = current_proc->tg;
     process_t *parent;
+    process_t *t;
 
     if (current_proc->tgid == init_pid && !debug_shell_is_home) {
         return;
@@ -5827,6 +5875,13 @@ static void sig_group_stop(int signo)
         return;
     }
     tg->stop = (uint32_t)signo;
+    for (t = proc_list; t; t = t->next) {
+        if (t != current_proc && t->tg == tg && t->state != PROC_UNUSED &&
+            t->state != PROC_ZOMBIE) {
+            t->sig_woken = 1;
+            sig_wake(t, 0);
+        }
+    }
     tg->leader->jc_status = (uint32_t)(((signo & 0xff) << 8) | 0x7f);
     ptrace_group_change(tg);
     parent = get_process(tg->leader->parent_pid);

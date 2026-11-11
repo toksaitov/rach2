@@ -50,7 +50,9 @@ A process whose threads have all ended remains a target until its parent
 reaps it, as on Linux: the signal is discarded and the call succeeds.
 A group request, and a request with a
 .Fa pid
-of \-1, posts the signal to every member the caller may signal.
+of \-1, posts the signal once to each process the caller may signal.
+The target is its leader, or its first live thread when the leader has
+ended; that thread's mask determines whether an ignored signal is kept.
 A signal accepted during a member's fork is kept for its new child too;
 a send to one process or one thread is not.
 It succeeds if at least one member is permitted, returns
@@ -142,9 +144,9 @@ thread has ended, or
 .Nm tgkill
 was given a thread that does not belong to the process.
 .Fn kill
-also returns this error for
-.Fa pid
--1 or the most negative 32-bit integer, and for
+also returns this error for the most negative 32-bit
+.Fa pid ,
+and for
 .Fa pid
 0 when there is no current process.
 .El

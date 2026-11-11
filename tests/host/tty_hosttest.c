@@ -212,6 +212,12 @@ void signal_post_multi(process_t *p, int signo, const struct k_siginfo *info)
     signal_post(p, signo);
 }
 
+/** The terminal rows signal only live leaders. */
+process_t *signal_process_target(process_t *p)
+{
+    return p->state != PROC_UNUSED && p->pid == p->tgid ? p : NULL;
+}
+
 /** The test's pair, zeroed, for `pty_alloc`; a request of another size is
  * a failure. */
 void *kzalloc(size_t size)
