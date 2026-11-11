@@ -69,9 +69,9 @@ void filecache_forget_mount(const struct vfs_mount *mnt);
 /** The frames the cache holds, which `mem_reclaim` can have back. */
 uint32_t filecache_pages(void);
 
-/** Drop up to `want` pages, the least recently used first; the number of
- * their frames that went back to the pool, which leaves out a frame a reader
- * still holds. */
+/** Drop pages, the least recently used first, until `want` frames have gone
+ * back to the pool or the cache is empty. Returns the frames freed, which
+ * leaves out a frame a reader still holds. */
 uint32_t filecache_shrink(uint32_t want);
 
 #endif /* _FILECACHE_H_ */
