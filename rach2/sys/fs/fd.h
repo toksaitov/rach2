@@ -373,11 +373,18 @@ void fd_ofd_unref(struct open_file *ofd);
 struct open_file *fd_ofd_new(void);
 
 struct vfs_ref;
-/** Reserve `ref` for writing (1) or execution (2) in `ofd`. Opposite
- * reservations on the same file give -ETXTBSY. Does not sleep; the caller
- * holds the node, and transfers that hold to the description or releases
- * the description before the node. The big kernel lock is required. */
+/** Reserve `ref` for writing (1) or execution (2) in `ofd`, in place of
+ * any reservation `ofd` held. Opposite reservations on the same file give
+ * -ETXTBSY, found from a count of each file's reservations as Linux's
+ * i_writecount, and -ENOMEM when that count has no room. Does not sleep;
+ * the caller holds the node, and transfers that hold to the description or
+ * releases the description before the node. The big kernel lock is
+ * required. */
 int fd_ofd_access(struct open_file *ofd, const struct vfs_ref *ref, int access);
+
+/** Give back the reservation `ofd` holds, if any. The big kernel lock is
+ * required. */
+void fd_ofd_access_drop(struct open_file *ofd);
 
 /** Take or release the description lock (see `busy` above), and with it,
  * taken first and released last, the namespace lock of the description's

@@ -3961,7 +3961,7 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
 
     entry = fd_entry_now(current_proc->fds, entry); /* past the last sleep */
     if ((flags & 3) == 0) {
-        entry->ofd->access = 0;
+        fd_ofd_access_drop(entry->ofd);
     }
     if ((flags & 3) == 1) {
         entry->flags = FD_FLAG_WRITE;

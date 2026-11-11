@@ -74,17 +74,97 @@ struct open_file *fd_ofd_new(void)
     return ofd_alloc();
 }
 
-int fd_ofd_access(struct open_file *ofd, const struct vfs_ref *ref, int access)
-{
-    struct ofd_rec *rec;
+/*
+ * The reservations of one file, by the descriptions that hold them: Linux's
+ * i_writecount, kept here by the file's mount base and node, since a node is
+ * each file system's own. A record lives while either count is above zero.
+ */
+struct access_count {
+    struct access_count *next;
+    const struct vfs_mount *base; /* vfs_mount_base of the holders' mount */
+    const void *node;
+    unsigned long count[2]; /* the writers, the executables */
+};
 
-    for (rec = ofds; rec; rec = rec->next) {
-        if (rec->ofd.access && rec->ofd.access != access &&
-            vfs_mount_base(rec->ofd.access_mnt) == vfs_mount_base(ref->mnt) &&
-            rec->ofd.access_node == ref->node) {
-            return -ETXTBSY;
+/* The buckets of `access_counts`, a power of two. */
+#define ACCESS_BUCKETS 64u
+
+static struct access_count *access_counts[ACCESS_BUCKETS];
+
+/** The bucket of the file `node` under the mount base `base`. */
+static uint32_t access_bucket(const struct vfs_mount *base, const void *node)
+{
+    uintptr_t k = (uintptr_t)node ^ ((uintptr_t)base >> 4);
+
+    return (uint32_t)((k >> 4) ^ (k >> 12)) & (ACCESS_BUCKETS - 1u);
+}
+
+/** The record of `node` under `mnt`'s base, made when `make` is set; NULL
+ * when there is none, or no room for one. */
+static struct access_count *access_find(const struct vfs_mount *mnt, const void *node, int make)
+{
+    const struct vfs_mount *base = vfs_mount_base(mnt);
+    struct access_count **b = &access_counts[access_bucket(base, node)], *a;
+
+    for (a = *b; a; a = a->next) {
+        if (a->base == base && a->node == node) {
+            return a;
         }
     }
+    if (!make || (a = (struct access_count *)kzalloc(sizeof(*a))) == NULL) {
+        return NULL;
+    }
+    a->base = base;
+    a->node = node;
+    a->next = *b;
+    *b = a;
+    return a;
+}
+
+/** Give back one reservation of kind `access`, 1 or 2, of `node` under
+ * `mnt`, freeing the record that holds no more. */
+static void access_put(const struct vfs_mount *mnt, const void *node, int access)
+{
+    struct access_count *a = access_find(mnt, node, 0), **p;
+
+    if (!a || a->count[access - 1] == 0) {
+        return;
+    }
+    if (--a->count[access - 1] > 0 || a->count[2 - access] > 0) {
+        return;
+    }
+    for (p = &access_counts[access_bucket(a->base, node)]; *p != a; p = &(*p)->next) {
+    }
+    *p = a->next;
+    kfree(a);
+}
+
+void fd_ofd_access_drop(struct open_file *ofd)
+{
+    if (ofd->access) {
+        access_put(ofd->access_mnt, ofd->access_node, ofd->access);
+        ofd->access = 0;
+    }
+}
+
+int fd_ofd_access(struct open_file *ofd, const struct vfs_ref *ref, int access)
+{
+    struct access_count *a = access_find(ref->mnt, ref->node, 0);
+
+    if (a && a->count[2 - access] > 0) {
+        return -ETXTBSY;
+    }
+    if (a && ofd->access == access && ofd->access_node == ref->node &&
+        vfs_mount_base(ofd->access_mnt) == vfs_mount_base(ref->mnt)) {
+        ofd->access_mnt = ref->mnt;
+        return 0;
+    }
+    fd_ofd_access_drop(ofd);
+    a = access_find(ref->mnt, ref->node, 1);
+    if (!a) {
+        return -ENOMEM;
+    }
+    a->count[access - 1]++;
     ofd->access_mnt = ref->mnt;
     ofd->access_node = ref->node;
     ofd->access = access;
@@ -173,7 +253,17 @@ void fd_ofd_repoint(struct vfs_mount *mnt, const void *from, void *to)
     struct ofd_rec *rec;
 
     for (rec = ofds; rec; rec = rec->next) {
-        if (rec->ofd.access_mnt == mnt && rec->ofd.access_node == from) {
+        if (rec->ofd.access && rec->ofd.access_mnt == mnt && rec->ofd.access_node == from) {
+            /* With no room for the new node's count, the reservation stays
+             * on the old one, whose count still has it. */
+            struct access_count *a = access_find(mnt, to, 1);
+
+            if (a) {
+                access_put(mnt, from, rec->ofd.access);
+                a->count[rec->ofd.access - 1]++;
+                rec->ofd.access_node = to;
+            }
+        } else if (rec->ofd.access_mnt == mnt && rec->ofd.access_node == from) {
             rec->ofd.access_node = to;
         }
         if (rec->ofd.vmnt != mnt) {
@@ -196,7 +286,7 @@ void fd_ofd_unref(struct open_file *ofd)
             struct ofd_rec **link = &ofds;
             struct ofd_rec *rec = ofd_rec_of(ofd);
 
-            ofd->access = 0;
+            fd_ofd_access_drop(ofd);
             if (lock_any()) {
                 lock_ofd_gone(ofd);
             }
