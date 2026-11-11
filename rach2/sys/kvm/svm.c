@@ -2749,7 +2749,9 @@ static uint64_t svm_cache(int type, int ignore_guest_pat)
 static const struct kvm_tdp_format svm_tdp = {
     0x1u, 0x1u, 0x2u, 0, 1ull << 63, 0x4u, 0x80u, 0x000FFFFFFFFFF000ull, 0x20u, 0x40u, svm_cache};
 
-const struct kvm_backend kvm_svm = {
-    "svm",     svm_probe,       svm_vm_init,           NULL,     svm_vcpu_init, svm_vcpu_free,
-    svm_enter, svm_exit,        svm_complete,          svm_save, svm_inject,    svm_check_extension,
-    &svm_tdp,  svm_tsc_scaling, svm_msr_filter_changed, svm_xsaves};
+const struct kvm_backend kvm_svm = {"svm",     svm_probe,       svm_vm_init,
+                                    NULL,      svm_vcpu_init,   svm_vcpu_free,
+                                    svm_enter, svm_exit,        svm_complete,
+                                    svm_save,  svm_inject,      svm_check_extension,
+                                    &svm_tdp,  svm_tsc_scaling, svm_msr_filter_changed,
+                                    svm_xsaves};

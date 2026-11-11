@@ -2838,7 +2838,9 @@ static uint64_t vmx_tsc_scaling(uint32_t *frac_bits)
 static const struct kvm_tdp_format vmx_tdp = {
     0x7u, 0x1u, 0x2u, 0x4u, 0, 0, 0x80u, 0x000FFFFFFFFFF000ull, 0x100u, 0x200u, vmx_cache};
 
-const struct kvm_backend kvm_vmx = {
-    "vmx",     vmx_probe,       vmx_vm_init,           NULL,     vmx_vcpu_init, vmx_vcpu_free,
-    vmx_enter, vmx_exit,        vmx_complete,          vmx_save, vmx_inject,    vmx_check_extension,
-    &vmx_tdp,  vmx_tsc_scaling, vmx_msr_filter_changed, vmx_xsaves};
+const struct kvm_backend kvm_vmx = {"vmx",     vmx_probe,       vmx_vm_init,
+                                    NULL,      vmx_vcpu_init,   vmx_vcpu_free,
+                                    vmx_enter, vmx_exit,        vmx_complete,
+                                    vmx_save,  vmx_inject,      vmx_check_extension,
+                                    &vmx_tdp,  vmx_tsc_scaling, vmx_msr_filter_changed,
+                                    vmx_xsaves};
