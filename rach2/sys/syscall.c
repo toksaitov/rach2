@@ -3210,15 +3210,16 @@ static void syscall_missing(uint32_t syscall_num, int compat)
  * a call that was not interrupted, with no other signal work, reaches the
  * program unchanged, as on Linux.
  *
- * At the exit the datagrams the call put on the loopback ring are delivered,
- * rather than only at the next tick, so a local transfer is not paced at a
- * ring a tick. The threshold is three datagrams of the ring's 64
- * (`ip_loop_crowded`): one or two are left to the timer, which lets the two
- * crossing SYNs of a simultaneous open both be queued before either is
- * delivered. The sender's own frames are gone by then, so no delivery runs
- * under them. Interrupts are off, the drain does not run inside itself, and
- * it takes at most four times the ring's slots in one run; what is left is
- * taken by the next call's exit or by the timer.
+ * At the exit whatever the loopback ring holds is delivered, a lone
+ * datagram too, so that a receive that follows the call finds what it sent,
+ * as on Linux, where loopback_xmit queues the datagram for the softirq
+ * (drivers/net/loopback.c:69-92) and the sender's local_bh_enable runs that
+ * softirq before the send returns (kernel/softirq.c:402-407). A receive
+ * that follows the sender's return therefore needs no drain of its own. The
+ * sender's own frames are gone by then, so no delivery runs under them.
+ * Interrupts are off, the drain does not run inside itself, and it takes at
+ * most four times the ring's slots in one run; what is left is taken by the
+ * next call's exit or by the timer.
  */
 static void _syscall_handler(isr_params_t *params)
 {
@@ -3276,7 +3277,7 @@ static void _syscall_handler(isr_params_t *params)
     if (current_proc) {
         current_proc->in_syscall = 0;
     }
-    if (ip_loop_crowded()) {
+    if (ip_loop_pending()) {
         ip_loop_drain_from(IP_LOOP_FROM_CALL);
     }
     sched_take_preempt();
