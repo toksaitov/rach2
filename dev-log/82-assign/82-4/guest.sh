@@ -11,6 +11,9 @@
 # exit status in status. QEMU's snapshot of the disk goes under TMPDIR,
 # /data/t2666/tmp by default. It prints run.log at the end and exits with
 # gpu.sh's status.
+#
+# The guest's serial getty is masked: systemd hangs up ttyS0 when it starts
+# it, and every later write of g82.sh to the console then fails.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 [ $# -ge 2 ] || { echo "usage: guest.sh NAME probe|run|hold [OPTION...]" >&2; exit 2; }
@@ -23,7 +26,7 @@ rm -rf "$out"
 mkdir -p "$out" "$TMPDIR"
 bash "$here/gpu.sh" -s 4 -m 3072 -o "$out" "$@" \
     -k "$g/vmlinuz" -i "$g/initrd.img" \
-    -l "root=/dev/vda1 ro console=ttyS0,115200n8 modprobe.blacklist=snd_hda_intel,snd_hda_codec_hdmi,ath9k g82=$mode" \
+    -l "root=/dev/vda1 ro console=ttyS0,115200n8 modprobe.blacklist=snd_hda_intel,snd_hda_codec_hdmi,ath9k systemd.mask=serial-getty@ttyS0.service g82=$mode" \
     -- -drive "file=$g/guest.qcow2,if=virtio,format=qcow2,snapshot=on" \
     -drive "file=$g/seed.img,if=virtio,format=raw,readonly=on" \
     -netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
