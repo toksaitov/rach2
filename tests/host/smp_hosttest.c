@@ -4,6 +4,7 @@
  * others at boot.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-cflags: -DRACH2_HOST_CPU
  *
  * proc/smp.c is included whole and runs as processor 0, the caller; three
  * other processors are records of `cpu_table` that a row sets up. The
@@ -18,7 +19,10 @@
  * another directory is left alone; and before the directory is freed, the
  * idle processor that kept it is interrupted and gives it up for the
  * kernel's. A stop asks every other processor and waits a second for one
- * that does not stop. At boot the wait for a started processor ends at
+ * that does not stop, then sends it an NMI, which the real `smp_stop_nmi`
+ * takes, run as that processor; each processor that stops, by the
+ * interrupt's `smp_service` or by the NMI, runs `k_panic_hook` before it
+ * marks itself stopped. At boot the wait for a started processor ends at
  * `CPU_ONLINE_WAIT_US`, and a processor that comes after it stops,
  * neither online nor counted. The profiler's sample of a hold of the big
  * lock walks the frames of the interrupted thread's kernel stack and stops
@@ -66,26 +70,76 @@ static unsigned long waited_us;
 void arch_sync_core(void)
 {}
 
-/* The NMIs sent to each processor. */
-static int nmis[NR_CPUS];
+/* The processor the code runs as, which `arch_cpu_id` gives. */
+unsigned int host_cpu;
 
-/** Count an NMI sent to `cpu`, which a processor that did not take its
- * stop does not take either: it stays stuck. */
+/* The NMIs sent to each processor, whether it takes one, and, for each
+ * processor, how many times `k_panic_hook` ran there and whether it was
+ * already marked stopped when it last did. */
+static int nmis[NR_CPUS];
+static int takes_nmi[NR_CPUS];
+static int hooked[NR_CPUS];
+static int hooked_late[NR_CPUS];
+
+/** The virtualization cleanup, as vmx.c's: count it on this processor. */
+static void hook(void)
+{
+    hooked[host_cpu]++;
+    hooked_late[host_cpu] = cpu_table[host_cpu].stopped;
+}
+
+void (*k_panic_hook)(void) = hook;
+
+/* Where a processor that stops goes on the host: back to the row. */
+static jmp_buf stopped;
+
+/** Jump back to the row, as the processor that stops. */
+void arch_stop(void)
+{
+    longjmp(stopped, 1);
+}
+
+/** Run `fn` as processor `cpu`, returning when it returns or stops. */
+static void run_as(int cpu, int (*fn)(void))
+{
+    unsigned int was = host_cpu;
+
+    host_cpu = (unsigned int)cpu;
+    if (setjmp(stopped) == 0) {
+        (void)fn();
+    }
+    host_cpu = was;
+}
+
+/** `smp_service`, for `run_as`. */
+static int service(void)
+{
+    smp_service();
+    return 0;
+}
+
+/** Count an NMI sent to `cpu` and, when `takes_nmi` says it takes one, run
+ * the real stop handler there; one that does not stays stuck. */
 void platform_cpu_nmi(int cpu)
 {
     nmis[cpu]++;
+    if (takes_nmi[cpu]) {
+        run_as(cpu, smp_stop_nmi);
+    }
 }
 
-/** Count an interrupt sent to `cpu` and answer its requests at once, as
- * `smp_service` would: a stop when `takes_stop` says so, a page to drop,
- * and a directory to give up for the kernel's. */
+/** Count an interrupt sent to `cpu` and answer its requests at once: a
+ * stop, when `takes_stop` says so, by the real `smp_service` run there; a
+ * page to drop, and a directory to give up for the kernel's, as
+ * `smp_service` would. */
 void platform_cpu_ipi(int cpu)
 {
     struct percpu *c = &cpu_table[cpu];
 
     ipis[cpu]++;
     if (c->stop_request && takes_stop[cpu]) {
-        c->stopped = 1;
+        run_as(cpu, service);
+        return;
     }
     if (c->tlb_request) {
         ipi_page[cpu] = c->tlb_page;
@@ -226,15 +280,6 @@ unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
 void arch_relax(void)
 {}
 
-/* Where a processor that stops goes on the host: back to the row. */
-static jmp_buf stopped;
-
-/** Jump back to the row, as the processor that stops. */
-void arch_stop(void)
-{
-    longjmp(stopped, 1);
-}
-
 /** Compare and exchange `*p` on the host's one thread; the old value. */
 unsigned int arch_atomic_cmpxchg(volatile unsigned int *p, unsigned int old, unsigned int value)
 {
@@ -334,6 +379,32 @@ static void row_sample_stack(void)
     check(pc[3] == 0, "and stops at a saved frame pointer above the stack, reading nothing there");
 }
 
+/**
+ * A stop asks every other processor: processor 1 takes the interrupt, 2
+ * does not and takes the NMI, and 3 takes neither. Each that stops runs
+ * the virtualization cleanup before it is marked stopped.
+ */
+static void row_stop(void)
+{
+    takes_stop[1] = 1;
+    takes_nmi[2] = 1;
+    waited_us = 0;
+    smp_stop_others();
+    check(cpu_table[1].stop_request && cpu_table[2].stop_request && cpu_table[3].stop_request &&
+              !cpu_table[0].stop_request,
+          "a stop asks every other processor");
+    check(waited_us == 1010000ul,
+          "and waits a second for those that do not take it and 10 ms after their NMIs");
+    check(nmis[2] == 1 && nmis[3] == 1 && nmis[1] == 0 && nmis[0] == 0,
+          "an NMI goes to each processor that did not take the stop, and to no other");
+    check(cpu_table[1].stopped && cpu_table[2].stopped && !cpu_table[3].stopped,
+          "the interrupt stops one processor, the NMI another, and a third takes neither");
+    check(hooked[1] == 1 && hooked[2] == 1 && !hooked_late[1] && !hooked_late[2],
+          "each leaves VMX operation before it is marked stopped");
+    check(hooked[0] == 0 && hooked[3] == 0,
+          "and neither the caller nor the stuck processor runs the hook");
+}
+
 /** Run every row; 0 when each passes, 1 otherwise. */
 int main(void)
 {
@@ -367,16 +438,7 @@ int main(void)
     check(ipis[1] == 0 && ipis[3] == 0 && cpu_table[1].space == DIR_B,
           "a release leaves processors in other directories alone");
 
-    takes_stop[1] = takes_stop[3] = 1;
-    waited_us = 0;
-    smp_stop_others();
-    check(cpu_table[1].stop_request && cpu_table[2].stop_request && cpu_table[3].stop_request &&
-              !cpu_table[0].stop_request,
-          "a stop asks every other processor");
-    check(waited_us == 1010000ul,
-          "and waits a second for the one that does not take it and 10 ms after its NMI");
-    check(nmis[2] == 1 && nmis[1] == 0 && nmis[3] == 0 && nmis[0] == 0,
-          "an NMI goes to the processor that did not take the stop, and to no other");
+    row_stop();
 
     k_memset(cpu_table, 0, sizeof(cpu_table));
     cpus_online = 1;

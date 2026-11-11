@@ -200,8 +200,9 @@ void smp_stop_others(void);
 
 /**
  * Take a stop `smp_stop_others` asked of this processor, from its NMI
- * handler: it does not return when one was asked. 0 when none was, and the
- * NMI is some other one.
+ * handler: it leaves VMX or SVM operation (`k_panic_hook`), marks the
+ * processor stopped and halts, and does not return when one was asked. 0
+ * when none was, and the NMI is some other one.
  */
 int smp_stop_nmi(void);
 

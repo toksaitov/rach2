@@ -321,8 +321,9 @@ static void _exception_handler(isr_params_t *params)
  * taken (`k_panic_begin`).
  *
  * An NMI that another processor's stop sent, to a processor that did not
- * take the interprocessor interrupt, is the stop, and this processor halts
- * (`smp_stop_nmi`), as Linux's `smp_stop_nmi_callback` halts it.
+ * take the interprocessor interrupt, is the stop, and this processor leaves
+ * VMX or SVM operation and halts (`smp_stop_nmi`), as Linux's
+ * `smp_stop_nmi_callback` does.
  */
 static void _hardware_fault_handler(isr_params_t *params)
 {
