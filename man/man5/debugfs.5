@@ -167,8 +167,9 @@ and the request for an
 or
 .Ql kernel 0
 for none, as in a kernel thread.
-Code that runs with interrupts off is not sampled, nor is the read of
-this file.
+Code that runs with interrupts off is not sampled, nor is the writing of
+this file's text; the rest of a read, its entry, allocation and copy out,
+is sampled.
 The text is the samples, which the lines' counts and the lost sum to; those lost, whose entry, instruction and callers
 found none of the 32 slots their hash names among the 16384 free or their
 own, which can happen while most slots are free; and a line for each
