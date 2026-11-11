@@ -533,12 +533,18 @@ static void measure(long bytes)
     }
     while ((at = call(gpu_fd, DRM_IOCTL_VIRTGPU_WAIT, &w)) == -PROBE_EBUSY) {
     }
+    if (at != 0) {
+        fail("wait for the copy to the VM");
+    }
     figure("copy to the VM", bytes, now_us() - t0);
     t0 = now_us();
-    if (at != 0 || call(gpu_fd, DRM_IOCTL_VIRTGPU_TRANSFER_FROM_HOST, &t) != 0) {
+    if (call(gpu_fd, DRM_IOCTL_VIRTGPU_TRANSFER_FROM_HOST, &t) != 0) {
         fail("copy from the VM");
     }
     while ((at = call(gpu_fd, DRM_IOCTL_VIRTGPU_WAIT, &w)) == -PROBE_EBUSY) {
+    }
+    if (at != 0) {
+        fail("wait for the copy from the VM");
     }
     figure("copy from the VM", bytes, now_us() - t0);
     syscall2(SYS_MUNMAP, (long)p, bytes);
