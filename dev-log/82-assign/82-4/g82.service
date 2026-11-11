@@ -1,0 +1,15 @@
+# 82-4b's step in the guest that is given the Lenovo's GPU: g82.sh, run
+# only on a boot whose command line has g82=MODE.
+[Unit]
+Description=82-4b's step on the assigned GPU
+ConditionKernelCommandLine=g82
+Wants=seatd.service
+After=seatd.service systemd-user-sessions.service systemd-udev-settle.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /usr/local/sbin/g82.sh
+TimeoutStartSec=infinity
+
+[Install]
+WantedBy=multi-user.target
