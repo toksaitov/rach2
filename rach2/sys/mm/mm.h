@@ -42,6 +42,7 @@
 
 #include "../lib/kint.h"
 #include "../lib/spinlock.h"
+#include "../proc/mutex.h"
 #include "vm.h"
 
 struct page_dir;
@@ -57,6 +58,18 @@ struct vfs_ref;
 struct mm {
     uint32_t users;
     uint32_t holds;
+    /* The regions' lock, as Linux's mmap_lock: held to read by a fault, a
+     * copy, a pin and a walk of the regions, and to write by every change
+     * of the regions (`mmap_read_lock`, `mmap_write_lock`). */
+    struct rwsem mmap_lock;
+    /* The page-table lock, as Linux's page_table_lock: held, with interrupts
+     * off, by a holder of `mmap_lock` to read that changes an entry, over the
+     * second phase of the change (`mm_ptl_lock`). */
+    struct spinlock ptl;
+    /* Changed by `paging_zap_device` and a truncation's cut, under the
+     * write lock: a fault that let the lock go across a file's or a
+     * device's operation maps nothing if it moved meanwhile. */
+    uint32_t zaps;
     struct page_dir *dir; /* NULL once the last user has gone */
     uintptr_t space_root; /* the directory's physical address; 0 with `dir` */
     vm_space_t vm;
@@ -204,6 +217,84 @@ void mm_hold(struct mm *mm);
 
 /** Let go of a hold `mm_hold` took; the last frees the record. */
 void mm_unhold(struct mm *mm);
+
+/*
+ * The locks of an address space, in the order of rach2/sys/proc/Readme.md:
+ * `mmap_lock` after the file locks and before the page-table lock.
+ *
+ * A thread counts its own holds (`struct process`'s `mmap_holds`), so a
+ * hold taken again by a thread that has one, of either kind, only counts,
+ * as a fault inside a copy that holds the lock does, and never waits
+ * behind a writer that waits for the first hold. Only the first hold of a
+ * thread takes the rwsem and only its last gives it back. A thread holds
+ * at most two address spaces' locks at once. A write hold wanted by a
+ * thread that holds the lock to read is a panic, since it would wait for
+ * itself. With no current thread, at boot, the calls do nothing.
+ *
+ * The holder of the lock alone, to read at a depth of one, may let it go
+ * and take it again around a sleep that may wait for a file (`mmap_may_drop`),
+ * as Linux's fault drops it around a read of a file; it finds what it
+ * looked up again after.
+ *
+ * Every change of the regions holds the lock to write and the big lock
+ * too, and every removal or downgrade of a present page holds the big
+ * lock, so that code under the big lock that does not sleep may still read
+ * the regions and the page tables without the regions' lock, as the older
+ * callers of `vm_resident` and KVM's fault do. Code that may sleep between
+ * its look and its use takes the regions' lock.
+ */
+
+/** Take `mm`'s regions' lock to read, sleeping while a writer holds it or
+ * waits for it, unless the thread holds it already. */
+void mmap_read_lock(struct mm *mm);
+
+/** Take `mm`'s regions' lock to read if that needs no wait: 1 when held
+ * now, as a thread that holds it already always is, or 0. Any context but
+ * an interrupt. */
+int mmap_read_trylock(struct mm *mm);
+
+/** Take `mm`'s regions' lock to write, sleeping until no other thread holds
+ * it; a thread that holds it to write already only counts the hold. */
+void mmap_write_lock(struct mm *mm);
+
+/** Take `mm`'s regions' lock to write if that needs no wait: 1 when held
+ * now, as a thread that holds it to write already always is, or 0, as a
+ * thread that holds it only to read always gets. */
+int mmap_write_trylock(struct mm *mm);
+
+/** Give back one hold of `mm`'s regions' lock, of either kind; the last
+ * gives the rwsem back. The caller then lets go of the files a change left
+ * (`mm_reap`), once it holds no regions' lock. */
+void mmap_unlock(struct mm *mm);
+
+/** Hold `mm`, another thread's address space or the caller's, and take its
+ * regions' lock to read, for a walk of its regions from outside it: /proc,
+ * a core dump, a pin. The reference keeps the record across the wait. */
+void mm_read_begin(struct mm *mm);
+
+/** End what `mm_read_begin` began. */
+void mm_read_end(struct mm *mm);
+
+/** Whether the calling thread holds `mm`'s regions' lock, to write when
+ * `write`, or of either kind. */
+int mmap_held(const struct mm *mm, int write);
+
+/** Whether the calling thread holds `mm`'s regions' lock to read and once,
+ * so that it may let it go around a sleep and take it again. */
+int mmap_may_drop(const struct mm *mm);
+
+/** Take `mm`'s page-table lock with interrupts off; the saved flags, for
+ * `mm_ptl_unlock`. */
+uint32_t mm_ptl_lock(struct mm *mm);
+
+/** Give back the page-table lock `mm_ptl_lock` took. */
+void mm_ptl_unlock(struct mm *mm, uint32_t flags);
+
+/** Release the files whose last region went (`vm_file_reap`), under the big
+ * lock, which their release needs, unless the calling thread holds a
+ * regions' lock: a release may unmap a device object's pages from every
+ * space (`paging_zap_device`), which takes their locks. May sleep. */
+void mm_reap(void);
 
 struct process;
 

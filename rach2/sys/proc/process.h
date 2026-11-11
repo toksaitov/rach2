@@ -347,6 +347,15 @@ struct process {
      * began (`device_fault`): a fault from user mode returns, so that the
      * thread's signals are handled, and the access runs again. */
     uint32_t fault_retry;
+    /* The regions' locks this thread holds (mm.h's `mmap_read_lock`): the
+     * address space, NULL in a free slot, how many holds it counts, and
+     * whether they are a writer's. Only the thread itself reads or writes
+     * them. */
+    struct mmap_hold {
+        struct mm *mm;
+        uint32_t depth;
+        uint32_t write;
+    } mmap_holds[2];
     /* It waits, with its registers and floating-point state saved, for the
      * core another thread of its process writes (`core_park`). */
     uint32_t core_parked;

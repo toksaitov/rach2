@@ -185,9 +185,14 @@ uint32_t mem_reclaim(void)
     return got;
 }
 
+int mem_short(void)
+{
+    return !in_interrupt() && frame_free_count() < low_mark();
+}
+
 void mem_balance(void)
 {
-    if (in_interrupt() || frame_free_count() >= low_mark()) {
+    if (!mem_short()) {
         return;
     }
     mem_reclaim();

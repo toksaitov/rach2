@@ -172,6 +172,22 @@ void down_write(struct rwsem *s)
     spin_unlock_irqrestore(&s->spin, flags);
 }
 
+int down_write_trylock(struct rwsem *s)
+{
+    uint32_t flags = spin_lock_irqsave(&s->spin);
+    int got = s->count == 0;
+
+    if (got) {
+        s->count = -1;
+        s->wowner = mutex_me();
+    }
+    spin_unlock_irqrestore(&s->spin, flags);
+    if (got) {
+        DEP_ACQUIRE(&s->dep);
+    }
+    return got;
+}
+
 void up_read(struct rwsem *s)
 {
     uint32_t flags = spin_lock_irqsave(&s->spin);
