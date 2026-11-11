@@ -46,9 +46,10 @@ The
 argument is ignored.
 Real time is the CMOS clock reading taken at boot plus
 .Dv CLOCK_MONOTONIC ,
-the time since, to the microsecond, at the rate that
+the time since, to the microsecond, so that the rate that
 .Xr adjtimex 2
-gives it, by which an NTP daemon slews it.
+gives the monotonic clock, by which an NTP daemon slews it, moves real time
+too.
 If the clock could not be read, the result is time since boot.
 The hardware clock is read once.
 .Fn time
@@ -96,15 +97,24 @@ The same real time reported by
 .Fn gettimeofday .
 .It Dv CLOCK_MONOTONIC
 ID 1.
-Time since boot: the 1 ms ticks counted, with the place within the current
-tick added from the reference that keeps the clock, the HPET, the PM timer,
-the TSC or the 8254.
+Time since boot: the 1 ms ticks of the timer counted at the length
+.Xr adjtimex 2
+gives each, with the place within the current tick added from the
+reference that keeps the clock, the HPET, the PM timer, the TSC or the
+8254, at the same rate.
 Where the kernel keeps the clock from the TSC, as
 .Xr vdso 7
 describes, it is the TSC's count at the rate the kernel measured, steered
 toward the ticks.
 A reading is never earlier than the one before it, and setting the real
 time does not move it.
+.It Dv CLOCK_MONOTONIC_RAW
+ID 4.
+Time since boot at the timer's own rate, which
+.Xr adjtimex 2
+does not slew, read as
+.Dv CLOCK_MONOTONIC
+is.
 .It Dv CLOCK_PROCESS_CPUTIME_ID
 ID 2.
 The CPU time the timer has charged to the caller, user and system time
@@ -115,11 +125,11 @@ counts it.
 ID 3.
 The calling thread's own CPU time; ID 2 reads that of all the process's
 threads, those that have ended included.
-.It Dv CLOCK_MONOTONIC_RAW , CLOCK_BOOTTIME
-IDs 4 and 7.
+.It Dv CLOCK_BOOTTIME
+ID 7.
 The same time since boot as
-.Dv CLOCK_MONOTONIC :
-no service adjusts the clock's rate, and the machine is never suspended.
+.Dv CLOCK_MONOTONIC ,
+since the machine is never suspended.
 .It Dv CLOCK_MONOTONIC_COARSE
 ID 6.
 Time since boot at the last tick, without the place within it.

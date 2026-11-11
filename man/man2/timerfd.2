@@ -62,9 +62,12 @@ that slew the clock,
 .Dv ADJ_OFFSET
 and
 .Dv ADJ_OFFSET_SINGLESHOT ,
-cancel nothing; each change of the slew's rate counts every timer of
-.Dv CLOCK_REALTIME
-again at the new rate.
+cancel nothing and count nothing again, since they slew the monotonic
+clock and real time together; a leap second that
+.Dv STA_INS
+or
+.Dv STA_DEL
+asks for is a step, and cancels as a setting does.
 .Fn timerfd_gettime ,
 number 326 on i386 and 287 on x86-64, reports the time to the next expiration and the interval:
 a disarmed timer has no time left and keeps the interval it was last set
