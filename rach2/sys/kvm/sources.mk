@@ -25,4 +25,5 @@ KVM_C_SRC = sys/kvm/kvm.c \
     sys/kvm/emulate.c \
     sys/kvm/hyperv.c \
     sys/kvm/pvclock.c \
-    sys/kvm/binstats.c
+    sys/kvm/binstats.c \
+    sys/kvm/exitstat.c

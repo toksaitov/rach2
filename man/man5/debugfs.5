@@ -370,6 +370,46 @@ while one sleeps with
 .Er EBUSY .
 Linux has no such file; its lib/test_lockup.c is a module that takes the
 same choices as parameters.
+.It Pa kvm/exit_stats
+Mode 0644, present when
+.Pa /dev/kvm
+is.
+The guests' exits since boot, counted by the processor's exit code, with
+the TSC cycles each kind spent in the kernel; Linux has no such file, and
+counts its exits by code through its
+.Dq kvm_exit
+trace event, whose names the file uses.
+A first line names the backend and the TSC's rate, a second the columns,
+then each code with exits has a line:
+.Bd -literal -offset indent
+backend vmx|svm tsc_khz KHZ
+code exits kernel user wait_cycles handle_cycles name
+0xCODE EXITS KERNEL USER WAIT HANDLE NAME
+.Ed
+.Pp
+.Ar KERNEL
+exits were handled in the kernel and the guest entered again;
+.Ar USER
+ended
+.Dv KVM_RUN .
+.Ar WAIT
+is the cycles from the end of the guest's run to the big kernel lock
+taken back, and
+.Ar HANDLE
+from there to the next entry or to
+.Dv KVM_RUN Ns 's
+return; a HLT the kernel handles counts its sleep until an interrupt there.
+The code is SVM's EXITCODE or VMX's exit reason, and a failed entry is
+0xffffffff under SVM and 0x80000000 under VMX.
+SVM's codes from 0xb0 to 0x3ff and above 0x40f, and VMX's from 0xb0 on, share
+one line,
+.Ql other ,
+with code 0.
+A write of
+.Ql 0
+clears every count, as a write of 0 clears one of Linux's KVM statistics
+in its debugfs; any other write fails with
+.Er EINVAL .
 .It Pa dri
 The display devices' files, one directory for each device registered with
 the DRM core, as Linux 6.12 makes them.
@@ -711,6 +751,7 @@ fences:
 # cat /sys/kernel/debug/dri/0/name
 bochs-drm dev=0000:00:02.0 unique=0000:00:02.0
 # echo off > /sys/kernel/debug/dri/0/Virtual-1/force
+# echo 0 > /sys/kernel/debug/kvm/exit_stats
 .Ed
 .Sh SEE ALSO
 .Xr mount 2 ,
