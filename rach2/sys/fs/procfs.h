@@ -260,7 +260,8 @@ uint64_t sysfs_pci_bar_size(int key, int bar);
 
 /** Whether the file `attr` of the directory of the PCI function `key` is
  * there: boot_vga for a VGA function alone, resourceN for a BAR with a
- * length alone, and every other file always. */
+ * length alone, resourceN_wc for a prefetchable memory BAR with
+ * write-combining available, and every other file always. */
 int sysfs_pci_attr_present(int key, int attr);
 
 /** The inode an open descriptor of /proc or /sys, `e`, has by the file it

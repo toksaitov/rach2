@@ -7487,10 +7487,10 @@ static void synth_sys_identity(const struct vpath *vp, struct kstat *kst, int fo
                                                                                   : 0444u);
         kst->st_size = 4096;
         if (vp->sysent == SYSFS_PCI_DEVICE && vp->procfile >= SYSFS_PCI_RESOURCE0) {
-            /* A resourceN file is root's alone and as long as its BAR. */
+            /* Both names of a BAR's file are root's and as long as the BAR. */
             kst->st_mode = S_IFREG | 0600u;
-            kst->st_size =
-                (int64_t)sysfs_pci_bar_size(vp->syskey, vp->procfile - SYSFS_PCI_RESOURCE0);
+            kst->st_size = (int64_t)sysfs_pci_bar_size(
+                vp->syskey, (vp->procfile - SYSFS_PCI_RESOURCE0) % SYSFS_PCI_BARS);
         }
         kst->st_ino = sysfs_ino(vp->sysent, vp->syskey, 1 + vp->procfile);
     } else if (vp->kind == VNODE_SYS_LINK && !follow && vp->sysreg) {

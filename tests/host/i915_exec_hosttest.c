@@ -298,13 +298,15 @@ static uint32_t gtt_load(struct chip *c, uint32_t addr)
 
 /** The dwords of the command whose first is `dw`, as the chip parses
  * them: MI commands below 0x10 are one and the others carry their length
- * less two in their low six bits, above which MI_FLUSH_DW has the video
- * ring's MI_INVALIDATE_BSD; the 2D and 3D commands carry theirs in their
- * low byte. */
+ * less two in their low six bits, except MI_LOAD_REGISTER_IMM's eight.
+ * MI_FLUSH_DW has the video ring's MI_INVALIDATE_BSD above its six length
+ * bits; the 2D and 3D commands carry their length in their low byte. */
 static uint32_t command_dwords(uint32_t dw)
 {
     if ((dw >> 29) == 0) {
-        return MI_OPCODE(dw) < 0x10u ? 1u : MI_LENGTH(dw);
+        return MI_OPCODE(dw) < 0x10u    ? 1u
+               : MI_OPCODE(dw) == 0x22u ? (dw & 0xffu) + 2u
+                                        : MI_LENGTH(dw);
     }
     return (dw & 0xffu) + 2u;
 }
@@ -390,7 +392,7 @@ static void command_run(struct chip *c, int idx, const uint32_t *d)
  * its head to the tail, unless it is hung. */
 static void ring_write(struct chip *c, uint32_t reg, uint32_t value)
 {
-    uint32_t d[128], head, start, size, n, k;
+    uint32_t d[257], head, start, size, n, k;
     int i;
 
     for (i = 0; i < I915_NUM_ENGINES; i++) {
@@ -405,7 +407,7 @@ static void ring_write(struct chip *c, uint32_t reg, uint32_t value)
         while (head != value) {
             d[0] = gtt_load(c, start + head);
             n = command_dwords(d[0]);
-            for (k = 1; k < n && k < 128u; k++) {
+            for (k = 1; k < n; k++) {
                 d[k] = gtt_load(c, start + ((head + 4u * k) & (size - 1u)));
             }
             command_run(c, i, d);
@@ -1478,6 +1480,33 @@ static void sol_and_faults(void)
     close_handle(&file_a, b);
 }
 
+/** The longest LRI fills its eight-bit length and the model's command
+ * buffer; the ring must reach the interrupt after all 128 register writes. */
+static void long_lri(void)
+{
+    struct i915_engine *e = &dev_a->gt.engine[I915_RCS0];
+    uint32_t *cs = i915_ring_begin(e, dev_a, 258), i;
+
+    CHECK(cs != NULL, "lri: room for 128 register writes and an interrupt");
+    if (!cs) {
+        return;
+    }
+    cs[0] = MI_LOAD_REGISTER_IMM(128);
+    for (i = 0; i < 128; i++) {
+        cs[1 + 2 * i] = GEN7_SO_WRITE_OFFSET(0);
+        cs[2 + 2 * i] = i + 1;
+    }
+    cs[257] = MI_USER_INTERRUPT;
+    irq_pending = 0;
+    i915_ring_advance(e, dev_a);
+    CHECK(chip_a.regs[GEN7_SO_WRITE_OFFSET(0) / 4] == 128 && (irq_pending & e->irq_bit) &&
+              (chip_a.regs[RING_HEAD(e->mmio_base) / 4] & HEAD_ADDR) == e->tail,
+          "lri: the last register written and the following interrupt reached");
+    chip_a.regs[GEN7_SO_WRITE_OFFSET(0) / 4] = 0;
+    idle();
+}
+
+/** Run the request, submission and ring-model rows. */
 int main(void)
 {
     uint32_t tl;
@@ -1490,6 +1519,7 @@ int main(void)
     chip_write_hook = ring_write;
     CHECK(i915_gt_init(dev_a) == 0, "setup: the rings start");
     CHECK(i915_driver_open(&dev_a->drm, &file_a) == 0, "setup: the file opened");
+    long_lri();
     rings();
     /* The PPGTT's tables, made as buffers are bound, stay with the rings. */
     before = allocations - (int)dev_a->gt.ppgtt.tables;

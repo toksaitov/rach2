@@ -1017,10 +1017,18 @@ int sysfs_file_writable(int node, int key, int attr)
 
 const char *sysfs_pci_attr(int attr)
 {
-    static const char *const names[SYSFS_PCI_ATTRS] = {
-        "uevent",           0,           "config",    "vendor",    "device",   "subsystem_vendor",
-        "subsystem_device", "class",     "revision",  "boot_vga",  "resource", "resource0",
-        "resource1",        "resource2", "resource3", "resource4", "resource5"};
+    static const char *const names[SYSFS_PCI_ATTRS] = {"uevent",           0,
+                                                       "config",           "vendor",
+                                                       "device",           "subsystem_vendor",
+                                                       "subsystem_device", "class",
+                                                       "revision",         "boot_vga",
+                                                       "resource",         "resource0",
+                                                       "resource1",        "resource2",
+                                                       "resource3",        "resource4",
+                                                       "resource5",        "resource0_wc",
+                                                       "resource1_wc",     "resource2_wc",
+                                                       "resource3_wc",     "resource4_wc",
+                                                       "resource5_wc"};
 
     return attr >= 0 && attr < SYSFS_PCI_ATTRS ? names[attr] : 0;
 }

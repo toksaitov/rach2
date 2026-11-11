@@ -159,6 +159,16 @@ struct virtqueue {
     struct spinlock lock;
 };
 
+/* A run of a device's own memory, as a device that maps its buffers from
+ * its pages reports one (`map_pages`): the first page's address as the
+ * device addresses its memory, page-aligned, and the pages. */
+struct virtio_run {
+    uint64_t addr;
+    uint64_t pages;
+};
+
+struct virtio_map;
+
 /*
  * A transport's operations on its device. virtio-pci is the first
  * (virtio_pci.c); another, such as a transport over one shared region of
@@ -230,16 +240,6 @@ struct virtqueue {
  * map_frame: the frame of page `i` of `m`, or 0 once it is taken back.
  * map_free: let go of `m`, without its `revoke`, once nothing uses it.
  */
-/* A run of a device's own memory, as a device that maps its buffers from
- * its pages reports one (`map_pages`): the first page's address as the
- * device addresses its memory, page-aligned, and the pages. */
-struct virtio_run {
-    uint64_t addr;
-    uint64_t pages;
-};
-
-struct virtio_map;
-
 struct virtio_ops {
     const char *name;
     uint8_t (*get_status)(struct virtio_dev *d);

@@ -252,6 +252,13 @@ static void sys_tree(void)
     CHECK(synth_classify("sys/bus/pci/devices/0000:00:1f.2/vendor", &vp) == VNODE_SYS_FILE &&
           vp.procfile == SYSFS_PCI_VENDOR);
     CHECK(synth_classify("sys/bus/pci/devices/0000:00:1f.2/vendors", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/bus/pci/devices/0000:00:1f.2/resource0_wc", &vp) == VNODE_SYS_FILE &&
+          vp.procfile == SYSFS_PCI_RESOURCE0_WC);
+    CHECK(synth_classify("sys/devices/pci0000:00/0000:00:1f.2/resource5_wc", &vp) ==
+              VNODE_SYS_FILE &&
+          vp.procfile == SYSFS_PCI_RESOURCE0_WC + 5);
+    CHECK(synth_classify("sys/bus/pci/devices/0000:00:1f.2/resource6_wc", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/bus/pci/devices/0000:00:1f.2/resource0_wc/x", &vp) == VNODE_ENOTDIR);
 }
 
 /** Check radio attributes and both routes to the driver link. */
