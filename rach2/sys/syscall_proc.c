@@ -4413,25 +4413,74 @@ void signal_exit_begin(void)
 }
 
 /**
+ * Whether the thread `t` would take the signal `signo` now, in the sense of
+ * Linux 6.12.115's `wants_signal` (kernel/signal.c:977-993), which decides
+ * whether a signal ends the process at its post: `t` does not block it and
+ * has not ended or begun to end, and either the signal is SIGKILL, or `t` is
+ * not stopped and is running on a processor or has no other signal pending
+ * that it does not block. A thread asleep with a signal pending already
+ * takes that one first, and its handler may change what `signo` does.
+ */
+static int sig_wants_now(const process_t *t, int signo)
+{
+    uint64_t bit = KSIG_BIT(signo);
+
+    if (t->state == PROC_ZOMBIE || t->state == PROC_UNUSED || t->exit_begun ||
+        (t->sig_blocked & bit)) {
+        return 0;
+    }
+    if (signo == SIGKILL) {
+        return 1;
+    }
+    return t->state != PROC_STOPPED &&
+           (t->state == PROC_RUNNING ||
+            ((t->sig_pending | t->tg->pending) & ~t->sig_blocked & ~bit) == 0);
+}
+
+/**
+ * The thread that takes the signal `signo`, sent to the thread `target`,
+ * for the test of whether it ends the process (`sig_fatal_now`), as Linux
+ * 6.12.115's `complete_signal` chooses it (kernel/signal.c:1003-1029):
+ * `target` when it would take the signal now (`sig_wants_now`); for a
+ * signal sent to the process (`whole`), else the first thread that would;
+ * NULL when none would, and the signal then ends nothing at its post.
+ */
+static process_t *sig_fatal_taker(process_t *target, int signo, int whole)
+{
+    process_t *t;
+
+    if (sig_wants_now(target, signo)) {
+        return target;
+    }
+    for (t = proc_list; t && whole; t = t->next) {
+        if (t->tg == target->tg && sig_wants_now(t, signo)) {
+            return t;
+        }
+    }
+    return NULL;
+}
+
+/**
  * Whether the signal `signo`, sent to the thread `target` and to be taken by
- * the thread `taker` of its process, ends the process at once, as Linux
- * 6.12.115's `complete_signal` judges it (kernel/signal.c:1034-1043): the
- * disposition is SIG_DFL and the default action ends the process without a
- * core dump, `taker` can take the signal now (`sig_wants`) and does not
- * wait for it in rt_sigtimedwait or a signalfd read (`sig_real_blocked`),
- * the process is not ending already, and `target` is not traced, unless the
- * signal is SIGKILL. Such a waiter takes the signal as its result, a traced
- * thread's tracer sees the signal first, and a signal that dumps core is
- * left to the thread that takes it, which writes the core before the others
- * end. An init (`unkillable`) ends only by SIGKILL here: Linux leaves this
- * test out (kernel/signal.c:1034-1037), so that a signal one of init's
- * threads blocks, which `sig_init_drops` lets through, ends init when
- * another thread does not block it, and the system's init panics.
+ * the thread `taker` of its process (`sig_fatal_taker`), ends the process at
+ * once, as Linux 6.12.115's `complete_signal` judges it (kernel/signal.c:
+ * 1034-1043): there is such a thread, the disposition is SIG_DFL and the
+ * default action ends the process without a core dump, `taker` does not
+ * wait for the signal in rt_sigtimedwait or a signalfd read
+ * (`sig_real_blocked`), the process is not ending already, and `target` is
+ * not traced, unless the signal is SIGKILL. Such a waiter takes the signal
+ * as its result, a traced thread's tracer sees the signal first, and a
+ * signal that dumps core is left to the thread that takes it, which writes
+ * the core before the others end. An init (`unkillable`) ends only by
+ * SIGKILL here: Linux leaves this test out (kernel/signal.c:1034-1037), so
+ * that a signal one of init's threads blocks, which `sig_init_drops` lets
+ * through, ends init when another thread does not block it, and the
+ * system's init panics.
  */
 static int sig_fatal_now(const process_t *target, const process_t *taker, int signo)
 {
     return taker != NULL && target->tg->action[signo].handler == KSIG_DFL &&
-           ksig_default_action(signo) == KSIG_DEFAULT_TERM && sig_wants(taker, KSIG_BIT(signo)) &&
+           ksig_default_action(signo) == KSIG_DEFAULT_TERM &&
            !(taker->sig_real_blocked & KSIG_BIT(signo)) && !target->tg->exiting &&
            (signo == SIGKILL || (!(target->ptrace & PT_TRACED) && !target->tg->unkillable));
 }
@@ -4465,7 +4514,8 @@ static void sig_post_own(process_t *t, int signo, const struct k_siginfo *info)
 
 /**
  * Finish posting `signo` to `target` once it is pending, with interrupts
- * off: wake `taker`, or, when the signal ends the process (`sig_fatal_now`),
+ * off: wake `taker`, or, when the signal ends the process (`sig_fatal_now`
+ * of `sig_fatal_taker`'s thread, `whole` for a signal sent to the process),
  * begin the process's end, as Linux 6.12.115's `complete_signal` does
  * (kernel/signal.c:1044-1056). The process will end with the wait status of
  * a death by `signo`, and every thread is sent SIGKILL and woken, so that a
@@ -4474,13 +4524,13 @@ static void sig_post_own(process_t *t, int signo, const struct k_siginfo *info)
  * Each thread then takes the SIGKILL, and the process's status stays
  * `signo`'s (`proc_exit_cleanup`).
  */
-static void sig_complete(process_t *target, process_t *taker, int signo)
+static void sig_complete(process_t *target, process_t *taker, int signo, int whole)
 {
     struct tgroup *tg = target->tg;
     struct k_siginfo info;
     process_t *t;
 
-    if (!sig_fatal_now(target, taker, signo)) {
+    if (!sig_fatal_now(target, sig_fatal_taker(target, signo, whole), signo)) {
         sig_wake(taker);
         return;
     }
@@ -4593,7 +4643,7 @@ void signal_post_info(process_t *target, int signo, const struct k_siginfo *info
             tg->info[signo] = *info;
         }
         tg->pending |= KSIG_BIT(signo);
-        sig_complete(target, sig_taker(target, signo), signo);
+        sig_complete(target, sig_taker(target, signo), signo, 1);
     }
     sig_irq_restore(f);
 }
@@ -4615,7 +4665,7 @@ void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
     f = sig_irq_save();
     if (sig_prepare(t, signo, info)) {
         sig_post_own(t, signo, info);
-        sig_complete(t, sig_wants(t, KSIG_BIT(signo)) ? t : NULL, signo);
+        sig_complete(t, sig_wants(t, KSIG_BIT(signo)) ? t : NULL, signo, 0);
     }
     sig_irq_restore(f);
 }
