@@ -52,9 +52,12 @@
  * bytes; a master write goes on after the last slave closes; a VSTART from
  * COM1 drained with no reader keeps the keyboard echo held during the stop;
  * a nonblocking master write behind a full slave counts the flow characters
- * it acts on, and its VSTART gives out the echo held; and a background
+ * it acts on, and its VSTART gives out the echo held; a background
  * process's change of its terminal takes SIGTTOU unless it ignores it, its
- * read EIO when it ignores SIGTTIN, and an orphaned group's call EIO.
+ * read EIO when it ignores SIGTTIN, and an orphaned group's call EIO, while
+ * a TOSTOP write that ignores SIGTTOU goes ahead; the console's TCIOFF
+ * writes its character under TCOOFF; and a session leader's read of a slave
+ * does not make it its controlling terminal.
  */
 #define WAIT_QUEUE_HOSTTEST
 #define wq_wait_event model_wait_event
@@ -305,10 +308,15 @@ void klog(int level, const char *subsystem, const char *format, ...)
     recorded_waits++;
 }
 
-/** Nothing: no row reads the console's output. */
+/* The bytes the console's sink wrote, and the last of them. */
+static int console_bytes;
+static char console_last;
+
+/** Count a byte of the console's output and keep it as the last. */
 void console_putc_raw(char c)
 {
-    (void)c;
+    console_bytes++;
+    console_last = c;
 }
 
 /** The fixture's screen answers no query. */
@@ -1507,7 +1515,40 @@ static void job_check(void)
           "an orphaned group's change is EIO and posts nothing");
     pair.slave.fg_pgid = 3;
     CHECK(tty_job_check(&pair.slave, SIGTTOU) == 0, "the foreground group passes");
+    pair.slave.fg_pgid = 2;
+    producer.sid = 1;
+    job_acts[SIGTTOU].handler = KSIG_IGN;
+    pair.slave.ldisc.tio.c_lflag |= TOSTOP;
+    CHECK(pts_write(&slave, "w", 1) == 1 && signals_posted == 1,
+          "a background TOSTOP write that ignores SIGTTOU goes ahead");
     proc_list = NULL;
+}
+
+/** Under TCOOFF the console's TCIOFF writes its VSTOP to the screen and
+ * COM1, and the stop and its Scroll Lock stay. */
+static void console_tcioff(void)
+{
+    setup_pair();
+    tty_console_init();
+    CHECK(tty_tcflow(&console_tty, TTY_TCOOFF) == 0 && scroll_lock, "TCOOFF stops the console");
+    console_bytes = 0;
+    CHECK(tty_tcflow(&console_tty, TTY_TCIOFF) == 0 && console_bytes == 1 && console_last == 023,
+          "the console's TCIOFF writes VSTOP under TCOOFF");
+    CHECK(console_tty.ldisc.stopped && scroll_lock, "the stop and its Scroll Lock stay");
+    tty_tcflow(&console_tty, TTY_TCOON);
+}
+
+/** A session leader's read of a slave no session controls does not make it
+ * the leader's controlling terminal, as on Linux. */
+static void read_claims_nothing(void)
+{
+    char byte;
+
+    setup_pair();
+    consumer.sid = consumer.tgid = consumer.pgid = 5;
+    CHECK(ptm_write(&master, "r", 1) == 1 && pts_read(&slave, &byte, 1) == 1 && byte == 'r',
+          "the leader reads the slave");
+    CHECK(pair.slave.sid == 0 && pair.slave.fg_pgid == 0, "the read claims no terminal");
 }
 
 int main(void)
@@ -1542,6 +1583,8 @@ int main(void)
     console_silent_restart();
     lookahead_nonblocking();
     job_check();
+    console_tcioff();
+    read_claims_nothing();
     printf("tty-test: result: %d failures\n", failures);
     return failures ? 1 : 0;
 }
