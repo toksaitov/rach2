@@ -81,6 +81,17 @@ void netconsole_putc(char c)
     (void)c;
 }
 
+/** No ramoops region here: the console zone takes nothing. */
+void pstore_console_write(const char *text, uint32_t n)
+{
+    (void)text;
+    (void)n;
+}
+
+/** No ramoops region here: the panic leaves no record. */
+void pstore_panic_dump(void)
+{}
+
 /** Nothing here is off yet. */
 void arch_irq_disable(void)
 {}

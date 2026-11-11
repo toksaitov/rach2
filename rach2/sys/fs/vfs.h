@@ -1226,6 +1226,17 @@ extern const struct vfs_type vfs_debugfs_type;
  * kernel/debug. umount2 answers EBUSY for each it can name. */
 #define VFS_PERMANENT 8
 
+/**
+ * Mount a new file system of `t` at `path` inside /sys, a nameless mount
+ * of /sys entered by the names of `path` below it, as /sys/kernel/debug is,
+ * with `source` and the VFS_MS_ `flags`, for a mount the kernel makes at
+ * boot that umount2 may take away, as /sys/fs/pstore. 0, -EINVAL before
+ * /sys is mounted or for a path outside it, -ENOMEM, or the error of the
+ * type's constructor, which is called with no device and no options.
+ */
+int vfs_mount_in_sys(const struct vfs_type *t, const char *path, const char *source,
+                     uint32_t flags);
+
 /** The tmpfs memfd_create makes its files on: no path reaches it, no
  * listing shows it, and it lasts as long as the kernel. */
 struct vfs_mount *vfs_memfd_mount(void);

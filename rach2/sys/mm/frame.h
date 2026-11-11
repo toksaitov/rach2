@@ -48,12 +48,12 @@
  * boot-time and runtime regions one by one and runs to a hundred entries
  * where a BIOS map has a score. Each reservation after the build splits at
  * most one range more: a module, of which the record keeps BOOT_MODULE_MAX,
- * the GPU's stolen memory (platform_memory_reserve) and the frame table;
- * the kernel image and the allocator's break start at 0 and only trim. A
- * map that still needs more, which no record can give, is refused by name
- * rather than read in part.
+ * the GPU's stolen memory (platform_memory_reserve), ramoops's region
+ * (pstore.h) and the frame table; the kernel image and the allocator's
+ * break start at 0 and only trim. A map that still needs more, which no
+ * record can give, is refused by name rather than read in part.
  */
-#define FRAME_MAP_RANGES       (BOOT_MMAP_MAX + BOOT_MODULE_MAX + 2)
+#define FRAME_MAP_RANGES       (BOOT_MMAP_MAX + BOOT_MODULE_MAX + 3)
 
 /** One half-open range of physical addresses, in bytes. */
 struct frame_range {

@@ -35,6 +35,7 @@
 #include "lib/kfmt.h"
 #include "lib/kirq.h"
 #include "network/netconsole.h"
+#include "pstore/pstore.h"
 #include "timer.h"
 
 /* The microseconds in one tick of `kernel_ticks`, which is read for the
@@ -246,12 +247,14 @@ static void ring_append(const char *text, uint32_t n)
     ring_written += n;
 }
 
-/** Put the record in the ring, with interrupts off. */
+/** Put the record in the ring and in ramoops's console zone, with
+ * interrupts off. */
 static void dest_ring(const struct klog_record *r)
 {
     uint32_t flags = kirq_save();
 
     ring_append(r->text, r->len);
+    pstore_console_write(r->text, r->len);
     kirq_restore(flags);
 }
 

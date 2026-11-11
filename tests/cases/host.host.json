@@ -1121,6 +1121,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "pstore",
+          "checks": "tests/host/pstore_hosttest.c checks ramoops's Reed-Solomon code, a persistent RAM zone's header, wrap and second-boot copy, and the parity's mending under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "ptrace",
           "checks": "tests/host/ptrace_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
