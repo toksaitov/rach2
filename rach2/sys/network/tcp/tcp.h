@@ -322,12 +322,12 @@ struct tcb {
     /* The send tick of the data in flight, as Linux stamps each segment it
      * sends: `sent_runs` runs, the oldest first, run i the bytes before
      * `sent_end[i]` that its predecessor does not hold, sent at the tick
-     * `sent_tick[i]`. An acknowledgement drops the runs it covers. When
-     * TCP_SENT_RUNS are in flight, the newest run takes in the bytes sent
-     * after it and their tick, so that a stamp is never earlier than its
-     * bytes' send; the oldest run is never merged into. The FIN counts as a
-     * byte. Only `tcp_rto_expire` reads it, for a closed window's first
-     * probe. */
+     * before `sent_tick[i]`, ticks+1 as `retx_stamp` keeps it, never 0. An
+     * acknowledgement drops the runs it covers. When TCP_SENT_RUNS are in
+     * flight, the newest run takes in the bytes sent after it and their
+     * tick, so that a stamp is never earlier than its bytes' send; the
+     * oldest run is never merged into. The FIN counts as a byte. Only
+     * `tcp_rto_expire` reads it, for a closed window's first probe. */
     uint8_t sent_runs;
     uint32_t sent_end[TCP_SENT_RUNS];
     uint32_t sent_tick[TCP_SENT_RUNS];
