@@ -102,7 +102,8 @@ empties the console zone, this boot's log in it too, as on Linux.
 The root directory is root's with mode 0750, and each file root's with
 mode 0444, as Linux makes them.
 A file's size is its record's, and its times the time in its header, or
-the boot's for the console's.
+the time of the first mount for the console's, as Linux makes the files at
+mount.
 Nothing else makes, writes or renames a file.
 .Xr statfs 2
 reports
