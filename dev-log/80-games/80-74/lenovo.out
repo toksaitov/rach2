@@ -1,0 +1,6 @@
+games: result: supertuxkart frames 6692 seconds 90.058 fps 74.31 median 12.65 p90 17.18 p99 25.83 p99.9 40.17 max 93.71 over50 2 end profile
+lenovo-games: result: supertuxkart-1 median 12.65 p90 17.18 p99 25.83 against Linux's 14.72 16.96 19.14: fail
+lenovo-games: result: fail
+bkl: supertuxkart: 176 lines of calls, samples 64090
+bkl: clock minimum back at 200 MHz
+1
