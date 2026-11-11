@@ -315,6 +315,20 @@ void paging_entry_clear(struct mm *mm, uintptr_t addr, pte_t bits);
 int vm_resident(uintptr_t addr, uintptr_t len, int write);
 
 /**
+ * Whether every page of the user range [addr, addr + len) of the current
+ * process is present and allows the access, a write when `write` says so,
+ * found by walking the page tables with no fault and no sleep, for a caller
+ * that holds the current address space's regions' lock to read and runs
+ * under a spinlock or with interrupts off: 1 or 0. It is 1 for an empty
+ * range and one the thread opened to the checks (`user_window_open`), and 0
+ * outside user space. A 1 holds until the caller lets the regions' lock go,
+ * as it holds for the copies (`vm_user_begin`); the futex calls read and
+ * exchange their words under their bucket locks so, as Linux's
+ * futex_get_value_locked does with page faults off.
+ */
+int vm_ready_held(uintptr_t addr, uintptr_t len, int write);
+
+/**
  * Bring in the pages of [start, end) of the current process's regions as
  * faults would, for mmap's MAP_POPULATE and for the locked regions of the
  * mlock calls: those of a private writable region for a write, the others
