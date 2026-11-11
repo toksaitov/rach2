@@ -465,3 +465,12 @@ Round 80's review of `c4c58e38b..7c707842d` (79-44, 79-43, 78-32 and 80-79) foun
 * When the enables are not loaded again after the kernel's hit, `watched_copy`'s child exits untrapped. `ptracemusl` now reports `copy-watch-no-stop` held and fails `copy-watch-user-trap`, where it failed `copy-watch-no-stop`.
 * `release_resume`'s four rows of the kernel slots and its row of the build's bootctl fetch (`tests/cases/host/flow_release.c`, from 80-79) test the `release.sh` of master's `e30144148` and `c05b79d3c`, which the milestone branch does not have. The case copies the tree's own `release.sh`, so those rows fail on the branch and hold only after the end's rebase onto master; a failure of them before that rebase is not a fault. The test stays on the branch, since master's copy of `flow_release.c` lacks the branch's other changes to the fixture.
 * The `DISK_SCENARIOS` rule in the Makefile has its space after the target list again.
+
+## Checkpoint
+
+The slice ran in QEMU on WSL under KVM, with udmabuf loaded, at heads both reviewers had read whole. 79 touched none of the Lenovo's hardware, so no trial boot ran.
+
+* 2026-11-11 19:18:20 to 19:24:45, at 6e1b2be55 (round 79's reviewed head): part C, `machine.d3dvenus.probe-proton-9-i386` under KVM, passed. Part A's ia32 and gpucompat suites passed; default failed one row, `guest.default.ptracemusl` poll-watch-eintr on i686 under the ia32 profile, fixed by 79-44 (#3753).
+* 2026-11-11 20:32:57 to 20:35:12, at bef05327b (round 80's reviewed head, whose findings reached no slice case): part A passed, 140 cases and 3,631 asserts with none failed: default in 105 s, ia32 (`ldtprobe`, `drmcompatprobe`) and gpucompat (i915, virgl). ptracemusl's changed rows copy-watch-*, poll-watch-no-stop, poll-watch-returns and sigwait-watch passed.
+
+With part C's pass, 79's slice has passed whole at reviewed heads.
