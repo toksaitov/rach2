@@ -321,6 +321,16 @@ int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
     return 1;
 }
 
+/** Whether a pin may take the page of `addr`: always, since the model has
+ * no region that Linux's get_user_pages refuses. */
+int paging_pin_allows(struct mm *mm, uintptr_t addr, int write)
+{
+    (void)mm;
+    (void)addr;
+    (void)write;
+    return 1;
+}
+
 /** Whether a buffer lies in user memory, as `user_buffer_ok` asks, without
  * bringing it in. */
 int user_buffer_ok(uintptr_t addr, size_t len, int write)

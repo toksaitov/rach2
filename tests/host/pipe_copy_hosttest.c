@@ -136,6 +136,16 @@ int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
     return 1;
 }
 
+/** Whether a pin may take the page of `addr`: always, since the model has
+ * no region that Linux's get_user_pages refuses. */
+int paging_pin_allows(struct mm *mm, uintptr_t addr, int write)
+{
+    (void)mm;
+    (void)addr;
+    (void)write;
+    return 1;
+}
+
 /** A wait on a pipe's queue: run `wait_action` once, as a peer would run
  * while the caller sleeps, and return 0; -EINTR when no action is set. */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
