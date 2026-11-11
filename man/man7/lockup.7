@@ -110,8 +110,15 @@ The kernel's debug shell holds a lockup of each kind for a test:
 .Ic lockup hard 30
 or
 .Ic lockup hung 300 .
+Root does the same from a shell through
+.Xr debugfs 5 :
+.Bd -literal -offset indent
+echo 2 > /proc/sys/kernel/watchdog_thresh
+echo hard 15 > /sys/kernel/debug/test_lockup
+.Ed
 .Sh SEE ALSO
 .Xr watchdog 4 ,
+.Xr debugfs 5 ,
 .Xr proc 5 ,
 .Xr rach2 7
 .Sh STANDARDS

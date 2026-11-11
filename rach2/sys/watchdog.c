@@ -7,10 +7,13 @@
 #include "watchdog.h"
 
 #include "cmdline.h"
+#include "fs/debugfs.h"
 #include "klog.h"
 #include "lib/kirq.h"
 #include "lib/kstd.h"
+#include "lib/kerrno.h"
 #include "lib/kstring.h"
+#include "mm/usercopy.h"
 #include "panic.h"
 #include "platform.h"
 #include "proc/percpu.h"
@@ -1059,6 +1062,9 @@ static void read_options(void)
     }
 }
 
+/* The hooks of /sys/kernel/debug/test_lockup, below with the test. */
+static const struct debugfs_text_ops test_lockup_ops;
+
 void watchdog_init(void)
 {
     int c;
@@ -1086,6 +1092,9 @@ void watchdog_init(void)
     hung_thread = kthread_start("khungtaskd", khungtaskd_main);
     if (!hung_thread) {
         klog(KLOG_ERR, "hung_task", "khungtaskd: refused: no record or stack for it");
+    }
+    if (debugfs_create_text("test_lockup", 0600u, &test_lockup_ops, NULL) != 0) {
+        klog(KLOG_ERR, "watchdog", "test_lockup: refused: no debugfs node");
     }
 }
 
@@ -1180,3 +1189,75 @@ int watchdog_test(const char *kind, unsigned int seconds)
     }
     return 0;
 }
+
+/** The writer's own sleep in the state D until `seconds` have passed, as
+ * lib/test_lockup.c's `state=D` sleeps in the process that loads it. 0, or
+ * -EBUSY while another test sleeps. */
+static int32_t test_sleep_d(unsigned int seconds)
+{
+    if (test_busy) {
+        return -EBUSY;
+    }
+    test_busy = 1;
+    test_until = tick_count() + (uint64_t)seconds * TICK_HZ;
+    current_proc->wakeup_tick = test_until;
+    (void)wq_wait_event_nointr(&test_wait, test_passed, NULL);
+    current_proc->wakeup_tick = 0;
+    test_busy = 0;
+    return 0;
+}
+
+/** The text of /sys/kernel/debug/test_lockup: the kinds a write takes. */
+static int32_t test_lockup_show(void *data, char *buf, uint32_t cap)
+{
+    static const char text[] = "soft hard hung\n";
+    uint32_t i;
+
+    (void)data;
+    for (i = 0; i + 1 < sizeof text && i < cap; i++) {
+        buf[i] = text[i];
+    }
+    return (int32_t)(sizeof text - 1);
+}
+
+/**
+ * A write of `KIND SECONDS` to /sys/kernel/debug/test_lockup, the debug
+ * shell's `lockup` for a root shell: `soft` and `hard` spin in the write
+ * with interrupts on or off, and `hung` sleeps in it in the state D, for 1
+ * to 600 seconds, and the write returns when the lockup ends. `len`, or
+ * -EINVAL for another text, -EFAULT or -EBUSY.
+ */
+static int32_t test_lockup_store(void *data, const char __user *buf, uint32_t len)
+{
+    char line[16];
+    unsigned int seconds = 0;
+    uint32_t i, n = len;
+
+    (void)data;
+    if (len < 6 || len >= sizeof line) {
+        return -EINVAL;
+    }
+    if (copy_from_user(line, buf, len) != 0) {
+        return -EFAULT;
+    }
+    if (line[n - 1] == '\n') {
+        n--;
+    }
+    if (line[4] != ' ') {
+        return -EINVAL;
+    }
+    line[4] = '\0';
+    for (i = 5; i < n && line[i] >= '0' && line[i] <= '9' && seconds <= 600u; i++) {
+        seconds = seconds * 10u + (unsigned int)(line[i] - '0');
+    }
+    if ((!kind_is(line, "soft") && !kind_is(line, "hard") && !kind_is(line, "hung")) || i != n ||
+        seconds == 0 || seconds > 600u) {
+        return -EINVAL;
+    }
+    if (line[1] == 'u') {
+        return test_sleep_d(seconds) < 0 ? -EBUSY : (int32_t)len;
+    }
+    return watchdog_test(line, seconds) < 0 ? -EINVAL : (int32_t)len;
+}
+
+static const struct debugfs_text_ops test_lockup_ops = {test_lockup_show, test_lockup_store};
