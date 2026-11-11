@@ -13,30 +13,35 @@ import time
 
 # While a scratch directory or a child is made and recorded, a request to
 # stop waits in pending, so that the cleanup always knows what to remove.
+# Once one stop has been raised, or the cleanup has begun, stopping is set
+# and every later request is only recorded, so none raises inside the
+# cleanup and skips the kill, the waits or the removal.
 making = False
 pending = False
+stopping = False
 
 
 def interrupted(signum, frame):
-    """Leave through the cleanup on an interrupt or termination request."""
-    global pending
-    if making:
+    """Leave through the cleanup on the first interrupt or termination request."""
+    global pending, stopping
+    if making or stopping:
         pending = True
         return
+    stopping = True
     raise KeyboardInterrupt
 
 
 @contextlib.contextmanager
 def recording():
     """Defer a stop until the resource made inside is assigned, then honour it."""
-    global making, pending
+    global making, stopping
     making = True
     try:
         yield
     finally:
         making = False
-    if pending:
-        pending = False
+    if pending and not stopping:
+        stopping = True
         raise KeyboardInterrupt
 
 
@@ -50,6 +55,7 @@ def snapshot(out, name):
 
 def main():
     """Run the named load once; keep OUT and remove scratch and children."""
+    global stopping
     if len(sys.argv) != 4 or sys.argv[1] not in ("exit", "unlink"):
         raise SystemExit("trigger: usage: trigger.py exit|unlink MIB OUT")
     mode, mib, out = sys.argv[1], int(sys.argv[2]), Path(sys.argv[3])
@@ -149,6 +155,10 @@ os._exit(0)
             raise RuntimeError('silent stream ended during the load')
         print('trigger: result: load completed; read the retained counters', flush=True)
     finally:
+        # CPython 3.11 and later run a signal handler only at a call, a
+        # backward jump or a function's start, so none runs between entering
+        # this block and the store; one that runs after it only records.
+        stopping = True
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         signal.signal(signal.SIGHUP, signal.SIG_IGN)
@@ -169,6 +179,8 @@ os._exit(0)
 if __name__ == '__main__':
     try:
         main()
+        if pending:
+            raise SystemExit(130)
     except KeyboardInterrupt:
         raise SystemExit(130)
     except (OSError, RuntimeError, ValueError) as exc:
