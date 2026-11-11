@@ -44,6 +44,9 @@ static uint8_t ring_bytes[PIPE_BUF_SIZE];
 static struct pipe_page ring_pages[2 * (PIPE_BUF_SIZE / PAGE_SIZE) + 2];
 static fd_entry_t reader, writer;
 static struct open_file read_ofd, write_ofd;
+/* A second pipe, the output of a tee or a splice from `ring`. */
+static pipe_t out_ring;
+static fd_entry_t out_writer;
 static uint8_t memory[USER_PAGES * PAGE_SIZE];
 static int pages[USER_PAGES];
 static int failures, waits, read_wakes, write_wakes, signals, resolves;
@@ -730,6 +733,33 @@ static void later_page(void)
           "a close during the group's resolve posts the signal and adds no byte");
 }
 
+/**
+ * A tee or a splice from an empty pipe with no writer into a pipe with no
+ * reader is -EPIPE with SIGPIPE, as Linux's `link_pipe` and
+ * `splice_pipe_to_pipe` check the output's readers before the input's end;
+ * with a reader it is 0.
+ */
+static void link_ends(void)
+{
+    int move;
+
+    for (move = 0; move <= 1; move++) {
+        setup(0);
+        k_memset(&out_ring, 0, sizeof(out_ring));
+        k_memset(&out_writer, 0, sizeof(out_writer));
+        out_writer.priv = &out_ring;
+        out_writer.flags = FD_FLAG_WRITE;
+        out_ring.size = PIPE_BUF_SIZE;
+        out_ring.write_open = 1;
+        ring.write_open = 0;
+        CHECK(pipe_tee(&reader, &out_writer, 8, 1, move) == -EPIPE && signals == 1,
+              "a link from an ended empty pipe into a readerless one is epipe");
+        out_ring.read_open = 1;
+        CHECK(pipe_tee(&reader, &out_writer, 8, 1, move) == 0 && signals == 1,
+              "a link from an ended empty pipe into a read one is 0");
+    }
+}
+
 /** Run every case; 0 when each passes, 1 otherwise. */
 int main(void)
 {
@@ -743,6 +773,7 @@ int main(void)
     write_with_data();
     later_page();
     fault_holds_pipe();
+    link_ends();
     printf("pipe-copy-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
     return failures ? 1 : 0;
 }

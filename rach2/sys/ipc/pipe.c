@@ -1576,12 +1576,20 @@ void pipe_splice_consume(fd_entry_t *e, uint32_t n)
  * bytes, and `b` has a slot and a byte free. Returns 1 then, or 0 for an
  * `a` that holds nothing and has no writer, -EAGAIN for a wait `nonblock`
  * forbids, -EPIPE with SIGPIPE raised for a `b` with no reader, or -EINTR.
+ * A `b` with no reader is -EPIPE before an `a` with neither bytes nor writer
+ * is 0, as Linux's `link_pipe` and `splice_pipe_to_pipe` check
+ * `opipe->readers` first in their loops (fs/splice.c:1765-1770 and
+ * 1916-1922 in 6.12), which `ipipe_prep` reaches with 0 for such an `a`.
  */
 static int32_t pipe_link_ready(pipe_t *a, pipe_t *b, int nonblock)
 {
     for (;;) {
         if (!pipe_holds(a)) {
             if (!a->write_open) {
+                if (!b->read_open) {
+                    pipe_sigpipe();
+                    return -EPIPE;
+                }
                 return 0;
             }
             if (nonblock) {
