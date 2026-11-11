@@ -755,14 +755,62 @@ uint32_t procfs_task_links(int pid)
     return 2u + (p ? p->tg->live : 0u);
 }
 
-/** Whether the caller may read what /proc shows of `p`'s memory, its
- * environment and its auxiliary vector: a thread of `p`'s own process, a
- * privileged caller, or one whose real user ID is `p`'s when `p` is not
- * privileged, as Linux's ptrace check asks at its simplest. */
+/**
+ * Whether the caller may see what /proc shows of `p` behind Linux's ptrace
+ * check with PTRACE_MODE_FSCREDS, `__ptrace_may_access`: a thread of `p`'s
+ * own process; a privileged caller, which stands for CAP_SYS_PTRACE; or a
+ * caller whose file-system user and group IDs are each of `p`'s three, with
+ * `p`'s address space dumpable and `p` not privileged, which stands for the
+ * subset test of its permitted capabilities in `cap_ptrace_access_check`.
+ * READ and ATTACH differ on Linux only by Yama, which Rach2 does not have,
+ * so one test serves both: the memory, environment, auxiliary vector and
+ * maps, the syscall and wchan files, the links and the descriptors.
+ */
 static int procfs_may_read_mem(const process_t *p)
 {
-    return current_proc && (p->tg == current_proc->tg || proc_privileged(current_proc) ||
-                            (current_proc->ruid == p->ruid && !proc_privileged(p)));
+    uint32_t uid, gid;
+
+    if (!current_proc) {
+        return 0;
+    }
+    if (p->tg == current_proc->tg || proc_privileged(current_proc)) {
+        return 1;
+    }
+    uid = proc_fsuid(current_proc);
+    gid = proc_fsgid(current_proc);
+    return uid == p->ruid && uid == p->euid && uid == p->suid && gid == p->rgid && gid == p->egid &&
+           gid == p->sgid && (!p->mm || p->mm->dumpable == 1u) && !proc_privileged(p);
+}
+
+uint32_t procfs_owner_mode(int procfile)
+{
+    if (procfile == SYNTH_PROC_ENVIRON || procfile == SYNTH_PROC_AUXV ||
+        procfile == SYNTH_PROC_SYSCALL) {
+        return 0400;
+    }
+    return procfile == SYNTH_PROC_MEM ? 0600u : 0u;
+}
+
+/**
+ * Whether the caller may open, with the access mode of `flags`, the file
+ * `procfile` of process `pid`, whose mode lets only its owner open it
+ * (`procfs_owner_mode`), as Linux's generic_permission judges it: a caller
+ * whose file-system user ID owns it (`procfs_oom_owner`), for an access its
+ * mode gives the owner, or one with privilege over files, which stands for
+ * CAP_DAC_OVERRIDE. 1 for a file of any other mode.
+ */
+static int procfs_owner_may_open(int pid, int procfile, int flags)
+{
+    uint32_t mode = procfs_owner_mode(procfile), uid, gid, want;
+
+    if (mode == 0 || proc_fs_privileged(current_proc)) {
+        return 1;
+    }
+    if (procfs_oom_owner(pid, &uid, &gid) != 0) {
+        return 0;
+    }
+    want = (flags & 3) == 0 ? 0400u : (flags & 3) == 1 ? 0200u : 0600u;
+    return proc_fsuid(current_proc) == uid && (mode & want) == want;
 }
 
 int procfs_may_read(int pid)
@@ -1289,11 +1337,13 @@ static void ap_xlow(struct procfs_text *t, unsigned long v, int width)
  * number 0 and every other field 0x0: Linux's has a stack, and the frame
  * `copy_thread` zeroes for it gives `orig_ax` 0. An exiting thread past its
  * address space still has its user frame. All but the number are in hex.
- * -EACCES for a caller `procfs_may_read_mem` refuses, which stands for
- * Linux's mode 0400 and its PTRACE_MODE_ATTACH check. The open makes the
- * text only for these checks; the first read makes it again
+ * -EPERM for a caller `procfs_may_read_mem` refuses, as Linux's
+ * `lock_trace` answers its PTRACE_MODE_ATTACH_FSCREDS check; the file's
+ * mode of 0400 is the open's (`procfs_owner_may_open`). The open makes the
+ * text only to see that it can be made, and the first read makes it again
  * (`procfs_read`), as Linux's seq_file makes it, so the caller's own thread
- * shows the read.
+ * shows the read, and a caller the ptrace check refuses opens the file and
+ * gets EPERM from its reads.
  */
 static int procfs_gen_syscall(struct procfs_text *t, int pid)
 {
@@ -1306,7 +1356,7 @@ static int procfs_gen_syscall(struct procfs_text *t, int pid)
         return -ENOENT;
     }
     if (!procfs_may_read_mem(p)) {
-        return -EACCES;
+        return -EPERM;
     }
     if (p != current_proc && (p->state == PROC_READY || p->state == PROC_RUNNING)) {
         ap_str(t, "running\n");
@@ -7287,9 +7337,9 @@ int procfs_is_mem(const fd_entry_t *e)
 }
 
 /**
- * Open /proc/<pid>/mem for reading, writing or both: the caller is a thread
- * of the process or privileged, or has the process's real user ID while the
- * process is dumpable and not privileged, as a tracer needs to attach. The
+ * Open /proc/<pid>/mem for reading, writing or both: the caller is one
+ * `procfs_may_read_mem` allows, as Linux's mm_access with
+ * PTRACE_MODE_ATTACH_FSCREDS, past the file's mode of 0600. The
  * descriptor keeps the process's id, `pid` as `procfs_resolve_id` gave it
  * for the path `vp`, a hold on the record of the address space those checks
  * allowed, which keeps none of its memory, and no text; its offset is an
@@ -7311,8 +7361,7 @@ static int procfs_open_mem(const struct vpath *vp, int pid, int flags)
     if (acc == 3 || (flags & 0100 /* O_CREAT */)) {
         return -EACCES;
     }
-    if (p->tg != current_proc->tg && !proc_privileged(current_proc) &&
-        (current_proc->ruid != p->ruid || !p->mm->dumpable || proc_privileged(p))) {
+    if (!procfs_may_read_mem(p)) {
         return -EACCES;
     }
     f = kzalloc(sizeof(*f));
@@ -8870,12 +8919,47 @@ static int procfs_render(struct procfs_text *t, const struct vpath *vp, int pid,
 }
 
 /**
+ * Open the file `vp` names, of process `pid` when it is one of a process,
+ * through the open of its own when it has one: oom_score_adj, a write of an
+ * ID map or comm, mem, a write of a /proc/sys file, the ACPI call file, a
+ * PCI function's config and BAR files, and a write of a /sys attribute.
+ * Returns 1 with the open's answer in `*fd`, or 0 for a file with none.
+ */
+static int procfs_open_own(const struct vpath *vp, int pid, int flags, int *fd)
+{
+    int acc = flags & 3;
+
+    if (vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_OOM_ADJ) {
+        *fd = procfs_open_oom(vp, pid, flags);
+    } else if (vp->kind == VNODE_PROC_FILE &&
+               (procfs_is_idmap(vp->procfile) || vp->procfile == SYNTH_PROC_COMM) && acc != 0) {
+        *fd = procfs_open_idmap(vp->procfile, pid, flags);
+    } else if (vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_MEM) {
+        *fd = procfs_open_mem(vp, pid, flags);
+    } else if (vp->kind == VNODE_PROC_SYS_FILE && synth_sys_writable(vp->sysent) && acc != 0) {
+        *fd = procfs_open_sysctl(vp->sysent, flags);
+    } else if (vp->kind == VNODE_PROC_ACPI_CALL) {
+        *fd = procfs_open_acpicall(flags);
+    } else if (vp->kind == VNODE_SYS_FILE && vp->sysent == SYSFS_PCI_DEVICE &&
+               (vp->procfile == SYSFS_PCI_CONFIG || vp->procfile >= SYSFS_PCI_RESOURCE0)) {
+        *fd = vp->procfile == SYSFS_PCI_CONFIG ? procfs_open_pciconfig(vp, flags)
+                                               : procfs_open_pcibar(vp, flags);
+    } else if (vp->kind == VNODE_SYS_FILE &&
+               sysfs_file_writable(vp->sysent, vp->syskey, vp->procfile) && acc != 0) {
+        *fd = procfs_open_sysattr(vp->sysent, vp->syskey, vp->procfile, flags);
+    } else {
+        return 0;
+    }
+    return 1;
+}
+
+/**
  * The checks of the flags are in the order that gives the errno of a
  * regular file that exists: O_CREAT with O_EXCL is -EEXIST first, then
- * O_DIRECTORY -ENOTDIR. The files a write reaches then go to opens of their
- * own (`procfs_open_oom`, `procfs_open_idmap`, `procfs_open_mem`,
- * `procfs_open_sysctl`, `procfs_open_sysattr`, `procfs_open_acpicall`), and
- * any other write or create is -EACCES.
+ * O_DIRECTORY -ENOTDIR, then -EACCES for a file of a process whose mode
+ * the caller lacks (`procfs_owner_may_open`). The files a write reaches
+ * then go to opens of their own (`procfs_open_own`), and any other write or
+ * create is -EACCES.
  *
  * `/proc/disk` is rendered from the record taken at boot, so opening it
  * issues no command to the device. `diskinfo_format` truncates to the size
@@ -8902,30 +8986,11 @@ int procfs_open(const struct vpath *vp, int flags)
     if (flags & 0200000 /* O_DIRECTORY */) {
         return -ENOTDIR;
     }
-    if (vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_OOM_ADJ) {
-        return procfs_open_oom(vp, pid, flags);
+    if (vp->kind == VNODE_PROC_FILE && !procfs_owner_may_open(pid, vp->procfile, flags)) {
+        return -EACCES;
     }
-    if (vp->kind == VNODE_PROC_FILE &&
-        (procfs_is_idmap(vp->procfile) || vp->procfile == SYNTH_PROC_COMM) && (flags & 3) != 0) {
-        return procfs_open_idmap(vp->procfile, pid, flags);
-    }
-    if (vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_MEM) {
-        return procfs_open_mem(vp, pid, flags);
-    }
-    if (vp->kind == VNODE_PROC_SYS_FILE && synth_sys_writable(vp->sysent) && (flags & 3) != 0) {
-        return procfs_open_sysctl(vp->sysent, flags);
-    }
-    if (vp->kind == VNODE_PROC_ACPI_CALL) {
-        return procfs_open_acpicall(flags);
-    }
-    if (vp->kind == VNODE_SYS_FILE && vp->sysent == SYSFS_PCI_DEVICE &&
-        (vp->procfile == SYSFS_PCI_CONFIG || vp->procfile >= SYSFS_PCI_RESOURCE0)) {
-        return vp->procfile == SYSFS_PCI_CONFIG ? procfs_open_pciconfig(vp, flags)
-                                                : procfs_open_pcibar(vp, flags);
-    }
-    if (vp->kind == VNODE_SYS_FILE && sysfs_file_writable(vp->sysent, vp->syskey, vp->procfile) &&
-        (flags & 3) != 0) {
-        return procfs_open_sysattr(vp->sysent, vp->syskey, vp->procfile, flags);
+    if (procfs_open_own(vp, pid, flags, &fd)) {
+        return fd;
     }
     if ((flags & 3) != 0 || (flags & 0100 /* O_CREAT */)) {
         return -EACCES;
@@ -8940,7 +9005,13 @@ int procfs_open(const struct vpath *vp, int flags)
         return -ENOMEM;
     }
     key = pid;
+    f->stale = vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_SYSCALL;
     len = procfs_render(&text, vp, pid, &key);
+    if (len == -EPERM && f->stale) {
+        /* The ptrace check is the read's, as Linux's lock_trace. */
+        text.buf = NULL;
+        len = 0;
+    }
     if (len < 0) {
         kfree(f);
         return len;
@@ -8948,7 +9019,6 @@ int procfs_open(const struct vpath *vp, int flags)
     f->data = text.buf;
     f->len = len;
     f->fresh = 1;
-    f->stale = vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_SYSCALL;
     f->vp = *vp;
     f->gen_pid = pid;
     f->origin_pid = key;

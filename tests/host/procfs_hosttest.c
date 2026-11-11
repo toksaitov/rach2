@@ -1329,7 +1329,7 @@ static int pid_file_reads(int pid, int wchan, const char *want)
  * 0; a stopped one its stop's function; a kernel thread call 0 with every
  * field 0x0, an exiting thread past its address space its call, and an
  * ended one -1 with no pointers; and a caller that may not read the process
- * EACCES and 0.
+ * EPERM and 0.
  */
 static void syscall_wchan_rows(void)
 {
@@ -1404,8 +1404,8 @@ static void syscall_wchan_rows(void)
         struct procfs_text text;
 
         procfs_text_init(&text);
-        check(procfs_gen_syscall(&text, 11) == -EACCES,
-              "another user's process refuses its syscall file");
+        check(procfs_gen_syscall(&text, 11) == -EPERM,
+              "another user's process refuses its syscall file's text with EPERM");
         kfree(text.buf);
     }
     check(pid_file_reads(11, 1, "0"), "another user's process reads 0 from wchan");

@@ -8235,8 +8235,8 @@ static int32_t synth_stat(const struct vpath *vp, struct kstat *kst, int follow)
         synth_pid_owner(procfs_resolve_id(vp), kst);
         if (synth_proc_writable(vp->procfile)) {
             kst->st_mode = S_IFREG | 0644;
-        } else if (vp->procfile == SYNTH_PROC_SYSCALL) {
-            kst->st_mode = S_IFREG | 0400;
+        } else if (procfs_owner_mode(vp->procfile) != 0) {
+            kst->st_mode = S_IFREG | procfs_owner_mode(vp->procfile);
         }
         return 0;
     case VNODE_PROC_FDINFO: {
