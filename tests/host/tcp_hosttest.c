@@ -1018,6 +1018,37 @@ static void keepalive_rows(void)
 }
 
 /**
+ * Check that the retransmission timer keeps the tick count when one call of
+ * `tcp_tick` follows several ticks, as the boot processor's does after ticks
+ * that found the big lock held: with a call every fourth tick, the segment
+ * goes again a timeout after it was sent, and not after a timeout's calls.
+ */
+static void skipped_tick_rows(void)
+{
+    struct socket sock;
+    struct tcb *conn;
+    uint32_t peer_seq = 24000, sent, rto;
+    uint16_t lport;
+    static uint8_t bytes[100];
+    unsigned calls = 0;
+
+    reset_all();
+    conn = open_conn(&sock, 99, &peer_seq, &lport);
+    n_segs = 0;
+    CHECK("skipped ticks: data goes out", tcp_send(&sock, bytes, 100) == 100 && n_segs == 1);
+    sent = (uint32_t)kernel_ticks;
+    rto = conn->rto;
+    n_segs = 0;
+    while (n_segs == 0 && calls < 2 * TCP_RTO_MAX) {
+        kernel_ticks += 4;
+        tcp_tick();
+        calls++;
+    }
+    CHECK("calls four ticks apart send it again within four ticks after the timeout",
+          n_segs == 1 && kernel_ticks - sent >= rto && kernel_ticks - sent < rto + 4);
+}
+
+/**
  * Check the give-up: a peer that answers nothing ends an established
  * connection when Linux's tcp_retries2 of 15 would, after 924.6 s and not
  * before, counted in TCPAbortOnTimeout; TCP_USER_TIMEOUT 5000 ends one five
@@ -1435,7 +1466,7 @@ int main(void)
         ip_tx_refuse_err = -ENETUNREACH;
         CHECK("data is taken under a permanent error", tcp_send(&sock, big, 100) == 100);
         CHECK("and counted as sent, for the retransmission timer",
-              conn->send_head == conn->send_tail && conn->rto_timer != 0);
+              conn->send_head == conn->send_tail && conn->rto_due != 0);
         ip_tx_refuse_err = -ENOBUFS;
         rx((uint16_t)82, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, (const char *)0, 0);
 
@@ -1459,6 +1490,7 @@ int main(void)
     ephemeral_rows();
     path_mtu_row();
     keepalive_rows();
+    skipped_tick_rows();
     giveup_rows();
     blackhole_rows();
 
@@ -1648,7 +1680,7 @@ int main(void)
         CHECK("a further duplicate adds a segment", conn->cwnd == ss + 4 * TCP_MSS);
         rx(84, lport, peer_seq, sent_end, F_ACK, 65535, (const char *)0, 0);
         CHECK("the acknowledgement of everything ends the recovery",
-              conn->recovering == 0 && conn->snd_una == sent_end && conn->rto_timer == 0);
+              conn->recovering == 0 && conn->snd_una == sent_end && conn->rto_due == 0);
         CHECK("at the threshold", conn->cwnd == ss);
         CHECK("one segment was sent again", conn->retransmits == 1);
         n_segs = 0;
@@ -1767,7 +1799,7 @@ int main(void)
         rx(88, lport, peer_seq, lost_from + TCP_MSS, F_ACK, 0, (const char *)0, 0);
         CHECK("its acknowledgement with a zero window sends nothing more",
               n_segs == 0 && conn->recovering == TCP_RECOVER_RTO);
-        CHECK("and starts the probe timer", conn->zwp_timer != 0);
+        CHECK("and starts the probe timer", conn->zwp_due != 0);
         while (n_segs == 0 && ticks < 4 * TCP_RTO_MAX) {
             kernel_ticks++;
             tcp_tick();

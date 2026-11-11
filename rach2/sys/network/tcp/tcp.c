@@ -107,6 +107,35 @@ static int isn_keyed;
  * are differences against, each shorter than the word's cycle. */
 #define TCP_NOW() ((uint32_t)kernel_ticks)
 
+/**
+ * The deadline `ticks` from now of a retransmission or zero-window timer,
+ * which `tcp_tick` compares with the tick count, as Linux's timers keep
+ * `jiffies + when`: the boot processor's tick does not call it on every
+ * tick, and a countdown of its calls would run slow. It is never 0, which
+ * means off; a deadline that falls on tick 0 is kept as tick 1.
+ */
+static uint32_t tcp_due(uint32_t ticks)
+{
+    uint32_t due = TCP_NOW() + ticks;
+
+    return due != 0 ? due : 1u;
+}
+
+/** Whether the deadline `due` of a running timer has come. */
+static int tcp_expired(uint32_t due)
+{
+    return (int32_t)(TCP_NOW() - due) >= 0;
+}
+
+/** The ticks left until the deadline `due` of a running timer, at least 1,
+ * or 0 when `due` is 0 and the timer is off. */
+static uint32_t tcp_left(uint32_t due)
+{
+    int32_t left = (int32_t)(due - TCP_NOW());
+
+    return due == 0 ? 0u : left > 0 ? (uint32_t)left : 1u;
+}
+
 #define TCP_U64(hi, lo)  (((uint64_t)(hi) << 32) | (uint64_t)(lo))
 #define TCP_ROTL64(x, b) (((x) << (b)) | ((x) >> (64 - (b))))
 
@@ -769,8 +798,8 @@ static void tcp_send_flags(struct tcb *tcb, uint8_t flags)
     if (flags & (TCP_SYN | TCP_FIN)) {
         tcb->retx_flags = flags;
         tcb->retx_seq = seq;
-        if (tcb->rto_timer == 0) {
-            tcb->rto_timer = tcb->rto;
+        if (tcb->rto_due == 0) {
+            tcb->rto_due = tcp_due(tcb->rto);
         }
     }
     if (flags & TCP_SYN)
@@ -787,8 +816,8 @@ static void tcp_send_flags(struct tcb *tcb, uint8_t flags)
  */
 static void tcp_arm_zwp(struct tcb *tcb)
 {
-    if (tcb->snd_wnd == 0 && tcb->zwp_timer == 0 && tcb->send_tail != tcb->send_ack) {
-        tcb->zwp_timer = tcb->rto;
+    if (tcb->snd_wnd == 0 && tcb->zwp_due == 0 && tcb->send_tail != tcb->send_ack) {
+        tcb->zwp_due = tcp_due(tcb->rto);
     }
 }
 
@@ -966,8 +995,8 @@ static int tcp_output(struct tcb *tcb)
         tcb->send_head += send_len;
         tcb->snd_nxt += send_len;
 
-        if (tcb->rto_timer == 0) {
-            tcb->rto_timer = tcb->rto;
+        if (tcb->rto_due == 0) {
+            tcb->rto_due = tcp_due(tcb->rto);
         }
         if (tcb->rtt_start == 0 && !tcb->recovering) {
             tcb->rtt_start = TCP_NOW() + 1;
@@ -1098,7 +1127,7 @@ static void tcp_enter_rto_recovery(struct tcb *tcb)
     tcb->dup_acks = 0;
     tcb->rtt_start = 0;
     (void)tcp_recover_send(tcb);
-    tcb->rto_timer = tcb->rto;
+    tcb->rto_due = tcp_due(tcb->rto);
 }
 
 /**
@@ -1498,8 +1527,8 @@ static void tcp_giveup(struct tcb *tcb)
     tcb->state = TCP_CLOSED;
     tcb->so_error = tcb->soft_error ? tcb->soft_error : ETIMEDOUT;
     tcb->retx_flags = 0;
-    tcb->rto_timer = 0;
-    tcb->zwp_timer = 0;
+    tcb->rto_due = 0;
+    tcb->zwp_due = 0;
     tcb->recovering = 0;
     tcb->fast_pending = 0;
 
@@ -1672,15 +1701,15 @@ static void tcp_user_timeout_clamp(struct tcb *tcb)
 {
     uint32_t limit, elapsed;
 
-    if (!tcb->sock || !tcb->sock->user_timeout || tcb->retx_stamp == 0 || tcb->rto_timer == 0) {
+    if (!tcb->sock || !tcb->sock->user_timeout || tcb->retx_stamp == 0 || tcb->rto_due == 0) {
         return;
     }
     limit = tcp_ms_ticks(tcb->sock->user_timeout);
     elapsed = TCP_NOW() + 1 - tcb->retx_stamp;
     if (elapsed >= limit) {
-        tcb->rto_timer = 1;
-    } else if (tcb->rto_timer > limit - elapsed) {
-        tcb->rto_timer = limit - elapsed;
+        tcb->rto_due = tcp_due(1);
+    } else if (tcp_left(tcb->rto_due) > limit - elapsed) {
+        tcb->rto_due = tcp_due(limit - elapsed);
     }
 }
 
@@ -1757,6 +1786,10 @@ static void tcp_keepalive(struct tcb *tcb)
  * refused acknowledgement would otherwise wait for the peer to send its FIN
  * again, which the block may not outlive.
  *
+ * The retransmission and zero-window timers are deadlines on the tick count
+ * (`tcp_due`), so a call that follows ticks the boot processor's tick passed
+ * over while another processor held the big lock still fires them on time.
+ *
  * When the retransmission timer expires, the first of the timeouts in a row
  * marks when what it found unacknowledged was sent (`retx_stamp`), the
  * connection is given up when `tcp_retx_expired` says so, and otherwise the
@@ -1812,48 +1845,46 @@ void tcp_tick(void)
             continue;
         }
 
-        if (tcb->rto_timer > 0) {
-            tcb->rto_timer--;
-            if (tcb->rto_timer == 0) {
-                if (tcb->rto_backoff == 0) {
-                    tcb->retx_stamp = TCP_NOW() + 1 - tcb->rto;
-                    if (tcb->retx_stamp == 0)
-                        tcb->retx_stamp = 1;
-                }
-                if (tcb->rto_backoff < 255)
-                    tcb->rto_backoff++;
-                if (tcp_retx_expired(tcb)) {
-                    if (tcb->state >= TCP_ESTABLISHED)
-                        net_mib.tcp_abort_on_timeout++;
-                    tcp_giveup(tcb);
-                    continue;
-                }
-                net_mib.tcp_timeouts++;
+        if (tcb->rto_due != 0 && tcp_expired(tcb->rto_due)) {
+            uint32_t due = tcb->rto_due;
 
-                tcb->rto <<= 1;
-                if (tcb->rto > TCP_RTO_MAX)
-                    tcb->rto = TCP_RTO_MAX;
-
-                if (tcb->send_head != tcb->send_ack) {
-                    tcp_blackhole(tcb);
-                    tcp_enter_rto_recovery(tcb);
-                } else if (tcb->retx_flags) {
-                    net_mib.tcp_retrans_segs +=
-                        tcp_emit_flags(tcb, tcb->retx_flags, tcb->retx_seq) == 0;
-                    tcb->retransmits++;
-                    tcb->rto_timer = tcb->rto;
-                }
-                tcp_user_timeout_clamp(tcb);
+            tcb->rto_due = 0;
+            if (tcb->rto_backoff == 0) {
+                tcb->retx_stamp = due + 1 - tcb->rto; /* the send's tick + 1 */
+                if (tcb->retx_stamp == 0)
+                    tcb->retx_stamp = 1;
             }
+            if (tcb->rto_backoff < 255)
+                tcb->rto_backoff++;
+            if (tcp_retx_expired(tcb)) {
+                if (tcb->state >= TCP_ESTABLISHED)
+                    net_mib.tcp_abort_on_timeout++;
+                tcp_giveup(tcb);
+                continue;
+            }
+            net_mib.tcp_timeouts++;
+
+            tcb->rto <<= 1;
+            if (tcb->rto > TCP_RTO_MAX)
+                tcb->rto = TCP_RTO_MAX;
+
+            if (tcb->send_head != tcb->send_ack) {
+                tcp_blackhole(tcb);
+                tcp_enter_rto_recovery(tcb);
+            } else if (tcb->retx_flags) {
+                net_mib.tcp_retrans_segs +=
+                    tcp_emit_flags(tcb, tcb->retx_flags, tcb->retx_seq) == 0;
+                tcb->retransmits++;
+                tcb->rto_due = tcp_due(tcb->rto);
+            }
+            tcp_user_timeout_clamp(tcb);
         }
 
-        if (tcb->zwp_timer > 0) {
-            tcb->zwp_timer--;
-            if (tcb->zwp_timer == 0 && tcb->snd_wnd == 0) {
+        if (tcb->zwp_due != 0 && tcp_expired(tcb->zwp_due)) {
+            tcb->zwp_due = 0;
+            if (tcb->snd_wnd == 0) {
                 tcp_send_zwp(tcb);
-                tcb->zwp_timer = tcb->rto << 1;
-                if (tcb->zwp_timer > TCP_RTO_MAX)
-                    tcb->zwp_timer = TCP_RTO_MAX;
+                tcb->zwp_due = tcp_due(tcb->rto << 1 < TCP_RTO_MAX ? tcb->rto << 1 : TCP_RTO_MAX);
             }
         }
 
@@ -2042,8 +2073,8 @@ static void tcp_closed_or_free(struct tcb *tcb)
     }
     tcb->state = TCP_CLOSED;
     tcb->retx_flags = 0;
-    tcb->rto_timer = 0;
-    tcb->zwp_timer = 0;
+    tcb->rto_due = 0;
+    tcb->zwp_due = 0;
 }
 
 void tcp_shutdown_send(struct socket *sock)
@@ -2320,10 +2351,10 @@ static void tcp_take_ack(struct tcb *tcb, uint32_t ack_num, uint32_t window)
     }
 
     if (tcb->snd_una == tcb->snd_nxt) {
-        tcb->rto_timer = 0;
-        tcb->zwp_timer = 0;
+        tcb->rto_due = 0;
+        tcb->zwp_due = 0;
     } else {
-        tcb->rto_timer = tcb->rto;
+        tcb->rto_due = tcp_due(tcb->rto);
     }
     tcp_arm_zwp(tcb);
     tcp_pump(tcb);
@@ -2598,8 +2629,8 @@ static void tcp_rx_reset(struct tcb *tcb, uint32_t seq, uint32_t ack_num, uint8_
         (tcb->state == TCP_SYN_SENT || tcb->state == TCP_SYN_RCVD) ? ECONNREFUSED : ECONNRESET;
     tcb->state = TCP_CLOSED;
     tcb->retx_flags = 0;
-    tcb->rto_timer = 0;
-    tcb->zwp_timer = 0;
+    tcb->rto_due = 0;
+    tcb->zwp_due = 0;
     tcb->recovering = 0;
     tcb->fast_pending = 0;
     if (tcb->sock) {
@@ -2864,7 +2895,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
         tcb->snd_wnd = window;
         tcb->state = TCP_ESTABLISHED;
         tcb->retx_flags = 0;
-        tcb->rto_timer = 0;
+        tcb->rto_due = 0;
         tcb->rto_backoff = 0;
         tcb->retx_stamp = 0;
 
@@ -2903,7 +2934,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
         tcp_take_options(tcb, data, hdr_len);
         tcb->state = TCP_ESTABLISHED;
         tcb->retx_flags = 0;
-        tcb->rto_timer = 0;
+        tcb->rto_due = 0;
         tcb->rto_backoff = 0;
         tcb->retx_stamp = 0;
 
@@ -2970,7 +3001,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
             if (ack_num == tcb->snd_nxt) {
                 tcb->state = TCP_FIN_WAIT_2;
                 tcb->retx_flags = 0;
-                tcb->rto_timer = 0;
+                tcb->rto_due = 0;
                 tcb->timewait_until = TCP_NOW() + TCP_FIN_WAIT2_TICKS;
             }
         }
@@ -3027,7 +3058,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
     case TCP_CLOSING:
         if ((flags & TCP_ACK) && ack_num == tcb->snd_nxt) {
             tcb->retx_flags = 0;
-            tcb->rto_timer = 0;
+            tcb->rto_due = 0;
             tcp_enter_time_wait(tcb);
         } else {
             if ((flags & TCP_ACK) && (int32_t)(ack_num - tcb->snd_una) > 0 &&
@@ -3150,8 +3181,8 @@ int tcp_snapshot(struct tcp_row **rows)
         out[n].cwnd = t->cwnd;
         out[n].in_flight = t->snd_nxt - t->snd_una;
         out[n].unsent = t->send_tail - t->send_head;
-        out[n].rto_timer = t->rto_timer;
-        out[n].zwp_timer = t->zwp_timer;
+        out[n].rto_timer = tcp_left(t->rto_due);
+        out[n].zwp_timer = tcp_left(t->zwp_due);
         out[n].tx_refused = t->tx_refused;
         out[n].retransmits = t->retransmits;
         out[n].refused_for = t->refused_since ? TCP_NOW() + 1 - t->refused_since : 0;
