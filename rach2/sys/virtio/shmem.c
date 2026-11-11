@@ -74,8 +74,9 @@ struct vshm_rev {
 
 /*
  * The transport's record of one attached region. `refs` counts the attach
- * and each bind of virtio-gpu until that bind's virtio_put, and each map
- * of the VM's pages until its map_free. The record is freed with the last;
+ * and each bind of virtio-gpu until that bind's virtio_put, each map of
+ * the VM's pages until its map_free, and the interrupt thread's reap while
+ * it runs. The record is freed with the last;
  * the detach gives back the region's pages and window, and the driver's
  * and maps' remaining references keep the record until they let go. A
  * record detached while objects still hold pages of its heap, as a buffer
@@ -1382,9 +1383,16 @@ static int vshm_irq_woken(void *arg)
  * region's queues each time their doorbell rings (vshm_irq_run), as
  * Linux's vhost worker runs the work a wakeup queued, so that the reap
  * runs outside the eventfd's lock and while the transport's thread binds.
+ * It reads the region and takes a reference on its record with interrupts
+ * off, so that no tick passes the big lock on between the two, and drops
+ * the reference after the reap: a detach that runs meanwhile, or a last
+ * put on another processor, leaves the record to this thread's put, as
+ * KVM's irqfd_shutdown flushes the irqfd's queued work before it frees
+ * the irqfd (virt/kvm/eventfd.c:143 and :158 in 6.12.115).
  */
 static void vshm_irq_main(void)
 {
+    struct vshm *vs;
     uint32_t flags;
 
     arch_irq_enable();
@@ -1392,9 +1400,14 @@ static void vshm_irq_main(void)
         (void)wq_wait_event_idle(&vshm_irq_wq, vshm_irq_woken, NULL);
         flags = kirq_save();
         vshm_irq_rang = 0;
+        vs = vshm_cur;
+        if (vs) {
+            vs->refs++;
+        }
         kirq_restore(flags);
-        if (vshm_cur) {
-            vshm_irq_run(vshm_cur);
+        if (vs) {
+            vshm_irq_run(vs);
+            vs_put(&vs->vdev);
         }
     }
 }
