@@ -53,8 +53,9 @@ clears it with
 once user space runs, and while it stays set the menu boots the fallback.
 A committed kernel that panics at boot therefore resets once, after the
 panic's 30 seconds, into the fallback, and not into itself for ever.
-The menu of a disk installed before this version lacks the entries' line
-and falls back only when a kernel fails to load.
+The menu of a disk installed before this version lacks these lines, and
+.Fl -update
+adds them, as below.
 On the installed machine,
 .Ql bootctl grub
 replaces the BIOS core in the BIOS boot partition; on a disk installed
@@ -297,7 +298,7 @@ then the partition is unmounted and checked with
 before the trial is armed.
 A failed write or check stops the update.
 Repeating the option leaves the same menu; without it the update leaves
-the menu byte for byte as it was.
+the boot lines as they were.
 The option requires
 .Fl -update
 and accepts only
@@ -455,6 +456,21 @@ grows it, below, since
 rewrites a slot in place, never grows it, and refuses a kernel in a
 smaller one.
 A boot partition with no room for the copy keeps its slot, with a note.
+.Pp
+A menu in
+.Pa /boot/grub/grub.cfg
+on partition 1 that lacks the recordfail lines described above, the menu
+of a disk installed before this version, is given them: each entry that
+boots the candidate slot sets
+.Ql recordfail=1
+and saves it before it loads the kernel, and the test that boots the
+fallback while it stays set follows the saved default's candidate line.
+The new menu is written beside the old one, synced and renamed over it,
+and checked with
+.Ql bootctl --target DISKp1 status
+before the trial is armed.
+A menu that has the test is left as it is, and so, with a note, is one
+with no candidate entry or no such line.
 .Pp
 Both kernel entries boot the same root; recovery runs from RAM.
 After the update, the new root is armed for one trial boot.
