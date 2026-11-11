@@ -6398,13 +6398,13 @@
     },
     {
       "case_id": "guest.default.wchanmusl",
-      "behavior": "/proc/PID/syscall and /proc/PID/wchan give a sleeping thread's call, its arguments and the function it sleeps in, \"running\" and 0 for a thread that runs, and nothing to another user, in Linux 6.12's formats.",
+      "behavior": "/proc/PID/syscall and /proc/PID/wchan give a sleeping thread's call, its arguments and the function it sleeps in, \"running\" and 0 for a thread that runs, and nothing to a caller Linux's ptrace check by file-system ids, every id of the process and its dumpable flag refuses, in Linux 6.12's formats.",
       "units": ["default", "musl/wchanmusl"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
-      "execution": {"program": "wchanmusl", "stdin": null, "role": "ordinary", "privileges": "root, which makes a child of user 1000", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
+      "execution": {"program": "wchanmusl", "stdin": null, "role": "ordinary", "privileges": "root, which makes children of users 1000 and 1001", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
       "assertions": [
         {"assertion_id": "listed", "checks": "/proc/self and a thread's directory under /proc/self/task list syscall and wchan.", "source": "program"},
         {"assertion_id": "modes", "checks": "/proc/self/syscall is a regular file of mode 0400 and /proc/self/wchan one of mode 0444.", "source": "program"},
@@ -6415,7 +6415,10 @@
         {"assertion_id": "running", "checks": "With its thread made, a thread that spins has a syscall file of running and a newline.", "source": "program"},
         {"assertion_id": "running-wchan", "checks": "Its wchan file reads 0.", "source": "program"},
         {"assertion_id": "refused-syscall", "checks": "After the fork, and once the root parent's stat shows it asleep in its wait, a child of user 1000 gets EACCES from an open of the root parent's syscall file.", "source": "program"},
-        {"assertion_id": "refused-wchan", "checks": "The child reads 0 from the parent's wchan file.", "source": "program"}
+        {"assertion_id": "refused-wchan", "checks": "The child reads 0 from the parent's wchan file.", "source": "program"},
+        {"assertion_id": "fs-ids", "checks": "Against a sleeper of user 1000 in a pipe's read, a caller of real and effective user and group 1001 and file-system ids 1000 reads pipe_read from its wchan and the read's call from its syscall file, as Linux's ptrace check by file-system ids allows.", "source": "program"},
+        {"assertion_id": "not-dumpable", "checks": "Against such a sleeper that is not dumpable, which root then owns, a caller of every id 1000 reads 0 from its wchan and gets EACCES from the open of its syscall file.", "source": "program"},
+        {"assertion_id": "other-group", "checks": "Against a dumpable sleeper, a caller of user 1000 and group 1001 reads 0 from its wchan, opens the syscall file its user owns and gets EPERM from the read.", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},

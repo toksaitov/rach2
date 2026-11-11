@@ -11,18 +11,25 @@
  * the operation, the value and the null timeout, and futex_wait_queue. A
  * thread that spins reads "running" and 0. A child of user 1000 gets EACCES
  * from the root parent's syscall file and 0 from its wchan file, once the
- * parent's stat shows it asleep in its wait for the child.
+ * parent's stat shows it asleep in its wait for the child. Against a sleeper
+ * of user 1000 in a pipe's read, Linux's ptrace check by file-system ids
+ * lets a caller of real and effective ids 1001 and file-system ids 1000
+ * read its call and pipe_read; a sleeper that is not dumpable, which root
+ * owns, gives a caller of every id 1000 EACCES from the open and 0 from
+ * wchan; and a caller of user 1000 and group 1001 opens the file its user
+ * owns and gets EPERM from the read, and 0 from wchan.
  *
  * Prints `WCHANMUSL OK` and exits 0 on success, and prints `WCHANMUSL FAIL
  * (detail)` and exits 1 otherwise. etude's report (probe_report.h), for the
  * case ETUDE_CASE names, has an assertion for each row in order: `listed`,
  * `modes`, `read-call`, with the thread and the pipe, `read-wchan`,
  * `futex-call`, with its thread, `futex-wchan`, `running`, with its thread,
- * `running-wchan`, `refused-syscall`, with the fork, and `refused-wchan`.
+ * `running-wchan`, `refused-syscall`, with the fork, `refused-wchan`,
+ * `fs-ids`, `not-dumpable` and `other-group`.
  * The first failure fails its assertion and leaves the rest not run.
  *
- * Needs root, to make a child of user 1000, or its NEW when a native run
- * gives `ids=OLD:NEW,...`.
+ * Needs root, to make children of users 1000 and 1001, or their NEWs when a
+ * native run gives `ids=OLD:NEW,...`.
  */
 
 #define _GNU_SOURCE
@@ -33,6 +40,8 @@
 #include <sched.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/fsuid.h>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
@@ -47,8 +56,9 @@ extern char **environ;
 #define FUTEX_WAIT_PRIVATE 128
 #define FUTEX_WAKE_PRIVATE 129
 
-/* The unprivileged user and group, 1000 or its native NEW. */
+/* The unprivileged users and groups, 1000 and 1001 or their native NEWs. */
 #define OTHER_ID ((unsigned)probe_id(1000))
+#define THIRD_ID ((unsigned)probe_id(1001))
 
 /* The call and the pointers a syscall file gives: `nr`, then `args` when
  * `nr` is not -1, then `sp` and `pc`. */
@@ -112,6 +122,20 @@ static void await_sleep(pid_t tid)
             p[1] == ' ' && p[2] == 'S') {
             return;
         }
+        sched_yield();
+    }
+}
+
+/** Wait until the process `pid` is asleep, its stat's state S, which
+ * anyone may read. */
+static void await_asleep(pid_t pid)
+{
+    char path[64], buf[512];
+    const char *state;
+
+    snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
+    while (read_file(path, buf, (int)sizeof(buf)) <= 0 || !(state = strrchr(buf, ')')) ||
+           state[1] != ' ' || state[2] != 'S') {
         sched_yield();
     }
 }
@@ -324,20 +348,14 @@ static int refused_rows(void)
 
     pid = fork();
     if (pid == 0) {
-        char path[64], buf[512];
-        const char *state;
+        char path[64], buf[64];
         int fd;
 
         if (setgid(OTHER_ID) != 0 || setuid(OTHER_ID) != 0) {
             _exit(3);
         }
-        /* The parent's stat, which anyone may read, shows when it sleeps in
-         * its wait; a ready parent would read 0 from wchan by right. */
-        snprintf(path, sizeof(path), "/proc/%d/stat", (int)parent);
-        while (read_file(path, buf, (int)sizeof(buf)) <= 0 || !(state = strrchr(buf, ')')) ||
-               state[1] != ' ' || state[2] != 'S') {
-            sched_yield();
-        }
+        /* A ready parent would read 0 from wchan by right. */
+        await_asleep(parent);
         snprintf(path, sizeof(path), "/proc/%d/syscall", (int)parent);
         fd = open(path, O_RDONLY);
         if (fd >= 0 || errno != EACCES) {
@@ -361,13 +379,159 @@ static int refused_rows(void)
     return 0;
 }
 
+/**
+ * Fork a child of user OTHER_ID that sleeps in a read of a new pipe, whose
+ * write end goes to `*wake`, with its address space dumpable when
+ * `dumpable`: the setuid from root left it not dumpable, as on Linux. The
+ * child's pid, or -1.
+ */
+static pid_t sleeper(int dumpable, int *wake)
+{
+    int fds[2];
+    pid_t pid;
+    char c;
+
+    if (pipe(fds) != 0) {
+        return -1;
+    }
+    pid = fork();
+    if (pid == 0) {
+        close(fds[1]);
+        if (setgid(OTHER_ID) != 0 || setuid(OTHER_ID) != 0 ||
+            prctl(PR_SET_DUMPABLE, dumpable, 0, 0, 0) != 0) {
+            _exit(3);
+        }
+        (void)read(fds[0], &c, 1);
+        _exit(0);
+    }
+    close(fds[0]);
+    *wake = fds[1];
+    return pid;
+}
+
+/** Take the ids of `how` (`peek`) as root: 0, or -1. */
+static int take_ids(int how)
+{
+    if (how != 'f') {
+        return setgid(how == 'g' ? THIRD_ID : OTHER_ID) == 0 && setuid(OTHER_ID) == 0 ? 0 : -1;
+    }
+    if (setresgid(THIRD_ID, THIRD_ID, OTHER_ID) != 0 || setfsgid(OTHER_ID) < 0 ||
+        setresuid(THIRD_ID, THIRD_ID, OTHER_ID) != 0 || setfsuid(OTHER_ID) < 0) {
+        return -1;
+    }
+    return (unsigned)setfsuid((uid_t)-1) == OTHER_ID ? 0 : -1;
+}
+
+/** Read the syscall file of `target` as `peek` says: 0, 3 for the open or
+ * 4 for the read. */
+static int peek_call(pid_t target, int open_ok, int call_ok)
+{
+    char path[64], buf[512];
+    struct call c;
+    int fd, n;
+
+    snprintf(path, sizeof(path), "/proc/%d/syscall", (int)target);
+    fd = open(path, O_RDONLY);
+    if (open_ok ? fd < 0 : fd >= 0 || errno != EACCES) {
+        return 3;
+    }
+    if (fd < 0) {
+        return 0;
+    }
+    n = (int)read(fd, buf, sizeof(buf) - 1);
+    buf[n > 0 ? n : 0] = '\0';
+    close(fd);
+    if (call_ok ? n <= 0 || !parse_call(buf, &c) || c.nr != SYS_read : n != -1 || errno != EPERM) {
+        return 4;
+    }
+    return 0;
+}
+
+/**
+ * In a child, take the ids of `how` and read the files of `target`, a
+ * sleeper of user OTHER_ID, once its stat shows it asleep. `how` is 'f' for
+ * real and effective user and group THIRD_ID with file-system ones OTHER_ID,
+ * which Linux's ptrace check with PTRACE_MODE_FSCREDS lets read the files;
+ * 'u' for every id OTHER_ID; and 'g' for user OTHER_ID with group THIRD_ID,
+ * whose user owns the syscall file and whose group the check refuses. With
+ * `open_ok` the open of syscall must succeed and with `call_ok` its read
+ * give the read; otherwise the open is EACCES, or the read EPERM. The
+ * wchan reads pipe_read when `call_ok` and 0 otherwise. The child's exit
+ * status: 0, 1 for the ids, 2 for the wchan, 3 for the open and 4 for the
+ * read.
+ */
+static int peek(pid_t target, int how, int open_ok, int call_ok)
+{
+    char path[64], buf[64];
+    pid_t pid = fork();
+    int status;
+
+    if (pid != 0) {
+        return pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status)
+                   ? 1
+                   : WEXITSTATUS(status);
+    }
+    if (take_ids(how) != 0) {
+        _exit(1);
+    }
+    await_asleep(target);
+    snprintf(path, sizeof(path), "/proc/%d/wchan", (int)target);
+    if (read_file(path, buf, (int)sizeof(buf)) < 0 ||
+        strcmp(buf, call_ok ? "pipe_read" : "0") != 0) {
+        _exit(2);
+    }
+    _exit(peek_call(target, open_ok, call_ok));
+}
+
+/**
+ * Linux's ptrace check judges /proc/PID/syscall and wchan by the caller's
+ * file-system ids, every id of the process and its dumpable flag: a caller
+ * whose file-system ids alone are the sleeper's reads both; one with every
+ * id the sleeper's gets EACCES from the open of a sleeper that is not
+ * dumpable, which root owns, and 0 from its wchan; and one with the
+ * sleeper's user and another group opens the file it owns and gets EPERM
+ * from the read, and 0 from the wchan.
+ */
+static int cred_rows(void)
+{
+    static const struct {
+        int dumpable, how, open_ok, call_ok;
+        const char *what;
+    } rows[] = {{1, 'f', 1, 1, "a caller with the sleeper's file-system ids alone reads its files"},
+                {0, 'u', 0, 0, "a sleeper that is not dumpable refuses its owner's user"},
+                {1, 'g', 1, 0, "a caller of the sleeper's user and another group reads EPERM"}};
+    char why[160];
+    unsigned i;
+    int wake, rc, status;
+    pid_t pid;
+
+    for (i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
+        pid = sleeper(rows[i].dumpable, &wake);
+        if (pid < 0) {
+            return fail("fork a sleeper of the other user");
+        }
+        rc = peek(pid, rows[i].how, rows[i].open_ok, rows[i].call_ok);
+        close(wake);
+        if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+            return fail("a sleeper of the other user sleeps and ends");
+        }
+        if (rc != 0) {
+            snprintf(why, sizeof(why), "%s (step %d)", rows[i].what, rc);
+            return fail(why);
+        }
+        report_held();
+    }
+    return 0;
+}
+
 /** Begin the report and plan its assertions, in the order they are
  * checked. */
 static void plan(void)
 {
     static const char *const ids[] = {
-        "listed",      "modes",   "read-call",     "read-wchan",      "futex-call",
-        "futex-wchan", "running", "running-wchan", "refused-syscall", "refused-wchan"};
+        "listed",      "modes",        "read-call",     "read-wchan",      "futex-call",
+        "futex-wchan", "running",      "running-wchan", "refused-syscall", "refused-wchan",
+        "fs-ids",      "not-dumpable", "other-group"};
     unsigned i;
 
     report_begin(report_case(environ, "guest.default.wchanmusl"));
@@ -382,7 +546,7 @@ int main(int argc, char **argv)
     setvbuf(stdout, NULL, _IONBF, 0);
     plan();
     if (listing_rows() != 0 || read_rows() != 0 || futex_rows() != 0 || running_rows() != 0 ||
-        refused_rows() != 0) {
+        refused_rows() != 0 || cred_rows() != 0) {
         return 1;
     }
     report_end();
