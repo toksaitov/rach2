@@ -412,18 +412,19 @@ long compat_sys_ia32_ftruncate64(isr_params_t *params)
 }
 
 /** pread64 (180): the descriptor, the buffer, the count, then the offset's
- * two words. */
+ * two words. The count goes whole to `ksys_pread64`, which checks the end it
+ * gives before the cut, as Linux's ia32_pread64 passes its u32. */
 long compat_sys_ia32_pread64(isr_params_t *params)
 {
     return ksys_pread64((int)SC_ARG(params, 0), (char __user *)UPTR(SC_ARG(params, 1)),
-                        USER_RW_LEN(SC_ARG(params, 2)), (long long)ARG64(params, 3, 4));
+                        SC_ARG(params, 2), (long long)ARG64(params, 3, 4));
 }
 
 /** pwrite64 (181): pread64's arguments, the buffer written from. */
 long compat_sys_ia32_pwrite64(isr_params_t *params)
 {
     return ksys_pwrite64((int)SC_ARG(params, 0), (const char __user *)UPTR(SC_ARG(params, 1)),
-                         USER_RW_LEN(SC_ARG(params, 2)), (long long)ARG64(params, 3, 4));
+                         SC_ARG(params, 2), (long long)ARG64(params, 3, 4));
 }
 
 /** fallocate (324): the descriptor, the mode, then the offset and the length
