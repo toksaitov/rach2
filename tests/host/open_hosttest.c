@@ -75,8 +75,8 @@ static void fd_holds_release(void);
 static long sys_ftruncate(isr_params_t *params);
 static long ksys_ftruncate(int fd, long long length);
 static long ksys_truncate(const char __user *upath, long long length);
-static long ksys_pread64(int fd, char __user *buf, uint32_t count, long long pos);
-static long ksys_pwrite64(int fd, const char __user *buf, uint32_t count, long long pos);
+static long ksys_pread64(int fd, char __user *buf, size_t count, long long pos);
+static long ksys_pwrite64(int fd, const char __user *buf, size_t count, long long pos);
 static long ksys_fadvise64(int fd, long long len, uint32_t advice);
 static long ksys_fallocate(int fd, uint32_t mode, uint64_t offset, uint64_t len);
 static long sys_write(isr_params_t *params);
@@ -1525,6 +1525,13 @@ int devfs_lseek_zero(struct fd_entry *e)
 {
     (void)e;
     check(0, "unexpected device seek");
+    return 0;
+}
+
+/** No row opens /dev/mem: 0. */
+int devfs_fd_is_mem(struct fd_entry *e)
+{
+    (void)e;
     return 0;
 }
 
@@ -3229,8 +3236,8 @@ static void offset_seek_waits(void)
         parked_on = 0;
         sharer_seek = 0;
         sharer_call = cases[i].seek;
-        moved_bytes =
-            cases[i].writing ? write_ops(e, buf, sizeof(buf)) : read_ops(e, buf, sizeof(buf));
+        moved_bytes = cases[i].writing ? write_ops(e, buf, sizeof(buf), sizeof(buf))
+                                       : read_ops(e, buf, sizeof(buf), sizeof(buf));
         check(moved_bytes == 32, "the transfer moves its 32 bytes");
         check(sharer_parked, cases[i].waits);
         if (sharer_parked) {
