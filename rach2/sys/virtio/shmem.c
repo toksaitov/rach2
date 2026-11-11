@@ -76,7 +76,9 @@ struct vshm_rev {
  * The transport's record of one attached region. `refs` counts the attach
  * and each bind of virtio-gpu until that bind's virtio_put, each map of
  * the VM's pages until its map_free, and the interrupt thread's reap while
- * it runs. The record is freed with the last;
+ * it runs, and changes only with interrupts off (vs_get, vs_put), since
+ * two kernel threads take and drop references. The record is freed with
+ * the last;
  * the detach gives back the region's pages and window, and the driver's
  * and maps' remaining references keep the record until they let go. A
  * record detached while objects still hold pages of its heap, as a buffer
@@ -914,6 +916,20 @@ static int vs_dma_addr(struct virtio_dev *d, uintptr_t phys, uint64_t *addr)
     return 0;
 }
 
+/**
+ * Take a reference on the record. `refs` changes with interrupts off, so
+ * that no tick passes the big lock on inside the load and the store when
+ * a kernel thread, which the tick preempts, takes or drops one; it is
+ * kref_get's increment (include/linux/kref.h:43-46 in 6.12.115).
+ */
+static void vs_get(struct vshm *vs)
+{
+    uint32_t flags = kirq_save();
+
+    vs->refs++;
+    kirq_restore(flags);
+}
+
 #if VSHM_PAGES
 /** KVM took a map's frames back: count it, then tell its owner, which
  * stops every use of them. Under the big lock; does not sleep. */
@@ -976,7 +992,7 @@ static int vs_map_pages(struct virtio_dev *d, const struct virtio_run *runs, uin
         return rc;
     }
     vm->live = 1;
-    vs->refs++;
+    vs_get(vs);
     vs->maps++;
     vs->map_live++;
     vs->map_pages += vm->pages;
@@ -1023,13 +1039,21 @@ static void vs_map_free(struct virtio_map *vm)
 
 static void vshm_free(struct vshm *vs);
 
-/** A driver's bind or a map has let go: free the record at its last
- * reference. */
+/**
+ * A driver's bind, a map or the interrupt thread's reap has let go: free
+ * the record at its last reference. The decrement and its test run with
+ * interrupts off, as kref_put's refcount_dec_and_test (kref.h:62-69), so
+ * that exactly one caller sees the count reach 0; that caller frees the
+ * record after the restore, since nothing else can reach it then.
+ */
 static void vs_put(struct virtio_dev *d)
 {
     struct vshm *vs = to_vs(d);
+    uint32_t flags = kirq_save();
+    int last = vs->refs > 0 && --vs->refs == 0;
 
-    if (vs->refs > 0 && --vs->refs == 0) {
+    kirq_restore(flags);
+    if (last) {
         vshm_free(vs);
     }
 }
@@ -1348,7 +1372,7 @@ static void vshm_main(void)
             continue;
         }
         if (!vs->bound) {
-            vs->refs++;
+            vs_get(vs);
             vs->binds++;
             rc = virtio_gpu_bind(&vs->vdev);
             if (rc == 0) {
@@ -1385,7 +1409,8 @@ static int vshm_irq_woken(void *arg)
  * runs outside the eventfd's lock and while the transport's thread binds.
  * It reads the region and takes a reference on its record with interrupts
  * off, so that no tick passes the big lock on between the two, and drops
- * the reference after the reap: a detach that runs meanwhile, or a last
+ * the reference after the reap through vs_put, whose decrement and test
+ * also run with interrupts off: a detach that runs meanwhile, or a last
  * put on another processor, leaves the record to this thread's put, as
  * KVM's irqfd_shutdown flushes the irqfd's queued work before it frees
  * the irqfd (virt/kvm/eventfd.c:143 and :158 in 6.12.115).
