@@ -1014,6 +1014,41 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
     return -EBADF;
 }
 
+/**
+ * Whether descriptor `fd` takes a write, asked without writing, for a
+ * writev(2) of no bytes, which Linux answers with 0 once the file is known
+ * to be open for writing and to have a write (`vfs_writev`), never calling
+ * the write itself: /dev/full and an unconnected datagram socket return 0
+ * there. Returns 0, or -EBADF for a descriptor that is not open, is an
+ * O_PATH one, is not open for writing, or is of a kind with no write, the
+ * refusals `write_fd` gives before it writes.
+ */
+static int32_t write_check(int fd)
+{
+    fd_entry_t *entry;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    entry = fd_get(current_proc->fds, fd);
+    if (!entry || (entry->flags & FD_FLAG_PATH)) {
+        return -EBADF;
+    }
+    if (entry->ops) {
+        return (entry->flags & FD_FLAG_WRITE) && entry->ops->write ? 0 : -EBADF;
+    }
+    if (entry->type == FD_TYPE_SOCKET) {
+        return entry->sock ? 0 : -EBADF;
+    }
+    if (entry->type == FD_TYPE_CONSOLE) {
+        return (entry->flags & FD_FLAG_WRITE) ? 0 : -EBADF;
+    }
+    if (entry->type == FD_TYPE_FILE) {
+        return (entry->flags & FD_FLAG_WRITE) && entry->ofd && entry->ofd->vmnt ? 0 : -EBADF;
+    }
+    return -EBADF;
+}
+
 static int size_guarded(struct vfs_mount *mnt, void *node);
 static int ofd_append_only(const struct open_file *ofd);
 
@@ -1324,13 +1359,15 @@ static long iov_file_write(fd_entry_t *entry, uintptr_t addr, int count, long lo
  * order (`writev_elements`); on a tmpfs file the mount's lock is held across
  * them, and a vector that would grow a sealed file is cut to the whole 2 MiB
  * chunks before its end (`writev_begin`). The vector is checked whole first
- * (`iov_import`), and its total cut at MAX_RW_COUNT; a vector of no bytes still
- * has the descriptor checked (`write_fd`). Returns the bytes written, or a
- * negative errno: -EINVAL for a count below 0 or past IOV_MAX_LOCAL or a
- * negative length, -EFAULT for a vector or a range outside user space, -EPERM
- * for a vector of which the seal lets no byte in, or a transfer error when no
- * byte was written. A buffer fault after a positive transfer returns the bytes
- * written before the fault.
+ * (`iov_import`), and its total cut at MAX_RW_COUNT. The descriptor is
+ * checked before the count and the vector, as Linux tests FMODE_WRITE
+ * first, and a vector of no bytes then returns 0 without a write
+ * (`write_check`). Returns the bytes written, or a negative errno: -EBADF
+ * for a descriptor `write_check` refuses, -EINVAL for a count below 0 or
+ * past IOV_MAX_LOCAL or a negative length, -EFAULT for a vector or a range
+ * outside user space, -EPERM for a vector of which the seal lets no byte in,
+ * or a transfer error when no byte was written. A buffer fault after a
+ * positive transfer returns the bytes written before the fault.
  */
 static long writev(int fd, uintptr_t iov_user, int iovcnt)
 {
@@ -1340,18 +1377,19 @@ static long writev(int fd, uintptr_t iov_user, int iovcnt)
     long wanted;
     int32_t rc;
 
+    rc = write_check(fd);
+    if (rc != 0) {
+        return rc;
+    }
     if (iovcnt < 0 || iovcnt > IOV_MAX_LOCAL) {
         return -EINVAL;
-    }
-    if (!current_proc) {
-        return -ESRCH;
     }
     wanted = iov_import(NULL, iov_user, iovcnt, -1);
     if (wanted < 0) {
         return wanted;
     }
     if (wanted == 0) {
-        return write_fd(fd, (const char __user *)0, 0);
+        return 0;
     }
     rc = writev_begin(fd, iov_user, iovcnt, (uint32_t)wanted, &held, &cap);
     if (rc == 0) {
