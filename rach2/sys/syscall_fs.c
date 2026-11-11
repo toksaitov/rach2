@@ -6315,13 +6315,35 @@ static int32_t console_read(fd_entry_t *entry, char __user *buf, uint32_t count)
 }
 
 /**
+ * Whether `entry` may be read, as Linux's vfs_read and vfs_readv test
+ * FMODE_READ and then FMODE_CAN_READ before anything else: 0, -EBADF for no
+ * descriptor, one opened with O_PATH or one not open for reading, or
+ * -EINVAL for an object with no read method, an epoll set among them. A
+ * directory passes; its read is -EISDIR, as Linux's generic_read_dir.
+ */
+static int32_t read_allowed(const fd_entry_t *entry)
+{
+    if (!entry || (entry->flags & FD_FLAG_PATH)) {
+        return -EBADF;
+    }
+    if (entry->type == FD_TYPE_DIR || entry->type == FD_TYPE_SYNTH_DIR) {
+        return 0;
+    }
+    if (!(entry->flags & FD_FLAG_READ)) {
+        return -EBADF;
+    }
+    if (entry->ops && !entry->ops->read) {
+        return -EINVAL;
+    }
+    return 0;
+}
+
+/**
  * Read up to `count` bytes of descriptor `fd` into the user's `buf`, for
  * read(2) and readv(2); the bytes read, 0 at the end, or a negative errno:
- * -EBADF for a descriptor that is not open, was opened with O_PATH or is not
- * open for reading, -EISDIR for a directory, -EFAULT for a NULL or bad
- * buffer. A read of zero bytes returns 0 once the descriptor is known to be
- * valid and not a directory and does not look at `buf`, which may then be
- * NULL, as POSIX allows.
+ * `read_allowed`'s, -EISDIR for a directory, -EFAULT for a NULL or bad
+ * buffer. A read of zero bytes returns 0 once those checks have passed and
+ * does not look at `buf`, which may then be NULL, as POSIX allows.
  *
  * The read goes by what is behind the descriptor. An object with a vtable,
  * a pipe, a pty, a device or a /proc file among them, reads through it
@@ -6338,14 +6360,16 @@ static int32_t console_read(fd_entry_t *entry, char __user *buf, uint32_t count)
 static int32_t read_fd(int fd, char __user *buf, uint32_t count)
 {
     fd_entry_t *entry;
+    int32_t rc;
 
     if (!current_proc) {
         return -EFAULT;
     }
 
     entry = fd_get(current_proc->fds, fd);
-    if (!entry || (entry->flags & FD_FLAG_PATH)) {
-        return -EBADF;
+    rc = read_allowed(entry);
+    if (rc != 0) {
+        return rc;
     }
     if (entry->type == FD_TYPE_DIR || entry->type == FD_TYPE_SYNTH_DIR) {
         return -EISDIR;
@@ -6608,20 +6632,6 @@ int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, net_addr_
 }
 
 /**
- * readv(2) of a vector of no bytes from `fd`, whose entry is `entry` or
- * NULL: 0 for a directory, as Linux's vfs_readv returns before the read that
- * would be EISDIR, and otherwise what a read of no bytes gives (`read_fd`).
- */
-static long readv_none(int fd, const fd_entry_t *entry)
-{
-    if (entry && !(entry->flags & FD_FLAG_PATH) &&
-        (entry->type == FD_TYPE_DIR || entry->type == FD_TYPE_SYNTH_DIR)) {
-        return 0;
-    }
-    return read_fd(fd, (char __user *)0, 0);
-}
-
-/**
  * readv(2): read from the descriptor in argument 0 into the buffers of the
  * user's iovec array in argument 1, of the count in argument 2, in order;
  * the total bytes read, or a negative errno. musl's stdio reads through
@@ -6635,10 +6645,10 @@ static long readv_none(int fd, const fd_entry_t *entry)
  * MAX_RW_COUNT, as Linux's is. The buffers are checked by `user_buffer_ok`
  * with write access, which faults their pages in, so an address inside the
  * user window that is unmapped or read-only fails here and not half way
- * through. An array that asks for nothing still checks the descriptor, so a
- * closed one is -EBADF, and returns 0 for a directory, as Linux's vfs_readv
- * does. Once a byte has been read, a later failure ends the call with the
- * total.
+ * through. The descriptor is checked before the array (`read_allowed`), as
+ * Linux's vfs_readv checks it, so an array that asks for nothing returns 0
+ * only from a descriptor a read could use, a directory among them. Once a
+ * byte has been read, a later failure ends the call with the total.
  *
  * The buffers are filled in order, and how depends on what is behind the
  * descriptor, since a second read is not always reading on. A regular file
@@ -6664,17 +6674,18 @@ static long readv(int fd, uintptr_t iov_user, int iovcnt)
     int walk;
     int i;
 
+    wanted = read_allowed(current_proc ? fd_get(current_proc->fds, fd) : (fd_entry_t *)0);
+    if (wanted != 0) {
+        return wanted;
+    }
     if (iovcnt < 0 || iovcnt > IOV_MAX_LOCAL) {
         return -EINVAL;
     }
     wanted = iov_import(NULL, iov_user, iovcnt, 1);
-    if (wanted < 0) {
+    if (wanted <= 0) {
         return wanted;
     }
     entry = current_proc ? fd_get(current_proc->fds, fd) : (fd_entry_t *)0;
-    if (wanted == 0) {
-        return readv_none(fd, entry);
-    }
 
     if (entry && entry->type == FD_TYPE_SOCKET && entry->sock && entry->sock->type == SOCK_DGRAM) {
         return readv_dgram(entry, iov_user, iovcnt, 0, 0, 0, 0);
