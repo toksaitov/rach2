@@ -1017,6 +1017,14 @@ int procfs_may_read(int pid)
     return 0;
 }
 
+/** No kind is a system-wide file of /proc here, so the opens and stats
+ * that ask fall through to ENOENT. */
+uint32_t procfs_ino_global(int kind)
+{
+    (void)kind;
+    return 0;
+}
+
 /** No row names a /proc process: -1. */
 int procfs_resolve_id(const struct vpath *vp)
 {

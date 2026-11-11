@@ -223,6 +223,9 @@ static void dcache_count_hits(uint32_t n)
 static struct spinlock mount_table_lock = SPINLOCK_INIT;
 static uint32_t tree_seq;
 
+/* The lock over the sleeping locks' records, which sleeplock.c defines. */
+static struct spinlock records_lock = SPINLOCK_INIT;
+
 /* The protection of /proc/sys/fs that a final link meets, at its default,
  * and the debugfs type, which no row opens. */
 int vfs_protected_symlinks = 1;
