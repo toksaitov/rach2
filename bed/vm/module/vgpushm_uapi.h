@@ -44,7 +44,12 @@ struct vgpushm_counts {
  * VGPUSHM_IOC_PIN: pin `size` bytes from `offset` of the buffer behind the
  * descriptor `fd`, a memfd or another file of shmem, or a dma-buf whose
  * pages are RAM, for the epoch `epoch` of the driver's (vgpushm.h), and get
- * a handle to it and its pages' count. Both are whole pages.
+ * a handle to it and its pages' count. Both are whole pages, and `size` is
+ * at most VGPUSHM_PIN_MAX_SIZE. Errors: EINVAL for a range not page-aligned,
+ * too large or past the buffer, or a descriptor that is neither shmem nor a
+ * dma-buf; EBADF for a descriptor not open; EFAULT for a dma-buf with no
+ * pages of RAM; EOPNOTSUPP for a dma-buf on a kernel with
+ * CONFIG_DMABUF_DEBUG.
  */
 struct vgpushm_pin {
     __s32 fd;
@@ -59,6 +64,9 @@ struct vgpushm_pin {
 #define VGPUSHM_PIN_SHMEM  1
 #define VGPUSHM_PIN_DMABUF 2
 
+/* The most bytes one pin holds, 1 GiB. */
+#define VGPUSHM_PIN_MAX_SIZE (1ull << 30)
+
 /* A run of the VM's physical pages: the first's address and the count. */
 struct vgpushm_run {
     __u64 addr;
@@ -69,7 +77,8 @@ struct vgpushm_run {
  * VGPUSHM_IOC_PAGES: the runs of a pin's pages from its page `first`, at
  * most `max` of them, into the array at `runs`, each run as long as the
  * pages follow each other; `count` gets the runs written, and `next` the
- * page after the last one's end.
+ * page after the last one's end. Errors: ENOENT for no such handle; EINVAL
+ * for `first` past the pin's end, or `max` 0 or over VGPUSHM_PAGES_MAX_RUNS.
  */
 struct vgpushm_pages {
     __u32 handle;
@@ -80,6 +89,9 @@ struct vgpushm_pages {
     __u32 reserved;
     __u64 next; /* out */
 };
+
+/* The most runs one call of VGPUSHM_IOC_PAGES gives. */
+#define VGPUSHM_PAGES_MAX_RUNS 4096u
 
 #define VGPUSHM_IOC_MAGIC   'V'
 #define VGPUSHM_IOC_INFO    _IOR(VGPUSHM_IOC_MAGIC, 0, struct vgpushm_info)
