@@ -1374,19 +1374,32 @@ static int rtc_irq_ready; /* the alarm interrupt is attached (`rtc_irq_setup`) *
  * may come on another processor. */
 static struct spinlock rtc_alarm_lock = SPINLOCK_INIT;
 
+/* How `rtc_alarm_came` judges an alarm: due by the clock, whatever its state;
+ * due by the clock and still enabled; or raised by the clock's interrupt,
+ * whose status C must show the alarm's flag. */
+#define RTC_CAME_DUE    0
+#define RTC_CAME_ARMED  1
+#define RTC_CAME_RAISED 2
+
 /** Count an alarm that has come, which ends it, wake its readers and end
  * a suspend to idle. The alarm is one-shot, as Linux's aie_timer, whose
  * expiry disables it and keeps its time (drivers/rtc/interface.c:951-955),
  * and the clock's driver turns the interrupt off at the first alarm
- * (rtc-cmos.c:731-733). With `armed`, only an alarm still enabled comes,
- * as Linux's rtc_timer_do_work expires only a timer still queued
- * (interface.c:947-955), so that the interrupt and a second reading of the
- * clock that both find it due count it once. Any context. */
-static void rtc_alarm_came(int armed)
+ * (rtc-cmos.c:731-733). With RTC_CAME_ARMED or RTC_CAME_RAISED, only an
+ * alarm still enabled comes, as Linux's rtc_timer_do_work expires only a
+ * timer still queued (interface.c:947-955), so that the interrupt and a
+ * second reading of the clock that both find it due count it once. The
+ * interrupt reads status C inside `rtc_alarm_lock`, so that no set or
+ * disable on another processor comes between that read and the test of the
+ * alarm's state: a flag left by an alarm that a set has since replaced is
+ * cleared by the set's own read of status C, or read here before the set
+ * begins, and never counts as the new alarm. Any context. */
+static void rtc_alarm_came(int how)
 {
     uint32_t flags = spin_lock_irqsave(&rtc_alarm_lock);
+    int came = how == RTC_CAME_RAISED ? rtc_alarm_ack() : 1;
 
-    if (armed && !rtc_wake_on) {
+    if (!came || (how != RTC_CAME_DUE && !rtc_wake_on)) {
         spin_unlock_irqrestore(&rtc_alarm_lock, flags);
         return;
     }
@@ -1398,13 +1411,11 @@ static void rtc_alarm_came(int armed)
     suspend_wake();
 }
 
-/** The clock's alarm interrupt: an alarm that has come. */
+/** The clock's alarm interrupt: an alarm that may have come. */
 static void rtc_alarm_irq(isr_params_t *params)
 {
     (void)params;
-    if (rtc_alarm_ack()) {
-        rtc_alarm_came(1);
-    }
+    rtc_alarm_came(RTC_CAME_RAISED);
 }
 
 /** Take the clock's alarm interrupt, once. */
@@ -1493,7 +1504,7 @@ static int32_t rtc_wake_enable(void)
     }
     now_s = rtc_seconds_of(&now);
     if (at <= now_s) {
-        rtc_alarm_came(0);
+        rtc_alarm_came(RTC_CAME_DUE);
         return 0;
     }
     if (at - now_s > 86400 - 1) {
@@ -1512,7 +1523,7 @@ static int32_t rtc_wake_enable(void)
             return -EIO;
         }
         if (rtc_seconds_of(&now) >= at) {
-            rtc_alarm_came(1);
+            rtc_alarm_came(RTC_CAME_ARMED);
         }
     }
     return 0;

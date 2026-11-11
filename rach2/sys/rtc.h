@@ -130,7 +130,8 @@ void rtc_set_realtime(int64_t seconds, int32_t nanoseconds);
 
 /**
  * Read the machine's clock now, as the boot reads it: two samples that agree,
- * decoded, with interrupts off while each pair is read. 0 with `*out`
+ * decoded, with interrupts off and the clock's ports locked against other
+ * processors while each pair is read. 0 with `*out`
  * filled, or -1 when the clock cannot be read or holds no time.
  */
 int rtc_read_clock(rtc_time_t *out);
@@ -166,7 +167,9 @@ int rtc_write_clock(const rtc_time_t *t);
  * whether its interrupt is enabled; `rtc_alarm_interrupts` enables or
  * disables the interrupt; and `rtc_alarm_ack`, which the interrupt's handler
  * calls, lets the clock raise the next (on a PC, by reading status register
- * C) and returns whether the alarm was what raised it.
+ * C) and returns whether the alarm was what raised it. Each holds the lock
+ * on the clock's ports through its accesses, so any processor may call them,
+ * in any context.
  */
 void rtc_alarm_write(const rtc_time_t *t);
 int rtc_alarm_read(rtc_time_t *t);
