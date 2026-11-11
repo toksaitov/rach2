@@ -549,21 +549,26 @@ static void ata_irq(isr_params_t *params)
  * the drive never raised, the first sector of a write among them. A channel
  * with sleepers counts toward `disk-wait-ticks` of `/proc/disk` here, since
  * this driver's transfers take no request of the block layer, which counts
- * the ticks its requests wait.
+ * the ticks its requests wait. Both count the ticks since the last call,
+ * since the boot processor's tick does not call this on every tick
+ * (`tick_waits`, isr.c).
  */
 void ata_tick(void)
 {
+    static uint32_t seen; /* `kernel_ticks` at the last call */
+    uint32_t now = (uint32_t)kernel_ticks, passed = now - seen;
     int c;
 
+    seen = now;
     for (c = 0; c < 2; c++) {
         if (channels[c].sleepers > 0) {
-            block_count_wait_tick();
+            block_count_wait_ticks(passed);
         }
     }
     for (c = 0; c < 2; c++) {
         struct ata_channel *ch = &channels[c];
 
-        ch->ticks++;
+        ch->ticks += passed;
         if (wq_active(&ch->wq)) {
             wq_wake_all(&ch->wq);
         }

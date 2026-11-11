@@ -25,6 +25,26 @@ static void check(int ok, const char *what)
     }
 }
 
+/* The boot processor's tick count, which both clocks advance by. */
+volatile uint64_t kernel_ticks;
+
+/** Count one tick and run the request pool's clock alone: the lag clock
+ *  passes the tick over, so that the rows move the two apart. */
+static void request_tick(void)
+{
+    kernel_ticks++;
+    block_request_tick();
+    lag_seen = (uint32_t)kernel_ticks;
+}
+
+/** Count one tick and run the lag wrapper's clock alone. */
+static void lag_tick(void)
+{
+    kernel_ticks++;
+    block_lag_tick();
+    req_seen = (uint32_t)kernel_ticks;
+}
+
 /* Reuse freed addresses immediately, and count records and DMA pages apart. */
 static struct block_request records[16];
 static uint8_t frames[16][PAGE_SIZE];
@@ -247,7 +267,7 @@ static int read_backing(block_device_t *dev, uint64_t lba, uint32_t count, void 
     if (inside_transfer) {
         check(block_lag_answer(next_generation, 0) == -EAGAIN,
               "an unfinished backing transfer cannot be answered");
-        block_lag_tick();
+        lag_tick();
     }
     k_memset(buf, 0x5A, count * BLOCK_SECTOR_SIZE);
     return 0;
@@ -345,11 +365,11 @@ static void quarantine(struct block_request *fresh, uint32_t gf)
     int status, i;
 
     for (i = 0; i < 5; i++) {
-        block_request_tick();
+        request_tick();
     }
     check(fresh->state == BLOCK_REQ_IN_FLIGHT && fresh->overdue == 1,
           "one expired period keeps a request in flight");
-    block_request_tick();
+    request_tick();
     check(fresh->state == BLOCK_REQ_QUARANTINED && block_quarantines() == 1,
           "the last period quarantines the held request");
     check(block_request_ended(fresh, gf, output, &status) && status == -EIO,
@@ -392,7 +412,7 @@ static void completion(void)
     check(block_in_flight() == 2 && record_count == 2 && frame_count == 2,
           "an independent device can use the remaining slot");
     for (i = 0; i < 1000; i++) {
-        block_lag_tick();
+        lag_tick();
     }
     check(a->state == BLOCK_REQ_IN_FLIGHT && a->page[0] == 0xEE,
           "timer activity cannot deliver a held read");
@@ -446,7 +466,7 @@ static void write_and_flush(void)
 static void advance(unsigned ticks)
 {
     while (ticks-- > 0) {
-        block_request_tick();
+        request_tick();
     }
 }
 
@@ -492,6 +512,39 @@ static void deadline_edges(uint32_t start)
     answer_read(r, gen);
 }
 
+/** Run the request clock once after `n` ticks, as the boot processor's
+ *  tick does after `n - 1` ticks that found the big lock held. */
+static void skip_ticks(uint32_t n)
+{
+    kernel_ticks += n;
+    block_request_tick();
+    lag_seen = (uint32_t)kernel_ticks;
+}
+
+/** Check that the deadlines and the wait count keep the tick count when one
+ *  call counts several ticks. */
+static void skipped_ticks(void)
+{
+    struct block_request *r;
+    uint32_t gen;
+    uint64_t waited;
+
+    check(live == 0, "no request is in flight before the skipped ticks");
+    lag->deadline_ticks = 8;
+    lag->deadline_limit = 4;
+    r = begin(lag, &gen);
+    waited = block_wait_ticks();
+    skip_ticks(4);
+    check(r->state == BLOCK_REQ_IN_FLIGHT && r->overdue == 0 && block_wait_ticks() == waited + 4,
+          "one call after four ticks counts four wait ticks");
+    skip_ticks(3);
+    check(r->overdue == 0, "a request is not overdue one tick before its deadline of eight");
+    skip_ticks(1);
+    check(r->state == BLOCK_REQ_IN_FLIGHT && r->overdue == 1 && block_wait_ticks() == waited + 8,
+          "three calls over eight ticks pass the first deadline");
+    answer_read(r, gen);
+}
+
 static int flush_expires;
 static uint32_t flush_generation;
 
@@ -508,7 +561,7 @@ static void flush_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     advance(ticks - 1);
     check(!cond(arg) && r->state == BLOCK_REQ_IN_FLIGHT && r->held_by_device,
           "a flush remains blocked until the chosen deadline or completion");
-    block_request_tick();
+    request_tick();
     if (flush_expires) {
         check(r->state == BLOCK_REQ_QUARANTINED && r->overdue == 2 && r->held_by_device,
               "the final flush deadline quarantines its DMA page");
@@ -630,6 +683,7 @@ int main(void)
     write_and_flush();
     deadline_edges(100);
     deadline_edges(0xFFFFFFF8u);
+    skipped_ticks();
     flush_deadlines();
     pool_deadline();
     check(record_count == 0 && frame_count == 0 && live == 0 && quarantined_count == 0,

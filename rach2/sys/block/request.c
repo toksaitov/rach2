@@ -66,11 +66,12 @@
 #define REQ_DEADLINE_MAX_S    600u
 static uint32_t default_deadline = REQ_DEFAULT_DEADLINE;
 
-static struct block_request *reqs; /* every live request */
-static uint32_t live;              /* how many are on the list */
-static uint32_t next_generation;   /* rising; see req_new */
-static wait_queue_t pool_wq;       /* woken on any completion, freed request or quarantine */
-static volatile uint32_t req_ticks;
+static struct block_request *reqs;  /* every live request */
+static uint32_t live;               /* how many are on the list */
+static uint32_t next_generation;    /* rising; see req_new */
+static wait_queue_t pool_wq;        /* woken on any completion, freed request or quarantine */
+static volatile uint32_t req_ticks; /* the deadlines' clock, in ticks */
+static uint32_t req_seen;           /* `kernel_ticks` at the last tick's call */
 static uint32_t quarantined_count;
 static uint32_t overlap_count; /* completions with another request in flight */
 /* Cumulative, for /proc/disk: quarantines made, callers released with EIO
@@ -898,21 +899,26 @@ uint32_t block_release_tick(void)
  * Every tick a request spends in flight is counted as a wait tick, whether a
  * caller sleeps for it or the USB pump left it running; the suites bound that
  * count on every device. A request quarantined keeps its generation, so the
- * late completion still matches it.
+ * late completion still matches it. The clock advances by the ticks counted
+ * since the last call, not by one a call: the boot processor's tick that
+ * finds the big lock held ends without calling this (`tick_waits`, isr.c),
+ * and a late interrupt counts several ticks.
  */
 void block_request_tick(void)
 {
     struct block_request *r;
+    uint32_t now = (uint32_t)kernel_ticks, passed = now - req_seen;
     int overdue = 0;
     int quarantined = 0;
     int stalled;
 
-    req_ticks++;
+    req_seen = now;
+    req_ticks += passed;
     for (r = reqs; r; r = r->next) {
         if (r->state != BLOCK_REQ_IN_FLIGHT) {
             continue;
         }
-        block_count_wait_tick();
+        block_count_wait_ticks(passed);
         if ((int32_t)(req_ticks - r->deadline) < 0) {
             continue;
         }

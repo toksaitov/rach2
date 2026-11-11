@@ -49,7 +49,7 @@ static unsigned beep_verbs;
 static uint8_t port61;
 static uint16_t pit_count;
 static unsigned pit_bytes;
-volatile uint64_t kernel_ticks;
+volatile uint64_t kernel_ticks; /* the tick count, which `hda_tick` counts by */
 static unsigned conn_reads, verbs, bad_offsets, sense_triggers;
 static int codec_silent; /* the codec takes commands and never answers */
 /* The command the codec refuses, ending it with no response, when its node
@@ -836,6 +836,14 @@ static void write_blocks(unsigned *next)
     }
 }
 
+/** Count one tick and run the driver's tick, as the boot processor's tick
+ *  does. */
+static void tick(void)
+{
+    kernel_ticks++;
+    hda_tick();
+}
+
 /**
  * Run `ticks` timer ticks 10 ms apart on the model, writing blocks after each
  * when `next` is not NULL, and check after each that the delay stays within
@@ -847,7 +855,7 @@ static uint32_t run_ticks(unsigned ticks, unsigned *next)
 
     while (ticks--) {
         model_play(10000);
-        hda_tick();
+        tick();
         if (next)
             write_blocks(next);
         delay = hda_delay_frames();
@@ -952,12 +960,12 @@ static void row_delay(void)
     model_play(10000);
     check(model_pos == 1764, "10 ms are 441 frames");
     check(hda_delay_frames() == 300 + 58 + (12288 - 1764) / 4 / 4, "the DMA's frames ahead count");
-    hda_tick();
+    tick();
     check(hw_fill_count == 0, "no period has ended");
     model_play(15000);
     check(model_pos == 4408, "25 ms are 1102 frames, into the second period");
     check(hda_delay_frames() == 300 + 58 + (12288 - 4408) / 4 / 4, "before the refill");
-    hda_tick();
+    tick();
     check(hw_fill_count == 1 && ring_available() == 44, "the first period takes 256 frames");
     check(resample_held(&hda_rs) == 58, "the filter holds 58 past the next frame's time");
     check(hda_delay_frames() == 44 + 58 + (4096 + 12288 - 4408) / 4 / 4,
@@ -984,7 +992,7 @@ static void row_fill(void)
     write_blocks(&next);
     check(next == 8, "the ring takes three periods, seven blocks");
     model_play(50000);
-    hda_tick();
+    tick();
     check(hw_fill_count == 2 && hw_period_last == 2, "a late service fills both periods played");
     check(ring_available() == 1120 * 4, "the two periods take 2240 frames");
     run_ticks(30, &next);
@@ -1040,7 +1048,7 @@ static void row_missed(void)
     model_play(1000000);
     check(model_pos == 480 * 4, "the DMA stopped 480 frames into the first period");
     from = played_count;
-    hda_tick();
+    tick();
     check(missed_revolutions == 14 && lpib_wraps >= 14, "14 revolutions missed");
     check(ring_available() == 0 && session_bytes_dropped > 0, "the ring's stale blocks dropped");
     check(hw_period_last == 0, "the service is in step with the period playing");
@@ -1238,7 +1246,7 @@ static void row_shutdown(void)
     writes = mmio_writes;
     hda_irq_handler(NULL);
     check(mmio_reads == reads && mmio_writes == writes, "late interrupt does no MMIO");
-    hda_tick();
+    tick();
     check(mmio_reads == reads && mmio_writes == writes, "tick after shutdown does no MMIO");
     hda_shutdown();
     check(mmio_reads == reads && mmio_writes == writes, "repeated shutdown does no MMIO");
@@ -1479,7 +1487,7 @@ static void row_capture_start(void)
           "the left at 0 dB, the right muted");
     move_input(4096 * 2 + 64);
     clock_value += 24000 * 43;
-    hda_tick();
+    tick();
     hda_driver.stream_stop(&s);
     clock_stopped = 1;
     k_memset(cap_buffer, 0x7F, sizeof(cap_buffer));
@@ -1487,13 +1495,13 @@ static void row_capture_start(void)
     check(hda_driver.stream_start(&s) == 0 && hda_test_read(0x80 + HDA_SD_LPIB, 32) == 0,
           "a second start resets the position the first left");
     got_transfers = 0;
-    hda_tick();
+    tick();
     check(got_transfers == 0, "nothing is handed over before the first period is recorded");
     cap_buffer[0] = 0x21;
     cap_buffer[1] = 0x43;
     move_input(4096 + 64);
     clock_value += 24000 * 22;
-    hda_tick();
+    tick();
     check(got_transfers == 1 && got_first[0] == 0x21 && got_first[1] == 0x43,
           "the first period handed over is the first recorded");
     hda_driver.stream_close(&s);
@@ -1586,11 +1594,11 @@ static void row_capture_stream(void)
         cap_buffer[i + 1] = 0x40;
         cap_buffer[i + 3] = 0x20;
     }
-    hda_tick();
+    tick();
     check(got_transfers == 0, "nothing is handed over before a period ends");
     move_input(3968 * 3 + 400);
     clock_value += 3 * 24000 * 62;
-    hda_tick();
+    tick();
     check(got_transfers == 3 && got_periods == 3 && got_bytes == 3 * 992,
           "three periods are handed over");
     check(got_first[0] == 0xB0, "u8 mono is the mean of the channels, 0x3000, offset");
@@ -1607,7 +1615,7 @@ static void row_capture_stream(void)
     check(!in->running && !(hda_test_read(0x80 + HDA_SD_CTL, 8) & HDA_SD_CTL_RUN),
           "a stop halts the stream");
     move_input(3968 * 9);
-    hda_tick();
+    tick();
     check(got_transfers == 5, "nothing is handed over after a stop");
     check(hda_driver.stream_position(&s) == 5 * 992, "the position stays where it stopped");
     hda_driver.stream_close(&s);
@@ -1647,7 +1655,7 @@ static void row_capture_duplex(void)
           "a stop of playback leaves capture running");
     move_input(4096 * 4);
     clock_value += 2 * 24000 * 21;
-    hda_tick();
+    tick();
     check(got_transfers == 4, "capture goes on alone");
     check(hda_start(48000, AUDIO_S16LE, 2) == 0, "playback starts again");
     hda_driver.stream_stop(&s);
@@ -1681,11 +1689,11 @@ static void row_capture_overrun(void)
     check(hda_driver.stream_start(&s) == 0, "capture starts");
     move_input(4096 * 2 + 100);
     clock_value += 24000 * 44;
-    hda_tick();
+    tick();
     check(got_transfers == 2 && in->overruns == 0 && s.lost == 0, "a service on time");
     move_input(4096 * 3);
     clock_value += 24000 * (21 + 341);
-    hda_tick();
+    tick();
     check(in->overruns == 1, "a revolution the position cannot show is an overrun");
     check(got_transfers == 2 + 15 && got_periods == 2 + 15,
           "every period but the one being written is handed over");
@@ -1694,13 +1702,13 @@ static void row_capture_overrun(void)
     check(s.lost == 2 * 1024, "the two periods neither handed over nor written are lost");
     move_input(4096 * 3 + 2000);
     clock_value += 24000 * 10;
-    hda_tick();
+    tick();
     check(got_transfers == 17 && in->overruns == 1 && s.lost == 2 * 1024,
           "a service within a period hands over none and loses none");
     /* 64036 bytes on, 16009 frames: 334 ms, less than a revolution. */
     move_input(4096 * 3 + 500);
     clock_value += 24000 * 334;
-    hda_tick();
+    tick();
     check(in->overruns == 2, "the device come round to the next period is an overrun");
     check(got_transfers == 17 + 15, "and the newest revolution is handed over");
     check(s.lost == 3 * 1024, "the period it overwrote is lost");
@@ -1714,7 +1722,7 @@ static void poll_jacks(unsigned n)
     unsigned i;
 
     for (i = 0; i < n * HDA_JACK_TICKS; i++)
-        hda_tick();
+        tick();
 }
 
 /** Enumerate the G50-70's codec and start playback on it at 48 kHz; the wall
@@ -1760,9 +1768,9 @@ static void row_jack_switch(void)
     sense[22] = 0x80000000;
     n = verbs;
     for (i = 0; i + 1 < HDA_JACK_TICKS; i++)
-        hda_tick();
+        tick();
     check(verbs == n, "no poll before a quarter second");
-    hda_tick();
+    tick();
     check(verbs == n + 2 && hp->polls == 2 && hp->state == HDA_JACK_OUT && pin_ctl[22] == 0,
           "a plug seen once moves nothing");
     poll_jacks(1);
@@ -2166,7 +2174,7 @@ static void row_beep(void)
     check(power[1] == 0x100, "the function group is powered");
     check(hda_driver.beep_level(-1) == 100, "the beep level starts at the 0 dB step, 100");
     speaker_set_beep(hda_driver.beep_level(-1) >= 0 ? hda_driver.beep : NULL);
-    kernel_ticks = 1000;
+    kernel_ticks += 1000;
     port61 = 0;
     speaker_tone(SPEAKER_CLOCK / 750, 100);
     speaker_get_counters(&c);

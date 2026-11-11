@@ -204,7 +204,8 @@ void block_count_flush(void);
 
 /**
  * The drivers' waits since boot: a poll is one read of a status register
- * while a command is in flight, a wait tick one tick a caller slept for one.
+ * while a command is in flight, a wait tick one tick a caller slept for one;
+ * `block_count_wait_ticks` counts `n` of them.
  * A driver that spins reads the status thousands of times a command; one
  * that sleeps reads it a few times and is woken. `/proc/disk` prints both, so
  * a test can require the sleep and not the seconds.
@@ -212,7 +213,7 @@ void block_count_flush(void);
 uint64_t block_polls(void);
 uint64_t block_wait_ticks(void);
 void block_count_poll(void);
-void block_count_wait_tick(void);
+void block_count_wait_ticks(uint32_t n);
 
 /**
  * The queued commands a polled command found active on its port and finished

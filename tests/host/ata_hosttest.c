@@ -133,10 +133,10 @@ int sched_is_enabled(void)
 static uint32_t polls;
 static uint32_t wait_ticks;
 
-/** Count a tick of a sleeper's wait in `wait_ticks`. */
-void block_count_wait_tick(void)
+/** Count `n` ticks of a sleeper's wait in `wait_ticks`. */
+void block_count_wait_ticks(uint32_t n)
 {
-    wait_ticks++;
+    wait_ticks += n;
 }
 
 /** Count a command; no row reads the count. */
@@ -772,11 +772,23 @@ static void polled_read_while_owner_sleeps(void)
     in_syscall = was_in_syscall;
 }
 
-/** The tick, twice, while the owner sleeps. */
-static void two_ticks_while_asleep(void)
+/* The boot processor's tick count, which `ata_tick` reads. */
+volatile uint64_t kernel_ticks;
+
+/** Count `n` ticks and run the driver's tick once, as the boot processor's
+ *  tick does after `n - 1` ticks that found the big lock held. */
+static void tick(uint32_t n)
 {
+    kernel_ticks += n;
     ata_tick();
-    ata_tick();
+}
+
+/** Four ticks while the owner sleeps: one, then three that one call
+ *  counts, as after two boot ticks that found the big lock held. */
+static void ticks_while_asleep(void)
+{
+    tick(1);
+    tick(3);
 }
 
 /** Ten seconds of ticks while the owner sleeps, which a loaded host can
@@ -786,7 +798,7 @@ static void ten_seconds_while_asleep(void)
     int i;
 
     for (i = 0; i < (int)MS_TO_TICKS(10000); i++) {
-        ata_tick();
+        tick(1);
     }
 }
 
@@ -796,7 +808,7 @@ static void thirty_seconds_while_asleep(void)
     int i;
 
     for (i = 0; i <= (int)MS_TO_TICKS(30000); i++) {
-        ata_tick();
+        tick(1);
     }
 }
 
@@ -1039,8 +1051,8 @@ static void identify_rows(void)
  *    and the polled read inside its sleep selected the master.
  * 8. With the scheduler stopped, as at a shutdown, a caller in a system call
  *    polls rather than sleep on a channel it might wait on for ever.
- * 9. The tick counts a sleeper's wait: two ticks while the owner sleeps are
- *    two in `disk-wait-ticks`.
+ * 9. The tick counts a sleeper's wait: four ticks while the owner sleeps,
+ *    three of them counted by one call, are four in `disk-wait-ticks`.
  *
  * Then the rows of IDENTIFY, of the sleeping wait's bound, of the write
  * rate and of durability.
@@ -1159,10 +1171,10 @@ int main(void)
 
     model_reset(2);
     dma_on_reads = 0;
-    on_sleep = two_ticks_while_asleep;
+    on_sleep = ticks_while_asleep;
     rc = ata_read(&d->dev, 100, 8, owner_buf);
-    CHECK(rc == 0, "the owner's DMA read returns 0 with two ticks inside its sleep");
-    CHECK(wait_ticks == 2, "the two ticks the owner slept through are counted");
+    CHECK(rc == 0, "the owner's DMA read returns 0 with ticks inside its sleep");
+    CHECK(wait_ticks == 4, "the four ticks the owner slept through are counted, three by one call");
 
     identify_rows();
 

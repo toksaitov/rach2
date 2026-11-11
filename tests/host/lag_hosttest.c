@@ -114,6 +114,9 @@ void block_request_complete(struct block_request *request, uint32_t generation, 
 
 #include "block/lag.c"
 
+/* The tick count `block_lag_tick` advances its clock by. */
+volatile uint64_t kernel_ticks;
+
 static int fails;
 
 #define CHECK(cond, what)                             \
@@ -209,6 +212,7 @@ static void ticks(int n)
 {
     n *= (int)LAG_UNIT;
     while (n-- > 0) {
+        kernel_ticks++;
         block_lag_tick();
     }
 }
