@@ -25,6 +25,7 @@
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/uaccess.h>
+#include <linux/version.h>
 #include <linux/workqueue.h>
 
 #include "vgpushm_uapi.h"
@@ -321,7 +322,7 @@ static int vgpushm_pin_dmabuf(struct vgpushm *dev, struct vgpushm_pinrec *rec, u
             return -EINVAL;
         for (k = 0; k < sg->length >> PAGE_SHIFT; k++, at += PAGE_SIZE) {
             if (at >= offset && at < end)
-                rec->phys[n++] = page_to_phys(nth_page(page, k)) + sg->offset;
+                rec->phys[n++] = page_to_phys(page) + ((u64)k << PAGE_SHIFT) + sg->offset;
         }
     }
     if (n != rec->npages)
@@ -830,4 +831,8 @@ module_pci_driver(vgpushm_driver);
 
 MODULE_DESCRIPTION("Rach2 test bed: ivshmem region and doorbells for the GPU backend");
 MODULE_LICENSE("GPL");
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0)
+MODULE_IMPORT_NS("DMA_BUF");
+#else
 MODULE_IMPORT_NS(DMA_BUF);
+#endif

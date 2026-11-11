@@ -4,7 +4,7 @@ CC ?= cc
 CFLAGS ?= -O2 -g -Wall -Wextra
 # vgpushm.h and device.c read and write the shared region through pointers
 # cast to wider types.
-CFLAGS += -std=c99 -fno-strict-aliasing
+CFLAGS += -std=c99 -fno-strict-aliasing -pthread
 CPPFLAGS += -I../../../rach2/sys/virtio -I../module $(shell pkg-config --cflags virglrenderer libdrm)
 LDLIBS += $(shell pkg-config --libs virglrenderer libdrm vulkan)
 OBJS = main.o device.o virgl.o kms.o vkprobe.o
