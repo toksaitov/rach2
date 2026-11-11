@@ -5,10 +5,12 @@
 # the kernel's time into work per call and waits on the big lock
 # (dev-log/80-games/80-41.md). Run as root on the trial root, beside
 # lenovo.sh; OUT/GAME gets lenovo.sh's output and calls, profile,
-# stat-before and stat-after. lenovo.sh is on task/2664 (80-7b) until that
-# task merges: copy it beside this script by running, in this script's
-# directory, `git show origin/task/2664:tests/system/games/lenovo.sh >
-# lenovo.sh`. The clock's minimum goes back from an exit trap, an
+# stat-before and stat-after. audio-* snapshots separate the game from the
+# report reads when a refill comes late. lenovo.sh is on task/2664
+# (80-7b) until that task merges: copy it beside this script by running,
+# in this script's directory:
+#   git show origin/task/2664:tests/system/games/lenovo.sh > lenovo.sh
+# The clock's minimum goes back from an exit trap, an
 # interrupted run's too.
 set -u
 
@@ -21,6 +23,22 @@ here=$(dirname "$0")
 [ -w "$d/calls" ] || { echo "bkl: no $d/calls" >&2; exit 1; }
 [ -f "$here/lenovo.sh" ] || { echo "bkl: no $here/lenovo.sh; it is on task/2664" >&2; exit 1; }
 min=$(cat "$gpu/gt_min_freq_mhz")
+khda=''
+for p in /proc/[0-9]*/comm; do
+    if [ "$(cat "$p" 2>/dev/null)" = khda ]; then
+        khda=${p%/comm}
+        break
+    fi
+done
+# Keep the audio counters on either side of each operation under study.
+audio_snapshot() {
+    [ -r /proc/audio ] || return 0
+    {
+        cat /proc/uptime /proc/audio
+        if [ -n "$khda" ]; then cat "$khda/schedstat"; fi
+        grep hda /proc/interrupts
+    } > "$o/audio-$1"
+}
 # shellcheck disable=SC2329 # the exit trap calls it
 restore() {
     echo "$min" > "$gpu/gt_min_freq_mhz"
@@ -34,12 +52,19 @@ status=0
 for g; do
     o=$out/$g
     mkdir -p "$o"
+    audio_snapshot before
     cat /proc/stat > "$o/stat-before"
     echo 0 > "$d/calls"
     echo 0 > "$d/profile"
+    if [ -w "$d/long" ]; then echo 0 > "$d/long"; fi
     sh "$here/lenovo.sh" -n 1 "$o" "$g" || status=1
+    audio_snapshot after-game
+    if [ -r "$d/long" ]; then cat "$d/long" > "$o/long-after-game"; fi
     cat "$d/calls" > "$o/calls"
+    audio_snapshot after-calls
     cat "$d/profile" > "$o/profile"
+    audio_snapshot after-profile
+    if [ -r "$d/long" ]; then cat "$d/long" > "$o/long-after-profile"; fi
     cat /proc/stat > "$o/stat-after"
     echo "bkl: $g: $(grep -c . "$o/calls") lines of calls, $(head -n 1 "$o/profile")"
 done
