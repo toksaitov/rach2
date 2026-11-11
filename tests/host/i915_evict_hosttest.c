@@ -783,11 +783,15 @@ void i915_rps_boost(struct i915_request *rq)
 
 /** A wait for a request, which here is its fence alone: the fence's default
  * wait until the timeout, for ever when it is negative. */
-int32_t i915_request_wait(struct i915_request *rq, int intr, int64_t timeout_ns)
+int32_t i915_request_wait(struct i915_request *rq, uint32_t flags, int64_t timeout_ns)
 {
-    return dma_fence_default_wait(&rq->fence.base, intr,
+    return dma_fence_default_wait(&rq->fence.base, (flags & I915_WAIT_INTERRUPTIBLE) != 0,
                                   timeout_ns < 0 ? -1 : dma_fence_now() + timeout_ns);
 }
+
+/* The driver's fences, i915_request.c's; no fence here is a request whose
+ * breadcrumb a chip writes, so each signals only when a row signals it. */
+const struct dma_fence_ops i915_fence_ops = {0, 0, 0, 0, 0, 0};
 
 int main(void)
 {

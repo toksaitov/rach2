@@ -44,7 +44,10 @@
  * park and not between a client's requests, with 80-50's signal of an
  * older request while a newer one is built and its listener that left
  * before the signal, a signal just after the retire worker takes its
- * notice, and 80-55's merge and timeline point that ask for no signal;
+ * notice, 80-55's merge and timeline point that ask for no signal, and
+ * 80-61's callback asked for once the breadcrumb is written, which does
+ * not count, and retirement before the interrupt, which parks the GT for
+ * a request listened for while it ran;
  * GETPARAM and I915_QUERY row
  * by row; GET_RESET_STATS; 78-5c's THROTTLE, which IGT calls at each open;
  * and 78-11a.2's REG_READ of the render ring's timestamp, which the model
@@ -424,6 +427,12 @@ void i915_rps_retire(struct i915_request *rq)
     (void)rq;
 }
 
+/** The waitboost, RPS's, which no row here measures. */
+void i915_rps_boost(struct i915_request *rq)
+{
+    (void)rq;
+}
+
 /* No request here holds a buffer object: execbuffer, which hands them
  * over, is the exec test's. */
 void i915_gem_object_put(struct drm_i915_gem_object *obj)
@@ -468,9 +477,6 @@ void i915_vma_revoke_mmap(struct i915_vma *vma)
 {
     (void)vma;
 }
-
-/* The driver's fences, i915_gem.c's. */
-const struct dma_fence_ops i915_fence_ops = {0, 0, 0, 0, 0, 0};
 
 /* The id table: the Lenovo's chip alone. */
 static const struct i915_platform hsw = {"HASWELL", 7, 50, 7, 2, 0xf, 1, 1, 1, 0, 1, 31, 40};
@@ -1980,6 +1986,110 @@ static void row_park_listener_left(void)
     done(&m);
 }
 
+/**
+ * 80-61: a request whose breadcrumb is written before its interrupt is
+ * taken. A callback asked for then finds it signalled, as Linux's
+ * i915_fence_signaled and i915_fence_enable_signaling answer
+ * (i915_request.c:88-96), and does not count it listened for, so its
+ * retirement leaves the GT awake to the worker's pass. One asked for while
+ * it ran lets the engine go at the first retirement, before the
+ * interrupt, though a query signalled its fence first, as Linux's
+ * signal_irq_work goes by I915_FENCE_FLAG_SIGNAL.
+ */
+static void row_park_before_interrupt(void)
+{
+    struct i915_model m;
+    struct drm_i915_private *i915 = fresh(&m);
+    struct i915_engine *rcs = &i915->gt.engine[I915_RCS0];
+    struct intel_context *r = engine_of(&file_a, 0, I915_RCS0);
+    struct i915_request *rq;
+    struct dma_fence_cb cb;
+    int p;
+
+    rq = submit(r, 0, 0);
+    p = parks;
+    irq_on = 0;
+    run_ms(1);
+    CHECK("early: the breadcrumb written, the interrupt not taken",
+          rq && i915_engine_passed(rcs, rq->seqno) && !rq->fence.base.signaled);
+    CHECK("early: a callback asked for then finds it signalled, not listened for",
+          rq && dma_fence_add_callback(&rq->fence.base, &cb, park_listener) == -ENOENT &&
+              rq->fence.base.signaled && !rq->signaling);
+    i915_retire_requests(i915);
+    CHECK("early: its retirement leaves the engine held and the GT awake",
+          !rcs->requests && rcs->unretired && i915->gt.awake && parks == p);
+    i915_request_put(rq);
+    irq_on = 1;
+
+    rq = submit(r, 0, 0);
+    CHECK("early: a callback on the engine's last request while it runs",
+          rq && dma_fence_add_callback(&rq->fence.base, &cb, park_listener) == 0 && rq->signaling);
+    irq_on = 0;
+    run_ms(1);
+    CHECK("early: a query once its breadcrumb is written signals it, the engine still held",
+          rq && dma_fence_is_signaled(&rq->fence.base) && rcs->unretired && i915->gt.awake);
+    i915_retire_requests(i915);
+    CHECK("early: the retirement before the interrupt lets the engine go and parks the GT",
+          !rcs->requests && !rcs->unretired && !i915->gt.awake && parks == p + 1);
+    irq_on = 1;
+    i915_request_put(rq);
+    intel_context_put(r);
+    done(&m);
+}
+
+/* The ring that the next release of a lock lets run, for
+ * row_park_between_passes. */
+static struct i915_model_ring *run_at_unlock;
+
+/** At the next release of a lock, let `run_at_unlock` run. */
+static int ring_runs_now(void)
+{
+    if (!run_at_unlock) {
+        return 0;
+    }
+    run_at_unlock->stuck = 0;
+    run_at_unlock = 0;
+    return 1;
+}
+
+/**
+ * 80-61: the engine's last request, listened for, whose breadcrumb the
+ * chip writes after the retirement's signalling pass and before its
+ * removal, with no interrupt taken: the removal signals it under the same
+ * rule, letting the engine go and parking the GT, as Linux's retirement
+ * drops the request's hold on its context in every path (i915_request.c:
+ * 409).
+ */
+static void row_park_between_passes(void)
+{
+    struct i915_model m;
+    struct drm_i915_private *i915 = fresh(&m);
+    struct i915_engine *rcs = &i915->gt.engine[I915_RCS0];
+    struct i915_model_ring *rr = i915_model_ring_state(&m, 0);
+    struct intel_context *r = engine_of(&file_a, 0, I915_RCS0);
+    struct i915_request *rq;
+    struct dma_fence_cb cb;
+    int p;
+
+    rr->stuck = 1;
+    rq = submit(r, 0, 0);
+    CHECK("between: a callback on the engine's last request, which the ring holds",
+          rq && dma_fence_add_callback(&rq->fence.base, &cb, park_listener) == 0 && rq->signaling);
+    p = parks;
+    irq_on = 0;
+    run_at_unlock = rr;
+    unlock_when = ring_runs_now;
+    i915_retire_requests(i915);
+    CHECK("between: the breadcrumb written after the signalling pass, the interrupt not taken",
+          unlock_fired == 1 && rq && rq->fence.base.signaled && !rq->signaling);
+    CHECK("between: the removal lets the engine go and parks the GT",
+          !rcs->requests && !rcs->unretired && !i915->gt.awake && parks == p + 1);
+    irq_on = 1;
+    i915_request_put(rq);
+    intel_context_put(r);
+    done(&m);
+}
+
 /* ---- 78-5a.4: GETPARAM and I915_QUERY ---- */
 
 /* GETPARAM's answers on the Lenovo, as Linux 6.18.58 gave them, which are
@@ -2393,6 +2503,8 @@ int main(void)
     row_park_signal_adding();
     row_park_kick_after_notice();
     row_park_listener_left();
+    row_park_before_interrupt();
+    row_park_between_passes();
     row_ring_room();
     row_getparam();
     row_query();

@@ -733,6 +733,10 @@ struct i915_fence {
     uint16_t uabi_class;
 };
 
+/* The ops of a request's fence, i915_request.c's, Linux's i915_fence_ops:
+ * `signaled` reads the breadcrumb, `enable_signaling` signals a request
+ * already past it at once, and `wait` is `i915_request_wait`'s, which
+ * boosts. */
 extern const struct dma_fence_ops i915_fence_ops;
 
 /* The device's shrinker: reclaim's record first, so that reclaim's
@@ -3572,6 +3576,13 @@ struct i915_file {
  * `hold`, when set, is what its batch needs until it retires: the objects
  * of its call and the parser's shadow, which `hold->release` lets go once
  * the chip is past it, as Linux's request keeps its vmas active.
+ *
+ * Signalling. `signaling` is Linux's I915_FENCE_FLAG_SIGNAL: its signal
+ * was asked for before its breadcrumb was written, so the first signal or
+ * retirement that finds it complete hands its engine to retirement when it
+ * is the engine's last, and clears it. A request already complete when its
+ * signal is asked for signals at once instead, without it. It is set with
+ * interrupts off, and cleared under its engine's `lock`.
  */
 struct i915_await;
 
@@ -3599,7 +3610,8 @@ struct i915_request {
     uint8_t was_valid;
     uint8_t added;
     uint8_t submitted;
-    uint8_t boosted;  /* Linux's I915_FENCE_FLAG_BOOST, under the frequency lock */
+    uint8_t boosted; /* Linux's I915_FENCE_FLAG_BOOST, under the frequency lock */
+    uint8_t signaling;
     uint16_t waiters; /* i915_request_wait's callers waiting for it */
     uint32_t awaits;
     struct i915_await *await_list;
@@ -3760,18 +3772,24 @@ int i915_request_completed(const struct i915_request *rq);
  * has passed the request before it, as Linux's i915_request_started. */
 int i915_request_started(const struct i915_request *rq);
 
+/* What `i915_request_wait` is asked, Linux's: that a signal ends the wait,
+ * and that a request the chip has not begun is boosted first. */
+#define I915_WAIT_INTERRUPTIBLE 1u
+#define I915_WAIT_PRIORITY      2u
+
 /**
  * Wait for the request for `timeout_ns`, for ever when it is negative, as
- * Linux's i915_request_wait; the breadcrumb is read again at each second
- * and at the timeout, in case an interrupt was lost. A request the chip
- * has begun is polled for 8 us first, and one done by then is not
- * listened for; otherwise the wait marks its fence `listened`, which
- * retires the engine at its signal when it is the engine's last.
+ * Linux's i915_request_wait_timeout; the breadcrumb is read again at each
+ * second and at the timeout, in case an interrupt was lost. A request the
+ * chip has begun is polled for 8 us first, and one done by then is not
+ * listened for; otherwise, with I915_WAIT_PRIORITY in `flags`, a request
+ * the chip has not begun is boosted, and the wait asks for its signal,
+ * which retires the engine at the signal when it is the engine's last.
  *
  * @return 0 once it completed, -ETIME at the timeout (at once for 0), or
- *         -EINTR for a signal when `intr` is set.
+ *         -EINTR for a signal with I915_WAIT_INTERRUPTIBLE.
  */
-int32_t i915_request_wait(struct i915_request *rq, int intr, int64_t timeout_ns);
+int32_t i915_request_wait(struct i915_request *rq, uint32_t flags, int64_t timeout_ns);
 
 /** Drop a reference to a request. */
 void i915_request_put(struct i915_request *rq);

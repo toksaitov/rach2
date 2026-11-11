@@ -1,10 +1,11 @@
 /*
  * i915_request.c: the Intel graphics driver's requests on the GPU's
  * rings: their commands, the context switch, the breadcrumb that
- * closes each, their fences signalled from the user interrupt, waits and
- * retirement, and the default context image, after Linux 6.12's
- * i915_request.c, gt/intel_ring_submission.c, gt/gen6_engine_cs.c,
- * gt/intel_gt_requests.c and gt/intel_gt.c on Haswell.
+ * closes each, their fences, which the user interrupt signals, and the
+ * fences' ops, waits and retirement, and the default context image,
+ * after Linux 6.12's i915_request.c, gt/intel_ring_submission.c,
+ * gt/gen6_engine_cs.c, gt/intel_gt_requests.c and gt/intel_gt.c on
+ * Haswell.
  */
 
 #include "i915.h"
@@ -512,9 +513,10 @@ static int32_t await_submit(struct i915_request *rq, struct i915_request *src)
 
 int32_t i915_request_await_fence(struct i915_request *rq, struct dma_fence *fence, int exec)
 {
+    struct dma_fence_unwrap u;
     struct i915_await *w;
     struct dma_fence *leaf;
-    uint32_t i, n, flags;
+    uint32_t flags;
     int32_t err;
 
     if (dma_fence_is_signaled(fence)) {
@@ -526,22 +528,24 @@ int32_t i915_request_await_fence(struct i915_request *rq, struct dma_fence *fenc
         return -ENOMEM;
     }
     submit_device_add(rq->i915);
-    n = dma_fence_count(fence);
-    for (i = 0; i < n; i++) {
-        leaf = dma_fence_at(fence, i);
-        if (!leaf || dma_fence_is_signaled(leaf) || leaf->context == rq->engine->fence_context) {
+    /* One walk, as Linux's dma_fence_unwrap_for_each: a lookup by index
+     * would pass over a leaf when an earlier one signalled between two. */
+    for (leaf = dma_fence_unwrap_first(fence, &u); leaf; leaf = dma_fence_unwrap_next(&u)) {
+        if (dma_fence_is_signaled(leaf) || leaf->context == rq->engine->fence_context) {
             continue;
         }
         if (exec && leaf->ops == &i915_fence_ops &&
             ((struct i915_request *)leaf)->i915 == rq->i915) {
             err = await_submit(rq, (struct i915_request *)leaf);
             if (err < 0) {
+                dma_fence_unwrap_end(&u);
                 return err;
             }
             continue;
         }
         w = await_new(rq);
         if (!w) {
+            dma_fence_unwrap_end(&u);
             return -ENOMEM;
         }
         w->fence = dma_fence_get(leaf);
@@ -615,24 +619,125 @@ static void exec_waiters_release(struct i915_request *rq)
  * Signalling and retirement
  */
 
-/** Whether anyone has asked for `rq`'s signal: a callback, a sleeper or
- * poller on its fence, or i915_request_wait, whether or not it still
- * waits, as Linux's signalers are the requests whose signalling a callback
- * or a wait enabled, and stay so when it leaves. */
-static int request_listened(const struct i915_request *rq)
+/** The driver's name, for a sync file's information. */
+static const char *i915_fence_driver(struct dma_fence *fence)
 {
-    return rq->fence.base.listened;
+    (void)fence;
+    return "i915";
+}
+
+/** The timeline's name: the engine's class, as programs number it. */
+static const char *i915_fence_timeline(struct dma_fence *fence)
+{
+    static const char *const names[] = {"rcs", "bcs", "vcs", "vecs"};
+    uint16_t c = ((struct i915_fence *)fence)->uabi_class;
+
+    return c < 4 ? names[c] : "unknown";
+}
+
+/** Whether the request's breadcrumb is written, as Linux's
+ * i915_fence_signaled (i915_request.c:88-91): a query that finds it so
+ * signals the fence, outside the rule of `i915_request_signal`, whose
+ * next pass still hands the engine to retirement for a request whose
+ * signal was asked for before. Any context. */
+static int i915_fence_signaled(struct dma_fence *fence)
+{
+    return i915_request_completed((struct i915_request *)fence);
+}
+
+/**
+ * Ask for the request's signal, as Linux's i915_fence_enable_signaling
+ * and insert_breadcrumb (i915_request.c:93-96, gt/intel_breadcrumbs.c:
+ * 362-364): 0, which signals the fence at once, for a request whose
+ * breadcrumb is written, which then does not count as listened for and
+ * leaves the engine held, as Linux's irq_signal_request leaves
+ * I915_FENCE_FLAG_SIGNAL clear; otherwise 1, the request marked
+ * `signaling` for the interrupt. With interrupts off and no lock, since a
+ * fence's callback may ask for another request's signal with the
+ * engine's lock held; every kernel path runs under the big lock.
+ */
+static int i915_fence_enable_signaling(struct dma_fence *fence)
+{
+    struct i915_request *rq = (struct i915_request *)fence;
+    uint32_t flags = kirq_save();
+    int armed = !i915_request_completed(rq);
+
+    if (armed) {
+        rq->signaling = 1;
+    }
+    kirq_restore(flags);
+    return armed;
+}
+
+/**
+ * Wait for a request's fence until the CLOCK_MONOTONIC `deadline_ns`, or
+ * for ever when it is negative, through `i915_request_wait` with
+ * I915_WAIT_PRIORITY, as Linux's i915_fence_wait (i915_request.c:98-105),
+ * so that every wait on the driver's fence spins first and boosts a
+ * request the chip has not begun. 0, -ETIME or -EINTR; sleeps.
+ */
+static int32_t i915_fence_wait(struct dma_fence *fence, int intr, int64_t deadline_ns)
+{
+    int64_t timeout = -1, now;
+
+    if (deadline_ns >= 0) {
+        now = dma_fence_now();
+        timeout = deadline_ns > now ? deadline_ns - now : 0;
+    }
+    return i915_request_wait((struct i915_request *)fence,
+                             (intr ? I915_WAIT_INTERRUPTIBLE : 0u) | I915_WAIT_PRIORITY, timeout);
+}
+
+/* Linux's i915_fence_ops (i915_request.c:173-180); the fence is the
+ * request's first member, and its last reference frees the request. */
+const struct dma_fence_ops i915_fence_ops = {i915_fence_driver,           i915_fence_timeline,
+                                             i915_fence_enable_signaling, 0,
+                                             i915_fence_signaled,         i915_fence_wait};
+
+/**
+ * Signal `rq`, which is on `e`'s list, complete, and not yet past the
+ * signal's rule, with `e`'s lock held: when its signal was asked for
+ * before it completed (`signaling`) and it is the engine's last, with
+ * none being built (`building`), Linux would retire every request of the
+ * engine now, so `unretired` is cleared. Returns 1 then, for the worker
+ * to be told. As Linux's signal_irq_work, which for a request with
+ * I915_FENCE_FLAG_SIGNAL hands the timeline whose last request it is to
+ * the engine's retire_work, whether or not a query signalled its fence
+ * first (gt/intel_breadcrumbs.c:217-238; intel_timeline_is_last, which a
+ * request being built, already on the timeline, makes false).
+ */
+static int request_signal_locked(struct i915_engine *e, struct i915_request *rq)
+{
+    int kick = 0;
+
+    if (rq->signaling) {
+        rq->signaling = 0;
+        if (rq == e->requests_tail && !e->building) {
+            e->unretired = 0;
+            kick = 1;
+        }
+    }
+    if (!rq->fence.base.signaled) {
+        (void)dma_fence_signal(&rq->fence.base);
+    }
+    return kick;
+}
+
+/** Tell the retire worker that an engine's last request signalled to a
+ * listener, so that it retires at once. */
+static void retire_kick(void)
+{
+    uint32_t flags = spin_lock_irqsave(&submit_lock);
+
+    retire_kicked = 1;
+    spin_unlock_irqrestore(&submit_lock, flags);
+    wq_wake_all(&submit_wait);
 }
 
 /**
  * Signal the fence of each request of `e` whose breadcrumb is written,
- * oldest first, the ring running them in order. When one that is listened
- * for is the engine's last, with none being built (`building`), Linux
- * would retire every request of the engine now, and the worker is told
- * to, as Linux's signal_irq_work hands the timeline whose last request it
- * signals to the engine's retire_work (gt/intel_breadcrumbs.c:233-234,
- * intel_timeline_is_last, which a request being built, already on the
- * timeline, makes false). The engine's `irq_notify`, from the user
+ * oldest first, the ring running them in order, under the rule of
+ * `request_signal_locked`. The engine's `irq_notify`, from the user
  * interrupt, and from any context besides.
  */
 static void i915_request_signal(struct drm_i915_private *i915, struct i915_engine *e)
@@ -644,20 +749,11 @@ static void i915_request_signal(struct drm_i915_private *i915, struct i915_engin
     (void)i915;
     flags = spin_lock_irqsave(&e->lock);
     for (rq = e->requests; rq && i915_engine_passed(e, rq->seqno); rq = rq->next) {
-        if (!rq->fence.base.signaled) {
-            if (rq == e->requests_tail && !e->building && request_listened(rq)) {
-                e->unretired = 0;
-                kick = 1;
-            }
-            (void)dma_fence_signal(&rq->fence.base);
-        }
+        kick |= request_signal_locked(e, rq);
     }
     spin_unlock_irqrestore(&e->lock, flags);
     if (kick) {
-        flags = spin_lock_irqsave(&submit_lock);
-        retire_kicked = 1;
-        spin_unlock_irqrestore(&submit_lock, flags);
-        wq_wake_all(&submit_wait);
+        retire_kick();
     }
 }
 
@@ -700,15 +796,18 @@ static void gt_park(struct drm_i915_private *i915)
 }
 
 /**
- * Take from `e`'s list each request that `done` says is finished, oldest
- * first, its fence signalled, its waitboost let go, and release it; the
- * user interrupt is let go once the list is empty.  Each finished request
- * moves the ring's head to its end, as Linux's i915_request_retire, so
- * that the room it took is free again; a cancel (`all`) leaves the head to
- * the ring's restart. A request passed before its interrupt is signalled
- * first by `i915_request_signal`, whose rule for a listened last request
- * then lets the engine go, as Linux's retirement in any path drops the
- * request's hold on its engine.
+ * Take from `e`'s list each request whose breadcrumb is written, or every
+ * one for a cancel (`all`), oldest first, its fence signalled, its
+ * waitboost let go, and release it; the user interrupt is let go once the
+ * list is empty. Each finished request moves the ring's head to its end,
+ * as Linux's i915_request_retire, so that the room it took is free again;
+ * a cancel leaves the head to the ring's restart. Every request taken off
+ * is signalled under `request_signal_locked`'s rule, a breadcrumb the chip
+ * wrote after `i915_request_signal`'s pass included, so that a listened
+ * last request lets the engine go however it is retired, as Linux's
+ * i915_request_retire drops the request's hold on its context, and with
+ * it the engine's on the GT, in every path (i915_request.c:409,
+ * gt/intel_context.h:225-233).
  */
 static void engine_retire(struct drm_i915_private *i915, struct i915_engine *e, int all)
 {
@@ -731,11 +830,15 @@ static void engine_retire(struct drm_i915_private *i915, struct i915_engine *e, 
         }
         *tail = rq;
         tail = &rq->next;
-        if (!rq->fence.base.signaled) {
-            if (all) {
+        if (all) {
+            rq->signaling = 0;
+            if (!rq->fence.base.signaled) {
                 dma_fence_set_error(&rq->fence.base, -EIO);
+                (void)dma_fence_signal(&rq->fence.base);
             }
-            (void)dma_fence_signal(&rq->fence.base);
+        } else {
+            /* The caller's pass parks the GT itself: no kick. */
+            (void)request_signal_locked(e, rq);
         }
     }
     if (!e->requests) {
@@ -1249,10 +1352,11 @@ static void request_poll(struct i915_request *rq, uint64_t us)
     }
 }
 
-int32_t i915_request_wait(struct i915_request *rq, int intr, int64_t timeout_ns)
+int32_t i915_request_wait(struct i915_request *rq, uint32_t flags, int64_t timeout_ns)
 {
     struct drm_i915_private *i915 = rq->i915;
     struct i915_engine *e = rq->engine;
+    int intr = (flags & I915_WAIT_INTERRUPTIBLE) != 0;
     int64_t deadline, slice, now;
     int32_t err = 0;
 
@@ -1268,6 +1372,10 @@ int32_t i915_request_wait(struct i915_request *rq, int intr, int64_t timeout_ns)
         request_poll(rq, I915_BUSYWAIT_US);
     }
     if (!i915_request_completed(rq)) {
+        /* Linux's waitboost before the sleep (i915_request.c:2046-2047). */
+        if ((flags & I915_WAIT_PRIORITY) && !i915_request_started(rq)) {
+            i915_rps_boost(rq);
+        }
         dma_fence_enable_sw_signaling(&rq->fence.base);
     }
     rq->waiters++;
@@ -1455,7 +1563,7 @@ static int32_t ring_wait_for_space(struct i915_engine *e)
             return 0;
         }
         (void)dma_fence_get(&rq->fence.base);
-        err = i915_request_wait(rq, 1, -1);
+        err = i915_request_wait(rq, I915_WAIT_INTERRUPTIBLE, -1);
         i915_request_put(rq);
         if (err != 0) {
             return err;
@@ -1499,7 +1607,9 @@ int32_t i915_gt_wait_for_idle(struct drm_i915_private *i915, int intr)
             return 0;
         }
         (void)dma_fence_get(&rq->fence.base);
-        err = i915_request_wait(rq, intr, -1);
+        /* Linux's waits on each timeline's last request through the
+         * fence, which boosts (gt/intel_gt_requests.c:161). */
+        err = i915_request_wait(rq, (intr ? I915_WAIT_INTERRUPTIBLE : 0u) | I915_WAIT_PRIORITY, -1);
         i915_request_put(rq);
         if (err < 0) {
             return err;
