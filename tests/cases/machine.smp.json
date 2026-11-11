@@ -180,26 +180,26 @@
     },
     {
       "case_id": "machine.smp.nmi",
-      "behavior": "An NMI on both of two processors at the debug shell is a fault of the machine: the first processor to take it reports it and panics, the other stops without a word, both halt, and the screen shows the vector and address with the panic after them",
+      "behavior": "An NMI on both of two processors at the debug shell is a fault of the machine: the first processor to take it reports it and panics, the other stops without a word, both halt with panic=0, and the screen's report names the fault under its instruction pointer, with the reason last",
       "units": ["isr", "panic"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": [], "inputs": {"processors": 2, "memory_mib": 128, "qmp": "inject-nmi"}, "repetitions": 1, "seed": null},
+      "workload": {"arguments": [], "inputs": {"processors": 2, "memory_mib": 128, "qmp": "inject-nmi", "boot_options": "panic=0"}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "smp_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, the screen's memory among it, which it keeps after a failure"},
       "steps": [
-        {"step_id": "nmi", "stage": "execute", "machine": "fixture", "does": "boot the test image on two processors, raise an NMI on both through QMP's inject-nmi, wait for the panic, look at the processors, read the screen and end the machine"}
+        {"step_id": "nmi", "stage": "execute", "machine": "fixture", "does": "boot the test image on two processors with panic=0, raise an NMI on both through QMP's inject-nmi, wait for the panic, look at the processors, read the screen and end the machine"}
       ],
       "machines": [
-        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "direct", "devices": [{"model": "vga"}], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false, "fault": {"end": "panic", "records": ["hardware fault: non-maskable interrupt", "the machine reported a fault"]}}
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "direct", "devices": [{"model": "vga"}], "boot_options": ["rach2.rescue", "panic=0"]}, "console": "serial", "qmp": true, "helper": false, "fault": {"end": "panic", "records": ["hardware fault: non-maskable interrupt", "the machine reported a fault"]}}
       ],
       "assertions": [
         {"assertion_id": "online", "checks": "the kernel says smp: processors: 2 online of 2", "source": "scenario"},
         {"assertion_id": "reported", "checks": "the kernel says isr: hardware fault: non-maskable interrupt", "source": "scenario"},
         {"assertion_id": "panicked", "checks": "the kernel panics saying the machine reported a fault, which the scenario records as the boot's end", "source": "scenario"},
         {"assertion_id": "halted", "checks": "QEMU says that the machine runs, and both processors have halted with interrupts off", "source": "scenario"},
-        {"assertion_id": "screen-cause", "checks": "the screen shows the record of the fault, with its vector and its rip, eip or pc field and value", "source": "scenario"},
-        {"assertion_id": "screen-stopped", "checks": "the screen shows panic: stopped: after that record", "source": "scenario"},
+        {"assertion_id": "screen-cause", "checks": "the screen's report has the line ip 0x and the instruction pointer, and the fault's name on a line after it", "source": "scenario"},
+        {"assertion_id": "screen-stopped", "checks": "the screen's report ends with panic: and the reason, after the fault's name", "source": "scenario"},
         {"assertion_id": "one-report", "checks": "no second record of a hardware fault follows the first", "source": "scenario"},
         {"assertion_id": "one-panic", "checks": "no second record of a panic follows the first", "source": "scenario"}
       ],
@@ -220,26 +220,26 @@
     },
     {
       "case_id": "machine.smp.exception",
-      "behavior": "An invalid opcode run in the kernel by the debug shell is a kernel exception: the kernel reports it and panics, both processors halt, and the screen shows the vector and address with the panic after them",
+      "behavior": "An invalid opcode run in the kernel by the debug shell is a kernel exception: the kernel reports it and panics, both processors halt with panic=0, and the screen's report names the fault under its instruction pointer, with the reason last",
       "units": ["isr", "panic"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": [], "inputs": {"processors": 2, "memory_mib": 128, "command": "badop"}, "repetitions": 1, "seed": null},
+      "workload": {"arguments": [], "inputs": {"processors": 2, "memory_mib": 128, "command": "badop", "boot_options": "panic=0"}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "smp_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, the screen's memory among it, which it keeps after a failure"},
       "steps": [
-        {"step_id": "exception", "stage": "execute", "machine": "fixture", "does": "boot the test image on two processors, run the debug shell's badop, wait for the panic, look at the processors, read the screen and end the machine"}
+        {"step_id": "exception", "stage": "execute", "machine": "fixture", "does": "boot the test image on two processors with panic=0, run the debug shell's badop, wait for the panic, look at the processors, read the screen and end the machine"}
       ],
       "machines": [
-        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "direct", "devices": [{"model": "vga"}], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false, "fault": {"end": "panic", "records": ["kernel exception: invalid opcode", "unrecoverable CPU exception in kernel mode"]}}
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "direct", "devices": [{"model": "vga"}], "boot_options": ["rach2.rescue", "panic=0"]}, "console": "serial", "qmp": true, "helper": false, "fault": {"end": "panic", "records": ["kernel exception: invalid opcode", "unrecoverable CPU exception in kernel mode"]}}
       ],
       "assertions": [
         {"assertion_id": "online", "checks": "the kernel says smp: processors: 2 online of 2", "source": "scenario"},
         {"assertion_id": "reported", "checks": "the kernel says isr: kernel exception: invalid opcode", "source": "scenario"},
         {"assertion_id": "panicked", "checks": "the kernel panics saying a CPU exception in kernel mode cannot be recovered, which the scenario records as the boot's end", "source": "scenario"},
         {"assertion_id": "halted", "checks": "QEMU says that the machine runs, and both processors have halted with interrupts off", "source": "scenario"},
-        {"assertion_id": "screen-cause", "checks": "the screen shows the record of the fault, with its vector and its rip, eip or pc field and value", "source": "scenario"},
-        {"assertion_id": "screen-stopped", "checks": "the screen shows panic: stopped: after that record", "source": "scenario"},
+        {"assertion_id": "screen-cause", "checks": "the screen's report has the line ip 0x and the instruction pointer, and the fault's name on a line after it", "source": "scenario"},
+        {"assertion_id": "screen-stopped", "checks": "the screen's report ends with panic: and the reason, after the fault's name", "source": "scenario"},
         {"assertion_id": "one-report", "checks": "no second record of a kernel exception follows the first", "source": "scenario"},
         {"assertion_id": "one-panic", "checks": "no second record of a panic follows the first", "source": "scenario"}
       ],
