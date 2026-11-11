@@ -33,17 +33,17 @@ static volatile unsigned int bkl_claim;
  * so that rounding at each acquisition loses no short waits. */
 static uint64_t bkl_wait_cycles;
 static uint64_t bkl_wait_max_cycles;
-static volatile uint32_t bkl_releases; /* ended hold records, modulo 2^32 */
-static uint32_t bkl_wait_max_holds;    /* records ended during the longest wait */
-/* Keep recent hold records, including bkl_thread_hold's without a release. */
+static volatile uint32_t bkl_releases; /* completed outer holds, modulo 2^32 */
+static uint32_t bkl_wait_max_holds;    /* holds completed during the longest wait */
+/* Keep the most recent releases and copy those of a new longest wait. */
 struct bkl_hold_record {
-    uint64_t cycles; /* record's duration in TSC cycles */
-    uint32_t vector; /* entry vector, 0 for a record begun without an entry */
+    uint64_t cycles; /* full hold duration in TSC cycles */
+    uint32_t vector; /* entry vector, 0 for a take after a drop */
     int32_t nr;      /* entry system call number, -1 for none */
 };
 static struct bkl_hold_record bkl_recent[BKL_WAIT_HOLDS];
 static struct bkl_hold_record bkl_wait_hold[BKL_WAIT_HOLDS];
-static uint64_t bkl_hold_max_cycles;          /* longest completed hold record */
+static uint64_t bkl_hold_max_cycles;          /* the longest hold, from take to give back */
 static uint32_t bkl_hold_vector;              /* its entry's vector, 0 for none */
 static int32_t bkl_hold_nr = -1;              /* its entry's system call number, or -1 */
 static uint64_t bkl_seen_max_cycles;          /* the oldest hold an interrupt has found */
@@ -55,7 +55,7 @@ static uintptr_t bkl_seen_pc[BKL_SAMPLE_PCS]; /* that instruction, then its call
  * The big lock and disabled local interrupts serialize the ring's writers. */
 struct bkl_long_record {
     uint64_t clock; /* TSC at the sample, on the processors' shared clock */
-    uint64_t age;   /* cycles since this hold record began */
+    uint64_t age;   /* cycles since this hold's take */
     uint32_t cpu;
     uint32_t pid; /* thread interrupted, 0 when there is none */
     uint32_t vector;
@@ -1070,21 +1070,6 @@ void bkl_take_as(int depth, int key)
         cpu->bkl_nr = key == BKL_KEY_IDLE ? BKL_NR_IDLE : BKL_NR_SWITCH;
         cpu->bkl_depth = depth;
     }
-}
-
-void bkl_thread_hold(void)
-{
-    uint32_t flags = kirq_save();
-    struct percpu *cpu = this_cpu();
-
-    if (cpu->bkl_depth > 0 && (cpu->bkl_vector != 0 || cpu->bkl_nr >= 0)) {
-        bkl_hold_end(cpu);
-        cpu->bkl_since = arch_cycles();
-        k_memset(bkl_early_cycles[arch_cpu_id()], 0, sizeof(bkl_early_cycles[0]));
-        cpu->bkl_vector = 0;
-        cpu->bkl_nr = -1;
-    }
-    kirq_restore(flags);
 }
 
 void bkl_yield(void)

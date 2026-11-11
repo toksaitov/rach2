@@ -69,7 +69,7 @@ struct percpu {
     int tick_unlocked;                          /* the tick under way took no big lock */
     volatile uint32_t ticks_unlocked;           /* ticks that found the big lock held */
     uint32_t ticks_passed;                      /* of those in a row, with work queued */
-    uint64_t bkl_since;                         /* hold record's start cycle */
+    uint64_t bkl_since;                         /* cycle count when it last took the big lock */
     uint32_t bkl_vector;                        /* the vector of the entry that holds it, or 0 */
     int32_t bkl_nr;                             /* that entry's system call number, or -1 */
     uint64_t bkl_waited;                        /* cycles the hold under way waited for the lock */

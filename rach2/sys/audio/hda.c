@@ -4100,17 +4100,18 @@ static int hda_service_asked(void *arg)
  * the ring with them on (hda_service_stream). The services keep them off
  * only around the stream's position and period state.
  *
- * No switch comes between two refills: the thread sets `in_syscall` while it
- * serves, so that an interrupt only asks for a switch (sched_preempt), as it
- * does of a system call, and the thread takes the switch asked for once the
- * service ends, as a system call does at its return. So no system call runs
- * on this processor in the middle of a service, and none on another, since
- * the thread holds the big lock throughout.
+ * No switch comes between two refills: as a kernel thread, khda is not
+ * switched by an interrupt (`no_tick_switch`), which only asks for a switch
+ * (sched_preempt), and it takes the switch asked for at the service point
+ * after each service (sched_service_point), as Linux's worker calls
+ * cond_resched between works (kernel/workqueue.c:3290-3299). So no system
+ * call runs on this processor in the middle of a service, and none on
+ * another, since the thread holds the big lock throughout.
  *
- * The hold of the big lock is the thread's own (bkl_thread_hold), not that
- * of the interrupt or the system call that switched to it, so that
- * `bkl/calls` charges the refill to no entry; the scheduler counts its time
- * in /proc/PID/schedstat.
+ * The thread takes the big lock in the tail of each switch to it
+ * (schedule_tail), so that `bkl/calls` counts the service as a thread's take
+ * after its switch, under no entry; the scheduler counts its time in
+ * /proc/PID/schedstat.
  */
 static void hda_service_thread(void)
 {
@@ -4120,7 +4121,6 @@ static void hda_service_thread(void)
     arch_irq_enable();
     for (;;) {
         (void)wq_wait_event_idle(&service_wq, hda_service_asked, NULL);
-        bkl_thread_hold();
         flags = kirq_save();
         wanted = service_wanted;
         service_wanted = 0;
@@ -4128,7 +4128,6 @@ static void hda_service_thread(void)
         service_play_asked = service_play_requested;
         if (wanted & HDA_SERVE_PLAY)
             service_play_pending = false;
-        current_proc->in_syscall = 1;
         kirq_restore(flags);
         start = arch_cycles();
         hda_serve(wanted);
@@ -4139,9 +4138,8 @@ static void hda_service_thread(void)
         if (elapsed > service_max_cycles)
             service_max_cycles = elapsed;
         service_play_active = false;
-        current_proc->in_syscall = 0;
-        sched_take_preempt();
         kirq_restore(flags);
+        sched_service_point();
     }
 }
 

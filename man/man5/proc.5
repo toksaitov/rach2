@@ -1412,54 +1412,38 @@ boot, measured by the processor's time-stamp counter.
 These include time when a hypervisor stopped a waiting processor.
 They are zero when no invariant counter was calibrated.
 .It Li bkl_wait_max_holds
-Outer hold records completed between the start of the longest acquisition
-and its success, modulo 2^32, including a record already in progress at
-its start.
+Outer holds completed between the start of the longest acquisition and its
+success, modulo 2^32, including a hold already in progress at its start.
 The count belongs to the same acquisition as
 .Li bkl_wait_max_us .
-It counts completed records, rather than distinct processors.
-A release, including an idle drop, ends a record.
-A kernel thread calling
-.Li bkl_thread_hold ,
-as the HD Audio service's
-.Li khda
-does when it wakes, also ends the entry's record and starts one under vector 0,
-without releasing the lock.
-A continuous hold can therefore have more than one record.
+It counts releases, including an idle drop, rather than distinct processors.
 .It Li bkl_wait_max_hold
-The last 32 of those completed records, or all when fewer, oldest first:
-entry vector, system call number (\-1 for none), and the record's full time in
+The last 32 of those completed holds, or all when fewer, oldest first:
+entry vector, system call number (\-1 for none), and full hold time in
 microseconds, as for
 .Li bkl_hold_max_entry
 and
 .Li bkl_hold_max_us .
-A record already in progress when the acquisition began includes time before
+A hold already in progress when the acquisition began includes time before
 the wait, so these times need not sum to the acquisition time.
 .It Li bkl_hold_max_us
-Longest completed hold record of the big kernel lock, in
+Longest hold of the big kernel lock, from its take to its release, in
 microseconds since boot, measured by the same counter.
-The record begins at the take or at
-.Li bkl_thread_hold
-and ends at the release or at the next
-.Li bkl_thread_hold
-that ends an entry's record.
 .It Li bkl_hold_max_entry
-The kernel entry that made that record: its interrupt vector, 0 for a record
-begun by
-.Li bkl_thread_hold
-or a take again without an entry, and its system call number, or
+The kernel entry that made that hold: its interrupt vector, 0 for a kernel
+thread or a take again after an idle halt, and its system call number, or
 \-1 when the entry was no system call.
 .It Li bkl_hold_sample_us , bkl_hold_sample_pc
-The oldest hold record of the big kernel lock that an interrupt on the
-holding processor has found, in microseconds since the record began, and
-in hexadecimal the kernel instruction that interrupt stopped, followed by
-up to seven return addresses of its callers, read from the interrupted
-thread's kernel stack alone.
+The oldest hold of the big kernel lock that an interrupt on the holding
+processor has found, in microseconds since its take, and in hexadecimal the
+kernel instruction that interrupt stopped, followed by up to seven return
+addresses of its callers, read from the interrupted thread's kernel stack
+alone.
 A hold that keeps interrupts off is sampled only where it turns them on.
 .It Li bkl_hold_max_mark
 Five lines, one for each of 1, 2, 4, 8 and 16 seconds: the mark, then the
-first such sample past it in the longest hold record, its age in
-microseconds and its instruction with callers; the age is 0 and the addresses absent when no
+first such sample past it in the longest hold, its age in microseconds and
+its instruction with callers; the age is 0 and the addresses absent when no
 interrupt came that late.
 .It Li bkl_hold_entry
 Up to 16 lines, one for each kernel entry that held the big kernel lock
