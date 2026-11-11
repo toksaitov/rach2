@@ -24,7 +24,9 @@
  * offset, the X-tiled offset's split and the sprite's registers and watermarks
  * (78-9.3); a page flip's event at the vblank that shows it, with its count and
  * a rising stamp, an async flip's at flip done, and the count of vblanks the
- * frame counter kept while the interrupt was off (78-9.4); the cursor's
+ * frame counter kept while the interrupt was off (78-9.4), and the
+ * interactive mark of RPS held by each pipe of a commit until its own
+ * flip ends (80-46.1); the cursor's
  * registers and the backlight, taken over from the boot's driver, set and
  * switched, off with the pipe, its transcoder and the panel's power, and given
  * back at the end (78-9.5); the pipe CRC through crc/control and crc/data,
@@ -262,6 +264,9 @@ int intelbl_take_back(void)
 /* ---- the device ---- */
 
 static struct drm_i915_private gpu;
+/* The page flips RPS counts pending, as i915_rps_mark_interactive keeps
+ * them, never below none. */
+static int interactive;
 static struct drm_driver driver;
 static struct drm_file fa;
 static struct i915_model model;
@@ -804,6 +809,40 @@ static void row_async(void)
           "async: to a linear buffer refused");
     CHECK(page_flip(fb_con, DRM_MODE_PAGE_FLIP_EVENT, 0) == 0, "async: back to the console");
     frame();
+}
+
+/**
+ * A commit's interactive mark of RPS, which Linux keeps until each of the
+ * commit's flips ends: with pipes B and C both pending, each takes a mark
+ * of its own and lets it go when its own flip ends, so the count stays up
+ * until the last; a failed commit leaves none. `interactive_handover` is
+ * driven directly, the pipes' pending flips set by hand, since the model
+ * lights pipe A alone.
+ */
+static void row_interactive(void)
+{
+    struct intel_crtc *b = &gpu.display.crtc[1], *c = &gpu.display.crtc[2];
+    int n0 = interactive;
+
+    b->base.flip_pending = c->base.flip_pending = DRM_FLIP_ARMED;
+    i915_rps_mark_interactive(&gpu, 1);
+    interactive_handover(&gpu, 6u, 0);
+    CHECK(interactive == n0 + 2 && b->rps_interactive && c->rps_interactive,
+          "interactive: each pending pipe of the commit holds a mark");
+    b->base.flip_pending = DRM_FLIP_NONE;
+    intel_crtc_interactive_end(b);
+    CHECK(interactive == n0 + 1 && !b->rps_interactive && c->rps_interactive,
+          "interactive: pipe B's flip ends, pipe C's mark stays");
+    c->base.flip_pending = DRM_FLIP_NONE;
+    intel_crtc_interactive_end(c);
+    CHECK(interactive == n0 && !c->rps_interactive,
+          "interactive: the last flip ends, no mark left");
+    b->base.flip_pending = c->base.flip_pending = DRM_FLIP_ARMED;
+    i915_rps_mark_interactive(&gpu, 1);
+    interactive_handover(&gpu, 6u, -EBUSY);
+    CHECK(interactive == n0 && !b->rps_interactive && !c->rps_interactive,
+          "interactive: a failed commit leaves no mark");
+    b->base.flip_pending = c->base.flip_pending = DRM_FLIP_NONE;
 }
 
 /** The vblanks of the frame counter while the interrupt was off are
@@ -1559,11 +1598,15 @@ void i915_rps_boost(struct i915_request *rq)
     (void)rq;
 }
 
-/** A page flip pending or done, which RPS counts; no row here reads it. */
+/** A page flip pending, with `on`, or done, counted in `interactive`. */
 void i915_rps_mark_interactive(struct drm_i915_private *i915, int on)
 {
     (void)i915;
-    (void)on;
+    if (on) {
+        interactive++;
+    } else if (interactive > 0) {
+        interactive--;
+    }
 }
 
 int main(void)
@@ -1578,6 +1621,7 @@ int main(void)
     row_takeover();
     row_flip();
     row_async();
+    row_interactive();
     row_count();
     row_primary();
     row_addfb_tiling();
