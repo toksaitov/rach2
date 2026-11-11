@@ -157,31 +157,40 @@ size_t frame_total_count(void)
     return model_frames;
 }
 
-/** The clock is absent from this model. */
+/* The clock, which only the wakealarm rows start: whether it reads, the
+ * seconds since 1970 it reads, and the alarm set, -1 for none. */
+static int clock_up;
+static int64_t clock_now, clock_alarm = -1;
+
+/** The clock reads only while a row has it up. */
 int rtc_read_clock(rtc_time_t *out)
 {
     (void)out;
-    return -EIO;
+    return clock_up ? 0 : -EIO;
 }
 
-/** No successful clock read supplies a date for conversion. */
+/** The seconds the clock reads. */
 int64_t rtc_seconds_of(const rtc_time_t *t)
 {
     (void)t;
-    return 0;
+    return clock_now;
 }
 
-/** No RTC wake alarm is armed. */
+/** The alarm set, -1 for none. */
 int64_t devfs_rtc_wakealarm(void)
 {
-    return -1;
+    return clock_alarm;
 }
 
-/** No row arms the RTC's wake alarm. */
+/** Set the alarm, or clear it for a negative `at`; -EIO while the clock
+ * is down. */
 int32_t devfs_rtc_set_wakealarm(int64_t at)
 {
-    (void)at;
-    return -EIO;
+    if (!clock_up) {
+        return -EIO;
+    }
+    clock_alarm = at < 0 ? -1 : at;
+    return 0;
 }
 
 /** No attribute the rows write sends a uevent. */
@@ -2395,6 +2404,48 @@ static void sysattr_number_writes(void)
           "and state refuses one with a space before its newline");
 }
 
+/** Write the text `text` whole to rtc0's wakealarm; the call's answer. */
+static int32_t wakealarm_write(const char *text)
+{
+    return sysattr_write(SYSFS_RTC0, 5, text, (uint32_t)__builtin_strlen(text));
+}
+
+/**
+ * rtc0's wakealarm takes what Linux's wakealarm_store takes: the clock
+ * read first, then seconds since 1970, `+N` from now or `+=N` to push a
+ * set alarm, read as kstrtos64 with base 0, with Linux's errors.
+ */
+static void wakealarm_writes(void)
+{
+    check(wakealarm_write("+60") == -EIO, "wakealarm: a clock that does not read is EIO");
+    clock_up = 1;
+    clock_now = 1000000;
+    clock_alarm = -1;
+    check(wakealarm_write("+60\n") == 4 && clock_alarm == 1000060,
+          "wakealarm: +N sets the alarm N seconds from now");
+    check(wakealarm_write("1000100") == -EBUSY && clock_alarm == 1000060,
+          "wakealarm: a new time while one is set is EBUSY");
+    check(wakealarm_write("+=0x3c") == 6 && clock_alarm == 1000120,
+          "wakealarm: +=N pushes the alarm set, its number in hexadecimal");
+    check(wakealarm_write("0") == 1 && clock_alarm == -1, "wakealarm: 0 clears it");
+    check(wakealarm_write("+=5") == -EINVAL && clock_alarm == -1,
+          "wakealarm: a push with none set is EINVAL");
+    check(wakealarm_write("1000000abc") == -EINVAL && clock_alarm == -1,
+          "wakealarm: junk after the number is EINVAL");
+    check(wakealarm_write("1000060 ") == -EINVAL && clock_alarm == -1,
+          "wakealarm: so is a space after it");
+    check(wakealarm_write("99999999999999999999") == -ERANGE && clock_alarm == -1,
+          "wakealarm: a number past 64 bits is ERANGE");
+    check(wakealarm_write("+0x3c") == 5 && clock_alarm == 1000060,
+          "wakealarm: +N in hexadecimal sets it");
+    check(wakealarm_write("999") == 3 && clock_alarm == -1,
+          "wakealarm: a time past clears it, as any time not after now");
+    check(wakealarm_write("-5") == 2 && clock_alarm == -1, "wakealarm: as a negative one does");
+    clock_up = 0;
+    clock_now = 0;
+    clock_alarm = -1;
+}
+
 /** Read the THP files at Linux 6.12's defaults with the policy never, and
  * write each policy as Linux's stores parse it. */
 static void thp_rows(void)
@@ -2473,6 +2524,7 @@ static void thp_rows(void)
     }
     thp_long_writes();
     sysattr_number_writes();
+    wakealarm_writes();
     thp_enabled = 2;
     thp_defrag = 3;
     thp_shmem = 1;

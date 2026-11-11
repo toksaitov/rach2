@@ -40,4 +40,13 @@ size_t k_ltoa(long input, char *buffer, size_t buffer_size, int radix, bool forc
  */
 int k_strtoul(const char *s, size_t len, unsigned long *out);
 
+/**
+ * Read the signed 64-bit number that is the text at `s`, as Linux's
+ * kstrtos64 with base 0: a `-`, or an optional `+`, then the digits as
+ * `k_strtoul` reads them, and at most one newline. 0 with the value in
+ * `*out`, -EINVAL for text that is not such a number, or -ERANGE for one
+ * past 64 signed bits; `*out` is left alone on an error.
+ */
+int k_strtoll(const char *s, size_t len, long long *out);
+
 #endif

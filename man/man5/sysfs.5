@@ -715,9 +715,17 @@ write of seconds since 1970, of
 .Ql + Ns Ar N
 for
 .Ar N
-seconds from now, or of 0 to clear it, and a new time while one is set is
-.Er EBUSY ,
-as on Linux.
+seconds from now, or of
+.Ql += Ns Ar N
+to move the alarm set
+.Ar N
+seconds later, the number read as Linux's kstrtos64 reads it with base 0,
+with one newline at most after it.
+A time after now sets the alarm, and a new time while one is set is
+.Er EBUSY ;
+a push with none set is
+.Er EINVAL ;
+any other time, such as 0, clears it, as on Linux.
 .It Pa /sys/class/rtc/rtc0/device/power/wakeup
 .Ql enabled :
 the clock's alarm may wake the machine.
