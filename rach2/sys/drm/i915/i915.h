@@ -3781,6 +3781,12 @@ int i915_request_started(const struct i915_request *rq);
 #define I915_WAIT_INTERRUPTIBLE 1u
 #define I915_WAIT_PRIORITY      2u
 
+/* Linux's CONFIG_DRM_I915_FENCE_TIMEOUT, i915_fence_timeout: how long a
+ * request waits for another driver's fence before it runs without it, its
+ * fence's error -ETIMEDOUT, and how long a commit waits for each plane's
+ * fence before it programs the planes regardless. */
+#define I915_FENCE_TIMEOUT_MS 10000u
+
 /**
  * Wait for the request for `timeout_ns`, for ever when it is negative, as
  * Linux's i915_request_wait_timeout; the breadcrumb is read again at each

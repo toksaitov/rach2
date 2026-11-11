@@ -1129,7 +1129,14 @@ struct drm_atomic_state {
  * each next one's as the one before signals, so that the driver can do
  * what its wait would, as i915's boosts the request. With interrupts
  * masked, maybe in an interrupt; it may not sleep, and the fence is
- * borrowed.
+ * borrowed. `commit_fence_timeout_ms`, when nonzero, bounds the commit's
+ * wait for each plane's fence in turn, uninterruptible, at that many
+ * milliseconds from the moment the wait reaches it, and on a timeout the
+ * commit stops waiting for the rest and programs the planes, as Linux's
+ * intel_atomic_commit_fence_wait with i915_fence_timeout
+ * (intel_display.c:7262-7280); 0 waits as Linux's
+ * drm_atomic_helper_wait_for_fences, a blocking commit interruptibly and
+ * a deferred one until every fence has signalled.
  */
 struct drm_mode_config {
     uint32_t min_width, max_width, min_height, max_height;
@@ -1164,6 +1171,7 @@ struct drm_mode_config {
     int32_t (*fb_create)(struct drm_device *dev, struct drm_framebuffer *fb);
     void (*fb_destroy)(struct drm_framebuffer *fb);
     void (*commit_fence_wait)(struct drm_device *dev, struct dma_fence *fence);
+    uint32_t commit_fence_timeout_ms;
 };
 
 /* The index masks of Linux's drm_crtc_mask, drm_plane_mask and

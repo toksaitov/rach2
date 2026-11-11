@@ -153,11 +153,6 @@ static void await_done(struct i915_request *rq, int32_t err)
     }
 }
 
-/* How long a request waits for another driver's fence before it runs
- * without it, its fence's error -ETIMEDOUT, as Linux's
- * CONFIG_DRM_I915_FENCE_TIMEOUT. */
-#define I915_FENCE_TIMEOUT_MS 10000u
-
 /* The earliest tick at which a request's wait for another driver's fence
  * ends, or 0 for none; the worker wakes for it. */
 static uint64_t await_next;

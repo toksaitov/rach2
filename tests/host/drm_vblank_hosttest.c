@@ -25,6 +25,8 @@
  * signals late, which flips, signals its out-fence and sends its event
  * only after the fence, a blocking flip waited on a late fence, and a
  * blocking commit that waits for the queued one ahead of it (76-5b.3);
+ * a driver's bound on the wait for each in-fence, i915's 10 s, past which
+ * a nonblocking and a blocking flip flip without it (80-72.2);
  * connector forcing, the EDID override, and the CRC files' source,
  * entries, lines and overflow (76-5b.4); and an unplug that sends what is
  * queued with -ENODEV on its fences. Every allocation is given back.
@@ -822,6 +824,62 @@ static void row_queued_off(void)
           "CRTC 1 on again");
 }
 
+/**
+ * 80-72.2: under the driver's `commit_fence_timeout_ms`, as i915's, a
+ * nonblocking flip whose in-fence never signals flips once 10 s have
+ * passed, its callback taken back, and a blocking one waits 10 s, then
+ * flips, as Linux's intel_atomic_commit_fence_wait programs the commit
+ * after i915_fence_timeout.
+ */
+static void row_fence_timeout(void)
+{
+    fd_entry_t timeline;
+    struct dma_fence *in;
+    struct req r;
+    int32_t in_fd;
+    int64_t t0;
+    int at;
+
+    k_memset(&timeline, 0, sizeof(timeline));
+    CHECK(sw_sync_open(&timeline) == 0, "timeout: a sw_sync timeline");
+    mc->commit_fence_timeout_ms = 10000;
+    in_fd = sw_point(&timeline, 1);
+    at = nshown;
+    t0 = model_now_ns;
+    req_flip(&r, 0, fb_a);
+    req_add(&r, &primary[0].base, mc->prop_in_fence_fd, (uint64_t)in_fd);
+    CHECK(req_commit(&r, DRM_MODE_ATOMIC_NONBLOCK, 0) == 0 &&
+              crtc[0].flip_pending == DRM_FLIP_QUEUED,
+          "timeout: a nonblocking flip on a fence that never signals");
+    while (model_now_ns - t0 < 9900000000ll) {
+        tick();
+    }
+    CHECK(works && nshown == at, "timeout: no flip before 10 s");
+    while (works && model_now_ns - t0 < 10100000000ll) {
+        tick();
+    }
+    in = sync_file_get_fence(in_fd);
+    CHECK(!works && nshown == at + 1 && shown[at] == fb_a && in && !in->signaled && !in->cbs,
+          "timeout: at 10 s the worker flips without it, its callback taken back");
+    dma_fence_put(in);
+    tick();
+    CHECK(!crtc[0].flip_pending, "timeout: the flip ends at its vblank");
+    fd_free(&table, in_fd);
+
+    in_fd = sw_point(&timeline, 2);
+    at = nshown;
+    t0 = model_now_ns;
+    req_flip(&r, 0, fb_b);
+    req_add(&r, &primary[0].base, mc->prop_in_fence_fd, (uint64_t)in_fd);
+    CHECK(req_commit(&r, 0, 0) == 0 && nshown == at + 1 && shown[at] == fb_b &&
+              model_now_ns - t0 >= 10000000000ll,
+          "timeout: a blocking flip waits 10 s for a fence that never signals, then flips");
+    fd_free(&table, in_fd);
+    mc->commit_fence_timeout_ms = 0;
+    sw_close(&timeline);
+    CHECK(!works, "timeout: no commit left queued");
+}
+
 /* The OUT_FENCE_PTR target of row_out_fence_fault. */
 static int32_t *out_fence_target;
 
@@ -1011,6 +1069,7 @@ int main(void)
     row_off();
     row_fences();
     row_queued_off();
+    row_fence_timeout();
     row_out_fence_fault();
     row_force();
     row_edid_override();
