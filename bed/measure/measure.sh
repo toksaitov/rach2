@@ -3,8 +3,8 @@
 # whose rendering path is measured, with one line of numbers for the run
 # (bed/measure/Readme.md).
 #
-#   measure.sh [-r RUNG] [-o OUT] [-t SECONDS] [-u USER] [-d] [-p]
-#              [-L LATENCY] [-v RELAYLOG] glmark2|piglit|webgl|game
+#   measure.sh [-r RUNG] [-o OUT] [-t SECONDS] [-u USER] [-d] [-p] [-c]
+#              [-L LATENCY] [-v RELAYLOG] [-R REPLAYS] glmark2|piglit|webgl|game
 #
 # The scenes, each the same work on every rung:
 #
@@ -12,31 +12,36 @@
 #            (normals) scenes on screen at 1280x800, or fullscreen with -d,
 #            each for SECONDS (10)
 #   piglit   the tests of piglit.txt, beside this script, one at a time on
-#            the device EGL's surfaceless platform finds (piglit.sh -g)
+#            the device EGL's surfaceless platform finds (piglit.sh -g),
+#            once, or with -t again and again until SECONDS have passed
 #   webgl    webgl.html in Chromium, fullscreen at 1280x800, for SECONDS
-#            times 60 frames (600)
-#   game     SuperTuxKart's replay, as games.sh plays it, with SECONDS of the
-#            race's own time when -t gives them
+#            times 60 frames (600), its frames paced by neither the
+#            display's refresh nor a frame rate limit
+#   game     SuperTuxKart's replay of REPLAYS, as games.sh -r plays it, with
+#            SECONDS of the race's own time when -t gives them
 #
 # glmark2 and webgl draw under a headless Weston of the script's own, with
 # its GL renderer unless -p asks for Pixman, which webgl always has, or with
 # -d under the caller's Wayland display; the game too, through games.sh. A scene's frame times
 # come from Mesa's Gallium HUD for glmark2 and the game, the time between
-# the page's frames for webgl, and each test's time for piglit, whose test
-# counts as one frame.
+# the page's frames for webgl, and each passing test's time for piglit,
+# whose test counts as one frame. Every scene compiles its shaders into a
+# new empty Mesa shader cache under OUT.
 #
 # Around the scene, the script reads the machine's counts and prints, as
 # its last line,
 #
 #   measure: result: SCENE RUNG frames N frame_ms MEAN p50 P50 p99 P99
 #       cpu_ms_per_frame C latency_ms L copied_bytes B exits E
-#       round_trips T seconds S
+#       round_trips T seconds S passed P
 #
 # on one line, `-` for a count this machine does not keep:
 #
 #   cpu_ms_per_frame  the CPU time of every processor of the machine,
 #                     /proc/stat's busy ticks, over the frames, the guest's
-#                     CPU among it where the guest is QEMU's process here
+#                     CPU among it where the guest is QEMU's process here;
+#                     for the game, over every frame the HUD wrote, since
+#                     the ticks span its loading screen too
 #   latency_ms        latency's median round trip, a clear and one pixel
 #                     read back, before the scene; LATENCY is the program,
 #                     which latency.c, beside this script, is compiled to
@@ -48,15 +53,25 @@
 #   round_trips       the doorbells Rach2's driver rang the VM on its queue
 #                     vector, by ivshmemd -i, while a region is attached, or
 #                     the commands the vtest relay carried with -v
+#   passed            piglit's tests that passed, of the tests run, as
+#                     P/T, the frames being the passing ones; `-` for the
+#                     other scenes
 #
 # RELAYLOG is the standard error of `vtestrelay -v`, whose `result:` line
 # for each client gives its commands and bytes. With -u, the script reads
 # the counts as its caller, root where ivshmemd and debugfs need it, and
-# runs the scene as USER, as Chromium needs. OUT (./measure-SCENE) gets the
-# record, `frametimes`, one frame's milliseconds a line, `counts`, the
-# readings before and after, and `line`, the last line. The status is 0 when
-# the scene ran to its end and gave frames, and 1 otherwise; the script sets
-# no time limit of its own.
+# runs the scene as USER, as Chromium needs, from a copy of the harness, its
+# runners and REPLAYS under OUT, which USER is given, since USER may not
+# read the caller's directories. REPLAYS (/usr/share/games/rach2/replays)
+# holds the games layer's replays, vendor/gnu/games/replays of the tree.
+# With -c the script prints `measure: counts: before` and `measure: counts:
+# after` as it reads the counts, for a caller that reads its own around the
+# scene. OUT (./measure-SCENE) gets the record, `frametimes`, one frame's
+# milliseconds a line, `counts`, the readings before and after, and `line`,
+# the last line. The scene runs in a process group of its own, which the
+# script ends, TERM and then KILL, on every exit and on SIGTERM, SIGINT or
+# SIGHUP. The status is 0 when the scene ran to its end and gave frames,
+# and 1 otherwise; the script sets no time limit of its own.
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -66,13 +81,14 @@ if [ -z "$runners" ]; then
 fi
 runners=$(cd "$runners" && pwd)
 
-rung=unnamed out='' seconds='' user='' own=1 renderer=gl latency='' relay='' inner=0
+rung=unnamed out='' seconds='' user='' own=1 renderer=gl latency='' relay='' inner=0 marks=0
+replays=/usr/share/games/rach2/replays
 usage()
 {
-    echo "usage: measure.sh [-r RUNG] [-o OUT] [-t SECONDS] [-u USER] [-d] [-p] [-L LATENCY] [-v RELAYLOG] glmark2|piglit|webgl|game" >&2
+    echo "usage: measure.sh [-r RUNG] [-o OUT] [-t SECONDS] [-u USER] [-d] [-p] [-c] [-L LATENCY] [-v RELAYLOG] [-R REPLAYS] glmark2|piglit|webgl|game" >&2
     exit 2
 }
-while getopts r:o:t:u:dpL:v:I o; do
+while getopts r:o:t:u:dpcL:v:R:I o; do
     case $o in
         r) rung=$OPTARG ;;
         o) out=$OPTARG ;;
@@ -80,6 +96,8 @@ while getopts r:o:t:u:dpL:v:I o; do
         u) user=$OPTARG ;;
         d) own=0 ;;
         p) renderer=pixman ;;
+        c) marks=1 ;;
+        R) replays=$OPTARG ;;
         L) latency=$OPTARG ;;
         v) relay=$OPTARG ;;
         I) inner=1 ;;
@@ -115,25 +133,44 @@ scene_glmark2()
     cat "$RUNNER_WORK/hud/"* 2>/dev/null > "$out/frametimes" || true
 }
 
-# scene_piglit: piglit.txt's tests, each test's time a frame.
+# scene_piglit: piglit.txt's tests, once or for SECONDS, each passing
+# test's time a frame; `passes` gets a line for each test run, 1 when it
+# passed.
 scene_piglit()
 {
-    sh "$runners/piglit.sh" -g -o "$out/piglit" -l "$here/piglit.txt" > "$out/piglit.log" 2>&1 ||
-        runner_die "piglit.sh failed: $(tail -n 3 "$out/piglit.log")"
-    cat "$out/piglit.log" >> "$RUNNER_OUT/record"
-    python3 -I - "$out/piglit/piglit.json" > "$out/frametimes" << 'EOF'
+    round=0 began=$(date +%s)
+    : > "$out/frametimes"
+    : > "$out/passes"
+    while :; do
+        round=$((round + 1))
+        sh "$runners/piglit.sh" -g -o "$out/piglit/$round" -l "$here/piglit.txt" \
+            > "$out/piglit-$round.log" 2>&1 ||
+            runner_die "piglit.sh failed: $(tail -n 3 "$out/piglit-$round.log")"
+        cat "$out/piglit-$round.log" >> "$RUNNER_OUT/record"
+        python3 -I - "$out/frametimes" "$out/passes" "$out/piglit/$round"/piglit*.json << 'EOF'
 import json, sys
-tests = json.load(open(sys.argv[1], encoding="utf-8"))["tests"]
-for name in sorted(tests):
-    t = tests[name].get("time", {})
-    print("%.3f" % ((t.get("end", 0) - t.get("start", 0)) * 1000))
+times, passes = open(sys.argv[1], "a"), open(sys.argv[2], "a")
+for path in sys.argv[3:]:
+    tests = json.load(open(path, encoding="utf-8"))["tests"]
+    for name in sorted(tests):
+        t = tests[name].get("time", {})
+        ok = tests[name].get("result") == "pass"
+        passes.write("%d\n" % ok)
+        if ok:
+            times.write("%.3f\n" % ((t.get("end", 0) - t.get("start", 0)) * 1000))
 EOF
+        [ -n "$seconds" ] && [ $(($(date +%s) - began)) -lt "$seconds" ] || break
+    done
+    runner_record "piglit rounds $round passed $(grep -c 1 "$out/passes") of $(grep -c . "$out/passes")"
 }
 
 # scene_webgl: webgl.html in Chromium, the time between its frames.
 scene_webgl()
 {
     frames=$((${seconds:-10} * 60))
+    # Frames as fast as the path draws them, as glmark2's swap interval 0.
+    # shellcheck disable=SC2034 # runner_switches reads it
+    RUNNER_CHROMIUM_EXTRA='--disable-gpu-vsync --disable-frame-rate-limit'
     runner_server "$here"
     runner_browser_record chromium
     runner_browser chromium "http://127.0.0.1:$RUNNER_PORT/webgl.html?frames=$frames" \
@@ -158,21 +195,27 @@ with open(sys.argv[3], "a") as f:
 EOF
 }
 
-# scene_game: SuperTuxKart's replay through games.sh.
+# scene_game: SuperTuxKart's replay through games.sh; `cpuframes` gets the
+# count of every frame the HUD wrote, which the CPU's ticks span.
 scene_game()
 {
-    sh "$runners/games.sh" ${seconds:+-t "$seconds"} -d -o "$out/game" supertuxkart \
+    sh "$runners/games.sh" ${seconds:+-t "$seconds"} -d -r "$replays" -o "$out/game" supertuxkart \
         > "$out/game.log" 2>&1 || runner_die "games.sh failed: $(tail -n 3 "$out/game.log")"
     cat "$out/game.log" >> "$RUNNER_OUT/record"
     cp "$out/game/frametimes" "$out/frametimes"
+    grep -c . "$out/game/hud" > "$out/cpuframes"
 }
 
 # The scene's half, -I, as the user who runs it: Weston, the scene and its
 # frames, with its scratch under OUT, which the caller gave the user.
 if [ "$inner" = 1 ]; then
     TMPDIR=$out/tmp
-    export TMPDIR
-    mkdir -p "$TMPDIR"
+    # A new empty shader cache, so that no rung starts warm from an earlier
+    # run: guest-env.sh's GRAPHICS_DONE, which the record names.
+    MESA_SHADER_CACHE_DIR=$out/shader-cache GRAPHICS_DONE=1
+    export TMPDIR MESA_SHADER_CACHE_DIR GRAPHICS_DONE
+    rm -rf "$MESA_SHADER_CACHE_DIR"
+    mkdir -p "$TMPDIR" "$MESA_SHADER_CACHE_DIR"
     # shellcheck source=../../tests/graphics/runners/common.sh
     . "$runners/common.sh"
     # shellcheck disable=SC2034 # common.sh reads it
@@ -191,6 +234,8 @@ if [ "$inner" = 1 ]; then
         [ -n "${WAYLAND_DISPLAY:-}" ] || runner_die "-d needs WAYLAND_DISPLAY"
         runner_record "compositor the caller's, $WAYLAND_DISPLAY"
     fi
+    # The latency's round trips are over: what draws from here is the scene.
+    echo "measure: scene: $scene: started"
     "scene_$scene"
     runner_finish
     [ -s "$out/frametimes" ] || runner_die "the scene gave no frame times"
@@ -231,39 +276,86 @@ if [ -n "$latency" ] && "$latency" 200 > "$out/latency.out" 2>&1; then
     lat=$(sed -n 's/^latency: .* median \([0-9.]*\) ms.*/\1/p' "$out/latency.out")
 fi
 
-{ echo before; counts; } > "$out/counts"
-start=$(date +%s.%N)
-status=0
+# The scene's half runs in a process group of its own, which a stop of this
+# half ends whole: its Weston, its scene and their children.
+scene_pid=''
+# shellcheck disable=SC2317 # the traps call it
+stop_scene()
+{
+    [ -n "$scene_pid" ] || return 0
+    kill -TERM "-$scene_pid" 2>/dev/null || true
+    n=50
+    while kill -0 "-$scene_pid" 2>/dev/null && [ "$n" -gt 0 ]; do
+        sleep 0.1
+        n=$((n - 1))
+    done
+    kill -KILL "-$scene_pid" 2>/dev/null || true
+    wait "$scene_pid" 2>/dev/null || true
+    scene_pid=''
+}
+trap stop_scene EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 flags=''
 [ "$own" = 1 ] || flags=-d
 [ "$renderer" = gl ] || flags="$flags -p"
+harness=$here inner_runners=$runners inner_replays=$replays
 if [ -n "$user" ] && [ "$(id -u)" = 0 ]; then
+    # USER may not read the caller's directories, as gfx cannot read
+    # root's home on Debian: the scene's half runs from a copy under OUT.
+    rm -rf "$out/harness"
+    mkdir -p "$out/harness/runners" "$out/harness/replays"
+    cp "$here/measure.sh" "$here/piglit.txt" "$here/webgl.html" "$out/harness/"
+    cp -R "$runners/." "$out/harness/runners/"
+    [ ! -d "$replays" ] || cp -R "$replays/." "$out/harness/replays/"
     chown -R "$user" "$out"
-    su -s /bin/sh "$user" -c "sh '$here/measure.sh' -I -r '$rung' -o '$out' ${seconds:+-t $seconds} $flags $scene" \
-        > "$out/scene.log" 2>&1 || status=$?
+    harness=$out/harness inner_runners=$out/harness/runners inner_replays=$out/harness/replays
+    su -s /bin/sh "$user" -c "test -r '$harness/measure.sh'" 2>/dev/null || {
+        echo "measure: $scene: failed: $user cannot read $harness; give OUT a path $user can reach" >&2
+        exit 1
+    }
+fi
+
+[ "$marks" = 0 ] || echo "measure: counts: before"
+{ echo before; counts; } > "$out/counts"
+start=$(date +%s.%N)
+status=0
+if [ "$harness" != "$here" ]; then
+    setsid su -s /bin/sh "$user" -c "MEASURE_RUNNERS='$inner_runners' sh '$harness/measure.sh' -I -r '$rung' -o '$out' -R '$inner_replays' ${seconds:+-t $seconds} $flags $scene" \
+        > "$out/scene.log" 2>&1 &
 else
     # shellcheck disable=SC2086 # the flags are words
-    sh "$here/measure.sh" -I -r "$rung" -o "$out" ${seconds:+-t "$seconds"} $flags "$scene" \
-        > "$out/scene.log" 2>&1 || status=$?
+    MEASURE_RUNNERS=$inner_runners setsid sh "$here/measure.sh" -I -r "$rung" -o "$out" -R "$inner_replays" \
+        ${seconds:+-t "$seconds"} $flags "$scene" > "$out/scene.log" 2>&1 &
 fi
+scene_pid=$!
+wait "$scene_pid" || status=$?
+scene_pid=''
 end=$(date +%s.%N)
 { echo after; counts; } >> "$out/counts"
+[ "$marks" = 0 ] || echo "measure: counts: after"
 if [ "$status" -ne 0 ] || [ ! -s "$out/frametimes" ]; then
     echo "measure: $scene: failed: $(tail -n 3 "$out/scene.log" | tr '\n' ' ')" >&2
     exit 1
 fi
 
 copied=$(delta virtio_gpu_copied_bytes) exits=$(delta kvm_exits) trips=$(delta rung)
+passed=- cpuframes=$(grep -c . "$out/frametimes")
+[ ! -s "$out/cpuframes" ] || cpuframes=$(cat "$out/cpuframes")
+[ ! -f "$out/passes" ] || passed=$(grep -c 1 "$out/passes")/$(grep -c . "$out/passes")
 [ "$exits" != - ] || exits=$(delta linux_exits)
 if [ -n "$relay" ]; then
     copied=$(delta relay_bytes) trips=$(delta relay_commands)
 fi
 tick=$(getconf CLK_TCK 2>/dev/null || echo 100)
 sort -g "$out/frametimes" | awk -v busy="$(delta busy)" -v tick="$tick" -v scene="$scene" -v rung="$rung" \
-    -v lat="$lat" -v copied="$copied" -v exits="$exits" -v trips="$trips" -v s="$start" -v e="$end" '
+    -v lat="$lat" -v copied="$copied" -v exits="$exits" -v trips="$trips" -v s="$start" -v e="$end" \
+    -v cpuframes="$cpuframes" -v passed="$passed" '
     { t[NR] = $1; sum += $1 }
     END {
         p50 = t[int((NR - 1) * 0.50) + 1]; p99 = t[int((NR - 1) * 0.99) + 1]
-        printf "measure: result: %s %s frames %d frame_ms %.3f p50 %.3f p99 %.3f cpu_ms_per_frame %.3f latency_ms %s copied_bytes %s exits %s round_trips %s seconds %.1f\n",
-            scene, rung, NR, sum / NR, p50, p99, busy * 1000 / tick / NR, lat, copied, exits, trips, e - s
+        printf "measure: result: %s %s frames %d frame_ms %.3f p50 %.3f p99 %.3f cpu_ms_per_frame %.3f latency_ms %s copied_bytes %s exits %s round_trips %s seconds %.1f passed %s\n",
+            scene, rung, NR, sum / NR, p50, p99, busy * 1000 / tick / cpuframes, lat, copied, exits, trips, e - s, passed
     }' | tee "$out/line"

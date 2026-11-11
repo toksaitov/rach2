@@ -200,7 +200,8 @@ runner_server()
 # runner_switches BROWSER: the browser's fixed words, which the record lists.
 # Chromium's are those Chromium's own WebGL conformance runner uses or that
 # keep a test page from being throttled, with --ignore-gpu-blocklist, which
-# llvmpipe needs for WebGL; Firefox's are the prefs of its profile.
+# llvmpipe needs for WebGL, and the words of RUNNER_CHROMIUM_EXTRA, which a
+# caller may set; Firefox's are the prefs of its profile.
 runner_switches()
 {
     case $1 in
@@ -210,7 +211,7 @@ runner_switches()
                 "--disable-gpu-process-crash-limit --js-flags=--expose-gc" \
                 "--disable-background-timer-throttling --disable-renderer-backgrounding" \
                 "--disable-background-networking --disable-hang-monitor" \
-                "--autoplay-policy=no-user-gesture-required"
+                "--autoplay-policy=no-user-gesture-required ${RUNNER_CHROMIUM_EXTRA:-}"
             ;;
         firefox)
             echo "--new-instance --no-remote --kiosk"
