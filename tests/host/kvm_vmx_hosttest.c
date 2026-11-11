@@ -869,6 +869,9 @@ struct row {
     uint32_t cs_ar; /* CS's access rights at the exit, when a far jump changed them */
 };
 
+/* The VMCSes the model knows, one for each vCPU any row has run. */
+#define MVMCS_MAX 16
+
 static struct {
     /* The capability MSRs and IA32_FEATURE_CONTROL. */
     uint64_t basic, pin, proc, exit, entry, misc, proc2, ept_vpid;
@@ -879,7 +882,7 @@ static struct {
     uint64_t cr4;
     uint64_t vmxon_pa;
     struct mvmcs *cur;
-    struct mvmcs vmcs[6];
+    struct mvmcs vmcs[MVMCS_MAX]; /* every VMCS the rows used, never forgotten */
     int nvmcs;
     uint64_t dr[8];
     int dr6_writes;
@@ -910,7 +913,7 @@ static struct mvmcs *mvmcs_of(uint64_t pa)
             return &m.vmcs[i];
         }
     }
-    if (m.nvmcs == 6) {
+    if (m.nvmcs == MVMCS_MAX) {
         return NULL;
     }
     k_memset(&m.vmcs[m.nvmcs], 0, sizeof(m.vmcs[0]));
