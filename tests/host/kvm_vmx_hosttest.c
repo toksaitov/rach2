@@ -3310,17 +3310,16 @@ static void far_rows(int fd)
           "a divisor of zero is #DE at the instruction, with the registers as they were");
 }
 
-/** MOV SS from the device with the null selector in 64-bit mode at CPL 0,
- * through identity tables at 0x10000 that map RAM and the device's 2 MiB
- * with large pages: SS is Linux's flat data segment, which the next entry
- * takes. */
-static void null_ss_rows(int fd)
+/** Put the vCPU on `fd` in 64-bit mode at CPL 0 at the instruction
+ * `bytes` of `n` bytes, as `emul_start` puts it in protected mode, with
+ * RBX at the device's 0xD0000200, through identity tables at 0x10000 that
+ * map RAM and the device's 2 MiB with large pages. */
+static void long_start(int fd, const char *bytes, uint32_t n)
 {
-    struct kvm_run *rp = run_of(fd);
     struct kvm_sregs s;
     uint64_t e;
 
-    emul_start(fd, "\x8e\x13\xf4", 3, 0, 0xD0000200ull, 0);
+    emul_start(fd, bytes, n, 0, 0xD0000200ull, 0);
     k_memset(&ram[0x10000], 0, 0x4000);
     e = 0x11003;
     k_memcpy(&ram[0x10000], &e, 8);
@@ -3340,6 +3339,17 @@ static void null_ss_rows(int fd)
     s.cs.l = 1;
     s.cs.db = 0;
     CHECK(fdio(fd, KVM_SET_SREGS, (uintptr_t)&s) == 0, "KVM_SET_SREGS to 64-bit mode");
+}
+
+/** MOV SS from the device with the null selector in 64-bit mode at CPL 0
+ * (`long_start`): SS is Linux's flat data segment, which the next entry
+ * takes. */
+static void null_ss_rows(int fd)
+{
+    struct kvm_run *rp = run_of(fd);
+    struct kvm_sregs s;
+
+    long_start(fd, "\x8e\x13\xf4", 3);
     CHECK(mmio_read(fd, 0xD0000200ull, 2), "MOV SS, [RBX] reads its selector on MMIO");
     k_memset(rp->u.mmio.data, 0, 2);
     script(EXIT_HLT, 0, 1);
@@ -3538,18 +3548,12 @@ static void db_rows(int fd)
           "the processor's DR6 is never written, over every row: the guest's is the record's");
 }
 
-/** SYSCALL outside 64-bit mode after its #UD, which Linux's emulator runs
- * for a guest whose CPUID vendor is AMD's, on a vCPU of its own on `vm`,
- * since a vCPU's CPUID is fixed once it has run. */
-static void amd_syscall_rows(int vm)
+/** A vCPU of id `id` on `vm` with the supported CPUID but for leaf 0's
+ * vendor, AMD's. */
+static int amd_vcpu(int vm, uint32_t id)
 {
-    struct {
-        struct kvm_msrs h;
-        struct kvm_msr_entry e[1];
-    } msrs;
     struct kvm_cpuid_entry2 *e = (struct kvm_cpuid_entry2 *)(buf.bytes + sizeof(buf.cpuid));
-    struct kvm_sregs s;
-    int fd = fdio(vm, KVM_CREATE_VCPU, 6);
+    int fd = fdio(vm, KVM_CREATE_VCPU, id);
     uint32_t i;
 
     CHECK(fd > vm, "KVM_CREATE_VCPU");
@@ -3563,6 +3567,92 @@ static void amd_syscall_rows(int vm)
         }
     }
     CHECK(fdio(fd, KVM_SET_CPUID2, (uintptr_t)&buf) == 0, "KVM_SET_CPUID2 with AMD's vendor");
+    return fd;
+}
+
+/* RCX with its low half 0 and RSI and RDI with their upper halves set, for
+ * a REP string instruction at address size 4 that moves nothing. */
+#define NONE_RCX 0xFFFFFFFF00000000ull
+#define NONE_RSI 0x1111111100002000ull
+#define NONE_RDI 0x2222222200003000ull
+
+/** Run the REP string instruction `bytes` of 3 bytes in 64-bit mode on
+ * `fd` with RCX, RSI and RDI at NONE_RCX, NONE_RSI and NONE_RDI, through
+ * an EPT violation on the device, or a string IN's exit at address size 4
+ * when `in`, then a HLT; 1 when the HLT is reached past it. */
+static int none_run(int fd, const char *bytes, int in)
+{
+    struct kvm_regs r;
+
+    long_start(fd, bytes, 3);
+    r = regs_of(fd);
+    r.rcx = NONE_RCX;
+    r.rsi = NONE_RSI;
+    r.rdi = NONE_RDI;
+    CHECK(fdio(fd, KVM_SET_REGS, (uintptr_t)&r) == 0, "KVM_SET_REGS of RCX, RSI and RDI");
+    if (in) {
+        script(EXIT_IO, 0x38u | (0x80ull << 16), 3)->insn_info = 1u << 7;
+    } else {
+        script(EXIT_EPT_VIOLATION, 0x2, 0)->gpa = 0xD0000200ull;
+    }
+    script(EXIT_HLT, 0, 1);
+    return run(fd) == 0 && run_of(fd)->exit_reason == KVM_EXIT_HLT && regs_of(fd).rip == 0x1004;
+}
+
+/** REP MOVSB, STOSB and INSB at address size 4 in 64-bit mode with ECX 0,
+ * on `fd`, whose vendor is Intel's when `intel`: each moves nothing, and
+ * for Intel's vendor RCX ends 0 whole, with RSI's and RDI's upper halves
+ * cleared for MOVSB and RDI's for STOSB, as Linux's
+ * string_registers_quirk; for another vendor every register stays. */
+static void none_rows(int fd, int intel)
+{
+    struct kvm_regs r;
+
+    CHECK(none_run(fd, "\xf3\x67\xa4", 0), "REP MOVSB with ECX 0 moves nothing, stepped");
+    r = regs_of(fd);
+    CHECK(intel ? r.rcx == 0 && r.rsi == (uint32_t)NONE_RSI && r.rdi == (uint32_t)NONE_RDI
+                : r.rcx == NONE_RCX && r.rsi == NONE_RSI && r.rdi == NONE_RDI,
+          intel ? "and for Intel's vendor clears RCX and RSI's and RDI's upper halves"
+                : "and for AMD's vendor leaves RCX, RSI and RDI");
+    CHECK(none_run(fd, "\xf3\x67\xaa", 0), "REP STOSB with ECX 0 moves nothing, stepped");
+    r = regs_of(fd);
+    CHECK(intel ? r.rcx == 0 && r.rsi == NONE_RSI && r.rdi == (uint32_t)NONE_RDI
+                : r.rcx == NONE_RCX && r.rsi == NONE_RSI && r.rdi == NONE_RDI,
+          intel ? "and for Intel's vendor clears RCX and RDI's upper half"
+                : "and for AMD's vendor leaves RCX, RSI and RDI");
+    CHECK(none_run(fd, "\xf3\x67\x6c", 1), "REP INSB with ECX 0 moves nothing, stepped");
+    r = regs_of(fd);
+    CHECK(intel ? r.rcx == 0 && r.rsi == NONE_RSI && r.rdi == NONE_RDI
+                : r.rcx == NONE_RCX && r.rsi == NONE_RSI && r.rdi == NONE_RDI,
+          intel ? "and for Intel's vendor clears RCX alone"
+                : "and for AMD's vendor leaves RCX, RSI and RDI");
+}
+
+/** The REP string instructions with ECX 0 at address size 4 (`none_rows`)
+ * on two vCPUs of their own on `vm`, Intel's vendor and AMD's. */
+static void string_none_rows(int vm)
+{
+    int fd = make_vcpu(vm, 7);
+
+    none_rows(fd, 1);
+    fdclose(fd);
+    fd = amd_vcpu(vm, 8);
+    none_rows(fd, 0);
+    fdclose(fd);
+}
+
+/** SYSCALL outside 64-bit mode after its #UD, which Linux's emulator runs
+ * for a guest whose CPUID vendor is AMD's, on a vCPU of its own on `vm`,
+ * since a vCPU's CPUID is fixed once it has run. */
+static void amd_syscall_rows(int vm)
+{
+    struct {
+        struct kvm_msrs h;
+        struct kvm_msr_entry e[1];
+    } msrs;
+    struct kvm_sregs s;
+    int fd = amd_vcpu(vm, 6);
+
     msrs.h.nmsrs = 1;
     msrs.h.pad = 0;
     k_memset(msrs.e, 0, sizeof(msrs.e));
@@ -3605,6 +3695,41 @@ static void ts_rows(int vm)
     db_rows(fd);
     fdclose(fd);
     amd_syscall_rows(vm);
+    string_none_rows(vm);
+}
+
+/** The caller's single step over a Hyper-V hypercall the caller answers,
+ * on the vCPU `fd` whose guest named itself: an extended query, 0x8001,
+ * from 32-bit protected mode at CPL 0 is KVM_EXIT_HYPERV, and the KVM_RUN
+ * that takes the answer is KVM_EXIT_DEBUG past the VMCALL with no guest
+ * entered, as Linux's kvm_hv_hypercall_complete_userspace steps it. Real
+ * mode and the debug registers are put back after. */
+static void hv_step_rows(int fd)
+{
+    struct kvm_run *rp = run_of(fd);
+    struct kvm_sregs s = sregs_of(fd);
+    struct kvm_debugregs d;
+    int runs;
+
+    CHECK(fdio(fd, KVM_GET_DEBUGREGS, (uintptr_t)&d) == 0, "KVM_GET_DEBUGREGS");
+    ts_start(fd);
+    guest_debug(fd, KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_SINGLESTEP, 0, 0);
+    set_regs(fd, 0x1000, 0x8001u, 0, 0);
+    script(EXIT_VMCALL, 0, 3);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_HYPERV &&
+              rp->u.hyperv.type == KVM_EXIT_HYPERV_HCALL && rp->u.hyperv.u.hcall.input == 0x8001u &&
+              regs_of(fd).rip == 0x1000,
+          "an extended hypercall under the caller's single step is the caller's");
+    rp->u.hyperv.u.hcall.result = 0;
+    runs = m.launches + m.resumes;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_DEBUG && (rp->u.debug.dr6 & 0x4000u) &&
+              rp->u.debug.pc == 0x1003 && regs_of(fd).rip == 0x1003 && regs_of(fd).rax == 0 &&
+              m.launches + m.resumes == runs,
+          "and its answer's KVM_RUN is KVM_EXIT_DEBUG past the VMCALL, with no guest entered");
+    guest_debug(fd, 0, 0, 0);
+    CHECK(fdio(fd, KVM_SET_SREGS, (uintptr_t)&s) == 0 &&
+              fdio(fd, KVM_SET_DEBUGREGS, (uintptr_t)&d) == 0,
+          "KVM_SET_SREGS and KVM_SET_DEBUGREGS back to real mode's");
 }
 
 /** A VMCALL goes to Hyper-V's hypercalls once the CPUID names Hyper-V and
@@ -3663,6 +3788,7 @@ static void hv_rows(int vm)
     set_regs(fd, 0x1000, 0, 0, 0);
     CHECK(exits(fd, EXIT_VMCALL, 0, 3) == 0 && m.injected == ud && regs_of(fd).rip == 0x1001,
           "VMCALL is Hyper-V's, #UD in real mode and not stepped, before the HLT");
+    hv_step_rows(fd);
     msrs.e[0].index = MSR_TSC_AUX;
     msrs.e[0].data = 0x1234;
     CHECK(fdio(fd, KVM_SET_MSRS, (uintptr_t)&msrs) == 1, "IA32_TSC_AUX set");
@@ -3862,6 +3988,41 @@ static int32_t msr_filter(int vm, const uint32_t *deny, uint32_t n, uint32_t fla
     return fdio(vm, KVM_X86_SET_MSR_FILTER, (uintptr_t)&f);
 }
 
+/** The caller's single step over a filtered RDMSR and WRMSR the caller
+ * answers, on the vCPU `fd`: KVM_EXIT_DEBUG past the instruction at the
+ * KVM_RUN that takes the answer, with no guest entered, as Linux's
+ * kvm_skip_emulated_instruction reports it from complete_fast_rdmsr and
+ * complete_fast_msr_access. */
+static void msr_step_rows(int fd)
+{
+    struct kvm_run *rp = run_of(fd);
+    int runs;
+
+    guest_debug(fd, KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_SINGLESTEP, 0, 0);
+    set_regs(fd, 0x1000, 0, 0xDA0u, 0);
+    script(EXIT_MSR_READ, 0, 2);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_X86_RDMSR && regs_of(fd).rip == 0x1000,
+          "a filtered RDMSR under the caller's single step is the caller's");
+    rp->u.msr.error = 0;
+    rp->u.msr.data = 0x1122334455667788ull;
+    runs = m.launches + m.resumes;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_DEBUG && (rp->u.debug.dr6 & 0x4000u) &&
+              rp->u.debug.pc == sregs_of(fd).cs.base + 0x1002 && regs_of(fd).rip == 0x1002 &&
+              regs_of(fd).rax == 0x55667788u && m.launches + m.resumes == runs,
+          "and its answer's KVM_RUN is KVM_EXIT_DEBUG past it, with no guest entered");
+    set_regs(fd, 0x1000, 0x9u, 0xDA0u, 0x1u);
+    script(EXIT_MSR_WRITE, 0, 2);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_X86_WRMSR && regs_of(fd).rip == 0x1000,
+          "a filtered WRMSR under the caller's single step is the caller's");
+    rp->u.msr.error = 0;
+    runs = m.launches + m.resumes;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_DEBUG && (rp->u.debug.dr6 & 0x4000u) &&
+              rp->u.debug.pc == sregs_of(fd).cs.base + 0x1002 && regs_of(fd).rip == 0x1002 &&
+              m.launches + m.resumes == runs,
+          "and its answer's KVM_RUN is KVM_EXIT_DEBUG past it, with no guest entered");
+    guest_debug(fd, 0, 0, 0);
+}
+
 /** The caller's MSR exits through the backend, as Linux's
  * userspace_msr_exit_test: a filtered access and an unknown MSR are
  * KVM_EXIT_X86_RDMSR or WRMSR, the caller's answer completes the
@@ -3901,6 +4062,7 @@ static void user_msr_rows(int vm, int fd)
     script(EXIT_HLT, 0, 1);
     CHECK(run(fd) == 0 && m.injected == gpe && regs_of(fd).rip == 0x1001,
           "and the caller's error is #GP at it");
+    msr_step_rows(fd);
 
     set_regs(fd, 0x1000, 0, 0xDEADBEEFu, 0);
     script(EXIT_MSR_READ, 0, 2);

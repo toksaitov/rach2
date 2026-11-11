@@ -1056,6 +1056,30 @@ static void sint_route_rows(void)
     CHECK(lvl.irq == -1 && sint_raises == 1, "a SINT route lowered is -1");
 }
 
+/** An MSI route that KVM_CAP_X2APIC_API's 32-bit ids make invalid after
+ * KVM_SET_GSI_ROUTING took it: KVM_IRQ_LINE_STATUS on it is -1 and raises
+ * nothing, as Linux's kvm_set_irq skips kvm_set_msi's -EINVAL. It leaves
+ * that one route in place. */
+static void invalid_route_rows(void)
+{
+    struct kvm_irq_level lvl;
+
+    rt.h.nr = 1;
+    rt.h.flags = 0;
+    route(0, 9, msi_addr(2, 0), msi_data(0x62, 0, 0));
+    rt.e[0].u.msi.address_hi = 0x1;
+    CHECK(kvm_irq_ioctl(&vm, KVM_SET_GSI_ROUTING, (uintptr_t)&rt) == 0,
+          "an MSI route with high address bits 7:0 set, without 32-bit ids");
+    vm.x2apic_format = 1;
+    clear_vectors();
+    lvl.irq = 9;
+    lvl.level = 1;
+    CHECK(kvm_irq_ioctl(&vm, KVM_IRQ_LINE_STATUS, (uintptr_t)&lvl) == 0 && lvl.irq == -1 &&
+              !has(vcpu[2], APIC_IRR, 0x62),
+          "KVM_IRQ_LINE_STATUS on it once 32-bit ids make it invalid is -1, delivered nowhere");
+    vm.x2apic_format = 0;
+}
+
 /** The split controller, routes, KVM_IRQ_LINE and the EOI exit. */
 static void routing_rows(void)
 {
@@ -1107,6 +1131,8 @@ static void routing_rows(void)
     route(1, 5, msi_addr(0, 0), msi_data(0x36, 0, 0));
     CHECK(kvm_irq_ioctl(&vm, KVM_SET_GSI_ROUTING, (uintptr_t)&rt) == -EINVAL,
           "two MSI routes of one GSI");
+    invalid_route_rows();
+    route(0, 5, msi_addr(0, 0), msi_data(0x35, 0, 1));
     rt.h.nr = 3;
     route(1, 6, msi_addr(0, 0), msi_data(0x36, 0, 0));
     route(2, 30, msi_addr(0, 0), msi_data(0x37, 0, 1));
