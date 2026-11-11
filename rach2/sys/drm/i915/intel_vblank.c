@@ -12,6 +12,7 @@
 #include "../../klog.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/kirq.h"
+#include "../../mm/kheap.h"
 
 /*
  * The interrupt handler takes the pipe's events under the interrupt mask's
@@ -153,43 +154,42 @@ void intel_crtc_send_event(struct intel_crtc *c)
     intel_crtc_interactive_end(c);
 }
 
-void intel_crtc_boost_after_vblank(struct intel_crtc *c, int slot, struct dma_fence *fence)
+void intel_crtc_boost_after_vblank(struct intel_crtc *c, struct dma_fence *fence)
 {
-    struct i915_request *old;
+    struct intel_boost *b;
     uint32_t flags;
 
     if (!fence || fence->ops != &i915_fence_ops || drm_crtc_vblank_get(&c->base) != 0) {
         return;
     }
-    flags = kirq_save();
-    old = c->boost_rq[slot];
-    c->boost_rq[slot] = (struct i915_request *)dma_fence_get(fence);
-    kirq_restore(flags);
-    if (old) {
-        dma_fence_put(&old->fence.base);
+    b = (struct intel_boost *)kmalloc(sizeof(*b));
+    if (!b) {
         drm_crtc_vblank_put(&c->base);
+        return;
     }
+    b->rq = (struct i915_request *)dma_fence_get(fence);
+    flags = kirq_save();
+    b->next = c->boosts;
+    c->boosts = b;
+    kirq_restore(flags);
 }
 
-/** Take `c`'s boosts after a vblank, each with its references let go; at
- * the vblank (`boost`) the requests the chip has not begun are boosted, as
- * Linux's do_rps_boost, since one that runs may be taken to end before
- * the next. Interrupts masked. */
+/** Take `c`'s boosts after a vblank, each with its references let go and
+ * its entry freed; at the vblank (`boost`) the requests the chip has not
+ * begun are boosted, as Linux's do_rps_boost, since one that runs may be
+ * taken to end before the next. Interrupts masked. */
 static void vblank_boost(struct intel_crtc *c, int boost)
 {
-    struct i915_request *rq;
-    int slot;
+    struct intel_boost *b;
 
-    for (slot = 0; slot < INTEL_NUM_PLANES; slot++) {
-        if ((rq = c->boost_rq[slot]) == NULL) {
-            continue;
+    while ((b = c->boosts) != NULL) {
+        c->boosts = b->next;
+        if (boost && !i915_request_started(b->rq)) {
+            i915_rps_boost(b->rq);
         }
-        c->boost_rq[slot] = NULL;
-        if (boost && !i915_request_started(rq)) {
-            i915_rps_boost(rq);
-        }
-        dma_fence_put(&rq->fence.base);
+        dma_fence_put(&b->rq->fence.base);
         drm_crtc_vblank_put(&c->base);
+        kfree(b);
     }
 }
 

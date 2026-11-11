@@ -1212,6 +1212,13 @@ struct intel_scanout {
     struct i915_vma *vma;
 };
 
+/** A request a pipe boosts at its next vblank, Linux's wait_rps_boost:
+ * `rq` holds a fence reference, and the entry a vblank reference. */
+struct intel_boost {
+    struct intel_boost *next;
+    struct i915_request *rq;
+};
+
 /*
  * A pipe as a CRTC, with its three planes. `hw` is the readout of the
  * bind. `event` is the commit's event the pipe holds until the frame
@@ -1236,13 +1243,12 @@ struct intel_scanout {
  * `planes_on` has bit INTEL_PLANE_ for each plane the hardware shows.
  * `underrun_off` says its FIFO underruns are not reported, Linux's
  * cpu_fifo_underrun_disabled, and `inherited` that it shows what the
- * firmware lit, with no commit of its own yet. `boost_rq` holds, with a
- * fence reference and a vblank reference each, the request drawing a
- * plane's flip that the next vblank boosts if the chip has not begun it,
- * Linux's intel_display_rps_boost_after_vblank, NULL for none, under the
- * interrupts' masking; `rps_interactive` says the pipe holds a commit's
- * interactive mark of RPS (`i915_rps_mark_interactive`) until its pending
- * flip ends.
+ * firmware lit, with no commit of its own yet. `boosts` lists, under the
+ * interrupts' masking, the requests drawing flips that the next vblank
+ * boosts if the chip has not begun them, one entry for each call of
+ * `intel_crtc_boost_after_vblank`, Linux's wait_rps_boost;
+ * `rps_interactive` says the pipe holds a commit's interactive mark of
+ * RPS (`i915_rps_mark_interactive`) until its pending flip ends.
  */
 struct intel_crtc {
     struct drm_crtc base;
@@ -1268,7 +1274,7 @@ struct intel_crtc {
     struct intel_scanout shown[INTEL_NUM_PLANES];
     struct intel_scanout parked[INTEL_NUM_PLANES];
     uint32_t shown_from[INTEL_NUM_PLANES], shown_to[INTEL_NUM_PLANES];
-    struct i915_request *boost_rq[INTEL_NUM_PLANES];
+    struct intel_boost *boosts;
     uint8_t rps_interactive;
 };
 
@@ -2775,13 +2781,14 @@ void intel_crtc_interactive_end(struct intel_crtc *c);
 
 /**
  * Boost the GT's clock at the next vblank of `c` for `fence`, the request
- * drawing the flip of plane `slot`, if the chip has not begun it by then,
- * as Linux's intel_display_rps_boost_after_vblank: nothing for a fence of
- * another driver or a merge, or a pipe whose vblanks cannot be had; a
- * boost the plane waited for already is replaced. May be called with
- * interrupts on.
+ * drawing a flip, if the chip has not begun it by then, as Linux's
+ * intel_display_rps_boost_after_vblank: nothing for a fence of another
+ * driver or a merge, a pipe whose vblanks cannot be had, or when no memory
+ * is left. Each call adds its own entry, so a later commit on the plane
+ * leaves a pending flip's boost in place. Process context; may be called
+ * with interrupts on.
  */
-void intel_crtc_boost_after_vblank(struct intel_crtc *c, int slot, struct dma_fence *fence);
+void intel_crtc_boost_after_vblank(struct intel_crtc *c, struct dma_fence *fence);
 
 /**
  * The display's deferred interrupt work, `irq.deferred_display`: each
