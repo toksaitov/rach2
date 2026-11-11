@@ -6732,6 +6732,8 @@
         {"assertion_id": "vmsplice-nonblock", "checks": "vmsplice with SPLICE_F_NONBLOCK is EAGAIN out of an empty pipe and into a full one, the pipe itself blocking", "source": "program"},
         {"assertion_id": "vmsplice-ebadf", "checks": "vmsplice on /dev/null, which is not a pipe, is EBADF", "source": "program"},
         {"assertion_id": "vmsplice-einval", "checks": "vmsplice of 1025 buffers, more than IOV_MAX, is EINVAL", "source": "program"},
+        {"assertion_id": "pipe-read-null-eagain", "checks": "read(2) of an empty nonblocking pipe into NULL is EAGAIN, before the copy would fault, as Linux's", "source": "program"},
+        {"assertion_id": "pipe-read-null-eof", "checks": "read(2) of a pipe whose writer has closed into NULL returns 0, before the copy would fault, as Linux's", "source": "program"},
         {"assertion_id": "pty-hangup-eio", "checks": "A pty master reads the slave's last output and then EIO once the slave has closed.", "source": "program"},
         {"assertion_id": "fallocate-krffs", "checks": "posix_fallocate of a KRFFS file open for writing is EOPNOTSUPP.", "source": "program"},
         {"assertion_id": "fallocate-ebadf", "checks": "posix_fallocate of a file open only for reading is EBADF.", "source": "program"},

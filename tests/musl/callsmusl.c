@@ -70,7 +70,9 @@
  * buffers it waits for the first byte and stops when the pipe is empty;
  * with SPLICE_F_NONBLOCK it is EAGAIN on an empty pipe's read end and a
  * full pipe's write end; on a descriptor that is not a pipe it is EBADF,
- * and with more than IOV_MAX buffers EINVAL. A pty master
+ * and with more than IOV_MAX buffers EINVAL. read(2) of a pipe into NULL
+ * is EAGAIN when the pipe is empty and nonblocking and 0 once it has ended,
+ * as Linux's pipe_read answers before its copy. A pty master
  * reads the slave's last output and then EIO once the slave has closed.
  * posix_fallocate gives a file in /dev/shm its pages, the size and the blocks
  * of the range, and answers EOPNOTSUPP for a file of KRFFS or of /proc open for
@@ -116,7 +118,8 @@
  * `sendfile-file`, `copy-file-range`, `seek-data-hole`, `ficlone-eopnotsupp`,
  * `faccessat2`, `splice-ebadf`, `copy-file-range-bind-overlap`,
  * `splice-readers-once`, `vmsplice-write`, `vmsplice-read`,
- * `vmsplice-nonblock`, `vmsplice-ebadf`, `vmsplice-einval`, `pty-hangup-eio`,
+ * `vmsplice-nonblock`, `vmsplice-ebadf`, `vmsplice-einval`,
+ * `pipe-read-null-eagain`, `pipe-read-null-eof`, `pty-hangup-eio`,
  * `fallocate-krffs`, `fallocate-ebadf`, `fallocate-einval`, `fallocate-espipe`,
  * `fallocate-mode`, `fallocate-proc`, `fallocate-shm`, `adjtimex`,
  * `clock-adjtime`, `listxattr`, `getxattr-absent`, `lsetxattr-enoent`,
@@ -1851,13 +1854,6 @@ static int spliced_once(void)
 }
 
 /**
- * Check the copies that a second name of a file or a second reader of a
- * pipe could turn wrong: copy_file_range through a bind, and a splice from
- * a pipe that another process reads. Returns 0, or 1 after the failure is
- * printed.
- */
-
-/**
  * Check vmsplice in both directions as Linux's on the pipe `p`: into its
  * write end, the bytes of two buffers whole; out of its read end into three
  * buffers, a wait for the first byte, which a child writes once it sees the
@@ -1966,12 +1962,40 @@ static int vmsplices(void)
     return 0;
 }
 
+/**
+ * Check read(2) of a pipe into NULL as Linux's, whose vfs_read passes NULL
+ * to the pipe since access_ok takes it: an empty nonblocking pipe is EAGAIN
+ * and an ended one 0, each before the copy would fault. Returns 0, or 1
+ * after the failure is printed.
+ */
+static int null_reads(void)
+{
+    char *volatile nowhere = NULL;
+    int p[2];
+
+    if (pipe2(p, O_NONBLOCK) != 0) {
+        return fail("a nonblocking pipe");
+    }
+    errno = 0;
+    if (read(p[0], nowhere, 1) != -1 || errno != EAGAIN) {
+        return fail("a read of an empty nonblocking pipe into NULL was not EAGAIN");
+    }
+    held();
+    close(p[1]);
+    if (read(p[0], nowhere, 1) != 0) {
+        return fail("a read of an ended pipe into NULL did not return 0");
+    }
+    held();
+    close(p[0]);
+    return 0;
+}
+
 /** The rows of copies between pipes and files past `copies`: those of
- * `bind_overlap`, `spliced_once` and `vmsplices`. Returns 0, or 1 after the
- * failure is printed. */
+ * `bind_overlap`, `spliced_once`, `vmsplices` and `null_reads`. Returns 0,
+ * or 1 after the failure is printed. */
 static int overlaps(void)
 {
-    return bind_overlap() || spliced_once() || vmsplices();
+    return bind_overlap() || spliced_once() || vmsplices() || null_reads();
 }
 
 /**
@@ -2762,6 +2786,8 @@ static void plan(void)
                                          "vmsplice-nonblock",
                                          "vmsplice-ebadf",
                                          "vmsplice-einval",
+                                         "pipe-read-null-eagain",
+                                         "pipe-read-null-eof",
                                          "pty-hangup-eio",
                                          "fallocate-krffs",
                                          "fallocate-ebadf",
