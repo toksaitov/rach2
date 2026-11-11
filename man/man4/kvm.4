@@ -76,6 +76,7 @@ the XCR0 bits a guest may have.
 .Dv KVM_GET_TSC_KHZ ,
 .Dv KVM_GET_STATS_FD ,
 .Dv KVM_ENABLE_CAP ,
+.Dv KVM_X86_SET_MSR_FILTER ,
 .Dv KVM_CREATE_IRQCHIP ,
 .Dv KVM_GET_IRQCHIP ,
 .Dv KVM_SET_IRQCHIP ,
@@ -157,7 +158,11 @@ on a VM also takes
 .Dv KVM_CAP_MSR_PLATFORM_INFO ,
 whose argument 0 makes the guest's read of
 .Dv MSR_PLATFORM_INFO
-#GP; and
+#GP;
+.Dv KVM_CAP_X86_USER_SPACE_MSR
+and
+.Dv KVM_CAP_X2APIC_API ,
+below; and
 .Dv KVM_CAP_X86_APIC_BUS_CYCLES_NS ,
 the length of the APIC timer's tick, 1 ns unless set, with the local APIC
 in the kernel and before the first vCPU.
@@ -389,6 +394,71 @@ EXITINTINFO and its error code.
 Under
 .Dv KVM_CAP_EXIT_ON_EMULATION_FAILURE
 the run ends so at every privilege level, and the guest gets no #UD.
+.Ss MSRs
+.Dv KVM_GET_MSRS
+and
+.Dv KVM_SET_MSRS
+are the caller's accesses, and RDMSR and WRMSR the guest's, with Linux's
+rules for each.
+.Dv MSR_IA32_MCG_CTL
+without
+.Dv MCG_CTL_P
+in
+.Dv MSR_IA32_MCG_CAP
+reads 0 for the caller and takes its 0, and is #GP to the guest.
+A machine-check bank's STATUS takes any value from the caller, and from the
+guest only 0, unless the guest's CPUID vendor is AMD or Hygon and
+.Dv MSR_K7_HWCR
+has McStatusWrEn, bit 18, set.
+.Dv MSR_K7_HWCR
+is kept for every vendor: a write may set bits 18 and 24, bits 3, 6 and 8
+are dropped, and any other bit is refused.
+.Dv MSR_IA32_POWER_CTL
+is kept as written.
+.Pp
+.Dv KVM_X86_SET_MSR_FILTER
+replaces the VM's filter of the guest's RDMSR and WRMSR:
+up to 16 ranges, each a bitmap of
+.Va nmsrs
+MSRs from
+.Va base ,
+at most 0x600 bytes and read in whole 8-byte words, whose set bit allows the
+accesses its
+.Dv KVM_MSR_FILTER_READ
+and
+.Dv KVM_MSR_FILTER_WRITE
+flags name.
+The first range that holds the MSR and names the access decides it; an
+MSR no range decides is allowed unless the filter's flags are
+.Dv KVM_MSR_FILTER_DEFAULT_DENY .
+The x2APIC's MSRs, 0x800 to 0x8ff, are never filtered, and the caller's
+accesses never are.
+A refused access is #GP to the guest.
+.Pp
+.Dv KVM_ENABLE_CAP
+of
+.Dv KVM_CAP_X86_USER_SPACE_MSR
+names the reasons a guest's RDMSR or WRMSR goes to the caller instead:
+.Dv KVM_MSR_EXIT_REASON_INVAL ,
+a value or an access the MSR refuses;
+.Dv KVM_MSR_EXIT_REASON_UNKNOWN ,
+an MSR the kernel does not have; and
+.Dv KVM_MSR_EXIT_REASON_FILTER ,
+an access the filter refuses.
+.Dv KVM_RUN
+then ends with
+.Dv KVM_EXIT_X86_RDMSR
+or
+.Dv KVM_EXIT_X86_WRMSR ,
+with the index, the reason and a write's EDX:EAX in
+.Va msr .
+At the next
+.Dv KVM_RUN
+a nonzero
+.Va error
+is the guest's #GP at the instruction; otherwise a read's
+.Va data
+goes to EDX:EAX and the guest goes on past the instruction.
 .Ss Interrupts
 The full and split interrupt controllers follow Linux's interfaces.
 .Dv KVM_CREATE_IRQCHIP
@@ -461,7 +531,23 @@ is refused.
 and
 .Dv KVM_SET_LAPIC
 take the APIC's 1 KiB page in Linux's layout, with the x2APIC id in bits
-31:24.
+31:24, and in x2APIC mode
+.Dv KVM_SET_LAPIC
+ignores the caller's id.
+.Dv KVM_ENABLE_CAP
+of
+.Dv KVM_CAP_X2APIC_API
+sets its flags, which stay set.
+With
+.Dv KVM_X2APIC_API_USE_32BIT_IDS
+the x2APIC id is whole in bits 31:0,
+.Dv KVM_SET_LAPIC
+refuses an x2APIC id other than the vCPU's, and an MSI's destination takes
+bits 31:8 from its high address, whose bits 7:0 make it invalid.
+A destination of 0xff from an MSI or an IOAPIC is a broadcast to an APIC in
+x2APIC mode until
+.Dv KVM_X2APIC_API_DISABLE_BROADCAST_QUIRK
+makes it the x2APIC id 0xff.
 .Pp
 .Dv KVM_SET_GSI_ROUTING
 replaces the whole routing table: one MSI or Hyper-V
@@ -926,7 +1012,18 @@ does not name;
 .Dv KVM_CAP_HYPERV_SYNIC
 without a local APIC in the kernel;
 .Dv KVM_HYPERV_EVENTFD
-of a connection past 0xffffff.
+of a connection past 0xffffff;
+.Dv KVM_X86_SET_MSR_FILTER
+of a flag it does not name, a bitmap past 0x600 bytes, or
+.Dv KVM_MSR_FILTER_DEFAULT_DENY
+with no range;
+.Dv KVM_CAP_X86_USER_SPACE_MSR
+or
+.Dv KVM_CAP_X2APIC_API
+of a bit it does not name; and, under
+.Dv KVM_X2APIC_API_USE_32BIT_IDS ,
+.Dv KVM_SET_LAPIC
+of another x2APIC id and an MSI with bits 7:0 of its high address set.
 .It Bq Er E2BIG
 A list longer than the call takes, more than 256 CPUID entries or 256
 MSRs or more;
@@ -1043,9 +1140,7 @@ Linux's KVM API, version 12, for x86, as its
 gives it.
 .Sh BUGS
 At most 1024 vCPUs in a VM, with ids below 4096, and 256 memory slots.
-No
-.Dv KVM_CAP_X2APIC_API ,
-no dirty ring, no SMM and no nested virtualization, so
+No dirty ring, no SMM and no nested virtualization, so
 no enlightened VMCS and no direct TLB flush of Hyper-V's.
 Most statistics of
 .Dv KVM_GET_STATS_FD
