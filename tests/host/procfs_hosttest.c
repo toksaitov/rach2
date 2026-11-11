@@ -172,6 +172,47 @@ int64_t devfs_rtc_wakealarm(void)
     return -1;
 }
 
+/** No row arms the RTC's wake alarm. */
+int32_t devfs_rtc_set_wakealarm(int64_t at)
+{
+    (void)at;
+    return -EIO;
+}
+
+/** No attribute the rows write sends a uevent. */
+int sysfs_attr_uevent(int node, int attr)
+{
+    (void)node;
+    (void)attr;
+    return 0;
+}
+
+/** No row writes a backlight's attribute. */
+int backlight_store(int i, int attr, const char *text, int len)
+{
+    (void)i;
+    (void)attr;
+    (void)text;
+    (void)len;
+    return -ENODEV;
+}
+
+/** No row writes an rfkill switch's attribute. */
+int rfkill_store(int index, int attr, const char *text, int len)
+{
+    (void)index;
+    (void)attr;
+    (void)text;
+    (void)len;
+    return -ENODEV;
+}
+
+/** No row writes /sys/power/state. */
+int suspend_to_idle(void)
+{
+    return -EIO;
+}
+
 /** Each model processor has its own core in package zero. */
 void cpuinfo_place(int cpu, struct cpu_place *p)
 {
@@ -2255,6 +2296,58 @@ static void system_rows(void)
           "modalias, as Linux's dmi-id.c makes it");
 }
 
+/** Write the `count` bytes at `text` to the THP attribute `attr` through
+ * its descriptor's write; the call's answer. */
+static int32_t thp_write(int attr, const char *text, uint32_t count)
+{
+    struct procfs_file file;
+    fd_entry_t entry;
+
+    k_memset(&file, 0, sizeof(file));
+    k_memset(&entry, 0, sizeof(entry));
+    file.origin_file = SYNTH_SYS_UEVENT;
+    file.origin_task = SYSFS_THP << 8 | attr;
+    entry.priv = &file;
+    return procfs_sysattr_write(&entry, (const char __user *)text, count);
+}
+
+/** Whether the THP attribute `attr` reads `want`. */
+static int thp_reads(int attr, const char *want)
+{
+    char out[128];
+
+    return sys_text(SYSFS_THP, 0, attr, out, sizeof(out)) > 0 && eq(out, want);
+}
+
+/**
+ * Writes to the THP files longer than the other attributes' buffer reach
+ * the stores whole up to a page, as Linux's kernfs gives them: 32 zeroes
+ * to use_zero_page, kstrtobool's long words to shrink_underused, and a
+ * write past a page, whose first PAGE_SIZE bytes alone are parsed and
+ * taken. Each store's own limit stays: shmem_enabled refuses 16 bytes.
+ */
+static void thp_long_writes(void)
+{
+    static char text[PAGE_SIZE + 4];
+
+    k_memset(text, '0', 32);
+    check(thp_write(2, text, 32) == 32 && thp_reads(2, "0\n"),
+          "use_zero_page takes 32 zeroes, as Linux's kstrtoul");
+    k_memset(text, 'o', 40);
+    text[0] = 'n';
+    check(thp_write(5, text, 40) == 40 && thp_reads(5, "0\n"),
+          "shrink_underused takes a 40-byte word kstrtobool reads as no");
+    text[0] = 'Y';
+    check(thp_write(5, text, 40) == 40 && thp_reads(5, "1\n"), "and one it reads as yes");
+    k_memset(text, '0', PAGE_SIZE - 1);
+    k_memcpy(text + PAGE_SIZE - 1, "1xyz", 4);
+    check(thp_write(2, text, PAGE_SIZE + 3) == (int32_t)PAGE_SIZE && thp_reads(2, "1\n"),
+          "a write past a page gives the store its first page, which it takes");
+    k_memcpy(text, "never          \n", 16);
+    check(thp_write(4, text, 16) == -EINVAL, "shmem_enabled still refuses 16 bytes");
+    k_memset(text, 0, sizeof(text));
+}
+
 /** Read the THP files at Linux 6.12's defaults with the policy never, and
  * write each policy as Linux's stores parse it. */
 static void thp_rows(void)
@@ -2328,6 +2421,7 @@ static void thp_rows(void)
                                    eq(out, writes[i].after)),
               "THP file reads back the stored policy");
     }
+    thp_long_writes();
     thp_enabled = 2;
     thp_defrag = 3;
     thp_shmem = 1;
