@@ -2121,14 +2121,18 @@ in hexadecimal with
 and the two pointers when the thread entered the kernel by a fault or an
 interrupt;
 .Ql running
-when it is ready or on a processor; and
+when it is ready or on a processor;
+.Ql 0
+with every other field
+.Ql 0x0
+for a sleeping kernel thread; and
 .Ql -1 0x0 0x0
-for a kernel thread or an ended leader.
+for an ended leader.
 The number is the one a tracer left, and an i386 call on x86-64 has i386's
 number and arguments.
-The text is made at the open, so the caller's own thread shows the call
-that opened the file, where Linux shows the
-.Xr read 2 .
+The text is made at the first
+.Xr read 2 ,
+so the caller's own thread shows that read.
 The file is mode 0400; opening it needs what
 .Pa environ
 needs, and is
