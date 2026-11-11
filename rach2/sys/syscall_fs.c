@@ -6468,7 +6468,7 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
                          size_t asked)
 {
     struct open_file *ofd = entry->ofd;
-    struct kernel_iovec one;
+    struct kernel_iovec one[1];
     int32_t bytes_read;
     uint32_t room;
 
@@ -6478,9 +6478,9 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
     if (!ofd || !ofd->vmnt) {
         return -EBADF;
     }
-    one.iov_base = (__force uintptr_t)buf;
-    one.iov_len = count;
-    room = iov_prefix(&one, 1, 1);
+    one[0].iov_base = (__force uintptr_t)buf;
+    one[0].iov_len = count;
+    room = iov_prefix(one, 1, 1);
     fd_ofd_lock(ofd);
     if (!at && rw_offset_end(entry, asked) != 0) {
         fd_ofd_unlock(ofd);
@@ -6529,14 +6529,14 @@ static int32_t socket_readv(fd_entry_t *entry, const struct kernel_iovec *iov, i
  * for `read_fd`: a vector of one (`socket_readv`). */
 static int32_t socket_read(fd_entry_t *entry, char __user *buf, uint32_t count)
 {
-    struct kernel_iovec one;
+    struct kernel_iovec one[1];
 
     if (!entry->sock) {
         return -EFAULT;
     }
-    one.iov_base = (__force uintptr_t)buf;
-    one.iov_len = count;
-    return socket_readv(entry, &one, 1);
+    one[0].iov_base = (__force uintptr_t)buf;
+    one[0].iov_len = count;
+    return socket_readv(entry, one, 1);
 }
 
 /**
