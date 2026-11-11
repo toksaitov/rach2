@@ -72,9 +72,10 @@ struct sysfs_pci_ident;
  * nothing, so that a compositor whose loop polls the node does not spin
  * on a device that will never be readable. The records stay until their
  * last holder lets go. virtio-gpu's objects of guest memory are the
- * exception to the SIGBUS: a revoked mapping of one takes its pages again
- * at the next touch, as it does on Linux, where a program outlives the
- * reset of its GPU (77-5).
+ * exception to the SIGBUS: a revoked mapping of one, its own or an
+ * importer's through its dma-buf, takes its pages again at the next touch,
+ * as it does on Linux, where a program outlives the reset of its GPU
+ * (77-5).
  *
  * Discovery. A program finds a device by its identity: the driver's name
  * and the bus that DRM_IOCTL_VERSION, /sys/class/drm and the PCI ids give,
@@ -352,7 +353,8 @@ uint32_t sw_sync_info(char *buf, uint32_t cap);
  * keep the pages where the device reads them for scanout. NULL `mmap`
  * refuses mapping with ENODEV; NULL `free` frees the record with kfree.
  * `page` returns a borrowed physical frame, or 0 on failure, for PRIME
- * imports by other devices; NULL refuses those imports. `map_wc` records
+ * imports by other devices; NULL refuses those imports. It decides alone
+ * whether it serves once its device is unplugged. `map_wc` records
  * the cache type that the exporter and its importers use. `vmap` returns
  * the kernel's address of the object's bytes, one contiguous range, for
  * the console's buffer (drm_client.c): valid while the object is scanned
@@ -1744,6 +1746,10 @@ int32_t drm_dev_register(struct drm_device *dev);
  * (`drm_sysfs_unregister`). Any later ioctl of its files answers ENODEV;
  * the record stays until its last holder lets go. */
 void drm_dev_unplug(struct drm_device *dev);
+/** Zap every program's mapping of `obj` and of each import of its dma-buf
+ * on any device, so that the next touch of one asks for its page again.
+ * Under the big kernel lock; does not sleep. */
+void drm_gem_object_zap(struct drm_gem_object *obj);
 /** Take and drop a reference to a device. */
 void drm_dev_get(struct drm_device *dev);
 void drm_dev_put(struct drm_device *dev);
