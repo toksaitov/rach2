@@ -880,6 +880,13 @@ void socket_unref(struct socket *sock)
     (void)sock;
 }
 
+/** No row writes to a TCP socket, so none posts SIGPIPE: `rc`. */
+int32_t sock_stream_sent(int32_t rc, int post)
+{
+    (void)post;
+    return rc;
+}
+
 /** No row writes to a TCP socket: -EBADF. */
 int socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblock)
 {

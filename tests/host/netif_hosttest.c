@@ -822,6 +822,14 @@ uint32_t netlink_memberships(struct socket *sock, uint32_t *words, uint32_t max)
     return 0;
 }
 
+/** No row sends on a TCP stream that fails: no signal is posted. */
+void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
+{
+    (void)t;
+    (void)signo;
+    (void)info;
+}
+
 /** Refuse every option: no row opens a netlink socket. */
 int32_t netlink_setsockopt(struct socket *s, int optname, int val, int optlen)
 {
