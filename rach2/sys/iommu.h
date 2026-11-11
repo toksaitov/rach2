@@ -96,6 +96,10 @@ int iommu_reserved_regions(uint8_t bus, uint8_t devfn, struct iommu_region *out,
 unsigned long iommu_dma_faults(void);
 unsigned long iommu_irq_faults(void);
 
+/** Read the fault records a unit's last pass left full, when it reached
+ * its bound: the boot processor's tick, with interrupts off. */
+void iommu_tick(void);
+
 /** Bring the units up: called once at boot, once ACPICA has the tables. */
 void iommu_boot(void);
 

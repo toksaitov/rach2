@@ -76,7 +76,7 @@ QEMU's intel-iommu does not reflect GCMD.CFI in its status register, so the driv
 
 ### Fault reports
 
-Each unit's fault event is a message on one vector of the boot processor, whose handler reads every unit's fault recording registers from the one the status register gives until one is empty, clearing each, as Linux's `dmar_fault` does. A fault lost while every record was full (FSTS.PFO) is counted and logged once each time. The Lenovo's units have one record each.
+Each unit's fault event is a message on one vector of the boot processor, whose handler reads every unit's fault recording registers from the one the status register gives until one is empty, clearing each and dropping the unit's lock to log it, as Linux's `dmar_fault` does. A fault lost while every record was full (FSTS.PFO) is counted and logged once each time. The Lenovo's units have one record each, which a device that keeps faulting refills as fast as the handler reads it; so a pass reads at most 32 records, unlike `dmar_fault`, and leaves the rest to the next tick (`iommu_tick`), since a record left full keeps PPF set and the unit raises no new event for it.
 
 ### Why Debian translates DMA on the Lenovo without `intel_iommu=on`
 
@@ -117,6 +117,7 @@ So every device of the Lenovo is translated, the GPU in a group of its own with 
 * A refused invalidation descriptor reported and the queue going on.
 * `intel_iommu=off` and `intremap=off`, and both: the Lenovo's units read and no register written, or one command where the firmware left translation on.
 * 42 faults: one lost while the record was full, 32 logged and the rest counted.
+* A device that refills the one record as fast as it is read: a pass reads 32 records and leaves the full one, and the next tick reads the other 9.
 * A full remapping table: the message refused and not enabled.
 
 The boot checks were run by hand in QEMU 10.2.1 with `-machine q35 -device intel-iommu,intremap=on` and `rach2.rescue`, under the x86-64 kernel: with an AHCI disk, an NVMe disk and an e1000, every message and line was remapped; disk reads through the request queue raised the AHCI controller's MSI and the NVMe controller's MSI-X once each, pings over the e1000 were answered on its I/O APIC line, and no unit recorded a fault.

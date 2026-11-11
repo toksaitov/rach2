@@ -487,6 +487,8 @@ struct model {
         uint64_t lo, hi;
     } iec[VTD_IRT_ENTRIES];
     unsigned int cc_next, tlb_next, fault_next;
+    unsigned int refill; /* faults recorded again as a record is cleared,
+                            as by a device that keeps faulting */
     unsigned int last_dest, last_level;
     unsigned long wbf, inv_cc, inv_tlb, inv_iec, waits, iqe;
     unsigned long writes;     /* register writes of every kind */
@@ -804,7 +806,15 @@ void vtd_hw_write32(uintptr_t regs, unsigned int off, uint32_t v)
             m_queue(m);
         }
     } else if (off >= fro && off < fro + 16u * nfr && (off - fro) % 16u == 12u) {
+        uint32_t *rec = &m->regs[(off - 12u) / 4];
+
         m->regs[off / 4] &= ~(v & 0x80000000u);
+        if (m->refill > 0 && (rec[3] & 0x80000000u) == 0) {
+            m->refill--;
+            m->fault_next = (off - fro) / 16u;
+            (void)m_fault(m, (uint16_t)rec[2], ((uint64_t)rec[1] << 32 | rec[0]) + 0x1000u,
+                          (int)((rec[3] >> 30) & 1u), rec[3] & 0xFFu);
+        }
     } else if (off == VTD_PMEN) {
         m->regs[off / 4] = (v & 0x80000000u) | (v >> 31);
     } else {
@@ -2255,6 +2265,38 @@ static void row_fault_limit(void)
     row_end();
 }
 
+/** A device that keeps faulting refills the one record as fast as it is
+ * read: a pass stops at its bound and the next tick reads the rest. */
+static void row_fault_bound(void)
+{
+    struct iommu_domain *d;
+    uint64_t phys;
+
+    row_begin("fault_bound");
+    setup_qemu(CAP_QEMU, ECAP_QEMU);
+    check(vtd_start() == 1, "up");
+    d = iommu_domain_alloc();
+    check(iommu_attach(d, 0, DF(3, 0)) == 0, "NVMe attached to an empty domain");
+    M(0)->refill = 40;
+    (void)m_dma(M(0), 0, DF(3, 0), 0x1000, 0, &phys);
+    vtd_fault_all();
+    check(iommu_dma_faults() == 32 && vtd_units[0].fault_again == 1 &&
+              (m_fsts(M(0)) & VTD_FSTS_PPF) != 0,
+          "a pass reads 32 records and leaves the full one");
+    iommu_tick();
+    check(iommu_dma_faults() == 41 && vtd_units[0].fault_again == 0 &&
+              (m_fsts(M(0)) & VTD_FSTS_PPF) == 0,
+          "the tick reads the other 9");
+    iommu_tick();
+    check(iommu_dma_faults() == 41, "and the next tick none");
+    check(log_count("vtd: fault: dmar0: dma read from 0:3.0") == 32 &&
+              log_count("further faults counted, not logged") == 1,
+          "32 logged");
+    iommu_detach(d, 0, DF(3, 0));
+    iommu_domain_free(d);
+    row_end();
+}
+
 /** A full remapping table refuses a message, and the device keeps none. */
 static void row_irt_full(void)
 {
@@ -2309,6 +2351,7 @@ int main(void)
     row_options();
     row_read_only();
     row_fault_limit();
+    row_fault_bound();
     row_irt_full();
     free(ecam_mem);
     if (fails != 0) {

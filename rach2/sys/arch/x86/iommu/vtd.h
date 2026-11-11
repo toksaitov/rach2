@@ -175,6 +175,7 @@ struct vtd_unit {
     unsigned long overflows; /* passes that found PFO set: faults lost */
     unsigned long errors;    /* invalidation errors */
     unsigned int logged;     /* faults logged, for the limit */
+    int fault_again;         /* a pass left full records for the next tick */
     struct spinlock lock;    /* the registers and the tables */
 };
 
