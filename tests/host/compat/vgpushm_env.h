@@ -3,9 +3,11 @@
  * program of one processor, which includes the transport through this file:
  * a region of REGION_PAGES static pages with made-up frames, a clock that
  * moves a tick for each pass of a sleep, references to the region's frames
- * counted, a memory object of SH_PAGES pages, no eventfds, and a sleep that
- * lets the includer's model device look at the region until its condition
- * holds. The includer defines REGION_PAGES, `check` and `model_step`.
+ * counted, a memory object of SH_PAGES pages in a directory of leaves, no
+ * eventfds, a hook that runs once interrupts are let in with vshm_lock free,
+ * and a sleep that lets the includer's model device look at the region until
+ * its condition holds. The includer defines REGION_PAGES, `check` and
+ * `model_step`.
  */
 #ifndef VGPUSHM_ENV_H
 #define VGPUSHM_ENV_H
@@ -71,10 +73,22 @@ uint32_t kirq_save(void)
     return 0;
 }
 
-/** Nothing to put back. */
+/* A row's stand-in for another processor, run once at the first point
+ * after it is set where interrupts are let in with vshm_lock free, then
+ * cleared. */
+static void (*irq_on_hook)(void);
+
+/** Nothing to put back; run `irq_on_hook` when it is set and vshm_lock is
+ * free. */
 void kirq_restore(uint32_t flags)
 {
+    void (*hook)(void) = irq_on_hook;
+
     (void)flags;
+    if (hook && !vshm_lock.locked) {
+        irq_on_hook = NULL;
+        hook();
+    }
 }
 
 /** The fake clock, which each pass of a sleep moves by a tick. */
@@ -128,43 +142,65 @@ void mmio_unmap(uintptr_t va, size_t size)
     unmaps++;
 }
 
-/* A memory object of up to 8 pages, which is all a row gives one. */
-#define SH_PAGES 8u
-static uintptr_t sh_frames[SH_PAGES];
+/*
+ * A memory object whose fill adopts up to SH_PAGES pages, which is all a row
+ * gives one, into leaf 0 of a directory of SH_LEAVES leaves of SHMEM_LEAF
+ * frames, as mm/shmem.c keeps its table. The directory reaches one leaf
+ * once a page is adopted; a row may move pages into the far leaf, the
+ * directory's last, by hand, leaving the leaves between it and leaf 0
+ * missing. `sh_lookups` counts the frames asked for.
+ */
+#define SH_PAGES  8u
+#define SH_LEAVES 3u
+static uintptr_t sh_frames[SHMEM_LEAF], sh_far[SHMEM_LEAF];
+static uintptr_t *sh_dir[SH_LEAVES];
+static uint32_t sh_lookups;
 
-/** The frame at `pgoff`, or 0. */
+/** The frame at `pgoff`, or 0, as the directory of `sh` holds it. */
 uintptr_t shmem_resident(const struct shmem *sh, uint32_t pgoff)
 {
-    (void)sh;
-    return pgoff < SH_PAGES ? sh_frames[pgoff] : 0;
+    sh_lookups++;
+    if (pgoff >= sh->npages || !sh->leaves[pgoff / SHMEM_LEAF]) {
+        return 0;
+    }
+    return sh->leaves[pgoff / SHMEM_LEAF][pgoff % SHMEM_LEAF];
 }
 
 /** Take `phys` at `pgoff` with the caller's reference, and add the
- * mapping's, as mm/shmem.c does. */
+ * mapping's, as mm/shmem.c does; the directory reaches leaf 0 after. */
 uintptr_t shmem_adopt(struct shmem *sh, uint32_t pgoff, uintptr_t phys)
 {
-    (void)sh;
     if (pgoff >= SH_PAGES || sh_frames[pgoff]) {
         frame_unref(phys);
         return 0;
+    }
+    sh_dir[0] = sh_frames;
+    sh->leaves = sh_dir;
+    if (sh->nleaves == 0) {
+        sh->nleaves = 1;
+        sh->npages = SHMEM_LEAF;
     }
     sh_frames[pgoff] = phys;
     frame_ref(phys);
     return phys;
 }
 
-/** Drop every page's reference. */
+/** Drop every page's reference and the directory. */
 void shmem_free(struct shmem *sh)
 {
-    uint32_t i;
+    uint32_t l, i;
 
-    (void)sh;
-    for (i = 0; i < SH_PAGES; i++) {
-        if (sh_frames[i]) {
-            frame_unref(sh_frames[i]);
-            sh_frames[i] = 0;
+    for (l = 0; sh->leaves && l < sh->nleaves; l++) {
+        for (i = 0; sh->leaves[l] && i < SHMEM_LEAF; i++) {
+            if (sh->leaves[l][i]) {
+                frame_unref(sh->leaves[l][i]);
+                sh->leaves[l][i] = 0;
+            }
         }
+        sh_dir[l] = NULL;
     }
+    sh->leaves = NULL;
+    sh->nleaves = sh->npages = 0;
 }
 
 /** No eventfd is held: the rows poll. */
