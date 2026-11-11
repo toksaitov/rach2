@@ -17,7 +17,9 @@
  *
  * The rows: the dirty log's structures and ioctl numbers; the capabilities;
  * KVM_SET_USER_MEMORY_REGION's checks in Linux's order and its answers for a
- * new, moved, flagged, unchanged and deleted slot and an overlap; a 4 KiB slot
+ * new, moved, flagged, unchanged and deleted slot and an overlap, a move
+ * and a deletion taking back the guest page maps over the slot's old frames
+ * (`kvm_gpamap_zap`, recorded here); a 4 KiB slot
  * mapped at each fault with the caller's frame, write-back with the guest's PAT
  * ignored, or in charge while a device that does not snoop is assigned, the
  * first and the last such device dropping every leaf, read-only over a
@@ -208,11 +210,28 @@ struct mm *kvm_vm_mm(struct kvm_vm *v)
     return &the_mm;
 }
 
+/* The calls of kvm_gpamap_zap, and the range the last one named. */
+static int zaps;
+static uint64_t zap_gfn, zap_npages;
+
+/** Record the range whose guest page maps a slot's change takes back. */
 void kvm_gpamap_zap(struct kvm_vm *vm, uint64_t gfn, uint64_t npages)
 {
     (void)vm;
-    (void)gfn;
-    (void)npages;
+    zaps++;
+    zap_gfn = gfn;
+    zap_npages = npages;
+}
+
+/** Whether the calls since the last look were one zap of [gfn, gfn +
+ * npages), clearing the record. */
+static int zapped(uint64_t gfn, uint64_t npages)
+{
+    int one = zaps == 1 && zap_gfn == gfn && zap_npages == npages;
+
+    zaps = 0;
+    zap_gfn = zap_npages = 0;
+    return one;
 }
 
 void kvm_vcpu_kick(struct kvm_vcpu *v, uint32_t request)
@@ -412,11 +431,15 @@ static void region_rows(void)
     CHECK(set(0, 0, 0x100000, 0x10000, HVA + 0x1000) == -EINVAL, "a change of address");
     CHECK(set(0, 0, 0x100000, 0x20000, HVA) == -EINVAL, "a change of size");
     CHECK(set(0, KVM_MEM_READONLY, 0x100000, 0x10000, HVA) == -EINVAL, "a change of READONLY");
-    CHECK(set(0, 0, 0x100000, 0x10000, HVA) == 0, "no change");
-    CHECK(set(0, 0, 0x118000, 0x10000, HVA) == -EEXIST, "a move into another slot");
+    zapped(0, 0);
+    CHECK(set(0, 0, 0x100000, 0x10000, HVA) == 0 && zaps == 0, "no change, and no map taken back");
+    CHECK(set(0, 0, 0x118000, 0x10000, HVA) == -EEXIST && zaps == 0, "a move into another slot");
     CHECK(set(0, 0, 0x200000, 0x10000, HVA) == 0, "a move");
+    CHECK(zapped(0x100, 16), "a move takes back the guest page maps over the slot's old frames");
     CHECK(set(0, 0, 1ull << 39, 0x10000, HVA) == -EINVAL, "a move past the physical width");
-    CHECK(set(0, 0, 0, 0, 0) == 0 && set(1, 0, 0, 0, 0) == 0, "the deletions");
+    CHECK(set(0, 0, 0, 0, 0) == 0 && zapped(0x200, 16),
+          "a deletion takes back the guest page maps over the slot");
+    CHECK(set(1, 0, 0, 0, 0) == 0 && zapped(0x110, 16), "the other deletion");
     CHECK(((struct slots *)vm.slots)->pages == 0 && the_mm.notify == NULL,
           "nothing left of the slots");
 }
