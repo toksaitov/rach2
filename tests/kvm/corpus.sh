@@ -9,9 +9,11 @@
 # LIST is unit-tests.list or selftests.list of this directory: a test a line,
 # its name and EXPECT, `pass`, `skip`, `fail` or `excluded`, or FLAG?A:B for a
 # test whose result is the processor's: A where the `flags` of /proc/cpuinfo
-# have FLAG, and B otherwise; A and B may each be FLAG?A:B. Three FLAGs are
+# have FLAG, and B otherwise; A and B may each be FLAG?A:B. Four FLAGs are
 # not the processor's flags: `kvm_cap_vm_tsc_control`, where /dev/kvm answers
 # KVM_CAP_VM_TSC_CONTROL with a value above 0, which perl asks it;
+# `kvm_lbr`, where the PERF_CAPABILITIES that /dev/kvm offers has an LBR
+# format, bits 5:0, which perl reads with KVM_GET_MSRS;
 # `kvm_pmu`, where /sys/module/kvm/parameters/enable_pmu reads Y; and
 # `intel`, where /proc/cpuinfo's vendor_id is GenuineIntel. Each test whose
 # EXPECT is not `excluded` runs, in the order of the list:
@@ -24,7 +26,8 @@
 #   its own; exit 0 is a pass and 4, kselftest's code, a skip.
 #
 # The copy and the directories are under TMPDIR, /tmp by default, and are
-# removed on every exit. Each test's line is `kvm-corpus: NAME: RESULT`, with
+# removed on every exit; a unit run sets kernel.nmi_watchdog to 0 and puts it
+# back on every exit. Each test's line is `kvm-corpus: NAME: RESULT`, with
 # `as expected` or `expected EXPECT` after it, and a kvm-unit-test's own log
 # on standard error after the second, and each excluded one's
 # `kvm-corpus: NAME: excluded: REASON`. The last line is `kvm-corpus: result:
@@ -51,7 +54,9 @@ case $list in
 esac
 
 work=
-trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+watchdog=
+trap '[ -z "$watchdog" ] || echo "$watchdog" > /proc/sys/kernel/nmi_watchdog
+    [ -z "$work" ] || rm -rf "$work"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -64,6 +69,14 @@ flags=$(awk -F: '$1 ~ /^flags[ \t]*$/ { print $2; exit }' /proc/cpuinfo 2> /dev/
 if perl -e 'open(my $f, "<", "/dev/kvm") or exit 1;
         exit !(ioctl($f, 0xAE03, 214) + 0)' 2> /dev/null; then
     flags="$flags kvm_cap_vm_tsc_control"
+fi
+# KVM_GET_MSRS is _IOWR(0xAE, 0x88, struct kvm_msrs), 8 bytes, and reads
+# feature MSRs from /dev/kvm: one entry, PERF_CAPABILITIES, 0x345.
+if perl -e 'open(my $f, "<", "/dev/kvm") or exit 1;
+        my $b = pack("LLLLQ", 1, 0, 0x345, 0, 0);
+        exit !((ioctl($f, 0xC008AE88, $b) + 0) == 1 &&
+            (unpack("LLLLQ", $b))[4] & 0x3F)' 2> /dev/null; then
+    flags="$flags kvm_lbr"
 fi
 pmu=
 [ ! -r /sys/module/kvm/parameters/enable_pmu ] ||
@@ -105,6 +118,13 @@ excluded=$(awk '$2 == "excluded"' "$work/list" | wc -l | tr -d ' ')
 # results: write NAME RESULT a line to $work/got, RESULT pass, skip or fail.
 : > "$work/got"
 if [ "$kind" = unit ]; then
+    # `pmu` and `pmu_lbr` require kernel.nmi_watchdog to read 0, as their
+    # configuration checks, since the hard-lockup detector holds a counter;
+    # it reads 0 for the run and its value comes back on every exit.
+    if read -r w < /proc/sys/kernel/nmi_watchdog 2> /dev/null && [ "$w" != 0 ] &&
+        echo 0 2> /dev/null > /proc/sys/kernel/nmi_watchdog; then
+        watchdog=$w
+    fi
     cp -R "$tree" "$work/kut" || exit 1
     # shellcheck disable=SC2046 # one word a test
     (cd "$work/kut" && ACCEL=kvm,kernel-irqchip=split TIMEOUT=0 \
