@@ -36,8 +36,12 @@
 /** The longest record the logger will build, including its newline. */
 #define KLOG_RECORD_MAX 256
 
-/** The machine's own copy of its records. */
-#define KLOG_RING_SIZE 16384
+/**
+ * The machine's own copy of its records: 128 KiB, Linux's default, which is
+ * `__LOG_BUF_LEN` (kernel/printk/printk.c:498), 1 << CONFIG_LOG_BUF_SHIFT,
+ * whose default is 17 (init/Kconfig:768). The ring is in .bss.
+ */
+#define KLOG_RING_SIZE 131072
 
 /**
  * Format and deliver one record.
