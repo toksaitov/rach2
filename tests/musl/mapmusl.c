@@ -36,7 +36,10 @@
  * /proc/self/mem to a read-only page a fork shared leaves the page read-only.
  * On an ext2 root, through a shared mapping of a file the parent sees a
  * child's store, read(2) sees a store, the mapping sees a write(2) without
- * losing a store beside it, and its stores reach the file after munmap and
+ * losing a store beside it, a readv(2) whose first buffer lies in the
+ * mapping reads into its second buffer what the first stored there, as
+ * Linux reads the vector from the shared page in order, and its stores
+ * reach the file after munmap and
  * after a mapper's exit; on the KRFFS root, one that may be written is ENODEV,
  * and a read-only one through a descriptor open for writing may not be made
  * writable. A page of the program's own data segment that was written, and
@@ -75,6 +78,7 @@
 #include <sys/resource.h>
 #include <sys/statfs.h>
 #include <sys/syscall.h>
+#include <sys/uio.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -134,6 +138,7 @@ static const char *const assertion_id[] = {"private-file",
                                            "ext2-child",
                                            "ext2-read",
                                            "ext2-write",
+                                           "ext2-readv",
                                            "ext2-msync",
                                            "ext2-reach-file",
                                            "krffs-enodev",
@@ -1027,11 +1032,13 @@ static int krffs_shared(int fd, char *m)
 /**
  * Check that `m`, a shared mapping of two pages of `fd`, a file on ext2, maps
  * the file's pages: a child's store is seen, read and write see the mapping's
- * stores and it sees theirs, and every store reaches the file. Unmaps `m`.
+ * stores and it sees theirs, a readv's later buffer sees what its first
+ * stored into the mapping, and every store reaches the file. Unmaps `m`.
  * Returns 0, or 1 once the failure is reported.
  */
 static int ext2_shared(int fd, char *m)
 {
+    struct iovec parts[2];
     char buf[8];
     pid_t pid;
 
@@ -1057,6 +1064,17 @@ static int ext2_shared(int fd, char *m)
     if (pwrite(fd, "WR", 2, 8) != 2 || memcmp(m + 8, "WR", 2) != 0 || m[100] != 'S') {
         return fail("a write to a file on the root was not seen through its shared mapping, "
                     "or lost a store beside it");
+    }
+    row_held();
+    parts[0].iov_base = m + 201;
+    parts[0].iov_len = 1;
+    parts[1].iov_base = buf;
+    parts[1].iov_len = 1;
+    buf[0] = 0;
+    if (pwrite(fd, "AB", 2, 200) != 2 || lseek(fd, 200, SEEK_SET) != 200 ||
+        readv(fd, parts, 2) != 2 || m[201] != 'A' || buf[0] != 'A') {
+        return fail("a readv's second buffer did not see the byte its first, in a shared "
+                    "mapping of a file on the root, stored there");
     }
     row_held();
     if (msync(m, 2 * PAGE, MS_SYNC) != 0) {
