@@ -41,11 +41,28 @@
  *       sentinel on each side of the reader's bytes untouched. The kernel's
  *       copies move words with a tail of bytes, so a wrong tail, a wrong
  *       start or a byte written past the end shows at the length and
- *       alignment that has it.
+ *       alignment that has it;
+ *   (j) bytes held across the end of the ring survive F_SETPIPE_SZ: a pipe
+ *       of 64 KiB holds 40000 bytes that wrap, grows to 128 KiB, shrinks to
+ *       64 KiB, which wraps them again, gives up 10000 and shrinks to
+ *       32 KiB, and then tee copies the 30000 left, wrapped in the source,
+ *       into a pipe whose tail wraps, and both pipes read back the stream
+ *       in order;
+ *   (k) the limits of a caller without privilege, as on Linux: a write to
+ *       /proc/sys/fs/pipe-max-size is rounded up to a power of two of a page
+ *       or more and past 2^31 refused; a child that set its user to 65534
+ *       may not grow a pipe past pipe-max-size, may grow one to 1 MiB, and,
+ *       with pipe-user-pages-soft set to 64, grows its own pipes to 64
+ *       pages whatever root's hold, is refused a growth past them, gets a
+ *       new pipe of 8192 bytes, and may still shrink one.
  *
  * Given `machine=native` (probe_args.h), the probe leaves out the heap's
  * comparison of (e), since the kernel's heap is shared with every process of
- * a machine that is already up; the pipes are still made and closed.
+ * a machine that is already up; the pipes are still made and closed. It
+ * leaves out (k)'s writes to /proc/sys and the rows that need them as well,
+ * since the limits they set would bind every other user's pipes meanwhile.
+ * Run without privilege, it leaves out all of (k) but its child's first
+ * rows, which it runs as the user it has.
  *
  * Prints "PIPEPROBE OK" and exits with the count of the checks that failed.
  * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
@@ -70,12 +87,17 @@
 #define CYCLES      100 /* pipes made and closed in one try of case (e) */
 #define CYCLE_TRIES 5   /* tries of case (e) before its heap check fails */
 
-#define EAGAIN      11
-#define EBUSY       16
-#define EPIPE       32
-#define SIGPIPE     13
-#define SA_SIGINFO  0x00000004
-#define SA_RESTORER 0x04000000
+#define EPERM             1
+#define EAGAIN            11
+#define EBUSY             16
+#define EINVAL            22
+#define EPIPE             32
+#define O_WRONLY          1
+#define SPLICE_F_NONBLOCK 2
+#define NOBODY            65534 /* the user (k)'s child takes */
+#define SIGPIPE           13
+#define SA_SIGINFO        0x00000004
+#define SA_RESTORER       0x04000000
 
 #define PIPE_BUF_SIZE 65536
 
@@ -210,6 +232,22 @@ enum {
     REFILL_CHILD,
     SWEEP_PIPE,
     SWEEP,
+    WRAP_PIPES,
+    WRAP_HELD,
+    WRAP_GROW,
+    WRAP_SHRINK,
+    WRAP_TEE,
+    WRAP_ORDER,
+    MAX_ROUND,
+    MAX_EINVAL,
+    LIMIT_FORK,
+    LIMIT_PAST_MAX,
+    LIMIT_TO_MAX,
+    SOFT_ROOT,
+    SOFT_OWN,
+    SOFT_PAST,
+    SOFT_NEW_SMALL,
+    SOFT_SHRINK,
     CHECKS
 };
 
@@ -262,6 +300,22 @@ static const struct {
     {"refill-child", "and said so"},
     {"sweep-pipe", "pipe() for the alignment sweep"},
     {"sweep", "every length to 67 at every alignment of both buffers arrives intact"},
+    {"wrap-pipes", "two nonblocking pipes for the wrap test"},
+    {"wrap-held", "40000 bytes held across the end of a 64 KiB ring"},
+    {"wrap-grow", "F_SETPIPE_SZ of 128 KiB with the bytes held wrapped"},
+    {"wrap-shrink", "F_SETPIPE_SZ back to 64 KiB, a read of 10000, and to 32 KiB"},
+    {"wrap-tee", "tee of the 30000 bytes wrapped into a pipe whose tail wraps, read in order"},
+    {"wrap-order", "the 30000 bytes read back in order from the resized pipe"},
+    {"max-round", "pipe-max-size takes 600000 as 1048576, 1 as 4096 and 2^31 as written"},
+    {"max-einval", "pipe-max-size refuses 2^31 + 1 with EINVAL"},
+    {"limit-fork", "fork for the limits' child"},
+    {"limit-past-max", "an unprivileged F_SETPIPE_SZ of 2 MiB -> -EPERM"},
+    {"limit-to-max", "an unprivileged F_SETPIPE_SZ of 600000 gives 1 MiB"},
+    {"soft-root", "root's pipe grows to 512 KiB with pipe-user-pages-soft at 64"},
+    {"soft-own", "the unprivileged child grows two pipes to 64 pages in all"},
+    {"soft-past", "and its growth past 64 pages -> -EPERM"},
+    {"soft-new-small", "and its new pipe past them has 8192 bytes"},
+    {"soft-shrink", "and it may still shrink a pipe"},
 };
 
 /* Each check's outcome: 0 not made, 1 held, 2 failed at least once. */
@@ -718,9 +772,224 @@ static void case_sweep(void)
     syscall1(SYS_CLOSE, p[1]);
 }
 
+/* The byte at offset `i` of the stream case (j) writes. */
+static char wrap_byte(unsigned int i)
+{
+    return (char)(i * 13u + (i >> 9));
+}
+
+/* One write's or one read's bytes of case (j). */
+static char wrap_buf[PIPE_BUF_SIZE];
+
+/** Write the `n` bytes of case (j)'s stream from offset `at` to `fd`:
+ * whether all were taken. */
+static int wrap_put(int fd, unsigned int at, int n)
+{
+    int i;
+
+    for (i = 0; i < n; i++) {
+        wrap_buf[i] = wrap_byte(at + (unsigned int)i);
+    }
+    return wr(fd, wrap_buf, n) == n;
+}
+
+/** Read `n` bytes from `fd`: whether they are case (j)'s stream from offset
+ * `at`, every one. */
+static int wrap_get(int fd, unsigned int at, int n)
+{
+    int i;
+
+    if (rd(fd, wrap_buf, n) != n) {
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        if (wrap_buf[i] != wrap_byte(at + (unsigned int)i)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/** F_SETPIPE_SZ of `size` on `fd`: the size given, or a negated errno. */
+static int set_size(int fd, long size)
+{
+    return (int)syscall3(SYS_FCNTL, fd, F_SETPIPE_SZ, size);
+}
+
+/**
+ * Case (j): bytes that wrap the ring survive a growth and two shrinks, each
+ * of which copies them across the end of one ring or both, and tee copies
+ * them from a wrapped source to a wrapped tail.
+ */
+static void case_wrap(void)
+{
+    int p[2], q[2];
+
+    check(WRAP_PIPES, do_pipe2(p, O_NONBLOCK) == 0 && do_pipe2(q, O_NONBLOCK) == 0);
+    check(WRAP_HELD,
+          wrap_put(p[1], 0, 60000) && wrap_get(p[0], 0, 50000) && wrap_put(p[1], 60000, 30000));
+    check(WRAP_GROW, set_size(p[1], 131072) == 131072);
+    check(WRAP_SHRINK, set_size(p[1], 65536) == 65536 && wrap_get(p[0], 50000, 10000) &&
+                           set_size(p[1], 32768) == 32768);
+    check(WRAP_TEE, wr(q[1], big, 50000) == 50000 && rd(q[0], back, 50000) == 50000 &&
+                        syscall4(SYS_TEE, p[0], q[1], 30000, SPLICE_F_NONBLOCK) == 30000 &&
+                        wrap_get(q[0], 60000, 30000));
+    check(WRAP_ORDER, wrap_get(p[0], 60000, 30000));
+    syscall1(SYS_CLOSE, p[0]);
+    syscall1(SYS_CLOSE, p[1]);
+    syscall1(SYS_CLOSE, q[0]);
+    syscall1(SYS_CLOSE, q[1]);
+}
+
+#define PIPE_MAX_FILE  "/proc/sys/fs/pipe-max-size"
+#define PIPE_SOFT_FILE "/proc/sys/fs/pipe-user-pages-soft"
+
+/* Why case (k) wrote no /proc/sys file, or NULL when it did. */
+static const char *limits_skipped;
+
+/** Write the text `s` to the /proc/sys file `path`: the count written, or a
+ * negated errno. */
+static int sysctl_put(const char *path, const char *s)
+{
+    int fd = (int)syscall3(SYS_OPEN, (long)path, O_WRONLY, 0), n;
+
+    if (fd < 0) {
+        return fd;
+    }
+    n = wr(fd, s, (int)strlen(s));
+    syscall1(SYS_CLOSE, fd);
+    return n;
+}
+
+/** Whether the /proc/sys file `path` reads exactly `s`. */
+static int sysctl_is(const char *path, const char *s)
+{
+    char buf[32];
+    int fd = (int)syscall3(SYS_OPEN, (long)path, 0, 0), n;
+
+    if (fd < 0) {
+        return 0;
+    }
+    n = rd(fd, buf, (int)sizeof(buf));
+    syscall1(SYS_CLOSE, fd);
+    return n == (int)strlen(s) && eqn(buf, s, n);
+}
+
+/** Wait for the child `pid`: its exit status, or 255 when it did not exit
+ * by itself. */
+static int exit_status(int pid)
+{
+    int status = -1;
+
+    if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid || (status & 0x7f) != 0) {
+        return 255;
+    }
+    return (status >> 8) & 0xff;
+}
+
+/* The bits a child of case (k) exits with, one for each row that failed. */
+#define LIMIT_BAD_USER 0x01 /* setuid to NOBODY failed */
+#define LIMIT_BAD_PAST 0x02
+#define LIMIT_BAD_TO   0x04
+#define SOFT_BAD_OWN   0x08
+#define SOFT_BAD_PAST  0x10
+#define SOFT_BAD_NEW   0x20
+#define SOFT_BAD_SHR   0x40
+
+/**
+ * The child of case (k): as NOBODY when `become` is set, and otherwise as
+ * the probe's user, it checks pipe-max-size's limit when `soft` is 0, and
+ * pipe-user-pages-soft's, which the parent set to 64, when it is 1. Exits
+ * with the bits of the rows that failed.
+ */
+static void limits_child(int become, int soft)
+{
+    int a[2], b[2], c[2], bad = 0;
+
+    if (become && syscall1(SYS_SETUID, NOBODY) != 0) {
+        sys_exit(LIMIT_BAD_USER);
+    }
+    if (!soft) {
+        if (do_pipe(a) != 0 || set_size(a[1], 2097152) != -EPERM) {
+            bad |= LIMIT_BAD_PAST;
+        }
+        if (set_size(a[1], 600000) != 1048576) {
+            bad |= LIMIT_BAD_TO;
+        }
+        sys_exit(bad);
+    }
+    if (do_pipe(a) != 0 || do_pipe(b) != 0 || set_size(a[1], 131072) != 131072 ||
+        set_size(b[1], 131072) != 131072) {
+        bad |= SOFT_BAD_OWN;
+    }
+    if (set_size(b[1], 262144) != -EPERM) {
+        bad |= SOFT_BAD_PAST;
+    }
+    if (do_pipe(c) != 0 || syscall3(SYS_FCNTL, c[0], F_GETPIPE_SZ, 0) != 8192) {
+        bad |= SOFT_BAD_NEW;
+    }
+    if (set_size(b[1], 4096) != 4096) {
+        bad |= SOFT_BAD_SHR;
+    }
+    sys_exit(bad);
+}
+
+/** Fork a child of case (k) for `limits_child`: its exit status, or 255
+ * when the fork failed, which LIMIT_FORK records. */
+static int limits_fork(int become, int soft)
+{
+    int pid = (int)syscall1(SYS_FORK, 0);
+
+    if (pid == 0) {
+        limits_child(become, soft);
+    }
+    check(LIMIT_FORK, pid > 0);
+    return pid > 0 ? exit_status(pid) : 255;
+}
+
+/**
+ * Case (k): the limits of a caller without privilege. The writes to
+ * /proc/sys need root and are left out under `machine=native`; each file is
+ * set back to Linux's value at boot whatever the rows found.
+ */
+static void case_limits(void)
+{
+    int root = syscall0(SYS_GETEUID) == 0, bits, r[2] = {-1, -1};
+
+    limits_skipped = !root            ? "the probe runs without privilege"
+                     : probe_native() ? "machine=native: a limit set binds every user's pipes"
+                                      : 0;
+    if (!limits_skipped) {
+        check(MAX_ROUND,
+              sysctl_put(PIPE_MAX_FILE, "600000\n") == 7 && sysctl_is(PIPE_MAX_FILE, "1048576\n") &&
+                  sysctl_put(PIPE_MAX_FILE, "1\n") == 2 && sysctl_is(PIPE_MAX_FILE, "4096\n") &&
+                  sysctl_put(PIPE_MAX_FILE, "2147483648\n") == 11 &&
+                  sysctl_is(PIPE_MAX_FILE, "2147483648\n"));
+        check(MAX_EINVAL, sysctl_put(PIPE_MAX_FILE, "2147483649\n") == -EINVAL);
+        sysctl_put(PIPE_MAX_FILE, "1048576\n");
+    }
+    bits = limits_fork(root, 0);
+    check(LIMIT_PAST_MAX, (bits & (LIMIT_BAD_USER | LIMIT_BAD_PAST)) == 0);
+    check(LIMIT_TO_MAX, (bits & (LIMIT_BAD_USER | LIMIT_BAD_TO)) == 0);
+    if (limits_skipped) {
+        return;
+    }
+    check(SOFT_ROOT, sysctl_put(PIPE_SOFT_FILE, "64\n") == 3 && do_pipe(r) == 0 &&
+                         set_size(r[1], 524288) == 524288);
+    bits = limits_fork(1, 1);
+    check(SOFT_OWN, (bits & (LIMIT_BAD_USER | SOFT_BAD_OWN)) == 0);
+    check(SOFT_PAST, (bits & (LIMIT_BAD_USER | SOFT_BAD_PAST)) == 0);
+    check(SOFT_NEW_SMALL, (bits & (LIMIT_BAD_USER | SOFT_BAD_NEW)) == 0);
+    check(SOFT_SHRINK, (bits & (LIMIT_BAD_USER | SOFT_BAD_SHR)) == 0);
+    sysctl_put(PIPE_SOFT_FILE, "16384\n");
+    syscall1(SYS_CLOSE, r[0]);
+    syscall1(SYS_CLOSE, r[1]);
+}
+
 /** Report each check: held, failed with its text, or not run, since a check
- * it depends on failed or, for the heap's, under `machine=native`; and end
- * the report. */
+ * it depends on failed, for the heap's under `machine=native`, or for the
+ * rows of case (k) that write /proc/sys when it wrote none; and end the
+ * report. */
 static void report_checks(void)
 {
     int i;
@@ -732,6 +1001,8 @@ static void report_checks(void)
             report_fail(checks[i].id, checks[i].text);
         } else if (i == HEAP_KEPT && probe_native()) {
             report_notrun(checks[i].id, "machine=native shares the kernel heap");
+        } else if (limits_skipped && (i == MAX_ROUND || i == MAX_EINVAL || i >= SOFT_ROOT)) {
+            report_notrun(checks[i].id, limits_skipped);
         } else {
             report_notrun(checks[i].id, "a check it depends on failed");
         }
@@ -743,7 +1014,7 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
-/** Run cases (a) to (i) in order; a failed check is printed and counted,
+/** Run cases (a) to (k) in order; a failed check is printed and counted,
  * and the next case runs. */
 void probe_main(unsigned long *sp)
 {
@@ -763,6 +1034,8 @@ void probe_main(unsigned long *sp)
     case_fault();
     case_refill();
     case_sweep();
+    case_wrap();
+    case_limits();
     report_checks();
     if (fails == 0) {
         puts("PIPEPROBE OK");
