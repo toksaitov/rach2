@@ -17,6 +17,8 @@
  *     bootctl env KEY [VAL]  read, or set, one allowlisted grubenv key
  *     bootctl rootimage SPEC:/PATH
  *                            boot a root image on a partition once
+ *     bootctl booted         clear GRUB's recordfail: this boot reached
+ *                            user space
  *
  * `--target PARTITION` before the verb selects a boot partition other than
  * `/dev/bootpart`, for every verb but `grub` and `commit`.
@@ -51,6 +53,13 @@
  * the rest of the menu, and arms it. The stub knows no `trialroot`, and it
  * sets its default after it sources the slot, so the block consumes the
  * trial itself and boots it at once; the next boot takes the saved default.
+ *
+ * `booted` is Ubuntu's `grub-editenv unset recordfail`, which init runs once
+ * a boot from a kernel slot has reached user space. The menu's candidate
+ * entries set `recordfail=1` in the block before they load the kernel, and
+ * the stub boots the fallback while it stays set and the candidate is the
+ * saved default, so a candidate that resets before user space, as a panic
+ * does after its 30 seconds, is not booted again and again.
  */
 
 #include <errno.h>
@@ -991,6 +1000,41 @@ static int cmd_cancel(void)
     return 0;
 }
 
+/**
+ * Remove `recordfail` from the environment block, as Ubuntu's boot does
+ * with `grub-editenv unset recordfail`, so that the stub boots the saved
+ * default again. Writes nothing when the block has no such line, which is
+ * every boot but one after a candidate entry. Returns 0, or 1 having said
+ * why not.
+ */
+static int cmd_booted(void)
+{
+    static uint8_t env[BOOTSLOT_ENV_BYTES];
+    size_t i;
+
+    if (open_slot() != 0) {
+        return 1;
+    }
+    if (bootslot_read_env(&bs, env, errbuf, sizeof(errbuf)) != 0) {
+        fprintf(stderr, "bootctl: %s\n", errbuf);
+        return 1;
+    }
+    for (i = 0; i + 11 <= sizeof(env); i++) {
+        if ((i == 0 || env[i - 1] == '\n') && memcmp(env + i, "recordfail=", 11) == 0) {
+            break;
+        }
+    }
+    if (i + 11 > sizeof(env)) {
+        return 0;
+    }
+    if (bootslot_env_drop(&bs, "recordfail", errbuf, sizeof(errbuf)) != 0) {
+        fprintf(stderr, "bootctl: %s\n", errbuf);
+        return 1;
+    }
+    printf("bootctl: booted: recordfail cleared; the next boot takes the saved default\n");
+    return 0;
+}
+
 /* Linux's BLKGETSIZE64, a block device's size in bytes, where the headers
  * lack it. */
 #ifndef BLKGETSIZE64
@@ -1156,6 +1200,7 @@ static void usage(void)
     fprintf(stderr, "       bootctl fallback\n");
     fprintf(stderr, "       bootctl env <key> [value]\n");
     fprintf(stderr, "       bootctl rootimage <spec>:<path>\n");
+    fprintf(stderr, "       bootctl booted\n");
     fprintf(stderr, "       bootctl --target <partition> <command> ...\n");
 }
 
@@ -1216,6 +1261,8 @@ int main(int argc, char **argv)
         return cmd_env(arg, arg2);
     case BOOTVERB_ROOTIMAGE:
         return cmd_rootimage(arg);
+    case BOOTVERB_BOOTED:
+        return cmd_booted();
     default:
         break;
     }

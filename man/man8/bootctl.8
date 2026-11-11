@@ -1,4 +1,4 @@
-.Dd November 9, 2026
+.Dd November 11, 2026
 .Dt BOOTCTL 8
 .Os
 .Sh NAME
@@ -25,6 +25,8 @@
 .Cm env Ar KEY Op Ar VALUE
 .Nm
 .Cm rootimage Ar SPEC : Ns Ar /PATH
+.Nm
+.Cm booted
 .Nm
 .Fl -target Ar PARTITION COMMAND
 .Ar ...
@@ -310,6 +312,30 @@ A trial root cannot commit or install a kernel, since its line has
 neither slot.
 Success is reported as:
 .Dl bootctl: armed: the next boot starts the candidate's kernel on SPEC:/PATH once; the boot after it takes the saved default
+.It Cm booted
+Remove
+.Ql recordfail
+from the environment block, as Ubuntu's boot does with
+.Ql grub-editenv unset recordfail .
+The menu's candidate and text entries set
+.Ql recordfail=1
+before they load the kernel, and while it stays set a saved default of
+.Ql candidate
+boots
+.Ql fallback
+instead, so that a candidate that resets before user space, as a panic
+does after its 30 seconds, is not booted again and again.
+An armed trial is still taken.
+.Xr init 8
+runs this command once a boot whose line has
+.Ql rach2.slot=candidate
+or
+.Ql rach2.slot=fallback
+reaches user space.
+Nothing is written when the block has no
+.Ql recordfail .
+Success is reported as:
+.Dl bootctl: booted: recordfail cleared; the next boot takes the saved default
 .El
 .Sh EXAMPLES
 Install a kernel from the running system, reboot to try it, then inspect

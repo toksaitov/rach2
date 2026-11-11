@@ -227,6 +227,8 @@ static const char *const Shell_Arg0[] = {"-sh", "-ish", 0};
 /* BusyBox, whose applets init runs by the name in argv[0]: the system log,
  * ntpd, acpid, ifplugd and sysctl. */
 #define BUSYBOX_PROGRAM "/bin/busybox"
+/* The tool that edits the boot partition's GRUB environment block. */
+#define BOOTCTL_PROGRAM "/bin/bootctl"
 
 /*
  * BusyBox's acpid, which runs the actions under /etc/acpi for the keys the
@@ -1323,13 +1325,12 @@ static void check_ext2_partitions(void)
 }
 #endif /* INIT_METAL */
 
-#if defined(INIT_METAL) || defined(INIT_CONSOLE_LOGIN)
 /**
  * Whether the boot line has `want` as a whole token.
  *
  * A whole token and not a prefix: `rach2.ip=none` and `rach2.ip=none.x` are
  * different things. The first 511 bytes of `/proc/cmdline` are read at each
- * call, of which a boot makes up to four.
+ * call, of which a boot makes a few.
  */
 static int boot_line_has(const char *want)
 {
@@ -1360,7 +1361,6 @@ static int boot_line_has(const char *want)
     }
     return 0;
 }
-#endif
 
 #ifdef INIT_CONSOLE_LOGIN
 /**
@@ -3021,6 +3021,51 @@ static void apply_sysctl(void)
     }
 }
 
+#ifndef INIT_RECOVERY
+/**
+ * Clear GRUB's `recordfail` on the boot partition, now that this boot has
+ * reached user space, as Ubuntu's boot does with `grub-editenv unset
+ * recordfail`: the disk's menu sets it before it boots the candidate, and
+ * boots the fallback while it stays set, so that a candidate that resets
+ * before it gets here is not booted again (bootctl(8)). Only a boot from a
+ * kernel slot of the disk's menu, whose line has `rach2.slot=candidate` or
+ * `rach2.slot=fallback`, does it, through `bootctl booted`, which writes
+ * nothing when the flag is not set; init waits for it and says when it
+ * failed.
+ */
+static void clear_recordfail(void)
+{
+    char *argv[3];
+    int status;
+    pid_t pid;
+
+    if (!boot_line_has("rach2.slot=candidate") && !boot_line_has("rach2.slot=fallback")) {
+        return;
+    }
+    pid = fork();
+    if (pid < 0) {
+        fprintf(stderr, "init: recordfail: cannot fork\n");
+        return;
+    }
+    if (pid == 0) {
+        argv[0] = (char *)"bootctl";
+        argv[1] = (char *)"booted";
+        argv[2] = 0;
+        execve(BOOTCTL_PROGRAM, argv, environ);
+        _exit(127);
+    }
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) {
+            return;
+        }
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        fprintf(stderr, "init: recordfail: bootctl booted failed (status 0x%x)\n",
+                (unsigned)status);
+    }
+}
+#endif
+
 /**
  * Set the machine up before the first child: empty `/var/run` and give it a
  * `utmp` with only this boot's record, set the limits, open the service log
@@ -3036,7 +3081,8 @@ static void apply_sysctl(void)
  * its image and whether the partition's turned SSH on, since the two kinds of
  * image look identical from outside, and names each disk whose GUID table was
  * read from its backup. A metal boot whose line has `rach2.fsck` then checks
- * its ext2 partitions.
+ * its ext2 partitions. Every other boot from a slot of a disk's menu then
+ * clears GRUB's `recordfail` (`clear_recordfail`).
  */
 static void set_up(void)
 {
@@ -3056,6 +3102,9 @@ static void set_up(void)
     if (boot_line_has("rach2.fsck")) {
         check_ext2_partitions();
     }
+#endif
+#ifndef INIT_RECOVERY
+    clear_recordfail();
 #endif
 }
 
