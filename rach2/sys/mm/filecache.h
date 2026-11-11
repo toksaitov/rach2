@@ -35,10 +35,11 @@ uint32_t filecache_epoch(struct vfs_mount *mnt, void *node);
 /**
  * Read up to `count` bytes at `offset` of the file `ofd` is open on into the
  * user buffer `buf` through the cache, as read(2) does: each page the cache
- * has as the file is now is copied from it, and a run of the pages it lacks
- * is read from the file with `vfs_read` and kept. Returns 0, with nothing
- * done, for a file the cache does not keep, which the caller reads itself;
- * 1 with `*got` the bytes read, 0 at the end of the file, -EFAULT for a
+ * has as the file is now is copied from it, and each page it lacks is read
+ * alone with `vfs_read` into a new frame, which joins the cache when it holds
+ * a whole page or the file's last part. Returns 0, with nothing done, for a
+ * file the cache does not keep, which the caller reads itself; 1 with `*got`
+ * the bytes read, 0 at or past the end of the file, -EFAULT for a
  * buffer that takes no byte, or the file system's error. The caller holds
  * the description's lock, and may sleep.
  */
@@ -68,8 +69,9 @@ void filecache_forget_mount(const struct vfs_mount *mnt);
 /** The frames the cache holds, which `mem_reclaim` can have back. */
 uint32_t filecache_pages(void);
 
-/** Give back up to `want` frames, the least recently used first; the
- * number given back. */
+/** Drop up to `want` pages, the least recently used first; the number of
+ * their frames that went back to the pool, which leaves out a frame a reader
+ * still holds. */
 uint32_t filecache_shrink(uint32_t want);
 
 #endif /* _FILECACHE_H_ */
