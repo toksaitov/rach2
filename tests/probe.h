@@ -588,7 +588,8 @@ static __inline__ long syscall6(long n, long a, long b, long c, long d, long e, 
  * `probe_main` as its argument on the stack.
  */
 #define PROBE_SP_ENTRY             \
-    __asm__(".globl _start\n"      \
+    __asm__(".text\n"              \
+            ".globl _start\n"      \
             "_start:\n"            \
             "    mov %esp, %eax\n" \
             "    push %eax\n"      \
@@ -598,9 +599,12 @@ static __inline__ long syscall6(long n, long a, long b, long c, long d, long e, 
  * the alignment it needs. */
 #define PROBE_START
 
-/* A signal restorer for SA_RESTORER, named `name`: rt_sigreturn. */
+/* A signal restorer for SA_RESTORER, named `name`: rt_sigreturn. It goes in
+ * .text, since the data sections are not executable where NX is on, as on
+ * the x86-64 kernel. */
 #define PROBE_RT_RESTORER(name)              \
-    __asm__(".globl " #name "\n" #name ":\n" \
+    __asm__(".text\n"                        \
+            ".globl " #name "\n" #name ":\n" \
             "    movl $173, %eax\n"          \
             "    int $0x80\n")
 
