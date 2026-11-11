@@ -301,6 +301,15 @@ reports
 and
 .Dv POLLRDNORM
 while a line waits.
+.It Pa dri/DEVICE/crtc-N/vblank_backwards
+Mode 0444, for a CRTC with vblanks; Rach2's own, not Linux's.
+How many times a vblank of the CRTC was stamped earlier than one stamped
+before it, as a decimal number and a newline.
+Every vblank, flip and sequence event and every
+.Dv DRM_IOCTL_WAIT_VBLANK
+reply carries the latest stamp, and a compositor such as Weston aborts on
+one that goes back, so the number is 0 unless the driver's scanout
+position read a later vblank as an earlier one.
 .It Pa dri/DEVICE/crtc-N/i915_pipe
 Mode 0444, for a device bound by
 .Xr i915 4 .

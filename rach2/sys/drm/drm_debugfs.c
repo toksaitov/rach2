@@ -682,6 +682,24 @@ static int32_t crc_control_store(void *data, const char __user *buf, uint32_t le
 
 static const struct debugfs_text_ops crc_control_ops = {crc_control_show, crc_control_store};
 
+/** `vblank_backwards`'s text: how many times the CRTC's vblanks were stamped
+ * before a vblank stamped earlier, `drm_vblank`'s `backwards`, which is 0
+ * unless an event or a WAIT_VBLANK reply went back in time. */
+static int32_t vblank_backwards_show(void *data, char *buf, uint32_t cap)
+{
+    const struct drm_crtc *crtc = (const struct drm_crtc *)data;
+    struct emit e;
+
+    e.buf = buf;
+    e.cap = cap;
+    e.len = 0;
+    emit_u(&e, crtc->vblank.backwards, 0);
+    emit_str(&e, "\n");
+    return emit_end(&e);
+}
+
+static const struct debugfs_text_ops vblank_backwards_ops = {vblank_backwards_show, NULL};
+
 /** crc/data's open: start the CRTC's source (`drm_crtc_crc_open`), which
  * may sleep for the commit lock. */
 static int32_t crc_data_open(fd_entry_t *e, int flags)
@@ -925,6 +943,10 @@ static int32_t make_files(struct drm_device *dev)
     for (i = 0; rc == 0 && i < mc->num_crtc && i < DRM_MAX_CRTCS; i++) {
         indexed_path(path, dev, "crtc", i, NULL);
         rc = debugfs_create_dir(path, NULL, NULL);
+        if (rc == 0 && drm_crtc_has_vblank(mc->crtcs[i])) {
+            indexed_path(path, dev, "crtc", i, "vblank_backwards");
+            rc = debugfs_create_text(path, 0444u, &vblank_backwards_ops, mc->crtcs[i]);
+        }
         /* Linux's drm_debugfs_crtc_crc_add: CRC files only with CRCs. */
         if (rc != 0 || !mc->crtcs[i]->funcs->set_crc_source ||
             !mc->crtcs[i]->funcs->verify_crc_source) {
