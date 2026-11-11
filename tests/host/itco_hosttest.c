@@ -182,6 +182,18 @@ void outw(uint16_t port, uint16_t value)
     (void)port;
     (void)value;
 }
+/** No hardware port is reached by the callback model. */
+uint32_t ind(uint16_t port)
+{
+    (void)port;
+    return 0xFFFFFFFFu;
+}
+/** No hardware port is reached by the callback model. */
+void outd(uint16_t port, uint32_t value)
+{
+    (void)port;
+    (void)value;
+}
 /** The node is tested through its production operations directly. */
 int32_t devfs_node_register(struct devfs_node *node)
 {

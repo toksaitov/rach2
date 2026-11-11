@@ -13,6 +13,10 @@
 #define TCO_HALT      0x0800u
 #define TCO_NO_REBOOT 0x20u
 #define TCO_MASK      0x03FFu
+/* SMI_EN at PMBASE + 0x30, and its TCO_EN, bit 13, through which the first
+ * stage's expiry raises an SMI to the firmware (iTCO_wdt.c:541). */
+#define SMI_EN        0x30u
+#define SMI_TCO_EN    0x2000u
 
 /* Linux's WATCHDOG_TIMEOUT, iTCO_wdt.c:118: the heartbeat when none is
  * given or the one given is out of range. */
@@ -453,6 +457,25 @@ static long itco_option(const char *key, long dflt, long lo, long hi)
 }
 
 /**
+ * Clear TCO_EN in SMI_EN at `pm` + 0x30 when the line's
+ * `iTCO_wdt.turn_SMI_watchdog_clear_off` is at least the TCO's version, 2,
+ * as iTCO_wdt_probe does (iTCO_wdt.c:131 and 541); Linux's default, 1,
+ * leaves the firmware's SMI on the first stage's expiry, which on the
+ * Lenovo leaves the machine down instead of reset.
+ */
+static void itco_smi_option(uint16_t pm)
+{
+    uint32_t value;
+
+    if (itco_option("iTCO_wdt.turn_SMI_watchdog_clear_off", 1, -0x7fffffffL, 0x7fffffffL) < 2) {
+        return;
+    }
+    value = inl((uint16_t)(pm + SMI_EN));
+    outl((uint16_t)(pm + SMI_EN), value & ~SMI_TCO_EN);
+    klog(KLOG_INFO, "watchdog", "SMI_EN: TCO_EN cleared, was %d", (value & SMI_TCO_EN) != 0);
+}
+
+/**
  * Read Linux's options, iTCO_wdt's `heartbeat` and `nowayout` (iTCO_wdt.c:
  * 118 to 127) and the watchdog core's `handle_boot_enabled` and
  * `open_timeout` (watchdog_dev.c:1319 to 1325), and `rach2.itco.arm`, which
@@ -501,6 +524,7 @@ void itco_init(void)
     if (result == 1) {
         klog(KLOG_INFO, "watchdog", "timeout value out of range, using %d", ITCO_DEFAULT_TIMEOUT);
     }
+    itco_smi_option(pm);
     registered = 1;
     if (arm && itco_boot_arm(&watchdog) != 0) {
         klog(KLOG_WARN, "watchdog", "refused: rach2.itco.arm: the timer would not start");
