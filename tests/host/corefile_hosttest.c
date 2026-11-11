@@ -1124,6 +1124,19 @@ void procfs_lookup_owner(const struct vpath *vp)
     (void)vp;
 }
 
+/** No row's descriptor is of /proc, so an open keeps no owner. */
+void procfs_owner_keep(struct synth_owner *o, const struct vpath *vp)
+{
+    (void)o;
+    (void)vp;
+}
+
+/** No row's descriptor is of /proc, so a close has no kept owner to drop. */
+void procfs_owner_drop(struct synth_owner *o)
+{
+    (void)o;
+}
+
 /** No row's descriptor is a /proc file: -1. */
 int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
 {
