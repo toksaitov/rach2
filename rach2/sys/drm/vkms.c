@@ -494,6 +494,7 @@ static int32_t composer_start(struct vkms_device *v)
     p->page_dir = NULL;
     p->parent_pid = 0;
     proc_set_comm(p, "kvkms");
+    p->no_tick_switch = 1;
     setup_process_stack(p, composer_main);
     v->composer_started = 1;
     sched_make_ready(p);

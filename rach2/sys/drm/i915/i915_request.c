@@ -462,6 +462,7 @@ static int32_t submit_worker_spawn(void)
     p->page_dir = 0;
     p->parent_pid = 0;
     proc_set_comm(p, "ki915");
+    p->no_tick_switch = 1;
     setup_process_stack(p, submit_thread_main);
     submit_thread = p;
     sched_make_ready(p);
