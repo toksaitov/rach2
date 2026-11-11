@@ -228,6 +228,9 @@ static krffs_node_t *watched_next_node(krffs_file_system_t *fs, krffs_node_t *no
     return krffs_node_of(next >= fs->size ? next - fs->size : next);
 }
 
+/* The lock over the sleeping locks' records, which sleeplock.c defines. */
+static struct spinlock records_lock = SPINLOCK_INIT;
+
 #define krffs_get_next_node watched_next_node
 #include "kfs_data.inc"
 #undef krffs_get_next_node
