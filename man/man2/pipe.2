@@ -60,18 +60,30 @@ A signal interrupting a wait produces
 if no bytes have been transferred, and the call is restarted instead, as
 in Linux, when the signal runs no handler or its handler has
 .Dv SA_RESTART .
-A read returns at most the bytes available when its first transfer starts,
-up to the requested count.
+A read waits only before its first byte and returns the bytes buffered
+then, up to the requested count, taking the pipe's page buffers in order,
+each whole or as much of one as the count takes.
 A write that stops after transferring bytes returns that count.
 .Pp
-The kernel resolves user buffers one page at a time before copying bytes.
-Resolution can wait for memory reclaim and allow another reader or writer
-to run; the pipe state is checked again afterwards.
-If another reader drains the pipe after this call has copied some bytes,
-the call returns that partial count without waiting for more data.
-A user-buffer fault returns the count already transferred, or
-.Er EFAULT
-if no bytes have been transferred.
+A read or a write holds the pipe from its start to its return, except
+while it waits for bytes or room, as Linux holds the pipe's lock.
+Bringing in a page of the caller's buffer can wait for memory, and
+meanwhile no other reader or writer of the pipe runs, so the bytes a read
+returns are adjacent in the stream and no other write's bytes come between
+those of one write.
+A destination page that cannot be written ends a read with the bytes of
+the buffers before it, or
+.Er EFAULT ,
+and every byte of its own buffer stays queued.
+A source page that cannot be read ends a write with the pages before it, or
+.Er EFAULT ,
+and no byte of its own page can be read.
+The end of input and
+.Er EAGAIN
+come before any copy, so a read into a null pointer returns 0 from a pipe
+whose writers have closed and
+.Er EAGAIN
+from an empty nonblocking one, as on Linux.
 .Pp
 Once every write descriptor has closed, reads consume the remaining
 buffered bytes and then return 0 for end of file.

@@ -89,7 +89,16 @@ Use
 .Xr getdents64 2
 to read directory entries.
 .Pp
-A pipe read returns the available bytes, up to the requested count.
+A pipe read waits only before its first byte, then returns the bytes
+buffered, up to the requested count: each of the pipe's page buffers whole,
+or as much of one as the count takes.
+It holds the pipe from its start to its return, except while it waits for
+bytes, as Linux holds the pipe's lock, so the bytes it returns are adjacent
+in the stream even when a page of the buffer must be brought in.
+A page that cannot be written ends it with the bytes of the buffers before
+it, or
+.Er EFAULT ,
+and every byte of its own buffer stays queued.
 An empty pipe waits while a writer remains open and returns zero after
 the last writer closes.
 The console and pseudoterminal slaves use the terminal line discipline:
@@ -180,11 +189,21 @@ A file, a device or a
 .Pa /proc
 file is read up to the first page that cannot be written, and the bytes
 before it are returned, as Linux's read stops at the first fault of its
-copy; when the first destination cannot be written the call gives
-.Er EFAULT ,
-but for a file of a mounted file system only after the check of the
-list's end at the offset and when the file has a byte to read at the
-offset; when it has none the call returns zero, as on Linux.
+copy.
+A first destination of which no byte can be written goes to the object's
+read whole, and the object answers before its copy fails:
+.Pa /dev/null
+returns zero, an empty device under
+.Dv O_NONBLOCK
+gives
+.Er EAGAIN ,
+and one with bytes to give
+.Er EFAULT ;
+a file of a mounted file system gives
+.Er EFAULT
+only after the check of the list's end at the offset and when the file has
+a byte to read at the offset, and returns zero when it has none, as on
+Linux.
 A pipe and a socket answer the wait, the end of input and
 .Er EAGAIN
 before any copy, so a list whose first buffer cannot be written reads zero
