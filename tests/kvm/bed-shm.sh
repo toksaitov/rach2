@@ -30,20 +30,28 @@
 # With -w the draw, the doorbells and the death give way to the desktop
 # session on the VM's GPU: once virtio-gpu has bound over the region,
 # rach2-desktop's session runs Weston on its card with GL through virgl in
-# the VM, SIGHUP starting it there unless the session moved there itself
-# (`session`), and the load draws under it as the desktop user while
-# Rach2's driver rings the VM (`load`): LOAD is glmark2-wayland, the
-# default, or the harness's scene `piglit`, `webgl` or `game`, which needs
-# MEASURE. With MEASURE, the directory of bed/measure/measure.sh, each scene
-# of SCENES (`glmark2`) runs on the session first, on the rung shm-virgl,
-# or shm-venus for a scene written `venus:SCENE`, whose GL goes through
-# Zink on Venus, and its lines are printed as figures. Then QEMU is
-# stopped, four fenced submissions are left pending and QEMU is killed
-# under the load: every fence must fail, the load must end and ivshmemd
-# must detach (`death`); and the session must start again, headless with
-# GL on llvmpipe, where glmark2 draws again (`fallback`). With -g as well, the
+# the VM, SIGHUP starting it there unless the session moved there itself,
+# and with -g virgl must name the Intel GPU the VM draws on (`session`).
+# The load draws as the desktop user while Rach2's driver rings the VM
+# (`load`): LOAD is glmark2-wayland on the session, the default, or the
+# harness's scene `piglit`, surfaceless on the card's render node, `webgl`
+# or `game` on the session, which needs MEASURE, each for 600 s, piglit's
+# list again and again; the doorbells are counted once the scene has
+# started, after the harness's latency. With MEASURE, the directory of
+# bed/measure/measure.sh, each scene of SCENES (`glmark2`) runs on the
+# session first, on the rung shm-virgl, or shm-venus for a scene written
+# `venus:SCENE`, whose GL goes through Zink on Venus, and its lines are
+# printed as figures. Then QEMU is stopped, four fenced submissions are
+# left pending and QEMU is killed under the load, which must still run:
+# every fence must fail, the load must end and ivshmemd must detach
+# (`death`); and the session must start again, headless with GL on
+# llvmpipe, where glmark2 draws again (`fallback`). With -g as well, the
 # session must come back to Rach2's driver on the GPU gpu.sh gave back,
-# with the pipe's CRC stable (`return`).
+# with the pipe's CRC the same over four frames after the first two
+# (`return`); when gpu.sh gave the GPU back before the old session had
+# gone, the session starts on it at once, which is both its fallback and
+# its return. Each load and each figure runs in a process group of its
+# own, which the script ends with the run.
 #
 # With -g the VM also has the host's PCI function BDF, the Lenovo's GPU:
 # gpu.sh, beside this script, takes it from Rach2's Intel driver, starts
@@ -55,6 +63,9 @@
 # reason, and the last line is `bed-shm: result: pass` or `fail`, after the
 # VM's last 80 lines of console, `bed-shm: vm: LINE`, on a failure. The
 # console of the VM, ivshmemd's output and the counters are kept in DIR.
+# Any exit, by its end or by SIGTERM, SIGINT or SIGHUP, kills QEMU, has
+# gpu.sh give the function back, and ends the load's and the figure's
+# groups, TERM and then KILL.
 set -u
 disk='' probe=./vgshmprobe crc=6e8e217c out=/tmp/bed-shm mib=2048 cpus=2 nocopy='' bdf=''
 desk=0 measure='' loadscene=glmark2 scenes=glmark2
@@ -88,9 +99,28 @@ case $loadscene in
 esac
 [ -z "$bdf" ] || [ -f "$gpush" ] || { echo "bed-shm: no $gpush for -g" >&2; exit 2; }
 [ -z "$nocopy" ] || [ "$desk" = 0 ] || { echo "bed-shm: -k and -w are apart" >&2; exit 2; }
-daemon='' qemu='' gpu='' waiter='' holder='' pid='' load='' bad=0
+daemon='' qemu='' gpu='' waiter='' holder='' pid='' load='' figpid='' bad=0
+
+# end_group PID: end the process group that PID leads, which setsid made,
+# with TERM and, once 10 seconds have passed, KILL, and reap its leader,
+# so that a load's scene, its browser and its compositor end with it.
+end_group()
+{
+    [ -n "$1" ] || return 0
+    kill -TERM "-$1" 2>/dev/null
+    n=100
+    while kill -0 "-$1" 2>/dev/null && [ "$n" -gt 0 ]; do
+        sleep 0.1
+        n=$((n - 1))
+    done
+    kill -KILL "-$1" 2>/dev/null
+    wait "$1" 2>/dev/null
+}
 # gpu.sh, sent SIGTERM, kills its QEMU and gives the function back.
-trap 'kill -9 $qemu $waiter $holder $pid $load 2>/dev/null; kill $daemon $gpu 2>/dev/null; wait 2>/dev/null' EXIT
+trap 'end_group "$load"; end_group "$figpid"; kill -9 $qemu $waiter $holder $pid 2>/dev/null; kill $daemon $gpu 2>/dev/null; wait 2>/dev/null' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 rm -rf "$out"
 mkdir -p "$out"
 # Where the desktop's log stood before anything here ran.
@@ -462,7 +492,10 @@ desk_rows()
     # rach2-desktop moves it at once to a card that appears after a loss.
     since "$offset" | grep -q "rach2-desktop: session: started as .* on drm $card gl" ||
         kill -HUP "$sup" 2>/dev/null
-    if started "$offset" "drm $card gl" virgl 600 "$console" "$qemu"; then
+    # With the GPU, the VM's virgl draws on its i915, which virgl names.
+    gl=virgl
+    [ -z "$bdf" ] || gl='virgl .*Intel'
+    if started "$offset" "drm $card gl" "$gl" 600 "$console" "$qemu"; then
         pass session "Weston on $card through virgl after $took s: $(grep 'GL renderer: ' "$out/services.txt" | tail -n 1 | sed 's/^.*GL renderer: //')"
     else
         fail session "$(grep 'rach2-desktop: \|GL renderer\|fatal\|error' "$out/services.txt" | tail -n 4 | tr '\n' ' ')"
@@ -471,25 +504,32 @@ desk_rows()
         rung=shm-virgl zink=''
         case $scene in venus:*) rung=shm-venus scene=${scene#venus:} zink="MESA_LOADER_DRIVER_OVERRIDE=zink VK_DRIVER_FILES=$icd" ;; esac
         # shellcheck disable=SC2086 # assignments
-        env $desktop_env $zink sh "$measure/measure.sh" -r "$rung" -u desktop -d \
-            -o "$out/measure/$rung-$scene" "$scene" > "$out/measure-$rung-$scene.out" 2>&1
+        setsid env $desktop_env $zink sh "$measure/measure.sh" -r "$rung" -u desktop -d \
+            -o "$out/measure/$rung-$scene" "$scene" > "$out/measure-$rung-$scene.out" 2>&1 &
+        figpid=$!
+        wait "$figpid"
+        figpid=''
         sed 's/^/bed-shm: figure: /' "$out/measure-$rung-$scene.out"
     done
 
-    # The load, until the driver has rung the VM's queue 32 times since it
-    # began to draw: glmark2 once it has named its renderer, a scene of the
-    # harness from its start, for longer than the step will take.
+    # The load, in a group of its own, until the driver has rung the VM's
+    # queue 32 times since it began to draw: glmark2 once it has named its
+    # renderer, a scene of the harness once the harness says it has
+    # started, after its latency's own round trips, for longer than the
+    # step will take.
     if [ "$loadscene" = glmark2 ]; then
         loadout=$out/glmark2.out
-        glmark --run-forever -b build > "$loadout" 2>&1 &
+        setsid su -s /bin/sh desktop -c "export $desktop_env; exec glmark2-wayland --run-forever -b build" \
+            > "$loadout" 2>&1 &
         load=$!
         until_line "$loadout" 'GL_RENDERER' 600 "$load" || true
     else
         loadout=$out/load.out
         # shellcheck disable=SC2086 # two assignments
-        env $desktop_env sh "$measure/measure.sh" -r shm-virgl -u desktop -d -t 600 \
+        setsid env $desktop_env sh "$measure/measure.sh" -r shm-virgl -u desktop -d -t 600 \
             -o "$out/load" "$loadscene" > "$loadout" 2>&1 &
         load=$!
+        until_line "$out/load/scene.log" "measure: scene: $loadscene: started" 600 "$load" || true
     fi
     rung0=$(info rung | cut -d/ -f1)
     last=-1 still=0
@@ -509,8 +549,11 @@ desk_rows()
         fail load "$loadscene, $drew doorbells: $(tail -n 3 "$loadout" | tr '\n' ' ')"
     fi
 
-    # The VM's death under the load, with fences pending.
+    # The VM's death under the load, with fences pending; the load must
+    # still run when the VM dies.
     dead=$(wc -c < "$services")
+    alive=no
+    ! kill -0 "$load" 2>/dev/null || alive=yes
     kill -STOP "$qemu" 2>/dev/null
     "$probe" pending 4 > "$out/pending.out" 2>&1 &
     waiter=$!
@@ -524,32 +567,43 @@ desk_rows()
     while kill -0 "$load" 2>/dev/null; do
         quiet "$loadout" 300 "$load" || break
     done
-    if kill -0 "$load" 2>/dev/null; then
+    if [ "$alive" = no ]; then
+        ended="ended before the death"
+        wait "$load" 2>/dev/null
+    elif kill -0 "$load" 2>/dev/null; then
         ended="still running"
     else
         load_status=0
         wait "$load" || load_status=$?
         ended="ended with status $load_status"
-        load=''
     fi
-    if grep -q 'VGSHMPROBE OK' "$out/pending.out" && [ -z "$load" ] &&
-        grep -q 'result: detached: QEMU closed' "$out/ivshmemd.out"; then
+    if grep -q 'VGSHMPROBE OK' "$out/pending.out" && [ "$ended" != "still running" ] &&
+        [ "$alive" = yes ] && grep -q 'result: detached: QEMU closed' "$out/ivshmemd.out"; then
         pass death "$(sed -n 's/^VGSHMPROBE FENCE: //p' "$out/pending.out" | head -n 1); $loadscene $ended"
     else
         fail death "$loadscene $ended: $(grep 'VGSHMPROBE\|result' "$out/pending.out" "$out/ivshmemd.out" | tr '\n' ' ')"
     fi
+    # What is left of the load's group, so that nothing of it draws on.
+    end_group "$load"
+    load=''
 
     # The session again, headless on llvmpipe, drawing a client; with -g
     # gpu.sh has given the GPU back by now, and the session may have gone
-    # on to it.
-    [ -z "$bdf" ] || which=any
-    if started "$dead" "headless - gl" llvmpipe 300 &&
+    # on to it, or started on it at once when it came back before the old
+    # session had gone, which is the fallback too.
+    fbshown="headless - gl" fbgl=llvmpipe
+    [ -z "$bdf" ] || which=any fbshown='' fbgl='(llvmpipe|Mesa Intel)'
+    if started "$dead" "$fbshown" "$fbgl" 300 &&
         grep -q "rach2-desktop: session: its display drm $card gl is gone" "$out/services.txt" &&
         { [ -n "$bdf" ] || { drawn "$out/fallback.out" -b build:duration=2 &&
             grep -q 'GL_RENDERER: *llvmpipe' "$out/fallback.out"; }; }; then
         drew=''
         [ -n "$bdf" ] || drew="; glmark2 build $(sed -n 's/^.*FPS: *\([0-9]*\).*/\1/p' "$out/fallback.out" | head -n 1) FPS"
-        pass fallback "Weston headless on llvmpipe $took s after the death$drew"
+        if grep -q 'rach2-desktop: session: started as .* on headless - gl' "$out/services.txt"; then
+            pass fallback "Weston headless on llvmpipe $took s after the death$drew"
+        else
+            pass fallback "Weston on the GPU given back, at once, $took s after the death"
+        fi
     else
         fail fallback "$(grep 'rach2-desktop: \|GL renderer\|fatal' "$out/services.txt" | tail -n 4 | tr '\n' ' ') $(tail -n 2 "$out/fallback.out" 2>/dev/null | tr '\n' ' ')"
     fi
@@ -562,15 +616,22 @@ desk_rows()
     for c in /sys/class/drm/card[0-9]*; do
         case $(readlink -f "$c/device" 2>/dev/null) in */"$bdf") back=${c##*/} ;; esac
     done
-    if [ -n "$back" ] && started "$dead" "drm $back gl" "Mesa Intel" 300 &&
-        grep -q "rach2-desktop: session: display drm $back gl appeared" "$out/services.txt"; then
+    # The last start is on the card given back, whether it came there from
+    # the headless session (`appeared`) or at once.
+    if [ -n "$back" ] && started "$dead" "drm $back gl" "Mesa Intel" 300; then
+        how="at once"
+        ! grep -q "rach2-desktop: session: display drm $back gl appeared" "$out/services.txt" ||
+            how="from the headless session"
         dir=/sys/kernel/debug/dri/${back#card}/crtc-0/crc
         echo auto > "$dir/control" 2>/dev/null
-        crcs=$(timeout 10 head -n 6 "$dir/data" 2>/dev/null | tail -n 4 | awk '{ print $NF }' | sort -u)
-        if [ "$(echo "$crcs" | grep -c .)" = 1 ]; then
-            pass return "Weston on $back, $(grep 'GL renderer: ' "$out/services.txt" | tail -n 1 | sed 's/^.*GL renderer: //'), pipe A crc $crcs over 4 frames, $took s after the death"
+        # Six frames, the first two of which the new pipe may still change.
+        timeout 10 head -n 6 "$dir/data" > "$out/crc.txt" 2>/dev/null
+        frames=$(grep -c . "$out/crc.txt")
+        crcs=$(tail -n 4 "$out/crc.txt" | awk '{ print $NF }' | sort -u)
+        if [ "$frames" -eq 6 ] && [ "$(echo "$crcs" | grep -c .)" = 1 ]; then
+            pass return "Weston on $back $how, $(grep 'GL renderer: ' "$out/services.txt" | tail -n 1 | sed 's/^.*GL renderer: //'), pipe A crc $crcs over 4 frames, $took s after the death"
         else
-            fail return "pipe A's crc over 4 frames: $(echo "$crcs" | tr '\n' ' ')"
+            fail return "pipe A's crc: $frames of 6 frames read, the last 4 giving $(echo "$crcs" | tr '\n' ' ')"
         fi
     else
         fail return "card '$back': $(grep 'rach2-desktop: \|GL renderer\|fatal' "$out/services.txt" | tail -n 4 | tr '\n' ' ')"
