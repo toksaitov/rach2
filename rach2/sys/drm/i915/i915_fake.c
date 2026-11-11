@@ -1334,6 +1334,7 @@ static struct i915_fake *i915_fake_create(struct i915_hw *hw)
     if (!f) {
         return 0;
     }
+    spin_lock_init(&f->lock, "i915_fake");
     f->regs = (uint32_t *)kzalloc(I915_MMIO_SIZE);
     if (!f->regs) {
         kfree(f);

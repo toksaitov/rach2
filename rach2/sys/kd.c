@@ -53,7 +53,7 @@ static const unsigned char max_vals[KD_NR_TYPES] = {255, 255, 19, 19,  26, 255, 
  * change under `kd_lock`, which the key path takes to read them, and are
  * freed only once out of reach.
  */
-static struct spinlock kd_lock = SPINLOCK_INIT;
+static struct spinlock kd_lock = SPINLOCK_INIT_NAMED("kd_lock");
 static volatile int kd_mode = K_UNICODE;
 static int kd_meta = K_ESCPREFIX;
 static unsigned int kd_leds = KD_LEDS_FOLLOW; /* KDSETLED's, or KD_LEDS_FOLLOW */

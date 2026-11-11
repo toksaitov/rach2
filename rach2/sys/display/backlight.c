@@ -26,7 +26,7 @@ static int nlights;
 
 /* Whether the console is blank; under `lock` with the lights' state. */
 static int console_blank;
-static struct spinlock lock = SPINLOCK_INIT;
+static struct spinlock lock = SPINLOCK_INIT_NAMED("backlight_lock");
 
 /** Give backlight `b` its level and turn it on or off, by its driver's
  * switch or else by the level 0, with `lock` held. */

@@ -45,7 +45,7 @@ static const uint32_t class_size[KHEAP_CLASSES] = {16, 32, 64, 128, 256, 512, 10
  * counts, against an allocation or a free on any processor and in any
  * interrupt. It is taken with interrupts off, after the big lock and
  * before the frame allocator's, which taking a page's frame takes. */
-static struct spinlock heap_lock = SPINLOCK_INIT;
+static struct spinlock heap_lock = SPINLOCK_INIT_NAMED("heap_lock");
 static uint32_t heap_pages;    /* the region's pages, from kheap_init */
 static uint32_t reserve_first; /* the reserve's first page */
 static uint32_t run_bits;      /* set where a reserve run is taken */

@@ -47,7 +47,7 @@ static unsigned type_soft[RFKILL_NUM_TYPES];
 static struct rfkill_client *clients;
 /* Guards the switches' states, the clients and their queues; taken with
  * interrupts off, since a driver reports a hard block from its handler. */
-static struct spinlock rfkill_lock = SPINLOCK_INIT;
+static struct spinlock rfkill_lock = SPINLOCK_INIT_NAMED("rfkill_lock");
 static wait_queue_t rfkill_wq; /* readers wait here; static storage starts it empty */
 
 /** Append `op` for `rf` to `c`'s queue, dropping the oldest event when it is

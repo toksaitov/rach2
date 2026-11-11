@@ -168,6 +168,7 @@ int virtio_queue_setup(struct virtio_dev *d, uint16_t index, virtqueue_done_t do
     if (!vq) {
         return -ENOMEM;
     }
+    spin_lock_init(&vq->lock, "virtqueue");
     vq->dev = d;
     vq->index = index;
     vq->size = size;

@@ -23,7 +23,7 @@
 
 /* The result of the last call, NUL-terminated. */
 static char result[ACPI_CALL_MAX] = "not called";
-static struct spinlock result_lock = SPINLOCK_INIT;
+static struct spinlock result_lock = SPINLOCK_INIT_NAMED("acpi_result_lock");
 
 /* A result being written: `len` bytes of `cap` used, the rest cut. */
 struct text {

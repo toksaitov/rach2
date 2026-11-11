@@ -43,7 +43,7 @@ static void wq_ready(process_t *p)
     p->state = PROC_READY;
 }
 #else
-static struct spinlock wq_spin = SPINLOCK_INIT;
+static struct spinlock wq_spin = SPINLOCK_INIT_NAMED("wq_spin");
 
 static uint32_t irq_save(void)
 {

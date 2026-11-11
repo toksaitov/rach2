@@ -1390,6 +1390,7 @@ static struct vshm *vshm_new(uint32_t peer)
     if (!vs) {
         return NULL;
     }
+    spin_lock_init(&vs->heap_lock, "vshm_heap");
     vs->vdev.ops = &vshm_ops;
     vs->vdev.transport = vs;
     vs->vdev.id = VIRTIO_ID_GPU;

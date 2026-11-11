@@ -68,7 +68,7 @@ static uint32_t mult_measured;
 static uint64_t mono_base_ns;
 static int64_t offset_sec;
 static uint32_t offset_nsec;
-static struct spinlock vclock_lock;
+static struct spinlock vclock_lock = SPINLOCK_INIT_NAMED("vclock_lock");
 
 /** `delta` counts of the TSC at `mult` / 2^`shift` nanoseconds a count, for
  * `shift` at most 32, as vdsocode.s's 128-bit product shifted gives it: the
