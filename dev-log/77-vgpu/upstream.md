@@ -122,3 +122,14 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: nothing in its own code. The virgl family's dEQP list leaves the 20 cases out, for both guests, as the header of `tests/graphics/deqp-gles-virgl.txt.gz` names them.
 * Status: unreported.
 * Next: check Mesa's main branch for a four-component case in `load_texel`, trace what makes a non-constant index bring a cube array lookup there with four components, and report to Mesa's issue tracker under the d3d12 label.
+
+## Two contexts that recreate a texture buffer's data after drawing from it stall the host's GPU
+
+* Project: Mesa 26.0.8, Ubuntu 26.04's 26.0.8-1ubuntu0.3 (build ID b089ec2f62ded38e9327502246aa4ccfb7929b24), its D3D12 gallium driver under WSL2 on an NVIDIA GeForce RTX 4080 SUPER, as the host renderer of virglrenderer 1.2.0-2ubuntu2 in QEMU 10.2.1; which of Mesa's driver, Direct3D 12 and NVIDIA's driver is at fault was not traced.
+* Fails: two or more guest GL contexts that each draw from a texture buffer and then recreate its data with `glBufferData`, at the same time, stall every context of the guest for two to three seconds, after which each draw of every context fails ("Rendering failed") for the rest of the guest's run; with three or four such contexts QEMU prints "D3D12: Removing Device." twice, two to three seconds after they start, and ends. The same cases one after another in one context pass. That the stall is Windows' GPU timeout was not confirmed, since the testing PC's WSL cannot read the Windows event log.
+* Found: 2026-11-11, the testing PC's WSL, milestone 77, task 77-5, taking the Debian guest's dEQP-GLES31 reference on virgl with deqp.sh in four parts: the first part, which holds the 15 cases `texture.texture_buffer.render_modify.*.bufferdata` and runs them in its four glcts processes at once, lost every context's draws 80 seconds in, on each of two runs, and the device and QEMU after; seven shorter runs of the cases around that point narrowed it to those 15.
+* Reproduction: on that host, in a Linux guest on virgl, run VK-GL-CTS 1.4.1.1's glcts in four processes at once, each with a list of `dEQP-GLES31.functional.texture.texture_buffer.render_modify.*.bufferdata` cases: QEMU ends within four seconds, on four guests of four. With two processes the draws fail from the second pair of cases on and QEMU goes on.
+* Evidence: `virgl-host/texture-buffer.txt`, the runs that narrowed the part to the 15 cases, and the timelines of the four-, two- and one-process runs.
+* Rach2: nothing in its own code. The virgl family's dEQP list leaves the 15 cases out, for both guests, as its header says.
+* Status: unreported.
+* Next: run two contexts on the host alone, without a guest, through Mesa's D3D12 driver with the same buffer sizes, to see whether virglrenderer is needed; take a trace with `D3D12_DEBUG=debuglayer` from a Mesa built for debugging, and report to Mesa's issue tracker under the d3d12 label.

@@ -1,0 +1,61 @@
+The Debian 13 guest on the virgl profile, 8 CPUs and 8192 MiB, under QEMU
+10.2.1 with virglrenderer 1.2.0 over Mesa 26.0.8's D3D12 driver on the
+testing PC, ran VK-GL-CTS 1.4.1.1's glcts on surfaceless EGL as deqp.sh
+runs it, in N processes, process j taking every Nth case of the list from
+the jth, with each case's start and end streamed to the host and stamped
+with the host's uptime.
+
+1. deqp.sh's first part of dEQP-GLES31, every fourth case of the virgl
+list, 9,175 cases. Twice, all four processes started failing every case
+within one second of each other, 80 seconds in, process 0 at
+texture.texture_buffer.modify_render.mapbuffer_readwrite.as_vertex_texture_as_fragment_texture
+both times; one process soon stopped with "ResourceError (Failed to
+allocate memory during test execution)", and QEMU printed "D3D12:
+Removing Device." and ended, once with "realloc(): invalid pointer".
+
+2. Shorter runs of the part's list, lines A to B, all four processes
+failing from the same point each time:
+
+    lines 1669-5741   all four from case ~420, 618 failed of 4,073
+    lines 2941-3741   all four from case ~90
+    lines 3141-3541   all four from case ~47
+    lines 3186-3541   from the second gather group on: the same
+    lines 3228-3541   from the third gather group on: the same
+    lines 3270-3541   texture_buffer cases first: all four from case ~17
+    lines 3270-3385   116 cases: all four from case ~17
+    lines 3327-3385   59 cases, modify_render then render_modify: all
+                      four from case 3
+
+The 116 cases of lines 3270-3385 in one process passed but one
+border_clamp case that fails alone too. The 352 texture_buffer cases of
+the whole list, every fourth to a process, so that the four processes ran
+different modifications at once, all passed.
+
+3. Lines 3342-3385, the 15 render_modify cases that recreate the buffer's
+data with glBufferData, first. Four guests in a row died before any case
+ended, each two to three seconds after its first four cases started:
+
+    5404.65 j1 Test case '...render_modify.as_index_array.bufferdata'..
+    5404.65 j0 Test case '...render_modify.as_vertex_array.bufferdata'..
+    5404.65 j3 Test case '...render_modify.as_vertex_texture.bufferdata'..
+    5404.65 j2 Test case '...render_modify.as_vertex_array_as_index_array.bufferdata'..
+    5406.92 D3D12: Removing Device.
+    5407.10 D3D12: Removing Device.
+    5407.16 Connection to 127.0.0.1 closed by remote host.
+
+the fourth with three of them and a border_clamp case running. Each of
+the cases then passed alone in one process.
+
+4. The 15 cases and 20 border_clamp cases in two processes: the first
+pair passed, the second pair took 2.3 seconds and failed with "Rendering
+failed", and every later case of both processes failed, the border_clamp
+cases among them; QEMU went on.
+
+    5526.10 5526.20 j0 Pass  render_modify.as_vertex_array.bufferdata
+    5526.10 5526.20 j1 Pass  render_modify.as_index_array.bufferdata
+    5526.20 5528.47 j0 Fail  render_modify.as_vertex_array_as_index_array.bufferdata
+    5526.20 5528.49 j1 Fail  render_modify.as_vertex_texture.bufferdata
+
+5. The same 35 cases in one process: the 15 passed, and 16 of the 20
+border_clamp cases; the four alpha ones failed, as they do after other
+cases too.
