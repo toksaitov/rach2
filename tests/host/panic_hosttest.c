@@ -464,6 +464,8 @@ static int framebuffer(unsigned int w, unsigned int h)
 
 int main(void)
 {
+    k_panic_setup();
+    CHECK(panic_timeout == 30, "with no panic= on the boot line a panic waits 30 seconds");
     routes("the text console at 80 by 25");
     edges();
     textcon_rows = 24;

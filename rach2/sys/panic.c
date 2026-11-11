@@ -355,7 +355,8 @@ static void put_end(char *line, int timeout, int seconds)
  * Write the report's lines, from the most general at the top to the reason
  * at the bottom, as Linux's panic ends with its reason: what becomes of the
  * machine, whether the crash record was saved, the build, the processor and
- * the process, the exception and its addresses, and the reason. The lines
+ * the process, with its name when it has one, the exception and its
+ * addresses, and the reason. The lines
  * are short, so that each fits in the room beside the character (see
  * `place_report`), and a long reason is cut on the screen alone.
  *
@@ -387,9 +388,11 @@ static void build_report(const char *str, int timeout, int saved)
         if (p != NULL) {
             put_str(line, "  pid ");
             put_num(line, (long)p->pid, 'd');
-            line = report_line();
-            put_str(line, "cmd ");
-            put_comm(line, p->comm);
+            if (p->comm[0] != '\0') {
+                line = report_line();
+                put_str(line, "cmd ");
+                put_comm(line, p->comm);
+            }
         }
         reading_process = 0;
     }
