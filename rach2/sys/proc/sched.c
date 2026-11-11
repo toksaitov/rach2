@@ -811,7 +811,7 @@ void sched_preempt(void)
     if (current_proc && current_proc == this_cpu()->idle) {
         return;
     }
-    if (current_proc && (current_proc->in_syscall || klog_inside())) {
+    if (current_proc && (current_proc->in_syscall || current_proc->in_fault || klog_inside())) {
         current_proc->need_resched = 1;
         return;
     }
