@@ -1,0 +1,24 @@
+{
+  "about:support": "Seccomp-BPF (System Call Filtering)\ttrue\nSeccomp Thread Synchronization\ttrue\nUser Namespaces\ttrue\nContent Process Sandboxing\ttrue\nMedia Plugin Sandboxing\ttrue\nContent Process Sandbox Level\t6\nEffective Content Process Sandbox Level\t6",
+  "application": "Firefox",
+  "graphics": {
+    "Compositing": "WebRender",
+    "Description": "Mesa Intel(R) HD Graphics 4400 (HSW GT2)",
+    "Device ID": "0x0a16",
+    "Driver Vendor": "mesa/crocus",
+    "Driver Version": "25.0.7.0",
+    "Vendor ID": "0x8086",
+    "WebGL 1 Driver Renderer": "Intel -- Mesa Intel(R) HD Graphics 4400 (HSW GT2)",
+    "WebGL 2 Driver Renderer": "Intel -- Mesa Intel(R) HD Graphics 4400 (HSW GT2)",
+    "Window Protocol": "wayland"
+  },
+  "webgl": {
+    "pixel": [
+      255,
+      128,
+      0,
+      255
+    ],
+    "renderer": "Intel(R) HD Graphics, or similar"
+  }
+}
