@@ -312,36 +312,62 @@ fi
 # own, TERM, so that the half's own cleanup runs.
 scene_pid='' copy_pid='' under_su=0
 
-# stop_copy: end the current reader, including su's child. util-linux's
-# su forwards TERM and then KILL to its child; BusyBox's su execs it.
-# shellcheck disable=SC2317 # the EXIT trap calls it
-stop_copy()
-{
-    [ -n "$copy_pid" ] || return 0
-    kill -TERM "$copy_pid" 2>/dev/null || true
-    wait "$copy_pid" 2>/dev/null || true
-    copy_pid=''
-}
-
-# inner_group: print the group of su's child when the child leads it, or
-# nothing. BusyBox's su, Rach2's, execs USER's shell in its own process, whose
-# children, Weston among them, lead groups of their own, so the scene's
-# process must still be su. comm, the second field of /proc/PID/stat, may
-# hold spaces, parentheses and newlines, so it ends at the last parenthesis.
+# inner_group PID: print the group of su's child when PID is still su and
+# the child leads that group, or nothing. BusyBox's su, Rach2's, execs
+# USER's shell in its own process, whose children, Weston among them, lead
+# groups of their own. comm, the second field of /proc/PID/stat, may hold
+# spaces, parentheses and newlines, so it ends at the last parenthesis.
 inner_group()
 {
-    st=$(tr '\n' ' ' 2>/dev/null < "/proc/$scene_pid/stat") || return 0
+    st=$(tr '\n' ' ' 2>/dev/null < "/proc/$1/stat") || return 0
     st=${st#*\(}
     [ "${st%) *}" = su ] || return 0
     for d in /proc/[0-9]*; do
         st=$(tr '\n' ' ' 2>/dev/null < "$d/stat") || continue
         # shellcheck disable=SC2086 # state, ppid, pgrp and the rest are words
         set -- ${st##*) }
-        if [ "${2:-}" = "$scene_pid" ] && [ "${3:-}" = "${d#/proc/}" ]; then
+        if [ "${2:-}" = "$1" ] && [ "${3:-}" = "${d#/proc/}" ]; then
             echo "$3"
             return 0
         fi
     done
+}
+
+# live PID: succeed while PID has not exited. kill -0 succeeds on a zombie
+# too, and the shell's own child stays one until its wait reaps it.
+live()
+{
+    st=$(tr '\n' ' ' 2>/dev/null < "/proc/$1/stat") || return 1
+    st=${st##*) }
+    [ "${st%% *}" != Z ]
+}
+
+# stop_copy: end the current reader. util-linux's su forwards TERM to its
+# child and KILL 2 seconds later; BusyBox's su execs the reader. The reader
+# is USER's, which USER may stop with SIGSTOP or ptrace, and util-linux's su
+# stops itself when its child stops; a stopped task takes no TERM until it
+# runs again (kernel/signal.c:988-989 of 6.12.115). So CONT follows TERM and
+# wakes it (:923-937), and a reader still alive after 5 seconds gets KILL,
+# with su's child's group, which a stop or a tracer cannot hold off
+# (:985-986, :1037-1064).
+# shellcheck disable=SC2317 # the EXIT trap calls it
+stop_copy()
+{
+    [ -n "$copy_pid" ] || return 0
+    kill -TERM "$copy_pid" 2>/dev/null || true
+    kill -CONT "$copy_pid" 2>/dev/null || true
+    n=50
+    while [ "$n" -gt 0 ] && live "$copy_pid"; do
+        sleep 0.1
+        n=$((n - 1))
+    done
+    if live "$copy_pid"; then
+        group=$(inner_group "$copy_pid")
+        [ -z "$group" ] || kill -KILL "-$group" 2>/dev/null || true
+        kill -KILL "$copy_pid" 2>/dev/null || true
+    fi
+    wait "$copy_pid" 2>/dev/null || true
+    copy_pid=''
 }
 
 # shellcheck disable=SC2317 # the traps call it
@@ -349,7 +375,7 @@ stop_scene()
 {
     [ -n "$scene_pid" ] || return 0
     group=''
-    [ "$under_su" = 0 ] || group=$(inner_group)
+    [ "$under_su" = 0 ] || group=$(inner_group "$scene_pid")
     if [ -n "$group" ]; then term=-$group; else term=-$scene_pid; fi
     kill -TERM "$term" 2>/dev/null || true
     n=150
@@ -433,7 +459,8 @@ end=$(date +%s.%N)
 # 6.12.115), and OUT is not one. A file the scene did not write is left out
 # of OUT/taken. A swapped-in FIFO can block the reader; wait, unlike a
 # foreground command, lets a trapped signal interrupt it (POSIX XCU 2.11).
-# The EXIT trap ends that reader before returning.
+# The EXIT trap ends that reader, TERM and CONT and after 5 seconds KILL,
+# before returning, so a reader USER stopped cannot hold the stop either.
 for f in frametimes cpuframes passes; do
     g="$out/$f" rc=0
     # shellcheck disable=SC2016 # the reader's shell expands its argument
