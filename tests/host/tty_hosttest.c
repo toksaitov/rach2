@@ -1257,29 +1257,20 @@ static void signal_flush(void)
     CHECK(n_tty_inq(&pair.slave.ldisc) == 2, "under NOFLSH the input stays");
 }
 
-/** With a master writer waiting behind a full slave, check the look ahead
- * stopped output, restart it, and make room. */
-static void lookahead_action(void)
-{
-    char byte;
-
-    CHECK(pair.slave.ldisc.stopped, "a VSTOP behind a full slave acts at once");
-    tty_input_char(&pair.slave, 021);
-    CHECK(pts_read(&slave, &byte, 1) == 1, "the slave reads a byte");
-}
-
 /** A VSTOP the master writes behind a full slave acts at once, and is fed
- * later without acting again or reaching the reader. */
+ * before any wait without reaching the reader or acting after a VSTART. */
 static void flow_lookahead(void)
 {
     int queued;
+    char byte;
 
     setup_pair();
     fill_input();
     queued = n_tty_inq(&pair.slave.ldisc);
-    scheduled_action = lookahead_action;
-    wake_detail = "a slave read wakes the master writer";
-    CHECK(ptm_write(&master, "\023", 1) == 1 && switches == 1, "the master write waits once");
+    CHECK(ptm_write(&master, "\023", 1) == 1 && switches == 0 && pair.slave.ldisc.stopped,
+          "the master takes the VSTOP and returns before any wait");
+    tty_input_char(&pair.slave, 021);
+    CHECK(pts_read(&slave, &byte, 1) == 1, "the slave reads a byte");
     CHECK(!pair.slave.ldisc.stopped, "the VSTOP fed after its look ahead does not act again");
     CHECK(n_tty_inq(&pair.slave.ldisc) == queued - 1, "the VSTOP reaches no reader");
 }
@@ -1552,6 +1543,73 @@ static void lookahead_bounded(void)
     master.ofd = NULL;
 }
 
+/* Data accepted from the competing writer in `lookahead_interrupted`. */
+static int competing_bytes;
+
+/** Fill the remaining input with nonblocking writes through the shared
+ * description, then interrupt the first writer if it slept. */
+static void lookahead_compete(void)
+{
+    char piece[256];
+    int n, rc;
+
+    nonblocking_ofd.status_flags = OFD_NONBLOCK;
+    for (n = 0; n < 255; n++) {
+        piece[n] = 'y';
+    }
+    for (n = 0; n < 16; n++) {
+        piece[255] = pair.slave.ldisc.stopped ? '\021' : '\023';
+        rc = ptm_write(&master, piece, sizeof(piece));
+        CHECK(rc == 256 || rc == -EAGAIN, "a competing write takes its prefix or refuses it");
+        if (rc > 0) {
+            competing_bytes += rc - 1;
+        }
+    }
+    pending_signal = 1;
+    wq_wake_all(&pair.m_read_wq);
+}
+
+/**
+ * A blocking writer behind 4097 queued bytes offers 255 data bytes and a
+ * VSTOP. If it sleeps, another writer fills all but 15 queue slots through
+ * the same description and interrupts it. The accepted prefix must already
+ * be stored before that can happen. Without the VSTOP, the first writer
+ * really waits and must return EINTR without feeding or counting its data.
+ */
+static void lookahead_interrupted(void)
+{
+    char piece[256];
+    int flow, n, rc, queued;
+
+    for (n = 0; n < 255; n++) {
+        piece[n] = 'x';
+    }
+    piece[255] = '\023';
+    for (flow = 0; flow <= 1; flow++) {
+        setup_pair();
+        fill_input();
+        queued = n_tty_inq(&pair.slave.ldisc);
+        CHECK(queued == 4097, "the slave has 4097 bytes before the blocking write");
+        nonblocking_ofd.status_flags = 0;
+        master.ofd = &nonblocking_ofd;
+        competing_bytes = 0;
+        scheduled_action = lookahead_compete;
+        wake_detail = "the signal wakes the blocked master writer";
+        rc = ptm_write(&master, piece, (uint32_t)(255 + flow));
+        if (!switches) {
+            current_proc = &producer;
+            lookahead_compete();
+        }
+        CHECK(rc == (flow ? 256 : -EINTR) && switches == (flow ? 0 : 1),
+              "a retained flow prefix returns before sleeping; ordinary data waits for the signal");
+        CHECK(pair.slave.ldisc.counters.queue_drops == 0 &&
+                  n_tty_inq(&pair.slave.ldisc) == queued + competing_bytes + (flow ? 255 : 0),
+              "the interrupted and competing writes count only the data the queue gained");
+        master.ofd = NULL;
+        scheduled_action = NULL;
+    }
+}
+
 /* The dispositions of the background process in `job_check`. */
 static struct k_sigaction job_acts[KSIG_MAX + 1];
 /* A thread of the parent's process in `job_check`, alive after its
@@ -1678,6 +1736,7 @@ int main(void)
     console_silent_restart();
     lookahead_nonblocking();
     lookahead_bounded();
+    lookahead_interrupted();
     job_check();
     console_tcioff();
     read_claims_nothing();

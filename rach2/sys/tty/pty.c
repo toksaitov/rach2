@@ -437,10 +437,10 @@ static uint32_t ptm_look_end(const struct ptm_feed *f, uint32_t i)
  * at once, the bytes before it discarded and `*i` moved past it, and the
  * VSTOP and VSTART from `f->ahead` on act at once (`tty_lookahead`),
  * `f->ahead` moving to the piece's end or as far as the read queue can store
- * (`ptm_look_end`). Before it returns without waiting, or after a signal
- * ends its wait, it takes the bytes it acted on (`ptm_take_acted`). Returns
- * 0 to go on feeding, or what `ptm_write` returns: the bytes written,
- * -EAGAIN or -EINTR.
+ * (`ptm_look_end`). It takes the bytes it acted on before any wait
+ * (`ptm_take_acted`), while the space measured is still its own, and returns
+ * that accepted prefix. Returns 0 to go on feeding, or what `ptm_write`
+ * returns: the bytes written, -EAGAIN or -EINTR.
  */
 static int32_t ptm_wait_feed(struct ptm_feed *f, uint32_t *i)
 {
@@ -466,15 +466,13 @@ static int32_t ptm_wait_feed(struct ptm_feed *f, uint32_t *i)
                 }
             }
         }
+        ptm_take_acted(f, i);
         if (f->done + *i > 0 || fd_is_nonblock(f->e)) {
-            ptm_take_acted(f, i);
             wake_master(p, &f->pushed);
             return f->done + *i > 0 ? (int32_t)(f->done + *i) : -EAGAIN;
         }
         wake_master(p, &f->pushed);
         if (wq_wait_event(&p->m_read_wq, ptm_has_room, p) < 0) {
-            ptm_take_acted(f, i);
-            wake_master(p, &f->pushed);
             return f->done + *i > 0 ? (int32_t)(f->done + *i) : -EINTR;
         }
     }
@@ -495,9 +493,9 @@ static int32_t ptm_wait_feed(struct ptm_feed *f, uint32_t *i)
  * bytes is fed at once and the bytes before it are discarded, since the
  * signal would discard them, unless NOFLSH keeps them; a VSTOP or VSTART
  * among them acts at once (`tty_lookahead`) and is fed later without acting
- * again, as Linux looks ahead in its flip buffer, and a write that returns
- * before it feeds them takes the bytes up to the last that acted
- * (`ptm_take_acted`), so that it never acts on a byte it does not count.
+ * again, as Linux looks ahead in its flip buffer. The bytes up to the last
+ * that acted are fed before any wait (`ptm_take_acted`), so that another
+ * writer cannot take their space, and the write returns that prefix.
  * Master readers are woken before every return that fed bytes, a failed
  * copy included, so they see the echo.
  */
