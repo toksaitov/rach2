@@ -142,9 +142,9 @@ as on Linux, since the file's write-back would never see the device's
 stores.
 When the program unmaps the pinned memory the device can no longer reach
 those pages.
-When its address space ends, a mapping of RAM stays, with its pages, until
-its unmap or the container's release, as on Linux, while one with device
-pages goes.
+When its address space ends, every mapping, of RAM or of device pages,
+stays with its pages until its unmap or until the last group leaves the
+container, as on Linux.
 A mapping containing device pages also loses its DMA access before a
 protection change or the device revokes its pages.
 .Dv VFIO_IOMMU_UNMAP_DMA
