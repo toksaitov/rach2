@@ -1377,7 +1377,8 @@ Datagrams delivered by the timer tick's loopback drain.
 .It Li loopback_delivered_idle
 Datagrams delivered by the idle wait's loopback drain.
 .It Li loopback_delivered_call
-Datagrams delivered by the loopback drain at system call exit.
+Datagrams delivered by the loopback drain at system call exit, and by the
+one a socket receive, accept or poll makes before it looks at its queues.
 .It Li loopback_left_idle
 Datagrams a timer tick found on the loopback ring while every processor was
 halted in an idle wait.
