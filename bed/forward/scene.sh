@@ -3,7 +3,7 @@
 # the user gfx, whose sudo asks no password: a picture drawn through the
 # guest's virtio-gpu and checked there, and its rate.
 #
-#   scene.sh virgl|venus [-o OUT]
+#   scene.sh virgl|venus [-o OUT] [-r REF]
 #
 # `virgl` builds triangle.c, bed/fixture's, with the guest's GCC and draws
 # the triangle on the guest's llvmpipe and then on its GPU; it passes when
@@ -16,8 +16,11 @@
 # Venus, and runs the graphics tests' vkcube.sh as root on that ICD: vkcube
 # presents to a Weston of its own on the card, is held after its 300th and
 # 345th frames, and each, read back inside the guest, must have the checksum
-# vkcube.ref gives it, the Debian reference guest's on the testing PC's
-# lavapipe.
+# REF gives it, a frames file of vkcube.sh, by default vkcube.ref beside this
+# file, the Debian reference guest's on the testing PC's lavapipe. A frame's
+# sum depends on the GPU that draws it, so another host's run names the
+# frames that Debian in Rach2's place drew there; REF `none` records the
+# frames without judging them, which is how that reference is taken.
 #
 # Beside this file in the guest are triangle.c, guest-env.sh, and for venus
 # runners/, the graphics tests' runners, and vkcube.ref. OUT, /tmp/out by
@@ -40,14 +43,16 @@ die()
     exit 1
 }
 
-usage='usage: scene.sh virgl|venus [-o OUT]'
+usage='usage: scene.sh virgl|venus [-o OUT] [-r REF]'
 [ $# -ge 1 ] || die "$usage"
 profile=$1
 shift
 out=/tmp/out
-while getopts o: o; do
+ref=$here/vkcube.ref
+while getopts o:r: o; do
     case $o in
         o) out=$OPTARG ;;
+        r) ref=$OPTARG ;;
         *) die "$usage" ;;
     esac
 done
@@ -131,8 +136,13 @@ venus()
     [ "$status" -eq 0 ] && [ -n "$line" ] || die "vkcube.sh failed: $(last "$out/vkcube.out")"
     echo "bed-forward: weston: $(sed -n 's/^renderer //p' "$out/vkcube/record" | head -n 1)"
     echo "bed-forward: $line"
+    if [ "$ref" = none ]; then
+        echo "bed-forward: result: pass: venus: $device; ${line#vkcube: result: }; frames not judged"
+        return
+    fi
+    [ -f "$ref" ] || die "no reference frames $ref"
     for n in 300 345; do
-        want=$(sed -n "s/^frame $n .* crc32 //p" "$here/vkcube.ref")
+        want=$(sed -n "s/^frame $n .* crc32 //p" "$ref")
         got=$(sed -n "s/^frame $n .* crc32 //p" "$out/vkcube/frames")
         [ -n "$want" ] && [ "$got" = "$want" ] ||
             die "vkcube's frame $n is ${got:-unread}, not the reference's ${want:-missing one}"

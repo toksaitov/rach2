@@ -10,7 +10,15 @@ On the x86-64 GNU root, as root, with the guest's disk, the key of its user and 
     sh forward.sh -d /dev/disk2 -k id_ed25519 -g guest.tar venus
     sh forward.sh -a tcg -c 4 -m 4096 -o /tmp/out -d /dev/disk2 -k id_ed25519 -g guest.tar virgl
 
-`forward.sh` boots the guest in the root's `qemu-system-x86_64` with `virtio-vga-gl` on `-display egl-headless,rendernode=/dev/dri/renderD128`, waits for the guest's SSH server on port 2222 of the loopback address (`-p`), copies the archive in, runs `scene.sh` as the guest's user `gfx`, copies the scene's output out and powers the guest off. `-a` is the accelerator, `kvm` by default and `tcg` for QEMU's emulator; `-c` and `-m` are the guest's processors and memory, 4 and 4096 MiB; `-o` is the directory that gets the guest's console, QEMU's messages, the scene's output and its logs, the working directory by default. `RENDER_NODE` names another render node, `QEMU` another QEMU, and for `venus` `VK_DRIVER_FILES` the Vulkan driver the guest's calls are made on, by default Venus's, and `HOSTMEM` the size of the window blobs are mapped in, 4G.
+`forward.sh` boots the guest in the root's `qemu-system-x86_64` with `virtio-vga-gl` on `-display egl-headless,rendernode=/dev/dri/renderD128`, waits for the guest's SSH server on port 2222 of the loopback address (`-p`), copies the archive in, runs `scene.sh` as the guest's user `gfx`, copies the scene's output out and powers the guest off. `-a` is the accelerator, `kvm` by default and `tcg` for QEMU's emulator; `-c` and `-m` are the guest's processors and memory, 4 and 4096 MiB; `-o` is the directory that gets the guest's console, QEMU's messages, the scene's output and its logs, the working directory by default. `-f` is the disk's format, `raw` for a device and by default, or `qcow2` for the guest's image file itself. `-r` names, for `venus`, the frames file of `vkcube.sh` whose checksums vkcube's frames must have, in place of the archive's `vkcube.ref`, or is `none`, which records the frames and judges none. `RENDER_NODE` names another render node, `QEMU` another QEMU, and for `venus` `VK_DRIVER_FILES` the Vulkan driver the guest's calls are made on, by default Venus's, and `HOSTMEM` the size of the window blobs are mapped in, 4G.
+
+On a machine with a GPU of its own, such as the Lenovo, the runner runs under KVM, the default, and the guest's disk is the image file; `venus` names the GPU's own Vulkan driver, hasvk on the Lenovo, and the frames that Debian in Rach2's place drew on that GPU, since a frame's checksum depends on the GPU that draws it:
+
+    sh forward.sh -f qcow2 -d guest.qcow2 -k id_ed25519 -g guest.tar virgl
+    VK_DRIVER_FILES=/usr/share/vulkan/icd.d/intel_hasvk_icd.x86_64.json \
+        sh forward.sh -f qcow2 -r lenovo.frames -d guest.qcow2 -k id_ed25519 -g guest.tar venus
+
+The same lines run on Debian in Rach2's place, with `-r none` for `venus` when they take the reference.
 
 The runner bounds silence, never the run: it fails when QEMU ends early, or when neither the guest's console nor the scene's output has grown for 600 seconds (`-w`).
 
@@ -19,7 +27,7 @@ The guest's disk and the archive are made on the build host:
     sh bed/forward/guest.sh build/tests/cases/bed-forward/guest.qcow2 build/tests/cases/bed-forward/id_ed25519
     make ARCH=x86_64 build/tests/cases/bed-forward/forward.ext2
 
-`guest.sh` prepares the graphics tests' [Debian reference guest](../../tests/graphics/Readme.md#the-reference-guest) where the clone has none yet, and writes its prepared image whole, with no backing file, as one qcow2 image, with the private key of `gfx`. The make rule packs `guest.tar`, which holds `scene.sh`, [`triangle.c`](../fixture/triangle.c), the graphics runs' `guest-env.sh`, their vkcube runner with its helpers, and vkcube's reference checksums, and puts it with `forward.sh` and the key on a small ext2 disk, which the family's cases mount on Rach2.
+`guest.sh` prepares the graphics tests' [Debian reference guest](../../tests/graphics/Readme.md#the-reference-guest) where the clone has none yet, and writes its prepared image whole, with no backing file, as one qcow2 image, with the private key of `gfx`. The make rule packs `guest.tar` (`make ARCH=x86_64 build/tests/cases/bed-forward/guest.tar` alone), which holds `scene.sh`, [`triangle.c`](../fixture/triangle.c), the graphics runs' `guest-env.sh`, their vkcube runner with its helpers, and vkcube's reference checksums, and puts it with `forward.sh` and the key on a small ext2 disk, which the family's cases mount on Rach2.
 
 ## Results
 
@@ -36,7 +44,7 @@ A failure's last line is `bed-forward: result: fail: REASON`, the scene's or the
 
 `scene.sh virgl` passes when the guest's GL renderer is virgl, the triangle drawn through it has the checksum of the same triangle on the guest's llvmpipe, and glmark2's scene validates. The triangle is the vtest rung's, built in the guest with its GCC: it reads its picture back and takes the FNV-1a checksum of the pixels, `f0b3cd1d6d2e2625` on every driver that draws it right. glmark2-es2-drm then draws `[build:use-vbo=true]` off screen at 1280x800 twice: once with `--validate`, which compares a frame with glmark2's own reference picture, and once as the benchmark, whose frames a second the scene reports.
 
-`scene.sh venus` passes when the guest's Vulkan device is Venus and vkcube's pictures are the reference's. [`vkcube.sh`](../../tests/graphics/runners/vkcube.sh) of the graphics tests presents vkcube through Venus to a Weston of its own on the guest's card, holds it after its 300th and 345th frames and reads each back inside the guest; both must have the CRC-32 that [`frames.out`](../../tests/graphics/ref/venus-wsl/vkcube/frames.out) records for the reference guest on the testing PC's lavapipe, `0x75d4ad32` and `0x1a0d31d7`. The scene reports the rate of the first 300 presents.
+`scene.sh venus` passes when the guest's Vulkan device is Venus and vkcube's pictures are the reference's, or, with `-r none`, when vkcube's frames were read, and then says `frames not judged`. [`vkcube.sh`](../../tests/graphics/runners/vkcube.sh) of the graphics tests presents vkcube through Venus to a Weston of its own on the guest's card, holds it after its 300th and 345th frames and reads each back inside the guest; both must have the CRC-32 that [`frames.out`](../../tests/graphics/ref/venus-wsl/vkcube/frames.out) records for the reference guest on the testing PC's lavapipe, `0x75d4ad32` and `0x1a0d31d7`. The scene reports the rate of the first 300 presents.
 
 The measurements, on the testing PC and beside Linux in Rach2's place, are in [83-2.md](../../dev-log/83-testbed/83-2.md).
 
