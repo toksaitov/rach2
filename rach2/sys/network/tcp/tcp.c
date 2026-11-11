@@ -2898,13 +2898,13 @@ static int tcp_in_window(const struct tcb *tcb, uint32_t seq, uint32_t end)
  */
 static int tcp_oow_limited(struct tcb *tcb, uint32_t *skipped)
 {
-    uint32_t stamp = TCP_NOW() + 1u, since = stamp - tcb->oow_stamp;
+    uint32_t stamp = tcp_due(1), since = stamp - tcb->oow_stamp; /* now + 1, never 0 */
 
     if (tcb->oow_stamp != 0 && (int32_t)since >= 0 && since < TCP_INVALID_RATELIMIT) {
         (*skipped)++;
         return 1;
     }
-    tcb->oow_stamp = stamp != 0 ? stamp : 1u;
+    tcb->oow_stamp = stamp;
     return 0;
 }
 
