@@ -840,7 +840,13 @@ and changes that group with
 .Dv TIOCSPGRP .
 It checks the refusals for a foreign group, a negative group ID, and a
 terminal detached by
-.Dv TIOCNOTTY .
+.Dv TIOCNOTTY ,
+and that once a zombie's group is in front its own orphaned group's
+.Dv TIOCSPGRP
+fails with
+.Er ENOTTY
+until it ignores
+.Dv SIGTTOU .
 .Sh ERRORS
 .Bl -tag -width "[EOPNOTSUPP]"
 .It Bq Er EBADF
