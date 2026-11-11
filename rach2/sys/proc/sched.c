@@ -12,6 +12,7 @@
 #include "wait_queue.h"
 #include "../io/timerfd.h"
 #include "../timer.h"
+#include "../rtc.h"
 #include "../lib/ksignal.h"
 
 #include "../lib/kirq.h"
@@ -110,6 +111,16 @@ static void sched_remove(process_t *p)
     p->ready_linked = 0;
 }
 
+/** The monotonic clock in nanoseconds, 64 bits wide so that no wait on a
+ * run queue wraps, as Linux's sched_info reads rq_clock. */
+static uint64_t sched_clock_ns(void)
+{
+    int64_t sec, ns;
+
+    rtc_monotonic(&sec, &ns);
+    return (uint64_t)sec * 1000000000u + (uint64_t)ns;
+}
+
 /** Append a noncurrent ready process once, with sched_lock held. A move
  * from one queue to another keeps the moment its wait began; a wait begun
  * before the scheduler is on, which has no clock to read, is not counted. */
@@ -122,7 +133,7 @@ static void sched_append(process_t *p)
     }
     if (!p->run_queued && _sched_enabled) {
         p->run_queued = 1;
-        p->queued_us = waketime_clock();
+        p->queued_ns = sched_clock_ns();
     }
     waketime_state(p, 1, p->cpu);
     p->ready_prev = q->tail;
@@ -141,12 +152,12 @@ static void sched_append(process_t *p)
 
 /** Count the wait of `p`, which now runs, on the run queues since it was
  * made ready, as Linux's sched_info_arrive adds it to run_delay, with
- * sched_lock held. A wait is under 2^32 microseconds, some 71 minutes. */
+ * sched_lock held. */
 static void sched_arrive(process_t *p)
 {
     if (p->run_queued) {
         p->run_queued = 0;
-        p->run_delay += (uint64_t)(waketime_clock() - p->queued_us) * 1000u;
+        p->run_delay += sched_clock_ns() - p->queued_ns;
     }
 }
 

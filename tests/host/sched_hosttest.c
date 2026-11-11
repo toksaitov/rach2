@@ -45,6 +45,16 @@ static uint32_t rseq_area[8];
         }                                                        \
     } while (0)
 
+/* The modeled monotonic clock in nanoseconds, which the rows move. */
+static uint64_t clock_ns;
+
+/** Read the modeled monotonic clock, which only the rows move. */
+void rtc_monotonic(int64_t *sec, int64_t *ns)
+{
+    *sec = (int64_t)(clock_ns / 1000000000u);
+    *ns = (int64_t)(clock_ns % 1000000000u);
+}
+
 /** Timer list membership is checked by process_timer_hosttest. */
 void proc_timer_update(process_t *p)
 {
@@ -657,6 +667,31 @@ static void migration(void)
     init_sched();
 }
 
+/**
+ * A thread made ready while the scheduler is on is credited, when it is
+ * selected, with its whole wait on the run queue in nanoseconds, as Linux's
+ * sched_info: a wait of 2^32 + 10^6 microseconds, past any 32-bit count of
+ * microseconds, counts whole, and a wait begun before the scheduler is on
+ * counts nothing.
+ */
+static void run_delay(void)
+{
+    const uint64_t wait = ((uint64_t)1 << 32) * 1000u + 1000000000u;
+
+    clock_ns = (uint64_t)7 * 1000000000u + 123u;
+    setup();
+    wake(&procs[6]);
+    clock_ns += wait;
+    schedule();
+    CHECK(current_proc == &procs[6] && procs[6].run_delay == wait && procs[6].pcount == 1,
+          "a wait past 2^32 microseconds counts whole in run_delay");
+    clock_ns += 5000u;
+    schedule();
+    CHECK(current_proc == &procs[1] && procs[1].run_delay == 0,
+          "a wait begun before the scheduler was on counts nothing");
+    clock_ns = 0;
+}
+
 /** Run every row; 0 when each passes, 1 otherwise. */
 int main(int argc, char **argv)
 {
@@ -675,13 +710,14 @@ int main(int argc, char **argv)
     all_idle();
     ready_lists();
     migration();
+    run_delay();
     affinity_rows();
     if (failures) {
         return 1;
     }
     dprintf(1, "sched-hosttest: result: pass: priority, fairness, states, lifecycle, accounting, "
                "load phase, "
-               "idle machine, ready lists, migration\n");
+               "idle machine, ready lists, migration, run delay\n");
     return 0;
 }
 

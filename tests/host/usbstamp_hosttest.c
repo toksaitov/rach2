@@ -70,6 +70,14 @@ uint32_t timer_now_us(void)
     return clock_us;
 }
 
+/** Read the explicit clock as the monotonic clock, for the run queue's
+ * waits, which no row judges. */
+void rtc_monotonic(int64_t *sec, int64_t *ns)
+{
+    *sec = clock_us / 1000000u;
+    *ns = (int64_t)(clock_us % 1000000u) * 1000;
+}
+
 /** Timer list membership is checked by process_timer_hosttest. */
 void proc_timer_update(process_t *p)
 {
