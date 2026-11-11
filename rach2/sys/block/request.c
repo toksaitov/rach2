@@ -83,6 +83,14 @@ static uint32_t release_tick;
 static uint32_t pool_size;  /* the limit: REQ_LIMIT, or rach2.blockpool=N */
 static uint32_t device_cap; /* the most requests one device may hold */
 
+/** The deadlines' clock as it stands now: `req_ticks` and the ticks
+ * `kernel_ticks` has counted since the tick's last call, which a boot
+ * processor's tick that found the big lock held left out. */
+static uint32_t req_clock(void)
+{
+    return req_ticks + ((uint32_t)kernel_ticks - req_seen);
+}
+
 /** Mask interrupts and return the state `irq_restore` puts back. */
 static uint32_t irq_save(void)
 {
@@ -370,7 +378,8 @@ static struct block_request *req_take(block_device_t *device, int write, uint64_
             r->status = -EIO;
             r->state = BLOCK_REQ_IN_FLIGHT;
             r->generation = ++next_generation;
-            r->deadline = req_ticks + req_period(device);
+            r->taken_tick = req_clock();
+            r->deadline = r->taken_tick + req_period(device);
             r->overdue = 0;
             r->taken_us = timer_now_us();
             r->flags = 0;
@@ -902,7 +911,9 @@ uint32_t block_release_tick(void)
  * late completion still matches it. The clock advances by the ticks counted
  * since the last call, not by one a call: the boot processor's tick that
  * finds the big lock held ends without calling this (`tick_waits`, isr.c),
- * and a late interrupt counts several ticks.
+ * and a late interrupt counts several ticks. A request taken between two
+ * calls counts only the ticks since it was taken, read from the clock as
+ * `req_clock` gives it then.
  */
 void block_request_tick(void)
 {
@@ -918,7 +929,8 @@ void block_request_tick(void)
         if (r->state != BLOCK_REQ_IN_FLIGHT) {
             continue;
         }
-        block_count_wait_ticks(passed);
+        block_count_wait_ticks(req_ticks - r->taken_tick < passed ? req_ticks - r->taken_tick
+                                                                  : passed);
         if ((int32_t)(req_ticks - r->deadline) < 0) {
             continue;
         }

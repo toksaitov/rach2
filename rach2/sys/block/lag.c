@@ -66,6 +66,15 @@ static block_device_t dead_device; /* rach2.blockdead=P: the partition's own dev
 static uint64_t dead_start;        /* where that partition starts, or 0 for none */
 static int dead_set;
 
+/** The lag clock as it stands now: `lag_ticks` and the ticks `kernel_ticks`
+ * has counted since the tick's last call, which a boot processor's tick
+ * that found the big lock held left out; `lag_ticks` alone while a fixture
+ * holds the queue, since the tick then does not advance it. */
+static uint32_t lag_clock(void)
+{
+    return lag_held ? lag_ticks : lag_ticks + ((uint32_t)kernel_ticks - lag_seen);
+}
+
 /**
  * Claim a free slot for `request` before anything runs for it.
  *
@@ -105,7 +114,7 @@ static int lag_flush(block_device_t *device, struct block_request *request)
     if (!e) {
         return -EIO;
     }
-    e->due = lag_ticks + lag_delay;
+    e->due = lag_clock() + lag_delay;
     e->ready = 1;
     return 0;
 }
@@ -141,7 +150,7 @@ static int lag_submit(block_device_t *device, struct block_request *request)
         k_memset(request->page, 0xEE, request->count * BLOCK_SECTOR_SIZE);
         e->status = lag_backing->read(lag_backing, request->lba, request->count, e->staged);
     }
-    e->due = lag_ticks + lag_delay;
+    e->due = lag_clock() + lag_delay;
     e->ready = 1;
     return 0;
 }
@@ -161,7 +170,7 @@ static void lag_deliver(struct lag_entry *e)
         return;
     }
     e->delivered = 1;
-    e->due = lag_ticks + 2u * LAG_UNIT;
+    e->due = lag_clock() + 2u * LAG_UNIT;
     lag_completions++;
     if (e->flush) {
         klog(KLOG_INFO, "block", "lag: flush answered");
