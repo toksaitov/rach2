@@ -45,7 +45,10 @@ Regular files are read at the open file description's offset.
 A positive result advances that offset by the number of bytes read.
 Descriptors shared through duplication or fork share the offset.
 Directories cannot be read with these calls: a read of any count returns
-.Er EISDIR .
+.Er EISDIR ,
+after
+.Er EFAULT
+for a buffer that passes the top of user memory, as on Linux.
 Use
 .Xr getdents64 2
 to read directory entries.

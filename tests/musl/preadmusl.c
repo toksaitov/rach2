@@ -37,7 +37,10 @@
  * socket without writing, and refuses a descriptor not open or open only
  * for reading with EBADF, and an epoll set, open for writing with no write,
  * with EINVAL, before its count and its vector; a write to the set is EINVAL
- * too.
+ * too. read and readv refuse the same descriptors with the same errors, with
+ * no bytes too and before a count past 1024 or a vector or buffer outside
+ * user memory, and a directory's read EFAULT for such a buffer before
+ * EISDIR.
  * pwritev2 with RWF_APPEND writes at the end, moving the descriptor's
  * offset at offset -1 and not at another, and leaves O_APPEND clear;
  * RWF_NOAPPEND overrides O_APPEND for one call at either offset form,
@@ -972,6 +975,48 @@ static int writev_empty(void)
 }
 
 /**
+ * Whether read and readv check the descriptor before the count, the vector
+ * and the buffer, as Linux's vfs_read and vfs_readv test FMODE_READ, then
+ * FMODE_CAN_READ, then the address: EBADF for a descriptor not open and one
+ * open only for writing, with no bytes too, and before a count past 1024 or
+ * a vector outside user memory; EINVAL for an epoll set, which has no read
+ * method, for no bytes and one, and before the same; and for a directory
+ * EFAULT for a buffer outside user memory before EISDIR, and EISDIR for no
+ * bytes there. KERNEL_ADDRESS is user memory for an i386 program on the
+ * x86-64 kernel, whose read of the directory there is EISDIR, as on Linux.
+ */
+static int read_empty(void)
+{
+    char buf[1];
+    struct iovec v[1];
+    int wr = open("/dev/null", O_WRONLY), ep = epoll_create1(0), dirfd = open("/", O_RDONLY);
+    int ok, fault = EFAULT;
+
+#if !defined __x86_64__
+    /* The x86-64 kernel gives an i386 program user memory up to 4 GiB. */
+    if (getenv("ETUDE_KERNEL") != NULL && strcmp(getenv("ETUDE_KERNEL"), "x86_64") == 0) {
+        fault = EISDIR;
+    }
+#endif
+
+    v[0].iov_base = buf;
+    v[0].iov_len = 0;
+    ok = wr >= 0 && ep >= 0 && dirfd >= 0 && refused(read(999, buf, 0), EBADF) &&
+         refused(readv(999, v, 0), EBADF) && refused(readv(999, v, 1025), EBADF) &&
+         refused(readv(999, KERNEL_ADDRESS, 1), EBADF) && refused(read(wr, buf, 0), EBADF) &&
+         refused(readv(wr, v, 0), EBADF) && refused(readv(wr, v, 1025), EBADF) &&
+         refused(readv(wr, KERNEL_ADDRESS, 1), EBADF) && refused(read(ep, buf, 0), EINVAL) &&
+         refused(read(ep, buf, 1), EINVAL) && refused(readv(ep, NULL, 0), EINVAL) &&
+         refused(readv(ep, v, 1025), EINVAL) && refused(readv(ep, KERNEL_ADDRESS, 1), EINVAL) &&
+         refused(read(dirfd, KERNEL_ADDRESS, 1), fault) &&
+         refused(read(dirfd, KERNEL_ADDRESS, 0), EISDIR);
+    close(wr);
+    close(ep);
+    close(dirfd);
+    return ok;
+}
+
+/**
  * Check the refusals of preadv and pwritev on the file vector_rows makes,
  * writev's cut of a vector past 2 GiB (`writev_cut`) and its vector of no
  * bytes (`writev_empty`). Returns 0, or 1 once the failure is reported.
@@ -1014,6 +1059,9 @@ static int vector_refusal_rows(void)
     }
     if (!writev_empty()) {
         return fail("writev of no bytes writes, or does not refuse a bad descriptor first");
+    }
+    if (!read_empty()) {
+        return fail("read or readv does not refuse a bad descriptor before its count and buffer");
     }
     report_held();
     return 0;
