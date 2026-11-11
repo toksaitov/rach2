@@ -126,10 +126,21 @@ faults()
 {
     awk '$1 == "iommu_dma_faults" || $1 == "iommu_irq_faults" { print }' /proc/stat
 }
-# How many times the driver has logged ACTION for the function.
-logged()
+# The driver's newest handoff line for the function, with its time stamp.
+newest()
 {
-    dmesg | grep -c "i915: handoff: $bdf: $1" || :
+    dmesg | grep "i915: handoff: $bdf: " | tail -n 1
+}
+# Whether the newest handoff line is ACTION and differs from MARK, the newest
+# before it; a count of the lines misses a new one once the kernel's log ring
+# has dropped an old one.
+logged_since()
+{
+    local l
+    l=$(newest)
+    [ "$l" != "$2" ] || return 1
+    case $l in *"i915: handoff: $bdf: $1"*) return 0 ;; esac
+    return 1
 }
 # Take the function from vfio-pci, restore its driver_override and bind the
 # Intel driver again; each step only where it is still to do, so that it
@@ -214,8 +225,7 @@ fi
 
 before=$(counts)
 faults_before=$(faults)
-released=$(logged released)
-bound=$(logged bound)
+mark=$(newest)
 override=$(cat "$dev/driver_override" 2>/dev/null || :)
 [ "$override" != '(null)' ] || override=
 card_before=$(card)
@@ -226,7 +236,8 @@ echo "gpu: unbind: $bdf from i915"
 taken=1
 echo "$bdf" > "$i915/unbind" || fail "the Intel driver did not release $bdf"
 [ -z "$(driver)" ] || fail "$bdf still has a driver after the unbind"
-[ "$(logged released)" = $((released + 1)) ] || fail 'the driver did not log the release'
+logged_since released "$mark" || fail 'the driver did not log the release'
+mark=$(newest)
 echo "gpu: bind: $bdf to vfio-pci"
 echo vfio-pci > "$dev/driver_override"
 echo "$bdf" > "$vfio/bind" || fail "vfio-pci did not take $bdf"
@@ -289,7 +300,7 @@ else
 fi
 [ -z "$token" ] || [ "$seen" = 1 ] || fail "the guest did not print $token"
 [ "$back" = 1 ] || fail "the Intel driver did not take $bdf back"
-[ "$(logged bound)" = $((bound + 1)) ] || fail 'the driver did not log the bind'
+logged_since bound "$mark" || fail 'the driver did not log the bind'
 card_after=$(card)
 [ -n "$card_after" ] || fail "$bdf has no DRM card after the bind"
 [ -e "/dev/dri/$card_after" ] || fail "/dev/dri/$card_after is absent"
