@@ -2844,6 +2844,24 @@ static int controls(uint32_t msr, uint32_t true_msr, uint32_t want, uint32_t nee
 }
 
 /**
+ * Whether the processor of CPUID leaf 1 signature `sig` is one of the five
+ * on which a VM exit may clear IA32_PERF_GLOBAL_CTRL bits 34-32 under the
+ * controls that load it: Nehalem EP, Nehalem, Westmere, Westmere EP and
+ * Nehalem EX (errata AAK155, AAP115, AAT100, BC86/AAY89/BD102 and BA97).
+ * Linux drops the controls there and switches the register by the MSR
+ * lists (arch/x86/kvm/vmx/vmx.c:2740-2759).
+ */
+static int perf_global_erratum(uint32_t sig)
+{
+    uint32_t model = ((sig >> 4) & 0xFu) | ((sig >> 12) & 0xF0u);
+
+    if (((sig >> 8) & 0xFu) != 6u) {
+        return 0;
+    }
+    return model == 0x1Au || model == 0x1Eu || model == 0x25u || model == 0x2Cu || model == 0x2Eu;
+}
+
+/**
  * Whether the processor has VMX as this backend needs it, the firmware
  * leaves it usable, and the controls are chosen: VMX in CPUID,
  * IA32_FEATURE_CONTROL locked with VMX outside SMX on, or not locked, when
@@ -2864,7 +2882,7 @@ static int vmx_probe(void)
     uint32_t proc2_need = PROC2_EPT | PROC2_UG;
     uint32_t exit_need = EXIT_HOST_64 | EXIT_SAVE_DEBUG | EXIT_LOAD_PAT | EXIT_LOAD_EFER;
     uint32_t entry_need = ENTRY_LOAD_DEBUG | ENTRY_LOAD_PAT | ENTRY_LOAD_EFER;
-    uint32_t forbid, windows, perf_exit, perf_entry;
+    uint32_t forbid, windows, perf_exit, perf_entry, sig;
 
 #ifndef RACH2_HOSTTEST
     vmx_op = &vmx_hw;
@@ -2873,6 +2891,7 @@ static int vmx_probe(void)
     if (!(c & (1u << 5))) {
         return 0;
     }
+    sig = a;
     fc = vmx_op->rdmsr(MSR_IA32_FEATURE_CONTROL);
     if ((fc & FC_LOCKED) && !(fc & FC_VMX_OUTSIDE_SMX)) {
         return 0;
@@ -2910,7 +2929,8 @@ static int vmx_probe(void)
     caps.perf_global = !controls(MSR_IA32_VMX_EXIT, MSR_IA32_VMX_TRUE_EXIT, EXIT_LOAD_PERF,
                                  EXIT_LOAD_PERF, &perf_exit) &&
                        !controls(MSR_IA32_VMX_ENTRY, MSR_IA32_VMX_TRUE_ENTRY, ENTRY_LOAD_PERF,
-                                 ENTRY_LOAD_PERF, &perf_entry);
+                                 ENTRY_LOAD_PERF, &perf_entry) &&
+                       !perf_global_erratum(sig);
     caps.ept_vpid = vmx_op->rdmsr(MSR_IA32_VMX_EPT_VPID);
     if (!(caps.ept_vpid & EPT_CAP_WALK4) || !(caps.ept_vpid & EPT_CAP_WB) ||
         !(caps.ept_vpid & EPT_CAP_INVEPT) ||
