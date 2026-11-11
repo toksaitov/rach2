@@ -8,6 +8,7 @@
  * host-deps: tests/host/compat/fd_flat.c
  * host-deps: tests/host/compat/spinlock_host.c
  * host-deps: tests/host/compat/atomic_host.c tests/host/compat/resv_host.c
+ * host-deps: tests/host/compat/mutex_none.c
  *
  * The fake driver has two CRTCs, each with a primary plane, an encoder and
  * a connector with the Lenovo panel's EDID; the first also has CRCs. A

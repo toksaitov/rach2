@@ -7,6 +7,7 @@
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
  * host-deps: tests/host/compat/atomic_host.c
  * host-deps: tests/host/compat/fd_flat.c tests/host/compat/bkl_none.c
+ * host-deps: tests/host/compat/mutex_none.c
  *
  * The four files are included whole. A fake driver binds two devices: one
  * with a card and a render node, GEM, dumb buffers of the shmem helper
@@ -94,6 +95,12 @@ int32_t udmabuf_start(void)
 int32_t virtio_gpu_probe(void)
 {
     return -ENODEV;
+}
+
+/** The commit worker, which no row here needs. */
+int32_t drm_atomic_worker_start(void)
+{
+    return 0;
 }
 
 /** No region is shared with a VM here. */

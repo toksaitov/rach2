@@ -135,9 +135,9 @@ int32_t intel_crtc_set_crc_source(struct drm_crtc *crtc, const char *name)
     if (ctl != 0) {
         crc_workaround(c, 1);
     }
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&c->i915->drm.event_lock);
     if (ctl != 0 && c->crc_ctl == 0 && drm_crtc_vblank_get(crtc) != 0) {
-        kirq_restore(flags);
+        spin_unlock_irqrestore(&c->i915->drm.event_lock, flags);
         crc_workaround(c, 0);
         return -EIO;
     }
@@ -148,7 +148,7 @@ int32_t intel_crtc_set_crc_source(struct drm_crtc *crtc, const char *name)
     i915_posting_read(hw, PIPE_CRC_CTL(c->pipe));
     c->crc_ctl = ctl;
     c->crc_skip = ctl != 0 ? 1u : 0u;
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&c->i915->drm.event_lock, flags);
     if (ctl == 0) {
         crc_workaround(c, 0);
     }

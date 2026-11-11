@@ -3,6 +3,7 @@
 #include "mutex.h"
 
 #include "process.h"
+#include "../lib/kerrno.h"
 #include "../panic.h"
 
 /* The checker's notes of a sleeping lock taken and let go, from the caller
@@ -84,6 +85,18 @@ void mutex_unlock(struct mutex *m)
     spin_unlock_irqrestore(&m->spin, flags);
     DEP_RELEASE(&m->dep);
     wq_wake_all(&m->wq);
+}
+
+int mutex_lock_interruptible(struct mutex *m)
+{
+    DEP_ACQUIRE(&m->dep);
+    while (!mutex_take(m)) {
+        if (wq_wait_event(&m->wq, mutex_free, m) != 0) {
+            DEP_RELEASE(&m->dep);
+            return -EINTR;
+        }
+    }
+    return 0;
 }
 
 int mutex_held(const struct mutex *m)

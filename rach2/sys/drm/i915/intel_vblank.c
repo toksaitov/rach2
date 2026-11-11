@@ -18,9 +18,12 @@
  * The interrupt handler takes the pipe's events under the interrupt mask's
  * lock and leaves them in `display.de_iir`; the deferred work then runs
  * the DRM core's vblank code, which may mask the vblank again through
- * `intel_disable_vblank`, a call that takes that lock. Process context
- * reaches the same state, the events and the vblank counts, with
- * interrupts off.
+ * `intel_disable_vblank`, a call that takes that lock. The deferred work
+ * runs without the big lock, on any processor, so each pipe's commit
+ * event, boosts, interactive mark, watermarks pending for a vblank and CRC
+ * state are kept under the DRM device's `event_lock`, as Linux keeps a
+ * CRTC's event under it; the interrupt mask's lock and the core's
+ * `vbl_lock` are taken inside it.
  */
 
 /** The display engine's events of each pipe that the driver takes, and
@@ -155,7 +158,7 @@ void intel_crtc_send_event(struct intel_crtc *c)
         i915_irq_mask(c->i915, I915_IRQ_DE, DE_PLANE_FLIP_DONE_IVB(c->pipe));
         c->event_async = 0;
     }
-    drm_crtc_send_vblank_event(&c->base, e);
+    drm_crtc_send_vblank_event_locked(&c->base, e);
     drm_crtc_vblank_put(&c->base);
     intel_crtc_interactive_end(c);
 }
@@ -174,16 +177,16 @@ void intel_crtc_boost_after_vblank(struct intel_crtc *c, struct dma_fence *fence
         return;
     }
     b->rq = (struct i915_request *)dma_fence_get(fence);
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&c->i915->drm.event_lock);
     b->next = c->boosts;
     c->boosts = b;
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&c->i915->drm.event_lock, flags);
 }
 
 /** Take `c`'s boosts after a vblank, each with its references let go and
  * its entry freed; at the vblank (`boost`) the requests the chip has not
  * begun are boosted, as Linux's do_rps_boost, since one that runs may be
- * taken to end before the next. Interrupts masked. */
+ * taken to end before the next. The DRM device's `event_lock` is held. */
 static void vblank_boost(struct intel_crtc *c, int boost)
 {
     struct intel_boost *b;
@@ -204,9 +207,9 @@ void intel_crtc_vblank_off(struct intel_crtc *c)
     uint32_t flags;
 
     drm_crtc_vblank_off(&c->base);
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&c->i915->drm.event_lock);
     vblank_boost(c, 1);
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&c->i915->drm.event_lock, flags);
 }
 
 void intel_crtc_arm_flip_done(struct intel_crtc *c, struct drm_atomic_state *state)
@@ -228,7 +231,7 @@ void intel_crtc_arm_event(struct intel_crtc *c, struct drm_atomic_state *state)
         return;
     }
     cs->event = NULL;
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&c->i915->drm.event_lock);
     if (e->flip_crtc && c->base.flip_pending == DRM_FLIP_QUEUED) {
         c->base.flip_pending = DRM_FLIP_ARMED;
         wq_wake_all(&c->base.vblank.wait);
@@ -253,10 +256,10 @@ void intel_crtc_arm_event(struct intel_crtc *c, struct drm_atomic_state *state)
         if (cs->async_flip) {
             i915_irq_mask(c->i915, I915_IRQ_DE, DE_PLANE_FLIP_DONE_IVB(c->pipe));
         }
-        drm_crtc_send_vblank_event(&c->base, e);
+        drm_crtc_send_vblank_event_locked(&c->base, e);
         intel_crtc_interactive_end(c);
     }
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&c->i915->drm.event_lock, flags);
 }
 
 /** The error interrupt, Linux's ivb_err_int_handler and
@@ -348,12 +351,16 @@ void intel_display_irq_work(struct drm_i915_private *i915)
     if (iir == 0 && crc_done == 0) {
         return;
     }
-    flags = kirq_save();
+    for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
+        if (iir & DE_PIPE_VBLANK_IVB(pipe)) {
+            (void)drm_crtc_handle_vblank(&d->crtc[pipe].base);
+        }
+    }
+    flags = spin_lock_irqsave(&i915->drm.event_lock);
     for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
         struct intel_crtc *c = &d->crtc[pipe];
 
         if (iir & DE_PIPE_VBLANK_IVB(pipe)) {
-            (void)drm_crtc_handle_vblank(&c->base);
             intel_wm_vblank(c);
             vblank_boost(c, 1);
             /* The writes latch at the vblank that ends the frame they were
@@ -373,7 +380,7 @@ void intel_display_irq_work(struct drm_i915_private *i915)
             intel_crtc_crc_frame(c, crc[pipe]);
         }
     }
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&i915->drm.event_lock, flags);
 }
 
 int32_t intel_vblank_init(struct drm_i915_private *i915)
@@ -393,10 +400,10 @@ void intel_vblank_fini(struct drm_i915_private *i915)
 
     i915_irq_unregister(i915, I915_IRQ_DE, de_bits());
     i915->irq.deferred_display = 0;
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&i915->drm.event_lock);
     for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
         intel_crtc_send_event(&i915->display.crtc[pipe]);
         vblank_boost(&i915->display.crtc[pipe], 0);
     }
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&i915->drm.event_lock, flags);
 }

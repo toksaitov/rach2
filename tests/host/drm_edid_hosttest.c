@@ -6,6 +6,8 @@
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/resv_host.c
+ * host-deps: tests/host/compat/mutex_none.c
+ * host-deps: tests/host/compat/spinlock_host.c
  *
  * A fake device has one CRTC, its primary plane, an encoder and a
  * connector whose get_modes gives the EDID under test to

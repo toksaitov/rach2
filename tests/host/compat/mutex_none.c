@@ -21,6 +21,13 @@ void mutex_lock(struct mutex *m)
     m->owner = m;
 }
 
+/** Take `m`, which must be free; no signal comes to a host test. */
+int mutex_lock_interruptible(struct mutex *m)
+{
+    mutex_lock(m);
+    return 0;
+}
+
 /** Take `m` if it is free. */
 int mutex_trylock(struct mutex *m)
 {

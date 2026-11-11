@@ -118,7 +118,8 @@ void drm_dev_init(struct drm_device *dev, const struct drm_driver *driver)
     dev->refs = 1;
     spin_lock_init(&dev->object_lock, "drm_object_lock");
     spin_lock_init(&dev->event_lock, "drm_event_lock");
-    wait_queue_init(&dev->commit_wait);
+    spin_lock_init(&dev->vbl_lock, "drm_vbl_lock");
+    mutex_init(&dev->mode_lock, "drm_mode_lock");
 }
 
 void drm_dev_get(struct drm_device *dev)
@@ -254,6 +255,7 @@ int32_t drm_dev_register(struct drm_device *dev)
     if (i == DRM_MAX_DEVICES) {
         return -ENOSPC;
     }
+    (void)drm_atomic_worker_start();
     if (!dev->unique[0]) {
         default_unique(dev);
     }
@@ -529,6 +531,28 @@ static void pending_unlink(struct drm_pending_event *e)
     e->pending_next = NULL;
 }
 
+/** Queue `e`, whose fence is already taken off, on its file and wake the
+ * reader, or free it when it has no file. The event lock of `e`'s device
+ * is held. */
+static void event_queue_locked(struct drm_pending_event *e)
+{
+    struct drm_file *file = e->dev ? e->file : NULL;
+
+    if (!file) {
+        kfree(e);
+        return;
+    }
+    pending_unlink(e);
+    e->next = NULL;
+    if (file->events_tail) {
+        file->events_tail->next = e;
+    } else {
+        file->events = e;
+    }
+    file->events_tail = e;
+    wq_wake(&file->event_wait, WQ_DATA);
+}
+
 /**
  * As Linux's drm_send_event_helper (drm_file.c:727-760): the event's file
  * is read, and its reader woken, under the event lock of the device it was
@@ -538,7 +562,6 @@ static void pending_unlink(struct drm_pending_event *e)
  */
 void drm_send_event(struct drm_pending_event *e)
 {
-    struct drm_file *file;
     struct drm_device *dev = e->dev;
     struct dma_fence *fence = e->fence;
     uint32_t flags;
@@ -553,22 +576,20 @@ void drm_send_event(struct drm_pending_event *e)
         return;
     }
     flags = spin_lock_irqsave(&dev->event_lock);
-    file = e->file;
-    if (file) {
-        pending_unlink(e);
-        e->next = NULL;
-        if (file->events_tail) {
-            file->events_tail->next = e;
-        } else {
-            file->events = e;
-        }
-        file->events_tail = e;
-        wq_wake(&file->event_wait, WQ_DATA);
-    }
+    event_queue_locked(e);
     spin_unlock_irqrestore(&dev->event_lock, flags);
-    if (!file) {
-        kfree(e);
+}
+
+void drm_send_event_locked(struct drm_pending_event *e)
+{
+    struct dma_fence *fence = e->fence;
+
+    e->fence = NULL;
+    if (fence) {
+        dma_fence_signal(fence);
+        dma_fence_put(fence);
     }
+    event_queue_locked(e);
 }
 
 void drm_event_cancel_free(struct drm_pending_event *e)

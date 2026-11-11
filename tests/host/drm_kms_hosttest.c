@@ -6,6 +6,8 @@
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/resv_host.c
+ * host-deps: tests/host/compat/mutex_none.c
+ * host-deps: tests/host/compat/spinlock_host.c
  *
  * The fake driver has two CRTCs: the first with a primary plane of three
  * formats and two modifiers, a cursor plane and a gamma table of 256

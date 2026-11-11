@@ -749,6 +749,10 @@ struct drm_file {
 int32_t drm_event_reserve(struct drm_file *file, struct drm_pending_event *e);
 /** Send `e`, reserved; it is the file's, or freed. Any context. */
 void drm_send_event(struct drm_pending_event *e);
+/** Send `e` as `drm_send_event` does, with its device's `event_lock`
+ * held, under which its fence is signalled, as Linux's
+ * drm_send_event_locked; an event never reserved is freed. */
+void drm_send_event_locked(struct drm_pending_event *e);
 /** Take back `e`, reserved and not sent, give back its space and free
  * it. */
 void drm_event_cancel_free(struct drm_pending_event *e);
@@ -1081,7 +1085,8 @@ struct drm_crtc_crc {
     struct drm_crtc_crc_entry *entries; /* DRM_CRC_ENTRIES_NR while open, else NULL */
     uint32_t head, tail;
     uint32_t values;
-    wait_queue_t wait; /* wakes the reader at each entry */
+    wait_queue_t wait;    /* wakes the reader at each entry */
+    struct spinlock lock; /* `entries`, `head` and `tail`, Linux's crc->lock */
 };
 
 /* A commit's flip on a CRTC, from the swap of its state until its event is
@@ -1510,16 +1515,27 @@ int drm_edid_parse_modes(const uint8_t *edid, uint32_t len,
 
 /* ---- The commit lock and the atomic commit, in drm_atomic.c ---- */
 
-/** Take `dev`'s commit lock, sleeping while another commit holds it:
- * 0, or -EINTR for a signal. */
+/** Start the commit worker, kdrm, which runs the queued commits, the
+ * hotplug events and the drivers' works, once: 0, or -ENOMEM. Process
+ * context; `drm_dev_register` calls it, so that an interrupt handler that
+ * queues a work only wakes it. */
+int32_t drm_atomic_worker_start(void);
+/** Take `dev`'s commit lock, its `mode_lock`, sleeping while another
+ * thread holds it: 0, or -EINTR for a signal. A holder may take it again,
+ * and lets it go as often, as Linux's acquire context takes a modeset lock
+ * it holds already; so a handler the dispatcher runs under the lock, or
+ * the worker under a work's device's lock, takes it as any caller does. */
 int32_t drm_modeset_lock(struct drm_device *dev);
 /** Take the commit lock with signals ignored, as Linux's acquire context
  * without DRM_MODESET_ACQUIRE_INTERRUPTIBLE: for a release that must take
  * a framebuffer off the display whatever the caller's signals, and for a
  * driver's commit of its own. */
 void drm_modeset_lock_nointr(struct drm_device *dev);
-/** Let the commit lock go and wake the next taker. */
+/** Let the commit lock go once, and at the holder's last take wake the
+ * next taker. */
 void drm_modeset_unlock(struct drm_device *dev);
+/** Whether the calling thread holds `dev`'s commit lock. */
+int drm_modeset_held(const struct drm_device *dev);
 
 /** A new empty atomic state of `dev`, with ALLOW_MODESET; NULL with no
  * memory. Freed with `drm_atomic_state_free`. */
@@ -1768,6 +1784,8 @@ void drm_crtc_arm_vblank_event(struct drm_crtc *crtc, struct drm_pending_event *
  * the last vblank's count and time on a device with vblanks, else count 0
  * and the time now. */
 void drm_crtc_send_vblank_event(struct drm_crtc *crtc, struct drm_pending_event *e);
+/** `drm_crtc_send_vblank_event` with the device's `event_lock` held. */
+void drm_crtc_send_vblank_event_locked(struct drm_crtc *crtc, struct drm_pending_event *e);
 /** Turn `crtc`'s vblanks off, sending its queued events with the count
  * reached and waking its waiters, and keep them off until
  * `drm_crtc_vblank_on`. */
@@ -1866,11 +1884,12 @@ struct drm_device {
     struct drm_gem_object *objects;      /* its buffer objects, through `dev_next` */
     struct drm_gem_object *mmap_objects; /* those with an mmap offset, by offset */
     struct drm_mmap_node *mmap_nodes;    /* drivers' further offsets, by offset */
-    struct spinlock event_lock;          /* its files' events */
+    struct spinlock event_lock;          /* its files' events, its CRTCs' queued events and flips */
+    struct spinlock vbl_lock;            /* its CRTCs' vblank counts, holds and interrupts */
     struct drm_mode_config mode_config;
-    int debugfs;     /* its debugfs directory is made (drm_debugfs.c) */
-    int commit_held; /* the commit lock: 1 while a commit holds it */
-    wait_queue_t commit_wait;
+    int debugfs;              /* its debugfs directory is made (drm_debugfs.c) */
+    struct mutex mode_lock;   /* the commit lock, `drm_modeset_lock`'s */
+    uint32_t mode_lock_depth; /* the holder's takes past its first */
     void *driver_priv;
 };
 
