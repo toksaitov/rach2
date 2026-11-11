@@ -281,6 +281,8 @@ static void nc_reset(void)
 {
     nc_head = 0;
     nc_tail = 0;
+    nc_line_start = 0;
+    nc_skip = 0;
     nc_boot_id = 0;
     nc_seq = 0;
     nc_frames = 0;
@@ -353,8 +355,10 @@ static void link_rows(void)
         for (i = 0; i < NETCONSOLE_RING + 10; i++) {
             netconsole_putc(i % 64 == 63 ? '\n' : 'f');
         }
-        CHECK(frame_count == 0 && nc_pending() == NETCONSOLE_RING - 1,
-              "a ring that fills while the link is down holds what it can");
+        /* The ring fills at the newline of its 512th line, whose 63 other
+           characters go back out with it; the 10 after it fit again. */
+        CHECK(frame_count == 0 && nc_pending() == NETCONSOLE_RING - 64 + 10 && nc_dropped == 64,
+              "a ring that fills while the link is down holds what it can, in whole lines");
         link_down = 0;
         netconsole_putc('\n');
         CHECK(frame_count > 0 && nc_pending() == 0,

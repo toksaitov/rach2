@@ -74,8 +74,9 @@
  * Take one character of a log record, from `klog`'s netconsole destination,
  * which feeds this whether or not the machine has a serial port.
  *
- * The character joins a ring of 8191, or is counted and dropped when the
- * ring is full. Before `netconsole_enable` the characters only wait there.
+ * The character joins a ring of 32767, or is counted and dropped when the
+ * ring is full, with the rest of its record, so that the ring holds whole
+ * records. Before `netconsole_enable` the characters only wait there.
  * After it, a newline starts `netconsole_flush`, and so do 512 characters
  * waiting unless the last drain was held for the link or a refused frame. A
  * character that comes while a frame is being sent only joins the ring, so a
