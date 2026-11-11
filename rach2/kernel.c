@@ -4053,11 +4053,11 @@ static void start_network(void)
     (void)ath9k_probe();
 }
 
-/* debugfs's bkl/calls and bkl/profile, the counts of system calls and
- * entries with their holds of the big lock, and the samples of the kernel
- * under it, which a write zeroes (proc/smp.c). */
+/* debugfs's big-lock counts, profile and long holds, each zeroed by a
+ * write (proc/smp.c). */
 static const struct debugfs_text_ops bkl_calls_ops = {smp_calls_show, smp_calls_store};
 static const struct debugfs_text_ops bkl_profile_ops = {smp_profile_show, smp_profile_store};
+static const struct debugfs_text_ops bkl_long_ops = {smp_long_show, smp_long_store};
 #ifdef RACH2_LOCKDEP
 /* debugfs's lockdep/inject, which makes the checker's two reports on
  * demand (lib/lockdep.c). */
@@ -4067,14 +4067,15 @@ static const struct debugfs_text_ops lockdep_inject_ops = {lockdep_inject_show,
 
 /** Start the processors past the first (`smp_start`) and the lockup
  * detectors on all of them (`watchdog_init`), then register bkl/calls,
- * bkl/profile and, with the checker, lockdep/inject in debugfs; a failure
- * there is logged. */
+ * bkl/profile, bkl/long and, with the checker, lockdep/inject in debugfs; a
+ * failure there is logged. */
 static void start_processors(void)
 {
     smp_start();
     watchdog_init();
     if (debugfs_create_text("bkl/calls", 0644u, &bkl_calls_ops, NULL) != 0 ||
-        debugfs_create_text("bkl/profile", 0644u, &bkl_profile_ops, NULL) != 0) {
+        debugfs_create_text("bkl/profile", 0644u, &bkl_profile_ops, NULL) != 0 ||
+        debugfs_create_text("bkl/long", 0644u, &bkl_long_ops, NULL) != 0) {
         klog(KLOG_WARN, "bkl", "debugfs: files not registered");
     }
 #ifdef RACH2_LOCKDEP

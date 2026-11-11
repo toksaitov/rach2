@@ -318,6 +318,10 @@ static volatile uint32_t service_wanted = 0;
 #ifndef RACH2_HOSTTEST
 static process_t *service_thread = NULL;
 static wait_queue_t service_wq; /* the thread sleeps here */
+static uint64_t service_cycles, service_max_cycles;
+static uint32_t service_calls;
+static uint32_t service_play_requested, service_play_asked; /* WALCLK */
+static bool service_play_pending, service_play_active;
 #endif
 
 /* Forward declarations for MMIO helpers (needed for C89 order). */
@@ -847,6 +851,19 @@ static void hda_service_stream(void)
         uint32_t size = (period + 1) * period_bytes - from;
 
         missed_revolutions += missed;
+        hda_report.service.missed += missed;
+        hda_report.service.gap_us = elapsed;
+        hda_report.service.moved_us = moved;
+        hda_report.service.revolution_us = rev;
+        hda_report.service.asked_us = 0;
+        hda_report.service.asked_valid = 0;
+#ifndef RACH2_HOSTTEST
+        hda_report.service.clock_us = timer_cycles_us(arch_cycles());
+        if (service_play_active) {
+            hda_report.service.asked_us = (now - service_play_asked) / 24u;
+            hda_report.service.asked_valid = 1;
+        }
+#endif
         lpib_wraps += missed;
         fill_silence(rest, size, current_hw_format != AUDIO_U8);
         hda_dma_sync_range(rest, size);
@@ -3463,6 +3480,9 @@ static void hda_poll_jacks(uint32_t passed)
  * total_bytes_written goes on. */
 static void hda_session_reset(void)
 {
+#ifndef RACH2_HOSTTEST
+    service_play_pending = service_play_active = false;
+#endif
     irq_count = 0;
     underrun_count = 0;
     underrun_samples = 0;
@@ -3966,6 +3986,11 @@ void hda_read_queue(void)
     q->periods = hw_fill_count;
     q->underruns = underrun_count;
     q->missed = missed_revolutions;
+#ifndef RACH2_HOSTTEST
+    hda_report.service.calls = service_calls;
+    hda_report.service.usec = timer_cycles_us(service_cycles);
+    hda_report.service.max_usec = timer_cycles_us(service_max_cycles);
+#endif
     kirq_restore(flags);
 }
 
@@ -4014,6 +4039,10 @@ static void hda_service_kick(uint32_t wanted)
         return;
     }
 #ifndef RACH2_HOSTTEST
+    if ((wanted & HDA_SERVE_PLAY) && playing && stream_started && !service_play_pending) {
+        service_play_requested = hda_read32(HDA_WALCLK);
+        service_play_pending = true;
+    }
     service_wanted |= wanted;
     wq_wake_all(&service_wq);
 #endif
@@ -4086,6 +4115,7 @@ static int hda_service_asked(void *arg)
 static void hda_service_thread(void)
 {
     uint32_t flags, wanted;
+    uint64_t start, elapsed;
 
     arch_irq_enable();
     for (;;) {
@@ -4094,10 +4124,21 @@ static void hda_service_thread(void)
         flags = kirq_save();
         wanted = service_wanted;
         service_wanted = 0;
+        service_play_active = (wanted & HDA_SERVE_PLAY) && service_play_pending;
+        service_play_asked = service_play_requested;
+        if (wanted & HDA_SERVE_PLAY)
+            service_play_pending = false;
         current_proc->in_syscall = 1;
         kirq_restore(flags);
+        start = arch_cycles();
         hda_serve(wanted);
+        elapsed = arch_cycles() - start;
         flags = kirq_save();
+        service_calls++;
+        service_cycles += elapsed;
+        if (elapsed > service_max_cycles)
+            service_max_cycles = elapsed;
+        service_play_active = false;
         current_proc->in_syscall = 0;
         sched_take_preempt();
         kirq_restore(flags);

@@ -197,6 +197,39 @@ These start again at each stream's start.
 is the position in the DMA buffer, in bytes.
 .Pp
 The
+.Ql service
+line spans stream starts and stops.
+.Ql calls
+counts khda service calls modulo 2^32;
+.Ql usec
+and
+.Ql max-usec
+are the sum and maximum of time measured around those services by the
+TSC, including nested interrupts, in 64-bit microseconds.
+They exclude the thread's wait to run and do not use its tick accounting.
+They are zero without a calibrated TSC.
+.Ql missed
+counts playback revolutions missed since driver initialization, modulo
+2^32, including those before khda starts.
+The remaining fields describe the latest miss, or are zero before one:
+.Ql clock-us
+is the TSC timestamp in microseconds, on the same clock as debugfs's
+.Pa bkl/long ,
+not uptime;
+.Ql gap-us
+is the WALCLK interval since the preceding playback service;
+.Ql asked-us
+is the interval since the first pending playback request;
+.Ql asked-valid
+is 1 when that request belongs to this stream start, otherwise 0;
+.Ql moved-us
+is the position's modular movement converted to microseconds; and
+.Ql revolution-us
+is the duration of the DMA buffer.
+The WALCLK intervals wrap after about 179 seconds.
+The timestamp is zero without a calibrated TSC.
+.Pp
+The
 .Ql gpio
 line gives the function group's GPIO count and its whole GPIO Count
 parameter.
