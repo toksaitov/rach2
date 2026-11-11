@@ -195,7 +195,8 @@ static int32_t sync_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     return fd;
 }
 
-static const struct file_ops sync_ops = {NULL, NULL, sync_poll, sync_ioctl, sync_close, NULL, NULL};
+static const struct file_ops sync_ops = {NULL,       NULL, sync_poll, sync_ioctl,
+                                         sync_close, NULL, NULL,      0};
 
 /** Find a caller's sync file and take a reference to its fence. */
 struct dma_fence *sync_file_get_fence(int32_t fd)
@@ -227,11 +228,12 @@ void sync_file_drop(struct sync_file *s)
 
 void sync_file_attach(int32_t fd, struct sync_file *s)
 {
-    fd_entry_t *e = &current_proc->fds->entries[fd];
+    fd_entry_t *e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_ANON;
     e->ops = &sync_ops;
     e->priv = s;
     e->flags = FD_FLAG_READ | FD_FLAG_WRITE | FD_FLAG_CLOEXEC;
+    fd_install(current_proc->fds, fd);
 }
 
 /** Make the descriptor `fd`, reserved and given no type, a sync file of

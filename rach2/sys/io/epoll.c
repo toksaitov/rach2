@@ -611,7 +611,7 @@ static void epoll_close(fd_entry_t *e)
     e->priv = NULL;
 }
 
-static const struct file_ops epoll_ops = {NULL, NULL, epoll_poll, NULL, epoll_close, NULL, NULL};
+static const struct file_ops epoll_ops = {NULL, NULL, epoll_poll, NULL, epoll_close, NULL, NULL, 0};
 
 /** The epoll set the caller's descriptor `fd` is, or NULL when `fd` is not
  * open or not a set. */
@@ -645,11 +645,12 @@ static int32_t make_epoll(uint32_t flags)
         kfree(ep);
         return fd;
     }
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_ANON;
     e->ops = &epoll_ops;
     e->priv = ep;
     e->flags = FD_FLAG_READ | FD_FLAG_WRITE | ((flags & EPOLL_CLOEXEC) ? FD_FLAG_CLOEXEC : 0u);
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 

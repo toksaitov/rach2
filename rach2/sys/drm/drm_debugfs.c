@@ -752,8 +752,8 @@ static int64_t crc_data_llseek(fd_entry_t *e, int64_t offset, int whence)
     return -ESPIPE;
 }
 
-static const struct file_ops crc_data_ops = {crc_data_read,  NULL, crc_data_poll,  NULL,
-                                             crc_data_close, NULL, crc_data_llseek};
+static const struct file_ops crc_data_ops = {crc_data_read,  NULL, crc_data_poll,   NULL,
+                                             crc_data_close, NULL, crc_data_llseek, 0};
 
 /* ------------------------------------------------------------------------
  * A connector's files, Linux's drm_debugfs_connector_add

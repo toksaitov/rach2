@@ -549,7 +549,7 @@ static void syncobj_file_close(fd_entry_t *e)
 }
 
 static const struct file_ops syncobj_file_ops = {NULL, NULL, NULL, NULL, syncobj_file_close,
-                                                 NULL, NULL};
+                                                 NULL, NULL, 0};
 
 /** A close-on-exec descriptor of the caller's on `s`, holding a reference
  * of its own, shown as anon_inode:syncobj_file as on Linux: the
@@ -575,11 +575,12 @@ static int32_t syncobj_file_install(struct drm_syncobj *s)
     f->anon.name = "syncobj_file";
     f->syncobj = s;
     drm_syncobj_get(s);
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_ANON;
     e->ops = &syncobj_file_ops;
     e->priv = f;
     e->flags = FD_FLAG_READ | FD_FLAG_CLOEXEC;
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 

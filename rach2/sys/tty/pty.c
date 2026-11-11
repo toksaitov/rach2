@@ -831,7 +831,7 @@ static void ptm_close(fd_entry_t *e)
 }
 
 static const struct file_ops ptm_ops = {ptm_read,  ptm_write, ptm_poll, ptm_ioctl,
-                                        ptm_close, NULL,      NULL};
+                                        ptm_close, NULL,      NULL,     0};
 
 /* the slave end */
 
@@ -1116,7 +1116,8 @@ static void pts_close(fd_entry_t *e)
     }
 }
 
-static const struct file_ops pts_ops = {pts_read, pts_write, pts_poll, NULL, pts_close, NULL, NULL};
+static const struct file_ops pts_ops = {pts_read,  pts_write, pts_poll, NULL,
+                                        pts_close, NULL,      NULL,     0};
 
 /* open paths */
 
@@ -1138,7 +1139,7 @@ int pty_open_master(int flags)
         pty_free(p);
         return fd;
     }
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_PTM;
     e->node = NULL;
     e->sock = NULL;
@@ -1152,6 +1153,7 @@ int pty_open_master(int flags)
         e->ofd->status_flags |= OFD_NONBLOCK;
     }
     p->master_open = 1;
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 
@@ -1181,7 +1183,7 @@ int pty_open_slave(int index, int flags)
     if (fd < 0) {
         return fd;
     }
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_PTS;
     e->node = NULL;
     e->sock = NULL;
@@ -1209,6 +1211,7 @@ int pty_open_slave(int index, int flags)
         !session_has_ctty((int)current_proc->sid)) {
         tty_make_sole_ctty(&p->slave, (int)current_proc->sid, (int)current_proc->pgid);
     }
+    fd_install(current_proc->fds, fd);
     return fd;
 }
 

@@ -82,16 +82,16 @@ static int may_inspect(const process_t *t)
            (!t->mm || t->mm->dumpable) && !proc_privileged(t);
 }
 
-/** The open file of descriptor `idx` of `t`, or NULL for none. */
+/** The open file of descriptor `idx` of `t`, or NULL for none, copied
+ * under the table's lock; it is compared, never read. */
 static const struct open_file *file_of(const process_t *t, uintptr_t idx)
 {
-    fd_entry_t *e;
+    fd_entry_t e;
 
-    if (!t->fds || idx > 0x7FFFFFFFu) {
+    if (idx > 0x7FFFFFFFu || fd_peek(t->fds, (int)idx, &e, 0) != 0) {
         return NULL;
     }
-    e = fd_get(t->fds, (int)idx);
-    return e ? e->ofd : NULL;
+    return e.ofd;
 }
 
 /** KCMP_EPOLL_TFD: the file of `t1`'s descriptor `idx1` against the target
@@ -101,7 +101,7 @@ static long kcmp_epoll_target(const process_t *t1, const process_t *t2, uintptr_
 {
     struct kcmp_epoll_slot slot;
     const struct open_file *f1, *target;
-    fd_entry_t *ep;
+    fd_entry_t ep;
     int32_t rc;
 
     if (copy_from_user(&slot, uslot, sizeof(slot)) != 0) {
@@ -111,11 +111,10 @@ static long kcmp_epoll_target(const process_t *t1, const process_t *t2, uintptr_
     if (!f1) {
         return -EBADF;
     }
-    ep = t2->fds && slot.efd <= 0x7FFFFFFFu ? fd_get(t2->fds, (int)slot.efd) : NULL;
-    if (!ep) {
+    if (slot.efd > 0x7FFFFFFFu || fd_peek(t2->fds, (int)slot.efd, &ep, 0) != 0) {
         return -EBADF;
     }
-    rc = epoll_target(ep, (int)slot.tfd, slot.toff, &target);
+    rc = epoll_target(&ep, (int)slot.tfd, slot.toff, &target);
     if (rc != 0) {
         return rc;
     }

@@ -198,7 +198,7 @@ static void source_close(fd_entry_t *e)
     releases++;
 }
 
-static const struct file_ops source_ops = {NULL, NULL, NULL, NULL, source_close, NULL, NULL};
+static const struct file_ops source_ops = {NULL, NULL, NULL, NULL, source_close, NULL, NULL, 0};
 
 /** Open one modeled source file. */
 static int source_open(int kind)

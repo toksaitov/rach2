@@ -469,7 +469,6 @@ static void filemap_release(struct vm_file *f)
     if (m->entry.ofd) {
         m->entry.node = filemap_node(m);
         fd_release_backing(&m->entry);
-        fd_ofd_unref(m->entry.ofd);
     }
     if (locked) {
         vfs_ns_unlock(locked);

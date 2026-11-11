@@ -140,7 +140,7 @@ static int32_t sw_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     return 0;
 }
 
-static const struct file_ops sw_file_ops = {NULL, NULL, NULL, sw_ioctl, sw_close, NULL, NULL};
+static const struct file_ops sw_file_ops = {NULL, NULL, NULL, sw_ioctl, sw_close, NULL, NULL, 0};
 
 /** Give a just-opened debugfs descriptor its own software timeline. */
 int32_t sw_sync_open(fd_entry_t *e)

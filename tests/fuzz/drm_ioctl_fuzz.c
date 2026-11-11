@@ -715,7 +715,7 @@ long ia32_ioctl_native(unsigned int fd, unsigned int cmd, void *buf, uint32_t le
 
 /* An event node's operations, as devfs gives them. */
 static const struct file_ops evdev_fuzz_ops = {evdev_read,  NULL, evdev_poll, evdev_ioctl,
-                                               evdev_close, NULL, NULL};
+                                               evdev_close, NULL, NULL,       0};
 
 /* The second device: a render node with sync objects and PRIME, which
  * vkms, as Linux's, has neither of; dumb buffers of the shmem helper. */

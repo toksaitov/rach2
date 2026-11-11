@@ -34,7 +34,6 @@ static int bridge_idle(void *arg)
 static void bridge_file_put(struct bridge_file *f)
 {
     fd_release_backing(&f->entry);
-    fd_ofd_unref(f->entry.ofd);
     kfree(f);
 }
 
@@ -142,7 +141,7 @@ static void bridge_close(fd_entry_t *e)
 }
 
 static const struct file_ops bridge_ops = {NULL,         NULL, NULL, bridge_ioctl,
-                                           bridge_close, NULL, NULL};
+                                           bridge_close, NULL, NULL, 0};
 
 int32_t kvm_vfio_create(struct kvm_vm *vm, uintptr_t arg)
 {
@@ -183,10 +182,11 @@ int32_t kvm_vfio_create(struct kvm_vm *vm, uintptr_t arg)
         fd_free(current_proc->fds, fd);
         return -EFAULT;
     }
-    e = &current_proc->fds->entries[fd];
+    e = fd_slot(current_proc->fds, fd);
     e->type = FD_TYPE_ANON;
     e->ops = &bridge_ops;
     e->priv = b;
     e->flags = FD_FLAG_READ | FD_FLAG_WRITE | FD_FLAG_CLOEXEC;
+    fd_install(current_proc->fds, fd);
     return 0;
 }

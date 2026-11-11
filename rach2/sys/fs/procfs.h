@@ -162,7 +162,9 @@ struct vfs_name *procfs_exe_entry(int pid);
  * when more of a path comes after the link: for /proc/PID/fd/N, the mount and
  * the node of the file or directory the descriptor is open on; for
  * /proc/PID/cwd and root, those of the process's working directory and root.
- * The node is not held, and stays while nothing sleeps. A directory of /dev,
+ * The node is not held: the descriptor is read under its table's lock, and
+ * the node stays while the caller, which holds the big lock that the release
+ * of a description on a mount takes, does not sleep. A directory of /dev,
  * /proc or /sys that a descriptor is open on, or a working directory there,
  * has no node, and its path from the root is written into `buf` of `cap`
  * bytes, without a terminator, instead. Returns 0 with `out` filled, the
