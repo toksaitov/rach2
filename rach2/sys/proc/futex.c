@@ -122,7 +122,7 @@ struct futex_q {
     const void *target_space;
     uintptr_t target_key; /* the requeue destination expected by the waiter */
     uint32_t owner_tid;   /* an exiting owner, in the caller's PID namespace */
-    const char *wchan;    /* the name of a PI or requeue-PI sleep's stage */
+    const char *wchan;    /* the name of a PI or requeue-PI sleep */
 };
 
 /* One futex of a wait, as the caller named it, and its waiter. */
@@ -1074,7 +1074,7 @@ static int pi_fixup(uintptr_t addr, struct futex_pi *pi)
 
 /** Sleep with a queued PI or requeue waiter and then remove its links.
  * A handoff wins over a simultaneous timeout or signal. The sleep takes its
- * name from `q->wchan`, which a requeue changes (`pi_requeue_one`). */
+ * name from `q->wchan`. */
 static int pi_sleep(struct futex_q *q, uintptr_t addr)
 {
     struct futex_sleeper *s = q->s;
@@ -1083,7 +1083,7 @@ static int pi_sleep(struct futex_q *q, uintptr_t addr)
     int rc;
 
     current_proc->wakeup_tick = s->timed ? (s->target ? s->target : 1u) : 0;
-    rc = wq_wait_event_named(&s->wq, futex_sleeper_done, s, &q->wchan);
+    rc = wq_wait_event_as(&s->wq, futex_sleeper_done, s, q->wchan);
     current_proc->wakeup_tick = 0;
     flags = kirq_save();
     pi = q->pi;
@@ -1248,7 +1248,10 @@ static int futex_wait_requeue_pi(uintptr_t addr, uint32_t val,
     q.s = &s;
     q.bitset = FUTEX_MATCH_ANY;
     q.requeue = 1;
-    q.wchan = "futex_wait_queue"; /* futex_wait_requeue_pi once requeued */
+    /* Linux's requeue moves the waiter without a wake, so it stays in
+     * futex_wait_queue's schedule(); Rach2's unlock hands the mutex over,
+     * so the waiter never blocks again in rt_mutex_wait_proxy_lock. */
+    q.wchan = "futex_wait_queue";
     for (;;) {
         if (!vm_prefault_range(addr2, sizeof(word), 1) ||
             !vm_prefault_range(addr, sizeof(word), 0)) {
@@ -1301,10 +1304,6 @@ static int pi_requeue_one(struct futex_q *q, uintptr_t addr, struct futex_pi **s
         wq_wake_all(&q->s->wq);
     } else {
         futex_enqueue(q);
-        /* Linux's rt_mutex_wait_proxy_lock is __sched, so wchan shows its
-         * caller. */
-        q->wchan = "futex_wait_requeue_pi";
-        q->task->wchan = q->wchan;
     }
     return 0;
 }

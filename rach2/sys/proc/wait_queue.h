@@ -83,14 +83,6 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg);
 int wq_wait_event_as(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name);
 
 /**
- * `wq_wait_event_as` with the name read from `*name` before each block, so
- * that a waker that moves the sleeper to another stage of its wait, as a
- * requeue of a futex waiter does, may give the stage's name: it sets
- * `*name`, and the sleeper's `wchan` while it is blocked.
- */
-int wq_wait_event_named(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *const *name);
-
-/**
  * The same wait with a pending signal ignored, for a lock held by another
  * process and for a transfer a device has in flight for the caller: an
  * interruptible wait returns at once while a signal is pending, and a waiter
