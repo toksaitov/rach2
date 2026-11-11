@@ -258,12 +258,11 @@ static void pipe_wake(pipe_t *p, wait_queue_t *wq, uint32_t kinds)
  */
 
 /** The slots of `buf_pages` for a ring of `size` bytes: twice its pages and
- * two, as many as writes can open, since of two neighbouring buffers past
- * the first that writes opened the second opened only because the first's
- * page had no room for its bytes. Tee, splice and vmsplice open a buffer
- * only while fewer than the pages hold bytes (`pipe_slots_free`), but
- * writes after theirs can open more, which `pipe_buf_open` folds into the
- * newest. */
+ * two. A write, a tee, a splice and vmsplice each open a buffer only while
+ * fewer than the pages hold bytes (`pipe_slots_free`), as Linux's
+ * `pipe_full` stops them at `max_usage`, so the slots past the pages are a
+ * margin no path reaches; were one reached, `pipe_buf_open` would fold the
+ * bytes into the newest buffer. */
 static uint32_t pipe_buf_slots(uint32_t size)
 {
     return 2 * (size / PAGE_SIZE) + 2;
@@ -584,40 +583,60 @@ static void pipe_sigpipe(void)
 #define PUT_PINNED   0x4u /* vmsplice's, from pages a pin may take */
 
 /** Wait for room in `p` for a `pipe_put` with `how` that has written
- * `done` bytes: 0 once the ring has a byte free, or for a splice a buffer
- * more (`pipe_slot_room`), -EAGAIN when the put may not wait, as with
- * PUT_NONBLOCK or for a splice past its first byte, or -EINTR. */
-static int32_t pipe_put_wait(pipe_t *p, uint32_t how, uint32_t done)
+ * `done` bytes: 0 once the ring has a byte free, or a buffer more
+ * (`pipe_slot_room`) when the next byte opens one, `opens`, -EAGAIN when
+ * the put may not wait, as with PUT_NONBLOCK or for a splice past its first
+ * byte, or -EINTR. */
+static int32_t pipe_put_wait(pipe_t *p, uint32_t how, uint32_t done, int opens)
 {
     int merge = (how & PUT_MERGE) != 0;
 
     if ((how & PUT_NONBLOCK) || (!merge && done > 0)) {
         return -EAGAIN;
     }
-    if (wq_wait_event_as(&p->write_wq, merge ? pipe_writable : pipe_slot_writable, p,
+    if (wq_wait_event_as(&p->write_wq, opens ? pipe_slot_writable : pipe_writable, p,
                          merge ? "pipe_write" : "pipe_wait_writable") < 0) {
         return -EINTR;
     }
     return 0;
 }
 
-/** Whether a splice's next byte, `src` bytes into its source page, opens a
- * buffer of `p`, as `pipe_buf_add_pages` judges it: at a page's start, as
- * the first after another writer's, `fresh`, or in an emptied pipe. */
-static int pipe_put_opens(const pipe_t *p, uint32_t src, int fresh)
+/** Whether the next byte of a `pipe_put` with `how` opens a buffer of `p`.
+ * A write's does, as `pipe_buf_add` judges it, when the newest buffer has
+ * none of the write's room `fill` left for it, in an emptied pipe, or as the
+ * first after another writer's, `other`. A splice's, `src` bytes into its
+ * source page, does as `pipe_buf_add_pages` judges it: at a page's start,
+ * as the call's first, `fresh`, or the first after another writer's, or in
+ * an emptied pipe. */
+static int pipe_put_opens(const pipe_t *p, uint32_t how, uint32_t src, uint32_t fill, int fresh,
+                          int other)
 {
-    return fresh || p->bufs == 0 || (src & (PAGE_SIZE - 1)) == 0;
+    if (how & PUT_MERGE) {
+        return other || p->bufs == 0 || fill == 0;
+    }
+    return fresh || other || p->bufs == 0 || (src & (PAGE_SIZE - 1)) == 0;
 }
 
-/** Whether `p` has room for the next bytes of a `pipe_put` with `how`: a
- * byte free, and for a splice whose next byte opens a buffer, `opens`, a
- * slot free as well, as Linux's `add_to_pipe` stops at `pipe_full`. */
-static int pipe_put_room(const pipe_t *p, uint32_t how, int opens)
+/** Whether `p` has room for the next bytes of a `pipe_put`: a byte free,
+ * and when the next byte opens a buffer, `opens`, a slot free as well, as
+ * Linux's `pipe_write` and `add_to_pipe` stop at `pipe_full`. */
+static int pipe_put_room(const pipe_t *p, int opens)
 {
     if (pipe_free_space(p) == 0) {
         return 0;
     }
-    return (how & PUT_MERGE) || !opens || pipe_slots_free(p) != 0;
+    return !opens || pipe_slots_free(p) != 0;
+}
+
+/** The part of a write's `chunk` that the buffers of `p` take: the room
+ * `fill` of the newest, while one holds bytes, and a page for each slot
+ * free, so that the write opens no buffer past `max_usage`, as Linux's
+ * `pipe_write` opens one only while the ring is not full. */
+static uint32_t pipe_merge_cap(const pipe_t *p, uint32_t chunk, uint32_t fill)
+{
+    uint32_t cap = (p->bufs != 0 ? fill : 0) + pipe_slots_free(p) * PAGE_SIZE;
+
+    return chunk < cap ? chunk : cap;
 }
 
 /** Make present the page of the caller's memory at `addr` that the next of
@@ -662,13 +681,15 @@ static int32_t pipe_put_copy(uint8_t *at, const char __user *from, uint32_t n, u
  * Each transfer makes its page present as `pipe_read`'s does, and judges
  * the readers and the ring again after that sleep.
  *
- * A write fills Linux's page buffers as `pipe_buf_add` does, and waits in
- * `pipe_write` as Linux's does. A splice's bytes take a buffer for each
- * page of the source they come from, whose first byte lies `src` bytes into
- * its page (`pipe_buf_add_pages`), and a transfer stays within one such
- * page. The splice stops where Linux's ring of a buffer for each page of
- * the pipe's size is full (`pipe_put_room`), however few bytes its buffers
- * hold, and waits for room only before its first byte, in
+ * A write fills Linux's page buffers as `pipe_buf_add` does, opens one only
+ * while a slot is free, as Linux's `pipe_write` opens one only while
+ * `pipe_full` is false, and waits in `pipe_write` as Linux's does, for a
+ * slot when its next byte opens a buffer. A splice's bytes take a buffer
+ * for each page of the source they come from, whose first byte lies `src`
+ * bytes into its page (`pipe_buf_add_pages`), and a transfer stays within
+ * one such page. The splice stops where Linux's ring of a buffer for each
+ * page of the pipe's size is full (`pipe_put_room`), however few bytes its
+ * buffers hold, and waits for room only before its first byte, in
  * `pipe_wait_writable`, returning what fitted once the ring fills, as
  * Linux's `wait_for_space` and `iter_to_pipe` do. With PUT_PINNED, a source
  * page that Linux's get_user_pages refuses, such as `[vvar]`, ends the copy
@@ -682,7 +703,7 @@ static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, u
     pipe_t *p = (pipe_t *)e->priv;
     int merge = (how & PUT_MERGE) != 0;
     uint32_t done = 0, fill = merge ? pipe_buf_merge_room(p, count) : 0, last = p->tail;
-    int fresh = 1;
+    int fresh = 1, opens;
 
     if (!(e->flags & FD_FLAG_WRITE)) {
         return -EBADF;
@@ -704,8 +725,9 @@ static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, u
             return (done > 0) ? (int32_t)done : -EPIPE;
         }
 
-        if (!pipe_put_room(p, how, pipe_put_opens(p, src + done, fresh || p->tail != last))) {
-            rc = pipe_put_wait(p, how, done);
+        opens = pipe_put_opens(p, how, src + done, fill, fresh, p->tail != last);
+        if (!pipe_put_room(p, opens)) {
+            rc = pipe_put_wait(p, how, done, opens);
             if (rc < 0) {
                 return (done > 0) ? (int32_t)done : rc;
             }
@@ -725,7 +747,7 @@ static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, u
             fill = 0;
             fresh = 1;
         }
-        if (!pipe_put_room(p, how, pipe_put_opens(p, src + done, fresh))) {
+        if (!pipe_put_room(p, pipe_put_opens(p, how, src + done, fill, fresh, 0))) {
             continue;
         }
         {
@@ -739,9 +761,7 @@ static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, u
                 chunk = count - done;
             }
             chunk = page_piece(addr, chunk);
-            if (!merge) {
-                chunk = page_piece(src + done, chunk);
-            }
+            chunk = merge ? pipe_merge_cap(p, chunk, fill) : page_piece(src + done, chunk);
             rc = pipe_put_copy(at, buf + done, chunk, how);
             if (rc < 0) {
                 return (done > 0) ? (int32_t)done : rc;
