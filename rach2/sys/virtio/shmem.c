@@ -1072,11 +1072,14 @@ static void vs_map_free(struct virtio_map *vm)
 static void vshm_free(struct vshm *vs);
 
 /**
- * A driver's bind, a map or the interrupt thread's reap has let go: free
- * the record at its last reference. The decrement and its test run with
- * interrupts off, as kref_put's refcount_dec_and_test (kref.h:62-69), so
- * that exactly one caller sees the count reach 0; that caller frees the
- * record after the restore, since nothing else can reach it then.
+ * The attach, a driver's bind, a map or the interrupt thread's reap has let
+ * go: free the record at its last reference. The decrement and its test
+ * run with interrupts off, as kref_put's refcount_dec_and_test
+ * (kref.h:62-69), so that exactly one caller sees the count reach 0; that
+ * caller frees the record after the restore. No reference is left then,
+ * but a detached record may still be on `vshm_kept`, where a give-back of
+ * another record or an attach can reach it, so vshm_free takes it off
+ * under vshm_lock before it frees it.
  */
 static void vs_put(struct virtio_dev *d)
 {
