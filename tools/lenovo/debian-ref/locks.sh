@@ -11,8 +11,9 @@ set -u
 need bpftrace pgrep
 K=$1; N=$2; O=$OUT/locks/$N
 case $K in
-stk) P=supertuxkart ;;
-0ad) P=pyrogenesis ;;
+# 0 A.D. names its main thread "main", so it is found by its command line.
+stk) F=-x; P=supertuxkart ;;
+0ad) F=-f; P='^[^ ]*/pyrogenesis( |$)' ;;
 *) echo "locks: unknown game $K" >&2; exit 2 ;;
 esac
 rm -rf $O; mkdir -p $O
@@ -21,13 +22,13 @@ echo 1000 > $GPU/gt_min_freq_mhz
 sh $R80/games.sh $K $N > $O/games.out 2>&1 &
 g=$!
 i=0
-until pid=$(pgrep -o -u gfx -x $P); do
+until pid=$(pgrep -o -u gfx $F "$P"); do
 	i=$((i + 1))
-	[ $i -ge 600 ] && { echo "locks: no $P after 120 s" >&2; break; }
+	[ $i -ge 600 ] && { echo "locks: no $K after 120 s" >&2; break; }
 	sleep 0.2
 done
 if [ -n "${pid:-}" ]; then
-	say "locks: $P is $pid" | tee $O/run.log
+	say "locks: $K is $pid" | tee $O/run.log
 	cat /proc/stat > $O/stat-before
 	cat /proc/$pid/stat > $O/pid-before
 	bpftrace -q $R80/calls.bt $pid > $O/calls.txt 2> $O/bpftrace.err &
@@ -39,7 +40,7 @@ if [ -n "${pid:-}" ]; then
 	kill -INT $b
 	wait $b
 	cat /proc/stat > $O/stat-after
-	say "locks: $P ended" | tee -a $O/run.log
+	say "locks: $K ended" | tee -a $O/run.log
 fi
 wait $g
 echo $min > $GPU/gt_min_freq_mhz
