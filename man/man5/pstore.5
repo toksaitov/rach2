@@ -75,7 +75,10 @@ The code is Linux's for ramoops, so a region written by either kernel
 reads in the other.
 .El
 .Pp
-Each size is rounded down to a power of two.
+The record, console, ftrace and pmsg sizes are each rounded down to a
+power of two, as Linux rounds them;
+.Cm ramoops.mem_size
+is used as given.
 Each zone has Linux's header of 12 bytes: the signature 0x43474244, the
 offset of the next byte to write and the bytes held, each 32 bits.
 .Pp

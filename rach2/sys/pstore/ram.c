@@ -102,10 +102,11 @@ static int firmware_usable(const struct boot_info *boot, uint64_t start, uint64_
 }
 
 /**
- * Read the options and check them as ramoops_probe does (ram.c:741): a
- * size and something to keep in it, each size rounded down to a power of
- * two, and room for the console, ftrace and pmsg zones after the dmesg
- * zones. 0 when they name a region, -1, with a record for a fault, when not.
+ * Read the options and check them as ramoops_probe does (ram.c:723): a
+ * size and something to keep in it, the record, console, ftrace and pmsg
+ * sizes rounded down to a power of two (ram.c:766-773), and room for the
+ * console, ftrace and pmsg zones after the dmesg zones. 0 when they name a
+ * region, -1, with a record for a fault, when not.
  */
 static int read_options(void)
 {
