@@ -94,6 +94,12 @@
 /* The wait before the next zero-window probe when the driver refused the
  * last, as Linux's TCP_RESOURCE_PROBE_INTERVAL: 500 ms. */
 #define TCP_RESOURCE_PROBE_TICKS TCP_MS(500)
+/* The least wait between two acknowledgements a connection sends to answer
+ * segments it cannot accept, a sequence outside the receive window, a SYN,
+ * a reset or an acknowledgement it challenges (RFC 5961), as Linux's
+ * tcp_invalid_ratelimit: 500 ms, so that two ends that each find the
+ * other's segments unacceptable do not answer each other for ever. */
+#define TCP_INVALID_RATELIMIT    TCP_MS(500)
 /* A handshake is given up after this many retransmissions of its SYN or
  * SYN-ACK. */
 #define TCP_SYN_RETRIES          7
@@ -163,6 +169,9 @@
 #define TCP_DUP_ACKS     3
 #define TCP_RECOVER_RTO  1
 #define TCP_RECOVER_FAST 2
+/* The runs of data in flight whose send tick a connection keeps
+ * (`sent_tick`): a run is the bytes sent in one tick. */
+#define TCP_SENT_RUNS    16
 
 /* TCP connection states (RFC 793). */
 typedef enum {
@@ -212,6 +221,10 @@ struct tcb {
     uint32_t snd_una; /* oldest unacknowledged sequence number  */
     uint32_t snd_nxt; /* next sequence number to send           */
     uint32_t snd_wnd; /* remote's receive window, in bytes      */
+    /* The largest window the remote has offered, as Linux's max_window: an
+     * acknowledgement further than that below snd_una is refused
+     * (`tcp_ack_ok`). */
+    uint32_t snd_wnd_max;
     uint16_t snd_mss; /* largest segment the remote takes       */
     /* Window scaling (RFC 7323): the shifts of the remote's window field and
      * of this side's, 0 when either SYN lacked the option, and whether this
@@ -300,9 +313,28 @@ struct tcb {
     /* ticks+1 at what the give-up of the timeouts in a row counts from, as
      * Linux's retrans_stamp: in a synchronized state the first
      * retransmission of data since the last recovery ended, kept through
-     * the recovery (`tcp_resend`), or the first timeout when it sends no
-     * data; in the handshake the send; 0 = none (`tcp_rto_expire`). */
+     * the recovery (`tcp_resend`), the send of the oldest data in flight
+     * (`sent_tick`) at a closed window's first probe, as Linux's
+     * tcp_retransmit_timer takes the head segment's stamp, or the first
+     * timeout when it sends no data; in the handshake the send; 0 = none
+     * (`tcp_rto_expire`). */
     uint32_t retx_stamp;
+    /* The send tick of the data in flight, as Linux stamps each segment it
+     * sends: `sent_runs` runs, the oldest first, run i the bytes before
+     * `sent_end[i]` that its predecessor does not hold, sent at the tick
+     * `sent_tick[i]`. An acknowledgement drops the runs it covers. When
+     * TCP_SENT_RUNS are in flight, the newest run takes in the bytes sent
+     * after it and their tick, so that a stamp is never earlier than its
+     * bytes' send; the oldest run is never merged into. The FIN counts as a
+     * byte. Only `tcp_rto_expire` reads it, for a closed window's first
+     * probe. */
+    uint8_t sent_runs;
+    uint32_t sent_end[TCP_SENT_RUNS];
+    uint32_t sent_tick[TCP_SENT_RUNS];
+    /* ticks+1 at the last acknowledgement sent to answer a segment this
+     * side could not accept, as Linux's last_oow_ack_time; 0 = none
+     * (`tcp_oow_limited`). */
+    uint32_t oow_stamp;
     /* The tick of the last acknowledgement received inside [snd_una,
      * snd_nxt] on a segment inside the receive window, as Linux's
      * rcv_tstamp, which a closed window over data in flight is given up by

@@ -4946,18 +4946,27 @@ static int procfs_gen_netsnmp(struct procfs_text *t)
 /**
  * Render /proc/net/netstat: of the TcpExt counters Linux keeps, the ones
  * this stack has (`net_mib`), a line of names and a line of values, in
- * Linux's order, which `nstat` reads by name: the retransmission timeouts
- * and the connections they ended, the keepalive probes, and the probes of
+ * Linux's order, which `nstat` reads by name: the segments of data received
+ * again whole, the retransmission timeouts and the connections they ended,
+ * the challenge acknowledgements and SYNs challenged, the answers to
+ * unacceptable segments held back, the keepalive probes, and the probes of
  * a larger segment lost and taken.
  */
 static int procfs_gen_netnetstat(struct procfs_text *t)
 {
     const struct net_mib *m = &net_mib;
 
-    ap_str(t, "TcpExt: TCPTimeouts TCPAbortOnTimeout TCPKeepAlive TCPMTUPFail TCPMTUPSuccess\n"
+    ap_str(t, "TcpExt: DelayedACKLost TCPTimeouts TCPAbortOnTimeout TCPChallengeACK "
+              "TCPSYNChallenge TCPACKSkippedSeq TCPACKSkippedChallenge TCPKeepAlive "
+              "TCPMTUPFail TCPMTUPSuccess\n"
               "TcpExt:");
+    ap_mib(t, m->tcp_delayed_ack_lost);
     ap_mib(t, m->tcp_timeouts);
     ap_mib(t, m->tcp_abort_on_timeout);
+    ap_mib(t, m->tcp_challenge_ack);
+    ap_mib(t, m->tcp_syn_challenge);
+    ap_mib(t, m->tcp_ack_skipped_seq);
+    ap_mib(t, m->tcp_ack_skipped_challenge);
     ap_mib(t, m->tcp_keepalive);
     ap_mib(t, m->tcp_mtup_fail);
     ap_mib(t, m->tcp_mtup_success);
