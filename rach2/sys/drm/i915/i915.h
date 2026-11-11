@@ -405,6 +405,10 @@ struct i915_ppgtt {
  * was awake before its last park, and `unpark_ticks` is the tick of its
  * last unpark, as Linux's intel_gt_get_awake_time adds them.
  */
+/* The buckets of the GT's pool of shadow batches, Linux's
+ * intel_gt_buffer_pool's four. */
+#define I915_POOL_BUCKETS 4
+
 struct i915_gt {
     uint64_t ggtt_top;
     uint64_t ggtt_bottom;
@@ -428,6 +432,11 @@ struct i915_gt {
     uint64_t init_ticks;
     uint64_t awake_ticks;
     uint64_t unpark_ticks;
+    /* The command parser's shadow batches, kept for the next batch their
+     * bucket fits, as Linux's intel_gt_buffer_pool: `pool[n]` lists objects
+     * of 2^n pages, the last bucket those of 8 pages or more, each with the
+     * pool's reference (`i915_gem_pool_trim`). */
+    struct drm_i915_gem_object *pool[I915_POOL_BUCKETS];
 };
 
 /*
@@ -718,6 +727,10 @@ struct drm_i915_gem_object {
     uint8_t madv;
     uint8_t dumb;
     struct i915_userptr userptr;
+    /* The next shadow batch of its bucket in the GT's `pool`, and the tick
+     * of its last take; for an object of the pool alone. */
+    struct drm_i915_gem_object *pool_next;
+    uint64_t pool_taken;
 };
 
 /* Whether `obj` was made by GEM_USERPTR. */
@@ -2286,6 +2299,21 @@ int32_t i915_gem_userptr_ioctl(struct drm_device *dev, void *data, struct drm_fi
 /** Revoke every program's mapping of every object, once the device is
  * unplugged, so that the next access faults to a device that refuses it. */
 void i915_gem_unplug(struct drm_i915_private *i915);
+
+/* What `i915_gem_pool_trim` drops: a shadow idle since a take a second
+ * ago, every idle one, or every one. */
+#define I915_POOL_STALE 0
+#define I915_POOL_IDLE  1
+#define I915_POOL_ALL   2
+
+/**
+ * Drop the pool's reference to the shadow batches `how` names, as Linux's
+ * pool_free_older_than frees the nodes idle for HZ: a shadow whose only
+ * reference is the pool's is idle, since a request holds its batch's
+ * objects until the chip is past it. The retire pass drops the stale ones,
+ * the GT's park every idle one, and the unplug all. In process context.
+ */
+void i915_gem_pool_trim(struct drm_i915_private *i915, int how);
 
 /**
  * GEM_EXECBUFFER2 and its _WR form, as Linux 6.12's
