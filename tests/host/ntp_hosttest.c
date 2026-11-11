@@ -244,12 +244,13 @@ static void pll_restart(void)
 /** An offset of 500 ms, the most the PLL takes, slews a sixteenth of what
  * is left each second from the second after, the monotonic clock and real
  * time alike, with real time's offset, the boot time and the step count
- * unmoved and no timer told; and one of -500 ms slows them, never back. */
+ * unmoved and no timer told; and one of -500 ms slows them, never back,
+ * with the same four unmoved. */
 static void offset_rows(void)
 {
     struct ktimex tx;
     int64_t base, offset_sec, epoch;
-    int32_t offset_nsec;
+    int32_t offset_nsec, nsec;
     uint32_t steps;
     int c;
 
@@ -269,19 +270,27 @@ static void offset_rows(void)
     CHECK(real_now() - base == 4087701988);
     adj(&tx, 0, 0, 0, 0);
     CHECK(tx.offset == 386238 && tx.freq == 0);
-    rtc_offset(&base, &offset_nsec);
-    CHECK(base == offset_sec && rtc_boot_epoch() == epoch);
+    rtc_offset(&base, &nsec);
+    CHECK(base == offset_sec && nsec == offset_nsec && rtc_boot_epoch() == epoch);
     CHECK(rtc_step_count() == steps && cancels == c);
 
     base = restart(1700000100);
     pll_restart();
+    rtc_offset(&offset_sec, &offset_nsec);
+    epoch = rtc_boot_epoch();
+    steps = rtc_step_count();
+    c = cancels;
     adj(&tx, ADJ_OFFSET, 0, -500000, 0);
     pass(1000);
     CHECK(real_now() - base == 1 * NS);
     pass(2000);
     CHECK(real_now() - base == 2939388671);
+    CHECK(mono_now() - 100 * NS == 2939388671);
     adj(&tx, 0, 0, 0, 0);
     CHECK(tx.offset == -439453);
+    rtc_offset(&base, &nsec);
+    CHECK(base == offset_sec && nsec == offset_nsec && rtc_boot_epoch() == epoch);
+    CHECK(rtc_step_count() == steps && cancels == c);
 }
 
 /** A second offset four seconds after the PLL's interval began becomes a
