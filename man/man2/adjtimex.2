@@ -21,9 +21,14 @@ ask for, and returns the clock's state:
 .Dv TIME_ERROR
 while
 .Dv STA_UNSYNC
-is set, as it is from boot until a program clears it, and
-.Dv TIME_OK
-otherwise.
+is set, as it is from boot until a program clears it, and otherwise the
+state of the leap second, below:
+.Dv TIME_OK ,
+.Dv TIME_INS ,
+.Dv TIME_DEL ,
+.Dv TIME_OOP
+or
+.Dv TIME_WAIT .
 .Fn clock_adjtime
 does the same for
 .Fa clock ,
@@ -33,12 +38,16 @@ which must be
 The modes are Linux's, and any but
 .Dv ADJ_OFFSET_SS_READ
 needs a privileged caller.
-The clock keeps Linux's NTP state and slews real time by it, as Linux 6.12
-does: at each second the next second's ticks take the length that the tick
-and the frequency give, plus a share of the offset left and of
+The clock keeps Linux's NTP state and slews by it, as Linux 6.12 does: at
+each second of real time the next second's ticks take the length that the
+tick and the frequency give, plus a share of the offset left and of
 .Fn adjtime Ns 's
-slew, and real time runs at that rate from where it is, so that it neither
-jumps nor goes back.
+slew.
+The length moves real time and every clock since boot together, at the
+next tick and from where they are, so that none jumps or goes back and
+real time less the monotonic clock changes only at a step;
+.Dv CLOCK_MONOTONIC_RAW
+alone keeps the timer's own rate.
 .Bl -tag -width ADJ_OFFSET_SINGLESHOT
 .It Dv ADJ_OFFSET
 With
@@ -46,14 +55,16 @@ With
 set, the offset, at most half a second either way, goes to the
 phase-locked loop: from the next second it slews 2^-(2 +
 .Fa constant )
-of what is left each second, and it changes the frequency by the offset
-times the seconds since the last offset, at most 2^(3 +
+of what is left each second, and it changes the frequency by 2^-(8 + 2 *
+.Fa constant )
+of the offset times the seconds since the last offset, those seconds
+counted as at most 2^(3 +
 .Fa constant ) .
 With
 .Dv STA_FLL
 set and 256 seconds or more since the last offset, or with over 2048
-seconds since it, the frequency-locked loop's change, the offset over
-those seconds, is added too, and
+seconds since it, the frequency-locked loop's change, a quarter of the
+offset over those seconds, is added too, and
 .Dv STA_MODE
 is set.
 .Dv STA_FREQHOLD
@@ -62,10 +73,11 @@ keeps the frequency.
 reads what is left.
 .It Dv ADJ_FREQUENCY
 The frequency, in units of 2^-16 ppm, at most 500 ppm either way, which
-changes the rate at once and which settings of the clock keep.
+changes the rate from the next tick and which settings of the clock keep.
 .It Dv ADJ_TIMECONST
 The loop's time constant, from 0 to 10, plus 4 without
-.Dv STA_NANO .
+.Dv STA_NANO
+and then at most 10.
 .It Dv ADJ_TICK
 The length of a tick of USER_HZ, from 9000 to 11000 microseconds; 10000 is
 the timer's own rate, whatever the timer's frequency, and another length
@@ -98,8 +110,33 @@ slew in progress, keeps the frequency and sets
 it counts the timers and sleeps of real time again and cancels a timerfd
 set with
 .Dv TFD_TIMER_CANCEL_ON_SET .
-A slew cancels nothing, and each change of its rate counts the timers and
-sleeps of real time again at the new rate.
+A slew cancels nothing and counts nothing again, since it moves real time
+and the timers' monotonic clock together.
+.Pp
+.Dv STA_INS
+announces a leap second inserted at the end of the day of real time:
+the state is
+.Dv TIME_INS ,
+and at midnight real time steps back to 23:59:59, which it runs through
+again in
+.Dv TIME_OOP .
+.Dv STA_DEL
+announces a second deleted from the end of the day: the state is
+.Dv TIME_DEL ,
+and at 23:59:59 real time steps on to midnight.
+Either then waits in
+.Dv TIME_WAIT
+until both bits are clear, and the TAI offset moves by the second.
+Clearing the bit before the second comes returns to
+.Dv TIME_OK .
+A call that finds the leap's second come before the tick has stepped the
+clock reads the time, the TAI offset and the state as the step will leave
+them, as Linux's does.
+A leap second is a step: it counts the timers and sleeps of real time
+again and cancels a timerfd set with
+.Dv TFD_TIMER_CANCEL_ON_SET ,
+but it keeps the NTP state.
+.Pp
 .Dv ADJ_MAXERROR ,
 .Dv ADJ_ESTERROR ,
 .Dv ADJ_TAI
@@ -194,12 +231,4 @@ A mode other than reading was asked for by a caller without privilege.
 .Xr gettimeofday 2 ,
 .Xr timerfd 2
 .Sh BUGS
-Linux slews
-.Dv CLOCK_MONOTONIC
-with real time; here it keeps the timer's rate, so the two part by the
-slew.
-.Dv STA_INS
-and
-.Dv STA_DEL
-are kept, and no leap second is inserted or deleted.
 There is no PPS signal.

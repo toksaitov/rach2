@@ -1,4 +1,4 @@
-.Dd November 11, 2026
+.Dd November 12, 2026
 .Dt VDSO 7
 .Os
 .Sh NAME
@@ -119,13 +119,18 @@ vdso: clock: the system call; no tsc at one rate was measured
 .Ed
 .Pp
 The kernel keeps the clock's state in a page of its own, mapped read-only
-one page below the library: the counter's value at the last tick, the time
-then and the nanoseconds a count adds, which it changes at each tick under
-a sequence count that a reader reads before and after.
-At each tick it steers the rate toward the reference by at most one part
-in 2000, so that the two never drift apart and no reading is earlier than
-one before it; a clock more than a tick behind is moved forward at once,
-and one ahead is never moved back.
+one page below the library: the counter's value at the last tick, and for
+the monotonic clock, real time and
+.Dv CLOCK_MONOTONIC_RAW
+the time then and the nanoseconds a count adds, which it changes at each
+tick under a sequence count that a reader reads before and after.
+The monotonic clock and real time run at the measured rate as
+.Xr adjtimex 2
+slews it, and the raw clock at the measured rate alone.
+At each tick the kernel steers each rate toward the reference by at most
+one part in 2000, so that the two never drift apart and no reading is
+earlier than one before it; a clock more than a tick behind is moved
+forward at once, and one ahead is never moved back.
 The kernel's own clock calls read the same clock while it runs, so a
 reading through the vDSO and one by the system call agree.
 .Xr clock_getres 2
