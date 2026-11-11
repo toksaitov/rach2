@@ -242,8 +242,10 @@ as
 .Fn pread
 reads one, each at the place the ones before it reached, from
 .Fa offset ,
-and leaves the descriptor's offset where it was; the vector is checked
-whole, as
+and leaves the descriptor's offset where it was; the offset and the
+descriptor are checked first, as
+.Fn pread
+checks them, then the vector whole, as
 .Fn readv
 checks it, before a byte is read, and a short read ends the call.
 .Pp

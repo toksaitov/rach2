@@ -12578,30 +12578,35 @@ static long iov_at_move(int fd, uintptr_t iov_user, int iovcnt, long long pos, i
 /**
  * The elements of the vector at `iov_user` read from or, with `write`, written
  * to `fd` at the position `pos`, which the descriptor's own offset does not
- * follow. An O_APPEND mounted file goes through iov_file_write, with one lock
- * across the vector. Other transfers check the vector whole first
- * (`iov_import`), so a bad element is refused before a byte moves, its total
- * cut at MAX_RW_COUNT, and then move it (`iov_at_move`), a write cut to the
- * whole 2 MiB chunks a sealed tmpfs file lets in (`iov_seal_grow`) when the
- * descriptor is open for writing; one that is not gets `ksys_pwrite64`'s EBADF,
- * as Linux tests FMODE_WRITE before the vector. A vector of no bytes still has
- * the descriptor checked. Returns the bytes moved or a negative errno: -EINVAL
- * for a negative position, a count past IOV_MAX_LOCAL or below 0, a negative
- * length, or a vector whose end would pass 2^63-1; -EFAULT for a vector or a
+ * follow. The position and the descriptor are checked first (`pio_entry`), as
+ * Linux's do_preadv and vfs_readv, or do_pwritev and vfs_writev, test them
+ * before the vector, a directory's EISDIR left to its read. An O_APPEND
+ * mounted file goes through iov_file_write, with one lock across the vector.
+ * Other transfers check the vector whole (`iov_import`), so a bad element is
+ * refused before a byte moves, its total cut at MAX_RW_COUNT, and then move
+ * it (`iov_at_move`), a write cut to the whole 2 MiB chunks a sealed tmpfs
+ * file lets in (`iov_seal_grow`). A vector of no bytes has the descriptor
+ * checked again by the transfer. Returns the bytes moved or a negative errno:
+ * -EINVAL for a negative position, a count past IOV_MAX_LOCAL or below 0, a
+ * negative length, or a vector whose end would pass 2^63-1; -EBADF or
+ * -ESPIPE for a descriptor `pio_entry` refuses; -EFAULT for a vector or a
  * buffer the caller cannot reach; -EPERM, with nothing written, for a write to
  * a file sealed against growth of which no whole 2 MiB chunk before the end
  * fits, as Linux takes the vector as one stream; or the first element's error.
  */
 static long iov_at(int fd, uintptr_t iov_user, int iovcnt, long long pos, int write)
 {
-    fd_entry_t *entry;
+    fd_entry_t *entry = NULL;
     uint32_t wanted, room;
-    long rc;
+    long rc = pio_entry(fd, write, 0, pos, &entry);
 
-    if (iovcnt < 0 || iovcnt > IOV_MAX_LOCAL || pos < 0) {
+    if (rc != 0 && rc != -EISDIR) {
+        return rc;
+    }
+    if (iovcnt < 0 || iovcnt > IOV_MAX_LOCAL) {
         return -EINVAL;
     }
-    entry = write && current_proc ? fd_get(current_proc->fds, fd) : NULL;
+    entry = write ? entry : NULL;
     if (iov_append_file(entry)) {
         return iov_file_write(entry, iov_user, iovcnt, pos, 1);
     }
