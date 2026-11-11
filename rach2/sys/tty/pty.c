@@ -395,6 +395,7 @@ struct ptm_feed {
     const uint8_t *kbuf; /* the piece copied from the user */
     uint32_t chunk;      /* its bytes */
     uint32_t done;       /* the bytes of the write before it */
+    uint32_t prior;      /* the bytes of a vector's elements before the write */
     uint32_t pushed;     /* m_tail when the master's readers were last woken */
     uint32_t ahead;      /* the bytes of the piece the look ahead has seen */
     uint32_t acted;      /* those up to the last one that stopped or restarted output */
@@ -441,8 +442,8 @@ static uint32_t ptm_look_end(const struct ptm_feed *f, uint32_t i)
  * `f->ahead` moving to the piece's end or as far as the read queue can store
  * (`ptm_look_end`). It takes the bytes it acted on before any wait
  * (`ptm_take_acted`), while the space measured is still its own, and returns
- * that accepted prefix. Returns 0 to go on feeding, or what `ptm_write`
- * returns: the bytes written, -EAGAIN or -EINTR.
+ * that accepted prefix. Returns 0 to go on feeding, or what `ptm_write_in`
+ * returns: the bytes fed with `f->prior` among them, -EAGAIN or -EINTR.
  */
 static int32_t ptm_wait_feed(struct ptm_feed *f, uint32_t *i)
 {
@@ -469,13 +470,13 @@ static int32_t ptm_wait_feed(struct ptm_feed *f, uint32_t *i)
             }
         }
         ptm_take_acted(f, i);
-        if (f->done + *i > 0 || fd_is_nonblock(f->e)) {
+        if (f->prior + f->done + *i > 0 || fd_is_nonblock(f->e)) {
             wake_master(p, &f->pushed);
-            return f->done + *i > 0 ? (int32_t)(f->done + *i) : -EAGAIN;
+            return f->prior + f->done + *i > 0 ? (int32_t)(f->prior + f->done + *i) : -EAGAIN;
         }
         wake_master(p, &f->pushed);
         if (wq_wait_event(&p->m_read_wq, ptm_has_room, p) < 0) {
-            return f->done + *i > 0 ? (int32_t)(f->done + *i) : -EINTR;
+            return f->prior + f->done + *i > 0 ? (int32_t)(f->prior + f->done + *i) : -EINTR;
         }
     }
     return 0;
@@ -499,9 +500,13 @@ static int32_t ptm_wait_feed(struct ptm_feed *f, uint32_t *i)
  * that acted are fed before any wait (`ptm_take_acted`), so that another
  * writer cannot take their space, and the write returns that prefix.
  * Master readers are woken before every return that fed bytes, a failed
- * copy included, so they see the echo.
+ * copy included, so they see the echo. `prior` is the bytes a vector's
+ * earlier elements fed, which the result counts: a write after them that
+ * fills the input returns short, though it fed none, where one with nothing
+ * before it would wait or fail, so that a vector returns as one write of the
+ * same bytes does.
  */
-static int32_t ptm_write_in(fd_entry_t *e, const char __user *buf, uint32_t count)
+static int32_t ptm_write_in(fd_entry_t *e, const char __user *buf, uint32_t count, uint32_t prior)
 {
     struct ptm_feed f;
     uint8_t kbuf[256];
@@ -516,6 +521,7 @@ static int32_t ptm_write_in(fd_entry_t *e, const char __user *buf, uint32_t coun
     f.p = (struct pty *)e->priv;
     f.kbuf = kbuf;
     f.done = 0;
+    f.prior = prior;
     f.pushed = f.p->m_tail;
     while (f.done < count) {
         uint32_t i;
@@ -528,7 +534,7 @@ static int32_t ptm_write_in(fd_entry_t *e, const char __user *buf, uint32_t coun
         }
         if (copy_from_user(kbuf, (const void __user *)(buf + f.done), f.chunk) != 0) {
             wake_master(f.p, &f.pushed);
-            return (f.done > 0) ? (int32_t)f.done : -EFAULT;
+            return (prior + f.done > 0) ? (int32_t)(prior + f.done) : -EFAULT;
         }
         for (i = 0; i < f.chunk; i++) {
             rc = ptm_wait_feed(&f, &i);
@@ -547,7 +553,7 @@ static int32_t ptm_write_in(fd_entry_t *e, const char __user *buf, uint32_t coun
         f.done += f.chunk;
     }
     wake_master(f.p, &f.pushed);
-    return (int32_t)f.done;
+    return (int32_t)(prior + f.done);
 }
 
 /** Whether the preceding master write has released the pair. */
@@ -592,7 +598,7 @@ static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     }
     rc = ptm_write_lock((struct pty *)e->priv, fd_is_nonblock(e));
     if (rc == 0) {
-        rc = ptm_write_in(e, buf, count);
+        rc = ptm_write_in(e, buf, count, 0);
         ptm_write_unlock((struct pty *)e->priv);
     }
     return rc;
@@ -601,7 +607,7 @@ static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 /** Feed the imported vector with one lock, as defined in pty.h. */
 int32_t pty_master_writev(fd_entry_t *e, const struct kernel_iovec *iov, int count)
 {
-    int32_t rc, total = 0;
+    int32_t rc, fed, total = 0;
     int i;
 
     for (i = 0; i < count && iov[i].iov_len == 0; i++) {
@@ -617,12 +623,14 @@ int32_t pty_master_writev(fd_entry_t *e, const struct kernel_iovec *iov, int cou
         if (iov[i].iov_len == 0) {
             continue;
         }
-        rc = ptm_write_in(e, (const char __user *)iov[i].iov_base, (uint32_t)iov[i].iov_len);
+        rc = ptm_write_in(e, (const char __user *)iov[i].iov_base, (uint32_t)iov[i].iov_len,
+                          (uint32_t)total);
         if (rc < 0) {
             break;
         }
-        total += rc;
-        if ((unsigned long)rc < iov[i].iov_len) {
+        fed = rc - total;
+        total = rc;
+        if ((unsigned long)fed < iov[i].iov_len) {
             break;
         }
     }
