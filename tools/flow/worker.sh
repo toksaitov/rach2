@@ -14,7 +14,12 @@
 # another account while this one waited for its usage limit, the loop drops
 # it and claims another. The number is kept in a file, not read from the
 # board, because two loops of one account cannot tell their tasks apart by
-# assignee. Write a number to STATE/issue to give a loop a task to resume.
+# assignee. Write a number to STATE/issue to give a loop a task to resume,
+# with the take before it and under the claim lock, as claim does:
+# `perl -MFcntl=:flock -e 'open(L, ">>", shift) && flock(L, LOCK_EX) or die;
+# system(@ARGV) == 0 or exit 1' build/flow/claim.lock sh -c 'CMDS'`. Outside
+# it, a loop of the same account can take the card meanwhile, since `take`
+# answers yes to a card this account already holds.
 #
 # The session's prompt is `worker.txt`, with @ISSUE@ replaced by the task's
 # number, @BRANCH@ by its milestone's branch, which `board.sh branch` reads
