@@ -3423,6 +3423,12 @@ static void selftest_rows(void)
 /* The NMI handler's hook, which kvm_pmu_start sets. */
 int (*watchdog_guest_nmi)(void);
 
+/** The hard-lockup detector's counter does not run here. */
+int platform_pmu_armed(void)
+{
+    return 0;
+}
+
 /** Run the rows; 0 when every check passed, 1 otherwise. */
 int main(void)
 {
