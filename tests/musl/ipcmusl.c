@@ -771,27 +771,18 @@ static int mq_mount(void)
 }
 
 /**
- * Read the file of the empty queue /ipcempty, whose size is 0 and whose
- * status line is not empty: a read into NULL at offset 0 is EFAULT, since
- * the line has a byte there, as Linux's simple_read_from_buffer answers
+ * Read the file `fd` of an empty queue, whose size is 0 and whose status
+ * line is not empty: a read into NULL at offset 0 is EFAULT, since the line
+ * has a byte there, as Linux's simple_read_from_buffer answers
  * (fs/libfs.c:1104-1110 in 6.12), and a pread at the line's end returns 0.
  * Returns 0, or 1 once the failure is reported.
  */
-static int mq_empty_reads(void)
+static int mq_empty_rows(int fd)
 {
     char *volatile nowhere = NULL;
     char line[256];
-    mqd_t q = mq_open("/ipcempty", O_CREAT | O_EXCL | O_RDWR, 0600, NULL);
     ssize_t n, r;
-    int fd;
 
-    if (q == (mqd_t)-1) {
-        return fail("an empty queue for its file's reads");
-    }
-    fd = open(mq_path("ipcempty"), O_RDONLY);
-    if (fd < 0) {
-        return fail("opening an empty queue's file");
-    }
     errno = 0;
     r = read(fd, nowhere, 10);
     if (r != -1 || errno != EFAULT) {
@@ -804,10 +795,31 @@ static int mq_empty_reads(void)
         return fail("a pread at the end of an empty queue's status line returns 0");
     }
     held();
-    close(fd);
+    return 0;
+}
+
+/**
+ * Make the empty queue /ipcempty and read its file (`mq_empty_rows`),
+ * closing both and unlinking the queue on every exit once it is made, so
+ * that no run leaves its name. Returns 0, or 1 once the failure is
+ * reported.
+ */
+static int mq_empty_reads(void)
+{
+    mqd_t q = mq_open("/ipcempty", O_CREAT | O_EXCL | O_RDWR, 0600, NULL);
+    int fd, status;
+
+    if (q == (mqd_t)-1) {
+        return fail("an empty queue for its file's reads");
+    }
+    fd = open(mq_path("ipcempty"), O_RDONLY);
+    status = fd < 0 ? fail("opening an empty queue's file") : mq_empty_rows(fd);
+    if (fd >= 0) {
+        close(fd);
+    }
     mq_close(q);
     mq_unlink("/ipcempty");
-    return 0;
+    return status;
 }
 
 /**
