@@ -294,7 +294,10 @@ its next touch, as on Linux, so a program that drew through the GPU goes on
 and draws nothing.
 An object whose pages a transport gave from its own memory, such as the
 shared region's heap, gives them back at the reset, and an old mapping of it
-takes new pages at its next touch.
+takes new pages at its next touch, unless it has been exported as a dma-buf:
+then it keeps them until it is freed, since another device, such as
+.Xr i915 4 ,
+may hold them in its translations.
 An old mapping of a blob of host memory faults with
 .Dv SIGBUS .
 A new boot is needed to use the device again.

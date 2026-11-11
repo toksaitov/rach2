@@ -2003,8 +2003,11 @@ void vgpu_kill(struct virtio_gpu_device *vg)
         bo->res_id = 0;
         vgpu_blob_pages_drop(vg, bo);
         /* A transport's own backing is its heap's, which the reset frees;
-         * a mapping that faulted in since the unplug's zap goes first. */
-        if (vg->vdev->ops->backing_release) {
+         * a mapping that faulted in since the unplug's zap goes first. An
+         * exported object keeps its frames, which an importer may hold in
+         * its own translations, as i915 does in its GTT, until it is
+         * freed, as Linux's page references keep them. */
+        if (vg->vdev->ops->backing_release && !bo->shmem.base.dma_buf) {
             drm_gem_object_zap(&bo->shmem.base);
             vgpu_obj_pages_free(vg, bo);
         }
