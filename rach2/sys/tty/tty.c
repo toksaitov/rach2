@@ -69,11 +69,11 @@ void tty_init(struct tty *t, n_tty_out_fn sink, void *sink_ctx)
     t->vhangups = 0;
 }
 
-/** Signal the live user processes of `pgid`, with the big lock held,
- * from a call or an interrupt. A process still has an address space;
- * its unfinished forks get the signal through signal_post_multi. Select
- * one target per process, as Linux 6.12.115's __kill_pgrp_info does
- * (kernel/signal.c:1478-1487). */
+/** Signal the processes of `pgid`, with the big lock held, from a call or
+ * an interrupt, each through its leader, zombie or not, as Linux
+ * 6.12.115's __kill_pgrp_info does (kernel/signal.c:1478-1479). A process
+ * whose threads have all ended and a kernel thread take nothing; a
+ * process's unfinished forks get the signal (`signal_post_multi`). */
 void tty_signal_group(int pgid, int signo)
 {
     process_t *p;
@@ -87,8 +87,7 @@ void tty_signal_group(int pgid, int signo)
     for (p = proc_list; p; p = p->next) {
         process_t *target = signal_process_target(p);
 
-        if (target && target->state != PROC_ZOMBIE && target->space_root != 0 &&
-            (int)target->pgid == pgid) {
+        if (target && (int)target->pgid == pgid) {
             signal_post_multi(target, signo, &info);
         }
     }

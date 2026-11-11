@@ -702,6 +702,13 @@ void free_process(process_t *proc);
  * numbering, that of the first PID namespace; NULL for none. */
 process_t *get_process(uint32_t pid);
 
+/** Whether the record `p` is a kernel thread: a live record with no
+ * address space outside an exit, which a user thread leaves only past its
+ * mm_drop, in its exit's system call. Such a thread takes no signal, as
+ * Linux 6.12.115's kernel threads inherit kthreadd's SIG_IGN for every
+ * signal (kernel/kthread.c:745, kernel/signal.c:518-525). */
+int proc_is_kthread(const process_t *p);
+
 /** Exchange the kernel and namespace thread ids of two threads in the
  * same PID namespace at exec, under the big kernel lock. */
 void proc_exchange_pids(process_t *a, process_t *b);
@@ -896,7 +903,10 @@ void signal_post(process_t *target, int signo);
  * `target`. Job control acts at once: SIGCONT ends a stop and cancels the
  * pending stop signals, SIGKILL makes the stopped threads ready, and a stop
  * signal cancels a pending SIGCONT. A process whose threads have all ended
- * takes nothing. SIGKILL also wakes a thread in execve's wait for the other
+ * takes nothing, and neither does a kernel thread (`proc_is_kthread`).
+ * `target` may be a leader that has ended while other threads run: its
+ * mask decides whether an ignored signal is kept, and another thread takes
+ * the signal. SIGKILL also wakes a thread in execve's wait for the other
  * threads. An interrupt handler may call it. The signal is delivered at a
  * return to user mode (`deliver_signals`).
  */
@@ -913,9 +923,12 @@ void signal_post_multi(process_t *target, int signo, const struct k_siginfo *inf
 
 /** Select one target per process while walking proc_list under the big
  * lock: NULL for an unused record or a nonleader; otherwise the leader,
- * its first live thread when it is a zombie, or the zombie when all its
- * threads ended. Linux 6.12.115's multiprocess sends walk leaders alone
- * (kernel/signal.c:1478-1487, 1635-1643; kernel/fork.c:2596-2618).
+ * zombie or not, whose credentials a send's permission check reads and
+ * whose mask decides whether an ignored signal is kept; signal_post_multi
+ * chooses the thread that takes the signal. Linux 6.12.115's multiprocess
+ * sends walk the leaders alone, a leader that has ended included, and
+ * post to each (kernel/fork.c:2596-2618; kernel/signal.c:1478-1479,
+ * 1635-1639).
  * Does not sleep; an interrupt handler may call it. */
 process_t *signal_process_target(process_t *p);
 
