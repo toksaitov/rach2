@@ -510,7 +510,10 @@ const struct open_file *filemap_ofd(const struct vm_file *f)
 
 const fd_entry_t *filemap_entry(const struct vm_file *f)
 {
-    return f && f->release == filemap_release ? &((const struct filemap *)f)->entry : NULL;
+    if (!f || f->release != filemap_release || !((const struct filemap *)f)->entry.ofd) {
+        return NULL;
+    }
+    return &((const struct filemap *)f)->entry;
 }
 
 int filemap_in_memory(const struct vm_file *f)
@@ -736,6 +739,10 @@ int filemap_msync(struct vm_file *f, int flush)
     return f->share == filemap_share_disk ? dshare_sync(m->ds, 0, 0xFFFFFFFFu, flush) : 0;
 }
 
+/* The name /proc/PID/maps gives shared anonymous memory, Linux's for the
+ * shmem file shmem_zero_setup makes (mm/shmem.c:5383). */
+static const char anon_shared_name[] = "/dev/zero (deleted)";
+
 struct vm_file *filemap_anon_shared(void)
 {
     struct filemap *m = kzalloc(sizeof(*m));
@@ -746,6 +753,9 @@ struct vm_file *filemap_anon_shared(void)
     m->vf.refs = 1;
     m->vf.share = filemap_share;
     m->vf.release = filemap_release;
+    if ((m->vf.path = kmalloc(sizeof(anon_shared_name))) != NULL) {
+        k_memcpy(m->vf.path, anon_shared_name, sizeof(anon_shared_name));
+    }
     m->sh = &m->own;
     m->own.maps = 1;
     m->next = maps;
