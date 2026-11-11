@@ -5,17 +5,21 @@
 # scene.sh inside it and report what it drew.
 #
 # Usage: forward.sh [-a ACCEL] [-c CPUS] [-m MIB] [-p PORT] [-w SECONDS]
-#                   [-o OUT] -d DISK -k KEY -g FILES virgl|venus
+#                   [-o OUT] [-f FORMAT] [-r REF] -d DISK -k KEY -g FILES
+#                   virgl|venus
 #
-# DISK is the guest's disk, the Debian reference guest's image as a raw
-# device or file; KEY the private key of its user gfx; FILES a tar archive of
+# DISK is the guest's disk, the Debian reference guest's image as a device or
+# file in QEMU's FORMAT, raw by default, or qcow2 for the image file itself;
+# KEY the private key of its user gfx; FILES a tar archive of
 # what scene.sh needs beside it, unpacked in the guest's /tmp/forward. The
 # guest has CPUS processors, 4 by default, and MIB of memory, 4096; QEMU
 # forwards PORT of the loopback address, 2222 by default, to the guest's SSH
 # server over its user network. OUT, the working directory by default, gets
 # the guest's console as console.log, QEMU's own messages as qemu.log, the
 # scene's output as scene.log, and for a scene that ran, the guest's /tmp/out
-# as out.tar.
+# as out.tar. REF is for venus: a frames file of vkcube.sh that the scene
+# judges vkcube's frames by in place of the archive's vkcube.ref, copied into
+# the guest, or `none`, which records the frames without judging them.
 #
 # DISK is opened with QEMU's snapshot=on: the guest's writes go to a
 # temporary overlay, a file without a name on OUT's file system, which is
@@ -53,14 +57,15 @@
 # or `bed-forward: result: fail: REASON` of its own. It exits 0 on a pass, 1
 # on a failure and 2 on a usage error.
 
-accel=kvm cpus=4 mib=4096 port=2222 silence=600 out=. disk='' key='' files=''
+accel=kvm cpus=4 mib=4096 port=2222 silence=600 out=. format=raw ref='' disk='' key='' files=''
 usage()
 {
     echo "usage: forward.sh [-a ACCEL] [-c CPUS] [-m MIB] [-p PORT] [-w SECONDS]" >&2
-    echo "                  [-o OUT] -d DISK -k KEY -g FILES virgl|venus" >&2
+    echo "                  [-o OUT] [-f FORMAT] [-r REF] -d DISK -k KEY -g FILES" >&2
+    echo "                  virgl|venus" >&2
     exit 2
 }
-while getopts a:c:m:p:w:o:d:k:g: o; do
+while getopts a:c:m:p:w:o:f:r:d:k:g: o; do
     case $o in
         a) accel=$OPTARG ;;
         c) cpus=$OPTARG ;;
@@ -68,6 +73,8 @@ while getopts a:c:m:p:w:o:d:k:g: o; do
         p) port=$OPTARG ;;
         w) silence=$OPTARG ;;
         o) out=$OPTARG ;;
+        f) format=$OPTARG ;;
+        r) ref=$OPTARG ;;
         d) disk=$OPTARG ;;
         k) key=$OPTARG ;;
         g) files=$OPTARG ;;
@@ -79,6 +86,14 @@ shift $((OPTIND - 1))
 profile=$1
 case $silence in
     '' | *[!0-9]*) usage ;;
+esac
+case $format in
+    raw | qcow2) ;;
+    *) usage ;;
+esac
+case $ref in
+    '' | none) ;;
+    *) [ -f "$ref" ] || { echo "forward.sh: no reference frames $ref" >&2; exit 2; } ;;
 esac
 case $accel in
     kvm) accel_option=kvm,kernel-irqchip=split cpu=host ;;
@@ -129,7 +144,7 @@ guest()
 echo "bed-forward: start: $qemu -accel $accel_option -cpu $cpu -smp $cpus -m $mib -device $gpu" \
     "-display egl-headless,rendernode=$node"
 TMPDIR=$out "$qemu" -nodefaults -no-reboot -machine q35 -accel "$accel_option" -cpu "$cpu" \
-    -smp "$cpus" -m "${mib}M" "$@" -drive "file=$disk,format=raw,if=virtio,snapshot=on" \
+    -smp "$cpus" -m "${mib}M" "$@" -drive "file=$disk,format=$format,if=virtio,snapshot=on" \
     -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:$port-:22" -device virtio-net-pci,netdev=net0 \
     -device virtio-rng-pci -device "$gpu" -display "egl-headless,rendernode=$node" \
     -serial "file:$out/console.log" -monitor none > "$out/qemu.log" 2>&1 < /dev/null &
@@ -161,11 +176,22 @@ scp -q $ssh_options -P "$port" "$files" gfx@127.0.0.1:/tmp/forward.tar ||
     fail "the scenes could not be copied to the guest"
 guest 'mkdir -p /tmp/forward && tar -xf /tmp/forward.tar -C /tmp/forward' ||
     fail "the scenes could not be unpacked in the guest"
+scene_ref=
+case $ref in
+    '') ;;
+    none) scene_ref=' -r none' ;;
+    *)
+        # shellcheck disable=SC2086 # the options are words
+        scp -q $ssh_options -P "$port" "$ref" gfx@127.0.0.1:/tmp/forward/ref.frames ||
+            fail "the reference $ref could not be copied to the guest"
+        scene_ref=' -r /tmp/forward/ref.frames'
+        ;;
+esac
 
 # The scene runs beside the watch on its output, so that a guest that stops
 # is found by its silence.
 (
-    guest "sh /tmp/forward/scene.sh $profile -o /tmp/out" > "$out/scene.log" 2>&1
+    guest "sh /tmp/forward/scene.sh $profile -o /tmp/out$scene_ref" > "$out/scene.log" 2>&1
     echo $? > "$out/scene.status"
 ) &
 scene=$!
