@@ -146,6 +146,8 @@ static void dir_free(page_dir_t *dir)
 struct percpu cpu_table[NR_CPUS];
 uintptr_t mem_reserved_ptr;
 process_t *proc_list;
+volatile uint32_t init_pid = 1; /* no row faults as init */
+bool debug_shell_is_home;
 
 /* Whether the page attribute table gives write-combining, which a row
  * turns off to see the uncached bits in its place. */
