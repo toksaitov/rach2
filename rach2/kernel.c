@@ -3975,9 +3975,11 @@ static void start_network(void)
 static const struct debugfs_text_ops bkl_calls_ops = {smp_calls_show, smp_calls_store};
 static const struct debugfs_text_ops bkl_profile_ops = {smp_profile_show, smp_profile_store};
 
-/** Register bkl/calls and bkl/profile in debugfs; a failure is logged. */
-static void bkl_debugfs_start(void)
+/** Start the processors past the first (`smp_start`), then register
+ * bkl/calls and bkl/profile in debugfs; a failure there is logged. */
+static void start_processors(void)
 {
+    smp_start();
     if (debugfs_create_text("bkl/calls", 0644u, &bkl_calls_ops, NULL) != 0 ||
         debugfs_create_text("bkl/profile", 0644u, &bkl_profile_ops, NULL) != 0) {
         klog(KLOG_WARN, "bkl", "debugfs: files not registered");
@@ -4372,8 +4374,7 @@ void kernel_main(const struct boot_info *boot)
         platform_report_hold();
     }
 
-    smp_start();
-    bkl_debugfs_start();
+    start_processors();
     vclock_start();
 
     rescue_mode = kcmdline_has("rach2.rescue") || kcmdline_has("init=rescue");
