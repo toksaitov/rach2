@@ -40,9 +40,13 @@
  * too. read and readv refuse the same descriptors with the same errors, with
  * no bytes too and before a count past 1024 or a vector or buffer outside
  * user memory, and a directory's read EFAULT for such a buffer before
- * EISDIR. read checks its original count before cutting it at MAX_RW_COUNT:
+ * EISDIR. read, write, pread64 and pwrite64 check the original count before
+ * cutting it at MAX_RW_COUNT:
  * an overflowing range is EFAULT, and on the i686 kernel a count negative
  * as ssize_t is EINVAL once its range has passed the address check.
+ * Positioned I/O checks the end before that cut too, and checks the range
+ * before an overflowing end. /dev/null lets large writes finish without
+ * touching the buffer.
  * pwritev2 with RWF_APPEND writes at the end, moving the descriptor's
  * offset at offset -1 and not at another, and leaves O_APPEND clear;
  * RWF_NOAPPEND overrides O_APPEND for one call at either offset form,
@@ -1055,6 +1059,104 @@ static int read_raw_count(void)
     return ok;
 }
 
+/** A bad descriptor, access mode or seek precedes the raw count check;
+ * a negative positioned offset precedes even the descriptor lookup.
+ * Return whether every refusal of the open descriptors has Linux's errno. */
+static int scalar_count_access(int rd, int wr, int ep, const int *pipefd)
+{
+    void *buf = (void *)(uintptr_t)0x10000;
+
+    return refused(syscall(SYS_write, 999, buf, (size_t)-1), EBADF) &&
+           refused(syscall(SYS_write, rd, buf, (size_t)-1), EBADF) &&
+           refused(syscall(SYS_write, ep, buf, (size_t)-1), EINVAL) &&
+           refused(PREAD_WIDE(999, buf, (size_t)-1, 0, 0), EBADF) &&
+           refused(PWRITE_WIDE(999, buf, (size_t)-1, 0, 0), EBADF) &&
+           refused(PREAD_WIDE(wr, buf, (size_t)-1, 0, 0), EBADF) &&
+           refused(PWRITE_WIDE(rd, buf, (size_t)-1, 0, 0), EBADF) &&
+           refused(PREAD_WIDE(pipefd[0], buf, (size_t)-1, 0, 0), ESPIPE) &&
+           refused(PWRITE_WIDE(pipefd[1], buf, (size_t)-1, 0, 0), ESPIPE) &&
+           refused(PREAD_WIDE(999, buf, (size_t)-1, 0, 0x80000000u), EINVAL) &&
+           refused(PWRITE_WIDE(999, buf, (size_t)-1, 0, 0x80000000u), EINVAL);
+}
+
+/** Check the original counts against the four errors the kernel's word
+ * size selects, 0 meaning success. /dev/null accepts a write without
+ * copying and a read returns EOF; a directory refuses a read after the
+ * range and signed-count checks. Return whether each result matches. */
+static int scalar_count_ranges(int rd, int wr, int dirfd, const int *errors)
+{
+    static const size_t counts[] = {(size_t)-1, 0xc0000001u, 0x80000000u, 0x7ffff001u};
+    void *buf = (void *)(uintptr_t)0x10000;
+    int i, ok = 1;
+    long wrote, read_at, wrote_at;
+
+    for (i = 0; i < (int)(sizeof(counts) / sizeof(counts[0])) && ok; i++) {
+        wrote = syscall(SYS_write, wr, buf, counts[i]);
+        ok = errors[i] ? refused(wrote, errors[i]) : wrote == 0x7ffff000L;
+        read_at = PREAD_WIDE(rd, buf, counts[i], 0, 0);
+        ok = ok && (errors[i] ? refused(read_at, errors[i]) : read_at == 0);
+        wrote_at = PWRITE_WIDE(wr, buf, counts[i], 0, 0);
+        ok = ok && (errors[i] ? refused(wrote_at, errors[i]) : wrote_at == 0x7ffff000L);
+        ok = ok && refused(PREAD_WIDE(dirfd, buf, counts[i], 0, 0), errors[i] ? errors[i] : EISDIR);
+    }
+    return ok;
+}
+
+/** Check an end at and past LLONG_MAX using the original count, a bad
+ * range before an overflowing end, and a zero count at a bad address.
+ * `faults` says this kernel refuses the huge range and KERNEL_ADDRESS;
+ * an i386 call on x86-64 passes both range checks. Return whether all match. */
+static int scalar_count_ends(int rd, int wr, int faults)
+{
+    void *buf = (void *)(uintptr_t)0x10000;
+    int ok, range = faults ? EFAULT : EINVAL;
+    long wrote, read_at, wrote_at;
+
+    ok = refused(PREAD_WIDE(rd, buf, 0x7ffff001u, 0x80000fffu, 0x7fffffffu), EINVAL) &&
+         refused(PWRITE_WIDE(wr, buf, 0x7ffff001u, 0x80000fffu, 0x7fffffffu), EINVAL) &&
+         PREAD_WIDE(rd, buf, 0x7ffff000u, 0x80000fffu, 0x7fffffffu) == 0 &&
+         PWRITE_WIDE(wr, buf, 0x7ffff000u, 0x80000fffu, 0x7fffffffu) == 0x7ffff000L;
+    ok = ok && refused(PREAD_WIDE(rd, buf, (size_t)-1, 0xffffffffu, 0x7fffffffu), range) &&
+         refused(PWRITE_WIDE(wr, buf, (size_t)-1, 0xffffffffu, 0x7fffffffu), range);
+    wrote = syscall(SYS_write, wr, KERNEL_ADDRESS, 0);
+    ok = ok && (faults ? refused(wrote, EFAULT) : wrote == 0);
+    read_at = PREAD_WIDE(rd, KERNEL_ADDRESS, 0, 0, 0);
+    ok = ok && (faults ? refused(read_at, EFAULT) : read_at == 0);
+    wrote_at = PWRITE_WIDE(wr, KERNEL_ADDRESS, 0, 0, 0);
+    return ok && (faults ? refused(wrote_at, EFAULT) : wrote_at == 0);
+}
+
+/** Check write, pread64 and pwrite64 before the transfer limit is applied.
+ * The native i686 kernel rejects signed counts and ranges as read_raw_count
+ * describes; the compat calls use the x86-64 kernel's limits. Close every
+ * descriptor before returning whether the rows passed. */
+static int scalar_raw_count(void)
+{
+    int errors[] = {EFAULT, 0, 0, 0};
+    int rd = open("/dev/null", O_RDONLY), wr = open("/dev/null", O_WRONLY);
+    int dirfd = open("/", O_RDONLY), ep = epoll_create1(0), pipefd[2] = {-1, -1};
+    int ok;
+
+#if !defined __x86_64__
+    if (getenv("ETUDE_KERNEL") != NULL && strcmp(getenv("ETUDE_KERNEL"), "x86_64") == 0) {
+        errors[0] = 0;
+    } else {
+        errors[1] = EFAULT;
+        errors[2] = EINVAL;
+    }
+#endif
+    ok = rd >= 0 && wr >= 0 && dirfd >= 0 && ep >= 0 && pipe(pipefd) == 0 &&
+         scalar_count_access(rd, wr, ep, pipefd) && scalar_count_ranges(rd, wr, dirfd, errors) &&
+         scalar_count_ends(rd, wr, errors[0] != 0);
+    close(pipefd[0]);
+    close(pipefd[1]);
+    close(ep);
+    close(dirfd);
+    close(wr);
+    close(rd);
+    return ok;
+}
+
 /**
  * Check the refusals of preadv and pwritev on the file vector_rows makes,
  * writev's cut of a vector past 2 GiB (`writev_cut`) and its vector of no
@@ -1104,6 +1206,9 @@ static int vector_refusal_rows(void)
     }
     if (!read_raw_count()) {
         return fail("read does not validate its original count before cutting the transfer");
+    }
+    if (!scalar_raw_count()) {
+        return fail("write, pread64 or pwrite64 does not check the raw count before the cut");
     }
     report_held();
     return 0;
