@@ -741,13 +741,18 @@ void _isr_router(isr_params_t *params)
 /** Dispatch a saved frame with the big lock held; isr_leave releases it. */
 void isr_router_locked(isr_params_t *params)
 {
-    bkl_note_entry((uint32_t)params->vector,
-                   params->vector == SYSCALL_ENTRY ? (int32_t)SC_NR(params) : -1);
+    int32_t nr = params->vector == SYSCALL_ENTRY ? (int32_t)SC_NR(params) : -1;
+    struct bkl_entry_saved saved;
+
+    bkl_note_entry((uint32_t)params->vector, nr);
+    bkl_entry_push(&saved, (uint32_t)params->vector, nr, nr == SYS_IOCTL && !SC_COMPAT(params),
+                   (uint32_t)SC_ARG(params, 1));
 #ifdef DEBUG
     klog(KLOG_DEBUG, "isr", "interrupt: vector 0x%X", params->vector);
 #endif
 
     _dispatch(params);
+    bkl_entry_pop(&saved);
 }
 
 /**
@@ -850,8 +855,12 @@ static int tick_waits(void)
  */
 static void irq_dispatch(isr_params_t *params)
 {
+    struct bkl_entry_saved saved;
+
     irq_enter();
+    bkl_entry_push(&saved, (uint32_t)params->vector, -1, 0, 0);
     _dispatch(params);
+    bkl_entry_pop(&saved);
     irq_leave();
 }
 

@@ -156,17 +156,27 @@ A write of anything zeroes the counts.
 Mode 0644.
 A profile of the kernel under the big lock, a Rach2 file: each processor's
 tick that finds the processor holding the lock, at 1000 Hz, takes a
-sample of the instruction it stopped and that function's caller, from the
-frame chain, 0 when there is none.
+sample of the instruction it stopped and the three return addresses above
+it, from the frame chain, 0 past its end, with the entry the running
+process is in: its innermost system call, interrupt or exception, as
+.Pa bkl/calls
+names it,
+.Ql ioctl
+and the request for an
+.Xr ioctl 2 ,
+or
+.Ql kernel 0
+for none, as in a kernel thread.
 Code that runs with interrupts off is not sampled.
-The text is the samples; those lost, whose instruction and caller found
-none of the 32 slots their hash names among the 2048 free or their own,
-which can happen while most slots are free; and a line for each
-instruction and caller sampled, with its count, in no order:
+The text is the samples; those lost, whose entry, instruction and callers
+found none of the 32 slots their hash names among the 16384 free or their
+own, which can happen while most slots are free; and a line for each
+entry, instruction and callers sampled, with its count, in no order:
 .Bd -literal -offset indent
 samples 5120
 lost 0
-0xffffffff8012a3c4 0xffffffff80131f08 37
+syscall 9 0xffffffff8012a3c4 0xffffffff80131f08 0xffffffff8013a210 0xffffffff80100e7c 37
+ioctl 0xc0406469 0xffffffff8024b1d0 0xffffffff80250c44 0xffffffff8024e9a8 0xffffffff80245f10 12
 .Ed
 .Pp
 The kernel's symbol table names the functions.

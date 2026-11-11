@@ -282,6 +282,11 @@ struct process {
      * handler that switches away is left only when the process it
      * interrupted runs again. */
     uint32_t irq_depth;
+    /* The innermost entry under way on this process's stack, which a sample
+     * of debugfs's bkl/profile names (`bkl_entry_push` in smp.c): its key
+     * plus one, 0 for none, and its ioctl request for BKL_PROFILE_IOCTL. */
+    uint32_t bkl_entry;
+    uint32_t bkl_cmd;
     /* The resource limits `prlimit64` keeps, by the RLIM_ slots: threads of
      * the real user, open descriptors, and in bytes the address space, the
      * stack, a core file, a file written and memory locked; soft and hard,

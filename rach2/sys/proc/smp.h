@@ -135,10 +135,34 @@ void smp_hold_sample(uint64_t *age_us, uintptr_t pc[BKL_SAMPLE_PCS]);
  * interrupt came that late. The caller holds the big lock. */
 void smp_hold_early(int mark, uint64_t *age_us, uintptr_t pc[BKL_SAMPLE_PCS]);
 
-/* The ioctl requests the call counts (`smp_calls_show`) keep apart, and the
- * slots of the profile of kernel time under the big lock. */
-#define BKL_IOCTL_SLOTS   256
-#define BKL_PROFILE_SLOTS 2048
+/* The ioctl requests the call counts (`smp_calls_show`) keep apart, the
+ * slots of the profile of kernel time under the big lock, and the frames a
+ * profile's sample keeps: the instruction and three callers. */
+#define BKL_IOCTL_SLOTS    256
+#define BKL_PROFILE_SLOTS  16384
+#define BKL_PROFILE_FRAMES 4
+
+/* The profile's key for an ioctl, which keeps its request beside it; the
+ * keys below it are those of `smp_entry_hold`. */
+#define BKL_PROFILE_IOCTL BKL_ENTRY_KEYS
+
+/* A process's entry as `bkl_entry_push` replaced it. */
+struct bkl_entry_saved {
+    uint32_t entry;
+    uint32_t cmd;
+};
+
+/** Mark the current process, if any, as in the entry by `vector`, the system
+ * call `nr` for 0x80 and -1 otherwise, which `bkl_profile_sample` keys its
+ * samples by, and keep the entry it was in at `saved`. `ioctl` set marks the
+ * call as ioctl request `cmd`. A router calls it before its handlers and
+ * `bkl_entry_pop` after them, on the same process, which keeps the mark
+ * while it sleeps and gets it back on any processor. */
+void bkl_entry_push(struct bkl_entry_saved *saved, uint32_t vector, int32_t nr, int ioctl,
+                    uint32_t cmd);
+
+/** Put back the entry `bkl_entry_push` replaced. */
+void bkl_entry_pop(const struct bkl_entry_saved *saved);
 
 /** Charge the hold under way on this processor, the outermost entry's, to
  * ioctl request `cmd` as well as to the call, and return the request's slot
@@ -154,8 +178,9 @@ void smp_call_end(uint32_t nr, int ioctl, uint64_t start);
 
 /** Count a sample of the kernel's time under the big lock: the tick found
  * this processor holding it at `pc`, with the frame pointer `fp`, which
- * gives its caller. Nothing when this processor took the lock for the tick
- * itself, from user mode or an idle wait. */
+ * gives its callers, in the current process's entry (`bkl_entry_push`).
+ * Nothing when this processor took the lock for the tick itself, from user
+ * mode or an idle wait. */
 void bkl_profile_sample(uintptr_t pc, uintptr_t fp);
 
 /** Write the call counts as debugfs's `bkl/calls` shows them, as far as `cap`
@@ -170,8 +195,8 @@ int32_t smp_calls_show(void *data, char *buf, uint32_t cap);
 int32_t smp_calls_store(void *data, const char __user *buf, uint32_t len);
 
 /** Write the profile as debugfs's `bkl/profile` shows it: the samples, those
- * a full table lost, and each sampled instruction with its caller and its
- * count. The caller holds the big lock. */
+ * a full table lost, and for each entry, instruction and three callers
+ * sampled, its count. The caller holds the big lock. */
 int32_t smp_profile_show(void *data, char *buf, uint32_t cap);
 
 /** Zero the profile; `len`. */
