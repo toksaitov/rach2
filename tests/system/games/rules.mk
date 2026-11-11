@@ -9,15 +9,16 @@ $(GAMES_DIR)/probes.tar: tests/system/games/build.sh tests/system/games/probe.h 
 	sh tests/system/games/build.sh $@
 
 $(GAMES_DIR)/bundle.tar: $(GAMES_DIR)/probes.tar tests/system/games/run.py tests/system/games/wm.py \
-                         tests/system/games/crysis.py tests/system/games/gpu.sh tests/system/games/ref/linux.json \
+                         tests/system/games/crysis.py tests/system/games/gpu.sh tests/system/games/trip.py \
+                         tests/system/games/trip.sh tests/system/games/ref/linux.json \
                          vendor/gnu/games/rach2-game.sh
 	@set -e; work=; \
 	trap '[ -z "$$work" ] || rm -rf "$$work"; rm -f "$@.tmp"' EXIT; \
 	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; \
 	mkdir -p build/tmp; work=$$(mktemp -d build/tmp/rach2-games-payload.XXXXXX); \
 	mkdir "$$work/ref"; tar -xf $< -C "$$work"; \
-	cp tests/system/games/run.py tests/system/games/wm.py tests/system/games/crysis.py \
-	    tests/system/games/gpu.sh \
+	cp tests/system/games/run.py tests/system/games/wm.py tests/system/games/crysis.py tests/system/games/gpu.sh \
+	    tests/system/games/trip.py tests/system/games/trip.sh \
 	    vendor/gnu/games/rach2-game.sh "$$work/"; \
 	cp tests/system/games/ref/linux.json "$$work/ref/"; \
 	tar -cf $@.tmp -C "$$work" .; mv $@.tmp $@
