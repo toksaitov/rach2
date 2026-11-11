@@ -1487,9 +1487,20 @@ process is dumpable, and to root otherwise, as on Linux;
 .Xr ps 1
 and
 .Xr top 1
-read a process's user from the directory's owner, and
+read a process's user from the directory's owner.
+A
+.Xr stat 2
+of a path works the owner out afresh, while a file, or a descriptor's
+.Pa fdinfo
+file, keeps the owner the last lookup of its path gave it, as a Linux
+inode does: an
 .Xr fstat 2
-of a descriptor open on one of the files reports the same owner.
+of a descriptor open on one reports the owner its open found, or a later
+.Xr stat 2
+of the same path, so a descriptor opened before
+.Dv PR_SET_DUMPABLE
+reports root until a path reaches the file again, and it keeps that owner
+after the process exits.
 The directories of
 .Pa /proc
 are the processes the reader's PID namespace has, named by their numbers

@@ -8403,7 +8403,7 @@ static int synth_proc_writable(int procfile)
  * group are kept on the pty, where the login server's chown and chmod put
  * them.
  */
-static int32_t synth_stat(const struct vpath *vp, struct kstat *kst, int follow)
+static int32_t synth_stat_node(const struct vpath *vp, struct kstat *kst, int follow)
 {
     uint32_t mode = 0, rdev = 0, ino = 0;
 
@@ -8673,6 +8673,24 @@ static int32_t synth_stat(const struct vpath *vp, struct kstat *kst, int follow)
     default:
         return -ENOENT;
     }
+}
+
+/**
+ * Fill `kst` for the node `vp` as a lookup of its path finds it
+ * (`synth_stat_node`). A lookup that finds a file of /proc/<pid> or an
+ * fdinfo file gives the descriptors open on it the owner it reports, as
+ * Linux's walk sets the owner of the inode they share
+ * (`procfs_lookup_owner`); the fstat of a descriptor takes
+ * `synth_stat_node`, which sets nothing.
+ */
+static int32_t synth_stat(const struct vpath *vp, struct kstat *kst, int follow)
+{
+    int32_t rc = synth_stat_node(vp, kst, follow);
+
+    if (rc == 0 && (vp->kind == VNODE_PROC_FILE || vp->kind == VNODE_PROC_FDINFO)) {
+        procfs_lookup_owner(vp);
+    }
+    return rc;
 }
 
 /**
@@ -9861,10 +9879,12 @@ static int32_t fstat_anon(fd_entry_t *entry, struct kstat *kst)
  * A devfs device reports the identity a stat of its /dev path gives, the
  * mode included, and the console that of /dev/console, which ttyname
  * compares. A /proc file is a regular file of mode 0444 whose inode is that
- * of the path it was opened by and whose owner is the one `synth_pid_owner`
- * gives; oom_score_adj, the user namespace's maps and a file a privileged
- * caller may write have mode 0644, and a /sys file is on sysfs with a size
- * of 4096.
+ * of the path it was opened by; a file of a process, or an fdinfo file, is
+ * owned as the last lookup of its path found it (`procfs_fd_owner`), the
+ * open's own or a later stat's, as Linux's inode keeps the owner its
+ * lookup set, and any other is root's; oom_score_adj, the user
+ * namespace's maps and a file a privileged caller may write have mode 0644,
+ * and a /sys file is on sysfs with a size of 4096.
  *
  * A /dev, /proc or /sys directory reports what a stat of its path gives,
  * from the descriptor's record of its kind, process and thread, or a bare
@@ -9958,7 +9978,7 @@ static int32_t fstat_fill_attrs(fd_entry_t *entry, struct kstat *kst)
         struct vpath vp;
 
         synth_dir_vpath((const struct synth_dir *)entry->priv, &vp);
-        if (synth_stat(&vp, kst, 1) != 0) {
+        if (synth_stat_node(&vp, kst, 1) != 0) {
             kst->st_mode = S_IFDIR | 0555;
             kst->st_nlink = 1;
             kst->st_blksize = 4096;
@@ -9970,7 +9990,7 @@ static int32_t fstat_fill_attrs(fd_entry_t *entry, struct kstat *kst)
     } else if (entry->type == FD_TYPE_SYNTH_PATH) {
         const struct vpath *vp = (const struct vpath *)entry->priv;
 
-        if (!vp || synth_stat(vp, kst, 0) != 0) {
+        if (!vp || synth_stat_node(vp, kst, 0) != 0) {
             int dev = vp && (vp->kind == VNODE_DEV || vp->kind == VNODE_PTS);
 
             k_memset(kst, 0, sizeof(*kst));
@@ -9987,7 +10007,7 @@ static int32_t fstat_fill_attrs(fd_entry_t *entry, struct kstat *kst)
         k_memset(&vp, 0, sizeof(vp));
         vp.kind = VNODE_PTS;
         vp.pts_index = pty_slave_index(entry);
-        if (synth_stat(&vp, kst, 1) != 0) {
+        if (synth_stat_node(&vp, kst, 1) != 0) {
             kst->st_mode = 020620; /* S_IFCHR | 0620 */
             kst->st_nlink = 1;
             kst->st_blksize = 4096;

@@ -304,10 +304,20 @@ int procfs_pid_owner(int pid, uint32_t mode, uint32_t *uid, uint32_t *gid);
  * such process. */
 int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid);
 
-/** The same owner for a descriptor open on a file of /proc/<pid>, into
- * `*uid` and `*gid`: 1 for oom_score_adj, uid_map, gid_map and setgroups,
- * whose mode lets the owner write them, and 0 for another file; -1 when `e`
- * is no such descriptor or its process is gone. */
+/** Give the descriptors open on the file `vp` names the owner a lookup of
+ * its path gives it now, `procfs_oom_owner`'s, when it is a file of
+ * /proc/<pid> outside its net directory or a descriptor's fdinfo file, as
+ * Linux's lookup of the path sets its inode's owner; any other node, and a
+ * process gone, change nothing. */
+void procfs_lookup_owner(const struct vpath *vp);
+
+/** The owner of a descriptor open on a file of /proc/<pid> or an fdinfo
+ * file, into `*uid` and `*gid`: what the last lookup of its path gave it
+ * (`procfs_lookup_owner`), the open's own among them, which a change of the
+ * process's dumpable flag or IDs since then leaves as it was, and which
+ * stays once the process is gone. Returns 1 for oom_score_adj, uid_map,
+ * gid_map, setgroups and comm, whose mode lets the owner write them, and 0
+ * for another file; -1 when `e` is no such descriptor. */
 int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid);
 
 /** The permission bits of `e` when it is open on a /proc/sys or /sys file,
