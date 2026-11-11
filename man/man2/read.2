@@ -186,10 +186,13 @@ with the bytes of the buffers before it, or
 and every byte of its own buffer stays queued, as Linux's
 .Fn pipe_read
 leaves it.
-A stream socket takes the bytes queued as one segment: a page that cannot
-be written gives
-.Er EFAULT
-with every byte left queued.
+A stream socket takes its bytes one receive buffer of the connection at a
+time, as
+.Xr recv 2
+describes: a buffer whose destination cannot be written, or lies outside
+user space, stays queued whole and ends the call with the bytes of the
+buffers before it, or
+.Er EFAULT .
 A datagram socket gives
 .Er EFAULT
 when any copy of the datagram fails, and the datagram is consumed.
