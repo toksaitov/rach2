@@ -14,14 +14,14 @@
     "mkdir -p /tmp/games /tmp/.X11-unix /data && chmod 1777 /tmp/.X11-unix && " \
     "mount -t ext2 -o ro /dev/disk1 /tmp/games && "
 
-/* The first boot makes the data partition's file system as rach2-install
- * --data does, gives the account its directory, as /data/crysis is given,
- * and runs the save row; the second runs the load row and checks the volume
- * once it is unmounted. Each unmounts /data before the scenario cuts the
- * power, so that the restart is cold and the volume clean. */
+/* The first boot gives the account its directory on the data volume, as
+ * /data/crysis is given, and runs the save row; the second runs the load row
+ * and checks the volume once it is unmounted. The host makes the volume, as
+ * the ordinary kernel refuses raw writes (disk(7)). Each boot unmounts /data
+ * before the scenario cuts the power, so that the restart is cold and the
+ * volume clean. */
 static const char *const COMMANDS[] = {
     MOUNT_PAYLOAD
-    "mke2fs -q -t ext2 -T huge -L 'Rach2 data' /dev/disk2 && "
     "mount -t ext2 /dev/disk2 /data && install -d -o desktop -g desktop /data/games && "
     "{ su -s /bin/bash desktop -c 'python3 /tmp/games/save.py save /tmp/save-results'; "
     "s=$?; umount /data || s=98; exit $s; }",
