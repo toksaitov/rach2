@@ -386,6 +386,7 @@ static void timer_handler(isr_params_t *params)
 
     hda_tick();
     netdev_poll();
+    netconsole_tick();
     ath9k_poll();
     tcp_tick();
     ip_frag_tick();
@@ -2037,7 +2038,9 @@ static int shutdown_never(void *arg)
  * The goodbye line is a log record and not a console line, so that it reaches
  * the serial port, the ring and netconsole, and the screen too on a boot that
  * did not give the screen to init: a machine read over netconsole has no
- * screen, and this is the last line it sends. The USB controller and then
+ * screen, and this is the last line it sends. `netconsole_shutdown` then sends
+ * it with what a sender still held for its link's start, which no later
+ * record would send (`netconsole_flush`). The USB controller and then
  * every network card are stopped after it, so that no device writes into its
  * rings while the machine stops; a card sends what it was given before it is
  * silenced, so the goodbye line is sent and not only queued, and the records
@@ -2086,6 +2089,7 @@ void kernel_shutdown(int how)
         klog(KLOG_INFO, "shutdown", "root: not on a disk; nothing to unmount");
     }
     klog(KLOG_INFO, "shutdown", "Stopping the system. Goodbye!");
+    netconsole_shutdown();
     usb_stop();
     {
         int i;
