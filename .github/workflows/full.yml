@@ -1,6 +1,8 @@
 # The release tests of tools/flow/release.sh: every suite of both
-# architectures at the commit SHA, its in-house code built from clean, or only
-# the ARCH:SUITE words of `suites`. The commit's tools/ci/site selects the runner and accelerator.
+# architectures at the commit SHA, its in-house code built from clean, and the
+# i686 cases on the x86-64 kernel, `ia32`, or only the ARCH:SUITE words of
+# `suites`, ARCH being i686, x86_64 or ia32. The commit's tools/ci/site
+# selects the runner and accelerator.
 # The failures go to the artifact `failures`, one ARCH:ITEM a line, which
 # release.sh downloads. Native preparation, execution and cleanup share the
 # four-hour ceiling.
@@ -18,7 +20,7 @@ on:
         required: false
         default: ''
       suites:
-        description: Only these suites, as ARCH:SUITE words; empty for every suite
+        description: Only these suites, as ARCH:SUITE words, ARCH being i686, x86_64 or ia32; empty for every suite
         required: false
         default: ''
 
@@ -56,8 +58,8 @@ jobs:
           set -f
           for w in $SUITES; do
               case "$w" in
-                  i686:*[!a-z0-9-]*|x86_64:*[!a-z0-9-]*|i686:|x86_64:) ;;
-                  i686:*|x86_64:*) continue ;;
+                  i686:*[!a-z0-9-]*|x86_64:*[!a-z0-9-]*|ia32:*[!a-z0-9-]*|i686:|x86_64:|ia32:) ;;
+                  i686:*|x86_64:*|ia32:*) continue ;;
               esac
               echo "full: refused: '$w' is not ARCH:SUITE" >&2
               exit 1
@@ -89,7 +91,7 @@ jobs:
           fi
 
   full:
-    name: Build and test both architectures on ${{ needs.site.outputs.runner }} under ${{ needs.site.outputs.accelerator }}
+    name: Build and test both architectures and ia32 on ${{ needs.site.outputs.runner }} under ${{ needs.site.outputs.accelerator }}
     needs: site
     runs-on: ${{ fromJSON(needs.site.outputs.labels) }}
     timeout-minutes: 270
@@ -143,7 +145,7 @@ jobs:
           export RACH2_CASES
           tests/run style
 
-      - name: Build and test both architectures
+      - name: Build and test both architectures and the i686 cases on the x86-64 kernel
         env:
           ARCH: i686 x86_64
           SUITES: ${{ inputs.suites }}
@@ -188,6 +190,18 @@ jobs:
           path: |
             ${{ env.ETUDE_RESULTS }}/full-x86_64
             !${{ env.ETUDE_RESULTS }}/full-x86_64/kept/*/copies
+          retention-days: 3
+
+      - name: Upload the ia32 logs
+        if: ${{ always() && steps.retention.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: full-ia32
+          # The native entry writes no full-ia32.
+          path: |
+            ${{ env.ETUDE_RESULTS }}/full-ia32
+            !${{ env.ETUDE_RESULTS }}/full-ia32/kept/*/copies
+          if-no-files-found: ignore
           retention-days: 3
 
       - name: Write down the failures
