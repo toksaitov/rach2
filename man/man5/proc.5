@@ -2283,7 +2283,13 @@ to it gives the caller a root that holds nothing, the empty root of a
 file system no path reaches.
 .It Pa /proc/PID/ns
 A directory of mode 0511, owned by the process's effective IDs while it
-is dumpable and by root otherwise, with six links,
+is dumpable and by root otherwise, which an open for reading checks as
+the mode says, so that a caller other than its owner and root gets
+.Er EACCES ,
+the process itself among them once it is not dumpable;
+.Dv O_PATH
+opens it for anyone.
+It has six links,
 .Pa user ,
 .Pa pid ,
 .Pa mnt ,

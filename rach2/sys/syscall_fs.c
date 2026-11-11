@@ -2290,6 +2290,7 @@ static void ofd_record_path(struct open_file *ofd, const char *name)
 }
 
 static int32_t synth_open_dir(const struct vpath *vp, int flags);
+static uint32_t synth_pid_dir_mode(const struct vpath *vp);
 
 /** Whether `m` is one of the permanent mounts (VFS_PERMANENT), the system's
  * /dev, /proc and /sys among them. */
@@ -3040,6 +3041,25 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     }
 }
 
+/** Check an open with `flags` of the synthetic directory at `vp`, of
+ * process `pid`, against an ns directory's mode, 0511, and the owner stat
+ * reports (`procfs_pid_owner`), as Linux's generic_permission answers a
+ * read: 0 for another directory or an O_PATH open, which reads nothing, or
+ * for a caller the mode lets read it; -EACCES for a caller other than its
+ * owner and root, or -ENOENT for a process that is gone. */
+static int32_t proc_ns_dir_read(const struct vpath *vp, int pid, int flags)
+{
+    uint32_t mode = synth_pid_dir_mode(vp), uid, gid;
+
+    if (vp->kind != VNODE_PROC_NS_DIR || (flags & O_PATH)) {
+        return 0;
+    }
+    if (procfs_pid_owner(pid, mode, &uid, &gid) != 0) {
+        return -ENOENT;
+    }
+    return cred_access_bits(uid, gid, mode, CRED_R, 0);
+}
+
 /**
  * Open a synthetic directory (/dev, /proc, /proc/<pid> and its fd, fdinfo
  * and ns, a thread's under /proc/<pid>/task, a directory of /proc/sys or of
@@ -3055,7 +3075,9 @@ static int32_t synth_open(const struct vpath *vp, int flags)
  * exclusive create also asks for write access; then write access, or
  * O_CREAT, which asks for a file, is -EISDIR. Another user's /proc/PID/fd
  * and /proc/PID/fdinfo are -EACCES, as Linux keeps a process's descriptors
- * to those who may trace it (`procfs_may_read`). A process, or a device of
+ * to those who may trace it (`procfs_may_read`). /proc/PID/ns, a thread's
+ * among them, is read by its mode and owner (`proc_ns_dir_read`); O_PATH in
+ * `flags`, which reads nothing, skips that check. A process, or a device of
  * /sys, that is gone is -ENOENT, as is a directory of /dev that is absent
  * (`devfs_subdir_present`), and a record the heap has no room for is
  * -ENFILE. A directory made under /dev is one the caller found there.
@@ -3083,6 +3105,10 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
     }
     if ((flags & 3) != 0 || (flags & O_CREAT)) {
         return -EISDIR;
+    }
+    fd = proc_ns_dir_read(vp, pid, flags);
+    if (fd != 0) {
+        return fd;
     }
     if ((vp->kind == VNODE_SYS_DIR || vp->kind == VNODE_SYS_LINK) && SYSFS_KEYED(vp->sysent) &&
         !sysfs_device_exists(vp->sysent, vp->syskey)) {
@@ -8619,7 +8645,7 @@ static int32_t synth_open_path(const struct vpath *vp, const char *name, int fla
         return -ENOENT;
     }
     if ((kst.st_mode & S_IFMT) == S_IFDIR) {
-        fd = synth_open_dir(vp, flags & O_CLOEXEC);
+        fd = synth_open_dir(vp, (flags & O_CLOEXEC) | O_PATH);
         if (fd >= 0) {
             e = &current_proc->fds->entries[fd];
             e->flags = (e->flags & FD_FLAG_CLOEXEC) | FD_FLAG_PATH;
