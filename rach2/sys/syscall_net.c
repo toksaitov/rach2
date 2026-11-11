@@ -1916,14 +1916,14 @@ static int32_t do_listen(int fd, int backlog)
  * The descriptor is reserved before the connection is dequeued, under
  * `net_lock` with the listener checked again, so a sharer that took the
  * connection or stopped the listener meanwhile sends the call back to wait
- * or fail, and a caller
- * with none free leaves it queued, and gets its socket only after the
- * address is copied out: the copy can sleep, and a thread sharing the table
- * must find nothing it could use or close. A copy that fails frees the slot
- * and the connection, and so does an address with no length pointer, which
- * is EFAULT, as in Linux. The address is truncated to the caller's declared
- * length (`copy_sockaddr_to_user`). The queued socket has the reference it
- * was queued with (`socket_tcp_accept`), which the new descriptor takes over.
+ * or fail, and a caller with none free leaves it queued, and gets its
+ * socket only after the address is copied out: the copy can sleep, and a
+ * thread sharing the table must find nothing it could use or close. A copy
+ * that fails frees the slot and the connection, and so does an address
+ * with no length pointer, which is EFAULT, as in Linux. The address is
+ * truncated to the caller's declared length (`copy_sockaddr_to_user`). The
+ * queued socket has the reference it was queued with (`socket_tcp_accept`),
+ * which the new descriptor takes over.
  */
 static int32_t do_accept(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr, uint32_t flags)
 {
