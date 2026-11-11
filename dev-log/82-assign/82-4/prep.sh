@@ -60,7 +60,7 @@ n=0
 while [ ! -b ${nbd}p1 ] && [ $n -lt 20 ]; do sleep 0.5; n=$((n + 1)); done
 mount ${nbd}p1 $img
 grep -q '^gfx:' $img/etc/passwd || fail 'the guest has no gfx'
-for f in /usr/bin/weston /usr/bin/glmark2-wayland /usr/bin/glmark2-es2-wayland /usr/bin/seatd; do
+for f in /usr/bin/weston /usr/bin/glmark2-wayland /usr/bin/glmark2-es2-wayland /usr/sbin/seatd; do
     [ -x $img$f ] || fail "the guest has no $f"
 done
 install -m 755 "$here/g82.sh" $img/usr/local/sbin/g82.sh
