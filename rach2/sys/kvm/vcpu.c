@@ -701,7 +701,6 @@ static int32_t run_enter(struct kvm_vcpu *v)
         return -EAGAIN;
     }
     v->has_run = 1;
-    v->at_boundary = 0;
     depth = bkl_drop();
     r = kvm_backend->enter(v);
     v->mode = KVM_MODE_OUTSIDE;
@@ -795,7 +794,11 @@ static void vcpu_sched_out(void *arg)
  * thousands of times a second, and giving the processor away at each exit
  * cost the vCPU up to a slice each time. The steal time says preempted
  * when that switch, or any other that leaves the thread able to run, goes
- * to another thread (`vcpu_sched_out`).
+ * to another thread (`vcpu_sched_out`), and only for a switch at the loop's
+ * top after an exit for a host interrupt: the loop clears `at_boundary`
+ * right after it, as Linux clears at_instruction_boundary at the top of
+ * vcpu_run's loop, since the work before the next entry may start an
+ * instruction of the guest's.
  * Returns 0 with `exit_reason` set,
  * -EINTR with it KVM_EXIT_INTR for a signal or a kick, or -errno.
  */
@@ -813,6 +816,7 @@ static int32_t run_loop(struct kvm_vcpu *v)
     for (;;) {
         flags = kirq_save();
         sched_take_preempt();
+        v->at_boundary = 0; /* the steps below may start an instruction */
         kirq_restore(flags);
         if (kvm_vcpu_test_clear(v, KVM_REQ_TRIPLE_FAULT)) {
             run->exit_reason = KVM_EXIT_SHUTDOWN;

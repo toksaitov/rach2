@@ -569,8 +569,9 @@ struct kvm_vcpu {
     int if_flag;     /* RFLAGS.IF */
     int irq_allowed; /* an interrupt can be injected at the next entry */
     /* Set by the backend after an exit for a host interrupt, cleared at
-     * each entry, Linux's at_instruction_boundary: the guest stopped
-     * between two instructions, so its record may say it was preempted. */
+     * the run loop's top after its switch, before the work of the next
+     * entry, Linux's at_instruction_boundary: the guest stopped between
+     * two instructions, so its record may say it was preempted. */
     int at_boundary;
 
     /* The steps each vector's interrupts reached, by enum kvm_vec_step,
