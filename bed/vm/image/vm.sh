@@ -336,10 +336,12 @@ sudo install -m 755 bed/vm/backend/vgpu-backend /usr/local/sbin/vgpu-backend
 sudo tee /usr/local/sbin/bed-vm-backend > /dev/null <<'RUN'
 #!/bin/sh
 # bed-vm-backend: serve the ivshmem device to Rach2 until the VM stops.
-# Venus renders on the Intel GPU the VM was given, once i915 has made its
-# render node, through Mesa's Intel Vulkan drivers alone; without one, on
-# lavapipe. GL stays on llvmpipe either way.
+# GL and Venus render on the Intel GPU the VM was given, once i915 has made
+# its render node: GL on the node, which Mesa's surfaceless EGL finds
+# first, and Venus through Mesa's Intel Vulkan drivers alone. Without one,
+# GL renders on llvmpipe and Venus on lavapipe.
 insmod /usr/local/lib/vgpushm.ko || exit 1
+soft=1
 for d in /sys/bus/pci/devices/*; do
     [ "$(cat "$d/vendor")" = 0x8086 ] || continue
     case $(cat "$d/class") in 0x03*) ;; *) continue ;; esac
@@ -349,6 +351,10 @@ for d in /sys/bus/pci/devices/*; do
         i=$((i + 1))
     done
     icds=$(ls /usr/share/vulkan/icd.d/intel_*icd*.json 2>/dev/null | tr '\n' : | sed 's/:$//')
+    if ls "$d"/drm/renderD* > /dev/null 2>&1; then
+        soft=''
+        echo "bed-vm: gpu: ${d##*/}: GL on $(ls "$d"/drm | grep renderD)" > /dev/ttyS0
+    fi
     if ls "$d"/drm/renderD* > /dev/null 2>&1 && [ -n "$icds" ]; then
         export VK_DRIVER_FILES="$icds"
         echo "bed-vm: gpu: ${d##*/} on $(readlink "$d/driver" | sed 's|.*/||'), Venus on $icds" > /dev/ttyS0
@@ -357,7 +363,8 @@ for d in /sys/bus/pci/devices/*; do
     fi
     break
 done
-LIBGL_ALWAYS_SOFTWARE=1 /usr/local/sbin/vgpu-backend -v 2>&1 | sed -u 's/^/bed-vm: /' > /dev/ttyS0
+[ -z "$soft" ] || export LIBGL_ALWAYS_SOFTWARE=1
+/usr/local/sbin/vgpu-backend -v 2>&1 | sed -u 's/^/bed-vm: /' > /dev/ttyS0
 RUN
 sudo chmod 755 /usr/local/sbin/bed-vm-backend
 sudo tee /etc/systemd/system/bed-vm-backend.service > /dev/null <<'UNIT'
