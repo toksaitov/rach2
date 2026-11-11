@@ -465,16 +465,17 @@ static void test_after_fin(void)
 /**
  * After the peer's FIN, a segment that starts before the next expected
  * number and whose data runs past the FIN ends the connection, as Linux's
- * tcp_rcv_state_process ends it with tcp_reset, counted in TCPAbortOnData:
- * in CLOSE_WAIT with EPIPE and nothing sent, and in LAST_ACK, after the
- * program's close, by freeing the block. The FIN sent again alone is
+ * tcp_rcv_state_process ends it with tcp_reset, counted in TCPAbortOnData,
+ * and is answered with a reset at its acknowledgement number, as
+ * tcp_v4_do_rcv sends it: in CLOSE_WAIT with EPIPE, and in LAST_ACK, after
+ * the program's close, by freeing the block. The FIN sent again alone is
  * acknowledged and ends nothing.
  */
 static void test_data_past_fin(void)
 {
     struct socket sock;
     struct tcb *conn;
-    uint32_t nxt, aborts = net_mib.tcp_abort_on_data;
+    uint32_t nxt, snd, aborts = net_mib.tcp_abort_on_data;
 
     reset_all();
     conn = open_conn(&sock, 6500);
@@ -486,9 +487,11 @@ static void test_data_past_fin(void)
           conn->state == TCP_CLOSE_WAIT && n_segs == 1 && segs[0].flags == F_ACK &&
               segs[0].ack == nxt + 1 && net_mib.tcp_abort_on_data == aborts);
     n_segs = 0;
-    rx_data(SELF_PORT, nxt, conn->snd_nxt, F_ACK, 4);
-    CHECK("data from the FIN's number past it ends the connection with EPIPE, sending nothing",
-          conn->state == TCP_CLOSED && conn->so_error == EPIPE && n_segs == 0 &&
+    snd = conn->snd_nxt;
+    rx_data(SELF_PORT, nxt, snd, F_ACK, 4);
+    CHECK("data from the FIN's number past it ends the connection with EPIPE and a reset",
+          conn->state == TCP_CLOSED && conn->so_error == EPIPE && n_segs == 1 &&
+              segs[0].flags == F_RST && segs[0].seq == snd &&
               net_mib.tcp_abort_on_data == aborts + 1);
     tcp_close(&sock);
 
@@ -499,9 +502,40 @@ static void test_data_past_fin(void)
     tcp_close(&sock);
     CHECK("a close in CLOSE_WAIT sends the FIN and leads to LAST_ACK",
           tcbs == conn && conn->state == TCP_LAST_ACK);
-    rx_data(SELF_PORT, nxt, conn->snd_una, F_ACK, 4);
-    CHECK("there data past the peer's FIN frees the block",
-          tcbs == 0 && net_mib.tcp_abort_on_data == aborts + 2);
+    n_segs = 0;
+    snd = conn->snd_una;
+    rx_data(SELF_PORT, nxt, snd, F_ACK, 4);
+    CHECK("there data past the peer's FIN frees the block and draws a reset",
+          tcbs == 0 && n_segs == 1 && segs[0].flags == F_RST && segs[0].seq == snd &&
+              net_mib.tcp_abort_on_data == aborts + 2);
+    reset_all();
+}
+
+/**
+ * After the program's close, data past the next expected number, which no
+ * program will read, ends the block with a reset at the segment's
+ * acknowledgement number, counted in TCPAbortOnData, as Linux ends a
+ * socket whose close set RCV_SHUTDOWN, here in FIN_WAIT_2 once the same
+ * segment acknowledged the FIN.
+ */
+static void test_data_after_close(void)
+{
+    struct socket sock;
+    struct tcb *conn;
+    uint32_t nxt, snd, aborts = net_mib.tcp_abort_on_data;
+
+    reset_all();
+    conn = open_conn(&sock, 6700);
+    nxt = conn->rcv_nxt;
+    tcp_close(&sock);
+    CHECK("a close sends the FIN and leads to FIN_WAIT_1",
+          tcbs == conn && conn->state == TCP_FIN_WAIT_1);
+    n_segs = 0;
+    snd = conn->snd_nxt;
+    rx_data(SELF_PORT, nxt, snd, F_ACK, 4);
+    CHECK("there new data frees the block and draws a reset at its acknowledgement",
+          tcbs == 0 && n_segs == 1 && segs[0].flags == F_RST && segs[0].seq == snd &&
+              net_mib.tcp_abort_on_data == aborts + 1);
     reset_all();
 }
 
@@ -609,10 +643,11 @@ static void test_syn_rcvd(void)
  * is answered with the SYN-ACK at once, counted in RetransSegs, and a
  * second in the same tick is not, counted in TCPACKSkippedSynRecv; an ACK
  * of another number is answered with a reset at that number and leaves the
- * block; a segment past the window offered draws an acknowledgement; and a
- * SYN at another number inside it is answered with a reset and frees the
- * block, counted in AttemptFails. The ACK that ends the handshake brings
- * its data and FIN with it, which are taken and acknowledged.
+ * block; a segment past the window offered draws an acknowledgement, and
+ * one with data draws another in the same tick, since Linux's
+ * tcp_oow_rate_limited holds back none with data and no SYN; and a SYN at
+ * another number inside it is answered with a reset and frees the block,
+ * counted in AttemptFails.
  */
 static void test_syn_rcvd_segments(void)
 {
@@ -648,14 +683,38 @@ static void test_syn_rcvd_segments(void)
           conn->state == TCP_SYN_RCVD && n_segs == 1 && segs[0].flags == F_ACK &&
               segs[0].seq == iss + 1 && segs[0].ack == 9001);
     n_segs = 0;
+    rx_data(SELF_PORT, 9001 + 200000, iss + 1, F_ACK, 4);
+    CHECK("and one with data in the same tick draws another, held back by no limit",
+          conn->state == TCP_SYN_RCVD && n_segs == 1 && segs[0].flags == F_ACK &&
+              net_mib.tcp_ack_skipped_syn_recv == skipped + 1);
+    n_segs = 0;
     rx(SELF_PORT, 9001 + 100, 0, F_SYN);
     CHECK("a SYN at another number in the window is answered with a reset and frees the block",
           n_segs == 1 && (segs[0].flags & F_RST) && tcbs != 0 && tcbs->next == 0 &&
               tcbs->state == TCP_LISTEN && unrefs == 1 && net_mib.tcp_attempt_fails == fails + 1);
 
+    tcp_close(&lsock);
+    reset_all();
+}
+
+/**
+ * The ACK that ends a passive open's handshake brings its data and FIN
+ * with it, which are taken and acknowledged, as Linux's
+ * tcp_rcv_state_process takes them once the child is made.
+ */
+static void test_syn_rcvd_ack_data(void)
+{
+    struct socket lsock;
+    struct tcb *conn;
+    uint32_t iss;
+
+    reset_all();
+    k_memset(&lsock, 0, sizeof(lsock));
+    lsock.type = SOCK_STREAM;
+    CHECK("a listener can be opened", tcp_listen(&lsock, SELF_PORT) == 0);
     rx(SELF_PORT, 9500, 0, F_SYN);
     conn = tcbs;
-    iss = segs[1].seq;
+    iss = segs[0].seq;
     n_segs = 0;
     rx_data(SELF_PORT, 9501, iss + 1, (uint8_t)(F_ACK | F_FIN), 4);
     CHECK("the ACK that ends the handshake brings its data and FIN, taken and acknowledged",
@@ -667,14 +726,19 @@ static void test_syn_rcvd_segments(void)
 
 /**
  * After a simultaneous open, as Linux's tcp_rcv_state_process judges
- * SYN_RCVD, an ACK of another number draws a reset at that number and the
- * peer's SYN-ACK ends the handshake.
+ * SYN_RCVD: an ACK of another number draws a reset at that number; a SYN
+ * outside the receive window draws a challenge acknowledgement, counted in
+ * TCPSYNChallenge, as tcp_validate_incoming answers it; and the peer's
+ * SYN-ACK ends the handshake. An ACK of the SYN's own number, snd_una,
+ * ends it too, with no reset, as tcp_ack takes it, and leaves the SYN
+ * unacknowledged, holding the send ring's slot until an ACK of it takes
+ * the slot and its retransmission.
  */
 static void test_syn_rcvd_simultaneous(void)
 {
     struct socket sock;
     struct tcb *conn;
-    uint32_t iss;
+    uint32_t iss, syns = net_mib.tcp_syn_challenge;
 
     reset_all();
     k_memset(&sock, 0, sizeof(sock));
@@ -689,9 +753,34 @@ static void test_syn_rcvd_simultaneous(void)
     CHECK("after a simultaneous open an ACK of another number draws a reset there",
           conn->state == TCP_SYN_RCVD && n_segs == 1 && segs[0].flags == F_RST &&
               segs[0].seq == iss + 2);
+    n_segs = 0;
+    rx(SELF_PORT, 7001 + 1000000, iss + 1, (uint8_t)(F_SYN | F_ACK));
+    CHECK("a SYN outside the window draws a challenge acknowledgement",
+          conn->state == TCP_SYN_RCVD && n_segs == 1 && segs[0].flags == F_ACK &&
+              segs[0].ack == 7001 && net_mib.tcp_syn_challenge == syns + 1);
     rx(SELF_PORT, 7000, iss + 1, (uint8_t)(F_SYN | F_ACK));
     CHECK("and the peer's SYN-ACK ends the handshake",
           conn->state == TCP_ESTABLISHED && cb_connected == 1);
+    tcp_close(&sock);
+
+    reset_all();
+    k_memset(&sock, 0, sizeof(sock));
+    sock.type = SOCK_STREAM;
+    sock.local_port = SELF_PORT;
+    CHECK("another open can be started", tcp_connect(&sock, net_addr4(PEER), PEER_PORT) == 0);
+    conn = sock.tcb;
+    iss = segs[0].seq;
+    rx(SELF_PORT, 7000, 0, F_SYN);
+    n_segs = 0;
+    rx(SELF_PORT, 7001, iss, F_ACK);
+    CHECK("an ACK of the SYN's own number ends the handshake with no reset",
+          conn->state == TCP_ESTABLISHED && cb_connected == 1 && n_segs == 0 &&
+              conn->snd_una == iss && conn->syn_unacked == 1 &&
+              conn->send_head - conn->send_ack == 1 && conn->retx_flags == (F_SYN | F_ACK));
+    rx(SELF_PORT, 7001, iss + 1, F_ACK);
+    CHECK("and an ACK of the SYN takes its slot and its retransmission",
+          conn->snd_una == iss + 1 && conn->syn_unacked == 0 && conn->send_head == conn->send_ack &&
+              conn->retx_flags == 0 && conn->rto_due == 0);
     tcp_close(&sock);
     reset_all();
 }
@@ -812,9 +901,11 @@ int main(void)
     test_established();
     test_after_fin();
     test_data_past_fin();
+    test_data_after_close();
     test_syn_sent();
     test_syn_rcvd();
     test_syn_rcvd_segments();
+    test_syn_rcvd_ack_data();
     test_syn_rcvd_simultaneous();
     test_listener_gone();
     test_isn();
