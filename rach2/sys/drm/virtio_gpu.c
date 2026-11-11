@@ -149,13 +149,15 @@ void vgpu_cmd_unfence(struct virtio_gpu_cmd *cmd)
     cmd->fence = NULL;
 }
 
-/** Free `cmd`, its pages and its hold on its fence. A fence never started,
- * which has no reference yet, is freed. Process context. */
+/** Free `cmd`, its pages and its hold on its fence, counting the bytes its
+ * transfers copied once the device has answered it OK. A fence never
+ * started, which has no reference yet, is freed. Process context. */
 void vgpu_cmd_free(struct virtio_gpu_cmd *cmd)
 {
     struct virtio_gpu_device *vg = cmd->vg;
     struct virtio_gpu_cmd **p;
     uint32_t flags, i;
+    uint64_t copied;
 
     flags = spin_lock_irqsave(&vg->lock);
     for (p = &vg->live; *p; p = &(*p)->live_next) {
@@ -164,7 +166,14 @@ void vgpu_cmd_free(struct virtio_gpu_cmd *cmd)
             break;
         }
     }
+    copied = cmd->done && cmd->resp_type >= VIRTIO_GPU_RESP_OK_NODATA &&
+                     cmd->resp_type < VIRTIO_GPU_RESP_ERR_UNSPEC
+                 ? cmd->copied
+                 : 0;
     spin_unlock_irqrestore(&vg->lock, flags);
+    if (copied) {
+        vgpu_count_copied(copied);
+    }
     for (i = 0; i < cmd->nextra; i++) {
         virtio_dma_free(vg->vdev, cmd->extra[i], PAGE_SIZE);
     }
@@ -873,7 +882,7 @@ static struct virtio_gpu_cmd *vgpu_transfer_cmd(struct virtio_gpu_device *vg, ui
         req->offset = offset;
         req->r = r;
         /* Every 2D format of virtio-gpu has 4 bytes a pixel. */
-        vgpu_count_copied((uint64_t)r.width * r.height * 4u);
+        cmd->copied = (uint64_t)r.width * r.height * 4u;
     }
     return cmd;
 }

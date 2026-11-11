@@ -1393,10 +1393,14 @@ Failed entries whose backend returns an error are excluded.
 .It Li virtio_gpu_copied_bytes
 Bytes that
 .Xr virtio-gpu 4
-has had its device copy between a resource and its backing since boot,
-both ways: each 2D transfer's rectangle at 4 bytes a pixel, and each 3D
-transfer's box at its virgl format's bytes a texel, 4 for a format other
-than the common 8-, 16-, 64- and 128-bit ones.
+has had its device copy between a resource and memory since boot, both
+ways, counted once the device has answered the command: each 2D
+transfer's rectangle at 4 bytes a pixel, and each 3D transfer's box by
+whole blocks of its virgl format, whether a transfer ioctl or a
+TRANSFER3D, COPY_TRANSFER3D or RESOURCE_INLINE_WRITE command of a virgl
+submission carried it.
+A box whose format has no block size, a planar or 3D ASTC one, or whose
+resource the submission does not list counts nothing.
 .It Li iommu_dma_faults , iommu_irq_faults
 DMA and interrupt faults reported by VT-d since boot, on x86-64.
 .It Li vfio_groups , vfio_devices , vfio_dma_mappings , vfio_dma_pages , vfio_dma_io_pages

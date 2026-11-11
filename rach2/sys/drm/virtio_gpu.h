@@ -551,6 +551,8 @@ struct virtio_gpu_cmd {
     uint32_t ring_idx;       /* with `ring`, the context's ring it goes on */
     int ring;                /* the fence is on a ring of a context */
     uint32_t resp_type;      /* the answer's type, once `done` */
+    uint64_t copied;         /* bytes its transfers have the device copy,
+                                counted when it is freed answered OK */
     int prepared;            /* the fence has its number and one reference */
     int queued;              /* started: its fence is live */
     int done;
@@ -828,10 +830,13 @@ int32_t vgpu_transfer_3d_ioctl(struct drm_device *, void *, struct drm_file *, i
 int32_t vgpu_wait_ioctl(struct drm_device *, void *, struct drm_file *);
 int32_t vgpu_blob_ioctl(struct drm_device *, void *, struct drm_file *);
 int32_t vgpu_context_init_ioctl(struct drm_device *, void *, struct drm_file *);
-/** Count `bytes` a transfer has the device copy between a resource and its
- * backing; under the big lock. */
+/** The bytes of a box of `w` by `h` by `d` texels of virgl format `format`,
+ * by whole blocks of the format, or 0 for a format with no size here. */
+uint64_t vgpu_box_bytes(uint32_t format, uint32_t w, uint32_t h, uint32_t d);
+/** Add `bytes` that an answered transfer had the device copy to
+ * virtio_gpu_copied_bytes. Any context. */
 void vgpu_count_copied(uint64_t bytes);
-/** The bytes the device has copied for transfers since boot, both ways. */
+/** The bytes the devices' transfers have copied since boot, both ways. */
 uint64_t virtio_gpu_copied_bytes(void);
 /**
  * Wait for the leaves of a dependency on any fence context but `context`,
