@@ -38,9 +38,11 @@
    fragment: {module, entryPoint: 'fs', targets: [{format}]}});
   let frames = 0;
   const start = performance.now();
+  const times = [];
   await new Promise((resolve, reject) => {
-   function draw() {
+   function draw(now) {
     try {
+     times.push(Math.round((now - start) * 10) / 10);
      if (result.error) throw Error(result.error);
      const encoder = device.createCommandEncoder();
      const pass = encoder.beginRenderPass({colorAttachments: [{
@@ -55,6 +57,8 @@
   });
   result.frames = frames;
   result.seconds = (performance.now() - start) / 1000;
+  // Each frame's callback time in ms after start, to tell a slow start from a slow rate.
+  result.frameTimes = times;
   const copy = document.createElement('canvas');
   copy.width = canvas.width; copy.height = canvas.height;
   const read = copy.getContext('2d'); read.drawImage(canvas, 0, 0);
