@@ -7770,11 +7770,14 @@ static int procfs_node_of(const struct vpath *vp, int id, int node[4])
 static void procfs_set_owner(const int node[4])
 {
     struct synth_owner *o;
-    uint32_t mode = node[0] == VNODE_PROC_FD_DIR                                         ? 0040500u
-                    : node[0] == VNODE_PROC_FDINFO_DIR || node[0] == VNODE_PROC_TASK_DIR ? 0040555u
-                                                                                         : 0100644u;
+    uint32_t mode = 0100644u;
     uint32_t uid = 0, gid = 0;
 
+    if (node[0] == VNODE_PROC_FD_DIR) {
+        mode = 0040500u;
+    } else if (node[0] == VNODE_PROC_FDINFO_DIR || node[0] == VNODE_PROC_TASK_DIR) {
+        mode = 0040555u;
+    }
     if (procfs_pid_owner(node[2], mode, &uid, &gid) != 0) {
         return;
     }
