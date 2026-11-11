@@ -362,7 +362,9 @@ uint32_t timer_late_passes(void)
  * current process is not inside a system call, and at the call's exit when
  * it is, since timer IRQs stay enabled during a call so HDA streaming keeps
  * running, yet a switch in the middle of one is unsafe. Kernel threads (no
- * current_proc, or one not in_syscall) are switched at once.
+ * current_proc, or one not in_syscall) are switched at once, but for one
+ * inside klog (`klog_inside`), in a record, a console write or a console
+ * byte, which gives way at a later tick.
  */
 static void timer_handler(isr_params_t *params)
 {
