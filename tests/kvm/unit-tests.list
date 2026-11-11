@@ -15,7 +15,7 @@
 access pass pass
 access-reduced-maxphyaddr skip skip /sys/module/kvm_intel/parameters/allow_smaller_maxphyaddr not equal to Y
 access_fep skip skip Forced emulation prefix (FEP) not available
-asyncpf pass pass
+asyncpf excluded pass asynchronous page faults, deferred by the owner's decision of 2026-11-10 to a later milestone
 cet skip skip No CET features supported
 cmpxchg8b excluded skip i386: built only for i386, and the staged tests are x86-64's
 debug pass fail Linux: unhandled #PF at ffff0ff0 and 404fb8

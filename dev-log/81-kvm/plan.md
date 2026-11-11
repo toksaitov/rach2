@@ -36,6 +36,8 @@ Standing decisions: one shared branch, `milestone/76-display`; Steam stays out o
 
 On 2026-11-10, asked about the corpus's exclusions, the owner excluded nested virtualization ("Skip them, please. Nested was not part of the scope."): the 38 tests of `tests/kvm/unit-tests.list` and `tests/kvm/selftests.list` that need SVM or VMX inside a guest of Rach2's KVM, and the selftest hyperv_svm_test, which needs it too, are excluded with that reason, and no task or milestone adds it. The other exclusions Linux passes are fixed in 81: Hyper-V's ten in 81-8 and the PMU's in 81-9.
 
+On 2026-11-10 at 21:41 UTC+6 the owner left guest_memfd, system management mode and asynchronous page faults for a later milestone, with the nested-virtualization leftovers, unless a guest the plan names as a goal needs one of them: the selftests `guest_memfd_test` and `smm_test` and kvm-unit-tests' `asyncpf` are excluded with that reason, and `rach2/sys/kvm/Readme.md` lists the three under Limits.
+
 ## Tasks
 
 Each task below is an issue in the GitHub milestone `81 kvm`, and each subtask a sub-issue under it; a wait is a blocker on GitHub. Faults found in other projects' code go in `upstream.md` beside this file, in the format [dev-log/upstream.md](../upstream.md) gives.
