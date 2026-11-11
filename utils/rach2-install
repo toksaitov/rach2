@@ -22,6 +22,7 @@
 # Usage: rach2-install [--source DIR]
 #        rach2-install [--console term] --update IMAGE DISK
 #        rach2-install --data DISK SIZE
+#        rach2-install --slots DISK
 #
 # `--source DIR` takes the image and its manifest from a directory already
 # mounted, which is how the tests drive it without a stick.
@@ -37,8 +38,9 @@
 # into its partition. The machine is saved to its recovery system for the whole
 # of the write and the new root is armed for one trial boot, so an update cut
 # off by a power cut, or one that does not come up, costs a reboot into recovery
-# and not a visit to the machine. Kernel slots smaller than SLOT_BYTES are
-# grown to it. An MBR disk is converted on the way to boot by
+# and not a visit to the machine. Kernel slots smaller than the size of this
+# version's slots, which `bootctl status` prints, are grown to it. An MBR
+# disk is converted on the way to boot by
 # UEFI as well, when GRUB's EFI image is beside IMAGE: it keeps its MBR, and its
 # boot partition becomes the EFI system partition.
 #
@@ -63,6 +65,14 @@
 # file system with `mke2fs`. Each step is one that a run stopped after it
 # finds done and passes, so the command can be run again.
 #
+# `--slots DISK` moves a disk installed before the kernel slots grew to the
+# size of this version's, from the recovery system, without an image:
+# `bootctl kernel` and `bootctl fallback` refuse its smaller slots. The
+# machine is saved to its recovery system for the move, the candidate slot is
+# grown and checked and then the fallback, and the saved default is put back
+# once both are, so a stop at any point leaves a disk that starts the
+# recovery system, where the command run again finishes the move.
+#
 
 set -u
 
@@ -85,9 +95,6 @@ var/lib/backlight var/lib/mixer var/lib/mixer.mute"
 ARCHIVE_NEEDS="etc/passwd etc/group etc/shadow"
 # The recovery system's key, on the recovery partition, where its init reads it.
 RECOVERY_KEYS_FILE=boot/recovery_authorized_keys
-# The size of each kernel slot on the disks tools/image/mkdisk_grub.sh makes,
-# which an update grows an older disk's slots to.
-SLOT_BYTES=4194304
 
 # Prints MESSAGE on stdout as `rach2-install: MESSAGE`, a note of progress.
 # keep_copy SRC DST: copy a kept file, or a directory such as var/lib/backlight
@@ -184,8 +191,14 @@ update_disk=""
 update_console=""
 data_disk=""
 data_size=""
+slots_disk=""
 while [ $# -gt 0 ]; do
     case "$1" in
+        --slots)
+            [ $# -ge 2 ] || die "--slots takes a disk"
+            slots_disk=$2
+            shift 2
+            ;;
         --data)
             [ $# -ge 3 ] || die "--data takes a disk and the root's size"
             data_disk=$2
@@ -210,7 +223,7 @@ while [ $# -gt 0 ]; do
             shift 3
             ;;
         *)
-            die "usage: $ME [--source DIR] | $ME [--console term] --update IMAGE DISK | $ME --data DISK SIZE"
+            die "usage: $ME [--source DIR] | $ME [--console term] --update IMAGE DISK | $ME --data DISK SIZE | $ME --slots DISK"
             ;;
     esac
 done
@@ -739,37 +752,90 @@ resume_boot_partition() { # resume_boot_partition BOOT
     mounted_recovery=""
 }
 
-# Grow each kernel slot of the boot partition BOOT, /boot/kernel and
-# /boot/fallback, that is smaller than SLOT_BYTES, as a disk installed before
-# the slots grew has them, so that `bootctl kernel` can write a kernel of that
-# size. `bootctl` rewrites a slot in place and never grows it. A slot is copied
-# beside itself, padded with zeros, and renamed over the old one, one slot at
-# a time: a stop part way costs at most the one slot being grown, and the
-# machine, saved to its recovery system for the update, starts that. A volume
-# without room for the copy keeps its slot, with a note.
+# Finish or undo what a stop left of a slot's move on the boot partition
+# BOOT, so that bootctl reads it again: it refuses a volume without both
+# /boot/kernel and /boot/fallback. A slot's grown copy, kernel.new or
+# fallback.new, is whole and checked before the slot is removed, so a copy
+# with no slot beside it was cut off before its rename and becomes the slot,
+# and a copy beside its slot is unfinished and is removed. A slot with no
+# copy and no file, which no stop of `grow_slots` leaves, is made again from
+# the other slot, with a note, since a bootable kernel in it is better than
+# a disk bootctl cannot read.
+finish_slots() { # finish_slots BOOT
+    mkdir -p "$BOOT_MNT" 2>/dev/null
+    mount -t vfat "$1" "$BOOT_MNT" || die "$1 would not mount to look at its kernel slots"
+    mounted_boot=$BOOT_MNT
+    for slot in kernel fallback; do
+        file="$BOOT_MNT/boot/$slot"
+        [ -e "$file.new" ] || continue
+        if [ -e "$file" ]; then
+            { rm -f "$file.new" && sync; } ||
+                die "the unfinished copy of the $slot slot of $1 could not be removed"
+            say "removed an unfinished copy of the $slot slot of $1, which a stop left"
+        else
+            { mv "$file.new" "$file" && sync; } ||
+                die "the grown $slot slot of $1 could not take its name"
+            say "the grown $slot slot of $1, which a stop left under another name, takes its name"
+        fi
+    done
+    for slot in kernel fallback; do
+        file="$BOOT_MNT/boot/$slot"
+        [ ! -e "$file" ] || continue
+        other="$BOOT_MNT/boot/fallback"
+        [ "$slot" = kernel ] || other="$BOOT_MNT/boot/kernel"
+        [ -e "$other" ] || die "$1 has neither kernel slot; run $ME --update to write it again"
+        { cp "$other" "$file" && sync; } || die "the missing $slot slot of $1 could not be made again"
+        say "$1 had no $slot slot; it is made again as a copy of the other"
+    done
+    umount "$BOOT_MNT" || die "$1 would not unmount"
+    mounted_boot=""
+}
+
+# Grow each kernel slot of the boot partition BOOT, /boot/kernel and then
+# /boot/fallback, that is smaller than the slots of this version's disks,
+# whose size `bootctl status` prints: `bootctl kernel` refuses a smaller one,
+# and bootctl rewrites a slot in place and never grows it. A slot is copied
+# beside itself as kernel.new or fallback.new, padded with zeros and compared
+# with the slot and its padding; only then is the slot removed and the copy
+# renamed to its name, which in one directory with the name free rewrites
+# the copy's entries in place. One slot is moved at a time, so the other is
+# whole throughout. The caller has saved the machine to its recovery system,
+# which a stop then starts, and `finish_slots`, run first here, completes or
+# undoes what the stop left. Status 1, with the slot kept as it was, when the
+# volume has no room for a copy.
 grow_slots() { # grow_slots BOOT
+    finish_slots "$1"
+    want=$(bootctl --target "$1" status | sed -n 's/^bootctl: slot size: \([0-9][0-9]*\) bytes$/\1/p')
+    [ -n "$want" ] || die "$1 is not a boot partition bootctl reads, so its slots cannot be grown"
+    short=0
     mkdir -p "$BOOT_MNT" 2>/dev/null
     mount -t vfat "$1" "$BOOT_MNT" || die "$1 would not mount to grow its kernel slots"
     mounted_boot=$BOOT_MNT
     for slot in kernel fallback; do
         file="$BOOT_MNT/boot/$slot"
         size=$(wc -c < "$file") || die "$file could not be read"
-        [ "$size" -lt "$SLOT_BYTES" ] || continue
+        [ "$size" -lt "$want" ] || continue
+        pad=$(((want - size) / 512))
         if ! { cp "$file" "$file.new" &&
-            dd if=/dev/zero bs=512 count=$(((SLOT_BYTES - size) / 512)) 2>/dev/null >> "$file.new" &&
-            [ "$(wc -c < "$file.new")" -eq "$SLOT_BYTES" ] && sync; }; then
+            dd if=/dev/zero bs=512 count="$pad" 2>/dev/null >> "$file.new" &&
+            [ "$(wc -c < "$file.new")" -eq "$want" ] && sync &&
+            { cat "$file" && dd if=/dev/zero bs=512 count="$pad" 2>/dev/null; } |
+            cmp -s - "$file.new"; }; then
             rm -f "$file.new"
-            say "$1 has no room to grow its $slot slot to $SLOT_BYTES bytes; it keeps $size"
+            sync
+            say "$1 has no room to grow its $slot slot to $want bytes; it keeps $size"
+            short=1
             continue
         fi
-        { mv "$file.new" "$file" && sync; } ||
-            die "the grown $slot slot did not take the place of the old one"
-        say "grew the $slot slot of $1 from $size to $SLOT_BYTES bytes"
+        { rm -f "$file" && sync && mv "$file.new" "$file" && sync; } ||
+            die "the grown $slot slot of $1 did not take the place of the old one; run $ME --slots ${1%p1} from the recovery system to finish it"
+        say "grew the $slot slot of $1 from $size to $want bytes"
     done
     umount "$BOOT_MNT" || die "$1 would not unmount"
     mounted_boot=""
     bootctl --target "$1" status > /dev/null ||
         die "$1, its slots grown, is not a boot partition bootctl reads"
+    return "$short"
 }
 
 # Give the installed root's boot lines one console token on BOOT. Write
@@ -983,6 +1049,60 @@ if [ -n "$data_disk" ]; then
     [ -n "$start" ] || die "the space freed after $root_node is too small for a data partition"
     make_data "$target" "$start"
     say "made room: $root_node is $data_size, and ${data_disk}p6 is the data partition"
+    exit 0
+fi
+
+# ---- moving the kernel slots ----
+#
+# A disk installed before the kernel slots grew is moved to the slots of this
+# version from the recovery system. The saved default goes to recovery
+# first, which GRUB starts from partition 2 whatever state the boot
+# partition is in, and is put back once both slots are grown and checked. A
+# trial armed on the disk is refused, since GRUB would take it at a stop in
+# place of recovery. A run again after a stop finds the saved default at
+# recovery and leaves it there, with a note of the command that sets it.
+
+if [ -n "$slots_disk" ]; then
+    case "$slots_disk" in
+        /dev/disk[0-9] | /dev/disk[0-9][0-9]) ;;
+        *) die "$slots_disk is not a whole disk of this machine" ;;
+    esac
+    slots_boot="${slots_disk}p1"
+    [ -e "$slots_boot" ] || die "$slots_disk has no boot partition"
+    if where=$(mounted_elsewhere "$slots_boot"); then
+        die "$slots_boot is mounted at $where; unmount it first"
+    fi
+    finish_slots "$slots_boot"
+    slots_status=$(bootctl --target "$slots_boot" status) ||
+        die "$slots_boot is not a boot partition bootctl reads"
+    if ! echo "$slots_status" | grep -q '^bootctl: slot size: the kernel slots are smaller'; then
+        say "$slots_boot has the slots of this version already"
+        exit 0
+    fi
+    case "$(echo "$slots_status" | sed -n 's/^bootctl: next_entry: //p')" in
+        empty* | absent) ;;
+        *) die "a trial is armed on $slots_boot; boot it, or cancel it with bootctl --target $slots_boot cancel, and run this again" ;;
+    esac
+    slots_saved=$(echo "$slots_status" | sed -n 's/^bootctl: saved_entry: //p')
+    if [ "$slots_saved" != recovery ]; then
+        bootctl --target "$slots_boot" env saved_entry recovery > /dev/null ||
+            die "the saved boot entry could not be moved to recovery; nothing was written"
+    fi
+    say "the machine is saved to its recovery system until its slots are moved"
+    grow_slots "$slots_boot" ||
+        die "$slots_boot has no room for the larger slots; the machine stays saved to its recovery system"
+    case "$slots_saved" in
+        recovery)
+            say "moved $slots_boot to the slots of this version; the saved entry stays recovery, as it was, and bootctl --target $slots_boot env saved_entry candidate starts the installed system"
+            exit 0
+            ;;
+        candidate) slots_back=candidate ;;
+        # Any other value starts the fallback entry, by the menu's rule.
+        *) slots_back=fallback ;;
+    esac
+    bootctl --target "$slots_boot" env saved_entry "$slots_back" > /dev/null ||
+        die "the slots of $slots_boot are moved, but the saved entry could not be put back; run bootctl --target $slots_boot env saved_entry $slots_back"
+    say "moved $slots_boot to the slots of this version; the saved entry is $slots_back again"
     exit 0
 fi
 
@@ -1236,7 +1356,8 @@ whole configuration archived on its recovery partition; its accounts are not the
     if [ "$(disk_field "$target" 6)" = mbr ]; then
         convert_mbr_disk
     fi
-    grow_slots "${update_disk}p1"
+    grow_slots "${update_disk}p1" ||
+        say "bootctl kernel refuses the smaller slots of ${update_disk}p1 until they grow; free room there and run $ME --slots $update_disk"
 
     echo "$update_disk $root_entry" > "$keep/root-written" ||
         die "the copy of the configuration could not be marked; the root was not written"
