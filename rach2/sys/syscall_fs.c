@@ -13960,9 +13960,10 @@ static long vmsplice_write(fd_entry_t *e, uintptr_t uiov, int iovcnt, uint32_t w
  * where it can; this kernel copies the bytes, which is the same for a caller
  * that does not change a buffer after a SPLICE_F_GIFT, and refuses a source
  * page that Linux's get_user_pages refuses, such as `[vvar]`, with -EFAULT.
- * The pipe end waits unless SPLICE_F_NONBLOCK or its description's
- * O_NONBLOCK, a write end only before its first byte, so that the call
- * returns what fitted in the pipe, as Linux's does. Returns the bytes
+ * The pipe end waits unless SPLICE_F_NONBLOCK, whatever its description's
+ * O_NONBLOCK, as Linux's vmsplice passes the caller's flags alone, a write
+ * end only before its first byte, so that the call returns what fitted in
+ * the pipe, as Linux's does. Returns the bytes
  * moved or a negative errno, in Linux's order: -EINVAL for an unknown flag,
  * -EBADF for a descriptor not open, -EINVAL for a count past IOV_MAX_LOCAL
  * or a buffer of a negative length (`iov_import`, which cuts the total at
@@ -14000,7 +14001,7 @@ long sys_vmsplice(isr_params_t *params)
     if (!pipe_is(e)) {
         return -EBADF;
     }
-    nonblock = (flags & SPLICE_F_NONBLOCK) || copy_nonblock(e);
+    nonblock = (flags & SPLICE_F_NONBLOCK) != 0;
     return write ? vmsplice_write(e, uiov, (int)cnt, (uint32_t)wanted, nonblock)
                  : vmsplice_read(e, uiov, (int)cnt, (uint32_t)wanted, nonblock);
 }
