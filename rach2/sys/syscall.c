@@ -1205,8 +1205,11 @@ static int32_t nanosleep_interrupted(int rem, uint64_t target)
  * with `rem` writes the remainder and returns -EINTR, or -EFAULT when the
  * write fails; a wake by one it does not act on sends it back to sleep with
  * the deadline stored again.
+ *
+ * `wchan` names the sleep for /proc/PID/wchan as Linux's wchan names the
+ * caller's: the first function on Linux's stack that is not `__sched`.
  */
-static int32_t sleep_until(uint64_t target, int rem)
+static int32_t sleep_until(uint64_t target, int rem, const char *wchan)
 {
     for (;;) {
         uint32_t flags = kirq_save();
@@ -1221,7 +1224,7 @@ static int32_t sleep_until(uint64_t target, int rem)
         }
         /* 0 means not sleeping, so a deadline of 0 is stored as 1. */
         current_proc->wakeup_tick = target != 0 ? target : 1u;
-        current_proc->wchan = "hrtimer_nanosleep"; /* do_nanosleep is __sched */
+        current_proc->wchan = wchan;
         current_proc->state = PROC_BLOCKED;
         kirq_restore(flags);
         schedule(); /* yield to any other READY process; the timer wakes us */
@@ -1276,9 +1279,11 @@ static int time_reached(enum kclock_kind kind, const struct kernel_timespec *whe
  * tick, so a time the clock has reached returns at once, before the deadline
  * is rounded up to a tick. The tick count and the time since boot are read
  * as one reading (`tick_now`), since the tick changes both. Returns 0, or
- * -EINTR when a signal the process acts on comes first.
+ * -EINTR when a signal the process acts on comes first. `wchan` names the
+ * sleep, as for `sleep_until`.
  */
-static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_timespec *when)
+static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_timespec *when,
+                                const char *wchan)
 {
     uint32_t seconds32, ticks32;
     uint64_t now, base, due;
@@ -1299,7 +1304,7 @@ static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_times
     if (due <= now) {
         return 0;
     }
-    return sleep_until(base + (due - now), 0);
+    return sleep_until(base + (due - now), 0, wchan);
 }
 
 static long sleep_resume(isr_params_t *params);
@@ -1314,17 +1319,18 @@ static long sleep_resume(isr_params_t *params);
  * restart block and the call stands for Linux's ERESTART_RESTARTBLOCK: a
  * signal that runs no handler, as a stop and a continue, restarts it
  * through restart_syscall (`sleep_resume`), which sleeps on to this same
- * deadline, and a handler gives the caller EINTR and the remainder.
+ * deadline, and a handler gives the caller EINTR and the remainder. `wchan`
+ * names the sleep, as for `sleep_until`.
  */
-static int32_t sleep_to(uint64_t target, const struct kernel_timespec *end)
+static int32_t sleep_to(uint64_t target, const struct kernel_timespec *end, const char *wchan)
 {
     struct restart_block *b = &current_proc->restart;
     int64_t sec, nsec;
     int32_t rc;
 
-    rc = sleep_until(target, 1);
+    rc = sleep_until(target, 1, wchan);
     if (rc == 0 && (end->tv_sec != 0 || end->tv_nsec != 0)) {
-        rc = sleep_until_time(KCLOCK_MONO, end);
+        rc = sleep_until_time(KCLOCK_MONO, end, wchan);
         if (rc != 0) {
             struct kernel_timespec rem;
 
@@ -1390,8 +1396,9 @@ static int32_t sleep_for(const struct kernel_timespec *req)
 
     end.tv_sec = 0;
     end.tv_nsec = 0;
+    /* Linux's do_nanosleep is __sched, so wchan shows its caller. */
     if (req->tv_sec == 0 && req->tv_nsec == 0) {
-        return sleep_to(tick_count() + 1u, &end);
+        return sleep_to(tick_count() + 1u, &end, "hrtimer_nanosleep");
     }
     rtc_monotonic(&sec, &nsec);
     rtc_tick_phase(&now, &phase_ns);
@@ -1405,7 +1412,7 @@ static int32_t sleep_for(const struct kernel_timespec *req)
             end.tv_nsec -= 1000000000L;
         }
     }
-    return sleep_to(now + ticks, &end);
+    return sleep_to(now + ticks, &end, "hrtimer_nanosleep");
 }
 
 /**
@@ -1439,7 +1446,7 @@ static int32_t sleep_until_cpu(int32_t clk, uint64_t due, int rem)
                 wait = 1;
             }
         }
-        rc = sleep_until(tick_count() + wait, 0);
+        rc = sleep_until(tick_count() + wait, 0, "do_cpu_nanosleep");
         if (rc != 0) {
             if (rem) {
                 struct kernel_timespec left;
@@ -1496,7 +1503,8 @@ static long sleep_resume(isr_params_t *params)
     }
     end.tv_sec = (long)b->sec;
     end.tv_nsec = (long)b->nsec;
-    return sleep_to(b->tick, &end);
+    /* hrtimer_nanosleep_restart and do_nanosleep are both __sched. */
+    return sleep_to(b->tick, &end, "__do_sys_restart_syscall");
 }
 
 long nanosleep_core(const struct kernel_timespec *req, uintptr_t urem, int wide)
@@ -1569,7 +1577,7 @@ long clock_nanosleep_core(int32_t clk, unsigned long flags, const struct kernel_
     } else if (!absolute) {
         return sleep_for(req);
     } else {
-        rc = sleep_until_time(c.kind, req);
+        rc = sleep_until_time(c.kind, req, "hrtimer_nanosleep");
     }
     if (rc == -EINTR) {
         /* An absolute sleep restarts with its own arguments. */
@@ -2856,7 +2864,7 @@ long sys_syslog(isr_params_t *params)
             return 0;
         }
         while ((syslog_read_at = klog_clamp(syslog_read_at)) == klog_written()) {
-            if (sleep_until(tick_count() + MS_TO_TICKS(100), 0) != 0) {
+            if (sleep_until(tick_count() + MS_TO_TICKS(100), 0, "syslog_print") != 0) {
                 return -EINTR;
             }
         }

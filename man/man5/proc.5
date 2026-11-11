@@ -2171,6 +2171,10 @@ A wait names itself with Linux's function where Linux has one:
 .Ql futex_lock_pi ,
 .Ql do_wait ,
 .Ql hrtimer_nanosleep ,
+.Ql do_cpu_nanosleep ,
+.Ql __do_sys_restart_syscall
+for a sleep resumed after a stop,
+.Ql syslog_print ,
 .Ql do_sys_poll ,
 .Ql do_select ,
 .Ql ep_poll ,
