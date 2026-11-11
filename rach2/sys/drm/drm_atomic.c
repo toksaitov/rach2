@@ -1918,6 +1918,7 @@ static int32_t commit_worker_start(void)
     p->page_dir = NULL;
     p->parent_pid = 0;
     proc_set_comm(p, "kdrm");
+    p->no_tick_switch = 1;
     setup_process_stack(p, commit_thread_main);
     commit_thread = p;
     sched_make_ready(p);
