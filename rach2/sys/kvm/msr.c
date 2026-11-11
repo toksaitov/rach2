@@ -331,10 +331,10 @@ static int mce_bank_msr(const struct kvm_vcpu *v, uint32_t index, uint32_t *bank
 
 /** Whether `index` is the CTL2 MSR of a machine-check bank: 1 for one of
  * a bank `v` has, -1 for one of a bank it lacks, 0 for another MSR. No
- * MCG_CAP offers MCG_CMCI_P, as none of Linux 6.12's does, so a CTL2 of a
- * bank that is there holds 0 alone: the caller reads 0 and writes 0, and
- * the guest neither reads nor writes it, as Linux's get_msr_mce and
- * set_msr_mce. */
+ * MCG_CAP offers MCG_CMCI_P, which Linux 6.12 offers on VMX alone, so a
+ * CTL2 of a bank that is there holds 0 alone: the caller reads 0 and
+ * writes 0, and the guest neither reads nor writes it, as Linux's
+ * get_msr_mce and set_msr_mce. */
 static int mce_ctl2_msr(const struct kvm_vcpu *v, uint32_t index)
 {
     if (index < MSR_IA32_MC0_CTL2 || index >= MSR_IA32_MC0_CTL2 + KVM_MAX_MCE_BANKS) {
@@ -623,17 +623,10 @@ int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value, int host)
         kvm_tsc_sync(v, &value);
         return 0;
     case MSR_IA32_MCG_CAP:
-        /* The caller's alone: Linux's kvm_set_msr_common has no case for
-         * it, so the guest's write is an unknown MSR's. */
-        if (!host) {
-            return KVM_MSR_UNKNOWN;
-        }
-        if (value & ~(MCG_CTL_P | MCG_SER_P | 0xFFull | 0xFF0000ull) ||
-            (value & 0xFFu) > KVM_MAX_MCE_BANKS) {
-            return KVM_MSR_INVAL;
-        }
-        v->mcg_cap = value;
-        break;
+        /* Set only by KVM_X86_SETUP_MCE: Linux's kvm_set_msr_common has
+         * no case for it, and no list advertises it, so the caller's write
+         * of any value is an unknown MSR's as much as the guest's. */
+        return KVM_MSR_UNKNOWN;
     case MSR_IA32_POWER_CTL:
         v->power_ctl = value;
         break;

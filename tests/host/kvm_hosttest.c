@@ -2929,9 +2929,9 @@ static void stats_rows(void)
 }
 
 /** The rest of Linux's machine-check MSRs on the vCPU `fd`, `v`, with ten
- * banks and MCG_CTL_P: the guest's write of MCG_CAP, which Linux has no
- * case for; P5_MC_ADDR and P5_MC_TYPE; and a bank's CTL2 without
- * MCG_CMCI_P, as Linux's get_msr_mce and set_msr_mce. */
+ * banks and MCG_CTL_P: the guest's and the caller's write of MCG_CAP,
+ * which Linux has no case for; P5_MC_ADDR and P5_MC_TYPE; and a bank's
+ * CTL2 without MCG_CMCI_P, as Linux's get_msr_mce and set_msr_mce. */
 static void mce_more_rows(struct kvm_vcpu *v, int fd)
 {
     uint64_t value;
@@ -2939,6 +2939,10 @@ static void mce_more_rows(struct kvm_vcpu *v, int fd)
     CHECK(kvm_msr_set(v, 0x179, MCG_CTL_P | 2, 0) == KVM_MSR_UNKNOWN &&
               v->mcg_cap == (MCG_CTL_P | 10),
           "the guest's write of MCG_CAP is an unknown MSR's");
+    CHECK(kvm_msr_set(v, 0x179, MCG_CTL_P | 2, 1) == KVM_MSR_UNKNOWN &&
+              kvm_msr_set(v, 0x179, 0, 1) == KVM_MSR_UNKNOWN && set_msr(fd, 0x179, 0) == 0 &&
+              v->mcg_cap == (MCG_CTL_P | 10),
+          "the caller's write of MCG_CAP, 0 too, is an unknown MSR's");
     value = 1;
     CHECK(kvm_msr_get(v, 0, &value, 0) == 0 && value == 0 && kvm_msr_get(v, 1, &value, 1) == 0 &&
               value == 0 && kvm_msr_set(v, 0, 0, 0) == KVM_MSR_UNKNOWN,

@@ -407,7 +407,9 @@ in
 .Dv MSR_IA32_MCG_CAP
 reads 0 for the caller and takes its 0, and is #GP to the guest.
 .Dv MSR_IA32_MCG_CAP
-is not the guest's to write.
+is set only by
+.Dv KVM_X86_SETUP_MCE ;
+neither the caller nor the guest may write it.
 .Dv MSR_IA32_P5_MC_ADDR
 and
 .Dv MSR_IA32_P5_MC_TYPE
@@ -655,9 +657,11 @@ A vCPU counts
 .Va irq_window_exits ,
 .Va signal_exits ,
 .Va hypercalls ,
-.Va insn_emulation
-and
+.Va insn_emulation ,
 .Va insn_emulation_fail ,
+.Va preemption_reported
+and
+.Va preemption_other ,
 and a VM
 .Va pages_4k ,
 .Va pages_2m ,
