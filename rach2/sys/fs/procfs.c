@@ -8579,54 +8579,17 @@ static int64_t sysattr_number(const char *s, uint32_t len, int *relative)
     return v;
 }
 
-/** Write the registered attribute `handle` (sysfs.h): the `count` bytes at
- * `buf`, at most 4096, Linux's page, go to its `store` as written. Its
- * result, -EINVAL past 4096 bytes, -EFAULT or -ENOMEM. */
-static int32_t procfs_regattr_write(int handle, const char __user *buf, uint32_t count)
-{
-    char *copy;
-    int32_t rc;
-
-    if (count > 4096) {
-        return -EINVAL;
-    }
-    copy = kmalloc(count ? count : 1u);
-    if (!copy) {
-        return -ENOMEM;
-    }
-    rc = copy_from_user(copy, buf, count) != 0 ? -EFAULT : sysfs_node_store(handle, copy, count);
-    kfree(copy);
-    return rc;
-}
-
 /**
- * Write a writable /sys attribute, as Linux's do. rtc0's wakealarm takes
- * seconds since 1970, or `+N` for N seconds from now, and 0 to clear it; a
- * new time while an alarm is set is -EBUSY, as on Linux, which wants the
- * alarm cleared first, and a time `devfs_rtc_set_wakealarm` does not set
- * has its error; text that is no number is -EINVAL.
- * /sys/power/state takes `freeze` or `mem`, both suspend to idle, which the
- * write waits in until a wake event, or has the error of `suspend_to_idle`;
- * another state is -EINVAL. The whole count is taken, or the write fails
- * with -EFAULT, -EIO for a clock that cannot be read or cleared, or one of
- * the errors above. A backlight's brightness and bl_power take what
- * `backlight_store` takes, and have its errors; a radio switch's soft and
- * state take what `rfkill_store` takes. A write of more than 31 bytes,
- * which would be read in part, is -EINVAL and changes nothing. A registered
- * attribute (sysfs.h) takes the bytes as written, at most 4096, Linux's
- * page, through its `store`.
+ * Take a write of the `count` bytes at `text` to the uevent `attr` of the
+ * device `key` of `node` (`sysfs_attr_uevent`), as Linux's
+ * dev_uevent_store: the action and its arguments (`sysfs_uevent_parse`) are
+ * sent as that uevent with the device's variables, so that udev's coldplug
+ * hears the device. `count`, -EINVAL, -ENOENT for a device that is gone,
+ * or -ENOMEM.
  */
-/**
- * Take a write of `count` bytes at `buf` to the uevent `attr` of the device
- * `key` of `node` (`sysfs_attr_uevent`), as Linux's dev_uevent_store: the
- * action and its arguments (`sysfs_uevent_parse`) are sent as that uevent
- * with the device's variables, so that udev's coldplug hears the device.
- * `count`, -EINVAL, -EFAULT, -ENOENT for a device that is gone, or -ENOMEM.
- */
-static int32_t procfs_uevent_write(int node, int key, int attr, const char __user *buf,
-                                   uint32_t count)
+static int32_t procfs_uevent_write(int node, int key, int attr, const char *text, uint32_t count)
 {
-    char text[SYSFS_SYNTH_ENV_MAX], env[SYSFS_SYNTH_ENV_MAX], action[8], path[96];
+    char env[SYSFS_SYNTH_ENV_MAX], action[8], path[96];
     const char *subsystem = node == SYSFS_PCI_DEVICE   ? "pci"
                             : node == SYSFS_USB_DEVICE ? "usb"
                             : node == SYSFS_NET_IF     ? "net"
@@ -8638,12 +8601,6 @@ static int32_t procfs_uevent_write(int node, int key, int attr, const char __use
     int32_t rc;
     int got = key;
 
-    if (count > sizeof(text)) {
-        return -EINVAL;
-    }
-    if (copy_from_user(text, buf, count) != 0) {
-        return -EFAULT;
-    }
     rc = sysfs_uevent_parse(text, count, action, env);
     if (rc != 0) {
         return rc;
@@ -8667,81 +8624,53 @@ static int32_t procfs_uevent_write(int node, int key, int attr, const char __use
 }
 
 /**
- * Give the first PAGE_SIZE bytes at most of a write of `count` bytes at
- * `buf` to the transparent_hugepage attribute `attr`, NUL-terminated, as
- * Linux's kernfs gives a write to a sysfs store, whose own checks then
- * apply. The count `thp_store` takes, or its error, -EFAULT or -ENOMEM.
+ * Give the `count` bytes at `text`, NUL-terminated, to the store of the
+ * writable /sys attribute of `f`, each of which parses them with its own
+ * limits. A registered attribute (sysfs.h) takes them as written, through
+ * its `store`, and a uevent file as `procfs_uevent_write` does; the
+ * transparent_hugepage files go to `thp_store`. The rest have their final
+ * newlines and spaces cut first. A backlight's brightness and bl_power
+ * take what `backlight_store` takes, and a radio switch's soft and state
+ * what `rfkill_store` takes, with their errors. rtc0's wakealarm takes
+ * seconds since 1970, or `+N` for N seconds from now, and 0 to clear it; a
+ * new time while an alarm is set is -EBUSY, as on Linux, which wants the
+ * alarm cleared first, and a time `devfs_rtc_set_wakealarm` does not set
+ * has its error; text that is no number is -EINVAL, and a clock that
+ * cannot be read or cleared -EIO. /sys/power/state takes `freeze` or
+ * `mem`, both suspend to idle, which the write waits in until a wake
+ * event, or has the error of `suspend_to_idle`; another state is -EINVAL.
+ * The count taken, or -errno.
  */
-static int32_t procfs_thp_write(int attr, const char __user *buf, uint32_t count)
+static int32_t procfs_sysattr_store(const struct procfs_file *f, char *text, uint32_t count)
 {
-    char *text;
-    int32_t rc;
-
-    if (count > PAGE_SIZE) {
-        count = PAGE_SIZE;
-    }
-    text = kmalloc(count + 1u);
-    if (!text) {
-        return -ENOMEM;
-    }
-    if (copy_from_user(text, buf, count) != 0) {
-        rc = -EFAULT;
-    } else {
-        text[count] = '\0';
-        rc = thp_store(attr, text, count);
-    }
-    kfree(text);
-    return rc;
-}
-
-/**
- * Take a write of `count` bytes at `buf` to the writable /sys attribute
- * `e` names, as its node's store parses it. An empty write is 0 with no
- * store called, as Linux's sysfs_kf_write answers it. The count taken, or
- * -errno.
- */
-static int32_t procfs_sysattr_write(fd_entry_t *e, const char __user *buf, uint32_t count)
-{
-    struct procfs_file *f = (struct procfs_file *)e->priv;
-    char text[32];
+    int node = f->origin_task >> 8, attr = f->origin_task & 255;
     uint32_t n = count;
     rtc_time_t now;
     int64_t v;
     int relative;
     int32_t rc;
 
-    if (count == 0) {
-        return 0;
+    if (node == SYSFS_REG) {
+        return sysfs_node_store(f->origin_pid, text, count);
     }
-    if (f->origin_task >> 8 == SYSFS_REG) {
-        return procfs_regattr_write(f->origin_pid, buf, count);
+    if (sysfs_attr_uevent(node, attr)) {
+        return procfs_uevent_write(node, f->origin_pid, attr, text, count);
     }
-    if (sysfs_attr_uevent(f->origin_task >> 8, f->origin_task & 255)) {
-        return procfs_uevent_write(f->origin_task >> 8, f->origin_pid, f->origin_task & 255, buf,
-                                   count);
-    }
-    if (f->origin_task >> 8 == SYSFS_THP) {
-        return procfs_thp_write(f->origin_task & 255, buf, count);
-    }
-    if (count > sizeof(text) - 1) {
-        return -EINVAL;
-    }
-    k_memset(text, 0, sizeof(text));
-    if (copy_from_user(text, buf, n) != 0) {
-        return -EFAULT;
+    if (node == SYSFS_THP) {
+        return thp_store(attr, text, count);
     }
     while (n > 0 && (text[n - 1] == '\n' || text[n - 1] == ' ')) {
         text[--n] = '\0';
     }
-    if (f->origin_task >> 8 == SYSFS_BACKLIGHT) {
-        rc = backlight_store(f->origin_pid, f->origin_task & 255, text, (int)n);
+    if (node == SYSFS_BACKLIGHT) {
+        rc = backlight_store(f->origin_pid, attr, text, (int)n);
         return rc != 0 ? rc : (int32_t)count;
     }
-    if (f->origin_task >> 8 == SYSFS_RFKILL) {
-        rc = rfkill_store(f->origin_pid, f->origin_task & 255, text, (int)n);
+    if (node == SYSFS_RFKILL) {
+        rc = rfkill_store(f->origin_pid, attr, text, (int)n);
         return rc != 0 ? rc : (int32_t)count;
     }
-    if (f->origin_task >> 8 == SYSFS_POWER) {
+    if (node == SYSFS_POWER) {
         if (!sysattr_is(text, n, "freeze") && !sysattr_is(text, n, "mem")) {
             return -EINVAL;
         }
@@ -8766,6 +8695,39 @@ static int32_t procfs_sysattr_write(fd_entry_t *e, const char __user *buf, uint3
     }
     rc = devfs_rtc_set_wakealarm(v);
     return rc != 0 ? rc : (int32_t)count;
+}
+
+/**
+ * Write a writable /sys attribute, as Linux's kernfs writes a sysfs file:
+ * the first PAGE_SIZE bytes at most of the `count` at `buf` go to the
+ * attribute's store (`procfs_sysattr_store`), NUL-terminated, so that a
+ * longer write is taken in part. An empty write is 0 with no store
+ * called, as Linux's sysfs_kf_write answers it. The count taken, or
+ * -EFAULT, -ENOMEM or the store's error.
+ */
+static int32_t procfs_sysattr_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    char *text;
+    int32_t rc;
+
+    if (count == 0) {
+        return 0;
+    }
+    if (count > PAGE_SIZE) {
+        count = PAGE_SIZE;
+    }
+    text = kmalloc(count + 1u);
+    if (!text) {
+        return -ENOMEM;
+    }
+    if (copy_from_user(text, buf, count) != 0) {
+        rc = -EFAULT;
+    } else {
+        text[count] = '\0';
+        rc = procfs_sysattr_store((const struct procfs_file *)e->priv, text, count);
+    }
+    kfree(text);
+    return rc;
 }
 
 static const struct file_ops procfs_sysattr_ops = {
