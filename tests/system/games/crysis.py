@@ -21,7 +21,8 @@ under OUT/NAME and prints one result line, `crysis: result: NAME: ok` or
 
 `flyby` runs Linux's island flyby, `-devmode +map island +exec benchmark_gpu`,
 and ends the game after LOOPS of its four loops; each loop's rate is judged
-against GATE frames a second (24 unless CRYSIS_GATE says), beside Linux's.
+against GATE frames a second (24 unless CRYSIS_GATE says), beside Linux's,
+but on the 32-bit game, which need only complete its loops.
 `hud` loads SAVE, a checkpoint before the suit's reboot on the first level,
 enters the reboot's trigger at the console and reads the HUD back 35 s later
 from a screenshot, the dialog's line times and a save's GameRules. `save`
@@ -374,6 +375,8 @@ def flyby(route, name, loops):
     except OSError:
         pass
     linux = LINUX.get(route, ())
+    # The plan asks the 32-bit game only to complete its loop.
+    gate = 0 if route == "32" else GATE
     previous = None
     for i, (fps, play) in enumerate(runs):
         end = ends[i] if i < len(ends) else len(dump)
@@ -381,8 +384,8 @@ def flyby(route, name, loops):
         previous = end
         segment = dump[start:end]
         beside = (" linux %.2f" % linux[i]) if i < len(linux) else ""
-        check("loop%d" % i, fps >= GATE, "%.2f fps (gate %.0f)%s, play %.2f s%s" % (
-            fps, GATE, beside, play, (", " + frame_stats(segment)) if segment else ""))
+        check("loop%d" % i, fps >= gate, "%.2f fps (gate %.0f)%s, play %.2f s%s" % (
+            fps, gate, beside, play, (", " + frame_stats(segment)) if segment else ""))
     check("loops", len(runs) == loops, "%d of %d loops finished" % (len(runs), loops))
     game.renderer()
 
