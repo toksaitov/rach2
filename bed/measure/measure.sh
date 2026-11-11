@@ -22,11 +22,11 @@
 #
 # glmark2 and webgl draw under a headless Weston of the script's own, with
 # its GL renderer unless -p asks for Pixman, which webgl always has, or with
-# -d under the caller's Wayland display; the game too, through games.sh. A scene's frame times
-# come from Mesa's Gallium HUD for glmark2 and the game, the time between
-# the page's frames for webgl, and each passing test's time for piglit,
-# whose test counts as one frame. Every scene compiles its shaders into a
-# new empty Mesa shader cache under OUT.
+# -d under the caller's Wayland display; the game too, through games.sh. A
+# scene's frame times come from Mesa's Gallium HUD for glmark2 and the game,
+# the time between the page's frames for webgl, and each passing test's time
+# for piglit, whose test counts as one frame. Every scene compiles its
+# shaders into a new empty Mesa shader cache under OUT.
 #
 # Around the scene, the script reads the machine's counts and prints, as
 # its last line,
@@ -60,18 +60,20 @@
 # RELAYLOG is the standard error of `vtestrelay -v`, whose `result:` line
 # for each client gives its commands and bytes. With -u, the script reads
 # the counts as its caller, root where ivshmemd and debugfs need it, and
-# runs the scene as USER, as Chromium needs, from a copy of the harness, its
-# runners and REPLAYS under OUT, which USER may write through its group,
-# since USER may not read the caller's directories. REPLAYS (/usr/share/games/rach2/replays)
-# holds the games layer's replays, vendor/gnu/games/replays of the tree.
-# With -c the script prints `measure: counts: before` and `measure: counts:
-# after` as it reads the counts, for a caller that reads its own around the
-# scene. OUT (./measure-SCENE) gets the record, `frametimes`, one frame's
-# milliseconds a line, `counts`, the readings before and after, and `line`,
-# the last line. The scene runs in a process group of its own, which the
-# script ends, TERM and then KILL, on every exit and on SIGTERM, SIGINT or
-# SIGHUP. The status is 0 when the scene ran to its end and gave frames,
-# and 1 otherwise; the script sets no time limit of its own.
+# runs the scene as USER, as Chromium needs, from a copy of the harness,
+# its runners and REPLAYS under OUT, which USER may write through its
+# group, since USER may not read the caller's directories. REPLAYS
+# (/usr/share/games/rach2/replays) holds the games layer's replays,
+# vendor/gnu/games/replays of the tree. With -c the script prints
+# `measure: counts: before` and `measure: counts: after` as it reads the
+# counts, for a caller that reads its own around the scene. OUT
+# (./measure-SCENE) gets the record, `frametimes`, one frame's milliseconds
+# a line, `counts`, the readings before and after, and `line`, the last
+# line; a run first removes what an earlier run wrote there. The scene runs
+# in a process group of its own, which the script ends, TERM and then KILL,
+# on every exit and on SIGTERM, SIGINT or SIGHUP. The status is 0 when the
+# scene ran to its end and gave frames, and 1 otherwise; the script sets no
+# time limit of its own.
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -116,13 +118,21 @@ out=$(cd "$out" && pwd)
 # With -u as root, OUT stays root's, and USER, who runs the scene's half,
 # writes there only through its group once the scene is about to start. The
 # sticky bit keeps USER from removing or renaming root's own files, so that
-# root never writes, runs or signals through a name USER chose. Until then
-# USER may not write OUT, and what an earlier run left in root's names goes.
-mine='counts line scene.log latency latency.build latency.out'
-if [ "$inner" = 0 ] && [ -n "$user" ] && [ "$(id -u)" = 0 ]; then
-    chown 0:0 "$out"
-    chmod 700 "$out"
-    for f in $mine; do rm -rf "${out:?}/$f"; done
+# root never writes, runs, reads or signals through a name USER chose: it
+# reads the scene's files from copies USER makes into `taken`, and changes
+# the owner only of `harness`, which it made. Until then USER may not write
+# OUT, and the names an earlier run wrote, root's and USER's, are removed;
+# rm -r unlinks a link USER left and never follows it. What else USER made
+# in OUT stays, untouched.
+written='counts line scene.log latency latency.build latency.out taken harness
+    frametimes cpuframes passes tmp shader-cache scene glmark2.log piglit
+    browser.log game game.log'
+if [ "$inner" = 0 ]; then
+    if [ -n "$user" ] && [ "$(id -u)" = 0 ]; then
+        chown 0:0 "$out"
+        chmod 700 "$out"
+    fi
+    for f in $written "$out"/piglit-*.log; do rm -rf "${out:?}/${f##*/}"; done
 fi
 
 # scene_glmark2: glmark2's scenes on screen, frame times from the HUD.
@@ -346,8 +356,8 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# What an earlier run into OUT left, which this run's line would read.
-rm -f "$out/frametimes" "$out/cpuframes" "$out/passes"
+# OUT/taken gets root's copies of the scene's files, below.
+mkdir -m 700 "$out/taken"
 
 flags=''
 [ "$own" = 1 ] || flags=-d
@@ -361,19 +371,20 @@ if [ -n "$user" ] && [ "$(id -u)" = 0 ]; then
     cp "$here/measure.sh" "$here/piglit.txt" "$here/webgl.html" "$out/harness/"
     cp -R "$runners/." "$out/harness/runners/"
     [ ! -d "$replays" ] || cp -R "$replays/." "$out/harness/replays/"
-    # The files root writes from here on exist before USER may write OUT,
-    # and the rest is USER's; -h, so that a link an earlier run left is
-    # changed, never its target.
+    # su's command line names `start`, never measure.sh, so that
+    # `pkill -f measure.sh` reaches both halves and not su, which would
+    # kill the scene's half 2 seconds after its own TERM.
+    harness=$out/harness inner_runners=$out/harness/runners inner_replays=$out/harness/replays
+    printf "MEASURE_RUNNERS='%s' exec sh '%s/measure.sh' -I -r '%s' -o '%s' -R '%s' %s %s %s\n" \
+        "$inner_runners" "$harness" "$rung" "$out" "$inner_replays" "${seconds:+-t $seconds}" \
+        "$flags" "$scene" > "$harness/start"
+    # The files root writes from here on exist before USER may write OUT.
     for f in counts line scene.log; do : > "$out/$f"; done
-    for e in "$out"/*; do
-        case " $mine " in *" ${e##*/} "*) continue ;; esac
-        [ ! -e "$e" ] && [ ! -h "$e" ] || chown -hR "$user" "$e"
-    done
+    chown -hR "$user" "$out/harness"
     chgrp "$(id -g "$user")" "$out"
     chmod 1770 "$out"
     under_su=1
-    harness=$out/harness inner_runners=$out/harness/runners inner_replays=$out/harness/replays
-    su -s /bin/sh "$user" -c "test -r '$harness/measure.sh'" 2>/dev/null || {
+    su -s /bin/sh "$user" -c "test -r '$harness/start'" 2>/dev/null || {
         echo "measure: $scene: failed: $user cannot read $harness; give OUT a path $user can reach" >&2
         exit 1
     }
@@ -384,8 +395,7 @@ fi
 start=$(date +%s.%N)
 status=0
 if [ "$harness" != "$here" ]; then
-    setsid su -s /bin/sh "$user" -c "MEASURE_RUNNERS='$inner_runners' sh '$harness/measure.sh' -I -r '$rung' -o '$out' -R '$inner_replays' ${seconds:+-t $seconds} $flags $scene" \
-        > "$out/scene.log" 2>&1 &
+    setsid su -s /bin/sh "$user" -c "sh '$harness/start'" > "$out/scene.log" 2>&1 &
 else
     # shellcheck disable=SC2086 # the flags are words
     MEASURE_RUNNERS=$inner_runners setsid sh "$here/measure.sh" -I -r "$rung" -o "$out" -R "$inner_replays" \
@@ -397,28 +407,49 @@ scene_pid=''
 end=$(date +%s.%N)
 { echo after; counts; } >> "$out/counts"
 [ "$marks" = 0 ] || echo "measure: counts: after"
-# The scene's files, USER's under -u, are read only as plain files.
+# The scene's files, USER's under -u, are read once, by USER, and only as
+# plain files, into OUT/taken, which only root may enter: root opening a
+# name USER may swap for a link, such as one to /dev/watchdog, would act
+# with root's rights on what USER chose. Linux's protected_symlinks guards
+# only a sticky directory that others may write (fs/namei.c:1127 of
+# 6.12.115), and OUT is not one. A file the scene did not write is left out
+# of OUT/taken.
 for f in frametimes cpuframes passes; do
-    if [ -h "$out/$f" ] || { [ -e "$out/$f" ] && [ ! -f "$out/$f" ]; }; then
-        echo "measure: $scene: failed: OUT/$f is not a plain file" >&2
-        exit 1
+    g="$out/$f" rc=0
+    take="if [ -h '$g' ] || { [ -e '$g' ] && [ ! -f '$g' ]; }; then exit 3; fi; [ -e '$g' ] || exit 4; exec cat '$g'"
+    if [ "$under_su" = 1 ]; then
+        su -s /bin/sh "$user" -c "$take" > "$out/taken/$f" 2>/dev/null || rc=$?
+    else
+        sh -c "$take" > "$out/taken/$f" 2>/dev/null || rc=$?
     fi
+    case $rc in
+        0) ;;
+        4) rm -f "$out/taken/$f" ;;
+        3)
+            echo "measure: $scene: failed: OUT/$f is not a plain file" >&2
+            exit 1
+            ;;
+        *)
+            echo "measure: $scene: failed: OUT/$f could not be read" >&2
+            exit 1
+            ;;
+    esac
 done
-if [ "$status" -ne 0 ] || [ ! -s "$out/frametimes" ]; then
+if [ "$status" -ne 0 ] || [ ! -s "$out/taken/frametimes" ]; then
     echo "measure: $scene: failed: $(tail -n 3 "$out/scene.log" | tr '\n' ' ')" >&2
     exit 1
 fi
 
 copied=$(delta virtio_gpu_copied_bytes) exits=$(delta kvm_exits) trips=$(delta rung)
-passed=- cpuframes=$(grep -c . "$out/frametimes")
-[ ! -s "$out/cpuframes" ] || cpuframes=$(cat "$out/cpuframes")
-[ ! -f "$out/passes" ] || passed=$(grep -c 1 "$out/passes")/$(grep -c . "$out/passes")
+passed=- cpuframes=$(grep -c . "$out/taken/frametimes")
+[ ! -s "$out/taken/cpuframes" ] || cpuframes=$(cat "$out/taken/cpuframes")
+[ ! -f "$out/taken/passes" ] || passed=$(grep -c 1 "$out/taken/passes")/$(grep -c . "$out/taken/passes")
 [ "$exits" != - ] || exits=$(delta linux_exits)
 if [ -n "$relay" ]; then
     copied=$(delta relay_bytes) trips=$(delta relay_commands)
 fi
 tick=$(getconf CLK_TCK 2>/dev/null || echo 100)
-sort -g "$out/frametimes" | awk -v busy="$(delta busy)" -v tick="$tick" -v scene="$scene" -v rung="$rung" \
+sort -g "$out/taken/frametimes" | awk -v busy="$(delta busy)" -v tick="$tick" -v scene="$scene" -v rung="$rung" \
     -v lat="$lat" -v copied="$copied" -v exits="$exits" -v trips="$trips" -v s="$start" -v e="$end" \
     -v cpuframes="$cpuframes" -v passed="$passed" '
     { t[NR] = $1; sum += $1 }
