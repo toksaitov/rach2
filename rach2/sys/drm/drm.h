@@ -1122,7 +1122,14 @@ struct drm_atomic_state {
  * ADDFB or ADDFB2 made, before it gets its ID, as Linux's driver's
  * fb_create does: it may give a legacy framebuffer its object's modifier,
  * and an error refuses it; `fb_destroy` lets go what it took, before the
- * last put of the framebuffer drops its objects.
+ * last put of the framebuffer drops its objects. `commit_fence_wait`, when
+ * set, is told of each plane fence a nonblocking commit deferred to the
+ * worker would wait for in Linux's commit tail, which Linux queues at
+ * once: the first plane's not yet signalled as the commit is queued, and
+ * each next one's as the one before signals, so that the driver can do
+ * what its wait would, as i915's boosts the request. With interrupts
+ * masked, maybe in an interrupt; it may not sleep, and the fence is
+ * borrowed.
  */
 struct drm_mode_config {
     uint32_t min_width, max_width, min_height, max_height;
@@ -1156,6 +1163,7 @@ struct drm_mode_config {
     int32_t (*atomic_commit)(struct drm_device *dev, struct drm_atomic_state *state, int nonblock);
     int32_t (*fb_create)(struct drm_device *dev, struct drm_framebuffer *fb);
     void (*fb_destroy)(struct drm_framebuffer *fb);
+    void (*commit_fence_wait)(struct drm_device *dev, struct dma_fence *fence);
 };
 
 /* The index masks of Linux's drm_crtc_mask, drm_plane_mask and

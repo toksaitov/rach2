@@ -429,6 +429,26 @@ static void flip_boost(struct intel_crtc *c, const struct drm_plane_state *ps)
 }
 
 /**
+ * Boost the request `fence` is when the chip has not begun it, at the
+ * moment the core says a deferred commit's tail would wait for it, for
+ * `mode_config.commit_fence_wait`: Linux's intel_atomic_commit_fence_wait
+ * waits with dma_fence_wait_timeout, which reaches i915_fence_wait, and
+ * its i915_request_wait_timeout boosts such a request after the spin,
+ * which it skips (i915_request.c:2030-2047). Nothing for another driver's
+ * fence or a merge, which Linux waits for in dma_fence_default_wait.
+ * Interrupts masked.
+ */
+static void commit_fence_wait(struct drm_device *dev, struct dma_fence *fence)
+{
+    struct i915_request *rq = (struct i915_request *)fence;
+
+    (void)dev;
+    if (fence->ops == &i915_fence_ops && !i915_request_started(rq)) {
+        i915_rps_boost(rq);
+    }
+}
+
+/**
  * Hand the commit's mark in RPS's interactive count to the pipes of
  * `pipes` whose flip is pending: one mark for the commit, in a free slot
  * of `rps_marks`, which the last of those pipes lets go once its flip
@@ -1591,6 +1611,7 @@ int32_t intel_display_init(struct drm_i915_private *i915)
     mc->atomic_commit = intel_atomic_commit;
     mc->fb_create = intel_fb_create;
     mc->fb_destroy = intel_fb_destroy;
+    mc->commit_fence_wait = commit_fence_wait;
     intel_cdclk_init(i915);
     intel_wm_init(i915);
     intel_gmbus_setup(i915);

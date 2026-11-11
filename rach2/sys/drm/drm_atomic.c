@@ -1388,9 +1388,11 @@ static void commit_tail(struct drm_atomic_state *state)
  * A nonblocking commit whose in-fences had not all signalled, which the
  * worker, or a blocking commit of the same objects, finishes once they
  * have: the commit's states, moved from the caller's after the swap, a
- * callback on each plane's fence, how many have yet to signal, whether
- * its tail has begun, and a hold on the device. The queue is in the order
- * the commits were made, and a work stays on it until its tail ends.
+ * callback on each plane's fence, how many have yet to signal, the plane
+ * whose fence Linux's tail would be waiting for (`waited`,
+ * DRM_MAX_PLANES for none), whether its tail has begun, and a hold on the
+ * device. The queue is in the order the commits were made, and a work
+ * stays on it until its tail ends.
  */
 struct commit_work;
 struct commit_fence_cb {
@@ -1401,6 +1403,7 @@ struct commit_work {
     struct drm_atomic_state state;
     struct commit_fence_cb cbs[DRM_MAX_PLANES];
     uint32_t waiting;
+    int waited;
     int running;
     struct commit_work *next;
 };
@@ -1413,15 +1416,44 @@ static wait_queue_t work_wait;
  * empty. */
 static wait_queue_t work_done_wait;
 
-/** A fence of a queued commit signalled: one fewer to wait for. In the
- * signaller's context, which may be an interrupt; dma_fence_signal runs
- * it with interrupts masked, so that its decrement cannot fall inside
- * another's. */
+/**
+ * Move `w`'s tail to the first plane after `from` whose fence has not
+ * signalled and hand that fence to the driver's `commit_fence_wait`, as
+ * Linux's intel_atomic_commit_fence_wait (intel_display.c:7262-7280)
+ * waits for each plane's fence in turn, at the start of the tail that
+ * Linux queues at once. Interrupts masked.
+ */
+static void work_fence_next(struct commit_work *w, int from)
+{
+    const struct drm_mode_config *mc = &w->state.dev->mode_config;
+    int i;
+
+    for (i = from + 1; i < DRM_MAX_PLANES; i++) {
+        struct drm_plane_state *ps = w->state.planes_new[i];
+
+        if (ps && ps->fence && !ps->fence->signaled) {
+            break;
+        }
+    }
+    w->waited = i;
+    if (i < DRM_MAX_PLANES && mc->commit_fence_wait) {
+        mc->commit_fence_wait(w->state.dev, w->state.planes_new[i]->fence);
+    }
+}
+
+/** A fence of a queued commit signalled: one fewer to wait for, and, for
+ * the fence the tail would wait for, the next plane's. In the signaller's
+ * context, which may be an interrupt; dma_fence_signal runs it with
+ * interrupts masked, so that its decrement cannot fall inside another's. */
 static void work_fence_done(struct dma_fence *fence, struct dma_fence_cb *cb)
 {
-    struct commit_work *w = ((struct commit_fence_cb *)cb)->work;
+    struct commit_fence_cb *fcb = (struct commit_fence_cb *)cb;
+    struct commit_work *w = fcb->work;
 
     (void)fence;
+    if (fcb - w->cbs == w->waited) {
+        work_fence_next(w, w->waited);
+    }
     if (--w->waiting == 0) {
         wq_wake_all(&work_wait);
         wq_wake_all(&work_done_wait);
@@ -1735,7 +1767,8 @@ static int32_t commit_worker_start(void)
 #endif
 
 /** Queue the commit `state`, swapped in, for the worker: its states move
- * to `w`, which takes a callback on each in-fence not yet signalled. */
+ * to `w`, which takes a callback on each in-fence not yet signalled, and
+ * the driver is told of the first fence its tail would wait for. */
 static void work_queue(struct commit_work *w, struct drm_atomic_state *state)
 {
     struct commit_work **link;
@@ -1750,8 +1783,10 @@ static void work_queue(struct commit_work *w, struct drm_atomic_state *state)
     k_memset(state->connectors_old, 0, sizeof(state->connectors_old));
     k_memset(state->connectors_new, 0, sizeof(state->connectors_new));
     /* One count of its own while the callbacks go on, so that a fence
-     * signalled meanwhile cannot make it ready early. */
+     * signalled meanwhile cannot make it ready early; no plane is waited
+     * for until they are all on. */
     w->waiting = 1;
+    w->waited = DRM_MAX_PLANES;
     for (i = 0; i < DRM_MAX_PLANES; i++) {
         struct drm_plane_state *ps = w->state.planes_new[i];
 
@@ -1770,6 +1805,7 @@ static void work_queue(struct commit_work *w, struct drm_atomic_state *state)
         }
     }
     flags = kirq_save();
+    work_fence_next(w, -1);
     w->waiting--;
     kirq_restore(flags);
     drm_dev_get(w->state.dev);
