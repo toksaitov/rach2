@@ -4,7 +4,7 @@
 
 ## Use
 
-Build the kernel with `make rach2-lockdep`, for `ARCH=i686` or `ARCH=x86_64`, and boot it in place of `kernel`. Read the reports from the kernel log, `dmesg` or the serial port, under the subsystem `lockdep`, and the checker's state from `/proc/lockdep` and `/proc/lockdep_stats`, which only this kernel has; [proc(5)](../../../man/man5/proc.5) gives their format.
+Build the kernel with `make rach2-lockdep`, for `ARCH=i686` or `ARCH=x86_64`, and boot it in place of `kernel`. Read the reports from the kernel log, `dmesg` or the serial port, under the subsystem `lockdep`, and the checker's state from `/proc/lockdep` and `/proc/lockdep_stats`, which only this kernel has; [proc(5)](../../../man/man5/proc.5) gives their format. A write of `abba` or `irq` to debugfs's `lockdep/inject` makes the checker report a possible deadlock or an interrupt inversion on locks of its own, to show that it reports ([debugfs(5)](../../../man/man5/debugfs.5)).
 
 ## Results
 
@@ -75,7 +75,7 @@ The reports go through `klog_report_begin`, `klog_report` and `klog_report_end`,
 
 ## Limits
 
-* Spinlocks are checked from 84-1. The hooks for the big lock, sleeping locks, `schedule` and `irq_enter` are in place for 84-2, which calls them.
+* Spinlocks, the big lock, `struct mutex`, `struct rwsem` and `struct sleep_lock` are checked, and `schedule` reports a switch made with a spinlock held as a sleep under it (`lockdep_switch`). An interrupt is the depth `irq_enter` keeps (`in_interrupt`), so code an interrupt runs before `irq_enter` counts as the interrupted context.
 * There are no read locks and no softirq states: the kernel has neither.
 * Only `kirq_restore` tells the checker that interrupts come on; a raw `sti` elsewhere goes unseen, so a lock it uncovers is not marked as held with interrupts on.
 * Code in an NMI is not checked.
