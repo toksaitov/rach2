@@ -42,7 +42,9 @@
  * counted in flight. A descriptor in flight while its file moves is counted,
  * installed and released by the node the move gave its description. Each
  * row ends with nothing allocated. A pipe's sleeping lock is the kernel's
- * (`fs/sleeplock.c`), which a sibling waits for as for any other.
+ * (`fs/sleeplock.c`). The sibling runs as the row's own process, which that
+ * lock takes for its holder, so a sibling would take a pipe's lock that the
+ * sleeping call holds without waiting; no row has it take one.
  */
 #include "ipc/unix.c"
 #include "ipc/pipe.c"
