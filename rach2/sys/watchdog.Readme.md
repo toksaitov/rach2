@@ -23,7 +23,7 @@ The hard lockup's headline is `watchdog: watchdog detected hard LOCKUP on cpu N`
 
 ## Interfaces
 
-`watchdog.h` declares the settings, `watchdog_init`, which the boot calls once after the other processors start, and the calls the rest of the kernel makes: `watchdog_tick` from every processor's tick, `watchdog_sched` from `schedule` and `sched_service_point`, `watchdog_wait` from each turn of a wait with interrupts off (`smp_service`), `watchdog_nmi` from the NMI handler, `touch_softlockup_watchdog` and `touch_nmi_watchdog` for code that keeps a processor on purpose, and `watchdog_test` for the shell. The PC's part is in [`platform.h`](platform.h) and `arch/x86/nmiwd.c`: the counter (`platform_pmu_probe`, `_enable`, `_disable`, `_overflow`), the clock (`platform_cpu_hz`), the register dump and stack walks (`platform_show_regs`, `platform_show_stack`, `platform_blocked_frame`) and whether a frame is a halted idle wait (`platform_frame_idle`).
+`watchdog.h` declares the settings, `watchdog_init`, which the boot calls once after the other processors start, and the calls the rest of the kernel makes: `watchdog_tick` from every processor's tick, `watchdog_sched` from `schedule` and `sched_service_point`, `watchdog_wait` from each turn of a wait with interrupts off (`smp_service`), `watchdog_nmi` from the NMI handler, `touch_softlockup_watchdog` and `touch_nmi_watchdog` for code that keeps a processor on purpose, and `watchdog_test` for the shell. The PC's part is in [`platform.h`](platform.h), `arch/x86/pmu.c`, the counter (`platform_pmu_probe`, `_enable`, `_disable`, `_overflow`) and the clock (`platform_cpu_hz`), and `arch/x86/nmiwd.c`, the register dump and stack walks (`platform_show_regs`, `platform_show_stack`, `platform_blocked_frame`) and whether a frame is a halted idle wait (`platform_frame_idle`).
 
 ## Design
 
@@ -55,4 +55,5 @@ Reports are serialized among the detectors by a lock taken again by the processo
 
 ## Tests
 
-* The debug shell's `lockup` command is the test: in QEMU, under TCG for the buddy check and under KVM with `-cpu host` for the counter, `lockup soft`, `lockup hard` and `lockup hung` each give their report, and with `softlockup_panic=1`, `nmi_watchdog=panic` or `hung_task_panic=1` a panic.
+* `tests/run smp` has the cases `machine.smp.softlockup`, `hardlockup` and `hungtask` of [`machine.smp.json`](../../tests/cases/machine.smp.json): on two processors with `watchdog_thresh=2` and `sysctl.kernel.hung_task_timeout_secs=3`, the debug shell's `lockup` of each kind must be reported with its call trace and, under `softlockup_panic=1`, `nmi_watchdog=panic` or `hung_task_panic=1`, end in its panic with both processors halted; `machine.smp.lockups` holds all three in one boot without a panic option, and each must be reported and give the shell back. Under TCG the hard lockup is the buddy check's; under KVM, whose `-cpu max` has a PMU, the counter's.
+* `tests/host/pmu_hosttest.c` runs `arch/x86/pmu.c` against a model of the counter's registers on the Lenovo's Haswell and six other processors, and checks each register write, the NMIs due at each period and the counter stopped after the disable.
