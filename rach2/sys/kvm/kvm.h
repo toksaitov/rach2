@@ -901,10 +901,11 @@ void kvm_tsc_moved(struct kvm_vcpu *v);
 /** Read or write, by `write`, the MSR `index` of `v` when it is one of
  * KVM's own: the kvmclock's four, MSR_KVM_STEAL_TIME and
  * MSR_KVM_POLL_CONTROL. `host` is 1 for
- * KVM_GET_MSRS and KVM_SET_MSRS. 0; -1 for a fault the guest takes as #GP,
- * which an MSR whose feature its CPUID lacks under
- * KVM_CAP_ENFORCE_PV_FEATURE_CPUID gives, and the caller as a refusal; 1
- * for an MSR that is not KVM's. */
+ * KVM_GET_MSRS and KVM_SET_MSRS. 0; KVM_MSR_INVAL for a value refused;
+ * KVM_MSR_UNKNOWN for an MSR whose feature the CPUID lacks under
+ * KVM_CAP_ENFORCE_PV_FEATURE_CPUID, as Linux's KVM_MSR_RET_UNSUPPORTED,
+ * but for the caller's read and its write of 0; 1 for an MSR that is not
+ * KVM's. */
 int kvm_pv_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, int host);
 
 /** Write `v`'s kvmclock into guest memory before an entry, when it was
