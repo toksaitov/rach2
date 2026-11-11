@@ -249,9 +249,16 @@ struct ata_drive {
 };
 
 static uint32_t ata_seen; /* `kernel_ticks` at `ata_tick`'s last call */
-static struct ata_channel channels[2] = {
-    {0x1F0, 0x3F6, "primary", ATA_IRQ_PRIMARY, {0}, 0, 0, 0, 0, 0, 0, 0, {0, 0, 0}, {0}},
-    {0x170, 0x376, "secondary", ATA_IRQ_SECONDARY, {0}, 0, 0, 0, 0, 0, 0, 0, {0, 0, 0}, {0}}};
+/* Zero until `ata_init` gives each channel its legacy ports, name and line:
+   an initializer would put the bounce buffers in .data, and their 128 KiB of
+   zeros, with the padding their alignment takes, in the kernel file. */
+static struct ata_channel channels[2];
+static const struct {
+    uint16_t io, ctrl;
+    const char *name;
+    uint8_t irq;
+} ata_legacy[2] = {{0x1F0, 0x3F6, "primary", ATA_IRQ_PRIMARY},
+                   {0x170, 0x376, "secondary", ATA_IRQ_SECONDARY}};
 static struct ata_drive drives[4];
 
 static int ata_read(block_device_t *device, uint64_t lba, uint32_t count, void *buffer);
@@ -1033,6 +1040,10 @@ static int same_drive(const uint16_t *a, const uint16_t *b)
 }
 
 /**
+ * Give each channel its ports, name and interrupt line, legacy or native,
+ * and register the drives that answer IDENTIFY. Returns 0 when one was
+ * found, -1 otherwise. Nothing reads a channel's ports before this.
+ *
  * `rach2.atapio` keeps a drive on the data port, so its transfers move with
  * interrupts off rather than through the bus master. A caller can still
  * sleep then, for the channel and for the cache flush that follows a write.
@@ -1042,6 +1053,12 @@ int ata_init(void)
     static uint16_t identify[4][ATA_WORDS_PER_SECTOR];
     int c, s, found = 0;
 
+    for (c = 0; c < 2; c++) {
+        channels[c].io = ata_legacy[c].io;
+        channels[c].ctrl = ata_legacy[c].ctrl;
+        channels[c].name = ata_legacy[c].name;
+        channels[c].irq = ata_legacy[c].irq;
+    }
     ata_native_ports();
     for (c = 0; c < 2; c++) {
         struct ata_channel *ch = &channels[c];
