@@ -15,6 +15,12 @@
  * read from the disks since boot, must not move. /proc/meminfo's Cached
  * must have grown by the file's size after the first read.
  *
+ * `eof`: a file of three pages and 100 bytes, written and synced but not
+ * read, is read with pread64 at its size, one byte past it, a page past it,
+ * at 2^44 and at 2^44 and a page, past the 32-bit page numbers. Each read
+ * must give 0 bytes and leave /proc/meminfo's Cached as it was, so that no
+ * page of the file joins the cache.
+ *
  * The rows: a file of three pages and 100 bytes is written whole and read
  * whole, which brings its pages into the cache; then one way of changing it
  * runs, and a second read must give the bytes and the size the change left:
@@ -238,6 +244,40 @@ static void twice(unsigned mib)
         fail("twice: unlink: %s", strerror(errno));
     }
     free(buf);
+}
+
+/** The row of reads at and past the end of a file that the cache does not
+ * hold yet. */
+static void row_eof(void)
+{
+    static const uint64_t past[] = {0, 1, BLOCK, 1ull << 44, (1ull << 44) + BLOCK};
+    unsigned char buf[BLOCK];
+    unsigned long long before, after;
+    size_t i;
+    int fd;
+
+    for (i = 0; i < ROW_SIZE; i++) {
+        want[i] = (unsigned char)('a' + i % 23);
+    }
+    fd = open(FILE_, O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0 || write(fd, want, ROW_SIZE) != (ssize_t)ROW_SIZE || fsync(fd) != 0) {
+        fail("eof: write the file: %s", strerror(errno));
+    }
+    before = cached_kib();
+    for (i = 0; i < sizeof(past) / sizeof(past[0]); i++) {
+        uint64_t at = ROW_SIZE + past[i];
+        ssize_t n = pread(fd, buf, sizeof(buf), (off_t)at);
+
+        if (n != 0) {
+            fail("eof: pread64 at %llu of a file of %u bytes gave %ld: %s", (unsigned long long)at,
+                 ROW_SIZE, (long)n, n < 0 ? strerror(errno) : "bytes");
+        }
+    }
+    after = cached_kib();
+    if (after != before) {
+        fail("eof: Cached went from %llu kB to %llu kB", before, after);
+    }
+    close(fd);
 }
 
 /** Write the row's file whole, with `want` as its bytes, and read it,
@@ -659,6 +699,7 @@ int main(int argc, char **argv)
         fail("mount %s: %s", node, strerror(errno));
     }
     twice(mib);
+    row_eof();
     rows_write();
     rows_size();
     rows_copy();
