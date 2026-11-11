@@ -13,7 +13,8 @@
  * It writes a byte to a pipe first, which must be there when the parent's
  * open returns.
  * The child's bytes then arrive. An open for reading and writing does not wait,
- * and once full it polls writable when a child's open reads a byte. Two FIFOs
+ * and once full it polls writable when a child's open reads a page of it, which
+ * frees a buffer's slot. Two FIFOs
  * whose names have one hash, which the KRFFS root numbers a file by, are two
  * pipes; a renamed FIFO keeps its pipe; and one unlinked while an end is open
  * keeps its pipe for that end, apart from a FIFO made in its name. Through a
@@ -55,6 +56,10 @@
 /* The FIFOs whose nodes the bind's row frees; each node's header is 357
  * bytes, so together they are some 17 KiB of the root. */
 #define ALIASES   48
+/* The bytes of a page buffer of the pipe: the full FIFO polls writable once a
+ * read frees a buffer's slot, as Linux's `pipe_poll` judges, and a read of
+ * fewer bytes than the oldest buffer holds frees none. */
+#define FIFO_PAGE 4096
 
 extern char **environ;
 
@@ -295,7 +300,8 @@ static void writer(pid_t parent, int told)
 
 /**
  * Wait to see `parent` asleep (`seen_asleep`), open the FIFO for reading and
- * read a byte of it, and keep running, reading the nonblocking `ack` in a
+ * read a page of it, FIFO_PAGE bytes, which frees the slot of the oldest
+ * buffer, and keep running, reading the nonblocking `ack` in a
  * loop, until it has a byte: an idle kernel scans a sleeping poll's
  * descriptors again at every interrupt, which would end the parent's wait
  * without the read's wake. Runs in the forked child and does not return:
@@ -304,6 +310,7 @@ static void writer(pid_t parent, int told)
  */
 static void drainer(pid_t parent, int ack)
 {
+    static char page[FIFO_PAGE];
     char byte;
     int r;
 
@@ -311,7 +318,7 @@ static void drainer(pid_t parent, int ack)
         _exit(2);
     }
     r = open(FIFO_PATH, O_RDONLY | O_NONBLOCK);
-    if (r < 0 || read(r, &byte, 1) != 1) {
+    if (r < 0 || read(r, page, sizeof(page)) != (ssize_t)sizeof(page)) {
         _exit(1);
     }
     while (read(ack, &byte, 1) != 1) {
@@ -321,11 +328,12 @@ static void drainer(pid_t parent, int ack)
 
 /**
  * Check that an open of the FIFO for reading and writing does not wait, and
- * that once full it polls writable when another open reads a byte. The
- * reader is a child that reads once it sees the poll asleep and keeps running
- * after, and the poll has no timeout: a wake the kernel misses leaves it
- * asleep, and the case's watchdog ends it. Then check read-only opens with
- * `reader_hangup`. Returns 0, or 1 once the failure is reported.
+ * that once full it polls writable when another open reads a page of it,
+ * which frees a buffer's slot (`drainer`). The reader is a child that reads
+ * once it sees the poll asleep and keeps running after, and the poll has no
+ * timeout: a wake the kernel misses leaves it asleep, and the case's watchdog
+ * ends it. Then check read-only opens with `reader_hangup`. Returns 0, or 1
+ * once the failure is reported.
  */
 static int poll_opens(void)
 {
