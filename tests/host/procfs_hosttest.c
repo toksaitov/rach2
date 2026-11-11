@@ -1326,8 +1326,10 @@ static int pid_file_reads(int pid, int wchan, const char *want)
  * number as a tracer left it, its six arguments, its stack and instruction
  * pointers, and the name its wait recorded; one blocked in a fault, or past
  * a handler's return, -1 and the two pointers; a ready thread "running" and
- * 0; a stopped one its stop's function; a kernel thread -1 with no
- * pointers; and a caller that may not read the process EACCES and 0.
+ * 0; a stopped one its stop's function; a kernel thread call 0 with every
+ * field 0x0, an exiting thread past its address space its call, and an
+ * ended one -1 with no pointers; and a caller that may not read the process
+ * EACCES and 0.
  */
 static void syscall_wchan_rows(void)
 {
@@ -1376,7 +1378,15 @@ static void syscall_wchan_rows(void)
     check(pid_file_reads(9, 1, "0"), "a ready thread has no wchan");
     thread.state = PROC_BLOCKED;
     thread.space_root = 0;
-    check(pid_file_reads(9, 0, "-1 0x0 0x0\n"), "a kernel thread has no user frame");
+    check(pid_file_reads(9, 0, "0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 0x0\n"),
+          "a kernel thread shows call 0 and zero fields, as Linux's zeroed frame gives");
+    thread.in_syscall = 1;
+    check(pid_file_reads(9, 0, "240 0x4 0x804a000 0x100 0x0 0x0 0xbffff000 0xbfffefd0 0x8048123\n"),
+          "an exiting thread past its address space shows its call");
+    thread.in_syscall = 0;
+    thread.state = PROC_ZOMBIE;
+    check(pid_file_reads(9, 0, "-1 0x0 0x0\n"), "an ended thread has no user frame");
+    thread.state = PROC_BLOCKED;
     thread.space_root = 0x1000;
     stranger.pid = 11;
     stranger.tg = &other_group;

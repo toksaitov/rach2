@@ -371,10 +371,13 @@ struct procfs_file {
     /* A snapshot's path, with the process or thread `procfs_resolve_id`
      * gave at the open, by which a read from offset 0 makes it again
      * (`procfs_read`); `fresh` while no read has used the text since it was
-     * made, and `gen` counts the times it was made. */
+     * made, and `gen` counts the times it was made. `stale` when the open
+     * made the text only for its checks, and the first read, at any
+     * offset, makes it again: /proc/<pid>/syscall's. */
     struct vpath vp;
     int gen_pid;
     int fresh;
+    int stale;
     uint32_t gen;
 };
 
@@ -1279,12 +1282,17 @@ static void ap_xlow(struct procfs_text *t, unsigned long v, int width)
  * "NR A0 A1 A2 A3 A4 A5 SP PC" when that entry was a system call, with the
  * number as a tracer left it (`orig_nr`) and the arguments of the call's
  * ABI, i386's for an `int $0x80` on x86-64, or "-1 SP PC" when it was a
- * fault or an interrupt, or after a signal handler's return. A thread with
- * no user frame, a kernel thread or a leader that has ended, reads
- * "-1 0x0 0x0", as Linux's with no stack does. All but the number are in
- * hex. -EACCES for a caller `procfs_may_read_mem` refuses, which stands for
- * Linux's mode 0400 and its PTRACE_MODE_ATTACH check. The text is made at
- * the open, so the caller's own thread shows the call that opened it.
+ * fault or an interrupt, or after a signal handler's return. A leader that
+ * has ended reads "-1 0x0 0x0", as Linux's, whose stack is gone, does. A
+ * sleeping kernel thread, one with no address space outside an exit, reads
+ * number 0 and every other field 0x0: Linux's has a stack, and the frame
+ * `copy_thread` zeroes for it gives `orig_ax` 0. An exiting thread past its
+ * address space still has its user frame. All but the number are in hex.
+ * -EACCES for a caller `procfs_may_read_mem` refuses, which stands for
+ * Linux's mode 0400 and its PTRACE_MODE_ATTACH check. The open makes the
+ * text only for these checks; the first read makes it again
+ * (`procfs_read`), as Linux's seq_file makes it, so the caller's own thread
+ * shows the read.
  */
 static int procfs_gen_syscall(struct procfs_text *t, int pid)
 {
@@ -1303,8 +1311,12 @@ static int procfs_gen_syscall(struct procfs_text *t, int pid)
         ap_str(t, "running\n");
         return t->len;
     }
-    if (p->state == PROC_ZOMBIE || p->space_root == 0) {
+    if (p->state == PROC_ZOMBIE) {
         ap_str(t, "-1 0x0 0x0\n");
+        return t->len;
+    }
+    if (p->space_root == 0 && !p->in_syscall) {
+        ap_str(t, "0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 0x0\n");
         return t->len;
     }
     tf = proc_user_frame(p);
@@ -6673,7 +6685,8 @@ static int procfs_regen(struct procfs_file *f)
  * or the error of making it again. A read from offset 0 makes the snapshot
  * again unless it is the first read of the text an open or a read made, so
  * a reader that seeks back to the start, or reads with pread64 at 0, sees
- * the file as it is then, as Linux's seq_file files are made again.
+ * the file as it is then, as Linux's seq_file files are made again. A
+ * `stale` text is made again at the first read, from any offset.
  *
  * The text goes out through a buffer on the stack, a piece at a time, since
  * the copy to the caller may sleep in a fault and pread64 holds no lock: a
@@ -6690,13 +6703,14 @@ static int32_t procfs_read(fd_entry_t *e, char __user *buf, uint32_t count)
     if (!f) {
         return 0;
     }
-    if (e->ofd->offset == 0 && !f->fresh) {
+    if (f->stale || (e->ofd->offset == 0 && !f->fresh)) {
         rc = procfs_regen(f);
         if (rc != 0) {
             return rc;
         }
     }
     f->fresh = 0;
+    f->stale = 0;
     if (e->ofd->offset >= (uint64_t)f->len) {
         return 0;
     }
@@ -8934,6 +8948,7 @@ int procfs_open(const struct vpath *vp, int flags)
     f->data = text.buf;
     f->len = len;
     f->fresh = 1;
+    f->stale = vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_SYSCALL;
     f->vp = *vp;
     f->gen_pid = pid;
     f->origin_pid = key;
