@@ -631,6 +631,15 @@ int fd_table_cap(const fd_table_t *t)
     return t ? t->cap : 0;
 }
 
+/** Whether descriptor `fd` of `t` is open and not closing, as fd.c has it. */
+int fd_is_valid(fd_table_t *t, int fd)
+{
+    if (!t || fd < 0 || fd >= t->cap) {
+        return 0;
+    }
+    return t->entries[fd].type != FD_TYPE_NONE && !(t->entries[fd].flags & FD_FLAG_CLOSING);
+}
+
 /** The link rows use a pipe end, which names no device, terminal, socket,
  * file or directory. */
 const char *devfs_fd_name(struct fd_entry *e)

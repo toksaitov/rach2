@@ -2234,7 +2234,7 @@ static void snapshot_rows(void)
 {
     static unsigned char st_path[KSTAT_SIZE], st_fd[KSTAT_SIZE];
     static char fd_dir[40], names[1024];
-    int pid, status, fd, dir_fd = -1, n, i;
+    int pid, status, fd, dir_fd, n, i;
 
     pid = syscall1(SYS_FORK, 0);
     check("snapshot-fork", pid >= 0, "fork");
