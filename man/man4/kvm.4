@@ -991,6 +991,15 @@ reads Y or N according to the host PMU probe.
 .Pa /sys/module/kvm/parameters/force_emulation_prefix
 reads 0.
 Both are read-only.
+.Pa /sys/module/kvm_intel/parameters/pmu_steps ,
+which root writes, reads 0x00 at boot; its bits add steps of Linux's
+perf to Intel's counter switching, for measuring the processor's
+counters: 0x01 writes each counter to minus its period before each entry,
+0x02 clears the guest's fixed-counter fields at each exit, 0x04 sets each
+counter's interrupt bit and needs 0x01, 0x08 sets FREEZE_WHILE_SMM in the
+guest's IA32_DEBUGCTL where PERF_CAPABILITIES offers it, and 0x10 places
+counters fixed counters first.
+Another value is EINVAL.
 .Sh FILES
 .Bl -tag -width /sys/module/kvm/parameters
 .It Pa /dev/kvm
