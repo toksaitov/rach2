@@ -22,7 +22,10 @@
 #include "../../proc/smp.h"
 #include "../../timer.h"
 #include "debugreg.h"
-#if !defined(__x86_64__)
+#if defined(__x86_64__)
+#include "../x86_64/sysnr.h"
+#else
+#include "../i686/sysnr.h"
 #include "../i686/tss.h"
 #endif
 
@@ -661,9 +664,25 @@ static void user_entry(const isr_params_t *params)
  */
 void _isr_router(isr_params_t *params)
 {
+    uint64_t start = 0;
+    uint32_t nr = 0, cmd = 0;
+    int is_ioctl = 0, ioctl = 0;
+
     user_entry(params);
+    if (params->vector == SYSCALL_ENTRY) {
+        start = arch_cycles();
+        nr = (uint32_t)SC_NR(params);
+        is_ioctl = !SC_COMPAT(params) && nr == SYS_IOCTL;
+        cmd = (uint32_t)SC_ARG(params, 1);
+    }
     bkl_enter();
+    if (is_ioctl) {
+        ioctl = bkl_note_ioctl(cmd);
+    }
     isr_router_locked(params);
+    if (params->vector == SYSCALL_ENTRY) {
+        smp_call_end(nr, ioctl, start);
+    }
 }
 
 /** Dispatch a saved frame with the big lock held; isr_leave releases it. */
@@ -876,8 +895,14 @@ void _irq_router(isr_params_t *params)
     bkl_note_entry((uint32_t)params->vector, -1);
 #if defined(__x86_64__)
     bkl_hold_sample((uintptr_t)FRAME_PC(params), (uintptr_t)params->rbp);
+    if (params->vector == IRQ_VECTOR(0)) {
+        bkl_profile_sample((uintptr_t)FRAME_PC(params), (uintptr_t)params->rbp);
+    }
 #else
     bkl_hold_sample((uintptr_t)FRAME_PC(params), (uintptr_t)params->ebp);
+    if (params->vector == IRQ_VECTOR(0)) {
+        bkl_profile_sample((uintptr_t)FRAME_PC(params), (uintptr_t)params->ebp);
+    }
 #endif
     irq_count++;
     if (params->vector >= 32 && params->vector <= ISR_MSI_LAST) {
