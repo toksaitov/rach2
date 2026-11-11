@@ -21,9 +21,11 @@
 #if RACH2_IA32
 
 /* The router of a system call's frame, the note of its ioctl request for
- * bkl/calls and the return after it (isr.c). */
+ * bkl/calls, the entry's choice of the big lock and the return after it
+ * (isr.c). */
 void isr_router_locked(isr_params_t *params);
 int isr_call_ioctl(const isr_params_t *params);
+int isr_entry_lock(const isr_params_t *params);
 void isr_leave(isr_params_t *params);
 
 /* The flags only `iretq` restores: TF, and RF, which `sysret` clears. */
@@ -510,8 +512,10 @@ uintptr_t ia32_vdso_sigreturn(int rt)
  * among them, has it as at address 0, in the first page, where the program
  * takes SIGSEGV.
  *
- * The call and its ioctl request count in debugfs's bkl/calls as
- * `_isr_router` counts an `int $0x80`'s.
+ * The call takes the big lock, or runs without it, as `_isr_router` decides
+ * for an `int $0x80` (`isr_entry_lock`), and it and its ioctl request count
+ * in debugfs's bkl/calls the same way. The read of EBP from the stack takes
+ * the lock when the call runs without it (`copy_from_user`).
  *
  * After the call, and the signal its return delivers (`isr_leave`), the
  * return may be by `sysretl`, as Linux's opportunistic SYSRETL: when the
@@ -525,10 +529,9 @@ int ia32_fast_syscall(isr_params_t *p, int sysenter)
     uintptr_t base, landing;
     uint64_t start = arch_cycles();
     uint32_t ebp, nr = (uint32_t)p->rax;
-    int ioctl = 0;
+    int ioctl = 0, locked;
 
-    bkl_enter();
-    bkl_frame_push(1);
+    locked = isr_entry_lock(p);
     mm = current_proc ? current_proc->mm : NULL;
     base = mm && mm->compat ? mm->vdso : 0;
     landing = vdso32_at(base, vdso32_landing);
@@ -541,7 +544,7 @@ int ia32_fast_syscall(isr_params_t *p, int sysenter)
         p->rax = (uint64_t)(int64_t)-EFAULT;
     } else {
         p->rbp = ebp;
-        ioctl = isr_call_ioctl(p);
+        ioctl = locked ? isr_call_ioctl(p) : 0;
         isr_router_locked(p);
     }
     smp_call_end(nr, ioctl, start);

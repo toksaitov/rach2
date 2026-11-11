@@ -38,6 +38,24 @@ typedef void (*isr_handler_t)(isr_params_t *);
  */
 void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *name);
 
+/* A handler's flag: it runs without the big lock, which takes nothing the
+ * lock guards, as Linux's handlers take only their device's own locks. */
+#define ISR_UNLOCKED 1u
+
+/**
+ * Give `handler`, already on `vector`'s chain, the flags `flags`
+ * (ISR_UNLOCKED). The router of a device's interrupt or an exception runs
+ * the chain without the big lock only while every handler on it carries
+ * ISR_UNLOCKED; a handler added later runs under the lock until it is
+ * marked too. A handler not on the chain is reported in the log.
+ */
+void isr_register_flags(uint8_t vector, isr_handler_t handler, unsigned int flags);
+
+/** Mark every handler on the chain of exception `vector`, below 32,
+ * ISR_UNLOCKED, as `isr_register_flags` does: the page fault's, once the
+ * fault takes its own locks. */
+void exception_unlock(uint8_t vector);
+
 /** Replace a vector's entire chain with a single `handler` named `name`,
  * for a vector no other handler may share, and route a platform line as
  * `register_isr_handler` does. */

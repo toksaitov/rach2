@@ -27,6 +27,7 @@
 #include "proc/tgroup.h"
 #include "proc/ptrace.h"
 #include "proc/seccomp.h"
+#include "proc/smp.h"
 #include "proc/ns.h"
 #include "lib/krandom.h"
 #include "lib/kerrno.h"
@@ -185,6 +186,13 @@ static syscall_fn_t _ia32_syscall_table[IA32_SYSCALL_TABLE_SIZE];
 long compat_sys_ioctl(isr_params_t *params);
 #endif
 
+/* The numbers of each table whose calls run without the big lock
+ * (`syscall_unlock`), a bit each. */
+static uint32_t _syscall_unlocked[(SYSCALL_TABLE_SIZE + 31) / 32];
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+static uint32_t _ia32_syscall_unlocked[(IA32_SYSCALL_TABLE_SIZE + 31) / 32];
+#endif
+
 /** The table the call in `params` is numbered in, and its size in `size`:
  * the compat table for a call SC_COMPAT marks, else the native one. */
 static syscall_fn_t *syscall_table_of(const isr_params_t *params, uint32_t *size)
@@ -198,6 +206,49 @@ static syscall_fn_t *syscall_table_of(const isr_params_t *params, uint32_t *size
     (void)params;
     *size = SYSCALL_TABLE_SIZE;
     return _syscall_table;
+}
+
+void syscall_unlock(int abi, syscall_fn_t handler)
+{
+    syscall_fn_t *table = _syscall_table;
+    uint32_t *bits = _syscall_unlocked;
+    uint32_t size = SYSCALL_TABLE_SIZE, i;
+
+    if (abi == SYSCALL_ABI_IA32) {
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+        table = _ia32_syscall_table;
+        bits = _ia32_syscall_unlocked;
+        size = IA32_SYSCALL_TABLE_SIZE;
+#else
+        return;
+#endif
+    } else if (abi != SYSCALL_ABI_NATIVE) {
+        return;
+    }
+    for (i = 0; i < size; i++) {
+        if (handler != 0 && table[i] == handler) {
+            bits[i / 32] |= 1u << (i % 32);
+        }
+    }
+}
+
+int syscall_entry_locked(const isr_params_t *params)
+{
+    const process_t *p = current_proc;
+    const uint32_t *bits = _syscall_unlocked;
+    uint32_t nr = (uint32_t)SC_NR(params), size;
+    syscall_fn_t *table = syscall_table_of(params, &size);
+
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    if (SC_COMPAT(params)) {
+        bits = _ia32_syscall_unlocked;
+    }
+#endif
+    if (!p || (p->ptrace & (PT_SYSCALL | PT_STEP)) || p->seccomp_mode != SECCOMP_MODE_DISABLED ||
+        p->fd_holding || usbdisk_pending()) {
+        return 1;
+    }
+    return nr >= size || !table[nr] || !(bits[nr / 32] & (1u << (nr % 32)));
 }
 
 int in_compat_syscall(void)
@@ -3168,6 +3219,57 @@ static void syscall_missing(uint32_t syscall_num, int compat)
     }
 }
 
+/** Take the big lock for a call's work that needs it when the call runs
+ * without it; nonzero when this took it, for `syscall_relock_end`. */
+static int syscall_relock(void)
+{
+    if (bkl_held()) {
+        return 0;
+    }
+    bkl_enter();
+    return 1;
+}
+
+/** Give back the lock `syscall_relock` took, when `relock` says it did. */
+static void syscall_relock_end(int relock)
+{
+    if (relock) {
+        bkl_exit();
+    }
+}
+
+/** Let go of the descriptors the call held (`fd_holds_release`), under the
+ * big lock: at once when the call holds it, and otherwise only when there
+ * is something to let go, a hold or a table's replaced arrays. */
+static void syscall_holds_release(void)
+{
+    const process_t *p = current_proc;
+
+    if (bkl_held()) {
+        fd_holds_release();
+    } else if (p && (p->fd_holding || (p->fds && p->fds->retired))) {
+        bkl_enter();
+        fd_holds_release();
+        bkl_exit();
+    }
+}
+
+/** Deliver what the loopback ring holds at a call's exit, under the big
+ * lock: the call's own, or the lock taken only when it is free, the ring
+ * otherwise left to the holder's exit or the timer. Interrupts are off. */
+static void syscall_loop_drain(void)
+{
+    if (!ip_loop_pending()) {
+        return;
+    }
+    if (bkl_held()) {
+        ip_loop_drain_from(IP_LOOP_FROM_CALL);
+    } else if (bkl_try_enter()) {
+        ip_loop_drain_from(IP_LOOP_FROM_CALL);
+        bkl_exit();
+    }
+}
+
 /**
  * The system call entry's handler: dispatch on the call's number.
  *
@@ -3213,6 +3315,12 @@ static void syscall_missing(uint32_t syscall_num, int compat)
  * a call that was not interrupted, with no other signal work, reaches the
  * program unchanged, as on Linux.
  *
+ * A call that runs without the big lock (`syscall_entry_locked`) takes it
+ * for the work of its entry and exit that needs it, which a tracer that
+ * attached or a filter another thread installed meanwhile may bring: the
+ * tracer's stops, the filters, the descriptors it held. The USB sticks wait
+ * for a call that holds the lock.
+ *
  * At the exit whatever the loopback ring holds is delivered, a lone
  * datagram too, so that a receive that follows the call finds what it sent,
  * as on Linux 6.12.115, where loopback_xmit queues the datagram for the
@@ -3222,7 +3330,9 @@ static void syscall_missing(uint32_t syscall_num, int compat)
  * own. The sender's own frames are gone by then, so no delivery runs under
  * them. Interrupts are off, the drain does not run inside itself, and it
  * takes at most four times the ring's slots in one run; what is left is
- * taken by the next call's exit or by the timer.
+ * taken by the next call's exit or by the timer. A call without the lock
+ * drains only when the lock is free (`bkl_try_enter`), and otherwise leaves
+ * the ring to the holder's exit or the timer.
  */
 static void _syscall_handler(isr_params_t *params)
 {
@@ -3230,7 +3340,7 @@ static void _syscall_handler(isr_params_t *params)
     uint32_t size;
     syscall_fn_t *table = syscall_table_of(params, &size);
     long ret = -ENOSYS;
-    int skip = 0;
+    int skip = 0, relock;
 
     if (current_proc) {
         current_proc->in_syscall = 1;
@@ -3238,19 +3348,26 @@ static void _syscall_handler(isr_params_t *params)
 
     arch_irq_enable();
 
-    usbdisk_service();
+    if (bkl_held()) {
+        usbdisk_service();
+    }
 
     if (current_proc) {
         current_proc->orig_nr = (int32_t)syscall_num;
         if (current_proc->ptrace & PT_SYSCALL) {
+            relock = syscall_relock();
             ptrace_syscall_stop(params, syscall_num, 0);
             syscall_num = (uint32_t)current_proc->orig_nr;
             skip = current_proc->orig_nr == -1;
+            syscall_relock_end(relock);
         }
-        if (!skip && current_proc->seccomp_mode != SECCOMP_MODE_DISABLED &&
-            !seccomp_permit(params, syscall_num, &ret)) {
-            skip = 1;
-            SC_RET(params) = (unsigned long)ret;
+        if (!skip && current_proc->seccomp_mode != SECCOMP_MODE_DISABLED) {
+            relock = syscall_relock();
+            if (!seccomp_permit(params, syscall_num, &ret)) {
+                skip = 1;
+                SC_RET(params) = (unsigned long)ret;
+            }
+            syscall_relock_end(relock);
         }
     }
     if (current_proc) {
@@ -3265,14 +3382,16 @@ static void _syscall_handler(isr_params_t *params)
         syscall_missing(syscall_num, SC_COMPAT(params));
     }
 
-    fd_holds_release();
+    syscall_holds_release();
     if (current_proc) {
         ret = restart_result(params, !skip && syscall_num < size ? table[syscall_num] : NULL, ret);
     }
     if (current_proc && (current_proc->ptrace & (PT_SYSCALL | PT_STEP))) {
+        relock = syscall_relock();
         SC_RET(params) = (unsigned long)ret;
         ptrace_syscall_stop(params, syscall_num, 1);
         ret = (long)SC_RET(params);
+        syscall_relock_end(relock);
     }
 
     arch_irq_disable();
@@ -3280,9 +3399,7 @@ static void _syscall_handler(isr_params_t *params)
     if (current_proc) {
         current_proc->in_syscall = 0;
     }
-    if (ip_loop_pending()) {
-        ip_loop_drain_from(IP_LOOP_FROM_CALL);
-    }
+    syscall_loop_drain();
     sched_take_preempt();
 
     /* The result, in the register the return to user mode restores it from. */
@@ -3303,6 +3420,9 @@ void init_syscall(void)
     }
     ia32_syscall_init(_ia32_syscall_table);
 #endif
+    /* The calls that take no lock but the scheduler's. */
+    syscall_unlock(SYSCALL_ABI_NATIVE, sys_sched_yield);
+    syscall_unlock(SYSCALL_ABI_IA32, sys_sched_yield);
 
     _trace_enosys = kcmdline_has("rach2.trace=enosys");
 }
