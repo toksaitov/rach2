@@ -14102,7 +14102,10 @@ static long vmsplice_write(fd_entry_t *e, uintptr_t uiov, int iovcnt, uint32_t w
  * both ways writes, as Linux's does. Linux gives the pipe the caller's pages
  * where it can; this kernel copies the bytes, which is the same for a caller
  * that does not change a buffer after a SPLICE_F_GIFT, and refuses a source
- * page that Linux's get_user_pages refuses, such as `[vvar]`, with -EFAULT.
+ * page that Linux's get_user_pages refuses, such as `[vvar]` or an untouched
+ * page of a mapping without PROT_READ, with -EFAULT. The import brings no
+ * source page in, as Linux's import_iovec brings none, so that the pipe
+ * judges each page before its own fault makes it present (`pipe_put`).
  * The pipe end waits unless SPLICE_F_NONBLOCK, whatever its description's
  * O_NONBLOCK, as Linux's vmsplice passes the caller's flags alone, a write
  * end only before its first byte, so that the call returns what fitted in
@@ -14137,7 +14140,7 @@ long sys_vmsplice(isr_params_t *params)
     if (cnt > IOV_MAX_LOCAL) {
         return -EINVAL;
     }
-    wanted = iov_import(NULL, uiov, (int)cnt, !write);
+    wanted = iov_import(NULL, uiov, (int)cnt, write ? -1 : 1);
     if (wanted <= 0) {
         return wanted;
     }

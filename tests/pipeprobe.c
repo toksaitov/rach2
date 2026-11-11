@@ -78,7 +78,9 @@
  *       page takes 65535 bytes in sixteen buffers. A vmsplice from a
  *       mapping made with PROT_WRITE alone is EFAULT for a page never
  *       written, which Linux's get_user_pages refuses for want of
- *       VM_READ, and takes a byte of a page written first.
+ *       VM_READ, and takes a byte of a page written first; a private
+ *       mapping of a memfd made so is EFAULT for its untouched page too,
+ *       though the file's page is in memory.
  *
  * Given `machine=native` (probe_args.h), the probe leaves out the heap's
  * comparison of (e), since the kernel's heap is shared with every process of
@@ -280,6 +282,7 @@ enum {
     PAGES_SLOTS,
     PAGES_SLOTS_UNALIGNED,
     PAGES_WRONLY,
+    PAGES_WRONLY_FILE,
     MAX_ROUND,
     MAX_EINVAL,
     SYSCTL_PLUS,
@@ -364,6 +367,8 @@ static const struct {
     {"pages-slots-unaligned", "a vmsplice of 128 KiB from byte 1 of a page returns 65535"},
     {"pages-wronly",
      "a vmsplice of an untouched PROT_WRITE page -> -EFAULT, and of a written one returns 1"},
+    {"pages-wronly-file",
+     "a vmsplice of an untouched PROT_WRITE private page of a memfd -> -EFAULT"},
     {"max-round", "pipe-max-size takes 600000 as 1048576, 1 as 4096 and 2^31 as written"},
     {"max-einval", "pipe-max-size refuses 2^31 + 1 with EINVAL"},
     {"sysctl-plus", "pipe-user-pages-soft and -hard refuse +64 with EINVAL and keep their values"},
@@ -1031,6 +1036,33 @@ static void pages_slots(void)
 }
 
 /**
+ * The row of case (l) that vmsplices a byte of a private mapping of a memfd
+ * made with PROT_WRITE alone and never touched: Linux's get_user_pages finds
+ * no page in the mapping, though the file's page is in memory, and its slow
+ * path refuses the region for want of VM_READ.
+ */
+static void pages_wronly_file(void)
+{
+    long fd = syscall2(SYS_MEMFD_CREATE, (long)"pipeprobe-wo", 0);
+    long wo = -1;
+    int w[2] = {-1, -1};
+    int made = do_pipe(w) == 0, filled = !sys_failed(fd) && wr((int)fd, big, 4096) == 4096;
+
+    if (filled) {
+        wo = probe_mmap(0, 4096, PROT_WRITE, MAP_PRIVATE, fd, 0);
+    }
+    check(PAGES_WRONLY_FILE, made && filled && wo != 0 && !sys_failed(wo) &&
+                                 vmsplice_one(w[1], wo, 1, SPLICE_F_NONBLOCK) == -EFAULT);
+    close_pair(w);
+    if (wo != 0 && !sys_failed(wo)) {
+        syscall2(SYS_MUNMAP, wo, 4096);
+    }
+    if (!sys_failed(fd)) {
+        syscall1(SYS_CLOSE, fd);
+    }
+}
+
+/**
  * Case (l): a shrink is refused below the page buffers that hold bytes, as
  * Linux counts them, however few bytes they hold. A write's first `count`
  * mod 4096 bytes join the newest buffer only when they fit in its page after
@@ -1063,6 +1095,7 @@ static void case_pages(void)
     pages_splices(p, q);
     pages_file(q);
     pages_slots();
+    pages_wronly_file();
     close_pair(p);
     close_pair(q);
 }
