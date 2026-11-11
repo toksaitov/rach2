@@ -9,6 +9,7 @@
 #include "rseq.h"
 #include "suspend.h"
 #include "tgroup.h"
+#include "wait_queue.h"
 #include "../io/timerfd.h"
 #include "../timer.h"
 #include "../lib/ksignal.h"
@@ -35,6 +36,53 @@ static uint32_t pick_count, pick_steps; /* selection attempts and entries examin
 
 /** Nonzero when the next selection may prefer a wait-queue wake. */
 static int _wake_turn[NR_CPUS];
+
+/* Each remote affinity caller keeps its wait on its stack until completed.
+ * The big lock and masked interrupts cover this list, outside sched_lock. */
+struct affinity_wait {
+    struct affinity_wait *next;
+    process_t *task; /* No reference remains after the wait completes. */
+    wait_queue_t queue;
+    int done;
+};
+static struct affinity_wait *affinity_waits;
+
+/** Complete every pending move of `p`, after its switch away or when a
+ * later affinity allows its processor. The big lock is held, interrupts
+ * masked and sched_lock free, since waking a waiter takes that lock. */
+static void affinity_complete(process_t *p)
+{
+    struct affinity_wait **link = &affinity_waits;
+
+    while (*link) {
+        struct affinity_wait *wait = *link;
+
+        if (wait->task != p) {
+            link = &wait->next;
+            continue;
+        }
+        *link = wait->next;
+        wait->task = NULL;
+        wait->done = 1;
+        wq_wake_all(&wait->queue);
+    }
+}
+
+/** Whether a remote affinity wait has completed; never dereference its task. */
+static int affinity_done(void *arg)
+{
+    return ((struct affinity_wait *)arg)->done;
+}
+
+/** Place `p` on `cpu`, marking its rseq area for the return to user mode.
+ * The scheduler's lock is held. */
+static void sched_move(process_t *p, int cpu)
+{
+    if (p->cpu != cpu) {
+        rseq_migrate(p);
+        p->cpu = cpu;
+    }
+}
 
 /** Unlink a queued process in constant work, with sched_lock held. */
 static void sched_remove(process_t *p)
@@ -107,7 +155,9 @@ void sched_forget(process_t *p)
     uint32_t flags = spin_lock_irqsave(&sched_lock);
 
     sched_remove(p);
-    spin_unlock_irqrestore(&sched_lock, flags);
+    spin_unlock(&sched_lock);
+    affinity_complete(p);
+    kirq_restore(flags);
 }
 
 static int sched_may_run(const process_t *p, int cpu);
@@ -263,7 +313,7 @@ static process_t *sched_steal(int cpu)
         p = sched_find(donor, cpu, 0);
         if (p) {
             sched_remove(p);
-            p->cpu = cpu;
+            sched_move(p, cpu);
             return p;
         }
     }
@@ -318,7 +368,7 @@ void sched_make_ready(process_t *p)
     p->state = PROC_READY;
     proc_timer_update(p);
     target = sched_place(p);
-    p->cpu = target;
+    sched_move(p, target);
     if (cpu_table[target].current != p) {
         sched_append(p);
     } else {
@@ -335,24 +385,43 @@ void sched_make_ready(process_t *p)
 void sched_set_affinity(process_t *p, uint64_t mask)
 {
     uint32_t flags = spin_lock_irqsave(&sched_lock);
+    struct affinity_wait wait;
+    int running = cpu_table[p->cpu].current == p;
+    int remote = running && p != current_proc && !((mask >> p->cpu) & 1u);
     int kick = -1;
 
     p->affinity = mask;
-    if (p->state == PROC_READY && cpu_table[p->cpu].current != p && !sched_allowed(p, p->cpu)) {
+    if (p->state == PROC_READY && !running && !sched_allowed(p, p->cpu)) {
         sched_remove(p);
-        p->cpu = sched_choose(p);
+        sched_move(p, sched_choose(p));
         sched_append(p);
         if (sched_cpu_idle(p->cpu)) {
             kick = p->cpu;
         }
     }
-    spin_unlock_irqrestore(&sched_lock, flags);
+    if (remote) {
+        p->need_resched = 1;
+        kick = p->cpu;
+    }
+    spin_unlock(&sched_lock);
+    if (remote) {
+        wait_queue_init(&wait.queue);
+        wait.task = p;
+        wait.done = 0;
+        wait.next = affinity_waits;
+        affinity_waits = &wait;
+    } else {
+        affinity_complete(p);
+    }
     if (kick >= 0) {
         smp_kick(kick);
     }
-    if (p == current_proc && !((mask >> arch_cpu_id()) & 1u)) {
+    if (remote) {
+        (void)wq_wait_event_nointr(&wait.queue, affinity_done, &wait);
+    } else if (p == current_proc && !((mask >> arch_cpu_id()) & 1u)) {
         schedule();
     }
+    kirq_restore(flags);
 }
 
 /** Select a real-time thread first, then apply ordinary wake preference.
@@ -404,7 +473,7 @@ static int sched_prepare_old(process_t *old, struct percpu *cpu, int me)
     if (cpu->idle && old != cpu->idle && (old->state == PROC_RUNNING || old->state == PROC_READY) &&
         !((old->affinity >> me) & 1u)) {
         old->state = PROC_READY;
-        old->cpu = sched_choose(old);
+        sched_move(old, sched_choose(old));
         if (sched_cpu_idle(old->cpu)) {
             kick = old->cpu;
         }
@@ -527,7 +596,7 @@ void schedule(void)
     }
     rseq_preempt(old);
     next->state = PROC_RUNNING;
-    next->cpu = me;
+    sched_move(next, me);
     next->pcount++;
 
     if (old != cpu->idle) {
@@ -541,6 +610,7 @@ void schedule(void)
     cpu->bkl_depth = next->bkl_depth;
     cpu->current = next;
     spin_unlock(&sched_lock);
+    affinity_complete(old);
 
     switch_context(old, next);
 

@@ -17,6 +17,7 @@
 #include "fs/synthfs.h"
 #include "fs/sysfs.h"
 #include "lib/kerrno.h"
+#include "lib/kstring.h"
 #include "mm/kheap.h"
 #include "rfkill.h"
 #include "dmi.h"
@@ -850,7 +851,36 @@ static void vfio_paths(void)
           synth_classify("sys/bus/pci/devices/0000:00:02.0/iommu_group", &vp) == VNODE_ENOENT);
 }
 
-int main(void)
+/** Classify the disabled THP directory, its files and paths past a file. */
+static void thp_rows(void)
+{
+    static const char *const names[] = {"enabled",        "defrag",        "use_zero_page",
+                                        "hpage_pmd_size", "shmem_enabled", "shrink_underused"};
+    struct vpath vp;
+    char path[128];
+    unsigned int i;
+
+    CHECK(synth_classify("sys/kernel/mm", &vp) == VNODE_SYS_DIR && vp.sysent == SYSFS_KERNEL_MM);
+    CHECK(synth_classify("sys/kernel/mm/transparent_hugepage", &vp) == VNODE_SYS_DIR &&
+          vp.sysent == SYSFS_THP);
+    synth_sys_path(SYSFS_THP, 0, path, sizeof(path));
+    CHECK(eq(path, "/sys/kernel/mm/transparent_hugepage"));
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        static const char prefix[] = "sys/kernel/mm/transparent_hugepage/";
+
+        k_memcpy(path, prefix, sizeof(prefix) - 1);
+        k_memcpy(path + sizeof(prefix) - 1, names[i], k_strlen(names[i]) + 1);
+        CHECK(synth_classify(path, &vp) == VNODE_SYS_FILE && vp.sysent == SYSFS_THP &&
+              vp.procfile == (int)i && eq(sysfs_attr(SYSFS_THP, (int)i), names[i]));
+        CHECK(!sysfs_attr_writable(vp.sysent, vp.procfile));
+    }
+    CHECK(sysfs_attr(SYSFS_THP, 6) == 0);
+    CHECK(synth_classify("sys/kernel/mm/transparent_hugepage/missing", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/kernel/mm/transparent_hugepage/enabled/more", &vp) == VNODE_ENOTDIR);
+}
+
+/** Ordinary paths stay in the root file system. */
+static void root_paths(void)
 {
     struct vpath vp;
 
@@ -859,6 +889,18 @@ int main(void)
     CHECK(synth_classify("etc/passwd", &vp) == VNODE_KRFFS);
     CHECK(synth_classify("devices/x", &vp) == VNODE_KRFFS);
     CHECK(synth_classify("proconsul", &vp) == VNODE_KRFFS);
+}
+
+/** Run the classifier's rows. */
+int main(int argc, char **argv)
+{
+    struct vpath vp;
+
+    thp_rows();
+    if (argc == 2 && eq(argv[1], "--thp-only")) {
+        return fails != 0;
+    }
+    root_paths();
 
     CHECK(synth_classify("dev", &vp) == VNODE_DEV_DIR);
     CHECK(synth_classify("dev/null", &vp) == VNODE_DEV && eq(vp.name, "null"));

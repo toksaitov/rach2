@@ -2,7 +2,8 @@
  * Host test of the scheduler's selection and the wait queue's wakeups,
  * proc/sched.c and proc/wait_queue.c, with no switch of the processor.
  *
- * host-deps:
+ * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-cflags: -DRACH2_HOST_CPU
  *
  * The interrupt flag, the floating-point saves and the switch of stacks are
  * the test's; the selection, the process states, the wake marks and the
@@ -13,6 +14,7 @@
 #include "proc/sched.c"
 #include "compat/waketime_none.h"
 #include "proc/wait_queue.c"
+#include "proc/rseq.c"
 
 extern int dprintf(int fd, const char *format, ...);
 
@@ -20,6 +22,7 @@ process_t *proc_list;
 struct percpu cpu_table[NR_CPUS];
 process_t *proc_idle;
 volatile uint64_t kernel_ticks;
+unsigned int host_cpu;
 
 /** A spin's pause, which the host does not need. */
 void arch_relax(void)
@@ -30,6 +33,9 @@ static uint8_t areas[7][16];
 static uint32_t irq_flags;
 static unsigned switches;
 static int failures;
+static int affinity_step;
+static unsigned int affinity_kicks;
+static uint32_t rseq_area[8];
 
 #define CHECK(test, message)                                     \
     do {                                                         \
@@ -102,10 +108,33 @@ void fpu_restore(const void *area)
     CHECK(area != current_proc->fpu, "restore belongs to incoming process");
 }
 
-/** Mark nothing: no row registers an rseq area. */
-void rseq_preempt(process_t *p)
+/** Copy a modeled user area without faults. */
+int copy_from_user(void *to, const void __user *from, size_t size)
+{
+    k_memcpy(to, from, size);
+    return 0;
+}
+
+/** Copy an rseq update into the modeled user area. */
+int copy_to_user(void __user *to, const void *from, size_t size)
+{
+    k_memcpy(to, from, size);
+    return 0;
+}
+
+/** No valid area should force a signal. */
+void signal_force(process_t *p, int signo, const struct k_siginfo *info)
 {
     (void)p;
+    (void)signo;
+    (void)info;
+    CHECK(0, "rseq forced a signal");
+}
+
+/** No row has a pending signal to deliver. */
+void deliver_signals(isr_params_t *params)
+{
+    (void)params;
 }
 
 /** No process registers for the sync-core barrier in the host model. */
@@ -127,10 +156,38 @@ void arch_debug_switch(struct process *old, const struct process *next)
 void switch_context(process_t *old, process_t *next)
 {
     CHECK(!irq_flags, "switch with interrupts on");
-    CHECK(old->state != PROC_RUNNING, "outgoing process still running");
+    CHECK(old == this_cpu()->idle || old->state != PROC_RUNNING, "outgoing process still running");
     CHECK(next == current_proc && next->state == PROC_RUNNING, "incoming state");
     CHECK(!next->woken, "wake mark survived selection");
     switches++;
+    if (affinity_step && old == &procs[0]) {
+        int step = affinity_step;
+
+        affinity_step = 0;
+        CHECK(old->state == PROC_BLOCKED && affinity_waits != NULL,
+              "remote affinity waits for the running target");
+        CHECK(procs[1].need_resched && affinity_kicks != 0,
+              "remote affinity requests and kicks a switch");
+        if (step == 2) {
+            sched_set_affinity(&procs[1], 3);
+        } else {
+            host_cpu = 1;
+            if (step == 3) {
+                procs[1].state = PROC_ZOMBIE;
+            }
+            sched_take_preempt();
+            CHECK(cpu_table[1].current != &procs[1], "target left the forbidden processor");
+            if (step == 3) {
+                sched_forget(&procs[1]);
+                k_memset(&procs[1], 0, sizeof(procs[1]));
+            }
+            host_cpu = 0;
+        }
+        CHECK(affinity_waits == NULL && old->state == PROC_READY,
+              "completion drops the task pointer and wakes the caller");
+        schedule();
+        CHECK(current_proc == old, "affinity caller resumes");
+    }
 }
 
 /** One processor: the run queues' lock is the interrupt flag alone. */
@@ -175,10 +232,12 @@ void bkl_take(int depth)
 void bkl_yield(void)
 {}
 
-/** Nothing: there is no other processor to wake. */
+/** Count a request to the remote processor, which the switch model services. */
 void smp_kick(int cpu)
 {
-    (void)cpu;
+    if (cpu == 1) {
+        affinity_kicks++;
+    }
 }
 
 /** Nothing: no row runs the idle task's loop. */
@@ -210,6 +269,8 @@ static void setup(void)
     unsigned i;
     unsigned char *bytes = (unsigned char *)procs;
 
+    host_cpu = 0;
+    k_memset(cpu_table, 0, sizeof(cpu_table));
     for (i = 0; i < sizeof(procs); i++) {
         bytes[i] = 0;
     }
@@ -233,6 +294,55 @@ static void setup(void)
         sched_make_ready(&procs[i]);
     }
     sched_enable();
+}
+
+/** Force remote affinity completion, supersession and exit, then consume
+ * the moved thread's rseq notification on its new processor. */
+static void affinity_rows(void)
+{
+    isr_params_t frame;
+    int step;
+    unsigned int i;
+
+    for (step = 1; step <= 3; step++) {
+        setup();
+        for (i = 1; i < 7; i++) {
+            sched_forget(&procs[i]);
+        }
+        cpu_table[0].idle = &procs[2];
+        cpu_table[1].idle = &procs[3];
+        cpu_table[1].current = &procs[1];
+        cpu_table[1].online = 1;
+        procs[0].affinity = 1;
+        procs[1].state = PROC_RUNNING;
+        procs[1].cpu = procs[3].cpu = 1;
+        procs[2].state = procs[3].state = PROC_READY;
+        k_memset(rseq_area, 0, sizeof(rseq_area));
+        rseq_area[0] = rseq_area[1] = 1;
+        procs[1].rseq = (uintptr_t)rseq_area;
+        affinity_kicks = 0;
+        affinity_step = step;
+        sched_set_affinity(&procs[1], 1);
+        CHECK(!affinity_step && current_proc == &procs[0] && !affinity_waits,
+              "affinity returns after completion with no wait left");
+        if (step == 1) {
+            CHECK(procs[1].rseq_notify && (procs[1].rseq_event & RSEQ_EVENT_MIGRATE),
+                  "moving a task marks rseq for the return");
+            procs[0].state = PROC_BLOCKED;
+            schedule();
+            CHECK(current_proc == &procs[1], "moved thread runs on the allowed processor");
+            k_memset(&frame, 0, sizeof(frame));
+            FRAME_PC(&frame) = 0x4000;
+            rseq_return(&frame);
+            CHECK(rseq_area[0] == host_cpu && rseq_area[1] == host_cpu && rseq_area[5] == 0 &&
+                      rseq_area[6] == host_cpu && !procs[1].rseq_notify,
+                  "rseq CPU numbers and mm_cid follow the move");
+        } else if (step == 2) {
+            CHECK(cpu_table[1].current == &procs[1] && procs[1].affinity == 3,
+                  "a newer mask allowing the current processor completes the wait");
+        }
+    }
+    setup();
 }
 
 /** Block `p` on a queue and wake it with `wq_wake_all`, as a device's
@@ -548,8 +658,13 @@ static void migration(void)
 }
 
 /** Run every row; 0 when each passes, 1 otherwise. */
-int main(void)
+int main(int argc, char **argv)
 {
+    if (argc == 2 && __builtin_strcmp(argv[1], "--affinity-only") == 0) {
+        affinity_rows();
+        dprintf(1, "sched-hosttest: affinity: %s\n", failures ? "fail" : "pass");
+        return failures != 0;
+    }
     tick_waits();
     priority();
     fairness();
@@ -560,6 +675,7 @@ int main(void)
     all_idle();
     ready_lists();
     migration();
+    affinity_rows();
     if (failures) {
         return 1;
     }

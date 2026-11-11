@@ -878,6 +878,9 @@ static const char *const *sysfs_system_attrs(int node)
                                               "online",  "possible",   0};
     static const char *const node0[] = {"cpulist", "cpumap", "distance", 0};
     static const char *const clocksource[] = {"available_clocksource", "current_clocksource", 0};
+    static const char *const thp[] = {
+        "enabled",          "defrag", "use_zero_page", "hpage_pmd_size", "shmem_enabled",
+        "shrink_underused", 0};
     /* In the order of dmi.h's DMI_ fields, then modalias. */
     static const char *const dmi[] = {
         "bios_vendor",         "bios_version",      "bios_date",     "bios_release",
@@ -891,6 +894,7 @@ static const char *const *sysfs_system_attrs(int node)
            : node == SYSFS_NODE          ? node_states
            : node == SYSFS_NODE0         ? node0
            : node == SYSFS_CLOCKSOURCE0  ? clocksource
+           : node == SYSFS_THP           ? thp
            : node == SYSFS_DMI_ID        ? dmi
                                          : 0;
 }
@@ -1136,6 +1140,11 @@ static int synth_sys_later_path(int node, int key, char *out, int cap)
         if (node == SYSFS_CPU_CACHE_INDEX) {
             synth_put(out, cap, &pos, "/index");
             synth_put_uint(out, cap, &pos, (unsigned int)(key & 15));
+        }
+    } else if (node == SYSFS_KERNEL_MM || node == SYSFS_THP) {
+        synth_put(out, cap, &pos, "/sys/kernel/mm");
+        if (node == SYSFS_THP) {
+            synth_put(out, cap, &pos, "/transparent_hugepage");
         }
     } else if (node >= SYSFS_NODE && node <= SYSFS_DMI_ID) {
         synth_put(out, cap, &pos, system[node - SYSFS_NODE]);
@@ -1657,7 +1666,8 @@ static int synth_classify_sys_class(const struct comp *c, int n, struct vpath *v
  * Classify the components `c` of `n`, at least one, below /sys among the
  * fixed directories numbered from SYSFS_KERNEL, which hold drivers'
  * entries: /sys/bus/platform and its `devices`, /sys/kernel with its
- * `debug` and its attribute, and /sys/devices/platform. The kind, with any
+ * `debug`, `mm/transparent_hugepage` and its attributes, and
+ * /sys/devices/platform. The kind, with any
  * other name below them VNODE_ENOENT, or -1 for a path outside them.
  */
 static int synth_classify_sys_later(const struct comp *c, int n, struct vpath *vp)
@@ -1670,6 +1680,12 @@ static int synth_classify_sys_later(const struct comp *c, int n, struct vpath *v
         }
     } else if (n >= 2 && comp_eq(c[0], "kernel") && comp_eq(c[1], "debug")) {
         vp->sysent = SYSFS_KERNEL_DEBUG;
+        vp->kind = n == 2 ? VNODE_SYS_DIR : VNODE_ENOENT;
+    } else if (n >= 2 && comp_eq(c[0], "kernel") && comp_eq(c[1], "mm")) {
+        if (n >= 3 && comp_eq(c[2], "transparent_hugepage")) {
+            return synth_classify_sys_attr(c + 3, n - 3, SYSFS_THP, 0, vp);
+        }
+        vp->sysent = SYSFS_KERNEL_MM;
         vp->kind = n == 2 ? VNODE_SYS_DIR : VNODE_ENOENT;
     } else if (comp_eq(c[0], "kernel")) {
         return synth_classify_sys_attr(c + 1, n - 1, SYSFS_KERNEL, 0, vp);

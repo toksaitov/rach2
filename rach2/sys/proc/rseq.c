@@ -188,6 +188,14 @@ void rseq_preempt(process_t *p)
     }
 }
 
+void rseq_migrate(process_t *p)
+{
+    if (p->rseq != 0) {
+        p->rseq_event |= RSEQ_EVENT_MIGRATE;
+        p->rseq_notify = 1;
+    }
+}
+
 /**
  * The look repeats while it is asked for again, since a write to the area
  * may sleep bringing its page in, and the switch marks the thread anew. A

@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 11, 2026
 .Dt SYSFS 5
 .Os
 .Sh NAME
@@ -591,6 +591,8 @@ and a
 link to the input device.
 .It Pa /sys/dev/char/13:M
 A link for each event device, by its numbers, to its directory.
+.It Pa /sys/kernel/mm/transparent_hugepage
+The disabled huge-page policy and page-directory mapping size.
 .It Pa /sys/kernel/debug
 The directory where the kernel mounts debugfs; see
 .Xr debugfs 5 .
@@ -1111,6 +1113,33 @@ Another word, a UUID of another length or a word without
 .Ql =
 is
 .Er EINVAL .
+.Pp
+The files under
+.Pa /sys/kernel/mm/transparent_hugepage
+report Linux 6.12's disabled huge-page policy:
+.Pa enabled
+is
+.Ql always madvise [never] ,
+.Pa defrag
+is
+.Ql always defer defer+madvise madvise [never] ,
+and
+.Pa shmem_enabled
+is
+.Ql always within_size advise [never] deny force .
+.Pa use_zero_page
+and
+.Pa shrink_underused
+are 0.
+.Pa hpage_pmd_size
+is the page-directory mapping size in bytes: 2097152 on x86-64,
+4194304 on the non-PAE i686 kernel.
+Each text ends in a newline.
+Anonymous faults still allocate 4 KiB pages.
+These six files are read-only; the kernel has no transparent huge-page
+allocator, khugepaged worker or per-size policy directories.
+This is Linux's interface with the policies disabled; a Linux build
+without THP would omit the directory.
 .Sh LIMITS
 Linux's tree has much more: the other device classes, the attribute files
 beside a USB device's
@@ -1241,6 +1270,8 @@ The IOMMU groups.
 The vfio-pci driver's files.
 .It Pa /sys/bus/pci/drivers/i915
 The Intel graphics driver's files.
+.It Pa /sys/kernel/mm/transparent_hugepage
+The disabled huge-page policy and page-directory mapping size.
 .It Pa /sys/kernel/debug
 Where debugfs is mounted.
 .It Pa /sys/kernel/uevent_seqnum

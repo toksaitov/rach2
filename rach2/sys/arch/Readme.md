@@ -101,6 +101,8 @@ A user selector the kernel loads can fault once the LDT entry it names has chang
 
 On both, the interprocessor interrupt and the spurious vector enter through `local_common_handler`, which takes no lock and delivers no signal. The NMI and the machine check enter through the paranoid entry, which takes no lock either, since either can arrive while the processor holds the big lock or is taking it; their handler reports a fault of the machine and stops it. On i686 they run on the stack in use. On x86-64 they arrive on their interrupt stacks, perhaps between the `swapgs` of an exit and its `iretq`, so `paranoid_entry` reads the GS base MSR, swaps only when the base is the user's, and swaps back only when it swapped. The routers and the interrupt controllers are [the PC platform's](x86/Readme.md).
 
+An interprocessor interrupt in user mode takes a pending reschedule under the big lock before returning, so a remote affinity change can wait for the thread to leave its old processor. The return passes through `isr_leave`, which consumes the rseq notification after the switch and before user instructions resume. An interrupt inside a system call leaves the request for that call's next scheduling point.
+
 ### Entry from a system call
 
 Both entries build the frame of an interrupt from user mode with the vector `SYSCALL_VECTOR`, 128, on which `arch_syscall_init` registers the shared dispatcher, `_syscall_handler` in `sys/syscall.c`. [syscalls(2)](../../../man/man2/syscalls.2) gives the registers and the numbers.

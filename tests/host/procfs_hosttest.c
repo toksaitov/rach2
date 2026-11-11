@@ -255,10 +255,19 @@ int netdev_seen_count(void)
     return netdev_count();
 }
 
-/** The attribute files of a /sys directory: the statistics of an interface,
- * named as in synthfs.c, and none other. */
+/** The fixed attributes used by these rows, as synthfs.c numbers them. */
 const char *sysfs_attr(int node, int n)
 {
+    int count = node == SYSFS_THP            ? 6
+                : node == SYSFS_NODE         ? 5
+                : node == SYSFS_NODE0        ? 3
+                : node == SYSFS_CLOCKSOURCE0 ? 2
+                : node == SYSFS_DMI_ID       ? 23
+                                             : 0;
+
+    if (n >= 0 && n < count) {
+        return "attribute";
+    }
     return node == SYSFS_NET_STATS && n >= 0 && n < 10 ? "statistic" : 0;
 }
 
@@ -2246,6 +2255,30 @@ static void system_rows(void)
           "modalias, as Linux's dmi-id.c makes it");
 }
 
+/** Read Linux's disabled THP values, including the native PMD size. */
+static void thp_rows(void)
+{
+    static const char *const expected[] = {"always madvise [never]\n",
+                                           "always defer defer+madvise madvise [never]\n",
+                                           "0\n",
+#if ELF_CLASS == 2
+                                           "2097152\n",
+#else
+                                           "4194304\n",
+#endif
+                                           "always within_size advise [never] deny force\n",
+                                           "0\n"};
+    char out[128];
+    int i;
+
+    for (i = 0; i < (int)(sizeof(expected) / sizeof(expected[0])); i++) {
+        check(sys_text(SYSFS_THP, 0, i, out, sizeof(out)) > 0 && eq(out, expected[i]),
+              "disabled THP attribute in Linux's format");
+    }
+    check(sys_text(SYSFS_THP, 0, 6, out, sizeof(out)) == -ENOENT,
+          "no attribute past the THP files");
+}
+
 /** The entry below `dir` named `name`. */
 static int child(int dir, const char *name)
 {
@@ -3562,12 +3595,18 @@ int main(int argc, char **argv)
     group.leader = &process;
     group.live = 1;
     k_memcpy(process.comm, "test", 5);
+    if (argc == 2 && __builtin_strcmp(argv[1], "--thp-only") == 0) {
+        thp_rows();
+        printf("procfs-hosttest: thp: %s\n", failures ? "fail" : "pass");
+        return failures != 0;
+    }
     if (argc == 2 && __builtin_strcmp(argv[1], "--pci-config-only") == 0) {
         pci_config_rows();
         printf("procfs-hosttest: pci config: %s\n", failures ? "fail" : "pass");
         return failures != 0;
     }
     procfs_text_init(&text);
+    thp_rows();
     refuse = 1;
     len = procfs_gen_stat(&text, 7, 1);
     check(len == 0 && text.nomem && !text.buf && allocations > 0,

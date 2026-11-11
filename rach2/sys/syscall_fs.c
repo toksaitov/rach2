@@ -16920,6 +16920,8 @@ static int synth_sys_fixed_dirent(int node, int key, int n, char *name, uint64_t
                  {SYSFS_DEV, "char", SYSFS_DEV_CHAR},
                  {SYSFS_ROOT, "kernel", SYSFS_KERNEL},
                  {SYSFS_KERNEL, "debug", SYSFS_KERNEL_DEBUG},
+                 {SYSFS_KERNEL, "mm", SYSFS_KERNEL_MM},
+                 {SYSFS_KERNEL_MM, "transparent_hugepage", SYSFS_THP},
                  {SYSFS_CLASS, "drm", SYSFS_CLASS_DRM},
                  {SYSFS_DEVICES, "platform", SYSFS_PLATFORM},
                  {SYSFS_BUS, "platform", SYSFS_BUS_PLATFORM},

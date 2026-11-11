@@ -18,6 +18,7 @@
 #include "../../proc/process.h"
 #include "../../proc/ptrace.h"
 #include "../../proc/rseq.h"
+#include "../../proc/sched.h"
 #include "../../proc/smp.h"
 #include "../../timer.h"
 #include "debugreg.h"
@@ -26,11 +27,6 @@
 #endif
 
 #include "../../../kernel.h"
-
-/* The scheduler's switch from an interrupt handler (proc/sched.h), which
- * lets a process a device's interrupt woke run. */
-extern void sched_preempt(void);
-extern int sched_tick_waits(void);
 
 #if defined(__x86_64__)
 /* The resumption of a faulting load of a selector, and the LDT loaded on a
@@ -705,11 +701,12 @@ void isr_leave(isr_params_t *params)
  * whose request is in this processor's record (`smp_ipi`), and the APIC's
  * spurious vector, which needs no end-of-interrupt.
  *
- * An interprocessor interrupt that finds user mode with its thread's rseq
- * marked, which only membarrier's RSEQ barrier does to a thread in user
- * mode, returns through `isr_leave` with the big lock, after its end of
- * interrupt, so that a critical section the thread is in is aborted before
- * it runs on, as Linux's ipi_rseq has it.
+ * An interprocessor interrupt that finds user mode with a requested
+ * reschedule or its thread's rseq marked takes the big lock after its end
+ * of interrupt. It takes the switch, then returns through `isr_leave`, so
+ * that a move updates the rseq area and a barrier aborts its section before
+ * user code resumes. An interrupt in kernel mode leaves the request for
+ * the system call's next scheduling point.
  */
 void isr_local_router(isr_params_t *params)
 {
@@ -717,8 +714,10 @@ void isr_local_router(isr_params_t *params)
     if (params->vector == IPI_VECTOR) {
         smp_ipi();
         lapic_eoi();
-        if (FRAME_USER(params) && current_proc && current_proc->rseq_notify) {
+        if (FRAME_USER(params) && current_proc &&
+            (current_proc->need_resched || current_proc->rseq_notify)) {
             bkl_enter();
+            sched_take_preempt();
             isr_leave(params);
         }
         return;

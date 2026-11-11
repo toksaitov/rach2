@@ -75,9 +75,12 @@ void sched_make_ready(process_t *p);
 /**
  * Bind `p` to the processors of `mask`, of which one is started at least,
  * as sched_setaffinity(2) asks. A ready process on the queue of a processor
- * outside the set moves to one inside it; a process running on one outside
- * it leaves at that processor's next selection (`schedule`), which for the
- * caller is now.
+ * outside the set moves to one inside it. A running process leaves before
+ * this returns: the caller switches now, and a remote process is asked to
+ * switch and waited for without signals ending the wait. A newer mask
+ * permitting its current processor also ends the wait. The big lock is
+ * held on entry and return; the call may sleep and the target may end
+ * meanwhile, so its caller must not use `p` afterwards without a new lookup.
  */
 void sched_set_affinity(process_t *p, uint64_t mask);
 
