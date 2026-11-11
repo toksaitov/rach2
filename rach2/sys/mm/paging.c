@@ -66,6 +66,18 @@ static size_t _free_window_frames; /* free frames below the window */
  * 4 GiB are taken once those above are gone. Set while they are left. */
 static int _framehigh_low;
 #define FRAME_HIGH_FIRST (0x100000000ULL / PAGE_SIZE)
+/* The index of the free frames, as Linux's free lists: `_frame_group_free[g]`
+ * counts the free frames of group g, the FRAME_GROUP frames from
+ * g * FRAME_GROUP, and bit g of `_frame_group_bits` is set while that count
+ * is not 0, so that a search passes 32 groups with no free frame in one word
+ * and never reads the used frames one at a time. Reserved beside the
+ * reference table and kept under frame_lock by `frame_take` and
+ * `frame_freed` once `_frame_index_ready`; the boot's searches before then
+ * read the table itself. */
+#define FRAME_GROUP      64u
+static uint32_t *_frame_group_bits;
+static uint8_t *_frame_group_free;
+static int _frame_index_ready;
 /* rach2.framefail: the allocation that fails on purpose, counted down. */
 static uint32_t _framefail_left;
 static int _framefail_on = -1; /* -1 until the boot line is read */
@@ -157,6 +169,145 @@ static uint32_t _kernel_frames_reserved;
 
 static void _page_fault_handler(isr_params_t *params);
 
+/** The words of `_frame_group_bits`, one bit for each group of the table. */
+static size_t frame_index_words(void)
+{
+    size_t groups = (_frames_number + FRAME_GROUP - 1u) / FRAME_GROUP;
+
+    return (groups + 31u) / 32u;
+}
+
+/** Where the index begins in the frame table's reservation: after the
+ * reference words and the anonymous-frame bits, at a word's boundary. */
+static size_t frame_index_offset(void)
+{
+    size_t end = _frames_number * sizeof(uint32_t) + (_frames_number + 7u) / 8u;
+
+    return (end + sizeof(uint32_t) - 1u) & ~(sizeof(uint32_t) - 1u);
+}
+
+/** The index's bytes: its group bits and a count for each group. */
+static size_t frame_index_bytes(void)
+{
+    return frame_index_words() * sizeof(uint32_t) +
+           (_frames_number + FRAME_GROUP - 1u) / FRAME_GROUP;
+}
+
+/** Count the free frames of each group from the table, once the boot has
+ * marked what it holds, and from then on keep the index with each change. */
+static void frame_index_build(void)
+{
+    uintptr_t frame;
+
+    k_memset(_frame_group_bits, 0, frame_index_bytes());
+    for (frame = 0; frame < _frames_number; frame++) {
+        if (_frames[frame] == 0) {
+            uintptr_t g = frame / FRAME_GROUP;
+
+            _frame_group_free[g]++;
+            _frame_group_bits[g / 32u] |= 1u << (g % 32u);
+        }
+    }
+    _frame_index_ready = 1;
+}
+
+/** `frame`, which was free, is taken. `frame_lock` is held. */
+static void frame_index_take(uintptr_t frame)
+{
+    uintptr_t g = frame / FRAME_GROUP;
+
+    if (_frame_index_ready && --_frame_group_free[g] == 0) {
+        _frame_group_bits[g / 32u] &= ~(1u << (g % 32u));
+    }
+}
+
+/** `frame` is free again. `frame_lock` is held. */
+static void frame_index_put(uintptr_t frame)
+{
+    uintptr_t g = frame / FRAME_GROUP;
+
+    if (_frame_index_ready && _frame_group_free[g]++ == 0) {
+        _frame_group_bits[g / 32u] |= 1u << (g % 32u);
+    }
+}
+
+/** The lowest free frame in [from, to), or `to` when there is none. A group
+ * the index has no free frame in is passed whole, and 32 such groups with
+ * one word. `frame_lock` is held. */
+static uintptr_t frame_next_free(uintptr_t from, uintptr_t to)
+{
+    uintptr_t g, end;
+
+    if (!_frame_index_ready) {
+        for (; from < to; from++) {
+            if (_frames[from] == 0) {
+                return from;
+            }
+        }
+        return to;
+    }
+    while (from < to) {
+        g = from / FRAME_GROUP;
+        if (_frame_group_free[g] != 0) {
+            end = (g + 1u) * FRAME_GROUP < to ? (g + 1u) * FRAME_GROUP : to;
+            for (; from < end; from++) {
+                if (_frames[from] == 0) {
+                    return from;
+                }
+            }
+            continue;
+        }
+        g++;
+        while (g * FRAME_GROUP < to && !(_frame_group_bits[g / 32u] >> (g % 32u))) {
+            g = (g / 32u + 1u) * 32u;
+        }
+        while (g * FRAME_GROUP < to && _frame_group_free[g] == 0) {
+            g++;
+        }
+        from = g * FRAME_GROUP;
+    }
+    return to;
+}
+
+/** The highest free frame in [floor, from), or `floor` - 1 when there is
+ * none, passing groups as `frame_next_free` does. `floor` is above 0.
+ * `frame_lock` is held. */
+static uintptr_t frame_prev_free(uintptr_t floor, uintptr_t from)
+{
+    uintptr_t g, start;
+
+    if (!_frame_index_ready) {
+        while (from-- > floor) {
+            if (_frames[from] == 0) {
+                return from;
+            }
+        }
+        return floor - 1u;
+    }
+    while (from > floor) {
+        g = (from - 1u) / FRAME_GROUP;
+        if (_frame_group_free[g] != 0) {
+            start = g * FRAME_GROUP > floor ? g * FRAME_GROUP : floor;
+            while (from-- > start) {
+                if (_frames[from] == 0) {
+                    return from;
+                }
+            }
+            from = start;
+            continue;
+        }
+        while (g > 0 && g * FRAME_GROUP > floor &&
+               !(_frame_group_bits[(g - 1u) / 32u] << (31u - (g - 1u) % 32u))) {
+            g = (g - 1u) / 32u * 32u;
+        }
+        while (g > 0 && g * FRAME_GROUP > floor && _frame_group_free[g - 1u] == 0) {
+            g--;
+        }
+        from = g * FRAME_GROUP > floor ? g * FRAME_GROUP : floor;
+    }
+    return floor - 1u;
+}
+
 /**
  * The architecture places the frame table (`mmu_frame_table`): below the
  * window with the other boot tables on i686, at the top of memory on
@@ -191,7 +342,7 @@ void init_paging(struct frame_map *map)
     _frames_number = map->top_frame ? (size_t)map->top_frame : (HARD_MEMORY_LIMIT / PAGE_SIZE);
     _window_frames = _frames_number < HARD_MEMORY_LIMIT / PAGE_SIZE ? _frames_number
                                                                     : HARD_MEMORY_LIMIT / PAGE_SIZE;
-    table_bytes = _frames_number * sizeof(uint32_t) + (_frames_number + 7u) / 8u;
+    table_bytes = frame_index_offset() + frame_index_bytes();
     _frames = mmu_frame_table(map, table_bytes);
     if (_frames == NULL) {
         k_panic("init_paging: no reserved memory for the frame table");
@@ -214,6 +365,8 @@ void init_paging(struct frame_map *map)
     }
     _frame_anon = (uint8_t *)(_frames + _frames_number);
     k_memset(_frame_anon, 0, (_frames_number + 7u) / 8u);
+    _frame_group_bits = _frames + frame_index_offset() / sizeof(uint32_t);
+    _frame_group_free = (uint8_t *)(_frame_group_bits + frame_index_words());
     if (map->top_frame == 0) {
         k_memset(_frames, 0, table_bytes);
     } else {
@@ -270,6 +423,7 @@ void init_paging(struct frame_map *map)
             }
         }
     }
+    frame_index_build();
 
     register_isr_handler(PAGE_FAULT_VECTOR, &_page_fault_handler, "page fault");
 
@@ -1913,6 +2067,7 @@ static void frame_take(uintptr_t frame)
         if (frame < _window_frames) {
             _free_window_frames--;
         }
+        frame_index_take(frame);
     }
     _frames[frame] = 1;
     _frame_anon[frame / 8u] &= (uint8_t)~(1u << (frame % 8u));
@@ -1944,17 +2099,17 @@ static int frame_is_anon(uintptr_t phys)
  * A free frame for a user page or a kernel object: from above the window
  * first, then from below it while more than WINDOW_KEEP are free there;
  * `_frames_number` when there is none. The two hints say no frame below
- * each is free in its region. `frame_lock` is held.
+ * each is free in its region, and the search from each passes the groups
+ * the index has no free frame in (`frame_next_free`). `frame_lock` is held.
  */
 static uintptr_t find_free_frame(void)
 {
     uintptr_t frame;
 
-    for (frame = _next_free_upper; frame < _frames_number; frame++) {
-        if (_frames[frame] == 0) {
-            _next_free_upper = frame + 1;
-            return frame;
-        }
+    frame = frame_next_free(_next_free_upper, _frames_number);
+    if (frame < _frames_number) {
+        _next_free_upper = frame + 1;
+        return frame;
     }
     if (_framehigh_low) {
         _framehigh_low = 0;
@@ -1965,11 +2120,10 @@ static uintptr_t find_free_frame(void)
     if (_free_window_frames <= WINDOW_KEEP) {
         return _frames_number;
     }
-    for (frame = _next_free_frame; frame < _window_frames; frame++) {
-        if (_frames[frame] == 0) {
-            _next_free_frame = frame + 1;
-            return frame;
-        }
+    frame = frame_next_free(_next_free_frame, _window_frames);
+    if (frame < _window_frames) {
+        _next_free_frame = frame + 1;
+        return frame;
     }
     return _frames_number;
 }
@@ -2129,15 +2283,13 @@ void paging_user_count(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned
 void *alloc_kernel_frame(void)
 {
     uint32_t flags = spin_lock_irqsave(&frame_lock);
-    uintptr_t frame = _window_frames;
+    uintptr_t frame = frame_prev_free(_user_frames_start, _window_frames);
 
-    while (frame-- > _user_frames_start) {
-        if (_frames[frame] == 0) {
-            frame_take(frame);
-            _kernel_frames_reserved++;
-            spin_unlock_irqrestore(&frame_lock, flags);
-            return phys_to_virt(frame * PAGE_SIZE);
-        }
+    if (frame >= _user_frames_start && frame < _window_frames) {
+        frame_take(frame);
+        _kernel_frames_reserved++;
+        spin_unlock_irqrestore(&frame_lock, flags);
+        return phys_to_virt(frame * PAGE_SIZE);
     }
     spin_unlock_irqrestore(&frame_lock, flags);
     return 0;
@@ -2358,6 +2510,7 @@ void frame_ref(uintptr_t phys)
 static void frame_freed(uintptr_t frame)
 {
     _free_frames++;
+    frame_index_put(frame);
     if (frame < _window_frames) {
         _free_window_frames++;
         if (frame >= _user_frames_start && frame < _next_free_frame) {
