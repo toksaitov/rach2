@@ -901,6 +901,15 @@ void signal_post(process_t *target, int signo);
  */
 void signal_post_info(process_t *target, int signo, const struct k_siginfo *info);
 
+/** Post one multiprocess send to `target` with `info`, as
+ * signal_post_info does, and keep the signal for each new process being
+ * forked by its threads. Used for kill's process-group and all-process
+ * sends and the terminal's process-group sends, as Linux 6.12.115's
+ * __send_signal_locked queues a PIDTYPE_PGID send on the multiprocess
+ * list (kernel/signal.c:1170-1181). The caller holds the big lock; an
+ * interrupt handler may call it. */
+void signal_post_multi(process_t *target, int signo, const struct k_siginfo *info);
+
 /** Post signal `signo` to the thread `t` alone, as tkill and tgkill do,
  * with the siginfo `info`, and wake it. A thread that has ended takes
  * nothing. */

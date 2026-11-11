@@ -23,6 +23,14 @@
  */
 struct ktimer;
 
+/* Signals sent to several processes while one fork builds a child. The
+ * record lives on the calling thread's stack, linked under interrupts off
+ * until the child starts or the fork fails, as Linux's multiprocess list. */
+struct fork_pending {
+    struct fork_pending *next;
+    uint64_t pending; /* bit signo-1, with no siginfo, as Linux keeps it */
+};
+
 struct tgroup {
     uint32_t refs;
     uint32_t live;          /* threads that have not ended */
@@ -107,6 +115,7 @@ struct tgroup {
      * wakes (`pidfd.h`). A pidfd holds a reference to the group, so the
      * queue outlives the process's record. */
     wait_queue_t exited;
+    struct fork_pending *forks; /* children being built by threads of this group */
 };
 
 /** A new group with `leader` as its one thread; NULL when the heap has no
