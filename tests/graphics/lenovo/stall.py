@@ -6,10 +6,10 @@ Weston, starts a private DRM Weston through seatd, presents vkcube's 300
 frames once, as hasvk.py does before its picture, and then runs Chromium's
 WebGPU picture RUNS times as USER, the even runs alone and the odd ones
 with Chromium's own trace. threadwatch samples the threads of Chromium,
-Weston and Xwayland through each run, with the GPU's clock and the i915
-interrupt's count. OUT must not exist; it keeps every run and, in
-summary.json and stall.txt, the slowest gap of each run's first frames and
-what each thread did in it.
+Weston and Xwayland through each run, with the GPU's clock, the i915
+interrupt's count and, on Rach2, the big lock's and the timer's counters.
+OUT must not exist; it keeps every run and, in summary.json and stall.txt,
+the slowest gap of each run's first frames and what each thread did in it.
 """
 import gzip
 import json
@@ -157,6 +157,9 @@ def main():
             log = here / "threadwatch.txt"
             watch = subprocess.Popen([str(sampler), "-i", "1000",
                 "-f", str(card / "gt_act_freq_mhz"), "-f", "/proc/interrupts@i915",
+                # Rach2's big lock and timer counters, which Linux lacks.
+                "-f", "/proc/stat@bkl_wait", "-f", "/proc/stat@bkl_hold_max",
+                "-f", "/proc/stat@latency_timer_us", "-f", "/proc/stat@timer_passes_late",
                 str(log), "600", "chromium", "weston", "Xwayland"], start_new_session=True)
             try:
                 run(["python3", str(GRAPHICS / "browser/sandbox.py"), user, "chromium",
