@@ -14,8 +14,9 @@ static int model_hybrid, model_bld;
 static uint32_t model_amd_sig; /* AMD's leaf 1 signature, 0 for family 0 */
 static uint32_t irq_flags = 0x200u;
 unsigned int host_cpu; /* the processor the model runs as, for `arch_cpu_id` */
-static uint64_t physical[160];
-static uint32_t physical_index[160], physical_n;
+/* Each of the two processors' MSRs, indexed by `host_cpu`. */
+static uint64_t physical[2][160];
+static uint32_t physical_index[2][160], physical_n[2];
 const struct kvm_backend kvm_vmx, kvm_svm;
 const struct kvm_backend *kvm_backend;
 static struct kvm_vm vm;
@@ -141,25 +142,28 @@ void kcpu_id(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
     kcpu_id_sub(leaf, 0, a, b, c, d);
 }
 
-/** Find a physical register in a bounded table. The full-width aliases
- * of the general counters are the counters themselves. */
+/** Find a physical register of the processor `host_cpu` names in a
+ * bounded table. The full-width aliases of the general counters are the
+ * counters themselves. */
 static uint64_t *reg(uint32_t index)
 {
-    uint32_t i;
+    uint32_t i, c = host_cpu;
+    CHECK(c < 2u, "the model runs as processor 0 or 1");
+    c &= 1u;
     if (index - FULL_PMC0 < 8u) {
         index = index - FULL_PMC0 + PMC0;
     }
-    for (i = 0; i < physical_n; i++) {
-        if (physical_index[i] == index) {
-            return &physical[i];
+    for (i = 0; i < physical_n[c]; i++) {
+        if (physical_index[c][i] == index) {
+            return &physical[c][i];
         }
     }
-    CHECK(physical_n < 160u, "physical register table fits");
-    if (physical_n == 160u) {
-        return &physical[0];
+    CHECK(physical_n[c] < 160u, "physical register table fits");
+    if (physical_n[c] == 160u) {
+        return &physical[c][0];
     }
-    physical_index[physical_n] = index;
-    return &physical[physical_n++];
+    physical_index[c][physical_n[c]] = index;
+    return &physical[c][physical_n[c]++];
 }
 
 /** Read the register bank used by the production switching code. */
@@ -261,7 +265,8 @@ static void setup(int intel, int ext, int v2)
     k_memset(&other, 0, sizeof(other));
     k_memset(cpuid, 0, sizeof(cpuid));
     k_memset(physical, 0, sizeof(physical));
-    physical_n = 0;
+    physical_n[0] = physical_n[1] = 0;
+    host_cpu = 0;
     if (intel && model_lbr) {
         *reg(PERF_CAP) = FW_WRITES | 4u;
     }
@@ -662,8 +667,10 @@ static void intel_steps(void)
           "KVM leaves the NMI of the host's counter's overflow to the detector");
     *reg(GLOBAL_STATUS) = FIXED_BIT(1) | FIXED_BIT(0) | 2u | 1u;
     host_cpu = 1;
+    *reg(GLOBAL_STATUS) = FIXED_BIT(0) | 1u;
     CHECK(!kvm_pmu_nmi() && !*reg(GLOBAL_OVF),
           "an NMI on another processor claims none of the counters this one gave the bits");
+    *reg(GLOBAL_STATUS) = 0;
     host_cpu = 0;
     CHECK(kvm_pmu_nmi() == 2 && *reg(GLOBAL_OVF) == (FIXED_BIT(0) | 1u),
           "and here KVM claims only the counters the last entry gave the bits, acknowledging "
@@ -733,6 +740,115 @@ static void intel_step_limits(void)
     CHECK(kvm_pmu_placed_show(NULL, 0, text, sizeof(text)) == 4 && !memcmp(text, "0x0\n", 4),
           "an entry that places no counter gives pmu_placed 0x0");
     kvm_pmu_vmx_exit(&v, guest, 1);
+}
+
+/** Enter `w` with pmu_steps 0x05 on processor `cpu`, with its general
+ * counters `run` counting UOPS_RETIRED.ALL, those of `cp` checkpointed,
+ * each two counts from its overflow, into the lists `guest` and `host`. */
+static void pmi_enter(struct kvm_vcpu *w, unsigned int cpu, uint32_t run, uint32_t cp,
+                      struct kvm_pmu_msr *guest, struct kvm_pmu_msr *host)
+{
+    uint64_t global[2];
+    uint32_t ng, nh, i;
+
+    host_cpu = cpu;
+    for (i = 0; i < 4u; i++) {
+        w->pmu.eventsel[i] =
+            (run & (1u << i)) ? (0xC4u | EV_ENABLE | EV_OS | ((cp & (1u << i)) ? EV_TXCP : 0)) : 0;
+        w->pmu.counter[i] = w->pmu.gp_mask - 1;
+    }
+    w->pmu.global_ctrl = run;
+    kvm_pmu_prepare(w);
+    kvm_pmu_vmx_enter(w, guest, host, &ng, &nh, global);
+}
+
+/** Drive the status an entry finds: the overflow firmware left on a
+ * counter, acknowledged before the counter is given its PMI bit, and a
+ * TSX-checkpointed counter's PMI, whose status a rollback cleared, claimed
+ * as Linux's intel_pmu_handle_irq adds intel_cp_status. */
+static void intel_pmi_status(void)
+{
+    struct kvm_pmu_msr guest[KVM_PMU_LIST_MAX], host[KVM_PMU_LIST_MAX];
+
+    setup(1, 0, 0);
+    CHECK(steps("0x05") == 4, "the PMI bits are taken with the writes");
+    *reg(GLOBAL_STATUS) = 2u | 1u;
+    pmi_enter(&v, 0, 1u, 0, guest, host);
+    CHECK(v.pmu.phys[0] == 0 && *reg(EVENTSEL0) == (0xC4u | EV_ENABLE | EV_OS | EV_INT),
+          "the first entry gives general counter 0 its interrupt bit");
+    CHECK(*reg(GLOBAL_OVF) == 1u,
+          "having acknowledged the overflow firmware left on it, and on no other counter");
+    *reg(GLOBAL_STATUS) = 2u;
+    *reg(GLOBAL_OVF) = 0;
+    CHECK(!kvm_pmu_nmi() && !*reg(GLOBAL_OVF),
+          "so an NMI that finds only another counter's status is not KVM's");
+    kvm_pmu_vmx_exit(&v, guest, 1);
+    *reg(GLOBAL_STATUS) = 0;
+    *reg(GLOBAL_OVF) = 0;
+    pmi_enter(&v, 0, 5u, 4u, guest, host);
+    CHECK(v.pmu.phys[2] == 2 &&
+              *reg(EVENTSEL0 + 2u) == (0xC4u | EV_ENABLE | EV_OS | EV_TXCP | EV_INT),
+          "a checkpointed event runs on counter 2 with its interrupt bit");
+    kvm_pmu_vmx_exit(&v, guest, 1);
+    CHECK(kvm_pmu_nmi() == 1 && !*reg(GLOBAL_OVF),
+          "an NMI that finds no status, the rollback having cleared counter 2's, is KVM's");
+    CHECK(!kvm_pmu_nmi(), "once, since the exit the NMI caused stopped the counter");
+    *reg(GLOBAL_STATUS) = FIXED_BIT(1);
+    CHECK(kvm_pmu_nmi() == 1 && !*reg(GLOBAL_OVF),
+          "while another counter's status is set the checkpointed counter counts, as Linux's");
+    *reg(GLOBAL_STATUS) = 4u | 1u;
+    CHECK(kvm_pmu_nmi() == 2 && *reg(GLOBAL_OVF) == 5u,
+          "and its own status bit counts it once, beside the other guest counter's");
+    *reg(GLOBAL_STATUS) = 0;
+    *reg(GLOBAL_OVF) = 0;
+    pmi_enter(&v, 0, 5u, 4u, guest, host);
+    CHECK(kvm_pmu_nmi() == 1, "the next entry lets one empty NMI be claimed again");
+    kvm_pmu_vmx_exit(&v, guest, 1);
+    model_armed = 0;
+    pmi_enter(&v, 0, 5u, 4u, guest, host);
+    CHECK(!kvm_pmu_nmi(), "and an entry that sets no interrupt bit lets none be claimed");
+    kvm_pmu_vmx_exit(&v, guest, 1);
+    model_armed = 1;
+}
+
+/** Drive two processors: each entry, exit and NMI reads its own
+ * processor's record of the counters given a PMI bit. */
+static void intel_pmi_cpus(void)
+{
+    struct kvm_pmu_msr guest[KVM_PMU_LIST_MAX], host[KVM_PMU_LIST_MAX];
+    struct kvm_pmu_msr guest1[KVM_PMU_LIST_MAX], host1[KVM_PMU_LIST_MAX];
+
+    setup(1, 0, 0);
+    CHECK(steps("0x05") == 4, "the PMI bits are taken with the writes");
+    pmi_enter(&v, 0, 1u, 0, guest, host);
+    pmi_enter(&other, 1, 3u, 0, guest1, host1);
+    CHECK(other.pmu.phys[0] == 0 && other.pmu.phys[1] == 1 &&
+              *reg(EVENTSEL0 + 1u) == (0xC4u | EV_ENABLE | EV_OS | EV_INT),
+          "processor 1's entry gives its general counters 0 and 1 the interrupt bit");
+    *reg(GLOBAL_STATUS) = 2u | 1u;
+    host_cpu = 0;
+    *reg(GLOBAL_STATUS) = 2u | 1u;
+    host_cpu = 1;
+    kvm_pmu_vmx_exit(&other, guest1, 1);
+    CHECK(!*reg(GLOBAL_OVF),
+          "processor 1's exit leaves both its counters' overflows to their NMIs");
+    host_cpu = 0;
+    CHECK(kvm_pmu_nmi() == 1 && *reg(GLOBAL_OVF) == 1u,
+          "processor 0's NMI claims only the counter its own entry gave the bit");
+    *reg(GLOBAL_STATUS) = 1u;
+    *reg(GLOBAL_OVF) = 0;
+    model_armed = 0;
+    pmi_enter(&other, 1, 3u, 0, guest1, host1);
+    CHECK(*reg(GLOBAL_OVF) == (2u | 1u),
+          "processor 1's next entry acknowledges its own last entry's stale overflows");
+    host_cpu = 0;
+    CHECK(!*reg(GLOBAL_OVF) && kvm_pmu_nmi() == 1 && *reg(GLOBAL_OVF) == 1u,
+          "and leaves processor 0's record and status as they were");
+    host_cpu = 1;
+    kvm_pmu_vmx_exit(&other, guest1, 1);
+    host_cpu = 0;
+    kvm_pmu_vmx_exit(&v, guest, 1);
+    model_armed = 1;
 }
 
 /** Drive the guest's LBR stack: PERF_CAPABILITIES, DEBUGCTL, its MSRs,
@@ -936,6 +1052,8 @@ int main(void)
     intel_placement();
     intel_steps();
     intel_step_limits();
+    intel_pmi_status();
+    intel_pmi_cpus();
     intel_lbr();
     amd_switch();
     amd_constraints();
