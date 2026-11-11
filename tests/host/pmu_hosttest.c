@@ -23,11 +23,13 @@
  *
  * Each row probes, enables the counter for 10 seconds at the processor's
  * clock, runs the clock for 25 seconds and takes each NMI the counter
- * raises as watchdog_nmi takes it, through platform_pmu_overflow, and
- * checks that the due NMIs come at 10 and 20 seconds, that the APIC's
- * performance-counter entry is unmasked again after each and after a late
- * one that finds no overflow, that AMD's window for a late NMI opens after
- * the overflow's callback, and that a disabled counter stops and keeps its
+ * raises as watchdog_nmi takes it, through KVM's hook and then
+ * platform_pmu_overflow, and checks that the due NMIs come at 10 and 20
+ * seconds, that the APIC's performance-counter entry is unmasked again
+ * after each and after a late one that finds no overflow, that a guest
+ * counter's overflows are claimed, counted and acknowledged while the entry
+ * is still masked, that AMD's window for a late NMI opens after the
+ * overflow's callback, and that a disabled counter stops and keeps its
  * entry masked.
  *
  * Returns 0 when every row passes, 1 otherwise.
@@ -65,6 +67,9 @@ static uint64_t fixed_ctrl, fixed1; /* the fixed counters' control, counter 1 */
 static uint64_t other_evtsel[8];    /* the other general counters' selects */
 static uint32_t lvtpc = LAPIC_LVT_MASKED;
 static int nmi_pending;
+static int guest_ovf;     /* guest counters' overflows not yet acknowledged */
+static int guest_handled; /* the sources KVM's hook counted */
+static int guest_masked;  /* the entry was masked when the hook acknowledged */
 static int msr_writes, last_msr_written;
 static uint64_t last_value_written;
 static char fault[160];
@@ -498,19 +503,37 @@ static void reset(const struct chip *c)
     }
     lvtpc = LAPIC_LVT_MASKED | LAPIC_LVT_NMI;
     nmi_pending = 0;
+    guest_ovf = guest_handled = guest_masked = 0;
     msr_writes = 0;
     fault[0] = logged[0] = '\0';
 }
 
-/** Take each pending NMI as watchdog_nmi does; see `drive`. */
+/** KVM's hook, `watchdog_guest_nmi` (kvm/pmu.c's `kvm_pmu_nmi`): acknowledge
+ * the guest counters' overflows and return how many there were, noting
+ * whether the counter's entry was still masked. */
+static int guest_nmi(void)
+{
+    int n = guest_ovf;
+
+    if (n) {
+        guest_masked = (lvtpc & LAPIC_LVT_MASKED) != 0;
+        guest_ovf = 0;
+        guest_handled += n;
+    }
+    return n;
+}
+
+/** Take each pending NMI as watchdog_nmi does, KVM's hook before
+ * platform_pmu_overflow; see `drive`. */
 static int take_nmis(long ms, long *due_ms, int n, int max, int *others, int *masked)
 {
-    int due;
+    int due, guest;
 
     while (nmi_pending > 0) {
         nmi_pending--;
+        guest = guest_nmi();
         if (platform_pmu_overflow(&due) == 0) {
-            (*others)++;
+            *others += !guest;
             continue;
         }
         platform_pmu_handled();
@@ -550,6 +573,23 @@ static int drive(int seconds, long *due_ms, int max, int *others, int *masked)
         }
     }
     return n;
+}
+
+/** Two guest counters' overflows in one NMI, which the APIC delivered
+ * through the running counter's entry and masked it for. */
+static void guest_row(void)
+{
+    long due_ms[4];
+    int others, masked;
+
+    guest_ovf = 2;
+    lvtpc |= LAPIC_LVT_MASKED;
+    nmi_pending = 1;
+    drive(0, due_ms, 4, &others, &masked);
+    check(others == 0 && guest_handled == 2 && guest_ovf == 0,
+          "a guest counter's NMI is claimed, each overflow counted");
+    check(guest_masked && lvtpc == LAPIC_LVT_NMI,
+          "the overflows are acknowledged before the entry is unmasked");
 }
 
 /**
@@ -602,6 +642,8 @@ static void counter_row(const struct chip *c, const char *line, int want_fixed, 
     drive(0, due_ms, 4, &others, &masked);
     check(others == 1 && (chip_amd() || chip_version() < 2 || msr_writes == writes),
           "an NMI of another source is not the counter's");
+
+    guest_row();
 
     /* A late NMI, delivered after the arming cleared the status it set:
      * the APIC masked the entry, and nothing shows an overflow. */
