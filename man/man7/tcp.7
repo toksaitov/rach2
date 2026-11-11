@@ -55,7 +55,8 @@ and acknowledges something from the oldest unacknowledged byte to the
 next to be sent answers the probes, as on Linux.
 A segment refused there, one with an older acknowledgement, and one
 outside the receive window answer none; in-order data with an older
-acknowledgement restarts the idle time but keeps the count of probes.
+acknowledgement, or a new FIN on bytes received before, restarts the
+idle time but keeps the count of probes.
 The defaults, 7200 seconds, 75 seconds and 9 probes, are those of
 .Pa /proc/sys/net/ipv4/tcp_keepalive_time ,
 .Pa tcp_keepalive_intvl
