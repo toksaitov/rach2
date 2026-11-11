@@ -556,15 +556,13 @@ static int ptm_write_free(void *arg)
     return !((const struct pty *)arg)->m_writing;
 }
 
-/** Take the master's write lock: 0, -EAGAIN for a nonblocking caller while
+/** Take the master's write lock: 0, -EAGAIN when `nonblock` while
  * another holds it, or -EINTR when a signal ends a blocking caller's wait.
  * The caller releases it with `ptm_write_unlock` after the whole write. */
-static int32_t ptm_write_lock(fd_entry_t *e)
+static int32_t ptm_write_lock(struct pty *p, int nonblock)
 {
-    struct pty *p = (struct pty *)e->priv;
-
     while (p->m_writing) {
-        if (fd_is_nonblock(e)) {
+        if (nonblock) {
             return -EAGAIN;
         }
         if (wq_wait_event(&p->m_read_wq, ptm_write_free, p) < 0) {
@@ -592,7 +590,7 @@ static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     if (count == 0) {
         return 0;
     }
-    rc = ptm_write_lock(e);
+    rc = ptm_write_lock((struct pty *)e->priv, fd_is_nonblock(e));
     if (rc == 0) {
         rc = ptm_write_in(e, buf, count);
         ptm_write_unlock((struct pty *)e->priv);
@@ -611,7 +609,7 @@ int32_t pty_master_writev(fd_entry_t *e, const struct kernel_iovec *iov, int cou
     if (i == count) {
         return 0;
     }
-    rc = ptm_write_lock(e);
+    rc = ptm_write_lock((struct pty *)e->priv, fd_is_nonblock(e));
     if (rc != 0) {
         return rc;
     }
@@ -688,12 +686,14 @@ static int32_t ptm_flush(struct pty *p, unsigned long which)
  * tcflow(3) on the master, whose output is the slave's input: TCOOFF stops
  * the master's writes until TCOON, and TCIOFF and TCION write ^S and ^Q, the
  * master's VSTOP and VSTART, to the slave's input unless TCOOFF stopped it,
- * as Linux's tty_send_xchar does through pty_write. Another action is
- * -EINVAL.
+ * as Linux's tty_send_xchar does through pty_write. Both wait for the
+ * master write lock even on a nonblocking descriptor, with -EINTR when a
+ * signal ends the wait, and hold it while feeding. Another action is -EINVAL.
  */
 static int32_t ptm_tcflow(struct pty *p, unsigned long action)
 {
-    uint32_t pushed = p->m_tail;
+    uint32_t pushed;
+    int32_t rc;
 
     switch (action) {
     case TTY_TCOOFF:
@@ -707,10 +707,16 @@ static int32_t ptm_tcflow(struct pty *p, unsigned long action)
         return 0;
     case TTY_TCIOFF:
     case TTY_TCION:
+        rc = ptm_write_lock(p, 0);
+        if (rc != 0) {
+            return rc;
+        }
+        pushed = p->m_tail;
         if (!p->m_stopped) {
             tty_input_char(&p->slave, action == TTY_TCIOFF ? 023 : 021);
             wake_master(p, &pushed);
         }
+        ptm_write_unlock(p);
         return 0;
     default:
         return -EINVAL;

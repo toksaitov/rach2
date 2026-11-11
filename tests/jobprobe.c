@@ -10,14 +10,17 @@
  *     pid);
  *   * the session leader claims the console as its controlling terminal,
  *     and TIOCSPGRP moves the foreground to a group of the session, one of
- *     a single unreaped zombie included, and refuses any other;
+ *     a single unreaped zombie included, or a thread's number in that
+ *     session even when it names no group, and refuses any other;
  *   * the probe's own group, which is orphaned because it leads its session,
  *     gets -ENOTTY from TIOCSPGRP once it is in the background, and goes
  *     ahead while it ignores SIGTTOU, as a shell does;
  *   * the stop, continue and kill cycle, a signal to a group, and the
  *     SIGTTIN stop of a background read behave as on Linux;
  *   * the error contract has: setsid by a group leader is -EPERM, getpgid of
- *     a missing pid is -ESRCH, setpgid with a negative pgid is -EINVAL.
+ *     a missing pid is -ESRCH, setpgid with a negative pgid is -EINVAL,
+ *     TIOCSPGRP of a missing group and thread is -ESRCH, and of a negative
+ *     number -EINVAL.
  *
  * Children report each check via exit status; the parent decodes WEXITSTATUS,
  * and a child that a signal ended fails its row, whatever its status reads.

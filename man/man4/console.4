@@ -50,13 +50,17 @@ The slave is
 where N is the lowest index not used by a live pair.
 A network login uses one pair per session.
 Master writes become slave input.
-Master writes are serialized too: a write waits while another is in
+Master writes are serialized: a write waits while another is in
 progress, or fails with
 .Er EAGAIN
 when non-blocking.
-A master write that finds no room waits, or fails with
+A master write that fills the input returns the bytes it fed.
+One that has fed no byte waits for room, or fails with
 .Er EAGAIN
 when non-blocking.
+The master's TCIOFF and TCION wait for the same write lock even on a
+non-blocking descriptor; a signal that interrupts the wait gives
+.Er EINTR .
 With software flow control enabled, a flow character in the waiting
 input can act at once if the input queue has room to retain the prefix
 through it; the write takes and returns that prefix before any wait.
