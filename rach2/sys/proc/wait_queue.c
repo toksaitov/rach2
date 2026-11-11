@@ -6,11 +6,13 @@
 #include "sched.h"
 #include "../lib/kerrno.h"
 
-/* The kinds of wait: one a signal ends, one it does not, and one it does not
- * that /proc counts as idle rather than blocked. */
+/* The kinds of wait: one a signal ends, one it does not, one it does not
+ * that /proc counts as idle rather than blocked, and one it does not whose
+ * condition SIGKILL ends, which the hung-task detector skips. */
 #define WQ_SIGNAL   0
 #define WQ_NOSIGNAL 1
 #define WQ_IDLE     2
+#define WQ_KILLABLE 3
 
 /*
  * Save the interrupt flag and disable interrupts; restore puts it back. With
@@ -120,9 +122,10 @@ static void wq_dequeue(wait_queue_t *wq, struct wq_waiter *w)
 }
 
 /**
- * The wait behind `wq_wait_event`, `wq_wait_event_as`, `wq_wait_event_nointr`
- * and `wq_wait_event_idle`: a pending signal ends a wait of kind WQ_SIGNAL,
- * and a sleeper of kind WQ_NOSIGNAL is marked uninterruptible. `name` is
+ * The wait behind `wq_wait_event`, `wq_wait_event_as`, `wq_wait_event_nointr`,
+ * `wq_wait_event_killable` and `wq_wait_event_idle`: a pending signal ends a
+ * wait of kind WQ_SIGNAL, a sleeper of kind WQ_NOSIGNAL or WQ_KILLABLE is
+ * marked uninterruptible, and one of WQ_KILLABLE killable too. `name` is
  * the wait's name for /proc/PID/wchan, stored before each block.
  *
  * The condition and the signal are tested, and the process queued and
@@ -170,7 +173,8 @@ static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int kind, const
         current_proc->wakeup_tick = deadline;
         current_proc->wchan = name;
         current_proc->state = PROC_BLOCKED;
-        current_proc->uninterruptible = kind == WQ_NOSIGNAL;
+        current_proc->uninterruptible = kind == WQ_NOSIGNAL || kind == WQ_KILLABLE;
+        current_proc->killable = kind == WQ_KILLABLE;
         irq_restore(flags);
 
         schedule();
@@ -188,6 +192,7 @@ static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int kind, const
     wq_unlock();
     current_proc->woken = 0;
     current_proc->uninterruptible = 0;
+    current_proc->killable = 0;
     current_proc->state = PROC_RUNNING;
     irq_restore(flags);
     return rc;
@@ -288,6 +293,11 @@ int wq_wait_event_as(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *n
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     return wq_wait(wq, cond, arg, WQ_NOSIGNAL, "wq_wait_event_nointr");
+}
+
+int wq_wait_event_killable(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
+{
+    return wq_wait(wq, cond, arg, WQ_KILLABLE, name);
 }
 
 int wq_wait_event_idle(wait_queue_t *wq, wq_cond_fn cond, void *arg)

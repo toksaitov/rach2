@@ -25,6 +25,14 @@
 #include "timer.h"
 #include "udelay.h"
 
+/* Linux's PID_MAX_LIMIT (include/linux/threads.h:34-35), the default of
+ * hung_task_check_count (kernel/hung_task.c:30). */
+#if defined(__x86_64__)
+#define HUNG_TASK_CHECK_COUNT 4194304
+#else
+#define HUNG_TASK_CHECK_COUNT 32768
+#endif
+
 /* The settings and their defaults, kernel/watchdog.c:45-59 and :303-310,
  * and kernel/hung_task.c:28-45; the hard-lockup detector is on by default,
  * as WATCHDOG_HARDLOCKUP_DEFAULT is where Linux has one. */
@@ -38,7 +46,7 @@ int sysctl_softlockup_all_cpu_backtrace;
 int sysctl_hardlockup_all_cpu_backtrace;
 int sysctl_hung_task_all_cpu_backtrace;
 int sysctl_hung_task_panic;
-int sysctl_hung_task_check_count = 0x7FFFFFFF;
+int sysctl_hung_task_check_count = HUNG_TASK_CHECK_COUNT;
 int sysctl_hung_task_timeout_secs = 120;
 int sysctl_hung_task_check_interval_secs;
 int sysctl_hung_task_warnings = 10;
@@ -886,7 +894,8 @@ static int check_hung_task(process_t *t, uint32_t timeout, uint64_t now)
 }
 
 /** check_hung_uninterruptible_tasks, kernel/hung_task.c:181: every thread
- * blocked in a sleep no signal ends. The big lock keeps the list still. */
+ * blocked in a sleep no signal ends, but one SIGKILL ends (:206-210). The
+ * big lock keeps the list still. */
 static void check_hung_uninterruptible_tasks(uint32_t timeout)
 {
     int max_count = sysctl_hung_task_check_count, reported = 0, want[NR_CPUS], c;
@@ -897,7 +906,7 @@ static void check_hung_uninterruptible_tasks(uint32_t timeout)
         if (max_count-- <= 0) {
             break;
         }
-        if (t->state == PROC_BLOCKED && t->uninterruptible) {
+        if (t->state == PROC_BLOCKED && t->uninterruptible && !t->killable) {
             reported |= check_hung_task(t, timeout, now);
         }
     }
