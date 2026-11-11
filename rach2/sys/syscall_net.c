@@ -1616,6 +1616,30 @@ static int connect_done(void *arg)
     return sock->tcb == NULL || connect_established(sock) || sock->tcb->state == TCP_CLOSED;
 }
 
+/**
+ * Wait out the handshake of a blocking connect on the stream socket `sock`.
+ * Returns 0 once it is established, -EINTR on a signal, the error a
+ * sharer's shutdown in SYN_SENT recorded, ECONNRESET, as Linux's
+ * __inet_stream_connect returns sock_error, or -ECONNABORTED when none
+ * was, and -ECONNREFUSED for a handshake that failed or timed out.
+ */
+static int32_t connect_wait(struct socket *sock)
+{
+    int rc = wq_wait_event(&sock->waiters, connect_done, sock);
+
+    if (rc < 0) {
+        return rc;
+    }
+    if (!sock->tcb) {
+        rc = socket_dgram_error(sock);
+        return rc != 0 ? rc : -ECONNABORTED;
+    }
+    if (!connect_established(sock)) {
+        return -ECONNREFUSED;
+    }
+    return 0;
+}
+
 /** Wait predicate: a listening socket has a connection queued for accept. */
 static int accept_ready(void *arg)
 {
@@ -1680,7 +1704,8 @@ static int32_t connect_echo(struct socket *sock, uintptr_t sa_ptr, int addrlen)
 /**
  * connect(2): start the TCP handshake to the sockaddr. A blocking socket waits
  * it out (-EINTR on a signal, -ECONNREFUSED when the handshake fails or times
- * out); a non-blocking one returns 0 or -EINPROGRESS, and the caller polls
+ * out, and ECONNRESET after a sharer's shutdown in SYN_SENT, `connect_wait`);
+ * a non-blocking one returns 0 or -EINPROGRESS, and the caller polls
  * for the end. A datagram socket records its peer instead, and a netlink
  * socket has its one peer, the kernel, already. Returns 0 or -errno.
  *
@@ -1815,15 +1840,7 @@ static int32_t do_connect(int fd, uintptr_t sa_ptr, int addrlen)
         return -EINPROGRESS;
     }
 
-    rc = wq_wait_event(&entry->sock->waiters, connect_done, entry->sock);
-    if (rc < 0) {
-        return rc;
-    }
-
-    if (!connect_established(entry->sock)) {
-        return -ECONNREFUSED;
-    }
-    return 0;
+    return connect_wait(entry->sock);
 }
 
 /** listen(2): mark a stream socket passive and open its LISTEN TCB. Returns
@@ -2150,22 +2167,27 @@ static int32_t do_getpeername(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr)
 #define SHUT_RDWR 2
 
 /**
- * shutdown(how): SHUT_RD(0)/SHUT_WR(1)/SHUT_RDWR(2). SHUT_WR closes the
- * sending half: the FIN goes after the queued data, a later send is EPIPE,
- * and the peer's data and FIN still reach the reader, as `nc` needs when it
- * has sent its input and reads the answer. SHUT_RDWR closes the connection as
- * close() does, and the socket reads end of input. SHUT_RD alone is accepted
- * as a no-op. Returns 0, -EINVAL for another `how`, -ENOTCONN or -EOPNOTSUPP.
+ * shutdown(how): SHUT_RD(0)/SHUT_WR(1)/SHUT_RDWR(2), as Linux's
+ * inet_shutdown (`tcp_shutdown`). SHUT_WR closes the sending half: the FIN
+ * goes after the queued data, a later send is EPIPE, and the peer's data
+ * and FIN still reach the reader, as `nc` needs when it has sent its input
+ * and reads the answer. SHUT_RD closes the receiving half: a read gives the
+ * bytes buffered and then the end of input without waiting, and poll
+ * reports POLLIN and POLLRDHUP; data past rcv_nxt once this side's FIN has
+ * gone ends the connection with a reset. SHUT_RDWR does both. The socket
+ * keeps its connection until its close. A connection still in SYN_SENT is
+ * disconnected and records ECONNRESET. Returns 0, -EINVAL for another
+ * `how`, -ENOTCONN or -EOPNOTSUPP.
  *
- * Only a connected stream socket can be shut down: not a listener, which
- * would free its LISTEN TCB and stop accepting without a word, nor an
- * unconnected or a UDP socket. `tcp_close` detaches the socket from its TCB
- * both ways, so no later answer from the peer can reach its queue, and a
- * sharer already asleep in `recv` is woken here or never.
+ * Only a connected or connecting stream socket can be shut down: not a
+ * listener, which would free its LISTEN TCB and stop accepting without a
+ * word, nor an unconnected or a UDP socket. A sharer asleep in `recv`,
+ * `send` or `connect` is woken to judge the socket again.
  */
 static int32_t do_shutdown(int fd, int how)
 {
     fd_entry_t *entry = fd_get(current_proc->fds, fd);
+    int rc;
 
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return not_a_socket(entry);
@@ -2176,18 +2198,14 @@ static int32_t do_shutdown(int fd, int how)
     if (how < SHUT_RD || how > SHUT_RDWR) {
         return -EINVAL;
     }
-    if (!tcp_is_connected(entry->sock)) {
+    if (entry->sock->type != SOCK_STREAM) {
         return -ENOTCONN;
     }
-    if (how == SHUT_WR) {
-        tcp_shutdown_send(entry->sock);
-        wq_wake_all(&entry->sock->waiters);
-    } else if (how == SHUT_RDWR) {
-        entry->sock->shut_down = 1;
-        tcp_close(entry->sock); /* send FIN; idempotent vs the later close() */
+    rc = tcp_shutdown(entry->sock, how != SHUT_WR, how != SHUT_RD);
+    if (rc == 0) {
         wq_wake_all(&entry->sock->waiters);
     }
-    return 0;
+    return rc;
 }
 
 /* Socket-option levels/names recognized by get/setsockopt. */

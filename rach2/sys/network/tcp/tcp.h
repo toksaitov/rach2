@@ -219,6 +219,9 @@ struct tcb {
      * since the descriptor still has it. */
     int passive;
     struct tcb *listener; /* borrowed until a passive handshake completes */
+    /* 1 when `tcp_connect` gave the socket an ephemeral port, which a
+     * shutdown in SYN_SENT gives back (`tcp_shutdown`). */
+    uint8_t port_auto;
 
     uint16_t family; /* socket family, including mapped IPv4 on AF_INET6 */
     /* The network namespace of its socket, NULL for the first: it sends in
@@ -423,10 +426,10 @@ struct tcb {
     uint8_t ack_owed;   /* a bare acknowledgement the driver refused */
     uint32_t retx_seq;  /* sequence number the control occupies   */
     /*
-     * 1 while ESTABLISHED after a simultaneous open whose ACK was of
-     * snd_una: the SYN, at snd_una, is unacknowledged and holds the send
-     * ring's slot before the data, so that ring position send_ack is
-     * sequence number snd_una, and `tcp_resend` sends the SYN-ACK for it.
+     * 1 from a simultaneous open's ACK of snd_una until an acknowledgement
+     * of the SYN: the SYN, at snd_una, holds the send ring's slot before
+     * the data, so that ring position send_ack is sequence number snd_una,
+     * and `tcp_resend` sends the SYN-ACK for it.
      */
     uint8_t syn_unacked;
 
@@ -568,16 +571,30 @@ int tcp_connect(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port);
 int tcp_send(struct socket *sock, const uint8_t *buf, int len);
 
 /**
- * Detach `sock` from its connection and begin closing it. In ESTABLISHED or
- * CLOSE_WAIT the queued data goes out and a FIN after it; in FIN_WAIT_2 the
- * wait for the peer's FIN is limited to TCP_FIN_WAIT2_TICKS; in FIN_WAIT_1,
- * CLOSING, LAST_ACK or TIME_WAIT, after a shutdown, the block finishes as it
- * is; in any other state it is freed, and a listener's close first frees the
- * blocks still in their handshake on its port, with their sockets. The
- * caller keeps `sock`. Takes `net_lock` itself, so it may be called with
- * interrupts on or off.
+ * Detach `sock` from its connection and begin closing it. A connection
+ * from ESTABLISHED to LAST_ACK with received data its reader never read is
+ * ended with a reset and freed, counted in TCPAbortOnClose. Otherwise, in
+ * ESTABLISHED or CLOSE_WAIT the queued data goes out and a FIN after it; in
+ * FIN_WAIT_2 the wait for the peer's FIN is limited to TCP_FIN_WAIT2_TICKS;
+ * in FIN_WAIT_1, CLOSING, LAST_ACK or TIME_WAIT, after a shutdown, the
+ * block finishes as it is; in any other state it is freed, and a
+ * listener's close first frees the blocks still in their handshake on its
+ * port, with their sockets. The caller keeps `sock`. Takes `net_lock`
+ * itself, so it may be called with interrupts on or off.
  */
 void tcp_close(struct socket *sock);
+
+/**
+ * Shut down the connection of `sock` as shutdown(2) asks: `rd` sets the
+ * socket's SOCK_RCV_SHUTDOWN, `wr` its SOCK_SEND_SHUTDOWN and sends the
+ * FIN after the queued data (`tcp_shutdown_send`). The block stays
+ * attached until the socket's close. A connection still in SYN_SENT is
+ * disconnected instead: its block is freed, nothing is sent, and the
+ * socket records ECONNRESET and may connect again. Returns 0, or -ENOTCONN
+ * for a socket with no connection, a listener, or one in CLOSED or
+ * SYN_RCVD. Takes `net_lock` itself.
+ */
+int tcp_shutdown(struct socket *sock, int rd, int wr);
 
 /**
  * Close the sending half of the connection, as shutdown(SHUT_WR) asks: the
