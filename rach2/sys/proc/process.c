@@ -787,9 +787,16 @@ static void kthread_start(void)
  * (`arch_context_init`), returning first to `kthread_start`, which runs the
  * switch's tail and then `entry_point`. The thread begins holding the big
  * lock once, as a forked child does: the tail takes it at that depth.
+ *
+ * The thread defers the tick's switch to its sleeps and service points
+ * (`no_tick_switch`), as a Linux kernel thread does without
+ * CONFIG_PREEMPTION: an interrupt in the middle of its work would otherwise
+ * switch it with state that only the big lock guards half changed, and the
+ * switch lets the lock go.
  */
 void setup_process_stack(process_t *proc, void (*entry_point)(void))
 {
+    proc->no_tick_switch = 1;
     proc->bkl_depth = 1;
     proc->bkl_frames = 0;
     proc->kthread_entry = entry_point;
