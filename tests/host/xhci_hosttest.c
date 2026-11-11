@@ -2693,6 +2693,16 @@ int main(void)
     CHECK("and is not finished", xhci_port_reset_done(hc, 0) == 0);
     xhci_advance(hc, 1000);
     CHECK("a reset that never finishes is given up on", xhci_port_reset_done(hc, 0) == -1);
+    /* The reset ends after all, with the device still on the port: its
+     * change bit is a stray one, which the next scan clears, since the core
+     * has given up on the reset (Linux's port_event clears C_RESET,
+     * drivers/usb/core/hub.c:5811-5813). */
+    reg[M_PORTSC(0)] &= ~M_PORTSC_PR;
+    reg[M_PORTSC(0)] |= M_PORTSC_PED | M_PORTSC_PRC;
+    post_event(TRB_TYPE_PORT_CHANGE, TRB_COMPLETION_SUCCESS, 0, 1u << 24);
+    xhci_events(hc);
+    CHECK("and the change bit its late end sets is cleared by the scan",
+          (reg[M_PORTSC(0)] & M_PORTSC_PRC) == 0);
 
     /* PORTSC, half of whose bits are cleared by writing them as one. */
     model_reset();
