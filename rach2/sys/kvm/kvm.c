@@ -874,9 +874,9 @@ static int32_t param_show(void *obj, int arg, char *buf, uint32_t cap)
 /**
  * Make /sys/module/MODULE/parameters for `kvm` and for the backend's
  * module, `kvm_intel` (`backend` 1) or `kvm_amd` (2), as Linux's modules
- * show theirs, each file read-only, and kvm_intel's pmu_steps, which root
- * writes. 0, or the first error of sysfs.h, which
- * leaves what was made; /dev/kvm works without the files.
+ * show theirs, each file read-only, kvm_intel's pmu_steps, which root
+ * writes, and its read-only pmu_placed. 0, or the first error of sysfs.h,
+ * which leaves what was made; /dev/kvm works without the files.
  */
 static int params_start(int backend)
 {
@@ -915,6 +915,14 @@ static int params_start(int backend)
         attr.mode = 0644u;
         attr.show = kvm_pmu_steps_show;
         attr.store = kvm_pmu_steps_store;
+        h = sysfs_add_attr(dir, &attr, NULL, 0);
+        if (h < 0) {
+            return h;
+        }
+        attr.name = "pmu_placed";
+        attr.mode = 0444u;
+        attr.show = kvm_pmu_placed_show;
+        attr.store = NULL;
         h = sysfs_add_attr(dir, &attr, NULL, 0);
         if (h < 0) {
             return h;

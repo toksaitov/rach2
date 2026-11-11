@@ -3406,6 +3406,9 @@ static void selftest_rows(void)
 }
 
 /** Run the rows; 0 when every check passed, 1 otherwise. */
+/* The NMI handler's hook, which kvm_pmu_start sets. */
+int (*watchdog_guest_nmi)(void);
+
 int main(void)
 {
     int vm, vcpu;
