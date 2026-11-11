@@ -25,8 +25,11 @@
  * driver's ioctls; a buffer's last reference, which unrefs its resource
  * and frees its pages once the host answers; virtio-vga, which removes the
  * firmware's framebuffer from its memory BARs; a device with no scanout,
- * which has no KMS; and an unplug, which fails the commands still out with
- * ENODEV and leaves nothing allocated once the last reference goes.
+ * which has no KMS; an unplug, which fails the commands still out with
+ * ENODEV and leaves nothing allocated once the last reference goes; and a
+ * reset over a transport whose backing is its own heap, which zaps an
+ * object no one exported and gives its frames back, and leaves an exported
+ * object its frames until it is freed.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -1150,11 +1153,16 @@ int vgs_check_run(const struct vgs_run *r, uint64_t left)
     return VGS_E_PAGES;
 }
 
+static const void *zapped; /* the object of the last zap */
+static int zaps;
+
+/** Count a zap of an object's mappings, the model having none to remove. */
 void paging_zap_device(const void *obj, uint32_t pgoff, uint32_t count)
 {
-    (void)obj;
     (void)pgoff;
     (void)count;
+    zapped = obj;
+    zaps++;
 }
 
 /** The core's zap of an object's mappings and its importers': the model
@@ -1325,11 +1333,24 @@ int virtio_backing_fill(struct virtio_dev *d, struct shmem *sh, uint64_t bytes)
     return 0;
 }
 
+static int backing_releases; /* backings given back while each still had pages */
+
+/** Count a backing given back to the transport. */
 void virtio_backing_release(struct virtio_dev *d, struct shmem *sh)
+{
+    (void)d;
+    backing_releases += sh->leaves != NULL;
+}
+
+/** The table's hook that marks a transport whose backing is its own heap,
+ * as the shared region's is; the driver calls virtio_backing_release. */
+static void heap_backing_release(struct virtio_dev *d, struct shmem *sh)
 {
     (void)d;
     (void)sh;
 }
+
+static const struct virtio_ops heap_ops = {.name = "heap", .backing_release = heap_backing_release};
 
 int virtio_dma_addr(struct virtio_dev *d, uintptr_t phys, uint64_t *addr)
 {
@@ -2096,6 +2117,49 @@ static void row_unplug(void)
     CHECK(released > 0, "the last reference releases the device");
 }
 
+/** A reset over a transport whose backing is its own heap: an object no
+ * one exported is zapped before its frames go back, and an exported one,
+ * whose frames an importer such as i915 may hold in its translations,
+ * keeps them until it is freed. */
+static void row_reset_heap(void)
+{
+    struct virtio_gpu_object *a, *b;
+    uint32_t ha, hb;
+    uintptr_t pa;
+    int buf; /* the dma-buf's place, which the model never reads */
+
+    unbind();
+    model_reset();
+    gpu.dev.ops = &heap_ops;
+    CHECK(bind() == 1, "a bind over a heap");
+    a = dumb(64, 64, &ha);
+    b = dumb(64, 64, &hb);
+    CHECK(a && b, "two buffers over the heap");
+    if (!a || !b) {
+        unbind();
+        gpu.dev.ops = NULL;
+        return;
+    }
+    pa = shmem_resident(&a->shmem.pages, 0);
+    CHECK(pa != 0 && shmem_resident(&b->shmem.pages, 0) != 0, "both have their pages");
+    a->shmem.base.dma_buf = (struct dma_buf *)&buf;
+    drm_gem_object_get(&a->shmem.base); /* the dma-buf's */
+    zaps = 0;
+    zapped = NULL;
+    backing_releases = 0;
+    unbind(); /* `dumb` left one reference of each for the program */
+    CHECK(zaps == 1 && zapped == &b->shmem.base && backing_releases == 1 &&
+              shmem_resident(&b->shmem.pages, 0) == 0,
+          "the reset zaps the object no one exported and gives its frames back");
+    CHECK(shmem_resident(&a->shmem.pages, 0) == pa, "the exported object keeps its frames");
+    a->shmem.base.dma_buf = NULL;
+    drm_gem_object_put(&a->shmem.base);
+    drm_gem_object_put(&a->shmem.base);
+    drm_gem_object_put(&b->shmem.base);
+    CHECK(backing_releases == 2, "the exported object's frames go back when it is freed");
+    gpu.dev.ops = NULL;
+}
+
 int main(void)
 {
     cpu_table[0].current = &self;
@@ -2117,6 +2181,7 @@ int main(void)
     row_vga();
     row_no_scanout();
     row_unplug();
+    row_reset_heap();
     CHECK(allocations == 0, "nothing is left allocated");
     CHECK(pages_held == 0, "no page is left held");
     CHECK(irq_depth == 0, "every lock is given back");
