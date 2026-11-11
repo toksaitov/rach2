@@ -1,0 +1,133 @@
+The Debian 13 guest on the virgl profile, 8 CPUs and 8192 MiB, under QEMU
+10.2.1 with virglrenderer 1.2.0 over Mesa 26.0.8's D3D12 driver on the
+testing PC, ran VK-GL-CTS 1.4.1.1's glcts as deqp.sh runs it:
+
+    EGL_PLATFORM=surfaceless ./glcts --deqp-caselist-file=LIST --deqp-surface-type=pbuffer \
+        --deqp-gl-config-name=rgba8888d24s8ms0 --deqp-surface-width=256 --deqp-surface-height=256 \
+        --deqp-watchdog=enable
+
+1. The reference runs. On 2026-11-11 the first part of four of dEQP-GLES31,
+`debian.sh deqp -p virgl -c 8 OUT -v 1.4.1.1 -e 4 -s 1 -l LIST gles31`, lost
+its guest in three tries of three, 37 to 46 s after the guest started, and
+the second part in its first try; the run printed only
+
+    deqp: running 9228 of 36911 cases of gles31 in 4 processes
+    Connection to 127.0.0.1 closed by remote host.
+    debian: the guest's run failed
+
+and the host's kernel, for each, a line such as
+
+    qemu-system-x86[12423]: segfault at 14 ip 00007b404ceafc48 sp 00007ffc09280700 error 4 in libgallium-26.0.8-1ubuntu0.3.so[6afc48,7b404c8dc000+19a0000] likely on CPU 27 (core 13, socket 0)
+
+the same offset, 0x6afc48 in the file, each time.
+
+2. The first part again, with each glcts process's output streamed to the
+host. When QEMU ended, the four processes were in
+
+    dEQP-GLES31.functional.shaders.opaque_type_indexing.sampler.dynamically_uniform.compute.isamplercubearray
+    dEQP-GLES31.functional.shaders.builtin_functions.precision.fma.mediump_compute.vec2
+    dEQP-GLES31.functional.shaders.builtin_functions.precision.fma.lowp_compute.vec2
+    dEQP-GLES31.functional.shaders.builtin_functions.precision.transpose.lowp_compute.mat4x2
+
+Each alone in a guest of its own: the first ended QEMU with the same
+segfault, the other three passed.
+
+3. The whole dEQP-GLES31 list of 36,911 cases with each case's start and
+end streamed, a new guest for the cases left after each death, stopped
+after twelve guests had died, the second to the twelfth after 0 to 310
+cases each. At eleven of the deaths an
+`opaque_type_indexing.sampler.uniform.*` or `.dynamically_uniform.*` case
+of `isamplercubearray` or `usamplercubearray` was among the cases running,
+in the vertex, fragment, geometry, tessellation control and compute
+stages. At the fourth, 0.32 s after the guest's four processes had each
+started one float or shadow case of the same group, the host had no line
+of a later case; those four pass alone and together, and they take a
+quarter of a second each, so that the lines of the cases started just
+before a death need not reach the host.
+
+4. Cases alone, one guest each, but for the lists of 20 and 144:
+
+    Test case 'dEQP-GLES31.functional.shaders.opaque_type_indexing.sampler.uniform.vertex.isamplercubearray'..
+    Connection to 127.0.0.1 closed by remote host.
+
+    Test case 'dEQP-GLES31.functional.shaders.opaque_type_indexing.sampler.uniform.fragment.isamplercubearray'..
+    Connection to 127.0.0.1 closed by remote host.
+
+    Test case 'dEQP-GLES31.functional.shaders.opaque_type_indexing.sampler.uniform.geometry.isamplercubearray'..
+    Connection to 127.0.0.1 closed by remote host.
+
+    Test case 'dEQP-GLES31.functional.shaders.opaque_type_indexing.sampler.uniform.tessellation_control.isamplercubearray'..
+    Connection to 127.0.0.1 closed by remote host.
+
+    Test case 'dEQP-GLES31.functional.shaders.opaque_type_indexing.sampler.uniform.compute.usamplercubearray'..
+    Connection to 127.0.0.1 closed by remote host.
+
+    Test case 'dEQP-GLES31.functional.shaders.opaque_type_indexing.sampler.dynamically_uniform.compute.isamplercubearray'..
+    Connection to 127.0.0.1 closed by remote host.
+
+    const_literal.{vertex,fragment,geometry,tessellation_control}.usamplercubearray,
+    each alone: Pass
+
+    the 20 const_literal and const_expression cases of isamplercubearray and
+    usamplercubearray, in one process: 20 Pass
+
+    the 20 cases of samplercubearray, every index kind and stage, in one
+    process: 20 Pass
+
+    the 144 cases of dEQP-GLES31 on integer cube array textures,
+    texture.format.sized.cube_array.*, texture.filtering.cube_array.formats.*
+    and the like, in one process: 144 Pass
+
+Each death gave the kernel's segfault line at offset 0x6afc48.
+
+5. QEMU's stack. The compute case of step 2 alone, with QEMU's core dumped,
+read by gdb 17.1, the frames of libgallium named by addr2line from Ubuntu's
+debug information for build ID b089ec2f62ded38e9327502246aa4ccfb7929b24:
+
+    Program terminated with signal SIGSEGV, Segmentation fault.
+    #0  nir_builder_alu_instr_finish_and_insert   src/compiler/nir/nir_builder.c:83
+    #1  nir_f2i32 (inlined)                       src/compiler/nir/nir_builder_opcodes.h:888
+    #2  load_texel                                src/microsoft/compiler/dxil_nir_lower_int_samplers.c:326
+    #3  lower_sample_to_txf_for_integer_tex_impl  src/microsoft/compiler/dxil_nir_lower_int_samplers.c:549
+    #4  nir_function_impl_lower_instructions      src/compiler/nir/nir.c:2332
+    #5  nir_shader_lower_instructions             src/compiler/nir/nir.c:2378
+    #6  dxil_lower_sample_to_txf_for_integer_tex  src/microsoft/compiler/dxil_nir_lower_int_samplers.c:570
+    #7  ??
+    #8  select_shader_variant                     src/gallium/drivers/d3d12/d3d12_compiler.cpp:103
+    #9  d3d12_select_compute_shader_variants      src/gallium/drivers/d3d12/d3d12_compiler.cpp:1553
+    #10 d3d12_launch_grid                         src/gallium/drivers/d3d12/d3d12_draw.cpp:1343
+    #11 tc_batch_execute                          src/gallium/auxiliary/util/u_threaded_context.c:4446
+    #12 _tc_sync                                  src/gallium/auxiliary/util/u_threaded_context.c:762
+    #13 tc_flush                                  src/gallium/auxiliary/util/u_threaded_context.c:3720
+    #14 _mesa_fence_sync                          src/mesa/main/syncobj.c:297
+    #15 ?? from libvirglrenderer.so.1
+    #16 virtio_gpu_process_cmdq                   hw-display-virtio-gpu.so
+
+6. The source, mesa-26.0.8's src/microsoft/compiler/dxil_nir_lower_int_samplers.c
+(SHA-256 c0261bd3219c7433a5ea4205a4e005e6cb898509e18b3f1ba2dc4d34e3f3e27d),
+lines 307-326:
+
+    load_texel(nir_builder *b, nir_tex_instr *tex, wrap_lower_param_t *params)
+    {
+       nir_def *texcoord = NULL;
+
+       /* Put coordinates back together */
+       switch (tex->coord_components) {
+       case 1:
+          texcoord = params->wrap[0].coords;
+          break;
+       case 2:
+          texcoord = nir_vec2(b, params->wrap[0].coords, params->wrap[1].coords);
+          break;
+       case 3:
+          texcoord = nir_vec3(b, params->wrap[0].coords, params->wrap[1].coords, params->wrap[2].coords);
+          break;
+       default:
+          ;
+       }
+
+       texcoord = nir_f2i32(b, texcoord);
+
+and src/gallium/drivers/d3d12/d3d12_compiler.cpp (SHA-256
+125f961c7873a290bd6072bfef7ec75d179efed501a535faf55247066c269c81), line 102,
+runs the pass when the shader's key says it samples integer textures.
