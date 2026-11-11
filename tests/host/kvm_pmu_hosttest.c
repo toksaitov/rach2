@@ -568,6 +568,15 @@ static void intel_placement(void)
 /* The NMI handler's hook, which kvm_pmu_start sets. */
 int (*watchdog_guest_nmi)(void);
 
+/* Whether the hard-lockup detector's counter runs, keeping the counters'
+ * APIC entry an unmasked NMI. */
+static int model_armed = 1;
+
+int platform_pmu_armed(void)
+{
+    return model_armed;
+}
+
 /** Write `text` to the measuring knob; its return. */
 static int32_t steps(const char *text)
 {
@@ -650,6 +659,18 @@ static void intel_steps(void)
     CHECK(kvm_pmu_nmi() == 2 && *reg(GLOBAL_OVF) == (FIXED_BIT(0) | 1u),
           "and claims a guest counter's, acknowledging only the counters the host does not hold "
           "and counting each, so that the NMI a second latched is swallowed");
+    *reg(GLOBAL_STATUS) = 0;
+    model_armed = 0;
+    kvm_pmu_prepare(&v);
+    kvm_pmu_vmx_enter(&v, guest, host, &ng, &nh, global);
+    CHECK(*reg(FIXED_CTRL) == 0xB2u && *reg(EVENTSEL0) == (0xC4u | EV_ENABLE | EV_OS),
+          "with the detector's counter stopped the entry sets no interrupt bit");
+    *reg(GLOBAL_STATUS) = FIXED_BIT(1) | FIXED_BIT(0) | 1u;
+    *reg(GLOBAL_OVF) = 0;
+    kvm_pmu_vmx_exit(&v, guest, 1);
+    CHECK(*reg(GLOBAL_OVF) == (FIXED_BIT(0) | 1u),
+          "and the exit acknowledges the guest counters' overflows, which raise no NMI");
+    model_armed = 1;
     *reg(GLOBAL_STATUS) = 0;
 }
 
