@@ -345,15 +345,25 @@ int signal_pending(void)
 /* The run loop's switch at a slice's end, which a row asks for by setting
  * the caller's need_resched: the thread waits `preempt_wait` ns on a run
  * queue and is switched in again, and the steal time's `preempted` byte at
- * `preempt_seen_at` is kept as the switch found it. */
+ * `preempt_seen_at` is kept as the switch found it. With `preempt_alone`
+ * no other thread is queued, so the request switches to none. */
 static uint64_t preempt_wait;
 static const uint8_t *preempt_seen_at;
 static int preempt_seen = -1;
+static int preempt_alone;
+
+int sched_preempt_due(void)
+{
+    return caller.need_resched && !preempt_alone;
+}
 
 void sched_take_preempt(void)
 {
     if (caller.need_resched) {
         caller.need_resched = 0;
+        if (preempt_alone) {
+            return;
+        }
         caller.run_delay += preempt_wait;
         caller.pcount++;
         preempt_seen = preempt_seen_at ? *preempt_seen_at : -1;
@@ -2099,6 +2109,19 @@ static void steal_rows(int fd0)
     CHECK(st->steal == 10000 && st->version == 18,
           "the wait on the run queue is stolen time at the next entry");
     CHECK(v0->stat[KVM_VCPU_STAT_PREEMPTION_REPORTED] == reported + 2, "and is reported");
+    script_len = 0;
+    script_at = 0;
+    scripted(KVM_X_AGAIN);
+    scripted(KVM_X_HLT);
+    preempt_alone = 1;
+    preempt_seen = -1;
+    CHECK(fdio(fd0, KVM_RUN, 0) == 0 && run->exit_reason == KVM_EXIT_HLT,
+          "KVM_RUN through a tick whose request finds no other thread, to a HLT");
+    CHECK(preempt_seen == -1 && st->preempted == 0 && st->version == 18 &&
+              v0->stat[KVM_VCPU_STAT_PREEMPTION_REPORTED] == reported + 2 &&
+              v0->stat[KVM_VCPU_STAT_PREEMPTION_OTHER] == 1,
+          "the vCPU is not marked preempted, nor counted, when nothing switches it out");
+    preempt_alone = 0;
     tick_exits = 0;
     preempt_wait = 0;
     preempt_seen_at = NULL;
