@@ -2102,6 +2102,59 @@ processes, the open files and the address space, have the process's
 values, and the others are unlimited, as
 .Xr prlimit64 2
 reports them.
+.It Pa /proc/PID/syscall
+The system call the thread is in, in Linux's form: its number, its six
+arguments, and the user stack and instruction pointers, all but the number
+in hexadecimal with
+.Ql 0x ;
+.Ql -1
+and the two pointers when the thread entered the kernel by a fault or an
+interrupt;
+.Ql running
+when it is ready or on a processor; and
+.Ql -1 0x0 0x0
+for a kernel thread or an ended leader.
+The number is the one a tracer left, and an i386 call on x86-64 has i386's
+number and arguments.
+The text is made at the open, so the caller's own thread shows the call
+that opened the file, where Linux shows the
+.Xr read 2 .
+The file is mode 0400; opening it needs what
+.Pa environ
+needs, and is
+.Er EACCES
+otherwise.
+.It Pa /proc/PID/wchan
+The name of the kernel function the thread sleeps in, with no newline, or
+.Ql 0
+when it runs, is ready to, has ended, or the caller may not read the
+process.
+A wait names itself with Linux's function where Linux has one:
+.Ql pipe_read ,
+.Ql pipe_write ,
+.Ql wait_for_partner ,
+.Ql futex_wait_queue ,
+.Ql rt_mutex_slowlock_block ,
+.Ql do_wait ,
+.Ql do_nanosleep ,
+.Ql do_sys_poll ,
+.Ql do_select ,
+.Ql ep_poll ,
+.Ql sigsuspend ,
+.Ql do_sigtimedwait ,
+.Ql __x64_sys_pause
+or
+.Ql __ia32_sys_pause ,
+and
+.Ql do_signal_stop
+or
+.Ql ptrace_stop
+for a stopped thread.
+Any other wait reads as Rach2's
+.Ql wq_wait_event ,
+.Ql wq_wait_event_nointr
+or
+.Ql wq_wait_event_idle .
 .It Pa /proc/PID/fdinfo
 A file for each open descriptor, named by its number, beginning with two lines:
 .Ql pos: ,
