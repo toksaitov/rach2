@@ -10,8 +10,9 @@
 .Fn shutdown "int fd" "int how"
 .Sh DESCRIPTION
 .Fn shutdown
-operates on a TCP socket, connected, connecting or listening, and on a
-UDP or ICMP datagram socket, judging each as Linux's inet_shutdown does.
+operates on a TCP socket, connected, connecting, listening or never
+connected, on a UDP socket and on a raw IPv4 or IPv6 socket, the ICMP
+datagram socket among them, judging each as Linux's inet_shutdown does.
 The socket keeps its connection until its close, which finishes the
 connection's close.
 .Pp
@@ -97,13 +98,31 @@ and the socket may listen again.
 .Dv SHUT_WR
 alone leaves a listener as it is.
 .Pp
-A TCP socket whose connection has ended, by a reset, by a timeout or
-in the time-wait state, takes the halves but returns
+A TCP socket that never connected, or whose connection has ended, by a
+reset, by a timeout or in the time-wait state, takes the halves but
+returns
 .Er ENOTCONN ,
 as Linux's closed socket does, and sends nothing.
+With the receiving half shut, a read of a socket that never connected
+returns 0 in place of
+.Er ENOTCONN ,
+after an error the socket recorded, and
+.Xr poll 2
+adds
+.Dv POLLIN
+and
+.Dv POLLRDHUP
+to its
+.Dv POLLHUP
+and
+.Dv POLLOUT ,
+as Linux's tcp_recvmsg and tcp_poll judge a closed socket.
+The halves stay shut if the socket then connects, so a send fails with
+.Er EPIPE
+and a read of an empty stream returns 0.
 .Pp
-A UDP or ICMP datagram socket records the halves shut, and every
-waiter is woken.
+A UDP or raw socket records the halves shut, and every waiter is
+woken.
 With the receiving half shut, a blocking receive returns the
 datagrams still queued and then 0, with no sender, where one that does
 not wait fails with
@@ -163,7 +182,8 @@ The host tests
 and
 .Pa tests/host/socket_wake_hosttest.c
 check a listener's shutdown, the states judged, a read and a send after
-a reset and a datagram socket's receive and poll.
+a reset, the read and poll of a stream that never connected and a
+datagram socket's receive and poll.
 .Sh ERRORS
 .Bl -tag -width "[EOPNOTSUPP]"
 .It Bq Er EBADF
@@ -184,7 +204,7 @@ halves.
 .Fa fd
 does not refer to a socket.
 .It Bq Er EOPNOTSUPP
-The socket is a raw, packet or netlink socket, as Linux's
+The socket is a packet or netlink socket, as Linux's
 sock_no_shutdown answers.
 .El
 .Sh SEE ALSO
