@@ -126,6 +126,11 @@ static void wrap(void)
           "the look ahead then gives the last byte alone");
 }
 
+/**
+ * Run the rows of a look ahead's cursor far behind the head (`stale_cursor`)
+ * and across the counters' 32-bit wrap (`wrap`), and print the count of
+ * failed checks. Exits 0 when every check passes, and 1 otherwise.
+ */
 int main(void)
 {
     stale_cursor();
