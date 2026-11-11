@@ -975,12 +975,16 @@ struct drm_crtc_funcs {
  * off-delay runs. `events` are the events waiting for a count, in the order
  * queued. `wait` wakes at each vblank, when vblanks stop, and when a commit's
  * flip on the CRTC completes. `last` is the hardware's frame counter when the
- * count last took it in, for a CRTC with `get_vblank_counter`.
+ * count last took it in, for a CRTC with `get_vblank_counter`. `backwards`
+ * counts the times stored before the latest one stored earlier,
+ * `stamp_max_ns`, which debugfs's `crtc-N/vblank_backwards` reads.
  */
 struct drm_vblank {
     uint64_t count;
     uint32_t last;
     int64_t time_ns;
+    int64_t stamp_max_ns;
+    uint32_t backwards;
     uint32_t refs;
     int enabled;   /* the driver's interrupt is on */
     int inmodeset; /* the CRTC is off, and `refs` holds one for it */
