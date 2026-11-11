@@ -41,7 +41,10 @@
  * when a message reaches the queue empty; poll reports a message; the
  * name goes with mq_unlink. /dev/mqueue lists the queue as a file with its
  * mode and its messages' bytes as its size, reading it gives its status
- * line, and unlinking a queue's file removes its name. fstat of a queue's
+ * line, and unlinking a queue's file removes its name. The file of an empty
+ * queue, of size 0, gives EFAULT for a read into NULL at offset 0, since its
+ * status line has a byte there, as Linux's simple_read_from_buffer gives it,
+ * and 0 for a pread at the line's end. fstat of a queue's
  * descriptor gives what stat of its file gives, and its /proc/self/fd link
  * reads /NAME, then "/NAME (deleted)" with no link counted once mq_unlink
  * has taken the name, as on Linux.
@@ -768,6 +771,46 @@ static int mq_mount(void)
 }
 
 /**
+ * Read the file of the empty queue /ipcempty, whose size is 0 and whose
+ * status line is not empty: a read into NULL at offset 0 is EFAULT, since
+ * the line has a byte there, as Linux's simple_read_from_buffer answers
+ * (fs/libfs.c:1104-1110 in 6.12), and a pread at the line's end returns 0.
+ * Returns 0, or 1 once the failure is reported.
+ */
+static int mq_empty_reads(void)
+{
+    char *volatile nowhere = NULL;
+    char line[256];
+    mqd_t q = mq_open("/ipcempty", O_CREAT | O_EXCL | O_RDWR, 0600, NULL);
+    ssize_t n, r;
+    int fd;
+
+    if (q == (mqd_t)-1) {
+        return fail("an empty queue for its file's reads");
+    }
+    fd = open(mq_path("ipcempty"), O_RDONLY);
+    if (fd < 0) {
+        return fail("opening an empty queue's file");
+    }
+    errno = 0;
+    r = read(fd, nowhere, 10);
+    if (r != -1 || errno != EFAULT) {
+        return fail("a read of an empty queue's file into NULL at offset 0 is EFAULT");
+    }
+    held();
+    n = pread(fd, line, sizeof(line), 0);
+    r = n > 0 ? pread(fd, line, sizeof(line), (off_t)n) : -1;
+    if (n <= 0 || r != 0) {
+        return fail("a pread at the end of an empty queue's status line returns 0");
+    }
+    held();
+    close(fd);
+    mq_close(q);
+    mq_unlink("/ipcempty");
+    return 0;
+}
+
+/**
  * Check /dev/mqueue while the queue /ipcfiles has one message of 4 bytes: its
  * file, its status line and its entry; a second queue whose name goes with
  * an unlink of its file; and the first queue's descriptor (`mq_fd_file`).
@@ -794,6 +837,9 @@ static int mq_files(void)
         return fail("the queue's file reads as its status line");
     }
     held();
+    if (mq_empty_reads() != 0) {
+        return 1;
+    }
     dir = opendir(mq_directory);
     while (dir && (d = readdir(dir)) != NULL) {
         listed |= strcmp(d->d_name, "ipcfiles") == 0;
@@ -923,10 +969,11 @@ static void plan(void)
     static const char *const sem_msg[] = {
         "sem-timeout",       "sem-waiter-blocks", "sem-waiter-undo", "sem-removal-blocks",
         "sem-removal-eidrm", "msg-order",         "msg-e2big"};
-    static const char *const mq[] = {
-        "mq-priority", "mq-full-eagain", "mq-timeout",     "mq-notify",     "mq-poll",
-        "mq-unlink",   "mqueue-file",    "mqueue-status",  "mqueue-listed", "mqueue-unlink-file",
-        "mq-fstat",    "mq-fd-link",     "mq-deleted-link"};
+    static const char *const mq[] = {"mq-priority",      "mq-full-eagain", "mq-timeout",
+                                     "mq-notify",        "mq-poll",        "mq-unlink",
+                                     "mqueue-file",      "mqueue-status",  "mqueue-null-efault",
+                                     "mqueue-pread-end", "mqueue-listed",  "mqueue-unlink-file",
+                                     "mq-fstat",         "mq-fd-link",     "mq-deleted-link"};
     unsigned i;
 
     report_begin(report_case(environ, "guest.default.ipcmusl"));
