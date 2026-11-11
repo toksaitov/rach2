@@ -8376,12 +8376,15 @@ static int sysctl_int(int entry)
  * write that changes `watchdog`, `soft_watchdog`, `nmi_watchdog` or
  * `watchdog_thresh` restarts the lockup detectors, as Linux's
  * `proc_watchdog_common` and `proc_watchdog_thresh` do (kernel/watchdog.c,
- * :1034-1050), and a write of the hung-task detector's timeout or interval
+ * :1034-1050): before the store as well as after it, so that a tick in
+ * between reads the new value against timestamps touched at the first
+ * restart, as Linux stores the threshold only once the timers have stopped
+ * (:873-880); and a write of the hung-task detector's timeout or interval
  * wakes it. `count` on success.
  */
 static int32_t sysctl_int_write(int entry, int32_t v, uint32_t count)
 {
-    int i, old;
+    int i, old, restart;
 
     i = sysctl_int(entry);
     if (i < 0) {
@@ -8391,8 +8394,12 @@ static int32_t sysctl_int_write(int entry, int32_t v, uint32_t count)
         return -EINVAL;
     }
     old = *sysctl_ints[i].var;
+    restart = entry >= SYNTH_SYS_WATCHDOG && entry <= SYNTH_SYS_WATCHDOG + 3 && old != (int)v;
+    if (restart) {
+        watchdog_reconfigure();
+    }
     *sysctl_ints[i].var = (int)v;
-    if (entry >= SYNTH_SYS_WATCHDOG && entry <= SYNTH_SYS_WATCHDOG + 3 && old != (int)v) {
+    if (restart) {
         watchdog_reconfigure();
     }
     if (entry == SYNTH_SYS_HUNG_TASK_TIMEOUT || entry == SYNTH_SYS_HUNG_TASK_INTERVAL) {
