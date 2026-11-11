@@ -219,8 +219,8 @@ int tty_lookahead(struct tty *t, unsigned char c, int echo);
  * tcflow(3), TCXONC with `action` one of TTY_TC*: TCOOFF stops output until
  * TCOON, which nothing else restarts; TCOON restarts it; TCIOFF and TCION
  * write VSTOP or VSTART, unless disabled, to the terminal's output past a
- * stop that is not TCOOFF's, as Linux's tty_send_xchar. Returns 0, or
- * -EINVAL for another action.
+ * stop, as Linux's tty_send_xchar, except a pty's under TCOOFF. Returns 0,
+ * or -EINVAL for another action.
  */
 int tty_tcflow(struct tty *t, int action);
 
