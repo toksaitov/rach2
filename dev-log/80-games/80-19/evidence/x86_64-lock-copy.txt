@@ -1,0 +1,50 @@
+spliceload: begin: read mib 16 load 0 mode 2 pipe 65536
+timer_passes_late 16
+bkl_wait_us 6850504
+timer_passes_late 16
+bkl_wait_us 6932016
+spliceload: result: read mib 16 load 0 mode 2 us 25722 calls 32 longest_pair_us 1826 disk_kib 0 voluntary 0 involuntary 0
+spliceload: begin: splice mib 16 load 0 mode 2 pipe 65536
+timer_passes_late 16
+bkl_wait_us 6962142
+timer_passes_late 16
+bkl_wait_us 6995446
+spliceload: result: splice mib 16 load 0 mode 2 us 41291 calls 512 longest_pair_us 1484 disk_kib 0 voluntary 0 involuntary 0
+spliceload: begin: read mib 16 load 3 mode 2 pipe 65536
+spliceload: load: cpu 1 calls 48
+spliceload: load: cpu 2 calls 53
+spliceload: load: cpu 3 calls 53
+timer_passes_late 21
+bkl_wait_us 7218338
+timer_passes_late 24
+bkl_wait_us 7752414
+spliceload: result: read mib 16 load 3 mode 2 us 155215 calls 32 longest_pair_us 11977 disk_kib 0 voluntary 0 involuntary 0
+spliceload: begin: splice mib 16 load 3 mode 2 pipe 65536
+spliceload: load: cpu 1 calls 519
+spliceload: load: cpu 2 calls 513
+spliceload: load: cpu 3 calls 459
+timer_passes_late 43
+bkl_wait_us 8626738
+timer_passes_late 93
+bkl_wait_us 15027671
+spliceload: result: splice mib 16 load 3 mode 2 us 2102799 calls 512 longest_pair_us 11925 disk_kib 0 voluntary 0 involuntary 0
+spliceload: begin: read mib 16 load 3 mode 2 pipe 65536
+spliceload: load: cpu 1 calls 91
+spliceload: load: cpu 2 calls 72
+spliceload: load: cpu 3 calls 48
+timer_passes_late 103
+bkl_wait_us 15623700
+timer_passes_late 104
+bkl_wait_us 16133457
+spliceload: result: read mib 16 load 3 mode 2 us 152224 calls 32 longest_pair_us 11336 disk_kib 0 voluntary 0 involuntary 0
+spliceload: begin: splice mib 16 load 3 mode 2 pipe 65536
+spliceload: load: cpu 1 calls 500
+spliceload: load: cpu 2 calls 479
+spliceload: load: cpu 3 calls 474
+timer_passes_late 110
+bkl_wait_us 16649644
+timer_passes_late 183
+bkl_wait_us 23289831
+spliceload: result: splice mib 16 load 3 mode 2 us 2180353 calls 512 longest_pair_us 15058 disk_kib 0 voluntary 0 involuntary 0
+SPLICELOAD OK
+<6>[10.634000] poweroff: powering off
