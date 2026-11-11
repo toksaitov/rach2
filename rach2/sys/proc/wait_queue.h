@@ -22,10 +22,10 @@
  * process.h): a process sleeps with the record in its own record, and a
  * poller supplies one per watched object, from an array it took from the
  * heap before it began, so entering a queue allocates nothing and no queue
- * has a size. A sleeper's test and block exclude a waker on its own
- * processor by turning interrupts off, the big lock keeps the other
- * processors' kernel code out, and the lists are under a spinlock of the
- * wait queues' as well (wait_queue.c).
+ * has a size. A sleeper files itself and is marked BLOCKED before it tests
+ * its condition, with interrupts off until it blocks, and the lists and
+ * the wakes are under a spinlock of the wait queues', so no wake is lost
+ * to a waker on any processor (wait_queue.c).
  *
  * A wake says what kind of change it is for the pollers of the queue: data
  * to read, room to write, or a hangup or an error. The queue counts the
@@ -48,9 +48,10 @@ typedef struct wait_queue {
 
 /*
  * Wait condition predicate: returns non-zero when the wait should end (the
- * event the caller is waiting for has happened). wq_wait_event re-checks it
- * with interrupts disabled before each sleep, which is what makes the sleep
- * lost-wakeup-safe.
+ * event the caller is waiting for has happened). wq_wait_event calls it
+ * with interrupts disabled before each sleep, after the process is on the
+ * queue and BLOCKED, which is what makes the sleep lost-wakeup-safe; it
+ * must not sleep.
  */
 typedef int (*wq_cond_fn)(void *arg);
 
@@ -128,6 +129,15 @@ void wq_wake(wait_queue_t *wq, uint32_t kinds);
 /** wq_wake for every kind of change: for a queue no poller watches, and for
  * a change of every kind, such as a close. */
 void wq_wake_all(wait_queue_t *wq);
+
+/**
+ * Set `*done` to 1 and wake every process on `wq`, both under the wait
+ * queues' lock, as Linux's `complete` sets its count under the wait's lock:
+ * a waiter whose condition reads `*done` leaves its queue under the same
+ * lock, so the caller is done with `wq` and `done` before the waiter can
+ * return and let the memory that holds them go, a record on its stack.
+ */
+void wq_complete(wait_queue_t *wq, volatile int *done);
 
 /** Make `p` runnable if it is blocked, as a wake of a queue it is on would,
  * for a waker that has taken it off its queues itself. */

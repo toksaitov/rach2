@@ -183,10 +183,8 @@ void paging_flush_tlb(uintptr_t addr);
  * A user address is dropped on this processor when it translates through
  * `dir`, and on every other that does (`smp_tlb_shootdown`), before this
  * returns, so that the caller may free the page's frame next. A kernel
- * address is in every directory: this processor drops it now, and every
- * other drops all its translations before it next takes the big lock,
- * which it holds whenever it reads kernel memory that was not mapped when
- * it last held it (`smp_kernel_mapping_changed`).
+ * address is in every directory, and is dropped on every processor before
+ * this returns (`smp_kernel_flush`).
  */
 void paging_flush_dir(const page_dir_t *dir, uintptr_t addr);
 
@@ -437,12 +435,12 @@ void mmio_usage(size_t *used, size_t *largest);
  * it, or 0, with a record, when every slot is held. The mapping lasts until
  * `kunmap_temp`, which any processor may call; a slot is its holder's alone.
  * A holder may sleep and wake on another processor, with or without the big
- * lock: the switch to it there drops that processor's translations if a
- * slot was swept since it last did (`smp_kernel_flush`). Any context. The
- * paths that zero, copy or fill a user frame use these, because on i686 a
- * user frame may lie above the identity-mapped window. Where the direct map
- * reaches every frame (`ARCH_DIRECT_MAP_ALL`, x86-64), the address is the
- * frame's there and nothing is mapped.
+ * lock: a sweep of a slot drops every processor's translations before the
+ * slot is taken again (`smp_kernel_flush`). Any context. The paths that
+ * zero, copy or fill a user frame use these, because on i686 a user frame
+ * may lie above the identity-mapped window. Where the direct map reaches
+ * every frame (`ARCH_DIRECT_MAP_ALL`, x86-64), the address is the frame's
+ * there and nothing is mapped.
  */
 void *kmap_temp(uintptr_t phys);
 
@@ -635,6 +633,12 @@ void map_kernel_frame(uintptr_t va, uintptr_t phys, int writable);
  * translation (`paging_flush_tlb`); nothing where the page table is
  * absent. */
 void unmap_kernel_frame(uintptr_t va);
+
+/** Clear the entries of the `count` kernel pages from the page-aligned `va`
+ * and drop their translations on every processor, with one request to each
+ * other (`smp_kernel_flush`), before this returns; pages not mapped are
+ * passed over. The caller frees the frames only after. */
+void unmap_kernel_frames(uintptr_t va, uint32_t count);
 
 /** The kernel's directory, whose tables of the kernel's layout every
  * directory shares. */

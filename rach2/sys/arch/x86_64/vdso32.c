@@ -528,6 +528,7 @@ int ia32_fast_syscall(isr_params_t *p, int sysenter)
     int ioctl = 0;
 
     bkl_enter();
+    bkl_frame_push(1);
     mm = current_proc ? current_proc->mm : NULL;
     base = mm && mm->compat ? mm->vdso : 0;
     landing = vdso32_at(base, vdso32_landing);

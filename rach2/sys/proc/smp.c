@@ -12,6 +12,7 @@
 #include "../panic.h"
 #include "../platform.h"
 #include "../lib/kirq.h"
+#include "../lib/spinlock.h"
 #include "../timer.h"
 #include "../udelay.h"
 #include "../watchdog.h"
@@ -111,10 +112,12 @@ static int bkl_booted;
 #define BKL_CLAIM_AFTER 4096u
 #define BKL_PASS_AFTER  (1u << 16)
 
-/* Counts the changes of kernel mappings; a processor that has seen fewer
- * drops its translations when it next takes the big lock or, on i686,
- * switches to a thread (`smp_kernel_flush`). */
-static volatile unsigned int kernel_gen;
+/* One sender of requests at a time: a TLB request, a barrier or a page
+ * directory to give up. Each processor has one slot of each kind, which a
+ * sender fills and waits for, so a second sender would overwrite the first's
+ * request. A processor that waits for the lock answers its own requests
+ * (`spin_lock`), so two senders do not wait on each other. */
+static struct spinlock ipi_lock = SPINLOCK_INIT;
 
 /* The processors online, the boot processor counted (`smp_cpu_count`). */
 static int cpus_online = 1;
@@ -123,22 +126,10 @@ static int cpus_online = 1;
  * (`smp_tlb_count`); written under the big lock. */
 static uint32_t tlb_counts[2];
 
-/** Drop every translation of `cpu`, the running processor, if a kernel
- * mapping changed since it last did. The count is read before the drop, so
- * a change counted after the read is dropped next time. */
-static void bkl_flush(struct percpu *cpu)
-{
-    if (cpu->kernel_gen != kernel_gen) {
-        cpu->kernel_gen = kernel_gen;
-        arch_space_load(arch_space_root());
-    }
-}
-
 /**
  * Spin until the big lock is free and take it, answering this processor's
  * requests meanwhile, since the holder may be waiting for the answer to its
- * own. Then drop every translation if a kernel mapping changed since this
- * processor last held the lock. Interrupts are off.
+ * own. Interrupts are off.
  *
  * An exchange alone favours the processor that last had the lock's cache
  * line, such as the holder's hyperthread, and can pass over the others for
@@ -192,7 +183,6 @@ static void bkl_acquire(struct percpu *cpu)
             bkl_wait_hold[i] = bkl_recent[(bkl_releases - n + i) % BKL_WAIT_HOLDS];
         }
     }
-    bkl_flush(cpu);
 }
 
 /** Add a hold of `held` cycles that waited `waited` for the lock to `c`. */
@@ -692,7 +682,6 @@ int bkl_try_enter(void)
         k_memset(bkl_early_cycles[arch_cpu_id()], 0, sizeof(bkl_early_cycles[0]));
         cpu->bkl_vector = 0;
         cpu->bkl_nr = -1;
-        bkl_flush(cpu);
     }
     cpu->bkl_depth++;
     return 1;
@@ -711,6 +700,35 @@ void bkl_exit(void)
         (void)arch_atomic_xchg(&bkl_word, 0u);
     }
     kirq_restore(flags);
+}
+
+/** The word of frame records `bkl_frame_push` keeps for this processor's
+ * entry under way; interrupts are off. */
+static uint32_t *bkl_frame_word(void)
+{
+    struct percpu *cpu = this_cpu();
+
+    return cpu->current ? &cpu->current->bkl_frames : &cpu->bkl_frames;
+}
+
+void bkl_frame_push(int locked)
+{
+    uint32_t flags = kirq_save();
+    uint32_t *w = bkl_frame_word();
+
+    *w = (*w << 1) | (locked ? 1u : 0u);
+    kirq_restore(flags);
+}
+
+int bkl_frame_pop(void)
+{
+    uint32_t flags = kirq_save();
+    uint32_t *w = bkl_frame_word();
+    int locked = (int)(*w & 1u);
+
+    *w >>= 1;
+    kirq_restore(flags);
+    return locked;
 }
 
 int bkl_drop(void)
@@ -845,28 +863,70 @@ void smp_kick(int cpu)
     }
 }
 
+/** Leave processor `c` a request to drop the translations of [`start`,
+ * `end`), or every one for CPU_TLB_ALL, and interrupt it; `ipi_lock` is
+ * held. */
+static void tlb_send(int c, uintptr_t start, uintptr_t end)
+{
+    struct percpu *other = &cpu_table[c];
+
+    other->tlb_page = start;
+    other->tlb_end = end;
+    other->tlb_request = 1;
+    platform_cpu_ipi(c);
+}
+
+/** Wait until every processor sent a TLB request has answered it,
+ * answering this one's own meanwhile; `ipi_lock` is held. */
+static void tlb_wait(void)
+{
+    int c;
+
+    for (c = 0; c < NR_CPUS; c++) {
+        while (cpu_table[c].tlb_request && cpu_table[c].online) {
+            smp_service();
+            arch_relax();
+        }
+    }
+}
+
 /**
- * The caller holds the big lock, so a processor that runs `dir` is in user
- * mode, idle in the kernel with interrupts on, or waiting for the lock and
- * answering requests: each answers. While this one waits it answers its own
- * requests, a stop among them.
+ * A processor that runs `dir` is in user mode, in the kernel with
+ * interrupts on, or spinning with them off and answering requests: each
+ * answers. While this one waits it answers its own requests, a stop among
+ * them. Taking `ipi_lock`, whose exchange is a full barrier, orders the
+ * caller's changes to the entries before the reads of each processor's
+ * `space` and `current`: a processor that loads `dir` after the read does so
+ * with a write of CR3, which serializes, and its walks see the new entries.
  *
  * A processor whose thread has no address space, an idle task or a kernel
- * thread that kept `dir` loaded, is not interrupted. It reaches `dir`'s user
- * pages only after a switch to one of its threads, which takes the big lock
- * this one holds, so marking `dir` stale there is enough: the switch loads
- * the directory again, as Linux skips a processor in lazy TLB mode. This
- * spares an idle processor a wake for each page that `fork` or `munmap`
- * changes in a process that last ran there.
+ * thread that kept `dir` loaded, is not interrupted: it is marked to load
+ * `dir` again at its next switch to one of its threads (`space_stale`), as
+ * Linux skips a processor in lazy TLB mode. The switch no longer holds the
+ * big lock, so the mark is a handshake: the mark, a full barrier, and a
+ * second read of that processor's `current`, against the switch's store of
+ * `current`, the full barrier of letting the run queues' lock go, and its
+ * read of the mark (`switch_space`, context.c). Either the switch sees the
+ * mark and loads `dir` again, or the second read sees the new thread and
+ * the processor is interrupted. This spares an idle processor a wake for
+ * each page that `fork` or `munmap` changes in a process that last ran
+ * there.
+ *
+ * The caller holds the big lock, which keeps the records of other
+ * processors' current threads from being freed while they are read here
+ * (`proc_release` takes the lock), and has changed the pages' entries; it
+ * frees a frame they named only after this returns.
  */
 void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t start, uintptr_t end)
 {
     int me = (int)arch_cpu_id();
     int c, sent = 0;
+    uint32_t flags;
 
     if (cpus_online < 2) {
         return;
     }
+    flags = spin_lock_irqsave(&ipi_lock);
     for (c = 0; c < NR_CPUS; c++) {
         struct percpu *other = &cpu_table[c];
 
@@ -875,24 +935,39 @@ void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t start, uintptr_t en
         }
         if (other->current->space_root == 0) {
             other->space_stale = 1;
-            continue;
+            sched_mb();
+            if (other->current->space_root == 0) {
+                continue;
+            }
         }
-        other->tlb_page = start;
-        other->tlb_end = end;
-        other->tlb_request = 1;
-        platform_cpu_ipi(c);
+        tlb_send(c, start, end);
         sent++;
     }
     if (sent) {
         tlb_counts[0]++;
         tlb_counts[1] += (uint32_t)sent;
     }
+    tlb_wait();
+    spin_unlock_irqrestore(&ipi_lock, flags);
+}
+
+void smp_kernel_flush(uintptr_t start, uintptr_t end)
+{
+    int me = (int)arch_cpu_id();
+    int c;
+    uint32_t flags;
+
+    if (cpus_online < 2) {
+        return;
+    }
+    flags = spin_lock_irqsave(&ipi_lock);
     for (c = 0; c < NR_CPUS; c++) {
-        while (cpu_table[c].tlb_request && cpu_table[c].online) {
-            smp_service();
-            arch_relax();
+        if (c != me && cpu_table[c].online) {
+            tlb_send(c, start, end);
         }
     }
+    tlb_wait();
+    spin_unlock_irqrestore(&ipi_lock, flags);
 }
 
 uint32_t smp_tlb_count(int which)
@@ -903,6 +978,7 @@ uint32_t smp_tlb_count(int which)
 void smp_barrier(uint64_t cpus, int sync_core)
 {
     int me = (int)arch_cpu_id();
+    uint32_t flags = spin_lock_irqsave(&ipi_lock);
     int c;
 
     for (c = 0; c < NR_CPUS; c++) {
@@ -917,16 +993,19 @@ void smp_barrier(uint64_t cpus, int sync_core)
             arch_relax();
         }
     }
+    spin_unlock_irqrestore(&ipi_lock, flags);
 }
 
 void smp_space_release(const struct page_dir *dir)
 {
     int me = (int)arch_cpu_id();
+    uint32_t flags;
     int c;
 
     if (cpus_online < 2) {
         return;
     }
+    flags = spin_lock_irqsave(&ipi_lock);
     for (c = 0; c < NR_CPUS; c++) {
         if (c != me && cpu_table[c].online && cpu_table[c].space == dir) {
             cpu_table[c].space_drop = dir;
@@ -939,31 +1018,12 @@ void smp_space_release(const struct page_dir *dir)
             arch_relax();
         }
     }
+    spin_unlock_irqrestore(&ipi_lock, flags);
 }
 
-/**
- * The count goes up by a compare-and-exchange, since a processor without the
- * big lock sweeps its temporary slots (mm/paging.c). This processor counts
- * itself up to date with the new value only when no other change came since
- * it last dropped its translations: one that did may have been made after
- * the caller's drop.
- */
 void smp_kernel_mapping_changed(void)
 {
-    struct percpu *cpu = this_cpu();
-    unsigned int gen;
-
-    do {
-        gen = kernel_gen;
-    } while (arch_atomic_cmpxchg(&kernel_gen, gen, gen + 1u) != gen);
-    if (cpu->kernel_gen == gen) {
-        cpu->kernel_gen = gen + 1u;
-    }
-}
-
-void smp_kernel_flush(void)
-{
-    bkl_flush(this_cpu());
+    smp_kernel_flush(CPU_TLB_ALL, 0);
 }
 
 /* How long a stop waits for the processors asked to take it by the
@@ -1045,7 +1105,7 @@ int smp_stop_nmi(void)
  * process 0's thread group, file system record and descriptor table, so
  * that code which reads the current process's finds them. It runs only on
  * `cpu`, and its floating-point area is never used: the switch leaves the
- * registers alone around it.
+ * registers alone around it. It holds no big lock (`sched_idle_loop`).
  */
 static process_t *smp_idle_task(int cpu)
 {
@@ -1077,15 +1137,16 @@ static process_t *smp_idle_task(int cpu)
     p->waiter.proc = p;
     p->cpu = cpu;
     p->affinity = (uint64_t)1 << cpu;
-    p->bkl_depth = 1;
+    p->bkl_depth = 0;
     return p;
 }
 
 /**
  * A started processor's first C, on its idle task's stack with interrupts
  * off: it is online at once, so that the boot processor goes on to the next,
- * and takes work once it has the big lock, which the boot holds until it
- * enters the first program. One that comes after the boot gave up waiting
+ * and takes work once it has had the big lock, which the boot holds until it
+ * enters the first program, and let it go again, since the idle task holds
+ * none. One that comes after the boot gave up waiting
  * for it finds its `admit` CPU_REFUSED (`smp_start`) and stops: online and
  * uncounted, it would miss the shootdowns, which are skipped while one
  * processor is counted.
@@ -1095,6 +1156,7 @@ static void smp_cpu_main(int cpu)
     struct percpu *self = &cpu_table[cpu];
 
     self->current = self->idle;
+    self->idle->on_cpu = 1;
     self->space = _kernel_dir;
     if (arch_atomic_cmpxchg(&self->admit, CPU_STARTING, CPU_ADMITTED) != CPU_STARTING) {
         arch_stop();
@@ -1102,6 +1164,7 @@ static void smp_cpu_main(int cpu)
     self->accounted_tick = (uint32_t)kernel_ticks;
     self->online = 1;
     bkl_take(1);
+    (void)bkl_drop();
     sched_idle_loop();
 }
 
@@ -1146,6 +1209,7 @@ void smp_start(void)
         k_panic("smp: no idle task for the boot processor");
     }
     setup_process_stack(cpu_table[0].idle, sched_idle_loop);
+    cpu_table[0].idle->bkl_depth = 0;
     cpu_table[0].online = 1;
     if (kcmdline_value("maxcpus", value, sizeof(value))) {
         limit = parse_count(value, NR_CPUS);
@@ -1154,7 +1218,6 @@ void smp_start(void)
         }
     }
     n = platform_cpu_count(limit);
-    paging_temp_split((unsigned int)n);
     for (cpu = 1; cpu < n; cpu++) {
         struct percpu *c = &cpu_table[cpu];
 

@@ -99,8 +99,11 @@ static int ptrace_stop(uint32_t status, const struct k_siginfo *info)
     wq_wake_all(&tracer->tg->chld);
 
     flags = kirq_save();
-    while (self->ptrace_status != 0 && !kill_pending()) {
-        current_proc->state = PROC_STOPPED;
+    for (;;) {
+        sched_set_current_state(PROC_STOPPED);
+        if (self->ptrace_status == 0 || kill_pending()) {
+            break;
+        }
         schedule();
         if (current_proc->state == PROC_STOPPED) {
             idle_wait_irq_off();

@@ -13,6 +13,7 @@
  */
 
 #include "../lib/kirq.h"
+#include "../lib/spinlock.h"
 #include "poll.h"
 #include "poll_select.h"
 #include "epoll.h"
@@ -228,11 +229,77 @@ static int deadline_passed(struct poll_deadline *d)
     return 0;
 }
 
+/* The lock over each process's published poll arrays (`poll_wqs`,
+ * `poll_recs`, `poll_n`): a sleeper publishes and takes back its arrays
+ * under it, and `poll_let_go` takes another thread's records off their
+ * queues under it. It comes before the wait queues' lock. */
+static struct spinlock poll_lock = SPINLOCK_INIT;
+
+/** Put the current process's records on the `n` queues of `wqs` and
+ * publish the arrays; interrupts are off. */
+static void poll_file(struct wait_queue **wqs, struct wq_waiter *recs, uint32_t n)
+{
+    uint32_t i;
+
+    spin_lock(&poll_lock);
+    for (i = 0; i < n; i++) {
+        recs[i].proc = current_proc;
+        recs[i].next = NULL;
+        wq_poll_add(wqs[i], &recs[i]);
+    }
+    current_proc->poll_wqs = wqs;
+    current_proc->poll_recs = recs;
+    current_proc->poll_n = n;
+    spin_unlock(&poll_lock);
+}
+
+/** Take the current process's records off their queues, the queues a
+ * `poll_let_go` left, and withdraw the arrays; interrupts are off. */
+static void poll_unfile(struct wait_queue **wqs, struct wq_waiter *recs, uint32_t n)
+{
+    uint32_t i;
+
+    spin_lock(&poll_lock);
+    for (i = 0; i < n; i++) {
+        wq_poll_remove(wqs[i], &recs[i]);
+    }
+    current_proc->poll_wqs = NULL;
+    current_proc->poll_recs = NULL;
+    current_proc->poll_n = 0;
+    spin_unlock(&poll_lock);
+}
+
+void poll_let_go(process_t *t)
+{
+    uint32_t flags = spin_lock_irqsave(&poll_lock);
+    uint32_t i;
+
+    if (t->poll_wqs) {
+        for (i = 0; i < t->poll_n; i++) {
+            wq_poll_remove(t->poll_wqs[i], &t->poll_recs[i]);
+            t->poll_wqs[i] = NULL;
+        }
+    }
+    spin_unlock_irqrestore(&poll_lock, flags);
+}
+
+/** Whether the wait whose deadline is `d` is over at this tick. */
+static int poll_expired(struct poll_deadline *d)
+{
+    return d->set && deadline_reached(d->tick) && deadline_passed(d);
+}
+
 /**
- * The process goes on every queue the scan named with interrupts still off
- * from the scan, so that a change of readiness cannot fall between the two
- * and be lost. A finite timeout also sets the timer wake, `wakeup_tick`,
- * which `proc_wake_sleepers` acts on at the deadline: with another process
+ * The scan runs first with the process RUNNING. When it finds nothing ready,
+ * the process goes on every queue it named and is marked BLOCKED, and the
+ * scan runs again, as Linux's poll adds its entry to each queue before it
+ * reads that file's mask (fs/select.c, `__pollwait`): a change of readiness
+ * after the second scan's look wakes the process from one of the queues,
+ * and `schedule` then keeps it running; one before it, the second scan
+ * sees. When the second scan names other queues, the process leaves them
+ * and scans again. Interrupts are off from the first scan to `schedule`.
+ * A finite timeout also sets the timer wake, `wakeup_tick`, which
+ * `proc_wake_sleepers` acts on at the deadline: with another process
  * runnable, schedule() does not return here on its own, and a wait on no
  * queue or on objects that never fire would otherwise sleep past its
  * deadline. A computed tick of 0 is stored as 1, since 0 means not
@@ -244,27 +311,28 @@ static int deadline_passed(struct poll_deadline *d)
  * While it sleeps, the process's record names the queues and its records
  * on them (`poll_wqs`), so that a close by another thread can take it off
  * them all, with each queue set to NULL, before it frees what an epoll
- * wait sleeps on (`epoll_waits_let_go`); the process looks at the arrays
- * again only with the big lock, which that close holds.
+ * wait sleeps on (`poll_let_go`); the process publishes and takes back the
+ * arrays under the lock that call takes.
  */
 int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d, const char *wchan)
 {
-    struct wait_queue **wqs;
+    struct wait_queue **wqs, **again;
     struct wq_waiter *recs;
-    uint32_t flags;
+    uint32_t flags, m = n ? n : 1;
     int rc;
     uint32_t i;
 
-    wqs = kzalloc(sizeof(*wqs) * (n ? n : 1));
-    recs = kzalloc(sizeof(*recs) * (n ? n : 1));
+    wqs = kzalloc(sizeof(*wqs) * 2u * m);
+    recs = kzalloc(sizeof(*recs) * m);
     if (!wqs || !recs) {
         kfree(wqs);
         kfree(recs);
         return -ENOMEM;
     }
+    again = wqs + m;
     flags = irq_save();
     for (;;) {
-        int ready;
+        int ready, changed = 0;
 
         for (i = 0; i < n; i++) {
             wqs[i] = NULL;
@@ -278,24 +346,34 @@ int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d,
             rc = -EINTR;
             break;
         }
-        if (d->set && deadline_reached(d->tick) && deadline_passed(d)) {
+        if (poll_expired(d)) {
             rc = 0;
             break;
         }
 
-        for (i = 0; i < n; i++) {
-            recs[i].proc = current_proc;
-            recs[i].next = NULL;
-            wq_poll_add(wqs[i], &recs[i]);
-        }
-        current_proc->poll_wqs = wqs;
-        current_proc->poll_recs = recs;
-        current_proc->poll_n = n;
+        poll_file(wqs, recs, n);
         if (d->set) {
             current_proc->wakeup_tick = d->tick ? d->tick : 1;
         }
         current_proc->wchan = wchan;
-        current_proc->state = PROC_BLOCKED;
+        sched_set_current_state(PROC_BLOCKED);
+        for (i = 0; i < n; i++) {
+            again[i] = NULL;
+        }
+        ready = scan(ctx, again);
+        for (i = 0; i < n; i++) {
+            changed |= again[i] != wqs[i];
+        }
+        if (ready > 0 || signal_pending() || poll_expired(d) || changed ||
+            current_proc->state != PROC_BLOCKED) {
+            poll_unfile(wqs, recs, n);
+            current_proc->state = PROC_RUNNING;
+            if (ready > 0) {
+                rc = ready;
+                break;
+            }
+            continue;
+        }
         irq_restore(flags);
 
         schedule();
@@ -304,19 +382,11 @@ int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d,
         if (current_proc->state == PROC_BLOCKED) {
             idle_wait_irq_off();
         }
-        for (i = 0; i < n; i++) {
-            wq_poll_remove(wqs[i], &recs[i]);
-        }
-        current_proc->poll_wqs = NULL;
-        current_proc->poll_recs = NULL;
-        current_proc->poll_n = 0;
+        poll_unfile(wqs, recs, n);
         current_proc->state = PROC_RUNNING;
     }
 
     current_proc->wakeup_tick = 0;
-    for (i = 0; i < n; i++) {
-        wq_poll_remove(wqs[i], &recs[i]);
-    }
     current_proc->state = PROC_RUNNING;
     irq_restore(flags);
     kfree(wqs);

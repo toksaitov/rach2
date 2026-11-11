@@ -11,11 +11,11 @@
  * lock held and hands the depth from one process to the next (sched.c).
  *
  * The interprocessor interrupts are taken without the lock: a TLB request
- * or a page directory to give up, which a holder sends and waits for, the
- * stop, which a panic or a power off sends, and a kick that ends an idle
- * wait. A request is a word in the target's record and an interrupt that
- * has it look; a processor that waits with interrupts off, for the big lock
- * or for a spinlock, looks itself (`smp_service`).
+ * or a page directory to give up, which one sender at a time sends and
+ * waits for, the stop, which a panic or a power off sends, and a kick that
+ * ends an idle wait. A request is a word in the target's record and an
+ * interrupt that has it look; a processor that waits with interrupts off,
+ * for the big lock or for a spinlock, looks itself (`smp_service`).
  */
 #ifndef _SMP_H_
 #define _SMP_H_
@@ -50,6 +50,20 @@ void bkl_yield(void);
 /** Give back what `bkl_enter` took, the lock itself on the outermost; a
  * panic when this processor does not hold it. */
 void bkl_exit(void);
+
+/**
+ * Record that the router of the entry under way took the big lock, for
+ * `locked` 1, or ran its handlers without it, for 0, which `isr_leave` reads
+ * back with `bkl_frame_pop`. The record is the current thread's, a bit for
+ * each frame on its kernel stack, since an entry that sleeps may return on
+ * another processor and other threads' entries come and go here meanwhile;
+ * a processor with no current thread keeps its own.
+ */
+void bkl_frame_push(int locked);
+
+/** Take back the record of the newest frame, 1 when its router took the
+ * big lock. */
+int bkl_frame_pop(void);
 
 /** Let go of the big lock whatever the depth, before an idle wait or the
  * entry to user mode, and return the depth for `bkl_take`. Interrupts are
@@ -228,11 +242,26 @@ void smp_kick(int cpu);
  * translation when `start` is CPU_TLB_ALL, on each other processor that
  * translates through `dir`, with one request to each, and wait until each
  * has; a processor whose current thread has no address space is marked to
- * load `dir` again at its next switch instead. The caller holds the big
- * lock and has changed the pages' entries, and frees a frame they named
- * only after this returns.
+ * load `dir` again at its next switch instead. One sender at a time sends
+ * requests (smp.c), with interrupts off while it waits. The caller holds
+ * the big lock and has changed the pages' entries, and frees a frame they
+ * named only after this returns.
  */
 void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t start, uintptr_t end);
+
+/**
+ * Drop the translations of the kernel pages [`start`, `end`), or every
+ * translation when `start` is CPU_TLB_ALL, on each other processor online,
+ * and wait until each has, as Linux's `flush_tlb_kernel_range`
+ * (arch/x86/mm/tlb.c:1099-1109). The caller has changed the entries and
+ * dropped its own translations, and frees a frame they named only after
+ * this returns. A processor reads kernel memory without the big lock, at
+ * its switches and idle waits among others, so the flush is made at once,
+ * not at its next take of the lock. Any context but an NMI; interrupts are
+ * off while it waits, and the caller may hold spinlocks, since a processor
+ * that spins for one answers requests.
+ */
+void smp_kernel_flush(uintptr_t start, uintptr_t end);
 
 /** The shootdowns since boot that interrupted at least one processor, and
  * the interrupts they sent, modulo 2^32, which `/proc/stat` gives as
@@ -257,18 +286,9 @@ void smp_barrier(uint64_t cpus, int sync_core);
 /**
  * Note that a kernel mapping changed, after the caller dropped its own
  * translation of it: every other processor drops all of its translations
- * before it next takes the big lock, the one place it reads kernel memory
- * that was not mapped when it last held it, and, on i686, before it next
- * switches to a thread, which may hold a temporary slot mapped on another
- * processor since (mm/paging.h). Any context; needs no lock.
+ * before this returns (`smp_kernel_flush`).
  */
 void smp_kernel_mapping_changed(void);
-
-/**
- * Drop every translation of this processor if a kernel mapping changed
- * since it last did (`smp_kernel_mapping_changed`). Interrupts are off.
- */
-void smp_kernel_flush(void);
 
 /**
  * Have every other processor that still translates through `dir`, which no

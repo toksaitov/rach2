@@ -1442,6 +1442,10 @@ static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uint
     user_proc->kernel_stack = (uintptr_t)stack + KERNEL_STACK_SIZE;
     user_proc->parent_pid = current_proc ? current_proc->tgid : 0;
     proc_set_comm(user_proc, name);
+    if (current_proc) {
+        current_proc->on_cpu = 0;
+    }
+    user_proc->on_cpu = 1;
     current_proc = user_proc;
     fpu_restore(user_proc->fpu);
 

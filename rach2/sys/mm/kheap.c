@@ -146,8 +146,9 @@ static int map_run(uint32_t page, uint32_t count)
             while (i-- > 0) {
                 uintptr_t va = KVA_HEAP + ((uintptr_t)page + i) * PAGE_SIZE;
 
-                free_frame(paging_virt_to_phys(va));
+                phys = paging_virt_to_phys(va);
                 unmap_kernel_frame(va);
+                free_frame(phys);
                 page_set(page + i, 0);
             }
             return -1;
@@ -159,18 +160,35 @@ static int map_run(uint32_t page, uint32_t count)
     return 0;
 }
 
-/** Unmap the run of `count` pages at `page`, give back its frames and mark
- * it free. `heap_lock` is held. */
+/* The pages `unmap_run` unmaps with one flush of every processor. */
+#define KHEAP_UNMAP_BATCH 16u
+
+/**
+ * Unmap the run of `count` pages at `page`, give back its frames and mark
+ * it free. `heap_lock` is held. The frames go back only once every
+ * processor has dropped its translations of the pages, a batch at a time
+ * (`unmap_kernel_frames`): a processor reads the heap without the big
+ * lock, and a translation it kept would reach a frame given to another
+ * user. The flush is made with `heap_lock` held, which a processor that
+ * spins for it answers, so that no page is taken again before it is done.
+ */
 static void unmap_run(uint32_t page, uint32_t count)
 {
-    uint32_t i;
+    uintptr_t phys[KHEAP_UNMAP_BATCH];
+    uint32_t done, i, n;
 
-    for (i = 0; i < count; i++) {
-        uintptr_t va = KVA_HEAP + ((uintptr_t)page + i) * PAGE_SIZE;
+    for (done = 0; done < count; done += n) {
+        uintptr_t va = KVA_HEAP + ((uintptr_t)page + done) * PAGE_SIZE;
 
-        free_frame(paging_virt_to_phys(va));
-        unmap_kernel_frame(va);
-        page_set(page + i, 0);
+        n = count - done < KHEAP_UNMAP_BATCH ? count - done : KHEAP_UNMAP_BATCH;
+        for (i = 0; i < n; i++) {
+            phys[i] = paging_virt_to_phys(va + (uintptr_t)i * PAGE_SIZE);
+        }
+        unmap_kernel_frames(va, n);
+        for (i = 0; i < n; i++) {
+            free_frame(phys[i]);
+            page_set(page + done + i, 0);
+        }
     }
     pages_held -= count;
 }

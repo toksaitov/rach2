@@ -41,33 +41,48 @@ static uint32_t pick_count, pick_steps; /* selection attempts and entries examin
 static int _wake_turn[NR_CPUS];
 
 /* Each remote affinity caller keeps its wait on its stack until completed.
- * The big lock and masked interrupts cover this list, outside sched_lock. */
+ * The list is under sched_lock; a wait is completed after it leaves the
+ * list, under the wait queues' lock (`wq_complete`), and its waiter may
+ * return and its stack go the moment that lock is let go. */
 struct affinity_wait {
     struct affinity_wait *next;
     process_t *task; /* No reference remains after the wait completes. */
     wait_queue_t queue;
-    int done;
+    volatile int done;
 };
 static struct affinity_wait *affinity_waits;
 
 /** Complete every pending move of `p`, after its switch away or when a
- * later affinity allows its processor. The big lock is held, interrupts
- * masked and sched_lock free, since waking a waiter takes that lock. */
+ * later affinity allows its processor. Interrupts are off and sched_lock
+ * free: the waits are taken off the list under it, and completed after,
+ * since a wake takes the wait queues' lock, which comes before it. A wait
+ * for `p` is linked only while `p` runs, under sched_lock, so a caller that
+ * comes after `p`'s switch away sees it without the lock. */
 static void affinity_complete(process_t *p)
 {
-    struct affinity_wait **link = &affinity_waits;
+    struct affinity_wait **link, *done = NULL, *wait;
 
+    if (!affinity_waits) {
+        return;
+    }
+    spin_lock(&sched_lock);
+    link = &affinity_waits;
     while (*link) {
-        struct affinity_wait *wait = *link;
-
+        wait = *link;
         if (wait->task != p) {
             link = &wait->next;
             continue;
         }
         *link = wait->next;
         wait->task = NULL;
-        wait->done = 1;
-        wq_wake_all(&wait->queue);
+        wait->next = done;
+        done = wait;
+    }
+    spin_unlock(&sched_lock);
+    while (done) {
+        wait = done;
+        done = wait->next;
+        wq_complete(&wait->queue, &wait->done);
     }
 }
 
@@ -203,9 +218,11 @@ void sched_forget(process_t *p)
 /**
  * The record must name the processor it is current on: a switch away
  * appends it to that processor's queue (`sched_append`), and a wake before
- * the switch keeps it there (`sched_place`). Linux's init_idle sets an idle
- * task's processor in the same hold of the run queue's lock that makes it
- * the queue's current (kernel/sched/core.c:7782-7786).
+ * the switch keeps it there (`sched_place`); and it runs here, so another
+ * processor's switch to it waits for its own switch away (`on_cpu`). Linux's
+ * init_idle sets an idle task's processor in the same hold of the run
+ * queue's lock that makes it the queue's current
+ * (kernel/sched/core.c:7782-7786).
  */
 void sched_adopt(process_t *p)
 {
@@ -215,6 +232,7 @@ void sched_adopt(process_t *p)
     sched_remove(p);
     sched_move(p, me);
     p->state = PROC_RUNNING;
+    p->on_cpu = 1;
     cpu_table[me].current = p;
     spin_unlock_irqrestore(&sched_lock, flags);
 }
@@ -272,6 +290,9 @@ void init_sched(void)
 {
     int c;
 
+    if (current_proc) {
+        current_proc->on_cpu = 1;
+    }
     _sched_enabled = 0;
     waits_held = 0;
     pick_count = pick_steps = 0;
@@ -451,6 +472,13 @@ void sched_set_affinity(process_t *p, uint64_t mask)
     int kick = -1;
 
     p->affinity = mask;
+    if (remote) {
+        wait_queue_init(&wait.queue);
+        wait.task = p;
+        wait.done = 0;
+        wait.next = affinity_waits;
+        affinity_waits = &wait;
+    }
     if (p->state == PROC_READY && !running && !sched_allowed(p, p->cpu)) {
         sched_remove(p);
         sched_move(p, sched_choose(p));
@@ -464,13 +492,7 @@ void sched_set_affinity(process_t *p, uint64_t mask)
         kick = p->cpu;
     }
     spin_unlock(&sched_lock);
-    if (remote) {
-        wait_queue_init(&wait.queue);
-        wait.task = p;
-        wait.done = 0;
-        wait.next = affinity_waits;
-        affinity_waits = &wait;
-    } else {
+    if (!remote) {
         affinity_complete(p);
     }
     if (kick >= 0) {
@@ -563,8 +585,9 @@ static int sched_prepare_old(process_t *old, struct percpu *cpu, int me)
  * use.
  *
  * A current process whose affinity no longer has this processor is made
- * ready on a processor it has; that processor cannot select it before the
- * switch away from it is done, since the big lock is held across it. A
+ * ready on a processor it has; that processor may select it before the
+ * switch away from it is done, and waits for its `on_cpu` to clear before
+ * it switches to it. A
  * current process a suspend to idle holds is made ready where it is: on
  * one processor the suspend's writer was the only one to run, and on
  * several the others' next tick stops what they run.
@@ -590,13 +613,23 @@ static int sched_prepare_old(process_t *old, struct percpu *cpu, int me)
  * it marks is true of the switch made: KVM's steal time says a vCPU was
  * preempted exactly when it was, as Linux's kvm_sched_out says it.
  *
- * The big lock stays held across the switch, so no other processor sees
- * the outgoing process before its registers are saved; the depth this
- * processor had in it goes with the outgoing process, and the incoming one
- * gets its own back. The run queues' lock is let go before the switch,
- * since the incoming process does not return here to let it go. Past the
- * switch a processor waiting its turn for the big lock gets it
- * (`bkl_yield`).
+ * The switch is Linux's protocol (kernel/sched/core.c:4972-4990, 3798):
+ * the incoming thread's `on_cpu` is set before the switch, and the
+ * outgoing one's is cleared by the incoming thread's tail once the switch
+ * has saved its registers (`schedule_tail`). A thread woken while it still
+ * switches away on another processor may be selected here meanwhile; the
+ * switch to it waits for its `on_cpu` to clear first, outside the run
+ * queues' lock, which the tail on that processor may take. The run queues'
+ * lock is let go before the switch, since the incoming process does not
+ * return here to let it go.
+ *
+ * The big lock does not cross the switch. The outgoing thread's depth is
+ * its own: it is saved in its record and the lock let go, and the tail
+ * takes the lock back at the incoming thread's own depth, none for the
+ * idle task or a thread switched away outside the lock. So a processor
+ * that goes idle or runs a thread that holds nothing keeps the lock from
+ * no one, as Linux 2.6's `release_kernel_lock` and `reacquire_kernel_lock`
+ * gave it up around the switch.
  *
  * The floating-point registers are the one part of the processor
  * `switch_context` does not touch. They are saved into the outgoing record
@@ -685,25 +718,65 @@ void schedule(void)
         fpu_restore(next->fpu);
     }
     arch_debug_switch(next);
-    old->bkl_depth = cpu->bkl_depth;
-    cpu->bkl_depth = next->bkl_depth;
     cpu->current = next;
+    cpu->switch_prev = old;
     spin_unlock(&sched_lock);
-    affinity_complete(old);
+    old->bkl_depth = bkl_drop();
+    sched_wait_off_cpu(next);
+    next->on_cpu = 1;
 
     switch_context(old, next);
 
+    schedule_tail();
     membarrier_switch(old);
-    bkl_yield();
     kirq_restore(saved_flags);
 }
 
 /**
+ * The outgoing thread's registers are saved once `switch_context` returns
+ * here, so its pending moves complete (`affinity_complete`) and its `on_cpu`
+ * clears, with the exchange's full barrier, before this thread takes the
+ * big lock: a holder may be waiting for that `on_cpu` to free the thread's
+ * stack (`sched_wait_off_cpu`). A switch made outside `schedule`, which
+ * leaves no outgoing thread and keeps the processor's depth, takes
+ * nothing.
+ */
+void schedule_tail(void)
+{
+    struct percpu *cpu = this_cpu();
+    process_t *prev = cpu->switch_prev;
+    process_t *self = cpu->current;
+
+    if (prev) {
+        cpu->switch_prev = NULL;
+        affinity_complete(prev);
+        (void)arch_atomic_xchg(&prev->on_cpu, 0u);
+    }
+    if (self->bkl_depth > 0 && cpu->bkl_depth == 0) {
+        bkl_take(self->bkl_depth);
+    }
+}
+
+void sched_wait_off_cpu(const process_t *p)
+{
+    uint32_t flags;
+
+    if (!p->on_cpu) {
+        return;
+    }
+    flags = kirq_save();
+    while (p->on_cpu) {
+        smp_service();
+        arch_relax();
+    }
+    kirq_restore(flags);
+}
+
+/**
  * A wake that puts a process on this processor's queue sends it the
- * interprocessor interrupt that ends the wait (`sched_make_ready`). The big
- * lock is held at depth 1 on entry, as a started processor takes it
- * (`smp_cpu_main`) and as the first switch to the boot processor's idle
- * task gives it (`setup_process_stack`).
+ * interprocessor interrupt that ends the wait (`sched_make_ready`). The
+ * idle task holds no big lock: its selection and its halt need none, and a
+ * thread it switches to takes the lock in its tail when it holds it.
  */
 void sched_idle_loop(void)
 {
@@ -793,8 +866,10 @@ void sched_service_point(void)
  * (percpu.h). They are `volatile` because the timer handler reads the marker
  * from an interrupt that arrives in the middle of the halt it describes. The
  * counters are 64 bits wide, so they do not wrap, and are read whole within
- * the record's `ticks_seq` (`sched_cpu_ticks`). The totals are summed over
- * every record, of which those of processors never started are zero.
+ * the record's `ticks_seq` (`sched_cpu_ticks`), whose wait answers this
+ * processor's requests, since the reader may have interrupts off. The
+ * totals are summed over every record, of which those of processors never
+ * started are zero.
  */
 void sched_cpu_ticks(int c, uint64_t *user, uint64_t *busy, uint64_t *idle)
 {
@@ -804,6 +879,10 @@ void sched_cpu_ticks(int c, uint64_t *user, uint64_t *busy, uint64_t *idle)
     for (;;) {
         seq = cpu->ticks_seq;
         if (seq & 1u) {
+            uint32_t flags = kirq_save();
+
+            smp_service();
+            kirq_restore(flags);
             arch_relax();
             continue;
         }
@@ -1045,6 +1124,10 @@ void sched_loadavg(uint32_t avg[3])
  *
  * Anything on the loopback ring is delivered before the processor is parked,
  * and this returns without halting so the caller checks its condition again.
+ * The drain needs the big lock: a caller without it, the idle task, tries
+ * the lock, and when another processor holds it leaves the ring to that
+ * holder, whose call's exit drains it, or to the next tick that has the
+ * lock, and halts.
  * Those datagrams are this machine's own, a delivery can be what makes a
  * process runnable, and nothing else is going to run to deliver them. A
  * call that sleeps inside, a blocking connect or a send that waits for the
@@ -1065,8 +1148,15 @@ void idle_wait_irq_off(void)
     int depth;
 
     if (ip_loop_pending()) {
-        ip_loop_drain_from(IP_LOOP_FROM_IDLE);
-        return;
+        if (this_cpu()->bkl_depth > 0) {
+            ip_loop_drain_from(IP_LOOP_FROM_IDLE);
+            return;
+        }
+        if (bkl_try_enter()) {
+            ip_loop_drain_from(IP_LOOP_FROM_IDLE);
+            bkl_exit();
+            return;
+        }
     }
     this_cpu()->idle_wait = 1;
     depth = bkl_drop();
