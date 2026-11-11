@@ -316,7 +316,7 @@ static int futex_sleep_on(struct futex_vec *v, uint32_t n, struct futex_sleeper 
     kirq_restore(flags);
 
     current_proc->wakeup_tick = s->timed ? (s->target != 0 ? s->target : 1u) : 0;
-    rc = wq_wait_event(&s->wq, futex_sleeper_done, s);
+    rc = wq_wait_event_as(&s->wq, futex_sleeper_done, s, "futex_wait_queue");
     current_proc->wakeup_tick = 0;
 
     flags = kirq_save();
@@ -1076,7 +1076,7 @@ static int pi_sleep(struct futex_q *q, uintptr_t addr)
     int rc;
 
     current_proc->wakeup_tick = s->timed ? (s->target ? s->target : 1u) : 0;
-    rc = wq_wait_event(&s->wq, futex_sleeper_done, s);
+    rc = wq_wait_event_as(&s->wq, futex_sleeper_done, s, "rt_mutex_slowlock_block");
     current_proc->wakeup_tick = 0;
     flags = kirq_save();
     pi = q->pi;

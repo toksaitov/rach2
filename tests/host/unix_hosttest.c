@@ -502,6 +502,13 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return 0;
 }
 
+/** A named wait, which the model takes as `wq_wait_event`. */
+int wq_wait_event_as(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
+{
+    (void)name;
+    return wq_wait_event(wq, cond, arg);
+}
+
 /** An uninterruptible wait, which only a sibling can make and sleep in. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {

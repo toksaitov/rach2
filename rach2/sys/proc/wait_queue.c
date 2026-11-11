@@ -120,9 +120,10 @@ static void wq_dequeue(wait_queue_t *wq, struct wq_waiter *w)
 }
 
 /**
- * The wait behind `wq_wait_event`, `wq_wait_event_nointr` and
- * `wq_wait_event_idle`: a pending signal ends a wait of kind WQ_SIGNAL, and
- * a sleeper of kind WQ_NOSIGNAL is marked uninterruptible.
+ * The wait behind `wq_wait_event`, `wq_wait_event_as`, `wq_wait_event_nointr`
+ * and `wq_wait_event_idle`: a pending signal ends a wait of kind WQ_SIGNAL,
+ * and a sleeper of kind WQ_NOSIGNAL is marked uninterruptible. `name` is
+ * the wait's name for /proc/PID/wchan, stored before each block.
  *
  * The condition and the signal are tested, and the process queued and
  * marked BLOCKED, with interrupts off, and interrupts come back on only for
@@ -141,7 +142,7 @@ static void wq_dequeue(wait_queue_t *wq, struct wq_waiter *w)
  * send the wait back to sleep with no timer to end it. The caller's condition
  * must be true once its deadline has passed.
  */
-static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int kind)
+static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int kind, const char *name)
 {
     uint32_t flags;
     uint64_t deadline;
@@ -167,6 +168,7 @@ static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int kind)
         wq_enqueue(wq, &current_proc->waiter);
         wq_unlock();
         current_proc->wakeup_tick = deadline;
+        current_proc->wchan = name;
         current_proc->state = PROC_BLOCKED;
         current_proc->uninterruptible = kind == WQ_NOSIGNAL;
         irq_restore(flags);
@@ -275,15 +277,20 @@ uint32_t wq_wakes(const wait_queue_t *wq, uint32_t kinds)
 
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
-    return wq_wait(wq, cond, arg, WQ_SIGNAL);
+    return wq_wait(wq, cond, arg, WQ_SIGNAL, "wq_wait_event");
+}
+
+int wq_wait_event_as(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
+{
+    return wq_wait(wq, cond, arg, WQ_SIGNAL, name);
 }
 
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
-    return wq_wait(wq, cond, arg, WQ_NOSIGNAL);
+    return wq_wait(wq, cond, arg, WQ_NOSIGNAL, "wq_wait_event_nointr");
 }
 
 int wq_wait_event_idle(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
-    return wq_wait(wq, cond, arg, WQ_IDLE);
+    return wq_wait(wq, cond, arg, WQ_IDLE, "wq_wait_event_idle");
 }

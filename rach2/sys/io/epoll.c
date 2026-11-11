@@ -814,7 +814,7 @@ static int32_t epoll_wait_common(int epfd, uintptr_t uevents, int max, struct po
         sc.n = 0;
         current_proc->epoll_waiting = 1;
         current_proc->epoll_wait_fd = epfd;
-        rc = poll_wait(scan_set, &sc, sc.queues, d);
+        rc = poll_wait(scan_set, &sc, sc.queues, d, "ep_poll");
         current_proc->epoll_waiting = 0;
         if (rc <= 0 || sc.grow == 0) {
             break;

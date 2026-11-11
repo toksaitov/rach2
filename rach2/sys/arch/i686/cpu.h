@@ -68,11 +68,13 @@ typedef struct cpu_regs cpu_regs_t;
 /* restart_syscall's number, i386's 0. */
 #define SC_RESTART_NR(p) 0u
 
-#define FRAME_PC(p)   ((p)->eip)
-#define FRAME_SP(p)   ((p)->user_esp)
-#define FRAME_USER(p) (((p)->cs & 3u) == 3u)
+#define FRAME_PC(p)      ((p)->eip)
+#define FRAME_SP(p)      ((p)->user_esp)
+#define FRAME_USER(p)    (((p)->cs & 3u) == 3u)
+/* Whether the frame is a system call's entry, by `int $0x80`. */
+#define FRAME_SYSCALL(p) ((p)->vector == 0x80u)
 /* The frame pointer at the trap; the kernel is built with frame pointers. */
-#define FRAME_FP(p)   ((p)->ebp)
+#define FRAME_FP(p)      ((p)->ebp)
 
 /* Resume the frame with interrupts off: clear IF in its saved flags. */
 #define FRAME_IRQ_OFF(p) ((p)->eflags &= ~0x200u)

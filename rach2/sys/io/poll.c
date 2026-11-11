@@ -247,7 +247,7 @@ static int deadline_passed(struct poll_deadline *d)
  * wait sleeps on (`epoll_waits_let_go`); the process looks at the arrays
  * again only with the big lock, which that close holds.
  */
-int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d)
+int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d, const char *wchan)
 {
     struct wait_queue **wqs;
     struct wq_waiter *recs;
@@ -294,6 +294,7 @@ int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d)
         if (d->set) {
             current_proc->wakeup_tick = d->tick ? d->tick : 1;
         }
+        current_proc->wchan = wchan;
         current_proc->state = PROC_BLOCKED;
         irq_restore(flags);
 
@@ -345,7 +346,7 @@ static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, struct poll_deadlin
     do {
         p.room = p.grow;
         p.grow = 0;
-        rc = poll_wait(scan_pollfds, &p, p.room, d);
+        rc = poll_wait(scan_pollfds, &p, p.room, d, sel ? "do_select" : "do_sys_poll");
     } while (rc > 0 && p.grow != 0);
     return rc;
 }

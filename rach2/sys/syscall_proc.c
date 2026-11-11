@@ -3779,6 +3779,7 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
             return -EINTR;
         }
         wq_poll_add(&current_proc->tg->chld, &current_proc->waiter);
+        current_proc->wchan = "do_wait";
         current_proc->state = PROC_BLOCKED;
         sig_irq_restore(flags);
         schedule();
@@ -4840,18 +4841,20 @@ long sys_rt_tgsigqueueinfo(isr_params_t *params)
 }
 
 /**
- * Block the current thread until a deliverable signal is pending.
+ * Block the current thread until a deliverable signal is pending, with
+ * `name` as its wait's name for /proc/PID/wchan.
  *
  * The test of the pending signals and the move to PROC_BLOCKED are one
  * section with interrupts off, so a signal posted from an interrupt is
  * either seen by the test or finds the thread blocked and wakes it, as in
  * `wait_queue.c`. Interrupts are on only while the thread yields or idles.
  */
-static void sig_wait(void)
+static void sig_wait(const char *name)
 {
     uint32_t flags = sig_irq_save();
 
     while (!signal_pending()) {
+        current_proc->wchan = name;
         current_proc->state = PROC_BLOCKED;
         sig_irq_restore(flags);
         schedule();
@@ -4872,12 +4875,19 @@ static void sig_wait(void)
  */
 long sys_pause(isr_params_t *params)
 {
-    (void)params;
-
     if (!current_proc) {
         return -ESRCH;
     }
-    sig_wait();
+    /* Linux's name of the call's entry for the ABI it was made by. */
+#if defined(__x86_64__)
+    sig_wait(SC_COMPAT(params) ? "__ia32_sys_pause" : "__x64_sys_pause");
+#elif defined(__i386__)
+    (void)params;
+    sig_wait("__ia32_sys_pause");
+#else
+    (void)params;
+    sig_wait("sys_pause");
+#endif
     current_proc->restart_kind = RESTART_NOHAND;
     return -EINTR;
 }
@@ -4915,7 +4925,7 @@ long signal_suspend(uint64_t mask)
     current_proc->saved_sigmask = current_proc->sig_blocked;
     current_proc->sigmask_saved = 1;
     signal_set_blocked(mask);
-    sig_wait();
+    sig_wait("sigsuspend");
     current_proc->restart_kind = RESTART_NOHAND;
     return -EINTR;
 }
@@ -5580,6 +5590,7 @@ static int32_t sigwait_take(uint64_t set, int timed, uint64_t deadline, struct k
             return signal_pending() ? -EINTR : -EAGAIN;
         }
         current_proc->wakeup_tick = timed ? (deadline != 0 ? deadline : 1u) : 0;
+        current_proc->wchan = "do_sigtimedwait";
         current_proc->state = PROC_BLOCKED;
         sig_irq_restore(flags);
         schedule();

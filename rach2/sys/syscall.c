@@ -1221,6 +1221,7 @@ static int32_t sleep_until(uint64_t target, int rem)
         }
         /* 0 means not sleeping, so a deadline of 0 is stored as 1. */
         current_proc->wakeup_tick = target != 0 ? target : 1u;
+        current_proc->wchan = "do_nanosleep";
         current_proc->state = PROC_BLOCKED;
         kirq_restore(flags);
         schedule(); /* yield to any other READY process; the timer wakes us */

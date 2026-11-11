@@ -7969,7 +7969,8 @@ static int synth_proc_writable(int procfile)
  * and directories are owned as `synth_pid_owner` has it; oom_score_adj,
  * uid_map, gid_map and setgroups are their owner's to write, mode 0644, as
  * on Linux, and so is a /proc/sys file that can be written. /proc/disk and
- * a descriptor's fdinfo file are 0400, and a process's fd directory 0500.
+ * a descriptor's fdinfo file are 0400, as is a process's syscall file, and a
+ * process's fd directory 0500.
  *
  * The /proc links, /proc/self, a process's cwd, root and exe, its namespace
  * links and its descriptors' links, are links of mode 0777 when not
@@ -8186,6 +8187,8 @@ static int32_t synth_stat(const struct vpath *vp, struct kstat *kst, int follow)
         synth_pid_owner(procfs_resolve_id(vp), kst);
         if (synth_proc_writable(vp->procfile)) {
             kst->st_mode = S_IFREG | 0644;
+        } else if (vp->procfile == SYNTH_PROC_SYSCALL) {
+            kst->st_mode = S_IFREG | 0400;
         }
         return 0;
     case VNODE_PROC_FDINFO: {
@@ -16274,13 +16277,13 @@ static int synth_proc_dirent(const struct synth_dir *sd, int *at, char *name, ui
         const char *name;
         uint8_t type;
     } files[] = {
-        {"stat", DT_REG},     {"cmdline", DT_REG},   {"fd", DT_DIR},     {"maps", DT_REG},
-        {"smaps", DT_REG},    {"status", DT_REG},    {"statm", DT_REG},  {"auxv", DT_REG},
-        {"environ", DT_REG},  {"comm", DT_REG},      {"mem", DT_REG},    {"oom_score_adj", DT_REG},
-        {"mounts", DT_REG},   {"mountinfo", DT_REG}, {"limits", DT_REG}, {"uid_map", DT_REG},
-        {"gid_map", DT_REG},  {"setgroups", DT_REG}, {"ns", DT_DIR},     {"fdinfo", DT_DIR},
-        {"exe", DT_LNK},      {"cwd", DT_LNK},       {"root", DT_LNK},   {"task", DT_DIR},
-        {"numa_maps", DT_REG}};
+        {"stat", DT_REG},    {"cmdline", DT_REG},   {"fd", DT_DIR},     {"maps", DT_REG},
+        {"smaps", DT_REG},   {"status", DT_REG},    {"statm", DT_REG},  {"auxv", DT_REG},
+        {"environ", DT_REG}, {"comm", DT_REG},      {"mem", DT_REG},    {"oom_score_adj", DT_REG},
+        {"mounts", DT_REG},  {"mountinfo", DT_REG}, {"limits", DT_REG}, {"uid_map", DT_REG},
+        {"gid_map", DT_REG}, {"setgroups", DT_REG}, {"ns", DT_DIR},     {"fdinfo", DT_DIR},
+        {"exe", DT_LNK},     {"cwd", DT_LNK},       {"root", DT_LNK},   {"numa_maps", DT_REG},
+        {"syscall", DT_REG}, {"wchan", DT_REG},     {"task", DT_DIR}};
     struct vpath vp;
     process_t *pp;
     int n = *at;

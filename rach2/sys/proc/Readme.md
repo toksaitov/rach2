@@ -75,7 +75,7 @@ The rest of the kernel reaches processes through these headers:
 
 * `process.h`: `current_proc`, the running thread's record (`percpu.h`); `get_process`, a record by its id; `proc_privileged`, whether a thread has privilege over the whole system; `proc_in_syscall`; and the signal functions, `signal_post` and the rest, which [signals](signal.Readme.md) describes.
 * `sched.h`: `schedule`, `sched_make_ready`, which every wake goes through, `sched_preempt`, which an interrupt calls on its way out, `sched_service_point` for a long system call, and `idle_wait_irq_off` and `idle_wait_irq_on`, the only idle waits.
-* `wait_queue.h`: `wq_wait_event`, `wq_wait_event_nointr`, `wq_wait_event_idle`, `wq_wake`, `wq_wake_all`, `wq_wake_proc` for a waker that took a sleeper off its queues itself, and `wq_poll_add` and `wq_poll_remove` for `poll` and `epoll`.
+* `wait_queue.h`: `wq_wait_event`, `wq_wait_event_as`, which names its sleep for /proc/PID/wchan, `wq_wait_event_nointr`, `wq_wait_event_idle`, `wq_wake`, `wq_wake_all`, `wq_wake_proc` for a waker that took a sleeper off its queues itself, and `wq_poll_add` and `wq_poll_remove` for `poll` and `epoll`.
 * `smp.h`: `bkl_enter` and `bkl_exit`, which the interrupt routers call (`rach2/sys/arch/x86/isr.c`); `smp_tlb_shootdown`, `smp_space_release` and `smp_kernel_mapping_changed`, which the page tables call; `smp_barrier`, which `membarrier` calls; `smp_stop_others`, for a panic and a power off; and `smp_start`.
 * `seccomp.h`: `seccomp_permit`, which the system call dispatcher calls (`rach2/sys/syscall.c`).
 * `coredump.h`: `core_notes` and `core_write`, which `fs_core_file` in `rach2/sys/syscall_fs.c` writes through.

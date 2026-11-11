@@ -44,9 +44,12 @@ typedef uint64_t phys_addr_t;
 /* restart_syscall's number, arm64's 128. */
 #define SC_RESTART_NR(p) 128u
 
-#define FRAME_PC(p)   ((p)->pc)
-#define FRAME_SP(p)   ((p)->sp)
-#define FRAME_USER(p) (((p)->pstate & 0xFu) == 0u)
+#define FRAME_PC(p)      ((p)->pc)
+#define FRAME_SP(p)      ((p)->sp)
+#define FRAME_USER(p)    (((p)->pstate & 0xFu) == 0u)
+/* Whether the frame is a system call's entry: an `svc` from AArch64,
+ * ESR_EL1's class 0x15. */
+#define FRAME_SYSCALL(p) (((p)->error_code >> 26) == 0x15u)
 
 #define PAGE_SHIFT 12
 #define PAGE_SIZE  0x1000

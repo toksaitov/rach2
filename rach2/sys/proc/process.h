@@ -580,6 +580,10 @@ struct process {
     uint32_t disk_waits;
     int file_locks;
     uint32_t fs_written;
+    /* The name of the function its last sleep began in, a static string,
+     * set before each block: /proc/PID/wchan gives it while the thread is
+     * PROC_BLOCKED, and reads nothing from it in any other state. */
+    const char *wchan;
 };
 
 typedef struct process process_t;

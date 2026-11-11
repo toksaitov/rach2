@@ -210,7 +210,7 @@ static int32_t pipe_read(fd_entry_t *e, char __user *buf, uint32_t count)
             if (fd_is_nonblock(e)) {
                 return -EAGAIN;
             }
-            if (wq_wait_event(&p->read_wq, pipe_readable, p) < 0) {
+            if (wq_wait_event_as(&p->read_wq, pipe_readable, p, "pipe_read") < 0) {
                 return -EINTR;
             }
             continue;
@@ -310,7 +310,7 @@ static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, i
             if (nonblock) {
                 return (done > 0) ? (int32_t)done : -EAGAIN;
             }
-            if (wq_wait_event(&p->write_wq, pipe_writable, p) < 0) {
+            if (wq_wait_event_as(&p->write_wq, pipe_writable, p, "pipe_write") < 0) {
                 return (done > 0) ? (int32_t)done : -EINTR;
             }
             continue;
@@ -733,7 +733,7 @@ int32_t fifo_attach(fd_entry_t *e, const void *mnt, uint64_t ino, int flags)
         w.p = p;
         w.for_reader = acc == 1;
         w.seen = w.for_reader ? p->read_opens : p->write_opens;
-        if (wq_wait_event(&p->open_wq, fifo_partner_came, &w) < 0) {
+        if (wq_wait_event_as(&p->open_wq, fifo_partner_came, &w, "wait_for_partner") < 0) {
             fifo_unopen(p, reads, writes);
             return -EINTR;
         }
