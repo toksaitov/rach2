@@ -3,8 +3,9 @@
 # trial root, and BUNDLE, the Wine probes' payload, on entry 6 of a new disk
 # with the Lenovo's GUID table identity, as its data partition holds them,
 # boot KERNEL under KVM with the root image as the Lenovo's trial boot names
-# it, check the boot, run gpu.sh on llvmpipe over SSH and power the guest off.
-# OUT receives the serial log, the checks and gpu.sh's results.
+# it, record the boot, run gpu.sh on llvmpipe over SSH and power the guest off.
+# OUT receives the serial log, the boot's mounts and command line, and gpu.sh's
+# results. The caller checks boot.txt before accepting the rehearsal.
 set -eu
 
 [ $# -eq 4 ] || { echo 'usage: qemu.sh ROOT BUNDLE KERNEL OUT' >&2; exit 2; }

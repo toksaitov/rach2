@@ -52,7 +52,7 @@ sh $D/mac.sh sh 'sh /srv/ref80/t2654/probes/gpu.sh -u gfx -p /srv/run2/step9/GE-
 sh $D/mac.sh sh 'tar -cf - -C /srv/ref80/t2654 linux' | tar -xf - -C $R
 ```
 
-   Passes: `intel_iommu=off` on the line; `games: weston: renderer Mesa Intel(R) HD Graphics 4400 (HSW GT2)`; each of `gl64`, `d3d964`, `gl32` and `d3d932` with exit 0 and a crc32; `trip-gl` and `trip-vulkan` with exit 0, their times and the adapter; `GPU OK`. The row writes `$R/linux/gpu/results.json`, Rach2's reference. A probe that fails under Linux is recorded with its log from `$R/linux/gpu/` and left out of the comparison; the row prints which.
+   Passes: `intel_iommu=off` on the line; `games: weston: renderer Mesa Intel(R) HD Graphics 4400 (HSW GT2)`; each of `gl64`, `d3d964`, `gl32` and `d3d932` with exit 0 and a crc32; `trip-gl` and `trip-vulkan` with exit 0, their times and the adapter; `GPU OK`. The row writes `$R/linux/gpu/results.json`, Rach2's reference. A draw with a nonzero Linux exit or no crc32 supplies neither a sum nor an adapter for comparison; Rach2 must still draw successfully and name the GPU. A round-trip probe that fails under Linux imposes no requirement on that renderer. Keep each failed Linux probe and its log from `$R/linux/gpu/`; the row prints each comparison it leaves out.
 4. Leave Debian and put p1 back:
 
 ```

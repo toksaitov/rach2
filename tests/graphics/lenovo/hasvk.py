@@ -141,7 +141,7 @@ def main():
         save(out / "machine.json", {"card": str(intel[0]), "icd": str(icds[0]),
              "cmdline": Path("/proc/cmdline").read_text(), "user": user,
              "kernel": os.uname().release})
-        if os.uname().sysname == "Rach2":
+        if shutil.which("mixer") and Path("/dev/mixer").exists():
             subprocess.run(["mixer", "vol", "1"], check=True)
         end_desktop()
         command = user_command(user, ["env", "LIBSEAT_BACKEND=seatd", "weston", "--no-config",

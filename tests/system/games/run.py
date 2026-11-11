@@ -420,26 +420,34 @@ class Runner:
         Run the GL and Direct3D 9 probes at 64 and 32 bits on the machine's
         own GPU, then time the 64-bit Direct3D 11 round trips on WineD3D's GL
         and Vulkan renderers. LINUX is the results of the same row under Linux
-        on the same machine, or None when this run records them: each sum must
-        equal Linux's, and each renderer that ran Linux's round trips to a zero
-        exit must run them too, exiting 0. Each Direct3D probe's adapter must
-        name the GPU, as hardware checks. The times are recorded beside
-        Linux's and judge nothing.
+        on the same machine, or None when this run records them. Each draw
+        must succeed; compare its sum and adapter with Linux's only when
+        Linux's draw exited 0 with a sum. Each renderer that ran Linux's
+        round trips to a zero exit must run them too, exiting 0. Each Direct3D
+        probe judged must name the GPU. Print comparisons left out because
+        Linux's probe failed. The times are recorded beside Linux's and judge
+        nothing.
         """
         self.make_prefix()
         ok = True
         for bits in ("64", "32"):
             ok = self.draw(bits, results, None) and ok
         for name in [n for n in results if n[:2] in ("gl", "d3")]:
-            want = linux.get(name, {}).get("crc32") if linux is not None else None
-            if linux is not None and results[name]["crc32"] != want:
-                say("%s: crc32 %s differs from linux's %s" % (name, results[name]["crc32"], want))
-                ok = False
-            elif linux is not None:
-                say("%s: crc32 %s equals linux's" % (name, want))
+            want = linux.get(name, {}) if linux is not None else None
+            if want is not None and (want.get("exit") != 0 or not want.get("crc32")):
+                say("%s: comparison omitted: linux exit %s crc32 %s" % (
+                    name, want.get("exit"), want.get("crc32")))
+                want = None
+            if want is not None:
+                if results[name]["crc32"] != want["crc32"]:
+                    say("%s: crc32 %s differs from linux's %s" % (
+                        name, results[name]["crc32"], want["crc32"]))
+                    ok = False
+                else:
+                    say("%s: crc32 %s equals linux's" % (name, want["crc32"]))
             if name.startswith("d3d9") and not self.hardware(
                     name, results[name]["renderer"],
-                    linux.get(name, {}).get("renderer") if linux is not None else None):
+                    want.get("renderer") if want is not None else None):
                 ok = False
         for renderer in TRIP_RENDERERS:
             name = "trip-" + renderer
@@ -460,6 +468,9 @@ class Runner:
                 results[name]["adapter"], want and want.get("ms")))
             expect = "OpenGL" if renderer == "gl" else "Vulkan"
             ran = want is None or (want.get("ok") and want.get("exit") == 0)
+            if not ran:
+                say("%s: comparison omitted: linux exit %s ok %s" % (
+                    name, want.get("exit"), want.get("ok")))
             if ran and not (status == 0 and results[name]["ok"] and
                             results[name]["renderer"] == expect and
                             self.hardware(name, results[name]["adapter"],
