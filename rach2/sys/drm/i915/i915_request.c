@@ -652,21 +652,20 @@ static int i915_fence_signaled(struct dma_fence *fence)
  * breadcrumb is written, which then does not count as listened for and
  * leaves the engine held, as Linux's irq_signal_request leaves
  * I915_FENCE_FLAG_SIGNAL clear; otherwise 1, the request marked
- * `signaling` for the interrupt. With interrupts off and no lock, since a
- * fence's callback may ask for another request's signal with the
- * engine's lock held; every kernel path runs under the big lock.
+ * `signaling` for the interrupt. Called with interrupts masked, as every
+ * `enable_signaling` is, and takes no lock, since a fence's callback may
+ * ask for another request's signal with the engine's lock held; every
+ * kernel path runs under the big lock.
  */
 static int i915_fence_enable_signaling(struct dma_fence *fence)
 {
     struct i915_request *rq = (struct i915_request *)fence;
-    uint32_t flags = kirq_save();
-    int armed = !i915_request_completed(rq);
 
-    if (armed) {
-        rq->signaling = 1;
+    if (i915_request_completed(rq)) {
+        return 0;
     }
-    kirq_restore(flags);
-    return armed;
+    rq->signaling = 1;
+    return 1;
 }
 
 /**

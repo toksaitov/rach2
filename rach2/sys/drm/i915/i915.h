@@ -3582,7 +3582,8 @@ struct i915_file {
  * retirement that finds it complete hands its engine to retirement when it
  * is the engine's last, and clears it. A request already complete when its
  * signal is asked for signals at once instead, without it. It is set with
- * interrupts off, and cleared under its engine's `lock`.
+ * interrupts masked, by the fence's `enable_signaling`, and cleared under
+ * its engine's `lock`.
  */
 struct i915_await;
 
