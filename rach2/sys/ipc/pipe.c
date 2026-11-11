@@ -148,6 +148,7 @@ static pipe_t *pipe_alloc(void)
     wait_queue_init(&p->write_wq);
     wait_queue_init(&p->rdwr_wq);
     wait_queue_init(&p->splice_wq);
+    sleep_lock_init(&p->lock, NULL, 0);
     p->next = pipes;
     pipes = p;
     return p;
@@ -229,14 +230,61 @@ static int pipe_unspliced(void *arg)
     return !((pipe_t *)arg)->spliced;
 }
 
-/** Wait until no splice holds the bytes of `p` (`pipe_splice_peek`): 0, or
- * -EINTR when a signal ends the wait. A reader waits even with O_NONBLOCK,
- * as Linux's waits for the pipe's lock, since the hold ends without any
- * other process acting. */
-static int32_t pipe_wait_unspliced(pipe_t *p)
+/** Take the lock of `p`, and of `q` too when it is not NULL, the lower
+ * address first, as Linux's `pipe_double_lock` orders them, so that two
+ * tees between the same pipes never wait on each other. May sleep; a
+ * signal does not end the wait, as Linux's `mutex_lock` of a pipe. */
+static void pipe_lock(pipe_t *p, pipe_t *q)
+{
+    if (q && (uintptr_t)q < (uintptr_t)p) {
+        pipe_t *t = p;
+
+        p = q;
+        q = t;
+    }
+    sleep_lock_take(&p->lock);
+    if (q) {
+        sleep_lock_take(&q->lock);
+    }
+}
+
+/** Give back the locks `pipe_lock` took of `p` and `q`. */
+static void pipe_unlock(pipe_t *p, pipe_t *q)
+{
+    sleep_lock_give(&p->lock);
+    if (q) {
+        sleep_lock_give(&q->lock);
+    }
+}
+
+/**
+ * Wait on `wq` until `cond` holds of `arg`, as the wait named `name`, or
+ * unnamed when that is NULL, with the locks of `p` and `q` (`pipe_lock`)
+ * given back for the wait and taken again after it, as Linux's pipe_read
+ * and pipe_write drop `pipe->mutex` to wait. Returns 0, or -EINTR when a
+ * signal ends the wait; the locks are held again either way, and the
+ * caller judges the pipe again, since others used it meanwhile.
+ */
+static int pipe_sleep(pipe_t *p, pipe_t *q, wait_queue_t *wq, wq_cond_fn cond, void *arg,
+                      const char *name)
+{
+    int rc;
+
+    pipe_unlock(p, q);
+    rc = name ? wq_wait_event_as(wq, cond, arg, name) : wq_wait_event(wq, cond, arg);
+    pipe_lock(p, q);
+    return rc;
+}
+
+/** Wait until no splice holds the bytes of `p` (`pipe_splice_peek`), with
+ * the locks of `p` and `q` held and given back for the wait (`pipe_sleep`):
+ * 0, or -EINTR when a signal ends the wait. A reader waits even with
+ * O_NONBLOCK, as Linux's waits for the pipe's lock, since the hold ends
+ * without any other process acting. */
+static int32_t pipe_wait_unspliced(pipe_t *p, pipe_t *q)
 {
     while (p->spliced) {
-        if (wq_wait_event(&p->splice_wq, pipe_unspliced, p) < 0) {
+        if (pipe_sleep(p, q, &p->splice_wq, pipe_unspliced, p, NULL) < 0) {
             return -EINTR;
         }
     }
@@ -570,10 +618,10 @@ static void pipe_sigpipe(void)
 #define PUT_PINNED   0x4u /* vmsplice's, from pages a pin may take */
 
 /** Wait for room in `p` for a put with `how` that has written `done`
- * bytes: 0 once the ring has a byte free, or a buffer more
- * (`pipe_slot_room`) when the next byte opens one, `opens`, -EAGAIN when
- * the put may not wait, as with PUT_NONBLOCK or for a splice past its first
- * byte, or -EINTR. */
+ * bytes, with the pipe's lock given back for the wait (`pipe_sleep`): 0
+ * once the ring has a byte free, or a buffer more (`pipe_slot_room`) when
+ * the next byte opens one, `opens`, -EAGAIN when the put may not wait, as
+ * with PUT_NONBLOCK or for a splice past its first byte, or -EINTR. */
 static int32_t pipe_put_wait(pipe_t *p, uint32_t how, uint32_t done, int opens)
 {
     int merge = (how & PUT_MERGE) != 0;
@@ -581,8 +629,8 @@ static int32_t pipe_put_wait(pipe_t *p, uint32_t how, uint32_t done, int opens)
     if ((how & PUT_NONBLOCK) || (!merge && done > 0)) {
         return -EAGAIN;
     }
-    if (wq_wait_event_as(&p->write_wq, opens ? pipe_slot_writable : pipe_writable, p,
-                         merge ? "pipe_write" : "pipe_wait_writable") < 0) {
+    if (pipe_sleep(p, NULL, &p->write_wq, opens ? pipe_slot_writable : pipe_writable, p,
+                   merge ? "pipe_write" : "pipe_wait_writable") < 0) {
         return -EINTR;
     }
     return 0;
@@ -656,11 +704,14 @@ static int pipe_span_ok(uintptr_t addr, uint32_t len)
  *
  * The bytes take a buffer for each page of the source they come from, whose
  * first byte lies `src` bytes into its page (`pipe_buf_add_pages`), and a
- * transfer stays within one such page. Each transfer makes its page present
- * as `pipe_read`'s does, and judges the readers and the ring again after
- * that sleep. The splice stops where Linux's ring of a buffer for each page
- * of the pipe's size is full (`pipe_put_room`), however few bytes its
- * buffers hold, and waits for room only before its first byte, in
+ * transfer stays within one such page. The pipe's lock is held throughout
+ * but for the wait for room, as Linux's `vmsplice_to_pipe` and
+ * `splice_file_to_pipe` hold `pipe_lock` (fs/splice.c:1558-1562 and
+ * 1295-1299 in 6.12), so no other reader or writer uses the ring while a
+ * transfer brings its page in; the readers and the ring are judged again
+ * after that sleep. The splice stops where Linux's ring of a buffer for
+ * each page of the pipe's size is full (`pipe_put_room`), however few bytes
+ * its buffers hold, and waits for room only before its first byte, in
  * `pipe_wait_writable`, returning what fitted once the ring fills, as
  * Linux's `wait_for_space` and `iter_to_pipe` do. With PUT_PINNED, a source
  * page that Linux's get_user_pages refuses, such as `[vvar]`, ends the copy
@@ -672,7 +723,8 @@ static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, u
                         uint32_t src)
 {
     pipe_t *p = (pipe_t *)e->priv;
-    uint32_t done = 0, last = p->tail;
+    uint32_t done = 0, last;
+    int32_t err = 0;
     int fresh = 1, opens;
 
     if (!(e->flags & FD_FLAG_WRITE)) {
@@ -685,6 +737,8 @@ static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, u
         return -EFAULT;
     }
 
+    pipe_lock(p, NULL);
+    last = p->tail;
     while (done < count) {
         uint8_t *at;
         uint32_t chunk;
@@ -693,23 +747,27 @@ static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, u
 
         if (!p->read_open) {
             pipe_sigpipe();
-            return (done > 0) ? (int32_t)done : -EPIPE;
+            err = -EPIPE;
+            break;
         }
         if (pipe_ring_ready(p) < 0) {
-            return (done > 0) ? (int32_t)done : -ENOMEM;
+            err = -ENOMEM;
+            break;
         }
 
         opens = pipe_put_opens(p, src + done, fresh, p->tail != last);
         if (!pipe_put_room(p, opens)) {
             rc = pipe_put_wait(p, how, done, opens);
             if (rc < 0) {
-                return (done > 0) ? (int32_t)done : rc;
+                err = rc;
+                break;
             }
             continue;
         }
 
         if (!pipe_put_fault(addr, count - done, how)) {
-            return (done > 0) ? (int32_t)done : -EFAULT;
+            err = -EFAULT;
+            break;
         }
         if (!p->read_open) {
             continue;
@@ -730,7 +788,8 @@ static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, u
         chunk = page_piece(src + done, page_piece(addr, chunk));
         rc = pipe_put_copy(at, (const char __user *)addr, chunk, how);
         if (rc < 0) {
-            return (done > 0) ? (int32_t)done : rc;
+            err = rc;
+            break;
         }
         pipe_buf_add_pages(p, chunk, src + done, fresh);
         fresh = 0;
@@ -739,8 +798,9 @@ static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, u
         done += chunk;
         pipe_wake(p, &p->read_wq, WQ_DATA);
     }
+    pipe_unlock(p, NULL);
 
-    return (int32_t)done;
+    return (done > 0) ? (int32_t)done : err;
 }
 
 /** The address of the next byte of `iov` for a `pipe_put_vec`, `*off`
@@ -882,16 +942,22 @@ static uint32_t pipe_buf_head_len(const pipe_t *p)
  * read of a pipe that holds only such buffers waits, or is -EAGAIN, as
  * Linux's.
  *
- * Each copy brings its destination in for writing first, which may sleep,
- * and judges the ring again after any sleep; then, with no sleep between,
- * it copies the bytes and moves the head past them, so that no other reader
- * of the pipe takes them meanwhile. An interrupt does not preempt a system
- * call, so no other thread unmaps a page between the check and the copy.
+ * The pipe's lock is held from the start to the return but for the wait for
+ * bytes (`pipe_sleep`), as Linux's `pipe_read` holds `pipe->mutex` across
+ * its copies' faults and drops it only to wait (fs/pipe.c:264, 361, 393 and
+ * 399 in 6.12), so while a destination page comes in no other reader takes
+ * the next buffer and no writer grows the one being read: the bytes a read
+ * returns are adjacent in the stream. Each copy brings its destination in
+ * for writing first, which may sleep, and judges the ring again after any
+ * sleep; then, with no sleep between, it copies the bytes and moves the head
+ * past them. An interrupt does not preempt a system call, so no other thread
+ * unmaps a page between the check and the copy.
  */
 static int32_t pipe_read_vec(fd_entry_t *e, const struct kernel_iovec *iov, int n)
 {
     pipe_t *p = (pipe_t *)e->priv;
     uint32_t count = 0, done = 0, off = 0;
+    int32_t err = 0;
     int i, k = 0;
 
     if (!(e->flags & FD_FLAG_READ)) {
@@ -907,6 +973,7 @@ static int32_t pipe_read_vec(fd_entry_t *e, const struct kernel_iovec *iov, int 
         return 0;
     }
 
+    pipe_lock(p, NULL);
     while (done < count) {
         uint32_t len;
         int32_t rc;
@@ -917,10 +984,12 @@ static int32_t pipe_read_vec(fd_entry_t *e, const struct kernel_iovec *iov, int 
                 break;
             }
             if (fd_is_nonblock(e)) {
-                return -EAGAIN;
+                err = -EAGAIN;
+                break;
             }
-            if (wq_wait_event_as(&p->read_wq, pipe_readable, p, "pipe_read") < 0) {
-                return -EINTR;
+            if (pipe_sleep(p, NULL, &p->read_wq, pipe_readable, p, "pipe_read") < 0) {
+                err = -EINTR;
+                break;
             }
             continue;
         }
@@ -928,8 +997,9 @@ static int32_t pipe_read_vec(fd_entry_t *e, const struct kernel_iovec *iov, int 
             if (done > 0) {
                 break;
             }
-            if (pipe_wait_unspliced(p) < 0) {
-                return -EINTR;
+            if (pipe_wait_unspliced(p, NULL) < 0) {
+                err = -EINTR;
+                break;
             }
             continue;
         }
@@ -939,21 +1009,24 @@ static int32_t pipe_read_vec(fd_entry_t *e, const struct kernel_iovec *iov, int 
         }
         rc = pipe_iov_resident(iov, k, off, len, 1);
         if (rc < 0) {
-            return (done > 0) ? (int32_t)done : rc;
+            err = rc;
+            break;
         }
         if (rc == 0) {
             continue;
         }
         if (pipe_iov_fill(p, iov, &k, &off, len) < 0) {
-            return (done > 0) ? (int32_t)done : -EFAULT;
+            err = -EFAULT;
+            break;
         }
         pipe_ring_consume(p, len);
         pipe_buf_drop(p);
         done += len;
         pipe_wake(p, &p->write_wq, WQ_ROOM);
     }
+    pipe_unlock(p, NULL);
 
-    return (int32_t)done;
+    return (done > 0) ? (int32_t)done : err;
 }
 
 /**
@@ -1002,6 +1075,12 @@ static void pipe_buf_fault(pipe_t *p)
  * write waits in `pipe_write`, as Linux's does, for a slot when its next
  * bytes open a buffer.
  *
+ * The pipe's lock is held from the start to the return but for the wait for
+ * room, as Linux's `pipe_write` holds `pipe->mutex` across its copies'
+ * faults and drops it only to wait (fs/pipe.c:455, 575, 580 and 587 in
+ * 6.12), so no other writer's bytes come between a write's own while its
+ * source pages come in, and no reader takes them half made.
+ *
  * Each of those groups, the merged bytes and each page, is committed whole
  * or not at all, as Linux commits a page only once it is full or the vector
  * is spent: the group's source is made present, which may sleep, and the
@@ -1023,7 +1102,8 @@ static int32_t pipe_put_vec(fd_entry_t *e, const struct kernel_iovec *iov, int n
 {
     pipe_t *p = (pipe_t *)e->priv;
     uint32_t how = PUT_MERGE | (nonblock ? PUT_NONBLOCK : 0u);
-    uint32_t done = 0, fill = pipe_buf_merge_room(p, count), last = p->tail, off = 0;
+    uint32_t done = 0, fill, last, off = 0;
+    int32_t err = 0;
     int i, k = 0;
 
     if (!(e->flags & FD_FLAG_WRITE)) {
@@ -1038,16 +1118,21 @@ static int32_t pipe_put_vec(fd_entry_t *e, const struct kernel_iovec *iov, int n
         }
     }
 
+    pipe_lock(p, NULL);
+    fill = pipe_buf_merge_room(p, count);
+    last = p->tail;
     while (done < count) {
         uint32_t len;
         int32_t rc;
 
         if (!p->read_open) {
             pipe_sigpipe();
-            return (done > 0) ? (int32_t)done : -EPIPE;
+            err = -EPIPE;
+            break;
         }
         if (pipe_ring_ready(p) < 0) {
-            return (done > 0) ? (int32_t)done : -ENOMEM;
+            err = -ENOMEM;
+            break;
         }
         if (p->tail != last || p->bufs == 0 || pipe_free_space(p) < fill) {
             fill = 0;
@@ -1062,7 +1147,8 @@ static int32_t pipe_put_vec(fd_entry_t *e, const struct kernel_iovec *iov, int n
         if (!pipe_put_room(p, fill == 0)) {
             rc = pipe_put_wait(p, how, done, fill == 0);
             if (rc < 0) {
-                return (done > 0) ? (int32_t)done : rc;
+                err = rc;
+                break;
             }
             continue;
         }
@@ -1074,7 +1160,8 @@ static int32_t pipe_put_vec(fd_entry_t *e, const struct kernel_iovec *iov, int n
             if (fill == 0) {
                 pipe_buf_fault(p);
             }
-            return (done > 0) ? (int32_t)done : -EFAULT;
+            err = -EFAULT;
+            break;
         }
         pipe_buf_add(p, len, &fill);
         pipe_ring_produce(p, len);
@@ -1082,8 +1169,9 @@ static int32_t pipe_put_vec(fd_entry_t *e, const struct kernel_iovec *iov, int n
         done += len;
         pipe_wake(p, &p->read_wq, WQ_DATA);
     }
+    pipe_unlock(p, NULL);
 
-    return (int32_t)done;
+    return (done > 0) ? (int32_t)done : err;
 }
 
 /** The write of a pipe end (`pipe_put_vec`), waiting for room unless the
@@ -1154,14 +1242,20 @@ static short pipe_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 }
 
 /** The ioctls of a pipe end: FIONREAD stores the bytes buffered, an int, at
- * `arg`, or fails with -EFAULT; any other request is -ENOTTY. */
+ * `arg`, or fails with -EFAULT, counting them under the pipe's lock, as
+ * Linux's `pipe_ioctl` does (fs/pipe.c:622-632 in 6.12), so a read or a
+ * write that sleeps in a fault ends first; any other request is -ENOTTY. */
 static int32_t pipe_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     pipe_t *p = (pipe_t *)e->priv;
 
     switch (request) {
     case FIONREAD: {
-        int n = (int)pipe_available(p);
+        int n;
+
+        pipe_lock(p, NULL);
+        n = (int)pipe_available(p);
+        pipe_unlock(p, NULL);
         if (copy_to_user((void __user *)arg, &n, sizeof(n)) != 0) {
             return -EFAULT;
         }
@@ -1242,41 +1336,47 @@ int32_t pipe_vmsplice_write(fd_entry_t *e, const char __user *buf, uint32_t coun
 int32_t pipe_splice_room(fd_entry_t *e, int nonblock, uint32_t src)
 {
     pipe_t *p = (pipe_t *)e->priv;
+    int32_t rc;
 
     if (!(e->flags & FD_FLAG_WRITE)) {
         return -EBADF;
     }
+    pipe_lock(p, NULL);
     for (;;) {
         if (!p->read_open) {
             pipe_sigpipe();
-            return -EPIPE;
+            rc = -EPIPE;
+            break;
         }
         if (pipe_slot_room(p)) {
             uint32_t room = pipe_slots_free(p) * PAGE_SIZE - (src & (PAGE_SIZE - 1));
 
-            return (int32_t)(room < pipe_free_space(p) ? room : pipe_free_space(p));
+            rc = (int32_t)(room < pipe_free_space(p) ? room : pipe_free_space(p));
+            break;
         }
         if (nonblock) {
-            return -EAGAIN;
+            rc = -EAGAIN;
+            break;
         }
-        if (wq_wait_event(&p->write_wq, pipe_slot_writable, p) < 0) {
-            return -EINTR;
+        if (pipe_sleep(p, NULL, &p->write_wq, pipe_slot_writable, p, NULL) < 0) {
+            rc = -EINTR;
+            break;
         }
     }
+    pipe_unlock(p, NULL);
+    return rc;
 }
 
 /**
- * Wait until the pipe of the read end `e` has bytes, or has no writer left:
- * the bytes buffered, 0 for none and no writer, -EAGAIN for none with
- * `nonblock`, or -EINTR when a signal ends the wait. The empty buffers at
- * the front, which faulted writes left, are let go of first, as a read
- * lets go of them (`pipe_buf_skip_empty`), so a splice or a tee waits for
- * bytes.
+ * Wait until the pipe `p` has bytes, or has no writer left, with the locks
+ * of `p` and `q` held and given back for the wait (`pipe_sleep`): the bytes
+ * buffered, 0 for none and no writer, -EAGAIN for none with `nonblock`, or
+ * -EINTR when a signal ends the wait. The empty buffers at the front, which
+ * faulted writes left, are let go of first, as a read lets go of them
+ * (`pipe_buf_skip_empty`), so a splice or a tee waits for bytes.
  */
-static int32_t pipe_wait_data(fd_entry_t *e, int nonblock)
+static int32_t pipe_wait_data(pipe_t *p, pipe_t *q, int nonblock)
 {
-    pipe_t *p = (pipe_t *)e->priv;
-
     for (;;) {
         pipe_buf_skip_empty(p);
         if (pipe_available(p) != 0) {
@@ -1288,7 +1388,7 @@ static int32_t pipe_wait_data(fd_entry_t *e, int nonblock)
         if (nonblock) {
             return -EAGAIN;
         }
-        if (wq_wait_event(&p->read_wq, pipe_readable, p) < 0) {
+        if (pipe_sleep(p, q, &p->read_wq, pipe_readable, p, NULL) < 0) {
             return -EINTR;
         }
     }
@@ -1326,7 +1426,8 @@ int32_t pipe_get_size(const fd_entry_t *e)
 }
 
 /**
- * A new ring is allocated, whether or not the pipe had one, as Linux's
+ * Give `p` a ring of `size` bytes for F_SETPIPE_SZ (`pipe_set_size`). A new
+ * ring is allocated, whether or not the pipe had one, as Linux's
  * `pipe_resize_ring` allocates its slots, so that a size the heap cannot
  * give fails here and not at every write; the bytes buffered are copied to
  * the slots their counters name in it, so `head` and `tail` keep counting
@@ -1338,11 +1439,10 @@ int32_t pipe_get_size(const fd_entry_t *e)
  * a page unless its first `count` mod 4096 bytes fit in the newest buffer's
  * (`pipe_buf_merge_room`), and tee, splice and vmsplice open one for each
  * buffer or source page their bytes come from (`pipe_buf_link`,
- * `pipe_buf_add_pages`).
+ * `pipe_buf_add_pages`). Called with the pipe's lock held.
  */
-int32_t pipe_set_size(fd_entry_t *e, uint32_t size, int privileged)
+static int32_t pipe_resize(pipe_t *p, uint32_t size, int privileged)
 {
-    pipe_t *p = (pipe_t *)e->priv;
     uint32_t want = pipe_round_size(size), done = 0, n = pipe_available(p), i;
     struct pipe_page *slots;
     uint8_t *ring;
@@ -1399,6 +1499,20 @@ int32_t pipe_set_size(fd_entry_t *e, uint32_t size, int privileged)
     return (int32_t)want;
 }
 
+/** F_SETPIPE_SZ of `e` (`pipe_resize`) under the pipe's lock, as Linux's
+ * `pipe_fcntl` holds it (fs/pipe.c:1408-1422 in 6.12), so a read or a write
+ * that sleeps in a fault ends before the ring moves. */
+int32_t pipe_set_size(fd_entry_t *e, uint32_t size, int privileged)
+{
+    pipe_t *p = (pipe_t *)e->priv;
+    int32_t rc;
+
+    pipe_lock(p, NULL);
+    rc = pipe_resize(p, size, privileged);
+    pipe_unlock(p, NULL);
+    return rc;
+}
+
 int32_t pipe_splice_peek(fd_entry_t *e, uint8_t *dst, uint32_t n, int nonblock)
 {
     pipe_t *p = (pipe_t *)e->priv;
@@ -1407,15 +1521,18 @@ int32_t pipe_splice_peek(fd_entry_t *e, uint8_t *dst, uint32_t n, int nonblock)
     if (!(e->flags & FD_FLAG_READ)) {
         return -EBADF;
     }
+    pipe_lock(p, NULL);
     for (;;) {
-        avail = pipe_wait_data(e, nonblock);
+        avail = pipe_wait_data(p, NULL, nonblock);
         if (avail <= 0) {
+            pipe_unlock(p, NULL);
             return avail;
         }
         if (!p->spliced) {
             break;
         }
-        if (pipe_wait_unspliced(p) < 0) {
+        if (pipe_wait_unspliced(p, NULL) < 0) {
+            pipe_unlock(p, NULL);
             return -EINTR;
         }
     }
@@ -1424,6 +1541,7 @@ int32_t pipe_splice_peek(fd_entry_t *e, uint8_t *dst, uint32_t n, int nonblock)
     }
     pipe_ring_copy(p, dst, NULL, n);
     p->spliced = 1;
+    pipe_unlock(p, NULL);
     return (int32_t)n;
 }
 
@@ -1431,6 +1549,7 @@ void pipe_splice_consume(fd_entry_t *e, uint32_t n)
 {
     pipe_t *p = (pipe_t *)e->priv;
 
+    pipe_lock(p, NULL);
     if (n > pipe_available(p)) {
         n = pipe_available(p);
     }
@@ -1441,6 +1560,7 @@ void pipe_splice_consume(fd_entry_t *e, uint32_t n)
     }
     p->spliced = 0;
     wq_wake(&p->splice_wq, WQ_ALL);
+    pipe_unlock(p, NULL);
 }
 
 /** How many of the first `n` bytes buffered in `a` another pipe takes in
@@ -1466,38 +1586,49 @@ int32_t pipe_tee(fd_entry_t *in, fd_entry_t *out, uint32_t len, int nonblock, in
     pipe_t *a = (pipe_t *)in->priv;
     pipe_t *b = (pipe_t *)out->priv;
     uint32_t n;
+    int32_t rc = 1;
 
     if (a == b) {
         return -EINVAL;
     }
+    pipe_lock(a, b);
     for (;;) {
-        int32_t avail = pipe_wait_data(in, nonblock);
+        int32_t avail = pipe_wait_data(a, b, nonblock);
 
         if (avail <= 0) {
-            return avail;
+            rc = avail;
+            break;
         }
         if (a->spliced) {
-            if (pipe_wait_unspliced(a) < 0) {
-                return -EINTR;
+            if (pipe_wait_unspliced(a, b) < 0) {
+                rc = -EINTR;
+                break;
             }
             continue;
         }
         if (!b->read_open) {
             pipe_sigpipe();
-            return -EPIPE;
+            rc = -EPIPE;
+            break;
         }
         if (pipe_slot_room(b)) {
             break;
         }
         if (nonblock) {
-            return -EAGAIN;
+            rc = -EAGAIN;
+            break;
         }
-        if (wq_wait_event(&b->write_wq, pipe_slot_writable, b) < 0) {
-            return -EINTR;
+        if (pipe_sleep(a, b, &b->write_wq, pipe_slot_writable, b, NULL) < 0) {
+            rc = -EINTR;
+            break;
         }
     }
-    if (pipe_ring_ready(b) < 0) {
-        return -ENOMEM;
+    if (rc > 0 && pipe_ring_ready(b) < 0) {
+        rc = -ENOMEM;
+    }
+    if (rc <= 0) {
+        pipe_unlock(a, b);
+        return rc;
     }
     n = pipe_available(a);
     if (n > pipe_free_space(b)) {
@@ -1516,6 +1647,7 @@ int32_t pipe_tee(fd_entry_t *in, fd_entry_t *out, uint32_t len, int nonblock, in
         pipe_buf_drop(a);
         pipe_wake(a, &a->write_wq, WQ_ROOM);
     }
+    pipe_unlock(a, b);
     return (int32_t)n;
 }
 
