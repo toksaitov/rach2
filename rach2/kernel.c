@@ -44,6 +44,7 @@
 #include "sys/evdev.h"
 #include "sys/proc/elf.h"
 #include "sys/proc/uimage.h"
+#include "sys/lib/kirq.h"
 #include "sys/lib/krandom.h"
 #include "sys/lib/ksignal.h"
 #include "sys/rtc.h"
@@ -440,7 +441,11 @@ static void shell_lockup(const char *args)
  * Write the core file of the current process, which the signal `signo`
  * ends, and let the threads parked for it go (`core_release`). Returns the
  * status the process ends with: `signo` with WCOREFLAG, which WCOREDUMP
- * reads, only when the whole file was written, and `signo` otherwise. The
+ * reads, only when the whole file was written and no SIGKILL came during
+ * the dump, and `signo` otherwise. A SIGKILL to the process during the dump
+ * stops the file and makes the process's status SIGKILL's (`sig_complete`),
+ * which WCOREFLAG then is not added to, as Linux 6.12.115's
+ * `coredump_finish` leaves out 0x80 (fs/coredump.c:473-474). The
  * caller has set `in_syscall` and enabled interrupts, as a system call
  * writing the file would: the timer does not switch away in the middle of
  * the file system's work, and a disk that answers only by interrupt, as a
@@ -449,12 +454,16 @@ static void shell_lockup(const char *args)
 static int32_t terminate_core(int32_t signo)
 {
     int32_t rc = fs_core_file(signo, current_proc->rlim[RLIM_CORE].cur);
+    uint32_t flags = kirq_save();
+    int dumped = rc == 0 && !(current_proc->sig_pending & KSIG_BIT(SIGKILL));
 
-    if (rc == 0) {
+    if (dumped) {
         current_proc->tg->exit_code = signo | WCOREFLAG;
     }
+    current_proc->tg->core_dumping = 0;
+    kirq_restore(flags);
     core_release();
-    return rc == 0 ? signo | WCOREFLAG : signo;
+    return dumped ? signo | WCOREFLAG : signo;
 }
 
 /**
