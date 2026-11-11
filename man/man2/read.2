@@ -337,8 +337,8 @@ and requires 6 and the bytes in turn.
 .It Er EAGAIN
 A nonblocking input would have to wait.
 .It Er EBADF
-The descriptor is invalid, is not open for reading, has no read
-operation, refers to a directory, or was opened with
+The descriptor is invalid, is not open for reading, is of a kind with no
+read, refers to a directory, or was opened with
 .Dv O_PATH .
 .It Er ECONNREFUSED
 A stream connection was refused.
@@ -355,7 +355,9 @@ A signal interrupted a wait, or a background terminal read posted
 .Dv SIGTTIN .
 .It Er EINVAL
 The vector count is outside 0 through 1024, a vector length is negative
-as a signed size, a file system has no read operation, or
+as a signed size, a file system has no read operation, the object the
+descriptor is open on, such as an epoll set, has no read method, as on
+Linux, or
 .Fn pread
 was given a negative offset or an end past the signed 64-bit range.
 A boot window,
