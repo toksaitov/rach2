@@ -537,6 +537,7 @@ int32_t exit_current(int32_t code)
     bool is_init;
     int alone;
     uint32_t exiting_pid;
+    process_t *dead;
 
     if (!current_proc) {
         arch_stop();
@@ -589,11 +590,12 @@ int32_t exit_current(int32_t code)
     console_puts("Init process exited. Returning to kernel debug shell.");
 
     arch_irq_disable();
-    free_process(current_proc);
-
+    /* The idle task is current before the record is freed, since what the
+     * free calls may read the current record. */
+    dead = current_proc;
     init_pid = 0;
-
     sched_adopt(proc_idle);
+    free_process(dead);
 
     shell_reset_input();
     arch_irq_enable();

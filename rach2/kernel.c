@@ -555,6 +555,7 @@ void terminate_current_process(int32_t signo)
     int alone;
     int last;
     int32_t event_status;
+    process_t *dead;
 
     if (!current_proc || current_proc->mm == NULL) {
         return;
@@ -608,10 +609,12 @@ void terminate_current_process(int32_t signo)
         init_end_line(pid, current_proc->tg->exit_code);
         console_puts("Init process exited. Returning to kernel debug shell.");
 
-        free_process(current_proc);
-
+        /* The idle task is current before the record is freed, since what
+         * the free calls may read the current record. */
+        dead = current_proc;
         init_pid = 0;
         sched_adopt(proc_idle);
+        free_process(dead);
 
         shell_reset_input();
 
