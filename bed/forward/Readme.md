@@ -20,6 +20,8 @@ On a machine with a GPU of its own, such as the Lenovo, the runner runs under KV
 
 The same lines run on Debian in Rach2's place, with `-r none` for `venus` when they take the reference.
 
+`-M SCENE` runs the test bed's [measurement harness](../measure/Readme.md) in the guest in place of the profile's check: its `glmark2` or `webgl` scene, the two the reference guest's packages have, for `-t` SECONDS (10), as the rung `forward-virgl` or `forward-venus`, GL going through Zink on Venus's ICD under `venus`. The harness's line comes back as `bed-forward: figure: LINE` and in the result.
+
 The runner bounds silence, never the run: it fails when QEMU ends early, or when neither the guest's console nor the scene's output has grown for 600 seconds (`-w`).
 
 The guest's disk and the archive are made on the build host:
@@ -27,7 +29,7 @@ The guest's disk and the archive are made on the build host:
     sh bed/forward/guest.sh build/tests/cases/bed-forward/guest.qcow2 build/tests/cases/bed-forward/id_ed25519
     make ARCH=x86_64 build/tests/cases/bed-forward/forward.ext2
 
-`guest.sh` prepares the graphics tests' [Debian reference guest](../../tests/graphics/Readme.md#the-reference-guest) where the clone has none yet, and writes its prepared image whole, with no backing file, as one qcow2 image, with the private key of `gfx`. The make rule packs `guest.tar` (`make ARCH=x86_64 build/tests/cases/bed-forward/guest.tar` alone), which holds `scene.sh`, [`triangle.c`](../fixture/triangle.c), the graphics runs' `guest-env.sh`, their vkcube runner with its helpers, and vkcube's reference checksums, and puts it with `forward.sh` and the key on a small ext2 disk, which the family's cases mount on Rach2.
+`guest.sh` prepares the graphics tests' [Debian reference guest](../../tests/graphics/Readme.md#the-reference-guest) where the clone has none yet, and writes its prepared image whole, with no backing file, as one qcow2 image, with the private key of `gfx`. The make rule packs `guest.tar` (`make ARCH=x86_64 build/tests/cases/bed-forward/guest.tar` alone), which holds `scene.sh`, [`triangle.c`](../fixture/triangle.c), the graphics runs' `guest-env.sh`, their vkcube runner with its helpers, the measurement harness with the runners it uses, and vkcube's reference checksums, and puts it with `forward.sh` and the key on a small ext2 disk, which the family's cases mount on Rach2.
 
 ## Results
 
