@@ -18,6 +18,12 @@
  * can show: a line never sent and a line sent and missed look the same from
  * inside the machine.
  *
+ * The `udp` case boots with a target of Linux's `netconsole=` in place of
+ * the frames, types `fault` so that the kernel panics, and requires the log
+ * from its first record to the panic's in datagrams to the target's port:
+ * one record each, all there, in order and with checksums a receiver
+ * accepts, which `nc -lu` on the host then reads.
+ *
  * Each expected text has the `] ` that ends a record's prefix, so that what
  * pcapcheck finds is a whole record put together from the frames, not a
  * fragment of one.
@@ -41,6 +47,27 @@ static int pcapcheck(struct net_case *u, const char *capture, const char *output
     for (i = 0; args[i] != NULL && i + 6 < sizeof(argv) / sizeof(argv[0]); i++)
         argv[5 + i] = (char *)args[i];
     argv[5 + i] = NULL;
+    net_host(u, argv, output, &r);
+    ok = net_exited0(&r);
+    net_run_free(&r);
+    return ok;
+}
+
+/** Run pcapcheck netconsole-udp on `capture` for port 6666 with `args`, ended
+ * by NULL, keeping its output as evidence `output`, and say whether it
+ * passed. */
+static int pcapcheck_udp(struct net_case *u, const char *capture, const char *output,
+                         const char *const args[])
+{
+    char *argv[16] = {
+        "pcapcheck", "netconsole-udp", (char *)capture, "--port", "6666", "--min-datagrams", "4"};
+    struct net_run r;
+    size_t i;
+    int ok;
+
+    for (i = 0; args[i] != NULL && i + 8 < sizeof(argv) / sizeof(argv[0]); i++)
+        argv[7 + i] = (char *)args[i];
+    argv[7 + i] = NULL;
     net_host(u, argv, output, &r);
     ok = net_exited0(&r);
     net_run_free(&r);
@@ -117,6 +144,41 @@ static void stop_case(struct net_case *u, struct net_boot *b)
                "a line printed after the card was silenced is on the wire");
 }
 
+/** The `udp` case: panic the kernel from the shell, end the machine, and read
+ * the datagrams. */
+static void udp_case(struct net_case *u, struct net_boot *b)
+{
+    static const char *const contract[] = {NULL};
+    static const char *const whole[] = {"--expect", "] boot: Initializing system components",
+                                        "--expect", "] netconsole: started:",
+                                        "--expect", "] panic: stopped:",
+                                        NULL};
+    static const char *const quiet[] = {"--reject", "Type 'help'", "--reject", "> ", NULL};
+    struct etude_termination end;
+    const char *capture;
+    char *reply = NULL;
+
+    net_assert(u, "shell", 1, "");
+    net_step(u, "panic");
+    net_line(b, "fault");
+    net_wait(b, "panic: stopped");
+    if (net_ok(u) && etude_fault(b->m, ETUDE_END_PANIC) != ETUDE_OK)
+        net_fail(u, "the console has no record of the kernel's panic");
+    net_step(u, "capture");
+    if (net_ok(u) && etude_qmp(b->m, "quit", NULL, &reply) == ETUDE_FAILED)
+        net_fail(u, "QEMU refused to quit");
+    free(reply);
+    if (net_ok(u) && etude_wait_end(b->m, &end) == ETUDE_LOST)
+        net_fail(u, "the machine was lost before it ended");
+    capture = capture_of(b);
+    net_assert(u, "datagrams", pcapcheck_udp(u, capture, "datagrams", contract),
+               "the datagrams are not whole, in order and checked");
+    net_assert(u, "first-to-panic", pcapcheck_udp(u, capture, "whole", whole),
+               "the log from the first record to the panic's is not in the datagrams");
+    net_assert(u, "no-console", pcapcheck_udp(u, capture, "quiet", quiet),
+               "the shell's greeting or prompt is in the datagrams");
+}
+
 int etude_scenario(struct etude_case *c)
 {
     const char *id = etude_case_id(c), *dot = strrchr(id, '.');
@@ -131,6 +193,8 @@ int etude_scenario(struct etude_case *c)
         boot_case(&u, &b);
     } else if (dot != NULL && strcmp(dot, ".stop") == 0) {
         stop_case(&u, &b);
+    } else if (dot != NULL && strcmp(dot, ".udp") == 0) {
+        udp_case(&u, &b);
     } else {
         fprintf(stderr, "netconsole_scenario: no case %s\n", id);
         return 1;

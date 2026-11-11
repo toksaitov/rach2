@@ -115,7 +115,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `netconsole-e1000` (full tier; needs qemu; 128 MiB): the netconsole suite's power-off on the e1000 card, whose stop sends the frames it was given before it silences the card, the case of tests/cases/machine.netconsole-e1000.json.
 * `audio` (core tier; needs qemu; 128 MiB): what the machine actually played and recorded.
 * `input` (core tier; needs qemu; 128 MiB): the keyboards', mice's and tablet's event devices and OSS's mixer.
-* `netconsole` (core tier; needs qemu; 128 MiB): the kernel log on the wire, the cases of tests/cases/machine.netconsole.json.
+* `netconsole` (core tier; needs qemu; 128 MiB): the kernel log on the wire, in broadcast frames and in UDP datagrams to a target of netconsole=, the cases of tests/cases/machine.netconsole.json.
 * `crash` (core tier; needs qemu; 128 MiB): the dirty-mount flag, a spare mode bit of the root node, untouched by dirtyprobe's clears of the set-id bits and still set after the unclean stop that follows.
 * `pools` (core tier; needs qemu; 128 MiB): many pipes, ptys, sockets and processes live at once, and the kernel heap back where it started after a thousand each of pipes, ptys and sockets (see tests/poolprobe.c).
 * `diskfull` (core tier; needs qemu; 128 MiB): a file system with no room left.

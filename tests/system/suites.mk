@@ -671,7 +671,8 @@ $(SERVICELOG_ROOT_DISK): tests/system/mkrootdisk.sh tools/setup/e2fsprogs_path.s
 # `tests/run keyboard`: the console's keyboard through the keymap, with kbd's
 # tools, on QEMU's PS/2 keyboard and on its USB keyboard. Its cases are in
 # tests/cases/machine.keyboard.json, which etude runs, and have no target here.
-# `tests/run netconsole`: the kernel log on the wire, the cases of
+# `tests/run netconsole`: the kernel log on the wire, in broadcast frames and
+# in UDP datagrams to a target of netconsole=, the cases of
 # tests/cases/machine.netconsole.json.
 # `tests/run e1000`: the network path on the other emulated card, and the probe
 # order that decides which card a machine with more than one of them gets, the
