@@ -1914,6 +1914,17 @@ for a mapping of a device object, which cannot grow,
 .Ql lf
 for a region locked on fault
 .Pq see Xr mlock 2 ,
+.Ql ac
+for one counted as committed memory: the stack, the heap, a writable
+segment of the program, and a private mapping that was writable when
+.Xr mmap 2
+made it or that
+.Xr mprotect 2
+first made writable, even after it stops being writable,
+.Ql nr
+for a mapping made with
+.Dv MAP_NORESERVE ,
+which is never counted,
 .Ql wf
 for a range
 .Dv MADV_WIPEONFORK

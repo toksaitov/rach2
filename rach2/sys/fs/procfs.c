@@ -1456,7 +1456,8 @@ static void ap_smaps_may(struct procfs_text *t, const vma_t *r)
  * show_smap_vma_flags gives the flags this kernel keeps, in the order of
  * Linux's VM_ bits: access and possible access (`ap_smaps_may`), then gd
  * 0x100, pf 0x400, lo 0x2000, io 0x4000, dc 0x20000, de 0x40000, lf
- * 0x80000, wf 0x2000000, dd 0x4000000, then sl. The vDSO's [vdso] is de,
+ * 0x80000, ac 0x100000, nr 0x200000, wf 0x2000000, dd 0x4000000, then sl.
+ * The vDSO's [vdso] is de,
  * and its [vvar] pf io de dd, as Linux's special mappings are.
  */
 static void ap_smaps_flags(struct procfs_text *t, const vma_t *r)
@@ -1476,6 +1477,8 @@ static void ap_smaps_flags(struct procfs_text *t, const vma_t *r)
     ap_str(t, (r->prot & VM_PROT_DONTFORK) ? " dc" : "");
     ap_str(t, io || vdso ? " de" : "");
     ap_str(t, (r->prot & VM_PROT_LOCKONFAULT) ? " lf" : "");
+    ap_str(t, (r->prot & VM_PROT_ACCOUNT) ? " ac" : "");
+    ap_str(t, (r->prot & VM_PROT_NORESERVE) ? " nr" : "");
     ap_str(t, (r->prot & VM_PROT_WIPEONFORK) ? " wf" : "");
     ap_str(t, io || (r->prot & VM_PROT_SECRET) ? " dd" : "");
     ap_str(t, (r->prot & VM_PROT_SEALED) ? " sl" : "");

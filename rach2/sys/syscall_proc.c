@@ -6810,7 +6810,9 @@ long sys_prlimit64(isr_params_t *params)
 #define MAP_32BIT_LO 0x40000000UL
 #define MAP_32BIT_HI 0x80000000UL
 
-#define MAP_LOCKED 0x2000
+#define MAP_LOCKED    0x2000
+/* Linux's VM_NORESERVE for the mapping, which overcommit_memory 0 allows */
+#define MAP_NORESERVE 0x4000
 
 #define MAP_POPULATE 0x8000
 
@@ -6875,8 +6877,9 @@ long sys_brk(isr_params_t *params)
             !mem_lock_room(vm_locked(vm) / PAGE_SIZE, (new_top - old_top) / PAGE_SIZE)) {
             return (long)vm->brk;
         }
-        if (vm_insert(vm, old_top, new_top, VM_PROT_READ | VM_PROT_WRITE | vm->def_prot, VM_HEAP) !=
-            0) {
+        if (vm_insert(vm, old_top, new_top,
+                      VM_PROT_READ | VM_PROT_WRITE | VM_PROT_ACCOUNT | vm->def_prot,
+                      VM_HEAP) != 0) {
             return (long)vm->brk;
         }
         if ((vm->def_prot & VM_PROT_LOCKS) == VM_PROT_LOCKED) {
@@ -7355,6 +7358,21 @@ static long mmap_install(uintptr_t addr, uintptr_t len, uint32_t flags, struct m
 }
 
 /**
+ * The charge mark of a new mapping with mmap's `flags` and the kind and
+ * protection in `src`: VM_PROT_NORESERVE for MAP_NORESERVE, as Linux sets
+ * VM_NORESERVE under overcommit_memory 0; VM_PROT_ACCOUNT for any other
+ * private writable mapping, as Linux's accountable_mapping charges one; or
+ * none.
+ */
+static uint32_t mmap_charge(uint32_t flags, const struct map_source *src)
+{
+    if (flags & MAP_NORESERVE) {
+        return VM_PROT_NORESERVE;
+    }
+    return src->type != VM_SHARED && (src->prot & VM_PROT_WRITE) ? VM_PROT_ACCOUNT : 0u;
+}
+
+/**
  * The core of mmap(2) and mmap2(2): map memory. Its arguments are addr,
  * length, prot, flags, fd and pgoff, the offset in the file in pages, which
  * anonymous memory ignores. The offset and the length in pages must sum to a
@@ -7440,6 +7458,7 @@ long ksys_mmap_pgoff(uintptr_t addr, uintptr_t length, uint32_t prot, uint32_t f
     if (!(src.prot & VM_PROT_IO)) {
         src.prot |= locks;
     }
+    src.prot |= mmap_charge(flags, &src);
     base = mmap_install(addr, len, flags, &src);
     if ((unsigned long)base < (unsigned long)-4095L &&
         ((locks & VM_PROT_LOCKS) == VM_PROT_LOCKED ||

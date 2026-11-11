@@ -8,11 +8,13 @@
  * overlapping range; the search by address and the test of overlap; the
  * four cases of munmap (full cover, left trim, right trim, middle split);
  * the growth of a stack; node allocation past what it starts with; the
- * merging of neighbours; mprotect's splits and merges, and its failure for
- * a gap and for write to a region that may never be written, which keeps
- * that mark; the search for a free range; the bytes a range covers; and the
- * file a region maps: its pages through splits and merges, its references,
- * and its release, which waits for vm_file_reap after the last one goes.
+ * merging of neighbours; mprotect's splits and merges, the charge
+ * (VM_PROT_ACCOUNT) a private region takes when mprotect first makes it
+ * writable and keeps after, and its failure for a gap and for write to a
+ * region that may never be written, which keeps that mark; the search for
+ * a free range; the bytes a range covers; and the file a region maps: its
+ * pages through splits and merges, its references, and its release, which
+ * waits for vm_file_reap after the last one goes.
  */
 
 #include "mm/vm.h"
@@ -149,10 +151,11 @@ static void file_rows(void)
     vm_space_t m = {0};
     vm_space_t c = {0};
     struct vm_file file = {1, no_fill, NULL, count_release};
+    const uint32_t ro = VM_PROT_READ | VM_PROT_ACCOUNT; /* a segment once writable */
     vma_t *lo, *hi;
 
     released = 0;
-    CHECK(vm_insert_file(&m, 0x40000, 0x48000, VM_PROT_READ, VM_DATA, &file, 3) == 0);
+    CHECK(vm_insert_file(&m, 0x40000, 0x48000, ro, VM_DATA, &file, 3) == 0);
     CHECK(file.refs == 2);
     CHECK(vm_protect(&m, 0x42000, 0x44000, VM_PROT_READ | VM_PROT_WRITE) == 0);
     CHECK(m.count == 3 && file.refs == 4);
@@ -169,10 +172,10 @@ static void file_rows(void)
     hi = vm_find(&m, 0x43000);
     CHECK(hi != NULL && hi->pgoff == 6);
     /* Page 4 at 0x41000 does not join the region above, at page 6. */
-    CHECK(vm_insert_file(&m, 0x41000, 0x42000, VM_PROT_READ, VM_DATA, &file, 4) == 0);
+    CHECK(vm_insert_file(&m, 0x41000, 0x42000, ro, VM_DATA, &file, 4) == 0);
     CHECK(m.count == 2 && region_at(&m, 0)->end == 0x42000);
     /* Page 9 at 0x42000 continues neither neighbour and stays apart. */
-    CHECK(vm_insert_file(&m, 0x42000, 0x43000, VM_PROT_READ, VM_DATA, &file, 9) == 0);
+    CHECK(vm_insert_file(&m, 0x42000, 0x43000, ro, VM_DATA, &file, 9) == 0);
     CHECK(m.count == 3 && region_at(&m, 1)->start == 0x42000 && region_at(&m, 1)->end == 0x43000 &&
           region_at(&m, 1)->pgoff == 9 && file.refs == 4);
     CHECK(vm_remove(&m, 0x42000, 0x43000) == 0 && m.count == 2 && file.refs == 3);
@@ -267,7 +270,7 @@ static void tree_rows(void)
     for (i = 256; i > 0; i--) {
         j = i - 1;
         at = 0x100000u + j * 4 * PG;
-        CHECK(vm_insert(&vm, at, at + 3 * PG, VM_PROT_READ, VM_ANON) == 0);
+        CHECK(vm_insert(&vm, at, at + 3 * PG, VM_PROT_READ | VM_PROT_ACCOUNT, VM_ANON) == 0);
         saved[j] = vm_find(&vm, at);
         present[j] = 1;
         tree_check(&vm);
@@ -283,7 +286,7 @@ static void tree_rows(void)
         CHECK(vm_remove(&vm, at + PG, at + 2 * PG) == 0);
         CHECK(vm_find(&vm, at + PG) == NULL);
         tree_check(&vm);
-        CHECK(vm_insert(&vm, at + PG, at + 2 * PG, VM_PROT_READ, VM_ANON) == 0);
+        CHECK(vm_insert(&vm, at + PG, at + 2 * PG, VM_PROT_READ | VM_PROT_ACCOUNT, VM_ANON) == 0);
         tree_check(&vm);
     }
     for (i = 0; i < 256; i++) {
@@ -579,32 +582,46 @@ int main(void)
         vm_free(&m);
     }
 
-    /* mprotect. */
+    /* mprotect: a private region keeps its charge (VM_PROT_ACCOUNT) as it
+     * stops and starts being writable, so its pieces join again; one first
+     * made writable by mprotect takes it. */
     {
         vm_space_t p = {0};
+        const uint32_t ro = VM_PROT_READ | VM_PROT_ACCOUNT;
         vma_t *r;
 
         vm_init(&p);
-        CHECK(vm_insert(&p, 0x50000, 0x58000, VM_PROT_READ | VM_PROT_WRITE, VM_ANON) == 0);
+        CHECK(vm_insert(&p, 0x50000, 0x58000, ro | VM_PROT_WRITE, VM_ANON) == 0);
         CHECK(vm_protect(&p, 0x52000, 0x54000, VM_PROT_READ) == 0);
         CHECK(p.count == 3);
         r = vm_find(&p, 0x52000);
-        CHECK(r != NULL && r->start == 0x52000 && r->end == 0x54000 && r->prot == VM_PROT_READ);
+        CHECK(r != NULL && r->start == 0x52000 && r->end == 0x54000 && r->prot == ro);
         r = vm_find(&p, 0x54000);
-        CHECK(r != NULL && r->start == 0x54000 && r->prot == (VM_PROT_READ | VM_PROT_WRITE));
+        CHECK(r != NULL && r->start == 0x54000 && r->prot == (ro | VM_PROT_WRITE));
         CHECK(vm_protect(&p, 0x52000, 0x54000, VM_PROT_READ | VM_PROT_WRITE) == 0);
         CHECK(p.count == 1 && region_at(&p, 0)->start == 0x50000 &&
               region_at(&p, 0)->end == 0x58000);
         CHECK(vm_protect(&p, 0x57000, 0x58000, 0) == 0);
-        CHECK(vm_insert(&p, 0x58000, 0x5A000, VM_PROT_READ, VM_ANON) == 0);
+        CHECK(vm_insert(&p, 0x58000, 0x5A000, ro, VM_ANON) == 0);
         CHECK(vm_protect(&p, 0x56000, 0x59000, VM_PROT_READ) == 0);
         r = vm_find(&p, 0x56000);
-        CHECK(r != NULL && r->start == 0x56000 && r->end == 0x5A000 && r->prot == VM_PROT_READ);
+        CHECK(r != NULL && r->start == 0x56000 && r->end == 0x5A000 && r->prot == ro);
         CHECK(vm_insert(&p, 0x5B000, 0x5C000, VM_PROT_READ, VM_ANON) == 0);
         CHECK(vm_protect(&p, 0x59000, 0x5C000, 0) == -1); /* 0x5A000 is a gap */
         r = vm_find(&p, 0x59000);
-        CHECK(r != NULL && r->prot == VM_PROT_READ);
+        CHECK(r != NULL && r->prot == ro);
         CHECK(vm_protect(&p, 0x40000, 0x41000, 0) == -1); /* nothing mapped */
+        CHECK(vm_protect(&p, 0x5B000, 0x5C000, VM_PROT_WRITE) == 0);
+        r = vm_find(&p, 0x5B000);
+        CHECK(r != NULL && r->prot == (VM_PROT_WRITE | VM_PROT_ACCOUNT));
+        CHECK(vm_insert(&p, 0x60000, 0x61000, VM_PROT_NORESERVE, VM_ANON) == 0);
+        CHECK(vm_insert(&p, 0x62000, 0x63000, VM_PROT_READ, VM_SHARED) == 0);
+        CHECK(vm_protect(&p, 0x60000, 0x61000, VM_PROT_WRITE) == 0);
+        CHECK(vm_protect(&p, 0x62000, 0x63000, VM_PROT_WRITE) == 0);
+        r = vm_find(&p, 0x60000);
+        CHECK(r != NULL && r->prot == (VM_PROT_WRITE | VM_PROT_NORESERVE));
+        r = vm_find(&p, 0x62000);
+        CHECK(r != NULL && r->prot == VM_PROT_WRITE);
         vm_free(&p);
     }
 

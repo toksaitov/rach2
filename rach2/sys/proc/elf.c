@@ -563,7 +563,7 @@ int elf_add_vmas(struct vm_space *vm, const elf_image_t *img)
             prot |= VM_PROT_READ;
         }
         if (seg->flags & PF_W) {
-            prot |= VM_PROT_WRITE | VM_PROT_READ;
+            prot |= VM_PROT_WRITE | VM_PROT_READ | VM_PROT_ACCOUNT;
         }
         if (seg->flags & PF_X) {
             prot |= VM_PROT_EXEC | VM_PROT_READ;
@@ -593,5 +593,6 @@ int elf_setup_vmas(struct vm_space *vm, const elf_image_t *img, uintptr_t heap_s
 
     vm->stack_limit = stack_top - stack_growth;
     vm->mmap_base = mmap_base;
-    return vm_insert(vm, stack_top, stack_top + PAGE_SIZE, VM_PROT_READ | VM_PROT_WRITE, VM_STACK);
+    return vm_insert(vm, stack_top, stack_top + PAGE_SIZE,
+                     VM_PROT_READ | VM_PROT_WRITE | VM_PROT_ACCOUNT, VM_STACK);
 }
