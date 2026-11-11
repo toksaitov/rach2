@@ -1,11 +1,12 @@
 #!/bin/sh
 # bkl.sh OUT GAME...: each GAME once through lenovo.sh, with the GPU's clock
-# pinned at 1000 MHz and debugfs's bkl/calls and bkl/profile zeroed before
-# the run and read after it, with /proc/stat around it, for 80-41's split of
-# the kernel's time into work per call and waits on the big lock
-# (dev-log/80-games/80-41.md). Run as root on the trial root, beside
-# lenovo.sh; OUT/GAME gets lenovo.sh's output and calls, profile,
-# stat-before and stat-after.
+# pinned at 1000 MHz and debugfs's bkl/calls, bkl/profile and, on a kernel
+# that has it, bkl/tick zeroed before the run and read after it, with
+# /proc/stat around it, for 80-41's split of the kernel's time into work per
+# call and waits on the big lock and 80-75's of the tick's time into its
+# parts (dev-log/80-games/80-41.md, 80-75.md). Run as root on the trial
+# root, beside lenovo.sh; OUT/GAME gets lenovo.sh's output and calls,
+# profile, tick, stat-before and stat-after.
 set -u
 
 [ $# -ge 2 ] || { echo "usage: bkl.sh OUT GAME..." >&2; exit 2; }
@@ -24,9 +25,11 @@ for g; do
     cat /proc/stat > "$o/stat-before"
     echo 0 > "$d/calls"
     echo 0 > "$d/profile"
+    [ -w "$d/tick" ] && echo 0 > "$d/tick"
     sh "$here/lenovo.sh" -n 1 "$o" "$g" || status=1
     cat "$d/calls" > "$o/calls"
     cat "$d/profile" > "$o/profile"
+    [ -r "$d/tick" ] && cat "$d/tick" > "$o/tick"
     cat /proc/stat > "$o/stat-after"
     echo "bkl: $g: $(grep -c . "$o/calls") lines of calls, $(head -n 1 "$o/profile")"
 done
