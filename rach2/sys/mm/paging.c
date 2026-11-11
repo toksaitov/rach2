@@ -117,7 +117,8 @@ struct temp_pool {
     uint32_t first, end;  /* the slots [first, end), multiples of 32 */
     uint32_t next;        /* the slot the next search starts at */
 };
-static struct temp_pool _temp_pools[TEMP_POOLS_MAX] = {{SPINLOCK_INIT, 0, KVA_TEMP_SLOTS, 0}};
+static struct temp_pool _temp_pools[TEMP_POOLS_MAX] = {
+    {SPINLOCK_INIT_NAMED("kva_temp_pool"), 0, KVA_TEMP_SLOTS, 0}};
 /* The pools in use and the slots of each but the last, which also has the
  * rest; one pool of every slot until `paging_temp_split`, which sets them
  * once, before a second processor runs. */
@@ -129,7 +130,7 @@ static uint32_t _temp_pool_size = KVA_TEMP_SLOTS;
  * spans' records and the region's entries. */
 #define MMIO_PAGES (KVA_MMIO_SIZE / PAGE_SIZE)
 static uint32_t _mmio_used[MMIO_PAGES / 32u];
-static struct spinlock mmio_lock = SPINLOCK_INIT;
+static struct spinlock mmio_lock = SPINLOCK_INIT_NAMED("mmio_lock");
 /* The first physical address past what an entry can name: 4 GiB on i686,
  * 2^52 on x86-64. */
 #define MMIO_PHYS_TOP ((uint64_t)PTE_ADDR(~(pte_t)0) + PAGE_SIZE)

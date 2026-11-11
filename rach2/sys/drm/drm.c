@@ -102,6 +102,12 @@ void drm_start(void)
  * Devices
  */
 
+void drm_file_locks_init(struct drm_file *file)
+{
+    spin_lock_init(&file->objects.lock, "drm_table_lock");
+    spin_lock_init(&file->syncobjs.lock, "drm_syncobj_table_lock");
+}
+
 void drm_dev_init(struct drm_device *dev, const struct drm_driver *driver)
 {
     k_memset(dev, 0, sizeof(*dev));
@@ -109,6 +115,8 @@ void drm_dev_init(struct drm_device *dev, const struct drm_driver *driver)
     dev->features = driver->ident.features;
     dev->index = -1;
     dev->refs = 1;
+    spin_lock_init(&dev->object_lock, "drm_object_lock");
+    spin_lock_init(&dev->event_lock, "drm_event_lock");
     wait_queue_init(&dev->commit_wait);
 }
 
@@ -376,6 +384,7 @@ static int32_t drm_node_open(struct devfs_node *node, fd_entry_t *e, int flags)
     if (!file) {
         return -ENOMEM;
     }
+    drm_file_locks_init(file);
     file->dev = dev;
     file->minor_type = m->type;
     file->pid = current_proc ? current_proc->tgid : 0;

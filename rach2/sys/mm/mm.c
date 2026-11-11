@@ -24,7 +24,7 @@ static struct mm *exe_list;
 #define DIR_CHAINS 64u
 
 static struct mm *dir_table[DIR_CHAINS];
-static struct spinlock dir_lock = SPINLOCK_INIT;
+static struct spinlock dir_lock = SPINLOCK_INIT_NAMED("mm_dir_lock");
 
 /** The chain of `dir_table` for the directory `dir`, by its page's number. */
 static struct mm **dir_chain(const struct page_dir *dir)
@@ -61,6 +61,7 @@ struct mm *mm_new(void)
         return NULL;
     }
     mm->space_root = get_page_dir_phys(mm->dir);
+    spin_lock_init(&mm->rss_lock, "mm_rss_lock");
     mm->users = 1;
     mm->holds = 1;
     mm->dumpable = 1;

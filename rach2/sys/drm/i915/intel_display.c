@@ -1312,6 +1312,7 @@ static struct drm_framebuffer *fw_fb_make(struct drm_i915_private *i915, struct 
         return NULL;
     }
     drm_gem_object_init(&i915->drm, obj, bytes, &fw_obj_funcs);
+    drm_file_locks_init(file);
     file->dev = &i915->drm;
     file->minor_type = DRM_MINOR_PRIMARY;
     k_memset(&r, 0, sizeof(r));
