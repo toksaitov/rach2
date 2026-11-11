@@ -96,12 +96,8 @@ int pstore_record_add(const struct pstore_record *r)
     f->buf = r->buf;
     f->size = r->size;
     f->ino = ++last_ino;
-    if (r->sec != 0) {
-        f->time_s = r->sec;
-        f->time_ns = r->nsec;
-    } else {
-        rtc_coarse_realtime(&f->time_s, &f->time_ns);
-    }
+    f->time_s = r->sec;
+    f->time_ns = r->sec != 0 ? r->nsec : 0;
     for (link = &files; *link; link = &(*link)->next) {
     }
     *link = f;
@@ -169,7 +165,7 @@ static void ps_put(struct vfs_mount *mnt, void *node)
 /** The `getattr` of pstore: the root 0750 and each file 0444, root's, as
  * Linux's pstore_get_inode and pstore_mkfile make them (inode.c:360, 424);
  * a file's size is its record's, and its times the record's when ramoops
- * wrote one. */
+ * wrote one, else the mount's. */
 static int ps_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     struct pstore_file *f = node_of(node);
@@ -341,12 +337,25 @@ static const struct vfs_ops pstore_vops = {
 static int pstore_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
                         const char *options)
 {
+    struct pstore_file *f;
+
     (void)dev;
     (void)flags;
     (void)options;
     if (root.ino == 0) {
         root.ino = 1;
         rtc_coarse_realtime(&root.time_s, &root.time_ns);
+        /* A record without a time, the console's, takes the time its file
+         * is made, as Linux's pstore_fill_super makes the files at mount
+         * (inode.c:436) and pstore_mkfile stamps only a timed record over
+         * the new inode's time (inode.c:380, 223); ramoops finds the
+         * records before the clock is read. */
+        for (f = files; f; f = f->next) {
+            if (f->time_s == 0) {
+                f->time_s = root.time_s;
+                f->time_ns = root.time_ns;
+            }
+        }
     }
     mnt->priv = 0;
     mnt->root = &root;
