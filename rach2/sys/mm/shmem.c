@@ -193,24 +193,31 @@ int32_t shmem_write(struct shmem *sh, const void *buf, uint32_t count, uint64_t 
     return done || count == 0 ? (int32_t)done : -ENOSPC;
 }
 
-int shmem_truncate(struct shmem *sh, uint64_t size)
+/**
+ * Free the pages of `sh` from page `keep` on, and the leaves that hold none
+ * below `keep`. With `give_way` set, the walk gives way after each leaf, or
+ * each SHMEM_LEAF slots of the table with no leaf (`sched_give_way`), as
+ * Linux's shmem_undo_range calls cond_resched after each batch of folios
+ * (mm/shmem.c:1060 and 1101); each leaf is whole then, its freed entries
+ * cleared and a freed leaf off the table.
+ */
+static void cut_pages(struct shmem *sh, uint32_t keep, int give_way)
 {
-    uint32_t keep, i, leaf;
-    uintptr_t last;
+    uint32_t i, leaf, work = 0;
 
-    if (size > SHMEM_MAX_SIZE) {
-        return -EFBIG;
-    }
-    keep = (uint32_t)((size + PAGE_SIZE - 1) / PAGE_SIZE);
-    if (sh->maps && size < sh->size) {
-        filemap_shmem_cut(sh, keep);
-    }
     for (leaf = keep / SHMEM_LEAF; leaf < sh->nleaves; leaf++) {
-        uintptr_t *frames = sh->leaves[leaf];
+        uintptr_t *frames;
 
+        if (give_way && work >= SHMEM_LEAF) {
+            sched_give_way();
+            work = 0;
+        }
+        frames = sh->leaves[leaf];
         if (!frames) {
+            work++;
             continue;
         }
+        work += SHMEM_LEAF;
         for (i = leaf == keep / SHMEM_LEAF ? keep % SHMEM_LEAF : 0; i < SHMEM_LEAF; i++) {
             if (frames[i]) {
                 free_frame(frames[i]);
@@ -223,6 +230,21 @@ int shmem_truncate(struct shmem *sh, uint64_t size)
             sh->leaves[leaf] = NULL;
         }
     }
+}
+
+int shmem_truncate(struct shmem *sh, uint64_t size)
+{
+    uint32_t keep;
+    uintptr_t last;
+
+    if (size > SHMEM_MAX_SIZE) {
+        return -EFBIG;
+    }
+    keep = (uint32_t)((size + PAGE_SIZE - 1) / PAGE_SIZE);
+    if (sh->maps && size < sh->size) {
+        filemap_shmem_cut(sh, keep);
+    }
+    cut_pages(sh, keep, 0);
     last = keep ? shmem_resident(sh, keep - 1u) : 0;
     if (size % PAGE_SIZE && last) {
         uint8_t *page = kmap_temp(last);
@@ -355,11 +377,17 @@ void shmem_punch(struct shmem *sh, uint64_t off, uint64_t len)
     }
 }
 
-void shmem_free(struct shmem *sh)
+/** Free what `shmem_free` frees, the pages with or without giving way, as
+ * `shmem_truncate` to 0 frees them. */
+static void free_all(struct shmem *sh, int give_way)
 {
     struct shmem_policy *n;
 
-    shmem_truncate(sh, 0);
+    if (sh->maps && sh->size > 0) {
+        filemap_shmem_cut(sh, 0);
+    }
+    cut_pages(sh, 0, give_way);
+    sh->size = 0;
     kfree(sh->leaves);
     sh->leaves = NULL;
     sh->nleaves = 0;
@@ -368,4 +396,14 @@ void shmem_free(struct shmem *sh)
         sh->policies = n->next;
         kfree(n);
     }
+}
+
+void shmem_free(struct shmem *sh)
+{
+    free_all(sh, 0);
+}
+
+void shmem_free_yielding(struct shmem *sh)
+{
+    free_all(sh, 1);
 }
