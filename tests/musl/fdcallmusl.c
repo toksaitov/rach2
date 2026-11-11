@@ -26,7 +26,9 @@
  * description may have more access and other status flags than the first,
  * as a DRM program's second file of one device needs; /dev/stdin is
  * descriptor 0's file. A device opened through a node of its own, one of
- * /dev/null's numbers with mode 0600, is opened again by the node's mode,
+ * /dev/null's numbers with mode 0600 on a private tmpfs, since the KRFFS root
+ * the test image boots makes no device node, is opened again by the node's
+ * mode,
  * as Linux follows the descriptor's path: uid 1000, which inherits the
  * descriptor, is refused with EACCES though /dev/null is 0666, and root
  * opens it again once the node has lost its name.
@@ -40,6 +42,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/mount.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -51,7 +54,10 @@
 /* The file and the directory the time rows make and remove. */
 #define FILE_PATH "/fdcall.tmp"
 #define DIR_PATH  "/fdcalldir"
-#define NODE_PATH "/fdcall.null"
+/* The private tmpfs the node rows mount, without MS_NODEV, since KRFFS
+ * makes no device node and /dev/shm and /tmp are nodev, and their node. */
+#define NODE_MNT  "/fdcall.mnt"
+#define NODE_PATH NODE_MNT "/null"
 
 /* An instant with a nanosecond part, so a store that drops it shows. */
 #define WHEN_SEC  1786712707L
@@ -397,9 +403,21 @@ static int fd_link_rows(void)
 }
 
 /**
- * Check that /proc/self/fd/N of a device opened through a device node of
- * the root file system checks that node's mode, not /dev's, and still opens
- * the device once the node is unlinked. Returns 0, or 1 once the failure is
+ * Remove the node rows' node and the tmpfs under it, whichever of them is
+ * there.
+ */
+static void node_cleanup(void)
+{
+    unlink(NODE_PATH);
+    umount2(NODE_MNT, 0);
+    rmdir(NODE_MNT);
+}
+
+/**
+ * Check that /proc/self/fd/N of a device opened through a device node of a
+ * tmpfs mounted without MS_NODEV checks that node's mode, not /dev's, and
+ * still opens the device once the node is unlinked. The caller removes the
+ * node and the mount (`node_cleanup`). Returns 0, or 1 once the failure is
  * reported.
  */
 static int node_link_rows(void)
@@ -408,6 +426,9 @@ static int node_link_rows(void)
     int f, g, status = -1;
     pid_t pid;
 
+    if (mkdir(NODE_MNT, 0755) != 0 || mount("tmpfs", NODE_MNT, "tmpfs", 0, NULL) != 0) {
+        return fail("could not mount a tmpfs for a device node");
+    }
     if (mknod(NODE_PATH, S_IFCHR | 0600, makedev(1, 3)) != 0 || chmod(NODE_PATH, 0600) != 0) {
         return fail("could not make a node of /dev/null's numbers");
     }
@@ -432,6 +453,9 @@ static int node_link_rows(void)
     unlink(NODE_PATH);
     g = open(path, O_WRONLY);
     if (g < 0 || write(g, "x", 1) != 1) {
+        if (g >= 0) {
+            close(g);
+        }
         close(f);
         return fail("root could not open an unlinked node's device by /proc/self/fd/N");
     }
@@ -451,7 +475,7 @@ int main(void)
     if (rc == 0) {
         rc = node_link_rows();
     }
-    unlink(NODE_PATH);
+    node_cleanup();
     unlink(FILE_PATH);
     rmdir(DIR_PATH);
     if (rc == 0) {
