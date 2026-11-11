@@ -27,9 +27,10 @@
  * stuck, busy and failing; RPS's limits from the Lenovo's chip, with and
  * without the pcode's answers; RPS enabled, its thresholds and the ring's
  * frequency table; the up and down interrupts stepping the frequency, the
- * park and unpark, and every request inside the softlimits; the
- * softlimits set and refused; the /sys files by Linux's names, read and
- * written; and RPS and RC6 turned off.
+ * park and unpark, and every request inside the softlimits; the waitboost
+ * and the interactive mode, as Linux's intel_rps_boost and
+ * intel_rps_mark_interactive; the softlimits set and refused; the /sys
+ * files by Linux's names, read and written; and RPS and RC6 turned off.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -732,6 +733,135 @@ static void row_rps_interrupts(void)
     done(&m);
 }
 
+/** A request of `i915`'s for the waitboost, which reads only its fence's
+ * state, its mark and its device. */
+static void make_request(struct i915_request *rq, struct drm_i915_private *i915)
+{
+    k_memset(rq, 0, sizeof(*rq));
+    rq->i915 = i915;
+}
+
+/** The waitboost: to the boost frequency and held while its requests wait,
+ * counted once each, let go at their retire, past the soft maximum, and
+ * none for a request signalled, retired or boosted while parked. */
+static void row_rps_boost(void)
+{
+    struct i915_model m;
+    struct drm_i915_private *i915 = fresh(&m, 1);
+    struct i915_rps *rps = &i915->rps;
+    struct i915_request rq1, rq2, rq3, rq4;
+    uint32_t runs;
+
+    make_request(&rq1, i915);
+    make_request(&rq2, i915);
+    make_request(&rq3, i915);
+    make_request(&rq4, i915);
+    i915_gt_unpark(i915);
+    runs = rps->work_runs;
+    i915_rps_boost(&rq1);
+    CHECK("boost: to the boost frequency at once",
+          asked(&m) == 20 && rps->cur_freq == 20 && rps->work_runs == runs + 1);
+    CHECK("boost: one waiter, one boost", rps->num_waiters == 1 && rps->boosts == 1 && rq1.boosted);
+    CHECK("boost: high power at RP0", rps->power_mode == I915_RPS_HIGH_POWER);
+    pm_event(&m, GEN6_PM_RP_DOWN_THRESHOLD);
+    pm_event(&m, GEN6_PM_RP_DOWN_TIMEOUT);
+    CHECK("boost: held over the down events while it waits", asked(&m) == 20);
+    i915_rps_boost(&rq1);
+    i915_rps_boost(&rq2);
+    CHECK("boost: a request counted once, a second waiter not boosted again",
+          rps->num_waiters == 2 && rps->boosts == 1);
+    i915_rps_retire(&rq1);
+    i915_rps_retire(&rq2);
+    CHECK("retire: the waiters let go", rps->num_waiters == 0);
+    pm_event(&m, GEN6_PM_RP_DOWN_THRESHOLD);
+    CHECK("retire: the down events step again", asked(&m) == 19);
+    i915_rps_boost(&rq1);
+    CHECK("boost: none for a request retired", rps->num_waiters == 0 && asked(&m) == 19);
+    rq3.fence.base.signaled = 1;
+    i915_rps_boost(&rq3);
+    CHECK("boost: none for a request signalled", rps->num_waiters == 0 && !rq3.boosted);
+    i915_rps_retire(&rq3);
+    CHECK("retire: a request never boosted counts nothing", rps->num_waiters == 0);
+
+    CHECK("max: 600 MHz", i915_rps_set_max_mhz(i915, 600) == 0 && asked(&m) == 12);
+    make_request(&rq3, i915);
+    i915_rps_boost(&rq3);
+    CHECK("boost: past the soft maximum, to the boost frequency", asked(&m) == 20);
+    CHECK("boost: the up events masked above the soft maximum",
+          (i915_model_peek(&m, GEN6_PMINTRMSK) & GEN6_PM_RP_UP_THRESHOLD) != 0);
+    runs = rps->work_runs;
+    CHECK("boost frequency: changed while it waits runs the work",
+          i915_rps_set_boost_mhz(i915, 750) == 0 && rps->work_runs == runs + 1 && asked(&m) == 20);
+    CHECK("boost frequency: unchanged runs nothing",
+          i915_rps_set_boost_mhz(i915, 750) == 0 && rps->work_runs == runs + 1);
+    i915_rps_retire(&rq3);
+    pm_event(&m, GEN6_PM_RP_DOWN_THRESHOLD);
+    CHECK("retire: back within the soft maximum", asked(&m) == 12);
+    CHECK("boost frequency: changed with no waiter runs nothing",
+          i915_rps_set_boost_mhz(i915, 1000) == 0 && rps->work_runs == runs + 2);
+
+    i915_gt_park(i915);
+    m.nlog = 0;
+    i915_rps_boost(&rq4);
+    CHECK("parked: counted a waiter, not boosted",
+          rps->num_waiters == 1 && rps->boosts == 2 &&
+              i915_model_count(&m, I915_MODEL_WRITE, GEN6_RPNSWREQ) == 0);
+    i915_gt_unpark(i915);
+    pm_event(&m, GEN6_PM_RP_DOWN_THRESHOLD);
+    CHECK("unparked: the next event finds the waiter and boosts", asked(&m) == 20);
+    i915_rps_retire(&rq4);
+    CHECK("retire: none left", rps->num_waiters == 0);
+    done(&m);
+}
+
+/** The interactive mode: high power at the first flip pending while
+ * active, kept over a step down while any is pending, counted. */
+static void row_rps_interactive(void)
+{
+    struct i915_model m;
+    struct drm_i915_private *i915 = fresh(&m, 1);
+    struct i915_rps *rps = &i915->rps;
+
+    i915_gt_unpark(i915);
+    CHECK("interactive: low power at RPn",
+          rps->power_mode == I915_RPS_LOW_POWER && i915_model_peek(&m, GEN6_RP_UP_EI) == 12500);
+    i915_rps_mark_interactive(i915, 1);
+    CHECK("interactive: high power at once, its 10 ms interval",
+          rps->interactive == 1 && rps->power_mode == I915_RPS_HIGH_POWER &&
+              i915_model_peek(&m, GEN6_RP_UP_EI) == 7813);
+    CHECK("interactive: the thresholds stay 95% up and 85% down",
+          i915_model_peek(&m, GEN6_RP_UP_THRESHOLD) == 7422 &&
+              i915_model_peek(&m, GEN6_RP_DOWN_THRESHOLD) == 21250);
+    pm_event(&m, GEN6_PM_RP_UP_THRESHOLD);
+    pm_event(&m, GEN6_PM_RP_UP_THRESHOLD);
+    pm_event(&m, GEN6_PM_RP_DOWN_THRESHOLD);
+    CHECK("interactive: high power kept over a step down",
+          asked(&m) == 6 && rps->power_mode == I915_RPS_HIGH_POWER);
+    i915_rps_mark_interactive(i915, 1);
+    i915_rps_mark_interactive(i915, 0);
+    CHECK("interactive: counted", rps->interactive == 1);
+    i915_rps_mark_interactive(i915, 0);
+    i915_rps_mark_interactive(i915, 0);
+    CHECK("interactive: never below none", rps->interactive == 0);
+    CHECK("interactive: the mode stays until the next request",
+          rps->power_mode == I915_RPS_HIGH_POWER);
+    pm_event(&m, GEN6_PM_RP_DOWN_THRESHOLD);
+    CHECK("interactive: none pending, the next request chooses",
+          asked(&m) == 4 && rps->power_mode == I915_RPS_LOW_POWER);
+
+    i915_gt_park(i915);
+    m.nlog = 0;
+    i915_rps_mark_interactive(i915, 1);
+    CHECK("parked: counted, no mode written",
+          rps->interactive == 1 && i915_model_count(&m, I915_MODEL_WRITE, GEN6_RP_UP_EI) == 0);
+    i915_gt_unpark(i915);
+    pm_event(&m, GEN6_PM_RP_UP_THRESHOLD);
+    CHECK("unparked: the next request takes high power",
+          asked(&m) == 5 && rps->power_mode == I915_RPS_HIGH_POWER);
+    i915_rps_mark_interactive(i915, 0);
+    done(&m);
+}
+
 /** Whether every request written to RPNSWREQ in `m`'s log lies within
  * `lo` and `hi`. */
 static int requests_within(const struct i915_model *m, int lo, int hi)
@@ -936,6 +1066,8 @@ int main(void)
     row_rps_init();
     row_rps_enable();
     row_rps_interrupts();
+    row_rps_boost();
+    row_rps_interactive();
     row_rps_limits();
     row_sysfs();
     row_disable();
