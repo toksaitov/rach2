@@ -426,10 +426,6 @@ void exception_unlock(uint8_t vector)
     (void)vector;
 }
 
-/** Nothing: the model keeps no interrupt flag. */
-void arch_irq_enable(void)
-{}
-
 /** Nothing: the model's address spaces live as long as the test. */
 void mm_get(struct mm *mm)
 {
