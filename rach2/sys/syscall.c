@@ -1492,13 +1492,15 @@ static int32_t sleep_cpu_for(int32_t clk, uint64_t due)
  * for ORC without frame pointers, reaches hrtimer_nanosleep_restart by tail
  * calls from its entry, `do_syscall_64` for a call of its own ABI and
  * `do_int80_emulation` for an i386 call by int 0x80, which Debian's 6.12.115
- * shows. Its i386 kernel keeps frame pointers and so every frame, and the
- * first is `__do_sys_restart_syscall`, which `__ia32_sys_restart_syscall`
- * aliases and kallsyms lists first.
+ * shows. The native name goes by the kernel's architecture, with the i386
+ * ABI built or not, since Linux's native entry is the same without
+ * CONFIG_IA32_EMULATION. Its i386 kernel keeps frame pointers and so every
+ * frame, and the first is `__do_sys_restart_syscall`, which
+ * `__ia32_sys_restart_syscall` aliases and kallsyms lists first.
  */
 static const char *sleep_resume_wchan(void)
 {
-#if defined(IA32_SYSCALL_TABLE_SIZE)
+#if defined(__x86_64__)
     return in_compat_syscall() ? "do_int80_emulation" : "do_syscall_64";
 #else
     return "__do_sys_restart_syscall";

@@ -8,7 +8,11 @@
  * kernel with the i386 ABI the program runs and exits 42. `int $0x80` with
  * the i386 getpid number must kill the process that makes it with SIGSEGV,
  * since the vector has no gate. A far return to 0x23 must still run 32-bit
- * code, since the GDT keeps the 32-bit code segment, as Linux's does.
+ * code, since the GDT keeps the 32-bit code segment, as Linux's does. A
+ * nanosleep that SIGSTOP and SIGCONT cut short resumes through
+ * restart_syscall, and the child's /proc/PID/wchan must then read
+ * `do_syscall_64`, the native entry Linux's x86-64 kernel shows with the
+ * i386 ABI or without it.
  *
  * The probe is built for x86-64 alone. It writes etude's report records
  * (probe_report.h) for the case ETUDE_CASE names, an assertion for each
@@ -28,7 +32,10 @@
 #define I386_GETPID 20
 
 #define ENOEXEC 8
+#define SIGKILL 9
 #define SIGSEGV 11
+#define SIGCONT 18
+#define SIGSTOP 19
 
 #define O_WRONLY 0x1
 #define O_CREAT  0x40
@@ -70,7 +77,8 @@ static void say(const char *s)
 }
 
 /* The assertions, a check each, in the order the probe makes them. */
-static const char *const assertion_id[] = {"exec-enoexec", "int80-sigsegv", "code32-runs"};
+static const char *const assertion_id[] = {"exec-enoexec", "int80-sigsegv", "code32-runs",
+                                           "resumed-sleep-wchan"};
 
 /** Print "PURE64PROBE FAIL: " and `why`, end the report at the assertion that
  * `why` fails, and exit 1. */
@@ -280,6 +288,119 @@ static void run_code32(void)
     report_held();
 }
 
+/** Whether the strings `a` and `b` are equal. */
+static int same(const char *a, const char *b)
+{
+    while (*a && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+/** Read /proc/`pid`/`name` into `buf` of `size` bytes as a string; the
+ * bytes read, or -1. */
+static long proc_read(long pid, const char *name, char *buf, long size)
+{
+    char path[48], digits[24];
+    long fd, n;
+    int i = 0, d = 0;
+
+    while (pid > 0 || d == 0) {
+        digits[d++] = (char)('0' + pid % 10);
+        pid /= 10;
+    }
+    for (n = 0; "/proc/"[n]; n++) {
+        path[i++] = "/proc/"[n];
+    }
+    while (d > 0) {
+        path[i++] = digits[--d];
+    }
+    path[i++] = '/';
+    for (n = 0; name[n]; n++) {
+        path[i++] = name[n];
+    }
+    path[i] = '\0';
+    fd = syscall3(SYS_OPEN, (long)path, 0, 0);
+    if (fd < 0) {
+        return -1;
+    }
+    n = syscall3(SYS_READ, fd, (long)buf, size - 1);
+    syscall1(SYS_CLOSE, fd);
+    buf[n > 0 ? n : 0] = '\0';
+    return n;
+}
+
+/** The state letter of process `pid`, the field after the name in its
+ * stat, or 0 when the file cannot be read. */
+static char proc_state(long pid)
+{
+    char buf[512];
+    long i, close = -1;
+
+    if (proc_read(pid, "stat", buf, (long)sizeof(buf)) <= 0) {
+        return 0;
+    }
+    for (i = 0; buf[i]; i++) {
+        if (buf[i] == ')') {
+            close = i;
+        }
+    }
+    return close >= 0 && buf[close + 1] == ' ' ? buf[close + 2] : 0;
+}
+
+/** Yield until process `pid` is in state `state` with the wchan `wchan`,
+ * or with any wchan but `wchan` when `other`; return that wchan in `buf`. */
+static void await_wait(long pid, char state, const char *wchan, int other, char *buf, long size)
+{
+    for (;;) {
+        if (proc_state(pid) == state && proc_read(pid, "wchan", buf, size) > 0 &&
+            same(buf, wchan) != other) {
+            return;
+        }
+        syscall0(SYS_SCHED_YIELD);
+    }
+}
+
+/**
+ * A child's nanosleep, which SIGSTOP cuts short and SIGCONT resumes through
+ * restart_syscall, as no handler runs, sleeps again in a wait whose wchan is
+ * `do_syscall_64`. The child sleeps first in `hrtimer_nanosleep` and stops
+ * in `do_signal_stop`; the first sleep after the stop is the resumed one.
+ */
+static void run_resume(void)
+{
+    long pid, ts[2];
+    char wchan[64];
+
+    pid = syscall0(SYS_FORK);
+    if (pid < 0) {
+        fail("fork");
+    }
+    if (pid == 0) {
+        ts[0] = 1000000;
+        ts[1] = 0;
+        /* interval: the sleep whose resumption is tested, which SIGKILL ends */
+        syscall2(SYS_NANOSLEEP, (long)ts, 0);
+        sys_exit(5);
+    }
+    await_wait(pid, 'S', "hrtimer_nanosleep", 0, wchan, (long)sizeof(wchan));
+    syscall2(SYS_KILL, pid, SIGSTOP);
+    while (proc_state(pid) != 'T') {
+        syscall0(SYS_SCHED_YIELD);
+    }
+    syscall2(SYS_KILL, pid, SIGCONT);
+    await_wait(pid, 'S', "do_signal_stop", 1, wchan, (long)sizeof(wchan));
+    syscall2(SYS_KILL, pid, SIGKILL);
+    if ((child_status(pid) & 0x7F) != SIGKILL) {
+        fail("the sleeping child did not end by SIGKILL");
+    }
+    if (!same(wchan, "do_syscall_64")) {
+        fail("a nanosleep resumed by restart_syscall did not wait in do_syscall_64");
+    }
+    report_held();
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
@@ -297,6 +418,7 @@ void probe_main(unsigned long *sp)
     run_exec(envp);
     run_int80();
     run_code32();
+    run_resume();
     report_end();
     say("PURE64PROBE OK\n");
     sys_exit(0);
