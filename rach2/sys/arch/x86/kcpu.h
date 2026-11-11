@@ -35,10 +35,10 @@ void kcpu_rdmsr(uint32_t msr, uint32_t *lo, uint32_t *hi);
 /** Write `hi` and `lo` to the model-specific register `msr`. */
 void kcpu_wrmsr(uint32_t msr, uint32_t lo, uint32_t hi);
 
-/** Whether XSAVES may be used: leaf 0xD subleaf 1 reports it, and the part
- * is not an AMD Zen 1 or Zen 2, family 0x17, whose XSAVES malfunctions by
- * Erratum 1386, unless its model, stepping and microcode revision are the
- * fixed ones Linux 6.12's `fix_erratum_1386` names. */
+/** Whether XSAVES may be used (xsaves.c): leaf 0xD subleaf 1 reports it,
+ * and the part is not an AMD Zen 1 or Zen 2, family 0x17, whose XSAVES
+ * malfunctions by Erratum 1386, unless its model, stepping and microcode
+ * revision are the fixed ones Linux 6.12's `fix_erratum_1386` names. */
 int kcpu_xsaves_usable(void);
 
 #endif /* _KCPU_H_ */

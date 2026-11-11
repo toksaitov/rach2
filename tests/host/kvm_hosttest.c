@@ -587,10 +587,14 @@ static void fake_msr_filter_changed(struct kvm_vcpu *v)
     filter_changes++;
 }
 
-/** The backend's xsaves: `model_xsaves`. */
+/* The backend lets no guest run XSAVES though the host has it, as SVM on
+ * a Zen 2 with Erratum 1386 unfixed. */
+static int backend_no_xsaves;
+
+/** The backend's xsaves: `model_xsaves`, unless `backend_no_xsaves`. */
 static int fake_xsaves(void)
 {
-    return model_xsaves;
+    return model_xsaves && !backend_no_xsaves;
 }
 
 /** The capabilities a backend makes true: single-stepping and guest
@@ -3231,7 +3235,8 @@ static void xss_rows(struct kvm_vcpu *v, int xsaves)
  * XSAVES as KVM offers it, as Linux 6.12: without XSAVES and XSAVEC
  * subleaf 1 offers XSAVEOPT alone with EBX 0; with both and a backend
  * that lets a guest run XSAVES it offers both, with EBX the compacted size
- * of the XCR0 KVM supports. A vCPU's subleaf 1 EBX follows its XCR0 from
+ * of the XCR0 KVM supports, and with a backend that does not, XSAVEC
+ * alone. A vCPU's subleaf 1 EBX follows its XCR0 from
  * the reset through KVM_SET_CPUID2 and KVM_SET_XCRS; and IA32_XSS's
  * rules (`xss_rows`) before and after its CPUID has XSAVES.
  */
@@ -3253,6 +3258,13 @@ static void xsaves_rows(void)
     d1 = buf_entry(n, 0xD, 1);
     CHECK(d1 && d1->eax == 0xF && d1->ebx == 832,
           "with XSAVEC and XSAVES subleaf 1 offers both, with EBX 832 for x87, SSE and AVX");
+    backend_no_xsaves = 1;
+    n = pv_cpuid();
+    d1 = buf_entry(n, 0xD, 1);
+    CHECK(d1 && d1->eax == 0x7 && d1->ebx == 832,
+          "a backend that lets no guest run XSAVES keeps it out of subleaf 1, and XSAVEC in");
+    backend_no_xsaves = 0;
+    n = pv_cpuid();
     vm = dev(KVM_CREATE_VM, 0);
     fd = fdio(vm, KVM_CREATE_VCPU, 0);
     v = (struct kvm_vcpu *)entries[fd].priv;

@@ -17,7 +17,8 @@
  * the error code only when EXITINTINFO is valid and has one, as Linux's
  * svm_get_exit_info, and 0 for the error bit alone or the valid bit alone.
  * Beside them, the MSR filter's half in SVM: the permission map's bits
- * and the exits of the guest's filtered RDMSR and WRMSR.
+ * and the exits of the guest's filtered RDMSR and WRMSR; and the backend's
+ * `xsaves`, which follows `kcpu_xsaves_usable`.
  */
 #include "kvm/svm.c"
 
@@ -124,9 +125,12 @@ void kcpu_rdmsr(uint32_t msr, uint32_t *lo, uint32_t *hi)
     (void)msr;
     *lo = *hi = 0;
 }
+/* What `kcpu_xsaves_usable` answers, which xsaves_hosttest.c checks. */
+static int xsaves_usable = 1;
+
 int kcpu_xsaves_usable(void)
 {
-    return 1;
+    return xsaves_usable;
 }
 void kfree(void *p)
 {
@@ -448,6 +452,18 @@ static void filter_rows(struct kvm_vcpu *v, uint8_t *msrpm)
     sv(v)->msrpm = NULL;
 }
 
+/** SVM lets a guest run XSAVES exactly where the host may use it: on an
+ * AMD Zen 1 or Zen 2 without Erratum 1386's fixed microcode the backend's
+ * `xsaves` says no, and KVM_GET_SUPPORTED_CPUID offers none. */
+static void xsaves_rows(void)
+{
+    xsaves_usable = 1;
+    CHECK(kvm_svm.xsaves && kvm_svm.xsaves() == 1, "SVM offers XSAVES where the host may use it");
+    xsaves_usable = 0;
+    CHECK(kvm_svm.xsaves() == 0, "and none where Erratum 1386 is unfixed");
+    xsaves_usable = 1;
+}
+
 int main(void)
 {
     struct kvm_vcpu *v = calloc(1, sizeof(*v));
@@ -457,6 +473,7 @@ int main(void)
     v->backend = s;
     report_rows(v);
     filter_rows(v, msrpm);
+    xsaves_rows();
     free(msrpm);
     free(s);
     free(v);

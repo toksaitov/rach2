@@ -51,6 +51,7 @@ PC_C_SRC = sys/arch/x86/boot.c \
     sys/arch/x86/fpu.c \
     sys/arch/x86/kirq.c \
     sys/arch/x86/kcpu.c \
+    sys/arch/x86/xsaves.c \
     sys/arch/x86/pat.c \
     sys/block/ata.c \
     sys/display/vga_text.c \
