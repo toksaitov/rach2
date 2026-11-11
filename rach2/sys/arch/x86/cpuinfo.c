@@ -658,6 +658,9 @@ uint32_t cpuinfo_text(char *out, uint32_t cap, int cpu)
     }
     if (max >= 0xD) {
         kcpu_id_sub(0xD, 1, &xs, 0, 0, 0);
+        if (!kcpu_xsaves_usable()) {
+            xs &= ~(1u << 3); /* Erratum 1386, as Linux clears it */
+        }
     }
     if (ext_max >= 0x8000000Au) {
         kcpu_id(0x8000000Au, 0, 0, 0, &svm);

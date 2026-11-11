@@ -2732,12 +2732,14 @@ static uint64_t svm_tsc_scaling(uint32_t *frac_bits)
     return caps.tscrate ? TSC_RATIO_MAX : 0;
 }
 
-/** `kvm_backend`'s xsaves: 1, since a guest with XSAVE runs XSAVES where
- * the host has it, which KVM_GET_SUPPORTED_CPUID then offers, as Linux's
- * svm_vcpu_after_set_cpuid has it. */
+/** `kvm_backend`'s xsaves: whether the host may use XSAVES
+ * (`kcpu_xsaves_usable`), since a guest with XSAVE runs it where the host
+ * has it, which KVM_GET_SUPPORTED_CPUID then offers, as Linux's
+ * svm_vcpu_after_set_cpuid has it; Linux's host lacks it on a Zen 1 or 2
+ * without Erratum 1386's fixed microcode. */
 static int svm_xsaves(void)
 {
-    return 1;
+    return kcpu_xsaves_usable();
 }
 
 /** The bits of a memory type in a 4 KiB leaf: PCD and PWT for UC, PWT for
