@@ -8,6 +8,7 @@
 #include "../fs/bcache.h"
 #include "../klog.h"
 #include "../proc/process.h"
+#include "../proc/smp.h"
 #include "filecache.h"
 #include "pagecache.h"
 #include "paging.h"
@@ -135,12 +136,18 @@ static int may_write_back(void)
 /** The calling process is marked as reclaiming meanwhile, so that the
  * requests a writeback needs come from the reserve even when the caller
  * itself may not take from it: the writeback is what the reserve is kept
- * for. */
+ * for. The caches and the shrinkers are walked under the big lock, taken
+ * when the caller runs without it, until each has a lock of its own. */
 uint32_t mem_reclaim(void)
 {
     size_t before = frame_free_count();
     uint32_t got = 0, written = 0;
     int can_write = may_write_back();
+    int taken = !bkl_held();
+
+    if (taken) {
+        bkl_enter();
+    }
 
     if (current_proc) {
         current_proc->reclaiming++;
@@ -166,6 +173,9 @@ uint32_t mem_reclaim(void)
     }
     if (current_proc) {
         current_proc->reclaiming--;
+    }
+    if (taken) {
+        bkl_exit();
     }
     if (got) {
         klog(KLOG_INFO, "memory",
