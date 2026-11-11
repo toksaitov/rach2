@@ -951,10 +951,10 @@ uint64_t vgpu_box_bytes(uint32_t format, uint32_t w, uint32_t h, uint32_t d)
         return 0;
     }
     b = &vgpu_blocks[format];
-    across = ((uint64_t)w + b->w - 1) / b->w * b->bytes;
-    n = ((uint64_t)h + b->h - 1) / b->h * (d ? d : 1);
+    across = (uint64_t)(w / b->w + (w % b->w != 0)) * b->bytes;
+    n = (uint64_t)(h / b->h + (h % b->h != 0)) * (d ? d : 1);
     /* No device takes a box this large; it counts nothing. */
-    if (across && n > (uint64_t)-1 / across) {
+    if (across && n > drm_div64((uint64_t)-1, across)) {
         return 0;
     }
     return across * n;
