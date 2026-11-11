@@ -30,6 +30,9 @@
  * writev to /dev/null of a vector past 2 GiB returns 0x7ffff000, Linux's
  * MAX_RW_COUNT, on x86-64, and on i686, where a length of 2 GiB is a
  * negative ssize_t, fails with EINVAL.
+ * writev of no bytes returns 0 from /dev/full and an unconnected datagram
+ * socket without writing, and refuses a descriptor not open or open only
+ * for reading with EBADF before its count and its vector.
  * pwritev2 with RWF_APPEND writes at the end, moving the descriptor's
  * offset at offset -1 and not at another, and leaves O_APPEND clear;
  * RWF_NOAPPEND overrides O_APPEND for one call at either offset form,
@@ -909,9 +912,35 @@ static int writev_cut(void)
 }
 
 /**
+ * Whether writev of a vector of no bytes checks the descriptor and writes
+ * nothing, as Linux's vfs_writev returns 0 before the file's write: 0 from
+ * /dev/full, whose write is ENOSPC, and from an unconnected datagram socket,
+ * whose send is EDESTADDRREQ, with no elements or one empty element; EBADF
+ * for a descriptor not open and one open only for reading, before a count
+ * past 1024 or a vector outside user memory.
+ */
+static int writev_empty(void)
+{
+    struct iovec v[1];
+    int full = open("/dev/full", O_WRONLY), sock = socket(AF_INET, SOCK_DGRAM, 0);
+    int rd = open("/dev/null", O_RDONLY), ok;
+
+    v[0].iov_base = cut_buffer;
+    v[0].iov_len = 0;
+    ok = full >= 0 && sock >= 0 && rd >= 0 && writev(full, v, 0) == 0 && writev(full, v, 1) == 0 &&
+         writev(sock, v, 0) == 0 && writev(sock, v, 1) == 0 && refused(writev(999, v, 0), EBADF) &&
+         refused(writev(999, v, 1025), EBADF) && refused(writev(999, KERNEL_ADDRESS, 1), EBADF) &&
+         refused(writev(rd, v, 0), EBADF) && refused(writev(rd, v, 1), EBADF);
+    close(full);
+    close(sock);
+    close(rd);
+    return ok;
+}
+
+/**
  * Check the refusals of preadv and pwritev on the file vector_rows makes,
- * and writev's cut of a vector past 2 GiB (`writev_cut`). Returns 0, or 1
- * once the failure is reported.
+ * writev's cut of a vector past 2 GiB (`writev_cut`) and its vector of no
+ * bytes (`writev_empty`). Returns 0, or 1 once the failure is reported.
  */
 static int vector_refusal_rows(void)
 {
@@ -947,6 +976,9 @@ static int vector_refusal_rows(void)
     }
     if (!writev_cut()) {
         return fail("writev of a vector past 2 GiB is not cut at 0x7ffff000 (EINVAL on i686)");
+    }
+    if (!writev_empty()) {
+        return fail("writev of no bytes writes, or does not refuse a bad descriptor first");
     }
     report_held();
     return 0;
