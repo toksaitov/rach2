@@ -710,7 +710,7 @@ void sched_idle_loop(void)
  * count of klog's users would stay up while the big lock passed on; it
  * gives way at a later tick, as Linux writes each console record with
  * interrupts off and gives way only between records
- * (kernel/printk/printk.c:3073-3088).
+ * (kernel/printk/printk.c:3074-3089).
  */
 void sched_preempt(void)
 {
