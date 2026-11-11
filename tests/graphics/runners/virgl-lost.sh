@@ -21,8 +21,8 @@
 # resource. glreset then draws FRAMES frames more (200) and makes a new
 # context. The runner then starts weston-simple-shm, a client that needs no
 # GPU, so that Weston has frames to repaint whatever became of the first
-# client, and once Weston has logged ten lines reads what is left: whether
-# Weston and its first client still run, what Weston's log says of its
+# client, and once Weston has logged a line or ended reads what is left:
+# whether Weston and its first client still run, what Weston's log says of its
 # repaints, the DRM nodes, the renderer a new Weston gets on the headless
 # backend with its GL renderer, and how a new Weston on the DRM backend
 # ends.
@@ -49,8 +49,8 @@
 #   weston drm: running | exit STATUS, LAST LINE
 #
 # with llvmpipe named without its LLVM, and then `virgl-lost: result: reset
-# by HOW`. The runner waits for each program's own line or end, and for
-# Weston's ten lines 100 tries, ten seconds. The status is 0 when every step
+# by HOW`. The runner waits for each program's own line or end, with no
+# bound of its own. The status is 0 when every step
 # ran; what the programs saw is a result, which the case compares with the
 # reference's.
 set -eu
@@ -196,13 +196,11 @@ wait "$gl" || st=$?
 gl=''
 weston-simple-shm > "$out/shm.log" 2>&1 < /dev/null &
 shm=$!
-# Weston's first line since the reset, without its time: wait for ten lines
-# while Weston runs, by when the first client has had its frame callbacks,
-# 100 tries at most, which a case's bound on silence allows.
-tries=0
-while [ "$(wc -l < "$out/weston.log")" -lt "$((logged + 10))" ] &&
-    kill -0 "$RUNNER_WESTON" 2>/dev/null && [ "$tries" -lt 100 ]; do
-    tries=$((tries + 1))
+# Weston's first line since the reset, without its time: wait for it while
+# Weston runs, with no bound of the runner's own; the case's bound on
+# silence ends a Weston that neither logs nor ends.
+while [ "$(wc -l < "$out/weston.log")" -le "$logged" ] &&
+    kill -0 "$RUNNER_WESTON" 2>/dev/null; do
     sleep 0.1
 done
 first=$(tail -n "+$((logged + 1))" "$out/weston.log" | sed -n '1s/^\[[0-9:.]*\] //p')
@@ -211,7 +209,7 @@ first=$(tail -n "+$((logged + 1))" "$out/weston.log" | sed -n '1s/^\[[0-9:.]*\] 
     grep '^glreset: ' "$out/glreset.log" | grep -v '^glreset: drawing$'
     echo "glreset: exit $st"
     state weston "$RUNNER_WESTON"
-    echo "weston: log: ${first:-nothing in 100 tries}"
+    echo "weston: log: ${first:-nothing}"
     state client "$client"
     nodes=
     for f in /dev/dri/*; do
