@@ -34,6 +34,9 @@ parent-death signal; see
 Its CPU times start at zero.
 It inherits signal dispositions and the blocked signal mask;
 it inherits no pending signals.
+If signal work is pending when the call begins, the kernel takes it first
+and restarts the call, even when the handler has no
+.Dv SA_RESTART .
 A signal sent to several processes during the fork is also kept for the
 child, as on Linux; this includes terminal process-group signals.
 A child whose caller's process begins to end while it is being made

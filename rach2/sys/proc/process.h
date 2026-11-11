@@ -910,6 +910,14 @@ void signal_post_info(process_t *target, int signo, const struct k_siginfo *info
  * interrupt handler may call it. */
 void signal_post_multi(process_t *target, int signo, const struct k_siginfo *info);
 
+/** Select one target per process while walking proc_list under the big
+ * lock: NULL for an unused record or a nonleader; otherwise the leader,
+ * its first live thread when it is a zombie, or the zombie when all its
+ * threads ended. Linux 6.12.115's multiprocess sends walk leaders alone
+ * (kernel/signal.c:1478-1487, 1635-1643; kernel/fork.c:2596-2618).
+ * Does not sleep; an interrupt handler may call it. */
+process_t *signal_process_target(process_t *p);
+
 /** Post signal `signo` to the thread `t` alone, as tkill and tgkill do,
  * with the siginfo `info`, and wake it. A thread that has ended takes
  * nothing. */

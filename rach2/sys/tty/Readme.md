@@ -12,7 +12,7 @@ Inside the kernel, `tty.h` is the terminal. `tty_input_char` gives a terminal on
 
 ### The line discipline
 
-Process-group signals from the terminal use `signal_post_multi`, so a child being built by a member receives a signal sent during its fork ([signals](../proc/signal.Readme.md#sending)).
+Process-group signals from the terminal select one target per process through `signal_process_target` and use `signal_post_multi`, so a child being built by a member receives a signal sent during its fork ([signals](../proc/signal.Readme.md#sending)).
 
 `n_tty.c` is pure logic over a `struct n_tty` and makes no kernel calls, so the kernel and a host test compile the same file. Echo and output leave through a sink function the caller supplies: the console's sink writes the screen and COM1, and a pseudo-terminal slave's writes its master's ring.
 
