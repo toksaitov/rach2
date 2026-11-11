@@ -8378,8 +8378,10 @@ static int sysctl_int(int entry)
  * `proc_watchdog_common` and `proc_watchdog_thresh` do (kernel/watchdog.c,
  * :1034-1050): before the store as well as after it, so that a tick in
  * between reads the new value against timestamps touched at the first
- * restart, as Linux stores the threshold only once the timers have stopped
- * (:873-880); and a write of the hung-task detector's timeout or interval
+ * restart, and a timer that checked the generation before the first and
+ * reads the new value sees it moved and returns (`watchdog_timer_fn`), as
+ * Linux stores the threshold only once the timers have stopped
+ * (:867-880); and a write of the hung-task detector's timeout or interval
  * wakes it. `count` on success.
  */
 static int32_t sysctl_int_write(int entry, int32_t v, uint32_t count)
