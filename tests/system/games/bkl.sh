@@ -1,12 +1,14 @@
 #!/bin/sh
 # bkl.sh OUT GAME...: each GAME once through lenovo.sh, with the GPU's clock
-# pinned at 1000 MHz and debugfs's bkl/calls and bkl/profile zeroed before
-# the run and read after it, with /proc/stat around it, for 80-41's split of
-# the kernel's time into work per call and waits on the big lock
-# (dev-log/80-games/80-41.md). Run as root on the trial root, beside
+# pinned at 1000 MHz and debugfs's bkl/calls, bkl/profile and bkl/long
+# zeroed before the run and read after it, with /proc/stat around it, for
+# 80-41's split of the kernel's time into work per call and waits on the big
+# lock (dev-log/80-games/80-41.md). Run as root on the trial root, beside
 # lenovo.sh; OUT/GAME gets lenovo.sh's output and calls, profile,
 # stat-before and stat-after. audio-* snapshots separate the game from the
-# report reads when a refill comes late. lenovo.sh is on task/2664
+# report reads when a refill comes late; long-after-game and
+# long-after-profile keep bkl/long's holds read after the game and after
+# the profile's read. lenovo.sh is on task/2664
 # (80-7b) until that task merges: copy it beside this script by running,
 # in this script's directory:
 #   git show origin/task/2664:tests/system/games/lenovo.sh > lenovo.sh
