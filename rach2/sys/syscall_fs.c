@@ -13602,10 +13602,12 @@ static int32_t copy_put(fd_entry_t *out, int out_fd, const char *buf, uint32_t n
  *
  * A pipe's room is waited for before the first chunk unless `nonblock`, and
  * a chunk is no larger than the room, so a copy into a pipe returns what
- * fitted, as Linux's splice does, and never holds bytes it cannot write. The
- * copy ends at the end of the file, at a short write and, once a byte has
- * moved, at a signal. Returns the bytes copied, or the first error when none
- * were.
+ * fitted, as Linux's splice does, and never holds bytes it cannot write. A
+ * chunk the room cuts is the copy's last, and one COPY_CHUNK cuts ends at a
+ * page of the file, so that each page is one buffer of the pipe, as Linux's
+ * splice links it once. The copy ends at the end of the file, at a short
+ * write and, once a byte has moved, at a signal. Returns the bytes copied,
+ * or the first error when none were.
  */
 static int32_t copy_from_file(fd_entry_t *in, uint64_t *pos, fd_entry_t *out, int out_fd,
                               uint64_t *out_at, uint32_t count, int nonblock, char *buf)
@@ -13615,6 +13617,7 @@ static int32_t copy_from_file(fd_entry_t *in, uint64_t *pos, fd_entry_t *out, in
     while (done < count) {
         uint32_t want = count - done;
         uint32_t src;
+        int full = 0;
         int32_t got, put;
 
         if (want > COPY_CHUNK) {
@@ -13628,9 +13631,13 @@ static int32_t copy_from_file(fd_entry_t *in, uint64_t *pos, fd_entry_t *out, in
             }
             if ((uint32_t)room < want) {
                 want = (uint32_t)room;
+                full = 1;
             }
         }
         src = (uint32_t)(*pos & (PAGE_SIZE - 1));
+        if (pipe_is(out) && !full && want < count - done) {
+            want -= (src + want) & (PAGE_SIZE - 1);
+        }
         got = file_read(in, (char __force __user *)buf, want, pos);
         if (got <= 0) {
             return done > 0 ? (int32_t)done : got;
@@ -13647,7 +13654,7 @@ static int32_t copy_from_file(fd_entry_t *in, uint64_t *pos, fd_entry_t *out, in
             *out_at += (uint64_t)put;
         }
         done += (uint32_t)put;
-        if (put < got || (uint32_t)got < want || signal_pending()) {
+        if (full || put < got || (uint32_t)got < want || signal_pending()) {
             break;
         }
     }
