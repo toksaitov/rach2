@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "family_id": "guest.pure64",
-  "summary": "The x86-64 kernel without the i386 ABI, built with IA32=0 or booted with ia32_emulation=0, refuses an i386 program's exec with ENOEXEC and int $0x80 with SIGSEGV, as Linux does, and still runs 32-bit code in a 64-bit process; the program is tests/pure64probe.c",
+  "summary": "The x86-64 kernel without the i386 ABI, built with IA32=0 or booted with ia32_emulation=0, refuses an i386 program's exec with ENOEXEC and int $0x80 with SIGSEGV, as Linux does, still runs 32-bit code in a 64-bit process, and names a resumed sleep's wait do_syscall_64; the program is tests/pure64probe.c",
   "cases": [
     {
       "case_id": "guest.pure64.build",
-      "behavior": "the kernel built with IA32=0 refuses an i386 program's exec with ENOEXEC and kills a process that makes int $0x80 with SIGSEGV, and a 64-bit process still runs 32-bit code",
+      "behavior": "the kernel built with IA32=0 refuses an i386 program's exec with ENOEXEC and kills a process that makes int $0x80 with SIGSEGV, a 64-bit process still runs 32-bit code, and a resumed nanosleep waits in do_syscall_64",
       "units": [
         "pure64",
         "pure64probe"
@@ -61,6 +61,11 @@
         {
           "assertion_id": "code32-runs",
           "checks": "code entered by a far return to selector 0x23 still runs in 32-bit mode with CS 0x23, and a far jump to 0x33 comes back",
+          "source": "program"
+        },
+        {
+          "assertion_id": "resumed-sleep-wchan",
+          "checks": "a child's nanosleep that SIGSTOP cuts short and SIGCONT resumes through restart_syscall reads do_syscall_64 from /proc/PID/wchan, Linux's native entry with the i386 ABI or without it",
           "source": "program"
         }
       ],
@@ -132,7 +137,7 @@
     },
     {
       "case_id": "guest.pure64.boot",
-      "behavior": "the default x86-64 kernel booted with ia32_emulation=0 refuses an i386 program's exec with ENOEXEC and kills a process that makes int $0x80 with SIGSEGV, and a 64-bit process still runs 32-bit code",
+      "behavior": "the default x86-64 kernel booted with ia32_emulation=0 refuses an i386 program's exec with ENOEXEC and kills a process that makes int $0x80 with SIGSEGV, a 64-bit process still runs 32-bit code, and a resumed nanosleep waits in do_syscall_64",
       "units": [
         "pure64",
         "pure64probe"
@@ -190,6 +195,11 @@
         {
           "assertion_id": "code32-runs",
           "checks": "code entered by a far return to selector 0x23 still runs in 32-bit mode with CS 0x23, and a far jump to 0x33 comes back",
+          "source": "program"
+        },
+        {
+          "assertion_id": "resumed-sleep-wchan",
+          "checks": "a child's nanosleep that SIGSTOP cuts short and SIGCONT resumes through restart_syscall reads do_syscall_64 from /proc/PID/wchan, Linux's native entry with the i386 ABI or without it",
           "source": "program"
         }
       ],
