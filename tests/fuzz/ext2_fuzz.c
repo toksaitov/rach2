@@ -44,6 +44,13 @@ uint64_t timer_cycles_us(uint64_t cycles)
     return cycles;
 }
 
+/** The cycles here are the clock's microseconds, the same on every
+ * processor. */
+int timer_cycles_agree(void)
+{
+    return 1;
+}
+
 /** Return 1: every buffer the walk passes is present. */
 int vm_resident(uintptr_t addr, uintptr_t len, int write)
 {
