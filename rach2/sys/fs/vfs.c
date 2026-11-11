@@ -3365,9 +3365,13 @@ static struct vfs_mount *mount_deep_at(struct vfs_mount *mnt, const char *text, 
  * names a link the walk follows, to its object (`synth_object_link`) or a
  * link made under /dev to its text, and more of the rest, from `p` to `end`,
  * comes after it: VFS_LINK with a new node of the link held in `*node`, 0
- * when it does not, or -ENOMEM. A process's fd, fdinfo or task directory
- * passed on the way gets its current owner, as Linux's pid_revalidate
- * updates each component's inode even if a later lookup fails.
+ * when it does not, or -ENOMEM. A node of /proc passed on the way whose
+ * inode keeps its owner, a process's fd, fdinfo or task directory or one of
+ * its links among them, gets its current owner (`procfs_lookup_owner`), as
+ * Linux's lookup_fast revalidates each component it reaches (Linux 6.12
+ * fs/namei.c:1694-1706), with pid_revalidate (fs/proc/base.c:2053-2066) or
+ * tid_fd_revalidate (fs/proc/fd.c:145-161), before it follows a link and
+ * even when a later lookup fails.
  */
 static int synth_link_part(char *full, uint32_t out, const char *p, const char *end, void **node)
 {
@@ -3382,10 +3386,7 @@ static int synth_link_part(char *full, uint32_t out, const char *p, const char *
     full[out] = '\0';
     synth_classify(full, &vp);
     synth_made(full, &vp);
-    if (vp.kind == VNODE_PROC_FD_DIR || vp.kind == VNODE_PROC_FDINFO_DIR ||
-        vp.kind == VNODE_PROC_TASK_DIR) {
-        procfs_lookup_owner(&vp);
-    }
+    procfs_lookup_owner(&vp);
     if (!synth_object_link(&vp) && !synth_self_link(&vp) &&
         !(vp.kind == VNODE_DEV_MADE && devtree_is_dir(vp.syskey) == 0)) {
         return 0;
@@ -3411,7 +3412,10 @@ static int synth_link_part(char *full, uint32_t out, const char *p, const char *
  * (`synth_classify`): 0 with a new node held, -ENOENT, also for a
  * directory of /dev that is absent (`devfs_subdir_present`), -ENOTDIR for a
  * path past a file that is there (`synth_past_present`), -ENAMETOOLONG for
- * a path longer than 255 bytes, or -ENOMEM.
+ * a path longer than 255 bytes, or -ENOMEM. The node found last gets its
+ * current owner as each one passed on the way does (`synth_link_part`), so
+ * that readlink(2) and a stat or open that follows a /proc link update the
+ * link's kept owner, as Linux's walk revalidates its last component.
  */
 static int synth_rest(struct vfs_mount *mnt, const char *prefix, const char *rest, uint32_t restlen,
                       void **node, const char **left)
@@ -3490,6 +3494,7 @@ static int synth_rest(struct vfs_mount *mnt, const char *prefix, const char *res
     if (kind == VNODE_DEV_SUBDIR && !devfs_subdir_present(vp.devdir)) {
         return -ENOENT;
     }
+    procfs_lookup_owner(&vp);
     return synth_take(&vp, node);
 }
 

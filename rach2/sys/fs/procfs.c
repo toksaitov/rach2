@@ -771,9 +771,12 @@ uint32_t procfs_task_links(int pid)
 }
 
 /**
- * The count is Linux's `proc_readfd_count` (fs/proc/fd.c:286-308): the
- * weight of the open-descriptor bitmap, which a close clears at once, so
- * that a descriptor whose release is still under way is not counted.
+ * The count is Linux's `proc_readfd_count` (Linux 6.12 fs/proc/fd.c:299):
+ * the weight of the open-descriptor bitmap. An open sets its bit when it
+ * reserves the number (fs/file.c:531), before an open that may block, such
+ * as a FIFO's (fs/open.c:1419), so a slot reserved and not yet given its
+ * object counts; a close clears the bit at once, so a descriptor whose
+ * release is still under way does not.
  */
 int procfs_fd_count(int pid)
 {
@@ -784,7 +787,9 @@ int procfs_fd_count(int pid)
         return -ENOENT;
     }
     for (fd = 0; fd < fd_table_cap(p->fds); fd++) {
-        if (fd_is_valid(p->fds, fd)) {
+        const fd_entry_t *e = &p->fds->entries[fd];
+
+        if ((e->type != FD_TYPE_NONE || e->ofd != NULL) && !(e->flags & FD_FLAG_CLOSING)) {
             n++;
         }
     }
