@@ -1354,6 +1354,8 @@ static int idle_within(struct drm_i915_private *i915, uint32_t ms)
     }
 }
 
+static int32_t drop_caches(struct drm_i915_private *i915, uint64_t val);
+
 /**
  * A write of i915_gem_drop_caches, Linux's i915_drop_caches_set with the
  * DROP_ bits written: RESET_ACTIVE wedges a GPU that does not idle within
@@ -1363,8 +1365,6 @@ static int idle_within(struct drm_i915_private *i915, uint32_t ms)
  * nothing to do, since objects go at their last reference. The wait for
  * idle may sleep and a signal ends it with -EINTR.
  */
-static int32_t drop_caches(struct drm_i915_private *i915, uint64_t val);
-
 static int32_t drop_caches_store(void *data, const char __user *buf, uint32_t len)
 {
     struct drm_i915_private *i915 = (struct drm_i915_private *)data;
