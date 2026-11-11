@@ -974,12 +974,10 @@ static int32_t obj_mmap(struct drm_gem_object *obj, vma_t *vma)
     return vm_device_map(vma, &vgpu_vm_ops, obj, 0u);
 }
 
-/** An object's frame for a PRIME importer. */
+/** An object's frame for a PRIME importer, served after an unplug too, as
+ * `obj_vm_page` serves the object's own mappings. */
 static uintptr_t obj_page(struct drm_gem_object *obj, uint32_t pgoff)
 {
-    if (obj->dev->unplugged) {
-        return 0;
-    }
     return drm_gem_shmem_page(&((struct virtio_gpu_object *)obj)->shmem, pgoff);
 }
 
@@ -2004,8 +2002,10 @@ void vgpu_kill(struct virtio_gpu_device *vg)
     for (bo = vg->resources; bo; bo = bo->next) {
         bo->res_id = 0;
         vgpu_blob_pages_drop(vg, bo);
-        /* A transport's own backing is its heap's, which the reset frees. */
+        /* A transport's own backing is its heap's, which the reset frees;
+         * a mapping that faulted in since the unplug's zap goes first. */
         if (vg->vdev->ops->backing_release) {
+            drm_gem_object_zap(&bo->shmem.base);
             vgpu_obj_pages_free(vg, bo);
         }
     }

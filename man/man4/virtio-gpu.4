@@ -285,10 +285,18 @@ to reset and unplug the virtual GPU.
 Every pending fence fails with
 .Er ENODEV ,
 every context is invalidated, the transport stops DMA and every resource's
-backing is freed.
-The device nodes disappear, old descriptors' ioctls return
-.Er ENODEV
-and old mappings fault.
+backing is detached from the host.
+The device nodes disappear and old descriptors' ioctls return
+.Er ENODEV .
+An object of guest memory keeps its pages until it is freed, and an old
+mapping of it, direct or through an exported dma-buf, takes them again at
+its next touch, as on Linux, so a program that drew through the GPU goes on
+and draws nothing.
+An object whose pages a transport gave from its own memory, such as the
+shared region's heap, gives them back at the reset, and an old mapping of it
+takes new pages at its next touch.
+An old mapping of a blob of host memory faults with
+.Dv SIGBUS .
 A new boot is needed to use the device again.
 .Sh FILES
 .Bl -tag -width /dev/dri/renderD128+N

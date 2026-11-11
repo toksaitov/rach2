@@ -1157,6 +1157,13 @@ void paging_zap_device(const void *obj, uint32_t pgoff, uint32_t count)
     (void)count;
 }
 
+/** The core's zap of an object's mappings and its importers': the model
+ * has no mappings of a process. */
+void drm_gem_object_zap(struct drm_gem_object *obj)
+{
+    paging_zap_device(obj, 0, (uint32_t)(obj->size >> PAGE_SHIFT));
+}
+
 #ifdef VGPU_3D_TEST
 #include "vgpu3d_model.h"
 #endif
