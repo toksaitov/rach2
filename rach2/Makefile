@@ -133,17 +133,17 @@ all : $(KERNEL_BIN)
 #
 # The kernel every loader reads has no debug sections and no symbols but
 # `_start` and `_end`, which the checker compares with the entry and the image
-# end. The debug sections are more than half of the linked file, and the
-# x86-64 kernel with its symbols comes within a few percent of the 4 MiB
-# kernel slot of a boot partition (tools/image/mkdisk_grub.sh,
-# utils/bootctl.c). The linked file with every symbol and the debug sections
-# is kept beside the kernel as `kernel.debug`, which debug.sh loads into GDB
-# and which `nm` and the symbol checks read. No loader reads the symbol
-# table, which lies in no loaded segment, so the two files load the same
-# bytes. A kernel larger than the slot fails the link here, since no disk
-# could take it. The rule names this file among its inputs, so a change to
-# how the kernel is made makes it again.
-KERNEL_SLOT_BYTES = 4194304
+# end. The debug sections are more than half of the linked file. The linked
+# file with every symbol and the debug sections is kept beside the kernel as
+# `kernel.debug`, which debug.sh loads into GDB and which `nm` and the symbol
+# checks read. No loader reads the symbol table, which lies in no loaded
+# segment, so the two files load the same bytes. A kernel larger than a boot
+# partition's kernel slot fails the link here, since no disk could take it.
+# The slot's size is BOOTSLOT_SLOT_BYTES in utils/bootslot.h, its one home,
+# which the recipe reads from the header's define line; the rule names the
+# header and this file among its inputs, so a change to either makes the
+# kernel again.
+KERNEL_SLOT_HEADER = ../utils/bootslot.h
 ELFCHECK = ../build/tools/inspect/elfcheck
 # The checker takes the profile from the file: an ELF32 kernel loaded where
 # its headers say, or the ELF64 x86-64 kernel loaded through the a.out
@@ -161,7 +161,8 @@ endif
 $(KERNEL_BIN).debug: $(KERNEL_BIN)
 	@test -f $@
 
-$(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS) $(ACPICA_OBJECTS) $(LINKER_SCRIPT).ld Makefile
+$(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS) $(ACPICA_OBJECTS) $(LINKER_SCRIPT).ld Makefile \
+                $(KERNEL_SLOT_HEADER)
 	@mkdir -p $(dir $@)
 	@$(MAKE) --no-print-directory -C .. build/tools/inspect/elfcheck
 	@tmp="$@.tmp.$$$$"; trap 'rm -f "$$tmp" "$$tmp.debug"' EXIT; \
@@ -170,8 +171,11 @@ $(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS) $(ACPICA_OBJECTS) $(LINKER_SCRIPT).l
 	$(CROSS_OBJCOPY) --strip-all --keep-symbol=_start --keep-symbol=_end "$$tmp.debug" "$$tmp" && \
 	$(KERNEL_CHECK) "$$tmp" && \
 	size=$$(($$(wc -c < "$$tmp"))) && \
-	{ [ "$$size" -le $(KERNEL_SLOT_BYTES) ] || \
-	  { echo "rach2: kernel: $$size bytes do not fit the $(KERNEL_SLOT_BYTES)-byte kernel slot" >&2; exit 1; }; } && \
+	slot=$$(sed -n 's/^.define BOOTSLOT_SLOT_BYTES  *\([0-9][0-9]*\).*/\1/p' $(KERNEL_SLOT_HEADER)) && \
+	{ [ -n "$$slot" ] || \
+	  { echo "rach2: kernel: $(KERNEL_SLOT_HEADER) defines no BOOTSLOT_SLOT_BYTES" >&2; exit 1; }; } && \
+	{ [ "$$size" -le "$$slot" ] || \
+	  { echo "rach2: kernel: $$size bytes do not fit the $$slot-byte kernel slot" >&2; exit 1; }; } && \
 	mv "$$tmp.debug" $@.debug && \
 	mv "$$tmp" $@
 

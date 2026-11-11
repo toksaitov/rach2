@@ -293,7 +293,7 @@ The menu's entries are, in an order GRUB's fallback number relies on, the candid
 It reads eleven settings from the environment:
 
 * `RACH2_DISK_TABLE`: `gpt`, the default, or `mbr`.
-* `RACH2_DISK_BOOT_MB`: the boot partition's size, 33 by default on a GUID table and 16 on an MBR. An EFI system partition has one sector per cluster, and the script refuses one outside 65525 to 131070 clusters, the least UEFI firmware reads as FAT32 and the most `bootctl` walks: 33 to 64 MiB.
+* `RACH2_DISK_BOOT_MB`: the boot partition's size, 40 by default on either table, the least that holds two kernel slots of `BOOTSLOT_SLOT_BYTES` (`utils/bootslot.h`, 16 MiB) with the menu, the environment block and GRUB's EFI image; the script refuses a smaller one. An EFI system partition has one sector per cluster, and the script refuses one outside 65525 to 131070 clusters, the least UEFI firmware reads as FAT32 and the most `bootctl` walks: at most 64 MiB.
 * `RACH2_DISK_CLUSTER`: sectors per cluster on the recovery partition and on an MBR's boot partition; unset, mformat chooses.
 * `RACH2_DISK_RECOVERY_MB`: the recovery partition's size, required.
 * `RACH2_DISK_RECOVERY_KERNEL` and `RACH2_DISK_RECOVERY_IMAGE`: the recovery kernel and RAM image staged there; without them the recovery entry's title says the system is not built.

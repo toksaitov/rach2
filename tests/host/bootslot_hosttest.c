@@ -1,8 +1,8 @@
 /**
  * bootslot_hosttest.c: the kernel checks and the fallback copy of
  * utils/bootslot.c: load address bounds, an x86-64 kernel's a.out kludge,
- * the multiboot2 header, the disk policy, a chain's cluster count, and copy
- * failures over resolved files.
+ * the multiboot2 header, the disk policy, a chain's cluster count, the
+ * kernel slots' size, and copy failures over resolved files.
  *
  * The sector model starts after FAT discovery, which bootctl_hosttest.c
  * tests. It drops a payload write beyond the 8192-byte header prefix, fails
@@ -312,6 +312,27 @@ static void check_chain(void)
           "a chain of 4 GiB and 64 KiB does not fit a file of 64 KiB");
 }
 
+/** Check that a volume whose kernel slots are smaller than this version's,
+ *  as a disk built before the slots grew has them, is refused with the
+ *  command that moves it, and one whose slots have that size is taken. */
+static void check_layout(void)
+{
+    memset(&bs, 0, sizeof(bs));
+    bs.kernel.size = bs.fallback.size = BOOTSLOT_SLOT_BYTES;
+    check(bootslot_layout_current(&bs, err, sizeof(err)) == 0,
+          "slots of this version's size are taken");
+    bs.fallback.size = 4194304;
+    check(bootslot_layout_current(&bs, err, sizeof(err)) == -1 &&
+              strstr(err, "rach2-install --slots DISK") != NULL,
+          "a 4 MiB fallback slot is refused, naming the command that moves the disk");
+    bs.fallback.size = BOOTSLOT_SLOT_BYTES;
+    bs.kernel.size = 4194304;
+    check(bootslot_layout_current(&bs, err, sizeof(err)) == -1,
+          "a 4 MiB candidate slot is refused");
+    check(BOOTSLOT_MAX_FILE_CLUSTERS * BOOTSLOT_SECTOR >= BOOTSLOT_SLOT_BYTES,
+          "the walk holds a slot's chain at one sector per cluster");
+}
+
 /** Make `bs` a volume with three resolved files over the model: the kernel
  *  slot in sectors 0 to 31 and the fallback in 32 to 63, both holding the
  *  kernel of `make_kernel`, and an environment block in sectors 64 and 65
@@ -466,6 +487,7 @@ int main(void)
     check_kludge();
     check_multiboot2();
     check_chain();
+    check_layout();
     printf("bootslot-hosttest: result: %s: %d failures\n", fails ? "fail" : "pass", fails);
     return fails != 0;
 }

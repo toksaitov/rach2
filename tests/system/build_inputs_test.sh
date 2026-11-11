@@ -120,7 +120,7 @@ if [ "${1:-all}" != libraries ]; then
     echo "build-inputs-test: passed: linker script edit reaches the validated kernel"
     # The loaders read a kernel without debug sections and with no symbols but
     # _start and _end, which elfcheck compares with the entry and the image
-    # end; that is what keeps it inside a boot slot's 4 MiB. GDB and nm read
+    # end, and is about half the linked file's size. GDB and nm read
     # kernel.debug, which has them all. nm prints a local symbol's type in
     # lowercase.
     if "${CROSS}readelf" -S "$WORK/kernel/kernel" | grep -q '\.debug_'; then

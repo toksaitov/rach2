@@ -93,7 +93,7 @@ debugfs -R "dump /rows.sh $work/rows.staged" "$volume" >> "$work/staged.log" 2>&
 cmp "$tree/rows.sh" "$work/rows.staged"
 
 RACH2_DISK_TABLE=mbr RACH2_DISK_APPEND='rach2.rescue' RACH2_DISK_DHCP_APPEND='' \
-    RACH2_DISK_BOOT_MB=16 RACH2_DISK_CLUSTER=1 RACH2_DISK_RECOVERY_MB=8 \
+    RACH2_DISK_BOOT_MB=40 RACH2_DISK_CLUSTER=1 RACH2_DISK_RECOVERY_MB=8 \
     RACH2_DISK_EXT2_MB=8 RACH2_DISK_EXT2_IMAGE="$volume" \
     sh tools/image/mkdisk_grub.sh "$kernel" "$work/candidate.disk.new" > "$work/disk.log" 2>&1
 RACH2_DISK_TABLE=gpt RACH2_DISK_APPEND='rach2.rescue' RACH2_DISK_DHCP_APPEND='' \
