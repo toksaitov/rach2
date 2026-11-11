@@ -58,3 +58,32 @@ dEQP-GLES31.functional.shaders.builtin_functions.common.abs.vec4_lowp_geometry
 and of
 dEQP-GLES31.functional.shaders.builtin_functions.common.abs.float_mediump_compute
 passed, with QEMU's exit status 0.
+
+On 2026-11-11 the dEQP-GLES31 list of 36,891 cases, run with each case's
+start and end streamed and a new guest for the cases left after each
+death, lost 12 guests in four glcts processes; the 48 cases running at
+those deaths then ran one process a guest. Twelve guests died each with
+one case running, every one of them an isolines draw that the list's
+pattern had missed:
+
+    shaders.opaque_type_indexing.ubo.const_literal_tessellation_evaluation
+    shaders.opaque_type_indexing.ubo.uniform_tessellation_evaluation
+    shaders.opaque_type_indexing.ssbo.const_literal_tessellation_evaluation
+    shaders.opaque_type_indexing.atomic_counter.const_literal_tessellation_evaluation
+    shaders.opaque_type_indexing.atomic_counter.uniform_tessellation_evaluation
+    shaders.builtin_constants.core.max_vertex_output_vectors
+    shaders.builtin_constants.core.max_fragment_input_vectors
+    shaders.builtin_constants.core.max_vertex_texture_image_units
+    shaders.builtin_constants.core.max_combined_texture_image_units
+    shaders.builtin_constants.core.max_program_texel_offset
+    shaders.builtin_constants.core.max_image_units
+    shaders.builtin_constants.core.max_compute_image_uniforms
+
+ShaderBuiltinConstantCase::iterate checks its constant in all six stages,
+the evaluation stage through the shader executor's isolines program; 25
+of the 59 builtin_constants cases were running at the deaths, and none of
+them passed. The list now leaves out all 59 and the ten evaluation-shader
+cases of the ubo, ssbo and atomic_counter groups. The six
+other cases running at the deaths, two of tessellation.tesscoord and four
+of copy_image.non_compressed, then ran one process in one guest, and each
+passed.
