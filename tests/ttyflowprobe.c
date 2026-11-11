@@ -32,7 +32,10 @@
  * Prints "TTYFLOWPROBE OK" or "TTYFLOWPROBE FAIL: why". etude's report
  * (probe_report.h), for the case ETUDE_CASE names, has an assertion for each
  * row above in order; the first failure fails its assertion and leaves the
- * rest not run. Freestanding; direct system calls (probe.h).
+ * rest not run. The child writes a byte down a pipe for each row that held,
+ * and the parent, which began the report, reports the rows from that count
+ * and the child's end, a death by a signal included. Freestanding; direct
+ * system calls (probe.h).
  */
 
 #include "probe.h"
@@ -85,6 +88,7 @@
 #define CTRL_S 023
 
 #define POLLIN  0x001
+#define POLLPRI 0x002
 #define POLLOUT 0x004
 
 #define WIFEXITED(s)   (((s) & 0x7f) == 0)
@@ -98,6 +102,10 @@ struct pollfd {
 
 /* The writer of the blocked-write row, killed and reaped on any failure. */
 static long writer_pid;
+
+/* The write end of the pipe down which the rows' process counts the rows
+ * that held. */
+static long progress_fd = -1;
 
 /* The pair: the nonblocking master in packet mode, the slave opened
  * nonblocking, and a second, blocking description of it for the writer. */
@@ -178,20 +186,6 @@ static void leave(int code)
     __builtin_unreachable();
 }
 
-/** Report the rows before the index `failed` as held and that one as
- * failed with `why`, print the failure and exit 1. */
-static void fail_at(int failed, const char *why)
-{
-    int i;
-
-    for (i = 0; i < failed; i++) {
-        report_held();
-    }
-    say("TTYFLOWPROBE FAIL: ", why);
-    report_stop(why);
-    leave(1);
-}
-
 /** Read the slave's termios into `tio`; 0, or -1 when TCGETS fails. */
 static int get_tio(unsigned char *tio)
 {
@@ -229,12 +223,20 @@ static int type(const char *s, long n)
 }
 
 /** The status byte the master's next read gives alone, or -1 when the read
- * gives data or fails. */
+ * gives data or fails. It waits with no time limit for the master's POLLPRI,
+ * pending status, first: Linux makes the status in the slave's work queue,
+ * which may run after the write that caused it has returned, and data the
+ * master holds already does not end the wait. */
 static int status_of(void)
 {
     unsigned char buf[8];
+    struct pollfd pfd;
 
-    if (syscall3(SYS_READ, master, (long)buf, sizeof(buf)) != 1 || buf[0] == 0) {
+    pfd.fd = (int)master;
+    pfd.events = POLLPRI;
+    pfd.revents = 0;
+    if (syscall3(SYS_POLL, (long)&pfd, 1, -1) != 1 || !(pfd.revents & POLLPRI) ||
+        syscall3(SYS_READ, master, (long)buf, sizeof(buf)) != 1 || buf[0] == 0) {
         return -1;
     }
     return buf[0];
@@ -394,6 +396,7 @@ static int start_writer(void)
 
     if (pid == 0) {
         writer_pid = 0;
+        syscall1(SYS_CLOSE, progress_fd);
         leave(syscall3(SYS_WRITE, bslave, (long)"late", 4) == 4 ? 0 : 1);
     }
     if (pid < 0) {
@@ -533,11 +536,53 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
+/** The rows' process: run each row, write a byte down the pipe for each
+ * that held, and exit 0 when all did, cleanup among them, or 1 at the
+ * first that failed. */
+static void run_rows(void)
+{
+    static int (*const rows[])(void) = {setup,  defaults, stop,         blocked_write,
+                                        start,  not_read, ixany,        tcooff,
+                                        tcioff, dostop,   signal_flush, noflsh};
+    int i;
+
+    for (i = 0; i < (int)(sizeof(rows) / sizeof(rows[0])); i++) {
+        if (!rows[i]() || syscall3(SYS_WRITE, progress_fd, (long)"+", 1) != 1) {
+            leave(1);
+        }
+    }
+    if (syscall1(SYS_CLOSE, bslave) != 0 || syscall1(SYS_CLOSE, slave) != 0 ||
+        syscall1(SYS_CLOSE, master) != 0 || syscall3(SYS_WRITE, progress_fd, (long)"+", 1) != 1) {
+        leave(1);
+    }
+    leave(0);
+}
+
+/** The bytes the rows' process wrote down the pipe whose read end is `fd`,
+ * read until its last writer has gone. */
+static int rows_held(long fd)
+{
+    char buf[16];
+    long n;
+    int held = 0;
+
+    while ((n = syscall3(SYS_READ, fd, (long)buf, sizeof(buf))) != 0) {
+        if (n < 0 && n != -EINTR) {
+            break;
+        }
+        held += n > 0 ? (int)n : 0;
+    }
+    return held;
+}
+
 /**
  * Run the rows in a child and report them. The child leads no session, so
  * reading the slave does not make it a controlling terminal, as Rach2 lets
  * a session leader's read claim an unowned slave and etude-guest starts the
- * probe as one. `_start` calls it with the initial stack.
+ * probe as one. The parent began the report and alone writes it: the rows
+ * that held, from the child's count, then the child's failure, by its row's
+ * reason or by the signal that ended it. `_start` calls it with the initial
+ * stack.
  */
 void probe_main(unsigned long *sp)
 {
@@ -554,42 +599,45 @@ void probe_main(unsigned long *sp)
         "tcioff: TCIOFF and TCION did not send ^S and ^Q to the master",
         "dostop: IXON off and on did not give TIOCPKT_NOSTOP and TIOCPKT_DOSTOP",
         "signal-flush: ^C did not discard output and input with FLUSHREAD and FLUSHWRITE",
-        "noflsh: under NOFLSH ^C flushed a queue or gave a status"};
-    static int (*const rows[])(void) = {setup,  defaults, stop,         blocked_write,
-                                        start,  not_read, ixany,        tcooff,
-                                        tcioff, dostop,   signal_flush, noflsh};
+        "noflsh: under NOFLSH ^C flushed a queue or gave a status",
+        "cleanup: a descriptor did not close"};
+    const int nplan = (int)(sizeof(plan) / sizeof(plan[0]));
+    const char *reason;
+    int pipefd[2];
     long pid;
-    int i, status = -1;
+    int i, held, status = -1;
 
     report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.ttyflowprobe"));
-    for (i = 0; i < (int)(sizeof(plan) / sizeof(plan[0])); i++) {
+    for (i = 0; i < nplan; i++) {
         report_plan(plan[i]);
     }
-    pid = syscall0(SYS_FORK);
+    pid = syscall1(SYS_PIPE, (long)pipefd) == 0 ? syscall0(SYS_FORK) : -1;
+    if (pid == 0) {
+        syscall1(SYS_CLOSE, pipefd[0]);
+        progress_fd = pipefd[1];
+        run_rows();
+    }
     if (pid < 0) {
-        fail_at(0, "setup: the probe could not fork");
+        say("TTYFLOWPROBE FAIL: ", "setup: the probe could not make its pipe or fork");
+        report_stop("setup: the probe could not make its pipe or fork");
+        leave(1);
     }
-    if (pid > 0) {
-        while (syscall3(SYS_WAITPID, pid, (long)&status, 0) == -EINTR) {
-        }
-        if (!WIFEXITED(status)) {
-            say("TTYFLOWPROBE FAIL: ", "the rows' process ended by a signal");
-            report_stop("the rows' process ended by a signal");
-        }
-        leave(WIFEXITED(status) ? WEXITSTATUS(status) : 1);
+    syscall1(SYS_CLOSE, pipefd[1]);
+    while (syscall3(SYS_WAITPID, pid, (long)&status, 0) == -EINTR) {
     }
-    for (i = 0; i < (int)(sizeof(rows) / sizeof(rows[0])); i++) {
-        if (!rows[i]()) {
-            fail_at(i, why[i]);
-        }
+    held = rows_held(pipefd[0]);
+    for (i = 0; i < held && i < nplan; i++) {
         report_held();
     }
-    if (syscall1(SYS_CLOSE, bslave) != 0 || syscall1(SYS_CLOSE, slave) != 0 ||
-        syscall1(SYS_CLOSE, master) != 0) {
-        fail_at(i, "cleanup: a descriptor did not close");
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0 && held == nplan) {
+        report_end();
+        say("TTYFLOWPROBE OK", "");
+        leave(0);
     }
-    report_held();
-    report_end();
-    say("TTYFLOWPROBE OK", "");
-    leave(0);
+    reason = !WIFEXITED(status) ? "the rows' process ended by a signal"
+             : held < nplan     ? why[held]
+                                : "the rows' process failed after its last row";
+    say("TTYFLOWPROBE FAIL: ", reason);
+    report_stop(reason);
+    leave(1);
 }
