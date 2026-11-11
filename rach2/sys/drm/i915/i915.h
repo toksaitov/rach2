@@ -1353,7 +1353,10 @@ struct intel_crtc {
 /*
  * The device's display. `crtc` are the pipes A to C, `encoder` DDI A and
  * `connector` its eDP panel, `dp` the panel, and `ddi` DDI B to D, by port less
- * one. `gmbus` are the PCH's GMBUS pins, by pin, and `dpll` the PLLs, by
+ * one. `gmbus` are the PCH's GMBUS pins, by pin; `gmbus_held` says a
+ * transfer on one of them, which may sleep, holds the controller and the
+ * pins' modes, as Linux's gmbus.mutex, and `gmbus_free` is where another
+ * waits for it (intel_gmbus.c). `dpll` are the PLLs, by
  * DPLL_ID_, with `dpll_nssc` the non-SSC reference in kHz of a non-ULT part, 24
  * or 135 MHz as FUSE_STRAP3 says. `hotplug` is the ports' hotplug. `pps` is the
  * sequencer's readout. `cdclk` is the CD clock in kHz and `max_cdclk` the most
@@ -1392,6 +1395,8 @@ struct intel_display {
     struct intel_dp dp;
     struct intel_ddi_port ddi[3];
     struct intel_gmbus gmbus[GMBUS_NUM_PINS];
+    int gmbus_held;
+    wait_queue_t gmbus_free;
     struct intel_dpll dpll[INTEL_NUM_DPLLS];
     uint32_t dpll_nssc;
     struct intel_hotplug hotplug;
@@ -3266,7 +3271,7 @@ struct intel_i2c_bus *intel_gmbus_bus(struct drm_i915_private *i915, int pin);
 
 /** Make GMBUS pin `pin` bit-bang while `force` callers want it, Linux's
  * intel_gmbus_force_bit: a call with `force` set adds one, without takes
- * one away. */
+ * one away. Sleeps while a transfer holds the controller. */
 void intel_gmbus_force_bit(struct drm_i915_private *i915, int pin, int force);
 
 /** Whether GMBUS pin `pin` bit-bangs, Linux's intel_gmbus_is_forced_bit. */
