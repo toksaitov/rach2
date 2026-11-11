@@ -918,6 +918,7 @@ LIFECYCLE_SCENARIOS = build/tests/cases/machine/acpi_scenario \
                       build/tests/cases/machine/memory_scenario \
                       build/tests/cases/machine/mixerkept_scenario \
                       build/tests/cases/machine/mount_scenario \
+                      build/tests/cases/machine/panic_scenario \
                       build/tests/cases/machine/parts_scenario \
                       build/tests/cases/machine/punch_scenario \
                       build/tests/cases/machine/reset_scenario \

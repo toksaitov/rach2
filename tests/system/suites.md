@@ -111,6 +111,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `socket` (core tier; needs qemu; 128 MiB): the guest opening connections of its own, checked by a host that answers (see tests/cases/machine.socket.json).
 * `bootorder` (full tier; needs qemu, mformat, mmd, mcopy, mke2fs, debugfs, e2fsck; 128 MiB): the GRUB disk on the second AHCI port behind a disk holding nothing, booted by the firmware, its root found as disk 1.
 * `reset` (core tier; needs qemu; 128 MiB): each reset mechanism on its own.
+* `panic` (core tier; needs qemu; 128 MiB): a panic that resets the machine as panic= and reboot= ask.
 * `netconsole-e1000` (full tier; needs qemu; 128 MiB): the netconsole suite's power-off on the e1000 card, whose stop sends the frames it was given before it silences the card, the case of tests/cases/machine.netconsole-e1000.json.
 * `audio` (core tier; needs qemu; 128 MiB): what the machine actually played and recorded.
 * `input` (core tier; needs qemu; 128 MiB): the keyboards', mice's and tablet's event devices and OSS's mixer.
