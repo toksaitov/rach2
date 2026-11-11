@@ -193,7 +193,9 @@ is null.
 A signal interrupted the wait.
 .It Er EINVAL
 The socket is a TCP datagram socket, or a stream or sequenced-packet
-socket that is not listening; an
+socket that is not listening, a TCP listener stopped by
+.Xr shutdown 2
+while the call waited among them; an
 .Dv AF_UNIX
 listener shut down for reading has no connection queued; or
 .Fa flags

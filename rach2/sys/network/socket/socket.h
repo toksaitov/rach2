@@ -44,7 +44,11 @@
  * have to wait: EAGAIN, negated. */
 #define SOCK_EAGAIN (-11)
 
-/* The bits of a stream's `shutdown`, Linux's RCV_SHUTDOWN and
+/* What `socket_dgram_wait` returns when the socket was shut for receiving
+ * and holds no datagram: the receive returns 0, with no sender. */
+#define SOCK_RECV_SHUT 1
+
+/* The bits of a socket's `shutdown`, Linux's RCV_SHUTDOWN and
  * SEND_SHUTDOWN. */
 #define SOCK_RCV_SHUTDOWN  0x1
 #define SOCK_SEND_SHUTDOWN 0x2
@@ -255,12 +259,15 @@ typedef struct socket {
     int accept_head, accept_tail;
     int listening;
 
-    /* A stream's halves shut by shutdown(2), as Linux's sk_shutdown:
+    /* The halves shut by shutdown(2), as Linux's sk_shutdown. On a stream
      * SOCK_RCV_SHUTDOWN, from SHUT_RD, makes a read of an empty stream the
      * end of input and poll report POLLIN and POLLRDHUP, and has new data
      * after this side's FIN answered with a reset (`tcp_rx_closed_data`);
      * SOCK_SEND_SHUTDOWN, from SHUT_WR, has poll report POLLOUT, where a
-     * send fails with EPIPE. Written under `net_lock`. */
+     * send fails with EPIPE. On a UDP or ICMP datagram socket
+     * SOCK_RCV_SHUTDOWN ends a blocking receive of an empty queue with 0
+     * and has poll report POLLIN and POLLRDHUP, and both bits POLLHUP.
+     * Written under `net_lock`. */
     int shutdown;
 
     /*
@@ -482,8 +489,9 @@ int socket_try_recv(struct socket *sock, uint8_t *buf, int len, net_addr_t *src_
  * which nests.
  */
 
-/** Wait for a datagram. Returns 0, or a negative errno: -EINTR on a signal,
- * or the socket's pending error, which this takes. */
+/** Wait for a datagram. Returns 0, SOCK_RECV_SHUT when the socket was shut
+ * for receiving and none is queued, or a negative errno: -EINTR on a
+ * signal, or the socket's pending error, which this takes. */
 int socket_dgram_wait(struct socket *sock);
 
 /** Take the socket's pending error: its negative errno, or 0 for none. */
@@ -536,6 +544,10 @@ void socket_dgram_sender(struct socket *sock, net_addr_t *src_ip, uint16_t *src_
  * `listen_sock` and wake its waiters. With the queue full the connection is
  * closed and freed instead (`socket_unref`). */
 void socket_tcp_accept(struct socket *listen_sock, struct socket *conn_sock);
+/** Empty the accept queue of `listen_sock`, which is closing or stopping:
+ * each connection is reset (`tcp_forget_queued`) and its socket released.
+ * Takes `net_lock` itself. */
+void socket_tcp_forget_queue(struct socket *listen_sock);
 /** Wake every waiter of `sock` when its connection is established or ends. */
 void socket_tcp_connected(struct socket *sock);
 /** Wake a writer or a poller for output when an ACK frees send-ring room. */
@@ -545,11 +557,12 @@ void socket_tcp_writable(struct socket *sock);
  * ring as long as none is free, and for a connection still in its handshake
  * to be established, and return the count queued, never 0 for a nonzero
  * `len`. Returns SOCK_EAGAIN instead of waiting when `nonblock` is set,
- * -EINTR on a signal, the error recorded for a connection that has one, and
- * -EPIPE for one past its handshake and no longer in a sending state. `buf`
- * is a user buffer the caller has brought in (`user_buffer_ok`); after a
- * wait this brings it in again, and returns -EFAULT, with nothing queued,
- * when it no longer can.
+ * -EINTR on a signal, the error recorded for a connection that has one, or
+ * for a socket a shutdown in SYN_SENT left with none, and -EPIPE for one
+ * past its handshake and no longer in a sending state or shut for sending.
+ * `buf` is a user buffer the caller has brought in (`user_buffer_ok`);
+ * after a wait this brings it in again, and returns -EFAULT, with nothing
+ * queued, when it no longer can.
  */
 int socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblock);
 /** Copy in-order stream bytes into the receive ring and wake a reader;
