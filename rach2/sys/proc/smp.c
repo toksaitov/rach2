@@ -188,9 +188,6 @@ static void bkl_acquire(struct percpu *cpu)
     bkl_flush(cpu);
 }
 
-/** Count the hold that ends now on `cpu`, which still holds the lock, under
- * its entry and against the longest. The first hold to end, the boot
- * processor's start-up, which nobody waits on, is left out. */
 /** Add a hold of `held` cycles that waited `waited` for the lock to `c`. */
 static void call_hold(struct bkl_call_count *c, uint64_t held, uint64_t waited)
 {
@@ -199,6 +196,9 @@ static void call_hold(struct bkl_call_count *c, uint64_t held, uint64_t waited)
     c->holds++;
 }
 
+/** Count the hold that ends now on `cpu`, which still holds the lock, under
+ * its entry and against the longest. The first hold to end, the boot
+ * processor's start-up, which nobody waits on, is left out. */
 static void bkl_hold_end(struct percpu *cpu)
 {
     uint64_t held = arch_cycles() - cpu->bkl_since, waited;
