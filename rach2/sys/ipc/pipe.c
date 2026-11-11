@@ -172,7 +172,8 @@ static void pipe_free(pipe_t *p)
 
 /** Whether `p` holds bytes or a buffer, as Linux's `pipe_empty` is false:
  * a write that faults in a page leaves an empty buffer (`pipe_buf_fault`),
- * which poll reports and a read lets go of (`pipe_buf_skip_empty`). */
+ * which poll reports, as Linux 6.12's fs/pipe.c:687-688 does, and a read
+ * lets go of (`pipe_buf_skip_empty`). */
 static int pipe_holds(const pipe_t *p)
 {
     return pipe_available(p) != 0 || p->bufs != 0;
@@ -353,7 +354,8 @@ static void pipe_buf_drop(pipe_t *p)
 
 /**
  * Let go of the empty buffers at the front of `p`, as Linux's `pipe_read`
- * lets go of an empty buffer it reaches with room left, and wake the
+ * lets go of an empty buffer it reaches with room left (fs/pipe.c:364-373
+ * in 6.12), and wake the
  * writers, who may wait for a slot, when one went. Called by a read with
  * room left before it reads the next buffer or waits.
  */
@@ -955,14 +957,14 @@ static int32_t pipe_read_vec(fd_entry_t *e, const struct kernel_iovec *iov, int 
 }
 
 /**
- * Leave in `p` the empty buffer of a write's page group whose source
- * faulted, as Linux's `pipe_write` moves `pipe->head` past an empty buffer
- * before its copy and leaves it in the ring after a fault: poll reports it
- * as data, it takes a slot, a later write's first `count` mod 4096 bytes
- * join it (`pipe_buf_merge_room`), and a read lets go of it
- * (`pipe_buf_skip_empty`). The readers are woken, as Linux wakes them for
- * an empty pipe. Nothing is opened when no slot is free, since a sleep in
- * the fault may have let other writers fill the ring.
+ * Leave in `p` the empty buffer of a write's page group whose source faulted,
+ * as Linux's `pipe_write` moves `pipe->head` past an empty buffer before its
+ * copy and leaves it in the ring after a fault (fs/pipe.c:521-545 in 6.12):
+ * poll reports it as data, it takes a slot, a later write's first `count` mod
+ * 4096 bytes join it (`pipe_buf_merge_room`), and a read lets go of it
+ * (`pipe_buf_skip_empty`). The readers are woken, as Linux wakes them for an
+ * empty pipe (fs/pipe.c:601-602). Nothing is opened when no slot is free, since
+ * a sleep in the fault may have let other writers fill the ring.
  */
 static void pipe_buf_fault(pipe_t *p)
 {

@@ -6408,8 +6408,9 @@ static int32_t file_read_locked(struct open_file *ofd, char __user *buf, uint32_
  * read returns is not always the size getattr gives: an mqueue file's size
  * is its queue's bytes and its read the status line. Linux's filemap_read
  * returns 0 at the end before its copy, and simple_read_from_buffer, which
- * an mqueue read is, returns 0 at the end of its text and -EFAULT for a
- * copy that fails short of it (fs/libfs.c:1104-1110).
+ * an mqueue read is (ipc/mqueue.c:655-656 in 6.12), returns 0 at the end
+ * of its text and -EFAULT for a copy that fails short of it
+ * (fs/libfs.c:1104-1110).
  */
 static int32_t file_read_unwritable(struct open_file *ofd, uint64_t at)
 {
