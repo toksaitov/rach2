@@ -82,6 +82,7 @@ static int relax_frees;          /* the other writer finishes at a wait's turn *
 static unsigned relax_turns;     /* the turns of a wait for the other writer */
 static unsigned serial_at_relax; /* the port's bytes when the other finished */
 static int stop_at_serial;       /* the panic stops this processor at this byte */
+static int stop_at_net;          /* the same, at this byte handed to netconsole */
 static jmp_buf stopped;          /* where a processor the panic stopped goes */
 
 unsigned int host_cpu;
@@ -187,6 +188,9 @@ void netconsole_putc(char c)
     }
     if (net_on && net_len < CAP) {
         net[net_len++] = c;
+    }
+    if (stop_at_net > 0 && --stop_at_net == 0) {
+        longjmp(stopped, 1);
     }
 }
 
@@ -345,6 +349,8 @@ static void reset(void)
     reenter_after = 0;
     pending_first = pending_next = 0;
     pending_lost = 0;
+    pending_writing = 0;
+    pending_had = 0;
     irq_depth = irq_pairs = irq_unbalanced = 0;
     kernel_ticks = 0;
     ring_st[0].head = ring_st[0].used = ring_st[0].oldest = ring_st[0].written = 0;
@@ -359,7 +365,7 @@ static void reset(void)
     }
     host_cpu = 0;
     kept_then_nested = holder_at_serial = kept_at_serial = panicking = 0;
-    stop_at_serial = 0;
+    stop_at_serial = stop_at_net = 0;
     relax_frees = 0;
     relax_turns = serial_at_relax = 0;
     defer_head = defer_tail = defer_lost = 0;
@@ -517,6 +523,19 @@ static void console_write_rows(void)
                         "<6>[0.000000] usbdisk: ready: device 4: lun 0\r\n"));
     CHECK("and nothing waits or is held once the formatted line is out",
           pending_count() == 0 && klog_delivering == 0 && console_writing == 0);
+
+    /* A full burst raised while the drain at a write's end writes the
+     * queue's last record, which keeps its slot. */
+    reset();
+    console_write_begin();
+    klog(KLOG_INFO, "outer", "began: queued behind a console write");
+    reenter_times = KLOG_PENDING_MAX;
+    console_write_end();
+    screen[screen_len] = '\0';
+    CHECK("the queue takes all of a burst beside the record in flight",
+          reenter_times == 0 && count_lines(screen) == KLOG_PENDING_MAX + 1 &&
+              !has(screen, "klog: dropped:") && pending_lost == 0);
+    CHECK("and nothing waits after", pending_count() == 0 && pending_writing == 0);
 }
 
 /** The brackets of the interrupts a record takes, and a read of the ring. */
@@ -600,6 +619,41 @@ static void panic_queue_rows(void)
                         "<6>[0.000000] usb: gone: device 0\r\n"
                         "<6>[0.000000] usb: gone: device 1\r\n"
                         "<2>[0.000000] panic: stopped: inside a drain\r\n"));
+    screen[screen_len] = '\0';
+    CHECK("and the screen, which had it whole, has it once",
+          streq(screen, "usb: gone: device 0\n"
+                        "usb: gone: device 1\n"
+                        "panic: stopped: inside a drain\n"));
+    CHECK("and nothing waits after", pending_count() == 0);
+
+    /* A drain stopped at the fifth byte netconsole had of its first record. */
+    reset();
+    net_on = 1;
+    console_write_begin();
+    klog(KLOG_INFO, "usb", "gone: device 0");
+    klog(KLOG_INFO, "usb", "gone: device 1");
+    stop_at_net = 5;
+    if (setjmp(stopped) == 0) {
+        console_write_end();
+    }
+    panicking = 1;
+    klog_deliver_directly();
+    klog(KLOG_CRIT, "panic", "stopped: inside netconsole");
+    net[net_len] = '\0';
+    CHECK("netconsole, which was writing it, has the record again whole",
+          streq(net, "<6>[0"
+                     "<6>[0.000000] usb: gone: device 0\n"
+                     "<6>[0.000000] usb: gone: device 1\n"
+                     "<2>[0.000000] panic: stopped: inside netconsole\n"));
+    serial[serial_len] = '\0';
+    CHECK("and the port, which had it whole, has it once",
+          streq(serial, "<6>[0.000000] usb: gone: device 0\r\n"
+                        "<6>[0.000000] usb: gone: device 1\r\n"
+                        "<2>[0.000000] panic: stopped: inside netconsole\r\n"));
+    screen[screen_len] = '\0';
+    CHECK("and so has the screen", streq(screen, "usb: gone: device 0\n"
+                                                 "usb: gone: device 1\n"
+                                                 "panic: stopped: inside netconsole\n"));
     CHECK("and nothing waits after", pending_count() == 0);
 }
 

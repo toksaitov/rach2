@@ -652,32 +652,67 @@ static int console_writing;
  * The largest burst is a USB hub pulled with the device table full behind
  * it: one pass of the USB stack, which runs in an interrupt, says each of
  * sixteen devices is gone and gives back its slot, and a disk says more.
- * Sixty-four records hold four for each. One more is counted and dropped,
- * and the count is reported once the queue is empty, because a log that
- * quietly loses records is worse than one that says how many.
+ * Sixty-four records hold four for each, beside the record a drain is
+ * writing out, which keeps its slot until every destination has had it.
+ * One more is counted and dropped, and the count is reported once the queue
+ * is empty, because a log that quietly loses records is worse than one that
+ * says how many.
  */
 #define KLOG_PENDING_MAX 64
 
+/* The queue's slots: room for `KLOG_PENDING_MAX` records and the one in
+ * flight, rounded up to a power of two so that it divides 2^32. */
+#define KLOG_PENDING_SLOTS 128
+
 /* The queue's records are those numbered from `pending_first` up to
- * `pending_next`, each in the slot of its number modulo the queue's size,
- * which divides 2^32: putting one moves only `pending_next`, and taking one
- * only `pending_first`, each in one store, so that a panic which stops
+ * `pending_next`, each in the slot of its number modulo
+ * `KLOG_PENDING_SLOTS`: putting one moves only `pending_next`, and taking
+ * one only `pending_first`, each in one store, so that a panic which stops
  * either at any instruction finds the queue whole. */
-static struct klog_record pending[KLOG_PENDING_MAX];
+static struct klog_record pending[KLOG_PENDING_SLOTS];
 static unsigned int pending_first;
 static unsigned int pending_next;
 static int pending_lost;
 
-/** How many records the queue holds. */
+/* 1 while `klog_drain` writes the queue's first record out, which then does
+ * not count against `KLOG_PENDING_MAX`. */
+static int pending_writing;
+
+/* Which destinations have had a record of the queue whole: its number times
+ * sixteen, plus 1 << i for each `DESTS[i]` that has, so that one store
+ * names both the record and the destinations and a panic that stops a drain
+ * finds them agreeing. The four destinations fit the four bits. */
+static unsigned int pending_had;
+
+/** How many records the queue holds, the one in flight included. */
 static int pending_count(void)
 {
     return (int)(pending_next - pending_first);
 }
 
+/** Whether the queue holds as many records as it takes, besides the one a
+ * drain is writing out. */
+static int pending_full(void)
+{
+    return pending_count() - pending_writing >= KLOG_PENDING_MAX;
+}
+
+/**
+ * The destinations that have had the queue's record numbered `n` whole, as
+ * `pending_had` gives them, 1 << i for each `DESTS[i]`; 0 when
+ * `pending_had` names another record.
+ */
+static unsigned int pending_had_by(unsigned int n)
+{
+    unsigned int had = pending_had;
+
+    return (had >> 4) == (n & 0x0fffffffu) ? had & 0xfu : 0u;
+}
+
 /** The newest record in the queue, which holds one. */
 static const struct klog_record *pending_last(void)
 {
-    return &pending[(pending_next - 1u) % KLOG_PENDING_MAX];
+    return &pending[(pending_next - 1u) % KLOG_PENDING_SLOTS];
 }
 
 /**
@@ -692,11 +727,11 @@ static void pending_put(const struct klog_record *r, uint32_t kept)
 {
     struct klog_record *q;
 
-    if (pending_count() >= KLOG_PENDING_MAX) {
+    if (pending_full()) {
         pending_lost++;
         return;
     }
-    q = &pending[pending_next % KLOG_PENDING_MAX];
+    q = &pending[pending_next % KLOG_PENDING_SLOTS];
     *q = *r;
     q->kept = kept;
     k_barrier();
@@ -712,18 +747,24 @@ static void pending_put(const struct klog_record *r, uint32_t kept)
  * flag is cleared with the queue empty and interrupts off, which leaves no
  * moment where a record is waiting and nobody is coming for it.
  *
- * A record leaves the queue only once it has been written out, so a panic
- * that stops the drain part way through one finds it still first in the
- * queue and writes it out again whole, as Linux moves a console's sequence
- * number past a record only after the console's write
- * (`console_emit_next_record`, kernel/printk/printk.c:3081-3086), and its
- * panic writes from that number on (`console_flush_on_panic`, :3449-3482).
+ * A record leaves the queue only once every destination has had it, and
+ * each destination that has is marked in `pending_had`, so a panic that
+ * stops the drain part way through one finds it still first in the queue
+ * and writes it out again whole to the destination that was writing it and
+ * to those after, and not to those before. So Linux keeps a sequence
+ * number for each console and moves it past a record only after that
+ * console's write (`con->seq`, `console_emit_next_record`,
+ * kernel/printk/printk.c:3081-3086); it walks each console from its own
+ * number (`console_flush_one_record`, :3144-3186), and its panic writes
+ * from there on (`console_flush_on_panic`, :3449-3482), so only the
+ * console that was writing has the record again.
  */
 static void klog_drain(void)
 {
     for (;;) {
         struct klog_record r;
         uint32_t flags;
+        unsigned int n, had;
         int lost;
         int i;
 
@@ -739,19 +780,31 @@ static void klog_drain(void)
             }
             return;
         }
-        r = pending[pending_first % KLOG_PENDING_MAX];
+        n = pending_first;
+        r = pending[n % KLOG_PENDING_SLOTS];
+        pending_writing = 1;
         kirq_restore(flags);
 
+        had = pending_had_by(n);
         for (i = 0; i < KLOG_N_DESTS; i++) {
             if (DESTS[i].write == dest_ring) {
                 continue; /* the ring took it where it was raised */
             }
+            if ((had & (1u << i)) != 0u) {
+                continue; /* it had the record whole before a panic */
+            }
             if (r.level <= DESTS[i].takes_down_to) {
                 DESTS[i].write(&r);
+                had |= 1u << i;
+                k_barrier();
+                pending_had = (n << 4) | had;
+                k_barrier();
             }
         }
-        k_barrier();
-        pending_first++;
+        flags = kirq_save();
+        pending_first = n + 1u;
+        pending_writing = 0;
+        kirq_restore(flags);
     }
 }
 
@@ -902,7 +955,7 @@ static int defer_collect(unsigned int end)
         slot = h % KLOG_DEFER_MAX;
         if (defer_whole[slot] == h + 1u) {
             queued = pending_count() > 0 && pending_last()->kept == h + 1u;
-            if (!queued && pending_count() >= KLOG_PENDING_MAX) {
+            if (!queued && pending_full()) {
                 break;
             }
             if (ring_st[ring_cur].kept != h + 1u) {
@@ -1057,7 +1110,7 @@ void klog_v(int level, const char *subsystem, const char *format, va_list ap)
     nested = klog_delivering || console_writing;
     if (nested && defer_head != defer_tail) {
         (void)defer_collect(defer_tail);
-        if (defer_head != defer_tail && pending_count() >= KLOG_PENDING_MAX) {
+        if (defer_head != defer_tail && pending_full()) {
             klog_leave();
             defer_put(level, subsystem, format, ap);
             kirq_restore(flags);
