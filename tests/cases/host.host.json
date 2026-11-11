@@ -1544,6 +1544,11 @@
           "assertion_id": "xhci",
           "checks": "tests/host/xhci_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
+        },
+        {
+          "assertion_id": "xsaves",
+          "checks": "tests/host/xsaves_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
         }
       ],
       "branches": [],
