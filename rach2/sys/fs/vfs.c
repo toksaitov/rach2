@@ -517,6 +517,21 @@ static int toward_cwd(const struct vfs_ref *start, const char *path, const char 
 }
 
 /**
+ * The search check of the full walk at `cur` for the component of `path` at
+ * `p`: 0, or may_search's error. A component on the way to the working
+ * directory passes (`toward_cwd`) unless `cwd_ok` is 0; that is asked only
+ * after the check failed, since it scans the path and the working
+ * directory's path.
+ */
+static int walk_may_search(const struct vfs_ref *cur, int use_real, int cwd_ok,
+                           const struct vfs_ref *start, const char *path, const char *p)
+{
+    int rc = may_search(cur->mnt, cur->node, use_real);
+
+    return rc != 0 && cwd_ok && toward_cwd(start, path, p) ? 0 : rc;
+}
+
+/**
  * The mount whose root replaces `node` when the walk arrives at it: a child
  * of `mnt` covering that node that the caller's mount namespace sees. A
  * mount being made or unmounted is returned too, and the walk's
@@ -2117,7 +2132,7 @@ begin:
             continue;
         }
 
-        rc = !nocwd && toward_cwd(start, path, p) ? 0 : may_search(cur.mnt, cur.node, use_real);
+        rc = walk_may_search(&cur, use_real, !nocwd, start, path, p);
         if (rc != 0) {
             goto out_err;
         }
