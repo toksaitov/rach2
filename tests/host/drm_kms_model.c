@@ -392,6 +392,20 @@ int32_t dma_fence_add_callback(struct dma_fence *fence, struct dma_fence_cb *cb,
     return -ENOENT;
 }
 
+/** Nothing to take back, since no callback is ever added. */
+int dma_fence_remove_callback(struct dma_fence *fence, struct dma_fence_cb *cb)
+{
+    (void)fence;
+    (void)cb;
+    return 0;
+}
+
+/** The model's monotonic time in nanoseconds. */
+int64_t dma_fence_now(void)
+{
+    return model_now_ns;
+}
+
 /** Record nothing of an error. */
 void dma_fence_set_error(struct dma_fence *fence, int32_t error)
 {
