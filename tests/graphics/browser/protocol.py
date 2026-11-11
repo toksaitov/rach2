@@ -88,6 +88,17 @@ class CDP:
                 return reply.get("result", {})
             self.events.append(reply)
 
+    def event(self, method):
+        """Return the first retained or later event named METHOD, removing it."""
+        for index, event in enumerate(self.events):
+            if event.get("method") == method:
+                return self.events.pop(index)
+        while True:
+            event = self.message()
+            if event.get("method") == method:
+                return event
+            self.events.append(event)
+
     def close(self):
         """Close the connection; the owner stops and reaps the browser."""
         self.sock.close()

@@ -49,7 +49,7 @@ if [ "$mode" = gpu ]; then
     # shellcheck disable=SC2034 # common.sh starts Weston with it
     RUNNER_RENDERER=gl
 fi
-if [ "$mode" = webgpu-hasvk ]; then
+if [ "$mode" = webgpu-hasvk ] || [ "$mode" = webgpu-frames ] || [ "$mode" = webgpu-trace ]; then
     [ "$browser" = chromium ] || runner_die "hasvk needs Chromium"
     [ -S "${XDG_RUNTIME_DIR:?}/${WAYLAND_DISPLAY:?}" ] || runner_die "no caller's Wayland display"
     runner_record "compositor caller's DRM Weston on the Lenovo, see ../weston.log"
