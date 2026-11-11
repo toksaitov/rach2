@@ -935,8 +935,18 @@ CPUID and the MSR index lists describe the registers available.
 RDPMC requires CPL 0 or CR4.PCE.
 Counter overflow sets global status and queues a virtual local APIC
 performance interrupt through LVTPC after the next guest exit.
-Intel's PERF_CAPABILITIES offers full-width counter writes.
-LBR and PEBS are not advertised.
+A guest's counters run on the physical counters the host's
+hard-lockup detector does not hold; one left without a counter does not
+count.
+Intel's PERF_CAPABILITIES offers full-width counter writes and, on a
+processor with a legacy LBR stack of format 4 or later, the host's LBR
+format.
+A guest with that format, CPUID.PDCM and the host's model has the
+host's LBR stack: IA32_DEBUGCTL's LBR and FREEZE_LBRS_ON_PMI, LBR_SELECT,
+LBR_TOS and each record's FROM, TO and, from Skylake, INFO registers.
+The caller writes PERF_CAPABILITIES with no LBR format but 0 or the
+host's.
+PEBS is not advertised.
 .Pp
 .Dv KVM_CAP_PMU_EVENT_FILTER
 and
