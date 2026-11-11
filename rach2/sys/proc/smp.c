@@ -956,11 +956,17 @@ void bkl_take_as(int depth, int key)
 
 void bkl_thread_hold(void)
 {
+    uint32_t flags = kirq_save();
     struct percpu *cpu = this_cpu();
 
     if (cpu->bkl_depth > 0 && (cpu->bkl_vector != 0 || cpu->bkl_nr >= 0)) {
-        bkl_take(bkl_drop());
+        bkl_hold_end(cpu);
+        cpu->bkl_since = arch_cycles();
+        k_memset(bkl_early_cycles[arch_cpu_id()], 0, sizeof(bkl_early_cycles[0]));
+        cpu->bkl_vector = 0;
+        cpu->bkl_nr = -1;
     }
+    kirq_restore(flags);
 }
 
 void bkl_yield(void)
