@@ -16,7 +16,9 @@
  *
  * The rows: the ports the VBT and the straps give, HDMI on B and DP++ on
  * C; an EDID read over GMBUS from the model's DDC, and again by
- * bit-banging the GPIO pins once a GMBUS transfer hangs (78-10c.1); the
+ * bit-banging the GPIO pins once a GMBUS transfer hangs (78-10c.1), and
+ * with the scheduler running the hung wait's sleeps under the GMBUS mutex,
+ * its end at its deadline and the mutex free after it (83-5b.30); the
  * WRPLL's dividers for a table of clocks, Linux's hsw_ddi_calculate_wrpll
  * run on the same clocks, and the SPLL's value (78-10c.3); a monitor
  * plugged into B, found by its long pulse, and set at 1920x1080 on pipe B
@@ -108,11 +110,14 @@ void kirq_restore(uint32_t flags)
     (void)flags;
 }
 
-/** The scheduler, which never runs here: the driver's sleeps are waits
- * on the model's clock. */
+/* Whether the scheduler runs: only in row_gmbus_sleep, where the driver's
+ * sleeps are waits; elsewhere they are delays on the model's clock. */
+static int sched_on;
+
+/** The scheduler, which runs only while `sched_on` says so. */
 int sched_is_enabled(void)
 {
-    return 0;
+    return sched_on;
 }
 
 void k_udelay(uint32_t usec)
@@ -653,6 +658,62 @@ static void row_gmbus(void)
     g->force_bit = 0;
 }
 
+/* The sleeps of row_gmbus_sleep: how many, how many with the GMBUS mutex
+ * held, and the model's time at the end of the last. */
+static uint32_t gmbus_sleeps, gmbus_sleeps_held;
+static uint64_t gmbus_slept_us;
+
+/** A sleep of the driver while the scheduler runs: the model's clock moves
+ * a millisecond at a time until the sleep's deadline has passed, two ticks
+ * for a sleep of one, as on the machine. */
+static void gmbus_sleep(wq_cond_fn cond, void *arg)
+{
+    gmbus_sleeps++;
+    if (mutex_held(&disp->gmbus_mutex)) {
+        gmbus_sleeps_held++;
+    }
+    while (!cond(arg)) {
+        pass_us(1000u);
+    }
+    gmbus_slept_us = model.now_us;
+}
+
+/**
+ * A hung GMBUS transfer with the scheduler running: its wait spins, then
+ * sleeps with the GMBUS mutex held, ends at its deadline on the monotonic
+ * clock, though each sleep of a millisecond lasts two ticks, and leaves the
+ * mutex free; the read is then bit-banged.
+ */
+static void row_gmbus_sleep(void)
+{
+    struct intel_i2c_bus *bus = intel_gmbus_bus(&gpu, PIN_B);
+    struct intel_gmbus *g = &disp->gmbus[PIN_B];
+    struct i915_model_ddc *c = &ddi->ddc[PIN_B];
+    static uint8_t buf[512];
+    uint32_t len = 0, timeouts = g->timeouts;
+    uint64_t t0, took;
+
+    g->force_bit = 0;
+    gmbus_sleeps = gmbus_sleeps_held = 0;
+    gmbus_slept_us = 0;
+    sched_on = 1;
+    model_wait = gmbus_sleep;
+    ddi->gmbus_hangs = 1;
+    t0 = model.now_us;
+    CHECK(bus && intel_edid_read(bus, buf, sizeof(buf), &len) == 0 && len == 256 &&
+              memcmp(buf, c->edid, 256) == 0,
+          "gmbus sleep: read with the controller hung");
+    model_wait = sleep_frames;
+    sched_on = 0;
+    took = gmbus_slept_us - t0;
+    CHECK(g->timeouts == timeouts + 1 && gmbus_sleeps > 0 && gmbus_sleeps == gmbus_sleeps_held,
+          "gmbus sleep: the hung wait slept after its spin, holding the GMBUS mutex");
+    CHECK(gmbus_slept_us > t0 && took >= GMBUS_WAIT_US && took <= GMBUS_WAIT_US + 3000u,
+          "gmbus sleep: the wait ended at its deadline, not after fifty sleeps");
+    CHECK(!mutex_held(&disp->gmbus_mutex), "gmbus sleep: the GMBUS mutex free after the timeout");
+    g->force_bit = 0;
+}
+
 /* ---- 78-10c.3: the PLLs ---- */
 
 /* A clock and its dividers and frequency as Linux's
@@ -1077,6 +1138,7 @@ int main(void)
                  : NULL;
     row_ports();
     row_gmbus();
+    row_gmbus_sleep();
     row_dpll();
     row_dpll_ref();
     row_hdmi_plug();
