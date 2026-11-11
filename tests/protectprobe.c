@@ -134,15 +134,17 @@ static const char *at(const char *rel)
     static char buf[4][256];
     static int next;
     char *p = buf[next++ & 3];
-    u32 i = 0, j = 0;
+    const char *s = dir;
+    u32 i = 0;
 
-    while (dir[i] && i < 200) {
-        p[i] = dir[i];
-        i++;
+    for (; i < sizeof(buf[0]) - 1 && *s != '\0'; s++) {
+        p[i++] = *s;
     }
-    p[i++] = '/';
-    while (rel[j] && j < 50) {
-        p[i++] = rel[j++];
+    if (i < sizeof(buf[0]) - 1) {
+        p[i++] = '/';
+    }
+    for (s = rel; i < sizeof(buf[0]) - 1 && *s != '\0'; s++) {
+        p[i++] = *s;
     }
     p[i] = '\0';
     return p;
