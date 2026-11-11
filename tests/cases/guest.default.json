@@ -3949,6 +3949,35 @@
       "ia32": {"runs": true, "why": "an i386 program runs with code selector 0x1B on the i686 kernel and 0x23, Linux's __USER32_CS, on the x86-64 kernel, which its saved context holds; the row ucontext compares the saved selector with the one the program runs with"}
     },
     {
+      "case_id": "guest.default.sigwakemusl",
+      "behavior": "A thread woken in a pipe read by a SIGCHLD that the leader blocks and the thread ignores discards it and sleeps again unmarked, so that a SIGTERM the leader blocks still ends the process through that thread; and kill(-1, 0) from an unprivileged process that may signal none of the processes it selects returns 0, as Linux's kill_something_info.",
+      "units": ["default", "musl/sigwakemusl"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "execution": {"program": "sigwakemusl", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
+      "assertions": [
+        {"assertion_id": "kill-all-unprivileged", "checks": "A child that has given up root for user and group 65534 calls kill(-1, 0), which selects only processes it may not signal, and gets 0.", "source": "program"},
+        {"assertion_id": "reader-asleep", "checks": "In a process whose leader blocks SIGCHLD and SIGTERM, a second thread that blocks neither is seen asleep in a read of a pipe nobody writes.", "source": "program"},
+        {"assertion_id": "ignored-discarded", "checks": "The leader's child exits; the reader is seen asleep again with more voluntary switches, and SIGCHLD is pending neither for it nor for the process.", "source": "program"},
+        {"assertion_id": "sigterm-ends", "checks": "SIGTERM to the process ends it, with the wait status of a death by SIGTERM, and the probe, a child subreaper, reaps the leader's child.", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "sigwakemusl", "node": "tests/musl/sigwakemusl", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]}
+    },
+    {
       "case_id": "guest.default.fdexecmusl",
       "behavior": "execve of /proc/self/fd/N runs the file the descriptor is open on, names it in /proc/self/exe, and applies the rules of the file, its mount and its kind as an exec by path does.",
       "units": ["default", "musl/fdexecmusl"],

@@ -207,6 +207,7 @@ The code and stack selectors are always the user's. On i686 a data selector stay
 * `tests/xsaveprobe.c`: the frame's XSAVE image, a handler's change to it, and a damaged XSAVE header, which must end the process with `SIGSEGV`.
 * `tests/musl/sigmusl.c`: both restorers through musl, the mask, `abort`, and the context an `SA_SIGINFO` handler receives.
 * `tests/musl/sigframemusl.c`: a fault handler that returns to its instruction, `SEGV_MAPERR`, `SA_RESTART` and its absence, `SA_ONSTACK`, `int3`, `rt_sigpending`, the old `sigprocmask`, `sigsuspend`'s mask, `SIGCHLD`'s siginfo, and a nested handler that runs off a small alternate stack.
+* `tests/musl/sigwakemusl.c`: a thread woken in a pipe read by a `SIGCHLD` its leader blocks and it ignores, which discards it and sleeps again, so that a `SIGTERM` the leader blocks still ends the process through that thread; and `kill(-1, 0)` from an unprivileged process, which returns 0 though it may signal none of the processes it selects.
 * `tests/musl/threadmusl.c`: `pthread_kill`, a signal to the process that waits while every thread blocks it, and a second signal another thread takes while the first one's handler runs.
 * `tests/musl/callsmusl.c`: `sigtimedwait`, `sigqueue`, `rt_sigqueueinfo`, a POSIX timer's overrun, and a signalfd.
 * `tests/musl/waitidmusl.c`, the siginfo of a child's exit, death, stop and continue; `tests/musl/prctlmusl.c`, the parent-death signal; `tests/musl/seccompmusl.c`, `SIGSYS`; and `tests/musl/pwauthmusl.c`, signals above 34 and musl's refusal of 32 to 34.

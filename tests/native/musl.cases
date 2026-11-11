@@ -79,6 +79,7 @@ case musl/schedmusl root:ext2-dir ids:1000 -- musl/schedmusl
 case musl/seccompmusl ids:1000 -- musl/seccompmusl
 case musl/sigframemusl -- musl/sigframemusl
 case musl/sigmusl -- musl/sigmusl
+case musl/sigwakemusl -- musl/sigwakemusl
 case musl/smpmusl -- musl/smpmusl 4
 case musl/sockfillmusl ports:7000 -- musl/sockfillmusl
 case musl/sockflagmusl ports:7461 -- musl/sockflagmusl

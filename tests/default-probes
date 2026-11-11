@@ -101,6 +101,8 @@ musl/stampmusl
 musl/execargmusl
 musl/spawnmusl
 musl/sigmusl
+# An ignored signal's wake, then a fatal one through that thread, and kill(-1).
+musl/sigwakemusl
 # execve of /proc/self/fd/N, which is glibc's fexecve without execveat.
 musl/fdexecmusl
 # clone in glibc's fork form, set_tid_address and futex.
