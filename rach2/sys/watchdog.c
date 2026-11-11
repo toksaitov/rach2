@@ -104,7 +104,7 @@ static struct wd_cpu wd[NR_CPUS];
 static volatile int wd_ready;
 static int wd_perf;
 
-/* The guards of kernel/watchdog.c:109 and :325, which keep one processor at
+/* The guards of kernel/watchdog.c:111 and :321, which keep one processor at
  * a time dumping every processor's trace; and lib/nmi_backtrace.c's flag
  * and mask of the processors yet to answer a backtrace request. */
 static volatile unsigned int hard_lockup_nmi_warn;
@@ -203,7 +203,7 @@ static void update_report_ts(struct wd_cpu *w)
 }
 
 /** Note now as the time this processor last scheduled, and its last
- * report's (kernel/watchdog.c:582). */
+ * report's (kernel/watchdog.c:574). */
 static void update_touch_ts(struct wd_cpu *w)
 {
     w->touch_ts = get_timestamp();
@@ -566,9 +566,9 @@ static void watchdog_hardlockup_kick(struct wd_cpu *w, unsigned int e)
 
 /**
  * Arm this processor's counter for a period of `watchdog_thresh` seconds of
- * cycles, `hw_nmi_get_sample_period`, or disarm it, when that changed. A
- * newly armed processor and the one its buddy check reads are touched, so
- * that no check reads a count from before (kernel/watchdog_buddy.c:31).
+ * cycles, `hw_nmi_get_sample_period`, or disarm it, when that changed. The
+ * processor is touched, so that its counter's next check reads no count
+ * from before.
  */
 static void watchdog_hardlockup_arm(struct wd_cpu *w, unsigned int e)
 {
@@ -591,13 +591,21 @@ static void watchdog_hardlockup_arm(struct wd_cpu *w, unsigned int e)
 
 /** Enable this processor's detectors, if they were off, and arm or disarm
  * its counter for the detectors `e` (kernel/watchdog.c, `watchdog_enable`):
- * the soft-lockup timestamp is touched and the next hard-lockup check
- * skipped, so that neither reads a time from before. */
+ * the soft-lockup timestamp is touched and the next hard-lockup check of
+ * this processor and of the one its buddy check reads skipped, so that
+ * neither reads a time or a count from before (kernel/watchdog_buddy.c:43
+ * and :52). */
 static void watchdog_enable(struct wd_cpu *w, unsigned int e)
 {
+    int next;
+
     if (e && !w->enabled) {
         update_touch_ts(w);
         w->hardlockup_touched = 1;
+        next = watchdog_next_cpu((int)arch_cpu_id());
+        if (next >= 0) {
+            wd[next].hardlockup_touched = 1;
+        }
         w->enabled = 1;
     }
     watchdog_hardlockup_arm(w, e);
@@ -829,7 +837,7 @@ void watchdog_sysctl_changed(void)
     wq_wake_all(&hung_wait);
 }
 
-/** check_hung_task, kernel/hung_task.c:93. */
+/** check_hung_task, kernel/hung_task.c:91. */
 static int check_hung_task(process_t *t, uint32_t timeout, uint64_t now)
 {
     unsigned long switch_count = t->nvcsw + t->nivcsw;
@@ -877,7 +885,7 @@ static int check_hung_task(process_t *t, uint32_t timeout, uint64_t now)
     return 1;
 }
 
-/** check_hung_uninterruptible_tasks, kernel/hung_task.c:172: every thread
+/** check_hung_uninterruptible_tasks, kernel/hung_task.c:181: every thread
  * blocked in a sleep no signal ends. The big lock keeps the list still. */
 static void check_hung_uninterruptible_tasks(uint32_t timeout)
 {
@@ -920,7 +928,7 @@ static int hung_due(void *arg)
 }
 
 /**
- * khungtaskd, kernel/hung_task.c:359: check every
+ * khungtaskd, kernel/hung_task.c:361: check every
  * `hung_task_check_interval_secs`, or every timeout when that is 0, and
  * sleep while the timeout is 0. A write of either setting wakes it.
  */
