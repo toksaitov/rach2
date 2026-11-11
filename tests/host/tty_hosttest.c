@@ -46,6 +46,15 @@
  * when fed; a master stopped by TCOOFF waits; and on the console a writer
  * waits for a VSTART from COM1, a VSTOP behind a full console acts at once,
  * and Hold and the Scroll Lock flag follow the stop.
+ *
+ * The echo held goes out ahead of a slave write only as far as the master's
+ * ring has room, and the write waits for the rest instead of losing its
+ * bytes; a master write goes on after the last slave closes; a VSTART from
+ * COM1 drained with no reader keeps the keyboard echo held during the stop;
+ * a nonblocking master write behind a full slave counts the flow characters
+ * it acts on, and its VSTART gives out the echo held; and a background
+ * process's change of its terminal takes SIGTTOU unless it ignores it, its
+ * read EIO when it ignores SIGTTIN, and an orphaned group's call EIO.
  */
 #define WAIT_QUEUE_HOSTTEST
 #define wq_wait_event model_wait_event
@@ -66,6 +75,9 @@ static fd_entry_t master, slave;
 static int failures, irq_enabled = 1, pending_signal, switches;
 static int recording, recorded_waits, read_stamps, serial_pos, serial_len;
 static int copy_calls, copy_failure, spans;
+/* A row that expects terminal signals sets `signals_expected`; the signals
+ * posted are counted, and the last one kept. */
+static int signals_expected, signals_posted, last_signo;
 /* The console's keyboard is in K_RAW, K_MEDIUMRAW or K_OFF
  * (`kd_translates`). */
 static int console_raw;
@@ -162,11 +174,16 @@ int signal_pending(void)
     return pending_signal;
 }
 
-/** A failure: no row sends a terminal signal. */
+/** Count a terminal signal a row expects; any other is a failure, since no
+ * signal substitutes for a readiness wake. */
 void signal_post(process_t *p, int signo)
 {
     (void)p;
-    (void)signo;
+    if (signals_expected) {
+        signals_posted++;
+        last_signo = signo;
+        return;
+    }
     CHECK(0, "no signal substitutes for a readiness wake");
 }
 
@@ -436,6 +453,7 @@ static void setup_pair(void)
     poller.waiter.proc = &poller;
     current_proc = &consumer;
     pending_signal = switches = recording = copy_calls = copy_failure = spans = 0;
+    signals_expected = signals_posted = last_signo = 0;
     copy_action = NULL;
     irq_enabled = 1;
     pty_init_pool();
@@ -1327,6 +1345,171 @@ static void flow_console(void)
           "the VSTOP fed after its look ahead neither acts again nor is read");
 }
 
+/* The slave's output before the echo in `echo_room`, a ring's worth less
+ * the two bytes of echo. */
+static char big[PTY_BUF_SIZE];
+
+/** With the slave writer waiting behind the echo held, read the ring: the
+ * writer's first bytes and the echo fill it. */
+static void echo_room_action(void)
+{
+    static char out[PTY_BUF_SIZE + 1];
+
+    CHECK(ptm_read(&master, out, sizeof(out)) == PTY_BUF_SIZE && out[PTY_BUF_SIZE - 2] == 'a' &&
+              out[PTY_BUF_SIZE - 1] == 'b',
+          "the slave writer waits with the ring full of its output and the echo held");
+}
+
+/**
+ * The echo of input typed under TCOOFF waits through TCOON, then goes out
+ * ahead of the slave's next write as far as the master's ring has room, and
+ * the write waits for the rest of the room instead of losing its bytes
+ * behind the echo.
+ */
+static void echo_room(void)
+{
+    char out[8];
+    int i;
+
+    setup_pair();
+    pair.slave.ldisc.tio.c_oflag &= ~(unsigned int)OPOST;
+    pair.slave.ldisc.tio.c_lflag |= ECHO;
+    for (i = 0; i < (int)sizeof(big); i++) {
+        big[i] = 'x';
+    }
+    CHECK(pts_write(&slave, big, PTY_BUF_SIZE - 2) == PTY_BUF_SIZE - 2,
+          "the slave fills the ring but for two bytes");
+    CHECK(tty_tcflow(&pair.slave, TTY_TCOOFF) == 0 && ptm_write(&master, "ab", 2) == 2 &&
+              pty_m_avail(&pair) == PTY_BUF_SIZE - 2,
+          "the echo of input typed under TCOOFF is held");
+    CHECK(tty_tcflow(&pair.slave, TTY_TCOON) == 0 && pty_m_avail(&pair) == PTY_BUF_SIZE - 2,
+          "TCOON leaves the echo held");
+    scheduled_action = echo_room_action;
+    wake_detail = "a master read wakes the slave writer";
+    CHECK(pts_write(&slave, "YZ", 2) == 2 && switches == 1,
+          "the slave writer waits once for room behind the echo");
+    CHECK(ptm_read(&master, out, sizeof(out)) == 2 && out[0] == 'Y' && out[1] == 'Z',
+          "its bytes follow the echo and none is lost");
+}
+
+/** A master write after the last slave description closed feeds the slave,
+ * as Linux's does, while the master's read fails with EIO. */
+static void master_after_close(void)
+{
+    char out[4];
+
+    setup_pair();
+    current_proc = &producer;
+    pts_close(&slave);
+    CHECK(pair.hung_up && ptm_write(&master, "x", 1) == 1 && n_tty_inq(&pair.slave.ldisc) == 1,
+          "a master write after the last slave close feeds the slave");
+    CHECK(ptm_read(&master, out, sizeof(out)) == -EIO, "the master's read still fails with EIO");
+}
+
+/**
+ * Keyboard echo typed while the console's output is stopped stays held when
+ * a VSTART from COM1 restarts output in the drain that shows no echo, with
+ * no reader waiting, and the next write gives it out first.
+ */
+static void console_silent_restart(void)
+{
+    struct n_tty *ld = &console_tty.ldisc;
+
+    setup_pair();
+    tty_console_init();
+    serial_pos = serial_len = serial_looked = 0;
+    ld->tio.c_lflag &= ~(unsigned int)ICANON;
+    tty_input_char(&console_tty, 023);
+    tty_input_char(&console_tty, 'a');
+    tty_input_char(&console_tty, 'b');
+    CHECK(ld->stopped && ld->echo_tail - ld->echo_head == 2,
+          "keyboard echo typed during a stop is held");
+    tty_set_session(&console_tty, 1, 1);
+    serial_bytes = "\021";
+    serial_len = 1;
+    irq_enabled = 0;
+    tty_console_poll();
+    irq_enabled = 1;
+    CHECK(!ld->stopped && serial_pos == 1 && ld->echo_tail - ld->echo_head == 2,
+          "COM1's VSTART drained with no reader restarts output and keeps the echo held");
+    CHECK(tty_write(&console_tty, (const unsigned char *)"x", 1) == 1 &&
+              ld->echo_tail == ld->echo_head,
+          "the next write gives the echo out first");
+    tty_set_session(&console_tty, 0, 0);
+}
+
+/* The open description of a nonblocking master. */
+static struct open_file nonblocking_ofd;
+
+/**
+ * A nonblocking master write behind a full slave counts the VSTOP it acts
+ * on, and the VSTART it acts on as well, which gives out the echo held while
+ * output was stopped; neither reaches the reader.
+ */
+static void lookahead_nonblocking(void)
+{
+    int queued;
+
+    setup_pair();
+    current_proc = &producer;
+    fill_input();
+    queued = n_tty_inq(&pair.slave.ldisc);
+    nonblocking_ofd.status_flags = OFD_NONBLOCK;
+    master.ofd = &nonblocking_ofd;
+    CHECK(ptm_write(&master, "\023", 1) == 1 && pair.slave.ldisc.stopped &&
+              n_tty_inq(&pair.slave.ldisc) == queued,
+          "a nonblocking master write behind a full slave counts the VSTOP it acts on");
+    pair.slave.ldisc.tio.c_lflag |= ECHO;
+    tty_input_char(&pair.slave, 'e');
+    CHECK(pty_m_avail(&pair) == 0, "the echo waits while output is stopped");
+    CHECK(ptm_write(&master, "\021", 1) == 1 && !pair.slave.ldisc.stopped &&
+              pty_m_avail(&pair) == 1 && n_tty_inq(&pair.slave.ldisc) == queued + 1,
+          "its VSTART restarts output, gives out the echo held and counts");
+    master.ofd = NULL;
+}
+
+/* The dispositions of the background process in `job_check`. */
+static struct k_sigaction job_acts[KSIG_MAX + 1];
+
+/**
+ * A process of a background group of the session the slave controls takes
+ * SIGTTOU for a change, goes ahead when it ignores SIGTTOU, fails its read
+ * with EIO when it ignores SIGTTIN, and fails with EIO, posting nothing,
+ * once its group is orphaned; the foreground group passes.
+ */
+static void job_check(void)
+{
+    setup_pair();
+    clear(job_acts, sizeof(job_acts));
+    proc_list = &consumer;
+    consumer.next = &producer;
+    consumer.pid = consumer.tgid = consumer.pgid = 3;
+    consumer.sid = 1;
+    consumer.parent_pid = 2;
+    consumer.space_root = 1;
+    consumer.sigacts = job_acts;
+    producer.tgid = producer.pgid = 2;
+    producer.parent_pid = 1;
+    producer.space_root = 1;
+    pair.slave.sid = 1;
+    pair.slave.fg_pgid = 2;
+    signals_expected = 1;
+    CHECK(tty_job_check(&pair.slave, SIGTTOU) == -EINTR && signals_posted == 1 &&
+              last_signo == SIGTTOU,
+          "a background process's change takes SIGTTOU");
+    job_acts[SIGTTOU].handler = KSIG_IGN;
+    CHECK(tty_job_check(&pair.slave, SIGTTOU) == 0, "an ignored SIGTTOU lets the change go ahead");
+    job_acts[SIGTTIN].handler = KSIG_IGN;
+    CHECK(tty_job_check(&pair.slave, SIGTTIN) == -EIO, "an ignored SIGTTIN fails the read");
+    job_acts[SIGTTOU].handler = 0;
+    producer.sid = 4;
+    CHECK(tty_job_check(&pair.slave, SIGTTOU) == -EIO && signals_posted == 1,
+          "an orphaned group's change is EIO and posts nothing");
+    pair.slave.fg_pgid = 3;
+    CHECK(tty_job_check(&pair.slave, SIGTTOU) == 0, "the foreground group passes");
+    proc_list = NULL;
+}
+
 int main(void)
 {
     read_wakes_poll();
@@ -1354,6 +1537,11 @@ int main(void)
     signal_flush();
     flow_lookahead();
     flow_console();
+    echo_room();
+    master_after_close();
+    console_silent_restart();
+    lookahead_nonblocking();
+    job_check();
     printf("tty-test: result: %d failures\n", failures);
     return failures ? 1 : 0;
 }

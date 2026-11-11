@@ -76,7 +76,7 @@ static int feed(struct n_tty *t, struct cap *cp, unsigned char c)
 {
     int signo = -1;
     n_tty_receive(t, c, sink, cp, &signo);
-    n_tty_echo_flush(t, sink, cp);
+    n_tty_echo_flush(t, sink, cp, ~0u);
     return signo;
 }
 
@@ -527,7 +527,28 @@ static void flow_stops(void)
         n_tty_receive(&t, t.tio.c_cc[VINTR], sink, &cp, &signo);
         CHECK(signo == NTTY_SIGINT && cp.len == 0 && n_tty_inq(&t) == 0 && t.line_len == 0);
     }
-    CHECK(n_tty_echo_flush(&t, sink, &cp) == 2 && cap_is(&cp, "^C", 2));
+    CHECK(n_tty_echo_flush(&t, sink, &cp, ~0u) == 2 && cap_is(&cp, "^C", 2));
+
+    /* The echo held goes out at most `max` bytes at a time, the rest held;
+     * a cut drops what was held since its mark and keeps what came before. */
+    n_tty_init(&t);
+    cap_reset(&cp);
+    feed(&t, &cp, 023);
+    feed_str(&t, &cp, "abc");
+    CHECK(n_tty_start(&t) == 1);
+    CHECK(n_tty_echo_flush(&t, sink, &cp, 2) == 2 && cap_is(&cp, "ab", 2));
+    CHECK(t.echo_tail - t.echo_head == 1);
+    {
+        unsigned int mark = t.echo_tail;
+
+        n_tty_hold_echo(&t, 'd');
+        n_tty_echo_cut(&t, mark);
+        CHECK(t.echo_tail - t.echo_head == 1);
+        t.echo_head = t.echo_tail;
+        n_tty_echo_cut(&t, mark - 1);
+        CHECK(t.echo_tail == t.echo_head);
+    }
+    CHECK(n_tty_echo_flush(&t, sink, &cp, ~0u) == 0 && cap_is(&cp, "ab", 2));
 }
 
 int main(void)
