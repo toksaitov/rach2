@@ -74,7 +74,7 @@ def main():
         for name in ("reverse.sh", "nctx-env"):
             shutil.copy2(tree / "bed/nctx" / name, scripts / name)
         for name in ("reverse-vmlinuz", "reverse-initrd.img", "mesa-nctx.tar.xz",
-                     "nctxcheck", "reverse.sha256", "id_ed25519"):
+                     "nctxcheck", "ivshmemd", "reverse.sha256", "id_ed25519"):
             shutil.copy2(assets / name, payload / name)
         (payload / "reverse.qcow2").symlink_to("/dev/disk2")
         run(["mke2fs", "-q", "-t", "ext2", "-F", "-d", str(stage),
@@ -120,9 +120,14 @@ def main():
                 check = subprocess.Popen(ssh + [command], stdin=subprocess.DEVNULL,
                                          stdout=log, stderr=subprocess.STDOUT)
             last = -1
+            printed = 0
             changed = reported = time.monotonic()
             while check.poll() is None:
                 now = time.monotonic()
+                with (out / "result.txt").open() as log:
+                    log.seek(printed)
+                    print(log.read(), end="", flush=True)
+                    printed = log.tell()
                 size = (out / "result.txt").stat().st_size + serial.stat().st_size
                 if size != last:
                     last, changed = size, now
@@ -132,7 +137,9 @@ def main():
                     print("nctx-fallback: running:", size, "output bytes", flush=True)
                     reported = now
                 time.sleep(1)
-            print((out / "result.txt").read_text(), end="", flush=True)
+            with (out / "result.txt").open() as log:
+                log.seek(printed)
+                print(log.read(), end="", flush=True)
             if check.returncode:
                 raise RuntimeError("the fallback check failed")
         finally:
