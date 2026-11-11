@@ -28,6 +28,7 @@
 #include "arch/arch.h"
 #include "lib/kirq.h"
 #include "lib/spinlock.h"
+#include "udelay.h"
 #include "wcwidth.h"
 
 /* The interpreter's state: where it is in a sequence; a CSI's parameters,
@@ -529,6 +530,29 @@ uint32_t console_lock(void)
     }
     console_depth++;
     return flags;
+}
+
+int console_lock_bounded(uint32_t *flags, uint32_t us)
+{
+    int me = (int)arch_cpu_id();
+    uint32_t waited;
+
+    *flags = kirq_save();
+    if (k_panicking()) {
+        return 1;
+    }
+    if (console_owner != me) {
+        for (waited = 0; !spin_trylock(&console_spin); waited += 10u) {
+            if (waited >= us) {
+                kirq_restore(*flags);
+                return 0;
+            }
+            k_udelay(10);
+        }
+        console_owner = me;
+    }
+    console_depth++;
+    return 1;
 }
 
 void console_unlock(uint32_t flags)

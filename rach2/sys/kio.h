@@ -91,6 +91,16 @@ uint32_t console_lock(void);
 void console_unlock(uint32_t flags);
 
 /**
+ * Take the console's lock as `console_lock` does, but give up when another
+ * processor has held it for `us` microseconds more, since that one may be
+ * locked up; 0 tries once. 1 with the lock taken and `*flags` set for
+ * `console_unlock`, 0 with nothing taken and interrupts as they were.
+ * klog's screen takes it so, as Linux's printk takes the console by
+ * `console_trylock_spinning`.
+ */
+int console_lock_bounded(uint32_t *flags, uint32_t us);
+
+/**
  * Load the console's font with the Cyrillic letters into the adapter, and
  * draw from it when the adapter reads it back; otherwise keep the adapter's
  * own font, code page 437. On a framebuffer the console draws the whole font
