@@ -3043,6 +3043,11 @@ int devfs_fd_is_raw(struct fd_entry *e)
            dev->ops == &mem_ops || dev->ops == &loop_ops;
 }
 
+int devfs_fd_is_mem(struct fd_entry *e)
+{
+    return e && e->type == FD_TYPE_DEVICE && e->dev && e->dev->ops == &mem_ops;
+}
+
 int devfs_fd_raw_size(struct fd_entry *e, uint64_t *size)
 {
     const struct devfs_entry *dev;

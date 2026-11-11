@@ -39,6 +39,15 @@ On the i686 kernel, a count negative as the kernel's signed size is
 .Er EINVAL
 after that range check, before the transfer is limited.
 An i386 call on x86-64 uses the kernel's 64-bit signed size for this check.
+Then a write at the open file description's offset whose end would pass
+the signed 64-bit range is
+.Er EINVAL ,
+as Linux's rw_verify_area has it, with the original count; a stream,
+which has no offset, and
+.Pa /proc/ Ns Ar pid Ns Pa /mem
+and
+.Pa /dev/mem ,
+whose offsets are unsigned, are never refused for it.
 The operation depends on the descriptor's backing object.
 .Ss Regular files
 A regular file is written through its mounted file system at the
@@ -452,8 +461,14 @@ negative as a signed size.
 A native i686 write count is negative as the kernel's signed size after
 its address range passes.
 .Fn pwrite
-was given a negative offset or an end past the signed 64-bit range,
-computed with the original count before the transfer is limited.
+was given a negative offset.
+A write at the description's offset or at that of
+.Fn pwrite
+would end past the signed 64-bit range, computed with the original count
+before the transfer is limited, on a file other than
+.Pa /proc/ Ns Ar pid Ns Pa /mem
+and
+.Pa /dev/mem .
 A raw write has an offset or length not divisible by 512.
 A device control write has an invalid argument or command.
 .It Er EIO
