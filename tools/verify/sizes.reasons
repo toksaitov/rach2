@@ -435,7 +435,7 @@ tests/host/i915_reset_hosttest.c:row_engine_reset complexity 33 a test's rows, e
 
 tests/host/kd_hosttest.c:translating lines 102 a test's rows, each a case, read as one table
 
-tests/host/kheap_hosttest.c:main lines 114 a test's rows, each a case, read as one table
+tests/host/kheap_hosttest.c:main lines 115 a test's rows, each a case, read as one table
 
 tests/host/klog_hosttest.c:main lines 266 a test's rows, each a case, read as one table
 
