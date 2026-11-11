@@ -401,13 +401,17 @@ static uint64_t wall_epoch(const struct kvm_vm *vm)
 
 /** Write the wall clock at the guest's `gpa`, as Linux's
  * kvm_write_wall_clock: its version odd, the time, its version even. A
- * write that misses guest memory is dropped, as Linux drops it. */
+ * `gpa` of 0, which QEMU writes at each reset, writes nothing, and a write
+ * that misses guest memory is dropped, as Linux drops both. */
 static void wall_clock_write(struct kvm_vcpu *v, uint64_t gpa)
 {
     struct pvclock_wall_clock wc;
     uint64_t wall;
     uint32_t version = 0;
 
+    if (gpa == 0) {
+        return;
+    }
     if (kvm_guest_phys_rw(v, gpa, &version, 4, 0) != 0) {
         return;
     }

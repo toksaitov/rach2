@@ -804,10 +804,14 @@ int kvm_lapic_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value
 #define GUEST_PAGE 0x1000u
 static uint8_t guest_page[4096];
 static int guest_mem;
+static int low_rw; /* accesses below GUEST_PAGE, which no row maps */
 
 int kvm_guest_phys_rw(struct kvm_vcpu *v, uint64_t gpa, void *buf, uint32_t n, int write)
 {
     (void)v;
+    if (gpa < GUEST_PAGE) {
+        low_rw++;
+    }
     if (!guest_mem || gpa < GUEST_PAGE || gpa + n > GUEST_PAGE + sizeof(guest_page)) {
         return 1;
     }
@@ -1905,6 +1909,10 @@ static void pv_clock_rows(int vm, int fd0)
     CHECK(fdio(fd0, KVM_GET_MSRS, (uintptr_t)&buf) == 1 &&
               MSR_ENTRIES[0].data == GUEST_PAGE + 0x100,
           "and its MSR reads back");
+    low_rw = 0;
+    CHECK(set_msr(fd0, MSR_KVM_WALL_CLOCK, 0) == 1 &&
+              set_msr(fd0, MSR_KVM_WALL_CLOCK_NEW, 0) == 1 && low_rw == 0,
+          "a wall clock MSR of 0, as QEMU's reset writes, writes nothing at 0");
 
     CHECK(kvm_clock_pairing(v0, GUEST_PAGE + 0x200, KVM_CLOCK_PAIRING_WALLCLOCK) == 0 &&
               (uint64_t)cp->sec * 1000000000u + (uint64_t)cp->nsec == real_ns &&
