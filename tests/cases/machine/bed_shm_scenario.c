@@ -5,8 +5,9 @@
  * to /dev/vgpu-shm, boots the VM under Rach2's KVM on it, draws through
  * virtio-gpu over the region and kills the VM, or, for the case `nocopy`,
  * maps the VM's Vulkan buffers into a program of Rach2's and kills the VM
- * with one mapping live; each line the runner prints for a check is the
- * case's assertion of that name.
+ * with one mapping live, or, for the case `vm-death`, runs the desktop
+ * session on the VM's GPU and kills the VM under glmark2; each line the
+ * runner prints for a check is the case's assertion of that name.
  */
 #include <stdio.h>
 #include <string.h>
@@ -76,17 +77,31 @@ static void stage(struct bed_case *s)
     net_run_free(&r);
 }
 
+/* The runs of bed-shm.sh, by the case's last word. */
+enum bed_run { RUN_VIRGL, RUN_NOCOPY, RUN_DESKTOP };
+
 /**
  * Run bed-shm.sh and assert each of its checks from the line it printed,
  * `bed-shm: NAME: pass` or `fail`, then print what it printed for the run's
- * log: the checks of the virgl draw, or with `nocopy` those of -k.
+ * log: the checks of the virgl draw, with `nocopy` those of -k, or with
+ * `vm-death` those of -w.
  */
-static void run(struct bed_case *s, int nocopy)
+static void run(struct bed_case *s, enum bed_run which)
 {
     static const char *const virgl[] = {"attach", "draw", "doorbell", "death", NULL};
     static const char *const mapped[] = {"attach", "build",   "pages",  "coherent", "release",
                                          "refuse", "measure", "revoke", "leak",     NULL};
-    const char *const *check = nocopy ? mapped : virgl;
+    static const char *const desktop[] = {"attach", "session", "load", "death", "fallback", NULL};
+    static const char *const commands[] = {"cd " BED_DIR " && sh bed-shm.sh -d " VM_DISK
+                                           " -p " BED_DIR "/vgshmprobe -o " BED_DIR "/out",
+                                           "cd " BED_DIR " && sh bed-shm.sh -d " VM_DISK
+                                           " -p " BED_DIR "/vgshmprobe -k " BED_DIR
+                                           "/nocopy.c -o " BED_DIR "/out",
+                                           "cd " BED_DIR " && sh bed-shm.sh -d " VM_DISK
+                                           " -p " BED_DIR "/vgshmprobe -w -o " BED_DIR "/out"};
+    const char *const *check = which == RUN_NOCOPY    ? mapped
+                               : which == RUN_DESKTOP ? desktop
+                                                      : virgl;
     char want[64], line[200];
     const char *found;
     struct net_run r;
@@ -94,13 +109,8 @@ static void run(struct bed_case *s, int nocopy)
     int ran;
 
     memset(&r, 0, sizeof(r));
-    ran = net_step(&s->u, "run") == ETUDE_OK &&
-          as_root(s,
-                  nocopy ? "cd " BED_DIR " && sh bed-shm.sh -d " VM_DISK " -p " BED_DIR
-                           "/vgshmprobe -k " BED_DIR "/nocopy.c -o " BED_DIR "/out"
-                         : "cd " BED_DIR " && sh bed-shm.sh -d " VM_DISK " -p " BED_DIR
-                           "/vgshmprobe -o " BED_DIR "/out",
-                  "runner", &r) == ETUDE_OK;
+    ran =
+        net_step(&s->u, "run") == ETUDE_OK && as_root(s, commands[which], "runner", &r) == ETUDE_OK;
     for (i = 0; check[i] != NULL; i++) {
         if (!ran || !net_ok(&s->u)) {
             net_assert(&s->u, check[i], 0, "");
@@ -127,6 +137,11 @@ int etude_scenario(struct etude_case *c)
     net_secret(&s.u, "demo-password", s.password, sizeof(s.password));
     up(&s);
     stage(&s);
-    run(&s, strcmp(etude_case_id(c), "machine.bed-shm.nocopy") == 0);
+    if (strcmp(etude_case_id(c), "machine.bed-shm.nocopy") == 0)
+        run(&s, RUN_NOCOPY);
+    else if (strcmp(etude_case_id(c), "machine.bed-shm.vm-death") == 0)
+        run(&s, RUN_DESKTOP);
+    else
+        run(&s, RUN_VIRGL);
     return net_end(&s.u);
 }

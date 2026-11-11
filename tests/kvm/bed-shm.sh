@@ -2,8 +2,8 @@
 # bed-shm.sh: Rach2's virtio-gpu over the region it shares with the test
 # bed's VM, run under Rach2's KVM (tests/cases/machine.bed-shm.json).
 #
-#   sh bed-shm.sh -d DISK [-p PROBE] [-c CRC] [-k NOCOPY] [-g BDF] [-o DIR]
-#       [-m MIB] [-n CPUS]
+#   sh bed-shm.sh -d DISK [-p PROBE] [-c CRC] [-k NOCOPY | -w] [-x MEASURE]
+#       [-g BDF] [-o DIR] [-m MIB] [-n CPUS]
 #
 # ivshmemd attaches a region of 32 MiB to /dev/vgpu-shm, and two more
 # attaches are refused; QEMU boots DISK, the VM that `bed/vm/image/vm.sh
@@ -27,12 +27,26 @@
 # touch after must raise SIGBUS, and every map and the frames it held must
 # be gone (`revoke`, `leak`).
 #
-# With -g, which needs -k, the VM also has the host's PCI function BDF, the
-# Lenovo's GPU: gpu.sh, beside this script, takes it from Rach2's Intel
-# driver, starts QEMU with it on vfio-pci and the disk on AHCI, kills QEMU
-# when this script sends it SIGUSR1, and gives the function back to the
-# driver, which must pass gpu.sh's own checks once the VM has gone
-# (`handoff`).
+# With -w the draw, the doorbells and the death give way to the desktop
+# session on the VM's GPU: once virtio-gpu has bound over the region,
+# rach2-desktop's session runs Weston on its card with GL through virgl in
+# the VM, SIGHUP starting it there unless the session moved there itself
+# (`session`), and glmark2-wayland draws under it as the desktop user
+# while Rach2's driver rings the VM (`load`). With MEASURE, the directory
+# of bed/measure/measure.sh, the harness's glmark2 scene runs on the
+# session first and its line is printed as a figure. Then QEMU is stopped,
+# four fenced submissions are left pending and QEMU is killed under the
+# load: every fence must fail, glmark2 must end and ivshmemd must detach
+# (`death`); and the session must start again, headless with GL on
+# llvmpipe, where glmark2 draws again (`fallback`). With -g as well, the
+# session must come back to Rach2's driver on the GPU gpu.sh gave back,
+# with the pipe's CRC stable (`return`).
+#
+# With -g the VM also has the host's PCI function BDF, the Lenovo's GPU:
+# gpu.sh, beside this script, takes it from Rach2's Intel driver, starts
+# QEMU with it on vfio-pci and the disk on AHCI, kills QEMU when this
+# script sends it SIGUSR1, and gives the function back to the driver,
+# which must pass gpu.sh's own checks once the VM has gone (`handoff`).
 #
 # Each check prints one line, `bed-shm: CHECK: pass` or `fail` with the
 # reason, and the last line is `bed-shm: result: pass` or `fail`, after the
@@ -40,10 +54,13 @@
 # console of the VM, ivshmemd's output and the counters are kept in DIR.
 set -u
 disk='' probe=./vgshmprobe crc=6e8e217c out=/tmp/bed-shm mib=2048 cpus=2 nocopy='' bdf=''
+desk=0 measure=''
 icd=/usr/share/vulkan/icd.d/venus_icd.x86_64.json
 gpush=$(dirname "$0")/gpu.sh
-while getopts d:p:c:k:g:o:m:n: o; do
+while getopts d:p:c:k:wx:g:o:m:n: o; do
     case $o in
+        w) desk=1 ;;
+        x) measure=$OPTARG ;;
         d) disk=$OPTARG ;;
         p) probe=$OPTARG ;;
         c) crc=$OPTARG ;;
@@ -56,20 +73,20 @@ while getopts d:p:c:k:g:o:m:n: o; do
     esac
 done
 [ -n "$disk" ] || {
-    echo "usage: bed-shm.sh -d DISK [-p PROBE] [-c CRC] [-k NOCOPY] [-g BDF] [-o DIR] [-m MIB] [-n CPUS]" >&2
+    echo "usage: bed-shm.sh -d DISK [-p PROBE] [-c CRC] [-k NOCOPY | -w] [-x MEASURE] [-g BDF] [-o DIR] [-m MIB] [-n CPUS]" >&2
     exit 2
 }
-# The GPU's MSIs reach the VM through irqfds and would count as doorbells
-# Rach2 rang, so -g runs only the nocopy rows, which check no doorbell.
-[ -z "$bdf" ] || [ -n "$nocopy" ] || { echo "bed-shm: -g needs -k" >&2; exit 2; }
 [ -z "$bdf" ] || [ -f "$gpush" ] || { echo "bed-shm: no $gpush for -g" >&2; exit 2; }
-daemon='' qemu='' gpu='' waiter='' holder='' pid='' bad=0
+[ -z "$nocopy" ] || [ "$desk" = 0 ] || { echo "bed-shm: -k and -w are apart" >&2; exit 2; }
+daemon='' qemu='' gpu='' waiter='' holder='' pid='' load='' bad=0
 # gpu.sh, sent SIGTERM, kills its QEMU and gives the function back.
-trap 'kill -9 $qemu $waiter $holder $pid 2>/dev/null; kill $daemon $gpu 2>/dev/null; wait 2>/dev/null' EXIT
+trap 'kill -9 $qemu $waiter $holder $pid $load 2>/dev/null; kill $daemon $gpu 2>/dev/null; wait 2>/dev/null' EXIT
 rm -rf "$out"
 mkdir -p "$out"
-console=$out/console.log qemu_err=$out/qemu.out
-[ -z "$bdf" ] || console=$out/gpu/console qemu_err=$out/gpu/qemu.err
+# Where the desktop's log stood before anything here ran.
+offset=$(wc -c < /var/log/services 2>/dev/null || echo 0)
+console=$out/console.log
+[ -z "$bdf" ] || console=$out/gpu/console
 
 pass() { echo "bed-shm: $1: pass${2:+: $2}"; }
 fail() { echo "bed-shm: $1: fail: $2"; bad=$((bad + 1)); }
@@ -131,8 +148,7 @@ fi
 # The VM, under Rach2's KVM, with the region on its doorbell device. Its
 # disk takes no ioeventfd, and QEMU raises a disk's interrupts without an
 # irqfd, so that both counts are the doorbells'. With -g, gpu.sh starts it
-# with the function, and $qemu is QEMU's own process, from its pid file;
-# QEMU's messages are then in gpu.sh's DIR/gpu/qemu.err.
+# with the function, and $qemu is QEMU's own process, from its pid file.
 if [ -z "$bdf" ]; then
     TMPDIR=$out qemu-system-x86_64 -accel kvm -machine q35,kernel-irqchip=split -cpu host -smp "$cpus" \
         -m "${mib}M" -nodefaults -no-reboot -display none -monitor none \
@@ -152,6 +168,7 @@ else
         quiet "$out/gpu.log" 120 "$gpu" || break
     done
     qemu=$(cat "$out/qemu.pid" 2>/dev/null)
+    : > "$out/qemu.out"
 fi
 
 # kill_vm: kill QEMU and wait for its end; with -g, through gpu.sh, which
@@ -223,7 +240,7 @@ nocopy_rows()
 {
     if [ "$(info bound)" != 1 ]; then
         for c in build pages coherent release refuse measure revoke leak; do
-            fail "$c" "virtio-gpu did not bind over the region: $(tail -n 2 "$console" "$qemu_err" 2>&1 | tr '\n' ' ')"
+            fail "$c" "virtio-gpu did not bind over the region: $(tail -n 2 "$console" "$out/qemu.out" 2>&1 | tr '\n' ' ')"
         done
         return
     fi
@@ -316,7 +333,7 @@ nocopy_rows()
 virgl_rows()
 {
     if [ "$(info bound)" != 1 ]; then
-        fail draw "virtio-gpu did not bind over the region: $(tail -n 2 "$console" "$qemu_err" 2>&1 | tr '\n' ' ')"
+        fail draw "virtio-gpu did not bind over the region: $(tail -n 2 "$console" "$out/qemu.out" 2>&1 | tr '\n' ' ')"
         fail doorbell "no device"
     else
         io0=$(stat kvm_ioeventfd_signals) irq0=$(stat kvm_irqfd_raises)
@@ -361,8 +378,164 @@ virgl_rows()
     fi
 }
 
+# The desktop session's log and its user's display.
+services=/var/log/services
+desktop_env='XDG_RUNTIME_DIR=/run/user/1001 WAYLAND_DISPLAY=wayland-0'
+
+# since OFFSET: the services' log from byte OFFSET on, which is kept in
+# DIR/services.txt.
+since()
+{
+    tail -c +"$(($1 + 1))" "$services" 2>/dev/null | tr -d '\r' > "$out/services.txt"
+    cat "$out/services.txt"
+}
+
+# started OFFSET DISPLAY RENDERER SILENCE [FILE PID]: wait until the
+# session's last start since OFFSET is on DISPLAY, `BACKEND CARD RENDERER`
+# as rach2-desktop logs it, its Weston has logged a GL renderer matching
+# RENDERER and the user's socket exists, while quiet FILE SILENCE PID holds,
+# FILE the services' log unless given; set `took` to the seconds waited.
+# With which=any, any start since OFFSET will do, not only the last.
+which=last
+started()
+{
+    last=-1 still=0 took=0
+    until since "$1" | awk -v want="on $2" -v gl="$3" -v which="$which" '
+            /rach2-desktop: session: started as / { on = index($0, want) > 0; seen = 0 }
+            on && /GL renderer: / && $0 ~ ("GL renderer: " gl) { seen = ever = 1 }
+            END { exit !(which == "any" ? ever : on && seen) }' && [ -S /run/user/1001/wayland-0 ]; do
+        quiet "${5:-$services}" "$4" "${6:-}" || return 1
+        took=$((took + 1))
+    done
+}
+
+# glmark ARGS...: glmark2-wayland as the desktop user on the session.
+glmark()
+{
+    su -s /bin/sh desktop -c "export $desktop_env; exec glmark2-wayland $*"
+}
+
+# desk_rows: the desktop session on the VM's GPU, the VM killed under
+# glmark2, the session back on llvmpipe and, with -g, on Rach2's driver.
+desk_rows()
+{
+    card=''
+    for c in /sys/class/drm/card[0-9]*; do
+        case $(readlink -f "$c/device" 2>/dev/null) in */platform/virtio_gpu) card=${c##*/} ;; esac
+    done
+    if [ "$(info bound)" != 1 ] || [ -z "$card" ]; then
+        for c in session load death fallback; do
+            fail "$c" "virtio-gpu did not bind over the region: card '$card', $(tail -n 2 "$console" "$out/qemu.out" 2>&1 | tr '\n' ' ')"
+        done
+        return
+    fi
+    sup=$(cat /run/rach2-desktop.pid 2>/dev/null)
+    # The session's start is in the log by the time of the bind, or never:
+    # rach2-desktop moves it at once to a card that appears after a loss.
+    since "$offset" | grep -q "rach2-desktop: session: started as .* on drm $card gl" ||
+        kill -HUP "$sup" 2>/dev/null
+    if started "$offset" "drm $card gl" virgl 600 "$console" "$qemu"; then
+        pass session "Weston on $card through virgl after $took s: $(grep 'GL renderer: ' "$out/services.txt" | tail -n 1 | sed 's/^.*GL renderer: //')"
+    else
+        fail session "$(grep 'rach2-desktop: \|GL renderer\|fatal\|error' "$out/services.txt" | tail -n 4 | tr '\n' ' ')"
+    fi
+    if [ -n "$measure" ]; then
+        # shellcheck disable=SC2086 # two assignments
+        env $desktop_env sh "$measure/measure.sh" -r shm-virgl -u desktop -d -t 5 \
+            -o "$out/measure" glmark2 > "$out/measure.out" 2>&1
+        sed 's/^/bed-shm: figure: /' "$out/measure.out"
+    fi
+
+    # The load, until the driver has rung the VM's queue 32 times since
+    # glmark2 named its renderer.
+    glmark --run-forever -b build > "$out/glmark2.out" 2>&1 &
+    load=$!
+    until_line "$out/glmark2.out" 'GL_RENDERER' 600 "$load" || true
+    rung0=$(info rung | cut -d/ -f1)
+    last=-1 still=0
+    until [ "$(($(info rung | cut -d/ -f1) - ${rung0:-0}))" -ge 32 ]; do
+        quiet "$console" 600 "$load" || break
+    done
+    drew=$(($(info rung | cut -d/ -f1) - ${rung0:-0}))
+    if kill -0 "$load" 2>/dev/null && [ "$drew" -ge 32 ] &&
+        grep -q 'GL_RENDERER: *virgl' "$out/glmark2.out"; then
+        pass load "glmark2 on $(sed -n 's/^ *GL_RENDERER: *//p' "$out/glmark2.out" | head -n 1), $drew doorbells"
+    else
+        fail load "$drew doorbells: $(tail -n 3 "$out/glmark2.out" | tr '\n' ' ')"
+    fi
+
+    # The VM's death under the load, with fences pending.
+    dead=$(wc -c < "$services")
+    kill -STOP "$qemu" 2>/dev/null
+    "$probe" pending 4 > "$out/pending.out" 2>&1 &
+    waiter=$!
+    until_line "$out/pending.out" 'VGSHMPROBE PENDING\|VGSHMPROBE FAIL' 30 || true
+    kill_vm
+    wait "$waiter" 2>/dev/null
+    waiter=''
+    wait "$daemon" 2>/dev/null
+    daemon=''
+    last=-1 still=0
+    while kill -0 "$load" 2>/dev/null; do
+        quiet "$out/glmark2.out" 300 "$load" || break
+    done
+    if kill -0 "$load" 2>/dev/null; then
+        ended="still running"
+    else
+        load_status=0
+        wait "$load" || load_status=$?
+        ended="ended with status $load_status"
+        load=''
+    fi
+    if grep -q 'VGSHMPROBE OK' "$out/pending.out" && [ -z "$load" ] &&
+        grep -q 'result: detached: QEMU closed' "$out/ivshmemd.out"; then
+        pass death "$(sed -n 's/^VGSHMPROBE FENCE: //p' "$out/pending.out" | head -n 1); glmark2 $ended"
+    else
+        fail death "glmark2 $ended: $(grep 'VGSHMPROBE\|result' "$out/pending.out" "$out/ivshmemd.out" | tr '\n' ' ')"
+    fi
+
+    # The session again, headless on llvmpipe, drawing a client; with -g
+    # gpu.sh has given the GPU back by now, and the session may have gone
+    # on to it.
+    [ -z "$bdf" ] || which=any
+    if started "$dead" "headless - gl" llvmpipe 300 &&
+        grep -q "rach2-desktop: session: its display drm $card gl is gone" "$out/services.txt" &&
+        { [ -n "$bdf" ] || { glmark -b build:duration=2 > "$out/fallback.out" 2>&1 &&
+            grep -q 'GL_RENDERER: *llvmpipe' "$out/fallback.out"; }; }; then
+        drew=''
+        [ -n "$bdf" ] || drew="; glmark2 build $(sed -n 's/^.*FPS: *\([0-9]*\).*/\1/p' "$out/fallback.out" | head -n 1) FPS"
+        pass fallback "Weston headless on llvmpipe $took s after the death$drew"
+    else
+        fail fallback "$(grep 'rach2-desktop: \|GL renderer\|fatal' "$out/services.txt" | tail -n 4 | tr '\n' ' ') $(tail -n 2 "$out/fallback.out" 2>/dev/null | tr '\n' ' ')"
+    fi
+    cp "$out/services.txt" "$out/services-fallback.txt"
+
+    # With -g, Rach2's driver has the GPU again once gpu.sh has ended.
+    [ -n "$bdf" ] || return 0
+    which=last
+    back=''
+    for c in /sys/class/drm/card[0-9]*; do
+        case $(readlink -f "$c/device" 2>/dev/null) in */"$bdf") back=${c##*/} ;; esac
+    done
+    if [ -n "$back" ] && started "$dead" "drm $back gl" Intel 300 &&
+        grep -q "rach2-desktop: session: display drm $back gl appeared" "$out/services.txt"; then
+        dir=/sys/kernel/debug/dri/${back#card}/crtc-0/crc
+        echo auto > "$dir/control" 2>/dev/null
+        crcs=$(timeout 10 head -n 6 "$dir/data" 2>/dev/null | tail -n 4 | awk '{ print $NF }' | sort -u)
+        if [ "$(echo "$crcs" | grep -c .)" = 1 ]; then
+            pass return "Weston on $back, $(grep 'GL renderer: ' "$out/services.txt" | tail -n 1 | sed 's/^.*GL renderer: //'), pipe A crc $crcs over 4 frames, $took s after the death"
+        else
+            fail return "pipe A's crc over 4 frames: $(echo "$crcs" | tr '\n' ' ')"
+        fi
+    else
+        fail return "card '$back': $(grep 'rach2-desktop: \|GL renderer\|fatal' "$out/services.txt" | tail -n 4 | tr '\n' ' ')"
+    fi
+}
+
 if [ -n "$nocopy" ]; then
     nocopy_rows
+elif [ "$desk" = 1 ]; then
+    desk_rows
 else
     virgl_rows
 fi
