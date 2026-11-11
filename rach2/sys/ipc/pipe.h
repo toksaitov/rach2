@@ -151,10 +151,12 @@ struct kernel_iovec;
  * cut, to the write end `e` as one write(2) of their bytes, as Linux runs a
  * writev(2) through one `pipe_write`: the newest buffer takes the vector's
  * first total mod 4096 bytes when it can, and each page buffer opened after
- * it fills across the elements. Returns as a write(2) of the pipe does: the
- * bytes written, all of them unless O_NONBLOCK or an error cuts the write,
- * or -EAGAIN, -EPIPE with SIGPIPE raised, -EINTR, -EBADF, -EFAULT or
- * -ENOMEM before any byte. May sleep.
+ * it fills across the elements. Each of those groups is committed whole
+ * once it is full or the vector is spent, so a fault leaves none of its
+ * group readable, as Linux leaves an unfinished page empty. Returns as a
+ * write(2) of the pipe does: the bytes written, all of them unless
+ * O_NONBLOCK or an error cuts the write, or -EAGAIN, -EPIPE with SIGPIPE
+ * raised, -EINTR, -EBADF, -EFAULT or -ENOMEM before any byte. May sleep.
  */
 int32_t pipe_writev(struct fd_entry *e, const struct kernel_iovec *iov, int count);
 
