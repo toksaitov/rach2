@@ -192,6 +192,10 @@ class Game:
                 "GALLIUM_HUD_DUMP_DIR=%s exec %s" % (self.hud, " ".join(
                     "'%s'" % word for word in command)))
         (out / "command.txt").write_text(line + "\n")
+        # The game writes Game.log anew on each start; the last run's would
+        # report its load before this one's.
+        if (GAME / "Game.log").exists():
+            (GAME / "Game.log").unlink()
         self.log = open(out / "game.out", "w")
         self.started = time.monotonic()
         self.proc = subprocess.Popen(desktop(line), stdout=self.log, stderr=subprocess.STDOUT,
