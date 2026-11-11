@@ -228,6 +228,7 @@ static void whole_gtt(void)
 
     CHECK(i915_ggtt_reserve(dev_a, 4096u, 0, &kept) == 0, "gtt: a page reserved for the kernel");
     dev_a->gem.evictions = 0;
+    clears_yielding = 0;
     for (n = 0; n < 20; n++) {
         h[n] = create(&file_a, 4u * SET_BYTES);
         err |= pin_whole(object(&file_a, h[n]), 0, &v);
@@ -237,6 +238,7 @@ static void whole_gtt(void)
     }
     CHECK(err == 0 && dev_a->gem.evictions >= 4,
           "gtt: 80 MiB bound in turn in 64 MiB, the oldest evicted");
+    CHECK(clears_yielding >= 4, "gtt: each eviction's clear may give way, as its caller may sleep");
     for (v = dev_a->gem.bound; v && v->start != kept; v = v->ggtt_next) {
     }
     CHECK(v && !v->obj, "gtt: the reserved page is still there");
@@ -705,9 +707,13 @@ static void userptr_pages(void)
 
     /* munmap of one page: the binding undone, its entries cleared, the
      * frames let go. */
+    clears = 0;
+    clears_yielding = 0;
     mmn_notify(&user_mm, MMN_UNMAP, m + 0x3000, m + 0x4000);
     CHECK(!obj->vmas && gtt_clear(start) && user_pins == 0 && !obj->frames,
           "userptr: an unmap undoes the binding and lets the 16 frames go");
+    CHECK(clears > 0 && clears_yielding == 0,
+          "userptr: the notifier's clear gives no way, since its caller holds the big lock");
     CHECK(pin_whole(obj, 0, &v) == 0 && user_pins == 16 && maps_user(obj, v),
           "userptr: used again, pinned and bound again");
 

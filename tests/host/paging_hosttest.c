@@ -103,6 +103,7 @@ bool debug_shell_is_home;
 static int tables_given;   /* page tables the heap gave since a row began */
 static int boot_carves;    /* calls to the boot allocator, which must be none */
 static int refusals_noted; /* calls to klog, one for each range that failed */
+static unsigned give_ways; /* calls to sched_give_way since a row began */
 
 /** A zeroed page from the host heap, counted as a page table; 0 for more
  * than one page. `*phys` is set to 0. */
@@ -936,9 +937,33 @@ uint32_t fpu_pkru(void)
     return 0;
 }
 
-/** Nothing: one thread has no one to give way to. */
+/** Count a give-way of a walk; one thread has no one to give way to. */
 void sched_give_way(void)
-{}
+{
+    give_ways++;
+}
+
+/**
+ * The give-ways of the walks that free an address space of 1,000 page
+ * tables: `free_user_pages` gives way after each table, and
+ * `free_page_directory` after each 512 tables it frees, once for the
+ * 1,000.
+ */
+static void give_way_rows(void)
+{
+    page_dir_t *dir = calloc(1, sizeof(*dir));
+    uint32_t i;
+
+    for (i = 0; i < 1000u; i++) {
+        dir->logical_page_tables[i] = calloc(1, PAGE_SIZE);
+    }
+    give_ways = 0;
+    free_user_pages(dir);
+    check(give_ways == 1000u, "freeing the pages of 1,000 tables gives way after each table");
+    give_ways = 0;
+    free_page_directory(dir);
+    check(give_ways == 1u, "freeing 1,000 tables gives way once, after the 512th");
+}
 
 /** Run every row; 0 when each passes, 1 otherwise. */
 int main(void)
@@ -953,6 +978,7 @@ int main(void)
     temp_cpu_rows();
     fault_rows();
     recovered_rows();
+    give_way_rows();
     check(boot_carves == 0, "no row reached the boot allocator after the heap exists");
 
     if (fails) {
