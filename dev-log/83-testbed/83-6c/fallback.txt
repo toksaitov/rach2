@@ -1,0 +1,60 @@
+nctx-fallback: evidence: /home/testing/rach2/build/worktrees/codex/build/runs/task-2669/fallback-4
+nctx-fallback: boot: 5743 console bytes
+nctx-reverse: evidence: /tmp/nctx-result
+nctx-fallback: running: 8850 output bytes
+reverse.qcow2: OK
+reverse-vmlinuz: OK
+reverse-initrd.img: OK
+mesa-nctx.tar.xz: OK
+nctxcheck: OK
+ivshmemd: OK
+nctxcheck: capset: node /dev/dri/renderD128, mask 0x6, DRM native context absent
+nctxcheck: capset: result: pass
+nctxcheck: info: egl vendor: Mesa Project
+nctxcheck: info: egl version: 1.5
+nctxcheck: info: render node: /dev/dri/renderD128
+nctxcheck: info: gl vendor: Mesa
+nctxcheck: info: gl renderer: virgl (LLVMPIPE (LLVM 19.1.7, 256 bits))
+nctxcheck: info: gl version: OpenGL ES 3.2 Mesa 26.1.6
+nctxcheck: info: native fence: yes
+nctxcheck: info: robustness: no
+nctxcheck: info: result: pass
+nctxcheck: triangle: inside 255,128,0,255 outside 0,0,128,255
+nctxcheck: triangle: result: pass
+nctxcheck: fence: 16 GL syncs signalled in order
+nctxcheck: fence: sync file 8 polled ready
+nctxcheck: fence: inside 255,128,0,255 outside 0,0,128,255
+nctxcheck: fence: native fence exported, polled, imported and waited on
+nctxcheck: fence: result: pass
+Ignoring custom size 1280x800 for validation. Using 800x600.
+Warning: DRM_CAP_ASYNC_PAGE_FLIP not supported, falling back to 'mailbox' mode for SwapInterval(0).
+=======================================================
+    glmark2 2023.01
+=======================================================
+    OpenGL Information
+    GL_VENDOR:      Mesa
+    GL_RENDERER:    virgl (LLVMPIPE (LLVM 19.1.7, 256 bits))
+    GL_VERSION:     4.5 (Compatibility Profile) Mesa 26.1.6
+    Surface Config: buf=32 r=8 g=8 b=8 a=8 depth=32 stencil=0 samples=0
+    Surface Size:   4096x2160 fullscreen
+=======================================================
+[build] use-vbo=true: Validation: Success
+nctx-fallback: running: 11697 output bytes
+Warning: DRM_CAP_ASYNC_PAGE_FLIP not supported, falling back to 'mailbox' mode for SwapInterval(0).
+=======================================================
+    glmark2 2023.01
+=======================================================
+    OpenGL Information
+    GL_VENDOR:      Mesa
+    GL_RENDERER:    virgl (LLVMPIPE (LLVM 19.1.7, 256 bits))
+    GL_VERSION:     4.5 (Compatibility Profile) Mesa 26.1.6
+    Surface Config: buf=32 r=8 g=8 b=8 a=8 depth=32 stencil=0 samples=0
+    Surface Size:   4096x2160 fullscreen
+=======================================================
+[build] use-vbo=true: FPS: 8 FrameTime: 137.642 ms
+=======================================================
+                                  glmark2 Score: 7 
+=======================================================
+ivshmemd: info: attached 1, bound 1, epoch 1, driver 2, device 2, error 0, doorbells 1, binds 1, rung 247/2, woken 95/2, polls 0, heap 771 of 16381 pages, refused 0, maps 0, map_pages 0, map_live 0, revoked 0
+nctx-reverse: result: pass: fallback
+nctx-fallback: result: pass

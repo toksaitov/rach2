@@ -1,0 +1,13 @@
+Linux debian-ref 7.2.12+deb13-amd64 #1 SMP PREEMPT_DYNAMIC Debian 7.2.12-1~bpo13+1 (2026-11-04) x86_64 GNU/Linux
+● nctx-reverse.service - Serve the reversed native-context transport
+     Loaded: loaded (/etc/systemd/system/nctx-reverse.service; enabled; preset: enabled)
+     Active: active (running) since Wed 2026-11-11 11:25:32 UTC; 5s ago
+ Invocation: 9d60495613da495d95cda560af504898
+   Main PID: 491 (vgpu-backend)
+      Tasks: 6 (limit: 4627)
+     Memory: 222M (peak: 223M)
+        CPU: 2.617s
+     CGroup: /system.slice/nctx-reverse.service
+             └─491 /opt/rach2-nctx/vgpu-backend -v -x
+
+Nov 11 11:25:32 debian-ref systemd[1]: Started nctx-reverse.service - Serve the reversed native-context transport.
