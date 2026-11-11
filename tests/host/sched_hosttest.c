@@ -493,10 +493,14 @@ static void states(void)
  * marks the process, and the exit from the call takes it with interrupts
  * still off. A removed ready entry leaves the next entry selectable.
  * A selection over an empty list restores the interrupt flag, and one with
- * no current process returns.
+ * no current process returns. A kernel thread (`no_tick_switch`) keeps the
+ * tick's request in its record for its next sleep or service point, and a
+ * selection that keeps the current thread clears the request it answered.
  */
 static void lifecycle(void)
 {
+    unsigned i;
+
     setup();
     sched_disable();
     schedule();
@@ -510,6 +514,18 @@ static void lifecycle(void)
     sched_take_preempt();
     CHECK(current_proc == &procs[6] && !procs[0].need_resched, "syscall exit takes wake");
     CHECK(!irq_flags, "syscall exit keeps interrupts off");
+    setup();
+    current_proc->no_tick_switch = 1;
+    wake(&procs[6]);
+    sched_preempt();
+    CHECK(!switches && current_proc == &procs[0] && procs[0].need_resched,
+          "kernel thread keeps the tick's request for its service point");
+    for (i = 1; i < 7; i++) {
+        procs[i].state = PROC_BLOCKED;
+    }
+    schedule();
+    CHECK(!switches && current_proc == &procs[0] && !procs[0].need_resched,
+          "schedule that keeps the thread clears its request");
     setup();
     schedule();
     sched_forget(&procs[1]);
