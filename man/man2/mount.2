@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 11, 2026
 .Dt MOUNT 2
 .Os
 .Sh NAME
@@ -38,6 +38,7 @@ The supported types are
 .Ql tmpfs ,
 .Ql mqueue ,
 .Ql debugfs ,
+.Ql pstore ,
 and
 .Ql devpts ,
 which shows the system's own
@@ -244,6 +245,13 @@ and
 set its root directory's mode, in octal, and owner; see
 .Xr debugfs 5 .
 .Pp
+For
+.Ql pstore ,
+the source is any string, recorded as given, nothing is claimed, and the
+options are ignored; every mount shows the records the last boot left, as
+on Linux; see
+.Xr pstore 5 .
+.Pp
 For every other type, the source must name a published block device
 under
 .Pa /dev :
@@ -383,6 +391,12 @@ and
 .Dv MS_NOEXEC .
 On Linux the init system makes most of these, and each it makes may be
 unmounted.
+With the
+.Cm ramoops.
+options the kernel also mounts pstore at
+.Pa /sys/fs/pstore ,
+with the same three flags, as systemd does on Linux; that mount is not
+permanent.
 .Pa /dev
 is synthetic and has no directory to cover, so
 .Pa /dev/shm
@@ -390,14 +404,18 @@ and
 .Pa /dev/mqueue
 stand in its root directory by name, as
 .Pa /dev
-stands in the root's, and debugfs stands in the root directory of
+stands in the root's, and debugfs and pstore stand in the root directory of
 .Pa /sys
 by the names
-.Pa kernel/debug ,
+.Pa kernel/debug
+and
+.Pa fs/pstore ,
 whose
 .Pa ..
-is
-.Pa /sys/kernel ;
+are
+.Pa /sys/kernel
+and
+.Pa /sys/fs ;
 a mount may be placed on a directory inside
 .Pa /dev/shm .
 .Pp
@@ -417,8 +435,8 @@ and
 .Ql relatime
 are set; the silent flag and the file system's own options are not
 shown.
-KRFFS, ext2 and mqueue ignore the option string; FAT32, exFAT, tmpfs and
-debugfs parse it.
+KRFFS, ext2, mqueue and pstore ignore the option string; FAT32, exFAT,
+tmpfs and debugfs parse it.
 .Ss Dirty-volume checks
 Before a writable mount, FAT32 checks a dirty volume with limits of
 32 directory levels including the root and 16 surplus tails.

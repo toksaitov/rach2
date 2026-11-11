@@ -1,0 +1,138 @@
+.Dd November 11, 2026
+.Dt PSTORE 5
+.Os
+.Sh NAME
+.Nm pstore
+.Nd crash records kept across a reset, under /sys/fs/pstore
+.Sh SYNOPSIS
+.Cm ramoops.mem_address Ns = Ns Ar ADDRESS
+.Cm ramoops.mem_size Ns = Ns Ar BYTES
+.Op Cm ramoops.record_size Ns = Ns Ar BYTES
+.Op Cm ramoops.console_size Ns = Ns Ar BYTES
+.Op Cm ramoops.ftrace_size Ns = Ns Ar BYTES
+.Op Cm ramoops.pmsg_size Ns = Ns Ar BYTES
+.Op Cm ramoops.mem_type Ns = Ns Ar N
+.Op Cm ramoops.ecc Ns = Ns Ar N
+.Sh DESCRIPTION
+With the
+.Cm ramoops.
+options on the kernel's command line, the kernel keeps a region of RAM
+that survives a warm reset, as Linux's ramoops does, and writes into it
+what the next boot should see: the end of the log when the kernel panics,
+and the log as the console prints it.
+The next boot finds what the region holds and shows each record as a
+file under
+.Pa /sys/fs/pstore ,
+which it mounts with
+.Ql nosuid ,
+.Ql nodev
+and
+.Ql noexec ,
+as systemd mounts pstore on Linux.
+Without the options there is no region and no
+.Pa /sys/fs/pstore .
+Nothing is written to the firmware's variables.
+.Pp
+The options are Linux's module parameters, read as Linux reads them;
+each number may be decimal, octal with a leading 0, or hexadecimal with
+a leading 0x:
+.Bl -tag -width Ds
+.It Cm ramoops.mem_address , Cm ramoops.mem_size
+The region's physical address and size, which must be under 4 GiB.
+The kernel takes the region out of its memory before it gives any of it
+out, as Linux's
+.Cm memmap=
+would, the whole of each page the region touches.
+A region that is partly usable memory, or that holds the kernel or a
+boot module, is refused with a record of why; one in memory the firmware
+does not call usable is mapped and used as it is.
+.It Cm ramoops.record_size
+The size of each crash record, 4096 when not given: the region, less the
+console, ftrace and pmsg zones, is cut into as many dmesg zones of at
+least this size as fit, each of the same even size.
+.It Cm ramoops.console_size
+The size of the console zone, 4096 when not given; 0 for none.
+.It Cm ramoops.ftrace_size , Cm ramoops.pmsg_size
+Each 4096 when not given.
+These zones keep their place after the console zone, as Linux lays them
+out, so that both kernels find the same zones at the same options; this
+kernel writes nothing to them.
+.It Cm ramoops.mem_type
+How the region is mapped: 0, the default, write-combining, with the
+write buffers drained after each write; 1 uncached; 2 cached.
+.It Cm ramoops.ecc
+The Reed-Solomon parity bytes of each 128-byte block, and of each zone's
+header: 0, the default, for none, 1 for 16, or 2 to 254.
+The code is Linux's for ramoops, so a region written by either kernel
+reads in the other.
+.El
+.Pp
+Each size is rounded down to a power of two.
+Each zone has Linux's header of 12 bytes: the signature 0x43474244, the
+offset of the next byte to write and the bytes held, each 32 bits.
+.Pp
+A panic writes the end of the log into the next dmesg zone, once, after
+its own record: Linux's header line,
+.Ql ==== Ns Ar SECONDS . Ns Ar MICROSECONDS Ns Ql -D ,
+the line
+.Ql Panic#1 Part1 ,
+then as many of the newest whole records of the log as fit.
+The console zone takes every record of the log as it is made, from the
+first, wrapping when full.
+.Pp
+At boot, a dmesg zone that holds such a header becomes the file
+.Pa dmesg-ramoops- Ns Ar N ,
+and the console zone, if it holds anything, the file
+.Pa console-ramoops-0 ,
+with the last boot's log; the console zone is then emptied for this
+boot's log, as on Linux.
+A record with parity ends with Linux's notice of what the parity mended:
+.Ql ECC: No errors detected ,
+or
+.Ql ECC: Ar N Corrected bytes, Ar M unrecoverable blocks .
+.Pp
+Removing a file erases its zone, so the next boot does not show the
+record again.
+A dmesg zone not removed keeps its record across boots until a later
+panic writes over it, the panics taking the zones in turn from the first.
+Removing
+.Pa console-ramoops-0
+empties the console zone, this boot's log in it too, as on Linux.
+.Pp
+The root directory is root's with mode 0750, and each file root's with
+mode 0444, as Linux makes them.
+A file's size is its record's, and its times the time in its header, or
+the boot's for the console's.
+Nothing else makes, writes or renames a file.
+.Xr statfs 2
+reports
+.Dv PSTOREFS_MAGIC ,
+0x6165676c.
+The type is
+.Ql pstore
+to
+.Xr mount 2 ,
+which shows the same files at every mount.
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa /sys/fs/pstore/dmesg-ramoops- Ns Ar N
+The end of the log at a panic, from dmesg zone
+.Ar N .
+.It Pa /sys/fs/pstore/console-ramoops-0
+The last boot's log.
+.El
+.Sh EXAMPLES
+On a machine with 4 GiB of RAM, a megabyte at 1 GiB, with records of 64 KiB
+and parity:
+.Bd -literal -offset indent
+ramoops.mem_address=0x40000000 ramoops.mem_size=0x100000
+ramoops.record_size=0x10000 ramoops.console_size=0x10000 ramoops.ecc=1
+.Ed
+.Sh SEE ALSO
+.Xr mount 2 ,
+.Xr watchdog 4 ,
+.Xr debugfs 5 ,
+.Xr sysfs 5
+.Sh BUGS
+The kernel has no oops that it survives, so only a panic writes a dmesg
+record; there is no ftrace or pmsg record, and no compression.
