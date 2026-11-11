@@ -14,7 +14,11 @@
  * takes it. A stream receive into an address below user space fails with every
  * byte kept, one whose later segment cannot be written returns the segments
  * before it and keeps that one, and one with MSG_WAITALL waits until its
- * buffers are full. A TCP connection to the probe's own listener completes its
+ * buffers are full. recv and recvfrom into a buffer whose second page cannot
+ * be written return the bytes queued, and into a page they cannot write at all
+ * fail with EAGAIN on an empty nonblocking stream and return 0 at the end of
+ * input. A send on a nonblocking socket still connecting fails with EAGAIN.
+ * A TCP connection to the probe's own listener completes its
  * handshake, moves data both ways and reports the peer 127.0.0.1, and one the
  * server closes at once after accept still connects; a nonblocking accept right
  * after the connect finds the connection, and a poll with a zero timeout right
@@ -72,16 +76,16 @@ typedef unsigned char uint8_t;
 #define EFAULT       14
 
 #define PROT_NONE     0x0
+#define PROT_READ     0x1
+#define PROT_WRITE    0x2
 #define MAP_PRIVATE   0x02
 #define MAP_ANONYMOUS 0x20
 
-/* An address below the bottom of user space, USER_ADDR_MIN: on i686 where
- * the kernel's image lies, on x86-64 in the low memory under 0x10000. */
-#if defined __x86_64__
+/* An address below the bottom of user space, USER_ADDR_MIN, on both kernels:
+ * 0x4000000 on i686 and 0x10000 on x86-64, which runs this i686 binary in its
+ * ia32 profile too. An address between the two would be refused on i686 and
+ * only unmapped on x86-64. */
 #define LOW_ADDR 0x8000UL
-#else
-#define LOW_ADDR 0x100000UL
-#endif
 
 #define AF_INET     2
 #define SOCK_STREAM 1
@@ -251,6 +255,11 @@ static const struct step {
     {"a tcp receive below user space was not EFAULT with every byte kept", "tcp-recv-low"},
     {"no page for the tcp receive buffer rows", "tcp-recv-buffer-kept"},
     {"a tcp receive did not keep the buffer whose destination failed", "tcp-recv-buffer-kept"},
+    {"no pages for the tcp recv span rows", "tcp-recv-span"},
+    {"a tcp recv into a buffer whose second page cannot be written did not return the bytes queued",
+     "tcp-recv-span"},
+    {"a nonblocking tcp recv of an empty stream into a page it cannot write was not EAGAIN",
+     "tcp-recv-span-empty"},
     {"a tcp receive with MSG_WAITALL did not wait for its buffers to fill", "tcp-recv-waitall"},
     {"a nonblocking tcp receive with MSG_WAITALL did not return what had come",
      "tcp-recv-waitall-nonblock"},
@@ -258,6 +267,7 @@ static const struct step {
     {"tcp recvmsg with empty buffers did not wait for input", "tcp-recvmsg-zero-wait"},
     {"tcp recvmsg with empty buffers took queued input", "tcp-recvmsg-zero-ready"},
     {"tcp recvmsg with empty buffers missed the end of input", "tcp-recvmsg-zero-eof"},
+    {"a tcp recv into a page it cannot write at the end of input was not 0", "tcp-recv-span-eof"},
     {"tcp listener socket", "tcp-connect"},
     {"tcp bind", "tcp-connect"},
     {"tcp listen", "tcp-connect"},
@@ -325,6 +335,10 @@ static const struct step {
     {"accept on 127.0.0.1", "bound-at-loopback"},
     {"refused socket", "closed-port-refused"},
     {"closed port not refused", "closed-port-refused"},
+    {"connecting socket", "send-connecting-eagain"},
+    {"connecting socket non-blocking", "send-connecting-eagain"},
+    {"a nonblocking connect to 192.0.2.1 did not return EINPROGRESS", "send-connecting-eagain"},
+    {"a send on a nonblocking socket still connecting was not EAGAIN", "send-connecting-eagain"},
     {"bound-port listen socket", "second-bind-before-listen"},
     {"bound-port listen bind", "second-bind-before-listen"},
     {"second listener socket", "second-bind-before-listen"},
@@ -1125,9 +1139,25 @@ static void tcp_recvmsg_overlap(int cs, int as)
     }
 }
 
+/** recv(2) on `s` into `buf` with `flags`, through its own subcall: the
+ * bytes received or a negated errno. */
+static int recv_call(int s, char *buf, int len, int flags)
+{
+    unsigned long args[4];
+
+    args[0] = (uint32_t)s;
+    args[1] = (unsigned long)buf;
+    args[2] = (uint32_t)len;
+    args[3] = (uint32_t)flags;
+    return socketcall(SC_RECV, args);
+}
+
 /** A stream receive whose destination lies below user space fails with
- * EFAULT and leaves every byte queued, through readv, recvmsg and recvmsg
- * with MSG_PEEK, as Linux's checked copy fails; a read then takes them. */
+ * EFAULT and leaves every byte queued, through readv, recvmsg, recvmsg with
+ * MSG_PEEK, recv and recvfrom, as Linux's checked copy fails; a read then
+ * takes them. recv and recvfrom find the address at the copy, as the vector
+ * calls do, since their first check is only that the buffer ends in user
+ * space. */
 static void tcp_recv_low(int cs, int as)
 {
     const char *msg = "below-user-space";
@@ -1139,6 +1169,8 @@ static void tcp_recv_low(int cs, int as)
     if (sys_write(as, msg, sizeof(got)) != (int)sizeof(got) ||
         syscall3(SYS_READV, cs, (long)iov, 1) != -EFAULT || recvmsg_vec(cs, iov, 1, 0) != -EFAULT ||
         recvmsg_vec(cs, iov, 1, MSG_PEEK) != -EFAULT ||
+        recv_call(cs, (char *)LOW_ADDR, sizeof(got), 0) != -EFAULT ||
+        recv_wait(cs, (char *)LOW_ADDR, sizeof(got), 0) != -EFAULT ||
         sys_read(cs, got, sizeof(got)) != (int)sizeof(got) ||
         !mem_eq((const uint8_t *)got, (const uint8_t *)msg, (int)sizeof(got)))
         fail("a tcp receive below user space was not EFAULT with every byte kept");
@@ -1148,7 +1180,10 @@ static void tcp_recv_low(int cs, int as)
  * segments queued, which a peek of eight bytes finds, and the second's
  * destination a page that cannot be written, readv and recvmsg return the
  * first and leave the second queued for a read, as Linux's tcp_recvmsg
- * returns what it copied before a failed copy. */
+ * returns what it copied before a failed copy. The two segments are two
+ * buffers because Rach2 keeps each segment's bounds; Linux may have
+ * joined the second to the first (tcp_try_coalesce) and failed the whole
+ * read with EFAULT, so the row checks Rach2's own bounds. */
 static void tcp_recv_kept(int cs, int as)
 {
     struct iovec_probe iov[2];
@@ -1173,21 +1208,74 @@ static void tcp_recv_kept(int cs, int as)
     }
 }
 
+/** Two pages, the first writable and the second of no access, mapped once:
+ * the first's address, or NULL when they cannot be had. */
+static char *span_pages(void)
+{
+    static long pages;
+    long m;
+
+    if (pages == 0) {
+        m = probe_mmap(0, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (sys_failed(m))
+            return 0;
+        if (syscall3(SYS_MPROTECT, m + 4096, 4096, PROT_NONE) != 0)
+            return 0;
+        pages = m;
+    }
+    return (char *)pages;
+}
+
+/** recv and recvfrom on a stream check their buffer only to end in user
+ * space and copy a receive buffer at a time, as Linux's import_ubuf and
+ * tcp_recvmsg do: into 8192 bytes whose second page cannot be written, with
+ * four bytes queued, each returns the four; on an empty stream with
+ * MSG_DONTWAIT, into a page it cannot write at all, each fails with EAGAIN,
+ * the wait coming before any copy. */
+static void tcp_recv_span(int cs, int as)
+{
+    char *buf = span_pages();
+    char *none = bad_page();
+    int mode, n;
+
+    if (!buf || !none)
+        fail("no pages for the tcp recv span rows");
+    for (mode = 0; mode < 2; mode++) {
+        buf[0] = 0;
+        if (sys_write(as, "span", 4) != 4)
+            fail("a tcp recv into a buffer whose second page cannot be written did not return the "
+                 "bytes queued");
+        n = mode == 0 ? recv_call(cs, buf, 8192, 0) : recv_wait(cs, buf, 8192, 0);
+        if (n != 4 || !mem_eq((const uint8_t *)buf, (const uint8_t *)"span", 4))
+            fail("a tcp recv into a buffer whose second page cannot be written did not return the "
+                 "bytes queued");
+    }
+    if (recv_call(cs, none, 4096, MSG_DONTWAIT) != -EAGAIN ||
+        recv_wait(cs, none, 4096, MSG_DONTWAIT) != -EAGAIN)
+        fail(
+            "a nonblocking tcp recv of an empty stream into a page it cannot write was not EAGAIN");
+}
+
+/** At the end of input, recv and recvfrom into a page they cannot write
+ * return 0, as Linux's tcp_recvmsg ends before it copies. `cs` has been shut
+ * down for reading. */
+static void tcp_recv_span_eof(int cs)
+{
+    char *none = bad_page();
+
+    if (recv_call(cs, none, 4096, 0) != 0 || recv_wait(cs, none, 4096, 0) != 0)
+        fail("a tcp recv into a page it cannot write at the end of input was not 0");
+}
+
 /** Receive on the stream `s` into `buf` with MSG_WAITALL, by recv when
  * `mode` is 0, recvfrom when 1, and recvmsg into two buffers when 2: the
  * bytes received or a negated errno. */
 static int recv_waitall(int s, char *buf, int len, int mode)
 {
     struct iovec_probe iov[2];
-    unsigned long args[4];
 
-    if (mode == 0) {
-        args[0] = (uint32_t)s;
-        args[1] = (unsigned long)buf;
-        args[2] = (uint32_t)len;
-        args[3] = MSG_WAITALL;
-        return socketcall(SC_RECV, args);
-    }
+    if (mode == 0)
+        return recv_call(s, buf, len, MSG_WAITALL);
     if (mode == 1)
         return recv_wait(s, buf, len, MSG_WAITALL);
     iov[0].iov_base = buf;
@@ -1342,8 +1430,10 @@ static void tcp_recvmsg(int cs, int as)
     tcp_recvmsg_overlap(cs, as);
     tcp_recv_low(cs, as);
     tcp_recv_kept(cs, as);
+    tcp_recv_span(cs, as);
     tcp_recv_waitall(cs, as);
     tcp_recvmsg_zero(cs, as);
+    tcp_recv_span_eof(cs);
 }
 
 /** A stream's bytes peeked at with MSG_PEEK stay in its ring: one byte
@@ -1976,6 +2066,49 @@ static void tcp_refused(void)
 }
 
 /**
+ * A send on a nonblocking socket whose connection is still in its handshake
+ * fails with EAGAIN, as Linux's sk_stream_wait_connect returns with no time
+ * to wait (net/core/stream.c:56-82). The loopback completes a handshake
+ * within connect, so the socket dials the documentation address 192.0.2.1,
+ * which `learn_addresses` showed is routed out of the interface and which
+ * nothing answers before the send that follows the connect at once. The
+ * socket is closed in SYN_SENT.
+ */
+static void tcp_send_connecting(void)
+{
+    unsigned long args[6];
+    uint8_t sa[16];
+    int cs;
+
+    args[0] = AF_INET;
+    args[1] = SOCK_STREAM;
+    args[2] = 0;
+    cs = socketcall(SC_SOCKET, args);
+    if (cs < 0)
+        fail("connecting socket");
+    if (sys_fcntl(cs, F_SETFL, O_NONBLOCK) < 0)
+        fail("connecting socket non-blocking");
+
+    make_sockaddr(sa, 9, 192, 0, 2, 1);
+    args[0] = (uint32_t)cs;
+    args[1] = (unsigned long)sa;
+    args[2] = 16;
+    if (socketcall(SC_CONNECT, args) != -EINPROGRESS)
+        fail("a nonblocking connect to 192.0.2.1 did not return EINPROGRESS");
+
+    args[0] = (uint32_t)cs;
+    args[1] = (unsigned long)"x";
+    args[2] = 1;
+    args[3] = MSG_NOSIGNAL;
+    args[4] = 0;
+    args[5] = 0;
+    if (socketcall(SC_SENDTO, args) != -EAGAIN)
+        fail("a send on a nonblocking socket still connecting was not EAGAIN");
+
+    sys_close(cs);
+}
+
+/**
  * A reader already asleep on a stream another process shuts down wakes with
  * the end of input. The sleeper is in the socket's wait queue, and
  * SHUT_RDWR shuts the receiving half, which ends a read of an empty stream
@@ -2483,6 +2616,8 @@ void probe_main(unsigned long *sp)
     tcp_bound_loopback();
     rows_enter("refused socket");
     tcp_refused();
+    rows_enter("connecting socket");
+    tcp_send_connecting();
     rows_enter("bound-port listen socket");
     tcp_ports();
     rows_enter("simultaneous socket");
