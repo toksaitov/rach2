@@ -1,0 +1,16 @@
+0
+v 0 caps 0 len 0 mask 0: probe mode 0: 313 of 200000 windows bad, extra 2456, max 54
+v 0 caps 0 len 0 mask 0: probe mode 2: 0 of 200000 windows bad, extra 0, max 0
+v 0 caps 0 len 0 mask 0: probe mode 1: 318 of 200000 windows bad, extra 2433, max 55
+v 0 caps 0 len 0 mask 0: probe mode 3: 0 of 200000 windows bad, extra 0, max 0
+pmcwin: 18 of 30000 windows bad
+pmcwin: 346 of 30000 windows bad
+pmcwin: 29999 of 30000 windows bad
+1
+v 0 caps 0 len 0 mask 0: probe mode 0: 756 of 200000 windows bad, extra 5850, max 54
+v 0 caps 0 len 0 mask 0: probe mode 2: 0 of 200000 windows bad, extra 0, max 0
+v 0 caps 0 len 0 mask 0: probe mode 1: 231 of 200000 windows bad, extra 1755, max 55
+v 0 caps 0 len 0 mask 0: probe mode 3: 0 of 200000 windows bad, extra 0, max 0
+pmcwin: 32 of 30000 windows bad
+pmcwin: 389 of 30000 windows bad
+pmcwin: 29999 of 30000 windows bad
