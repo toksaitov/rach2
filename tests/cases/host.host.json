@@ -1111,6 +1111,16 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "psmouse_attr",
+          "checks": "tests/host/psmouse_attr_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "psmouse_synaptics",
+          "checks": "tests/host/psmouse_synaptics_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "ptrace",
           "checks": "tests/host/ptrace_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
@@ -1208,6 +1218,11 @@
         {
           "assertion_id": "sectorcopy",
           "checks": "tests/host/sectorcopy_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "serial",
+          "checks": "tests/host/serial_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {
