@@ -923,11 +923,8 @@ uint64_t proc_alarm_at(uint64_t now, uint64_t ticks);
  * Non-zero if the current thread, or its process, has a pending signal that
  * is neither blocked nor ignored: one that is caught, or whose default
  * action terminates or stops the process; or a stop its tracer asked for
- * with PTRACE_INTERRUPT. A deferred hardware debug hit counts as a pending
- * SIGTRAP. Blocking system call loops call it so that the signal or stop is
- * acted on. A deferred kernel debug hit is posted first, which may make
- * the thread ready and clear its `wakeup_tick`, so a caller that waits on
- * arms its deadline again. Called on the thread's stack with the big lock
+ * with PTRACE_INTERRUPT. Blocking system call loops call it so that the
+ * signal or stop is acted on. Called on the thread's stack with the big lock
  * held. Defined in syscall_proc.c.
  */
 int signal_pending(void);
