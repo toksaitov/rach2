@@ -7,8 +7,9 @@
  *
  * The interrupt flag, the floating-point saves and the switch of stacks are
  * the test's; the selection, the process states, the wake marks and the
- * ready lists are the kernel's. The rows judge the order of
- * dispatch and the counts, never the host's speed.
+ * ready lists are the kernel's, and the big lock is a depth the model keeps
+ * on each processor. The rows judge the order of dispatch and the counts,
+ * never the host's speed.
  */
 
 #include "proc/sched.c"
@@ -171,7 +172,9 @@ void arch_debug_switch(const struct process *next)
 }
 
 /** Check the states of a dispatch from `old` to `next` and count it; the
- * test stays on its own stack. */
+ * test stays on its own stack. An affinity row runs what comes next on the
+ * processors here, after the incoming thread's tail, which on the machine
+ * runs first and lets `old` be switched to again. */
 void switch_context(process_t *old, process_t *next)
 {
     CHECK(!irq_flags, "switch with interrupts on");
@@ -182,6 +185,7 @@ void switch_context(process_t *old, process_t *next)
     if (affinity_step && old == &procs[0]) {
         int step = affinity_step;
 
+        schedule_tail();
         affinity_step = 0;
         CHECK(old->state == PROC_BLOCKED && affinity_waits != NULL,
               "remote affinity waits for the running target");
@@ -235,10 +239,17 @@ void spin_unlock(struct spinlock *lock)
     (void)lock;
 }
 
-/** 0: there is no big lock to let go around an idle wait. */
+/* The big lock's takes the model saw: how many, and the last one's key. */
+static int bkl_takes, bkl_last_key;
+
+/** Let the modelled big lock go and return the processor's depth, which is
+ * 0 in every row but the big lock's. */
 int bkl_drop(void)
 {
-    return 0;
+    int depth = this_cpu()->bkl_depth;
+
+    this_cpu()->bkl_depth = 0;
+    return depth;
 }
 
 /** Nothing: there is no big lock. */
@@ -515,6 +526,42 @@ static void lifecycle(void)
     CHECK(irq_flags == 0x200, "empty process list restores interrupts");
     current_proc = NULL;
     schedule();
+}
+
+/**
+ * The big lock does not cross a switch: the outgoing thread's depth is
+ * saved in its record and the lock let go, a thread that holds nothing
+ * runs without it, and the tail takes it back at the incoming thread's own
+ * depth, counted as a switch's take. The tail clears the outgoing thread's
+ * `on_cpu` and the incoming one's is set. An idle wait lets the lock go and
+ * takes it back at the same depth, counted as an idle wait's take.
+ */
+static void big_lock(void)
+{
+    int i;
+
+    setup();
+    bkl_takes = 0;
+    procs[0].on_cpu = 1;
+    this_cpu()->bkl_depth = 2;
+    schedule();
+    CHECK(current_proc != &procs[0] && procs[0].bkl_depth == 2,
+          "a switch saves the outgoing thread's depth");
+    CHECK(this_cpu()->bkl_depth == 0 && bkl_takes == 0,
+          "and a thread that holds nothing runs without the lock");
+    CHECK(!procs[0].on_cpu && current_proc->on_cpu,
+          "the tail clears the outgoing thread's on_cpu and the incoming one's is set");
+    for (i = 0; i < 7 && current_proc != &procs[0]; i++) {
+        schedule();
+    }
+    CHECK(current_proc == &procs[0] && this_cpu()->bkl_depth == 2 && bkl_takes == 1 &&
+              bkl_last_key == BKL_KEY_SWITCH,
+          "the tail takes the lock back at the incoming thread's depth, as a switch's take");
+    this_cpu()->bkl_depth = 1;
+    idle_wait_irq_on();
+    CHECK(this_cpu()->bkl_depth == 1 && bkl_takes == 2 && bkl_last_key == BKL_KEY_IDLE,
+          "an idle wait takes the lock back at its depth, as an idle wait's take");
+    this_cpu()->bkl_depth = 0;
 }
 
 /**
@@ -801,6 +848,30 @@ static void sched_out_rows(void)
     procs[0].in_syscall = 0;
 }
 
+/** One processor: nothing to answer. */
+void smp_service(void)
+{}
+
+/** Store `value` at `p` and return what was there: one thread. */
+unsigned int arch_atomic_xchg(volatile unsigned int *p, unsigned int value)
+{
+    unsigned int old = *p;
+
+    *p = value;
+    return old;
+}
+
+/** Take the modelled big lock back at `depth`, counting the take and its
+ * key. */
+void bkl_take_as(int depth, int key)
+{
+    if (depth > 0) {
+        this_cpu()->bkl_depth = depth;
+        bkl_takes++;
+        bkl_last_key = key;
+    }
+}
+
 /** Run every row; 0 when each passes, 1 otherwise. */
 int main(int argc, char **argv)
 {
@@ -814,6 +885,7 @@ int main(int argc, char **argv)
     fairness();
     states();
     lifecycle();
+    big_lock();
     sched_out_rows();
     accounting();
     load_phase();
@@ -825,7 +897,8 @@ int main(int argc, char **argv)
     if (failures) {
         return 1;
     }
-    dprintf(1, "sched-hosttest: result: pass: priority, fairness, states, lifecycle, preempt due, "
+    dprintf(1, "sched-hosttest: result: pass: priority, fairness, states, lifecycle, big lock, "
+               "preempt due, "
                "accounting, "
                "load phase, "
                "idle machine, ready lists, migration, run delay\n");
