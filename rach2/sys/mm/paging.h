@@ -435,13 +435,25 @@ void mmio_usage(size_t *used, size_t *largest);
 /**
  * Map the frame at physical `phys` at a temporary kernel address and return
  * it, or 0, with a record, when every slot is held. The mapping lasts until
- * `kunmap_temp`; a caller may sleep while it holds one, since a slot is its
- * own. The paths that zero, copy or fill a user frame use these, because on
- * i686 a user frame may lie above the identity-mapped window. Where the
- * direct map reaches every frame (`ARCH_DIRECT_MAP_ALL`, x86-64), the
- * address is the frame's there and nothing is mapped.
+ * `kunmap_temp`, which any processor may call; a slot is its holder's alone.
+ * A holder may sleep and wake on another processor, with or without the big
+ * lock: the switch to it there drops that processor's translations if a
+ * slot was swept since it last did (`smp_kernel_flush`). Any context. The
+ * paths that zero, copy or fill a user frame use these, because on i686 a
+ * user frame may lie above the identity-mapped window. Where the direct map
+ * reaches every frame (`ARCH_DIRECT_MAP_ALL`, x86-64), the address is the
+ * frame's there and nothing is mapped.
  */
 void *kmap_temp(uintptr_t phys);
+
+/**
+ * Split the temporary slots into a pool for each of `cpus` processors, at
+ * most 32, of whole words of the slot maps; with more processors, several
+ * share a pool by their index modulo the count. Called once, while the boot
+ * processor alone runs; a slot held then stays held and is given back to the
+ * pool its index now falls in. Nothing on x86-64.
+ */
+void paging_temp_split(unsigned int cpus);
 
 /** Whether the frame of the physical address `phys` is not the allocator's:
  * past the top of memory, or one the memory map does not offer, which
@@ -451,10 +463,10 @@ int paging_frame_is_device(uintptr_t phys);
 
 /**
  * Release a mapping `kmap_temp` returned. The caller must not use the
- * address again. On i686 the slot stays mapped until the slots are next
- * swept: when none is free, every released slot is unmapped at once and
- * every processor drops its translations, once for up to 1024 releases, as
- * Linux's `kmap` does with its pool.
+ * address again. On i686 the slot stays mapped until its pool is next
+ * swept: when a pool has none free, every released slot of it is unmapped
+ * at once and every processor drops its translations, once for all the
+ * pool's releases, as Linux's `kmap` does with its pool.
  */
 void kunmap_temp(void *va);
 

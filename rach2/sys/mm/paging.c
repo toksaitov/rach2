@@ -98,16 +98,38 @@ int paging_framefail_arm(uint32_t count)
 #ifndef ARCH_DIRECT_MAP_ALL
 /* The temporary mappings: one bit per slot of the region set while a caller
  * holds it, and one per slot given back but still mapped, which no caller is
- * given until the next sweep unmaps it. */
+ * given until the next sweep of its pool unmaps it. A pool's lock covers its
+ * bits. */
 static uint32_t _temp_slots[KVA_TEMP_SLOTS / 32];
 static uint32_t _temp_stale[KVA_TEMP_SLOTS / 32];
-/* The slot the next search for a free one starts at. */
-static uint32_t _temp_next;
+/* The most pools: each has whole words of the two maps, so that no two
+ * pools' locks cover one word. */
+#define TEMP_POOLS_MAX (KVA_TEMP_SLOTS / 32u)
+/*
+ * The slots split into a pool for each processor, as Linux gives each its
+ * own slots of the kmap_local fixmap (`kmap_local_calc_idx`,
+ * mm/highmem.c:476-480), so that processors mapping at once take their own
+ * locks and two never take one slot. A processor borrows from another's pool
+ * only when its own has nothing free even after a sweep.
+ */
+struct temp_pool {
+    struct spinlock lock; /* over `next` and the pool's bits of the maps */
+    uint32_t first, end;  /* the slots [first, end), multiples of 32 */
+    uint32_t next;        /* the slot the next search starts at */
+};
+static struct temp_pool _temp_pools[TEMP_POOLS_MAX] = {{SPINLOCK_INIT, 0, KVA_TEMP_SLOTS, 0}};
+/* The pools in use and the slots of each but the last, which also has the
+ * rest; one pool of every slot until `paging_temp_split`, which sets them
+ * once, before a second processor runs. */
+static uint32_t _temp_pool_count = 1;
+static uint32_t _temp_pool_size = KVA_TEMP_SLOTS;
 #endif
 /* The pages of the MMIO region, a bit each, set while a window or a
- * mapping of `map_mmio` has the page. */
+ * mapping of `map_mmio` has the page. `mmio_lock` covers them, the large
+ * spans' records and the region's entries. */
 #define MMIO_PAGES (KVA_MMIO_SIZE / PAGE_SIZE)
 static uint32_t _mmio_used[MMIO_PAGES / 32u];
+static struct spinlock mmio_lock = SPINLOCK_INIT;
 /* The first physical address past what an entry can name: 4 GiB on i686,
  * 2^52 on x86-64. */
 #define MMIO_PHYS_TOP ((uint64_t)PTE_ADDR(~(pte_t)0) + PAGE_SIZE)
@@ -1397,14 +1419,15 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
     return map_mmio_typed(phys_addr, size, PTE_NOCACHE);
 }
 
-/** The bit of page `i` of the MMIO region in `_mmio_used`. */
+/** The bit of page `i` of the MMIO region in `_mmio_used`. `mmio_lock` is
+ * held. */
 static int mmio_bit(uintptr_t i)
 {
     return (_mmio_used[i / 32u] >> (i % 32u)) & 1u;
 }
 
 /** Mark the `count` pages of the MMIO region from page `i` used, or free
- * when `used` is 0. */
+ * when `used` is 0. `mmio_lock` is held. */
 static void mmio_mark(uintptr_t i, uintptr_t count, int used)
 {
     for (; count > 0; i++, count--) {
@@ -1420,6 +1443,7 @@ static void mmio_mark(uintptr_t i, uintptr_t count, int used)
  * The first page of the lowest free run of `count` pages of the MMIO region
  * whose index is `phase` modulo `align`, or MMIO_PAGES when there is none.
  * The region has 32768 pages, so a first fit over the bit map is cheap.
+ * `mmio_lock` is held.
  */
 static uintptr_t mmio_find(uintptr_t count, uintptr_t align, uintptr_t phase)
 {
@@ -1448,7 +1472,7 @@ static int mmio_span_large(uintptr_t va, uint64_t phys, uintptr_t lo, uintptr_t 
 /** Map the window of `pages` pages at the region's page `first` to the
  * device memory at `phys`, page-aligned, with the entry flags `flags`:
  * each aligned span with a large page where the architecture has them, the
- * rest a page at a time. */
+ * rest a page at a time. `mmio_lock` is held. */
 static void mmio_fill(uintptr_t first, uintptr_t pages, uint64_t phys, pte_t flags)
 {
     uintptr_t lo = KVA_MMIO + first * PAGE_SIZE;
@@ -1478,7 +1502,8 @@ static void mmio_fill(uintptr_t first, uintptr_t pages, uint64_t phys, pte_t fla
  * The MMIO region's page tables exist from the boot (`mmu_init`) and every
  * directory shares them, so a mapping made here at any time is seen by
  * every process. A bit for each page of the region says it is taken, so a
- * window `mmio_unmap` frees is used again.
+ * window `mmio_unmap` frees is used again. `mmio_lock` covers the search,
+ * the marks and the entries, so two processors never take one run.
  *
  * The page count is rounded up by division and not by adding a page less
  * one: a region reaching the top of the address space would wrap that sum to
@@ -1490,6 +1515,7 @@ uintptr_t mmio_map(uint64_t phys, size_t size, pte_t cache)
     uint64_t end_addr = phys + size;
     uint64_t span;
     uintptr_t pages, first, align = 1, phase = 0;
+    uint32_t flags;
 
     if (size == 0 || end_addr < phys || end_addr > MMIO_PHYS_TOP) {
         klog(KLOG_ERR, "vm", "map_mmio: bad region 0x%x%08x, %zu bytes", (uint32_t)(phys >> 32),
@@ -1509,6 +1535,7 @@ uintptr_t mmio_map(uint64_t phys, size_t size, pte_t cache)
         phase = (uintptr_t)((start_page / PAGE_SIZE) % align);
     }
 #endif
+    flags = spin_lock_irqsave(&mmio_lock);
     first = mmio_find(pages, align, phase);
 #if KVA_MMIO_LARGE
     if (first >= MMIO_PAGES && align > 1) {
@@ -1516,6 +1543,7 @@ uintptr_t mmio_map(uint64_t phys, size_t size, pte_t cache)
     }
 #endif
     if (first >= MMIO_PAGES) {
+        spin_unlock_irqrestore(&mmio_lock, flags);
         klog(KLOG_ERR, "vm", "map_mmio: no run of %lu pages free in the MMIO region",
              (unsigned long)pages);
         return 0;
@@ -1526,6 +1554,7 @@ uintptr_t mmio_map(uint64_t phys, size_t size, pte_t cache)
     /* Every translation the processor cached goes. */
     arch_space_load(arch_space_root());
     smp_kernel_mapping_changed();
+    spin_unlock_irqrestore(&mmio_lock, flags);
 
     return KVA_MMIO + first * PAGE_SIZE + (uintptr_t)(phys - start_page);
 }
@@ -1533,13 +1562,16 @@ uintptr_t mmio_map(uint64_t phys, size_t size, pte_t cache)
 uintptr_t mmio_map_frames(const uintptr_t *frames, uintptr_t count, pte_t cache)
 {
     uintptr_t first, i, va;
+    uint32_t flags;
 
     if (count == 0 || count > MMIO_PAGES) {
         klog(KLOG_ERR, "vm", "map_mmio: bad list of %lu frames", (unsigned long)count);
         return 0;
     }
+    flags = spin_lock_irqsave(&mmio_lock);
     first = mmio_find(count, 1, 0);
     if (first >= MMIO_PAGES) {
+        spin_unlock_irqrestore(&mmio_lock, flags);
         klog(KLOG_ERR, "vm", "map_mmio: no run of %lu pages free in the MMIO region",
              (unsigned long)count);
         return 0;
@@ -1552,6 +1584,7 @@ uintptr_t mmio_map_frames(const uintptr_t *frames, uintptr_t count, pte_t cache)
     }
     arch_space_load(arch_space_root());
     smp_kernel_mapping_changed();
+    spin_unlock_irqrestore(&mmio_lock, flags);
     return va;
 }
 
@@ -1559,11 +1592,13 @@ void mmio_unmap(uintptr_t va, size_t size)
 {
     uintptr_t lo = va & ~(uintptr_t)(PAGE_SIZE - 1);
     uintptr_t hi = va + size;
+    uint32_t flags;
 
     if (size == 0 || lo < KVA_MMIO || hi < va || hi > KVA_MMIO + KVA_MMIO_SIZE) {
         return;
     }
     hi = (hi + PAGE_SIZE - 1) & ~(uintptr_t)(PAGE_SIZE - 1); /* the region's end is aligned */
+    flags = spin_lock_irqsave(&mmio_lock);
     mmio_mark((lo - KVA_MMIO) / PAGE_SIZE, (hi - lo) / PAGE_SIZE, 0);
     for (va = lo; va < hi;) {
 #if KVA_MMIO_LARGE
@@ -1582,31 +1617,39 @@ void mmio_unmap(uintptr_t va, size_t size)
         va += PAGE_SIZE;
     }
     smp_kernel_mapping_changed();
+    spin_unlock_irqrestore(&mmio_lock, flags);
 }
 
 size_t mmio_page_size(uintptr_t va)
 {
+    size_t size;
+    uint32_t flags;
     pte_t *e;
 
     if (va < KVA_MMIO || va - KVA_MMIO >= KVA_MMIO_SIZE) {
         return 0;
     }
+    flags = spin_lock_irqsave(&mmio_lock);
 #if KVA_MMIO_LARGE
     {
         uintptr_t slot = (va - KVA_MMIO) / MMU_TABLE_SPAN;
 
         if (_mmio_large[slot / 32u] & (1u << (slot % 32u))) {
+            spin_unlock_irqrestore(&mmio_lock, flags);
             return MMU_TABLE_SPAN;
         }
     }
 #endif
     e = kernel_pte(va);
-    return e && (*e & PTE_P) ? PAGE_SIZE : 0;
+    size = e && (*e & PTE_P) ? PAGE_SIZE : 0;
+    spin_unlock_irqrestore(&mmio_lock, flags);
+    return size;
 }
 
 void mmio_usage(size_t *used, size_t *largest)
 {
     uintptr_t i, run = 0, best = 0, taken = 0;
+    uint32_t flags = spin_lock_irqsave(&mmio_lock);
 
     for (i = 0; i < MMIO_PAGES; i++) {
         if (mmio_bit(i)) {
@@ -1616,6 +1659,7 @@ void mmio_usage(size_t *used, size_t *largest)
             best = run;
         }
     }
+    spin_unlock_irqrestore(&mmio_lock, flags);
     *used = taken * PAGE_SIZE;
     *largest = best * PAGE_SIZE;
 }
@@ -1638,25 +1682,52 @@ void kunmap_temp(void *va)
 {
     (void)va;
 }
-#else
-/**
- * The first slot from `_temp_next` that is neither held nor stale, or
- * `KVA_TEMP_SLOTS` when there is none. Interrupts are off.
- *
- * Such a slot has been unmapped since every processor that holds the big
- * lock last dropped its translations, so none that runs the caller has one
- * for it and its new entry needs no flush.
- */
-static uint32_t temp_find(void)
+
+void paging_temp_split(unsigned int cpus)
 {
+    (void)cpus;
+}
+#else
+void paging_temp_split(unsigned int cpus)
+{
+    uint32_t flags = kirq_save();
+    uint32_t p;
+
+    _temp_pool_count = cpus < 1u ? 1u : cpus > TEMP_POOLS_MAX ? TEMP_POOLS_MAX : cpus;
+    _temp_pool_size = (KVA_TEMP_SLOTS / _temp_pool_count) & ~31u;
+    for (p = 0; p < _temp_pool_count; p++) {
+        struct temp_pool *pool = &_temp_pools[p];
+
+        pool->first = p * _temp_pool_size;
+        pool->end = p + 1u == _temp_pool_count ? KVA_TEMP_SLOTS : pool->first + _temp_pool_size;
+        pool->next = pool->first;
+    }
+    kirq_restore(flags);
+}
+
+/** The pool that has `slot`. */
+static struct temp_pool *temp_pool_of(uint32_t slot)
+{
+    uint32_t p = slot / _temp_pool_size;
+
+    return &_temp_pools[p < _temp_pool_count ? p : _temp_pool_count - 1u];
+}
+
+/**
+ * The first slot of `pool` from its `next` that is neither held nor stale,
+ * or `KVA_TEMP_SLOTS` when there is none. The pool's lock is held.
+ */
+static uint32_t temp_find(struct temp_pool *pool)
+{
+    uint32_t n = pool->end - pool->first;
     uint32_t i;
 
-    for (i = 0; i < KVA_TEMP_SLOTS; i++) {
-        uint32_t slot = (_temp_next + i) % KVA_TEMP_SLOTS;
+    for (i = 0; i < n; i++) {
+        uint32_t slot = pool->first + (pool->next - pool->first + i) % n;
         uint32_t bit = 1u << (slot % 32);
 
         if (!((_temp_slots[slot / 32] | _temp_stale[slot / 32]) & bit)) {
-            _temp_next = (slot + 1) % KVA_TEMP_SLOTS;
+            pool->next = slot + 1u < pool->end ? slot + 1u : pool->first;
             return slot;
         }
     }
@@ -1664,45 +1735,72 @@ static uint32_t temp_find(void)
 }
 
 /**
- * Unmap every stale slot and drop this processor's translations, and have
- * every other drop its own before it next takes the big lock: one change of
- * kernel mappings for all the slots given back since the last sweep, where
- * unmapping each as it was given back would be one change for each.
- * Interrupts are off.
+ * Unmap every stale slot of `pool` and drop this processor's translations,
+ * and have every other drop its own before it next takes the big lock: one
+ * change of kernel mappings for all the slots of the pool given back since
+ * its last sweep, where unmapping each as it was given back would be one
+ * change for each. The pool's lock is held; 0 when no slot was stale, and
+ * then nothing changed.
  */
-static void temp_sweep(void)
+static int temp_sweep(struct temp_pool *pool)
 {
-    uint32_t slot;
+    uint32_t w, slot, swept = 0;
 
-    for (slot = 0; slot < KVA_TEMP_SLOTS; slot++) {
-        if (_temp_stale[slot / 32] & (1u << (slot % 32))) {
-            *kernel_pte(KVA_TEMP + slot * PAGE_SIZE) = 0;
+    for (w = pool->first / 32; w < pool->end / 32; w++) {
+        for (slot = w * 32; _temp_stale[w] != 0 && slot < w * 32 + 32; slot++) {
+            if (_temp_stale[w] & (1u << (slot % 32))) {
+                *kernel_pte(KVA_TEMP + slot * PAGE_SIZE) = 0;
+                _temp_stale[w] &= ~(1u << (slot % 32));
+                swept++;
+            }
         }
     }
-    k_memset(_temp_stale, 0, sizeof _temp_stale);
+    if (swept == 0) {
+        return 0;
+    }
     arch_space_load(arch_space_root());
     smp_kernel_mapping_changed();
+    return 1;
 }
 
+/**
+ * A slot is taken from this processor's pool, sweeping it when nothing in it
+ * is free, and then from each other pool in turn the same way, so that one
+ * processor may hold every slot of the region. The new entry's translation
+ * is dropped on this processor, since a sweep by another processor, or of
+ * another's pool, left this one's translations of the slot in place. The
+ * others need nothing: only the holder reads the slot, and a processor it
+ * moves to drops its translations at the switch when a sweep came since
+ * (`smp_kernel_flush`).
+ */
 void *kmap_temp(uintptr_t phys)
 {
-    uint32_t flags = kirq_save();
-    uint32_t slot = temp_find();
+    uint32_t home = arch_cpu_id() % _temp_pool_count;
+    uint32_t slot = KVA_TEMP_SLOTS;
+    uint32_t i, flags;
     uintptr_t va;
 
-    if (slot == KVA_TEMP_SLOTS) {
-        temp_sweep();
-        slot = temp_find();
+    for (i = 0; i < _temp_pool_count && slot == KVA_TEMP_SLOTS; i++) {
+        struct temp_pool *pool = &_temp_pools[(home + i) % _temp_pool_count];
+
+        flags = spin_lock_irqsave(&pool->lock);
+        slot = temp_find(pool);
+        if (slot == KVA_TEMP_SLOTS && temp_sweep(pool)) {
+            slot = temp_find(pool);
+        }
+        if (slot != KVA_TEMP_SLOTS) {
+            _temp_slots[slot / 32] |= 1u << (slot % 32);
+            *kernel_pte(KVA_TEMP + slot * PAGE_SIZE) =
+                (pte_t)(phys & ~(PAGE_SIZE - 1)) | PTE_P | PTE_W;
+        }
+        spin_unlock_irqrestore(&pool->lock, flags);
     }
     if (slot == KVA_TEMP_SLOTS) {
-        kirq_restore(flags);
         klog(KLOG_ERR, "vm", "temporary mappings: every slot is held");
         return 0;
     }
     va = KVA_TEMP + slot * PAGE_SIZE;
-    _temp_slots[slot / 32] |= 1u << (slot % 32);
-    *kernel_pte(va) = (pte_t)(phys & ~(PAGE_SIZE - 1)) | PTE_P | PTE_W;
-    kirq_restore(flags);
+    arch_tlb_flush_page(va);
     return (void *)(va + (phys & (PAGE_SIZE - 1)));
 }
 
@@ -1710,15 +1808,17 @@ void kunmap_temp(void *va)
 {
     uintptr_t addr = (uintptr_t)va & ~(PAGE_SIZE - 1);
     uint32_t slot = (uint32_t)((addr - KVA_TEMP) / PAGE_SIZE);
+    struct temp_pool *pool;
     uint32_t flags;
 
     if (addr < KVA_TEMP || slot >= KVA_TEMP_SLOTS) {
         return;
     }
-    flags = kirq_save();
+    pool = temp_pool_of(slot);
+    flags = spin_lock_irqsave(&pool->lock);
     _temp_slots[slot / 32] &= ~(1u << (slot % 32));
     _temp_stale[slot / 32] |= 1u << (slot % 32);
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&pool->lock, flags);
 }
 #endif
 

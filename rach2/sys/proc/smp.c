@@ -107,8 +107,9 @@ static int bkl_booted;
 #define BKL_PASS_AFTER  (1u << 16)
 
 /* Counts the changes of kernel mappings; a processor that has seen fewer
- * drops its translations when it next takes the big lock. */
-static volatile uint32_t kernel_gen;
+ * drops its translations when it next takes the big lock or, on i686,
+ * switches to a thread (`smp_kernel_flush`). */
+static volatile unsigned int kernel_gen;
 
 /* The processors online, the boot processor counted (`smp_cpu_count`). */
 static int cpus_online = 1;
@@ -117,8 +118,9 @@ static int cpus_online = 1;
  * (`smp_tlb_count`); written under the big lock. */
 static uint32_t tlb_counts[2];
 
-/** Drop every translation of `cpu`, which has just taken the big lock, if a
- * kernel mapping changed since it last held it. */
+/** Drop every translation of `cpu`, the running processor, if a kernel
+ * mapping changed since it last did. The count is read before the drop, so
+ * a change counted after the read is dropped next time. */
 static void bkl_flush(struct percpu *cpu)
 {
     if (cpu->kernel_gen != kernel_gen) {
@@ -859,9 +861,29 @@ void smp_space_release(const struct page_dir *dir)
     }
 }
 
+/**
+ * The count goes up by a compare-and-exchange, since a processor without the
+ * big lock sweeps its temporary slots (mm/paging.c). This processor counts
+ * itself up to date with the new value only when no other change came since
+ * it last dropped its translations: one that did may have been made after
+ * the caller's drop.
+ */
 void smp_kernel_mapping_changed(void)
 {
-    this_cpu()->kernel_gen = ++kernel_gen;
+    struct percpu *cpu = this_cpu();
+    unsigned int gen;
+
+    do {
+        gen = kernel_gen;
+    } while (arch_atomic_cmpxchg(&kernel_gen, gen, gen + 1u) != gen);
+    if (cpu->kernel_gen == gen) {
+        cpu->kernel_gen = gen + 1u;
+    }
+}
+
+void smp_kernel_flush(void)
+{
+    bkl_flush(this_cpu());
 }
 
 /* How long a stop waits for the processors asked to take it by the
@@ -1052,6 +1074,7 @@ void smp_start(void)
         }
     }
     n = platform_cpu_count(limit);
+    paging_temp_split((unsigned int)n);
     for (cpu = 1; cpu < n; cpu++) {
         struct percpu *c = &cpu_table[cpu];
 
