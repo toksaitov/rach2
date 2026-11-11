@@ -149,11 +149,16 @@ static int pvm_may_access(const process_t *t)
  */
 static int32_t pvm_move(struct mm *mm, uintptr_t laddr, uintptr_t raddr, uint32_t n, int write)
 {
-    const vma_t *vma = vm_find(&mm->vm, raddr);
+    const vma_t *vma;
     unsigned char buf[PVM_CHUNK];
     int32_t rc;
+    int allowed;
 
-    if (!vma || !(write ? (vma->prot & VM_PROT_WRITE) != 0 : VM_READABLE(vma->prot))) {
+    mmap_read_lock(mm);
+    vma = vm_find(&mm->vm, raddr);
+    allowed = vma && (write ? (vma->prot & VM_PROT_WRITE) != 0 : VM_READABLE(vma->prot));
+    mmap_unlock(mm);
+    if (!allowed) {
         return -EFAULT;
     }
     if (write) {
@@ -326,6 +331,7 @@ static int pvm_may_read(const process_t *t)
 static long pvm_advise(struct mm *mm, uintptr_t start, uintptr_t len, uint32_t advice)
 {
     uintptr_t end;
+    long rc;
 
     if ((start & (PAGE_SIZE - 1u)) != 0) {
         return -EINVAL;
@@ -337,10 +343,14 @@ static long pvm_advise(struct mm *mm, uintptr_t start, uintptr_t len, uint32_t a
     if (end == start) {
         return 0;
     }
+    mm_read_begin(mm);
     if (vm_covered(&mm->vm, start, end) != end - start) {
-        return -ENOMEM;
+        rc = -ENOMEM;
+    } else {
+        rc = madvise_refused(&mm->vm, start, end, advice) ? -EINVAL : 0;
     }
-    return madvise_refused(&mm->vm, start, end, advice) ? -EINVAL : 0;
+    mm_read_end(mm);
+    return rc;
 }
 
 /**
@@ -431,12 +441,14 @@ static int pvm_dying(const struct tgroup *tg)
  * Linux's __oom_reap_task_mm: those of every region but shared memory,
  * whose pages the memory keeps, and device memory, which is the device's.
  * The ranges drivers registered hear of it first (MMN_DROP), and a later
- * touch by a dying thread finds a page as after MADV_DONTNEED.
+ * touch by a dying thread finds a page as after MADV_DONTNEED. The regions'
+ * lock is held to write, so that no fault backs a page during the walk.
  */
 static void pvm_reap(struct mm *mm)
 {
     const vma_t *r;
 
+    mmap_write_lock(mm);
     for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
         if (r->type != VM_SHARED && !(r->prot & VM_PROT_IO)) {
             mmn_notify(mm, MMN_DROP, r->start, r->end);
@@ -444,6 +456,7 @@ static void pvm_reap(struct mm *mm)
         }
     }
     mm->reaped = 1;
+    mmap_unlock(mm);
 }
 
 /**
