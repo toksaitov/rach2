@@ -799,6 +799,9 @@ static int add_serio_files(int port, int dir)
         if (made < SERIO_FILES_MAX) {
             serio_made[port][made++] = h;
         } else {
+            sysfs_remove(h);
+            i--;
+            n--;
             rc = -ENOSPC; /* the table is sized for the largest protocol's */
         }
     }

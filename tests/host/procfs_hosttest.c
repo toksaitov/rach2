@@ -3231,6 +3231,64 @@ static int add_guest_protocol(int dir)
     return sysfs_add_attr(dir, &attr, NULL, 0) < 0 ? -ENOMEM : 0;
 }
 
+/* A protocol can request a whole file table, or one entry too many. */
+static int protocol_file_count;
+
+/** Add numbered settings to exercise the real replacement table. */
+static int add_numbered_protocol(int dir)
+{
+    struct sysfs_attr attr = {NULL, 0444u, show_guest_file, NULL};
+    char name[16];
+    int i;
+
+    for (i = 0; i < protocol_file_count; i++) {
+        __builtin_snprintf(name, sizeof(name), "setting%d", i);
+        attr.name = name;
+        if (sysfs_add_attr(dir, &attr, NULL, 0) < 0) {
+            return -ENOMEM;
+        }
+    }
+    return 0;
+}
+
+/** Replace the auxiliary port's protocol files through the real registry,
+ * preserving the port's other files and removing a failed oversized set. */
+static void input_protocol_rows(void)
+{
+    int dir, old, base, i, all;
+    char name[16];
+
+    dir = child(child(sysfs_anchor_find(SYSFS_PLATFORM, 0), "i8042"), "serio1");
+    check(dir > 0, "the auxiliary port exists before replacing its protocol files");
+    base = sysfs_node_count(dir);
+    evdev_sysfs_serio_files(1, add_guest_protocol);
+    old = child(dir, "sensitivity");
+    check(old > 0 && reg_is(old, "1\n") && sysfs_node_count(dir) == base + 1,
+          "the real auxiliary port lists its first protocol's file");
+    protocol_file_count = 24;
+    evdev_sysfs_serio_files(1, add_numbered_protocol);
+    all = 1;
+    for (i = 0; i < 24; i++) {
+        __builtin_snprintf(name, sizeof(name), "setting%d", i);
+        if (!reg_is(child(dir, name), "1\n")) {
+            all = 0;
+        }
+    }
+    check(!child(dir, "sensitivity") && !sysfs_node_kind(old) && all &&
+              sysfs_node_count(dir) == base + 24,
+          "replacement removes the old file and lists all 24 new settings");
+    protocol_file_count = 25;
+    evdev_sysfs_serio_files(1, add_numbered_protocol);
+    check(sysfs_node_count(dir) == base && !child(dir, "setting24"),
+          "a rejected oversized set leaves none of its files behind");
+    evdev_sysfs_serio_files(1, add_guest_protocol);
+    check(reg_is(child(dir, "sensitivity"), "1\n"),
+          "a protocol's files can be installed after the oversized set failed");
+    evdev_sysfs_serio_files(1, NULL);
+    check(sysfs_node_count(dir) == base && child(dir, "description") > 0,
+          "removing protocol files preserves the port's own files");
+}
+
 /** Publish, remove and recreate a pass-through port through the real
  * sysfs registry, including its input and bus links and its callbacks. */
 static void input_guest_rows(void)
@@ -3376,6 +3434,7 @@ int main(int argc, char **argv)
     input_file_rows();
     input_change_rows();
     input_guest_rows();
+    input_protocol_rows();
     if (!failures) {
         printf("procfs-hosttest: result: pass: stat allocation failure and times, descriptor "
                "links, task ids, the mem descriptor's counts, the exe link, a read of a reaped "

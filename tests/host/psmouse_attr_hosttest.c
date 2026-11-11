@@ -660,9 +660,9 @@ void console_poke(void)
 /*
  * The files sysfs would hold: each attribute added, the directory it went
  * below, which is 100 and its port's number, and whether a protocol's
- * files or the port's own added it. `evdev_sysfs_serio_driver` and
- * `evdev_sysfs_serio_files` make them at once, as evdev_sysfs.c does for a
- * port whose directory is there.
+ * files or the port's own added it. This model makes driver files at once;
+ * evdev_sysfs.c records the callback and makes them with the directory.
+ * procfs_hosttest.c exercises the real registry and file replacement.
  */
 #define FILES_MAX 64
 struct file {
@@ -801,6 +801,12 @@ static int32_t store(int port, const char *name, const char *text)
 
 /* The Synaptics driver, a stub: a pad with a pass-through port when the row
  * says, which takes no bytes of its own. */
+/** The relative-mode probe sees the same modeled device. */
+int synaptics_init_relative(void)
+{
+    return synaptics_init();
+}
+
 int synaptics_init(void)
 {
     return synaptics_answer;
@@ -1214,12 +1220,13 @@ static void plain_rows(void)
     CHECK("each mode 0644 with a show and a store", file_of(1, "rate")->attr.mode == 0644u &&
                                                         file_of(1, "rate")->attr.show &&
                                                         file_of(1, "rate")->attr.store);
+    n_took = 0;
     CHECK("protocol reads PS/2", reads(1, "protocol", "PS/2\n"));
     CHECK("rate reads 100", reads(1, "rate", "100\n"));
     CHECK("resolution reads 200", reads(1, "resolution", "200\n"));
     CHECK("resetafter reads 5", reads(1, "resetafter", "5\n"));
     CHECK("resync_time reads 0", reads(1, "resync_time", "0\n"));
-    CHECK("the reads send nothing", aux_mouse.reporting && model_count == 0);
+    CHECK("the reads send nothing", aux_mouse.reporting && model_count == 0 && n_took == 0);
 }
 
 /** Writes of `rate` to the plain mouse: the bytes each sends, psmouse's
@@ -1392,8 +1399,6 @@ static void protocol_rows(void)
     CHECK("a name with a newline is refused, as psmouse matches the bytes written",
           store(1, "protocol", "imps\n") == -EINVAL);
     CHECK("a name psmouse does not know is refused", store(1, "protocol", "mouse") == -EINVAL);
-    CHECK("so is one Rach2 has no detect for",
-          store(1, "protocol", "lifebook") == -EINVAL && store(1, "protocol", "PS2++") == -EINVAL);
     CHECK("a protocol write keeps its embedded NUL in the length",
           store_bytes(1, "protocol", "bare\0junk", 9) == -EINVAL);
     CHECK("a protocol write cannot include its terminating NUL",
@@ -1413,8 +1418,41 @@ static void protocol_rows(void)
               count_named("ImPS/2 Generic Explorer Mouse") == 0);
 }
 
-/** More switches: the rate kept across one, Cortron's, which has no
- * detect, the fallback to PS/2 that keeps the name a detect gave, and
+/** Every known name without a detect is accepted, resets the device and
+ * falls back to PS/2 on both ports. */
+static void fallback_name_rows(void)
+{
+    static const char *const names[] = {"PS2++",       "logitech",       "CyPS/2",
+                                        "cypress",     "SynSMBus",       "synaptics-smbus",
+                                        "LBPS/2",      "lifebook",       "touchkitPS/2",
+                                        "touchkit",    "OLPC HGPK",      "hgpk",
+                                        "ETSMBus",     "elantech-smbus", "FSPPS/2",
+                                        "fsp",         "FocalTechPS/2",  "focaltech",
+                                        "VirtualPS/2", "vmmouse",        "BYDPS/2",
+                                        "byd"};
+    unsigned int i;
+    int port, expected;
+
+    for (port = 1; port <= EVDEV_SERIO_PASS_THROUGH; port++) {
+        model_reset(KIND_MOUSE, 0);
+        synaptics_answer = pt_present = port == EVDEV_SERIO_PASS_THROUGH;
+        aux_mouse.wheel = pt_mouse.wheel = ID_IMPS;
+        CHECK("the fallback row starts its port", init_mouse() == 0);
+        for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+            expected = (int)k_strlen(names[i]);
+            aux_mouse.id = pt_mouse.id = ID_IMPS;
+            CHECK("a known protocol without a detect is accepted",
+                  store(port, "protocol", names[i]) == expected);
+            CHECK("its failed detect resets the device to PS/2",
+                  reads(port, "protocol", "PS/2\n") &&
+                      (port == 1 ? aux_mouse.id : pt_mouse.id) == 0);
+        }
+    }
+}
+
+/** More switches: the rate kept across one, Cortron's, whose detect
+ * sends nothing and always succeeds, the fallback to PS/2 that keeps the
+ * name a detect gave, and
  * `any`, which probes the port whole. */
 static void switch_rows(void)
 {
@@ -1423,7 +1461,7 @@ static void switch_rows(void)
     CHECK("the rate written before a switch is kept",
           store(1, "rate", "40") == 2 && store(1, "protocol", "imps") == 4 &&
               aux_mouse.rate == 40 && reads(1, "rate", "40\n"));
-    CHECK("cortps is taken without a detect, as psmouse's has none",
+    CHECK("cortps has a detect that sends nothing and always succeeds",
           store(1, "protocol", "cortps") == 6 && protocol == PROTO_CORTRON &&
               count_named("CortronPS/2 Cortron PS/2 Trackball") == 1);
     CHECK("thinkps on a mouse that is no ThinkingMouse falls back to PS/2",
@@ -1630,8 +1668,10 @@ static void guest_switch_rows(void)
     CHECK("the guest refuses an embedded NUL and its suffix",
           store_bytes(EVDEV_SERIO_PASS_THROUGH, "protocol", "bare\0junk", 9) == -EINVAL &&
               guest.protocol == PROTO_IMPS);
-    CHECK("the guest does not take synaptics",
-          store(EVDEV_SERIO_PASS_THROUGH, "protocol", "synaptics") == -EINVAL);
+    pt_mouse.id = ID_IMPS;
+    CHECK("synaptics on the guest falls back to PS/2 after a reset",
+          store(EVDEV_SERIO_PASS_THROUGH, "protocol", "synaptics") == 9 &&
+              guest.protocol == PROTO_PS2 && pt_mouse.id == 0);
     CHECK("bare switches it to PS/2", store(EVDEV_SERIO_PASS_THROUGH, "protocol", "bare") == 4 &&
                                           guest.protocol == PROTO_PS2 &&
                                           reads(EVDEV_SERIO_PASS_THROUGH, "protocol", "PS/2\n"));
@@ -1685,9 +1725,11 @@ static void elantech_rows(void)
     CHECK("absolute mode is in register 0x07", regs[0x07] == 0x01);
     CHECK("whose read gives its second byte, as elantech.c takes version 4's",
           (reg07_hi = 0x3c, reads(1, "reg_07", "0x3c\n")) && etd_regs[REG_07] == 0x3c);
+    n_took = 0;
     CHECK("reg_10 reads the pad's register", (regs[0x10] = 0x5a, reads(1, "reg_10", "0x5a\n")));
     CHECK("a read runs with the pad disabled and leaves it reporting",
-          took[n_took - 1] == 0xF4 && reporting && state == STATE_ACTIVE);
+          n_took >= 2 && took[0] == 0xF5 && took[n_took - 1] == 0xF4 && reporting &&
+              state == STATE_ACTIVE);
     CHECK("debug reads 1, a pad past version 1", reads(1, "debug", "0x01\n"));
     CHECK("paritycheck reads 1", reads(1, "paritycheck", "0x01\n"));
     CHECK("crc_enabled reads 0 for firmware 0x581f01", reads(1, "crc_enabled", "0x00\n"));
@@ -1848,6 +1890,7 @@ int main(void)
     resync_switch_rows();
     protocol_rows();
     switch_rows();
+    fallback_name_rows();
     detect_rows();
     guest_rows();
     guest_switch_rows();

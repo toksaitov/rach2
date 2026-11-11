@@ -166,15 +166,12 @@ static uint32_t etd_generation; /* changes when a protocol's callbacks expire */
 static unsigned int etd_single_finger_reports;
 static struct finger_pos etd_mt[MAX_FINGERS];
 
-/* The packet being assembled: its bytes, how many have come, its size and
- * the tick of the last. */
+/* The packet being assembled: its bytes, how many have come and its size. */
 static uint8_t etd_packet[6];
 static int etd_pktcnt;
 static int etd_pktsize;
-static uint32_t etd_last_tick;
 
-/* The packets dropped for constant bits or parity out of form or for a
- * pause, which psmouse logs as lost synchronization. */
+/* Packets dropped for constant bits or parity out of form. */
 static unsigned int etd_sync_losses;
 
 /** Send `cmd` and return 0 when the pad acknowledged it, -1 when not, as
@@ -930,6 +927,19 @@ static void etd_report_buttons(struct evdev *dev, uint8_t b)
     evdev_report(dev, EV_KEY, BTN_RIGHT, (b & 0x02) != 0);
 }
 
+/** Log the packet, as Linux's `elantech_packet_dump`. */
+static void etd_dump(void)
+{
+    const uint8_t *p = etd_packet;
+
+    if (etd_pktsize == 4) {
+        klog(KLOG_DEBUG, "elantech", "packet: %02x %02x %02x %02x", p[0], p[1], p[2], p[3]);
+    } else {
+        klog(KLOG_DEBUG, "elantech", "packet: %02x %02x %02x %02x %02x %02x", p[0], p[1], p[2],
+             p[3], p[4], p[5]);
+    }
+}
+
 /** Report a version 1 packet, Linux's `elantech_report_absolute_v1`. */
 static void etd_report_v1(void)
 {
@@ -946,6 +956,9 @@ static void etd_report_v1(void)
             etd_single_finger_reports = 0;
         } else if (etd_single_finger_reports < 2) {
             etd_single_finger_reports++;
+            if (etd_info.debug) {
+                klog(KLOG_DEBUG, "elantech", "packet: discarding a jumpy-cursor report");
+            }
             return;
         }
     }
@@ -1083,6 +1096,9 @@ static void etd_report_trackpoint(void)
     case 0x26800010u:
     case 0x36808000u:
         if (p[4] == 0x80 || p[5] == 0x80 || p[1] >> 7 == p[4] >> 7 || p[2] >> 7 == p[5] >> 7) {
+            if (etd_info.debug) {
+                klog(KLOG_DEBUG, "elantech", "packet: discarding a stick report out of range");
+            }
             return;
         }
         if (!etd_tp) {
@@ -1099,6 +1115,9 @@ static void etd_report_trackpoint(void)
         }
         break;
     default:
+        if (etd_info.debug == 1) {
+            etd_dump();
+        }
         break;
     }
 }
@@ -1380,19 +1399,6 @@ void elantech_packet_restart(void)
     etd_pktcnt = 0;
 }
 
-/** Log the packet, as Linux's `elantech_packet_dump`. */
-static void etd_dump(void)
-{
-    const uint8_t *p = etd_packet;
-
-    if (etd_pktsize == 4) {
-        klog(KLOG_DEBUG, "elantech", "packet: %02x %02x %02x %02x", p[0], p[1], p[2], p[3]);
-    } else {
-        klog(KLOG_DEBUG, "elantech", "packet: %02x %02x %02x %02x %02x %02x", p[0], p[1], p[2],
-             p[3], p[4], p[5]);
-    }
-}
-
 /** Check and report a whole packet, Linux's `elantech_process_byte`.
  * Returns -1 for a packet out of form, which is dropped. */
 static int etd_process_packet(void)
@@ -1450,13 +1456,6 @@ static int etd_process_packet(void)
 
 int elantech_byte(uint8_t data)
 {
-    uint32_t now = (uint32_t)kernel_ticks;
-
-    if (etd_pktcnt && now - etd_last_tick > MS_TO_TICKS(500)) {
-        etd_sync_losses++;
-        etd_pktcnt = 0;
-    }
-    etd_last_tick = now;
     etd_packet[etd_pktcnt++] = data;
     if (etd_pktcnt < etd_pktsize) {
         return ELANTECH_GOOD;

@@ -351,6 +351,12 @@ void klog(int level, const char *subsystem, const char *format, ...)
 }
 
 /** No Synaptics touchpad answers. */
+/** The relative-mode probe sees the same modeled device. */
+int synaptics_init_relative(void)
+{
+    return synaptics_init();
+}
+
 int synaptics_init(void)
 {
     return 0;

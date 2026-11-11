@@ -184,6 +184,10 @@ static void dev_take(uint8_t b)
             put3(reporting ? 0x20 : 0x00, dev_res, dev_rate);
         }
         break;
+    case 0xEB:
+        put3(0x80, 0, 0);
+        put3(0xc0, 0, 0);
+        break;
     case 0xF2:
         model_put(0x00);
         break;
@@ -788,12 +792,57 @@ static void switch_rows(void)
     CHECK("a finger moves the pointer", moves_to(3600));
 }
 
+/** A partial absolute packet queues a poll through the shared worker. */
+static void pause_rows(void)
+{
+    static const uint8_t resync[] = {0xF5, 0xEB, 0xF4};
+    struct evdev *old = pad;
+
+    irq_byte(0x80);
+    irq_byte(0);
+    kernel_ticks += MS_TO_TICKS(600);
+    irq_byte(0);
+    CHECK("a pause queues the pad's resync",
+          state == STATE_RESYNC && (reconnect_wanted & RESYNC_PORT));
+    n_took = 0;
+    ps2mouse_resync();
+    CHECK("the worker disables, polls six bytes and enables the pad",
+          took_bytes(resync, 3) && state == STATE_ACTIVE && reporting && pktcnt == 0 && pad == old);
+    CHECK("a finger reports after the poll", moves_to(3700));
+}
+
+/** Relative mode is selectable, and a failed absolute setup is retried
+ * when the device reconnects. */
+static void relative_rows(void)
+{
+    CHECK("synaptics-relative selects three-byte relative packets",
+          store(1, "protocol", "synaptics-relative") == 18 &&
+              reads(1, "protocol", "SynRelPS/2\n") && pad_mode == 0 &&
+              touchpad == -TOUCHPAD_SYNAPTICS && packet_size == 3 && mouse_dev && !pad);
+    CHECK("absolute mode can be selected again",
+          store(1, "protocol", "SynPS/2") == 7 && pad && touchpad == TOUCHPAD_SYNAPTICS);
+    CHECK("bare leaves absolute mode", store(1, "protocol", "bare") == 4);
+    refuse_mode = 1;
+    CHECK("a failed absolute setup leaves a relative mouse",
+          store(1, "protocol", "synaptics") == 9 && touchpad == -TOUCHPAD_SYNAPTICS && mouse_dev);
+    refuse_mode = 0;
+    n_took = 0;
+    state = STATE_IGNORE;
+    reconnect_wanted = RECONNECT_PORT;
+    ps2mouse_reconnect();
+    CHECK("reconnect tries absolute mode anew after its earlier failure",
+          state == STATE_ACTIVE && touchpad == TOUCHPAD_SYNAPTICS && pad && !mouse_dev &&
+              pad_mode == 0xc5 && reporting);
+}
+
 int main(void)
 {
     bringup_rows();
     rate_rows();
     other_rows();
     switch_rows();
+    pause_rows();
+    relative_rows();
     if (fails == 0) {
         printf("psmouse-synaptics-test: pass\n");
     }

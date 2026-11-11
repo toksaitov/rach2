@@ -286,23 +286,19 @@ static struct evdev *bare;
 static int bare_failed; /* the external mouse's registration failed */
 
 /* The packet being assembled, psmouse's: its bytes, how many have come, its
- * size, the tick of the last, and the bad packets since the last good one.
+ * size, and the bad packets since the last good one.
  * A stick's PS/2 packet cut into a pad's makes the packet one byte longer
  * than its size before it is taken apart. */
 static uint8_t packet[8];
 static int pktcnt;
 static int pktsize = 6;
-static uint32_t last_tick;
 static unsigned int out_of_sync;
 
 /* The flush of an interleaving pad's last packet: armed, and its tick. */
 static int flush_armed;
 static uint32_t flush_at;
 
-/* The packets dropped for a pause, which psmouse logs as lost
- * synchronization, and the stick packets of a pad without a stick, which
- * are logged once. */
-static unsigned int sync_losses;
+/* Stick packets from a pad without a stick, logged once. */
 static unsigned int rejected_stick;
 
 /* The name `alps_mouse_name` builds. */
@@ -1504,15 +1500,7 @@ void alps_tick(void)
 
 int alps_byte(uint8_t data)
 {
-    uint32_t now = (uint32_t)kernel_ticks;
-
-    alps_tick(); /* a flush due before this byte, which the tick has not run */
-    if (pktcnt && now - last_tick > MS_TO_TICKS(500)) {
-        sync_losses++;
-        pktcnt = 0;
-        flush_armed = 0;
-    }
-    last_tick = now;
+    alps_tick(); /* flush a packet whose deadline passed before this byte */
     if (pktcnt >= (int)sizeof(packet)) {
         pktcnt = 0;
     }
