@@ -6065,6 +6065,206 @@ static void ap_hex_lower(struct procfs_text *t, uint32_t v)
     }
 }
 
+/* The policy words of /sys/kernel/mm/transparent_hugepage's `enabled`,
+ * `defrag` and `shmem_enabled`, in Linux 6.12's order (huge_memory.c and
+ * shmem.c). */
+static const char *const thp_enabled_words[] = {"always", "madvise", "never", 0};
+static const char *const thp_defrag_words[] = {"always",  "defer", "defer+madvise",
+                                               "madvise", "never", 0};
+static const char *const thp_shmem_words[] = {"always", "never", "within_size", "advise", "deny",
+                                              "force",  0};
+
+/* The order shmem_enabled_show lists its words in, as indexes above. */
+static const int thp_shmem_order[] = {0, 2, 3, 1, 4, 5};
+
+/* The policy as Linux 6.12 boots with CONFIG_TRANSPARENT_HUGEPAGE_NEVER:
+ * indexes into the words above for the first three, and flags for the
+ * huge zero page and the splitting of underused huge pages. Root's writes
+ * change them; no page is ever huge, which every policy permits. The big
+ * lock covers them. */
+static int thp_enabled = 2, thp_defrag = 3, thp_shmem = 1;
+static int thp_zero_page = 1, thp_shrink_underused = 1;
+
+/** Append the word `words[i]` of each `order[k]`, the chosen one in
+ * brackets, separated by spaces and ended by a newline. */
+static void ap_choice(struct procfs_text *t, const char *const *words, const int *order, int n,
+                      int chosen)
+{
+    int k;
+
+    for (k = 0; k < n; k++) {
+        int i = order ? order[k] : k;
+
+        if (k > 0) {
+            ap_ch(t, ' ');
+        }
+        if (i == chosen) {
+            ap_ch(t, '[');
+        }
+        ap_str(t, words[i]);
+        if (i == chosen) {
+            ap_ch(t, ']');
+        }
+    }
+    ap_ch(t, '\n');
+}
+
+/**
+ * Render the attribute `attr` of /sys/kernel/mm/transparent_hugepage, in
+ * `sysfs_system_attrs`' order: the policy words of `enabled` and `defrag`,
+ * the flag `use_zero_page`, the page-directory mapping size, the words of
+ * `shmem_enabled` and the flag `shrink_underused`, as Linux 6.12 writes
+ * them. The length of the text.
+ */
+static int procfs_gen_thp(struct procfs_text *t, int attr)
+{
+    if (attr == 0) {
+        ap_choice(t, thp_enabled_words, 0, 3, thp_enabled);
+    } else if (attr == 1) {
+        ap_choice(t, thp_defrag_words, 0, 5, thp_defrag);
+    } else if (attr == 3) {
+        /* PMD_SIZE: 2 MiB with 4-level paging, 4 MiB with i686's 2-level. */
+#if ELF_CLASS == 2
+        ap_u32(t, 2097152u);
+#else
+        ap_u32(t, 4194304u);
+#endif
+        ap_ch(t, '\n');
+    } else if (attr == 4) {
+        ap_choice(t, thp_shmem_words, thp_shmem_order, 6, thp_shmem);
+    } else {
+        ap_ch(t, (attr == 2 ? thp_zero_page : thp_shrink_underused) ? '1' : '0');
+        ap_ch(t, '\n');
+    }
+    return t->len;
+}
+
+/** Whether the string `s` is `word`, or, when `newline` is set, `word`
+ * and one newline, as Linux's sysfs_streq compares them. */
+static int thp_streq(const char *s, const char *word, int newline)
+{
+    while (*s != '\0' && *s == *word) {
+        s++;
+        word++;
+    }
+    return *word == '\0' && (*s == '\0' || (newline && *s == '\n' && s[1] == '\0'));
+}
+
+/** The index in `words` of the word `s` names as `thp_streq` compares it,
+ * or -EINVAL. */
+static int thp_word(const char *s, const char *const *words, int newline)
+{
+    int i;
+
+    for (i = 0; words[i] != 0; i++) {
+        if (thp_streq(s, words[i], newline)) {
+            return i;
+        }
+    }
+    return -EINVAL;
+}
+
+/**
+ * Parse `s` as Linux's kstrtoul in base 10: an optional `+`, decimal
+ * digits and an optional newline. The value when it is 0 or 1, -ERANGE
+ * when it does not fit an unsigned long, and -EINVAL otherwise.
+ */
+static int thp_flag(const char *s)
+{
+#if ELF_CLASS == 2
+    static const char max[] = "18446744073709551615";
+#else
+    static const char max[] = "4294967295";
+#endif
+    const char *digits;
+    int n = 0;
+    int i;
+
+    if (*s == '+') {
+        s++;
+    }
+    while (*s == '0' && s[1] >= '0' && s[1] <= '9') {
+        s++;
+    }
+    digits = s;
+    while (s[n] >= '0' && s[n] <= '9') {
+        n++;
+    }
+    if (n == 0 || !(s[n] == '\0' || (s[n] == '\n' && s[n + 1] == '\0'))) {
+        return -EINVAL;
+    }
+    if (n > (int)sizeof(max) - 1) {
+        return -ERANGE;
+    }
+    if (n == (int)sizeof(max) - 1) {
+        for (i = 0; i < n && digits[i] == max[i]; i++) {
+        }
+        if (i < n && digits[i] > max[i]) {
+            return -ERANGE;
+        }
+    }
+    return n == 1 && digits[0] <= '1' ? digits[0] - '0' : -EINVAL;
+}
+
+/** `text` as Linux's kstrtobool reads its first letters: 1 for y, t, 1 or
+ * on, 0 for n, f, 0 or off, in either case, and -EINVAL otherwise. */
+static int thp_bool(const char *text)
+{
+    char c = text[0] | 0x20, d = c == 'o' ? text[1] | 0x20 : 0;
+
+    if (c == 'y' || c == 't' || text[0] == '1' || d == 'n') {
+        return 1;
+    }
+    if (c == 'n' || c == 'f' || text[0] == '0' || d == 'f') {
+        return 0;
+    }
+    return -EINVAL;
+}
+
+/** The index in `thp_shmem_words` of the `count` bytes of `text` as
+ * Linux's shmem_enabled_store reads them: at most 15, a final newline
+ * dropped, then one word exactly; -EINVAL otherwise. */
+static int thp_shmem_word(char *text, uint32_t count)
+{
+    if (count + 1 > 16) {
+        return -EINVAL;
+    }
+    if (count > 0 && text[count - 1] == '\n') {
+        text[count - 1] = '\0';
+    }
+    return thp_word(text, thp_shmem_words, 0);
+}
+
+/**
+ * Take root's write of `count` bytes, `text`, NUL-terminated after them,
+ * to the attribute `attr` of /sys/kernel/mm/transparent_hugepage, as
+ * Linux 6.12's stores parse it: `enabled` and `defrag` a policy word with
+ * at most one newline after it, `use_zero_page` 0 or 1 as kstrtoul reads
+ * it (`thp_flag`), `shmem_enabled` as `thp_shmem_word` reads it, and
+ * `shrink_underused` as `thp_bool` does. `count`, or -EINVAL or -ERANGE
+ * with nothing changed.
+ */
+static int32_t thp_store(int attr, char *text, uint32_t count)
+{
+    int *const flags[] = {&thp_enabled, &thp_defrag,          &thp_zero_page, 0,
+                          &thp_shmem,   &thp_shrink_underused};
+    int v;
+
+    if (attr < 0 || attr > 5 || !flags[attr]) {
+        return -EINVAL;
+    }
+    v = attr == 0   ? thp_word(text, thp_enabled_words, 1)
+        : attr == 1 ? thp_word(text, thp_defrag_words, 1)
+        : attr == 2 ? thp_flag(text)
+        : attr == 4 ? thp_shmem_word(text, count)
+                    : thp_bool(text);
+    if (v < 0) {
+        return v;
+    }
+    *flags[attr] = v;
+    return (int32_t)count;
+}
+
 /**
  * Render the attribute `attr` of /sys/class/rtc/rtc0, of its device's power
  * directory, of /sys/power, of /sys/devices/system/cpu or of
@@ -6091,20 +6291,7 @@ static int procfs_gen_sysattr(struct procfs_text *t, int node, int attr)
         return procfs_gen_system(t, node, attr);
     }
     if (node == SYSFS_THP) {
-        /* Linux's huge_memory.c and shmem.c, with huge pages disabled. */
-        static const char *const values[] = {"always madvise [never]\n",
-                                             "always defer defer+madvise madvise [never]\n",
-                                             "0\n",
-#if ELF_CLASS == 2
-                                             "2097152\n",
-#else
-                                             "4194304\n",
-#endif
-                                             "always within_size advise [never] deny force\n",
-                                             "0\n"};
-
-        ap_str(t, values[attr]);
-        return t->len;
+        return procfs_gen_thp(t, attr);
     }
     if (node == SYSFS_KERNEL) {
         ap_u32(t, sysfs_uevent_seqnum());
@@ -8476,6 +8663,9 @@ static int32_t procfs_sysattr_write(fd_entry_t *e, const char __user *buf, uint3
     k_memset(text, 0, sizeof(text));
     if (copy_from_user(text, buf, n) != 0) {
         return -EFAULT;
+    }
+    if (f->origin_task >> 8 == SYSFS_THP) {
+        return thp_store(f->origin_task & 255, text, count);
     }
     while (n > 0 && (text[n - 1] == '\n' || text[n - 1] == ' ')) {
         text[--n] = '\0';

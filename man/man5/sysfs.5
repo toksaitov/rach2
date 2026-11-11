@@ -592,7 +592,7 @@ link to the input device.
 .It Pa /sys/dev/char/13:M
 A link for each event device, by its numbers, to its directory.
 .It Pa /sys/kernel/mm/transparent_hugepage
-The disabled huge-page policy and page-directory mapping size.
+The transparent huge-page policy and page-directory mapping size.
 .It Pa /sys/kernel/debug
 The directory where the kernel mounts debugfs; see
 .Xr debugfs 5 .
@@ -1116,30 +1116,45 @@ is
 .Pp
 The files under
 .Pa /sys/kernel/mm/transparent_hugepage
-report Linux 6.12's disabled huge-page policy:
+are Linux 6.12's, as it boots with the transparent huge-page policy
+.Ql never :
 .Pa enabled
-is
+reads
 .Ql always madvise [never] ,
 .Pa defrag
-is
-.Ql always defer defer+madvise madvise [never] ,
-and
+.Ql always defer defer+madvise [madvise] never ,
 .Pa shmem_enabled
-is
-.Ql always within_size advise [never] deny force .
+.Ql always within_size advise [never] deny force ,
+and
 .Pa use_zero_page
 and
 .Pa shrink_underused
-are 0.
+read 1.
 .Pa hpage_pmd_size
-is the page-directory mapping size in bytes: 2097152 on x86-64,
-4194304 on the non-PAE i686 kernel.
-Each text ends in a newline.
-Anonymous faults still allocate 4 KiB pages.
-These six files are read-only; the kernel has no transparent huge-page
-allocator, khugepaged worker or per-size policy directories.
-This is Linux's interface with the policies disabled; a Linux build
-without THP would omit the directory.
+is the page-directory mapping size in bytes, 2097152 on x86-64 and
+4194304 on i686, and is read-only.
+The other five take root's write as Linux parses it:
+.Pa enabled
+and
+.Pa defrag
+one of their words, with at most one newline after it;
+.Pa shmem_enabled
+one of its words in at most 15 bytes, of which a final newline is dropped;
+.Pa use_zero_page
+0 or 1, with an optional
+.Ql +
+and newline, and
+.Er ERANGE
+for a number too large for an unsigned long; and
+.Pa shrink_underused
+a boolean as Linux's
+.Fn kstrtobool
+reads its first letters.
+Anything else is
+.Er EINVAL
+and changes nothing.
+A written policy reads back, but no page is ever huge: memory is mapped
+in 4 KiB pages under every policy, which each of Linux's permits.
 .Sh LIMITS
 Linux's tree has much more: the other device classes, the attribute files
 beside a USB device's
@@ -1164,6 +1179,12 @@ and its counter cannot be changed.
 Linux lists the HPET and the ACPI PM timer when the machine has both;
 here only the one the kernel found is listed.
 A DMI string is cut at 63 bytes.
+.Pa /sys/kernel/mm/transparent_hugepage
+has no
+.Pa khugepaged
+directory and no
+.Pa hugepages- Ns Ar N Ns Pa kB
+directories of the sizes Linux's multi-size huge pages add.
 .Pa /sys/dev/char
 lists only the DRM nodes and the event devices.
 A virtio-gpu card's
@@ -1271,7 +1292,7 @@ The vfio-pci driver's files.
 .It Pa /sys/bus/pci/drivers/i915
 The Intel graphics driver's files.
 .It Pa /sys/kernel/mm/transparent_hugepage
-The disabled huge-page policy and page-directory mapping size.
+The transparent huge-page policy and page-directory mapping size.
 .It Pa /sys/kernel/debug
 Where debugfs is mounted.
 .It Pa /sys/kernel/uevent_seqnum

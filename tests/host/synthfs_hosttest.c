@@ -851,7 +851,8 @@ static void vfio_paths(void)
           synth_classify("sys/bus/pci/devices/0000:00:02.0/iommu_group", &vp) == VNODE_ENOENT);
 }
 
-/** Classify the disabled THP directory, its files and paths past a file. */
+/** Classify the THP directory, its files, which of them root may write,
+ * and paths past a file. */
 static void thp_rows(void)
 {
     static const char *const names[] = {"enabled",        "defrag",        "use_zero_page",
@@ -872,7 +873,7 @@ static void thp_rows(void)
         k_memcpy(path + sizeof(prefix) - 1, names[i], k_strlen(names[i]) + 1);
         CHECK(synth_classify(path, &vp) == VNODE_SYS_FILE && vp.sysent == SYSFS_THP &&
               vp.procfile == (int)i && eq(sysfs_attr(SYSFS_THP, (int)i), names[i]));
-        CHECK(!sysfs_attr_writable(vp.sysent, vp.procfile));
+        CHECK(sysfs_attr_writable(vp.sysent, vp.procfile) == (i != SYSFS_THP_PMD_SIZE));
     }
     CHECK(sysfs_attr(SYSFS_THP, 6) == 0);
     CHECK(synth_classify("sys/kernel/mm/transparent_hugepage/missing", &vp) == VNODE_ENOENT);
