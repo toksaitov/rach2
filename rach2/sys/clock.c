@@ -170,7 +170,8 @@ static volatile int64_t rtc_rate;
  * wall_to_monotonic (kernel/time/timekeeping.c:151-164), in seconds and in
  * nanoseconds from 0 to 10^9 - 1, which the anchor, each setting and each
  * leap second move and nothing else; and the last reading of real time,
- * before which no later one may fall until the clock is set.
+ * before which no later one may fall until the clock is set or a leap
+ * second is inserted.
  */
 static int64_t rtc_wall_sec;
 static volatile int32_t rtc_wall_nsec;
