@@ -48,6 +48,8 @@ typedef uint32_t phys_addr_t;
 #define FRAME_PC(p)      ((p)->pc)
 #define FRAME_SP(p)      ((p)->sp)
 #define FRAME_USER(p)    (((p)->cpsr & 0x1Fu) == 0x10u)
+/* Whether the frame was taken with interrupts on: the I mask bit clear. */
+#define FRAME_IRQ_ON(p)  (((p)->cpsr & 0x80u) == 0u)
 /* Whether the frame is a system call's entry: `svc`, as vector 2 of the
  * numbering a port's entry gives, its place in the vector table. */
 #define FRAME_SYSCALL(p) ((p)->vector == 2u)
