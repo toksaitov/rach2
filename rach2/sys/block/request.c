@@ -91,6 +91,22 @@ static uint32_t req_clock(void)
     return req_ticks + ((uint32_t)kernel_ticks - req_seen);
 }
 
+/**
+ * Interrupts off. Count toward `disk-wait-ticks` the ticks request `r`,
+ * leaving flight now, spent in flight since `block_request_tick` last
+ * counted: from the later of `taken_tick` and that call to the clock now,
+ * which the next call, finding it no longer in flight, would leave out.
+ */
+static void req_count_rest(const struct block_request *r)
+{
+    uint32_t from = (int32_t)(r->taken_tick - req_ticks) > 0 ? r->taken_tick : req_ticks;
+    uint32_t now = req_clock();
+
+    if ((int32_t)(now - from) > 0) {
+        block_count_wait_ticks(now - from);
+    }
+}
+
 /** Mask interrupts and return the state `irq_restore` puts back. */
 static uint32_t irq_save(void)
 {
@@ -808,6 +824,7 @@ void block_request_complete(struct block_request *request, uint32_t generation, 
     }
     request->status = status;
     request->state = BLOCK_REQ_DONE;
+    req_count_rest(request);
     latency_span(LAT_DISK, request->taken_us, timer_now_us());
     {
         const struct block_request *r;
@@ -906,14 +923,15 @@ uint32_t block_release_tick(void)
 
 /**
  * Every tick a request spends in flight is counted as a wait tick, whether a
- * caller sleeps for it or the USB pump left it running; the suites bound that
- * count on every device. A request quarantined keeps its generation, so the
- * late completion still matches it. The clock advances by the ticks counted
- * since the last call, not by one a call: the boot processor's tick that
- * finds the big lock held ends without calling this (`tick_waits`, isr.c),
- * and a late interrupt counts several ticks. A request taken between two
- * calls counts only the ticks since it was taken, read from the clock as
- * `req_clock` gives it then.
+ * caller sleeps for it or the USB pump left it running, here or, for the ticks
+ * since the last call, at its completion (`req_count_rest`); the suites bound
+ * that count on every device. A request quarantined keeps its generation, so
+ * the late completion still matches it. The clock advances by the ticks counted
+ * since the last call, not by one a call: the boot processor's tick that finds
+ * the big lock held ends without calling this (`tick_waits`, isr.c), and a late
+ * interrupt counts several ticks. A request taken between two calls counts only
+ * the ticks since it was taken, read from the clock as `req_clock` gives it
+ * then.
  */
 void block_request_tick(void)
 {

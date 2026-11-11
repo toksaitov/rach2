@@ -74,13 +74,25 @@ uint32_t kirq_save(void)
 static int dma_written_not_started;
 static int unmasked_between;
 
+/* A timer interrupt the model raises, of `irq_ticks` ticks, which arrives
+   at the driver's next read of the tick count while interrupts are on, or,
+   read while they are masked, is held (`irq_held`) to the unmasking that
+   follows, as the processor holds it; 0 = none. */
+static uint32_t irq_ticks;
+static int irq_held;
+static void irq_deliver(void);
+
 /** Restore the mask `kirq_save` returned, noting an unmasking while a DMA
- *  command waits for its engine's start. */
+ *  command waits for its engine's start, and delivering a held interrupt
+ *  at an unmasking. */
 void kirq_restore(uint32_t flags)
 {
     masked = (int)flags;
     if (!masked && dma_written_not_started) {
         unmasked_between = 1;
+    }
+    if (!masked && irq_held) {
+        irq_deliver();
     }
 }
 
@@ -669,7 +681,13 @@ int wq_active(const wait_queue_t *wq)
     return 0;
 }
 
+/* The driver reads the tick count through `ata_hosttest_ticks`, where the
+   model's interrupt arrives. */
+#include "../../rach2/sys/timer.h"
+static volatile uint64_t *ata_hosttest_ticks(void);
+#define kernel_ticks (*ata_hosttest_ticks())
 #include "../../rach2/sys/block/ata.c"
+#undef kernel_ticks
 
 /** The caller, whose sleeps `ata_count_wait` counts. */
 static process_t caller;
@@ -713,6 +731,8 @@ static void model_reset(int answer)
     records = 0;
     last_record[0] = '\0';
     masked = 0;
+    irq_ticks = 0;
+    irq_held = 0;
     in_syscall = 1;
     for (s = 0; s < SECTORS; s++) {
         for (i = 0; i < SECTOR; i++) {
@@ -781,6 +801,88 @@ static void tick(uint32_t n)
 {
     kernel_ticks += n;
     ata_tick();
+}
+
+/** Run the model's interrupt now, in interrupt context: `irq_ticks` ticks
+ *  and one call of the driver's tick. */
+static void irq_deliver(void)
+{
+    uint32_t n = irq_ticks;
+    int was = masked;
+
+    irq_ticks = 0;
+    irq_held = 0;
+    masked = 1;
+    tick(n);
+    masked = was;
+}
+
+/** The driver's read of the tick count: the model's interrupt arrives here
+ *  while interrupts are on, and is held while they are masked. */
+static volatile uint64_t *ata_hosttest_ticks(void)
+{
+    if (irq_ticks != 0 && masked) {
+        irq_held = 1;
+    } else if (irq_ticks != 0) {
+        irq_deliver();
+    }
+    return &kernel_ticks;
+}
+
+/** Three ticks, one call, while the owner sleeps. */
+static void three_ticks_while_asleep(void)
+{
+    tick(3);
+}
+
+/** One tick and a call, then two ticks the tick has not counted when the
+ *  owner wakes. */
+static void ticks_left_at_wake(void)
+{
+    tick(1);
+    kernel_ticks += 2;
+}
+
+/**
+ * Check the wait ticks against a tick that skips calls and an interrupt
+ * that arrives as the wait starts: a sleep that begins two ticks into a
+ * skipped span counts only the three it slept through of the call's five;
+ * a wait that ends two ticks after the last call counts them as it ends;
+ * and a tick that arrives while the wait reads its start is held until the
+ * start and the sleeper are published, so that it counts its one tick of
+ * sleep, not the two before the sleep nor none.
+ */
+static void wait_tick_rows(struct ata_drive *d)
+{
+    int rc;
+
+    model_reset(2);
+    dma_on_reads = 0;
+    tick(0);
+    kernel_ticks += 2;
+    on_sleep = three_ticks_while_asleep;
+    rc = ata_read(&d->dev, 100, 8, owner_buf);
+    CHECK(rc == 0 && wait_ticks == 3,
+          "a sleep two ticks into a skipped span counts the three it slept, not the call's five");
+
+    model_reset(2);
+    dma_on_reads = 0;
+    tick(0);
+    on_sleep = ticks_left_at_wake;
+    rc = ata_read(&d->dev, 100, 8, owner_buf);
+    CHECK(rc == 0 && wait_ticks == 3,
+          "a wait that ends two ticks after the last call counts them as it ends");
+    tick(0);
+    CHECK(wait_ticks == 3, "and the next call, with no sleeper, counts nothing more");
+
+    model_reset(2);
+    dma_on_reads = 0;
+    tick(0);
+    kernel_ticks += 2;
+    irq_ticks = 1;
+    rc = ata_read(&d->dev, 100, 8, owner_buf);
+    CHECK(rc == 0 && irq_ticks == 0 && wait_ticks == 1,
+          "a tick that arrives as a wait reads its start counts its one tick of sleep");
 }
 
 /** Four ticks while the owner sleeps: one, then three that one call
@@ -1179,6 +1281,7 @@ int main(void)
     identify_rows();
 
     wait_bound_rows(d);
+    wait_tick_rows(d);
     write_rate_rows(d);
     durability_rows(d);
 
