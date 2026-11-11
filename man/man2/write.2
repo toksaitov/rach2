@@ -82,7 +82,7 @@ pages keeps its bytes in at most
 .Em n
 page buffers, as Linux's does, and is full once
 .Em n
-buffers hold bytes, however few.
+buffers are open, however few bytes they hold.
 A write's first bytes, its count modulo 4096, join the newest buffer when
 a write made it and they fit in its page; each further page of bytes
 opens a buffer of its own.
@@ -97,6 +97,13 @@ A byte the caller cannot read, one below the lowest user address among
 them, ends the write with the bytes of the groups before its own, or
 .Er EFAULT
 when there are none; no byte of its own group can be read.
+A page that faults leaves its buffer in the pipe with no bytes, as
+Linux's does: the buffer counts toward a full pipe, the readers are woken,
+.Xr poll 2
+reports
+.Dv POLLIN ,
+and a later write's first bytes join it, until a read with room left
+reaches it and lets it go.
 A write of 4096 bytes or fewer is one group, so another writer's bytes
 never come between its own.
 A pipe write waits when the pipe is full and its next byte would open a
