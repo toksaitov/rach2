@@ -475,12 +475,23 @@ def hud(name, save, route):
     for old in SAVEGAMES.glob("default_%s.*" % tag):
         old.unlink()
     copy = source_copy(out, name, save)
-    # The dialog's log level is set at the start: a console line typed
-    # beside others was once lost, and its lines are what `lines` reads.
-    game = Game(out, route, ["+load", copy, "+log_verbosity", "4", "+ds_loglevel", "4"])
+    game = Game(out, route, ["+load", copy])
     try:
         if load_save(game, copy, "load"):
             game.shot("loaded")
+            # Set after the load, which a verbose log slows sixfold; each line
+            # alone and until its echo shows, since one typed beside others
+            # was once lost, and the dialog's lines are what `lines` reads.
+            for cvar in ("log_Verbosity", "ds_LogLevel"):
+                echoed = False
+                for attempt in range(3):
+                    game.console("%s 4" % cvar)
+                    log = GAME / "Game.log"
+                    text = log.read_text(errors="replace") if log.exists() else ""
+                    echoed = re.search(r"\$3%s = \$64 " % cvar, text) is not None
+                    if echoed:
+                        break
+                say("console: %s 4 %s" % (cvar, "set" if echoed else "not echoed"))
             game.console("gotoe suit_menu_and_objectives")
             game.keys(35)
             check("after", game.shot("after"), "the HUD 35 s after the trigger, to read")
