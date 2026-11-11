@@ -283,6 +283,11 @@ and its open files stay with it: their ioctls answer
 .Er ENODEV
 and a touch of a mapping of its buffers raises
 .Dv SIGBUS .
+A mapping of a virtio-gpu object of guest memory, its own or an importer's
+through the object's dma-buf, is the exception: it takes pages again at its
+next touch, as Linux's shmem helper serves it, so a program goes on and
+draws nothing; see
+.Xr virtio-gpu 4 .
 .Xr read 2
 and
 .Xr poll 2
