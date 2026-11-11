@@ -774,6 +774,18 @@ static int within(struct ts t)
            (t.sec == WAIT_S && t.nsec >= 0 && t.nsec <= 1000000L);
 }
 
+/** Report the remainder `left` that within() rejected: in microseconds,
+ * since nanoseconds past 2 s overflow i686's 32-bit long, or in seconds when
+ * even that would not fit. */
+static void miss_left(const char *name, int scen, struct ts left)
+{
+    if (left.sec >= 0 && left.sec <= 2 * WAIT_S) {
+        miss(name, scen, "wrote a remainder of us", left.sec * 1000000L + left.nsec / 1000, 1);
+    } else {
+        miss(name, scen, "wrote a remainder of s", left.sec, WAIT_S);
+    }
+}
+
 /** Check the time the timed call `c` took and the time left it wrote,
  * against Linux's for the disturbance `scen`. A ppoll, select or pselect6
  * that a stop cut short restarts with the time left at the stop, so it
@@ -794,7 +806,7 @@ static void judge_time(int c, int scen, const struct record *r, int on)
         miss(name, scen, "wrote a remainder of s", r->left.sec, -1);
     }
     if (rem && scen != S_IGNORED && !within(r->left)) {
-        miss(name, scen, "wrote a remainder of ns", r->left.sec * 1000000000L + r->left.nsec, 1);
+        miss_left(name, scen, r->left);
     }
     if (back && on && (r->left.sec != 0 || r->left.nsec != 0)) {
         miss(name, scen, "wrote back a time left of ns", r->left.nsec, 0);
@@ -939,8 +951,12 @@ static const char *const trace_names[T_COUNT] = {"trace-block",   "trace-cancel"
                                                  "trace-number",  "trace-restore",
                                                  "trace-no-orig", "trace-no-signal"};
 
+/* The wait status of the tracee trace_stop last reaped, for its miss line. */
+static int trace_end;
+
 /** Wait for `*pid` to stop and return its signal, or -1 for another end.
- * Clear the owned pid when wait reaps it, so cleanup cannot signal it. */
+ * Clear the owned pid when wait reaps it, so cleanup cannot signal it, and
+ * keep its wait status in trace_end. */
 static int trace_stop(int *pid)
 {
     int status = 0;
@@ -949,6 +965,7 @@ static int trace_stop(int *pid)
         return -1;
     }
     if ((status & 0xFF) != 0x7F) {
+        trace_end = status;
         *pid = 0;
         return -1;
     }
@@ -1120,8 +1137,10 @@ static void trace_case(int mode)
     if (pid == 0) {
         tracee(mode);
     }
+    trace_end = 0;
     if (trace_stop(&pid) != SIGSTOP || !trace_entry(&pid, nr) || !trace_edit(&pid, mode)) {
         miss(trace_names[mode], -1, "could not reach or edit its stop", 0, 1);
+        status = pid == 0 ? trace_end : status;
         goto out;
     }
     if (syscall4(SYS_PTRACE, PTRACE_CONT, pid, 0, 0) != 0) {
