@@ -32,6 +32,8 @@
  * a moved page faults in at its new frame and a revoked one raises SIGBUS
  * with BUS_ADRERR at the address, from the page fault handler; and
  * paging_access reaches a device region through its object's `access`.
+ * Before them, the index of the free frames is searched up and down over
+ * groups with no free frame.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -801,6 +803,56 @@ static void exit_rows(void)
           "every counted frame is back to the object's own reference");
 }
 
+/* The frames of the index rows: 40 groups, past the 32 that one word of the
+ * index's bits covers. */
+#define INDEX_FRAMES (FRAME_GROUP * 40u)
+
+/**
+ * The index of the free frames (`frame_index_build`), on a table of its own
+ * with every frame taken but one in group 37 and one in group 39: the
+ * search up passes the 37 groups with none, a word of 32 at a time, and
+ * finds the first; the search down from the top finds the second, and from
+ * there the first, passing group 38; a frame taken empties its group and
+ * clears its bit, so that the search up goes on to the next group with
+ * one; a frame put back is found again; and a search with none left in its
+ * range answers its end.
+ */
+static void index_rows(void)
+{
+    uint32_t *saved = _frames;
+    size_t saved_number = _frames_number;
+    uintptr_t first = 37u * FRAME_GROUP + 5u, last = 39u * FRAME_GROUP + 60u, i;
+
+    _frames_number = INDEX_FRAMES;
+    _frames = calloc(frame_index_offset() + frame_index_bytes(), 1);
+    _frame_group_bits = _frames + frame_index_offset() / sizeof(uint32_t);
+    _frame_group_free = (uint8_t *)(_frame_group_bits + frame_index_words());
+    for (i = 0; i < INDEX_FRAMES; i++) {
+        _frames[i] = i != first && i != last;
+    }
+    frame_index_build();
+    check(frame_next_free(0, INDEX_FRAMES) == first,
+          "the index finds the first free frame past 37 groups with none");
+    check(frame_prev_free(1, INDEX_FRAMES) == last, "and the last from the top");
+    check(frame_prev_free(1, last) == first, "and from there the first, passing a group");
+    check(frame_next_free(first + 1u, last) == last, "and none between them");
+    _frames[first] = 1;
+    frame_index_take(first);
+    check(_frame_group_free[37] == 0 && !(_frame_group_bits[1] & (1u << 5)),
+          "a frame taken empties its group and clears its bit");
+    check(frame_next_free(0, INDEX_FRAMES) == last, "and the search goes on to the next group");
+    _frames[first] = 0;
+    frame_index_put(first);
+    check(frame_next_free(0, INDEX_FRAMES) == first, "a frame put back is found again");
+    check(frame_prev_free(1, first) == 0, "and none below it");
+    free(_frames);
+    _frames = saved;
+    _frames_number = saved_number;
+    _frame_group_bits = 0;
+    _frame_group_free = 0;
+    _frame_index_ready = 0;
+}
+
 /** The protection keys are off in the host test, as on a processor without
  * them. */
 int fpu_pkeys(void)
@@ -838,6 +890,7 @@ int main(void)
     _curr_dir = &dir_a;
     _kernel_dir = &dir_a;
 
+    index_rows();
     fault_rows();
     access_rows();
     fork_rows();
