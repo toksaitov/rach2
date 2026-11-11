@@ -24,19 +24,37 @@ listings() {
     pulse sinks
     pulse sources
 }
+# show FILE [MAX [irq]]: print FILE, only its first MAX lines when MAX is not
+# 0, and with irq only the lines that hold "hda" or begin with "48:" after
+# blanks. It uses the shell's own read and printf, so that sleep is the only
+# program started between the two reads of /proc/stat.
+show() {
+    n=0
+    while IFS= read -r l || [ -n "$l" ]; do
+        if [ "${3:-}" = irq ]; then
+            case "${l#"${l%%[! ]*}"}" in
+                *hda* | 48:*) ;;
+                *) continue ;;
+            esac
+        fi
+        printf '%s\n' "$l"
+        n=$((n + 1))
+        [ "${2:-0}" -eq 0 ] || [ "$n" -lt "$2" ] || break
+    done < "$1"
+}
 # The /proc counters the ten seconds are judged by.
 counters() {
     echo "idle: sample $1"
-    cat /proc/uptime
+    show /proc/uptime
     for f in /proc/"$pa"/task/*/stat /proc/"$khda"/task/*/stat; do
         echo "idle: $f"
-        cat "$f"
+        show "$f"
     done
     echo "idle: khda schedstat"
-    cat /proc/"$khda"/schedstat
-    grep -E 'hda|^ *48:' /proc/interrupts
-    head -n 5 /proc/stat
-    cat /proc/audio
+    show /proc/"$khda"/schedstat
+    show /proc/interrupts 0 irq
+    show /proc/stat 5
+    show /proc/audio
 }
 # The listings come before the first counters and after the second, so that
 # no pactl client of this script runs inside the window.
