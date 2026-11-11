@@ -114,13 +114,17 @@ void *k_memset(void *dst, int c, size_t n)
     return dst;
 }
 
-/** Run `action` as a peer: at once when the pipe's lock is free, and
- * otherwise once its holder gives it back (`sleep_lock_give`). */
+static void close_reader(void);
+
+/** Run `action` as a peer: at once when the pipe's lock is free or the
+ * action takes none, as `close_reader`, since the kernel's `pipe_close`
+ * takes no lock, and otherwise once its holder gives it back
+ * (`sleep_lock_give`). */
 static void as_peer(void (*action)(void))
 {
     int was = thread_now;
 
-    if (ring.lock.depth > 0 && ring.lock.holder != 2) {
+    if (action != close_reader && ring.lock.depth > 0 && ring.lock.holder != 2) {
         CHECK(lock_waiter == NULL, "one peer waits for the lock");
         lock_waiter = action;
         lock_waits++;
