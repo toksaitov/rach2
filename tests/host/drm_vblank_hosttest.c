@@ -1296,15 +1296,6 @@ static int64_t query1(uint32_t *seq)
 }
 
 /**
- * The times that events and replies carry never go back, as Weston asserts
- * in weston_output_finish_frame: an interrupt whose frame the count already
- * took in keeps the count's time, and a vblank that begins between the
- * frame counter's read and the time's is read again, at an interrupt and
- * when the CRTC comes on, as Linux 6.12.115's drm_update_vblank_count and
- * drm_reset_vblank_timestamp do; a driver's time before an earlier one is
- * counted in `backwards`.
- */
-/**
  * Read dri/fake/crtc-`i`/vblank_backwards as a read(2) of it does, through
  * debugfs's lookup of each name, its open and its read, into `buf` with
  * its NUL: the bytes read, or -1 when a name is not there.
@@ -1348,6 +1339,15 @@ static int32_t read_backwards(uint32_t i, char *buf, uint32_t cap)
     return !found || rc < 0 ? -1 : got;
 }
 
+/**
+ * The times that events and replies carry never go back, as Weston asserts
+ * in weston_output_finish_frame: an interrupt whose frame the count already
+ * took in keeps the count's time, and a vblank that begins between the
+ * frame counter's read and the time's is read again, at an interrupt and
+ * when the CRTC comes on, as Linux 6.12.115's drm_update_vblank_count and
+ * drm_reset_vblank_timestamp do; a driver's time before an earlier one is
+ * counted in `backwards`, which debugfs's crtc-1/vblank_backwards gives.
+ */
 static void row_stamps(void)
 {
     static const struct drm_crtc_funcs stamp_funcs = {NULL, NULL,          NULL,       NULL, NULL,
