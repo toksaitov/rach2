@@ -152,7 +152,11 @@ busy for more than 95% of an interval of 16 ms at low frequencies, 13 ms
 between and 10 ms near RP0; down when it was busy for less than 85% of
 32 ms; and on the down timeout, to RPe and then RPn.
 Parked, the GT runs at RPn.
-A request unparks it, and it parks again when every ring is idle.
+A request unparks it, and it parks again once every ring is idle and its
+requests are retired, as on Linux: at once when a ring's last request
+completes while something waits for it, and otherwise at the driver's
+retire pass, once a second, so that a client's next frame finds the GT
+awake at the frequency its last one left.
 The bind leaves the GT parked, and logs
 .Dq i915: rps:
 with RPn, RP1, RP0, RPe and the highest frequency allowed.

@@ -1374,7 +1374,7 @@ static int32_t drop_caches_store(void *data, const char __user *buf, uint32_t le
         i915_gt_set_wedged(i915);
     }
     if (val & DROP_RETIRE) {
-        i915_retire_requests(i915);
+        i915_gt_retire_requests(i915);
     }
     if (val & (DROP_IDLE | DROP_ACTIVE)) {
         rc = i915_gt_wait_for_idle(i915, 1);
