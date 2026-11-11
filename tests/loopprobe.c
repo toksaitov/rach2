@@ -2,35 +2,49 @@
  * loopprobe: the loopback, the probe's sockets reaching each other through
  * 127.0.0.1 with no ARP and no wire.
  *
- * The IP layer turns a datagram to 127/8 around through the loopback ring,
- * from 127.0.0.1. A datagram socket connected to 127.0.0.1 reports 127.0.0.1
- * as its own address. A UDP datagram sent to 127.0.0.1 at the socket's own
- * bound port comes back with the payload intact and the source 127.0.0.1, an
- * empty datagram comes back as one, and a recvfrom given an address and no
- * length pointer fails with EFAULT and leaves the datagram for the next
- * receive. A receive with MSG_PEEK leaves a datagram and a stream's bytes
- * for the next one. A TCP connection to the probe's own listener completes
- * its handshake, moves data both ways and reports the peer 127.0.0.1, and
- * one the server closes at once after accept still connects. A transfer
- * larger than the ring arrives whole with no datagram dropped, and no leg of
- * the round trips between two processes is left on the ring for the timer
- * while the machine idles. A listener bound to 127.0.0.1 is not reached at
- * the machine's interface address, a bind to an address the machine lacks
- * is refused, and a connect to a closed port is refused by the reset that
- * answers its SYN. The rows of TCP ports check a client's bound source port,
- * the one listener a port may have, ephemeral ports and a shutdown, and two
- * sockets that dial each other at once open one connection.
+ * The IP layer turns a datagram to 127/8 around through the loopback ring, from
+ * 127.0.0.1. A datagram socket connected to 127.0.0.1 reports 127.0.0.1 as its
+ * own address. A UDP datagram sent to 127.0.0.1 at the socket's own bound port
+ * comes back with the payload intact and the source 127.0.0.1, an empty
+ * datagram comes back as one, and a recvfrom given an address and no length
+ * pointer fails with EFAULT and leaves the datagram for the next receive. A
+ * receive with MSG_PEEK leaves a datagram and a stream's bytes for the next
+ * one, and recvmsg reads a stream into its buffers in order, peeking or taking.
+ * A datagram recvmsg fails only on a buffer the datagram reaches, and then
+ * takes it. A stream receive into an address below user space fails with every
+ * byte kept, one whose later segment cannot be written returns the segments
+ * before it and keeps that one, past 32 segments as before them, and one with
+ * MSG_WAITALL waits until its
+ * buffers are full. recv and recvfrom into a buffer whose second page cannot
+ * be written return the bytes queued, and into a page they cannot write at all
+ * fail with EAGAIN on an empty nonblocking stream and return 0 at the end of
+ * input. A send on a nonblocking socket still connecting fails with EAGAIN.
+ * A TCP connection to the probe's own listener completes its
+ * handshake, moves data both ways and reports the peer 127.0.0.1, and one the
+ * server closes at once after accept still connects; a nonblocking accept right
+ * after the connect finds the connection, and a poll with a zero timeout right
+ * after a write finds the bytes. A transfer larger than the ring arrives whole
+ * with no datagram dropped, and the legs of the round trips between two
+ * processes are delivered at the exits of the calls that sent them, none left
+ * on the ring for the timer while the machine idles. A listener bound to
+ * 127.0.0.1 is not reached at the machine's interface address, a bind to an
+ * address the machine lacks is refused, and a connect to a closed port is
+ * refused by the reset that answers its SYN. The rows of TCP ports check a
+ * client's bound source port, the one listener a port may have, ephemeral ports
+ * and a shutdown, and a socket that dials its own port opens a connection to
+ * itself by a simultaneous open.
  *
  * A row that waits for a datagram or a connection blocks in the receive or
  * in poll(2) until it comes, and judges what came; the case's watchdog ends
  * one that never does.
  *
- * The probe uses UDP ports 7100 to 7102 and TCP ports 7200 to 7207 and 7300
- * to 7325, and 7300 is the closed port until its rows listen on it. A native
- * run maps them with `ports=OLD:NEW,...` (probe_args.h). With
- * `machine=native` the probe leaves out the two checks of counts that every
+ * The probe uses UDP ports 7100 to 7102 and TCP ports 7200 to 7207, 7300,
+ * 7301 and 7310, and 7300 is the closed port until its rows listen on it. A
+ * native run maps them with `ports=OLD:NEW,...` (probe_args.h). With
+ * `machine=native` the probe leaves out the checks of counts that every
  * loopback datagram of the machine moves, no datagram dropped in the bulk
- * transfer and no round trip left for the timer by an idle machine.
+ * transfer, and the round trips delivered at their calls' exits with none
+ * left for the timer by an idle machine.
  *
  * Prints "LOOPPROBE OK" and exits 0 on success.
  *
@@ -57,30 +71,43 @@ typedef unsigned char uint8_t;
 
 #define MSG_DONTWAIT 0x40
 #define MSG_PEEK     0x2
+#define MSG_WAITALL  0x100
+#define MSG_NOSIGNAL 0x4000
 #define EAGAIN       11
 #define EFAULT       14
+
+#define PROT_NONE     0x0
+#define PROT_READ     0x1
+#define PROT_WRITE    0x2
+#define MAP_PRIVATE   0x02
+#define MAP_ANONYMOUS 0x20
+
+/* An address below the bottom of user space, USER_ADDR_MIN, on both kernels:
+ * 0x4000000 on i686 and 0x10000 on x86-64, which runs this i686 binary in its
+ * ia32 profile too. An address between the two would be refused on i686 and
+ * only unmapped on x86-64. */
+#define LOW_ADDR 0x8000UL
 
 #define AF_INET     2
 #define SOCK_STREAM 1
 #define SOCK_DGRAM  2
 
-/* The ports, 7100 to 7102, 7200 to 7207 and 7300 to 7325, or the values
+/* The ports, 7100 to 7102, 7200 to 7207, 7300, 7301 and 7310, or the values
  * `ports=` gives in their place: `udp_port`, `nolen_port` for the recvfrom
  * given no length pointer, `peek_port` for the peek rows' datagram and
  * connection, `tcp_port[N]` for 7200 + N, the bound-port rows' two of
- * `tcp_ports`, and the simultaneous-open case's SIM_PAIRS pairs, taken in
- * turn, a pair a round. `closed_port` is the bound-port rows' listener's;
- * `tcp_refused` runs before those rows, while nothing listens on it. */
-#define SIM_PAIRS 8
+ * `tcp_ports`, and `sim_port`, the simultaneous-open case's. `closed_port`
+ * is the bound-port rows' listener's; `tcp_refused` runs before those rows,
+ * while nothing listens on it. */
 static uint16_t udp_port, nolen_port, peek_port, tcp_port[8];
-static uint16_t bound_listen_port, bound_client_port, closed_port;
-static uint16_t sim_port[2 * SIM_PAIRS];
+static uint16_t bound_listen_port, bound_client_port, closed_port, sim_port;
 
 /* The round trips of `tcp_loop_pingpong`, a byte each way. */
 #define PINGPONG_ROUNDS 200
 
 #define EADDRINUSE  98
 #define EPIPE       32
+#define SIGPIPE     13
 #define ENOTCONN    107
 #define EINPROGRESS 115
 
@@ -207,6 +234,10 @@ static const struct step {
     {"a second udp peek did not find the datagram and its sender", "udp-peek-again"},
     {"a udp receive after a peek did not take the datagram", "udp-receive-after-peek"},
     {"a udp receive after a peek left the datagram queued", "udp-peek-dequeued"},
+    {"a udp recvmsg failed on a buffer the datagram did not reach", "udp-recvmsg-unreached"},
+    {"a udp recvmsg on an empty socket with a bad buffer was not EAGAIN", "udp-recvmsg-empty-bad"},
+    {"a udp recvmsg into a bad buffer it reached was not EFAULT with the datagram taken",
+     "udp-recvmsg-reached"},
     {"tcp sockets for the peek", "tcp-peek-copies"},
     {"tcp bind for the peek", "tcp-peek-copies"},
     {"tcp listen for the peek", "tcp-peek-copies"},
@@ -215,13 +246,41 @@ static const struct step {
     {"tcp write for the peek", "tcp-peek-copies"},
     {"a tcp peek of one byte did not copy it", "tcp-peek-copies"},
     {"a tcp read after a peek did not start at the byte peeked", "tcp-read-after-peek"},
+    {"tcp write for recvmsg", "tcp-recvmsg-peek"},
+    {"a tcp recvmsg peek did not fill both buffers in order", "tcp-recvmsg-peek"},
+    {"a tcp recvmsg gave an address, control data or flags", "tcp-recvmsg-header"},
+    {"a tcp recvmsg did not take the bytes the two buffers hold", "tcp-recvmsg-take"},
+    {"a nonblocking tcp recvmsg did not take the rest", "tcp-recvmsg-rest"},
+    {"a nonblocking tcp recvmsg of an empty stream was not EAGAIN", "tcp-recvmsg-empty"},
+    {"tcp recvmsg changed a copied vector", "tcp-recvmsg-overlap"},
+    {"a tcp receive below user space was not EFAULT with every byte kept", "tcp-recv-low"},
+    {"no page for the tcp receive buffer rows", "tcp-recv-buffer-kept"},
+    {"a tcp receive did not keep the buffer whose destination failed", "tcp-recv-buffer-kept"},
+    {"a tcp receive past 32 buffers did not keep the buffer whose destination failed",
+     "tcp-recv-buffer-kept-many"},
+    {"no pages for the tcp recv span rows", "tcp-recv-span"},
+    {"a tcp recv into a buffer whose second page cannot be written did not return the bytes queued",
+     "tcp-recv-span"},
+    {"a nonblocking tcp recv of an empty stream into a page it cannot write was not EAGAIN",
+     "tcp-recv-span-empty"},
+    {"a tcp receive with MSG_WAITALL did not wait for its buffers to fill", "tcp-recv-waitall"},
+    {"a nonblocking tcp receive with MSG_WAITALL did not return what had come",
+     "tcp-recv-waitall-nonblock"},
+    {"tcp recvmsg with empty buffers was not EAGAIN", "tcp-recvmsg-zero-empty"},
+    {"tcp recvmsg with empty buffers did not wait for input", "tcp-recvmsg-zero-wait"},
+    {"tcp recvmsg with empty buffers took queued input", "tcp-recvmsg-zero-ready"},
+    {"tcp recvmsg with empty buffers missed the end of input", "tcp-recvmsg-zero-eof"},
+    {"a tcp recv into a page it cannot write at the end of input was not 0", "tcp-recv-span-eof"},
     {"tcp listener socket", "tcp-connect"},
     {"tcp bind", "tcp-connect"},
     {"tcp listen", "tcp-connect"},
     {"tcp client socket", "tcp-connect"},
+    {"tcp listener non-blocking", "tcp-connect"},
     {"tcp connect", "tcp-connect"},
-    {"tcp accept", "tcp-connect"},
-    {"tcp client write", "tcp-client-to-server"},
+    {"tcp accept", "tcp-accept-now"},
+    {"a nonblocking accept right after the connect found no connection", "tcp-accept-now"},
+    {"tcp client write", "tcp-poll-now"},
+    {"a zero-timeout poll right after the write found nothing to read", "tcp-poll-now"},
     {"tcp server read", "tcp-client-to-server"},
     {"tcp server write", "tcp-server-to-client"},
     {"tcp client read", "tcp-server-to-client"},
@@ -265,6 +324,7 @@ static const struct step {
     {"ping-pong write", "pingpong-rounds"},
     {"ping-pong read", "pingpong-rounds"},
     {"the ping-pong child did not finish", "pingpong-child"},
+    {"the exits of the round trips' calls delivered fewer datagrams than rounds", "pingpong-idle"},
     {"a local round trip waited for the timer with nothing running", "pingpong-idle"},
     {"bound listener socket", "bind-missing-address"},
     {"a bind to an address the machine lacks was not refused", "bind-missing-address"},
@@ -278,6 +338,10 @@ static const struct step {
     {"accept on 127.0.0.1", "bound-at-loopback"},
     {"refused socket", "closed-port-refused"},
     {"closed port not refused", "closed-port-refused"},
+    {"connecting socket", "send-connecting-eagain"},
+    {"connecting socket non-blocking", "send-connecting-eagain"},
+    {"a nonblocking connect to 192.0.2.1 did not return EINPROGRESS", "send-connecting-eagain"},
+    {"a send on a nonblocking socket still connecting was not EAGAIN", "send-connecting-eagain"},
     {"bound-port listen socket", "second-bind-before-listen"},
     {"bound-port listen bind", "second-bind-before-listen"},
     {"second listener socket", "second-bind-before-listen"},
@@ -310,20 +374,25 @@ static const struct step {
     {"a reader asleep through a shutdown did not read the end of input", "shutdown-wakes-reader"},
     {"shutdown of the client", "shutdown-epipe"},
     {"a send after shutdown is not EPIPE", "shutdown-epipe"},
+    {"fork for the send that raises SIGPIPE", "shutdown-epipe"},
+    {"a send after shutdown without MSG_NOSIGNAL did not end the sender with SIGPIPE",
+     "shutdown-epipe"},
+    {"an empty sendmsg after shutdown is not EPIPE", "shutdown-epipe"},
+    {"fork for the empty sendmsg that raises SIGPIPE", "shutdown-epipe"},
+    {"an empty sendmsg after shutdown without MSG_NOSIGNAL did not end the sender with SIGPIPE",
+     "shutdown-epipe"},
     {"a blocking read after shutdown is not the end of input", "shutdown-blocking-eof"},
     {"nonblocking after shutdown", "shutdown-nonblocking-eof"},
     {"a nonblocking read after shutdown is not the end of input", "shutdown-nonblocking-eof"},
     {"fresh stream socket", "never-connected-enotconn"},
     {"nonblocking on the fresh socket", "never-connected-enotconn"},
     {"a read of a stream that never connected is not ENOTCONN", "never-connected-enotconn"},
-    {"simultaneous sockets", "simultaneous-open"},
-    {"simultaneous bind a", "simultaneous-open"},
-    {"simultaneous bind b", "simultaneous-open"},
+    {"simultaneous socket", "simultaneous-open"},
+    {"simultaneous bind", "simultaneous-open"},
     {"simultaneous nonblock", "simultaneous-open"},
-    {"simultaneous connect a", "simultaneous-open"},
-    {"simultaneous connect b", "simultaneous-open"},
-    {"crossing SYNs in flight at once opened no connection that carries data",
-     "simultaneous-open"}};
+    {"simultaneous connect", "simultaneous-open"},
+    {"a socket that dialed its own port is not connected", "simultaneous-open"},
+    {"a socket that dialed its own port did not receive what it sent", "simultaneous-open"}};
 
 #define STEPS ((int)(sizeof(steps) / sizeof(steps[0])))
 
@@ -568,6 +637,7 @@ static int sys_fcntl(int fd, int cmd, int arg)
 #define POLLIN  0x001
 #define POLLOUT 0x004
 #define POLLERR 0x008
+#define POLLHUP 0x010
 
 struct pollfd_probe {
     int fd;
@@ -580,6 +650,13 @@ struct pollfd_probe {
 static int sys_poll_wait(struct pollfd_probe *fds, unsigned int n)
 {
     return syscall3(SYS_POLL, (long)fds, (long)n, (long)-1);
+}
+
+/** poll(2) with a zero timeout: how many descriptors of `fds` are ready now,
+ * without waiting, or a negated errno. */
+static int sys_poll_now(struct pollfd_probe *fds, unsigned int n)
+{
+    return syscall3(SYS_POLL, (long)fds, (long)n, 0);
 }
 
 /** Block until `fd` reports one of `events`, or an error or hangup, which
@@ -849,8 +926,95 @@ static int recv_wait(int s, char *buf, int len, int flags)
     return socketcall(SC_RECVFROM, args);
 }
 
+/** A page of no access, mapped once, which a receive cannot write: its
+ * address, or NULL when it cannot be mapped. */
+static void *bad_page(void)
+{
+    static long page;
+
+    if (page == 0) {
+        page = probe_mmap(0, 4096, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (sys_failed(page))
+            page = 0;
+    }
+    return (void *)page;
+}
+
+/* The struct iovec and msghdr of the probe's ABI. */
+struct iovec_probe {
+    void *iov_base;
+    size_t iov_len;
+};
+
+struct msghdr_probe {
+    void *msg_name;
+    unsigned int msg_namelen;
+    struct iovec_probe *msg_iov;
+    size_t msg_iovlen;
+    void *msg_control;
+    size_t msg_controllen;
+    int msg_flags;
+};
+
+/** Receive on `s` into `count` vectors at `iov`, with no address or control
+ * buffer: the count read or a negated errno. */
+static int recvmsg_vec(int s, struct iovec_probe *iov, size_t count, int flags)
+{
+    struct msghdr_probe msg = {0};
+    unsigned long args[3];
+
+    msg.msg_iov = iov;
+    msg.msg_iovlen = count;
+    args[0] = (unsigned long)s;
+    args[1] = (unsigned long)&msg;
+    args[2] = (unsigned long)flags;
+    return socketcall(SC_RECVMSG, args);
+}
+
+/** Send the `len` bytes of `msg` from the UDP socket `s` to the address `sa`:
+ * the bytes sent or a negated errno. */
+static int udp_send(int s, const uint8_t *sa, const char *msg, int len)
+{
+    unsigned long args[6];
+
+    args[0] = (uint32_t)s;
+    args[1] = (unsigned long)msg;
+    args[2] = (uint32_t)len;
+    args[3] = 0;
+    args[4] = (unsigned long)sa;
+    args[5] = 16;
+    return socketcall(SC_SENDTO, args);
+}
+
+/** recvmsg on the datagram socket `s` writes its buffers only as it copies
+ * the datagram into them, as Linux's udp_recvmsg does, with `sa` the
+ * socket's own address: a datagram of four bytes fills the first of two
+ * buffers whose second cannot be written and returns four; a buffer that
+ * cannot be written on an empty socket gives EAGAIN with MSG_DONTWAIT; and a
+ * datagram of eight bytes that reaches it gives EFAULT and is taken. */
+static void udp_recvmsg_bad(int s, const uint8_t *sa)
+{
+    struct iovec_probe iov[2];
+    char first[4];
+
+    iov[0].iov_base = first;
+    iov[0].iov_len = sizeof(first);
+    iov[1].iov_base = bad_page();
+    iov[1].iov_len = 4096;
+    if (!iov[1].iov_base || udp_send(s, sa, "dgrm", 4) != 4 || recvmsg_vec(s, iov, 2, 0) != 4 ||
+        !mem_eq((const uint8_t *)first, (const uint8_t *)"dgrm", 4))
+        fail("a udp recvmsg failed on a buffer the datagram did not reach");
+    if (recvmsg_vec(s, iov + 1, 1, MSG_DONTWAIT) != -EAGAIN)
+        fail("a udp recvmsg on an empty socket with a bad buffer was not EAGAIN");
+    iov[1].iov_len = 4;
+    if (udp_send(s, sa, "datagram", 8) != 8 || recvmsg_vec(s, iov, 2, 0) != -EFAULT ||
+        recvmsg_vec(s, iov, 1, MSG_DONTWAIT) != -EAGAIN)
+        fail("a udp recvmsg into a bad buffer it reached was not EFAULT with the datagram taken");
+}
+
 /** A datagram peeked at with MSG_PEEK stays queued, whole and with its
- * sender, for the next receive, which takes it. */
+ * sender, for the next receive, which takes it. recvmsg then reads the same
+ * socket with buffers it cannot write (`udp_recvmsg_bad`). */
 static void udp_peek(void)
 {
     unsigned long args[6];
@@ -901,12 +1065,417 @@ static void udp_peek(void)
         fail("a udp receive after a peek did not take the datagram");
     if (socketcall(SC_RECVFROM, args) != -EAGAIN)
         fail("a udp receive after a peek left the datagram queued");
+    udp_recvmsg_bad(s, sa);
     sys_close(s);
+}
+
+/* The two buffers `recvmsg2` reads into, and the header it gives back. */
+static char rm_a[16], rm_b[16];
+static struct msghdr_probe rm_msg;
+
+/** recvmsg on the stream `s` with `flags` into the first `alen` bytes of
+ * `rm_a` and the first `blen` of `rm_b`, the header given back in `rm_msg`:
+ * the bytes received, or a negated errno. The header offers an address and
+ * a control buffer, which a stream leaves unwritten. */
+static int recvmsg2(int s, int alen, int blen, int flags)
+{
+    static uint8_t name[16], control[32];
+    static struct iovec_probe iov[2];
+    unsigned long args[3];
+
+    iov[0].iov_base = rm_a;
+    iov[0].iov_len = (size_t)alen;
+    iov[1].iov_base = rm_b;
+    iov[1].iov_len = (size_t)blen;
+    rm_msg.msg_name = name;
+    rm_msg.msg_namelen = sizeof(name);
+    rm_msg.msg_iov = iov;
+    rm_msg.msg_iovlen = 2;
+    rm_msg.msg_control = control;
+    rm_msg.msg_controllen = sizeof(control);
+    rm_msg.msg_flags = -1;
+    args[0] = (uint32_t)s;
+    args[1] = (unsigned long)&rm_msg;
+    args[2] = (uint32_t)flags;
+    return socketcall(SC_RECVMSG, args);
+}
+
+/** Whether `rm_a` begins with the `alen` bytes of `want` and `rm_b` with
+ * the `blen` after them. */
+static int recvmsg2_got(const char *want, int alen, int blen)
+{
+    return mem_eq((const uint8_t *)rm_a, (const uint8_t *)want, alen) &&
+           mem_eq((const uint8_t *)rm_b, (const uint8_t *)want + alen, blen);
+}
+
+/** A receive that overwrites its second vector must still use its original
+ * destination, for blocking, nonblocking and peeking reads on `cs` from
+ * `as`. The replacement is writable too, so the unfixed kernel fails the
+ * contents check without faulting. The nonblocking read comes right after
+ * the write, and finds its bytes, since the write's exit delivered the
+ * loopback ring, as Linux's loopback delivers within the sender's call. */
+static void tcp_recvmsg_overlap(int cs, int as)
+{
+    struct iovec_probe iov[2], replacement;
+    unsigned char wire[sizeof(replacement) + 1], got[sizeof(wire)];
+    char original, other;
+    int mode, flags, j;
+
+    for (mode = 0; mode < 3; mode++) {
+        flags = mode == 0 ? 0 : mode == 1 ? MSG_DONTWAIT : MSG_PEEK;
+        original = other = 0;
+        replacement.iov_base = &other;
+        replacement.iov_len = 1;
+        for (j = 0; j < (int)sizeof(replacement); j++)
+            wire[j] = ((unsigned char *)&replacement)[j];
+        wire[j] = 'x';
+        iov[0].iov_base = &iov[1];
+        iov[0].iov_len = sizeof(iov[1]);
+        iov[1].iov_base = &original;
+        iov[1].iov_len = 1;
+        if (sys_write(as, wire, sizeof(wire)) != (int)sizeof(wire) ||
+            recvmsg_vec(cs, iov, 2, flags) != (int)sizeof(wire) || original != 'x' || other != 0)
+            fail("tcp recvmsg changed a copied vector");
+        if (flags == MSG_PEEK && (sys_read(cs, got, sizeof(got)) != (int)sizeof(got) ||
+                                  !mem_eq(got, wire, sizeof(wire))))
+            fail("tcp recvmsg changed a copied vector");
+    }
+}
+
+/** recv(2) on `s` into `buf` with `flags`, through its own subcall: the
+ * bytes received or a negated errno. */
+static int recv_call(int s, char *buf, int len, int flags)
+{
+    unsigned long args[4];
+
+    args[0] = (uint32_t)s;
+    args[1] = (unsigned long)buf;
+    args[2] = (uint32_t)len;
+    args[3] = (uint32_t)flags;
+    return socketcall(SC_RECV, args);
+}
+
+/** A stream receive whose destination lies below user space fails with
+ * EFAULT and leaves every byte queued, through readv, recvmsg, recvmsg with
+ * MSG_PEEK, recv and recvfrom, as Linux's checked copy fails; a read then
+ * takes them. recv and recvfrom find the address at the copy, as the vector
+ * calls do, since their first check is only that the buffer ends in user
+ * space. */
+static void tcp_recv_low(int cs, int as)
+{
+    const char *msg = "below-user-space";
+    struct iovec_probe iov[1];
+    char got[16];
+
+    iov[0].iov_base = (void *)LOW_ADDR;
+    iov[0].iov_len = sizeof(got);
+    if (sys_write(as, msg, sizeof(got)) != (int)sizeof(got) ||
+        syscall3(SYS_READV, cs, (long)iov, 1) != -EFAULT || recvmsg_vec(cs, iov, 1, 0) != -EFAULT ||
+        recvmsg_vec(cs, iov, 1, MSG_PEEK) != -EFAULT ||
+        recv_call(cs, (char *)LOW_ADDR, sizeof(got), 0) != -EFAULT ||
+        recv_wait(cs, (char *)LOW_ADDR, sizeof(got), 0) != -EFAULT ||
+        sys_read(cs, got, sizeof(got)) != (int)sizeof(got) ||
+        !mem_eq((const uint8_t *)got, (const uint8_t *)msg, (int)sizeof(got)))
+        fail("a tcp receive below user space was not EFAULT with every byte kept");
+}
+
+/** A stream receive takes each receive buffer whole or not at all: with two
+ * segments queued, which a peek of eight bytes finds, and the second's
+ * destination a page that cannot be written, readv and recvmsg return the
+ * first and leave the second queued for a read, as Linux's tcp_recvmsg
+ * returns what it copied before a failed copy. The two segments are two
+ * buffers because Rach2 keeps each segment's bounds; Linux may have
+ * joined the second to the first (tcp_try_coalesce) and failed the whole
+ * read with EFAULT, so the row checks Rach2's own bounds. */
+static void tcp_recv_kept(int cs, int as)
+{
+    struct iovec_probe iov[2];
+    char first[4], got[8];
+    int mode, n;
+
+    iov[0].iov_base = first;
+    iov[0].iov_len = sizeof(first);
+    iov[1].iov_base = bad_page();
+    iov[1].iov_len = 4;
+    if (!iov[1].iov_base)
+        fail("no page for the tcp receive buffer rows");
+    for (mode = 0; mode < 2; mode++) {
+        if (sys_write(as, "seg1", 4) != 4 || sys_write(as, "seg2", 4) != 4 ||
+            recv_wait(cs, got, sizeof(got), MSG_PEEK | MSG_DONTWAIT) != (int)sizeof(got))
+            fail("a tcp receive did not keep the buffer whose destination failed");
+        n = mode == 0 ? syscall3(SYS_READV, cs, (long)iov, 2) : recvmsg_vec(cs, iov, 2, 0);
+        if (n != 4 || !mem_eq((const uint8_t *)first, (const uint8_t *)"seg1", 4) ||
+            sys_read(cs, got, sizeof(got)) != 4 ||
+            !mem_eq((const uint8_t *)got, (const uint8_t *)"seg2", 4))
+            fail("a tcp receive did not keep the buffer whose destination failed");
+    }
+}
+
+/** Past 32 receive buffers each is still kept whole: with 33 four-byte
+ * segments queued and the 33rd's destination a page that cannot be written,
+ * readv returns the 32 before it and leaves the 33rd for a read, where a
+ * table of 32 ends would have joined the 32nd to it and returned 31. */
+static void tcp_recv_kept_many(int cs, int as)
+{
+    struct iovec_probe iov[2];
+    char seg[4], got[33 * 4];
+    int i;
+
+    iov[0].iov_base = got;
+    iov[0].iov_len = 32 * 4;
+    iov[1].iov_base = bad_page();
+    iov[1].iov_len = 4;
+    for (i = 0; i < 33; i++) {
+        seg[0] = 's';
+        seg[1] = (char)('0' + i / 10);
+        seg[2] = (char)('0' + i % 10);
+        seg[3] = '.';
+        if (sys_write(as, seg, 4) != 4)
+            fail("a tcp receive past 32 buffers did not keep the buffer whose destination failed");
+    }
+    if (recv_wait(cs, got, sizeof(got), MSG_PEEK | MSG_DONTWAIT) != (int)sizeof(got) ||
+        syscall3(SYS_READV, cs, (long)iov, 2) != 32 * 4 ||
+        !mem_eq((const uint8_t *)got + 31 * 4, (const uint8_t *)"s31.", 4) ||
+        sys_read(cs, got, sizeof(got)) != 4 ||
+        !mem_eq((const uint8_t *)got, (const uint8_t *)"s32.", 4))
+        fail("a tcp receive past 32 buffers did not keep the buffer whose destination failed");
+}
+
+/** Two pages, the first writable and the second of no access, mapped once:
+ * the first's address, or NULL when they cannot be had. */
+static char *span_pages(void)
+{
+    static long pages;
+    long m;
+
+    if (pages == 0) {
+        m = probe_mmap(0, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (sys_failed(m))
+            return 0;
+        if (syscall3(SYS_MPROTECT, m + 4096, 4096, PROT_NONE) != 0)
+            return 0;
+        pages = m;
+    }
+    return (char *)pages;
+}
+
+/** recv and recvfrom on a stream check their buffer only to end in user
+ * space and copy a receive buffer at a time, as Linux's import_ubuf and
+ * tcp_recvmsg do: into 8192 bytes whose second page cannot be written, with
+ * four bytes queued, each returns the four; on an empty stream with
+ * MSG_DONTWAIT, into a page it cannot write at all, each fails with EAGAIN,
+ * the wait coming before any copy. */
+static void tcp_recv_span(int cs, int as)
+{
+    char *buf = span_pages();
+    char *none = bad_page();
+    int mode, n;
+
+    if (!buf || !none) {
+        fail("no pages for the tcp recv span rows");
+        return;
+    }
+    for (mode = 0; mode < 2; mode++) {
+        buf[0] = 0;
+        if (sys_write(as, "span", 4) != 4)
+            fail("a tcp recv into a buffer whose second page cannot be written did not return the "
+                 "bytes queued");
+        n = mode == 0 ? recv_call(cs, buf, 8192, 0) : recv_wait(cs, buf, 8192, 0);
+        if (n != 4 || !mem_eq((const uint8_t *)buf, (const uint8_t *)"span", 4))
+            fail("a tcp recv into a buffer whose second page cannot be written did not return the "
+                 "bytes queued");
+    }
+    if (recv_call(cs, none, 4096, MSG_DONTWAIT) != -EAGAIN ||
+        recv_wait(cs, none, 4096, MSG_DONTWAIT) != -EAGAIN)
+        fail(
+            "a nonblocking tcp recv of an empty stream into a page it cannot write was not EAGAIN");
+}
+
+/** At the end of input, recv and recvfrom into a page they cannot write
+ * return 0, as Linux's tcp_recvmsg ends before it copies. `cs` has been shut
+ * down for reading. */
+static void tcp_recv_span_eof(int cs)
+{
+    char *none = bad_page();
+
+    if (recv_call(cs, none, 4096, 0) != 0 || recv_wait(cs, none, 4096, 0) != 0)
+        fail("a tcp recv into a page it cannot write at the end of input was not 0");
+}
+
+/** Receive on the stream `s` into `buf` with MSG_WAITALL, by recv when
+ * `mode` is 0, recvfrom when 1, and recvmsg into two buffers when 2: the
+ * bytes received or a negated errno. */
+static int recv_waitall(int s, char *buf, int len, int mode)
+{
+    struct iovec_probe iov[2];
+
+    if (mode == 0)
+        return recv_call(s, buf, len, MSG_WAITALL);
+    if (mode == 1)
+        return recv_wait(s, buf, len, MSG_WAITALL);
+    iov[0].iov_base = buf;
+    iov[0].iov_len = 3;
+    iov[1].iov_base = buf + 3;
+    iov[1].iov_len = (size_t)len - 3;
+    return recvmsg_vec(s, iov, 2, MSG_WAITALL);
+}
+
+/** A stream receive with MSG_WAITALL waits until its buffers are full: recv,
+ * recvfrom and recvmsg, each in a child seen asleep after the first half
+ * came, return all eight bytes once the parent sends the second half; with
+ * MSG_DONTWAIT the call returns the half that came, as Linux's tcp_recvmsg
+ * returns what it took where it would wait. */
+static void tcp_recv_waitall(int cs, int as)
+{
+    char buf[8];
+    int mode, pid, status;
+    char state;
+
+    for (mode = 0; mode < 3; mode++) {
+        if (sys_write(as, "wait", 4) != 4)
+            fail("a tcp receive with MSG_WAITALL did not wait for its buffers to fill");
+        pid = sys_fork();
+        if (pid < 0)
+            fail("a tcp receive with MSG_WAITALL did not wait for its buffers to fill");
+        if (pid == 0)
+            sys_exit(recv_waitall(cs, buf, sizeof(buf), mode) == (int)sizeof(buf) &&
+                             mem_eq((const uint8_t *)buf, (const uint8_t *)"waitall!", 8)
+                         ? 0
+                         : 1);
+        while ((state = state_of(pid)) != 'S') {
+            if (state == 0 || state == 'Z') {
+                sys_waitpid(pid, &status);
+                fail("a tcp receive with MSG_WAITALL did not wait for its buffers to fill");
+            }
+            sys_nanosleep_ms(10);
+        }
+        if (sys_write(as, "all!", 4) != 4) {
+            syscall2(SYS_KILL, pid, 9);
+            sys_waitpid(pid, &status);
+            fail("a tcp receive with MSG_WAITALL did not wait for its buffers to fill");
+        }
+        if (sys_waitpid(pid, &status) != pid || status != 0)
+            fail("a tcp receive with MSG_WAITALL did not wait for its buffers to fill");
+    }
+    if (sys_write(as, "half", 4) != 4 ||
+        recv_wait(cs, buf, sizeof(buf), MSG_WAITALL | MSG_DONTWAIT) != 4 ||
+        !mem_eq((const uint8_t *)buf, (const uint8_t *)"half", 4))
+        fail("a nonblocking tcp receive with MSG_WAITALL did not return what had come");
+}
+
+/** Both empty vector forms must sleep before the peer sends, then return
+ * zero and leave its byte queued. The parent reaps each receiver. */
+static void tcp_recvmsg_zero_wait(int cs, int as)
+{
+    struct iovec_probe iov[2] = {{0, 0}, {0, 0}};
+    int count, pid, status;
+    char state, byte;
+
+    for (count = 0; count <= 2; count += 2) {
+        pid = sys_fork();
+        if (pid < 0)
+            fail("tcp recvmsg with empty buffers did not wait for input");
+        if (pid == 0)
+            sys_exit(recvmsg_vec(cs, iov, (size_t)count, 0) == 0 ? 0 : 1);
+        while ((state = state_of(pid)) != 'S') {
+            if (state == 0 || state == 'Z') {
+                sys_waitpid(pid, &status);
+                fail("tcp recvmsg with empty buffers did not wait for input");
+            }
+            sys_nanosleep_ms(10);
+        }
+        if (sys_write(as, "z", 1) != 1) {
+            syscall2(SYS_KILL, pid, 9);
+            sys_waitpid(pid, &status);
+            fail("tcp recvmsg with empty buffers did not wait for input");
+        }
+        if (sys_waitpid(pid, &status) != pid || status != 0 || sys_read(cs, &byte, 1) != 1 ||
+            byte != 'z')
+            fail("tcp recvmsg with empty buffers did not wait for input");
+    }
+}
+
+/** Empty TCP buffers, both a zero count and zero lengths, wait on an empty
+ * stream and leave a byte ready after they wake. The parent observes the
+ * child's sleeping state before sending, then reaps it and takes the byte.
+ * The last row closes input on `cs`. */
+static void tcp_recvmsg_zero(int cs, int as)
+{
+    struct iovec_probe iov[2] = {{0, 0}, {0, 0}};
+    unsigned long args[2];
+    int count;
+    char byte;
+
+    for (count = 0; count <= 2; count += 2) {
+        if (recvmsg_vec(cs, iov, (size_t)count, MSG_DONTWAIT) != -EAGAIN ||
+            syscall3(SYS_FCNTL, cs, F_SETFL, O_NONBLOCK) != 0 ||
+            recvmsg_vec(cs, iov, (size_t)count, 0) != -EAGAIN ||
+            syscall3(SYS_FCNTL, cs, F_SETFL, 0) != 0)
+            fail("tcp recvmsg with empty buffers was not EAGAIN");
+    }
+    tcp_recvmsg_zero_wait(cs, as);
+    if (sys_write(as, "r", 1) != 1)
+        fail("tcp recvmsg with empty buffers took queued input");
+    for (count = 0; count <= 2; count += 2) {
+        if (recvmsg_vec(cs, iov, (size_t)count, 0) != 0 ||
+            recvmsg_vec(cs, iov, (size_t)count, MSG_DONTWAIT | MSG_PEEK) != 0)
+            fail("tcp recvmsg with empty buffers took queued input");
+    }
+    if (sys_read(cs, &byte, 1) != 1 || byte != 'r')
+        fail("tcp recvmsg with empty buffers took queued input");
+    args[0] = (unsigned long)cs;
+    args[1] = 2; /* SHUT_RDWR */
+    if (socketcall(SC_SHUTDOWN, args) != 0)
+        fail("tcp recvmsg with empty buffers missed the end of input");
+    for (count = 0; count <= 2; count += 2) {
+        if (recvmsg_vec(cs, iov, (size_t)count, 0) != 0 ||
+            recvmsg_vec(cs, iov, (size_t)count, MSG_DONTWAIT) != 0)
+            fail("tcp recvmsg with empty buffers missed the end of input");
+    }
+}
+
+/** recvmsg on a stream, as QEMU reads its monitor's socket: a peek fills two
+ * buffers in order and takes nothing, the header comes back with no
+ * address, no control data and no flags, a receive takes what its buffers
+ * hold and leaves the rest, a nonblocking one takes that rest, and one of an
+ * empty stream fails with EAGAIN. Receives retain copied vectors when a
+ * buffer overlaps the list. Empty buffers wait for data or EOF, take no
+ * bytes, and return EAGAIN on an empty nonblocking stream. The empty-buffer
+ * rows shut down cs before this function returns. */
+static void tcp_recvmsg(int cs, int as)
+{
+    const char *msg = "recvmsg-tcp";
+    int n;
+
+    if (sys_write(as, msg, strlen(msg)) != (int)strlen(msg))
+        fail("tcp write for recvmsg");
+    n = recvmsg2(cs, 4, sizeof(rm_b), MSG_PEEK);
+    if (n != (int)strlen(msg) || !recvmsg2_got(msg, 4, n - 4))
+        fail("a tcp recvmsg peek did not fill both buffers in order");
+    if (rm_msg.msg_namelen != 0 || rm_msg.msg_controllen != 0 || rm_msg.msg_flags != 0)
+        fail("a tcp recvmsg gave an address, control data or flags");
+    n = recvmsg2(cs, 4, 4, 0);
+    if (n != 8 || !recvmsg2_got(msg, 4, 4))
+        fail("a tcp recvmsg did not take the bytes the two buffers hold");
+    n = recvmsg2(cs, 2, sizeof(rm_b), MSG_DONTWAIT);
+    if (n != 3 || !recvmsg2_got(msg + 8, 2, 1))
+        fail("a nonblocking tcp recvmsg did not take the rest");
+    if (recvmsg2(cs, 2, sizeof(rm_b), MSG_DONTWAIT) != -EAGAIN)
+        fail("a nonblocking tcp recvmsg of an empty stream was not EAGAIN");
+    tcp_recvmsg_overlap(cs, as);
+    tcp_recv_low(cs, as);
+    tcp_recv_kept(cs, as);
+    tcp_recv_kept_many(cs, as);
+    tcp_recv_span(cs, as);
+    tcp_recv_waitall(cs, as);
+    tcp_recvmsg_zero(cs, as);
+    tcp_recv_span_eof(cs);
 }
 
 /** A stream's bytes peeked at with MSG_PEEK stay in its ring: one byte
  * peeked, as Chromium checks a connection it keeps idle, and the read after
- * it gets the whole message from its first byte. */
+ * it gets the whole message from its first byte. recvmsg then reads the
+ * same connection (`tcp_recvmsg`). */
 static void tcp_peek(void)
 {
     unsigned long args[6];
@@ -952,16 +1521,28 @@ static void tcp_peek(void)
     n = sys_read(cs, rbuf, sizeof(rbuf));
     if (n != (int)strlen(msg) || !mem_eq((const uint8_t *)rbuf, (const uint8_t *)msg, n))
         fail("a tcp read after a peek did not start at the byte peeked");
+    tcp_recvmsg(cs, as);
     sys_close(cs);
     sys_close(as);
     sys_close(ls);
 }
 
-/** A TCP connection to the probe's own listener on 127.0.0.1 completes its
+/**
+ * A TCP connection to the probe's own listener on 127.0.0.1 completes its
  * handshake, carries a message each way, and reports its peer as
- * 127.0.0.1:tcp_port[0]. */
+ * 127.0.0.1:tcp_port[0].
+ *
+ * Each step finds what the call before it sent with no wait, as on Linux
+ * 6.12.115, whose loopback delivers within the sender's call: the connect's
+ * last acknowledgement (net/ipv4/tcp_input.c:6639) puts the connection in
+ * the listener's queue, where a nonblocking accept finds it instead of
+ * EAGAIN (net/ipv4/inet_connection_sock.c:666-672), and the client's write
+ * puts its bytes in the server's receive queue, which a poll with a zero
+ * timeout reports readable (net/ipv4/tcp.c:576-577).
+ */
 static void tcp_loop(void)
 {
+    struct pollfd_probe pfd;
     unsigned long args[6];
     uint8_t sa[16], peer[16];
     uint32_t salen = 16;
@@ -988,6 +1569,8 @@ static void tcp_loop(void)
     args[1] = 2;
     if (socketcall(SC_LISTEN, args) != 0)
         fail("tcp listen");
+    if (sys_fcntl(ls, F_SETFL, O_NONBLOCK) != 0)
+        fail("tcp listener non-blocking");
 
     args[0] = AF_INET;
     args[1] = SOCK_STREAM;
@@ -1007,11 +1590,19 @@ static void tcp_loop(void)
     args[1] = 0;
     args[2] = 0;
     as = socketcall(SC_ACCEPT, args);
+    if (as == -EAGAIN)
+        fail("a nonblocking accept right after the connect found no connection");
     if (as < 0)
         fail("tcp accept");
 
     if (sys_write(cs, ping, strlen(ping)) != (int)strlen(ping)) {
         fail("tcp client write");
+    }
+    pfd.fd = as;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+    if (sys_poll_now(&pfd, 1) != 1 || !(pfd.revents & POLLIN)) {
+        fail("a zero-timeout poll right after the write found nothing to read");
     }
     n = sys_read(as, rbuf, sizeof(rbuf));
     if (n != (int)strlen(ping) || !mem_eq((const uint8_t *)rbuf, (const uint8_t *)ping, n)) {
@@ -1176,10 +1767,10 @@ static void bulk_transfer(int cs, int as)
  *
  * A write offers up to 64 KiB, so that a call puts the most it can in the
  * ring: a window's worth, 65535 bytes, is 45 segments of 1460 bytes, of the
- * ring's 64 slots, and a system call's exit delivers the ring once it holds
- * three or more. The ring's high-water mark is kept since boot, so it can
- * show that the ring was pressed but not that this transfer pressed it: the
- * row requires LOOP_PEAK_FLOOR of it and prints it.
+ * ring's 64 slots, and the call's exit delivers the ring. The ring's
+ * high-water mark is kept since boot, so it can show that the ring was
+ * pressed but not that this transfer pressed it: the row requires
+ * LOOP_PEAK_FLOOR of it and prints it.
  */
 static void tcp_loop_bulk(void)
 {
@@ -1294,21 +1885,23 @@ static int pipe_pingpong_ms(void)
 
 /**
  * PINGPONG_ROUNDS round trips of a byte each way between this process and a
- * child over a loopback connection, judged leg by leg by the kernel's count
- * of the datagrams a tick found on the ring while every processor was idle
- * (`loopback_left_idle` in /proc/stat).
+ * child over a loopback connection, judged by the kernel's counts of the
+ * loopback datagrams each path delivered (`loopback_delivered_*` in
+ * /proc/stat).
  *
- * Each leg queues one datagram, below the three at which a system call's exit
- * delivers the ring, and the sender then blocks in its read with nothing else
- * runnable, so the processor goes to its idle wait, which delivers the ring
- * before it halts. A tick may still deliver a leg first, when it comes
- * between the write and the idle wait, and a slower processor makes that
- * likelier; the count does not see those, since the processor was running.
- * It sees a leg the idle wait left on the ring and halted over, which then
- * waited for the timer: a connection that does turns over one window a tick.
- * No leg may, so the count must not rise. The legs each path delivered and
- * the times of these rounds and of the same rounds over pipes are printed for
- * a person and not judged.
+ * Each leg queues one datagram, which the exit of the write that sent it
+ * delivers, with the acknowledgement it draws, before the write returns, as
+ * Linux 6.12.115's local_bh_enable runs the softirq that loopback_xmit queued
+ * it for (drivers/net/loopback.c:69-92, kernel/softirq.c:402-407); a tick
+ * that comes between the send and the exit may take it first. The sender
+ * then blocks in its read with the ring empty, so the idle wait's drain
+ * (`idle_wait_irq_off`) finds nothing and delivers no leg. The exits must
+ * have delivered at least one datagram a round, which a broken exit drain
+ * leaves to the idle wait and the timer. `loopback_left_idle`, the datagrams
+ * a tick found on the ring with every processor halted, must not rise: such
+ * a leg waited for the timer with nothing running, a turn of one window a
+ * tick. The other counts and the times of these rounds and of the same
+ * rounds over pipes are printed for a person and not judged.
  */
 static void tcp_loop_pingpong(void)
 {
@@ -1317,7 +1910,7 @@ static void tcp_loop_pingpong(void)
     long t0[2], t1[2];
     char one = 'p';
     int ls, cs, as, pid, status = 0, round, ms, base;
-    uint32_t idle, tick, left;
+    uint32_t call, idle, tick, left;
 
     base = pipe_pingpong_ms();
 
@@ -1370,6 +1963,7 @@ static void tcp_loop_pingpong(void)
     as = socketcall(SC_ACCEPT, args);
     if (as < 0)
         fail("ping-pong accept");
+    call = proc_stat_u32("loopback_delivered_call ", 24);
     idle = proc_stat_u32("loopback_delivered_idle ", 24);
     tick = proc_stat_u32("loopback_delivered_tick ", 24);
     left = proc_stat_u32("loopback_left_idle ", 19);
@@ -1387,6 +1981,7 @@ static void tcp_loop_pingpong(void)
     sys_close(as);
     sys_close(ls);
     ms = elapsed_ms(t0, t1);
+    call = proc_stat_u32("loopback_delivered_call ", 24) - call;
     idle = proc_stat_u32("loopback_delivered_idle ", 24) - idle;
     tick = proc_stat_u32("loopback_delivered_tick ", 24) - tick;
     left = proc_stat_u32("loopback_left_idle ", 19) - left;
@@ -1394,13 +1989,18 @@ static void tcp_loop_pingpong(void)
     print_u32((uint32_t)ms);
     print(" ms over the loopback, ");
     print_u32((uint32_t)base);
-    print(" over a pipe, for 200 round trips; delivered by the idle path ");
+    print(" over a pipe, for 200 round trips; delivered at a call's exit ");
+    print_u32(call);
+    print(", by the idle wait ");
     print_u32(idle);
     print(", by the timer ");
     print_u32(tick);
     print(", left for the timer by an idle machine ");
     print_u32(left);
     print("\n");
+    if (!probe_native() && call < PINGPONG_ROUNDS) {
+        fail("the exits of the round trips' calls delivered fewer datagrams than rounds");
+    }
     if (!probe_native() && left != 0) {
         fail("a local round trip waited for the timer with nothing running");
     }
@@ -1502,13 +2102,57 @@ static void tcp_refused(void)
 }
 
 /**
+ * A send on a nonblocking socket whose connection is still in its handshake
+ * fails with EAGAIN, as Linux's sk_stream_wait_connect returns with no time
+ * to wait (net/core/stream.c:56-82). The loopback completes a handshake
+ * within connect, so the socket dials the documentation address 192.0.2.1,
+ * which `learn_addresses` showed is routed out of the interface and which
+ * nothing answers before the send that follows the connect at once. The
+ * socket is closed in SYN_SENT.
+ */
+static void tcp_send_connecting(void)
+{
+    unsigned long args[6];
+    uint8_t sa[16];
+    int cs;
+
+    args[0] = AF_INET;
+    args[1] = SOCK_STREAM;
+    args[2] = 0;
+    cs = socketcall(SC_SOCKET, args);
+    if (cs < 0)
+        fail("connecting socket");
+    if (sys_fcntl(cs, F_SETFL, O_NONBLOCK) < 0)
+        fail("connecting socket non-blocking");
+
+    make_sockaddr(sa, 9, 192, 0, 2, 1);
+    args[0] = (uint32_t)cs;
+    args[1] = (unsigned long)sa;
+    args[2] = 16;
+    if (socketcall(SC_CONNECT, args) != -EINPROGRESS)
+        fail("a nonblocking connect to 192.0.2.1 did not return EINPROGRESS");
+
+    args[0] = (uint32_t)cs;
+    args[1] = (unsigned long)"x";
+    args[2] = 1;
+    args[3] = MSG_NOSIGNAL;
+    args[4] = 0;
+    args[5] = 0;
+    if (socketcall(SC_SENDTO, args) != -EAGAIN)
+        fail("a send on a nonblocking socket still connecting was not EAGAIN");
+
+    sys_close(cs);
+}
+
+/**
  * A reader already asleep on a stream another process shuts down wakes with
- * the end of input. The sleeper is in the socket's wait queue, and the
- * shutdown detaches the socket from its block both ways, so nothing the peer
- * sends afterwards can reach that queue: the shutdown wakes it or nothing
- * does. `cs` is a connected socket with nothing to read. The shutdown waits
- * until /proc shows the child asleep, since a shutdown before its read takes
- * the path `shutdown_rows` covers, and a child that ends first fails.
+ * the end of input. The sleeper is in the socket's wait queue, and
+ * SHUT_RDWR shuts the receiving half, which ends a read of an empty stream
+ * at once, and wakes the queue: nothing the peer sends need come for the
+ * sleeper to see it. `cs` is a connected socket with nothing to read. The
+ * shutdown waits until /proc shows the child asleep, since a shutdown before
+ * its read takes the path `shutdown_rows` covers, and a child that ends
+ * first fails.
  */
 static void shutdown_wakes_a_sharer(int cs)
 {
@@ -1539,16 +2183,41 @@ static void shutdown_wakes_a_sharer(int cs)
         fail("a reader asleep through a shutdown did not read the end of input");
 }
 
+/** sendmsg on the stream `s` of `count` buffers of no bytes, or of none
+ * when `count` is 0, with `flags`: the count sent or a negated errno. */
+static int sendmsg_empty(int s, size_t count, int flags)
+{
+    static struct iovec_probe iov[2];
+    struct msghdr_probe msg = {0};
+    unsigned long args[3];
+
+    iov[0].iov_base = rm_a;
+    iov[1].iov_base = rm_b;
+    msg.msg_iov = count ? iov : (struct iovec_probe *)0;
+    msg.msg_iovlen = count;
+    args[0] = (unsigned long)s;
+    args[1] = (unsigned long)&msg;
+    args[2] = (unsigned long)flags;
+    return socketcall(SC_SENDMSG, args);
+}
+
 /**
- * A stream this end shut down for writing: a send is EPIPE, and a read,
- * blocking or not, is the end of input, since the peer has closed its end.
- * A stream that never connected reads ENOTCONN. `cs` is a connected client
- * whose peer has shut down; `sa` is scratch space of a byte.
+ * A stream this end shut down for writing: a send with MSG_NOSIGNAL is
+ * EPIPE, and one without it ends the sender with SIGPIPE, as on Linux, and
+ * so is a sendmsg with no byte to send, of no buffer or of empty ones; a
+ * read, blocking or not, is the end of input, since the peer has closed
+ * its end. A stream that never connected reads ENOTCONN. `cs` is a
+ * connected client whose peer has shut down; `sa` is scratch space of a
+ * byte.
  */
 static void shutdown_rows(int cs, uint8_t *sa)
 {
+    /* A zeroed sigaction, handler, flags, restorer and an 8-byte mask:
+     * SIG_DFL, whatever the probe inherited. */
+    static const unsigned long dfl[5] = {0, 0, 0, 0, 0};
     unsigned long args[6];
-    int fresh;
+    int fresh, pid, status = 0;
+    size_t count;
 
     args[0] = (uint32_t)cs;
     args[1] = 1; /* SHUT_WR */
@@ -1557,11 +2226,38 @@ static void shutdown_rows(int cs, uint8_t *sa)
     args[0] = (uint32_t)cs;
     args[1] = (unsigned long)"x";
     args[2] = 1;
-    args[3] = 0;
+    args[3] = MSG_NOSIGNAL;
     args[4] = 0;
     args[5] = 0;
     if (socketcall(SC_SENDTO, args) != -EPIPE)
         fail("a send after shutdown is not EPIPE");
+    pid = sys_fork();
+    if (pid < 0)
+        fail("fork for the send that raises SIGPIPE");
+    if (pid == 0) {
+        syscall4(SYS_RT_SIGACTION, SIGPIPE, (long)dfl, 0, 8);
+        args[3] = 0;
+        socketcall(SC_SENDTO, args);
+        sys_exit(0);
+    }
+    if (sys_waitpid(pid, &status) != pid || (status & 0x7F) != SIGPIPE)
+        fail("a send after shutdown without MSG_NOSIGNAL did not end the sender with SIGPIPE");
+    if (sendmsg_empty(cs, 0, MSG_NOSIGNAL) != -EPIPE ||
+        sendmsg_empty(cs, 2, MSG_NOSIGNAL) != -EPIPE)
+        fail("an empty sendmsg after shutdown is not EPIPE");
+    for (count = 0; count <= 2; count += 2) {
+        pid = sys_fork();
+        if (pid < 0)
+            fail("fork for the empty sendmsg that raises SIGPIPE");
+        if (pid == 0) {
+            syscall4(SYS_RT_SIGACTION, SIGPIPE, (long)dfl, 0, 8);
+            sendmsg_empty(cs, count, 0);
+            sys_exit(0);
+        }
+        if (sys_waitpid(pid, &status) != pid || (status & 0x7F) != SIGPIPE)
+            fail("an empty sendmsg after shutdown without MSG_NOSIGNAL did not end the sender "
+                 "with SIGPIPE");
+    }
     if (sys_read(cs, sa, 1) != 0)
         fail("a blocking read after shutdown is not the end of input");
     if (sys_fcntl(cs, F_SETFL, O_NONBLOCK) != 0)
@@ -1773,120 +2469,78 @@ static void tcp_ports(void)
     sys_close(ls);
 }
 
-/** The datagrams the loopback ring has delivered since boot, by the tick, the
- * idle wait and system calls' exits together. */
-static uint32_t loop_delivered_now(void)
-{
-    return proc_stat_u32("loopback_delivered_tick ", 24) +
-           proc_stat_u32("loopback_delivered_idle ", 24) +
-           proc_stat_u32("loopback_delivered_call ", 24);
-}
-
 /**
- * Simultaneous open (RFC 793): both ends send a SYN and neither has seen an
- * ACK. Two sockets, each bound to the port the other dials, connect without
- * blocking, so that both SYNs are in flight at once from one process and
- * each arrives at a socket that has sent its own. Each end answers with a
- * SYN-ACK at its `iss`, the sequence the peer expects, and the two establish
- * a connection that carries a message from `a` to `b`.
+ * Simultaneous open (RFC 793, figure 8): a SYN reaches a socket in SYN_SENT,
+ * which answers with a SYN-ACK at its `iss` and waits in SYN_RCVD for the
+ * peer's. A socket bound to 127.0.0.1 at `sim_port` dials that same address
+ * and port, so its own SYN is the one that reaches it in SYN_SENT, and the
+ * SYN-ACK it answers with is the peer's; the connection it opens to itself
+ * carries a message back to it, as Linux's tcp_rcv_synsent_state_process
+ * takes "connect to self" in its arm for crossed SYNs (tcp_input.c:6661-6704
+ * in 6.12.115) and tcp_validate_incoming passes the SYN-ACK in SYN_RECV
+ * (6101-6106). Two sockets of one thread cannot cross two SYNs over the
+ * loopback, since each send is delivered before its call returns, as on
+ * Linux; a socket's SYN to itself is crossed every time.
  *
- * A round waits in poll for `a` to connect or be refused, and is decided by
- * the message, which `b` waits for in poll as well. A round may lose: a tick
- * of the 100 Hz timer between the two connects delivers the first SYN
- * before `b` has a block, and the reset refuses it. The kernel's count of
- * the datagrams the ring delivered, read before the first connect and after
- * the second, says whether that can have happened: a round that loses with
- * the count unchanged had both SYNs on the ring at once, and fails the
- * probe; one that loses after a delivery is tried again on the next pair of
- * ports, SIM_PAIRS pairs in turn.
+ * The connect is nonblocking and is decided in poll, as a crossing between
+ * two machines would be: POLLOUT with neither POLLERR nor POLLHUP is the
+ * open connection, and a reset would have refused it.
  */
 static void tcp_simultaneous(void)
 {
     unsigned long args[6];
     uint8_t sa[16];
-    int a, b, rc, round, crossed = 0;
-    uint16_t port_a, port_b;
-    uint32_t before, delivered;
+    int a, rc, n;
     const char *msg = "simultaneous";
     char rbuf[32];
-    int n;
 
-    for (round = 0; !crossed; round++) {
-        port_a = sim_port[(round % SIM_PAIRS) * 2];
-        port_b = sim_port[(round % SIM_PAIRS) * 2 + 1];
-        args[0] = AF_INET;
-        args[1] = SOCK_STREAM;
-        args[2] = 0;
-        a = socketcall(SC_SOCKET, args);
-        args[0] = AF_INET;
-        args[1] = SOCK_STREAM;
-        args[2] = 0;
-        b = socketcall(SC_SOCKET, args);
-        if (a < 0 || b < 0)
-            fail("simultaneous sockets");
+    args[0] = AF_INET;
+    args[1] = SOCK_STREAM;
+    args[2] = 0;
+    a = socketcall(SC_SOCKET, args);
+    if (a < 0)
+        fail("simultaneous socket");
 
-        make_sockaddr(sa, port_a, 0, 0, 0, 0);
+    make_sockaddr(sa, sim_port, 127, 0, 0, 1);
+    args[0] = (uint32_t)a;
+    args[1] = (unsigned long)sa;
+    args[2] = 16;
+    if (socketcall(SC_BIND, args) != 0)
+        fail("simultaneous bind");
+
+    if (sys_fcntl(a, F_SETFL, O_NONBLOCK) < 0)
+        fail("simultaneous nonblock");
+
+    args[0] = (uint32_t)a;
+    args[1] = (unsigned long)sa;
+    args[2] = 16;
+    rc = socketcall(SC_CONNECT, args);
+    if (rc != -EINPROGRESS && rc != 0)
+        fail("simultaneous connect");
+
+    if ((wait_for(a, POLLOUT) & (POLLOUT | POLLERR | POLLHUP)) != POLLOUT)
+        fail("a socket that dialed its own port is not connected");
+
+    n = 0;
+    args[0] = (uint32_t)a;
+    args[1] = (unsigned long)msg;
+    args[2] = (uint32_t)strlen(msg);
+    args[3] = 0;
+    args[4] = 0;
+    args[5] = 0;
+    if (socketcall(SC_SENDTO, args) == (int)strlen(msg)) {
+        (void)wait_for(a, POLLIN);
         args[0] = (uint32_t)a;
-        args[1] = (unsigned long)sa;
-        args[2] = 16;
-        if (socketcall(SC_BIND, args) != 0)
-            fail("simultaneous bind a");
-        make_sockaddr(sa, port_b, 0, 0, 0, 0);
-        args[0] = (uint32_t)b;
-        args[1] = (unsigned long)sa;
-        args[2] = 16;
-        if (socketcall(SC_BIND, args) != 0)
-            fail("simultaneous bind b");
-
-        if (sys_fcntl(a, F_SETFL, O_NONBLOCK) < 0 || sys_fcntl(b, F_SETFL, O_NONBLOCK) < 0)
-            fail("simultaneous nonblock");
-
-        before = loop_delivered_now();
-        make_sockaddr(sa, port_b, 127, 0, 0, 1);
-        args[0] = (uint32_t)a;
-        args[1] = (unsigned long)sa;
-        args[2] = 16;
-        rc = socketcall(SC_CONNECT, args);
-        if (rc != -EINPROGRESS && rc != 0)
-            fail("simultaneous connect a");
-
-        make_sockaddr(sa, port_a, 127, 0, 0, 1);
-        args[0] = (uint32_t)b;
-        args[1] = (unsigned long)sa;
-        args[2] = 16;
-        rc = socketcall(SC_CONNECT, args);
-        if (rc != -EINPROGRESS && rc != 0)
-            fail("simultaneous connect b");
-        delivered = loop_delivered_now() - before;
-
-        (void)wait_for(a, POLLOUT);
-
-        /* The round crossed when a message reaches `b`. */
-        n = 0;
-        args[0] = (uint32_t)a;
-        args[1] = (unsigned long)msg;
-        args[2] = (uint32_t)strlen(msg);
-        args[3] = 0;
+        args[1] = (unsigned long)rbuf;
+        args[2] = sizeof(rbuf);
+        args[3] = MSG_DONTWAIT;
         args[4] = 0;
         args[5] = 0;
-        if (socketcall(SC_SENDTO, args) == (int)strlen(msg)) {
-            (void)wait_for(b, POLLIN);
-            args[0] = (uint32_t)b;
-            args[1] = (unsigned long)rbuf;
-            args[2] = sizeof(rbuf);
-            args[3] = MSG_DONTWAIT;
-            args[4] = 0;
-            args[5] = 0;
-            n = socketcall(SC_RECVFROM, args);
-        }
-        if (n == (int)strlen(msg) && mem_eq((const uint8_t *)rbuf, (const uint8_t *)msg, n)) {
-            crossed = 1;
-        } else if (delivered == 0) {
-            fail("crossing SYNs in flight at once opened no connection that carries data");
-        }
-        sys_close(a);
-        sys_close(b);
+        n = socketcall(SC_RECVFROM, args);
     }
+    if (n != (int)strlen(msg) || !mem_eq((const uint8_t *)rbuf, (const uint8_t *)msg, n))
+        fail("a socket that dialed its own port did not receive what it sent");
+    sys_close(a);
 }
 
 /** A server that closes a connection at once after accept: the client's
@@ -1962,9 +2616,7 @@ static void take_ports(void)
     bound_listen_port = (uint16_t)probe_port(7300);
     bound_client_port = (uint16_t)probe_port(7301);
     closed_port = bound_listen_port;
-    for (i = 0; i < 2 * SIM_PAIRS; i++) {
-        sim_port[i] = (uint16_t)probe_port(7310 + i);
-    }
+    sim_port = (uint16_t)probe_port(7310);
 }
 
 void probe_main(unsigned long *sp);
@@ -2000,9 +2652,11 @@ void probe_main(unsigned long *sp)
     tcp_bound_loopback();
     rows_enter("refused socket");
     tcp_refused();
+    rows_enter("connecting socket");
+    tcp_send_connecting();
     rows_enter("bound-port listen socket");
     tcp_ports();
-    rows_enter("simultaneous sockets");
+    rows_enter("simultaneous socket");
     tcp_simultaneous();
     rows_report(STEPS, 0);
     print("LOOPPROBE OK\n");

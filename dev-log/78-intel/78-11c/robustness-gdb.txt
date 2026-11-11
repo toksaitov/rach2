@@ -1,0 +1,56 @@
+/usr/bin/gdb
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/libthread_db.so.1".
+Writing test log into /root/t2651/bt/r.qpa
+dEQP Core unknown (0xcafebabe) starting..
+  target implementation = 'Surfaceless'
+MESA-INTEL: warning: Haswell Vulkan support is incomplete
+[New Thread 0x7efffe5056c0 (LWP 708) (id 2)]
+[Thread 0x7efffe5056c0 (LWP 708) (id 2) exited]
+MESA-INTEL: warning: Haswell Vulkan support is incomplete
+[New Thread 0x7efffe5056c0 (LWP 709) (id 3)]
+[New Thread 0x7efffdc2b6c0 (LWP 710) (id 4)]
+
+Test case 'dEQP-VK.robustness.robustness2.bind.notemplate.r32i.unroll.nonvolatile.sampled_image.no_fmt_qual.img.samples_4.2d_array.comp'..
+[New Thread 0x7efff7fff6c0 (LWP 711) (id 5)]
+  ResourceError (vk.createImage(device, pCreateInfo, pAllocator, &object): VK_ERROR_OUT_OF_DEVICE_MEMORY at vkRefUtilImpl.inl:410)
+
+DONE!
+
+Test run totals:
+  Passed:        0/1 (0.0%)
+  Failed:        1/1 (100.0%)
+  Not supported: 0/1 (0.0%)
+  Warnings:      0/1 (0.0%)
+  Waived:        0/1 (0.0%)
+Test run was ABORTED!
+[Thread 0x7efffdc2b6c0 (LWP 710) (id 4) exited]
+[Thread 0x7efffe5056c0 (LWP 709) (id 3) exited]
+[Thread 0x7efff7fff6c0 (LWP 711) (id 5) exited]
+
+Thread 1 "deqp-vk" received signal SIGSEGV, Segmentation fault.
+0x00007effff853290 in ?? ()
+#0  0x00007effff853290 in ?? ()
+#1  0x00005555587aea12 in ?? ()
+#2  0x000055555791b7de in ?? ()
+#3  0x000055555791cda7 in ?? ()
+#4  0x00005555599c349f in ?? ()
+#5  0x0000555559974813 in ?? ()
+#6  0x000055555993b58a in ?? ()
+#7  0x000055555993b623 in ?? ()
+#8  0x0000555555d8f944 in ?? ()
+#9  0x00007effff9a0de7 in __libc_start_call_main () from /lib/libc.so.6
+#10 0x00007effff9a0f07 in __libc_start_main_impl () from /lib/libc.so.6
+#11 0x0000555555e16e41 in ?? ()
+From                To                  Syms Read   Shared Object Library
+0x00007efffffc3000  0x00007f0000000000  Yes (*)     /lib64/ld-linux-x86-64.so.2
+0x00007efffff7a000  0x00007efffffb3000  Yes (*)     /usr/lib/x86_64-linux-gnu/libpng16.so.16
+0x00007efffff64000  0x00007efffff7a000  Yes (*)     /usr/lib/x86_64-linux-gnu/libEGL.so.1
+0x00007effffcad000  0x00007efffff64000  Yes (*)     /usr/lib/libstdc++.so.6
+0x00007effffb92000  0x00007effffcad000  Yes (*)     /lib/libm.so.6
+0x00007effffb64000  0x00007effffb92000  Yes         /lib/libgcc_s.so.1
+0x00007effff976000  0x00007effffb64000  Yes (*)     /lib/libc.so.6
+0x00007effff955000  0x00007effff974000  Yes (*)     /usr/lib/libz.so.1
+0x00007effff89c000  0x00007effff955000  Yes (*)     /usr/lib/x86_64-linux-gnu/libGLdispatch.so.0
+(*): Shared library is missing debugging information.
+=> 0x7effff853290:	Cannot access memory at address 0x7effff853290

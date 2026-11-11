@@ -30,6 +30,16 @@ static volatile unsigned int bkl_claim;
  * so that rounding at each acquisition loses no short waits. */
 static uint64_t bkl_wait_cycles;
 static uint64_t bkl_wait_max_cycles;
+static volatile uint32_t bkl_releases; /* completed outer holds, modulo 2^32 */
+static uint32_t bkl_wait_max_holds;    /* holds completed during the longest wait */
+/* Keep the most recent releases and copy those of a new longest wait. */
+struct bkl_hold_record {
+    uint64_t cycles; /* full hold duration in TSC cycles */
+    uint32_t vector; /* entry vector, 0 for a take after a drop */
+    int32_t nr;      /* entry system call number, -1 for none */
+};
+static struct bkl_hold_record bkl_recent[BKL_WAIT_HOLDS];
+static struct bkl_hold_record bkl_wait_hold[BKL_WAIT_HOLDS];
 static uint64_t bkl_hold_max_cycles;          /* the longest hold, from take to give back */
 static uint32_t bkl_hold_vector;              /* its entry's vector, 0 for none */
 static int32_t bkl_hold_nr = -1;              /* its entry's system call number, or -1 */
@@ -96,8 +106,13 @@ static void bkl_acquire(struct percpu *cpu)
 {
     unsigned int me = (unsigned int)arch_cpu_id() + 1u;
     uint32_t spins = 0, passed = 0;
+    uint32_t releases = bkl_releases;
     uint64_t start = arch_cycles(), waited;
+    uint32_t wake_start = waketime_clock(), wake_wait;
+    unsigned int i, n;
 
+    cpu->wake_bkl_start = wake_start;
+    cpu->wake_bkl_waiting = 1;
     for (;;) {
         unsigned int claim = bkl_claim;
 
@@ -117,11 +132,20 @@ static void bkl_acquire(struct percpu *cpu)
         (void)arch_atomic_cmpxchg(&bkl_claim, me, 0u);
     }
     cpu->bkl_since = arch_cycles();
+    wake_wait = waketime_clock() - wake_start;
+    cpu->wake_bkl_total += wake_wait;
+    cpu->wake_bkl_waiting = 0;
+    waketime_lock(wake_wait);
     k_memset(bkl_early_cycles[arch_cpu_id()], 0, sizeof(bkl_early_cycles[0]));
     waited = cpu->bkl_since - start;
     bkl_wait_cycles += waited;
     if (waited > bkl_wait_max_cycles) {
         bkl_wait_max_cycles = waited;
+        bkl_wait_max_holds = bkl_releases - releases;
+        n = bkl_wait_max_holds < BKL_WAIT_HOLDS ? bkl_wait_max_holds : BKL_WAIT_HOLDS;
+        for (i = 0; i < n; i++) {
+            bkl_wait_hold[i] = bkl_recent[(bkl_releases - n + i) % BKL_WAIT_HOLDS];
+        }
     }
     bkl_flush(cpu);
 }
@@ -135,6 +159,10 @@ static void bkl_hold_end(struct percpu *cpu)
     int c = arch_cpu_id();
     int key;
 
+    bkl_recent[bkl_releases % BKL_WAIT_HOLDS].cycles = held;
+    bkl_recent[bkl_releases % BKL_WAIT_HOLDS].vector = cpu->bkl_vector;
+    bkl_recent[bkl_releases % BKL_WAIT_HOLDS].nr = cpu->bkl_nr;
+    bkl_releases++;
     if (!bkl_booted) {
         bkl_booted = 1;
         return;
@@ -167,20 +195,23 @@ void bkl_note_entry(uint32_t vector, int32_t nr)
 
 /** Fill `out` with `pc` and the return addresses of the frames from `fp`,
  * 0 past the last. The kernel keeps frame pointers: each frame holds the
- * caller's frame pointer, then the return address. The walk stays within
- * 64 KiB above the first frame, on one stack. */
-static void sample_chain(uintptr_t out[BKL_SAMPLE_PCS], uintptr_t pc, uintptr_t fp)
+ * caller's frame pointer, then the return address. The walk reads only the
+ * interrupted thread's kernel stack, the KERNEL_STACK_SIZE bytes below
+ * `top`, and only upward, since the outermost kernel frame holds whatever
+ * the user left in the frame pointer; a `top` of 0 records `pc` alone. */
+static void sample_chain(uintptr_t out[BKL_SAMPLE_PCS], uintptr_t pc, uintptr_t fp, uintptr_t top)
 {
-    uintptr_t first = fp;
+    uintptr_t low = fp;
     int i;
 
     out[0] = pc;
     for (i = 1; i < BKL_SAMPLE_PCS; i++) {
-        if (fp < USER_ADDR_MAX || fp % sizeof(uintptr_t) != 0 || fp < first ||
-            fp - first > 0x10000u) {
+        if (top < KERNEL_STACK_SIZE || fp < top - KERNEL_STACK_SIZE ||
+            fp > top - 2 * sizeof(uintptr_t) || fp % sizeof(uintptr_t) != 0 || fp < low) {
             break;
         }
         out[i] = ((const uintptr_t *)fp)[1];
+        low = fp + 2 * sizeof(uintptr_t);
         fp = ((const uintptr_t *)fp)[0];
     }
     for (; i < BKL_SAMPLE_PCS; i++) {
@@ -192,29 +223,40 @@ void bkl_hold_sample(uintptr_t pc, uintptr_t fp)
 {
     struct percpu *cpu = this_cpu();
     int c = arch_cpu_id(), m;
+    uintptr_t top;
     uint64_t held;
 
     if (cpu->bkl_depth < 2) {
         return;
     }
     held = arch_cycles() - cpu->bkl_since;
+    top = cpu->current ? cpu->current->kernel_stack : 0;
     for (m = 0; m < BKL_SAMPLE_MARKS; m++) {
         if (!bkl_early_cycles[c][m] && timer_cycles_us(held) >= 1000000u << m) {
             bkl_early_cycles[c][m] = held;
-            sample_chain(bkl_early_pc[c][m], pc, fp);
+            sample_chain(bkl_early_pc[c][m], pc, fp, top);
         }
     }
     if (held > bkl_seen_max_cycles) {
         bkl_seen_max_cycles = held;
-        sample_chain(bkl_seen_pc, pc, fp);
+        sample_chain(bkl_seen_pc, pc, fp, top);
     }
 }
 
 /** Read the acquisition and shootdown counters with the big lock held. */
-void smp_wait_stats(uint64_t *total_us, uint64_t *max_us)
+void smp_wait_stats(uint64_t *total_us, uint64_t *max_us, uint32_t *holds)
 {
     *total_us = timer_cycles_us(bkl_wait_cycles);
     *max_us = timer_cycles_us(bkl_wait_max_cycles);
+    *holds = bkl_wait_max_holds;
+}
+
+/** Read a retained hold from the longest wait, with the big lock held. */
+void smp_wait_hold(unsigned int index, uint64_t *held_us, uint32_t *vector, int32_t *nr)
+{
+    *held_us = timer_cycles_us(bkl_wait_hold[index].cycles);
+    *vector = bkl_wait_hold[index].vector;
+    *nr = bkl_wait_hold[index].nr;
 }
 
 void smp_hold_stats(uint64_t *max_us, uint32_t *vector, int32_t *nr)
@@ -338,20 +380,38 @@ int smp_cpu_count(void)
 }
 
 /**
+ * Stop this processor for good: leave VMX or SVM operation first
+ * (`k_panic_hook`), then mark it stopped, which is what `smp_stop_others`
+ * waits for, and halt. Linux's `smp_stop_nmi_callback` and
+ * `sysvec_reboot` call `cpu_emergency_disable_virtualization` before
+ * `stop_this_cpu` in the same order (arch/x86/kernel/smp.c:121-141), since
+ * a processor left in VMX operation blocks INIT, and the restart that
+ * follows the stop may need it (arch/x86/kernel/reboot.c:556-599).
+ */
+static void smp_stop_here(struct percpu *cpu)
+{
+    if (k_panic_hook) {
+        k_panic_hook();
+    }
+    cpu->online = 0;
+    cpu->stopped = 1;
+    arch_stop();
+}
+
+/**
  * A stop is final. A TLB request is answered by dropping the page's
  * translation, or all of them, and then clearing the word, which is what
  * the sender waits for; the processor does not go on with a translation it
  * was asked to drop, since the sender frees the page once it sees the word
- * clear.
+ * clear. A barrier request is answered by the locked exchange that clears
+ * it, a full barrier, after a serializing instruction when it asks for one.
  */
 void smp_service(void)
 {
     struct percpu *cpu = this_cpu();
 
     if (cpu->stop_request) {
-        cpu->online = 0;
-        cpu->stopped = 1;
-        arch_stop();
+        smp_stop_here(cpu);
     }
     if (cpu->tlb_request) {
         uintptr_t va = cpu->tlb_page;
@@ -364,6 +424,12 @@ void smp_service(void)
             }
         }
         cpu->tlb_request = 0;
+    }
+    if (cpu->barrier_request) {
+        if (cpu->barrier_request == SMP_BARRIER_SYNC) {
+            arch_sync_core();
+        }
+        (void)arch_atomic_xchg(&cpu->barrier_request, 0);
     }
     if (cpu->space_drop) {
         if (cpu->space == cpu->space_drop) {
@@ -441,6 +507,25 @@ uint32_t smp_tlb_count(int which)
     return which == 0 || which == 1 ? tlb_counts[which] : 0;
 }
 
+void smp_barrier(uint64_t cpus, int sync_core)
+{
+    int me = (int)arch_cpu_id();
+    int c;
+
+    for (c = 0; c < NR_CPUS; c++) {
+        if (c != me && (cpus & ((uint64_t)1 << c)) && cpu_table[c].online) {
+            cpu_table[c].barrier_request = sync_core ? SMP_BARRIER_SYNC : SMP_BARRIER;
+            platform_cpu_ipi(c);
+        }
+    }
+    for (c = 0; c < NR_CPUS; c++) {
+        while (cpu_table[c].barrier_request && cpu_table[c].online) {
+            smp_service();
+            arch_relax();
+        }
+    }
+}
+
 void smp_space_release(const struct page_dir *dir)
 {
     int me = (int)arch_cpu_id();
@@ -468,12 +553,34 @@ void smp_kernel_mapping_changed(void)
     this_cpu()->kernel_gen = ++kernel_gen;
 }
 
-/* How long a stop waits for each processor asked to take it: one with its
- * interrupts off takes it when it next turns them on or spins in a lock,
- * and one that never does, a processor stuck, is left after a second, as
- * Linux's panic leaves one. */
-#define STOP_WAIT_US 1000000u
+/* How long a stop waits for the processors asked to take it by the
+ * interprocessor interrupt, which one with its interrupts off takes when it
+ * next turns them on or spins in a lock; and then for those sent the NMI,
+ * as Linux's `native_stop_other_cpus` waits (arch/x86/kernel/smp.c). */
+#define STOP_WAIT_US     1000000u
+#define STOP_NMI_WAIT_US 10000u
 
+/** Whether a processor of those `asked` marks has not yet stopped. */
+static int stop_pending(const int *asked)
+{
+    int c;
+
+    for (c = 0; c < NR_CPUS; c++) {
+        if (asked[c] && !cpu_table[c].stopped) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * The stop is Linux's: the interrupt to every other processor, a second's
+ * wait for all, then a non-maskable interrupt to each still running, which
+ * reaches one spinning with its interrupts off (`smp_stop_nmi`), and 10 ms
+ * more; a processor stuck past both, as one whose APIC no longer answers, is
+ * left. Nothing is logged: a processor that did not stop may hold the log's
+ * lock.
+ */
 void smp_stop_others(void)
 {
     int me = (int)arch_cpu_id();
@@ -488,12 +595,31 @@ void smp_stop_others(void)
             platform_cpu_ipi(c);
         }
     }
+    for (waited = 0; stop_pending(asked) && waited < STOP_WAIT_US; waited += 10u) {
+        k_udelay(10);
+    }
+    if (!stop_pending(asked)) {
+        return;
+    }
     for (c = 0; c < NR_CPUS; c++) {
-        for (waited = 0; asked[c] && !cpu_table[c].stopped && waited < STOP_WAIT_US;
-             waited += 10u) {
-            k_udelay(10);
+        if (asked[c] && !cpu_table[c].stopped) {
+            platform_cpu_nmi(c);
         }
     }
+    for (waited = 0; stop_pending(asked) && waited < STOP_NMI_WAIT_US; waited += 10u) {
+        k_udelay(10);
+    }
+}
+
+int smp_stop_nmi(void)
+{
+    struct percpu *cpu = this_cpu();
+
+    if (!cpu->stop_request) {
+        return 0;
+    }
+    smp_stop_here(cpu);
+    return 1;
 }
 
 /**

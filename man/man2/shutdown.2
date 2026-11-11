@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd November 11, 2026
 .Dt SHUTDOWN 2
 .Os
 .Sh NAME
@@ -10,13 +10,15 @@
 .Fn shutdown "int fd" "int how"
 .Sh DESCRIPTION
 .Fn shutdown
-operates on the connected TCP socket
-.Fa fd .
+operates on the TCP socket
+.Fa fd ,
+connected or still connecting.
 A listener, an unconnected socket, and a datagram socket cannot be
 shut down.
 A stream has a connection for this purpose after its handshake has
-completed and while its connection record remains attached in a
-subsequent closing state.
+completed, through each later closing state, until its connection ends.
+The socket keeps its connection until its close, which finishes the
+connection's close.
 .Pp
 The
 .Fa how
@@ -24,32 +26,68 @@ argument selects a direction:
 .Bl -tag -width SHUT_RDWR
 .It Dv SHUT_RD
 Value 0.
-Accepted without effect.
-Input remains available.
+Close the receiving half, as Linux does.
+A read returns the bytes received and then, with none left, end of input
+at once, as does one another thread is blocked in;
+.Xr poll 2
+reports
+.Dv POLLIN
+and
+.Dv POLLRDHUP .
+The peer's data is still taken while this side's sending half is open,
+and a read returns it, but the window it may fill is no longer
+announced as the reader drains it.
+Once this side's FIN is sent or queued and before the peer's FIN, data
+past what was received ends the connection with a reset, counted in
+TCPAbortOnData, as RFC 1122, section 4.2.2.13, asks.
 .It Dv SHUT_WR
 Value 1.
 Close the sending half, as Linux does.
 In the established or close-wait state, queued output is sent and then
 the FIN, so the peer receives end of input after those bytes, and a
 later send fails with
-.Er EPIPE .
-The connection stays attached to the socket: the peer's data and its
-FIN still reach a read, which is how a client such as
+.Er EPIPE ,
+as does one another thread is blocked in, waiting for room;
+.Xr poll 2
+reports
+.Dv POLLOUT ,
+since a send does not wait.
+The peer's data and its FIN still reach a read, which is how a client
+such as
 .Xr nc 1
 sends its request and reads the answer.
-The socket's close finishes the connection's close.
 In a later closing state, whose FIN is on its way already, nothing
-changes.
+else changes.
 .It Dv SHUT_RDWR
 Value 2.
-Start the normal TCP close and detach the connection record from the
-socket, as the final close of the socket does: a read returns end of
-input at once, and data the peer sends later is not kept.
-The descriptor remains open, but a later
-.Fn shutdown
-fails with
-.Er ENOTCONN .
+Both: the FIN goes after the queued output, a read returns the bytes
+received and then end of input, and data the peer sends past what was
+received ends the connection with a reset, counted in TCPAbortOnData,
+after which a read or send reports
+.Er ECONNRESET .
+.Xr poll 2
+reports
+.Dv POLLHUP
+too.
 .El
+.Pp
+A socket whose connection is still in its first handshake state,
+.Dv SYN_SENT ,
+is disconnected instead, whatever
+.Fa how
+is, as on Linux: the attempt ends with nothing sent, a
+.Xr connect 2
+blocked on it returns
+.Er ECONNRESET ,
+which is otherwise the socket's pending error, a local port the attempt
+chose is given back, and the socket may connect again.
+.Pp
+When the socket is closed with received data still unread, the
+connection ends with a reset in place of the FIN, counted in
+TCPAbortOnClose, whatever
+.Fn shutdown
+did before; see
+.Xr tcp 7 .
 .Pp
 This operation is subcall 13 of i386
 .Xr socketcall 2 ,
@@ -90,9 +128,9 @@ argument array cannot be read.
 .Fa how
 is not 0, 1, or 2.
 .It Bq Er ENOTCONN
-The socket is not a connected stream, including a listener, a
-datagram socket, an incomplete handshake, or a socket whose
-connection record has been detached.
+The socket is not a connected or connecting stream, including a
+listener, a datagram socket, a socket in the second handshake state of
+a simultaneous open, or one whose connection has ended.
 .It Bq Er ENOTSOCK
 .Fa fd
 does not refer to a socket.
@@ -101,7 +139,9 @@ The socket is a raw socket.
 .El
 .Sh SEE ALSO
 .Xr connect 2 ,
+.Xr poll 2 ,
 .Xr recv 2 ,
 .Xr send 2 ,
 .Xr socket 2 ,
-.Xr socketcall 2
+.Xr socketcall 2 ,
+.Xr tcp 7

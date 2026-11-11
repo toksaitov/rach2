@@ -1,0 +1,4 @@
+futex(0x7ffd0c1dc90c, FUTEX_UNLOCK_PI_PRIVATE) = -1 ENOSYS (Function not implemented)
+pi+robust init: 95 (Operation not supported)
+default init: 0, kind 0
++++ exited with 0 +++

@@ -13,6 +13,17 @@ Faults this milestone found in another project's code, one section each, in the 
 * Status: unreported, cause unproved.
 * Next: run it with `WAYLAND_DEBUG=1` to see the last requests and events and whether cage advertises `zxdg_decoration_manager_v1`; try current SDL 2, libdecor and cage; then report to whichever project the trace names.
 
+## GE-Proton loses mutex robustness when priority inheritance is unavailable
+
+* Project: GE-Proton11-12, archive SHA-256 `0595159e417c3dbbfb7cc3ae0d3ed15a617cc607aa23ef756ea79029d7af5d70` in `vendor/gnu/sources-extra.txt`; its Wine base is `fda79a585939fb7512dc220a11249f9ffe825fcf`.
+* Fails: the audio hotplug patch initializes `g_phys_mutex` with robust PI attributes, then retries with default attributes on failure, losing robustness. `free_phys_device_lists` later locks it during detach. See [patch 0010](https://github.com/GloriousEggroll/proton-ge-custom/blob/GE-Proton11-12/patches/proton-ds5-haptic/0010-winepulse-mmdevapi-Add-support-for-hotplugged-audio-.patch#L645), lines 627 and 648-649.
+* Found: 2026-11-10, task 80-6, Rach2 in QEMU on the testing host, running 64-bit Crysis on llvmpipe with a PulseAudio null sink.
+* Reproduction: run `crysis.sh run +quit` where PI initialization returns `ENOTSUP`; the observed detach waits on a default mutex whose owner has ended. A controlled Linux reproduction with PI unavailable is still needed.
+* Evidence: `dev-log/80-games/80-6.md`; `dev-log/80-games/80-6/evidence/game4-backtrace.txt`, `mutex-attributes.txt` and the compressed launch-4 logs beside them. The deployed libc's PI probe returned `ENOSYS`, attributed initialization returned 95 and default initialization had kind 0. The observed mutex had kind 0 and owner 239, absent from the remaining threads.
+* Rach2: PI futexes merged in task 80-10c; the resumed audio detach passed the ordinary-mutex wait and destroyed `g_phys_mutex`. The manager set a Wine fallback aside. The fallback remains an upstream fault when PI initialization fails.
+* Status: unreported, draft; the exact termination point of owner 239 was not captured.
+* Next: force PI refusal on Linux, check the current GE patch and preserve robust attributes in a fallback.
+
 ## Linux looks up an AMD L1 cache's eight-bit associativity in a table of sixteen
 
 * Project: Linux 6.12, `arch/x86/kernel/cpu/cacheinfo.c` at the tag `v6.12`.
@@ -35,16 +46,38 @@ Faults this milestone found in another project's code, one section each, in the 
 * Status: unreported.
 * Next: check current Linux; build the table with QEMU's `-smbios file=` and run the reproduction; send a one-line patch, `dm->length <= index`.
 
-## Weston's kiosk-shell moves a view that is NULL when Wine maps a window
+## Wine DirectInput waits for a terminated worker during process detach
 
-* Project: Weston 14.0.2, Debian's `weston` and `libweston-14-0` 14.0.2-1, `kiosk-shell/kiosk-shell.c` at the tag `14.0.2`.
-* Fails: Weston dies of a segmentation fault when Wine, through Xwayland, maps a window after an earlier one went away. `desktop_surface_committed` maps the new root and calls `kiosk_shell_output_set_active_surface_tree` (line 1055), which walks the output's previous active tree and calls `weston_view_move_to_layer` on each surface's view (lines 623 to 626); one of those surfaces has a NULL view, and `weston_view_move_to_layer` reads through it (`libweston/compositor.c:4212`). Xwayland loses its compositor and every X client with it.
-* Found: 2026-11-10, on the testing PC, in the Debian 13 reference guest under QEMU's virgl profile, task 80-3, while running GE-Proton11-12's Wine probes under a headless Weston with `--shell=kiosk --xwayland`.
-* Reproduction: in that guest, `weston --backend=headless --renderer=gl --shell=kiosk --xwayland`, then through `rach2-game` with `DISPLAY` set to its Xwayland, `cmd.exe /c exit 0` in a new prefix and then the 64-bit GL probe of `tests/system/games/`: Weston logs "Detected an unmapped surface or view in the layer list, which should not occur." and dies with status 139 as the probe makes its window. xeyes, xclock and xlogo started and ended three times each did not crash it. The kernel logged `segfault at ffffffffffffff80 ... in kiosk-shell.so` in two runs.
-* Evidence: the core's backtrace through Debian's debuginfod, frames `weston_view_move_to_layer (view=0x0)` at `compositor.c:4212`, `kiosk_shell_output_set_active_surface_tree` at `kiosk-shell.c:625` and `desktop_surface_committed` at `kiosk-shell.c:1055`, recorded with the task's commits in `vendor/gnu/games/Readme.md`, section "Wine in QEMU".
-* Rach2: the games-wine runner starts its Weston with `--shell=desktop`, where Wine's windows run under Linux and Rach2 alike. The desktop session's own Weston uses kiosk-shell, so a Windows program in the session meets the fault; task 80-4, which places Wine's window on the kiosk shell, must fix it in Weston or avoid it.
-* Status: unreported, cause partly traced: to the NULL view, not to where the view was lost.
-* Next: find which surface of the previous tree has no view; `desktop_surface_removed` resets the output's active tree only when the removed surface has focus (lines 940 to 970), so check with a watchpoint or an AddressSanitizer build whether `active_surface_tree` points into a destroyed `kiosk_shell_surface`; try Weston 14.0.x's newest release and 15; then report with the reproduction.
+* Project: Wine 11.0 in GE-Proton11-12. The release is pinned in `vendor/gnu/sources-extra.txt`; its Wine, Staging and GE source commits and archive SHA-256 values are in `vendor/gnu/proton/sources.txt`.
+* Fails: releasing the last DirectInput interface from a process-detach callback waits forever. In `dlls/dinput/dinput_main.c` of the pinned Wine source, ValveSoftware/wine at `fda79a585939fb7512dc220a11249f9ffe825fcf`, `input_thread_remove_user` (lines 484 to 500) creates `stop_event` (line 491), sends a message to its worker and waits for the event (line 494); only the worker's normal exit from `dinput_thread_proc` sets it (line 428). GE's patches move the function to line 478 of the source that `dinput-shutdown.patch` applies to. `RtlExitUserProcess` terminates the other Windows threads before `LdrShutdownProcess` calls these callbacks, so that producer is gone.
+* Found: 2026-11-10, in milestone 80's Crysis save proof, in a private x86-64 Rach2 guest under KVM on the testing host.
+* Reproduction: build `dev-log/80-games/80-6/dinput-shutdown.c` as the Windows DLL `dinput-probe.dll` and `dev-log/80-games/80-6/dinput-shutdown-main.c` as an executable beside it, which loads the DLL by that name, both linked with dinput8 and dxguid. Run the executable through the pinned Wine. It acquires a keyboard and calls `ExitProcess`; DLL detach never returns. Giving it an argument unloads the DLL first and returns 0.
+* Evidence: `dev-log/80-games/80-6/evidence/dinput-shutdown-backtrace.txt` holds the final game wait; the six `dinput-*.txt.gz` records beside it hold the original and patched probe traces. The exact original DLL's return addresses identify the wait and its `dinput7_Release` caller. `dev-log/80-games/80-6.md` records the stopped attempts and the successful patched probe.
+* Rach2: the local `vendor/gnu/proton/dinput-shutdown.patch` skips the worker handshake before taking its lock during process shutdown. `make gnu-proton` rebuilds both DirectInput DLLs for both Windows architectures while preserving GE's relevant patches. The patched 64-bit probe returns 0 for both forms, and Crysis exits 0 after its startup `+quit`.
+* Status: unreported. The current Wine source read on 2026-11-10 retains this wait; no Linux-runtime reproduction has been run here.
+* Next: repeat the small probe with the pinned GE runtime on Linux and current Wine, then report with the source guard and its ordinary-unload control.
+
+## Weston's kiosk-shell walks a freed surface tree when Wine maps a window
+
+* Project: Weston 14.0.2, Debian's `weston` and `libweston-14-0` 14.0.2-1, `kiosk-shell/kiosk-shell.c` at the tag `14.0.2`; source package `weston_14.0.2-1.dsc`, SHA-256 `7c06118894b6274212f68e61c138a87ccbb869a5d3835aaa543570c004f8ec65` (`vendor/gnu/games/weston/sources.txt`).
+* Fails: an output's `active_surface_tree` points into a `kiosk_shell_surface` after it is freed, and the next root that maps walks the freed list. `kiosk_shell_surface_destroy` (lines 457 to 481) unlinks the surface and frees it, but `desktop_surface_removed` (lines 913 to 973), which calls it, resets the output's `active_surface_tree` only when the removed surface had focus. Wine's windows lose focus to the next one before they go, so when Wine maps a window after another went away, `desktop_surface_committed` (line 1055) calls `kiosk_shell_output_set_active_surface_tree`, which reads the freed tree (line 624) and calls `weston_view_move_to_layer` on what it finds there (lines 623 to 626); that is the NULL view at `libweston/compositor.c:4212` of the first record, and Weston dies of a segmentation fault, taking Xwayland and every X client with it.
+* Found: 2026-11-10, on the testing PC, in the Debian 13 reference guest under QEMU's virgl profile, task 80-3, while running GE-Proton11-12's Wine probes under a headless Weston with `--shell=kiosk --xwayland`; traced to the freed tree in task 80-4 with an AddressSanitizer build of the same source.
+* Reproduction: in that guest, `weston --backend=headless --renderer=gl --shell=kiosk --xwayland`, then through `rach2-game` with `DISPLAY` set to its Xwayland, `cmd.exe /c exit 0` in a new prefix and then a Direct3D 9 or GL probe of `tests/system/games/`: Weston logs "Detected an unmapped surface or view in the layer list, which should not occur." and dies with status 139 as the probe makes its window. Built with `-Db_sanitize=address`, Weston reports `heap-use-after-free` at the probe's first window: a read of 8 bytes in `kiosk_shell_output_set_active_surface_tree` (`kiosk-shell.c:624`) from `desktop_surface_committed` (`kiosk-shell.c:1055`), 120 bytes into a 200-byte region freed by `kiosk_shell_surface_destroy` (`kiosk-shell.c:480`) from `desktop_surface_removed`. xeyes, xclock and xlogo started and ended three times each did not crash it.
+* Evidence: the core's backtrace through Debian's debuginfod, recorded with task 80-3's commits; the AddressSanitizer report, quoted above, of task 80-4; `vendor/gnu/games/weston/kiosk-active-tree.patch`; `vendor/gnu/games/Readme.md`, section "Weston".
+* Rach2: `kiosk-active-tree.patch`, in the rebuilt Weston 14.0.2-1+rach2.1 that the x86-64 root stages in place of Debian's (`vendor/gnu/games/weston/`), clears every output's `active_surface_tree` that points at a surface's tree as the surface is destroyed; with it, Wine's windows map, go and map again on kiosk-shell in Debian and on Rach2.
+* Status: unreported.
+* Next: check Weston 14.0.x's newest release and 15 for the same code; report with the reproduction and the patch.
+
+## virglrenderer gives the host's video memory in KiB where Mesa reads MiB
+
+* Project: virglrenderer 1.2.0, Ubuntu's `libvirglrenderer1` 1.2.0-2ubuntu2 under QEMU 10.2.1 on the testing PC; `src/vrend/vrend_renderer.c` at the tag `1.2.0`, commit `500b41d5c8638f9b80dd558f4044f3301c7457a4`. The guest's reader is Mesa 25.0.7's virgl driver.
+* Fails: a guest's GL driver reports the host GPU's video memory 1,024 times too large. `vrend_renderer_get_video_memory` (lines 13601 to 13609) takes `GLX_RENDERER_VIDEO_MEMORY_MESA`, in MiB, only when the renderer runs on GLX (`vrend_winsys_query_video_memory`, `src/vrend/vrend_winsys.c:260`); on EGL, as under QEMU, it falls back to `GL_GPU_MEMORY_INFO_DEDICATED_VIDMEM_NVX`, which GL_NVX_gpu_memory_info gives in KiB, and `vrend_renderer_fill_caps_v2` passes that unchanged as the capability set's `max_video_memory` (lines 12708 to 12712). Mesa's virgl driver makes it its `video_memory`, in MiB, which `GLX_MESA_query_renderer` and WineD3D read.
+* Found: 2026-11-10, on the testing PC, milestone 80, task 80-4, while taking Wine's video memory from the device as Linux reports it.
+* Reproduction: in the Debian 13 reference guest under QEMU's `virgl` profile on a host whose GPU has 16,045 MiB, `glxinfo -B` under Weston's Xwayland prints `Video memory: 16430080MB` and `Dedicated video memory: 16045 MB`; 16,430,080 is 16,045 times 1,024. WineD3D, in a prefix without `VideoMemorySize`, logs `Card reports vendor PCI ID 0x1af4, device PCI ID 0x1010, 0xfab40000000 bytes of video memory`, 16,430,080 MiB. Two boots of the guest gave the same figures, twice each.
+* Evidence: the experiment's outputs on the testing host under `build/tmp/exp/` of the task's copy, quoted above; `vendor/gnu/games/Readme.md`, section "Proton".
+* Rach2: nothing in virglrenderer, which runs on the host. `rach2-game` sets no `VideoMemorySize`, so WineD3D takes the same figure as under Linux, and Rach2's virtio-gpu driver keeps each capability set the host gives, as Linux's does, so every process of a boot sees the same one.
+* Status: unreported.
+* Next: check virglrenderer's main branch; report with a patch that divides the NVX figure by 1,024.
 
 ## SuperTuxKart's profile summary counts simulation steps as frames
 
@@ -56,3 +89,113 @@ Faults this milestone found in another project's code, one section each, in the 
 * Rach2: `tests/graphics/runners/games.sh` records the summary's line but takes the frame times from Mesa's HUD, as Linux's runs in task 80-2 did.
 * Status: unreported.
 * Next: check current SuperTuxKart; run the reproduction; report with a patch that counts in the main loop's drawing.
+
+## Weston's kiosk-shell leaves an X window's frame where it sat with its margin
+
+* Project: Weston 14.0.2, Debian's `weston` 14.0.2-1, `kiosk-shell/kiosk-shell.c` at the tag `14.0.2`; source package as in the entry above.
+* Fails: an undecorated X window of the output's size that sets no fullscreen state, as games and `tests/system/games/xplace.c` map, keeps its X frame at -32,-32, so X reports the client at -32,-32 or, with the frame resized, its frame off the output. Weston's window manager frames such a window with the theme's 32-pixel margin until kiosk-shell makes it fullscreen, and places the 1430x832 frame at -32,-32 so that the client stays at 0,0. kiosk-shell tells the window manager a view's place only from its transform handler (lines 88 to 113), which returns while the view is unmapped, and `desktop_surface_committed` (lines 976 to 1075) centres a fullscreen surface only when it maps or changes size (line 1021). The view is centred while unmapped and stays at 0,0, so no transform signal reaches the window manager after the window becomes fullscreen, and the frame keeps -32,-32 at 1366x768.
+* Found: 2026-11-10, on the testing PC, milestone 80, task 80-4, in Rach2's boot session on QEMU's `virgl` profile, where Weston's capture of the output showed xplace's window from edge to edge while X put its frame at -32,-32.
+* Reproduction: `tests/run games-wm`, row `place`, with Debian's kiosk-shell: `xplace 1366 768` prints `window at -32,-32 size 1366x768` and `frame at -32,-32 size 1366x768 child at 0,0`. The window manager's scope (`weston --debug --logger-scopes=log,xwm-wm-x11`) logs the frame's configure notifications `-32,-32 @ 1430x832` and then `-32,-32 @ 1366x768`, and nothing after.
+* Evidence: the games-wm place row's output of task 80-4; `vendor/gnu/games/weston/kiosk-fullscreen-centre.patch`; `vendor/gnu/games/Readme.md`, section "Weston".
+* Rach2: `kiosk-fullscreen-centre.patch`, in the rebuilt Weston 14.0.2-1+rach2.1, centres a fullscreen surface on each commit and calls the transform handler at the end of each commit, which sends the window manager the view's place when it changed; the frame's configure notifications then end at `0,0 @ 1366x768`.
+* Status: unreported.
+* Next: check Weston's main branch; report with the reproduction and the patch.
+
+## Weston's Xwayland window manager resizes an emulated mode's window to the output
+
+* Project: Weston 14.0.2, Debian's `libweston-14-0` 14.0.2-1, `xwayland/window-manager.c` at the tag `14.0.2`; source package as in the kiosk-shell entry above.
+* Fails: an X client that sets a lower mode through RandR draws unscaled in the corner of the output under kiosk-shell. Xwayland emulates the mode: it lists the mode's rectangle in `_XWAYLAND_RANDR_EMU_MONITOR_RECTS` on the client's windows and scales a window of that size at the output's origin to the output through `wp_viewport`. Weston's window manager never reads the property: `send_configure` (lines 3042 to 3094) gives a fullscreen window the size the shell asks for, the output's, and kiosk-shell centres any smaller surface, so the window is never the mode's size at the origin and Xwayland never scales it.
+* Found: 2026-11-10, on the testing PC, milestone 80, task 80-4, with `tests/system/games/xplace.c`, which sets 800x600 through RandR and maps a fullscreen window of that size, in Rach2's boot session on QEMU's `virgl` profile.
+* Reproduction: `tests/run games-wm`, row `scaled`, with Debian's Weston.
+* Evidence: `vendor/gnu/games/weston/xwm-emulated-mode.patch`; `vendor/gnu/games/Readme.md`, section "Weston".
+* Rach2: `xwm-emulated-mode.patch`, in the rebuilt Weston 14.0.2-1+rach2.1, reads the property, gives a fullscreen window the emulated size in its configure, keeps its X position at the output's origin, fullscreens it again when the property changes, and takes input over the whole scaled surface. With it, xplace reports `window at 0,0 size 800x600` and `emulated 0,0 800x600`, and Weston's capture of the output shows the window's halves from edge to edge.
+* Status: unreported.
+* Next: check Weston's main branch; report with the patch.
+
+## Weston's Xwayland window manager keeps a window override-redirect after it asks to be mapped
+
+* Project: Weston 14.0.2, Debian's `libweston-14-0` 14.0.2-1, `xwayland/window-manager.c` at the tag `14.0.2`.
+* Fails: a window that a client creates override-redirect and then makes an ordinary window before mapping it, as Wine does with its fullscreen window, never gets the input focus. `weston_wm_window_create` takes `override_redirect` from the CreateNotify (line 1620), and nothing clears it: `weston_wm_handle_map_request` (line 1242) frames and maps the window, but `weston_wm_send_focus_window` returns before `xcb_set_input_focus` for a window it counts override-redirect (line 965), `weston_wm_handle_configure_request` ignores its requests (line 822) and `weston_wm_window_send_configure_notify` sends it none. The X focus stays None, so the program's keys reach no window. The X server sends a MapRequest only for a window that is not override-redirect.
+* Found: 2026-11-10, on the testing PC, milestone 80, task 80-4, with `tests/system/games/fullprobe.c` (a WS_POPUP window and a Direct3D 9 device with `Windowed` false) under GE-Proton in Rach2's boot session on kiosk-shell.
+* Reproduction: `tests/run games-wm`, row `place` or `scaled`, with Debian's window manager: `xplace -q fullprobe` prints `focus no: 0x0` while Wine's window fills the output; the window manager's scope logs `XCB_CREATE_NOTIFY (window N, at (0, 0), width 1366, height 768, override)` and then `XCB_MAP_REQUEST (window N, ...)` for the same window.
+* Evidence: the games-wm rows' output of task 80-4; `vendor/gnu/games/weston/xwm-mapped-managed.patch`; `vendor/gnu/games/Readme.md`, section "Weston".
+* Rach2: `xwm-mapped-managed.patch`, in the rebuilt Weston 14.0.2-1+rach2.1, clears the flag in `weston_wm_handle_map_request` before the window's properties are read.
+* Status: unreported.
+* Next: check Weston's main branch; report with the patch.
+
+## Weston starts a fullscreen surface's pointer constraint on whatever view has the focus
+
+* Project: Weston 14.0.2, Debian's `libweston-14-0` 14.0.2-1, `libweston/input.c` at the tag `14.0.2`; source package as in the kiosk-shell entry above.
+* Fails: Weston aborts when a client constrains the pointer to its fullscreen surface before the pointer's focus has reached that surface, and the mouse then moves. `init_pointer_constraint` (lines 4932 to 4992) enables a fullscreen surface's constraint at once on `pointer->focus` (lines 4984 to 4988) without checking that the view belongs to the constrained surface. Between the surface's becoming fullscreen and the repaint that picks the focus again, the focus is whatever lies under the pointer, under kiosk-shell its background view. The confine and lock grabs' focus handlers are empty (lines 5094 and 4722), so the focus never reaches the surface, and `confined_pointer_grab_pointer_motion` asserts `pointer->focus->surface == constraint->surface` (line 5719).
+* Found: 2026-11-10, on the testing PC, milestone 80, task 80-4, with `tests/system/games/xplace.c` in Rach2's boot session on kiosk-shell under QEMU's `virgl` profile, once the seat had its pointer.
+* Reproduction: `tests/run games-wm`, row `place`, with a Weston without the patch. xplace grabs the pointer, confined to its window, at the window's first Expose, before it draws. Weston's protocol scope (`--logger-scopes=proto`) shows Xwayland's `zwp_pointer_constraints_v1.confine_pointer` answered with `confined` at once, with no `wl_pointer.enter` before it; at the scenario's first move Weston prints that the assertion of line 5719 failed in `confined_pointer_grab_pointer_motion` and aborts, and xplace loses its display. With the grab after xplace's first drawing, in the run before, the `wl_pointer.enter` came 15 ms before the request and the constraint held.
+* Evidence: the two place rows' outputs of task 80-4, quoted above; `vendor/gnu/games/weston/pointer-constraint-view.patch`; `vendor/gnu/games/Readme.md`, section "Weston".
+* Rach2: `pointer-constraint-view.patch`, in the rebuilt Weston 14.0.2-1+rach2.1, starts the constraint on the focus only when it is a view of the constrained surface, and otherwise on the surface's first mapped view, which takes the focus; while the surface has no mapped view the constraint waits as any other does.
+* Status: unreported.
+* Next: check Weston's main branch; report with the reproduction and the patch.
+
+## Xwayland forgets a grab's confinement made while the seat has no pointer
+
+* Project: Xwayland 24.1.6, Debian's `xwayland` 2:24.1.6-1, SHA-256 `7e51a144e858d5be7e91d6644c2758a618e425c7222234d2e8f059e5aba6c1f5`; read in `hw/xwayland/xwayland-input.c` and `hw/xwayland/xwayland-screen.c` at the tag `xwayland-24.1.6`, commit `5b1d9da00f217d3b52bfd3cc862dff79a9433e63`. Debian's patches to the package were not read.
+* Fails: an X client's pointer grab with a confine-to window, taken while the compositor's seat has no pointer, confines nothing, then or after the seat gains one. The X server tells Xwayland of the confinement once, as the grab activates: `xwl_cursor_confined_to` (`xwayland-screen.c`, lines 386 to 421) calls `xwl_seat_confine_pointer` (`xwayland-input.c`, lines 3537 to 3569), which returns at line 3547 when the seat has no `wl_pointer`, before it records the window in `cursor_confinement_window`. `init_pointer` (lines 1699 to 1712), which `seat_handle_capabilities` (line 1886) runs when the seat gains a pointer, asks for no confinement. Weston gives its seat a pointer only at a device's first pointer event (`libweston/libinput-device.c`, lines 71 to 83, in 14.0.2), so in a session whose mouse has not moved a game's grab is lost this way, and the moves that come before Xwayland has its `wl_pointer` reach no X client.
+* Found: 2026-11-10, on the testing PC, milestone 80, task 80-4, while finding why xplace's raw motion summed to less than the scenario sent.
+* Reproduction: in a new Weston session on kiosk-shell, before any pointer event, run `xplace 1366 768`, which grabs the pointer confined to its window, and then move the mouse by dx -2000 and dy 200 in fifteen moves. At the grab the X server lists `xwayland-keyboard:17` and no pointer device of the seat's. Weston's protocol scope shows no `zwp_pointer_constraints_v1` request; `wl_seat.capabilities(3)` and Xwayland's `get_pointer` come with the first move, and the first `wl_pointer.enter` carries serial 0, the focus having been set before Xwayland had a pointer. xplace's raw motion summed to dx 0 and to a dy between 0 and 160 from run to run, while the kernel's evdev counted all of it.
+* Evidence: the games-wm place row's outputs of task 80-4, quoted above.
+* Rach2: nothing in Xwayland. The place row's scenario moves the mouse once before xplace starts, and `wm.py` waits for the X server's pointer device (`seat_pointer`), as a desktop in use has had its first move before a game starts.
+* Status: unreported.
+* Next: check the X server's main branch and the newest Xwayland 24.1; report with a patch that records the window before the return and asks for the confinement in `init_pointer`.
+
+## QEMU's PS/2 mouse holds motion its queue has no room for until the next input event
+
+* Project: QEMU 10.2.1, Ubuntu's 1:10.2.1+ds-1ubuntu3.3 on the testing PC; `hw/input/ps2.c` at the tag `v10.2.1`.
+* Fails: motion sent to the PS/2 mouse faster than the guest reads it can stay unsent for as long as no other input event comes. `ps2_mouse_event` adds each move to `mouse_dx` and `mouse_dy`. `ps2_mouse_sync` sends packets while `ps2_mouse_send_packet` returns 1, and that function returns 0 and leaves the deltas when the queue of `PS2_QUEUE_SIZE`, 16 bytes (line 80), has no room for a packet of three or four bytes. `ps2_read_data`, by which the guest empties the queue, sends nothing; the rest goes with the next input event's sync, or when the guest writes the poll command, 0xEB.
+* Found: 2026-11-10, on the testing PC, milestone 80, task 80-4, by reading, after a run of the games-wm place row in which the scenario sent its fifteen moves through QMP's `input-send-event` without waiting, the kernel's count of them never reached their sum, and the case ran to its bound of 900 s without progress. The count the kernel reached in that run was not recorded, so the run does not prove this cause.
+* Reproduction: not yet run. Send relative moves through `input-send-event` faster than the guest's i8042 handler reads them, and stop: the sum of the guest's evdev events should stay short of the moves' until one more event is sent.
+* Evidence: QEMU's `hw/input/ps2.c` at `v10.2.1`, the four functions named above.
+* Rach2: `tests/cases/machine/gameswm_scenario.c` sends each move only once `wm.py` has printed the kernel's count of the last (`move_to`).
+* Status: unreported.
+* Next: run the reproduction; check QEMU's main branch; report, with a patch that sends the pending deltas as the guest reads the queue.
+
+## umu-launcher exits 0 when it fails to start the game
+
+* Project: umu-launcher 1.4.4, its release's zipapp, `umu/__main__.py` at the tag `1.4.4`.
+* Fails: the module's entry catches `BaseException` from `main()` (lines 94 to 102), logs it with `log.exception` and falls off the end, so the interpreter exits with status 0. A launch that never ran the game, such as one whose runtime is not set up and that raises `RuntimeError("umu has not been setup for the user")` in `umu_run.py`, therefore reports success to its caller.
+* Found: 2026-11-10, in QEMU on the testing host, task 80-8b, when `rach2-game --umu` printed that it had made a prefix after `umu-run wineboot.exe -u` had exited 0 with that error, and no prefix existed.
+* Reproduction: with no network and an empty `$XDG_DATA_HOME/umu`, `PROTONPATH=/opt/proton umu-run /bin/true; echo $?` prints the error and 0.
+* Evidence: the `umu` row's output in the evidence of `tests/run games-umu`, `build/tests/failed/tests.x86_64.20261110T092032Z.1076283.machine.games-umu.umu.r0/evidence/games` in the testing host's copy `build/worktrees/m3`, from the run that began at 15:20 UTC+6.
+* Rach2: `rach2-game` checks that a new prefix has `pfx/user.reg` after `wineboot`, on both routes, and exits 1 when it has none.
+* Status: unreported.
+* Next: report to Open-Wine-Components/umu-launcher with a patch that exits 1 after logging the exception.
+
+## Linux's protection keys selftest exits 0 before most of its tests have run
+
+* Project: Linux 6.12.115, `tools/testing/selftests/mm/protection_keys.c`; the source is `linux-6.12.115.tar.xz`, SHA-256 `0ec90fe4b20422b1b664b77e6d2dde22b40bd41e7eb2cad8ac8739a4749cb1bb`, which `vendor/gnu/kvm/sources.txt` pins.
+* Fails: the program's exit status says nothing about all but the first 18 tests. `test_pkey_alloc_exhaust` (line 1199) calls `become_child` (line 1234) to check that allocations survive a fork, and `become_child` (line 1183) forks and has the parent `exit(0)` (line 1195) while the child goes on. The test is the 19th of `pkey_tests` (line 1778), so in the first of the 22 iterations the process the caller waits for exits 0 there, and each later test, and each later iteration's `become_child`, runs in a descendant that no one waits for. A `pkey_assert` that fails after that point ends a descendant and leaves the status 0; only the output, which ends with `done (all tests OK)` when every test passed, shows it.
+* Found: 2026-11-11, on the testing host, milestone 80, task 80-10h, when the selftest, run on Debian's 6.12.115 under QEMU's `max` processor with its output to a file that the shell read as soon as the program exited, exited 0 with the file ending at `test 17 PASSED (iteration 1)` in one run and at `test 19 PASSED (iteration 2)` in another, the tests being numbered from 0.
+* Reproduction: run `protection_keys_64` with its output to a file and read the file as soon as the program exits: the file ends long before `done (all tests OK)`, which a pipe into `cat`, read to its end, shows a few seconds later.
+* Evidence: Linux's `protection_keys.c` at 6.12.115, the lines named above; the task's comment on its issue, with the two runs' counts.
+* Rach2: nothing to work around. Rach2's checks of the selftest read its output through a pipe to the end and look for `done (all tests OK)`.
+* Status: unreported.
+* Next: check the current mainline's `protection_keys.c`, whether it still forks this way and whether `run_vmtests.sh` reads more than the status, which the records do not hold; then report to linux-mm with a patch that has the parent wait for the child and exit with its status.
+
+## Linux's move_pages reads a 32-bit program's addresses past the first 16 from the wrong place
+
+* Project: Linux 6.12.115, `mm/migrate.c`; the source is `linux-6.12.115.tar.xz`, SHA-256 `0ec90fe4b20422b1b664b77e6d2dde22b40bd41e7eb2cad8ac8739a4749cb1bb`, which `vendor/gnu/kvm/sources.txt` pins.
+* Fails: a 32-bit program on a 64-bit kernel that calls `move_pages` with a null `nodes` and more than 16 addresses gets, from the 17th status on, the statuses of other addresses than the ones it gave. `do_pages_stat` (line 2463) works in chunks of `DO_PAGES_STAT_CHUNK_NR`, 16 (line 2467), and after each chunk steps the user array with `pages += chunk_nr` (line 2489), where `pages` is a `const void __user * __user *`, so a step is 16 pointers of 8 bytes, 128 bytes. For a compat caller `get_compat_pages_array` (line 2442) casts that pointer to `compat_uptr_t __user *` (line 2446) and reads 4-byte entries from it (line 2451). The second chunk therefore starts at the caller's entry 32 and not 16, the third at entry 64, and so on: entries 16 to 31 are never read, and the kernel reads past the end of an array of fewer than twice as many entries as it was told. The statuses are stepped by `status += chunk_nr` over ints, which is right, so status 16 holds the answer for entry 32.
+* Found: 2026-11-11, on the Mac, milestone 80, task 80-10d, by reading `mm/migrate.c` while writing Rach2's `move_pages` for 32-bit programs on the x86-64 kernel.
+* Reproduction: not yet run on Linux. Build `tests/numaprobe.c` for i686 and run it on an x86-64 Linux 6.12: its `move-many` row asks for the status of 20 addresses, 19 of a written page and one in no mapping, and should fail there, since entries 16 to 19 are answered from what lies at entries 32 to 35, past the array. A 64-bit build of the same program should pass.
+* Evidence: Linux's `mm/migrate.c` at 6.12.115, the lines named above; `tests/numaprobe.c`, the `move-many` row.
+* Rach2: nothing to work around. `sys_move_pages` in `rach2/sys/mm/mempolicy.c` reads each entry at its own index for a 32-bit program, so Rach2's x86-64 kernel answers such a program as a 32-bit Linux does and not as 64-bit Linux 6.12 does; `rach2/ia32.md` says so in the call's row.
+* Status: unreported.
+* Next: run the reproduction on Linux 6.12 and on the current mainline; whether a later version fixed it is missing from the records. Then report to linux-mm, with a patch that steps a compat caller's array by `compat_uptr_t`.
+
+## PulseAudio's OSS sink writes 1% as 0 to the mixer
+
+* Project: PulseAudio 17.0, Debian's `pulseaudio` 17.0+dfsg1-2, its `module-oss` and `oss-util.c`.
+* Fails: a sink volume of 1% (655 of `PA_VOLUME_NORM`'s 65,536) sets the OSS mixer to 0, while a mixer at 1 reads back as 655, so writing the volume PulseAudio itself read lowers the hardware's from 1 to 0. Where PulseAudio turns a volume into a mixer level, and how it rounds, is missing from the records: `pa_oss_set_volume` was not read.
+* Found: 2026-11-11, on the Lenovo under Rach2 (80-6's trial root, kernel `a7c7686d`), task 80-12.d, while finding which path carries a volume change to the kernel's mixer, with Crysis playing through the session's PulseAudio.
+* Reproduction: with `module-oss` on a device whose mixer reads 1, `pactl set-sink-volume oss_output 3%` sets the mixer to 2 and `pactl set-sink-volume oss_output 1%` sets it to 0, after which `pactl get-sink-volume oss_output` reads 0%.
+* Evidence: `dev-log/80-games/80-12/evidence/volume-paths.txt`; PulseAudio's start reads `Read mixer settings: 0: 655 /   1%` from a mixer at 1, in `build/runs/task3426/lenovo/b/run2/logs.tar.gz` (`80-12/pulse.log`).
+* Rach2: nothing; the steps set `mixer vol 1` themselves.
+* Status: unreported.
+* Next: read `pa_oss_set_volume` and `pa_oss_get_volume` in PulseAudio's current source for the conversion and its rounding; then report, with a patch that makes a read value written back unchanged.

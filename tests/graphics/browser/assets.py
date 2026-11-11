@@ -53,7 +53,7 @@ def main():
             member = tarfile.TarInfo("browser/assets/sources")
             member.size = len(data)
             bundle.addfile(member, io.BytesIO(data))
-            for name in ("browser", "runners", "guest-env.sh", "ref/debian"):
+            for name in ("browser", "lenovo", "runners", "guest-env.sh", "ref/debian"):
                 bundle.add(here.parent / name, arcname=name,
                            filter=lambda m: None if "__pycache__" in m.name else m)
             bundle.add(tree / "build/tests/cases/browser/seat.so", arcname="browser/seat.so")

@@ -6,6 +6,7 @@
  */
 
 #include "drm.h"
+#include "../virtio/virtio.h"
 #include "../dmabuf/dmabuf.h"
 
 #include "../arch/arch.h"
@@ -14,6 +15,7 @@
 #include "../io/poll.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
+#include "../lib/kirq.h"
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
 #include "../mm/paging.h"
@@ -82,10 +84,18 @@ void drm_start(void)
     if (n < 0 && n != -ENODEV) {
         klog(KLOG_WARN, "drm", "virtio_gpu: error %d", (int)n);
     }
+    n = vgpu_shm_start();
+    if (n < 0) {
+        klog(KLOG_WARN, "drm", "vgpu-shm: error %d", (int)n);
+    }
     arch_drm_probe(ARCH_DRM_FIRMWARE);
     n = vkms_probe();
     if (n < 0 && n != -ENODEV) {
         klog(KLOG_WARN, "drm", "vkms: error %d", (int)n);
+    }
+    n = vgem_probe();
+    if (n < 0 && n != -ENODEV) {
+        klog(KLOG_WARN, "drm", "vgem: error %d", (int)n);
     }
 }
 
@@ -255,12 +265,31 @@ int32_t drm_dev_register(struct drm_device *dev)
     return 0;
 }
 
+void drm_gem_object_zap(struct drm_gem_object *obj)
+{
+    struct drm_gem_object *imported;
+    int i;
+
+    paging_zap_device(obj, 0, (uint32_t)(obj->size >> PAGE_SHIFT));
+    if (!obj->dma_buf) {
+        return;
+    }
+    for (i = 0; i < DRM_MAX_DEVICES; i++) {
+        if (!devices[i]) {
+            continue;
+        }
+        for (imported = devices[i]->objects; imported; imported = imported->dev_next) {
+            if (imported->import == obj->dma_buf) {
+                paging_zap_device(imported, 0, (uint32_t)(imported->size >> PAGE_SHIFT));
+            }
+        }
+    }
+}
+
 void drm_dev_unplug(struct drm_device *dev)
 {
     struct drm_gem_object *obj;
     struct drm_file *f;
-    struct drm_gem_object *imported;
-    int i;
 
     if (dev->unplugged) {
         return;
@@ -274,20 +303,7 @@ void drm_dev_unplug(struct drm_device *dev)
         drm_client_dev_unregister(dev);
     }
     for (obj = dev->objects; obj; obj = obj->dev_next) {
-        paging_zap_device(obj, 0, (uint32_t)(obj->size >> PAGE_SHIFT));
-        if (!obj->dma_buf) {
-            continue;
-        }
-        for (i = 0; i < DRM_MAX_DEVICES; i++) {
-            if (!devices[i]) {
-                continue;
-            }
-            for (imported = devices[i]->objects; imported; imported = imported->dev_next) {
-                if (imported->import == obj->dma_buf) {
-                    paging_zap_device(imported, 0, (uint32_t)(imported->size >> PAGE_SHIFT));
-                }
-            }
-        }
+        drm_gem_object_zap(obj);
     }
     if (drm_core_check_feature(dev, DRIVER_MODESET)) {
         drm_vblank_unplug(dev);
@@ -390,18 +406,22 @@ static int32_t drm_node_open(struct devfs_node *node, fd_entry_t *e, int flags)
  * senders, unattached. */
 static void events_release(struct drm_file *file)
 {
-    struct drm_pending_event *e;
+    struct drm_pending_event *e, *queued;
+    uint32_t flags = kirq_save();
 
     while ((e = file->pending) != NULL) {
         file->pending = e->pending_next;
         e->pending_next = NULL;
         e->file = NULL;
     }
-    while ((e = file->events) != NULL) {
-        file->events = e->next;
+    queued = file->events;
+    file->events = NULL;
+    file->events_tail = NULL;
+    kirq_restore(flags);
+    while ((e = queued) != NULL) {
+        queued = e->next;
         kfree(e);
     }
-    file->events_tail = NULL;
 }
 
 /**
@@ -448,7 +468,10 @@ static void drm_node_close(fd_entry_t *e)
 
 int32_t drm_event_reserve(struct drm_file *file, struct drm_pending_event *e)
 {
+    uint32_t flags = kirq_save();
+
     if (file->event_space < e->length) {
+        kirq_restore(flags);
         return -ENOMEM;
     }
     file->event_space -= e->length;
@@ -456,10 +479,11 @@ int32_t drm_event_reserve(struct drm_file *file, struct drm_pending_event *e)
     e->next = NULL;
     e->pending_next = file->pending;
     file->pending = e;
+    kirq_restore(flags);
     return 0;
 }
 
-/** Take `e` off its file's reserved events. */
+/** Take `e` off its file's reserved events. Interrupts masked. */
 static void pending_unlink(struct drm_pending_event *e)
 {
     struct drm_pending_event **link;
@@ -475,15 +499,19 @@ static void pending_unlink(struct drm_pending_event *e)
 
 void drm_send_event(struct drm_pending_event *e)
 {
-    struct drm_file *file = e->file;
+    struct drm_file *file;
     struct dma_fence *fence = e->fence;
+    uint32_t flags;
 
     e->fence = NULL;
     if (fence) {
         dma_fence_signal(fence);
         dma_fence_put(fence);
     }
+    flags = kirq_save();
+    file = e->file;
     if (!file) {
+        kirq_restore(flags);
         kfree(e);
         return;
     }
@@ -495,50 +523,109 @@ void drm_send_event(struct drm_pending_event *e)
         file->events = e;
     }
     file->events_tail = e;
+    kirq_restore(flags);
     wq_wake(&file->event_wait, WQ_DATA);
 }
 
 void drm_event_cancel_free(struct drm_pending_event *e)
 {
+    uint32_t flags;
+
     dma_fence_put(e->fence);
     e->fence = NULL;
+    flags = kirq_save();
     if (e->file) {
         pending_unlink(e);
         e->file->event_space += e->length;
     }
+    kirq_restore(flags);
     kfree(e);
 }
 
-/** Whether a reader of `arg`, a file, has an event or its device is gone. */
+/** Whether a reader of `arg`, a file, has an event. */
 static int events_readable(void *arg)
 {
     struct drm_file *file = (struct drm_file *)arg;
 
-    return file->events != NULL || file->dev->unplugged;
+    return file->events != NULL;
+}
+
+/**
+ * Take the first queued event of `file` into `*out` if it fits in `room`
+ * bytes, as Linux's drm_read under its event lock: 1 taken, 0 none queued,
+ * -1 the first does not fit. The event keeps its space until `event_done`,
+ * so that the count stays within DRM_EVENT_SPACE while its copy sleeps.
+ */
+static int event_take(struct drm_file *file, uint32_t room, struct drm_pending_event **out)
+{
+    struct drm_pending_event *ev;
+    uint32_t flags = kirq_save();
+    int rc = 1;
+
+    ev = file->events;
+    if (!ev) {
+        rc = 0;
+    } else if (ev->length > room) {
+        rc = -1;
+    } else {
+        file->events = ev->next;
+        if (!file->events) {
+            file->events_tail = NULL;
+        }
+        *out = ev;
+    }
+    kirq_restore(flags);
+    return rc;
+}
+
+/** Give back the space of `ev`, taken by event_take and copied, and free it. */
+static void event_done(struct drm_file *file, struct drm_pending_event *ev)
+{
+    uint32_t flags = kirq_save();
+
+    file->event_space += ev->length;
+    kirq_restore(flags);
+    kfree(ev);
+}
+
+/** Put `ev`, taken by event_take, back at the head of `file`'s queue, and
+ * wake the readers and pollers that found the queue empty meanwhile, as
+ * Linux's drm_read does after a failed copy. */
+static void event_put_back(struct drm_file *file, struct drm_pending_event *ev)
+{
+    uint32_t flags = kirq_save();
+
+    ev->next = file->events;
+    file->events = ev;
+    if (!file->events_tail) {
+        file->events_tail = ev;
+    }
+    kirq_restore(flags);
+    wq_wake(&file->event_wait, WQ_DATA);
 }
 
 /**
  * read of a node: the queued events that fit in `count` bytes, whole, as
  * Linux's drm_read; 0 when the first does not fit. Blocks for one unless
- * O_NONBLOCK, which answers EAGAIN. With none queued, ENODEV once the
- * device is unplugged; EINTR for a signal, EFAULT for a bad buffer before
- * any event was read.
+ * O_NONBLOCK, which answers EAGAIN; EINTR for a signal, EFAULT for a bad
+ * buffer before any event was read. Each event leaves the queue before its
+ * copy, which may sleep, so that another reader cannot free it meanwhile.
+ * An unplugged device changes nothing here, as on Linux: a compositor that
+ * polls the node keeps its loop, and learns of the loss from its ioctls.
  */
 static int32_t drm_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     struct drm_file *file = (struct drm_file *)e->priv;
+    struct drm_pending_event *ev = NULL;
     uint32_t done = 0;
+    int got;
 
     for (;;) {
-        struct drm_pending_event *ev = file->events;
-
-        if (!ev) {
-            if (done) {
-                return (int32_t)done;
-            }
-            if (file->dev->unplugged) {
-                return -ENODEV;
-            }
+        got = event_take(file, count - done, &ev);
+        if (got < 0 || (got == 0 && done)) {
+            return (int32_t)done;
+        }
+        if (got == 0) {
             if (e->ofd && (e->ofd->status_flags & OFD_NONBLOCK)) {
                 return -EAGAIN;
             }
@@ -547,36 +634,22 @@ static int32_t drm_read(fd_entry_t *e, char __user *buf, uint32_t count)
             }
             continue;
         }
-        if (ev->length > count - done) {
-            return (int32_t)done;
-        }
-        /* The event stays queued while the copy may sleep. */
         if (copy_to_user(buf + done, &ev->event, ev->length) != 0) {
+            event_put_back(file, ev);
             return done ? (int32_t)done : -EFAULT;
         }
-        if (file->events != ev) {
-            continue; /* another reader took it meanwhile */
-        }
-        file->events = ev->next;
-        if (!file->events) {
-            file->events_tail = NULL;
-        }
-        file->event_space += ev->length;
         done += ev->length;
-        kfree(ev);
+        event_done(file, ev);
     }
 }
 
-/** poll of a node: POLLIN while an event is queued, POLLERR | POLLHUP once
- * the device is unplugged. */
+/** poll of a node: POLLIN while an event is queued and nothing else, of an
+ * unplugged device too, as Linux's drm_poll. */
 static short drm_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     struct drm_file *file = (struct drm_file *)e->priv;
 
     *wq = &file->event_wait;
-    if (file->dev->unplugged) {
-        return POLLERR | POLLHUP;
-    }
     return (short)(events & (file->events ? POLLIN : 0));
 }
 
@@ -594,6 +667,12 @@ static int32_t drm_node_mmap(fd_entry_t *e, struct vma *vma)
 
 static const struct file_ops drm_fops = {drm_read,       NULL,          drm_poll, drm_node_ioctl,
                                          drm_node_close, drm_node_mmap, NULL};
+
+/** Whether the held descriptor belongs to this DRM core's node operations. */
+int drm_is_file(const fd_entry_t *entry)
+{
+    return entry && entry->ops == &drm_fops && entry->priv != NULL;
+}
 
 /* ------------------------------------------------------------------------
  * The dispatcher

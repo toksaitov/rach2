@@ -7,7 +7,36 @@
 #include "dmabuf/sync_file.c"
 #include "dmabuf/sw_sync.c"
 
+/* The model's interrupt flag, and an interrupt that a row raises while
+ * interrupts are masked, taken when the flag comes on again, as a device's
+ * interrupt waits for a thread's masked section to end. */
+static int irq_on = 1;
+static void (*irq_pending)(void);
+
+/** Mask the model's interrupts; whether they were on. */
+uint32_t kirq_save(void)
+{
+    uint32_t was = (uint32_t)irq_on;
+    irq_on = 0;
+    return was;
+}
+
+/** Restore the model's interrupt flag, and take a pending interrupt, with
+ * interrupts masked as in a handler, once it is on. */
+void kirq_restore(uint32_t flags)
+{
+    void (*handler)(void) = irq_pending;
+    irq_on = (int)flags;
+    if (irq_on && handler) {
+        irq_pending = NULL;
+        irq_on = 0;
+        handler();
+        irq_on = 1;
+    }
+}
+
 int printf(const char *format, ...);
+int snprintf(char *out, unsigned long size, const char *format, ...);
 
 struct percpu cpu_table[NR_CPUS];
 static process_t self;
@@ -91,20 +120,23 @@ int copy_from_user(void *dst, const void __user *src, size_t n)
     k_memcpy(dst, src, n);
     return 0;
 }
+/* Set: every copy to the user faults, as to a read-only page. */
+static int to_user_faults;
 /** Copy to a real test address. */
 int copy_to_user(void __user *dst, const void *src, size_t n)
 {
-    if ((uintptr_t)dst < 4096)
+    if ((uintptr_t)dst < 4096 || to_user_faults)
         return -EFAULT;
     k_memcpy(dst, src, n);
     return 0;
 }
-/** Allocate a descriptor in the model's bounded table. */
+/** Allocate a descriptor in the model's bounded table, skipping a slot
+ * that is in use or reserved, which has its description set. */
 int fd_alloc(fd_table_t *t)
 {
     int i;
     for (i = 0; i < 64; i++)
-        if (t->entries[i].type == FD_TYPE_NONE) {
+        if (t->entries[i].type == FD_TYPE_NONE && !t->entries[i].ofd) {
             k_memset(&descriptions[i], 0, sizeof(descriptions[i]));
             t->entries[i].ofd = &descriptions[i];
             return i;
@@ -116,16 +148,24 @@ fd_entry_t *fd_get(fd_table_t *t, int fd)
 {
     return fd >= 0 && fd < 64 && t->entries[fd].type != FD_TYPE_NONE ? &t->entries[fd] : NULL;
 }
-/** Release the object attached to a model descriptor. */
+/** Clear a model descriptor's slot, reserved or not, without closing its
+ * object, as the kernel's fd_free does. */
 int fd_free(fd_table_t *t, int fd)
+{
+    if (fd < 0 || fd >= 64 || (t->entries[fd].type == FD_TYPE_NONE && !t->entries[fd].ofd))
+        return -1;
+    k_memset(&t->entries[fd], 0, sizeof(t->entries[fd]));
+    return 0;
+}
+/** Close a model descriptor: its object's close, then its slot. */
+static int close_fd(fd_table_t *t, int fd)
 {
     fd_entry_t *e = fd_get(t, fd);
     if (!e)
         return -EBADF;
     if (e->ops && e->ops->close)
         e->ops->close(e);
-    k_memset(e, 0, sizeof(*e));
-    return 0;
+    return fd_free(t, fd);
 }
 /** Count one completion callback. */
 static void counted(struct dma_fence *f, struct dma_fence_cb *cb)
@@ -173,6 +213,182 @@ static void fence_cases(void)
     dma_fence_put(a);
     dma_fence_put(b);
 }
+/* The fences of `interrupt_cases`: f1 under the first point, f2 under the
+ * second. */
+static struct dma_fence *irq_f1, *irq_f2;
+
+/** The device's interrupt: f2 completes. */
+static void signal_f2(void)
+{
+    dma_fence_signal(irq_f2);
+}
+
+/** A callback on f1 that runs before the first point's: a device raises
+ * its interrupt while f1's signal is under way. */
+static void raise_f2(struct dma_fence *f, struct dma_fence_cb *cb)
+{
+    (void)f;
+    (void)cb;
+    irq_pending = signal_f2;
+}
+
+/** The second point's waiter: drops the last reference to the point, which
+ * frees it and the first point with it. */
+static void drop_point(struct dma_fence *f, struct dma_fence_cb *cb)
+{
+    (void)cb;
+    callbacks++;
+    dma_fence_put(f);
+}
+
+/**
+ * An interrupt that frees the owner of a callback already taken off the
+ * list but not yet called: point c2 on f2 follows point c1 on f1, both
+ * asked for their signal, and c2's waiter holds the only reference to c2,
+ * which holds the only one to c1.
+ * While f1 signals, after a callback that raises f2's interrupt and before
+ * c1's callback, the interrupt completes c2 and its waiter frees both
+ * points. dma_fence_signal runs f1's callbacks with interrupts masked, so
+ * the interrupt comes after c1's callback has returned; without that,
+ * c1's callback runs in freed storage, which the sanitizer reports.
+ */
+static void interrupt_cases(void)
+{
+    uint64_t context = dma_fence_context_alloc(2);
+    struct dma_fence_chain *c1 = dma_fence_chain_alloc(), *c2 = dma_fence_chain_alloc();
+    struct dma_fence_cb raise, waiter;
+    int before = callbacks;
+    irq_f1 = new_fence(context, 1);
+    irq_f2 = new_fence(context + 1, 1);
+    dma_fence_chain_init(c1, NULL, dma_fence_get(irq_f1), 1);
+    dma_fence_chain_init(c2, &c1->base, dma_fence_get(irq_f2), 2);
+    CHECK(!dma_fence_is_signaled(&c1->base) && !dma_fence_is_signaled(&c2->base) && !irq_f1->cbs &&
+              !irq_f2->cbs,
+          "a query of both points waits on neither fence, as Linux's");
+    dma_fence_enable_sw_signaling(&c1->base);
+    CHECK(irq_f1->cbs && irq_f1->listened, "the first point, enabled, waits on its fence");
+    CHECK(!dma_fence_add_callback(&c2->base, &waiter, drop_point), "the second point's waiter");
+    CHECK(!dma_fence_add_callback(irq_f1, &raise, raise_f2), "the interrupt's trigger");
+    dma_fence_signal(irq_f1);
+    CHECK(irq_pending == NULL && irq_on, "the interrupt is taken once f1's callbacks end");
+    CHECK(dma_fence_is_signaled(irq_f2) && callbacks == before + 1,
+          "the interrupt completes the second point and its waiter runs");
+    CHECK(irq_f1->refs == 1 && irq_f2->refs == 1 && !irq_f1->cbs && !irq_f2->cbs,
+          "both points are freed with their fences' references and callbacks");
+    dma_fence_put(irq_f1);
+    dma_fence_put(irq_f2);
+    irq_f1 = irq_f2 = NULL;
+}
+/* The fences of `enable_cases`: the GPU's fence under the later point of a
+ * timeline, and whether the GPU's interrupt is to come at the first query
+ * of a child of the array under the earlier point. `setup_irq_on` records
+ * whether interrupts were on there. */
+static struct dma_fence *setup_gpu;
+static int setup_armed, setup_irq_on;
+
+/** The GPU's interrupt: its fence completes, and the later point's
+ * chain_done moves on to the array, asking for its signal. */
+static void signal_gpu(void)
+{
+    dma_fence_signal(setup_gpu);
+}
+
+/** A child of the array, unsignalled. Its first query is the first call
+ * the array's signalling setup makes after the fence is marked
+ * `listened`: the GPU raises its interrupt there, taken at once while
+ * interrupts are on, else when they come on again. */
+static int child_signaled(struct dma_fence *f)
+{
+    (void)f;
+    if (setup_armed) {
+        setup_armed = 0;
+        setup_irq_on = irq_on;
+        if (irq_on) {
+            irq_on = 0;
+            signal_gpu();
+            irq_on = 1;
+        } else
+            irq_pending = signal_gpu;
+    }
+    return 0;
+}
+
+/** The children's driver and timeline name. */
+static const char *child_name(struct dma_fence *f)
+{
+    (void)f;
+    return "child";
+}
+
+static const struct dma_fence_ops child_ops = {child_name, child_name,     NULL,
+                                               NULL,       child_signaled, NULL};
+
+/** Allocate an unsignalled child of `enable_cases`'s array. */
+static struct dma_fence *new_child(uint64_t context)
+{
+    struct dma_fence *f = kzalloc(sizeof(*f));
+    dma_fence_init(f, &child_ops, context, 1);
+    return f;
+}
+
+/** Whether `f` has exactly one callback linked. */
+static int one_callback(struct dma_fence *f)
+{
+    return f->cbs && !f->cbs->next;
+}
+
+/**
+ * An interrupt at the first `listened` transition of an array: point c1
+ * holds array a of children x and y, and point c2 after it holds the GPU's
+ * fence g, which an eventfd watches through c2. A process asks for a's
+ * signal, as a wait does first, and the GPU's interrupt comes while a's
+ * setup runs; g completes, and c2's chain_done adds its callback to a,
+ * asking for a's signal again. The setup runs with interrupts masked, as
+ * Linux's under the fence's lock (dma-fence.c:615-617), so the interrupt
+ * comes after it and finds a armed; were it to come between the test of
+ * `listened` and the mark, both would arm a, linking each child's
+ * callback twice and resetting its count, and x alone would complete a.
+ */
+static void enable_cases(void)
+{
+    uint64_t context = dma_fence_context_alloc(3);
+    struct dma_fence_chain *c1 = dma_fence_chain_alloc(), *c2 = dma_fence_chain_alloc();
+    struct dma_fence *x = new_child(context), *y = new_child(context + 1), *a, *inputs[2];
+    struct dma_fence_cb watch;
+    int before = callbacks;
+    setup_gpu = new_fence(context + 2, 1);
+    inputs[0] = x;
+    inputs[1] = y;
+    a = dma_fence_merge(inputs, 2);
+    CHECK(a && a->ops == &array_ops, "two children make an array");
+    dma_fence_chain_init(c1, NULL, a, 1);
+    dma_fence_chain_init(c2, &c1->base, dma_fence_get(setup_gpu), 2);
+    CHECK(!dma_fence_add_callback(&c2->base, &watch, counted) && one_callback(setup_gpu),
+          "the eventfd's watch waits on the GPU's fence");
+    setup_armed = 1;
+    dma_fence_enable_sw_signaling(a);
+    CHECK(!setup_armed && !setup_irq_on,
+          "an array's signalling setup runs with interrupts masked, as Linux's");
+    CHECK(irq_pending == NULL && irq_on && dma_fence_is_signaled(setup_gpu),
+          "the GPU's interrupt is taken once the setup ends");
+    CHECK(one_callback(x) && one_callback(y) && ((struct fence_array *)a)->pending == 2,
+          "the array is armed once: one callback on each child, two pending");
+    CHECK(one_callback(a) && c2->armed == a && !c2->base.signaled,
+          "the later point waits on the array");
+    dma_fence_signal(x);
+    CHECK(!a->signaled && !c2->base.signaled && callbacks == before,
+          "one child does not complete the array of two");
+    dma_fence_signal(y);
+    CHECK(a->signaled && c2->base.signaled && callbacks == before + 1,
+          "the second child completes the array, the point and its watch");
+    dma_fence_put(&c2->base);
+    CHECK(x->refs == 1 && y->refs == 1 && setup_gpu->refs == 1,
+          "both points are freed with the array");
+    dma_fence_put(x);
+    dma_fence_put(y);
+    dma_fence_put(setup_gpu);
+    setup_gpu = NULL;
+}
 /** Test merge flattening, duplicate timelines, errors and callback teardown. */
 static void merge_cases(void)
 {
@@ -184,6 +400,8 @@ static void merge_cases(void)
     inputs[2] = d;
     f = dma_fence_merge(inputs, 3);
     CHECK(f && dma_fence_count(f) == 2, "merge keeps latest timeline point");
+    CHECK(!b->cbs && !d->cbs && !b->listened && !d->listened,
+          "a merge asks its fences for nothing until it is waited for, as Linux's array");
     inputs[0] = f;
     inputs[1] = d;
     g = dma_fence_merge(inputs, 2);
@@ -230,6 +448,7 @@ static void buffer_cases(void)
     CHECK(!dma_resv_add_fence(b->resv, w, 1), "install writer");
     CHECK(!dma_resv_add_fence(b->resv, r, 0), "install reader");
     CHECK(!e->ops->poll(e, 5, &q) && q == &b->wq, "buffer waits on implicit fences");
+    CHECK(w->listened && !r->listened, "poll listens on the first pending leaf alone");
     snap = dma_resv_snapshot(b->resv, 1);
     CHECK(dma_fence_count(snap) == 2, "write waits for readers too");
     dma_fence_put(snap);
@@ -264,9 +483,9 @@ static void buffer_cases(void)
     data.fd = syncfd;
     data.flags = DMA_BUF_SYNC_READ;
     CHECK(!e->ops->ioctl(e, DMA_BUF_IOCTL_IMPORT_SYNC_FILE, (uintptr_t)&data), "import read fence");
-    fd_free(&table, merge.fence);
-    fd_free(&table, syncfd);
-    fd_free(&table, fd);
+    close_fd(&table, merge.fence);
+    close_fd(&table, syncfd);
+    close_fd(&table, fd);
     dma_buf_put(b);
     dma_buf_put(other);
     dma_fence_put(w);
@@ -303,9 +522,9 @@ static void import_cases(void)
     dma_fence_put(snapshot);
     dma_fence_signal(r);
     CHECK(buf_poll(e, 5, &q) == 5, "write ready only after every producer");
-    fd_free(&table, fa);
-    fd_free(&table, fc);
-    fd_free(&table, fd);
+    close_fd(&table, fa);
+    close_fd(&table, fc);
+    close_fd(&table, fd);
     dma_buf_put(b);
     dma_fence_put(a);
     dma_fence_put(c);
@@ -343,31 +562,216 @@ static void timeline_cases(void)
     CHECK(!dma_fence_status(f), "first increment below point");
     sw_ioctl(&timeline, SW_SYNC_IOC_INC, (uintptr_t)&step);
     CHECK(dma_fence_status(f) == 1, "second increment signals point");
-    fd_free(&table, fd);
+    close_fd(&table, fd);
     dma_fence_put(f);
     data.value = 4;
     sw_ioctl(&timeline, SW_SYNC_IOC_CREATE_FENCE, (uintptr_t)&data);
     f = sync_file_get_fence(data.fence);
     sw_close(&timeline);
     CHECK(dma_fence_status(f) == -ENOENT, "producer close signals error");
-    fd_free(&table, data.fence);
+    close_fd(&table, data.fence);
     dma_fence_put(f);
 }
-/** Run the model cases and fail on any assertion. */
-int main(void)
+/** Whether only descriptor `fd` is in use or reserved. */
+static int only_fd(int fd)
+{
+    int i;
+    for (i = 0; i < 64; i++)
+        if ((slots[i].type != FD_TYPE_NONE || slots[i].ofd != NULL) != (i == fd))
+            return 0;
+    return 1;
+}
+/** A sync file whose descriptor cannot be copied out is not made: each
+ * call answers EFAULT and leaves no descriptor, and no sync file or fence
+ * reference, which the leak sanitizer would report at exit. */
+static void copy_out_cases(void)
+{
+    struct dma_fence *f = new_fence(dma_fence_context_alloc(1), 1);
+    struct dma_buf *b = dma_buf_export(4096, &model_ops, NULL, NULL);
+    struct dma_buf_export_sync_file exp;
+    struct sync_merge_data merge;
+    struct sw_sync_create_fence_data data;
+    fd_entry_t timeline;
+    int fd = sync_file_create(f, "one"), bfd;
+    k_memset(&merge, 0, sizeof(merge));
+    merge.fd2 = fd;
+    to_user_faults = 1;
+    CHECK(sync_ioctl(fd_get(&table, fd), SYNC_IOC_MERGE, (uintptr_t)&merge) == -EFAULT &&
+              only_fd(fd),
+          "a merge that cannot be copied out: EFAULT, nothing left");
+    k_memset(&timeline, 0, sizeof(timeline));
+    CHECK(!sw_sync_open(&timeline), "open software timeline");
+    k_memset(&data, 0, sizeof(data));
+    data.value = 1;
+    CHECK(sw_ioctl(&timeline, SW_SYNC_IOC_CREATE_FENCE, (uintptr_t)&data) == -EFAULT && only_fd(fd),
+          "a software fence that cannot be copied out: EFAULT, nothing left");
+    sw_close(&timeline);
+    to_user_faults = 0;
+    CHECK(!dma_resv_add_fence(b->resv, f, 1), "a writer on a buffer");
+    bfd = dma_buf_fd(b, 0);
+    k_memset(&exp, 0, sizeof(exp));
+    exp.flags = DMA_BUF_SYNC_WRITE;
+    to_user_faults = 1;
+    CHECK(fd_get(&table, bfd)
+                  ->ops->ioctl(fd_get(&table, bfd), DMA_BUF_IOCTL_EXPORT_SYNC_FILE,
+                               (uintptr_t)&exp) == -EFAULT,
+          "an export that cannot be copied out: EFAULT");
+    to_user_faults = 0;
+    close_fd(&table, bfd);
+    dma_buf_put(b);
+    CHECK(only_fd(fd), "and nothing left");
+    close_fd(&table, fd);
+    dma_fence_put(f);
+}
+/** SET_NAME of a name with no NUL in 32 bytes and mmap through an
+ * exporter without mmap both answer EINVAL, as Linux. */
+static void buffer_answers(void)
+{
+    struct dma_buf *b = dma_buf_export(4096, &model_ops, NULL, NULL);
+    char name[40];
+    vma_t vma;
+    int fd = dma_buf_fd(b, 0);
+    fd_entry_t *e = fd_get(&table, fd);
+    k_memset(name, 'x', sizeof(name));
+    CHECK(e->ops->ioctl(e, DMA_BUF_SET_NAME_A, (uintptr_t)name) == -EINVAL,
+          "a name of 32 bytes or more: EINVAL, as strndup_user");
+    name[31] = 0;
+    CHECK(!e->ops->ioctl(e, DMA_BUF_SET_NAME_A, (uintptr_t)name) && b->named, "a name of 31 bytes");
+    k_memset(&vma, 0, sizeof(vma));
+    vma.end = 4096;
+    CHECK(e->ops->mmap(e, &vma) == -EINVAL, "mmap through an exporter without mmap: EINVAL");
+    close_fd(&table, fd);
+    dma_buf_put(b);
+}
+/* The model exporter's answer to `sync_cases`, and whether its writer
+ * had been asked for its signal when the exporter's hook ran. */
+static int32_t hook_answer;
+static int hook_runs, hook_saw_listened;
+
+/** The exporter's CPU-access hook: it waits its own way, as i915's spins
+ * on its requests, completing the buffer's writer, unless it fails. */
+static int32_t hook_access(struct dma_buf *b, uint64_t flags)
+{
+    (void)flags;
+    hook_runs++;
+    hook_saw_listened = b->resv->write->listened;
+    if (!hook_answer)
+        dma_fence_signal(b->resv->write);
+    return hook_answer;
+}
+
+static const struct dma_buf_ops hook_ops = {NULL, NULL, hook_access, NULL};
+
+/**
+ * DMA_BUF_IOCTL_SYNC runs the exporter's hook before it waits on the
+ * reservation, as Linux's dma_buf_begin_cpu_access (dma-buf.c:1415-1423):
+ * the hook finds the writer not yet waited for, and the wait after it
+ * finds the writer done. A hook's error returns before the wait, and END
+ * runs the hook alone.
+ */
+static void sync_cases(void)
+{
+    struct dma_buf *b = dma_buf_export(4096, &hook_ops, NULL, NULL);
+    struct dma_fence *w = new_fence(dma_fence_context_alloc(1), 1);
+    struct dma_buf_sync access;
+    int fd = dma_buf_fd(b, 0);
+    fd_entry_t *e = fd_get(&table, fd);
+    CHECK(!dma_resv_add_fence(b->resv, w, 1), "install the exporter's writer");
+    hook_answer = -EINTR;
+    access.flags = DMA_BUF_SYNC_READ;
+    CHECK(e->ops->ioctl(e, DMA_BUF_IOCTL_SYNC, (uintptr_t)&access) == -EINTR && hook_runs == 1 &&
+              !w->listened,
+          "the exporter's error returns before the reservation's wait");
+    hook_answer = 0;
+    CHECK(!e->ops->ioctl(e, DMA_BUF_IOCTL_SYNC, (uintptr_t)&access) && hook_runs == 2 &&
+              !hook_saw_listened && w->signaled,
+          "the exporter's hook runs before the wait, which finds its writer done");
+    access.flags = DMA_BUF_SYNC_READ | DMA_BUF_SYNC_END;
+    CHECK(!e->ops->ioctl(e, DMA_BUF_IOCTL_SYNC, (uintptr_t)&access) && hook_runs == 3,
+          "END runs the exporter's hook");
+    close_fd(&table, fd);
+    dma_buf_put(b);
+    CHECK(w->refs == 1, "the buffer drops its writer");
+    dma_fence_put(w);
+}
+/** Whether two strings are equal. */
+static int same(const char *x, const char *y)
+{
+    while (*x && *x == *y) {
+        x++;
+        y++;
+    }
+    return *x == *y;
+}
+/** The name FILE_INFO reports of sync file `fd`. */
+static void name_of(int fd, char *out)
+{
+    struct sync_file_info info;
+    k_memset(&info, 0, sizeof(info));
+    CHECK(!sync_ioctl(fd_get(&table, fd), SYNC_IOC_FILE_INFO, (uintptr_t)&info), "file info");
+    k_memcpy(out, info.name, sizeof(info.name));
+}
+/** A sync file is named as Linux's sync_file_get_name names it: the
+ * user's name from MERGE, else "driver-timelineCONTEXT-SEQNO" of its
+ * fence, whatever name CREATE_FENCE was given. */
+static void name_cases(void)
+{
+    struct sw_sync_create_fence_data data;
+    struct sync_merge_data merge;
+    struct dma_fence *f;
+    fd_entry_t timeline;
+    char name[32], want[64];
+    k_memset(&timeline, 0, sizeof(timeline));
+    CHECK(!sw_sync_open(&timeline), "open software timeline");
+    k_memset(&data, 0, sizeof(data));
+    data.value = 5;
+    k_strncpy(data.name, "ignored", sizeof(data.name));
+    CHECK(!sw_ioctl(&timeline, SW_SYNC_IOC_CREATE_FENCE, (uintptr_t)&data), "a software fence");
+    f = sync_file_get_fence(data.fence);
+    snprintf(want, sizeof(want), "%s-%s%llu-%lld", f->ops->get_driver_name(f),
+             f->ops->get_timeline_name(f), (unsigned long long)f->context, (long long)f->seqno);
+    want[31] = 0;
+    name_of(data.fence, name);
+    CHECK(same(name, want), "named from its fence, not the caller's name");
+    k_memset(&merge, 0, sizeof(merge));
+    merge.fd2 = data.fence;
+    k_strncpy(merge.name, "joined", sizeof(merge.name));
+    CHECK(!sync_ioctl(fd_get(&table, data.fence), SYNC_IOC_MERGE, (uintptr_t)&merge), "merge");
+    name_of(merge.fence, name);
+    CHECK(same(name, "joined"), "a merge keeps the user's name");
+    close_fd(&table, merge.fence);
+    close_fd(&table, data.fence);
+    dma_fence_put(f);
+    sw_close(&timeline);
+}
+/** Run the model cases, or with `--interrupt-only` the interrupt's alone,
+ * and fail on any assertion. */
+int main(int argc, char **argv)
 {
     int i;
     current_proc = &self;
     table.entries = slots;
     table.cap = 64;
     self.fds = &table;
+    if (argc == 2 && same(argv[1], "--interrupt-only")) {
+        interrupt_cases();
+        goto finish;
+    }
     fence_cases();
+    interrupt_cases();
+    enable_cases();
     merge_cases();
     buffer_cases();
+    sync_cases();
     import_cases();
     timeline_cases();
+    copy_out_cases();
+    buffer_answers();
+    name_cases();
+finish:
     for (i = 0; i < 64; i++)
-        CHECK(slots[i].type == FD_TYPE_NONE, "all descriptors closed");
+        CHECK(slots[i].type == FD_TYPE_NONE && slots[i].ofd == NULL,
+              "all descriptors closed and none reserved");
     if (!failures)
         printf("fence-test: passed\n");
     return failures != 0;

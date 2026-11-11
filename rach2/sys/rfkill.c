@@ -3,6 +3,7 @@
 #include "rfkill.h"
 #include "io/poll.h"
 #include "lib/kerrno.h"
+#include "lib/kstd.h"
 #include "lib/kstring.h"
 #include "lib/spinlock.h"
 #include "mm/kheap.h"
@@ -347,14 +348,20 @@ int rfkill_show(int index, int attr, char *out, int cap)
 int rfkill_store(int index, int attr, const char *text, int len)
 {
     struct rfkill *rf = find(index);
+    unsigned long n;
     unsigned v;
+    int rc;
 
     if (!rf)
         return -ENOENT;
-    if ((attr != RFKILL_ATTR_SOFT && attr != RFKILL_ATTR_STATE) || len != 1 ||
-        (text[0] != '0' && text[0] != '1'))
+    if (attr != RFKILL_ATTR_SOFT && attr != RFKILL_ATTR_STATE)
         return -EINVAL;
-    v = (unsigned)(text[0] - '0');
+    rc = k_strtoul(text, len < 0 ? 0 : (size_t)len, &n);
+    if (rc != 0)
+        return rc;
+    if (n > 1)
+        return -EINVAL;
+    v = (unsigned)n;
     /* `state` is the user state: 0 soft blocked, 1 unblocked. */
     return set_soft(rf, attr == RFKILL_ATTR_SOFT ? v : !v);
 }

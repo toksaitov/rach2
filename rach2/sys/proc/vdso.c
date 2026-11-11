@@ -1,7 +1,7 @@
 /*
  * vdso.c: the vDSO's data page and image mapped into a new image, as two
- * regions whose pages are the kernel's own frames, shared by every process
- * (../vdso.h).
+ * regions whose pages are the kernel's own frames, which every process maps
+ * until it writes the image (../vdso.h).
  */
 
 #include "../vdso.h"
@@ -57,8 +57,8 @@ static void vdso_release(struct vm_file *f)
 /*
  * The files the regions map: the data page and each image. Their reference
  * counts start at one, the kernel's, so that the last region to let one go
- * never releases it; the pages are shared, so a fork's child maps the same
- * frames and no fill is needed.
+ * never releases it. Each lends the kernel's frame (`share`), so a fork's
+ * child maps the same frames and no fill is needed.
  */
 static char vdso_data_name[] = "[vvar]";
 static char vdso_image_name[] = "[vdso]";
@@ -76,11 +76,17 @@ uintptr_t vdso_span(int abi)
 }
 
 /**
- * The regions are of the kind VM_SHARED, so that a fault maps the kernel's
- * frame through `share` and a fork shares it; VM_PROT_NOWRITE keeps
- * mprotect from making either writable, and paging_access refuses a write
- * to a read-only shared page, so neither ptrace nor /proc/PID/mem can
- * change the page every process maps.
+ * The data page, [vvar], is of the kind VM_SHARED with VM_PROT_NOWRITE and
+ * VM_PROT_VVAR, as Linux maps it VM_IO | VM_PFNMAP and without VM_MAYWRITE
+ * or VM_MAYEXEC: mprotect can make it neither writable nor executable, and
+ * ptrace, /proc/PID/mem, process_vm_readv and pins can neither read nor
+ * write it, since Linux's get_user_pages refuses the region. The image,
+ * [vdso], is a private mapping, VM_FILE, as Linux maps it with VM_MAYWRITE
+ * so that a debugger may set a breakpoint there: a fault maps the kernel's
+ * frame copy-on-write through `share`, and a write after mprotect, or one
+ * of ptrace or /proc/PID/mem (`paging_access`), copies the page into this
+ * address space alone. The frame keeps the kernel's own reference, so even
+ * the last mapping of it is copied and never written in place.
  */
 intptr_t vdso_map(struct vm_space *vm, uintptr_t at, int abi)
 {
@@ -90,12 +96,12 @@ intptr_t vdso_map(struct vm_space *vm, uintptr_t at, int abi)
     if (vdso_image_pages(abi) == 0) {
         return 0;
     }
-    if (vm_insert_file(vm, at, image, VM_PROT_READ | VM_PROT_NOWRITE, VM_SHARED, &vdso_data_file,
-                       0) != 0) {
+    if (vm_insert_file(vm, at, image, VM_PROT_READ | VM_PROT_NOWRITE | VM_PROT_VVAR, VM_SHARED,
+                       &vdso_data_file, 0) != 0) {
         return -1;
     }
-    if (vm_insert_file(vm, image, at + vdso_span(abi),
-                       VM_PROT_READ | VM_PROT_EXEC | VM_PROT_NOWRITE, VM_SHARED, file, 0) != 0) {
+    if (vm_insert_file(vm, image, at + vdso_span(abi), VM_PROT_READ | VM_PROT_EXEC, VM_FILE, file,
+                       0) != 0) {
         (void)vm_remove(vm, at, image);
         return -1;
     }

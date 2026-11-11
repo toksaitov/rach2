@@ -250,8 +250,8 @@ void ptrace_syscall_stop(isr_params_t *tf, uint32_t nr, int leaving)
     } else if (self->ptrace_opts & PTRACE_O_TRACESYSGOOD) {
         signo |= 0x80u;
     }
-    self->orig_nr = (int32_t)nr;
     if (!leaving) {
+        self->orig_nr = (int32_t)nr;
         SC_RET(tf) = (unsigned long)-ENOSYS;
     }
     if (!stepping) {
@@ -663,12 +663,14 @@ static int siginfo_access(uint32_t pid, process_t *t, uintptr_t data, int set)
  * larger than a frame of the kernel's stack should be. The copy of the iovec
  * may sleep, and the thread may be reaped meanwhile, so both directions find
  * it again after their copies from the caller (`ptrace_tracee`). 0, or
- * -EFAULT, -EINVAL, -ENOMEM, -ESRCH or the architecture's error.
+ * -EFAULT, -EINVAL, -ENOMEM, -ESRCH, -EIO if the set changed shape while
+ * a copy slept, or the architecture's error.
  */
 static long regset_access(uint32_t pid, process_t *t, unsigned long type, uintptr_t data, int set)
 {
     struct kernel_iovec iov;
     uint32_t unit = 1;
+    uint32_t copied_unit;
     uint32_t len;
     uint8_t *buf;
     long size;
@@ -684,6 +686,10 @@ static long regset_access(uint32_t pid, process_t *t, unsigned long type, uintpt
         iov.iov_len = iov32[1];
     } else if (copy_from_user(&iov, (const void __user *)data, sizeof(iov)) != 0) {
         return -EFAULT;
+    }
+    t = ptrace_tracee(pid);
+    if (!t) {
+        return -ESRCH;
     }
     size = arch_regset_size(t, type, &unit);
     if (size < 0) {
@@ -701,6 +707,8 @@ static long regset_access(uint32_t pid, process_t *t, unsigned long type, uintpt
         t = ptrace_tracee(pid);
         if (!t) {
             rc = -ESRCH;
+        } else if (arch_regset_size(t, type, &copied_unit) != size || copied_unit != unit) {
+            rc = -EIO;
         } else {
             arch_regset_get(t, type, buf);
             if (copy_to_user((void __user *)iov.iov_base, buf, len) != 0) {
@@ -711,7 +719,13 @@ static long regset_access(uint32_t pid, process_t *t, unsigned long type, uintpt
         rc = -EFAULT;
     } else {
         t = ptrace_tracee(pid);
-        rc = t ? arch_regset_set(t, type, buf, len) : -ESRCH;
+        if (!t) {
+            rc = -ESRCH;
+        } else if (arch_regset_size(t, type, &copied_unit) != size || copied_unit != unit) {
+            rc = -EIO;
+        } else {
+            rc = arch_regset_set(t, type, buf, len);
+        }
     }
     kfree(buf);
     iov.iov_len = len;

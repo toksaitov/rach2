@@ -55,7 +55,8 @@ static const void *fault_at;
 
 /* What the terminal was given and asked. */
 static unsigned char input[64];
-static int ninput, flushes, termios_sets;
+/* The console's Holds, each a stop or restart of its output. */
+static int ninput, flushes, termios_sets, holds;
 static struct ktermios termios_set;
 
 /* The input layer's repeat and LEDs, and what was asked of them. */
@@ -143,6 +144,11 @@ void tty_input_char(struct tty *t, unsigned char c)
     }
 }
 
+void tty_console_hold(void)
+{
+    holds++;
+}
+
 void tty_flush_input(struct tty *t)
 {
     CHECK(t == &console_tty, "the console's input is flushed");
@@ -173,6 +179,14 @@ void input_get_repeat(int *delay_ms, int *period_ms)
 {
     *delay_ms = repeat_delay;
     *period_ms = repeat_period;
+}
+
+/** No keyboard here takes its keys through input.c. */
+int input_keyboard_release(struct evdev *dev, unsigned int keycode)
+{
+    (void)dev;
+    (void)keycode;
+    return 0;
 }
 
 /** No device of a row has keys the console takes. */
@@ -725,6 +739,31 @@ static int typed(const char *s, int n)
 }
 
 /**
+ * Scroll Lock as Linux's Hold key: one stop or restart of the console's output
+ * a press, with no LED of its own, and the Scroll Lock flag and LED that a
+ * stop and a restart of the output set and clear (`kd_scroll_lock`).
+ */
+static void holding(void)
+{
+    unsigned char b = 0;
+
+    led_sets = 0;
+    kd_key_event(&caller, 70, KD_KEY_PRESS);
+    kd_key_event(&caller, 70, KD_KEY_REPEAT);
+    kd_key_event(&caller, 70, KD_KEY_RELEASE);
+    CHECK(holds == 1 && ninput == 0 && led_sets == 0,
+          "Scroll Lock is Hold, once a press, and lights nothing itself");
+    kd_scroll_lock(1);
+    CHECK(led_sets == 1 && leds_lit == LED_SCR && kd_ioctl(KDGKBLED, (uintptr_t)&b) == 0 &&
+              (b & K_SCROLLLOCK),
+          "a stop of the console's output sets Scroll Lock and its LED");
+    kd_scroll_lock(1);
+    CHECK(led_sets == 1, "a second stop changes nothing");
+    kd_scroll_lock(0);
+    CHECK(led_sets == 2 && leds_lit == 0, "a restart clears them");
+}
+
+/**
  * The translating modes: the built-in US keymap through the translator to
  * the terminal, with the cursor mode the console gives, the locks lighting
  * the LEDs, the scrollback's keys spent, K_XLATE's 8 bits and K_METABIT's
@@ -775,6 +814,7 @@ static void translating(void)
     CHECK(led_sets == 0, "a lock leaves LEDs that KDSETLED lit");
     tap(58);
     CHECK(kd_ioctl(KDSETLED, 0xFF) == 0, "the LEDs follow the flags again");
+    holding();
 
     kd_key_event(&caller, 42, KD_KEY_PRESS);
     tap(104);
@@ -941,8 +981,22 @@ static void evdev_repeat(void)
     evdev_close(&f);
 }
 
+/** A stop before the keymap's first use must survive its initialization. */
+static void early_scroll_lock(void)
+{
+    unsigned char flags = 0;
+
+    kd_scroll_lock(1);
+    kd_key_event(&caller, 30, KD_KEY_PRESS);
+    kd_key_event(&caller, 30, KD_KEY_RELEASE);
+    CHECK(kd_ioctl(KDGKBLED, (uintptr_t)&flags) == 0 && (flags & K_SCROLLLOCK),
+          "a key event keeps Scroll Lock set before the first keymap use");
+    kd_scroll_lock(0);
+}
+
 int main(void)
 {
+    early_scroll_lock();
     type_and_screen();
     modes();
     meta();

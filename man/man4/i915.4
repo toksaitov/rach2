@@ -6,6 +6,7 @@
 .Nd Intel Haswell graphics driver
 .Sh SYNOPSIS
 .Cd rach2.i915
+.Cd rach2.i915.disable_display
 .Cd rach2.i915.firstlight
 .Cd rach2.i915fake
 .Pp
@@ -31,6 +32,17 @@ The driver binds a device only when the kernel command line has
 .Cm rach2.i915 .
 Without it the kernel logs the device and leaves the screen to the
 firmware's framebuffer.
+.Pp
+With
+.Cm rach2.i915.disable_display
+as well, as Linux's
+.Ql i915.disable_display ,
+the driver binds the device without its display: the device offers no
+mode setting, and the display, the backlight and the firmware's
+framebuffer, on which the console keeps drawing, stay as the firmware left
+them.
+Unlike Linux, which removes the firmware's framebuffer device in any case,
+the driver leaves it, so that a trial of the GPU leaves the screen alone.
 .Pp
 With
 .Cm rach2.i915fake
@@ -102,6 +114,13 @@ Each ring's user interrupt is enabled and stays masked except while the
 driver waits for that ring's work, the video enhancement ring's among the
 power management events as on Linux; every other source stays masked.
 A ring that does not start is logged, and the device takes no work.
+Before the rings start the driver writes Linux's workarounds for Haswell
+to the GT and to the render engine, and writes them again after a reset
+that loses them; it logs
+.Dq i915: workarounds: applied
+with their numbers, and
+.Dq i915: workarounds: NAME: lost
+for one the chip did not keep.
 .Pp
 With the rings comes the aliasing PPGTT, as Linux runs it on Haswell: one
 table of the GPU's addresses that every context of every program shares,
@@ -133,7 +152,11 @@ busy for more than 95% of an interval of 16 ms at low frequencies, 13 ms
 between and 10 ms near RP0; down when it was busy for less than 85% of
 32 ms; and on the down timeout, to RPe and then RPn.
 Parked, the GT runs at RPn.
-A request unparks it, and it parks again when every ring is idle.
+A request unparks it, and it parks again once every ring is idle and its
+requests are retired, as on Linux: at once when a ring's last request
+completes while something waits for it, and otherwise at the driver's
+retire pass, once a second, so that a client's next frame finds the GT
+awake at the frequency its last one left.
 The bind leaves the GT parked, and logs
 .Dq i915: rps:
 with RPn, RP1, RP0, RPe and the highest frequency allowed.
@@ -210,9 +233,32 @@ An object of
 .Fa size
 bytes rounded up to a page, and its handle.
 .Er EINVAL
-for 0 and
+for 0 or a size that rounds up past 2^64, and
 .Er E2BIG
 past what an object holds.
+.It Dv DRM_IOCTL_I915_GEM_CREATE_EXT
+The object of GEM_CREATE, after the chain of extensions at
+.Fa extensions .
+.Dv I915_GEM_CREATE_EXT_MEMORY_REGIONS
+names the regions it may be placed in, of which there is one, system
+memory, class
+.Dv I915_MEMORY_CLASS_SYSTEM
+instance 0.
+.Dv I915_GEM_CREATE_EXT_PROTECTED_CONTENT
+and
+.Dv I915_GEM_CREATE_EXT_SET_PAT
+fail with
+.Er ENODEV .
+.Er EINVAL
+for a flag, since
+.Dv I915_GEM_CREATE_EXT_FLAG_NEEDS_CPU_ACCESS
+needs a second region; for an unknown extension, or one whose flags or
+reserved words are not 0; and for a region list that is empty, longer than
+seven, names a region twice or one the device lacks, or comes twice;
+.Er E2BIG
+past 512 extensions;
+.Er EFAULT
+for an address that cannot be read; then GEM_CREATE's errors.
 .It Dv DRM_IOCTL_I915_GEM_PREAD , DRM_IOCTL_I915_GEM_PWRITE
 Copy bytes out of the object or into it, after its work is done.
 PREAD reads through the processor's view; PWRITE writes through the
@@ -301,6 +347,13 @@ Whether engines still read or write the object, and a wait for them of
 for ever when it is negative, with the time left written back;
 .Er ETIME
 when the object is still busy at the timeout.
+.It Dv DRM_IOCTL_I915_GEM_THROTTLE
+Wait for the caller's requests that were submitted more than 20 ms ago,
+so that a client keeps at most 20 ms of work queued.
+.Er EIO
+when the GPU is wedged,
+.Er EINTR
+when a signal comes.
 .It Dv DRM_IOCTL_I915_GEM_GET_APERTURE
 The global GTT's size in
 .Fa aper_size ,
@@ -317,8 +370,8 @@ and set
 .Fa retained
 to whether its pages are still there.
 When memory runs short, the kernel frees the pages of an idle object
-marked DONTNEED, unbinding it and revoking its maps; such an object
-is purged, keeps that state, and fails with
+marked DONTNEED of which no dma-buf exists, unbinding it and revoking its
+maps; such an object is purged, keeps that state, and fails with
 .Er EFAULT
 on each later use of its pages, and a touch of a map of it raises
 .Dv SIGBUS .
@@ -337,6 +390,9 @@ copy-on-write break; its next use pins them again, or fails with
 .Er EFAULT
 once they are unmapped.
 Only the address space that made it may pin them.
+A range that starts below the caller's memory, at 0 among others, makes an
+object, as on Linux, whose first use fails with
+.Er EFAULT .
 .Dv I915_USERPTR_PROBE
 asks that the whole range be memory with pages now.
 PREAD and PWRITE fail on it with
@@ -353,7 +409,7 @@ for an unknown flag, no bytes, or a pointer or size not of whole pages;
 .Er E2BIG
 for a size past what an object holds;
 .Er EFAULT
-for a range outside the caller's memory, or with PROBE not wholly in
+for a range that ends past user space, or with PROBE one not wholly in
 memory with pages;
 .Er ENODEV
 for
@@ -369,10 +425,14 @@ rows, and gives it one of the 32 fence registers, the least recently used
 that no fault holds.
 A binding that finds no room in the aperture or the GTT takes the place of
 idle bindings, the least recently used first; one whose object the GPU
-still uses stays.
+still uses stays, and the fault waits for the GPU to finish with it until
+a signal comes.
+The fault never waits for a binding the GPU uses above the aperture: it
+binds a view of the whole object beside it.
 A map whose binding or fence is taken away faults again on its next
-touch; one that finds no room or no fence raises
-.Dv SIGBUS .
+touch; one that finds no room or no fence yet, or whose wait a signal
+ends, returns to the program, which handles the signal and touches the
+page again, as on Linux.
 An allocation of an object's pages that finds no memory fails with
 .Er ENOMEM .
 .Pp
@@ -553,6 +613,9 @@ and gone is passed over, and a point marked
 is added to its timeline with the batch's fence.
 As on Linux, the batch is also ordered after the fence of a syncobj
 named with neither flag, and of one to signal.
+A fence of another driver is waited for 10 seconds at most, Linux's
+default; the batch then runs, and its own fence ends with
+.Er ETIMEDOUT .
 .Dv I915_EXEC_GEN7_SOL_RESET
 clears the four streamout write offsets on the render ring.
 .Pp
@@ -768,10 +831,22 @@ A commit fails with
 .Er EINVAL
 for C8, which needs a gamma table the CRTCs do not have; a modifier that
 does not match the object's tiling; a stride that is not a multiple of 64
-bytes, or of 512 X-tiled; one past 32 KiB on the primary plane or 16 KiB
-on the sprite; a YUV source that starts or ends on an odd pixel; scaling;
-and a primary plane that does not cover the CRTC.
-Each framebuffer shown is bound in the aperture at a multiple of 256 KiB.
+bytes, or of 512 X-tiled; a YUV source that starts or ends on an odd
+pixel; scaling; and a primary plane that does not cover the CRTC.
+A plane reads a stride of at most 8192 pixels, and at most 32 KiB on the
+primary plane and 16 KiB on the sprite.
+A framebuffer with a wider stride, up to 16384 pixels wide, is shown
+through a remapped view of the GTT that holds only the tiles, or for a
+linear framebuffer the pages of each row, that the plane's source
+rectangle covers, as on Linux; a commit fails with
+.Er EINVAL
+when the framebuffer is linear and its stride is not a multiple of 4096
+bytes, or when the view's own stride, the source rectangle's width in
+whole tiles, still passes the plane's.
+Each framebuffer shown, or its view, is bound in the GTT at a multiple
+of 256 KiB; a whole framebuffer goes inside the aperture when room
+there needs no wait and above it otherwise, as Linux binds it on a
+chip without a GMCH.
 .Pp
 Vblanks are counted from the pipe's frame counter.
 A page flip's event comes at the vblank that shows the new framebuffer.
@@ -835,6 +910,17 @@ lists them.
 The fault file of a device bound to the fake chip.
 .El
 .Ss The card in /sys
+While the card is registered its PCI function is shown bound to
+.Ql i915 :
+its
+.Pa driver
+link names
+.Pa /sys/bus/pci/drivers/i915
+and its uevent begins with
+.Ql DRIVER=i915 ,
+as
+.Xr sysfs 5
+gives them.
 The card's directory,
 .Pa /sys/class/drm/cardN ,
 holds Linux's files of the GT's frequency, each a decimal number of MHz

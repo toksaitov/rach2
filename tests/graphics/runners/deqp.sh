@@ -12,7 +12,9 @@
 # mustpass list, the AOSP list GLESN-main for GLES and vk-default with its
 # includes expanded for Vulkan, which the build stages compressed in
 # CTS/mustpass, or a file of one case a line, `#` beginning a comment,
-# compressed with gzip when its name ends in .gz. VERSION is 1.4.7.1, the
+# compressed with gzip when its name ends in .gz, of which the runner takes
+# SUITE's own cases, those of its package, dEQP-GLES2 for gles2, so that one
+# file may list several suites. VERSION is 1.4.7.1, the
 # Lenovo's references, or 1.4.1.1, Mesa 25.0.7's CI pin; CTS is
 # /opt/vk-gl-cts-VERSION. GLES runs glcts and Vulkan deqp-vk, from their
 # directories, with dEQP's watchdog on, its own limit, at 300 s a case and
@@ -151,7 +153,8 @@ mkdir -p "$logs"
 case $list in
     *.gz) gzip -d < "$list" ;;
     *) cat "$list" ;;
-esac | sed -e 's/#.*//' -e 's/[[:space:]]*$//' -e '/^$/d' > "$work/list"
+esac | sed -e 's/#.*//' -e 's/[[:space:]]*$//' -e '/^$/d' |
+    awk -v p="$package." 'index($0, p) == 1' > "$work/list"
 all=$(wc -l < "$work/list" | tr -d ' ')
 awk -v e="$every" -v s="$start" '(NR - s) % e == 0 && NR >= s' "$work/list" > "$work/sample"
 cases=$(wc -l < "$work/sample" | tr -d ' ')

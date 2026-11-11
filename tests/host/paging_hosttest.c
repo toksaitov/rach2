@@ -176,6 +176,26 @@ void k_panic(const char *str)
     exit(1);
 }
 
+/** Nothing: the fault's note is for the panic's report, which no row reads. */
+void k_panic_note_fault(const char *name, uintptr_t ip, long error)
+{
+    (void)name;
+    (void)ip;
+    (void)error;
+}
+
+/** Nothing, as `k_panic_note_fault`. */
+void k_panic_note_address(uintptr_t address)
+{
+    (void)address;
+}
+
+/** No panic reads a process here. */
+int k_panic_reading(void)
+{
+    return 0;
+}
+
 /** Nothing: the host has no task state segment. */
 void tss_set_double_fault_dir(uint32_t dir)
 {
@@ -348,6 +368,13 @@ void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t start, uintptr_t en
 void smp_kernel_mapping_changed(void)
 {
     kernel_changes++;
+}
+
+/** Nothing: the test has no address space that counts its resident pages. */
+void mm_resident_add(const struct page_dir *dir, long pages)
+{
+    (void)dir;
+    (void)pages;
 }
 
 /** Nothing: the host has no TLB. */
@@ -567,6 +594,19 @@ static void fault_rows(void)
               "panics as that stack's overrun");
     fault_row(GUARD_PAGE + PAGE_SIZE, "page fault while in kernel mode",
               "a supervisor fault at the stack's lowest byte panics as any kernel fault");
+}
+
+/** The protection keys are off in the host test, as on a processor without
+ * them. */
+int fpu_pkeys(void)
+{
+    return 0;
+}
+
+/** PKRU with the keys off. */
+uint32_t fpu_pkru(void)
+{
+    return 0;
 }
 
 /** Run every row; 0 when each passes, 1 otherwise. */

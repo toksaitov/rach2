@@ -1,7 +1,8 @@
 /*
  * udelay.c: short waits measured against the 8254 counter, or, on a machine
  * with none, by the HPET or the ACPI PM timer through `udelay_wait`, which
- * the platform sets (platform.c, refclock.c).
+ * the platform sets (platform.c, refclock.c), or by the TSC once it keeps the
+ * clock (pit.c).
  *
  * The device bring-up sequences in this kernel ask for waits in
  * microseconds and milliseconds, and each is a hardware requirement: a wait
@@ -53,7 +54,8 @@
 
 /* The wait that replaces the 8254's, or NULL: `platform_timer_start` sets
  * `refclock_wait_us` here when channel 0 does not count and the HPET or the
- * PM timer does. */
+ * PM timer does, and the reference's start the TSC's when the TSC keeps the
+ * clock. */
 void (*udelay_wait)(uint32_t usec);
 
 /**

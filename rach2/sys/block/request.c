@@ -66,11 +66,12 @@
 #define REQ_DEADLINE_MAX_S    600u
 static uint32_t default_deadline = REQ_DEFAULT_DEADLINE;
 
-static struct block_request *reqs; /* every live request */
-static uint32_t live;              /* how many are on the list */
-static uint32_t next_generation;   /* rising; see req_new */
-static wait_queue_t pool_wq;       /* woken on any completion, freed request or quarantine */
-static volatile uint32_t req_ticks;
+static struct block_request *reqs;  /* every live request */
+static uint32_t live;               /* how many are on the list */
+static uint32_t next_generation;    /* rising; see req_new */
+static wait_queue_t pool_wq;        /* woken on any completion, freed request or quarantine */
+static volatile uint32_t req_ticks; /* the deadlines' clock, in ticks */
+static uint32_t req_seen;           /* `kernel_ticks` at the last tick's call */
 static uint32_t quarantined_count;
 static uint32_t overlap_count; /* completions with another request in flight */
 /* Cumulative, for /proc/disk: quarantines made, callers released with EIO
@@ -81,6 +82,30 @@ static uint32_t release_total;
 static uint32_t release_tick;
 static uint32_t pool_size;  /* the limit: REQ_LIMIT, or rach2.blockpool=N */
 static uint32_t device_cap; /* the most requests one device may hold */
+
+/** The deadlines' clock as it stands now: `req_ticks` and the ticks
+ * `kernel_ticks` has counted since the tick's last call, which a boot
+ * processor's tick that found the big lock held left out. */
+static uint32_t req_clock(void)
+{
+    return req_ticks + ((uint32_t)kernel_ticks - req_seen);
+}
+
+/**
+ * Interrupts off. Count toward `disk-wait-ticks` the ticks request `r`,
+ * leaving flight now, spent in flight since `block_request_tick` last
+ * counted: from the later of `taken_tick` and that call to the clock now,
+ * which the next call, finding it no longer in flight, would leave out.
+ */
+static void req_count_rest(const struct block_request *r)
+{
+    uint32_t from = (int32_t)(r->taken_tick - req_ticks) > 0 ? r->taken_tick : req_ticks;
+    uint32_t now = req_clock();
+
+    if ((int32_t)(now - from) > 0) {
+        block_count_wait_ticks(now - from);
+    }
+}
 
 /** Mask interrupts and return the state `irq_restore` puts back. */
 static uint32_t irq_save(void)
@@ -369,7 +394,8 @@ static struct block_request *req_take(block_device_t *device, int write, uint64_
             r->status = -EIO;
             r->state = BLOCK_REQ_IN_FLIGHT;
             r->generation = ++next_generation;
-            r->deadline = req_ticks + req_period(device);
+            r->taken_tick = req_clock();
+            r->deadline = r->taken_tick + req_period(device);
             r->overdue = 0;
             r->taken_us = timer_now_us();
             r->flags = 0;
@@ -798,6 +824,7 @@ void block_request_complete(struct block_request *request, uint32_t generation, 
     }
     request->status = status;
     request->state = BLOCK_REQ_DONE;
+    req_count_rest(request);
     latency_span(LAT_DISK, request->taken_us, timer_now_us());
     {
         const struct block_request *r;
@@ -896,23 +923,32 @@ uint32_t block_release_tick(void)
 
 /**
  * Every tick a request spends in flight is counted as a wait tick, whether a
- * caller sleeps for it or the USB pump left it running; the suites bound that
- * count on every device. A request quarantined keeps its generation, so the
- * late completion still matches it.
+ * caller sleeps for it or the USB pump left it running, here or, for the ticks
+ * since the last call, at its completion (`req_count_rest`); the suites bound
+ * that count on every device. A request quarantined keeps its generation, so
+ * the late completion still matches it. The clock advances by the ticks counted
+ * since the last call, not by one a call: the boot processor's tick that finds
+ * the big lock held ends without calling this (`tick_waits`, isr.c), and a late
+ * interrupt counts several ticks. A request taken between two calls counts only
+ * the ticks since it was taken, read from the clock as `req_clock` gives it
+ * then.
  */
 void block_request_tick(void)
 {
     struct block_request *r;
+    uint32_t now = (uint32_t)kernel_ticks, passed = now - req_seen;
     int overdue = 0;
     int quarantined = 0;
     int stalled;
 
-    req_ticks++;
+    req_seen = now;
+    req_ticks += passed;
     for (r = reqs; r; r = r->next) {
         if (r->state != BLOCK_REQ_IN_FLIGHT) {
             continue;
         }
-        block_count_wait_tick();
+        block_count_wait_ticks(req_ticks - r->taken_tick < passed ? req_ticks - r->taken_tick
+                                                                  : passed);
         if ((int32_t)(req_ticks - r->deadline) < 0) {
             continue;
         }

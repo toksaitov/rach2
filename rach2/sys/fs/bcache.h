@@ -292,6 +292,17 @@ uint32_t bcache_reserve(block_device_t *dev, uint32_t n);
  * reads nothing unless it is taken for another block first. */
 int bcache_cached(block_device_t *dev, uint64_t blk);
 
+/** Whether `dev`'s block `blk` is in the cache: 0 when it is not, 1 when it
+ * is, and 2 when it is and is dirty, for cachestat(2). */
+int bcache_state(block_device_t *dev, uint64_t blk);
+
+/** Copy a resident buffer's bytes [offset, offset + count) into `out`
+ * without a disk read, a wait or a hold. Return 1, or 0 for an absent,
+ * discarded or busy buffer or a range outside its valid bytes. The caller
+ * holds the big lock, so the copy and the state check are one step. */
+int bcache_copy_cached(block_device_t *dev, uint64_t blk, uint32_t offset, void *out,
+                       uint32_t count);
+
 /** Whether `dev`'s block `blk` is in the cache and held, by a write, a fill
  * or a caller, so that a `bcache_get` of it would sleep until the holder
  * lets it go, the length of a disk request when that is a write or a fill. */

@@ -58,6 +58,7 @@
 #define CMD_RESET_BAT  0x02ff
 #define CMD_NIBBLE_10  0x01f2 /* GETID, its one byte read */
 #define CMD_TP_READ_ID 0x02e1 /* a TrackPoint's identity */
+#define CMD_POLL       0x00eb /* a packet after the ACK, its size in bits 8 to 11 */
 
 /* The protocol versions, which Linux gives as the event devices' version. */
 #define PROTO_V1          0x100
@@ -285,23 +286,19 @@ static struct evdev *bare;
 static int bare_failed; /* the external mouse's registration failed */
 
 /* The packet being assembled, psmouse's: its bytes, how many have come, its
- * size, the tick of the last, and the bad packets since the last good one.
+ * size, and the bad packets since the last good one.
  * A stick's PS/2 packet cut into a pad's makes the packet one byte longer
  * than its size before it is taken apart. */
 static uint8_t packet[8];
 static int pktcnt;
 static int pktsize = 6;
-static uint32_t last_tick;
 static unsigned int out_of_sync;
 
 /* The flush of an interleaving pad's last packet: armed, and its tick. */
 static int flush_armed;
 static uint32_t flush_at;
 
-/* The packets dropped for a pause, which psmouse logs as lost
- * synchronization, and the stick packets of a pad without a stick, which
- * are logged once. */
-static unsigned int sync_losses;
+/* Stick packets from a pad without a stick, logged once. */
 static unsigned int rejected_stick;
 
 /* The name `alps_mouse_name` builds. */
@@ -1503,15 +1500,7 @@ void alps_tick(void)
 
 int alps_byte(uint8_t data)
 {
-    uint32_t now = (uint32_t)kernel_ticks;
-
-    alps_tick(); /* a flush due before this byte, which the tick has not run */
-    if (pktcnt && now - last_tick > MS_TO_TICKS(500)) {
-        sync_losses++;
-        pktcnt = 0;
-        flush_armed = 0;
-    }
-    last_tick = now;
+    alps_tick(); /* flush a packet whose deadline passed before this byte */
     if (pktcnt >= (int)sizeof(packet)) {
         pktcnt = 0;
     }
@@ -1533,6 +1522,18 @@ int alps_byte(uint8_t data)
 int alps_packet_start(void)
 {
     return pktcnt == 0;
+}
+
+void alps_packet_restart(void)
+{
+    pktcnt = 0;
+    out_of_sync = 0;
+    flush_armed = 0;
+}
+
+int alps_reset_after(void)
+{
+    return 2 * pktsize;
 }
 
 /* Command mode. */
@@ -2140,7 +2141,8 @@ static int set_defaults_ss4_v2(void)
 }
 
 /** A version 5 pad's electrodes, and so its size, from its register,
- * Linux's `alps_dolphin_get_device_area`. */
+ * Linux's `alps_dolphin_get_device_area`. Returns -1 for a pad of fewer
+ * than two Y electrodes, whose bitmaps have no place to divide. */
 static int dolphin_get_device_area(void)
 {
     uint8_t param[4];
@@ -2161,6 +2163,10 @@ static int dolphin_get_device_area(void)
     }
     num_x = DOLPHIN_PROFILE_XOFFSET + (param[2] & 0x0F);
     num_y = DOLPHIN_PROFILE_YOFFSET + ((param[2] >> 4) & 0x0F);
+    if (num_y < 2) { /* bitmap_place divides by num_y - 1; Linux does not check */
+        exit_command_mode();
+        return -1;
+    }
     priv.x_bits = num_x;
     priv.y_bits = num_y;
     priv.x_max = (num_x - 1) * DOLPHIN_COUNT_PER_ELECTRODE;
@@ -2524,9 +2530,9 @@ static int register_pad(void)
     uint8_t keys[EVDEV_KEY_BYTES];
 
     k_memset(keys, 0, sizeof(keys));
-    pad = evdev_register(priv.flags & F_DUALPOINT ? "AlpsPS/2 ALPS DualPoint TouchPad"
-                                                  : "AlpsPS/2 ALPS GlidePoint",
-                         EVDEV_BUS_I8042, PSMOUSE_VENDOR, PSMOUSE_ALPS, keys);
+    pad = ps2mouse_register(priv.flags & F_DUALPOINT ? "AlpsPS/2 ALPS DualPoint TouchPad"
+                                                     : "AlpsPS/2 ALPS GlidePoint",
+                            PSMOUSE_ALPS, keys);
     if (!pad) {
         return -1;
     }
@@ -2581,16 +2587,34 @@ const char *alps_mouse_name(const char *proto)
     return mouse_name;
 }
 
-/** Linux's `psmouse_initialize`: the rate, 200 dpi and 1:1 scaling. */
+/** Linux's `psmouse_initialize`: the port's rate, resolution and 1:1
+ * scaling. */
 static void psmouse_initialize(void)
 {
-    uint8_t param[1];
+    ps2mouse_initialize(NULL);
+}
 
-    param[0] = 100;
-    ps2_command(param, CMD_SETRATE);
-    param[0] = 3;
-    ps2_command(param, CMD_SETRES);
-    ps2_command(0, CMD_SETSCALE11);
+int alps_poll(uint8_t badbyte, uint8_t *buf)
+{
+    uint8_t p[8];
+    int failed;
+
+    if (priv.flags & F_PASS) {
+        (void)passthrough_mode_v2(1);
+    }
+    failed = ps2_command(p, CMD_POLL | ((unsigned int)pktsize << 8)) < 0;
+    if (priv.flags & F_PASS) {
+        (void)passthrough_mode_v2(0);
+    }
+    if (failed || (p[0] & priv.mask0) != priv.byte0) {
+        return -1;
+    }
+    /* A first byte of the stick's form: the stick's packet is wanted. */
+    if ((badbyte & 0xc8) == 0x08 && ps2_command(p, CMD_POLL | (3u << 8)) < 0) {
+        return -1;
+    }
+    k_memcpy(buf, p, sizeof(p));
+    return pktsize;
 }
 
 int alps_reconnect(void)

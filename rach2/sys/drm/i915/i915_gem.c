@@ -18,28 +18,6 @@
 #include "../../mm/usercopy.h"
 
 /* ------------------------------------------------------------------------
- * The driver's fences
- */
-
-/** The driver's name, for a sync file's information. */
-static const char *i915_fence_driver(struct dma_fence *fence)
-{
-    (void)fence;
-    return "i915";
-}
-
-/** The timeline's name: the engine's class, as programs number it. */
-static const char *i915_fence_timeline(struct dma_fence *fence)
-{
-    static const char *const names[] = {"rcs", "bcs", "vcs", "vecs"};
-    uint16_t c = ((struct i915_fence *)fence)->uabi_class;
-
-    return c < 4 ? names[c] : "unknown";
-}
-
-const struct dma_fence_ops i915_fence_ops = {i915_fence_driver, i915_fence_timeline, 0, 0};
-
-/* ------------------------------------------------------------------------
  * Pages
  */
 
@@ -99,6 +77,20 @@ int32_t i915_gem_object_pin_pages(struct drm_i915_gem_object *obj)
             return err == -EINVAL ? -EFAULT : err;
         }
     }
+    if (obj->frames || obj->madv != I915_MADV_WILLNEED) {
+        /* Reclaim slept: another caller pinned the pages meanwhile, or the
+         * object was made purgeable, or purged. */
+        unpin(pin);
+        kfree(frames);
+        if (obj->frames) {
+            obj->pages_pin_count++;
+            return 0;
+        }
+        if (obj->madv == __I915_MADV_PURGED) {
+            shmem_free(&obj->pages);
+        }
+        return -EFAULT;
+    }
     obj->frames = frames;
     obj->pin = pin;
     obj->pages_pin_count = 1;
@@ -140,6 +132,102 @@ int i915_gem_object_is_active(const struct drm_i915_gem_object *obj)
         }
     }
     return 0;
+}
+
+/**
+ * Wait for a fence of a reservation until `deadline`, or for ever when it
+ * is negative, as Linux's i915_gem_object_wait_fence
+ * (gem/i915_gem_wait.c:17-33): a request of the driver through
+ * `i915_request_wait` with `flags`, which spins before it asks for the
+ * signal, and any other fence through `dma_fence_wait_until`. Each leaf of
+ * a merge or a timeline is waited for alone, in one walk that holds the
+ * point it is at, so that the merge, which a wait would arm, asks for no
+ * signal, and a leaf that signals meanwhile moves no other out of the
+ * walk. 0, -ETIME or -EINTR; sleeps.
+ */
+static int32_t object_fence_wait(struct dma_fence *f, uint32_t flags, int64_t deadline)
+{
+    struct dma_fence_unwrap u;
+    struct dma_fence *leaf;
+    int64_t now, timeout;
+    int32_t err = 0;
+
+    for (leaf = dma_fence_unwrap_first(f, &u); leaf && err == 0; leaf = dma_fence_unwrap_next(&u)) {
+        if (dma_fence_is_signaled(leaf)) {
+            continue;
+        }
+        if (leaf->ops == &i915_fence_ops) {
+            timeout = -1;
+            if (deadline >= 0) {
+                now = dma_fence_now();
+                timeout = deadline > now ? deadline - now : 0;
+            }
+            err = i915_request_wait((struct i915_request *)leaf, flags, timeout);
+        } else {
+            err = dma_fence_wait_until(leaf, (flags & I915_WAIT_INTERRUPTIBLE) != 0, deadline);
+        }
+    }
+    dma_fence_unwrap_end(&u);
+    return err;
+}
+
+/**
+ * Ask for the signal of each leaf of `f` that has not signalled, as
+ * Linux's flush_lazy_signals enables every fence an i915_active tracks
+ * before __i915_active_wait sleeps (i915_active.c:559-571, 589-620): a
+ * listened request that completes during a later spin then hands its
+ * engine to retirement (gt/intel_breadcrumbs.c:220-235). The leaves are
+ * armed alone, so that a merge asks for no signal. Never sleeps.
+ */
+static void object_fence_arm(struct dma_fence *f)
+{
+    struct dma_fence_unwrap u;
+    struct dma_fence *leaf;
+
+    for (leaf = dma_fence_unwrap_first(f, &u); leaf; leaf = dma_fence_unwrap_next(&u)) {
+        if (!dma_fence_is_signaled(leaf)) {
+            dma_fence_enable_sw_signaling(leaf);
+        }
+    }
+    dma_fence_unwrap_end(&u);
+}
+
+int32_t i915_gem_object_wait_idle(struct drm_i915_gem_object *obj, int intr)
+{
+    struct dma_resv *r = obj->base.resv;
+    struct dma_fence *f;
+    uint32_t i;
+    int32_t err;
+
+    /* Every fence of now armed before any wait, as Linux's unbind; one
+     * added while the wait sleeps is waited for but not armed. */
+    if (fence_busy(r->write)) {
+        object_fence_arm(r->write);
+    }
+    for (i = 0; i < r->nreads; i++) {
+        if (fence_busy(r->reads[i])) {
+            object_fence_arm(r->reads[i]);
+        }
+    }
+    for (;;) {
+        f = fence_busy(r->write) ? r->write : 0;
+        for (i = 0; !f && i < r->nreads; i++) {
+            if (fence_busy(r->reads[i])) {
+                f = r->reads[i];
+            }
+        }
+        if (!f) {
+            return 0;
+        }
+        /* A reference of its own, since the reservation may change while
+         * the wait sleeps. */
+        (void)dma_fence_get(f);
+        err = object_fence_wait(f, intr ? I915_WAIT_INTERRUPTIBLE : 0u, -1);
+        dma_fence_put(f);
+        if (err == -EINTR) {
+            return err;
+        }
+    }
 }
 
 uintptr_t i915_gem_object_frame(struct drm_i915_gem_object *obj, uint32_t pgoff)
@@ -215,9 +303,12 @@ void i915_gem_object_set_cache_coherency(struct drm_i915_gem_object *obj, int le
     obj->cache_dirty = !(obj->cache_coherent & I915_BO_CACHE_COHERENT_FOR_WRITE);
 }
 
-/** The `free` of an object, once its last reference goes: every binding
- * undone, its mmap offsets taken out of the device's space, its pages
- * unpinned and freed, a userptr object's range taken off. */
+/**
+ * The `free` of an object, once its last reference goes, which no request
+ * the chip has not passed holds: every binding undone, its mmap offsets
+ * taken out of the device's space, its pages unpinned and freed, a userptr
+ * object's range taken off. The DRM core has let its fences go by then.
+ */
 static void i915_gem_object_free(struct drm_gem_object *base)
 {
     struct drm_i915_gem_object *obj = (struct drm_i915_gem_object *)base;
@@ -281,12 +372,14 @@ int32_t i915_gem_object_create(struct drm_i915_private *i915, uint64_t size,
 {
     struct drm_i915_gem_object *obj;
 
-    if (size > SHMEM_MAX_SIZE || size > (uint64_t)(size_t)-1 - (PAGE_SIZE - 1)) {
-        return -E2BIG;
-    }
+    /* A size within a page of 2^64 rounds up to 0, which is EINVAL, as
+     * Linux's __i915_gem_object_create_user_ext rounds before it tests. */
     size = (size + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
     if (size == 0) {
         return -EINVAL;
+    }
+    if (size > SHMEM_MAX_SIZE || size > (uint64_t)(size_t)-1) {
+        return -E2BIG;
     }
     obj = i915_gem_object_alloc(i915, size);
     if (!obj) {
@@ -318,26 +411,84 @@ void i915_gem_object_put(struct drm_i915_gem_object *obj)
  * Waits
  */
 
+/** Boost the GT's clock for each request of `f`'s leaves that the chip has
+ * not begun. */
+static void fence_boost(struct dma_fence *f)
+{
+    struct dma_fence_unwrap u;
+    struct dma_fence *leaf;
+
+    for (leaf = dma_fence_unwrap_first(f, &u); leaf; leaf = dma_fence_unwrap_next(&u)) {
+        if (leaf->ops == &i915_fence_ops && !i915_request_started((struct i915_request *)leaf)) {
+            i915_rps_boost((struct i915_request *)leaf);
+        }
+    }
+}
+
+/**
+ * Boost the GT's clock for every request of the object's reservation that
+ * the chip has not begun, its writes and with `all` its reads too, before
+ * a wait, as Linux's i915_gem_object_boost: all of them first, so that the
+ * boost does not hang on the order the wait meets them.
+ */
+static void object_boost(struct drm_i915_gem_object *obj, int all)
+{
+    struct dma_resv *r = obj->base.resv;
+    uint32_t i;
+
+    fence_boost(r->write);
+    for (i = 0; all && i < r->nreads; i++) {
+        fence_boost(r->reads[i]);
+    }
+}
+
 int32_t i915_gem_object_wait(struct drm_i915_gem_object *obj, int all, int64_t timeout_ns)
 {
-    struct dma_fence *f = dma_resv_snapshot(obj->base.resv, all);
+    struct dma_resv *r = obj->base.resv;
+    struct dma_fence **fences;
     int64_t deadline = -1;
-    int32_t err;
+    uint32_t i, n = all ? r->nreads : 0;
+    int32_t err = 0;
 
-    if (!f) {
+    object_boost(obj, all);
+    if (timeout_ns == 0) {
+        /* A test, which asks for no signal. */
+        if (fence_busy(r->write)) {
+            return -ETIME;
+        }
+        for (i = 0; i < n; i++) {
+            if (fence_busy(r->reads[i])) {
+                return -ETIME;
+            }
+        }
+        return 0;
+    }
+    if (timeout_ns > 0) {
+        int64_t now = dma_fence_now();
+
+        deadline = timeout_ns > (int64_t)0x7fffffffffffffffLL - now ? -1 : now + timeout_ns;
+    }
+    /* The fences of now, each with a reference, since the reservation may
+     * change while a wait sleeps, as Linux's iterator walks a snapshot. */
+    if (n == 0xffffffffu || ((size_t)n + 1) * sizeof(*fences) / sizeof(*fences) != (size_t)n + 1) {
         return -ENOMEM;
     }
-    if (timeout_ns == 0) {
-        err = dma_fence_is_signaled(f) ? 0 : -ETIME;
-    } else {
-        if (timeout_ns > 0) {
-            int64_t now = dma_fence_now();
-
-            deadline = timeout_ns > (int64_t)0x7fffffffffffffffLL - now ? -1 : now + timeout_ns;
-        }
-        err = dma_fence_wait_until(f, 1, deadline);
+    fences = (struct dma_fence **)kmalloc(((size_t)n + 1) * sizeof(*fences));
+    if (!fences) {
+        return -ENOMEM;
     }
-    dma_fence_put(f);
+    fences[0] = dma_fence_get(r->write);
+    for (i = 0; i < n; i++) {
+        fences[i + 1] = dma_fence_get(r->reads[i]);
+    }
+    for (i = 0; i <= n; i++) {
+        if (err == 0 && fences[i]) {
+            err = object_fence_wait(fences[i], I915_WAIT_INTERRUPTIBLE | I915_WAIT_PRIORITY,
+                                    deadline);
+        }
+        dma_fence_put(fences[i]);
+    }
+    kfree(fences);
     return err;
 }
 
@@ -893,6 +1044,117 @@ int32_t i915_gem_create_ioctl(struct drm_device *dev, void *data, struct drm_fil
     return err;
 }
 
+#define I915_USER_PTR(v) ((void __user *)(uintptr_t)(v))
+
+/* The most regions MEMORY_REGIONS may name, Linux's INTEL_REGION_UNKNOWN. */
+#define I915_GEM_MAX_REGIONS 7u
+
+/* What GEM_CREATE_EXT's extensions set: whether MEMORY_REGIONS came. */
+struct gem_create_ext {
+    struct drm_i915_private *i915;
+    uint32_t n_placements;
+};
+
+/**
+ * GEM_CREATE_EXT's MEMORY_REGIONS, as Linux's set_placements: Haswell has
+ * one region a program may name, system memory, class 0 instance 0, since
+ * Linux keeps its stolen memory's region private. EINVAL for a pad not 0,
+ * no regions, more than Linux's seven, a region the device lacks, one
+ * named twice, or a second MEMORY_REGIONS in the chain; EFAULT.
+ */
+static int32_t ext_set_placements(uintptr_t ext, void *data)
+{
+    struct gem_create_ext *ext_data = (struct gem_create_ext *)data;
+    struct drm_i915_gem_create_ext_memory_regions args;
+    struct drm_i915_gem_memory_class_instance region;
+    uint32_t i, mask = 0;
+
+    if (copy_from_user(&args, I915_USER_PTR(ext), sizeof(args)) != 0) {
+        return -EFAULT;
+    }
+    if (args.pad || !args.num_regions || args.num_regions > I915_GEM_MAX_REGIONS) {
+        return -EINVAL;
+    }
+    for (i = 0; i < args.num_regions; i++) {
+        if (copy_from_user(&region, I915_USER_PTR(args.regions + i * sizeof(region)),
+                           sizeof(region)) != 0) {
+            return -EFAULT;
+        }
+        if (region.memory_class != I915_MEMORY_CLASS_SYSTEM || region.memory_instance != 0 ||
+            (mask & 1u)) {
+            return -EINVAL;
+        }
+        mask |= 1u;
+    }
+    if (ext_data->n_placements) {
+        return -EINVAL;
+    }
+    ext_data->n_placements = args.num_regions;
+    return 0;
+}
+
+/** PROTECTED_CONTENT, as Linux's ext_set_protected: EINVAL for flags,
+ * else ENODEV, since Haswell has no PXP. */
+static int32_t ext_set_protected(uintptr_t ext, void *data)
+{
+    uint32_t flags;
+
+    (void)data;
+    if (copy_from_user(&flags, I915_USER_PTR(ext + sizeof(struct i915_user_extension)),
+                       sizeof(flags)) != 0) {
+        return -EFAULT;
+    }
+    return flags ? -EINVAL : -ENODEV;
+}
+
+/** SET_PAT, as Linux's ext_set_pat: ENODEV before graphics 12.70. */
+static int32_t ext_set_pat(uintptr_t ext, void *data)
+{
+    (void)ext;
+    (void)data;
+    return -ENODEV;
+}
+
+static const i915_ext_fn gem_create_extensions[3] = {ext_set_placements, ext_set_protected,
+                                                     ext_set_pat};
+
+/**
+ * GEM_CREATE_EXT, as Linux's i915_gem_create_ext_ioctl: GEM_CREATE's
+ * object, after its extensions. EINVAL for a flag but NEEDS_CPU_ACCESS,
+ * and for that one too, which asks for a second region to spill to, and
+ * Haswell has one; the extensions' errors; then GEM_CREATE's.
+ */
+int32_t i915_gem_create_ext_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+{
+    struct drm_i915_gem_create_ext *args = (struct drm_i915_gem_create_ext *)data;
+    struct gem_create_ext ext_data;
+    struct drm_i915_gem_object *obj;
+    int32_t err;
+
+    if (args->flags & ~I915_GEM_CREATE_EXT_FLAG_NEEDS_CPU_ACCESS) {
+        return -EINVAL;
+    }
+    ext_data.i915 = to_i915(dev);
+    ext_data.n_placements = 0;
+    err = i915_user_extensions(args->extensions, gem_create_extensions, 3u, &ext_data);
+    if (err != 0) {
+        return err;
+    }
+    if (args->flags & I915_GEM_CREATE_EXT_FLAG_NEEDS_CPU_ACCESS) {
+        return -EINVAL;
+    }
+    err = i915_gem_object_create(to_i915(dev), args->size, &obj);
+    if (err != 0) {
+        return err;
+    }
+    err = drm_gem_handle_create(file, &obj->base, &args->handle);
+    if (err == 0) {
+        args->size = obj->base.size;
+    }
+    i915_gem_object_put(obj);
+    return err;
+}
+
 /* The widest stride a linear framebuffer of Haswell's primary plane
  * takes, which a dumb buffer's pitch past it is rounded to pages for, as
  * Linux's intel_plane_fb_max_stride gives it. */
@@ -930,7 +1192,8 @@ int32_t i915_gem_dumb_create(struct drm_file *file, struct drm_device *dev,
     return err;
 }
 
-int32_t i915_gem_object_pin_to_display(struct drm_i915_gem_object *obj, uint32_t align,
+int32_t i915_gem_object_pin_to_display(struct drm_i915_gem_object *obj,
+                                       const struct i915_remap_info *remap, uint32_t align,
                                        struct i915_vma **vma)
 {
     int32_t err;
@@ -940,7 +1203,17 @@ int32_t i915_gem_object_pin_to_display(struct drm_i915_gem_object *obj, uint32_t
     if (err != 0) {
         return err;
     }
-    err = i915_vma_pin(obj, 0, 0, I915_PIN_MAPPABLE, align, vma);
+    /* A plane of a chip without a GMCH reads anywhere in the GTT, so the
+     * aperture is only tried first, without a wait, for a normal view, as
+     * Linux's i915_gem_object_pin_to_display_plane. */
+    if (remap) {
+        err = i915_vma_pin_remapped(obj, remap, 0, align, vma);
+    } else {
+        err = i915_vma_pin(obj, 0, 0, I915_PIN_MAPPABLE | I915_PIN_NONBLOCK, align, vma);
+        if (err != 0) {
+            err = i915_vma_pin(obj, 0, 0, 0, align, vma);
+        }
+    }
     if (err != 0) {
         return err;
     }
@@ -1143,16 +1416,12 @@ static uint32_t busy_write_id(uint16_t id)
  * fence adds nothing, as on Linux. */
 static uint32_t busy_check(struct dma_fence *fence, uint32_t (*flag)(uint16_t))
 {
-    uint32_t i, n, busy = 0;
+    struct dma_fence_unwrap u;
+    struct dma_fence *leaf;
+    uint32_t busy = 0;
 
-    if (!fence) {
-        return 0;
-    }
-    n = dma_fence_count(fence);
-    for (i = 0; i < n; i++) {
-        struct dma_fence *leaf = dma_fence_at(fence, i);
-
-        if (leaf && leaf->ops == &i915_fence_ops && !dma_fence_is_signaled(leaf)) {
+    for (leaf = dma_fence_unwrap_first(fence, &u); leaf; leaf = dma_fence_unwrap_next(&u)) {
+        if (leaf->ops == &i915_fence_ops && !dma_fence_is_signaled(leaf)) {
             busy |= flag(((struct i915_fence *)leaf)->uabi_class);
         }
     }
@@ -1326,7 +1595,10 @@ const struct drm_ioctl_desc i915_ioctls[I915_NUM_IOCTLS] = {
      "I915_GEM_CONTEXT_SETPARAM"},
     {DRM_IOCTL_I915_QUERY, DRM_RENDER_ALLOW, i915_query_ioctl, "I915_QUERY"},
     {DRM_IOCTL_I915_GEM_BUSY, DRM_RENDER_ALLOW, i915_gem_busy_ioctl, "I915_GEM_BUSY"},
+    {DRM_IOCTL_I915_GEM_THROTTLE, DRM_RENDER_ALLOW, i915_gem_throttle_ioctl, "I915_GEM_THROTTLE"},
     {DRM_IOCTL_I915_GEM_CREATE, DRM_RENDER_ALLOW, i915_gem_create_ioctl, "I915_GEM_CREATE"},
+    {DRM_IOCTL_I915_GEM_CREATE_EXT, DRM_RENDER_ALLOW, i915_gem_create_ext_ioctl,
+     "I915_GEM_CREATE_EXT"},
     {DRM_IOCTL_I915_GEM_PREAD, DRM_RENDER_ALLOW, i915_gem_pread_ioctl, "I915_GEM_PREAD"},
     {DRM_IOCTL_I915_GEM_PWRITE, DRM_RENDER_ALLOW, i915_gem_pwrite_ioctl, "I915_GEM_PWRITE"},
     {DRM_IOCTL_I915_GEM_MMAP, DRM_RENDER_ALLOW, i915_gem_mmap_ioctl, "I915_GEM_MMAP"},

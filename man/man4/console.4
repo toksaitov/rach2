@@ -50,6 +50,20 @@ The slave is
 where N is the lowest index not used by a live pair.
 A network login uses one pair per session.
 Master writes become slave input.
+Master writes are serialized: a write waits while another is in
+progress, or fails with
+.Er EAGAIN
+when non-blocking.
+A master write that fills the input returns the bytes it fed.
+One that has fed no byte waits for room, or fails with
+.Er EAGAIN
+when non-blocking.
+The master's TCIOFF and TCION wait for the same write lock even on a
+non-blocking descriptor; a signal that interrupts the wait gives
+.Er EINTR .
+With software flow control enabled, a flow character in the waiting
+input can act at once if the input queue has room to retain the prefix
+through it; the write takes and returns that prefix before any wait.
 Slave output and echo enter the master's 4096-byte ring.
 A slave writer the ring has no room for waits until the master reads, as
 on Linux, or, when non-blocking, returns what fit or fails with
@@ -61,7 +75,8 @@ Linux's terminal write lock keeps it, so two processes' lines are not
 mixed within a write; a non-blocking writer that finds another write in
 progress fails with
 .Er EAGAIN .
-Echo that arrives while the ring is full is discarded.
+Echo that arrives while the ring is full is held in the discipline's
+echo buffer, whose oldest byte is discarded when that buffer fills too.
 The slave has the same line discipline and job control as the console.
 .Xr stat 2
 on the slave gives the second it last returned input to a reader as its
@@ -132,7 +147,22 @@ normally Ctrl-C and Ctrl-Z, send
 .Dv SIGINT
 and
 .Dv SIGTSTP
-to the foreground process group.
+to the foreground process group, and discard the unread input and the
+output not yet shown, unless
+.Dv NOFLSH
+is set.
+With
+.Dv IXON ,
+which a new terminal has, Ctrl-S stops the terminal's output and Ctrl-Q
+restarts it, and neither reaches a reader; with
+.Dv IXANY
+any key restarts it.
+A write waits while output is stopped, Scroll Lock and its LED are on,
+and the Hold key, Scroll Lock, stops and restarts output, as on Linux.
+.Dv TCXONC
+does the same from a program, as
+.Xr ioctl 2
+describes.
 .Pp
 A background process reading its controlling terminal receives
 .Dv SIGTTIN .
@@ -141,8 +171,19 @@ A background write generates
 only when
 .Dv TOSTOP
 is set.
-If the applicable signal is blocked or ignored, the operation fails with
-.Er EIO .
+A blocked or ignored
+.Dv SIGTTIN
+fails the read with
+.Er EIO ,
+and a blocked or ignored
+.Dv SIGTTOU
+lets the write go ahead, as on Linux.
+A write that would post
+.Dv SIGTTOU
+from an orphaned process group, which no member's parent in the
+session can continue, fails with
+.Er EIO
+instead.
 .Ss Screen
 The screen is a terminal whose escape sequences the terminfo entry
 .Ql rach2

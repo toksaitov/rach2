@@ -6,6 +6,7 @@
 .Nd run a Windows game through Proton and WineD3D on OpenGL
 .Sh SYNOPSIS
 .Nm
+.Op Fl -umu
 .Op Fl -id Ar id
 .Op Fl -prefix Ar directory
 .Op Fl -print
@@ -44,20 +45,10 @@ When the compatibility directory has no
 .Nm
 first makes the prefix: it runs
 .Li wineboot -u
-through Proton, then sets
-.Li VideoMemorySize
-under
-.Li HKCU\eSoftware\eWine\eDirect3D
-to the machine's memory in MiB, the
-.Li MemTotal
-of
-.Pa /proc/meminfo .
-The GPUs Rach2 drives draw from system memory, and WineD3D otherwise takes
-the size the GL driver reports, which virgl gives as a size no memory has.
-It prints
-.Dl rach2-game: prefix: made DIR with VideoMemorySize N MiB
+through Proton and prints
+.Dl rach2-game: prefix: made DIR
 on standard error before it starts the program.
-An existing prefix keeps its key.
+WineD3D takes the video memory from the GL driver, as under Linux.
 .Pp
 .Fl -print
 prints the effective settings, one
@@ -68,6 +59,98 @@ No program is needed in this mode.
 prints usage.
 .Fl -
 ends option processing.
+.Ss umu
+.Fl -umu
+runs Proton through
+.Xr umu-run 1 ,
+in the container of the pinned Steam Linux Runtime 4.0, steamrt4, as games
+run outside Steam under Linux.
+The settings and the prefix are the direct route's.
+umu takes the compatibility directory as
+.Ev WINEPREFIX
+and links its
+.Pa pfx
+to the directory itself unless
+.Pa pfx
+is already a directory, as in one the direct route made.
+.Pp
+umu keeps the runtime in
+.Pa $XDG_DATA_HOME/umu/steamrt4
+or
+.Pa $HOME/.local/share/umu/steamrt4 .
+When that copy's
+.Pa VERSIONS.txt
+differs from
+.Pa /opt/umu/VERSIONS.txt ,
+or it has none,
+.Nm
+unpacks
+.Pa /opt/umu/SteamLinuxRuntime_4.tar.xz
+there, under umu's lock
+.Pa umu.lock
+beside it, replacing the old copy, and prints
+.Dl rach2-game: umu: unpacked the Steam Linux Runtime VERSION in DIR
+on standard error.
+The copy takes 711 MB.
+umu checks it with
+.Nm pv-verify
+on the first start and downloads nothing; with
+.Ev UMU_RUNTIME_UPDATE
+set to 0 it does not update the runtime either.
+.Ss Crysis
+The x86-64 GNU root also provides
+.Nm crysis.sh .
+An administrator first mounts the data partition writable at
+.Pa /data
+and creates
+.Pa /data/crysis
+owned by the user who will play.
+As that user, run:
+.Bd -literal -offset indent
+crysis.sh install '/data/installers/setup_crysis_2.0.0.7_(84418).exe'
+crysis.sh verify
+crysis.sh run
+.Ed
+.Pp
+Keep the installer's two
+.Pa .bin
+files beside its executable.
+The installer checks their SHA-256 hashes, unpacks with
+.Xr innoextract 1 ,
+and checks all 2,358 game files against the system's manifest before
+publishing
+.Pa /data/crysis/game .
+An existing game tree is refused; use
+.Cm verify
+to check it again.
+.Pp
+.Cm run
+starts
+.Pa Bin64/Crysis.exe
+with
+.Fl dx9
+from its own directory through
+.Nm rach2-game
+with game ID 17300.
+Additional arguments follow these settings.
+The game's
+.Fl userpath
+is
+.Pa Z:\edata\ecrysis\esaves ;
+its compatibility directory, logs, Steam client directory and Mesa cache
+are respectively
+.Pa /data/crysis/compat ,
+.Pa /data/crysis/logs ,
+.Pa /data/crysis/steam
+and
+.Pa /data/crysis/cache/mesa .
+Mesa's on-disk cache is enabled.
+With
+.Ev MESA_SHADER_CACHE_SHOW_STATS=true
+Mesa prints the cache's hits and misses only when it destroys the cache,
+which Crysis's exit through Wine has not done.
+These files and the saves survive an update of the system's root.
+The game tree needs write access too, for its own logs.
 .Sh ENVIRONMENT
 .Nm
 sets these variables for Proton:
@@ -87,6 +170,33 @@ The chosen game ID.
 1, enabling Proton's log and DLL load records.
 .El
 .Pp
+With
+.Fl -umu
+it also sets these for umu:
+.Bl -tag -width UMU_RUNTIME_UPDATE
+.It Ev PROTONPATH
+.Pa /opt/proton .
+.It Ev GAMEID
+.Li umu- Ns Ar id ,
+from which umu sets
+.Ev SteamGameId
+and
+.Ev SteamAppId
+to
+.Ar id .
+.It Ev WINEPREFIX
+The compatibility directory.
+.It Ev UMU_RUNTIME_UPDATE
+0, turning the runtime's update off.
+.El
+.Fl -print
+then also prints these and
+.Ev UMU_RUNTIME ,
+the runtime's directory.
+umu sets
+.Ev STEAM_COMPAT_CLIENT_INSTALL_PATH
+to the empty string inside the container.
+.Pp
 .Ev PROTON_LOG_DIR
 chooses the log directory; its default is
 .Pa logs
@@ -94,6 +204,11 @@ in the compatibility directory.
 Proton writes
 .Pa steam-ID.log
 there, replacing the preceding launch's log.
+.Pp
+.Ev PULSE_LATENCY_MSEC
+is kept when set; otherwise it is 60, the milliseconds of sound that
+libpulse asks PulseAudio to hold for each of Wine's streams, in place of
+Wine's own 30.
 .Pp
 .Ev STEAM_COMPAT_CLIENT_INSTALL_PATH
 is kept when set; otherwise it names
@@ -105,19 +220,30 @@ The launcher creates this directory for Proton without installing Steam.
 .Ev DISPLAY
 and the desktop session's other variables pass through unchanged.
 .Sh EXIT STATUS
-Usage errors exit with status 2.
+Usage errors exit with status 2, as do the launcher's own errors before it
+starts Proton: a root other than x86-64, a missing
+.Pa /opt/proton/proton ,
+a missing
+.Nm umu-run
+or a missing runtime archive with
+.Fl -umu .
 A failed
 .Li wineboot
-or
-.Li reg
-in a new prefix exits with status 1.
-Otherwise the exit status is Proton's.
+in a new prefix, a
+.Li wineboot
+that leaves no
+.Pa pfx/user.reg ,
+or a failed unpacking of the runtime, exits with status 1.
+Otherwise the exit status is Proton's, or umu's with
+.Fl -umu .
 .Sh EXAMPLES
 .Bd -literal -offset indent
-rach2-game --id 17300 --prefix /data/crysis/compat /data/crysis/Bin64/Crysis.exe -dx9
+rach2-game --id 17300 --prefix /data/crysis/compat /data/crysis/game/Bin64/Crysis.exe -dx9
+rach2-game --umu --id 17300 --prefix /data/crysis/compat /data/crysis/game/Bin64/Crysis.exe -dx9
 rach2-game --id 17300 --print
 .Ed
 .Sh SEE ALSO
 .Xr innoextract 1 ,
 .Xr proton 1 ,
+.Xr umu-run 1 ,
 .Xr desktop 7

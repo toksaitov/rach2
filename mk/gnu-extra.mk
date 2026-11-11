@@ -69,7 +69,9 @@ GNU_DEBIAN_LISTS = debian/mesa.list debian/desktop.list debian/browsers.list deb
 GNU_DEBIAN_SOURCES = vendor/gnu/debian/fetch_debs.sh vendor/gnu/debian/fetch_asset.sh \
                      vendor/gnu/debian/resolve_debs.py \
                      $(addprefix vendor/gnu/,$(GNU_DEBIAN_LISTS)) vendor/gnu/fetch.sh vendor/gnu/sources-extra.txt
-GNU_PROTON_SOURCES = vendor/gnu/proton/fetch_proton.sh vendor/gnu/debian/fetch_asset.sh vendor/gnu/fetch.sh vendor/gnu/sources-extra.txt
+GNU_PROTON_SOURCES = vendor/gnu/proton/fetch_proton.sh vendor/gnu/proton/fetch_dinput.sh \
+                     vendor/gnu/proton/prepare_dinput.py vendor/gnu/proton/dinput-shutdown.patch \
+                     vendor/gnu/proton/sources.txt vendor/gnu/debian/fetch_asset.sh vendor/gnu/fetch.sh vendor/gnu/sources-extra.txt
 GNU_VENUS_SOURCES = vendor/gnu/debian/fetch_venus.sh vendor/gnu/debian/fetch_asset.sh vendor/gnu/debian/venus.list
 GNU_WEBGL_SOURCES = vendor/gnu/debian/fetch_webgl.sh vendor/gnu/debian/fetch_asset.sh vendor/gnu/fetch.sh vendor/gnu/sources-extra.txt
 
@@ -121,7 +123,7 @@ $(GNU_I386_STAMP): $(GNU_I386_SOURCES) | $(SHA256TOOL) $(ETUDE)
 
 $(GNU_PROTON_STAMP): $(GNU_PROTON_SOURCES) | $(SHA256TOOL) $(ETUDE)
 	@rm -f $@
-	@$(GNU_ASSET_STEP) -n gnu-proton -t $@ $(STEP_INPUTS) -o proton \
+	+@$(GNU_ASSET_STEP) -c clang -n gnu-proton -t $@ $(STEP_INPUTS) -o proton \
 	    -- $(call GNU_STEP_RUN,vendor/gnu/proton/fetch_proton.sh)
 
 $(GNU_WEBGL_STAMP): $(GNU_WEBGL_SOURCES) | $(SHA256TOOL) $(ETUDE)
@@ -130,13 +132,15 @@ $(GNU_WEBGL_STAMP): $(GNU_WEBGL_SOURCES) | $(SHA256TOOL) $(ETUDE)
 	    -- $(call GNU_STEP_RUN,vendor/gnu/debian/fetch_webgl.sh)
 
 # The games layer (vendor/gnu/games/Readme.md): a Debian closure of its own,
-# from the same snapshot, which install_root.sh installs after the desktop's.
+# from the same snapshot, which install_root.sh installs after the desktop's,
+# and on x86-64 umu-launcher with the Steam Linux Runtime's archive in umu/.
 GNU_GAMES_STAMP = $(GNU_OUT)/games.stamp
 GNU_STEP_STAMPS += $(GNU_GAMES_STAMP)
 GNU_GAMES_LISTS = games/layer.list games/native.list
 GNU_GAMES_SOURCES = vendor/gnu/debian/fetch_debs.sh vendor/gnu/debian/fetch_asset.sh \
                     vendor/gnu/debian/resolve_debs.py \
-                    $(addprefix vendor/gnu/,$(GNU_GAMES_LISTS)) vendor/gnu/fetch.sh vendor/gnu/sources-extra.txt
+                    $(addprefix vendor/gnu/,$(GNU_GAMES_LISTS)) vendor/gnu/fetch.sh vendor/gnu/sources-extra.txt \
+                    vendor/gnu/games/fetch_umu.sh vendor/gnu/games/umu.list
 
 .PHONY: gnu-games
 gnu-games: $(GNU_GAMES_STAMP)
@@ -144,9 +148,10 @@ gnu-games: $(GNU_GAMES_STAMP)
 $(GNU_GAMES_STAMP): $(GNU_GAMES_SOURCES) | $(SHA256TOOL) $(ETUDE)
 	@rm -f $@
 	@$(GNU_ASSET_STEP) -n gnu-games -t $@ $(STEP_INPUTS) \
-	    -o debian/games -o work/debian/games/files -o work/debian/games/closure.txt \
+	    -o debian/games -o work/debian/games/files -o work/debian/games/closure.txt -o umu \
 	    -- sh -c 'RACH2_ARCH=$(ARCH) RACH2_GNU_OUT="$$ETUDE_STEP_ROOT" \
-	        GNU_DEBIAN_LISTS="$(GNU_GAMES_LISTS)" ./vendor/gnu/debian/fetch_debs.sh games'
+	        GNU_DEBIAN_LISTS="$(GNU_GAMES_LISTS)" ./vendor/gnu/debian/fetch_debs.sh games && \
+	        RACH2_ARCH=$(ARCH) RACH2_GNU_OUT="$$ETUDE_STEP_ROOT" ./vendor/gnu/games/fetch_umu.sh'
 
 # The video layer (vendor/gnu/debian/Readme.md): libva, Intel's i965 VA
 # driver and vainfo, a Debian closure of its own from the desktop's
@@ -211,6 +216,31 @@ $(GNU_IGT_STAMP): $(GNU_IGT_SOURCES) | $(SHA256TOOL) $(ETUDE)
 	@$(GNU_ASSET_STEP) -n gnu-igt -t $@ $(STEP_INPUTS) -o igt -o work/igt \
 	    -- $(call GNU_STEP_RUN,vendor/gnu/igt/build_igt.sh)
 	@test -x $(GNU_OUT)/igt/usr/bin/igt_runner || { echo "gnu: igt: the root has no usr/bin/igt_runner" >&2; exit 1; }
+
+# Weston 14.0.2 rebuilt from Debian's source package with Rach2's patches in
+# the Debian builder guest (vendor/gnu/games/weston/build_weston.sh), for
+# x86-64 alone. Like IGT, it builds where the layer builds on an x86-64 Linux
+# host, and mk/gnu-image.mk's rule for that host alone stages it in place of
+# the desktop closure's Weston; a root made in the tooling machine keeps
+# Debian's. The builder's files are inputs, as IGT's are.
+GNU_WESTON_STAMP = $(GNU_OUT)/weston.stamp
+GNU_STEP_STAMPS += $(GNU_WESTON_STAMP)
+GNU_WESTON_SOURCES = $(addprefix vendor/gnu/games/weston/,build_weston.sh sources.txt series debs.sha256 \
+                         kiosk-active-tree.patch kiosk-fullscreen-centre.patch xwm-emulated-mode.patch \
+                         xwm-mapped-managed.patch pointer-constraint-view.patch version.patch) \
+                     vendor/gnu/debian/fetch_asset.sh \
+                     $(addprefix tests/graphics/debian-ref/,debian-ref.sh image packages setup.sh.in \
+                         user-data.in meta-data network-config) \
+                     tests/graphics/guest-env.sh rach2/qemu_devices.sh
+
+.PHONY: gnu-weston
+gnu-weston: $(GNU_WESTON_STAMP)
+
+$(GNU_WESTON_STAMP): $(GNU_WESTON_SOURCES) | $(SHA256TOOL) $(ETUDE)
+	@rm -f $@
+	@$(GNU_ASSET_STEP) -n gnu-weston -t $@ $(STEP_INPUTS) -o weston -o work/weston \
+	    -- $(call GNU_STEP_RUN,vendor/gnu/games/weston/build_weston.sh)
+	@test -x $(GNU_OUT)/weston/usr/bin/weston || { echo "gnu: weston: the stage has no usr/bin/weston" >&2; exit 1; }
 
 # VK-GL-CTS 1.4.1.1 and 1.4.7.1, deqp-vk and glcts for the surfaceless EGL
 # target, built in the same builder guest as IGT's tests

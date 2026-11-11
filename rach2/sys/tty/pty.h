@@ -50,12 +50,15 @@ struct pty {
     /* The master's readers, writers and pollers; the slave's space_wq. */
     wait_queue_t m_read_wq;
 
-    int master_open; /* the master descriptor is open */
-    int slave_opens; /* count of open slave descriptions (distinct OFDs) */
-    int hung_up;     /* every slave description has closed since one opened */
-    int locked;      /* TIOCSPTLCK: 1 until unlockpt() writes 0 */
-    int packet;      /* TIOCPKT: each master read begins with a status byte */
-    int writing;     /* a slave write is in progress, which no other enters */
+    int master_open;   /* the master descriptor is open */
+    int slave_opens;   /* count of open slave descriptions (distinct OFDs) */
+    int hung_up;       /* every slave description has closed since one opened */
+    int locked;        /* TIOCSPTLCK: 1 until unlockpt() writes 0 */
+    int packet;        /* TIOCPKT: each master read begins with a status byte */
+    uint8_t pktstatus; /* pending TIOCPKT_* bits for the next packet read */
+    int writing;       /* a slave write is in progress, which no other enters */
+    int m_writing;     /* a master write is in progress, which no other enters */
+    int m_stopped;     /* TCOOFF on the master: its writes wait for TCOON */
 
     /* Ownership of the slave (/dev/pts/N), the state a login server sets
      * with chown/chmod before handing the terminal to the user. Set at
@@ -97,6 +100,16 @@ int pty_open_master(int flags);
  * TIOCSCTTY.
  */
 int pty_open_slave(int index, int flags);
+
+struct kernel_iovec;
+
+/** Write an imported vector to the held master descriptor `e`, with the
+ * master's write lock held across every element and user copy. `iov` has
+ * `count` kernel-owned elements, range-checked and capped at USER_RW_MAX
+ * in total by `iov_import`. Returns the bytes fed before a short write or
+ * fault, or a negative errno when none were fed, as the master's write
+ * does. No bytes returns 0 without taking the lock. May sleep. */
+int32_t pty_master_writev(struct fd_entry *e, const struct kernel_iovec *iov, int count);
 
 /** Index of the pty whose slave is session `sid`'s controlling terminal, or
  * -1 (always for `sid` 0). /dev/tty opens the caller's controlling pty
@@ -142,6 +155,10 @@ struct pty *pty_get(int index);
  * /dev/pts/N, 136:N.
  */
 int tty_controlling(int sid, uint32_t *dev, int *fg_pgid);
+
+/** The controlling terminal of the session `sid`, the console or a pty's
+ * slave, or NULL when the session has none (always for `sid` 0). */
+struct tty *tty_session_tty(int sid);
 
 /**
  * Release every pty slave whose session is `sid` when `sid` is `pid`, a

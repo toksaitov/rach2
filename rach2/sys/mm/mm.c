@@ -18,6 +18,31 @@
 /* The address spaces that keep a program's file, linked by `exe_next`. */
 static struct mm *exe_list;
 
+/* The address spaces by their directory, in chains linked by `dir_next`,
+ * for `mm_resident_add`, whose callers have the directory alone. */
+#define DIR_CHAINS 64u
+
+static struct mm *dir_table[DIR_CHAINS];
+
+/** The chain of `dir_table` for the directory `dir`, by its page's number. */
+static struct mm **dir_chain(const struct page_dir *dir)
+{
+    return &dir_table[((uintptr_t)dir / PAGE_SIZE) % DIR_CHAINS];
+}
+
+/** Take `mm` off the chain of its directory, before the directory goes. */
+static void dir_forget(struct mm *mm)
+{
+    struct mm **link = dir_chain(mm->dir);
+
+    while (*link && *link != mm) {
+        link = &(*link)->dir_next;
+    }
+    if (*link) {
+        *link = mm->dir_next;
+    }
+}
+
 struct mm *mm_new(void)
 {
     struct mm *mm = kzalloc(sizeof(*mm));
@@ -34,6 +59,10 @@ struct mm *mm_new(void)
     mm->users = 1;
     mm->holds = 1;
     mm->dumpable = 1;
+    mm->pkeys = 1;
+    mm->pkey_exec = -1;
+    mm->dir_next = *dir_chain(mm->dir);
+    *dir_chain(mm->dir) = mm;
     return mm;
 }
 
@@ -60,6 +89,8 @@ void mm_put(struct mm *mm)
     arch_mm_release(mm);
     smp_space_release(mm->dir);
     free_user_pages(mm->dir);
+    mm_resident_add(mm->dir, -(long)mm->resident);
+    dir_forget(mm);
     free_page_directory(mm->dir);
     mm->dir = NULL;
     mm->space_root = 0;
@@ -213,31 +244,73 @@ void mm_copy_info(struct mm *to, const struct mm *from)
     to->env_end = from->env_end;
     k_memcpy(to->auxv, from->auxv, sizeof(to->auxv));
     to->dumpable = from->dumpable;
+    to->membarrier = from->membarrier;
     to->compat = from->compat;
     to->vdso = from->vdso;
+    to->pkeys = from->pkeys;
+    to->pkey_exec = from->pkey_exec;
 }
 
 unsigned long mm_resident(const struct mm *mm)
 {
-    unsigned long n = 0, present, dirty;
-    const vma_t *r;
+    return mm->resident;
+}
 
-    for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
-        paging_user_count(mm->dir, r->start, r->end, &present, &dirty);
-        n += present;
+unsigned long mm_resident_peak(const struct mm *mm)
+{
+    return mm->resident > mm->resident_peak ? mm->resident : mm->resident_peak;
+}
+
+void mm_resident_add(const struct page_dir *dir, long pages)
+{
+    struct mm *mm = current_proc ? current_proc->mm : NULL;
+
+    if (pages == 0) {
+        return;
     }
-    return n;
+    if (!mm || mm->dir != dir) {
+        mm = *dir_chain(dir);
+        while (mm && mm->dir != dir) {
+            mm = mm->dir_next;
+        }
+        if (!mm) {
+            return;
+        }
+    }
+    if (pages > 0) {
+        mm->resident += (unsigned long)pages;
+        return;
+    }
+    if (mm->resident > mm->resident_peak) {
+        mm->resident_peak = mm->resident;
+    }
+    mm->resident -= (unsigned long)-pages < mm->resident ? (unsigned long)-pages : mm->resident;
+}
+
+void mm_note_anon(struct mm *mm, uintptr_t start, uintptr_t end)
+{
+    struct paging_frame_counts counts;
+    vma_t *r;
+
+    for (r = vm_lower(&mm->vm, start); r && r->start < end; r = vm_next(r)) {
+        if (!r->anon && !r->file && r->type != VM_SHARED && !(r->prot & VM_PROT_IO)) {
+            paging_user_frames(mm->dir, r->start, r->end, &counts);
+            r->anon = counts.frames > 0;
+        }
+    }
 }
 
 void mm_drop(struct process *p)
 {
     struct mm *mm = p->mm;
 
+    vm_policy_put(p->mempolicy);
+    p->mempolicy = NULL;
     if (!mm) {
         return;
     }
     if (mm->users == 1 && p->tg) {
-        unsigned long kb = mm_resident(mm) * (PAGE_SIZE / 1024u);
+        unsigned long kb = mm_resident_peak(mm) * (PAGE_SIZE / 1024u);
 
         if (kb > p->tg->maxrss_kb) {
             p->tg->maxrss_kb = kb;

@@ -1,0 +1,56 @@
+[   73.436000] i915: hangcheck: rcs0: no heartbeat in 2500 ms: breadcrumb 1152 of 1157, ACTHD 0x007af480, was 0x007af480
+[   73.436000] i915: hang: GPU HANG: ecode 7:1:85dffffc, in read-front [287]
+[   73.538000] i915: ring stop: timeout after 100000 us: register 0x209c reads 0x4100
+[   73.538000] i915: reset: rcs0 for stopped heartbeat on rcs0
+[   73.538000] i915: reset: read-front[287] context reset due to GPU hang
+[   73.538000] i915: reset: context read-front[287]: guilty 1, banned
+[   73.538000] i915: reset: client read-front[287]: gained 3 ban score, now 3
+[   79.118000] i915: hangcheck: rcs0: no heartbeat in 2500 ms: breadcrumb 1177 of 1181, ACTHD 0x006bc480, was 0x006bc480
+[   79.118000] i915: hang: GPU HANG: ecode 7:1:85dffffc, in read-front [310]
+[   79.219000] i915: ring stop: timeout after 100000 us: register 0x209c reads 0x4100
+[   79.219000] i915: reset: rcs0 for stopped heartbeat on rcs0
+[   79.219000] i915: reset: read-front[310] context reset due to GPU hang
+[   79.219000] i915: reset: context read-front[310]: guilty 1, banned
+[   79.219000] i915: reset: client read-front[310]: gained 3 ban score, now 3
+[   84.568000] i915: hangcheck: rcs0: no heartbeat in 2500 ms: breadcrumb 1260 of 1264, ACTHD 0x006fd480, was 0x006fd480
+[   84.568000] i915: hang: GPU HANG: ecode 7:1:85dffffc, in read-front [337]
+[   84.670000] i915: ring stop: timeout after 100000 us: register 0x209c reads 0x4100
+[   84.670000] i915: reset: rcs0 for stopped heartbeat on rcs0
+[   84.670000] i915: reset: read-front[337] context reset due to GPU hang
+[   84.670000] i915: reset: context read-front[337]: guilty 1, banned
+[   84.670000] i915: reset: client read-front[337]: gained 3 ban score, now 3
+[   90.054000] i915: hangcheck: rcs0: no heartbeat in 2500 ms: breadcrumb 1367 of 1371, ACTHD 0x00701480, was 0x00701480
+[   90.054000] i915: hang: GPU HANG: ecode 7:1:85dffffc, in read-front [352]
+[   90.155000] i915: ring stop: timeout after 100000 us: register 0x209c reads 0x4100
+[   90.155000] i915: reset: rcs0 for stopped heartbeat on rcs0
+[   90.155000] i915: reset: read-front[352] context reset due to GPU hang
+[   90.155000] i915: reset: context read-front[352]: guilty 1, banned
+[   90.155000] i915: reset: client read-front[352]: gained 3 ban score, now 3
+[   95.641000] i915: hangcheck: rcs0: no heartbeat in 2500 ms: breadcrumb 1490 of 1494, ACTHD 0x0064c480, was 0x0064c480
+[   95.641000] i915: hang: GPU HANG: ecode 7:1:85dffffc, in read-front [367]
+[   95.743000] i915: ring stop: timeout after 100000 us: register 0x209c reads 0x4100
+[   95.743000] i915: reset: rcs0 for stopped heartbeat on rcs0
+[   95.743000] i915: reset: read-front[367] context reset due to GPU hang
+[   95.743000] i915: reset: context read-front[367]: guilty 1, banned
+[   95.743000] i915: reset: client read-front[367]: gained 3 ban score, now 3
+[  101.285000] i915: hangcheck: rcs0: no heartbeat in 2500 ms: breadcrumb 1500 of 1505, ACTHD 0x0064c480, was 0x0064c480
+[  101.285000] i915: hang: GPU HANG: ecode 7:1:85dffffc, in read-front [390]
+[  101.386000] i915: ring stop: timeout after 100000 us: register 0x209c reads 0x4100
+[  101.386000] i915: reset: rcs0 for stopped heartbeat on rcs0
+[  101.386000] i915: reset: read-front[390] context reset due to GPU hang
+[  101.386000] i915: reset: context read-front[390]: guilty 1, banned
+[  101.386000] i915: reset: client read-front[390]: gained 3 ban score, now 3
+[  106.969000] i915: hangcheck: rcs0: no heartbeat in 2500 ms: breadcrumb 1562 of 1566, ACTHD 0x00778480, was 0x00778480
+[  106.969000] i915: hang: GPU HANG: ecode 7:1:85dffffc, in read-front [413]
+[  107.071000] i915: ring stop: timeout after 100000 us: register 0x209c reads 0x4100
+[  107.071000] i915: reset: rcs0 for stopped heartbeat on rcs0
+[  107.071000] i915: reset: read-front[413] context reset due to GPU hang
+[  107.071000] i915: reset: context read-front[413]: guilty 1, banned
+[  107.071000] i915: reset: client read-front[413]: gained 3 ban score, now 3
+[  112.371000] i915: hangcheck: rcs0: no heartbeat in 2500 ms: breadcrumb 1653 of 1657, ACTHD 0x007fd480, was 0x007fd480
+[  112.371000] i915: hang: GPU HANG: ecode 7:1:85dffffc, in read-front [436]
+[  112.472000] i915: ring stop: timeout after 100000 us: register 0x209c reads 0x4100
+[  112.472000] i915: reset: rcs0 for stopped heartbeat on rcs0
+[  112.472000] i915: reset: read-front[436] context reset due to GPU hang
+[  112.472000] i915: reset: context read-front[436]: guilty 1, banned
+[  112.472000] i915: reset: client read-front[436]: gained 3 ban score, now 3

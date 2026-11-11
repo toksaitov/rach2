@@ -10,7 +10,8 @@
  * and is delivered once unblocked. Third, the default action terminates: a
  * child that calls abort with no handler is reaped as killed by SIGABRT.
  * Fourth, an SA_SIGINFO handler finds the interrupted context in Linux's
- * layout: the user code selector and a stack pointer in the saved registers,
+ * layout: the code selector the program runs with and a stack pointer in the
+ * saved registers,
  * the floating-point state's address, the mask from before the handler, and a
  * siginfo with the code of raise's tkill and the sender's pid. A handler that
  * finds the user code selector, the stack pointer or the floating-point state
@@ -41,20 +42,20 @@
 
 /*
  * The saved registers a handler checks, by each architecture's index into
- * gregs: the code segment, whose user selector is 0x1B on i386 and 0x33 on
- * x86-64, where it is the low 16 bits of the word that also has gs and fs,
- * and the stack pointer.
+ * gregs: the code segment, which on x86-64 is the low 16 bits of the word
+ * that also has gs and fs, and the stack pointer. The selector is compared
+ * with the one the program runs with, since it depends on the kernel: an
+ * i386 program has 0x1B on Rach2's i686 kernel, 0x73 on Linux's i386 kernel
+ * and 0x23, __USER32_CS, on an x86-64 kernel of either.
  */
 #if defined __x86_64__
 #define CTX_CS  REG_CSGSFS
 #define CTX_SP  REG_RSP
 #define SP_NAME "rsp"
-#define USER_CS 0x33
 #else
 #define CTX_CS  REG_CS
 #define CTX_SP  REG_ESP
 #define SP_NAME "esp"
-#define USER_CS 0x1B
 #endif
 
 /* The checks, one assertion each, in the order the program makes them. */
@@ -85,6 +86,18 @@ static volatile unsigned long context_cs;
 static volatile unsigned long context_esp;
 static volatile unsigned long context_fpregs;
 static volatile int context_mask_has_usr1;
+
+/* The code selector the program runs with, which a saved context holds. */
+static unsigned long user_cs;
+
+/** The code selector the caller runs with. */
+static unsigned long running_cs(void)
+{
+    unsigned short cs;
+
+    __asm__ volatile("mov %%cs, %0" : "=r"(cs));
+    return cs;
+}
 
 /** Record delivery to the plain handler. */
 static void usr1_handler(int sig)
@@ -134,7 +147,7 @@ static void info_handler(int sig, siginfo_t *info, void *context)
     context_esp = (unsigned long)uc->uc_mcontext.gregs[CTX_SP];
     context_fpregs = (unsigned long)uc->uc_mcontext.fpregs;
     context_mask_has_usr1 = sigismember(&uc->uc_sigmask, SIGUSR1);
-    if (context_cs != USER_CS || context_esp == 0 || context_fpregs == 0) {
+    if (context_cs != user_cs || context_esp == 0 || context_fpregs == 0) {
         context_fail();
     }
 }
@@ -147,6 +160,7 @@ static int run_context(void)
 {
     struct sigaction sa = {0};
 
+    user_cs = running_cs();
     sa.sa_sigaction = info_handler;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = SA_SIGINFO;
@@ -172,7 +186,7 @@ static int run_context(void)
         return 1;
     }
     report_held();
-    if (context_cs != USER_CS || context_esp == 0 || context_fpregs == 0 || context_mask_has_usr1) {
+    if (context_cs != user_cs || context_esp == 0 || context_fpregs == 0 || context_mask_has_usr1) {
         printf("SIGMUSL FAIL: ucontext cs=0x%lx " SP_NAME "=0x%lx fpregs=0x%lx usr1-masked=%d\n",
                context_cs, context_esp, context_fpregs, context_mask_has_usr1);
         report_stop("the ucontext selector, stack pointer, FP state or mask is wrong");

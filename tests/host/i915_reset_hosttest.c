@@ -9,6 +9,7 @@
  * host-deps: rach2/sys/drm/i915/i915_reset.c
  * host-deps: rach2/sys/drm/i915/i915_gpu_error.c
  * host-deps: rach2/sys/drm/i915/i915_gem_context.c
+ * host-deps: rach2/sys/drm/i915/i915_user_extensions.c
  * host-deps: rach2/sys/drm/i915/i915_request.c
  * host-deps: rach2/sys/drm/i915/i915_getparam.c
  * host-deps: rach2/sys/drm/i915/i915_ring.c rach2/sys/drm/i915/i915_irq.c
@@ -31,7 +32,9 @@
  * The rows, after 78-6a's subtasks: the heartbeat, the engine's reset and
  * the error state it captures; a reset of the whole GPU when the engine's
  * does not finish; a wedge when that does not either, and the reset that
- * ends it; the guilty context's bans and counts.
+ * ends it; the guilty context's bans and counts. One row is 78-6c.1's: the
+ * GT's and the render engine's workarounds, written at the start and again
+ * after each reset.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -373,6 +376,18 @@ void i915_gt_unpark(struct drm_i915_private *i915)
     unparks++;
 }
 
+/** A request retires: no request here is boosted, so RPS counts nothing. */
+void i915_rps_retire(struct i915_request *rq)
+{
+    (void)rq;
+}
+
+/** The waitboost, RPS's, which no row here measures. */
+void i915_rps_boost(struct i915_request *rq)
+{
+    (void)rq;
+}
+
 /* The GTT's allocator for the kernel's own ranges, i915_vma.c's: from
  * 16 MiB up, each range its own, `held` counting those not given back. */
 static uint64_t next_range;
@@ -412,9 +427,6 @@ void i915_vma_revoke_mmap(struct i915_vma *vma)
 {
     (void)vma;
 }
-
-/* The driver's fences, i915_gem.c's. */
-const struct dma_fence_ops i915_fence_ops = {0, 0, 0, 0};
 
 /* The id table: the Lenovo's chip alone. */
 static const struct i915_platform hsw = {"HASWELL", 7, 50, 7, 2, 0xf, 1, 1, 1, 0, 1, 31, 40};
@@ -904,6 +916,95 @@ static void row_full_reset(void)
     done(&m);
 }
 
+/* ---- 78-6c.1: the workarounds, at the start and after each reset ---- */
+
+/** Whether the render engine's workarounds stand in the model's registers
+ * as Linux's rcs_engine_wa_init leaves them on Haswell. */
+static int rcs_was_stand(struct i915_model *m)
+{
+    uint32_t mode = GFX_TLB_INVALIDATE_EXPLICIT | GFX_REPLAY_MODE;
+
+    return (i915_model_peek(m, RING_MI_MODE(RENDER_RING_BASE)) & ASYNC_FLIP_PERF_DISABLE) &&
+           (i915_model_peek(m, RING_MODE_GEN7(RENDER_RING_BASE)) & mode) == mode &&
+           !(i915_model_peek(m, CACHE_MODE_0_GEN7) &
+             (HIZ_RAW_STALL_OPT_DISABLE | RC_OP_FLUSH_ENABLE)) &&
+           (i915_model_peek(m, CACHE_MODE_1) & PIXEL_SUBSPAN_COLLECT_OPT_DISABLE) &&
+           (i915_model_peek(m, GEN7_GT_MODE) & GEN6_WIZ_HASHING_MASK) == GEN6_WIZ_HASHING_16x4 &&
+           (i915_model_peek(m, HSW_HALF_SLICE_CHICKEN3) & HSW_SAMPLE_C_PERFORMANCE);
+}
+
+/** Whether the GT's state stands as Linux's intel_gt_init_hw leaves it on
+ * a Haswell GT2. */
+static int gt_was_stand(struct i915_model *m)
+{
+    return !(i915_model_peek(m, GEN7_FF_THREAD_MODE) & GEN7_FF_VS_REF_CNT_FFME) &&
+           i915_model_peek(m, HSW_SCRATCH1) == HSW_SCRATCH1_L3_DATA_ATOMICS_DISABLE &&
+           (i915_model_peek(m, HSW_ROW_CHICKEN3) & HSW_ROW_CHICKEN3_L3_GLOBAL_ATOMICS_DISABLE) &&
+           i915_model_peek(m, HSW_MI_PREDICATE_RESULT_2) == LOWER_SLICE_DISABLED;
+}
+
+/** HSW_SCRATCH1 read as a chip that did not keep its write. */
+static uint32_t scratch1_lost(struct i915_model *m, uint32_t reg, uint32_t value)
+{
+    (void)m;
+    return reg == HSW_SCRATCH1 ? 0 : value;
+}
+
+/** 78-6c.1: the GT's and the render engine's workarounds written at the
+ * start, the engine's again after its reset, both after the whole GPU's,
+ * and one the chip does not keep logged and counted. */
+static void row_workarounds(void)
+{
+    struct i915_model m;
+    struct drm_i915_private *i915 = ready(&m);
+    struct i915_model_ring *rr = i915_model_ring_state(&m, 0);
+    struct i915_model_reset *rs = i915_model_reset_state(&m);
+    struct intel_context *r = engine_of(&file_a, 0, I915_RCS0);
+    struct i915_request *rq;
+    uint32_t hung;
+
+    CHECK("workarounds: the GT's and the render engine's stand after the start",
+          gt_was_stand(&m) && rcs_was_stand(&m) && i915->gt.wa_lost == 0 &&
+              logged("workarounds: applied: 3 of the GT and 6 of rcs0, 0 lost"));
+    CHECK(
+        "workarounds: the GT's two registers of the clock gating, the PPGTT's caching kept",
+        (i915_model_peek(&m, GEN7_SQ_CHICKEN_MBCUNIT_CONFIG) & GEN7_SQ_CHICKEN_MBCUNIT_SQINTMOB) &&
+            (i915_model_peek(&m, GAM_ECOCHK) & (HSW_ECOCHK_ARB_PRIO_SOL | ECOCHK_PPGTT_WB_HSW)) ==
+                (HSW_ECOCHK_ARB_PRIO_SOL | ECOCHK_PPGTT_WB_HSW));
+
+    rr->stuck = 1;
+    rq = submit(r, 0, 0);
+    (void)beat_until_hung(10000, &hung);
+    run_ms(1);
+    CHECK("workarounds: the render engine's written again after its reset",
+          hung == 1u && rs->resets[1] == 2 && rs->resets[0] == 0 && ended(rq, -EIO) &&
+              rcs_was_stand(&m) && gt_was_stand(&m));
+    i915_request_put(rq);
+
+    rs->stuck = GEN6_GRDOM_RENDER;
+    rr->stuck = 1;
+    rq = submit(r, 0, 0);
+    (void)beat_until_hung(10000, &hung);
+    run_ms(1);
+    CHECK("workarounds: the GT's and the engine's written again after the whole GPU's reset",
+          hung == 1u && i915->gt.reset_count == 1 && rs->resets[0] == 2 && ended(rq, -EIO) &&
+              gt_was_stand(&m) && rcs_was_stand(&m) && i915->gt.wa_lost == 0);
+    i915_request_put(rq);
+    rs->stuck = 0;
+
+    m.on_read = scratch1_lost;
+    CHECK("workarounds: forcewake for the GT's", i915_forcewake_get(i915) == 0);
+    i915_gt_init_hw(i915);
+    i915_forcewake_put(i915);
+    m.on_read = 0;
+    CHECK("workarounds: one the chip did not keep is logged and counted",
+          i915->gt.wa_lost == 1 &&
+              logged("workarounds: gt: lost: register 0xb038 reads 0x00000000, expected "
+                     "0x08000000 of 0xffffffff"));
+    intel_context_put(r);
+    done(&m);
+}
+
 /** 78-6a.2: a GPU that does not reset is wedged, every request failed,
  * and a later reset that succeeds lets it take work again. */
 static void row_wedge(void)
@@ -922,8 +1023,8 @@ static void row_wedge(void)
     rq = submit(r, 0, 0);
     rq2 = submit(r, 0, 0);
     (void)beat_until_hung(10000, &hung);
-    CHECK("wedge: the engine's reset and four of the GPU's tried",
-          hung == 1u && rs->writes == 5 && rs->resets[0] == 0 && rs->resets[1] == 0 &&
+    CHECK("wedge: the engine's reset and four rounds of three of the GPU's tried",
+          hung == 1u && rs->writes == 13 && rs->resets[0] == 0 && rs->resets[1] == 0 &&
               logged("reset: the chip did not reset: GDRST reads 0x00000001"));
     CHECK("wedge: wedged, every request failed with EIO, the GT parked",
           i915->gt.wedged && !i915->gt.wedged_terminal && ended(rq, -EIO) && ended(rq2, -EIO) &&
@@ -951,6 +1052,95 @@ static void row_wedge(void)
           i915->gt.wedged && i915->gt.reset_count == 2 && rs->resets[0] == 2);
     intel_context_put(r);
     intel_context_put(b);
+    done(&m);
+}
+
+/**
+ * A wedge with a request the chip was never given, which waits for another
+ * driver's fence: its commands and its switch are taken back, so that the
+ * reset that ends the wedge runs none of them.
+ */
+static void row_wedge_queued(void)
+{
+    struct i915_model m;
+    struct drm_i915_private *i915 = ready(&m);
+    struct i915_engine *e = &i915->gt.engine[I915_RCS0];
+    struct i915_model_reset *rs = i915_model_reset_state(&m);
+    struct intel_context *r = engine_of(&file_a, 0, I915_RCS0);
+    struct intel_context *r2 = engine_of(&file_a, make_context(&file_a), I915_RCS0);
+    struct i915_request *rq, *rq2 = 0;
+    struct dma_fence f;
+    uint32_t hung, *cs;
+    int was_valid = 0;
+
+    k_memset(&f, 0, sizeof(f));
+    dma_fence_init(&f, 0, dma_fence_context_alloc(1), 1);
+    rs->stuck = GEN6_GRDOM_RENDER | GEN6_GRDOM_FULL;
+    i915_model_ring_state(&m, 0)->stuck = 1;
+    rq = submit(r, 0, 0);
+    if (r2 && i915_request_create(r2, &rq2) == 0) {
+        cs = i915_request_begin(rq2, 4);
+        if (cs) {
+            cs[0] = MI_LOAD_REGISTER_IMM(1);
+            cs[1] = TEST_REG;
+            cs[2] = 0xbad;
+            cs[3] = MI_NOOP;
+        }
+        (void)i915_request_await_fence(rq2, &f, 0);
+        (void)i915_request_add(rq2);
+        was_valid = rq2->was_valid;
+    }
+    CHECK("wedge: a request waits for another driver's fence, its switch emitted",
+          rq && rq2 && !rq2->submitted && rq2->set_context && e->tail != e->hw_tail &&
+              e->last_ce == r2);
+    (void)beat_until_hung(10000, &hung);
+    CHECK("wedge: its commands and switch taken back, the tail at what the chip has",
+          i915->gt.wedged && ended(rq2, -EIO) && e->tail == e->hw_tail && e->reserved == 0 &&
+              e->last_ce == r && r2->image_valid == was_valid);
+    i915_request_put(rq);
+    i915_request_put(rq2);
+    rs->stuck = 0;
+    i915_reset_gt(i915, 0, "a test");
+    rq = submit(r, 0, 0);
+    CHECK("wedge: after the reset the ring runs none of the cancelled commands",
+          rq && i915_request_wait(rq, 0, 100000000) == 0 && i915_model_peek(&m, TEST_REG) != 0xbad);
+    i915_request_put(rq);
+    (void)dma_fence_signal(&f);
+    intel_context_put(r);
+    intel_context_put(r2);
+    done(&m);
+}
+
+/**
+ * A request that waits for another driver's fence that never signals runs
+ * after Linux's 10 s, its fence's error ETIMEDOUT, and not before.
+ */
+static void row_fence_timeout(void)
+{
+    struct i915_model m;
+    struct intel_context *r;
+    struct i915_request *rq = 0;
+    struct dma_fence f;
+
+    (void)ready(&m);
+    r = engine_of(&file_a, 0, I915_RCS0);
+    k_memset(&f, 0, sizeof(f));
+    dma_fence_init(&f, 0, dma_fence_context_alloc(1), 1);
+    if (r && i915_request_create(r, &rq) == 0) {
+        (void)i915_request_await_fence(rq, &f, 0);
+        (void)i915_request_add(rq);
+    }
+    run_ms(9990);
+    (void)i915_submit_work();
+    CHECK("fence timeout: held back for 10 s by another driver's fence",
+          rq && !rq->submitted && !rq->fence.base.error);
+    run_ms(20);
+    (void)i915_submit_work();
+    CHECK("fence timeout: then given to the chip with ETIMEDOUT, and run",
+          rq && rq->submitted && i915_request_wait(rq, 0, 100000000) == 0 && ended(rq, -ETIMEDOUT));
+    (void)dma_fence_signal(&f);
+    i915_request_put(rq);
+    intel_context_put(r);
     done(&m);
 }
 
@@ -1080,7 +1270,10 @@ int main(void)
     row_error_state();
     row_wait_resets();
     row_full_reset();
+    row_workarounds();
     row_wedge();
+    row_wedge_queued();
+    row_fence_timeout();
     row_ban();
     CHECK("the heap: every record freed", heap_live == 0);
     if (fails) {

@@ -1,9 +1,9 @@
-.Dd November 9, 2026
+.Dd November 11, 2026
 .Dt RACH2-INSTALL 8
 .Os
 .Sh NAME
 .Nm rach2-install
-.Nd install Rach2 on a disk, update an installed root or make room for the data partition
+.Nd install Rach2 on a disk, update an installed root, make room for the data partition or move a disk to larger kernel slots
 .Sh SYNOPSIS
 .Nm
 .Op Fl -source Ar DIR
@@ -12,6 +12,8 @@
 .Fl -update Ar IMAGE DISK
 .Nm
 .Fl -data Ar DISK SIZE
+.Nm
+.Fl -slots Ar DISK
 .Sh DESCRIPTION
 The
 .Nm
@@ -38,6 +40,21 @@ The installer adds partition 6, the data partition, after the root, as
 .Xr disk 7
 describes.
 The disk boots by BIOS and by UEFI.
+Its menu boots the saved default, the candidate kernel once committed,
+and falls back to the previous kernel after a candidate boot that never
+reached user space, as Ubuntu's
+.Ql recordfail
+does: the candidate's entries set
+.Ql recordfail=1
+in the environment block before they load the kernel,
+.Xr init 8
+clears it with
+.Ql bootctl booted
+once user space runs, and while it stays set the menu boots the fallback.
+A committed kernel that panics at boot therefore resets once, after the
+panic's 30 seconds, into the fallback, and not into itself for ever.
+The menu of a disk installed before this version lacks the entries' line
+and falls back only when a kernel fails to load.
 On the installed machine,
 .Ql bootctl grub
 replaces the BIOS core in the BIOS boot partition; on a disk installed
@@ -429,17 +446,14 @@ A kernel slot,
 .Pa /boot/kernel
 or
 .Pa /boot/fallback ,
-smaller than 4 MiB, the size of the slots on the disks this version
-makes, is then grown to 4 MiB, since
+smaller than the slots on the disks this version makes, 16 MiB, the size
+.Ql bootctl status
+prints, is then grown to it as
+.Fl -slots
+grows it, below, since
 .Xr bootctl 8
-rewrites a slot in place and never grows it.
-The slot is copied beside itself as
-.Pa kernel.new
-or
-.Pa fallback.new ,
-padded with zeros, and renamed over the old one, one slot at a time;
-a stop part way costs at most the slot being grown, and the machine,
-saved to recovery, starts the recovery system.
+rewrites a slot in place, never grows it, and refuses a kernel in a
+smaller one.
 A boot partition with no room for the copy keeps its slot, with a note.
 .Pp
 Both kernel entries boot the same root; recovery runs from RAM.
@@ -481,12 +495,62 @@ is not moved, an entry already that length is not written, and an entry 6
 named
 .Ql Rach2 data
 whose file system checks is kept.
+.Pp
+With
+.Fl -slots Ar DISK ,
+.Nm
+moves a disk installed before the kernel slots grew to the slots of this
+version, from the recovery system, with partition 1 of
+.Ar DISK
+not mounted;
+.Ql bootctl kernel
+and
+.Ql bootctl fallback
+refuse its smaller slots.
+A disk whose slots have the size already is left as it is.
+A trial armed in the environment block is refused, since GRUB would take
+it at a stop.
+The saved default is set to
+.Ql recovery ,
+which GRUB starts from partition 2 whatever the boot partition holds.
+Then each slot, the candidate first and the fallback after it, is copied
+beside itself as
+.Pa kernel.new
+or
+.Pa fallback.new ,
+padded with zeros to the new size and compared with the slot and its
+padding; only then is the slot removed and the copy renamed to its name,
+which rewrites the copy's directory entries in place.
+The other slot is whole throughout, and the slots' kernels are the same
+bytes as before.
+Once both are grown and
+.Xr bootctl 8
+reads the volume, the saved default is put back:
+.Ql candidate
+if it was, and
+.Ql fallback
+for any other value but
+.Ql recovery ,
+which the menu treats alike.
+A stop part way leaves a machine that starts the recovery system.
+The command run again there finishes what the stop left: a copy with no
+slot beside it, cut off before its rename, takes the slot's name; a copy
+beside its slot is unfinished and is removed; and a slot missing with no
+copy is made again from the other slot.
+It finds the saved default at
+.Ql recovery
+and leaves it there, saying which command sets it.
+Growing the fallback takes the most room, two new slots and the old
+fallback: 36 MiB on a disk with 4 MiB slots, which the 64 MiB boot
+partition of an installed disk has.
 .Sh EXIT STATUS
 The exit status is 0 when the disk contains the installed system,
 for an update, when the new root is on disk and armed for a trial boot,
-and with
+with
 .Fl -data ,
-when the data partition is on the disk.
+when the data partition is on the disk, and with
+.Fl -slots ,
+when both slots have this version's size and the saved default is back.
 Other statuses indicate failure, with the reason on standard error.
 A failure before the image write stops the run without starting that write.
 .Sh EXAMPLES
@@ -512,6 +576,11 @@ none, from recovery:
 .Dl rach2-install --data /dev/disk0 64G
 The space reserved for the boot and recovery copies does not cover a
 backup of a grown root.
+.Pp
+Move a disk installed before the kernel slots grew to the larger slots,
+from recovery, and look at the result:
+.Dl rach2-install --slots /dev/disk0
+.Dl bootctl --target /dev/disk0p1 status
 The RAM root has no room for the 1 GiB update image.
 .Sh SEE ALSO
 .Xr mkfs.vfat 1 ,

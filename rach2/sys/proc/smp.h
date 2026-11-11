@@ -63,9 +63,19 @@ void bkl_take(int depth);
 int smp_cpu_count(void);
 
 /** Read the sum and longest big-lock acquisition in microseconds
- * elapsed since boot. The caller holds the big lock. Wait times are zero
+ * elapsed since boot, and the outer holds completed during that longest
+ * wait, modulo 2^32. The caller holds the big lock. Wait times are zero
  * without a calibrated invariant TSC. */
-void smp_wait_stats(uint64_t *total_us, uint64_t *max_us);
+void smp_wait_stats(uint64_t *total_us, uint64_t *max_us, uint32_t *holds);
+
+/* The last outer holds completed during the longest big-lock acquisition. */
+#define BKL_WAIT_HOLDS 32u
+
+/** Read retained hold `index`, below the smaller of BKL_WAIT_HOLDS and
+ * smp_wait_stats's holds, oldest first. Return its full time in microseconds
+ * and entry, as smp_hold_stats does. A hold may begin before the wait.
+ * The caller holds the big lock. */
+void smp_wait_hold(unsigned int index, uint64_t *held_us, uint32_t *vector, int32_t *nr);
 
 /** Name the kernel entry that holds the big lock on this processor, by its
  * vector and, for a system call, its number (-1 otherwise), for the longest
@@ -148,6 +158,20 @@ void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t start, uintptr_t en
  * second. */
 uint32_t smp_tlb_count(int which);
 
+/* A barrier request's kinds: a full memory barrier, or one and a
+ * serializing instruction. */
+#define SMP_BARRIER      1u
+#define SMP_BARRIER_SYNC 2u
+
+/**
+ * Have each other processor started in `cpus`, a bit for each, pass a full
+ * memory barrier, and a serializing instruction as well with `sync_core`,
+ * and wait until each has, for membarrier(2). One in user mode passes them
+ * in the interrupt, and one in the kernel, which waits for the big lock,
+ * while it waits. The caller holds the big lock.
+ */
+void smp_barrier(uint64_t cpus, int sync_core);
+
 /**
  * Note that a kernel mapping changed, after the caller dropped its own
  * translation of it: every other processor drops all of its translations
@@ -168,10 +192,19 @@ void smp_space_release(const struct page_dir *dir);
 
 /**
  * Stop every other processor for good, for a panic and a power off, and
- * wait, a second at most for each, until each has taken the stop, so that
- * none is still writing the log or the screen when the caller does.
+ * wait, a second at most and 10 ms more for a processor sent an NMI, until
+ * each has taken the stop, so that none is still writing the log or the
+ * screen when the caller does.
  */
 void smp_stop_others(void);
+
+/**
+ * Take a stop `smp_stop_others` asked of this processor, from its NMI
+ * handler: it leaves VMX or SVM operation (`k_panic_hook`), marks the
+ * processor stopped and halts, and does not return when one was asked. 0
+ * when none was, and the NMI is some other one.
+ */
+int smp_stop_nmi(void);
 
 /** Make the boot processor's idle task and start the others the firmware
  * lists, as many as `maxcpus=` allows, the boot one counted; a panic when

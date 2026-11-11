@@ -14,6 +14,7 @@
 #include "seccomp.h"
 #include "../timer.h"
 #include "ns.h"
+#include "../tty/tty.h"
 
 process_t *proc_list;
 process_t *proc_idle;
@@ -324,6 +325,8 @@ static void process_limits(process_t *p)
     p->rlim[RLIM_CORE].max = RLIM_INFINITY;
     p->rlim[RLIM_FSIZE].cur = p->rlim[RLIM_FSIZE].max = RLIM_INFINITY;
     p->rlim[RLIM_MEMLOCK].cur = p->rlim[RLIM_MEMLOCK].max = RLIM_MEMLOCK_DEFAULT;
+    p->rlim[RLIM_NICE].cur = p->rlim[RLIM_NICE].max = 0;
+    p->rlim[RLIM_RTPRIO].cur = p->rlim[RLIM_RTPRIO].max = 0;
 }
 
 /** New directories, at / with umask 022 and one reference, or NULL. */
@@ -402,7 +405,7 @@ static process_t *process_alloc(const process_t *parent, int thread, int share_f
     }
     if (!parent) {
         p->fds = fd_table_new();
-        if (!p->fds || fd_init_stdio(p->fds) != 0) {
+        if (!p->fds || fd_init_stdio(p->fds, tty_console_vhangups()) != 0) {
             goto fail_parts;
         }
     }
@@ -517,6 +520,7 @@ void proc_wake_sleepers(uint64_t now)
         timer_cursor = p->timer_next;
         work_count[2]++;
         if (p->state == PROC_BLOCKED && p->wakeup_tick != 0 && now >= p->wakeup_tick) {
+            waketime_expire(p, p->wakeup_tick);
             p->wakeup_tick = 0;
             sched_make_ready(p);
         }

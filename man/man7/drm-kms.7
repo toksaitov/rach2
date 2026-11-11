@@ -176,13 +176,16 @@ routes it.
 A commit that leaves a CRTC on or turns it on or off ends at the vblank
 that shows its state: it is pending until then, and its events are sent and
 its out-fence signals then.
-A blocking commit waits for the flip it makes, and for a flip pending on
-any CRTC it changes; a
+A blocking commit waits for the flip it makes, for a flip pending on any
+CRTC it changes, and for a nonblocking commit still queued on its in-fences
+that changes any CRTC, plane or connector it changes; a
 .Dv DRM_MODE_ATOMIC_NONBLOCK
-commit on a CRTC with a flip pending is
+commit in either case is
 .Er EBUSY .
-The descriptors of the out-fences are written once the commit has
-succeeded; a commit that fails writes \-1 to each.
+The descriptor of each out-fence is reserved and written before the commit
+takes effect, so that a descriptor that cannot be written fails the commit;
+the sync file is given to the caller once the commit has succeeded, and a
+commit that fails writes \-1 to each.
 .Ss Vblanks and events
 A CRTC whose driver takes its vblank interrupt counts the vblanks it scans
 out, in 64 bits, and stamps each with the
@@ -298,7 +301,9 @@ of no CRTC.
 .It Er EBUSY
 A page flip of a CRTC whose primary plane shows nothing; a
 .Dv DRM_MODE_ATOMIC_NONBLOCK
-commit or page flip on a CRTC whose flip is pending; a
+commit or page flip on a CRTC whose flip is pending, or that changes a
+CRTC, plane or connector of a nonblocking commit still queued on its
+in-fences; a
 .Dv DRM_IOCTL_WAIT_VBLANK
 that waited 3 seconds.
 .It Er EFAULT
@@ -309,8 +314,8 @@ An unknown flag; a value a property does not allow; a modeset without
 an event without a CRTC;
 a format, modifier, pitch or size the device does not take; a framebuffer
 a plane cannot show; a route an encoder cannot take; a page flip that
-changes the format or names a target vblank; a blob of length 0 or of no
-ID; a vblank call on a CRTC that is off, of an index the device does not
+changes the format or names a target vblank; a blob of length 0, or a
+blob property that names no blob; a vblank call on a CRTC that is off, of an index the device does not
 have, with
 .Dv _DRM_VBLANK_SIGNAL
 or with an unknown flag; or
@@ -322,7 +327,9 @@ in-fences, or during
 .Dv DRM_IOCTL_WAIT_VBLANK .
 .It Er ENOENT
 An ID of no object of the kind asked, a property an atomic commit names
-that the object does not have, or a framebuffer of another file.
+that the object does not have, a framebuffer of another file, or a blob
+.Dv DRM_IOCTL_MODE_DESTROYPROPBLOB
+names that does not exist.
 .It Er ENOMEM
 No room for another event in the file's 4096 bytes.
 .It Er ENOSPC

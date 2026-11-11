@@ -56,3 +56,25 @@ Each entry follows [the upstream fault format](../upstream.md).
 * Rach2: `rach2/sys/drm/i915/i915_debugfs.c`, `error_state_write`, returns the count whether or not a state is held, as the sysfs file does, in the commit that adds the debugfs files.
 * Status: unreported.
 * Next: read 6.18's and current upstream's `i915_error_state_write`, show the spinning write on a machine with i915, and propose returning `cnt` when no state is held.
+
+## Debian's Chromium loads libpci.so.3 without asking for its package
+
+* Project: Debian 13's `chromium` 156.0.8078.79-1~deb13u1 and `chromium-common` of the same version, from trixie-security in the snapshot `vendor/gnu/debian/fetch_debs.sh` pins.
+* Fails: ANGLE in `/usr/lib/chromium/libGLESv2.so` loads `libpci.so.3` with dlopen for the GPU's PCI identity (its strings name `libpci.so.3` and `/sys/bus/pci/`), but neither package's Depends nor Recommends names `libpci3`. Without the library ANGLE reads no identity, and chrome://gpu gives `GPU0: VENDOR= 0x0000 ..., DEVICE=0x0000`, so Chromium's GPU blocklist and driver workarounds see no vendor; with it, the Debian reference guest, whose image has `pciutils`, gives virtio-vga's 0x1af4:0x1050.
+* Found: 2026-11-10 on the testing PC, milestone 78, while starting Chromium's GPU process on Crocus on the fake i915 chip for task 78-12a.
+* Reproduction: on Debian 13 without `libpci3`, run Chromium on any GPU and read GPU0 in chrome://gpu; install `libpci3` and read it again.
+* Evidence: `tests/graphics/browser/ref/chromium-sandbox/result.json`, Debian's chrome://gpu with the identity; the trixie-security Packages index in `build/cache/debian/amd64/`.
+* Rach2: `vendor/gnu/debian/browsers.list` stages `libpci3` beside the browsers, in the commit that stages it.
+* Status: unreported.
+* Next: check Debian's current `chromium` in unstable for the dependency, and on a clean Debian 13 without `libpci3` confirm the 0x0000 identity before reporting it to Debian's bug tracker.
+
+## VK-GL-CTS calls into the Vulkan loader after unloading it when a resource error ends the run
+
+* Project: VK-GL-CTS vulkan-cts-1.4.7.1, `vk-gl-cts-1.4.7.1` in `vendor/gnu/vk-gl-cts/sources.txt`, SHA-256 `2071468a8509528b030c5fc54dbad7f4645bb95c4ccda198e01c722372793462`, built by the GNU layer and run on Debian 13's Mesa 25.0.7 and Vulkan loader.
+* Fails: after a case answers ResourceError, `deqp-vk` ends its session (`framework/common/tcuTestSessionExecutor.cpp`, lines 400 to 405, `m_abortSession`), prints "Test run was ABORTED!", unloads `libvulkan.so.1`, and then, still under `main`, jumps into the loader's old text and dies of SIGSEGV. The abort leaves the group hierarchy without leaving its groups, so robustness2's `cleanupGroup` (`external/vulkancts/modules/vulkan/robustness/vktRobustnessExtsTests.cpp`, lines 4820 to 4828), which destroys the static `SingletonDevice` devices (lines 81 to 212), never runs. Which object makes the late call is not named: the binary is stripped, and the frames are in `deqp-vk` under `__libc_start_call_main`, not in an exit handler.
+* Found: 2026-11-11 on the Lenovo, milestone 78, in task 78-11c's trial of hasvk on Rach2's trial root, on `dEQP-VK.robustness.robustness2.bind.notemplate.r32i.unroll.nonvolatile.sampled_image.no_fmt_qual.img.samples_4.2d_array.comp`, whose image creation answers `VK_ERROR_OUT_OF_DEVICE_MEMORY` on Haswell under Linux as under Rach2.
+* Reproduction: on the Lenovo with hasvk, run `deqp-vk` with that one case in `--deqp-caselist-file`; it exits 139. Under gdb the fault is at 0x7effff853290 with ASLR off; `LD_DEBUG=files` gives `libvulkan.so.1` the base 0x7effff815000 and size 0x82388, so the address is in the loader, and its last lines are the loader's `calling fini` and `destroying link map`. Not run on Linux; the steps are user space only, Debian's glibc, loader and Mesa, which Rach2 runs unchanged.
+* Evidence: `dev-log/78-intel/78-11c/robustness-gdb.txt`, `dev-log/78-intel/78-11c/robustness-lddebug.txt`, and the `vm: fault: killing` lines in `dev-log/78-intel/78-11c/dmesg-after.txt`; [the session's abort](https://github.com/KhronosGroup/VK-GL-CTS/blob/vulkan-cts-1.4.7.1/framework/common/tcuTestSessionExecutor.cpp#L400) and [robustness2's cleanupGroup](https://github.com/KhronosGroup/VK-GL-CTS/blob/vulkan-cts-1.4.7.1/external/vulkancts/modules/vulkan/robustness/vktRobustnessExtsTests.cpp#L4820).
+* Rach2: nothing. `tests/graphics/runners/deqp.sh` reads each case's result from the process's output, where the case has answered ResourceError before the crash, as in Linux's reference, and starts the process's remaining cases in a new one, so the crash costs no case and is not counted.
+* Status: unreported.
+* Next: build `deqp-vk` with symbols and take the backtrace, to name the object that calls into the unloaded loader; check current upstream's session executor and robustness singletons; run the case on Linux on any driver that refuses that image, to show the same exit.

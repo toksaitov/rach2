@@ -86,6 +86,11 @@ static const struct row rows[] = {
     OFF(ia32_statfs64, f_frsize, 60),
     OFF(ia32_statfs64, f_flags, 64),
     OFF(ia32_statfs64, f_spare, 68),
+    /* compat_ustat */
+    SIZE(ia32_ustat, 20),
+    OFF(ia32_ustat, f_tinode, 4),
+    OFF(ia32_ustat, f_fname, 8),
+    OFF(ia32_ustat, f_fpack, 14),
     /* compat_flock and compat_flock64 */
     SIZE(ia32_flock, 16),
     OFF(ia32_flock, l_whence, 2),

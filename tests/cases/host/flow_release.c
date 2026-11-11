@@ -373,7 +373,8 @@ static int ssh_mock(int argc, char **argv)
     }
     if (!strcmp(command, "bootctl fallback")) {
         append(ev("RELEASE_TEST_CALLS"), "machine write bootctl fallback\n");
-        puts("bootctl: fallback: 4194304 bytes written from the committed candidate and read back");
+        puts(
+            "bootctl: fallback: 16777216 bytes written from the committed candidate and read back");
         return 0;
     }
     if (!strcmp(command, "cat /etc/rach2/release 2> /dev/null; echo answered")) {

@@ -17,6 +17,8 @@
  *     bootctl env KEY [VAL]  read, or set, one allowlisted grubenv key
  *     bootctl rootimage SPEC:/PATH
  *                            boot a root image on a partition once
+ *     bootctl booted         clear GRUB's recordfail: this boot reached
+ *                            user space
  *
  * `--target PARTITION` before the verb selects a boot partition other than
  * `/dev/bootpart`, for every verb but `grub` and `commit`.
@@ -25,13 +27,16 @@
  * `saved_entry=fallback`, writes the candidate slot, reads it back byte for
  * byte, and sets `next_entry=candidate`, so exactly one reboot tries the new
  * kernel and a power cycle after a crash returns to the fallback. Once that
- * kernel has booted, `commit` makes it the saved default.
+ * kernel has booted, `commit` makes it the saved default. `kernel` and
+ * `fallback` refuse a disk whose slots are smaller than BOOTSLOT_SLOT_BYTES,
+ * a disk built before the slots grew, and name `rach2-install --slots`,
+ * which moves it.
  *
  * `status` prints the four files' sector extents, what the environment block
- * has, whether a trial is armed or consumed, and which slot this boot came
- * from. Its extent lines are a test contract: the install suite reads the
- * candidate's first sector from them to corrupt it, so their field order is
- * fixed.
+ * has, whether a trial is armed or consumed, which slot this boot came from
+ * and the slot size of this version's disks. Its extent lines are a test
+ * contract: the install suite reads the candidate's first sector from them
+ * to corrupt it, so their field order is fixed.
  *
  * `config` writes the boot menu GRUB reads after its own stub entries. That
  * file is GRUB script and whoever writes it can direct the boot, which is the
@@ -51,6 +56,13 @@
  * the rest of the menu, and arms it. The stub knows no `trialroot`, and it
  * sets its default after it sources the slot, so the block consumes the
  * trial itself and boots it at once; the next boot takes the saved default.
+ *
+ * `booted` is Ubuntu's `grub-editenv unset recordfail`, which init runs once
+ * a boot from a kernel slot has reached user space. The menu's candidate
+ * entries set `recordfail=1` in the block before they load the kernel, and
+ * the stub boots the fallback while it stays set and the candidate is the
+ * saved default, so a candidate that resets before user space, as a panic
+ * does after its 30 seconds, is not booted again and again.
  */
 
 #include <errno.h>
@@ -65,7 +77,9 @@
 #include "bootverb.h"
 #include "grubslot.h"
 
-#define SLOT_MAX (4 * 1024 * 1024)
+/* The most of a menu this tool reads or writes: far more than the 8 KiB
+ * slot of the disks this version builds. */
+#define MENU_MAX (4 * 1024 * 1024)
 
 /* The ELF class of the kernel of this system's own architecture. The i686
  * kernel runs no x86-64 program, so an x86-64 system takes only its own; the
@@ -80,7 +94,7 @@
 #define KERNEL_ARCH  "i686"
 #endif
 
-static uint8_t image[SLOT_MAX];
+static uint8_t image[BOOTSLOT_SLOT_BYTES];
 static char errbuf[128];
 
 /* The device fd behind the bootslot_io callbacks. */
@@ -350,7 +364,7 @@ static const char TRIAL_BEGIN[] = "# bootctl rootimage: one boot of a root image
 static const char TRIAL_END[] = "# bootctl rootimage: end\n";
 
 /* The menu slot's text, and its length without the `#` a write pads with. */
-static uint8_t menu[SLOT_MAX];
+static uint8_t menu[MENU_MAX];
 static uint32_t menu_len;
 
 /**
@@ -431,8 +445,38 @@ static void print_trial_root(void)
     }
 }
 
-/** Print the files' extents, the two environment keys and the booted slot;
- *  0, or 1 having said why not. */
+/**
+ * Print the kernel slots' size on this version's disks, a line rach2-install
+ * reads, and, when this disk's slots are smaller, that they refuse a kernel
+ * and the command that moves them.
+ */
+static void print_slot_size(void)
+{
+    printf("bootctl: slot size: %u bytes\n", (unsigned)BOOTSLOT_SLOT_BYTES);
+    if (bootslot_layout_current(&bs, errbuf, sizeof(errbuf)) != 0) {
+        printf("bootctl: slot size: %s\n", errbuf);
+    }
+}
+
+/**
+ * Say why the open volume's slots refuse a kernel, when they are smaller than
+ * this version's; 0 when they are not, or 1 having said why.
+ */
+static int layout_refused(void)
+{
+    if (bootslot_layout_current(&bs, errbuf, sizeof(errbuf)) == 0) {
+        return 0;
+    }
+    fprintf(stderr, "bootctl: %s\n", errbuf);
+    fprintf(stderr,
+            "bootctl: the candidate slot is %u bytes and the fallback %u; this version's "
+            "are %u\n",
+            (unsigned)bs.kernel.size, (unsigned)bs.fallback.size, (unsigned)BOOTSLOT_SLOT_BYTES);
+    return 1;
+}
+
+/** Print the files' extents, the two environment keys, the booted slot and
+ *  the slot size; 0, or 1 having said why not. */
 static int cmd_status(void)
 {
     static uint8_t env[BOOTSLOT_ENV_BYTES];
@@ -459,6 +503,7 @@ static int cmd_status(void)
         print_trial_root();
     }
     print_booted();
+    print_slot_size();
     return 0;
 }
 
@@ -492,10 +537,12 @@ static int cmd_commit(void)
  * Stage the kernel in `path` into the candidate slot for one trial boot.
  *
  * The boot line must have `rach2.slot=candidate`, `rach2.slot=fallback` or
- * `rach2.slot=recovery`. A file larger than any slot, or a kernel that
+ * `rach2.slot=recovery`. A file larger than a slot, or a kernel that
  * cannot run this system's programs (`kernel_fits`), fails before the disk
- * is opened; `bootslot_install` checks the file and the fallback and does
- * the writes the file header lists. Returns 0, or 1 having said why not.
+ * is opened, and a disk whose slots are smaller than this version's
+ * (`layout_refused`) before it is written; `bootslot_install` checks the
+ * file and the fallback and does the writes the file header lists.
+ * Returns 0, or 1 having said why not.
  */
 static int cmd_kernel(const char *path)
 {
@@ -521,7 +568,8 @@ static int cmd_kernel(const char *path)
     }
     if (size == sizeof(image) && fgetc(f) != EOF) {
         fclose(f);
-        fprintf(stderr, "bootctl: '%s' is larger than any slot\n", path);
+        fprintf(stderr, "bootctl: '%s' is larger than a kernel slot, %u bytes\n", path,
+                (unsigned)BOOTSLOT_SLOT_BYTES);
         return 1;
     }
     fclose(f);
@@ -530,7 +578,7 @@ static int cmd_kernel(const char *path)
                 KERNEL_ARCH);
         return 1;
     }
-    if (open_slot() != 0) {
+    if (open_slot() != 0 || layout_refused()) {
         return 1;
     }
     if (bootslot_install(&bs, image, (uint32_t)size, errbuf, sizeof(errbuf)) != 0) {
@@ -605,7 +653,7 @@ static int allowed(const char *const *list, int count, const char *word)
  */
 static int cmd_config(const char *path)
 {
-    static uint8_t text[SLOT_MAX];
+    static uint8_t text[MENU_MAX];
     FILE *f;
     size_t size;
 
@@ -816,7 +864,7 @@ static int boot_serial(char serial[10])
  */
 static int write_trial_menu(const char *spec, const char *serial, const char *tokens)
 {
-    static uint8_t text[SLOT_MAX];
+    static uint8_t text[MENU_MAX];
     uint32_t from, to, len = menu_len;
     int w;
 
@@ -958,7 +1006,7 @@ static int cmd_trial(const char *id)
  */
 static int cmd_fallback(void)
 {
-    if (open_slot() != 0) {
+    if (open_slot() != 0 || layout_refused()) {
         return 1;
     }
     if (bootslot_fallback(&bs, errbuf, sizeof(errbuf)) != 0) {
@@ -988,6 +1036,41 @@ static int cmd_cancel(void)
         return 1;
     }
     printf("bootctl: cancelled: the next boot takes the saved default\n");
+    return 0;
+}
+
+/**
+ * Remove `recordfail` from the environment block, as Ubuntu's boot does
+ * with `grub-editenv unset recordfail`, so that the stub boots the saved
+ * default again. Writes nothing when the block has no such line, which is
+ * every boot but one after a candidate entry. Returns 0, or 1 having said
+ * why not.
+ */
+static int cmd_booted(void)
+{
+    static uint8_t env[BOOTSLOT_ENV_BYTES];
+    size_t i;
+
+    if (open_slot() != 0) {
+        return 1;
+    }
+    if (bootslot_read_env(&bs, env, errbuf, sizeof(errbuf)) != 0) {
+        fprintf(stderr, "bootctl: %s\n", errbuf);
+        return 1;
+    }
+    for (i = 0; i + 11 <= sizeof(env); i++) {
+        if ((i == 0 || env[i - 1] == '\n') && memcmp(env + i, "recordfail=", 11) == 0) {
+            break;
+        }
+    }
+    if (i + 11 > sizeof(env)) {
+        return 0;
+    }
+    if (bootslot_env_drop(&bs, "recordfail", errbuf, sizeof(errbuf)) != 0) {
+        fprintf(stderr, "bootctl: %s\n", errbuf);
+        return 1;
+    }
+    printf("bootctl: booted: recordfail cleared; the next boot takes the saved default\n");
     return 0;
 }
 
@@ -1156,6 +1239,7 @@ static void usage(void)
     fprintf(stderr, "       bootctl fallback\n");
     fprintf(stderr, "       bootctl env <key> [value]\n");
     fprintf(stderr, "       bootctl rootimage <spec>:<path>\n");
+    fprintf(stderr, "       bootctl booted\n");
     fprintf(stderr, "       bootctl --target <partition> <command> ...\n");
 }
 
@@ -1216,6 +1300,8 @@ int main(int argc, char **argv)
         return cmd_env(arg, arg2);
     case BOOTVERB_ROOTIMAGE:
         return cmd_rootimage(arg);
+    case BOOTVERB_BOOTED:
+        return cmd_booted();
     default:
         break;
     }

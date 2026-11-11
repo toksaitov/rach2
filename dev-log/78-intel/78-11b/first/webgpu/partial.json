@@ -1,0 +1,48 @@
+{
+  "picture": {
+    "adapter": {
+      "architecture": "gen-7",
+      "description": "",
+      "device": "",
+      "isFallbackAdapter": false,
+      "vendor": "intel"
+    },
+    "canvas": [
+      1366,
+      768,
+      "rgba8unorm"
+    ],
+    "centerPixel": [
+      95,
+      80,
+      80,
+      255
+    ],
+    "cornerPixel": [
+      25,
+      25,
+      76,
+      255
+    ],
+    "frames": 480,
+    "ok": true,
+    "seconds": 8.2785
+  },
+  "readback": {
+    "adapter": {
+      "architecture": "gen-7",
+      "description": "",
+      "device": "",
+      "fallback": false,
+      "vendor": "intel"
+    },
+    "errors": 0,
+    "pixel": [
+      255,
+      128,
+      0,
+      255
+    ],
+    "words": 1024
+  }
+}

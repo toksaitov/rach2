@@ -1,0 +1,30 @@
+[Switching to thread 1 (process 120)]
+0xf7f59809 in __kernel_vsyscall ()
+eax            0xfffffffc          -4
+ecx            0x80                128
+edx            0x2                 2
+ebx            0xf7f55fb0          -134914128
+esp            0xff9eae58          0xff9eae58
+ebp            0x0                 0x0
+esi            0x0                 0
+edi            0x0                 0
+eip            0xf7f59809          0xf7f59809 <__kernel_vsyscall+9>
+eflags         0x296               [ PF AF SF IF ]
+cs             0x23                35
+ss             0x2b                43
+ds             0x2b                43
+es             0x2b                43
+fs             0x0                 0
+gs             0x63                99
+k0             0x0                 0
+k1             0x0                 0
+k2             0x0                 0
+k3             0x0                 0
+k4             0x0                 0
+k5             0x0                 0
+k6             0x0                 0
+k7             0x0                 0
+[Inferior 1 (process 120) detached]
+The history is empty.
+Argument required (starting display address).
+Argument required (starting display address).

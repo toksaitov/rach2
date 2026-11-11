@@ -140,9 +140,12 @@ static uint64_t get64(const uint8_t *p)
  * tests: `lar` leaves its 0 where the descriptor is out of reach. */
 int sigframe_ss_valid(unsigned int sel)
 {
-    uint32_t ar = 0;
+    uint32_t ar;
 
-    __asm__ __volatile__("larl %1, %0" : "+r"(ar) : "r"((uint32_t)sel));
+    if (sel & 4u) {
+        ldt_switch(current_proc->mm);
+    }
+    ar = x86_64_lar(sel);
     ar &= AR_TYPE_MASK | AR_S | AR_DPL3 | AR_P;
     return ar == (AR_DPL3 | AR_S | AR_P | AR_TYPE_RWDATA) ||
            ar == (AR_DPL3 | AR_S | AR_P | AR_TYPE_RWDATA_EXPDOWN);
@@ -158,7 +161,8 @@ static int is_sigsys(int signo, int32_t code)
 /**
  * The x86-64 siginfo: signo, errno and code, then at byte 16, past the
  * padding that aligns the union, Linux x86-64's fields of the kind the
- * code says: a fault's address; a seccomp SIGSYS's call address, call
+ * code says: a fault's address, and for SIGSEGV with SEGV_PKUERR the key
+ * at 32, `si_pkey`; a seccomp SIGSYS's call address, call
  * number at 24 and architecture at 28; and otherwise the sender's or
  * child's pid and uid at 16 and 20 and, at 24, a timer's or a queued
  * signal's si_value, all eight bytes, or a child's status. For a timer the
@@ -176,6 +180,9 @@ void sigframe_fill_siginfo(uint8_t *out, int signo, const struct k_siginfo *info
     put32(out + 8, (uint32_t)info->code);
     if (fault) {
         put64(out + 16, (uint64_t)info->addr);
+        if (signo == SIGSEGV && info->code == SEGV_PKUERR) {
+            put32(out + 32, info->pkey);
+        }
         return;
     }
     if (is_sigsys(signo, info->code)) {
@@ -215,6 +222,7 @@ void sigframe_take_siginfo(const uint8_t *in, struct k_siginfo *info)
     info->uid = get32(in + 20);
     info->status = (int32_t)get32(in + 24);
     info->value = get64(in + 24);
+    info->pkey = get32(in + 32);
 }
 
 /**
@@ -282,9 +290,14 @@ uintptr_t sigframe_stack_bytes(void)
  * Linux saves them: SS_ONSTACK only when the thread was already on the
  * alternate stack.
  *
- * The handler starts with the initial floating-point state, as a new image
- * does, its arguments in RDI, RSI and RDX, and RAX 0, which a variadic
- * handler reads, in AL, as the count of its arguments in vector registers.
+ * The frame is written with every protection key open, as Linux's
+ * sig_prepare_pkru opens them, so that a stack under a key the interrupted
+ * code had denied takes it; the frame keeps the interrupted code's PKRU
+ * (`fpu_frame_put`), and a frame that cannot be written leaves PKRU as it
+ * was. The handler starts with the initial floating-point state, as a new
+ * image does, PKRU_INIT among it, its arguments in RDI, RSI and RDX, and
+ * RAX 0, which a variadic handler reads, in AL, as the count of its
+ * arguments in vector registers.
  * DF, TF and RF are cleared. The handler runs in 64-bit code, CS the
  * user's 64-bit selector even for a signal taken in 32-bit code, and SS
  * stays as it was where `iretq` can load it, else becomes the user's data
@@ -298,6 +311,7 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
     int on_alt, was_on;
     uintptr_t sp = tf->rsp - RED_ZONE;
     uintptr_t fp_addr, frame_addr;
+    uint32_t pkru;
 
 #if RACH2_IA32
     if (sa->flags & SA_IA32_ABI) {
@@ -321,7 +335,10 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
     }
 
     fpu_save(current_proc->fpu);
+    pkru = fpu_pkru();
+    fpu_pkru_set(0);
     if (fpu_frame_put(fp_addr, current_proc->fpu) != 0) {
+        fpu_pkru_set(pkru);
         return -1;
     }
 
@@ -339,6 +356,7 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
     frame.uc.sigmask = oldmask;
     sigframe_fill_siginfo(frame.info, signo, info);
     if (copy_to_user((void __user *)frame_addr, &frame, sizeof(frame)) != 0) {
+        fpu_pkru_set(pkru);
         return -1;
     }
 

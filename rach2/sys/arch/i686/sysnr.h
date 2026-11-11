@@ -10,6 +10,7 @@
 /* The vector of `int $0x80`. */
 #define SYSCALL_VECTOR 128
 
+#define SYS_RESTART_SYSCALL   0
 #define SYS_EXIT              1
 #define SYS_FORK              2
 #define SYS_READ              3
@@ -102,107 +103,129 @@
 #define SYS_SEMTIMEDOP_TIME64 420
 
 /* POSIX message queues (ipc/mqueue.c). */
-#define SYS_MQ_OPEN                277
-#define SYS_MQ_UNLINK              278
-#define SYS_MQ_TIMEDSEND           279
-#define SYS_MQ_TIMEDRECEIVE        280
-#define SYS_MQ_NOTIFY              281
-#define SYS_MQ_GETSETATTR          282
-#define SYS_MQ_TIMEDSEND_TIME64    418
-#define SYS_MQ_TIMEDRECEIVE_TIME64 419
-#define SYS_MMAP2                  192
-#define SYS_MPROTECT               125
-#define SYS_CLONE                  120
-#define SYS_FUTEX                  240
-#define SYS_SIGALTSTACK            186
-#define SYS_RT_SIGPENDING          176
-#define SYS_SIGPROCMASK            126
-#define SYS_SOCKETCALL             102
-#define SYS_IOCTL                  54
-#define SYS_DUP                    41
-#define SYS_DUP2                   63
-#define SYS_PIPE                   42
-#define SYS_PIPE2                  331
-#define SYS_SELECT                 82  /* old i386 select: 5 args behind one pointer */
-#define SYS_NEWSELECT              142 /* _newselect: the normal 5-arg form */
-#define SYS_POLL                   168
-#define SYS_PRCTL                  172
-#define SYS_CAPGET                 184
-#define SYS_CAPSET                 185
-#define SYS_PSELECT6               308
-#define SYS_PPOLL                  309
-#define SYS_GETRUSAGE              77
-#define SYS_GETTIMEOFDAY           78
-#define SYS_TIME                   13
-#define SYS_SETTIMEOFDAY           79
-#define SYS_STIME                  25
-#define SYS_STAT                   106
-#define SYS_LSTAT                  107
-#define SYS_UNAME                  122
-#define SYS_READV                  145
-#define SYS_WRITEV                 146
-#define SYS_PREAD64                180
-#define SYS_PWRITE64               181
-#define SYS_GETCWD                 183
-#define SYS_LLSEEK                 140
-#define SYS_FSTAT64                197
-#define SYS_STATFS64               268
-#define SYS_FSTATFS64              269
-#define SYS_FCNTL64                221
-#define SYS_GETTID                 224
-#define SYS_OPENAT                 295
-#define SYS_FSTATAT64              300
-#define SYS_STAT64                 195
-#define SYS_LSTAT64                196
-#define SYS_GETDENTS64             220
-#define SYS_SET_THREAD_AREA        243
-#define SYS_EXIT_GROUP             252
-#define SYS_PTRACE                 26
-#define SYS_PERSONALITY            136
-#define SYS_GETCPU                 318
-#define SYS_MLOCK                  150
-#define SYS_MUNLOCK                151
-#define SYS_MLOCKALL               152
-#define SYS_MUNLOCKALL             153
-#define SYS_RT_SIGTIMEDWAIT        177
-#define SYS_MINCORE                218
-#define SYS_MLOCK2                 376
-#define SYS_SET_TID_ADDRESS        258
-#define SYS_SET_ROBUST_LIST        311
-#define SYS_GET_ROBUST_LIST        312
-#define SYS_FUTEX_WAITV            449
-#define SYS_FCHMODAT2              452
-#define SYS_WAITID                 284
-#define SYS_UTIMENSAT              320
-#define SYS_NANOSLEEP              162
-#define SYS_GETUID32               199
-#define SYS_GETGID32               200
-#define SYS_GETEUID32              201
-#define SYS_GETEGID32              202
-#define SYS_CLOCK_SETTIME          264
-#define SYS_CLOCK_GETTIME          265
-#define SYS_CLOCK_GETRES           266
-#define SYS_CLOCK_NANOSLEEP        267
-#define SYS_GETRANDOM              355
-#define SYS_SECCOMP                354
-#define SYS_UNSHARE                310
-#define SYS_SETNS                  346
-#define SYS_KCMP                   349
-#define SYS_PROCESS_VM_READV       347
-#define SYS_PROCESS_VM_WRITEV      348
-#define SYS_GET_MEMPOLICY          275
-#define SYS_RSEQ                   386
-#define SYS_KILL                   37
-#define SYS_SIGRETURN              119
-#define SYS_RT_SIGRETURN           173
-#define SYS_RT_SIGACTION           174
-#define SYS_RT_SIGPROCMASK         175
-#define SYS_TKILL                  238
-#define SYS_TGKILL                 270
-#define SYS_RT_SIGQUEUEINFO        178
-#define SYS_RT_TGSIGQUEUEINFO      335
-#define SYS_SIGNALFD               321
-#define SYS_SIGNALFD4              327
+#define SYS_MQ_OPEN                 277
+#define SYS_MQ_UNLINK               278
+#define SYS_MQ_TIMEDSEND            279
+#define SYS_MQ_TIMEDRECEIVE         280
+#define SYS_MQ_NOTIFY               281
+#define SYS_MQ_GETSETATTR           282
+#define SYS_MQ_TIMEDSEND_TIME64     418
+#define SYS_MQ_TIMEDRECEIVE_TIME64  419
+#define SYS_MMAP2                   192
+#define SYS_MPROTECT                125
+#define SYS_CLONE                   120
+#define SYS_FUTEX                   240
+#define SYS_SIGALTSTACK             186
+#define SYS_RT_SIGPENDING           176
+#define SYS_SIGPROCMASK             126
+#define SYS_SOCKETCALL              102
+#define SYS_IOCTL                   54
+#define SYS_DUP                     41
+#define SYS_DUP2                    63
+#define SYS_PIPE                    42
+#define SYS_PIPE2                   331
+#define SYS_SELECT                  82  /* old i386 select: 5 args behind one pointer */
+#define SYS_NEWSELECT               142 /* _newselect: the normal 5-arg form */
+#define SYS_POLL                    168
+#define SYS_PRCTL                   172
+#define SYS_CAPGET                  184
+#define SYS_CAPSET                  185
+#define SYS_PSELECT6                308
+#define SYS_PPOLL                   309
+#define SYS_GETRUSAGE               77
+#define SYS_GETTIMEOFDAY            78
+#define SYS_TIME                    13
+#define SYS_SETTIMEOFDAY            79
+#define SYS_STIME                   25
+#define SYS_STAT                    106
+#define SYS_LSTAT                   107
+#define SYS_UNAME                   122
+#define SYS_READV                   145
+#define SYS_WRITEV                  146
+#define SYS_PREAD64                 180
+#define SYS_PWRITE64                181
+#define SYS_PREADV                  333
+#define SYS_PWRITEV                 334
+#define SYS_PREADV2                 378
+#define SYS_PWRITEV2                379
+#define SYS_GETCWD                  183
+#define SYS_LLSEEK                  140
+#define SYS_FSTAT64                 197
+#define SYS_STATFS64                268
+#define SYS_FSTATFS64               269
+#define SYS_USTAT                   62
+#define SYS_SYSFS                   135
+#define SYS_VHANGUP                 111
+#define SYS_FCNTL64                 221
+#define SYS_GETTID                  224
+#define SYS_OPENAT                  295
+#define SYS_OPENAT2                 437
+#define SYS_FSTATAT64               300
+#define SYS_STAT64                  195
+#define SYS_LSTAT64                 196
+#define SYS_GETDENTS64              220
+#define SYS_SET_THREAD_AREA         243
+#define SYS_EXIT_GROUP              252
+#define SYS_PTRACE                  26
+#define SYS_PERSONALITY             136
+#define SYS_GETCPU                  318
+#define SYS_MLOCK                   150
+#define SYS_MUNLOCK                 151
+#define SYS_MLOCKALL                152
+#define SYS_MUNLOCKALL              153
+#define SYS_RT_SIGTIMEDWAIT         177
+#define SYS_MINCORE                 218
+#define SYS_MLOCK2                  376
+#define SYS_SET_TID_ADDRESS         258
+#define SYS_SET_ROBUST_LIST         311
+#define SYS_GET_ROBUST_LIST         312
+#define SYS_FUTEX_WAITV             449
+#define SYS_FUTEX_WAKE              454
+#define SYS_FUTEX_WAIT              455
+#define SYS_FUTEX_REQUEUE           456
+#define SYS_MEMBARRIER              375
+#define SYS_FCHMODAT2               452
+#define SYS_PROCESS_MADVISE         440
+#define SYS_MEMFD_SECRET            447
+#define SYS_PROCESS_MRELEASE        448
+#define SYS_CACHESTAT               451
+#define SYS_MSEAL                   462
+#define SYS_WAITID                  284
+#define SYS_UTIMENSAT               320
+#define SYS_NANOSLEEP               162
+#define SYS_GETUID32                199
+#define SYS_GETGID32                200
+#define SYS_GETEUID32               201
+#define SYS_GETEGID32               202
+#define SYS_CLOCK_SETTIME           264
+#define SYS_CLOCK_GETTIME           265
+#define SYS_CLOCK_GETRES            266
+#define SYS_CLOCK_NANOSLEEP         267
+#define SYS_GETRANDOM               355
+#define SYS_SECCOMP                 354
+#define SYS_UNSHARE                 310
+#define SYS_SETNS                   346
+#define SYS_KCMP                    349
+#define SYS_PROCESS_VM_READV        347
+#define SYS_PROCESS_VM_WRITEV       348
+#define SYS_GET_MEMPOLICY           275
+#define SYS_MBIND                   274
+#define SYS_SET_MEMPOLICY           276
+#define SYS_MIGRATE_PAGES           294
+#define SYS_MOVE_PAGES              317
+#define SYS_SET_MEMPOLICY_HOME_NODE 450
+#define SYS_RSEQ                    386
+#define SYS_KILL                    37
+#define SYS_SIGRETURN               119
+#define SYS_RT_SIGRETURN            173
+#define SYS_RT_SIGACTION            174
+#define SYS_RT_SIGPROCMASK          175
+#define SYS_TKILL                   238
+#define SYS_TGKILL                  270
+#define SYS_RT_SIGQUEUEINFO         178
+#define SYS_RT_TGSIGQUEUEINFO       335
+#define SYS_SIGNALFD                321
+#define SYS_SIGNALFD4               327
 
 /* The scheduling calls, whose names are longer than the column above. */
 #define SYS_SCHED_SETPARAM         154
@@ -215,6 +238,8 @@
 #define SYS_SCHED_RR_GET_INTERVAL  161
 #define SYS_SCHED_SETAFFINITY      241
 #define SYS_SCHED_GETAFFINITY      242
+#define SYS_SCHED_SETATTR          351
+#define SYS_SCHED_GETATTR          352
 
 /* The clock calls with 64-bit times, and utimensat's, whose names are longer
  * than the column above. */
@@ -241,13 +266,14 @@
 #define SYS_DUP3          330
 #define SYS_PRLIMIT64     340
 
-/* Write-back and space: fsync and fdatasync write back one open file, sync
- * and syncfs every mounted file system (syscall_fs.c). */
-#define SYS_SYNC      36
-#define SYS_FSYNC     118
-#define SYS_FDATASYNC 148
-#define SYS_SYNCFS    344
-#define SYS_FALLOCATE 324
+/* Write-back and space: fsync, fdatasync and sync_file_range write back one
+ * open file, sync and syncfs every mounted file system (syscall_fs.c). */
+#define SYS_SYNC            36
+#define SYS_FSYNC           118
+#define SYS_FDATASYNC       148
+#define SYS_SYNC_FILE_RANGE 314
+#define SYS_SYNCFS          344
+#define SYS_FALLOCATE       324
 
 /* Advice about coming reads, which the page cache accepts and ignores. */
 #define SYS_READAHEAD    225
@@ -283,6 +309,12 @@
 #define SYS_SETREGID32  204
 #define SYS_SETRESUID32 208
 #define SYS_SETRESGID32 210
+/* setfsuid and setfsgid: the old numbers take 16-bit ids, whose -1 is
+ * 0xFFFF, and the *32 numbers whole ones. */
+#define SYS_SETFSUID    138
+#define SYS_SETFSGID    139
+#define SYS_SETFSUID32  215
+#define SYS_SETFSGID32  216
 /* The mode and owner calls; the 16-bit chown numbers take 32-bit ids here,
  * as their *32 forms do. */
 #define SYS_CHMOD       15

@@ -85,9 +85,25 @@ int copy_from_user(void *dst, const void __user *src, size_t n)
     return 0;
 }
 
+/* Run once by the next copy_to_user before it copies: another thread's
+ * work while the copy sleeps. */
+static void (*copy_hook)(void);
+/* The copies to let through before the next copy_to_user faults; -1 for
+ * none. */
+static int copy_fault_after = -1;
+
 /** Copy to a test address. */
 int copy_to_user(void __user *dst, const void *src, size_t n)
 {
+    void (*hook)(void) = copy_hook;
+
+    copy_hook = NULL;
+    if (hook) {
+        hook();
+    }
+    if (copy_fault_after >= 0 && copy_fault_after-- == 0) {
+        return -EFAULT;
+    }
     if ((uintptr_t)dst < 4096) {
         return -EFAULT;
     }
@@ -203,7 +219,7 @@ void drm_event_cancel_free(struct drm_pending_event *e)
 
 /* ---- buffer objects: a table of handles over a few objects ---- */
 
-#define MAX_GEM     8
+#define MAX_GEM     16
 #define MAX_HANDLES 32
 static struct drm_gem_object gem[MAX_GEM];
 static struct {
@@ -220,6 +236,7 @@ static uint32_t gem_new(struct drm_file *file, int i, uint64_t size)
 
     gem[i].size = size;
     gem[i].refs = 1;
+    gem[i].resv = &gem[i].resv_own;
     CHECK(drm_gem_handle_create(file, &gem[i], &h) == 0, "a model handle is made");
     gem[i].refs--;
     return h;
@@ -307,6 +324,8 @@ int32_t drm_gem_handle_delete(struct drm_file *file, uint32_t handle)
 
 static struct dma_fence in_fence;
 static int fence_refs, fence_waits, fence_wait_rc;
+static struct dma_fence *fence_waited; /* the last fence waited for */
+static struct dma_fence *unsignaled;   /* a fence a row holds unsignalled */
 
 /** The fence of sync file `fd`, held, or NULL. */
 struct dma_fence *sync_file_get_fence(int32_t fd)
@@ -333,6 +352,7 @@ int32_t dma_fence_wait_until(struct dma_fence *fence, int intr, int64_t deadline
     (void)deadline_ns;
     CHECK(intr, "a commit waits for its fences interruptibly");
     fence_waits++;
+    fence_waited = fence;
     return fence_wait_rc;
 }
 
@@ -345,11 +365,21 @@ struct dma_fence *dma_fence_get(struct dma_fence *fence)
     return fence;
 }
 
-/** Whether the fence has signalled: the model's has. */
+/** No merge: no row shows a framebuffer of two objects with pending
+ * writes, which alone would need one. */
+struct dma_fence *dma_fence_merge(struct dma_fence **fences, uint32_t count)
+{
+    (void)fences;
+    (void)count;
+    CHECK(0, "no fences are merged in the model");
+    return NULL;
+}
+
+/** Whether the fence has signalled: the model's has, but the one a row
+ * holds unsignalled. */
 int dma_fence_is_signaled(struct dma_fence *fence)
 {
-    (void)fence;
-    return 1;
+    return fence != unsignaled;
 }
 
 /** No callback is added to a fence that has signalled. */
@@ -360,6 +390,20 @@ int32_t dma_fence_add_callback(struct dma_fence *fence, struct dma_fence_cb *cb,
     (void)cb;
     (void)func;
     return -ENOENT;
+}
+
+/** Nothing to take back, since no callback is ever added. */
+int dma_fence_remove_callback(struct dma_fence *fence, struct dma_fence_cb *cb)
+{
+    (void)fence;
+    (void)cb;
+    return 0;
+}
+
+/** The model's monotonic time in nanoseconds. */
+int64_t dma_fence_now(void)
+{
+    return model_now_ns;
 }
 
 /** Record nothing of an error. */
@@ -399,6 +443,34 @@ int32_t sync_file_create(struct dma_fence *fence, const char *name)
     (void)fence;
     (void)name;
     return -EMFILE;
+}
+
+/** No descriptor table: no descriptor can be reserved. */
+int fd_alloc(fd_table_t *table)
+{
+    (void)table;
+    return -EMFILE;
+}
+
+/** Never reached, since no descriptor can be reserved. */
+struct sync_file *sync_file_new(struct dma_fence *fence, const char *name)
+{
+    (void)fence;
+    (void)name;
+    return NULL;
+}
+
+/** Never reached, as sync_file_new. */
+void sync_file_drop(struct sync_file *s)
+{
+    (void)s;
+}
+
+/** Never reached, as sync_file_new. */
+void sync_file_attach(int32_t fd, struct sync_file *s)
+{
+    (void)fd;
+    (void)s;
 }
 
 /** Nothing to free. */

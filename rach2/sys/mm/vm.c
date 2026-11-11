@@ -98,6 +98,50 @@ void *vm_device_object(const struct vm_file *f)
     return f && f->device == vm_device_page ? ((const struct vm_device *)f)->obj : NULL;
 }
 
+int vm_device_access(struct vm_file *f, uint64_t offset, void *buf, uint32_t len, int write)
+{
+    struct vm_device *d = (struct vm_device *)f;
+
+    if (!f || f->device != vm_device_page || !d->ops->access) {
+        return -EIO;
+    }
+    return d->ops->access(d->obj, offset, buf, len, write);
+}
+
+struct vm_policy *vm_policy_get(struct vm_policy *p)
+{
+    if (p) {
+        p->refs++;
+    }
+    return p;
+}
+
+void vm_policy_put(struct vm_policy *p)
+{
+    if (p && --p->refs == 0) {
+        kfree(p);
+    }
+}
+
+int vm_policy_equal(const struct vm_policy *a, const struct vm_policy *b)
+{
+    uint32_t i;
+
+    if (a == b) {
+        return 1;
+    }
+    if (!a || !b || a->mode != b->mode || a->flags != b->flags || a->home != b->home ||
+        a->nodes != b->nodes) {
+        return 0;
+    }
+    for (i = 0; a->flags && i < VM_NODES_WORDS; i++) {
+        if (a->user[i] != b->user[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 void vm_file_reap(void)
 {
     struct vm_file *f;
@@ -251,7 +295,8 @@ int vm_reserve(vm_space_t *vm, uint32_t n)
     return vm_nodes_reserve(vm, n);
 }
 
-/** Insert a region from a reserved node, taking its file reference. */
+/** Insert a region from a reserved node, taking its file reference; its
+ * policy is the default. */
 static vma_t *vm_link(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_type_t type,
                       struct vm_file *file, uint32_t pgoff)
 {
@@ -276,6 +321,8 @@ static vma_t *vm_link(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t p
     r->type = type;
     r->file = file;
     r->pgoff = pgoff;
+    r->policy = NULL;
+    r->anon = 0;
     r->parent = parent;
     r->left = r->right = NULL;
     r->height = 1;
@@ -335,23 +382,30 @@ static void vm_delete(vm_space_t *vm, vma_t *r)
     vm->count--;
     vm->total -= r->end - r->start;
     vm_file_put(r->file);
+    vm_policy_put(r->policy);
+    r->policy = NULL;
     r->next = vm->spare;
     vm->spare = r;
     vm_balance(vm, parent);
 }
 
-/** Split r at an interior address, using a reserved node for the upper part. */
+/** Split r at an interior address, using a reserved node for the upper
+ * part, which takes a reference to r's policy. */
 static vma_t *vm_split(vm_space_t *vm, vma_t *r, uintptr_t at)
 {
     uintptr_t end = r->end;
     uint32_t pgoff = r->pgoff;
+    vma_t *upper;
 
     if (r->file) {
         pgoff += (uint32_t)((at - r->start) >> VM_PAGE_SHIFT);
     }
     r->end = at;
     vm->total -= end - at;
-    return vm_link(vm, at, end, r->prot, r->type, r->file, pgoff);
+    upper = vm_link(vm, at, end, r->prot, r->type, r->file, pgoff);
+    upper->policy = vm_policy_get(r->policy);
+    upper->anon = r->anon;
+    return upper;
 }
 
 /** Merge a compatible right neighbour into r; return 1 if one was removed. */
@@ -361,11 +415,12 @@ static int vm_merge(vm_space_t *vm, vma_t *r)
     uintptr_t end;
 
     if (!s || r->end != s->start || r->prot != s->prot || r->type != s->type ||
-        r->file != s->file ||
+        r->file != s->file || !vm_policy_equal(r->policy, s->policy) ||
         (r->file && r->pgoff + ((r->end - r->start) >> VM_PAGE_SHIFT) != s->pgoff)) {
         return 0;
     }
     end = s->end;
+    r->anon |= s->anon;
     vm_delete(vm, s);
     vm->total += end - r->end;
     r->end = end;
@@ -380,6 +435,8 @@ void vm_init(vm_space_t *vm)
     while (r) {
         next = r->next;
         vm_file_put(r->file);
+        vm_policy_put(r->policy);
+        r->policy = NULL;
         r->next = vm->spare;
         vm->spare = r;
         r = next;
@@ -409,6 +466,7 @@ void vm_free(vm_space_t *vm)
 int vm_copy(vm_space_t *dst, const vm_space_t *src)
 {
     const vma_t *r;
+    vma_t *copy;
 
     *dst = *src;
     dst->root = dst->first = dst->last = dst->spare = NULL;
@@ -423,8 +481,10 @@ int vm_copy(vm_space_t *dst, const vm_space_t *src)
     }
     for (r = vm_first(src); r; r = vm_next(r)) {
         if (!(r->prot & VM_PROT_DONTFORK)) {
-            (void)vm_link(dst, r->start, r->end, r->prot & ~(uint32_t)VM_PROT_LOCKS, r->type,
-                          r->file, r->pgoff);
+            copy = vm_link(dst, r->start, r->end, r->prot & ~(uint32_t)VM_PROT_LOCKS, r->type,
+                           r->file, r->pgoff);
+            copy->policy = vm_policy_get(r->policy);
+            copy->anon = (r->prot & VM_PROT_WIPEONFORK) ? 0 : r->anon;
         }
     }
     return 0;
@@ -452,13 +512,54 @@ int vm_insert(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_
 int vm_insert_file(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_type_t type,
                    struct vm_file *file, uint32_t pgoff)
 {
+    vma_t like;
+
+    like.prot = prot;
+    like.type = type;
+    like.file = file;
+    like.policy = NULL;
+    like.anon = 0;
+    return vm_insert_like(vm, start, end, &like, pgoff);
+}
+
+int vm_insert_like(vm_space_t *vm, uintptr_t start, uintptr_t end, const vma_t *like,
+                   uint32_t pgoff)
+{
     vma_t *r;
 
     if (start >= end || ((start | end) & VM_PAGE_MASK) || vm_overlaps(vm, start, end) ||
         vm_reserve(vm, 1) != 0) {
         return -1;
     }
-    r = vm_link(vm, start, end, prot, type, file, pgoff);
+    r = vm_link(vm, start, end, like->prot, like->type, like->file, pgoff);
+    r->policy = vm_policy_get(like->policy);
+    r->anon = like->anon;
+    (void)vm_merge(vm, r);
+    if (r->prev) {
+        (void)vm_merge(vm, r->prev);
+    }
+    return 0;
+}
+
+int vm_set_policy(vm_space_t *vm, uintptr_t start, uintptr_t end, struct vm_policy *pol)
+{
+    vma_t *r = vm_find(vm, start);
+
+    if (!r || start >= end || end > r->end) {
+        return 0;
+    }
+    if (vm_reserve(vm, (uint32_t)(r->start < start) + (uint32_t)(r->end > end)) != 0) {
+        return -1;
+    }
+    if (r->start < start) {
+        r = vm_split(vm, r, start);
+    }
+    if (r->end > end) {
+        (void)vm_split(vm, r, end);
+    }
+    (void)vm_policy_get(pol);
+    vm_policy_put(r->policy);
+    r->policy = pol;
     (void)vm_merge(vm, r);
     if (r->prev) {
         (void)vm_merge(vm, r->prev);
@@ -504,25 +605,67 @@ int vm_remove(vm_space_t *vm, uintptr_t start, uintptr_t end)
     return 0;
 }
 
-/* An option of `vm_change`, above every protection bit: a region with
- * VM_PROT_NOWRITE stops the change. */
-#define VM_CHANGE_NOWRITE 0x80000000u
+/* Options of `vm_change`, above every protection bit: a region with
+ * VM_PROT_NOWRITE, or with VM_PROT_SECRET, stops the change; a private
+ * region made writable is charged; and, with the key k in bits 24 to 27, a
+ * region left with key k, the execute-only key, takes key 0. */
+#define VM_CHANGE_NOWRITE   0x80000000u
+#define VM_CHANGE_NOEXEC    0x40000000u
+#define VM_CHANGE_ACCOUNT   0x20000000u
+#define VM_CHANGE_XO        0x10000000u
+#define VM_CHANGE_XO_KEY(k) (VM_CHANGE_XO | ((uint32_t)(k) << 24))
+#define VM_CHANGE_OPTS      0xFF000000u
 
 /**
- * Give each region of [start, end) the protection `(prot & ~mask) | bits`,
- * for `vm_protect`, `vm_advise` and `vm_lock`, splitting the regions the
- * range cuts at its ends and merging the pieces with neighbours that then
- * match. `opts` holds protection bits, a region with any of which keeps its
- * protection, and VM_CHANGE_NOWRITE, with which a region with
- * VM_PROT_NOWRITE stops the change with -3. An empty range changes nothing.
- * 0, -1 for a gap, -2 when a split has no room, or -3; of -1 and -3, the
- * one met first in address order, and every error leaves the regions as
- * they were.
+ * The protection `vm_change` gives the region `r`: `(r->prot & ~mask) | bits`,
+ * with VM_PROT_ACCOUNT added under VM_CHANGE_ACCOUNT to a private region that
+ * was not writable and is not VM_PROT_NORESERVE, as Linux's mprotect_fixup
+ * charges one, and dropped by a change that leaves write off from anonymous
+ * memory none of whose pages was written, as mprotect_fixup drops it from an
+ * anonymous region with no anon_vma; and with VM_CHANGE_XO_KEY a key left at
+ * the execute-only key dropped to 0. A change that leaves the protection as
+ * it was changes nothing, as mprotect_fixup returns first when the flags are
+ * the same.
+ */
+static uint32_t vm_change_prot(const vma_t *r, uint32_t mask, uint32_t bits, uint32_t opts)
+{
+    uint32_t prot = (r->prot & ~mask) | bits;
+
+    if (prot == r->prot) {
+        return prot;
+    }
+    if ((opts & VM_CHANGE_ACCOUNT) && r->type != VM_SHARED &&
+        !(r->prot & (VM_PROT_WRITE | VM_PROT_NORESERVE))) {
+        prot |= VM_PROT_ACCOUNT;
+    } else if ((mask & VM_PROT_WRITE) && !(prot & VM_PROT_WRITE) && !r->anon && !r->file &&
+               r->type != VM_SHARED && !(r->prot & VM_PROT_IO)) {
+        prot &= ~(uint32_t)VM_PROT_ACCOUNT;
+    }
+    if ((opts & VM_CHANGE_XO) && VM_PROT_KEY(prot) == ((opts >> 24) & 15u)) {
+        prot &= ~(uint32_t)VM_PROT_PKEY;
+    }
+    return prot;
+}
+
+/**
+ * Give each region of [start, end) the protection `(prot & ~mask) | bits`, for
+ * `vm_protect`, `vm_advise` and `vm_lock`, splitting the regions the range cuts
+ * at its ends and merging the pieces with neighbours that then match. `opts`
+ * holds protection bits, a region with any of which keeps its protection, and
+ * VM_CHANGE_NOWRITE and VM_CHANGE_NOEXEC, with which a region with
+ * VM_PROT_NOWRITE, or VM_PROT_SECRET or VM_PROT_VVAR, stops the change
+ * with -3, as Linux's
+ * mprotect answers EACCES without VM_MAYWRITE or VM_MAYEXEC, and
+ * VM_CHANGE_ACCOUNT and VM_CHANGE_XO_KEY (`vm_change_prot`). An empty range
+ * changes nothing. 0,
+ * -1 for a gap, -2 when a split has no room, or -3; of -1 and -3, the one
+ * met first in address order, and every error leaves the regions as they
+ * were.
  */
 static int vm_change(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t mask, uint32_t bits,
                      uint32_t opts)
 {
-    uint32_t skip = opts & ~(uint32_t)VM_CHANGE_NOWRITE;
+    uint32_t skip = opts & ~(uint32_t)VM_CHANGE_OPTS;
     uintptr_t at = start;
     vma_t *r, *first, *last = NULL;
     uint32_t splits;
@@ -535,7 +678,8 @@ static int vm_change(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t ma
         if (r->start > at) {
             break;
         }
-        if ((opts & VM_CHANGE_NOWRITE) && (r->prot & VM_PROT_NOWRITE)) {
+        if (((opts & VM_CHANGE_NOWRITE) && (r->prot & VM_PROT_NOWRITE)) ||
+            ((opts & VM_CHANGE_NOEXEC) && (r->prot & (VM_PROT_SECRET | VM_PROT_VVAR)))) {
             return -3;
         }
         at = r->end;
@@ -556,7 +700,7 @@ static int vm_change(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t ma
             (void)vm_split(vm, r, end);
         }
         if (!(r->prot & skip)) {
-            r->prot = (r->prot & ~mask) | bits;
+            r->prot = vm_change_prot(r, mask, bits, opts);
         }
     }
     r = first->prev ? first->prev : first;
@@ -570,20 +714,79 @@ static int vm_change(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t ma
 
 int vm_protect(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot)
 {
-    return vm_change(vm, start, end, ~(uint32_t)VM_PROT_KEPT, prot & ~(uint32_t)VM_PROT_KEPT,
-                     (prot & VM_PROT_WRITE) ? VM_CHANGE_NOWRITE : 0u);
+    return vm_protect_key(vm, start, end, prot, -1, -1);
+}
+
+int vm_protect_key(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, int key,
+                   int exec_key)
+{
+    uint32_t mask = ~(uint32_t)VM_PROT_KEPT;
+    uint32_t bits = prot & ~(uint32_t)VM_PROT_KEPT;
+    uint32_t opts = ((prot & VM_PROT_WRITE) ? VM_CHANGE_NOWRITE | VM_CHANGE_ACCOUNT : 0u) |
+                    ((prot & VM_PROT_EXEC) ? VM_CHANGE_NOEXEC : 0u);
+
+    if (key >= 0) {
+        mask |= VM_PROT_PKEY;
+        bits |= ((uint32_t)key << VM_PROT_PKEY_SHIFT) & VM_PROT_PKEY;
+    } else if (exec_key > 0) {
+        opts |= VM_CHANGE_XO_KEY(exec_key);
+    }
+    return vm_change(vm, start, end, mask, bits, opts);
 }
 
 int vm_advise(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t set, uint32_t clear)
 {
-    uint32_t mask = (set | clear) & (VM_PROT_DONTFORK | VM_PROT_GUARD);
+    uint32_t mask =
+        (set | clear) & (VM_PROT_DONTFORK | VM_PROT_GUARD | VM_PROT_SEALED | VM_PROT_WIPEONFORK);
 
     return vm_change(vm, start, end, mask, set & mask, 0);
 }
 
+uintptr_t vm_protect_stop(const vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot,
+                          int *why)
+{
+    uintptr_t at = start;
+    const vma_t *r;
+
+    *why = 0;
+    for (r = vm_lower(vm, start); r && at < end; r = vm_next(r)) {
+        if (r->start > at) {
+            break;
+        }
+        if (((prot & VM_PROT_WRITE) && (r->prot & VM_PROT_NOWRITE)) ||
+            ((prot & VM_PROT_EXEC) && (r->prot & (VM_PROT_SECRET | VM_PROT_VVAR)))) {
+            *why = -3;
+            return at;
+        }
+        if (r->prot & VM_PROT_SEALED) {
+            *why = -4;
+            return at;
+        }
+        at = r->end;
+    }
+    if (at < end) {
+        *why = -1;
+        return at;
+    }
+    return end;
+}
+
+uintptr_t vm_sealed_at(const vm_space_t *vm, uintptr_t start, uintptr_t end)
+{
+    const vma_t *r;
+
+    for (r = vm_lower(vm, start); r && r->start < end; r = vm_next(r)) {
+        if (r->prot & VM_PROT_SEALED) {
+            return r->start > start ? r->start : start;
+        }
+    }
+    return end;
+}
+
 int vm_lock(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t bits)
 {
-    return vm_change(vm, start, end, VM_PROT_LOCKS, bits & VM_PROT_LOCKS, VM_PROT_IO);
+    return vm_change(vm, start, end, VM_PROT_LOCKS, bits & VM_PROT_LOCKS,
+                     VM_PROT_IO | VM_PROT_SECRET);
 }
 
 void vm_lock_all(vm_space_t *vm, uint32_t bits)
@@ -591,7 +794,7 @@ void vm_lock_all(vm_space_t *vm, uint32_t bits)
     vma_t *r;
 
     for (r = vm->first; r; r = r->next) {
-        if (!(r->prot & VM_PROT_IO)) {
+        if (!(r->prot & (VM_PROT_IO | VM_PROT_SECRET))) {
             r->prot = (r->prot & ~(uint32_t)VM_PROT_LOCKS) | (bits & VM_PROT_LOCKS);
         }
     }
@@ -671,6 +874,28 @@ uintptr_t vm_find_free(vm_space_t *vm, uintptr_t len, uintptr_t lo, uintptr_t hi
     }
 }
 
+/** Find a top-down mapping, falling back to the whole range bottom-up. */
+uintptr_t vm_find_mmap(vm_space_t *vm, uintptr_t len, uintptr_t lo, uintptr_t base, uintptr_t hi)
+{
+    uintptr_t at = vm_find_free(vm, len, lo, base < hi ? base : hi);
+    const vma_t *r;
+
+    if (at || !len || lo >= hi || len > hi - lo) {
+        return at;
+    }
+    at = lo;
+    for (r = vm_lower(vm, lo); r && r->start < hi; r = vm_next(r)) {
+        gap_steps++;
+        if (r->start > at && len <= r->start - at) {
+            return at;
+        }
+        if (r->end > at) {
+            at = r->end;
+        }
+    }
+    return at <= hi - len ? at : 0;
+}
+
 uintptr_t vm_covered(const vm_space_t *vm, uintptr_t start, uintptr_t end)
 {
     uintptr_t total = 0;
@@ -701,13 +926,21 @@ int vm_grow_stack(vm_space_t *vm, uintptr_t page, uintptr_t as_limit)
     if (!r || r->type != VM_STACK || page >= r->start || page < vm->stack_limit) {
         return 0;
     }
+    if (r->prev && r->prev->type != VM_STACK &&
+        (r->prev->prot & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC)) &&
+        (page < r->prev->end || page - r->prev->end < VM_STACK_GUARD_GAP)) {
+        return 0;
+    }
     growth = r->start - page;
     if (vm->total > as_limit || growth > as_limit - vm->total) {
         return 0;
     }
     if (r->prot & VM_PROT_GUARD) {
         /* Linux's guard marks pages, not the region: the growth is stack. */
-        return vm_insert(vm, page, r->start, r->prot & ~(uint32_t)VM_PROT_GUARD, VM_STACK) == 0;
+        vma_t like = *r;
+
+        like.prot &= ~(uint32_t)VM_PROT_GUARD;
+        return vm_insert_like(vm, page, r->start, &like, 0) == 0;
     }
     vm->total += growth;
     r->start = page;

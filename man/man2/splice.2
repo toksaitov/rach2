@@ -1,4 +1,4 @@
-.Dd November 1, 2026
+.Dd November 11, 2026
 .Dt SPLICE 2
 .Os
 .Sh NAME
@@ -48,6 +48,25 @@ From a pipe to anything else they are written as
 writes them, and only the bytes written leave the pipe, so a short or
 failed write leaves the rest there.
 From a regular file to a pipe it reads what fits in the pipe.
+A pipe of
+.Em n
+pages holds at most
+.Em n
+of Linux's page buffers, and is full for
+.Fn splice ,
+.Fn tee ,
+.Fn vmsplice ,
+.Xr write 2
+and
+.Xr poll 2
+once it has that many, however few bytes they hold: each page of a file
+or of the caller's memory that the bytes come from takes one, and so does
+each buffer of another pipe, so a pipe of 64 KiB takes sixteen one-byte
+.Fn vmsplice
+calls, or 65535 bytes from byte 1 of a page.
+A write still puts bytes in the newest buffer when they join it, as
+.Xr write 2
+says.
 For the side that is a regular file, a non-null
 .Fa off_in
 or
@@ -63,6 +82,19 @@ is given or its description has
 the call then fails with
 .Er EAGAIN
 instead.
+An empty buffer that a write whose source faulted left in a pipe counts
+as something to read for
+.Fn tee
+and for a splice to another pipe, as on Linux:
+.Fn tee
+links it into the other pipe, where it takes a slot, and returns 0 when it
+linked nothing else, and
+.Fn splice
+moves it there and then waits for bytes, or fails with
+.Er EAGAIN .
+A splice to anything else and
+.Fn vmsplice
+let such buffers go and wait for bytes, as a read does.
 .Dv SPLICE_F_MOVE ,
 .Dv SPLICE_F_MORE
 and
@@ -94,13 +126,31 @@ Linux hands the pipe the caller's pages; this kernel copies the bytes,
 which a caller that leaves a buffer alone after
 .Dv SPLICE_F_GIFT
 cannot tell apart.
-The pipe end waits as
-.Fn splice
-does; reading, only the first buffer waits, and the call stops at an
-empty pipe once it has copied a byte.
-The vector is checked whole first, as
+The pipe end waits unless
+.Dv SPLICE_F_NONBLOCK
+is given, whatever its description's
+.Dv O_NONBLOCK ,
+as Linux's does: writing, the call takes what fits once it has copied a byte;
+reading, only the first buffer waits, and the call stops at an empty pipe
+once it has copied a byte.
+A page Linux would not hand the pipe, as its
+.Fn get_user_pages
+refuses it, is not copied either: the vDSO's data page,
+.Li [vvar] ,
+a page of a mapping made without
+.Dv PROT_READ
+that is not present in the mapping or is the shared zero page, as an
+untouched page is and an anonymous page read but never written is, a region of
+.Xr memfd_secret 2 ,
+device memory or a page the caller cannot read ends the call, with the
+bytes before it or
+.Er EFAULT .
+For a read end the vector is checked whole first, as
 .Xr readv 2
-checks it.
+checks it; for a write end only the lengths and that each range lies in
+user space are checked first, and each page is judged as it is copied, so
+a buffer that is not mapped ends the call with the bytes before it, as on
+Linux.
 .Pp
 .Fn sendfile
 copies up to
@@ -189,13 +239,15 @@ also an output with
 .It Bq Er EFAULT
 An offset cannot be read or written, or a
 .Fn vmsplice
-vector or buffer cannot be reached.
+vector or buffer cannot be reached or holds a page Linux would not hand
+the pipe.
 .It Bq Er EINTR
 A signal came before a byte moved.
 .It Bq Er EINVAL
 A flag is unknown, a
 .Fn vmsplice
-vector has more than 1024 buffers or 2 GiB or more in all, neither
+vector has more than 1024 buffers or a length negative as a signed size,
+neither
 .Fn splice
 descriptor is a pipe, both are one pipe, a
 .Fn tee
@@ -223,7 +275,7 @@ is at 2147483647, or a
 .Fn copy_file_range
 range passes the largest offset.
 .It Bq Er EPIPE
-A pipe output has no reader left;
+A pipe output has no reader left, or a TCP output can send no more;
 .Dv SIGPIPE
 is sent too.
 .It Bq Er ESPIPE

@@ -6,6 +6,7 @@
  */
 #include "arch/arch.h"
 #include "arch/uabi.h"
+#include "fpu.h"
 #include "../kernel.h"
 #include "mm/filecache.h"
 #include "mm/kheap.h"
@@ -31,6 +32,7 @@
 #include "proc/sigframe.h"
 #include "proc/pidfd.h"
 #include "proc/rseq.h"
+#include "proc/smp.h"
 #include "lib/krandom.h"
 #include "lib/kerrno.h"
 #include "lib/kirq.h"
@@ -132,13 +134,16 @@ void kstack_free(uintptr_t top)
  * it gives, or the one loader.s leaves below the boot stack, which process
  * 0, the first program and the programs the debug shell starts run on. The
  * double fault's handler and the page fault's call this with the address
- * the processor left in CR2.
+ * the processor left in CR2. It answers -1 without reading the process
+ * while the panic reads it (`k_panic_reading`), since a fault there may be
+ * about the process's record.
  */
 int kstack_overrun_pid(uintptr_t addr)
 {
     uintptr_t guard;
 
-    if (!current_proc || current_proc->kernel_stack < KERNEL_STACK_SIZE + PAGE_SIZE) {
+    if (k_panic_reading() || !current_proc ||
+        current_proc->kernel_stack < KERNEL_STACK_SIZE + PAGE_SIZE) {
         return -1;
     }
     guard = current_proc->kernel_stack - KERNEL_STACK_SIZE - PAGE_SIZE;
@@ -679,7 +684,7 @@ static int exec_file_read(void *ctx, void *dst, uint32_t count, uint32_t off)
 {
     struct exec_file *f = ctx;
     int page = count == PAGE_SIZE && off % PAGE_SIZE == 0;
-    uint32_t epoch = filecache_epoch();
+    uint32_t epoch;
     int32_t got;
 
     if (f->held != NULL) {
@@ -688,6 +693,7 @@ static int exec_file_read(void *ctx, void *dst, uint32_t count, uint32_t off)
     if (f->ref.mnt == NULL) {
         return krffs_read(f->path, (char *)dst, count, off);
     }
+    epoch = page ? filecache_epoch(f->ref.mnt, f->ref.node) : 0;
     if (page && filecache_read_node(f->ref.mnt, f->ref.node, off / PAGE_SIZE, dst)) {
         return (int)count;
     }
@@ -968,26 +974,62 @@ static int32_t exec_shebang(struct exec_state *s, uint32_t *argc,
     return rc < 0 ? rc : 1;
 }
 
+/** What a move of `p`'s effective or file-system ids undoes: its address
+ * space stops being dumpable, for every thread that shares it, and it loses
+ * its parent-death signal, so the parent it had cannot signal the identity
+ * it now has. */
+static void cred_undump(process_t *p)
+{
+    if (p->mm) {
+        p->mm->dumpable = 0;
+    }
+    p->pdeath_signal = 0;
+}
+
 /**
  * What a move of the effective ids undoes, as Linux's `commit_creds` undoes
  * it: when `p`'s effective uid or gid is no longer `old_euid` or `old_egid`,
- * its address space stops being dumpable, for every thread that shares it,
- * and it loses its parent-death signal, so the parent it had cannot signal
- * the identity it now has. A new effective uid also ends the capabilities
- * it was granted in its user namespace (`ns_granted`), where its privilege
- * is then its uid's.
+ * what `cred_undump` takes away. A new effective uid also ends the
+ * capabilities it was granted in its user namespace (`ns_granted`), where
+ * its privilege is then its uid's; one that comes to root from another
+ * gives back the capabilities of CAP_FS_SET (PROC_FSCAPS_OFF), as Linux's
+ * `cap_emulate_setxuid` makes the effective set the permitted one.
  */
 static void cred_moved(process_t *p, uint32_t old_euid, uint32_t old_egid)
 {
     if (p->euid != old_euid || p->egid != old_egid) {
-        if (p->mm) {
-            p->mm->dumpable = 0;
-        }
-        p->pdeath_signal = 0;
+        cred_undump(p);
     }
     if (p->euid != old_euid) {
         p->ns_granted = 0;
     }
+    if (uid_seen(old_euid) != 0 && uid_seen(p->euid) == 0) {
+        p->fs_own &= ~PROC_FSCAPS_OFF;
+    }
+}
+
+/**
+ * Make `p`'s file-system user id its effective one again, as Linux does in
+ * every call that sets user ids, whether or not the call moved the effective
+ * id. An id setfsuid had set apart moves by that, which undoes what a move
+ * of the effective id does (`cred_undump`).
+ */
+static void fsuid_follow(process_t *p)
+{
+    if ((p->fs_own & PROC_FSUID_OWN) && p->fsuid != p->euid) {
+        cred_undump(p);
+    }
+    p->fs_own &= ~PROC_FSUID_OWN;
+}
+
+/** `fsuid_follow` for the file-system group id, in every call that sets
+ * group ids. */
+static void fsgid_follow(process_t *p)
+{
+    if ((p->fs_own & PROC_FSGID_OWN) && p->fsgid != p->egid) {
+        cred_undump(p);
+    }
+    p->fs_own &= ~PROC_FSGID_OWN;
 }
 
 /** Whether any of the caller's real, effective and saved user ids is root
@@ -1048,22 +1090,21 @@ static int32_t ids_named(uint32_t *v, int n, int gid)
 /**
  * What an exec's credentials change beside the ids, as Linux's exec does:
  * the new image's address space `mm` is dumpable unless the image runs with
- * ids its caller lacks (`secure`), its effective ids moved from `old_euid`
- * and `old_egid`, it is privileged where its caller was not
+ * ids its caller lacks (`secure`), its effective or file-system ids moved
+ * (`ids_moved`), it is privileged where its caller was not
  * (`was_privileged`), or an image it loaded is one the caller may not read
  * (`unreadable`), whose bytes a core file or a tracer's attach would give
  * the caller, as Linux's `would_dump` has it. A secure exec, or one that
- * moved the effective ids or made the caller privileged, clears the
+ * moved those ids or made the caller privileged, clears the
  * parent-death signal too, as Linux's `commit_creds` clears it; a secure
  * exec lowers a soft RLIMIT_STACK above 8 MiB to 8 MiB. The flag is set
  * before the address space is installed, so no other process sees the image
  * dumpable while it runs with new ids.
  */
-static void exec_privileges(struct mm *mm, int secure, int unreadable, uint32_t old_euid,
-                            uint32_t old_egid, int was_privileged)
+static void exec_privileges(struct mm *mm, int secure, int unreadable, int ids_moved,
+                            int was_privileged)
 {
-    int moved = current_proc->euid != old_euid || current_proc->egid != old_egid ||
-                (!was_privileged && proc_privileged(current_proc));
+    int moved = ids_moved || (!was_privileged && proc_privileged(current_proc));
 
     mm->dumpable = secure || moved || unreadable ? 0u : 1u;
     if (secure || moved) {
@@ -1096,6 +1137,37 @@ static uintptr_t exec_stack_window(const struct exec_state *s, uintptr_t bottom,
         floor = bottom;
     }
     return s->stack_top - PAGE_SIZE - floor;
+}
+
+/** The stack's growth at an exec below the pages its arguments took. */
+#define EXEC_STACK_EXPAND 131072UL
+
+/**
+ * The page the stack of the new image in `s` starts at once the exec ends:
+ * `EXEC_STACK_EXPAND` bytes below `bottom`, where the pages its arguments
+ * took start, while the whole stack stays within the soft RLIMIT_STACK
+ * `limit`, as Linux 6.12's `setup_arg_pages` (fs/exec.c) expands it, and
+ * never below `floor`, the bottom of the window `exec_stack_window` gives.
+ * A program's first frames then lie in the stack's region and need no
+ * growth, which an accessible mapping within the guard gap below them would
+ * refuse; an i386 Wine maps the address space below its stack to within
+ * 128 KiB of its stack pointer.
+ */
+static uintptr_t exec_stack_base(const struct exec_state *s, uintptr_t bottom, unsigned long limit,
+                                 uintptr_t floor)
+{
+    uintptr_t size = s->stack_top - bottom + EXEC_STACK_EXPAND;
+    uintptr_t rlim = limit & ~(unsigned long)(PAGE_SIZE - 1);
+    uintptr_t base;
+
+    if (size > rlim) {
+        size = rlim;
+    }
+    base = s->stack_top - size;
+    if (base < floor) {
+        base = floor;
+    }
+    return base < bottom ? base : bottom;
 }
 
 /**
@@ -1907,6 +1979,7 @@ static int32_t exec_build(struct exec_state *s)
     uintptr_t bottom = uimage_bottom(&s->args);
     uintptr_t vdso_at = s->mmap_base + PAGE_SIZE;
     unsigned long limit = current_proc->rlim[RLIM_STACK].cur;
+    uintptr_t window, base;
     uintptr_t dyn_floor = ELF_ET_DYN_BASE;
     int abi = s->compat ? VDSO_IA32 : VDSO_NATIVE;
     uint8_t random16[16];
@@ -1940,12 +2013,13 @@ static int32_t exec_build(struct exec_state *s)
     if (s->secure && limit > RLIM_STACK_DEFAULT) {
         limit = RLIM_STACK_DEFAULT;
     }
+    window = exec_stack_window(s, bottom, limit);
+    base = exec_stack_base(s, bottom, limit, s->stack_top - PAGE_SIZE - window);
     if (elf_setup_vmas(&s->mm->vm, &s->img, s->img.image_end + s->heap_shift,
-                       s->stack_top - PAGE_SIZE, exec_stack_window(s, bottom, limit),
-                       s->mmap_base) != 0 ||
+                       s->stack_top - PAGE_SIZE, window, s->mmap_base) != 0 ||
         (s->layout.interp[0] != '\0' && elf_add_vmas(&s->mm->vm, &s->iimg) != 0) ||
         (ehdr = vdso_map(&s->mm->vm, vdso_at, abi)) < 0 ||
-        (bottom < s->stack_top - PAGE_SIZE && !vm_grow_stack(&s->mm->vm, bottom, RLIM_INFINITY)) ||
+        (base < s->stack_top - PAGE_SIZE && !vm_grow_stack(&s->mm->vm, base, RLIM_INFINITY)) ||
         vm_total(&s->mm->vm) > current_proc->rlim[RLIM_AS].cur) {
         return -ENOMEM;
     }
@@ -2114,7 +2188,8 @@ static void exec_files(struct exec_state *s)
  * its descriptor table one of its own (`exec_files`) and drops the
  * close-on-exec descriptors; takes the new ids, the saved ids becoming the new
  * effective ones, which is the POSIX rule for every exec and what lets an image
- * shed acquired authority and take it back; resets what pointed into the old
+ * shed acquired authority and take it back, and the file-system ids the
+ * effective ones again; resets what pointed into the old
  * image: caught signals' handlers (SIG_IGN, the blocked mask and the pending
  * signals are kept, as POSIX says), the alternate signal stack, the TLS base
  * and the floating-point state, and deletes the POSIX timers, as POSIX says.
@@ -2130,8 +2205,8 @@ static void exec_files(struct exec_state *s)
 static void exec_commit(isr_params_t *params, struct exec_state *s)
 {
     struct mm *old = current_proc->mm;
-    uint32_t old_euid = current_proc->euid;
-    uint32_t old_egid = current_proc->egid;
+    int ids_moved = current_proc->euid != s->euid || current_proc->egid != s->egid ||
+                    proc_fsuid(current_proc) != s->euid || proc_fsgid(current_proc) != s->egid;
     int was_privileged = proc_privileged(current_proc);
     int sig;
 
@@ -2150,17 +2225,21 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
     current_proc->egid = s->egid;
     current_proc->suid = s->euid;
     current_proc->sgid = s->egid;
+    current_proc->fs_own = 0;
     cap_store(current_proc, s->cap_lost[0], s->cap_lost[1]);
     current_proc->persona = s->persona;
     ns_exec(current_proc);
     exec_ambient(current_proc, s->secure);
-    exec_privileges(s->mm, s->secure, s->unreadable, old_euid, old_egid, was_privileged);
+    exec_privileges(s->mm, s->secure, s->unreadable, ids_moved, was_privileged);
     proc_set_comm(current_proc, s->script[0] ? s->script : s->path);
+    /* Linux's flush_signal_handlers: a caught signal reverts to its
+     * default, an ignored one stays ignored, and each loses its flags,
+     * restorer and mask, which rt_sigaction reports afterwards. */
     for (sig = 1; sig <= KSIG_MAX; sig++) {
-        if (current_proc->sigacts[sig].handler != KSIG_DFL &&
-            current_proc->sigacts[sig].handler != KSIG_IGN) {
-            k_memset(&current_proc->sigacts[sig], 0, sizeof(struct k_sigaction));
-        }
+        uintptr_t handler = current_proc->sigacts[sig].handler == KSIG_IGN ? KSIG_IGN : KSIG_DFL;
+
+        k_memset(&current_proc->sigacts[sig], 0, sizeof(struct k_sigaction));
+        current_proc->sigacts[sig].handler = handler;
     }
     current_proc->clear_child_tid = 0;
     rseq_exec(current_proc);
@@ -2640,10 +2719,15 @@ static int fork_fs(process_t *child, process_t *parent, uint32_t flags)
  * one that has ended until it is reaped. Counted by the real uid at the
  * time, so a thread that took a new identity with setuid counts for that
  * user. The check follows reclaim, which may sleep, and the new record
- * reserves its count before another building step can sleep. 0, or -EAGAIN.
+ * reserves its count before another building step can sleep. A
+ * SCHED_DEADLINE parent without SCHED_RESET_ON_FORK may not fork at all, as
+ * Linux's sched_fork refuses it. 0, or -EAGAIN.
  */
 static int32_t fork_nproc(const process_t *parent)
 {
+    if (parent->sched_policy == SCHED_DEADLINE && !parent->sched_reset) {
+        return -EAGAIN; /* Linux's sched_fork refuses a deadline thread's child */
+    }
     if (parent->ruid == 0 || parent->rlim[RLIM_NPROC].cur == RLIM_INFINITY) {
         return 0;
     }
@@ -2653,11 +2737,12 @@ static int32_t fork_nproc(const process_t *parent)
 /**
  * What a child takes of `parent` besides its memory, files and signals: the
  * session and the process group, which it keeps until it or the parent calls
- * setsid or setpgid, the nice value, the scheduling policy without its
- * SCHED_RESET_ON_FORK and the I/O priority, the OOM score adjustment and
+ * setsid or setpgid, the nice value, the scheduling policy with its
+ * parameters, the I/O priority, the OOM score adjustment and
  * its floor, the persona, the no_new_privs flag, whether it
  * gave up its capabilities, the seccomp mode and filters, the limits, the
- * credentials, and the program name, which `execve` sets and a child that
+ * credentials, the memory policy, with a reference that `mm_drop` gives
+ * back, and the program name, which `execve` sets and a child that
  * never execs would otherwise never have: a daemon that forks itself into
  * the background is such a child, and without it shows in `ps` and in
  * /proc/<pid>/stat with no name. The dumpable flag comes with the address
@@ -2670,8 +2755,26 @@ static void fork_ids(process_t *child, const process_t *parent)
     child->pgid = parent->pgid;
     child->nice = parent->nice;
     child->ioprio = parent->ioprio;
-    child->sched_policy = parent->sched_reset && parent->rt_priority ? 0 : parent->sched_policy;
-    child->rt_priority = parent->sched_reset ? 0 : parent->rt_priority;
+    child->sched_policy = parent->sched_policy;
+    child->rt_priority = parent->rt_priority;
+    child->sched_slice = parent->sched_slice;
+    child->dl_runtime = parent->dl_runtime;
+    child->dl_deadline = parent->dl_deadline;
+    child->dl_period = parent->dl_period;
+    child->dl_flags = parent->dl_flags;
+    if (parent->sched_reset) {
+        /* SCHED_RESET_ON_FORK, as Linux's sched_fork: a real-time or
+         * deadline policy becomes SCHED_OTHER at nice 0, a negative nice
+         * becomes 0, the slice the default, and the flag is not passed on. */
+        if (parent->rt_priority || parent->sched_policy == SCHED_DEADLINE) {
+            child->sched_policy = SCHED_OTHER;
+            child->nice = 0;
+        } else if (child->nice < 0) {
+            child->nice = 0;
+        }
+        child->rt_priority = 0;
+        child->sched_slice = 0;
+    }
     if (child->tg != parent->tg) {
         child->tg->oom_score_adj = parent->tg->oom_score_adj;
         child->tg->oom_score_adj_min = parent->tg->oom_score_adj_min;
@@ -2691,9 +2794,13 @@ static void fork_ids(process_t *child, const process_t *parent)
     child->rgid = parent->rgid;
     child->egid = parent->egid;
     child->sgid = parent->sgid;
+    child->fsuid = parent->fsuid;
+    child->fsgid = parent->fsgid;
+    child->fs_own = parent->fs_own;
     child->ngroups = parent->ngroups;
     k_memcpy(child->groups, parent->groups, sizeof(child->groups));
     k_memcpy(child->comm, parent->comm, sizeof(child->comm));
+    child->mempolicy = vm_policy_get(parent->mempolicy);
 }
 
 /**
@@ -3708,6 +3815,7 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
             return -EINTR;
         }
         wq_poll_add(&current_proc->tg->chld, &current_proc->waiter);
+        current_proc->wchan = "do_wait";
         current_proc->state = PROC_BLOCKED;
         sig_irq_restore(flags);
         schedule();
@@ -3944,14 +4052,15 @@ long sys_waitid(isr_params_t *params)
  * process, every thread's, for RUSAGE_SELF, the calling thread's for
  * RUSAGE_THREAD, and the totals of the children the process has reaped,
  * each with the children those reaped, for RUSAGE_CHILDREN: the ticks
- * `times` reports, as timevals. `ru_maxrss` is the larger of the present
- * address space's resident size and the most any earlier one had when it
- * ended, in kilobytes, or for RUSAGE_CHILDREN the most a reaped child
- * reported. `ru_minflt` and `ru_majflt` are the page faults of the same
- * threads or children (`proc_faults`). `ru_nvcsw` and `ru_nivcsw` count
- * voluntary and involuntary context switches of the same threads or
- * children. The other counters are zero. -EINVAL for any other `who`, Linux's
- * RUSAGE_BOTH among them, -EFAULT for a structure that cannot be written.
+ * `times` reports, as timevals. `ru_maxrss` is the most the present
+ * address space or any earlier one has had resident (`mm_resident_peak`),
+ * in kilobytes, or for RUSAGE_CHILDREN the most a reaped child reported;
+ * no call walks the page tables for it. `ru_minflt` and `ru_majflt` are
+ * the page faults of the same threads or children (`proc_faults`).
+ * `ru_nvcsw` and `ru_nivcsw` count voluntary and involuntary context
+ * switches of the same threads or children. The other counters are zero.
+ * -EINVAL for any other `who`, Linux's RUSAGE_BOTH among them, -EFAULT for
+ * a structure that cannot be written.
  */
 long sys_getrusage(isr_params_t *params)
 {
@@ -3997,7 +4106,7 @@ long sys_getrusage(isr_params_t *params)
         ru.maxrss = (long)current_proc->tg->cmaxrss_kb;
     } else {
         unsigned long now =
-            current_proc->mm ? mm_resident(current_proc->mm) * (PAGE_SIZE / 1024u) : 0;
+            current_proc->mm ? mm_resident_peak(current_proc->mm) * (PAGE_SIZE / 1024u) : 0;
 
         ru.maxrss = (long)(now > current_proc->tg->maxrss_kb ? now : current_proc->tg->maxrss_kb);
     }
@@ -4335,15 +4444,18 @@ static void sender_info(struct k_siginfo *info, int32_t code, const process_t *t
 
 /** A stop the tracer asked for with PTRACE_INTERRUPT ends a wait as a stop
  * signal would, so the stop is taken on the way back to user mode
- * (`ptrace_return_stops`). Blocking syscall loops call this on the thread's
- * stack with the big lock held. A deferred kernel debug hit is posted before
- * its mask and disposition are tested; a deferred user hit interrupts
- * whatever either says, but stays deferred until the return to user mode
- * delivers it. Posting can make this thread ready and clear its
- * `wakeup_tick`, so a caller that keeps waiting must arm its deadline again.
- * No wait queue is changed. On the x86-64 debug interrupt stack the kernel
- * calls only `debugreg_defer_user` and, when it declines, `debugreg_defer`;
- * a user debug exception moves to the thread's stack before entering C. */
+ * (`ptrace_return_stops`). A traced thread counts an ignored signal too, as
+ * Linux's sig_ignored does, since its tracer sees each signal at a
+ * signal-delivery stop, where a wait it cut short is restarted. Blocking
+ * syscall loops call this on the thread's stack with the big lock held. A
+ * deferred kernel debug hit is posted before its mask and disposition are
+ * tested; a deferred user hit interrupts whatever either says, but stays
+ * deferred until the return to user mode delivers it. Posting can make this
+ * thread ready and clear its `wakeup_tick`, so a caller that keeps waiting
+ * must arm its deadline again. No wait queue is changed. On the x86-64 debug
+ * interrupt stack the kernel calls only `debugreg_defer_user` and, when it
+ * declines, `debugreg_defer`; a user debug exception moves to the thread's
+ * stack before entering C. */
 int signal_pending(void)
 {
     uint64_t deliverable;
@@ -4368,6 +4480,9 @@ int signal_pending(void)
             continue;
         }
         sa = &current_proc->sigacts[signo];
+        if (current_proc->ptrace & PT_TRACED) {
+            return 1;
+        }
         if (sa->handler == KSIG_IGN) {
             continue;
         }
@@ -4762,18 +4877,20 @@ long sys_rt_tgsigqueueinfo(isr_params_t *params)
 }
 
 /**
- * Block the current thread until a deliverable signal is pending.
+ * Block the current thread until a deliverable signal is pending, with
+ * `name` as its wait's name for /proc/PID/wchan.
  *
  * The test of the pending signals and the move to PROC_BLOCKED are one
  * section with interrupts off, so a signal posted from an interrupt is
  * either seen by the test or finds the thread blocked and wakes it, as in
  * `wait_queue.c`. Interrupts are on only while the thread yields or idles.
  */
-static void sig_wait(void)
+static void sig_wait(const char *name)
 {
     uint32_t flags = sig_irq_save();
 
     while (!signal_pending()) {
+        current_proc->wchan = name;
         current_proc->state = PROC_BLOCKED;
         sig_irq_restore(flags);
         schedule();
@@ -4789,16 +4906,18 @@ static void sig_wait(void)
 /**
  * Sleep until a signal is delivered (pause(2)). Returns -EINTR once a
  * deliverable signal is pending; the signal then acts on the return to user
- * mode.
+ * mode. The call stands for Linux's ERESTARTNOHAND: a signal that runs no
+ * handler, as a stop and a continue, restarts it.
  */
 long sys_pause(isr_params_t *params)
 {
-    (void)params;
-
     if (!current_proc) {
         return -ESRCH;
     }
-    sig_wait();
+    (void)params;
+    /* Linux's entries share __do_sys_pause's address; nm -n lists it first. */
+    sig_wait("__do_sys_pause");
+    current_proc->restart_kind = RESTART_NOHAND;
     return -EINTR;
 }
 
@@ -4809,8 +4928,8 @@ long sys_pause(isr_params_t *params)
  * blocked mask with *mask, waits for a deliverable signal, and returns -EINTR.
  * The handler the signal runs runs under *mask, and the frame it gets has the
  * old mask, which its return restores; without a handler the old mask comes
- * back on the return to user mode. -EINVAL for another sigsetsize, -EFAULT
- * when the mask cannot be read.
+ * back on the return to user mode, and the call restarts (`signal_suspend`).
+ * -EINVAL for another sigsetsize, -EFAULT when the mask cannot be read.
  */
 long sys_rt_sigsuspend(isr_params_t *params)
 {
@@ -4835,7 +4954,8 @@ long signal_suspend(uint64_t mask)
     current_proc->saved_sigmask = current_proc->sig_blocked;
     current_proc->sigmask_saved = 1;
     signal_set_blocked(mask);
-    sig_wait();
+    sig_wait("sigsuspend");
+    current_proc->restart_kind = RESTART_NOHAND;
     return -EINTR;
 }
 
@@ -4963,6 +5083,9 @@ long sys_rt_sigprocmask(isr_params_t *params)
  * floating-point state and the mask; a frame that cannot be read or that would
  * load a faulting state kills the process with SIGSEGV. Returns the restored
  * result register, so the dispatcher's store of the result leaves it as it was.
+ * A call the handler's signal cut short is not resumed by restart_syscall
+ * after it, as Linux clears the restart block here. The restored registers
+ * are no longer those of a system call, so orig_nr becomes -1.
  */
 static long signal_return(isr_params_t *tf, int rt)
 {
@@ -4971,10 +5094,12 @@ static long signal_return(isr_params_t *tf, int rt)
     if (!current_proc) {
         return -ESRCH;
     }
+    current_proc->restart.fn = NULL;
     if (sigframe_restore(tf, rt, &mask) != 0) {
         terminate_current_process(SIGSEGV | WCOREFLAG);
         return 0;
     }
+    current_proc->orig_nr = -1;
     signal_set_blocked(mask);
     return (long)SC_RET(tf);
 }
@@ -5166,12 +5291,45 @@ long sys_sigprocmask(isr_params_t *params)
     return 0;
 }
 
-/** Restart the system call the dispatcher recorded, `restart_nr` being one
- * more than its number: the number back in the number's register and the
- * instruction pointer back on the instruction that made the call. */
-static void restart_syscall(isr_params_t *tf, uint32_t restart_nr)
+/** Apply a restart code in `tf` after signal selection and its ptrace stops.
+ * With `handler`, only ERESTARTNOINTR and ERESTARTSYS under SA_RESTART
+ * restart; other codes become EINTR. Without a handler all four restart,
+ * ERESTART_RESTARTBLOCK through restart_syscall. orig_nr -1 and results
+ * that are not restart codes stay unchanged, as in Linux's handle_signal
+ * and arch_do_signal_or_restart. Called with the big lock held. */
+static void signal_restart(isr_params_t *tf, int handler, uint32_t flags)
 {
-    SC_NR(tf) = restart_nr - 1u;
+    long ret = (long)SC_RET(tf);
+    uint32_t nr = (uint32_t)current_proc->orig_nr;
+
+    if (SC_COMPAT(tf)) {
+        ret = (long)(int32_t)SC_RET(tf);
+    }
+    if (current_proc->orig_nr == -1) {
+        return;
+    }
+    switch (ret) {
+    case -ERESTART_RESTARTBLOCK:
+        nr = SC_RESTART_NR(tf);
+        /* fall through */
+    case -ERESTARTNOHAND:
+        if (handler) {
+            SC_RET(tf) = (unsigned long)-EINTR;
+            return;
+        }
+        break;
+    case -ERESTARTSYS:
+        if (handler && !(flags & SA_RESTART)) {
+            SC_RET(tf) = (unsigned long)-EINTR;
+            return;
+        }
+        break;
+    case -ERESTARTNOINTR:
+        break;
+    default:
+        return;
+    }
+    SC_NR(tf) = nr;
     FRAME_PC(tf) -= SYSCALL_INSN_LEN;
 }
 
@@ -5318,12 +5476,6 @@ static int group_stop_taken(void)
     return 1;
 }
 
-/** Whether a handler's flags or ERESTARTNOINTR require a call restart. */
-static int signal_restarts(uint32_t flags, int forced)
-{
-    return forced || (flags & SA_RESTART) != 0;
-}
-
 /**
  * Only a frame that returns to user mode is acted on, and one handler at most
  * is given a frame on each return. A deliverable signal, one pending for the
@@ -5340,16 +5492,19 @@ static int signal_restarts(uint32_t flags, int forced)
  * stop. The records of ended threads are freed here too, a point every
  * running process passes where none of them is in use.
  *
- * A system call the dispatcher found interrupted and restartable is
- * restarted when no handler runs, and when the handler that runs has
- * SA_RESTART; otherwise it keeps its EINTR. A mask rt_sigsuspend, pselect6 or
- * ppoll replaced goes into the handler's frame, or back in place at once when
- * no handler runs.
+ * After signal work, `signal_restart` reads the live result and orig_nr to
+ * restart a call or give it EINTR, after the tracer has made its changes. A
+ * call the dispatcher translated into a restart code is signal work in
+ * itself (`restart_due`), as Linux's TIF_SIGPENDING stays set until
+ * get_signal runs, so a call whose signal another thread took first, or
+ * that slept after its signal check, restarts. With no signal, stop or
+ * translated call to take, a result the tracer wrote stays as it is. A mask
+ * rt_sigsuspend, pselect6 or ppoll replaced goes into the handler's frame,
+ * or back in place at once when no handler runs.
  */
 void deliver_signals(isr_params_t *tf)
 {
-    uint32_t restart_nr;
-    int restart_always;
+    int signal_work;
 
     if (!current_proc) {
         return;
@@ -5360,13 +5515,11 @@ void deliver_signals(isr_params_t *tf)
     if (proc_dead_threads != 0) {
         reap_threads();
     }
+    signal_work = current_proc->restart_due || (current_proc->ptrace & (PT_START | PT_INTERRUPT));
+    current_proc->restart_due = 0;
     if (current_proc->ptrace) {
         ptrace_return_stops();
     }
-    restart_nr = current_proc->restart_nr;
-    restart_always = current_proc->restart_always;
-    current_proc->restart_nr = 0;
-    current_proc->restart_always = 0;
 
     for (;;) {
         uint64_t deliverable;
@@ -5377,20 +5530,17 @@ void deliver_signals(isr_params_t *tf)
         int signo;
 
         if (group_stop_taken()) {
+            signal_work = 1;
             continue;
         }
         deliverable = sig_pending_now() & ~current_proc->sig_blocked;
         if (deliverable == 0) {
             break;
         }
+        signal_work = 1;
         signo = sig_dequeue(deliverable, &info);
         if (current_proc->ptrace) {
-            /* The tracer may cancel the call's restart through orig_nr. */
-            current_proc->restart_nr = restart_nr;
-            current_proc->orig_nr = restart_nr ? (int32_t)restart_nr - 1 : -1;
             signo = ptrace_signal_stop(signo, &info);
-            restart_nr = current_proc->restart_nr;
-            current_proc->restart_nr = 0;
             if (signo == 0) {
                 continue;
             }
@@ -5414,9 +5564,7 @@ void deliver_signals(isr_params_t *tf)
         }
 
         handler_flags = (uint32_t)sa->flags;
-        if (restart_nr != 0 && signal_restarts(handler_flags, restart_always)) {
-            restart_syscall(tf, restart_nr);
-        }
+        signal_restart(tf, 1, handler_flags);
         oldmask =
             current_proc->sigmask_saved ? current_proc->saved_sigmask : current_proc->sig_blocked;
         rseq_signal(tf, signo);
@@ -5436,8 +5584,8 @@ void deliver_signals(isr_params_t *tf)
         return;
     }
 
-    if (restart_nr != 0) {
-        restart_syscall(tf, restart_nr);
+    if (signal_work) {
+        signal_restart(tf, 0, 0);
     }
     if (current_proc->sigmask_saved) {
         current_proc->sigmask_saved = 0;
@@ -5471,6 +5619,7 @@ static int32_t sigwait_take(uint64_t set, int timed, uint64_t deadline, struct k
             return signal_pending() ? -EINTR : -EAGAIN;
         }
         current_proc->wakeup_tick = timed ? (deadline != 0 ? deadline : 1u) : 0;
+        current_proc->wchan = "do_sigtimedwait";
         current_proc->state = PROC_BLOCKED;
         sig_irq_restore(flags);
         schedule();
@@ -5992,12 +6141,14 @@ long sys_setuid(isr_params_t *params)
         }
         p->euid = uid;
         p->suid = uid;
+        fsuid_follow(p);
         cred_moved(p, old_euid, p->egid);
         ambient_uid_moved(p, had_root);
         return 0;
     }
     if (uid == p->ruid || uid == p->suid) {
         p->euid = uid;
+        fsuid_follow(p);
         cred_moved(p, old_euid, p->egid);
         ambient_uid_moved(p, had_root);
         return 0;
@@ -6019,11 +6170,13 @@ long sys_setgid(isr_params_t *params)
         p->rgid = gid;
         p->egid = gid;
         p->sgid = gid;
+        fsgid_follow(p);
         cred_moved(p, p->euid, old_egid);
         return 0;
     }
     if (gid == p->rgid || gid == p->sgid) {
         p->egid = gid;
+        fsgid_follow(p);
         cred_moved(p, p->euid, old_egid);
         return 0;
     }
@@ -6072,6 +6225,7 @@ long sys_setreuid(isr_params_t *params)
         p->suid = new_e;
     }
     p->euid = new_e;
+    fsuid_follow(p);
     cred_moved(p, old_euid, p->egid);
     ambient_uid_moved(p, had_root);
     return 0;
@@ -6107,6 +6261,7 @@ long sys_setregid(isr_params_t *params)
     }
     p->rgid = new_r;
     p->egid = new_e;
+    fsgid_follow(p);
     cred_moved(p, p->euid, old_egid);
     return 0;
 }
@@ -6114,9 +6269,11 @@ long sys_setregid(isr_params_t *params)
 /**
  * setresuid takes a real, an effective and a saved user ID, -1 keeping any of
  * them. A caller that is not privileged (`id_privileged`) may set each only to
- * one of its current three. Ids that leave root empty the ambient set
- * (`ambient_uid_moved`). -EINVAL for an ID the namespace does not map,
- * -EPERM.
+ * one of its current three. A call that would change no id, the file-system
+ * one included, returns 0 at once, as Linux's does, and so leaves an id that
+ * setfsuid set apart, the dumpable flag and the parent-death signal. Ids that
+ * leave root empty the ambient set (`ambient_uid_moved`). -EINVAL for an ID
+ * the namespace does not map, -EPERM.
  */
 long sys_setresuid(isr_params_t *params)
 {
@@ -6135,6 +6292,11 @@ long sys_setresuid(isr_params_t *params)
     r = v[0];
     e = v[1];
     s = v[2];
+    if ((r == SC_ID_KEEP || r == p->ruid) &&
+        (e == SC_ID_KEEP || (e == p->euid && e == proc_fsuid(p))) &&
+        (s == SC_ID_KEEP || s == p->suid)) {
+        return 0;
+    }
     if (!id_privileged()) {
         int i;
 
@@ -6153,12 +6315,14 @@ long sys_setresuid(isr_params_t *params)
     if (s != SC_ID_KEEP) {
         p->suid = s;
     }
+    fsuid_follow(p);
     cred_moved(p, old_euid, p->egid);
     ambient_uid_moved(p, had_root);
     return 0;
 }
 
-/** setresgid: setresuid's rule over the group IDs. */
+/** setresgid: setresuid's rule over the group IDs, with its early return
+ * for a call that would change no group id. */
 long sys_setresgid(isr_params_t *params)
 {
     process_t *p = current_proc;
@@ -6175,6 +6339,11 @@ long sys_setresgid(isr_params_t *params)
     r = v[0];
     e = v[1];
     s = v[2];
+    if ((r == SC_ID_KEEP || r == p->rgid) &&
+        (e == SC_ID_KEEP || (e == p->egid && e == proc_fsgid(p))) &&
+        (s == SC_ID_KEEP || s == p->sgid)) {
+        return 0;
+    }
     if (!id_privileged()) {
         int i;
 
@@ -6193,8 +6362,99 @@ long sys_setresgid(isr_params_t *params)
     if (s != SC_ID_KEEP) {
         p->sgid = s;
     }
+    fsgid_follow(p);
     cred_moved(p, p->euid, old_egid);
     return 0;
+}
+
+/**
+ * setfsuid's work on the user ID `uid`, as the caller's user namespace
+ * names it: it becomes the caller's file-system user ID when it is the
+ * caller's real, effective, saved or file-system ID, or the caller is
+ * privileged in its user namespace (`id_privileged`). The call has no error,
+ * as on Linux: an ID that is refused, or that the namespace does not map, -1
+ * among them, changes nothing, and the previous file-system user ID comes
+ * back either way, as the namespace sees it, which is how a program reads
+ * it. The ID is the calling thread's alone and stays apart from the
+ * effective one until the next call that sets user IDs or an exec
+ * (`fsuid_follow`); a change undoes what `cred_undump` takes away. A change
+ * from root takes the capabilities of CAP_FS_SET out of the effective set
+ * and one to root gives them back (PROC_FSCAPS_OFF), as Linux's
+ * `cap_task_fix_setuid` does; a call that sets user IDs and so brings the
+ * file-system ID back to root leaves them out.
+ */
+static long fsuid_set(uint32_t uid)
+{
+    process_t *p = current_proc;
+    uint32_t old = proc_fsuid(p);
+    int64_t k = uid == SC_ID_KEEP ? -1 : uid_named(uid);
+
+    uid = (uint32_t)k;
+    if (k >= 0 && uid != old &&
+        (uid == p->ruid || uid == p->euid || uid == p->suid || id_privileged())) {
+        if (uid_seen(old) == 0 && uid_seen(uid) != 0) {
+            p->fs_own |= PROC_FSCAPS_OFF;
+        } else if (uid_seen(old) != 0 && uid_seen(uid) == 0) {
+            p->fs_own &= ~PROC_FSCAPS_OFF;
+        }
+        p->fsuid = uid;
+        p->fs_own |= PROC_FSUID_OWN;
+        cred_undump(p);
+    }
+    return (long)uid_seen(old);
+}
+
+/** `fsuid_set` for the file-system group ID, which also decides the group
+ * class of the file access checks. */
+static long fsgid_set(uint32_t gid)
+{
+    process_t *p = current_proc;
+    uint32_t old = proc_fsgid(p);
+    int64_t k = gid == SC_ID_KEEP ? -1 : gid_named(gid);
+
+    gid = (uint32_t)k;
+    if (k >= 0 && gid != old &&
+        (gid == p->rgid || gid == p->egid || gid == p->sgid || id_privileged())) {
+        p->fsgid = gid;
+        p->fs_own |= PROC_FSGID_OWN;
+        cred_undump(p);
+    }
+    return (long)gid_seen(old);
+}
+
+/** The 32-bit ID of a 16-bit ID argument, as Linux's low2highuid: its low
+ * 16 bits, the 16-bit -1 becoming the 32-bit one. */
+static uint32_t id16_wide(unsigned long v)
+{
+    return (uint16_t)v == 0xFFFFu ? SC_ID_KEEP : (uint32_t)(uint16_t)v;
+}
+
+/** setfsuid (setfsuid32 on i386) takes a user ID and returns the previous
+ * file-system user ID (`fsuid_set`). */
+long sys_setfsuid(isr_params_t *params)
+{
+    return fsuid_set((uint32_t)SC_ARG(params, 0));
+}
+
+/** setfsgid (setfsgid32 on i386) takes a group ID and returns the previous
+ * file-system group ID (`fsgid_set`). */
+long sys_setfsgid(isr_params_t *params)
+{
+    return fsgid_set((uint32_t)SC_ARG(params, 0));
+}
+
+/** i386's setfsuid, call 138, with a 16-bit ID (`id16_wide`). The previous
+ * ID comes back whole, not cut to 16 bits, as Linux's setfsuid16 returns
+ * it. */
+long sys_setfsuid16(isr_params_t *params)
+{
+    return fsuid_set(id16_wide(SC_ARG(params, 0)));
+}
+
+/** i386's setfsgid, call 139, as `sys_setfsuid16`. */
+long sys_setfsgid16(isr_params_t *params)
+{
+    return fsgid_set(id16_wide(SC_ARG(params, 0)));
 }
 
 /** getresuid (getresuid32 on i686): the real, effective and saved user IDs, as
@@ -6295,7 +6555,7 @@ long sys_getgroups(isr_params_t *params)
     return (int32_t)p->ngroups;
 }
 
-/* The resources: seven are kept in the record and enforced, and the rest
+/* The resources: nine are kept in the record and enforced, and the rest
  * are unlimited. */
 #define RLIMIT_FSIZE_RES 1
 
@@ -6310,6 +6570,10 @@ long sys_getgroups(isr_params_t *params)
 #define RLIMIT_MEMLOCK_RES 8
 
 #define RLIMIT_AS_RES 9
+
+#define RLIMIT_NICE_RES 13
+
+#define RLIMIT_RTPRIO_RES 14
 
 /* Linux's count of resources; a resource number at or past it is EINVAL. */
 #define RLIM_NLIMITS 16u
@@ -6332,6 +6596,10 @@ static int rlimit_slot(uint32_t resource)
         return RLIM_FSIZE;
     case RLIMIT_MEMLOCK_RES:
         return RLIM_MEMLOCK;
+    case RLIMIT_NICE_RES:
+        return RLIM_NICE;
+    case RLIMIT_RTPRIO_RES:
+        return RLIM_RTPRIO;
     default:
         return -1;
     }
@@ -6557,6 +6825,12 @@ long sys_prlimit64(isr_params_t *params)
 
 #define PROT_EXEC 0x4
 
+#define PROT_SEM 0x8 /* accepted by mprotect and given no meaning, as on x86 Linux */
+
+#define PROT_GROWSDOWN 0x01000000 /* mprotect: start at the main stack region's start */
+
+#define PROT_GROWSUP 0x02000000 /* mprotect: refused, since no x86 region grows up */
+
 #define MAP_SHARED 0x01
 
 #define MAP_PRIVATE 0x02
@@ -6576,7 +6850,9 @@ long sys_prlimit64(isr_params_t *params)
 #define MAP_32BIT_LO 0x40000000UL
 #define MAP_32BIT_HI 0x80000000UL
 
-#define MAP_LOCKED 0x2000
+#define MAP_LOCKED    0x2000
+/* Linux's VM_NORESERVE for the mapping, which overcommit_memory 0 allows */
+#define MAP_NORESERVE 0x4000
 
 #define MAP_POPULATE 0x8000
 
@@ -6641,8 +6917,9 @@ long sys_brk(isr_params_t *params)
             !mem_lock_room(vm_locked(vm) / PAGE_SIZE, (new_top - old_top) / PAGE_SIZE)) {
             return (long)vm->brk;
         }
-        if (vm_insert(vm, old_top, new_top, VM_PROT_READ | VM_PROT_WRITE | vm->def_prot, VM_HEAP) !=
-            0) {
+        if (vm_insert(vm, old_top, new_top,
+                      VM_PROT_READ | VM_PROT_WRITE | VM_PROT_ACCOUNT | vm->def_prot,
+                      VM_HEAP) != 0) {
             return (long)vm->brk;
         }
         if ((vm->def_prot & VM_PROT_LOCKS) == VM_PROT_LOCKED) {
@@ -6651,7 +6928,8 @@ long sys_brk(isr_params_t *params)
             return (long)req;
         }
     } else if (new_top < old_top) {
-        if (vm_remove(vm, new_top, old_top) != 0) {
+        mm_note_anon(current_proc->mm, new_top, old_top);
+        if (vm_sealed_at(vm, new_top, old_top) < old_top || vm_remove(vm, new_top, old_top) != 0) {
             return (long)vm->brk;
         }
         mmn_notify(current_proc->mm, MMN_UNMAP, new_top, old_top);
@@ -6685,11 +6963,97 @@ static void vma_exhausted(const char *what)
          (int)current_proc->pid, current_proc->comm, vm_max_map_count);
 }
 
+/* pkey_alloc's access rights, PKEY_DISABLE_ACCESS and PKEY_DISABLE_WRITE. */
+#define PKEY_DISABLE_ACCESS 1u
+#define PKEY_DISABLE_WRITE  2u
+#define PKEY_ACCESS_MASK    3u
+
+/** Give the key `key` the rights `rights`, of PKEY_ACCESS_MASK, in the
+ * calling thread's PKRU, keeping every other key's, as Linux's
+ * arch_set_user_pkey_access does. */
+static void pkey_rights(int key, uint32_t rights)
+{
+    uint32_t pkru = fpu_pkru() & ~(PKRU_AD(key) | PKRU_WD(key));
+
+    if (rights & PKEY_DISABLE_ACCESS) {
+        pkru |= PKRU_AD(key);
+    }
+    if (rights & PKEY_DISABLE_WRITE) {
+        pkru |= PKRU_WD(key);
+    }
+    fpu_pkru_set(pkru);
+}
+
+/** Allocate the lowest free protection key of `mm`, as Linux's
+ * mm_pkey_alloc: the key, or -1 when the keys are off or all sixteen are
+ * taken. */
+static int pkey_take(struct mm *mm)
+{
+    int key;
+
+    if (!fpu_pkeys()) {
+        return -1;
+    }
+    for (key = 0; key < FPU_PKEYS; key++) {
+        if (!(mm->pkeys & (1u << key))) {
+            mm->pkeys |= 1u << key;
+            return key;
+        }
+    }
+    return -1;
+}
+
+/** Whether a program may name the key `key` of `mm`, as Linux's
+ * mm_pkey_is_allocated: one it allocated, or the default key 0 until it
+ * frees it, but never the execute-only key; none with the keys off. */
+static int pkey_named(const struct mm *mm, int key)
+{
+    return fpu_pkeys() && key >= 0 && key < FPU_PKEYS && key != mm->pkey_exec &&
+           (mm->pkeys & (1u << key)) != 0;
+}
+
+/**
+ * The key of `mm` for a mapping made execute-only, by mmap or mprotect with
+ * PROT_EXEC alone, as Linux's __execute_only_pkey: allocated the first
+ * time, and then denied every data access in the calling thread's PKRU,
+ * as it is again whenever the thread allows it reads. The pages can then
+ * be run and not read. -1 with the keys off or no key free; the mapping
+ * then keeps the key it would have had.
+ */
+static int pkey_exec_only(struct mm *mm)
+{
+    int key = mm->pkey_exec;
+
+    if (key < 0) {
+        key = pkey_take(mm);
+        if (key < 0) {
+            return -1;
+        }
+        mm->pkey_exec = key;
+    } else if (fpu_pkru() & PKRU_AD(key)) {
+        return key;
+    }
+    pkey_rights(key, PKEY_DISABLE_ACCESS);
+    return key;
+}
+
+/** The protection key bits of a new mapping of the mmap `prot`: the
+ * execute-only key for PROT_EXEC alone where there is one, as Linux's
+ * do_mmap takes it, and key 0 otherwise. */
+static uint32_t mmap_key(uint32_t prot)
+{
+    int key = prot == PROT_EXEC ? pkey_exec_only(current_proc->mm) : -1;
+
+    return key > 0 ? (uint32_t)key << VM_PROT_PKEY_SHIFT : 0u;
+}
+
 /** The VMA protection of an mmap or mprotect `prot`. Write and execute each
- * grant read, which x86 paging cannot withhold from them. */
+ * grant read, which x86 paging cannot withhold from them, and without
+ * PROT_READ the region is marked VM_PROT_NOREAD, as Linux's lacks VM_READ. */
 static uint32_t vm_prot_of(uint32_t prot)
 {
-    uint32_t vmprot = 0;
+    uint32_t vmprot =
+        (prot & (PROT_WRITE | PROT_EXEC)) && !(prot & PROT_READ) ? VM_PROT_NOREAD : 0u;
 
     if (prot & PROT_READ) {
         vmprot |= VM_PROT_READ;
@@ -6755,6 +7119,29 @@ static int32_t mmap_file_check(const fd_entry_t *e, int shared, uint32_t prot)
 }
 
 /**
+ * The rules of a mapping through `e` of a file whose memory is `sh`, when
+ * it is a file of memfd_secret: shared alone, else -EINVAL, and never
+ * executable, else -EPERM, as Linux's noexec mount of the files answers
+ * first; the region gets VM_PROT_SECRET in `src`. 0 or the error; 0 for
+ * any other file.
+ */
+static int32_t mmap_secret(const fd_entry_t *e, struct shmem *sh, int shared,
+                           struct map_source *src)
+{
+    if (!sh || !tmpfs_secret(e->ofd->vnode)) {
+        return 0;
+    }
+    if (src->prot & VM_PROT_EXEC) {
+        return -EPERM;
+    }
+    if (!shared) {
+        return -EINVAL;
+    }
+    src->prot |= VM_PROT_SECRET;
+    return 0;
+}
+
+/**
  * The file half of `mmap_backing`: the file the descriptor `e`, number `fd`, is
  * open on, mapped shared or not. A private mapping of it is VM_FILE, and a
  * shared mapping of a file in memory is VM_SHARED, the file's own pages; a
@@ -6771,7 +7158,8 @@ static int32_t mmap_file_check(const fd_entry_t *e, int shared, uint32_t prot)
  * read-only, which reads the same bytes, and fails with ENODEV when it may be
  * written. A shared mapping served as a private one, or made through a
  * descriptor not open for writing, is given VM_PROT_NOWRITE, so that mprotect
- * cannot make it writable later. It may sleep, finding the file's path.
+ * cannot make it writable later. A file of memfd_secret maps as
+ * `mmap_secret` says. It may sleep, finding the file's path.
  */
 static int32_t mmap_file(fd_entry_t *e, int fd, int shared, struct map_source *src)
 {
@@ -6783,6 +7171,10 @@ static int32_t mmap_file(fd_entry_t *e, int fd, int shared, struct map_source *s
         return rc;
     }
     sh = (e->ofd->vmnt->type == &vfs_tmpfs_type) ? tmpfs_shmem(e->ofd->vnode) : NULL;
+    rc = mmap_secret(e, sh, shared, src);
+    if (rc != 0) {
+        return rc;
+    }
     disk = e->ofd->vmnt->type == &vfs_ext2_type;
     if (shared && !sh && !disk && (src->prot & VM_PROT_WRITE)) {
         return -ENODEV;
@@ -6900,15 +7292,17 @@ static uintptr_t task_size(void)
  * without a usable hint, or 0: below the mmap base, down to the bottom of
  * user space whatever the heap's place, as Linux's top-down search goes, and
  * when that has no room, as Linux then falls back to its bottom-up search,
- * between the mmap base and the stack's growth window. In an i386 call the
- * mmap base is at most IA32_MMAP_BASE, Linux's mmap_compat_base, and the
+ * over the whole range below the stack's growth window and its guard gap.
+ * In an i386 call the mmap base is at most IA32_MMAP_BASE, Linux's
+ * mmap_compat_base, and the
  * range ends by IA32_TASK_SIZE, so that the call's 32-bit result holds the
  * address. The search goes below the heap's top: an i386 Wine reserves
  * nearly all that lies above its loader's heap until its program starts.
  */
 static uintptr_t mmap_free(vm_space_t *vm, uintptr_t len)
 {
-    uintptr_t hi = vm->mmap_base, end = vm->stack_limit, base;
+    uintptr_t hi = vm->mmap_base;
+    uintptr_t end = vm->stack_limit > VM_STACK_GUARD_GAP ? vm->stack_limit - VM_STACK_GUARD_GAP : 0;
 
 #if ELF_IA32
     if (in_compat_syscall()) {
@@ -6916,11 +7310,7 @@ static uintptr_t mmap_free(vm_space_t *vm, uintptr_t len)
         end = end < IA32_TASK_SIZE ? end : IA32_TASK_SIZE;
     }
 #endif
-    base = vm_find_free(vm, len, USER_ADDR_MIN, hi);
-    if (base == 0 && end > hi) {
-        base = vm_find_free(vm, len, hi, end);
-    }
-    return base;
+    return vm_find_mmap(vm, len, USER_ADDR_MIN, hi, end);
 }
 
 /**
@@ -6928,8 +7318,8 @@ static uintptr_t mmap_free(vm_space_t *vm, uintptr_t len)
  * MAP_FIXED or MAP_FIXED_NOREPLACE, which fails with EEXIST for a range in
  * use and with ENOMEM for one past the address space's end (`task_size`);
  * otherwise the hint rounded down to its page when that range is free
- * below the stack's growth window, and without one `mmap_free`'s, the
- * highest free range, so the ranges munmap frees are used again. MAP_32BIT in
+ * below the stack's growth window and guard gap, and without one the range
+ * `mmap_free` finds, so the ranges munmap frees are used again. MAP_32BIT in
  * a 64-bit call, as on Linux, rounds the hint up, takes it only when its
  * range ends by 2 GiB, and otherwise takes the highest free range from
  * 1 GiB to 2 GiB; a 32-bit call ignores it, its every address being below
@@ -6941,7 +7331,7 @@ static int32_t mmap_place(vm_space_t *vm, uintptr_t addr, uintptr_t len, uint32_
                           uintptr_t *base)
 {
     unsigned long limit = current_proc->rlim[RLIM_AS].cur;
-    uintptr_t top = vm->stack_limit;
+    uintptr_t top = vm->stack_limit > VM_STACK_GUARD_GAP ? vm->stack_limit - VM_STACK_GUARD_GAP : 0;
     int low = 0;
 
     if (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) {
@@ -6973,9 +7363,10 @@ static int32_t mmap_place(vm_space_t *vm, uintptr_t addr, uintptr_t len, uint32_
 
 /**
  * Put the region `src` describes, `len` bytes, where `mmap_place` finds for
- * `addr` and `flags`, replacing what a MAP_FIXED range held. The region
- * takes its own reference to the file, and the caller's is put here.
- * Returns the address, or -errno.
+ * `addr` and `flags`, replacing what a MAP_FIXED range held, or failing with
+ * EPERM when a region of that range is sealed (mseal). The region takes its
+ * own reference to the file, and the caller's is put here. Returns the
+ * address, or -errno.
  * Under MAP_FIXED the two entries that a split in the removal and the new
  * region take are reserved before the old mapping is removed, so that a
  * failure leaves the old mapping in place.
@@ -6986,8 +7377,12 @@ static long mmap_install(uintptr_t addr, uintptr_t len, uint32_t flags, struct m
     uintptr_t base = 0;
     int32_t rc = mmap_place(vm, addr, len, flags, &base);
 
+    if (rc == 0 && (flags & MAP_FIXED) && vm_sealed_at(vm, base, base + len) < base + len) {
+        rc = -EPERM;
+    }
     if (rc == 0 && (flags & MAP_FIXED)) {
         if (vm_reserve(vm, 2) == 0) {
+            mm_note_anon(current_proc->mm, base, base + len);
             vm_remove(vm, base, base + len);
             mmn_notify(current_proc->mm, MMN_UNMAP, base, base + len);
             unmap_user_range(_curr_dir, base, base + len);
@@ -7004,6 +7399,21 @@ static long mmap_install(uintptr_t addr, uintptr_t len, uint32_t flags, struct m
     vm_file_put(src->file);
     vm_file_reap();
     return rc == 0 ? (long)base : rc;
+}
+
+/**
+ * The charge mark of a new mapping with mmap's `flags` and the kind and
+ * protection in `src`: VM_PROT_NORESERVE for MAP_NORESERVE, as Linux sets
+ * VM_NORESERVE under overcommit_memory 0; VM_PROT_ACCOUNT for any other
+ * private writable mapping, as Linux's accountable_mapping charges one; or
+ * none.
+ */
+static uint32_t mmap_charge(uint32_t flags, const struct map_source *src)
+{
+    if (flags & MAP_NORESERVE) {
+        return VM_PROT_NORESERVE;
+    }
+    return src->type != VM_SHARED && (src->prot & VM_PROT_WRITE) ? VM_PROT_ACCOUNT : 0u;
 }
 
 /**
@@ -7028,6 +7438,10 @@ static long mmap_install(uintptr_t addr, uintptr_t len, uint32_t flags, struct m
  * MAP_NONBLOCK is given too, or with MAP_LOCKED, they are backed before the
  * call returns, as far as memory allows (`vm_populate`); a device's pages
  * are always backed on first touch.
+ *
+ * A mapping with PROT_EXEC alone takes the execute-only protection key, which
+ * the calling thread may run and not read, where the keys are on
+ * (`pkey_exec_only`); any other has key 0.
  *
  * MAP_LOCKED locks the mapping, as mlock does, and so does mlockall's
  * MCL_FUTURE, with its MCL_ONFAULT; a device's mapping is never locked.
@@ -7079,7 +7493,7 @@ long ksys_mmap_pgoff(uintptr_t addr, uintptr_t length, uint32_t prot, uint32_t f
         return -EAGAIN;
     }
     mem_balance();
-    src.prot = vm_prot_of(prot);
+    src.prot = vm_prot_of(prot) | mmap_key(prot);
     src.pgoff = (uint32_t)pgoff;
     rc = mmap_backing(flags, fd, len, &src);
     if (rc != 0) {
@@ -7088,6 +7502,7 @@ long ksys_mmap_pgoff(uintptr_t addr, uintptr_t length, uint32_t prot, uint32_t f
     if (!(src.prot & VM_PROT_IO)) {
         src.prot |= locks;
     }
+    src.prot |= mmap_charge(flags, &src);
     base = mmap_install(addr, len, flags, &src);
     if ((unsigned long)base < (unsigned long)-4095L &&
         ((locks & VM_PROT_LOCKS) == VM_PROT_LOCKED ||
@@ -7182,6 +7597,7 @@ int32_t munmap_shm(uintptr_t addr, const struct shmem *sh, size_t size)
     vm_space_t *vm = &current_proc->mm->vm;
     vma_t *r = vm_find(vm, addr);
     uintptr_t end = addr;
+    int32_t rc = -EPERM;
 
     if (!r || r->start != addr || r->pgoff != 0 || filemap_shmem(r->file) != sh) {
         return -EINVAL;
@@ -7190,14 +7606,25 @@ int32_t munmap_shm(uintptr_t addr, const struct shmem *sh, size_t size)
         end = r->end;
         r = vm_find(vm, end);
     }
-    if (vm_remove(vm, addr, end) != 0) {
-        vma_exhausted("shmdt");
-        return -ENOMEM;
+    while (addr < end) {
+        uintptr_t next = vm_find(vm, addr)->end;
+
+        if (vm_find(vm, addr)->prot & VM_PROT_SEALED) {
+            addr = next; /* kept, as Linux's shmdt ignores the unmap's EPERM */
+            continue;
+        }
+        if (vm_remove(vm, addr, next) != 0) {
+            vma_exhausted("shmdt");
+            rc = rc == 0 ? 0 : -ENOMEM; /* 0 once a region went */
+            break;
+        }
+        mmn_notify(current_proc->mm, MMN_UNMAP, addr, next);
+        unmap_user_range(_curr_dir, addr, next);
+        rc = 0;
+        addr = next;
     }
-    mmn_notify(current_proc->mm, MMN_UNMAP, addr, end);
-    unmap_user_range(_curr_dir, addr, end);
     vm_file_reap();
-    return 0;
+    return rc;
 }
 
 /** An address space is counted at the first process of `proc_list` that has
@@ -7225,7 +7652,8 @@ uint32_t shm_attaches(const struct shmem *sh)
  * is a no-op, as on Linux. Returns 0; -EINVAL for a zero length, an unaligned
  * address, or a range that leaves user space or wraps, which is judged before
  * the end is rounded up so that the rounding cannot wrap to a smaller end;
- * -ENOMEM when a split finds no room for its region.
+ * -EPERM, with nothing unmapped, when a region of the range is sealed
+ * (mseal); -ENOMEM when a split finds no room for its region.
  */
 long sys_munmap(isr_params_t *params)
 {
@@ -7249,6 +7677,10 @@ long sys_munmap(isr_params_t *params)
     start = addr;
     end = PAGE_UP(addr + length);
 
+    if (vm_sealed_at(vm, start, end) < end) {
+        return -EPERM;
+    }
+    mm_note_anon(current_proc->mm, start, end);
     if (vm_remove(vm, start, end) != 0) {
         vma_exhausted("munmap");
         return -ENOMEM;
@@ -7259,8 +7691,9 @@ long sys_munmap(isr_params_t *params)
     return 0;
 }
 
-/** Bring the resident pages of [start, end) to `prot`, region by region, so a
- * shared region's pages stay shared. */
+/** Bring the resident pages of [start, end) to their regions' protection,
+ * `prot` where no region holds them, region by region, so that a shared
+ * region's pages stay shared and each page takes its region's key. */
 static void protect_resident(uintptr_t start, uintptr_t end, uint32_t prot)
 {
     while (start < end) {
@@ -7268,59 +7701,135 @@ static void protect_resident(uintptr_t start, uintptr_t end, uint32_t prot)
         uintptr_t stop = (r && r->end < end) ? r->end : end;
 
         paging_protect_range(_curr_dir, start, stop,
-                             prot | ((r && r->type == VM_SHARED) ? VM_PROT_SHARED : 0u));
+                             r ? r->prot | (r->type == VM_SHARED ? VM_PROT_SHARED : 0u) : prot);
         start = stop;
     }
 }
 
-/**
- * Change the protection of a range (mprotect(2)). Its arguments are addr
- * (page aligned), length and prot. Returns 0, or -errno: EINVAL for an
- * unaligned address or an unknown protection bit, ENOMEM when a page of the
- * range is not mapped or a split finds no room for its region, EACCES for write
- * asked of a shared mapping that may never be written (the VM_PROT_NOWRITE
- * `mmap_file` and `mmap_shm` give), with nothing changed. The regions take the
- * new protection first and the resident pages after, so a fault in between
- * reads the protection the call is setting.
- */
-long sys_mprotect(isr_params_t *params)
+/** The checks of `mprotect_key` before it looks at the regions, in Linux's
+ * order, of the `prot` it was given, PROT_GROWSDOWN or PROT_GROWSUP among
+ * its bits: 1 to go on, 0 for an empty range, or -errno. */
+static long mprotect_refused(const struct mm *mm, uintptr_t addr, uintptr_t length, uint32_t prot,
+                             int key)
 {
-    uintptr_t addr = SC_ARG(params, 0);
-    uintptr_t length = SC_ARG(params, 1);
-    uint32_t prot = (uint32_t)SC_ARG(params, 2);
-    uintptr_t end;
-    uint32_t vmprot;
-    int rc;
-
-    if (!current_proc || !current_proc->mm) {
-        return -ESRCH;
+    if ((prot & (PROT_GROWSDOWN | PROT_GROWSUP)) == (PROT_GROWSDOWN | PROT_GROWSUP)) {
+        return -EINVAL;
     }
-    if ((addr & (PAGE_SIZE - 1)) != 0 ||
-        (prot & ~(uint32_t)(PROT_READ | PROT_WRITE | PROT_EXEC)) != 0) {
+    if ((addr & (PAGE_SIZE - 1)) != 0) {
         return -EINVAL;
     }
     if (length == 0) {
         return 0;
     }
+    if (PAGE_UP(length) == 0 || addr + PAGE_UP(length) <= addr) {
+        return -ENOMEM;
+    }
+    if ((prot & ~(uint32_t)(PROT_READ | PROT_WRITE | PROT_EXEC | PROT_SEM | PROT_GROWSDOWN |
+                            PROT_GROWSUP)) != 0 ||
+        (key != -1 && !pkey_named(mm, key))) {
+        return -EINVAL;
+    }
     if (addr < USER_ADDR_MIN || addr >= task_size() || length > task_size() - addr) {
         return -ENOMEM;
     }
+    return 1;
+}
+
+/**
+ * Change the protection of a range under the protection key `key`, or -1
+ * for mprotect's: the core of mprotect(2) and pkey_mprotect(2). Its
+ * arguments are addr (page aligned), length and prot. The checks run in
+ * Linux's order: EINVAL for PROT_GROWSDOWN and PROT_GROWSUP together, for
+ * an unaligned address, 0 for an empty range, ENOMEM for one that wraps,
+ * EINVAL for an unknown protection bit or a key the caller may not name
+ * (`pkey_named`), and ENOMEM when no region meets the range or the first
+ * begins above it. PROT_GROWSDOWN moves the start down to that of the
+ * first region, which must be the main stack (EINVAL otherwise), as
+ * glibc's _dl_make_stack_executable asks; PROT_GROWSUP is EINVAL, since no
+ * x86 region grows up. PROT_SEM is accepted and means nothing.
+ *
+ * The regions then change one after another, as Linux's do, and the first
+ * that cannot stops the call (`vm_protect_stop`): ENOMEM at a page that no
+ * region holds; EACCES for write asked of a shared mapping that may never
+ * be written (the VM_PROT_NOWRITE `mmap_file` and `mmap_shm` give) or for
+ * execute asked of a mapping of memfd_secret; EPERM at a sealed region
+ * (mseal). The regions and resident pages before the stop keep the new
+ * protection, and their notifiers run, before the error is returned; a
+ * split with no room for its region is ENOMEM with nothing changed. The
+ * regions take the new protection first and the resident pages after, so
+ * a fault in between reads the protection the call is setting.
+ *
+ * The regions take `key`; with -1, PROT_EXEC alone takes the execute-only
+ * key where the keys are on (`pkey_exec_only`), once the range is known to
+ * begin in a region, any other protection moves a region of that key back
+ * to key 0, and every other region keeps its own, as Linux's
+ * arch_override_mprotect_pkey chooses.
+ */
+static long mprotect_key(isr_params_t *params, int key)
+{
+    uintptr_t addr = SC_ARG(params, 0);
+    uintptr_t length = SC_ARG(params, 1);
+    uint32_t prot = (uint32_t)SC_ARG(params, 2);
+    uint32_t grows = prot & (PROT_GROWSDOWN | PROT_GROWSUP);
+    uintptr_t end, stop;
+    const vma_t *first;
+    uint32_t vmprot;
+    int exec_key = -1;
+    struct mm *mm;
+    long rc;
+    int why;
+
+    if (!current_proc || !current_proc->mm) {
+        return -ESRCH;
+    }
+    mm = current_proc->mm;
+    rc = mprotect_refused(mm, addr, length, prot, key);
+    if (rc <= 0) {
+        return rc;
+    }
+    prot &= ~grows;
     end = PAGE_UP(addr + length);
-    vmprot = vm_prot_of(prot);
-    rc = vm_protect(&current_proc->mm->vm, addr, end, vmprot);
-    if (rc == -1) {
+    first = vm_lower(&mm->vm, addr);
+    if (!first || first->start >= end) {
         return -ENOMEM;
     }
-    if (rc == -3) {
-        return -EACCES;
+    if (grows == PROT_GROWSDOWN) {
+        addr = first->start;
+        if (first->type != VM_STACK) {
+            return -EINVAL;
+        }
+    } else if (first->start > addr) {
+        return -ENOMEM;
+    } else if (grows == PROT_GROWSUP) {
+        return -EINVAL;
     }
+    vmprot = vm_prot_of(prot);
+    if (key == -1 && prot == PROT_EXEC) {
+        int xo = pkey_exec_only(mm);
+
+        key = xo > 0 ? xo : -1;
+    } else if (key == -1) {
+        exec_key = mm->pkey_exec;
+    }
+    stop = vm_protect_stop(&mm->vm, addr, end, vmprot, &why);
+    mm_note_anon(mm, addr, stop);
+    rc = vm_protect_key(&mm->vm, addr, stop, vmprot, key, exec_key);
     if (rc != 0) {
         vma_exhausted("mprotect");
         return -ENOMEM;
     }
-    mmn_notify(current_proc->mm, MMN_PROTECT, addr, end);
-    protect_resident(addr, end, vmprot);
-    return 0;
+    if (stop > addr) {
+        mmn_notify(mm, MMN_PROTECT, addr, stop);
+        protect_resident(addr, stop, vmprot);
+    }
+    return why == -1 ? -ENOMEM : why == -3 ? -EACCES : why == -4 ? -EPERM : 0;
+}
+
+/** Change the protection of a range (mprotect(2)): `mprotect_key` with no
+ * key named. */
+long sys_mprotect(isr_params_t *params)
+{
+    return mprotect_key(params, -1);
 }
 
 #define MREMAP_MAYMOVE   1
@@ -7330,17 +7839,19 @@ long sys_mprotect(isr_params_t *params)
 /** Give [addr, addr + len), which lies in the region `r`, a region at `to`
  * of `new_len` bytes, moving the resident pages there. Returns `to`, or
  * -ENOMEM with no room for the regions or a page table. The file the region
- * maps is held across the move, which removes the old region's hold before
+ * maps and its policy, which the new region keeps as Linux's copy_vma keeps
+ * it, are held across the move, which removes the old region's holds before
  * the new region takes its own. */
 static long remap_move(vm_space_t *vm, vma_t *r, uintptr_t addr, uintptr_t len, uintptr_t to,
                        uintptr_t new_len)
 {
-    struct vm_file *file = r->file;
+    vma_t like;
     uint32_t pgoff = r->pgoff + (uint32_t)((addr - r->start) / PAGE_SIZE);
-    uint32_t prot = r->prot;
-    vm_type_t type = r->type;
     uintptr_t moved = len < new_len ? len : new_len;
+    int rc;
 
+    mm_note_anon(current_proc->mm, addr, addr + len);
+    like = *r;
     if (vm_reserve(vm, 3) != 0) {
         vma_exhausted("mremap");
         return -ENOMEM;
@@ -7349,15 +7860,17 @@ static long remap_move(vm_space_t *vm, vma_t *r, uintptr_t addr, uintptr_t len, 
         return -ENOMEM;
     }
     mmn_notify(current_proc->mm, MMN_UNMAP, addr, addr + len);
-    vm_file_get(file);
+    vm_file_get(like.file);
+    (void)vm_policy_get(like.policy);
     vm_remove(vm, addr, addr + len);
     unmap_user_range(_curr_dir, addr, addr + len);
-    if (vm_insert_file(vm, to, to + new_len, prot, type, file, pgoff) != 0) {
-        vm_file_put(file);
+    rc = vm_insert_like(vm, to, to + new_len, &like, pgoff);
+    vm_file_put(like.file);
+    vm_policy_put(like.policy);
+    if (rc != 0) {
         unmap_user_range(_curr_dir, to, to + moved);
         return -ENOMEM;
     }
-    vm_file_put(file);
     return (long)to;
 }
 
@@ -7382,6 +7895,9 @@ static long remap_fixed(vm_space_t *vm, uintptr_t addr, uintptr_t old_len, uintp
         (to < addr + old_len && addr < to + new_len)) {
         return -EINVAL;
     }
+    if (vm_sealed_at(vm, to, to + new_len) < to + new_len) {
+        return -EPERM;
+    }
     rest = vm_total(vm) - vm_covered(vm, to, to + new_len) - old_len;
     if (new_len > limit || rest > limit - new_len) {
         return -ENOMEM;
@@ -7390,6 +7906,7 @@ static long remap_fixed(vm_space_t *vm, uintptr_t addr, uintptr_t old_len, uintp
         vma_exhausted("mremap");
         return -ENOMEM;
     }
+    mm_note_anon(current_proc->mm, to, to + new_len);
     vm_remove(vm, to, to + new_len);
     mmn_notify(current_proc->mm, MMN_UNMAP, to, to + new_len);
     unmap_user_range(_curr_dir, to, to + new_len);
@@ -7431,6 +7948,7 @@ static long remap_resize(vma_t *r, uintptr_t addr, uintptr_t old_len, uintptr_t 
         return remap_fixed(vm, addr, old_len, to, new_len);
     }
     if (new_len <= old_len) {
+        mm_note_anon(current_proc->mm, addr + new_len, addr + old_len);
         if (vm_remove(vm, addr + new_len, addr + old_len) != 0) {
             vma_exhausted("mremap");
             return -ENOMEM;
@@ -7444,7 +7962,7 @@ static long remap_resize(vma_t *r, uintptr_t addr, uintptr_t old_len, uintptr_t 
     }
     if (addr + old_len == r->end && addr <= task_size() - new_len &&
         addr + new_len <= vm->stack_limit && !vm_overlaps(vm, addr + old_len, addr + new_len)) {
-        if (vm_insert_file(vm, addr + old_len, addr + new_len, r->prot, r->type, r->file,
+        if (vm_insert_like(vm, addr + old_len, addr + new_len, r,
                            r->pgoff + (uint32_t)((addr + old_len - r->start) / PAGE_SIZE)) != 0) {
             vma_exhausted("mremap");
             return -ENOMEM;
@@ -7462,21 +7980,22 @@ static long remap_resize(vma_t *r, uintptr_t addr, uintptr_t old_len, uintptr_t 
 }
 
 /**
- * Resize a mapping, or move it (mremap(2)). Its arguments are old address,
- * old length, new length, flags and new address with MREMAP_FIXED. The old
- * range must lie in one region. With MREMAP_FIXED the mapping moves, pages
- * and all, to the new address, whatever was there going first
- * (`remap_fixed`). Otherwise a shrink cuts its end, and a growth takes the
- * range after it when that is free, or with MREMAP_MAYMOVE moves the whole
- * mapping to a free range of the new length. Returns the mapping's address,
- * or -errno: EINVAL for arguments that fail `remap_args_valid`, and for a
- * mapping of a file whose last page at the new length would not fit in 32
- * bits; EFAULT for a range not in one region, or for a growth of device
- * memory; ENOMEM when it cannot grow in place and may not move, when no range
- * is free, or past RLIMIT_AS; EAGAIN when the growth of a locked mapping
- * would take the locked pages past RLIMIT_MEMLOCK. The growth of a locked
- * mapping is locked and brought in, unless it was locked on fault, as on
- * Linux. MREMAP_DONTUNMAP is not implemented, and is EINVAL.
+ * Resize a mapping, or move it (mremap(2)). Its arguments are old address, old
+ * length, new length, flags and new address with MREMAP_FIXED. The old range
+ * must lie in one region. With MREMAP_FIXED the mapping moves, pages and all,
+ * to the new address, whatever was there going first (`remap_fixed`). Otherwise
+ * a shrink cuts its end, and a growth takes the range after it when that is
+ * free, or with MREMAP_MAYMOVE moves the whole mapping to a free range of the
+ * new length. Returns the mapping's address, or -errno: EINVAL for arguments
+ * that fail `remap_args_valid`, and for a mapping of a file whose last page at
+ * the new length would not fit in 32 bits; EFAULT for a range not in one
+ * region, or for a growth of device memory; EPERM when the region at the old
+ * address is sealed (mseal), or under MREMAP_FIXED a region of the new range
+ * is; ENOMEM when it cannot grow in place and may not move, when no range is
+ * free, or past RLIMIT_AS; EAGAIN when the growth of a locked mapping would
+ * take the locked pages past RLIMIT_MEMLOCK. The growth of a locked mapping is
+ * locked and brought in, unless it was locked on fault, as on Linux.
+ * MREMAP_DONTUNMAP is not implemented, and is EINVAL.
  */
 long sys_mremap(isr_params_t *params)
 {
@@ -7499,7 +8018,13 @@ long sys_mremap(isr_params_t *params)
     old_len = PAGE_UP(SC_ARG(params, 1));
     new_len = PAGE_UP(SC_ARG(params, 2));
     r = vm_find(vm, addr);
-    if (!r || addr + old_len > r->end) {
+    if (!r) {
+        return -EFAULT;
+    }
+    if (r->prot & VM_PROT_SEALED) {
+        return -EPERM;
+    }
+    if (addr + old_len > r->end) {
         return -EFAULT;
     }
     if (r->file && new_len / PAGE_SIZE > 0xFFFFFFFFu - (r->pgoff + (addr - r->start) / PAGE_SIZE)) {
@@ -7526,6 +8051,10 @@ long sys_mremap(isr_params_t *params)
 #define MADV_REMOVE          9
 #define MADV_DONTFORK        10
 #define MADV_DOFORK          11
+#define MADV_WIPEONFORK      18
+#define MADV_KEEPONFORK      19
+#define MADV_COLD            20
+#define MADV_PAGEOUT         21
 #define MADV_DONTNEED_LOCKED 24
 #define MADV_COLLAPSE        25
 #define MADV_GUARD_INSTALL   102
@@ -7548,9 +8077,10 @@ static int madvise_known(uint32_t advice)
 
 /**
  * Whether the region `r` may hold a guard, as Linux 6.13's
- * is_valid_guard_vma has it: anonymous and private, the memory of mmap's
- * MAP_ANONYMOUS, the heap or the stack, and not device memory; and for an
- * `install` not locked, whose pages Linux will not drop.
+ * is_valid_guard_vma has it, or be wiped at a fork, as Linux's
+ * MADV_WIPEONFORK takes it: anonymous and private, the memory of mmap's
+ * MAP_ANONYMOUS, the heap or the stack, and not device memory; and for a
+ * guard's `install` not locked, whose pages Linux will not drop.
  */
 static int madvise_guard_allowed(const vma_t *r, int install)
 {
@@ -7558,31 +8088,75 @@ static int madvise_guard_allowed(const vma_t *r, int install)
            !(r->prot & VM_PROT_IO) && !(install && (r->prot & VM_PROT_LOCKED));
 }
 
-/**
- * Whether `advice` over [start, end), which regions of `vm` cover without a
- * gap, is EINVAL for a region it meets: the dropping advice and
- * MADV_DOFORK over device memory, MADV_DONTNEED and MADV_FREE over a
- * locked region, and the guard advice over a region that may not hold a
- * guard (`madvise_guard_allowed`).
- */
-static int madvise_refused(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t advice)
+int madvise_refused(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t advice)
 {
-    int drop = advice == MADV_DONTNEED || advice == MADV_FREE;
-    int guard = advice == MADV_GUARD_INSTALL || advice == MADV_GUARD_REMOVE;
+    int drop = advice == MADV_DONTNEED || advice == MADV_FREE || advice == MADV_COLD ||
+               advice == MADV_PAGEOUT;
+    int anon =
+        advice == MADV_GUARD_INSTALL || advice == MADV_GUARD_REMOVE || advice == MADV_WIPEONFORK;
     uintptr_t at;
 
-    if (!drop && !guard && advice != MADV_DONTNEED_LOCKED && advice != MADV_DOFORK) {
+    if (!drop && !anon && advice != MADV_DONTNEED_LOCKED && advice != MADV_DOFORK) {
         return 0;
     }
     for (at = start; at < end; at = vm_find(vm, at)->end) {
         const vma_t *r = vm_find(vm, at);
 
-        if (guard ? !madvise_guard_allowed(r, advice == MADV_GUARD_INSTALL)
-                  : (r->prot & VM_PROT_IO) || (drop && (r->prot & VM_PROT_LOCKED))) {
+        if (anon ? !madvise_guard_allowed(r, advice == MADV_GUARD_INSTALL)
+                 : (r->prot & VM_PROT_IO) || (drop && (r->prot & VM_PROT_LOCKED))) {
             return 1;
         }
     }
     return 0;
+}
+
+/**
+ * Where `advice` over [start, end), which regions of `vm` cover, must stop
+ * with EPERM, as Linux's can_modify_vma_madv has it: at the first sealed
+ * region (mseal) of anonymous, private memory without write, for the advice
+ * that would discard its pages, MADV_DONTNEED, MADV_DONTNEED_LOCKED,
+ * MADV_FREE, MADV_REMOVE, MADV_DONTFORK, MADV_WIPEONFORK and, as Linux 6.13
+ * adds, MADV_GUARD_INSTALL. The start of
+ * that region, or `start` when it begins below, or `end` when the advice may
+ * go over the whole range. A region of a program's segment counts as a
+ * file's.
+ */
+static uintptr_t madvise_sealed_at(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t advice)
+{
+    const vma_t *r;
+
+    if (advice != MADV_DONTNEED && advice != MADV_DONTNEED_LOCKED && advice != MADV_FREE &&
+        advice != MADV_REMOVE && advice != MADV_DONTFORK && advice != MADV_WIPEONFORK &&
+        advice != MADV_GUARD_INSTALL) {
+        return end;
+    }
+    for (r = vm_lower(vm, start); r && r->start < end; r = vm_next(r)) {
+        if ((r->prot & VM_PROT_SEALED) && !(r->prot & VM_PROT_WRITE) && r->file == NULL &&
+            r->type != VM_SHARED && r->type != VM_CODE && r->type != VM_DATA) {
+            return r->start > start ? r->start : start;
+        }
+    }
+    return end;
+}
+
+/** The mark of a region (vm.h) that `advice` sets or clears: VM_PROT_DONTFORK
+ * for MADV_DONTFORK and MADV_DOFORK, VM_PROT_WIPEONFORK for MADV_WIPEONFORK
+ * and MADV_KEEPONFORK, VM_PROT_GUARD for the two of guards, or 0. */
+static uint32_t madvise_mark_bit(uint32_t advice)
+{
+    switch (advice) {
+    case MADV_DONTFORK:
+    case MADV_DOFORK:
+        return VM_PROT_DONTFORK;
+    case MADV_WIPEONFORK:
+    case MADV_KEEPONFORK:
+        return VM_PROT_WIPEONFORK;
+    case MADV_GUARD_INSTALL:
+    case MADV_GUARD_REMOVE:
+        return VM_PROT_GUARD;
+    default:
+        return 0;
+    }
 }
 
 /**
@@ -7593,28 +8167,37 @@ static int madvise_refused(vm_space_t *vm, uintptr_t start, uintptr_t end, uint3
  * holds. Those three are EINVAL over device memory, which has no pages to read
  * again, as on Linux for VM_PFNMAP, and MADV_DONTNEED and MADV_FREE are EINVAL
  * over a locked region, whose pages MADV_DONTNEED_LOCKED alone drops, as on
- * Linux for VM_LOCKED. MADV_DONTFORK marks the regions so that a fork's child
- * does not get them, and MADV_DOFORK clears the mark; DOFORK is EINVAL over
- * device memory, as on Linux for VM_IO, and either is ENOMEM when a region
- * cannot be split. MADV_GUARD_INSTALL makes the range a guard (VM_PROT_GUARD,
- * vm.h), whose pages go and whose every access is SIGSEGV with SEGV_MAPERR, and
- * MADV_GUARD_REMOVE ends the guard, leaving pages that read as zeros; both are
- * EINVAL over a region that may not hold a guard (`madvise_guard_allowed`) and
- * ENOMEM when a region cannot be split. Linux marks a guard's pages in its page
- * tables and splits no region, so a guard shows in /proc/PID/maps here as a
- * region of its own, with the protection of the region it was cut from. Any
- * other advice `madvise_known` takes changes nothing, and the rest is EINVAL,
- * as Linux refuses an advice it does not define. A range with a page in no
- * region is ENOMEM, as in Linux. A range that runs past user space is EINVAL,
- * judged by the length as given: a length within a page of 4 GiB rounds up to
- * 0, which would pass for an empty range.
+ * Linux for VM_LOCKED; MADV_COLD and MADV_PAGEOUT, which change nothing here,
+ * are EINVAL over either, as Linux's can_madv_lru_vma refuses them. Over a
+ * sealed region of anonymous memory without write (mseal) the advice that
+ * discards pages stops with EPERM, the regions below it in the range advised
+ * first, as Linux advises region by region. MADV_DONTFORK marks the regions so
+ * that a fork's child does not get them, and MADV_DOFORK clears the mark;
+ * DOFORK is EINVAL over device memory, as on Linux for VM_IO, and either is
+ * ENOMEM when a region cannot be split. MADV_WIPEONFORK marks the regions so
+ * that a fork's child gets them without their pages, reading zeros, and
+ * MADV_KEEPONFORK clears the mark (VM_PROT_WIPEONFORK, vm.h); WIPEONFORK is
+ * EINVAL over a region that is not private anonymous memory, as on Linux,
+ * and either is ENOMEM when a region cannot be split. MADV_GUARD_INSTALL
+ * makes the range a guard (VM_PROT_GUARD, vm.h), whose pages go and whose every
+ * access is SIGSEGV with SEGV_MAPERR, and MADV_GUARD_REMOVE ends the guard,
+ * leaving pages that read as zeros; both are EINVAL over a region that may not
+ * hold a guard (`madvise_guard_allowed`) and ENOMEM when a region cannot be
+ * split. Linux marks a guard's pages in its page tables and splits no region,
+ * so a guard shows in /proc/PID/maps here as a region of its own, with the
+ * protection of the region it was cut from. Any other advice `madvise_known`
+ * takes changes nothing, and the rest is EINVAL, as Linux refuses an advice it
+ * does not define. A range with a page in no region is ENOMEM, as in Linux. A
+ * range that runs past user space is EINVAL, judged by the length as given: a
+ * length within a page of 4 GiB rounds up to 0, which would pass for an empty
+ * range.
  */
 long sys_madvise(isr_params_t *params)
 {
     uintptr_t addr = SC_ARG(params, 0);
     uint32_t advice = (uint32_t)SC_ARG(params, 2);
     vm_space_t *vm;
-    uintptr_t len;
+    uintptr_t len, end;
 
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
@@ -7631,28 +8214,154 @@ long sys_madvise(isr_params_t *params)
     if (vm_covered(vm, addr, addr + len) != len) {
         return -ENOMEM;
     }
-    if (madvise_refused(vm, addr, addr + len, advice)) {
+    end = madvise_sealed_at(vm, addr, addr + len, advice);
+    if (madvise_refused(vm, addr, end, advice)) {
         return -EINVAL;
     }
-    if (advice == MADV_DONTFORK || advice == MADV_DOFORK || advice == MADV_GUARD_INSTALL ||
-        advice == MADV_GUARD_REMOVE) {
-        uint32_t bit =
-            advice == MADV_DONTFORK || advice == MADV_DOFORK ? VM_PROT_DONTFORK : VM_PROT_GUARD;
-        int set = advice == MADV_DONTFORK || advice == MADV_GUARD_INSTALL;
+    if (madvise_mark_bit(advice) != 0) {
+        uint32_t bit = madvise_mark_bit(advice);
+        int set =
+            advice == MADV_DONTFORK || advice == MADV_GUARD_INSTALL || advice == MADV_WIPEONFORK;
 
-        if (vm_advise(vm, addr, addr + len, set ? bit : 0u, set ? 0u : bit) != 0) {
+        mm_note_anon(current_proc->mm, addr, end);
+        if (vm_advise(vm, addr, end, set ? bit : 0u, set ? 0u : bit) != 0) {
             vma_exhausted("madvise");
             return -ENOMEM;
         }
         if (advice == MADV_GUARD_INSTALL) {
-            mmn_notify(current_proc->mm, MMN_DROP, addr, addr + len);
-            unmap_user_range(_curr_dir, addr, addr + len);
+            mmn_notify(current_proc->mm, MMN_DROP, addr, end);
+            unmap_user_range(_curr_dir, addr, end);
         }
     } else if (advice == MADV_DONTNEED || advice == MADV_DONTNEED_LOCKED || advice == MADV_FREE) {
-        mmn_notify(current_proc->mm, MMN_DROP, addr, addr + len);
-        unmap_user_range(_curr_dir, addr, addr + len);
+        mm_note_anon(current_proc->mm, addr, end);
+        mmn_notify(current_proc->mm, MMN_DROP, addr, end);
+        unmap_user_range(_curr_dir, addr, end);
+    }
+    return end < addr + len ? -EPERM : 0;
+}
+
+/**
+ * Seal a range (mseal(2)), as Linux 6.12's mm/mseal.c does. Its arguments are
+ * address, length and flags. Each region of the range takes VM_PROT_SEALED
+ * (vm.h), split at the range's ends; sealing a sealed region again is no
+ * error, and no call unseals. Returns 0, or -errno: EINVAL for flags that are
+ * not 0, an unaligned address, or a range that wraps; ENOMEM, with nothing
+ * sealed, for a range with a page in no region, or when a split finds no
+ * room. An empty range is 0. Linux has seals on 64-bit kernels alone: the
+ * i686 kernel answers EPERM to every call, as Linux's i386 kernel does, and
+ * the x86-64 kernel seals for an i386 program too.
+ */
+long sys_mseal(isr_params_t *params)
+{
+    uintptr_t start = SC_ARG(params, 0);
+    uintptr_t len_in = SC_ARG(params, 1);
+    vm_space_t *vm;
+    uintptr_t len;
+
+    if (sizeof(uintptr_t) < 8u) {
+        return -EPERM;
+    }
+    if (!current_proc || !current_proc->mm) {
+        return -ESRCH;
+    }
+    vm = &current_proc->mm->vm;
+    if (SC_ARG(params, 2) != 0 || (start & (PAGE_SIZE - 1)) != 0) {
+        return -EINVAL;
+    }
+    len = PAGE_UP(len_in);
+    if ((len_in != 0 && len == 0) || start + len < start) {
+        return -EINVAL;
+    }
+    if (len == 0) {
+        return 0;
+    }
+    if (vm_covered(vm, start, start + len) != len) {
+        return -ENOMEM;
+    }
+    mm_note_anon(current_proc->mm, start, start + len);
+    if (vm_advise(vm, start, start + len, VM_PROT_SEALED, 0u) != 0) {
+        vma_exhausted("mseal");
+        return -ENOMEM;
     }
     return 0;
+}
+
+/**
+ * Change the protection of a range under a protection key (pkey_mprotect(2)).
+ * Its arguments are mprotect's and the key, an int: -1 is mprotect itself,
+ * and any other must be one the caller may name (`pkey_named`), a key it
+ * allocated or the default key 0, which the range then takes, or EINVAL
+ * after mprotect's checks of the address (EINVAL), an empty range (0) and
+ * one that wraps (ENOMEM), as `mprotect_key` orders them. With the keys
+ * off no key may be named, as on Linux where the processor has none. Linux
+ * builds the keys' calls on x86-64 alone, so the i686 kernel has no row for
+ * this one and its two companions, and answers ENOSYS.
+ */
+long sys_pkey_mprotect(isr_params_t *params)
+{
+    return mprotect_key(params, (int32_t)SC_ARG(params, 3));
+}
+
+/**
+ * Allocate a protection key (pkey_alloc(2)). Its arguments are flags, which
+ * must be 0, and the key's first access rights, of PKEY_ACCESS_MASK; either
+ * otherwise is EINVAL. The answer is the lowest key, 1 to 15 or 0 once the
+ * program freed it, that the address space has not allocated, with its
+ * rights written into the calling thread's PKRU, as Linux's; ENOSPC when
+ * every key is taken, the execute-only key among them, and always with the
+ * keys off.
+ */
+long sys_pkey_alloc(isr_params_t *params)
+{
+    uintptr_t rights = SC_ARG(params, 1);
+    int key;
+
+    if (SC_ARG(params, 0) != 0 || (rights & ~(uintptr_t)PKEY_ACCESS_MASK) != 0) {
+        return -EINVAL;
+    }
+    if (!current_proc || !current_proc->mm) {
+        return -ESRCH;
+    }
+    key = pkey_take(current_proc->mm);
+    if (key < 0) {
+        return -ENOSPC;
+    }
+    pkey_rights(key, (uint32_t)rights);
+    return key;
+}
+
+/**
+ * Free a protection key (pkey_free(2)): its argument, an int, must be a key
+ * the caller may name (`pkey_named`), or the answer is EINVAL. The key may
+ * be allocated again; the regions that have it keep it, and PKRU keeps its
+ * rights, as on Linux. With the keys off every key is EINVAL.
+ */
+long sys_pkey_free(isr_params_t *params)
+{
+    int key = (int32_t)SC_ARG(params, 0);
+
+    if (!current_proc || !current_proc->mm) {
+        return -ESRCH;
+    }
+    if (!pkey_named(current_proc->mm, key)) {
+        return -EINVAL;
+    }
+    current_proc->mm->pkeys &= ~(1u << key);
+    return 0;
+}
+
+/**
+ * Map a shadow stack (map_shadow_stack(2)). Linux builds the call on x86-64
+ * with CONFIG_X86_USER_SHADOW_STACK, as the distributions do, and answers
+ * EOPNOTSUPP before any check of its arguments where the processor's shadow
+ * stacks for user mode are not enabled, which Rach2 never enables: to 64-bit
+ * and i386 programs alike. The i686 kernel has no row, as Linux cannot build
+ * the call there, and answers ENOSYS.
+ */
+long sys_map_shadow_stack(isr_params_t *params)
+{
+    (void)params;
+    return -EOPNOTSUPP;
 }
 
 /**
@@ -7798,14 +8507,20 @@ long sys_getpriority(isr_params_t *params)
     return best;
 }
 
+int proc_nice_allowed(const process_t *p, int32_t nice)
+{
+    return cred_privileged() || (unsigned long)(20 - nice) <= p->rlim[RLIM_NICE].cur;
+}
+
 /**
  * Set a priority (setpriority).
  *
  * Its arguments are which, who and the nice value, clamped to -20 through 19 as
  * Linux clamps it. Each target is changed on Linux's terms: a caller whose
  * effective uid is neither the target's real nor its effective uid gets -EPERM,
- * and one that would lower the target's nice value, raising its priority, gets
- * -EACCES, since `RLIMIT_NICE` is 0; effective uid 0 may do both. The targets
+ * and one that would lower the target's nice value, raising its priority,
+ * past what the target's `RLIMIT_NICE` allows gets -EACCES
+ * (`proc_nice_allowed`); effective uid 0 may do both. The targets
  * that pass are changed even when others fail, and the call returns the error
  * of the last that failed, 0 when none did, or -ESRCH when nothing matched;
  * -EINVAL for an unknown `which`. The value is kept and inherited, and the
@@ -7836,7 +8551,7 @@ long sys_setpriority(isr_params_t *params)
             rc = -EPERM;
             continue;
         }
-        if (nice < p->nice && !cred_privileged()) {
+        if (nice < p->nice && !proc_nice_allowed(p, nice)) {
             rc = -EACCES;
             continue;
         }
@@ -7967,24 +8682,6 @@ long sys_ioprio_get(isr_params_t *params)
     return best;
 }
 
-/* The scheduling policies Linux numbers. SCHED_OTHER, SCHED_BATCH and
- * SCHED_IDLE are kept as a thread's policy, and every ready thread takes its
- * turn whichever it has; the others are defined so that a call about each
- * returns the error or the value Linux returns for it. */
-#define SCHED_OTHER 0
-
-#define SCHED_FIFO 1
-
-#define SCHED_RR 2
-
-#define SCHED_BATCH 3
-
-#define SCHED_IDLE 5
-
-#define SCHED_DEADLINE 6
-
-#define SCHED_EXT 7
-
 /* The flag of a policy that clears itself in a fork's child, which keeps
  * the policy, as Linux keeps SCHED_BATCH and SCHED_IDLE. */
 #define SCHED_RESET_ON_FORK 0x40000000
@@ -8075,30 +8772,243 @@ long sys_sched_yield(isr_params_t *params)
     return 0;
 }
 
+/* struct sched_attr of sched_setattr(2) and sched_getattr(2), Linux's
+ * layout, the same for an i386 caller: SCHED_ATTR_SIZE_VER0 bytes up to
+ * the period, SCHED_ATTR_SIZE_VER1 with the utilization clamps. */
+struct sched_attr {
+    uint32_t size;           /* the bytes the caller's structure has */
+    uint32_t sched_policy;   /* SCHED_ */
+    uint64_t sched_flags;    /* SCHED_FLAG_ */
+    int32_t sched_nice;      /* the ordinary policies' nice value */
+    uint32_t sched_priority; /* FIFO's and RR's priority, else 0 */
+    uint64_t sched_runtime;  /* nanoseconds: DEADLINE's, or the slice asked */
+    uint64_t sched_deadline; /* nanoseconds, DEADLINE's relative deadline */
+    uint64_t sched_period;   /* nanoseconds, DEADLINE's, 0 for the deadline */
+    uint32_t sched_util_min; /* the clamps, which this kernel does not have */
+    uint32_t sched_util_max;
+};
+
+#define SCHED_ATTR_SIZE_VER0 48u
+#define SCHED_ATTR_SIZE_VER1 56u
+
+/* The flags of struct sched_attr, Linux's values. SCHED_FLAG_SUGOV is the
+ * kernel's own, which the flags' check lets by and a later one refuses, as
+ * Linux's __sched_setscheduler does. */
+#define SCHED_FLAG_RESET_ON_FORK 0x01u
+#define SCHED_FLAG_RECLAIM       0x02u
+#define SCHED_FLAG_DL_OVERRUN    0x04u
+#define SCHED_FLAG_KEEP_POLICY   0x08u
+#define SCHED_FLAG_KEEP_PARAMS   0x10u
+#define SCHED_FLAG_UTIL_CLAMP    0x60u
+#define SCHED_FLAG_ALL           0x7Fu
+#define SCHED_FLAG_SUGOV         0x10000000u
+#define SCHED_DL_FLAGS           (SCHED_FLAG_RECLAIM | SCHED_FLAG_DL_OVERRUN)
+
+/* SCHED_DEADLINE's bounds, Linux's defaults: a period of 100 us to 2^22 us
+ * (sched_deadline_period_min_us and _max_us), a runtime of 1024 ns at
+ * least. */
+#define SCHED_DL_PERIOD_MIN  ((uint64_t)100000u)
+#define SCHED_DL_PERIOD_MAX  (((uint64_t)1 << 22) * 1000u)
+#define SCHED_DL_RUNTIME_MIN 1024u
+
+/* The slice an ordinary thread may ask for, Linux's clamp of 0.1 to 100 ms,
+ * and the default one before its scaling by the processors. */
+#define SCHED_SLICE_MIN  100000u
+#define SCHED_SLICE_MAX  100000000u
+#define SCHED_SLICE_BASE 750000u
+
+/* What a call asks of a thread's scheduling, as Linux's struct sched_attr
+ * reaches __sched_setscheduler. */
+struct sched_req {
+    int policy;        /* -1 keeps the thread's, with its reset flag */
+    uint32_t flags;    /* SCHED_FLAG_, the high word refused before */
+    int32_t nice;      /* -20 to 19 */
+    uint32_t priority; /* as the caller gave it */
+    uint64_t runtime;
+    uint64_t deadline;
+    uint64_t period;
+};
+
+/** Whether `policy` is one Linux's valid_policy takes; SCHED_EXT is not, as
+ * for a kernel without sched_ext. */
+static int sched_policy_valid(int policy)
+{
+    return policy == SCHED_OTHER || policy == SCHED_BATCH || policy == SCHED_IDLE ||
+           policy == SCHED_FIFO || policy == SCHED_RR || policy == SCHED_DEADLINE;
+}
+
+/** Whether `policy` is one of the ordinary ones, Linux's fair_policy. */
+static int sched_policy_fair(int policy)
+{
+    return policy == SCHED_OTHER || policy == SCHED_BATCH;
+}
+
+/** Whether `policy` is SCHED_FIFO or SCHED_RR. */
+static int sched_policy_rt(int policy)
+{
+    return policy == SCHED_FIFO || policy == SCHED_RR;
+}
+
+/** Whether `a` has deadline parameters Linux's __checkparam_dl takes. */
+static int sched_dl_valid(const struct sched_req *a)
+{
+    uint64_t period = a->period ? a->period : a->deadline;
+
+    if (a->flags & SCHED_FLAG_SUGOV) {
+        return 1;
+    }
+    if (a->deadline == 0 || a->runtime < SCHED_DL_RUNTIME_MIN || (a->deadline >> 63) != 0 ||
+        (a->period >> 63) != 0) {
+        return 0;
+    }
+    return period >= a->deadline && a->deadline >= a->runtime && period >= SCHED_DL_PERIOD_MIN &&
+           period <= SCHED_DL_PERIOD_MAX;
+}
+
+/**
+ * Linux's checks of a caller without CAP_SYS_NICE
+ * (user_check_sched_setscheduler), by the target's RLIMIT_NICE and
+ * RLIMIT_RTPRIO: no nice value lower than the first allows; no entry to a
+ * real-time policy while the second is 0, and no priority past both the
+ * present one and the second; no SCHED_DEADLINE; no leaving SCHED_IDLE,
+ * unless the first allows the present nice value; no target of another
+ * user; and no clearing of SCHED_RESET_ON_FORK. 0, or -EPERM.
+ */
+static int32_t sched_user_check(const process_t *p, const struct sched_req *a, int policy,
+                                int reset)
+{
+    unsigned long rtprio = p->rlim[RLIM_RTPRIO].cur;
+
+    if (sched_policy_fair(policy) && a->nice < p->nice && !proc_nice_allowed(p, a->nice)) {
+        return -EPERM;
+    }
+    if (sched_policy_rt(policy) && ((policy != p->sched_policy && rtprio == 0) ||
+                                    (a->priority > p->rt_priority && a->priority > rtprio))) {
+        return -EPERM;
+    }
+    if (policy == SCHED_DEADLINE ||
+        (p->sched_policy == SCHED_IDLE && policy != SCHED_IDLE && !proc_nice_allowed(p, p->nice)) ||
+        !sched_may_change(p) || (p->sched_reset && !reset)) {
+        return -EPERM;
+    }
+    return 0;
+}
+
+/**
+ * The checks of `a` that come before any look at the processors, in Linux's
+ * order (__sched_setscheduler), for `policy`, the one `p` is to have: a
+ * flag Linux does not know, a priority past 99 or one that does not suit
+ * the policy, or deadline parameters out of their bounds, -EINVAL; what the
+ * caller may not do without privilege (`sched_user_check`), -EPERM; the
+ * kernel's SCHED_FLAG_SUGOV, -EINVAL; the utilization clamps, -EOPNOTSUPP,
+ * as from a kernel without them. 0 when they pass.
+ */
+static int32_t sched_check(const process_t *p, const struct sched_req *a, int policy, int reset)
+{
+    int32_t rc;
+
+    if ((a->flags & ~(SCHED_FLAG_ALL | SCHED_FLAG_SUGOV)) != 0 || a->priority > SCHED_RT_PRIO_MAX ||
+        (policy == SCHED_DEADLINE && !sched_dl_valid(a)) ||
+        sched_policy_rt(policy) != (a->priority != 0)) {
+        return -EINVAL;
+    }
+    if (!cred_privileged()) {
+        rc = sched_user_check(p, a, policy, reset);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    if (a->flags & SCHED_FLAG_SUGOV) {
+        return -EINVAL;
+    }
+    return (a->flags & SCHED_FLAG_UTIL_CLAMP) ? -EOPNOTSUPP : 0;
+}
+
+/** Store in `p` the parameters `a` gives `policy`: a deadline thread's
+ * runtime, deadline, period and flags, or an ordinary thread's nice value
+ * and slice, clamped to 0.1 to 100 ms; and the policy and priority. */
+static void sched_store(process_t *p, const struct sched_req *a, int policy)
+{
+    if (policy == SCHED_DEADLINE) {
+        p->dl_runtime = a->runtime;
+        p->dl_deadline = a->deadline;
+        p->dl_period = a->period ? a->period : a->deadline;
+        p->dl_flags = a->flags & SCHED_DL_FLAGS;
+    } else if (sched_policy_fair(policy)) {
+        p->nice = a->nice;
+        p->sched_slice = a->runtime == 0                ? 0
+                         : a->runtime < SCHED_SLICE_MIN ? SCHED_SLICE_MIN
+                         : a->runtime > SCHED_SLICE_MAX ? SCHED_SLICE_MAX
+                                                        : (uint32_t)a->runtime;
+    }
+    p->sched_policy = (uint8_t)policy;
+    p->rt_priority = (uint8_t)a->priority;
+}
+
+/**
+ * Give `p` the scheduling `a` asks for, in Linux's order and with its
+ * errors (__sched_setscheduler): a policy Linux does not take, -EINVAL;
+ * `sched_check`'s errors; SCHED_DEADLINE for a thread whose affinity leaves
+ * out a processor started, -EPERM; and bandwidth the deadline threads do
+ * not have, -EBUSY. SCHED_FLAG_KEEP_PARAMS changes only the reset flag
+ * after those checks.
+ *
+ * The scheduler has no deadline class, so no deadline bandwidth is
+ * available: every otherwise valid request for that policy is -EBUSY,
+ * as Linux's sched_dl_overflow refuses bandwidth it cannot provide.
+ */
+static int32_t sched_apply(process_t *p, const struct sched_req *a)
+{
+    int policy = a->policy;
+    uint64_t online = cpu_online_mask();
+    int32_t rc;
+    int reset;
+
+    if (policy < 0) {
+        reset = p->sched_reset;
+        policy = p->sched_policy;
+    } else {
+        reset = (a->flags & SCHED_FLAG_RESET_ON_FORK) != 0;
+        if (!sched_policy_valid(policy)) {
+            return -EINVAL;
+        }
+    }
+    rc = sched_check(p, a, policy, reset);
+    if (rc != 0) {
+        return rc;
+    }
+    if (policy == SCHED_DEADLINE && (p->affinity & online) != online) {
+        return -EPERM;
+    }
+    if (policy == SCHED_DEADLINE) {
+        return -EBUSY;
+    }
+    p->sched_reset = (uint8_t)reset;
+    if (!(a->flags & SCHED_FLAG_KEEP_PARAMS)) {
+        sched_store(p, a, policy);
+        futex_pi_recalculate();
+        sched_priority_changed(p);
+    }
+    return 0;
+}
+
 /**
  * Change a thread's policy and priority (sched_setscheduler(2)), or its
  * priority alone (sched_setparam, which passes `policy` -1 and keeps the
  * policy and its SCHED_RESET_ON_FORK).
  *
- * `uparam` points at a struct sched_param, one int. SCHED_OTHER, SCHED_BATCH
- * and SCHED_IDLE take priority 0, and are set, with or without
- * SCHED_RESET_ON_FORK, for a caller that may change the target. The rest
- * fails in Linux's order and with its errors: no parameter or a negative
- * pid, -EINVAL; an unreadable parameter, -EFAULT; no such process, -ESRCH; a
- * policy Linux does not define, a priority outside 0 to 99, or one that does
- * not suit the policy, -EINVAL, as for SCHED_DEADLINE, which takes its
- * parameters from sched_setattr alone. FIFO and RR take priority 1 to 99;
- * entry or a raised priority needs privilege with RLIMIT_RTPRIO 0.
- * Without privilege, -EPERM as well for a caller that may not change the
- * target, for leaving SCHED_IDLE, which Linux counts as nice 20 and allows
- * only as far as RLIMIT_NICE, 0 here, would, and for clearing
- * SCHED_RESET_ON_FORK.
+ * `uparam` points at a struct sched_param, one int. No parameter or a
+ * negative pid, -EINVAL; an unreadable parameter, -EFAULT; no such thread,
+ * -ESRCH; then `sched_apply`, with the thread's nice value and slice kept
+ * as Linux's _sched_setscheduler keeps them, and SCHED_RESET_ON_FORK in
+ * `policy` taken as the flag. SCHED_DEADLINE takes its parameters from
+ * sched_setattr alone, and is -EINVAL here.
  */
 static int32_t sched_set(int pid, int policy, const void __user *uparam)
 {
+    struct sched_req a;
     int32_t priority;
     process_t *p;
-    int reset;
 
     if (!uparam || pid < 0) {
         return -EINVAL;
@@ -8110,47 +9020,16 @@ static int32_t sched_set(int pid, int policy, const void __user *uparam)
     if (!p) {
         return -ESRCH;
     }
-    if (policy >= 0) {
-        reset = (policy & SCHED_RESET_ON_FORK) != 0;
-        policy &= ~SCHED_RESET_ON_FORK;
-    } else {
-        reset = p->sched_reset;
-        policy = p->sched_policy;
+    k_memset(&a, 0, sizeof(a));
+    a.policy = policy;
+    if (policy >= 0 && (policy & SCHED_RESET_ON_FORK)) {
+        a.flags = SCHED_FLAG_RESET_ON_FORK;
+        a.policy = policy & ~SCHED_RESET_ON_FORK;
     }
-    if (priority < 0 || priority > SCHED_RT_PRIO_MAX) {
-        return -EINVAL;
-    }
-    switch (policy) {
-    case SCHED_OTHER:
-    case SCHED_BATCH:
-    case SCHED_IDLE:
-        if (priority != 0) {
-            return -EINVAL;
-        }
-        break;
-    case SCHED_FIFO:
-    case SCHED_RR:
-        if (priority == 0) {
-            return -EINVAL;
-        }
-        if (!cred_privileged() && (policy != p->sched_policy || priority > p->rt_priority)) {
-            return -EPERM;
-        }
-        break;
-    default:
-        return -EINVAL;
-    }
-    if (!sched_may_change(p) ||
-        (!cred_privileged() &&
-         ((p->sched_policy == SCHED_IDLE && policy != SCHED_IDLE) || (p->sched_reset && !reset)))) {
-        return -EPERM;
-    }
-    p->sched_policy = (uint8_t)policy;
-    p->sched_reset = (uint8_t)reset;
-    p->rt_priority = (uint8_t)priority;
-    futex_pi_recalculate();
-    sched_priority_changed(p);
-    return 0;
+    a.priority = (uint32_t)priority;
+    a.nice = p->nice;
+    a.runtime = p->sched_slice;
+    return sched_apply(p, &a);
 }
 
 /** sched_setscheduler takes pid, policy and the struct sched_param; see
@@ -8168,6 +9047,181 @@ long sys_sched_setscheduler(isr_params_t *params)
 long sys_sched_setparam(isr_params_t *params)
 {
     return sched_set((int)SC_ARG(params, 0), -1, (const void __user *)SC_ARG(params, 1));
+}
+
+/** The slice an ordinary thread has, in nanoseconds: the one it asked for,
+ * or Linux's default, 0.75 ms times one more than the log of the
+ * processors started, eight at most (sysctl_sched_base_slice). */
+static uint32_t sched_slice_of(const process_t *p)
+{
+    int cpus = smp_cpu_count();
+    uint32_t factor = 1;
+
+    if (p->sched_slice != 0) {
+        return p->sched_slice;
+    }
+    while (cpus > 1 && factor < 4) {
+        cpus >>= 1;
+        factor++;
+    }
+    return SCHED_SLICE_BASE * factor;
+}
+
+/** Fill in `k` the parameters of `p`'s present policy, as Linux's
+ * get_params: a deadline thread's parameters and flags, a real-time
+ * thread's priority, or an ordinary thread's nice value and slice. */
+static void sched_get_params(const process_t *p, struct sched_attr *k)
+{
+    if (p->sched_policy == SCHED_DEADLINE) {
+        k->sched_priority = p->rt_priority;
+        k->sched_runtime = p->dl_runtime;
+        k->sched_deadline = p->dl_deadline;
+        k->sched_period = p->dl_period;
+        k->sched_flags = (k->sched_flags & ~(uint64_t)SCHED_DL_FLAGS) | p->dl_flags;
+    } else if (sched_policy_rt(p->sched_policy)) {
+        k->sched_priority = p->rt_priority;
+    } else {
+        k->sched_nice = p->nice;
+        k->sched_runtime = sched_slice_of(p);
+    }
+}
+
+/**
+ * Copy the caller's struct sched_attr into `k`, as Linux's sched_copy_attr:
+ * a size of 0 is SCHED_ATTR_SIZE_VER0's, one below that or past a page is
+ * -E2BIG, and so is a larger structure than this kernel's whose further
+ * bytes are not all 0, either with this kernel's size written back into
+ * the caller's; the utilization clamps in a structure without them are
+ * -EINVAL; and the nice value is clamped to -20 to 19. -EFAULT for bytes
+ * that cannot be read.
+ */
+static int32_t sched_copy_attr(struct sched_attr __user *uattr, struct sched_attr *k)
+{
+    uint32_t size, at, n, ksize = SCHED_ATTR_SIZE_VER1;
+    unsigned char buf[64];
+
+    k_memset(k, 0, sizeof(*k));
+    if (copy_from_user(&size, uattr, sizeof(size)) != 0) {
+        return -EFAULT;
+    }
+    if (size == 0) {
+        size = SCHED_ATTR_SIZE_VER0;
+    }
+    if (size < SCHED_ATTR_SIZE_VER0 || size > PAGE_SIZE) {
+        goto too_big;
+    }
+    for (at = ksize; at < size; at += n) {
+        uint32_t i;
+
+        n = size - at < sizeof(buf) ? size - at : (uint32_t)sizeof(buf);
+        if (copy_from_user(buf, (const char __user *)uattr + at, n) != 0) {
+            return -EFAULT;
+        }
+        for (i = 0; i < n; i++) {
+            if (buf[i] != 0) {
+                goto too_big;
+            }
+        }
+    }
+    if (copy_from_user(k, uattr, size < ksize ? size : ksize) != 0) {
+        return -EFAULT;
+    }
+    if ((k->sched_flags & SCHED_FLAG_UTIL_CLAMP) && size < SCHED_ATTR_SIZE_VER1) {
+        return -EINVAL;
+    }
+    k->sched_nice = k->sched_nice < -20 ? -20 : (k->sched_nice > 19 ? 19 : k->sched_nice);
+    return 0;
+
+too_big:
+    (void)copy_to_user(uattr, &ksize, sizeof(ksize));
+    return -E2BIG;
+}
+
+/**
+ * sched_setattr(pid, attr, flags): set a thread's policy and its
+ * parameters from a struct sched_attr, as Linux's. No structure, a negative
+ * pid or flags, -EINVAL; then `sched_copy_attr`'s errors; a policy with its
+ * top bit set, -EINVAL; no such thread, -ESRCH; then `sched_apply`'s.
+ * SCHED_FLAG_KEEP_POLICY keeps the thread's policy and its reset flag, and
+ * SCHED_FLAG_KEEP_PARAMS checks the thread's present parameters in place of
+ * the structure's and changes nothing but the reset flag.
+ */
+long sys_sched_setattr(isr_params_t *params)
+{
+    int pid = (int)SC_ARG(params, 0);
+    struct sched_attr __user *uattr = (struct sched_attr __user *)SC_ARG(params, 1);
+    struct sched_attr k;
+    struct sched_req a;
+    process_t *p;
+    int32_t rc;
+
+    if (!uattr || pid < 0 || (uint32_t)SC_ARG(params, 2) != 0) {
+        return -EINVAL;
+    }
+    rc = sched_copy_attr(uattr, &k);
+    if (rc != 0) {
+        return rc;
+    }
+    if ((int32_t)k.sched_policy < 0) {
+        return -EINVAL;
+    }
+    p = sched_target(pid);
+    if (!p) {
+        return -ESRCH;
+    }
+    if (k.sched_flags & SCHED_FLAG_KEEP_PARAMS) {
+        sched_get_params(p, &k);
+    }
+    if ((k.sched_flags >> 32) != 0) {
+        return -EINVAL; /* no flag Linux knows is there */
+    }
+    a.policy = (k.sched_flags & SCHED_FLAG_KEEP_POLICY) ? -1 : (int)k.sched_policy;
+    a.flags = (uint32_t)k.sched_flags;
+    a.nice = k.sched_nice;
+    a.priority = k.sched_priority;
+    a.runtime = k.sched_runtime;
+    a.deadline = k.sched_deadline;
+    a.period = k.sched_period;
+    return sched_apply(p, &a);
+}
+
+/**
+ * sched_getattr(pid, attr, size, flags): a thread's policy and parameters
+ * as a struct sched_attr, as Linux's: its policy, SCHED_FLAG_RESET_ON_FORK
+ * when it has it, the parameters of its policy (`sched_get_params`), and
+ * no utilization clamps. As much of the structure as `size` holds is
+ * written, and its size field gives that, at most this kernel's. No
+ * structure, a negative pid, a size below SCHED_ATTR_SIZE_VER0 or past a
+ * page, or flags, -EINVAL; no such thread, -ESRCH; -EFAULT.
+ */
+long sys_sched_getattr(isr_params_t *params)
+{
+    int pid = (int)SC_ARG(params, 0);
+    uintptr_t uattr = SC_ARG(params, 1);
+    uint32_t usize = (uint32_t)SC_ARG(params, 2);
+    struct sched_attr k;
+    process_t *p;
+
+    if (!uattr || pid < 0 || usize > PAGE_SIZE || usize < SCHED_ATTR_SIZE_VER0 ||
+        (uint32_t)SC_ARG(params, 3) != 0) {
+        return -EINVAL;
+    }
+    p = sched_target(pid);
+    if (!p) {
+        return -ESRCH;
+    }
+    k_memset(&k, 0, sizeof(k));
+    k.sched_policy = p->sched_policy;
+    if (p->sched_reset) {
+        k.sched_flags |= SCHED_FLAG_RESET_ON_FORK;
+    }
+    sched_get_params(p, &k);
+    k.sched_flags &= SCHED_FLAG_ALL;
+    k.size = usize < SCHED_ATTR_SIZE_VER1 ? usize : SCHED_ATTR_SIZE_VER1;
+    if (!user_span_ok(uattr, usize) || copy_to_user((void __user *)uattr, &k, k.size) != 0) {
+        return -EFAULT;
+    }
+    return 0;
 }
 
 /**
@@ -8253,21 +9307,25 @@ long sys_sched_get_priority_min(isr_params_t *params)
 /**
  * A process's round-robin time slice (sched_rr_get_interval, a timespec of
  * two longs): one tick, since the timer takes the processor from every
- * process at each tick. -EINVAL for a negative pid, -ESRCH, -EFAULT.
+ * process at each tick, and 0 for SCHED_FIFO and SCHED_DEADLINE, which
+ * Linux gives no slice. -EINVAL for a negative pid, -ESRCH, -EFAULT.
  */
 long sys_sched_rr_get_interval(isr_params_t *params)
 {
     int pid = (int)SC_ARG(params, 0);
     struct kernel_timespec slice;
+    process_t *p;
 
     if (pid < 0) {
         return -EINVAL;
     }
-    if (!sched_target(pid)) {
+    p = sched_target(pid);
+    if (!p) {
         return -ESRCH;
     }
     slice.tv_sec = 0;
-    slice.tv_nsec = (long)TICK_NS;
+    slice.tv_nsec =
+        p->sched_policy == SCHED_FIFO || p->sched_policy == SCHED_DEADLINE ? 0 : (long)TICK_NS;
     if (copy_to_user((void __user *)SC_ARG(params, 1), &slice, sizeof(slice)) != 0) {
         return -EFAULT;
     }
@@ -8326,15 +9384,22 @@ static int32_t lock_range(uintptr_t addr, uintptr_t len, uintptr_t *start, uintp
 /**
  * Bring in the pages of the regions of [start, end) that are locked and not
  * on fault, region by region, so that a lock over a large reservation walks
- * only what is mapped. 0, or -1 when a page could not be had.
+ * only what is mapped, as Linux's __mm_populate after a lock. A region of
+ * memfd_secret not locked on fault fails, since Linux's get_user_pages
+ * refuses one with EFAULT. With `go_on` 0, the first failure ends the walk,
+ * the regions before it brought in; otherwise the walk goes on past each,
+ * as mm_populate does for mlockall. 0, -1 when a page could not be had, or
+ * -2 at a region of memfd_secret.
  */
-static int lock_populate(uintptr_t start, uintptr_t end)
+static int lock_populate(uintptr_t start, uintptr_t end, int go_on)
 {
     uintptr_t at = start;
+    int rc = 0;
 
     while (at < end) {
         const vma_t *r = vm_lower(&current_proc->mm->vm, at);
         uintptr_t stop;
+        int got = 0;
 
         if (!r || r->start >= end) {
             break;
@@ -8343,12 +9408,20 @@ static int lock_populate(uintptr_t start, uintptr_t end)
             at = r->start;
         }
         stop = r->end < end ? r->end : end;
-        if ((r->prot & VM_PROT_LOCKS) == VM_PROT_LOCKED && vm_populate(at, stop) != 0) {
-            return -1;
+        if ((r->prot & VM_PROT_SECRET) && !(r->prot & VM_PROT_LOCKONFAULT)) {
+            got = -2;
+        } else if ((r->prot & VM_PROT_LOCKS) == VM_PROT_LOCKED && vm_populate(at, stop) != 0) {
+            got = -1;
+        }
+        if (got != 0 && rc == 0) {
+            rc = got;
+        }
+        if (got != 0 && !go_on) {
+            break;
         }
         at = stop;
     }
-    return 0;
+    return rc;
 }
 
 /**
@@ -8359,7 +9432,10 @@ static int lock_populate(uintptr_t start, uintptr_t end)
  * privilege whose RLIMIT_MEMLOCK is 0, and ENOMEM when the pages the range
  * would add to those already locked pass it; the pages are then brought in
  * unless locked on fault, and EAGAIN tells that memory ran out first, with
- * the range locked. -ENOMEM for a gap, or when a split has no room.
+ * the range locked. -ENOMEM for a gap, when a split has no room, or, with
+ * the rest of the range locked, for a region of memfd_secret, which is left
+ * unlocked and uncounted: Linux's mlock_fixup passes such a region over and
+ * its populate then fails on it. An unlock leaves such a region as it is.
  */
 static long do_mlock(uintptr_t addr, uintptr_t len, uint32_t bits)
 {
@@ -8384,6 +9460,7 @@ static long do_mlock(uintptr_t addr, uintptr_t len, uint32_t bits)
             return -ENOMEM;
         }
     }
+    mm_note_anon(current_proc->mm, start, end);
     rc = vm_lock(vm, start, end, bits);
     if (rc == -2) {
         vma_exhausted("mlock");
@@ -8391,8 +9468,11 @@ static long do_mlock(uintptr_t addr, uintptr_t len, uint32_t bits)
     if (rc != 0) {
         return -ENOMEM;
     }
-    if ((bits & VM_PROT_LOCKS) == VM_PROT_LOCKED && lock_populate(start, end) != 0) {
-        return -EAGAIN;
+    if (bits) {
+        rc = lock_populate(start, end, 0);
+        if (rc != 0) {
+            return rc == -2 ? -ENOMEM : -EAGAIN;
+        }
     }
     return 0;
 }
@@ -8462,7 +9542,7 @@ long sys_mlockall(isr_params_t *params)
     if (flags & 1u) {
         vm_lock_all(vm, bits);
         if (!(flags & 4u)) {
-            (void)lock_populate(USER_ADDR_MIN, USER_ADDR_MAX);
+            (void)lock_populate(USER_ADDR_MIN, USER_ADDR_MAX, 1);
         }
     }
     return 0;
@@ -8571,8 +9651,9 @@ long sys_personality(isr_params_t *params)
  * size, and a shorter mask is zero past its end. The process is bound to the
  * started processors the mask has (`sched_set_affinity`), and moves off one
  * it no longer has; a mask with none fails with -EINVAL. -EFAULT, then
- * -ESRCH, then -EPERM for a caller that may not change the target, in
- * Linux's order.
+ * -ESRCH, then -EPERM for a caller that may not change the target, then
+ * -EBUSY for a SCHED_DEADLINE target and a mask without every processor
+ * started, whose bandwidth was admitted against them all, in Linux's order.
  */
 long sys_sched_setaffinity(isr_params_t *params)
 {
@@ -8594,6 +9675,9 @@ long sys_sched_setaffinity(isr_params_t *params)
         return -EPERM;
     }
     mask &= cpu_online_mask();
+    if (p->sched_policy == SCHED_DEADLINE && mask != cpu_online_mask()) {
+        return -EBUSY; /* Linux's dl_task_check_affinity */
+    }
     if (mask == 0) {
         return -EINVAL;
     }
@@ -8875,8 +9959,10 @@ static int32_t cap_pid_in(uintptr_t uhdr, int32_t *pid)
  * capget takes header and the sets' words.
  *
  * The sets of the thread the header's pid names, the caller for 0: the
- * effective and permitted sets as `cap_word` gives them, and the
- * inheritable set capset stored (`cap_inh`). With a null
+ * effective set as `cap_eff_word` gives it, which has the capabilities of
+ * file access by the file-system user id, the permitted set as `cap_word`
+ * gives it with the effective set's capabilities, and the inheritable set
+ * capset stored (`cap_inh`). With a null
  * second argument the call is a query of the version alone, and returns 0 even
  * for an unknown version, over which the preferred one is written
  * (`cap_version_in`). -ESRCH for a pid that names no thread, -EINVAL for a
@@ -8908,8 +9994,10 @@ long sys_capget(isr_params_t *params)
         }
     }
     k_memset(d, 0, sizeof(d));
-    d[0].effective = d[0].permitted = cap_word(p, 0);
-    d[1].effective = d[1].permitted = cap_word(p, 1);
+    d[0].effective = cap_eff_word(p, 0);
+    d[1].effective = cap_eff_word(p, 1);
+    d[0].permitted = cap_word(p, 0) | d[0].effective;
+    d[1].permitted = cap_word(p, 1) | d[1].effective;
     d[0].inheritable = p->cap_inh[0];
     d[1].inheritable = p->cap_inh[1];
     if (copy_to_user((void __user *)SC_ARG(params, 1), d, words * sizeof(d[0])) != 0) {
@@ -8966,7 +10054,7 @@ long sys_capset(isr_params_t *params)
     }
     for (i = 0; i < 2; i++) {
         uint32_t valid = i == 0 ? 0xFFFFFFFFu : CAP_HIGH_WORD;
-        uint32_t held = cap_word(p, i);
+        uint32_t held = cap_word(p, i) | cap_eff_word(p, i);
         uint32_t inh_room = valid & ~p->bset_lost[i];
 
         d[i].effective &= valid;

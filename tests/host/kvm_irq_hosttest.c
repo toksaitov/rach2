@@ -1,7 +1,8 @@
 /**
  * Check KVM's interrupts in the kernel: the local APIC against the SDM's
  * register rules, the split controller's routes, MSIs, irqfds over the
- * kernel's eventfd, and ioeventfds.
+ * kernel's eventfd, ioeventfds, the PIC, IOAPIC and PIT.
+ * --irqchip-only runs the full-controller rows alone.
  *
  * host-deps: tests/host/compat/spinlock_host.c
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
@@ -18,33 +19,41 @@
  * class; fixed MSIs into IRR, held by PPR, acknowledged into ISR and ended
  * by EOI; TMR for level-triggered ones; physical, flat, cluster and
  * broadcast destinations and lowest priority by Linux's vector hashing;
- * INIT and SIPI through the ICR, an SIPI to a running vCPU dropped and
- * SIPI_RECEIVED from KVM_SET_MP_STATE; NMIs; the timer one-shot, periodic
+ * INIT and SIPI through the ICR, an INIT and its SIPI taken together, an
+ * SIPI to a running vCPU dropped and SIPI_RECEIVED from KVM_SET_MP_STATE;
+ * NMIs; the timer one-shot, periodic
  * with Linux's 200 us floor, TSC-deadline and TSC-deadline refused without
  * the CPUID bit; SPIV's software disable masking the LVT; x2APIC mode, its
  * MSRs, its #GP cases, its self IPI and IPI, its MMIO hole and its moves
  * between modes; KVM_GET_LAPIC and KVM_SET_LAPIC with the x2APIC id and
- * the timer's count; KVM_INTERRUPT's ExtINT; the halted vCPU woken by an
+ * the timer's count; KVM_CAP_X2APIC_API's 32-bit ids, high MSI addresses
+ * and broadcast quirk; KVM_INTERRUPT's ExtINT; the halted vCPU woken by an
  * interrupt, by its timer's tick, or ended by a signal; the split
- * controller's enable, KVM_CREATE_IRQCHIP refused, the routes' refusals, a SINT
+ * controller's enable, the routes' refusals, a SINT
  * route raising Hyper-V's SynIC, KVM_IRQ_LINE_STATUS and the EOI exit of a
  * level-triggered I/O APIC route; KVM_SIGNAL_MSI; irqfds raised by a write to
  * the eventfd, following a new route, refused twice or with RESAMPLE,
  * deassigned, raised at once by a counter already up, freed by the eventfd's
  * last close, by the VM's end and after a close that left the hangup to run;
  * ioeventfds on ports and MMIO, with and without a data match, any length,
- * string OUTs, their refusals and collisions, a full bus, and deassign; and
- * every allocation given back.
+ * string OUTs, their refusals and collisions, a full bus, and deassign;
+ * coalesced zones of MMIO and of ports, queued on the VM's ring until one
+ * slot is left, from any start, and removed by a range they hold; and every
+ * allocation given back.
  */
 #include "io/eventfd.c"
 #include "kvm/iobus.c"
 #include "kvm/irq.c"
+#include "kvm/i8259.c"
+#include "kvm/ioapic.c"
+#include "kvm/i8254.c"
 #include "kvm/vlapic.c"
 #include "lib/kstring.h"
 
 extern int printf(const char *format, ...);
 extern void *malloc(unsigned long n);
 extern void free(void *p);
+extern int strcmp(const char *a, const char *b);
 
 static int failures;
 
@@ -63,12 +72,24 @@ unsigned int host_cpu;
 
 /* The heap's live allocations. */
 static int live;
+static int allocation_fail = -1; /* allocations before failure, -1 unlimited */
 
 /** kmalloc over the host's allocator, counted. */
 void *kmalloc(size_t size)
 {
-    live++;
-    return malloc(size ? size : 1);
+    void *p;
+
+    if (allocation_fail == 0) {
+        return NULL;
+    }
+    if (allocation_fail > 0) {
+        allocation_fail--;
+    }
+    p = malloc(size ? size : 1);
+    if (p) {
+        live++;
+    }
+    return p;
 }
 
 /** kzalloc over the host's allocator, counted. */
@@ -76,7 +97,9 @@ void *kzalloc(size_t size)
 {
     void *p = kmalloc(size);
 
-    k_memset(p, 0, size);
+    if (p) {
+        k_memset(p, 0, size);
+    }
     return p;
 }
 
@@ -176,6 +199,12 @@ uint64_t kvm_host_ns(void)
 uint64_t arch_cycles(void)
 {
     return tsc_base + mono_ns * 2u;
+}
+
+/* pvclock.c's guest TSC, which no vCPU here has scaled. */
+uint64_t kvm_tsc_read(const struct kvm_vcpu *v)
+{
+    return arch_cycles() + (uint64_t)v->tsc_offset;
 }
 
 uint64_t tick_count(void)
@@ -327,6 +356,7 @@ void kvm_vcpu_init_reset(struct kvm_vcpu *v)
     init_resets++;
     k_memset(&v->regs, 0, sizeof(v->regs));
     k_memset(&v->sregs, 0, sizeof(v->sregs));
+    k_memset(&v->events, 0, sizeof(v->events));
     v->regs.rip = 0xFFF0;
     v->sregs.cs.selector = 0xF000;
     v->sregs.cs.base = 0xFFFF0000ull;
@@ -373,22 +403,25 @@ static struct kvm_run runs[NVCPU];
 
 /** A VM with the split controller, its I/O APIC on 24 pins, and NVCPU
  * vCPUs at reset, vCPU 0 the boot one. */
-static void vm_make(void)
+static void vm_make(int full)
 {
     struct kvm_enable_cap cap;
     int i;
 
     k_memset(&vm, 0, sizeof(vm));
+    vm.apic_bus_ns = KVM_APIC_BUS_NS_DEFAULT;
     k_memset(&cap, 0, sizeof(cap));
     cap.cap = KVM_CAP_SPLIT_IRQCHIP;
     cap.args[0] = 24;
-    CHECK(kvm_irq_enable_split(&vm, &cap) == 0, "the split controller");
+    CHECK((full ? kvm_irq_ioctl(&vm, KVM_CREATE_IRQCHIP, 0) : kvm_irq_enable_split(&vm, &cap)) == 0,
+          "the requested controller");
     for (i = 0; i < NVCPU; i++) {
         struct kvm_vcpu *v = kzalloc(sizeof(*v));
 
         v->vm = &vm;
         v->id = (uint32_t)i;
         v->index = (uint32_t)i;
+        v->tsc_khz = 2000000u;
         v->run = &runs[i];
         v->sregs.apic_base = BASE | APIC_BASE_ENABLE | (i == 0 ? APIC_BASE_BSP : 0);
         v->mp_state = KVM_MP_STATE_RUNNABLE;
@@ -652,18 +685,27 @@ static void init_rows(void)
     wr(vcpu[0], APIC_ICR, 0x4600 | 0x10);
     kvm_lapic_prepare(ap);
     CHECK(ap->sregs.cs.selector == 0x9A00, "a SIPI to a running vCPU is dropped");
+    wr(vcpu[0], APIC_ICR, 0x4500);
+    wr(vcpu[0], APIC_ICR, 0x4600 | 0x9B);
+    CHECK(apic_of(ap)->events == (EV_INIT | EV_SIPI),
+          "an INIT and the SIPI after it wait together for a vCPU that has not looked");
+    CHECK(kvm_lapic_prepare(ap) == 0 && ap->mp_state == KVM_MP_STATE_RUNNABLE &&
+              ap->sregs.cs.selector == 0x9B00 && ap->sregs.cs.base == 0x9B000 && ap->regs.rip == 0,
+          "and the INIT's reset of the vCPU keeps the SIPI's vector");
+    wr(ap, APIC_SPIV, 0x1FF);
     wr(vcpu[0], APIC_ICR, 0x40000 | 0x4500);
     kvm_lapic_prepare(vcpu[0]);
     CHECK(vcpu[0]->mp_state == KVM_MP_STATE_RUNNABLE, "an INIT leaves the boot vCPU running");
     wr(vcpu[0], APIC_SPIV, 0x1FF);
-    ap->events.sipi_vector = 0x30;
+    ap->events.sipi_vector = 0x10;
     mp.mp_state = KVM_MP_STATE_SIPI_RECEIVED;
     CHECK(kvm_lapic_ioctl(ap, KVM_SET_MP_STATE, (uintptr_t)&mp) == 0,
           "KVM_SET_MP_STATE of SIPI_RECEIVED");
     CHECK(ap->mp_state == KVM_MP_STATE_INIT_RECEIVED, "waits for SIPI with one pending");
+    ap->events.sipi_vector = 0x30;
     CHECK(kvm_lapic_ioctl(ap, KVM_GET_MP_STATE, (uintptr_t)&mp) == 0 &&
               mp.mp_state == KVM_MP_STATE_RUNNABLE && ap->sregs.cs.selector == 0x3000,
-          "KVM_GET_MP_STATE takes the SIPI first");
+          "KVM_GET_MP_STATE takes the SIPI first, at the vector the events hold by then");
     mp.mp_state = 5;
     CHECK(kvm_lapic_ioctl(ap, KVM_SET_MP_STATE, (uintptr_t)&mp) == -EINVAL,
           "an MP state of another architecture");
@@ -729,6 +771,45 @@ static void timer_rows(void)
     wr(v, APIC_LVT1, 0x400);
     CHECK(rd(v, APIC_LVT1) == (APIC_LVT_MASKED | 0x400), "an LVT write stays masked meanwhile");
     wr(v, APIC_SPIV, 0x1FF);
+    clear_vectors();
+}
+
+/** The local APIC's two quirks turned off, as KVM_CAP_DISABLE_QUIRKS2
+ * turns them, and a bus cycle KVM_CAP_X86_APIC_BUS_CYCLES_NS set; the VM
+ * ends after these rows. */
+static void quirk_rows(void)
+{
+    struct kvm_vcpu *v = vcpu[0];
+    struct lapic *l = apic_of(v);
+
+    vm.disabled_quirks = KVM_X86_QUIRK_LINT0_REENABLED | KVM_X86_QUIRK_LAPIC_MMIO_HOLE;
+    lapic_reset(l, 0);
+    CHECK(rd(v, APIC_LVT0) == APIC_LVT_MASKED,
+          "with LINT0's quirk off the boot vCPU's LINT0 starts masked");
+    v->sregs.apic_base &= ~(uint64_t)APIC_BASE_ENABLE;
+    k_memset(&v->exit, 0, sizeof(v->exit));
+    v->exit.kind = KVM_X_MMIO;
+    v->exit.mmio.phys_addr = BASE + APIC_ID;
+    v->exit.mmio.len = 4;
+    CHECK(kvm_lapic_mmio(v) == 0,
+          "with the MMIO hole's quirk off, the page of an APIC turned off is the caller's");
+    v->sregs.apic_base |= APIC_BASE_ENABLE;
+    vm.disabled_quirks = 0;
+
+    vm.apic_bus_ns = 4;
+    wr(v, APIC_SPIV, 0x1FF);
+    wr(v, APIC_TDCR, 0xB);
+    wr(v, APIC_LVTT, 0xEB);
+    wr(v, APIC_TMICT, 1000);
+    mono_ns += 400;
+    CHECK(rd(v, APIC_TMCCT) == 900, "at a bus cycle of 4 ns, 400 ns count 100 off");
+    mono_ns += 3599;
+    timer_check(l);
+    CHECK(!has(v, APIC_IRR, 0xEB), "and the count of 1000 has not run out after 3999 ns");
+    mono_ns += 1;
+    timer_check(l);
+    CHECK(has(v, APIC_IRR, 0xEB), "but has after 4000");
+    vm.apic_bus_ns = KVM_APIC_BUS_NS_DEFAULT;
     clear_vectors();
 }
 
@@ -883,6 +964,71 @@ static void route(int i, uint32_t gsi, uint32_t addr, uint32_t data)
     rt.e[i].u.msi.data = data;
 }
 
+/** KVM_SIGNAL_MSI of `addr` and `data` with the high address `hi`. */
+static int32_t signal_hi(uint32_t addr, uint32_t hi, uint32_t data)
+{
+    struct kvm_msi m;
+
+    k_memset(&m, 0, sizeof(m));
+    m.address_lo = addr;
+    m.address_hi = hi;
+    m.data = data;
+    return kvm_irq_ioctl(&vm, KVM_SIGNAL_MSI, (uintptr_t)&m);
+}
+
+/** KVM_CAP_X2APIC_API, as Linux's xapic_state_test and its MSI rules:
+ * the x2APIC id whole in KVM_GET_LAPIC and checked by KVM_SET_LAPIC, an
+ * MSI's destination in the high address, and 0xFF no longer a broadcast
+ * to an x2APIC; vCPU 2 is in x2APIC mode. */
+static void x2apic_api_rows(void)
+{
+    struct kvm_lapic_state s;
+    struct kvm_vcpu *v = vcpu[2];
+    uint32_t id;
+
+    vm.x2apic_format = 1;
+    CHECK(kvm_lapic_ioctl(v, KVM_GET_LAPIC, (uintptr_t)&s) == 0, "KVM_GET_LAPIC with 32-bit ids");
+    k_memcpy(&id, s.regs + APIC_ID, 4);
+    CHECK(id == 2, "the x2APIC id unshifted");
+    CHECK(kvm_lapic_ioctl(v, KVM_SET_LAPIC, (uintptr_t)&s) == 0, "KVM_SET_LAPIC of the vCPU's id");
+    id = 3;
+    k_memcpy(s.regs + APIC_ID, &id, 4);
+    CHECK(kvm_lapic_ioctl(v, KVM_SET_LAPIC, (uintptr_t)&s) == -EINVAL && msr_rd(v, 0x802) == 2,
+          "and of another id is -EINVAL");
+    vm.x2apic_format = 0;
+    id = 5u << 24;
+    k_memcpy(s.regs + APIC_ID, &id, 4);
+    CHECK(kvm_lapic_ioctl(v, KVM_SET_LAPIC, (uintptr_t)&s) == 0 && msr_rd(v, 0x802) == 2 &&
+              msr_rd(v, 0x80D) == 4,
+          "without 32-bit ids the caller's id is ignored");
+
+    clear_vectors();
+    CHECK(signal_hi(msi_addr(2, 0), 0x100, msi_data(0x61, 0, 0)) == 1 && has(v, APIC_IRR, 0x61),
+          "without 32-bit ids the high address is ignored");
+    vm.x2apic_format = 1;
+    CHECK(signal_hi(msi_addr(2, 0), 0x100, msi_data(0x62, 0, 0)) == -EPERM,
+          "with them it holds the destination's bits 31:8");
+    CHECK(signal_hi(msi_addr(2, 0), 0x1, msi_data(0x62, 0, 0)) == -EINVAL,
+          "and its bits 7:0 make the MSI invalid");
+    route(0, 9, msi_addr(2, 0), msi_data(0x62, 0, 0));
+    rt.e[0].u.msi.address_hi = 0x1;
+    rt.h.nr = 1;
+    rt.h.flags = 0;
+    CHECK(kvm_irq_ioctl(&vm, KVM_SET_GSI_ROUTING, (uintptr_t)&rt) == -EINVAL,
+          "a route of such an MSI is -EINVAL");
+    vm.x2apic_format = 0;
+
+    clear_vectors();
+    CHECK(signal(msi_addr(0xFF, 0), msi_data(0x63, 0, 0)) == NVCPU && has(v, APIC_IRR, 0x63),
+          "an MSI to 0xFF is a broadcast to an x2APIC too");
+    vm.x2apic_no_broadcast = 1;
+    clear_vectors();
+    CHECK(signal(msi_addr(0xFF, 0), msi_data(0x63, 0, 0)) == NVCPU - 1 && !has(v, APIC_IRR, 0x63),
+          "but not with KVM_X2APIC_API_DISABLE_BROADCAST_QUIRK");
+    vm.x2apic_no_broadcast = 0;
+    clear_vectors();
+}
+
 /** A KVM_IRQ_ROUTING_HV_SINT route of GSI 5 in `rt`'s first slot, raised
  * and lowered through KVM_IRQ_LINE_STATUS. */
 static void sint_route_rows(void)
@@ -910,6 +1056,30 @@ static void sint_route_rows(void)
     CHECK(lvl.irq == -1 && sint_raises == 1, "a SINT route lowered is -1");
 }
 
+/** An MSI route that KVM_CAP_X2APIC_API's 32-bit ids make invalid after
+ * KVM_SET_GSI_ROUTING took it: KVM_IRQ_LINE_STATUS on it is -1 and raises
+ * nothing, as Linux's kvm_set_irq skips kvm_set_msi's -EINVAL. It leaves
+ * that one route in place. */
+static void invalid_route_rows(void)
+{
+    struct kvm_irq_level lvl;
+
+    rt.h.nr = 1;
+    rt.h.flags = 0;
+    route(0, 9, msi_addr(2, 0), msi_data(0x62, 0, 0));
+    rt.e[0].u.msi.address_hi = 0x1;
+    CHECK(kvm_irq_ioctl(&vm, KVM_SET_GSI_ROUTING, (uintptr_t)&rt) == 0,
+          "an MSI route with high address bits 7:0 set, without 32-bit ids");
+    vm.x2apic_format = 1;
+    clear_vectors();
+    lvl.irq = 9;
+    lvl.level = 1;
+    CHECK(kvm_irq_ioctl(&vm, KVM_IRQ_LINE_STATUS, (uintptr_t)&lvl) == 0 && lvl.irq == -1 &&
+              !has(vcpu[2], APIC_IRR, 0x62),
+          "KVM_IRQ_LINE_STATUS on it once 32-bit ids make it invalid is -1, delivered nowhere");
+    vm.x2apic_format = 0;
+}
+
 /** The split controller, routes, KVM_IRQ_LINE and the EOI exit. */
 static void routing_rows(void)
 {
@@ -929,7 +1099,6 @@ static void routing_rows(void)
     k_memset(&cap, 0, sizeof(cap));
     cap.args[0] = 4097;
     CHECK(kvm_irq_enable_split(&none, &cap) == -EINVAL, "more pins than routes");
-    CHECK(kvm_irq_ioctl(&none, KVM_CREATE_IRQCHIP, 0) == -ENXIO, "KVM_CREATE_IRQCHIP refused");
     CHECK(kvm_irq_ioctl(&none, KVM_IRQ_LINE, (uintptr_t)&lvl) == -ENXIO,
           "KVM_IRQ_LINE with no controller");
     CHECK(kvm_irq_ioctl(&none, KVM_SET_GSI_ROUTING, (uintptr_t)&rt) == -EINVAL,
@@ -962,6 +1131,8 @@ static void routing_rows(void)
     route(1, 5, msi_addr(0, 0), msi_data(0x36, 0, 0));
     CHECK(kvm_irq_ioctl(&vm, KVM_SET_GSI_ROUTING, (uintptr_t)&rt) == -EINVAL,
           "two MSI routes of one GSI");
+    invalid_route_rows();
+    route(0, 5, msi_addr(0, 0), msi_data(0x35, 0, 1));
     rt.h.nr = 3;
     route(1, 6, msi_addr(0, 0), msi_data(0x36, 0, 0));
     route(2, 30, msi_addr(0, 0), msi_data(0x37, 0, 1));
@@ -1195,43 +1366,581 @@ static void ioeventfd_rows(void)
     CHECK(ioev() == 0 && out(0x520, 4, 1, 0xABCD) == 0, "the matching one deassigned");
     io.flags = KVM_IOEVENTFD_FLAG_PIO;
     io.len = 1;
-    for (i = 0; i < MAX_BUS_DEVS; i++) {
+    for (i = 0; i <= MAX_BUS_DEVS; i++) {
         io.addr = 0x1000 + i;
         if (ioev() != 0) {
             break;
         }
     }
-    CHECK(i == MAX_BUS_DEVS - 2, "the port bus holds 1000 devices");
-    io.addr = 0x9000;
-    CHECK(ioev() == -ENOSPC, "and no more");
+    CHECK(i == MAX_BUS_DEVS + 1, "ioeventfds count toward no bus's 1000, as on Linux");
     io.flags = 0;
-    CHECK(ioev() == 0, "the MMIO bus is another");
+    CHECK(ioev() == 0, "and take the MMIO bus too");
     kvm_iobus_free(&vm);
     CHECK(ev->refs == 1 && live == before, "the VM's end lets go of every ioeventfd");
     eventfd_close(&efd2_entry);
 }
 
-int main(void)
+/* The ring coalesced_rows gives the VM, and the zone it asks for. */
+static struct kvm_coalesced_mmio_ring ring;
+static struct kvm_coalesced_mmio_zone zone;
+
+/** KVM_REGISTER_COALESCED_MMIO or its undoing of `size` bytes at `addr`. */
+static int32_t coalesced(uint32_t request, uint64_t addr, uint32_t size, uint32_t pio)
+{
+    zone.addr = addr;
+    zone.size = size;
+    zone.pio = pio;
+    return kvm_iobus_ioctl(&vm, request, (uintptr_t)&zone);
+}
+
+/** Fill the ring from slot `start` as coalesced_io_test does, an 8-byte
+ * MMIO write and a 4-byte OUT by turns: whether every write but the one
+ * that would take the last free slot was queued whole, and that one went
+ * to the caller. */
+static int ring_fills(uint32_t start)
+{
+    const uint64_t gpa = 0x100000000ull;
+    uint32_t i, at;
+    int ok = 1;
+
+    ring.first = ring.last = start;
+    for (i = 0; i < KVM_COALESCED_MMIO_MAX - 1u; i++) {
+        ok = ok && ((i & 1u) ? out(0x80, 4, 1, 0x80 + i) : mwrite(gpa, 8, i)) == 1;
+    }
+    ok = ok && (ring.last + 1u) % KVM_COALESCED_MMIO_MAX == ring.first && ring.first == start;
+    ok = ok && mwrite(gpa, 8, i) == 0 && out(0x80, 4, 1, 0x80 + i) == 0;
+    for (i = 0; i < KVM_COALESCED_MMIO_MAX - 1u; i++) {
+        const struct kvm_coalesced_mmio *e;
+        uint32_t value;
+
+        at = (start + i) % KVM_COALESCED_MMIO_MAX;
+        e = &ring.coalesced_mmio[at];
+        k_memcpy(&value, e->data, 4);
+        if (i & 1u) {
+            ok = ok && e->phys_addr == 0x80 && e->len == 4 && e->pio == 1 && value == 0x80 + i;
+        } else {
+            ok = ok && e->phys_addr == gpa && e->len == 8 && e->pio == 0 && value == i;
+        }
+    }
+    return ok;
+}
+
+/** What a zone takes and what removes it, with the zones of
+ * coalesced_rows in place. */
+static void range_rows(void)
+{
+    const uint64_t gpa = 0x100000000ull;
+
+    ring.first = 0;
+    ring.last = KVM_COALESCED_MMIO_MAX;
+    CHECK(mwrite(gpa, 8, 1) == 0 && ring.last == KVM_COALESCED_MMIO_MAX,
+          "a last the caller put outside the ring queues nothing");
+    ring.first = ring.last = 0;
+    CHECK(mwrite(gpa + 4, 4, 1) == 1 && mwrite(gpa + 4, 8, 1) == 0 && mwrite(gpa - 1, 2, 1) == 0 &&
+              ring.last == 1,
+          "a write must lie wholly in its zone");
+    CHECK(out(0x84, 4, 1, 1) == 1 && out(0x86, 4, 1, 1) == 0 && out(0x88, 1, 1, 1) == 0 &&
+              ring.last == 2 && ring.coalesced_mmio[1].phys_addr == 0x84,
+          "a port write too");
+    CHECK(mwrite(0x80, 4, 1) == 0 && out(0x80, 2, 3, 7) == 1 && ring.last == 5 &&
+              ring.coalesced_mmio[4].len == 2 && ring.coalesced_mmio[4].pio == 1,
+          "the buses are apart, and a string OUT queues each element");
+    CHECK(coalesced(KVM_UNREGISTER_COALESCED_MMIO, gpa, 16, 0) == 0 && mwrite(gpa, 8, 1) == 1,
+          "a range the zone does not hold removes nothing");
+    CHECK(coalesced(KVM_REGISTER_COALESCED_MMIO, gpa, 16, 0) == 0 &&
+              coalesced(KVM_UNREGISTER_COALESCED_MMIO, gpa + 4, 4, 0) == 0 &&
+              mwrite(gpa, 8, 1) == 0,
+          "a range removes every zone that holds it");
+    CHECK(out(0x80, 4, 1, 1) == 1 && coalesced(KVM_UNREGISTER_COALESCED_MMIO, 0x80, 8, 1) == 0 &&
+              out(0x80, 4, 1, 1) == 0,
+          "the port zone goes by its own bus");
+}
+
+/** Coalesced zones on both buses. */
+static void coalesced_rows(void)
+{
+    const uint64_t gpa = 0x100000000ull;
+    long before = live;
+    uint32_t i;
+
+    vm.ring = &ring;
+    CHECK(sizeof(struct kvm_coalesced_mmio_zone) == 16 && sizeof(struct kvm_coalesced_mmio) == 24 &&
+              sizeof(ring) <= 4096 && KVM_COALESCED_MMIO_MAX == 170,
+          "the zone, the entry and the ring of 170 are Linux's");
+    CHECK(kvm_iobus_check_extension(KVM_CAP_COALESCED_MMIO) == KVM_COALESCED_MMIO_PAGE_OFFSET &&
+              kvm_iobus_check_extension(KVM_CAP_COALESCED_PIO) == 1,
+          "KVM_CAP_COALESCED_MMIO is the ring's page and KVM_CAP_COALESCED_PIO 1");
+    CHECK(coalesced(KVM_REGISTER_COALESCED_MMIO, gpa, 8, 2) == -EINVAL &&
+              coalesced(KVM_UNREGISTER_COALESCED_MMIO, gpa, 8, 2) == -EINVAL,
+          "a pio that is not 0 or 1 is -EINVAL");
+    CHECK(kvm_iobus_ioctl(&vm, KVM_REGISTER_COALESCED_MMIO, 0) == -EFAULT, "a bad zone is -EFAULT");
+    CHECK(coalesced(KVM_UNREGISTER_COALESCED_MMIO, gpa, 8, 0) == 0, "removing no zone is no error");
+    CHECK(mwrite(gpa, 8, 1) == 0 && out(0x80, 4, 1, 1) == 0,
+          "a write in no zone goes to the caller");
+    CHECK(coalesced(KVM_REGISTER_COALESCED_MMIO, gpa, 8, 0) == 0 &&
+              coalesced(KVM_REGISTER_COALESCED_MMIO, 0x80, 8, 1) == 0,
+          "a zone of MMIO and a zone of ports");
+    CHECK(ring_fills(0), "the zones queue all but the last slot's write");
+    CHECK(ring_fills(1) && ring_fills(85) && ring_fills(KVM_COALESCED_MMIO_MAX - 1u),
+          "from any start, around the ring's end");
+    range_rows();
+    for (i = 0; i < MAX_BUS_DEVS; i++) {
+        if (coalesced(KVM_REGISTER_COALESCED_MMIO, 0x1000 + i, 1, 1) != 0) {
+            break;
+        }
+    }
+    CHECK(i == MAX_BUS_DEVS && coalesced(KVM_REGISTER_COALESCED_MMIO, 0x9000, 1, 1) == -ENOSPC,
+          "the port bus holds 1000 zones and no more");
+    efd_open(&efd2_entry);
+    k_memset(&io, 0, sizeof(io));
+    io.fd = 5;
+    io.flags = KVM_IOEVENTFD_FLAG_PIO;
+    io.addr = 0x9100;
+    io.len = 1;
+    CHECK(ioev() == -ENOSPC, "nor an ioeventfd beside them");
+    io.flags = 0;
+    CHECK(ioev() == 0, "while the MMIO bus takes one");
+    kvm_iobus_free(&vm);
+    eventfd_close(&efd2_entry);
+    CHECK(live == before, "the VM's end frees every zone");
+    vm.ring = NULL;
+}
+
+/** A byte access through the vCPU's legacy port exit. */
+static uint32_t legacy_port(uint32_t port, int write, uint32_t value)
+{
+    struct kvm_vcpu *v = vcpu[0];
+
+    k_memset(&v->exit, 0, sizeof(v->exit));
+    v->exit.kind = KVM_X_IO;
+    v->exit.io.port = (uint16_t)port;
+    v->exit.io.size = 1;
+    v->exit.io.count = 1;
+    v->exit.io.direction = write ? KVM_EXIT_IO_OUT : KVM_EXIT_IO_IN;
+    v->exit.data[0] = (uint8_t)value;
+    CHECK(kvm_irq_io(v) == 1, "the legacy controller takes its port");
+    return v->exit.data[0];
+}
+
+/** Write an IOAPIC register through IOREGSEL and IOWIN. */
+static void ioa_write(uint32_t reg, uint32_t value)
+{
+    struct kvm_vcpu *v = vcpu[0];
+    uint32_t i, words[2];
+
+    words[0] = reg;
+    words[1] = value;
+    for (i = 0; i < 2; i++) {
+        k_memset(&v->exit, 0, sizeof(v->exit));
+        v->exit.kind = KVM_X_MMIO;
+        v->exit.mmio.phys_addr = 0xFEC00000ull + i * 16u;
+        v->exit.mmio.len = 4;
+        v->exit.mmio.is_write = 1;
+        k_memcpy(v->exit.mmio.data, &words[i], 4);
+        CHECK(kvm_irq_io(v) == 1, "the IOAPIC takes its MMIO");
+    }
+}
+
+/** Program one IOAPIC entry's vector, flags and physical destination. */
+static void ioa_entry(uint32_t pin, uint32_t low, uint32_t destination)
+{
+    ioa_write(0x11u + pin * 2u, destination << 24);
+    ioa_write(0x10u + pin * 2u, low);
+}
+
+/** Set a userspace GSI and return Linux's delivery status. */
+static int line_status(uint32_t gsi, uint32_t level)
+{
+    struct kvm_irq_level line;
+
+    line.irq = (int32_t)gsi;
+    line.level = level;
+    CHECK(kvm_irq_ioctl(&vm, KVM_IRQ_LINE_STATUS, (uintptr_t)&line) == 0,
+          "IRQ_LINE_STATUS accepts a line");
+    return line.irq;
+}
+
+/** Initialize both PICs to vectors 0x20 and 0x28, all inputs unmasked. */
+static void pic_program(int automatic)
+{
+    uint32_t chip, port;
+
+    for (chip = 0; chip < 2; chip++) {
+        port = chip ? 0xA0u : 0x20u;
+        legacy_port(port, 1, 0x11);
+        legacy_port(port + 1, 1, chip ? 0x28u : 0x20u);
+        legacy_port(port + 1, 1, chip ? 2 : 4);
+        legacy_port(port + 1, 1, automatic ? 3 : 1);
+        legacy_port(port + 1, 1, 0);
+    }
+}
+
+/** The PIC's vectors, cascade, priority, levels, polling and state ABI. */
+static void pic_rows(void)
+{
+    struct kvm_irqchip chip;
+    struct kvm_interrupt intr;
+    struct kvm_vcpu *v = vcpu[0];
+
+    pic_program(0);
+    CHECK(line_status(1, 1) == 1 && kvm_lapic_pending(v) == 0x21,
+          "the default master PIC route reaches LINT0");
+    line_status(1, 0);
+    CHECK(kvm_lapic_ack(v) == 0x21 && !has(v, APIC_ISR, 0x21),
+          "PIC INTA does not put its vector in the local APIC ISR");
+    line_status(3, 1);
+    line_status(3, 0);
+    CHECK(kvm_lapic_pending(v) == -1, "a lower PIC priority waits for EOI");
+    legacy_port(0x20, 1, 0x0B);
+    CHECK(legacy_port(0x20, 0, 0) == 2, "OCW3 selects the PIC ISR");
+    legacy_port(0x20, 1, 0x20);
+    CHECK(kvm_lapic_ack(v) == 0x23, "EOI releases the next PIC interrupt");
+    legacy_port(0x20, 1, 0x20);
+    line_status(10, 1);
+    line_status(10, 0);
+    CHECK(kvm_lapic_ack(v) == 0x2A, "the slave is acknowledged through IRQ2");
+    legacy_port(0xA0, 1, 0x0B);
+    CHECK(legacy_port(0x20, 0, 0) == 4 && legacy_port(0xA0, 0, 0) == 4,
+          "both cascade pins are in service");
+    legacy_port(0xA0, 1, 0x20);
+    legacy_port(0x20, 1, 0x20);
+    legacy_port(0x4D0, 1, 0xFF);
+    CHECK(legacy_port(0x4D0, 0, 0) == 0xF8, "ELCR keeps its read-only pins clear");
+    line_status(5, 1);
+    CHECK(kvm_lapic_ack(v) == 0x25, "a level input arrives");
+    legacy_port(0x20, 1, 0x20);
+    CHECK(kvm_lapic_ack(v) == 0x25, "an asserted level arrives again after EOI");
+    line_status(5, 0);
+    legacy_port(0x20, 1, 0x20);
+    CHECK(kvm_lapic_pending(v) == -1, "a lowered level stays down after EOI");
+    legacy_port(0x4D0, 1, 0);
+    line_status(4, 1);
+    line_status(4, 0);
+    legacy_port(0x20, 1, 0x0C);
+    CHECK(legacy_port(0x20, 0, 0) == 0x84 && kvm_lapic_pending(v) == -1,
+          "OCW3 poll acknowledges its pin");
+    pic_program(1);
+    line_status(1, 1);
+    line_status(1, 0);
+    CHECK(kvm_lapic_ack(v) == 0x21 && legacy_port(0x20, 0, 0) == 0,
+          "automatic EOI ends service at INTA");
+    k_memset(&chip, 0xA5, sizeof(chip));
+    chip.chip_id = KVM_IRQCHIP_PIC_MASTER;
+    CHECK(kvm_irq_ioctl(&vm, KVM_GET_IRQCHIP, (uintptr_t)&chip) == 0 &&
+              chip.chip.pic.irq_base == 0x20 && chip.chip.dummy[511] == 0xA5,
+          "GET_IRQCHIP preserves unused bytes");
+    chip.chip.pic.irq_base = 0x30;
+    chip.chip.pic.irr = 2;
+    CHECK(kvm_irq_ioctl(&vm, KVM_SET_IRQCHIP, (uintptr_t)&chip) == 0 && kvm_lapic_ack(v) == 0x31,
+          "restoring a PIC updates its pending vector");
+    intr.irq = 0x40;
+    CHECK(kvm_lapic_ioctl(v, KVM_INTERRUPT, (uintptr_t)&intr) == -ENXIO,
+          "KVM_INTERRUPT is refused with the full controller");
+    legacy_port(0x21, 1, 0xFF);
+    legacy_port(0xA1, 1, 0xFF);
+}
+
+/** IOAPIC edges, level EOI, read-only bits and RTC saved state. */
+static void ioapic_rows(void)
+{
+    struct kvm_irqchip chip;
+    struct kvm_lapic_state local;
+    struct kvm_vcpu *v = vcpu[0];
+    uint32_t remote;
+
+    wr(v, APIC_SPIV, 0x1FF);
+    wr(v, APIC_LVT0, APIC_LVT_MASKED);
+    ioa_entry(18, 0x51, 0);
+    CHECK(line_status(18, 1) == 1 && kvm_lapic_ack(v) == 0x51,
+          "the default IOAPIC route reaches the local APIC");
+    CHECK(line_status(18, 1) == 0, "an unchanged edge input coalesces");
+    line_status(18, 0);
+    wr(v, APIC_EOI, 0);
+    ioa_entry(19, 0x52u | (uint32_t)IOA_LEVEL, 0);
+    CHECK(line_status(19, 1) == 1 && kvm_lapic_ack(v) == 0x52, "a level input is accepted");
+    remote = (uint32_t)IOA_REMOTE;
+    ioa_write(0x10u + 19u * 2u, 0x52u | (uint32_t)IOA_LEVEL);
+    k_memset(&chip, 0, sizeof(chip));
+    chip.chip_id = KVM_IRQCHIP_IOAPIC;
+    kvm_irq_ioctl(&vm, KVM_GET_IRQCHIP, (uintptr_t)&chip);
+    CHECK(chip.chip.ioapic.redirtbl[19] & remote, "a guest write cannot clear remote IRR");
+    wr(v, APIC_EOI, 0);
+    CHECK(kvm_lapic_ack(v) == 0x52 && !(v->requests & KVM_REQ_EOI_EXIT),
+          "the level EOI reinjects inside KVM");
+    line_status(19, 0);
+    wr(v, APIC_EOI, 0);
+    CHECK(kvm_lapic_pending(v) == -1, "the low input does not reinject");
+    kvm_irq_ioctl(&vm, KVM_GET_IRQCHIP, (uintptr_t)&chip);
+    CHECK(!(chip.chip.ioapic.redirtbl[19] & remote), "EOI clears remote IRR");
+    ioa_entry(20, 0x53u | (uint32_t)(IOA_LEVEL | IOA_MASKED), 0);
+    CHECK(line_status(20, 1) == -1, "a masked level stays pending");
+    ioa_entry(20, 0x53u | (uint32_t)IOA_LEVEL, 0);
+    CHECK(kvm_lapic_ack(v) == 0x53, "unmask delivers the pending level");
+    line_status(20, 0);
+    wr(v, APIC_EOI, 0);
+    ioa_entry(8, 0x58, 0);
+    CHECK(line_status(8, 1) == 1, "an RTC edge is delivered");
+    line_status(8, 0);
+    CHECK(line_status(8, 1) == 0, "an RTC edge waits for the previous EOI");
+    line_status(8, 0);
+    CHECK(kvm_lapic_ack(v) == 0x58, "the RTC vector is acknowledged");
+    kvm_lapic_ioctl(v, KVM_GET_LAPIC, (uintptr_t)&local);
+    kvm_irq_ioctl(&vm, KVM_GET_IRQCHIP, (uintptr_t)&chip);
+    kvm_irq_ioctl(&vm, KVM_SET_IRQCHIP, (uintptr_t)&chip);
+    kvm_lapic_ioctl(v, KVM_SET_LAPIC, (uintptr_t)&local);
+    CHECK(line_status(8, 1) == 0, "restoring both APICs retains the RTC acknowledgement");
+    line_status(8, 0);
+    wr(v, APIC_EOI, 0);
+    CHECK(line_status(8, 1) == 1, "the RTC EOI permits another edge");
+    line_status(8, 0);
+    kvm_lapic_ack(v);
+    wr(v, APIC_EOI, 0);
+    chip.chip_id = 3;
+    CHECK(kvm_irq_ioctl(&vm, KVM_GET_IRQCHIP, (uintptr_t)&chip) == -EINVAL,
+          "an unknown controller id is refused");
+    CHECK(kvm_irq_ioctl(&vm, KVM_GET_IRQCHIP, 0) == -EFAULT,
+          "an invalid controller-state address is refused");
+}
+
+/** Level irqfds defer interrupt-context work and resample after EOI. */
+static void resample_rows(void)
+{
+    struct kvm_irqfd a;
+    struct eventfd *ev = efd_open(&efd_entry), *resample = efd_open(&efd2_entry);
+    struct kvm_vcpu *v = vcpu[0];
+
+    ioa_entry(21, 0x61u | (uint32_t)IOA_LEVEL, 0);
+    k_memset(&a, 0, sizeof(a));
+    a.fd = 3;
+    a.resamplefd = 5;
+    a.gsi = 21;
+    a.flags = KVM_IRQFD_FLAG_RESAMPLE;
+    CHECK(kvm_irq_ioctl(&vm, KVM_IRQFD, (uintptr_t)&a) == 0 && resample->refs == 2,
+          "a resampling irqfd holds both eventfds");
+    efd_write(&efd_entry, 1);
+    CHECK(ev->count == 0 && kvm_irq_pending(&vm) && !has(v, APIC_IRR, 0x61),
+          "its interrupt-context hook consumes the counter and defers the line");
+    kvm_irq_process(&vm);
+    CHECK(kvm_lapic_ack(v) == 0x61 && !kvm_irq_pending(&vm),
+          "the deferred irqfd raises its line before guest entry");
+    wr(v, APIC_EOI, 0);
+    CHECK(resample->count == 1 && kvm_lapic_pending(v) == -1,
+          "EOI lowers the resampling source and signals the resamplefd");
+    line_status(21, 1);
+    kvm_lapic_ack(v);
+    efd_write(&efd_entry, 1);
+    kvm_irq_process(&vm);
+    wr(v, APIC_EOI, 0);
+    CHECK(kvm_lapic_ack(v) == 0x61,
+          "resampling preserves another source that still holds the line high");
+    line_status(21, 0);
+    wr(v, APIC_EOI, 0);
+    a.flags = KVM_IRQFD_FLAG_DEASSIGN;
+    CHECK(kvm_irq_ioctl(&vm, KVM_IRQFD, (uintptr_t)&a) == 0 && resample->refs == 1,
+          "deassign releases the resample eventfd");
+    eventfd_close(&efd_entry);
+    eventfd_close(&efd2_entry);
+}
+
+/** The PIT's binary count, latches, pending ticks, speaker and HPET handoff. */
+static void pit_rows(void)
+{
+    struct kvm_pit_config config;
+    struct kvm_pit_state2 state;
+    struct kvm_reinject_control control;
+    struct kvm_vcpu *v = vcpu[0];
+    uint32_t lo, hi, status;
+    uint64_t saved;
+
+    k_memset(&config, 0, sizeof(config));
+    config.flags = KVM_PIT_SPEAKER_DUMMY;
+    CHECK(kvm_irq_ioctl(&vm, KVM_CREATE_PIT2, (uintptr_t)&config) == 0,
+          "CREATE_PIT2 makes the timer and silent speaker");
+    CHECK(kvm_irq_ioctl(&vm, KVM_CREATE_PIT, 0) == -EEXIST, "the PIT is made once");
+    CHECK(kvm_irq_ioctl(&vm, KVM_GET_PIT2, (uintptr_t)&state) == 0 &&
+              state.channels[0].count == 65536 && state.channels[2].gate == 0,
+          "the PIT's reset counts and speaker gate");
+    legacy_port(0x43, 1, 0xB6);
+    legacy_port(0x42, 1, 0x34);
+    legacy_port(0x42, 1, 0x12);
+    legacy_port(0x61, 1, 3);
+    CHECK((legacy_port(0x61, 0, 0) & 3) == 3, "speaker data and gate are retained");
+    legacy_port(0x43, 1, 0xC8);
+    status = legacy_port(0x42, 0, 0);
+    lo = legacy_port(0x42, 0, 0);
+    mono_ns += 1000000;
+    hi = legacy_port(0x42, 0, 0);
+    CHECK((status & 0x3F) == 0x36 && (lo | (hi << 8)) == 0x1234,
+          "read-back returns status first and keeps both count bytes latched");
+    ioa_entry(0, 0x70, 0);
+    legacy_port(0x43, 1, 0x34);
+    legacy_port(0x40, 1, 0xA9);
+    legacy_port(0x40, 1, 0x04);
+    saved = mono_ns;
+    mono_ns += 3100000;
+    kvm_pit_check(&vm);
+    CHECK(kvm_lapic_ack(v) == 0x70, "three elapsed PIT periods deliver the first tick");
+    kvm_pit_check(&vm);
+    CHECK(!has(v, APIC_IRR, 0x70), "reinjection waits for the first EOI");
+    wr(v, APIC_EOI, 0);
+    kvm_pit_check(&vm);
+    CHECK(kvm_lapic_ack(v) == 0x70, "the first EOI releases the second tick");
+    wr(v, APIC_EOI, 0);
+    kvm_pit_check(&vm);
+    CHECK(kvm_lapic_ack(v) == 0x70, "the second EOI releases the third tick");
+    wr(v, APIC_EOI, 0);
+    kvm_pit_check(&vm);
+    CHECK(!has(v, APIC_IRR, 0x70), "the backlog is exhausted without another period");
+    k_memset(&control, 0, sizeof(control));
+    CHECK(kvm_irq_ioctl(&vm, KVM_REINJECT_CONTROL, (uintptr_t)&control) == 0,
+          "reinjection can be disabled");
+    mono_ns = saved + 10100000;
+    kvm_pit_check(&vm);
+    CHECK(kvm_lapic_ack(v) == 0x70, "without reinjection missed periods coalesce");
+    wr(v, APIC_EOI, 0);
+    kvm_pit_check(&vm);
+    CHECK(!has(v, APIC_IRR, 0x70), "without reinjection EOI does not release a backlog");
+    control.pit_reinject = 1;
+    kvm_irq_ioctl(&vm, KVM_REINJECT_CONTROL, (uintptr_t)&control);
+    kvm_irq_ioctl(&vm, KVM_GET_PIT2, (uintptr_t)&state);
+    state.flags |= KVM_PIT_FLAGS_HPET_LEGACY;
+    kvm_irq_ioctl(&vm, KVM_SET_PIT2, (uintptr_t)&state);
+    CHECK(kvm_pit_next(&vm) == 0, "HPET legacy mode stops IRQ0");
+    state.flags &= ~KVM_PIT_FLAGS_HPET_LEGACY;
+    state.channels[0].mode = 0;
+    state.channels[0].count = 1193;
+    kvm_irq_ioctl(&vm, KVM_SET_PIT2, (uintptr_t)&state);
+    v->regs.rflags = 0x202;
+    v->dirty |= KVM_PART_REGS;
+    v->mp_state = KVM_MP_STATE_HALTED;
+    sleep_to_tick = 1;
+    CHECK(kvm_lapic_prepare(v) == 0 && v->mp_state == KVM_MP_STATE_RUNNABLE &&
+              kvm_lapic_ack(v) == 0x70,
+          "the PIT's one-shot wakes a halted vCPU at its next deadline");
+    sleep_to_tick = 0;
+    wr(v, APIC_EOI, 0);
+    CHECK(kvm_pit_next(&vm) == 0, "the one-shot stays disarmed after EOI");
+    k_memset(&state, 0xA5, sizeof(state));
+    kvm_irq_ioctl(&vm, KVM_GET_PIT2, (uintptr_t)&state);
+    CHECK(state.reserved[0] == 0 && state.reserved[8] == 0, "GET_PIT2 zeros its reserved words");
+}
+
+/** Controller routes may share a GSI but never the same chip. */
+static void controller_route_rows(void)
+{
+    uint32_t i;
+
+    k_memset(&rt, 0, sizeof(rt));
+    rt.h.nr = 2;
+    for (i = 0; i < 2; i++) {
+        rt.e[i].gsi = 100;
+        rt.e[i].type = KVM_IRQ_ROUTING_IRQCHIP;
+    }
+    rt.e[0].u.irqchip.irqchip = KVM_IRQCHIP_PIC_SLAVE;
+    rt.e[0].u.irqchip.pin = 2;
+    rt.e[1].u.irqchip.irqchip = KVM_IRQCHIP_IOAPIC;
+    rt.e[1].u.irqchip.pin = 18;
+    CHECK(kvm_irq_ioctl(&vm, KVM_SET_GSI_ROUTING, (uintptr_t)&rt) == 0,
+          "two different controller routes may share a GSI");
+    CHECK(line_status(100, 1) == 1 && kvm_lapic_ack(vcpu[0]) == 0x51,
+          "the replacement table routes its IOAPIC pin");
+    line_status(100, 0);
+    wr(vcpu[0], APIC_EOI, 0);
+    CHECK(line_status(18, 1) == -1, "replacement removes the default routes");
+    rt.e[0] = rt.e[1];
+    CHECK(kvm_irq_ioctl(&vm, KVM_SET_GSI_ROUTING, (uintptr_t)&rt) == -EINVAL,
+          "a second route to the same chip is refused");
+    rt.h.nr = 1;
+    rt.e[0].u.irqchip.pin = KVM_IOAPIC_NUM_PINS;
+    CHECK(kvm_irq_ioctl(&vm, KVM_SET_GSI_ROUTING, (uintptr_t)&rt) == -EINVAL,
+          "an IOAPIC pin past the table is refused");
+    CHECK(line_status(100, 1) == 1 && kvm_lapic_ack(vcpu[0]) == 0x51,
+          "a refused table preserves the old routes");
+    line_status(100, 0);
+    wr(vcpu[0], APIC_EOI, 0);
+    rt.h.nr = 0;
+    CHECK(kvm_irq_ioctl(&vm, KVM_SET_GSI_ROUTING, (uintptr_t)&rt) == 0 && line_status(100, 1) == -1,
+          "an empty table removes every route");
+}
+
+/** New full-controller rows, also selectable alone during development. */
+static void full_irqchip_rows(void)
+{
+    struct kvm_vm empty;
+    struct kvm_enable_cap cap;
+    struct kvm_pit_config pit;
+    struct kvm_irqchip chip;
+    int i, before = live;
+
+    CHECK(sizeof(struct kvm_irqchip) == 520 && sizeof(struct kvm_ioapic_state) == 216 &&
+              sizeof(struct kvm_pit_channel_state) == 24 && sizeof(struct kvm_pit_state2) == 112,
+          "the controller records have Linux's ABI sizes");
+    CHECK(kvm_irq_check_extension(KVM_CAP_PIT) == 1 && kvm_irq_check_extension(KVM_CAP_PIT2) == 1 &&
+              kvm_irq_check_extension(KVM_CAP_PIT_STATE2) == 1 &&
+              kvm_irq_check_extension(KVM_CAP_IRQFD_RESAMPLE) == 1 &&
+              kvm_irq_check_extension(KVM_CAP_REINJECT_CONTROL) == 1,
+          "the controller capabilities are offered");
+    k_memset(&empty, 0, sizeof(empty));
+    for (i = 0; i < 4; i++) {
+        allocation_fail = i;
+        CHECK(kvm_irq_ioctl(&empty, KVM_CREATE_IRQCHIP, 0) == -ENOMEM &&
+                  empty.irqchip == KVM_IRQCHIP_NONE && !empty.pic && !empty.ioapic && !empty.irq &&
+                  live == before,
+              "a failed controller allocation leaves no partial state");
+    }
+    allocation_fail = -1;
+    k_memset(&pit, 0, sizeof(pit));
+    k_memset(&chip, 0, sizeof(chip));
+    CHECK(kvm_irq_ioctl(&empty, KVM_CREATE_PIT2, (uintptr_t)&pit) == -ENOENT,
+          "PIT creation needs the full controller");
+    CHECK(kvm_irq_ioctl(&empty, KVM_GET_IRQCHIP, (uintptr_t)&chip) == -ENXIO,
+          "state ioctls need the full controller");
+    empty.nr_vcpus = 1;
+    CHECK(kvm_irq_ioctl(&empty, KVM_CREATE_IRQCHIP, 0) == -EINVAL,
+          "the full controller must precede the vCPUs");
+    vm_make(1);
+    k_memset(&cap, 0, sizeof(cap));
+    CHECK(kvm_irq_ioctl(&vm, KVM_CREATE_IRQCHIP, 0) == -EEXIST &&
+              kvm_irq_enable_split(&vm, &cap) == -EEXIST,
+          "a controller cannot be replaced after creation");
+    pic_rows();
+    ioapic_rows();
+    resample_rows();
+    pit_rows();
+    controller_route_rows();
+    vm_end();
+}
+
+int main(int argc, char **argv)
 {
     int start = live;
 
     fake.name = "fake";
     fake.complete = fake_complete;
     kvm_backend = &fake;
-    vm_make();
-    reset_rows();
-    priority_rows();
-    delivery_rows();
-    init_rows();
-    timer_rows();
-    x2apic_rows();
-    state_rows();
-    extint_rows();
-    halt_rows();
-    routing_rows();
-    irqfd_rows();
-    ioeventfd_rows();
-    vm_end();
+    if (argc != 1 && (argc != 2 || strcmp(argv[1], "--irqchip-only") != 0)) {
+        return 2;
+    }
+    if (argc == 1) {
+        vm_make(0);
+        reset_rows();
+        priority_rows();
+        delivery_rows();
+        init_rows();
+        timer_rows();
+        x2apic_rows();
+        state_rows();
+        x2apic_api_rows();
+        extint_rows();
+        halt_rows();
+        routing_rows();
+        irqfd_rows();
+        ioeventfd_rows();
+        coalesced_rows();
+        quirk_rows();
+        vm_end();
+    }
+    full_irqchip_rows();
     CHECK(live == start, "every allocation is given back");
     if (failures) {
         printf("kvm-irq-hosttest: %d failures\n", failures);

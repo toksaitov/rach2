@@ -25,7 +25,7 @@ SEED=${1:?seed}
 CHAN=/dev/ttyS1
 [ ! -c /dev/ttyAMA1 ] || CHAN=/dev/ttyAMA1
 PACKAGES='util-linux iproute2 exfatprogs dosfstools e2fsprogs python3 openssl git
-curl wget ca-certificates build-essential gawk bison flex m4 perl
+curl wget ca-certificates build-essential gawk bison flex m4 perl autoconf llvm lld
 texinfo xz-utils patch gzip bzip2 tar gnupg gpgv binutils mandoc mtools xorriso qemu-utils
 openssh-client rsync cppcheck shellcheck clang clang-format gcc-i686-linux-gnu binutils-i686-linux-gnu
 gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu sparse'

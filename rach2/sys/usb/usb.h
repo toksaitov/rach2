@@ -39,10 +39,11 @@ void usb_report_controllers(void);
 int usb_init(void);
 
 /**
- * Run the stack for one tick: advance each controller's clock, drain its events
- * and step the devices.
+ * Run the stack: advance each controller's clock by the ticks counted since
+ * the last call, drain its events and step the devices.
  *
- * Called from the timer tick, with interrupts off; it takes what the
+ * Called from the boot processor's tick, with interrupts off, which skips
+ * the call while another processor holds the big lock; it takes what the
  * controllers have left and returns, and does nothing before `usb_init` has
  * brought a controller up or after `usb_stop`.
  */

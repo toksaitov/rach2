@@ -64,48 +64,66 @@
 /* The SACK blocks an acknowledgement names at most: four, 36 bytes of
  * options, when a segment has no timestamps (RFC 2018). */
 #define TCP_SACK_BLOCKS     4
+/* The ends of receive buffers a block keeps in itself; more go to a table
+ * on the heap (`recv_seg_heap`). */
+#define TCP_RECV_SEGS       32
 
 /* The timers are written in milliseconds and kept in ticks of the kernel's
  * clock; TCP_MS rounds up, so that no timer is shorter than asked or 0. */
-#define TCP_MS(ms)              (((uint32_t)(ms) * TICK_HZ + 999u) / 1000u)
+#define TCP_MS(ms)               (((uint32_t)(ms) * TICK_HZ + 999u) / 1000u)
 /* The retransmission timeout: 1 s before a round trip is measured (RFC
  * 6298), then the smoothed round trip plus four deviations, at least 200 ms,
  * Linux's floor, which covers a peer's delayed acknowledgement, and at most
  * 60 s after doubling. */
-#define TCP_RTO_INIT            TCP_MS(1000)
-#define TCP_RTO_MIN             TCP_MS(200)
-#define TCP_RTO_MAX             TCP_MS(60000)
+#define TCP_RTO_INIT             TCP_MS(1000)
+#define TCP_RTO_MIN              TCP_MS(200)
+#define TCP_RTO_MAX              TCP_MS(60000)
 /* Policy: TIME_WAIT lasts 2 s, short for a local network, and a detached
  * block in FIN_WAIT_2, whose peer may go with neither a FIN nor a reset,
  * 10 s (cf. Linux's tcp_fin_timeout). */
-#define TCP_2MSL_TICKS          TCP_MS(2000)
-#define TCP_FIN_WAIT2_TICKS     TCP_MS(10000)
+#define TCP_2MSL_TICKS           TCP_MS(2000)
+#define TCP_FIN_WAIT2_TICKS      TCP_MS(10000)
 /* Policy: a detached block that still has data or a FIN to deliver, in
  * ESTABLISHED, CLOSE_WAIT, FIN_WAIT_1, CLOSING or LAST_ACK, is given up when
  * its peer has acknowledged nothing for 30 s, rather than after the minutes
  * TCP_MAX_RETX doublings can take, since no program waits on it (cf. Linux's
  * tcp_orphan_retries). */
-#define TCP_ORPHAN_TICKS        TCP_MS(30000)
+#define TCP_ORPHAN_TICKS         TCP_MS(30000)
 /* How long queued bytes may wait from the first transmit the driver refused
  * to the last, with no segment sent between and the link up, before the
  * connection is given up: 30 s. While the link is down the wait does not
  * run, so a cable out for a minute ends nothing. */
-#define TCP_REFUSE_GIVEUP_TICKS TCP_MS(30000)
+#define TCP_REFUSE_GIVEUP_TICKS  TCP_MS(30000)
+/* The wait before the next zero-window probe when the driver refused the
+ * last, as Linux's TCP_RESOURCE_PROBE_INTERVAL: 500 ms. */
+#define TCP_RESOURCE_PROBE_TICKS TCP_MS(500)
+/* The least wait between two acknowledgements a connection sends to answer
+ * segments it cannot accept, a sequence outside the receive window, a SYN,
+ * a reset or an acknowledgement it challenges (RFC 5961), as Linux's
+ * tcp_invalid_ratelimit: 500 ms, so that two ends that each find the
+ * other's segments unacceptable do not answer each other for ever. */
+#define TCP_INVALID_RATELIMIT    TCP_MS(500)
 /* A handshake is given up after this many retransmissions of its SYN or
  * SYN-ACK. */
-#define TCP_SYN_RETRIES         7
+#define TCP_SYN_RETRIES          7
 /*
  * The give-up of a synchronized connection is Linux's: the time that
  * `tcp_retries2` retransmissions take when the first waits 200 ms and each
  * doubles up to 120 s, about 924.6 s for the default of 15, measured from
- * the first timeout's segment (`tcp_retx_limit`). These are Linux's figures
+ * the first retransmission of the loss, a fast one or a timeout's, as
+ * Linux measures it (`tcp_retx_limit`). These are Linux's figures
  * and not this stack's own bounds above, so that a connection to a peer
  * that went away lasts as long as on Linux. TCP_USER_TIMEOUT replaces the
  * figure with the socket's own, in milliseconds, in every state.
  */
-#define TCP_RETRIES2_DEFAULT    15
-#define TCP_MODEL_RTO_BASE_MS   200u
-#define TCP_MODEL_RTO_MAX_MS    120000u
+#define TCP_RETRIES2_DEFAULT     15
+#define TCP_MODEL_RTO_BASE_MS    200u
+#define TCP_MODEL_RTO_MAX_MS     120000u
+/* The longest wait between zero-window probes, Linux's TCP_RTO_MAX of 120 s,
+ * the cap of its tcp_probe0_when, so that with a timeout of 200 ms the
+ * connection is given up after `tcp_retries2` unanswered probes 924.6 s
+ * after the window closed, as on Linux. */
+#define TCP_PROBE_MAX            TCP_MS(TCP_MODEL_RTO_MAX_MS)
 
 /*
  * Keepalive, as Linux's: a connection with SO_KEEPALIVE set and nothing
@@ -154,6 +172,10 @@
 #define TCP_DUP_ACKS     3
 #define TCP_RECOVER_RTO  1
 #define TCP_RECOVER_FAST 2
+/* The runs of data in flight whose send tick a connection keeps in the
+ * control block itself (`sent_first`): a run is the bytes sent in one
+ * tick. */
+#define TCP_SENT_RUNS    16
 
 /* TCP connection states (RFC 793). */
 typedef enum {
@@ -172,9 +194,17 @@ typedef enum {
 
 struct socket; /* defined in socket/socket.h */
 
-/* A connection's control block, or a listener's. */
 struct netns;
 
+/* A run of the send history (`struct tcb`'s `sent_first`): the bytes before
+ * `end` that the run before it does not hold, sent at the tick before
+ * `tick`, ticks+1 as `retx_stamp` keeps it, never 0. */
+struct tcp_sent_run {
+    uint32_t end;
+    uint32_t tick;
+};
+
+/* A connection's control block, or a listener's. */
 struct tcb {
     struct tcb *next; /* the list of live control blocks */
     int in_use;
@@ -188,6 +218,9 @@ struct tcb {
      * since the descriptor still has it. */
     int passive;
     struct tcb *listener; /* borrowed until a passive handshake completes */
+    /* 1 when `tcp_connect` gave the socket an ephemeral port, which a
+     * shutdown in SYN_SENT gives back (`tcp_shutdown`). */
+    uint8_t port_auto;
 
     uint16_t family; /* socket family, including mapped IPv4 on AF_INET6 */
     /* The network namespace of its socket, NULL for the first: it sends in
@@ -203,6 +236,14 @@ struct tcb {
     uint32_t snd_una; /* oldest unacknowledged sequence number  */
     uint32_t snd_nxt; /* next sequence number to send           */
     uint32_t snd_wnd; /* remote's receive window, in bytes      */
+    /* The largest window the remote has offered, as Linux's max_window. */
+    uint32_t snd_wnd_max;
+    /* The bytes the remote has acknowledged, as Linux's bytes_acked: the
+     * data, the FIN, and the SYN of an active open but not of a passive
+     * one. It stops at 0xFFFFFFFF, above every window, where Linux's
+     * counter has 64 bits; the lesser of it and `snd_wnd_max` bounds an
+     * old acknowledgement (`tcp_ack_ok`). */
+    uint32_t snd_acked;
     uint16_t snd_mss; /* largest segment the remote takes       */
     /* Window scaling (RFC 7323): the shifts of the remote's window field and
      * of this side's, 0 when either SYN lacked the option, and whether this
@@ -223,6 +264,14 @@ struct tcb {
     uint32_t irs;
     uint32_t rcv_nxt; /* next expected sequence number          */
     uint32_t rcv_wnd; /* the window last offered, in bytes      */
+    /* The right edge of the windows offered, the farthest sequence number
+     * a segment sent has offered, which data may not start at or past, as
+     * Linux's rcv_wup + rcv_wnd; valid once `rcv_adv_set`. */
+    uint32_t rcv_adv;
+    uint8_t rcv_adv_set;
+    /* rcv_nxt as the last segment sent with an ACK had it, as Linux's
+     * rcv_wup: a segment that ends before it is old (`tcp_seq_ok`). */
+    uint32_t rcv_wup;
 
     /* Data that arrived past a hole, kept in the receive ring past
      * `recv_tail`, where it belongs, and not yet readable: the ranges
@@ -245,6 +294,29 @@ struct tcb {
     uint8_t *recv_buf;
     uint32_t recv_size;
     uint32_t recv_head, recv_tail; /* head = next to read, tail = next to fill */
+    /*
+     * The receive buffers of the bytes in the receive ring, as Linux's
+     * receive queue holds them in its sk_buffs, which a stream receive
+     * copies whole or not at all: the end of each, a count like
+     * `recv_tail`, the oldest at `recv_seg_first` of a circle of entries,
+     * the TCP_RECV_SEGS of `recv_seg_end` or, once more are queued, the
+     * `recv_seg_cap` of `recv_seg_heap`, which doubles as needed and is
+     * given back when every buffer has been read. Each in-order segment the
+     * ring takes is a buffer, and so are the bytes past a hole that its
+     * filling makes readable at once. Only when the table would take more
+     * bytes than the ring, or the heap has no room, does a new buffer join
+     * the last, as Linux's tcp_prune_queue has tcp_collapse join the queue's
+     * buffers once their overhead passes the receive buffer. Linux also
+     * joins an in-order segment to the queue's tail whenever
+     * tcp_try_coalesce can (net/ipv4/tcp_input.c:4930-4963, 5208-5216),
+     * which depends on how the sk_buffs are laid out and shared, so it may
+     * keep fewer bounds than these. An end at or before `recv_head` has been
+     * read, and is dropped when next looked at. Changed with interrupts off.
+     */
+    uint32_t recv_seg_first, recv_seg_count;
+    uint32_t recv_seg_cap;   /* entries of `recv_seg_heap`; 0 while unused */
+    uint32_t *recv_seg_heap; /* the table on the heap, or NULL */
+    uint32_t recv_seg_end[TCP_RECV_SEGS];
 
     int fin_received; /* the peer's FIN was taken: a read sees the end */
     int fin_pending;  /* a close or shutdown asked for a FIN after the data */
@@ -257,7 +329,7 @@ struct tcb {
 
     /* Retransmission and congestion control (RFC 6298 / RFC 5681). */
     uint32_t rto;        /* current retransmit timeout (ticks)     */
-    uint32_t rto_timer;  /* countdown to next retransmit; 0 = off  */
+    uint32_t rto_due;    /* tick the retransmit is due, never 0; 0 = off */
     uint32_t srtt;       /* smoothed RTT x 8 (fixed point)         */
     uint32_t rttvar;     /* RTT variance x 4 (fixed point)         */
     uint32_t rtt_start;  /* ticks+1 at RTT sample start; 0 = none  */
@@ -269,17 +341,57 @@ struct tcb {
      * the limit of any other detached block, which each acknowledgement of
      * new data moves TCP_ORPHAN_TICKS ahead. */
     uint32_t timewait_until;
-    uint32_t zwp_timer;     /* zero-window probe countdown; 0 = off   */
+    uint32_t zwp_due; /* tick the zero-window probe is due; 0 = off */
+    /* Zero-window probing with nothing in flight, as Linux's
+     * icsk_probes_out, icsk_backoff and icsk_probes_tstamp: the probes sent
+     * since an acknowledgement was last taken, the doublings of the
+     * interval since the window last opened, at most `tcp_retries2`, and
+     * ticks+1 at the first probe since then; 0 = none. */
+    uint8_t zwp_probes;
+    uint8_t zwp_backoff;
+    uint32_t zwp_stamp;
     uint32_t tx_refused;    /* transmits the driver refused, a count */
     uint32_t refused_since; /* ticks+1 at the first refusal still unresolved; 0 = none */
-    /* ticks+1 at the sending of what the first of the timeouts in a row
-     * found unacknowledged, which the give-up counts from; 0 = none. */
+    /* ticks+1 at what the give-up of the timeouts in a row counts from, as
+     * Linux's retrans_stamp: in a synchronized state the first
+     * retransmission of data since the last recovery ended, kept through
+     * the recovery (`tcp_resend`), the send of the oldest data in flight
+     * (`sent_first`) at a closed window's first probe, as Linux's
+     * tcp_retransmit_timer takes the head segment's stamp, or the first
+     * timeout when it sends no data; in the handshake the send; 0 = none
+     * (`tcp_rto_expire`). */
     uint32_t retx_stamp;
+    /* The send tick of the data in flight, as Linux stamps each segment it
+     * sends: `sent_runs` runs (`struct tcp_sent_run`), the oldest first,
+     * held in `sent_first` and, once its TCP_SENT_RUNS are not enough, in
+     * `sent_more`, a heap array of `sent_cap` runs that doubles when it
+     * would fill and is freed when the history empties. An acknowledgement
+     * drops the runs it covers. New data takes a run only when one stays
+     * free after it for the FIN, and waits in the send ring while the heap
+     * refuses a larger array, so that each byte keeps its own send's tick
+     * (`tcp_sent_room`). The FIN counts as a byte. Only `tcp_rto_expire`
+     * reads it, for a closed window's first probe. */
+    uint32_t sent_runs;
+    uint32_t sent_cap;
+    struct tcp_sent_run *sent_more;
+    struct tcp_sent_run sent_first[TCP_SENT_RUNS];
+    /* ticks+1 at the last acknowledgement sent to answer a segment this
+     * side could not accept, as Linux's last_oow_ack_time; 0 = none
+     * (`tcp_oow_limited`). */
+    uint32_t oow_stamp;
+    /* The tick of the last acknowledgement received inside [snd_una,
+     * snd_nxt] on a segment `tcp_rx_check` let on, as Linux's rcv_tstamp,
+     * which a closed window over data in flight is given up by
+     * (`tcp_rx_answers`). */
+    uint32_t rcv_stamp;
 
     /* Keepalive. `ka_armed` is set once the tick has seen SO_KEEPALIVE on
-     * the socket, and `ka_since` is the tick of the last segment received
-     * or of that arming; `ka_probes` counts the probes unanswered since,
-     * the last sent at the tick `ka_probe_at`. */
+     * the socket, and `ka_since` is the tick of that arming, of the last
+     * `rcv_stamp` or of the last in-order data taken, whichever is
+     * latest, as Linux's keepalive counts from rcv_tstamp and lrcvtime;
+     * `ka_probes` counts the probes sent since an acknowledgement last
+     * answered them, as icsk_probes_out, the last sent at the tick
+     * `ka_probe_at`. */
     uint8_t ka_armed;
     uint8_t ka_probes;
     uint32_t ka_since;
@@ -321,6 +433,13 @@ struct tcb {
     uint8_t retx_flags; /* 0 = none, else the control flags       */
     uint8_t ack_owed;   /* a bare acknowledgement the driver refused */
     uint32_t retx_seq;  /* sequence number the control occupies   */
+    /*
+     * 1 from a simultaneous open's ACK of snd_una until an acknowledgement
+     * of the SYN: the SYN, at snd_una, holds the send ring's slot before
+     * the data, so that ring position send_ack is sequence number snd_una,
+     * and `tcp_resend` sends the SYN-ACK for it.
+     */
+    uint8_t syn_unacked;
 
     struct socket *sock; /* owning socket (NULL once detached)     */
 
@@ -381,7 +500,8 @@ int tcp_in_flight(net_addr_t local_ip, uint16_t local_port, net_addr_t remote_ip
  * again an acknowledgement the driver refused, retransmit when the
  * retransmission timer runs out and give up with ETIMEDOUT at the limit of
  * `tcp_retx_limit`, give up a detached block whose peer acknowledged
- * nothing for TCP_ORPHAN_TICKS, probe a closed window, send keepalive
+ * nothing for TCP_ORPHAN_TICKS, probe a closed window and give up one
+ * whose probes go unanswered (`tcp_zwp_expire`), send keepalive
  * probes and reset a connection that answers none, and send what refused
  * transmits left in the send rings.
  */
@@ -443,27 +563,46 @@ int tcp_listen(struct socket *sock, uint16_t port);
  */
 int tcp_connect(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port);
 
+/* `tcp_send`'s answer for a connection still in its handshake, SYN_SENT or
+ * SYN_RCVD, which can send once it is established. */
+#define TCP_SEND_CONNECTING (-2)
+
 /**
  * Queue up to `len` bytes of `buf` on the send ring of `sock`'s connection,
  * and send what the windows allow; the bytes stay in the ring until they are
- * acknowledged. Returns the bytes queued, 0 when the ring is full, or -1 for
- * a socket with no connection, a negative `len`, or a connection not in
- * ESTABLISHED or CLOSE_WAIT or whose sending half is shut. Takes `net_lock`
- * itself.
+ * acknowledged. Returns the bytes queued, 0 when the ring is full,
+ * TCP_SEND_CONNECTING for a connection in SYN_SENT or SYN_RCVD, or -1 for a
+ * socket with no connection, a negative `len`, or a connection in another
+ * state than ESTABLISHED or CLOSE_WAIT or whose sending half is shut. Takes
+ * `net_lock` itself.
  */
 int tcp_send(struct socket *sock, const uint8_t *buf, int len);
 
 /**
- * Detach `sock` from its connection and begin closing it. In ESTABLISHED or
- * CLOSE_WAIT the queued data goes out and a FIN after it; in FIN_WAIT_2 the
- * wait for the peer's FIN is limited to TCP_FIN_WAIT2_TICKS; in FIN_WAIT_1,
- * CLOSING, LAST_ACK or TIME_WAIT, after a shutdown, the block finishes as it
- * is; in any other state it is freed, and a listener's close first frees the
- * blocks still in their handshake on its port, with their sockets. The
- * caller keeps `sock`. Takes `net_lock` itself, so it may be called with
- * interrupts on or off.
+ * Detach `sock` from its connection and begin closing it. A connection
+ * from ESTABLISHED to LAST_ACK with received data its reader never read is
+ * ended with a reset and freed, counted in TCPAbortOnClose. Otherwise, in
+ * ESTABLISHED or CLOSE_WAIT the queued data goes out and a FIN after it; in
+ * FIN_WAIT_2 the wait for the peer's FIN is limited to TCP_FIN_WAIT2_TICKS;
+ * in FIN_WAIT_1, CLOSING, LAST_ACK or TIME_WAIT, after a shutdown, the
+ * block finishes as it is; in any other state it is freed, and a
+ * listener's close first frees the blocks still in their handshake on its
+ * port, with their sockets. The caller keeps `sock`. Takes `net_lock`
+ * itself, so it may be called with interrupts on or off.
  */
 void tcp_close(struct socket *sock);
+
+/**
+ * Shut down the connection of `sock` as shutdown(2) asks: `rd` sets the
+ * socket's SOCK_RCV_SHUTDOWN, `wr` its SOCK_SEND_SHUTDOWN and sends the
+ * FIN after the queued data (`tcp_shutdown_send`). The block stays
+ * attached until the socket's close. A connection still in SYN_SENT is
+ * disconnected instead: its block is freed, nothing is sent, and the
+ * socket records ECONNRESET and may connect again. Returns 0, or -ENOTCONN
+ * for a socket with no connection, a listener, or one in CLOSED or
+ * SYN_RCVD. Takes `net_lock` itself.
+ */
+int tcp_shutdown(struct socket *sock, int rd, int wr);
 
 /**
  * Close the sending half of the connection, as shutdown(SHUT_WR) asks: the
@@ -507,7 +646,8 @@ struct tcp_row {
     uint32_t inode;
     /* This stack's own view, after Linux's columns: the peer's window, the
      * congestion window, the bytes in flight, the bytes not yet sent, the
-     * retransmission and zero-window timers, the transmits the driver
+     * retransmission and zero-window timers, the ticks left on each, at
+     * least 1 while it runs and 0 when it is off, the transmits the driver
      * refused and how long ago the standing refusal began, in ticks. */
     uint32_t snd_wnd;
     uint32_t cwnd;
@@ -560,7 +700,7 @@ struct tcp_counts {
     int tw;         /* in TIME_WAIT */
     int alloc;      /* every block not in TIME_WAIT */
     int estab;      /* ESTABLISHED or CLOSE_WAIT, Linux's CurrEstab */
-    uint32_t bytes; /* the blocks and their receive rings */
+    uint32_t bytes; /* the blocks, their receive rings and send histories */
 };
 
 /** Count the control blocks into `c`, under `net_lock`. */

@@ -25,6 +25,12 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 mkdir -p "$out"
 RUNNER_WORK=$(mktemp -d "${TMPDIR:-/tmp}/browser.XXXXXX")
+if [ "$mode" = webgpu-hasvk ]; then
+    # The caller's DRM Weston drives the Lenovo's panel at its 1366x768 mode,
+    # which the record's size must name.
+    # shellcheck disable=SC2034 # runner_start records them
+    RUNNER_WIDTH=1366 RUNNER_HEIGHT=768
+fi
 runner_start
 runner_record "case $browser $mode"
 case $mode in
@@ -39,6 +45,17 @@ if [ "$mode" = pages ]; then
     # shellcheck disable=SC2034 # common.sh loads the private module
     RUNNER_SEAT_MODULE=$here/seat.so
 fi
-runner_weston
+if [ "$mode" = gpu ]; then
+    # shellcheck disable=SC2034 # common.sh starts Weston with it
+    RUNNER_RENDERER=gl
+fi
+if [ "$mode" = webgpu-hasvk ]; then
+    [ "$browser" = chromium ] || runner_die "hasvk needs Chromium"
+    [ -S "${XDG_RUNTIME_DIR:?}/${WAYLAND_DISPLAY:?}" ] || runner_die "no caller's Wayland display"
+    runner_record "compositor caller's DRM Weston on the Lenovo, see ../weston.log"
+    runner_record "icd ${VK_DRIVER_FILES:?}"
+else
+    runner_weston
+fi
 python3 "$here/run.py" "$browser" "$mode" "$out" "$RUNNER_WORK"
 runner_finish

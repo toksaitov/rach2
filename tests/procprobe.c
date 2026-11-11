@@ -92,6 +92,13 @@
 #define ECONNREFUSED 111
 #define SIGKILL      9
 #define ESRCH        3
+#define ENOENT       2
+
+#if defined __x86_64__
+#define SYS_MEMFD_CREATE 319
+#else
+#define SYS_MEMFD_CREATE 356
+#endif
 
 /** End the process with `status`; it does not return. */
 static void sys_exit(int status)
@@ -137,12 +144,14 @@ static const struct row {
             {"snapshot-open", ROW_PLAIN},
             {"child-state-s", ROW_PLAIN},
             {"procs-blocked-zero", ROW_MACHINE},
+            {"fd-dir-size", ROW_PLAIN},
             {"snapshot-kill", ROW_PLAIN},
             {"snapshot-reap", ROW_PLAIN},
             {"snapshot-entry-gone", ROW_PLAIN},
             {"snapshot-reads", ROW_PLAIN},
             {"snapshot-starts-with-pid", ROW_PLAIN},
             {"snapshot-reread-gone", ROW_PLAIN},
+            {"fd-dir-gone", ROW_PLAIN},
             {"cmdline-newline", ROW_PLAIN},
             {"net-dev-newline", ROW_PLAIN},
             {"loop-intr-stat", ROW_PLAIN},
@@ -171,6 +180,7 @@ static const struct row {
             {"meminfo-newline", ROW_PLAIN},
             {"meminfo-memtotal", ROW_PLAIN},
             {"meminfo-swapfree", ROW_PLAIN},
+            {"meminfo-swapcached", ROW_PLAIN},
             {"meminfo-slab", ROW_PLAIN},
             {"meminfo-free-bounded", ROW_PLAIN},
             {"meminfo-no-double-count", ROW_PLAIN},
@@ -244,6 +254,10 @@ static const struct row {
             {"hostname-read-back", ROW_PLAIN},
             {"version", ROW_PLAIN},
             {"ip-forward", ROW_PLAIN},
+            {"panic-read", ROW_PLAIN},
+            {"panic-write", ROW_PLAIN},
+            {"panic-refuse", ROW_PLAIN},
+            {"panic-on-oops", ROW_PLAIN},
             {"rtc-open", ROW_PLAIN},
             {"rtc-read", ROW_PLAIN},
             {"rtc-time-of-day", ROW_PLAIN},
@@ -267,6 +281,9 @@ static const struct row {
             {"root-link", ROW_PLAIN},
             {"cwd-walk", ROW_PLAIN},
             {"status-cpus-allowed", ROW_PLAIN},
+            {"status-rss-kinds", ROW_PLAIN},
+            {"status-rss-fork-file", ROW_PLAIN},
+            {"status-rss-fork-shmem", ROW_PLAIN},
             {"ns-listing", ROW_PLAIN},
             {"ns-chdir", ROW_PLAIN},
             {"net-class-listed", ROW_PLAIN},
@@ -1272,6 +1289,41 @@ static int write_file(const char *name, const char *text, int len)
     return rc;
 }
 
+/**
+ * /proc/sys/kernel/panic and panic_on_oops take any int, a negative one
+ * among them, and read back what was written, as Linux's `proc_dointvec`
+ * gives them, and refuse text that is no number with EINVAL. Each value is
+ * put back as it was read, since a panic of a later probe acts on it.
+ */
+static void panic_rows(void)
+{
+    static char panic[24], oops[24];
+    int was_panic = slurp("/proc/sys/kernel/panic", panic, (int)sizeof(panic));
+    int was_oops = slurp("/proc/sys/kernel/panic_on_oops", oops, (int)sizeof(oops));
+    int n;
+
+    check("panic-read", was_panic >= 2 && panic[was_panic - 1] == '\n',
+          "/proc/sys/kernel/panic reads as a number and a newline");
+    n = write_file("/proc/sys/kernel/panic", "-1\n", 3) == 3
+            ? slurp("/proc/sys/kernel/panic", buf, (int)sizeof(buf))
+            : -1;
+    check("panic-write", n == 3 && contains(buf, n, "-1\n"),
+          "/proc/sys/kernel/panic takes -1 and reads it back");
+    check("panic-refuse", write_file("/proc/sys/kernel/panic", "x\n", 2) == -EINVAL,
+          "and refuses text that is no number with EINVAL");
+    if (was_panic > 1) {
+        write_file("/proc/sys/kernel/panic", panic, was_panic);
+    }
+    n = write_file("/proc/sys/kernel/panic_on_oops", "1\n", 2) == 2
+            ? slurp("/proc/sys/kernel/panic_on_oops", buf, (int)sizeof(buf))
+            : -1;
+    check("panic-on-oops", was_oops >= 2 && n == 2 && contains(buf, n, "1\n"),
+          "/proc/sys/kernel/panic_on_oops reads as a number and takes 1");
+    if (was_oops > 1) {
+        write_file("/proc/sys/kernel/panic_on_oops", oops, was_oops);
+    }
+}
+
 /** /proc/sys/kernel/hostname takes a write as sethostname does, the text
  * before its newline; /proc/version gives the kernel's name and release; and
  * net/ipv4/ip_forward takes 0 and refuses forwarding, which the stack does
@@ -1300,6 +1352,7 @@ static void sysctl_rows(void)
           write_file("/proc/sys/net/ipv4/ip_forward", "0\n", 2) == 2 &&
               write_file("/proc/sys/net/ipv4/ip_forward", "1\n", 2) == -EINVAL,
           "/proc/sys/net/ipv4/ip_forward takes 0 and refuses 1 with EINVAL");
+    panic_rows();
 }
 
 /** /dev/rtc0: the CMOS clock as hwclock reads it, the time of day of
@@ -1516,6 +1569,144 @@ static int listing(const char *dir, char *out, int cap)
     return n == 0 ? 0 : -1;
 }
 
+/** The row of the resident pages by kind, from the `n` bytes of
+ * /proc/self/status at `b`: Linux's three lines, which sum to VmRSS, the
+ * file being of one moment. */
+static void status_rss_row(const char *b, int n)
+{
+    int rss = uint_after(b, n, "VmRSS:"), anon = uint_after(b, n, "RssAnon:");
+    int file = uint_after(b, n, "RssFile:"), shmem = uint_after(b, n, "RssShmem:");
+
+    check("status-rss-kinds",
+          rss > 0 && anon > 0 && file >= 0 && shmem >= 0 && anon + file + shmem == rss,
+          "/proc/self/status divides VmRSS among RssAnon, RssFile and RssShmem");
+}
+
+/** Read the three resident counts of `pid` into `rss`; 0 or -1. The parent
+ * reads a stopped-at-a-pipe child, so making the text changes no child page. */
+static int child_rss(int pid, int rss[3])
+{
+    char child_path[40] = "/proc/";
+    int n = 6, k;
+
+    n += dec_of(child_path + n, (unsigned int)pid);
+    for (k = 0; k < 8; k++) {
+        child_path[n++] = "/status"[k];
+    }
+    n = slurp(child_path, buf, (int)sizeof(buf));
+    rss[0] = uint_after(buf, n, "RssAnon:");
+    rss[1] = uint_after(buf, n, "RssFile:");
+    rss[2] = uint_after(buf, n, "RssShmem:");
+    return rss[0] >= 0 && rss[1] >= 0 && rss[2] >= 0 ? 0 : -1;
+}
+
+/** Whether numa_maps keeps the dirty count of the private page at `at`.
+ * The page has its own file mapping, so its line must have one dirty page. */
+static int private_page_dirty(long at)
+{
+    char name[24];
+    int n = slurp("/proc/self/numa_maps", buf, (int)sizeof(buf));
+    int k = hex_of(name, (unsigned long)at, 8), i, end;
+
+    name[k++] = ' ';
+    name[k] = '\0';
+    for (i = 0; i + k < n; i = end + 1) {
+        for (end = i; end < n && buf[end] != '\n'; end++) {
+        }
+        if (contains(buf + i, k, name)) {
+            return contains(buf + i, end - i, " dirty=1 ");
+        }
+    }
+    return 0;
+}
+
+/** A private file page dirtied before fork stays anonymous in the child,
+ * before and after its own COW write. Removing it must remove exactly 4 KiB
+ * of RssAnon. `memory` selects a memfd instead of the executable's file;
+ * `write_child` asks the child to write before the first snapshot. All
+ * descriptors, mappings and the child are released even after a failure. */
+static int rss_fork_file(int memory, int write_child)
+{
+    struct handshake h;
+    long at = -1;
+    int fd = -1, pid = -1, status = -1, ok = 0, before[3], after[3];
+    char byte = 'r';
+
+    h.ready[0] = h.ready[1] = h.go[0] = h.go[1] = -1;
+    fd = memory ? (int)syscall2(SYS_MEMFD_CREATE, (long)"procprobe-rss", 0)
+                : (int)syscall3(SYS_OPEN, (long)"/proc/self/exe", O_RDONLY, 0);
+    if (fd < 0 || (memory && probe_ftruncate64(fd, 4096) != 0)) {
+        goto out;
+    }
+    at = probe_mmap(0, 4096, 3, 2, fd, 0);
+    if (sys_failed(at)) {
+        goto out;
+    }
+    ((volatile char *)at)[0] ^= 1;
+    if (handshake_open(&h) != 0) {
+        goto out;
+    }
+    pid = (int)syscall1(SYS_FORK, 0);
+    if (pid == 0) {
+        handshake_child(&h);
+        if (write_child) {
+            ((volatile char *)at)[0] ^= 1;
+        }
+        if (!private_page_dirty(at)) {
+            sys_exit(2);
+        }
+        handshake_hold(&h);
+        if (syscall2(SYS_MUNMAP, at, 4096) != 0) {
+            sys_exit(1);
+        }
+        handshake_hold(&h);
+        sys_exit(0);
+    }
+    syscall1(SYS_CLOSE, h.ready[1]);
+    syscall1(SYS_CLOSE, h.go[0]);
+    h.ready[1] = h.go[0] = -1;
+    if (pid <= 0 || syscall3(SYS_READ, h.ready[0], (long)&byte, 1) != 1 ||
+        child_rss(pid, before) != 0 || syscall3(SYS_WRITE, h.go[1], (long)&byte, 1) != 1 ||
+        syscall3(SYS_READ, h.ready[0], (long)&byte, 1) != 1 || child_rss(pid, after) != 0) {
+        goto out;
+    }
+    ok = before[0] - after[0] == 4 && before[1] == after[1] && before[2] == after[2];
+    syscall1(SYS_CLOSE, h.go[1]);
+    h.go[1] = -1;
+    if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid || status != 0) {
+        ok = 0;
+    }
+    pid = -1;
+out:
+    if (pid > 0) {
+        syscall2(SYS_KILL, pid, SIGKILL);
+        syscall3(SYS_WAITPID, pid, (long)&status, 0);
+    }
+    syscall1(SYS_CLOSE, h.ready[0]);
+    syscall1(SYS_CLOSE, h.ready[1]);
+    syscall1(SYS_CLOSE, h.go[0]);
+    syscall1(SYS_CLOSE, h.go[1]);
+    if (!sys_failed(at)) {
+        syscall2(SYS_MUNMAP, at, 4096);
+    }
+    syscall1(SYS_CLOSE, fd);
+    return ok;
+}
+
+/** Check inherited private pages from a regular file and from shmem. */
+static void rss_fork_rows(void)
+{
+    int memory, wrote;
+
+    for (memory = 0; memory < 2; memory++) {
+        for (wrote = 0; wrote < 2; wrote++) {
+            check(memory ? "status-rss-fork-shmem" : "status-rss-fork-file",
+                  rss_fork_file(memory, wrote),
+                  "an inherited private file copy stays RssAnon before and after a child write");
+        }
+    }
+}
+
 /** A /proc/<pid> directory lists its files in their order, `task` last, and a
  * thread's directory under `task` lists them with `children` in place of
  * `task`; /proc/self/limits has Linux's header and sixteen limits; /proc
@@ -1525,7 +1716,8 @@ static void pid_dir_rows(void)
 {
     static const char files[] = "stat cmdline fd maps smaps status statm auxv environ comm "
                                 "mem oom_score_adj mounts mountinfo limits uid_map gid_map "
-                                "setgroups ns fdinfo exe cwd root ";
+                                "setgroups ns fdinfo exe cwd root numa_maps syscall wchan "
+                                "schedstat ";
     static char got[512], want[512], names[4096];
     char dir[40] = "/proc/self/task/";
     int pid = syscall1(SYS_GETPID, 0);
@@ -1600,6 +1792,7 @@ static void pid_dir_rows(void)
         line[k] = '\0';
         check("status-cpus-allowed", cpus > 0 && contains(buf, n, line),
               "/proc/self/status allows every processor /proc/stat lists");
+        status_rss_row(buf, n);
     }
     check("ns-listing",
           listing("/proc/self/ns", got, (int)sizeof(got)) == 0 &&
@@ -2039,7 +2232,9 @@ static void pool_full_rows(void)
  */
 static void snapshot_rows(void)
 {
-    int pid, status, fd, n;
+    static unsigned char st_path[KSTAT_SIZE], st_fd[KSTAT_SIZE];
+    static char fd_dir[40], names[1024];
+    int pid, status, fd, dir_fd, n, i;
 
     pid = syscall1(SYS_FORK, 0);
     check("snapshot-fork", pid >= 0, "fork");
@@ -2053,6 +2248,27 @@ static void snapshot_rows(void)
         fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
         check("snapshot-open", fd >= 0, "open /proc/<child>/stat while the child is alive");
         sleeping_child_rows(path);
+        /* The fd directory's size is its count of open descriptors, as
+         * Linux's proc_fd_getattr gives it, by path and by descriptor. */
+        for (i = 0; path[i]; i++) {
+            fd_dir[i] = path[i];
+        }
+        fd_dir[i - 4] = 'f';
+        fd_dir[i - 3] = 'd';
+        fd_dir[i - 2] = '\0';
+        dir_fd = syscall3(SYS_OPEN, (long)fd_dir, O_RDONLY, 0);
+        n = 0;
+        if (listing(fd_dir, names, (int)sizeof(names)) == 0) {
+            for (i = 0; names[i]; i++) {
+                n += names[i] == ' ';
+            }
+        }
+        check("fd-dir-size",
+              n > 0 && dir_fd >= 0 && syscall3(SYS_STAT, (long)fd_dir, (long)st_path, 0) == 0 &&
+                  syscall3(SYS_FSTAT, dir_fd, (long)st_fd, 0) == 0 &&
+                  *(long long *)(st_path + KSTAT_SIZE_AT) == n &&
+                  *(long long *)(st_fd + KSTAT_SIZE_AT) == n,
+              "stat and fstat of /proc/<child>/fd give the number of its open descriptors");
         check("snapshot-kill", syscall3(SYS_KILL, pid, SIGKILL, 0) == 0, "kill the child");
         check("snapshot-reap", syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid,
               "reap the child");
@@ -2071,6 +2287,11 @@ static void snapshot_rows(void)
             check("snapshot-reread-gone", probe_pread(fd, buf, 64, 0) == -ESRCH,
                   "and a read from offset 0, which makes the text again, is ESRCH");
             syscall1(SYS_CLOSE, fd);
+        }
+        check("fd-dir-gone", dir_fd >= 0 && syscall3(SYS_FSTAT, dir_fd, (long)st_fd, 0) == -ENOENT,
+              "and fstat of a descriptor on it is ENOENT once the child is gone");
+        if (dir_fd >= 0) {
+            syscall1(SYS_CLOSE, dir_fd);
         }
     }
 }
@@ -2340,6 +2561,8 @@ static void machine_file_rows(void)
           "/proc/meminfo carries MemTotal");
     check("meminfo-swapfree", has_line_starting(buf, n, "SwapFree:"),
           "/proc/meminfo carries SwapFree");
+    check("meminfo-swapcached", uint_after(buf, n, "SwapCached:") == 0,
+          "/proc/meminfo carries SwapCached, 0, which IGT adds to the memory it may use");
     check("meminfo-slab", has_line_starting(buf, n, "Slab:"),
           "/proc/meminfo runs through to its last line, Slab, which nmeter needs");
     check("meminfo-free-bounded", uint_after(buf, n, "MemTotal:") >= uint_after(buf, n, "MemFree:"),
@@ -2764,6 +2987,7 @@ void probe_main(unsigned long *sp)
 #endif
     anonymous_rows();
     pid_dir_rows();
+    rss_fork_rows();
     pool_full_rows();
     connection_owner_rows();
 

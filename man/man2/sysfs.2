@@ -1,0 +1,88 @@
+.Dd November 10, 2026
+.Dt SYSFS 2
+.Os
+.Sh NAME
+.Nm sysfs
+.Nd get information about the file system types
+.Sh SYNOPSIS
+.Ft int
+.Fn sysfs "int option" "const char *fsname"
+.Ft int
+.Fn sysfs "int option" "unsigned int fs_index" "char *buf"
+.Ft int
+.Fn sysfs "int option"
+.Sh DESCRIPTION
+.Fn sysfs
+numbers the file system types the kernel knows from 0, in the order
+.Pa /proc/filesystems
+lists them, and answers by
+.Fa option :
+.Bl -tag -width 1n
+.It 1
+The index of the type named by the string
+.Fa fsname .
+.It 2
+The name of the type whose index is
+.Fa fs_index ,
+copied with its terminating NUL into
+.Fa buf ,
+which must be large enough.
+.It 3
+The number of types.
+.El
+.Pp
+The call has nothing to do with the
+.Pa /sys
+file system that
+.Xr sysfs 5
+describes.
+.Ss System call numbers
+The call is 135 on i386 and 139 on x86-64.
+The x86-64 kernel has it for a program that enters it by
+.Ql int $0x80
+too, as
+.Xr ia32 7
+describes.
+.Sh RETURN VALUES
+Option 1 returns the index, option 2 zero and option 3 the number of
+types.
+On error the call returns -1 and sets
+.Va errno .
+.Sh EXAMPLES
+The default suite's
+.Pa tests/oldfsprobe.c
+reads
+.Pa /proc/filesystems ,
+checks that option 3 gives the number of its lines and that options 1
+and 2 give each line's name and index both ways, and checks each error.
+.Sh ERRORS
+.Bl -tag -width Er
+.It Bq Er EINVAL
+.Fa option
+is not 1, 2 or 3;
+.Fa fsname
+names no type; or
+.Fa fs_index
+is not below the number of types.
+.It Bq Er ENOENT
+.Fa fsname
+is the empty string.
+.It Bq Er ENAMETOOLONG
+.Fa fsname
+has no NUL in its first 4096 bytes.
+.It Bq Er EFAULT
+.Fa fsname
+or
+.Fa buf
+is outside the caller's memory.
+.El
+.Sh SEE ALSO
+.Xr mount 2 ,
+.Xr ustat 2 ,
+.Xr proc 5
+.Sh STANDARDS
+The call is Linux's, which builds it unless
+.Dv CONFIG_SYSFS_SYSCALL
+is off, and its rules are those of Linux 6.12.
+No C library has a wrapper; a program calls it through
+.Xr syscall 2 .

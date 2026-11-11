@@ -84,6 +84,22 @@ struct vd_blob {
     uint64_t blob_id, size;
 };
 
+/*
+ * A page list asked of a mappable blob under VGS_TF_PAGES (vgpushm.h): the
+ * runs of the VM-physical pages behind blob `id` from page `first` on, at
+ * most `max` into `runs`, its memory pinned for the driver's `epoch` at the
+ * first ask and held until the device lets it go (`unpin`).
+ */
+struct vd_pages {
+    uint32_t id, epoch;
+    uint64_t size;  /* the blob's bytes, as created */
+    uint64_t first; /* below the blob's pages */
+    struct vgs_run *runs;
+    uint32_t max;      /* at least 1 */
+    uint32_t count;    /* out: runs written, at least 1 */
+    uint32_t map_info; /* out: VIRTIO_GPU_MAP_CACHE_* of the VM's own mapping */
+};
+
 /* One display's mode as the device reports it. */
 struct vd_mode {
     uint32_t width, height, enabled;
@@ -117,8 +133,12 @@ struct vd_ops {
     /* Show resource id's rectangle r; id 0, with r 0, takes the scanout off. */
     int (*scanout)(void *c, uint32_t scanout, uint32_t id, const struct vd_rect *r);
     int (*flush)(void *c, uint32_t scanout, uint32_t id, const struct vd_rect *r);
-    /* End every resource and context: a new epoch begins. */
+    /* End every resource and context, and every pin: a new epoch begins. */
     void (*reset)(void *c);
+    /* Pin a mappable blob, at its first ask, and give its pages' runs. */
+    int (*pages)(void *c, struct vd_pages *q);
+    /* Let go of a blob's pin, if it has one. */
+    void (*unpin)(void *c, uint32_t id);
 };
 
 /* What the backend offers, fixed before the first epoch. */
@@ -134,13 +154,18 @@ struct vd_offer {
 /* Counters a run reports. */
 struct vd_counts {
     uint64_t epochs, commands, errors, fenced, completed, notified, faults;
+    uint64_t maps, unmaps; /* page lists answered, pins let go of at UNMAP_BLOB */
 };
 
 /* A device resource beside its table entry. */
 struct vd_res {
     struct iovec *iov; /* its backing in the region, or 0 */
     uint32_t niov;
-    uint32_t blob; /* 1 for a blob resource */
+    uint32_t blob;   /* 1 for a blob resource */
+    uint32_t mem;    /* a blob's BLOB_MEM_* */
+    uint32_t flags;  /* a blob's BLOB_FLAG_* */
+    uint32_t pinned; /* 1 once a page list pinned it, until it is let go */
+    uint64_t size;   /* a blob's bytes */
 };
 
 /* A fenced command whose completion waits on its fence. */
@@ -173,8 +198,9 @@ struct vd {
     uint32_t scanout[VD_SCANOUTS]; /* each scanout's resource, or 0 */
     struct vd_pending pend[VD_PENDING];
     uint32_t npend;
-    int kick;     /* used entries published since the last notify */
-    uint8_t *cmd; /* offer.limits.max_cmd bytes: a chain's readable part */
+    int kick;      /* used entries published since the last notify */
+    uint8_t *cmd;  /* offer.limits.max_cmd bytes: a chain's readable part */
+    uint32_t room; /* the writable bytes of the chain being served */
     uint8_t resp[VD_RESP_MAX];
     const struct vd_ops *ops;
     void *cookie;

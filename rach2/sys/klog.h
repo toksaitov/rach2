@@ -108,18 +108,12 @@ uint32_t klog_read_from(char *buf, uint32_t cap, uint32_t *at);
  */
 void klog_deliver_directly(void);
 
-/** How many characters `klog_show_crit` would show, without its newline; 0
- * before the first `KLOG_CRIT` record. */
-uint32_t klog_crit_len(void);
-
 /**
- * Show the last `KLOG_CRIT` record again on the screen, and nowhere else,
- * from the cursor and on a line of its own: for a panic, whose picture has
- * cleared the record that says why. It takes no lock and allocates nothing.
- * Every other `KLOG_CRIT` record but `panic: stopped:` comes just before the
- * machine stops, so the one kept is the cause when one was logged.
+ * Show no more records on the screen, and nowhere else changed: for a
+ * panic, which draws its own report there (panic.c) and sends its records
+ * to the other destinations. It takes no lock, and nothing undoes it.
  */
-void klog_show_crit(void);
+void klog_screen_stop(void);
 
 /**
  * Set the lowest-priority record the screen shows.
@@ -130,7 +124,8 @@ void klog_show_crit(void);
  * What it decides is how much of the machine's own record a person standing
  * at it has to read. The default keeps the boot log, `KLOG_INFO`, and drops
  * `KLOG_DEBUG`; a program talking to a person turns it down for its own run
- * and puts it back. `KLOG_CRIT` is the floor, so a panic always shows. A
+ * and puts it back. `KLOG_CRIT` is the floor, so a critical record always
+ * shows, until a panic stops the screen's records (`klog_screen_stop`). A
  * level past `KLOG_DEBUG` is taken as `KLOG_DEBUG`, which shows what
  * `KLOG_INFO` shows, since a `KLOG_DEBUG` record is never offered to the
  * screen.

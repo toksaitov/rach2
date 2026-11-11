@@ -2,11 +2,12 @@
  * graphics_scenario.c: the graphics runners' cases (machine.webgl.json,
  * machine.video.json, machine.igt.json, machine.modetest.json,
  * machine.piglit.json, machine.glmark2.json, machine.venus.json,
- * machine.vkpresent.json and machine.games-native.json). Each boots an
- * overlay of the GNU root with a display, runs one runner of
+ * machine.vkpresent.json, machine.games-native.json and machine.virgl.json).
+ * Each boots an overlay of the GNU root with a display, runs one runner of
  * tests/graphics/runners on its case, and judges the result against the
  * Debian reference guest's stored one, with judge.py or, for the loss of
- * Venus's render server, diff, in the guest. A native game's replay has no
+ * Venus's render server, the reset of virgl's device and virgl's renderer,
+ * diff, in the guest. A native game's replay has no
  * reference in QEMU, since Linux's is taken on the Lenovo: its case plays
  * the replay's small form, which llvmpipe draws in minutes under TCG,
  * asserts that it ran through its window and keeps the frame times.
@@ -53,13 +54,44 @@
 #define VKCUBE_RUN                              \
     "sh " GRAPHICS_DIR "/runners/vkcube.sh -i " \
     "/usr/share/vulkan/icd.d/venus_icd.x86_64.json -o " GRAPHICS_DIR "/out"
-/* Before IGT and modetest, which take the card's master: stop the GNU root's
- * desktop services for the boot, as one stops the display manager on Linux
- * before IGT, since the session's Weston takes the master of a connected
- * display at a time of its own after login. The supervisor, made unrunnable
- * on the case's overlay so that init does not start it again, ends the
- * session, seatd and udevd on SIGTERM; the wait is for it and every weston
- * to exit. vkcube.sh ends the session's Weston itself. */
+/* The virgl cases' references, the testing PC's: the renderer every record
+ * names, glinfo's lines, piglit's results and its flakes, dEQP-GLES's
+ * results by suite, the WebGL pages and what the reset left; and the WebGL
+ * pages both guests leave out. */
+#define VIRGL_REF          GRAPHICS_DIR "/ref/virgl-wsl"
+#define VIRGL_PIGLIT       GRAPHICS_DIR "/piglit-virgl.txt.gz"
+#define VIRGL_FLAKES       GRAPHICS_DIR "/piglit-virgl.flakes"
+#define VIRGL_DEQP         GRAPHICS_DIR "/deqp-gles-virgl.txt.gz"
+#define VIRGL_OMIT         GRAPHICS_DIR "/runners/webgl-virgl.omit"
+/* The parts the release runs the lists in, each in a boot of its own, and
+ * the sample, every VIRGL_SAMPLEth test, that one case runs. */
+#define VIRGL_PIGLIT_PARTS 16
+#define VIRGL_GLES2_PARTS  2
+#define VIRGL_GLES3_PARTS  4
+#define VIRGL_GLES31_PARTS 4
+#define VIRGL_SAMPLE       200
+/* Fail the judging unless a `renderer` line of the run's record names the
+ * reference's renderer, virgl over the testing PC's adapter. */
+#define VIRGL_NAMED                                                            \
+    "r=$(cat " VIRGL_REF "/renderer) && { grep \"^renderer \" " GRAPHICS_DIR   \
+    "/out/record | grep -qF -- \"$r\" || "                                     \
+    "{ echo \"judge: result: fail no renderer line of the record names $r\"; " \
+    "exit 1; }; } && "
+/* Compare a file of the run with the reference's, line by line. */
+#define VIRGL_DIFF(ref, got)                                            \
+    "if diff " VIRGL_REF "/" ref " " GRAPHICS_DIR "/out/" got "; then " \
+    "echo \"judge: result: pass\"; else echo \"judge: result: fail\"; fi"
+
+/* Before IGT, modetest and virgl's device loss, which take the card's
+ * master: stop the GNU root's desktop services for the boot, as one stops
+ * the display manager on Linux before IGT, since the session's Weston takes
+ * the master of a connected display at a time of its own after login, which
+ * may be after the runner has looked for it: the runner's Weston then
+ * commits nothing ("atomic: couldn't commit new state: Permission denied").
+ * The supervisor, made unrunnable on the case's overlay so that init does
+ * not start it again, ends the session, seatd and udevd on SIGTERM; the wait
+ * is for it and every weston to exit. vkcube.sh ends the session's Weston
+ * itself. */
 #define END_DESKTOP                                                               \
     "procs() { for p in /proc/[0-9]*; do "                                        \
     "[ \"$(cat $p/comm 2>/dev/null)\" != \"$1\" ] || echo ${p#/proc/}; done; }; " \
@@ -80,7 +112,7 @@
 #define GRAPHICS_DATA "/tmp/graphics-data"
 
 /* The runners, by the family of the case's identity. */
-enum runner { WEBGL, VIDEO, IGT, MODETEST, PIGLIT, GLMARK2, VENUS, VKPRESENT, GAMES };
+enum runner { WEBGL, VIDEO, IGT, MODETEST, PIGLIT, GLMARK2, VENUS, VKPRESENT, GAMES, VIRGL };
 
 /* What one attempt shares among its steps. */
 struct graphics_case {
@@ -92,8 +124,13 @@ struct graphics_case {
     char version[8];    /* the WebGL suite's version, 1.0.4 or 2.0.1 */
     char chunk[8];      /* the chunk's number, two digits */
     char clip[48];      /* the clip's file name */
-    char test[48];      /* IGT's test program, piglit's part, Venus's case or the game */
-    int part;           /* the part of the lavapipe fraction, 1 to VENUS_PARTS */
+    char test[48];      /* IGT's test program, piglit's part, Venus's case, the
+                         * game or virgl's kind: renderer, piglit, deqp, webgl
+                         * or device-lost */
+    char suite[8];      /* a virgl dEQP case's suite: gles2, gles3 or gles31 */
+    int part;           /* the part of the lavapipe fraction, 1 to VENUS_PARTS,
+                         * or of a virgl list, 1 to its parts, 0 being the
+                         * sample */
     char password[128]; /* root's, at the console */
 };
 
@@ -170,19 +207,84 @@ static int parse_venus(struct graphics_case *s, const char *name)
 }
 
 /**
+ * Read a part's number from TEXT, `sample` or 1 to PARTS in decimal, into
+ * the case. Give 0 for another text.
+ */
+static int set_part(struct graphics_case *s, const char *text, int parts)
+{
+    char *end;
+    long n;
+
+    if (strcmp(text, "sample") == 0) {
+        s->part = 0;
+        return 1;
+    }
+    n = strtol(text, &end, 10);
+    if (text[0] < '0' || text[0] > '9' || *end != '\0' || n < 1 || n > parts)
+        return 0;
+    s->part = (int)n;
+    return 1;
+}
+
+/**
+ * Read a virgl case, NAME: `renderer`; `device-lost`; `piglit-sample` or
+ * `piglit-NN`, part NN of VIRGL_PIGLIT_PARTS of the piglit list;
+ * `deqp-SUITE-sample` or `deqp-SUITE-N`, a part of SUITE's cases, gles2,
+ * gles3 or gles31; or `webgl-` and a chunk as parse_browser reads it. Give
+ * 0 for another name.
+ */
+static int parse_virgl(struct graphics_case *s, const char *name)
+{
+    static const struct {
+        const char *suite;
+        int parts;
+    } suites[] = {
+        {"gles2", VIRGL_GLES2_PARTS}, {"gles3", VIRGL_GLES3_PARTS}, {"gles31", VIRGL_GLES31_PARTS}};
+    size_t i, n;
+
+    if (strcmp(name, "renderer") == 0 || strcmp(name, "device-lost") == 0) {
+        strcpy(s->test, name);
+    } else if (strncmp(name, "piglit-", 7) == 0) {
+        strcpy(s->test, "piglit");
+        if (!set_part(s, name + 7, VIRGL_PIGLIT_PARTS))
+            return 0;
+    } else if (strncmp(name, "deqp-", 5) == 0) {
+        strcpy(s->test, "deqp");
+        for (i = 0; i < sizeof(suites) / sizeof(suites[0]); i++) {
+            n = strlen(suites[i].suite);
+            if (strncmp(name + 5, suites[i].suite, n) == 0 && name[5 + n] == '-')
+                break;
+        }
+        if (i == sizeof(suites) / sizeof(suites[0]))
+            return 0;
+        strcpy(s->suite, suites[i].suite);
+        if (!set_part(s, name + 5 + n + 1, suites[i].parts))
+            return 0;
+    } else if (strncmp(name, "webgl-", 6) == 0) {
+        strcpy(s->test, "webgl");
+        if (!parse_browser(s, name + 6))
+            return 0;
+    } else {
+        return 0;
+    }
+    strcpy(s->profile, "virgl");
+    return 1;
+}
+
+/**
  * Read the case from the last part of its identity, after its family:
  * webgl's and video's as parse_browser says; igt's TEST-PROFILE, IGT's test
  * program TEST, whose name has no dash, on PROFILE; modetest's PROFILE;
  * piglit's PART, on virtio-vga; glmark2's `wayland`, on virtio-vga;
- * venus's as parse_venus says; vkpresent's `vkcube`, on venus; and
- * games-native's `supertuxkart` or `0ad`, on virtio-vga. Give 0 for an
- * identity of no such form.
+ * venus's as parse_venus says; vkpresent's `vkcube`, on venus;
+ * games-native's `supertuxkart` or `0ad`, on virtio-vga; and virgl's as
+ * parse_virgl says. Give 0 for an identity of no such form.
  */
 static int parse(struct graphics_case *s, const char *id)
 {
-    static const char *const families[] = {".webgl.",    ".video.",     ".igt.",
-                                           ".modetest.", ".piglit.",    ".glmark2.",
-                                           ".venus.",    ".vkpresent.", ".games-native."};
+    static const char *const families[] = {".webgl.",        ".video.",   ".igt.",   ".modetest.",
+                                           ".piglit.",       ".glmark2.", ".venus.", ".vkpresent.",
+                                           ".games-native.", ".virgl."};
     const char *name = strrchr(id, '.'), *dash;
     size_t i, n;
 
@@ -226,6 +328,8 @@ static int parse(struct graphics_case *s, const char *id)
             return 0;
         strcpy(s->test, name);
         return set_profile(s, "virtio-vga");
+    case VIRGL:
+        return parse_virgl(s, name);
     }
     return 0;
 }
@@ -310,15 +414,17 @@ static void stage(struct graphics_case *s)
 /**
  * Write the runner's command line for the case to `runner`, and the line
  * that begins its result to `*pattern`. Give 1 when the runner runs as
- * root, IGT, modetest and vkcube, which take the card's master, and 0 when
- * it runs as the test account.
+ * root, IGT, modetest and vkcube, which take the card's master, and virgl's
+ * device-lost, which resets the device, and 0 when it runs as the test
+ * account.
  */
 static int runner_line(struct graphics_case *s, char *runner, size_t size, const char **pattern)
 {
     static const char *const results[] = {
-        "webgl: result: ",    "video: result: ",  "igt: result: ",
-        "modetest: result: ", "piglit: result: ", "glmark2: result: ",
-        "deqp: result: ",     "vkcube: result: ", "games: result: "};
+        "webgl: result: ",  "video: result: ",   "igt: result: ",  "modetest: result: ",
+        "piglit: result: ", "glmark2: result: ", "deqp: result: ", "vkcube: result: ",
+        "games: result: ",  "virgl: result: "};
+    int every = s->part == 0 ? VIRGL_SAMPLE : 0;
 
     *pattern = results[s->runner];
     switch (s->runner) {
@@ -370,16 +476,49 @@ static int runner_line(struct graphics_case *s, char *runner, size_t size, const
                  " -o " GRAPHICS_DIR "/out %s",
                  s->test);
         return 0;
+    case VIRGL:
+        if (strcmp(s->test, "renderer") == 0) {
+            *pattern = "glinfo: result: ";
+            snprintf(runner, size, "sh " GRAPHICS_DIR "/runners/glinfo.sh -o " GRAPHICS_DIR "/out");
+        } else if (strcmp(s->test, "device-lost") == 0) {
+            *pattern = "virgl-lost: result: ";
+            snprintf(runner, size,
+                     "sh " GRAPHICS_DIR "/runners/virgl-lost.sh -o " GRAPHICS_DIR "/out");
+            return 1;
+        } else if (strcmp(s->test, "piglit") == 0) {
+            *pattern = "piglit: result: ";
+            snprintf(runner, size,
+                     "sh " GRAPHICS_DIR "/runners/piglit.sh -g -o " GRAPHICS_DIR
+                     "/out -l " VIRGL_PIGLIT " -e %d -s %d",
+                     every != 0 ? every : VIRGL_PIGLIT_PARTS, every != 0 ? 1 : s->part);
+        } else if (strcmp(s->test, "deqp") == 0) {
+            int parts = strcmp(s->suite, "gles2") == 0   ? VIRGL_GLES2_PARTS
+                        : strcmp(s->suite, "gles3") == 0 ? VIRGL_GLES3_PARTS
+                                                         : VIRGL_GLES31_PARTS;
+
+            *pattern = "deqp: result: ";
+            snprintf(runner, size,
+                     "sh " GRAPHICS_DIR "/runners/deqp.sh -v 1.4.1.1 -o " GRAPHICS_DIR
+                     "/out -e %d -s %d -l " VIRGL_DEQP " %s" VENUS_SUMMARY,
+                     every != 0 ? every : parts, every != 0 ? 1 : s->part, s->suite);
+        } else {
+            *pattern = "webgl: result: ";
+            snprintf(runner, size,
+                     "sh " GRAPHICS_DIR "/runners/webgl.sh -g -b %s -v %s -x " VIRGL_OMIT
+                     " -o " GRAPHICS_DIR "/out %s",
+                     s->browser, s->version, s->chunk);
+        }
+        return 0;
     }
     return 0;
 }
 
 /**
  * Run the runner, as root, once the desktop services have stopped
- * (END_DESKTOP) for IGT and modetest, or as the test account, with the
- * environment of a Done's run of its class, performance for glmark2, vkcube
- * and the games and conformance for the others, assert that it ran its
- * whole case, and print what it printed.
+ * (END_DESKTOP) for IGT, modetest and virgl's device loss, or as the test
+ * account, with the environment of a Done's run of its class, performance
+ * for glmark2, vkcube and the games and conformance for the others, assert
+ * that it ran its whole case, and print what it printed.
  */
 static void run(struct graphics_case *s)
 {
@@ -396,7 +535,8 @@ static void run(struct graphics_case *s)
              runner);
     if (root)
         snprintf(command, sizeof(command), "%s%s",
-                 s->runner == IGT || s->runner == MODETEST ? END_DESKTOP : "", env);
+                 s->runner == IGT || s->runner == MODETEST || s->runner == VIRGL ? END_DESKTOP : "",
+                 env);
     else
         snprintf(command, sizeof(command), "su -s /bin/sh test -c '%s'", env);
     if (net_step(&s->u, "run") == ETUDE_OK)
@@ -526,6 +666,34 @@ static void judge_line(struct graphics_case *s, char *command, size_t size)
                        "d " VENUS_REF "/smoke/vulkaninfo.out > /tmp/vk.ref && "
                        "d " GRAPHICS_DIR "/out/vulkaninfo.out > /tmp/vk.out && "
                        "grep -q 'Virtio-GPU Venus' /tmp/vk.out && diff /tmp/vk.ref /tmp/vk.out");
+        break;
+    case VIRGL:
+        /* Each case's record names the reference's renderer; the renderer
+         * case's lines and what the reset left are the Debian guest's. */
+        command -= n;
+        size += (size_t)n;
+        if (strcmp(s->test, "renderer") == 0)
+            snprintf(command, size, VIRGL_NAMED VIRGL_DIFF("glinfo/renderers", "renderers"));
+        else if (strcmp(s->test, "device-lost") == 0)
+            snprintf(command, size, VIRGL_NAMED VIRGL_DIFF("lost/lost.txt", "lost.txt"));
+        else if (strcmp(s->test, "piglit") == 0)
+            snprintf(command, size,
+                     VIRGL_NAMED "python3 -I " GRAPHICS_DIR "/runners/judge.py results " VIRGL_REF
+                                 "/piglit/piglit-virgl.results.gz " GRAPHICS_DIR
+                                 "/out/piglit-virgl.results " GRAPHICS_DIR
+                                 "/out/piglit-virgl.sample " VIRGL_FLAKES);
+        else if (strcmp(s->test, "deqp") == 0)
+            snprintf(command, size,
+                     VIRGL_NAMED "python3 -I " GRAPHICS_DIR "/runners/judge.py deqp " VIRGL_REF
+                                 "/deqp/%s.csv.gz " GRAPHICS_DIR "/out/results.csv.gz " GRAPHICS_DIR
+                                 "/out/flakes",
+                     s->suite);
+        else
+            snprintf(command, size,
+                     VIRGL_NAMED "python3 -I " GRAPHICS_DIR "/runners/judge.py webgl " VIRGL_REF
+                                 "/webgl-%s-%s/%s-%s-%s.pages " GRAPHICS_DIR "/out/%s-%s-%s.pages",
+                     s->browser, s->version, s->browser, s->version, s->chunk, s->browser,
+                     s->version, s->chunk);
         break;
     }
 }

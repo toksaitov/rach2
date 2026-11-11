@@ -1,0 +1,1 @@
+qemu-system-x86_64: -device vfio-pci,host=0000:00:02.0,bus=pcie.0,addr=02.0,x-igd-opregion=on: warning: vfio 0000:00:02.0: Could not enable error recovery for the device

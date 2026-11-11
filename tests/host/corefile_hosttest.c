@@ -1,6 +1,7 @@
 /**
  * corefile_hosttest.c: the core file `fs_core_file` writes, its descriptor
- * and its limit, and the limit of an append that brings its buffer in again.
+ * and its limit, the limit of an append that brings its buffer in again,
+ * and the SIGPIPE of a writev to a TCP stream.
  *
  * host-deps: tests/host/compat/vfs_name_none.c tests/host/compat/devtree_none.c
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
@@ -31,9 +32,15 @@
  *
  * The append rows call `file_write_pieces` as a type that sets
  * `file_locked` has it, with the file's lock held: the model's first write
- * moves a few bytes and the rest of the buffer is not resident, and while
- * it is brought in with the lock let go another writer moves the file's end
- * to the limit or near it, so the rest must be cut again to RLIMIT_FSIZE.
+ * moves a few bytes and the rest of the buffer is not resident. The call
+ * must end short without releasing the lock. Only a call that moved no
+ * byte may bring the buffer in with the lock let go; another writer then
+ * moves the end, so the resumed append must check RLIMIT_FSIZE again.
+ *
+ * The writev row writes a vector of two elements to a TCP stream whose
+ * model send takes the first and fails the second with EPIPE: the call
+ * returns the first's count and posts no SIGPIPE, which only a failure of
+ * the first element posts. Its user pointers are the host's.
  */
 #include "isr.h"
 #include "lib/kuser.h"
@@ -49,8 +56,8 @@ static void fd_holds_release(void);
 static long sys_ftruncate(isr_params_t *params);
 static long ksys_ftruncate(int fd, long long length);
 static long ksys_truncate(const char __user *upath, long long length);
-static long ksys_pread64(int fd, char __user *buf, uint32_t count, long long pos);
-static long ksys_pwrite64(int fd, const char __user *buf, uint32_t count, long long pos);
+static long ksys_pread64(int fd, char __user *buf, size_t count, long long pos);
+static long ksys_pwrite64(int fd, const char __user *buf, size_t count, long long pos);
 static long ksys_fadvise64(int fd, long long len, uint32_t advice);
 static long ksys_fallocate(int fd, uint32_t mode, uint64_t offset, uint64_t len);
 static long sys_write(isr_params_t *params);
@@ -77,6 +84,7 @@ static long sys_mount(isr_params_t *params);
 static long sys_umount2(isr_params_t *params);
 static long sys_open(isr_params_t *params);
 static long sys_openat(isr_params_t *params);
+static long sys_openat2(isr_params_t *params);
 static long sys_close(isr_params_t *params);
 static long sys_fsync(isr_params_t *params);
 static long sys_fdatasync(isr_params_t *params);
@@ -89,8 +97,9 @@ static long sys_pread64(isr_params_t *params);
 static long sys_pwrite64(isr_params_t *params);
 static long sys_preadv(isr_params_t *params);
 static long sys_pwritev(isr_params_t *params);
-static int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, net_addr_t *src_ip,
-                           uint16_t *src_port, int peek, int32_t *whole);
+struct kernel_iovec;
+static int32_t readv_dgram(fd_entry_t *entry, const struct kernel_iovec *iov, int iovcnt,
+                           net_addr_t *src_ip, uint16_t *src_port, int peek, int32_t *whole);
 static long sys_readv(isr_params_t *params);
 static long sys_dup(isr_params_t *params);
 static long sys_dup2(isr_params_t *params);
@@ -109,6 +118,9 @@ static long sys_statfs(isr_params_t *params);
 static long sys_fstatfs(isr_params_t *params);
 static long sys_statfs64(isr_params_t *params);
 static long sys_fstatfs64(isr_params_t *params);
+static int ksys_ustat_counts(uint32_t dev, uint64_t *bfree, uint64_t *ffree);
+static long sys_ustat(isr_params_t *params);
+static long sys_sysfs(isr_params_t *params);
 static long sys_fstat64(isr_params_t *params);
 static long sys_fstatat64(isr_params_t *params);
 static long sys_access(isr_params_t *params);
@@ -141,10 +153,17 @@ static long sys_renameat2(isr_params_t *params);
 static void get_current_time(int64_t *seconds, int64_t *nanoseconds);
 static long sys_utimensat(isr_params_t *params);
 static long sys_utimensat_time64(isr_params_t *params);
+static long ksys_getdents32(int fd, uintptr_t buf, uint32_t count, int old);
+static long ksys_sync_file_range(int fd, int64_t off, int64_t len, uint32_t flags);
+static long sys_sync_file_range(isr_params_t *params);
+static long sys_preadv2(isr_params_t *params);
+static long sys_pwritev2(isr_params_t *params);
 static long sys_getdents64(isr_params_t *params);
 static long sys_dup3(isr_params_t *params);
 static long sys_statx(isr_params_t *params);
 static long sys_memfd_create(isr_params_t *params);
+static long sys_memfd_secret(isr_params_t *params);
+static long sys_cachestat(isr_params_t *params);
 static long sys_flock(isr_params_t *params);
 static long sys_close_range(isr_params_t *params);
 static long sys_mknod(isr_params_t *params);
@@ -553,6 +572,34 @@ int user_buffer_ok(uintptr_t addr, size_t len, int write)
     return 1;
 }
 
+/** A user range of the model lies in user memory. */
+int user_access_ok(uintptr_t addr, size_t len)
+{
+    (void)addr;
+    (void)len;
+    return 1;
+}
+
+/** Nothing: no row writes to the console, whose writes yield here. */
+void sched_service_point(void)
+{}
+
+/** A user range of the model ends in user space. */
+int user_span_ok(uintptr_t addr, size_t len)
+{
+    (void)addr;
+    (void)len;
+    return 1;
+}
+
+/** No PCI function of /sys exists, so none has a BAR. */
+uint64_t sysfs_pci_bar_size(int key, int bar)
+{
+    (void)key;
+    (void)bar;
+    return 0;
+}
+
 /** Every page of a model buffer is present, but for an append row's until
  * it is brought in. */
 int vm_resident(uintptr_t addr, uintptr_t len, int write)
@@ -578,13 +625,17 @@ int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
     return 1;
 }
 
-/** No row copies from a user buffer: -1. */
+static int host_copies; /* nonzero while a row's user pointers are the host's */
+
+/** Copy from a host pointer while `host_copies` is set, as the writev row's
+ * vector is; no other row copies from a user buffer: 0 or -1. */
 int copy_from_user(void *dst, const void __user *src, size_t n)
 {
-    (void)dst;
-    (void)src;
-    (void)n;
-    return -1;
+    if (!host_copies) {
+        return -1;
+    }
+    k_memcpy(dst, (const void __force *)src, n);
+    return 0;
 }
 
 /** No row copies to a user buffer: -1. */
@@ -692,6 +743,13 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 volatile uint32_t fb_owner_pid;
 struct tty console_tty;
 
+/** No description of the model's console is hung up. */
+int fd_tty_hung(fd_entry_t *e)
+{
+    (void)e;
+    return 0;
+}
+
 /** No row opens the framebuffer: -EBUSY. */
 int32_t fb_take(struct fd_entry *e)
 {
@@ -791,6 +849,27 @@ int devfs_fd_moves_offset(struct fd_entry *e)
     return 0;
 }
 
+/** No row's descriptor is /dev/mem: 0. */
+int devfs_fd_is_mem(struct fd_entry *e)
+{
+    (void)e;
+    return 0;
+}
+
+/** No row's descriptor is a device that seeks to 0: 0. */
+int devfs_lseek_zero(struct fd_entry *e)
+{
+    (void)e;
+    return 0;
+}
+
+/** No row opens a /proc/PID/mem: 0. */
+int procfs_is_mem(const struct fd_entry *e)
+{
+    (void)e;
+    return 0;
+}
+
 /** No pseudo-terminal: NULL. */
 struct pty *pty_get(int index)
 {
@@ -824,14 +903,33 @@ void socket_unref(struct socket *sock)
     (void)sock;
 }
 
-/** No row writes to a TCP socket: -EBADF. */
+/* The writev row's: what `socket_tcp_send` answers to each call, the bytes
+ * sent or -errno, the calls made, and the SIGPIPEs `sock_stream_sent` would
+ * post. */
+static int32_t stream_answer[2];
+static int stream_sends, sigpipes;
+
+/** Count the SIGPIPE a TCP send's EPIPE posts when `post` is set: `rc`. */
+int32_t sock_stream_sent(int32_t rc, int post)
+{
+    sigpipes += rc == -EPIPE && post;
+    return rc;
+}
+
+/** Answer the writev row's next call from `stream_answer`, no more than
+ * `len` bytes, and -EPIPE past its two. */
 int socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblock)
 {
+    int32_t answer;
+
     (void)sock;
     (void)buf;
-    (void)len;
     (void)nonblock;
-    return -EBADF;
+    if (stream_sends >= 2) {
+        return -EPIPE;
+    }
+    answer = stream_answer[stream_sends++];
+    return answer > len ? len : answer;
 }
 
 /** No row writes to a datagram socket: -EBADF. */
@@ -852,6 +950,14 @@ int tty_is_background(struct tty *t, int sid, int pgid)
     (void)t;
     (void)sid;
     (void)pgid;
+    return 0;
+}
+
+/** No process of a row is in the background, so none is stopped: 0. */
+int tty_job_check(struct tty *t, int signo)
+{
+    (void)t;
+    (void)signo;
     return 0;
 }
 
@@ -974,6 +1080,17 @@ uint32_t procfs_ino_pid(int pid)
     return 0;
 }
 
+/** The owner of a node of a process under /proc, which no row reads:
+ * -ENOENT. */
+int procfs_pid_owner(int pid, uint32_t mode, uint32_t *uid, uint32_t *gid)
+{
+    (void)pid;
+    (void)mode;
+    (void)uid;
+    (void)gid;
+    return -ENOENT;
+}
+
 /* The descriptor, process and mount lookups of fstat and of a descriptor's
  * path, which no row reaches: GCC keeps their callers, so a link needs
  * them. */
@@ -999,6 +1116,25 @@ int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid)
     (void)uid;
     (void)gid;
     return -ENOENT;
+}
+
+/** No row's descriptor is a /proc file, so a lookup has no owner to set. */
+void procfs_lookup_owner(const struct vpath *vp)
+{
+    (void)vp;
+}
+
+/** No row's descriptor is of /proc, so an open keeps no owner. */
+void procfs_owner_keep(struct synth_owner *o, const struct vpath *vp)
+{
+    (void)o;
+    (void)vp;
+}
+
+/** No row's descriptor is of /proc, so a close has no kept owner to drop. */
+void procfs_owner_drop(struct synth_owner *o)
+{
+    (void)o;
 }
 
 /** No row's descriptor is a /proc file: -1. */
@@ -1653,14 +1789,16 @@ static void trailing_zero_limit(void)
  * Append 32 bytes as a type that sets `file_locked` does, with the file's
  * lock held and RLIMIT_FSIZE at APPEND_LIMIT: the first write moves
  * `first` bytes, and while the rest is brought in another writer makes the
- * file `grown` bytes long. Returns what `file_write_pieces` answered.
+ * file `grown` bytes long, but only when no byte moved. Return the write's
+ * result; a completed prefix must not release the lock to fault. With
+ * `previous`, write an eight-byte element first using the same state.
  */
-static int32_t append_across_refault(uint32_t first, uint32_t grown)
+static int32_t append_across_refault(uint32_t first, uint32_t grown, int previous)
 {
     static const char buf[32] = "the bytes of an appending write";
     struct open_file ofd;
     fd_entry_t entry;
-    struct vfs_ref ref;
+    struct file_write_state state;
     unsigned long was = self.rlim[RLIM_FSIZE].cur;
     uint64_t pos = 0;
     int32_t n;
@@ -1672,41 +1810,55 @@ static int32_t append_across_refault(uint32_t first, uint32_t grown)
     ofd.fhandle = &core_node;
     ofd.status_flags = OFD_APPEND;
     entry.ofd = &ofd;
-    ref.mnt = &mount;
-    ref.node = &core_node;
+    state.file.mnt = &mount;
+    state.file.node = &core_node;
+    state.own = 1;
+    state.append = 1;
+    state.moved = 0;
+    if (previous) {
+        vfs_node_lock(&state.file);
+        n = file_write_pieces(&entry, &state, 0, (const char __user *)buf, 8, &pos);
+        vfs_node_unlock(&state.file);
+        check(n == 8 && state.moved, "the first vector element wrote eight bytes");
+    }
     write_cap = (int32_t)first;
     grown_len = grown;
     self.rlim[RLIM_FSIZE].cur = APPEND_LIMIT;
-    vfs_node_lock(&ref);
-    n = file_write_pieces(&entry, &ref, 0, (const char __user *)buf, sizeof(buf), &pos);
-    vfs_node_unlock(&ref);
+    vfs_node_lock(&state.file);
+    n = file_write_pieces(&entry, &state, 0, (const char __user *)buf, sizeof(buf), &pos);
+    vfs_node_unlock(&state.file);
     self.rlim[RLIM_FSIZE].cur = was;
-    check(grown_len == 0, "the append brought its buffer in once");
+    check(grown_len == (first || previous ? grown : 0),
+          "only an append that moved no byte released the lock to fault");
     return n;
 }
 
 /**
- * An append whose buffer is brought in again, while another writer moves the
- * file's end, writes no byte past RLIMIT_FSIZE: the rest is cut to what fits
- * from the new end, the write stops at an end at the limit with the bytes it
- * moved, and one that moved none answers EFBIG.
+ * A buffer fault after bytes moved ends the append without letting another
+ * writer in. A fault before any bytes moved may release the lock, and the
+ * resumed append must check the new end against RLIMIT_FSIZE.
  */
 static void append_refault_limit(void)
 {
     row_begin();
-    check(append_across_refault(APPEND_FIRST, APPEND_LIMIT - 4u) == (int32_t)APPEND_FIRST + 4,
-          "an append retried near the limit writes what fits from the new end");
-    check(file_len == APPEND_LIMIT, "and the file ends at the limit");
+    check(append_across_refault(APPEND_FIRST, APPEND_LIMIT - 4u, 0) == (int32_t)APPEND_FIRST,
+          "an append ends before faulting after bytes moved");
+    check(file_len == APPEND_FIRST, "and no other writer entered the call");
     row_end();
     row_begin();
-    check(append_across_refault(APPEND_FIRST, APPEND_LIMIT) == (int32_t)APPEND_FIRST,
-          "an append retried at the limit answers the bytes it moved");
-    check(file_len == APPEND_LIMIT, "and writes no byte past it");
+    check(append_across_refault(0, APPEND_LIMIT - 4u, 0) == 4,
+          "an append that moved no byte resumes at the new end and writes what fits");
+    check(file_len == APPEND_LIMIT, "and stops at the limit");
     row_end();
     row_begin();
-    check(append_across_refault(0, APPEND_LIMIT) == -EFBIG,
+    check(append_across_refault(0, APPEND_LIMIT, 0) == -EFBIG,
           "an append that moved no byte before the end reached the limit is EFBIG");
     check(file_len == APPEND_LIMIT, "and writes nothing");
+    row_end();
+    row_begin();
+    check(append_across_refault(0, APPEND_LIMIT, 1) == -EFAULT,
+          "a later element cannot release the lock after the first wrote");
+    check(file_len == 8, "and the vector keeps only its first element");
     row_end();
 }
 
@@ -1722,6 +1874,45 @@ void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
     (void)t;
     (void)signo;
     (void)info;
+}
+
+/**
+ * A writev to a TCP stream posts SIGPIPE only for an error it returns, as
+ * Linux's tcp_sendmsg returns what it copied: one whose first element goes
+ * and whose second fails with EPIPE returns the first's count with no
+ * signal, and one whose first fails posts it.
+ */
+static void stream_writev(void)
+{
+    static uint8_t bytes[8];
+    struct kernel_iovec v[2];
+    struct socket s;
+    int fd = 5;
+
+    row_begin();
+    k_memset(&s, 0, sizeof(s));
+    s.type = SOCK_STREAM;
+    check(fd < files.cap, "the table has a descriptor 5");
+    files.entries[fd].type = FD_TYPE_SOCKET;
+    files.entries[fd].sock = &s;
+    v[0].iov_base = (uintptr_t)bytes;
+    v[0].iov_len = 4;
+    v[1].iov_base = (uintptr_t)(bytes + 4);
+    v[1].iov_len = 4;
+    host_copies = 1;
+    stream_answer[0] = 4;
+    stream_answer[1] = -EPIPE;
+    stream_sends = sigpipes = 0;
+    check(writev_elements(fd, (uintptr_t)v, 2, 8) == 4 && stream_sends == 2 && sigpipes == 0,
+          "a writev whose second element fails returns the first's count with no SIGPIPE");
+    stream_answer[0] = -EPIPE;
+    stream_sends = 0;
+    check(writev_elements(fd, (uintptr_t)v, 2, 8) == -EPIPE && sigpipes == 1,
+          "a writev whose first element fails with EPIPE posts SIGPIPE");
+    host_copies = 0;
+    files.entries[fd].type = FD_TYPE_NONE;
+    files.entries[fd].sock = NULL;
+    row_end();
 }
 
 /**
@@ -1754,9 +1945,11 @@ int main(void)
     sharer_finds_no_descriptor();
     trailing_zero_limit();
     append_refault_limit();
+    stream_writev();
     if (!failures) {
         printf("corefile-hosttest: result: pass: the core file's descriptor, its trailing "
-               "zero under the limit, and an append's limit across a refault\n");
+               "zero under the limit, an append's limit across a refault, and a writev's "
+               "SIGPIPE\n");
     }
     return failures != 0;
 }

@@ -1,0 +1,151 @@
+.Dd November 11, 2026
+.Dt NETCONSOLE 4
+.Os
+.Sh NAME
+.Nm netconsole
+.Nd kernel log over the network
+.Sh SYNOPSIS
+.Sy netconsole Ns = Ns Oo Cm + Oc Ns Oo Cm r Oc Ns Oo Ar src-port Oc Ns Cm @ Ns Oo Ar src-ip Oc Ns Cm / Ns Oo Ar dev Oc Ns Cm \&, Ns Oo Ar tgt-port Oc Ns Cm @ Ns Ar tgt-ip Ns Cm / Ns Op Ar tgt-macaddr
+.Pp
+.Sy rach2.netconsole
+.Sh DESCRIPTION
+The kernel sends the records of its log over the network, so that a
+machine with no serial port leaves a record of its boot and of a panic
+on another machine.
+Every record from the first of the boot is sent, those written before
+the network card started among them: the kernel keeps 32767 characters
+of log until they are sent and drops the newest records whole when that
+store is full.
+A card is sent nothing until its link has been up for two seconds,
+since frames sent the moment a link comes up can be lost beyond the
+card; a kernel that panics sends at once.
+The records are sent by calling the card's transmit with interrupts
+off, which waits for the card by polling and not for an interrupt, so
+the record of a panic goes out too.
+What the debug shell prints is not a record and is not sent.
+.Ss UDP targets
+The boot option
+.Sy netconsole=
+gives one or more targets, separated by
+.Ql \&; ,
+in the form Linux's netconsole reads.
+Each record goes to each target as one UDP datagram, from
+.Ar src-ip
+port
+.Ar src-port
+to
+.Ar tgt-ip
+port
+.Ar tgt-port ,
+through the interface
+.Ar dev ,
+in an Ethernet frame to the station address
+.Ar tgt-macaddr .
+The defaults are Linux's: source port 6665, target port 6666, the
+interface
+.Ql eth0 ,
+and the broadcast station address, which needs no address resolution.
+.Ar dev
+is an interface name, or a station address written with colons.
+.Ar src-ip
+and
+.Ar tgt-ip
+are both IPv4 or both IPv6.
+Without
+.Ar src-ip ,
+a datagram is sent from the interface's first IPv4 address or, for
+IPv6, from its first address whose link-local scope matches
+.Ar tgt-ip Ns 's ,
+taken when it is sent; until the interface has one, the records wait.
+Linux refuses such a target instead.
+.Pp
+Each datagram holds one record, a line as
+.Xr dmesg 1
+shows it:
+.Bd -literal -offset indent
+<6>[0.083000] net: eth0: IPv6 fe80::5054:ff:fe12:3456/64 added
+.Ed
+.Pp
+A line longer than 1000 characters goes in pieces of 1000.
+A leading
+.Cm +
+sends Linux's extended form instead:
+.Ql level,seq,usec,flags;text ,
+where
+.Ar seq
+counts the records sent to the target from 0,
+.Ar usec
+is the record's time since boot in microseconds,
+.Ar flags
+is
+.Ql -
+or
+.Ql c
+for a piece of a longer line after its first, and each byte of
+.Ar text
+below a space, from 127 up, and the backslash is written
+.Ql \exNN .
+An extended message longer than 1000 bytes is sent in pieces, each with
+.Ql ,ncfrag=OFFSET/TOTAL
+before its
+.Ql \&; .
+.Cm r
+after
+.Cm +
+puts the kernel's release and a comma before each message.
+.Pp
+A target that cannot be read, or whose interface does not exist, is
+logged and left out; the others are kept.
+Of several
+.Sy netconsole=
+options, the last is read.
+GRUB's script reads
+.Ql \&;
+as the end of a command, so a line with two targets quotes the option.
+.Ss Broadcast frames
+The boot option
+.Sy rach2.netconsole
+sends the records below IP, in broadcast Ethernet frames of type
+0x88b5, so that it needs no address and works while the address
+configuration is wrong.
+A frame holds up to 512 characters of log after a 16-byte header: the
+magic
+.Ql RCH2 ,
+a boot identifier, a sequence number, the length and a checksum, all
+big-endian.
+Only a packet socket receives them, which needs root.
+The frames use the first interface.
+Both options may be given; each form is sent the whole log.
+.Sh EXAMPLES
+Send the log of the machine at 192.168.0.106 to port 6666 of
+192.168.0.100:
+.Dl netconsole=6665@192.168.0.106/,6666@192.168.0.100/
+.Pp
+Keep it there, as an ordinary user:
+.Dl nc -lu 6666 > boot.log
+.Pp
+Send the extended form to an IPv6 host on the link through
+.Ql eth1 :
+.Dl netconsole=+@/eth1,@fe80::1/
+.Sh DIAGNOSTICS
+The kernel logs each target it takes as
+.Ql netconsole: udp: SRC-PORT@SRC-IP/DEV,TGT-PORT@TGT-IP/TGT-MACADDR ,
+then
+.Ql netconsole: started: network logging, targets N ,
+and a target it leaves out as
+.Ql netconsole: refused: cannot read the target at 'TEXT'
+or
+.Ql netconsole: refused: DEV: no such card .
+.Sh SEE ALSO
+.Xr dmesg 1 ,
+.Xr nc 1 ,
+.Xr bootlog 4 ,
+.Xr console 4
+.Sh STANDARDS
+The option follows Linux 6.12's
+.Pa Documentation/networking/netconsole.rst .
+Targets cannot be added or changed while the machine runs, which Linux
+does through configfs.
+.Sh BUGS
+Neither form is acknowledged: a datagram or frame lost on the wire is
+lost.

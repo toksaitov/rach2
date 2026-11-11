@@ -139,6 +139,12 @@ void klog(int level, const char *subsystem, const char *format, ...)
         resume_errors++;
 }
 
+/** No run queue: the model's suspends hold no thread's wait. */
+void sched_hold_waits(int hold)
+{
+    (void)hold;
+}
+
 /** The modeled wait queue needs no allocation or scheduler. */
 void wait_queue_init(wait_queue_t *wq)
 {

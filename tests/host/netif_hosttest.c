@@ -2,8 +2,9 @@
  * Exercise the socket address and option handlers with two interfaces, a
  * stream's keepalive options, the creation flags of socket and accept4, an
  * accept the heap has no room to give a descriptor, a recvfrom given an address
- * and no length pointer, and the descriptor accept reserves while it copies the
- * peer's address.
+ * and no length pointer, the descriptor accept reserves while it copies the
+ * peer's address, and the receive lock a stream read holds while it brings in
+ * a destination.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/network/socket/address.c
@@ -39,6 +40,9 @@ static long sys_socket(isr_params_t *params);
 static long sys_socketpair(isr_params_t *params);
 struct kernel_msghdr;
 struct kernel_cmsghdr;
+struct kernel_iovec;
+static int32_t stream_readv(struct fd_entry *entry, const struct kernel_iovec *iov, uint32_t iovlen,
+                            int flags);
 static int socketcall_nargs(int call);
 static int32_t socket_call(int call, unsigned long *args);
 static long sys_recvmmsg_time64(isr_params_t *params);
@@ -83,6 +87,20 @@ static fd_entry_t table[8];
 static struct open_file made_description;
 static void (*copy_sleep)(void); /* run once by the next copy in */
 static int sibling_found = -1;   /* what close_four found, or -1 */
+static int thread = 1;           /* the thread the model runs as */
+
+/* A stream's queued bytes, for the receive lock's row: `ends` of `count`
+ * receive buffers, as offsets into `bytes`, of which `head` are read. While
+ * `on` is clear the stream stubs answer as for the rows before it. */
+static struct {
+    int on;
+    const char *bytes;
+    uint32_t ends[4], count, head, tail;
+    uintptr_t fault_at;  /* the destination whose first check misses */
+    uintptr_t other_buf; /* the competing reader's destination */
+    int other_waited;    /* the competing reader found the lock held */
+    int32_t other_took;  /* what the competing reader read, if it ran */
+} stream;
 
 #define CHECK(condition, detail)                          \
     do {                                                  \
@@ -319,20 +337,168 @@ int socket_try_recv(struct socket *s, uint8_t *buf, int len, net_addr_t *src_ip,
     return socket_recv(s, buf, len, src_ip, src_port, peek);
 }
 
-/** Receive one byte of a stream and count the receive unless it is a peek. */
+/** Receive one byte of a stream and count the receive unless it is a peek;
+ * with `stream` on, report the stream's queued bytes as ready. */
 int socket_tcp_recv(struct socket *s, uint8_t *buf, int len, int peek)
 {
     (void)s;
     (void)buf;
     (void)len;
+    if (stream.on) {
+        CHECK(stream.head < stream.tail, "no row waits for stream data");
+        return 0;
+    }
     takes += peek ? 0 : 1;
     return 1;
 }
 
-/** Receive from a stream without waiting, as socket_tcp_recv does. */
+/** Receive from a stream without waiting, as socket_tcp_recv does; with
+ * `stream` on, take up to `len` of its bytes into the user offset `buf`, or
+ * SOCK_EAGAIN when none is queued. */
 int socket_tcp_try_recv(struct socket *s, uint8_t *buf, int len, int peek)
 {
-    return socket_tcp_recv(s, buf, len, peek);
+    uint32_t n;
+
+    if (!stream.on) {
+        return socket_tcp_recv(s, buf, len, peek);
+    }
+    if (stream.head == stream.tail) {
+        return SOCK_EAGAIN;
+    }
+    n = stream.tail - stream.head;
+    if (n > (uint32_t)len) {
+        n = (uint32_t)len;
+    }
+    k_memcpy(user + (uintptr_t)buf, stream.bytes + stream.head, n);
+    if (!peek) {
+        stream.head += n;
+    }
+    return (int)n;
+}
+
+/** Report the stream's queued bytes, none before the receive lock's row. */
+uint32_t socket_tcp_queued(const struct socket *s)
+{
+    (void)s;
+    return stream.on ? stream.tail - stream.head : 0;
+}
+
+/** Report the bytes of the receive buffer `off` bytes past the stream's
+ * next unread one, to that buffer's end, or 0 past the queue. */
+uint32_t socket_tcp_buffer(struct socket *s, uint32_t off)
+{
+    uint32_t at = stream.head + off, i;
+
+    (void)s;
+    if (!stream.on || at >= stream.tail) {
+        return 0;
+    }
+    i = 0;
+    while (i < stream.count && stream.ends[i] <= at) {
+        i++;
+    }
+    return i < stream.count ? stream.ends[i] - at : stream.tail - at;
+}
+
+/** Report the input ended, so that a receive returns what it took. */
+int socket_tcp_wait_more(struct socket *s, uint32_t have)
+{
+    (void)s;
+    (void)have;
+    return 0;
+}
+
+/** Copy nothing: no stream bytes are queued. */
+int socket_tcp_peek_at(struct socket *s, uint32_t off, uint8_t *buf, int len)
+{
+    (void)s;
+    (void)off;
+    (void)buf;
+    (void)len;
+    return 0;
+}
+
+/** Report whether a user range lies inside `user`, as `user_buffer_ok`. */
+int user_range_ok(uintptr_t addr, size_t len)
+{
+    return user_buffer_ok(addr, len, 1);
+}
+
+/** Report whether the user range a stream receive checks first lies inside
+ * `user`, as `user_buffer_ok`. */
+int user_span_ok(uintptr_t addr, size_t len)
+{
+    return user_buffer_ok(addr, len, 1);
+}
+
+/** Report every page of `user` present, but for `stream.fault_at` the
+ * first time it is asked about. */
+int vm_resident(uintptr_t addr, uintptr_t len, int write)
+{
+    (void)len;
+    (void)write;
+    if (stream.fault_at && addr == stream.fault_at) {
+        stream.fault_at = 0;
+        return 0;
+    }
+    return 1;
+}
+
+/** Bring in a range of `user`, during which, while the receive lock's row
+ * has a competing reader, that reader, thread 2, reads four bytes of the
+ * stream when the lock is free, as it could while the first reader sleeps
+ * in the fault, or else is counted as waiting for it. */
+int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
+{
+    struct kernel_iovec other;
+
+    (void)addr;
+    (void)len;
+    (void)write;
+    if (stream.on && stream.other_buf) {
+        other.iov_base = stream.other_buf;
+        other.iov_len = 4;
+        stream.other_buf = 0;
+        if (sock.recv_lock.holder != -1) {
+            stream.other_waited = 1;
+        } else {
+            thread = 2;
+            stream.other_took = stream_readv(&entry, &other, 1, MSG_DONTWAIT);
+            thread = 1;
+        }
+    }
+    return 1;
+}
+
+/** Make `l` free. */
+void sleep_lock_init(struct sleep_lock *l, struct sleep_lock_record *record, int flags)
+{
+    (void)record;
+    l->holder = -1;
+    l->depth = 0;
+    l->flags = flags;
+}
+
+/** Take `l` for `thread`; a take of a lock another thread holds would wait,
+ * which no row may do, since the model has one thread at a time. */
+void sleep_lock_take(struct sleep_lock *l)
+{
+    if (l->holder == thread) {
+        l->depth++;
+        return;
+    }
+    CHECK(l->holder == -1, "a take of a lock another thread holds would wait");
+    l->holder = thread;
+    l->depth = 1;
+}
+
+/** Give back one take of `l`, which `thread` must hold. */
+void sleep_lock_give(struct sleep_lock *l)
+{
+    CHECK(l->holder == thread && l->depth > 0, "a give of a lock the thread does not hold");
+    if (--l->depth == 0) {
+        l->holder = -1;
+    }
 }
 
 /** Fail the row: no row releases a socket. */
@@ -745,6 +911,49 @@ static void recvfrom_no_length(void)
           "a recvfrom with a length pointer takes the datagram and reports its sender");
 }
 
+/**
+ * A stream read holds the socket's receive lock while it brings in a
+ * destination, as Linux's lock_sock: with buffers AAAA, BBBB and CCCC
+ * queued and BBBB's destination not present, a second reader that runs
+ * while the first brings it in finds the lock held, and the first returns
+ * all twelve bytes in order. Without the lock the second would take BBBB
+ * and the first return AAAACCCC, bytes not adjacent in the stream.
+ */
+static void receive_lock(void)
+{
+    struct kernel_iovec iov;
+    int32_t n;
+
+    sock.type = SOCK_STREAM;
+    sleep_lock_init(&sock.recv_lock, NULL, 0);
+    stream.on = 1;
+    stream.bytes = "AAAABBBBCCCC";
+    stream.ends[0] = 4;
+    stream.ends[1] = 8;
+    stream.ends[2] = 12;
+    stream.count = 3;
+    stream.head = 0;
+    stream.tail = 12;
+    stream.fault_at = 16 + 4;
+    stream.other_buf = 40;
+    stream.other_took = 0;
+    k_memset(user + 16, 0, 12);
+    iov.iov_base = 16;
+    iov.iov_len = 12;
+    n = stream_readv(&entry, &iov, 1, MSG_DONTWAIT);
+    CHECK(n == 12 && memcmp(user + 16, "AAAABBBBCCCC", 12) == 0 && stream.other_waited &&
+              stream.other_took == 0,
+          "a stream read that brings in a destination keeps a second reader out");
+    CHECK(sock.recv_lock.holder == -1, "a stream read gives back its receive lock");
+    iov.iov_base = 40;
+    iov.iov_len = 4;
+    thread = 2;
+    CHECK(stream_readv(&entry, &iov, 1, MSG_DONTWAIT) == -EAGAIN,
+          "the second reader then finds the stream empty");
+    thread = 1;
+    stream.on = 0;
+}
+
 /** Another thread's close of descriptor 4 while a copy sleeps: whether it
  * found a descriptor there, which it closes. */
 static void close_four(void)
@@ -822,6 +1031,14 @@ uint32_t netlink_memberships(struct socket *sock, uint32_t *words, uint32_t max)
     return 0;
 }
 
+/** No row sends on a TCP stream that fails: no signal is posted. */
+void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
+{
+    (void)t;
+    (void)signo;
+    (void)info;
+}
+
 /** Refuse every option: no row opens a netlink socket. */
 int32_t netlink_setsockopt(struct socket *s, int optname, int val, int optlen)
 {
@@ -884,6 +1101,7 @@ int main(void)
     accept_refused();
     recvfrom_no_length();
     accept_reserved();
+    receive_lock();
     if (!failures) {
         printf("netif-test: pass: socket interface contracts\n");
     }

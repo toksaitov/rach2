@@ -16,17 +16,64 @@
  * reads nothing at 4 GiB. Then each error, in Linux's order: a negative offset
  * before the descriptor, a pipe, a socket and the terminal that cannot seek, a
  * descriptor open for the other direction, an end past the signed range, and
- * a directory. lseek of a socket and of a pseudo-terminal master is ESPIPE, by
+ * a directory, which read refuses with EISDIR too, while preadv and readv of
+ * no bytes return 0 from it and of bytes EISDIR. lseek of a socket and of a
+ * pseudo-terminal master is ESPIPE, by
  * _llseek and by call 19 (lseek, call 8, on x86-64), as on Linux.
  *
- * On x86-64, preadv and pwritev move a vector at an offset and leave the
- * descriptor's own: each buffer at the place the ones before it reached, a
- * buffer of no bytes skipped, a short read ending the call, and the call's
- * fifth argument, the offset's high half, not read. A vector with a buffer
- * the probe cannot reach is refused before a byte is written, and a negative
+ * preadv and pwritev move a vector at an offset and leave the descriptor's
+ * own: each buffer at the place the ones before it reached, a buffer of no
+ * bytes skipped, and a short read ending the call. The call's fifth
+ * argument is the offset's high half on i686, and on x86-64, which has the
+ * whole offset in the fourth, it is not read. A vector with a buffer
+ * outside user memory is refused before a byte is written, and a negative
  * offset, a count past 1024, a pipe, a descriptor open for the other
- * direction and one not open are refused, the last with no buffers too. The
- * i686 kernel has neither call, and musl's preadv and pwritev are ENOSYS.
+ * direction and one not open are refused, the last with no buffers too, and
+ * the last two before a count past 1024 or a vector outside user memory.
+ * writev to /dev/null of a vector past 2 GiB returns 0x7ffff000, Linux's
+ * MAX_RW_COUNT, on x86-64, and on i686, where a length of 2 GiB is a
+ * negative ssize_t, fails with EINVAL.
+ * writev of no bytes returns 0 from /dev/full and an unconnected datagram
+ * socket without writing, and refuses a descriptor not open or open only
+ * for reading with EBADF, and an epoll set, open for writing with no write,
+ * with EINVAL, before its count and its vector; a write to the set is EINVAL
+ * too. read and readv refuse the same descriptors with the same errors, with
+ * no bytes too and before a count past 1024 or a vector or buffer outside
+ * user memory, and a directory's read EFAULT for such a buffer before
+ * EISDIR. read, write, pread64 and pwrite64 check the original count before
+ * cutting it at MAX_RW_COUNT:
+ * an overflowing range is EFAULT, and on the i686 kernel a count negative
+ * as ssize_t is EINVAL once its range has passed the address check.
+ * Positioned I/O checks the end before that cut too, and checks the range
+ * before an overflowing end. At a file's offset one short of LLONG_MAX, a
+ * read, write, readv or writev of two bytes is EINVAL and leaves the offset;
+ * /proc/self/mem and /dev/mem, which take unsigned offsets, are not refused
+ * so. /dev/null lets large writes finish without
+ * touching the buffer.
+ * pwritev2 with RWF_APPEND writes at the end, moving the descriptor's
+ * offset at offset -1 and not at another, and leaves O_APPEND clear;
+ * RWF_NOAPPEND overrides O_APPEND for one call at either offset form,
+ * leaving the flag set for later writes; preadv2 takes it and reads the
+ * bytes back. Both calls refuse APPEND with NOAPPEND after vector import,
+ * except for zero bytes, which return before flags. They refuse a descriptor
+ * that is not open with EBADF whatever the flags, and only then a flag they
+ * do not take with EOPNOTSUPP. On an append-only file (chattr +a), which a
+ * root of ext2 run as root lets the probe make, NOAPPEND is EPERM to both
+ * calls and F_SETFL may not change O_APPEND, as Linux 6.12's
+ * kiocb_set_rw_flags and setfl answer. sync_file_range flushes a range of
+ * the file, and refuses a descriptor that is not open with EBADF before its
+ * flags and /dev/null with ESPIPE.
+ * noappend-seal refuses a vector that would grow a six-byte sealed memfd
+ * and allows one within its size. The four append-fault rows use writev,
+ * pwritev and pwritev2:
+ * later and mid-buffer faults return the completed prefix, an initial
+ * fault returns EFAULT, and a demand-paged buffer is brought in. A read,
+ * readv or pread into a buffer at NULL or in an unmapped page is 0 at a
+ * file's end, EINVAL with its end past LLONG_MAX and EFAULT short of the
+ * end; a read of a file that runs into an unmapped page, by read and
+ * readv, returns the bytes before it, as Linux's copy stops at its first
+ * fault, and so does a readv of a pipe whose page buffer the buffers before
+ * the unmapped one take whole.
  *
  * Prints `PREADMUSL OK` and exits 0 on success, and prints
  * `PREADMUSL FAIL (detail)` and exits 1 otherwise.
@@ -35,9 +82,12 @@
  * names, an assertion for each check, as `assertion_id` lists them; a failed
  * check fails its assertion and leaves those after it not run. The branch of
  * the group `arch` is the architecture the program was built for: `x86-64`
- * with the assertions of preadv and pwritev, from `vector-file` to
- * `vector-refusals`, and `i686` with `mem-write-eio`, the write past 32 bits
- * of /proc/self/mem, and `no-vectors`.
+ * with `preadv-high-half`, the fifth argument not read, and `i686` with
+ * `mem-write-eio`, the write past 32 bits of /proc/self/mem, and
+ * `preadv-high-word`, the fifth argument read as the offset's high half.
+ * The branch of the group `flags` is `append-only`, with the rows of an
+ * append-only file, when the probe runs as root on a root that keeps inode
+ * flags, and `none`, with no rows, on any other.
  */
 
 #define _GNU_SOURCE
@@ -47,6 +97,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/epoll.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -78,29 +131,81 @@ extern char **environ;
 
 /* The assertions, a check each, in the order the program makes them, with
  * those of the architecture's alternative of the group `arch` in place. */
-static const char *const assertion_id[] = {
-    "make-file",        "pread-middle",    "pread-across-end",  "pread-past-end",
-    "pwrite-middle",    "pwrite-past-end", "file-after-writes", "read-from-offset",
-    "pread-wide",       "append",          "proc-snapshot",     "dev-zero",
-    "dev-null",         "proc-seek",       "mem-stack",
+static const char *const assertion_id[] = {"make-file",
+                                           "pread-middle",
+                                           "pread-across-end",
+                                           "pread-past-end",
+                                           "pwrite-middle",
+                                           "pwrite-past-end",
+                                           "file-after-writes",
+                                           "read-from-offset",
+                                           "pread-wide",
+                                           "append",
+                                           "proc-snapshot",
+                                           "dev-zero",
+                                           "dev-null",
+                                           "proc-seek",
+                                           "mem-stack",
 #if !defined __x86_64__
-    "mem-write-eio",
+                                           "mem-write-eio",
 #endif
-    "proc-sys-4g",      "negative-offset", "sign-bit",          "make-pipe",
-    "pipe-espipe",      "socket-espipe",   "stdout-espipe",     "other-direction",
-    "directory",        "lseek-espipe",
+                                           "proc-sys-4g",
+                                           "negative-offset",
+                                           "sign-bit",
+                                           "make-pipe",
+                                           "pipe-espipe",
+                                           "socket-espipe",
+                                           "stdout-espipe",
+                                           "other-direction",
+                                           "directory",
+                                           "lseek-espipe",
+                                           "vector-file",
+                                           "pwritev-vector",
+                                           "preadv-vector",
+                                           "preadv-short",
 #if defined __x86_64__
-    "vector-file",      "pwritev-vector",  "preadv-vector",     "preadv-short",
-    "preadv-high-half", "pwritev-efault",  "vector-refusals"
+                                           "preadv-high-half",
 #else
-    "no-vectors"
+                                           "preadv-high-word",
 #endif
-};
+                                           "pwritev-efault",
+                                           "vector-refusals",
+                                           "pwritev2-append",
+                                           "preadv2-readback",
+                                           "rwv2-refusals",
+                                           "rwv2-import",
+                                           "rwv2-zero",
+                                           "range-sync",
+                                           "noappend-position",
+                                           "noappend-shared",
+                                           "noappend-read",
+                                           "noappend-flags",
+                                           "noappend-seal",
+                                           "append-later-fault",
+                                           "append-buffer-fault",
+                                           "append-first-fault",
+                                           "append-demand-buffer",
+                                           "offset-end",
+                                           "mem-offset-end",
+                                           "read-unwritable-end",
+                                           "read-unwritable-prefix",
+                                           "readv-pipe-prefix"};
 
-/** Begin the report, give the branch of `arch`, and plan the assertions. */
+/* chattr's requests and its append-only flag, which musl's headers do not
+ * name: _IOR and _IOW of 'f' with a long, whose argument is an int. */
+#define FS_IOC_GETFLAGS _IOR('f', 1, long)
+#define FS_IOC_SETFLAGS _IOW('f', 2, long)
+#define FS_APPEND_FL    0x20
+
+/* Whether the branch of `flags` is `append-only`, which adds its rows. */
+static int append_only;
+
+/** Begin the report, give the branches of `arch` and `flags`, and plan the
+ * assertions. */
 static void report_start(void)
 {
     unsigned int i;
+    int root = open("/", O_RDONLY | O_DIRECTORY), flags;
 
     report_begin(report_case(environ, "guest.default.preadmusl"));
 #if defined __x86_64__
@@ -108,8 +213,17 @@ static void report_start(void)
 #else
     report_branch("arch", "i686");
 #endif
+    append_only = geteuid() == 0 && root >= 0 && ioctl(root, FS_IOC_GETFLAGS, &flags) == 0;
+    if (root >= 0) {
+        close(root);
+    }
+    report_branch("flags", append_only ? "append-only" : "none");
     for (i = 0; i < sizeof(assertion_id) / sizeof(assertion_id[0]); i++) {
         report_plan(assertion_id[i]);
+    }
+    if (append_only) {
+        report_plan("append-only-noappend");
+        report_plan("append-only-setfl");
     }
 }
 
@@ -323,6 +437,35 @@ static int wide_proc_rows(void)
 }
 
 /**
+ * Whether a directory, / and /dev, is refused as Linux refuses it: pread
+ * and read fail with EISDIR for one byte and for none, and pread with an end
+ * past the signed range with EINVAL; preadv and readv return 0 for no bytes
+ * and fail with EISDIR for one.
+ */
+static int directory_refused(void)
+{
+    char buf[8];
+    struct iovec v[1];
+    int dirfd, ok;
+
+    dirfd = open("/", O_RDONLY | O_DIRECTORY);
+    v[0].iov_base = buf;
+    v[0].iov_len = 0;
+    ok = dirfd >= 0 && refused(pread(dirfd, buf, 1, 0), EISDIR) &&
+         refused(pread(dirfd, buf, 0, 0), EISDIR) &&
+         refused(PREAD_WIDE(dirfd, buf, 2, 0xFFFFFFFFL, 0x7FFFFFFFL), EINVAL) &&
+         refused(read(dirfd, buf, 1), EISDIR) && refused(read(dirfd, buf, 0), EISDIR) &&
+         preadv(dirfd, v, 1, 0) == 0 && preadv(dirfd, v, 0, 0) == 0 && readv(dirfd, v, 1) == 0;
+    v[0].iov_len = 1;
+    ok = ok && refused(preadv(dirfd, v, 1, 0), EISDIR) && refused(readv(dirfd, v, 1), EISDIR);
+    close(dirfd);
+    dirfd = open("/dev", O_RDONLY | O_DIRECTORY);
+    ok = ok && dirfd >= 0 && refused(pread(dirfd, buf, 1, 0), EISDIR);
+    close(dirfd);
+    return ok;
+}
+
+/**
  * Check each error, in the order Linux checks for them. Returns 0, or 1 once
  * the failure is reported.
  */
@@ -330,7 +473,7 @@ static int refusal_rows(void)
 {
     char buf[8];
     int pipefd[2];
-    int fd, dirfd;
+    int fd;
     int ok;
 
     if (!refused(pread(999, buf, 1, -1), EINVAL) || !refused(pread(999, buf, 1, 0), EBADF)) {
@@ -377,15 +520,7 @@ static int refusal_rows(void)
         return fail("the other direction, or an end past the signed range");
     }
     report_held();
-    dirfd = open("/", O_RDONLY | O_DIRECTORY);
-    ok = dirfd >= 0 && refused(pread(dirfd, buf, 1, 0), EISDIR) &&
-         refused(pread(dirfd, buf, 0, 0), EISDIR) &&
-         refused(PREAD_WIDE(dirfd, buf, 2, 0xFFFFFFFFL, 0x7FFFFFFFL), EINVAL);
-    close(dirfd);
-    dirfd = open("/dev", O_RDONLY | O_DIRECTORY);
-    ok = ok && dirfd >= 0 && refused(pread(dirfd, buf, 1, 0), EISDIR);
-    close(dirfd);
-    if (!ok) {
+    if (!directory_refused()) {
         return fail("a directory");
     }
     report_held();
@@ -417,38 +552,699 @@ static int seek_refusal_rows(void)
     return 0;
 }
 
+/* The x86-64 kernel half, or the i686 kernel's base, which this program
+ * leaves unmapped when it runs under the ia32 profile. */
 #if defined __x86_64__
-/* An address in the kernel's half, which no user buffer may name. */
 #define KERNEL_ADDRESS ((void *)0xffff800000000000UL)
+#else
+#define KERNEL_ADDRESS ((void *)0xc0000000UL)
+#endif
+
+/* RWF_APPEND, which musl's headers may not name. */
+#ifndef RWF_APPEND
+#define RWF_APPEND 0x10
+#endif
+#ifndef RWF_NOAPPEND
+#define RWF_NOAPPEND 0x20
+#endif
+#ifndef RWF_ATOMIC
+#define RWF_ATOMIC 0x40
+#endif
+
+/* Outside Linux 6.12's RWF_SUPPORTED, whose 0x40 is RWF_ATOMIC. */
+#define UNKNOWN_RWF 0x10000000
+
+/* preadv2's and pwritev2's position as the two words the call takes, low
+ * first, and the position -1, the descriptor's own offset. */
+#define POS_LO(p)                      ((long)(p))
+#define POS_HI(p)                      ((long)((unsigned long long)(p) >> 32))
+#define RWV2(nr, fd, iov, n, p, flags) syscall(nr, fd, iov, n, POS_LO(p), POS_HI(p), flags)
+
+/** Check vector import before an unknown flag, and zero bytes before the
+ * flag, for both directions and both position forms. Return 0 or report 1. */
+static int vector_flag_order(int fd)
+{
+    const long calls[2] = {SYS_preadv2, SYS_pwritev2};
+    struct iovec invalid = {(void *)0x1, (size_t)-1};
+    struct iovec unfaulted = {(void *)0x1, 1};
+    struct iovec empty = {0, 0};
+    int i, pos;
+
+    for (i = 0; i < 2; i++) {
+        for (pos = -1; pos <= 0; pos++) {
+            if (!refused(RWV2(calls[i], fd, (void *)0x1, 1, pos, UNKNOWN_RWF), EFAULT) ||
+                !refused(RWV2(calls[i], fd, &empty, 1025, pos, UNKNOWN_RWF), EINVAL) ||
+                !refused(RWV2(calls[i], fd, &invalid, 1, pos, UNKNOWN_RWF), EINVAL) ||
+                !refused(RWV2(calls[i], fd, &unfaulted, 1, pos, UNKNOWN_RWF), EOPNOTSUPP)) {
+                return fail("vector import precedes flags, but data faults follow flags");
+            }
+        }
+    }
+    report_held();
+    for (i = 0; i < 2; i++) {
+        for (pos = -1; pos <= 0; pos++) {
+            if (RWV2(calls[i], fd, (void *)0x1, 0, pos, UNKNOWN_RWF) != 0 ||
+                RWV2(calls[i], fd, &empty, 1, pos, UNKNOWN_RWF) != 0) {
+                return fail("zero bytes return before an unknown vector flag");
+            }
+        }
+    }
+    report_held();
+    return 0;
+}
 
 /**
- * Check the refusals of preadv and pwritev on the file vector_rows makes.
- * Returns 0, or 1 once the failure is reported.
+ * Check pwritev2's RWF_APPEND, preadv2's read back, the two calls' refusals
+ * and sync_file_range on a new copy of the file. Returns 0, or 1 once the
+ * failure is reported.
  */
-static int vector_refusal_rows(void)
+static int vector_flag_rows(void)
+{
+    char back[8];
+    struct iovec out[2], in[1];
+    int fd, null, ok;
+
+    fd = open(FILE_PATH, O_RDWR | O_TRUNC);
+    out[0].iov_base = "C";
+    out[0].iov_len = 1;
+    out[1].iov_base = "D";
+    out[1].iov_len = 1;
+    if (fd < 0 || write(fd, "ab", 2) != 2 || lseek(fd, 0, SEEK_SET) != 0 ||
+        RWV2(SYS_pwritev2, fd, out, 2, -1LL, RWF_APPEND) != 2 || !offset_is(fd, 4)) {
+        return fail("pwritev2 with RWF_APPEND at -1 writes at the end and moves the offset");
+    }
+    out[0].iov_base = "E";
+    if (lseek(fd, 1, SEEK_SET) != 1 || RWV2(SYS_pwritev2, fd, out, 1, 0LL, RWF_APPEND) != 1 ||
+        !offset_is(fd, 1) || (fcntl(fd, F_GETFL) & O_APPEND) != 0) {
+        return fail("pwritev2 with RWF_APPEND at 0 writes at the end and leaves the offset");
+    }
+    report_held();
+    memset(back, 'x', sizeof(back));
+    in[0].iov_base = back;
+    in[0].iov_len = sizeof(back);
+    if (RWV2(SYS_preadv2, fd, in, 1, 0LL, 0) != 5 || memcmp(back, "abCDExxx", 8) != 0 ||
+        !offset_is(fd, 1)) {
+        return fail("preadv2 reads the appended bytes back");
+    }
+    report_held();
+    ok = refused(RWV2(SYS_preadv2, 999, in, 1, 0LL, UNKNOWN_RWF), EBADF) &&
+         refused(RWV2(SYS_pwritev2, 999, out, 1, -1LL, UNKNOWN_RWF), EBADF) &&
+         refused(RWV2(SYS_preadv2, fd, in, 1, 0LL, UNKNOWN_RWF), EOPNOTSUPP) &&
+         refused(RWV2(SYS_pwritev2, fd, out, 1, -1LL, UNKNOWN_RWF), EOPNOTSUPP);
+    if (!ok) {
+        return fail("preadv2 and pwritev2 refuse a bad descriptor before a bad flag");
+    }
+    report_held();
+    if (vector_flag_order(fd) != 0) {
+        return 1;
+    }
+    null = open("/dev/null", O_RDWR);
+    ok = sync_file_range(fd, 0, 5, SYNC_FILE_RANGE_WRITE) == 0 &&
+         refused(sync_file_range(999, -1, 0, 0x100), EBADF) &&
+         refused(sync_file_range(fd, 0, 0, 0x100), EINVAL) && null >= 0 &&
+         refused(sync_file_range(null, 0, 0, 0), ESPIPE);
+    close(null);
+    close(fd);
+    if (!ok) {
+        return fail("sync_file_range flushes a file and refuses in Linux's order");
+    }
+    report_held();
+    return 0;
+}
+
+/** Check reads with NOAPPEND and both directions' conflicting flags on
+ * the append descriptor `fd` after the write rows. Leave it open at offset
+ * 3. Return a failure message or NULL, reporting each completed row. */
+static const char *noappend_read_flags(int fd)
+{
+    const long calls[2] = {SYS_preadv2, SYS_pwritev2};
+    char back[8];
+    struct iovec in = {back, 2}, empty = {0, 0};
+    int flags = RWF_APPEND | RWF_NOAPPEND;
+    int i, pos;
+    const char *error;
+
+    error = "preadv2 takes NOAPPEND at both offset forms";
+    if (RWV2(SYS_preadv2, fd, &in, 1, 1LL, RWF_NOAPPEND) != 2 || memcmp(back, "XY", 2) != 0 ||
+        !offset_is(fd, 7) || lseek(fd, 1, SEEK_SET) != 1 ||
+        RWV2(SYS_preadv2, fd, &in, 1, -1LL, RWF_NOAPPEND) != 2 || memcmp(back, "XY", 2) != 0 ||
+        !offset_is(fd, 3)) {
+        return error;
+    }
+    report_held();
+    error = "APPEND and NOAPPEND conflict after import and before known unsupported flags";
+    for (i = 0; i < 2; i++) {
+        for (pos = -1; pos <= 0; pos++) {
+            if (!refused(RWV2(calls[i], fd, &in, 1, pos, flags), EINVAL) ||
+                !refused(RWV2(calls[i], fd, &in, 1, pos, flags | RWF_ATOMIC), EINVAL) ||
+                !refused(RWV2(calls[i], fd, &in, 1, pos, flags | UNKNOWN_RWF), EOPNOTSUPP) ||
+                !refused(RWV2(calls[i], fd, (void *)0x1, 1, pos, flags), EFAULT) ||
+                RWV2(calls[i], fd, (void *)0x1, 0, pos, flags) != 0 ||
+                RWV2(calls[i], fd, &empty, 1, pos, flags) != 0) {
+                return error;
+            }
+        }
+    }
+    if (!offset_is(fd, 3) || (fcntl(fd, F_GETFL) & O_APPEND) == 0 ||
+        pread(fd, back, sizeof(back), 0) != 7 || memcmp(back, "aXYdUV!", 7) != 0) {
+        return error;
+    }
+    report_held();
+    return NULL;
+}
+
+/** Check NOAPPEND at an explicit and the shared offset, without changing
+ * O_APPEND, and its read and conflicting-flag rules. Close the file on
+ * every exit; main removes it. Return 0, or report a failure and return 1. */
+static int vector_noappend_rows(void)
+{
+    char back[8];
+    struct iovec out[2] = {{"X", 1}, {"Y", 1}};
+    int fd = open(FILE_PATH, O_RDWR | O_APPEND | O_TRUNC);
+    const char *error = "NOAPPEND writes at the explicit offset and keeps O_APPEND";
+
+    if (fd < 0 || write(fd, "abcdef", 6) != 6 || lseek(fd, 4, SEEK_SET) != 4 ||
+        RWV2(SYS_pwritev2, fd, out, 2, 1LL, RWF_NOAPPEND) != 2 || !offset_is(fd, 4) ||
+        (fcntl(fd, F_GETFL) & O_APPEND) == 0 || pread(fd, back, sizeof(back), 0) != 6 ||
+        memcmp(back, "aXYdef", 6) != 0) {
+        goto out;
+    }
+    report_held();
+    error = "NOAPPEND advances the shared offset and later writes still append";
+    out[0].iov_base = "U";
+    out[1].iov_base = "V";
+    if (RWV2(SYS_pwritev2, fd, out, 2, -1LL, RWF_NOAPPEND) != 2 || !offset_is(fd, 6) ||
+        (fcntl(fd, F_GETFL) & O_APPEND) == 0 || lseek(fd, 0, SEEK_SET) != 0 ||
+        write(fd, "!", 1) != 1 || !offset_is(fd, 7) || pread(fd, back, sizeof(back), 0) != 7 ||
+        memcmp(back, "aXYdUV!", 7) != 0) {
+        goto out;
+    }
+    report_held();
+    error = noappend_read_flags(fd);
+out:
+    if (fd >= 0) {
+        close(fd);
+    }
+    return error ? fail(error) : 0;
+}
+
+/** Check a NOAPPEND vector against F_SEAL_GROW before it writes any byte,
+ * at both offset forms, then an allowed write within the file. Close the
+ * memfd on every exit. Return 0, or report a failure and return 1. */
+static int noappend_seal_row(void)
+{
+    struct iovec out[2] = {{"X", 1}, {"Y", 1}};
+    char back[8];
+    int fd = memfd_create("preadmusl", MFD_ALLOW_SEALING);
+    int ok = fd >= 0 && write(fd, "abcdef", 6) == 6 && fcntl(fd, F_SETFL, O_APPEND) == 0 &&
+             fcntl(fd, F_ADD_SEALS, F_SEAL_GROW) == 0 && lseek(fd, 5, SEEK_SET) == 5 &&
+             refused(RWV2(SYS_pwritev2, fd, out, 2, 5LL, RWF_NOAPPEND), EPERM) &&
+             refused(RWV2(SYS_pwritev2, fd, out, 2, -1LL, RWF_NOAPPEND), EPERM) &&
+             offset_is(fd, 5) && pread(fd, back, sizeof(back), 0) == 6 &&
+             memcmp(back, "abcdef", 6) == 0 &&
+             RWV2(SYS_pwritev2, fd, out, 2, 2LL, RWF_NOAPPEND) == 2 && offset_is(fd, 5) &&
+             (fcntl(fd, F_GETFL) & O_APPEND) != 0 && pread(fd, back, sizeof(back), 0) == 6 &&
+             memcmp(back, "abXYef", 6) == 0;
+
+    if (fd >= 0) {
+        close(fd);
+    }
+    if (!ok) {
+        return fail("NOAPPEND refuses sealed growth before writing any element");
+    }
+    report_held();
+    return 0;
+}
+
+/** Set or clear the append-only flag of the file `fd` is open on, as
+ * `on` says. Return 0, or -1 with errno set. */
+static int set_append_only(int fd, int on)
+{
+    int flags;
+
+    if (ioctl(fd, FS_IOC_GETFLAGS, &flags) != 0) {
+        return -1;
+    }
+    flags = on ? flags | FS_APPEND_FL : flags & ~FS_APPEND_FL;
+    return ioctl(fd, FS_IOC_SETFLAGS, &flags);
+}
+
+/** Check NOAPPEND and F_SETFL on an append-only file, the descriptor `fd`
+ * open on it for reading and writing with O_APPEND and `ro` for reading.
+ * Return a failure message or NULL, reporting each completed row. */
+static const char *append_only_checks(int fd, int ro)
+{
+    struct iovec out = {"Z", 1};
+    char back[8];
+    struct iovec in = {back, sizeof(back)};
+
+    if (!refused(RWV2(SYS_pwritev2, fd, &out, 1, 0LL, RWF_NOAPPEND), EPERM) ||
+        !refused(RWV2(SYS_pwritev2, fd, &out, 1, -1LL, RWF_NOAPPEND), EPERM) ||
+        !refused(RWV2(SYS_preadv2, fd, &in, 1, 0LL, RWF_NOAPPEND), EPERM) ||
+        RWV2(SYS_preadv2, ro, &in, 1, 0LL, RWF_NOAPPEND) != 3 ||
+        RWV2(SYS_pwritev2, fd, &out, 1, 0LL, 0) != 1 || pread(fd, back, sizeof(back), 0) != 4 ||
+        memcmp(back, "abcZ", 4) != 0) {
+        return "NOAPPEND on an append-only file is EPERM to both calls";
+    }
+    report_held();
+    if (!refused(fcntl(fd, F_SETFL, 0), EPERM) || (fcntl(fd, F_GETFL) & O_APPEND) == 0 ||
+        fcntl(fd, F_SETFL, O_APPEND | O_NONBLOCK) != 0 ||
+        (fcntl(fd, F_GETFL) & (O_APPEND | O_NONBLOCK)) != (O_APPEND | O_NONBLOCK) ||
+        !refused(fcntl(ro, F_SETFL, O_APPEND), EPERM) || (fcntl(ro, F_GETFL) & O_APPEND) != 0 ||
+        fcntl(ro, F_SETFL, O_NONBLOCK) != 0) {
+        return "F_SETFL may not change O_APPEND of an append-only file";
+    }
+    report_held();
+    return NULL;
+}
+
+/** Make the file append-only and run `append_only_checks` on it, in the
+ * branch `append-only` alone. Clear the flag and close both descriptors on
+ * every exit, so that main can remove the file. Return 0, or report a
+ * failure and return 1. */
+static int append_only_rows(void)
+{
+    const char *error = "make an append-only file";
+    int fd, ro = -1, marked = 0;
+
+    if (!append_only) {
+        return 0;
+    }
+    fd = open(FILE_PATH, O_RDWR | O_CREAT | O_TRUNC | O_APPEND, 0644);
+    if (fd >= 0 && write(fd, "abc", 3) == 3 && set_append_only(fd, 1) == 0) {
+        marked = 1;
+        ro = open(FILE_PATH, O_RDONLY);
+        error = ro >= 0 ? append_only_checks(fd, ro) : error;
+    }
+    if (marked && set_append_only(fd, 0) != 0 && !error) {
+        error = "clear the append-only flag";
+    }
+    if (ro >= 0) {
+        close(ro);
+    }
+    if (fd >= 0) {
+        close(fd);
+    }
+    return error ? fail(error) : 0;
+}
+
+/** Check one kind of append buffer through writev, pwritev and pwritev2.
+ * `pages` has one mapped page and an unmapped page after it. Each call must
+ * retain its valid prefix, stop at the fault and keep a positioned offset.
+ * Return 1 on success, 0 on any mismatch. */
+static int append_fault_case(int fd, char *pages, int kind)
+{
+    struct iovec out[2];
+    char got[8];
+    const char *want = kind == 3 ? "\0\0UV" : "XY";
+    int mode, bytes = kind == 2 ? 0 : kind == 3 ? 4 : 2;
+
+    for (mode = 0; mode < 3; mode++) {
+        ssize_t n;
+
+        if (ftruncate(fd, 0) != 0 || lseek(fd, 0, SEEK_SET) != 0) {
+            return 0;
+        }
+        out[0].iov_base = "XY";
+        out[0].iov_len = 2;
+        out[1].iov_base = pages + 4096;
+        out[1].iov_len = 2;
+        if (kind == 1) {
+            pages[4094] = 'X';
+            pages[4095] = 'Y';
+            out[0].iov_base = pages + 4094;
+            out[0].iov_len = 4;
+        } else if (kind == 2) {
+            out[0].iov_base = pages + 4096;
+        } else if (kind == 3) {
+            if (madvise(pages, 4096, MADV_DONTNEED) != 0) {
+                return 0;
+            }
+            out[0].iov_base = pages;
+        }
+        if (kind != 0) {
+            out[1].iov_base = "UV";
+        }
+        n = mode == 0   ? writev(fd, out, 2)
+            : mode == 1 ? pwritev(fd, out, 2, 0)
+                        : RWV2(SYS_pwritev2, fd, out, 2, 0LL, 0);
+        if ((kind == 2 ? !refused(n, EFAULT) : n != bytes) ||
+            !offset_is(fd, mode == 0 ? bytes : 0) || pread(fd, got, sizeof(got), 0) != bytes ||
+            memcmp(got, want, (size_t)bytes) != 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/** Check append's short counts and demand faults, releasing the file and
+ * mappings before reporting a failure. The caller removes FILE_PATH. */
+static int append_fault_rows(void)
+{
+    static const char *const why[] = {
+        "append retains bytes before a later unmapped buffer",
+        "append retains bytes before a fault within a buffer",
+        "append returns EFAULT with no bytes when its first buffer is unmapped",
+        "append faults in a valid buffer before taking the file lock"};
+    int fd = open(FILE_PATH, O_CREAT | O_RDWR | O_APPEND | O_TRUNC, 0600);
+    char *pages = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    int kind, ok = 0;
+    const char *error = "make append file and unmapped buffer";
+
+    if (fd < 0 || pages == MAP_FAILED || munmap(pages + 4096, 4096) != 0) {
+        goto out;
+    }
+    for (kind = 0; kind < 4; kind++) {
+        error = why[kind];
+        if (!append_fault_case(fd, pages, kind)) {
+            goto out;
+        }
+        report_held();
+    }
+    ok = 1;
+out:
+    if (pages != MAP_FAILED) {
+        munmap(pages, 8192);
+    }
+    if (fd >= 0) {
+        close(fd);
+    }
+    return ok ? 0 : fail(error);
+}
+
+/* The buffer writev_cut names past its end; /dev/null reads no byte of it. */
+static char cut_buffer[16];
+
+/**
+ * Whether writev to /dev/null takes a vector past 2 GiB as Linux's
+ * import_iovec does: on x86-64 a length of 2 GiB alone, or one of 2 GiB - 1
+ * after 16 bytes, is cut to a total of 0x7ffff000, MAX_RW_COUNT; on i686,
+ * where 2 GiB is a negative ssize_t, the call is EINVAL.
+ */
+static int writev_cut(void)
+{
+    struct iovec v[2];
+    int fd = open("/dev/null", O_WRONLY), ok;
+
+    v[0].iov_base = cut_buffer;
+    v[0].iov_len = 0x80000000ul;
+#if defined __x86_64__
+    ok = writev(fd, v, 1) == 0x7ffff000L;
+    v[0].iov_len = sizeof(cut_buffer);
+    v[1].iov_base = cut_buffer;
+    v[1].iov_len = 0x7ffffffful;
+    ok = ok && writev(fd, v, 2) == 0x7ffff000L;
+#else
+    ok = refused(writev(fd, v, 1), EINVAL);
+#endif
+    close(fd);
+    return fd >= 0 && ok;
+}
+
+/**
+ * Whether writev of a vector of no bytes checks the descriptor and writes
+ * nothing, as Linux's vfs_writev returns 0 before the file's write: 0 from
+ * /dev/full, whose write is ENOSPC, and from an unconnected datagram socket,
+ * whose send is EDESTADDRREQ, with no elements or one empty element; EBADF
+ * for a descriptor not open and one open only for reading, before a count
+ * past 1024 or a vector outside user memory; and EINVAL for an epoll set,
+ * which Linux opens for reading and writing with no write method, before
+ * the same, and for a write of a byte to it.
+ */
+static int writev_empty(void)
+{
+    struct iovec v[1];
+    int full = open("/dev/full", O_WRONLY), sock = socket(AF_INET, SOCK_DGRAM, 0);
+    int rd = open("/dev/null", O_RDONLY), ep = epoll_create1(0), ok;
+
+    v[0].iov_base = cut_buffer;
+    v[0].iov_len = 0;
+    ok = full >= 0 && sock >= 0 && rd >= 0 && writev(full, v, 0) == 0 && writev(full, v, 1) == 0 &&
+         writev(sock, v, 0) == 0 && writev(sock, v, 1) == 0 && refused(writev(999, v, 0), EBADF) &&
+         refused(writev(999, v, 1025), EBADF) && refused(writev(999, KERNEL_ADDRESS, 1), EBADF) &&
+         refused(writev(rd, v, 0), EBADF) && refused(writev(rd, v, 1), EBADF) &&
+         refused(writev(rd, v, 1025), EBADF) && refused(writev(rd, KERNEL_ADDRESS, 1), EBADF) &&
+         ep >= 0 && refused(writev(ep, v, 0), EINVAL) && refused(writev(ep, v, 1), EINVAL) &&
+         refused(writev(ep, KERNEL_ADDRESS, 1), EINVAL) && refused(writev(ep, v, 1025), EINVAL) &&
+         refused(write(ep, "x", 1), EINVAL);
+    close(ep);
+    close(full);
+    close(sock);
+    close(rd);
+    return ok;
+}
+
+/**
+ * Whether read and readv check the descriptor before the count, the vector
+ * and the buffer, as Linux's vfs_read and vfs_readv test FMODE_READ, then
+ * FMODE_CAN_READ, then the address: EBADF for a descriptor not open and one
+ * open only for writing, with no bytes too, and before a count past 1024 or
+ * a vector outside user memory; EINVAL for an epoll set, which has no read
+ * method, for no bytes and one, and before the same; and for a directory
+ * EFAULT for a buffer outside user memory before EISDIR, for no bytes too
+ * on x86-64. KERNEL_ADDRESS is user memory for an i386 program on the
+ * x86-64 kernel, whose read of the directory there is EISDIR, as on Linux,
+ * and the i686 kernel's top, where Linux takes a range of no bytes.
+ */
+static int read_empty(void)
+{
+    char buf[1];
+    struct iovec v[1];
+    int wr = open("/dev/null", O_WRONLY), ep = epoll_create1(0), dirfd = open("/", O_RDONLY);
+    int ok, fault = EFAULT;
+
+#if !defined __x86_64__
+    /* The x86-64 kernel gives an i386 program user memory up to 4 GiB. */
+    if (getenv("ETUDE_KERNEL") != NULL && strcmp(getenv("ETUDE_KERNEL"), "x86_64") == 0) {
+        fault = EISDIR;
+    }
+#endif
+
+    v[0].iov_base = buf;
+    v[0].iov_len = 0;
+    ok = wr >= 0 && ep >= 0 && dirfd >= 0 && refused(read(999, buf, 0), EBADF) &&
+         refused(readv(999, v, 0), EBADF) && refused(readv(999, v, 1025), EBADF) &&
+         refused(readv(999, KERNEL_ADDRESS, 1), EBADF) && refused(read(wr, buf, 0), EBADF) &&
+         refused(readv(wr, v, 0), EBADF) && refused(readv(wr, v, 1025), EBADF) &&
+         refused(readv(wr, KERNEL_ADDRESS, 1), EBADF) && refused(read(ep, buf, 0), EINVAL) &&
+         refused(read(ep, buf, 1), EINVAL) && refused(readv(ep, NULL, 0), EINVAL) &&
+         refused(readv(ep, v, 1025), EINVAL) && refused(readv(ep, KERNEL_ADDRESS, 1), EINVAL) &&
+         refused(read(dirfd, KERNEL_ADDRESS, 1), fault);
+#if defined __x86_64__
+    ok = ok && refused(read(dirfd, KERNEL_ADDRESS, 0), EFAULT);
+#endif
+    close(wr);
+    close(ep);
+    close(dirfd);
+    return ok;
+}
+
+/** Check read's original count before MAX_RW_COUNT cuts it. Linux's
+ * native i686 access_ok rejects a range past 3 GiB, then rw_verify_area
+ * rejects a count negative as ssize_t. An i386 call on x86-64 instead
+ * uses the kernel's 64-bit address range and ssize_t. A directory lets
+ * these checks finish without moving any of the requested bytes. */
+static int read_raw_count(void)
+{
+    void *buf = (void *)(uintptr_t)0x10000;
+    int dirfd = open("/", O_RDONLY), wr = open("/dev/null", O_WRONLY);
+    int ep = epoll_create1(0), huge = EFAULT, sign = EISDIR, span = EISDIR;
+    int ok;
+
+#if !defined __x86_64__
+    if (getenv("ETUDE_KERNEL") != NULL && strcmp(getenv("ETUDE_KERNEL"), "x86_64") == 0) {
+        huge = EISDIR;
+    } else {
+        sign = EINVAL;
+        span = EFAULT;
+    }
+#endif
+    ok = dirfd >= 0 && wr >= 0 && ep >= 0 &&
+         refused(syscall(SYS_read, 999, buf, (size_t)-1), EBADF) &&
+         refused(syscall(SYS_read, wr, buf, (size_t)-1), EBADF) &&
+         refused(syscall(SYS_read, ep, buf, (size_t)-1), EINVAL) &&
+         refused(syscall(SYS_read, dirfd, buf, (size_t)-1), huge) &&
+         refused(syscall(SYS_read, dirfd, buf, (size_t)0xc0000001u), span) &&
+         refused(syscall(SYS_read, dirfd, buf, (size_t)0x80000000u), sign) &&
+         refused(syscall(SYS_read, dirfd, buf, (size_t)0x7ffff001u), EISDIR);
+    close(ep);
+    close(wr);
+    close(dirfd);
+    return ok;
+}
+
+/** A bad descriptor, access mode or seek precedes the raw count check;
+ * a negative positioned offset precedes even the descriptor lookup.
+ * Return whether every refusal of the open descriptors has Linux's errno. */
+static int scalar_count_access(int rd, int wr, int ep, const int *pipefd)
+{
+    void *buf = (void *)(uintptr_t)0x10000;
+
+    return refused(syscall(SYS_write, 999, buf, (size_t)-1), EBADF) &&
+           refused(syscall(SYS_write, rd, buf, (size_t)-1), EBADF) &&
+           refused(syscall(SYS_write, ep, buf, (size_t)-1), EINVAL) &&
+           refused(PREAD_WIDE(999, buf, (size_t)-1, 0, 0), EBADF) &&
+           refused(PWRITE_WIDE(999, buf, (size_t)-1, 0, 0), EBADF) &&
+           refused(PREAD_WIDE(wr, buf, (size_t)-1, 0, 0), EBADF) &&
+           refused(PWRITE_WIDE(rd, buf, (size_t)-1, 0, 0), EBADF) &&
+           refused(PREAD_WIDE(pipefd[0], buf, (size_t)-1, 0, 0), ESPIPE) &&
+           refused(PWRITE_WIDE(pipefd[1], buf, (size_t)-1, 0, 0), ESPIPE) &&
+           refused(PREAD_WIDE(999, buf, (size_t)-1, 0, 0x80000000u), EINVAL) &&
+           refused(PWRITE_WIDE(999, buf, (size_t)-1, 0, 0x80000000u), EINVAL);
+}
+
+/** Check the original counts against the four errors the kernel's word
+ * size selects, 0 meaning success. /dev/null accepts a write without
+ * copying and a read returns EOF; a directory refuses a read after the
+ * range and signed-count checks. Return whether each result matches. */
+static int scalar_count_ranges(int rd, int wr, int dirfd, const int *errors)
+{
+    static const size_t counts[] = {(size_t)-1, 0xc0000001u, 0x80000000u, 0x7ffff001u};
+    void *buf = (void *)(uintptr_t)0x10000;
+    int i, ok = 1;
+    long wrote, read_at, wrote_at;
+
+    for (i = 0; i < (int)(sizeof(counts) / sizeof(counts[0])) && ok; i++) {
+        wrote = syscall(SYS_write, wr, buf, counts[i]);
+        ok = errors[i] ? refused(wrote, errors[i]) : wrote == 0x7ffff000L;
+        read_at = PREAD_WIDE(rd, buf, counts[i], 0, 0);
+        ok = ok && (errors[i] ? refused(read_at, errors[i]) : read_at == 0);
+        wrote_at = PWRITE_WIDE(wr, buf, counts[i], 0, 0);
+        ok = ok && (errors[i] ? refused(wrote_at, errors[i]) : wrote_at == 0x7ffff000L);
+        ok = ok && refused(PREAD_WIDE(dirfd, buf, counts[i], 0, 0), errors[i] ? errors[i] : EISDIR);
+    }
+    return ok;
+}
+
+/** Whether write, pread64 and pwrite64 of no bytes at `addr` each give
+ * EFAULT when `fault`, and 0 otherwise. */
+static int zero_count_at(int rd, int wr, void *addr, int fault)
+{
+    long wrote = syscall(SYS_write, wr, addr, 0);
+    int ok = fault ? refused(wrote, EFAULT) : wrote == 0;
+    long read_at = PREAD_WIDE(rd, addr, 0, 0, 0);
+    long wrote_at;
+
+    ok = ok && (fault ? refused(read_at, EFAULT) : read_at == 0);
+    wrote_at = PWRITE_WIDE(wr, addr, 0, 0, 0);
+    return ok && (fault ? refused(wrote_at, EFAULT) : wrote_at == 0);
+}
+
+/**
+ * Check an end at and past LLONG_MAX using the original count, a bad range
+ * before an overflowing end, and a zero count at the top of user memory and
+ * past it. `faults` says this kernel refuses the huge range, and an i386
+ * call on x86-64 passes both range checks. No bytes at KERNEL_ADDRESS are
+ * EFAULT on the x86-64 kernel alone: the i686 kernel takes a range of no
+ * bytes that ends at its base, as Linux's access_ok does, and refuses one a
+ * page above it, which `native32` says. Return whether all match.
+ */
+static int scalar_count_ends(int rd, int wr, int faults, int native32)
+{
+    void *buf = (void *)(uintptr_t)0x10000;
+    int ok, range = faults ? EFAULT : EINVAL;
+
+    ok = refused(PREAD_WIDE(rd, buf, 0x7ffff001u, 0x80000fffu, 0x7fffffffu), EINVAL) &&
+         refused(PWRITE_WIDE(wr, buf, 0x7ffff001u, 0x80000fffu, 0x7fffffffu), EINVAL) &&
+         PREAD_WIDE(rd, buf, 0x7ffff000u, 0x80000fffu, 0x7fffffffu) == 0 &&
+         PWRITE_WIDE(wr, buf, 0x7ffff000u, 0x80000fffu, 0x7fffffffu) == 0x7ffff000L;
+    ok = ok && refused(PREAD_WIDE(rd, buf, (size_t)-1, 0xffffffffu, 0x7fffffffu), range) &&
+         refused(PWRITE_WIDE(wr, buf, (size_t)-1, 0xffffffffu, 0x7fffffffu), range);
+    ok = ok && zero_count_at(rd, wr, KERNEL_ADDRESS, faults && !native32);
+    return ok && zero_count_at(rd, wr, (char *)KERNEL_ADDRESS + 4096, faults);
+}
+
+/** Check write, pread64 and pwrite64 before the transfer limit is applied.
+ * The native i686 kernel rejects signed counts and ranges as read_raw_count
+ * describes; the compat calls use the x86-64 kernel's limits. Close every
+ * descriptor before returning whether the rows passed. */
+static int scalar_raw_count(void)
+{
+    int errors[] = {EFAULT, 0, 0, 0};
+    int rd = open("/dev/null", O_RDONLY), wr = open("/dev/null", O_WRONLY);
+    int dirfd = open("/", O_RDONLY), ep = epoll_create1(0), pipefd[2] = {-1, -1};
+    int ok, native32 = 0;
+
+#if !defined __x86_64__
+    if (getenv("ETUDE_KERNEL") != NULL && strcmp(getenv("ETUDE_KERNEL"), "x86_64") == 0) {
+        errors[0] = 0;
+    } else {
+        errors[1] = EFAULT;
+        errors[2] = EINVAL;
+        native32 = 1;
+    }
+#endif
+    ok = rd >= 0 && wr >= 0 && dirfd >= 0 && ep >= 0 && pipe(pipefd) == 0 &&
+         scalar_count_access(rd, wr, ep, pipefd) && scalar_count_ranges(rd, wr, dirfd, errors) &&
+         scalar_count_ends(rd, wr, errors[0] != 0, native32);
+    close(pipefd[0]);
+    close(pipefd[1]);
+    close(ep);
+    close(dirfd);
+    close(wr);
+    close(rd);
+    return ok;
+}
+
+/**
+ * Whether pwritev of "XY" and a buffer at KERNEL_ADDRESS to `fd` at offset 0
+ * behaves as Linux's: the address fails access_ok in __import_iovec, so the
+ * call is EFAULT before it writes; for an i386 program on the x86-64 kernel
+ * it is unmapped user memory, which access_ok takes, and
+ * generic_perform_write writes the buffer before it and returns its 2 bytes.
+ * `fd` is open for reading and writing and begins with "01".
+ */
+static int pwritev_bad_buffer(int fd)
 {
     char two[2];
-    struct iovec out[2], in[1];
-    int fd, pipefd[2], ok;
+    struct iovec out[2];
+    long want = -1;
+    const char *head = "01";
 
-    fd = open(FILE_PATH, O_RDWR);
+#if !defined __x86_64__
+    if (getenv("ETUDE_KERNEL") != NULL && strcmp(getenv("ETUDE_KERNEL"), "x86_64") == 0) {
+        want = 2;
+        head = "XY";
+    }
+#endif
     out[0].iov_base = "XY";
     out[0].iov_len = 2;
     out[1].iov_base = KERNEL_ADDRESS;
     out[1].iov_len = 4;
-    if (fd < 0 || !refused(pwritev(fd, out, 2, 0), EFAULT) || pread(fd, two, 2, 0) != 2 ||
-        memcmp(two, "01", 2) != 0) {
-        return fail("pwritev refuses a vector with a bad buffer before it writes");
+    errno = 0;
+    return pwritev(fd, out, 2, 0) == want && (want >= 0 || errno == EFAULT) &&
+           pread(fd, two, 2, 0) == 2 && memcmp(two, head, 2) == 0;
+}
+
+/**
+ * Check the refusals of preadv and pwritev on the file vector_rows makes,
+ * writev's cut of a vector past 2 GiB (`writev_cut`) and its vector of no
+ * bytes (`writev_empty`). Returns 0, or 1 once the failure is reported.
+ */
+static int vector_refusal_rows(void)
+{
+    char two[2];
+    struct iovec out[1], in[1];
+    int fd, pipefd[2], ok;
+
+    fd = open(FILE_PATH, O_RDWR);
+    if (fd < 0 || !pwritev_bad_buffer(fd)) {
+        return fail("pwritev of a vector with a buffer outside user memory was not refused with "
+                    "EFAULT before a byte was written, or on the x86-64 kernel did not write the "
+                    "2 bytes before it");
     }
+    out[0].iov_base = "XY";
+    out[0].iov_len = 2;
     report_held();
     in[0].iov_base = two;
     in[0].iov_len = sizeof(two);
     ok = refused(preadv(fd, in, 1, -1), EINVAL) && refused(preadv(fd, in, -1, 0), EINVAL) &&
          refused(preadv(fd, in, 1025, 0), EINVAL) && refused(preadv(999, in, 1, 0), EBADF) &&
-         refused(preadv(999, in, 0, 0), EBADF);
+         refused(preadv(999, in, 0, 0), EBADF) && refused(preadv(999, in, 1025, 0), EBADF);
     close(fd);
     fd = open(FILE_PATH, O_RDONLY);
-    ok = ok && fd >= 0 && refused(pwritev(fd, out, 1, 0), EBADF);
+    ok = ok && fd >= 0 && refused(pwritev(fd, out, 1, 0), EBADF) &&
+         refused(pwritev(fd, KERNEL_ADDRESS, 1, 0), EBADF);
     close(fd);
     ok = ok && pipe(pipefd) == 0 && refused(preadv(pipefd[0], in, 1, 0), ESPIPE) &&
          refused(pwritev(pipefd[1], out, 1, 0), ESPIPE);
@@ -456,6 +1252,21 @@ static int vector_refusal_rows(void)
     close(pipefd[1]);
     if (!ok) {
         return fail("the refusals of preadv and pwritev");
+    }
+    if (!writev_cut()) {
+        return fail("writev of a vector past 2 GiB is not cut at 0x7ffff000 (EINVAL on i686)");
+    }
+    if (!writev_empty()) {
+        return fail("writev of no bytes writes, or does not refuse a bad descriptor first");
+    }
+    if (!read_empty()) {
+        return fail("read or readv does not refuse a bad descriptor before its count and buffer");
+    }
+    if (!read_raw_count()) {
+        return fail("read does not validate its original count before cutting the transfer");
+    }
+    if (!scalar_raw_count()) {
+        return fail("write, pread64 or pwrite64 does not check the raw count before the cut");
     }
     report_held();
     return 0;
@@ -513,41 +1324,183 @@ static int vector_rows(void)
     report_held();
     in[0].iov_base = three;
     in[0].iov_len = sizeof(three);
+#if defined __x86_64__
     if (syscall(SYS_preadv, fd, in, 1, 4L, 0xdeadL) != 3 || memcmp(three, "456", 3) != 0) {
         return fail("preadv does not read the offset's high half");
     }
+#else
+    if (syscall(SYS_preadv, fd, in, 1, 4L, 1L) != 0 ||
+        syscall(SYS_preadv, fd, in, 1, 4L, 0L) != 3 || memcmp(three, "456", 3) != 0) {
+        return fail("preadv reads its fifth argument as the offset's high half");
+    }
+#endif
     report_held();
     close(fd);
-    return vector_refusal_rows();
+    return vector_refusal_rows() != 0 ? 1 : vector_flag_rows();
 }
-#else
-/** Check that the i686 kernel has neither preadv nor pwritev. Returns 0, or
- * 1 once the failure is reported. */
-static int vector_rows(void)
+
+/** The largest offset, LLONG_MAX, which an end may reach and not pass. */
+#define OFFSET_MAX ((off_t)0x7FFFFFFFFFFFFFFFLL)
+
+/** Whether `rc` and errno are anything but -1 with EINVAL. */
+static int not_einval(long rc)
 {
-    char buf[4];
-    struct iovec iov;
+    return rc != -1 || errno != EINVAL;
+}
+
+/**
+ * Check the end of a transfer at the description's offset, as Linux's
+ * rw_verify_area checks it for read, write, readv and writev: with the
+ * file's offset one short of LLONG_MAX each of two bytes is EINVAL and
+ * leaves the offset. Then /proc/self/mem, which takes unsigned offsets, and
+ * /dev/mem where the probe may open it, are not refused EINVAL at that
+ * offset. Returns 0, or 1 once the failure is reported.
+ */
+static int offset_end_rows(void)
+{
+    char buf[2];
+    struct iovec v[1];
     int fd, ok;
 
-    iov.iov_base = buf;
-    iov.iov_len = sizeof(buf);
+    v[0].iov_base = buf;
+    v[0].iov_len = sizeof(buf);
     fd = open(FILE_PATH, O_RDWR);
-    ok = fd >= 0 && refused(preadv(fd, &iov, 1, 0), ENOSYS) &&
-         refused(pwritev(fd, &iov, 1, 0), ENOSYS);
+    ok = fd >= 0 && lseek(fd, OFFSET_MAX - 1, SEEK_SET) == OFFSET_MAX - 1 &&
+         refused(read(fd, buf, 2), EINVAL) && refused(write(fd, "ab", 2), EINVAL) &&
+         refused(readv(fd, v, 1), EINVAL) && refused(writev(fd, v, 1), EINVAL) &&
+         offset_is(fd, OFFSET_MAX - 1);
     close(fd);
     if (!ok) {
-        return fail("i686 has neither preadv nor pwritev");
+        return fail("an end past LLONG_MAX at the description's offset is not EINVAL");
+    }
+    report_held();
+    fd = open("/proc/self/mem", O_RDONLY);
+    ok = fd >= 0 && lseek(fd, OFFSET_MAX - 1, SEEK_SET) == OFFSET_MAX - 1 &&
+         not_einval(read(fd, buf, 2));
+    close(fd);
+    fd = open("/dev/mem", O_RDONLY);
+    if (fd >= 0) {
+        ok = ok && lseek(fd, OFFSET_MAX - 1, SEEK_SET) == OFFSET_MAX - 1 &&
+             not_einval(read(fd, buf, 2));
+        close(fd);
+    }
+    if (!ok) {
+        return fail("/proc/self/mem or /dev/mem refused an end past LLONG_MAX");
     }
     report_held();
     return 0;
 }
-#endif
+
+/** Whether reads of the four-byte file `fd` into a buffer at NULL or at
+ * `hole`, an unmapped page, are 0 at its end, EFAULT short of it with the
+ * offset left, and EINVAL with the read's end past LLONG_MAX. */
+static int read_unwritable_end(int fd, char *hole)
+{
+    struct iovec v[1];
+
+    v[0].iov_base = hole;
+    v[0].iov_len = 10;
+    return lseek(fd, 4, SEEK_SET) == 4 && read(fd, NULL, 10) == 0 && read(fd, hole, 10) == 0 &&
+           readv(fd, v, 1) == 0 && pread(fd, hole, 10, 4) == 0 && offset_is(fd, 4) &&
+           lseek(fd, 0, SEEK_SET) == 0 && refused(read(fd, NULL, 10), EFAULT) &&
+           refused(readv(fd, v, 1), EFAULT) && refused(pread(fd, hole, 10, 1), EFAULT) &&
+           offset_is(fd, 0) && lseek(fd, OFFSET_MAX - 1, SEEK_SET) == OFFSET_MAX - 1 &&
+           refused(readv(fd, v, 1), EINVAL) && refused(read(fd, hole, 10), EINVAL);
+}
+
+/** Whether a read of the file `fd`, "abcd", into the last two bytes of
+ * `pages` before the unmapped page after them returns 2, and a readv of a
+ * byte and then of that page returns 1, each moving the offset so. */
+static int read_unwritable_prefix(int fd, char *pages)
+{
+    struct iovec v[2];
+    char got[1];
+
+    v[0].iov_base = got;
+    v[0].iov_len = 1;
+    v[1].iov_base = pages + 4096;
+    v[1].iov_len = 2;
+    return lseek(fd, 0, SEEK_SET) == 0 && read(fd, pages + 4094, 4) == 2 &&
+           memcmp(pages + 4094, "ab", 2) == 0 && offset_is(fd, 2) && readv(fd, v, 2) == 1 &&
+           got[0] == 'c' && offset_is(fd, 3);
+}
+
+/** Whether, with "12345" in the pipe `p` and "67" written after it, which
+ * joins its buffer, a readv of five bytes and then of `hole`, an unmapped
+ * page, is EFAULT and leaves all seven bytes queued, and a readv of five
+ * bytes alone then cuts the buffer, returning "12345" and leaving "67". */
+static int readv_pipe_prefix(const int *p, char *hole)
+{
+    struct iovec v[2];
+    char got[8];
+
+    v[0].iov_base = got;
+    v[0].iov_len = 5;
+    v[1].iov_base = hole;
+    v[1].iov_len = 5;
+    if (write(p[1], "67", 2) != 2 || !refused(readv(p[0], v, 2), EFAULT)) {
+        return 0;
+    }
+    return readv(p[0], v, 1) == 5 && memcmp(got, "12345", 5) == 0 &&
+           read(p[0], got, sizeof(got)) == 2 && memcmp(got, "67", 2) == 0;
+}
+
+/**
+ * Check reads whose buffers the caller cannot all write, as Linux's read and
+ * readv check only that their ranges lie in user space and find a bad page
+ * in their copy. A file's read stops at the first fault with the bytes
+ * before it (`read_unwritable_end`, `read_unwritable_prefix`); Linux's
+ * pipe_read copies each of its page buffers whole, or as much of one as the
+ * vector takes, or not at all, so a fault in a buffer leaves every byte of
+ * it queued (`readv_pipe_prefix`). Returns 0, or 1 once the failure is
+ * reported.
+ */
+static int read_fault_rows(void)
+{
+    static const char *const why[] = {
+        "a read into an unmapped buffer is not 0 at the end, EINVAL past LLONG_MAX or EFAULT",
+        "a read that runs into an unmapped page does not return the bytes before it",
+        "a readv of a pipe into an unmapped buffer does not keep its buffer, or a readv does not "
+        "cut one"};
+    char *pages = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    int fd = -1, p[2] = {-1, -1}, row, ok = 0;
+    const char *error = "make the file, the pipe and the unmapped page";
+
+    if (pages != MAP_FAILED && munmap(pages + 4096, 4096) == 0) {
+        fd = open(FILE_PATH, O_RDWR | O_CREAT | O_TRUNC, 0600);
+    }
+    if (fd >= 0 && write(fd, "abcd", 4) == 4 && pipe(p) == 0 && write(p[1], "12345", 5) == 5) {
+        for (row = 0; row < 3; row++) {
+            error = why[row];
+            if (!(row == 0   ? read_unwritable_end(fd, pages + 4096)
+                  : row == 1 ? read_unwritable_prefix(fd, pages)
+                             : readv_pipe_prefix(p, pages + 4096))) {
+                break;
+            }
+            report_held();
+        }
+        ok = row == 3;
+    }
+    if (pages != MAP_FAILED) {
+        munmap(pages, 4096);
+    }
+    if (fd >= 0) {
+        close(fd);
+    }
+    if (p[0] >= 0) {
+        close(p[0]);
+        close(p[1]);
+    }
+    return ok ? 0 : fail(error);
+}
 
 int main(void)
 {
     report_start();
     if (file_rows() != 0 || device_rows() != 0 || proc_seek_rows() != 0 || wide_proc_rows() != 0 ||
-        refusal_rows() != 0 || seek_refusal_rows() != 0 || vector_rows() != 0) {
+        refusal_rows() != 0 || seek_refusal_rows() != 0 || vector_rows() != 0 ||
+        vector_noappend_rows() != 0 || noappend_seal_row() != 0 || append_fault_rows() != 0 ||
+        offset_end_rows() != 0 || read_fault_rows() != 0 || append_only_rows() != 0) {
         unlink(FILE_PATH);
         return 1;
     }

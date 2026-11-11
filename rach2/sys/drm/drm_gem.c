@@ -397,7 +397,7 @@ static void shmem_vm_put(void *obj)
     drm_gem_object_put((struct drm_gem_object *)obj);
 }
 
-static const struct vm_device_ops shmem_vm_ops = {shmem_vm_page, shmem_vm_put};
+static const struct vm_device_ops shmem_vm_ops = {shmem_vm_page, shmem_vm_put, NULL};
 
 /** The `mmap` of a shmem object: a device region over its frames. */
 static int32_t shmem_obj_mmap(struct drm_gem_object *obj, vma_t *vma)
@@ -447,8 +447,10 @@ struct drm_gem_shmem_object *drm_gem_shmem_create(struct drm_device *dev, uint64
     return s;
 }
 
-int32_t drm_gem_shmem_dumb_create(struct drm_file *file, struct drm_device *dev,
-                                  struct drm_mode_create_dumb *args)
+/** `drm_gem_shmem_dumb_create`'s body, the objects mapped write-combined
+ * when `map_wc` is set. */
+static int32_t shmem_dumb_create(struct drm_file *file, struct drm_device *dev,
+                                 struct drm_mode_create_dumb *args, int map_wc)
 {
     uint32_t min_pitch = (args->width * args->bpp + 7) / 8;
     struct drm_gem_shmem_object *s;
@@ -470,7 +472,7 @@ int32_t drm_gem_shmem_dumb_create(struct drm_file *file, struct drm_device *dev,
     if (args->size > SHMEM_MAX_SIZE) {
         return -EINVAL;
     }
-    s = drm_gem_shmem_create(dev, args->size, 0);
+    s = drm_gem_shmem_create(dev, args->size, map_wc);
     if (!s) {
         return -ENOMEM;
     }
@@ -479,20 +481,30 @@ int32_t drm_gem_shmem_dumb_create(struct drm_file *file, struct drm_device *dev,
     return rc;
 }
 
+int32_t drm_gem_shmem_dumb_create(struct drm_file *file, struct drm_device *dev,
+                                  struct drm_mode_create_dumb *args)
+{
+    return shmem_dumb_create(file, dev, args, 0);
+}
+
+int32_t drm_gem_shmem_dumb_create_wc(struct drm_file *file, struct drm_device *dev,
+                                     struct drm_mode_create_dumb *args)
+{
+    return shmem_dumb_create(file, dev, args, 1);
+}
+
 /* ------------------------------------------------------------------------
  * The ioctls
  */
 
-/** GEM_CLOSE: drop a handle. EINVAL for a nonzero pad or no such handle. */
+/** GEM_CLOSE: drop a handle. EINVAL for no such handle; the pad is not
+ * read, as Linux. */
 int32_t drm_gem_close_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
     struct drm_gem_close *args = (struct drm_gem_close *)data;
 
     if (!drm_core_check_feature(dev, DRIVER_GEM)) {
         return -EOPNOTSUPP;
-    }
-    if (args->pad) {
-        return -EINVAL;
     }
     return drm_gem_handle_delete(file, args->handle);
 }

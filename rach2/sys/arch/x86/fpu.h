@@ -7,13 +7,15 @@
 
 /*
  * The x86's floating-point state, behind ../../fpu.h: the x87, SSE, AVX
- * and AVX-512 registers.
+ * and AVX-512 registers, and the protection keys' PKRU.
  *
  * Three formats, chosen at boot. With XSAVE, which `cpuid` reports, the
  * kernel sets CR4.OSXSAVE and XCR0 to the components it saves: x87 and SSE,
  * AVX where the processor has it, and AVX-512's opmask, upper ZMM and high
- * ZMM components together where it has all three and AVX512F. A program
- * then sees OSXSAVE in `cpuid` and may use the AVX instructions. The area
+ * ZMM components together where it has all three and AVX512F, and on
+ * x86-64 PKRU where it has protection keys, with CR4.PKE, which turns the
+ * keys on (../../fpu.h). A program then sees OSXSAVE in `cpuid` and may
+ * use the AVX instructions, and OSPKE where the keys are on. The area
  * is the standard-format XSAVE image, as large as leaf 0xD of `cpuid` says
  * those components need, and `xsave` and `xrstor` move it; on x86-64 they
  * are `xsave64` and `xrstor64`, which keep the x87 unit's pointers at 64

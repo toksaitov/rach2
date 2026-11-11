@@ -1131,6 +1131,25 @@ int bcache_cached(block_device_t *dev, uint64_t blk)
     return index_find(dev, blk) != 0;
 }
 
+int bcache_state(block_device_t *dev, uint64_t blk)
+{
+    struct bbuf *b = index_find(dev, blk);
+
+    return b == 0 ? 0 : b->dirty ? 2 : 1;
+}
+
+int bcache_copy_cached(block_device_t *dev, uint64_t blk, uint32_t offset, void *out,
+                       uint32_t count)
+{
+    struct bbuf *b = index_find(dev, blk);
+
+    if (!b || b->discard || b->holder != -1 || offset > b->bytes || count > b->bytes - offset) {
+        return 0;
+    }
+    k_memcpy(out, b->data + offset, count);
+    return 1;
+}
+
 int bcache_busy(block_device_t *dev, uint64_t blk)
 {
     struct bbuf *b = index_find(dev, blk);

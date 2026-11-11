@@ -2,24 +2,130 @@
  * triangle.c: draw a textured background and a triangle off screen with
  * OpenGL ES 2 on EGL's surfaceless platform, wait on a fence, read the
  * pixels back and check them, so that two drivers' pictures can be compared.
+ * It links only libc and libdl: EGL and GLES come from libEGL.so.1 by
+ * eglGetProcAddress, so that it builds where no development headers are, as
+ * in Rach2's GNU root.
  */
 
 #define _POSIX_C_SOURCE 200809L
 
-#include <EGL/egl.h>
-#include <EGL/eglext.h>
-#include <GLES2/gl2.h>
+#include <dlfcn.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
+typedef void *EGLDisplay;
+typedef void *EGLConfig;
+typedef void *EGLContext;
+typedef void *EGLSurface;
+typedef void *EGLSyncKHR;
+typedef int32_t EGLint;
+typedef unsigned EGLBoolean;
+typedef unsigned EGLenum;
+typedef uint64_t EGLTimeKHR;
+
+typedef unsigned GLuint;
+typedef int GLint;
+typedef unsigned GLenum;
+typedef int GLsizei;
+typedef float GLfloat;
+typedef unsigned char GLubyte;
+typedef unsigned char GLboolean;
+typedef char GLchar;
+
+/* The values of Khronos's registry (egl.h, eglext.h, gl2.h). */
+#define EGL_NO_DISPLAY                  ((EGLDisplay)0)
+#define EGL_DEFAULT_DISPLAY             ((void *)0)
+#define EGL_NO_CONFIG_KHR               ((EGLConfig)0)
+#define EGL_NO_CONTEXT                  ((EGLContext)0)
+#define EGL_NO_SURFACE                  ((EGLSurface)0)
+#define EGL_NO_SYNC_KHR                 ((EGLSyncKHR)0)
+#define EGL_NONE                        0x3038
+#define EGL_EXTENSIONS                  0x3055
+#define EGL_CONTEXT_CLIENT_VERSION      0x3098
+#define EGL_OPENGL_ES_API               0x30A0
+#define EGL_CONDITION_SATISFIED_KHR     0x30F6
+#define EGL_SYNC_FENCE_KHR              0x30F9
+#define EGL_PLATFORM_SURFACELESS_MESA   0x31DD
+#define EGL_SYNC_FLUSH_COMMANDS_BIT_KHR 0x0001
+#define EGL_FOREVER_KHR                 0xFFFFFFFFFFFFFFFFULL
+
+#define GL_NO_ERROR             0
+#define GL_FALSE                0
+#define GL_TRIANGLES            0x0004
+#define GL_TEXTURE_2D           0x0DE1
+#define GL_RENDERER             0x1F01
+#define GL_UNSIGNED_BYTE        0x1401
+#define GL_FLOAT                0x1406
+#define GL_RGBA                 0x1908
+#define GL_NEAREST              0x2600
+#define GL_TEXTURE_MAG_FILTER   0x2800
+#define GL_TEXTURE_MIN_FILTER   0x2801
+#define GL_TEXTURE0             0x84C0
+#define GL_FRAGMENT_SHADER      0x8B30
+#define GL_VERTEX_SHADER        0x8B31
+#define GL_COMPILE_STATUS       0x8B81
+#define GL_LINK_STATUS          0x8B82
+#define GL_FRAMEBUFFER_COMPLETE 0x8CD5
+#define GL_COLOR_ATTACHMENT0    0x8CE0
+#define GL_FRAMEBUFFER          0x8D40
+
+/* Each entry point the program calls: its type, name and parameters. */
+#define ENTRY_POINTS(X)                                                                       \
+    X(EGLDisplay, eglGetPlatformDisplayEXT, (EGLenum, void *, const EGLint *))                \
+    X(EGLBoolean, eglInitialize, (EGLDisplay, EGLint *, EGLint *))                            \
+    X(const char *, eglQueryString, (EGLDisplay, EGLint))                                     \
+    X(EGLBoolean, eglBindAPI, (EGLenum))                                                      \
+    X(EGLContext, eglCreateContext, (EGLDisplay, EGLConfig, EGLContext, const EGLint *))      \
+    X(EGLBoolean, eglMakeCurrent, (EGLDisplay, EGLSurface, EGLSurface, EGLContext))           \
+    X(EGLBoolean, eglTerminate, (EGLDisplay))                                                 \
+    X(EGLSyncKHR, eglCreateSyncKHR, (EGLDisplay, EGLenum, const EGLint *))                    \
+    X(EGLint, eglClientWaitSyncKHR, (EGLDisplay, EGLSyncKHR, EGLint, EGLTimeKHR))             \
+    X(EGLBoolean, eglDestroySyncKHR, (EGLDisplay, EGLSyncKHR))                                \
+    X(const GLubyte *, glGetString, (GLenum))                                                 \
+    X(GLenum, glGetError, (void))                                                             \
+    X(GLuint, glCreateProgram, (void))                                                        \
+    X(GLuint, glCreateShader, (GLenum))                                                       \
+    X(void, glShaderSource, (GLuint, GLsizei, const GLchar *const *, const GLint *))          \
+    X(void, glCompileShader, (GLuint))                                                        \
+    X(void, glGetShaderiv, (GLuint, GLenum, GLint *))                                         \
+    X(void, glGetShaderInfoLog, (GLuint, GLsizei, GLsizei *, GLchar *))                       \
+    X(void, glAttachShader, (GLuint, GLuint))                                                 \
+    X(void, glDeleteShader, (GLuint))                                                         \
+    X(void, glBindAttribLocation, (GLuint, GLuint, const GLchar *))                           \
+    X(void, glLinkProgram, (GLuint))                                                          \
+    X(void, glGetProgramiv, (GLuint, GLenum, GLint *))                                        \
+    X(void, glUseProgram, (GLuint))                                                           \
+    X(GLint, glGetUniformLocation, (GLuint, const GLchar *))                                  \
+    X(void, glUniform1i, (GLint, GLint))                                                      \
+    X(void, glUniform4f, (GLint, GLfloat, GLfloat, GLfloat, GLfloat))                         \
+    X(void, glGenTextures, (GLsizei, GLuint *))                                               \
+    X(void, glBindTexture, (GLenum, GLuint))                                                  \
+    X(void, glActiveTexture, (GLenum))                                                        \
+    X(void, glTexParameteri, (GLenum, GLenum, GLint))                                         \
+    X(void, glTexImage2D,                                                                     \
+      (GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, const void *))          \
+    X(void, glGenFramebuffers, (GLsizei, GLuint *))                                           \
+    X(void, glBindFramebuffer, (GLenum, GLuint))                                              \
+    X(void, glFramebufferTexture2D, (GLenum, GLenum, GLenum, GLuint, GLint))                  \
+    X(GLenum, glCheckFramebufferStatus, (GLenum))                                             \
+    X(void, glViewport, (GLint, GLint, GLsizei, GLsizei))                                     \
+    X(void, glEnableVertexAttribArray, (GLuint))                                              \
+    X(void, glVertexAttribPointer, (GLuint, GLint, GLenum, GLboolean, GLsizei, const void *)) \
+    X(void, glDrawArrays, (GLenum, GLint, GLsizei))                                           \
+    X(void, glReadPixels, (GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void *))
+
+#define POINTER(type, name, params) static type(*name) params;
+ENTRY_POINTS(POINTER)
+#undef POINTER
+
 /* The picture's side, which the texture's side equals. */
 #define SIDE 256
 
-/* The fence's wait, in nanoseconds: a minute, far past any draw here. */
-#define FENCE_WAIT_NS 60000000000ULL
+/* The fence's wait is unbounded; the runner stops a draw that never ends. */
+#define FENCE_WAIT_NS EGL_FOREVER_KHR
 
 /* The colors, as RGBA bytes: the triangle and the texture's two squares. */
 static const unsigned char tri_color[4] = {255, 64, 0, 255};
@@ -51,6 +157,33 @@ static void die(const char *msg)
 {
     fprintf(stderr, "triangle: error: %s\n", msg);
     exit(1);
+}
+
+/**
+ * Open libEGL.so.1 and resolve every entry point of ENTRY_POINTS by its
+ * eglGetProcAddress, which answers core EGL and GLES functions as well as
+ * extensions (EGL_KHR_get_all_proc_addresses). Exit on a missing one.
+ */
+static void load(void)
+{
+    void *(*get)(const char *);
+    void *egl = dlopen("libEGL.so.1", RTLD_NOW | RTLD_GLOBAL);
+
+    if (egl == NULL) {
+        fprintf(stderr, "triangle: libEGL.so.1: %s\n", dlerror());
+        die("EGL did not load");
+    }
+    *(void **)&get = dlsym(egl, "eglGetProcAddress");
+    if (get == NULL)
+        die("libEGL.so.1 has no eglGetProcAddress");
+#define RESOLVE(type, name, params)                        \
+    *(void **)&name = get(#name);                          \
+    if (name == NULL) {                                    \
+        fprintf(stderr, "triangle: missing: %s\n", #name); \
+        die("an entry point is missing");                  \
+    }
+    ENTRY_POINTS(RESOLVE)
+#undef RESOLVE
 }
 
 /** Compile and link VS and FS into a program with `pos` at attribute 0. */
@@ -89,15 +222,11 @@ static GLuint program(const char *vs, const char *fs)
 static EGLDisplay open_context(void)
 {
     static const EGLint attribs[] = {EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE};
-    PFNEGLGETPLATFORMDISPLAYEXTPROC get_display;
     const char *exts;
     EGLDisplay dpy;
     EGLContext ctx;
 
-    get_display = (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress("eglGetPlatformDisplayEXT");
-    if (get_display == NULL)
-        die("no eglGetPlatformDisplayEXT");
-    dpy = get_display(EGL_PLATFORM_SURFACELESS_MESA, EGL_DEFAULT_DISPLAY, NULL);
+    dpy = eglGetPlatformDisplayEXT(EGL_PLATFORM_SURFACELESS_MESA, EGL_DEFAULT_DISPLAY, NULL);
     if (dpy == EGL_NO_DISPLAY || !eglInitialize(dpy, NULL, NULL))
         die("the surfaceless display did not open");
     exts = eglQueryString(dpy, EGL_EXTENSIONS);
@@ -173,21 +302,14 @@ static void draw(GLuint tex)
 /** Wait on a fence behind the draw; return 0 once it has signalled. */
 static int wait_fence(EGLDisplay dpy)
 {
-    PFNEGLCREATESYNCKHRPROC create = (PFNEGLCREATESYNCKHRPROC)eglGetProcAddress("eglCreateSyncKHR");
-    PFNEGLCLIENTWAITSYNCKHRPROC wait =
-        (PFNEGLCLIENTWAITSYNCKHRPROC)eglGetProcAddress("eglClientWaitSyncKHR");
-    PFNEGLDESTROYSYNCKHRPROC destroy =
-        (PFNEGLDESTROYSYNCKHRPROC)eglGetProcAddress("eglDestroySyncKHR");
     EGLSyncKHR sync;
     EGLint got;
 
-    if (create == NULL || wait == NULL || destroy == NULL)
-        die("no fence functions");
-    sync = create(dpy, EGL_SYNC_FENCE_KHR, NULL);
+    sync = eglCreateSyncKHR(dpy, EGL_SYNC_FENCE_KHR, NULL);
     if (sync == EGL_NO_SYNC_KHR)
         die("no fence");
-    got = wait(dpy, sync, EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, FENCE_WAIT_NS);
-    destroy(dpy, sync);
+    got = eglClientWaitSyncKHR(dpy, sync, EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, FENCE_WAIT_NS);
+    eglDestroySyncKHR(dpy, sync);
     return got == EGL_CONDITION_SATISFIED_KHR ? 0 : -1;
 }
 
@@ -270,6 +392,7 @@ int main(int argc, char **argv)
         }
         ppm = optarg;
     }
+    load();
     dpy = open_context();
     printf("triangle: renderer: %s\n", (const char *)glGetString(GL_RENDERER));
     tex = make_texture();

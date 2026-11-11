@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 11, 2026
 .Dt WRITE 2
 .Os
 .Sh NAME
@@ -31,6 +31,23 @@ A successful call may write fewer bytes than requested; a count past
 0x7ffff000, Linux's
 .Dv MAX_RW_COUNT ,
 writes at most that many, so that the count returned is never negative.
+The descriptor is checked first, then the range with the original count:
+an overflowing range or one past the top of user memory is
+.Er EFAULT ,
+even for a count of zero.
+On the i686 kernel, a count negative as the kernel's signed size is
+.Er EINVAL
+after that range check, before the transfer is limited.
+An i386 call on x86-64 uses the kernel's 64-bit signed size for this check.
+Then a write at the open file description's offset whose end would pass
+the signed 64-bit range is
+.Er EINVAL ,
+as Linux's rw_verify_area has it, with the original count; a stream,
+which has no offset, and
+.Pa /proc/ Ns Ar pid Ns Pa /mem
+and
+.Pa /dev/mem ,
+whose offsets are unsigned, are never refused for it.
 The operation depends on the descriptor's backing object.
 .Ss Regular files
 A regular file is written through its mounted file system at the
@@ -59,7 +76,38 @@ Sparse writes and hole fills drain before returning.
 An I/O error after some bytes were accepted returns their count;
 fsync reports the delayed error even after close and reopen.
 .Ss Pipes and terminals
-A pipe write waits when the pipe is full.
+A pipe of
+.Em n
+pages keeps its bytes in at most
+.Em n
+page buffers, as Linux's does, and is full once
+.Em n
+buffers are open, however few bytes they hold.
+A write's first bytes, its count modulo 4096, join the newest buffer when
+a write made it and they fit in its page; each further page of bytes
+opens a buffer of its own.
+A
+.Fn writev
+to a pipe is one such write of the whole vector, as on Linux: its first
+bytes are its total modulo 4096, and each buffer it opens fills across
+the elements.
+Each of these groups, the first bytes and each page, is committed whole
+once it is full or the write is spent, as on Linux.
+A byte the caller cannot read, one below the lowest user address among
+them, ends the write with the bytes of the groups before its own, or
+.Er EFAULT
+when there are none; no byte of its own group can be read.
+A page that faults leaves its buffer in the pipe with no bytes, as
+Linux's does: the buffer counts toward a full pipe, the readers are woken,
+.Xr poll 2
+reports
+.Dv POLLIN ,
+and a later write's first bytes join it, until a read with room left
+reaches it and lets it go.
+A write of 4096 bytes or fewer is one group, so another writer's bytes
+never come between its own.
+A pipe write waits when the pipe is full and its next byte would open a
+buffer.
 With
 .Dv O_NONBLOCK ,
 it returns the bytes already written, or
@@ -79,9 +127,17 @@ and
 .Dv ONLCR
 set, a newline becomes carriage return followed by newline.
 The return value counts input bytes, before this conversion.
+Console writes give waiting processors and queued threads a turn after
+each block of at most 256 input bytes; one block and its serial waits
+still hold the kernel lock.
 Pseudoterminal slave output uses the same processing and enters the
-master's 4096-byte ring; bytes that arrive while the ring is full, echo
-included, are discarded and still counted as written.
+master's 4096-byte ring.
+A slave writer waits for room, or returns a short count or
+.Er EAGAIN
+when nonblocking; echo that arrives while the ring is full is discarded.
+One slave write reaches the ring before another begins, as
+.Xr console 4
+describes.
 Writing a slave whose master has closed fails with
 .Er EIO .
 Master writes supply input to the slave's line discipline and may wait
@@ -93,11 +149,12 @@ A background process writing its controlling terminal receives
 .Dv SIGTTOU
 when
 .Dv TOSTOP
-is set.
-If the signal is blocked or ignored, the write fails with
-.Er EIO ;
-otherwise it posts the signal and returns
+is set: the write posts the signal to its process group and returns
 .Er EINTR .
+If the signal is blocked or ignored, the write goes ahead.
+Otherwise, in an orphaned process group, it fails with
+.Er EIO ,
+as on Linux.
 .Ss Sockets
 A stream socket queues bytes for TCP transmission.
 If no send space is available, it waits unless
@@ -107,9 +164,15 @@ A short return counts only the bytes queued.
 A connection no longer able to send returns its recorded error, or
 .Er EPIPE
 when no error was recorded.
-This write path does not generate
+An
+.Er EPIPE
+posts
 .Dv SIGPIPE
-for a socket.
+to the writing thread, as Linux's
+.Fn tcp_sendmsg
+does, except for an element of
+.Fn writev
+after one that wrote.
 .Pp
 A datagram socket must have a connected peer.
 Each write sends one datagram, with at most 65507 payload bytes over IPv4
@@ -166,25 +229,59 @@ struct iovec {
 };
 .Ed
 .Pp
+The descriptor is checked first: one not open, opened with
+.Dv O_PATH
+or not open for writing gives
+.Er EBADF ,
+and one open for writing on an object with no write method, such as an
+epoll set,
+.Er EINVAL ,
+before the count and the vector are looked at, as on Linux.
 The vector count must be between 0 and 1024.
 Zero-length entries are skipped.
 Each nonempty entry is passed to the same operation as
 .Fn write .
 The call stops at the first short write or error.
+Before a byte is written the kernel checks each length, then that each
+range lies in user space, as Linux's import_iovec does: a length negative
+as a signed size, which for a 32-bit program is one past 2147483647,
+gives
+.Er EINVAL ,
+and a range outside user space
+.Er EFAULT .
+The total is cut at 0x7ffff000, as one write's count is, and the buffer
+that crosses it is written only up to it.
 .Pp
-The kernel reads and checks each vector as it reaches it.
-An individual length above 2147483647, or a length that would make the
-running byte total exceed that value, stops the call.
+For a mounted file, the kernel copies the whole vector, then
+brings in its buffers before taking the file lock.
+A bad data page ends the accessible prefix; bytes before it are written
+and returned as a short count.
+A pseudo-terminal master also copies the whole vector, and holds its
+write lock across every element, including waits and user copies, so
+another writer cannot insert bytes between them.
+A pipe copies the whole vector and writes it as one write, as the
+section on pipes above says.
+Other writes read each vector again as they reach it.
 An error found after a positive transfer returns the transferred byte
 count instead of the error.
 With zero vectors, or a readable vector list of zero-length entries
 only,
 .Fn writev
-returns zero without checking the descriptor; an entry that cannot be
-read gives
+returns zero once the descriptor is checked, without the write itself:
+.Pa /dev/full
+and an unconnected datagram socket return zero, not
+.Er ENOSPC
+or
+.Er EDESTADDRREQ .
+An entry that cannot be read gives
 .Er EFAULT .
 .Pp
-The vector is a sequence of separate writes, not one atomic operation.
+A write to a mounted file holds the open file description and the file's
+write lock across the vector, as Linux holds its position lock, so that a
+seek through a descriptor that shares the description comes before the
+call or after it, never between two buffers, and the end of the whole
+vector at the offset is checked under that hold.
+Other vectors but a pipe's are a sequence of separate writes.
 On a datagram socket, each nonempty entry sends a separate datagram.
 Musl's buffered output uses
 .Fn writev .
@@ -224,14 +321,21 @@ any point of the call.
 The i386 system call numbers are 4 for
 .Nm write ,
 146 for
-.Nm writev
-and 181 for
+.Nm writev ,
+181 for
 .Nm pwrite64 ,
 which takes the descriptor, the buffer and the count in EBX, ECX and
-EDX, and the offset's low and high 32 bits in ESI and EDI.
+EDX, and the offset's low and high 32 bits in ESI and EDI,
+334 for
+.Nm pwritev ,
+whose offset is in the fourth and fifth arguments, low word first, and
+379 for
+.Nm pwritev2 ,
+which adds flags in the sixth.
 Musl's and GNU libc's
 .Fn pwrite
-are this call.
+are
+.Nm pwrite64 .
 .Pp
 On x86-64 the numbers are 1 for
 .Nm write ,
@@ -239,9 +343,12 @@ On x86-64 the numbers are 1 for
 .Nm writev ,
 18 for
 .Nm pwrite64 ,
-which takes the offset whole in R10, and 296 for
-.Nm pwritev ,
-which i386 does not have here.
+which takes the offset whole in R10, 296 for
+.Nm pwritev
+and 328 for
+.Nm pwritev2 ,
+each with the offset whole in its fourth argument and its fifth, the
+offset's high half, not read.
 .Fn pwritev
 writes the buffers of
 .Fa iov
@@ -249,8 +356,15 @@ as
 .Fn pwrite
 writes one, each at the place the ones before it reached, from
 .Fa offset ;
-the vector is checked whole before a byte is written, and a short write
-ends the call.
+the offset and the descriptor are checked first, as
+.Fn pwrite
+checks them, then the vector, and a short write ends the call.
+A file of a mounted file system takes the whole vector under one lock,
+as
+.Fn writev
+does, leaving the shared offset alone, and a bad data page returns the
+bytes written before it; on an O_APPEND file the vector goes to the end.
+Anything else has the vector checked whole before a byte is written.
 .Pp
 The x86-64 kernel runs, for a program that enters it by
 .Ql int $0x80 ,
@@ -258,16 +372,18 @@ which
 .Xr ia32 7
 describes, i386's
 .Nm writev
-(146), whose vector is of 32-bit addresses and lengths;
+(146), whose vector is of 32-bit addresses and lengths, and i386's
 .Nm pwritev
-(334), whose offset is in the fourth and fifth arguments, low word first;
-and
+(334) and
 .Nm pwritev2
-(379), which adds flags in the sixth.
+(379), with i386's arguments.
+.Pp
 .Nm pwritev2
 writes as
 .Nm writev
-at offset -1, and after a write with
+at offset -1 and as
+.Nm pwritev
+at another, and after a write with
 .Dv RWF_DSYNC
 or
 .Dv RWF_SYNC
@@ -275,10 +391,50 @@ does what
 .Fn fdatasync
 or
 .Fn fsync
-does; another flag but
-.Dv RWF_HIPRI
+does, to the file the write went to even when another thread closes the
+descriptor meanwhile.
+.Dv RWF_APPEND
+writes at the file's end, moving the descriptor's offset only when the
+supplied offset is -1, and fails with the file system's error when the
+end cannot be read.
+.Dv RWF_NOAPPEND
+ignores the description's
+.Dv O_APPEND
+for this call: an explicit offset is used without moving the shared offset,
+and -1 uses and advances the shared offset.
+The description keeps
+.Dv O_APPEND
+for other calls.
+On an append-only file it fails with
+.Er EPERM .
+Combining
+.Dv RWF_APPEND
+and
+.Dv RWF_NOAPPEND
 is
+.Er EINVAL
+for a nonempty vector.
+An append, by
+.Dv RWF_APPEND
+or by
+.Dv O_APPEND ,
+reads the end and writes there under one hold of the file's lock, or, on
+a file system with no lock of each file, such as FAT32 and exFAT, of the
+mount's lock, so that two opens of one file appending at once each add
+their bytes.
+A vector append holds that lock across all its elements;
+another open's append cannot split a record between elements.
+.Dv RWF_HIPRI
+is also accepted.
+The descriptor is checked first, then the vector is imported, as Linux does:
+an unreadable list is
+.Er EFAULT ,
+an excessive count or a negative signed length is
+.Er EINVAL ,
+and a vector of no bytes returns zero before flags are checked.
+Only then is another flag
 .Er EOPNOTSUPP .
+The data pages are touched after the flags have been accepted.
 .Sh RETURN VALUES
 On success, these functions return the number of bytes written.
 .Fn writev
@@ -300,7 +456,7 @@ writes a file at offsets with
 checks that the descriptor's offset does not move, and that
 .Dv O_APPEND
 writes at the end.
-On x86-64 it writes buffers of 2, 0 and 5 bytes at offset 12 with
+It writes buffers of 2, 0 and 5 bytes at offset 12 with
 .Fn pwritev ,
 requires 7, and requires
 .Er EFAULT
@@ -318,8 +474,8 @@ A nonblocking pipe, pseudoterminal master, or stream socket cannot
 accept bytes without waiting, or a datagram socket cannot acquire
 an ephemeral port.
 .It Er EBADF
-The descriptor is invalid, is not open for writing, has no write operation,
-or was opened with
+The descriptor is invalid, is not open for writing, is of a kind with no
+write, or was opened with
 .Dv O_PATH .
 .It Er EBUSY
 A regular file backs a loop device, or a loop-control command encounters
@@ -334,7 +490,8 @@ A stream connection was reset.
 .It Er EDESTADDRREQ
 A datagram socket has no connected peer.
 .It Er EFAULT
-The buffer or vector list cannot be read as required.
+The original buffer range passes the top of user memory, or the buffer
+or vector list cannot be read as required.
 .It Er EFBIG
 A file write exceeds the file system's size or addressing limit, or a
 framebuffer write starts past the mode's end.
@@ -342,10 +499,21 @@ framebuffer write starts past the mode's end.
 A signal interrupted a wait, or a background terminal write posted
 .Dv SIGTTOU .
 .It Er EINVAL
-The vector count is outside 0 through 1024, a vector length exceeds
-2147483647, or the next length would overflow the running byte total.
+The descriptor is open for writing on an object with no write method,
+such as an epoll set, as on Linux.
+The vector count is outside 0 through 1024, or a vector length is
+negative as a signed size.
+A native i686 write count is negative as the kernel's signed size after
+its address range passes.
 .Fn pwrite
-was given a negative offset or an end past the signed 64-bit range.
+was given a negative offset.
+A write at the description's offset or at that of
+.Fn pwrite
+would end past the signed 64-bit range, computed with the original count
+before the transfer is limited, on a file other than
+.Pa /proc/ Ns Ar pid Ns Pa /mem
+and
+.Pa /dev/mem .
 A raw write has an offset or length not divisible by 512.
 A device control write has an invalid argument or command.
 .It Er EIO
@@ -353,9 +521,7 @@ A file system or device write failed, including a write to a protected stick.
 A pseudoterminal slave has lost its master.
 A background terminal write with
 .Dv TOSTOP
-also gives this error when
-.Dv SIGTTOU
-is blocked or ignored.
+also gives this error from an orphaned process group.
 .It Er ELOOP
 A loop-control attachment would exceed the permitted device nesting,
 or its path has too many symbolic links.
@@ -387,8 +553,15 @@ The socket type does not support this write path.
 .It Er EPERM
 A whole-disk or partition node was written on the ordinary kernel,
 a raw write was attempted without effective user ID 0,
-a loop device node was written directly, or the frame-allocation test
-device was written without its boot option.
+a loop device node was written directly, the frame-allocation test
+device was written without its boot option,
+.Fn pwritev2
+was given
+.Dv RWF_NOAPPEND
+on an append-only file, or a write to a memfd sealed with
+.Dv F_SEAL_GROW
+would pass its end with no byte of the write before the last 2 MiB
+boundary at or below that end.
 .It Er EPIPE
 A pipe has no reader, or a stream socket can no longer send and has
 no recorded error.

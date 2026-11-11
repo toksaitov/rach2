@@ -75,6 +75,14 @@ void wait_queue_init(wait_queue_t *wq);
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg);
 
 /**
+ * `wq_wait_event` with `name`, a static string, as the function the sleep
+ * began in, which /proc/PID/wchan gives while the process sleeps; Linux's
+ * name of the function that sleeps there, where Linux has one. The waits of
+ * the three calls above give their own names.
+ */
+int wq_wait_event_as(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name);
+
+/**
  * The same wait with a pending signal ignored, for a lock held by another
  * process and for a transfer a device has in flight for the caller: an
  * interruptible wait returns at once while a signal is pending, and a waiter

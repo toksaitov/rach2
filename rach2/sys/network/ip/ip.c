@@ -738,16 +738,6 @@ uint32_t ip_loop_left_idle(void)
     return loop_left_idle;
 }
 
-/* More than a pair queued: a simultaneous open is a pair of crossing SYNs and
- * is only a pair while neither has been delivered, so a pair is left to the
- * timer; past that the queue is a transfer and is delivered at once. */
-#define LOOP_DRAIN_AT 3u
-
-int ip_loop_crowded(void)
-{
-    return loop_head - loop_tail >= LOOP_DRAIN_AT;
-}
-
 /* Datagrams delivered, counted by who drained them (`IP_LOOP_FROM_*`). */
 static uint32_t loop_delivered[3];
 

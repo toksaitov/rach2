@@ -68,6 +68,7 @@ crc32 1 busybox-coreutils
 creat 2 open
 crond 1 busybox-miscutils
 cryptpw 8 busybox-loginutils
+crysis.sh 1 rach2-game
 cttyhack 1 busybox-shell
 cut 1 busybox-coreutils
 date 1 busybox-coreutils
@@ -146,8 +147,11 @@ ftpput 1 busybox-networking
 ftruncate 2 truncate
 ftruncate64 2 truncate
 fuser 1 busybox-procps
+futex_requeue 2 futex
 futex_time64 2 futex
+futex_wait 2 futex
 futex_waitv 2 futex
+futex_wake 2 futex
 get_robust_list 2 futex
 get_thread_area 2 set_thread_area
 getcpu 2 sched_setscheduler
@@ -239,6 +243,7 @@ makemime 1 busybox-mailutils
 md5sum 1 busybox-coreutils
 mesg 1 busybox-util-linux
 microcom 1 busybox-miscutils
+migrate_pages 2 move_pages
 mim 1 busybox-miscutils
 mincore 2 brk
 mkdir 1 busybox-coreutils
@@ -343,6 +348,7 @@ renameat2 2 rename
 renice 1 busybox-util-linux
 reset 1 busybox-console-tools
 resize 1 busybox-console-tools
+restart_syscall 2 sigaction
 resume 1 busybox-klibc-utils
 rev 1 busybox-util-linux
 rm 1 busybox-coreutils
@@ -369,11 +375,13 @@ rx 1 busybox-miscutils
 sched_get_priority_max 2 sched_setscheduler
 sched_get_priority_min 2 sched_setscheduler
 sched_getaffinity 2 sched_setscheduler
+sched_getattr 2 sched_setscheduler
 sched_getparam 2 sched_setscheduler
 sched_getscheduler 2 sched_setscheduler
 sched_rr_get_interval 2 sched_setscheduler
 sched_rr_get_interval_time64 2 sched_setscheduler
 sched_setaffinity 2 sched_setscheduler
+sched_setattr 2 sched_setscheduler
 sched_setparam 2 sched_setscheduler
 sched_yield 2 sched_setscheduler
 script 1 busybox-util-linux
@@ -385,11 +393,15 @@ sendmail 1 busybox-mailutils
 sendmmsg 2 send
 sendto 2 send
 seq 1 busybox-coreutils
+set_mempolicy_home_node 2 mbind
 set_robust_list 2 futex
 set_tid_address 2 set_thread_area
 setarch 1 busybox-util-linux
 setdomainname 2 uname
 setfattr 1 busybox-miscutils
+setfsgid 2 setfsuid
+setfsgid32 2 setfsuid
+setfsuid32 2 setfsuid
 setgid32 2 setuid
 setgroups32 2 setuid
 sethostname 2 uname
@@ -803,3 +815,5 @@ nice 2 getpriority
 olduname 2 uname
 oldolduname 2 uname
 umount 2 mount
+pkey_free 2 pkey_alloc
+pkey_mprotect 2 pkey_alloc

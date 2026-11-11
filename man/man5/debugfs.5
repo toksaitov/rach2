@@ -161,8 +161,14 @@ The state of each plane, then of each CRTC, then of each connector, as
 Linux's
 .Fn drm_state_dump
 writes them.
+.It Pa dri/DEVICE/crtc-N
+A directory for CRTC N of a device with mode setting, made for every CRTC
+as Linux's
+.Fn drm_debugfs_crtc_add
+makes it; it holds the files below that its driver has.
 .It Pa dri/DEVICE/crtc-N/crc/control
-Mode 0644.
+Mode 0644, for a CRTC whose driver has CRCs, as
+.Pa crc/data .
 A write names the source of the CRTC's CRCs for the next open of
 .Pa crc/data ;
 .Er EINVAL
@@ -178,10 +184,8 @@ chosen one followed by
 .Ql * ;
 nothing for a driver that lists none.
 .It Pa dri/DEVICE/crtc-N/crc/data
-Mode 0444.
+Mode 0444, made only for a CRTC whose driver has CRCs, as Linux makes it.
 The open starts the source, and fails with
-.Er EINVAL
-on a CRTC without CRCs,
 .Er EIO
 while the CRTC is off, and
 .Er EBUSY
@@ -201,6 +205,8 @@ A buffer too short for the line fails with
 .Xr poll 2
 reports
 .Dv POLLIN
+and
+.Dv POLLRDNORM
 while a line waits.
 .It Pa dri/DEVICE/crtc-N/i915_pipe
 Mode 0444, for a device bound by
@@ -272,6 +278,12 @@ and a line for stolen memory when the device has it.
 Mode 0444.
 The GT's frequency registers and limits, as Linux's
 .Fn rps_frequency_dump .
+.It Pa dri/DEVICE/i915_rps_boost_info
+Mode 0444.
+Whether RPS runs and the GT is busy, the wait boosts outstanding, the page
+flips pending that hold RPS at high power, the requested and actual
+frequency with its limits, in MHz, and the wait boosts counted, as Linux's
+.Fn i915_rps_boost_info .
 .It Pa dri/DEVICE/i915_cdclk_info
 Mode 0444.
 The current and the highest CD clock and the highest dot clock, in kHz.
@@ -335,14 +347,25 @@ The rest are read-only, mode 0400, at Linux's defaults.
 .It Pa dri/DEVICE/i915_error_state
 Mode 0644.
 The text of the first error state captured at a hang since boot or the
-last clear, in Linux's format, with the ring and status page of each engine
-that hung in Linux's ascii85; empty when there is none.
+last clear, in Linux's format, with the status page and ring of each engine
+with an incomplete request, hung or not, in Linux's ascii85; empty when
+there is none.
 The text is made at the open.
 Any write clears the state.
 .It Pa dri/DEVICE/i915_gpu_info
 Mode 0644.
 The same text for a state captured of every engine at the open, without
 a hang.
+.It Pa dri/DEVICE/i915_forcewake_user
+Mode 0400.
+An open holds the GT's forcewake, and so keeps the GT out of RC6, until
+the last close, as Linux's does, so that a program may read and write the
+registers through the mapping of BAR 0's
+.Pa resource0
+file of
+.Xr sysfs 5 ,
+as IGT's register access does.
+It has no text.
 .It Pa dri/DEVICE/i915_fake
 Mode 0600.
 Present for a device bound to the fake chip of

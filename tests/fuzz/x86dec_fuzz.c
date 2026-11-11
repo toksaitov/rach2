@@ -1,9 +1,9 @@
 /**
- * Fuzz harness for the decoder of guest instructions that touch MMIO
- * (sys/kvm/decode.c): the input's first 15 bytes are decoded in 16, 32 and
- * 64-bit mode, and each decode that succeeds is checked against the rules
- * of decode.h; then the input's internal error is checked against the
- * layout of Linux's emulation_failure.
+ * Fuzz harness for the decoder of the guest instructions the kernel
+ * carries out (sys/kvm/decode.c): the input's first 15 bytes are decoded
+ * in 16, 32 and 64-bit mode, and each decode that succeeds is checked
+ * against the rules of decode.h; then the input's internal error is
+ * checked against the layout of Linux's emulation_failure.
  *
  * fuzz-deps:
  */
@@ -12,9 +12,6 @@
 
 extern long write(int fd, const void *buf, unsigned long n);
 extern void abort(void);
-
-/* The flags decode.h defines. */
-#define ALL_FLAGS 0x3FFu
 
 /** Report that the decoder broke one of its rules, and abort. */
 static void reject(const char *rule)
@@ -52,6 +49,31 @@ static int same(const struct kvm_insn *a, const struct kvm_insn *b)
     return 1;
 }
 
+/** Whether the instruction is an encoding the processor refuses that was
+ * decoded no further than its opcode. */
+static int bare_ud(const struct kvm_insn *d)
+{
+    return (d->flags & KVM_INSN_UD) && d->size == 0;
+}
+
+/** Check the operand and address sizes of a decode in `mode`. */
+static void check_sizes(int mode, const struct kvm_insn *d)
+{
+    int wide =
+        d->op == KVM_OP_CMPXCHG8B || d->dst.kind == KVM_OPND_MM || d->src.kind == KVM_OPND_MM;
+
+    if (!bare_ud(d) && !pow2_size(d->size) && d->size != 16) {
+        reject("operand size");
+    }
+    if (d->addr_size != 2 && d->addr_size != 4 && d->addr_size != 8) {
+        reject("address size");
+    }
+    if ((mode != 64 && ((d->size == 8 && !wide) || d->addr_size == 8)) ||
+        (mode == 64 && d->addr_size == 2)) {
+        reject("size the mode does not have");
+    }
+}
+
 /** Check the length, bytes, operation, flags and sizes of a decode of
  * `n` bytes in `mode`. */
 static void check_shape(const uint8_t *in, uint32_t n, int mode, const struct kvm_insn *d)
@@ -66,37 +88,68 @@ static void check_shape(const uint8_t *in, uint32_t n, int mode, const struct kv
             reject("bytes not copied");
         }
     }
-    if (d->op < KVM_OP_LOAD || d->op > KVM_OP_POP) {
+    if (d->op < KVM_OP_MOV || d->op > KVM_OP_LAST) {
         reject("unknown op");
     }
-    if ((d->op == KVM_OP_ALU || d->op == KVM_OP_UNARY) && d->alu > KVM_ALU_NEG) {
+    if ((d->op == KVM_OP_ALU || d->op == KVM_OP_UNARY) && d->sub > KVM_ALU_CMPR) {
         reject("unknown alu");
     }
-    if ((d->flags & ~ALL_FLAGS) || !(d->flags & (KVM_INSN_READ | KVM_INSN_WRITE))) {
+    if ((d->flags & ~KVM_INSN_ALL) ||
+        ((d->flags & KVM_INSN_MOV) && (d->flags & KVM_INSN_NOWRITE)) ||
+        ((d->flags & KVM_INSN_REP) && (d->flags & KVM_INSN_REPNE))) {
         reject("flags");
     }
-    if (!pow2_size(d->size) || !pow2_size(d->reg_size) || d->reg_size < d->size) {
-        reject("operand size");
+    check_sizes(mode, d);
+}
+
+/** Check one operand of a decode in `mode`: its kind, register and size. */
+static void check_operand(int mode, const struct kvm_insn *d, const struct kvm_operand *o)
+{
+    uint32_t top = mode == 64 ? 15 : 7;
+
+    switch (o->kind) {
+    case KVM_OPND_NONE:
+    case KVM_OPND_IMM:
+        break;
+    case KVM_OPND_REG:
+        if (o->reg > top || !pow2_size(o->size) || (o->high8 && (o->reg > 3 || o->size != 1))) {
+            reject("register");
+        }
+        break;
+    case KVM_OPND_MEM:
+        if (o->mem > KVM_MEM_XLAT ||
+            (!pow2_size(o->size) && o->size != 16 && o->size != 6 && o->size != 10)) {
+            reject("memory operand");
+        }
+        break;
+    case KVM_OPND_SREG:
+        if (o->reg > KVM_SEG_GS && !(d->flags & KVM_INSN_UD)) {
+            reject("segment register");
+        }
+        break;
+    case KVM_OPND_XMM:
+        if (o->reg > top || o->size != 16) {
+            reject("SSE register");
+        }
+        break;
+    case KVM_OPND_MM:
+        if (o->reg > 7 || o->size != 8) {
+            reject("MMX register");
+        }
+        break;
+    default:
+        reject("operand kind");
     }
-    if (d->addr_size != 2 && d->addr_size != 4 && d->addr_size != 8) {
-        reject("address size");
-    }
-    if ((mode != 64 && (d->size == 8 || d->addr_size == 8)) || (mode == 64 && d->addr_size == 2)) {
-        reject("size the mode does not have");
+    if (o->kind != KVM_OPND_REG && o->high8) {
+        reject("high byte of no register");
     }
 }
 
-/** Check the segment and registers of a decode in `mode`. */
+/** Check the segment and address registers of a decode in `mode`. */
 static void check_regs(int mode, const struct kvm_insn *d)
 {
     if (d->seg > KVM_SEG_GS) {
         reject("segment");
-    }
-    if (d->reg < KVM_REG_NONE || d->reg > 15 || (mode != 64 && d->reg > 7)) {
-        reject("register");
-    }
-    if ((d->flags & KVM_INSN_HIGH8) && (d->reg < 0 || d->reg > 3 || d->size != 1)) {
-        reject("high byte register");
     }
     if (d->base < KVM_REG_NONE || d->base > KVM_REG_RIP || d->index < KVM_REG_NONE ||
         d->index > 15 || d->index == 4) {
@@ -110,6 +163,12 @@ static void check_regs(int mode, const struct kvm_insn *d)
     }
 }
 
+/** Whether `o` is memory at the ModRM byte's or a moffs's address. */
+static int modrm_mem(const struct kvm_operand *o)
+{
+    return o->kind == KVM_OPND_MEM && o->mem == KVM_MEM_MODRM;
+}
+
 /** Check one successful decode of `n` bytes in `mode` against decode.h,
  * and that the instruction's bytes alone decode the same and one byte
  * fewer do not. */
@@ -119,9 +178,18 @@ static void check(const uint8_t *in, uint32_t n, int mode, const struct kvm_insn
 
     check_shape(in, n, mode, d);
     check_regs(mode, d);
-    if ((d->op == KVM_OP_MOVS || d->op == KVM_OP_STOS) &&
+    check_operand(mode, d, &d->dst);
+    check_operand(mode, d, &d->src);
+    check_operand(mode, d, &d->src2);
+    if (modrm_mem(&d->dst) + modrm_mem(&d->src) + modrm_mem(&d->src2) > 1) {
+        reject("two memory operands at one address");
+    }
+    if ((d->flags & KVM_INSN_STRING) &&
         (d->base != KVM_REG_NONE || d->index != KVM_REG_NONE || d->disp != 0)) {
         reject("string operation with an address");
+    }
+    if ((d->flags & KVM_INSN_LOCK) && !(d->flags & KVM_INSN_UD) && !modrm_mem(&d->dst)) {
+        reject("LOCK taken with no memory destination");
     }
     if (kvm_decode(in, d->len, mode, &again) != 0 || !same(d, &again)) {
         reject("cut to its length, decodes otherwise");

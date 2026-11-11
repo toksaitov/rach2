@@ -1,0 +1,455 @@
+spec@!opengl 1.0@depth-clear-precision-check fail
+spec@!opengl 1.0@depth-clear-precision-check@depth16 fail
+spec@!opengl 1.0@depth-clear-precision-check@depth24 fail
+spec@!opengl 1.0@depth-clear-precision-check@depth24_stencil8 fail
+spec@!opengl 1.0@depth-clear-precision-check@depth32 fail
+spec@!opengl 1.0@depth-clear-precision-check@depth32f pass
+spec@!opengl 1.0@depth-clear-precision-check@depth32f_stencil8 pass
+spec@!opengl 1.0@depth-clear-with-copy pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glaccum pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glalphafunc pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glarrayelement pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glbegin pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glbitmap pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glblendfunc pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcalllist pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcalllists pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glclear pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glclearaccum pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glclearcolor pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcleardepth pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glclearindex pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glclearstencil pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glclipplane pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor3b pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor3bv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor3d pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor3dv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor3f pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor3fv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor3i pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor3iv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor3s pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor3sv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor3ub pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor3ubv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor3ui pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor3uiv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor3us pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor3usv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor4b pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor4bv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor4d pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor4dv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor4f pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor4fv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor4i pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor4iv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor4s pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor4sv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor4ub pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor4ubv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor4ui pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor4uiv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor4us pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolor4usv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolormask pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolormaterial pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcolorpointer pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcopypixels pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glcullface pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gldeletelists pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gldepthfunc pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gldepthmask pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gldepthrange pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gldisable pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gldisableclientstate pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gldrawarrays pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gldrawbuffer pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gldrawelements pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gldrawpixels pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gledgeflag pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gledgeflagpointer pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gledgeflagv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glenable pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glenableclientstate pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glendlist pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glfinish pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glflush pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glfrontface pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glfrustum pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glgenlists pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glgetbooleanv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glgetclipplane pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glgetdoublev pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glgeterror pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glgetfloatv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glgetintegerv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glgetlightfv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glgetlightiv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glgetmaterialfv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glgetmaterialiv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glgetpixelmapfv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glgetpixelmapuiv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glgetpixelmapusv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glgetpointerv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glgetpolygonstipple pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glgetstring pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glgettexenvfv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glgettexenviv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glgettexgendv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glgettexgenfv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glgettexgeniv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glgetteximage pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glgettexlevelparameterfv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glgettexlevelparameteriv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glgettexparameterfv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glgettexparameteriv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glhint pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glindexd pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glindexdv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glindexf pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glindexfv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glindexi pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glindexiv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glindexmask pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glindexpointer pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glindexs pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glindexsv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glindexub pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glindexubv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glinterleavedarrays pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glisenabled pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glislist pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gllightf pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gllightfv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gllighti pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gllightiv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gllightmodelf pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gllightmodelfv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gllightmodeli pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gllightmodeliv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gllinestipple pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gllinewidth pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gllistbase pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glloadidentity pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glloadmatrixd pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glloadmatrixf pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gllogicop pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glmaterialf pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glmaterialfv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glmateriali pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glmaterialiv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glmatrixmode pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glmultmatrixd pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glmultmatrixf pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glnewlist pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glnormal3d pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glnormal3dv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glnormal3f pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glnormal3fv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glnormal3i pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glnormal3iv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glnormal3s pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glnormal3sv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glnormalpointer pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glortho pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glpixelmapfv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glpixelmapuiv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glpixelmapusv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glpixelstoref pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glpixelstorei pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glpixeltransferf pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glpixeltransferi pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glpixelzoom pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glpointsize pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glpolygonstipple pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glpushattrib pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glpushclientattrib pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glpushmatrix pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glrasterpos2d pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glrasterpos2dv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glrasterpos2f pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glrasterpos2fv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glrasterpos2i pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glrasterpos2iv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glrasterpos2s pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glrasterpos2sv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glrasterpos3d pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glrasterpos3dv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glrasterpos3f pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glrasterpos3fv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glrasterpos3i pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glrasterpos3iv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glrasterpos3s pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glrasterpos3sv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glreadbuffer pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glreadpixels pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glrectd pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glrectdv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glrectf pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glrectfv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glrecti pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glrectiv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glrects pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glrectsv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glrendermode pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glrotated pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glrotatef pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glscaled pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glscalef pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glscissor pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glshademodel pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glstencilfunc pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glstencilmask pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glstencilop pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord1d pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord1dv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord1f pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord1fv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord1i pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord1iv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord1s pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord1sv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord2d pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord2dv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord2f pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord2fv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord2i pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord2iv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord2s pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord2sv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord3d pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord3dv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord3f pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord3fv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord3i pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord3iv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord3s pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord3sv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord4d pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord4dv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord4f pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord4fv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord4i pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord4iv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord4s pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoord4sv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexcoordpointer pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexenvf pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexenvfv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexenvi pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexenviv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexgend pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexgendv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexgenf pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexgenfv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexgeni pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexgeniv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glteximage1d pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glteximage2d pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexparameterf pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexparameterfv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexparameteri pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltexparameteriv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltranslated pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@gltranslatef pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glvertex2d pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glvertex2dv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glvertex2f pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glvertex2fv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glvertex2i pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glvertex2iv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glvertex2s pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glvertex2sv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glvertex3d pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glvertex3dv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glvertex3f pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glvertex3fv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glvertex3i pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glvertex3iv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glvertex3s pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glvertex3sv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glvertex4d pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glvertex4dv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glvertex4f pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glvertex4fv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glvertex4i pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glvertex4iv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glvertex4s pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glvertex4sv pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glvertexpointer pass
+spec@!opengl 1.0@gl-1.0-beginend-coverage@glviewport pass
+spec@!opengl 1.0@gl-1.0-bitmap-heart-dance pass
+spec@!opengl 1.0@gl-1.0-blend-func pass
+spec@!opengl 1.0@gl-1.0-dlist-beginend pass
+spec@!opengl 1.0@gl-1.0-dlist-beginend@glcalllist inside glbegin-glend pass
+spec@!opengl 1.0@gl-1.0-dlist-beginend@illegal glbegin mode in display list pass
+spec@!opengl 1.0@gl-1.0-dlist-beginend@illegal gldrawarrays inside glbegin-glend pass
+spec@!opengl 1.0@gl-1.0-dlist-beginend@illegal gldrawarrays inside glbegin-glend (2) pass
+spec@!opengl 1.0@gl-1.0-dlist-beginend@illegal glrect inside glbegin-glend pass
+spec@!opengl 1.0@gl-1.0-dlist-beginend@incorrect dlist with glthread (bug 7335) pass
+spec@!opengl 1.0@gl-1.0-dlist-beginend@nested glcalllist inside glbegin-glend pass
+spec@!opengl 1.0@gl-1.0-dlist-beginend@separate glbegin-glvertex-glend lists pass
+spec@!opengl 1.0@gl-1.0-dlist-bitmap pass
+spec@!opengl 1.0@gl-1.0-dlist-materials pass
+spec@!opengl 1.0@gl-1.0-dlist-shademodel pass
+spec@!opengl 1.0@gl-1.0-drawbuffer-modes pass
+spec@!opengl 1.0@gl-1.0-drawpixels-color-index pass
+spec@!opengl 1.0@gl-1.0-drawpixels-depth-test pass
+spec@!opengl 1.0@gl-1.0-drawpixels-stencil-test pass
+spec@!opengl 1.0@gl-1.0-edgeflag pass
+spec@!opengl 1.0@gl-1.0-edgeflag-const pass
+spec@!opengl 1.0@gl-1.0-edgeflag-quads pass
+spec@!opengl 1.0@gl-1.0-empty-begin-end-clause pass
+spec@!opengl 1.0@gl-1.0-fpexceptions pass
+spec@!opengl 1.0@gl-1.0-front-invalidate-back pass
+spec@!opengl 1.0@gl-1.0-logicop pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_and pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_and_inverted pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_and_inverted_msaa pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_and_msaa pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_and_reverse pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_and_reverse_msaa pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_clear pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_clear_msaa pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_copy pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_copy_inverted pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_copy_inverted_msaa pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_copy_msaa pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_equiv pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_equiv_msaa pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_invert pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_invert_msaa pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_nand pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_nand_msaa pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_noop pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_noop_msaa pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_nor pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_nor_msaa pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_or pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_or_inverted pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_or_inverted_msaa pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_or_msaa pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_or_reverse pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_or_reverse_msaa pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_set pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_set_msaa pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_xor pass
+spec@!opengl 1.0@gl-1.0-logicop@gl_xor_msaa pass
+spec@!opengl 1.0@gl-1.0-long-dlist pass
+spec@!opengl 1.0@gl-1.0-long-line-loop pass
+spec@!opengl 1.0@gl-1.0-no-op-paths pass
+spec@!opengl 1.0@gl-1.0-ortho-pos pass
+spec@!opengl 1.0@gl-1.0-polygon-line-aa pass
+spec@!opengl 1.0@gl-1.0-push-no-attribs pass
+spec@!opengl 1.0@gl-1.0-rastercolor pass
+spec@!opengl 1.0@gl-1.0-read-cache-stress-test pass
+spec@!opengl 1.0@gl-1.0-readpixels-oob pass
+spec@!opengl 1.0@gl-1.0-readpixsanity pass
+spec@!opengl 1.0@gl-1.0-rendermode-feedback pass
+spec@!opengl 1.0@gl-1.0-rendermode-feedback@gl_2d pass
+spec@!opengl 1.0@gl-1.0-rendermode-feedback@gl_3d pass
+spec@!opengl 1.0@gl-1.0-rendermode-feedback@gl_3d_color pass
+spec@!opengl 1.0@gl-1.0-rendermode-feedback@gl_3d_color_texture pass
+spec@!opengl 1.0@gl-1.0-rendermode-feedback@gl_4d_color_texture pass
+spec@!opengl 1.0@gl-1.0-scissor-bitmap pass
+spec@!opengl 1.0@gl-1.0-scissor-clear pass
+spec@!opengl 1.0@gl-1.0-scissor-copypixels pass
+spec@!opengl 1.0@gl-1.0-scissor-depth-clear pass
+spec@!opengl 1.0@gl-1.0-scissor-depth-clear-negative-xy pass
+spec@!opengl 1.0@gl-1.0-scissor-many pass
+spec@!opengl 1.0@gl-1.0-scissor-offscreen pass
+spec@!opengl 1.0@gl-1.0-scissor-polygon pass
+spec@!opengl 1.0@gl-1.0-scissor-stencil-clear pass
+spec@!opengl 1.0@gl-1.0-simple-readbuffer pass
+spec@!opengl 1.0@gl-1.0-spot-light pass
+spec@!opengl 1.0@gl-1.0-swapbuffers-behavior fail
+spec@!opengl 1.0@gl-1.0-texgen pass
+spec@!opengl 1.0@gl-1.0-textured-triangle pass
+spec@!opengl 1.0@gl-1.0-user-clip-all-planes pass
+spec@!opengl 1.0@rasterpos pass
+spec@!opengl 1.0@rasterpos@arb_vp pass
+spec@!opengl 1.0@rasterpos@fixed_func pass
+spec@!opengl 1.0@rasterpos@glsl_vs pass
+spec@!opengl 1.0@rasterpos@glsl_vs_tbo pass
+spec@!opengl 1.0@rasterpos@glsl_vs_tex1d pass
+spec@!opengl 1.0@rasterpos@glsl_vs_ubo pass
+spec@!opengl 1.0@rasterpos@glsl_vs_uniforms pass
+spec@arb_framebuffer_object@arb_framebuffer_object-depth-stencil-blit depth gl_depth24_stencil8 pass
+spec@arb_framebuffer_object@arb_framebuffer_object-depth-stencil-blit depth gl_depth32f_stencil8 pass
+spec@arb_framebuffer_object@arb_framebuffer_object-depth-stencil-blit depth gl_depth_component16 pass
+spec@arb_framebuffer_object@arb_framebuffer_object-depth-stencil-blit depth gl_depth_component24 pass
+spec@arb_framebuffer_object@arb_framebuffer_object-depth-stencil-blit depth gl_depth_component32 pass
+spec@arb_framebuffer_object@arb_framebuffer_object-depth-stencil-blit depth gl_depth_component32f pass
+spec@arb_framebuffer_object@arb_framebuffer_object-depth-stencil-blit depth_stencil gl_depth24_stencil8 pass
+spec@arb_framebuffer_object@arb_framebuffer_object-depth-stencil-blit depth_stencil gl_depth32f_stencil8 pass
+spec@arb_framebuffer_object@arb_framebuffer_object-depth-stencil-blit stencil gl_depth24_stencil8 pass
+spec@arb_framebuffer_object@arb_framebuffer_object-depth-stencil-blit stencil gl_depth32f_stencil8 pass
+spec@arb_framebuffer_object@arb_framebuffer_object-depth-stencil-blit stencil gl_stencil_index1 pass
+spec@arb_framebuffer_object@arb_framebuffer_object-depth-stencil-blit stencil gl_stencil_index16 pass
+spec@arb_framebuffer_object@arb_framebuffer_object-depth-stencil-blit stencil gl_stencil_index4 pass
+spec@arb_framebuffer_object@arb_framebuffer_object-depth-stencil-blit stencil gl_stencil_index8 pass
+spec@arb_framebuffer_object@arb_framebuffer_object-get-attachment-parameter-default-framebuffer pass
+spec@arb_framebuffer_object@execution@msaa-alpha-to-coverage skip
+spec@arb_framebuffer_object@execution@msaa-alpha-to-coverage_alpha-to-one skip
+spec@arb_framebuffer_object@execution@msaa-alpha-to-coverage_alpha-to-one_write-z skip
+spec@arb_framebuffer_object@execution@msaa-alpha-to-one skip
+spec@arb_framebuffer_object@execution@msaa-trivial skip
+spec@arb_framebuffer_object@fbo blit from missing attachment pass
+spec@arb_framebuffer_object@fbo blit to missing attachment pass
+spec@arb_framebuffer_object@fbo-alpha pass
+spec@arb_framebuffer_object@fbo-attachments-blit-scaled-linear pass
+spec@arb_framebuffer_object@fbo-blit-scaled-linear pass
+spec@arb_framebuffer_object@fbo-blit-stretch pass
+spec@arb_framebuffer_object@fbo-deriv pass
+spec@arb_framebuffer_object@fbo-drawbuffers-none gl_fragcolor pass
+spec@arb_framebuffer_object@fbo-drawbuffers-none gl_fragdata pass
+spec@arb_framebuffer_object@fbo-drawbuffers-none glblendfunci pass
+spec@arb_framebuffer_object@fbo-drawbuffers-none glblitframebuffer pass
+spec@arb_framebuffer_object@fbo-drawbuffers-none glclear pass
+spec@arb_framebuffer_object@fbo-drawbuffers-none glclearbuffer pass
+spec@arb_framebuffer_object@fbo-drawbuffers-none glcolormaskindexed pass
+spec@arb_framebuffer_object@fbo-drawbuffers-none gldrawpixels pass
+spec@arb_framebuffer_object@fbo-drawbuffers-none use_frag_out pass
+spec@arb_framebuffer_object@fbo-generatemipmap-1d pass
+spec@arb_framebuffer_object@fbo-generatemipmap-1d rgb9_e5 pass
+spec@arb_framebuffer_object@fbo-generatemipmap-3d pass
+spec@arb_framebuffer_object@fbo-generatemipmap-3d rgb9_e5 pass
+spec@arb_framebuffer_object@fbo-generatemipmap-cubemap pass
+spec@arb_framebuffer_object@fbo-generatemipmap-cubemap rgb9_e5 pass
+spec@arb_framebuffer_object@fbo-generatemipmap-cubemap s3tc_dxt1 pass
+spec@arb_framebuffer_object@fbo-getframebufferattachmentparameter-01 pass
+spec@arb_framebuffer_object@fbo-gl_pointcoord pass
+spec@arb_framebuffer_object@fbo-incomplete pass
+spec@arb_framebuffer_object@fbo-incomplete-invalid-texture pass
+spec@arb_framebuffer_object@fbo-incomplete-texture-01 pass
+spec@arb_framebuffer_object@fbo-incomplete-texture-02 pass
+spec@arb_framebuffer_object@fbo-incomplete-texture-03 pass
+spec@arb_framebuffer_object@fbo-incomplete-texture-04 pass
+spec@arb_framebuffer_object@fbo-incomplete@0x0 renderbuffer pass
+spec@arb_framebuffer_object@fbo-incomplete@0x0 texture pass
+spec@arb_framebuffer_object@fbo-incomplete@delete renderbuffer of bound fbo pass
+spec@arb_framebuffer_object@fbo-incomplete@delete texture of bound fbo pass
+spec@arb_framebuffer_object@fbo-incomplete@invalid layer of a 1d-array texture pass
+spec@arb_framebuffer_object@fbo-incomplete@invalid layer of a 2d-array texture pass
+spec@arb_framebuffer_object@fbo-incomplete@invalid layer of a cube-array texture pass
+spec@arb_framebuffer_object@fbo-incomplete@invalid slice of 3d texture pass
+spec@arb_framebuffer_object@fbo-luminance-alpha skip
+spec@arb_framebuffer_object@fbo-mipmap-copypix pass
+spec@arb_framebuffer_object@fbo-scissor-blit fbo pass
+spec@arb_framebuffer_object@fbo-scissor-blit window pass
+spec@arb_framebuffer_object@fbo-tex-rgbx pass
+spec@arb_framebuffer_object@fbo-viewport pass
+spec@arb_framebuffer_object@framebuffer-blit-levels draw depth pass
+spec@arb_framebuffer_object@framebuffer-blit-levels draw rgba pass
+spec@arb_framebuffer_object@framebuffer-blit-levels draw stencil pass
+spec@arb_framebuffer_object@framebuffer-blit-levels read depth pass
+spec@arb_framebuffer_object@framebuffer-blit-levels read rgba pass
+spec@arb_framebuffer_object@framebuffer-blit-levels read stencil pass
+spec@arb_framebuffer_object@framebuffer-blit-mipmap pass
+spec@arb_framebuffer_object@mixed-buffer-sizes pass
+spec@arb_framebuffer_object@negative-readpixels-no-rb pass
+spec@arb_framebuffer_object@same-attachment-renderbuffer-depth_stencil pass
+spec@arb_framebuffer_object@same-attachment-tex2d-depth_stencil pass

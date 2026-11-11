@@ -1,0 +1,247 @@
+kvm-corpus: rseq_test: run
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  rseq_test.c:277: rseq_cpu == cpu
+  pid=1558 tid=1558 errno=4 - Interrupted system call
+     1	0x00000000004036a0: main at ??:?
+     2	0x000000000041b753: __libc_start_call_main at ??:?
+     3	0x000000000041d61d: __libc_start_main_impl at ??:?
+     4	0x0000000000403840: _start at ??:?
+  rseq CPU = 2, sched CPU = 1
+kvm-corpus: set_memory_region_test: run
+Random seed: 0x6b8b4567
+Testing KVM_RUN with zero added memory regions
+Allowed number of memory slots: 256
+Adding slots 0..255, each memory region with 2048K size
+Skipping tests for KVM_MEM_GUEST_MEMFD memory regions
+Testing MOVE of in-use region, 10 loops, slot zap quirk enabled
+==== Test Assertion Failure ====
+  lib/test_util.c:153: thp_configured()
+  pid=1566 tid=1566 errno=2 - No such file or directory
+     1	0x000000000040ec78: get_trans_hugepagesz at ??:?
+     2	0x0000000000406bfd: vm_mem_add at ??:?
+     3	0x00000000004077cc: vm_userspace_mem_region_add at ??:?
+     4	0x00000000004041b6: spawn_vm at ??:?
+     5	0x000000000040378b: main at ??:?
+     6	0x000000000041c2d3: __libc_start_call_main at ??:?
+     7	0x000000000041e19d: __libc_start_main_impl at ??:?
+     8	0x0000000000403e00: _start at ??:?
+  THP is not configured in host kernel
+kvm-corpus: steal_time: run
+Random seed: 0x6b8b4567
+TAP version 13
+1..0 # SKIP - Requirement not met: is_steal_time_supported(vcpus[0])
+kvm-corpus: system_counter_offset_test: run
+Random seed: 0x6b8b4567
+1..0 # SKIP - KVM_VCPU_TSC_OFFSET not supported; skipping test
+kvm-corpus: x86_64/debug_regs: run
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  x86_64/debug_regs.c:177: run->exit_reason == KVM_EXIT_DEBUG && run->debug.arch.exception == DB_VECTOR && run->debug.arch.pc == target_rip && run->debug.arch.dr6 == target_dr6
+  pid=1581 tid=1581 errno=2 - No such file or directory
+     1	0x00000000004036bd: main at ??:?
+     2	0x000000000041ba93: __libc_start_call_main at ??:?
+     3	0x000000000041d95d: __libc_start_main_impl at ??:?
+     4	0x0000000000403d00: _start at ??:?
+  SINGLE_STEP[1]: exit 9 exception -2147483615 rip 0x0 (should be 0x40407c) dr6 0xffff4ff0 (should be 0xffff4ff0)
+kvm-corpus: x86_64/hwcr_msr_test: run
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  include/x86_64/processor.h:865: r == msrs->nmsrs
+  pid=1588 tid=1588 errno=2 - No such file or directory
+     1	0x0000000000412440: vcpu_get_msr at ??:?
+     2	0x00000000004034d3: test_hwcr_bit at ??:?
+     3	0x000000000040327e: main at ??:?
+     4	0x000000000041ae13: __libc_start_call_main at ??:?
+     5	0x000000000041ccdd: __libc_start_main_impl at ??:?
+     6	0x0000000000403340: _start at ??:?
+  KVM_GET_MSRS failed, r: 0 (failed on MSR c0010015)
+kvm-corpus: x86_64/state_test: run
+Random seed: 0x6b8b4567
+will skip nested state checks
+==== Test Assertion Failure ====
+  include/x86_64/processor.h:865: r == msrs->nmsrs
+  pid=1595 tid=1595 errno=4 - Interrupted system call
+     1	0x00000000004154b7: vcpu_save_state at ??:?
+     2	0x0000000000403411: main at ??:?
+     3	0x000000000041d053: __libc_start_call_main at ??:?
+     4	0x000000000041ef1d: __libc_start_main_impl at ??:?
+     5	0x0000000000403ca0: _start at ??:?
+  KVM_GET_MSRS failed, r: 13 (failed on MSR 17b)
+kvm-corpus: x86_64/sync_regs_test: run
+Random seed: 0x6b8b4567
+TAP version 13
+1..10
+# Starting 10 tests from 1 test cases.
+#  RUN           sync_regs_test.read_invalid ...
+#            OK  sync_regs_test.read_invalid
+ok 1 sync_regs_test.read_invalid
+#  RUN           sync_regs_test.set_invalid ...
+#            OK  sync_regs_test.set_invalid
+ok 2 sync_regs_test.set_invalid
+#  RUN           sync_regs_test.req_and_verify_all_valid ...
+#            OK  sync_regs_test.req_and_verify_all_valid
+ok 3 sync_regs_test.req_and_verify_all_valid
+#  RUN           sync_regs_test.set_and_verify_various ...
+#            OK  sync_regs_test.set_and_verify_various
+ok 4 sync_regs_test.set_and_verify_various
+#  RUN           sync_regs_test.clear_kvm_dirty_regs_bits ...
+#            OK  sync_regs_test.clear_kvm_dirty_regs_bits
+ok 5 sync_regs_test.clear_kvm_dirty_regs_bits
+#  RUN           sync_regs_test.clear_kvm_valid_and_dirty_regs ...
+#            OK  sync_regs_test.clear_kvm_valid_and_dirty_regs
+ok 6 sync_regs_test.clear_kvm_valid_and_dirty_regs
+#  RUN           sync_regs_test.clear_kvm_valid_regs_bits ...
+#            OK  sync_regs_test.clear_kvm_valid_regs_bits
+ok 7 sync_regs_test.clear_kvm_valid_regs_bits
+#  RUN           sync_regs_test.race_cr4 ...
+==== Test Assertion Failure ====
+  include/x86_64/processor.h:865: r == msrs->nmsrs
+  pid=1618 tid=1618 errno=4 - Interrupted system call
+     1	0x0000000000417037: vcpu_save_state at ??:?
+     2	0x0000000000404718: race_sync_regs at ??:?
+     3	0x0000000000405644: wrapper_sync_regs_test_race_cr4 at ??:?
+     4	0x000000000040732a: __run_test at ??:?
+     5	0x0000000000403bc4: main at ??:?
+     6	0x000000000041ebd3: __libc_start_call_main at ??:?
+     7	0x0000000000420a9d: __libc_start_main_impl at ??:?
+     8	0x0000000000403e60: _start at ??:?
+  KVM_GET_MSRS failed, r: 13 (failed on MSR 17b)
+# race_cr4: Test failed
+#          FAIL  sync_regs_test.race_cr4
+not ok 8 sync_regs_test.race_cr4
+#  RUN           sync_regs_test.race_exc ...
+==== Test Assertion Failure ====
+  include/x86_64/processor.h:865: r == msrs->nmsrs
+  pid=1623 tid=1623 errno=4 - Interrupted system call
+     1	0x0000000000417037: vcpu_save_state at ??:?
+     2	0x0000000000404718: race_sync_regs at ??:?
+     3	0x00000000004057f4: wrapper_sync_regs_test_race_exc at ??:?
+     4	0x000000000040732a: __run_test at ??:?
+     5	0x0000000000403bc4: main at ??:?
+     6	0x000000000041ebd3: __libc_start_call_main at ??:?
+     7	0x0000000000420a9d: __libc_start_main_impl at ??:?
+     8	0x0000000000403e60: _start at ??:?
+  KVM_GET_MSRS failed, r: 13 (failed on MSR 17b)
+# race_exc: Test failed
+#          FAIL  sync_regs_test.race_exc
+not ok 9 sync_regs_test.race_exc
+#  RUN           sync_regs_test.race_inj_pen ...
+==== Test Assertion Failure ====
+  include/x86_64/processor.h:865: r == msrs->nmsrs
+  pid=1628 tid=1628 errno=4 - Interrupted system call
+     1	0x0000000000417037: vcpu_save_state at ??:?
+     2	0x0000000000404718: race_sync_regs at ??:?
+     3	0x0000000000405494: wrapper_sync_regs_test_race_inj_pen at ??:?
+     4	0x000000000040732a: __run_test at ??:?
+     5	0x0000000000403bc4: main at ??:?
+     6	0x000000000041ebd3: __libc_start_call_main at ??:?
+     7	0x0000000000420a9d: __libc_start_main_impl at ??:?
+     8	0x0000000000403e60: _start at ??:?
+  KVM_GET_MSRS failed, r: 13 (failed on MSR 17b)
+# race_inj_pen: Test failed
+#          FAIL  sync_regs_test.race_inj_pen
+not ok 10 sync_regs_test.race_inj_pen
+# FAILED: 7 / 10 tests passed.
+# Totals: pass:7 fail:3 xfail:0 xpass:0 skip:0 error:0
+kvm-corpus: x86_64/userspace_io_test: run
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  lib/x86_64/processor.c:567: Unconditional guest failure
+  pid=1635 tid=1635 errno=4 - Interrupted system call
+     1	0x0000000000411251: assert_on_unhandled_exception at ??:?
+     2	0x000000000040712f: vcpu_run at ??:?
+     3	0x0000000000403299: main at ??:?
+     4	0x000000000041b153: __libc_start_call_main at ??:?
+     5	0x000000000041d01d: __libc_start_main_impl at ??:?
+     6	0x0000000000403680: _start at ??:?
+  Unhandled exception '0xe' at guest RIP '0x4037be'
+kvm-corpus: x86_64/userspace_msr_exit_test: run
+Random seed: 0x6b8b4567
+TAP version 13
+1..4
+# Starting 4 tests from 1 test cases.
+#  RUN           user_msr.msr_filter_allow ...
+==== Test Assertion Failure ====
+  x86_64/userspace_msr_exit_test.c:520: rc
+  pid=1644 tid=1644 errno=2 - No such file or directory
+     1	0x000000000040669f: wrapper_user_msr_msr_filter_allow at ??:?
+     2	0x0000000000406fba: __run_test at ??:?
+     3	0x00000000004039b4: main at ??:?
+     4	0x000000000041e853: __libc_start_call_main at ??:?
+     5	0x000000000042071d: __libc_start_main_impl at ??:?
+     6	0x0000000000403b80: _start at ??:?
+  KVM_CAP_X86_USER_SPACE_MSR is available
+# msr_filter_allow: Test failed
+#          FAIL  user_msr.msr_filter_allow
+not ok 1 user_msr.msr_filter_allow
+#  RUN           user_msr.msr_filter_deny ...
+==== Test Assertion Failure ====
+  x86_64/userspace_msr_exit_test.c:633: rc
+  pid=1649 tid=1649 errno=2 - No such file or directory
+     1	0x0000000000405b08: wrapper_user_msr_msr_filter_deny at ??:?
+     2	0x0000000000406fba: __run_test at ??:?
+     3	0x00000000004039b4: main at ??:?
+     4	0x000000000041e853: __libc_start_call_main at ??:?
+     5	0x000000000042071d: __libc_start_main_impl at ??:?
+     6	0x0000000000403b80: _start at ??:?
+  KVM_CAP_X86_USER_SPACE_MSR is available
+# msr_filter_deny: Test failed
+#          FAIL  user_msr.msr_filter_deny
+not ok 2 user_msr.msr_filter_deny
+#  RUN           user_msr.msr_permission_bitmap ...
+==== Test Assertion Failure ====
+  x86_64/userspace_msr_exit_test.c:673: rc
+  pid=1654 tid=1654 errno=2 - No such file or directory
+     1	0x000000000040619e: wrapper_user_msr_msr_permission_bitmap at ??:?
+     2	0x0000000000406fba: __run_test at ??:?
+     3	0x00000000004039b4: main at ??:?
+     4	0x000000000041e853: __libc_start_call_main at ??:?
+     5	0x000000000042071d: __libc_start_main_impl at ??:?
+     6	0x0000000000403b80: _start at ??:?
+  KVM_CAP_X86_USER_SPACE_MSR is available
+# msr_permission_bitmap: Test failed
+#          FAIL  user_msr.msr_permission_bitmap
+not ok 3 user_msr.msr_permission_bitmap
+#  RUN           user_msr.user_exit_msr_flags ...
+==== Test Assertion Failure ====
+  x86_64/userspace_msr_exit_test.c:708: rc
+  pid=1659 tid=1659 errno=2 - No such file or directory
+     1	0x0000000000405189: wrapper_user_msr_user_exit_msr_flags at ??:?
+     2	0x0000000000406fba: __run_test at ??:?
+     3	0x00000000004039b4: main at ??:?
+     4	0x000000000041e853: __libc_start_call_main at ??:?
+     5	0x000000000042071d: __libc_start_main_impl at ??:?
+     6	0x0000000000403b80: _start at ??:?
+  KVM_CAP_X86_USER_SPACE_MSR is available
+# user_exit_msr_flags: Test failed
+#          FAIL  user_msr.user_exit_msr_flags
+not ok 4 user_msr.user_exit_msr_flags
+# FAILED: 0 / 4 tests passed.
+# Totals: pass:0 fail:4 xfail:0 xpass:0 skip:0 error:0
+kvm-corpus: x86_64/xapic_state_test: run
+Random seed: 0x6b8b4567
+==== Test Assertion Failure ====
+  include/kvm_util.h:374: !ret
+  pid=1666 tid=1666 errno=22 - Invalid argument
+     1	0x00000000004033c3: main at ??:?
+     2	0x000000000041bc93: __libc_start_call_main at ??:?
+     3	0x000000000041db5d: __libc_start_main_impl at ??:?
+     4	0x00000000004035c0: _start at ??:?
+  KVM_ENABLE_CAP failed, rc: -1 errno: 22 (Invalid argument)
+kvm-corpus: x86_64/xss_msr_test: run
+Random seed: 0x6b8b4567
+1..0 # SKIP - Requirement not met: kvm_cpu_has(X86_FEATURE_XSAVES)
+kvm-corpus: rseq_test: fail: expected pass
+kvm-corpus: set_memory_region_test: fail: expected pass
+kvm-corpus: steal_time: skip: expected pass
+kvm-corpus: system_counter_offset_test: skip: expected pass
+kvm-corpus: x86_64/debug_regs: fail: expected pass
+kvm-corpus: x86_64/hwcr_msr_test: fail: expected pass
+kvm-corpus: x86_64/state_test: fail: expected pass
+kvm-corpus: x86_64/sync_regs_test: fail: expected pass
+kvm-corpus: x86_64/userspace_io_test: fail: expected pass
+kvm-corpus: x86_64/userspace_msr_exit_test: fail: expected pass
+kvm-corpus: x86_64/xapic_state_test: fail: expected pass
+kvm-corpus: x86_64/xss_msr_test: skip: as expected
+kvm-corpus: result: fail: 11 of 12: rseq_test set_memory_region_test steal_time system_counter_offset_test x86_64/debug_regs x86_64/hwcr_msr_test x86_64/state_test x86_64/sync_regs_test x86_64/userspace_io_test x86_64/userspace_msr_exit_test x86_64/xapic_state_test

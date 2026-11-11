@@ -1,0 +1,15 @@
+rm: cannot remove '/data/trial/t2660/tmp/rach2-hasvk.geb8r1bi/cache/mesa_shader_cache_db/part2': Directory not empty
+rm: cannot remove '/data/trial/t2660/tmp/rach2-hasvk.geb8r1bi/cache/mesa_shader_cache_db/part33': Directory not empty
+rm: cannot remove '/data/trial/t2660/tmp/rach2-hasvk.geb8r1bi/cache/mesa_shader_cache_db/part36': Directory not empty
+rm: cannot remove '/data/trial/t2660/tmp/rach2-hasvk.geb8r1bi/cache/mesa_shader_cache_db/part40': Directory not empty
+rm: cannot remove '/data/trial/t2660/tmp/rach2-hasvk.geb8r1bi/cache/mesa_shader_cache_db/part43': Directory not empty
+rm: cannot remove '/data/trial/t2660/tmp/rach2-hasvk.geb8r1bi/cache/mesa_shader_cache_db/part46': Directory not empty
+rm: cannot remove '/data/trial/t2660/tmp/rach2-hasvk.geb8r1bi/cache/mesa_shader_cache_db/part49': Directory not empty
+env GRAPHICS_CLASS=performance
+env GRAPHICS_CPUS=4
+env GRAPHICS_MEMORY_KIB=16639336
+env LP_NUM_THREADS=4
+env MESA_SHADER_CACHE_DIR=/data/trial/t2660/tmp/rach2-hasvk.geb8r1bi/cache
+env MESA_SHADER_CACHE_FILES=9
+env GRAPHICS_DONE=1
+env XVFB=-noreset

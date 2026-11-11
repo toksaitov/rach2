@@ -271,8 +271,9 @@ int ip_loop_put_parts(const uint8_t *hdr, uint32_t hlen, const uint8_t *payload,
  * timer interrupt. */
 void ip_loop_drain(void);
 
-/* Who drains the loopback: the tick, the idle wait, or a system call's
-   exit; `ip_loop_delivered` counts the datagrams each delivered. */
+/* Who drains the loopback: the tick, the idle wait, or the end of a system
+   call or of a thread; `ip_loop_delivered` counts the datagrams each
+   delivered. */
 #define IP_LOOP_FROM_TICK 0
 #define IP_LOOP_FROM_IDLE 1
 #define IP_LOOP_FROM_CALL 2
@@ -282,10 +283,12 @@ void ip_loop_drain(void);
  * for an IPv6 datagram, at most four times the ring's slots in one call,
  * and count them under `from`, an `IP_LOOP_FROM_*` value.
  *
- * Called with interrupts off, after the caller has finished with the stack
- * (`ip_loop_crowded`): from the tick, the idle wait and a system call's
- * exit. A call made from inside a delivery returns at once, and the drain
- * already running delivers what that delivery put on the ring.
+ * Called with interrupts off, after the caller has finished with the stack,
+ * since a delivery runs the receive path and may transmit: from the tick,
+ * the idle wait, a system call's exit and a thread's end, once its
+ * descriptors are closed. A call made from inside a delivery returns at
+ * once, and the drain already running delivers what that delivery put on
+ * the ring.
  */
 void ip_loop_drain_from(int from);
 
@@ -312,18 +315,6 @@ uint32_t ip_loop_dropped(void);
 /** The most datagrams the loopback ring has held at once, which says how much
  * room the ring has over what one system call can put in it. */
 uint32_t ip_loop_peak(void);
-
-/**
- * Nonzero when the loopback ring holds more than a pair of datagrams.
- *
- * A system call's exit asks this to drain before the ring fills and starts
- * refusing. Two conditions belong to the caller of `ip_loop_drain_from`:
- * interrupts are off, and the caller has finished whatever it was doing to
- * the stack, since a delivery runs the receive path and may transmit. A
- * pair is left to the timer, since a simultaneous open is a pair of crossing
- * SYNs and is a pair only while neither has been delivered.
- */
-int ip_loop_crowded(void);
 
 /**
  * The Internet checksum of the `len` bytes at `buf`: the one's complement of

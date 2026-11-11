@@ -1,4 +1,4 @@
-.Dd November 9, 2026
+.Dd November 11, 2026
 .Dt INIT 8
 .Os
 .Sh NAME
@@ -406,6 +406,18 @@ that stops the machine without signalling
 .Nm ,
 is not kept, as on Linux without a running daemon.
 .Pp
+Every build but the recovery system's, on a boot whose line has
+.Ql rach2.slot=candidate
+or
+.Ql rach2.slot=fallback ,
+runs
+.Ql bootctl booted
+before the first service and waits for it, which clears GRUB's
+.Ql recordfail
+on the boot partition, so that the disk's menu goes on booting the saved
+default, as Ubuntu's boot clears it; a failure is reported and the boot
+goes on.
+.Pp
 Every build applies the kernel settings of
 .Pa /etc/sysctl.conf ,
 where the image has one, with BusyBox's
@@ -652,6 +664,7 @@ init: ipv6: CARD: cannot restart IPv6 with the stable secret: ERROR
 .Xr sysfs 5 ,
 .Xr limits 7 ,
 .Xr recovery 7 ,
+.Xr bootctl 8 ,
 .Xr dropbear 8 ,
 .Xr halt 8 ,
 .Xr ndwatch 8 ,

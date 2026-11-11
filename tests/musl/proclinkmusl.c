@@ -16,8 +16,15 @@
  * no new name, and `..` climbs from it as the working directory. A child's
  * working directory and root are reached through /proc/PID/cwd and root, and
  * ".." after cwd climbs from the directory. A child of uid 1000 holds a
- * directory open: root and another process of uid 1000 reach it through
- * /proc/PID/fd/N, and a process of uid 1001 is refused with EACCES. A
+ * directory open, dumpable again after its setuid: root and another process
+ * of uid 1000 reach it through /proc/PID/fd/N, and a process of uid 1001 is
+ * refused with EACCES. Its /proc/PID/fd, mode 0500 and owned by uid and
+ * gid 1000, is entered by chdir and by fchdir through an O_PATH descriptor
+ * of uid 1000 and gid 1001, as Linux's proc_fd_permission judges the owner
+ * whatever its group, and that process lstats a link in it; uid 1001 is
+ * refused with EACCES all three ways. Once the holder is gone, fchdir
+ * through such a descriptor still enters its fd
+ * directory and gives ESRCH for its fdinfo directory. A
  * descriptor on a file or a pipe used as a directory is ENOTDIR, a closed one
  * ENOENT, and a descriptor on /dev reaches its devices. The links of a
  * directory and a file whose paths are longer than 64 bytes name them
@@ -36,16 +43,19 @@
  * `removed-links`, `removed-create`, `removed-cwd`, `file-notdir`,
  * `pipe-notdir`, `closed-enoent`, `dev-through`, `cwd-root-other`,
  * `cwd-root-self`, `fd-other-root`, `fd-other-same-uid`, `fd-other-eacces`,
- * `long-link`, `long-removal` and `cleanup`. The first failure fails its
+ * `fd-dir-owner`, `fd-dir-eacces`, `fd-dir-ended`, `long-link`,
+ * `long-removal` and `cleanup`. The first failure fails its
  * assertion and leaves the rest not run.
  */
 
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/mount.h>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -401,6 +411,19 @@ static int not_dirs(void)
 }
 
 /**
+ * Release and reap the held child `pid`: close `ready`, the read end of the
+ * pipe it signals on, and `go`, the write end of the one it waits on, so that
+ * a child still waiting reads end of file and exits. Returns the child's exit
+ * status, or -1 when `pid` is a failed fork's or the child did not exit.
+ */
+static int let_go(pid_t pid, int ready, int go)
+{
+    close(ready);
+    close(go);
+    return pid > 0 ? child_status(pid) : -1;
+}
+
+/**
  * Check /proc/PID/cwd and root of a child whose working directory is
  * TOP/d2/sub2 and whose root is TOP/d2: a file through each, and ".." after
  * cwd, which climbs from the directory. Two pipes hold the child in place
@@ -431,18 +454,18 @@ static int cwd_root(void)
     }
     close(ready[1]);
     close(go[0]);
-    if (read(ready[0], &c, 1) != 1) {
+    if (pid < 0 || read(ready[0], &c, 1) != 1) {
+        let_go(pid, ready[0], go[1]);
         return fail("the child's start");
     }
     ok = holds(at(a, "/proc", pid, "cwd/../f"), "one") &&
          holds(at(a, "/proc", pid, "root/f"), "one") &&
          same_file(at(a, "/proc", pid, "root/sub2"), TOP "/d2/sub2");
-    if (write(go[1], &c, 1) != 1 || child_status(pid) != 0 || !ok) {
+    ok = write(go[1], &c, 1) == 1 && ok;
+    if (let_go(pid, ready[0], go[1]) != 0 || !ok) {
         return fail("another process's cwd and root");
     }
     report_held();
-    close(ready[0]);
-    close(go[1]);
     if (chdir(TOP "/d2/sub2") != 0 || !holds("/proc/self/cwd/../f", "one") ||
         !holds("/proc/self/root" TOP "/d2/f", "one") || chdir("/") != 0) {
         return fail("the caller's cwd and root");
@@ -453,14 +476,17 @@ static int cwd_root(void)
 
 /**
  * Fork a child that takes the uid and gid `id` and opens the file at `path`:
- * 0 when that succeeds with `want` 0 or fails with errno `want`, its step
- * otherwise.
+ * 0 when that succeeds with `want` 0 or fails with errno `want`, 1 when the
+ * child cannot be made, its step otherwise.
  */
 static int as_user(int id, const char *path, int want)
 {
     pid_t pid = fork();
     int fd;
 
+    if (pid < 0) {
+        return 1;
+    }
     if (pid == 0) {
         if (setgid((gid_t)id) != 0 || setuid((uid_t)id) != 0) {
             _exit(2);
@@ -475,8 +501,10 @@ static int as_user(int id, const char *path, int want)
 }
 
 /**
- * Check another process's /proc/PID/fd/N: a child of uid 1000 holds TOP/d2
- * open, and root and a process of uid 1000 reach TOP/d2/f through its link,
+ * Check another process's /proc/PID/fd/N: a child of uid 1000, dumpable
+ * again after its setuid, which clears the flag as Linux's commit_creds
+ * does, holds TOP/d2 open, and root and a process of uid 1000 reach TOP/d2/f
+ * through its link,
  * where a process of uid 1001 is refused with EACCES. Returns 0, or 1 after
  * printing the failure; the step that failed says which of the three it is.
  */
@@ -486,7 +514,7 @@ static int other_process(void)
     int ready[2], go[2];
     char c = 0;
     pid_t pid;
-    int d = -1, st;
+    int d = -1, st, sent;
 
     if (pipe(ready) != 0 || pipe(go) != 0) {
         return fail("the pipes");
@@ -496,7 +524,7 @@ static int other_process(void)
         close(ready[0]);
         close(go[1]);
         if (setgid((gid_t)probe_id(1000)) != 0 || setuid((uid_t)probe_id(1000)) != 0 ||
-            (d = open(TOP "/d2", O_RDONLY)) < 0) {
+            prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0 || (d = open(TOP "/d2", O_RDONLY)) < 0) {
             _exit(2);
         }
         if (write(ready[1], &d, sizeof(d)) != sizeof(d) || read(go[0], &c, 1) != 1) {
@@ -506,7 +534,8 @@ static int other_process(void)
     }
     close(ready[1]);
     close(go[0]);
-    if (read(ready[0], &d, sizeof(d)) != sizeof(d)) {
+    if (pid < 0 || read(ready[0], &d, sizeof(d)) != sizeof(d)) {
+        let_go(pid, ready[0], go[1]);
         return fail("the child's start");
     }
     snprintf(a, sizeof(a), "/proc/%d/fd/%d/f", (int)pid, d);
@@ -519,11 +548,10 @@ static int other_process(void)
             st = st == 0 ? 0 : 20 + st;
         }
     }
-    if (write(go[1], &c, 1) != 1 || child_status(pid) != 0) {
+    sent = write(go[1], &c, 1) == 1;
+    if (let_go(pid, ready[0], go[1]) != 0 || !sent) {
         return fail("the holder of the descriptor");
     }
-    close(ready[0]);
-    close(go[1]);
     if (st != 10) {
         report_held();
     }
@@ -534,6 +562,177 @@ static int other_process(void)
         report_held();
     }
     return st == 0 ? 0 : fail_step("another process's descriptor", st);
+}
+
+/**
+ * In a child of uid `uid` and gid `gid`, enter `dir`, another process's
+ * /proc/PID/fd, by chdir and by fchdir through an O_PATH descriptor, and
+ * lstat its link `fd`: 0 when all three succeed with `want` 0 or fail with
+ * errno `want`, 1 when the child cannot be made, its step otherwise. The
+ * lstat takes only the directory's check, as Linux's link inode has no
+ * permission of its own.
+ */
+static int fd_dir_enter(int uid, int gid, const char *dir, int fd, int want)
+{
+    char link[96];
+    struct stat st;
+    pid_t pid = fork();
+    int o, rc;
+
+    if (pid < 0) {
+        return 1;
+    }
+    if (pid == 0) {
+        if (setgid((gid_t)gid) != 0 || setuid((uid_t)uid) != 0) {
+            _exit(2);
+        }
+        o = open(dir, O_PATH | O_DIRECTORY);
+        if (o < 0) {
+            _exit(3);
+        }
+        rc = chdir(dir);
+        if (want == 0 ? rc != 0 : !refused(rc, want)) {
+            _exit(4);
+        }
+        rc = fchdir(o);
+        if (want == 0 ? rc != 0 : !refused(rc, want)) {
+            _exit(want == 0 ? 5 : 6);
+        }
+        snprintf(link, sizeof(link), "%s/%d", dir, fd);
+        rc = lstat(link, &st);
+        if (want == 0) {
+            _exit(rc == 0 && S_ISLNK(st.st_mode) ? 0 : 7);
+        }
+        _exit(refused(rc, want) ? 0 : 8);
+    }
+    return child_status(pid);
+}
+
+/**
+ * In a child of uid 1000 and gid 1001, open O_PATH descriptors of `dir` and
+ * `info`, the fd and fdinfo directories of the held child `owner`, then
+ * release and reap `owner` (`let_go` on `ready` and `go`) and fchdir through
+ * each: 0 when the fd directory is entered and the fdinfo one is ESRCH, 40
+ * plus the child's step otherwise, or -1 when the child could not be made or
+ * `owner` did not end well. `owner` is released and reaped, and `ready` and
+ * `go` closed, on every path.
+ */
+static int fd_dir_ended(pid_t owner, int ready, int go, const char *dir, const char *info)
+{
+    int seen[2], gone[2];
+    char c = 0;
+    pid_t late;
+    int st, fo, io, opened, ended;
+
+    if (pipe(seen) != 0) {
+        let_go(owner, ready, go);
+        return -1;
+    }
+    if (pipe(gone) != 0) {
+        close(seen[0]);
+        close(seen[1]);
+        let_go(owner, ready, go);
+        return -1;
+    }
+    late = fork();
+    if (late == 0) {
+        close(ready);
+        close(go);
+        close(seen[0]);
+        close(gone[1]);
+        if (setgid((gid_t)probe_id(1001)) != 0 || setuid((uid_t)probe_id(1000)) != 0) {
+            _exit(2);
+        }
+        fo = open(dir, O_PATH | O_DIRECTORY);
+        io = open(info, O_PATH | O_DIRECTORY);
+        if (fo < 0 || io < 0 || write(seen[1], &c, 1) != 1 || read(gone[0], &c, 1) != 1) {
+            _exit(3);
+        }
+        if (fchdir(fo) != 0) {
+            _exit(4);
+        }
+        _exit(refused(fchdir(io), ESRCH) ? 0 : 5);
+    }
+    close(seen[1]);
+    close(gone[0]);
+    opened = late > 0 && read(seen[0], &c, 1) == 1;
+    ended = write(go, &c, 1) == 1;
+    ended = let_go(owner, ready, go) == 0 && ended;
+    if (opened && ended && write(gone[1], &c, 1) != 1) {
+        ended = 0;
+    }
+    close(seen[0]);
+    close(gone[1]);
+    st = late > 0 ? child_status(late) : -1;
+    if (late < 0 || !ended) {
+        return -1;
+    }
+    return st == 0 ? 0 : 40 + st;
+}
+
+/**
+ * Check the search of another process's /proc/PID/fd, mode 0500, whose
+ * owner is a dumpable child of uid and gid 1000: a process of uid 1000 and
+ * gid 1001 enters it by chdir and by fchdir, as Linux's proc_fd_permission
+ * judges the owner whatever its group, and lstats the link of the child's
+ * descriptor `go[0]`, and one of uid 1001 gets EACCES all three ways; and
+ * once the child is reaped, the fd directory is entered and the
+ * fdinfo one is ESRCH through descriptors opened before (`fd_dir_ended`).
+ * Returns 0, or 1 after printing the failure; the step says which check
+ * failed.
+ */
+static int fd_dir_search(void)
+{
+    char dir[64], info[64];
+    int ready[2], go[2];
+    char c = 0;
+    pid_t pid;
+    int st, sent;
+
+    if (pipe(ready) != 0 || pipe(go) != 0) {
+        return fail("the pipes of the fd directory's search");
+    }
+    pid = fork();
+    if (pid == 0) {
+        close(ready[0]);
+        close(go[1]);
+        if (setgid((gid_t)probe_id(1000)) != 0 || setuid((uid_t)probe_id(1000)) != 0 ||
+            prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0 || write(ready[1], &c, 1) != 1 ||
+            read(go[0], &c, 1) != 1) {
+            _exit(2);
+        }
+        _exit(0);
+    }
+    close(ready[1]);
+    close(go[0]);
+    if (pid < 0 || read(ready[0], &c, 1) != 1) {
+        let_go(pid, ready[0], go[1]);
+        return fail("the fd directory's owner");
+    }
+    snprintf(dir, sizeof(dir), "/proc/%d/fd", (int)pid);
+    snprintf(info, sizeof(info), "/proc/%d/fdinfo", (int)pid);
+    st = fd_dir_enter((int)probe_id(1000), (int)probe_id(1001), dir, go[0], 0);
+    if (st == 0) {
+        report_held();
+        st = fd_dir_enter((int)probe_id(1001), (int)probe_id(1001), dir, go[0], EACCES);
+        st = st == 0 ? 0 : 20 + st;
+    }
+    if (st == 0) {
+        report_held();
+        st = fd_dir_ended(pid, ready[0], go[1], dir, info);
+    } else {
+        sent = write(go[1], &c, 1) == 1;
+        if (let_go(pid, ready[0], go[1]) != 0 || !sent) {
+            st = -1;
+        }
+    }
+    if (st < 0) {
+        return fail("the fd directory's owner's end");
+    }
+    if (st == 0) {
+        report_held();
+    }
+    return st == 0 ? 0 : fail_step("another process's fd directory", st);
 }
 
 /** Begin the report and plan its assertions, in the order they are
@@ -566,6 +765,9 @@ static void plan(void)
                                       "fd-other-root",
                                       "fd-other-same-uid",
                                       "fd-other-eacces",
+                                      "fd-dir-owner",
+                                      "fd-dir-eacces",
+                                      "fd-dir-ended",
                                       "long-link",
                                       "long-removal",
                                       "cleanup"};
@@ -577,12 +779,22 @@ static void plan(void)
     }
 }
 
+/**
+ * Mount the tmpfs, run the rows in order, remove the tmpfs and print the
+ * result.
+ *
+ * SIGPIPE is ignored: a held child that has died leaves the write that
+ * releases it with no reader, and Linux sends SIGPIPE before EPIPE, which
+ * would kill the probe before it reaps the child, removes the tmpfs and
+ * prints its failure. Ignored, the write fails and the row says why.
+ */
 int main(int argc, char **argv)
 {
     int d;
     int bad;
 
     probe_args(argc, argv);
+    signal(SIGPIPE, SIG_IGN);
     plan();
     if (!is_dir("/proc/self/fd")) {
         return fail("/proc/self/fd is not a directory");
@@ -599,7 +811,7 @@ int main(int argc, char **argv)
         return fail("the directory");
     }
     bad = through(d) || renamed(d) || removed() || not_dirs() || cwd_root() || other_process() ||
-          long_paths();
+          fd_dir_search() || long_paths();
     close(d);
     if (umount2(TOP, 0) != 0 || rmdir(TOP) != 0) {
         return fail("the tmpfs's removal");

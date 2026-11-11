@@ -1,0 +1,17 @@
+Linux rach2 6.18.0-rach2 #1 Rach2 1.0.0 x86_64 GNU/Linux
+rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial2654/root-bf6ceb0edfb56a37.img rach2.slot=trialroot rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.disk=ahci rach2.netconsole rach2.ip=none rach2.console=term rach2.i915 rach2.i915.disable_display rach2.trace=enosys intel_iommu=off intremap=off
+total 0
+drwxr-xr-x 2 root root          0 Nov 11 02:59 by-path
+crw-rw---- 1 root video  226,   0 Nov 11 02:59 card0
+crw-rw---- 1 root video  226,   1 Nov 11 02:59 card1
+crw-rw---- 1 root render 226, 128 Nov 11 02:59 renderD128
+gfxstream_vk_icd.json
+intel_hasvk_icd.json
+intel_icd.json
+lvp_icd.json
+nouveau_icd.json
+radeon_icd.json
+venus_icd.i686.json
+venus_icd.x86_64.json
+/opt/proton
+1793687165 GE-Proton11-12

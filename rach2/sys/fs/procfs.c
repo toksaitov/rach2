@@ -16,7 +16,9 @@
 #include "../iommu.h"
 #endif
 
+#include "../fpu.h"
 #include "../klog.h"
+#include "../panic.h"
 #include "../irq.h"
 #include "procfs.h"
 
@@ -29,6 +31,7 @@
 #include "../mm/filecache.h"
 #include "../mm/filemap.h"
 #include "../mm/kheap.h"
+#include "../mm/mempolicy.h"
 #include "../mm/pagecache.h"
 #include "bcache.h"
 #include "dcache.h"
@@ -95,6 +98,7 @@
 #include "../io/anon.h"
 #include "../io/inotify.h"
 #include "../lib/krandom.h"
+#include "../lib/kstd.h"
 #include "../mm/vm.h"
 #include "../ipc/unix.h"
 #include "../acpicall.h"
@@ -142,8 +146,8 @@
 
 /* Inode namespace for /sys: a fixed directory by its node, with its
  * attribute files 256 apart above it; a PCI function's directory by its
- * key times four, with its uevent one more and its config three more, and
- * its link by its key in a range of its own; a USB device's directory by
+ * key in bits 8 to 23 and its file in the low byte, and its link by its
+ * key in a range of its own; a USB device's directory by
  * its key with the top bit set, its uevent with the next bit too, and its
  * link with that bit alone;
  * and an interface's, a disk node's and a processor's directory and files
@@ -369,12 +373,27 @@ struct procfs_file {
     /* A snapshot's path, with the process or thread `procfs_resolve_id`
      * gave at the open, by which a read from offset 0 makes it again
      * (`procfs_read`); `fresh` while no read has used the text since it was
-     * made, and `gen` counts the times it was made. */
+     * made, and `gen` counts the times it was made. `stale` when the open
+     * made the text only for its checks, and the first read, at any
+     * offset, makes it again: /proc/<pid>/syscall's. */
     struct vpath vp;
     int gen_pid;
     int fresh;
+    int stale;
     uint32_t gen;
+    /* The owner the last lookup of a file of /proc/<pid> or of a
+     * descriptor's fdinfo file gave it (`procfs_lookup_owner`). */
+    struct synth_owner own;
 };
+
+/* The kept owners of the open descriptors, as a Linux inode of /proc/<pid>
+ * keeps the owner `pid_revalidate` and `tid_fd_revalidate` set
+ * (fs/proc/base.c:2066, fs/proc/fd.c:161) where no getattr works it out
+ * again (base.c:776-778, fd.c:103-106, fd.c:350-366, fd.c:411-415,
+ * base.c:3945-3958). */
+static struct synth_owner *procfs_owned;
+
+static void procfs_own(struct synth_owner *o, const struct vpath *vp, int id);
 
 /**
  * Drop a user's count of `mm` that a read of /proc took for its length,
@@ -750,14 +769,83 @@ uint32_t procfs_task_links(int pid)
     return 2u + (p ? p->tg->live : 0u);
 }
 
-/** Whether the caller may read what /proc shows of `p`'s memory, its
- * environment and its auxiliary vector: a thread of `p`'s own process, a
- * privileged caller, or one whose real user ID is `p`'s when `p` is not
- * privileged, as Linux's ptrace check asks at its simplest. */
+/**
+ * The count is Linux's `proc_readfd_count` (fs/proc/fd.c:286-308): the
+ * weight of the open-descriptor bitmap, which a close clears at once, so
+ * that a descriptor whose release is still under way is not counted.
+ */
+int procfs_fd_count(int pid)
+{
+    process_t *p = pid < 0 ? NULL : procfs_proc(pid);
+    int fd, n = 0;
+
+    if (!p) {
+        return -ENOENT;
+    }
+    for (fd = 0; fd < fd_table_cap(p->fds); fd++) {
+        if (fd_is_valid(p->fds, fd)) {
+            n++;
+        }
+    }
+    return n;
+}
+
+/**
+ * Whether the caller may see what /proc shows of `p` behind Linux's ptrace
+ * check with PTRACE_MODE_FSCREDS, `__ptrace_may_access`: a thread of `p`'s
+ * own process; a privileged caller, which stands for CAP_SYS_PTRACE; or a
+ * caller whose file-system user and group IDs are each of `p`'s three, with
+ * `p`'s address space dumpable and `p` not privileged, which stands for the
+ * subset test of its permitted capabilities in `cap_ptrace_access_check`.
+ * READ and ATTACH differ on Linux only by Yama, which Rach2 does not have,
+ * so one test serves both: the memory, environment, auxiliary vector and
+ * maps, the syscall and wchan files, the links and the descriptors.
+ */
 static int procfs_may_read_mem(const process_t *p)
 {
-    return current_proc && (p->tg == current_proc->tg || proc_privileged(current_proc) ||
-                            (current_proc->ruid == p->ruid && !proc_privileged(p)));
+    uint32_t uid, gid;
+
+    if (!current_proc) {
+        return 0;
+    }
+    if (p->tg == current_proc->tg || proc_privileged(current_proc)) {
+        return 1;
+    }
+    uid = proc_fsuid(current_proc);
+    gid = proc_fsgid(current_proc);
+    return uid == p->ruid && uid == p->euid && uid == p->suid && gid == p->rgid && gid == p->egid &&
+           gid == p->sgid && (!p->mm || p->mm->dumpable == 1u) && !proc_privileged(p);
+}
+
+uint32_t procfs_owner_mode(int procfile)
+{
+    if (procfile == SYNTH_PROC_ENVIRON || procfile == SYNTH_PROC_AUXV ||
+        procfile == SYNTH_PROC_SYSCALL) {
+        return 0400;
+    }
+    return procfile == SYNTH_PROC_MEM ? 0600u : 0u;
+}
+
+/**
+ * Whether the caller may open, with the access mode of `flags`, the file
+ * `procfile` of process `pid`, whose mode lets only its owner open it
+ * (`procfs_owner_mode`), as Linux's generic_permission judges it: a caller
+ * whose file-system user ID owns it (`procfs_oom_owner`), for an access its
+ * mode gives the owner, or one with privilege over files, which stands for
+ * CAP_DAC_OVERRIDE. 1 for a file of any other mode.
+ */
+static int procfs_owner_may_open(int pid, int procfile, int flags)
+{
+    uint32_t mode = procfs_owner_mode(procfile), uid, gid, want;
+
+    if (mode == 0 || proc_fs_privileged(current_proc)) {
+        return 1;
+    }
+    if (procfs_oom_owner(pid, &uid, &gid) != 0) {
+        return 0;
+    }
+    want = (flags & 3) == 0 ? 0400u : (flags & 3) == 1 ? 0200u : 0600u;
+    return proc_fsuid(current_proc) == uid && (mode & want) == want;
 }
 
 int procfs_may_read(int pid)
@@ -765,6 +853,13 @@ int procfs_may_read(int pid)
     process_t *p = procfs_proc(pid);
 
     return p && procfs_may_read_mem(p);
+}
+
+int procfs_same_group(int pid)
+{
+    process_t *p = procfs_proc(pid);
+
+    return p && current_proc && p->tg == current_proc->tg;
 }
 
 int procfs_exe_file(int pid, struct vfs_ref *out)
@@ -1270,6 +1365,132 @@ static void ap_xlow(struct procfs_text *t, unsigned long v, int width)
     }
 }
 
+/**
+ * /proc/<pid>/syscall, in the forms of Linux's `proc_pid_syscall`:
+ * "running" for a thread that is ready or on a processor, other than the
+ * caller; otherwise, from the frame of the thread's entry to the kernel,
+ * "NR A0 A1 A2 A3 A4 A5 SP PC" when that entry was a system call, with the
+ * number as a tracer left it (`orig_nr`) and the arguments of the call's
+ * ABI, i386's for an `int $0x80` on x86-64; "NR SP PC" when that number is
+ * negative, and "-1 SP PC" when the entry was a fault or an interrupt, or
+ * after a signal handler's return. A leader that
+ * has ended reads "-1 0x0 0x0", as Linux's, whose stack is gone, does. A
+ * sleeping kernel thread, one with no address space outside an exit, reads
+ * number 0 and every other field 0x0: Linux's has a stack, and the frame
+ * `copy_thread` zeroes for it gives `orig_ax` 0. An exiting thread past its
+ * address space still has its user frame. All but the number are in hex.
+ * -EPERM for a caller `procfs_may_read_mem` refuses, as Linux's
+ * `lock_trace` answers its PTRACE_MODE_ATTACH_FSCREDS check; the file's
+ * mode of 0400 is the open's (`procfs_owner_may_open`). The open makes the
+ * text only to see that it can be made, and the first read makes it again
+ * (`procfs_read`), as Linux's seq_file makes it, so the caller's own thread
+ * shows the read, and a caller the ptrace check refuses opens the file and
+ * gets EPERM from its reads.
+ */
+static int procfs_gen_syscall(struct procfs_text *t, int pid)
+{
+    process_t *p = procfs_proc(pid);
+    const isr_params_t *tf;
+    unsigned long args[6];
+    int i, nr;
+
+    if (!p) {
+        return -ENOENT;
+    }
+    if (!procfs_may_read_mem(p)) {
+        return -EPERM;
+    }
+    if (p != current_proc && (p->state == PROC_READY || p->state == PROC_RUNNING)) {
+        ap_str(t, "running\n");
+        return t->len;
+    }
+    if (p->state == PROC_ZOMBIE) {
+        ap_str(t, "-1 0x0 0x0\n");
+        return t->len;
+    }
+    if (p->space_root == 0 && !p->in_syscall) {
+        ap_str(t, "0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 0x0\n");
+        return t->len;
+    }
+    tf = proc_user_frame(p);
+    nr = FRAME_SYSCALL(tf) ? (int)p->orig_nr : -1;
+    ap_int(t, nr);
+    if (nr >= 0) {
+        args[0] = SC_ARG(tf, 0);
+        args[1] = SC_ARG(tf, 1);
+        args[2] = SC_ARG(tf, 2);
+        args[3] = SC_ARG(tf, 3);
+        args[4] = SC_ARG(tf, 4);
+        args[5] = SC_ARG(tf, 5);
+        for (i = 0; i < 6; i++) {
+            ap_str(t, " 0x");
+            ap_xlow(t, args[i], 1);
+        }
+    }
+    ap_str(t, " 0x");
+    ap_xlow(t, (unsigned long)FRAME_SP(tf), 1);
+    ap_str(t, " 0x");
+    ap_xlow(t, (unsigned long)FRAME_PC(tf), 1);
+    ap_ch(t, '\n');
+    return t->len;
+}
+
+/**
+ * The name of the function thread `p` sleeps in, as /proc/<pid>/wchan gives
+ * it: the name its wait recorded while it is blocked, Linux's
+ * `do_signal_stop` or `ptrace_stop` while it is stopped, and NULL while it
+ * runs, is ready to, or has ended, as Linux's `get_wchan` gives 0 then.
+ */
+static const char *procfs_wchan(const process_t *p)
+{
+    if (p->state == PROC_BLOCKED) {
+        return p->wchan;
+    }
+    if (p->state == PROC_STOPPED) {
+        return p->ptrace_status != 0 ? "ptrace_stop" : "do_signal_stop";
+    }
+    return NULL;
+}
+
+/** /proc/<pid>/wchan: `procfs_wchan`'s name with no newline, or "0" for
+ * none and for a caller `procfs_may_read_mem` refuses, as Linux gives 0 to
+ * a reader that fails its PTRACE_MODE_READ check. */
+static int procfs_gen_wchan(struct procfs_text *t, int pid)
+{
+    process_t *p = procfs_proc(pid);
+    const char *name;
+
+    if (!p) {
+        return -ENOENT;
+    }
+    name = procfs_may_read_mem(p) ? procfs_wchan(p) : NULL;
+    ap_str(t, name ? name : "0");
+    return t->len;
+}
+
+/**
+ * /proc/<pid>/schedstat, as Linux's `proc_pid_schedstat` prints the
+ * thread's sched_info: its time on a processor in nanoseconds, here its
+ * ticks of user and system time, then the nanoseconds it waited ready on a
+ * run queue and the times it was switched onto a processor, which
+ * `schedule` counts (process.h's `run_delay` and `pcount`).
+ */
+static int procfs_gen_schedstat(struct procfs_text *t, int pid)
+{
+    process_t *p = procfs_proc(pid);
+
+    if (!p) {
+        return -ENOENT;
+    }
+    ap_u64(t, (p->utime + p->stime) * TICK_NS);
+    ap_ch(t, ' ');
+    ap_u64(t, p->run_delay);
+    ap_ch(t, ' ');
+    ap_u64(t, (uint64_t)p->pcount);
+    ap_ch(t, '\n');
+    return t->len;
+}
+
 /** The path /proc/<pid>/maps gives region `r` of `mm`: the file it maps,
  * which for the vDSO's two regions is [vvar] or [vdso] (`vdso_map`),
  * [heap], [stack], the program for the segments of its image, which lie
@@ -1325,6 +1546,16 @@ static void ap_maps_identity(struct procfs_text *t, const struct mm *mm, const v
     ap_u64(t, ofd->ino);
 }
 
+/** Whether region `r` is a shared mapping, Linux's VM_MAYSHARE: a VM_SHARED
+ * region, or a read-only shared mapping served as a private one, VM_FILE
+ * with VM_PROT_NOWRITE, which only a shared mapping is given; the vDSO's
+ * data page, which Linux maps private, is not. */
+static int maps_shared(const vma_t *r)
+{
+    return !vdso_region_name(r->file) &&
+           (r->type == VM_SHARED || (r->type == VM_FILE && (r->prot & VM_PROT_NOWRITE)));
+}
+
 /** Append region `r` of `mm` as its line of /proc/<pid>/maps. */
 static void ap_maps_line(struct procfs_text *t, const struct mm *mm, const vma_t *r)
 {
@@ -1335,10 +1566,10 @@ static void ap_maps_line(struct procfs_text *t, const struct mm *mm, const vma_t
     ap_ch(t, '-');
     ap_xlow(t, r->end, 8);
     ap_ch(t, ' ');
-    ap_ch(t, (r->prot & VM_PROT_READ) ? 'r' : '-');
+    ap_ch(t, VM_READABLE(r->prot) ? 'r' : '-');
     ap_ch(t, (r->prot & VM_PROT_WRITE) ? 'w' : '-');
     ap_ch(t, (r->prot & VM_PROT_EXEC) ? 'x' : '-');
-    ap_ch(t, r->type == VM_SHARED && !vdso_region_name(r->file) ? 's' : 'p');
+    ap_ch(t, maps_shared(r) ? 's' : 'p');
     ap_ch(t, ' ');
     ap_xlow(t, r->file ? r->pgoff * PAGE_SIZE : 0u, 8);
     ap_ch(t, ' ');
@@ -1408,6 +1639,70 @@ static void ap_smaps_kb(struct procfs_text *t, const char *name, unsigned long p
     ap_str(t, " kB\n");
 }
 
+/** Append the `ProtectionKey:` line of the region `r`, as Linux's smaps has
+ * it where the protection keys are on; nothing where they are off. */
+static void ap_smaps_key(struct procfs_text *t, const vma_t *r)
+{
+    if (fpu_pkeys()) {
+        ap_str(t, "ProtectionKey:  ");
+        ap_u32_width(t, VM_PROT_KEY(r->prot), 8);
+        ap_ch(t, '\n');
+    }
+}
+
+/**
+ * Append the possible-access part of the VmFlags line of the region `r`:
+ * sh, mr, mw, me and ms. A shared mapping is ms (`maps_shared`), and sh too
+ * only when it may be made writable, as Linux clears VM_SHARED for a file
+ * opened without write. The vDSO's pages have what Linux's special mappings
+ * have: [vdso] mr mw me, and [vvar], which is VM_PROT_NOWRITE, mr.
+ */
+static void ap_smaps_may(struct procfs_text *t, const vma_t *r)
+{
+    int vvar = vdso_is_data(r->file);
+    int shared = maps_shared(r);
+
+    ap_str(t, shared && !(r->prot & VM_PROT_NOWRITE) ? " sh" : "");
+    ap_str(t, " mr");
+    ap_str(t, !(r->prot & VM_PROT_NOWRITE) ? " mw" : "");
+    ap_str(t, vvar || (r->prot & VM_PROT_SECRET) ? "" : " me");
+    ap_str(t, shared ? " ms" : "");
+}
+
+/**
+ * Append the VmFlags line of smaps for the region `r`, the names Linux's
+ * show_smap_vma_flags gives the flags this kernel keeps, in the order of
+ * Linux's VM_ bits: access and possible access (`ap_smaps_may`), then gd
+ * 0x100, pf 0x400, lo 0x2000, io 0x4000, dc 0x20000, de 0x40000, lf
+ * 0x80000, ac 0x100000, nr 0x200000, wf 0x2000000, dd 0x4000000, then sl.
+ * The vDSO's [vdso] is de,
+ * and its [vvar] pf io de dd, as Linux's special mappings are.
+ */
+static void ap_smaps_flags(struct procfs_text *t, const vma_t *r)
+{
+    int vdso = vdso_region_name(r->file) != NULL;
+    int io = (r->prot & VM_PROT_IO) || (vdso && vdso_is_data(r->file));
+
+    ap_str(t, "VmFlags:");
+    ap_str(t, VM_READABLE(r->prot) ? " rd" : "");
+    ap_str(t, (r->prot & VM_PROT_WRITE) ? " wr" : "");
+    ap_str(t, (r->prot & VM_PROT_EXEC) ? " ex" : "");
+    ap_smaps_may(t, r);
+    ap_str(t, r->type == VM_STACK ? " gd" : "");
+    ap_str(t, io ? " pf" : "");
+    ap_str(t, (r->prot & VM_PROT_LOCKED) ? " lo" : "");
+    ap_str(t, io ? " io" : "");
+    ap_str(t, (r->prot & VM_PROT_DONTFORK) ? " dc" : "");
+    ap_str(t, io || vdso ? " de" : "");
+    ap_str(t, (r->prot & VM_PROT_LOCKONFAULT) ? " lf" : "");
+    ap_str(t, (r->prot & VM_PROT_ACCOUNT) ? " ac" : "");
+    ap_str(t, (r->prot & VM_PROT_NORESERVE) ? " nr" : "");
+    ap_str(t, (r->prot & VM_PROT_WIPEONFORK) ? " wf" : "");
+    ap_str(t, io || (r->prot & VM_PROT_SECRET) ? " dd" : "");
+    ap_str(t, (r->prot & VM_PROT_SEALED) ? " sl" : "");
+    ap_ch(t, '\n');
+}
+
 /**
  * /proc/<pid>/smaps: each region's maps line and Linux's fields for it, which
  * BusyBox's pmap and smemcap read. The pages in memory are the present pages
@@ -1420,7 +1715,10 @@ static void ap_smaps_kb(struct procfs_text *t, const char *name, unsigned long p
  * count the processes that map a page, so Pss is Rss, a page another process
  * also maps being counted whole to each; there is no swap and no huge page
  * of user memory, so those fields are 0. Locked is Rss for a locked region,
- * flagged `lo`, and `lf` when it is locked on fault.
+ * flagged `lo`, and `lf` when it is locked on fault; a mapping of
+ * memfd_secret is flagged `dd`, left out of a core file, and a sealed region
+ * `sl`, last, as Linux's highest bit. Where the protection keys are on, the
+ * region's key comes before the flags, as `ProtectionKey:`.
  * -EACCES for a caller `procfs_may_read_mem` refuses, as for maps.
  */
 static int procfs_gen_smaps(struct procfs_text *t, int pid)
@@ -1437,11 +1735,11 @@ static int procfs_gen_smaps(struct procfs_text *t, int pid)
     }
     mm = p->mm;
     for (r = mm ? vm_first(&mm->vm) : NULL; r; r = vm_next(r)) {
-        unsigned long present, clean, dirty;
+        unsigned long present, clean, dirty, anon;
         int shared = r->type == VM_SHARED;
         int of_file = r->file || r->type == VM_CODE || r->type == VM_DATA;
 
-        paging_user_count(mm->dir, r->start, r->end, &present, &dirty);
+        paging_user_count(mm->dir, r->start, r->end, &present, &dirty, &anon);
         clean = present - dirty;
         ap_maps_line(t, mm, r);
         ap_smaps_kb(t, "Size:", (r->end - r->start) / PAGE_SIZE);
@@ -1454,20 +1752,139 @@ static int procfs_gen_smaps(struct procfs_text *t, int pid)
         ap_smaps_kb(t, "Private_Clean:", shared ? 0 : clean);
         ap_smaps_kb(t, "Private_Dirty:", shared ? 0 : dirty);
         ap_smaps_kb(t, "Referenced:", clean + dirty);
-        ap_smaps_kb(t, "Anonymous:", !of_file ? clean + dirty : shared ? 0 : dirty);
+        ap_smaps_kb(t, "Anonymous:", !of_file ? clean + dirty : shared ? 0 : anon);
         ap_smaps_kb(t, "Swap:", 0);
         ap_smaps_kb(t, "SwapPss:", 0);
         ap_smaps_kb(t, "Locked:", (r->prot & VM_PROT_LOCKED) ? clean + dirty : 0);
-        ap_str(t, "VmFlags:");
-        ap_str(t, (r->prot & VM_PROT_READ) ? " rd" : "");
-        ap_str(t, (r->prot & VM_PROT_WRITE) ? " wr" : "");
-        ap_str(t, (r->prot & VM_PROT_EXEC) ? " ex" : "");
-        ap_str(t, shared ? " sh" : "");
-        ap_str(t, r->type == VM_STACK ? " gd" : "");
-        ap_str(t, (r->prot & VM_PROT_LOCKED) ? " lo" : "");
-        ap_str(t, (r->prot & VM_PROT_IO) ? " io pf" : "");
-        ap_str(t, (r->prot & VM_PROT_DONTFORK) ? " dc" : "");
-        ap_str(t, (r->prot & VM_PROT_LOCKONFAULT) ? " lf" : "");
+        ap_smaps_key(t, r);
+        ap_smaps_flags(t, r);
+    }
+    return t->len;
+}
+
+/** Append the policy `pol`, NULL for the default, as Linux's mpol_to_str
+ * writes it in numa_maps: the mode's name; for a policy with a mode flag
+ * "=" and "static" or "relative", then "balancing", after a "|" when it
+ * follows one of the two; and ":0", the policy's nodes, for a mode that has
+ * nodes. */
+static void ap_numa_policy(struct procfs_text *t, const struct vm_policy *pol)
+{
+    static const char *const names[] = {
+        "default", "prefer", "bind", "interleave", "local", "prefer (many)", "weighted interleave"};
+    uint32_t mode = pol ? pol->mode : 0u;
+    uint32_t flags = pol ? pol->flags : 0u;
+
+    ap_str(t, mode < sizeof(names) / sizeof(names[0]) ? names[mode] : "unknown");
+    if (flags) {
+        ap_ch(t, '=');
+        ap_str(t, (flags & MPOL_F_STATIC_NODES)     ? "static"
+                  : (flags & MPOL_F_RELATIVE_NODES) ? "relative"
+                                                    : "");
+        if (flags & MPOL_F_NUMA_BALANCING) {
+            ap_str(t, flags != MPOL_F_NUMA_BALANCING ? "|balancing" : "balancing");
+        }
+    }
+    if (pol && pol->nodes) {
+        ap_str(t, ":0");
+    }
+}
+
+/** Append what region `r` of `mm` maps, as numa_maps names it: " heap",
+ * " stack", or " file=" and the path maps gives the region, with a newline,
+ * a tab, a space and an equals sign each written as a backslash and three
+ * octal digits, as Linux's seq_path writes them; nothing for anonymous
+ * memory and for the vDSO's two regions. */
+static void ap_numa_place(struct procfs_text *t, const struct mm *mm, const vma_t *r)
+{
+    const char *path = maps_path(mm, r);
+
+    if (r->type == VM_HEAP || r->type == VM_STACK) {
+        ap_str(t, r->type == VM_HEAP ? " heap" : " stack");
+        return;
+    }
+    if (!path || vdso_region_name(r->file)) {
+        return;
+    }
+    ap_str(t, " file=");
+    for (; *path; path++) {
+        if (*path == '\n' || *path == '\t' || *path == ' ' || *path == '=') {
+            ap_ch(t, '\\');
+            ap_ch(t, (char)('0' + ((*path >> 6) & 3)));
+            ap_ch(t, (char)('0' + ((*path >> 3) & 7)));
+            ap_ch(t, (char)('0' + (*path & 7)));
+        } else {
+            ap_ch(t, *path);
+        }
+    }
+}
+
+/** Append `name` and the count `n`, a field of a numa_maps line. */
+static void ap_numa_count(struct procfs_text *t, const char *name, unsigned long n)
+{
+    ap_str(t, name);
+    ap_ulong(t, n);
+}
+
+/**
+ * /proc/<pid>/numa_maps: a line for each region, in Linux's form: the start,
+ * the policy that governs it, and what it maps (`ap_numa_place`); then, for
+ * a region with pages of memory, the counts of them Linux gives: anon=, the
+ * anonymous ones; dirty=, those written; mapped=, all of them, when they are
+ * neither all anonymous nor all dirty; N0=, those on node 0, which is all;
+ * and the page size in kilobytes. The policy is the one mbind gave the
+ * region's first page (`mempolicy_at`), and where it gave none the policy
+ * of the thread read, as on Linux. The pages are the frames of the region's
+ * page tables (`paging_user_frames`): a page a read brought in zeroed is
+ * Linux's zero page and is not one, nor is device memory. Memory of no
+ * file is anonymous and counts as written, as Linux's anonymous pages are
+ * from their first store; of a private region read from a file the pages
+ * written since are the anonymous ones, as in smaps. Linux's mapmax=, the
+ * most mappings a page has, and active=, the pages on the active list, are
+ * not given: the kernel counts no mappings of a page and has no such list.
+ * -EACCES for a caller `procfs_may_read_mem` refuses, as for maps.
+ */
+static int procfs_gen_numa_maps(struct procfs_text *t, int pid)
+{
+    process_t *p = procfs_proc(pid);
+    const struct mm *mm;
+    const vma_t *r;
+
+    if (!p) {
+        return -ENOENT;
+    }
+    if (!procfs_may_read_mem(p)) {
+        return -EACCES;
+    }
+    mm = p->mm;
+    for (r = mm ? vm_first(&mm->vm) : NULL; r; r = vm_next(r)) {
+        const struct vm_policy *pol = mempolicy_at(r, r->start);
+        int of_file = r->file || r->type == VM_CODE || r->type == VM_DATA;
+        struct paging_frame_counts counts;
+        unsigned long frames, dirty, anon;
+
+        ap_xlow(t, r->start, 8);
+        ap_ch(t, ' ');
+        ap_numa_policy(t, pol ? pol : p->mempolicy);
+        ap_numa_place(t, mm, r);
+        paging_user_frames(mm->dir, r->start, r->end, &counts);
+        frames = counts.frames;
+        dirty = counts.dirty;
+        anon = counts.anon;
+        if (frames != 0) {
+            dirty = of_file ? dirty : frames;
+            anon = !of_file ? frames : r->type == VM_SHARED ? 0 : anon;
+            if (anon) {
+                ap_numa_count(t, " anon=", anon);
+            }
+            if (dirty) {
+                ap_numa_count(t, " dirty=", dirty);
+            }
+            if (frames != anon && frames != dirty) {
+                ap_numa_count(t, " mapped=", frames);
+            }
+            ap_numa_count(t, " N0=", frames);
+            ap_numa_count(t, " kernelpagesize_kB=", PAGE_SIZE / 1024u);
+        }
         ap_ch(t, '\n');
     }
     return t->len;
@@ -1588,20 +2005,37 @@ static void ap_set(struct procfs_text *t, const char *name, uint64_t set)
     ap_ch(t, '\n');
 }
 
-/** Append "Name:\t" and four ids separated by tabs: the real, effective and
- * saved ones, and the effective one again as the file-system id. */
-static void ap_ids(struct procfs_text *t, const char *name, uint32_t r, uint32_t e, uint32_t s)
+/** Append "Name:" and the four ids of `ids`, a tab before each: the real,
+ * effective, saved and file-system ones. */
+static void ap_ids(struct procfs_text *t, const char *name, const uint32_t ids[4])
 {
+    int i;
+
     ap_str(t, name);
-    ap_str(t, ":\t");
-    ap_u32(t, r);
-    ap_ch(t, '\t');
-    ap_u32(t, e);
-    ap_ch(t, '\t');
-    ap_u32(t, s);
-    ap_ch(t, '\t');
-    ap_u32(t, e);
+    ap_ch(t, ':');
+    for (i = 0; i < 4; i++) {
+        ap_ch(t, '\t');
+        ap_u32(t, ids[i]);
+    }
     ap_ch(t, '\n');
+}
+
+/** The Uid and Gid lines of `p`: its real, effective, saved and
+ * file-system ids, as the reader's user namespace sees them. */
+static void ap_cred_ids(struct procfs_text *t, const process_t *p)
+{
+    uint32_t ids[4];
+
+    ids[0] = uid_seen(p->ruid);
+    ids[1] = uid_seen(p->euid);
+    ids[2] = uid_seen(p->suid);
+    ids[3] = uid_seen(proc_fsuid(p));
+    ap_ids(t, "Uid", ids);
+    ids[0] = gid_seen(p->rgid);
+    ids[1] = gid_seen(p->egid);
+    ids[2] = gid_seen(p->sgid);
+    ids[3] = gid_seen(proc_fsgid(p));
+    ap_ids(t, "Gid", ids);
 }
 
 /** `head`, then the numbers of `p` in each PID namespace from the reader's
@@ -1640,13 +2074,107 @@ static void ap_signal_sets(struct procfs_text *t, const process_t *p)
     ap_set(t, "SigCgt", caught);
 }
 
+/** Append the completed timed wakes and their stage times, in microseconds.
+ * The big lock keeps the record stable while this snapshot is built. */
+static void procfs_waketime(struct procfs_text *t, const process_t *p)
+{
+    const struct wake_record *w = &p->wake_time;
+    unsigned int i;
+
+    ap_str(t, "TimedWakeCount:\t");
+    ap_u32(t, w->count);
+    ap_str(t, "\nTimedWakeLast:\t");
+    for (i = 0; i < WAKE_FIELDS; i++) {
+        if (i) {
+            ap_ch(t, ' ');
+        }
+        ap_u32(t, w->last[i]);
+    }
+    ap_str(t, "\nTimedWakeWorst:\t");
+    for (i = 0; i < WAKE_FIELDS; i++) {
+        if (i) {
+            ap_ch(t, ' ');
+        }
+        ap_u32(t, w->worst[i]);
+    }
+    ap_str(t, "\nTimedWakeSum:\t");
+    for (i = 0; i < WAKE_FIELDS; i++) {
+        if (i) {
+            ap_ch(t, ' ');
+        }
+        ap_u64(t, w->sum[i]);
+    }
+    ap_ch(t, '\n');
+}
+
+/**
+ * Count the resident pages of `mm` by Linux's three kinds, for the RssAnon,
+ * RssFile and RssShmem of status, by the rule of smaps: a private region's
+ * pages are anonymous, but for the unwritten ones of a region read from a
+ * file, which are the file's still; a shared region's are the file's. A
+ * file's pages are counted as shared memory when the file is in memory (a
+ * tmpfs file, a memfd, shared anonymous memory), and as file pages
+ * otherwise, device memory among them. This walks the regions' page
+ * tables and each frame's anonymous mark, which fork and copy-on-write
+ * preserve independently of the dirty bit; the three sum to VmRSS.
+ */
+static void rss_by_kind(const struct mm *mm, unsigned long *anon, unsigned long *file,
+                        unsigned long *shmem)
+{
+    const vma_t *r;
+
+    *anon = 0;
+    *file = 0;
+    *shmem = 0;
+    for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
+        unsigned long present, dirty, own, copies;
+        int of_file = r->file || r->type == VM_CODE || r->type == VM_DATA;
+
+        paging_user_count(mm->dir, r->start, r->end, &present, &dirty, &copies);
+        own = r->type == VM_SHARED ? 0 : of_file ? copies : present;
+        *anon += own;
+        if (filemap_in_memory(r->file)) {
+            *shmem += present - own;
+        } else {
+            *file += present - own;
+        }
+    }
+}
+
+/** Append the memory sizes of an address space to its status record. */
+static void procfs_status_memory(struct procfs_text *t, const struct mm *mm)
+{
+    unsigned long size = vm_total(&mm->vm);
+    unsigned long rss = mm_resident(mm) * PAGE_SIZE;
+    unsigned long anon, file, shmem;
+
+    rss_by_kind(mm, &anon, &file, &shmem);
+    ap_kb(t, "VmPeak", size);
+    ap_kb(t, "VmSize", size);
+    ap_kb(t, "VmLck", vm_locked(&mm->vm));
+    ap_kb(t, "VmPin", mm->pinned * PAGE_SIZE);
+    ap_kb(t, "VmHWM", mm_resident_peak(mm) * PAGE_SIZE);
+    ap_kb(t, "VmRSS", rss);
+    ap_kb(t, "RssAnon", anon * PAGE_SIZE);
+    ap_kb(t, "RssFile", file * PAGE_SIZE);
+    ap_kb(t, "RssShmem", shmem * PAGE_SIZE);
+    ap_kb(t, "VmData", mm_bytes(mm, VM_DATA) + mm_bytes(mm, VM_HEAP) + mm_bytes(mm, VM_ANON));
+    ap_kb(t, "VmStk", mm_bytes(mm, VM_STACK));
+    ap_kb(t, "VmExe", mm_bytes(mm, VM_CODE));
+    ap_kb(t, "VmLib", mm_bytes(mm, VM_FILE));
+    ap_kb(t, "VmSwap", 0);
+}
+
 /**
  * /proc/<pid>/status: the lines of Linux's that programs read, among them
  * the name, the state, the ids, the tracer, the memory in kilobytes, the
- * thread count and the signal sets. The file-system ids are the effective
- * ones. The capability sets are full for a process `proc_privileged` passes
- * and empty otherwise, since the kernel has no capabilities but that test.
- * VmPeak and VmHWM are the present sizes, since the kernel keeps no peak.
+ * thread count and the signal sets. The fourth Uid and Gid columns are the
+ * file-system ids (`proc_fsuid`, `proc_fsgid`). The capability sets are
+ * those capget(2) reports (`cap_word`, `cap_eff_word`).
+ * VmPeak is the present size, since the kernel keeps no peak of it; VmHWM
+ * is the most pages the address space has had resident. RssAnon, RssFile
+ * and RssShmem divide VmRSS as `rss_by_kind` says; Wine's working set and
+ * pagefile figures are read from them.
  * Cpus_allowed and its list are the thread's affinity among the processors
  * started, which sched_getaffinity(2) reports.
  */
@@ -1686,8 +2214,7 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
     ap_str(t, "\nTracerPid:\t");
     ap_u32(t, p->ptrace ? pid_seen(p->tracer) : 0u);
     ap_ch(t, '\n');
-    ap_ids(t, "Uid", uid_seen(p->ruid), uid_seen(p->euid), uid_seen(p->suid));
-    ap_ids(t, "Gid", gid_seen(p->rgid), gid_seen(p->egid), gid_seen(p->sgid));
+    ap_cred_ids(t, p);
     ap_str(t, "FDSize:\t");
     ap_u32(t, (uint32_t)fd_table_cap(p->fds));
     ap_str(t, "\nGroups:\t");
@@ -1703,20 +2230,7 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
     ap_u32(t, pid_seen(p->sid));
     ap_ch(t, '\n');
     if (mm) {
-        unsigned long size = vm_total(&mm->vm);
-        unsigned long rss = mm_resident(mm) * PAGE_SIZE;
-
-        ap_kb(t, "VmPeak", size);
-        ap_kb(t, "VmSize", size);
-        ap_kb(t, "VmLck", vm_locked(&mm->vm));
-        ap_kb(t, "VmPin", mm->pinned * PAGE_SIZE);
-        ap_kb(t, "VmHWM", rss);
-        ap_kb(t, "VmRSS", rss);
-        ap_kb(t, "VmData", mm_bytes(mm, VM_DATA) + mm_bytes(mm, VM_HEAP) + mm_bytes(mm, VM_ANON));
-        ap_kb(t, "VmStk", mm_bytes(mm, VM_STACK));
-        ap_kb(t, "VmExe", mm_bytes(mm, VM_CODE));
-        ap_kb(t, "VmLib", mm_bytes(mm, VM_FILE));
-        ap_kb(t, "VmSwap", 0);
+        procfs_status_memory(t, mm);
     }
     ap_str(t, "Threads:\t");
     ap_u32(t, p->tg->live);
@@ -1724,9 +2238,9 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
     ap_u32(t, KSIG_MAX);
     ap_ch(t, '\n');
     ap_signal_sets(t, p);
-    caps = (uint64_t)cap_word(p, 1) << 32 | cap_word(p, 0);
+    caps = (uint64_t)cap_eff_word(p, 1) << 32 | cap_eff_word(p, 0);
     ap_set(t, "CapInh", (uint64_t)p->cap_inh[1] << 32 | p->cap_inh[0]);
-    ap_set(t, "CapPrm", caps);
+    ap_set(t, "CapPrm", caps | (uint64_t)cap_word(p, 1) << 32 | cap_word(p, 0));
     ap_set(t, "CapEff", caps);
     ap_set(t, "CapBnd", (uint64_t)(CAP_HIGH_WORD & ~p->bset_lost[1]) << 32 | ~p->bset_lost[0]);
     ap_set(t, "CapAmb", (uint64_t)p->cap_amb[1] << 32 | p->cap_amb[0]);
@@ -1746,6 +2260,7 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
     ap_str(t, "\nnonvoluntary_ctxt_switches:\t");
     ap_ulong(t, p->nivcsw);
     ap_ch(t, '\n');
+    procfs_waketime(t, p);
     return t->len;
 }
 
@@ -1811,7 +2326,7 @@ static void ap_limit(struct procfs_text *t, unsigned long v)
 /**
  * /proc/<pid>/limits: Linux's table of the sixteen resource limits, each a
  * name, the soft and hard values or "unlimited", and a unit, in Linux's
- * columns. The six the kernel keeps (`rlim`) are the process's, and the
+ * columns. The nine the kernel keeps (`rlim`) are the process's, and the
  * others unlimited, as getrlimit reports them.
  */
 static int procfs_gen_limits(struct procfs_text *t, int pid)
@@ -1828,13 +2343,13 @@ static int procfs_gen_limits(struct procfs_text *t, int pid)
                 {"Max resident set", -1, "bytes"},
                 {"Max processes", RLIM_NPROC, "processes"},
                 {"Max open files", RLIM_NOFILE, "files"},
-                {"Max locked memory", -1, "bytes"},
+                {"Max locked memory", RLIM_MEMLOCK, "bytes"},
                 {"Max address space", RLIM_AS, "bytes"},
                 {"Max file locks", -1, "locks"},
                 {"Max pending signals", -1, "signals"},
                 {"Max msgqueue size", -1, "bytes"},
-                {"Max nice priority", -1, 0},
-                {"Max realtime priority", -1, 0},
+                {"Max nice priority", RLIM_NICE, 0},
+                {"Max realtime priority", RLIM_RTPRIO, 0},
                 {"Max realtime timeout", -1, "us"}};
     process_t *p = procfs_proc(pid);
     uint32_t i;
@@ -1871,6 +2386,8 @@ static const char *procfs_pid_file_name(int kind)
         return "maps";
     case SYNTH_PROC_SMAPS:
         return "smaps";
+    case SYNTH_PROC_NUMA_MAPS:
+        return "numa_maps";
     case SYNTH_PROC_STATUS:
         return "status";
     case SYNTH_PROC_STATM:
@@ -1899,6 +2416,12 @@ static const char *procfs_pid_file_name(int kind)
         return "setgroups";
     case SYNTH_PROC_CHILDREN:
         return "children";
+    case SYNTH_PROC_SYSCALL:
+        return "syscall";
+    case SYNTH_PROC_WCHAN:
+        return "wchan";
+    case SYNTH_PROC_SCHEDSTAT:
+        return "schedstat";
     default:
         return "stat";
     }
@@ -1975,22 +2498,44 @@ static const char *procfs_global_fd_path(int origin)
     }
 }
 
+/** Append to `t` the target of `e` when it is open on a file that no path
+ * names, "/memfd:NAME (deleted)" for a memfd and "/secretmem (deleted)" for
+ * a file of memfd_secret, as Linux shows them: 1, or 0 for any other. */
+static int memfd_target(struct procfs_text *t, const fd_entry_t *e)
+{
+    if (!e->ofd || !e->ofd->vmnt || e->ofd->vmnt->type != &vfs_tmpfs_type) {
+        return 0;
+    }
+    if (tmpfs_secret(e->ofd->vnode)) {
+        ap_str(t, "/secretmem (deleted)");
+        return 1;
+    }
+    if (!tmpfs_label(e->ofd->vnode)) {
+        return 0;
+    }
+    ap_str(t, "/memfd:");
+    ap_str(t, tmpfs_label(e->ofd->vnode));
+    ap_str(t, " (deleted)");
+    return 1;
+}
+
 /**
  * Append the /proc/<pid>/fd/<fd> target of a file or directory descriptor to
  * `t`: the absolute path of a KRFFS node, "/memfd:NAME (deleted)" for a memfd
- * as Linux shows one, the present path of a node of another type, and "/"
- * for the root directory, a stale descriptor or a path the heap had no room
- * to record. A KRFFS path is rebuilt, in a heap buffer of VFS_PATH_MAX bytes,
- * only from a node still live and reachable, since the node of a stale
- * descriptor, unlinked or relocated, may be on the free list; a heap with no
- * room for the buffer sets `t`'s `nomem`.
+ * and "/secretmem (deleted)" for a file of memfd_secret as Linux shows them,
+ * the present path of a node of another type, and "/" for the root directory, a
+ * stale descriptor or a path the heap had no room to record. A KRFFS path is
+ * rebuilt, in a heap buffer of VFS_PATH_MAX bytes, only from a node still live
+ * and reachable, since the node of a stale descriptor, unlinked or relocated,
+ * may be on the free list; a heap with no room for the buffer sets `t`'s
+ * `nomem`.
  *
- * The present path of a node of a mounted type is what Linux's `d_path`
- * gives: the entry the file was opened by as renames have moved it, or a
- * directory's path as the type rebuilds it, from the reader's root, with
- * " (deleted)" once the entry is gone (`exe_file_path`). A type that keeps
- * neither gives the path the file was opened by. Reading the present path
- * may sleep; `e` is not read after it.
+ * The present path of a node of a mounted type is what Linux's `d_path` gives:
+ * the entry the file was opened by as renames have moved it, or a directory's
+ * path as the type rebuilds it, from the reader's root, with " (deleted)" once
+ * the entry is gone (`exe_file_path`). A type that keeps neither gives the path
+ * the file was opened by. Reading the present path may sleep; `e` is not read
+ * after it.
  */
 static void procfs_file_target(struct procfs_text *t, const fd_entry_t *e)
 {
@@ -2010,11 +2555,7 @@ static void procfs_file_target(struct procfs_text *t, const fd_entry_t *e)
             ap_ch(t, '/');
         }
         kfree(path);
-    } else if (e->ofd && e->ofd->vmnt && e->ofd->vmnt->type == &vfs_tmpfs_type &&
-               tmpfs_label(e->ofd->vnode)) {
-        ap_str(t, "/memfd:");
-        ap_str(t, tmpfs_label(e->ofd->vnode));
-        ap_str(t, " (deleted)");
+    } else if (memfd_target(t, e)) {
     } else if (file && file->vmnt && (file->name || file->vmnt->type->ops->path) &&
                ((now = exe_file_path(file, &deleted)) != NULL || (deleted && file->dirpath))) {
         ap_str(t, now ? now : file->dirpath);
@@ -2869,12 +3410,14 @@ static void procfs_entry_holds(struct procfs_text *t)
     }
 }
 
-/** Append live KVM objects on x86-64; every count is under the big lock. */
+/** Append live KVM objects on x86-64, each counted under the big lock, and
+ * the work KVM did for guests without an exit to their callers. */
 static void procfs_kvm_counts(struct procfs_text *t)
 {
 #if defined(__x86_64__) && !defined(RACH2_HOSTTEST)
-    static const char *const names[KVM_COUNT_TOTAL] = {"kvm_vms ", "kvm_vcpus ", "kvm_slots ",
-                                                       "kvm_tdp_pages ", "kvm_run_mappings "};
+    static const char *const names[KVM_COUNT_TOTAL] = {
+        "kvm_vms ",          "kvm_vcpus ",    "kvm_slots ",        "kvm_tdp_pages ",
+        "kvm_run_mappings ", "kvm_gpa_maps ", "kvm_gpa_map_pages "};
     int i;
 
     for (i = 0; i < KVM_COUNT_TOTAL; i++) {
@@ -2882,6 +3425,11 @@ static void procfs_kvm_counts(struct procfs_text *t)
         ap_u32(t, kvm_resource_count((enum kvm_resource)i));
         ap_ch(t, '\n');
     }
+    ap_str(t, "kvm_ioeventfd_signals ");
+    ap_u32(t, kvm_event_count(KVM_EVENT_IOEVENTFD));
+    ap_str(t, "\nkvm_irqfd_raises ");
+    ap_u32(t, kvm_event_count(KVM_EVENT_IRQFD));
+    ap_ch(t, '\n');
 #else
     (void)t;
 #endif
@@ -2916,18 +3464,40 @@ static void procfs_assignment_counts(struct procfs_text *t)
 #endif
 }
 
+/** Append the retained holds completed during the longest big-lock wait. */
+static void procfs_wait_holds(struct procfs_text *t, uint32_t holds)
+{
+    uint32_t i, vector;
+    uint64_t us;
+    int32_t nr;
+
+    for (i = 0; i < holds && i < BKL_WAIT_HOLDS; i++) {
+        smp_wait_hold(i, &us, &vector, &nr);
+        ap_str(t, "\nbkl_wait_max_hold ");
+        ap_u32(t, vector);
+        ap_ch(t, ' ');
+        if (nr < 0) {
+            ap_str(t, "-1");
+        } else {
+            ap_u32(t, (uint32_t)nr);
+        }
+        ap_ch(t, ' ');
+        ap_u64(t, us);
+    }
+}
+
 /** The counts of the kernel's own work for `/proc/stat`, from
  * `process_pid_steps` to the last `bkl_hold_entry`, each on a line of
  * its own. */
 static void procfs_work_counts(struct procfs_text *t)
 {
     uint64_t total, longest, held, age;
-    uint32_t vector;
+    uint32_t vector, holds;
     int32_t nr;
     uintptr_t pc[BKL_SAMPLE_PCS];
     int i, m;
 
-    smp_wait_stats(&total, &longest);
+    smp_wait_stats(&total, &longest, &holds);
     smp_hold_stats(&held, &vector, &nr);
     smp_hold_sample(&age, pc);
     ap_str(t, "process_pid_steps ");
@@ -2958,6 +3528,9 @@ static void procfs_work_counts(struct procfs_text *t)
     ap_u64(t, total);
     ap_str(t, "\nbkl_wait_max_us ");
     ap_u64(t, longest);
+    ap_str(t, "\nbkl_wait_max_holds ");
+    ap_u32(t, holds);
+    procfs_wait_holds(t, holds);
     ap_str(t, "\nbkl_hold_max_us ");
     ap_u64(t, held);
     ap_str(t, "\nbkl_hold_max_entry ");
@@ -3128,7 +3701,9 @@ static void ap_frames_as_kb(struct procfs_text *t, size_t frames)
  * are the two counts outright. Buffers and Cached are what the buffer cache
  * and the page caches hold, the disk window's and the file page cache's,
  * which reclaim gives back under pressure, so
- * MemAvailable is the free count and the two together. HeapPages and
+ * MemAvailable is the free count and the two together. SwapCached, which
+ * IGT adds to Cached, is 0, as SwapTotal and SwapFree are, since nothing is
+ * swapped. HeapPages and
  * HeapUsed are the kernel heap's pages and the bytes in use inside it, for a
  * test that makes and frees objects and requires the heap back where it
  * started. Slab, last, is the heap's pages but the buffer cache's, which
@@ -3159,6 +3734,7 @@ static int procfs_gen_meminfo(struct procfs_text *t)
     ap_frames_as_kb(t, buffers);
     ap_str(t, "Cached:         ");
     ap_frames_as_kb(t, cached);
+    ap_str(t, "SwapCached:            0 kB\n");
     ap_str(t, "HeapPages:      ");
     ap_u32(t, heap_pages);
     ap_str(t, "\n");
@@ -3910,28 +4486,48 @@ static int procfs_gen_loop(struct procfs_text *t)
     return t->nomem ? -1 : t->len;
 }
 
-/** Render /proc/filesystems: devfs and proc, each after `nodev`, then every
- * type mount(2) accepts (`vfs_type_at`), KRFFS volumes among them, with
- * `nodev` before one that stands on no device. The type of the KRFFS root
- * is not among them: the root is an image the kernel maps, which mount(2)
- * does not place. */
+/* The types /proc/filesystems lists ahead of those mount(2) accepts. */
+static const char *const procfs_fixed_types[] = {"devfs", "proc"};
+
+/** The types /proc/filesystems lists: devfs and proc, then every type
+ * mount(2) accepts (`vfs_type_at`), KRFFS volumes among them. The type of
+ * the KRFFS root is not among them: the root is an image the kernel maps,
+ * which mount(2) does not place. */
+int procfs_filesystem_at(int idx, const char **name)
+{
+    const struct vfs_type *ty;
+    int fixed = (int)(sizeof(procfs_fixed_types) / sizeof(procfs_fixed_types[0]));
+
+    if (idx < 0) {
+        return -1;
+    }
+    if (idx < fixed) {
+        *name = procfs_fixed_types[idx];
+        return 1;
+    }
+    ty = vfs_type_at(idx - fixed);
+    if (!ty) {
+        return -1;
+    }
+    *name = ty->name;
+    return ty->nodev ? 1 : 0;
+}
+
+/** Render /proc/filesystems: a line for each type `procfs_filesystem_at`
+ * gives, with `nodev` before one that stands on no device. */
 static int procfs_gen_filesystems(struct procfs_text *t)
 {
+    const char *name;
+    int nodev;
     int i;
 
-    ap_str(t, "nodev\tdevfs\n");
-    ap_str(t, "nodev\tproc\n");
-    for (i = 0; vfs_type_at(i); i++) {
-        const struct vfs_type *ty = vfs_type_at(i);
-
-        if (ty) {
-            if (ty->nodev) {
-                ap_str(t, "nodev");
-            }
-            ap_ch(t, '\t');
-            ap_str(t, ty->name);
-            ap_ch(t, '\n');
+    for (i = 0; (nodev = procfs_filesystem_at(i, &name)) >= 0; i++) {
+        if (nodev) {
+            ap_str(t, "nodev");
         }
+        ap_ch(t, '\t');
+        ap_str(t, name);
+        ap_ch(t, '\n');
     }
     return t->nomem ? -1 : t->len;
 }
@@ -4392,18 +4988,32 @@ static int procfs_gen_netsnmp(struct procfs_text *t)
 /**
  * Render /proc/net/netstat: of the TcpExt counters Linux keeps, the ones
  * this stack has (`net_mib`), a line of names and a line of values, in
- * Linux's order, which `nstat` reads by name: the retransmission timeouts
- * and the connections they ended, the keepalive probes, and the probes of
- * a larger segment lost and taken.
+ * Linux's order, which `nstat` reads by name: the segments of data received
+ * again whole, the retransmission timeouts, the connections ended by data
+ * no program will read, by a close with data unread and by the timeouts,
+ * the challenge acknowledgements
+ * and SYNs challenged, the answers to unacceptable segments held back, the
+ * keepalive probes, and the probes of a larger segment lost and taken.
  */
 static int procfs_gen_netnetstat(struct procfs_text *t)
 {
     const struct net_mib *m = &net_mib;
 
-    ap_str(t, "TcpExt: TCPTimeouts TCPAbortOnTimeout TCPKeepAlive TCPMTUPFail TCPMTUPSuccess\n"
+    ap_str(t, "TcpExt: DelayedACKLost TCPTimeouts TCPAbortOnData TCPAbortOnClose "
+              "TCPAbortOnTimeout TCPChallengeACK TCPSYNChallenge TCPACKSkippedSynRecv "
+              "TCPACKSkippedSeq TCPACKSkippedChallenge TCPKeepAlive TCPMTUPFail "
+              "TCPMTUPSuccess\n"
               "TcpExt:");
+    ap_mib(t, m->tcp_delayed_ack_lost);
     ap_mib(t, m->tcp_timeouts);
+    ap_mib(t, m->tcp_abort_on_data);
+    ap_mib(t, m->tcp_abort_on_close);
     ap_mib(t, m->tcp_abort_on_timeout);
+    ap_mib(t, m->tcp_challenge_ack);
+    ap_mib(t, m->tcp_syn_challenge);
+    ap_mib(t, m->tcp_ack_skipped_syn_recv);
+    ap_mib(t, m->tcp_ack_skipped_seq);
+    ap_mib(t, m->tcp_ack_skipped_challenge);
     ap_mib(t, m->tcp_keepalive);
     ap_mib(t, m->tcp_mtup_fail);
     ap_mib(t, m->tcp_mtup_success);
@@ -4888,7 +5498,7 @@ uint32_t sysfs_ino(int node, int key, int file)
         return SYSFS_INO_PCI_LINK + (uint32_t)key;
     }
     if (node == SYSFS_PCI_DEVICE) {
-        return SYSFS_INO_PCI + ((uint32_t)key << 4) + ((uint32_t)file & 15u);
+        return SYSFS_INO_PCI + ((uint32_t)key << 8) + ((uint32_t)file & 0xFFu);
     }
     if (node == SYSFS_USB_DEVICE && file == 2) {
         return SYSFS_INO_FILE | (uint32_t)key;
@@ -4994,6 +5604,42 @@ int sysfs_pci_is_vga(int key)
     struct sysfs_pci_ident id;
 
     return sysfs_pci_ident(key, &id) == 0 && (id.class >> 8) == 0x0300u;
+}
+
+uint64_t sysfs_pci_bar_size(int key, int bar)
+{
+    struct pci_resource r;
+
+    if (bar < 0 || bar >= SYSFS_PCI_BARS || !sysfs_pci_real(key)) {
+        return 0;
+    }
+    pci_resource((uint8_t)(key >> 8), (uint8_t)((key >> 3) & 31), (uint8_t)(key & 7), bar, &r);
+    return r.flags ? r.end - r.start + 1u : 0;
+}
+
+int sysfs_pci_attr_present(int key, int attr)
+{
+    struct pci_resource r;
+    int bar;
+
+    if (attr == SYSFS_PCI_BOOT_VGA) {
+        return sysfs_pci_is_vga(key);
+    }
+    if (attr >= SYSFS_PCI_RESOURCE0 && attr < SYSFS_PCI_ATTRS) {
+        bar = (attr - SYSFS_PCI_RESOURCE0) % SYSFS_PCI_BARS;
+        if (sysfs_pci_bar_size(key, bar) == 0) {
+            return 0;
+        }
+        if (attr >= SYSFS_PCI_RESOURCE0_WC) {
+            pci_resource((uint8_t)(key >> 8), (uint8_t)((key >> 3) & 31), (uint8_t)(key & 7), bar,
+                         &r);
+            return arch_pte_wc() != PTE_NOCACHE &&
+                   (r.flags & (PCI_IORESOURCE_MEM | PCI_IORESOURCE_PREFETCH)) ==
+                       (PCI_IORESOURCE_MEM | PCI_IORESOURCE_PREFETCH);
+        }
+        return 1;
+    }
+    return 1;
 }
 
 int sysfs_device_key(int node, int n)
@@ -5475,6 +6121,223 @@ static void ap_hex_lower(struct procfs_text *t, uint32_t v)
     }
 }
 
+/* The policy words of /sys/kernel/mm/transparent_hugepage's `enabled`,
+ * `defrag` and `shmem_enabled`, in Linux 6.12's order (huge_memory.c and
+ * shmem.c). */
+static const char *const thp_enabled_words[] = {"always", "madvise", "never", 0};
+static const char *const thp_defrag_words[] = {"always",  "defer", "defer+madvise",
+                                               "madvise", "never", 0};
+static const char *const thp_shmem_words[] = {"always", "never", "within_size", "advise", "deny",
+                                              "force",  0};
+
+/* The order shmem_enabled_show lists its words in, as indexes above. */
+static const int thp_shmem_order[] = {0, 2, 3, 1, 4, 5};
+
+/* The policy as Linux 6.12 boots with CONFIG_TRANSPARENT_HUGEPAGE_NEVER:
+ * indexes into the words above for the first three, and flags for the
+ * huge zero page and the splitting of underused huge pages, which
+ * `procfs_thp_boot` sets for a small machine. Root's writes change them; no
+ * page is ever huge, which every policy permits. The big lock covers them. */
+static int thp_enabled = 2, thp_defrag = 3, thp_shmem = 1;
+static int thp_zero_page = 1, thp_shrink_underused = 1;
+
+void procfs_thp_boot(void)
+{
+    if (frame_total_count() < (512u << 20) / PAGE_SIZE) {
+        thp_enabled = 2;
+        thp_defrag = 4;
+        thp_zero_page = 0;
+    }
+}
+
+/** Append the word `words[i]` of each `order[k]`, the chosen one in
+ * brackets, separated by spaces and ended by a newline. */
+static void ap_choice(struct procfs_text *t, const char *const *words, const int *order, int n,
+                      int chosen)
+{
+    int k;
+
+    for (k = 0; k < n; k++) {
+        int i = order ? order[k] : k;
+
+        if (k > 0) {
+            ap_ch(t, ' ');
+        }
+        if (i == chosen) {
+            ap_ch(t, '[');
+        }
+        ap_str(t, words[i]);
+        if (i == chosen) {
+            ap_ch(t, ']');
+        }
+    }
+    ap_ch(t, '\n');
+}
+
+/**
+ * Render the attribute `attr` of /sys/kernel/mm/transparent_hugepage, in
+ * `sysfs_system_attrs`' order: the policy words of `enabled` and `defrag`,
+ * the flag `use_zero_page`, the page-directory mapping size, the words of
+ * `shmem_enabled` and the flag `shrink_underused`, as Linux 6.12 writes
+ * them. The length of the text.
+ */
+static int procfs_gen_thp(struct procfs_text *t, int attr)
+{
+    if (attr == 0) {
+        ap_choice(t, thp_enabled_words, 0, 3, thp_enabled);
+    } else if (attr == 1) {
+        ap_choice(t, thp_defrag_words, 0, 5, thp_defrag);
+    } else if (attr == 3) {
+        /* PMD_SIZE: 2 MiB with 4-level paging, 4 MiB with i686's 2-level. */
+#if ELF_CLASS == 2
+        ap_u32(t, 2097152u);
+#else
+        ap_u32(t, 4194304u);
+#endif
+        ap_ch(t, '\n');
+    } else if (attr == 4) {
+        ap_choice(t, thp_shmem_words, thp_shmem_order, 6, thp_shmem);
+    } else {
+        ap_ch(t, (attr == 2 ? thp_zero_page : thp_shrink_underused) ? '1' : '0');
+        ap_ch(t, '\n');
+    }
+    return t->len;
+}
+
+/** Whether the string `s` is `word`, or, when `newline` is set, `word`
+ * and one newline, as Linux's sysfs_streq compares them. */
+static int thp_streq(const char *s, const char *word, int newline)
+{
+    while (*s != '\0' && *s == *word) {
+        s++;
+        word++;
+    }
+    return *word == '\0' && (*s == '\0' || (newline && *s == '\n' && s[1] == '\0'));
+}
+
+/** The index in `words` of the word `s` names as `thp_streq` compares it,
+ * or -EINVAL. */
+static int thp_word(const char *s, const char *const *words, int newline)
+{
+    int i;
+
+    for (i = 0; words[i] != 0; i++) {
+        if (thp_streq(s, words[i], newline)) {
+            return i;
+        }
+    }
+    return -EINVAL;
+}
+
+/** Whether the `n` decimal digits at `digits`, with no leading zero, name
+ * a number above the one `max` spells. */
+static int thp_over(const char *digits, int n, const char *max)
+{
+    int len = (int)k_strlen(max), i;
+
+    if (n != len) {
+        return n > len;
+    }
+    for (i = 0; i < n && digits[i] == max[i]; i++) {
+    }
+    return i < n && digits[i] > max[i];
+}
+
+/**
+ * Parse `s` as Linux's kstrtoul in base 10: an optional `+`, decimal
+ * digits and an optional newline. The value when it is 0 or 1; -ERANGE
+ * when the digits pass 64 bits, which Linux's _kstrtoull finds before it
+ * looks at what follows them, or when what is otherwise a number passes an
+ * unsigned long; -EINVAL otherwise.
+ */
+static int thp_flag(const char *s)
+{
+    const char *digits;
+    int n = 0;
+
+    if (*s == '+') {
+        s++;
+    }
+    while (*s == '0' && s[1] >= '0' && s[1] <= '9') {
+        s++;
+    }
+    digits = s;
+    while (s[n] >= '0' && s[n] <= '9') {
+        n++;
+    }
+    if (thp_over(digits, n, "18446744073709551615")) {
+        return -ERANGE;
+    }
+    if (n == 0 || !(s[n] == '\0' || (s[n] == '\n' && s[n + 1] == '\0'))) {
+        return -EINVAL;
+    }
+#if ELF_CLASS != 2
+    if (thp_over(digits, n, "4294967295")) {
+        return -ERANGE;
+    }
+#endif
+    return n == 1 && digits[0] <= '1' ? digits[0] - '0' : -EINVAL;
+}
+
+/** `text` as Linux's kstrtobool reads its first letters: 1 for y, t, 1 or
+ * on, 0 for n, f, 0 or off, in either case, and -EINVAL otherwise. */
+static int thp_bool(const char *text)
+{
+    char c = text[0] | 0x20, d = c == 'o' ? text[1] | 0x20 : 0;
+
+    if (c == 'y' || c == 't' || text[0] == '1' || d == 'n') {
+        return 1;
+    }
+    if (c == 'n' || c == 'f' || text[0] == '0' || d == 'f') {
+        return 0;
+    }
+    return -EINVAL;
+}
+
+/** The index in `thp_shmem_words` of the `count` bytes of `text` as
+ * Linux's shmem_enabled_store reads them: at most 15, a final newline
+ * dropped, then one word exactly; -EINVAL otherwise. */
+static int thp_shmem_word(char *text, uint32_t count)
+{
+    if (count + 1 > 16) {
+        return -EINVAL;
+    }
+    if (count > 0 && text[count - 1] == '\n') {
+        text[count - 1] = '\0';
+    }
+    return thp_word(text, thp_shmem_words, 0);
+}
+
+/**
+ * Take root's write of `count` bytes, `text`, NUL-terminated after them,
+ * to the attribute `attr` of /sys/kernel/mm/transparent_hugepage, as
+ * Linux 6.12's stores parse it: `enabled` and `defrag` a policy word with
+ * at most one newline after it, `use_zero_page` 0 or 1 as kstrtoul reads
+ * it (`thp_flag`), `shmem_enabled` as `thp_shmem_word` reads it, and
+ * `shrink_underused` as `thp_bool` does. `count`, or -EINVAL or -ERANGE
+ * with nothing changed.
+ */
+static int32_t thp_store(int attr, char *text, uint32_t count)
+{
+    int *const flags[] = {&thp_enabled, &thp_defrag,          &thp_zero_page, 0,
+                          &thp_shmem,   &thp_shrink_underused};
+    int v;
+
+    if (attr < 0 || attr > 5 || !flags[attr]) {
+        return -EINVAL;
+    }
+    v = attr == 0   ? thp_word(text, thp_enabled_words, 1)
+        : attr == 1 ? thp_word(text, thp_defrag_words, 1)
+        : attr == 2 ? thp_flag(text)
+        : attr == 4 ? thp_shmem_word(text, count)
+                    : thp_bool(text);
+    if (v < 0) {
+        return v;
+    }
+    *flags[attr] = v;
+    return (int32_t)count;
+}
+
 /**
  * Render the attribute `attr` of /sys/class/rtc/rtc0, of its device's power
  * directory, of /sys/power, of /sys/devices/system/cpu or of
@@ -5499,6 +6362,9 @@ static int procfs_gen_sysattr(struct procfs_text *t, int node, int attr)
     }
     if (node >= SYSFS_NODE && node <= SYSFS_DMI_ID) {
         return procfs_gen_system(t, node, attr);
+    }
+    if (node == SYSFS_THP) {
+        return procfs_gen_thp(t, attr);
     }
     if (node == SYSFS_KERNEL) {
         ap_u32(t, sysfs_uevent_seqnum());
@@ -5703,18 +6569,20 @@ static void ap_u32_3(struct procfs_text *t, uint32_t v)
  * Render the uevent of the device `key` of `node`, the variables Linux
  * gives a device of that bus that the readers here use.
  *
- * A PCI function has its class, IDs and subsystem IDs, its slot and its
- * module alias. A USB device has its product, the numbers of its bus and
- * of itself, and its type last: `lsusb` takes a uevent whose first line is
- * the type for an interface's, and Linux's first lines, the device node's
- * numbers and name, are left out, since no node of the device exists here.
- * -ENOENT for a device that is not there.
+ * A PCI function has its driver when one has it, its class, IDs and
+ * subsystem IDs, its slot and its module alias. A USB device has its
+ * product, the numbers of its bus and of itself, and its type last: `lsusb`
+ * takes a uevent whose first line is the type for an interface's, and
+ * Linux's first lines, the device node's numbers and name, are left out,
+ * since no node of the device exists here. -ENOENT for a device that is not
+ * there.
  */
 static int procfs_gen_uevent(struct procfs_text *t, int node, int key)
 {
     struct usb_sys_row r;
     struct sysfs_pci_ident id;
     char name[16];
+    const char *drv, *owner;
     uint32_t cls, ids, sub;
 
     if (node == SYSFS_USB_DEVICE) {
@@ -5741,6 +6609,16 @@ static int procfs_gen_uevent(struct procfs_text *t, int node, int key)
     ids = (uint32_t)id.vendor | (uint32_t)id.device << 16;
     sub = (uint32_t)id.subsystem_vendor | (uint32_t)id.subsystem_device << 16;
     synth_sys_device_name(SYSFS_PCI_DEVICE, key, name, sizeof(name));
+    drv = sysfs_pci_driver(key);
+    owner = pci_owner((uint8_t)(key >> 8), (uint8_t)key);
+    if (!drv && owner && !same_word(owner, PCI_OWNER_KERNEL)) {
+        drv = owner; /* vfio-pci, which shows itself bound */
+    }
+    if (drv) {
+        ap_str(t, "DRIVER=");
+        ap_str(t, drv);
+        ap_ch(t, '\n');
+    }
     ap_str(t, "PCI_CLASS=");
     ap_hex(t, cls, cls > 0xFFFFFu ? 6 : cls > 0xFFFFu ? 5 : 4);
     ap_str(t, "\nPCI_ID=");
@@ -5991,6 +6869,56 @@ static int procfs_gen_pciattr(struct procfs_text *t, int key, int attr)
     return t->len;
 }
 
+/** Append `v` to `t` as 0x and sixteen hex digits, as Linux's "0x%016llx". */
+static void ap_hex64(struct procfs_text *t, uint64_t v)
+{
+    static const char digits[] = "0123456789abcdef";
+    int i;
+
+    ap_str(t, "0x");
+    for (i = 15; i >= 0; i--) {
+        ap_ch(t, digits[(unsigned)(v >> (i * 4)) & 0xFu]);
+    }
+}
+
+/**
+ * Render the `resource` file of the PCI function `key`, as Linux's
+ * resource_show: a line for each resource, its start, end and flags in
+ * hex (`pci_resource`), BARs 0 to 5 and the ROM, then the six of SR-IOV,
+ * which no function here has, and for a bridge its four windows, which
+ * Linux shows as 0 too. libpciaccess reads a BAR's size from it. A
+ * function a driver reports has no BARs, so its lines are 0. -ENOENT for
+ * a function that is not there.
+ */
+static int procfs_gen_pciresource(struct procfs_text *t, int key)
+{
+    uint8_t bus = (uint8_t)(key >> 8), dev = (uint8_t)((key >> 3) & 31), fn = (uint8_t)(key & 7);
+    struct pci_resource r;
+    int real = sysfs_pci_real(key), lines = 13, i;
+
+    if (!sysfs_pci_present(key)) {
+        return -ENOENT;
+    }
+    if (real && (pci_read_config8(bus, dev, fn, 0x0E) & 0x7F) != 0) {
+        lines = 17;
+    }
+    for (i = 0; i < lines; i++) {
+        r.start = 0;
+        r.end = 0;
+        r.flags = 0;
+        if (real && i < PCI_RESOURCES) {
+            pci_resource(bus, dev, fn, i, &r);
+        }
+        ap_hex64(t, r.start);
+        ap_ch(t, ' ');
+        ap_hex64(t, r.end);
+        ap_ch(t, ' ');
+        ap_hex64(t, r.flags);
+        ap_ch(t, '\n');
+    }
+    return t->len;
+}
+
 /**
  * Render the registered attribute `handle` (sysfs.h) through its `show`,
  * into room that grows to what the show asks for, up to SYSFS_SHOW_MAX:
@@ -6066,6 +6994,9 @@ static int procfs_gen_sysfile(struct procfs_text *t, const struct vpath *vp, int
     if (vp->sysent == SYSFS_PCI_DEVICE && vp->procfile == SYSFS_PCI_CONFIG) {
         return procfs_gen_pciconfig(t, vp->syskey);
     }
+    if (vp->sysent == SYSFS_PCI_DEVICE && vp->procfile == SYSFS_PCI_RESOURCE) {
+        return procfs_gen_pciresource(t, vp->syskey);
+    }
     if (vp->sysent == SYSFS_PCI_DEVICE && vp->procfile >= SYSFS_PCI_VENDOR) {
         return procfs_gen_pciattr(t, vp->syskey, vp->procfile);
     }
@@ -6105,7 +7036,8 @@ static int procfs_regen(struct procfs_file *f)
  * or the error of making it again. A read from offset 0 makes the snapshot
  * again unless it is the first read of the text an open or a read made, so
  * a reader that seeks back to the start, or reads with pread64 at 0, sees
- * the file as it is then, as Linux's seq_file files are made again.
+ * the file as it is then, as Linux's seq_file files are made again. A
+ * `stale` text is made again at the first read, from any offset.
  *
  * The text goes out through a buffer on the stack, a piece at a time, since
  * the copy to the caller may sleep in a fault and pread64 holds no lock: a
@@ -6122,13 +7054,14 @@ static int32_t procfs_read(fd_entry_t *e, char __user *buf, uint32_t count)
     if (!f) {
         return 0;
     }
-    if (e->ofd->offset == 0 && !f->fresh) {
+    if (f->stale || (e->ofd->offset == 0 && !f->fresh)) {
         rc = procfs_regen(f);
         if (rc != 0) {
             return rc;
         }
     }
     f->fresh = 0;
+    f->stale = 0;
     if (e->ofd->offset >= (uint64_t)f->len) {
         return 0;
     }
@@ -6179,12 +7112,14 @@ static int32_t procfs_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     return -ENOTTY;
 }
 
-/** Free the descriptor's record and its text, and drop a mem descriptor's
- * hold on its address space; at the description's last close. */
+/** Free the descriptor's record and its text, drop its kept owner
+ * (`procfs_owner_drop`), and drop a mem descriptor's hold on its address
+ * space; at the description's last close. */
 static void procfs_close(fd_entry_t *e)
 {
     struct procfs_file *f = (struct procfs_file *)e->priv;
     if (f) {
+        procfs_owner_drop(&f->own);
         e->priv = NULL;
         mm_unhold(f->mm);
         kfree(f->data);
@@ -6290,15 +7225,42 @@ static const struct file_ops procfs_pciconfig_ops = {procfs_pciconfig_read,
                                                      NULL,
                                                      NULL};
 
-/** Open raw PCI config, writable only by a privileged caller. Each access
- * reaches the current registers, including a read at a nonzero offset. */
+/**
+ * Whether the caller may open a PCI function's file, root's with the mode
+ * bits `mode`, for access `acc` (0 read, 1 write, 2 both), as Linux's
+ * generic_permission judges a sysfs file: by the owner's bits when its
+ * file-system user id is root's, else by the others' bits, which
+ * CAP_DAC_OVERRIDE passes, and for a read CAP_DAC_READ_SEARCH, while root's
+ * ids are mapped in its user namespace. Root's group is no help, since
+ * these files give it no more than the others.
+ */
+static int pci_file_may(uint32_t mode, int acc)
+{
+    uint32_t want = acc == 0 ? 4u : acc == 1 ? 2u : 6u;
+
+    if (proc_fsuid(current_proc) == 0) {
+        return (want & ~(mode >> 6) & 7u) == 0;
+    }
+    if ((want & ~mode & 7u) == 0) {
+        return 1;
+    }
+    if (!ns_ids_mapped(proc_userns(current_proc), 0, 0)) {
+        return 0;
+    }
+    return cap_holds(current_proc, CAP_DAC_OVERRIDE) ||
+           (acc == 0 && cap_holds(current_proc, CAP_DAC_READ_SEARCH));
+}
+
+/** Open raw PCI config, root's with mode 0644 as Linux's, which any caller
+ * reads and a write needs `pci_file_may` to allow. Each access reaches the
+ * current registers, including a read at a nonzero offset. */
 static int procfs_open_pciconfig(const struct vpath *vp, int flags)
 {
     struct procfs_file *f;
     fd_entry_t *e;
     int acc = flags & 3, fd;
 
-    if (acc == 3 || (acc && !proc_privileged(current_proc))) {
+    if (acc == 3 || !pci_file_may(0644, acc)) {
         return -EACCES;
     }
     if (!sysfs_pci_present(vp->syskey)) {
@@ -6319,6 +7281,260 @@ static int procfs_open_pciconfig(const struct vpath *vp, int flags)
     e = &current_proc->fds->entries[fd];
     e->type = FD_TYPE_PROC;
     e->ops = &procfs_pciconfig_ops;
+    e->priv = f;
+    e->flags = acc == 0 ? FD_FLAG_READ : acc == 1 ? FD_FLAG_WRITE : FD_FLAG_READ | FD_FLAG_WRITE;
+    if (flags & PROCFS_O_CLOEXEC) {
+        e->flags |= FD_FLAG_CLOEXEC;
+    }
+    return fd;
+}
+
+/* The resourceN and resourceN_wc files of a PCI function, as in pci-sysfs:
+ * the descriptor's `procfs_file` has the function's key in `origin_pid` and
+ * the file's `procfile` in the low byte of `origin_task`. */
+
+/** The BAR of the resourceN descriptor `e` into `*r`, as `pci_resource`
+ * reads it now, and its function's key into `*key`: its number, or -1. */
+static int pcibar_of(fd_entry_t *e, struct pci_resource *r, int *key)
+{
+    struct procfs_file *f = (struct procfs_file *)e->priv;
+    int attr = (int)(f->origin_task & 0xFFu);
+    int bar = (attr - SYSFS_PCI_RESOURCE0) % SYSFS_PCI_BARS;
+
+    *key = f->origin_pid;
+    r->flags = 0;
+    if (attr < SYSFS_PCI_RESOURCE0 || attr >= SYSFS_PCI_ATTRS ||
+        !sysfs_pci_attr_present(*key, attr)) {
+        return -1;
+    }
+    pci_resource((uint8_t)(*key >> 8), (uint8_t)((*key >> 3) & 31), (uint8_t)(*key & 7), bar, r);
+    return bar;
+}
+
+/**
+ * The bytes a read or write of `count` bytes at the description's offset in
+ * the resourceN descriptor `e` reaches, as Linux's sysfs and pci_resource_io
+ * judge them together, with the BAR into `*r`. sysfs clips the access to the
+ * file, as long as the BAR: a read of none, or one at or past the end, gives
+ * 0, a write at or past it -EFBIG, and a write clipped to none 0. A memory
+ * BAR then has no read or write, -EIO, and pci_resource_io takes one port
+ * access of 1, 2 or 4 bytes within the BAR as it reads now, -EINVAL for
+ * another width or one past its end. The bytes to move, more than 0, or
+ * the call's result: 0, -ENODEV for a function or BAR that is gone, -EFBIG,
+ * -EIO or -EINVAL.
+ */
+static int32_t pcibar_span(fd_entry_t *e, uint32_t count, int write, struct pci_resource *r)
+{
+    uint64_t off = e->ofd->offset, size;
+    int key, bar = pcibar_of(e, r, &key);
+
+    if (bar < 0) {
+        return -ENODEV;
+    }
+    if (count == 0 && !write) {
+        return 0;
+    }
+    size = sysfs_pci_bar_size(key, bar);
+    if (off >= size) {
+        return write ? -EFBIG : 0;
+    }
+    if (count > size - off) {
+        count = (uint32_t)(size - off);
+    }
+    if (count == 0) {
+        return 0;
+    }
+    if (!(r->flags & PCI_IORESOURCE_IO)) {
+        return -EIO;
+    }
+    if (off > r->end - r->start) {
+        return 0;
+    }
+    if (count - 1u > r->end - r->start - off || (count != 1 && count != 2 && count != 4)) {
+        return -EINVAL;
+    }
+    return (int32_t)count;
+}
+
+/**
+ * Read or write `count` bytes, 1, 2 or 4, of the I/O BAR `r` at the
+ * offset of the resourceN descriptor `e`, which `pcibar_span` has judged,
+ * one port access of that width, as Linux's pci_resource_io: from `*value`
+ * for a write, into it for a read. Moves the offset past them.
+ */
+static void pcibar_io(fd_entry_t *e, const struct pci_resource *r, uint32_t count, uint32_t *value,
+                      int write)
+{
+    uint16_t port = (uint16_t)(r->start + e->ofd->offset);
+
+    if (write) {
+        if (count == 1) {
+            pci_io_write8(port, (uint8_t)*value);
+        } else if (count == 2) {
+            pci_io_write16(port, (uint16_t)*value);
+        } else {
+            pci_io_write32(port, *value);
+        }
+    } else {
+        *value = count == 1   ? pci_io_read8(port)
+                 : count == 2 ? pci_io_read16(port)
+                              : pci_io_read32(port);
+    }
+    e->ofd->offset += count;
+}
+
+/** read of a resourceN file, its bytes little-endian: the count, clipped
+ * to the file, or `pcibar_span`'s result. */
+static int32_t procfs_pcibar_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    struct pci_resource r;
+    uint32_t value = 0;
+    uint8_t bytes[4];
+    int32_t n = pcibar_span(e, count, 0, &r);
+
+    if (n <= 0) {
+        return n;
+    }
+    pcibar_io(e, &r, (uint32_t)n, &value, 0);
+    bytes[0] = (uint8_t)value;
+    bytes[1] = (uint8_t)(value >> 8);
+    bytes[2] = (uint8_t)(value >> 16);
+    bytes[3] = (uint8_t)(value >> 24);
+    if (copy_to_user(buf, bytes, (uint32_t)n)) {
+        e->ofd->offset -= (uint32_t)n;
+        return -EFAULT;
+    }
+    return n;
+}
+
+/**
+ * write of a resourceN file, its bytes little-endian: the count, clipped
+ * to the file, `pcibar_span`'s result, or -EFAULT. As Linux's kernfs, the
+ * first `count` bytes, up to a page, are copied before anything else is
+ * judged, so that a source not readable to that length is -EFAULT with no
+ * port written, though the access the file clips it to would read less.
+ */
+static int32_t procfs_pcibar_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    struct pci_resource r;
+    uint8_t bytes[4] = {0, 0, 0, 0};
+    uint8_t chunk[64];
+    uint32_t value, done, len = count < PAGE_SIZE ? count : PAGE_SIZE;
+    int32_t n;
+
+    for (done = 0; done < len; done += sizeof(chunk)) {
+        uint32_t piece = len - done < sizeof(chunk) ? len - done : sizeof(chunk);
+
+        if (copy_from_user(chunk, buf + done, piece)) {
+            return -EFAULT;
+        }
+        if (done == 0) {
+            k_memcpy(bytes, chunk, piece < sizeof(bytes) ? piece : sizeof(bytes));
+        }
+    }
+    n = pcibar_span(e, len, 1, &r);
+    if (n <= 0) {
+        return n;
+    }
+    value = (uint32_t)bytes[0] | (uint32_t)bytes[1] << 8 | (uint32_t)bytes[2] << 16 |
+            (uint32_t)bytes[3] << 24;
+    pcibar_io(e, &r, (uint32_t)n, &value, 1);
+    return n;
+}
+
+/** The `page` of a resourceN mapping, whose object is the function's key
+ * shifted left by 3 with the BAR's number: the physical address of the
+ * BAR's page `pgoff` as the BAR reads now, or -1, and SIGBUS, once the
+ * function or the BAR is gone or for a page past its end. */
+static int pcibar_page(void *obj, uint32_t pgoff, uintptr_t *phys)
+{
+    uintptr_t v = (uintptr_t)obj;
+    int key = (int)(v >> 3), bar = (int)(v & 7u);
+    uint64_t size = sysfs_pci_bar_size(key, bar), at;
+    struct pci_resource r;
+
+    if ((uint64_t)pgoff * PAGE_SIZE >= size) {
+        return -1;
+    }
+    pci_resource((uint8_t)(key >> 8), (uint8_t)((key >> 3) & 31), (uint8_t)(key & 7), bar, &r);
+    at = r.start + (uint64_t)pgoff * PAGE_SIZE;
+    if (!(r.flags & PCI_IORESOURCE_MEM) || at != (uint64_t)(uintptr_t)at) {
+        return -1;
+    }
+    *phys = (uintptr_t)at;
+    return 0;
+}
+
+/** The `put` of a resourceN mapping: the mapping holds no reference. */
+static void pcibar_put(void *obj)
+{
+    (void)obj;
+}
+
+static const struct vm_device_ops pcibar_vm_ops = {pcibar_page, pcibar_put, NULL};
+
+/**
+ * mmap of a resourceN or resourceN_wc file, as Linux's pci_mmap_resource:
+ * a shared mapping of the memory BAR's pages from the page offset,
+ * uncached for resourceN and write-combining for resourceN_wc, mapped as
+ * they are touched. -ENODEV for an I/O BAR, which x86 does not map, or a
+ * function that is gone; -EINVAL for a range past the BAR's end, as
+ * pci_mmap_fits refuses it, or a private mapping; -ENOMEM.
+ */
+static int32_t procfs_pcibar_mmap(fd_entry_t *e, struct vma *vma)
+{
+    struct procfs_file *f = (struct procfs_file *)e->priv;
+    uint64_t pages = (vma->end - vma->start) / PAGE_SIZE, size;
+    struct pci_resource r;
+    int key, bar = pcibar_of(e, &r, &key);
+
+    if (bar < 0 || !(r.flags & PCI_IORESOURCE_MEM)) {
+        return -ENODEV;
+    }
+    size = (r.end - r.start) / PAGE_SIZE + 1u;
+    if (vma->pgoff >= size || size - vma->pgoff < pages) {
+        return -EINVAL;
+    }
+    return vm_device_map(
+        vma, &pcibar_vm_ops, (void *)(uintptr_t)((uintptr_t)key << 3 | (uintptr_t)bar),
+        (f->origin_task & 0xFFu) >= SYSFS_PCI_RESOURCE0_WC ? VM_PROT_WC : VM_PROT_UC);
+}
+
+static const struct file_ops procfs_pcibar_ops = {
+    procfs_pcibar_read, procfs_pcibar_write, procfs_poll, procfs_ioctl,
+    procfs_close,       procfs_pcibar_mmap,  NULL};
+
+/** Open a resourceN or resourceN_wc file, root's with mode 0600 as
+ * Linux's, for the access `pci_file_may` allows. -EACCES for another caller,
+ * -ENOENT for a BAR without a length or a function that is not there,
+ * -ENOMEM, or the descriptor's error. */
+static int procfs_open_pcibar(const struct vpath *vp, int flags)
+{
+    struct procfs_file *f;
+    fd_entry_t *e;
+    int acc = flags & 3, fd;
+
+    if (acc == 3 || !pci_file_may(0600, acc)) {
+        return -EACCES;
+    }
+    if (!sysfs_pci_attr_present(vp->syskey, vp->procfile)) {
+        return -ENOENT;
+    }
+    f = kzalloc(sizeof(*f));
+    if (!f) {
+        return -ENOMEM;
+    }
+    f->origin_file = SYNTH_SYS_UEVENT;
+    f->origin_task = SYSFS_PCI_DEVICE << 8 | vp->procfile;
+    f->origin_pid = vp->syskey;
+    fd = fd_alloc(current_proc->fds);
+    if (fd < 0) {
+        kfree(f);
+        return fd;
+    }
+    e = &current_proc->fds->entries[fd];
+    e->type = FD_TYPE_PROC;
+    e->ops = &procfs_pcibar_ops;
     e->priv = f;
     e->flags = acc == 0 ? FD_FLAG_READ : acc == 1 ? FD_FLAG_WRITE : FD_FLAG_READ | FD_FLAG_WRITE;
     if (flags & PROCFS_O_CLOEXEC) {
@@ -6424,9 +7640,9 @@ int procfs_is_mem(const fd_entry_t *e)
 }
 
 /**
- * Open /proc/<pid>/mem for reading, writing or both: the caller is a thread
- * of the process or privileged, or has the process's real user ID while the
- * process is dumpable and not privileged, as a tracer needs to attach. The
+ * Open /proc/<pid>/mem for reading, writing or both: the caller is one
+ * `procfs_may_read_mem` allows, as Linux's mm_access with
+ * PTRACE_MODE_ATTACH_FSCREDS, past the file's mode of 0600. The
  * descriptor keeps the process's id, `pid` as `procfs_resolve_id` gave it
  * for the path `vp`, a hold on the record of the address space those checks
  * allowed, which keeps none of its memory, and no text; its offset is an
@@ -6448,8 +7664,7 @@ static int procfs_open_mem(const struct vpath *vp, int pid, int flags)
     if (acc == 3 || (flags & 0100 /* O_CREAT */)) {
         return -EACCES;
     }
-    if (p->tg != current_proc->tg && !proc_privileged(current_proc) &&
-        (current_proc->ruid != p->ruid || !p->mm->dumpable || proc_privileged(p))) {
+    if (!procfs_may_read_mem(p)) {
         return -EACCES;
     }
     f = kzalloc(sizeof(*f));
@@ -6472,6 +7687,7 @@ static int procfs_open_mem(const struct vpath *vp, int pid, int flags)
     e->sock = NULL;
     e->ops = &procfs_mem_ops;
     e->priv = f;
+    procfs_own(&f->own, vp, pid);
     e->ofd->offset = 0;
     e->flags = acc == 0 ? FD_FLAG_READ : acc == 1 ? FD_FLAG_WRITE : (FD_FLAG_READ | FD_FLAG_WRITE);
     if (flags & PROCFS_O_CLOEXEC) {
@@ -6508,7 +7724,8 @@ static int procfs_gen_audio(struct procfs_text *t)
 #define OOM_SCORE_ADJ_MIN (-1000)
 #define OOM_SCORE_ADJ_MAX 1000
 
-int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid)
+/** Give a process node Linux's task_dump_owner ownership (procfs.h). */
+int procfs_pid_owner(int pid, uint32_t mode, uint32_t *uid, uint32_t *gid)
 {
     process_t *p = procfs_proc(pid);
 
@@ -6517,11 +7734,144 @@ int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid)
     }
     *uid = 0;
     *gid = 0;
-    if (p->mm && p->mm->dumpable) {
+    if (mode == 0040555u || (p->mm && p->mm->dumpable == 1u)) {
         *uid = p->euid;
         *gid = p->egid;
     }
     return 0;
+}
+
+/** The owner of oom_score_adj and the other process files, mode 0644. */
+int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid)
+{
+    return procfs_pid_owner(pid, 0100644u, uid, gid);
+}
+
+/**
+ * Name in `node` the node `vp` names whose inode keeps the owner its lookup
+ * set (struct synth_owner): its kind, its file or descriptor, the process or
+ * thread `id` that `procfs_resolve_id` gave, and for a thread's node its
+ * process. Returns 1, or 0 for any other node, /proc/<pid> and its ns
+ * directory among them, whose getattr works the owner out again
+ * (`pid_getattr`, fs/proc/base.c:2007, 3436 and 3767, and
+ * fs/proc/namespaces.c:195).
+ */
+static int procfs_node_of(const struct vpath *vp, int id, int node[4])
+{
+    switch (vp->kind) {
+    case VNODE_PROC_FILE:
+        if (synth_net_name(vp->procfile) != NULL) {
+            return 0;
+        }
+        node[1] = vp->procfile;
+        break;
+    case VNODE_PROC_FDINFO:
+    case VNODE_PROC_FD_LINK:
+    case VNODE_PROC_NS_LINK:
+        node[1] = vp->procfd;
+        break;
+    case VNODE_PROC_FD_DIR:
+    case VNODE_PROC_FDINFO_DIR:
+    case VNODE_PROC_TASK_DIR:
+    case VNODE_PROC_EXE:
+    case VNODE_PROC_CWD:
+    case VNODE_PROC_ROOT:
+        node[1] = 0;
+        break;
+    default:
+        return 0;
+    }
+    node[0] = vp->kind;
+    node[2] = id;
+    node[3] = vp->tid != 0 ? procfs_resolve_pid(vp->pid) : 0;
+    return 1;
+}
+
+/**
+ * Give every kept owner of the node `node` (`procfs_node_of`) the owner
+ * Linux's lookup gives its inode, task_dump_owner's for the inode's mode:
+ * the effective IDs of the process or thread `node[2]` for the fdinfo and
+ * task directories, mode 0555, and for the fd directory, files and links
+ * while it is dumpable, and root otherwise (`procfs_pid_owner`). Linux sets it
+ * when the lookup makes the inode and again at each walk that finds the
+ * dentry (fs/proc/base.c:1895, 2693 and 2066, fs/proc/fd.c:393 and 161).
+ */
+static void procfs_set_owner(const int node[4])
+{
+    struct synth_owner *o;
+    uint32_t mode = 0100644u;
+    uint32_t uid = 0, gid = 0;
+
+    if (node[0] == VNODE_PROC_FD_DIR) {
+        mode = 0040500u;
+    } else if (node[0] == VNODE_PROC_FDINFO_DIR || node[0] == VNODE_PROC_TASK_DIR) {
+        mode = 0040555u;
+    } else if (node[0] == VNODE_PROC_EXE || node[0] == VNODE_PROC_CWD ||
+               node[0] == VNODE_PROC_ROOT || node[0] == VNODE_PROC_FD_LINK ||
+               node[0] == VNODE_PROC_NS_LINK) {
+        mode = 0120777u;
+    }
+    if (procfs_pid_owner(node[2], mode, &uid, &gid) != 0) {
+        return;
+    }
+    for (o = procfs_owned; o; o = o->next) {
+        if (o->node[0] == node[0] && o->node[1] == node[1] && o->node[2] == node[2] &&
+            o->node[3] == node[3]) {
+            o->uid = uid;
+            o->gid = gid;
+        }
+    }
+}
+
+/**
+ * Put `o`, the record of a descriptor just opened on `vp` for the process
+ * or thread `id`, on `procfs_owned` when its node's inode keeps its owner,
+ * and give it and the node's other kept owners the owner of this lookup.
+ */
+static void procfs_own(struct synth_owner *o, const struct vpath *vp, int id)
+{
+    if (o->kept || !procfs_node_of(vp, id, o->node)) {
+        return;
+    }
+    o->kept = 1;
+    o->next = procfs_owned;
+    procfs_owned = o;
+    procfs_set_owner(o->node);
+}
+
+void procfs_owner_keep(struct synth_owner *o, const struct vpath *vp)
+{
+    int id = procfs_resolve_id(vp);
+
+    if (id >= 0) {
+        procfs_own(o, vp, id);
+    }
+}
+
+void procfs_owner_drop(struct synth_owner *o)
+{
+    struct synth_owner **pp = &procfs_owned;
+
+    if (!o->kept) {
+        return;
+    }
+    while (*pp && *pp != o) {
+        pp = &(*pp)->next;
+    }
+    if (*pp == o) {
+        *pp = o->next;
+    }
+    o->kept = 0;
+}
+
+void procfs_lookup_owner(const struct vpath *vp)
+{
+    int node[4];
+    int id = procfs_resolve_id(vp);
+
+    if (id >= 0 && procfs_node_of(vp, id, node)) {
+        procfs_set_owner(node);
+    }
 }
 
 int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
@@ -6532,11 +7882,11 @@ int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
         return -1;
     }
     f = (const struct procfs_file *)e->priv;
-    if (procfs_global_fd_path(f->origin_file) || synth_net_name(f->origin_file) ||
-        f->origin_file == SYNTH_SYS_UEVENT || f->origin_file == SYNTH_PROC_SYSCTL ||
-        procfs_oom_owner(f->origin_pid, uid, gid) != 0) {
+    if (!f->own.kept) {
         return -1;
     }
+    *uid = f->own.uid;
+    *gid = f->own.gid;
     return f->origin_file == SYNTH_PROC_OOM_ADJ || f->origin_file == SYNTH_PROC_COMM ||
            procfs_is_idmap(f->origin_file);
 }
@@ -6852,14 +8202,14 @@ static const struct file_ops procfs_comm_ops = {
     procfs_idmap_read, procfs_comm_write, procfs_poll, procfs_ioctl, procfs_close, NULL, NULL};
 
 /**
- * Open /proc/<pid>/uid_map, gid_map, setgroups or comm, `file`, for
- * writing, or for reading and writing. Who may write a map is the
+ * Open /proc/<pid>/uid_map, gid_map, setgroups or comm, `file` of the path
+ * `vp`, for writing, or for reading and writing. Who may write a map is the
  * namespace's rule (`ns_map_write`), checked at the write, which must be at
  * the start; a `comm`, whose mode is 0644, takes a writer that owns it
  * (`procfs_oom_owner`) or a privileged one, checked here. -EACCES for an
  * access mode of 3 or a writer who may not, and -ENOENT for no such process.
  */
-static int procfs_open_idmap(int file, int pid, int flags)
+static int procfs_open_idmap(const struct vpath *vp, int file, int pid, int flags)
 {
     struct procfs_file *f;
     fd_entry_t *e;
@@ -6873,7 +8223,8 @@ static int procfs_open_idmap(int file, int pid, int flags)
     if (procfs_oom_owner(pid, &uid, &gid) != 0) {
         return -ENOENT;
     }
-    if (file == SYNTH_PROC_COMM && !proc_privileged(current_proc) && current_proc->euid != uid) {
+    if (file == SYNTH_PROC_COMM && !proc_fs_privileged(current_proc) &&
+        proc_fsuid(current_proc) != uid) {
         return -EACCES;
     }
     f = kzalloc(sizeof(*f));
@@ -6893,6 +8244,7 @@ static int procfs_open_idmap(int file, int pid, int flags)
     e->sock = NULL;
     e->ops = file == SYNTH_PROC_COMM ? &procfs_comm_ops : &procfs_idmap_ops;
     e->priv = f;
+    procfs_own(&f->own, vp, pid);
     e->ofd->offset = 0;
     e->flags = acc == 1 ? FD_FLAG_WRITE : (FD_FLAG_READ | FD_FLAG_WRITE);
     if (flags & PROCFS_O_CLOEXEC) {
@@ -6924,7 +8276,7 @@ static int procfs_open_oom(const struct vpath *vp, int pid, int flags)
     if (procfs_oom_owner(pid, &uid, &gid) != 0) {
         return -ENOENT;
     }
-    if (acc != 0 && !proc_privileged(current_proc) && current_proc->euid != uid) {
+    if (acc != 0 && !proc_fs_privileged(current_proc) && proc_fsuid(current_proc) != uid) {
         return -EACCES;
     }
     f = kzalloc(sizeof(*f));
@@ -6945,6 +8297,7 @@ static int procfs_open_oom(const struct vpath *vp, int pid, int flags)
     e->sock = NULL;
     e->ops = &procfs_oom_ops;
     e->priv = f;
+    procfs_own(&f->own, vp, pid);
     e->ofd->offset = 0;
     e->flags = acc == 0 ? FD_FLAG_READ : acc == 1 ? FD_FLAG_WRITE : (FD_FLAG_READ | FD_FLAG_WRITE);
     if (flags & PROCFS_O_CLOEXEC) {
@@ -6958,7 +8311,9 @@ static int procfs_open_oom(const struct vpath *vp, int pid, int flags)
 #define SYSCTL_SECONDS_MAX (0x7FFFFFFF / TICK_HZ)
 
 /* The /proc/sys files whose values are their owners' variables, and the
- * range a write must fall in, as Linux's `proc_dointvec_minmax` takes one. */
+ * range a write must fall in, as Linux's `proc_dointvec_minmax` takes one;
+ * kernel/panic and kernel/panic_on_oops take any int, as Linux's
+ * `proc_dointvec` does (kernel/sysctl.c). */
 static const struct {
     int entry;
     int *var;
@@ -6976,7 +8331,9 @@ static const struct {
                    {SYNTH_SYS_TCP_KEEPALIVE_TIME + 1, &tcp_keepalive_intvl, 1, SYSCTL_SECONDS_MAX},
                    {SYNTH_SYS_TCP_KEEPALIVE_TIME + 2, &tcp_keepalive_probes, 0, 255},
                    {SYNTH_SYS_TCP_KEEPALIVE_TIME + 3, &tcp_mtu_probing, 0, 2},
-                   {SYNTH_SYS_TCP_RETRIES2, &tcp_retries2, 0, 255}};
+                   {SYNTH_SYS_TCP_RETRIES2, &tcp_retries2, 0, 255},
+                   {SYNTH_SYS_PANIC, &panic_timeout, -0x7FFFFFFF - 1, 0x7FFFFFFF},
+                   {SYNTH_SYS_PANIC_ON_OOPS, &panic_on_oops, -0x7FFFFFFF - 1, 0x7FFFFFFF}};
 
 /** The index in `sysctl_ints` of the /proc/sys file `entry`, or -1. */
 static int sysctl_int(int entry)
@@ -7106,6 +8463,13 @@ static int procfs_sysctl_text(struct procfs_text *t, int entry)
     } else if (entry == SYNTH_SYS_FILE_MAX) {
         ap_ulong(t, fd_file_max);
         ap_ch(t, '\n');
+    } else if (entry == SYNTH_SYS_PIPE_MAX_SIZE) {
+        ap_ulong(t, pipe_max_size);
+        ap_ch(t, '\n');
+    } else if (entry == SYNTH_SYS_PIPE_USER_PAGES_HARD || entry == SYNTH_SYS_PIPE_USER_PAGES_SOFT) {
+        ap_ulong(t, entry == SYNTH_SYS_PIPE_USER_PAGES_HARD ? pipe_user_pages_hard
+                                                            : pipe_user_pages_soft);
+        ap_ch(t, '\n');
     } else if (entry == SYNTH_SYS_FILE_NR) {
         ap_ulong(t, fd_files_open());
         ap_str(t, "\t0\t");
@@ -7157,15 +8521,17 @@ static int32_t procfs_sysctl_read(fd_entry_t *e, char __user *buf, uint32_t coun
 
 /**
  * Store the number of the NUL-ended text `s` in `*v`, as Linux's
- * `proc_doulongvec_minmax` takes a write to fs/file-max: spaces stripped at
- * both ends, an optional `+`, then a number in base 0, as `oom_parse` reads
- * one, from 0 to LONG_MAX. 0, or -EINVAL for a sign, text that is no
- * number, or a number out of range, which leaves `*v` as it was.
+ * `proc_doulongvec_minmax` takes a write to fs/file-max and the pipe page
+ * limits and `proc_douintvec` one to fs/pipe-max-size: spaces stripped at
+ * both ends, then a number in base 0, as `oom_parse` reads one, from 0 to
+ * `limit`. 0, or -EINVAL for a sign, `+` or `-`, as Linux's `proc_get_long`
+ * and its callers refuse either, text that is no number, or a number out of
+ * range, which leaves `*v` as it was.
  */
-static int sysctl_parse_ulong(const char *s, unsigned long *v)
+static int sysctl_parse_ulong(const char *s, unsigned long limit, unsigned long *v)
 {
     const char *end = s + k_strlen(s);
-    unsigned long base = 10, mag = 0, limit = ~0ul >> 1, d;
+    unsigned long base = 10, mag = 0, d;
     int digits = 0;
 
     while (oom_space(*s)) {
@@ -7173,9 +8539,6 @@ static int sysctl_parse_ulong(const char *s, unsigned long *v)
     }
     while (end > s && oom_space(end[-1])) {
         end--;
-    }
-    if (*s == '+') {
-        s++;
     }
     if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X') && oom_digit(s[2]) < 16u) {
         base = 16;
@@ -7197,6 +8560,41 @@ static int sysctl_parse_ulong(const char *s, unsigned long *v)
     return 0;
 }
 
+/**
+ * Write the NUL-ended text `text` to the /proc/sys file `entry` when its
+ * value is an unsigned long: fs/file-max, up to LONG_MAX; fs/pipe-max-size,
+ * up to 2^31 and rounded (`pipe_round_size`); fs/pipe-user-pages-hard and
+ * fs/pipe-user-pages-soft, any. Returns 0 for any other file, and otherwise
+ * 1, with 0 or -EINVAL in `*rc`.
+ */
+static int sysctl_ulong_write(int entry, const char *text, int *rc)
+{
+    unsigned long v;
+
+    switch (entry) {
+    case SYNTH_SYS_FILE_MAX:
+        *rc = sysctl_parse_ulong(text, ~0ul >> 1, &fd_file_max);
+        return 1;
+    case SYNTH_SYS_PIPE_MAX_SIZE:
+        *rc = sysctl_parse_ulong(text, ~0ul, &v);
+        if (*rc == 0 && v > 0x80000000ul) {
+            *rc = -EINVAL;
+        }
+        if (*rc == 0) {
+            pipe_max_size = pipe_round_size((uint32_t)v);
+        }
+        return 1;
+    case SYNTH_SYS_PIPE_USER_PAGES_HARD:
+        *rc = sysctl_parse_ulong(text, ~0ul, &pipe_user_pages_hard);
+        return 1;
+    case SYNTH_SYS_PIPE_USER_PAGES_SOFT:
+        *rc = sysctl_parse_ulong(text, ~0ul, &pipe_user_pages_soft);
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 /** Set the caller's user namespace's user/max_mnt_namespaces to `v`:
  * `count`, or -EINVAL out of its range. */
 static int32_t sysctl_max_mnt_write(int32_t v, uint32_t count)
@@ -7211,11 +8609,13 @@ static int32_t sysctl_max_mnt_write(int32_t v, uint32_t count)
  *
  * kernel/hostname and kernel/domainname become the text up to its first
  * newline, at most 64 bytes, as sethostname(2) and setdomainname(2) would
- * set them; the whole count is taken. fs/file-max takes an unsigned long
- * up to LONG_MAX (`sysctl_parse_ulong`). A write to another file is an
- * integer, read as `oom_parse` reads one. A file of `sysctl_ints` stores it
- * in its owner's variable, which the owner reads at its next use, and a
- * value out of the file's range is -EINVAL. user/max_mnt_namespaces is the
+ * set them; the whole count is taken. fs/file-max and the pipe limits take
+ * an unsigned long (`sysctl_ulong_write`), and fs/pipe-max-size rounds it
+ * as Linux's `round_pipe_size` does, so that 1 sets a page. A write to
+ * another file is an integer, read as `oom_parse` reads one. A file of
+ * `sysctl_ints` stores it in its owner's variable, which the owner reads at
+ * its next use, and a value out of the file's range is -EINVAL.
+ * user/max_mnt_namespaces is the
  * limit of the caller's user namespace, from 0 to INT_MAX
  * (`ns_set_max_mnt`). To net/ipv4/ip_forward 0, its
  * value, is taken, and any other value is -EINVAL, since the stack forwards
@@ -7252,8 +8652,7 @@ static int32_t procfs_sysctl_write(fd_entry_t *e, const char __user *buf, uint32
         }
         return (int32_t)count;
     }
-    if (f->origin_pid == SYNTH_SYS_FILE_MAX) {
-        rc = sysctl_parse_ulong(text, &fd_file_max);
+    if (sysctl_ulong_write(f->origin_pid, text, &rc)) {
         return rc != 0 ? rc : (int32_t)count;
     }
     if (synth_sys_ipv6(f->origin_pid, &dir, &key) && key == SYNTH_IPV6_STABLE_SECRET) {
@@ -7344,73 +8743,81 @@ static int sysattr_is(const char *s, uint32_t len, const char *word)
     return i == len && word[i] == '\0';
 }
 
-/** The decimal number at the start of the `len` bytes at `s`, with a
- * leading `+` noted in `*relative`; -1 when no digit begins them. Reading
- * stops at the first other byte, or once the value reaches 2^31 - 1. */
-static int64_t sysattr_number(const char *s, uint32_t len, int *relative)
+/**
+ * Take a write of the `count` bytes at `text`, NUL-terminated, to rtc0's
+ * wakealarm, as Linux's wakealarm_store (drivers/rtc/sysfs.c:152-213):
+ * the clock read first; then seconds since 1970, `+N` for N seconds from
+ * now, or `+=N` to move a set alarm N seconds later, the number read as
+ * kstrtos64 with base 0 reads it (`k_strtoll`). A time after now, or any
+ * push, sets the alarm: -EBUSY while one is set but for a push, and
+ * -EINVAL for a push with none set or to a time before 1970, which
+ * Linux's rtc_valid_tm refuses (drivers/rtc/lib.c:161-172); a push to a
+ * time not after now raises the alarm at once. Any other time disables it.
+ * The count, -EIO when the clock cannot be read, the parse's error, or the
+ * error of `devfs_rtc_set_wakealarm`.
+ */
+static int32_t wakealarm_store(const char *text, uint32_t count)
 {
-    int64_t v = 0;
-    uint32_t i = 0;
-
-    *relative = len > 0 && s[0] == '+';
-    i = (uint32_t)*relative;
-    if (i == len || s[i] < '0' || s[i] > '9') {
-        return -1;
-    }
-    for (; i < len && s[i] >= '0' && s[i] <= '9' && v < 0x7FFFFFFF; i++) {
-        v = v * 10 + (s[i] - '0');
-    }
-    return v;
-}
-
-/** Write the registered attribute `handle` (sysfs.h): the `count` bytes at
- * `buf`, at most 4096, Linux's page, go to its `store` as written. Its
- * result, -EINVAL past 4096 bytes, -EFAULT or -ENOMEM. */
-static int32_t procfs_regattr_write(int handle, const char __user *buf, uint32_t count)
-{
-    char *copy;
+    const char *p = text;
+    rtc_time_t now_tm;
+    long long alarm;
+    int64_t now, set;
+    int adjust = 0, push = 0;
     int32_t rc;
 
-    if (count > 4096) {
-        return -EINVAL;
+    if (rtc_read_clock(&now_tm) != 0) {
+        return -EIO;
     }
-    copy = kmalloc(count ? count : 1u);
-    if (!copy) {
-        return -ENOMEM;
+    now = rtc_seconds_of(&now_tm);
+    if (*p == '+') {
+        p++;
+        if (*p == '=') {
+            p++;
+            push = 1;
+        } else {
+            adjust = 1;
+        }
     }
-    rc = copy_from_user(copy, buf, count) != 0 ? -EFAULT : sysfs_node_store(handle, copy, count);
-    kfree(copy);
-    return rc;
+    rc = k_strtoll(p, count - (uint32_t)(p - text), &alarm);
+    if (rc != 0) {
+        return rc;
+    }
+    /* The sums wrap, as Linux's time64_t arithmetic does. */
+    if (adjust) {
+        alarm = (long long)((uint64_t)alarm + (uint64_t)now);
+    }
+    if (alarm > now || push) {
+        set = devfs_rtc_wakealarm();
+        if (set >= 0 && !push) {
+            return -EBUSY;
+        }
+        if (set < 0 && push) {
+            return -EINVAL;
+        }
+        if (push) {
+            alarm = (long long)((uint64_t)alarm + (uint64_t)set);
+            if (alarm < 0) {
+                return -EINVAL;
+            }
+        }
+        rc = devfs_rtc_set_wakealarm(alarm);
+    } else {
+        rc = devfs_rtc_set_wakealarm(-1);
+    }
+    return rc != 0 ? rc : (int32_t)count;
 }
 
 /**
- * Write a writable /sys attribute, as Linux's do. rtc0's wakealarm takes
- * seconds since 1970, or `+N` for N seconds from now, and 0 to clear it; a
- * new time while an alarm is set is -EBUSY, as on Linux, which wants the
- * alarm cleared first, and a time `devfs_rtc_set_wakealarm` does not set
- * has its error; text that is no number is -EINVAL.
- * /sys/power/state takes `freeze` or `mem`, both suspend to idle, which the
- * write waits in until a wake event, or has the error of `suspend_to_idle`;
- * another state is -EINVAL. The whole count is taken, or the write fails
- * with -EFAULT, -EIO for a clock that cannot be read or cleared, or one of
- * the errors above. A backlight's brightness and bl_power take what
- * `backlight_store` takes, and have its errors; a radio switch's soft and
- * state take what `rfkill_store` takes. A write of more than 31 bytes,
- * which would be read in part, is -EINVAL and changes nothing. A registered
- * attribute (sysfs.h) takes the bytes as written, at most 4096, Linux's
- * page, through its `store`.
+ * Take a write of the `count` bytes at `text` to the uevent `attr` of the
+ * device `key` of `node` (`sysfs_attr_uevent`), as Linux's
+ * dev_uevent_store: the action and its arguments (`sysfs_uevent_parse`) are
+ * sent as that uevent with the device's variables, so that udev's coldplug
+ * hears the device. `count`, -EINVAL, -ENOENT for a device that is gone,
+ * or -ENOMEM.
  */
-/**
- * Take a write of `count` bytes at `buf` to the uevent `attr` of the device
- * `key` of `node` (`sysfs_attr_uevent`), as Linux's dev_uevent_store: the
- * action and its arguments (`sysfs_uevent_parse`) are sent as that uevent
- * with the device's variables, so that udev's coldplug hears the device.
- * `count`, -EINVAL, -EFAULT, -ENOENT for a device that is gone, or -ENOMEM.
- */
-static int32_t procfs_uevent_write(int node, int key, int attr, const char __user *buf,
-                                   uint32_t count)
+static int32_t procfs_uevent_write(int node, int key, int attr, const char *text, uint32_t count)
 {
-    char text[SYSFS_SYNTH_ENV_MAX], env[SYSFS_SYNTH_ENV_MAX], action[8], path[96];
+    char env[SYSFS_SYNTH_ENV_MAX], action[8], path[96];
     const char *subsystem = node == SYSFS_PCI_DEVICE   ? "pci"
                             : node == SYSFS_USB_DEVICE ? "usb"
                             : node == SYSFS_NET_IF     ? "net"
@@ -7422,12 +8829,6 @@ static int32_t procfs_uevent_write(int node, int key, int attr, const char __use
     int32_t rc;
     int got = key;
 
-    if (count > sizeof(text)) {
-        return -EINVAL;
-    }
-    if (copy_from_user(text, buf, count) != 0) {
-        return -EFAULT;
-    }
     rc = sysfs_uevent_parse(text, count, action, env);
     if (rc != 0) {
         return rc;
@@ -7450,66 +8851,89 @@ static int32_t procfs_uevent_write(int node, int key, int attr, const char __use
     return rc < 0 ? rc : (int32_t)count;
 }
 
-static int32_t procfs_sysattr_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+/**
+ * Give the `count` bytes at `text`, NUL-terminated, to the store of the
+ * writable /sys attribute of `f`, each of which parses them with its own
+ * limits. A registered attribute (sysfs.h) takes them as written, through
+ * its `store`, and a uevent file as `procfs_uevent_write` does; the
+ * transparent_hugepage files go to `thp_store`. A backlight's brightness
+ * and bl_power take what `backlight_store` takes, and a radio switch's
+ * soft and state what `rfkill_store` takes, with their errors, given the
+ * text whole, as Linux gives the buffer to kstrtoul, which takes one
+ * newline; rtc0's wakealarm goes whole to `wakealarm_store`.
+ * /sys/power/state has its final newlines and spaces cut, then takes
+ * `freeze` or
+ * `mem`, both suspend to idle, which the write waits in until a wake
+ * event, or has the error of `suspend_to_idle`; another state is -EINVAL.
+ * The count taken, or -errno.
+ */
+static int32_t procfs_sysattr_store(const struct procfs_file *f, char *text, uint32_t count)
 {
-    struct procfs_file *f = (struct procfs_file *)e->priv;
-    char text[32];
+    int node = f->origin_task >> 8, attr = f->origin_task & 255;
     uint32_t n = count;
-    rtc_time_t now;
-    int64_t v;
-    int relative;
     int32_t rc;
 
-    if (f->origin_task >> 8 == SYSFS_REG) {
-        return procfs_regattr_write(f->origin_pid, buf, count);
+    if (node == SYSFS_REG) {
+        return sysfs_node_store(f->origin_pid, text, count);
     }
-    if (sysfs_attr_uevent(f->origin_task >> 8, f->origin_task & 255)) {
-        return procfs_uevent_write(f->origin_task >> 8, f->origin_pid, f->origin_task & 255, buf,
-                                   count);
+    if (sysfs_attr_uevent(node, attr)) {
+        return procfs_uevent_write(node, f->origin_pid, attr, text, count);
     }
-    if (count > sizeof(text) - 1) {
-        return -EINVAL;
+    if (node == SYSFS_THP) {
+        return thp_store(attr, text, count);
     }
-    k_memset(text, 0, sizeof(text));
-    if (copy_from_user(text, buf, n) != 0) {
-        return -EFAULT;
+    if (node == SYSFS_BACKLIGHT) {
+        rc = backlight_store(f->origin_pid, attr, text, (int)count);
+        return rc != 0 ? rc : (int32_t)count;
+    }
+    if (node == SYSFS_RFKILL) {
+        rc = rfkill_store(f->origin_pid, attr, text, (int)count);
+        return rc != 0 ? rc : (int32_t)count;
+    }
+    if (node != SYSFS_POWER) {
+        return wakealarm_store(text, count);
     }
     while (n > 0 && (text[n - 1] == '\n' || text[n - 1] == ' ')) {
         text[--n] = '\0';
     }
-    if (f->origin_task >> 8 == SYSFS_BACKLIGHT) {
-        rc = backlight_store(f->origin_pid, f->origin_task & 255, text, (int)n);
-        return rc != 0 ? rc : (int32_t)count;
-    }
-    if (f->origin_task >> 8 == SYSFS_RFKILL) {
-        rc = rfkill_store(f->origin_pid, f->origin_task & 255, text, (int)n);
-        return rc != 0 ? rc : (int32_t)count;
-    }
-    if (f->origin_task >> 8 == SYSFS_POWER) {
-        if (!sysattr_is(text, n, "freeze") && !sysattr_is(text, n, "mem")) {
-            return -EINVAL;
-        }
-        rc = suspend_to_idle();
-        return rc != 0 ? rc : (int32_t)count;
-    }
-    v = sysattr_number(text, n, &relative);
-    if (v < 0) {
+    if (!sysattr_is(text, n, "freeze") && !sysattr_is(text, n, "mem")) {
         return -EINVAL;
     }
-    if (v == 0) {
-        return devfs_rtc_set_wakealarm(-1) == 0 ? (int32_t)count : -EIO;
-    }
-    if (devfs_rtc_wakealarm() >= 0) {
-        return -EBUSY;
-    }
-    if (relative) {
-        if (rtc_read_clock(&now) != 0) {
-            return -EIO;
-        }
-        v += rtc_seconds_of(&now);
-    }
-    rc = devfs_rtc_set_wakealarm(v);
+    rc = suspend_to_idle();
     return rc != 0 ? rc : (int32_t)count;
+}
+
+/**
+ * Write a writable /sys attribute, as Linux's kernfs writes a sysfs file:
+ * the first PAGE_SIZE bytes at most of the `count` at `buf` go to the
+ * attribute's store (`procfs_sysattr_store`), NUL-terminated, so that a
+ * longer write is taken in part. An empty write is 0 with no store
+ * called, as Linux's sysfs_kf_write answers it. The count taken, or
+ * -EFAULT, -ENOMEM or the store's error.
+ */
+static int32_t procfs_sysattr_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    char *text;
+    int32_t rc;
+
+    if (count == 0) {
+        return 0;
+    }
+    if (count > PAGE_SIZE) {
+        count = PAGE_SIZE;
+    }
+    text = kmalloc(count + 1u);
+    if (!text) {
+        return -ENOMEM;
+    }
+    if (copy_from_user(text, buf, count) != 0) {
+        rc = -EFAULT;
+    } else {
+        text[count] = '\0';
+        rc = procfs_sysattr_store((const struct procfs_file *)e->priv, text, count);
+    }
+    kfree(text);
+    return rc;
 }
 
 static const struct file_ops procfs_sysattr_ops = {
@@ -7696,13 +9120,52 @@ static int procfs_open_sysctl(int entry, int flags)
     return fd;
 }
 
+#if defined(__x86_64__) && !defined(RACH2_HOSTTEST)
+/**
+ * Append the interrupt counts of the VM `vm` for its descriptor's fdinfo:
+ * the controller in the kernel, then a line for each I/O APIC pin and each
+ * vCPU's vector with a count, the counts in the order of enum
+ * kvm_pin_step and enum kvm_vec_step. Under the big lock.
+ */
+static void procfs_kvm_irqs(struct procfs_text *t, void *vm)
+{
+    static const char *const pin_names[KVM_PIN_STEPS] = {" raised ", " coalesced ", " held ",
+                                                         " delivered ", " missed "};
+    static const char *const vec_names[KVM_VEC_STEPS] = {" accepted ", " dropped ", " acked ",
+                                                         " injected ", " saved ",   " eoi "};
+    struct kvm_irq_row row;
+    uint32_t pos = 0, i;
+
+    ap_str(t, "kvm_irqchip:\t");
+    ap_str(t, kvm_vm_irqchip_name(vm));
+    ap_ch(t, '\n');
+    while (kvm_vm_irq_row(vm, &pos, &row)) {
+        if (row.pin) {
+            ap_str(t, "kvm_ioapic_pin:\t");
+            ap_u32(t, row.index);
+        } else {
+            ap_str(t, "kvm_vcpu_vector:\t");
+            ap_u32(t, row.vcpu);
+            ap_ch(t, ' ');
+            ap_u32(t, row.index);
+        }
+        for (i = 0; i < (row.pin ? (uint32_t)KVM_PIN_STEPS : (uint32_t)KVM_VEC_STEPS); i++) {
+            ap_str(t, row.pin ? pin_names[i] : vec_names[i]);
+            ap_u32(t, row.counts[i]);
+        }
+        ap_ch(t, '\n');
+    }
+}
+#endif
+
 /**
  * The text of /proc/PID/fdinfo/N, descriptor `fd` of process `pid`: its
  * offset, its flags in octal, the access mode with O_APPEND, O_NONBLOCK,
  * O_PATH and O_CLOEXEC, the id of its mount, 0 for an object on none, and
  * its inode number, the four lines Linux gives first. Its length, or
  * -ENOENT for a descriptor that is not open. A dma-buf also gives its
- * supplied name, copied before appending text or the stat can sleep.
+ * supplied name, copied before appending text or the stat can sleep, and a
+ * KVM VM its interrupt counts, from a reference taken then.
  */
 static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
 {
@@ -7712,6 +9175,9 @@ static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
     uint32_t rw, flags, mnt_id;
     uint64_t ino;
     int named = 0;
+#if defined(__x86_64__) && !defined(RACH2_HOSTTEST)
+    void *vm;
+#endif
 
     if (!p || p->state == PROC_UNUSED || fd < 0 || fd >= fd_table_cap(p->fds)) {
         return -ENOENT;
@@ -7728,6 +9194,9 @@ static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
             k_memcpy(name, b->name, sizeof(name));
         }
     }
+#if defined(__x86_64__) && !defined(RACH2_HOSTTEST)
+    vm = kvm_vm_irq_hold(e);
+#endif
     rw = e->flags & (FD_FLAG_READ | FD_FLAG_WRITE);
     flags = rw == (FD_FLAG_READ | FD_FLAG_WRITE) ? 2u : (rw == FD_FLAG_WRITE ? 1u : 0u);
     if (e->ofd) {
@@ -7759,6 +9228,12 @@ static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
         ap_str(t, name);
         ap_ch(t, '\n');
     }
+#if defined(__x86_64__) && !defined(RACH2_HOSTTEST)
+    if (vm) {
+        procfs_kvm_irqs(t, vm);
+        kvm_vm_irq_done(vm);
+    }
+#endif
     return t->nomem ? -1 : t->len;
 }
 
@@ -7777,6 +9252,8 @@ static int procfs_gen_pid_file(struct procfs_text *t, int pid, const struct vpat
         return procfs_gen_maps(t, pid);
     case SYNTH_PROC_SMAPS:
         return procfs_gen_smaps(t, pid);
+    case SYNTH_PROC_NUMA_MAPS:
+        return procfs_gen_numa_maps(t, pid);
     case SYNTH_PROC_STATUS:
         return procfs_gen_status(t, pid);
     case SYNTH_PROC_STATM:
@@ -7795,6 +9272,12 @@ static int procfs_gen_pid_file(struct procfs_text *t, int pid, const struct vpat
         return procfs_gen_limits(t, pid);
     case SYNTH_PROC_CHILDREN:
         return procfs_gen_children(t, pid);
+    case SYNTH_PROC_SYSCALL:
+        return procfs_gen_syscall(t, pid);
+    case SYNTH_PROC_WCHAN:
+        return procfs_gen_wchan(t, pid);
+    case SYNTH_PROC_SCHEDSTAT:
+        return procfs_gen_schedstat(t, pid);
     default:
         return procfs_is_idmap(vp->procfile) ? procfs_gen_idmap(t, pid, vp->procfile)
                                              : procfs_gen_cmdline(t, pid);
@@ -7948,12 +9431,47 @@ static int procfs_render(struct procfs_text *t, const struct vpath *vp, int pid,
 }
 
 /**
+ * Open the file `vp` names, of process `pid` when it is one of a process,
+ * through the open of its own when it has one: oom_score_adj, a write of an
+ * ID map or comm, mem, a write of a /proc/sys file, the ACPI call file, a
+ * PCI function's config and BAR files, and a write of a /sys attribute.
+ * Returns 1 with the open's answer in `*fd`, or 0 for a file with none.
+ */
+static int procfs_open_own(const struct vpath *vp, int pid, int flags, int *fd)
+{
+    int acc = flags & 3;
+
+    if (vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_OOM_ADJ) {
+        *fd = procfs_open_oom(vp, pid, flags);
+    } else if (vp->kind == VNODE_PROC_FILE &&
+               (procfs_is_idmap(vp->procfile) || vp->procfile == SYNTH_PROC_COMM) && acc != 0) {
+        *fd = procfs_open_idmap(vp, vp->procfile, pid, flags);
+    } else if (vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_MEM) {
+        *fd = procfs_open_mem(vp, pid, flags);
+    } else if (vp->kind == VNODE_PROC_SYS_FILE && synth_sys_writable(vp->sysent) && acc != 0) {
+        *fd = procfs_open_sysctl(vp->sysent, flags);
+    } else if (vp->kind == VNODE_PROC_ACPI_CALL) {
+        *fd = procfs_open_acpicall(flags);
+    } else if (vp->kind == VNODE_SYS_FILE && vp->sysent == SYSFS_PCI_DEVICE &&
+               (vp->procfile == SYSFS_PCI_CONFIG || vp->procfile >= SYSFS_PCI_RESOURCE0)) {
+        *fd = vp->procfile == SYSFS_PCI_CONFIG ? procfs_open_pciconfig(vp, flags)
+                                               : procfs_open_pcibar(vp, flags);
+    } else if (vp->kind == VNODE_SYS_FILE &&
+               sysfs_file_writable(vp->sysent, vp->syskey, vp->procfile) && acc != 0) {
+        *fd = procfs_open_sysattr(vp->sysent, vp->syskey, vp->procfile, flags);
+    } else {
+        return 0;
+    }
+    return 1;
+}
+
+/**
  * The checks of the flags are in the order that gives the errno of a
  * regular file that exists: O_CREAT with O_EXCL is -EEXIST first, then
- * O_DIRECTORY -ENOTDIR. The files a write reaches then go to opens of their
- * own (`procfs_open_oom`, `procfs_open_idmap`, `procfs_open_mem`,
- * `procfs_open_sysctl`, `procfs_open_sysattr`, `procfs_open_acpicall`), and
- * any other write or create is -EACCES.
+ * O_DIRECTORY -ENOTDIR, then -EACCES for a file of a process whose mode
+ * the caller lacks (`procfs_owner_may_open`). The files a write reaches
+ * then go to opens of their own (`procfs_open_own`), and any other write or
+ * create is -EACCES.
  *
  * `/proc/disk` is rendered from the record taken at boot, so opening it
  * issues no command to the device. `diskinfo_format` truncates to the size
@@ -7980,29 +9498,11 @@ int procfs_open(const struct vpath *vp, int flags)
     if (flags & 0200000 /* O_DIRECTORY */) {
         return -ENOTDIR;
     }
-    if (vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_OOM_ADJ) {
-        return procfs_open_oom(vp, pid, flags);
+    if (vp->kind == VNODE_PROC_FILE && !procfs_owner_may_open(pid, vp->procfile, flags)) {
+        return -EACCES;
     }
-    if (vp->kind == VNODE_PROC_FILE &&
-        (procfs_is_idmap(vp->procfile) || vp->procfile == SYNTH_PROC_COMM) && (flags & 3) != 0) {
-        return procfs_open_idmap(vp->procfile, pid, flags);
-    }
-    if (vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_MEM) {
-        return procfs_open_mem(vp, pid, flags);
-    }
-    if (vp->kind == VNODE_PROC_SYS_FILE && synth_sys_writable(vp->sysent) && (flags & 3) != 0) {
-        return procfs_open_sysctl(vp->sysent, flags);
-    }
-    if (vp->kind == VNODE_PROC_ACPI_CALL) {
-        return procfs_open_acpicall(flags);
-    }
-    if (vp->kind == VNODE_SYS_FILE && vp->sysent == SYSFS_PCI_DEVICE &&
-        vp->procfile == SYSFS_PCI_CONFIG) {
-        return procfs_open_pciconfig(vp, flags);
-    }
-    if (vp->kind == VNODE_SYS_FILE && sysfs_file_writable(vp->sysent, vp->syskey, vp->procfile) &&
-        (flags & 3) != 0) {
-        return procfs_open_sysattr(vp->sysent, vp->syskey, vp->procfile, flags);
+    if (procfs_open_own(vp, pid, flags, &fd)) {
+        return fd;
     }
     if ((flags & 3) != 0 || (flags & 0100 /* O_CREAT */)) {
         return -EACCES;
@@ -8017,7 +9517,13 @@ int procfs_open(const struct vpath *vp, int flags)
         return -ENOMEM;
     }
     key = pid;
+    f->stale = vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_SYSCALL;
     len = procfs_render(&text, vp, pid, &key);
+    if (len == -EPERM && f->stale) {
+        /* The ptrace check is the read's, as Linux's lock_trace. */
+        text.buf = NULL;
+        len = 0;
+    }
     if (len < 0) {
         kfree(f);
         return len;
@@ -8053,6 +9559,7 @@ int procfs_open(const struct vpath *vp, int flags)
     e->sock = NULL;
     e->ops = &procfs_file_ops;
     e->priv = f;
+    procfs_own(&f->own, vp, pid);
     e->ofd->offset = 0;
     e->flags = FD_FLAG_READ;
     if (flags & PROCFS_O_CLOEXEC) {

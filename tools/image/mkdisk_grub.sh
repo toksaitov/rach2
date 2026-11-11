@@ -97,11 +97,14 @@ DHCP_APPEND="${RACH2_DISK_DHCP_APPEND:-}"
 # BOOTSLOT_MAX_CLUSTERS (131072), which a 64 MiB partition at one sector per
 # cluster, about 130000 clusters with a 1016-sector FAT, stays within. The
 # build reads the count back from the volume and refuses one outside both.
+# Either table's boot partition holds the two kernel slots, the menu, the
+# environment block and GRUB's EFI image, which take 40 MiB with 16 MiB
+# slots; that is the default, and a smaller partition is refused below.
 GAP_MB=1
 TABLE="${RACH2_DISK_TABLE:-gpt}"
 case "$TABLE" in
-    gpt) BOOT_MB="${RACH2_DISK_BOOT_MB:-33}" ;;
-    mbr) BOOT_MB="${RACH2_DISK_BOOT_MB:-16}" ;;
+    gpt) BOOT_MB="${RACH2_DISK_BOOT_MB:-40}" ;;
+    mbr) BOOT_MB="${RACH2_DISK_BOOT_MB:-40}" ;;
     *)
         echo "mkdisk_grub: RACH2_DISK_TABLE is gpt or mbr, not $TABLE" >&2
         exit 1
@@ -167,12 +170,24 @@ FALLBACK_ROOT="$DISK_IDENTITY,3 rach2.rootfstype=ext2"
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1700000000}"
 export SOURCE_DATE_EPOCH
 
-# The candidate slot: bootctl rewrites these bytes in place and never
-# touches FAT metadata, so the file's size is fixed at build time. It is
-# 4 MiB: room for the kernel TinyCC builds on the machine itself, which is
-# larger than GCC's, and the longest file bootslot walks at one sector per
-# cluster (BOOTSLOT_MAX_FILE_CLUSTERS).
-SLOT_BYTES=4194304
+# The kernel slots, /boot/kernel and /boot/fallback: bootctl rewrites these
+# bytes in place and never touches FAT metadata, so the files' size is fixed
+# at build time. It is BOOTSLOT_SLOT_BYTES of utils/bootslot.h, its one home,
+# read from the header's define line: room for years of the kernel's growth,
+# and for the kernel TinyCC builds on the machine itself, which is larger
+# than GCC's. A boot partition takes two slots and 8 MiB besides, for the
+# FATs, GRUB's EFI image and the small files.
+SLOT_BYTES=$(sed -n 's/^.define BOOTSLOT_SLOT_BYTES  *\([0-9][0-9]*\).*/\1/p' "$REPO/utils/bootslot.h")
+if [ -z "$SLOT_BYTES" ]; then
+    echo "mkdisk_grub: utils/bootslot.h defines no BOOTSLOT_SLOT_BYTES" >&2
+    exit 1
+fi
+BOOT_MIN_MB=$((2 * SLOT_BYTES / 1048576 + 8))
+if [ "$BOOT_MB" -lt "$BOOT_MIN_MB" ]; then
+    echo "mkdisk_grub: a boot partition of $BOOT_MB MiB cannot hold two $SLOT_BYTES-byte" \
+         "kernel slots; RACH2_DISK_BOOT_MB is $BOOT_MIN_MB or more" >&2
+    exit 1
+fi
 # The rewritable menu's slot. bootctl overwrites these bytes in place and never
 # extends the file or moves its chain, so the size is fixed at build time and is
 # a whole number of clusters at either geometry this script produces.
@@ -272,6 +287,13 @@ load_env
 #
 #   0 candidate   1 fallback   2 recovery   3 text
 #
+# No line names `panic=`: the kernel's default, 30 seconds, keeps a panic's
+# report on the screen that long and then resets the machine, so that a
+# trial that panics comes back through the firmware to the saved default,
+# the fallback, with nobody at the machine (rach2/cmdline.md), and a
+# committed candidate that panics comes back to the fallback by the
+# recordfail its entry left set.
+#
 # The kernel draws its console on a framebuffer when the loader gives one,
 # and on the VGA's text mode when it does not. GRUB sets the mode that
 # `gfxpayload` names when it boots the entry, and the multiboot2 command
@@ -282,6 +304,8 @@ load_env
 # text mode, takes the firmware's framebuffer whatever the variable says.
 
 menuentry "Start Rach2" --id candidate {
+    set recordfail=1
+    save_env recordfail
     search --no-floppy --fs-uuid --set=root RACH2_BOOT_SERIAL
     RACH2_MULTIBOOT /boot/kernel rach2.root=RACH2_CANDIDATE_ROOT rach2.boot=RACH2_BOOT_PART rach2.slot=candidate RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
     if [ "$grub_platform" = pc ]; then set gfxpayload=auto; fi
@@ -319,6 +343,8 @@ menuentry "RACH2_RECOVERY_TITLE" --id recovery {
 # mode does not suit and for the programs that draw in mode 13h. UEFI has no
 # text mode, so there it starts the kernel as the first entry does.
 menuentry "Start Rach2 in text mode" --id text {
+    set recordfail=1
+    save_env recordfail
     search --no-floppy --fs-uuid --set=root RACH2_BOOT_SERIAL
     RACH2_MULTIBOOT /boot/kernel rach2.root=RACH2_CANDIDATE_ROOT rach2.boot=RACH2_BOOT_PART rach2.slot=candidate RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
     if [ "$grub_platform" = pc ]; then set gfxpayload=text; fi
@@ -365,6 +391,18 @@ fi
 set default=fallback
 set fallback=1
 if [ "${saved_entry}" = "candidate" ]; then set default=candidate; fi
+# A candidate that never reached user space is not booted again. Its entries
+# set recordfail in the block before they load the kernel, the installed
+# system's init clears it once user space runs (`bootctl booted`), and while
+# it stays set the saved default gives way to the previous kernel, as
+# Ubuntu's recordfail keeps a failed boot from repeating (its
+# /etc/grub.d/00_header and 10_linux). Without it a committed candidate that
+# panics at boot resets into itself every 30 seconds for ever, since
+# `fallback=1` acts only when an entry fails to load. A trial armed since is
+# still taken, below, since a person asked for that boot.
+if [ "${default}" = "candidate" ]; then
+    if [ "${recordfail}" = "1" ]; then set default=fallback; fi
+fi
 # A repair is not one boot. Rewriting a root takes minutes, and a machine that
 # lost power in the middle of one would come back to a kernel that cannot mount
 # what is there and starts no way in; the boot partition is healthy, so nothing
@@ -593,7 +631,7 @@ CLUSTERS=$(( ($5 - ($2 + $3 * 256) - $4 * $6) / $1 ))
 if [ "$TABLE" = gpt ] && { [ "$CLUSTERS" -lt 65525 ] || [ "$CLUSTERS" -gt 131070 ]; }; then
     echo "mkdisk_grub: the EFI system partition has $CLUSTERS clusters; UEFI firmware reads" \
          "a FAT32 volume with 65525 or more and bootctl walks 131070 at most, so" \
-         "RACH2_DISK_BOOT_MB is 33 to 64" >&2
+         "RACH2_DISK_BOOT_MB is at most 64" >&2
     exit 1
 fi
 awk -v cbytes="$CLBYTES" -v kernel="$SLOT_BYTES" -v fallback="$SLOT_BYTES" \

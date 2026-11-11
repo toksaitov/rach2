@@ -21,14 +21,17 @@
  *
  * Every call runs under the big kernel lock, from a probe, a system call or
  * a worker, never from an interrupt, since adding takes heap. A `show` runs
- * at each open of its file and at each read from offset 0, and must not
- * sleep; a `store` runs at each write and may sleep, holding a reference to
- * whatever it uses after the sleep, since the entry may be removed meanwhile.
+ * at each open of its file and at each read from offset 0, a `store` at each
+ * write. Either may sleep, as a driver's that asks its device does, holding
+ * a reference to whatever it uses after the sleep, since the entry may be
+ * removed meanwhile; a uevent's `show`, which `sysfs_uevent` calls, must
+ * not.
  */
 
-#define SYSFS_NODES_MAX 512 /* entries and anchors at once */
-#define SYSFS_NAME_MAX  32  /* bytes of a name, with its NUL */
-#define SYSFS_SHOW_MAX  65536u
+#define SYSFS_NODES_MAX 65536 /* entries and anchors at once; the table grows */
+#define SYSFS_NAME_MAX  32    /* bytes of a name, with its NUL */
+/* Bytes; the largest, i915's `error`, is under 160 KiB. */
+#define SYSFS_SHOW_MAX  1048576u
 
 /* The kinds of entry, as `sysfs_node_kind` answers. */
 #define SYSFS_NODE_ANCHOR 1 /* a fixed directory of synthfs.h */
@@ -218,5 +221,28 @@ int sysfs_pci_virtual(int key, struct sysfs_pci_ident *id);
 
 /** The key of the `n`th function reported, or -1 past the last. */
 int sysfs_pci_virtual_nth(int n);
+
+/*
+ * PCI functions bound to a driver of the kernel, shown as Linux's driver
+ * core shows them: /sys/bus/pci/drivers/DRIVER, made on the first binding
+ * to it, with a link named by the function's address to its directory, the
+ * function's `driver` link to the driver's directory, and DRIVER= in its
+ * uevent. libudev reads a device's driver from that link, as IGT's device
+ * scan and Mesa's loader do. vfio-pci makes its own links (vfio/group.c).
+ */
+#define SYSFS_PCI_BOUND_MAX 32
+
+/** Show the function `key`, bus << 8 | device << 3 | function, bound to
+ * `driver`, a string that outlives the binding: 0, also when it is shown
+ * bound to `driver` already; -EBUSY when it is shown bound to another;
+ * -ENOSPC past SYSFS_PCI_BOUND_MAX; or the errors of making the entries,
+ * with none of them left. */
+int sysfs_pci_bind(int key, const char *driver);
+
+/** Take away what `sysfs_pci_bind` showed for `key`; nothing when none. */
+void sysfs_pci_unbind(int key);
+
+/** The driver the function `key` is shown bound to, or NULL. */
+const char *sysfs_pci_driver(int key);
 
 #endif /* _SYSFS_H_ */

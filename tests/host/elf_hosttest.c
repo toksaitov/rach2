@@ -492,13 +492,15 @@ static void mapped_regions(const elf_image_t *out, struct vm_file *file)
 /**
  * The protection `elf_add_vmas` gives the regions of segments with each
  * kind of `p_flags`: write and execute each grant read, as the processor
- * reads a page it may write or run, and a segment with no flags has none.
+ * reads a page it may write or run, a writable one counts as committed
+ * memory, as Linux's VM_ACCOUNT, and a segment with no flags has none.
  */
 static void region_protection(void)
 {
     static const uint32_t flags[5] = {PF_X, PF_W, PF_R, PF_R | PF_X, 0};
-    static const uint32_t prot[5] = {VM_PROT_READ | VM_PROT_EXEC, VM_PROT_READ | VM_PROT_WRITE,
-                                     VM_PROT_READ, VM_PROT_READ | VM_PROT_EXEC, 0};
+    static const uint32_t prot[5] = {VM_PROT_READ | VM_PROT_EXEC,
+                                     VM_PROT_READ | VM_PROT_WRITE | VM_PROT_ACCOUNT, VM_PROT_READ,
+                                     VM_PROT_READ | VM_PROT_EXEC, 0};
     vm_space_t vm;
     elf_image_t out;
     int i;

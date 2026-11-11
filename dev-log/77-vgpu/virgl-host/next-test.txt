@@ -1,0 +1,94 @@
+The Debian 13 guest on the virgl profile, 8 CPUs and 8192 MiB, ran piglit's
+tests one at a time (piglit run -1, surfaceless EGL) with each test's start
+and end streamed to the host, alone on the GPU. Each list below in a guest
+of its own, with the host's uptime, piglit's lines and QEMU 10.2.1's:
+
+    spec@arb_texture_buffer_object@subdata-sync, then spec@arb_shader_draw_parameters@baseinstance-indirect
+        84201.01 running: spec/arb_texture_buffer_object/subdata-sync
+        84203.68 fail: spec/arb_texture_buffer_object/subdata-sync
+        84203.68 running: spec/arb_shader_draw_parameters/baseinstance-indirect
+        84203.71 D3D12: Removing Device.
+        84203.95 Connection to 127.0.0.1 closed by remote host.
+
+    spec@arb_texture_buffer_object@data-sync, then spec@arb_shader_draw_parameters@baseinstance-indirect
+        84273.48 running: spec/arb_texture_buffer_object/data-sync
+        84275.56 fail: spec/arb_texture_buffer_object/data-sync
+        84275.56 running: spec/arb_shader_draw_parameters/baseinstance-indirect
+        84275.58 D3D12: Removing Device.
+        84275.77 Connection to 127.0.0.1 closed by remote host.
+
+    spec@arb_direct_state_access@texture-buffer, then spec@arb_shader_draw_parameters@baseinstance-indirect
+        84325.81 running: spec/arb_direct_state_access/texture-buffer
+        84339.28 fail: spec/arb_direct_state_access/texture-buffer
+        84339.28 running: spec/arb_shader_draw_parameters/baseinstance-indirect
+        84339.30 D3D12: Removing Device.
+        84339.59 Connection to 127.0.0.1 closed by remote host.
+
+    spec@arb_query_buffer_object@coherency, then spec@arb_shader_draw_parameters@baseinstance-indirect
+        84389.79 running: spec/arb_query_buffer_object/coherency
+        84400.48 pass: spec/arb_query_buffer_object/coherency
+        84400.55 running: spec/arb_shader_draw_parameters/baseinstance-indirect
+        84402.16 D3D12: Removing Device.
+        84402.46 Connection to 127.0.0.1 closed by remote host.
+
+    spec@arb_shader_draw_parameters@baseinstance-indirect
+        84466.41 running: spec/arb_shader_draw_parameters/baseinstance-indirect
+        84466.70 pass: spec/arb_shader_draw_parameters/baseinstance-indirect
+
+    spec@arb_shader_image_load_store@atomicity, then spec@arb_shader_image_load_store@shader-mem-barrier
+        83944.25 running: spec/arb_shader_image_load_store/atomicity
+        83957.46 fail: spec/arb_shader_image_load_store/atomicity
+        83957.46 running: spec/arb_shader_image_load_store/shader-mem-barrier
+        83957.50 D3D12: Removing Device.
+        83957.75 Connection to 127.0.0.1 closed by remote host.
+
+    spec@arb_shader_image_load_store@atomicity alone
+        84011.41 running: spec/arb_shader_image_load_store/atomicity
+        84038.03 fail: spec/arb_shader_image_load_store/atomicity
+
+    spec@arb_shader_image_load_store@shader-mem-barrier alone
+        84091.92 running: spec/arb_shader_image_load_store/shader-mem-barrier
+        84093.13 fail: spec/arb_shader_image_load_store/shader-mem-barrier
+
+In the search of piglit's whole list, four guests at once, each of the five
+deaths not at a tessellation test came as a test started after one of the
+five; each test then running passed alone:
+
+    65814.49 fail: spec/arb_shader_image_load_store/atomicity
+    65814.49 running: spec/arb_shader_image_load_store/early-z
+    65814.52 D3D12: Removing Device.
+
+    66385.49 fail: spec/arb_texture_buffer_object/subdata-sync
+    66385.49 running: spec/arb_texture_buffer_range/errors
+    66385.53 D3D12: Removing Device.
+
+    65677.31 fail: spec/arb_texture_buffer_object/data-sync
+    65677.31 running: spec/arb_texture_buffer_object/formats (fs, arb)
+    65677.33 D3D12: Removing Device.
+
+    65587.07 fail: spec/arb_direct_state_access/texture-buffer
+    65587.50 running: spec/arb_direct_state_access/textures-storage
+    65594.87 D3D12: Removing Device.
+
+    65668.34 pass: spec/arb_query_buffer_object/coherency
+    65668.43 running: spec/arb_sample_shading/arb_sample_shading-api
+    65669.06 D3D12: Removing Device.
+
+Each of the other four alone:
+
+    spec@arb_texture_buffer_object@subdata-sync
+        84632.49 running: spec/arb_texture_buffer_object/subdata-sync
+        84642.11 fail: spec/arb_texture_buffer_object/subdata-sync
+
+    spec@arb_texture_buffer_object@data-sync
+        84688.76 running: spec/arb_texture_buffer_object/data-sync
+        84691.44 fail: spec/arb_texture_buffer_object/data-sync
+
+    spec@arb_direct_state_access@texture-buffer
+        84742.37 running: spec/arb_direct_state_access/texture-buffer
+        84752.05 fail: spec/arb_direct_state_access/texture-buffer
+
+    spec@arb_query_buffer_object@coherency
+        84799.68 running: spec/arb_query_buffer_object/coherency
+        84808.61 pass: spec/arb_query_buffer_object/coherency
+

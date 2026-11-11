@@ -5,6 +5,7 @@
 #include "suspend.h"
 
 #include "process.h"
+#include "sched.h"
 #include "wait_queue.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
@@ -44,11 +45,13 @@ int suspend_to_idle(void)
     suspend_preparing = 1;
     ath9k_suspend_all();
     suspender = current_proc;
+    sched_hold_waits(1);
     suspend_preparing = 0;
     klog(KLOG_INFO, "suspend", "freeze: the processes are held until a wake event");
     rc = wq_wait_event(&suspend_wq, woken, &from);
     suspend_preparing = 1;
     suspender = NULL;
+    sched_hold_waits(0);
     resume_rc = ath9k_resume_all();
     suspend_preparing = 0;
     if (resume_rc)

@@ -25,8 +25,8 @@
 
 #if RACH2_IA32
 
-/*
- * The x86-64 handler with native arguments. Most compat handlers convert an
+/**
+ * Call an x86-64 handler with native arguments. Most compat handlers convert an
  * i386 structure into the x86-64 one in kernel memory, run the x86-64 handler
  * on it, and convert what it wrote back: the handler takes only user
  * addresses, so the conversion buffer is opened to its user-copy checks for
@@ -35,7 +35,9 @@
  * SC_COMPAT, whose registers carry whole 64-bit arguments, a kernel address
  * among them; `in_compat_syscall` still reads the real frame, so a shared
  * reader that picks the i386 layout for an i386 call (`iov_fetch`) does so
- * for the user's own structures, and no window holds such a structure.
+ * for the user's structures and for rwv2's retained copy of its vector.
+ * The caller holds the big lock and owns `win` for the call; a null window
+ * opens nothing. Returns the handler's result. The handler may sleep.
  */
 long ia32_native(const isr_params_t *params, syscall_fn_t fn, void *win, uint32_t winlen,
                  unsigned long a0, unsigned long a1, unsigned long a2, unsigned long a3,
@@ -410,18 +412,19 @@ long compat_sys_ia32_ftruncate64(isr_params_t *params)
 }
 
 /** pread64 (180): the descriptor, the buffer, the count, then the offset's
- * two words. */
+ * two words. The count goes whole to `ksys_pread64`, which checks the end it
+ * gives before the cut, as Linux's ia32_pread64 passes its u32. */
 long compat_sys_ia32_pread64(isr_params_t *params)
 {
     return ksys_pread64((int)SC_ARG(params, 0), (char __user *)UPTR(SC_ARG(params, 1)),
-                        USER_RW_LEN(SC_ARG(params, 2)), (long long)ARG64(params, 3, 4));
+                        SC_ARG(params, 2), (long long)ARG64(params, 3, 4));
 }
 
 /** pwrite64 (181): pread64's arguments, the buffer written from. */
 long compat_sys_ia32_pwrite64(isr_params_t *params)
 {
     return ksys_pwrite64((int)SC_ARG(params, 0), (const char __user *)UPTR(SC_ARG(params, 1)),
-                         USER_RW_LEN(SC_ARG(params, 2)), (long long)ARG64(params, 3, 4));
+                         SC_ARG(params, 2), (long long)ARG64(params, 3, 4));
 }
 
 /** fallocate (324): the descriptor, the mode, then the offset and the length
@@ -455,200 +458,24 @@ long compat_sys_ia32_readahead(isr_params_t *params)
                        (unsigned long)ARG64(params, 1, 2), SC_ARG(params, 3), 0, 0, 0);
 }
 
-/* sync_file_range's flags, Linux's. */
-#define SYNC_FILE_RANGE_WAIT_BEFORE 1u
-#define SYNC_FILE_RANGE_WRITE       2u
-#define SYNC_FILE_RANGE_WAIT_AFTER  4u
-
-/**
- * sync_file_range (314): the descriptor, the offset and the length in two
- * words each, and the flags. The checks are Linux's, in its order: a flag
- * past the three, a negative offset or length, or a range past the largest
- * offset is -EINVAL; a descriptor not open is -EBADF, and one on a pipe or a
- * socket -ESPIPE. A range with SYNC_FILE_RANGE_WRITE writes the file's data
- * out, the whole file's, as fdatasync(2) does, which holds the range too.
- */
+/** Join sync_file_range's split offset and length before the shared call. */
 long compat_sys_ia32_sync_file_range(isr_params_t *params)
 {
-    int fd = (int)SC_ARG(params, 0);
-    int64_t off = (int64_t)ARG64(params, 1, 2);
-    int64_t len = (int64_t)ARG64(params, 3, 4);
-    uint32_t flags = (uint32_t)SC_ARG(params, 5);
-    fd_entry_t *e;
-
-    if (flags &
-        ~(SYNC_FILE_RANGE_WAIT_BEFORE | SYNC_FILE_RANGE_WRITE | SYNC_FILE_RANGE_WAIT_AFTER)) {
-        return -EINVAL;
-    }
-    if (off < 0 || len < 0 || off > 0x7FFFFFFFFFFFFFFFll - len) {
-        return -EINVAL;
-    }
-    if (!current_proc) {
-        return -ESRCH;
-    }
-    e = fd_get(current_proc->fds, fd);
-    if (!e || (e->flags & FD_FLAG_PATH)) {
-        return -EBADF;
-    }
-    if (e->type == FD_TYPE_PIPE || e->type == FD_TYPE_SOCKET) {
-        return -ESPIPE;
-    }
-    if (!(flags & SYNC_FILE_RANGE_WRITE) || e->type != FD_TYPE_FILE) {
-        return 0;
-    }
-    return ia32_native(params, sys_fdatasync, NULL, 0, (unsigned long)fd, 0, 0, 0, 0, 0);
+    return ksys_sync_file_range((int)SC_ARG(params, 0), (int64_t)ARG64(params, 1, 2),
+                                (int64_t)ARG64(params, 3, 4), (uint32_t)SC_ARG(params, 5));
 }
 
-/*
- * The directory reads. getdents64 fills a kernel buffer, whose records are
- * rewritten in i386's shorter forms; when the user's buffer takes fewer
- * records than were read, the directory's offset goes back to the end of
- * the last one taken, its d_off, so that the next read starts there, as
- * GNU libc's getdents does over getdents64.
- */
-
-/* The head of a struct linux_dirent64, whose name follows at byte 19. */
-#define DIRENT64_NAME 19u
-
-/* The largest kernel buffer one getdents reads into. */
-#define IA32_DIRENT_BUF 32768u
-
-/* Move the descriptor `fd` to the directory offset `off`. */
-static void dir_seek(const isr_params_t *params, int fd, int64_t off)
-{
-    (void)ia32_native(params, sys_lseek, NULL, 0, (unsigned long)fd, (unsigned long)off, 0, 0, 0,
-                      0);
-}
-
-/* A field of `n` bytes of a dirent64 record at `p`, little-endian. */
-static uint64_t dirent_field(const uint8_t *p, int n)
-{
-    uint64_t v = 0;
-
-    while (n-- > 0) {
-        v = (v << 8) | p[n];
-    }
-    return v;
-}
-
-/**
- * getdents (141): the descriptor, the buffer and its size; struct
- * linux_dirent records in i386's layout, compat_linux_dirent: a 32-bit inode
- * number and offset, the length, the name and its NUL, and the type in the
- * record's last byte, each record a multiple of 4 bytes. An inode number
- * past 32 bits is -EOVERFLOW, or ends the call after the records before it;
- * the offset is cut to 32 bits, as Linux's is. Returns the bytes written, 0
- * at the end, -EINVAL when the first record does not fit, or getdents64's
- * error.
- */
+/** Read i386 getdents records while holding the directory description. */
 long compat_sys_getdents(isr_params_t *params)
 {
-    int fd = (int)SC_ARG(params, 0);
-    uintptr_t ubuf = UPTR(SC_ARG(params, 1));
-    uint32_t count = (uint32_t)SC_ARG(params, 2);
-    uint32_t klen = count > IA32_DIRENT_BUF / 2u ? IA32_DIRENT_BUF : count * 2u + 64u;
-    uint8_t *kbuf, *out;
-    uint32_t at = 0, put = 0;
-    int64_t last = 0;
-    long here, n, rc;
-
-    kbuf = kmalloc(klen * 2u);
-    if (!kbuf) {
-        return -ENOMEM;
-    }
-    out = kbuf + klen;
-    here = ia32_native(params, sys_lseek, NULL, 0, (unsigned long)fd, 0, 1, 0, 0, 0);
-    n = ia32_native(params, sys_getdents64, kbuf, klen, (unsigned long)fd, KPTR(kbuf), klen, 0, 0,
-                    0);
-    rc = n;
-    while (n > 0 && at < (uint32_t)n) {
-        const uint8_t *r = kbuf + at;
-        uint32_t reclen = (uint32_t)dirent_field(r + 16, 2);
-        uint64_t ino = dirent_field(r, 8);
-        uint32_t namelen = (uint32_t)k_strlen((const char *)r + DIRENT64_NAME);
-        uint32_t len = (IA32_DIRENT_NAME + namelen + 2u + 3u) & ~3u;
-        uint8_t *w = out + put;
-
-        if (ino > 0xFFFFFFFFu) {
-            rc = -EOVERFLOW;
-            break;
-        }
-        if (put + len > count) {
-            rc = -EINVAL;
-            break;
-        }
-        k_memset(w, 0, len);
-        w[0] = (uint8_t)ino;
-        w[1] = (uint8_t)(ino >> 8);
-        w[2] = (uint8_t)(ino >> 16);
-        w[3] = (uint8_t)(ino >> 24);
-        k_memcpy(w + 4, r + 8, 4); /* d_off, cut to its low word */
-        w[8] = (uint8_t)len;
-        w[9] = (uint8_t)(len >> 8);
-        k_memcpy(w + IA32_DIRENT_NAME, r + DIRENT64_NAME, namelen);
-        w[len - 1] = r[18];
-        last = (int64_t)dirent_field(r + 8, 8);
-        put += len;
-        at += reclen;
-    }
-    if (put > 0 && copy_to_user((void __user *)ubuf, out, put) != 0) {
-        put = 0;
-        rc = -EFAULT;
-    }
-    if (n > 0 && at < (uint32_t)n) {
-        /* the records not taken are read again by the next call */
-        dir_seek(params, fd, put > 0 ? last : (int64_t)here);
-    }
-    kfree(kbuf);
-    return put > 0 ? (long)put : rc;
+    return ksys_getdents32((int)SC_ARG(params, 0), UPTR(SC_ARG(params, 1)),
+                           (uint32_t)SC_ARG(params, 2), 0);
 }
 
-/**
- * readdir (89): the descriptor, a struct old_linux_dirent of i386's layout
- * and a count Linux ignores. Reads one entry: its 32-bit inode number, its
- * own offset, the length of its name and the name with its NUL. Returns 1
- * for an entry, 0 at the end, -EOVERFLOW for an inode number past 32 bits,
- * or getdents64's error.
- */
+/** Read one old i386 directory record; Linux ignores the count. */
 long compat_sys_old_readdir(isr_params_t *params)
 {
-    int fd = (int)SC_ARG(params, 0);
-    uintptr_t ubuf = UPTR(SC_ARG(params, 1));
-    uint8_t kbuf[DIRENT64_NAME + 256u + 8u];
-    uint8_t w[IA32_DIRENT_NAME + 256u];
-    long here, n;
-    uint64_t ino;
-    uint32_t namelen;
-
-    here = ia32_native(params, sys_lseek, NULL, 0, (unsigned long)fd, 0, 1, 0, 0, 0);
-    n = ia32_native(params, sys_getdents64, kbuf, sizeof(kbuf), (unsigned long)fd, KPTR(kbuf),
-                    sizeof(kbuf), 0, 0, 0);
-    if (n <= 0) {
-        return n;
-    }
-    ino = dirent_field(kbuf, 8);
-    if ((uint32_t)dirent_field(kbuf + 16, 2) < (uint32_t)n) {
-        dir_seek(params, fd, (int64_t)dirent_field(kbuf + 8, 8));
-    }
-    if (ino > 0xFFFFFFFFu) {
-        return -EOVERFLOW;
-    }
-    namelen = (uint32_t)k_strlen((const char *)kbuf + DIRENT64_NAME);
-    w[0] = (uint8_t)ino;
-    w[1] = (uint8_t)(ino >> 8);
-    w[2] = (uint8_t)(ino >> 16);
-    w[3] = (uint8_t)(ino >> 24);
-    w[4] = (uint8_t)here;
-    w[5] = (uint8_t)((unsigned long)here >> 8);
-    w[6] = (uint8_t)((unsigned long)here >> 16);
-    w[7] = (uint8_t)((unsigned long)here >> 24);
-    w[8] = (uint8_t)namelen;
-    w[9] = (uint8_t)(namelen >> 8);
-    k_memcpy(w + IA32_DIRENT_NAME, kbuf + DIRENT64_NAME, namelen + 1u);
-    if (copy_to_user((void __user *)ubuf, w, IA32_DIRENT_NAME + namelen + 1u) != 0) {
-        return -EFAULT;
-    }
-    return 1;
+    return ksys_getdents32((int)SC_ARG(params, 0), UPTR(SC_ARG(params, 1)), 0, 1);
 }
 
 /*
@@ -771,12 +598,6 @@ long compat_sys_fcntl64(isr_params_t *params)
  * the user's, read in i386's layout by the shared reader (`iov_fetch`).
  */
 
-/* RWF_HIPRI, a hint, and RWF_DSYNC and RWF_SYNC, which ask for the data
- * written out at the end of the write, as fdatasync and fsync do. */
-#define RWF_HIPRI 0x1u
-#define RWF_DSYNC 0x2u
-#define RWF_SYNC  0x4u
-
 /** preadv (333): the descriptor, the vector, its count and the position in
  * two words. */
 long compat_sys_preadv(isr_params_t *params)
@@ -794,35 +615,17 @@ long compat_sys_pwritev(isr_params_t *params)
                        (unsigned long)ARG64(params, 3, 4), 0, 0);
 }
 
-/* preadv2 or, with `write`, pwritev2: preadv's arguments and the flags in
- * argument 5. A flag past the three above is -EOPNOTSUPP, as Linux answers a
- * flag a file does not take. */
+/**
+ * Join the split offset of preadv2 or pwritev2 before the native call.
+ * `write` selects pwritev2; otherwise read. The caller holds the big lock.
+ * Returns the native handler's count or negative error; it may sleep.
+ */
 static long rw2(isr_params_t *params, int write)
 {
-    int fd = (int)SC_ARG(params, 0);
-    int64_t pos = (int64_t)ARG64(params, 3, 4);
-    uint32_t flags = (uint32_t)SC_ARG(params, 5);
-    long rc;
-
-    if (flags & ~(RWF_HIPRI | RWF_DSYNC | RWF_SYNC)) {
-        return -EOPNOTSUPP;
-    }
-    if (pos == -1) {
-        rc = ia32_native(params, write ? sys_writev : sys_readv, NULL, 0, (unsigned long)fd,
-                         UPTR(SC_ARG(params, 1)), SC_ARG(params, 2), 0, 0, 0);
-    } else {
-        rc = ia32_native(params, write ? sys_pwritev : sys_preadv, NULL, 0, (unsigned long)fd,
-                         UPTR(SC_ARG(params, 1)), SC_ARG(params, 2), (unsigned long)pos, 0, 0);
-    }
-    if (rc > 0 && write && (flags & (RWF_DSYNC | RWF_SYNC))) {
-        long s = ia32_native(params, (flags & RWF_SYNC) ? sys_fsync : sys_fdatasync, NULL, 0,
-                             (unsigned long)fd, 0, 0, 0, 0, 0);
-
-        if (s < 0) {
-            return s;
-        }
-    }
-    return rc;
+    return ia32_native(params, write ? sys_pwritev2 : sys_preadv2, NULL, 0,
+                       (unsigned long)(int)SC_ARG(params, 0), UPTR(SC_ARG(params, 1)),
+                       SC_ARG(params, 2), (unsigned long)ARG64(params, 3, 4), 0,
+                       (uint32_t)SC_ARG(params, 5));
 }
 
 /** preadv2 (378): preadv's arguments and the flags. */
@@ -887,14 +690,42 @@ int ia32_get_timespec(uintptr_t u, long ts[2])
 /* The kinds of timeout of the select calls. */
 enum { SEL_TIMEVAL, SEL_TIMESPEC, SEL_TIMESPEC64 };
 
+/** Whether the timeout `ts`, of `kind`, is zero after normalization.
+ * A timeval's fields came from signed 32-bit words, so its sum fits. */
+static int select_timeout_zero(int kind, const long ts[2])
+{
+    if (kind == SEL_TIMEVAL) {
+        return ts[0] + ts[1] / 1000000L == 0 && ts[1] % 1000000L == 0;
+    }
+    return ts[0] == 0 && ts[1] == 0;
+}
+
+/** Give the time left, which the native call wrote to `ts`, back to the
+ * timeout at `ut`, of the kind `kind`, unless it was `zero`, as
+ * `poll_left_out` does; returns `rc`, the call's result. Here the native
+ * call has nonnegative nfds and kernel-backed sets, so EINVAL or EFAULT
+ * means its timeout or signal-mask validation failed before the wait. */
+static long select_left_out(long rc, uintptr_t ut, int kind, int zero, const long ts[2])
+{
+    int form = kind == SEL_TIMEVAL ? POLL_LEFT_USEC : kind == SEL_TIMESPEC64 ? POLL_LEFT_WIDE : 0;
+
+    if (rc == -EINVAL || rc == -EFAULT) {
+        return rc;
+    }
+    return poll_left_out((int32_t)rc, ut, form, zero, ts[0],
+                         kind == SEL_TIMEVAL ? ts[1] * 1000L : ts[1]);
+}
+
 /**
  * The body of the select calls: the descriptors below `nfds` set in the
  * i386 fd_sets at `ur`, `uw` and `ue`, each 0 for none, the timeout at `ut`
  * of the kind `kind`, 0 for none, and for pselect6 (`usig` not 0) the
  * address of its sixth argument. The bits are counted as the x86-64 handler
  * counts them: `nfds` is cut to the size of the descriptor table, at least
- * 64 (`select_common` in io/poll.c). Returns as the x86-64 handler does,
- * -EFAULT for a set, timeout or argument that cannot be read or written.
+ * 64 (`select_common` in io/poll.c). The time left goes back to the
+ * timeout in its own form (`poll_left_out`). Returns as the x86-64 handler
+ * does, -EFAULT for a set, timeout or argument that cannot be read or
+ * written.
  */
 static long select_body(isr_params_t *params, long nfds, uintptr_t ur, uintptr_t uw, uintptr_t ue,
                         uintptr_t ut, int kind, uintptr_t usig)
@@ -940,7 +771,7 @@ static long select_body(isr_params_t *params, long nfds, uintptr_t ur, uintptr_t
     }
     if (rc == 0 && ut) {
         if (kind == SEL_TIMEVAL) {
-            struct ia32_timeval tv;
+            struct ia32_timeval tv = {0, 0};
 
             if (copy_from_user(&tv, (const void __user *)ut, sizeof(tv)) != 0) {
                 rc = -EFAULT;
@@ -954,7 +785,7 @@ static long select_body(isr_params_t *params, long nfds, uintptr_t ur, uintptr_t
         kts = KPTR(b->ts);
     }
     if (rc == 0 && usig) {
-        struct ia32_sigset_arg sa;
+        struct ia32_sigset_arg sa = {0, 0};
 
         if (copy_from_user(&sa, (const void __user *)usig, sizeof(sa)) != 0) {
             rc = -EFAULT;
@@ -964,8 +795,11 @@ static long select_body(isr_params_t *params, long nfds, uintptr_t ur, uintptr_t
         ksig = KPTR(b->sigarg);
     }
     if (rc == 0) {
-        rc = ia32_native(params, usig ? sys_pselect6 : sys__newselect, b, size, (unsigned long)nfds,
-                         kset[0], kset[1], kset[2], kts, ksig);
+        int zero = select_timeout_zero(kind, b->ts);
+
+        rc = ia32_native(params, kind == SEL_TIMEVAL ? sys__newselect : sys_pselect6, b, size,
+                         (unsigned long)nfds, kset[0], kset[1], kset[2], kts, ksig);
+        rc = select_left_out(rc, ut, kind, zero, b->ts);
     }
     for (i = 0; rc >= 0 && i < 3; i++) {
         const uint8_t *set = (const uint8_t *)b->words + (uint32_t)i * kbytes;
@@ -1023,9 +857,9 @@ long compat_sys_pselect6_time64(isr_params_t *params)
  * both, their count, the timeout, the mask and its size. */
 static long ppoll_kind(isr_params_t *params, int kind)
 {
-    long ts[2];
+    long ts[2], ret;
     uintptr_t ut = UPTR(SC_ARG(params, 2));
-    int rc;
+    int rc, zero;
 
     if (!ut) {
         return ia32_native(params, sys_ppoll, NULL, 0, UPTR(SC_ARG(params, 0)), SC_ARG(params, 1),
@@ -1035,8 +869,12 @@ static long ppoll_kind(isr_params_t *params, int kind)
     if (rc != 0) {
         return rc;
     }
-    return ia32_native(params, sys_ppoll, ts, sizeof(ts), UPTR(SC_ARG(params, 0)),
-                       SC_ARG(params, 1), KPTR(ts), UPTR(SC_ARG(params, 3)), SC_ARG(params, 4), 0);
+    zero = ts[0] == 0 && ts[1] == 0;
+    ret = ia32_native(params, sys_ppoll, ts, sizeof(ts), UPTR(SC_ARG(params, 0)), SC_ARG(params, 1),
+                      KPTR(ts), UPTR(SC_ARG(params, 3)), SC_ARG(params, 4), 0);
+    /* The time left the native call wrote to the copy goes back. */
+    return poll_left_out((int32_t)ret, ut, kind == SEL_TIMESPEC64 ? POLL_LEFT_WIDE : 0, zero, ts[0],
+                         ts[1]);
 }
 
 /** ppoll (309): its timeout an i386 timespec. */
@@ -1072,8 +910,25 @@ long compat_sys_epoll_pwait2(isr_params_t *params)
                        UPTR(SC_ARG(params, 4)), SC_ARG(params, 5));
 }
 
+/** ustat (62): the device number and i386's struct ustat, whose counts are
+ * truncated to 32 bits as Linux's compat_sys_ustat truncates them. */
+long compat_sys_ustat(isr_params_t *params)
+{
+    struct ia32_ustat u;
+    uint64_t bfree;
+    uint64_t ffree;
+    int rc = ksys_ustat_counts((uint32_t)SC_ARG(params, 0), &bfree, &ffree);
+
+    if (rc != 0) {
+        return rc;
+    }
+    k_memset(&u, 0, sizeof(u));
+    u.f_tfree = (int32_t)bfree;
+    u.f_tinode = (uint32_t)ffree;
+    return copy_to_user((void __user *)UPTR(SC_ARG(params, 1)), &u, sizeof(u)) != 0 ? -EFAULT : 0;
+}
+
 /* Each answers ENOSYS until its translation is written (ia32.h). */
-IA32_STUB(compat_sys_ustat)
 IA32_STUB(compat_sys_io_setup)
 IA32_STUB(compat_sys_io_getevents_time32)
 IA32_STUB(compat_sys_io_submit)

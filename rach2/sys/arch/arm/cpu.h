@@ -42,9 +42,15 @@ typedef uint32_t phys_addr_t;
  * bytes, which a restart rewinds the return address over. */
 #define SYSCALL_INSN_LEN 4u
 
-#define FRAME_PC(p)   ((p)->pc)
-#define FRAME_SP(p)   ((p)->sp)
-#define FRAME_USER(p) (((p)->cpsr & 0x1Fu) == 0x10u)
+/* restart_syscall's number, arm's 0. */
+#define SC_RESTART_NR(p) 0u
+
+#define FRAME_PC(p)      ((p)->pc)
+#define FRAME_SP(p)      ((p)->sp)
+#define FRAME_USER(p)    (((p)->cpsr & 0x1Fu) == 0x10u)
+/* Whether the frame is a system call's entry: `svc`, as vector 2 of the
+ * numbering a port's entry gives, its place in the vector table. */
+#define FRAME_SYSCALL(p) ((p)->vector == 2u)
 
 #define PAGE_SHIFT 12
 #define PAGE_SIZE  0x1000
@@ -61,6 +67,10 @@ typedef uint32_t pte_t;
 #define PTE_COW           0x020u
 #define PTE_NONE          0x040u
 #define PTE_NOEXEC        0x080u
+#define PTE_ZEROFILL      0x100u
+/* No protection keys. */
+#define PTE_PKEY          0u
+#define PTE_PKEY_SHIFT    0
 #define PTE_FLAGS         0xFFFu
 #define PTE_ADDR(e)       ((e) & ~(pte_t)PTE_FLAGS)
 
@@ -104,6 +114,7 @@ void mmio_write32(uintptr_t a, uint32_t v);
 /* A fetch is a prefetch abort, an exception of its own, which a port's
  * entry tells apart; the data abort above is never one. */
 #define FAULT_EXEC(p)     ((void)(p), 0)
+#define FAULT_PK(p)       ((void)(p), 0)
 
 #define USER_ADDR_MIN 0x00010000UL
 #define USER_ADDR_MAX 0xC0000000UL

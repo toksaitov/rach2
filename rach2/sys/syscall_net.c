@@ -164,6 +164,10 @@ struct kernel_mmsghdr {
  * pass. */
 #define MSG_CMSG_COMPAT 0x80000000u
 
+/* recvmsg: close-on-exec for descriptors a control message passes, which
+ * Linux echoes in msg_flags. */
+#define MSG_CMSG_CLOEXEC 0x40000000u
+
 /* The creation flags socket(2) takes above the type's low four bits and
  * accept4(2) takes in its flags: the values of O_CLOEXEC and O_NONBLOCK,
  * as Linux defines them. */
@@ -264,10 +268,14 @@ static void raw_count_sent(const struct socket *sock, int r, const uint8_t *msg,
 
 /* recv flags honored: MSG_PEEK leaves what it copies for the next receive,
  * MSG_TRUNC has a receive on a datagram socket answer the datagram's whole
- * length, and MSG_DONTWAIT does not wait. */
+ * length, MSG_DONTWAIT does not wait, and MSG_WAITALL has a stream receive
+ * wait until its buffers are full (`stream_readv`). */
 #define MSG_PEEK     0x2
 #define MSG_TRUNC    0x20
 #define MSG_DONTWAIT 0x40
+#define MSG_WAITALL  0x100
+/* A send flag: an EPIPE posts no SIGPIPE (`sock_stream_sent`). */
+#define MSG_NOSIGNAL 0x4000
 
 #define IPPROTO_RAW 255
 
@@ -702,7 +710,7 @@ static int32_t do_socket(int domain, int type, int protocol)
         sock->protocol =
             (uint16_t)(((uint32_t)protocol & 0xffu) << 8 | (((uint32_t)protocol >> 8) & 0xffu));
     }
-    sock->uid = current_proc->euid;
+    sock->uid = proc_fsuid(current_proc); /* as Linux owns a socket's inode */
 
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
@@ -1233,6 +1241,21 @@ static int32_t netlink_addr_to_user(const uint8_t *nl, uintptr_t sa_ptr, uintptr
     return copy_to_user((void __user *)salen_ptr, &cap, sizeof(cap)) == 0 ? 0 : -EFAULT;
 }
 
+/** Post SIGPIPE after a TCP send's EPIPE (syscall_internal.h). */
+int32_t sock_stream_sent(int32_t rc, int post)
+{
+    struct k_siginfo info;
+
+    if (rc == -EPIPE && post) {
+        k_memset(&info, 0, sizeof(info));
+        info.code = SI_USER;
+        info.pid = current_proc->tgid;
+        info.uid = current_proc->ruid;
+        signal_post_thread(current_proc, SIGPIPE, &info);
+    }
+    return rc;
+}
+
 /**
  * sendto(2): a stream socket ignores the destination and behaves like send; a
  * datagram socket sends to the sockaddr, binding an ephemeral source port
@@ -1359,8 +1382,10 @@ static int32_t do_sendto_opt(int fd, uintptr_t buf_ptr, int len, int flags, uint
     if (entry->sock->type == SOCK_STREAM) {
         int nonblock =
             (flags & MSG_DONTWAIT) || (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
-        return (int32_t)socket_tcp_send(
-            entry->sock, (const uint8_t __force *)(const void __user *)buf_ptr, len, nonblock);
+        return sock_stream_sent(
+            socket_tcp_send(entry->sock, (const uint8_t __force *)(const void __user *)buf_ptr, len,
+                            nonblock),
+            !(flags & MSG_NOSIGNAL));
     }
 
     if (entry->sock->family == AF_PACKET) {
@@ -1409,13 +1434,36 @@ static int32_t do_sendto(int fd, uintptr_t buf_ptr, int len, int flags, uintptr_
 }
 
 /**
+ * Receive on the stream socket of `entry` into the `len` bytes at
+ * `buf_ptr`, cut at MAX_RW_COUNT and checked only to end in user space
+ * (`user_span_ok`), for recv(2) and recvfrom(2): one buffer read as
+ * `stream_readv` reads a vector, with MSG_PEEK, MSG_DONTWAIT and
+ * MSG_WAITALL from `flags`, as Linux's recv reads a stream through
+ * tcp_recvmsg with the buffer as an iov_iter that import_ubuf checked with
+ * access_ok alone (net/socket.c:2232, lib/iov_iter.c:1527-1535). The wait,
+ * the end of input and -EAGAIN come before any page of the buffer is
+ * touched, and each queued buffer's destination is checked as it is copied,
+ * so a buffer whose later pages cannot be written still takes what fits
+ * before them. Returns the bytes read or -errno.
+ */
+static int32_t stream_recv(fd_entry_t *entry, uintptr_t buf_ptr, int len, int flags)
+{
+    struct kernel_iovec one;
+
+    one.iov_base = buf_ptr;
+    one.iov_len = (unsigned long)(uint32_t)len;
+    return stream_readv(entry, &one, 1, flags);
+}
+
+/**
  * recvfrom(2): a stream socket behaves like recv (no source writeback); a
  * datagram socket reports the source address, truncated to the caller's
  * capacity. An address with no length pointer is EFAULT before anything is
  * taken, so the message stays queued; Linux fails the call only after it
  * has taken the message. Honors MSG_PEEK, MSG_DONTWAIT and O_NONBLOCK, the
- * last a status flag of the open file description, which dup and fork share.
- * Returns the bytes received or -errno.
+ * last a status flag of the open file description, which dup and fork share,
+ * and on a stream MSG_WAITALL (`stream_recv`). Returns the bytes received or
+ * -errno.
  *
  * Where the source address will land is settled before a datagram is taken:
  * taking one destroys it, and a fault found afterwards would report an error
@@ -1435,8 +1483,10 @@ static int32_t do_sendto(int fd, uintptr_t buf_ptr, int len, int flags, uintptr_
  * for a datagram that cannot arrive (-EOPNOTSUPP). A connected stream socket
  * receives as recv does, from the connection's peer, so the address is not
  * written and a null sockaddr is fine; this is the path musl's recv() takes,
- * recvfrom with a null address. The receive writes into the buffer
- * `user_buffer_ok` checked, as the `__force` casts mark.
+ * recvfrom with a null address. A stream's buffer is checked only to end
+ * in user space and is reached a queued buffer at a time (`stream_recv`); a
+ * datagram's is checked and brought in whole (`user_buffer_ok`) before the
+ * receive writes into it, as the `__force` casts mark.
  */
 static int32_t do_recvfrom(int fd, uintptr_t buf_ptr, int len, int flags, uintptr_t sa_ptr,
                            uintptr_t salen_ptr)
@@ -1452,7 +1502,7 @@ static int32_t do_recvfrom(int fd, uintptr_t buf_ptr, int len, int flags, uintpt
     int peek = (flags & MSG_PEEK) != 0;
     int how = (peek ? SOCK_RECV_PEEK : 0) | ((flags & MSG_TRUNC) ? SOCK_RECV_TRUNC : 0);
 
-    if (len < 0 || !user_buffer_ok(buf_ptr, (uint32_t)len, 1)) {
+    if (len < 0 || !user_span_ok(buf_ptr, (uint32_t)len)) {
         return -EFAULT;
     }
     entry = fd_get(current_proc->fds, fd);
@@ -1481,12 +1531,10 @@ static int32_t do_recvfrom(int fd, uintptr_t buf_ptr, int len, int flags, uintpt
     nonblock = (flags & MSG_DONTWAIT) || (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
 
     if (entry->sock->type == SOCK_STREAM) {
-        if (nonblock) {
-            return (int32_t)socket_tcp_try_recv(
-                entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len, peek);
-        }
-        return (int32_t)socket_tcp_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len,
-                                        peek);
+        return stream_recv(entry, buf_ptr, len, flags);
+    }
+    if (!user_buffer_ok(buf_ptr, (uint32_t)len, 1)) {
+        return -EFAULT;
     }
 
     if (nonblock) {
@@ -1578,6 +1626,30 @@ static int connect_done(void *arg)
     return sock->tcb == NULL || connect_established(sock) || sock->tcb->state == TCP_CLOSED;
 }
 
+/**
+ * Wait out the handshake of a blocking connect on the stream socket `sock`.
+ * Returns 0 once it is established, -EINTR on a signal, the error a
+ * sharer's shutdown in SYN_SENT recorded, ECONNRESET, as Linux's
+ * __inet_stream_connect returns sock_error, or -ECONNABORTED when none
+ * was, and -ECONNREFUSED for a handshake that failed or timed out.
+ */
+static int32_t connect_wait(struct socket *sock)
+{
+    int rc = wq_wait_event(&sock->waiters, connect_done, sock);
+
+    if (rc < 0) {
+        return rc;
+    }
+    if (!sock->tcb) {
+        rc = socket_dgram_error(sock);
+        return rc != 0 ? rc : -ECONNABORTED;
+    }
+    if (!connect_established(sock)) {
+        return -ECONNREFUSED;
+    }
+    return 0;
+}
+
 /** Wait predicate: a listening socket has a connection queued for accept. */
 static int accept_ready(void *arg)
 {
@@ -1642,7 +1714,8 @@ static int32_t connect_echo(struct socket *sock, uintptr_t sa_ptr, int addrlen)
 /**
  * connect(2): start the TCP handshake to the sockaddr. A blocking socket waits
  * it out (-EINTR on a signal, -ECONNREFUSED when the handshake fails or times
- * out); a non-blocking one returns 0 or -EINPROGRESS, and the caller polls
+ * out, and ECONNRESET after a sharer's shutdown in SYN_SENT, `connect_wait`);
+ * a non-blocking one returns 0 or -EINPROGRESS, and the caller polls
  * for the end. A datagram socket records its peer instead, and a netlink
  * socket has its one peer, the kernel, already. Returns 0 or -errno.
  *
@@ -1777,15 +1850,7 @@ static int32_t do_connect(int fd, uintptr_t sa_ptr, int addrlen)
         return -EINPROGRESS;
     }
 
-    rc = wq_wait_event(&entry->sock->waiters, connect_done, entry->sock);
-    if (rc < 0) {
-        return rc;
-    }
-
-    if (!connect_established(entry->sock)) {
-        return -ECONNREFUSED;
-    }
-    return 0;
+    return connect_wait(entry->sock);
 }
 
 /** listen(2): mark a stream socket passive and open its LISTEN TCB. Returns
@@ -1918,22 +1983,27 @@ static int32_t do_send(int fd, uintptr_t buf_ptr, int len, int flags)
         return do_sendto(fd, buf_ptr, len, flags, 0, 0);
     }
     nonblock = (flags & MSG_DONTWAIT) || (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
-    return (int32_t)socket_tcp_send(
-        entry->sock, (const uint8_t __force *)(const void __user *)buf_ptr, len, nonblock);
+    return sock_stream_sent(socket_tcp_send(entry->sock,
+                                            (const uint8_t __force *)(const void __user *)buf_ptr,
+                                            len, nonblock),
+                            !(flags & MSG_NOSIGNAL));
 }
 
 /**
  * recv(2): read from a connected stream socket, or one message from a
- * datagram socket. Honors MSG_PEEK, MSG_DONTWAIT and O_NONBLOCK, and on a
- * datagram socket MSG_TRUNC, which answers the datagram's whole length.
+ * datagram socket. Honors MSG_PEEK, MSG_DONTWAIT and O_NONBLOCK, on a stream
+ * MSG_WAITALL (`stream_recv`), and on a datagram socket MSG_TRUNC, which
+ * answers the datagram's whole length.
  * Returns the bytes received or -errno, -EOPNOTSUPP for the query
  * descriptor, which takes only ioctls.
  *
  * A datagram or raw socket reads one message with no sender reported, which is
  * what `recv` is: `recvfrom` without the address. Failing it here would leave
  * one of the four ways of reading a socket disagreeing with the other three
- * about whether the same queued datagram exists. The receive writes into the
- * buffer `user_buffer_ok` checked.
+ * about whether the same queued datagram exists. A stream's buffer is checked
+ * only to end in user space and is reached a queued buffer at a time
+ * (`stream_recv`); a datagram's is checked and brought in whole
+ * (`user_buffer_ok`) before the receive writes into it.
  */
 static int32_t do_recv(int fd, uintptr_t buf_ptr, int len, int flags)
 {
@@ -1941,7 +2011,7 @@ static int32_t do_recv(int fd, uintptr_t buf_ptr, int len, int flags)
     int nonblock;
     int peek = (flags & MSG_PEEK) != 0;
 
-    if (len < 0 || !user_buffer_ok(buf_ptr, (uint32_t)len, 1)) {
+    if (len < 0 || !user_span_ok(buf_ptr, (uint32_t)len)) {
         return -EFAULT;
     }
 
@@ -1957,6 +2027,9 @@ static int32_t do_recv(int fd, uintptr_t buf_ptr, int len, int flags)
     if (entry->sock->type == SOCK_DGRAM || entry->sock->type == SOCK_RAW) {
         int how = (peek ? SOCK_RECV_PEEK : 0) | ((flags & MSG_TRUNC) ? SOCK_RECV_TRUNC : 0);
 
+        if (!user_buffer_ok(buf_ptr, (uint32_t)len, 1)) {
+            return -EFAULT;
+        }
         if (nonblock) {
             return (int32_t)socket_try_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr,
                                             len, 0, 0, how);
@@ -1967,12 +2040,7 @@ static int32_t do_recv(int fd, uintptr_t buf_ptr, int len, int flags)
     if (entry->sock->type != SOCK_STREAM) {
         return -EOPNOTSUPP;
     }
-    if (nonblock) {
-        return (int32_t)socket_tcp_try_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr,
-                                            len, peek);
-    }
-    return (int32_t)socket_tcp_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len,
-                                    peek);
+    return stream_recv(entry, buf_ptr, len, flags);
 }
 
 /**
@@ -2114,22 +2182,27 @@ static int32_t do_getpeername(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr)
 #define SHUT_RDWR 2
 
 /**
- * shutdown(how): SHUT_RD(0)/SHUT_WR(1)/SHUT_RDWR(2). SHUT_WR closes the
- * sending half: the FIN goes after the queued data, a later send is EPIPE,
- * and the peer's data and FIN still reach the reader, as `nc` needs when it
- * has sent its input and reads the answer. SHUT_RDWR closes the connection as
- * close() does, and the socket reads end of input. SHUT_RD alone is accepted
- * as a no-op. Returns 0, -EINVAL for another `how`, -ENOTCONN or -EOPNOTSUPP.
+ * shutdown(how): SHUT_RD(0)/SHUT_WR(1)/SHUT_RDWR(2), as Linux's
+ * inet_shutdown (`tcp_shutdown`). SHUT_WR closes the sending half: the FIN
+ * goes after the queued data, a later send is EPIPE, and the peer's data
+ * and FIN still reach the reader, as `nc` needs when it has sent its input
+ * and reads the answer. SHUT_RD closes the receiving half: a read gives the
+ * bytes buffered and then the end of input without waiting, and poll
+ * reports POLLIN and POLLRDHUP; data past rcv_nxt once this side's FIN has
+ * gone ends the connection with a reset. SHUT_RDWR does both. The socket
+ * keeps its connection until its close. A connection still in SYN_SENT is
+ * disconnected and records ECONNRESET. Returns 0, -EINVAL for another
+ * `how`, -ENOTCONN or -EOPNOTSUPP.
  *
- * Only a connected stream socket can be shut down: not a listener, which
- * would free its LISTEN TCB and stop accepting without a word, nor an
- * unconnected or a UDP socket. `tcp_close` detaches the socket from its TCB
- * both ways, so no later answer from the peer can reach its queue, and a
- * sharer already asleep in `recv` is woken here or never.
+ * Only a connected or connecting stream socket can be shut down: not a
+ * listener, which would free its LISTEN TCB and stop accepting without a
+ * word, nor an unconnected or a UDP socket. A sharer asleep in `recv`,
+ * `send` or `connect` is woken to judge the socket again.
  */
 static int32_t do_shutdown(int fd, int how)
 {
     fd_entry_t *entry = fd_get(current_proc->fds, fd);
+    int rc;
 
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return not_a_socket(entry);
@@ -2140,18 +2213,14 @@ static int32_t do_shutdown(int fd, int how)
     if (how < SHUT_RD || how > SHUT_RDWR) {
         return -EINVAL;
     }
-    if (!tcp_is_connected(entry->sock)) {
+    if (entry->sock->type != SOCK_STREAM) {
         return -ENOTCONN;
     }
-    if (how == SHUT_WR) {
-        tcp_shutdown_send(entry->sock);
-        wq_wake_all(&entry->sock->waiters);
-    } else if (how == SHUT_RDWR) {
-        entry->sock->shut_down = 1;
-        tcp_close(entry->sock); /* send FIN; idempotent vs the later close() */
+    rc = tcp_shutdown(entry->sock, how != SHUT_WR, how != SHUT_RD);
+    if (rc == 0) {
         wq_wake_all(&entry->sock->waiters);
     }
-    return 0;
+    return rc;
 }
 
 /* Socket-option levels/names recognized by get/setsockopt. */
@@ -3404,7 +3473,285 @@ static int32_t get_tx_control(const struct socket *sock, uintptr_t control, uint
 }
 
 /**
- * Receive one datagram into a scatter list (recvmsg, socketcall 17).
+ * Whether the `n` bytes of the copied vector `iov` of `count` elements that
+ * begin `skip` bytes into it lie in user space and in pages that are
+ * present and may be written, found with no sleep: 1. A range outside user
+ * space, below USER_ADDR_MIN among them, is -EFAULT (`user_range_ok`),
+ * since `vm_resident` takes a kernel address for present and the copy would
+ * write the kernel. Otherwise the first page that is not present and
+ * writable is brought in, which may sleep, and the answer is 0, or -EFAULT
+ * when it cannot be had.
+ */
+static int stream_room_resident(const struct kernel_iovec *iov, uint32_t count, uint32_t skip,
+                                uint32_t n)
+{
+    uint32_t i;
+
+    for (i = 0; i < count && n > 0; i++) {
+        uintptr_t addr = iov[i].iov_base;
+        uint32_t len = (uint32_t)iov[i].iov_len;
+
+        if (skip >= len) {
+            skip -= len;
+            continue;
+        }
+        addr += skip;
+        len -= skip;
+        skip = 0;
+        if (len > n) {
+            len = n;
+        }
+        n -= len;
+        if (!user_range_ok(addr, len)) {
+            return -EFAULT;
+        }
+        while (len > 0) {
+            uint32_t piece = PAGE_SIZE - (uint32_t)(addr & (PAGE_SIZE - 1));
+
+            if (piece > len) {
+                piece = len;
+            }
+            if (!vm_resident(addr, piece, 1)) {
+                return vm_prefault_range(addr, piece, 1) ? 0 : -EFAULT;
+            }
+            addr += piece;
+            len -= piece;
+        }
+    }
+    return 1;
+}
+
+/**
+ * Copy `n` queued bytes of the stream `sock` into the copied vector `iov` of
+ * `count` elements from `skip` bytes into it, which `stream_room_resident`
+ * has found present and writable with no sleep since: taken, or with `peek`
+ * copied from `skip` bytes past the next unread one and left queued.
+ * Never sleeps. Returns the bytes copied.
+ */
+static uint32_t stream_copy(struct socket *sock, const struct kernel_iovec *iov, uint32_t count,
+                            uint32_t skip, uint32_t n, int peek)
+{
+    uint32_t i, at = skip, done = 0;
+    int r;
+
+    for (i = 0; i < count && done < n; i++) {
+        uint32_t len = (uint32_t)iov[i].iov_len;
+        uint8_t *buf;
+
+        if (at >= len) {
+            at -= len;
+            continue;
+        }
+        buf = (uint8_t __force *)(void __user *)(iov[i].iov_base + at);
+        len -= at;
+        at = 0;
+        if (len > n - done) {
+            len = n - done;
+        }
+        r = peek ? socket_tcp_peek_at(sock, skip + done, buf, (int)len)
+                 : socket_tcp_try_recv(sock, buf, (int)len, 0);
+        if (r <= 0) {
+            break;
+        }
+        done += (uint32_t)r;
+        if ((uint32_t)r < len) {
+            break;
+        }
+    }
+    return done;
+}
+
+/**
+ * The stream is read as Linux's tcp_recvmsg_locked reads it, one receive
+ * buffer at a time (`socket_tcp_buffer`), until the vector is full or no
+ * buffer is queued and `target` bytes are taken: one, or the vector's whole
+ * length with MSG_WAITALL (net/ipv4/tcp.c:2628). With nothing taken, the
+ * wait, the end of input and -EAGAIN come first; with some taken, the call
+ * returns them where it would wait without MSG_WAITALL, and with it on a
+ * nonblocking socket, at the end of input, an error or a signal
+ * (:2673-2712). The destination of each buffer, as much of it as the vector
+ * takes, is checked and brought in for writing, which may sleep, and the
+ * queue is judged again after any sleep; with no sleep between, the buffer
+ * is then copied and taken (:2737-2739, 2798-2800). A destination that
+ * cannot be written leaves its buffer queued whole and ends the call with
+ * the bytes taken before it, or -EFAULT when there are none, as Linux
+ * leaves an sk_buff whose copy fails (:2765-2772).
+ *
+ * The caller holds the socket's `recv_lock`, which this gives up only while
+ * it waits for data, as Linux's sk_wait_data gives up the socket lock
+ * (net/core/sock.c); another reader may take bytes during such a wait, so
+ * the end of input is judged again under the lock after it.
+ */
+static int32_t stream_readv_locked(struct socket *sock, const struct kernel_iovec *iov,
+                                   uint32_t iovlen, int flags, int nonblock)
+{
+    uint32_t i, n, want = 0, copied = 0, target;
+    int peek = (flags & MSG_PEEK) != 0;
+    int32_t r;
+
+    for (i = 0; i < iovlen; i++) {
+        want += (uint32_t)iov[i].iov_len;
+    }
+    target = (flags & MSG_WAITALL) && want > 0 ? want : 1u;
+    for (;;) {
+        n = socket_tcp_buffer(sock, peek ? copied : 0);
+        if (n == 0 && copied > 0) {
+            if (copied >= target || nonblock) {
+                break;
+            }
+            sleep_lock_give(&sock->recv_lock);
+            r = socket_tcp_wait_more(sock, peek ? copied : 0);
+            sleep_lock_take(&sock->recv_lock);
+            if (r <= 0) {
+                break;
+            }
+            continue;
+        }
+        if (n == 0) {
+            r = socket_tcp_try_recv(sock, (uint8_t *)0, 0, 1);
+            if (r == SOCK_EAGAIN && !nonblock) {
+                sleep_lock_give(&sock->recv_lock);
+                r = socket_tcp_recv(sock, (uint8_t *)0, 0, 1);
+                sleep_lock_take(&sock->recv_lock);
+                if (r >= 0) {
+                    continue;
+                }
+            }
+            if (r < 0 || want == 0) {
+                return r;
+            }
+            if (socket_tcp_queued(sock) == 0) {
+                return 0;
+            }
+            continue;
+        }
+        if (copied == want) {
+            break;
+        }
+        if (n > want - copied) {
+            n = want - copied;
+        }
+        r = stream_room_resident(iov, iovlen, copied, n);
+        if (r < 0) {
+            return copied > 0 ? (int32_t)copied : -EFAULT;
+        }
+        if (r > 0) {
+            copied += stream_copy(sock, iov, iovlen, copied, n, peek);
+        }
+    }
+    return (int32_t)copied;
+}
+
+/**
+ * Read the stream socket of `entry` into the copied vector `iov` of
+ * `iovlen` elements with MSG_PEEK, MSG_DONTWAIT and MSG_WAITALL from
+ * `flags`, for read(2), readv(2), recv(2), recvfrom(2) and recvmsg(2):
+ * `stream_readv_locked` under the socket's `recv_lock`, which keeps a
+ * second reader from taking a buffer while this one brings in its
+ * destination, as Linux's tcp_recvmsg holds lock_sock across
+ * tcp_recvmsg_locked and its copies (net/ipv4/tcp.c:2869-2871). Returns the
+ * bytes read or -errno.
+ */
+int32_t stream_readv(fd_entry_t *entry, const struct kernel_iovec *iov, uint32_t iovlen, int flags)
+{
+    struct socket *sock = entry->sock;
+    int nonblock =
+        (flags & MSG_DONTWAIT) || (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
+    int32_t r;
+
+    sleep_lock_take(&sock->recv_lock);
+    r = stream_readv_locked(sock, iov, iovlen, flags, nonblock);
+    sleep_lock_give(&sock->recv_lock);
+    return r;
+}
+
+/**
+ * recvmsg(2) on the stream socket `entry` with the header `hdr` read from
+ * `msg_ptr`: the vector copied once, its ranges checked and its total cut
+ * at MAX_RW_COUNT (`iov_import`), then read by `stream_readv`, and the
+ * header written back with no address and no control data, `msg_flags`
+ * keeping only MSG_CMSG_CLOEXEC, as Linux's do. The copy keeps an earlier
+ * buffer that overlaps the vector list from replacing a later destination.
+ * Returns the bytes read, or -errno, including -ENOMEM for the vector copy.
+ */
+static int32_t recvmsg_stream(fd_entry_t *entry, struct kernel_msghdr *hdr, uintptr_t msg_ptr,
+                              int flags)
+{
+    struct kernel_iovec local[8], *iov = local;
+    uint32_t count = (uint32_t)hdr->msg_iovlen;
+    long checked;
+    int32_t taken;
+
+    if (count > sizeof(local) / sizeof(local[0])) {
+        iov = kmalloc((size_t)count * sizeof(*iov));
+        if (!iov) {
+            return -ENOMEM;
+        }
+    }
+    checked = iov_import(iov, hdr->msg_iov, (int)count, -1);
+    taken = checked < 0 ? (int32_t)checked : stream_readv(entry, iov, count, flags);
+    if (iov != local) {
+        kfree(iov);
+    }
+    if (taken < 0) {
+        return taken;
+    }
+    hdr->msg_namelen = 0;
+    hdr->msg_controllen = 0;
+    hdr->msg_flags = (unsigned int)flags & MSG_CMSG_CLOEXEC;
+    return msghdr_put(msg_ptr, hdr) != 0 ? -EFAULT : taken;
+}
+
+/**
+ * Receive one datagram of the socket of `entry` into the buffers of the
+ * user's vector that the header `hdr` names, for `do_recvmsg`: the vector
+ * copied once and each range checked to end in user space, with no page
+ * brought in (`iov_import`), as Linux checks only access_ok
+ * (lib/iov_iter.c:1474); then, with MSG_DONTWAIT in `flags`, -EAGAIN when
+ * none waits, and the receive (`readv_dgram`), which reports the sender in
+ * `src_ip` and `src_port` and the datagram's length in `whole`. Only the
+ * buffers the datagram reaches are written, and one that cannot be makes
+ * the call -EFAULT with the datagram consumed, or kept with MSG_PEEK, as
+ * Linux's udp_recvmsg copies no more than the datagram and drops it on a
+ * failed copy (net/ipv4/udp.c:1909-1913, 1941-1949). Returns the bytes
+ * copied, or -errno, -ENOMEM for the copy of a vector of more than eight
+ * buffers among them.
+ */
+static int32_t recvmsg_dgram(fd_entry_t *entry, const struct kernel_msghdr *hdr, int flags,
+                             net_addr_t *src_ip, uint16_t *src_port, int32_t *whole)
+{
+    struct kernel_iovec local[8], *iov = local;
+    uint32_t iovlen = (uint32_t)hdr->msg_iovlen;
+    int32_t taken;
+
+    if (iovlen > sizeof(local) / sizeof(local[0])) {
+        iov = kmalloc((size_t)iovlen * sizeof(*iov));
+        if (!iov) {
+            return -ENOMEM;
+        }
+    }
+    taken = (int32_t)iov_import(iov, hdr->msg_iov, (int)iovlen, -1);
+    if (taken >= 0 && (flags & MSG_DONTWAIT)) {
+        taken = socket_dgram_nowait(entry->sock);
+    }
+    if (taken >= 0) {
+        taken =
+            readv_dgram(entry, iov, (int)iovlen, src_ip, src_port, (flags & MSG_PEEK) != 0, whole);
+    }
+    if (iov != local) {
+        kfree(iov);
+    }
+    return taken;
+}
+
+/**
+ * Receive one datagram, or a stream's bytes, into a scatter list (recvmsg,
+ * socketcall 17).
+ *
+ * A connected stream socket is read as recv(2) reads it, the buffers filled
+ * in order by `recvmsg_stream`, with MSG_DONTWAIT, O_NONBLOCK, MSG_PEEK and
+ * MSG_WAITALL honoured, and no address or control data reported.
+ * QEMU reads its socket channels, QMP's among them, this way.
  *
  * The DHCP client is what needs this: it reads its packet socket through
  * `recvmsg`, not `read` so that it can look for `PACKET_AUXDATA` in the control
@@ -3413,8 +3760,7 @@ static int32_t get_tx_control(const struct socket *sock, uintptr_t control, uint
  * length of zero, the true answer, but on an AF_INET6 UDP or raw socket that
  * asked for IPV6_PKTINFO, IPV6_HOPLIMIT or IPV6_TCLASS, or an AF_INET one that
  * asked for IP_RECVTTL (`put_rx_control`); a message that does not fit sets
- * MSG_CTRUNC, and the buffer is checked with the others before the datagram is
- * taken.
+ * MSG_CTRUNC, and the buffer is checked before the datagram is taken.
  *
  * A datagram longer than the buffers is cut, and `msg_flags` says so with
  * MSG_TRUNC; with MSG_TRUNC in `flags` the call answers the datagram's whole
@@ -3431,30 +3777,35 @@ static int32_t get_tx_control(const struct socket *sock, uintptr_t control, uint
  * Linux does and how a caller learns its buffer was too small; it is zero
  * for a packet socket that has no sender to report.
  *
- * Every destination is checked before the datagram is taken, because taking
- * it is what destroys it: a fault discovered half way through the copy would
- * report an error for a message the machine no longer has. This is the pass
- * `sys_readv` makes for the same reason. Only what will be written of the
- * address is checked, twenty bytes for a packet socket and sixteen for an
- * AF_INET one, however much the caller declared, since checking the whole
- * declared capacity would fail a call whose address fits.
+ * The vector is copied once, and the copy, with its cut lengths, serves the
+ * transfer. Its buffers are checked only to lie below the top of user space
+ * (`iov_import`), as Linux's import checks them: the datagram is copied into
+ * as many of them as it fills, and a copy that fails makes the call -EFAULT
+ * with the datagram taken, or kept with MSG_PEEK, as readv(2) fails
+ * (`readv_dgram`), so that a bad buffer the datagram does not reach is no
+ * error and one on an empty socket waits, or answers -EAGAIN. The address
+ * and the control buffer are checked before the datagram is taken, and of
+ * the address only what will be written, twenty bytes for a packet socket
+ * and sixteen for an AF_INET one, however much the caller declared, since
+ * checking the whole declared capacity would fail a call whose address
+ * fits.
  *
  * Returns the bytes taken, or with MSG_TRUNC the datagram's whole length, or
- * -errno: -EOPNOTSUPP on a socket that is neither a datagram nor a raw
- * socket, or on the raw descriptor that takes only ioctls, -EINVAL for
- * more than IOV_MAX_LOCAL buffers, -EFAULT, or the error of the receive.
+ * -errno: -EOPNOTSUPP on a socket that is neither a stream, a datagram nor a
+ * raw socket, or on the raw descriptor that takes only ioctls, -EINVAL for
+ * more than IOV_MAX_LOCAL buffers or a buffer of a negative length
+ * (`iov_import`), -EFAULT, -ENOMEM for the copy of a vector of more than
+ * eight buffers, or the error of the receive.
  */
 static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
 {
     struct kernel_msghdr hdr;
     fd_entry_t *entry;
-    uintptr_t iov_user, name_ptr;
+    uintptr_t name_ptr;
     uint32_t namelen;
     uint32_t addr_len, addr_give;
-    uint32_t iovlen;
     net_addr_t src_ip = net_addr4(0);
     uint16_t src_port = 0;
-    uint32_t i;
     int32_t taken;
     int32_t whole = 0;
 
@@ -3465,21 +3816,23 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return not_a_socket(entry);
     }
-    if ((entry->sock->type != SOCK_DGRAM && entry->sock->type != SOCK_RAW) ||
+    if ((entry->sock->type != SOCK_DGRAM && entry->sock->type != SOCK_RAW &&
+         entry->sock->type != SOCK_STREAM) ||
         sock_is_query(entry->sock)) {
         return -EOPNOTSUPP;
     }
 
     name_ptr = hdr.msg_name;
     namelen = (uint32_t)hdr.msg_namelen;
-    iov_user = hdr.msg_iov;
     if (hdr.msg_iovlen > IOV_MAX_LOCAL) {
         return -EINVAL;
     }
-    iovlen = (uint32_t)hdr.msg_iovlen;
 
     if (!user_buffer_ok(msg_ptr, msghdr_size(), 1)) {
         return -EFAULT;
+    }
+    if (entry->sock->type == SOCK_STREAM) {
+        return recvmsg_stream(entry, &hdr, msg_ptr, flags);
     }
     if (rx_control(entry->sock) && hdr.msg_control && hdr.msg_controllen > 0 &&
         (hdr.msg_controllen > 0x7FFFFFFFu ||
@@ -3491,26 +3844,7 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
     if (name_ptr && addr_give > 0 && !user_buffer_ok(name_ptr, addr_give, 1)) {
         return -EFAULT;
     }
-    for (i = 0; i < iovlen; i++) {
-        struct kernel_iovec iov;
-
-        if (iov_fetch(&iov, iov_user, i) != 0) {
-            return -EFAULT;
-        }
-        if (iov.iov_len == 0) {
-            continue;
-        }
-        if (iov.iov_len > 0x7FFFFFFFu || !user_buffer_ok(iov.iov_base, iov.iov_len, 1)) {
-            return -EFAULT;
-        }
-    }
-
-    if ((flags & MSG_DONTWAIT) && (taken = socket_dgram_nowait(entry->sock)) < 0) {
-        return taken;
-    }
-
-    taken = readv_dgram(entry, iov_user, (int)iovlen, &src_ip, &src_port, (flags & MSG_PEEK) != 0,
-                        &whole);
+    taken = recvmsg_dgram(entry, &hdr, flags, &src_ip, &src_port, &whole);
     if (taken < 0) {
         return taken;
     }
@@ -3534,7 +3868,8 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
         }
     }
     hdr.msg_namelen = (int)addr_len;
-    hdr.msg_flags = whole > taken ? (unsigned int)MSG_TRUNC : 0u;
+    hdr.msg_flags =
+        (whole > taken ? (unsigned int)MSG_TRUNC : 0u) | ((unsigned int)flags & MSG_CMSG_CLOEXEC);
     if (rx_control(entry->sock)) {
         uint32_t used;
 
@@ -3550,6 +3885,47 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
         return -EFAULT;
     }
     return (flags & MSG_TRUNC) ? whole : taken;
+}
+
+/**
+ * sendmsg(2) on the stream socket `fd`: its `iovlen` buffers, whose vector
+ * is at `iov_user`, sent one after another, stopping at the first that
+ * goes short. A vector with no bytes, no buffer or only empty ones, is a
+ * send of 0 bytes, which a socket that cannot send fails as Linux's
+ * tcp_sendmsg fails it, with EPIPE and SIGPIPE after a shutdown. Returns
+ * the bytes sent, or -errno when the first buffer sends none. Only a
+ * failure of the first buffer may post SIGPIPE (`sock_stream_sent`), since
+ * Linux's send returns what it sent with no signal.
+ */
+static int32_t sendmsg_stream(int fd, uintptr_t iov_user, uint32_t iovlen, int flags)
+{
+    struct kernel_iovec one;
+    uint32_t i, total = 0;
+    int32_t rc;
+    int tried = 0;
+
+    for (i = 0; i < iovlen; i++) {
+        if (iov_fetch(&one, iov_user, i) != 0) {
+            return total ? (int32_t)total : -EFAULT;
+        }
+        if (one.iov_len == 0) {
+            continue;
+        }
+        tried = 1;
+        rc = do_sendto(fd, one.iov_base, (int)USER_RW_LEN(one.iov_len),
+                       total ? flags | MSG_NOSIGNAL : flags, 0, 0);
+        if (rc < 0) {
+            return total ? (int32_t)total : rc;
+        }
+        total += (uint32_t)rc;
+        if ((uint32_t)rc < one.iov_len) {
+            break;
+        }
+    }
+    if (!tried) {
+        return do_sendto(fd, 0, 0, flags, 0, 0);
+    }
+    return (int32_t)total;
 }
 
 /**
@@ -3606,25 +3982,7 @@ static int32_t do_sendmsg(int fd, uintptr_t msg_ptr, int flags)
         opt = &txopt;
     }
     if (entry->sock->type == SOCK_STREAM) {
-        for (i = 0; i < iovlen; i++) {
-            struct kernel_iovec one;
-
-            if (iov_fetch(&one, iov_user, i) != 0) {
-                return total ? (int32_t)total : -EFAULT;
-            }
-            if (one.iov_len == 0) {
-                continue;
-            }
-            rc = do_sendto(fd, one.iov_base, (int)USER_RW_LEN(one.iov_len), flags, 0, 0);
-            if (rc < 0) {
-                return total ? (int32_t)total : rc;
-            }
-            total += (uint32_t)rc;
-            if ((uint32_t)rc < one.iov_len) {
-                break;
-            }
-        }
-        return (int32_t)total;
+        return sendmsg_stream(fd, iov_user, iovlen, flags);
     }
     if (iovlen > sizeof(iov) / sizeof(iov[0])) {
         return -EMSGSIZE;

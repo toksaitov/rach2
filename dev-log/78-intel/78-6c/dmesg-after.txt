@@ -1,0 +1,186 @@
+[  214.267000] i915: reset: the chip for stopped heartbeat on vcs0
+[  214.267000] i915: reset: gem_reset_stats[289] context reset due to GPU hang
+[  214.267000] i915: reset: client gem_reset_stats[289]: gained 1 ban score, now 1
+[  219.271000] i915: hangcheck: vcs0: no heartbeat in 2500 ms: breadcrumb 46 of 47, ACTHD 0x2a574be8, was 0x2a5747c4
+[  219.272000] i915: hang: GPU HANG: ecode 7:4:3fffffff, in gem_reset_stats [289]
+[  219.272000] i915: reset: the chip for stopped heartbeat on vcs0
+[  219.272000] i915: reset: gem_reset_stats[289] context reset due to GPU hang
+[  219.272000] i915: reset: context gem_reset_stats[289]: guilty 3, banned
+[  219.272000] i915: reset: client gem_reset_stats[289]: gained 4 ban score, now 5
+[  224.400000] i915: hangcheck: vcs0: no heartbeat in 2500 ms: breadcrumb 51 of 55, ACTHD 0x20efa8a4, was 0x20efa6fc
+[  224.400000] i915: hang: GPU HANG: ecode 7:4:3fffffff, in gem_reset_stats [295]
+[  224.400000] i915: reset: the chip for stopped heartbeat on vcs0
+[  224.400000] i915: reset: gem_reset_stats[295] context reset due to GPU hang
+[  229.400000] i915: hangcheck: vcs0: no heartbeat in 2500 ms: breadcrumb 54 of 55, ACTHD 0x229b56d4, was 0x229b5ed0
+[  229.400000] i915: hang: GPU HANG: ecode 7:4:3fffffff, in gem_reset_stats [295]
+[  229.400000] i915: reset: the chip for stopped heartbeat on vcs0
+[  229.400000] i915: reset: gem_reset_stats[295] context reset due to GPU hang
+[  229.400000] i915: reset: client gem_reset_stats[295]: gained 1 ban score, now 1
+[  234.404000] i915: hangcheck: vcs0: no heartbeat in 2500 ms: breadcrumb 56 of 57, ACTHD 0x205a270c, was 0x205a2114
+[  234.405000] i915: hang: GPU HANG: ecode 7:4:3fffffff, in gem_reset_stats [295]
+[  234.405000] i915: reset: the chip for stopped heartbeat on vcs0
+[  234.405000] i915: reset: gem_reset_stats[295] context reset due to GPU hang
+[  234.405000] i915: reset: context gem_reset_stats[295]: guilty 3, banned
+[  234.405000] i915: reset: client gem_reset_stats[295]: gained 4 ban score, now 5
+[  239.528000] i915: hangcheck: vcs0: no heartbeat in 2500 ms: breadcrumb 58 of 59, ACTHD 0x28cd5248, was 0x28cd5040
+[  239.528000] i915: hang: GPU HANG: ecode 7:4:3fffffff, in gem_reset_stats [296]
+[  239.528000] i915: reset: the chip for stopped heartbeat on vcs0
+[  244.656000] i915: hangcheck: vcs0: no heartbeat in 2500 ms: breadcrumb 60 of 61, ACTHD 0x2b771674, was 0x2b7715e0
+[  244.656000] i915: hang: GPU HANG: ecode 7:4:3fffffff, in gem_reset_stats [298]
+[  244.656000] i915: reset: the chip for stopped heartbeat on vcs0
+[  249.773000] i915: hangcheck: vcs0: no heartbeat in 2500 ms: breadcrumb 62 of 63, ACTHD 0x2e857f3c, was 0x2e857794
+[  249.773000] i915: hang: GPU HANG: ecode 7:4:3fffffff, in gem_reset_stats [300]
+[  249.773000] i915: reset: the chip for stopped heartbeat on vcs0
+[  254.886000] i915: hangcheck: vcs0: no heartbeat in 2500 ms: breadcrumb 64 of 65, ACTHD 0x20eac040, was 0x20eac4f8
+[  254.886000] i915: hang: GPU HANG: ecode 7:4:3fffffff, in gem_reset_stats [301]
+[  254.886000] i915: reset: the chip for stopped heartbeat on vcs0
+[  260.014000] i915: hangcheck: vcs0: no heartbeat in 2500 ms: breadcrumb 66 of 67, ACTHD 0x23e2f040, was 0x23e2f170
+[  260.014000] i915: hang: GPU HANG: ecode 7:4:3fffffff, in gem_reset_stats [302]
+[  260.014000] i915: reset: the chip for stopped heartbeat on vcs0
+[  265.128000] i915: hangcheck: vcs0: no heartbeat in 2500 ms: breadcrumb 67 of 71, ACTHD 0x26b99d20, was 0x26b994a8
+[  265.128000] i915: hang: GPU HANG: ecode 7:4:3fffffff, in gem_reset_stats [303]
+[  265.128000] i915: reset: the chip for stopped heartbeat on vcs0
+[  270.274000] i915: hangcheck: vcs0: no heartbeat in 2500 ms: breadcrumb 71 of 75, ACTHD 0x28dda608, was 0x28ddaef4
+[  270.274000] i915: hang: GPU HANG: ecode 7:4:3fffffff, in gem_reset_stats [305]
+[  270.274000] i915: reset: the chip for stopped heartbeat on vcs0
+[  275.420000] i915: hangcheck: vcs0: no heartbeat in 2500 ms: breadcrumb 76 of 77, ACTHD 0x227a41d4, was 0x227a4714
+[  275.420000] i915: hang: GPU HANG: ecode 7:4:bfffffff, in gem_reset_stats [312]
+[  275.420000] i915: reset: the chip for stopped heartbeat on vcs0
+[  280.767000] i915: hangcheck: vcs0: no heartbeat in 2500 ms: breadcrumb 95 of 99, ACTHD 0x256bba20, was 0x256bb218
+[  280.767000] i915: hang: GPU HANG: ecode 7:4:277ffeff, in gem_reset_stats [315]
+[  280.767000] i915: reset: the chip for stopped heartbeat on vcs0
+[  280.767000] i915: reset: gem_reset_stats[315] context reset due to GPU hang
+[  285.767000] i915: hangcheck: vcs0: no heartbeat in 2500 ms: breadcrumb 98 of 99, ACTHD 0x2b0bd680, was 0x2b0bdbf0
+[  285.767000] i915: hang: GPU HANG: ecode 7:4:3fffffff, in gem_reset_stats [315]
+[  285.767000] i915: reset: the chip for stopped heartbeat on vcs0
+[  285.767000] i915: reset: gem_reset_stats[315] context reset due to GPU hang
+[  285.767000] i915: reset: client gem_reset_stats[315]: gained 1 ban score, now 1
+[  290.769000] i915: hangcheck: vcs0: no heartbeat in 2500 ms: breadcrumb 100 of 101, ACTHD 0x2d1db630, was 0x2d1db3c0
+[  290.769000] i915: hang: GPU HANG: ecode 7:4:277ffeff, in gem_reset_stats [315]
+[  290.770000] i915: reset: the chip for stopped heartbeat on vcs0
+[  290.770000] i915: reset: gem_reset_stats[315] context reset due to GPU hang
+[  290.770000] i915: reset: context gem_reset_stats[315]: guilty 3, banned
+[  290.770000] i915: reset: client gem_reset_stats[315]: gained 4 ban score, now 5
+[  296.014000] i915: hangcheck: vcs0: no heartbeat in 2500 ms: breadcrumb 105 of 106, ACTHD 0x2d8174a4, was 0x2d817040
+[  296.014000] i915: hang: GPU HANG: ecode 7:4:3fffffff, in gem_reset_stats [317]
+[  296.014000] i915: reset: the chip for stopped heartbeat on vcs0
+[  301.381000] i915: hangcheck: vcs0: no heartbeat in 2500 ms: breadcrumb 108 of 109, ACTHD 0x26dca1b0, was 0x26dca8f4
+[  301.381000] i915: hang: GPU HANG: ecode 7:4:277ffeff, in gem_reset_stats [321]
+[  301.381000] i915: reset: the chip for stopped heartbeat on vcs0
+[  306.614000] i915: hangcheck: vcs0: no heartbeat in 2500 ms: breadcrumb 110 of 114, ACTHD 0x29807480, was 0x2980764c
+[  306.614000] i915: hang: GPU HANG: ecode 7:4:3fffffff, in gem_reset_stats [323]
+[  306.614000] i915: reset: the chip for stopped heartbeat on vcs0
+[  311.754000] i915: hangcheck: vcs0: no heartbeat in 2500 ms: breadcrumb 114 of 118, ACTHD 0x2c3532c0, was 0x2c3531d0
+[  311.754000] i915: hang: GPU HANG: ecode 7:4:3fffffff, in gem_reset_stats [325]
+[  311.754000] i915: reset: the chip for stopped heartbeat on vcs0
+[  316.909000] i915: hangcheck: vcs0: no heartbeat in 2500 ms: breadcrumb 119 of 120, ACTHD 0x2f0e38cc, was 0x2f0e3040
+[  316.909000] i915: hang: GPU HANG: ecode 7:4:3fffffff, in gem_reset_stats [327]
+[  316.909000] i915: reset: the chip for stopped heartbeat on vcs0
+[  323.721000] i915: hangcheck: bcs0: no heartbeat in 2500 ms: breadcrumb 36 of 40, ACTHD 0x2f9439c0, was 0x2f943234
+[  323.721000] i915: hang: GPU HANG: ecode 7:2:fffffff7, in gem_reset_stats [342]
+[  323.721000] i915: reset: the chip for stopped heartbeat on bcs0
+[  323.721000] i915: reset: gem_reset_stats[342] context reset due to GPU hang
+[  328.721000] i915: hangcheck: bcs0: no heartbeat in 2500 ms: breadcrumb 39 of 40, ACTHD 0x2bc2d414, was 0x2bc2d15c
+[  328.721000] i915: hang: GPU HANG: ecode 7:2:fffffff7, in gem_reset_stats [342]
+[  328.721000] i915: reset: the chip for stopped heartbeat on bcs0
+[  328.721000] i915: reset: gem_reset_stats[342] context reset due to GPU hang
+[  328.721000] i915: reset: client gem_reset_stats[342]: gained 1 ban score, now 1
+[  333.725000] i915: hangcheck: bcs0: no heartbeat in 2500 ms: breadcrumb 41 of 42, ACTHD 0x2dd5a23c, was 0x2dd5a6d8
+[  333.725000] i915: hang: GPU HANG: ecode 7:2:fffffff7, in gem_reset_stats [342]
+[  333.725000] i915: reset: the chip for stopped heartbeat on bcs0
+[  333.725000] i915: reset: gem_reset_stats[342] context reset due to GPU hang
+[  333.725000] i915: reset: context gem_reset_stats[342]: guilty 3, banned
+[  333.725000] i915: reset: client gem_reset_stats[342]: gained 4 ban score, now 5
+[  338.844000] i915: hangcheck: bcs0: no heartbeat in 2500 ms: breadcrumb 46 of 50, ACTHD 0x27c98570, was 0x27c98290
+[  338.844000] i915: hang: GPU HANG: ecode 7:2:fffffff3, in gem_reset_stats [348]
+[  338.844000] i915: reset: the chip for stopped heartbeat on bcs0
+[  338.844000] i915: reset: gem_reset_stats[348] context reset due to GPU hang
+[  343.845000] i915: hangcheck: bcs0: no heartbeat in 2500 ms: breadcrumb 49 of 50, ACTHD 0x288f65a8, was 0x288f6d04
+[  343.845000] i915: hang: GPU HANG: ecode 7:2:fffffff7, in gem_reset_stats [348]
+[  343.845000] i915: reset: the chip for stopped heartbeat on bcs0
+[  343.845000] i915: reset: gem_reset_stats[348] context reset due to GPU hang
+[  343.845000] i915: reset: client gem_reset_stats[348]: gained 1 ban score, now 1
+[  348.847000] i915: hangcheck: bcs0: no heartbeat in 2500 ms: breadcrumb 51 of 52, ACTHD 0x208e5e04, was 0x208e5c38
+[  348.847000] i915: hang: GPU HANG: ecode 7:2:fffffff7, in gem_reset_stats [348]
+[  348.848000] i915: reset: the chip for stopped heartbeat on bcs0
+[  348.848000] i915: reset: gem_reset_stats[348] context reset due to GPU hang
+[  348.848000] i915: reset: context gem_reset_stats[348]: guilty 3, banned
+[  348.848000] i915: reset: client gem_reset_stats[348]: gained 4 ban score, now 5
+[  353.973000] i915: hangcheck: bcs0: no heartbeat in 2500 ms: breadcrumb 53 of 54, ACTHD 0x2faa6d2c, was 0x2faa66fc
+[  353.973000] i915: hang: GPU HANG: ecode 7:2:fffffff3, in gem_reset_stats [349]
+[  353.973000] i915: reset: the chip for stopped heartbeat on bcs0
+[  359.088000] i915: hangcheck: bcs0: no heartbeat in 2500 ms: breadcrumb 55 of 56, ACTHD 0x2285c9e4, was 0x2285c5a8
+[  359.088000] i915: hang: GPU HANG: ecode 7:2:fffffff7, in gem_reset_stats [351]
+[  359.088000] i915: reset: the chip for stopped heartbeat on bcs0
+[  364.219000] i915: hangcheck: bcs0: no heartbeat in 2500 ms: breadcrumb 57 of 58, ACTHD 0x24f9b1d4, was 0x24f9bcb8
+[  364.219000] i915: hang: GPU HANG: ecode 7:2:fffffff7, in gem_reset_stats [353]
+[  364.219000] i915: reset: the chip for stopped heartbeat on bcs0
+[  369.338000] i915: hangcheck: bcs0: no heartbeat in 2500 ms: breadcrumb 59 of 60, ACTHD 0x2e8686e0, was 0x2e86857c
+[  369.339000] i915: hang: GPU HANG: ecode 7:2:fffffff7, in gem_reset_stats [354]
+[  369.339000] i915: reset: the chip for stopped heartbeat on bcs0
+[  374.462000] i915: hangcheck: bcs0: no heartbeat in 2500 ms: breadcrumb 61 of 62, ACTHD 0x2146a8b8, was 0x2146a9b8
+[  374.462000] i915: hang: GPU HANG: ecode 7:2:fffffff7, in gem_reset_stats [355]
+[  374.462000] i915: reset: the chip for stopped heartbeat on bcs0
+[  379.592000] i915: hangcheck: bcs0: no heartbeat in 2500 ms: breadcrumb 62 of 64, ACTHD 0x2436833c, was 0x243683a8
+[  379.592000] i915: hang: GPU HANG: ecode 7:2:fffffff7, in gem_reset_stats [356]
+[  379.592000] i915: reset: the chip for stopped heartbeat on bcs0
+[  384.743000] i915: hangcheck: bcs0: no heartbeat in 2500 ms: breadcrumb 64 of 66, ACTHD 0x26a0ccac, was 0x26a0cc74
+[  384.743000] i915: hang: GPU HANG: ecode 7:2:fffffff3, in gem_reset_stats [358]
+[  384.743000] i915: reset: the chip for stopped heartbeat on bcs0
+[  389.887000] i915: hangcheck: bcs0: no heartbeat in 2500 ms: breadcrumb 66 of 67, ACTHD 0x2944e928, was 0x2944e6c4
+[  389.887000] i915: hang: GPU HANG: ecode 7:2:fffffff7, in gem_reset_stats [360]
+[  389.887000] i915: reset: the chip for stopped heartbeat on bcs0
+[  395.273000] i915: hangcheck: vecs0: no heartbeat in 2500 ms: breadcrumb 39 of 43, ACTHD 0x2c2972e0, was 0x2c297e9c
+[  395.273000] i915: hang: GPU HANG: ecode 7:8:3fffffff, in gem_reset_stats [368]
+[  395.273000] i915: reset: the chip for stopped heartbeat on vecs0
+[  395.273000] i915: reset: gem_reset_stats[368] context reset due to GPU hang
+[  400.273000] i915: hangcheck: vecs0: no heartbeat in 2500 ms: breadcrumb 42 of 43, ACTHD 0x20ed9648, was 0x20ed9708
+[  400.273000] i915: hang: GPU HANG: ecode 7:8:3fffffff, in gem_reset_stats [368]
+[  400.273000] i915: reset: the chip for stopped heartbeat on vecs0
+[  400.273000] i915: reset: gem_reset_stats[368] context reset due to GPU hang
+[  400.273000] i915: reset: client gem_reset_stats[368]: gained 1 ban score, now 1
+[  405.275000] i915: hangcheck: vecs0: no heartbeat in 2500 ms: breadcrumb 44 of 45, ACTHD 0x2d45d1fc, was 0x2d45df20
+[  405.276000] i915: hang: GPU HANG: ecode 7:8:3fffffff, in gem_reset_stats [368]
+[  405.276000] i915: reset: the chip for stopped heartbeat on vecs0
+[  405.276000] i915: reset: gem_reset_stats[368] context reset due to GPU hang
+[  405.276000] i915: reset: context gem_reset_stats[368]: guilty 3, banned
+[  405.276000] i915: reset: client gem_reset_stats[368]: gained 4 ban score, now 5
+[  410.402000] i915: hangcheck: vecs0: no heartbeat in 2500 ms: breadcrumb 49 of 53, ACTHD 0x2b36b5e4, was 0x2b36b8e0
+[  410.402000] i915: hang: GPU HANG: ecode 7:8:3fffffff, in gem_reset_stats [369]
+[  410.402000] i915: reset: the chip for stopped heartbeat on vecs0
+[  410.402000] i915: reset: gem_reset_stats[369] context reset due to GPU hang
+[  415.402000] i915: hangcheck: vecs0: no heartbeat in 2500 ms: breadcrumb 52 of 53, ACTHD 0x27e74068, was 0x27e74d94
+[  415.402000] i915: hang: GPU HANG: ecode 7:8:3fffffff, in gem_reset_stats [369]
+[  415.402000] i915: reset: the chip for stopped heartbeat on vecs0
+[  415.402000] i915: reset: gem_reset_stats[369] context reset due to GPU hang
+[  415.402000] i915: reset: client gem_reset_stats[369]: gained 1 ban score, now 1
+[  420.406000] i915: hangcheck: vecs0: no heartbeat in 2500 ms: breadcrumb 54 of 55, ACTHD 0x232964a4, was 0x232968c8
+[  420.406000] i915: hang: GPU HANG: ecode 7:8:3fffffff, in gem_reset_stats [369]
+[  420.406000] i915: reset: the chip for stopped heartbeat on vecs0
+[  420.407000] i915: reset: gem_reset_stats[369] context reset due to GPU hang
+[  420.407000] i915: reset: context gem_reset_stats[369]: guilty 3, banned
+[  420.407000] i915: reset: client gem_reset_stats[369]: gained 4 ban score, now 5
+[  425.521000] i915: hangcheck: vecs0: no heartbeat in 2500 ms: breadcrumb 56 of 57, ACTHD 0x2304c200, was 0x2304cca0
+[  425.521000] i915: hang: GPU HANG: ecode 7:8:3fffffff, in gem_reset_stats [370]
+[  425.521000] i915: reset: the chip for stopped heartbeat on vecs0
+[  430.650000] i915: hangcheck: vecs0: no heartbeat in 2500 ms: breadcrumb 58 of 59, ACTHD 0x25c69100, was 0x25c69740
+[  430.650000] i915: hang: GPU HANG: ecode 7:8:3fffffff, in gem_reset_stats [372]
+[  430.650000] i915: reset: the chip for stopped heartbeat on vecs0
+[  435.776000] i915: hangcheck: vecs0: no heartbeat in 2500 ms: breadcrumb 60 of 61, ACTHD 0x2850471c, was 0x28504ccc
+[  435.776000] i915: hang: GPU HANG: ecode 7:8:3fffffff, in gem_reset_stats [374]
+[  435.776000] i915: reset: the chip for stopped heartbeat on vecs0
+[  440.893000] i915: hangcheck: vecs0: no heartbeat in 2500 ms: breadcrumb 62 of 63, ACTHD 0x2b31c7a0, was 0x2b31c6dc
+[  440.893000] i915: hang: GPU HANG: ecode 7:8:3fffffff, in gem_reset_stats [375]
+[  440.893000] i915: reset: the chip for stopped heartbeat on vecs0
+[  446.019000] i915: hangcheck: vecs0: no heartbeat in 2500 ms: breadcrumb 64 of 65, ACTHD 0x2d9c6040, was 0x2d9c66b8
+[  446.019000] i915: hang: GPU HANG: ecode 7:8:3fffffff, in gem_reset_stats [376]
+[  446.019000] i915: reset: the chip for stopped heartbeat on vecs0
+[  451.137000] i915: hangcheck: vecs0: no heartbeat in 2500 ms: breadcrumb 65 of 67, ACTHD 0x208970dc, was 0x208978ec
+[  451.137000] i915: hang: GPU HANG: ecode 7:8:3fffffff, in gem_reset_stats [377]
+[  451.137000] i915: reset: the chip for stopped heartbeat on vecs0
+[  456.297000] i915: hangcheck: vecs0: no heartbeat in 2500 ms: breadcrumb 67 of 69, ACTHD 0x233d9b80, was 0x233d9b1c
+[  456.297000] i915: hang: GPU HANG: ecode 7:8:3fffffff, in gem_reset_stats [384]
+[  456.297000] i915: reset: the chip for stopped heartbeat on vecs0
+[  461.444000] i915: hangcheck: vecs0: no heartbeat in 2500 ms: breadcrumb 69 of 70, ACTHD 0x2ccc2c24, was 0x2ccc2de4
+[  461.445000] i915: hang: GPU HANG: ecode 7:8:3fffffff, in gem_reset_stats [386]
+[  461.445000] i915: reset: the chip for stopped heartbeat on vecs0

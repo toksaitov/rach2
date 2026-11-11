@@ -53,7 +53,14 @@ This is the kernel layout, the same on i386 and x86-64, with 19 control
 characters, not musl's
 larger termios structure with 32 control characters and speed fields.
 A new terminal has Linux's control flags,
-.Dv B38400 | CS8 | CREAD | HUPCL .
+.Dv B38400 | CS8 | CREAD | HUPCL ,
+and
+.Dv IXON
+among its input flags, with
+.Dv VSTART
+^Q and
+.Dv VSTOP
+^S.
 .It Dv TCSETS , TCSETSW , TCSETSF
 Read a 36-byte kernel termios from
 .Fa arg
@@ -102,8 +109,53 @@ selects the queue:
 .Dv TCIOFLUSH
 (2) discard unread input.
 .Dv TCOFLUSH
-(1) succeeds without action because there is no output queue.
+(1) and
+.Dv TCIOFLUSH
+discard a pseudo-terminal slave's output its master has not read; the
+console writes its output at once, so there they do nothing.
 Other values are invalid.
+.It Dv TCXONC
+The integer
+.Fa arg
+selects the action, as
+.Xr tcflow 3
+gives it:
+.Dv TCOOFF
+(0) stops the terminal's output and
+.Dv TCOON
+(1) restarts it; a stop made so outlasts
+.Dv VSTART
+and
+.Dv IXANY ,
+which end only a stop that
+.Dv VSTOP
+made.
+.Dv TCIOFF
+(2) and
+.Dv TCION
+(3) send the
+.Dv VSTOP
+and
+.Dv VSTART
+characters as output, also while output is stopped by
+.Dv VSTOP .
+While it is stopped by
+.Dv TCOOFF ,
+the console still sends them, as Linux's console and serial line do, and
+a pseudo-terminal slave sends nothing, as Linux's does;
+a disabled character sends nothing.
+Other values are
+.Er EINVAL .
+While output is stopped, a write waits, or with
+.Dv O_NONBLOCK
+fails with
+.Er EAGAIN
+once it has written nothing, and
+.Xr poll 2
+gives no
+.Dv POLLOUT .
+On the console a stop lights Scroll Lock, and the Hold key, Scroll Lock,
+stops and restarts output, as on Linux.
 .It Dv FIONREAD
 Write an
 .Vt int
@@ -132,6 +184,12 @@ pointer
 and make it foreground.
 The terminal must belong to the caller's session, and the group must
 have a member in that session.
+If the number names no group but names a thread in the session, that
+number is accepted as on Linux.
+A negative number fails with
+.Er EINVAL ;
+zero or a number no thread, process group or session holds fails with
+.Er ESRCH .
 .It Dv TIOCSCTTY
 Make this the session's controlling terminal and set its foreground
 group to the caller's process group.
@@ -149,6 +207,32 @@ as on Linux.
 Detach the terminal if it belongs to the caller's session.
 Otherwise succeed without action.
 .El
+.Pp
+A process of a background group of the session a terminal controls that
+calls
+.Dv TCSETS
+or its kin,
+.Dv TCFLSH ,
+.Dv TCXONC
+or
+.Dv TIOCSPGRP
+on it is stopped first, as on Linux: the request posts
+.Dv SIGTTOU
+to its process group and fails with
+.Er EINTR ,
+to be restarted once the group is continued.
+A process that blocks or ignores
+.Dv SIGTTOU
+makes the request at once.
+A request that would post
+.Dv SIGTTOU
+from an orphaned process group, which no member's parent in the session
+can continue, fails instead with
+.Er EIO ,
+and
+.Dv TIOCSPGRP
+with
+.Er ENOTTY .
 .Pp
 The console alone also answers Linux's keyboard requests of
 .In linux/kd.h ,
@@ -214,15 +298,57 @@ Set packet mode from an
 nonzero on, or read it back.
 In packet mode each read of the master begins with a status byte,
 .Dv TIOCPKT_DATA ,
-0, before the slave's output, as screen asks for; Linux also sends the
-byte alone when the slave flushes or stops its output, which this kernel
-does not.
+0, before the slave's output, as screen asks for.
+A flush on the slave makes the master readable, with
+.Dv POLLPRI
+as well, for a status byte alone:
+.Dv TIOCPKT_FLUSHREAD
+after its input is discarded by
+.Dv TCFLSH
+or
+.Dv TCSETSF ,
+and
+.Dv TIOCPKT_FLUSHWRITE
+after its output is discarded by
+.Dv TCFLSH ,
+or both, as a signal character does unless
+.Dv NOFLSH
+is set.
+.Dv TIOCPKT_STOP
+and
+.Dv TIOCPKT_START
+follow a stop and a restart of the slave's output, and
+.Dv TIOCPKT_NOSTOP
+and
+.Dv TIOCPKT_DOSTOP
+a termios change that ends or begins flow control by ^S and ^Q, that is
+.Dv IXON
+with those two characters.
+A slave's
+.Xr vhangup 2
+leaves no status pending.
 .It Dv TCFLSH
 With
 .Fa arg
 0, drop the slave's output the master has not read; with 1, the input the
 slave has not read; with 2, both.
+.It Dv TCXONC
+.Dv TCOOFF
+stops the master's writes, which wait, or fail with
+.Er EAGAIN
+under
+.Dv O_NONBLOCK ,
+until
+.Dv TCOON ;
+.Dv TCIOFF
+and
+.Dv TCION
+feed ^S and ^Q to the slave as input, unless the master's writes are
+stopped.
 .El
+.Pp
+A master's write goes on after every slave description has closed, as
+Linux's does, until the slave's input is full.
 .Ss Disk requests
 Raw disk windows and loop devices with a file attached accept:
 .Bl -tag -width "BLKGETSIZE64"
@@ -718,9 +844,16 @@ reads its foreground group with
 .Dv TIOCGPGRP ,
 and changes that group with
 .Dv TIOCSPGRP .
-It checks the refusals for a foreign group, a negative group ID, and a
+It checks the refusals for a foreign group, a missing, zero or negative
+group ID, and a
 terminal detached by
-.Dv TIOCNOTTY .
+.Dv TIOCNOTTY ,
+and that once a zombie's group is in front its own orphaned group's
+.Dv TIOCSPGRP
+fails with
+.Er ENOTTY
+until it ignores
+.Dv SIGTTOU .
 .Sh ERRORS
 .Bl -tag -width "[EOPNOTSUPP]"
 .It Bq Er EBADF
@@ -740,6 +873,10 @@ A required argument or buffer cannot be read or written in user memory.
 The sector count requested by
 .Dv BLKGETSIZE
 does not fit 32 bits.
+.It Bq Er EINTR
+A signal ended a wait, or a terminal request from a background process
+group posted
+.Dv SIGTTOU .
 .It Bq Er EINVAL
 The flush selector is outside 0 through 2, the foreground group ID
 is not positive, or an interface address, mask, broadcast address, or
@@ -755,9 +892,10 @@ was given a zero size, or the console's channel is not playing.
 A keyboard request's mode, flag, keymap entry, string or accent count is
 out of range.
 .It Bq Er EIO
-The partition rescan could not read the disk's first sector, or the
+The partition rescan could not read the disk's first sector, the
 sound device failed to start the stream of
-.Dv AUDIO_START .
+.Dv AUDIO_START ,
+or a terminal request came from an orphaned background process group.
 .It Bq Er ENODEV
 The named network interface or index does not exist, or an
 .Dv AUDIO_*
@@ -784,7 +922,8 @@ A bridge or VLAN request was made.
 The object does not support the request, a disk size query has no live
 raw window, or
 .Dv TIOCSPGRP
-selected a terminal outside the caller's session.
+selected a terminal outside the caller's session or came from an
+orphaned background process group.
 .It Bq Er EOPNOTSUPP
 A clone request found nothing else wrong, a route change other than a
 default route or addition of the existing subnet route was requested, or
@@ -804,7 +943,10 @@ flag, or a keyboard request came from a caller
 .Xr console 4
 does not let set it.
 .It Bq Er ESRCH
-There is no current process, or the default route to remove is absent
+There is no current process,
+.Dv TIOCSPGRP
+was given zero or a number no thread, process group or session holds,
+or the default route to remove is absent
 or has a different nonzero gateway from the one supplied.
 .El
 .Sh SEE ALSO

@@ -1,0 +1,49 @@
+/data/trial/out/video/chromium.log:0
+top - 14:50:49 up 5 min,  0 users,  load average: 1.81, 1.63, 0.73
+Tasks: 51 total, 1 running, 50 sleep, 0 d-sleep, 0 stopped, 0 zombie
+%Cpu0  :  20.9/53.5   74[            ]   %Cpu1  :  18.2/72.7   91[            ] 
+%Cpu2  :   9.5/81.0   90[            ]   %Cpu3  :   9.3/76.7   86[            ] 
+GiB Mem :  4.7/15.9     [            ]   GiB Swap:  0.0/0.0      [            ] 
+
+       PID USER      PR  NI    VIRT    RES  %CPU  %MEM     TIME+ S COMMAND
+         1 root      20   0    0.1m   0.1m   9.5   0.0   0:01.35 S /sbin/init
+         7 root      20   0    8.5m   8.4m   0.0   0.1   0:00.12 S  `- term -l
+        15 root      20   0    0.1m   0.1m   0.0   0.0   0:00.00 S      `- log+
+         8 root      20   0    0.0m   0.0m   0.0   0.0   0:02.05 S  `- update
+         9 root      20   0    1.0m   0.2m   0.0   0.0   0:00.01 S  `- acpid -d
+        36 root      20   0    1.0m   0.3m   0.0   0.0   0:00.00 S  `- udhcpc +
+        38 root      20   0    1.0m   0.3m   0.0   0.0   0:00.00 S  `- syslogd+
+        39 root      20   0   10.1m   4.1m   0.0   0.0   0:00.43 S  `- sshd: /+
+      2106 root      20   0   10.6m   4.6m   0.0   0.0   0:00.07 S      `- ssh+
+      2108 root      20   0   10.9m   5.0m   0.0   0.0   0:00.00 S          `-+
+      2109 root      20   0    4.2m   1.5m   0.0   0.0   0:00.00 S            +
+      2112 root      20   0    5.5m   3.3m  28.5   0.0   0:00.23 R            +
+      2113 root      20   0    2.3m   0.6m   0.0   0.0   0:00.02 S            +
+        40 message+  20   0    6.7m   2.2m   0.0   0.0   0:00.34 S  `- /usr/bi+
+        41 root      20   0    3.1m   1.1m   0.0   0.0   0:00.02 S  `- /usr/sb+
+cpu  36404 0 64962 40364 0 0 0 0 0 0
+bkl_wait_us 550238201
+bkl_hold_entry syscall 16 101203 137098309
+bkl_hold_entry vector 32 528652 21438999
+bkl_hold_entry vector 0 702642 11464278
+bkl_hold_entry vector 14 1918781 10723710
+bkl_hold_entry syscall 202 884879 10612867
+bkl_hold_entry vector 48 15164 8657509
+bkl_hold_entry syscall 9 35437 6693516
+bkl_hold_entry syscall 257 31647 3578974
+bkl_hold_entry syscall 0 135075 3322534
+bkl_hold_entry syscall 17 157415 3210401
+bkl_hold_entry vector 50 125102 2731985
+cpu  37022 0 67352 41391 0 0 0 0 0 0
+bkl_wait_us 570830540
+bkl_hold_entry syscall 16 103901 143207581
+bkl_hold_entry vector 32 539820 22162951
+bkl_hold_entry vector 0 715692 11652910
+bkl_hold_entry vector 14 1932110 10761482
+bkl_hold_entry syscall 202 895575 10721341
+bkl_hold_entry vector 48 15481 8794469
+bkl_hold_entry syscall 9 35521 6697116
+bkl_hold_entry syscall 257 31725 3613193
+bkl_hold_entry syscall 0 136423 3400889
+bkl_hold_entry syscall 17 157421 3210563
+bkl_hold_entry vector 50 125304 2733421

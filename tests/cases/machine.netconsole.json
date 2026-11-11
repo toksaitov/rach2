@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "family_id": "machine.netconsole",
-  "summary": "The kernel's log on the wire as netconsole frames from the RTL8139, at a boot and at a power-off, each a boot that tests/cases/machine/netconsole_scenario.c drives",
+  "summary": "The kernel's log on the wire from the RTL8139, as netconsole frames at a boot and at a power-off and as UDP datagrams to a target of netconsole= through a panic, each a boot that tests/cases/machine/netconsole_scenario.c drives",
   "cases": [
     {
       "case_id": "machine.netconsole.boot",
@@ -211,6 +211,115 @@
         "plan": "none",
         "class": "QEMU",
         "reason": "the frames are read from QEMU's filter-dump of the emulated card, which a machine outside QEMU has nothing like"
+      }
+    },
+    {
+      "case_id": "machine.netconsole.udp",
+      "behavior": "with a target of Linux's netconsole= the kernel sends its log from the RTL8139 as UDP datagrams to the target, one record each, from the first record to the record of a panic",
+      "units": ["netconsole"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "netconsole_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the capture, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "card",
+          "does": "boot the test image with netconsole=@/,6666@10.0.2.2/ on its command line and its card's frames recorded, until the debug shell's greeting"
+        },
+        {
+          "step_id": "panic",
+          "stage": "execute",
+          "machine": "card",
+          "does": "type `fault` at the shell and wait for the console's `panic: stopped`"
+        },
+        {
+          "step_id": "capture",
+          "stage": "capture",
+          "machine": "card",
+          "does": "end the machine through QMP, then run pcapcheck netconsole-udp on its card's frames"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "card",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [{"model": "rtl8139"}],
+            "boot_options": ["netconsole=@/,6666@10.0.2.2/"],
+            "captures": ["net0"]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false,
+          "fault": {"end": "panic", "records": ["vm: fault: in kernel mode", "vm: fault: called from", "page fault while in kernel mode"]}
+        }
+      ],
+      "assertions": [
+        {"assertion_id": "shell", "checks": "the machine reaches the debug shell", "source": "scenario"},
+        {
+          "assertion_id": "datagrams",
+          "checks": "pcapcheck finds at least four datagrams from port 6665 to port 6666 that a receiver takes: IP and UDP checksums that sum to zero, one source address, identifications that count up by one, so none is missing or out of order, and one whole line in each",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "first-to-panic",
+          "checks": "the log the datagrams carry has the whole records `] boot: Initializing system components`, printed before the card existed, `] netconsole: started:` and the panic's `] panic: stopped:`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-console",
+          "checks": "the log the datagrams carry has neither the shell's greeting `Type 'help'` nor its prompt `> `",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 270000000, "ceiling_us": 810000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 360000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 360000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "pcapcheck", "node": "tests/system/pcapcheck", "per_architecture": false},
+        {"name": "netconsole_scenario", "node": "tests/cases/machine/netconsole_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the datagrams are read from QEMU's filter-dump of the emulated card, which a machine outside QEMU has nothing like"
       }
     }
   ]

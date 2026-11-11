@@ -18,7 +18,9 @@
  *       a closed fd, past the table's first sixteen entries or not, is
  *       -EBADF; an nfds past the fd_set width is cut to the table, as on
  *       Linux, so sets as wide as it asks find fd 1 writable;
- *   (g) bad timeout: an out-of-range timeval (tv_usec >= 1e6) is -EINVAL;
+ *   (g) timeout conversion: excess microseconds are normalized before
+ *       validation; a negative normalized timeout is refused unchanged;
+ *       a normalized zero timeout is also left unchanged;
  *   (h) on x86-64, a ppoll whose timeout is 2^32 seconds waits for its pipe,
  *       which a child writes once the parent sleeps, and does not end at
  *       once, as a timeout narrowed to 32 bits would;
@@ -281,6 +283,60 @@ static void select_contract(int closed)
           "select nfds > FD_SETSIZE with a set that wide finds fd 1 writable");
 }
 
+/** Select writable fd 1 with the timeval `tv`, through i386's old form
+ * when `old` and through the usual five-argument form otherwise. */
+static long select_timeval(long *tv, int old)
+{
+    unsigned long set = 1ul << 1;
+
+#if defined __i386__
+    if (old) {
+        unsigned long args[5];
+
+        args[0] = 2;
+        args[1] = 0;
+        args[2] = (unsigned long)&set;
+        args[3] = 0;
+        args[4] = (unsigned long)tv;
+        return syscall1(82, (long)args);
+    }
+#else
+    (void)old;
+#endif
+    return syscall5(SYS_SELECT, 2, 0, (long)&set, 0, (long)tv);
+}
+
+/** Case (g): normalize before validation, and preserve refused and zero
+ * timeouts. The writable descriptor makes every accepted call ready. */
+static void select_timeouts(int old)
+{
+    long tv[2], rc;
+
+    tv[0] = 0;
+    tv[1] = 3000000;
+    rc = select_timeval(tv, old);
+    check(rc == 1 && tv[0] >= 0 && tv[0] <= 3 && tv[1] >= 0 && tv[1] < 1000000,
+          "select normalizes excess microseconds and writes the remainder");
+    tv[0] = -1;
+    tv[1] = 1500000;
+    check(select_timeval(tv, old) == 1, "select validates the normalized seconds");
+    tv[0] = -4;
+    tv[1] = 3000000;
+    rc = select_timeval(tv, old);
+    check(rc == -EINVAL && tv[0] == -4 && tv[1] == 3000000,
+          "select leaves a refused timeval unchanged");
+    tv[0] = 0;
+    tv[1] = -1;
+    rc = select_timeval(tv, old);
+    check(rc == -EINVAL && tv[0] == 0 && tv[1] == -1,
+          "select refuses negative fractional microseconds unchanged");
+    tv[0] = 1;
+    tv[1] = -1000000;
+    rc = select_timeval(tv, old);
+    check(rc == 1 && tv[0] == 1 && tv[1] == -1000000,
+          "select leaves a normalized zero timeval unchanged");
+}
+
 /**
  * (i): the kernel's standard descriptors are each open for reading and
  * writing, and the console opened read-only is writable to poll, as on Linux,
@@ -327,8 +383,17 @@ static void wide_ppoll(void)
     char buf[1];
     int c[2], pid, status;
 
-    check(do_pipe(c) == 0, "pipe for the ppoll row");
+    if (do_pipe(c) != 0) {
+        check(0, "pipe for the ppoll row");
+        return;
+    }
     pid = syscall0(SYS_FORK);
+    if (pid < 0) {
+        check(0, "fork for the ppoll row");
+        syscall1(SYS_CLOSE, c[0]);
+        syscall1(SYS_CLOSE, c[1]);
+        return;
+    }
     if (pid == 0) {
         syscall1(SYS_CLOSE, c[0]);
         write_when_asleep((int)syscall0(SYS_GETPPID), c[1]);
@@ -359,7 +424,10 @@ void probe_main(unsigned long *sp)
 
     probe_args((int)sp[0], (char **)(sp + 1));
     /* (a) timeout: two empty pipes, nothing ready -> 0. */
-    check(do_pipe(a) == 0 && do_pipe(b) == 0, "pipe x2");
+    if (do_pipe(a) != 0 || do_pipe(b) != 0) {
+        check(0, "pipe x2");
+        sys_exit(fails);
+    }
     pfd[0].fd = a[0];
     pfd[0].events = POLLIN;
     pfd[0].revents = 0;
@@ -404,7 +472,7 @@ void probe_main(unsigned long *sp)
     if (pid == 0) {
         syscall1(SYS_CLOSE, a[0]);
         write_when_asleep((int)syscall0(SYS_GETPPID), a[1]);
-    } else {
+    } else if (pid > 0) {
         syscall1(SYS_CLOSE, a[1]);
         pfd[0].fd = a[0];
         pfd[0].events = POLLIN;
@@ -414,19 +482,17 @@ void probe_main(unsigned long *sp)
               "poll blocks then wakes on the child's write");
         check(do_read(a[0], buf, 1) == 1, "the pipe poll waited for has the child's byte");
         syscall3(SYS_WAITPID, pid, (long)&status, 0);
+    } else {
+        syscall1(SYS_CLOSE, a[1]);
     }
     syscall1(SYS_CLOSE, a[0]);
 
     select_contract(a[0]);
 
-    /* (g) an out-of-range timeout is refused, not clamped. */
-    {
-        long tv[2];
-        tv[0] = 0;
-        tv[1] = 2000000; /* tv_usec >= 1e6 is invalid */
-        check(syscall5(SYS_SELECT, 0, 0, 0, 0, (long)tv) == -EINVAL,
-              "select with tv_usec >= 1e6 -> -EINVAL");
-    }
+    select_timeouts(0);
+#if defined __i386__
+    select_timeouts(1);
+#endif
 
 #if defined __x86_64__
     wide_ppoll();

@@ -9,6 +9,18 @@
 #define MODEL_TEST "i915-evict-test"
 #include "i915_gem_model.c"
 
+/** No interrupts on the host: the fences' masking is a no-op. */
+uint32_t kirq_save(void)
+{
+    return 0;
+}
+
+/** The pair of kirq_save. */
+void kirq_restore(uint32_t flags)
+{
+    (void)flags;
+}
+
 /* The working set: 48 objects of 1 MiB, three times the aperture. */
 #define SET_OBJECTS 48u
 #define SET_BYTES   0x100000u
@@ -165,6 +177,7 @@ static void pinned_and_active(void)
     struct drm_i915_gem_object *a = object(&file_a, big), *b = object(&file_a, busy);
     struct i915_vma *va = 0, *vb = 0, *v = 0;
     struct dma_fence *f;
+    vma_t gtt;
 
     CHECK(pin_whole(a, I915_PIN_MAPPABLE, &va) == 0 && pin_whole(b, I915_PIN_MAPPABLE, &vb) == 0,
           "pinned: two objects of 8 MiB fill the aperture");
@@ -176,6 +189,16 @@ static void pinned_and_active(void)
     CHECK(pin_whole(object(&file_a, h), I915_PIN_MAPPABLE | I915_PIN_NONBLOCK, &v) == -ENOSPC &&
               whole(a) == va && whole(b) == vb && idle_waits == 0,
           "pinned: without a wait, a pinned binding and an active one stay, the bind ENOSPC");
+    CHECK(map(&file_a, h, I915_MMAP_OFFSET_GTT, SET_PAGES, &gtt) == 0, "pinned: a GTT map");
+    idle_intr = 1;
+    idle_waits = 0;
+    CHECK(fault_code(&gtt, 0) == 1 && idle_waits == 1 && !object(&file_a, h)->vmas &&
+              !dma_fence_is_signaled(f) && whole(b) == vb && whole(a) == va,
+          "pinned: a GTT fault's wait for the GPU ends at a signal, the access to run again as "
+          "Linux's, nothing moved");
+    idle_intr = 0;
+    idle_waits = 0;
+    unmap(&gtt);
     idle_signals = f;
     CHECK(pin_whole(object(&file_a, h), I915_PIN_MAPPABLE, &v) == 0 && idle_waits == 1 &&
               dma_fence_is_signaled(f) && !b->vmas && whole(a) == va,
@@ -468,7 +491,16 @@ static void userptr_refusals(void)
     CHECK(userptr(m, 0, 0, &h) == -EINVAL, "userptr: no bytes, EINVAL");
     CHECK(userptr(m + 16, 4096, 0, &h) == -EINVAL && userptr(m, 100, 0, &h) == -EINVAL,
           "userptr: not whole pages, EINVAL");
-    CHECK(userptr(0, 4096, 0, &h) == -EFAULT, "userptr: outside user space, EFAULT");
+    CHECK(userptr((uintptr_t)-4096, 8192, 0, &h) == -EFAULT,
+          "userptr: a range that wraps past user space, EFAULT");
+    CHECK(userptr(m, SHMEM_MAX_SIZE + 4096u, 0, &h) == -E2BIG,
+          "userptr: a size past what an object holds, E2BIG");
+    CHECK(userptr(0, 4096, I915_USERPTR_PROBE, &h) == -EFAULT,
+          "userptr: PROBE of a pointer of 0, EFAULT");
+    CHECK(userptr(0, 4096, 0, &h) == 0 && h, "userptr: a pointer of 0 without PROBE, as Linux's");
+    CHECK(domain(&file_a, h, I915_GEM_DOMAIN_CPU, 0) == -EFAULT,
+          "userptr: and its first use, EFAULT, as IGT's invalid-null-pointer expects");
+    close_handle(&file_a, h);
     CHECK(userptr(m, 4096, I915_USERPTR_UNSYNCHRONIZED, &h) == -ENODEV,
           "userptr: UNSYNCHRONIZED, ENODEV as Linux 6.12 for everyone");
     CHECK(userptr(m, 4096, I915_USERPTR_READ_ONLY, &h) == -ENODEV,
@@ -542,10 +574,100 @@ static int gtt_clear(uint64_t start)
     return 1;
 }
 
+/* The object another thread pins while this one's pin sleeps. */
+static struct drm_i915_gem_object *raced_obj;
+
+/** Another thread's pin of `raced_obj`'s pages. */
+static void pin_raced(void)
+{
+    CHECK(i915_gem_object_pin_pages(raced_obj) == 0, "race: the other thread's pin");
+}
+
+/** Another thread's DONTNEED on `raced_obj` and the reclaim that purges
+ * it. */
+static void purge_raced(void)
+{
+    raced_obj->madv = I915_MADV_DONTNEED;
+    (void)i915_gem_object_truncate(raced_obj);
+}
+
+/**
+ * Two pins of one object's pages while reclaim sleeps: the second counts
+ * one more pin on the first's pages, and nothing leaks; an object purged
+ * meanwhile gets no pages.
+ */
+static void pin_raced_reclaim(void)
+{
+    uint32_t h = create(&file_a, 0x4000);
+    int pins = pins_live, frames = frames_live;
+
+    raced_obj = object(&file_a, h);
+    balance_sleep = pin_raced;
+    CHECK(i915_gem_object_pin_pages(raced_obj) == 0 && raced_obj->pages_pin_count == 2 &&
+              pins_live == pins + 1 && frames_live == frames + 4,
+          "race: a pin while reclaim sleeps counts one more on the first pages, nothing leaked");
+    i915_gem_object_unpin_pages(raced_obj);
+    i915_gem_object_unpin_pages(raced_obj);
+    close_handle(&file_a, h);
+    CHECK(pins_live == pins && frames_live == frames, "race: closed, every page and pin gone");
+
+    h = create(&file_a, 0x4000);
+    raced_obj = object(&file_a, h);
+    balance_sleep = purge_raced;
+    CHECK(i915_gem_object_pin_pages(raced_obj) == -EFAULT && !raced_obj->frames &&
+              raced_obj->madv == __I915_MADV_PURGED && pins_live == pins && frames_live == frames,
+          "race: purged while reclaim sleeps, EFAULT and no pages");
+    close_handle(&file_a, h);
+}
+
+/** Another thread's pin of the userptr object `raced_obj` while this
+ * one's pin of the range sleeps. */
+static void pin_userptr_raced(void)
+{
+    CHECK(i915_gem_object_pin_pages(raced_obj) == 0, "userptr: the other thread's pin");
+}
+
 /** Another thread's mprotect while the pin sleeps. */
 static void protect_during_pin(void)
 {
     mmn_notify(&user_mm, MMN_PROTECT, (uintptr_t)user_mem, (uintptr_t)user_mem + 4096u);
+}
+
+/**
+ * A userptr object's pages, pinned: a second pin while the first sleeps
+ * counts one more on its frames, and a change while the GPU uses the
+ * object keeps its binding and frames until the next use waits for the GPU.
+ */
+static void userptr_raced(struct drm_i915_gem_object *obj, uint32_t h)
+{
+    uintptr_t m = (uintptr_t)user_mem;
+    struct i915_vma *v = 0;
+    struct dma_fence *f;
+    uint64_t start;
+
+    /* Two pins of the range, the second while the first sleeps. */
+    mmn_notify(&user_mm, MMN_PROTECT, m, m + 0x10000);
+    raced_obj = obj;
+    pin_sleep = pin_userptr_raced;
+    CHECK(i915_gem_object_pin_pages(obj) == 0 && obj->pages_pin_count == 2 && user_pins == 16,
+          "userptr: a pin while another sleeps counts one more on its frames, none leaked");
+    i915_gem_object_unpin_pages(obj);
+    i915_gem_object_unpin_pages(obj);
+
+    /* An unmap while the GPU uses the object: its binding and frames stay
+     * until the work is done, and go at the next use. */
+    CHECK(pin_whole(obj, 0, &v) == 0, "userptr: bound for a batch");
+    start = v->start;
+    drop_pin(&v);
+    f = busy_fence(obj);
+    mmn_notify(&user_mm, MMN_PROTECT, m, m + 0x10000);
+    CHECK(obj->vmas && !gtt_clear(start) && obj->userptr.stale && user_pins == 16,
+          "userptr: a change while the GPU uses it keeps the binding and the frames");
+    signal_on_wait = f;
+    CHECK(domain(&file_a, h, I915_GEM_DOMAIN_CPU, 0) == 0 && dma_fence_is_signaled(f) &&
+              !obj->vmas && gtt_clear(start) && !obj->userptr.stale && user_pins == 16,
+          "userptr: the next use waits for the GPU, undoes the binding and pins anew");
+    dma_fence_put(f);
 }
 
 /**
@@ -609,6 +731,8 @@ static void userptr_pages(void)
     CHECK(domain(&file_a, h, I915_GEM_DOMAIN_CPU, 0) == 0 && user_pins == 16 && obj->frames,
           "userptr: an mprotect during the pin, pinned again");
 
+    userptr_raced(obj, h);
+
     /* Another address space may not pin it. */
     mmn_notify(&user_mm, MMN_COW, m, m + 4096u);
     CHECK(user_pins == 0, "userptr: a copy-on-write break lets the frames go");
@@ -642,6 +766,33 @@ static void userptr_pages(void)
 }
 
 /** Run every row: 0 when each passed. */
+/* ---- RPS's waitboost and interactive mode, which the driver calls ---- */
+
+/** Whether the chip has begun `rq`; no request runs here, so only once
+ * it has signalled. */
+int i915_request_started(const struct i915_request *rq)
+{
+    return rq->fence.base.signaled;
+}
+
+/** The waitboost, RPS's, which no row here measures. */
+void i915_rps_boost(struct i915_request *rq)
+{
+    (void)rq;
+}
+
+/** A wait for a request, which here is its fence alone: the fence's default
+ * wait until the timeout, for ever when it is negative. */
+int32_t i915_request_wait(struct i915_request *rq, uint32_t flags, int64_t timeout_ns)
+{
+    return dma_fence_default_wait(&rq->fence.base, (flags & I915_WAIT_INTERRUPTIBLE) != 0,
+                                  timeout_ns < 0 ? -1 : dma_fence_now() + timeout_ns);
+}
+
+/* The driver's fences, i915_request.c's; no fence here is a request whose
+ * breadcrumb a chip writes, so each signals only when a row signals it. */
+const struct dma_fence_ops i915_fence_ops = {0, 0, 0, 0, 0, 0};
+
 int main(void)
 {
     int before;
@@ -656,6 +807,7 @@ int main(void)
     get_aperture();
     madvise_states();
     pressure();
+    pin_raced_reclaim();
     user_space();
     userptr_refusals();
     userptr_calls();

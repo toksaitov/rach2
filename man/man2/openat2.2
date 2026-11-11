@@ -1,0 +1,240 @@
+.Dd November 11, 2026
+.Dt OPENAT2 2
+.Os
+.Sh NAME
+.Nm openat2
+.Nd open a file, with limits on how its path is resolved
+.Sh SYNOPSIS
+.In linux/openat2.h
+.Ft long
+.Fn syscall SYS_openat2 "int dirfd" "const char *path" "struct open_how *how" "size_t size"
+.Sh DESCRIPTION
+.Fn openat2
+opens
+.Fa path
+as
+.Xr openat 2
+does, with the flags and mode in
+.Fa how ,
+which is
+.Fa size
+bytes long, and with the limits its
+.Va resolve
+member sets on the walk of the path.
+.Bd -literal -offset indent
+struct open_how {
+    uint64_t flags;   /* O_ flags, as openat(2) takes them */
+    uint64_t mode;    /* the new file's mode, with O_CREAT or O_TMPFILE */
+    uint64_t resolve; /* RESOLVE_ flags */
+};
+.Ed
+.Pp
+The structure is 24 bytes and is the same for i386 and x86-64.
+A larger
+.Fa size
+is accepted, up to a page, if the bytes past the 24 are zero, so that a
+program built for a later version of the structure runs.
+.Pp
+Unlike
+.Xr openat 2 ,
+.Fn openat2
+refuses a flag it does not know, a mode without
+.Dv O_CREAT
+or
+.Dv O_TMPFILE ,
+and a mode bit above 07777.
+.Pp
+The
+.Va resolve
+flags are:
+.Bl -tag -width RESOLVE_NO_MAGICLINKS
+.It Dv RESOLVE_NO_XDEV
+Every name of the path is on the mount the walk starts on: the walk never
+crosses onto another mount, downward, by
+.Ql ..
+or by a link.
+A final descriptor link checks the mount of its target as well.
+.It Dv RESOLVE_NO_MAGICLINKS
+The walk follows no link of
+.Pa /proc
+that refers to an object instead of to a path: a descriptor's
+.Pa /proc/PID/fd/N ,
+a process's
+.Pa cwd ,
+.Pa root
+and
+.Pa exe ,
+and a namespace's link.
+.It Dv RESOLVE_NO_SYMLINKS
+The walk follows no link at all, those of
+.Pa /proc
+and the
+.Pa /proc/self
+component among them.
+.It Dv RESOLVE_BENEATH
+The walk stays under
+.Fa dirfd :
+an absolute path, an absolute link,
+.Ql ..
+at
+.Fa dirfd
+and a link of
+.Pa /proc
+to an object are refused.
+.It Dv RESOLVE_IN_ROOT
+Search permission is checked at the anchor and each directory below it.
+The walk treats
+.Fa dirfd
+as its root, as
+.Xr chroot 2
+would: an absolute path and an absolute link start there, and
+.Ql ..
+there stays there.
+A link of
+.Pa /proc
+to an object is refused.
+.It Dv RESOLVE_CACHED
+The walk takes only names the kernel's name cache already holds, and
+fails with
+.Er EAGAIN
+where it would read a directory, so that a caller can try a fast open
+first and do the slow one elsewhere.
+.El
+.Pp
+Under a
+.Va resolve
+flag, a rename or a mount anywhere in the system between the checked walk
+and the open of the path it reached makes the kernel walk again; after
+four such races in a row the call fails with
+.Er EAGAIN
+and the caller tries again.
+.Ss System call numbers
+The call is 437 on both i386 and x86-64.
+The x86-64 kernel adds
+.Dv O_LARGEFILE
+to every open but an
+.Dv O_PATH
+one, for an i386 program too, as Linux's 64-bit kernel does.
+.Sh RETURN VALUES
+The call returns the new descriptor, or \-1 with
+.Va errno
+set.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/openat2probe.c
+checks the size rules and the strict checks of the flags and the mode,
+and each
+.Va resolve
+flag on a tree of directories and links in tmpfs: a link and
+.Ql ..
+out of the directory under
+.Dv RESOLVE_BENEATH
+and
+.Dv RESOLVE_IN_ROOT ,
+a link through
+.Pa /proc/self/fd ,
+a crossing onto
+.Pa /proc ,
+and
+.Dv RESOLVE_CACHED
+for a name that is cached and for an open that would create.
+.Sh ERRORS
+.Fn openat2
+fails with the errors of
+.Xr openat 2
+and these:
+.Bl -tag -width Er
+.It Bq Er E2BIG
+.Fa size
+is larger than a page, or a byte of
+.Fa how
+past the 24 it knows is not zero.
+.It Bq Er EINVAL
+.Fa size
+is smaller than 24; a flag or a
+.Va resolve
+flag is unknown; both
+.Dv RESOLVE_BENEATH
+and
+.Dv RESOLVE_IN_ROOT
+are set; the mode is not zero without
+.Dv O_CREAT
+or
+.Dv O_TMPFILE ,
+or has a bit above 07777;
+.Dv O_CREAT
+is set with
+.Dv O_DIRECTORY ;
+or
+.Dv O_PATH
+is set with a flag but
+.Dv O_DIRECTORY ,
+.Dv O_NOFOLLOW
+and
+.Dv O_CLOEXEC .
+.It Bq Er EAGAIN
+.Dv RESOLVE_CACHED
+is set and a name is not in the cache, or the flags would create or
+truncate; or a rename or a mount raced a walk under any
+.Va resolve
+flag four times in a row, as STANDARDS says.
+.It Bq Er ELOOP
+.Dv RESOLVE_NO_SYMLINKS
+is set and the walk meets a link it would follow, or
+.Dv RESOLVE_NO_MAGICLINKS
+is set and it meets a link of
+.Pa /proc
+to an object.
+.It Bq Er EXDEV
+.Dv RESOLVE_BENEATH
+is set and the walk would leave
+.Fa dirfd ;
+.Dv RESOLVE_BENEATH
+or
+.Dv RESOLVE_IN_ROOT
+is set and the walk meets a link of
+.Pa /proc
+to an object; or
+.Dv RESOLVE_NO_XDEV
+is set and the walk would cross onto another mount.
+.It Bq Er EFAULT
+.Fa how
+or
+.Fa path
+is outside the caller's memory.
+.El
+.Sh SEE ALSO
+.Xr chroot 2 ,
+.Xr open 2 ,
+.Xr openat 2
+.Sh STANDARDS
+The call is Linux's, and its rules are those of Linux 6.12.
+musl does not wrap it; a program calls it through
+.Xr syscall 2 .
+.Pp
+The kernel checks a walk under a
+.Va resolve
+flag first, and then opens the path that walk reached, which has no
+link and no
+.Ql ..
+left in it; if a rename or a mount changes the tree between the two, it
+walks again, four times in all, before it fails with
+.Er EAGAIN
+even for a flag Linux gives that error only under
+.Dv RESOLVE_BENEATH
+and
+.Dv RESOLVE_IN_ROOT .
+A link whose target climbs with
+.Ql ..
+from a directory of
+.Pa /proc ,
+.Pa /dev
+or
+.Pa /sys
+under
+.Dv RESOLVE_BENEATH
+or
+.Dv RESOLVE_IN_ROOT
+fails with
+.Er EXDEV ,
+where Linux may follow it.

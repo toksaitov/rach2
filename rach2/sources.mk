@@ -41,6 +41,9 @@ C_SRC_SHARED = kernel.c \
     sys/evdev_sysfs.c \
     sys/rfkill.c \
     sys/panic.c \
+    sys/pstore/inode.c \
+    sys/pstore/ram.c \
+    sys/pstore/ram_core.c \
     sys/block/block.c \
     sys/block/chain.c \
     sys/block/loop.c \
@@ -101,6 +104,7 @@ C_SRC_SHARED = kernel.c \
     sys/proc/exit.c \
     sys/proc/child_signal.c \
     sys/proc/sched.c \
+    sys/proc/waketime.c \
     sys/proc/smp.c \
     sys/proc/suspend.c \
     sys/proc/wait_queue.c \
@@ -113,6 +117,7 @@ C_SRC_SHARED = kernel.c \
     sys/proc/kcmp.c \
     sys/proc/process_vm.c \
     sys/proc/rseq.c \
+    sys/proc/membarrier.c \
     sys/ipc/pipe.c \
     sys/ipc/pipe_ring.c \
     sys/ipc/unix.c \

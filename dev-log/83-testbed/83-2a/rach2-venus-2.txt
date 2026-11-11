@@ -1,0 +1,17 @@
+run: bed-forward: machine.bed-forward.venus: starting
+@etude 1 begin machine.bed-forward.venus
+@etude 1 progress stage 1
+@etude 1 progress stage 2
+@etude 1 assert drawn pass
+bed-forward: start: qemu-system-x86_64 -accel tcg -cpu max -smp 4 -m 4096 -device virtio-vga-gl,edid=on,xres=1280,yres=800,venus=on,blob=on,hostmem=4G -display egl-headless,rendernode=/dev/dri/renderD128
+bed-forward: guest: SSH answered after 40 s
+bed-forward: vulkan: Virtio-GPU Venus (Virtio-GPU Venus (llvmpipe (LLVM 21.1.8, 256 bits)))
+bed-forward: weston: virgl (virgl (LLVMPIPE (LLVM 21.1.8, 256 bits)))
+bed-forward: vkcube: result: frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 8.882 s, 33.78 a second
+bed-forward: result: pass: venus: Virtio-GPU Venus (Virtio-GPU Venus (llvmpipe (LLVM 21.1.8, 256 bits))); frames 300 0x75d4ad32 345 0x1a0d31d7; 300 presents in 8.882 s, 33.78 a second
+@etude 1 progress stage 3
+@etude 1 progress stage 4
+@etude 1 end 1
+etude check: result: unchanged: 6 files
+etude run: result: ran: 1 suites, 1 passed
+run: bed-forward: PASS in 152s

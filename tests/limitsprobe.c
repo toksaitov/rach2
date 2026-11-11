@@ -186,7 +186,7 @@ PROBE_RT_RESTORER(lp_restorer);
 long lp_cs_run(u64 *field, struct rseq_cs *cs, long pid);
 extern char lp_cs_start[], lp_cs_post[], lp_cs_abort[];
 #if defined __x86_64__
-__asm__(".text\n"
+__asm__(".pushsection .text\n"
         ".globl lp_cs_run\n"
         "lp_cs_run:\n"
         "    movq %rsi, (%rdi)\n"
@@ -204,9 +204,10 @@ __asm__(".text\n"
         ".globl lp_cs_abort\n"
         "lp_cs_abort:\n"
         "    movl $1, %eax\n"
-        "    ret\n");
+        "    ret\n"
+        ".popsection\n");
 #else
-__asm__(".text\n"
+__asm__(".pushsection .text\n"
         ".globl lp_cs_run\n"
         "lp_cs_run:\n"
         "    movl 4(%esp), %ecx\n"
@@ -230,7 +231,8 @@ __asm__(".text\n"
         "lp_cs_abort:\n"
         "    popl %ebx\n"
         "    movl $1, %eax\n"
-        "    ret\n");
+        "    ret\n"
+        ".popsection\n");
 #endif
 
 /** End the process with `status`; it does not return. */

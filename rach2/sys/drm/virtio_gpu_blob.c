@@ -1,8 +1,10 @@
 /*
  * virtio_gpu_blob.c: virtio-gpu's blob resources, Linux 6.12's: blobs of
  * guest memory, host memory or both, the host-visible region that MAP_BLOB
- * places host memory in for programs to map, and CONTEXT_INIT, which gives
- * a file's context its capability set, its rings and its name.
+ * places host memory in for programs to map, or the device's own pages
+ * that MAP_BLOB names where the transport has no such region, and
+ * CONTEXT_INIT, which gives a file's context its capability set, its rings
+ * and its name.
  */
 #include "virtio_gpu.h"
 #include "../dmabuf/dmabuf.h"
@@ -12,6 +14,12 @@
 #include "../mm/kheap.h"
 #include "../mm/paging.h"
 #include "../mm/usercopy.h"
+#include "../virtio/vgpushm.h"
+
+/* The bytes of MAP_BLOB's inline answer, and the runs of a page list one
+ * answer holds after its heads. */
+#define VGPU_MAP_ANSWER (PAGE_SIZE - VIRTIO_GPU_RESP_OFF)
+#define VGPU_MAP_RUNS   ((VGPU_MAP_ANSWER - VGS_PAGES_OFF) / sizeof(struct vgs_run))
 
 /* The highest capability set id CONTEXT_INIT takes, and the most of its
  * parameters one call gives, Linux's. */
@@ -33,6 +41,12 @@ void vgpu_hostmem_init(struct virtio_gpu_device *vg)
 {
     uint64_t addr, len;
 
+    if (vg->vdev->pages && vg->has_blob) {
+        vg->has_host_visible = 1;
+        vg->host_pages = 1;
+        klog(KLOG_INFO, "virtio_gpu", "host memory: the device's own pages, by MAP_BLOB");
+        return;
+    }
     if (virtio_shm_region(vg->vdev, VIRTIO_GPU_SHM_ID_HOST_VISIBLE, &addr, &len) != 0) {
         return;
     }
@@ -75,11 +89,12 @@ static int32_t hostmem_place(struct virtio_gpu_device *vg, struct virtio_gpu_obj
 }
 
 /** Take away the kernel's window onto `bo`'s piece, if any, and give the
- * piece back to the region. */
+ * piece back to the region, or let go of the device's pages it maps. */
 void vgpu_blob_release(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
 {
     struct virtio_gpu_object **p;
 
+    vgpu_blob_pages_drop(vg, bo);
     if (bo->vmap) {
         mmio_unmap(bo->vmap, (size_t)bo->shmem.base.size);
         bo->vmap = 0;
@@ -93,6 +108,143 @@ void vgpu_blob_release(struct virtio_gpu_device *vg, struct virtio_gpu_object *b
         *p = bo->hv_next;
     }
     bo->host_visible = 0;
+}
+
+/**
+ * The transport took the frames of `bo`'s page list back, the device's
+ * memory having changed or its VM gone: every program's mapping of the blob
+ * goes, and the next touch of one raises SIGBUS, as a revoked mapping does
+ * on Linux. Under the big lock; does not sleep.
+ */
+static void pages_revoked(void *owner)
+{
+    struct virtio_gpu_object *bo = (struct virtio_gpu_object *)owner;
+
+    paging_zap_device(&bo->shmem.base, 0, (uint32_t)(bo->shmem.base.size >> PAGE_SHIFT));
+    bo->map_ok = 0;
+}
+
+void vgpu_blob_pages_drop(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
+{
+    if (!bo->pages_map) {
+        return;
+    }
+    paging_zap_device(&bo->shmem.base, 0, (uint32_t)(bo->shmem.base.size >> PAGE_SHIFT));
+    virtio_map_free(vg->vdev, bo->pages_map);
+    bo->pages_map = NULL;
+    bo->map_ok = 0;
+}
+
+/* A page list as its answers come: the runs so far, which cover the blob's
+ * pages below `first` of its `total`, and the first answer's cache type. */
+struct pages_gather {
+    uint64_t total, first;
+    uint32_t info, n;
+    struct virtio_run *runs; /* `n` of them */
+};
+
+/**
+ * Add the runs of one answer of a page list, `got` bytes at `answer`, to
+ * those `g` gathered: the heads checked against the blob and the request,
+ * each run checked alone, and the cache type the same as the first
+ * answer's. 0, or -EIO for an answer that breaks a rule, -ENOMEM.
+ */
+static int32_t pages_take(const uint8_t *answer, uint32_t got, struct pages_gather *g)
+{
+    struct vgs_pages head;
+    struct vgs_run run;
+    struct virtio_run *more;
+    uint64_t left;
+    uint32_t i;
+
+    if (got < VGS_PAGES_OFF) {
+        return -EIO;
+    }
+    k_memcpy(&head, answer + 24, sizeof(head));
+    if (vgs_check_pages(&head, got, g->total, g->first, &left) != VGS_OK ||
+        head.count > VGPU_MAP_RUNS || (g->first != 0 && head.map_info != g->info)) {
+        return -EIO;
+    }
+    g->info = head.map_info;
+    more = (struct virtio_run *)kmalloc(((size_t)g->n + head.count) * sizeof(*more));
+    if (!more) {
+        return -ENOMEM;
+    }
+    if (g->n) {
+        k_memcpy(more, g->runs, (size_t)g->n * sizeof(*more));
+    }
+    kfree(g->runs);
+    g->runs = more;
+    for (i = 0; i < head.count; i++) {
+        k_memcpy(&run, answer + VGS_PAGES_OFF + i * sizeof(run), sizeof(run));
+        if (vgs_check_run(&run, left) != VGS_OK) {
+            return -EIO;
+        }
+        more[g->n].addr = run.addr;
+        more[g->n].pages = run.pages;
+        g->n++;
+        left -= run.pages;
+        g->first += run.pages;
+    }
+    return 0;
+}
+
+/**
+ * RESOURCE_MAP_BLOB on a device that maps blobs from its own pages: the
+ * page list asked for from the first page on, and from the page after its
+ * last run again until it covers `bo`, then its frames held through the
+ * transport. The device pins the blob's pages at its first answer and lets
+ * them go at UNMAP_BLOB, which the free sends once any answer came. 0; the
+ * answer's error, -EIO for a list that breaks the transport's rules,
+ * -EFAULT for pages the transport cannot share, -ENOMEM, -ETIMEDOUT. May
+ * sleep.
+ */
+static int32_t blob_map_pages(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo)
+{
+    struct pages_gather g;
+    struct virtio_gpu_resource_map_blob *req;
+    struct virtio_gpu_cmd *cmd;
+    uint32_t got;
+    uint8_t *answer = (uint8_t *)kmalloc(VGPU_MAP_ANSWER);
+    int32_t rc = answer ? 0 : -ENOMEM;
+
+    k_memset(&g, 0, sizeof(g));
+    g.total = bo->shmem.base.size >> PAGE_SHIFT;
+    while (rc == 0 && g.first < g.total) {
+        cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB, sizeof(*req));
+        if (!cmd) {
+            rc = -ENOMEM;
+            break;
+        }
+        req = (struct virtio_gpu_resource_map_blob *)(void *)cmd->page;
+        req->resource_id = bo->res_id;
+        req->offset = g.first;
+        rc = vgpu_cmd_send_wait_map(cmd, answer, VGPU_MAP_ANSWER, &got);
+        if (rc == 0 || rc == -ETIMEDOUT) {
+            bo->host_visible = 1; /* the device may hold the pages: UNMAP_BLOB at the free */
+        }
+        if (rc == 0 && ((const struct virtio_gpu_ctrl_hdr *)(const void *)answer)->type !=
+                           VIRTIO_GPU_RESP_OK_MAP_INFO) {
+            rc = -EIO;
+        }
+        if (rc == 0) {
+            rc = pages_take(answer, got, &g);
+        }
+    }
+    if (rc == 0) {
+        rc = virtio_map_pages(vg->vdev, g.runs, g.n, pages_revoked, bo, &bo->pages_map);
+    }
+    if (rc == 0) {
+        bo->map_info = g.info & VIRTIO_GPU_MAP_CACHE_MASK;
+        bo->map_ok = 1;
+        bo->shmem.base.map_wc = bo->map_info == VIRTIO_GPU_MAP_CACHE_WC;
+    } else {
+        klog(KLOG_WARN, "virtio_gpu", "resource %u: refused: its page list: error %d",
+             (unsigned)bo->res_id, (int)rc);
+    }
+    kfree(g.runs);
+    kfree(answer);
+    return rc;
 }
 
 /**
@@ -113,6 +265,9 @@ static int32_t blob_map(struct virtio_gpu_device *vg, struct virtio_gpu_object *
     if (!vg->has_host_visible) {
         return -EINVAL;
     }
+    if (vg->host_pages) {
+        return blob_map_pages(vg, bo);
+    }
     cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB, sizeof(*req));
     if (!cmd) {
         return -ENOMEM;
@@ -125,7 +280,7 @@ static int32_t blob_map(struct virtio_gpu_device *vg, struct virtio_gpu_object *
     req = (struct virtio_gpu_resource_map_blob *)(void *)cmd->page;
     req->resource_id = bo->res_id;
     req->offset = bo->hv_offset;
-    rc = vgpu_cmd_send_wait(cmd, &info, sizeof(info));
+    rc = vgpu_cmd_send_wait_map(cmd, &info, sizeof(info), NULL);
     if (rc == 0 && info.hdr.type != VIRTIO_GPU_RESP_OK_MAP_INFO) {
         rc = -EIO;
     }
@@ -168,8 +323,8 @@ int32_t vgpu_blob_unmap(struct virtio_gpu_device *vg, struct virtio_gpu_object *
  */
 
 /** The physical address of page `pgoff` of a mapped blob of host memory,
- * or 0 when it has none there: past its end, not mapped, or its device
- * gone. */
+ * or 0 when it has none there: past its end, not mapped, its pages taken
+ * back or its device gone. */
 static uintptr_t host_phys(struct virtio_gpu_object *bo, uint32_t pgoff)
 {
     struct virtio_gpu_device *vg = vgpu_device(bo->shmem.base.dev);
@@ -177,6 +332,9 @@ static uintptr_t host_phys(struct virtio_gpu_object *bo, uint32_t pgoff)
     if (bo->shmem.base.dev->unplugged || !bo->map_ok ||
         (uint64_t)pgoff >= bo->shmem.base.size >> PAGE_SHIFT) {
         return 0;
+    }
+    if (bo->pages_map) {
+        return virtio_map_frame(vg->vdev, bo->pages_map, pgoff);
     }
     return (uintptr_t)(vg->hostmem_addr + bo->hv_offset + ((uint64_t)pgoff << PAGE_SHIFT));
 }
@@ -200,7 +358,7 @@ static void host_vm_put(void *obj)
     drm_gem_object_put((struct drm_gem_object *)obj);
 }
 
-static const struct vm_device_ops host_vm_ops = {host_vm_page, host_vm_put};
+static const struct vm_device_ops host_vm_ops = {host_vm_page, host_vm_put, NULL};
 
 /**
  * The `mmap` of a blob of host memory, Linux's virtio_gpu_vram_mmap: the
@@ -225,9 +383,13 @@ static int32_t host_mmap(struct drm_gem_object *obj, vma_t *vma)
     return vm_device_map(vma, &host_vm_ops, obj, cache);
 }
 
-/** A blob's page for a PRIME importer, or 0. */
+/** A blob's page for a PRIME importer, or 0: none of a blob mapped from
+ * the device's pages, whose taking back would not reach an importer. */
 static uintptr_t host_page(struct drm_gem_object *obj, uint32_t pgoff)
 {
+    if (((struct virtio_gpu_object *)obj)->pages_map) {
+        return 0;
+    }
     return host_phys((struct virtio_gpu_object *)obj, pgoff);
 }
 
@@ -235,7 +397,9 @@ static uintptr_t host_page(struct drm_gem_object *obj, uint32_t pgoff)
  * The kernel's address of a mapped blob: a window of the MMIO region onto
  * its piece of the host-visible region alone, made at the first call with
  * the host's cache type and kept until the blob is freed. NULL when it is
- * not mapped or the region has no room for it.
+ * not mapped, the region has no room for it, or it is mapped from the
+ * device's pages, which have no window, as Linux's blobs of host memory
+ * have no vmap.
  */
 static volatile uint8_t *host_vmap(struct drm_gem_object *obj)
 {
@@ -243,7 +407,7 @@ static volatile uint8_t *host_vmap(struct drm_gem_object *obj)
     struct virtio_gpu_device *vg = vgpu_device(obj->dev);
     pte_t cache = 0;
 
-    if (!bo->map_ok || obj->dev->unplugged) {
+    if (!bo->map_ok || obj->dev->unplugged || bo->pages_map) {
         return NULL;
     }
     if (!bo->vmap) {
@@ -323,10 +487,13 @@ static int32_t blob_commands(struct virtio_gpu_device *vg, uint32_t ctx_id, uint
 }
 
 /**
- * Send `bo`'s RESOURCE_CREATE_BLOB under resource id `id`, with its pages'
- * entries for a blob with guest memory, and wait for the answer. The host
- * has the id once this returns 0, or -ETIMEDOUT, when it may yet; on any
- * other error it does not. May sleep.
+ * Queue `bo`'s RESOURCE_CREATE_BLOB under resource id `id`, with its pages'
+ * entries for a blob with guest memory, without a wait, as Linux's
+ * virtio_gpu_cmd_resource_create_blob, and put its fence in the object's
+ * reservation. Once queued, `bo` has the id, which its UNREF undoes, and
+ * an error answer is logged. 0, or the entries' -ENOMEM, -EINVAL or -E2BIG
+ * with nothing queued and no id given, or the reservation's -ENOMEM after
+ * the queueing. May sleep.
  */
 static int32_t blob_create_cmd(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo,
                                const struct drm_virtgpu_resource_create_blob *a, uint32_t ctx_id,
@@ -356,7 +523,11 @@ static int32_t blob_create_cmd(struct virtio_gpu_device *vg, struct virtio_gpu_o
     req->nr_entries = n;
     req->blob_id = a->blob_mem == VIRTGPU_BLOB_MEM_GUEST ? 0 : a->blob_id;
     req->size = bo->shmem.base.size;
-    return vgpu_cmd_send_wait(cmd, NULL, 0);
+    vgpu_cmd_prepare(cmd);
+    rc = dma_resv_add_fence(bo->shmem.base.resv, cmd->fence, 1);
+    vgpu_cmd_send(cmd, NULL, NULL);
+    bo->res_id = id;
+    return rc;
 }
 
 /** The answer to ASSIGN_UUID: the blob's UUID, kept, and the hold on the
@@ -421,9 +592,7 @@ static struct virtio_gpu_object *blob_create(struct virtio_gpu_device *vg,
     bo->blob_flags = a->blob_flags;
     id = vgpu_res_id_get(vg);
     *err = id ? blob_create_cmd(vg, bo, a, ctx_id, id) : -ENOSPC;
-    if (*err == 0 || *err == -ETIMEDOUT) {
-        bo->res_id = id;
-    } else if (id) {
+    if (id && !bo->res_id) {
         vgpu_res_id_put(vg, id);
     }
     if (*err == 0 && a->blob_mem == VIRTGPU_BLOB_MEM_HOST3D &&

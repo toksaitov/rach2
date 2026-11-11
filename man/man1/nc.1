@@ -35,7 +35,11 @@ A reply that spans several reads is printed one read for each chunk of
 input, and what the peer sends after the end of input is not read.
 Both output paths complete partial writes.
 A read that returns 0 or fails ends the transfer with status 0;
-a write failure ends it with status 1.
+a write failure ends it with status 1, a write to a connection the peer
+reset or to a pipe with no reader among them, since
+.Nm
+ignores
+.Dv SIGPIPE .
 .Pp
 The host is an IPv4 address or a name resolved as described in
 .Xr ping 1 .

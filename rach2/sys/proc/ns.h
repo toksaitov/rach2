@@ -245,12 +245,15 @@ int64_t gid_named(uint32_t id);
 /**
  * The PID of the process or thread whose kernel id is `kid` as the current
  * process sees it: its number in the current PID namespace, 0 when it is
- * not in that namespace or below it.
+ * not in that namespace or below it. A reaped process's id that a group or
+ * a session still has reads as the process's number did.
  */
 uint32_t pid_seen(uint32_t kid);
 
 /** The kernel id of the process or thread the current process names `pid`,
- * 0 for none it can see; `pid` itself in the first PID namespace. */
+ * or of the reaped process whose id a group or a session still has, as
+ * Linux's find_vpid finds it; 0 for none it can see; `pid` itself in the
+ * first PID namespace. */
 uint32_t pid_named(uint32_t pid);
 
 /** The process or thread the current process names `pid`, as `pid_named`
@@ -282,14 +285,19 @@ void ns_release(process_t *p);
 void ns_exec(process_t *p);
 
 /* The capabilities Linux names, 0 to CAP_LAST_CAP, in two words: the second
- * has the nine above 31. CAP_SETPCAP controls PR_CAPBSET_DROP,
- * CAP_SYS_CHROOT controls chroot, and CAP_SYS_ADMIN controls namespace
- * operations and global privilege (`nocaps` in process.h). */
-#define CAP_LAST_CAP   40
-#define CAP_HIGH_WORD  0x1FFu
-#define CAP_SETPCAP    8
-#define CAP_SYS_CHROOT 18
-#define CAP_SYS_ADMIN  21
+ * has the nine above 31. CAP_DAC_OVERRIDE and CAP_DAC_READ_SEARCH pass a
+ * file's mode bits where a check of them is written out, CAP_SETPCAP
+ * controls PR_CAPBSET_DROP, CAP_SYS_CHROOT controls chroot, and
+ * CAP_SYS_ADMIN controls namespace operations and global privilege
+ * (`nocaps` in process.h); CAP_SYS_TTY_CONFIG controls vhangup. */
+#define CAP_LAST_CAP        40
+#define CAP_HIGH_WORD       0x1FFu
+#define CAP_DAC_OVERRIDE    1
+#define CAP_DAC_READ_SEARCH 2
+#define CAP_SETPCAP         8
+#define CAP_SYS_CHROOT      18
+#define CAP_SYS_ADMIN       21
+#define CAP_SYS_TTY_CONFIG  26
 
 /**
  * Whether `p`'s ids give it the capabilities it has not lost: its
@@ -300,14 +308,35 @@ void ns_exec(process_t *p);
 int cap_ids(const process_t *p);
 
 /**
- * Word `i` of the capabilities `p` holds, its effective and permitted sets
- * alike: those it has not lost (`cap_lost`) when its ids give them
- * (`cap_ids`) or an exec gave it its ambient set (`amb_granted`); none
- * otherwise.
+ * Word `i` of the capabilities `p` holds by its effective user id, its
+ * permitted set and, but for the capabilities of CAP_FS_SET
+ * (`cap_eff_word`), its effective one: those it has not lost (`cap_lost`)
+ * when its ids give them (`cap_ids`) or an exec gave it its ambient set
+ * (`amb_granted`); none otherwise.
  */
 uint32_t cap_word(const process_t *p, uint32_t i);
 
-/** Whether `p` holds the capability `cap`, 0 to CAP_LAST_CAP. */
+/* Linux's CAP_FS_SET in the two words: the capabilities that go by the
+ * file-system user id, CAP_CHOWN (0), CAP_DAC_OVERRIDE (1),
+ * CAP_DAC_READ_SEARCH (2), CAP_FOWNER (3), CAP_FSETID (4),
+ * CAP_LINUX_IMMUTABLE (9), CAP_MKNOD (27) and CAP_MAC_OVERRIDE (32). */
+#define CAP_FS_WORD0 0x0800021Fu
+#define CAP_FS_WORD1 0x1u
+
+/**
+ * Word `i` of `p`'s effective set: `cap_word`, with the capabilities of
+ * CAP_FS_SET by the file-system user id in place of the effective one, as
+ * Linux's `cap_task_fix_setuid` moves them for setfsuid: those `p` has not
+ * lost while that id is root in its user namespace, and none once
+ * setfsuid has taken it from root while the effective id stayed there, nor
+ * while PROC_FSCAPS_OFF holds them out after a call that set user ids
+ * brought the file-system id back to root. A thread neither of whose ids
+ * is root keeps what `cap_word` gives.
+ */
+uint32_t cap_eff_word(const process_t *p, uint32_t i);
+
+/** Whether `p` holds the capability `cap`, 0 to CAP_LAST_CAP, in its
+ * effective set (`cap_eff_word`). */
 int cap_holds(const process_t *p, uint32_t cap);
 
 /** Make `lost0` and `lost1` the capabilities `p` has lost, `cap_lost`, and

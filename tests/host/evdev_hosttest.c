@@ -97,6 +97,14 @@ void input_get_repeat(int *delay_ms, int *period_ms)
     *period_ms = 33;
 }
 
+/** No keyboard here takes its keys through input.c. */
+int input_keyboard_release(struct evdev *dev, unsigned int keycode)
+{
+    (void)dev;
+    (void)keycode;
+    return 0;
+}
+
 /** Nothing to set. */
 void input_set_repeat(int delay_ms, int period_ms)
 {
@@ -207,6 +215,10 @@ int in_compat_syscall(void)
 #define KEY_A   30
 #define KEY_KP1 79
 
+/* LEDs beyond a keyboard's three. */
+#define LED_COMPOSE 3
+#define LED_MAIL    9
+
 /* The ioctls, by Linux's macros. */
 #define IOC(dir, nr, size) (((uint32_t)(dir) << 30) | ((uint32_t)(size) << 16) | ('E' << 8) | (nr))
 #define EVIOCGNAME(n)      IOC(IOC_READ, NR_GNAME, n)
@@ -214,6 +226,12 @@ int in_compat_syscall(void)
 #define EVIOCGUNIQ(n)      IOC(IOC_READ, NR_GUNIQ, n)
 #define EVIOCGPROP(n)      IOC(IOC_READ, NR_GPROP, n)
 #define EVIOCGKEY(n)       IOC(IOC_READ, NR_GKEY, n)
+#define EVIOCGLED(n)       IOC(IOC_READ, NR_GLED, n)
+#define EVIOCGKEYCODE      IOC(IOC_READ, NR_KEYCODE, 8)
+#define EVIOCSKEYCODE      IOC(IOC_WRITE, NR_KEYCODE, 8)
+#define EVIOCGKEYCODE_V2   IOC(IOC_READ, NR_KEYCODE, 40)
+#define EVIOCSKEYCODE_V2   IOC(IOC_WRITE, NR_KEYCODE, 40)
+#define EVIOCSFF(n)        IOC(IOC_WRITE, NR_SFF, n)
 #define EVIOCGBIT(t, n)    IOC(IOC_READ, NR_GBIT + (t), n)
 #define EVIOCGABS(a)       IOC(IOC_READ, NR_GABS + (a), sizeof(struct input_absinfo))
 #define EVIOCSABS(a, n)    IOC(IOC_WRITE, NR_SABS + (a), n)
@@ -275,6 +293,34 @@ static struct evdev *mouse(void)
     evdev_set_capability(dev, EV_REL, REL_WHEEL);
     evdev_set_prop(dev, INPUT_PROP_POINTER);
     return dev;
+}
+
+/** A reserved slot is invisible until registration and remains owned
+ * while another device takes the next slot. */
+static void reservation_rows(void)
+{
+    struct evdev *reserved, *other;
+    struct evdev_desc d;
+    struct opened o;
+    uint8_t keys[EVDEV_KEY_BYTES];
+    uint32_t changes = evdev_changes();
+
+    k_memset(keys, 0, sizeof(keys));
+    reserved = evdev_reserve();
+    CHECK("reserve the first slot", reserved == &devices[0]);
+    CHECK("a reservation publishes neither a node nor a change",
+          !evdev_present(0) && !evdev_snapshot(0, &d) && evdev_changes() == changes &&
+              open_dev(&o, 0) == -ENODEV);
+    other = evdev_register("other", EVDEV_BUS_I8042, 2, 1, keys);
+    CHECK("another registration cannot take the reserved slot", other == &devices[1]);
+    CHECK("the reservation becomes a live device at its original slot",
+          evdev_register_reserved(reserved, "reserved", EVDEV_BUS_I8042, 2, 2, keys) == reserved &&
+              evdev_snapshot(0, &d) && strcmp(d.name, "reserved") == 0);
+    evdev_unregister(reserved);
+    evdev_unregister(other);
+    reserved = evdev_reserve();
+    evdev_unregister(reserved);
+    CHECK("an unused reservation can be released", !devices[0].used && !devices[1].used);
 }
 
 /** A mouse's capabilities, records and packets, the filters and an
@@ -356,6 +402,39 @@ static void motion_rows(void)
     evdev_close(&a.e);
     evdev_close(&b.e);
     evdev_unregister(dev);
+}
+
+/** The name, place and serial: copied at registration, cut to fit, and
+ * -ENODEV once the device has gone. */
+static void text_rows(void)
+{
+    uint8_t keys[EVDEV_KEY_BYTES];
+    char given[200], name[256];
+    struct evdev *dev;
+    struct opened a;
+
+    k_memset(keys, 0, sizeof(keys));
+    k_memset(given, 'n', sizeof(given) - 1);
+    given[sizeof(given) - 1] = '\0';
+    dev = evdev_register(given, EVDEV_BUS_USB, 1, 3, keys);
+    evdev_describe(dev, "usb-0000:00:14.0-1/input0", 0);
+    k_memset(given, 'x', 8);
+    open_dev(&a, 0);
+    CHECK("a long name is cut to 127 bytes and its terminator",
+          evdev_ioctl(&a.e, EVIOCGNAME(256), (uintptr_t)name) == EVDEV_NAME_MAX &&
+              strlen(name) == EVDEV_NAME_MAX - 1);
+    CHECK("the name is the device's copy, not the caller's buffer", name[0] == 'n');
+    CHECK("no serial is -ENOENT", evdev_ioctl(&a.e, EVIOCGUNIQ(64), (uintptr_t)name) == -ENOENT);
+    evdev_set_uniq(dev, "");
+    CHECK("an empty serial is one terminator",
+          evdev_ioctl(&a.e, EVIOCGUNIQ(64), (uintptr_t)name) == 1 && name[0] == '\0');
+    evdev_set_uniq(dev, "A1B2");
+    CHECK("a serial is given as set",
+          evdev_ioctl(&a.e, EVIOCGUNIQ(64), (uintptr_t)name) == 5 && strcmp(name, "A1B2") == 0);
+    evdev_unregister(dev);
+    CHECK("the name of a device gone is -ENODEV",
+          evdev_ioctl(&a.e, EVIOCGNAME(256), (uintptr_t)name) == -ENODEV);
+    evdev_close(&a.e);
 }
 
 /** EVIOCREVOKE: a revoked open reads -ENODEV while the others read on. */
@@ -775,6 +854,185 @@ static void write_keyboard_rows(void)
     evdev_unregister(kbd);
 }
 
+/** A device's LEDs beyond Num, Caps and Scroll Lock: lit by a write on
+ * that device alone, reported, and given by EVIOCGLED; and EV_KEY offered
+ * only by a device with keys. */
+static void led_rows(void)
+{
+    uint8_t keys[EVDEV_KEY_BYTES], bits[8], leds[2];
+    struct input_event ev[2];
+    struct opened a, b;
+    struct evdev *kbd, *pad;
+
+    k_memset(keys, 0, sizeof(keys));
+    pad = evdev_register("pad", EVDEV_BUS_USB, 1, 4, keys);
+    evdev_set_capability(pad, EV_REL, REL_X);
+    open_dev(&a, 0);
+    evdev_ioctl(&a.e, EVIOCGBIT(0, 8), (uintptr_t)bits);
+    CHECK("a device with no keys has no EV_KEY", bits[0] == (1u << EV_SYN | 1u << EV_REL));
+    evdev_close(&a.e);
+    evdev_unregister(pad);
+
+    keys[KEY_A >> 3] |= (uint8_t)(1u << (KEY_A & 7));
+    kbd = evdev_register("Keyboard", EVDEV_BUS_USB, 1, 5, keys);
+    evdev_describe(kbd, "usb-1/input0", EVDEV_SCAN | EVDEV_KEYBOARD);
+    evdev_set_capability(kbd, EV_LED, LED_COMPOSE);
+    evdev_set_capability(kbd, EV_LED, LED_MAIL);
+    open_dev(&a, 0);
+    open_dev(&b, 0);
+    n_written = 0;
+    event(&ev[0], EV_LED, LED_MAIL, 1);
+    event(&ev[1], EV_SYN, SYN_REPORT, 0);
+    put(&a, ev, 2);
+    CHECK("a written Mail LED is lit on the device, not every keyboard's",
+          n_written == 0 && evdev_leds_lit(kbd) == 1u << LED_MAIL);
+    CHECK("its opens read it", take(&b) > 0 && n_got == 2 && is(0, EV_LED, LED_MAIL, 1));
+    k_memset(leds, 0, sizeof(leds));
+    CHECK("EVIOCGLED gives it in its second byte",
+          evdev_ioctl(&a.e, EVIOCGLED(2), (uintptr_t)leds) == 2 && leds[0] == 0 &&
+              leds[1] == 1u << (LED_MAIL - 8));
+    put(&a, ev, 2);
+    CHECK("writing it lit again changes nothing", take(&b) == -EAGAIN);
+    evdev_report_leds(kbd, 1u << LED_CAPSL);
+    CHECK("the console's LEDs leave it lit",
+          evdev_leds_lit(kbd) == (1u << LED_MAIL | 1u << LED_CAPSL));
+    event(&ev[0], EV_LED, LED_COMPOSE, 7);
+    put(&a, ev, 2);
+    CHECK("Compose is lit by any value but 0",
+          evdev_leds_lit(kbd) == (1u << LED_MAIL | 1u << LED_CAPSL | 1u << LED_COMPOSE));
+    event(&ev[0], EV_LED, 10, 1);
+    put(&a, ev, 2);
+    CHECK("an LED it lacks is dropped", (evdev_leds_lit(kbd) & 1u << 10) == 0 && n_written == 0);
+    event(&ev[0], EV_LED, LED_CAPSL, 0);
+    put(&a, ev, 1);
+    CHECK("Caps Lock still goes to every keyboard", n_written == 1 && written_code == LED_CAPSL);
+    evdev_close(&a.e);
+    evdev_close(&b.e);
+    evdev_unregister(kbd);
+}
+
+/* A model keymap of four scan codes, 0x10 to 0x13. */
+static uint16_t model_map[4] = {KEY_A, KEY_KP1, KEY_A, 0};
+
+/** The model's entry `ke` names. */
+static int model_get(void *ctx, struct evdev_keymap_entry *ke)
+{
+    uint32_t at = ke->by_index ? ke->index : ke->scancode - 0x10;
+
+    (void)ctx;
+    if (at >= 4) {
+        return -EINVAL;
+    }
+    ke->index = at;
+    ke->scancode = 0x10 + at;
+    ke->keycode = model_map[at];
+    return 0;
+}
+
+/** Set the model's entry `ke` names. */
+static int model_set(void *ctx, const struct evdev_keymap_entry *ke, uint16_t *old)
+{
+    uint32_t at = ke->by_index ? ke->index : ke->scancode - 0x10;
+
+    (void)ctx;
+    if (at >= 4) {
+        return -EINVAL;
+    }
+    *old = model_map[at];
+    model_map[at] = ke->keycode;
+    return 0;
+}
+
+/** Whether the model maps a scan code to `code`. */
+static int model_maps(void *ctx, uint16_t code)
+{
+    int i;
+
+    (void)ctx;
+    for (i = 0; i < 4; i++) {
+        if (model_map[i] == code) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** EVIOCGKEYCODE and EVIOCSKEYCODE over a driver's keymap, in both forms,
+ * and the force feedback calls of a device without it, as Linux answers. */
+static void keycode_rows(void)
+{
+    static const struct evdev_keymap km = {model_get, model_set, model_maps, NULL};
+    struct {
+        uint8_t flags, len;
+        uint16_t index;
+        uint32_t keycode;
+        uint8_t scancode[32];
+    } v2;
+    uint8_t keys[EVDEV_KEY_BYTES], effect[48];
+    unsigned int legacy[2];
+    struct opened a, b;
+    struct evdev *dev;
+    int n = -1;
+
+    k_memset(keys, 0, sizeof(keys));
+    keys[KEY_A >> 3] |= (uint8_t)(1u << (KEY_A & 7));
+    keys[KEY_KP1 >> 3] |= (uint8_t)(1u << (KEY_KP1 & 7));
+    dev = evdev_register("Keypad", EVDEV_BUS_USB, 1, 6, keys);
+    open_dev(&a, 0);
+    open_dev(&b, 0);
+    legacy[0] = 0x11;
+    CHECK("a device with no keymap answers EVIOCGKEYCODE -EINVAL",
+          evdev_ioctl(&a.e, EVIOCGKEYCODE, (uintptr_t)legacy) == -EINVAL);
+    evdev_set_keymap(dev, &km);
+    CHECK("EVIOCGKEYCODE gives the scan code's key after it",
+          evdev_ioctl(&a.e, EVIOCGKEYCODE, (uintptr_t)legacy) == 0 && legacy[1] == KEY_KP1);
+    legacy[0] = 0x20;
+    CHECK("and -EINVAL for a scan code the map has not",
+          evdev_ioctl(&a.e, EVIOCGKEYCODE, (uintptr_t)legacy) == -EINVAL);
+    k_memset(&v2, 0, sizeof(v2));
+    v2.flags = 1;
+    v2.index = 2;
+    CHECK("EVIOCGKEYCODE_V2 by place gives the entry with a 4-byte scan code",
+          evdev_ioctl(&a.e, EVIOCGKEYCODE_V2, (uintptr_t)&v2) == 0 && v2.keycode == KEY_A &&
+              v2.len == 4 && v2.scancode[0] == 0x12 && v2.index == 2);
+    k_memset(&v2, 0, sizeof(v2));
+    v2.len = 3;
+    CHECK("a scan code of 3 bytes is -EINVAL",
+          evdev_ioctl(&a.e, EVIOCGKEYCODE_V2, (uintptr_t)&v2) == -EINVAL);
+    packet(dev, EV_KEY, KEY_KP1, 1);
+    take(&b);
+    legacy[0] = 0x11;
+    legacy[1] = 0x2FF + 1;
+    CHECK("EVIOCSKEYCODE of a code past KEY_MAX is -EINVAL",
+          evdev_ioctl(&a.e, EVIOCSKEYCODE, (uintptr_t)legacy) == -EINVAL);
+    legacy[1] = KEY_A;
+    CHECK("EVIOCSKEYCODE sets the entry",
+          evdev_ioctl(&a.e, EVIOCSKEYCODE, (uintptr_t)legacy) == 0 && model_map[1] == KEY_A);
+    CHECK("the key held whose code no entry has is released",
+          take(&b) > 0 && n_got == 2 && is(0, EV_KEY, KEY_KP1, 0));
+    evdev_ioctl(&a.e, EVIOCGBIT(EV_KEY, EVDEV_KEY_BYTES), (uintptr_t)keys);
+    CHECK("and is no longer a key the device has", !(keys[KEY_KP1 >> 3] & (1u << (KEY_KP1 & 7))) &&
+                                                       (keys[KEY_A >> 3] & (1u << (KEY_A & 7))));
+    k_memset(&v2, 0, sizeof(v2));
+    v2.len = 1;
+    v2.scancode[0] = 0x13;
+    v2.keycode = KEY_KP1;
+    evdev_ioctl(&a.e, EVIOCSKEYCODE_V2, (uintptr_t)&v2);
+    evdev_ioctl(&a.e, EVIOCGBIT(EV_KEY, EVDEV_KEY_BYTES), (uintptr_t)keys);
+    CHECK("EVIOCSKEYCODE_V2 by scan code makes its key one the device has",
+          model_map[3] == KEY_KP1 && (keys[KEY_KP1 >> 3] & (1u << (KEY_KP1 & 7))));
+    CHECK("EVIOCGEFFECTS gives 0", evdev_ioctl(&a.e, 0x80044584u, (uintptr_t)&n) == 0 && n == 0);
+    CHECK("EVIOCRMFF is -ENOSYS", evdev_ioctl(&a.e, 0x40044581u, 0) == -ENOSYS);
+    k_memset(effect, 0, sizeof(effect));
+    CHECK("EVIOCSFF of a struct ff_effect is -ENOSYS",
+          evdev_ioctl(&a.e, EVIOCSFF(48), (uintptr_t)effect) == -ENOSYS);
+    CHECK("and of another size -EFAULT",
+          evdev_ioctl(&a.e, EVIOCSFF(40), (uintptr_t)effect) == -EFAULT);
+    evdev_close(&a.e);
+    evdev_close(&b.e);
+    evdev_unregister(dev);
+}
+
 /** A mouse's written motion goes on to mouse.c with no grab held, as
  * Linux's mousedev takes it, and a grab keeps it from mouse.c. */
 static void write_pointer_rows(void)
@@ -924,8 +1182,10 @@ static void compat_rows(void)
 
 int main(void)
 {
+    reservation_rows();
     motion_rows();
     revoke_rows();
+    text_rows();
     clock_rows();
     mask_rows();
     key_state_rows();
@@ -933,6 +1193,8 @@ int main(void)
     compat_rows();
     write_rows();
     write_keyboard_rows();
+    led_rows();
+    keycode_rows();
     write_pointer_rows();
     console_key_rows();
     write_compat_rows();

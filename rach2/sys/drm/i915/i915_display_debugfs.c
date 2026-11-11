@@ -1,6 +1,6 @@
 /*
  * i915_display_debugfs.c: the pipe CRC of Haswell, which debugfs's
- * crc/control and crc/data reach through the DRM core (76-18b), with the
+ * crc/control and crc/data reach through the DRM core, with the
  * fitter forced through on the eDP pipe, after Linux's
  * display/intel_pipe_crc.c.
  */
@@ -56,8 +56,11 @@ static int32_t crc_ctl_of(const char *name, uint32_t *ctl)
  * eDP transcoder gives no CRC at its fitter's output while the transcoder
  * takes the pipe past the fitter's power well, so while a source runs the
  * pipe is set again with its input through the well (force_thru), and
- * back after. A commit of its own under the commit lock, a mode set only
- * when the input changes, as Linux's fastset leaves it otherwise.
+ * back after. A commit of its own under the commit lock, taken without
+ * regard to signals as Linux's acquire context without
+ * DRM_MODESET_ACQUIRE_INTERRUPTIBLE takes it, a mode set only when the
+ * input changes, as Linux's fastset leaves it otherwise. A failed commit
+ * is logged, and the source starts all the same, as Linux's drm_WARN.
  */
 static void crc_workaround(struct intel_crtc *c, int enable)
 {
@@ -71,9 +74,7 @@ static void crc_workaround(struct intel_crtc *c, int enable)
         c->cfg.force_thru == (c->cfg.pfit || c->crc_wa)) {
         return;
     }
-    if (drm_modeset_lock(dev) != 0) {
-        return;
-    }
+    drm_modeset_lock_nointr(dev);
     state = drm_atomic_state_alloc(dev);
     cs = state ? drm_atomic_get_crtc_state(state, &c->base) : NULL;
     if (cs) {

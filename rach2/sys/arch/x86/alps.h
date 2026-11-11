@@ -49,7 +49,7 @@ const char *alps_mouse_name(const char *proto);
  * `alps_process_byte`: a byte more than half a second after the one before
  * starts the packet again, a byte that breaks the packet's form drops it,
  * and a whole packet is reported. Returns ALPS_*, which ps2mouse.c counts
- * toward the reconnect after five bad packets in a row.
+ * toward the reconnect after `alps_reset_after` bad bytes in a row.
  */
 int alps_byte(uint8_t data);
 
@@ -57,8 +57,19 @@ int alps_byte(uint8_t data);
  * byte 0xAA may begin a device's announcement. In interrupt context. */
 int alps_packet_start(void);
 
+/** Drop the packet under way and the count of bad bytes, as Linux's
+ * `__psmouse_set_state` does at each change of the port's state: when a
+ * run of commands begins and ends. In interrupt context or with
+ * interrupts off. */
+void alps_packet_restart(void);
+
+/** The bad bytes in a row after which ps2mouse.c reconnects the pad,
+ * Linux's `resetafter` for ALPS: twice the packet's size, 12 or 16, so that
+ * two broken packets pass. */
+int alps_reset_after(void);
+
 /**
- * Set the pad up again after five bad packets or its announcement, as
+ * Set the pad up again after its run of bad bytes or its announcement, as
  * Linux's `alps_reconnect` and psmouse's `psmouse_initialize` do: the
  * reset, the identification, which must again find a pad Linux drives, the
  * version's set-up, then the rate, resolution and scaling. Its event
@@ -72,6 +83,17 @@ int alps_reconnect(void);
  * `alps_disconnect` does, before the port is probed anew. Process
  * context. */
 void alps_disconnect(void);
+
+/**
+ * Poll the pad for a packet, as Linux's `alps_poll` does for psmouse's
+ * resync: the stick's port left for the pad's on a version 2 DualPoint, the
+ * packet of the pad's size, which must begin with the protocol's first
+ * byte, and when `badbyte`, the first byte of the packet the resync
+ * dropped, was the stick's, the stick's three bytes in its place. Returns
+ * the packet's size with its bytes in `buf`, of 8, or -1. Inside a run of
+ * `ps2mouse_cmd_begin`.
+ */
+int alps_poll(uint8_t badbyte, uint8_t *buf);
 
 /**
  * Report the last six-byte packet of a pad that interleaves a stick's PS/2

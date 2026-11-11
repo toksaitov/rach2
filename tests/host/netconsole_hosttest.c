@@ -22,6 +22,10 @@ extern int printf(const char *fmt, ...);
    from the host's stdint may be included alongside them. */
 #include "../../rach2/sys/network/netconsole.h"
 #include "../../rach2/sys/network/driver/netdev.h"
+#include "../../rach2/sys/network/ip6/ip6.h"
+#include "../../rach2/sys/mm/kheap.h"
+#include "../../rach2/sys/panic.h"
+#include "../../rach2/sys/timer.h"
 
 /* ------------------------------------------------------------------ */
 /* The stubs netconsole links against.                                 */
@@ -127,6 +131,20 @@ static int lock_ever_negative;
 
 /** Take the network lock: count it and return 0 as the saved flags, since no
  * interrupt runs on the host. */
+/* The tick, which the settle rows move, and whether the kernel panics. */
+static uint64_t host_ticks;
+static int host_panicking;
+
+uint64_t tick_count(void)
+{
+    return host_ticks;
+}
+
+int k_panicking(void)
+{
+    return host_panicking;
+}
+
 unsigned int net_lock(void)
 {
     lock_depth++;
@@ -205,6 +223,59 @@ uint16_t ip_checksum(const uint8_t *buf, uint16_t len)
     return (uint16_t)(~sum & 0xFFFF);
 }
 
+/* The targets of netconsole= are left to the QEMU runs, which put a real
+ * card and a host socket at the two ends; these rows drive the frames, and
+ * these stubs only satisfy the target code's links. */
+
+/** Allocate nothing: no row reads a netconsole= value. */
+void *kzalloc(size_t size)
+{
+    (void)size;
+    return 0;
+}
+
+/** Free nothing, since kzalloc gave nothing. */
+void kfree(void *p)
+{
+    (void)p;
+}
+
+/** No interface has a name here. */
+struct netdev *netdev_by_name(const char *name)
+{
+    (void)name;
+    return 0;
+}
+
+/** No interface is listed here. */
+struct netdev *netdev_at(int n)
+{
+    (void)n;
+    return 0;
+}
+
+/** There is no `lo` here. */
+struct netdev *netdev_loopback(void)
+{
+    return 0;
+}
+
+/** Refuse every IPv6 address. */
+int ip6_parse(const char *s, uint32_t len, uint8_t *out)
+{
+    (void)s;
+    (void)len;
+    (void)out;
+    return -1;
+}
+
+/** Format every IPv6 address as nothing. */
+void ip6_format(const uint8_t *a, char *out)
+{
+    (void)a;
+    out[0] = '\0';
+}
+
 #include "../../rach2/sys/network/netconsole.c"
 
 /* ------------------------------------------------------------------ */
@@ -226,6 +297,12 @@ static void nc_reset(void)
 {
     nc_head = 0;
     nc_tail = 0;
+    nc_line_start = 0;
+    nc_skip = 0;
+    nc_settle_ticks = 0;
+    nc_frames_up = 0;
+    host_ticks = 0;
+    host_panicking = 0;
     nc_boot_id = 0;
     nc_seq = 0;
     nc_frames = 0;
@@ -270,11 +347,48 @@ static unsigned frame_be16(unsigned f, unsigned off)
 }
 
 /**
+ * Check that a link that has just come up is sent nothing until it has been
+ * up for the settle time, and the held lines go out with the first newline
+ * after it; that a link that goes down starts the time again; and that a
+ * panicking kernel sends at once.
+ */
+static void settle_rows(void)
+{
+    nc_reset();
+    nc_settle_ticks = MS_TO_TICKS(NC_LINK_SETTLE_MS);
+    link_down = 1;
+    netconsole_enable();
+    put_string("held\n");
+    link_down = 0;
+    host_ticks = 100;
+    put_string("up\n");
+    CHECK(frame_count == 0 && nc_pending() == 8, "a link just up is sent nothing");
+    host_ticks = 100 + nc_settle_ticks - 1;
+    put_string("a\n");
+    CHECK(frame_count == 0, "nor a tick before the settle time");
+    host_ticks = 100 + nc_settle_ticks;
+    put_string("b\n");
+    CHECK(frame_count == 1 && frame_len[0] == NETCONSOLE_HDR_LEN + 12 && nc_pending() == 0,
+          "the first line after the settle time sends what was held with it");
+
+    link_down = 1;
+    put_string("down\n");
+    link_down = 0;
+    host_ticks += nc_settle_ticks * 4;
+    put_string("again\n");
+    CHECK(frame_count == 1, "a link that came back starts the settle time again");
+    host_panicking = 1;
+    put_string("panic\n");
+    CHECK(frame_count == 2 && nc_pending() == 0, "a panicking kernel sends at once");
+}
+
+/**
  * Check that the lines wait in the ring while the card has no link: before
  * it first comes up, when the ring fills meanwhile, and when it goes down in
  * the middle of a drain, where the drain held back goes out with the next
  * newline. A card that drops every frame is offered one frame by a long line
- * and one by its newline, and gets all of it once it takes frames.
+ * and one by its newline, and gets all of it once it takes frames. The
+ * settle rows follow.
  */
 static void link_rows(void)
 {
@@ -298,8 +412,10 @@ static void link_rows(void)
         for (i = 0; i < NETCONSOLE_RING + 10; i++) {
             netconsole_putc(i % 64 == 63 ? '\n' : 'f');
         }
-        CHECK(frame_count == 0 && nc_pending() == NETCONSOLE_RING - 1,
-              "a ring that fills while the link is down holds what it can");
+        /* The ring fills at the newline of its 512th line, whose 63 other
+           characters go back out with it; the 10 after it fit again. */
+        CHECK(frame_count == 0 && nc_pending() == NETCONSOLE_RING - 64 + 10 && nc_dropped == 64,
+              "a ring that fills while the link is down holds what it can, in whole lines");
         link_down = 0;
         netconsole_putc('\n');
         CHECK(frame_count > 0 && nc_pending() == 0,
@@ -346,6 +462,8 @@ static void link_rows(void)
         netconsole_putc('\n');
         CHECK(nc_pending() == 0 && frame_count == 4, "and all of it once the card takes frames");
     }
+
+    settle_rows();
 }
 
 /**

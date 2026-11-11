@@ -60,8 +60,17 @@
 #define USB_PROTOCOL_HUB_MULTI  2
 #define USB_PROTOCOL_HUB_SUPER  3
 
-/** What a configuration descriptor says about the first interface in it this
- *  kernel can drive, and about that interface's endpoints. */
+/* The HID interfaces of one configuration this kernel drives at most, which
+ * is every one a configuration can have. Linux binds usbhid to each HID
+ * interface of a device, and each needs an interrupt IN endpoint of its own:
+ * a configuration has 15 IN endpoint numbers, and Linux drops an endpoint
+ * that repeats another interface's, which leaves its interface without one
+ * and usbhid refuses it. A keyboard with media keys has two, a receiver for
+ * a wireless keyboard and mouse three, and a gaming keyboard four or five. */
+#define USB_HID_INTERFACES 15
+
+/** What a configuration descriptor says about an interface this kernel can
+ *  drive, and about that interface's endpoints. */
 struct usb_interface_info {
     int found;      /* whether such an interface was there at all */
     int kind;       /* one of the `USB_KIND_` values */
@@ -85,8 +94,9 @@ struct usb_interface_info {
 };
 
 /**
- * Find the first interface this kernel can drive in the configuration
- * descriptor `buffer`, `length` bytes, and its endpoints.
+ * Find the interfaces this kernel can drive in the configuration descriptor
+ * `buffer`, `length` bytes, and their endpoints, into `out`, which has room
+ * for `max` of them, at least one.
  *
  * An interface on alternate setting zero is a candidate when it is a HID
  * interface (class 3, of any subclass and protocol), a hub (class 9,
@@ -95,9 +105,17 @@ struct usb_interface_info {
  * endpoint, the first of each; a HID interface's HID descriptor, before
  * or after its endpoints, gives bcdHID and its report descriptor's length.
  * A candidate whose endpoints do not all follow it before the next
- * interface is dropped and the walk goes on. `out` is cleared first;
- * `out->found` says whether an interface was found. A configuration value
- * of zero, or a buffer shorter than the nine-byte header, finds nothing.
+ * interface is dropped and the walk goes on.
+ *
+ * The first complete candidate is `out[0]`. A hub or a stick is the only
+ * one kept. After a HID interface the walk keeps each further complete HID
+ * interface, as Linux binds usbhid to each, up to `max`, and passes over
+ * the other classes; a HID interface that repeats the number or the
+ * endpoint of one kept is passed over too, as Linux skips a duplicate.
+ *
+ * `out` is cleared first. Returns how many interfaces were kept, and
+ * `out[0].found` says whether there was one. A configuration value of
+ * zero, or a buffer shorter than the nine-byte header, finds nothing.
  *
  * The descriptors are walked by their own length fields, which is the only
  * way they can be walked, and the walk stops at the first one shorter than two
@@ -105,7 +123,7 @@ struct usb_interface_info {
  * bytes long would otherwise be walked for ever, and one that says it is
  * longer than what arrived would be read past the end of the buffer.
  */
-void usb_parse_config(const uint8_t *buffer, int length, struct usb_interface_info *out);
+int usb_parse_config(const uint8_t *buffer, int length, struct usb_interface_info *out, int max);
 
 /**
  * Bring the stack's devices along by one pass. Never waits.
@@ -250,7 +268,7 @@ int usb_core_busy(void);
 /* A running device as /sys/bus/usb/devices names it: its bus, the number
  * of its controller from 1; its ports from the root port down, each from 1,
  * `depth` of them; the controller's slot, which is its device number; its
- * descriptor's vendor, product and release; and the configuration and the
+ * descriptor's vendor, product and release; and the configuration and an
  * interface this kernel drives, which name the interface's directory,
  * B-P:C.I. */
 struct usb_sys_row {
@@ -266,18 +284,27 @@ struct usb_sys_row {
     int ifprotocol; /* bInterfaceProtocol, 1 a boot keyboard and 2 a mouse */
 };
 
-/** Fill `row` for the device of table entry `index`; 0, or -1 when that
- * entry is not a running device. The entry is read with interrupts off, so
- * a device the interrupt side takes away is read whole or not at all. */
+/** Fill `row` for the device of table entry `index`, with the first
+ * interface it drives, a HID device's first that was not given up; 0, or -1
+ * when that entry is not a running device.
+ * The entry is read with interrupts off, so a device the interrupt side
+ * takes away is read whole or not at all. */
 int usb_core_row(int index, struct usb_sys_row *row);
+
+/** Fill `row` as `usb_core_row` does, with the interface whose
+ * bInterfaceNumber is `ifnum` of those the device drives, or with the one
+ * `usb_core_row` gives for a negative `ifnum`; 0, or -1 when the entry is
+ * not a running device or does not drive that interface. */
+int usb_core_interface(int index, int ifnum, struct usb_sys_row *row);
 
 /**
  * Describe the running device at table entry `index` for `/proc/usb`, as one
  * line in `out`, `size` bytes with its terminator: `port PATH SPEED
  * VENDOR:PRODUCT class C protocol P`, with PATH the root port and then each
- * hub's port, from 1, joined by dots, and the identifiers in hex. A keyboard's
- * or mouse's line ends with `reports N`, the reports it has delivered to the
- * class driver since it was entered.
+ * hub's port, from 1, joined by dots, and the identifiers in hex; the class
+ * and protocol are its first interface's. A HID device's line ends with
+ * `reports N`, the reports its interfaces have delivered to the class driver
+ * since it was entered.
  *
  * Returns the number of bytes written, or zero when `index` names no running
  * device or `size` is less than 8. Called in process context; the entry, and

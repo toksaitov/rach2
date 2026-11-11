@@ -1,0 +1,100 @@
+.Dd November 11, 2026
+.Dt PROCESS_MADVISE 2
+.Os
+.Sh NAME
+.Nm process_madvise
+.Nd advice about the memory of a process a pidfd names
+.Sh SYNOPSIS
+.In sys/mman.h
+.In sys/uio.h
+.Ft ssize_t
+.Fn process_madvise "int pidfd" "const struct iovec *iov" "size_t vlen" "int advice" "unsigned int flags"
+.Sh DESCRIPTION
+.Fn process_madvise
+gives the advice
+.Fa advice
+about each of the
+.Fa vlen
+ranges of
+.Fa iov
+in the address space of the process
+.Fa pidfd
+names, a descriptor of
+.Xr pidfd_open 2 ,
+as Linux's call does.
+Each range is judged as
+.Xr madvise 2
+judges its own: its base must be page-aligned, its length is rounded up
+to a page, and every page of it must be mapped.
+The ranges are advised in order, and the first that fails ends the call.
+.Pp
+The advice is one that discards nothing, as on Linux:
+.Dv MADV_WILLNEED
+(3),
+.Dv MADV_COLD
+(20),
+.Dv MADV_PAGEOUT
+(21) or
+.Dv MADV_COLLAPSE
+(25).
+None changes anything here, there being no swap and no huge pages of user
+memory, but
+.Dv MADV_COLD
+and
+.Dv MADV_PAGEOUT
+are refused over a locked mapping or a device object's, as
+.Xr madvise 2
+refuses them.
+.Pp
+The caller must be allowed to read the process's memory, as
+.Xr ptrace 2
+allows a read: the process is its own, or the caller is privileged, or
+its file system user and group IDs are each of the process's three and the
+process is dumpable and not privileged.
+Advice about another process's memory needs privilege, Linux's
+.Dv CAP_SYS_NICE ,
+as well.
+.Pa iov
+is read in the caller's layout, a
+.Vt struct iovec
+of two 32-bit words from an i386 program; at most 1024 ranges are taken,
+and their lengths are cut so that together they are at most
+.Ql 0x7FFFF000 .
+.Fa flags
+must be 0.
+.Sh RETURN VALUES
+The bytes of the ranges advised.
+When the first range fails, or there is none and a check fails, -1 is
+returned with
+.Va errno
+set; the kernel returns the negative error number.
+.Sh ERRORS
+.Bl -tag -width "[EACCES]"
+.It Bq Er EACCES
+The caller may not read the process's memory.
+.It Bq Er EBADF
+.Fa pidfd
+is no pidfd.
+.It Bq Er EFAULT
+.Fa iov ,
+or a range of it, lies outside the caller's memory.
+.It Bq Er EINVAL
+.Fa flags
+is not 0,
+.Fa vlen
+is over 1024, a length is negative as a signed size,
+.Fa advice
+is not one of the four, a range is not page-aligned or wraps, or the
+advice is refused over a mapping of the range.
+.It Bq Er ENOMEM
+A page of a range is not mapped.
+.It Bq Er EPERM
+The memory is another process's and the caller is not privileged.
+.It Bq Er ESRCH
+The process has been reaped, or has no address space.
+.El
+.Sh SEE ALSO
+.Xr brk 2 ,
+.Xr pidfd_open 2 ,
+.Xr process_mrelease 2 ,
+.Xr process_vm_readv 2

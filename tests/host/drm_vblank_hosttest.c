@@ -25,6 +25,8 @@
  * signals late, which flips, signals its out-fence and sends its event
  * only after the fence, a blocking flip waited on a late fence, and a
  * blocking commit that waits for the queued one ahead of it (76-5b.3);
+ * a driver's bound on the wait for each in-fence, i915's 10 s, past which
+ * a nonblocking and a blocking flip flip without it (80-72.2);
  * connector forcing, the EDID override, and the CRC files' source,
  * entries, lines and overflow (76-5b.4); and an unplug that sends what is
  * queued with -ENODEV on its fences. Every allocation is given back.
@@ -675,12 +677,27 @@ static int32_t fd_status(int32_t fd)
     return st;
 }
 
+/* The fences the core told the driver a deferred commit's tail would
+ * wait for (`commit_fence_wait`), the last of them in `tail_wait`. */
+static int tail_waits;
+static struct dma_fence *tail_wait;
+
+/** The driver's `commit_fence_wait`, counted. */
+static void count_tail_wait(struct drm_device *d, struct dma_fence *fence)
+{
+    (void)d;
+    tail_waits++;
+    tail_wait = fence;
+}
+
 /** A nonblocking flip on a late in-fence flips, signals its out-fence and
- * sends its event only after the fence; a blocking flip waits for its
- * fence; a blocking commit waits for the queued one ahead of it. */
+ * sends its event only after the fence, and tells the driver of the fence
+ * its tail would wait for once, as it is queued; a blocking flip waits for
+ * its fence; a blocking commit waits for the queued one ahead of it. */
 static void row_fences(void)
 {
     struct sync_file_info info;
+    struct dma_fence *in;
     fd_entry_t timeline;
     int32_t in_fd, out_fd = 77, out2 = 77, base;
     struct req r;
@@ -695,8 +712,14 @@ static void row_fences(void)
     req_flip(&r, 0, fb_c);
     req_add(&r, &primary[0].base, mc->prop_in_fence_fd, (uint64_t)in_fd);
     req_add(&r, &crtc[0].base, mc->prop_out_fence_ptr, UPTR(&out_fd));
+    mc->commit_fence_wait = count_tail_wait;
+    tail_waits = 0;
     CHECK(req_commit(&r, DRM_MODE_ATOMIC_NONBLOCK | DRM_MODE_PAGE_FLIP_EVENT, 41) == 0,
           "a nonblocking flip on an in-fence that has not signalled");
+    in = sync_file_get_fence(in_fd);
+    CHECK(tail_waits == 1 && tail_wait == in,
+          "the driver is told of the in-fence its tail would wait for, as it is queued");
+    dma_fence_put(in);
     CHECK(out_fd >= 0 && out_fd != 77 && fd_status(out_fd) == 0, "its out-fence, pending");
     k_memset(&info, 0, sizeof(info));
     CHECK(sync_ioctl(fd_get(&table, out_fd), SYNC_IOC_FILE_INFO, (uintptr_t)&info) == 0 &&
@@ -714,6 +737,8 @@ static void row_fences(void)
     CHECK(drm_atomic_commit_work() == 1 && nshown == at + 1 && shown[at] == fb_c &&
               crtc[0].flip_pending == DRM_FLIP_ARMED && nsent == base,
           "the worker flips once it has signalled, and the event waits for the vblank");
+    CHECK(tail_waits == 1, "with no plane's fence left, the driver is told of none");
+    mc->commit_fence_wait = NULL;
     tick();
     CHECK(nsent == base + 1 && sent[base].user_data == 41 && fd_status(out_fd) == 1 &&
               !crtc[0].flip_pending,
@@ -748,6 +773,150 @@ static void row_fences(void)
     fd_free(&table, in_fd);
     sw_close(&timeline);
     CHECK(!works, "no commit left queued");
+}
+
+/** A request that shows `fb_id` on primary plane 1, on CRTC 1, with the
+ * in-fence `in_fd`, and changes nothing of the CRTC. */
+static void req_plane1(struct req *r, uint32_t fb_id, int32_t in_fd)
+{
+    k_memset(r, 0, sizeof(*r));
+    req_add(r, &primary[1].base, mc->prop_fb_id, fb_id);
+    req_add(r, &primary[1].base, mc->prop_crtc_id, crtc[1].base.id);
+    req_add(r, &primary[1].base, mc->prop_src_w, 1366u << 16);
+    req_add(r, &primary[1].base, mc->prop_src_h, 768u << 16);
+    req_add(r, &primary[1].base, mc->prop_crtc_w, 1366);
+    req_add(r, &primary[1].base, mc->prop_crtc_h, 768);
+    if (in_fd >= 0) {
+        req_add(r, &primary[1].base, mc->prop_in_fence_fd, (uint64_t)in_fd);
+    }
+}
+
+/** A commit queued on an in-fence over a CRTC that is off has no flip, so
+ * only its objects tell a later commit to stall: a nonblocking one of the
+ * same plane answers EBUSY, and a blocking one finishes it first, without
+ * the worker, before its own tail frees the queued commit's states. */
+static void row_queued_off(void)
+{
+    fd_entry_t timeline;
+    struct req r;
+    int32_t in_fd;
+
+    req_mode(&r, 1, 0, 0);
+    CHECK(req_commit(&r, DRM_MODE_ATOMIC_ALLOW_MODESET, 0) == 0 && !crtc[1].state->active,
+          "CRTC 1 off");
+    k_memset(&timeline, 0, sizeof(timeline));
+    CHECK(sw_sync_open(&timeline) == 0, "a sw_sync timeline");
+    in_fd = sw_point(&timeline, 1);
+    req_plane1(&r, fb_a, in_fd);
+    CHECK(req_commit(&r, DRM_MODE_ATOMIC_NONBLOCK, 0) == 0 && works && !crtc[1].flip_pending,
+          "a plane queued on its fence over the CRTC that is off, with no flip");
+    req_plane1(&r, fb_b, -1);
+    CHECK(req_commit(&r, DRM_MODE_ATOMIC_NONBLOCK, 0) == -EBUSY,
+          "a nonblocking commit of the same plane: EBUSY");
+    late_timeline = &timeline;
+    CHECK(req_commit(&r, 0, 0) == 0 && !late_timeline && !works &&
+              primary[1].state->fb->base.id == fb_b,
+          "a blocking one waits for the fence and finishes the queued commit first");
+    fd_free(&table, in_fd);
+    sw_close(&timeline);
+    req_mode(&r, 1, mode_id, fb_b);
+    CHECK(req_commit(&r, DRM_MODE_ATOMIC_ALLOW_MODESET, 0) == 0 && crtc[1].state->active,
+          "CRTC 1 on again");
+}
+
+/**
+ * 80-72.2: under the driver's `commit_fence_timeout_ms`, as i915's, a
+ * nonblocking flip whose in-fence never signals flips once 10 s have
+ * passed, its callback taken back, and a blocking one waits 10 s, then
+ * flips, as Linux's intel_atomic_commit_fence_wait programs the commit
+ * after i915_fence_timeout.
+ */
+static void row_fence_timeout(void)
+{
+    fd_entry_t timeline;
+    struct dma_fence *in;
+    struct req r;
+    int32_t in_fd;
+    int64_t t0;
+    int at;
+
+    k_memset(&timeline, 0, sizeof(timeline));
+    CHECK(sw_sync_open(&timeline) == 0, "timeout: a sw_sync timeline");
+    mc->commit_fence_timeout_ms = 10000;
+    in_fd = sw_point(&timeline, 1);
+    at = nshown;
+    t0 = model_now_ns;
+    req_flip(&r, 0, fb_a);
+    req_add(&r, &primary[0].base, mc->prop_in_fence_fd, (uint64_t)in_fd);
+    CHECK(req_commit(&r, DRM_MODE_ATOMIC_NONBLOCK, 0) == 0 &&
+              crtc[0].flip_pending == DRM_FLIP_QUEUED,
+          "timeout: a nonblocking flip on a fence that never signals");
+    while (model_now_ns - t0 < 9900000000ll) {
+        tick();
+    }
+    CHECK(works && nshown == at, "timeout: no flip before 10 s");
+    while (works && model_now_ns - t0 < 10100000000ll) {
+        tick();
+    }
+    in = sync_file_get_fence(in_fd);
+    CHECK(!works && nshown == at + 1 && shown[at] == fb_a && in && !in->signaled && !in->cbs,
+          "timeout: at 10 s the worker flips without it, its callback taken back");
+    dma_fence_put(in);
+    tick();
+    CHECK(!crtc[0].flip_pending, "timeout: the flip ends at its vblank");
+    fd_free(&table, in_fd);
+
+    in_fd = sw_point(&timeline, 2);
+    at = nshown;
+    t0 = model_now_ns;
+    req_flip(&r, 0, fb_b);
+    req_add(&r, &primary[0].base, mc->prop_in_fence_fd, (uint64_t)in_fd);
+    CHECK(req_commit(&r, 0, 0) == 0 && nshown == at + 1 && shown[at] == fb_b &&
+              model_now_ns - t0 >= 10000000000ll,
+          "timeout: a blocking flip waits 10 s for a fence that never signals, then flips");
+    fd_free(&table, in_fd);
+    mc->commit_fence_timeout_ms = 0;
+    sw_close(&timeline);
+    CHECK(!works, "timeout: no commit left queued");
+}
+
+/* The OUT_FENCE_PTR target of row_out_fence_fault. */
+static int32_t *out_fence_target;
+
+/** Before the copy of the descriptor: undo the -1 the property's copy
+ * wrote, so that only the error path's write can leave -1. */
+static void out_fence_spoil(void)
+{
+    *out_fence_target = 77;
+}
+
+/** Before the property's copy of -1: spoil what it writes at the next. */
+static void out_fence_arm(void)
+{
+    copy_hook = out_fence_spoil;
+}
+
+/** An out-fence descriptor that cannot be written refuses the commit
+ * before it takes effect, as Linux's setup_out_fence, and leaves no sync
+ * file or descriptor and -1 where OUT_FENCE_PTR points. */
+static void row_out_fence_fault(void)
+{
+    struct req r;
+    uint32_t before = primary[0].state->fb->base.id;
+    int32_t out_fd = 77;
+    int at = nshown, made = allocations;
+
+    req_flip(&r, 0, before == fb_a ? fb_b : fb_a);
+    req_add(&r, &crtc[0].base, mc->prop_out_fence_ptr, UPTR(&out_fd));
+    out_fence_target = &out_fd;
+    copy_hook = out_fence_arm;
+    copy_fault_after = 1; /* the -1 of the property passes; the descriptor faults */
+    CHECK(req_commit(&r, 0, 0) == -EFAULT, "an out-fence that cannot be written: EFAULT");
+    copy_fault_after = -1;
+    ticks(2);
+    CHECK(primary[0].state->fb->base.id == before && nshown == at, "and no flip");
+    copy_hook = NULL;
+    CHECK(out_fd == -1 && allocations == made, "-1 written, and no sync file left");
 }
 
 /* ---- 76-5b.4: connector forcing, the EDID override and CRCs ---- */
@@ -899,6 +1068,9 @@ int main(void)
     row_events();
     row_off();
     row_fences();
+    row_queued_off();
+    row_fence_timeout();
+    row_out_fence_fault();
     row_force();
     row_edid_override();
     row_crc();

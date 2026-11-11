@@ -1,0 +1,23 @@
+18:38:09
+vol 1:1
+hda ready 1 playing 1
+stream requested 48000 programmed 48000 format 0x0031 dac-format 0x0031 hp-format 0x0031 bits 24
+queue fill 0 high 0 delay-ms 60 written 0 dropped 0 periods 7929 underruns 0 missed 0 lpib 3296
+3046
+last 600 frames: fps 30.5389 median ms 24.10 p99 139.7 max 1559
+[  410.385000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[  410.385000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+[  410.386000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+     10 boot: syscall: ready
+      7 syscall: 323: not implemented (asked for by wine)
+     58 syscall: 323: not implemented (asked for by wine64)
+20.8  5296 pulseaudio
+ 7.2 67112 weston
+ 8.2 70840 Xwayland
+ 206 1232936 Main
+cpu  11000 0 38992 185259 0 0 0 0 0 0
+bkl_wait_us 217458117
+cpu  11672 0 41943 185652 0 0 0 0 0 0
+bkl_wait_us 237110528
+/data/crysis/logs/steam-17300.log:fsync: up and running.
+/data/crysis/logs/steam-17300.log:431.957:0144:0148:err:winediag:wined3d_dll_init Using the OpenGL renderer.

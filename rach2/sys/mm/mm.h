@@ -91,6 +91,10 @@ struct mm {
      * that its caller may not read, and once any sharer's effective ids
      * move; PR_SET_DUMPABLE sets it, and fork's copy takes it. */
     uint32_t dumpable;
+    /* The membarrier(2) commands the space registered for, as
+     * MEMBARRIER_STATE_ bits (proc/membarrier.h); 0 for a new space and
+     * for an image an exec builds, and a fork's copy takes them. */
+    uint32_t membarrier;
     /* The ranges drivers registered to hear of changes to the pages
      * (notify.h), among them those of the pins charged to the address
      * space (pin.h); a fork's copy has none. */
@@ -106,6 +110,25 @@ struct mm {
      * (`arch_mm_release`). */
     void *ldt;
     uint32_t ldt_entries; /* the entries up to the highest written */
+    /* The present user pages of the page tables, VmRSS, which every change
+     * of an entry's present bit keeps (`mm_resident_add`), and the most
+     * there were before any went, as Linux's hiwater_rss; a fork's copy
+     * counts its own from none. */
+    unsigned long resident;
+    unsigned long resident_peak;
+    /* Whether process_mrelease has freed the private pages of the space of
+     * a dying process, as Linux's MMF_OOM_SKIP: a second call then has
+     * nothing to do and answers 0. 0 in a new space and in a fork's copy. */
+    uint32_t reaped;
+    /* The protection keys the space has allocated, bit k for key k, and the
+     * key it gives an execute-only mapping, or -1 before it has one, as
+     * Linux's pkey_allocation_map and execute_only_pkey (../fpu.h): key 0,
+     * the default, alone and -1 in a new space and in an image an exec
+     * builds, and a fork's copy takes both. They count only where the
+     * keys are on (`fpu_pkeys`). */
+    uint32_t pkeys;
+    int32_t pkey_exec;
+    struct mm *dir_next; /* the next in its chain of the table by directory */
 };
 
 /** A new, empty, dumpable address space with one user and one hold; NULL
@@ -114,8 +137,8 @@ struct mm *mm_new(void);
 
 /** Copy what `from` keeps beside its pages, for /proc and the dumpable flag,
  * into `to`, a copy of its address space that fork made: the program's file,
- * and its ELF interpreter, whose descriptions the two then share, and the
- * path when there is room. */
+ * and its ELF interpreter, whose descriptions the two then share, the path
+ * when there is room, and the protection keys allocated. */
 void mm_copy_info(struct mm *to, const struct mm *from);
 
 /** Keep the heap copy of the path `path` as the path the exec found `mm`'s
@@ -180,16 +203,45 @@ void mm_unhold(struct mm *mm);
 
 struct process;
 
+/**
+ * Set `anon` (vm.h) on each region of anonymous memory that meets [start,
+ * end) and has a page written anywhere in it, before a call splits or
+ * merges a region, drops pages of the range or takes write from it. Linux
+ * gives a region its anon_vma at its first private page and keeps it after
+ * the page goes, and a split gives both parts the one it has; the store
+ * that writes a page here sets its entry's dirty bit with no fault, so the
+ * mark is taken while the pages that show it are still mapped and before a
+ * split copies it. A page a read brought in zeroed and nothing stored into
+ * does not count, as Linux's base-page anonymous fault maps its zero page
+ * there. Rach2 has no transparent huge pages; Linux's huge zero page
+ * prepares anon_vma on a read too, so its ac can differ for such a region.
+ */
+void mm_note_anon(struct mm *mm, uintptr_t start, uintptr_t end);
+
 /** Take `p`'s address space from it and drop its user's count, loading the
  * kernel's directory first when this is the last user and its directory is
- * the one in use. `p` is left with none, as a kernel thread has none. The
- * last user records the space's resident size in the thread group's
+ * the one in use. `p` is left with none, as a kernel thread has none, and
+ * without the memory policy set_mempolicy gave it. The
+ * last user records the space's peak resident size in the thread group's
  * `maxrss_kb` when it is the largest yet, for `ru_maxrss`. */
 void mm_drop(struct process *p);
 
 /** The pages of `mm` in memory: the present user pages of its page tables,
- * counted past the tables its regions lack (`paging_user_count`). */
+ * as `mm_resident_add` has counted them, at no cost of a walk. */
 unsigned long mm_resident(const struct mm *mm);
+
+/** The most pages `mm` has had in memory at once, VmHWM and what
+ * `ru_maxrss` reports of it. */
+unsigned long mm_resident_peak(const struct mm *mm);
+
+/**
+ * Count `pages` more present user pages, or fewer for a negative count, in
+ * the address space whose directory is `dir`. Each writer of a user entry
+ * calls it for the present bits it set or cleared, under the big lock, so
+ * that `getrusage` and /proc read the size without walking the tables.
+ * Nothing for a directory no address space has.
+ */
+void mm_resident_add(const struct page_dir *dir, long pages);
 
 /**
  * A description of the file at `ref` for an address space to keep its

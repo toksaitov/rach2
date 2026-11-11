@@ -21,6 +21,7 @@
  * most.
  */
 #include "io/timerfd.c"
+#include "compat/waketime_none.h"
 
 extern int printf(const char *format, ...);
 

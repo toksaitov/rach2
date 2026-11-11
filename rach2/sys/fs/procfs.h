@@ -14,6 +14,7 @@
 
 struct vpath;
 struct fd_entry;
+struct synth_owner;
 struct vfs_ref;
 
 /* st_dev for /proc nodes, distinct from KRFFS (0) and devfs (DEVFS_FSID). */
@@ -24,16 +25,33 @@ struct vfs_ref;
  * reach, Linux's nsfs's 0:4. */
 #define NSFS_DEV    4u
 
+/** Give the transparent_hugepage files Linux 6.12's boot policy for this
+ * machine's memory, once the frame pool is counted: with less than 512 MiB
+ * managed, as Linux's hugepage_init clears every flag, `defrag` is never
+ * and `use_zero_page` 0. */
+void procfs_thp_boot(void);
+
 /** The kernel's id of the process or thread whose /proc directory has the
  * number `pid` in the caller's PID namespace, or of the caller's process for
  * SYNTH_PID_SELF; -1 when there is none that has not been reaped. */
 int procfs_resolve_pid(int pid);
 
 /** Whether the caller may see process `pid`'s memory map and descriptors,
- * as Linux's ptrace read check asks: a thread of its own process, a
- * privileged caller, or one with its real user ID when it is not privileged.
- * 0 when there is no such process. */
+ * as Linux's ptrace check with PTRACE_MODE_FSCREDS asks: a thread of its
+ * own process, a privileged caller, or one whose file-system user and group
+ * IDs are each of the process's three, while the process is dumpable and
+ * not privileged. 0 when there is no such process. */
 int procfs_may_read(int pid);
+
+/** Whether process `pid` is the caller's own, a thread of the caller's
+ * thread group, as Linux's same_thread_group asks: 1 or 0, 0 when there is
+ * no such process. */
+int procfs_same_group(int pid);
+
+/** The mode of the file `procfile` of a process's directory when only its
+ * owner may open it, Linux's: 0400 for environ, auxv and syscall, 0600 for
+ * mem; 0 for a file of another mode. */
+uint32_t procfs_owner_mode(int procfile);
 
 /** The id of the process, or of the thread for a path under
  * /proc/<pid>/task/<tid>, whose files the path `vp` shows; -1 when the
@@ -44,6 +62,11 @@ int procfs_resolve_id(const struct vpath *vp);
 /** The link count of process `pid`'s task directory: 2 and one for each of
  * its live threads. */
 uint32_t procfs_task_links(int pid);
+
+/** The number of descriptors process `pid` has open, the size Linux's
+ * getattr gives its /proc/<pid>/fd directory: 0 for a process with no
+ * descriptor table, a zombie's, and -ENOENT once the process is gone. */
+int procfs_fd_count(int pid);
 
 /**
  * Open the file of /proc or /sys at the path `vp`, with open(2)'s `flags`,
@@ -204,6 +227,11 @@ struct vfs_mount;
  * 16 for any other mount. */
 uint32_t procfs_mount_dev(int i, const struct vfs_mount *m);
 
+/** The name of the `idx`-th file system type /proc/filesystems lists, in
+ * `*name`, which sysfs(2) numbers the types by: 1 when the type stands on
+ * no device, 0 when it does, or -1 past the last. */
+int procfs_filesystem_at(int idx, const char **name);
+
 /** The id /proc/PID/mountinfo gives the mount `m`, its entry's index plus
  * one, which statx reports as STATX_MNT_ID; 0 for NULL or a mount not in
  * the table. */
@@ -249,6 +277,16 @@ int sysfs_device_exists(int node, int key);
  * its directory has boot_vga. */
 int sysfs_pci_is_vga(int key);
 
+/** The length in bytes of standard BAR `bar` of the PCI function `key`, 0
+ * for a BAR that decodes nothing or a function that is not there. */
+uint64_t sysfs_pci_bar_size(int key, int bar);
+
+/** Whether the file `attr` of the directory of the PCI function `key` is
+ * there: boot_vga for a VGA function alone, resourceN for a BAR with a
+ * length alone, resourceN_wc for a prefetchable memory BAR with
+ * write-combining available, and every other file always. */
+int sysfs_pci_attr_present(int key, int attr);
+
 /** The inode an open descriptor of /proc or /sys, `e`, has by the file it
  * was opened on, so that fstat reports what the stat of its path does; 0
  * when `e` is no such descriptor. */
@@ -258,17 +296,46 @@ uint32_t procfs_fd_ino(struct fd_entry *e);
  * share: a base and the low 16 bits of `pid`. */
 uint32_t procfs_ino_pid(int pid);
 
-/** The owner of the files and directories of process `pid` under /proc,
+/** The owner of a node of process `pid` under /proc, whose full type and
+ * permission bits are `mode`: its effective IDs for a directory of mode
+ * 0555, even after the address space is gone, and for any other node while
+ * its address space is dumpable; root otherwise. Returns 0,
+ * with the IDs in `*uid` and `*gid`, or -ENOENT for no such process. */
+int procfs_pid_owner(int pid, uint32_t mode, uint32_t *uid, uint32_t *gid);
+
+/** The owner of the files of process `pid` under /proc,
  * whose effective user ID may write its oom_score_adj beside a privileged
  * caller: the process's effective user and group IDs while it has an address
  * space that is dumpable, and 0 otherwise. 0, or -ENOENT when there is no
  * such process. */
 int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid);
 
-/** The same owner for a descriptor open on a file of /proc/<pid>, into
- * `*uid` and `*gid`: 1 for oom_score_adj, uid_map, gid_map and setgroups,
- * whose mode lets the owner write them, and 0 for another file; -1 when `e`
- * is no such descriptor or its process is gone. */
+/** Give the descriptors open on the node `vp` names the owner a lookup of
+ * its path gives it now, as Linux's lookup sets the owner of the inode they
+ * share, when its inode keeps that owner (struct synth_owner): a file of
+ * /proc/<pid> outside its net directory, a descriptor's fdinfo file, a
+ * process's fd, fdinfo or task directory, or its exe, cwd, root, descriptor
+ * or namespace link. Any other node, and a process gone, change nothing. */
+void procfs_lookup_owner(const struct vpath *vp);
+
+/** Put `o`, the zeroed record of a descriptor just opened on the node `vp`
+ * names, on the list of kept owners when that node's inode keeps its owner
+ * (`procfs_lookup_owner`), and give it and the node's other records the
+ * owner of this lookup, the open's. Any other node, or a process gone,
+ * leaves `o` off the list, with `kept` 0. */
+void procfs_owner_keep(struct synth_owner *o, const struct vpath *vp);
+
+/** Take `o` off the list of kept owners, if it is on it; at the last close
+ * of the description that holds it, before its record is freed. */
+void procfs_owner_drop(struct synth_owner *o);
+
+/** The owner of a descriptor open on a file of /proc/<pid> or an fdinfo
+ * file, into `*uid` and `*gid`: what the last lookup of its path gave it
+ * (`procfs_lookup_owner`), the open's own among them, which a change of the
+ * process's dumpable flag or IDs since then leaves as it was, and which
+ * stays once the process is gone. Returns 1 for oom_score_adj, uid_map,
+ * gid_map, setgroups and comm, whose mode lets the owner write them, and 0
+ * for another file; -1 when `e` is no such descriptor. */
 int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid);
 
 /** The permission bits of `e` when it is open on a /proc/sys or /sys file,

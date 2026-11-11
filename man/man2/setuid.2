@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd November 11, 2026
 .Dt SETUID 2
 .Os
 .Sh NAME
@@ -104,6 +104,25 @@ with size zero reports the current count; see
 A call that changes the effective user or group ID also clears the
 process's dumpable flag and its parent-death signal, as on Linux; see
 .Xr prctl 2 .
+.Pp
+Each of the user ID calls also makes the thread's file-system user ID
+its effective one, whether or not the effective ID changed, and each of
+the group ID calls its file-system group ID, which undoes what
+.Xr setfsuid 2
+set apart.
+It gives back the file capabilities that
+.Xr setfsuid 2
+took away only when the effective user ID comes to 0 from another; see
+that page.
+The exception is a
+.Fn setresuid
+or
+.Fn setresgid
+that would change no ID: one whose every argument is \-1 or the ID
+already in its field, and whose effective ID, if given, equals the
+file-system one.
+It returns 0 at once, as on Linux, and changes nothing, the file-system
+ID, the dumpable flag and the parent-death signal included.
 .Pp
 A change of real user ID makes the thread count against the new user's
 total for
@@ -222,4 +241,5 @@ values, or called
 .Sh SEE ALSO
 .Xr fork 2 ,
 .Xr getuid 2 ,
-.Xr prlimit64 2
+.Xr prlimit64 2 ,
+.Xr setfsuid 2

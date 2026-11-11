@@ -575,6 +575,18 @@ void i915_debugfs_register(struct drm_i915_private *i915)
     (void)i915;
 }
 
+/* The release and the bring-up through /sys, i915_handoff.c, which
+ * i915_handoff_hosttest.c tests; no row here unbinds the driver. */
+void i915_handoff_bound(struct drm_i915_private *i915)
+{
+    (void)i915;
+}
+
+void i915_handoff_unbound(struct drm_i915_private *i915)
+{
+    (void)i915;
+}
+
 /* The contexts and requests, i915_gem_context.c and i915_request.c, which
  * the bind reaches only through the DRM core's hooks and the unplug. */
 int32_t i915_driver_open(struct drm_device *dev, struct drm_file *file)
@@ -1103,6 +1115,9 @@ static void row_fault_commands(void)
     CHECK("refused: words after clear and light",
           cmd(f, "clear all") == -EINVAL && cmd(f, "light now") == -EINVAL);
     CHECK("refused: nothing", cmd(f, "") == -EINVAL && cmd(f, "\n") == -EINVAL);
+    CHECK("refused: a word with NULs, read no further than the word's name",
+          fake_command(f, "clear\0\0\0\0", 9) == -EINVAL &&
+              fake_command(f, "hang\0\0\0\0\0", 9) == -EINVAL);
     CHECK("refused: nothing armed", f->armed[FAKE_HANG] == 0);
     done();
 }

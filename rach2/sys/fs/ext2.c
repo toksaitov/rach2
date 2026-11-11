@@ -5433,8 +5433,8 @@ static int inode_new(struct ext2_mount *em, const struct ext2_node *dir, uint32_
         }
         return rc;
     }
-    n->uid = current_proc ? current_proc->euid : 0;
-    n->gid = current_proc ? current_proc->egid : 0;
+    n->uid = current_proc ? proc_fsuid(current_proc) : 0;
+    n->gid = current_proc ? proc_fsgid(current_proc) : 0;
     if (dir->mode & S_ISGID_) {
         n->gid = dir->gid;
         if ((mode & S_IFMT_) == S_IFDIR_) {
@@ -8471,6 +8471,147 @@ static int ext2_xattr(struct vfs_mount *mnt, void *node, struct vfs_xattr *arg)
     return rc;
 }
 
+/* The cached-only map walk, in logical block order. A page counts once,
+ * after its last allocated block; holes alone count no page. */
+struct ext2_cache_walk {
+    struct ext2_mount *em;
+    struct vfs_cachestat *cs;
+    uint32_t first, last; /* inclusive logical block indexes */
+    uint32_t perpage;
+    uint32_t page;
+    uint32_t visits; /* steps since the last scheduling point */
+    int any, missing, dirty;
+};
+
+/** Account for the page just visited, then clear its block state. */
+static void cache_page_end(struct ext2_cache_walk *walk)
+{
+    if (walk->any && !walk->missing) {
+        walk->cs->cache++;
+        walk->cs->dirty += walk->dirty != 0;
+    }
+    walk->any = walk->missing = walk->dirty = 0;
+}
+
+/** Count one allocated data block at logical `index`, present in the
+ * pending write batch or the buffer cache. No lock is taken and no read
+ * or wait is performed: the file's node lock keeps its map stable. */
+static void cache_data(struct ext2_cache_walk *walk, uint32_t block, uint32_t index)
+{
+    struct ext2_mount *em = walk->em;
+    uint64_t key = ((uint64_t)block << em->block_shift) >> BCACHE_BLOCK_SHIFT;
+    struct ext2_image *pending = writeback_find(em, (uint32_t)key);
+    uint32_t page = index / walk->perpage;
+    int state = pending ? (pending->dirty ? 2 : 1) : bcache_state(em->dev, key);
+
+    if (page != walk->page) {
+        cache_page_end(walk);
+        walk->page = page;
+    }
+    walk->any = 1;
+    walk->missing |= state == 0;
+    walk->dirty |= state == 2;
+}
+
+/** Read entry `index` of a pointer `block` from the batch or a resident,
+ * idle buffer. Return 1 with the pointer in `out`, or 0 for an uncached
+ * map block. Never fetch metadata merely to count cached data pages. */
+static int cache_pointer(struct ext2_mount *em, uint32_t block, uint32_t index, uint32_t *out)
+{
+    uint64_t at = ((uint64_t)block << em->block_shift) + index * 4u;
+    uint32_t offset = (uint32_t)at & (BCACHE_BLOCK_BYTES - 1u);
+    struct ext2_image *pending = writeback_find(em, (uint32_t)(at >> BCACHE_BLOCK_SHIFT));
+    uint8_t raw[4];
+
+    if (pending) {
+        k_memcpy(raw, pending->data + offset, sizeof(raw));
+    } else if (!bcache_copy_cached(em->dev, at >> BCACHE_BLOCK_SHIFT, offset, raw, sizeof(raw))) {
+        return 0;
+    }
+    *out = le32(raw);
+    return 1;
+}
+
+/** Visit the allocated, resident part of a subtree rooted at `block`.
+ * Its logical indexes are [base, base + span), and `level` is 0 for data,
+ * up to 3 for a pointer block. The node lock remains held, but no buffer
+ * pointer survives the scheduling point every EXT2_SERVICE_BLOCKS steps. */
+static void cache_branch(struct ext2_cache_walk *walk, uint32_t block, uint32_t base, uint32_t span,
+                         int level)
+{
+    uint32_t first, last, sub, i;
+
+    if (++walk->visits == EXT2_SERVICE_BLOCKS) {
+        sched_service_point();
+        walk->visits = 0;
+    }
+    if (!block || !data_block_ok(walk->em, block) || base > walk->last ||
+        base + span - 1u < walk->first) {
+        return;
+    }
+    if (level == 0) {
+        cache_data(walk, block, base);
+        return;
+    }
+    sub = span / (walk->em->block_size / 4u);
+    first = walk->first > base ? (walk->first - base) / sub : 0;
+    last = walk->last < base + span - 1u ? (walk->last - base) / sub : span / sub - 1u;
+    for (i = first; i <= last; i++) {
+        uint32_t child;
+
+        if (!cache_pointer(walk->em, block, i, &child)) {
+            /* The rest of the page under way, if any, is under this entry. */
+            if ((base + i * sub) / walk->perpage == walk->page) {
+                walk->missing = 1;
+            }
+            return;
+        }
+        cache_branch(walk, child, base + i * sub, sub, level - 1);
+    }
+}
+
+/** Count file pages whose allocated blocks are in the batch or cache.
+ * Walk only allocated branches with resident metadata, under the node's
+ * lock. A sparse hole costs one step per absent branch, and the call
+ * performs no disk I/O; long walks let other kernel work run. */
+static void ext2_cachestat(struct vfs_mount *mnt, void *node, uint64_t first, uint64_t last,
+                           struct vfs_cachestat *cs)
+{
+    struct ext2_node *n = node;
+    struct ext2_cache_walk walk;
+    uint32_t base, span, i;
+
+    node_lock(n);
+    if (n->size == 0 || first > (n->size - 1u) >> 12) {
+        node_unlock(n);
+        return;
+    }
+    if (last > (n->size - 1u) >> 12) {
+        last = (n->size - 1u) >> 12;
+    }
+    k_memset(&walk, 0, sizeof(walk));
+    walk.em = em_of(mnt);
+    walk.cs = cs;
+    walk.perpage = 4096u / walk.em->block_size;
+    walk.first = (uint32_t)(first * walk.perpage);
+    walk.last = (uint32_t)((last + 1u) * walk.perpage - 1u);
+    if (walk.last > (n->size - 1u) >> walk.em->block_shift) {
+        walk.last = (uint32_t)((n->size - 1u) >> walk.em->block_shift);
+    }
+    for (i = 0; i < EXT2_NDIR; i++) {
+        cache_branch(&walk, n->block[i], i, 1, 0);
+    }
+    base = EXT2_NDIR;
+    span = 1;
+    for (i = 1; i <= 3; i++) {
+        span *= walk.em->block_size / 4u;
+        cache_branch(&walk, n->block[EXT2_NDIR + i - 1u], base, span, (int)i);
+        base += span;
+    }
+    cache_page_end(&walk);
+    node_unlock(n);
+}
+
 static const struct vfs_ops ext2_ops = {
     ext2_lookup,
     0, /* lookup_rest */
@@ -8509,6 +8650,7 @@ static const struct vfs_ops ext2_ops = {
     ext2_unlock_node,
     ext2_shutdown,
     ext2_xattr,
+    ext2_cachestat,
 };
 
 const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops, 0, 0, 1, 1};

@@ -5,6 +5,7 @@
 #include "address.h"
 #include "../../proc/process.h"
 #include "../../proc/wait_queue.h"
+#include "../../fs/sleeplock.h"
 
 /*
  * socket: the kernel object behind a descriptor of type FD_TYPE_SOCKET, for
@@ -42,6 +43,11 @@
 /* What a receive or a stream send that does not wait returns when it would
  * have to wait: EAGAIN, negated. */
 #define SOCK_EAGAIN (-11)
+
+/* The bits of a stream's `shutdown`, Linux's RCV_SHUTDOWN and
+ * SEND_SHUTDOWN. */
+#define SOCK_RCV_SHUTDOWN  0x1
+#define SOCK_SEND_SHUTDOWN 0x2
 
 /* Policy: an AF_INET6 socket holds at most eight multicast memberships
  * (IPV6_JOIN_GROUP), each a group on one interface. */
@@ -249,10 +255,13 @@ typedef struct socket {
     int accept_head, accept_tail;
     int listening;
 
-    /* Set by shutdown(SHUT_RDWR), which detaches the block: a read of the
-     * socket afterwards is the end of input, where a stream that never
-     * connected has no block either and answers ENOTCONN. */
-    int shut_down;
+    /* A stream's halves shut by shutdown(2), as Linux's sk_shutdown:
+     * SOCK_RCV_SHUTDOWN, from SHUT_RD, makes a read of an empty stream the
+     * end of input and poll report POLLIN and POLLRDHUP, and has new data
+     * after this side's FIN answered with a reset (`tcp_rx_closed_data`);
+     * SOCK_SEND_SHUTDOWN, from SHUT_WR, has poll report POLLOUT, where a
+     * send fails with EPIPE. Written under `net_lock`. */
+    int shutdown;
 
     /*
      * Identity, for the files that report sockets. `inode` is this socket's
@@ -288,6 +297,10 @@ typedef struct socket {
      * accept. A wake from the receive path wakes every one; each checks its
      * own condition again. */
     wait_queue_t waiters;
+    /* Held by a stream receive from its start to its return but for its
+     * waits for data, as Linux's lock_sock, so that no other reader takes
+     * bytes while it brings in a destination (`stream_readv`). */
+    struct sleep_lock recv_lock;
 
     /* AF_NETLINK only: the socket's port id and its queue of answers
      * (netlink.c). */
@@ -529,12 +542,14 @@ void socket_tcp_connected(struct socket *sock);
 void socket_tcp_writable(struct socket *sock);
 /**
  * Queue the `len` bytes at `buf` on the stream, waiting for room in the send
- * ring as long as none is free, and return the count queued, never 0 for a
- * nonzero `len`. Returns SOCK_EAGAIN instead of waiting when `nonblock` is
- * set, -EINTR on a signal, and on a connection no longer in a sending state
- * the error recorded for it or -EPIPE. `buf` is a user buffer the caller
- * has brought in (`user_buffer_ok`); after a wait this brings it in again,
- * and returns -EFAULT, with nothing queued, when it no longer can.
+ * ring as long as none is free, and for a connection still in its handshake
+ * to be established, and return the count queued, never 0 for a nonzero
+ * `len`. Returns SOCK_EAGAIN instead of waiting when `nonblock` is set,
+ * -EINTR on a signal, the error recorded for a connection that has one, and
+ * -EPIPE for one past its handshake and no longer in a sending state. `buf`
+ * is a user buffer the caller has brought in (`user_buffer_ok`); after a
+ * wait this brings it in again, and returns -EFAULT, with nothing queued,
+ * when it no longer can.
  */
 int socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblock);
 /** Copy in-order stream bytes into the receive ring and wake a reader;
@@ -563,6 +578,25 @@ int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len, int peek);
 /** `socket_tcp_recv` without the wait (MSG_DONTWAIT): SOCK_EAGAIN where it
  * would wait. */
 int socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len, int peek);
+/** Copy queued stream bytes from `off` past the next unread one, leaving
+ * them queued; 0 when there are none. */
+int socket_tcp_peek_at(struct socket *sock, uint32_t off, uint8_t *buf, int len);
+/** The stream bytes queued for a read of `sock`, which a read takes without
+ * waiting; 0 for a socket with no connection or a listener. */
+uint32_t socket_tcp_queued(const struct socket *sock);
+/** The bytes from `off` past the next unread one of `sock` to the end of the
+ * receive buffer they lie in, the most a stream receive takes from there
+ * as one copy, as Linux's tcp_recvmsg_locked copies one sk_buff at a time;
+ * 0 when no byte lies past `off`. Never waits. */
+uint32_t socket_tcp_buffer(struct socket *sock, uint32_t off);
+/**
+ * Wait, for a stream receive that has taken bytes and wants more
+ * (MSG_WAITALL), until more than `have` bytes are queued: 1 when they are;
+ * 0 when the input ended, the connection closed or has an error, or the
+ * socket has no connection, which the receive leaves for the next call;
+ * -EINTR or the wait's error on a signal.
+ */
+int socket_tcp_wait_more(struct socket *sock, uint32_t have);
 /** Wake every waiter of `sock` on the peer's FIN or the connection's end. */
 void socket_tcp_fin(struct socket *sock);
 

@@ -29,11 +29,19 @@
  * is EAGAIN. A setgid directory gives a file
  * made in it its group, and a directory its group and the bit. A process
  * of another user may not open the maps or the descriptors
- * of a root process under /proc, and reads its own. Its /proc directory is
- * root's while a change of ids leaves it not dumpable, and its own once
- * PR_SET_DUMPABLE makes it so, as on Linux, and so is a descriptor open on its
- * maps. mlock, mlock2, munlock, mlockall and munlockall accept a mapped
- * range and count in VmLck, a mapping made under MCL_FUTURE is locked, an
+ * of a root process under /proc, and reads its own. Its /proc directory,
+ * mode 0555, is its own whether or not it is dumpable; a stat of its status
+ * is root's while a change of ids leaves it not dumpable and its own once
+ * PR_SET_DUMPABLE makes it so; and a descriptor open on its maps before that
+ * stays root's, the owner the open's lookup gave it, as on Linux. Normal
+ * and O_PATH descriptors on files and directories keep their user and group
+ * IDs across credential and dumpability changes. A walk, including one to a
+ * missing child, refreshes the directories it crosses; listing /dev does
+ * not. O_PATH descriptors on unfollowed links keep each link's owner until
+ * lstat reaches it. An inherited fd directory's owner governs fchdir from
+ * another process before and after a walk updates it. mlock,
+ * mlock2, munlock, mlockall and munlockall accept a mapped range and count
+ * in VmLck, a mapping made under MCL_FUTURE is locked, an
  * unprivileged mlock past RLIMIT_MEMLOCK fails with ENOMEM and with a limit
  * of 0 with EPERM, and mlock fails on a gap with ENOMEM; mincore reports a
  * touched page resident.
@@ -62,7 +70,9 @@
  * buffers it waits for the first byte and stops when the pipe is empty;
  * with SPLICE_F_NONBLOCK it is EAGAIN on an empty pipe's read end and a
  * full pipe's write end; on a descriptor that is not a pipe it is EBADF,
- * and with more than IOV_MAX buffers EINVAL. A pty master
+ * and with more than IOV_MAX buffers EINVAL. read(2) of a pipe into NULL
+ * is EAGAIN when the pipe is empty and nonblocking and 0 once it has ended,
+ * as Linux's pipe_read answers before its copy. A pty master
  * reads the slave's last output and then EIO once the slave has closed.
  * posix_fallocate gives a file in /dev/shm its pages, the size and the blocks
  * of the range, and answers EOPNOTSUPP for a file of KRFFS or of /proc open for
@@ -80,9 +90,12 @@
  * /dev/mem reads the first megabyte and maps the local APIC, and fails with
  * EPERM for RAM and with EINVAL for a private mapping. klogctl gives the log
  * ring's size, its records whole, and after a clear none of those before;
- * /dev/log leads to /var/run/log. The clock's wake alarm fails with ETIME for a
- * time past and EINVAL for one two days ahead, ends a read at the alarm, and
- * wakes a suspend to idle that gives no process time meanwhile.
+ * /dev/log leads to /var/run/log. The clock's wake alarm, set for a time past
+ * or enabled by RTC_AIE_ON with its time past, comes, which a read waits for,
+ * and is then off with its time kept; one two days ahead fails with EINVAL,
+ * and one an hour ahead reads back with its time, which an invalid date and
+ * time leaves set. The alarm ends a read at its time and wakes a suspend to
+ * idle that gives no process time meanwhile.
  *
  * It prints "CALLSMUSL OK" and exits 0 on success, or prints "CALLSMUSL FAIL
  * (detail: errno N)" and exits 1 at the first failure.
@@ -105,20 +118,24 @@
  * `sendfile-file`, `copy-file-range`, `seek-data-hole`, `ficlone-eopnotsupp`,
  * `faccessat2`, `splice-ebadf`, `copy-file-range-bind-overlap`,
  * `splice-readers-once`, `vmsplice-write`, `vmsplice-read`,
- * `vmsplice-nonblock`, `vmsplice-ebadf`, `vmsplice-einval`, `pty-hangup-eio`,
+ * `vmsplice-nonblock`, `vmsplice-ebadf`, `vmsplice-einval`,
+ * `pipe-read-null-eagain`, `pipe-read-null-eof`, `pty-hangup-eio`,
  * `fallocate-krffs`, `fallocate-ebadf`, `fallocate-einval`, `fallocate-espipe`,
  * `fallocate-mode`, `fallocate-proc`, `fallocate-shm`, `adjtimex`,
  * `clock-adjtime`, `listxattr`, `getxattr-absent`, `lsetxattr-enoent`,
  * `readahead-fadvise`, `fadvise-espipe`, `noctty-session`, `maxrss-self`,
  * `maxrss-child`, `udp-refused`, `setgid-file`, `setgid-dir`,
- * `privacy-other-root`, `privacy-own-maps`, `privacy-dumpable`,
+ * `privacy-other-root`, `privacy-own-maps`, `privacy-kept-dirs`,
+ * `privacy-dumpable`, `privacy-kept-files`, `privacy-dev-list`,
+ * `privacy-kept-links`, `privacy-fchdir-owner`, `privacy-fd-walk`,
  * `timer-si-timer`, `timer-overrun`, `timer-delete`, `sigqueue`,
  * `rt-sigqueueinfo`, `pty-nonblock-eagain`, `pty-writer-sleeps`, `pty-64k`,
  * `pty-whole-lines`, `signalfd-eagain`, `signalfd-read`, `itimer-interval`,
  * `itimer-signals`, `ptimer-gettime`, `ptimer-signals`, `devmem-low`,
  * `devmem-ram-eperm`, `devmem-private-einval`, `devmem-apic`, `klog-size`,
- * `klog-records`, `klog-clear`, `dev-log-link`, `rtc-alarm-refused`,
- * `rtc-alarm-readback`, `rtc-read-af`, `rtc-wakeup-enabled`,
+ * `klog-records`, `klog-clear`, `dev-log-link`, `rtc-alarm-range`,
+ * `rtc-aie-on-past`, `rtc-alarm-readback`, `rtc-alarm-invalid`,
+ * `rtc-read-af`, `rtc-wakealarm-empty`, `rtc-wakeup-enabled`,
  * `power-state-mode`, `freeze-wakes` and `freeze-holds`. `ids-unsigned`,
  * `recvmmsg-wide-count` and `socket-wide-domain` are x86-64's alone, and the
  * branch of the group `arch`, `i686` or `x86-64`, says whether they ran. A
@@ -485,22 +502,306 @@ static int setgids(void)
     return 0;
 }
 
+/* Descriptors kept by privacies_child; its exit closes every one. */
+struct privacy_fds {
+    uid_t user;
+    gid_t group;
+    int dirs[3][2];        /* fd, fdinfo, task; each opened for reading and with O_PATH */
+    struct stat before[3]; /* directory owners before the child's IDs change */
+    int maps;
+    int pathmaps;
+    int info[2]; /* the same fdinfo file, opened for reading and with O_PATH */
+    char info_path[64];
+    int links[7];
+    char link_path[7][64];
+};
+
+/** Whether fstat of fd reports the given owner and complete mode. */
+static int privacy_owner(int fd, uid_t user, gid_t group, mode_t mode)
+{
+    struct stat st;
+
+    return fstat(fd, &st) == 0 && st.st_uid == user && st.st_gid == group && st.st_mode == mode;
+}
+
+/** Open the three directories before changing IDs; 0, or 1 on failure. */
+static int privacy_dirs_open(struct privacy_fds *p)
+{
+    static const char *const paths[] = {"/proc/self/fd", "/proc/self/fdinfo", "/proc/self/task"};
+    int i;
+
+    for (i = 0; i < 3; i++) {
+        p->dirs[i][0] = open(paths[i], O_RDONLY | O_DIRECTORY);
+        p->dirs[i][1] = open(paths[i], O_PATH | O_DIRECTORY);
+        if (p->dirs[i][0] < 0 || p->dirs[i][1] < 0 || fstat(p->dirs[i][0], &p->before[i]) != 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /**
- * Run in a child of root: as user 4243, open the root process `parent`'s maps
- * and fd directory and read a link in that directory, which fail with EACCES,
- * open the caller's own maps, and check the owner of its /proc directory
- * before and after PR_SET_DUMPABLE. Returns 0, or the number of the first
- * step that went wrong.
+ * Check that changing IDs leaves each directory's owner alone, and a walk
+ * below fdinfo or task updates it even when the last lookup fails. Returns
+ * 0, or 1 on failure. The caller has changed both IDs since opening them.
+ */
+static int privacy_dirs_kept(struct privacy_fds *p)
+{
+    static const char *const missing[] = {"/proc/self/fdinfo/2147483647",
+                                          "/proc/self/task/2147483647/status"};
+    struct stat st;
+    mode_t mode;
+    int i, j;
+
+    for (i = 0; i < 3; i++) {
+        mode = S_IFDIR | (i == 0 ? 0500 : 0555);
+        for (j = 0; j < 2; j++) {
+            if (!privacy_owner(p->dirs[i][j], p->before[i].st_uid, p->before[i].st_gid, mode)) {
+                return 1;
+            }
+        }
+    }
+    for (i = 1; i < 3; i++) {
+        if (stat(missing[i - 1], &st) != -1 || errno != ENOENT) {
+            return 1;
+        }
+        for (j = 0; j < 2; j++) {
+            if (!privacy_owner(p->dirs[i][j], p->user, p->group, S_IFDIR | 0555)) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/** Open the files and unfollowed links while not dumpable; 0, or 1. */
+static int privacy_leaves_open(struct privacy_fds *p)
+{
+    static const char *const names[] = {"exe", "cwd", "root", "ns/mnt", "ns/uts"};
+    int i;
+
+    p->pathmaps = open("/proc/self/maps", O_PATH);
+    snprintf(p->info_path, sizeof p->info_path, "/proc/self/fdinfo/%d", p->maps);
+    p->info[0] = open(p->info_path, O_RDONLY);
+    p->info[1] = open(p->info_path, O_PATH);
+    if (p->pathmaps < 0 || p->info[0] < 0 || p->info[1] < 0) {
+        return 1;
+    }
+    for (i = 0; i < 7; i++) {
+        if (i < 5) {
+            snprintf(p->link_path[i], sizeof p->link_path[i], "/proc/self/%s", names[i]);
+        } else {
+            snprintf(p->link_path[i], sizeof p->link_path[i], "/proc/self/fd/%d",
+                     i == 5 ? p->maps : p->dirs[0][0]);
+        }
+        p->links[i] = open(p->link_path[i], O_PATH | O_NOFOLLOW);
+        if (p->links[i] < 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Check the directory's 0555 mode and owner and status's changing owner
+ * across PR_SET_DUMPABLE, while maps keeps its old owner. Returns 0, or 1.
+ */
+static int privacy_dumpable(struct privacy_fds *p)
+{
+    struct stat st;
+
+    if (stat("/proc/self/", &st) != 0 || st.st_mode != (S_IFDIR | 0555) || st.st_uid != p->user ||
+        st.st_gid != p->group || stat("/proc/self/status", &st) != 0 || st.st_uid != 0 ||
+        st.st_gid != 0 || !privacy_owner(p->maps, 0, 0, S_IFREG | 0444)) {
+        return 1;
+    }
+    if (prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0 || stat("/proc/self/", &st) != 0 ||
+        st.st_mode != (S_IFDIR | 0555) || st.st_uid != p->user || st.st_gid != p->group ||
+        stat("/proc/self/status", &st) != 0 || st.st_uid != p->user || st.st_gid != p->group ||
+        !privacy_owner(p->maps, 0, 0, S_IFREG | 0444)) {
+        return 1;
+    }
+    return 0;
+}
+
+/**
+ * Check the retained owners of normal and O_PATH files after dumpability
+ * changes, then their update by stat, including fdinfo's 0444 mode. 0, or 1.
+ */
+static int privacy_files_kept(struct privacy_fds *p)
+{
+    struct stat st;
+    int i;
+
+    if (!privacy_owner(p->pathmaps, 0, 0, S_IFREG | 0444)) {
+        return 1;
+    }
+    for (i = 0; i < 2; i++) {
+        if (!privacy_owner(p->info[i], 0, 0, S_IFREG | 0444)) {
+            return 1;
+        }
+    }
+    if (stat("/proc/self/maps", &st) != 0 || st.st_uid != p->user || st.st_gid != p->group ||
+        !privacy_owner(p->maps, p->user, p->group, S_IFREG | 0444) ||
+        !privacy_owner(p->pathmaps, p->user, p->group, S_IFREG | 0444) ||
+        stat(p->info_path, &st) != 0 || st.st_mode != (S_IFREG | 0444) || st.st_uid != p->user ||
+        st.st_gid != p->group) {
+        return 1;
+    }
+    for (i = 0; i < 2; i++) {
+        if (!privacy_owner(p->info[i], p->user, p->group, S_IFREG | 0444)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** List /dev, including fd, without changing /proc/self/fd's owner; 0, or 1. */
+static int privacy_dev_list(struct privacy_fds *p)
+{
+    DIR *d = opendir("/dev");
+    struct dirent *entry;
+    int found = 0, error, i;
+
+    if (!d) {
+        return 1;
+    }
+    errno = 0;
+    while ((entry = readdir(d)) != NULL) {
+        if (strcmp(entry->d_name, "fd") == 0) {
+            found = 1;
+        }
+    }
+    error = errno;
+    if (closedir(d) != 0 || error != 0 || !found) {
+        return 1;
+    }
+    for (i = 0; i < 2; i++) {
+        if (!privacy_owner(p->dirs[0][i], 0, 0, S_IFDIR | 0500)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Check each unfollowed link's old owner, then update it by lstat without
+ * changing any other link's owner, including another namespace or fd link.
+ * Returns 0, or 1 on failure; Linux's fd-link modes depend on the target.
+ */
+static int privacy_links_kept(struct privacy_fds *p)
+{
+    struct stat st;
+    int i, j;
+
+    for (i = 0; i < 7; i++) {
+        for (j = i; j < 7; j++) {
+            if (fstat(p->links[j], &st) != 0 || !S_ISLNK(st.st_mode) || st.st_uid != 0 ||
+                st.st_gid != 0) {
+                return 1;
+            }
+        }
+        if (lstat(p->link_path[i], &st) != 0 || !S_ISLNK(st.st_mode) || st.st_uid != p->user ||
+            st.st_gid != p->group || fstat(p->links[i], &st) != 0 || !S_ISLNK(st.st_mode) ||
+            st.st_uid != p->user || st.st_gid != p->group) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Have a separate process try fchdir on the inherited fd; 0 if it gets
+ * error (0 for success), 1 otherwise. The child exits and is reaped here,
+ * and cannot use Linux's exception that lets a process enter its own fd.
+ */
+static int privacy_chdir(int fd, int error)
+{
+    pid_t pid = fork();
+    int rc, status;
+
+    if (pid == 0) {
+        rc = fchdir(fd);
+        _exit(error == 0 ? rc != 0 : !(rc == -1 && errno == error));
+    }
+    if (pid < 0) {
+        return 1;
+    }
+    do {
+        rc = waitpid(pid, &status, 0);
+    } while (rc < 0 && errno == EINTR);
+    return rc != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0;
+}
+
+/**
+ * Give fd a root owner, then make the process dumpable without another
+ * lookup. Its inherited descriptors must refuse fchdir. Returns 0, or 1.
+ */
+static int privacy_chdir_kept(struct privacy_fds *p)
+{
+    struct stat st;
+    int i;
+
+    if (prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0 || stat("/proc/self/fd", &st) != 0 ||
+        st.st_uid != 0 || st.st_gid != 0 || prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0) {
+        return 1;
+    }
+    for (i = 0; i < 2; i++) {
+        if (!privacy_owner(p->dirs[0][i], 0, 0, S_IFDIR | 0500) ||
+            privacy_chdir(p->dirs[0][i], EACCES)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Walk through fd to update its owner; after clearing dumpability again,
+ * its descriptors keep that owner and allow another process's fchdir.
+ * Returns 0, or 1 on failure.
+ */
+static int privacy_fd_walk(struct privacy_fds *p)
+{
+    struct stat st;
+    char path[64];
+    int i;
+
+    snprintf(path, sizeof path, "/proc/self/fd/%d", p->maps);
+    if (stat(path, &st) != 0) {
+        return 1;
+    }
+    for (i = 0; i < 2; i++) {
+        if (!privacy_owner(p->dirs[0][i], p->user, p->group, S_IFDIR | 0500)) {
+            return 1;
+        }
+    }
+    if (prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0) {
+        return 1;
+    }
+    for (i = 0; i < 2; i++) {
+        if (!privacy_owner(p->dirs[0][i], p->user, p->group, S_IFDIR | 0500) ||
+            privacy_chdir(p->dirs[0][i], 0)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Run the privacy rows in a child of root, changing both IDs to the test's
+ * user and group. All descriptors and the changed credentials die with the
+ * child. Returns 0, or the step that failed, which privacies maps to a row.
  */
 static int privacies_child(pid_t parent)
 {
+    struct privacy_fds p;
     char path[64], link[64];
-    uid_t user = (uid_t)probe_id(4243);
-    struct stat st;
     DIR *d;
-    int fd;
 
-    if (setuid(user) != 0) {
+    p.user = (uid_t)probe_id(4243);
+    p.group = (gid_t)probe_id(4242);
+    if (privacy_dirs_open(&p) || setgid(p.group) != 0 || setuid(p.user) != 0 ||
+        prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0) {
         return 1;
     }
     snprintf(path, sizeof path, "/proc/%d/maps", (int)parent);
@@ -516,51 +817,70 @@ static int privacies_child(pid_t parent)
     if (readlink(path, link, sizeof link) != -1 || errno != EACCES) {
         return 3;
     }
-    fd = open("/proc/self/maps", O_RDONLY);
-    if (fd < 0) {
+    p.maps = open("/proc/self/maps", O_RDONLY);
+    if (p.maps < 0 || read(p.maps, link, sizeof link) <= 0) {
         return 4;
     }
-    if (stat("/proc/self/", &st) != 0 || st.st_uid != 0 ||
-        prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0 || stat("/proc/self/", &st) != 0 ||
-        st.st_uid != user || stat("/proc/self/status", &st) != 0 || st.st_uid != user ||
-        fstat(fd, &st) != 0 || st.st_uid != user) {
+    if (privacy_dirs_kept(&p)) {
         return 5;
     }
-    return 0;
+    if (privacy_leaves_open(&p) || privacy_dumpable(&p)) {
+        return 6;
+    }
+    if (privacy_files_kept(&p)) {
+        return 7;
+    }
+    if (privacy_dev_list(&p)) {
+        return 8;
+    }
+    if (privacy_links_kept(&p)) {
+        return 9;
+    }
+    if (privacy_chdir_kept(&p)) {
+        return 10;
+    }
+    return privacy_fd_walk(&p) ? 11 : 0;
 }
 
-/**
- * Run `privacies_child` in a child and judge its exit status, which also says
- * which of the three rows of etude's report failed: another user's opens, the
- * child's own maps, and its /proc directory. Returns 0, or 1 after the
- * failure is printed.
- */
+/** Run the privacy child and report its nine rows in order; 0, or 1. */
 static int privacies(void)
 {
-    int status;
+    static const char *const failures[] = {
+        "privacy setup or another user's access to a root process",
+        "a child of user 4243 could not read its own maps",
+        "retained /proc directory owners across changed IDs and failed walks",
+        "/proc directory mode or owner across PR_SET_DUMPABLE",
+        "retained /proc file owners or fdinfo mode",
+        "listing /dev changed a retained /proc owner",
+        "retained /proc link owners or their separate lookup updates",
+        "fchdir ignored a retained root owner",
+        "a walk through fd did not update its owner, or fchdir lost that owner"};
+    int status, row;
     int base = rows_reported;
-    pid_t pid, parent = getpid();
+    pid_t pid, waited, parent = getpid();
 
     pid = fork();
     if (pid == 0) {
         _exit(privacies_child(parent));
     }
-    if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status)) {
+    if (pid < 0) {
+        return fail("fork for /proc privacy");
+    }
+    do {
+        waited = waitpid(pid, &status, 0);
+    } while (waited < 0 && errno == EINTR);
+    if (waited != pid || !WIFEXITED(status)) {
         return fail("a child of user 4243");
     }
-    if (WEXITSTATUS(status) == 2 || WEXITSTATUS(status) == 3) {
-        return fail("another user opened a root process's maps or fd directory, or read "
-                    "one of its descriptors' links");
-    }
-    if (WEXITSTATUS(status) == 5) {
-        held_to(base + 2);
-        return fail("the /proc directory of a dumpable process of user 4243 was not its own");
-    }
     if (WEXITSTATUS(status) != 0) {
-        held_to(base + (WEXITSTATUS(status) == 4 ? 1 : 0));
-        return fail("a child of user 4243 could not become it or read its own maps");
+        row = WEXITSTATUS(status) > 3 ? WEXITSTATUS(status) - 3 : 0;
+        if (row >= (int)(sizeof failures / sizeof failures[0])) {
+            return fail("unknown /proc privacy step");
+        }
+        held_to(base + row);
+        return fail(failures[row]);
     }
-    held_to(base + 3);
+    held_to(base + (int)(sizeof failures / sizeof failures[0]));
     return 0;
 }
 
@@ -1534,13 +1854,6 @@ static int spliced_once(void)
 }
 
 /**
- * Check the copies that a second name of a file or a second reader of a
- * pipe could turn wrong: copy_file_range through a bind, and a splice from
- * a pipe that another process reads. Returns 0, or 1 after the failure is
- * printed.
- */
-
-/**
  * Check vmsplice in both directions as Linux's on the pipe `p`: into its
  * write end, the bytes of two buffers whole; out of its read end into three
  * buffers, a wait for the first byte, which a child writes once it sees the
@@ -1649,12 +1962,40 @@ static int vmsplices(void)
     return 0;
 }
 
+/**
+ * Check read(2) of a pipe into NULL as Linux's, whose vfs_read passes NULL
+ * to the pipe since access_ok takes it: an empty nonblocking pipe is EAGAIN
+ * and an ended one 0, each before the copy would fault. Returns 0, or 1
+ * after the failure is printed.
+ */
+static int null_reads(void)
+{
+    char *volatile nowhere = NULL;
+    int p[2];
+
+    if (pipe2(p, O_NONBLOCK) != 0) {
+        return fail("a nonblocking pipe");
+    }
+    errno = 0;
+    if (read(p[0], nowhere, 1) != -1 || errno != EAGAIN) {
+        return fail("a read of an empty nonblocking pipe into NULL was not EAGAIN");
+    }
+    held();
+    close(p[1]);
+    if (read(p[0], nowhere, 1) != 0) {
+        return fail("a read of an ended pipe into NULL did not return 0");
+    }
+    held();
+    close(p[0]);
+    return 0;
+}
+
 /** The rows of copies between pipes and files past `copies`: those of
- * `bind_overlap`, `spliced_once` and `vmsplices`. Returns 0, or 1 after the
- * failure is printed. */
+ * `bind_overlap`, `spliced_once`, `vmsplices` and `null_reads`. Returns 0,
+ * or 1 after the failure is printed. */
 static int overlaps(void)
 {
-    return bind_overlap() || spliced_once() || vmsplices();
+    return bind_overlap() || spliced_once() || vmsplices() || null_reads();
 }
 
 /**
@@ -2039,6 +2380,7 @@ static int klogs(void)
 
 /* Linux's RTC ioctls, which no header of this build has, with the wake
    alarm's struct: enabled, pending and a struct rtc_time of nine ints. */
+#define RTC_AIE_ON    0x7001u
 #define RTC_RD_TIME   0x80247009u
 #define RTC_WKALM_SET 0x4028700Fu
 #define RTC_WKALM_RD  0x80287010u
@@ -2079,6 +2421,21 @@ static long cpu_ticks(pid_t pid)
     return u + s;
 }
 
+/** The seconds since the epoch of the struct rtc_time `tm`, a time in UTC. */
+static time_t rtc_seconds(const int *tm)
+{
+    struct tm t;
+
+    memset(&t, 0, sizeof t);
+    t.tm_sec = tm[0];
+    t.tm_min = tm[1];
+    t.tm_hour = tm[2];
+    t.tm_mday = tm[3];
+    t.tm_mon = tm[4];
+    t.tm_year = tm[5];
+    return timegm(&t);
+}
+
 /**
  * Set the wake alarm of /dev/rtc0, open as `fd`, `ahead` seconds from the
  * clock's time. Returns ioctl's result, with the alarm's date and time in
@@ -2093,14 +2450,7 @@ static int wake_in(int fd, int ahead, struct wkalrm *w)
     if (ioctl(fd, RTC_RD_TIME, w->tm) != 0) {
         return -1;
     }
-    memset(&t, 0, sizeof t);
-    t.tm_sec = w->tm[0];
-    t.tm_min = w->tm[1];
-    t.tm_hour = w->tm[2];
-    t.tm_mday = w->tm[3];
-    t.tm_mon = w->tm[4];
-    t.tm_year = w->tm[5];
-    at = timegm(&t) + ahead;
+    at = rtc_seconds(w->tm) + ahead;
     gmtime_r(&at, &t);
     w->enabled = 1;
     w->tm[0] = t.tm_sec;
@@ -2130,7 +2480,9 @@ static int unfreeze(pid_t spinner, int state, const char *why)
     return why ? fail(why) : 0;
 }
 
-/** Check that freeze waits for the wake alarm while the spinner is held.
+/** Check that freeze waits for the wake alarm while the spinner is held:
+ * the clock has reached the alarm's time when the write returns. RTC_WKALM_RD
+ * gives `pending` as 0, as on Linux, so the alarm is judged by the clock.
  * The spinner writes a byte to a pipe before it spins, and the freeze waits
  * for the byte. The caller owns the RTC descriptor `fd`; return 0, or report
  * a failure. */
@@ -2138,7 +2490,7 @@ static int freezes(int fd)
 {
     struct wkalrm w, back;
     struct stat st;
-    int started[2], spun, state, woke;
+    int started[2], spun, state, woke, now[9];
     long before, after;
     pid_t spinner;
     char c;
@@ -2166,14 +2518,14 @@ static int freezes(int fd)
     }
     held();
     before = cpu_ticks(spinner);
-    if (ioctl(fd, RTC_WKALM_RD, &back) != 0 || back.pending) {
-        return unfreeze(spinner, state, "the wake alarm was already pending before suspend");
+    if (ioctl(fd, RTC_WKALM_RD, &back) != 0 || !back.enabled) {
+        return unfreeze(spinner, state, "the wake alarm came before suspend");
     }
     if (write(state, "freeze", 6) != 6) {
         return unfreeze(spinner, state, "a write of freeze to /sys/power/state");
     }
     after = cpu_ticks(spinner);
-    woke = ioctl(fd, RTC_WKALM_RD, &back) == 0 && back.pending;
+    woke = ioctl(fd, RTC_RD_TIME, now) == 0 && rtc_seconds(now) >= rtc_seconds(w.tm);
     unfreeze(spinner, state, 0);
     if (!woke) {
         return fail("suspend to idle returned before the wake alarm");
@@ -2186,14 +2538,97 @@ static int freezes(int fd)
     return 0;
 }
 
+/** Whether the alarm read back in `back` has the date and time of `w`, the
+ * second to the year. */
+static int same_alarm_time(const struct wkalrm *back, const struct wkalrm *w)
+{
+    return memcmp(back->tm, w->tm, 6 * sizeof(int)) == 0;
+}
+
 /**
- * Check the clock's wake alarm and suspend to idle: an alarm in the past is
- * ETIME and one two days ahead EINVAL; one two seconds ahead reads back
- * enabled and ends a read of /dev/rtc0 with RTC_AF; the device may wake the
- * machine; a descriptor open on /sys/power/state has mode 0644, as its path
- * does; and a write of freeze to it, with the alarm set again, returns at
- * the alarm with a spinning child given no processor time meanwhile, which
- * the kernel counts. Returns 0, or 1 after the failure is printed.
+ * Check that RTC_WKALM_SET refuses with EINVAL each date and time Linux's
+ * rtc_valid_tm refuses, from the alarm `w` set on /dev/rtc0, open as `fd`,
+ * and keeps that alarm, which then reads back enabled with its time. `w` is
+ * an hour ahead, so that it cannot come meanwhile; `pending` is not read,
+ * since Linux gives it as 0. Returns 0, or 1 after the failure is printed.
+ */
+static int refuses_bad_alarms(int fd, const struct wkalrm *w)
+{
+    /* The field of struct rtc_time each case changes, and its value: a
+       second, minute and hour past their range, day 0, February 31, month 12,
+       a year before 1970 and one past INT_MAX - 1900. */
+    static const int field[] = {0, 1, 2, 3, 3, 4, 5, 5};
+    static const int value[] = {60, -1, 24, 0, 31, 12, 69, 0x7fffffff - 1899};
+    struct wkalrm bad, back;
+    char why[80];
+    unsigned i;
+
+    for (i = 0; i < sizeof field / sizeof field[0]; i++) {
+        bad = *w;
+        bad.tm[field[i]] = value[i];
+        if (field[i] == 3 && value[i] == 31) {
+            bad.tm[4] = 1;
+        }
+        if (ioctl(fd, RTC_WKALM_SET, &bad) != -1 || errno != EINVAL) {
+            snprintf(why, sizeof why, "RTC_WKALM_SET took field %d of struct rtc_time as %d",
+                     field[i], value[i]);
+            return fail(why);
+        }
+    }
+    if (ioctl(fd, RTC_WKALM_RD, &back) != 0 || !back.enabled || !same_alarm_time(&back, w)) {
+        return fail("a refused RTC_WKALM_SET did not keep the alarm set before it");
+    }
+    return 0;
+}
+
+/**
+ * Check alarms past on /dev/rtc0, open as `fd`: one set comes, is then off
+ * and reads back with its whole date and time, as Linux's rtc_timer_enqueue
+ * raises it and keeps its expiry, and one two days ahead is EINVAL; and
+ * RTC_AIE_ON with the alarm's time past raises it. Linux raises such an
+ * alarm from work queued by the set or the ioctl (drivers/rtc/interface.c:
+ * 858-861, 939-957), which may run after the call returns, so each check
+ * waits for the alarm before it reads it. Returns 0, or 1 after the failure
+ * is printed.
+ */
+static int past_alarms(int fd)
+{
+    struct wkalrm w, back;
+    unsigned long data = 0;
+    struct pollfd p;
+
+    if (wake_in(fd, -10, &w) != 0 || read(fd, &data, sizeof data) != (ssize_t)sizeof data ||
+        !(data & 0x20) || ioctl(fd, RTC_WKALM_RD, &back) != 0 || back.enabled ||
+        !same_alarm_time(&back, &w)) {
+        return fail("a wake alarm in the past did not come and keep its date and time");
+    }
+    if (wake_in(fd, 2 * 86400, &w) != -1 || errno != EINVAL) {
+        return fail("a wake alarm two days ahead was taken");
+    }
+    held();
+    p.fd = fd;
+    p.events = POLLIN;
+    p.revents = 0;
+    if (wake_in(fd, -10, &w) != 0 || read(fd, &data, sizeof data) != (ssize_t)sizeof data ||
+        ioctl(fd, RTC_AIE_ON, 0) != 0 || poll(&p, 1, -1) != 1 || !(p.revents & POLLIN) ||
+        read(fd, &data, sizeof data) != (ssize_t)sizeof data || !(data & 0x20) ||
+        ioctl(fd, RTC_WKALM_RD, &back) != 0 || back.enabled || !same_alarm_time(&back, &w)) {
+        return fail("RTC_AIE_ON with an alarm past did not raise it");
+    }
+    held();
+    return 0;
+}
+
+/**
+ * Check the clock's wake alarm and suspend to idle: the alarms past
+ * (`past_alarms`); one an hour ahead reads back enabled, and an invalid
+ * date and time is EINVAL and keeps it; one two seconds ahead ends a read of
+ * /dev/rtc0 with RTC_AF, after which /sys/class/rtc/rtc0/wakealarm reads
+ * empty; the device may wake the machine; a descriptor open on
+ * /sys/power/state has mode 0644, as its path does; and a write of freeze to
+ * it, with the alarm set again, returns at the alarm with a spinning child
+ * given no processor time meanwhile, which the kernel counts. Returns 0, or
+ * 1 after the failure is printed.
  */
 static int rtcs(void)
 {
@@ -2205,19 +2640,28 @@ static int rtcs(void)
     if (fd < 0) {
         return fail("open /dev/rtc0");
     }
-    if (wake_in(fd, -10, &w) != -1 || errno != ETIME || wake_in(fd, 2 * 86400, &w) != -1 ||
-        errno != EINVAL) {
-        return fail("a wake alarm in the past or two days ahead was taken");
+    if (past_alarms(fd) != 0) {
+        return 1;
+    }
+    if (wake_in(fd, 3600, &w) != 0 || ioctl(fd, RTC_WKALM_RD, &back) != 0 || !back.enabled ||
+        !same_alarm_time(&back, &w)) {
+        return fail("a wake alarm an hour ahead did not read back");
     }
     held();
-    if (wake_in(fd, 2, &w) != 0 || ioctl(fd, RTC_WKALM_RD, &back) != 0 || !back.enabled ||
-        back.tm[0] != w.tm[0] || back.tm[1] != w.tm[1]) {
-        return fail("a wake alarm two seconds ahead did not read back");
+    if (refuses_bad_alarms(fd, &w) != 0) {
+        return 1;
     }
     held();
-    if (read(fd, &data, sizeof data) != (ssize_t)sizeof data || !(data & 0x20) || data >> 8 < 1) {
+    if (wake_in(fd, 2, &w) != 0 || read(fd, &data, sizeof data) != (ssize_t)sizeof data ||
+        !(data & 0x20) || data >> 8 < 1) {
         return fail("a read of /dev/rtc0 did not end at the alarm with RTC_AF");
     }
+    held();
+    state = open("/sys/class/rtc/rtc0/wakealarm", O_RDONLY);
+    if (state < 0 || read(state, text, sizeof text) != 0) {
+        return fail("the wakealarm file did not read empty after the alarm came");
+    }
+    close(state);
     held();
     state = open("/sys/class/rtc/rtc0/device/power/wakeup", O_RDONLY);
     if (state < 0 || read(state, text, sizeof text) != 8 || memcmp(text, "enabled\n", 8) != 0) {
@@ -2241,6 +2685,62 @@ static void plan_rows(const char *const *ids, unsigned n)
 }
 
 #define PLAN(ids) plan_rows(ids, sizeof(ids) / sizeof(ids[0]))
+
+/* The rows checked after `adjtimex`, in their order. */
+static const char *const after_rows[] = {"clock-adjtime",
+                                         "listxattr",
+                                         "getxattr-absent",
+                                         "lsetxattr-enoent",
+                                         "readahead-fadvise",
+                                         "fadvise-espipe",
+                                         "noctty-session",
+                                         "maxrss-self",
+                                         "maxrss-child",
+                                         "udp-refused",
+                                         "setgid-file",
+                                         "setgid-dir",
+                                         "privacy-other-root",
+                                         "privacy-own-maps",
+                                         "privacy-kept-dirs",
+                                         "privacy-dumpable",
+                                         "privacy-kept-files",
+                                         "privacy-dev-list",
+                                         "privacy-kept-links",
+                                         "privacy-fchdir-owner",
+                                         "privacy-fd-walk",
+                                         "timer-si-timer",
+                                         "timer-overrun",
+                                         "timer-delete",
+                                         "sigqueue",
+                                         "rt-sigqueueinfo",
+                                         "pty-nonblock-eagain",
+                                         "pty-writer-sleeps",
+                                         "pty-64k",
+                                         "pty-whole-lines",
+                                         "signalfd-eagain",
+                                         "signalfd-read",
+                                         "itimer-interval",
+                                         "itimer-signals",
+                                         "ptimer-gettime",
+                                         "ptimer-signals",
+                                         "devmem-low",
+                                         "devmem-ram-eperm",
+                                         "devmem-private-einval",
+                                         "devmem-apic",
+                                         "klog-size",
+                                         "klog-records",
+                                         "klog-clear",
+                                         "dev-log-link",
+                                         "rtc-alarm-range",
+                                         "rtc-aie-on-past",
+                                         "rtc-alarm-readback",
+                                         "rtc-alarm-invalid",
+                                         "rtc-read-af",
+                                         "rtc-wakealarm-empty",
+                                         "rtc-wakeup-enabled",
+                                         "power-state-mode",
+                                         "freeze-wakes",
+                                         "freeze-holds"};
 
 /**
  * Begin the report, with the branch of the architecture, and plan its
@@ -2286,6 +2786,8 @@ static void plan(void)
                                          "vmsplice-nonblock",
                                          "vmsplice-ebadf",
                                          "vmsplice-einval",
+                                         "pipe-read-null-eagain",
+                                         "pipe-read-null-eof",
                                          "pty-hangup-eio",
                                          "fallocate-krffs",
                                          "fallocate-ebadf",
@@ -2294,22 +2796,6 @@ static void plan(void)
                                          "fallocate-mode",
                                          "fallocate-proc",
                                          "fallocate-shm"};
-    static const char *const after[] = {
-        "clock-adjtime",      "listxattr",         "getxattr-absent",
-        "lsetxattr-enoent",   "readahead-fadvise", "fadvise-espipe",
-        "noctty-session",     "maxrss-self",       "maxrss-child",
-        "udp-refused",        "setgid-file",       "setgid-dir",
-        "privacy-other-root", "privacy-own-maps",  "privacy-dumpable",
-        "timer-si-timer",     "timer-overrun",     "timer-delete",
-        "sigqueue",           "rt-sigqueueinfo",   "pty-nonblock-eagain",
-        "pty-writer-sleeps",  "pty-64k",           "pty-whole-lines",
-        "signalfd-eagain",    "signalfd-read",     "itimer-interval",
-        "itimer-signals",     "ptimer-gettime",    "ptimer-signals",
-        "devmem-low",         "devmem-ram-eperm",  "devmem-private-einval",
-        "devmem-apic",        "klog-size",         "klog-records",
-        "klog-clear",         "dev-log-link",      "rtc-alarm-refused",
-        "rtc-alarm-readback", "rtc-read-af",       "rtc-wakeup-enabled",
-        "power-state-mode",   "freeze-wakes",      "freeze-holds"};
 
     report_begin(report_case(environ, "guest.default.callsmusl"));
 #if defined __x86_64__
@@ -2332,7 +2818,7 @@ static void plan(void)
     } else {
         plan_row("adjtimex");
     }
-    PLAN(after);
+    PLAN(after_rows);
 }
 
 int main(int argc, char **argv)

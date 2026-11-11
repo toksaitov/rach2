@@ -12,6 +12,7 @@
 #include "../mm/vm.h"
 #include "../fpu.h"
 #include "percpu.h"
+#include "waketime.h"
 
 /* Policy: the threads one real user may have, each thread of a process
  * counting, unless `prlimit64` or `/etc/rach2/limits` says otherwise, and
@@ -47,7 +48,9 @@ struct proc_rlimit {
 #define RLIM_CORE     4
 #define RLIM_FSIZE    5
 #define RLIM_MEMLOCK  6
-#define RLIM_COUNT    7
+#define RLIM_NICE     7 /* the lowest nice value as 20 less it, Linux's */
+#define RLIM_RTPRIO   8 /* the highest real-time priority */
+#define RLIM_COUNT    9
 #define RLIM_INFINITY (~0UL)
 
 /* RLIMIT_MEMLOCK a process starts with, soft and hard, 8 MiB, which is
@@ -123,6 +126,46 @@ struct wq_waiter {
 
 struct bbuf; /* the buffer cache's buffer, bcache.h */
 
+struct isr_params;
+
+/*
+ * What a call that a signal interrupted with EINTR stands for, Linux's four
+ * restart codes and plain EINTR, which `deliver_signals` acts on: with no
+ * handler run, every kind but RESTART_NONE restarts the call; with a
+ * handler, RESTART_SYS restarts it under SA_RESTART, RESTART_NOINTR always,
+ * and the rest give the caller EINTR. RESTART_BLOCK restarts through
+ * restart_syscall, which resumes the thread's restart block.
+ */
+#define RESTART_SYS    0 /* -ERESTARTSYS */
+#define RESTART_NOINTR 1 /* -ERESTARTNOINTR */
+#define RESTART_NOHAND 2 /* -ERESTARTNOHAND */
+#define RESTART_BLOCK  3 /* -ERESTART_RESTARTBLOCK */
+#define RESTART_NONE   4 /* -EINTR in every case */
+
+/*
+ * A call's state for restart_syscall to resume, Linux's restart_block: the
+ * resuming handler and what it needs, the deadline the first call fixed
+ * among it, so that the resumed call ends where the first would have. Each
+ * kind of call uses the fields its handler names.
+ */
+struct restart_block {
+    /* The handler restart_syscall runs, NULL when there is nothing to
+     * resume, which Linux's do_no_restart_syscall answers with EINTR. */
+    long (*fn)(struct isr_params *params);
+    uint64_t tick; /* the deadline's tick, or a CPU clock's due ticks */
+    /* Deadline since boot; sec -1 marks a CPU-clock sleep; both 0 for
+     * a wait ended by its tick alone. */
+    int64_t sec;
+    int64_t nsec;
+    uintptr_t uaddr; /* poll's array, or the futex word */
+    uintptr_t urem;  /* where a sleep's remainder goes, or 0 */
+    uint32_t val;    /* poll's count, or the value the futex word holds */
+    uint32_t bitset; /* the futex wait's bitset */
+    int32_t flags;   /* the futex operation's flags, or the CPU clock */
+    uint8_t timed;   /* poll has a deadline */
+    uint8_t wide;    /* the remainder is two 64-bit words, not two 32-bit */
+};
+
 /*
  * The record of one thread, from the heap (`alloc_process`), on `proc_list`
  * while it lives. The threads of a process share their thread group
@@ -145,9 +188,10 @@ struct process {
      * arch/i686/context.c has the same offsets and checks them against the
      * compiler's, at build time where the compiler can and at boot
      * (`arch_context_check`, from `init_proc`). */
-    uintptr_t tls_base;   /* The thread pointer (arch_tls_set) */
-    struct mm *mm;        /* The address space, shared by CLONE_VM (mm/mm.h) */
-    uint64_t wakeup_tick; /* The tick a timed sleep ends at, 0 for none */
+    uintptr_t tls_base;           /* The thread pointer (arch_tls_set) */
+    struct mm *mm;                /* The address space, shared by CLONE_VM (mm/mm.h) */
+    uint64_t wakeup_tick;         /* The tick a timed sleep ends at, 0 for none */
+    struct wake_record wake_time; /* timed wakes through the return to user mode */
     /* Signal state: the dispositions, `sigacts[signo]` with index 0 unused,
      * which are the thread group's (`tg->action`), and this thread's 64-bit
      * pending and blocked masks (bit signo-1). */
@@ -184,6 +228,22 @@ struct process {
     uint32_t rgid;
     uint32_t egid;
     uint32_t sgid;
+    /* The file-system ids, which the file access checks and the owner of a
+     * new file go by (`proc_fsuid`, `proc_fsgid`). While its bit of `fs_own`
+     * is clear an id is the effective one, and so follows every change of
+     * it; setfsuid and setfsgid store an id here and set its bit, and every
+     * call that sets user ids, or group ids, and an exec clear it, as Linux
+     * sets the id to the effective one there. */
+    uint32_t fsuid;
+    uint32_t fsgid;
+    uint32_t fs_own; /* PROC_FSUID_OWN, PROC_FSGID_OWN */
+    /* While an openat2 opens the path its checked walk found, the walks of
+     * the open replay that walk (`vfs_replay`): VFS_REPLAY_* bits, 0 at every
+     * other time, and the tree's sequence the replay must still see. */
+    uint32_t walk_replay;
+    uint32_t walk_replay_seq;
+    /* NO_XDEV's mount during the replay, held by the open, or NULL. */
+    struct vfs_mount *walk_replay_mnt;
     uint32_t ngroups;             /* live entries in groups[] */
     uint32_t groups[NGROUPS_MAX]; /* supplementary gids */
     /* Set once this process has been reported for running out of mappings, so
@@ -238,6 +298,22 @@ struct process {
      * voluntary_ctxt_switches and nonvoluntary_ctxt_switches, and getrusage. */
     unsigned long nvcsw;
     unsigned long nivcsw;
+    /* Called with `sched_out_arg` by `schedule` at each switch counted in
+     * `nivcsw`, under the run queues' lock with interrupts off and before
+     * the process stops being current, as Linux's preempt notifier's
+     * sched_out: a vCPU's thread sets it across KVM_RUN. It must neither
+     * sleep nor fault. NULL for none. */
+    void (*sched_out)(void *arg);
+    void *sched_out_arg;
+    /* The scheduler's statistics of /proc/<pid>/schedstat, Linux's
+     * sched_info, kept by `schedule`: the nanoseconds it waited ready on a
+     * run queue for a processor, which KVM's steal time also reads, and the
+     * times it was switched onto one. While `run_queued` is set it waits on
+     * a queue since `queued_ns`, the monotonic clock in nanoseconds. */
+    uint64_t run_delay;
+    uint64_t queued_ns;
+    unsigned long pcount;
+    uint8_t run_queued;
     /* Whether its sleep is one no signal ends (`wq_wait_event_nointr`),
      * which /proc reports as the state D and counts as blocked; a kernel
      * thread's idle wait (`wq_wait_event_idle`) is not marked. */
@@ -248,6 +324,10 @@ struct process {
     /* A device object had no page for this thread's access since its last
      * page fault began (`device_fault`): the fault raises SIGBUS. */
     uint32_t bus_fault;
+    /* A device object could not give the page yet since its last page fault
+     * began (`device_fault`): a fault from user mode returns, so that the
+     * thread's signals are handled, and the access runs again. */
+    uint32_t fault_retry;
     /* It waits, with its registers and floating-point state saved, for the
      * core another thread of its process writes (`core_park`). */
     uint32_t core_parked;
@@ -274,12 +354,19 @@ struct process {
      * puts it back at once. */
     uint64_t saved_sigmask;
     uint32_t sigmask_saved;
-    /* One more than the number of a system call that returned EINTR and
-     * that a signal without a handler, or one whose handler has SA_RESTART,
-     * restarts; 0 for none. Set by the dispatcher, consumed by
-     * deliver_signals on the same return. */
-    uint32_t restart_nr;
-    uint8_t restart_always; /* Linux ERESTARTNOINTR, even without SA_RESTART */
+    /* Which of Linux's restart codes the interrupted call stands for, a
+     * RESTART_ value: the dispatcher sets RESTART_SYS before each call, and
+     * a call that Linux restarts otherwise sets another before it returns
+     * EINTR. */
+    uint8_t restart_kind;
+    /* Set when the dispatcher turned the call's EINTR into a restart code,
+     * cleared at the next entry and by `deliver_signals`, which counts it as
+     * signal work, as Linux's TIF_SIGPENDING stays set until get_signal
+     * runs: a call whose signal another thread took meanwhile then restarts,
+     * and a code only a tracer wrote reaches the program. */
+    uint8_t restart_due;
+    /* What restart_syscall resumes: Linux's restart_block. */
+    struct restart_block restart;
     /* The trap number, error code and fault address of the last processor
      * exception, for the signal frame's sigcontext. */
     uint32_t trap_nr;
@@ -375,6 +462,11 @@ struct process {
     uintptr_t robust_list;
     uint32_t robust_len;
     uintptr_t compat_robust_list;
+    /* The memory policy set_mempolicy gave the thread (mm/mempolicy.c),
+     * with a reference, or NULL for the default. A fork and a new thread
+     * take the caller's (`fork_ids`), an exec keeps it, and the thread's
+     * end drops it (`mm_drop`). */
+    struct vm_policy *mempolicy;
     /* rseq(2) (rseq.c): the address of the area the thread registered, 0
      * for none, its length and its signature; the events that abort a
      * critical section, RSEQ_EVENT_ bits, set since a return to user mode
@@ -396,6 +488,19 @@ struct process {
     uint8_t sched_yielded;       /* allow an equal FIFO peer at the next selection */
     uint8_t futex_exit_state;    /* 0 live, 1 releasing futexes, 2 released */
     struct futex_pi *pi_blocked; /* PI lock this thread waits for, or NULL */
+    /* SCHED_DEADLINE's runtime, deadline and period in nanoseconds, the
+     * period never 0, and its flags SCHED_FLAG_RECLAIM and
+     * SCHED_FLAG_DL_OVERRUN, as sched_setattr last set them; meaningful
+     * while sched_policy is SCHED_DEADLINE. */
+    uint64_t dl_runtime;
+    uint64_t dl_deadline;
+    uint64_t dl_period;
+    uint32_t dl_flags;
+    /* The slice an ordinary thread asked for in sched_setattr's
+     * sched_runtime, in nanoseconds, 100000 to 100000000, or 0 for the
+     * default one; sched_getattr reports it, and the scheduler, whose slice
+     * is a tick, does not read it. A fork passes it on. */
+    uint32_t sched_slice;
     /* Set once this thread has been through the stop in effect in its
      * process, which a tracer may then have resumed it from; cleared when
      * the process continues. */
@@ -455,10 +560,13 @@ struct process {
      * first set; and whether it holds capabilities in its user namespace
      * whatever its ids there, as its creator and a process that joined it
      * do until an exec or a change of its effective uid. A fork passes them
-     * on (`ns_fork`). */
+     * on (`ns_fork`). Below the first PID namespace, `pid_keep` is the
+     * memory, taken at the fork, that keeps its numbers after it is reaped
+     * while a group or a session has its ID (ns.c). */
     struct userns *userns;
     struct pidns *pidns;
     uint32_t nspid[NS_LEVELS];
+    struct pid_held *pid_keep;
     struct nsset *nsset;
     uint32_t ns_granted;
 
@@ -491,6 +599,10 @@ struct process {
     uint32_t disk_waits;
     int file_locks;
     uint32_t fs_written;
+    /* The name of the function its last sleep began in, a static string,
+     * set before each block: /proc/PID/wchan gives it while the thread is
+     * PROC_BLOCKED, and reads nothing from it in any other state. */
+    const char *wchan;
 };
 
 typedef struct process process_t;
@@ -606,6 +718,29 @@ isr_params_t *proc_user_frame(const process_t *t);
  * (`ns_privileged`). A macro, so that the host tests that compile the
  * callers without this file's functions need no stub of it. */
 #define proc_privileged(p) ((p)->euid == 0 && !(p)->nocaps && !(p)->userns)
+
+/* The bits of `fs_own`: the file-system user or group id was set apart from
+ * the effective one; and the capabilities of CAP_FS_SET are out of the
+ * effective set, as Linux's `cap_task_fix_setuid` leaves them once setfsuid
+ * takes the file-system user id from root, until setfsuid gives it back,
+ * the effective user id comes to root from another or an exec. */
+#define PROC_FSUID_OWN  1u
+#define PROC_FSGID_OWN  2u
+#define PROC_FSCAPS_OFF 4u
+
+/* The file-system user and group ids of thread `p`: the effective ones
+ * unless setfsuid or setfsgid set one apart. */
+#define proc_fsuid(p) (((p)->fs_own & PROC_FSUID_OWN) ? (p)->fsuid : (p)->euid)
+#define proc_fsgid(p) (((p)->fs_own & PROC_FSGID_OWN) ? (p)->fsgid : (p)->egid)
+
+/* Whether thread `p` has privilege over files: `proc_privileged` judged by
+ * the file-system user id, since the capabilities Linux checks for file
+ * access (CAP_FS_SET: CAP_CHOWN, CAP_DAC_OVERRIDE, CAP_DAC_READ_SEARCH,
+ * CAP_FOWNER, CAP_FSETID, CAP_LINUX_IMMUTABLE, CAP_MKNOD and
+ * CAP_MAC_OVERRIDE) leave the effective set when that id leaves 0 and come
+ * back as PROC_FSCAPS_OFF says. */
+#define proc_fs_privileged(p) \
+    (proc_fsuid(p) == 0 && !((p)->fs_own & PROC_FSCAPS_OFF) && !(p)->nocaps && !(p)->userns)
 
 /* Whether [addr, addr + len) lies in the kernel buffer the thread `p` has
  * opened to the user-copy checks (`user_window_open`). A macro, so that

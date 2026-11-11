@@ -1,15 +1,17 @@
 /*
- * filecache.h: the pages of ext2 files that private mappings and exec read,
- * kept in free frames between them (mm/Readme.md).
+ * filecache.h: the pages of ext2 files that read(2), private mappings and
+ * exec read, kept in free frames between them (mm/Readme.md).
  */
 
 #ifndef _FILECACHE_H_
 #define _FILECACHE_H_
 
 #include "../lib/kint.h"
+#include "../lib/kuser.h"
 
 struct vfs_mount;
 struct fd_entry;
+struct open_file;
 
 /** Make the tables that find a file's pages, sized for the frames the machine
  * has. The boot calls it once, after `init_paging`; when the heap cannot give
@@ -24,15 +26,32 @@ int filecache_read(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys);
  * buffer `buf` of a page, as exec reads a program. */
 int filecache_read_node(struct vfs_mount *mnt, void *node, uint32_t pgoff, void *buf);
 
-/** The count of the changes recorded so far (`filecache_forget`,
+/** The count of the changes recorded so far of the file `node` of `mnt`
+ * and of the few files that share its counter (`filecache_forget`,
  * `filecache_forget_mount`), taken before a page is read for
  * `filecache_store`. */
-uint32_t filecache_epoch(void);
+uint32_t filecache_epoch(struct vfs_mount *mnt, void *node);
+
+/**
+ * Read up to `count` bytes at `offset` of the file `ofd` is open on into the
+ * user buffer `buf` through the cache, as read(2) does: each page the cache
+ * has as the file is now is copied from it, and each page it lacks is read
+ * alone with `vfs_read` into a new frame, which joins the cache when it holds
+ * a whole page or the file's last part. Returns 0, with nothing done, for a
+ * file the cache does not keep, which the caller reads itself; 1 with `*got`
+ * the bytes read, 0 at or past the end of the file, -EFAULT for a
+ * buffer that takes no byte, or the file system's error. The caller holds
+ * the description's lock, and may sleep.
+ */
+int filecache_file_read(struct open_file *ofd, char __user *buf, uint32_t count, uint64_t offset,
+                        int32_t *got);
 
 /** Keep a copy of the frame `phys`, page `pgoff` of the file `e` is open on
- * as it was just read, while a quarter of the frames are free and no change
- * has been recorded since `filecache_epoch` gave `epoch`, since the read
- * might have seen part of one. Only an ext2 regular file's page is kept. */
+ * as it was just read, unless a change of the file has been recorded since
+ * `filecache_epoch` gave `epoch`, since the read might have seen part of
+ * one. Only an ext2 regular file's page is kept. A new frame is taken while
+ * a quarter of the frames are free and the records fit in an eighth of the
+ * heap; past that the least recently used page's frame is used. */
 void filecache_store(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys, uint32_t epoch);
 
 /** The same for page `pgoff` of the file `node` of `mnt`, from the kernel
@@ -50,8 +69,9 @@ void filecache_forget_mount(const struct vfs_mount *mnt);
 /** The frames the cache holds, which `mem_reclaim` can have back. */
 uint32_t filecache_pages(void);
 
-/** Give back up to `want` frames, the least recently used first; the
- * number given back. */
+/** Drop pages, the least recently used first, until `want` frames have gone
+ * back to the pool or the cache is empty. Returns the frames freed, which
+ * leaves out a frame a reader still holds. */
 uint32_t filecache_shrink(uint32_t want);
 
 #endif /* _FILECACHE_H_ */

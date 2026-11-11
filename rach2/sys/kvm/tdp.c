@@ -33,6 +33,7 @@ struct tdp {
     uint64_t root; /* the top table's physical address */
     uint64_t dead; /* the first table to free after the flush, or 0 */
     uint32_t tables;
+    uint64_t *pages; /* the VM's pages_4k, pages_2m and pages_1g: its leaves by level */
 };
 
 /** The backend's entry format. */
@@ -101,8 +102,9 @@ static uint64_t table_entry(uint64_t phys)
  * vmx_get_mt_mask: a device's frame is uncached with the guest's PAT in
  * charge, so that the guest may make it write-combining; RAM is write-back
  * with the guest's PAT ignored, or, while a device that does not snoop is
- * assigned to the VM, write-back with the guest's PAT in charge, so that
- * the guest's uncached buffers stay uncached for that device.
+ * assigned to the VM or once the caller turned
+ * KVM_X86_QUIRK_IGNORE_GUEST_PAT off, write-back with the guest's PAT in
+ * charge, so that the guest's uncached buffers stay uncached.
  */
 static uint64_t leaf_entry(const struct kvm_vm *vm, uint64_t phys, int writable, int large,
                            int device)
@@ -110,7 +112,9 @@ static uint64_t leaf_entry(const struct kvm_vm *vm, uint64_t phys, int writable,
     const struct kvm_tdp_format *f = fmt();
     uint64_t e = phys | f->read | f->exec | f->user | f->accessed;
 
-    e |= device ? f->cache(KVM_MT_UC, 0) : f->cache(KVM_MT_WB, vm->noncoherent == 0);
+    e |= device ? f->cache(KVM_MT_UC, 0)
+                : f->cache(KVM_MT_WB,
+                           vm->noncoherent == 0 && KVM_QUIRK(vm, KVM_X86_QUIRK_IGNORE_GUEST_PAT));
     if (writable) {
         e |= f->write | f->dirty;
     }
@@ -132,6 +136,7 @@ int kvm_tdp_init(struct kvm_vm *vm)
         kfree(t);
         return -ENOMEM;
     }
+    t->pages = &vm->stat[KVM_VM_STAT_PAGES_4K];
     vm->tdp = t;
     return 0;
 }
@@ -198,6 +203,10 @@ void kvm_tdp_flush(struct kvm_vm *vm)
 {
     uint32_t i;
 
+    vm->stat[KVM_VM_STAT_REMOTE_TLB_FLUSH_REQUESTS]++;
+    if (vm->nr_vcpus) {
+        vm->stat[KVM_VM_STAT_REMOTE_TLB_FLUSH]++;
+    }
     for (i = 0; i < vm->nr_vcpus; i++) {
         kvm_vcpu_kick(vm->vcpus[i], KVM_REQ_TLB_FLUSH);
     }
@@ -244,6 +253,7 @@ static int zap_level(struct tdp *t, uint64_t *table, int level, uint64_t base, u
         }
         if (leaf(e, level)) {
             table[i] = 0;
+            t->pages[level - 1]--;
             cleared = 1;
             continue;
         }
@@ -314,6 +324,7 @@ int kvm_tdp_protect(struct kvm_vm *vm, uint64_t gfn, uint64_t mask)
         }
         if (level > 1) {
             *e = 0;
+            t->pages[level - 1]--;
             changed = 1;
         } else if (*e & fmt()->write) {
             *e &= ~fmt()->write;
@@ -327,18 +338,20 @@ int kvm_tdp_protect(struct kvm_vm *vm, uint64_t gfn, uint64_t mask)
  * Set the entry of `gfn` at level `level`, 1 or 2, to `entry`, making the
  * tables above it. A 2 MiB leaf on the way, where a finer leaf is wanted,
  * goes first, with a flush, since the frames it mapped are no longer
- * mapped until their next fault. 0 or -ENOMEM.
+ * mapped until their next fault. What the entry held is a leaf of this
+ * level, set anew, or nothing, which the VM's page counts follow. 0 or
+ * -ENOMEM.
  */
 static int map(struct kvm_vm *vm, struct tdp *t, uint64_t gfn, int level, uint64_t entry)
 {
-    uint64_t *table = table_at(t->root);
+    uint64_t *table = table_at(t->root), *e;
     int l;
 
     for (l = TDP_LEVELS; l > level; l--) {
-        uint64_t *e = &table[index_of(gfn, l)];
-
+        e = &table[index_of(gfn, l)];
         if (present(*e) && l <= 3 && leaf(*e, l)) {
             *e = 0;
+            t->pages[l - 1]--;
             kvm_tdp_flush(vm);
         }
         if (!present(*e)) {
@@ -351,7 +364,11 @@ static int map(struct kvm_vm *vm, struct tdp *t, uint64_t gfn, int level, uint64
         }
         table = table_at(*e & fmt()->addr);
     }
-    table[index_of(gfn, level)] = entry;
+    e = &table[index_of(gfn, level)];
+    if (!present(*e)) {
+        t->pages[level - 1]++;
+    }
+    *e = entry;
     return 0;
 }
 
@@ -379,24 +396,80 @@ struct leaf_info {
     int device;
 };
 
+/** Whether the host entry `e` stands for Linux's zero page: an anonymous
+ * page read but not yet stored into (PTE_ZEROFILL without PTE_DIRTY). */
+static int host_zero(pte_t e)
+{
+    return (e & (pte_t)(PTE_ZEROFILL | PTE_DIRTY)) == (pte_t)PTE_ZEROFILL;
+}
+
+/** Whether a region of memfd_secret meets the caller's [start, end). */
+static int host_secret(struct mm *mm, uintptr_t start, uintptr_t end)
+{
+    const vma_t *r;
+
+    for (r = vm_lower(&mm->vm, start); r && r->start < end; r = vm_next(r)) {
+        if (r->prot & VM_PROT_SECRET) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Whether the caller's 512 entries of `host` are each the caller's to
+ * touch and map 512 consecutive frames from a 2 MiB boundary, all RAM or
+ * all a device's, with the first frame and the kind in `*out`. `*w` is
+ * cleared when a page is read-only, or on a read (`write` 0) when one
+ * stands for the zero page. 1, or 0 when they cannot be one leaf or a
+ * write fault would need a write right `*w` lacks.
+ */
+static int host_block(const pte_t *host, int write, int *w, struct leaf_info *out)
+{
+    uint64_t base = PTE_ADDR(host[0]);
+    uint32_t i;
+    int dev;
+
+    if (base & (TDP_LARGE - 1u)) {
+        return 0;
+    }
+    dev = paging_frame_is_device((uintptr_t)base);
+    for (i = 0; i < TDP_ENTRIES; i++) {
+        pte_t e = host[i];
+
+        if (!host_ok(e, 0) || PTE_ADDR(e) != base + (uint64_t)i * 4096u ||
+            paging_frame_is_device((uintptr_t)PTE_ADDR(e)) != dev) {
+            return 0;
+        }
+        if (!(e & PTE_W) || (!write && host_zero(e))) {
+            *w = 0;
+        }
+    }
+    out->phys = base;
+    out->device = dev;
+    return !write || *w;
+}
+
 /**
  * Whether the 2 MiB of guest frames around `gfn` of the slot `s` can be one
  * leaf: they lie in the slot, which does not log, their caller's addresses
  * are one leaf table of `mm`, 2 MiB-aligned, whose 512 pages are present,
- * the caller's to touch, and 512 consecutive frames from a 2 MiB boundary,
- * all RAM or all a device's, and no table of `t` lies there already. The
- * leaf is writable when every page is and the slot is not read-only, and a
- * write fault needs it so. 1 with the leaf in `*out`, or 0.
+ * the caller's to touch, in no region of memfd_secret, and 512 consecutive
+ * frames from a 2 MiB boundary, all RAM or all a device's, and no table of
+ * `t` lies there already. The leaf is writable when every page is and the
+ * slot is not read-only, and a write fault needs it so; a read fault leaves
+ * it read-only while a page stands for the zero page, so that the first
+ * store faults and ends the mark. 1 with the leaf in `*out`, or 0.
  */
 static int large_ok(struct mm *mm, struct tdp *t, uint64_t gfn, int write,
                     const struct kvm_slot_view *s, struct leaf_info *out)
 {
     uint64_t block = gfn & ~(uint64_t)(TDP_ENTRIES - 1u);
     uintptr_t hva = (uintptr_t)(s->hva - (gfn - block) * 4096u);
-    uint64_t *table = table_at(t->root), base;
+    uint64_t *table = table_at(t->root);
     pte_t *host;
     uint32_t i;
-    int l, w = !(s->flags & KVM_MEM_READONLY), dev;
+    int l, w = !(s->flags & KVM_MEM_READONLY);
 
     if (s->dirty || block < s->base_gfn || block + TDP_ENTRIES > s->base_gfn + s->npages ||
         (hva & (TDP_LARGE - 1u)) != 0) {
@@ -417,31 +490,16 @@ static int large_ok(struct mm *mm, struct tdp *t, uint64_t gfn, int write,
         return 0;
     }
     host = mmu_user_table(mm->dir, hva, 0);
-    if (!host || !host_ok(host[0], 0)) {
+    if (!host || !host_ok(host[0], 0) || host_secret(mm, hva, hva + TDP_LARGE)) {
         return 0;
     }
-    base = PTE_ADDR(host[0]);
-    if (base & (TDP_LARGE - 1u)) {
+    if (!host_block(host, write, &w, out)) {
         return 0;
     }
-    dev = paging_frame_is_device((uintptr_t)base);
-    for (i = 0; i < TDP_ENTRIES; i++) {
-        pte_t e = host[i];
-
-        if (!host_ok(e, 0) || PTE_ADDR(e) != base + (uint64_t)i * 4096u ||
-            paging_frame_is_device((uintptr_t)PTE_ADDR(e)) != dev) {
-            return 0;
-        }
-        if (!(e & PTE_W)) {
-            w = 0;
-        }
+    for (i = 0; w && i < TDP_ENTRIES; i++) {
+        host[i] &= ~(pte_t)PTE_ZEROFILL;
     }
-    if (write && !w) {
-        return 0;
-    }
-    out->phys = base;
     out->writable = w;
-    out->device = dev;
     return 1;
 }
 
@@ -450,7 +508,13 @@ static int large_ok(struct mm *mm, struct tdp *t, uint64_t gfn, int write,
  * and then read again from the caller's tables with nothing that sleeps
  * before the leaf is set, so that the change notice, which runs only under
  * the big lock, cannot come between the read and the leaf. The slot is
- * looked up again after each sleep, since it may have moved or gone.
+ * looked up again after each sleep, since it may have moved or gone. A
+ * page of memfd_secret is -EFAULT, as Linux's get_user_pages refuses one.
+ *
+ * A page that stands for the zero page (PTE_ZEROFILL) is mapped read-only
+ * on a read, as Linux maps its zero page, and a write fault, which maps it
+ * writable, ends the host entry's mark, since the guest's stores set no
+ * dirty bit in it.
  *
  * A page of a slot that logs is mapped writable only when it is dirty
  * already: a write fault marks it, and a read leaves a clean page
@@ -462,6 +526,7 @@ int kvm_tdp_fault(struct kvm_vm *vm, uint64_t gfn, int write)
     struct mm *mm = kvm_vm_mm(vm);
     struct kvm_slot_view s;
     struct leaf_info big;
+    const vma_t *r;
     uint64_t phys, i;
     int writable;
     pte_t pte;
@@ -471,6 +536,10 @@ int kvm_tdp_fault(struct kvm_vm *vm, uint64_t gfn, int write)
             return 1;
         }
         if (!t || !mm || !current_proc || current_proc->mm != mm) {
+            return -EFAULT;
+        }
+        r = vm_find(&mm->vm, (uintptr_t)s.hva);
+        if (r && (r->prot & VM_PROT_SECRET)) {
             return -EFAULT;
         }
         pte = host_pte(mm, (uintptr_t)s.hva);
@@ -485,7 +554,7 @@ int kvm_tdp_fault(struct kvm_vm *vm, uint64_t gfn, int write)
         return map(vm, t, gfn, 2, leaf_entry(vm, big.phys, big.writable, 1, big.device));
     }
     phys = PTE_ADDR(pte);
-    writable = (pte & PTE_W) && !(s.flags & KVM_MEM_READONLY);
+    writable = (pte & PTE_W) && !(s.flags & KVM_MEM_READONLY) && (write || !host_zero(pte));
     if (s.dirty) {
         i = gfn - s.base_gfn;
         if (write) {
@@ -494,7 +563,78 @@ int kvm_tdp_fault(struct kvm_vm *vm, uint64_t gfn, int write)
             writable = 0;
         }
     }
+    if (writable) {
+        mmu_user_table(mm->dir, (uintptr_t)s.hva, 0)[MMU_INDEX((uintptr_t)s.hva)] &=
+            ~(pte_t)PTE_ZEROFILL;
+    }
     return map(vm, t, gfn, 1, leaf_entry(vm, phys, writable, 0, paging_frame_is_device(phys)));
+}
+
+/**
+ * The caller's page is read from its tables and written through the
+ * kernel's map of the frame, so nothing can fault. A page not yet stored
+ * into (no PTE_DIRTY) is refused with the rest, since this write would not
+ * set the bit: the zero page's rules and the counts of dirty pages read it.
+ */
+int kvm_tdp_write_nofault(struct kvm_vm *vm, uint64_t gpa, const void *buf, uint32_t n)
+{
+    struct mm *mm = kvm_vm_mm(vm);
+    struct kvm_slot_view s;
+    const vma_t *r;
+    uint64_t i;
+    pte_t pte;
+
+    if (n == 0 || (gpa & 0xFFFu) + n > 4096u || !mm || !current_proc || current_proc->mm != mm ||
+        !kvm_slot_find(vm, gpa >> 12, &s) || (s.flags & KVM_MEM_READONLY)) {
+        return 1;
+    }
+    r = vm_find(&mm->vm, (uintptr_t)s.hva);
+    if (!r || (r->prot & VM_PROT_SECRET)) {
+        return 1;
+    }
+    pte = host_pte(mm, (uintptr_t)s.hva);
+    if (!host_ok(pte, 1) || !(pte & PTE_DIRTY) || paging_frame_is_device(PTE_ADDR(pte))) {
+        return 1;
+    }
+    k_memcpy((uint8_t *)phys_to_virt(PTE_ADDR(pte)) + (gpa & 0xFFFu), buf, n);
+    if (s.dirty) {
+        i = (gpa >> 12) - s.base_gfn;
+        s.dirty[i / 64u] |= 1ull << (i % 64u);
+    }
+    return 0;
+}
+
+int32_t kvm_tdp_pre_fault(struct kvm_vm *vm, struct kvm_pre_fault_memory *range)
+{
+    uint64_t size = range->size, step;
+    int32_t r = 0;
+    int level;
+
+    if (range->flags || ((range->gpa | range->size) & 4095u) != 0 ||
+        range->gpa + range->size <= range->gpa) {
+        return -EINVAL;
+    }
+    while (range->size) {
+        if (signal_pending()) {
+            r = -EINTR;
+            break;
+        }
+        r = kvm_tdp_fault(vm, range->gpa >> 12, 0);
+        if (r != 0) {
+            r = r > 0 ? -ENOENT : r;
+            break;
+        }
+        step = 4096u;
+        if (find_leaf((struct tdp *)vm->tdp, range->gpa >> 12, &level) && level == 2) {
+            step = TDP_LARGE - (range->gpa & (TDP_LARGE - 1u));
+        }
+        if (step > range->size) {
+            step = range->size;
+        }
+        range->gpa += step;
+        range->size -= step;
+    }
+    return size == range->size ? r : 0;
 }
 
 void kvm_tdp_noncoherent(struct kvm_vm *vm, int assigned)

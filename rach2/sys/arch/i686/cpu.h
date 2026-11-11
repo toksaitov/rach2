@@ -65,9 +65,16 @@ typedef struct cpu_regs cpu_regs_t;
  * bytes, which a restart rewinds the return address over. */
 #define SYSCALL_INSN_LEN 2u
 
-#define FRAME_PC(p)   ((p)->eip)
-#define FRAME_SP(p)   ((p)->user_esp)
-#define FRAME_USER(p) (((p)->cs & 3u) == 3u)
+/* restart_syscall's number, i386's 0. */
+#define SC_RESTART_NR(p) 0u
+
+#define FRAME_PC(p)      ((p)->eip)
+#define FRAME_SP(p)      ((p)->user_esp)
+#define FRAME_USER(p)    (((p)->cs & 3u) == 3u)
+/* Whether the frame is a system call's entry, by `int $0x80`. */
+#define FRAME_SYSCALL(p) ((p)->vector == 0x80u)
+/* The frame pointer at the trap; the kernel is built with frame pointers. */
+#define FRAME_FP(p)      ((p)->ebp)
 
 /* Resume the frame with interrupts off: clear IF in its saved flags. */
 #define FRAME_IRQ_OFF(p) ((p)->eflags &= ~0x200u)
@@ -98,9 +105,17 @@ typedef uint32_t pte_t;
  * user access faults; fork and teardown own it as a user page by this bit,
  * and mprotect makes it a user page again. */
 #define PTE_NONE          0x400u
+/* Bit 11: a page of anonymous memory that a read brought in zeroed. While
+ * PTE_DIRTY is clear beside it nothing has stored into the page, and it is
+ * what Linux maps its zero page for: the memory policy calls and
+ * /proc/PID/numa_maps leave it out as Linux leaves that page out. */
+#define PTE_ZEROFILL      0x800u
 /* Without PAE an entry has no bit that forbids instruction fetches: every
  * page an i686 maps is executable. */
 #define PTE_NOEXEC        0u
+/* Nor a protection key, which only 64-bit paging has. */
+#define PTE_PKEY          0u
+#define PTE_PKEY_SHIFT    0
 #define PTE_FLAGS         0xFFFu
 #define PTE_ADDR(e)       ((e) & ~(pte_t)PTE_FLAGS)
 
@@ -174,6 +189,8 @@ typedef uint32_t pte_t;
 #define FAULT_USER(p)     (((p)->error_code & 0x4u) != 0)
 /* No fetch is told apart without PAE's NX, and no page refuses one. */
 #define FAULT_EXEC(p)     ((void)(p), 0)
+/* Nor a refusal by a protection key. */
+#define FAULT_PK(p)       ((void)(p), 0)
 
 /* `rep movs` and `rep stos` move the words of k_memcpy and k_memset. */
 #define ARCH_STRING_WORDS 1

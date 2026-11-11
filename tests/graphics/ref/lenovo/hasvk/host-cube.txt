@@ -1,0 +1,6 @@
+host vkcube --c 300: exit 0 in 5.053 s; Selected GPU 0: Intel(R) HD Graphics 4400 (HSW GT2), type: IntegratedGpu
+host vkcube --c 900: exit 0 in 15.041 s; Selected GPU 0: Intel(R) HD Graphics 4400 (HSW GT2), type: IntegratedGpu
+host vkcube --c 300: exit 0 in 5.045 s; Selected GPU 0: Intel(R) HD Graphics 4400 (HSW GT2), type: IntegratedGpu
+host vkcube --c 900: exit 0 in 15.035 s; Selected GPU 0: Intel(R) HD Graphics 4400 (HSW GT2), type: IntegratedGpu
+host vkcube --c 300 --present_mode 0: exit 0 in 0.386 s; Selected GPU 0: Intel(R) HD Graphics 4400 (HSW GT2), type: IntegratedGpu
+host vkcube --c 1500 --present_mode 0: exit 0 in 1.568 s; Selected GPU 0: Intel(R) HD Graphics 4400 (HSW GT2), type: IntegratedGpu

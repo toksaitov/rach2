@@ -1,0 +1,10 @@
+2358
+drwxr-xr-x 3 1000 1000 4096 Nov 10 17:24 /data/crysis
+total 4
+drwxr-xr-x 10 1000 1000 4096 Nov 10 17:22 game
+[    8.122000] rtl8168: link 1000 Mb/s, full duplex, pause both ways
+[    8.268000] net: eth0: IPv4 192.168.0.106/24
+[    8.462000] net: wlan0: IPv6 fe80::baee:65ff:fe32:8915/64 added
+[    9.646000] net: eth0: IPv6 fd91:381e:e667:4a0c:4ce0:fc3c:40b:648/64 added
+[    9.646000] net: eth0: IPv6 fd91:381e:e667:4a0c:3e68:64f1:b948:9c6c/64 added
+cac65c5881caf56f5250b839203e3744b03cbcbf49f02920ca8df28bd6a5a56b  /data/trial2653/root-2961387c696576a3.img

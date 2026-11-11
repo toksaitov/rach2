@@ -359,10 +359,20 @@ of, turns it off; any other is ignored, and the last value read wins.
 The kernel built with
 .Ql IA32=0
 has no ABI to turn on and ignores the option.
+.Pp
+An i386 handler taken on a non-flat stack segment uses a nonzero
+.Fa sa_restorer
+as its stack top when neither
+.Dv SA_ONSTACK
+nor
+.Dv SA_RESTORER
+is set and the interrupted stack is outside the alternate stack.
+The frame must fit the alternate stack, as on Linux.
 .Sh LIMITS
 An i386 frame without
 .Dv SA_RESTORER
-returns through the return code in the frame.
+returns through the 32-bit vDSO's sigreturn entry when the process has
+one, and otherwise through the return code in the frame.
 .Sh EXAMPLES
 The default suite's
 .Pa tests/wow64probe.c
@@ -374,7 +384,7 @@ each call's architecture with
 .Dv PTRACE_GET_SYSCALL_INFO .
 The i686 probe
 .Pa tests/ldtprobe.c ,
-which no suite yet runs on this kernel, writes and reads entries of the
+which the ia32 profile runs on this kernel, writes and reads entries of the
 LDT, loads and calls through them across a switch, a
 .Xr fork 2
 and a signal, and makes its calls through

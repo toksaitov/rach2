@@ -38,11 +38,11 @@
  * writes as Linux's do: "isa0060/serioK/input0" is the i8042's port K,
  * under /sys/devices/platform/i8042/serioK; "synaptics-pt/serio0/input0"
  * is the touchpad's pass-through port, serio2 below serio1, as Linux
- * numbers it after the i8042's two; and "usb-N/input0" is the
- * device of the USB stack's entry N - 1 (hid.c), whose interface directory
- * B-P:C.I is made below its device. Any other, the ACPI buttons', is a
- * device with no parent here, under /sys/devices/virtual/input, as Linux
- * puts one made by uinput.
+ * numbers it after the i8042's two; and "usb-N/inputI" is interface
+ * number I of the device of the USB stack's entry N - 1 (hid.c), whose
+ * directory B-P:C.I is made below its device, one for each interface. Any
+ * other, the ACPI buttons', is a device with no parent here, under
+ * /sys/devices/virtual/input, as Linux puts one made by uinput.
  */
 
 /* Linux's UEVENT_BUFFER_SIZE, the most bytes of a uevent's variables, and
@@ -56,12 +56,26 @@
 #define SERIO_PORTS       3
 
 /*
+ * A USB interface's directory that published devices are below: its
+ * handle, 0 for a free entry, its link in /sys/bus/usb/devices, the devices
+ * below it, and the interface as the USB stack described it when the
+ * directory was made, which its files show. The last device withdrawn
+ * takes it away, after its own "remove", as Linux's USB core removes an
+ * interface after the input devices below it.
+ */
+struct iface_sys {
+    int dir, link;
+    int users;
+    struct usb_sys_row usb;
+};
+
+static struct iface_sys ifaces[EVDEV_MAX];
+
+/*
  * A device published: the registration whose entries these are, 0 for
- * none; its description; the N of inputN, from 0, the lowest free, as
- * Linux's input core numbers; and the handles of sysfs.h of its entries.
- * `iface` and `iface_link` are the USB interface's directory and its link
- * in /sys/bus/usb/devices when this device made them, else 0; `usb` is that
- * interface's device as the USB stack described it then.
+ * none; its description; the N of inputN, counted from 0 and never used
+ * again, as Linux's input core numbers; the handles of sysfs.h of its
+ * entries; and the USB interface it is below, or NULL.
  */
 struct input_sys {
     uint32_t gen;
@@ -72,27 +86,40 @@ struct input_sys {
     int holder; /* the directory inputN is in */
     int input, event;
     int class_input, class_event, char_link;
-    int iface, iface_link;
-    struct usb_sys_row usb;
+    struct iface_sys *iface;
 };
 
 static struct input_sys records[EVDEV_MAX];
 
-/* The fixed parents, made on their first use and kept: /sys/class/input,
+/* The N of the next inputN. */
+static uint32_t next_number;
+
+/* The parents, made on first use: /sys/class/input,
  * /sys/devices/virtual/input, the i8042 with its link, /sys/bus/serio's
- * `devices`, and the i8042's ports. 0 for one not made yet. */
+ * `devices`, and the serio ports and their bus links. The pass-through
+ * port is removed on disconnect; the fixed parents stay. 0 for none. */
 static struct {
     int class_input;
     int virtual_input;
     int i8042, i8042_link;
     int bus_serio, serio_devices;
     int serio[SERIO_PORTS];
+    int serio_link[SERIO_PORTS];
 } parents;
 
-/* Each serio port's firmware ID, NULL for none, and the function that adds
- * its driver's own files to its directory, NULL for none. */
+/* Each serio port's firmware ID, NULL for none; whether its driver made it
+ * without a device below it, which `evdev_sysfs_serio_add` says; the
+ * functions that add its driver's own files to its directory, which stay
+ * while the driver is bound, and its protocol's, which a change of protocol
+ * replaces, NULL for none; and the entries each function made, 0 past the
+ * last. */
+#define SERIO_FILES_MAX 24
 static const char *serio_firmware[SERIO_PORTS];
+static int serio_wanted[SERIO_PORTS];
+static int (*serio_driver[SERIO_PORTS])(int dir);
 static int (*serio_files[SERIO_PORTS])(int dir);
+static int serio_driver_made[SERIO_PORTS][SERIO_FILES_MAX];
+static int serio_made[SERIO_PORTS][SERIO_FILES_MAX];
 
 /* What a show writes: the bytes so far, which may pass `cap`, so that the
  * show returns how many it needs; a `cap` of 0 counts alone. */
@@ -391,6 +418,11 @@ static void emit_uevent(struct emit *e, const struct input_sys *r)
         emit_str(e, r->d.phys);
         emit_str(e, "\"\n");
     }
+    if (r->d.has_uniq) {
+        emit_str(e, "UNIQ=\"");
+        emit_str(e, r->d.uniq);
+        emit_str(e, "\"\n");
+    }
     emit_str(e, "PROP=");
     emit_bitmap(e, r->d.prop, INPUT_PROP_CNT);
     emit_str(e, "\n");
@@ -428,6 +460,7 @@ static int32_t show_input(void *obj, int arg, char *buf, uint32_t cap)
         emit_str(&e, "\n");
         break;
     case IN_UNIQ:
+        emit_str(&e, r->d.uniq);
         emit_str(&e, "\n");
         break;
     case IN_MODALIAS:
@@ -611,7 +644,7 @@ static void emit_usb_alias(struct emit *e, const struct usb_sys_row *u)
  * modalias and its uevent, with usbhid, Linux's HID driver, bound to it. */
 static int32_t show_iface(void *obj, int arg, char *buf, uint32_t cap)
 {
-    const struct usb_sys_row *u = &((const struct input_sys *)obj)->usb;
+    const struct usb_sys_row *u = &((const struct iface_sys *)obj)->usb;
     struct emit e;
 
     emit_init(&e, buf, cap);
@@ -737,9 +770,69 @@ static int serio_bus_devices(void)
     return parents.serio_devices;
 }
 
+/**
+ * Have `add` add its files to the serio directory `dir`, and keep in `made`,
+ * SERIO_FILES_MAX entries, those it made, found as those that were not below
+ * `dir` before, so that a change of driver or protocol can remove them
+ * (`remove_serio_files`). A NULL `add` makes none. 0, or `add`'s -errno,
+ * with what it made removed.
+ */
+static int add_serio_files(int (*add)(int dir), int dir, int *made)
+{
+    int before[SERIO_FILES_MAX * 3], nbefore, n, h, i, j, nmade = 0, rc;
+
+    k_memset(made, 0, SERIO_FILES_MAX * sizeof(made[0]));
+    if (!add) {
+        return 0;
+    }
+    nbefore = sysfs_node_count(dir);
+    if (nbefore > (int)(sizeof(before) / sizeof(before[0]))) {
+        return -ENOSPC;
+    }
+    for (i = 0; i < nbefore; i++) {
+        before[i] = sysfs_node_nth(dir, i);
+    }
+    rc = add(dir);
+    n = sysfs_node_count(dir);
+    for (i = 0; i < n; i++) {
+        h = sysfs_node_nth(dir, i);
+        for (j = 0; j < nbefore && before[j] != h; j++) {
+        }
+        if (j < nbefore) {
+            continue;
+        }
+        if (nmade < SERIO_FILES_MAX) {
+            made[nmade++] = h;
+        } else {
+            sysfs_remove(h);
+            i--;
+            n--;
+            rc = -ENOSPC; /* the table is sized for the largest protocol's */
+        }
+    }
+    if (rc < 0) {
+        for (i = 0; i < nmade; i++) {
+            sysfs_remove(made[i]);
+        }
+        k_memset(made, 0, SERIO_FILES_MAX * sizeof(made[0]));
+    }
+    return rc;
+}
+
+/** Remove the entries `add_serio_files` kept in `made`, and forget them. */
+static void remove_serio_files(int *made)
+{
+    int i;
+
+    for (i = 0; i < SERIO_FILES_MAX && made[i]; i++) {
+        sysfs_remove(made[i]);
+    }
+    k_memset(made, 0, SERIO_FILES_MAX * sizeof(made[0]));
+}
+
 /** The serio port `port`, serioK below the i8042, or below serio1 for the
- * pass-through port, with its files and links and its driver's, made on
- * its first use. */
+ * pass-through port, with its files and links and its driver's and
+ * protocol's, made on its first use. */
 static int serio_dir(int port)
 {
     static const struct sysfs_attr attrs[] = {{"description", 0444u, show_serio, NULL},
@@ -767,22 +860,29 @@ static int serio_dir(int port)
             add_attrs(id, ids, 4, NULL, port * 16 + SERIO_TYPE) < 0 ||
             sysfs_add_uevent(h, show_serio, NULL, port * 16 + SERIO_UEVENT) < 0 ||
             sysfs_add_link(h, "subsystem", parents.bus_serio) < 0 ||
-            (serio_files[port] && serio_files[port](h) < 0)) {
+            add_serio_files(serio_driver[port], h, serio_driver_made[port]) < 0 ||
+            add_serio_files(serio_files[port], h, serio_made[port]) < 0) {
             sysfs_remove(h);
             return -ENOMEM;
         }
-        (void)sysfs_add_link(bus, name, h);
+        parents.serio_link[port] = sysfs_add_link(bus, name, h);
+        if (parents.serio_link[port] < 0) {
+            sysfs_remove(h);
+            parents.serio_link[port] = 0;
+            return -ENOMEM;
+        }
         sysfs_uevent(h, "add", NULL);
     }
     parents.serio[port] = h;
     return h;
 }
 
-/** The directory of the USB interface of the stack's entry `index`,
- * B-P:C.I below its device, made for `r` when absent, with its files, its
- * `subsystem` link and its link in /sys/bus/usb/devices: its handle, or
- * -errno, -ENOENT for an entry that is not running. */
-static int iface_dir(struct input_sys *r, int index)
+/** The directory of interface number `ifnum` of the stack's entry `index`,
+ * B-P:C.I below its device, made when absent, with its files, its
+ * `subsystem` link and its link in /sys/bus/usb/devices, and counted as
+ * `r`'s: its handle, or -errno, -ENOENT for an entry that is not running
+ * or does not drive that interface. */
+static int iface_dir(struct input_sys *r, int index, int ifnum)
 {
     static const struct sysfs_attr attrs[] = {{"bInterfaceNumber", 0444u, show_iface, NULL},
                                               {"bAlternateSetting", 0444u, show_iface, NULL},
@@ -791,35 +891,54 @@ static int iface_dir(struct input_sys *r, int index)
                                               {"bInterfaceProtocol", 0444u, show_iface, NULL},
                                               {"modalias", 0444u, show_iface, NULL}};
     char dev[SYSFS_NAME_MAX], name[SYSFS_NAME_MAX];
+    struct usb_sys_row row;
+    struct iface_sys *f = NULL;
     struct emit e;
-    int key, made = 0, h;
+    int key, made = 0, h, i, rc;
 
-    if (usb_core_row(index, &r->usb) != 0 || (key = sysfs_usb_key(&r->usb)) < 0) {
+    if (usb_core_interface(index, ifnum, &row) != 0 || (key = sysfs_usb_key(&row)) < 0) {
         return -ENOENT;
     }
     synth_sys_device_name(SYSFS_USB_DEVICE, key, dev, (int)sizeof(dev));
     emit_init(&e, name, sizeof(name) - 1);
     emit_str(&e, dev);
     emit_str(&e, ":");
-    emit_u32(&e, (uint32_t)r->usb.config & 0xFFu);
+    emit_u32(&e, (uint32_t)row.config & 0xFFu);
     emit_str(&e, ".");
-    emit_u32(&e, (uint32_t)r->usb.ifnum & 0xFFu);
+    emit_u32(&e, (uint32_t)row.ifnum & 0xFFu);
     name[e.len < sizeof(name) - 1 ? e.len : sizeof(name) - 1] = '\0';
     h = dir_at(sysfs_anchor(SYSFS_USB_DEVICE, key), name, &made);
-    if (h > 0 && made) {
-        if (add_attrs(h, attrs, 6, r, IF_NUMBER) < 0 ||
-            sysfs_add_uevent(h, show_iface, r, IF_UEVENT) < 0 ||
-            sysfs_add_link(h, "subsystem", sysfs_anchor(SYSFS_BUS_USB, 0)) < 0) {
-            sysfs_remove(h);
-            return -ENOMEM;
-        }
-        r->iface = h;
-        h = sysfs_add_link(sysfs_anchor(SYSFS_USB_LINKS, 0), name, r->iface);
-        r->iface_link = h > 0 ? h : 0;
-        sysfs_uevent(r->iface, "add", NULL);
-        h = r->iface;
+    if (h <= 0) {
+        return h;
     }
-    return h;
+    for (i = 0; i < EVDEV_MAX && !f; i++) {
+        if (made ? ifaces[i].dir == 0 : ifaces[i].dir == h) {
+            f = &ifaces[i];
+        }
+    }
+    if (!f) {
+        if (made) {
+            sysfs_remove(h);
+        }
+        return -ENOMEM;
+    }
+    if (made) {
+        k_memset(f, 0, sizeof(*f));
+        f->usb = row;
+        if ((rc = add_attrs(h, attrs, 6, f, IF_NUMBER)) < 0 ||
+            (rc = sysfs_add_uevent(h, show_iface, f, IF_UEVENT)) < 0 ||
+            (rc = sysfs_add_link(h, "subsystem", sysfs_anchor(SYSFS_BUS_USB, 0))) < 0) {
+            sysfs_remove(h);
+            return rc;
+        }
+        f->dir = h;
+        h = sysfs_add_link(sysfs_anchor(SYSFS_USB_LINKS, 0), name, f->dir);
+        f->link = h > 0 ? h : 0;
+        sysfs_uevent(f->dir, "add", NULL);
+    }
+    f->users++;
+    r->iface = f;
+    return f->dir;
 }
 
 /** The decimal number at `s` up to a character that is no digit, or -1
@@ -861,35 +980,29 @@ static int parent_of(struct input_sys *r)
     }
     if (starts(phys, "usb-")) {
         n = number_at(phys + 4);
-        return n >= 1 ? iface_dir(r, n - 1) : 0;
+        for (phys += 4; *phys >= '0' && *phys <= '9'; phys++) {
+        }
+        if (n < 1 || !starts(phys, "/input") || number_at(phys + 6) < 0) {
+            return 0;
+        }
+        return iface_dir(r, n - 1, number_at(phys + 6));
     }
     return 0;
 }
 
-/** The lowest N of inputN no device published has. */
-static int free_number(void)
-{
-    int n, i;
-
-    for (n = 0;; n++) {
-        for (i = 0; i < EVDEV_MAX && !(records[i].gen && records[i].number == n); i++) {
-        }
-        if (i == EVDEV_MAX) {
-            return n;
-        }
-    }
-}
-
-/** Take away the USB interface `r` made, sending its "remove". */
+/** Let go of the USB interface `r` is below; the last device to let go
+ * takes it away, sending its "remove". */
 static void drop_iface(struct input_sys *r)
 {
-    if (r->iface) {
-        sysfs_uevent(r->iface, "remove", NULL);
-        sysfs_remove(r->iface_link);
-        sysfs_remove(r->iface);
+    struct iface_sys *f = r->iface;
+
+    r->iface = NULL;
+    if (f && --f->users == 0) {
+        sysfs_uevent(f->dir, "remove", NULL);
+        sysfs_remove(f->link);
+        sysfs_remove(f->dir);
+        k_memset(f, 0, sizeof(*f));
     }
-    r->iface = 0;
-    r->iface_link = 0;
 }
 
 /**
@@ -1005,7 +1118,7 @@ static int publish(struct input_sys *r, int slot, const struct evdev_desc *d)
     k_memset(r, 0, sizeof(*r));
     r->slot = slot;
     r->d = *d;
-    r->number = free_number();
+    r->number = (int)next_number;
     parent = class_input < 0 ? class_input : parent_of(r);
     h = parent < 0 ? parent : make_input(r, parent);
     if (h >= 0) {
@@ -1029,6 +1142,7 @@ static int publish(struct input_sys *r, int slot, const struct evdev_desc *d)
         return h;
     }
     r->gen = d->gen;
+    next_number++;
     sysfs_uevent(r->input, "add", NULL);
     sysfs_uevent(r->event, "add", NULL);
     return 0;
@@ -1054,34 +1168,135 @@ void evdev_sysfs_serio_firmware_id(int port, const char *id)
     }
 }
 
+void evdev_sysfs_serio_remove(int port)
+{
+    int n, dir;
+
+    if (port < 0 || port >= SERIO_PORTS) {
+        return;
+    }
+    if (port == 1) {
+        evdev_sysfs_serio_remove(EVDEV_SERIO_PASS_THROUGH);
+    }
+    dir = parents.serio[port];
+    if (sysfs_node_kind(dir) == SYSFS_NODE_DIR) {
+        for (n = 0; n < EVDEV_MAX; n++) {
+            if (records[n].gen && sysfs_node_parent(records[n].holder) == dir) {
+                withdraw(&records[n]);
+            }
+        }
+        sysfs_uevent(dir, "remove", NULL);
+        sysfs_remove(parents.serio_link[port]);
+        sysfs_remove(dir);
+    }
+    parents.serio[port] = parents.serio_link[port] = 0;
+    serio_firmware[port] = NULL;
+    serio_wanted[port] = 0;
+    serio_driver[port] = NULL;
+    serio_files[port] = NULL;
+    k_memset(serio_driver_made[port], 0, sizeof(serio_driver_made[port]));
+    k_memset(serio_made[port], 0, sizeof(serio_made[port]));
+}
+
+/** Make the ports `evdev_sysfs_serio_add` asked for whose parent is
+ * there: the i8042's ports once the i8042 is, the pass-through port once
+ * serio1 is. */
+static void make_wanted_ports(void)
+{
+    int port, parent;
+
+    for (port = 0; port < SERIO_PORTS; port++) {
+        parent = port == EVDEV_SERIO_PASS_THROUGH ? parents.serio[1] : parents.i8042;
+        if (serio_wanted[port] && sysfs_node_kind(parents.serio[port]) != SYSFS_NODE_DIR &&
+            sysfs_node_kind(parent) == SYSFS_NODE_DIR && serio_dir(port) < 0) {
+            klog(KLOG_WARN, "input", "serio%d: the port was not made", port);
+        }
+    }
+}
+
+void evdev_sysfs_serio_add(int port)
+{
+    if (port < 0 || port >= SERIO_PORTS) {
+        return;
+    }
+    serio_wanted[port] = 1;
+    make_wanted_ports();
+}
+
+void evdev_sysfs_serio_driver(int port, int (*add)(int dir))
+{
+    if (port < 0 || port >= SERIO_PORTS) {
+        return;
+    }
+    serio_driver[port] = add;
+    if (sysfs_node_kind(parents.serio[port]) != SYSFS_NODE_DIR) {
+        return; /* the directory, when made, takes them */
+    }
+    remove_serio_files(serio_driver_made[port]);
+    if (add_serio_files(add, parents.serio[port], serio_driver_made[port]) < 0) {
+        klog(KLOG_WARN, "input", "serio%d: the driver's files were not made", port);
+    }
+}
+
 void evdev_sysfs_serio_files(int port, int (*add)(int dir))
 {
-    if (port >= 0 && port < SERIO_PORTS) {
-        serio_files[port] = add;
+    if (port < 0 || port >= SERIO_PORTS) {
+        return;
+    }
+    serio_files[port] = add;
+    if (sysfs_node_kind(parents.serio[port]) != SYSFS_NODE_DIR) {
+        return; /* the directory, when made, takes them */
+    }
+    remove_serio_files(serio_made[port]);
+    if (add_serio_files(add, parents.serio[port], serio_made[port]) < 0) {
+        klog(KLOG_WARN, "input", "serio%d: the protocol's files were not made", port);
     }
 }
 
 void evdev_sysfs_sync(void)
 {
     struct evdev_desc d;
-    int n, rc;
+    uint8_t tried[EVDEV_MAX];
+    uint32_t best, failed;
+    int n, next, rc;
 
     (void)class_dir();
     for (n = 0; n < EVDEV_MAX; n++) {
-        if (records[n].gen && (!evdev_snapshot(n, &d) || d.gen != records[n].gen)) {
-            withdraw(&records[n]);
-        }
-    }
-    for (n = 0; n < EVDEV_MAX; n++) {
-        if (records[n].gen || !evdev_snapshot(n, &d)) {
+        if (!records[n].gen) {
             continue;
         }
-        rc = publish(&records[n], n, &d);
-        if (rc < 0 && records[n].failed != d.gen) {
-            klog(KLOG_WARN, "input", "sysfs: event%d: refused: error %d", n, (int)rc);
+        if (!evdev_snapshot(n, &d) || d.gen != records[n].gen) {
+            withdraw(&records[n]);
+        } else {
+            records[n].d = d; /* EVIOCSKEYCODE changes the keys a device has */
         }
-        records[n].failed = rc < 0 ? d.gen : 0;
     }
+    /* The new devices in the order they registered, as Linux numbers them. */
+    k_memset(tried, 0, sizeof(tried));
+    for (;;) {
+        next = -1;
+        best = 0;
+        for (n = 0; n < EVDEV_MAX; n++) {
+            if (records[n].gen || tried[n] || !evdev_snapshot(n, &d)) {
+                continue;
+            }
+            if (next < 0 || d.gen < best) {
+                next = n;
+                best = d.gen;
+            }
+        }
+        if (next < 0 || !evdev_snapshot(next, &d)) {
+            break;
+        }
+        tried[next] = 1;
+        failed = records[next].failed; /* publish clears the record */
+        rc = publish(&records[next], next, &d);
+        if (rc < 0 && failed != d.gen) {
+            klog(KLOG_WARN, "input", "sysfs: event%d: refused: error %d", next, (int)rc);
+        }
+        records[next].failed = rc < 0 ? d.gen : 0;
+    }
+    make_wanted_ports();
 }
 
 #ifndef RACH2_HOSTTEST

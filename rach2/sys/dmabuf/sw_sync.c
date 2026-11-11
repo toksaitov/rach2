@@ -41,7 +41,8 @@ static const char *sw_timeline_name(struct dma_fence *f)
     return ((struct sw_point *)f)->timeline;
 }
 
-static const struct dma_fence_ops sw_ops = {sw_driver_name, sw_timeline_name, NULL, NULL};
+static const struct dma_fence_ops sw_ops = {
+    sw_driver_name, sw_timeline_name, NULL, NULL, NULL, NULL};
 
 /** Complete every point reached, detaching it before callbacks can run. */
 static void sw_advance(struct sw_timeline *t, uint32_t increment, int close)
@@ -122,16 +123,12 @@ static int32_t sw_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     dma_fence_init(&point->fence, &sw_ops, t->context, data.value);
     k_memcpy(point->timeline, t->name, sizeof(point->timeline));
     data.name[31] = 0;
-    fd = sync_file_create(&point->fence, data.name);
+    /* Linux ignores the caller's name and names the file from its fence. */
+    fd = sync_file_copy_out(&point->fence, NULL, (void __user *)arg, &data, sizeof(data),
+                            &data.fence);
     if (fd < 0) {
         dma_fence_put(&point->fence);
         return fd;
-    }
-    data.fence = fd;
-    if (copy_to_user((void __user *)arg, &data, sizeof(data))) {
-        fd_free(current_proc->fds, fd);
-        dma_fence_put(&point->fence);
-        return -EFAULT;
     }
     for (link = &t->points;
          *link && (int32_t)((uint32_t)(*link)->fence.seqno - (uint32_t)data.value) <= 0;

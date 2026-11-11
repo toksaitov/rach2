@@ -344,7 +344,7 @@ static struct unix_sock *unix_alloc(int type)
     s->ns = proc_netns(current_proc);
     s->state = US_UNCONNECTED;
     s->inode = socket_inode_next();
-    s->uid = current_proc->euid;
+    s->uid = proc_fsuid(current_proc); /* as Linux owns a socket's inode */
     s->sndbuf = UNIX_BUF;
     s->rcvbuf = UNIX_BUF;
     wait_queue_init(&s->wq);
@@ -2336,7 +2336,11 @@ static int32_t recv_stream(struct unix_sock *s, int nonblock, const struct kerne
 
 /** A receive of one message into `iov` on a datagram or sequenced-packet
  * socket, which the receive lock keeps from its choice to its consumption;
- * its length as `unix_recvfrom` gives it, or its errors. */
+ * its length as `unix_recvfrom` gives it, or its errors. A copy that faults
+ * is -EFAULT and consumes the message, closing its descriptors, unless
+ * MSG_PEEK, as Linux's __unix_dgram_recvmsg has dequeued the skb before its
+ * copy and frees it (net/unix/af_unix.c:2459-2460, 2501-2502 and
+ * 2541-2542 in 6.12). */
 static int32_t recv_msg(struct unix_sock *s, int nonblock, const struct kernel_iovec *iov,
                         uint32_t iovlen, uint32_t total, int flags, struct unix_in *in)
 {
@@ -2365,6 +2369,9 @@ static int32_t recv_msg(struct unix_sock *s, int nonblock, const struct kernel_i
     m = s->rq_head;
     chunk = m->len < total ? m->len : total;
     if (iov_copy(iov, iovlen, 0, m->data, chunk, 1) != 0) {
+        if (!peek) {
+            msg_free(dequeue(s));
+        }
         recv_unlock(s);
         return -EFAULT;
     }
@@ -2576,15 +2583,28 @@ int32_t unix_recvfrom(fd_entry_t *e, uintptr_t buf, uint32_t len, int flags, uin
     return rc;
 }
 
-/** The caller's iovec array in `*iov`, copied in in its layout
- * (`iov_fetch`) and checked, with its
- * total length in `*total`: 0, or -EMSGSIZE past IOV_MAX_LOCAL vectors,
- * -EINVAL for a total past 2^31 - 1, -ENOMEM, -EFAULT. The caller frees the
- * array, whatever the result. */
+int32_t unix_readv(fd_entry_t *e, const struct kernel_iovec *iov, int count, uint32_t total)
+{
+    struct unix_in in;
+    int32_t rc;
+
+    k_memset(&in, 0, sizeof(in));
+    transit_enter(&in);
+    rc = recv_core(e, iov, (uint32_t)count, total, 0, &in);
+    release_in(&in);
+    transit_leave(&in);
+    return rc;
+}
+
+/** The caller's iovec array in `*iov`, copied in in its layout and checked
+ * (`iov_import`), with its total length, cut at MAX_RW_COUNT, in `*total`:
+ * 0, or -EMSGSIZE past IOV_MAX_LOCAL vectors, -EINVAL for a negative
+ * length, -ENOMEM, -EFAULT. The caller frees the array, whatever the
+ * result. */
 static int32_t get_iov(uintptr_t uiov, unsigned long iovlen, struct kernel_iovec **iov,
                        uint32_t *total)
 {
-    unsigned long i;
+    long rc;
 
     *iov = NULL;
     *total = 0;
@@ -2598,15 +2618,11 @@ static int32_t get_iov(uintptr_t uiov, unsigned long iovlen, struct kernel_iovec
     if (!*iov) {
         return -ENOMEM;
     }
-    for (i = 0; i < iovlen; i++) {
-        if (iov_fetch(&(*iov)[i], uiov, (uint32_t)i) != 0) {
-            return -EFAULT;
-        }
-        if ((*iov)[i].iov_len > 0x7FFFFFFFu - *total) {
-            return -EINVAL;
-        }
-        *total += (uint32_t)(*iov)[i].iov_len;
+    rc = iov_import(*iov, uiov, (int)iovlen, -1);
+    if (rc < 0) {
+        return (int32_t)rc;
     }
+    *total = (uint32_t)rc;
     return 0;
 }
 

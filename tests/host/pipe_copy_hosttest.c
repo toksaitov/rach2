@@ -6,11 +6,14 @@
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
  * Pipe, ring and checked-copy code are the kernel's. User addresses refer to
- * model pages; the resolver runs a peer operation before returning a missing
- * or copy-on-write page. Waits, signals and wakeups are recorded substitutes;
- * a wakeup keeps the kinds of change it names, so a read must wake the writers
- * for room alone, a write the readers for data alone, whether the ring had
- * data before it or not, and a close the other end for a hangup.
+ * model pages; the resolver starts a peer operation before returning a
+ * missing or copy-on-write page. A peer that would take the pipe's lock while
+ * the caller holds it waits, and runs when the caller gives the lock back, as
+ * a thread that waits for Linux's `pipe->mutex`; a close takes no lock and
+ * runs at once. Waits, signals and wakeups are recorded substitutes; a wakeup
+ * keeps the kinds of change it names, so a read must wake the writers for
+ * room alone, a write the readers for data alone, whether the ring had data
+ * before it or not, and a close the other end for a hangup.
  */
 #include "ipc/pipe.c"
 #include "ipc/pipe_ring.c"
@@ -37,8 +40,13 @@ extern int printf(const char *format, ...);
 
 static pipe_t ring;
 static uint8_t ring_bytes[PIPE_BUF_SIZE];
+/* The page buffers' slots, which a row that counts them gives the ring. */
+static struct pipe_page ring_pages[2 * (PIPE_BUF_SIZE / PAGE_SIZE) + 2];
 static fd_entry_t reader, writer;
 static struct open_file read_ofd, write_ofd;
+/* A second pipe, the output of a tee or a splice from `ring`. */
+static pipe_t out_ring;
+static fd_entry_t out_writer;
 static uint8_t memory[USER_PAGES * PAGE_SIZE];
 static int pages[USER_PAGES];
 static int failures, waits, read_wakes, write_wakes, signals, resolves;
@@ -46,7 +54,13 @@ static uint32_t read_kinds, write_kinds;
 static void (*resolve_action)(void);
 static void (*wait_action)(void);
 static uint32_t peer_count;
+static int32_t peer_result;
 static int peer_closes;
+/* The model's thread: 1 for a row's own call, 2 for a peer. */
+static int thread_now = 1;
+/* A peer that waits for the pipe's lock, and the waits for it so far. */
+static void (*lock_waiter)(void);
+static int lock_waits;
 static process_t writing_thread;
 struct percpu cpu_table[NR_CPUS] = {{.current = &writing_thread}};
 
@@ -103,13 +117,68 @@ void *k_memset(void *dst, int c, size_t n)
     return dst;
 }
 
+static void close_reader(void);
+
+/** Run `action` as a peer: at once when the pipe's lock is free or the
+ * action takes none, as `close_reader`, since the kernel's `pipe_close`
+ * takes no lock, and otherwise once its holder gives it back
+ * (`sleep_lock_give`). */
+static void as_peer(void (*action)(void))
+{
+    int was = thread_now;
+
+    if (action != close_reader && ring.lock.depth > 0 && ring.lock.holder != 2) {
+        CHECK(lock_waiter == NULL, "one peer waits for the lock");
+        lock_waiter = action;
+        lock_waits++;
+        return;
+    }
+    thread_now = 2;
+    action();
+    thread_now = was;
+}
+
+/** Make `l` a free lock, for pipe creation, which no row reaches. */
+void sleep_lock_init(struct sleep_lock *l, struct sleep_lock_record *record, int flags)
+{
+    (void)record;
+    (void)flags;
+    l->holder = -1;
+    l->depth = 0;
+}
+
+/** Take `l` for the model's thread; a row's call or a peer finds it free,
+ * since a peer that would wait runs only once it is (`as_peer`). */
+void sleep_lock_take(struct sleep_lock *l)
+{
+    CHECK(l->depth == 0 || l->holder == thread_now, "a pipe lock is taken only when free");
+    l->holder = thread_now;
+    l->depth++;
+}
+
+/** Give back one take of `l`; the last runs the peer that waits for it. */
+void sleep_lock_give(struct sleep_lock *l)
+{
+    void (*waiter)(void) = lock_waiter;
+
+    CHECK(l->depth > 0 && l->holder == thread_now, "a pipe lock is given by its holder");
+    if (--l->depth > 0) {
+        return;
+    }
+    l->holder = -1;
+    if (waiter && l == &ring.lock) {
+        lock_waiter = NULL;
+        as_peer(waiter);
+    }
+}
+
 /**
  * Resolve the page of `addr` for a read or, with `write`, a write: 0, a
  * fault, for an address outside the model or a page marked -1, and 1
  * otherwise. A page whose state is below what the access needs (0 missing, 1
- * copy-on-write, 2 writable) first runs `resolve_action` once, as a peer
- * would run while the kernel allocates the frame. A copy must stay in one
- * page.
+ * copy-on-write, 2 writable) first starts `resolve_action` once, as a peer
+ * would run while the kernel allocates the frame (`as_peer`). A copy must
+ * stay in one page.
  */
 int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
 {
@@ -129,10 +198,35 @@ int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
         resolves++;
         resolve_action = NULL;
         if (action) {
-            action();
+            as_peer(action);
         }
         pages[page] = write ? 2 : 1;
     }
+    return 1;
+}
+
+/** Whether the page of `addr` is present for a read, or with `write` for
+ * a write, with no resolve: 1 or 0, 0 also outside the model. A check must
+ * stay in one page. */
+int vm_resident(uintptr_t addr, uintptr_t len, int write)
+{
+    uint32_t page;
+
+    CHECK(len > 0 && len <= PAGE_SIZE - (addr & (PAGE_SIZE - 1)), "one user page per check");
+    if (addr < USER_BASE || addr - USER_BASE >= sizeof(memory)) {
+        return 0;
+    }
+    page = (addr - USER_BASE) / PAGE_SIZE;
+    return pages[page] >= (write ? 2 : 1);
+}
+
+/** Whether a pin may take the page of `addr`: always, since the model has
+ * no region that Linux's get_user_pages refuses. */
+int paging_pin_allows(struct mm *mm, uintptr_t addr, int write)
+{
+    (void)mm;
+    (void)addr;
+    (void)write;
     return 1;
 }
 
@@ -149,9 +243,16 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     if (!action) {
         return -EINTR;
     }
-    action();
+    as_peer(action);
     CHECK(cond(arg), "peer makes wait ready");
     return 0;
+}
+
+/** A named wait, which the model takes as `wq_wait_event`. */
+int wq_wait_event_as(wait_queue_t *wq, wq_cond_fn cond, void *arg, const char *name)
+{
+    (void)name;
+    return wq_wait_event(wq, cond, arg);
 }
 
 /** Count the wakeups of each end's queue and the kinds of change they name,
@@ -253,6 +354,7 @@ static void setup(uint32_t head)
     k_memset(&write_ofd, 0, sizeof(write_ofd));
     k_memset(memory, 0x33, sizeof(memory));
     ring.buf = ring_bytes;
+    ring.size = PIPE_BUF_SIZE;
     ring.head = ring.tail = head;
     ring.read_open = ring.write_open = 1;
     reader.priv = writer.priv = &ring;
@@ -269,26 +371,29 @@ static void setup(uint32_t head)
     read_kinds = write_kinds = 0;
     resolve_action = wait_action = NULL;
     peer_count = 0;
+    peer_result = 0;
     peer_closes = 0;
+    thread_now = 1;
+    lock_waiter = NULL;
+    lock_waits = 0;
 }
 
-/** Read `peer_count` bytes through `pipe_read`, as a peer during a resolve
- * or a wait, and with `peer_closes` close the writer after. */
+/** Read `peer_count` bytes through `pipe_read` into PEER_PAGE, as a peer
+ * during a resolve or a wait, its result in `peer_result`, and with
+ * `peer_closes` close the writer after. */
 static void peer_read(void)
 {
-    CHECK(pipe_read(&reader, user_at(PEER_PAGE * PAGE_SIZE), peer_count) == (int32_t)peer_count,
-          "peer read count");
+    peer_result = pipe_read(&reader, user_at(PEER_PAGE * PAGE_SIZE), peer_count);
     if (peer_closes) {
         pipe_close(&writer);
     }
 }
 
-/** Write `peer_count` bytes through `pipe_write`, as a peer during a
- * resolve or a wait. */
+/** Write `peer_count` bytes from PEER_PAGE through `pipe_write`, as a peer
+ * during a resolve or a wait, its result in `peer_result`. */
 static void peer_write(void)
 {
-    CHECK(pipe_write(&writer, user_at(PEER_PAGE * PAGE_SIZE), peer_count) == (int32_t)peer_count,
-          "peer write count");
+    peer_result = pipe_write(&writer, user_at(PEER_PAGE * PAGE_SIZE), peer_count);
 }
 
 /** Close the read end, as a peer while a writer resolves its source page. */
@@ -298,33 +403,38 @@ static void close_reader(void)
 }
 
 /**
- * A reader whose page is resolved while a peer reads 2 of the 6 bytes
- * copies the other 4 from the head as it is after the peer, and consumes no
- * byte twice. `head` is the ring's head: 0, at the end of the buffer, or at
- * the wrap of the counter; `present` is the page's state, 0 missing or 1
- * copy-on-write.
+ * A reader whose page is resolved while a peer would read 2 of the 8 bytes
+ * holds the pipe across the resolve, as Linux's `pipe_read` holds
+ * `pipe->mutex`: it copies the first 6 bytes, adjacent in the stream, and
+ * the peer, which waited for the lock, reads the last 2 after it. `head` is
+ * the ring's head: 0, at the end of the buffer, or at the wrap of the
+ * counter; `present` is the page's state, 0 missing or 1 copy-on-write.
  */
 static void read_competition(uint32_t head, int present)
 {
-    static const uint8_t bytes[] = {1, 2, 3, 4, 5, 6};
+    static const uint8_t bytes[] = {1, 2, 3, 4, 5, 6, 7, 8};
+    const uint8_t *peer = memory + PEER_PAGE * PAGE_SIZE;
 
     setup(head);
     pipe_ring_put(&ring, bytes, sizeof(bytes));
     pages[0] = present;
     peer_count = 2;
     resolve_action = peer_read;
-    CHECK(pipe_read(&reader, user_at(0), 6) == 4, "reader returns remaining bytes");
-    CHECK(memory[0] == 3 && memory[1] == 4 && memory[2] == 5 && memory[3] == 6,
-          "reader copies current head");
+    CHECK(pipe_read(&reader, user_at(0), 6) == 6, "a reader keeps the pipe across its resolve");
+    CHECK(memory[0] == 1 && memory[2] == 3 && memory[5] == 6,
+          "a reader copies the stream's first bytes");
+    CHECK(lock_waits == 1 && peer_result == 2 && peer[0] == 7 && peer[1] == 8,
+          "a peer's read waits for the lock and takes the bytes after");
     CHECK(pipe_available(&ring) == 0, "reader does not consume twice");
     CHECK(resolves == 1, "reader resolves lazy or cow page once");
 }
 
 /**
- * A writer whose page is resolved while a peer writes rechecks the free
- * space: with `fill` the peer fills the ring and the write gives -EAGAIN;
- * without, the writer's 3 bytes follow the peer's 4. No byte already in the
- * ring is lost.
+ * A writer whose page is resolved while a peer would write holds the pipe
+ * across the resolve, as Linux's `pipe_write` holds `pipe->mutex`: its 3
+ * bytes follow the 2 unread ones, and the peer's, written once the lock is
+ * free, follow its own. With `fill` the peer's write fills the ring to the
+ * byte. No byte already in the ring is lost.
  */
 static void write_competition(int fill)
 {
@@ -337,32 +447,96 @@ static void write_competition(int fill)
     bytes[0] = bytes[1] = 0x11;
     pipe_ring_put(&ring, bytes, 2);
     pages[0] = 0;
-    peer_count = fill ? PIPE_BUF_SIZE - 2 : 4;
+    peer_count = fill ? PIPE_BUF_SIZE - 5 : 4;
     resolve_action = peer_write;
     result = pipe_write(&writer, user_at(0), 3);
-    CHECK(result == (fill ? -EAGAIN : 3), "writer rechecks free space");
-    CHECK(pipe_available(&ring) == 2 + peer_count + (fill ? 0 : 3),
-          "writer occupancy stays bounded");
+    CHECK(result == 3, "a writer keeps the pipe across its resolve");
+    CHECK(lock_waits == 1 && peer_result == (int32_t)peer_count,
+          "a peer's write waits for the lock and takes the room after");
+    CHECK(pipe_available(&ring) == 5 + peer_count, "writer occupancy stays bounded");
     pipe_ring_get(&ring, bytes, PIPE_BUF_SIZE);
     CHECK(bytes[0] == 0x11 && bytes[1] == 0x11, "writer preserves unread bytes");
+    CHECK(bytes[2] == 0x33 && bytes[4] == 0x33, "a writer's bytes follow the unread ones");
     for (i = 0; i < peer_count; i++) {
-        if (bytes[2 + i] != 0x22) {
+        if (bytes[5 + i] != 0x22) {
             intact = 0;
         }
     }
-    CHECK(intact, "writer preserves peer bytes");
-    if (!fill) {
-        CHECK(bytes[6] == 0x33 && bytes[8] == 0x33, "writer appends after peer");
-    }
+    CHECK(intact, "a peer's bytes follow the writer's");
     CHECK(resolves == 1, "writer resolves lazy page once");
 }
 
 /**
- * A transfer rechecks the ring after a resolve or a wait: a read of a ring a
- * peer drained gives -EAGAIN, or 0 once the writer closed; a write after the
- * reader closed gives -EPIPE and SIGPIPE; a blocking read or write waits,
- * and a read wakes the writers for room alone and a write the readers for
- * data alone.
+ * A read whose second destination is resolved while a peer would read or
+ * write keeps the pipe, as Linux's `pipe_read` holds `pipe->mutex` across
+ * the fault (fs/pipe.c:264-399 in 6.12). With four page buffers of 2 bytes,
+ * a read of 6 bytes into a vector of 2 and 4 copies the first three buffers,
+ * adjacent in the stream, and the peer's read, once the lock is free, takes
+ * the fourth; under the old read it took the second, and the read returned
+ * the first, third and fourth. With one buffer of 4 bytes, a read into a
+ * vector of 4 bytes whose page is resolved and 4 that cannot be written
+ * returns the 4, and the peer's append of 4 merged into that buffer waits;
+ * under the old read the buffer grew to 8 during the resolve, the copy of 8
+ * faulted, and the read was -EFAULT with every byte kept.
+ */
+static void fault_holds_pipe(void)
+{
+    struct kernel_iovec iov[2];
+    const uint8_t *peer = memory + PEER_PAGE * PAGE_SIZE;
+    uint32_t i;
+
+    setup(0);
+    ring.buf_pages = ring_pages;
+    ring.buf_cap = pipe_buf_slots(ring.size);
+    for (i = 0; i < 8; i++) {
+        memory[i] = (uint8_t)(i + 1);
+    }
+    for (i = 0; i < 4; i++) {
+        CHECK(pipe_splice_write(&writer, user_at(2 * i), 2, 1, 2 * i) == 2,
+              "a splice of 2 bytes makes a buffer");
+    }
+    CHECK(ring.bufs == 4, "four buffers of 2 bytes");
+    iov[0].iov_base = USER_BASE + PAGE_SIZE;
+    iov[0].iov_len = 2;
+    iov[1].iov_base = USER_BASE + 2 * PAGE_SIZE;
+    iov[1].iov_len = 4;
+    pages[2] = 0;
+    peer_count = 2;
+    resolve_action = peer_read;
+    CHECK(pipe_readv(&reader, iov, 2) == 6, "a read keeps the pipe across a later page's resolve");
+    CHECK(memory[PAGE_SIZE] == 1 && memory[PAGE_SIZE + 1] == 2 && memory[2 * PAGE_SIZE] == 3 &&
+              memory[2 * PAGE_SIZE + 2] == 5 && memory[2 * PAGE_SIZE + 3] == 6,
+          "a read returns the stream's first 6 bytes, adjacent");
+    CHECK(lock_waits == 1 && peer_result == 2 && peer[0] == 7 && peer[1] == 8,
+          "a peer's read waits and takes the fourth buffer");
+    CHECK(pipe_available(&ring) == 0 && ring.bufs == 0, "every buffer read once");
+
+    setup(0);
+    ring.buf_pages = ring_pages;
+    ring.buf_cap = pipe_buf_slots(ring.size);
+    CHECK(pipe_write(&writer, user_at(PEER_PAGE * PAGE_SIZE), 4) == 4 && ring.bufs == 1,
+          "a write of 4 makes a buffer");
+    iov[0].iov_base = USER_BASE + PAGE_SIZE;
+    iov[0].iov_len = 4;
+    iov[1].iov_base = USER_BASE + 2 * PAGE_SIZE;
+    iov[1].iov_len = 4;
+    pages[1] = 0;
+    pages[2] = -1;
+    peer_count = 4;
+    resolve_action = peer_write;
+    CHECK(pipe_readv(&reader, iov, 2) == 4, "a read of a buffer no append grows returns it whole");
+    CHECK(memory[PAGE_SIZE] == 0x22 && memory[PAGE_SIZE + 3] == 0x22, "a read copies its buffer");
+    CHECK(lock_waits == 1 && peer_result == 4, "a peer's append waits for the lock");
+    CHECK(pipe_available(&ring) == 4 && ring.bufs == 1, "the peer's bytes stay queued after");
+}
+
+/**
+ * A transfer rechecks the ring after a resolve or a wait: a peer's read
+ * that waited for a reader's resolve finds the ring drained, and a later
+ * read gives 0 once the writer closed; a write after the reader closed
+ * during its resolve, which a close does without the lock, gives -EPIPE and
+ * SIGPIPE; a blocking read or write waits, and a read wakes the writers for
+ * room alone and a write the readers for data alone.
  */
 static void state_changes(void)
 {
@@ -373,8 +547,9 @@ static void state_changes(void)
     pages[0] = 0;
     peer_count = 2;
     resolve_action = peer_read;
-    CHECK(pipe_read(&reader, user_at(0), 2) == -EAGAIN, "drained reader returns eagain");
-    CHECK(pipe_available(&ring) == 0, "drained ring stays empty");
+    CHECK(pipe_read(&reader, user_at(0), 2) == 2, "a reader drains the ring across its resolve");
+    CHECK(peer_result == -EAGAIN && pipe_available(&ring) == 0,
+          "a peer's read after it finds the ring drained");
 
     setup(0);
     pipe_ring_put(&ring, memory, 2);
@@ -382,6 +557,7 @@ static void state_changes(void)
     peer_count = 2;
     peer_closes = 1;
     resolve_action = peer_read;
+    CHECK(pipe_read(&reader, user_at(0), 2) == 2, "a reader takes its bytes before the close");
     CHECK(pipe_read(&reader, user_at(0), 2) == 0, "drained reader observes eof");
     CHECK(read_kinds & WQ_HANGUP, "a close wakes the readers for a hangup");
 
@@ -413,9 +589,10 @@ static void state_changes(void)
 }
 
 /**
- * A blocking reader whose ring a peer drains during the resolve waits for
- * new bytes, and a blocking writer whose ring a peer fills waits for room;
- * each page a write copies wakes the readers.
+ * A blocking reader or writer that holds the pipe across its resolve
+ * neither waits nor finds the ring changed: the reader takes its bytes, and
+ * the writer its room, before the peer that waited for the lock writes or
+ * reads; each page a write copies wakes the readers.
  */
 static void readiness_changes(void)
 {
@@ -424,19 +601,19 @@ static void readiness_changes(void)
     pipe_ring_put(&ring, memory, 2);
     pages[0] = 0;
     peer_count = 2;
-    resolve_action = peer_read;
-    wait_action = peer_write;
-    CHECK(pipe_read(&reader, user_at(0), 2) == 2, "drained blocking reader retries");
-    CHECK(waits == 1 && pipe_available(&ring) == 0, "drained blocking reader waits for new bytes");
+    resolve_action = peer_write;
+    CHECK(pipe_read(&reader, user_at(0), 8) == 2, "a blocking reader keeps its bytes");
+    CHECK(waits == 0 && peer_result == 2 && pipe_available(&ring) == 2,
+          "a blocking reader waits for nothing, and the peer's bytes come after it");
 
     setup(0);
     write_ofd.status_flags = 0;
     pages[0] = 0;
-    peer_count = PIPE_BUF_SIZE;
+    peer_count = PIPE_BUF_SIZE - 3;
     resolve_action = peer_write;
-    wait_action = peer_read;
-    CHECK(pipe_write(&writer, user_at(0), 3) == 3, "filled blocking writer retries");
-    CHECK(waits == 1 && pipe_available(&ring) == 3, "filled blocking writer waits for space");
+    CHECK(pipe_write(&writer, user_at(0), 3) == 3, "a blocking writer keeps its room");
+    CHECK(waits == 0 && peer_result == PIPE_BUF_SIZE - 3 && pipe_available(&ring) == PIPE_BUF_SIZE,
+          "a blocking writer waits for nothing, and the peer after it fills the rest");
     CHECK(read_wakes == PIPE_BUF_SIZE / PAGE_SIZE + 1, "each page a write copies wakes reader");
 
     setup(0);
@@ -444,8 +621,10 @@ static void readiness_changes(void)
     pages[0] = 0;
     peer_count = 2;
     resolve_action = peer_read;
-    CHECK(pipe_write(&writer, user_at(0), 3) == 3, "writer copies after peer drains");
-    CHECK(read_wakes == 1, "a write after a peer drained the ring wakes the readers once");
+    CHECK(pipe_write(&writer, user_at(0), 3) == 3, "a writer copies before the peer reads");
+    CHECK(read_wakes == 1, "a write into a ring that has data wakes the readers once");
+    CHECK(peer_result == 2 && pipe_available(&ring) == 3,
+          "the peer after it reads the older bytes");
 }
 
 /** A write into a ring that already has data wakes the readers for data, so
@@ -460,35 +639,125 @@ static void write_with_data(void)
           "a write into a ring that has data wakes the readers for data");
 }
 
-/** A transfer over two pages whose second faults, or whose resolve lets a
- * peer drain the ring or close the reader, returns the bytes of the first. */
+/**
+ * A read over two pages whose second faults is -EFAULT and keeps every byte
+ * of the buffer it copied, as Linux's pipe_read advances a buffer only once
+ * its copy is whole; one whose later page is resolved while a peer would
+ * read returns the whole buffer, the peer waiting for the lock. A read of a
+ * vector whose first buffer faults, through `pipe_readv`, is -EAGAIN from an
+ * empty pipe and 0 from an ended one, which Linux's pipe_read answers
+ * before any copy, and so is a read(2) into NULL, which Linux's vfs_read
+ * passes to the pipe, since access_ok passes it; with bytes queued, NULL
+ * faults in the copy and keeps them. A write of fewer bytes
+ * than a page is one group, which a write commits whole, as Linux's
+ * pipe_write commits a page: when its second page faults it is -EFAULT
+ * with no byte added, and it leaves the group's buffer empty in the ring,
+ * as Linux's pipe_write leaves the buffer it moved the head past: the
+ * readers are woken, poll reports POLLIN, a later small write joins the
+ * buffer, and a read that reaches it alone lets it go and is -EAGAIN. When
+ * the reader closes while that page is resolved the write is -EPIPE with
+ * SIGPIPE and no byte added.
+ */
 static void later_page(void)
 {
+    struct kernel_iovec iov[2];
+
     setup(0);
     pipe_ring_put(&ring, memory, 6);
     pages[1] = -1;
-    CHECK(pipe_read(&reader, user_at(PAGE_SIZE - 2), 6) == 2, "read fault returns partial count");
-    CHECK(pipe_available(&ring) == 4 && write_wakes == 1,
-          "read fault leaves bytes and wakes writer");
+    CHECK(pipe_read(&reader, user_at(PAGE_SIZE - 2), 6) == -EFAULT,
+          "a read fault in a buffer returns efault");
+    CHECK(pipe_available(&ring) == 6 && write_wakes == 0,
+          "a read fault keeps its buffer's bytes and wakes no writer");
 
     setup(0);
+    pages[0] = -1;
+    iov[0].iov_base = USER_BASE;
+    iov[0].iov_len = 4;
+    iov[1].iov_base = USER_BASE + PAGE_SIZE;
+    iov[1].iov_len = 4;
+    CHECK(pipe_readv(&reader, iov, 2) == -EAGAIN,
+          "an empty pipe is eagain before a vector's bad first buffer faults");
+    ring.write_open = 0;
+    CHECK(pipe_readv(&reader, iov, 2) == 0,
+          "an ended pipe is 0 before a vector's bad first buffer faults");
+
+    setup(0);
+    CHECK(pipe_read(&reader, NULL, 1) == -EAGAIN,
+          "an empty nonblocking pipe is eagain before a null buffer faults");
+    ring.write_open = 0;
+    CHECK(pipe_read(&reader, NULL, 1) == 0, "an ended pipe is 0 before a null buffer faults");
+    setup(0);
+    pipe_ring_put(&ring, memory, 2);
+    CHECK(pipe_read(&reader, NULL, 1) == -EFAULT && pipe_available(&ring) == 2,
+          "a null buffer faults in the copy with every byte kept");
+
+    setup(0);
+    ring.buf_pages = ring_pages;
+    ring.buf_cap = pipe_buf_slots(ring.size);
     pages[1] = -1;
-    CHECK(pipe_write(&writer, user_at(PAGE_SIZE - 2), 6) == 2, "write fault returns partial count");
-    CHECK(pipe_available(&ring) == 2 && read_wakes == 1, "write fault publishes completed bytes");
+    CHECK(pipe_write(&writer, user_at(PAGE_SIZE - 2), 6) == -EFAULT,
+          "a write fault in the first group returns efault");
+    CHECK(pipe_available(&ring) == 0 && ring.bufs == 1 && read_wakes == 1 && read_kinds == WQ_DATA,
+          "a write fault publishes no byte of its group and leaves its buffer empty");
+    CHECK(pipe_poll(&reader, PIPE_POLLIN, NULL) == PIPE_POLLIN,
+          "a pipe with an empty buffer polls in");
+    CHECK(pipe_write(&writer, user_at(0), 3) == 3 && ring.bufs == 1 && pipe_available(&ring) == 3,
+          "a small write joins the empty buffer");
+    CHECK(pipe_read(&reader, user_at(PEER_PAGE * PAGE_SIZE), 8) == 3 && ring.bufs == 0,
+          "a read takes the joined buffer whole");
+    CHECK(pipe_write(&writer, user_at(PAGE_SIZE - 2), 6) == -EFAULT && ring.bufs == 1,
+          "a second write fault leaves an empty buffer");
+    write_wakes = 0;
+    CHECK(pipe_read(&reader, user_at(PEER_PAGE * PAGE_SIZE), 4) == -EAGAIN && ring.bufs == 0 &&
+              write_wakes == 1,
+          "a read lets go of an empty buffer and is eagain");
+    CHECK(pipe_poll(&reader, PIPE_POLLIN, NULL) == 0, "a pipe whose empty buffer went polls empty");
 
     setup(0);
     pipe_ring_put(&ring, memory, 6);
     pages[1] = 0;
     peer_count = 4;
     resolve_action = peer_read;
-    CHECK(pipe_read(&reader, user_at(PAGE_SIZE - 2), 6) == 2, "later drain returns partial count");
-    CHECK(pipe_available(&ring) == 0 && waits == 0, "partial reader does not wait for more");
+    CHECK(pipe_read(&reader, user_at(PAGE_SIZE - 2), 6) == 6,
+          "a read keeps its buffer across a later page's resolve");
+    CHECK(pipe_available(&ring) == 0 && waits == 0 && peer_result == -EAGAIN,
+          "a peer's read after it finds the ring drained");
 
     setup(0);
     pages[1] = 0;
     resolve_action = close_reader;
-    CHECK(pipe_write(&writer, user_at(PAGE_SIZE - 2), 6) == 2, "later close returns partial count");
-    CHECK(signals == 1 && pipe_available(&ring) == 2, "later close posts signal without copying");
+    CHECK(pipe_write(&writer, user_at(PAGE_SIZE - 2), 6) == -EPIPE,
+          "a close during the group's resolve returns epipe");
+    CHECK(signals == 1 && pipe_available(&ring) == 0,
+          "a close during the group's resolve posts the signal and adds no byte");
+}
+
+/**
+ * A tee or a splice from an empty pipe with no writer into a pipe with no
+ * reader is -EPIPE with SIGPIPE, as Linux's `link_pipe` and
+ * `splice_pipe_to_pipe` check the output's readers before the input's end;
+ * with a reader it is 0.
+ */
+static void link_ends(void)
+{
+    int move;
+
+    for (move = 0; move <= 1; move++) {
+        setup(0);
+        k_memset(&out_ring, 0, sizeof(out_ring));
+        k_memset(&out_writer, 0, sizeof(out_writer));
+        out_writer.priv = &out_ring;
+        out_writer.flags = FD_FLAG_WRITE;
+        out_ring.size = PIPE_BUF_SIZE;
+        out_ring.write_open = 1;
+        ring.write_open = 0;
+        CHECK(pipe_tee(&reader, &out_writer, 8, 1, move) == -EPIPE && signals == 1,
+              "a link from an ended empty pipe into a readerless one is epipe");
+        out_ring.read_open = 1;
+        CHECK(pipe_tee(&reader, &out_writer, 8, 1, move) == 0 && signals == 1,
+              "a link from an ended empty pipe into a read one is 0");
+    }
 }
 
 /** Run every case; 0 when each passes, 1 otherwise. */
@@ -503,6 +772,8 @@ int main(void)
     readiness_changes();
     write_with_data();
     later_page();
+    fault_holds_pipe();
+    link_ends();
     printf("pipe-copy-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
     return failures ? 1 : 0;
 }

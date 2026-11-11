@@ -536,8 +536,8 @@ static const char *const display_params[] = {"i915.dmc_firmware_path=",
                                              "i915.enable_psr2_sel_fetch=yes",
                                              "i915.enable_dmc_wl=-1"};
 
-/** The `cap` bytes at `buf` hold no text when the device is gone, since
- * its registers are; -ENODEV then, 0 otherwise. */
+/** -ENODEV when the device is unplugged, since its registers are gone and
+ * a file of it has no text; 0 otherwise. */
 static int32_t gone(struct drm_i915_private *i915)
 {
     return i915->drm.unplugged ? -ENODEV : 0;
@@ -749,6 +749,47 @@ static void state_close(fd_entry_t *e)
     }
     e->priv = NULL;
 }
+
+/**
+ * The open of i915_forcewake_user, Linux's i915_forcewake_open: the GT's
+ * forcewake is held, and with it the GT kept out of RC6, until the close,
+ * so that a program may reach the registers through the BAR's mapping, as
+ * IGT's register access does. The device is held until the close. 0,
+ * -ENODEV for a device unplugged, or -EIO when the forcewake is not
+ * acknowledged.
+ */
+static int32_t forcewake_user_open(fd_entry_t *e, int flags)
+{
+    struct drm_i915_private *i915 = (struct drm_i915_private *)e->priv;
+
+    (void)flags;
+    if (gone(i915)) {
+        return -ENODEV;
+    }
+    if (i915_forcewake_get(i915) < 0) {
+        return -EIO;
+    }
+    drm_dev_get(&i915->drm);
+    return 0;
+}
+
+/** Let the forcewake and the device go at the last close of
+ * i915_forcewake_user; an unplugged device's registers are gone. */
+static void forcewake_user_close(fd_entry_t *e)
+{
+    struct drm_i915_private *i915 = (struct drm_i915_private *)e->priv;
+
+    if (i915) {
+        if (!gone(i915)) {
+            i915_forcewake_put(i915);
+        }
+        drm_dev_put(&i915->drm);
+    }
+    e->priv = NULL;
+}
+
+static const struct file_ops forcewake_user_ops = {NULL, NULL, NULL, NULL, forcewake_user_close,
+                                                   NULL, NULL};
 
 static const struct file_ops error_state_ops = {
     state_read, error_state_write, NULL, NULL, state_close, NULL, state_llseek};
@@ -996,6 +1037,39 @@ static int32_t frequency_show(void *data, char *buf, uint32_t cap)
 }
 
 /**
+ * i915_rps_boost_info, Linux's i915_rps_boost_info: whether RPS runs and
+ * the GT is awake, the waitboosts outstanding and the flips pending, the
+ * requested and actual frequency with the limits, and the boosts counted.
+ */
+static int32_t rps_boost_show(void *data, char *buf, uint32_t cap)
+{
+    struct drm_i915_private *i915 = (struct drm_i915_private *)data;
+    struct i915_rps *rps = &i915->rps;
+    struct emit e;
+
+    e.buf = buf;
+    e.cap = cap;
+    e.len = 0;
+    if (gone(i915)) {
+        return -ENODEV;
+    }
+    emitf(&e, "RPS enabled? %s\n", yes_no(rps->enabled));
+    emitf(&e, "RPS active? %s\n", yes_no(rps->active));
+    emitf(&e, "GPU busy? %s\n", yes_no(i915->gt.awake));
+    emitf(&e, "Boosts outstanding? %d\n", rps->num_waiters);
+    emitf(&e, "Interactive? %d\n", rps->interactive);
+    emitf(&e, "Frequency requested %d, actual %u\n", rps->cur_freq * FREQ_MHZ,
+          i915_rps_read_actual_mhz(i915));
+    emitf(&e, "  min hard:%d, soft:%d; max soft:%d, hard:%d\n", rps->min_freq * FREQ_MHZ,
+          rps->min_freq_softlimit * FREQ_MHZ, rps->max_freq_softlimit * FREQ_MHZ,
+          rps->max_freq * FREQ_MHZ);
+    emitf(&e, "  idle:%d, efficient:%d, boost:%d\n", rps->idle_freq * FREQ_MHZ,
+          rps->efficient_freq * FREQ_MHZ, rps->boost_freq * FREQ_MHZ);
+    emitf(&e, "Wait boosts: %u\n", rps->boosts);
+    return emit_end(&e);
+}
+
+/**
  * Append the request `rq` of engine `en` as Linux's engine_dump_request:
  * i915_request_show's line after `prefix`, the ring's offsets, and the
  * request's commands in the ring. `started` says the chip has begun it,
@@ -1016,9 +1090,9 @@ static void engine_request(struct emit *e, struct i915_engine *en, struct i915_r
           i915_engine_passed(en, rq->seqno) ? "!"
           : started                         ? "*"
                                             : "",
-          f->signaled            ? "+"
-          : f->signaling_enabled ? "-"
-                                 : "",
+          f->signaled   ? "+"
+          : f->listened ? "-"
+                        : "",
           ticks_ms(rtc_ticks_now() - rq->emitted), f->ops->get_timeline_name(f));
     emitf(e, "\t\tring->start:  0x%08x\n\t\tring->head:   0x%08x\n", en->ring_ggtt, en->head);
     emitf(e, "\t\tring->tail:   0x%08x\n\t\tring->emit:   0x%08x\n", en->hw_tail, en->tail);
@@ -1171,12 +1245,29 @@ static int32_t wedged_show(void *data, char *buf, uint32_t cap)
     return emit_end(&e);
 }
 
+/** The driver's mask of engines (1 << index) that Linux's mask `val`,
+ * by Linux's engine ids, names; a bit of no engine here is dropped, as
+ * Linux's intel_gt_handle_error masks with the engines it has. */
+static uint32_t engines_by_index(struct drm_i915_private *i915, uint64_t val)
+{
+    uint32_t mask = 0;
+    int i;
+
+    for (i = 0; i < I915_NUM_ENGINES; i++) {
+        if ((val >> i915->gt.engine[i].linux_id) & 1u) {
+            mask |= 1u << i;
+        }
+    }
+    return mask;
+}
+
 /**
  * A write of i915_wedged, Linux's i915_wedged_set: the number written, in
  * any base kstrtoull takes, is a mask of engines by Linux's engine ids,
- * which `i915_handle_error` recovers as from a hang with its state
- * captured: each engine reset alone, the whole GPU where that fails or
- * the GPU is wedged, which IGT's igt_force_gpu_reset writes -1 for.
+ * which `i915_handle_error` recovers, by the driver's indices, as from a
+ * hang with its state captured: each engine reset alone, the whole GPU
+ * where that fails or the GPU is wedged, which IGT's igt_force_gpu_reset
+ * writes -1 for.
  */
 static int32_t wedged_store(void *data, const char __user *buf, uint32_t len)
 {
@@ -1202,7 +1293,7 @@ static int32_t wedged_store(void *data, const char __user *buf, uint32_t len)
     emitf(&e, "Manually reset engine mask to %Lx", val);
     (void)emit_end(&e);
     msg[sizeof(msg) - 1u] = '\0';
-    i915_handle_error(i915, (uint32_t)val, msg);
+    i915_handle_error(i915, engines_by_index(i915, val), msg);
     return (int32_t)len;
 }
 
@@ -1283,7 +1374,7 @@ static int32_t drop_caches_store(void *data, const char __user *buf, uint32_t le
         i915_gt_set_wedged(i915);
     }
     if (val & DROP_RETIRE) {
-        i915_retire_requests(i915);
+        i915_gt_retire_requests(i915);
     }
     if (val & (DROP_IDLE | DROP_ACTIVE)) {
         rc = i915_gt_wait_for_idle(i915, 1);
@@ -1484,6 +1575,7 @@ static int32_t params_register(struct drm_i915_private *i915)
 static const struct debugfs_text_ops capabilities_ops = {capabilities_show, NULL};
 static const struct debugfs_text_ops gem_objects_ops = {gem_objects_show, NULL};
 static const struct debugfs_text_ops frequency_ops = {frequency_show, NULL};
+static const struct debugfs_text_ops rps_boost_ops = {rps_boost_show, NULL};
 static const struct debugfs_text_ops engine_info_ops = {engine_info_show, NULL};
 static const struct debugfs_text_ops cdclk_info_ops = {cdclk_info_show, NULL};
 static const struct debugfs_text_ops wedged_ops = {wedged_show, wedged_store};
@@ -1494,11 +1586,14 @@ static const struct {
     const char *name;
     uint32_t mode;
     const struct debugfs_text_ops *ops;
-} text_files[] = {
-    {"i915_capabilities", 0444u, &capabilities_ops},  {"i915_gem_objects", 0444u, &gem_objects_ops},
-    {"i915_frequency_info", 0444u, &frequency_ops},   {"i915_engine_info", 0444u, &engine_info_ops},
-    {"i915_cdclk_info", 0444u, &cdclk_info_ops},      {"i915_wedged", 0644u, &wedged_ops},
-    {"i915_gem_drop_caches", 0644u, &drop_caches_ops}};
+} text_files[] = {{"i915_capabilities", 0444u, &capabilities_ops},
+                  {"i915_gem_objects", 0444u, &gem_objects_ops},
+                  {"i915_frequency_info", 0444u, &frequency_ops},
+                  {"i915_engine_info", 0444u, &engine_info_ops},
+                  {"i915_cdclk_info", 0444u, &cdclk_info_ops},
+                  {"i915_wedged", 0644u, &wedged_ops},
+                  {"i915_gem_drop_caches", 0644u, &drop_caches_ops},
+                  {"i915_rps_boost_info", 0444u, &rps_boost_ops}};
 
 /** crtc-N/i915_pipe, Linux's intel_crtc_pipe_show: the pipe's letter, by
  * which IGT maps a CRTC to its pipe. */
@@ -1515,22 +1610,18 @@ static int32_t crtc_pipe_show(void *data, char *buf, uint32_t cap)
 }
 
 /** crtc-N/i915_current_bpc, Linux's i915_current_bpc_show: the pipe's bits
- * a colour in its configuration, under the commit lock. */
+ * a colour in its configuration. Linux reads it under the commit lock; a
+ * show may not sleep, so this reads it under the big kernel lock alone,
+ * and a commit asleep in its middle may show the depth before or after. */
 static int32_t crtc_bpc_show(void *data, char *buf, uint32_t cap)
 {
     struct intel_crtc *c = (struct intel_crtc *)data;
     struct emit e;
-    int32_t rc;
 
-    rc = drm_modeset_lock(&c->i915->drm);
-    if (rc != 0) {
-        return rc;
-    }
     e.buf = buf;
     e.cap = cap;
     e.len = 0;
     emitf(&e, "Current: %u\n", (unsigned)(c->cfg.bpp / 3u));
-    drm_modeset_unlock(&c->i915->drm);
     return emit_end(&e);
 }
 
@@ -1588,6 +1679,10 @@ void i915_debugfs_register(struct drm_i915_private *i915)
     if (rc == 0) {
         drm_debugfs_path(&i915->drm, "i915_gpu_info", path, sizeof(path));
         rc = debugfs_create_file(path, 0644u, &gpu_info_ops, gpu_info_open, i915);
+    }
+    if (rc == 0) {
+        drm_debugfs_path(&i915->drm, "i915_forcewake_user", path, sizeof(path));
+        rc = debugfs_create_file(path, 0400u, &forcewake_user_ops, forcewake_user_open, i915);
     }
     if (rc != 0) {
         klog(KLOG_WARN, "i915", "debugfs: %s: error %d", path, (int)rc);

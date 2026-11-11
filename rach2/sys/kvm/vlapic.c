@@ -115,9 +115,12 @@
 #define APIC_BASE_ENABLE 0x800ull
 #define APIC_BASE_ADDR   0xFFFFFFFFFF000ull
 
-/* The events another processor leaves, in `events`. */
-#define EV_INIT 1u
-#define EV_SIPI 2u
+/* The events another processor leaves, in `events`, and the SIPI that
+ * KVM_SET_MP_STATE leaves, whose vector is the one KVM_SET_VCPU_EVENTS
+ * gave the vCPU. */
+#define EV_INIT     1u
+#define EV_SIPI     2u
+#define EV_SIPI_SET 4u
 
 #define RFLAGS_IF 0x200ull
 
@@ -141,11 +144,18 @@ struct lapic {
     uint64_t expire_ns;       /* the host's ns of the next expiry, 0 for none */
     uint64_t tscdeadline;     /* the guest's TSC of the deadline, 0 for none */
     volatile uint32_t events; /* EV_*, from another processor */
-    volatile uint32_t nmis;   /* NMIs delivered, not yet queued on the vCPU */
-    int ext_vector;           /* KVM_INTERRUPT's vector, -1 for none */
-    uint32_t eoi_vector;      /* the vector of KVM_EXIT_IOAPIC_EOI */
-    uint64_t wake_tick;       /* the tick a halted wait ends at for the timer, 0 for none */
-    wait_queue_t wq;          /* the vCPU's halted wait */
+    /* The vector of EV_SIPI, from another processor. It is kept here,
+     * where an INIT's reset of the vCPU does not reach it: the SIPI may
+     * come while its INIT waits or is being taken. */
+    volatile uint32_t sipi_vector;
+    volatile uint32_t nmis; /* NMIs delivered, not yet queued on the vCPU */
+    /* KVM_HC_KICK_CPU's wake, from another processor: the halted vCPU runs
+     * again whatever its IF, as Linux's pv_unhalted. */
+    volatile uint32_t pv_unhalted;
+    int ext_vector;      /* KVM_INTERRUPT's vector, -1 for none */
+    uint32_t eoi_vector; /* the vector of KVM_EXIT_IOAPIC_EOI */
+    uint64_t wake_tick;  /* the tick a halted wait ends at for the timer, 0 for none */
+    wait_queue_t wq;     /* the vCPU's halted wait */
 };
 
 /** The APIC of `v`, or NULL with no local APIC in the kernel. */
@@ -279,6 +289,16 @@ static void lapic_kick(struct lapic *l, uint32_t request)
     wq_wake(&l->wq, 0);
 }
 
+/** Wake a local APIC for a deferred controller interrupt. */
+void kvm_lapic_wake(struct kvm_vcpu *v)
+{
+    struct lapic *l = apic_of(v);
+
+    if (l) {
+        lapic_kick(l, KVM_REQ_EVENT);
+    }
+}
+
 /** Bring PPR up to date from TPR and the highest vector in service:
  * whether it fell, which may let a waiting interrupt through. */
 static int update_ppr(struct lapic *l)
@@ -306,7 +326,7 @@ static void set_tpr(struct lapic *l, uint32_t tpr)
 /** The guest's TSC now. */
 static uint64_t guest_tsc(const struct kvm_vcpu *v)
 {
-    return arch_cycles() + (uint64_t)v->tsc_offset;
+    return kvm_tsc_read(v);
 }
 
 /** The divisor TDCR gives: 1, or 2 to 128 by powers of two. */
@@ -318,11 +338,17 @@ static void update_divide(struct lapic *l)
     l->divide = 1u << (n & 7u);
 }
 
-/** The span in ns of `count` ticks of the timer, at the 1 GHz bus Linux
- * gives a guest (APIC_BUS_CYCLE_NS). */
+/** The ns of one tick of the timer: the divisor's bus cycles, each the
+ * VM's `apic_bus_ns`, 1 unless KVM_CAP_X86_APIC_BUS_CYCLES_NS set another. */
+static uint64_t tick_ns(const struct lapic *l)
+{
+    return l->divide * l->v->vm->apic_bus_ns;
+}
+
+/** The span in ns of `count` ticks of the timer. */
 static uint64_t count_ns(const struct lapic *l, uint32_t count)
 {
-    return (uint64_t)count * l->divide;
+    return (uint64_t)count * tick_ns(l);
 }
 
 /** Stop the one-shot or periodic count. */
@@ -404,7 +430,7 @@ static uint32_t tmcct(const struct lapic *l)
     } else {
         return 0;
     }
-    return (uint32_t)(left / l->divide);
+    return (uint32_t)(left / tick_ns(l));
 }
 
 /**
@@ -422,6 +448,7 @@ static int accept(struct lapic *l, uint32_t mode, uint32_t vector, uint32_t leve
             return 0;
         }
         if (!hw_enabled(l) || !sw_enabled(l)) {
+            l->v->irq_counts[vector & 0xFFu][KVM_VEC_DROP]++;
             return 0;
         }
         if (trig) {
@@ -430,9 +457,11 @@ static int accept(struct lapic *l, uint32_t mode, uint32_t vector, uint32_t leve
             vec_clear(l, APIC_TMR, vector);
         }
         vec_set(l, APIC_IRR, vector);
+        l->v->irq_counts[vector & 0xFFu][KVM_VEC_ACCEPT]++;
         lapic_kick(l, KVM_REQ_EVENT);
         return 1;
     case KVM_APIC_DM_REMRD:
+        l->pv_unhalted = 1;
         lapic_kick(l, KVM_REQ_EVENT);
         return 1;
     case KVM_APIC_DM_NMI:
@@ -447,7 +476,7 @@ static int accept(struct lapic *l, uint32_t mode, uint32_t vector, uint32_t leve
         lapic_kick(l, KVM_REQ_EVENT);
         return 1;
     case KVM_APIC_DM_STARTUP:
-        l->v->events.sipi_vector = vector;
+        l->sipi_vector = vector;
         atomic_or(&l->events, EV_SIPI);
         lapic_kick(l, KVM_REQ_EVENT);
         return 1;
@@ -510,12 +539,12 @@ static void timer_check(struct lapic *l)
 }
 
 /** The host's ns at which the timer next expires, 0 for none. A TSC
- * deadline is turned into ns at the rate the kernel measured, or taken as
- * one tick away when it measured none. */
+ * deadline is turned into ns at the rate of the vCPU's TSC, as Linux
+ * does, or taken as one tick away when no rate is known. */
 static uint64_t timer_next_ns(const struct lapic *l)
 {
     uint64_t now, tsc, left;
-    uint32_t per_tick;
+    uint32_t khz;
 
     if (l->timer_mode != TIMER_DEADLINE) {
         return l->expire_ns;
@@ -528,15 +557,15 @@ static uint64_t timer_next_ns(const struct lapic *l)
     if (tsc >= l->tscdeadline) {
         return now;
     }
-    per_tick = timer_calibrate();
-    if (per_tick == 0) {
+    khz = l->v->tsc_khz;
+    if (khz == 0) {
         return now + TICK_NS;
     }
     left = l->tscdeadline - tsc;
-    if (left / per_tick >= MAX_WAIT_NS / TICK_NS) {
+    if (left / khz >= MAX_WAIT_NS / 1000000u) {
         return now + MAX_WAIT_NS;
     }
-    return now + left * TICK_NS / per_tick;
+    return now + left * 1000000u / khz;
 }
 
 /** IA32_TSC_DEADLINE written: in TSC-deadline mode, the new deadline,
@@ -586,14 +615,23 @@ static int match_logical(const struct lapic *l, uint32_t mda)
     }
 }
 
+/** Match a physical or logical destination for restored IOAPIC state. */
+int kvm_lapic_match_dest(struct kvm_vcpu *v, uint32_t id, int logical)
+{
+    struct lapic *l = apic_of(v);
+
+    return l && hw_enabled(l) && (logical ? match_logical(l, id) : match_physical(l, id));
+}
+
 /** Whether `target` is a destination of `irq` sent by `src`, as Linux's
- * kvm_apic_match_dest; a device's broadcast to an x2APIC is x2APIC's. */
+ * kvm_apic_match_dest; a device's broadcast to an x2APIC is x2APIC's,
+ * unless KVM_X2APIC_API_DISABLE_BROADCAST_QUIRK makes 0xFF an x2APIC id. */
 static int match_dest(const struct lapic *target, const struct lapic *src,
                       const struct kvm_lapic_irq *irq)
 {
     uint32_t mda = irq->dest_id;
 
-    if (!src && mda == APIC_BROADCAST && x2apic(target)) {
+    if (!src && mda == APIC_BROADCAST && x2apic(target) && !target->v->vm->x2apic_no_broadcast) {
         mda = X2APIC_BROADCAST;
     }
     switch (irq->shorthand) {
@@ -610,14 +648,20 @@ static int match_dest(const struct lapic *target, const struct lapic *src,
     }
 }
 
-int kvm_lapic_deliver(struct kvm_vm *vm, struct kvm_vcpu *src, const struct kvm_lapic_irq *in)
+int kvm_lapic_deliver_tracked(struct kvm_vm *vm, struct kvm_vcpu *src,
+                              const struct kvm_lapic_irq *in, uint64_t *destinations)
 {
     struct kvm_lapic_irq irq = *in;
     struct lapic *s = src ? apic_of(src) : NULL;
     struct lapic *l;
     uint32_t i, n, dests = 0;
-    uint8_t chosen[KVM_MAX_VCPUS];
-    int lowest, r = -1;
+    uint64_t chosen[KVM_VCPU_WORDS];
+    int lowest, naccepted, r = -1;
+
+    k_memset(chosen, 0, sizeof(chosen));
+    if (destinations) {
+        k_memset(destinations, 0, KVM_VCPU_WORDS * sizeof(*destinations));
+    }
 
     lowest = irq.delivery_mode == KVM_APIC_DM_LOWEST || irq.redir_hint;
     if (!irq.dest_mode && irq.dest_id == APIC_BROADCAST && lowest) {
@@ -628,7 +672,6 @@ int kvm_lapic_deliver(struct kvm_vm *vm, struct kvm_vcpu *src, const struct kvm_
     n = vm->nr_vcpus;
     for (i = 0; i < n; i++) {
         l = apic_of(vm->vcpus[i]);
-        chosen[i] = 0;
         if (!l || !hw_enabled(l) || !match_dest(l, s, &irq)) {
             continue;
         }
@@ -636,9 +679,13 @@ int kvm_lapic_deliver(struct kvm_vm *vm, struct kvm_vcpu *src, const struct kvm_
             if (r < 0) {
                 r = 0;
             }
-            r += accept(l, irq.delivery_mode, irq.vector, irq.level, irq.trig_mode);
+            naccepted = accept(l, irq.delivery_mode, irq.vector, irq.level, irq.trig_mode);
+            r += naccepted;
+            if (naccepted && destinations) {
+                KVM_VCPU_SET(destinations, i);
+            }
         } else if (sw_enabled(l)) {
-            chosen[i] = 1;
+            KVM_VCPU_SET(chosen, i);
             dests++;
         }
     }
@@ -647,14 +694,51 @@ int kvm_lapic_deliver(struct kvm_vm *vm, struct kvm_vcpu *src, const struct kvm_
         uint32_t k = irq.vector % dests;
 
         for (i = 0; i < n; i++) {
-            if (chosen[i] && k-- == 0) {
+            if (KVM_VCPU_TEST(chosen, i) && k-- == 0) {
                 r = accept(apic_of(vm->vcpus[i]), irq.delivery_mode, irq.vector, irq.level,
                            irq.trig_mode);
+                if (r && destinations) {
+                    KVM_VCPU_SET(destinations, i);
+                }
                 break;
             }
         }
     }
     return r;
+}
+
+/** Deliver without retaining the destination set. */
+int kvm_lapic_deliver(struct kvm_vm *vm, struct kvm_vcpu *src, const struct kvm_lapic_irq *irq)
+{
+    return kvm_lapic_deliver_tracked(vm, src, irq, NULL);
+}
+
+/** Whether the vector is pending or in service, for RTC EOI tracking. */
+int kvm_lapic_pending_eoi(struct kvm_vcpu *v, uint32_t vector)
+{
+    struct lapic *l = apic_of(v);
+    uint32_t word = (vector >> 5) * 4u, bit = 1u << (vector & 31u);
+
+    return l && vector < KVM_NR_INTERRUPTS &&
+           ((l->regs[(APIC_IRR >> 2) + word] | l->regs[(APIC_ISR >> 2) + word]) & bit) != 0;
+}
+
+/** The PIT's virtual-wire NMI, as Linux's kvm_apic_nmi_wd_deliver. */
+void kvm_lapic_pit_nmi(struct kvm_vm *vm)
+{
+    struct lapic *l;
+    uint32_t i, lvt;
+
+    for (i = 0; i < vm->nr_vcpus; i++) {
+        l = apic_of(vm->vcpus[i]);
+        if (!l) {
+            continue;
+        }
+        lvt = reg_get(l, APIC_LVT0);
+        if (!(lvt & APIC_LVT_MASKED) && (lvt & APIC_MODE_MASK) == KVM_APIC_DM_NMI) {
+            accept(l, KVM_APIC_DM_NMI, 0, 1, 0);
+        }
+    }
 }
 
 /** Deliver `irq` to each vCPU whose physical APIC id is `min` plus a bit
@@ -695,7 +779,7 @@ int64_t kvm_lapic_pv_ipi(struct kvm_vm *vm, uint64_t low, uint64_t high, uint32_
     int count = 0;
 
     if (icr & (APIC_DEST_LOGICAL | APIC_SHORT_MASK)) {
-        return -22; /* -KVM_EINVAL */
+        return -KVM_EINVAL;
     }
     irq.vector = (uint32_t)icr & APIC_VECTOR_MASK;
     irq.delivery_mode = (uint32_t)icr & APIC_MODE_MASK;
@@ -754,8 +838,13 @@ static void set_eoi(struct lapic *l)
         return;
     }
     l->regs[(APIC_ISR >> 2) + ((uint32_t)vector >> 5) * 4u] &= ~(1u << ((uint32_t)vector & 31u));
+    l->v->irq_counts[vector][KVM_VEC_EOI]++;
     update_ppr(l);
     kvm_hv_synic_eoi(l->v, (uint32_t)vector);
+    kvm_ioapic_eoi(l->v, (uint32_t)vector,
+                   (l->regs[(APIC_TMR >> 2) + ((uint32_t)vector >> 5) * 4u] &
+                    (1u << ((uint32_t)vector & 31u))) != 0,
+                   (reg_get(l, APIC_SPIV) & APIC_SPIV_DIRECTED) != 0);
     if (kvm_irq_eoi_exits(l->v->vm, (uint32_t)vector)) {
         l->eoi_vector = (uint32_t)vector;
         kvm_vcpu_kick(l->v, KVM_REQ_EOI_EXIT);
@@ -933,8 +1022,9 @@ static int reg_write(struct lapic *l, uint32_t off, uint32_t val)
 
 /** Reset `l` as Linux's kvm_lapic_reset, for a vCPU's creation or, with
  * `init`, an INIT, which keeps the APIC's mode and its id. The boot vCPU's
- * LINT0 takes ExtINT, as Linux's LINT0_REENABLED quirk sets it, so the
- * caller's PIC reaches it before the guest programs its APIC. */
+ * LINT0 takes ExtINT, as Linux's LINT0_REENABLED quirk sets it until the
+ * caller turns it off, so the caller's PIC reaches it before the guest
+ * programs its APIC. */
 static void lapic_reset(struct lapic *l, int init)
 {
     struct kvm_vcpu *v = l->v;
@@ -950,7 +1040,8 @@ static void lapic_reset(struct lapic *l, int init)
     l->timer_mode = TIMER_ONESHOT;
     l->period_ns = 0;
     l->tscdeadline = 0;
-    if (v->id == v->vm->boot_cpu_id) {
+    l->pv_unhalted = 0;
+    if (v->id == v->vm->boot_cpu_id && KVM_QUIRK(v->vm, KVM_X86_QUIRK_LINT0_REENABLED)) {
         reg_set(l, APIC_LVT0, KVM_APIC_DM_EXTINT);
     }
     reg_set(l, APIC_DFR, APIC_DFR_FLAT);
@@ -1134,10 +1225,14 @@ int kvm_lapic_mmio(struct kvm_vcpu *v)
         return 0;
     }
     off = (uint32_t)(addr - base);
+    /* An access through MMIO in x2APIC mode or with the APIC off is dropped,
+     * as Linux's LAPIC_MMIO_HOLE quirk drops it; with the quirk off the
+     * page is no APIC's and the access goes on to the caller. */
+    if ((!hw_enabled(l) || x2apic(l)) && !KVM_QUIRK(v->vm, KVM_X86_QUIRK_LAPIC_MMIO_HOLE)) {
+        return 0;
+    }
     if (ex->mmio.is_write) {
-        /* An access through MMIO in x2APIC mode or with the APIC off is
-         * dropped, as Linux's LAPIC_MMIO_HOLE quirk drops it; a register
-         * is written only whole, at its start. */
+        /* A register is written only whole, at its start. */
         if (hw_enabled(l) && !x2apic(l) && len == 4u && (off & 0xFu) == 0) {
             for (i = 0; i < 4u; i++) {
                 val |= (uint32_t)ex->mmio.data[i] << (i * 8u);
@@ -1191,6 +1286,21 @@ static int accept_pic_intr(const struct lapic *l)
     return !(lvt0 & APIC_LVT_MASKED) && (lvt0 & APIC_MODE_MASK) == KVM_APIC_DM_EXTINT;
 }
 
+/** Wake the first local APIC whose LINT0 accepts the PIC's INT. */
+void kvm_lapic_pic_wake(struct kvm_vm *vm)
+{
+    struct lapic *l;
+    uint32_t i;
+
+    for (i = 0; i < vm->nr_vcpus; i++) {
+        l = apic_of(vm->vcpus[i]);
+        if (l && accept_pic_intr(l)) {
+            lapic_kick(l, KVM_REQ_EVENT);
+            return;
+        }
+    }
+}
+
 int kvm_lapic_pending(struct kvm_vcpu *v)
 {
     struct lapic *l = apic_of(v);
@@ -1199,8 +1309,15 @@ int kvm_lapic_pending(struct kvm_vcpu *v)
     if (!l) {
         return -1;
     }
-    if (l->ext_vector >= 0 && accept_pic_intr(l)) {
-        return l->ext_vector;
+    if (accept_pic_intr(l)) {
+        if (v->vm->irqchip == KVM_IRQCHIP_KERNEL) {
+            irr = kvm_pic_pending(v->vm);
+            if (irr >= 0) {
+                return irr;
+            }
+        } else if (l->ext_vector >= 0) {
+            return l->ext_vector;
+        }
     }
     if (!hw_enabled(l)) {
         return -1;
@@ -1221,11 +1338,22 @@ int kvm_lapic_ack(struct kvm_vcpu *v)
     if (vector < 0) {
         return -1;
     }
-    if (l->ext_vector >= 0 && accept_pic_intr(l)) {
-        l->ext_vector = -1;
-        return vector;
+    if (accept_pic_intr(l)) {
+        if (v->vm->irqchip == KVM_IRQCHIP_KERNEL && kvm_pic_pending(v->vm) >= 0) {
+            vector = kvm_pic_ack(v->vm);
+            if (vector >= 0) {
+                v->irq_counts[vector & 0xFF][KVM_VEC_ACK]++;
+            }
+            return vector;
+        }
+        if (l->ext_vector >= 0 && v->vm->irqchip == KVM_IRQCHIP_SPLIT) {
+            l->ext_vector = -1;
+            v->irq_counts[vector & 0xFF][KVM_VEC_ACK]++;
+            return vector;
+        }
     }
     vec_clear(l, APIC_IRR, (uint32_t)vector);
+    v->irq_counts[vector & 0xFF][KVM_VEC_ACK]++;
     if (!kvm_hv_synic_auto_eoi(v, (uint32_t)vector)) {
         l->regs[(APIC_ISR >> 2) + ((uint32_t)vector >> 5) * 4u] |= 1u << ((uint32_t)vector & 31u);
     }
@@ -1237,6 +1365,9 @@ int kvm_lapic_ready(struct kvm_vcpu *v)
 {
     struct lapic *l = apic_of(v);
 
+    if (v->vm->irqchip == KVM_IRQCHIP_KERNEL) {
+        return 1;
+    }
     return l && v->irq_allowed && l->ext_vector < 0 && accept_pic_intr(l) &&
            !v->events.interrupt.injected && !v->events.exception.injected &&
            !v->events.nmi.injected;
@@ -1295,8 +1426,8 @@ static void accept_events(struct lapic *l)
                                                            : KVM_MP_STATE_INIT_RECEIVED;
         v->dirty |= KVM_PART_MP;
     }
-    if ((ev & EV_SIPI) && v->mp_state == KVM_MP_STATE_INIT_RECEIVED) {
-        vector = v->events.sipi_vector & 0xFFu;
+    if ((ev & (EV_SIPI | EV_SIPI_SET)) && v->mp_state == KVM_MP_STATE_INIT_RECEIVED) {
+        vector = ((ev & EV_SIPI) ? l->sipi_vector : v->events.sipi_vector) & 0xFFu;
         v->sregs.cs.selector = (uint16_t)(vector << 8);
         v->sregs.cs.base = (uint64_t)vector << 12;
         v->regs.rip = 0;
@@ -1317,8 +1448,10 @@ static int guest_if(const struct kvm_vcpu *v)
 static uint64_t next_ns(const struct lapic *l)
 {
     uint64_t a = timer_next_ns(l), b = kvm_hv_stimer_next(l->v);
+    uint64_t pit = kvm_pit_next(l->v->vm);
 
-    return !a || (b && b < a) ? b : a;
+    a = !a || (b && b < a) ? b : a;
+    return !a || (pit && pit < a) ? pit : a;
 }
 
 /** Whether the halted or waiting vCPU `arg` has an event to wake it, as
@@ -1329,16 +1462,16 @@ static int wake_cond(void *arg)
     struct lapic *l = apic_of(v);
     uint64_t next;
 
-    if (v->requests & (KVM_REQ_EXIT | KVM_REQ_TRIPLE_FAULT)) {
+    if ((v->requests & (KVM_REQ_EXIT | KVM_REQ_TRIPLE_FAULT)) || kvm_irq_pending(v->vm)) {
         return 1;
     }
     if (l->events & EV_INIT) {
         return 1;
     }
     if (v->mp_state == KVM_MP_STATE_INIT_RECEIVED || v->mp_state == KVM_MP_STATE_UNINITIALIZED) {
-        return (l->events & EV_SIPI) != 0;
+        return (l->events & (EV_SIPI | EV_SIPI_SET)) != 0;
     }
-    if (l->nmis || v->nmi_queued) {
+    if (l->nmis || v->nmi_queued || l->pv_unhalted) {
         return 1;
     }
     if (guest_if(v) && kvm_lapic_pending(v) >= 0) {
@@ -1378,6 +1511,8 @@ int32_t kvm_lapic_prepare(struct kvm_vcpu *v)
     int32_t r;
 
     for (;;) {
+        kvm_irq_process(v->vm);
+        kvm_pit_check(v->vm);
         take_nmis(l);
         timer_check(l);
         kvm_hv_stimers(v);
@@ -1394,7 +1529,8 @@ int32_t kvm_lapic_prepare(struct kvm_vcpu *v)
             break;
         }
         if ((v->mp_state == KVM_MP_STATE_HALTED || v->mp_state == KVM_MP_STATE_AP_RESET_HOLD) &&
-            (v->nmi_queued || (guest_if(v) && kvm_lapic_pending(v) >= 0))) {
+            (v->nmi_queued || l->pv_unhalted || (guest_if(v) && kvm_lapic_pending(v) >= 0))) {
+            l->pv_unhalted = 0;
             v->mp_state = KVM_MP_STATE_RUNNABLE;
             v->dirty |= KVM_PART_MP;
             break;
@@ -1412,8 +1548,9 @@ int32_t kvm_lapic_prepare(struct kvm_vcpu *v)
 }
 
 /** KVM_GET_LAPIC: the page, with LVR and TMCCT as the guest reads them,
- * and in x2APIC mode the id in xAPIC's place, as Linux's
- * kvm_apic_state_fixup gives it without KVM_CAP_X2APIC_API. */
+ * and in x2APIC mode the id in xAPIC's place unless
+ * KVM_X2APIC_API_USE_32BIT_IDS asked for all 32 bits, as Linux's
+ * kvm_apic_state_fixup gives it. */
 static int32_t get_lapic(struct lapic *l, uintptr_t arg)
 {
     struct kvm_lapic_state s;
@@ -1425,7 +1562,7 @@ static int32_t get_lapic(struct lapic *l, uintptr_t arg)
             w = lvr_of(l->v);
         } else if (i * 4u == APIC_TMCCT) {
             w = tmcct(l);
-        } else if (i * 4u == APIC_ID && x2apic(l)) {
+        } else if (i * 4u == APIC_ID && x2apic(l) && !l->v->vm->x2apic_format) {
             w <<= 24;
         }
         s.regs[i * 4u] = (uint8_t)w;
@@ -1436,9 +1573,12 @@ static int32_t get_lapic(struct lapic *l, uintptr_t arg)
     return copy_to_user((void __user *)arg, &s, sizeof(s)) ? -EFAULT : 0;
 }
 
-/** KVM_SET_LAPIC, as Linux's kvm_apic_set_state: the page, with the
- * x2APIC id and LDR fixed up, PPR and the timer's mode and divisor
- * applied, and the count restarted from the TMCCT given. */
+/** KVM_SET_LAPIC, as Linux's kvm_apic_set_state: the page, with PPR and
+ * the timer's mode and divisor applied, and the count restarted from the
+ * TMCCT given. In x2APIC mode the id is the vCPU's, which the caller
+ * cannot change, and the LDR follows from it; with
+ * KVM_X2APIC_API_USE_32BIT_IDS an id other than the vCPU's is -EINVAL,
+ * as in Linux's kvm_apic_state_fixup. -EFAULT for a bad pointer. */
 static int32_t set_lapic(struct lapic *l, uintptr_t arg)
 {
     struct kvm_lapic_state s;
@@ -1448,14 +1588,20 @@ static int32_t set_lapic(struct lapic *l, uintptr_t arg)
     if (copy_from_user(&s, (const void __user *)arg, sizeof(s)) != 0) {
         return -EFAULT;
     }
+    p = s.regs + APIC_ID;
+    if (x2apic(l) && l->v->vm->x2apic_format &&
+        ((uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24) !=
+            l->v->id) {
+        return -EINVAL;
+    }
     for (i = 0; i < KVM_APIC_REG_SIZE / 4; i++) {
         p = s.regs + i * 4u;
         l->regs[i] =
             (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
     }
     if (x2apic(l)) {
-        reg_set(l, APIC_ID, reg_get(l, APIC_ID) >> 24);
-        reg_set(l, APIC_LDR, x2apic_ldr(reg_get(l, APIC_ID)));
+        reg_set(l, APIC_ID, l->v->id);
+        reg_set(l, APIC_LDR, x2apic_ldr(l->v->id));
     }
     reg_set(l, APIC_LVR, lvr_of(l->v));
     update_ppr(l);
@@ -1466,13 +1612,14 @@ static int32_t set_lapic(struct lapic *l, uintptr_t arg)
         timer_start(l, APIC_TMCCT);
     }
     reg_set(l, APIC_TMCCT, 0);
+    kvm_ioapic_restore(l->v);
     kvm_vcpu_kick(l->v, KVM_REQ_EVENT);
     return 0;
 }
 
 /** KVM_SET_MP_STATE with the APIC in the kernel, as Linux's
  * kvm_arch_vcpu_ioctl_set_mpstate: SIPI_RECEIVED waits for SIPI with one
- * pending, at the vector KVM_SET_VCPU_EVENTS gave. */
+ * pending, at the vector KVM_SET_VCPU_EVENTS gave, before or after. */
 static int32_t set_mp_state(struct lapic *l, uintptr_t arg)
 {
     struct kvm_mp_state mp;
@@ -1491,7 +1638,7 @@ static int32_t set_mp_state(struct lapic *l, uintptr_t arg)
         break;
     case KVM_MP_STATE_SIPI_RECEIVED:
         v->mp_state = KVM_MP_STATE_INIT_RECEIVED;
-        atomic_or(&l->events, EV_SIPI);
+        atomic_or(&l->events, EV_SIPI_SET);
         break;
     default:
         return -EINVAL;
@@ -1522,6 +1669,9 @@ int32_t kvm_lapic_ioctl(struct kvm_vcpu *v, uint32_t request, uintptr_t arg)
         if (copy_from_user(&irq, (const void __user *)arg, sizeof(irq)) != 0) {
             return -EFAULT;
         }
+        if (v->vm->irqchip == KVM_IRQCHIP_KERNEL) {
+            return -ENXIO;
+        }
         if (irq.irq >= KVM_NR_INTERRUPTS) {
             return -EINVAL;
         }
@@ -1534,6 +1684,10 @@ int32_t kvm_lapic_ioctl(struct kvm_vcpu *v, uint32_t request, uintptr_t arg)
     case KVM_GET_MP_STATE:
         accept_events(l);
         mp.mp_state = v->mp_state;
+        if ((mp.mp_state == KVM_MP_STATE_HALTED || mp.mp_state == KVM_MP_STATE_AP_RESET_HOLD) &&
+            l->pv_unhalted) {
+            mp.mp_state = KVM_MP_STATE_RUNNABLE;
+        }
         return copy_to_user((void __user *)arg, &mp, sizeof(mp)) ? -EFAULT : 0;
     case KVM_SET_MP_STATE:
         return set_mp_state(l, arg);

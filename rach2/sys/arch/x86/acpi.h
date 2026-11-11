@@ -259,7 +259,23 @@ const struct acpi_info *acpi_get(void);
 int acpi_gas_read(const struct acpi_gas *g, uint32_t *value);
 
 /** Write `value` to the register `g` describes, in its own space and
- * width: 0, or -1 for a register this kernel cannot reach. */
+ * width: 0, or -1 for a register this kernel cannot reach. A PCI register's
+ * offset is its address's low 16 bits, and one past 255 goes through the
+ * function's extended configuration space. */
 int acpi_gas_write(const struct acpi_gas *g, uint32_t value);
+
+/**
+ * Write the reset value of the FADT that `a` holds to its reset register,
+ * as Linux's `acpi_reboot` and `acpi_reset` do (drivers/acpi/reboot.c:11-26
+ * and drivers/acpi/acpica/hwxface.c:32-68), and return; nothing when the
+ * FADT has no reset register.
+ *
+ * An I/O or PCI register gets one byte whatever width the FADT gives, since
+ * the specification makes the register 8 bits and a firmware's wider width
+ * at port 0xCF9 would reach 0xCFC, the PCI configuration data port. A PCI
+ * register is on bus 0 at the offset in its address's low 16 bits, through
+ * the extended configuration accessor. A memory register keeps its width.
+ */
+void acpi_reset_write(const struct acpi_info *a);
 
 #endif /* _ACPI_H_ */

@@ -40,6 +40,19 @@
  * one processor, and two thousand taken on each processor in turn, are each
  * no earlier than the one before.
  *
+ * `write`: as on Linux, which maps the vDSO private and may-write so that a
+ * debugger can set a breakpoint there, a child's mprotect makes it rwxp, a
+ * store there does not fault and its clock_gettime still works, and
+ * another child's write through /proc/self/mem, as a tracer writes, reads
+ * back with the page still read-only; the parent's vDSO, which shared the
+ * kernel's page with both, is unchanged.
+ *
+ * `vvar`: the data page is the process's own, as on Linux, which maps it
+ * VM_IO | VM_PFNMAP without VM_MAYEXEC: a read of it through
+ * /proc/self/mem and a tracer's PTRACE_PEEKDATA of a tracee's give EIO,
+ * process_vm_readv of it and a vmsplice of a byte of it into a pipe EFAULT,
+ * and mprotect of it with PROT_EXEC EACCES.
+ *
  * On the i686 kernel, which has no vDSO, `absent`: there is no
  * AT_SYSINFO_EHDR, and maps names neither region; then `source`.
  *
@@ -58,14 +71,20 @@
 #define _GNU_SOURCE
 #include <elf.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <sched.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/auxv.h>
+#include <sys/mman.h>
+#include <sys/ptrace.h>
 #include <sys/syscall.h>
 #include <sys/time.h>
+#include <sys/uio.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -604,11 +623,189 @@ static int ordered(void)
     return 0;
 }
 
+/**
+ * In a child, write `value` over the image's byte EI_PAD, which a valid
+ * header leaves 0: after mprotect makes the page writable, or with
+ * `through_mem` through /proc/self/mem with the page read-only, as a tracer
+ * sets a breakpoint. The status the child exits with: 0 when the write
+ * through /proc/self/mem reads back and leaves the page r-xp, or when the
+ * store after mprotect leaves it rwxp and the vDSO's clock_gettime still
+ * works; 1 when the mprotect or the write is refused; 2 otherwise. A store
+ * that faults ends the child by its signal.
+ */
+static int patch(int through_mem, unsigned char value)
+{
+    volatile unsigned char *at = (volatile unsigned char *)image + EI_PAD;
+    struct timespec ts;
+    unsigned long lo;
+    unsigned long hi;
+    char perm[5];
+    int fd;
+
+    if (through_mem) {
+        fd = open("/proc/self/mem", O_RDWR);
+        if (fd < 0 || pwrite(fd, &value, 1, (off_t)(uintptr_t)at) != 1) {
+            return 1;
+        }
+        close(fd);
+        return *at == value && maps_region("[vdso]", &lo, &hi, perm) == 0 &&
+                       strcmp(perm, "r-xp") == 0
+                   ? 0
+                   : 2;
+    }
+    if (mprotect((void *)image, 4096, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) {
+        return 1;
+    }
+    *at = value;
+    return maps_region("[vdso]", &lo, &hi, perm) == 0 && strcmp(perm, "rwxp") == 0 &&
+                   vdso_clock_gettime(CLOCK_MONOTONIC, &ts) == 0
+               ? 0
+               : 2;
+}
+
+/** Run `patch` in a child; its exit status, 1 when a signal ended it, as a
+ * refused store does, or -1 when it could not be run. */
+static int patch_in_child(int through_mem, unsigned char value)
+{
+    int status;
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        _exit(patch(through_mem, value));
+    }
+    if (pid < 0 || waitpid(pid, &status, 0) != pid) {
+        return -1;
+    }
+    return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+}
+
+/** Check that a child may write its vDSO, as Linux lets mprotect and a
+ * tracer write it, and that the write copies the page. */
+static int write_row(void)
+{
+    unsigned char was = image[EI_PAD];
+    unsigned long lo;
+    unsigned long hi;
+    char perm[5];
+    int rc;
+
+    rc = patch_in_child(0, (unsigned char)(was ^ 0x5a));
+    if (rc == 1) {
+        return fail("mprotect refused to make the vDSO writable, or a write to it faulted");
+    }
+    if (rc != 0) {
+        return fail("the vDSO after mprotect and a store is not rwxp or lost its clock");
+    }
+    rc = patch_in_child(1, (unsigned char)(was ^ 0xa5));
+    if (rc == 1) {
+        return fail("a write to the vDSO through /proc/self/mem was refused");
+    }
+    if (rc != 0) {
+        return fail("the vDSO after a write through /proc/self/mem lost the byte or is not r-xp");
+    }
+    if (image[EI_PAD] != was || maps_region("[vdso]", &lo, &hi, perm) != 0 ||
+        strcmp(perm, "r-xp") != 0) {
+        return fail("a child's write to its vDSO changed the parent's");
+    }
+    report_held();
+    return 0;
+}
+
+/** Whether a tracer's PTRACE_PEEKDATA of a stopped child's word at `at`
+ * answers EIO; -1 when the child could not be traced. */
+static int peek_is_eio(unsigned long at)
+{
+    int status;
+    int eio;
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        if (ptrace(PTRACE_TRACEME, 0, 0, 0) == 0) {
+            raise(SIGSTOP);
+        }
+        _exit(0);
+    }
+    if (pid < 0 || waitpid(pid, &status, 0) != pid) {
+        return -1;
+    }
+    if (!WIFSTOPPED(status)) {
+        return -1;
+    }
+    errno = 0;
+    eio = ptrace(PTRACE_PEEKDATA, pid, (void *)at, 0) == -1 && errno == EIO;
+    kill(pid, SIGKILL);
+    waitpid(pid, &status, 0);
+    return eio;
+}
+
+/** Check that no access but the process's own reaches its [vvar], and that
+ * mprotect refuses it PROT_EXEC, as on Linux. */
+static int vvar_row(void)
+{
+    unsigned long lo;
+    unsigned long hi;
+    char perm[5];
+    char byte;
+    struct iovec local;
+    struct iovec remote;
+    int fd;
+    int peek;
+    int p[2];
+    ssize_t spliced;
+    int err;
+
+    if (maps_region("[vvar]", &lo, &hi, perm) != 0) {
+        return fail("/proc/self/maps has no [vvar]");
+    }
+    fd = open("/proc/self/mem", O_RDONLY);
+    if (fd < 0) {
+        return fail("/proc/self/mem cannot be opened");
+    }
+    errno = 0;
+    if (pread(fd, &byte, 1, (off_t)lo) != -1 || errno != EIO) {
+        close(fd);
+        return fail("a read of [vvar] through /proc/self/mem is not EIO");
+    }
+    close(fd);
+    local.iov_base = &byte;
+    local.iov_len = 1;
+    remote.iov_base = (void *)lo;
+    remote.iov_len = 1;
+    errno = 0;
+    if (process_vm_readv(getpid(), &local, 1, &remote, 1, 0) != -1 || errno != EFAULT) {
+        return fail("process_vm_readv of [vvar] is not EFAULT");
+    }
+    if (pipe(p) != 0) {
+        return fail("no pipe for vmsplice");
+    }
+    spliced = vmsplice(p[1], &remote, 1, SPLICE_F_NONBLOCK);
+    err = errno;
+    close(p[0]);
+    close(p[1]);
+    if (spliced != -1 || err != EFAULT) {
+        return fail("vmsplice of a byte of [vvar] is not EFAULT");
+    }
+    errno = 0;
+    if (mprotect((void *)lo, 4096, PROT_READ | PROT_EXEC) != -1 || errno != EACCES) {
+        return fail("mprotect of [vvar] with PROT_EXEC is not EACCES");
+    }
+    peek = peek_is_eio(lo);
+    if (peek < 0) {
+        return fail("a child could not be stopped under ptrace");
+    }
+    if (!peek) {
+        return fail("PTRACE_PEEKDATA of a tracee's [vvar] is not EIO");
+    }
+    report_held();
+    return 0;
+}
+
 /** The rows of the x86-64 kernel's vDSO, up to `source`. */
 static int vdso_rows(void)
 {
     if (auxv() != 0 || maps() != 0 || symbols() != 0 || source() != 0 || agree() != 0 ||
-        resolution() != 0 || getcpu_row() != 0 || ordered() != 0) {
+        resolution() != 0 || getcpu_row() != 0 || ordered() != 0 || write_row() != 0 ||
+        vvar_row() != 0) {
         return 1;
     }
     return 0;
@@ -633,8 +830,9 @@ static int absent_rows(void)
  * its assertions in the order they are checked. */
 static void plan(void)
 {
-    static const char *const with[] = {"auxv",       "maps",   "symbols", "source", "agree",
-                                       "resolution", "getcpu", "ordered", "calls"};
+    static const char *const with[] = {"auxv",  "maps",       "symbols", "source",
+                                       "agree", "resolution", "getcpu",  "ordered",
+                                       "write", "vvar",       "calls"};
     static const char *const without[] = {"absent", "source", "calls"};
     const char *const *ids = kernel_x86_64 ? with : without;
     unsigned n =

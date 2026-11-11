@@ -65,11 +65,17 @@ struct sysfs_pci_ident;
  * hangs past recovery or a firmware framebuffer whose aperture a native
  * driver takes, is unplugged (`drm_dev_unplug`): its nodes leave /dev at
  * once, every later ioctl and mmap of its open files fails with ENODEV,
- * reads give the events already queued and then ENODEV, poll answers
- * POLLERR | POLLHUP, every mapping of its buffers is revoked so that a
- * later access raises SIGBUS (76-2a), and the driver signals every fence
- * it still owes with the error -ENODEV. The records stay until their
- * last holder lets go.
+ * every mapping of its buffers is revoked so that a later access raises
+ * SIGBUS (76-2a), and the driver signals every fence it still owes with
+ * the error -ENODEV. read and poll do not change, as on Linux: they give
+ * the events already queued, and after them read waits and poll reports
+ * nothing, so that a compositor whose loop polls the node does not spin
+ * on a device that will never be readable. The records stay until their
+ * last holder lets go. virtio-gpu's objects of guest memory are the
+ * exception to the SIGBUS: a revoked mapping of one, its own or an
+ * importer's through its dma-buf, takes its pages again at the next touch,
+ * as it does on Linux, where a program outlives the reset of its GPU
+ * (77-5).
  *
  * Discovery. A program finds a device by its identity: the driver's name
  * and the bus that DRM_IOCTL_VERSION, /sys/class/drm and the PCI ids give,
@@ -113,10 +119,10 @@ struct drm_ident {
     int bus;           /* DRM_BUS_* */
 };
 
-/* The five drivers' identities as Linux 6.12 reports them (i915_driver.c
+/* The six drivers' identities as Linux 6.12 reports them (i915_driver.c
  * and i915_driver.h, virtgpu_drv.c and virtgpu_drv.h, tiny/bochs.c,
- * tiny/simpledrm.c and vkms/vkms_drv.c). fbdrm reports itself as
- * simpledrm, the driver Linux gives the firmware's framebuffer. */
+ * tiny/simpledrm.c, vkms/vkms_drv.c and vgem/vgem_drv.c). fbdrm reports
+ * itself as simpledrm, the driver Linux gives the firmware's framebuffer. */
 #define DRM_IDENT_I915                                                              \
     {"i915",                                                                        \
      "Intel Graphics",                                                              \
@@ -152,6 +158,9 @@ struct drm_ident {
      0,                                           \
      DRIVER_MODESET | DRIVER_ATOMIC | DRIVER_GEM, \
      DRM_BUS_PLATFORM}
+#define DRM_IDENT_VGEM                                          \
+    {"vgem", "Virtual GEM provider",     "20120112",      1, 0, \
+     0,      DRIVER_GEM | DRIVER_RENDER, DRM_BUS_PLATFORM}
 
 /* The device numbers of the nodes and the most devices at once. */
 #define DRM_MAJOR             226
@@ -226,15 +235,22 @@ struct drm_driver {
 /*
  * A fence's driver and timeline names, for SYNC_IOC_FILE_INFO and debugfs,
  * and its release, which frees the record when the last reference goes;
- * NULL frees it with kfree. `enable_signaling` is called once, the first
- * time anyone waits or adds a callback, for a driver that signals only on
- * request; it returns 0 when the fence has signalled meanwhile.
+ * NULL frees it with kfree. The rest may be NULL, as Linux's:
+ * `enable_signaling` is called once, the first time anyone waits or adds a
+ * callback, for a fence that signals only on request, with interrupts
+ * masked, so it must not sleep; it returns 0 when the fence has signalled
+ * meanwhile. `signaled` answers a query without
+ * enabling anything, and returns 1 when the fence may be signalled now.
+ * `wait` replaces the default sleep of `dma_fence_wait_until`, after
+ * signalling is enabled, with the same deadline and results.
  */
 struct dma_fence_ops {
     const char *(*get_driver_name)(struct dma_fence *fence);
     const char *(*get_timeline_name)(struct dma_fence *fence);
     int (*enable_signaling)(struct dma_fence *fence);
     void (*release)(struct dma_fence *fence);
+    int (*signaled)(struct dma_fence *fence);
+    int32_t (*wait)(struct dma_fence *fence, int intr, int64_t deadline_ns);
 };
 
 /* A callback run once when its fence signals, in the signaller's context,
@@ -261,7 +277,13 @@ struct dma_fence {
     int64_t deadline_ns; /* earliest requested completion hint, INT64_MAX if none */
     struct dma_fence_cb *cbs;
     wait_queue_t wq;
-    int signaling_enabled;
+    /* A callback, a sleeper or a poller has asked for the signal, and
+     * `enable_signaling` has run, as Linux's
+     * DMA_FENCE_FLAG_ENABLE_SIGNAL_BIT is set by
+     * __dma_fence_enable_signaling from dma_fence_add_callback,
+     * dma_fence_wait_timeout and dma_fence_enable_sw_signaling; it stays
+     * set when they leave. A query sets nothing. */
+    int listened;
 };
 
 /** The first of `num` new timeline contexts. Any context. */
@@ -279,21 +301,33 @@ void dma_fence_set_error(struct dma_fence *fence, int32_t error);
 /** Signal: stamp the time, run the callbacks, wake the waiters. Returns 0,
  * or -EINVAL when it had signalled. Any context, an interrupt among them. */
 int32_t dma_fence_signal(struct dma_fence *fence);
-/** Whether the fence has signalled, asking the driver if need be. */
+/** Whether the fence has signalled, asking its `signaled` if need be and
+ * signalling it when that says so; enables nothing, as Linux's. */
 int dma_fence_is_signaled(struct dma_fence *fence);
-/** Run `func` when `fence` signals: 0, or -ENOENT, with nothing added, when
- * it has signalled already. */
+/** Ask for the signal, as Linux's dma_fence_enable_sw_signaling: mark the
+ * fence `listened` and run its `enable_signaling` the first time. */
+void dma_fence_enable_sw_signaling(struct dma_fence *fence);
+/** Run `func` when `fence` signals: 0, with the fence marked `listened`,
+ * or -ENOENT, with nothing added, when it has signalled already. */
 int32_t dma_fence_add_callback(struct dma_fence *fence, struct dma_fence_cb *cb,
                                void (*func)(struct dma_fence *, struct dma_fence_cb *));
-/** Take a callback back: 1 when it was pending, 0 when it ran. */
+/** Take a callback back: 1 when it was pending, 0 when it ran. The fence
+ * stays `listened`. */
 int dma_fence_remove_callback(struct dma_fence *fence, struct dma_fence_cb *cb);
 /**
  * Wait for the fence until the CLOCK_MONOTONIC time `deadline_ns`, or for
  * ever when it is negative; sleeps. Returns 0 once signalled (the fence's
  * error is read from it), -ETIME at the deadline, or -EINTR for a
- * signal when `intr` is set.
+ * signal when `intr` is set. A fence not signalled before the deadline is
+ * enabled (`dma_fence_enable_sw_signaling`), as Linux's
+ * dma_fence_wait_timeout enables it, and then waited for by its `wait`, or
+ * else by `dma_fence_default_wait`.
  */
 int32_t dma_fence_wait_until(struct dma_fence *fence, int intr, int64_t deadline_ns);
+/** The sleep of `dma_fence_wait_until` without the fence's `wait`, Linux's
+ * dma_fence_default_wait: enables signalling and sleeps on the fence's
+ * queue; for a driver's `wait` that sleeps on its own fence. */
+int32_t dma_fence_default_wait(struct dma_fence *fence, int intr, int64_t deadline_ns);
 
 /*
  * The implicit fences of a buffer, Linux's dma_resv: outstanding writes
@@ -344,14 +378,20 @@ uint32_t sw_sync_info(char *buf, uint32_t cap);
  * keep the pages where the device reads them for scanout. NULL `mmap`
  * refuses mapping with ENODEV; NULL `free` frees the record with kfree.
  * `page` returns a borrowed physical frame, or 0 on failure, for PRIME
- * imports by other devices; NULL refuses those imports. `map_wc` records
+ * imports by other devices; NULL refuses those imports. It decides alone
+ * whether it serves once its device is unplugged, but a frame it gave stays
+ * the object's while the object's dma-buf exists, unplugged or not, and is
+ * never purged meanwhile, since an importer such as i915 keeps it in its
+ * own GTT and page tables, and holds the dma-buf while it does, as Linux's
+ * page references and attachment pins keep it. `map_wc` records
  * the cache type that the exporter and its importers use. `vmap` returns
  * the kernel's address of the object's bytes, one contiguous range, for
  * the console's buffer (drm_client.c): valid while the object is scanned
  * out, or NULL when the kernel cannot reach it so; NULL `vmap` is the same.
  * `cpu_access` is the exporter's part of a dma-buf's DMA_BUF_IOCTL_SYNC,
- * with its DMA_BUF_SYNC_ flags, once the fences are waited for: 0 or
- * -errno; NULL does nothing. It may sleep. `open` sees each handle a file
+ * with its DMA_BUF_SYNC_ flags, before the start waits for the fences, so
+ * that it may wait its own way: 0 or -errno, which ends the call without
+ * the wait; NULL does nothing. It may sleep. `open` sees each handle a file
  * gets to the object, by creation, GEM_OPEN or PRIME import, as Linux's
  * drm_gem_object_funcs.open: 0, or -errno, which takes the handle back;
  * NULL does nothing. It may sleep.
@@ -497,6 +537,10 @@ uintptr_t drm_gem_shmem_page(struct drm_gem_shmem_object *obj, uint32_t pgoff);
  * cached. 0, -EINVAL for a size past the helper's reach, or -ENOMEM. */
 int32_t drm_gem_shmem_dumb_create(struct drm_file *file, struct drm_device *dev,
                                   struct drm_mode_create_dumb *args);
+/** The same, the objects mapped write-combined, for vgem, whose importers
+ * have no call that would bracket a processor's access. */
+int32_t drm_gem_shmem_dumb_create_wc(struct drm_file *file, struct drm_device *dev,
+                                     struct drm_mode_create_dumb *args);
 
 /* ------------------------------------------------------------------------
  * Open files
@@ -628,6 +672,9 @@ void drm_mode_file_release(struct drm_file *file);
  */
 int32_t drm_ioctl(struct drm_file *file, uint32_t cmd, uintptr_t arg);
 
+/** Whether a held descriptor is an open DRM card or render node. */
+int drm_is_file(const fd_entry_t *entry);
+
 /* ------------------------------------------------------------------------
  * Display state: mode objects and their atomic state (76-5a, 76-5b)
  *
@@ -743,8 +790,9 @@ struct drm_framebuffer {
 /*
  * A plane's state: the framebuffer it shows (held), where on its CRTC in
  * pixels, and which part of the framebuffer in 16.16 fixed point; the
- * fence to wait for before scanning out (IN_FENCE_FD, held), and the damage
- * since the last commit (FB_DAMAGE_CLIPS, held). `src`, `dst` and `visible`
+ * fence to wait for before scanning out (IN_FENCE_FD, or else the commit
+ * takes the framebuffer's pending writes; held), and the damage since the
+ * last commit (FB_DAMAGE_CLIPS, held). `src`, `dst` and `visible`
  * are set by `drm_atomic_helper_check_plane_state` for the driver: the
  * source and the destination clipped to the CRTC's mode.
  */
@@ -1074,7 +1122,21 @@ struct drm_atomic_state {
  * ADDFB or ADDFB2 made, before it gets its ID, as Linux's driver's
  * fb_create does: it may give a legacy framebuffer its object's modifier,
  * and an error refuses it; `fb_destroy` lets go what it took, before the
- * last put of the framebuffer drops its objects.
+ * last put of the framebuffer drops its objects. `commit_fence_wait`, when
+ * set, is told of each plane fence a nonblocking commit deferred to the
+ * worker would wait for in Linux's commit tail, which Linux queues at
+ * once: the first plane's not yet signalled as the commit is queued, and
+ * each next one's as the one before signals, so that the driver can do
+ * what its wait would, as i915's boosts the request. With interrupts
+ * masked, maybe in an interrupt; it may not sleep, and the fence is
+ * borrowed. `commit_fence_timeout_ms`, when nonzero, bounds the commit's
+ * wait for each plane's fence in turn, uninterruptible, at that many
+ * milliseconds from the moment the wait reaches it, and on a timeout the
+ * commit stops waiting for the rest and programs the planes, as Linux's
+ * intel_atomic_commit_fence_wait with i915_fence_timeout
+ * (intel_display.c:7262-7280); 0 waits as Linux's
+ * drm_atomic_helper_wait_for_fences, a blocking commit interruptibly and
+ * a deferred one until every fence has signalled.
  */
 struct drm_mode_config {
     uint32_t min_width, max_width, min_height, max_height;
@@ -1108,6 +1170,8 @@ struct drm_mode_config {
     int32_t (*atomic_commit)(struct drm_device *dev, struct drm_atomic_state *state, int nonblock);
     int32_t (*fb_create)(struct drm_device *dev, struct drm_framebuffer *fb);
     void (*fb_destroy)(struct drm_framebuffer *fb);
+    void (*commit_fence_wait)(struct drm_device *dev, struct dma_fence *fence);
+    uint32_t commit_fence_timeout_ms;
 };
 
 /* The index masks of Linux's drm_crtc_mask, drm_plane_mask and
@@ -1345,8 +1409,10 @@ int drm_edid_parse_modes(const uint8_t *edid, uint32_t len,
 /** Take `dev`'s commit lock, sleeping while another commit holds it:
  * 0, or -EINTR for a signal. */
 int32_t drm_modeset_lock(struct drm_device *dev);
-/** Take the commit lock with signals ignored, for a release that must
- * take a framebuffer off the display whatever the caller's signals. */
+/** Take the commit lock with signals ignored, as Linux's acquire context
+ * without DRM_MODESET_ACQUIRE_INTERRUPTIBLE: for a release that must take
+ * a framebuffer off the display whatever the caller's signals, and for a
+ * driver's commit of its own. */
 void drm_modeset_lock_nointr(struct drm_device *dev);
 /** Let the commit lock go and wake the next taker. */
 void drm_modeset_unlock(struct drm_device *dev);
@@ -1707,7 +1773,7 @@ struct drm_device {
 /** Probe and register the display devices, once, after the PCI drivers
  * have started: in the order the aperture handoff needs, bochs and
  * virtio-gpu, then fbdrm on what they left, then vkms when `rach2.vkms`
- * asks; and /dev/udmabuf. Logs "drm: start". */
+ * asks and vgem when `rach2.vgem` asks; and /dev/udmabuf. Logs "drm: start". */
 void drm_start(void);
 
 /** Fill a new device for `driver`, with one reference, the caller's, and
@@ -1726,6 +1792,12 @@ int32_t drm_dev_register(struct drm_device *dev);
  * (`drm_sysfs_unregister`). Any later ioctl of its files answers ENODEV;
  * the record stays until its last holder lets go. */
 void drm_dev_unplug(struct drm_device *dev);
+/** Zap every program's mapping of `obj` and of each import of its dma-buf
+ * on any device that maps the import under its own address, as the shmem
+ * helper's import does, so that the next touch of one asks for its page
+ * again. i915 maps an import under its mmap-offset records, which this
+ * does not reach. Under the big kernel lock; does not sleep. */
+void drm_gem_object_zap(struct drm_gem_object *obj);
 /** Take and drop a reference to a device. */
 void drm_dev_get(struct drm_device *dev);
 void drm_dev_put(struct drm_device *dev);
@@ -1976,6 +2048,12 @@ void drm_client_dev_unregister(struct drm_device *dev);
  * console sets its mode again on the outputs connected now. Process
  * context; may sleep. */
 void drm_client_dev_hotplug(struct drm_device *dev);
+/** The loader's framebuffer has gone, with the device whose aperture
+ * showed it, which its driver gives to another owner: a console still on
+ * it draws nothing from now on, and /fb's native mode has no screen, until
+ * a device registers, on which the console then sets its own mode. Nothing
+ * for a console on a buffer of its own. Does not sleep. */
+void drm_client_boot_screen_gone(void);
 
 /* ------------------------------------------------------------------------
  * The drivers' probes. Each finds its devices, binds and registers them,
@@ -1983,20 +2061,34 @@ void drm_client_dev_hotplug(struct drm_device *dev);
  * PC-only code and are called through `arch_drm_probe` (sys/arch/arch.h).
  */
 
+/** QEMU's standard VGA and bochs display, as Linux's bochs-drm. */
 int32_t bochs_probe(void);
+/** The framebuffer the loader left, as Linux's simpledrm. */
 int32_t fbdrm_probe(void);
+/** Intel's graphics, when `rach2.i915` asks for it; see i915/Readme.md. */
 int32_t i915_probe(void);
+/** The virtio GPUs on virtio-pci. */
 int32_t virtio_gpu_probe(void);
+struct virtio_dev;
+/** Bind virtio-gpu to `vdev`, a device of a transport other than virtio-pci,
+ * such as the shared-memory transport's (../virtio/shmem.c), once its device
+ * has answered; 0 or -errno. See virtio_gpu.c. */
+int32_t virtio_gpu_bind(struct virtio_dev *vdev);
+/** vkms, a display in software, when the command line has `rach2.vkms`. */
 int32_t vkms_probe(void);
+/** vgem, buffers in memory with no display, with `rach2.vgem`. */
+int32_t vgem_probe(void);
 /** vkms's vblank timer, from the boot processor's tick with interrupts
  * off: each vblank due on its CRTC since the last call. Nothing while no
  * vkms device holds vblanks. */
 void vkms_tick(void);
 
 /* ------------------------------------------------------------------------
- * The ioctl handlers of the core's table, one per number, each in the file
- * of the task that writes it. Until then each answers -EOPNOTSUPP, what
- * Linux answers for a driver without the feature.
+ * The ioctl handlers of the core's table, one per number, in the files the
+ * comments below name. Each takes the device, the argument the dispatcher
+ * copied in and copies back out, and the caller's file, and answers 0 or
+ * -errno; one for a feature the device lacks answers -EOPNOTSUPP, as Linux
+ * does.
  */
 
 /* drm.c (76-4a): the device's identity and the client's view. */
@@ -2122,7 +2214,8 @@ void drm_syncobj_add_point(struct drm_syncobj *syncobj, struct dma_fence_chain *
  * signalled stub for a point gone by. With
  * DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT in `flags` it waits up to five
  * seconds for the point to be submitted, and may sleep. 0, -ENOENT for no
- * such handle, -EINVAL for a point not submitted, -ETIME or -EINTR.
+ * such handle, -EINVAL for any other flag or a point not submitted, -ETIME
+ * or -EINTR.
  */
 int32_t drm_syncobj_find_fence(struct drm_file *file, uint32_t handle, uint64_t point,
                                uint32_t flags, struct dma_fence **fence);

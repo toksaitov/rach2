@@ -1,0 +1,91 @@
+.Dd November 10, 2026
+.Dt IVSHMEMD 8
+.Os
+.Sh NAME
+.Nm ivshmemd
+.Nd serve QEMU's ivshmem-doorbell a region the kernel's virtio-gpu shares
+.Sh SYNOPSIS
+.Nm
+.Op Fl n Ar node
+.Op Fl s Ar size
+.Ar socket
+.Nm
+.Op Fl n Ar node
+.Fl i
+.Sh DESCRIPTION
+.Nm
+makes a sealed memfd of
+.Ar size
+bytes and four eventfds, attaches them to the kernel through
+.Pa /dev/vgpu-shm
+.Pq Xr vgpu-shm 4
+as peer 0, and listens on the Unix socket
+.Ar socket
+for one QEMU whose
+.Sy ivshmem-doorbell
+device has two vectors:
+.Bd -literal -offset indent
+ivshmemd /tmp/ivs.sock &
+qemu-system-x86_64 -accel kvm -machine q35,kernel-irqchip=split ... \e
+    -chardev socket,path=/tmp/ivs.sock,id=ivs \e
+    -device ivshmem-doorbell,chardev=ivs,vectors=2
+.Ed
+.Pp
+It speaks the server protocol of QEMU's
+.Pa docs/specs/ivshmem-spec.rst :
+version 0, the id 1 for QEMU, the region, then peer 0's two eventfds,
+which the virtual machine rings for the kernel, and peer 1's two, which
+the kernel rings to raise the machine's vectors.
+The virtual machine runs the virtio-gpu device over the region, and the
+kernel binds its driver to it.
+.Pp
+When QEMU's connection closes,
+.Nm
+detaches the region as lost, which fails every pending fence; after
+.Dv SIGINT
+or
+.Dv SIGTERM
+it detaches in order.
+Before the detach it prints the transport's report, and then exits.
+.Pp
+The options:
+.Bl -tag -width Ds
+.It Fl i
+Print the transport's report and exit, without attaching.
+.It Fl n Ar node
+The control node, by default
+.Pa /dev/vgpu-shm .
+.It Fl s Ar size
+The region's size, a power of two from 32K to 64M, with an optional
+.Sy K
+or
+.Sy M ;
+by default 32M.
+.El
+.Sh EXIT STATUS
+0 after the detach or the report, 1 when the region, the attach, the
+socket or the node fails, and 2 for a usage error.
+.Sh DIAGNOSTICS
+.Nm
+prints
+.Ql ivshmemd: attached: 33554432 bytes as peer 0 ,
+.Ql ivshmemd: listening on SOCKET
+and
+.Ql ivshmemd: QEMU connected as peer 1
+as it goes, and last
+.Ql ivshmemd: result: detached: QEMU closed its connection
+or
+.Ql in order .
+The report is one line,
+.Ql ivshmemd: info: attached 1, bound 1, epoch 2, driver 3, device 3, error 0, doorbells 1, binds 1, rung 10/0, woken 9/1, polls 0, heap 7 of 8189 pages, refused 0, maps 4, map_pages 512, map_live 2, revoked 0 ,
+which gives
+.Vt struct vgs_info
+in order.
+A second attach while one is held prints
+.Ql ivshmemd: attach: refused /dev/vgpu-shm: Device or resource busy .
+.Sh SEE ALSO
+.Xr qemu-system 1 ,
+.Xr eventfd 2 ,
+.Xr memfd_create 2 ,
+.Xr kvm 4 ,
+.Xr vgpu-shm 4

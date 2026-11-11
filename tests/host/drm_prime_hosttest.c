@@ -1,5 +1,6 @@
 /* PRIME sharing, cache identity and lifetimes over the real GEM and dma-buf
- * code; frames, descriptor tables and device regions are host models.
+ * code, and vgem's fences on a buffer another device imports; frames,
+ * descriptor tables, device regions and the commit worker are host models.
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  */
 #include "drm/drm_gem.c"
@@ -8,6 +9,19 @@
 #include "dmabuf/dmabuf.c"
 #include "dmabuf/sync_file.c"
 #include "dmabuf/udmabuf.c"
+#include "drm/vgem.c"
+
+/** No interrupts on the host: the fences' masking is a no-op. */
+uint32_t kirq_save(void)
+{
+    return 0;
+}
+
+/** The pair of kirq_save. */
+void kirq_restore(uint32_t flags)
+{
+    (void)flags;
+}
 
 extern int printf(const char *format, ...);
 extern void *calloc(unsigned long n, unsigned long size);
@@ -339,6 +353,85 @@ int32_t devfs_node_register(struct devfs_node *node)
     return 0;
 }
 
+/* vgem's registration, which the rows do not run. */
+int kcmdline_has(const char *flag)
+{
+    (void)flag;
+    return 0;
+}
+/** No log on the host. */
+void klog(int level, const char *subsystem, const char *fmt, ...)
+{
+    (void)level;
+    (void)subsystem;
+    (void)fmt;
+}
+/** Unused: vgem_probe returns before it. */
+void drm_dev_init(struct drm_device *dev, const struct drm_driver *drv)
+{
+    dev->driver = drv;
+}
+/** Unused: vgem_probe returns before it. */
+int32_t drm_dev_register(struct drm_device *dev)
+{
+    (void)dev;
+    return -ENODEV;
+}
+
+/* The commit worker's queue of delayed works, which `expire` runs. */
+static struct drm_work *works[8];
+static uint32_t last_due_ms;
+
+/** Queue `work` as the commit worker does, holding its device. */
+void drm_dev_work_later_ms(struct drm_device *dev, struct drm_work *work, uint32_t ms)
+{
+    int i;
+
+    last_due_ms = ms;
+    if (work->queued)
+        return;
+    for (i = 0; i < 8 && works[i]; i++) {
+    }
+    CHECK(i < 8, "work queue has room");
+    if (i == 8)
+        return;
+    drm_dev_get(dev);
+    work->dev = dev;
+    work->queued = 1;
+    works[i] = work;
+}
+
+/** Take `work` off the queue, dropping its device. */
+void drm_dev_work_cancel(struct drm_work *work)
+{
+    int i;
+
+    if (!work->queued)
+        return;
+    for (i = 0; i < 8; i++) {
+        if (works[i] == work)
+            works[i] = NULL;
+    }
+    work->queued = 0;
+    drm_dev_put(work->dev);
+}
+
+/** Run every queued work, as the worker does once their time has come. */
+static void expire(void)
+{
+    struct drm_work *w;
+    int i;
+
+    for (i = 0; i < 8; i++) {
+        if ((w = works[i]) != NULL) {
+            works[i] = NULL;
+            w->queued = 0;
+            w->fn(w);
+            drm_dev_put(w->dev);
+        }
+    }
+}
+
 static const struct drm_driver driver = {.ident = DRM_IDENT_VKMS,
                                          .dumb_create = drm_gem_shmem_dumb_create};
 static struct drm_device exporter, importer;
@@ -629,6 +722,9 @@ static void unmappable(void)
           "the object freed with its handle");
 }
 
+/** An import whose driver hook sleeps while another import of the same
+ * buffer publishes its handle: the first gets that handle, and its own
+ * object is freed with its reference on the buffer. */
 static void concurrent_import(void)
 {
     struct drm_driver custom = driver;
@@ -646,6 +742,129 @@ static void concurrent_import(void)
     drm_gem_release(&c);
     fd_free(&table, hook_fd);
     importer.driver = &driver;
+}
+
+/** Attach a vgem fence to `handle`, returning the ioctl's result. */
+static int32_t vgem_attach(struct drm_file *file, uint32_t handle, uint32_t flags, uint32_t *id)
+{
+    struct drm_vgem_fence_attach arg;
+    int32_t rc;
+
+    k_memset(&arg, 0, sizeof(arg));
+    arg.handle = handle;
+    arg.flags = flags;
+    rc = vgem_fence_attach_ioctl(file->dev, &arg, file);
+    if (id)
+        *id = arg.out_fence;
+    return rc;
+}
+
+/** Signal vgem fence `id`, returning the ioctl's result. */
+static int32_t vgem_signal(struct drm_file *file, uint32_t id, uint32_t flags)
+{
+    struct drm_vgem_fence_signal arg;
+
+    arg.fence = id;
+    arg.flags = flags;
+    return vgem_fence_signal_ioctl(file->dev, &arg, file);
+}
+
+/** Whether the reservation of `obj` has work pending for a writer
+ * (`write`) or a reader. */
+static int resv_busy(struct drm_gem_object *obj, int write)
+{
+    struct dma_fence *f = dma_resv_snapshot(obj->resv, write);
+    int busy = f && !dma_fence_is_signaled(f);
+
+    dma_fence_put(f);
+    return busy;
+}
+
+/**
+ * vgem as IGT's cork uses it: a write-combined dumb buffer, exported and
+ * imported by another device, held busy by a vgem fence until it is
+ * signalled, and Linux's answers for every misuse, the timeout and the
+ * close of a file with fences pending.
+ */
+static void vgem_fences(void)
+{
+    static const struct drm_driver vgem = {DRM_IDENT_VGEM,   vgem_open, vgem_postclose,
+                                           vgem_dumb_create, NULL,      NULL,
+                                           vgem_ioctls,      2,         NULL};
+    struct drm_device vdev;
+    struct drm_file v;
+    struct drm_mode_create_dumb dumb;
+    struct drm_gem_object *obj, *imported;
+    uint32_t handle, cross, id, id2, id3;
+    int fd;
+
+    k_memset(&vdev, 0, sizeof(vdev));
+    k_memset(&v, 0, sizeof(v));
+    vdev.driver = &vgem;
+    vdev.features = DRIVER_GEM | DRIVER_RENDER;
+    vdev.refs = 1;
+    v.dev = &vdev;
+    CHECK(!vgem_open(&vdev, &v), "vgem open");
+    CHECK(vgem_signal(&v, 0, 0) == -ENOENT, "fence 0 is ENOENT, IGT's vgem_has_fences");
+    CHECK(vgem_signal(&v, 1, 0) == -ENOENT, "an id never given is ENOENT");
+    k_memset(&dumb, 0, sizeof(dumb));
+    dumb.width = dumb.height = 1;
+    dumb.bpp = 32;
+    CHECK(!vgem_dumb_create(&v, &vdev, &dumb) && dumb.size == PAGE_SIZE && dumb.pitch == 4,
+          "dumb buffer of one pixel takes a page");
+    handle = dumb.handle;
+    obj = drm_handle_find(v.objects, handle);
+    CHECK(obj && obj->map_wc, "vgem maps its buffers write-combined");
+
+    CHECK(vgem_attach(&v, handle, 2, NULL) == -EINVAL, "unknown flag is EINVAL");
+    {
+        struct drm_vgem_fence_attach arg;
+        k_memset(&arg, 0, sizeof(arg));
+        arg.handle = handle;
+        arg.pad = 1;
+        CHECK(vgem_fence_attach_ioctl(&vdev, &arg, &v) == -EINVAL, "pad is EINVAL");
+    }
+    CHECK(vgem_attach(&v, handle + 100, 0, NULL) == -ENOENT, "no such handle is ENOENT");
+    CHECK(!works[0] && !works[1], "a refused attach leaves no timer");
+
+    fd = export_fd(&v, handle, DRM_RDWR);
+    cross = import_fd(&c, fd);
+    imported = drm_handle_find(c.objects, cross);
+    CHECK(imported && imported->resv == obj->resv, "importer shares vgem's reservation");
+
+    CHECK(!vgem_attach(&v, handle, VGEM_FENCE_WRITE, &id) && id == 1, "write fence is id 1");
+    CHECK(last_due_ms == VGEM_FENCE_TIMEOUT_MS && works[0] && works[0]->queued,
+          "fence expires in ten seconds");
+    CHECK(resv_busy(imported, 0) && resv_busy(imported, 1),
+          "importer's readers and writers wait for the vgem writer");
+    CHECK(vgem_attach(&v, handle, 0, NULL) == -EBUSY, "reader behind a writer is EBUSY");
+    CHECK(vgem_attach(&v, handle, VGEM_FENCE_WRITE, NULL) == -EBUSY,
+          "writer behind a writer is EBUSY");
+    CHECK(vgem_signal(&v, 1, 1) == -EINVAL, "signal flags are EINVAL");
+    CHECK(!vgem_signal(&v, 1, 0), "signal the writer");
+    CHECK(!works[0] && !works[1], "signal stops the timer");
+    CHECK(!resv_busy(imported, 1), "importer is idle once the writer signals");
+    CHECK(vgem_signal(&v, 1, 0) == -ENOENT, "a consumed id is ENOENT");
+
+    CHECK(!vgem_attach(&v, handle, 0, &id2) && id2 == 2, "reader is id 2, ids not reused");
+    CHECK(!vgem_attach(&v, handle, 0, &id3) && id3 == 3, "readers share a buffer");
+    CHECK(!resv_busy(imported, 0) && resv_busy(imported, 1), "readers hold back writers alone");
+    CHECK(vgem_attach(&v, handle, VGEM_FENCE_WRITE, NULL) == -EBUSY,
+          "writer behind readers is EBUSY");
+    CHECK(!vgem_signal(&v, id2, 0), "signal one reader");
+    expire();
+    CHECK(!resv_busy(imported, 1), "the other reader signals by itself at its timeout");
+    CHECK(vgem_signal(&v, id3, 0) == -ETIMEDOUT, "signal after the timeout is ETIMEDOUT");
+
+    CHECK(!vgem_attach(&v, handle, VGEM_FENCE_WRITE, &id) && id == 4, "write fence is id 4");
+    CHECK(resv_busy(imported, 0), "importer waits for the new writer");
+    fd_free(&table, fd);
+    drm_gem_release(&c);
+    drm_gem_release(&v);
+    vgem_postclose(&vdev, &v);
+    CHECK(!works[0] && !works[1], "close stops the pending fence's timer");
+    CHECK(!v.driver_priv && vdev.refs == 1, "close frees the table and the device's holds");
+    CHECK(!vdev.objects, "the buffer goes with its last handle and import");
 }
 
 /** Run only the PRIME rows with each kernel ABI's structures. */
@@ -670,6 +889,7 @@ int main(void)
     failures_and_flags();
     concurrent_import();
     unmappable();
+    vgem_fences();
     CHECK(exporter.refs == 1 && importer.refs == 1, "device references return to baseline");
     CHECK(!allocations && !frames_live, "all allocations and frames released");
     printf("drm-prime-test: %s\n", failures ? "failed" : "ok");

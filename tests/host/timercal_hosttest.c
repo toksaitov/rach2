@@ -206,6 +206,10 @@ void host_tsc_read(uint32_t *lo, uint32_t *hi)
     *hi = (uint32_t)(v >> 32);
 }
 
+/** The pause of a spin, which the model's clock does not need. */
+void arch_relax(void)
+{}
+
 /* The one flag the row puts on the command line, or NULL for none. */
 static const char *cmdline_flag;
 
@@ -286,6 +290,13 @@ uint32_t tick_read_begin(void)
 int tick_read_retry(uint32_t seq)
 {
     (void)seq;
+    return 0;
+}
+
+/** The clock does not run from the TSC here, so the clock source named is
+ * the reference's. */
+int vclock_running(void)
+{
     return 0;
 }
 

@@ -1,0 +1,228 @@
+[    0.171000] vtd: irte: dmar1 index 1: ioapic 2, vector 41 to apic 0, level, sid 0xf0f8 svt 1
+[    0.171000] vtd: interrupt remapping: on, compatibility format refused
+[    0.177000] vtd: ready: 2 units, interrupt remapping on, translation on for assigned devices only
+[    0.184000] mouse: started
+[    0.184000] synaptics: found: touchpad model 1, fw 8.1, id 0x1e2b1, caps 0xd00123/0x840300/0x2a800/0x0, board id 2848, fw id 1581875
+[    0.184000] vtd: irte: dmar1 index 2: ioapic 2, vector 44 to apic 0, edge, sid 0xf0f8 svt 1
+[    0.184000] ioapic: route: line 12 to gsi 12, vector 44, edge, active high
+[    1.429000] mouse: ready
+[    1.429000] audio: started
+[    1.429000] audio: not driven: 8086:a0c at 00:03.0
+[    1.552000] vtd: irte: dmar1 index 3: msi of 0:1b.0, vector 49 to apic 0, edge, sid 0x00d8 svt 1
+[    1.552000] pci: msi: 0:1b.0 on vector 49, remapped
+[    1.552000] audio: interrupts: messages on vector 49
+[    1.559000] audio: ready: Intel HD Audio, codec 0x14f1510f
+[    1.565000] disk: policy: read-write
+[    1.571000] modules: none
+[    1.577000] block: started
+[    1.583000] ahci: found: 8086:9C03 at 0:31.2, prog-if 1, BAR5 C061B000
+[    1.596000] ahci: port 1: signature EB140101 is not a disk; skipped
+[    2.685000] ahci: port 2: no link after 1000 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+[    3.774000] ahci: port 3: no link after 1000 ms; SStatus 0x0, DET 0 (0 is nothing attached, 1 is a device that did not negotiate)
+[    3.778000] disk: disk0: ahci 0: 488397168 sectors, model Samsung SSD 870 EVO 250GB
+[    3.784000] ahci: port 0: 488397168 sectors, 238475 MiB
+[    3.790000] nvme: none: no NVMe controller on the bus
+[    3.797000] vtd: irte: dmar1 index 4: ioapic 2, vector 46 to apic 0, edge, sid 0xf0f8 svt 1
+[    3.797000] ioapic: route: line 14 to gsi 14, vector 46, edge, active high
+[    3.797000] vtd: irte: dmar1 index 5: ioapic 2, vector 47 to apic 0, edge, sid 0xf0f8 svt 1
+[    3.797000] ioapic: route: line 15 to gsi 15, vector 47, edge, active high
+[    3.798000] devfs: /dev/grubcore: BIOS boot partition 4, 2014 sectors at LBA 34
+[    3.810000] ext2: mounted: 35850496 blocks of 4096, 2242560 inodes, 1095 groups
+[    3.817000] ext2: root: /dev/disk0p6
+[    3.824000] loop: loop0: /trial/root-f216a775d48669a6.img, 0 bytes, read-write
+[    3.835000] ext2: mounted: 4194304 blocks of 4096, 1048576 inodes, 128 groups
+[    3.842000] root: image: /trial/root-f216a775d48669a6.img on /dev/disk0p6, ext2 through /dev/loop0; /data is /dev/disk0p6
+[    3.856000] usb: started
+[    3.862000] usb: controller: 0:14.0 xhci interface 0x30 8086:9c31 bar0 0xC0600004
+[    3.869000] usb: routing: usb2 0xA of 0x1FF, usb3 0x1 of 0xF, as the firmware left it
+[    3.876000] usb: controller: 0:1d.0 ehci interface 0x20 8086:9c26 bar0 0xC061C000
+[    3.885000] usb: handoff: ehci at 00:1d.0: taken from the firmware, halted
+[    3.892000] usb: routing: usb2 0x1FF of 0x1FF, usb3 0xF of 0xF, taken
+[    3.899000] usb: found: xhci0: 8086:9c31 at 0:20.0, aperture 0xC0600000
+[    3.906000] usb: unsupported: ehci at 00:1d.0
+[    3.913000] usb: caps: hcs1 0xD000820 hcs2 0x84000054 hcc1 0x200077C1 pagesize 0x1
+[    3.913000] usb: caps: scratchpads 16, contexts 32 bytes, 64-bit 1
+[    3.913000] usb: handoff: legsup 0x10801 legctl 0xC0012000 before
+[    3.915000] usb: handoff: legsup 0x1000801 legctl 0x0 after
+[    3.916000] usb: ready: xhci0: version 100, 13 ports, 32 slots, 32-byte contexts
+[    4.024000] usb: port: xhci0.2: a device; its reset tells full from high speed
+[    4.024000] usb: port: xhci0.4: a device; its reset tells full from high speed
+[    4.024000] usb: port: xhci0.6: a device; its reset tells full from high speed
+[    4.024000] usb: port: xhci0.7: a device; its reset tells full from high speed
+[    4.024000] usb: port: xhci0.10: a device; its reset tells full from high speed
+[    4.085000] usb: device: port 10: 35d6:3510, class 9 protocol 0, endpoint 1, a hub
+[    4.210000] usb: device: port 2: 35d6:2510, class 9 protocol 1, endpoint 1, a hub
+[    4.329000] usb: device: port 4: bda:129, class 0: no driver for it here
+[    4.483000] usb: device: port 6: bda:579a, class 0: no driver for it here
+[    4.603000] usb: device: port 7: cf3:3004, class 0: no driver for it here
+[    4.613000] usb: slot: 3: given back
+[    4.614000] usb: slot: 4: given back
+[    4.615000] usb: slot: 5: given back
+[    4.718000] usb: hub: device 1: 4 ports, power mode 0, think time 0
+[    4.725000] usb: hub: device 2: 4 ports, power mode 0, think time 1
+[    4.919000] usb: hid: device 3 interface 0: Logitech USB Keyboard on usb-3/input0, input devices: 1
+[    4.936000] usb: hid: device 3 interface 1: Logitech USB Keyboard on usb-3/input1, input devices: 1
+[    4.936000] usb: device: port 2.1: 46d:c34b, class 3 protocol 1, endpoint 1, HID interfaces 2 of 2
+[    5.049000] usb: hid: device 4 interface 0: Logitech USB Optical Mouse on usb-4/input0, input devices: 1
+[    5.049000] usb: device: port 2.3: 46d:c077, class 3 protocol 2, endpoint 1, HID interfaces 1 of 1
+[    5.077000] usb: devices: 4 configured
+[    5.085000] vtd: irte: dmar1 index 6: msi of 0:14.0, vector 50 to apic 0, edge, sid 0x00a0 svt 1
+[    5.085000] pci: msi: 0:14.0 on vector 50, remapped
+[    5.085000] usb: interrupts: xhci0: messages on vector 50
+[    5.092000] vtd: irte: dmar1 index 7: msi of 0:1f.2, vector 51 to apic 0, edge, sid 0x00fa svt 1
+[    5.092000] pci: msi: 0:1f.2 on vector 51, remapped
+[    5.092000] ahci: interrupts: messages on vector 51, 1 disks queued
+[    5.099000] net: started
+[    5.115000] vtd: irte: dmar1 index 8: msi of 1:0.0, vector 52 to apic 0, edge, sid 0x0100 svt 1
+[    5.115000] pci: msi: 1:0.0 on vector 52, remapped
+[    5.115000] rtl8168: interrupts: messages on vector 52
+[    5.122000] net: eth0: IPv6 fe80::2ad2:44ff:fe7e:e0af/64 added
+[    5.129000] net: ready: RTL8168GU
+[    5.135000] net: eth0: RTL8168GU, station 28:D2:44:7E:E0:AF
+[    5.142000] rtl8168: RTL8168GU: xid 0x509, MMIO 0x48A000, MAC 28:D2:44:7E:E0:AF
+[    5.142000] rtl8168: no link yet
+[    5.148000] rtl8168: messages on vector 52: none yet, 0 by the tick
+[    5.155000] net: eth0: no address
+[    5.162000] netconsole: broadcast, ethertype 0x88b5, boot id 0xb82fa8e8, 0 frames, 6791 characters dropped
+[    5.187000] vtd: irte: dmar1 index 9: msi of 2:0.0, vector 56 to apic 0, edge, sid 0x0200 svt 1
+[    5.187000] pci: msi: 2:0.0 on vector 56, remapped
+[    5.187000] ath9k: interrupts: messages on vector 56
+[    5.194000] ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac b8:ee:65:32:89:15 subsys 17aa:4026
+[    5.205000] drm: start
+[    5.212000] i915: uncore: an unclaimed access before the bind, cleared
+[    5.219000] i915: stolen: [mem 0xaba00000-0xaf9fffff], 64512 KiB usable, inside the device's reserved region; DMAR active, no buffers in it
+[    5.234000] i915: gtt: pipe A's firmware surface at 0x0, 4128 KiB, kept
+[    5.250000] i915: gtt: 2048 MiB, 256 MiB of it through the aperture; 523256 entries to the scratch page, 1032 kept
+[    5.264000] i915: opregion: version 2.0.0 at 0xaafb4018, mailboxes 0x1f; VBT in mailbox 4
+[    5.272000] i915: vbt: "$VBT HASWELL        " from the OpRegion (Mailbox #4), version 177, 3 outputs
+[    5.286000] i915: gem: 32 fences, swizzle 9/10 for X tiles and 9 for Y
+[    5.294000] vtd: irte: dmar0 index 0: msi of 0:2.0, vector 53 to apic 0, edge, sid 0x0010 svt 1
+[    5.294000] pci: msi: 0:2.0 on vector 53, remapped
+[    5.294000] i915: interrupts: messages on vector 53
+[    5.301000] i915: rps: RPn 200 MHz, RP1 200 MHz, RP0 1000 MHz, RPe 500 MHz, max 1000 MHz
+[    5.309000] i915: ppgtt: aliasing, 2048 MiB shared, directory at 0x7fde0000
+[    5.317000] i915: rings: rcs0, bcs0, vcs0 and vecs0 started: 16 KiB each at 0x7fffb000, 0x7fff6000, 0x7fff1000 and 0x7ffec000, status pages at 0x7ffff000, 0x7fffa000, 0x7fff5000 and 0x7fff0000
+[    5.342000] i915: workarounds: applied: 3 of the GT and 6 of rcs0, 0 lost
+[    5.350000] i915: pcode: read of command 0x5: error -6
+[    5.350000] i915: found: 00:02.0: haswell/ult (device id 0a16), graphics 7.5, display version 7.00, gt2, revision 0b
+[    5.367000] i915: cdclk: 450000 kHz, the most 450000 kHz, pixel clocks to 450000 kHz
+[    5.376000] i915: wm: latencies 20, 4, 36, 90 and 160 (level 0 in 0.1 us, then 0.5 us)
+[    5.385000] i915: pps: power up 200 ms, down 50 ms, cycle 500 ms, backlight on 1 ms, off 200 ms
+[    5.402000] i915: panel: the EDID's preferred fixed mode 1366x768@60, 76300 kHz
+[    5.411000] i915: edp: DPCD 1.1, eDP 1, 1 lane, rates 162000 to 270000 kHz, 6 bpc, EDID 128 bytes
+[    5.420000] i915: hdmi B: DDC pin 5, level 9, 300000 kHz TMDS
+[    5.429000] i915: display: port B: HDMI
+[    5.437000] i915: hdmi C: DDC pin 4, level 6, 300000 kHz TMDS, DP++
+[    5.446000] i915: display: port C: DP+HDMI
+[    5.454000] i915: display: pipe A adopted: 1366x768 in 1366x768@60, 76300 kHz, 18 bpp, 1 lane at 270000 kHz, the firmware's framebuffer at GTT 0x0, stride 5504
+[    5.471000] i915: backlight: intel_backlight: levels 0 to 937, at 937, off with the pipe
+[    5.480000] drm: worker: kdrm is pid 1
+[    5.480000] drm: i915: card0
+[    5.488000] console: card0: a native display
+[    5.496000] i915: gmbus dpb: NAK for addr 0050 w(1)
+[    5.496000] i915: gmbus dpb: NAK on first message, retry
+[    5.496000] i915: gmbus dpb: NAK for addr 0050 w(1)
+[    5.496000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[    5.496000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+[    5.498000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+[    5.498000] i915: gmbus dpc: NAK for addr 0050 w(1)
+[    5.498000] i915: gmbus dpc: NAK on first message, retry
+[    5.498000] i915: gmbus dpc: NAK for addr 0050 w(1)
+[    5.498000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[    5.498000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+[    5.499000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+[    5.499000] i915: registered: i915 1.6.0 for pci:0000:00:02.0 on card 0
+[    5.507000] fbdrm: framebuffer at 0xb0000000 is a native driver's
+[    5.516000] kvm: ready: vmx
+[    5.524000] vfio: ready: 12 groups of 14 functions
+[    5.865000] timing: tick 1000 Hz, 200 ms delay measured 201 ms, 2000 us wait measured 2011 us
+[    5.873000] clock: reference: the hpet; a tick the timer misses or delays is counted
+[    5.892000] smp: cpu1: tsc: synchronized with cpu0
+[    5.917000] smp: cpu2: tsc: synchronized with cpu0
+[    5.941000] smp: cpu3: tsc: synchronized with cpu0
+[    5.952000] smp: processors: 4 online of 4
+[    5.962000] vdso: clock: the tsc, 1895607 counts a tick
+[    5.979000] boot: starting /sbin/init
+[    5.981000] acpi: thread: kacpid is pid 3
+[    5.981000] wlan: worker: kwlan is pid 4
+[    5.981000] mouse: worker: kpsmoused is pid 5
+[    5.985000] input: sysfs: worker: kinputd is pid 6
+[    8.170000] rtl8168: link 1000 Mb/s, full duplex, pause both ways
+[    9.100000] net: eth0: IPv4 192.168.0.106/24
+[    9.274000] net: eth0: IPv6 fd91:381e:e667:4a0c:96d6:6625:ccdb:d9c4/64 added
+[    9.274000] net: eth0: IPv6 fd91:381e:e667:4a0c:955a:f578:9f30:1f6b/64 added
+[    9.413000] net: wlan0: IPv6 fe80::baee:65ff:fe32:8915/64 added
+[   12.641000] console: card0: handed to a master, the keyboard off
+[   14.048000] i915: gmbus dpb: NAK for addr 0050 w(1)
+[   14.048000] i915: gmbus dpb: NAK on first message, retry
+[   14.048000] i915: gmbus dpb: NAK for addr 0050 w(1)
+[   14.048000] i915: gmbus dpb: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[   14.048000] i915: gmbus dpb: enabling bit-banging, force_bit 1
+[   14.048000] i915: gmbus dpb: disabling bit-banging, force_bit 0
+[   14.051000] i915: gmbus dpc: NAK for addr 0050 w(1)
+[   14.051000] i915: gmbus dpc: NAK on first message, retry
+[   14.051000] i915: gmbus dpc: NAK for addr 0050 w(1)
+[   14.051000] i915: gmbus dpc: HDMI GMBUS EDID read failed, retry using GPIO bit-banging
+[   14.051000] i915: gmbus dpc: enabling bit-banging, force_bit 1
+[   14.051000] i915: gmbus dpc: disabling bit-banging, force_bit 0
+[   14.206000] i915: worker: ki915 is pid 115
+[   49.543000] syscall: 444: not implemented (asked for by chromium)
+[   64.790000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[   65.131000] syscall: 179: not implemented (asked for by firefox-esr)
+[   65.779000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[   65.923000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[   67.121000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[   67.235000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[   68.431000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[   68.702000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[   69.008000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[   69.765000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[   72.905000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[   73.006000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[   73.257000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[   73.446000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[   73.509000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[   73.967000] syscall: 179: not implemented (asked for by firefox-esr)
+[   74.364000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[   74.367000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[   74.692000] syscall: 179: not implemented (asked for by IndexedDB IO #1)
+[   74.895000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[   74.896000] syscall: 179: not implemented (asked for by IndexedDB IO #4)
+[   74.906000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[   75.045000] syscall: 179: not implemented (asked for by IndexedDB IO #4)
+[   76.791000] syscall: 179: not implemented (asked for by Cache2 I/O)
+[   77.913000] syscall: 179: not implemented (asked for by IndexedDB IO #7)
+[   78.078000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[   78.356000] syscall: 179: not implemented (asked for by IndexedDB IO #7)
+[   78.449000] syscall: 179: not implemented (asked for by IndexedDB IO #6)
+[   78.492000] syscall: 179: not implemented (asked for by DOMCacheThread)
+[   79.583000] syscall: 179: not implemented (asked for by LS Thread)
+[   79.586000] syscall: 179: not implemented (asked for by QuotaManager IO)
+[   79.747000] syscall: 179: not implemented (asked for by firefox-esr)
+[   79.777000] syscall: 179: not implemented (asked for by IndexedDB IO #8)
+[  110.689000] syscall: 323: not implemented (asked for by wine)
+[  110.925000] syscall: 323: not implemented (asked for by wine64)
+[  111.120000] syscall: 323: not implemented (asked for by wine64)
+[  111.326000] syscall: 323: not implemented (asked for by wine64)
+[  111.548000] syscall: 323: not implemented (asked for by wine64)
+[  112.401000] syscall: 323: not implemented (asked for by wine64)
+[  112.653000] syscall: 323: not implemented (asked for by wine64)
+[  114.571000] syscall: 323: not implemented (asked for by wine64)
+[  115.371000] syscall: 323: not implemented (asked for by wine64)
+[  116.926000] syscall: 323: not implemented (asked for by wine64)
+[  117.129000] syscall: 323: not implemented (asked for by wine64)
+[  117.671000] syscall: 323: not implemented (asked for by wine64)
+[  118.646000] syscall: 323: not implemented (asked for by wine64)
+[  119.077000] syscall: 323: not implemented (asked for by wine64)
+[  123.238000] syscall: 323: not implemented (asked for by wine)
+[  123.363000] syscall: 323: not implemented (asked for by wine64)
+[  123.505000] syscall: 323: not implemented (asked for by wine64)
+[  123.691000] syscall: 323: not implemented (asked for by wine64)
+[  123.889000] syscall: 323: not implemented (asked for by wine64)
+[  124.347000] syscall: 323: not implemented (asked for by wine64)
+[  124.592000] syscall: 323: not implemented (asked for by wine64)
+[  126.390000] syscall: 323: not implemented (asked for by wine64)
+[  127.120000] syscall: 323: not implemented (asked for by wine64)
+[  128.270000] syscall: 323: not implemented (asked for by wine64)
+[  128.473000] syscall: 323: not implemented (asked for by wine64)
+[  128.985000] syscall: 323: not implemented (asked for by wine64)

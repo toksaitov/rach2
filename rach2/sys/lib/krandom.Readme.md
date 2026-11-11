@@ -15,7 +15,7 @@ Three kernel consumers draw whatever the source:
 
 * Each program image the kernel builds gets 16 bytes on its initial stack, which the `AT_RANDOM` auxiliary vector entry points at: `exec_build` in `sys/syscall_proc.c` for `execve`, and `boot_stack` in `kernel.c` for the programs the boot starts. musl takes its stack-protector canary and the mallocng allocator's secret from them. `fork` copies the parent's stack and draws nothing.
 * TCP draws four words once, at the first `listen` or `connect`, as the key of the hash that chooses initial sequence numbers (`tcp_isn_key` in `sys/network/tcp/tcp.c`).
-* Netconsole draws one word as its boot identifier when `rach2.netconsole` enables it (`netconsole_enable` in `sys/network/netconsole.c`).
+* Netconsole draws one word as its boot identifier when `rach2.netconsole` starts its frames (`nc_choose_boot_id` in `sys/network/netconsole.c`).
 
 Two user interfaces refuse an untrusted source:
 

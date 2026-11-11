@@ -8,29 +8,55 @@
 #include "portio.h"
 #include "../../lib/kctypes.h"
 #include "../../lib/kstring.h"
+#ifndef RACH2_HOSTTEST
+#include "../../timer.h"
+#endif
+
+uint32_t ps2_wait_begin(void)
+{
+#ifndef RACH2_HOSTTEST
+    return timer_now_us();
+#else
+    return 0;
+#endif
+}
+
+int ps2_wait_over(uint32_t start, int reads)
+{
+    if (reads >= PS2_TIMEOUT) {
+        return 1;
+    }
+#ifndef RACH2_HOSTTEST
+    return (reads & 63) == 0 && timer_now_us() - start >= PS2_TIMEOUT_US;
+#else
+    (void)start;
+    return 0;
+#endif
+}
+
+/** Read the status until its bits `mask` equal `want`: 0, or -1 when the
+ * wait is over (`ps2_wait_over`). */
+static int ps2_wait(uint8_t mask, uint8_t want)
+{
+    uint32_t start = ps2_wait_begin();
+    int reads = 0;
+
+    do {
+        if ((inb(PS2_STATUS_PORT) & mask) == want) {
+            return 0;
+        }
+    } while (!ps2_wait_over(start, ++reads));
+    return -1;
+}
 
 int ps2_wait_input(void)
 {
-    int timeout = PS2_TIMEOUT;
-
-    while (timeout-- > 0) {
-        if ((inb(PS2_STATUS_PORT) & PS2_STATUS_INPUT_FULL) == 0) {
-            return 0;
-        }
-    }
-    return -1;
+    return ps2_wait(PS2_STATUS_INPUT_FULL, 0);
 }
 
 int ps2_wait_output(void)
 {
-    int timeout = PS2_TIMEOUT;
-
-    while (timeout-- > 0) {
-        if (inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL) {
-            return 0;
-        }
-    }
-    return -1;
+    return ps2_wait(PS2_STATUS_OUTPUT_FULL, PS2_STATUS_OUTPUT_FULL);
 }
 
 int ps2_send_command(uint8_t cmd)

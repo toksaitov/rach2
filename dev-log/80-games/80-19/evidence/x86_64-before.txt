@@ -1,0 +1,62 @@
+spliceload: begin: read mib 16 load 0 mode 2 pipe 65536
+ctxt 0
+timer_passes_late 0
+bkl_wait_us 5927437
+ctxt 0
+timer_passes_late 0
+bkl_wait_us 6005802
+spliceload: result: read mib 16 load 0 mode 2 us 29830 calls 32 longest_pair_us 2248 disk_kib 0 voluntary 0 involuntary 0
+spliceload: begin: splice mib 16 load 0 mode 2 pipe 65536
+ctxt 0
+timer_passes_late 0
+bkl_wait_us 6030676
+ctxt 0
+timer_passes_late 0
+bkl_wait_us 6197212
+spliceload: result: splice mib 16 load 0 mode 2 us 177565 calls 512 longest_pair_us 2034 disk_kib 0 voluntary 0 involuntary 0
+spliceload: begin: read mib 16 load 3 mode 2 pipe 65536
+spliceload: load: cpu 1 calls 4260
+spliceload: load: cpu 2 calls 4174
+spliceload: load: cpu 3 calls 4218
+ctxt 0
+timer_passes_late 1578
+bkl_wait_us 47525880
+ctxt 0
+timer_passes_late 1597
+bkl_wait_us 48289102
+spliceload: result: read mib 16 load 3 mode 2 us 189342 calls 32 longest_pair_us 19259 disk_kib 0 voluntary 0 involuntary 0
+spliceload: begin: splice mib 16 load 3 mode 2 pipe 65536
+spliceload: load: cpu 1 calls 5787
+spliceload: load: cpu 2 calls 5785
+spliceload: load: cpu 3 calls 5716
+ctxt 0
+timer_passes_late 2692
+bkl_wait_us 82641481
+ctxt 0
+timer_passes_late 4983
+bkl_wait_us 156048535
+spliceload: result: splice mib 16 load 3 mode 2 us 24436569 calls 512 longest_pair_us 12323824 disk_kib 0 voluntary 0 involuntary 0
+spliceload: begin: read mib 16 load 3 mode 2 pipe 65536
+spliceload: load: cpu 1 calls 7025
+spliceload: load: cpu 2 calls 7103
+spliceload: load: cpu 3 calls 6968
+ctxt 0
+timer_passes_late 7390
+bkl_wait_us 231097528
+ctxt 0
+timer_passes_late 8563
+bkl_wait_us 270358775
+spliceload: result: read mib 16 load 3 mode 2 us 13052778 calls 32 longest_pair_us 12872464 disk_kib 0 voluntary 0 involuntary 0
+spliceload: begin: splice mib 16 load 3 mode 2 pipe 65536
+spliceload: load: cpu 1 calls 18116
+spliceload: load: cpu 2 calls 18084
+spliceload: load: cpu 3 calls 18022
+ctxt 0
+timer_passes_late 10233
+bkl_wait_us 327051883
+ctxt 0
+timer_passes_late 14094
+bkl_wait_us 450695933
+spliceload: result: splice mib 16 load 3 mode 2 us 41170365 calls 512 longest_pair_us 28061170 disk_kib 0 voluntary 0 involuntary 0
+SPLICELOAD OK
+<6>[188.951000] poweroff: powering off

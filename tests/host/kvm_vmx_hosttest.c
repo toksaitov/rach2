@@ -3,7 +3,8 @@
  *
  * host-deps: rach2/sys/kvm/kvm.c rach2/sys/kvm/vcpu.c rach2/sys/kvm/cpuid.c
  * host-deps: rach2/sys/kvm/msr.c rach2/sys/kvm/emulate.c rach2/sys/kvm/decode.c
- * host-deps: rach2/sys/kvm/hyperv.c rach2/sys/kvm/pmu.c
+ * host-deps: rach2/sys/kvm/hyperv.c rach2/sys/kvm/pvclock.c
+ * host-deps: rach2/sys/kvm/binstats.c rach2/sys/kvm/pmu.c
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
  *
  * vmx.c is the kernel's, included whole, so that its table of operations
@@ -25,19 +26,30 @@
  * a VM and its vCPU; each entry inside VMXON and VMPTRLD and each exit followed
  * by VMCLEAR and VMXOFF with CR4 as it was, on every path; the VMCS built and
  * checked by the model; each exit the corpus's guests cause handled in the
- * kernel or given to the caller: CPUID, port I/O and its string form, EPT
+ * kernel or given to the caller: CPUID, port I/O and its string form, with
+ * RF across a REP cut at a page and a 64-bit address size at offset 0, EPT
  * faults on RAM and MMIO reads, writes and read-modify-writes, an instruction
  * the decoder refuses, the control and debug registers, real to long mode and
  * PAE's PDPTEs, the MSRs, XSETBV, VMCALL, KVM's and Hyper-V's once the CPUID
  * and the guest's id name it, and the instructions answered alone, the
  * interrupt and NMI windows, an event the exit found under delivery, the
- * caller's single steps and breakpoints, a RIP above 4 GiB, the host's
+ * caller's single steps and breakpoints, the guest's own #DB and #AC given
+ * back, #UD exits for the instructions Linux's emulator runs after one and
+ * for the other vendor's hypercall, a table of the instructions Linux's
+ * emulator runs with their operand on MMIO, string, far-pointer, MMX and SSE
+ * forms among them, a RIP above 4 GiB, the host's
  * interrupt, NMI and machine check, the preemption timer, a triple fault and
  * the two kinds of failed entry; hardware task switches by CALL, IRET, JMP and
  * task gates, to 32-bit, 16-bit and virtual-8086 tasks, and their faults; a
  * move to another processor; a state read between runs; VMXON and VMPTRLD
- * failing; a failed VMWRITE reported once; VPIDs; and a panic inside a run,
- * which turns VMX off.
+ * failing; a failed VMWRITE reported once; VPIDs; a panic inside a run,
+ * which turns VMX off; and what Linux's selftests ask of the guest's side:
+ * AMD's hypercall instruction patched or left as its quirk says, MWAIT's
+ * quirk, MSR_PLATFORM_INFO and CPUID faulting, a plain OUT's RIP at its
+ * exit and after it with port 0x7E's quirk, an emulation failure above
+ * CPL 0 under KVM_CAP_EXIT_ON_EMULATION_FAILURE, DR7.GD under the
+ * caller's breakpoints, and the TSC multiplier on a model whose controls
+ * have TSC scaling.
  */
 #include "kvm/vmx.c"
 
@@ -52,6 +64,7 @@
 #include "proc/process.h"
 
 extern int printf(const char *format, ...);
+extern int memcmp(const void *a, const void *b, unsigned long n);
 extern void *malloc(unsigned long n);
 extern void *aligned_alloc(unsigned long align, unsigned long n);
 extern void free(void *p);
@@ -306,6 +319,10 @@ int signal_pending(void)
     return 0;
 }
 
+/** The run loop's switch at a slice's end: one thread here, no slice ends. */
+void sched_take_preempt(void)
+{}
+
 void signal_set_blocked(uint64_t mask)
 {
     current_proc->sig_blocked = mask;
@@ -549,6 +566,23 @@ uint64_t kvm_tdp_root(struct kvm_vm *vm)
     return TDP_ROOT;
 }
 
+int32_t kvm_tdp_pre_fault(struct kvm_vm *vm, struct kvm_pre_fault_memory *range)
+{
+    (void)vm;
+    (void)range;
+    return -ENOENT;
+}
+
+/** No thread here is switched away, so the steal time is never marked. */
+int kvm_tdp_write_nofault(struct kvm_vm *vm, uint64_t gpa, const void *buf, uint32_t n)
+{
+    (void)vm;
+    (void)gpa;
+    (void)buf;
+    (void)n;
+    return 1;
+}
+
 /** A frame of the slot is mapped; any other is MMIO. */
 int kvm_tdp_fault(struct kvm_vm *vm, uint64_t gfn, int write)
 {
@@ -601,6 +635,22 @@ void kvm_irq_free(struct kvm_vm *vm)
     (void)vm;
 }
 
+/** No I/O APIC in this model, so no pin has counts. */
+int kvm_ioapic_counts(struct kvm_vm *vm, uint32_t pin, uint32_t *counts)
+{
+    (void)vm;
+    (void)pin;
+    (void)counts;
+    return -1;
+}
+
+/** Legacy I/O is not part of this model. */
+int kvm_irq_io(struct kvm_vcpu *v)
+{
+    (void)v;
+    return 0;
+}
+
 int32_t kvm_iobus_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg)
 {
     (void)vm;
@@ -624,6 +674,18 @@ int32_t kvm_iobus_check_extension(long cap)
 }
 
 void kvm_iobus_free(struct kvm_vm *vm)
+{
+    (void)vm;
+}
+
+int kvm_iobus_has_eventfd(struct kvm_vm *vm, const struct eventfd *ev)
+{
+    (void)vm;
+    (void)ev;
+    return 0;
+}
+
+void kvm_gpamap_vm_end(struct kvm_vm *vm)
 {
     (void)vm;
 }
@@ -780,6 +842,20 @@ uint32_t timer_calibrate(void)
     return 0;
 }
 
+/* The vDSO's clock, which does not run from the TSC here. */
+int vclock_running(void)
+{
+    return 0;
+}
+
+int vclock_read_cycles(int real, uint64_t *ns, uint64_t *cycles)
+{
+    (void)real;
+    (void)ns;
+    (void)cycles;
+    return 0;
+}
+
 void arch_relax(void)
 {}
 
@@ -806,6 +882,12 @@ const struct kvm_backend kvm_svm = {"svm", svm_probe, NULL, NULL, NULL, NULL,   
 #define ERR_READONLY           13
 #define ERR_VMXON_IN_VMX       15
 
+/* The exceptions that always exit with EPT, as Linux's
+ * vmx_update_exception_bitmap has them: #DB (1), #UD (6), #AC (17) and
+ * #MC (18), written out here so that a change to vmx.c's EXC_ALWAYS fails a
+ * row. */
+#define EXC_LINUX 0x00060042u
+
 #define EXIT_RIP_MODEL 0xFFFFFFFF80123450ull
 #define HOST_CR4_MODEL 0x000406F0ull
 
@@ -827,6 +909,9 @@ struct row {
     uint32_t cs_ar; /* CS's access rights at the exit, when a far jump changed them */
 };
 
+/* The VMCSes the model knows, one for each vCPU any row has run. */
+#define MVMCS_MAX 16
+
 static struct {
     /* The capability MSRs and IA32_FEATURE_CONTROL. */
     uint64_t basic, pin, proc, exit, entry, misc, proc2, ept_vpid;
@@ -837,9 +922,10 @@ static struct {
     uint64_t cr4;
     uint64_t vmxon_pa;
     struct mvmcs *cur;
-    struct mvmcs vmcs[4];
+    struct mvmcs vmcs[MVMCS_MAX]; /* every VMCS the rows used, never forgotten */
     int nvmcs;
     uint64_t dr[8];
+    int dr6_writes;
     /* The counts of each instruction, and its failures. */
     int vmxons, vmxoffs, vmclears, vmptrlds, launches, resumes, invepts, invvpids;
     int ud, gp, bad_writes, bad_reads;
@@ -867,7 +953,7 @@ static struct mvmcs *mvmcs_of(uint64_t pa)
             return &m.vmcs[i];
         }
     }
-    if (m.nvmcs == 4) {
+    if (m.nvmcs == MVMCS_MAX) {
         return NULL;
     }
     k_memset(&m.vmcs[m.nvmcs], 0, sizeof(m.vmcs[0]));
@@ -882,7 +968,8 @@ static int in(uint32_t f, uint32_t lo, uint32_t hi, int even)
     return f >= lo && f <= hi && (!even || !(f & 1u));
 }
 
-/** Whether `field` is a field of the Haswell's VMCS. */
+/** Whether `field` is a field of the Haswell's VMCS, or the TSC
+ * multiplier on a model whose controls have TSC scaling. */
 static int field_known(uint64_t field)
 {
     static const uint32_t ranges[][3] = {
@@ -894,6 +981,9 @@ static int field_known(uint64_t field)
 
     if (field >> 32) {
         return 0;
+    }
+    if (field == TSC_MULTIPLIER) {
+        return ((m.proc2 >> 32) & PROC2_TSC_SCALING) != 0;
     }
     for (i = 0; i < sizeof(ranges) / sizeof(ranges[0]); i++) {
         if (in((uint32_t)field, ranges[i][0], ranges[i][1], (int)ranges[i][2])) {
@@ -1172,6 +1262,20 @@ static int pat_ok(uint64_t pat)
     return 1;
 }
 
+/** The limit `limit` of a segment with the access rights `ar` agrees with
+ * its granularity, as the SDM's 26.3.1.2 asks of a usable segment, and of
+ * TR, which `always` names: G clear when a bit of the limit's low 12 is
+ * clear, G set when a bit of its high 12 is set. */
+static int seg_limit_ok(uint64_t limit, uint64_t ar, int always)
+{
+    int g = (ar & 0x8000u) != 0;
+
+    if ((ar & 0x10000u) && !always) {
+        return 1;
+    }
+    return !((limit & 0xFFFu) != 0xFFFu && g) && !((limit & 0xFFF00000u) && !g);
+}
+
 /** The checks of the guest's segments in the state `f` (SDM 26.3.1.2). */
 static int check_segments(const uint64_t *f)
 {
@@ -1191,6 +1295,12 @@ static int check_segments(const uint64_t *f)
     for (n = SEG_ES; n <= SEG_GS; n++) {
         if (!seg_accessed(f[GUEST_ES_AR_BYTES + 2u * (uint32_t)n])) {
             return fail("a usable segment not accessed");
+        }
+    }
+    for (n = SEG_ES; n <= SEG_TR; n++) {
+        if (!seg_limit_ok(f[GUEST_ES_LIMIT + 2u * (uint32_t)n],
+                          f[GUEST_ES_AR_BYTES + 2u * (uint32_t)n], n == SEG_TR)) {
+            return fail("a segment's limit against its granularity");
         }
     }
     if ((tr & 0x10000u) || ((tr & 15u) != 3u && (tr & 15u) != 11u) || (tr & 0x10u) ||
@@ -1470,6 +1580,9 @@ static uint64_t m_read_dr(int n)
 static void m_write_dr(int n, uint64_t value)
 {
     m.dr[n & 7] = value;
+    if ((n & 7) == 6) {
+        m.dr6_writes++;
+    }
 }
 
 /** The host's state before an entry: an IDT and an FS base. */
@@ -1799,7 +1912,7 @@ static void io_rows(int fd)
               rp->u.io.port == 0x3F8 && rp->u.io.size == 1 && rp->u.io.count == 1 &&
               v->pio[0] == 'A',
           "OUT DX, AL goes to the caller with its byte");
-    CHECK(regs_of(fd).rip == 0x1001, "and is stepped");
+    CHECK(regs_of(fd).rip == 0x1000, "with RIP at it until the next KVM_RUN, as on Linux");
     script(EXIT_IO, 8u | (0x60ull << 16), 1);
     CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO && rp->u.io.direction == KVM_EXIT_IO_IN &&
               rp->u.io.port == 0x60,
@@ -1825,6 +1938,172 @@ static void io_rows(int fd)
           "and counts CX and SI off, stepped past");
 }
 
+/* RFLAGS.RF, the resume flag. */
+#define F_RF 0x10000u
+
+/** REP OUTSB cut at a page: RF set while it repeats and cleared once it
+ * ends, as Linux's x86_emulate_insn leaves it. */
+static void outs_rf_rows(int fd)
+{
+    struct kvm_vcpu *v = vcpu_of(fd);
+    struct kvm_run *rp = run_of(fd);
+    struct kvm_regs r;
+    struct row *w;
+
+    set_regs(fd, 0x1000, 0, 3, 0);
+    r = regs_of(fd);
+    r.rsi = 0x2FFE;
+    r.rflags &= ~(uint64_t)F_RF;
+    CHECK(fdio(fd, KVM_SET_REGS, (uintptr_t)&r) == 0,
+          "KVM_SET_REGS with SI two bytes short of a page");
+    ram[0x2FFE] = 'p';
+    ram[0x2FFF] = 'q';
+    ram[0x3000] = 'r';
+    w = script(EXIT_IO, 0x30u | (0x3F8ull << 16), 2);
+    w->insn_info = 3u << 15;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO && rp->u.io.count == 2 &&
+              v->pio[0] == 'p' && v->pio[1] == 'q',
+          "REP OUTSB stops at the page's end");
+    r = regs_of(fd);
+    CHECK(r.rcx == 1 && r.rsi == 0x3000 && r.rip == 0x1000 && (r.rflags & F_RF),
+          "and repeats with RF set");
+    w = script(EXIT_IO, 0x30u | (0x3F8ull << 16), 2);
+    w->insn_info = 3u << 15;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO && rp->u.io.count == 1 && v->pio[0] == 'r',
+          "the guest's next pass moves the last byte");
+    r = regs_of(fd);
+    CHECK(r.rcx == 0 && r.rsi == 0x3001 && r.rip == 0x1002 && !(r.rflags & F_RF),
+          "and ends the instruction with RF clear");
+}
+
+/** REP INSB cut at a page, whose elements are written at the next
+ * KVM_RUN: RF set while it repeats and cleared once it ends. */
+static void ins_rf_rows(int fd)
+{
+    struct kvm_vcpu *v = vcpu_of(fd);
+    struct kvm_run *rp = run_of(fd);
+    struct kvm_regs r;
+
+    set_regs(fd, 0x1000, 0, 2, 0);
+    r = regs_of(fd);
+    r.rdi = 0x2FFF;
+    CHECK(fdio(fd, KVM_SET_REGS, (uintptr_t)&r) == 0,
+          "KVM_SET_REGS with DI a byte short of a page");
+    script(EXIT_IO, 0x38u | (0x60ull << 16), 2);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO && rp->u.io.direction == KVM_EXIT_IO_IN &&
+              rp->u.io.count == 1,
+          "REP INSB stops at the page's end");
+    v->pio[0] = 'i';
+    script(EXIT_IO, 0x38u | (0x60ull << 16), 2);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO && rp->u.io.count == 1,
+          "the answer is stored at the next KVM_RUN, and the guest's next pass reads again");
+    r = regs_of(fd);
+    CHECK(ram[0x2FFF] == 'i' && r.rcx == 1 && r.rdi == 0x3000 && r.rip == 0x1000 &&
+              (r.rflags & F_RF),
+          "with the first element stored and RF set while it repeats");
+    v->pio[0] = 'j';
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_HLT, "the last answer ends it");
+    r = regs_of(fd);
+    CHECK(ram[0x3000] == 'j' && r.rcx == 0 && r.rdi == 0x3001 && r.rip == 0x1003 &&
+              !(r.rflags & F_RF),
+          "with RF clear and RIP past it");
+}
+
+/** A REP OUTSB at offset 0 with a 64-bit address size, which the model's
+ * exit may give in any mode: no wrap is near, so it moves whole. */
+static void outs_wrap_rows(int fd)
+{
+    struct kvm_vcpu *v = vcpu_of(fd);
+    struct kvm_run *rp = run_of(fd);
+    struct kvm_regs r;
+    struct row *w;
+
+    set_regs(fd, 0x1000, 0, 3, 0);
+    r = regs_of(fd);
+    r.rsi = 0;
+    CHECK(fdio(fd, KVM_SET_REGS, (uintptr_t)&r) == 0, "KVM_SET_REGS with SI 0");
+    ram[0] = 'a';
+    ram[1] = 'b';
+    ram[2] = 'c';
+    w = script(EXIT_IO, 0x30u | (0x3F8ull << 16), 2);
+    w->insn_info = (2u << 7) | (3u << 15);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO && rp->u.io.count == 3 &&
+              v->pio[0] == 'a' && v->pio[2] == 'c',
+          "REP OUTSB at offset 0 with a 64-bit address size moves every byte at once");
+    r = regs_of(fd);
+    CHECK(r.rcx == 0 && r.rsi == 3 && r.rip == 0x1002, "and counts RCX and RSI off, stepped past");
+}
+
+/** Set RCX and RDI of the vCPU on `fd`, as a caller does between an exit
+ * and the next KVM_RUN. */
+static void set_cx_di(int fd, uint64_t rcx, uint64_t rdi)
+{
+    struct kvm_regs r = regs_of(fd);
+
+    r.rcx = rcx;
+    r.rdi = rdi;
+    CHECK(fdio(fd, KVM_SET_REGS, (uintptr_t)&r) == 0, "KVM_SET_REGS of RCX and RDI");
+}
+
+/** REP INSB whose count the caller changes between the exit and the next
+ * KVM_RUN, as Linux's userspace_io_test does: the elements stored are
+ * those RCX now allows, at most the exit's, so RCX ends at 0 and not past
+ * it, and the guest's buffer is not overrun. */
+static void ins_count_rows(int fd)
+{
+    struct kvm_vcpu *v = vcpu_of(fd);
+    struct kvm_run *rp = run_of(fd);
+    struct kvm_regs r;
+
+    k_memset(&ram[0x2000], 0, 8);
+    set_regs(fd, 0x1000, 0, 2, 0);
+    set_cx_di(fd, 2, 0x2000);
+    script(EXIT_IO, 0x38u | (0x80ull << 16), 2);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO && rp->u.io.count == 2,
+          "REP INSB of two bytes asks the caller for both");
+    set_cx_di(fd, 1, 0x2000);
+    k_memcpy(v->pio, "xy", 2);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_HLT, "the caller's RCX of 1 ends it");
+    r = regs_of(fd);
+    CHECK(ram[0x2000] == 'x' && ram[0x2001] == 0 && r.rcx == 0 && r.rdi == 0x2001 &&
+              r.rip == 0x1003 && !(r.rflags & F_RF),
+          "with the one byte RCX allows stored and RCX at 0, as Linux leaves them");
+
+    set_regs(fd, 0x1000, 0, 3, 0);
+    set_cx_di(fd, 3, 0x2000);
+    script(EXIT_IO, 0x38u | (0x80ull << 16), 2);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO && rp->u.io.count == 3,
+          "REP INSB of three bytes asks for three");
+    set_cx_di(fd, 5, 0x2000);
+    k_memcpy(v->pio, "abc", 3);
+    script(EXIT_IO, 0x38u | (0x80ull << 16), 2);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO && rp->u.io.count == 2,
+          "a caller's RCX of 5 stores the three answered and asks for the other two");
+    r = regs_of(fd);
+    CHECK(memcmp(&ram[0x2000], "abc", 3) == 0 && ram[0x2003] == 0 && r.rcx == 2 &&
+              r.rdi == 0x2003 && r.rip == 0x1000 && (r.rflags & F_RF),
+          "with RCX and RDI counted by three");
+    set_cx_di(fd, 0, 0x2003);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_HLT, "the caller's RCX of 0 ends it");
+    r = regs_of(fd);
+    CHECK(ram[0x2003] == 0 && r.rcx == 0 && r.rdi == 0x2003 && r.rip == 0x1003 &&
+              !(r.rflags & F_RF),
+          "with nothing stored, as Linux's first termination condition ends it");
+}
+
+/** The string I/O instructions cut at a page, one near no wrap, and a
+ * count the caller changes. */
+static void io_string_rows(int fd)
+{
+    outs_rf_rows(fd);
+    ins_rf_rows(fd);
+    outs_wrap_rows(fd);
+    ins_count_rows(fd);
+}
+
 /** Write the instruction `bytes` of `n` bytes at `rip` and point RIP at
  * it with RAX `rax`. */
 static void code(int fd, uint64_t rip, const char *bytes, uint32_t n, uint64_t rax)
@@ -1833,12 +2112,91 @@ static void code(int fd, uint64_t rip, const char *bytes, uint32_t n, uint64_t r
     set_regs(fd, rip, rax, 0, 0);
 }
 
+/** Set DS's base on the vCPU on `fd`, and BX. */
+static void set_ds_bx(int fd, uint64_t base, uint64_t bx)
+{
+    struct kvm_sregs s = sregs_of(fd);
+    struct kvm_regs r = regs_of(fd);
+
+    s.ds.base = base;
+    CHECK(fdio(fd, KVM_SET_SREGS, (uintptr_t)&s) == 0, "KVM_SET_SREGS with DS's base");
+    r.rbx = bx;
+    CHECK(fdio(fd, KVM_SET_REGS, (uintptr_t)&r) == 0, "KVM_SET_REGS with BX");
+}
+
+/** An EPT fault at an instruction the decoder refuses, at CPL 0. */
+static void refused_rows(int fd)
+{
+    struct kvm_run *rp = run_of(fd);
+    struct kvm_vcpu *v = vcpu_of(fd);
+    struct row *w;
+
+    code(fd, 0x1400, "\x0f\x0b", 2, 0);
+    w = script(EXIT_EPT_VIOLATION, 0x1, 0);
+    w->gpa = 0xD0000030ull;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_INTERNAL_ERROR &&
+              rp->u.internal.suberror == KVM_INTERNAL_ERROR_EMULATION,
+          "an instruction the decoder refuses at CPL 0 is Linux's emulation failure");
+    CHECK(v->events.exception.pending && v->events.exception.nr == UD_VECTOR,
+          "with #UD queued for the guest, as Linux queues it");
+    v->events.exception.pending = 0;
+
+    code(fd, 0x1400, "\x0f\x0b", 2, 0);
+    w = script(EXIT_EPT_VIOLATION, 0x1, 0);
+    w->gpa = 0xD0000030ull;
+    w->intr_info = 0x800u;
+    w->intr_error = 0x1234;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_INTERNAL_ERROR && rp->u.internal.ndata == 8 &&
+              rp->u.internal.data[6] == 0x800u && rp->u.internal.data[7] == 0,
+          "the report gives no error code for interruption information with its error bit alone");
+    v->events.exception.pending = 0;
+    code(fd, 0x1400, "\x0f\x0b", 2, 0);
+    w = script(EXIT_EPT_VIOLATION, 0x1, 0);
+    w->gpa = 0xD0000030ull;
+    w->intr_info = 0x80000B0Eu;
+    w->intr_error = 0x1234;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_INTERNAL_ERROR &&
+              rp->u.internal.data[6] == 0x80000B0Eu && rp->u.internal.data[7] == 0x1234,
+          "and gives it with the valid bit too, as Linux's vmx_get_exit_info");
+    v->events.exception.pending = 0;
+}
+
+/** An MMIO read, MOV AX, [BX], at an exit address unlike its operand's,
+ * answered once under immediate_exit. */
+static void read_rows(int fd)
+{
+    struct kvm_run *rp = run_of(fd);
+    struct row *w;
+    int launches;
+
+    code(fd, 0x1100, "\x8b\x07", 2, 0);
+    set_ds_bx(fd, 0xD0000000ull, 0);
+    w = script(EXIT_EPT_VIOLATION, 0x1, 0);
+    w->gpa = 0xD0000FF8ull;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_MMIO &&
+              rp->u.mmio.phys_addr == 0xD0000000ull && rp->u.mmio.len == 2 && !rp->u.mmio.is_write,
+          "MOV AX, [BX] on MMIO is a read of two bytes for the caller, at the operand's address "
+          "and not the exit's");
+    rp->u.mmio.data[0] = 0xEF;
+    rp->u.mmio.data[1] = 0xBE;
+    rp->immediate_exit = 1;
+    launches = m.launches + m.resumes;
+    CHECK(run(fd) == -EINTR && (regs_of(fd).rax & 0xFFFF) == 0xBEEF && regs_of(fd).rip == 0x1102 &&
+              m.launches + m.resumes == launches,
+          "its answer reaches AX and the instruction is stepped before KVM_RUN returns under "
+          "immediate_exit, with no guest entered");
+    rp->immediate_exit = 0;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && (regs_of(fd).rax & 0xFFFF) == 0xBEEF && regs_of(fd).rip == 0x1103,
+          "and the guest runs on after it");
+}
+
 /** EPT faults: a RAM frame mapped in the kernel; MMIO reads, writes and a
- * read-modify-write carried out with the caller; an instruction the
- * decoder refuses. */
+ * read-modify-write carried out with the caller, at the address the
+ * instruction's operand names, DS:BX with DS's base on the device's
+ * frame; an instruction the decoder refuses. */
 static void ept_rows(int fd)
 {
-    struct kvm_vcpu *v = vcpu_of(fd);
     struct kvm_run *rp = run_of(fd);
     struct row *w;
     int launches;
@@ -1849,29 +2207,23 @@ static void ept_rows(int fd)
     CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_HLT && tdp_fault_gfn == 3 && tdp_fault_write,
           "a write to a RAM frame is mapped in the kernel and the guest runs on");
 
-    code(fd, 0x1100, "\x8b\x07", 2, 0);
-    w = script(EXIT_EPT_VIOLATION, 0x1, 0);
-    w->gpa = 0xD0000000ull;
-    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_MMIO &&
-              rp->u.mmio.phys_addr == 0xD0000000ull && rp->u.mmio.len == 2 && !rp->u.mmio.is_write,
-          "MOV AX, [BX] on MMIO is a read of two bytes for the caller");
-    rp->u.mmio.data[0] = 0xEF;
-    rp->u.mmio.data[1] = 0xBE;
-    script(EXIT_HLT, 0, 1);
-    CHECK(run(fd) == 0 && (regs_of(fd).rax & 0xFFFF) == 0xBEEF && regs_of(fd).rip == 0x1103,
-          "its answer reaches AX and the instruction is stepped");
+    read_rows(fd);
 
     code(fd, 0x1200, "\x88\x07", 2, 0x77);
+    set_ds_bx(fd, 0xD0000000ull, 0x10);
     w = script(EXIT_EPT_VIOLATION, 0x2, 0);
     w->gpa = 0xD0000010ull;
     CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_MMIO && rp->u.mmio.is_write &&
-              rp->u.mmio.len == 1 && rp->u.mmio.data[0] == 0x77 && regs_of(fd).rip == 0x1202,
+              rp->u.mmio.phys_addr == 0xD0000010ull && rp->u.mmio.len == 1 &&
+              rp->u.mmio.data[0] == 0x77 && regs_of(fd).rip == 0x1202,
           "MOV [BX], AL on MMIO is a write of AL, stepped");
 
     code(fd, 0x1300, "\x00\x07", 2, 3);
+    set_ds_bx(fd, 0xD0000000ull, 0x20);
     w = script(EXIT_EPT_VIOLATION, 0x3, 0);
     w->gpa = 0xD0000020ull;
-    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_MMIO && !rp->u.mmio.is_write,
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_MMIO && !rp->u.mmio.is_write &&
+              rp->u.mmio.phys_addr == 0xD0000020ull,
           "ADD [BX], AL reads its operand first");
     rp->u.mmio.data[0] = 5;
     launches = m.launches;
@@ -1879,14 +2231,8 @@ static void ept_rows(int fd)
               rp->u.mmio.data[0] == 8 && regs_of(fd).rip == 0x1302,
           "then writes the sum at the next KVM_RUN");
     CHECK(m.launches == launches, "with no guest entered between the read and the write");
-
-    code(fd, 0x1400, "\x0f\x0b", 2, 0);
-    w = script(EXIT_EPT_VIOLATION, 0x1, 0);
-    w->gpa = 0xD0000030ull;
-    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_INTERNAL_ERROR &&
-              rp->u.internal.suberror == KVM_INTERNAL_ERROR_EMULATION,
-          "an instruction the decoder refuses at CPL 0 is Linux's emulation failure");
-    (void)v;
+    set_ds_bx(fd, 0, 0);
+    refused_rows(fd);
 }
 
 /** The instruction at `rip` that exits as the script says; HLT after. */
@@ -1944,6 +2290,37 @@ static void cr_rows(int fd)
           "and the next entry delivers #GP(0)");
 }
 
+/** The MSRs of particular processors that Linux's KVM reads as zero or
+ * whose writes it drops; `gpe` is the #GP that any other access injects. */
+static void msr_family_rows(int fd, uint32_t gpe)
+{
+    set_regs(fd, 0x1000, 0x55, 0xC0010010u, 0x66);
+    CHECK(exits(fd, EXIT_MSR_READ, 0, 2) == 0 && m.injected == 0 && regs_of(fd).rax == 0 &&
+              regs_of(fd).rdx == 0 && regs_of(fd).rip == 0x1003,
+          "RDMSR of AMD's SYSCFG reads zero, as Linux's KVM reads it");
+    set_regs(fd, 0x1000, 0, 0xC001001Fu, 0x4000);
+    CHECK(exits(fd, EXIT_MSR_WRITE, 0, 2) == 0 && m.injected == 0 && regs_of(fd).rip == 0x1003,
+          "WRMSR of AMD's NB_CFG is taken and dropped");
+    set_regs(fd, 0x1000, 0, 0xC001001Fu, 0);
+    CHECK(exits(fd, EXIT_MSR_READ, 0, 2) == 0 && m.injected == 0 && regs_of(fd).rax == 0 &&
+              regs_of(fd).rdx == 0,
+          "and NB_CFG still reads zero");
+    set_regs(fd, 0x1000, 1, 0xC0010010u, 0);
+    CHECK(exits(fd, EXIT_MSR_WRITE, 0, 2) == 0 && m.injected == gpe && regs_of(fd).rip == 0x1001,
+          "WRMSR of SYSCFG, which Linux does not drop, is #GP");
+    set_regs(fd, 0x1000, 0, 0xC0010058u, 0);
+    CHECK(exits(fd, EXIT_MSR_WRITE, 0, 2) == 0 && m.injected == 0 && regs_of(fd).rip == 0x1003,
+          "WRMSR of zero to the MMIO configuration base is dropped");
+    set_regs(fd, 0x1000, 1, 0xC0010058u, 0);
+    CHECK(exits(fd, EXIT_MSR_WRITE, 0, 2) == 0 && m.injected == gpe, "and of another value is #GP");
+    set_regs(fd, 0x1000, 0x55, 0x17, 0x66);
+    CHECK(exits(fd, EXIT_MSR_READ, 0, 2) == 0 && m.injected == 0 && regs_of(fd).rax == 0,
+          "RDMSR of the platform id reads zero");
+    set_regs(fd, 0x1000, 1, 0x17, 0);
+    CHECK(exits(fd, EXIT_MSR_WRITE, 0, 2) == 0 && m.injected == gpe,
+          "WRMSR of the platform id is #GP");
+}
+
 /** The debug registers, MSRs, XSETBV, VMCALL and the instructions the
  * kernel answers alone. */
 static void insn_rows(int fd)
@@ -1964,6 +2341,7 @@ static void insn_rows(int fd)
     set_regs(fd, 0x1000, 0, 0x12345678u, 0);
     CHECK(exits(fd, EXIT_MSR_READ, 0, 2) == 0 && m.injected == gpe && regs_of(fd).rip == 0x1001,
           "RDMSR of an MSR nobody knows is #GP");
+    msr_family_rows(fd, gpe);
     set_regs(fd, 0x1000, 1, 0x6E0, 0);
     CHECK(exits(fd, EXIT_MSR_WRITE, 0, 2) == 0 && m.injected == 0 && regs_of(fd).rip == 0x1003,
           "WRMSR of the TSC deadline goes to the local APIC's MSRs");
@@ -2096,8 +2474,39 @@ static void guest_debug(int fd, uint32_t control, uint64_t dr0, uint64_t dr7)
     CHECK(fdio(fd, KVM_SET_GUEST_DEBUG, (uintptr_t)&d) == 0, "KVM_SET_GUEST_DEBUG");
 }
 
+/** The caller's single step over STI, which exits in the STI shadow, and
+ * the next step, which must enter under TF with the shadow ended, as
+ * Linux's vmx_vcpu_run ends it; the registers back after. */
+static void sti_step_rows(int fd)
+{
+    struct kvm_run *rp = run_of(fd);
+    struct kvm_regs r, saved;
+    struct row *w;
+
+    saved = regs_of(fd);
+    r = saved;
+    r.rflags |= RFLAGS_IF;
+    CHECK(fdio(fd, KVM_SET_REGS, (uintptr_t)&r) == 0, "KVM_SET_REGS with IF");
+    w = script(EXIT_EXCEPTION_NMI, 0x4000, 0);
+    w->intr_info = DB_VECTOR | (TYPE_HW_EXC << 8) | INTR_VALID;
+    w->rip = 0x1004;
+    w->intr_state = INTR_STI;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_DEBUG && rp->u.debug.pc == 0x1004,
+          "a single step over STI exits in the STI shadow");
+    guest_debug(fd, KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_SINGLESTEP | KVM_GUESTDBG_BLOCKIRQ, 0, 0);
+    w = script(EXIT_EXCEPTION_NMI, 0x4000, 0);
+    w->intr_info = DB_VECTOR | (TYPE_HW_EXC << 8) | INTR_VALID;
+    w->rip = 0x1006;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_DEBUG && rp->u.debug.pc == 0x1006 &&
+              (m.entry_rflags & RFLAGS_TF) && !(m.entry_intr & (INTR_STI | INTR_MOV_SS)),
+          "and the next step enters under TF with the shadow ended, as Linux's vmx_vcpu_run "
+          "ends it, which the entry's check without a pending single step asks for");
+    CHECK(fdio(fd, KVM_SET_REGS, (uintptr_t)&saved) == 0, "KVM_SET_REGS back");
+}
+
 /** The caller's debugging: a single step, one over an instruction the
- * kernel runs, software and hardware breakpoints, interrupts held, and
+ * kernel runs, steps over STI and on out of its shadow, software and
+ * hardware breakpoints, interrupts held, and
  * the guest's own state back after. */
 static void debug_rows(int fd)
 {
@@ -2120,13 +2529,14 @@ static void debug_rows(int fd)
     CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_DEBUG && rp->u.debug.pc == 0x1003,
           "an instruction the kernel runs is a step too");
 
+    sti_step_rows(fd);
+
     guest_debug(fd, KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_USE_SW_BP, 0, 0);
     w = script(EXIT_EXCEPTION_NMI, 0, 1);
     w->intr_info = BP_VECTOR | (TYPE_SOFT_EXC << 8) | INTR_VALID;
     CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_DEBUG && rp->u.debug.exception == BP_VECTOR &&
-              rp->u.debug.pc == 0x1003 && (f[EXCEPTION_BITMAP] & (1u << BP_VECTOR)) &&
-              !(f[EXCEPTION_BITMAP] & (1u << DB_VECTOR)),
-          "INT3 under software breakpoints is KVM_EXIT_DEBUG at the INT3");
+              rp->u.debug.pc == 0x1003 && f[EXCEPTION_BITMAP] == (EXC_LINUX | (1u << BP_VECTOR)),
+          "INT3 under software breakpoints is KVM_EXIT_DEBUG at the INT3, the only time #BP exits");
 
     guest_debug(fd, KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_USE_HW_BP, 0x1234, 0x1);
     w = script(EXIT_EXCEPTION_NMI, 0x1, 0);
@@ -2144,8 +2554,8 @@ static void debug_rows(int fd)
     script(EXIT_HLT, 0, 1);
     CHECK(run(fd) == 0 && m.injected == (NMI_VECTOR | (TYPE_NMI << 8) | INTR_VALID),
           "and it is injected once debugging ends");
-    CHECK(f[EXCEPTION_BITMAP] == (1u << MC_VECTOR) && f[GUEST_DR7] == vcpu_of(fd)->debugregs.dr7,
-          "with the bitmap and DR7 the guest's again");
+    CHECK(f[EXCEPTION_BITMAP] == EXC_LINUX && f[GUEST_DR7] == vcpu_of(fd)->debugregs.dr7,
+          "with the bitmap of #DB, #UD, #AC and #MC alone and DR7 the guest's again");
 }
 
 /** The host's interrupt, NMI and machine check, the preemption timer, a
@@ -2600,8 +3010,707 @@ static void ts_fault_rows(int fd)
           "is #NP(selector) in the new task");
 }
 
+/** Put the vCPU on `fd` back in the first task, in 32-bit protected mode
+ * without paging, at the instruction `bytes` of `n` bytes, with EAX, EBX
+ * and ECX as given, ESI at the device's frame and EDI at RAM. */
+static void emul_start(int fd, const char *bytes, uint32_t n, uint64_t rax, uint64_t rbx,
+                       uint64_t rcx)
+{
+    struct kvm_regs r;
+
+    ts_start(fd);
+    k_memcpy(&ram[0x1000], bytes, n);
+    r = regs_of(fd);
+    r.rax = rax;
+    r.rbx = rbx;
+    r.rcx = rcx;
+    r.rsi = 0xD0000100ull;
+    r.rdi = 0x6000;
+    CHECK(fdio(fd, KVM_SET_REGS, (uintptr_t)&r) == 0, "KVM_SET_REGS at the instruction");
+}
+
+/** A run of the vCPU on `fd` that ends in an EPT violation at `gpa`,
+ * which the caller's MMIO read of `len` bytes at `gpa` must follow. */
+static int mmio_read(int fd, uint64_t gpa, uint32_t len)
+{
+    struct kvm_run *rp = run_of(fd);
+    struct row *w = script(EXIT_EPT_VIOLATION, 0x1, 0);
+
+    w->gpa = gpa;
+    return run(fd) == 0 && rp->exit_reason == KVM_EXIT_MMIO && !rp->u.mmio.is_write &&
+           rp->u.mmio.phys_addr == gpa && rp->u.mmio.len == len;
+}
+
+/* The flags the table's rows name. */
+#define F_CF 0x001u
+#define F_ZF 0x040u
+#define F_SF 0x080u
+#define F_OF 0x800u
+
+/*
+ * One instruction of the table: its bytes, with [EBX] its memory operand
+ * on the device's frame; the flags and EAX, ECX and EDX it starts with;
+ * the bytes it reads there and the device's answer; the bytes it writes
+ * and their value; and what it leaves: the three registers, the flags
+ * under a mask, and EIP when it is not the next instruction's.
+ */
+struct erow {
+    const char *name, *bytes;
+    uint32_t n, fl;
+    uint64_t rax, rcx, rdx;
+    uint32_t rlen;
+    uint64_t rval;
+    uint32_t wlen;
+    uint64_t wval;
+    uint64_t o_rax, o_rcx, o_rdx;
+    uint32_t fmask, fval;
+    uint64_t rip;
+};
+
+static const struct erow erows[] = {
+    {"MUL", "\xf7\x23", 2, 0, 0x10000, 0, 0x55, 4, 0x10000, 0, 0, 0, 0, 1, F_CF | F_OF, F_CF | F_OF,
+     0},
+    {"IMUL r/m", "\xf7\x2b", 2, 0, 0xFFFFFFFFu, 0, 0x55, 4, 5, 0, 0, 0xFFFFFFFBu, 0, 0xFFFFFFFFu,
+     F_CF | F_OF, 0, 0},
+    {"DIV", "\xf7\x33", 2, 0, 100, 0, 0, 4, 7, 0, 0, 14, 0, 2, 0, 0, 0},
+    {"IDIV", "\xf7\x3b", 2, 0, 0xFFFFFF9Cu, 0, 0xFFFFFFFFu, 4, 7, 0, 0, 0xFFFFFFF2u, 0, 0xFFFFFFFEu,
+     0, 0, 0},
+    {"IMUL r, r/m", "\x0f\xaf\x03", 3, 0, 6, 0, 0, 4, 7, 0, 0, 42, 0, 0, F_CF | F_OF, 0, 0},
+    {"IMUL r, r/m, imm8", "\x6b\x03\x03", 3, 0, 0, 0, 0, 4, 0x40000000u, 0, 0, 0xC0000000u, 0, 0,
+     F_CF | F_OF, F_CF | F_OF, 0},
+    {"SHL r/m, CL", "\xd3\x23", 2, 0, 0, 4, 0, 4, 1, 4, 0x10, 0, 4, 0, F_CF | F_ZF | F_SF, 0, 0},
+    {"SAR r/m, imm8", "\xc1\x3b\x01", 3, 0, 0, 0, 0, 4, 0x80000001u, 4, 0xC0000000u, 0, 0, 0,
+     F_CF | F_ZF | F_SF, F_CF | F_SF, 0},
+    {"ROL r/m8, 1", "\xd0\x03", 2, 0, 0, 0, 0, 1, 0x81, 1, 0x03, 0, 0, 0, F_CF | F_OF, F_CF | F_OF,
+     0},
+    {"RCR r/m, 1", "\xd1\x1b", 2, F_CF, 0, 0, 0, 4, 2, 4, 0x80000001u, 0, 0, 0, F_CF | F_OF, F_OF,
+     0},
+    {"CMPXCHG, equal", "\x0f\xb1\x0b", 3, 0, 5, 9, 0, 4, 5, 4, 9, 5, 9, 0, F_CF | F_ZF, F_ZF, 0},
+    {"CMPXCHG, different", "\x0f\xb1\x0b", 3, 0, 5, 9, 0, 4, 6, 4, 6, 6, 9, 0, F_CF | F_ZF | F_SF,
+     F_CF | F_SF, 0},
+    {"XADD", "\x0f\xc1\x0b", 3, 0, 0, 2, 0, 4, 1, 4, 3, 0, 1, 0, F_CF | F_ZF | F_SF, 0, 0},
+    {"BT r/m, r", "\x0f\xa3\x03", 3, 0, 3, 0, 0, 4, 8, 0, 0, 3, 0, 0, F_CF, F_CF, 0},
+    {"BTR r/m, imm8", "\x0f\xba\x33\x03", 4, 0, 0, 0, 0, 4, 0xF, 4, 7, 0, 0, 0, F_CF, F_CF, 0},
+    {"BSF", "\x0f\xbc\x03", 3, 0, 0, 0, 0, 4, 0x50, 0, 0, 4, 0, 0, F_ZF, 0, 0},
+    {"BSR", "\x0f\xbd\x03", 3, 0, 0, 0, 0, 4, 0x50, 0, 0, 6, 0, 0, F_ZF, 0, 0},
+    {"SHLD r/m, r, CL", "\x0f\xa5\x13", 3, 0, 0, 4, 0x80000000u, 4, 1, 4, 0x18, 0, 4, 0x80000000u,
+     F_CF | F_ZF | F_SF, 0, 0},
+    {"SHRD r/m, r, imm8", "\x0f\xac\x13\x04", 4, 0, 0, 0, 1, 4, 0x10, 4, 0x10000001u, 0, 0, 1,
+     F_CF | F_ZF | F_SF, 0, 0},
+    {"NEG r/m8", "\xf6\x1b", 2, 0, 0, 0, 0, 1, 1, 1, 0xFF, 0, 0, 0, F_CF | F_ZF | F_SF, F_CF | F_SF,
+     0},
+    {"NOT", "\xf7\x13", 2, 0, 0, 0, 0, 4, 0x0F0F0F0Fu, 4, 0xF0F0F0F0u, 0, 0, 0, 0, 0, 0},
+    {"INC r/m16", "\x66\xff\x03", 3, 0, 0, 0, 0, 2, 0xFFFF, 2, 0, 0, 0, 0, F_CF | F_ZF | F_SF, F_ZF,
+     0},
+    {"ADC r/m, r", "\x11\x0b", 2, F_CF, 0, 2, 0, 4, 1, 4, 4, 0, 2, 0, F_CF | F_ZF | F_SF, 0, 0},
+    {"SBB r, r/m", "\x1b\x03", 2, F_CF, 10, 0, 0, 4, 3, 0, 0, 6, 0, 0, F_CF | F_ZF | F_SF, 0, 0},
+    {"XCHG", "\x87\x0b", 2, 0, 0, 0x22222222u, 0, 4, 0x11111111u, 4, 0x22222222u, 0, 0x11111111u, 0,
+     0, 0, 0},
+    {"TEST", "\x85\x0b", 2, 0, 0, 0x0F, 0, 4, 0xF0, 0, 0, 0, 0x0F, 0, F_CF | F_ZF | F_SF, F_ZF, 0},
+    {"CMP r/m, r", "\x39\x0b", 2, 0, 0, 2, 0, 4, 1, 0, 0, 0, 2, 0, F_CF | F_ZF | F_SF, F_CF | F_SF,
+     0},
+    {"OR r/m8, imm8", "\x80\x0b\x0f", 3, 0, 0, 0, 0, 1, 0xF0, 1, 0xFF, 0, 0, 0, F_CF | F_ZF | F_SF,
+     F_SF, 0},
+    {"LOCK ADD", "\xf0\x01\x0b", 3, 0, 0, 1, 0, 4, 0xFFFFFFFFu, 4, 0, 0, 1, 0, F_CF | F_ZF | F_SF,
+     F_CF | F_ZF, 0},
+    {"MOVZX r, r/m8", "\x0f\xb6\x03", 3, 0, 0xFFFFFFFFu, 0, 0, 1, 0x80, 0, 0, 0x80, 0, 0, 0, 0, 0},
+    {"MOVSX r, r/m16", "\x0f\xbf\x03", 3, 0, 0, 0, 0, 2, 0x8000, 0, 0, 0xFFFF8000u, 0, 0, 0, 0, 0},
+    {"MOVBE r, m", "\x0f\x38\xf0\x03", 4, 0, 0, 0, 0, 4, 0x11223344u, 0, 0, 0x44332211u, 0, 0, 0, 0,
+     0},
+    {"MOVBE m, r", "\x0f\x38\xf1\x03", 4, 0, 0x11223344u, 0, 0, 0, 0, 4, 0x44332211u, 0x11223344u,
+     0, 0, 0, 0, 0},
+    {"SETE", "\x0f\x94\x03", 3, F_ZF, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0},
+    {"SETNE", "\x0f\x95\x03", 3, F_ZF, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0},
+    {"CMOVE, taken", "\x0f\x44\x03", 3, F_ZF, 9, 0, 0, 4, 7, 0, 0, 7, 0, 0, 0, 0, 0},
+    {"CMOVNE, not taken", "\x0f\x45\x03", 3, F_ZF, 9, 0, 0, 4, 7, 0, 0, 9, 0, 0, 0, 0, 0},
+    {"CMPXCHG8B", "\x0f\xc7\x0b", 3, 0, 2, 7, 1, 8, 0x0000000100000002ull, 8, 0x00000007D0000200ull,
+     2, 7, 1, F_ZF, F_ZF, 0},
+    {"MOV r/m, imm32", "\xc7\x03\x78\x56\x34\x12", 6, 0, 0, 0, 0, 0, 0, 4, 0x12345678u, 0, 0, 0, 0,
+     0, 0},
+    {"MOV EAX, moffs", "\xa1\x00\x02\x00\xd0", 5, 0, 0, 0, 0, 4, 0xCAFEF00Du, 0, 0, 0xCAFEF00Du, 0,
+     0, 0, 0, 0},
+    {"MOV r/m16, Sreg", "\x8c\x1b", 2, 0, 0, 0, 0, 0, 0, 2, 0x10, 0, 0, 0, 0, 0, 0},
+    {"SMSW", "\x0f\x01\x23", 3, 0, 0, 0, 0, 0, 0, 2, 0x11, 0, 0, 0, 0, 0, 0},
+    {"FNSTCW", "\xd9\x3b", 2, 0, 0, 0, 0, 0, 0, 2, 0x37F, 0, 0, 0, 0, 0, 0},
+    {"JMP r/m", "\xff\x23", 2, 0, 0, 0, 0, 4, 0x5000, 0, 0, 0, 0, 0, 0, 0, 0x5000},
+};
+
+/** Report a failed check of the table's row `e`. */
+static void erow_failed(const struct erow *e, const char *what)
+{
+    printf("kvm-vmx-hosttest: failed: %s on MMIO: %s\n", e->name, what);
+    failures++;
+}
+
+/** Run the row `e` on the vCPU on `fd` up to its last exit to the caller:
+ * its read, answered, and its write. Whether both were as the row says. */
+static int erow_io(int fd, const struct erow *e)
+{
+    struct kvm_run *rp = run_of(fd);
+    uint64_t got = 0;
+    int ok = 1, runs;
+
+    if (e->rlen) {
+        ok = mmio_read(fd, 0xD0000200ull, e->rlen);
+        k_memcpy(rp->u.mmio.data, &e->rval, 8);
+    } else {
+        script(EXIT_EPT_VIOLATION, 0x2, 0)->gpa = 0xD0000200ull;
+    }
+    if (!ok) {
+        erow_failed(e, "its read");
+    }
+    if (!e->wlen) {
+        return ok;
+    }
+    runs = m.launches + m.resumes;
+    if (run(fd) != 0 || rp->exit_reason != KVM_EXIT_MMIO || !rp->u.mmio.is_write ||
+        rp->u.mmio.phys_addr != 0xD0000200ull || rp->u.mmio.len != e->wlen) {
+        erow_failed(e, "its write");
+        return 0;
+    }
+    k_memcpy(&got, rp->u.mmio.data, e->wlen);
+    if (got != e->wval || (e->rlen && m.launches + m.resumes != runs)) {
+        erow_failed(e, "the value written, with no guest entered after the read");
+        return 0;
+    }
+    return ok;
+}
+
+/** Run the row `e` on the vCPU on `fd` and check what it leaves. */
+static void erow_run(int fd, const struct erow *e)
+{
+    struct kvm_regs r;
+
+    emul_start(fd, e->bytes, e->n, e->rax, 0xD0000200ull, e->rcx);
+    r = regs_of(fd);
+    r.rdx = e->rdx;
+    r.rflags = 2u | e->fl;
+    CHECK(fdio(fd, KVM_SET_REGS, (uintptr_t)&r) == 0, "KVM_SET_REGS with EDX and the flags");
+    if (!erow_io(fd, e)) {
+        return;
+    }
+    script(EXIT_HLT, 0, 1);
+    if (run(fd) != 0 || run_of(fd)->exit_reason != KVM_EXIT_HLT) {
+        erow_failed(e, "the guest runs on after it");
+        return;
+    }
+    r = regs_of(fd);
+    if ((uint32_t)r.rax != (uint32_t)e->o_rax || (uint32_t)r.rcx != (uint32_t)e->o_rcx ||
+        (uint32_t)r.rdx != (uint32_t)e->o_rdx) {
+        erow_failed(e, "EAX, ECX and EDX");
+    }
+    if ((r.rflags & e->fmask) != e->fval) {
+        erow_failed(e, "the flags");
+    }
+    if (r.rip != (e->rip ? e->rip : 0x1000u + e->n) + 1u) {
+        erow_failed(e, "EIP");
+    }
+}
+
+/** String instructions on device memory, each element one exit to the
+ * caller: REPE CMPSB and REP MOVSD from the device, REPNE SCASB of it. */
+static void string_rows(int fd)
+{
+    struct kvm_run *rp = run_of(fd);
+    struct kvm_regs r;
+
+    emul_start(fd, "\xf3\xa6", 2, 0, 0, 3);
+    ram[0x6000] = 'A';
+    ram[0x6001] = 'B';
+    CHECK(mmio_read(fd, 0xD0000100ull, 1), "REPE CMPSB with [ESI] on MMIO reads its first byte");
+    rp->u.mmio.data[0] = 'A';
+    CHECK(mmio_read(fd, 0xD0000101ull, 1),
+          "an equal byte leaves the instruction to run again, which reads the next");
+    rp->u.mmio.data[0] = 'X';
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_HLT,
+          "a byte that differs ends it with an element left");
+    r = regs_of(fd);
+    CHECK(r.rip == 0x1003 && r.rcx == 1 && r.rsi == 0xD0000102ull && r.rdi == 0x6002 &&
+              !(r.rflags & (F_ZF | F_CF)),
+          "with ECX, ESI, EDI and the flags of the last compare, and RIP past it");
+
+    emul_start(fd, "\xf3\xa5", 2, 0, 0, 2);
+    CHECK(mmio_read(fd, 0xD0000100ull, 4), "REP MOVSD from MMIO reads its first element");
+    put32(0, 0x11111111u);
+    k_memcpy(rp->u.mmio.data, &ram[0], 4);
+    CHECK(mmio_read(fd, 0xD0000104ull, 4) && get32(0x6000) == 0x11111111u,
+          "stores it and reads the second");
+    put32(0, 0x22222222u);
+    k_memcpy(rp->u.mmio.data, &ram[0], 4);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && get32(0x6004) == 0x22222222u && regs_of(fd).rcx == 0 &&
+              regs_of(fd).rdi == 0x6008 && regs_of(fd).rip == 0x1003,
+          "and ends with ECX 0 and EDI past both");
+
+    emul_start(fd, "\xf2\xae", 2, 'Q', 0, 5);
+    r = regs_of(fd);
+    r.rdi = 0xD0000300ull;
+    CHECK(fdio(fd, KVM_SET_REGS, (uintptr_t)&r) == 0, "KVM_SET_REGS with EDI on MMIO");
+    CHECK(mmio_read(fd, 0xD0000300ull, 1), "REPNE SCASB of MMIO reads its first byte");
+    rp->u.mmio.data[0] = 'x';
+    CHECK(mmio_read(fd, 0xD0000301ull, 1), "and the next after one that differs");
+    rp->u.mmio.data[0] = 'Q';
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && regs_of(fd).rcx == 3 && regs_of(fd).rdi == 0xD0000302ull &&
+              (regs_of(fd).rflags & F_ZF),
+          "the byte that matches ends it with ZF set and ECX counting the two");
+}
+
+/** A bit test past its operand, and the stack with the operand on device
+ * memory. */
+static void stack_rows(int fd)
+{
+    struct kvm_run *rp = run_of(fd);
+    int runs;
+
+    emul_start(fd, "\x0f\xab\x03", 3, 35, 0xD0000200ull, 0);
+    CHECK(mmio_read(fd, 0xD0000204ull, 4),
+          "BTS [EBX], EAX with bit 35 reads the doubleword after the operand's");
+    k_memcpy(rp->u.mmio.data, "\x09\x00\x00\x00", 4);
+    runs = m.launches + m.resumes;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_MMIO && rp->u.mmio.is_write &&
+              rp->u.mmio.phys_addr == 0xD0000204ull && rp->u.mmio.len == 4 &&
+              rp->u.mmio.data[0] == 9 && m.launches + m.resumes == runs,
+          "and writes it back with bit 3 set, no guest entered between");
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && regs_of(fd).rip == 0x1004 && (regs_of(fd).rflags & F_CF),
+          "CF is the bit as it was, set, and RIP is past the instruction");
+
+    emul_start(fd, "\xff\x13", 2, 0, 0xD0000200ull, 0);
+    CHECK(mmio_read(fd, 0xD0000200ull, 4), "CALL [EBX] reads its target on MMIO");
+    put32(0, 0x4000u);
+    k_memcpy(rp->u.mmio.data, &ram[0], 4);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && regs_of(fd).rip == 0x4001 && regs_of(fd).rsp == 0x8FFC &&
+              get32(0x8FFC) == 0x1002u,
+          "and goes there with the return address pushed");
+
+    emul_start(fd, "\xff\x33", 2, 0, 0xD0000200ull, 0);
+    CHECK(mmio_read(fd, 0xD0000200ull, 4), "PUSH [EBX] reads its operand on MMIO");
+    put32(0, 0xAABBCCDDu);
+    k_memcpy(rp->u.mmio.data, &ram[0], 4);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && regs_of(fd).rsp == 0x8FFC && get32(0x8FFC) == 0xAABBCCDDu,
+          "and pushes it");
+    emul_start(fd, "\x8f\x03", 2, 0, 0xD0000200ull, 0);
+    put32(0x9000, 0x55667788u);
+    script(EXIT_EPT_VIOLATION, 0x2, 0)->gpa = 0xD0000200ull;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_MMIO && rp->u.mmio.is_write &&
+              rp->u.mmio.len == 4 && rp->u.mmio.data[0] == 0x88 && rp->u.mmio.data[3] == 0x55 &&
+              regs_of(fd).rsp == 0x9004,
+          "POP [EBX] writes the stack's top to MMIO and releases it");
+}
+
+/** Far pointers and segment loads with their operand on device memory,
+ * and a divide's #DE. */
+static void far_rows(int fd)
+{
+    struct kvm_run *rp = run_of(fd);
+    struct kvm_sregs s;
+
+    emul_start(fd, "\xff\x2b", 2, 0, 0xD0000200ull, 0);
+    CHECK(mmio_read(fd, 0xD0000200ull, 6), "JMP FAR [EBX] reads its six bytes on MMIO");
+    k_memcpy(rp->u.mmio.data, "\x00\x40\x00\x00\x48\x00", 6);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_HLT, "and the guest runs on");
+    s = sregs_of(fd);
+    CHECK(regs_of(fd).rip == 0x4001 && s.cs.selector == 0x48 && s.cs.limit == 0xFFFF && !s.cs.db,
+          "in the 16-bit code segment the pointer names, at its offset");
+
+    ts_tables();
+    emul_start(fd, "\x0f\x00\x1b", 3, 0, 0xD0000200ull, 0);
+    CHECK(mmio_read(fd, 0xD0000200ull, 2), "LTR [EBX] reads its selector on MMIO");
+    k_memcpy(rp->u.mmio.data, "\x20\x00", 2);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && sregs_of(fd).tr.selector == 0x20 && sregs_of(fd).tr.base == TS_TSSB &&
+              ram[TS_GDT + 0x25u] == 0x8B,
+          "loads the task register and marks the TSS busy in the GDT");
+    ts_tables();
+
+    emul_start(fd, "\x0f\xb2\x03", 3, 0, 0xD0000200ull, 0);
+    CHECK(mmio_read(fd, 0xD0000200ull, 6), "LSS EAX, [EBX] reads its six bytes on MMIO");
+    k_memcpy(rp->u.mmio.data, "\x78\x56\x34\x12\x50\x00", 6);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && (uint32_t)regs_of(fd).rax == 0x12345678u &&
+              sregs_of(fd).ss.selector == 0x50 && sregs_of(fd).ss.limit == 0xFFFF,
+          "and loads EAX and SS from them");
+
+    emul_start(fd, "\xf7\x33", 2, 1, 0xD0000200ull, 0);
+    CHECK(mmio_read(fd, 0xD0000200ull, 4), "DIV [EBX] reads its divisor on MMIO");
+    k_memset(rp->u.mmio.data, 0, 4);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && m.injected == ((TYPE_HW_EXC << 8) | INTR_VALID) &&
+              regs_of(fd).rip == 0x1001 && (uint32_t)regs_of(fd).rax == 1,
+          "a divisor of zero is #DE at the instruction, with the registers as they were");
+}
+
+/** Put the vCPU on `fd` in 64-bit mode at CPL 0 at the instruction
+ * `bytes` of `n` bytes, as `emul_start` puts it in protected mode, with
+ * RBX at the device's 0xD0000200, through identity tables at 0x10000 that
+ * map RAM and the device's 2 MiB with large pages. */
+static void long_start(int fd, const char *bytes, uint32_t n)
+{
+    struct kvm_sregs s;
+    uint64_t e;
+
+    emul_start(fd, bytes, n, 0, 0xD0000200ull, 0);
+    k_memset(&ram[0x10000], 0, 0x4000);
+    e = 0x11003;
+    k_memcpy(&ram[0x10000], &e, 8);
+    e = 0x12003;
+    k_memcpy(&ram[0x11000], &e, 8);
+    e = 0x13003;
+    k_memcpy(&ram[0x11000 + 3 * 8], &e, 8);
+    e = 0x83;
+    k_memcpy(&ram[0x12000], &e, 8);
+    e = 0xD0000083ull;
+    k_memcpy(&ram[0x13000 + 128 * 8], &e, 8);
+    s = sregs_of(fd);
+    s.cr0 = 0x80000011u;
+    s.cr3 = 0x10000;
+    s.cr4 = CR4_PAE;
+    s.efer = GEFER_LME | GEFER_LMA;
+    s.cs.l = 1;
+    s.cs.db = 0;
+    CHECK(fdio(fd, KVM_SET_SREGS, (uintptr_t)&s) == 0, "KVM_SET_SREGS to 64-bit mode");
+}
+
+/** MOV SS from the device with the null selector in 64-bit mode at CPL 0
+ * (`long_start`): SS is Linux's flat data segment, which the next entry
+ * takes. */
+static void null_ss_rows(int fd)
+{
+    struct kvm_run *rp = run_of(fd);
+    struct kvm_sregs s;
+
+    long_start(fd, "\x8e\x13\xf4", 3);
+    CHECK(mmio_read(fd, 0xD0000200ull, 2), "MOV SS, [RBX] reads its selector on MMIO");
+    k_memset(rp->u.mmio.data, 0, 2);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_HLT, "and the entry after it passes");
+    s = sregs_of(fd);
+    CHECK(s.ss.selector == 0 && s.ss.present && !s.ss.unusable && s.ss.type == 3 && s.ss.s &&
+              s.ss.dpl == 0 && s.ss.db && s.ss.g && s.ss.limit == 0xFFFu,
+          "SS is a flat data segment of DPL 0 with the limit 0xFFF under G");
+}
+
+/** Instructions Linux's emulator runs on device memory that the first
+ * decoder refused. */
+static void emul_rows(int fd)
+{
+    uint32_t i;
+
+    for (i = 0; i < sizeof(erows) / sizeof(erows[0]); i++) {
+        erow_run(fd, &erows[i]);
+    }
+    string_rows(fd);
+    stack_rows(fd);
+    far_rows(fd);
+    null_ss_rows(fd);
+}
+
+/** The #UD exit `fd`'s next run ends with, then the runs `after` gives
+ * and a HLT: KVM_RUN's result. */
+static int32_t ud_run(int fd, uint32_t after, uint32_t len)
+{
+    struct row *w = script(EXIT_EXCEPTION_NMI, 0, 0);
+
+    w->intr_info = UD_VECTOR | (TYPE_HW_EXC << 8) | INTR_VALID;
+    if (after) {
+        script(after, 0, len);
+    }
+    script(EXIT_HLT, 0, 1);
+    return run(fd);
+}
+
+/** #UD exits: the instructions Linux's emulator runs after one are
+ * carried out, the other vendor's hypercall is rewritten, and any other
+ * instruction's #UD goes back to the guest. */
+static void ud_rows(int fd)
+{
+    struct {
+        struct kvm_msrs h;
+        struct kvm_msr_entry e[3];
+    } msrs;
+    uint32_t ud = UD_VECTOR | (TYPE_HW_EXC << 8) | INTR_VALID;
+    struct kvm_sregs s;
+
+    emul_start(fd, "\x0f\x0b", 2, 0, 0, 0);
+    CHECK(ud_run(fd, 0, 0) == 0 && run_of(fd)->exit_reason == KVM_EXIT_HLT && m.injected == ud &&
+              regs_of(fd).rip == 0x1001,
+          "UD2's #UD goes back to the guest at CPL 0, with no internal error");
+
+    k_memset(&msrs, 0, sizeof(msrs));
+    msrs.h.nmsrs = 3;
+    msrs.e[0].index = MSR_IA32_SYSENTER_CS;
+    msrs.e[0].data = 0x08;
+    msrs.e[1].index = MSR_IA32_SYSENTER_ESP;
+    msrs.e[1].data = 0x8000;
+    msrs.e[2].index = MSR_IA32_SYSENTER_EIP;
+    msrs.e[2].data = 0x4000;
+    CHECK(fdio(fd, KVM_SET_MSRS, (uintptr_t)&msrs) == 3, "the SYSENTER MSRs set");
+    emul_start(fd, "\x0f\x34", 2, 0, 0, 0);
+    CHECK(ud_run(fd, 0, 0) == 0 && run_of(fd)->exit_reason == KVM_EXIT_HLT && m.injected == 0,
+          "SYSENTER that raised #UD is carried out, and the entry's checks pass its segments");
+    s = sregs_of(fd);
+    CHECK(regs_of(fd).rip == 0x4001 && regs_of(fd).rsp == 0x8000 && s.cs.selector == 0x08 &&
+              s.cs.base == 0 && s.cs.limit == 0xFFFFFFFFu && s.cs.db && !s.cs.l &&
+              s.ss.selector == 0x10 && s.ss.dpl == 0,
+          "to the EIP, ESP and flat segments the SYSENTER MSRs name");
+
+    emul_start(fd, "\x0f\x05", 2, 0, 0, 0);
+    s = sregs_of(fd);
+    s.efer = GEFER_SCE;
+    CHECK(fdio(fd, KVM_SET_SREGS, (uintptr_t)&s) == 0, "KVM_SET_SREGS with EFER.SCE");
+    CHECK(ud_run(fd, 0, 0) == 0 && m.injected == ud && regs_of(fd).rip == 0x1001,
+          "SYSCALL outside 64-bit mode is #UD for a guest whose vendor is Intel's, SCE set");
+
+    emul_start(fd, "\xf3\x0f\xc7\xf9", 4, 0, 0, 7);
+    CHECK(ud_run(fd, 0, 0) == 0 && m.injected == ud && regs_of(fd).rcx == 7,
+          "RDPID is #UD for a guest whose CPUID lacks it");
+
+    emul_start(fd, "\x0f\x01\xd9", 3, 0, 0, 0);
+    CHECK(ud_run(fd, EXIT_VMCALL, 3) == 0 && ram[0x1000] == 0x0F && ram[0x1001] == 0x01 &&
+              ram[0x1002] == 0xC1 && m.injected == 0,
+          "VMMCALL that raised #UD is rewritten as VMCALL in the guest's memory");
+    CHECK(regs_of(fd).rip == 0x1004 && (uint32_t)regs_of(fd).rax == (uint32_t)-1000,
+          "which then runs at the same RIP and is answered");
+}
+
+/** MMX and SSE moves with their memory operand on device memory. */
+static void simd_rows(int fd)
+{
+    struct kvm_run *rp = run_of(fd);
+    struct kvm_vcpu *v = vcpu_of(fd);
+    struct kvm_sregs s;
+    int runs;
+
+    emul_start(fd, "\x0f\x6f\x03", 3, 0, 0xD0000200ull, 0);
+    CHECK(mmio_read(fd, 0xD0000200ull, 8) && v->xsave[4] == 0,
+          "MOVQ MM0, [EBX] reads eight bytes on MMIO, the x87 tags as they were until it ends");
+    k_memcpy(rp->u.mmio.data, "\x01\x02\x03\x04\x05\x06\x07\x08", 8);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && memcmp(v->xsave + 32, "\x01\x02\x03\x04\x05\x06\x07\x08", 8) == 0 &&
+              v->xsave[40] == 0xFF && v->xsave[41] == 0xFF && v->xsave[4] == 0xFF,
+          "into the x87 register MM0 names, with its exponent all ones and every tag valid");
+    emul_start(fd, "\x0f\x7f\x03", 3, 0, 0xD0000200ull, 0);
+    script(EXIT_EPT_VIOLATION, 0x2, 0)->gpa = 0xD0000200ull;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_MMIO && rp->u.mmio.is_write &&
+              rp->u.mmio.len == 8 &&
+              memcmp(rp->u.mmio.data, "\x01\x02\x03\x04\x05\x06\x07\x08", 8) == 0,
+          "MOVQ [EBX], MM0 writes them back");
+
+    emul_start(fd, "\xf3\x0f\x6f\x0b", 4, 0, 0xD0000200ull, 0);
+    script(EXIT_EPT_VIOLATION, 0x1, 0)->gpa = 0xD0000200ull;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_HLT && regs_of(fd).rip == 0x1001 &&
+              m.injected == (UD_VECTOR | (TYPE_HW_EXC << 8) | INTR_VALID),
+          "MOVDQU on MMIO without CR4.OSFXSR is #UD, with no read for the caller");
+    emul_start(fd, "\xf3\x0f\x6f\x0b", 4, 0, 0xD0000200ull, 0);
+    s = sregs_of(fd);
+    s.cr4 = 0x200;
+    CHECK(fdio(fd, KVM_SET_SREGS, (uintptr_t)&s) == 0, "KVM_SET_SREGS with CR4.OSFXSR");
+    CHECK(mmio_read(fd, 0xD0000200ull, 8), "MOVDQU XMM1, [EBX] reads its low half on MMIO");
+    k_memcpy(rp->u.mmio.data, "ABCDEFGH", 8);
+    runs = m.launches + m.resumes;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_MMIO && !rp->u.mmio.is_write &&
+              rp->u.mmio.phys_addr == 0xD0000208ull && rp->u.mmio.len == 8 &&
+              m.launches + m.resumes == runs,
+          "then its high half, no guest entered between");
+    k_memcpy(rp->u.mmio.data, "IJKLMNOP", 8);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && memcmp(v->xsave + 176, "ABCDEFGHIJKLMNOP", 16) == 0,
+          "into XMM1 of the vCPU's image");
+}
+
+/** The guest's own #DB and #AC, which always exit: each is given back,
+ * #DB with its bits in the guest's DR6 and DR7.GD cleared. */
+static void db_rows(int fd)
+{
+    uint32_t db = DB_VECTOR | (TYPE_HW_EXC << 8) | INTR_VALID;
+    uint32_t ac = AC_VECTOR | (TYPE_HW_EXC << 8) | INTR_ERRCODE | INTR_VALID;
+    struct kvm_debugregs d;
+    struct kvm_regs r;
+    uint64_t *f = fields(fd);
+    struct row *w;
+
+    ts_start(fd);
+    k_memset(&d, 0, sizeof(d));
+    d.db[0] = 0x4321;
+    d.dr6 = 0xFFFF0FF0u;
+    d.dr7 = 0x2557;
+    CHECK(fdio(fd, KVM_SET_DEBUGREGS, (uintptr_t)&d) == 0, "KVM_SET_DEBUGREGS with DR7.GD");
+    w = script(EXIT_EXCEPTION_NMI, 0x4001, 0);
+    w->intr_info = db;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && m.injected == db && f[EXCEPTION_BITMAP] == EXC_LINUX &&
+              m.entry_dr0 == 0x4321,
+          "the guest's #DB, from a breakpoint that ran in DR0, exits and is injected again");
+    CHECK(fdio(fd, KVM_GET_DEBUGREGS, (uintptr_t)&d) == 0 && d.dr6 == 0xFFFF4FF1u &&
+              d.dr7 == 0x557 && f[GUEST_DR7] == 0x557,
+          "with the qualification's BS and B0 in the guest's DR6 and DR7.GD cleared");
+
+    r = regs_of(fd);
+    r.rip = 0x1000;
+    r.rflags = 0x302;
+    CHECK(fdio(fd, KVM_SET_REGS, (uintptr_t)&r) == 0, "KVM_SET_REGS with TF and IF");
+    w = script(EXIT_EXCEPTION_NMI, 0x4000, 0);
+    w->intr_info = db;
+    w->intr_state = INTR_STI;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && run_of(fd)->exit_reason == KVM_EXIT_HLT && m.injected == db &&
+              (f[GUEST_PENDING_DBG_EXCEPTIONS] & DR6_BS),
+          "a single step after STI is injected with the single-step trap pending, which the "
+          "entry's check under the STI shadow asks for");
+
+    ts_start(fd);
+    w = script(EXIT_EXCEPTION_NMI, 0, 1);
+    w->intr_info = DB_VECTOR | (TYPE_PRIV_SOFT << 8) | INTR_VALID;
+    w->intr_state = INTR_MOV_SS;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && m.injected == db && m.entry_intr == 0 && regs_of(fd).rip == 0x1002,
+          "INT1 is stepped past, ends the shadow it ran under and is injected as #DB");
+    CHECK(fdio(fd, KVM_GET_DEBUGREGS, (uintptr_t)&d) == 0 && d.dr6 == 0xFFFF0FF0u,
+          "with no bit of DR6 set");
+
+    w = script(EXIT_EXCEPTION_NMI, 0, 0);
+    w->intr_info = ac;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && m.injected == ac && m.injected_error == 0,
+          "the guest's #AC exits and is injected again with its error code");
+    CHECK(m.dr6_writes == 0,
+          "the processor's DR6 is never written, over every row: the guest's is the record's");
+}
+
+/** A vCPU of id `id` on `vm` with the supported CPUID but for leaf 0's
+ * vendor, AMD's. */
+static int amd_vcpu(int vm, uint32_t id)
+{
+    struct kvm_cpuid_entry2 *e = (struct kvm_cpuid_entry2 *)(buf.bytes + sizeof(buf.cpuid));
+    int fd = fdio(vm, KVM_CREATE_VCPU, id);
+    uint32_t i;
+
+    CHECK(fd > vm, "KVM_CREATE_VCPU");
+    buf.cpuid.nent = 256;
+    CHECK(dev(KVM_GET_SUPPORTED_CPUID, (uintptr_t)&buf) == 0, "KVM_GET_SUPPORTED_CPUID");
+    for (i = 0; i < buf.cpuid.nent; i++) {
+        if (e[i].function == 0) {
+            e[i].ebx = 0x68747541u; /* "AuthenticAMD" */
+            e[i].edx = 0x69746E65u;
+            e[i].ecx = 0x444D4163u;
+        }
+    }
+    CHECK(fdio(fd, KVM_SET_CPUID2, (uintptr_t)&buf) == 0, "KVM_SET_CPUID2 with AMD's vendor");
+    return fd;
+}
+
+/* RCX with its low half 0 and RSI and RDI with their upper halves set, for
+ * a REP string instruction at address size 4 that moves nothing. */
+#define NONE_RCX 0xFFFFFFFF00000000ull
+#define NONE_RSI 0x1111111100002000ull
+#define NONE_RDI 0x2222222200003000ull
+
+/** Run the REP string instruction `bytes` of 3 bytes in 64-bit mode on
+ * `fd` with RCX, RSI and RDI at NONE_RCX, NONE_RSI and NONE_RDI, through
+ * an EPT violation on the device, or a string IN's exit at address size 4
+ * when `in`, then a HLT; 1 when the HLT is reached past it. */
+static int none_run(int fd, const char *bytes, int in)
+{
+    struct kvm_regs r;
+
+    long_start(fd, bytes, 3);
+    r = regs_of(fd);
+    r.rcx = NONE_RCX;
+    r.rsi = NONE_RSI;
+    r.rdi = NONE_RDI;
+    CHECK(fdio(fd, KVM_SET_REGS, (uintptr_t)&r) == 0, "KVM_SET_REGS of RCX, RSI and RDI");
+    if (in) {
+        script(EXIT_IO, 0x38u | (0x80ull << 16), 3)->insn_info = 1u << 7;
+    } else {
+        script(EXIT_EPT_VIOLATION, 0x2, 0)->gpa = 0xD0000200ull;
+    }
+    script(EXIT_HLT, 0, 1);
+    return run(fd) == 0 && run_of(fd)->exit_reason == KVM_EXIT_HLT && regs_of(fd).rip == 0x1004;
+}
+
+/** REP MOVSB, STOSB and INSB at address size 4 in 64-bit mode with ECX 0,
+ * on `fd`, whose vendor is Intel's when `intel`: each moves nothing, and
+ * for Intel's vendor RCX ends 0 whole, with RSI's and RDI's upper halves
+ * cleared for MOVSB and RDI's for STOSB, as Linux's
+ * string_registers_quirk; for another vendor every register stays. */
+static void none_rows(int fd, int intel)
+{
+    struct kvm_regs r;
+
+    CHECK(none_run(fd, "\xf3\x67\xa4", 0), "REP MOVSB with ECX 0 moves nothing, stepped");
+    r = regs_of(fd);
+    CHECK(intel ? r.rcx == 0 && r.rsi == (uint32_t)NONE_RSI && r.rdi == (uint32_t)NONE_RDI
+                : r.rcx == NONE_RCX && r.rsi == NONE_RSI && r.rdi == NONE_RDI,
+          intel ? "and for Intel's vendor clears RCX and RSI's and RDI's upper halves"
+                : "and for AMD's vendor leaves RCX, RSI and RDI");
+    CHECK(none_run(fd, "\xf3\x67\xaa", 0), "REP STOSB with ECX 0 moves nothing, stepped");
+    r = regs_of(fd);
+    CHECK(intel ? r.rcx == 0 && r.rsi == NONE_RSI && r.rdi == (uint32_t)NONE_RDI
+                : r.rcx == NONE_RCX && r.rsi == NONE_RSI && r.rdi == NONE_RDI,
+          intel ? "and for Intel's vendor clears RCX and RDI's upper half"
+                : "and for AMD's vendor leaves RCX, RSI and RDI");
+    CHECK(none_run(fd, "\xf3\x67\x6c", 1), "REP INSB with ECX 0 moves nothing, stepped");
+    r = regs_of(fd);
+    CHECK(intel ? r.rcx == 0 && r.rsi == NONE_RSI && r.rdi == NONE_RDI
+                : r.rcx == NONE_RCX && r.rsi == NONE_RSI && r.rdi == NONE_RDI,
+          intel ? "and for Intel's vendor clears RCX alone"
+                : "and for AMD's vendor leaves RCX, RSI and RDI");
+}
+
+/** The REP string instructions with ECX 0 at address size 4 (`none_rows`)
+ * on two vCPUs of their own on `vm`, Intel's vendor and AMD's. */
+static void string_none_rows(int vm)
+{
+    int fd = make_vcpu(vm, 7);
+
+    none_rows(fd, 1);
+    fdclose(fd);
+    fd = amd_vcpu(vm, 8);
+    none_rows(fd, 0);
+    fdclose(fd);
+}
+
+/** SYSCALL outside 64-bit mode after its #UD, which Linux's emulator runs
+ * for a guest whose CPUID vendor is AMD's, on a vCPU of its own on `vm`,
+ * since a vCPU's CPUID is fixed once it has run. */
+static void amd_syscall_rows(int vm)
+{
+    struct {
+        struct kvm_msrs h;
+        struct kvm_msr_entry e[1];
+    } msrs;
+    struct kvm_sregs s;
+    int fd = amd_vcpu(vm, 6);
+
+    msrs.h.nmsrs = 1;
+    msrs.h.pad = 0;
+    k_memset(msrs.e, 0, sizeof(msrs.e));
+    msrs.e[0].index = MSR_STAR;
+    msrs.e[0].data = 0x0000000800004000ull;
+    CHECK(fdio(fd, KVM_SET_MSRS, (uintptr_t)&msrs) == 1, "STAR set");
+    emul_start(fd, "\x0f\x05", 2, 0, 0, 0);
+    s = sregs_of(fd);
+    s.efer = GEFER_SCE;
+    CHECK(fdio(fd, KVM_SET_SREGS, (uintptr_t)&s) == 0, "KVM_SET_SREGS with EFER.SCE");
+    CHECK(ud_run(fd, 0, 0) == 0 && run_of(fd)->exit_reason == KVM_EXIT_HLT && m.injected == 0,
+          "SYSCALL outside 64-bit mode that raised #UD runs for a guest whose vendor is AMD's");
+    s = sregs_of(fd);
+    CHECK(regs_of(fd).rip == 0x4001 && (uint32_t)regs_of(fd).rcx == 0x1002u &&
+              s.cs.selector == 0x08 && s.ss.selector == 0x10,
+          "to STAR's EIP and selectors, with ECX the next instruction's address");
+    fdclose(fd);
+}
+
 /** A hardware task switch from each of its sources, on a vCPU of its own
- * on `vm`. */
+ * on `vm`; then, in the same protected mode, the instructions the
+ * emulator runs on device memory and after #UD, and the guest's own #DB
+ * and #AC; and SYSCALL under AMD's vendor on another vCPU. */
 static void ts_rows(int vm)
 {
     int fd = make_vcpu(vm, 2);
@@ -2615,7 +3724,47 @@ static void ts_rows(int vm)
     ts_jmp_rows(fd);
     ts_gate_rows(fd);
     ts_fault_rows(fd);
+    emul_rows(fd);
+    ud_rows(fd);
+    simd_rows(fd);
+    db_rows(fd);
     fdclose(fd);
+    amd_syscall_rows(vm);
+    string_none_rows(vm);
+}
+
+/** The caller's single step over a Hyper-V hypercall the caller answers,
+ * on the vCPU `fd` whose guest named itself: an extended query, 0x8001,
+ * from 32-bit protected mode at CPL 0 is KVM_EXIT_HYPERV, and the KVM_RUN
+ * that takes the answer is KVM_EXIT_DEBUG past the VMCALL with no guest
+ * entered, as Linux's kvm_hv_hypercall_complete_userspace steps it. Real
+ * mode and the debug registers are put back after. */
+static void hv_step_rows(int fd)
+{
+    struct kvm_run *rp = run_of(fd);
+    struct kvm_sregs s = sregs_of(fd);
+    struct kvm_debugregs d;
+    int runs;
+
+    CHECK(fdio(fd, KVM_GET_DEBUGREGS, (uintptr_t)&d) == 0, "KVM_GET_DEBUGREGS");
+    ts_start(fd);
+    guest_debug(fd, KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_SINGLESTEP, 0, 0);
+    set_regs(fd, 0x1000, 0x8001u, 0, 0);
+    script(EXIT_VMCALL, 0, 3);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_HYPERV &&
+              rp->u.hyperv.type == KVM_EXIT_HYPERV_HCALL && rp->u.hyperv.u.hcall.input == 0x8001u &&
+              regs_of(fd).rip == 0x1000,
+          "an extended hypercall under the caller's single step is the caller's");
+    rp->u.hyperv.u.hcall.result = 0;
+    runs = m.launches + m.resumes;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_DEBUG && (rp->u.debug.dr6 & 0x4000u) &&
+              rp->u.debug.pc == 0x1003 && regs_of(fd).rip == 0x1003 && regs_of(fd).rax == 0 &&
+              m.launches + m.resumes == runs,
+          "and its answer's KVM_RUN is KVM_EXIT_DEBUG past the VMCALL, with no guest entered");
+    guest_debug(fd, 0, 0, 0);
+    CHECK(fdio(fd, KVM_SET_SREGS, (uintptr_t)&s) == 0 &&
+              fdio(fd, KVM_SET_DEBUGREGS, (uintptr_t)&d) == 0,
+          "KVM_SET_SREGS and KVM_SET_DEBUGREGS back to real mode's");
 }
 
 /** A VMCALL goes to Hyper-V's hypercalls once the CPUID names Hyper-V and
@@ -2634,6 +3783,7 @@ static void hv_rows(int vm)
     uint32_t ud = UD_VECTOR | (TYPE_HW_EXC << 8) | INTR_VALID;
     struct kvm_sregs s;
     int fd = fdio(vm, KVM_CREATE_VCPU, 3);
+    uint32_t i, n = 0;
 
     CHECK(fd > vm, "KVM_CREATE_VCPU");
     buf.cpuid.nent = 256;
@@ -2641,6 +3791,19 @@ static void hv_rows(int vm)
     CHECK(dev(KVM_GET_SUPPORTED_CPUID, (uintptr_t)&buf) == 0 &&
               dev(KVM_GET_SUPPORTED_HV_CPUID, (uintptr_t)&hv) == 0 && hv.h.nent == 10,
           "the supported CPUID and Hyper-V's leaves");
+    /* Hyper-V's leaves take the place of KVM's own at 0x40000000, as a
+     * caller that names Hyper-V gives them. */
+    for (i = 0; i < buf.cpuid.nent; i++) {
+        if ((e[i].function & 0xFFFFFF00u) != 0x40000000u) {
+            e[n++] = e[i];
+        }
+    }
+    buf.cpuid.nent = n;
+    for (i = 0; i < n; i++) {
+        if (e[i].function == 7 && e[i].index == 0) {
+            e[i].ecx |= 1u << 22;
+        }
+    }
     k_memcpy(e + buf.cpuid.nent, hv.e, sizeof(hv.e));
     buf.cpuid.nent += 10;
     CHECK(fdio(fd, KVM_SET_CPUID2, (uintptr_t)&buf) == 0, "KVM_SET_CPUID2 with Hyper-V's leaves");
@@ -2660,7 +3823,429 @@ static void hv_rows(int vm)
     set_regs(fd, 0x1000, 0, 0, 0);
     CHECK(exits(fd, EXIT_VMCALL, 0, 3) == 0 && m.injected == ud && regs_of(fd).rip == 0x1001,
           "VMCALL is Hyper-V's, #UD in real mode and not stepped, before the HLT");
+    hv_step_rows(fd);
+    msrs.e[0].index = MSR_TSC_AUX;
+    msrs.e[0].data = 0x1234;
+    CHECK(fdio(fd, KVM_SET_MSRS, (uintptr_t)&msrs) == 1, "IA32_TSC_AUX set");
+    code(fd, 0x1000, "\xf3\x0f\xc7\xf9", 4, 0);
+    CHECK(ud_run(fd, 0, 0) == 0 && m.injected == 0 && regs_of(fd).rcx == 0x1234 &&
+              regs_of(fd).rip == 0x1005,
+          "RDPID that raised #UD reads IA32_TSC_AUX for a guest whose CPUID has it");
     fdclose(fd);
+}
+
+/** KVM_ENABLE_CAP of `cap` with `arg` on the VM `vm`. */
+static int32_t vm_cap(int vm, uint32_t cap, uint64_t arg)
+{
+    struct kvm_enable_cap c;
+
+    k_memset(&c, 0, sizeof(c));
+    c.cap = cap;
+    c.args[0] = arg;
+    return fdio(vm, KVM_ENABLE_CAP, (uintptr_t)&c);
+}
+
+/** The hypercall instruction of the other vendor and MWAIT, with their
+ * quirks on and then off, on the vCPU `fd` in protected mode. */
+static void quirk_rows(int vm, int fd)
+{
+    uint32_t ud = UD_VECTOR | (TYPE_HW_EXC << 8) | INTR_VALID;
+    struct row *w;
+
+    code(fd, 0x1000, "\x0f\x01\xd9", 3, 0);
+    w = script(EXIT_EXCEPTION_NMI, 0, 0);
+    w->intr_info = ud;
+    script(EXIT_VMCALL, 0, 3);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && m.injected == 0 && ram[0x1002] == 0xC1 && regs_of(fd).rip == 0x1004 &&
+              (uint32_t)regs_of(fd).rax == (uint32_t)-1000,
+          "AMD's VMMCALL is #UD on Intel: KVM writes VMCALL in its place and the guest runs it");
+    CHECK(fields(fd)[EXCEPTION_BITMAP] & (1u << UD_VECTOR), "#UD always exits");
+    code(fd, 0x1000, "\x0f\x0b", 2, 0);
+    w = script(EXIT_EXCEPTION_NMI, 0, 0);
+    w->intr_info = ud;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && m.injected == ud && ram[0x1000] == 0x0F && ram[0x1001] == 0x0B,
+          "the #UD of another instruction goes back to the guest");
+    set_regs(fd, 0x1000, 0, 0, 0);
+    CHECK(exits(fd, EXIT_MWAIT, 0, 3) == 0 && m.injected == 0 && regs_of(fd).rip == 0x1004,
+          "MWAIT is a no-op for a guest whose CPUID lacks it");
+
+    CHECK(vm_cap(vm, KVM_CAP_DISABLE_QUIRKS2,
+                 KVM_X86_QUIRK_FIX_HYPERCALL_INSN | KVM_X86_QUIRK_MWAIT_NEVER_UD_FAULTS) == 0,
+          "KVM_CAP_DISABLE_QUIRKS2 of the hypercall's and MWAIT's quirks");
+    code(fd, 0x1000, "\x0f\x01\xd9", 3, 0);
+    w = script(EXIT_EXCEPTION_NMI, 0, 0);
+    w->intr_info = ud;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && m.injected == ud && ram[0x1002] == 0xD9 && regs_of(fd).rip == 0x1001,
+          "with its quirk off VMMCALL stays, and is the guest's #UD");
+    set_regs(fd, 0x1000, 0, 0, 0);
+    CHECK(exits(fd, EXIT_MWAIT, 0, 3) == 0 && m.injected == ud && regs_of(fd).rip == 0x1001,
+          "and with its quirk off MWAIT is #UD for that guest");
+}
+
+/** A plain OUT's RIP on the vCPU `fd`: at the instruction when the caller
+ * sees the exit and stepped at the next KVM_RUN, as Linux's
+ * complete_fast_pio_out steps it, unless the caller moved it meanwhile;
+ * the caller's single step over an OUT and an IN, reported once each has
+ * ended; and port 0x7E's OUT, stepped before the exit until its quirk is
+ * off. */
+static void out_rows(int vm, int fd)
+{
+    struct kvm_run *rp = run_of(fd);
+
+    set_regs(fd, 0x1000, 0x41, 0, 0);
+    script(EXIT_IO, 0x3F8ull << 16, 1);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO && regs_of(fd).rip == 0x1000,
+          "the caller sees an OUT with RIP at it");
+    set_regs(fd, 0x1800, 0, 0, 0);
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && regs_of(fd).rip == 0x1801, "a caller that moved RIP keeps its RIP");
+    guest_debug(fd, KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_SINGLESTEP, 0, 0);
+    set_regs(fd, 0x1000, 0x41, 0, 0);
+    script(EXIT_IO, 0x3F8ull << 16, 1);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO, "an OUT under the caller's single step");
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_DEBUG && regs_of(fd).rip == 0x1001 &&
+              (rp->u.debug.dr6 & 0x4000u),
+          "is KVM_EXIT_DEBUG at the next KVM_RUN, past it, with no guest entered");
+    set_regs(fd, 0x1000, 0, 0, 0);
+    script(EXIT_IO, 8u | (0x60ull << 16), 1);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO, "an IN under the caller's single step");
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_DEBUG && regs_of(fd).rip == 0x1001,
+          "is KVM_EXIT_DEBUG once its answer is in");
+    guest_debug(fd, 0, 0, 0);
+    set_regs(fd, 0x1000, 0x41, 0, 0);
+    script(EXIT_IO, 0x7Eull << 16, 1);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO && rp->u.io.port == 0x7E &&
+              regs_of(fd).rip == 0x1001,
+          "an OUT to port 0x7E is stepped before the caller sees it");
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && regs_of(fd).rip == 0x1002, "and not again at the next KVM_RUN");
+    CHECK(vm_cap(vm, KVM_CAP_DISABLE_QUIRKS2, KVM_X86_QUIRK_OUT_7E_INC_RIP) == 0,
+          "KVM_CAP_DISABLE_QUIRKS2 of port 0x7E's quirk");
+    set_regs(fd, 0x1000, 0x41, 0, 0);
+    script(EXIT_IO, 0x7Eull << 16, 1);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_IO && regs_of(fd).rip == 0x1000,
+          "with its quirk off port 0x7E is as any other");
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && regs_of(fd).rip == 0x1002, "stepped at the next KVM_RUN");
+}
+
+/** MSR_PLATFORM_INFO and CPUID faulting on the vCPU `fd`. */
+static void platform_rows(int vm, int fd)
+{
+    uint32_t gpe = GP_VECTOR | (TYPE_HW_EXC << 8) | INTR_ERRCODE | INTR_VALID;
+    struct kvm_vcpu *v = vcpu_of(fd);
+    struct {
+        struct kvm_msrs h;
+        struct kvm_msr_entry e[1];
+    } msrs;
+
+    k_memset(&msrs, 0, sizeof(msrs));
+    msrs.h.nmsrs = 1;
+    msrs.e[0].index = 0xCE;
+    msrs.e[0].data = 0x80001100u;
+    CHECK(fdio(fd, KVM_SET_MSRS, (uintptr_t)&msrs) == 1, "the caller writes MSR_PLATFORM_INFO");
+    set_regs(fd, 0x1000, 0, 0xCE, 0);
+    CHECK(exits(fd, EXIT_MSR_READ, 0, 2) == 0 && m.injected == 0 && regs_of(fd).rax == 0x80001100u,
+          "the guest reads MSR_PLATFORM_INFO as the caller wrote it");
+    set_regs(fd, 0x1000, 0, 0xCE, 0);
+    CHECK(exits(fd, EXIT_MSR_WRITE, 0, 2) == 0 && m.injected == gpe, "its write is #GP");
+    CHECK(vm_cap(vm, KVM_CAP_MSR_PLATFORM_INFO, 0) == 0, "KVM_CAP_MSR_PLATFORM_INFO with 0");
+    set_regs(fd, 0x1000, 0, 0xCE, 0);
+    CHECK(exits(fd, EXIT_MSR_READ, 0, 2) == 0 && m.injected == gpe, "and then its read is #GP");
+
+    set_regs(fd, 0x1000, 1, 0x140, 0);
+    CHECK(exits(fd, EXIT_MSR_WRITE, 0, 2) == 0 && m.injected == 0 && v->misc_features == 1,
+          "the guest turns CPUID faulting on in MSR_MISC_FEATURES_ENABLES");
+    set_regs(fd, 0x1000, 0, 0, 0);
+    CHECK(exits(fd, EXIT_CPUID, 0, 2) == 0 && m.injected == 0 && regs_of(fd).rip == 0x1003,
+          "CPUID at CPL 0 is still answered");
+    (void)sregs_of(fd);
+    v->sregs.ss.dpl = 3;
+    CHECK(kvm_emul_cpuid(v) == -1 && v->events.exception.pending &&
+              v->events.exception.nr == GP_VECTOR,
+          "and above CPL 0 it is #GP");
+    v->events.exception.pending = 0;
+    v->sregs.ss.dpl = 0;
+}
+
+/** An instruction the decoder refuses above CPL 0, without and with
+ * KVM_CAP_EXIT_ON_EMULATION_FAILURE, and DR7.GD under the caller's
+ * hardware breakpoints, on the vCPU `fd`. */
+static void failure_rows(int vm, int fd)
+{
+    struct kvm_vcpu *v = vcpu_of(fd);
+    struct kvm_run *rp = run_of(fd);
+    uint64_t info[5] = {0, 0, 0, 0, 0};
+
+    code(fd, 0x1400, "\x0f\x0b", 2, 0);
+    (void)sregs_of(fd);
+    v->sregs.ss.dpl = 3;
+    CHECK(kvm_emul_mmio(v, info) == 0 && v->exit.kind == KVM_X_AGAIN &&
+              v->events.exception.pending && v->events.exception.nr == UD_VECTOR,
+          "an instruction the decoder refuses above CPL 0 is the guest's #UD");
+    v->events.exception.pending = 0;
+    CHECK(vm_cap(vm, KVM_CAP_EXIT_ON_EMULATION_FAILURE, 1) == 0,
+          "KVM_CAP_EXIT_ON_EMULATION_FAILURE");
+    CHECK(kvm_emul_mmio(v, info) == 0 && v->exit.kind == KVM_X_INTERNAL &&
+              v->exit.internal.suberror == KVM_INTERNAL_ERROR_EMULATION &&
+              !v->events.exception.pending,
+          "and under the capability the caller's emulation failure, with no #UD");
+    v->sregs.ss.dpl = 0;
+
+    guest_debug(fd, KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_USE_HW_BP, 0, 0x2400);
+    set_regs(fd, 0x1000, 0, 0, 0);
+    script(EXIT_DR_ACCESS, 0x10u, 3);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_DEBUG && rp->u.debug.exception == DB_VECTOR &&
+              rp->u.debug.dr6 == 0xFFFF2FF0u && rp->u.debug.dr7 == 0x2400 &&
+              rp->u.debug.pc == 0x1000 && regs_of(fd).rip == 0x1000,
+          "a debug register's access under the caller's DR7.GD is KVM_EXIT_DEBUG with DR6.BD");
+    guest_debug(fd, 0, 0, 0);
+}
+
+/** KVM_X86_SET_MSR_FILTER with the ranges `deny` of one MSR each, whose
+ * accesses of `flags` it refuses; 0 or the ioctl's error. */
+static int32_t msr_filter(int vm, const uint32_t *deny, uint32_t n, uint32_t flags)
+{
+    static uint64_t none;
+    struct kvm_msr_filter f;
+    uint32_t i;
+
+    k_memset(&f, 0, sizeof(f));
+    for (i = 0; i < n; i++) {
+        f.ranges[i].flags = flags;
+        f.ranges[i].nmsrs = 1;
+        f.ranges[i].base = deny[i];
+        f.ranges[i].bitmap = (uintptr_t)&none;
+    }
+    return fdio(vm, KVM_X86_SET_MSR_FILTER, (uintptr_t)&f);
+}
+
+/** The caller's single step over a filtered RDMSR and WRMSR the caller
+ * answers, on the vCPU `fd`: KVM_EXIT_DEBUG past the instruction at the
+ * KVM_RUN that takes the answer, with no guest entered, as Linux's
+ * kvm_skip_emulated_instruction reports it from complete_fast_rdmsr and
+ * complete_fast_msr_access. */
+static void msr_step_rows(int fd)
+{
+    struct kvm_run *rp = run_of(fd);
+    int runs;
+
+    guest_debug(fd, KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_SINGLESTEP, 0, 0);
+    set_regs(fd, 0x1000, 0, 0xDA0u, 0);
+    script(EXIT_MSR_READ, 0, 2);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_X86_RDMSR && regs_of(fd).rip == 0x1000,
+          "a filtered RDMSR under the caller's single step is the caller's");
+    rp->u.msr.error = 0;
+    rp->u.msr.data = 0x1122334455667788ull;
+    runs = m.launches + m.resumes;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_DEBUG && (rp->u.debug.dr6 & 0x4000u) &&
+              rp->u.debug.pc == sregs_of(fd).cs.base + 0x1002 && regs_of(fd).rip == 0x1002 &&
+              regs_of(fd).rax == 0x55667788u && m.launches + m.resumes == runs,
+          "and its answer's KVM_RUN is KVM_EXIT_DEBUG past it, with no guest entered");
+    set_regs(fd, 0x1000, 0x9u, 0xDA0u, 0x1u);
+    script(EXIT_MSR_WRITE, 0, 2);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_X86_WRMSR && regs_of(fd).rip == 0x1000,
+          "a filtered WRMSR under the caller's single step is the caller's");
+    rp->u.msr.error = 0;
+    runs = m.launches + m.resumes;
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_DEBUG && (rp->u.debug.dr6 & 0x4000u) &&
+              rp->u.debug.pc == sregs_of(fd).cs.base + 0x1002 && regs_of(fd).rip == 0x1002 &&
+              m.launches + m.resumes == runs,
+          "and its answer's KVM_RUN is KVM_EXIT_DEBUG past it, with no guest entered");
+    guest_debug(fd, 0, 0, 0);
+}
+
+/** The caller's MSR exits through the backend, as Linux's
+ * userspace_msr_exit_test: a filtered access and an unknown MSR are
+ * KVM_EXIT_X86_RDMSR or WRMSR, the caller's answer completes the
+ * instruction or is #GP, and the bitmap follows the filter for the MSRs
+ * it passes to the guest, on the vCPU `fd` of `vm`. */
+static void user_msr_rows(int vm, int fd)
+{
+    uint32_t gpe = GP_VECTOR | (TYPE_HW_EXC << 8) | INTR_ERRCODE | INTR_VALID;
+    uint32_t deny[2] = {0xDA0u, 0xC0000100u};
+    struct kvm_vcpu *v = vcpu_of(fd);
+    struct kvm_run *rp = run_of(fd);
+
+    CHECK(msr_filter(vm, deny, 2, KVM_MSR_FILTER_READ | KVM_MSR_FILTER_WRITE) == 0 &&
+              vm_cap(vm, KVM_CAP_X86_USER_SPACE_MSR,
+                     KVM_MSR_EXIT_REASON_FILTER | KVM_MSR_EXIT_REASON_UNKNOWN) == 0,
+          "a filter of XSS and FS_BASE, with the caller's exits for both reasons");
+    set_regs(fd, 0x1000, 0, 0xDA0u, 0);
+    script(EXIT_MSR_READ, 0, 2);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_X86_RDMSR &&
+              rp->u.msr.reason == KVM_MSR_EXIT_REASON_FILTER && rp->u.msr.index == 0xDA0u &&
+              regs_of(fd).rip == 0x1000,
+          "a filtered RDMSR is KVM_EXIT_X86_RDMSR for the filter");
+    CHECK((vx(v)->msr_bitmap[1024 + 0x20] & 1u) && (vx(v)->msr_bitmap[3072 + 0x20] & 1u),
+          "the run took the filter: FS_BASE's accesses exit");
+    rp->u.msr.data = 0x1122334455667788ull;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && m.injected == 0 && regs_of(fd).rax == 0x55667788u &&
+              regs_of(fd).rdx == 0x11223344u && regs_of(fd).rip == 0x1003,
+          "the caller's answer is EDX:EAX, past the RDMSR");
+
+    set_regs(fd, 0x1000, 0x9u, 0xDA0u, 0x1u);
+    script(EXIT_MSR_WRITE, 0, 2);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_X86_WRMSR &&
+              rp->u.msr.data == 0x100000009ull && rp->u.msr.index == 0xDA0u,
+          "a filtered WRMSR is KVM_EXIT_X86_WRMSR with EDX:EAX");
+    rp->u.msr.error = 1;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && m.injected == gpe && regs_of(fd).rip == 0x1001,
+          "and the caller's error is #GP at it");
+    msr_step_rows(fd);
+
+    set_regs(fd, 0x1000, 0, 0xDEADBEEFu, 0);
+    script(EXIT_MSR_READ, 0, 2);
+    CHECK(run(fd) == 0 && rp->exit_reason == KVM_EXIT_X86_RDMSR &&
+              rp->u.msr.reason == KVM_MSR_EXIT_REASON_UNKNOWN,
+          "an unknown MSR is the caller's, for KVM_MSR_EXIT_REASON_UNKNOWN");
+    rp->u.msr.error = 1;
+    script(EXIT_HLT, 0, 1);
+    CHECK(run(fd) == 0 && m.injected == gpe, "and its error is #GP");
+    CHECK(vm_cap(vm, KVM_CAP_X86_USER_SPACE_MSR, KVM_MSR_EXIT_REASON_FILTER) == 0,
+          "the caller's exits for the filter alone");
+    set_regs(fd, 0x1000, 0, 0xDEADBEEFu, 0);
+    CHECK(exits(fd, EXIT_MSR_READ, 0, 2) == 0 && m.injected == gpe && regs_of(fd).rip == 0x1001,
+          "and the unknown MSR is the guest's #GP");
+
+    CHECK(msr_filter(vm, deny, 0, 0) == 0 && vm_cap(vm, KVM_CAP_X86_USER_SPACE_MSR, 0) == 0,
+          "a filter that allows all, without the caller's exits");
+    set_regs(fd, 0x1000, 0, 0xC0000100u, 0);
+    CHECK(exits(fd, EXIT_MSR_READ, 0, 2) == 0 && m.injected == 0 && regs_of(fd).rip == 0x1001,
+          "an exit of FS_BASE under the old bitmap enters again, not stepped");
+    CHECK(!(vx(v)->msr_bitmap[1024 + 0x20] & 7u) && !(vx(v)->msr_bitmap[3072 + 0x20] & 7u),
+          "and FS_BASE, GS_BASE and KERNEL_GS_BASE pass to the guest again");
+}
+
+/** TSC scaling: the Haswell has none, and on a model with the control a
+ * vCPU of `vm` runs under it with the multiplier of its ratio, 1 for a
+ * TSC at the host's rate. */
+static void tsc_scale_rows(int vm)
+{
+    uint32_t frac = 0, had = caps.proc2;
+    uint64_t model = m.proc2;
+    int fd;
+
+    CHECK(vmx_tsc_scaling(&frac) == 0 && fdio(vm, KVM_CHECK_EXTENSION, KVM_CAP_VM_TSC_CONTROL) == 0,
+          "the Haswell scales no TSC, and KVM_CAP_VM_TSC_CONTROL says so");
+    m.proc2 |= (uint64_t)PROC2_TSC_SCALING << 32;
+    caps.proc2 |= PROC2_TSC_SCALING;
+    CHECK(vmx_tsc_scaling(&frac) == ~0ull && frac == 48 &&
+              fdio(vm, KVM_CHECK_EXTENSION, KVM_CAP_VM_TSC_CONTROL) == 1,
+          "with the control, a multiplier of 48 bits of fraction and the capability");
+    fd = make_vcpu(vm, 5);
+    CHECK(exits(fd, EXIT_CPUID, 0, 2) == 0 &&
+              (fields(fd)[SECONDARY_VM_EXEC_CONTROL] & PROC2_TSC_SCALING) &&
+              fields(fd)[TSC_MULTIPLIER] == 1ull << 48,
+          "a vCPU runs under TSC scaling with a multiplier of 1");
+    vcpu_of(fd)->tsc_ratio = 3ull << 47;
+    vcpu_of(fd)->dirty |= KVM_PART_TSC;
+    set_regs(fd, 0x1000, 0, 0, 0);
+    CHECK(exits(fd, EXIT_CPUID, 0, 2) == 0 && fields(fd)[TSC_MULTIPLIER] == 3ull << 47,
+          "and with its ratio once it has one");
+    fdclose(fd);
+    m.proc2 = model;
+    caps.proc2 = had;
+}
+
+/** A vCPU of id `id` on `vm` as `make_vcpu` makes it, with XSAVE in its
+ * CPUID's leaf 1 only when `xsave`, and XSAVES in leaf 0xD's subleaf 1
+ * only when `xsaves`. */
+static int xsaves_vcpu(int vm, uint32_t id, int xsave, int xsaves)
+{
+    struct kvm_cpuid_entry2 *e = (struct kvm_cpuid_entry2 *)(buf.bytes + sizeof(buf.cpuid));
+    struct kvm_sregs s;
+    uint32_t i;
+    int fd = fdio(vm, KVM_CREATE_VCPU, id);
+
+    CHECK(fd > vm, "KVM_CREATE_VCPU");
+    buf.cpuid.nent = 256;
+    CHECK(dev(KVM_GET_SUPPORTED_CPUID, (uintptr_t)&buf) == 0, "KVM_GET_SUPPORTED_CPUID");
+    for (i = 0; i < buf.cpuid.nent; i++) {
+        if (e[i].function == 1) {
+            e[i].ecx = xsave ? e[i].ecx | (1u << 26) : e[i].ecx & ~(1u << 26);
+        } else if (e[i].function == 0xD && e[i].index == 1) {
+            e[i].eax = xsaves ? e[i].eax | (1u << 3) : e[i].eax & ~(1u << 3);
+        }
+    }
+    CHECK(fdio(fd, KVM_SET_CPUID2, (uintptr_t)&buf) == 0, "KVM_SET_CPUID2 of XSAVE and XSAVES");
+    s = sregs_of(fd);
+    s.cs.base = 0;
+    s.cs.selector = 0;
+    CHECK(fdio(fd, KVM_SET_SREGS, (uintptr_t)&s) == 0, "KVM_SET_SREGS");
+    set_regs(fd, 0x1000, 0, 0, 0);
+    return fd;
+}
+
+/** Leaf 0xD subleaf 1's EBX in the CPUID of the vCPU on `fd`, or ~0. */
+static uint32_t d1_ebx(int fd)
+{
+    const struct kvm_cpuid_entry2 *e = kvm_cpuid_find(vcpu_of(fd), 0xD, 1);
+
+    return e ? e->ebx : ~0u;
+}
+
+/** XSAVES on a model whose secondary controls have it, on vCPUs of their
+ * own on `vm`: KVM offers it; the control is on only for a vCPU whose
+ * CPUID has XSAVE and XSAVES, as Linux's vmx_secondary_exec_control; and
+ * subleaf 1's compacted size follows the guest's XCR0 through XSETBV. */
+static void xsaves_rows(int vm)
+{
+    uint32_t had = caps.proc2;
+    uint64_t model = m.proc2;
+    int fd;
+
+    m.proc2 |= (uint64_t)PROC2_XSAVES << 32;
+    caps.proc2 |= PROC2_XSAVES;
+    CHECK(vmx_xsaves(), "with the control the backend lets a guest run XSAVES");
+    fd = xsaves_vcpu(vm, 9, 1, 1);
+    CHECK(d1_ebx(fd) == 576, "subleaf 1's compacted size is x87's and SSE's at the reset's XCR0");
+    CHECK(exits(fd, EXIT_CPUID, 0, 2) == 0 &&
+              (fields(fd)[SECONDARY_VM_EXEC_CONTROL] & PROC2_XSAVES) &&
+              fields(fd)[XSS_EXIT_BITMAP] == 0,
+          "a vCPU whose CPUID has XSAVE and XSAVES runs with the control and no XSS exit");
+    set_regs(fd, 0x1000, 7, 0, 0);
+    CHECK(exits(fd, EXIT_XSETBV, 0, 3) == 0 && vcpu_of(fd)->xcr0 == 7 && d1_ebx(fd) == 832,
+          "XSETBV of AVX makes subleaf 1's compacted size 832");
+    set_regs(fd, 0x1000, 3, 0, 0);
+    CHECK(exits(fd, EXIT_XSETBV, 0, 3) == 0 && vcpu_of(fd)->xcr0 == 3 && d1_ebx(fd) == 576,
+          "and XSETBV of x87 and SSE 576 again");
+    fdclose(fd);
+    fd = xsaves_vcpu(vm, 10, 1, 0);
+    CHECK(exits(fd, EXIT_CPUID, 0, 2) == 0 &&
+              !(fields(fd)[SECONDARY_VM_EXEC_CONTROL] & PROC2_XSAVES),
+          "a vCPU whose CPUID lacks XSAVES runs without the control");
+    fdclose(fd);
+    fd = xsaves_vcpu(vm, 11, 0, 1);
+    CHECK(exits(fd, EXIT_CPUID, 0, 2) == 0 &&
+              !(fields(fd)[SECONDARY_VM_EXEC_CONTROL] & PROC2_XSAVES),
+          "and one whose CPUID has XSAVES without XSAVE");
+    fdclose(fd);
+    m.proc2 = model;
+    caps.proc2 = had;
+}
+
+/** What Linux's selftests ask of the guest's side, on a vCPU of its own
+ * on `vm` in protected mode. The rows change the VM's capabilities, so
+ * they come last. */
+static void selftest_rows(int vm)
+{
+    int fd = make_vcpu(vm, 4);
+
+    ts_start(fd);
+    quirk_rows(vm, fd);
+    platform_rows(vm, fd);
+    out_rows(vm, fd);
+    failure_rows(vm, fd);
+    user_msr_rows(vm, fd);
+    fdclose(fd);
+    tsc_scale_rows(vm);
+    xsaves_rows(vm);
 }
 
 /** Run the rows; 0 when every check passed, 1 otherwise. */
@@ -2679,6 +4264,7 @@ int main(void)
     fd = make_vcpu(vm, 0);
     launch_rows(fd);
     io_rows(fd);
+    io_string_rows(fd);
     ept_rows(fd);
     cr_rows(fd);
     insn_rows(fd);
@@ -2691,13 +4277,14 @@ int main(void)
     vpid_panic_rows(vm);
     ts_rows(vm);
     hv_rows(vm);
+    selftest_rows(vm);
     CHECK(m.ud == 0 && m.gp == 0 && m.bad_writes == 0 && m.bad_reads == 0,
           "no VMX instruction outside VMX operation and no field the VMCS lacks, over every row");
     fdclose(fd);
     fdclose(vm);
     CHECK(vpid_used[0] == 0, "the vCPUs' VPIDs are freed with the VM");
-    CHECK(live == 5, "the VM's allocations are given back, but for the VMXON regions of the four "
-                     "processors and the MSR bitmap, which the backend keeps");
+    CHECK(live == 4, "the VM's allocations are given back, but for the VMXON regions of the four "
+                     "processors, which the backend keeps");
     printf("kvm-vmx-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
     return failures ? 1 : 0;
 }

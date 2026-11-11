@@ -1,0 +1,5 @@
+# DirectInput sources of GE-Proton11-12, pinned by that tag's submodules.
+# SHA-256 values are of GitHub's archives at the named commits.
+ge-source f85547f0ea51ac356ab42b4de57b927b0044cc85 https://codeload.github.com/GloriousEggroll/proton-ge-custom/tar.gz/f85547f0ea51ac356ab42b4de57b927b0044cc85 6b8699979100f6d629f73efa9d944c81a8942d3fa9d788edcc9dc7c5070d4176
+wine-source fda79a585939fb7512dc220a11249f9ffe825fcf https://codeload.github.com/ValveSoftware/wine/tar.gz/fda79a585939fb7512dc220a11249f9ffe825fcf 664a23bf1151784311b06c976e62f9191291447a1dff1b39489c66d1afe701d7
+staging-source 6cc805ea57132eeaf44764e9213823c9b8d0d300 https://codeload.github.com/wine-staging/wine-staging/tar.gz/6cc805ea57132eeaf44764e9213823c9b8d0d300 46fccc6412d5a0ac5e02047a545bba21c3db45abfa1c161119a1de2f7b8cb360

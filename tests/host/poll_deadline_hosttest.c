@@ -47,7 +47,7 @@ struct wait_queue;
 static short poll_fd(struct fd_entry *e, short events, struct wait_queue **wq);
 struct poll_deadline;
 static int poll_wait(int (*scan)(void *ctx, struct wait_queue **wqs), void *ctx, uint32_t n,
-                     struct poll_deadline *d);
+                     struct poll_deadline *d, const char *wchan);
 static int32_t poll_mask_set(uintptr_t umask, uint32_t size);
 static int32_t poll_mask_done(int32_t ret);
 #include "io/poll.c"
@@ -56,6 +56,22 @@ extern int printf(const char *format, ...);
 extern int dprintf(int fd, const char *format, ...);
 
 volatile uint64_t kernel_ticks;
+
+/* The processors' records, which `current_proc` reads when a wait writes
+ * back its time left; no thread runs in the model. */
+struct percpu cpu_table[NR_CPUS];
+
+/** Copy `n` bytes to user memory, the host's own in the model; 0. */
+int copy_to_user(void __user *dst, const void *src, size_t n)
+{
+    unsigned char *d = (unsigned char *)dst;
+    const unsigned char *s = src;
+
+    while (n-- > 0) {
+        *d++ = *s++;
+    }
+    return 0;
+}
 
 /** The tick count as the kernel reads it whole: the model's `kernel_ticks`. */
 uint64_t tick_count(void)
@@ -135,6 +151,17 @@ static uint64_t ts_tick(const struct poll_timespec *ts, int *set)
     return d.set ? d.tick : 0;
 }
 
+/** The deadline tick of a `select` of `tv`, or 0, with `*set` whether it has
+ * one. */
+static uint64_t tv_tick(const struct poll_timeval *tv, int *set)
+{
+    struct poll_deadline d;
+
+    tv_deadline(tv, &d);
+    *set = d.set;
+    return d.set ? d.tick : 0;
+}
+
 /* The milliseconds and the nanoseconds of `n` ticks. */
 #define TICKS_MS(n) ((int)((n) * (1000u / TICK_HZ)))
 #define TICKS_NS(n) ((long)((n) * TICK_NS))
@@ -200,7 +227,7 @@ static void pending_tick(void)
           "a zero ppoll timeout begun with a tick pending ends at once");
     tv.tv_sec = 0;
     tv.tv_usec = 0;
-    poll_ms_deadline(tv_to_ms(&tv), &d);
+    tv_deadline(&tv, &d);
     CHECK(d.tick == 1000 && deadline_reached(d.tick) && deadline_passed(&d),
           "a zero select timeout begun with a tick pending ends at once");
     poll_ms_deadline(1, &d);
@@ -248,15 +275,14 @@ int main(void)
     CHECK(ts_tick(&ts, &has) == 1000 && has == 1, "a zero ppoll timeout ends at once");
     tv.tv_sec = 0;
     tv.tv_usec = 1;
-    CHECK(ms_tick(tv_to_ms(&tv), &has) == 1001 && has == 1,
-          "a select of 1 us from tick 1000 ends at 1001");
+    CHECK(tv_tick(&tv, &has) == 1001 && has == 1, "a select of 1 us from tick 1000 ends at 1001");
     tv.tv_sec = 1;
     tv.tv_usec = 1;
-    CHECK(ms_tick(tv_to_ms(&tv), &has) == 1001u + TICK_HZ,
+    CHECK(tv_tick(&tv, &has) == 1001u + TICK_HZ,
           "a select of 1 s and 1 us from tick 1000 ends a second and a tick later");
     tv.tv_sec = 0;
     tv.tv_usec = 0;
-    CHECK(ms_tick(tv_to_ms(&tv), &has) == 1000 && has == 1, "a zero select timeout ends at once");
+    CHECK(tv_tick(&tv, &has) == 1000 && has == 1, "a zero select timeout ends at once");
     CHECK(!deadline_reached(1001), "a deadline one tick ahead is not reached");
     CHECK(deadline_reached(1000) && deadline_reached(999),
           "a deadline at the tick or behind it is");

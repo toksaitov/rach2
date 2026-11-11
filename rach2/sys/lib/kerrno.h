@@ -143,4 +143,12 @@
 #define ERFKILL         132
 #define EHWPOISON       133
 
+/* Linux's restart codes, which no program is given: a tracer reads one in
+ * the result register at the exit stop of a call a signal interrupted, as
+ * on Linux (`_syscall_handler`), and the caller gets EINTR or a restart. */
+#define ERESTARTSYS           512
+#define ERESTARTNOINTR        513
+#define ERESTARTNOHAND        514
+#define ERESTART_RESTARTBLOCK 516
+
 #endif /* _KERRNO_H_ */

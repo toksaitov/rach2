@@ -1,0 +1,46 @@
+<6>[59.028000] shutdown: root: unmounted
+<6>[59.028000] shutdown: Stopping the system. Goodbye!
+<6>[59.028000] usb: stop: the controller is halted
+<6>[0.000000] boot: Rach2 Booting
+<6>[0.000000] boot: loader: GRUB 2.12-1ubuntu7.3, by multiboot2 on UEFI
+<6>[0.000000] boot: screen: framebuffer, rgb, 1366x768, 32 bits, pitch 5504, at 0xb0000000
+<7>[0.000000] module: none: the loader carried no module
+<6>[0.000000] console: framebuffer: 1366x768, 32 bits a pixel; the font at 2x, 85x24 cells
+<6>[0.000000] console: font: drawn: code page 437 box drawing with Cyrillic
+<7>[0.000000] boot: Initializing system components
+<6>[0.000000] cpu: page attributes: 0x0007040600070106; the framebuffer is mapped write-combining
+<7>[0.000000] boot: gdt: ready
+<7>[0.000000] memory: map: 0x00000000AAFBF000-0x00000000AAFFF000 acpi
+<7>[0.000000] memory: map: 0x00000000AAFFF000-0x00000000AB000000 available
+<7>[0.000000] memory: map: 0x0000000100000000-0x000000044F600000 available
+<7>[0.000000] memory: map: 0x00000000000A0000-0x00000000000C0000 reserved
+<7>[0.000000] memory: map: 0x00000000AB000000-0x00000000AFA00000 reserved
+<7>[0.000000] memory: map: 0x00000000E0000000-0x00000000F0000000 reserved
+<7>[0.000000] memory: map: 0x00000000FE101000-0x00000000FE113000 reserved
+<7>[0.000000] memory: map: 0x00000000FEC00000-0x00000000FEC01000 reserved
+<7>[0.000000] memory: map: 0x00000000FED00000-0x00000000FEE01000 reserved
+<7>[0.000000] pci: ecam: 1:0.0: extended capability 0x1, version 2, at 0x100
+<7>[0.050000] acpi: acpica: FPDT 0x00000000AAFFA000 000044 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+<7>[0.050000] acpi: acpica: POAT 0x00000000AAFF9000 000055 (v03 LENOVO CB-01    00000001 ACPI 00040000)
+<6>[0.138000] acpi: pnp: i8042 aux: PNP: SYN2b37 PNP0f13 SYN0002 SYN2b00
+<6>[3.881000] ahci: port 0: 488397168 sectors, 238475 MiB
+<6>[3.887000] nvme: none: no NVMe controller on the bus
+<7>[3.893000] vtd: irte: dmar1 index 4: ioapic 2, vector 46 to apic 0, edge, sid 0xf0f8 svt 1
+<7>[3.893000] ioapic: route: line 14 to gsi 14, vector 46, edge, active high
+<6>[3.975000] usb: unsupported: ehci at 00:1d.0
+<7>[3.982000] usb: caps: hcs1 0xD000820 hcs2 0x84000054 hcc1 0x200077C1 pagesize 0x1
+<6>[3.985000] usb: ready: xhci0: version 100, 13 ports, 32 slots, 32-byte contexts
+<6>[4.549000] usb: device: port 6: bda:579a, class 0: no driver for it here
+<7>[5.208000] rtl8168: RTL8168GU: xid 0x509, MMIO 0x48A000, MAC 28:D2:44:7E:E0:AF
+<6>[5.244000] netconsole: udp: port 6666 of eth0: 0 datagrams, held, 0 characters dropped
+<7>[5.261000] vtd: irte: dmar1 index 9: msi of 2:0.0, vector 56 to apic 0, edge, sid 0x0200 svt 1
+<7>[5.261000] pci: msi: 2:0.0 on vector 56, remapped
+<6>[5.261000] ath9k: interrupts: messages on vector 56
+<6>[5.269000] ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac b8:ee:65:32:89:15 subsys 17aa:4026
+<6>[5.280000] drm: start
+<6>[5.287000] i915: 00:02.0: 0a16 left to the firmware's framebuffer; rach2.i915 binds it
+<6>[5.295000] drm: simpledrm: card0
+<6>[5.302000] console: card0: the firmware's framebuffer
+<6>[12.584000] net: wlan0: IPv6 fd91:381e:e667:4a0c:a1e:e4b1:d013:473b/64 added
+<6>[12.584000] net: wlan0: IPv6 fd91:381e:e667:4a0c:9de0:a636:d679:6cf1/64 added
+<6>[13.094000] net: wlan0: IPv4 192.168.0.105/24

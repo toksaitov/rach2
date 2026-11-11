@@ -17,6 +17,9 @@
 /* The bytes of a device's name with its terminator, Linux's `hid->name`. */
 #define HID_NAME_MAX 128
 
+/* The bytes of its serial with its terminator, Linux's `hid->uniq`. */
+#define HID_UNIQ_MAX 64
+
 /* One input device, Linux's `struct hid_input`, with the capabilities its
  * usages were mapped to before its event device is registered. */
 struct hid_input {
@@ -43,13 +46,16 @@ struct hid_dev {
     struct hid_desc desc;
     char name[HID_NAME_MAX]; /* "Manufacturer Product", as usbhid writes it */
     const char *phys;        /* EVIOCGPHYS, kept by its pointer */
+    char uniq[HID_UNIQ_MAX]; /* EVIOCGUNIQ: the serial string, "" for none */
     uint16_t vendor;
     uint16_t product;
     uint16_t version; /* bcdHID, which usbhid gives as the version */
     uint32_t ninputs;
-    uint8_t *inbuf;  /* a report padded to its full length, `insize` bytes */
-    uint32_t insize; /* the longest input report with its ID, plus slack */
-    int multiplier;  /* a Resolution Multiplier report to send, or -1 */
+    uint8_t *inbuf;   /* a report padded to its full length, `insize` bytes */
+    uint32_t insize;  /* the longest input report with its ID, plus slack */
+    uint8_t *outbuf;  /* two of the longest output or Feature report, for hid.c */
+    uint32_t outsize; /* the longest output or Feature report with its ID */
+    int multiplier;   /* a Resolution Multiplier report to send, or -1 */
     struct hid_input inputs[HID_MAX_INPUTS];
 };
 
@@ -84,13 +90,16 @@ void hid_input_report(struct hid_dev *hid, const uint8_t *data, uint32_t size);
 /**
  * Build the output report of `hid`'s LEDs in `out`, of `size` bytes, as
  * Linux's `hidinput_led_worker` builds it: the report that holds the first
- * LED field, each LED usage set from `leds`, a bit for each LED_* code,
- * and every other field of the report 0. `*value` is set to the wValue of
+ * LED field, and every other field of the report 0. Each LED usage is set
+ * from the input device that owns its field: the LEDs programs lit on its
+ * event device, and on a keyboard Num, Caps and Scroll Lock from `locks`,
+ * the console's, a bit 1 << LED_* each. `*value` is set to the wValue of
  * SET_REPORT, 0x0200 with the report's ID. Returns the report's bytes, its
  * ID byte first when it has one, or -1 when the device has no LED or the
  * report is longer than `size`.
  */
-int hidinput_led_report(struct hid_dev *hid, unsigned int leds, uint8_t *out, int size, int *value);
+int hidinput_led_report(struct hid_dev *hid, unsigned int locks, uint8_t *out, int size,
+                        int *value);
 
 /**
  * Build the Feature report that sets each Resolution Multiplier of `hid`

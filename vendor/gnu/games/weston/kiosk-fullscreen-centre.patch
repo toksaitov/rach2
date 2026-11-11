@@ -1,0 +1,56 @@
+Description: Centre a fullscreen surface on each commit and report its place
+ kiosk-shell centred a fullscreen surface only when it was mapped or
+ resized, and told Xwayland's window manager a view's place only from its
+ transform signal once the view was mapped. The window manager frames an X
+ window that sets no fullscreen state with the theme's margin until
+ kiosk-shell makes it fullscreen, so the window's first commit is at its
+ framed size, 1430x832 for a 1366x768 window; it can report the window
+ fullscreen after the commit of its fullscreen size, so that no commit
+ centred that size; and a view centred while unmapped, or again where it
+ was, sends the window manager no place, so the X frame kept the place it
+ had with its margin, -32,-32. The shell now centres a fullscreen surface on
+ each commit and reports an X window's place after each commit.
+Author: Rach2
+Forwarded: no
+---
+--- a/kiosk-shell/kiosk-shell.c
++++ b/kiosk-shell/kiosk-shell.c
+@@ -995,7 +995,6 @@
+ 		weston_desktop_surface_get_surface(desktop_surface);
+ 	const char *app_id =
+ 		weston_desktop_surface_get_app_id(desktop_surface);
+-	bool is_resized;
+ 	bool is_fullscreen;
+ 
+ 	assert(shsurf);
+@@ -1026,12 +1025,14 @@
+ 	 * updating?
+ 	 */
+ 
+-	is_resized = surface->width != shsurf->last_width ||
+-		     surface->height != shsurf->last_height;
+ 	is_fullscreen = weston_desktop_surface_get_maximized(desktop_surface) ||
+ 			weston_desktop_surface_get_fullscreen(desktop_surface);
+ 
+-	if (!weston_surface_is_mapped(surface) || (is_resized && is_fullscreen)) {
++	/* Xwayland's window manager can report a window fullscreen after its
++	 * first commit, which centred it at its framed size, and after the
++	 * commit of its fullscreen size; centre a fullscreen surface on each
++	 * commit. */
++	if (!weston_surface_is_mapped(surface) || is_fullscreen) {
+ 		if (is_fullscreen || !shsurf->xwayland.is_set) {
+ 			weston_shell_utils_center_on_output(shsurf->view,
+ 							    shsurf->output);
+@@ -1085,6 +1086,12 @@
+ 
+ 	shsurf->last_width = surface->width;
+ 	shsurf->last_height = surface->height;
++
++	/* The transform handler tells Xwayland's window manager where a view
++	 * is only once it is mapped, and centring a view again where it was
++	 * sends no transform signal; an X window first placed while unmapped
++	 * kept the frame's place from before it was fullscreen. */
++	transform_handler(NULL, surface);
+ }
+ 
+ static void

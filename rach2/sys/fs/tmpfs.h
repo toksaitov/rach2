@@ -50,6 +50,22 @@ int tmpfs_memfd(struct vfs_mount *mnt, const char *name, uint32_t mode, uint32_t
  * where Linux fails the mapping with EPERM and the seal with EBUSY. */
 uint32_t tmpfs_seals(void *node);
 
+/* The chunk a write to a file sealed against growth is cut at: 2 MiB, the
+ * largest folio of Linux's shmem with CONFIG_TRANSPARENT_HUGEPAGE. */
+#define TMPFS_GROW_CHUNK 0x200000u
+
+/**
+ * The bytes of a write of `count` at `pos` that F_SEAL_GROW lets into a
+ * file of `size` bytes: all of them when the write ends at or before the
+ * end, and otherwise those before the last TMPFS_GROW_CHUNK boundary at or
+ * below the end. Linux's generic_perform_write takes a write in chunks of
+ * the mapping's largest folio, aligned to it, which for shmem under a
+ * kernel with transparent huge pages, as Debian's, is 2 MiB, and
+ * shmem_write_begin refuses the first chunk that would pass the end. 0 when
+ * no byte fits, which the write answers -EPERM.
+ */
+uint32_t tmpfs_grow_room(uint64_t pos, uint32_t count, uint64_t size);
+
 /**
  * Add `seals` to the tmpfs file `node`, as F_ADD_SEALS does: 0, -EINVAL for
  * a bit that is no seal, or -EPERM when the file has TMPFS_SEAL_SEAL. A
@@ -57,6 +73,22 @@ uint32_t tmpfs_seals(void *node);
  * against a change of size and against writing too, as on Linux.
  */
 int tmpfs_add_seals(void *node, uint32_t seals);
+
+/**
+ * A file of memfd_secret on `mnt`: a regular file of mode 0600 that no
+ * directory names, owned by the caller, whose bytes only its shared mappings
+ * reach. Its pages are counted for the caller's real user, as Linux counts
+ * them in the user's locked_vm, against the RLIMIT_MEMLOCK of the process
+ * that touches each, with no exception for privilege; a touch past the
+ * limit is SIGBUS. read and write are -EINVAL, a size is set only while it
+ * is 0, else -EINVAL, fallocate is -EOPNOTSUPP and fcntl's seal commands
+ * EINVAL, as on Linux. The node comes back in `*node` with one hold. 0, or
+ * -ENOMEM.
+ */
+int tmpfs_secret_file(struct vfs_mount *mnt, void **node);
+
+/** Whether the tmpfs node `node` is a file of memfd_secret. */
+int tmpfs_secret(void *node);
 
 /** The name `tmpfs_memfd` was given for the file `node`, or NULL for a file
  * made in a directory. */

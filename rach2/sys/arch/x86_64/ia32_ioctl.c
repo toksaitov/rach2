@@ -7,6 +7,7 @@
 #include "ia32.h"
 
 #include "../../fs/fd.h"
+#include "../../drm/drm.h"
 #include "../../lib/kstring.h"
 #include "../../mm/kheap.h"
 #include "../../mm/usercopy.h"
@@ -296,8 +297,8 @@ static uint32_t ev_compat_bytes(uint32_t nr)
 /** The bit set reads of type 'E', cut to their compat length: the native
  * request reads the set into a buffer here, and the caller gets as much of
  * it as Linux gives a compat caller, which is also the result. Every other
- * request of type 'E' passes, EVIOCSFF among them, which evdev does not
- * answer. */
+ * request of type 'E' passes, EVIOCSFF among them, whose compat struct
+ * ff_effect of 44 bytes evdev takes itself. */
 static long evdev(const fd_entry_t *e, unsigned int fd, unsigned int cmd, unsigned long arg)
 {
     uint8_t bits[EV_BITS_MAX];
@@ -353,21 +354,63 @@ static long audio(const fd_entry_t *e, unsigned int fd, unsigned int cmd, unsign
 /* ------------------------------------------------------------------------
  * KVM: its structures have one layout in both ABIs, but the two that carry
  * a pointer in a union with a 64-bit field take only its low half from a
- * compat caller, as Linux's kvm_vm_compat_ioctl does.
+ * compat caller, and KVM_X86_SET_MSR_FILTER, whose ranges hold a pointer,
+ * has i386's own number and layout, as Linux's kvm_vm_compat_ioctl and
+ * kvm_arch_vm_compat_ioctl take them.
  */
 
-#define KVM_GET_DIRTY_LOG   0x4010AE42u
-#define KVM_CLEAR_DIRTY_LOG 0xC018AEC0u
+#define KVM_GET_DIRTY_LOG             0x4010AE42u
+#define KVM_CLEAR_DIRTY_LOG           0xC018AEC0u
+#define KVM_X86_SET_MSR_FILTER        0x4188AEC6u
+#define KVM_X86_SET_MSR_FILTER_COMPAT 0x4104AEC6u
+#define KVM_MSR_FILTER_MAX_RANGES     16u
+
+/* The native filter: its flags, then each range's flags, MSR count and
+ * base, with the bitmap's pointer in a 64-bit word. */
+struct msr_filter64 {
+    uint32_t flags;
+    uint32_t pad;
+    struct {
+        uint32_t flags, nmsrs, base, pad;
+        uint64_t bitmap;
+    } ranges[KVM_MSR_FILTER_MAX_RANGES];
+};
+
+/** KVM_X86_SET_MSR_FILTER from i386's filter at `arg`, whose ranges hold
+ * the bitmap's pointer in 32 bits, as Linux's
+ * KVM_X86_SET_MSR_FILTER_COMPAT. */
+static long kvm_msr_filter(unsigned int fd, unsigned long arg)
+{
+    uint32_t f32[1 + 4 * KVM_MSR_FILTER_MAX_RANGES];
+    struct msr_filter64 f;
+    uint32_t i;
+
+    if (copy_from_user(f32, (const void __user *)arg, sizeof(f32)) != 0) {
+        return -EFAULT;
+    }
+    k_memset(&f, 0, sizeof(f));
+    f.flags = f32[0];
+    for (i = 0; i < KVM_MSR_FILTER_MAX_RANGES; i++) {
+        f.ranges[i].flags = f32[1 + 4 * i];
+        f.ranges[i].nmsrs = f32[2 + 4 * i];
+        f.ranges[i].base = f32[3 + 4 * i];
+        f.ranges[i].bitmap = f32[4 + 4 * i];
+    }
+    return ia32_ioctl_native(fd, KVM_X86_SET_MSR_FILTER, &f, sizeof(f));
+}
 
 /** KVM_GET_DIRTY_LOG and KVM_CLEAR_DIRTY_LOG with the bitmap's pointer
- * zero-extended from its low 32 bits; every other request of type 0xAE
- * passes. */
+ * zero-extended from its low 32 bits, and i386's KVM_X86_SET_MSR_FILTER;
+ * every other request of type 0xAE passes. */
 static long kvm(const fd_entry_t *e, unsigned int fd, unsigned int cmd, unsigned long arg)
 {
     uint32_t log[6];
     uint32_t len = IOC_SIZE(cmd);
 
     (void)e;
+    if (cmd == KVM_X86_SET_MSR_FILTER_COMPAT) {
+        return kvm_msr_filter(fd, arg);
+    }
     if (cmd != KVM_GET_DIRTY_LOG && cmd != KVM_CLEAR_DIRTY_LOG) {
         return pass(fd, cmd, arg);
     }
@@ -691,8 +734,7 @@ static long tty(const fd_entry_t *e, unsigned int fd, unsigned int cmd, unsigned
 /** The DRM requests, type 'd' (ia32_ioctl_drm.c). */
 static long drm(const fd_entry_t *e, unsigned int fd, unsigned int cmd, unsigned long arg)
 {
-    (void)e;
-    return ia32_ioctl_drm(fd, cmd, arg);
+    return drm_is_file(e) ? ia32_ioctl_drm(fd, cmd, arg) : pass(fd, cmd, arg);
 }
 
 /** The requests of dma-buf, sync_file and udmabuf (ia32_ioctl_gpu.c). */

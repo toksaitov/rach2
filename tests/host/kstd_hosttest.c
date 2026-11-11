@@ -1,5 +1,6 @@
 /**
- * kstd_hosttest.c: k_itoa, the kernel's integer formatter (`lib/kstd.c`).
+ * kstd_hosttest.c: k_itoa, the kernel's integer formatter, and k_strtoul,
+ * its reader of a number written to /sys (`lib/kstd.c`).
  *
  * host-deps: rach2/sys/lib/kstd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
@@ -10,10 +11,17 @@
  * `int` overflows, which is undefined, and UBSan reports it here. The
  * rejections of a buffer too small and of a radix out of range, the count
  * returned, and the plus sign `force_sign` writes are covered too. It
- * depends on k_strreverse and k_strtoupper, compiled in. Exits with the count
- * of failed checks, at most 120.
+ * depends on k_strreverse and k_strtoupper, compiled in. k_strtoul is
+ * checked against what Linux's kstrtoul takes with base 0: the bases, the
+ * plus sign, one newline, leading zeros past 31 bytes, the end of the text
+ * at a NUL, junk, a number past 64 bits before junk and one past 32 bits
+ * with and without it, which i686's unsigned long cannot hold, with `*out`
+ * left alone on an error. k_strtoll is checked against Linux's kstrtos64:
+ * both ends of 64 signed bits and one past each, a minus with a plus after
+ * it, and junk. Exits with the count of failed checks, at most 120.
  */
 
+#include "kerrno.h"
 #include "kstd.h"
 
 static int fails;
@@ -25,6 +33,26 @@ static int fails;
             fails++;   \
         }              \
     } while (0)
+
+/** Whether k_strtoul reads the text `s` as `want`, an error code or 0,
+ * with the value `value` on success and `*out` untouched on an error. */
+static int reads(const char *s, int want, unsigned long value)
+{
+    unsigned long out = 12345;
+    int rc = k_strtoul(s, k_strlen(s), &out);
+
+    return rc == want && out == (want == 0 ? value : 12345ul);
+}
+
+/** Whether k_strtoll reads the text `s` as `want`, an error code or 0,
+ * with the value `value` on success and `*out` untouched on an error. */
+static int reads_signed(const char *s, int want, long long value)
+{
+    long long out = 12345;
+    int rc = k_strtoll(s, k_strlen(s), &out);
+
+    return rc == want && out == (want == 0 ? value : 12345ll);
+}
 
 /** Whether the strings `a` and `b` are equal. */
 static int streq(const char *a, const char *b)
@@ -87,6 +115,56 @@ int main(void)
     CHECK(streq(b, "0"));
     CHECK(k_itoa(-7, b, sizeof(b), 'd', true) == 3);
     CHECK(streq(b, "-7"));
+
+    /* k_strtoul, as Linux's kstrtoul with base 0. */
+    CHECK(reads("42", 0, 42));
+    CHECK(reads("42\n", 0, 42));
+    CHECK(reads("+7", 0, 7));
+    CHECK(reads("010", 0, 8));
+    CHECK(reads("0", 0, 0));
+    CHECK(reads("0x1F", 0, 31));
+    CHECK(reads("+0X1f\n", 0, 31));
+    CHECK(reads("0xffffffff", 0, 0xfffffffful));
+    CHECK(reads("000000000000000000000000000000000005", 0, 5));
+    CHECK(reads("", -EINVAL, 0));
+    CHECK(reads("+", -EINVAL, 0));
+    CHECK(reads("\n", -EINVAL, 0));
+    CHECK(reads("-1", -EINVAL, 0));
+    CHECK(reads("0x", -EINVAL, 0));
+    CHECK(reads("0xg", -EINVAL, 0));
+    CHECK(reads("08", -EINVAL, 0));
+    CHECK(reads("1a", -EINVAL, 0));
+    CHECK(reads("1 ", -EINVAL, 0));
+    CHECK(reads("1\n\n", -EINVAL, 0));
+    CHECK(reads("0x10000000000000000", -ERANGE, 0));
+    /* A 64-bit overflow is ERANGE before the junk after it, and junk after
+     * a number past 32 bits EINVAL, at either width. */
+    CHECK(reads("18446744073709551616x", -ERANGE, 0));
+    CHECK(reads("4294967296x", -EINVAL, 0));
+    /* The unsigned long's bound comes last: ERANGE where it has 32 bits,
+     * as on i686. */
+    CHECK(sizeof(unsigned long) == 4 ? reads("4294967296", -ERANGE, 0)
+                                     : reads("4294967296", 0, (unsigned long)4294967296ull));
+    /* k_strtoll, as Linux's kstrtos64 with base 0. */
+    CHECK(reads_signed("1700000000\n", 0, 1700000000ll));
+    CHECK(reads_signed("+0x3c", 0, 60));
+    CHECK(reads_signed("-010", 0, -8));
+    CHECK(reads_signed("9223372036854775807", 0, 0x7fffffffffffffffll));
+    CHECK(reads_signed("-9223372036854775808", 0, -0x7fffffffffffffffll - 1));
+    CHECK(reads_signed("9223372036854775808", -ERANGE, 0));
+    CHECK(reads_signed("-9223372036854775809", -ERANGE, 0));
+    CHECK(reads_signed("-+1", -EINVAL, 0));
+    CHECK(reads_signed("-", -EINVAL, 0));
+    CHECK(reads_signed("1700000000abc", -EINVAL, 0));
+    CHECK(reads_signed("=5", -EINVAL, 0));
+    {
+        unsigned long out = 0;
+
+        /* The text ends at a NUL before `len`, as Linux's string does. */
+        CHECK(k_strtoul("9\0junk", 6, &out) == 0 && out == 9);
+        /* And at `len` before a NUL. */
+        CHECK(k_strtoul("123", 2, &out) == 0 && out == 12);
+    }
 
     return (fails > 120) ? 120 : fails;
 }

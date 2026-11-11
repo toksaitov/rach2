@@ -1,0 +1,580 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.games-wm",
+  "summary": "Fullscreen X and Wine windows in the boot session's Weston on kiosk-shell: placed at the origin unframed, focused and scaled from a lower mode, raw pointer motion under a confining grab, Wine's tone recorded through the audio loopback and DirectInput's keyboard and mouse",
+  "cases": [
+    {
+      "case_id": "machine.games-wm.place",
+      "behavior": "xplace and a Wine Direct3D 9 fullscreen window at the output's 1366x768 sit at 0,0 unframed with focus and fullscreen state, the screen shows each window's halves from edge to edge, xplace's confining grab holds and its raw relative motion sums to what QMP sent while the pointer stays at the window's edge",
+      "units": [
+        "tests/system/games/wm.py",
+        "tests/system/games/xplace.c",
+        "vendor/gnu/games/weston",
+        "vendor/gnu/desktop",
+        "GE-Proton11-12",
+        "Weston",
+        "Xwayland",
+        "PulseAudio"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "row": "place"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "gameswm_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "the runner runs as root to set the session's mode and read the keyboard and the loopback; xplace and the Wine programs run as the desktop account in its session",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "the runner kills its clients, ends the Wine server and removes its prefix on every exit; libetude-case stops QEMU and removes passed overlays, keeping failed overlays and the runner's output"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, the virgl display, HDA with the audio loopback and the PS/2 keyboard and mouse, log in as root, open the guest command channel and mount the payload's disk"
+        },
+        {
+          "step_id": "row",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run wm.py's row as root in the boot session, moving the pointer, clicking and pressing Escape through QMP at its ready lines"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "games-payload",
+                "base": "games-data",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 4,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.audio.loopback"
+            ],
+            "display": "virgl",
+            "audio": "hda",
+            "audio_backend": "none"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "row",
+          "checks": "each window's place, frame, focus and fullscreen state, weston-screenshooter's sample points, the grab, the raw motion sums and the pointer's place hold, and the runner prints GAMESWM OK place",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 2
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 1320000000,
+          "ceiling_us": 3960000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 900000000,
+          "ceiling_us": 2700000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 8589934592,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "gnu-image",
+          "node": "images/gnu-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "games-data",
+          "node": "tests/system/games/data.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "gameswm_scenario",
+          "node": "tests/cases/machine/gameswm_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "image",
+        "reason": "the row needs QEMU's virgl display, QMP's input, and the HDA loopback"
+      }
+    },
+    {
+      "case_id": "machine.games-wm.scaled",
+      "behavior": "xplace in an emulated 800x600 mode keeps an 800x600 window at 0,0 that Xwayland scales to the whole 1366x768 output, and a Wine Direct3D 9 fullscreen window at 800x600 fills the output",
+      "units": [
+        "tests/system/games/wm.py",
+        "tests/system/games/xplace.c",
+        "vendor/gnu/games/weston",
+        "vendor/gnu/desktop",
+        "GE-Proton11-12",
+        "Weston",
+        "Xwayland",
+        "PulseAudio"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "row": "scaled"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "gameswm_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "the runner runs as root to set the session's mode and read the keyboard and the loopback; xplace and the Wine programs run as the desktop account in its session",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "the runner kills its clients, ends the Wine server and removes its prefix on every exit; libetude-case stops QEMU and removes passed overlays, keeping failed overlays and the runner's output"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, the virgl display, HDA with the audio loopback and the PS/2 keyboard and mouse, log in as root, open the guest command channel and mount the payload's disk"
+        },
+        {
+          "step_id": "row",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run wm.py's row as root in the boot session, moving the pointer and pressing Escape through QMP at its ready lines"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "games-payload",
+                "base": "games-data",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 4,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.audio.loopback"
+            ],
+            "display": "virgl",
+            "audio": "hda",
+            "audio_backend": "none"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "row",
+          "checks": "xplace's mode, place, frame, focus and fullscreen state, Wine's window's place, and weston-screenshooter's sample points across the whole output hold, and the runner prints GAMESWM OK scaled",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 2
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 1320000000,
+          "ceiling_us": 3960000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 900000000,
+          "ceiling_us": 2700000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 8589934592,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "gnu-image",
+          "node": "images/gnu-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "games-data",
+          "node": "tests/system/games/data.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "gameswm_scenario",
+          "node": "tests/cases/machine/gameswm_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "image",
+        "reason": "the row needs QEMU's virgl display, QMP's input, and the HDA loopback"
+      }
+    },
+    {
+      "case_id": "machine.games-wm.wineio",
+      "behavior": "64-bit and 32-bit Wine programs play a 440 Hz waveOut tone through PulseAudio on OSS that the audio loopback records, and DirectInput 8 lists the keyboard and the mouse, with Wine's log naming the event devices it found through /sys/class/input",
+      "units": [
+        "tests/system/games/wm.py",
+        "tests/system/games/xplace.c",
+        "vendor/gnu/games/weston",
+        "vendor/gnu/desktop",
+        "GE-Proton11-12",
+        "Weston",
+        "Xwayland",
+        "PulseAudio"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "row": "wineio"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "gameswm_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "the runner runs as root to set the session's mode and read the keyboard and the loopback; xplace and the Wine programs run as the desktop account in its session",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "the runner kills its clients, ends the Wine server and removes its prefix on every exit; libetude-case stops QEMU and removes passed overlays, keeping failed overlays and the runner's output"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, the virgl display, HDA with the audio loopback and the PS/2 keyboard and mouse, log in as root, open the guest command channel and mount the payload's disk"
+        },
+        {
+          "step_id": "row",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run wm.py's row as root in the boot session, moving the pointer and pressing Escape through QMP at its ready lines"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "games-payload",
+                "base": "games-data",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 4,
+            "memory_bytes": 8589934592,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.audio.loopback"
+            ],
+            "display": "virgl",
+            "audio": "hda",
+            "audio_backend": "none"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "row",
+          "checks": "the launcher sets PULSE_LATENCY_MSEC to 60, both tones measure 440 Hz in at least twenty of the 50 ms windows they fill and another frequency in at most a fifth as many, DirectInput creates the system keyboard and mouse, Wine's log names /dev/input event devices, and the runner prints GAMESWM OK wineio",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 2
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 1320000000,
+          "ceiling_us": 3960000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 900000000,
+          "ceiling_us": 2700000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 4000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 9663676416,
+        "disk_bytes": 8589934592,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "gnu-image",
+          "node": "images/gnu-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "games-data",
+          "node": "tests/system/games/data.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "gameswm_scenario",
+          "node": "tests/cases/machine/gameswm_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "image",
+        "reason": "the row needs QEMU's virgl display, QMP's input, and the HDA loopback"
+      }
+    }
+  ]
+}

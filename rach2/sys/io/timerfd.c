@@ -129,6 +129,15 @@ static void ptimer_free(struct ktimer **link);
  * `timer_lock`. */
 static void expire(struct ktimer *t, uint64_t now)
 {
+    struct wq_waiter *w;
+
+    if (!t->tg) {
+        for (w = t->wq.head; w; w = w->next) {
+            if (w->proc) {
+                waketime_expire(w->proc, t->due);
+            }
+        }
+    }
     if (t->isec != 0 || t->isub != 0) {
         uint64_t interval = ticks_of(t->isec, t->isub);
         uint64_t gap = now - t->due;

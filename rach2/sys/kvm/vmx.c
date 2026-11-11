@@ -92,6 +92,8 @@
 #define VM_EXIT_MSR_LOAD_ADDR         0x2008u
 #define VM_ENTRY_MSR_LOAD_ADDR        0x200Au
 #define TSC_OFFSET                    0x2010u
+#define TSC_MULTIPLIER                0x2032u
+#define XSS_EXIT_BITMAP               0x202Cu
 #define EPT_POINTER                   0x201Au
 #define GUEST_PHYSICAL_ADDRESS        0x2400u
 #define VMCS_LINK_POINTER             0x2800u
@@ -199,12 +201,18 @@
 #define PROC_SECONDARY   0x80000000u
 
 /* The secondary controls. */
-#define PROC2_EPT     0x00000002u
-#define PROC2_RDTSCP  0x00000008u
-#define PROC2_VPID    0x00000020u
-#define PROC2_WBINVD  0x00000040u
-#define PROC2_UG      0x00000080u
-#define PROC2_INVPCID 0x00001000u
+#define PROC2_EPT         0x00000002u
+#define PROC2_RDTSCP      0x00000008u
+#define PROC2_VPID        0x00000020u
+#define PROC2_WBINVD      0x00000040u
+#define PROC2_UG          0x00000080u
+#define PROC2_INVPCID     0x00001000u
+#define PROC2_XSAVES      0x00100000u
+#define PROC2_TSC_SCALING 0x02000000u
+
+/* The TSC multiplier, 16 bits of integer over 48 of fraction: 1. */
+#define TSC_RATIO_BITS 48u
+#define TSC_RATIO_ONE  (1ull << TSC_RATIO_BITS)
 
 /* The exit controls. */
 #define EXIT_SAVE_DEBUG 0x00000004u
@@ -343,6 +351,13 @@
 #define AC_VECTOR  17
 #define MC_VECTOR  18
 #define CP_VECTOR  21
+
+/* The exceptions that always exit, as Linux's vmx_update_exception_bitmap
+ * has them with EPT: #DB and #AC, so that a guest cannot hold the
+ * processor in an endless loop of either (CVE-2015-8104, CVE-2015-5307);
+ * #UD, for the instructions emulate.c runs after one; and #MC, which is
+ * the host's. */
+#define EXC_ALWAYS ((1u << DB_VECTOR) | (1u << UD_VECTOR) | (1u << AC_VECTOR) | (1u << MC_VECTOR))
 
 /* The guest's run, bounded by the preemption timer: about 4 million TSC
  * cycles, 2 ms at the Lenovo's 1.9 GHz, past the host's 1 ms tick, which
@@ -719,11 +734,6 @@ static void *vmxon_region[NR_CPUS];
 static uint64_t vmxon_pa[NR_CPUS];
 static int fc_checked[NR_CPUS];
 
-/* The MSR bitmap every vCPU shares: every MSR exits but FS_BASE,
- * GS_BASE and KERNEL_GS_BASE, which the guest reaches directly. */
-static uint8_t *msr_bitmap;
-static uintptr_t msr_bitmap_pa;
-
 /* The VPIDs in use, 1 to 65535, a bit each; 0 is the host's. */
 static uint8_t vpid_used[8192];
 
@@ -756,6 +766,8 @@ struct vmx_vcpu {
     uint64_t vmcs_pa;
     uint64_t *msrs; /* the MSR area: the guest's list, then at HOST_LIST the host's */
     uintptr_t msrs_pa;
+    uint8_t *msr_bitmap; /* every MSR exits but those `vmx_msr_filter_changed` passes */
+    uintptr_t msr_bitmap_pa;
     void *host_fpu;
     uint16_t vpid;
     int built;       /* the VMCS's lasting fields are written */
@@ -769,7 +781,7 @@ struct vmx_vcpu {
     uint32_t inj_info, inj_error, inj_len;   /* the event the next entry injects */
     uint64_t pdpte[4];
     uint64_t debugctl;
-    int guest_dr; /* DR0 to DR3 and DR6 were loaded for the run */
+    int guest_dr; /* DR0 to DR3 were loaded for the run */
     int tf_set;   /* the entry set RFLAGS.TF for KVM_GUESTDBG_SINGLESTEP */
     struct vmx_exit ex;
 };
@@ -1079,19 +1091,23 @@ static void vmcs_build(struct kvm_vcpu *v)
         vmcs_write(VIRTUAL_PROCESSOR_ID, x->vpid);
     }
     vmcs_write(PIN_BASED_VM_EXEC_CONTROL, caps.pin);
-    x->proc = caps.proc;
+    x->proc = caps.proc & ~(v->hlt_in_guest ? PROC_HLT : 0u);
     vmcs_write(CPU_BASED_VM_EXEC_CONTROL, x->proc);
-    x->proc2 = caps.proc2 & ~(PROC2_RDTSCP | PROC2_INVPCID);
+    x->proc2 = caps.proc2 & ~(PROC2_RDTSCP | PROC2_INVPCID | PROC2_XSAVES);
     vmcs_write(SECONDARY_VM_EXEC_CONTROL, x->proc2);
+    if (caps.proc2 & PROC2_XSAVES) {
+        /* No component of IA32_XSS makes XSAVES or XRSTORS exit. */
+        vmcs_write(XSS_EXIT_BITMAP, 0);
+    }
     vmcs_write(VM_EXIT_CONTROLS, caps.exit);
     x->entry = caps.entry & ~ENTRY_IA32E;
     vmcs_write(VM_ENTRY_CONTROLS, x->entry);
-    x->exc_bitmap = 1u << MC_VECTOR;
+    x->exc_bitmap = EXC_ALWAYS;
     vmcs_write(EXCEPTION_BITMAP, x->exc_bitmap);
     vmcs_write(PAGE_FAULT_ERROR_CODE_MASK, 0);
     vmcs_write(PAGE_FAULT_ERROR_CODE_MATCH, 0);
     vmcs_write(CR3_TARGET_COUNT, 0);
-    vmcs_write(MSR_BITMAP, msr_bitmap_pa);
+    vmcs_write(MSR_BITMAP, x->msr_bitmap_pa);
     vmcs_write(VM_ENTRY_MSR_LOAD_ADDR, x->msrs_pa);
     vmcs_write(VM_ENTRY_MSR_LOAD_COUNT, n);
     vmcs_write(VM_EXIT_MSR_STORE_ADDR, x->msrs_pa);
@@ -1149,19 +1165,19 @@ static uint64_t table_msr(struct kvm_vcpu *v, uint32_t index)
 {
     uint64_t value = 0;
 
-    if (kvm_msr_get(v, index, &value) != 0) {
+    if (kvm_msr_get(v, index, &value, 1) != 0) {
         return 0;
     }
     return value;
 }
 
-/** The secondary controls `v`'s CPUID allows: RDTSCP and INVPCID only
- * where it offers them, since without the control each is #UD, as Linux's
- * vmx_secondary_exec_control. */
+/** The secondary controls `v`'s CPUID allows: RDTSCP, INVPCID and
+ * XSAVES only where it offers them, XSAVES with XSAVE, since without the
+ * control each is #UD, as Linux's vmx_secondary_exec_control. */
 static uint32_t proc2_for(const struct kvm_vcpu *v)
 {
-    const struct kvm_cpuid_entry2 *e;
-    uint32_t p = caps.proc2 & ~(PROC2_RDTSCP | PROC2_INVPCID);
+    const struct kvm_cpuid_entry2 *e, *d1;
+    uint32_t p = caps.proc2 & ~(PROC2_RDTSCP | PROC2_INVPCID | PROC2_XSAVES);
 
     e = kvm_cpuid_find(v, 0x80000001u, 0);
     if (e && ((e->edx >> 27) & 1u)) {
@@ -1170,6 +1186,11 @@ static uint32_t proc2_for(const struct kvm_vcpu *v)
     e = kvm_cpuid_find(v, 7, 0);
     if (e && ((e->ebx >> 10) & 1u)) {
         p |= caps.proc2 & PROC2_INVPCID;
+    }
+    e = kvm_cpuid_find(v, 1, 0);
+    d1 = kvm_cpuid_find(v, 0xD, 1);
+    if (e && ((e->ecx >> 26) & 1u) && d1 && ((d1->eax >> 3) & 1u)) {
+        p |= caps.proc2 & PROC2_XSAVES;
     }
     return p;
 }
@@ -1197,17 +1218,15 @@ static void load_intr(struct kvm_vcpu *v)
     }
 }
 
-/** Write the exception bitmap and DR7 for the caller's debugging: #DB for
- * single steps and hardware breakpoints, #BP for software ones, as Linux's
- * vmx_update_exception_bitmap, and #MC always. */
+/** Write the exception bitmap and DR7: the exceptions taken always, and
+ * #BP while the caller's debugging sets software breakpoints, as Linux's
+ * vmx_update_exception_bitmap; DR7 the caller's while it sets hardware
+ * breakpoints, else the guest's. */
 static void load_debug(struct kvm_vcpu *v)
 {
     struct vmx_vcpu *x = vx(v);
 
-    x->exc_bitmap = 1u << MC_VECTOR;
-    if (debugging(v, KVM_GUESTDBG_SINGLESTEP | KVM_GUESTDBG_USE_HW_BP)) {
-        x->exc_bitmap |= 1u << DB_VECTOR;
-    }
+    x->exc_bitmap = EXC_ALWAYS;
     if (debugging(v, KVM_GUESTDBG_USE_SW_BP)) {
         x->exc_bitmap |= 1u << BP_VECTOR;
     }
@@ -1277,6 +1296,9 @@ static void load_dirty(struct kvm_vcpu *v)
     }
     if (d & KVM_PART_TSC) {
         vmcs_write(TSC_OFFSET, (uint64_t)v->tsc_offset);
+        if (caps.proc2 & PROC2_TSC_SCALING) {
+            vmcs_write(TSC_MULTIPLIER, v->tsc_ratio ? v->tsc_ratio : TSC_RATIO_ONE);
+        }
     }
     if (d & KVM_PART_CPUID) {
         x->proc2 = proc2_for(v);
@@ -1369,9 +1391,14 @@ static int needs_sregs(const struct kvm_vcpu *v, const struct vmx_exit *e)
     }
 }
 
-/** Load the debug registers for the run when the DR7 it runs under
- * enables a breakpoint: the caller's breakpoints while it sets them, else
- * the guest's; the host's DR7, which the exit clears, comes back after. */
+/**
+ * Load DR0 to DR3 for the run when the DR7 it runs under enables a
+ * breakpoint: the caller's breakpoints while it sets them, else the
+ * guest's; the host's DR7, which the exit clears, comes back after. DR6
+ * is not loaded: the guest reads and writes the record's, since every MOV
+ * DR exits, and a #DB exits with its bits in the qualification and the
+ * processor's DR6 as it was.
+ */
 static void dr_load(struct kvm_vcpu *v, uint64_t *host_dr7, uint64_t host_db[4])
 {
     struct vmx_vcpu *x = vx(v);
@@ -1386,20 +1413,15 @@ static void dr_load(struct kvm_vcpu *v, uint64_t *host_dr7, uint64_t host_db[4])
         host_db[i] = vmx_op->read_dr(i);
         vmx_op->write_dr(i, hw ? v->guest_debug.debugreg[i] : v->debugregs.db[i]);
     }
-    vmx_op->write_dr(6, hw ? DR6_FIXED : v->debugregs.dr6);
 }
 
-/** Take the guest's DR6 back and put the host's debug registers back. */
+/** Put the host's debug registers back. */
 static void dr_store(struct kvm_vcpu *v, uint64_t host_dr7, const uint64_t host_db[4])
 {
     struct vmx_vcpu *x = vx(v);
     int i;
 
     if (x->guest_dr) {
-        if (!debugging(v, KVM_GUESTDBG_USE_HW_BP)) {
-            v->debugregs.dr6 = vmx_op->read_dr(6);
-        }
-        vmx_op->write_dr(6, 0);
         for (i = 0; i < 4; i++) {
             vmx_op->write_dr(i, host_db[i]);
         }
@@ -1448,7 +1470,7 @@ static void entry_fields(struct kvm_vcpu *v)
 {
     struct vmx_vcpu *x = vx(v);
 
-    if (v->vm->irqchip != KVM_IRQCHIP_SPLIT) {
+    if (v->vm->irqchip == KVM_IRQCHIP_NONE) {
         x->proc_want &= ~PROC_INTR_WINDOW;
         if (v->run->request_interrupt_window &&
             (x->inj_info || !(v->regs.rflags & RFLAGS_IF) || v->events.interrupt.shadow)) {
@@ -1460,9 +1482,17 @@ static void entry_fields(struct kvm_vcpu *v)
         vmcs_write(CPU_BASED_VM_EXEC_CONTROL, x->proc);
     }
     vmcs_write(VM_ENTRY_INTR_INFO_FIELD, x->inj_info);
+    /* A guest halted in HLT of its own wakes to the event, as Linux's
+     * vmx_clear_hlt makes it: the HLT has completed, and RIP is past it. */
+    if (x->inj_info && v->hlt_in_guest) {
+        vmcs_write(GUEST_ACTIVITY_STATE, 0);
+    }
     if (x->inj_info) {
         vmcs_write(VM_ENTRY_EXCEPTION_ERROR_CODE, x->inj_error);
         vmcs_write(VM_ENTRY_INSTRUCTION_LEN, x->inj_len);
+    }
+    if ((x->inj_info & INTR_VALID) && INTR_TYPE(x->inj_info) == TYPE_EXT_INTR) {
+        v->irq_counts[INTR_VECTOR(x->inj_info)][KVM_VEC_INJECT]++;
     }
     vmcs_write(GUEST_RSP, v->regs.rsp);
     vmcs_write(GUEST_RIP, v->regs.rip);
@@ -1529,9 +1559,12 @@ static void after_run(struct kvm_vcpu *v)
  * from the host reaches the host's own handler after VMX is off, as
  * Linux's vmx_do_nmi_irqoff and kvm_machine_check pass them on; the host's
  * interrupt that ended the run waits until the run loop turns interrupts
- * on. While `v->emul.resume` is set no guest runs: the next step of the
- * instruction under way is `exit`'s. 0, or -EIO when VMX cannot be turned
- * on here.
+ * on. Under the caller's single step the STI and MOV SS shadow ends before
+ * the entry, as Linux's vmx_vcpu_run ends it: the step over STI or MOV SS
+ * has been taken by the caller, and the shadow under TF would make the
+ * entry fail for want of a pending single-step trap. While
+ * `v->emul.resume` is set no guest runs: the next step of the instruction
+ * under way is `exit`'s. 0, or -EIO when VMX cannot be turned on here.
  */
 static int vmx_enter(struct kvm_vcpu *v)
 {
@@ -1564,6 +1597,11 @@ static int vmx_enter(struct kvm_vcpu *v)
     vmcs_write(HOST_FS_BASE, host.fs_base);
     eptp = eptp_of(v);
     vmcs_write(EPT_POINTER, eptp);
+    if (debugging(v, KVM_GUESTDBG_SINGLESTEP) && v->events.interrupt.shadow) {
+        /* Under the step's TF the entry would ask for a pending step. */
+        v->events.interrupt.shadow = 0;
+        x->vdirty |= VX_INTR;
+    }
     load_dirty(v);
     if (tlb || x->flush_vpid) {
         flush(v, tlb ? eptp : 0, x->flush_vpid);
@@ -1650,6 +1688,9 @@ static void complete_events(struct kvm_vcpu *v)
         v->events.interrupt.nr = (uint8_t)INTR_VECTOR(info);
         v->events.interrupt.soft = (uint8_t)(type == TYPE_SOFT_INTR);
         x->inj_len = type == TYPE_SOFT_INTR ? x->ex.insn_len : 0;
+        if (type == TYPE_EXT_INTR) {
+            v->irq_counts[INTR_VECTOR(info)][KVM_VEC_SAVE]++;
+        }
         break;
     default:
         break;
@@ -1778,7 +1819,7 @@ static int set_cr4(struct kvm_vcpu *v, uint64_t cr4)
 /** CR8 of `v`: the in-kernel APIC's TPR, or the record's without one. */
 static uint64_t get_cr8(struct kvm_vcpu *v)
 {
-    return v->vm->irqchip == KVM_IRQCHIP_SPLIT ? kvm_lapic_cr8(v) : v->sregs.cr8;
+    return v->vm->irqchip != KVM_IRQCHIP_NONE ? kvm_lapic_cr8(v) : v->sregs.cr8;
 }
 
 /** A control register's access (exit 28), whose qualification names the
@@ -1807,7 +1848,7 @@ static int exit_cr(struct kvm_vcpu *v)
                 r = -1;
                 break;
             }
-            if (v->vm->irqchip == KVM_IRQCHIP_SPLIT) {
+            if (v->vm->irqchip != KVM_IRQCHIP_NONE) {
                 kvm_lapic_set_cr8(v, val);
             } else {
                 v->sregs.cr8 = val;
@@ -1855,7 +1896,21 @@ static int exit_dr(struct kvm_vcpu *v)
         }
         dr += 2;
     }
-    if (v->debugregs.dr7 & DR7_GD) {
+    if (dr7_of(v) & DR7_GD) {
+        /* The exit comes before DR7.GD's trap, which is made here: the
+         * caller's, while it sets the breakpoints, as a debug exit, and
+         * the guest's own as its #DB, as Linux's handle_dr. */
+        if (debugging(v, KVM_GUESTDBG_USE_HW_BP)) {
+            struct kvm_run_debug *dbg = &v->exit.debug;
+
+            v->exit.kind = KVM_X_DEBUG;
+            k_memset(dbg, 0, sizeof(*dbg));
+            dbg->exception = DB_VECTOR;
+            dbg->pc = v->sregs.cs.base + v->regs.rip;
+            dbg->dr6 = DR6_BD | DR6_FIXED;
+            dbg->dr7 = dr7_of(v);
+            return 0;
+        }
         v->debugregs.dr6 = (v->debugregs.dr6 & ~0xFull) | DR6_BD | DR6_FIXED;
         v->debugregs.dr7 &= ~DR7_GD;
         v->dirty |= KVM_PART_DEBUG;
@@ -1948,14 +2003,47 @@ static void kgs_sync(struct kvm_vcpu *v)
     struct vmx_vcpu *x = vx(v);
 
     if (!x->kgs_table) {
-        (void)kvm_msr_set(v, MSR_KERNEL_GS_BASE, x->msrs[KGS_SLOT * 2u + 1u]);
+        (void)kvm_msr_set(v, MSR_KERNEL_GS_BASE, x->msrs[KGS_SLOT * 2u + 1u], 1);
         x->kgs_table = 1;
     }
 }
 
-/** RDMSR and WRMSR (exits 31 and 32): EFER and DEBUGCTL here, the rest
- * through `kvm_emul_msr`; #GP for an MSR neither knows or a value they
- * refuse, as Linux's default without ignore_msrs. */
+/** The guest's RDMSR or WRMSR of `index`, by `write`, with `*value` its
+ * EDX:EAX: EFER and DEBUGCTL here, the rest through `kvm_emul_msr`. 0, with
+ * a read's value in `*value`, or a KVM_MSR_* failure. */
+static int msr_access(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value)
+{
+    struct vmx_vcpu *x = vx(v);
+
+    switch (index) {
+    case MSR_EFER:
+        if (write) {
+            return set_efer(v, *value);
+        }
+        *value = v->sregs.efer;
+        return 0;
+    case MSR_IA32_DEBUGCTL:
+        /* No LBR and no BTF, which Linux drops with a note; any other bit
+         * is #GP. */
+        if (write) {
+            if (*value & ~(DEBUGCTL_LBR | DEBUGCTL_BTF)) {
+                return KVM_MSR_INVAL;
+            }
+            x->debugctl = 0;
+            return 0;
+        }
+        *value = x->debugctl;
+        return 0;
+    default:
+        return kvm_emul_msr(v, index, write, value);
+    }
+}
+
+/** RDMSR and WRMSR (exits 31 and 32), as Linux's kvm_emulate_rdmsr and
+ * kvm_emulate_wrmsr: an access KVM_X86_SET_MSR_FILTER denies fails at
+ * once, any other is `msr_access`'s. A failure goes to the caller when
+ * KVM_CAP_X86_USER_SPACE_MSR asked for its reason, and is #GP otherwise,
+ * as Linux's default without ignore_msrs. */
 static int exit_msr(struct kvm_vcpu *v, int write)
 {
     struct vmx_vcpu *x = vx(v);
@@ -1964,38 +2052,19 @@ static int exit_msr(struct kvm_vcpu *v, int write)
     int r;
 
     v->exit.kind = KVM_X_AGAIN;
+    if (index - MSR_FS_BASE < 3u && kvm_msr_allowed(v, index, write)) {
+        /* The bitmap predates the filter, and KVM_REQ_MSR_FILTER brings it
+         * up to date before the instruction runs again. */
+        return 0;
+    }
     if (write) {
         kgs_sync(v);
     }
-    switch (index) {
-    case MSR_EFER:
-        if (write) {
-            r = set_efer(v, value);
-        } else {
-            value = v->sregs.efer;
-            r = 0;
-        }
-        break;
-    case MSR_IA32_DEBUGCTL:
-        /* No LBR and no BTF, which Linux drops with a note; any other bit
-         * is #GP. */
-        if (write) {
-            value &= ~(DEBUGCTL_LBR | DEBUGCTL_BTF);
-            r = value ? -1 : 0;
-            if (r == 0) {
-                x->debugctl = 0;
-            }
-        } else {
-            value = x->debugctl;
-            r = 0;
-        }
-        break;
-    default:
-        r = kvm_emul_msr(v, index, write, &value);
-        break;
-    }
+    r = kvm_msr_allowed(v, index, write) ? msr_access(v, index, write, &value) : KVM_MSR_FILTERED;
     if (r != 0) {
-        gp(v);
+        if (!kvm_msr_user_exit(v, index, write, value, r, x->ex.insn_len)) {
+            gp(v);
+        }
         return 0;
     }
     if (!write) {
@@ -2023,6 +2092,22 @@ static int exit_vmcall(struct kvm_vcpu *v)
     return 0;
 }
 
+/** The exit's numbers for an internal error's report, as Linux's
+ * vmx_get_exit_info gives them: the reason, the qualification, the IDT
+ * vectoring information, and the exit's interruption information with its
+ * error code, 0 unless that is an exception with one. */
+static void exit_info(const struct kvm_vcpu *v, uint64_t info[5])
+{
+    const struct vmx_exit *e = &vx(v)->ex;
+    uint32_t coded = INTR_VALID | INTR_ERRCODE;
+
+    info[0] = e->reason;
+    info[1] = e->qual;
+    info[2] = e->idt_info;
+    info[3] = e->intr_info;
+    info[4] = (e->intr_info & coded) == coded ? e->intr_error : 0;
+}
+
 /** An EPT violation (exit 48): a fault on the guest-physical tables,
  * which `kvm_tdp_fault` maps, or an access to a frame no slot holds, MMIO,
  * which emulate.c carries out. */
@@ -2040,12 +2125,8 @@ static int exit_ept(struct kvm_vcpu *v)
         v->exit.kind = KVM_X_AGAIN;
         return 0;
     }
-    info[0] = x->ex.reason;
-    info[1] = x->ex.qual;
-    info[2] = x->ex.gpa;
-    info[3] = x->ex.intr_info;
-    info[4] = x->ex.intr_error;
-    return kvm_emul_mmio(v, x->ex.gpa, info);
+    exit_info(v, info);
+    return kvm_emul_mmio(v, info);
 }
 
 /** The failed entry's exit: KVM_EXIT_FAIL_ENTRY with the instruction's
@@ -2058,31 +2139,74 @@ static void fail_entry(struct kvm_vcpu *v, uint64_t reason)
 }
 
 /**
+ * The guest's own #DB, as Linux's handle_exception_nmi gives it back: its
+ * bits, which the qualification holds, folded into the guest's DR6, and
+ * the exception queued. INT1 exits on the instruction, so RIP steps past
+ * it, without the single-step trap it outranks, and the interrupt shadow
+ * ends. For any other under a shadow with TF, the entry needs the
+ * single-step trap pending, which `load_intr` writes with the event.
+ */
+static void guest_db(struct kvm_vcpu *v)
+{
+    struct vmx_exit *e = &vx(v)->ex;
+    uint64_t rip;
+
+    if (INTR_TYPE(e->intr_info) == TYPE_PRIV_SOFT) {
+        rip = v->regs.rip + e->insn_len;
+        v->regs.rip = kvm_emul_mode(v) == 64 ? rip : (rip & 0xFFFFFFFFull);
+        v->events.interrupt.shadow = 0;
+    }
+    kvm_queue_db(v, e->qual);
+}
+
+/**
  * An exception's exit (0): the host's NMI or machine check, which `enter`
- * passed on, or the #DB or #BP the caller's debugging takes, which goes to
- * the caller as KVM_EXIT_DEBUG with the address, DR6 and DR7, as Linux's
- * handle_exception_nmi gives it. The bitmap takes no other.
+ * passed on; #UD, whose instruction emulate.c runs when it is one Linux's
+ * emulator runs after a #UD, as Linux's handle_ud; #AC, given back to the
+ * guest; the guest's own #DB, given back; and the #DB or #BP the caller's
+ * debugging takes, which goes to the caller as KVM_EXIT_DEBUG with the
+ * address, DR6 and DR7, as Linux's handle_exception_nmi gives it. The
+ * bitmap takes no other.
  */
 static int exit_exception(struct kvm_vcpu *v)
 {
     struct vmx_exit *e = &vx(v)->ex;
     uint32_t vec = INTR_VECTOR(e->intr_info);
     struct kvm_run_debug *d = &v->exit.debug;
+    uint64_t info[5];
 
     if (INTR_TYPE(e->intr_info) == TYPE_NMI || vec == MC_VECTOR) {
         return 0;
     }
-    if ((vec == DB_VECTOR && debugging(v, KVM_GUESTDBG_SINGLESTEP | KVM_GUESTDBG_USE_HW_BP)) ||
-        (vec == BP_VECTOR && debugging(v, KVM_GUESTDBG_USE_SW_BP))) {
-        v->exit.kind = KVM_X_DEBUG;
-        k_memset(d, 0, sizeof(*d));
-        d->exception = vec;
-        d->pc = v->sregs.cs.base + v->regs.rip;
-        d->dr6 = vec == DB_VECTOR ? ((e->qual & 0x600Full) | DR6_FIXED) : 0;
-        d->dr7 = dr7_of(v);
+    switch (vec) {
+    case UD_VECTOR:
+        exit_info(v, info);
+        return kvm_emul_ud(v, info);
+    case AC_VECTOR:
+        kvm_queue_exception(v, AC_VECTOR, 1, e->intr_error);
+        return 0;
+    case DB_VECTOR:
+        if (!debugging(v, KVM_GUESTDBG_SINGLESTEP | KVM_GUESTDBG_USE_HW_BP)) {
+            guest_db(v);
+            return 0;
+        }
+        break;
+    case BP_VECTOR:
+        if (debugging(v, KVM_GUESTDBG_USE_SW_BP)) {
+            break;
+        }
+        unexpected(v);
+        return 0;
+    default:
+        unexpected(v);
         return 0;
     }
-    unexpected(v);
+    v->exit.kind = KVM_X_DEBUG;
+    k_memset(d, 0, sizeof(*d));
+    d->exception = vec;
+    d->pc = v->sregs.cs.base + v->regs.rip;
+    d->dr6 = vec == DB_VECTOR ? ((e->qual & 0x600Full) | DR6_FIXED) : 0;
+    d->dr7 = dr7_of(v);
     return 0;
 }
 
@@ -2140,19 +2264,27 @@ static int exit_insn(struct kvm_vcpu *v, uint32_t reason)
 
     switch (reason) {
     case EXIT_CPUID:
-        kvm_emul_cpuid(v);
-        kvm_emul_skip(v, len);
+        if (kvm_emul_cpuid(v) == 0) {
+            kvm_emul_skip(v, len);
+        }
         return 1;
     case EXIT_HLT:
         kvm_emul_skip(v, len);
         v->exit.kind = KVM_X_HLT;
         return 1;
-    case EXIT_INVD:
     case EXIT_MWAIT:
     case EXIT_MONITOR:
-        /* INVD as a no-op, as Linux's kvm_emulate_invd; MONITOR and MWAIT
-         * as no-ops, as Linux's KVM_X86_QUIRK_MWAIT_NEVER_UD_FAULTS does by
-         * default. */
+        /* MONITOR and MWAIT as no-ops, as Linux's kvm_emulate_monitor_mwait:
+         * #UD only with KVM_X86_QUIRK_MWAIT_NEVER_UD_FAULTS turned off, for a
+         * guest whose CPUID lacks MWAIT. */
+        if (!KVM_QUIRK(v->vm, KVM_X86_QUIRK_MWAIT_NEVER_UD_FAULTS) && !kvm_msr_guest_mwait(v)) {
+            kvm_queue_exception(v, UD_VECTOR, 0, 0);
+            return 1;
+        }
+        kvm_emul_skip(v, len);
+        return 1;
+    case EXIT_INVD:
+        /* A no-op, as Linux's kvm_emulate_invd. */
         kvm_emul_skip(v, len);
         return 1;
     case EXIT_WBINVD:
@@ -2226,6 +2358,8 @@ static int exit_reason(struct kvm_vcpu *v)
     case EXIT_EXCEPTION_NMI:
         return exit_exception(v);
     case EXIT_EXTERNAL_INTR:
+        v->at_boundary = 1;
+        return 0;
     case EXIT_PREEMPTION_TIMER:
     case EXIT_INIT_SIGNAL:
     case EXIT_SIPI:
@@ -2409,7 +2543,7 @@ static void vmx_inject(struct kvm_vcpu *v)
 {
     struct vmx_vcpu *x = vx(v);
     uint32_t info = 0, len = x->inj_len;
-    int split = v->vm->irqchip == KVM_IRQCHIP_SPLIT;
+    int split = v->vm->irqchip != KVM_IRQCHIP_NONE;
     /* No new NMI or interrupt while the caller's KVM_GUESTDBG_BLOCKIRQ
      * holds them, as Linux's kvm_check_and_inject_events. */
     int block = debugging(v, KVM_GUESTDBG_BLOCKIRQ);
@@ -2487,25 +2621,14 @@ static void vpid_free(uint16_t vpid)
     }
 }
 
-/** The backend's share of a new VM: the VMXON regions of the processors
- * and the MSR bitmap, made at the first VM and kept. 0 or -ENOMEM. */
+/** The backend's share of a new VM: the VMXON regions of the processors,
+ * made at the first VM and kept. 0 or -ENOMEM. */
 static int vmx_vm_init(struct kvm_vm *vm)
 {
     uintptr_t pa;
     uint32_t i, ncpu = (uint32_t)smp_cpu_count();
 
     vm->backend = NULL;
-    if (!msr_bitmap) {
-        msr_bitmap = kalloc_pages(1, &msr_bitmap_pa);
-        if (!msr_bitmap) {
-            return -ENOMEM;
-        }
-        k_memset(msr_bitmap, 0xFF, 4096);
-        /* The high MSRs' read bitmap at 1024 and write bitmap at 3072:
-         * FS_BASE, GS_BASE and KERNEL_GS_BASE, bits 0x100 to 0x102. */
-        msr_bitmap[1024 + 0x100 / 8] &= (uint8_t)~0x07u;
-        msr_bitmap[3072 + 0x100 / 8] &= (uint8_t)~0x07u;
-    }
     for (i = 0; i < ncpu && i < NR_CPUS; i++) {
         if (vmxon_region[i]) {
             continue;
@@ -2521,8 +2644,29 @@ static int vmx_vm_init(struct kvm_vm *vm)
     return 0;
 }
 
-/** Make the backend's share of `v`: the VMCS, the MSR area, the host's
- * FPU area and the VPID. 0 or -ENOMEM. */
+/**
+ * Have the guest of `v` reach FS_BASE, GS_BASE and KERNEL_GS_BASE
+ * directly but for the accesses KVM_X86_SET_MSR_FILTER denies, which exit,
+ * as Linux's vmx_msr_filter_changed. The high MSRs' read bitmap is at byte
+ * 1024 and their write bitmap at 3072, where the three are bits 0x100 to
+ * 0x102.
+ */
+static void vmx_msr_filter_changed(struct kvm_vcpu *v)
+{
+    uint8_t *b = vx(v)->msr_bitmap;
+    uint8_t rd = 0, wr = 0;
+    uint32_t i;
+
+    for (i = 0; i < 3u; i++) {
+        rd |= (uint8_t)((kvm_msr_allowed(v, MSR_FS_BASE + i, 0) ? 0u : 1u) << i);
+        wr |= (uint8_t)((kvm_msr_allowed(v, MSR_FS_BASE + i, 1) ? 0u : 1u) << i);
+    }
+    b[1024 + 0x100 / 8] = (uint8_t)((b[1024 + 0x100 / 8] & ~0x07u) | rd);
+    b[3072 + 0x100 / 8] = (uint8_t)((b[3072 + 0x100 / 8] & ~0x07u) | wr);
+}
+
+/** Make the backend's share of `v`: the VMCS, the MSR area and bitmap,
+ * the host's FPU area and the VPID. 0 or -ENOMEM. */
 static int vmx_vcpu_init(struct kvm_vcpu *v)
 {
     struct vmx_vcpu *x = kzalloc(sizeof(*x));
@@ -2535,17 +2679,20 @@ static int vmx_vcpu_init(struct kvm_vcpu *v)
     x->vmcs = kalloc_pages(1, &pa);
     x->vmcs_pa = pa;
     x->msrs = kalloc_pages(1, &x->msrs_pa);
+    x->msr_bitmap = kalloc_pages(1, &x->msr_bitmap_pa);
     x->host_fpu = fpu_area_alloc();
-    if (!x->vmcs || !x->msrs || !x->host_fpu) {
+    if (!x->vmcs || !x->msrs || !x->msr_bitmap || !x->host_fpu) {
         return -ENOMEM;
     }
     k_memset(x->vmcs, 0, 4096);
     *(uint32_t *)x->vmcs = caps.revision;
     k_memset(x->msrs, 0, 4096);
+    k_memset(x->msr_bitmap, 0xFF, 4096);
+    vmx_msr_filter_changed(v);
     x->vpid = vpid_alloc();
     x->last_cpu = -1;
     x->kgs_table = 1;
-    x->proc_want = caps.proc;
+    x->proc_want = caps.proc & ~(v->hlt_in_guest ? PROC_HLT : 0u);
     return 0;
 }
 
@@ -2562,6 +2709,9 @@ static void vmx_vcpu_free(struct kvm_vcpu *v)
     }
     if (x->msrs) {
         kfree_pages(x->msrs, 1);
+    }
+    if (x->msr_bitmap) {
+        kfree_pages(x->msr_bitmap, 1);
     }
     fpu_area_free(x->host_fpu);
     vpid_free(x->vpid);
@@ -2588,8 +2738,8 @@ static int controls(uint32_t msr, uint32_t true_msr, uint32_t want, uint32_t nee
  * the backend locks it so; a VMCS of 4 KiB at most, write-back, in 64-bit
  * addresses; EPT of four levels, write-back, with INVEPT; the unrestricted
  * guest; the preemption timer; virtual NMIs; and the exit and entry
- * controls of EFER and PAT. VPID, RDTSCP, INVPCID and WBINVD exiting are
- * taken where they are. 1 or 0.
+ * controls of EFER and PAT. VPID, RDTSCP, INVPCID, WBINVD exiting, XSAVES
+ * and TSC scaling are taken where they are. 1 or 0.
  */
 static int vmx_probe(void)
 {
@@ -2637,7 +2787,8 @@ static int vmx_probe(void)
         return 0;
     }
     caps.proc2 = (uint32_t)(vmx_op->rdmsr(MSR_IA32_VMX_PROCBASED2) >> 32) &
-                 (PROC2_EPT | PROC2_UG | PROC2_VPID | PROC2_RDTSCP | PROC2_INVPCID | PROC2_WBINVD);
+                 (PROC2_EPT | PROC2_UG | PROC2_VPID | PROC2_RDTSCP | PROC2_INVPCID | PROC2_WBINVD |
+                  PROC2_XSAVES | PROC2_TSC_SCALING);
     if ((caps.proc2 & proc2_need) != proc2_need ||
         controls(MSR_IA32_VMX_EXIT, MSR_IA32_VMX_TRUE_EXIT, exit_need, exit_need, &caps.exit) ||
         controls(MSR_IA32_VMX_ENTRY, MSR_IA32_VMX_TRUE_ENTRY, entry_need, entry_need,
@@ -2677,11 +2828,30 @@ static uint64_t vmx_cache(int type, int ignore_guest_pat)
     return ((uint64_t)type << 3) | (ignore_guest_pat ? 0x40u : 0u);
 }
 
+/** `kvm_backend`'s xsaves: whether the processor has the secondary
+ * control that lets a guest run XSAVES and XRSTORS, as Linux clears
+ * XSAVES from what it offers without it. */
+static int vmx_xsaves(void)
+{
+    return (caps.proc2 & PROC2_XSAVES) != 0;
+}
+
+/** `kvm_backend`'s tsc_scaling: the TSC multiplier's largest value and
+ * its 48 bits of fraction, or 0 on a processor without the control. */
+static uint64_t vmx_tsc_scaling(uint32_t *frac_bits)
+{
+    *frac_bits = TSC_RATIO_BITS;
+    return (caps.proc2 & PROC2_TSC_SCALING) ? ~0ull : 0;
+}
+
 /* EPT's format: read, write and execute, PS, and the accessed and dirty
  * bits of EPT's A/D. */
 static const struct kvm_tdp_format vmx_tdp = {
     0x7u, 0x1u, 0x2u, 0x4u, 0, 0, 0x80u, 0x000FFFFFFFFFF000ull, 0x100u, 0x200u, vmx_cache};
 
-const struct kvm_backend kvm_vmx = {
-    "vmx",    vmx_probe,    vmx_vm_init, NULL,       vmx_vcpu_init,       vmx_vcpu_free, vmx_enter,
-    vmx_exit, vmx_complete, vmx_save,    vmx_inject, vmx_check_extension, &vmx_tdp};
+const struct kvm_backend kvm_vmx = {"vmx",     vmx_probe,       vmx_vm_init,
+                                    NULL,      vmx_vcpu_init,   vmx_vcpu_free,
+                                    vmx_enter, vmx_exit,        vmx_complete,
+                                    vmx_save,  vmx_inject,      vmx_check_extension,
+                                    &vmx_tdp,  vmx_tsc_scaling, vmx_msr_filter_changed,
+                                    vmx_xsaves};

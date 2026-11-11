@@ -236,7 +236,7 @@ uint8_t pci_read_config8(uint8_t bus, uint8_t device, uint8_t function, uint8_t 
 }
 
 /** Record a configuration write of `width` bits; the bus is not kept. */
-static void cfg_write(uint8_t device, uint8_t function, uint8_t offset, uint32_t value,
+static void cfg_write(uint8_t device, uint8_t function, uint16_t offset, uint32_t value,
                       uint32_t width)
 {
     last_cfg_dev = device;
@@ -264,6 +264,38 @@ void pci_write_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t o
 
 /** Record an 8-bit configuration write. */
 void pci_write_config8(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset, uint8_t value)
+{
+    (void)bus;
+    cfg_write(device, function, offset, value, 8);
+}
+
+/** An extended configuration read: as `pci_read_config32`, with the
+ * offset's high bits kept. */
+uint32_t pci_read_config32_ext(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset)
+{
+    (void)bus;
+    return 0xA0000000u | ((uint32_t)device << 16) | ((uint32_t)function << 8) | (offset & 0xFFu);
+}
+
+/** Record a 32-bit extended configuration write. */
+void pci_write_config32_ext(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset,
+                            uint32_t value)
+{
+    (void)bus;
+    cfg_write(device, function, offset, value, 32);
+}
+
+/** Record a 16-bit extended configuration write. */
+void pci_write_config16_ext(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset,
+                            uint16_t value)
+{
+    (void)bus;
+    cfg_write(device, function, offset, value, 16);
+}
+
+/** Record an 8-bit extended configuration write. */
+void pci_write_config8_ext(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset,
+                           uint8_t value)
 {
     (void)bus;
     cfg_write(device, function, offset, value, 8);
@@ -779,6 +811,37 @@ static void madt_full_rows(void)
           "processor 64, enabled, displaces a disabled one; the last disabled one is left out");
 }
 
+/** The reset register takes one byte whatever width the FADT gives, at the
+ * full offset of a PCI register, as Linux's `acpi_reset` and
+ * `acpi_pci_reboot` write it. */
+static void reset_write_rows(void)
+{
+    static const struct acpi_info none;
+    struct acpi_info a = none;
+
+    printf("reset register\n");
+    a.reset_supported = 1;
+    a.reset_value = 6;
+    a.reset_reg.space = ACPI_SPACE_PCI;
+    a.reset_reg.bit_width = 32;
+    a.reset_reg.address = ((uint64_t)0x1F << 32) | (3u << 16) | 0x104u;
+    last_cfg_width = 0;
+    acpi_reset_write(&a);
+    CHECK(last_cfg_dev == 0x1F && last_cfg_fn == 3 && last_cfg_off == 0x104 &&
+              last_cfg_value == 6 && last_cfg_width == 8,
+          "a 32-bit reset register at offset 0x104 takes one byte at 0x104");
+    a.reset_reg.space = ACPI_SPACE_IO;
+    a.reset_reg.address = 0xCF9;
+    last_port_width = 0;
+    acpi_reset_write(&a);
+    CHECK(last_port == 0xCF9 && last_port_value == 6 && last_port_width == 8,
+          "a 32-bit reset port takes one byte, and not 0xcfc too");
+    a.reset_supported = 0;
+    last_port_width = 0;
+    acpi_reset_write(&a);
+    CHECK(last_port_width == 0, "a FADT with no reset register is not written");
+}
+
 /** The FADT's 64-bit register forms win over its 32-bit block fields from
  * revision 3, and the DSDT's address with them. */
 static void fadt_rows(void)
@@ -963,6 +1026,7 @@ int main(void)
     madt_rows();
     madt_full_rows();
     fadt_rows();
+    reset_write_rows();
     pci_read_rows();
     window_rows();
     s5_rows();

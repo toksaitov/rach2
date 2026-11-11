@@ -1,0 +1,14 @@
+qemu: root build/x86_64/images/gnu-test.ext2 sha256 61194a495c3378d2a6fbc80f30fd85ec1c6d594a1d6521c8ff17e87493e014d4
+19d68201fe1920175be2acdc5750e37c71950ebaa1e61cad43b11ac5f1729b79  build/tests/system/games/bundle.tar
+079070bfc94ed29abc216b4461d6502263a6c6a9969f2bec8b14c470a32b0dc5  build/x86_64/rach2/kernel
+Disk /home/toksaitov-v/rach2/build/worktrees/task-2654/build/tmp/rach2-t2654.1fJeeu/disk.img: 69206016 sectors, 33.0 GiB
+Sector size (logical): 512 bytes
+Disk identifier (GUID): 1ACEF00D-0F1E-4D2C-8B3A-C0FFEE000001
+Partition table holds up to 128 entries
+Main partition table begins at sector 2 and ends at sector 33
+First usable sector is 34, last usable sector is 69205982
+Partitions will be aligned on 2048-sector boundaries
+Total free space is 2097085 sectors (1024.0 MiB)
+
+Number  Start (sector)    End (sector)  Size       Code  Name
+   6            2048        67110911   32.0 GiB    8300  Rach2 data

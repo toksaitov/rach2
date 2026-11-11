@@ -16,11 +16,16 @@ tlsprobe i686
 fsbaseprobe
 wow64probe x86_64
 futexvprobe
+futex2probe
+schedattrprobe
+membarrierprobe
 errnoprobe
 vmprobe
 mmapdevprobe
 forkro
 cowregrant
+numaprobe
+restartprobe
 usercopyfault
 fdstale
 dirgrow
@@ -33,6 +38,9 @@ sigprobe
 credprobe
 ownprobe
 permprobe
+fsidprobe
+oldfsprobe
+openat2probe
 sockettest
 # The YMM registers across switches, signals, an exec and ptrace, with XSAVE's
 # frame and register set; without AVX its rows say they did not run.
@@ -57,6 +65,8 @@ devprobe
 jobprobe
 miscprobe
 ptyprobe
+vhangprobe
+ttyflowprobe
 rngprobe
 orphanprobe
 loopprobe
@@ -175,12 +185,20 @@ musl/tmpfsmusl
 musl/mknodmusl
 # memfd_create, its descriptor and name, and each seal.
 musl/memfdmusl
+# Memory seals, remote advice and release, cache counts and secret memory.
+musl/memcallmusl
+# Memory protection keys: the three calls, PKRU through faults, signals,
+# fork, exec and ptrace, and the execute-only key, as Linux 6.12 gives them.
+musl/pkeymusl
 # chroot on KRFFS and tmpfs: paths, links and ".." inside the root, fork and
 # exec keeping it, and the rmdir and unmount it refuses.
 musl/chrootmusl
 # Paths that go on past /proc/PID/fd/N, cwd and root, and /dev/fd/N, from the
 # file or directory each refers to.
 musl/proclinkmusl
+# /proc/PID/syscall and wchan of threads asleep in a pipe's read and a futex
+# wait, of one that runs, and of another user's process.
+musl/wchanmusl
 # vfork and clone with CLONE_VM|CLONE_VFORK, as posix_spawn, system and popen
 # start their children.
 musl/vforkmusl

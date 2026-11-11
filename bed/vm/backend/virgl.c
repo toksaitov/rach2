@@ -12,10 +12,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/ioctl.h>
 
 #include <virgl/virglrenderer.h>
 
 #include "backend.h"
+#include "vgpushm_uapi.h"
 
 #define CAPSET_VIRGL  1u
 #define CAPSET_VIRGL2 2u
@@ -27,6 +29,15 @@
 /* The Venus contexts, whose attached resources the probe imports. */
 #define VENUS_CTXS 16
 
+/* The blobs pinned for page lists at once, one per resource at most. */
+#define PINS VD_OBJS
+
+/* A blob pinned through the module: its resource and the pin's handle. */
+struct vr_pin {
+    uint32_t id, handle;
+    uint32_t map_info; /* the cache type virglrenderer gave at the pin */
+};
+
 struct vr {
     struct vd *dev;
     struct kms *kms;
@@ -36,6 +47,10 @@ struct vr {
     uint32_t venus[VENUS_CTXS]; /* live Venus contexts' ids, 0 when free */
     int probe;                  /* import each resource a Venus context takes into Vulkan */
     int verbose;
+    int module; /* the vgpushm module's node, which pins blobs, or -1 */
+    struct vr_pin pins[PINS];
+    uint32_t npins;
+    struct vr_pin_counts pc;
 };
 
 /* virglrenderer calls back with the cookie vr_init passed. */
@@ -94,6 +109,7 @@ struct vr *vr_init(struct vd *dev, int gbm_fd, int venus, int verbose)
     r->dev = dev;
     r->gbm_fd = gbm_fd;
     r->verbose = verbose;
+    r->module = -1;
     if (gbm_fd < 0) {
         flags |= VIRGL_RENDERER_USE_SURFACELESS;
     }
@@ -437,11 +453,132 @@ static int op_flush(void *c, uint32_t scanout, uint32_t id, const struct vd_rect
     return err;
 }
 
-/** End every context and resource for a new epoch. */
+/** The pin of resource id, or 0. */
+static struct vr_pin *pin_find(struct vr *r, uint32_t id)
+{
+    uint32_t i;
+
+    for (i = 0; i < r->npins; i++) {
+        if (r->pins[i].id == id) {
+            return &r->pins[i];
+        }
+    }
+    return 0;
+}
+
+/** Let go of a pin in the module and drop it from the table. */
+static void pin_drop(struct vr *r, struct vr_pin *p)
+{
+    uint32_t handle = p->handle;
+
+    if (ioctl(r->module, VGPUSHM_IOC_UNPIN, &handle) != 0) {
+        fprintf(stderr, "backend: unpin: resource %u: %s\n", (unsigned)p->id, strerror(errno));
+    }
+    r->pc.unpinned++;
+    *p = r->pins[--r->npins];
+}
+
+/**
+ * Pin blob q->id through the module: its memory exported by virglrenderer
+ * as a dma-buf or a memfd, as Venus and the shared-memory blobs give it,
+ * and pinned whole for the driver's epoch. Returns the pin, or 0 for a
+ * blob that cannot be exported or pinned, as a GPU's own memory cannot.
+ */
+static struct vr_pin *pin_new(struct vr *r, const struct vd_pages *q)
+{
+    struct vgpushm_pin pin;
+    uint32_t fd_type = 0, info = 0;
+    struct vr_pin *p;
+    int fd = -1, err;
+
+    if (r->module < 0 || r->npins == PINS) {
+        r->pc.refused++;
+        return 0;
+    }
+    if ((err = virgl_renderer_resource_export_blob(q->id, &fd_type, &fd)) != 0) {
+        fprintf(stderr, "backend: map: resource %u: refused: not exported: %d\n", (unsigned)q->id,
+                err);
+        r->pc.refused++;
+        return 0;
+    }
+    if ((err = virgl_renderer_resource_get_map_info(q->id, &info)) != 0) {
+        fprintf(stderr, "backend: map: resource %u: refused: no map info: %d\n", (unsigned)q->id,
+                err);
+        close(fd);
+        r->pc.refused++;
+        return 0;
+    }
+    memset(&pin, 0, sizeof(pin));
+    pin.fd = fd;
+    pin.epoch = q->epoch;
+    pin.size = (q->size + 4095u) & ~(uint64_t)4095u;
+    err = ioctl(r->module, VGPUSHM_IOC_PIN, &pin) != 0 ? errno : 0;
+    close(fd);
+    if (err != 0) {
+        fprintf(stderr, "backend: map: resource %u: refused: fd type %u: %s\n", (unsigned)q->id,
+                (unsigned)fd_type, strerror(err));
+        r->pc.refused++;
+        return 0;
+    }
+    p = &r->pins[r->npins++];
+    p->id = q->id;
+    p->handle = pin.handle;
+    p->map_info = info;
+    r->pc.pinned++;
+    if (r->verbose) {
+        fprintf(stderr, "backend: pin: resource %u, fd type %u, %s, %llu pages\n", (unsigned)q->id,
+                (unsigned)fd_type, pin.kind == VGPUSHM_PIN_DMABUF ? "dma-buf" : "shmem",
+                (unsigned long long)pin.pages);
+    }
+    return p;
+}
+
+/** A mappable blob's page list from q->first: pinned at the first ask,
+ * then read from the module. Returns 0 or VD_RESP_ERR_UNSPEC. */
+static int op_pages(void *c, struct vd_pages *q)
+{
+    struct vr *r = c;
+    struct vr_pin *p = pin_find(r, q->id);
+    struct vgpushm_pages pg;
+
+    if (p == 0 && (p = pin_new(r, q)) == 0) {
+        return VD_RESP_ERR_UNSPEC;
+    }
+    memset(&pg, 0, sizeof(pg));
+    pg.handle = p->handle;
+    pg.max = q->max < VGPUSHM_PAGES_MAX_RUNS ? q->max : VGPUSHM_PAGES_MAX_RUNS;
+    pg.first = q->first;
+    /* struct vgs_run and struct vgpushm_run are both two u64s, address first. */
+    pg.runs = (uint64_t)(uintptr_t)q->runs;
+    if (ioctl(r->module, VGPUSHM_IOC_PAGES, &pg) != 0 || pg.count == 0) {
+        fprintf(stderr, "backend: map: resource %u: pages from %llu: %s\n", (unsigned)q->id,
+                (unsigned long long)q->first, strerror(errno));
+        return VD_RESP_ERR_UNSPEC;
+    }
+    q->count = pg.count;
+    q->map_info = p->map_info;
+    return 0;
+}
+
+/** Let go of a blob's pin. */
+static void op_unpin(void *c, uint32_t id)
+{
+    struct vr *r = c;
+    struct vr_pin *p = pin_find(r, id);
+
+    if (p) {
+        pin_drop(r, p);
+    }
+}
+
+/** End every context, resource and pin for a new epoch. */
 static void op_reset(void *c)
 {
     struct vr *r = c;
 
+    while (r->npins) {
+        pin_drop(r, &r->pins[0]);
+    }
     if (r->kms) {
         kms_reset(r->kms);
     }
@@ -468,7 +605,21 @@ const struct vd_ops vr_ops = {
     .scanout = op_scanout,
     .flush = op_flush,
     .reset = op_reset,
+    .pages = op_pages,
+    .unpin = op_unpin,
 };
+
+/** Pin blobs for page lists through the module's node fd. */
+void vr_set_module(struct vr *r, int fd)
+{
+    r->module = fd;
+}
+
+/** What the page lists pinned and let go of. */
+const struct vr_pin_counts *vr_pin_counts(struct vr *r)
+{
+    return &r->pc;
+}
 
 /** Reverse the order of n rows of len bytes, stride bytes apart. */
 static int flip_rows(uint8_t *p, uint32_t stride, uint32_t len, uint32_t n)

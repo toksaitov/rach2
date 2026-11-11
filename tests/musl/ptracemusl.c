@@ -22,9 +22,11 @@
  * returns the parent's id, and a write made -1 is not run and returns the eax
  * the tracer set; on x86-64 a DS selector the tracer sets there is the
  * child's at the next stop, and the kernel's data selector is refused. A
- * tracee that SIGKILL reaches at the entry stop of a write writes nothing. At
- * the exit stop of a read a signal interrupted, -1 in orig_eax keeps the read
- * from being restarted after a handler with SA_RESTART.
+ * tracee that SIGKILL reaches at the entry stop of a write writes nothing. The
+ * exit stop of a read a signal interrupted has -ERESTARTSYS, -512, in eax, as
+ * Linux's, whose exit stop comes before signal delivery; -1 in orig_eax there
+ * keeps the read from being restarted after a handler with SA_RESTART, and the
+ * read returns the code the tracer left, errno 512.
  * PTRACE_O_TRACEEXEC stops the child after an execve with the exec event, which
  * waitid reports in si_status above the signal, and a /proc/PID/mem descriptor
  * opened before the execve reads nothing of the new image. A debug register set
@@ -135,7 +137,8 @@
 /*
  * The fields of each architecture's user_regs_struct the rows read: the
  * call's number, its result, the instruction pointer and the code segment,
- * whose user selector is 0x1b on i386 and 0x33 on x86-64. The floating-point
+ * which must be the selector the tracer runs with (`running_cs`). The
+ * floating-point
  * state is the fxsave image, which i386 reads with GETFPXREGS and x86-64 with
  * GETFPREGS. LAST_USER_WORD is the last four bytes of user space: below the
  * kernel at 3 GiB on i386, and below the last page of the lower half on
@@ -148,7 +151,6 @@
 #define R_RET(r)       ((r).rax)
 #define R_IP(r)        ((r).rip)
 #define R_CS(r)        ((r).cs)
-#define USER_CS        0x33
 #define PTRACE_GETFX   PTRACE_GETFPREGS
 #define LAST_USER_WORD 0x00007FFFFFFFEFFCUL
 typedef struct user_fpregs_struct fxregs_t;
@@ -159,11 +161,23 @@ typedef struct user_fpregs_struct fxregs_t;
 #define R_RET(r)       ((r).eax)
 #define R_IP(r)        ((r).eip)
 #define R_CS(r)        ((r).xcs)
-#define USER_CS        0x1b
 #define PTRACE_GETFX   PTRACE_GETFPXREGS
 #define LAST_USER_WORD 0xbffffffcUL
 typedef struct user_fpxregs_struct fxregs_t;
 #endif
+
+/**
+ * The code selector the caller runs with, which its forked tracee has too.
+ * An i386 program's depends on the kernel: 0x1b on Rach2's i686 kernel and
+ * 0x23, Linux's __USER32_CS, on an x86-64 kernel.
+ */
+static unsigned long running_cs(void)
+{
+    unsigned short cs;
+
+    __asm__ volatile("mov %%cs, %0" : "=r"(cs));
+    return cs;
+}
 
 /* The word the parent reads and changes in its traced child. */
 static volatile long target = 1234;
@@ -342,7 +356,7 @@ static int memory_and_registers(void)
         return 1;
     }
     held();
-    if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 || R_CS(regs) != USER_CS) {
+    if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 || R_CS(regs) != running_cs()) {
         return fail("GETREGS");
     }
     held();
@@ -665,11 +679,20 @@ static void interrupt_only(int sig)
     (void)sig;
 }
 
+/* Linux's restart code for a call a handler with SA_RESTART restarts, which
+ * a tracer reads at the exit stop (include/linux/errno.h); no user header
+ * defines it. */
+#define ERESTARTSYS 512
+
 /**
- * Check that a tracer's -1 in orig_eax at the exit stop of a read a signal
- * interrupted keeps the read from being restarted, though the handler that
- * runs has SA_RESTART: the read returns EINTR, and a byte written after it is
- * not read. Returns 0, or 1 after the failure is printed.
+ * Check that a tracer reads -ERESTARTSYS at the exit stop of a read a signal
+ * interrupted, as on Linux 6.12, whose exit stop (kernel/entry/common.c:176)
+ * comes before the signal's delivery decides the restart, and that its -1 in
+ * orig_eax there keeps the read from being restarted, though the handler that
+ * runs has SA_RESTART: Linux's handle_signal then leaves the result register
+ * alone (arch/x86/kernel/signal.c:264), so the read returns -1 with errno
+ * ERESTARTSYS, and a byte written after it is not read. Returns 0, or 1 after
+ * the failure is printed.
  */
 static int restart_cancelled(void)
 {
@@ -693,7 +716,7 @@ static int restart_cancelled(void)
         close(p[1]);
         ptrace(PTRACE_TRACEME, 0, NULL, NULL);
         raise(SIGSTOP);
-        _exit(read(p[0], &c, 1) == -1 && errno == EINTR ? 0 : 1);
+        _exit(read(p[0], &c, 1) == -1 && errno == ERESTARTSYS ? 0 : 1);
     }
     if (!stopped_by(pid, SIGSTOP) || syscall_entry(pid, SYS_read, &regs) != 0) {
         return fail("the entry stop of read");
@@ -701,7 +724,7 @@ static int restart_cancelled(void)
     held();
     if (ptrace(PTRACE_SYSCALL, pid, NULL, NULL) != 0 || kill(pid, SIGUSR1) != 0 ||
         !stopped_by(pid, SIGTRAP) || ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 ||
-        R_NR(regs) != SYS_read || (long)R_RET(regs) != -EINTR) {
+        R_NR(regs) != SYS_read || (long)R_RET(regs) != -ERESTARTSYS) {
         return fail("the exit stop of the interrupted read");
     }
     held();
@@ -1926,8 +1949,9 @@ static int watched_sigwait(void)
  * user space, fails with EPERM under ARCH_SET_FS and ARCH_SET_GS and with EIO
  * under POKEUSER, SETREGS and SETREGSET, and leaves the bases as they were.
  * On i386 the requests are PTRACE_GET_THREAD_AREA and PTRACE_SET_THREAD_AREA:
- * entry 6 is the thread pointer's, entries 7 and 8 read as unused and take
- * only an unused entry, and the others are EINVAL.
+ * the first TLS entry, 6 on an i386 kernel and 12 on an x86-64 one, is the
+ * thread pointer's, the two after it read as unused and take only an unused
+ * entry, and the others are EINVAL.
  */
 #define TP_WORDS 16
 #define TP_MARK  0x5A17C0DEUL
@@ -2102,8 +2126,20 @@ static int thread_pointer(void)
     return 0;
 }
 #else
-/* The GDT entry of the thread pointer's segment. */
-#define TLS_ENTRY 6
+/*
+ * The GDT entry of the thread pointer's segment, the first of the three TLS
+ * entries, which musl's set_thread_area was given and GS selects: 6 on an
+ * i386 kernel and 12 on an x86-64 kernel, as Linux's GDT_ENTRY_TLS_MIN.
+ */
+static unsigned int tls_entry(void)
+{
+    unsigned short gs;
+
+    __asm__ volatile("mov %%gs, %0" : "=r"(gs));
+    return gs >> 3;
+}
+
+#define TLS_ENTRY tls_entry()
 
 /* Linux i386's struct user_desc: the flags are its bit fields. */
 struct tp_desc {
@@ -2117,8 +2153,9 @@ struct tp_desc {
 #define UD_SEG_NOT_PRESENT 0x20u
 
 /**
- * Check that entries 7 and 8, beside the thread pointer's, read as unused and
- * take only an unused entry, and that entries 5 and 9 fail with EINVAL.
+ * Check that the two entries after the thread pointer's, 7 and 8 on an i386
+ * kernel, read as unused and take only an unused entry, and that the entries
+ * just outside the three fail with EINVAL.
  * Returns 0, or 1 after the failure is printed.
  */
 static int other_entries(pid_t pid)
@@ -2147,7 +2184,7 @@ static int other_entries(pid_t pid)
     held_to(base + 3);
     if (ptrace(PTRACE_GET_THREAD_AREA, pid, (void *)(TLS_ENTRY - 1), &d) != -1 || errno != EINVAL ||
         ptrace(PTRACE_GET_THREAD_AREA, pid, (void *)(TLS_ENTRY + 3), &d) != -1 || errno != EINVAL) {
-        return abandon(pid, "an entry outside 6 to 8 was not EINVAL");
+        return abandon(pid, "an entry outside the three TLS entries was not EINVAL");
     }
     held();
     return 0;
@@ -2155,8 +2192,8 @@ static int other_entries(pid_t pid)
 
 /**
  * Check the thread pointer on i386: PTRACE_GET_THREAD_AREA reads
- * pthread_self in entry 6, the rows of `other_entries`, and a tracee
- * continued with the entry's base moved reads TP_MARK through it.
+ * pthread_self in the first TLS entry, the rows of `other_entries`, and a
+ * tracee continued with the entry's base moved reads TP_MARK through it.
  * Returns 0, or 1 after the failure is printed.
  */
 static int thread_pointer(void)

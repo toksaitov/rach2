@@ -55,7 +55,8 @@ struct lag_entry {
 static block_device_t lag_device;
 static block_device_t *lag_backing;
 static struct lag_entry queue[LAG_QUEUE];
-static uint32_t lag_ticks;
+static uint32_t lag_ticks; /* the lag clock, in ticks */
+static uint32_t lag_seen;  /* `kernel_ticks` at the last tick's call */
 static uint32_t lag_delay;
 static int lag_held;             /* explicit completion control for kernel test fixtures */
 static uint32_t lag_completions; /* answers delivered after their lag, for /proc/disk */
@@ -64,6 +65,22 @@ static uint32_t writes_seen;
 static block_device_t dead_device; /* rach2.blockdead=P: the partition's own device */
 static uint64_t dead_start;        /* where that partition starts, or 0 for none */
 static int dead_set;
+
+/** The lag clock as it stands now: `lag_ticks` and the ticks `kernel_ticks`
+ * has counted since the tick's last call, which a boot processor's tick
+ * that found the big lock held left out; `lag_ticks` alone while a fixture
+ * holds the queue, since the tick then does not advance it. Interrupts are
+ * masked across the reads, so that the tick, run by a timer interrupt on
+ * this processor, cannot mix one call's `lag_ticks` with the next call's
+ * `lag_seen`. */
+static uint32_t lag_clock(void)
+{
+    uint32_t flags = kirq_save();
+    uint32_t now = lag_held ? lag_ticks : lag_ticks + ((uint32_t)kernel_ticks - lag_seen);
+
+    kirq_restore(flags);
+    return now;
+}
 
 /**
  * Claim a free slot for `request` before anything runs for it.
@@ -104,7 +121,7 @@ static int lag_flush(block_device_t *device, struct block_request *request)
     if (!e) {
         return -EIO;
     }
-    e->due = lag_ticks + lag_delay;
+    e->due = lag_clock() + lag_delay;
     e->ready = 1;
     return 0;
 }
@@ -140,7 +157,7 @@ static int lag_submit(block_device_t *device, struct block_request *request)
         k_memset(request->page, 0xEE, request->count * BLOCK_SECTOR_SIZE);
         e->status = lag_backing->read(lag_backing, request->lba, request->count, e->staged);
     }
-    e->due = lag_ticks + lag_delay;
+    e->due = lag_clock() + lag_delay;
     e->ready = 1;
     return 0;
 }
@@ -160,7 +177,7 @@ static void lag_deliver(struct lag_entry *e)
         return;
     }
     e->delivered = 1;
-    e->due = lag_ticks + 2u * LAG_UNIT;
+    e->due = lag_clock() + 2u * LAG_UNIT;
     lag_completions++;
     if (e->flush) {
         klog(KLOG_INFO, "block", "lag: flush answered");
@@ -211,17 +228,21 @@ int block_lag_answer(uint32_t generation, int duplicate)
 
 /**
  * Deliver ready answers at their due tick, and error duplicates two ticks
- * later. Explicitly held fixtures use `block_lag_answer` instead; timer
- * ticks then change neither the lag clock nor its queue.
+ * later. The lag clock advances by the ticks counted since the last call,
+ * since the boot processor's tick does not call this on every tick
+ * (`tick_waits`, isr.c). Explicitly held fixtures use `block_lag_answer`
+ * instead; timer ticks then change neither the lag clock nor its queue.
  */
 void block_lag_tick(void)
 {
+    uint32_t now = (uint32_t)kernel_ticks, passed = now - lag_seen;
     int i;
 
+    lag_seen = now;
     if (!lag_backing || lag_held) {
         return;
     }
-    lag_ticks++;
+    lag_ticks += passed;
     for (i = 0; i < LAG_QUEUE; i++) {
         struct lag_entry *e = &queue[i];
 

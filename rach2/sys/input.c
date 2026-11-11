@@ -16,6 +16,7 @@
 #include "display/blank.h"
 #include "evdev.h"
 #include "kd.h"
+#include "lib/kerrno.h"
 #include "lib/kstring.h"
 #include "lib/spinlock.h"
 #include "kbd.h"
@@ -329,6 +330,26 @@ void input_key_event(struct input_keyboard *kb, uint32_t scan, unsigned int keyc
     key_event(kb, scan, keycode, down, 1);
 }
 
+int input_keyboard_release(struct evdev *dev, unsigned int keycode)
+{
+    struct input_keyboard *kb;
+    uint32_t flags;
+    int held = 0;
+
+    if (!dev || keycode == 0 || keycode >= INPUT_KEY_BYTES * 8) {
+        return 0;
+    }
+    flags = spin_lock_irqsave(&input_lock);
+    for (kb = keyboards; kb && kb->dev != dev; kb = kb->next) {
+    }
+    held = kb && (kb->down[keycode >> 3] & (1u << (keycode & 7))) != 0;
+    spin_unlock_irqrestore(&input_lock, flags);
+    if (held) {
+        key_event(kb, 0, keycode, 0, 0);
+    }
+    return held;
+}
+
 void input_tick(void)
 {
     struct input_keyboard *kb;
@@ -411,6 +432,65 @@ void input_keyboard_detach(struct input_keyboard *kb)
     kb->skip = 0;
 }
 
+/** EVIOCGKEYCODE of a set-1 keyboard: the entry at its scan code, which is
+ * its place too. */
+static int set1_get(void *ctx, struct evdev_keymap_entry *ke)
+{
+    const struct input_keyboard *kb = (const struct input_keyboard *)ctx;
+    uint32_t index = ke->by_index ? ke->index : ke->scancode;
+
+    if (index >= INPUT_SET1_KEYMAP) {
+        return -EINVAL;
+    }
+    ke->index = ke->scancode = index;
+    ke->keycode = kb->keymap[index];
+    return 0;
+}
+
+/** EVIOCSKEYCODE of a set-1 keyboard. */
+static int set1_set(void *ctx, const struct evdev_keymap_entry *ke, uint16_t *old)
+{
+    struct input_keyboard *kb = (struct input_keyboard *)ctx;
+    uint32_t index = ke->by_index ? ke->index : ke->scancode;
+
+    if (index >= INPUT_SET1_KEYMAP) {
+        return -EINVAL;
+    }
+    *old = kb->keymap[index];
+    kb->keymap[index] = ke->keycode;
+    return 0;
+}
+
+/** Whether a scan code of a set-1 keyboard gives key code `code`. */
+static int set1_maps(void *ctx, uint16_t code)
+{
+    const struct input_keyboard *kb = (const struct input_keyboard *)ctx;
+    int i;
+
+    for (i = 0; i < INPUT_SET1_KEYMAP; i++) {
+        if (kb->keymap[i] == code) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void input_keyboard_set1_keymap(struct input_keyboard *kb, uint16_t *map)
+{
+    struct evdev_keymap km;
+    int i;
+
+    for (i = 0; i < INPUT_SET1_KEYMAP; i++) {
+        map[i] = (uint16_t)(i < 256 ? set1_keycode((unsigned)i) : 0);
+    }
+    kb->keymap = map;
+    km.get = set1_get;
+    km.set = set1_set;
+    km.maps = set1_maps;
+    km.ctx = kb;
+    evdev_set_keymap(kb->dev, &km);
+}
+
 void input_set1_event(struct input_keyboard *kb, uint8_t code)
 {
     unsigned scan;
@@ -433,5 +513,6 @@ void input_set1_event(struct input_keyboard *kb, uint8_t code)
     if (scan == 0xAA || scan == 0xB6) {
         return;
     }
-    input_key_event(kb, scan, (unsigned int)set1_keycode(scan), !(code & 0x80));
+    input_key_event(kb, scan, kb->keymap ? kb->keymap[scan] : (unsigned int)set1_keycode(scan),
+                    !(code & 0x80));
 }

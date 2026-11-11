@@ -126,7 +126,8 @@ static uint32_t get32(const uint8_t *p)
 /**
  * The i386 siginfo: signo, errno and code, then at byte 12 the union, with
  * the fields of the kind the code says, as Linux's
- * `copy_siginfo_to_user32` writes them: a fault's address; a seccomp
+ * `copy_siginfo_to_user32` writes them: a fault's address, and for SIGSEGV
+ * with SEGV_PKUERR the key at 20, `si_pkey`; a seccomp
  * SIGSYS's call address, call number at 16 and architecture at 20; and
  * otherwise the sender's or child's pid and uid at 12 and 16 and, at 20, a
  * timer's or a queued signal's si_value, or a child's status. For a timer
@@ -145,6 +146,9 @@ void ia32_fill_siginfo(uint8_t *out, int signo, const struct k_siginfo *info)
     put32(out + 8, (uint32_t)info->code);
     if (fault) {
         put32(out + 12, (uint32_t)info->addr);
+        if (signo == SIGSEGV && info->code == SEGV_PKUERR) {
+            put32(out + 20, info->pkey);
+        }
         return;
     }
     if (signo == SIGSYS && info->code == SIGSYS_SECCOMP) {
@@ -184,6 +188,7 @@ void ia32_take_siginfo(const uint8_t *in, struct k_siginfo *info)
     info->uid = get32(in + 16);
     info->status = (int32_t)get32(in + 20);
     info->value = get32(in + 20);
+    info->pkey = get32(in + 20);
 }
 
 /** Whether the selector `sel` at RPL 3 may be loaded into DS, ES, FS or GS
@@ -195,6 +200,9 @@ static int seg_loadable(unsigned int sel)
 
     if ((sel & ~3u) == 0) {
         return 1;
+    }
+    if (sel & 4u) {
+        ldt_switch(current_proc->mm);
     }
     ar = x86_64_lar(sel);
     if ((ar & (AR_P | AR_S | AR_DPL3)) != (AR_P | AR_S | AR_DPL3)) {
@@ -303,13 +311,16 @@ static uint32_t restorer_of(const struct k_sigaction *sa, int rt, uintptr_t retc
  * The frame goes below the interrupted stack pointer, an i386 stack having
  * no red zone, or at the top of the alternate stack under SA_ONSTACK, with
  * the floating-point state above it (`fpu_frame32_place`). Linux's switch
- * to the stack in `sa_restorer` for a 16-bit SS is left out, since no
- * other SS can be loaded here without an LDT. A frame any byte of which
+ * to the stack in `sa_restorer` for a non-flat SS applies without
+ * SA_ONSTACK or SA_RESTORER, when not already on the alternate stack.
+ * A frame any byte of which
  * lies at or past 4 GiB, which a 64-bit program's stack can put it, is
  * refused, where Linux writes it and its handler faults on the truncated
  * stack pointer. The restorer is SA_RESTORER's, else the 32-bit vDSO's,
  * else the frame's `retcode`, as Linux takes it.
  *
+ * The frame is written with every protection key open and keeps the
+ * interrupted code's PKRU, as `sigframe_setup` writes the native one.
  * The handler starts with the initial floating-point state, the signal in
  * EAX and, for the rt frame, the siginfo's and ucontext's addresses in EDX
  * and ECX, as `-mregparm=3` reads them besides the stack; DF, TF and RF are
@@ -326,10 +337,15 @@ int ia32_sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *s
     int on_alt, was_on;
     uintptr_t sp = tf->rsp;
     uintptr_t fp_addr, frame_addr, size;
+    uint32_t pkru;
 
     on_alt = was_on = sigframe_on_altstack(tf->rsp);
     if ((sa->flags & SA_ONSTACK) && current_proc->altstack_on && !on_alt) {
         sp = (uintptr_t)current_proc->altstack_sp + (uintptr_t)current_proc->altstack_size;
+        on_alt = 1;
+    } else if (!(sa->flags & (SA_ONSTACK | SA_RESTORER)) && !was_on && tf->ss != GDT_USER_DATA &&
+               sa->restorer) {
+        sp = (uintptr_t)sa->restorer;
         on_alt = 1;
     }
     fp_addr = fpu_frame32_place(sp);
@@ -340,12 +356,15 @@ int ia32_sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *s
     if (on_alt && !sigframe_on_altstack(frame_addr)) {
         return -1;
     }
-    if (fp_addr + fpu_frame32_bytes() > LOW_4G) {
+    if (frame_addr >= LOW_4G || fp_addr >= LOW_4G || fpu_frame32_bytes() > LOW_4G - fp_addr) {
         return -1;
     }
 
     fpu_save(current_proc->fpu);
+    pkru = fpu_pkru();
+    fpu_pkru_set(0);
     if (fpu_frame32_put(fp_addr, current_proc->fpu, (uint32_t)tf->cs, x86_64_ds_read()) != 0) {
+        fpu_pkru_set(pkru);
         return -1;
     }
 
@@ -375,6 +394,7 @@ int ia32_sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *s
             restorer_of(sa, 0, frame_addr + offsetof(struct sigframe32, retcode));
     }
     if (copy_to_user((void __user *)frame_addr, &frame, size) != 0) {
+        fpu_pkru_set(pkru);
         return -1;
     }
 

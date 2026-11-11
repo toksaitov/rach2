@@ -1386,10 +1386,14 @@ static void commit_tail(struct drm_atomic_state *state)
 
 /*
  * A nonblocking commit whose in-fences had not all signalled, which the
- * worker finishes once they have: the commit's states, moved from the
- * caller's after the swap, a callback on each plane's fence, how many have
- * yet to signal, and a hold on the device. The queue is in the order the
- * commits were made.
+ * worker, or a blocking commit of the same objects, finishes once they
+ * have: the commit's states, moved from the caller's after the swap, a
+ * callback on each plane's fence, how many have yet to signal, the plane
+ * whose fence Linux's tail would be waiting for (`waited`,
+ * DRM_MAX_PLANES for none), the tick at which that wait times out under
+ * the driver's `commit_fence_timeout_ms` (`deadline`, 0 for none), whether
+ * its tail has begun, and a hold on the device. The queue is in the order
+ * the commits were made, and a work stays on it until its tail ends.
  */
 struct commit_work;
 struct commit_fence_cb {
@@ -1400,22 +1404,78 @@ struct commit_work {
     struct drm_atomic_state state;
     struct commit_fence_cb cbs[DRM_MAX_PLANES];
     uint32_t waiting;
+    int waited;
+    uint64_t deadline;
+    int running;
     struct commit_work *next;
 };
 
 static struct commit_work *works;
 /* The worker sleeps here; static storage starts it empty. */
 static wait_queue_t work_wait;
+/* A commit stalled on a queued one sleeps here, woken as a queued
+ * commit's fences signal or its tail ends; static storage starts it
+ * empty. */
+static wait_queue_t work_done_wait;
 
-/** A fence of a queued commit signalled: one fewer to wait for. In the
- * signaller's context, which may be an interrupt. */
+/**
+ * Move `w`'s tail to the first plane after `from` whose fence has not
+ * signalled, hand that fence to the driver's `commit_fence_wait` and start
+ * its timeout, as Linux's intel_atomic_commit_fence_wait
+ * (intel_display.c:7262-7280) waits for each plane's fence in turn, at
+ * the start of the tail that Linux queues at once. Interrupts masked.
+ */
+static void work_fence_next(struct commit_work *w, int from)
+{
+    const struct drm_mode_config *mc = &w->state.dev->mode_config;
+    int i;
+
+    for (i = from + 1; i < DRM_MAX_PLANES; i++) {
+        struct drm_plane_state *ps = w->state.planes_new[i];
+
+        if (ps && ps->fence && !ps->fence->signaled) {
+            break;
+        }
+    }
+    w->waited = i;
+    w->deadline = 0;
+    if (i < DRM_MAX_PLANES && mc->commit_fence_timeout_ms) {
+        w->deadline = rtc_ticks_now() + MS_TO_TICKS(mc->commit_fence_timeout_ms) + 1u;
+    }
+    if (i < DRM_MAX_PLANES && mc->commit_fence_wait) {
+        mc->commit_fence_wait(w->state.dev, w->state.planes_new[i]->fence);
+    }
+}
+
+/** Whether the tail of `w`, a queued commit, may run at tick `now`: it has
+ * not begun, and every fence has signalled or the wait for the plane the
+ * tail waits for has timed out, after which Linux's tail waits for no
+ * other. */
+static int work_due(const struct commit_work *w, uint64_t now)
+{
+    uint32_t flags = kirq_save();
+    int due = !w->running && (!w->waiting || (w->deadline && now >= w->deadline));
+
+    kirq_restore(flags);
+    return due;
+}
+
+/** A fence of a queued commit signalled: one fewer to wait for, and, for
+ * the fence the tail would wait for, the next plane's. In the signaller's
+ * context, which may be an interrupt; dma_fence_signal runs it with
+ * interrupts masked, so that its decrement cannot fall inside another's. */
 static void work_fence_done(struct dma_fence *fence, struct dma_fence_cb *cb)
 {
-    struct commit_work *w = ((struct commit_fence_cb *)cb)->work;
+    struct commit_fence_cb *fcb = (struct commit_fence_cb *)cb;
+    struct commit_work *w = fcb->work;
 
     (void)fence;
+    if (fcb - w->cbs == w->waited) {
+        work_fence_next(w, w->waited);
+    }
     if (--w->waiting == 0) {
         wq_wake_all(&work_wait);
+        wq_wake_all(&work_done_wait);
     }
 }
 
@@ -1456,8 +1516,9 @@ void drm_connector_hotplug_later(struct drm_connector *connector)
  * the interrupt flag; static storage starts it empty. */
 static struct drm_work *dev_works, **dev_works_tail = &dev_works;
 
-/* Counts the works queued, so that the worker's wait ends on a new one
- * whose time may come before the deadline it armed. */
+/* Counts the works queued, the drivers' and the commits', so that the
+ * worker's wait ends on a new one whose time may come before the deadline
+ * it armed. */
 static uint32_t dev_works_gen;
 
 void drm_dev_work_later_ms(struct drm_device *dev, struct drm_work *work, uint32_t ms)
@@ -1593,24 +1654,57 @@ static int hotplug_work(void)
     }
 }
 
+/** Run the tail of `w`, a queued commit that `work_due` lets run, its
+ * callbacks on fences that have not signalled taken back, then take it off
+ * the queue and free it. May sleep in the drivers' hooks. */
+static void work_finish(struct commit_work *w)
+{
+    struct commit_work **link;
+    struct drm_device *dev = w->state.dev;
+    uint32_t flags;
+    int i;
+
+    w->running = 1;
+    for (i = 0; i < DRM_MAX_PLANES; i++) {
+        struct drm_plane_state *ps = w->state.planes_new[i];
+
+        if (ps && ps->fence) {
+            flags = kirq_save();
+            if (dma_fence_remove_callback(ps->fence, &w->cbs[i].cb)) {
+                w->waiting--;
+            }
+            kirq_restore(flags);
+        }
+    }
+    commit_tail(&w->state);
+    for (link = &works; *link != w; link = &(*link)->next) {
+    }
+    *link = w->next;
+    drm_dev_put(dev);
+    kfree(w);
+    wq_wake_all(&work_done_wait);
+}
+
+/** The first queued commit whose tail may run now (`work_due`), or
+ * NULL. */
+static struct commit_work *work_next_ready(void)
+{
+    struct commit_work *w;
+    uint64_t now = rtc_ticks_now();
+
+    for (w = works; w && !work_due(w, now); w = w->next) {
+    }
+    return w;
+}
+
 int drm_atomic_commit_work(void)
 {
-    struct commit_work **link = &works, *w;
-    struct drm_device *dev;
+    struct commit_work *w;
     int n = dev_work_run();
 
     n += hotplug_work();
-
-    while ((w = *link) != NULL) {
-        if (w->waiting) {
-            link = &w->next;
-            continue;
-        }
-        *link = w->next;
-        dev = w->state.dev;
-        commit_tail(&w->state);
-        drm_dev_put(dev);
-        kfree(w);
+    while ((w = work_next_ready()) != NULL) {
+        work_finish(w);
         n++;
     }
     return n;
@@ -1619,16 +1713,24 @@ int drm_atomic_commit_work(void)
 #ifndef RACH2_HOSTTEST
 static process_t *commit_thread;
 
-/** Whether a queued commit has all its fences, a hotplug event or a
- * driver's work waits whose time has come, or a work was queued since the
- * wait began, whose generation `arg` holds. */
+/* What the worker's sleep began with: the generation of the queues and
+ * the tick it wakes at, 0 for none. */
+struct worker_wait {
+    uint32_t gen;
+    uint64_t tick;
+};
+
+/** Whether a queued commit may run, a hotplug event or a driver's work
+ * waits whose time has come, a work was queued since the wait began, or
+ * the tick the wait armed has passed, all of which `arg`, the sleep's
+ * `struct worker_wait`, holds. */
 static int work_ready(void *arg)
 {
-    const struct commit_work *w;
+    const struct worker_wait *ww = (const struct worker_wait *)arg;
     const struct drm_work *dw;
     uint64_t now = rtc_ticks_now();
 
-    if (nhotplugs != 0 || dev_works_gen != *(const uint32_t *)arg) {
+    if (nhotplugs != 0 || dev_works_gen != ww->gen || (ww->tick && now >= ww->tick)) {
         return 1;
     }
     for (dw = dev_works; dw; dw = dw->next) {
@@ -1636,37 +1738,38 @@ static int work_ready(void *arg)
             return 1;
         }
     }
-    for (w = works; w; w = w->next) {
-        if (!w->waiting) {
-            return 1;
-        }
-    }
-    return 0;
+    return work_next_ready() != NULL;
 }
 
-/** The worker, kdrm: sleep in an idle wait until a queued commit has its
- * fences, then finish what is ready, holding the big lock as kernel code
- * does. */
+/** The worker, kdrm: sleep in an idle wait until a queued commit may run,
+ * then finish what is ready, holding the big lock as kernel code does. */
 static void commit_thread_main(void)
 {
     const struct drm_work *dw;
-    uint64_t next;
-    uint32_t gen, flags;
+    const struct commit_work *w;
+    struct worker_wait ww;
+    uint32_t flags;
 
     arch_irq_enable();
     for (;;) {
-        /* Sleep until the soonest delayed work's tick at the latest. */
+        /* Sleep until the soonest delayed work's tick or commit's fence
+         * timeout at the latest. */
         flags = kirq_save();
-        gen = dev_works_gen;
-        next = 0;
+        ww.gen = dev_works_gen;
+        ww.tick = 0;
         for (dw = dev_works; dw; dw = dw->next) {
-            if (dw->due && (next == 0 || dw->due < next)) {
-                next = dw->due;
+            if (dw->due && (ww.tick == 0 || dw->due < ww.tick)) {
+                ww.tick = dw->due;
             }
         }
-        current_proc->wakeup_tick = next;
+        for (w = works; w; w = w->next) {
+            if (!w->running && w->deadline && (ww.tick == 0 || w->deadline < ww.tick)) {
+                ww.tick = w->deadline;
+            }
+        }
+        current_proc->wakeup_tick = ww.tick;
         kirq_restore(flags);
-        (void)wq_wait_event_idle(&work_wait, work_ready, &gen);
+        (void)wq_wait_event_idle(&work_wait, work_ready, &ww);
         current_proc->wakeup_tick = 0;
         (void)drm_atomic_commit_work();
     }
@@ -1714,10 +1817,12 @@ static int32_t commit_worker_start(void)
 #endif
 
 /** Queue the commit `state`, swapped in, for the worker: its states move
- * to `w`, which takes a callback on each in-fence not yet signalled. */
+ * to `w`, which takes a callback on each in-fence not yet signalled, and
+ * the driver is told of the first fence its tail would wait for. */
 static void work_queue(struct commit_work *w, struct drm_atomic_state *state)
 {
     struct commit_work **link;
+    uint32_t flags;
     int i;
 
     w->state = *state;
@@ -1728,8 +1833,10 @@ static void work_queue(struct commit_work *w, struct drm_atomic_state *state)
     k_memset(state->connectors_old, 0, sizeof(state->connectors_old));
     k_memset(state->connectors_new, 0, sizeof(state->connectors_new));
     /* One count of its own while the callbacks go on, so that a fence
-     * signalled meanwhile cannot make it ready early. */
+     * signalled meanwhile cannot make it ready early; no plane is waited
+     * for until they are all on. */
     w->waiting = 1;
+    w->waited = DRM_MAX_PLANES;
     for (i = 0; i < DRM_MAX_PLANES; i++) {
         struct drm_plane_state *ps = w->state.planes_new[i];
 
@@ -1737,12 +1844,22 @@ static void work_queue(struct commit_work *w, struct drm_atomic_state *state)
             continue;
         }
         w->cbs[i].work = w;
+        /* A callback already added may decrement it from an interrupt. */
+        flags = kirq_save();
         w->waiting++;
+        kirq_restore(flags);
         if (dma_fence_add_callback(ps->fence, &w->cbs[i].cb, work_fence_done) != 0) {
+            flags = kirq_save();
             w->waiting--;
+            kirq_restore(flags);
         }
     }
+    flags = kirq_save();
+    work_fence_next(w, -1);
     w->waiting--;
+    /* The worker's sleep looks again, for this work's fence timeout. */
+    dev_works_gen++;
+    kirq_restore(flags);
     drm_dev_get(w->state.dev);
     for (link = &works; *link; link = &(*link)->next) {
     }
@@ -1779,34 +1896,142 @@ static int32_t setup_flips(struct drm_atomic_state *state)
     return 0;
 }
 
-/** Wait for every in-fence of `state`, interruptibly when `intr`: 0 or
- * -EINTR. */
+/**
+ * Wait for every in-fence of `state`, interruptibly when `intr`, as
+ * Linux's drm_atomic_helper_wait_for_fences; or, under the driver's
+ * `commit_fence_timeout_ms`, for each plane's fence in turn for at most
+ * that long, uninterruptibly, and for none after one that times out, as
+ * Linux's intel_atomic_commit_fence_wait (intel_display.c:7262-7280). 0 or
+ * -EINTR.
+ */
 static int32_t wait_for_fences(struct drm_atomic_state *state, int intr)
 {
+    uint32_t ms = state->dev->mode_config.commit_fence_timeout_ms;
     int32_t rc;
     int i;
 
     for (i = 0; i < DRM_MAX_PLANES; i++) {
         struct drm_plane_state *ps = state->planes_new[i];
 
-        if (ps && ps->fence && (rc = dma_fence_wait_until(ps->fence, intr, -1)) != 0) {
+        if (!ps || !ps->fence) {
+            continue;
+        }
+        if (ms) {
+            if (dma_fence_wait_until(ps->fence, 0, dma_fence_now() + (int64_t)ms * 1000000) != 0) {
+                return 0;
+            }
+        } else if ((rc = dma_fence_wait_until(ps->fence, intr, -1)) != 0) {
             return rc;
         }
     }
     return 0;
 }
 
+/** The first queued commit of `state`'s device that holds a state of a
+ * CRTC, plane or connector `state` changes, whose tail reads the states
+ * that `state`'s tail would free as old; or NULL. */
+static struct commit_work *work_overlapping(const struct drm_atomic_state *state)
+{
+    struct commit_work *w;
+    int i, hit;
+
+    for (w = works; w; w = w->next) {
+        if (w->state.dev != state->dev) {
+            continue;
+        }
+        hit = 0;
+        for (i = 0; i < DRM_MAX_PLANES; i++) {
+            hit |= state->planes_new[i] && w->state.planes_new[i];
+        }
+        for (i = 0; i < DRM_MAX_CRTCS; i++) {
+            hit |= state->crtcs_new[i] && w->state.crtcs_new[i];
+        }
+        for (i = 0; i < DRM_MAX_CONNECTORS; i++) {
+            hit |= state->connectors_new[i] && w->state.connectors_new[i];
+        }
+        if (hit) {
+            return w;
+        }
+    }
+    return NULL;
+}
+
+/* What a commit stalled on a queued one waits with: its state and the
+ * tick its sleep wakes at, the queued commit's fence timeout, 0 for
+ * none. */
+struct overlap_wait {
+    const struct drm_atomic_state *state;
+    uint64_t tick;
+};
+
+/** Whether a commit stalled on a queued one may act, or look again: none
+ * holds its objects, the first that does may run (`work_due`), or the
+ * tick the sleep armed in `arg`, a `struct overlap_wait`, has passed. */
+static int overlap_ready(void *arg)
+{
+    const struct overlap_wait *ow = (const struct overlap_wait *)arg;
+    const struct commit_work *w = work_overlapping(ow->state);
+    uint64_t now = rtc_ticks_now();
+
+    return !w || work_due(w, now) || (ow->tick && now >= ow->tick);
+}
+
 /**
- * Linux's stall_checks: a nonblocking commit may not get ahead of a flip; a
- * blocking one waits for it, at once for one the worker has yet to program,
- * whose states it would otherwise replace under it, then at most 10 s for
- * its vblank. 0, -EBUSY or -EINTR.
+ * Linux's stall on the commits of a state's objects, which a queued commit
+ * has yet to finish: EBUSY for a nonblocking commit; a blocking one waits
+ * for the queued commit's fences and runs its tail itself, or waits for the
+ * worker to end a tail it began, since the worker's other works may want
+ * the commit lock the caller holds. 0, -EBUSY or -EINTR.
+ */
+static int32_t stall_on_works(struct drm_atomic_state *state, int nonblock)
+{
+    struct commit_work *w;
+    struct overlap_wait ow;
+    uint64_t saved = 0;
+    uint32_t flags;
+    int32_t rc;
+
+    while ((w = work_overlapping(state)) != NULL) {
+        if (nonblock) {
+            return -EBUSY;
+        }
+        if (work_due(w, rtc_ticks_now())) {
+            work_finish(w);
+            continue;
+        }
+        ow.state = state;
+        flags = kirq_save();
+        ow.tick = w->running ? 0 : w->deadline;
+        kirq_restore(flags);
+        if (current_proc) {
+            saved = current_proc->wakeup_tick;
+            current_proc->wakeup_tick = ow.tick;
+        }
+        rc = wq_wait_event(&work_done_wait, overlap_ready, &ow);
+        if (current_proc) {
+            current_proc->wakeup_tick = saved;
+        }
+        if (rc != 0) {
+            return -EINTR;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Linux's stall_checks: a nonblocking commit may not get ahead of a queued
+ * commit of its objects or of a flip; a blocking one finishes the queued
+ * commit first, as stall_on_works says, then waits at most 10 s for each
+ * flip's vblank. 0, -EBUSY or -EINTR.
  */
 static int32_t stall_checks(struct drm_atomic_state *state, int nonblock)
 {
-    int32_t rc;
+    int32_t rc = stall_on_works(state, nonblock);
     int i;
 
+    if (rc != 0) {
+        return rc;
+    }
     for (i = 0; i < DRM_MAX_CRTCS; i++) {
         struct drm_crtc_state *cs = state->crtcs_new[i];
 
@@ -1822,6 +2047,47 @@ static int32_t stall_checks(struct drm_atomic_state *state, int nonblock)
         }
         if (rc == -EINTR) {
             return rc;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Give each plane of `state` that shows a framebuffer and has no in-fence
+ * the pending writes of the framebuffer's objects as its fence, Linux's
+ * drm_gem_plane_helper_prepare_fb, which drm_atomic_helper_prepare_planes
+ * runs for every GEM driver without a prepare_fb of its own and i915's
+ * intel_prepare_plane_fb runs too. A flip then waits for the render job
+ * that draws the buffer, which a compositor that passes no IN_FENCE_FD
+ * relies on; an in-fence overrules them, as on Linux. Returns 0, or
+ * -ENOMEM when two objects' writes could not be merged into one fence.
+ */
+static int32_t implicit_fences(struct drm_atomic_state *state)
+{
+    struct dma_fence *w[4];
+    int i, j, k, n;
+
+    for (i = 0; i < DRM_MAX_PLANES; i++) {
+        struct drm_plane_state *ps = state->planes_new[i];
+
+        if (!ps || !ps->fb || ps->fence) {
+            continue;
+        }
+        n = 0;
+        for (j = 0; j < 4; j++) {
+            struct drm_gem_object *obj = ps->fb->obj[j];
+            struct dma_fence *f = obj ? obj->resv->write : NULL;
+
+            for (k = 0; f && k < n && w[k] != f; k++) {
+            }
+            if (f && k == n) {
+                w[n++] = f;
+            }
+        }
+        if (n == 1) {
+            ps->fence = dma_fence_get(w[0]);
+        } else if (n > 1 && !(ps->fence = dma_fence_merge(w, (uint32_t)n))) {
+            return -ENOMEM;
         }
     }
     return 0;
@@ -1859,6 +2125,9 @@ int32_t drm_atomic_helper_commit(struct drm_device *dev, struct drm_atomic_state
     int i;
 
     rc = stall_checks(state, nonblock);
+    if (rc == 0) {
+        rc = implicit_fences(state);
+    }
     if (rc != 0) {
         return rc;
     }
@@ -2009,8 +2278,8 @@ static const char *crtc_fence_timeline(struct dma_fence *fence)
     return ((struct crtc_fence *)fence)->timeline;
 }
 
-static const struct dma_fence_ops crtc_fence_ops = {crtc_fence_driver, crtc_fence_timeline, NULL,
-                                                    NULL};
+static const struct dma_fence_ops crtc_fence_ops = {
+    crtc_fence_driver, crtc_fence_timeline, NULL, NULL, NULL, NULL};
 
 /** Append the string `src` to `out` of `cap` bytes at `*at`, cut to fit. */
 static void put_str(char *out, uint32_t cap, uint32_t *at, const char *src)
@@ -2059,19 +2328,49 @@ static struct dma_fence *crtc_create_fence(struct drm_crtc *crtc)
     return &f->base;
 }
 
-/** The out-fences of an ATOMIC call, by CRTC index: each fence, held, and
- * where its descriptor goes. */
+/** The out-fences of an ATOMIC call, by CRTC index: each fence, held,
+ * where its descriptor goes, and, once out_fence_setup has run, its sync
+ * file, not yet attached, and the descriptor reserved for it. */
 struct out_fences {
     struct dma_fence *fence[DRM_MAX_CRTCS];
     int32_t __user *ptr[DRM_MAX_CRTCS];
+    struct sync_file *file[DRM_MAX_CRTCS];
+    int32_t fd[DRM_MAX_CRTCS];
 };
+
+/**
+ * Linux's setup_out_fence for CRTC `i` of `out`: reserve the descriptor,
+ * write it where OUT_FENCE_PTR points, and make the sync file, all before
+ * the commit, so that a commit that succeeds cannot then fail to give it. 0, or
+ * -EMFILE, -EFAULT or -ENOMEM with nothing reserved or made.
+ */
+static int32_t out_fence_setup(struct out_fences *out, int i)
+{
+    int32_t fd = fd_alloc(current_proc->fds);
+
+    if (fd < 0) {
+        return fd;
+    }
+    if (copy_to_user(out->ptr[i], &fd, sizeof(fd)) != 0) {
+        fd_free(current_proc->fds, fd);
+        return -EFAULT;
+    }
+    out->file[i] = sync_file_new(out->fence[i], NULL);
+    if (!out->file[i]) {
+        fd_free(current_proc->fds, fd);
+        return -ENOMEM;
+    }
+    out->fd[i] = fd;
+    return 0;
+}
 
 /**
  * Give each CRTC of the commit its event when the caller asked for events
  * or an out-fence, Linux's prepare_signaling: a reserved FLIP_COMPLETE, and
  * for OUT_FENCE_PTR a new fence of the CRTC that the event signals, kept
- * in `out` too. -EINVAL when no CRTC would send an asked event, -ENOMEM, or
- * the reservation's error.
+ * in `out` too with its descriptor and sync file (out_fence_setup).
+ * -EINVAL when no CRTC would send an asked event, -ENOMEM, or the error of
+ * the reservation or of out_fence_setup.
  */
 static int32_t prepare_signaling(struct drm_atomic_state *state, const struct drm_mode_atomic *arg,
                                  struct drm_file *file, struct out_fences *out)
@@ -2116,6 +2415,10 @@ static int32_t prepare_signaling(struct drm_atomic_state *state, const struct dr
             cs->event->fence = fence;
             out->fence[i] = dma_fence_get(fence);
             out->ptr[i] = cs->out_fence_ptr;
+            rc = out_fence_setup(out, i);
+            if (rc != 0) {
+                return rc;
+            }
         }
     }
     if (crtcs == 0 && (arg->flags & DRM_MODE_PAGE_FLIP_EVENT)) {
@@ -2125,43 +2428,30 @@ static int32_t prepare_signaling(struct drm_atomic_state *state, const struct dr
 }
 
 /**
- * Give the caller a sync file of each out-fence of a commit that `rc` says
- * succeeded, its descriptor written where OUT_FENCE_PTR points, as Linux's
- * complete_signaling installs them; drop the fences either way. A failed
- * commit leaves the -1 written when the property was set. Returns `rc`, or
- * the error of a sync file that could not be made or written.
+ * Linux's complete_signaling: attach the sync file of each out-fence of a
+ * commit that `rc` says succeeded to its reserved descriptor; for a failed
+ * one, drop the files, free the descriptors and write -1 where
+ * OUT_FENCE_PTR points. Drop the fences either way. Returns `rc`.
  */
-static int32_t complete_signaling(struct drm_crtc **crtcs, struct out_fences *out, int32_t rc)
+static int32_t complete_signaling(struct out_fences *out, int32_t rc)
 {
-    char name[32];
-    uint32_t at;
-    int32_t fd;
+    int32_t none = -1;
     int i;
 
     for (i = 0; i < DRM_MAX_CRTCS; i++) {
-        struct dma_fence *f = out->fence[i];
-
-        if (!f) {
+        if (!out->fence[i]) {
             continue;
         }
         if (rc == 0) {
-            /* Linux's sync_file_get_name of a file given no name. */
-            at = 0;
-            put_str(name, sizeof(name), &at, crtcs[i]->dev->driver->ident.name);
-            put_str(name, sizeof(name), &at, "-");
-            put_str(name, sizeof(name), &at, crtc_fence_timeline(f));
-            put_dec(name, sizeof(name), &at, f->context);
-            put_str(name, sizeof(name), &at, "-");
-            put_dec(name, sizeof(name), &at, f->seqno);
-            fd = sync_file_create(f, name);
-            if (fd < 0) {
-                rc = fd;
-            } else if (copy_to_user(out->ptr[i], &fd, sizeof(fd)) != 0) {
-                fd_free(current_proc->fds, fd);
-                rc = -EFAULT;
+            sync_file_attach(out->fd[i], out->file[i]);
+        } else {
+            if (out->file[i]) {
+                sync_file_drop(out->file[i]);
+                fd_free(current_proc->fds, out->fd[i]);
             }
+            (void)copy_to_user(out->ptr[i], &none, sizeof(none));
         }
-        dma_fence_put(f);
+        dma_fence_put(out->fence[i]);
     }
     return rc;
 }
@@ -2271,7 +2561,7 @@ int32_t drm_mode_atomic_ioctl(struct drm_device *dev, void *data, struct drm_fil
             rc = drm_atomic_commit(state);
         }
     }
-    rc = complete_signaling(dev->mode_config.crtcs, &out, rc);
+    rc = complete_signaling(&out, rc);
     /* A failed commit's events go back unsent with its states. */
     drm_atomic_state_free(state);
     drm_modeset_unlock(dev);

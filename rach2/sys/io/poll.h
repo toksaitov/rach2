@@ -19,12 +19,15 @@
 
 /* poll(2) event bits (Linux values). POLLHUP/POLLERR/POLLNVAL are reported in
  * revents regardless of the requested events. */
-#define POLLIN   0x001
-#define POLLPRI  0x002
-#define POLLOUT  0x004
-#define POLLERR  0x008
-#define POLLHUP  0x010
-#define POLLNVAL 0x020
+#define POLLIN     0x001
+#define POLLPRI    0x002
+#define POLLOUT    0x004
+#define POLLERR    0x008
+#define POLLHUP    0x010
+#define POLLNVAL   0x020
+#define POLLRDNORM 0x040
+#define POLLWRNORM 0x100
+#define POLLRDHUP  0x2000
 
 /* The struct pollfd of poll(2), as musl lays it out. */
 struct kernel_pollfd {
@@ -63,9 +66,10 @@ struct poll_deadline {
  * an array of `n` queues, the most it may name. Returns the ready count, 0
  * at the deadline, -EINTR or -ENOMEM. A deadline moved to a later tick stays
  * moved in `d`, so a caller that waits again with it keeps the same end.
+ * `wchan` is the sleep's name for /proc/PID/wchan, a static string.
  * Sleeps, so it is for system call context.
  */
-int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d);
+int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d, const char *wchan);
 
 /** In `d`, the deadline of a timeout of `timeout_ms` milliseconds: the first
  * tick at or after its end, and its end by time since boot. A negative
@@ -82,17 +86,45 @@ int32_t poll_mask_set(uintptr_t umask, uint32_t size);
  * signal puts the mask back after its handler. */
 int32_t poll_mask_done(int32_t ret);
 
+/* The forms of a timeout `poll_put_left` writes: a timeval's microseconds
+ * in place of nanoseconds, and two 64-bit words in place of two 32-bit. */
+#define POLL_LEFT_USEC 1
+#define POLL_LEFT_WIDE 2
+
+/**
+ * End a select, pselect6 or ppoll whose result is `ret` and whose deadline
+ * is `d`, as Linux's poll_select_finish does: the time left goes back to
+ * the caller's timeout at `ut`, in the form `form`, unless `ut` is 0, the
+ * timeout `zero`, or the process's personality has STICKY_TIMEOUTS. A wait
+ * a signal ended stands for ERESTARTNOHAND, so a signal that runs no
+ * handler restarts it with the time left; when that time cannot be written
+ * it gives EINTR in every case instead. A failed write changes no other
+ * result. Returns `ret`.
+ */
+int32_t poll_finish(int32_t ret, uintptr_t ut, const struct poll_deadline *d, int form, int zero);
+
+/** The write of `poll_finish`: `sec` seconds and `nsec` nanoseconds left,
+ * to the timeout at `ut` in the form `form`, with the same exceptions and
+ * the same EINTR when it cannot be written. The i386 calls on x86-64 use
+ * it for their own timeout, after the native call wrote the time left to
+ * the copy it was given. Returns `ret`. */
+int32_t poll_left_out(int32_t ret, uintptr_t ut, int form, int zero, int64_t sec, int64_t nsec);
+
 /** poll(2) takes the user array of struct pollfd, its length and a timeout
  * in milliseconds, negative for none. Returns the count of entries with
  * events, 0 at the timeout, -EINVAL for more than 1024 entries and more than
  * the caller's soft RLIMIT_NOFILE,
- * -EFAULT, -EINTR or -ENOMEM. */
+ * -EFAULT, -EINTR or -ENOMEM. A signal that runs no handler resumes the
+ * wait to its first deadline through restart_syscall, as Linux's does, and
+ * a handler gives EINTR. */
 long sys_poll(struct isr_params *params);
 
 /** ppoll(2) takes the array and its length, the address of a timespec of
  * longs or 0 for none, and a signal mask and its size, the mask the wait
  * runs under. Returns as poll does, or -EINVAL for a timespec out of range
- * or a mask size that is not 8. */
+ * or a mask size that is not 8. The time left goes back to the timespec,
+ * and a signal that runs no handler restarts the call with it
+ * (`poll_finish`). */
 long sys_ppoll(struct isr_params *params);
 
 /**
@@ -102,8 +134,10 @@ long sys_ppoll(struct isr_params *params);
  * of those five, Linux's struct sel_arg_struct. Returns the count of bits
  * set in the sets written back, 0 at the timeout, -EBADF for a set bit of a
  * descriptor that is not open or was opened with O_PATH, -EINVAL for a
- * count negative or past 1024 or a timeval out of range, -EFAULT, -EINTR or
- * -ENOMEM.
+ * negative count or a timeval whose normalized seconds or fraction are
+ * negative, -EFAULT, -EINTR or -ENOMEM. The time left goes back to the
+ * timeval, and a signal that runs no handler restarts the call with it
+ * (`poll_finish`).
  */
 long sys_select(struct isr_params *params);
 long sys__newselect(struct isr_params *params);

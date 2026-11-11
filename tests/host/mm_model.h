@@ -1,7 +1,8 @@
 /**
  * A model of what mm/paging.c reaches outside itself, for the host tests
- * that include it whole: pin_hosttest.c and mmnotify_hosttest.c, each on
- * i686's `cpu.h` and, with RACH2_HOST_X86_64, on x86-64's.
+ * that include it whole: pin_hosttest.c, mmnotify_hosttest.c and
+ * tlb_hosttest.c, each on i686's `cpu.h` and, with RACH2_HOST_X86_64, on
+ * x86-64's.
  *
  * A user page directory is a run of leaf tables over a window of user
  * space, which is all `mmu_user_table` and `mmu_user_skip` are asked for.
@@ -254,6 +255,13 @@ void smp_kernel_mapping_changed(void)
     kernel_flushes++;
 }
 
+/** Nothing: the test has no address space that counts its resident pages. */
+void mm_resident_add(const struct page_dir *dir, long pages)
+{
+    (void)dir;
+    (void)pages;
+}
+
 /** Nothing. */
 void arch_tlb_flush_page(uintptr_t va)
 {
@@ -430,6 +438,26 @@ void terminate_current_process(int32_t signo)
     (void)signo;
 }
 
+/** Nothing: the fault's note is for the panic's report, which no row reads. */
+void k_panic_note_fault(const char *name, uintptr_t ip, long error)
+{
+    (void)name;
+    (void)ip;
+    (void)error;
+}
+
+/** Nothing, as `k_panic_note_fault`. */
+void k_panic_note_address(uintptr_t address)
+{
+    (void)address;
+}
+
+/** No panic reads a process here. */
+int k_panic_reading(void)
+{
+    return 0;
+}
+
 #ifndef MM_MODEL_PRESSURE
 /** Nothing: memory is never short. */
 void mem_balance(void)
@@ -513,6 +541,7 @@ static void model_start(const char *name)
 
     model_name = name;
     _frames = calloc(FRAMES, sizeof(uint32_t));
+    _frame_anon = calloc((FRAMES + 7u) / 8u, 1); /* init_paging's anonymous-frame bits */
     frame_mem = calloc(FRAMES, PAGE_SIZE);
     _frames_number = FRAMES;
     _window_frames = FRAMES;
@@ -561,6 +590,7 @@ static int model_end(void)
     for (i = 0; i < MODEL_TABLES; i++) {
         free(mmio_leaf[i]);
     }
+    free(_frame_anon);
     free(_frames);
     free(frame_mem);
     if (fails) {

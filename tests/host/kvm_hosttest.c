@@ -3,6 +3,7 @@
  * against a fake backend.
  *
  * host-deps: rach2/sys/kvm/cpuid.c rach2/sys/kvm/msr.c rach2/sys/kvm/hyperv.c
+ * host-deps: rach2/sys/kvm/pvclock.c rach2/sys/kvm/binstats.c
  * host-deps: rach2/sys/kvm/pmu.c
  * host-cflags: -DRACH2_HOST_X86_64 -DRACH2_HOST_CPU
  *
@@ -20,8 +21,9 @@
  * The rows: the structures' sizes and the ioctl numbers against Linux's;
  * /dev/kvm registered as 10:232 when the backend probes; QEMU 10's
  * start-up as its sources order it, from KVM_GET_API_VERSION through the
- * required capabilities, the MSR and feature lists, the supported CPUID
- * taken by doubling, the vCPU and its mapping, KVM_SET_CPUID2, the
+ * required capabilities, the MSR and feature lists, with the host's
+ * microcode revision, the supported CPUID taken by doubling, the vCPU and
+ * its mapping, KVM_SET_CPUID2, the
  * machine-check setup, the full put and get of the registers, to KVM_RUN,
  * where the refusing backend's error comes back; each exit kind through the
  * run page, with port and MMIO reads answered on the next KVM_RUN, a HLT
@@ -29,8 +31,21 @@
  * signal, a kick from another processor and a triple fault; the big lock
  * let go and interrupts off for the entry; the signal mask swapped for the
  * run; the refusals of the state ioctls Linux makes; EIO from another
- * address space; and every allocation given back when the last reference
- * to the VM goes, the mapping's among them.
+ * address space; every allocation given back when the last reference
+ * to the VM goes, the mapping's among them; and, in a VM of their own with
+ * the TSC's rate known, KVM's CPUID leaves and capabilities, the vCPUs'
+ * TSCs matched under the master clock, which a write of another TSC stops,
+ * the kvmclock in guest memory reading as KVM_GET_CLOCK does, its stop
+ * flag, the wall clock, the clock pairing, the old MSR, KVM_SET_CLOCK,
+ * KVM_CAP_ENFORCE_PV_FEATURE_CPUID and KVM_CAP_X86_DISABLE_EXITS; the
+ * steal time, its writes of the thread's run_delay and its preempted flag
+ * across a switch at a slice's end inside KVM_RUN; the vCPU attribute
+ * KVM_VCPU_TSC_OFFSET; and what Linux's selftests ask for: the TSC's rate
+ * set on a VM and on a vCPU, on a processor that scales none and with SVM's
+ * and VMX's ratios,
+ * the statistics files of a VM and a vCPU, KVM_PRE_FAULT_MEMORY, 1024
+ * vCPUs with ids below 4096, the CR4 bits taken before KVM_SET_CPUID2,
+ * the VM's capabilities and quirks, and the synchronized registers.
  */
 #include "kvm/kvm.c"
 #include "kvm/vcpu.c"
@@ -40,6 +55,7 @@ extern int printf(const char *format, ...);
 extern void *malloc(unsigned long n);
 extern void *aligned_alloc(unsigned long align, unsigned long n);
 extern void free(void *p);
+extern int strcmp(const char *a, const char *b);
 
 static int failures;
 
@@ -248,6 +264,39 @@ uint64_t arch_cycles(void)
     return tsc;
 }
 
+/* Whether the vDSO's clock runs from the TSC, and the TSC's counts in a
+ * tick, 0 for a rate not known; the model's TSC runs at 2 GHz. */
+static int vclock_on;
+static uint32_t tick_counts;
+
+int vclock_running(void)
+{
+    return vclock_on;
+}
+
+int vclock_read_cycles(int real, uint64_t *ns, uint64_t *cycles)
+{
+    if (!vclock_on) {
+        return 0;
+    }
+    *ns = real ? real_ns : mono_ns;
+    *cycles = tsc;
+    return 1;
+}
+
+uint32_t timer_calibrate(void)
+{
+    return tick_counts;
+}
+
+/** Let `ns` nanoseconds pass on every clock. */
+static void clock_pass(uint64_t ns)
+{
+    mono_ns += ns;
+    real_ns += ns;
+    tsc += ns * 2u;
+}
+
 /* The big lock's depth on this processor, the interrupt flag, the
  * processors kicked and a pending signal. */
 static int bkl_depth = 1, irq_on = 1, kicked = -1, sig_pending;
@@ -292,6 +341,33 @@ void smp_kick(int cpu)
 int signal_pending(void)
 {
     return sig_pending;
+}
+
+/* The run loop's switch at a slice's end, which a row asks for by setting
+ * the caller's need_resched: the switch calls the thread's `sched_out`, as
+ * `schedule` does, the thread waits `preempt_wait` ns on a run queue and is
+ * switched in again, and the steal time's `preempted` byte at
+ * `preempt_seen_at` is kept as the switch found it. With `preempt_alone`
+ * no other thread is queued, so the request switches to none. */
+static uint64_t preempt_wait;
+static const uint8_t *preempt_seen_at;
+static int preempt_seen = -1;
+static int preempt_alone;
+
+void sched_take_preempt(void)
+{
+    if (caller.need_resched) {
+        caller.need_resched = 0;
+        if (preempt_alone) {
+            return;
+        }
+        CHECK(caller.sched_out != NULL, "a vCPU's thread has its sched_out across KVM_RUN");
+        caller.nivcsw++;
+        caller.sched_out(caller.sched_out_arg);
+        caller.run_delay += preempt_wait;
+        caller.pcount++;
+        preempt_seen = preempt_seen_at ? *preempt_seen_at : -1;
+    }
 }
 
 void signal_set_blocked(uint64_t mask)
@@ -359,6 +435,10 @@ int vm_device_map(vma_t *vma, const struct vm_device_ops *ops, void *obj, uint32
     return 0;
 }
 
+/* Whether the model has XSAVEC and XSAVES, which the Haswell lacks, and
+ * the fake backend lets a guest run XSAVES. */
+static int model_xsaves;
+
 /* The processor: a model of the Lenovo's Haswell, i7-4xxx. */
 void kcpu_id_sub(uint32_t leaf, uint32_t sub, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
 {
@@ -399,7 +479,7 @@ void kcpu_id_sub(uint32_t leaf, uint32_t sub, uint32_t *a, uint32_t *b, uint32_t
             r[0] = 0x7;
             r[1] = r[2] = 832;
         } else if (sub == 1) {
-            r[0] = 0x1;
+            r[0] = model_xsaves ? 0xF : 0x1; /* XSAVEOPT, and XSAVEC, XGETBV1, XSAVES */
         } else if (sub == 2) {
             r[0] = 256;
             r[1] = 576;
@@ -432,11 +512,12 @@ void kcpu_id(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
     kcpu_id_sub(leaf, 0, a, b, c, d);
 }
 
+/** The model's MSRs: the Haswell's microcode revision 0x28 in
+ * UCODE_REV's high half, and 0x5 for every other. */
 void kcpu_rdmsr(uint32_t msr, uint32_t *lo, uint32_t *hi)
 {
-    (void)msr;
-    *lo = 0x5;
-    *hi = 0;
+    *lo = msr == 0x8Bu ? 0 : 0x5;
+    *hi = msr == 0x8Bu ? 0x28 : 0;
 }
 
 /** Physical counter writes are unused by this model's fake backend. */
@@ -492,6 +573,10 @@ static int fake_enter(struct kvm_vcpu *v)
     return refusing ? -EOPNOTSUPP : 0;
 }
 
+/* An exit the kernel takes for a host interrupt, KVM_X_AGAIN, is one at an
+ * instruction boundary whose interrupt asks for a switch, when set. */
+static int tick_exits;
+
 /** The next exit of the script. */
 static int fake_exit(struct kvm_vcpu *v)
 {
@@ -502,6 +587,10 @@ static int fake_exit(struct kvm_vcpu *v)
     v->exit = script[script_at++];
     v->if_flag = 1;
     v->irq_allowed = 1;
+    if (tick_exits && v->exit.kind == KVM_X_AGAIN) {
+        v->at_boundary = 1;
+        caller.need_resched = 1;
+    }
     return 0;
 }
 
@@ -519,6 +608,26 @@ static void fake_inject(struct kvm_vcpu *v)
     injects++;
 }
 
+/* The calls of the backend's msr_filter_changed. */
+static int filter_changes;
+
+/** The backend's msr_filter_changed: counted. */
+static void fake_msr_filter_changed(struct kvm_vcpu *v)
+{
+    (void)v;
+    filter_changes++;
+}
+
+/* The backend lets no guest run XSAVES though the host has it, as SVM on
+ * a Zen 2 with Erratum 1386 unfixed. */
+static int backend_no_xsaves;
+
+/** The backend's xsaves: `model_xsaves`, unless `backend_no_xsaves`. */
+static int fake_xsaves(void)
+{
+    return model_xsaves && !backend_no_xsaves;
+}
+
 /** The capabilities a backend makes true: single-stepping and guest
  * debugging. */
 static int32_t fake_backend_cap(long cap)
@@ -526,9 +635,33 @@ static int32_t fake_backend_cap(long cap)
     return cap == KVM_CAP_X86_ROBUST_SINGLESTEP || cap == KVM_CAP_SET_GUEST_DEBUG;
 }
 
-const struct kvm_backend kvm_vmx = {"vmx",       fake_probe,       NULL,      NULL,          NULL,
-                                    NULL,        fake_enter,       fake_exit, fake_complete, NULL,
-                                    fake_inject, fake_backend_cap, NULL};
+/* The width of the fraction of the ratio the model's processor scales a
+ * TSC by, SVM's 32 or VMX's 48, and 0 for a processor that scales none. */
+static uint32_t scale_bits;
+
+/** The backend's tsc_scaling: the largest ratio of `scale_bits`. */
+static uint64_t fake_tsc_scaling(uint32_t *frac_bits)
+{
+    *frac_bits = scale_bits;
+    return scale_bits == 32 ? 0xFFFFFFFFFFull : scale_bits ? ~0ull : 0;
+}
+
+const struct kvm_backend kvm_vmx = {"vmx",
+                                    fake_probe,
+                                    NULL,
+                                    NULL,
+                                    NULL,
+                                    NULL,
+                                    fake_enter,
+                                    fake_exit,
+                                    fake_complete,
+                                    NULL,
+                                    fake_inject,
+                                    fake_backend_cap,
+                                    NULL,
+                                    fake_tsc_scaling,
+                                    fake_msr_filter_changed,
+                                    fake_xsaves};
 const struct kvm_backend kvm_svm = {"svm", fake_probe, NULL, NULL, NULL, NULL, NULL,
                                     NULL,  NULL,       NULL, NULL, NULL, NULL};
 
@@ -580,6 +713,20 @@ void kvm_tdp_free(struct kvm_vm *vm)
     (void)vm;
 }
 
+/* What the model's page tables say to KVM_PRE_FAULT_MEMORY: the first
+ * `pre_fault_pages` pages of a range are mapped, and the next has no slot. */
+static uint64_t pre_fault_pages;
+
+int32_t kvm_tdp_pre_fault(struct kvm_vm *vm, struct kvm_pre_fault_memory *range)
+{
+    uint64_t n = range->size / 4096u < pre_fault_pages ? range->size / 4096u : pre_fault_pages;
+
+    (void)vm;
+    range->gpa += n * 4096u;
+    range->size -= n * 4096u;
+    return n ? 0 : -ENOENT;
+}
+
 int32_t kvm_dirty_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg)
 {
     (void)vm;
@@ -621,6 +768,22 @@ void kvm_irq_free(struct kvm_vm *vm)
     (void)vm;
 }
 
+/** No I/O APIC in this model, so no pin has counts. */
+int kvm_ioapic_counts(struct kvm_vm *vm, uint32_t pin, uint32_t *counts)
+{
+    (void)vm;
+    (void)pin;
+    (void)counts;
+    return -1;
+}
+
+/** Legacy I/O is not part of this model. */
+int kvm_irq_io(struct kvm_vcpu *v)
+{
+    (void)v;
+    return 0;
+}
+
 int32_t kvm_iobus_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg)
 {
     (void)vm;
@@ -643,6 +806,18 @@ int32_t kvm_iobus_check_extension(long cap)
 }
 
 void kvm_iobus_free(struct kvm_vm *vm)
+{
+    (void)vm;
+}
+
+int kvm_iobus_has_eventfd(struct kvm_vm *vm, const struct eventfd *ev)
+{
+    (void)vm;
+    (void)ev;
+    return 0;
+}
+
+void kvm_gpamap_vm_end(struct kvm_vm *vm)
 {
     (void)vm;
 }
@@ -725,14 +900,43 @@ int kvm_lapic_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value
 /* What hyperv.c calls of emulate.c, vlapic.c, eventfd.c and the clock,
  * for a VM with no guest memory, no APIC and no eventfd. */
 
+/* One guest page at GUEST_PAGE, present only while guest_mem is set, for
+ * the kvmclock's rows; the Hyper-V rows see no guest memory. */
+#define GUEST_PAGE 0x1000u
+static uint8_t guest_page[4096];
+static int guest_mem;
+static int low_rw; /* accesses below GUEST_PAGE, which no row maps */
+
 int kvm_guest_phys_rw(struct kvm_vcpu *v, uint64_t gpa, void *buf, uint32_t n, int write)
 {
     (void)v;
-    (void)gpa;
-    (void)buf;
-    (void)n;
-    (void)write;
-    return 1;
+    if (gpa < GUEST_PAGE) {
+        low_rw++;
+    }
+    if (!guest_mem || gpa < GUEST_PAGE || gpa + n > GUEST_PAGE + sizeof(guest_page)) {
+        return 1;
+    }
+    if (write) {
+        memcpy(guest_page + (gpa - GUEST_PAGE), buf, n);
+    } else {
+        memcpy(buf, guest_page + (gpa - GUEST_PAGE), n);
+    }
+    return 0;
+}
+
+/* The no-fault write of the steal time's preempted byte, into the same
+ * page; `nofault_refuse` stands for a page that is not present. */
+static int nofault_refuse;
+
+int kvm_tdp_write_nofault(struct kvm_vm *vm, uint64_t gpa, const void *buf, uint32_t n)
+{
+    (void)vm;
+    if (nofault_refuse || !guest_mem || gpa < GUEST_PAGE ||
+        gpa + n > GUEST_PAGE + sizeof(guest_page)) {
+        return 1;
+    }
+    memcpy(guest_page + (gpa - GUEST_PAGE), buf, n);
+    return 0;
 }
 
 int kvm_lapic_set_irq(struct kvm_vcpu *v, uint32_t vector)
@@ -751,12 +955,23 @@ int kvm_lapic_hv_msr(struct kvm_vcpu *v, uint32_t reg, int write, uint64_t *valu
     return 1;
 }
 
+/* The vector of the last exception queued, -1 for none. */
+static int queued = -1;
+
 void kvm_queue_exception(struct kvm_vcpu *v, uint8_t nr, int has_error, uint32_t error)
 {
     (void)v;
-    (void)nr;
     (void)has_error;
     (void)error;
+    queued = nr;
+}
+
+/** emulate.c's: whether the CPUID names AMD, "AuthenticAMD". */
+int kvm_guest_amd(const struct kvm_vcpu *v)
+{
+    const struct kvm_cpuid_entry2 *e = kvm_cpuid_find(v, 0, 0);
+
+    return e && e->ebx == 0x68747541u && e->edx == 0x69746E65u && e->ecx == 0x444D4163u;
 }
 
 int kvm_emul_cpl(const struct kvm_vcpu *v)
@@ -776,6 +991,11 @@ void kvm_emul_skip(struct kvm_vcpu *v, uint32_t len)
     v->regs.rip += len;
 }
 
+void kvm_emul_stepped(struct kvm_vcpu *v)
+{
+    v->emul.step_trap = 0;
+}
+
 struct eventfd *eventfd_get(int fd, int32_t *err)
 {
     (void)fd;
@@ -791,11 +1011,6 @@ void eventfd_put(struct eventfd *ev)
 void eventfd_signal(struct eventfd *ev)
 {
     (void)ev;
-}
-
-uint32_t timer_calibrate(void)
-{
-    return 0;
 }
 
 void arch_relax(void)
@@ -981,7 +1196,7 @@ static void startup_caps(int vm)
     CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_MAX_VCPUS) == KVM_MAX_VCPUS, "KVM_CAP_MAX_VCPUS");
     CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_NR_MEMSLOTS) == KVM_MEM_SLOTS, "KVM_CAP_NR_MEMSLOTS");
     CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_MCE) == KVM_MAX_MCE_BANKS, "KVM_CAP_MCE is the banks");
-    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_COALESCED_MMIO) == 0, "a capability not offered is 0");
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_PV_MMU) == 0, "a capability not offered is 0");
     CHECK(dev(KVM_CHECK_EXTENSION, 100000) == 0, "an unknown capability is 0");
     CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_SPLIT_IRQCHIP) == 1, "the split irqchip is offered");
 }
@@ -991,6 +1206,7 @@ static void startup_caps(int vm)
 static void startup_msr_lists(void)
 {
     uint32_t i, nmsrs;
+    int ucode, steal;
     int32_t r;
 
     buf.list.nmsrs = 0;
@@ -1000,9 +1216,16 @@ static void startup_msr_lists(void)
     r = dev(KVM_GET_MSR_INDEX_LIST, (uintptr_t)&buf);
     CHECK(r == 0 && buf.list.nmsrs == nmsrs, "KVM_GET_MSR_INDEX_LIST with room");
     n_put = 0;
+    ucode = steal = 0;
     for (i = 0; i < nmsrs; i++) {
         put_msr(MSR_INDICES[i]);
+        ucode |= MSR_INDICES[i] == 0x8B ? 1 : MSR_INDICES[i] == 0x1FC ? 2 : 0;
+        ucode |= MSR_INDICES[i] == 0xC0010015u ? 4 : 0;
+        steal |= MSR_INDICES[i] == MSR_KVM_STEAL_TIME;
     }
+    CHECK(ucode == 7,
+          "the index list names UCODE_REV, POWER_CTL and HWCR, as Linux's emulated_msrs");
+    CHECK(steal, "and MSR_KVM_STEAL_TIME");
     buf.list.nmsrs = 4;
     r = dev(KVM_GET_MSR_FEATURE_INDEX_LIST, (uintptr_t)&buf);
     CHECK(r == 0 && buf.list.nmsrs == 2 && MSR_INDICES[0] == 0x8B && MSR_INDICES[1] == 0x345,
@@ -1011,8 +1234,9 @@ static void startup_msr_lists(void)
     MSR_ENTRIES[0].index = 0x8B;
     MSR_ENTRIES[1].index = 0x10A;
     r = dev(KVM_GET_MSRS, (uintptr_t)&buf);
-    CHECK(r == 1 && MSR_ENTRIES[0].data == 0x100000000ull,
-          "KVM_GET_MSRS of /dev/kvm reads feature MSRs up to the first that is not");
+    CHECK(r == 1 && MSR_ENTRIES[0].data == 0x2800000000ull,
+          "KVM_GET_MSRS of /dev/kvm reads feature MSRs up to the first that is not, "
+          "UCODE_REV as the host's");
 }
 
 /** Check the offered CPUID entry `e` against the model's processor. */
@@ -1034,7 +1258,39 @@ static void check_cpuid_entry(const struct kvm_cpuid_entry2 *e)
     if (e->function == 0xA) {
         CHECK(e->eax == 0x07300402u, "architectural performance counters capped at version two");
     }
-    CHECK(e->function < 0x40000000u || e->function >= 0x80000000u, "no paravirtual leaf");
+    if (e->function == KVM_CPUID_SIGNATURE) {
+        CHECK(e->eax == KVM_CPUID_FEATURES && e->ebx == 0x4B4D564Bu && e->ecx == 0x564B4D56u &&
+                  e->edx == 0x4Du,
+              "KVM's signature leaf");
+    }
+    if (e->function == KVM_CPUID_FEATURES) {
+        CHECK(e->eax == ((1u << KVM_FEATURE_NOP_IO_DELAY) | (1u << KVM_FEATURE_STEAL_TIME) |
+                         (1u << KVM_FEATURE_PV_UNHALT) | (1u << KVM_FEATURE_PV_SEND_IPI) |
+                         (1u << KVM_FEATURE_POLL_CONTROL) | (1u << KVM_FEATURE_PV_SCHED_YIELD)),
+              "KVM's features, with no kvmclock while the TSC's rate is not known");
+    }
+    CHECK(e->function < 0x40000000u || e->function >= 0x80000000u ||
+              e->function == KVM_CPUID_SIGNATURE || e->function == KVM_CPUID_FEATURES,
+          "no paravirtual leaf but KVM's two");
+}
+
+/** KVM_GET_EMULATED_CPUID: Linux's three entries, for MOVBE and RDPID. */
+static void emulated_cpuid(void)
+{
+    const struct kvm_cpuid_entry2 *e = CPUID_ENTRIES;
+
+    buf.cpuid.nent = 2;
+    CHECK(dev(KVM_GET_EMULATED_CPUID, (uintptr_t)&buf) == -E2BIG,
+          "KVM_GET_EMULATED_CPUID into two entries is -E2BIG");
+    buf.cpuid.nent = 8;
+    CHECK(dev(KVM_GET_EMULATED_CPUID, (uintptr_t)&buf) == 0 && buf.cpuid.nent == 3,
+          "KVM_GET_EMULATED_CPUID gives three entries");
+    CHECK(e[0].function == 0 && e[0].eax == 7 && e[1].function == 1 && e[1].ecx == (1u << 22) &&
+              e[1].eax == 0 && e[1].edx == 0,
+          "leaf 0 with the highest leaf and leaf 1 with MOVBE alone");
+    CHECK(e[2].function == 7 && e[2].index == 0 && e[2].flags == KVM_CPUID_FLAG_SIGNIFCANT_INDEX &&
+              e[2].ecx == (1u << 22) && e[2].ebx == 0,
+          "and leaf 7 with RDPID alone, on a processor with RDTSCP");
 }
 
 /** try_get_cpuid: KVM_GET_SUPPORTED_CPUID from one entry, doubling while
@@ -1044,6 +1300,7 @@ static uint32_t startup_cpuid(void)
     uint32_t i, max, n;
     int32_t r;
 
+    emulated_cpuid();
     for (max = 1;; max *= 2) {
         buf.cpuid.nent = max;
         r = dev(KVM_GET_SUPPORTED_CPUID, (uintptr_t)&buf);
@@ -1079,8 +1336,8 @@ static void startup_addrs(int vm)
           "KVM_SET_USER_MEMORY_REGION2's slot goes there too, its padding unread");
 }
 
-/** Check the mapping of the vCPU on `vcpu`: its two pages, the page past
- * them, and the VM reference the mapping holds. */
+/** Check the mapping of the vCPU on `vcpu`: its two pages, the VM's ring,
+ * the page past them, and the VM reference the mapping holds. */
 static void check_mapping(int vcpu)
 {
     struct kvm_vcpu *v = (struct kvm_vcpu *)entries[vcpu].priv;
@@ -1090,7 +1347,9 @@ static void check_mapping(int vcpu)
           "page 0 of the mapping is the run page");
     CHECK(map_ops->page(map_obj, 1, &phys) == 0 && phys == (uintptr_t)v->pio,
           "page 1 is the port I/O page");
-    CHECK(map_ops->page(map_obj, 2, &phys) == -1, "page 2 is past the mapping: SIGBUS");
+    CHECK(map_ops->page(map_obj, 2, &phys) == 0 && phys == (uintptr_t)v->vm->ring,
+          "page 2 is the VM's ring of coalesced writes");
+    CHECK(map_ops->page(map_obj, 3, &phys) == -1, "page 3 is past the mapping: SIGBUS");
     CHECK(v->vm->refs == 3, "the mapping holds the VM, beside the two descriptors");
 }
 
@@ -1109,7 +1368,12 @@ static void check_private(int vcpu, struct vm_file *f)
           "a private mapping's first page is a copy of the run page");
     CHECK(f->fill(f, 1, (uintptr_t)frame) == 0 && frame[7] == 0xA5,
           "its second page is a copy of the port I/O page");
-    CHECK(f->fill(f, 2, (uintptr_t)frame) == -1, "and a page past them raises SIGBUS");
+    v->vm->ring->last = 0x1234;
+    CHECK(f->fill(f, 2, (uintptr_t)frame) == 0 &&
+              ((struct kvm_coalesced_mmio_ring *)frame)->last == 0x1234,
+          "its third page is a copy of the ring of coalesced writes");
+    v->vm->ring->last = 0;
+    CHECK(f->fill(f, 3, (uintptr_t)frame) == -1, "and a page past them raises SIGBUS");
     v->run->exit_reason = 0;
     v->pio[7] = 0;
     CHECK(refs == 3, "the private mapping holds the VM");
@@ -1132,9 +1396,10 @@ static int startup_vcpu(int vm)
     CHECK(fdio(vm, KVM_CREATE_VCPU, KVM_MAX_VCPU_IDS) == -EINVAL, "an id past the bound");
     CHECK(fdio(vm, KVM_SET_IDENTITY_MAP_ADDR, (uintptr_t)&addr) == -EBUSY,
           "KVM_SET_IDENTITY_MAP_ADDR after a vCPU");
-    CHECK(dev(KVM_GET_VCPU_MMAP_SIZE, 0) == 8192, "the mapping is the run page and the I/O page");
+    CHECK(dev(KVM_GET_VCPU_MMAP_SIZE, 0) == 12288,
+          "the mapping is the run page, the I/O page and the ring of coalesced writes");
     k_memset(&vma, 0, sizeof(vma));
-    vma.end = 8192;
+    vma.end = 12288;
     vma.type = VM_FILE;
     CHECK(entries[vcpu].ops->mmap(&entries[vcpu], &vma) == 0 && vma.file, "a private mapping");
     check_private(vcpu, vma.file);
@@ -1637,9 +1902,8 @@ static void vm_rows(int vm, int vcpu)
     int32_t before;
 
     k_memset(&clk, 0, sizeof(clk));
-    CHECK(fdio(vm, KVM_GET_CLOCK, (uintptr_t)&clk) == 0 && clk.clock == 0 &&
-              clk.flags == (KVM_CLOCK_REALTIME | KVM_CLOCK_HOST_TSC),
-          "the kvmclock starts at 0 with the VM");
+    CHECK(fdio(vm, KVM_GET_CLOCK, (uintptr_t)&clk) == 0 && clk.clock == 0 && clk.flags == 0,
+          "the kvmclock starts at 0 with the VM, without the master clock");
     mono_ns += 1000;
     clk.clock = 1000000;
     clk.flags = KVM_CLOCK_REALTIME;
@@ -1673,6 +1937,1405 @@ static void vm_rows(int vm, int vcpu)
     CHECK(live == 0 && holds == 0, "the mapping's put frees the VM and every allocation");
 }
 
+#define MSR_IA32_TSC 0x010u
+
+/** KVM_SET_MSRS of one MSR, `index`, to `value`, on the vCPU `fd`;
+ * returns the count set. */
+static int32_t set_msr(int fd, uint32_t index, uint64_t value)
+{
+    buf.msrs.nmsrs = 1;
+    MSR_ENTRIES[0].index = index;
+    MSR_ENTRIES[0].reserved = 0;
+    MSR_ENTRIES[0].data = value;
+    return fdio(fd, KVM_SET_MSRS, (uintptr_t)&buf);
+}
+
+/** KVM_GET_CLOCK of the VM `vm` into `clk`. */
+static void get_clock(int vm, struct kvm_clock_data *clk)
+{
+    k_memset(clk, 0, sizeof(*clk));
+    CHECK(fdio(vm, KVM_GET_CLOCK, (uintptr_t)clk) == 0, "KVM_GET_CLOCK");
+}
+
+/** The supported CPUID with KVM's leaves, left in `buf`, and its count. */
+static uint32_t pv_cpuid(void)
+{
+    buf.cpuid.nent = 256;
+    CHECK(dev(KVM_GET_SUPPORTED_CPUID, (uintptr_t)&buf) == 0, "KVM_GET_SUPPORTED_CPUID");
+    return buf.cpuid.nent;
+}
+
+/** KVM's leaves and capabilities with the TSC's rate known, and a VM's
+ * vCPUs matching their TSCs under the master clock, as the kvmclock
+ * selftests and kvm-unit-tests' kvmclock_test see them. */
+static void pv_leaf_rows(void)
+{
+    uint32_t i, n, want;
+    int found = 0;
+
+    want = (1u << KVM_FEATURE_CLOCKSOURCE) | (1u << KVM_FEATURE_NOP_IO_DELAY) |
+           (1u << KVM_FEATURE_CLOCKSOURCE2) | (1u << KVM_FEATURE_STEAL_TIME) |
+           (1u << KVM_FEATURE_PV_UNHALT) | (1u << KVM_FEATURE_PV_SEND_IPI) |
+           (1u << KVM_FEATURE_POLL_CONTROL) | (1u << KVM_FEATURE_PV_SCHED_YIELD) |
+           (1u << KVM_FEATURE_CLOCKSOURCE_STABLE_BIT);
+    n = pv_cpuid();
+    for (i = 0; i < n; i++) {
+        if (CPUID_ENTRIES[i].function == KVM_CPUID_FEATURES) {
+            found = 1;
+            CHECK(CPUID_ENTRIES[i].eax == want,
+                  "with the TSC's rate known, the kvmclock and its stable bit are offered");
+        }
+    }
+    CHECK(found, "KVM_CPUID_FEATURES is offered");
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_KVMCLOCK_CTRL) == 1, "KVM_CAP_KVMCLOCK_CTRL");
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_ENFORCE_PV_FEATURE_CPUID) == 1,
+          "KVM_CAP_ENFORCE_PV_FEATURE_CPUID");
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_X86_DISABLE_EXITS) ==
+              (KVM_X86_DISABLE_EXITS_PAUSE | KVM_X86_DISABLE_EXITS_HLT),
+          "KVM_CAP_X86_DISABLE_EXITS offers PAUSE and HLT");
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_ADJUST_CLOCK) == KVM_CLOCK_VALID_FLAGS,
+          "KVM_CAP_ADJUST_CLOCK names KVM_GET_CLOCK's flags");
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_STEAL_TIME) == 1, "KVM_CAP_STEAL_TIME");
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_VCPU_ATTRIBUTES) == 1, "KVM_CAP_VCPU_ATTRIBUTES");
+}
+
+/** The guest's kvmclock at the host's TSC count `now`, by the formula
+ * the vCPU `v`'s copy at GUEST_PAGE gives, as pvclock_clocksource_read. */
+static uint64_t guest_reads(const struct kvm_vcpu *v, uint64_t now)
+{
+    const struct pvclock_vcpu_time_info *pv = (const void *)guest_page;
+    uint64_t delta = now + (uint64_t)v->tsc_offset - pv->tsc_timestamp;
+
+    delta = pv->tsc_shift < 0 ? delta >> -pv->tsc_shift : delta << pv->tsc_shift;
+    return pv->system_time + (uint64_t)(((unsigned __int128)delta * pv->tsc_to_system_mul) >> 32);
+}
+
+/** The kvmclock of the VM `vm` on vCPU `fd0` and its MSRs: the copy in
+ * guest memory, which reads as KVM_GET_CLOCK does, the guest's stop, the
+ * wall clock, the old MSR and KVM_SET_CLOCK. */
+static void pv_clock_rows(int vm, int fd0)
+{
+    const struct pvclock_vcpu_time_info *pv = (const void *)guest_page;
+    const struct pvclock_wall_clock *wc = (const void *)(guest_page + 0x100);
+    struct kvm_vcpu *v0 = entries[fd0].priv;
+    struct kvm_clock_data clk;
+    struct kvm_clock_pairing *cp = (void *)(guest_page + 0x200);
+    uint64_t value, epoch;
+
+    CHECK(set_msr(fd0, MSR_KVM_SYSTEM_TIME_NEW, GUEST_PAGE | KVM_MSR_ENABLED) == 1,
+          "MSR_KVM_SYSTEM_TIME_NEW");
+    kvm_clock_prepare(v0);
+    CHECK(pv->version == 2 && pv->flags == PVCLOCK_TSC_STABLE_BIT && pv->tsc_shift == 0 &&
+              pv->tsc_to_system_mul == 0x80000000u,
+          "the kvmclock is written, even, stable, at 2 GHz");
+    clock_pass(123456789);
+    get_clock(vm, &clk);
+    CHECK(guest_reads(v0, tsc) == clk.clock, "the guest's kvmclock reads as KVM_GET_CLOCK's");
+    kvm_clock_prepare(v0);
+    CHECK(pv->version == 2, "under the master clock it is not written again");
+    CHECK(fdio(fd0, KVM_KVMCLOCK_CTRL, 0) == 0, "KVM_KVMCLOCK_CTRL");
+    kvm_clock_prepare(v0);
+    CHECK(pv->version == 4 && pv->flags == (PVCLOCK_TSC_STABLE_BIT | PVCLOCK_GUEST_STOPPED),
+          "which sets PVCLOCK_GUEST_STOPPED for the guest to clear");
+
+    CHECK(set_msr(fd0, MSR_KVM_WALL_CLOCK_NEW, GUEST_PAGE + 0x100) == 1, "MSR_KVM_WALL_CLOCK_NEW");
+    get_clock(vm, &clk);
+    epoch = real_ns - clk.clock;
+    CHECK(wc->version == 2 && wc->sec == epoch / 1000000000u && wc->nsec == epoch % 1000000000u,
+          "the wall clock is the real time at which the kvmclock read 0");
+    buf.msrs.nmsrs = 1;
+    MSR_ENTRIES[0].index = MSR_KVM_WALL_CLOCK_NEW;
+    CHECK(fdio(fd0, KVM_GET_MSRS, (uintptr_t)&buf) == 1 &&
+              MSR_ENTRIES[0].data == GUEST_PAGE + 0x100,
+          "and its MSR reads back");
+    low_rw = 0;
+    CHECK(set_msr(fd0, MSR_KVM_WALL_CLOCK, 0) == 1 &&
+              set_msr(fd0, MSR_KVM_WALL_CLOCK_NEW, 0) == 1 && low_rw == 0,
+          "a wall clock MSR of 0, as QEMU's reset writes, writes nothing at 0");
+
+    CHECK(kvm_clock_pairing(v0, GUEST_PAGE + 0x200, KVM_CLOCK_PAIRING_WALLCLOCK) == 0 &&
+              (uint64_t)cp->sec * 1000000000u + (uint64_t)cp->nsec == real_ns &&
+              cp->tsc == tsc + (uint64_t)v0->tsc_offset,
+          "KVM_HC_CLOCK_PAIRING pairs the real time with the guest's TSC");
+    CHECK(kvm_clock_pairing(v0, GUEST_PAGE + 0x200, 1) == (uint64_t)-95, "and no other clock");
+
+    value = GUEST_PAGE | KVM_MSR_ENABLED;
+    CHECK(kvm_pv_msr(v0, MSR_KVM_SYSTEM_TIME, 1, &value, 0) == 0 && !v0->vm->master_clock,
+          "the boot vCPU's guest choosing the old MSR stops the master clock");
+    get_clock(vm, &clk);
+    CHECK(clk.flags == 0, "and KVM_GET_CLOCK's flags with it");
+    CHECK(kvm_pv_msr(v0, MSR_KVM_SYSTEM_TIME_NEW, 1, &value, 0) == 0 && v0->vm->master_clock,
+          "the new MSR starts it again");
+
+    k_memset(&clk, 0, sizeof(clk));
+    clk.clock = 5000000000ull;
+    CHECK(fdio(vm, KVM_SET_CLOCK, (uintptr_t)&clk) == 0, "KVM_SET_CLOCK under the master clock");
+    clock_pass(1000);
+    get_clock(vm, &clk);
+    CHECK(clk.clock == 5000001000ull, "sets the kvmclock exactly");
+    kvm_clock_prepare(v0);
+    CHECK(guest_reads(v0, tsc) == clk.clock, "and the guest's copy follows it");
+}
+
+/** The vCPUs' TSCs of the VM `vm`, vCPUs `fd0` and `fd1`: a new vCPU
+ * matches, a host write elsewhere starts a generation without the master
+ * clock, and a write that matches it again brings the master clock back. */
+static void pv_tsc_rows(int vm, int fd0, int fd1)
+{
+    struct kvm_vcpu *v0 = entries[fd0].priv, *v1 = entries[fd1].priv;
+    struct kvm_clock_data clk;
+
+    CHECK(v1->tsc_offset == v0->tsc_offset && v0->vm->master_clock,
+          "a new vCPU takes the TSC of those before it");
+    CHECK(set_msr(fd1, MSR_IA32_TSC, 5000000000000ull) == 1 && !v0->vm->master_clock,
+          "a write of another TSC stops the master clock");
+    get_clock(vm, &clk);
+    CHECK(clk.flags == 0, "KVM_GET_CLOCK then has no flags");
+    clock_pass(1000000);
+    CHECK(set_msr(fd0, MSR_IA32_TSC, 5000000000000ull + 2000000u) == 1 &&
+              v0->tsc_offset == v1->tsc_offset && v0->vm->master_clock,
+          "a write that matches it starts the master clock again");
+    get_clock(vm, &clk);
+    CHECK(clk.flags == (KVM_CLOCK_TSC_STABLE | KVM_CLOCK_REALTIME | KVM_CLOCK_HOST_TSC),
+          "KVM_GET_CLOCK says so");
+}
+
+static int32_t get_msr(int fd, uint32_t index, uint64_t *value);
+
+/* The steal time's record in the guest page, 64-byte aligned. */
+#define ST_GPA (GUEST_PAGE + 0x400u)
+
+/** The steal time of vCPU `fd0`, as the selftest steal_time and Linux's
+ * record_steal_time see it: MSR_KVM_STEAL_TIME refuses its reserved bits,
+ * each write adds the thread's run_delay since the last and keeps the
+ * version even, a switch of the thread asks for a write, and a preemption
+ * at a host interrupt marks the record preempted until the next entry. */
+static void steal_rows(int fd0)
+{
+    struct kvm_vcpu *v0 = entries[fd0].priv;
+    struct kvm_steal_time *st = (void *)(guest_page + (ST_GPA - GUEST_PAGE));
+    struct kvm_run *run = run_of(fd0);
+    uint64_t value = 0, reported;
+
+    CHECK(set_msr(fd0, MSR_KVM_STEAL_TIME, ST_GPA | KVM_STEAL_RESERVED_MASK) == 0,
+          "MSR_KVM_STEAL_TIME refuses its reserved bits");
+    k_memset(st, 0, sizeof(*st));
+    st->version = 7; /* what the guest left there, odd */
+    st->preempted = KVM_VCPU_PREEMPTED;
+    caller.run_delay = 5000;
+    CHECK(set_msr(fd0, MSR_KVM_STEAL_TIME, ST_GPA | KVM_MSR_ENABLED) == 1 &&
+              get_msr(fd0, MSR_KVM_STEAL_TIME, &value) == 1 && value == (ST_GPA | KVM_MSR_ENABLED),
+          "MSR_KVM_STEAL_TIME takes an aligned address and reads it back");
+    kvm_steal_prepare(v0);
+    CHECK(st->version == 10 && st->steal == 5000 && st->preempted == 0,
+          "the first write evens the version, adds the thread's whole run_delay and clears "
+          "preempted");
+    kvm_steal_prepare(v0);
+    CHECK(st->version == 10, "nothing is written again while the thread stays on its processor");
+    caller.run_delay += 3000;
+    caller.pcount++;
+    kvm_steal_prepare(v0);
+    CHECK(st->version == 12 && st->steal == 8000,
+          "a switch of the thread adds the wait since the last write");
+
+    reported = v0->stat[KVM_VCPU_STAT_PREEMPTION_REPORTED];
+    v0->at_boundary = 0;
+    kvm_steal_preempted(v0);
+    CHECK(st->preempted == 0 && v0->stat[KVM_VCPU_STAT_PREEMPTION_OTHER] == 1,
+          "a preemption away from an instruction boundary is not reported");
+    v0->at_boundary = 1;
+    kvm_steal_preempted(v0);
+    CHECK(st->preempted == KVM_VCPU_PREEMPTED &&
+              v0->stat[KVM_VCPU_STAT_PREEMPTION_REPORTED] == reported + 1,
+          "one at a host interrupt marks the record preempted");
+    kvm_steal_prepare(v0);
+    CHECK(st->preempted == 0 && st->version == 14 && st->steal == 8000,
+          "and the next entry clears it, with no switch in between");
+    nofault_refuse = 1;
+    kvm_steal_preempted(v0);
+    CHECK(st->preempted == 0 && !v0->st_preempted &&
+              v0->stat[KVM_VCPU_STAT_PREEMPTION_REPORTED] == reported + 2,
+          "a record that cannot be written without a fault is not marked, and the preemption is "
+          "still reported, as Linux's");
+    nofault_refuse = 0;
+
+    refusing = 0;
+    script_len = 0;
+    script_at = 0;
+    scripted(KVM_X_AGAIN);
+    scripted(KVM_X_HLT);
+    tick_exits = 1;
+    preempt_wait = 2000;
+    preempt_seen_at = &st->preempted;
+    run->immediate_exit = 0;
+    CHECK(fdio(fd0, KVM_RUN, 0) == 0 && run->exit_reason == KVM_EXIT_HLT,
+          "KVM_RUN through a tick that takes the processor, to a HLT");
+    CHECK(preempt_seen == KVM_VCPU_PREEMPTED && st->preempted == 0,
+          "the record says preempted while the thread is switched out, and not after");
+    CHECK(st->steal == 10000 && st->version == 18,
+          "the wait on the run queue is stolen time at the next entry");
+    CHECK(v0->stat[KVM_VCPU_STAT_PREEMPTION_REPORTED] == reported + 3 && caller.sched_out == NULL,
+          "and is reported, and the thread has no sched_out after KVM_RUN");
+    script_len = 0;
+    script_at = 0;
+    scripted(KVM_X_AGAIN);
+    scripted(KVM_X_HLT);
+    preempt_alone = 1;
+    preempt_seen = -1;
+    CHECK(fdio(fd0, KVM_RUN, 0) == 0 && run->exit_reason == KVM_EXIT_HLT,
+          "KVM_RUN through a tick whose request finds no other thread, to a HLT");
+    CHECK(preempt_seen == -1 && st->preempted == 0 && st->version == 18 &&
+              v0->stat[KVM_VCPU_STAT_PREEMPTION_REPORTED] == reported + 3 &&
+              v0->stat[KVM_VCPU_STAT_PREEMPTION_OTHER] == 1,
+          "the vCPU is not marked preempted, nor counted, when nothing switches it out");
+    preempt_alone = 0;
+    tick_exits = 0;
+    preempt_wait = 0;
+    preempt_seen_at = NULL;
+    refusing = 1;
+
+    CHECK(set_msr(fd0, MSR_KVM_STEAL_TIME, ST_GPA) == 1, "the guest turns it off");
+    caller.pcount++;
+    kvm_steal_prepare(v0);
+    CHECK(st->version == 18, "and nothing more is written");
+}
+
+/** A guest's INIT on vCPU `fd0`, as Linux's kvm_vcpu_reset: the steal
+ * time and the kvmclock, both on, are turned off, and neither is written
+ * at the next entry. */
+static void init_pv_rows(int fd0)
+{
+    struct kvm_vcpu *v0 = entries[fd0].priv;
+    struct kvm_steal_time *st = (void *)(guest_page + (ST_GPA - GUEST_PAGE));
+    const struct pvclock_vcpu_time_info *pv = (const void *)guest_page;
+    uint64_t value = 0;
+    uint32_t pv_version, st_version;
+
+    CHECK(set_msr(fd0, MSR_KVM_STEAL_TIME, ST_GPA | KVM_MSR_ENABLED) == 1 &&
+              set_msr(fd0, MSR_KVM_SYSTEM_TIME_NEW, GUEST_PAGE | KVM_MSR_ENABLED) == 1,
+          "the steal time and the kvmclock on again");
+    kvm_steal_prepare(v0);
+    kvm_clock_prepare(v0);
+    pv_version = pv->version;
+    st_version = st->version;
+    CHECK(st_version == 20 && (v0->pv_time & KVM_MSR_ENABLED) && pv_version % 2u == 0,
+          "both are written at the next entry");
+    kvm_vcpu_init_reset(v0);
+    CHECK(get_msr(fd0, MSR_KVM_STEAL_TIME, &value) == 1 && value == 0 &&
+              get_msr(fd0, MSR_KVM_SYSTEM_TIME_NEW, &value) == 1 && value == 0,
+          "a guest's INIT turns the steal time and the kvmclock off, as Linux's kvm_vcpu_reset");
+    caller.pcount++;
+    kvm_vcpu_kick(v0, KVM_REQ_STEAL_UPDATE);
+    kvm_vcpu_kick(v0, KVM_REQ_CLOCK_UPDATE);
+    kvm_steal_prepare(v0);
+    kvm_clock_prepare(v0);
+    CHECK(st->version == st_version && pv->version == pv_version,
+          "and neither is written at the next entry, a switch and requests for both "
+          "notwithstanding");
+}
+
+/** The vCPU attribute KVM_VCPU_TSC_OFFSET of vCPUs `fd0` and `fd1` of the
+ * VM `vm`, as system_counter_offset_test drives it and Linux's
+ * kvm_arch_tsc_set_attr matches it: the guest's TSC is the host's plus the
+ * offset, a new offset on one vCPU starts a generation without the master
+ * clock, and the same offset on the other joins it and brings the master
+ * clock back. */
+static void tsc_attr_rows(int vm, int fd0, int fd1)
+{
+    struct kvm_vcpu *v0 = entries[fd0].priv, *v1 = entries[fd1].priv;
+    struct kvm_device_attr attr;
+    struct kvm_clock_data clk;
+    uint64_t value = 0, offset = (uint64_t)-180000000000ll;
+
+    k_memset(&attr, 0, sizeof(attr));
+    attr.group = KVM_VCPU_TSC_CTRL;
+    attr.attr = KVM_VCPU_TSC_OFFSET;
+    attr.addr = (uint64_t)(uintptr_t)&value;
+    CHECK(fdio(fd0, KVM_HAS_DEVICE_ATTR, (uintptr_t)&attr) == 0, "a vCPU has KVM_VCPU_TSC_OFFSET");
+    CHECK(fdio(fd0, KVM_GET_DEVICE_ATTR, (uintptr_t)&attr) == 0 &&
+              value == (uint64_t)v0->tsc_offset,
+          "which reads as its TSC's offset");
+    value = offset;
+    CHECK(fdio(fd0, KVM_SET_DEVICE_ATTR, (uintptr_t)&attr) == 0 &&
+              v0->tsc_offset == (int64_t)offset && kvm_tsc_read(v0) == tsc + offset,
+          "setting it makes the guest's TSC the host's plus the offset");
+    CHECK(!v0->vm->master_clock, "a new offset stops the master clock");
+    value = 0;
+    CHECK(fdio(fd0, KVM_GET_DEVICE_ATTR, (uintptr_t)&attr) == 0 && value == offset,
+          "and reads back");
+    value = offset;
+    CHECK(fdio(fd1, KVM_SET_DEVICE_ATTR, (uintptr_t)&attr) == 0 &&
+              v1->tsc_offset == v0->tsc_offset && v0->vm->master_clock,
+          "the same offset on the other vCPU matches it and starts the master clock again");
+    get_clock(vm, &clk);
+    CHECK(clk.flags == (KVM_CLOCK_TSC_STABLE | KVM_CLOCK_REALTIME | KVM_CLOCK_HOST_TSC),
+          "KVM_GET_CLOCK says so");
+    attr.group = 1;
+    CHECK(fdio(fd0, KVM_HAS_DEVICE_ATTR, (uintptr_t)&attr) == -ENXIO &&
+              fdio(fd0, KVM_GET_DEVICE_ATTR, (uintptr_t)&attr) == -ENXIO &&
+              fdio(fd0, KVM_SET_DEVICE_ATTR, (uintptr_t)&attr) == -ENXIO,
+          "another group is ENXIO");
+    attr.group = KVM_VCPU_TSC_CTRL;
+    attr.attr = 1;
+    CHECK(fdio(fd0, KVM_HAS_DEVICE_ATTR, (uintptr_t)&attr) == -ENXIO,
+          "and so is another attribute");
+}
+
+/** KVM_CAP_ENFORCE_PV_FEATURE_CPUID on vCPU `fd1` of the VM `vm`, and
+ * KVM_CAP_X86_DISABLE_EXITS: PV_UNHALT dropped at KVM_SET_CPUID2 and HLT
+ * left to the guests of vCPUs made after it. */
+static void pv_cap_rows(int vm, int fd0, int fd1)
+{
+    struct kvm_vcpu *v0 = entries[fd0].priv, *v1 = entries[fd1].priv, *v2;
+    struct kvm_enable_cap cap;
+    uint64_t value = 0;
+    uint32_t n;
+    int fd2;
+
+    k_memset(&cap, 0, sizeof(cap));
+    cap.cap = KVM_CAP_ENFORCE_PV_FEATURE_CPUID;
+    cap.args[0] = 1;
+    CHECK(fdio(fd1, KVM_ENABLE_CAP, (uintptr_t)&cap) == 0, "KVM_CAP_ENFORCE_PV_FEATURE_CPUID");
+    CHECK(kvm_pv_msr(v1, MSR_KVM_SYSTEM_TIME_NEW, 0, &value, 0) == KVM_MSR_UNKNOWN &&
+              !kvm_pv_has(v1, KVM_FEATURE_PV_SEND_IPI),
+          "holds a vCPU with no KVM leaf to no feature");
+    value = 1;
+    CHECK(kvm_pv_msr(v1, MSR_KVM_SYSTEM_TIME_NEW, 0, &value, 1) == 0 && value == 0 &&
+              set_msr(fd1, MSR_KVM_SYSTEM_TIME_NEW, 0) == 1 &&
+              set_msr(fd1, MSR_KVM_SYSTEM_TIME_NEW, 1) == 0,
+          "but lets the caller read 0 and write 0");
+    n = pv_cpuid();
+    buf.cpuid.nent = n;
+    CHECK(fdio(fd1, KVM_SET_CPUID2, (uintptr_t)&buf) == 0 &&
+              kvm_pv_msr(v1, MSR_KVM_SYSTEM_TIME_NEW, 0, &value, 0) == 0 &&
+              kvm_pv_has(v1, KVM_FEATURE_PV_SEND_IPI),
+          "and to those its CPUID names");
+
+    k_memset(&cap, 0, sizeof(cap));
+    cap.cap = KVM_CAP_X86_DISABLE_EXITS;
+    cap.args[0] = 0x10;
+    CHECK(fdio(vm, KVM_ENABLE_CAP, (uintptr_t)&cap) == -EINVAL, "an exit Linux does not name");
+    cap.args[0] = KVM_X86_DISABLE_EXITS_HLT;
+    CHECK(fdio(vm, KVM_ENABLE_CAP, (uintptr_t)&cap) == 0,
+          "KVM_CAP_X86_DISABLE_EXITS after the vCPUs, as Linux 6.12 takes it");
+    n = pv_cpuid();
+    buf.cpuid.nent = n;
+    CHECK(fdio(fd0, KVM_SET_CPUID2, (uintptr_t)&buf) == 0 &&
+              !(v0->pv_features & (1u << KVM_FEATURE_PV_UNHALT)) &&
+              (v0->pv_features & (1u << KVM_FEATURE_CLOCKSOURCE2)),
+          "KVM_SET_CPUID2 then drops PV_UNHALT");
+    fd2 = fdio(vm, KVM_CREATE_VCPU, 2);
+    v2 = entries[fd2].priv;
+    CHECK(fd2 > fd1 && v2->hlt_in_guest && !v0->hlt_in_guest,
+          "and a vCPU made after it leaves HLT to its guest");
+    fdclose(fd2);
+}
+
+/** The paravirtual rows, in a VM of their own with the TSC's rate known,
+ * the vDSO's clock on the TSC and a page of guest memory. */
+static void pv_rows(void)
+{
+    struct kvm_clock_data clk;
+    int vm, fd0, fd1;
+
+    tick_counts = 2000000;
+    vclock_on = 1;
+    guest_mem = 1;
+    pv_leaf_rows();
+    vm = dev(KVM_CREATE_VM, 0);
+    get_clock(vm, &clk);
+    CHECK(clk.clock == 0 && clk.flags == 0, "no master clock before a vCPU");
+    clock_pass(1000000);
+    fd0 = fdio(vm, KVM_CREATE_VCPU, 0);
+    get_clock(vm, &clk);
+    CHECK(clk.flags == (KVM_CLOCK_TSC_STABLE | KVM_CLOCK_REALTIME | KVM_CLOCK_HOST_TSC) &&
+              clk.clock == 1000000 && clk.host_tsc == tsc && clk.realtime == real_ns,
+          "the master clock with the first vCPU, and its flags");
+    fd1 = fdio(vm, KVM_CREATE_VCPU, 1);
+    pv_tsc_rows(vm, fd0, fd1);
+    pv_clock_rows(vm, fd0);
+    tsc_attr_rows(vm, fd0, fd1);
+    pv_cap_rows(vm, fd0, fd1);
+    steal_rows(fd0);
+    init_pv_rows(fd0);
+    fdclose(fd1);
+    fdclose(fd0);
+    fdclose(vm);
+    CHECK(live == 0, "the VM frees every allocation");
+    tick_counts = 0;
+    vclock_on = 0;
+    guest_mem = 0;
+}
+
+/** KVM_ENABLE_CAP of `cap` with `arg` on the VM `vm`. */
+static int32_t vm_cap(int vm, uint32_t cap, uint64_t arg)
+{
+    struct kvm_enable_cap c;
+
+    k_memset(&c, 0, sizeof(c));
+    c.cap = cap;
+    c.args[0] = arg;
+    return fdio(vm, KVM_ENABLE_CAP, (uintptr_t)&c);
+}
+
+/** KVM_GET_MSRS of the MSR `index` on the vCPU `fd` into `*value`; the
+ * count read. */
+static int32_t get_msr(int fd, uint32_t index, uint64_t *value)
+{
+    int32_t r;
+
+    buf.msrs.nmsrs = 1;
+    MSR_ENTRIES[0].index = index;
+    MSR_ENTRIES[0].reserved = 0;
+    MSR_ENTRIES[0].data = 0;
+    r = fdio(fd, KVM_GET_MSRS, (uintptr_t)&buf);
+    *value = MSR_ENTRIES[0].data;
+    return r;
+}
+
+/** Linux's bounds, 1024 vCPUs with ids below 4096, and
+ * KVM_CAP_MAX_VCPU_ID, as max_vcpuid_cap_test and kvm_create_max_vcpus
+ * ask for them. */
+static void bound_rows(void)
+{
+    int vm = dev(KVM_CREATE_VM, 0), fd, made = 0;
+    uint32_t i;
+
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_MAX_VCPUS) == 1024 &&
+              dev(KVM_CHECK_EXTENSION, KVM_CAP_MAX_VCPU_ID) == 4096,
+          "Linux's bounds: 1024 vCPUs, with ids below 4096");
+    CHECK(vm_cap(vm, KVM_CAP_MAX_VCPU_ID, 4097) == -EINVAL, "a bound of ids past Linux's");
+    CHECK(fdio(vm, KVM_SET_BOOT_CPU_ID, 70) == 0 && vm_cap(vm, KVM_CAP_MAX_VCPU_ID, 69) == -EINVAL,
+          "a bound of ids below the boot vCPU's");
+    CHECK(vm_cap(vm, KVM_CAP_MAX_VCPU_ID, 70) == 0 && vm_cap(vm, KVM_CAP_MAX_VCPU_ID, 70) == 0,
+          "KVM_CAP_MAX_VCPU_ID, and the same bound again");
+    CHECK(vm_cap(vm, KVM_CAP_MAX_VCPU_ID, 71) == -EINVAL, "another bound once one is set");
+    CHECK(fdio(vm, KVM_SET_BOOT_CPU_ID, 71) == -EINVAL, "a boot vCPU past the bound");
+    CHECK(fdio(vm, KVM_CREATE_VCPU, 70) == -EINVAL, "a vCPU's id at the bound");
+    CHECK(fdio(vm, KVM_CREATE_VCPU, (uintptr_t)1 << 32) == -EINVAL,
+          "an id with a bit above the low 32 set");
+    fd = fdio(vm, KVM_CREATE_VCPU, 69);
+    CHECK(fd > vm, "a vCPU's id below the bound");
+    fdclose(fd);
+    fdclose(vm);
+
+    vm = dev(KVM_CREATE_VM, 0);
+    for (i = 0; i < KVM_MAX_VCPUS; i++) {
+        fd = fdio(vm, KVM_CREATE_VCPU, KVM_MAX_VCPU_IDS - 1u - i);
+        if (fd > vm) {
+            made++;
+            fdclose(fd);
+        }
+    }
+    CHECK(made == KVM_MAX_VCPUS, "a VM takes 1024 vCPUs, with ids up to 4095");
+    CHECK(vm_cap(vm, KVM_CAP_MAX_VCPU_ID, 4096) == 0 &&
+              vm_cap(vm, KVM_CAP_MAX_VCPU_ID, 512) == -EINVAL,
+          "the first vCPU settles the bound of the ids at Linux's");
+    CHECK(fdio(vm, KVM_CREATE_VCPU, 0) == -EINVAL, "and no vCPU past 1024");
+    fdclose(vm);
+    CHECK(live == 0, "the VMs free every allocation");
+}
+
+/** KVM_SET_SREGS before KVM_SET_CPUID2 takes the CR4 bits the supported
+ * CPUID has, as set_sregs_test asks, and after it those the vCPU's has. */
+static void cr4_rows(void)
+{
+    int vm = dev(KVM_CREATE_VM, 0), fd = fdio(vm, KVM_CREATE_VCPU, 0);
+    struct kvm_sregs s;
+
+    fdio(fd, KVM_GET_SREGS, (uintptr_t)&s);
+    s.cr4 = 0x1707FF; /* the model's: FSGSBASE, PCIDE, OSXSAVE and SMEP */
+    CHECK(fdio(fd, KVM_SET_SREGS, (uintptr_t)&s) == 0,
+          "before KVM_SET_CPUID2, CR4 takes every bit the supported CPUID has");
+    s.cr4 = 1ull << 21;
+    CHECK(fdio(fd, KVM_SET_SREGS, (uintptr_t)&s) == -EINVAL, "but not SMAP, which it lacks");
+    s.cr4 = 1ull << 13;
+    CHECK(fdio(fd, KVM_SET_SREGS, (uintptr_t)&s) == -EINVAL, "nor VMXE");
+    buf.cpuid.nent = 0;
+    CHECK(fdio(fd, KVM_SET_CPUID2, (uintptr_t)&buf) == 0, "KVM_SET_CPUID2 with no entry");
+    s.cr4 = 1ull << 18;
+    CHECK(fdio(fd, KVM_SET_SREGS, (uintptr_t)&s) == -EINVAL,
+          "after it, CR4 takes only what the vCPU's CPUID has");
+    fdclose(fd);
+    fdclose(vm);
+}
+
+/** The capabilities a VM enables: the quirks,
+ * KVM_CAP_EXIT_ON_EMULATION_FAILURE, KVM_CAP_MSR_PLATFORM_INFO with the
+ * MSRs of CPUID faulting, and KVM_CAP_X86_APIC_BUS_CYCLES_NS. */
+static void vm_cap_rows(void)
+{
+    int vm = dev(KVM_CREATE_VM, 0), fd;
+    struct kvm_vm *k = (struct kvm_vm *)entries[vm].priv;
+    struct kvm_vcpu *v;
+    uint64_t value = 0;
+
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_DISABLE_QUIRKS2) == 0x7FF &&
+              dev(KVM_CHECK_EXTENSION, KVM_CAP_DISABLE_QUIRKS) == 1,
+          "KVM_CAP_DISABLE_QUIRKS2 names Linux's eleven quirks on a processor that snoops itself");
+    CHECK(k->disabled_quirks == KVM_X86_QUIRK_CD_NW_CLEARED,
+          "a VM on VMX starts without SVM's quirk");
+    CHECK(vm_cap(vm, KVM_CAP_DISABLE_QUIRKS2, 0x800) == -EINVAL, "a quirk Linux does not name");
+    CHECK(vm_cap(vm, KVM_CAP_DISABLE_QUIRKS2, KVM_X86_QUIRK_FIX_HYPERCALL_INSN) == 0 &&
+              !KVM_QUIRK(k, KVM_X86_QUIRK_FIX_HYPERCALL_INSN) &&
+              KVM_QUIRK(k, KVM_X86_QUIRK_LINT0_REENABLED),
+          "KVM_CAP_DISABLE_QUIRKS2 turns one quirk off and leaves the others");
+    CHECK(vm_cap(vm, KVM_CAP_DISABLE_QUIRKS, 0x800 | KVM_X86_QUIRK_STUFF_FEATURE_MSRS) == 0 &&
+              !KVM_QUIRK(k, KVM_X86_QUIRK_STUFF_FEATURE_MSRS),
+          "KVM_CAP_DISABLE_QUIRKS drops the bits it does not know");
+
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_EXIT_ON_EMULATION_FAILURE) == 1 &&
+              vm_cap(vm, KVM_CAP_EXIT_ON_EMULATION_FAILURE, 2) == -EINVAL &&
+              vm_cap(vm, KVM_CAP_EXIT_ON_EMULATION_FAILURE, 1) == 0 && k->exit_on_emulation_error,
+          "KVM_CAP_EXIT_ON_EMULATION_FAILURE takes 0 or 1");
+
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_X86_APIC_BUS_CYCLES_NS) == 1 &&
+              vm_cap(vm, KVM_CAP_X86_APIC_BUS_CYCLES_NS, 4) == -ENXIO,
+          "the APIC's bus cycle needs the local APIC in the kernel");
+    k->irqchip = KVM_IRQCHIP_SPLIT;
+    CHECK(vm_cap(vm, KVM_CAP_X86_APIC_BUS_CYCLES_NS, 0) == -EINVAL &&
+              vm_cap(vm, KVM_CAP_X86_APIC_BUS_CYCLES_NS, 1ull << 26) == -EINVAL,
+          "a cycle of 0 ns, or one whose longest count passes 64 bits of ns");
+    CHECK(vm_cap(vm, KVM_CAP_X86_APIC_BUS_CYCLES_NS, 4) == 0 && k->apic_bus_ns == 4,
+          "KVM_CAP_X86_APIC_BUS_CYCLES_NS sets the cycle");
+    k->irqchip = KVM_IRQCHIP_NONE;
+
+    fd = fdio(vm, KVM_CREATE_VCPU, 0);
+    v = (struct kvm_vcpu *)entries[fd].priv;
+    k->irqchip = KVM_IRQCHIP_SPLIT;
+    CHECK(vm_cap(vm, KVM_CAP_X86_APIC_BUS_CYCLES_NS, 8) == -EINVAL, "but not after a vCPU");
+    k->irqchip = KVM_IRQCHIP_NONE;
+
+    CHECK(get_msr(fd, 0xCE, &value) == 1 && value == 0,
+          "with the feature MSRs left to the caller, PLATFORM_INFO starts at 0");
+    CHECK(set_msr(fd, 0x140, 1) == 0, "and CPUID faulting cannot be turned on");
+    CHECK(set_msr(fd, 0xCE, 0x80000000u | 0xFF00u) == 1 && get_msr(fd, 0xCE, &value) == 1 &&
+              value == 0x8000FF00u,
+          "the caller writes PLATFORM_INFO");
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_MSR_PLATFORM_INFO) == 1 &&
+              vm_cap(vm, KVM_CAP_MSR_PLATFORM_INFO, 0) == 0 && k->platform_info_hidden &&
+              get_msr(fd, 0xCE, &value) == 1 && value == 0x8000FF00u,
+          "KVM_CAP_MSR_PLATFORM_INFO with 0 hides it from the guest, not from the caller");
+    CHECK(set_msr(fd, 0x140, 2) == 0 && set_msr(fd, 0x140, 1) == 1 && v->misc_features == 1 &&
+              set_msr(fd, 0xCE, 0) == 0,
+          "CPUID faulting on: one bit, and PLATFORM_INFO keeps offering it");
+    fdclose(fd);
+    fdclose(vm);
+}
+
+/** The feature MSRs a new vCPU starts with, by
+ * KVM_X86_QUIRK_STUFF_FEATURE_MSRS, as Linux's kvm_arch_vcpu_create fills
+ * them: PLATFORM_INFO and UCODE_REV. */
+static void feature_msr_rows(void)
+{
+    int vm = dev(KVM_CREATE_VM, 0), fd = fdio(vm, KVM_CREATE_VCPU, 0);
+    struct kvm_vcpu *v;
+    uint64_t value = 0;
+
+    CHECK(get_msr(fd, 0xCE, &value) == 1 && value == 0x80000000u,
+          "a new vCPU's PLATFORM_INFO offers CPUID faulting");
+    CHECK(get_msr(fd, 0x8B, &value) == 1 && value == 0x100000000ull,
+          "and its UCODE_REV is Linux's 0x100000000 for VMX");
+    v = (struct kvm_vcpu *)entries[fd].priv;
+    kvm_backend = &kvm_svm;
+    kvm_msr_reset(v);
+    kvm_backend = &kvm_vmx;
+    CHECK(get_msr(fd, 0x8B, &value) == 1 && value == 0x01000065ull,
+          "and Linux's 0x01000065 for SVM");
+    fdclose(fd);
+    fdclose(vm);
+
+    vm = dev(KVM_CREATE_VM, 0);
+    CHECK(vm_cap(vm, KVM_CAP_DISABLE_QUIRKS2, KVM_X86_QUIRK_STUFF_FEATURE_MSRS) == 0,
+          "the quirk turned off");
+    fd = fdio(vm, KVM_CREATE_VCPU, 0);
+    v = (struct kvm_vcpu *)entries[fd].priv;
+    CHECK(get_msr(fd, 0x8B, &value) == 1 && value == 0,
+          "with the feature MSRs left to the caller, UCODE_REV starts at 0");
+    CHECK(set_msr(fd, 0x8B, 0x2800000000ull) == 1 && get_msr(fd, 0x8B, &value) == 1 &&
+              value == 0x2800000000ull && v->ucode_rev == value,
+          "the caller writes UCODE_REV");
+    fdclose(fd);
+    fdclose(vm);
+}
+
+/** /dev/kvm's attribute KVM_X86_XCOMP_GUEST_SUPP, as amx_test reads it,
+ * and the debugging capabilities. */
+static void attr_rows(void)
+{
+    struct kvm_device_attr attr;
+    uint64_t value = 0;
+
+    k_memset(&attr, 0, sizeof(attr));
+    attr.attr = KVM_X86_XCOMP_GUEST_SUPP;
+    attr.addr = (uint64_t)(uintptr_t)&value;
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_SYS_ATTRIBUTES) == 1 &&
+              dev(KVM_HAS_DEVICE_ATTR, (uintptr_t)&attr) == 0 &&
+              dev(KVM_GET_DEVICE_ATTR, (uintptr_t)&attr) == 0 && value == kvm_xcr0_supported() &&
+              !(value & (3ull << 17)),
+          "KVM_X86_XCOMP_GUEST_SUPP is the XCR0 a guest may have, with no AMX in it");
+    attr.attr = 1;
+    CHECK(dev(KVM_HAS_DEVICE_ATTR, (uintptr_t)&attr) == -ENXIO &&
+              dev(KVM_GET_DEVICE_ATTR, (uintptr_t)&attr) == -ENXIO,
+          "another attribute of /dev/kvm is ENXIO");
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_SET_GUEST_DEBUG) == 1 &&
+              dev(KVM_CHECK_EXTENSION, KVM_CAP_SET_GUEST_DEBUG2) ==
+                  (int32_t)KVM_GUESTDBG_VALID_MASK,
+          "KVM_CAP_SET_GUEST_DEBUG, and the flags KVM_SET_GUEST_DEBUG takes");
+}
+
+/** KVM_CAP_SYNC_REGS: the register sets KVM_RUN takes from the run page
+ * and writes to it, as sync_regs_test drives them. */
+static void sync_rows(void)
+{
+    int vm = dev(KVM_CREATE_VM, 0), fd = fdio(vm, KVM_CREATE_VCPU, 0);
+    struct kvm_vcpu *v = (struct kvm_vcpu *)entries[fd].priv;
+    struct kvm_run *run = run_of(fd);
+    struct kvm_vcpu_events events;
+    struct kvm_sregs sregs;
+    struct kvm_regs regs;
+    int i;
+
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_SYNC_REGS) == 7 && offsetof(struct kvm_run, s) == 304 &&
+              sizeof(struct kvm_sync_regs) == 520 && offsetof(struct kvm_sync_regs, sregs) == 144 &&
+              offsetof(struct kvm_sync_regs, events) == 456,
+          "KVM_CAP_SYNC_REGS names the three sets, laid out as Linux's kvm_sync_regs");
+    refusing = 0;
+    script_len = 0;
+    script_at = 0;
+    for (i = 0; i < 6; i++) {
+        scripted(KVM_X_HLT);
+    }
+    entries_made = 0;
+    run->kvm_valid_regs = 8;
+    CHECK(fdio(fd, KVM_RUN, 0) == -EINVAL && entries_made == 0,
+          "a set Linux does not name to write");
+    run->kvm_valid_regs = 0;
+    run->kvm_dirty_regs = 8 | KVM_SYNC_X86_REGS;
+    CHECK(fdio(fd, KVM_RUN, 0) == -EINVAL && entries_made == 0, "or to take");
+    run->kvm_dirty_regs = 0;
+
+    v->regs.rbx = 0x1111;
+    v->events.interrupt.injected = 1;
+    v->events.interrupt.nr = 0x41;
+    run->kvm_valid_regs = KVM_SYNC_X86_VALID_FIELDS;
+    CHECK(fdio(fd, KVM_RUN, 0) == 0 && run->exit_reason == KVM_EXIT_HLT,
+          "a run with the sets asked");
+    fdio(fd, KVM_GET_REGS, (uintptr_t)&regs);
+    fdio(fd, KVM_GET_SREGS, (uintptr_t)&sregs);
+    fdio(fd, KVM_GET_VCPU_EVENTS, (uintptr_t)&events);
+    CHECK(bytes_equal(&run->s.regs.regs, &regs, sizeof(regs)) && regs.rbx == 0x1111,
+          "the run page has the registers as KVM_GET_REGS gives them");
+    CHECK(bytes_equal(&run->s.regs.sregs, &sregs, sizeof(sregs)) && sregs.interrupt_bitmap[1] == 2,
+          "the special registers as KVM_GET_SREGS, the interrupt waiting in the bitmap");
+    CHECK(bytes_equal(&run->s.regs.events, &events, sizeof(events)),
+          "and the events as KVM_GET_VCPU_EVENTS");
+
+    run->s.regs.regs.rbx = 0x2222;
+    run->s.regs.sregs.cr4 = 1ull << 13;
+    run->kvm_dirty_regs = KVM_SYNC_X86_REGS | KVM_SYNC_X86_SREGS;
+    entries_made = 0;
+    CHECK(fdio(fd, KVM_RUN, 0) == -EINVAL && entries_made == 0 && v->regs.rbx == 0x2222 &&
+              run->kvm_dirty_regs == KVM_SYNC_X86_SREGS,
+          "special registers Linux refuses end the run, the set still marked, the registers taken");
+    run->s.regs.sregs.cr4 = 0;
+    run->s.regs.sregs.cr3 = 0x5000;
+    run->s.regs.events.interrupt.injected = 0;
+    run->s.regs.events.flags = 0;
+    run->kvm_dirty_regs |= KVM_SYNC_X86_EVENTS;
+    CHECK(fdio(fd, KVM_RUN, 0) == 0 && run->kvm_dirty_regs == 0 && v->sregs.cr3 == 0x5000 &&
+              !v->events.interrupt.injected && run->s.regs.sregs.cr3 == 0x5000,
+          "the sets marked are taken before the entry and their marks cleared");
+    run->s.regs.events.flags = 0x80;
+    run->kvm_dirty_regs = KVM_SYNC_X86_EVENTS;
+    CHECK(fdio(fd, KVM_RUN, 0) == -EINVAL, "events Linux refuses end the run");
+    run->kvm_dirty_regs = 0;
+
+    run->kvm_valid_regs = 0;
+    run->s.regs.regs.rbx = 0x3333;
+    v->regs.rbx = 0x4444;
+    CHECK(fdio(fd, KVM_RUN, 0) == 0 && run->s.regs.regs.rbx == 0x3333 && v->regs.rbx == 0x4444,
+          "with no set asked the run page and the vCPU keep their own");
+    run->kvm_dirty_regs = KVM_SYNC_X86_REGS;
+    run->immediate_exit = 1;
+    CHECK(fdio(fd, KVM_RUN, 0) == -EINTR && v->regs.rbx == 0x3333,
+          "a set is taken even under immediate_exit");
+    run->immediate_exit = 0;
+    refusing = 1;
+    fdclose(fd);
+    fdclose(vm);
+    CHECK(live == 0, "the VM frees every allocation");
+}
+
+/** KVM_PRE_FAULT_MEMORY through a vCPU's descriptor: the range moves by
+ * what the page tables mapped, whatever the result. tdp.c's own rows are in
+ * kvm_slots_hosttest. */
+static void pre_fault_rows(void)
+{
+    int vm = dev(KVM_CREATE_VM, 0), vcpu = fdio(vm, KVM_CREATE_VCPU, 0);
+    struct kvm_pre_fault_memory range;
+
+    CHECK(sizeof(range) == 64 && KVM_PRE_FAULT_MEMORY == 0xC040AED5u,
+          "kvm_pre_fault_memory and KVM_PRE_FAULT_MEMORY are Linux's");
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_PRE_FAULT_MEMORY) == 1 &&
+              fdio(vm, KVM_CHECK_EXTENSION, KVM_CAP_PRE_FAULT_MEMORY) == 1,
+          "KVM_CAP_PRE_FAULT_MEMORY");
+    k_memset(&range, 0, sizeof(range));
+    range.gpa = 0x200000;
+    range.size = 0x3000;
+    pre_fault_pages = 2;
+    CHECK(fdio(vcpu, KVM_PRE_FAULT_MEMORY, (uintptr_t)&range) == 0 && range.gpa == 0x202000 &&
+              range.size == 0x1000,
+          "a range mapped in part is 0, moved past what was mapped");
+    pre_fault_pages = 0;
+    CHECK(fdio(vcpu, KVM_PRE_FAULT_MEMORY, (uintptr_t)&range) == -ENOENT && range.gpa == 0x202000 &&
+              range.size == 0x1000,
+          "and -ENOENT, unmoved, with nothing mapped");
+    CHECK(fdio(vcpu, KVM_PRE_FAULT_MEMORY, 0) == -EFAULT, "a bad range is -EFAULT");
+    CHECK(fdio(vm, KVM_PRE_FAULT_MEMORY, (uintptr_t)&range) == -ENOTTY, "it is no ioctl of a VM");
+    fdclose(vcpu);
+    fdclose(vm);
+}
+
+/* The description a statistics descriptor is read through. */
+static struct open_file stats_ofd;
+
+/** Read `count` bytes of the statistics descriptor `fd` at `pos`, as
+ * pread64 does. */
+static int32_t stats_at(int fd, void *buf, uint32_t count, uint64_t pos)
+{
+    stats_ofd.offset = pos;
+    entries[fd].ofd = &stats_ofd;
+    return entries[fd].ops->read(&entries[fd], (char *)buf, count);
+}
+
+/** The first value of the statistic `name` in the file on `fd`, or all
+ * ones when the file has no such descriptor. */
+static uint64_t stat_of(int fd, const char *name)
+{
+    struct kvm_stats_header h;
+    struct kvm_stats_desc d;
+    uint64_t value = ~0ull;
+    uint32_t i;
+
+    stats_at(fd, &h, sizeof(h), 0);
+    for (i = 0; i < h.num_desc; i++) {
+        stats_at(fd, &d, sizeof(d), h.desc_offset + i * sizeof(d));
+        if (strcmp(d.name, name) == 0) {
+            stats_at(fd, &value, 8, h.data_offset + d.offset);
+        }
+    }
+    return value;
+}
+
+/** Whether the `ndesc` descriptors at `descs` are ones
+ * kvm_binary_stats_test takes: names that end, a known type and unit to
+ * base 10, the exponent their unit has, no bucket size, and `nvalues`
+ * values in all that lie in the data. */
+static int stats_descs_ok(const uint8_t *descs, uint32_t ndesc, uint32_t nvalues)
+{
+    struct kvm_stats_desc d;
+    uint32_t i, next = 0;
+    int ok = 1;
+
+    for (i = 0; ok && i < ndesc; i++) {
+        uint32_t unit;
+
+        k_memcpy(&d, descs + i * 64u, sizeof(d));
+        unit = d.flags & 0xF0u;
+        ok = d.name[0] != '\0' && d.name[47] == '\0' && (d.flags & 0xFu) <= 4u && unit <= 0x40u &&
+             (d.flags >> 8) == 0 && d.exponent == (unit == KVM_STATS_UNIT_SECONDS ? -9 : 0) &&
+             d.size != 0 && d.bucket_size == 0 && d.offset % 8u == 0 &&
+             d.offset / 8u + d.size <= nvalues;
+        next += d.size;
+    }
+    return ok && next == nvalues;
+}
+
+/** Whether the file on `fd` is what kvm_binary_stats_test requires: Linux's
+ * header for `ndesc` descriptors, the id `id`, descriptors whose names end,
+ * whose exponents fit their units and whose `nvalues` values lie in the
+ * data, and the same bytes whether read whole, one at a time or
+ * across its parts, with nothing at its end. */
+static int stats_file_ok(int fd, const char *id, uint32_t ndesc, uint32_t nvalues)
+{
+    static uint8_t whole[8192];
+    struct kvm_stats_header h;
+    uint8_t piece[200];
+    uint32_t size = 72u + ndesc * 64u + nvalues * 8u, pos;
+    int ok;
+
+    ok = stats_at(fd, &h, sizeof(h), 0) == (int32_t)sizeof(h) && h.flags == 0 &&
+         h.name_size == 48 && h.num_desc == ndesc && h.id_offset == 24 && h.desc_offset == 72 &&
+         h.data_offset == 72u + ndesc * 64u;
+    ok = ok && stats_at(fd, whole, sizeof(whole), 0) == (int32_t)size &&
+         strcmp((const char *)whole + 24, id) == 0;
+    for (pos = 0; ok && pos < size; pos++) {
+        ok = stats_at(fd, piece, 1, pos) == 1 && piece[0] == whole[pos];
+    }
+    for (pos = 0; ok && pos + sizeof(piece) <= size; pos += 97u) {
+        ok = stats_at(fd, piece, sizeof(piece), pos) == (int32_t)sizeof(piece) &&
+             bytes_equal(piece, whole + pos, sizeof(piece));
+    }
+    ok = ok && stats_at(fd, piece, 16, size - 4u) == 4 && stats_at(fd, piece, 1, size) == 0 &&
+         stats_at(fd, piece, 1, 1ull << 40) == 0;
+    return ok && stats_descs_ok(whole + 72, ndesc, nvalues);
+}
+
+/** What the vCPU on `vcpu` counts as it runs, read from its statistics
+ * file on `vcpu_stats`. */
+static void stats_count_rows(int vcpu, int vcpu_stats)
+{
+    struct kvm_vcpu *v = (struct kvm_vcpu *)entries[vcpu].priv;
+
+    refusing = 0;
+    script_len = 0;
+    script_at = 0;
+    scripted(KVM_X_AGAIN);
+    scripted_io(KVM_EXIT_IO_OUT, 4, BUS_PORT, 1);
+    scripted_io(KVM_EXIT_IO_OUT, 1, 0x3F8, 1);
+    scripted(KVM_X_MMIO)->mmio.len = 4;
+    scripted(KVM_X_HLT);
+    CHECK(fdio(vcpu, KVM_RUN, 0) == 0 && stat_of(vcpu_stats, "exits") == 3 &&
+              stat_of(vcpu_stats, "io_exits") == 2 && stat_of(vcpu_stats, "mmio_exits") == 0,
+          "exits counts every exit, io_exits the bus's too");
+    CHECK(fdio(vcpu, KVM_RUN, 0) == 0 && run_of(vcpu)->exit_reason == KVM_EXIT_MMIO &&
+              stat_of(vcpu_stats, "mmio_exits") == 1,
+          "mmio_exits counts the MMIO the caller answers");
+    CHECK(fdio(vcpu, KVM_RUN, 0) == 0 && run_of(vcpu)->exit_reason == KVM_EXIT_HLT &&
+              stat_of(vcpu_stats, "halt_exits") == 1 && stat_of(vcpu_stats, "exits") == 5,
+          "halt_exits counts the HLT");
+    sig_pending = 1;
+    CHECK(fdio(vcpu, KVM_RUN, 0) == -EINTR && stat_of(vcpu_stats, "signal_exits") == 1,
+          "signal_exits counts a run a signal ended");
+    sig_pending = 0;
+    v->stat[KVM_VCPU_STAT_HALT_WAIT_HIST + 31] = 9;
+    CHECK(stat_of(vcpu_stats, "blocking") == 0 && v->stat[KVM_VCPU_STAT_BLOCKING] == 0,
+          "a histogram's 32 values end before the next statistic");
+    v->stat[KVM_VCPU_STAT_HALT_WAIT_HIST + 31] = 0;
+}
+
+/** The guest's TSC of the vCPU `fd`, as KVM_GET_MSRS reads it. */
+static uint64_t guest_tsc(int fd)
+{
+    uint64_t value = 0;
+
+    (void)get_msr(fd, MSR_IA32_TSC, &value);
+    return value;
+}
+
+/** KVM_SET_TSC_KHZ on a processor that scales no TSC, the model's at 2
+ * GHz: a rate within 250 parts in a million is the host's, a lower one
+ * is refused, and a higher one is kept by moving the TSC up before each
+ * entry, from the count and the moment its generation began at. */
+static void tsc_unscaled_rows(void)
+{
+    int vm = dev(KVM_CREATE_VM, 0), fd;
+    struct kvm_vcpu *v;
+
+    CHECK(fdio(vm, KVM_SET_TSC_KHZ, 1000000) == 0 && fdio(vm, KVM_GET_TSC_KHZ, 0) == 1000000,
+          "the VM's KVM_SET_TSC_KHZ takes a rate no vCPU could have, as Linux's");
+    CHECK(fdio(vm, KVM_SET_TSC_KHZ, 0) == 0 && fdio(vm, KVM_GET_TSC_KHZ, 0) == 2000000,
+          "and the host's for 0");
+    fd = fdio(vm, KVM_CREATE_VCPU, 0);
+    v = entries[fd].priv;
+    CHECK(fdio(vm, KVM_SET_TSC_KHZ, 1000000) == 0 && fdio(vm, KVM_GET_TSC_KHZ, 0) == 1000000 &&
+              fdio(fd, KVM_GET_TSC_KHZ, 0) == 2000000,
+          "and one once a vCPU exists, for later vCPUs only, as Linux's x86.c takes it");
+    CHECK(fdio(vm, KVM_SET_TSC_KHZ, 0) == 0, "and the host's again");
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_TSC_CONTROL) == 0 &&
+              fdio(vm, KVM_CHECK_EXTENSION, KVM_CAP_VM_TSC_CONTROL) == 0,
+          "no KVM_CAP_TSC_CONTROL and no KVM_CAP_VM_TSC_CONTROL without scaling");
+    CHECK(fdio(vm, KVM_GET_TSC_KHZ, 0) == 2000000 && fdio(fd, KVM_GET_TSC_KHZ, 0) == 2000000,
+          "KVM_GET_TSC_KHZ is the host's rate, of the VM and of a vCPU");
+    CHECK(fdio(fd, KVM_SET_TSC_KHZ, 2000500) == 0 && fdio(fd, KVM_SET_TSC_KHZ, 1999500) == 0 &&
+              !v->tsc_catchup && v->tsc_ratio == 0 && fdio(fd, KVM_GET_TSC_KHZ, 0) == 1999500,
+          "a rate within 250 parts in a million is taken, and runs at the host's");
+    CHECK(fdio(fd, KVM_SET_TSC_KHZ, 1999499) == -EINVAL && fdio(fd, KVM_GET_TSC_KHZ, 0) == 1999499,
+          "a lower rate is -EINVAL, and is recorded all the same, as Linux records it");
+    CHECK(fdio(fd, KVM_SET_TSC_KHZ, 0) == 0 && fdio(fd, KVM_GET_TSC_KHZ, 0) == 2000000,
+          "0 kHz is the host's rate");
+    clock_pass(1000000);
+    CHECK(guest_tsc(fd) == 2000000, "the TSC counts at the host's rate");
+    CHECK(fdio(fd, KVM_SET_TSC_KHZ, 3000000) == 0 && v->tsc_catchup && v->tsc_ratio == 0,
+          "a higher rate is taken");
+    kvm_clock_prepare(v);
+    CHECK(guest_tsc(fd) == 3000000 && (v->dirty & KVM_PART_TSC),
+          "and the TSC is moved up to it before an entry");
+    clock_pass(1000000);
+    CHECK(guest_tsc(fd) == 5000000, "between entries it counts at the host's rate");
+    kvm_clock_prepare(v);
+    CHECK(guest_tsc(fd) == 6000000, "and is moved up again");
+    fdclose(fd);
+    fdclose(vm);
+}
+
+/** KVM_SET_TSC_KHZ on a processor that scales the TSC by a ratio with
+ * `bits` of fraction, whose 2,345,678 kHz, tsc_scaling_sync's rate, is
+ * the ratio `ratio`, and whose rates end below `past`: the capabilities,
+ * Linux's bound on the rate, the VM's rate given to its new vCPUs, and
+ * the TSC counting at it. */
+static void tsc_scaled_rows(uint32_t bits, uint64_t ratio, uint32_t past)
+{
+    int vm, fd0, fd1;
+    struct kvm_vcpu *v0, *v1;
+    uint64_t t0;
+
+    scale_bits = bits;
+    vm = dev(KVM_CREATE_VM, 0);
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_TSC_CONTROL) == 1 &&
+              fdio(vm, KVM_CHECK_EXTENSION, KVM_CAP_VM_TSC_CONTROL) == 1,
+          "KVM_CAP_TSC_CONTROL and KVM_CAP_VM_TSC_CONTROL with scaling");
+    CHECK(fdio(vm, KVM_SET_TSC_KHZ, past) == -EINVAL && fdio(vm, KVM_SET_TSC_KHZ, past - 1u) == 0,
+          "the VM's rate is below what the largest ratio gives, at most 2^31 - 1");
+    CHECK(fdio(vm, KVM_SET_TSC_KHZ, 2345678) == 0 && fdio(vm, KVM_GET_TSC_KHZ, 0) == 2345678,
+          "the VM's KVM_SET_TSC_KHZ is read back");
+    fd0 = fdio(vm, KVM_CREATE_VCPU, 0);
+    v0 = entries[fd0].priv;
+    CHECK(fdio(fd0, KVM_GET_TSC_KHZ, 0) == 2345678 && v0->tsc_ratio == ratio &&
+              v0->tsc_frac_bits == bits && kvm_tsc_hz(v0) == 2345678000ull,
+          "a new vCPU has the VM's rate, and the ratio the processor is given");
+    t0 = guest_tsc(fd0);
+    clock_pass(1000000);
+    fd1 = fdio(vm, KVM_CREATE_VCPU, 1);
+    v1 = entries[fd1].priv;
+    CHECK(guest_tsc(fd0) - t0 >= 2345677 && guest_tsc(fd0) - t0 <= 2345678,
+          "its TSC counts at that rate");
+    CHECK(v1->tsc_offset == v0->tsc_offset && v1->tsc_ratio == ratio,
+          "a second vCPU takes the same TSC");
+    CHECK(fdio(fd1, KVM_SET_TSC_KHZ, past) == -EINVAL && fdio(fd1, KVM_GET_TSC_KHZ, 0) == 2345678,
+          "a vCPU's rate has the same bound, and one past it changes nothing");
+    v1->dirty = 0;
+    CHECK(fdio(fd1, KVM_SET_TSC_KHZ, 1000000) == 0 && v1->tsc_ratio == 1ull << (bits - 1u) &&
+              (v1->dirty & KVM_PART_TSC) && !v1->tsc_catchup,
+          "a rate below the host's is a ratio below 1, loaded before the next entry");
+    CHECK(fdio(fd1, KVM_SET_TSC_KHZ, 2000100) == 0 && v1->tsc_ratio == 0 &&
+              fdio(fd1, KVM_GET_TSC_KHZ, 0) == 2000100,
+          "a rate within the tolerance is not scaled");
+    CHECK(fdio(fd1, KVM_SET_TSC_KHZ, 0) == 0 && fdio(fd1, KVM_GET_TSC_KHZ, 0) == 2000000,
+          "0 kHz is the host's rate");
+    fdclose(fd1);
+    fdclose(fd0);
+    fdclose(vm);
+    scale_bits = 0;
+}
+
+/** KVM_SET_TSC_KHZ and KVM_GET_TSC_KHZ of a VM and of a vCPU, with
+ * KVM_CAP_TSC_CONTROL and KVM_CAP_VM_TSC_CONTROL, as tsc_scaling_sync
+ * and Linux's kvm_set_tsc_khz have them: without scaling, with SVM's
+ * ratio and with VMX's. */
+static void tsc_rows(void)
+{
+    tick_counts = 2000000;
+    vclock_on = 1;
+    tsc_unscaled_rows();
+    tsc_scaled_rows(32, 0x12c3f2d3cull, 511999999u);
+    tsc_scaled_rows(48, 0x12c3f2d3c792dull, 0x7FFFFFFFu);
+    CHECK(live == 0, "the VMs free every allocation");
+    tick_counts = 0;
+    vclock_on = 0;
+}
+
+/** KVM_GET_STATS_FD of a VM and of a vCPU, as kvm_binary_stats_test reads
+ * them: several files at once, read after the VM's own descriptors closed. */
+static void stats_rows(void)
+{
+    int before = live, vm, vcpu, vm_stats, vm_again, vcpu_stats;
+    uint8_t byte[10];
+
+    caller.pid = 321;
+    vm = dev(KVM_CREATE_VM, 0);
+    vcpu = fdio(vm, KVM_CREATE_VCPU, 7);
+    CHECK(sizeof(struct kvm_stats_header) == 24 &&
+              __builtin_offsetof(struct kvm_stats_desc, name) == 16 &&
+              sizeof(struct kvm_stats_desc) == 16 + KVM_STATS_NAME_SIZE &&
+              KVM_GET_STATS_FD == 0xAECE,
+          "the header and KVM_GET_STATS_FD are Linux's, and a descriptor is Linux's 16 bytes "
+          "and a name of 48, 64 bytes of the file");
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_BINARY_STATS_FD) == 1 &&
+              fdio(vm, KVM_CHECK_EXTENSION, KVM_CAP_BINARY_STATS_FD) == 1,
+          "KVM_CAP_BINARY_STATS_FD");
+    vm_stats = fdio(vm, KVM_GET_STATS_FD, 0);
+    vm_again = fdio(vm, KVM_GET_STATS_FD, 0);
+    vcpu_stats = fdio(vcpu, KVM_GET_STATS_FD, 0);
+    CHECK(vm_stats > vcpu && vm_again > vm_stats && vcpu_stats > vm_again &&
+              entries[vm_stats].type == FD_TYPE_ANON &&
+              entries[vm_stats].flags == (FD_FLAG_READ | FD_FLAG_CLOEXEC),
+          "a descriptor each, read-only and close-on-exec");
+    CHECK(strcmp(((struct anon_obj *)entries[vm_stats].priv)->name, "kvm-vm-stats") == 0 &&
+              strcmp(((struct anon_obj *)entries[vcpu_stats].priv)->name, "kvm-vcpu-stats:7") == 0,
+          "anon_inode:kvm-vm-stats and anon_inode:kvm-vcpu-stats:ID");
+    CHECK(stats_file_ok(vm_stats, "kvm-321", 15, KVM_VM_STATS) && KVM_VM_STATS == 15,
+          "the VM's file: Linux's 15 statistics, read at any offset");
+    CHECK(stats_file_ok(vcpu_stats, "kvm-321/vcpu-7", 45, KVM_VCPU_STATS) && KVM_VCPU_STATS == 138,
+          "the vCPU's file: Linux's 45 statistics in 138 values");
+    CHECK(stat_of(vm_stats, "pages_4k") == 0 && stat_of(vcpu_stats, "exits") == 0 &&
+              stat_of(vcpu_stats, "no_such") == ~0ull,
+          "a statistic is found by its name");
+    stats_ofd.offset = 0;
+    entries[vm_stats].ofd = &stats_ofd;
+    CHECK(entries[vm_stats].ops->read(&entries[vm_stats], (char *)byte, 10) == 10 &&
+              stats_ofd.offset == 10 &&
+              entries[vm_stats].ops->llseek(&entries[vm_stats], 0, 0) == 10,
+          "a read moves the offset and a seek leaves it, as Linux's noop_llseek");
+    CHECK(stats_at(vm_stats, NULL, 8, 0) == -EFAULT, "a bad buffer is -EFAULT");
+
+    stats_count_rows(vcpu, vcpu_stats);
+
+    fdclose(vcpu);
+    fdclose(vm);
+    CHECK(live > before && stats_file_ok(vm_stats, "kvm-321", 15, KVM_VM_STATS) &&
+              stats_file_ok(vcpu_stats, "kvm-321/vcpu-7", 45, KVM_VCPU_STATS) &&
+              stat_of(vcpu_stats, "exits") == 5,
+          "the files hold the VM after its own descriptors close");
+    fdclose(vm_stats);
+    fdclose(vcpu_stats);
+    CHECK(live > before, "each file holds a reference");
+    fdclose(vm_again);
+    CHECK(live == before, "the last file's close frees the VM");
+}
+
+/** The rest of Linux's machine-check MSRs on the vCPU `fd`, `v`, with ten
+ * banks and MCG_CTL_P: the guest's and the caller's write of MCG_CAP,
+ * which Linux has no case for; P5_MC_ADDR and P5_MC_TYPE; and a bank's
+ * CTL2 without MCG_CMCI_P, as Linux's get_msr_mce and set_msr_mce. */
+static void mce_more_rows(struct kvm_vcpu *v, int fd)
+{
+    uint64_t value;
+
+    CHECK(kvm_msr_set(v, 0x179, MCG_CTL_P | 2, 0) == KVM_MSR_UNKNOWN &&
+              v->mcg_cap == (MCG_CTL_P | 10),
+          "the guest's write of MCG_CAP is an unknown MSR's");
+    CHECK(kvm_msr_set(v, 0x179, MCG_CTL_P | 2, 1) == KVM_MSR_UNKNOWN &&
+              kvm_msr_set(v, 0x179, 0, 1) == KVM_MSR_UNKNOWN && set_msr(fd, 0x179, 0) == 0 &&
+              v->mcg_cap == (MCG_CTL_P | 10),
+          "the caller's write of MCG_CAP, 0 too, is an unknown MSR's");
+    value = 1;
+    CHECK(kvm_msr_get(v, 0, &value, 0) == 0 && value == 0 && kvm_msr_get(v, 1, &value, 1) == 0 &&
+              value == 0 && kvm_msr_set(v, 0, 0, 0) == KVM_MSR_UNKNOWN,
+          "P5_MC_ADDR and P5_MC_TYPE read 0 and take no write");
+    value = 1;
+    CHECK(kvm_msr_get(v, 0x289, &value, 1) == 0 && value == 0 && set_msr(fd, 0x289, 0) == 1 &&
+              set_msr(fd, 0x289, 1) == 0 && kvm_msr_get(v, 0x289, &value, 0) == KVM_MSR_INVAL &&
+              kvm_msr_set(v, 0x289, 0, 0) == KVM_MSR_INVAL &&
+              kvm_msr_get(v, 0x280 + 10, &value, 1) == KVM_MSR_INVAL,
+          "a bank's CTL2 without MCG_CMCI_P is the caller's 0 and the guest's #GP, and past the "
+          "count is refused");
+}
+
+/**
+ * The machine-check MSRs, HWCR and POWER_CTL as the caller and the guest
+ * reach them, by Linux's host_initiated: MCG_CTL without MCG_CTL_P, which
+ * state_test saves and restores; each bit of HWCR on an Intel model, as
+ * hwcr_msr_test sets it; and a bank's STATUS, which the guest writes
+ * nonzero only on AMD with McStatusWrEn.
+ */
+static void mce_hwcr_rows(void)
+{
+    const uint64_t legal = (1ull << 3) | (1ull << 6) | (1ull << 8) | (1ull << 18) | (1ull << 24);
+    const uint64_t valid = (1ull << 18) | (1ull << 24);
+    int vm = dev(KVM_CREATE_VM, 0), fd = fdio(vm, KVM_CREATE_VCPU, 0);
+    struct kvm_vcpu *v = (struct kvm_vcpu *)entries[fd].priv;
+    uint64_t value = 1, val;
+    uint32_t bit;
+    int32_t r;
+    int ok = 1;
+
+    CHECK(!(v->mcg_cap & MCG_CTL_P) && get_msr(fd, 0x17B, &value) == 1 && value == 0,
+          "the caller reads MCG_CTL without MCG_CTL_P, as state_test saves it");
+    CHECK(set_msr(fd, 0x17B, 0) == 1 && set_msr(fd, 0x17B, ~0ull) == 0,
+          "and writes 0 to it, but not all ones");
+    CHECK(kvm_msr_get(v, 0x17B, &value, 0) == KVM_MSR_INVAL &&
+              kvm_msr_set(v, 0x17B, 0, 0) == KVM_MSR_INVAL,
+          "the guest neither reads nor writes it");
+    for (bit = 0; bit < 64; bit++) {
+        val = 1ull << bit;
+        r = set_msr(fd, 0xC0010015u, val);
+        ok &= (val & ~legal) ? r == 0 : r == 1;
+        ok &= get_msr(fd, 0xC0010015u, &value) == 1 && value == (val & valid);
+        ok &= set_msr(fd, 0xC0010015u, 0) == 1;
+    }
+    CHECK(ok, "HWCR keeps McStatusWrEn and TscFreqSel, drops three bits and refuses the rest");
+    CHECK(set_msr(fd, 0x1FC, 0x1234) == 1 && get_msr(fd, 0x1FC, &value) == 1 && value == 0x1234 &&
+              kvm_msr_get(v, 0x1FC, &value, 0) == 0 && value == 0x1234,
+          "POWER_CTL keeps what is written, and the guest reads it");
+
+    value = MCG_CTL_P | 10;
+    CHECK(fdio(fd, KVM_X86_SETUP_MCE, (uintptr_t)&value) == 0, "KVM_X86_SETUP_MCE, 10 banks");
+    CHECK(kvm_msr_set(v, 0x401, 5, 0) == KVM_MSR_INVAL && kvm_msr_set(v, 0x401, 0, 0) == 0 &&
+              set_msr(fd, 0x401, 5) == 1,
+          "the guest only clears a bank's STATUS, which the caller writes as it likes");
+    CHECK(set_msr(fd, 0xC0010015u, 1ull << 18) == 1 && kvm_msr_set(v, 0x401, 5, 0) == KVM_MSR_INVAL,
+          "McStatusWrEn does not let an Intel guest write it");
+    k_memset(CPUID_ENTRIES, 0, sizeof(*CPUID_ENTRIES));
+    CPUID_ENTRIES[0].eax = 0xD;
+    CPUID_ENTRIES[0].ebx = 0x68747541u; /* "AuthenticAMD" */
+    CPUID_ENTRIES[0].edx = 0x69746E65u;
+    CPUID_ENTRIES[0].ecx = 0x444D4163u;
+    buf.cpuid.nent = 1;
+    CHECK(fdio(fd, KVM_SET_CPUID2, (uintptr_t)&buf) == 0 && kvm_msr_set(v, 0x401, 6, 0) == 0 &&
+              v->mce_banks[1] == 6,
+          "an AMD guest with McStatusWrEn does, as Linux's can_set_mci_status");
+    CHECK(kvm_msr_get(v, 0x400 + 4 * 10, &value, 1) == KVM_MSR_INVAL &&
+              kvm_msr_get(v, 0x400 + 4 * 32, &value, 1) == KVM_MSR_UNKNOWN,
+          "a bank past MCG_CAP's count is refused, one past KVM's 32 unknown");
+    mce_more_rows(v, fd);
+    fdclose(fd);
+    fdclose(vm);
+}
+
+/* The bitmaps of user_msr_rows' filter: reads of 0 to 0x2FFF but 0x10,
+ * writes of them but POWER_CTL, and one MSR at 0xDEADBEEF. */
+static uint8_t read_bits[KVM_MSR_FILTER_MAX_BITMAP_SIZE],
+    write_bits[KVM_MSR_FILTER_MAX_BITMAP_SIZE];
+static uint64_t one_bit = 1;
+
+/** KVM_X86_SET_MSR_FILTER of `f` on the VM `vm`. */
+static int32_t set_filter(int vm, struct kvm_msr_filter *f)
+{
+    return fdio(vm, KVM_X86_SET_MSR_FILTER, (uintptr_t)f);
+}
+
+/** KVM_CAP_X86_USER_SPACE_MSR's and KVM_X86_SET_MSR_FILTER's flags, as
+ * userspace_msr_exit_test's user_exit_msr_flags tries each bit. */
+static void user_msr_flag_rows(int vm)
+{
+    struct kvm_msr_filter f;
+    uint64_t deny = 0;
+    uint32_t i;
+    int32_t r;
+    int ok = 1;
+
+    CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_X86_USER_SPACE_MSR) == 1 &&
+              dev(KVM_CHECK_EXTENSION, KVM_CAP_X86_MSR_FILTER) == 1,
+          "KVM_CAP_X86_USER_SPACE_MSR and KVM_CAP_X86_MSR_FILTER");
+    for (i = 0; i < 64; i++) {
+        r = vm_cap(vm, KVM_CAP_X86_USER_SPACE_MSR, 1ull << i);
+        ok &= (1ull << i) & KVM_MSR_EXIT_REASON_VALID_MASK ? r == 0 : r == -EINVAL;
+    }
+    CHECK(ok, "KVM_CAP_X86_USER_SPACE_MSR takes INVAL, UNKNOWN and FILTER alone");
+    k_memset(&f, 0, sizeof(f));
+    f.ranges[0].flags = KVM_MSR_FILTER_READ;
+    f.ranges[0].nmsrs = 1;
+    f.ranges[0].bitmap = (uintptr_t)&deny;
+    for (i = 0; i < 32; i++) {
+        f.flags = 1u << i;
+        r = set_filter(vm, &f);
+        ok &= (1u << i) & KVM_MSR_FILTER_VALID_MASK ? r == 0 : r == -EINVAL;
+    }
+    f.flags = KVM_MSR_FILTER_DEFAULT_ALLOW;
+    for (i = 0; i < 32; i++) {
+        f.ranges[0].flags = 1u << i;
+        r = set_filter(vm, &f);
+        ok &= (1u << i) & KVM_MSR_FILTER_RANGE_VALID_MASK ? r == 0 : r == -EINVAL;
+    }
+    CHECK(ok, "KVM_X86_SET_MSR_FILTER takes DEFAULT_DENY, and READ and WRITE in a range");
+    k_memset(&f, 0, sizeof(f));
+    f.flags = KVM_MSR_FILTER_DEFAULT_DENY;
+    CHECK(set_filter(vm, &f) == -EINVAL, "a filter that denies all with no range");
+    f.ranges[0].flags = KVM_MSR_FILTER_READ;
+    f.ranges[0].nmsrs = KVM_MSR_FILTER_MAX_BITMAP_SIZE * 8u + 1u;
+    f.ranges[0].bitmap = (uintptr_t)read_bits;
+    CHECK(set_filter(vm, &f) == -EINVAL, "a bitmap past KVM_MSR_FILTER_MAX_BITMAP_SIZE");
+}
+
+/**
+ * The guest's RDMSR and WRMSR under KVM_X86_SET_MSR_FILTER and
+ * KVM_CAP_X86_USER_SPACE_MSR, as userspace_msr_exit_test's filter_deny
+ * sets them: which accesses the filter allows, the request each vCPU gets
+ * when it changes, and the exits through the run page with the caller's
+ * answers at the next KVM_RUN, a read's value or #GP.
+ */
+static void user_msr_rows(void)
+{
+    int vm = dev(KVM_CREATE_VM, 0), fd = fdio(vm, KVM_CREATE_VCPU, 0);
+    struct kvm_vcpu *v = (struct kvm_vcpu *)entries[fd].priv;
+    struct kvm_run *run = run_of(fd);
+    struct kvm_msr_filter f;
+    struct kvm_regs regs;
+
+    user_msr_flag_rows(vm);
+    k_memset(read_bits, 0xFF, sizeof(read_bits));
+    k_memset(write_bits, 0xFF, sizeof(write_bits));
+    read_bits[0x10 / 8] &= (uint8_t)~(1u << (0x10 % 8));
+    write_bits[0x1FC / 8] &= (uint8_t)~(1u << (0x1FC % 8));
+    k_memset(&f, 0, sizeof(f));
+    f.flags = KVM_MSR_FILTER_DEFAULT_DENY;
+    f.ranges[0].flags = KVM_MSR_FILTER_READ;
+    f.ranges[0].nmsrs = KVM_MSR_FILTER_MAX_BITMAP_SIZE * 8u;
+    f.ranges[0].bitmap = (uintptr_t)read_bits;
+    f.ranges[1].flags = KVM_MSR_FILTER_WRITE;
+    f.ranges[1].nmsrs = KVM_MSR_FILTER_MAX_BITMAP_SIZE * 8u;
+    f.ranges[1].bitmap = (uintptr_t)write_bits;
+    f.ranges[2].flags = KVM_MSR_FILTER_READ | KVM_MSR_FILTER_WRITE;
+    f.ranges[2].nmsrs = 1;
+    f.ranges[2].base = 0xDEADBEEFu;
+    f.ranges[2].bitmap = (uintptr_t)&one_bit;
+    v->requests = 0;
+    CHECK(set_filter(vm, &f) == 0 && (v->requests & KVM_REQ_MSR_FILTER),
+          "a new filter asks each vCPU to bring its bitmap up to date");
+    CHECK(!kvm_msr_allowed(v, 0x10, 0) && kvm_msr_allowed(v, 0x11, 0) &&
+              kvm_msr_allowed(v, 0x10, 1) && !kvm_msr_allowed(v, 0x1FC, 1) &&
+              kvm_msr_allowed(v, 0x1FC, 0),
+          "a range's bitmap decides the accesses its flags name");
+    CHECK(!kvm_msr_allowed(v, 0xC0000100u, 0) && kvm_msr_allowed(v, 0xDEADBEEFu, 1) &&
+              kvm_msr_allowed(v, 0x830, 1),
+          "an MSR no range names is denied, but the x2APIC's are never filtered");
+
+    CHECK(vm_cap(vm, KVM_CAP_X86_USER_SPACE_MSR,
+                 KVM_MSR_EXIT_REASON_UNKNOWN | KVM_MSR_EXIT_REASON_FILTER) == 0 &&
+              kvm_msr_user_exit(v, 0x10, 0, 0, KVM_MSR_INVAL, 2) == 0,
+          "a failure whose reason the caller did not ask for stays #GP");
+    script_len = 0;
+    script_at = 0;
+    CHECK(kvm_msr_user_exit(v, 0xDEADBEEFu, 0, 0, KVM_MSR_UNKNOWN, 2) == 1,
+          "an unknown MSR's read goes to the caller");
+    script[script_len++] = v->exit;
+    CHECK(kvm_msr_user_exit(v, 0x1FC, 1, 0x1234, KVM_MSR_FILTERED, 3) == 1, "and a filtered write");
+    script[script_len++] = v->exit;
+    refusing = 0;
+    filter_changes = 0;
+    v->regs.rip = 0x1000;
+    CHECK(fdio(fd, KVM_RUN, 0) == 0 && run->exit_reason == KVM_EXIT_X86_RDMSR &&
+              run->u.msr.index == 0xDEADBEEFu && run->u.msr.reason == KVM_MSR_EXIT_REASON_UNKNOWN &&
+              run->u.msr.error == 0 && filter_changes == 1,
+          "KVM_EXIT_X86_RDMSR with its index and reason, after the bitmap was brought up to date");
+    run->u.msr.data = 0x1122334455667788ull;
+    CHECK(fdio(fd, KVM_RUN, 0) == 0 && run->exit_reason == KVM_EXIT_X86_WRMSR &&
+              run->u.msr.index == 0x1FC && run->u.msr.data == 0x1234 &&
+              run->u.msr.reason == KVM_MSR_EXIT_REASON_FILTER,
+          "KVM_EXIT_X86_WRMSR with the value written");
+    CHECK(fdio(fd, KVM_GET_REGS, (uintptr_t)&regs) == 0 && regs.rax == 0x55667788u &&
+              regs.rdx == 0x11223344u && regs.rip == 0x1002,
+          "the caller's answer to the read is in EDX:EAX, past the instruction");
+    run->u.msr.error = 1;
+    queued = -1;
+    CHECK(fdio(fd, KVM_RUN, 0) == -EIO && queued == 13 && v->regs.rip == 0x1002,
+          "the caller's error is #GP, at the instruction");
+    refusing = 1;
+    fdclose(fd);
+    fdclose(vm);
+    CHECK(live == 0, "the VM frees its filter");
+}
+
+/** The entry of `buf`'s first `n` CPUID entries for `function` and
+ * `index`, or NULL. */
+static struct kvm_cpuid_entry2 *buf_entry(uint32_t n, uint32_t function, uint32_t index)
+{
+    uint32_t i;
+
+    for (i = 0; i < n; i++) {
+        if (CPUID_ENTRIES[i].function == function && CPUID_ENTRIES[i].index == index) {
+            return &CPUID_ENTRIES[i];
+        }
+    }
+    return NULL;
+}
+
+/** Leaf 0xD subleaf `index`'s EBX in `v`'s CPUID, or ~0. */
+static uint32_t vcpu_d_ebx(const struct kvm_vcpu *v, uint32_t index)
+{
+    const struct kvm_cpuid_entry2 *e = kvm_cpuid_find(v, 0xD, index);
+
+    return e ? e->ebx : ~0u;
+}
+
+/** IA32_XSS on `v`, as Linux 6.12's: the caller reads 0 and writes 0
+ * alone; a guest whose CPUID has XSAVES, `xsaves`, does the same and its
+ * nonzero write is #GP, and to one without it every access is #GP. */
+static void xss_rows(struct kvm_vcpu *v, int xsaves)
+{
+    uint64_t value = 1;
+
+    CHECK(kvm_msr_get(v, 0xDA0, &value, 1) == 0 && value == 0 && kvm_msr_set(v, 0xDA0, 0, 1) == 0 &&
+              kvm_msr_set(v, 0xDA0, 1, 1) == KVM_MSR_INVAL,
+          "the caller reads IA32_XSS as 0 and writes 0 to it, and nothing else");
+    value = 1;
+    if (xsaves) {
+        CHECK(kvm_msr_get(v, 0xDA0, &value, 0) == 0 && value == 0 &&
+                  kvm_msr_set(v, 0xDA0, 0, 0) == 0 && kvm_msr_set(v, 0xDA0, 1, 0) == KVM_MSR_INVAL,
+              "a guest whose CPUID has XSAVES reads 0 and writes 0, and a nonzero write is #GP");
+    } else {
+        CHECK(kvm_msr_get(v, 0xDA0, &value, 0) == KVM_MSR_INVAL &&
+                  kvm_msr_set(v, 0xDA0, 0, 0) == KVM_MSR_INVAL,
+              "IA32_XSS is #GP to a guest whose CPUID lacks XSAVES");
+    }
+}
+
+/**
+ * XSAVES as KVM offers it, as Linux 6.12: without XSAVES and XSAVEC
+ * subleaf 1 offers XSAVEOPT alone with EBX 0; with both and a backend
+ * that lets a guest run XSAVES it offers both, with EBX the compacted size
+ * of the XCR0 KVM supports, and with a backend that does not, XSAVEC
+ * alone. A vCPU's subleaf 1 EBX follows its XCR0 from
+ * the reset through KVM_SET_CPUID2 and KVM_SET_XCRS; and IA32_XSS's
+ * rules (`xss_rows`) before and after its CPUID has XSAVES.
+ */
+static void xsaves_rows(void)
+{
+    struct kvm_cpuid_entry2 *d1;
+    struct kvm_xcrs xcrs;
+    struct kvm_vcpu *v;
+    int vm, fd;
+    uint32_t n;
+
+    model_xsaves = 0;
+    n = pv_cpuid();
+    d1 = buf_entry(n, 0xD, 1);
+    CHECK(d1 && d1->eax == 0x1 && d1->ebx == 0,
+          "without XSAVES subleaf 1 offers XSAVEOPT alone, with EBX 0");
+    model_xsaves = 1;
+    n = pv_cpuid();
+    d1 = buf_entry(n, 0xD, 1);
+    CHECK(d1 && d1->eax == 0xF && d1->ebx == 832,
+          "with XSAVEC and XSAVES subleaf 1 offers both, with EBX 832 for x87, SSE and AVX");
+    backend_no_xsaves = 1;
+    n = pv_cpuid();
+    d1 = buf_entry(n, 0xD, 1);
+    CHECK(d1 && d1->eax == 0x7 && d1->ebx == 832,
+          "a backend that lets no guest run XSAVES keeps it out of subleaf 1, and XSAVEC in");
+    backend_no_xsaves = 0;
+    n = pv_cpuid();
+    vm = dev(KVM_CREATE_VM, 0);
+    fd = fdio(vm, KVM_CREATE_VCPU, 0);
+    v = (struct kvm_vcpu *)entries[fd].priv;
+    xss_rows(v, 0);
+    CHECK(fdio(fd, KVM_SET_CPUID2, (uintptr_t)&buf) == 0 && vcpu_d_ebx(v, 0) == 576 &&
+              vcpu_d_ebx(v, 1) == 576,
+          "KVM_SET_CPUID2 gives leaf 0xD the sizes of the reset's XCR0, x87's 576");
+    xss_rows(v, 1);
+    CHECK(fdio(fd, KVM_GET_XCRS, (uintptr_t)&xcrs) == 0, "KVM_GET_XCRS");
+    xcrs.xcrs[0].value = 7;
+    CHECK(fdio(fd, KVM_SET_XCRS, (uintptr_t)&xcrs) == 0 && vcpu_d_ebx(v, 0) == 832 &&
+              vcpu_d_ebx(v, 1) == 832,
+          "KVM_SET_XCRS of x87, SSE and AVX makes both sizes 832");
+    xcrs.xcrs[0].value = 3;
+    CHECK(fdio(fd, KVM_SET_XCRS, (uintptr_t)&xcrs) == 0 && vcpu_d_ebx(v, 0) == 576 &&
+              vcpu_d_ebx(v, 1) == 576,
+          "and of x87 and SSE 576 again");
+    fdclose(fd);
+    fdclose(vm);
+    model_xsaves = 0;
+}
+
+/** The capabilities and bounds Linux's selftests ask for, each in VMs of
+ * its own. */
+static void selftest_rows(void)
+{
+    tsc_rows();
+    stats_rows();
+    pre_fault_rows();
+    bound_rows();
+    cr4_rows();
+    vm_cap_rows();
+    feature_msr_rows();
+    mce_hwcr_rows();
+    xsaves_rows();
+    user_msr_rows();
+    attr_rows();
+    sync_rows();
+}
+
 /** Run the rows; 0 when every check passed, 1 otherwise. */
 int main(void)
 {
@@ -1691,6 +3354,8 @@ int main(void)
     exit_rows(vcpu);
     state_rows(vcpu);
     vm_rows(vm, vcpu);
+    pv_rows();
+    selftest_rows();
     printf("kvm-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
     return failures ? 1 : 0;
 }

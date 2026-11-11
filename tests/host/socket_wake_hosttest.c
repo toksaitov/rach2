@@ -93,6 +93,15 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return -EINTR;
 }
 
+/** Make `l` free: no row reads a stream, which alone takes it. */
+void sleep_lock_init(struct sleep_lock *l, struct sleep_lock_record *record, int flags)
+{
+    (void)record;
+    l->holder = -1;
+    l->depth = 0;
+    l->flags = flags;
+}
+
 /** The wall clock `sock_dgq_put` stamps a datagram with: the epoch, since
  * no test here reads a timestamp. */
 void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)

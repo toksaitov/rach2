@@ -21,68 +21,72 @@
 
 #include "../evdev.h"
 #include "../input.h"
+#include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../mouse.h"
 
 /* Usage pages and usages, Linux's HID_UP_ and HID_GD_ values. */
-#define HID_USAGE_PAGE      0xFFFF0000u
-#define HID_USAGE           0x0000FFFFu
-#define HID_UP_UNDEFINED    0x00000000u
-#define HID_UP_GENDESK      0x00010000u
-#define HID_UP_SIMULATION   0x00020000u
-#define HID_UP_GENDEVCTRLS  0x00060000u
-#define HID_UP_KEYBOARD     0x00070000u
-#define HID_UP_LED          0x00080000u
-#define HID_UP_BUTTON       0x00090000u
-#define HID_UP_TELEPHONY    0x000B0000u
-#define HID_UP_CONSUMER     0x000C0000u
-#define HID_UP_DIGITIZER    0x000D0000u
-#define HID_UP_PID          0x000F0000u
-#define HID_UP_BATTERY      0x00850000u
-#define HID_UP_CAMERA       0x00900000u
-#define HID_UP_CUSTOM       0x00FF0000u
-#define HID_UP_MSVENDOR     0xFF000000u
-#define HID_UP_HPVENDOR2    0xFF010000u
-#define HID_UP_LOGIVENDOR2  0xFF090000u
-#define HID_UP_LOGIVENDOR3  0xFF430000u
-#define HID_UP_HPVENDOR     0xFF7F0000u
-#define HID_UP_LOGIVENDOR   0xFFBC0000u
-#define HID_GD_POINTER      0x00010001u
-#define HID_GD_MOUSE        0x00010002u
-#define HID_GD_JOYSTICK     0x00010004u
-#define HID_GD_GAMEPAD      0x00010005u
-#define HID_GD_KEYBOARD     0x00010006u
-#define HID_GD_KEYPAD       0x00010007u
-#define HID_GD_MULTIAXIS    0x00010008u
-#define HID_GD_WIRELESS     0x0001000Cu
-#define HID_GD_SYSMULTIAXIS 0x0001000Eu
-#define HID_GD_X            0x00010030u
-#define HID_GD_Y            0x00010031u
-#define HID_GD_Z            0x00010032u
-#define HID_GD_RX           0x00010033u
-#define HID_GD_RY           0x00010034u
-#define HID_GD_RZ           0x00010035u
-#define HID_GD_SLIDER       0x00010036u
-#define HID_GD_DIAL         0x00010037u
-#define HID_GD_WHEEL        0x00010038u
-#define HID_GD_HATSWITCH    0x00010039u
-#define HID_GD_START        0x0001003Du
-#define HID_GD_SELECT       0x0001003Eu
-#define HID_GD_RESOLUTION   0x00010048u
-#define HID_GD_SYSCONTROL   0x00010080u
-#define HID_GD_UP           0x00010090u
-#define HID_GD_DOWN         0x00010091u
-#define HID_GD_RIGHT        0x00010092u
-#define HID_GD_LEFT         0x00010093u
-#define HID_GD_RFKILL_BTN   0x000100C6u
-#define HID_CP_CONSUMER     0x000C0001u
-#define HID_CP_PROGBUTTONS  0x000C0003u
-#define HID_DG_DIGITIZER    0x000D0001u
-#define HID_DG_PEN          0x000D0002u
-#define HID_DG_TOUCHSCREEN  0x000D0004u
-#define HID_DG_TOUCHPAD     0x000D0005u
-#define HID_DG_WHITEBOARD   0x000D0006u
-#define HID_DG_STYLUS       0x000D0020u
+#define HID_USAGE_PAGE                0xFFFF0000u
+#define HID_USAGE                     0x0000FFFFu
+#define HID_UP_UNDEFINED              0x00000000u
+#define HID_UP_GENDESK                0x00010000u
+#define HID_UP_SIMULATION             0x00020000u
+#define HID_UP_GENDEVCTRLS            0x00060000u
+#define HID_UP_KEYBOARD               0x00070000u
+#define HID_UP_LED                    0x00080000u
+#define HID_UP_BUTTON                 0x00090000u
+#define HID_UP_TELEPHONY              0x000B0000u
+#define HID_UP_CONSUMER               0x000C0000u
+#define HID_UP_DIGITIZER              0x000D0000u
+#define HID_UP_PID                    0x000F0000u
+#define HID_UP_BATTERY                0x00850000u
+#define HID_UP_CAMERA                 0x00900000u
+#define HID_UP_CUSTOM                 0x00FF0000u
+#define HID_UP_MSVENDOR               0xFF000000u
+#define HID_UP_HPVENDOR2              0xFF010000u
+#define HID_UP_LOGIVENDOR2            0xFF090000u
+#define HID_UP_LOGIVENDOR3            0xFF430000u
+#define HID_UP_HPVENDOR               0xFF7F0000u
+#define HID_UP_LOGIVENDOR             0xFFBC0000u
+#define HID_DC_BATTERYSTRENGTH        0x00060020u
+#define HID_BAT_CHARGING              0x00850044u
+#define HID_BAT_ABSOLUTESTATEOFCHARGE 0x00850065u
+#define HID_GD_POINTER                0x00010001u
+#define HID_GD_MOUSE                  0x00010002u
+#define HID_GD_JOYSTICK               0x00010004u
+#define HID_GD_GAMEPAD                0x00010005u
+#define HID_GD_KEYBOARD               0x00010006u
+#define HID_GD_KEYPAD                 0x00010007u
+#define HID_GD_MULTIAXIS              0x00010008u
+#define HID_GD_WIRELESS               0x0001000Cu
+#define HID_GD_SYSMULTIAXIS           0x0001000Eu
+#define HID_GD_X                      0x00010030u
+#define HID_GD_Y                      0x00010031u
+#define HID_GD_Z                      0x00010032u
+#define HID_GD_RX                     0x00010033u
+#define HID_GD_RY                     0x00010034u
+#define HID_GD_RZ                     0x00010035u
+#define HID_GD_SLIDER                 0x00010036u
+#define HID_GD_DIAL                   0x00010037u
+#define HID_GD_WHEEL                  0x00010038u
+#define HID_GD_HATSWITCH              0x00010039u
+#define HID_GD_START                  0x0001003Du
+#define HID_GD_SELECT                 0x0001003Eu
+#define HID_GD_RESOLUTION             0x00010048u
+#define HID_GD_SYSCONTROL             0x00010080u
+#define HID_GD_UP                     0x00010090u
+#define HID_GD_DOWN                   0x00010091u
+#define HID_GD_RIGHT                  0x00010092u
+#define HID_GD_LEFT                   0x00010093u
+#define HID_GD_RFKILL_BTN             0x000100C6u
+#define HID_CP_CONSUMER               0x000C0001u
+#define HID_CP_PROGBUTTONS            0x000C0003u
+#define HID_DG_DIGITIZER              0x000D0001u
+#define HID_DG_PEN                    0x000D0002u
+#define HID_DG_TOUCHSCREEN            0x000D0004u
+#define HID_DG_TOUCHPAD               0x000D0005u
+#define HID_DG_WHITEBOARD             0x000D0006u
+#define HID_DG_STYLUS                 0x000D0020u
 
 /* The event codes this file names beyond evdev.h's, Linux's values. */
 #define KEY_ESC            1
@@ -401,10 +405,12 @@ static uint8_t *bits_of(struct hid_input *in, unsigned type, unsigned *max)
 }
 
 /* What `configure_usage`'s cases decide: a mapping, with the code's bit
- * cleared first or not, or none. */
+ * cleared first or not, none, or a battery usage, which Linux types EV_PWR
+ * and gives its power supply instead of an event. */
 #define MAP_NONE  0
 #define MAP_SET   1
 #define MAP_CLEAR 2
+#define MAP_PWR   3
 
 #define COUNT(a) (sizeof(a) / sizeof((a)[0]))
 
@@ -617,7 +623,11 @@ static int map_desktop(struct hid_input *in, struct hid_field *f, struct hid_usa
         *type = relative ? EV_REL : EV_ABS;
         return MAP_SET;
     case HID_GD_HATSWITCH:
-        u->hat = 1;
+        /* Linux's hat_min < hat_max, kept in 16 bits: a range stored
+         * backwards, such as 0 to 0xFFFFFFFF, or one whose ends cut to 16
+         * bits are not in order, such as INT32_MIN to INT32_MAX, is an
+         * axis. */
+        u->hat = (int16_t)f->logical_minimum < (int16_t)f->logical_maximum;
         *type = EV_ABS;
         *code = ABS_HAT0X;
         return MAP_SET;
@@ -717,7 +727,7 @@ static int map_keys_page(struct hid_input *in, uint32_t page, uint32_t id, unsig
  * Decide what `u`, a usage of field `f` on input device `in`, maps to, as
  * the page cases of Linux's `hidinput_configure_usage`. Sets `*type` and
  * `*code`, and may add EV_REP or a second relative axis to `in`, or set
- * `u`'s hat. Returns MAP_SET, MAP_CLEAR or MAP_NONE.
+ * `u`'s hat. Returns MAP_SET, MAP_CLEAR, MAP_NONE or MAP_PWR.
  */
 static int map_usage(struct hid_dev *hid, struct hid_input *in, struct hid_field *f,
                      struct hid_usage *u, unsigned *type, unsigned *code)
@@ -730,13 +740,20 @@ static int map_usage(struct hid_dev *hid, struct hid_input *in, struct hid_field
     switch (page) {
     case HID_UP_UNDEFINED:
     case HID_UP_DIGITIZER:
-    case HID_UP_GENDEVCTRLS:
-    case HID_UP_BATTERY:
     case HID_UP_MSVENDOR:
     case HID_UP_LOGIVENDOR:
     case HID_UP_LOGIVENDOR2:
     case HID_UP_LOGIVENDOR3:
         return MAP_NONE;
+    case HID_UP_GENDEVCTRLS:
+    case HID_UP_BATTERY:
+        /* Battery Strength, Absolute State Of Charge and Charging feed
+         * Linux's power supply, which has no event; the rest are unknown. */
+        if (u->hid == HID_DC_BATTERYSTRENGTH || u->hid == HID_BAT_ABSOLUTESTATEOFCHARGE ||
+            u->hid == HID_BAT_CHARGING) {
+            return MAP_PWR;
+        }
+        return map_unknown(f, report_type, type, code);
     case HID_UP_KEYBOARD:
         return map_keyboard(in, id, type, code);
     case HID_UP_BUTTON:
@@ -762,7 +779,8 @@ static int map_usage(struct hid_dev *hid, struct hid_input *in, struct hid_field
  * `in`, as Linux's `hidinput_configure_usage`: a constant field, an empty
  * one and a usage of an output field other than an LED map to nothing; a
  * code the input device has already is a duplicate and maps to nothing,
- * unless its case clears the bit first.
+ * unless its case clears the bit first; a battery usage is typed EV_PWR,
+ * which no event reports and the keymap skips.
  */
 static void configure_usage(struct hid_dev *hid, struct hid_input *in, struct hid_field *f,
                             struct hid_usage *u)
@@ -784,6 +802,10 @@ static void configure_usage(struct hid_dev *hid, struct hid_input *in, struct hi
         return;
     }
     how = map_usage(hid, in, f, u, &type, &code);
+    if (how == MAP_PWR) {
+        u->type = EV_PWR;
+        return;
+    }
     if (how == MAP_NONE) {
         return;
     }
@@ -817,6 +839,13 @@ static void configure_usage(struct hid_dev *hid, struct hid_input *in, struct hi
     }
 }
 
+/** `b - a` as Linux computes it, built with -fno-strict-overflow, so that
+ * a range as wide as INT32_MIN to INT32_MAX wraps instead of overflowing. */
+static int32_t wrap_sub(int32_t b, int32_t a)
+{
+    return (int32_t)((uint32_t)b - (uint32_t)a);
+}
+
 /**
  * An axis's resolution, in units per millimetre for a length and per radian
  * for an angle, from its logical and physical ranges and unit, as Linux's
@@ -825,8 +854,8 @@ static void configure_usage(struct hid_dev *hid, struct hid_input *in, struct hi
 static int32_t abs_resolution(const struct hid_field *f, unsigned code)
 {
     int32_t exponent = f->unit_exponent;
-    int32_t logical = f->logical_maximum - f->logical_minimum;
-    int32_t physical = f->physical_maximum - f->physical_minimum;
+    int32_t logical = wrap_sub(f->logical_maximum, f->logical_minimum);
+    int32_t physical = wrap_sub(f->physical_maximum, f->physical_minimum);
     int32_t prev;
 
     if (logical <= 0 || physical <= 0) {
@@ -1021,17 +1050,20 @@ static uint8_t input_index(struct hid_dev *hid, const struct hid_input *in)
 }
 
 /** The multiplier the Resolution Multiplier field `f` gives with its value
- * `v`, Linux's `hid_calculate_multiplier`. */
+ * `v`, Linux's `hid_calculate_multiplier`; the one quotient that traps on
+ * Linux, INT32_MIN over -1, gives 1. */
 static int calculate_multiplier(const struct hid_field *f, int32_t v)
 {
+    int32_t range = wrap_sub(f->logical_maximum, f->logical_minimum);
+    int32_t dist = wrap_sub(v, f->logical_minimum);
     int32_t m;
 
-    if (f->logical_maximum - f->logical_minimum == 0) {
+    if (range == 0 || (range == -1 && dist == -0x7fffffffL - 1)) {
         return 1;
     }
-    m = (v - f->logical_minimum) / (f->logical_maximum - f->logical_minimum) *
-            (f->physical_maximum - f->physical_minimum) +
-        f->physical_minimum;
+    m = (int32_t)((uint32_t)(dist / range) *
+                      (uint32_t)wrap_sub(f->physical_maximum, f->physical_minimum) +
+                  (uint32_t)f->physical_minimum);
     if (m == 0 || m > 255 || m < -255) {
         m = 1;
     }
@@ -1112,10 +1144,122 @@ static void setup_multipliers(struct hid_dev *hid, int use_max)
     }
 }
 
+/**
+ * The usage of report `r` of `hid` that keymap entry `ke` names, counting
+ * the places of the usages mapped to a key or to nothing in `*at` over the
+ * report's fields in turn. NULL when the report has none.
+ */
+static struct hid_usage *find_key_in(struct hid_dev *hid, uint32_t r,
+                                     const struct evdev_keymap_entry *ke, uint32_t *at)
+{
+    uint32_t i, j;
+
+    for (i = 0; i < hid->desc.nfields; i++) {
+        struct hid_field *f = field_at(hid, i);
+
+        if (f->report != r) {
+            continue;
+        }
+        for (j = 0; j < f->maxusage; j++) {
+            struct hid_usage *u = &usages_of(hid, f)[j];
+
+            if (u->type != EV_KEY && u->type != 0) {
+                continue;
+            }
+            if (ke->by_index ? *at == ke->index : u->hid == ke->scancode) {
+                return u;
+            }
+            ++*at;
+        }
+    }
+    return NULL;
+}
+
+/**
+ * The usage of `hid` that keymap entry `ke` names, as Linux's
+ * hidinput_find_key finds it: over the input reports, then the output
+ * reports, each in the order the descriptor first names it, and over each
+ * report's fields in turn, the usages mapped to a key or to nothing are
+ * counted, and the one at place `ke->index`, or with usage `ke->scancode`,
+ * is the entry, its place stored in `*index`. NULL for none.
+ */
+static struct hid_usage *find_key(struct hid_dev *hid, const struct evdev_keymap_entry *ke,
+                                  uint32_t *index)
+{
+    struct hid_usage *u;
+    uint32_t type, r, at = 0;
+
+    for (type = HID_INPUT_REPORT; type <= HID_OUTPUT_REPORT; type++) {
+        for (r = 0; r < hid->desc.nreports; r++) {
+            if (hid->desc.reports[r].type != type) {
+                continue;
+            }
+            u = find_key_in(hid, r, ke, &at);
+            if (u) {
+                *index = at;
+                return u;
+            }
+        }
+    }
+    return NULL;
+}
+
+/** EVIOCGKEYCODE of a HID device, Linux's hidinput_getkeycode: the entry's
+ * usage is its scan code, and an unmapped one has KEY_RESERVED. */
+static int keymap_get(void *ctx, struct evdev_keymap_entry *ke)
+{
+    struct hid_usage *u = find_key((struct hid_dev *)ctx, ke, &ke->index);
+
+    if (!u) {
+        return -EINVAL;
+    }
+    ke->scancode = u->hid;
+    ke->keycode = u->type == EV_KEY ? u->code : 0;
+    return 0;
+}
+
+/** EVIOCSKEYCODE of a HID device, Linux's hidinput_setkeycode: the usage
+ * becomes that key. */
+static int keymap_set(void *ctx, const struct evdev_keymap_entry *ke, uint16_t *old)
+{
+    uint32_t index;
+    struct hid_usage *u = find_key((struct hid_dev *)ctx, ke, &index);
+
+    if (!u) {
+        return -EINVAL;
+    }
+    *old = u->type == EV_KEY ? u->code : 0;
+    u->code = ke->keycode;
+    u->type = EV_KEY;
+    return 0;
+}
+
+/** Whether a usage of the HID device at `ctx` is mapped to key `code`. */
+static int keymap_maps(void *ctx, uint16_t code)
+{
+    struct hid_dev *hid = (struct hid_dev *)ctx;
+    uint32_t i, j;
+
+    for (i = 0; i < hid->desc.nfields; i++) {
+        struct hid_field *f = field_at(hid, i);
+
+        for (j = 0; j < f->maxusage; j++) {
+            const struct hid_usage *u = &usages_of(hid, f)[j];
+
+            if (u->type == EV_KEY && u->code == code &&
+                hid->desc.reports[f->report].type != HID_FEATURE_REPORT) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 /** Register input device `in` of `hid` with its capabilities, as Linux's
  * `input_register_device` takes what hid-input set. */
 static void register_input(struct hid_dev *hid, struct hid_input *in)
 {
+    struct evdev_keymap km;
     struct evdev *dev;
     uint32_t i, j;
     unsigned code;
@@ -1129,6 +1273,12 @@ static void register_input(struct hid_dev *hid, struct hid_input *in)
         evdev_describe(dev, hid->phys, test_bit(in->msc, MSC_SCAN) ? EVDEV_SCAN : 0);
     }
     in->dev = dev;
+    km.get = keymap_get;
+    km.set = keymap_set;
+    km.maps = keymap_maps;
+    km.ctx = hid;
+    evdev_set_keymap(dev, &km);
+    evdev_set_uniq(dev, hid->uniq);
     evdev_set_version(dev, hid->version);
     for (code = 0; code <= REL_MAX; code++) {
         if (test_bit(in->rel, code)) {
@@ -1156,7 +1306,7 @@ static void register_input(struct hid_dev *hid, struct hid_input *in)
                 continue;
             }
             if (f->application == HID_GD_GAMEPAD || f->application == HID_GD_JOYSTICK) {
-                evdev_set_abs(dev, u->code, a, b, (b - a) >> 8, (b - a) >> 4);
+                evdev_set_abs(dev, u->code, a, b, wrap_sub(b, a) >> 8, wrap_sub(b, a) >> 4);
             } else {
                 evdev_set_abs(dev, u->code, a, b, 0, 0);
             }
@@ -1331,6 +1481,22 @@ static void handle_scroll(struct hid_input *in, struct hid_usage *u, int32_t val
     input_event(in, EV_REL, u->code, hi_res, 0);
 }
 
+/**
+ * The direction, 1 to 8 or 0 for centred, of hat switch field `f` at
+ * `value`, Linux's `(value - hat_min) * 8 / (hat_max - hat_min + 1) + 1`,
+ * with its minimum and maximum cut to 16 bits as Linux keeps them, so that
+ * the divisor is from 2 to 65536, and the product wrapped to 32 bits as
+ * Linux, built with -fno-strict-overflow, wraps it. The caller centres a
+ * result past 8 or below 0.
+ */
+static int hat_direction(const struct hid_field *f, int32_t value)
+{
+    int32_t min = (int16_t)f->logical_minimum, max = (int16_t)f->logical_maximum;
+    int32_t product = (int32_t)(((uint32_t)value - (uint32_t)min) * 8u);
+
+    return (int)(product / (max - min + 1) + 1);
+}
+
 /** The event of hat switch or D-pad usage `u` of field `f` at `value`: a
  * direction as the two axes of its code and the next. */
 static void hat_event(struct hid_input *in, const struct hid_field *f, const struct hid_usage *u,
@@ -1339,7 +1505,7 @@ static void hat_event(struct hid_input *in, const struct hid_field *f, const str
     int dir = u->hat_dir;
 
     if (!dir) {
-        dir = (value - f->logical_minimum) * 8 / (f->logical_maximum - f->logical_minimum + 1) + 1;
+        dir = hat_direction(f, value);
     }
     if (dir < 0 || dir > 8) {
         dir = 0;
@@ -1409,7 +1575,7 @@ static void hid_event(struct hid_dev *hid, struct hid_field *f, struct hid_usage
 {
     struct hid_input *in;
 
-    if (!u->type || f->input == HID_NO_INPUT) {
+    if (!u->type || u->type == EV_PWR || f->input == HID_NO_INPUT) {
         return;
     }
     in = &hid->inputs[f->input];
@@ -1439,7 +1605,7 @@ static void hid_event(struct hid_dev *hid, struct hid_field *f, struct hid_usage
 static int array_value_valid(const struct hid_field *f, int32_t value)
 {
     return value >= f->logical_minimum && value <= f->logical_maximum &&
-           (uint32_t)(value - f->logical_minimum) < f->maxusage;
+           (uint32_t)value - (uint32_t)f->logical_minimum < f->maxusage;
 }
 
 /** Read the elements of `f` from `data` into their `new_value`, as Linux's
@@ -1460,7 +1626,7 @@ static void fetch_field(struct hid_dev *hid, struct hid_field *f, const uint8_t 
 
         u[n].new_value = v;
         if (!(f->flags & HID_MAIN_ITEM_VARIABLE) && array_value_valid(f, v) &&
-            u[v - f->logical_minimum].hid == HID_UP_KEYBOARD + 1) {
+            u[(uint32_t)v - (uint32_t)f->logical_minimum].hid == HID_UP_KEYBOARD + 1) {
             f->ignored = 1;
             return;
         }
@@ -1587,12 +1753,13 @@ void hid_input_report(struct hid_dev *hid, const uint8_t *data, uint32_t size)
 /** Write the elements of `f` into `data` from `value`, as Linux's
  * `hid_output_field`; a signed field's values are cut to its size. */
 static void output_field(struct hid_dev *hid, const struct hid_field *f, uint8_t *data,
-                         int (*value)(const struct hid_usage *, void *), void *arg)
+                         int (*value)(const struct hid_field *, const struct hid_usage *, void *),
+                         void *arg)
 {
     uint32_t n;
 
     for (n = 0; n < f->count; n++) {
-        int32_t v = value(&usages_of(hid, f)[n], arg);
+        int32_t v = value(f, &usages_of(hid, f)[n], arg);
         uint32_t bits;
 
         if (f->logical_minimum < 0 && f->size > 0 && f->size < 32) {
@@ -1614,7 +1781,8 @@ static void output_field(struct hid_dev *hid, const struct hid_field *f, uint8_t
  * given by `value`, as Linux's `hid_output_report`. Returns its bytes, or
  * -1 when it does not fit. */
 static int output_report(struct hid_dev *hid, const struct hid_report *r, uint8_t *out, int size,
-                         int (*value)(const struct hid_usage *, void *), void *arg)
+                         int (*value)(const struct hid_field *, const struct hid_usage *, void *),
+                         void *arg)
 {
     uint32_t len = hid_report_len(r);
     uint8_t *data = out;
@@ -1637,18 +1805,44 @@ static int output_report(struct hid_dev *hid, const struct hid_report *r, uint8_
     return (int)len;
 }
 
-/** An LED usage's value from the LED_* bits at `arg`; 0 for any other. */
-static int led_value(const struct hid_usage *u, void *arg)
-{
-    unsigned int leds = *(unsigned int *)arg;
+/* The console's locks, which a keyboard shows in place of its own. */
+#define LOCK_LEDS ((1u << LED_NUML) | (1u << LED_CAPSL) | (1u << LED_SCROLLL))
 
-    return u->type == EV_LED ? (int)((leds >> u->code) & 1u) : 0;
+/* What `led_value` reads: the device, and the console's locks as LED_*
+ * bits. */
+struct led_source {
+    struct hid_dev *hid;
+    unsigned int locks;
+};
+
+/** An LED usage's value from the LEDs of the input device that owns its
+ * field, as Linux sets each from its own input's `led` bits: those programs
+ * lit on its event device, and on a keyboard the console's three locks in
+ * place of its own. 0 for any other usage. */
+static int led_value(const struct hid_field *f, const struct hid_usage *u, void *arg)
+{
+    const struct led_source *src = (const struct led_source *)arg;
+    const struct hid_input *in;
+    unsigned int lit;
+
+    if (u->type != EV_LED || f->input == HID_NO_INPUT) {
+        return 0;
+    }
+    in = &src->hid->inputs[f->input];
+    lit = evdev_leds_lit(in->dev);
+    if (in->ev & (1u << EV_REP)) {
+        lit = (lit & ~LOCK_LEDS) | (src->locks & LOCK_LEDS);
+    }
+    return (int)((lit >> u->code) & 1u);
 }
 
-int hidinput_led_report(struct hid_dev *hid, unsigned int leds, uint8_t *out, int size, int *value)
+int hidinput_led_report(struct hid_dev *hid, unsigned int locks, uint8_t *out, int size, int *value)
 {
+    struct led_source src;
     uint32_t i, j;
 
+    src.hid = hid;
+    src.locks = locks;
     for (i = 0; i < hid->desc.nfields; i++) {
         struct hid_field *f = field_at(hid, i);
         struct hid_report *r = &hid->desc.reports[f->report];
@@ -1659,7 +1853,7 @@ int hidinput_led_report(struct hid_dev *hid, unsigned int leds, uint8_t *out, in
         for (j = 0; j < f->maxusage; j++) {
             if (usages_of(hid, f)[j].type == EV_LED) {
                 *value = (HID_OUTPUT_REPORT + 1) << 8 | r->id;
-                return output_report(hid, r, out, size, led_value, &leds);
+                return output_report(hid, r, out, size, led_value, &src);
             }
         }
     }
@@ -1668,10 +1862,11 @@ int hidinput_led_report(struct hid_dev *hid, unsigned int leds, uint8_t *out, in
 
 /** A Resolution Multiplier's value, its field's logical maximum at `arg`'s
  * field; 0 for any other usage. */
-static int multiplier_value(const struct hid_usage *u, void *arg)
+static int multiplier_value(const struct hid_field *f, const struct hid_usage *u, void *arg)
 {
     const int32_t *max = (const int32_t *)arg;
 
+    (void)f;
     return u->hid == HID_GD_RESOLUTION ? *max : 0;
 }
 

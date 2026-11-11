@@ -1,0 +1,33 @@
+19:42:01.958 start: vol 1:1
+3	0	1	protocol-native.c	float32le 2ch 44100Hz
+Volume: front-left: 655 /   1% / -120.01 dB,   front-right: 655 /   1% / -120.01 dB
+        balance 0.00
+19:42:05.116 after the game's stream to 150%: vol 1:1
+19:42:07.381 after the game's stream back to 100%: vol 1:1
+19:42:09.759 after the sink to 3%: vol 2:2
+19:42:12.097 after the sink back to 1%: vol 0:0
+key: window 0x600003 Default IME
+key: window 0x1400002 Default IME
+key: window 0x1400001 Steam
+key: window 0x1400003 SteamVR Status
+key: window 0x1200002 Default IME
+key: window 0x1200001 Input
+key: window 0x1a00008 Default IME
+key: window 0x1a00007 - Crysis - Mar 11 2008 (20:32:55)
+key: focus 0x1a00007
+key: pressing XF86AudioRaiseVolume 123
+19:42:14.947 after XF86AudioRaiseVolume to the game: vol 0:0
+key: window 0x600003 Default IME
+key: window 0x1400002 Default IME
+key: window 0x1400001 Steam
+key: window 0x1400003 SteamVR Status
+key: window 0x1200002 Default IME
+key: window 0x1200001 Input
+key: window 0x1a00008 Default IME
+key: window 0x1a00007 - Crysis - Mar 11 2008 (20:32:55)
+key: focus 0x1a00007
+key: pressing XF86AudioLowerVolume 122
+19:42:17.668 after XF86AudioLowerVolume to the game: vol 0:0
+Volume: front-left: 0 /   0% / -inf dB,   front-right: 0 /   0% / -inf dB
+        balance 0.00
+19:42:17.957 end: vol 1:1

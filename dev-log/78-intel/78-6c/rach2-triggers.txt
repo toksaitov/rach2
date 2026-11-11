@@ -1,0 +1,9 @@
+1 fail 1 6 /usr/lib/x86_64-linux-gnu/piglit/bin/read-front clear-front-first -samples=2 -auto
+2 fail 1 6 /usr/lib/x86_64-linux-gnu/piglit/bin/read-front clear-front-first -samples=4 -auto
+3 fail 1 5 /usr/lib/x86_64-linux-gnu/piglit/bin/read-front clear-front-first -samples=6 -auto
+4 fail 1 6 /usr/lib/x86_64-linux-gnu/piglit/bin/read-front clear-front-first -samples=8 -auto
+5 fail 1 5 /usr/lib/x86_64-linux-gnu/piglit/bin/read-front -samples=2 -auto
+6 fail 1 6 /usr/lib/x86_64-linux-gnu/piglit/bin/read-front -samples=4 -auto
+7 fail 1 6 /usr/lib/x86_64-linux-gnu/piglit/bin/read-front -samples=6 -auto
+8 fail 1 5 /usr/lib/x86_64-linux-gnu/piglit/bin/read-front -samples=8 -auto
+9 fail 1 2 /usr/lib/x86_64-linux-gnu/piglit/bin/arb_copy_image-formats --samples=2 -auto -fbo

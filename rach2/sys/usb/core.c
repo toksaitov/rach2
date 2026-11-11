@@ -28,6 +28,7 @@
 #include "../klog.h"
 #include "../lib/kstring.h"
 #include "../lib/kirq.h"
+#include "../mm/kheap.h"
 #include "../mm/paging.h"
 #include "hid.h"
 #include "hub.h"
@@ -132,24 +133,67 @@
  * is reset again. */
 #define ST_READDRESS  21
 /* A keyboard, mouse or other HID device is read before it runs: its strings,
- * SET_IDLE and its report descriptor, one control transfer each, `hid_step`
- * saying which (ST_HIDSETUP); a request it refused leaves its control
- * endpoint halted, which is reset before the next (ST_EP0RESET). */
+ * and SET_IDLE and the report descriptor of each of its HID interfaces, one
+ * control transfer each, `hid_step` and `hid_if` saying which
+ * (ST_HIDSETUP); a request it refused leaves its control endpoint halted,
+ * which is reset before the next (ST_EP0RESET). */
 #define ST_HIDSETUP   22
 #define ST_EP0RESET   23
+/* The interrupt IN endpoint of a HID device's interface `hid_if` past its
+ * first is to be opened; the controller takes one command each. */
+#define ST_OPEN_HID   24
 
-/* The steps of ST_HIDSETUP, in their order. */
+/* The steps of ST_HIDSETUP, in their order: the device's strings, then the
+ * requests of each interface, from HS_IDLE to HS_PROTOCOL. */
 #define HS_LANGID       1
 #define HS_MANUFACTURER 2
 #define HS_PRODUCT      3
-#define HS_IDLE         4
-#define HS_REPORT       5
-#define HS_PROTOCOL     6
-#define HS_DONE         7
+#define HS_SERIAL       4
+#define HS_IDLE         5
+#define HS_REPORT       6
+#define HS_PROTOCOL     7
+#define HS_DONE         8
 
-/* The bytes of a device's manufacturer or product string in UTF-8, with its
- * terminator, as Linux's HID name holds them. */
+/* The bytes of a device's manufacturer, product or serial string in UTF-8,
+ * with its terminator, as Linux's HID name holds them. */
 #define STRING_MAX 128
+
+/*
+ * One HID interface of a device, which runs on its own as Linux's usbhid runs
+ * each: the device context index of its interrupt IN endpoint, its number
+ * times two plus one; where its setup came to; and its report transfer. The
+ * report buffers are given to the controller, which is why the interfaces
+ * are a frame of the DMA pool, as the device's record is.
+ */
+struct usb_hid_if {
+    int ep_dci;
+    int live;      /* the HID driver took it, and it runs */
+    int given_up;  /* it refused its setup, or input handles nothing in it */
+    int boot;      /* it runs, or is to run, in the boot protocol */
+    int reporting; /* a report transfer is outstanding on `ep_dci` */
+    int have_report;
+    struct usb_completion report_done;
+    /* Its reports handed to `hid_report`, for /proc/usb. */
+    uint32_t reports;
+    /* The last report, in `report` or, for a report longer, in
+     * `long_report` of `long_cap` bytes from the heap; `report_at` is the
+     * one the transfer outstanding fills. */
+    uint8_t *report_at;
+    uint8_t *long_report;
+    int long_cap;
+    uint8_t report[64];
+};
+
+/* A HID device's interfaces: how many the configuration has that are
+ * driven, each one's descriptors as the walk found them, and each one's
+ * state, in the same order. */
+struct usb_hid_ifs {
+    int count;
+    struct usb_interface_info info[USB_HID_INTERFACES];
+    struct usb_hid_if at[USB_HID_INTERFACES];
+};
+
+typedef char usb_hid_ifs_fit_a_frame[(sizeof(struct usb_hid_ifs) <= 4096) ? 1 : -1];
 
 struct usb_device_state {
     int index; /* its entry in the table, which a frame's address does not give */
@@ -185,42 +229,50 @@ struct usb_device_state {
     /* A command whose result must be consumed before the device closes. */
     int abandoned;
     uint32_t short_by; /* bytes the last control transfer came back short */
-    int reporting;     /* a report transfer is outstanding on `ep_dci` */
-    /* A keyboard's or mouse's reports handed to `hid_report` since the
-     * device was entered, for /proc/usb. */
-    uint32_t reports;
     /* A quiesce in progress on this device's endpoint `quiesce_dci`: 1 with
      * the stop or the reset out, 2 with the dequeue out. */
     int quiesce_stage;
     int quiesce_dci;
-    /* The completions waiting for this device, one for its control endpoint
-     * and one for the endpoint it reports on. They are put here by the one
-     * drain in `usb_core_step`: a device that polled the controller itself
-     * would take the completions of every other device and drop them. */
+    /* The completion waiting for this device's control endpoint; a HID
+     * interface's report completion waits in its `usb_hid_if`. They are put
+     * there by the one drain in `usb_core_step`: a device that polled the
+     * controller itself would take the completions of every other device
+     * and drop them. */
     int have_control;
-    int have_report;
     struct usb_completion control;
-    struct usb_completion report_done;
     /* A HID device's output report, its LEDs or a Feature report, is out on
-     * its control endpoint, and the `core_ms` by which it must have
-     * completed. */
+     * its control endpoint for interface `output_if`, and the `core_ms` by
+     * which it must have completed; `output_next` is the interface offered
+     * the next turn, so that each has one. `output_quiesce` is set when one
+     * failed or timed out: the control endpoint is being quiesced, and no
+     * output goes out, nor is its buffer touched, until that has ended. */
     int output_out;
+    int output_if;
+    int output_next;
+    int output_quiesce;
     uint32_t output_deadline;
-    /* A HID device: the step of ST_HIDSETUP, whether it runs in the boot
-     * protocol, the string indexes of its device descriptor, the language
-     * of its strings, and the strings, in UTF-8. */
+    /* A HID device: its interfaces, a frame of their own, NULL on another
+     * kind; the interface whose endpoint is being opened, being set up, or,
+     * in ST_HALTED, being recovered; the step of ST_HIDSETUP; why the last
+     * interface given up was refused, NULL when input handled nothing in it;
+     * the string indexes of its device descriptor, the language of its
+     * strings, and the strings, in UTF-8. */
+    struct usb_hid_ifs *hid;
+    int hid_if;
     int hid_step;
-    int boot;
+    const char *hid_why;
     uint8_t i_manufacturer;
     uint8_t i_product;
+    uint8_t i_serial;
     uint16_t langid;
     char manufacturer[STRING_MAX];
     char product_name[STRING_MAX];
-    /* What the controller is given the addresses of: the last report, a
-     * HID device's output report, the setup packet and the descriptor
-     * being read. */
-    uint8_t report[64];
-    uint8_t output[16];
+    char serial[STRING_MAX];
+    /* What the controller is given the addresses of: the setup packet, and
+     * the descriptor being read, which a running HID device's output report
+     * takes the place of. */
+    uint8_t *long_output; /* an output report longer than `buffer`, of */
+    int long_output_cap;  /* this many bytes from the heap */
     uint8_t setup[8];
     uint8_t buffer[USB_DESC_MAX];
     uint32_t config_length; /* wTotalLength, from the configuration header */
@@ -229,10 +281,12 @@ struct usb_device_state {
     uint16_t release; /* bcdDevice */
     int ep0_packet;   /* bMaxPacketSize0 */
     /* The device context indexes of the endpoint it reports or answers on,
-     * the endpoint's number times two plus one for IN, and of a stick's OUT
-     * endpoint, its number times two, zero on another kind of device. */
+     * the endpoint's number times two plus one for IN, a HID device's first
+     * interface's, and of a stick's OUT endpoint, its number times two, zero
+     * on another kind of device. */
     int ep_dci;
     int ep_out_dci;
+    /* The interface it is driven by, a HID device's first. */
     struct usb_interface_info interface;
 };
 
@@ -283,10 +337,28 @@ static struct usb_device_state *dev_take(int i)
     return devices[i];
 }
 
-/** Give back entry `i`'s frame. */
+/** Give back the frame of `d`'s HID interfaces and their long reports'
+ * buffers, if it has them. */
+static void hid_ifs_release(struct usb_device_state *d)
+{
+    int k;
+
+    if (!d->hid) {
+        return;
+    }
+    for (k = 0; k < USB_HID_INTERFACES; k++) {
+        kfree(d->hid->at[k].long_report);
+    }
+    free_kernel_frame(d->hid);
+    d->hid = 0;
+}
+
+/** Give back entry `i`'s frame, its interfaces' and its long buffers. */
 static void dev_release(int i)
 {
     if (devices[i]) {
+        hid_ifs_release(devices[i]);
+        kfree(devices[i]->long_output);
         free_kernel_frame(devices[i]);
         devices[i] = 0;
     }
@@ -388,20 +460,79 @@ static void parse_hid_descriptor(const uint8_t *desc, int size, struct usb_inter
     }
 }
 
-void usb_parse_config(const uint8_t *buffer, int length, struct usb_interface_info *out)
+/**
+ * Take what the endpoint descriptor at `desc`, seven bytes or more, says into
+ * the candidate `at`: the first interrupt IN endpoint of a HID interface or a
+ * hub, which completes it, or the first bulk IN and bulk OUT endpoints of a
+ * stick, which complete it together. Endpoint zero is the control endpoint
+ * and never one of these.
+ */
+static void parse_endpoint(const uint8_t *desc, struct usb_interface_info *at)
 {
+    int address = desc[2];
+    int attributes = desc[3] & EP_ATTR_TYPE_MASK;
+    int max_packet = desc[4] | (desc[5] << 8);
+
+    if ((address & 0xF) == 0) {
+        return;
+    }
+    if (at->kind != USB_KIND_STORAGE) {
+        if ((address & EP_ADDR_IN) && attributes == EP_ATTR_INTERRUPT && at->ep_number == 0) {
+            at->ep_number = address & 0xF;
+            at->ep_max_packet = max_packet;
+            at->ep_interval = desc[6];
+            at->found = 1;
+        }
+        return;
+    }
+    if (attributes != EP_ATTR_BULK) {
+        return;
+    }
+    if ((address & EP_ADDR_IN) && at->ep_number == 0) {
+        at->ep_number = address & 0xF;
+        at->ep_max_packet = max_packet;
+    } else if (!(address & EP_ADDR_IN) && at->ep_out_number == 0) {
+        at->ep_out_number = address & 0xF;
+        at->ep_out_max_packet = max_packet;
+    }
+    if (at->ep_number != 0 && at->ep_out_number != 0) {
+        at->found = 1;
+    }
+}
+
+/** Whether the HID interface `out[kept]` repeats the number or the endpoint
+ * of one of the `kept` before it. */
+static int repeats(const struct usb_interface_info *out, int kept)
+{
+    int k;
+
+    for (k = 0; k < kept; k++) {
+        if (out[k].number == out[kept].number || out[k].ep_number == out[kept].ep_number) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int usb_parse_config(const uint8_t *buffer, int length, struct usb_interface_info *out, int max)
+{
+    struct usb_interface_info *at = out; /* the candidate, `out[kept]` */
+    int kept = 0;
     int offset = 0;
     int in_hid_interface = 0;
     int in_storage_interface = 0;
     int in_hub_interface = 0;
 
-    k_memset(out, 0, sizeof(*out));
+    if (max < 1) {
+        return 0;
+    }
+    k_memset(out, 0, (size_t)max * sizeof(*out));
     if (buffer == 0 || length < 9) {
-        return;
+        return 0;
     }
     out->config_value = buffer[5];
     if (out->config_value == 0) {
-        return;
+        return 0;
     }
 
     while (offset + 2 <= length) {
@@ -413,64 +544,52 @@ void usb_parse_config(const uint8_t *buffer, int length, struct usb_interface_in
         }
 
         if (type == DESC_INTERFACE) {
-            if (out->found) {
-                break; /* the interface found has no more descriptors */
+            if (at->found && !repeats(out, kept)) {
+                kept++;
+                if (out->kind != USB_KIND_HID || kept == max) {
+                    break; /* nothing more of this configuration is kept */
+                }
+                at = &out[kept];
             }
-            k_memset(out, 0, sizeof(*out));
-            out->config_value = buffer[5];
+            k_memset(at, 0, sizeof(*at));
+            at->config_value = buffer[5];
             in_hid_interface = 0;
             in_storage_interface = 0;
             in_hub_interface = 0;
             if (size >= 9 && buffer[offset + 3] == 0) {
                 in_hid_interface = buffer[offset + 5] == USB_CLASS_HID;
-                in_storage_interface = (buffer[offset + 5] == USB_CLASS_STORAGE &&
+                in_storage_interface = (kept == 0 && buffer[offset + 5] == USB_CLASS_STORAGE &&
                                         buffer[offset + 6] == USB_SUBCLASS_SCSI &&
                                         buffer[offset + 7] == USB_PROTOCOL_BULK_ONLY);
-                in_hub_interface = (buffer[offset + 5] == USB_CLASS_HUB &&
+                in_hub_interface = (kept == 0 && buffer[offset + 5] == USB_CLASS_HUB &&
                                     buffer[offset + 7] <= USB_PROTOCOL_HUB_SUPER);
                 if (in_hid_interface || in_storage_interface || in_hub_interface) {
-                    out->kind = in_hid_interface   ? USB_KIND_HID
-                                : in_hub_interface ? USB_KIND_HUB
-                                                   : USB_KIND_STORAGE;
-                    out->number = buffer[offset + 2];
-                    out->class_code = buffer[offset + 5];
-                    out->subclass = buffer[offset + 6];
-                    out->protocol = buffer[offset + 7];
+                    at->kind = in_hid_interface   ? USB_KIND_HID
+                               : in_hub_interface ? USB_KIND_HUB
+                                                  : USB_KIND_STORAGE;
+                    at->number = buffer[offset + 2];
+                    at->class_code = buffer[offset + 5];
+                    at->subclass = buffer[offset + 6];
+                    at->protocol = buffer[offset + 7];
                 }
             }
         } else if (type == DESC_HID && in_hid_interface) {
-            parse_hid_descriptor(&buffer[offset], size, out);
-        } else if (type == DESC_ENDPOINT && size >= 7 && (in_hid_interface || in_hub_interface)) {
-            int address = buffer[offset + 2];
-            int attributes = buffer[offset + 3];
-
-            if ((address & EP_ADDR_IN) && (attributes & EP_ATTR_TYPE_MASK) == EP_ATTR_INTERRUPT &&
-                (address & 0xF) != 0 && out->ep_number == 0) {
-                out->ep_number = address & 0xF;
-                out->ep_max_packet = buffer[offset + 4] | (buffer[offset + 5] << 8);
-                out->ep_interval = buffer[offset + 6];
-                out->found = 1;
-            }
-        } else if (type == DESC_ENDPOINT && size >= 7 && in_storage_interface) {
-            int address = buffer[offset + 2];
-            int attributes = buffer[offset + 3];
-
-            if ((attributes & EP_ATTR_TYPE_MASK) == EP_ATTR_BULK && (address & 0xF) != 0) {
-                if ((address & EP_ADDR_IN) && out->ep_number == 0) {
-                    out->ep_number = address & 0xF;
-                    out->ep_max_packet = buffer[offset + 4] | (buffer[offset + 5] << 8);
-                } else if (!(address & EP_ADDR_IN) && out->ep_out_number == 0) {
-                    out->ep_out_number = address & 0xF;
-                    out->ep_out_max_packet = buffer[offset + 4] | (buffer[offset + 5] << 8);
-                }
-                if (out->ep_number != 0 && out->ep_out_number != 0) {
-                    out->found = 1;
-                }
-            }
+            parse_hid_descriptor(&buffer[offset], size, at);
+        } else if (type == DESC_ENDPOINT && size >= 7 &&
+                   (in_hid_interface || in_hub_interface || in_storage_interface)) {
+            parse_endpoint(&buffer[offset], at);
         }
 
         offset += size;
     }
+    if (kept < max && at == &out[kept] && at->found) {
+        if (repeats(out, kept)) {
+            k_memset(at, 0, sizeof(*at));
+        } else {
+            kept++;
+        }
+    }
+    return kept;
 }
 
 /** Fill the eight bytes of a setup packet, its 16-bit fields little-endian. */
@@ -569,9 +688,11 @@ static const char *path_of(const struct usb_device_state *d)
 /**
  * Take the device at entry `i` down, and everything below it first: a
  * running device's class driver is told, as is a keyboard's or mouse's whose
- * report endpoint halted (ST_HALTED), and the entry closes if the
- * controller gave it a slot and is freed otherwise. Nothing for an entry that
- * is free, closing or a tombstone.
+ * report endpoint halted (ST_HALTED); the HID driver is told in every state,
+ * since a device of several HID interfaces has those set up before a later
+ * one's setup ended; and the entry closes if the controller gave it a slot
+ * and is freed otherwise. Nothing for an entry that is free, closing or a
+ * tombstone.
  *
  * A device taken down during its port reset gives up its turn at once: the
  * reset is the hub's or the controller's port and not a command, so no
@@ -594,12 +715,11 @@ static void device_gone(int i)
             msc_detach(d->hc, d->slot);
         } else if (d->interface.kind == USB_KIND_HUB) {
             hub_detach(i);
-        } else {
-            hid_gone(d->index + 1);
         }
     }
+    /* The HID driver may hold interfaces taken before a later one's setup. */
+    hid_gone(d->index + 1);
     d->have_control = 0;
-    d->have_report = 0;
     d->closing_asked = 0;
     if (enumerating[bus_of(d)] == i && d->state == ST_RESETTING) {
         enumerating[bus_of(d)] = -1;
@@ -1002,136 +1122,249 @@ static void readdress_step(struct usb_device_state *d)
 }
 
 /**
- * Send the running HID device `d` the output report its driver has for it
- * (`hid_output_report`), a Feature report or its LEDs, as SET_REPORT on its
- * control endpoint: one report at a time, the next only after the last has
- * completed, so a keyboard connected later or a change made meanwhile is
- * caught up at the next step. The completion is the control endpoint's,
- * which nothing else uses on a running device. A report that fails or has
- * not completed in STEP_MS is told to the driver as failed: a stall leaves
- * the control endpoint halted, and a keyboard without LEDs may refuse the
- * request for good.
+ * Offer interface `k` of the running HID device `d` a turn to send the output
+ * report its driver has for it (`hid_output_report`), a Feature report or its
+ * LEDs, as SET_REPORT to the interface on the control endpoint. Returns 1
+ * when a report went out, 0 when the interface has none to send, and -1 when
+ * one could not go out now, for want of memory or because the endpoint
+ * refused the transfer: the driver offers again at the next step what was not
+ * taken.
+ */
+static int output_offer(struct usb_device_state *d, int k)
+{
+    int length, value, need;
+    uint8_t *out = d->buffer;
+
+    need = hid_output_size(d->index + 1, k);
+    if (need > (int)sizeof(d->buffer)) {
+        if (need > d->long_output_cap) {
+            kfree(d->long_output);
+            d->long_output = (uint8_t *)kzalloc((size_t)need);
+            d->long_output_cap = d->long_output ? need : 0;
+        }
+        if (!d->long_output) {
+            return -1;
+        }
+        out = d->long_output;
+    }
+    length =
+        hid_output_report(d->index + 1, k, out,
+                          need > (int)sizeof(d->buffer) ? need : (int)sizeof(d->buffer), &value);
+    if (length < 0) {
+        return 0;
+    }
+    setup_fill(d->setup, TYPE_TO_INTERFACE, REQ_SET_REPORT, value, d->hid->info[k].number, length);
+    if (control(d, USB_DIR_OUT, out, length) != 0) {
+        return -1;
+    }
+    d->output_out = 1;
+    d->output_if = k;
+    d->output_deadline = core_ms + STEP_MS;
+    return 1;
+}
+
+/**
+ * Quiesce the control endpoint of the HID device `d` after an output report
+ * failed or timed out (`output_quiesce`), on the core's command turn: a
+ * stall or a transaction error leaves the endpoint halted, and a report
+ * never answered leaves its transfer on the ring, reading a buffer the next
+ * report would reuse or free. Returns 1 once the endpoint is usable again,
+ * its transfers retired and any completion that came meanwhile dropped; 0
+ * while the quiesce runs; -1 when it would not, and `d` has failed.
+ */
+static int output_quiesce_step(struct usb_device_state *d)
+{
+    int answer;
+
+    if (!d->output_quiesce) {
+        return 1;
+    }
+    answer = usb_core_endpoint_quiesce(d->hc, d->slot, 1);
+    if (answer == 0) {
+        return 0;
+    }
+    d->output_quiesce = 0;
+    d->have_control = 0;
+    if (answer < 0) {
+        fail(d, "its control endpoint would not reset after a failed output report");
+        return -1;
+    }
+    return 1;
+}
+
+/**
+ * Send the running HID device `d` the output reports its driver has for its
+ * interfaces, one report at a time on its control endpoint, the next only
+ * after the last has completed, so a keyboard connected later or a change
+ * made meanwhile is caught up at the next step. The interfaces take turns,
+ * from `output_next`, so that one with a report always ready does not hold
+ * the others back. The completion is the control endpoint's, which nothing
+ * else uses on a running device. A report that fails or has not completed in
+ * STEP_MS is told to the driver as failed, and the control endpoint, which
+ * every interface's reports share, is quiesced before another goes out
+ * (`output_quiesce_step`); a keyboard without LEDs may refuse the request
+ * for good. `d` may have failed on return.
  */
 static void output_step(struct usb_device_state *d)
 {
-    int length, value;
+    int n, k, sent;
 
     if (d->have_control) {
         d->have_control = 0;
         if (d->output_out) {
             d->output_out = 0;
-            hid_output_sent(d->index + 1, d->control.status == USB_XFER_OK);
+            if (d->control.status != USB_XFER_OK) {
+                d->output_quiesce = 1;
+            }
+            hid_output_sent(d->index + 1, d->output_if, d->control.status == USB_XFER_OK);
         }
     }
     if (d->output_out) {
         if ((int32_t)(core_ms - d->output_deadline) >= 0) {
             d->output_out = 0;
-            hid_output_sent(d->index + 1, 0);
+            d->output_quiesce = 1;
+            hid_output_sent(d->index + 1, d->output_if, 0);
         }
         return;
     }
-    length = hid_output_report(d->index + 1, d->output, (int)sizeof(d->output), &value);
-    if (length < 0) {
+    if (output_quiesce_step(d) <= 0) {
         return;
     }
-    setup_fill(d->setup, TYPE_TO_INTERFACE, REQ_SET_REPORT, value, d->interface.number, length);
-    /* A transfer the endpoint refuses now is offered again at the next
-     * step, since the driver offers what was not taken. */
-    if (control(d, USB_DIR_OUT, d->output, length) == 0) {
-        d->output_out = 1;
-        d->output_deadline = core_ms + STEP_MS;
+    for (n = 0; n < d->hid->count; n++) {
+        k = (d->output_next + n) % d->hid->count;
+        if (!d->hid->at[k].live) {
+            continue;
+        }
+        sent = output_offer(d, k);
+        if (sent > 0) {
+            d->output_next = (k + 1) % d->hid->count;
+        }
+        if (sent != 0) {
+            return;
+        }
     }
 }
 
 /**
- * One step of a running device: a HID device's report handed on and the
- * next one asked for, and its output reports sent (`output_step`).
+ * Ask interface `k` of the running HID device `d`, which has no report
+ * transfer outstanding, for its next report: as many bytes as its longest
+ * input report, as Linux asks, and at least its endpoint's packet, so that a
+ * report longer than a packet comes whole in several. A transfer that cannot
+ * be had or queued now is asked for at the next step.
+ */
+static void report_ask(struct usb_device_state *d, int k)
+{
+    struct usb_hid_if *f = &d->hid->at[k];
+    struct usb_transfer transfer;
+    int length = hid_report_size(d->index + 1, k);
+
+    if (length < d->hid->info[k].ep_max_packet) {
+        length = d->hid->info[k].ep_max_packet;
+    }
+    if (length > (int)sizeof(f->report) && length > f->long_cap) {
+        kfree(f->long_report);
+        f->long_report = (uint8_t *)kzalloc((size_t)length);
+        f->long_cap = f->long_report ? length : 0;
+        if (!f->long_report) {
+            return; /* no memory for its reports yet */
+        }
+    }
+    f->report_at = length > (int)sizeof(f->report) ? f->long_report : f->report;
+    transfer.setup = 0;
+    transfer.buffer = f->report_at;
+    transfer.length = (uint32_t)length;
+    transfer.direction = USB_DIR_IN;
+    transfer.generation = 0;
+    if (xhci_submit(d->hc, d->slot, f->ep_dci, &transfer) == 0) {
+        f->reporting = 1;
+    }
+}
+
+/**
+ * One step of a running device: each HID interface's report handed on and
+ * the next one asked for, and the output reports sent (`output_step`).
  *
- * One transfer is outstanding at a time: it is queued, and when the controller
- * says it finished the report is handed to the class driver and another is
- * queued. A device that says nothing leaves its transfer outstanding for as
- * long as nobody touches it, which is what an interrupt endpoint is for.
+ * Each interface that runs has one transfer outstanding at a time: it is
+ * queued, and when the controller says it finished the report is handed to
+ * the class driver for that interface and another is queued. An interface
+ * that says nothing leaves its transfer outstanding for as long as nobody
+ * touches it, which is what an interrupt endpoint is for.
  *
  * A stick answers only when asked, so it has no transfer kept outstanding
  * here; its own driver steps it, and the hub driver reads a hub's change
- * endpoint. A stall halts a device's endpoint and any other failure leaves it
- * halted or in the Error state; nothing queued on it moves until it has been
- * quiesced on the core's turn, which ST_HALTED waits for.
+ * endpoint. A stall halts an interface's endpoint and any other failure
+ * leaves it halted or in the Error state; nothing queued on it moves until
+ * it has been quiesced on the core's turn, which ST_HALTED waits for, with
+ * `hid_if` the interface.
  */
 static void step_running(struct usb_device_state *d)
 {
-    int length;
+    int k;
 
-    if (d->interface.kind == USB_KIND_HUB) {
+    if (d->interface.kind == USB_KIND_HUB || d->interface.kind == USB_KIND_STORAGE || !d->hid) {
         return;
     }
+    for (k = 0; k < d->hid->count; k++) {
+        struct usb_hid_if *f = &d->hid->at[k];
+        struct usb_completion completion = f->report_done;
 
-    if (d->interface.kind == USB_KIND_STORAGE) {
-        return;
-    }
-    /* A report longer than a packet comes in several, as Linux asks for
-     * its longest input report. */
-    length = hid_report_size(d->index + 1);
-    if (length < d->interface.ep_max_packet) {
-        length = d->interface.ep_max_packet;
-    }
-    if (length > (int)sizeof(d->report)) {
-        length = (int)sizeof(d->report);
-    }
-
-    if (d->have_report) {
-        struct usb_completion completion = d->report_done;
-
-        d->have_report = 0;
-        d->reporting = 0;
+        if (!f->live || !f->have_report) {
+            continue;
+        }
+        f->have_report = 0;
+        f->reporting = 0;
         if (completion.status != USB_XFER_OK && completion.status != USB_XFER_SHORT) {
             d->state = ST_HALTED;
+            d->hid_if = k;
             arm(d);
             return;
-        } else {
-            d->reports++;
-            hid_report(d->index + 1, d->report, (int)(completion.length - completion.residual));
         }
+        f->reports++;
+        hid_report(d->index + 1, k, f->report_at, (int)(completion.length - completion.residual));
     }
 
     output_step(d);
+    if (d->state != ST_RUNNING) {
+        return;
+    }
 
-    if (!d->reporting) {
-        struct usb_transfer transfer;
-
-        transfer.setup = 0;
-        transfer.buffer = d->report;
-        transfer.length = (uint32_t)length;
-        transfer.direction = USB_DIR_IN;
-        transfer.generation = 0;
-        if (xhci_submit(d->hc, d->slot, d->ep_dci, &transfer) == 0) {
-            d->reporting = 1;
+    for (k = 0; k < d->hid->count; k++) {
+        if (d->hid->at[k].live && !d->hid->at[k].reporting) {
+            report_ask(d, k);
         }
     }
 }
 
 /**
- * Put the HID device `d`, which its driver has taken, to work: end its
- * bus's enumeration and record it.
+ * Put the HID device `d`, whose driver has taken one interface or more, to
+ * work: end its bus's enumeration and record it.
  */
 static void start_running(struct usb_device_state *d)
 {
+    int k, live = 0, boot = 0;
+
+    for (k = 0; k < d->hid->count; k++) {
+        live += d->hid->at[k].live;
+        boot += d->hid->at[k].live && d->hid->at[k].boot;
+    }
     d->state = ST_RUNNING;
-    d->reporting = 0;
     d->output_out = 0;
+    d->output_next = 0;
+    d->output_quiesce = 0;
     enumerating[bus_of(d)] = -1;
-    klog(KLOG_INFO, "usb", "device: port %s: %x:%x, class %d protocol %d, endpoint %d%s",
+    klog(KLOG_INFO, "usb",
+         "device: port %s: %x:%x, class %d protocol %d, endpoint %d, HID interfaces %d of %d%s",
          path_of(d), (int)d->vendor, (int)d->product, d->interface.class_code,
-         d->interface.protocol, d->interface.ep_number, d->boot ? ", boot protocol" : "");
+         d->interface.protocol, d->interface.ep_number, live, d->hid->count,
+         boot ? ", boot protocol" : "");
 }
 
-/** Whether `d` is a HID interface with a boot protocol, a keyboard or a
- * mouse, which Linux's usbkbd and usbmouse would take. */
-static int boot_capable(const struct usb_device_state *d)
+/** Whether the HID interface `info` has a boot protocol, a keyboard's or a
+ * mouse's, which Linux's usbkbd and usbmouse would take. */
+static int boot_capable(const struct usb_interface_info *info)
 {
-    return d->interface.subclass == USB_SUBCLASS_BOOT &&
-           (d->interface.protocol == USB_PROTOCOL_KBD ||
-            d->interface.protocol == USB_PROTOCOL_MOUSE);
+    return info->subclass == USB_SUBCLASS_BOOT &&
+           (info->protocol == USB_PROTOCOL_KBD || info->protocol == USB_PROTOCOL_MOUSE);
 }
 
 /**
@@ -1188,36 +1421,43 @@ static void take_string(const struct usb_device_state *d, int length, char *out)
     out[at] = 0;
 }
 
-/** The identity `d`'s driver is given, its strings kept by their
- * pointers. */
-static void hid_ids_of(const struct usb_device_state *d, struct hid_ids *ids)
+/** The identity `d`'s driver is given for its interface `k`, its strings kept
+ * by their pointers. */
+static void hid_ids_of(const struct usb_device_state *d, int k, struct hid_ids *ids)
 {
     ids->vendor = d->vendor;
     ids->product = d->product;
-    ids->version = (uint16_t)d->interface.hid_version;
+    ids->version = (uint16_t)d->hid->info[k].hid_version;
     ids->manufacturer = d->manufacturer;
     ids->product_name = d->product_name;
+    ids->serial = d->serial;
+    ids->interface = d->hid->info[k].number;
 }
 
 /**
  * Send the request of HID setup step `step` to `d`, or skip it: the
- * language of its strings, its manufacturer and product strings, SET_IDLE
- * with a duration of 0, as Linux's usbhid sends it, its report descriptor,
- * and SET_PROTOCOL to the boot protocol. Returns 1 when the request is
- * out, 0 when the step has nothing to send, -1 when it could not be
- * queued.
+ * language of its strings, its manufacturer, product and serial strings,
+ * and for its interface `hid_if`, SET_IDLE with a duration of 0, as
+ * Linux's usbhid sends it, its report descriptor, and SET_PROTOCOL to the
+ * boot protocol. Returns 1 when the request is out, 0 when the step has
+ * nothing to send, -1 when it could not be queued.
  */
 static int hid_request(struct usb_device_state *d, int step)
 {
+    const struct usb_interface_info *info = &d->hid->info[d->hid_if];
+
     switch (step) {
     case HS_LANGID:
-        if (!d->i_manufacturer && !d->i_product) {
+        if (!d->i_manufacturer && !d->i_product && !d->i_serial) {
             return 0;
         }
         return control_in(d, REQ_GET_DESCRIPTOR, DESC_STRING << 8, 0, STRING_ASK) == 0 ? 1 : -1;
     case HS_MANUFACTURER:
-    case HS_PRODUCT: {
-        int index = step == HS_MANUFACTURER ? d->i_manufacturer : d->i_product;
+    case HS_PRODUCT:
+    case HS_SERIAL: {
+        int index = step == HS_MANUFACTURER ? d->i_manufacturer
+                    : step == HS_PRODUCT    ? d->i_product
+                                            : d->i_serial;
 
         if (!index || !d->langid) {
             return 0;
@@ -1228,103 +1468,147 @@ static int hid_request(struct usb_device_state *d, int step)
                    : -1;
     }
     case HS_IDLE:
-        return control_out(d, TYPE_TO_INTERFACE, REQ_SET_IDLE, 0, d->interface.number) == 0 ? 1
-                                                                                            : -1;
+        return control_out(d, TYPE_TO_INTERFACE, REQ_SET_IDLE, 0, info->number) == 0 ? 1 : -1;
     case HS_REPORT:
-        if (d->interface.report_length <= 0) {
+        if (info->report_length <= 0) {
             return 0;
         }
-        if (d->interface.report_length > USB_DESC_MAX) {
+        if (info->report_length > USB_DESC_MAX) {
             klog(KLOG_WARN, "usb",
-                 "device: port %s: its report descriptor of %d bytes is longer "
+                 "device: port %s: interface %d: its report descriptor of %d bytes is longer "
                  "than this kernel reads",
-                 path_of(d), d->interface.report_length);
+                 path_of(d), info->number, info->report_length);
             return 0;
         }
         setup_fill(d->setup, TYPE_FROM_INTERFACE, REQ_GET_DESCRIPTOR, DESC_REPORT << 8,
-                   d->interface.number, d->interface.report_length);
-        return control(d, USB_DIR_IN, d->buffer, d->interface.report_length) == 0 ? 1 : -1;
+                   info->number, info->report_length);
+        return control(d, USB_DIR_IN, d->buffer, info->report_length) == 0 ? 1 : -1;
     case HS_PROTOCOL:
-        if (!d->boot) {
+        if (!d->hid->at[d->hid_if].boot) {
             return 0;
         }
-        return control_out(d, TYPE_TO_INTERFACE, REQ_SET_PROTOCOL, 0, d->interface.number) == 0
-                   ? 1
-                   : -1;
+        return control_out(d, TYPE_TO_INTERFACE, REQ_SET_PROTOCOL, 0, info->number) == 0 ? 1 : -1;
     default:
         return 0;
     }
 }
 
 /**
+ * Give up the interface `hid_if` of `d` alone, and drive the others: `why`
+ * the request it refused, or NULL when input handles nothing in it. The why
+ * is kept for the device's own failure, should no interface be left.
+ */
+static void hid_give_up(struct usb_device_state *d, const char *why)
+{
+    d->hid->at[d->hid_if].given_up = 1;
+    if (why) {
+        d->hid_why = why;
+    }
+    klog(KLOG_INFO, "usb", "device: port %s: interface %d: not driven: %s", path_of(d),
+         d->hid->info[d->hid_if].number, why ? why : "no input device in it");
+}
+
+/**
  * Move `d` to the first HID setup step after `step` that sends a request,
- * or past the last, where the driver takes the device in the protocol it
+ * for its interface `hid_if` and then each interface after it, or past the
+ * last.
+ *
+ * At the end of an interface's steps the driver takes it in the protocol it
  * has come to: the report protocol, or the boot protocol when its report
- * descriptor could not be had or was refused and it has one. A device
- * with neither is given up.
+ * descriptor could not be had or was refused and it has one. An interface
+ * with neither, or given up on the way, is left, and the next begins at
+ * HS_IDLE. Past the last interface the device runs if its driver took one
+ * interface or more; one with none is given up, as failed when an interface
+ * refused a request and as a device with no driver here otherwise.
  */
 static void hid_advance(struct usb_device_state *d, int step)
 {
+    struct usb_hid_if *f;
     struct hid_ids ids;
-    int sent;
+    int sent, k, live = 0;
 
-    for (step++; step < HS_DONE; step++) {
-        if (step == HS_PROTOCOL && !d->boot) {
-            continue;
+    for (;;) {
+        f = &d->hid->at[d->hid_if];
+        for (step++; step < HS_DONE && !f->given_up; step++) {
+            if (step == HS_PROTOCOL && !f->boot) {
+                continue;
+            }
+            sent = hid_request(d, step);
+            if (sent < 0) {
+                fail(d, "a request to it could not be queued");
+                return;
+            }
+            if (sent > 0) {
+                d->hid_step = step;
+                d->state = ST_HIDSETUP;
+                arm(d);
+                return;
+            }
+            if (step == HS_REPORT && boot_capable(&d->hid->info[d->hid_if])) {
+                f->boot = 1; /* no report descriptor to read */
+            } else if (step == HS_REPORT) {
+                hid_give_up(d, 0);
+            }
         }
-        sent = hid_request(d, step);
-        if (sent < 0) {
-            fail(d, "a request to it could not be queued");
-            return;
+        if (!f->given_up && f->boot) {
+            hid_ids_of(d, d->hid_if, &ids);
+            if (hid_attach_boot(d->index + 1, d->hid_if,
+                                d->hid->info[d->hid_if].protocol == USB_PROTOCOL_KBD ? HID_KEYBOARD
+                                                                                     : HID_MOUSE,
+                                &ids) != 0) {
+                hid_give_up(d, "no memory for its driver's state");
+            }
         }
-        if (sent > 0) {
-            d->hid_step = step;
-            d->state = ST_HIDSETUP;
-            arm(d);
-            return;
+        f->live = !f->given_up;
+        if (d->hid_if + 1 >= d->hid->count) {
+            break;
         }
-        if (step == HS_REPORT && boot_capable(d)) {
-            d->boot = 1; /* no report descriptor to read */
-        } else if (step == HS_REPORT) {
-            unsupported(d);
-            return;
-        }
+        d->hid_if++;
+        step = HS_IDLE - 1;
     }
-    hid_ids_of(d, &ids);
-    if (d->boot) {
-        hid_attach_boot(d->index + 1,
-                        d->interface.protocol == USB_PROTOCOL_KBD ? HID_KEYBOARD : HID_MOUSE, &ids);
+    for (k = 0; k < d->hid->count; k++) {
+        live += d->hid->at[k].live;
+    }
+    if (live == 0 && d->hid_why) {
+        fail(d, d->hid_why);
+        return;
+    }
+    if (live == 0) {
+        unsupported(d);
+        return;
     }
     start_running(d);
 }
 
 /**
- * The answer to HID setup step `d->hid_step`, which `transfer_result` gave
- * as `answer`, taken in; then the next step. A string, SET_IDLE or the
- * report descriptor that the device refused is done without, its control
- * endpoint reset first (ST_EP0RESET); a device that refuses the boot
- * protocol is given up. The report descriptor goes to the driver
+ * The answer to HID setup step `d->hid_step` of interface `hid_if`, which
+ * `transfer_result` gave as `answer`, taken in; then the next step. A
+ * string, SET_IDLE or the report descriptor that the device refused is done
+ * without, its control endpoint reset first (ST_EP0RESET); an interface that
+ * refuses the boot protocol, or its report descriptor without having a boot
+ * protocol, is given up. The report descriptor goes to the driver
  * (`hid_attach`), and a keyboard or mouse whose descriptor it refuses runs
- * in the boot protocol.
+ * in the boot protocol; another interface it refuses is given up.
  */
 static void hid_answer(struct usb_device_state *d, int answer)
 {
-    int got = (int)(d->interface.report_length - (int)d->short_by);
+    const struct usb_interface_info *info = &d->hid->info[d->hid_if];
+    struct usb_hid_if *f = &d->hid->at[d->hid_if];
+    int got = (int)(info->report_length - (int)d->short_by);
     struct hid_ids ids;
 
     if (answer < 0) {
         if (d->hid_step == HS_PROTOCOL) {
-            fail(d, "it refused the boot protocol");
-            return;
-        }
-        if (d->hid_step == HS_REPORT) {
-            klog(KLOG_WARN, "usb", "device: port %s: it did not give its report descriptor: %s",
-                 path_of(d), transfer_why(d));
-            if (!boot_capable(d)) {
-                fail(d, "it gave no report descriptor");
-                return;
+            hid_give_up(d, "it refused the boot protocol");
+        } else if (d->hid_step == HS_REPORT) {
+            klog(KLOG_WARN, "usb",
+                 "device: port %s: interface %d: it did not give its report descriptor: %s",
+                 path_of(d), info->number, transfer_why(d));
+            if (boot_capable(info)) {
+                f->boot = 1;
+            } else {
+                hid_give_up(d, "it gave no report descriptor");
             }
-            d->boot = 1;
         }
         d->state = ST_EP0RESET;
         arm(d);
@@ -1342,14 +1626,17 @@ static void hid_answer(struct usb_device_state *d, int answer)
     case HS_PRODUCT:
         take_string(d, (int)(STRING_ASK - d->short_by), d->product_name);
         break;
+    case HS_SERIAL:
+        take_string(d, (int)(STRING_ASK - d->short_by), d->serial);
+        break;
     case HS_REPORT:
-        hid_ids_of(d, &ids);
-        if (hid_attach(d->index + 1, &ids, d->buffer, got) != 0) {
-            if (!boot_capable(d)) {
-                unsupported(d);
-                return;
+        hid_ids_of(d, d->hid_if, &ids);
+        if (hid_attach(d->index + 1, d->hid_if, &ids, d->buffer, got) != 0) {
+            if (boot_capable(info)) {
+                f->boot = 1;
+            } else {
+                hid_give_up(d, 0);
             }
-            d->boot = 1;
         }
         break;
     default:
@@ -1358,14 +1645,23 @@ static void hid_answer(struct usb_device_state *d, int answer)
     hid_advance(d, d->hid_step);
 }
 
-/** Start the HID setup of `d`, configured: its strings and report
- * descriptor are asked for afresh. */
+/** Start the HID setup of `d`, configured: its strings and each interface's
+ * report descriptor are asked for afresh, from its first interface. */
 static void hid_begin(struct usb_device_state *d)
 {
-    d->boot = 0;
+    int k;
+
+    for (k = 0; k < d->hid->count; k++) {
+        d->hid->at[k].boot = 0;
+        d->hid->at[k].live = 0;
+        d->hid->at[k].given_up = 0;
+    }
+    d->hid_if = 0;
+    d->hid_why = 0;
     d->langid = 0;
     d->manufacturer[0] = 0;
     d->product_name[0] = 0;
+    d->serial[0] = 0;
     hid_advance(d, 0);
 }
 
@@ -1386,6 +1682,98 @@ static void ep0reset_step(struct usb_device_state *d)
         return;
     }
     hid_advance(d, d->hid_step);
+}
+
+/**
+ * The step of ST_HALTED: quiesce the halted report endpoint of `d`'s
+ * interface `hid_if`, and run again once it is usable, or fail the device
+ * when it will not be. A quiesce of the control endpoint that a failed
+ * output report began ends first, since a device has one quiesce at a time.
+ */
+static void halted_step(struct usb_device_state *d)
+{
+    int answer;
+
+    if (output_quiesce_step(d) <= 0) {
+        return;
+    }
+    answer = usb_core_endpoint_quiesce(d->hc, d->slot, d->hid->at[d->hid_if].ep_dci);
+    if (answer == 0) {
+        return;
+    }
+    if (answer < 0) {
+        fail(d, "its halted endpoint would not reset");
+        return;
+    }
+    d->state = ST_RUNNING;
+    d->hid->at[d->hid_if].reporting = 0;
+}
+
+/**
+ * Take the frame of the HID device `d`'s interfaces, or clear the one it has,
+ * and fill it from the configuration in `d->buffer`: every HID interface the
+ * walk keeps, `d->interface` the first, with its endpoint's index; the first
+ * endpoint is the one opened first, `hid_if` 0. Returns 0 when no frame
+ * could be had.
+ */
+static int hid_ifs_take(struct usb_device_state *d)
+{
+    int k;
+
+    hid_ifs_release(d);
+    d->hid = (struct usb_hid_ifs *)alloc_kernel_frame();
+    if (!d->hid) {
+        return 0;
+    }
+    k_memset(d->hid, 0, sizeof(*d->hid));
+    d->hid->count = usb_parse_config(d->buffer, (int)(d->config_length - d->short_by), d->hid->info,
+                                     USB_HID_INTERFACES);
+    for (k = 0; k < d->hid->count; k++) {
+        d->hid->at[k].ep_dci = d->hid->info[k].ep_number * 2 + 1;
+    }
+    d->hid_if = 0;
+    return 1;
+}
+
+/**
+ * The step of ST_OPEN_HID: ask the controller to open the interrupt IN
+ * endpoint of `d`'s interface `hid_if`, and wait in ST_OPEN_EP for the
+ * answer. A request the controller cannot take now is asked again at the
+ * next step, until the deadline.
+ */
+static void open_hid_step(struct usb_device_state *d)
+{
+    const struct usb_interface_info *info = &d->hid->info[d->hid_if];
+    struct usb_endpoint endpoint;
+
+    endpoint.number = info->ep_number;
+    endpoint.direction = USB_DIR_IN;
+    endpoint.type = USB_EP_INTERRUPT;
+    endpoint.max_packet = info->ep_max_packet;
+    endpoint.interval = info->ep_interval;
+    if (xhci_endpoint_open(d->hc, d->slot, &endpoint) != 0) {
+        if (expired(d)) {
+            fail(d, "the endpoint of an interface could not be opened");
+        }
+        return;
+    }
+    d->state = ST_OPEN_EP;
+    arm(d);
+}
+
+/** Give the report `completion` to the interface of `hid` whose endpoint it
+ * came from; a completion of no interface's endpoint is dropped. */
+static void report_route(struct usb_hid_ifs *hid, const struct usb_completion *completion)
+{
+    int k;
+
+    for (k = 0; k < hid->count; k++) {
+        if (hid->at[k].ep_dci == completion->endpoint) {
+            hid->at[k].report_done = *completion;
+            hid->at[k].have_report = 1;
+            return;
+        }
+    }
 }
 
 /**
@@ -1439,16 +1827,7 @@ static void step_device(struct usb_device_state *d)
         return;
 
     case ST_HALTED:
-        answer = usb_core_endpoint_quiesce(d->hc, d->slot, d->ep_dci);
-        if (answer == 0) {
-            return;
-        }
-        if (answer < 0) {
-            fail(d, "its halted endpoint would not reset");
-            return;
-        }
-        d->state = ST_RUNNING;
-        d->reporting = 0;
+        halted_step(d);
         return;
 
     case ST_SETTLING:
@@ -1639,6 +2018,7 @@ static void step_device(struct usb_device_state *d)
         d->release = (uint16_t)(d->buffer[12] | (d->buffer[13] << 8));
         d->i_manufacturer = d->buffer[14];
         d->i_product = d->buffer[15];
+        d->i_serial = d->buffer[16];
         if (control_in(d, REQ_GET_DESCRIPTOR, DESC_CONFIG << 8, 0, 9) != 0) {
             fail(d, "its configuration could not be asked for");
             return;
@@ -1682,9 +2062,13 @@ static void step_device(struct usb_device_state *d)
             fail(d, "it did not answer for its configuration");
             return;
         }
-        usb_parse_config(d->buffer, (int)(d->config_length - d->short_by), &d->interface);
+        usb_parse_config(d->buffer, (int)(d->config_length - d->short_by), &d->interface, 1);
         if (!d->interface.found) {
             unsupported(d);
+            return;
+        }
+        if (d->interface.kind == USB_KIND_HID && !hid_ifs_take(d)) {
+            fail(d, "no frame for its interfaces");
             return;
         }
         {
@@ -1739,12 +2123,23 @@ static void step_device(struct usb_device_state *d)
             arm(d);
             return;
         }
+        if (d->interface.kind == USB_KIND_HID && d->hid_if + 1 < d->hid->count) {
+            d->hid_if++;
+            d->state = ST_OPEN_HID;
+            arm(d);
+            open_hid_step(d);
+            return;
+        }
         if (control_out(d, 0x00, REQ_SET_CONFIGURATION, d->interface.config_value, 0) != 0) {
             fail(d, "it could not be told its configuration");
             return;
         }
         d->state = ST_SET_CONFIG;
         d->deadline = core_ms + CONFIG_MS;
+        return;
+
+    case ST_OPEN_HID:
+        open_hid_step(d);
         return;
 
     case ST_OPEN_EP2:
@@ -1781,7 +2176,6 @@ static void step_device(struct usb_device_state *d)
                 return;
             }
             d->state = ST_RUNNING;
-            d->reporting = 0;
             enumerating[bus_of(d)] = -1;
             klog(KLOG_INFO, "usb",
                  "device: port %s: %x:%x, class %d protocol %d, endpoints %d and %d", path_of(d),
@@ -1796,7 +2190,6 @@ static void step_device(struct usb_device_state *d)
                 return;
             }
             d->state = ST_RUNNING;
-            d->reporting = 0;
             d->refused = 0;
             d->unentered = 0;
             d->hub_multi = 0;
@@ -1860,8 +2253,7 @@ static void device_arrive(struct xhci_ctrl *hc, int owner, int port)
             dev_at(i)->closing_asked = 0;
             dev_at(i)->abandoned = 0;
             dev_at(i)->have_control = 0;
-            dev_at(i)->have_report = 0;
-            dev_at(i)->reports = 0;
+            hid_ifs_release(dev_at(i));
             dev_at(i)->refused = 0;
             dev_at(i)->unentered = 0;
             dev_at(i)->interface.found = 0;
@@ -2028,9 +2420,8 @@ void usb_core_step(uint32_t elapsed_ms)
                 if (completion.endpoint == 1) {
                     dev_at(i)->control = completion;
                     dev_at(i)->have_control = 1;
-                } else if (completion.endpoint == dev_at(i)->ep_dci) {
-                    dev_at(i)->report_done = completion;
-                    dev_at(i)->have_report = 1;
+                } else if (dev_at(i)->hid) {
+                    report_route(dev_at(i)->hid, &completion);
                 }
                 break;
             }
@@ -2314,7 +2705,30 @@ static int put_num(char *out, int size, int at, uint32_t value, int base)
 
 int usb_core_row(int index, struct usb_sys_row *row)
 {
+    return usb_core_interface(index, -1, row);
+}
+
+/** The interface of the running device `d` whose number is `ifnum`, of
+ * those it drives, or its first for an `ifnum` of -1; NULL for none. */
+static const struct usb_interface_info *interface_of(const struct usb_device_state *d, int ifnum)
+{
+    int k;
+
+    if (!d->hid) {
+        return ifnum < 0 || d->interface.number == ifnum ? &d->interface : 0;
+    }
+    for (k = 0; k < d->hid->count; k++) {
+        if (d->hid->at[k].live && (ifnum < 0 || d->hid->info[k].number == ifnum)) {
+            return &d->hid->info[k];
+        }
+    }
+    return 0;
+}
+
+int usb_core_interface(int index, int ifnum, struct usb_sys_row *row)
+{
     const struct usb_device_state *d;
+    const struct usb_interface_info *info;
     int chain[USB_TREE_TIERS + 1];
     int depth = 0;
     uint32_t flags;
@@ -2324,7 +2738,8 @@ int usb_core_row(int index, struct usb_sys_row *row)
     }
     flags = kirq_save();
     d = dev_at(index);
-    if (d->state != ST_RUNNING) {
+    info = d->state == ST_RUNNING ? interface_of(d, ifnum) : 0;
+    if (!info) {
         kirq_restore(flags);
         return -1;
     }
@@ -2333,11 +2748,11 @@ int usb_core_row(int index, struct usb_sys_row *row)
     row->vendor = d->vendor;
     row->product = d->product;
     row->release = d->release;
-    row->config = d->interface.config_value;
-    row->ifnum = d->interface.number;
-    row->ifclass = d->interface.class_code;
-    row->ifsubclass = d->interface.subclass;
-    row->ifprotocol = d->interface.protocol;
+    row->config = info->config_value;
+    row->ifnum = info->number;
+    row->ifclass = info->class_code;
+    row->ifsubclass = info->subclass;
+    row->ifprotocol = info->protocol;
     while (d != 0 && depth <= USB_TREE_TIERS) {
         chain[depth++] = d->port + 1;
         d = d->owner >= 0 ? dev_at(d->owner) : 0;
@@ -2396,9 +2811,15 @@ int usb_core_describe(int index, char *out, int size)
     at = put_num(out, size, at, (uint32_t)d->interface.class_code, 10);
     at = put_str(out, size, at, " protocol ");
     at = put_num(out, size, at, (uint32_t)d->interface.protocol, 10);
-    if (d->interface.kind == USB_KIND_HID) {
+    if (d->interface.kind == USB_KIND_HID && d->hid) {
+        uint32_t reports = 0;
+        int k;
+
+        for (k = 0; k < d->hid->count; k++) {
+            reports += d->hid->at[k].reports;
+        }
         at = put_str(out, size, at, " reports ");
-        at = put_num(out, size, at, d->reports, 10);
+        at = put_num(out, size, at, reports, 10);
     }
     at = put_str(out, size, at, "\n");
     out[at] = '\0';

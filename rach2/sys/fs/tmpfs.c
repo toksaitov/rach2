@@ -70,8 +70,23 @@ struct tmpfs_node {
     int64_t atime, atime_ns, mtime, mtime_ns, ctime, ctime_ns;
     struct shmem data; /* a regular file's bytes */
     char *target;
-    char *label; /* a memfd's name, for /proc/PID/fd; NULL for a named file */
+    char *label;                /* a memfd's name, for /proc/PID/fd; NULL for a named file */
+    struct secret_user *secret; /* memfd_secret's: its pages' count; or NULL */
 };
+
+/*
+ * The pages the files of memfd_secret that a real user made hold, as Linux
+ * counts them in the user's locked_vm, against the RLIMIT_MEMLOCK of the
+ * process that touches a page (`secret_cap`). A record lives while a file
+ * of its user's does; `files` counts them.
+ */
+struct secret_user {
+    struct shmem_quota quota;
+    uint32_t uid;
+    uint32_t files;
+    struct secret_user *next;
+};
+static struct secret_user *secret_users;
 
 /* The state of a mount, in its `priv`. */
 struct tmpfs_mount {
@@ -123,7 +138,7 @@ static int removed(const struct tmpfs_node *d)
 /** A new node of `mode` for the directory `dir`, or of no directory for the
  * root and a memfd, with no hold, no name, the next inode number and the
  * seal TMPFS_SEAL_SEAL; NULL when the heap has no room. It is owned as
- * Linux's `inode_init_owner` owns one: by the caller's effective ids, but
+ * Linux's `inode_init_owner` owns one: by the caller's file-system ids, but
  * with the group of a setgid directory, which passes the bit on to a new
  * directory. */
 static struct tmpfs_node *new_node(struct vfs_mount *mnt, const struct tmpfs_node *dir,
@@ -135,8 +150,8 @@ static struct tmpfs_node *new_node(struct vfs_mount *mnt, const struct tmpfs_nod
     if (!n) {
         return NULL;
     }
-    n->uid = current_proc ? current_proc->euid : 0u;
-    n->gid = current_proc ? current_proc->egid : 0u;
+    n->uid = current_proc ? proc_fsuid(current_proc) : 0u;
+    n->gid = current_proc ? proc_fsgid(current_proc) : 0u;
     if (dir && (dir->mode & T_ISGID)) {
         n->gid = dir->gid;
         if ((mode & T_IFMT) == T_IFDIR) {
@@ -149,6 +164,52 @@ static struct tmpfs_node *new_node(struct vfs_mount *mnt, const struct tmpfs_nod
     n->data.quota = &tm->quota;
     stamp(n, STAMP_A | STAMP_M | STAMP_C);
     return n;
+}
+
+/** The pages of memfd_secret the current process lets its user hold: its
+ * soft RLIMIT_MEMLOCK in pages, as Linux reads it, with no exception for
+ * privilege. */
+static size_t secret_cap(void)
+{
+    return current_proc ? (size_t)(current_proc->rlim[RLIM_MEMLOCK].cur >> 12) : 0u;
+}
+
+/** The record of the current process's real user, made when it has none;
+ * NULL when the heap has no room. */
+static struct secret_user *secret_get(void)
+{
+    uint32_t uid = current_proc ? current_proc->ruid : 0u;
+    struct secret_user *u;
+
+    for (u = secret_users; u && u->uid != uid; u = u->next) {
+    }
+    if (!u) {
+        u = kzalloc(sizeof(*u));
+        if (!u) {
+            return NULL;
+        }
+        u->uid = uid;
+        u->quota.cap = secret_cap;
+        u->next = secret_users;
+        secret_users = u;
+    }
+    u->files++;
+    return u;
+}
+
+/** Let go of a file's hold on the record `u`, which goes with its last file,
+ * whose pages are freed by then. */
+static void secret_put(struct secret_user *u)
+{
+    struct secret_user **link;
+
+    if (--u->files != 0) {
+        return;
+    }
+    for (link = &secret_users; *link != u; link = &(*link)->next) {
+    }
+    *link = u->next;
+    kfree(u);
 }
 
 /**
@@ -164,6 +225,9 @@ static void settle(struct tmpfs_node *n)
         struct tmpfs_node *up = is_dir(n) && n->parent != n ? n->parent : NULL;
 
         shmem_free(&n->data);
+        if (n->secret) {
+            secret_put(n->secret);
+        }
         kfree(n->target);
         kfree(n->label);
         kfree(n);
@@ -361,7 +425,8 @@ static void tmpfs_put(struct vfs_mount *mnt, void *node)
  * subdirectory, or none once it is removed, and a size of DIRENT_BYTES for
  * each name and for `.` and `..`; a symbolic link's size is its target's
  * length; any other node has the size of its bytes and the 512-byte blocks
- * of the pages that hold them. */
+ * of the pages that hold them, but a file of memfd_secret one link and no
+ * blocks, as Linux's anonymous inode has. */
 static int tmpfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     struct tmpfs_node *n = (struct tmpfs_node *)node;
@@ -371,7 +436,9 @@ static int tmpfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     st->mode = n->mode;
     st->uid = n->uid;
     st->gid = n->gid;
-    if (!is_dir(n)) {
+    if (n->secret) {
+        st->nlink = 1;
+    } else if (!is_dir(n)) {
         st->nlink = n->links;
     } else {
         st->nlink = removed(n) ? 0u : 2u + n->subdirs;
@@ -384,7 +451,7 @@ static int tmpfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
         st->size = k_strlen(n->target);
     } else {
         st->size = n->data.size;
-        st->blocks = (uint64_t)n->data.held * (PAGE_SIZE / 512u);
+        st->blocks = n->secret ? 0u : (uint64_t)n->data.held * (PAGE_SIZE / 512u);
         st->blocks_known = 1;
     }
     st->atime_sec = n->atime;
@@ -413,7 +480,8 @@ static int seals_allow_size(const struct tmpfs_node *n, uint64_t size)
 /**
  * The `setattr` of tmpfs. A change of the execute bits under
  * TMPFS_SEAL_EXEC is -EPERM. A size change is -EISDIR on a directory,
- * -EINVAL on any other node but a regular file, -EPERM where the seals
+ * -EINVAL on any other node but a regular file and on a file of
+ * memfd_secret whose size is set already, -EPERM where the seals
  * forbid the size, or what `shmem_truncate` answers, and on success sets
  * the modification time. Every call that succeeds sets the change time.
  */
@@ -431,7 +499,7 @@ static int tmpfs_setattr(struct vfs_mount *mnt, void *node, int what, const stru
         if (is_dir(n)) {
             return -EISDIR;
         }
-        if ((n->mode & T_IFMT) != T_IFREG) {
+        if ((n->mode & T_IFMT) != T_IFREG || (n->secret && n->data.size != 0)) {
             return -EINVAL;
         }
         rc = seals_allow_size(n, st->size);
@@ -488,7 +556,8 @@ static void tmpfs_release(struct vfs_mount *mnt, void *handle)
 }
 
 /** The `read` of tmpfs: bytes of a regular file (`shmem_read`), which sets
- * its access time; -EISDIR for a directory, -EINVAL for any other node. */
+ * its access time; -EISDIR for a directory, -EINVAL for any other node and
+ * for a file of memfd_secret. */
 static int32_t tmpfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
                           uint64_t offset)
 {
@@ -498,7 +567,7 @@ static int32_t tmpfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32
     if (is_dir(n)) {
         return -EISDIR;
     }
-    if ((n->mode & T_IFMT) != T_IFREG) {
+    if ((n->mode & T_IFMT) != T_IFREG || n->secret) {
         return -EINVAL;
     }
     stamp(n, STAMP_A);
@@ -507,9 +576,10 @@ static int32_t tmpfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32
 
 /** The `write` of tmpfs: bytes of a regular file (`shmem_write`), which sets
  * its modification and change times; -EISDIR for a directory, -EINVAL for
- * any other node. A write under F_SEAL_WRITE or F_SEAL_FUTURE_WRITE is
- * -EPERM, and one past the end under F_SEAL_GROW is -EPERM whole, as on
- * Linux. */
+ * any other node and for a file of memfd_secret. A write under
+ * F_SEAL_WRITE or F_SEAL_FUTURE_WRITE is -EPERM, and one past the end under
+ * F_SEAL_GROW writes the whole 2 MiB chunks before the end
+ * (`tmpfs_grow_room`) and is -EPERM when none fits, as on Linux. */
 static int32_t tmpfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                            uint64_t offset)
 {
@@ -519,12 +589,17 @@ static int32_t tmpfs_write(struct vfs_mount *mnt, void *handle, const void *buf,
     if (is_dir(n)) {
         return -EISDIR;
     }
-    if ((n->mode & T_IFMT) != T_IFREG) {
+    if ((n->mode & T_IFMT) != T_IFREG || n->secret) {
         return -EINVAL;
     }
-    if ((n->seals & (TMPFS_SEAL_WRITE | TMPFS_SEAL_FUTURE_WRITE)) ||
-        ((n->seals & TMPFS_SEAL_GROW) && offset + count > n->data.size)) {
+    if (n->seals & (TMPFS_SEAL_WRITE | TMPFS_SEAL_FUTURE_WRITE)) {
         return -EPERM;
+    }
+    if ((n->seals & TMPFS_SEAL_GROW) && count) {
+        count = tmpfs_grow_room(offset, count, n->data.size);
+        if (count == 0) {
+            return -EPERM;
+        }
     }
     stamp(n, STAMP_M | STAMP_C);
     return shmem_write(&n->data, buf, count, offset);
@@ -532,7 +607,8 @@ static int32_t tmpfs_write(struct vfs_mount *mnt, void *handle, const void *buf,
 
 /** The `truncate` of tmpfs: a regular file's new size (`shmem_truncate`),
  * which sets its modification and change times; -EISDIR for a directory,
- * -EINVAL for any other node, or -EPERM where the seals forbid the size. */
+ * -EINVAL for any other node and for a file of memfd_secret whose size is
+ * set already, or -EPERM where the seals forbid the size. */
 static int tmpfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
 {
     struct tmpfs_node *n = (struct tmpfs_node *)handle;
@@ -540,6 +616,9 @@ static int tmpfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     (void)mnt;
     if ((n->mode & T_IFMT) != T_IFREG) {
         return is_dir(n) ? -EISDIR : -EINVAL;
+    }
+    if (n->secret && n->data.size != 0) {
+        return -EINVAL;
     }
     if (seals_allow_size(n, size) != 0) {
         return -EPERM;
@@ -865,8 +944,9 @@ static int tmpfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
  * size grown to its end unless FALLOC_FL_KEEP_SIZE, and with
  * FALLOC_FL_PUNCH_HOLE the range made to read as zeros and its whole pages
  * freed. A growth a seal forbids, or a hole in a file sealed against
- * writing, is -EPERM, any other mode -EOPNOTSUPP, and a node that is not a
- * regular file -ENODEV; a failed allocation answers the error of
+ * writing, is -EPERM, any other mode -EOPNOTSUPP, as is every call on a
+ * file of memfd_secret, and a node that is not a regular file -ENODEV; a
+ * failed allocation answers the error of
  * `shmem_allocate`.
  */
 static int tmpfs_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t offset,
@@ -877,6 +957,9 @@ static int tmpfs_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, u
     int rc;
 
     (void)mnt;
+    if (n->secret) {
+        return -EOPNOTSUPP;
+    }
     if ((n->mode & T_IFMT) != T_IFREG) {
         return -ENODEV;
     }
@@ -1194,9 +1277,42 @@ int tmpfs_memfd(struct vfs_mount *mnt, const char *name, uint32_t mode, uint32_t
     return 0;
 }
 
+int tmpfs_secret_file(struct vfs_mount *mnt, void **node)
+{
+    struct tmpfs_node *n = new_node(mnt, NULL, T_IFREG | 0600u);
+
+    if (!n) {
+        return -ENOMEM;
+    }
+    n->secret = secret_get();
+    if (!n->secret) {
+        kfree(n);
+        return -ENOMEM;
+    }
+    n->data.quota = &n->secret->quota;
+    n->refs = 1;
+    *node = n;
+    return 0;
+}
+
+int tmpfs_secret(void *node)
+{
+    return ((struct tmpfs_node *)node)->secret != NULL;
+}
+
 uint32_t tmpfs_seals(void *node)
 {
     return ((struct tmpfs_node *)node)->seals;
+}
+
+uint32_t tmpfs_grow_room(uint64_t pos, uint32_t count, uint64_t size)
+{
+    uint64_t end = size & ~(uint64_t)(TMPFS_GROW_CHUNK - 1u);
+
+    if (pos <= size && count <= size - pos) {
+        return count;
+    }
+    return end > pos ? (uint32_t)(end - pos) : 0u;
 }
 
 int tmpfs_add_seals(void *node, uint32_t seals)
@@ -1219,6 +1335,24 @@ int tmpfs_add_seals(void *node, uint32_t seals)
 const char *tmpfs_label(void *node)
 {
     return ((struct tmpfs_node *)node)->label;
+}
+
+/** Count allocated pages, skipping absent shmem leaves. Linux's shmem
+ * folios may be dirty, but have no PAGECACHE_TAG_DIRTY mark, which is what
+ * cachestat counts; secret-memory pages likewise count as clean. */
+static void tmpfs_cachestat(struct vfs_mount *mnt, void *node, uint64_t first, uint64_t last,
+                            struct vfs_cachestat *cs)
+{
+    struct tmpfs_node *n = node;
+
+    (void)mnt;
+    if (first > 0xFFFFFFFFu) {
+        return;
+    }
+    if (last > 0xFFFFFFFFu) {
+        last = 0xFFFFFFFFu;
+    }
+    cs->cache = shmem_count(&n->data, (uint32_t)first, (uint32_t)last);
 }
 
 /**
@@ -1285,6 +1419,7 @@ static const struct vfs_ops tmpfs_ops = {
     0, /* unlock_node */
     0, /* shutdown */
     0, /* xattr */
+    tmpfs_cachestat,
 };
 
 const struct vfs_type vfs_tmpfs_type = {"tmpfs", tmpfs_mount, &tmpfs_ops, 1, 1, 0, 0};

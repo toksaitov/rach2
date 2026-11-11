@@ -241,8 +241,11 @@ static void synth_put_proc(char *out, int cap, int *pos, int pid, int tid)
  * (mm/vm.h); net/ipv6/conf, whose entries follow the table's
  * (`synth_sys_ipv6`); TCP's keepalive defaults, black-hole detection and
  * give-up (tcp.h); Linux 6.12's highest capability, 40, and FIPS mode,
- * off, which libcap and libgcrypt read; and the mount namespaces a user may
- * own, the limit of the reader's user namespace (proc/ns.h). An entry whose
+ * off, which libcap and libgcrypt read; the mount namespaces a user may
+ * own, the limit of the reader's user namespace (proc/ns.h); and the largest
+ * pipe an unprivileged F_SETPIPE_SZ makes and the limits of one user's pipe
+ * pages (ipc/pipe.h); and what a panic does once its record is out and
+ * whether an oops panics (panic.h). An entry whose
  * text is empty is procfs's, which reads its value when the file is opened.
  * A new entry goes at the end, so that the indices SYNTH_SYS_ names stay
  * the same. */
@@ -303,7 +306,12 @@ static const struct {
                {0, "crypto", 0},
                {50, "fips_enabled", "0\n"},
                {0, "user", 0},
-               {52, "max_mnt_namespaces", ""}};
+               {52, "max_mnt_namespaces", ""},
+               {1, "pipe-max-size", ""},
+               {1, "pipe-user-pages-hard", ""},
+               {1, "pipe-user-pages-soft", ""},
+               {6, "panic", ""},
+               {6, "panic_on_oops", ""}};
 
 /* The entries of the table. */
 #define SYNTH_SYS_TABLE ((int)(sizeof(sysents) / sizeof(sysents[0])))
@@ -349,6 +357,8 @@ int synth_sys_writable(int entry)
            (entry >= SYNTH_SYS_MAX_MAP_COUNT && entry <= SYNTH_SYS_OVERFLOWUID) ||
            entry == SYNTH_SYS_NR_OPEN || entry == SYNTH_SYS_FILE_MAX ||
            entry == SYNTH_SYS_RANDOMIZE_VA_SPACE || entry == SYNTH_SYS_MAX_MNT_NAMESPACES ||
+           (entry >= SYNTH_SYS_PIPE_MAX_SIZE && entry <= SYNTH_SYS_PIPE_USER_PAGES_SOFT) ||
+           entry == SYNTH_SYS_PANIC || entry == SYNTH_SYS_PANIC_ON_OOPS ||
            (entry >= SYNTH_SYS_TCP_KEEPALIVE_TIME && entry <= SYNTH_SYS_TCP_RETRIES2);
 }
 
@@ -519,6 +529,7 @@ static int synth_pid_file(struct comp name, int task)
                  {"cmdline", SYNTH_PROC_CMDLINE},
                  {"maps", SYNTH_PROC_MAPS},
                  {"smaps", SYNTH_PROC_SMAPS},
+                 {"numa_maps", SYNTH_PROC_NUMA_MAPS},
                  {"status", SYNTH_PROC_STATUS},
                  {"statm", SYNTH_PROC_STATM},
                  {"auxv", SYNTH_PROC_AUXV},
@@ -531,7 +542,10 @@ static int synth_pid_file(struct comp name, int task)
                  {"mountinfo", SYNTH_PROC_MOUNTINFO},
                  {"uid_map", SYNTH_PROC_UID_MAP},
                  {"gid_map", SYNTH_PROC_GID_MAP},
-                 {"setgroups", SYNTH_PROC_SETGROUPS}};
+                 {"setgroups", SYNTH_PROC_SETGROUPS},
+                 {"syscall", SYNTH_PROC_SYSCALL},
+                 {"wchan", SYNTH_PROC_WCHAN},
+                 {"schedstat", SYNTH_PROC_SCHEDSTAT}};
     uint32_t i;
 
     for (i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
@@ -868,6 +882,9 @@ static const char *const *sysfs_system_attrs(int node)
                                               "online",  "possible",   0};
     static const char *const node0[] = {"cpulist", "cpumap", "distance", 0};
     static const char *const clocksource[] = {"available_clocksource", "current_clocksource", 0};
+    static const char *const thp[] = {
+        "enabled",          "defrag", "use_zero_page", "hpage_pmd_size", "shmem_enabled",
+        "shrink_underused", 0};
     /* In the order of dmi.h's DMI_ fields, then modalias. */
     static const char *const dmi[] = {
         "bios_vendor",         "bios_version",      "bios_date",     "bios_release",
@@ -881,6 +898,7 @@ static const char *const *sysfs_system_attrs(int node)
            : node == SYSFS_NODE          ? node_states
            : node == SYSFS_NODE0         ? node0
            : node == SYSFS_CLOCKSOURCE0  ? clocksource
+           : node == SYSFS_THP           ? thp
            : node == SYSFS_DMI_ID        ? dmi
                                          : 0;
 }
@@ -1006,7 +1024,8 @@ int sysfs_attr_writable(int node, int attr)
            sysfs_attr_uevent(node, attr) ||
            (node == SYSFS_PCI_DEVICE && attr == SYSFS_PCI_CONFIG) ||
            (node == SYSFS_BACKLIGHT && (attr == BACKLIGHT_POWER || attr == BACKLIGHT_BRIGHTNESS)) ||
-           (node == SYSFS_RFKILL && (attr == RFKILL_ATTR_SOFT || attr == RFKILL_ATTR_STATE));
+           (node == SYSFS_RFKILL && (attr == RFKILL_ATTR_SOFT || attr == RFKILL_ATTR_STATE)) ||
+           (node == SYSFS_THP && attr != SYSFS_THP_PMD_SIZE);
 }
 
 int sysfs_file_writable(int node, int key, int attr)
@@ -1016,9 +1035,18 @@ int sysfs_file_writable(int node, int key, int attr)
 
 const char *sysfs_pci_attr(int attr)
 {
-    static const char *const names[SYSFS_PCI_ATTRS] = {
-        "uevent",           0,       "config",   "vendor",  "device", "subsystem_vendor",
-        "subsystem_device", "class", "revision", "boot_vga"};
+    static const char *const names[SYSFS_PCI_ATTRS] = {"uevent",           0,
+                                                       "config",           "vendor",
+                                                       "device",           "subsystem_vendor",
+                                                       "subsystem_device", "class",
+                                                       "revision",         "boot_vga",
+                                                       "resource",         "resource0",
+                                                       "resource1",        "resource2",
+                                                       "resource3",        "resource4",
+                                                       "resource5",        "resource0_wc",
+                                                       "resource1_wc",     "resource2_wc",
+                                                       "resource3_wc",     "resource4_wc",
+                                                       "resource5_wc"};
 
     return attr >= 0 && attr < SYSFS_PCI_ATTRS ? names[attr] : 0;
 }
@@ -1117,6 +1145,11 @@ static int synth_sys_later_path(int node, int key, char *out, int cap)
         if (node == SYSFS_CPU_CACHE_INDEX) {
             synth_put(out, cap, &pos, "/index");
             synth_put_uint(out, cap, &pos, (unsigned int)(key & 15));
+        }
+    } else if (node == SYSFS_KERNEL_MM || node == SYSFS_THP) {
+        synth_put(out, cap, &pos, "/sys/kernel/mm");
+        if (node == SYSFS_THP) {
+            synth_put(out, cap, &pos, "/transparent_hugepage");
         }
     } else if (node >= SYSFS_NODE && node <= SYSFS_DMI_ID) {
         synth_put(out, cap, &pos, system[node - SYSFS_NODE]);
@@ -1638,7 +1671,8 @@ static int synth_classify_sys_class(const struct comp *c, int n, struct vpath *v
  * Classify the components `c` of `n`, at least one, below /sys among the
  * fixed directories numbered from SYSFS_KERNEL, which hold drivers'
  * entries: /sys/bus/platform and its `devices`, /sys/kernel with its
- * `debug` and its attribute, and /sys/devices/platform. The kind, with any
+ * `debug`, `mm/transparent_hugepage` and its attributes, and
+ * /sys/devices/platform. The kind, with any
  * other name below them VNODE_ENOENT, or -1 for a path outside them.
  */
 static int synth_classify_sys_later(const struct comp *c, int n, struct vpath *vp)
@@ -1651,6 +1685,12 @@ static int synth_classify_sys_later(const struct comp *c, int n, struct vpath *v
         }
     } else if (n >= 2 && comp_eq(c[0], "kernel") && comp_eq(c[1], "debug")) {
         vp->sysent = SYSFS_KERNEL_DEBUG;
+        vp->kind = n == 2 ? VNODE_SYS_DIR : VNODE_ENOENT;
+    } else if (n >= 2 && comp_eq(c[0], "kernel") && comp_eq(c[1], "mm")) {
+        if (n >= 3 && comp_eq(c[2], "transparent_hugepage")) {
+            return synth_classify_sys_attr(c + 3, n - 3, SYSFS_THP, 0, vp);
+        }
+        vp->sysent = SYSFS_KERNEL_MM;
         vp->kind = n == 2 ? VNODE_SYS_DIR : VNODE_ENOENT;
     } else if (comp_eq(c[0], "kernel")) {
         return synth_classify_sys_attr(c + 1, n - 1, SYSFS_KERNEL, 0, vp);

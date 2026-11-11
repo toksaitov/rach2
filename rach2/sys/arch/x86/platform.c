@@ -19,6 +19,7 @@
 #include "board.h"
 #include "itco.h"
 #include "diag.h"
+#include "efirt.h"
 #include "i8042.h"
 #include "ioapic.h"
 #include "ps2kbd.h"
@@ -230,6 +231,7 @@ void platform_firmware_init(const struct boot_info *boot)
 
     acpi_init(boot->acpi_rsdp);
     smbios_init(boot->efi_systab, boot->efi_systab_64);
+    efirt_init(boot);
     a = acpi_get();
     ecam_init(a);
     (void)refclock_init(a);
@@ -333,7 +335,9 @@ static int tick_arrives(uint32_t before)
  * interrupt gives way to the 8254 through the I/O APIC. With the 8259, a
  * tick that does not arrive is a `LINT0` that the firmware or the emulator
  * masked, and the entry is written again; without that a masked entry would
- * show as a machine that boots and never ticks, with nothing said.
+ * show as a machine that boots and never ticks, with nothing said. Under
+ * `rach2.tscreliable` the TSC is measured here, before the first tick, so
+ * that the tick makes it the reference (pit.c).
  */
 void platform_timer_start(isr_handler_t tick)
 {
@@ -350,6 +354,9 @@ void platform_timer_start(isr_handler_t tick)
         if (refclock_name()) {
             udelay_wait = refclock_wait_us;
         }
+    }
+    if (kcmdline_has("rach2.tscreliable")) {
+        (void)timer_calibrate(); /* before the first tick, which starts the reference */
     }
     apic = ioapic_wanted(a);
     if (apic) {
@@ -502,6 +509,7 @@ void platform_tick(void)
     ata_tick();
     ps2kbd_tick();
     alps_tick();
+    itco_tick();
 }
 
 void platform_disks_probe(void)

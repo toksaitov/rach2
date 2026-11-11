@@ -77,6 +77,10 @@ struct input_event32 {
 #define EVIOCGMASK    0x80104592u /* _IOR('E', 0x92, struct input_mask) */
 #define EVIOCSMASK    0x40104593u /* _IOW('E', 0x93, struct input_mask) */
 #define EVIOCSCLOCKID 0x400445A0u
+#define EVIOCRMFF     0x40044581u /* _IOW('E', 0x81, int) */
+#define EVIOCGEFFECTS 0x80044584u /* _IOR('E', 0x84, int) */
+#define NR_KEYCODE    0x04u       /* EVIOCGKEYCODE, EVIOCSKEYCODE and their _V2 */
+#define NR_SFF        0x80u       /* EVIOCSFF: _IOW('E', 0x80, struct ff_effect) */
 #define NR_GNAME      0x06u
 #define NR_GPHYS      0x07u
 #define NR_GUNIQ      0x08u
@@ -153,17 +157,21 @@ struct evdev_slot {
 };
 
 struct evdev {
-    int used;             /* the slot is taken, by a device or by the opens of one gone */
-    int gone;             /* unregistered: no node, and its opens read -ENODEV */
+    int used;             /* reserved, registered, or held by opens of a device gone */
+    int gone;             /* reserved or unregistered: no node; opens read -ENODEV */
     unsigned int flags;   /* EVDEV_SCAN, EVDEV_KEYBOARD */
-    unsigned int leds;    /* a keyboard's LEDs lit, a bit 1 << LED_* each */
+    unsigned int leds;    /* the LEDs lit, a bit 1 << LED_* each: a keyboard's
+                           * first three as the console has them, the others
+                           * as programs wrote them */
     unsigned int ledbits; /* the LEDs it has beyond a keyboard's three */
     int rep[2];           /* a keyboard's REP_DELAY and REP_PERIOD, ms */
     int has_abs;          /* EV_ABS: `absinfo` answers EVIOCGABS */
     int stamped;          /* a packet has begun, at `stamp` */
     uint32_t gen;         /* the registration's number, `evdev_desc`'s */
-    const char *name;
-    const char *phys;                          /* NULL: EVIOCGPHYS answers -ENOENT */
+    char name[EVDEV_NAME_MAX];
+    char phys[EVDEV_TEXT_MAX];
+    char uniq[EVDEV_TEXT_MAX];
+    unsigned int texts;                        /* TEXT_*: those given; one not answers -ENOENT */
     uint16_t id[4];                            /* bustype, vendor, product, version */
     uint8_t keys[EVDEV_KEY_BYTES];             /* the keys it can report */
     uint8_t down[EVDEV_KEY_BYTES];             /* the keys down now, for EVIOCGKEY */
@@ -178,12 +186,18 @@ struct evdev {
     unsigned int trkid;    /* the next tracking number, before the cut to TRKID_MAX */
     struct evdev_slot slots[EVDEV_MT_SLOTS];
     evdev_handler_t handler;
-    int64_t stamp_sec[CLKS]; /* the packet's time on each clock */
+    struct evdev_keymap keymap; /* EVIOCGKEYCODE's; `get` NULL for none */
+    int64_t stamp_sec[CLKS];    /* the packet's time on each clock */
     int32_t stamp_nsec[CLKS];
     struct evdev_client *clients;
     struct evdev_client *grab; /* the open that holds EVIOCGRAB, or NULL */
     wait_queue_t wq;           /* its readers and pollers */
 };
+
+/* The texts of a device that were given, `evdev.texts`. */
+#define TEXT_NAME 1u
+#define TEXT_PHYS 2u
+#define TEXT_UNIQ 4u
 
 static struct evdev devices[EVDEV_MAX];
 
@@ -227,8 +241,20 @@ static void read_clocks(int64_t *sec, int32_t *nsec)
     nsec[CLK_MONO] = nsec[CLK_BOOT] = (int32_t)ns;
 }
 
-struct evdev *evdev_register(const char *name, uint16_t bustype, uint16_t vendor, uint16_t product,
-                             const uint8_t *keys)
+/** Copy the string `s`, or "" for NULL, into `out` of `cap` bytes, cut to
+ * fit. */
+static void copy_text(char *out, const char *s, uint32_t cap)
+{
+    uint32_t i = 0;
+
+    while (s && s[i] && i < cap - 1) {
+        out[i] = s[i];
+        i++;
+    }
+    out[i] = '\0';
+}
+
+struct evdev *evdev_reserve(void)
 {
     struct evdev *dev = NULL;
     uint32_t flags;
@@ -244,27 +270,66 @@ struct evdev *evdev_register(const char *name, uint16_t bustype, uint16_t vendor
     if (dev) {
         k_memset(dev, 0, sizeof(*dev));
         dev->used = 1;
-        dev->name = name;
+        dev->gone = 1;
+        wait_queue_init(&dev->wq);
+    }
+    spin_unlock_irqrestore(&evdev_lock, flags);
+    return dev;
+}
+
+struct evdev *evdev_register_reserved(struct evdev *dev, const char *name, uint16_t bustype,
+                                      uint16_t vendor, uint16_t product, const uint8_t *keys)
+{
+    uint32_t flags;
+
+    if (!dev) {
+        dev = evdev_reserve();
+    }
+    if (dev) {
+        flags = spin_lock_irqsave(&evdev_lock);
+        copy_text(dev->name, name, sizeof(dev->name));
+        dev->texts = name ? TEXT_NAME : 0;
         dev->id[0] = bustype;
         dev->id[1] = vendor;
         dev->id[2] = product;
         k_memcpy(dev->keys, keys, EVDEV_KEY_BYTES);
-        wait_queue_init(&dev->wq);
         dev->gen = ++registered_count;
+        dev->gone = 0;
         change_count++;
-    }
-    spin_unlock_irqrestore(&evdev_lock, flags);
-    if (dev) {
+        spin_unlock_irqrestore(&evdev_lock, flags);
         wq_wake_all(&change_wq);
     }
     return dev;
 }
 
+struct evdev *evdev_register(const char *name, uint16_t bustype, uint16_t vendor, uint16_t product,
+                             const uint8_t *keys)
+{
+    return evdev_register_reserved(NULL, name, bustype, vendor, product, keys);
+}
+
 void evdev_describe(struct evdev *dev, const char *phys, unsigned int flags)
 {
+    uint32_t irq;
+
     if (dev) {
-        dev->phys = phys;
+        irq = spin_lock_irqsave(&evdev_lock);
+        copy_text(dev->phys, phys, sizeof(dev->phys));
+        dev->texts = phys ? dev->texts | TEXT_PHYS : dev->texts & ~TEXT_PHYS;
         dev->flags = flags;
+        spin_unlock_irqrestore(&evdev_lock, irq);
+    }
+}
+
+void evdev_set_uniq(struct evdev *dev, const char *uniq)
+{
+    uint32_t irq;
+
+    if (dev) {
+        irq = spin_lock_irqsave(&evdev_lock);
+        copy_text(dev->uniq, uniq, sizeof(dev->uniq));
+        dev->texts = uniq ? dev->texts | TEXT_UNIQ : dev->texts & ~TEXT_UNIQ;
+        spin_unlock_irqrestore(&evdev_lock, irq);
     }
 }
 
@@ -286,6 +351,17 @@ void evdev_set_capability(struct evdev *dev, uint16_t type, uint16_t code)
         set_bit(dev->rel, code);
     } else if (type == EV_LED && code < LED_CNT) {
         dev->ledbits |= 1u << code;
+    }
+}
+
+void evdev_set_keymap(struct evdev *dev, const struct evdev_keymap *km)
+{
+    uint32_t flags;
+
+    if (dev) {
+        flags = spin_lock_irqsave(&evdev_lock);
+        dev->keymap = *km;
+        spin_unlock_irqrestore(&evdev_lock, flags);
     }
 }
 
@@ -1055,6 +1131,7 @@ static void report_changes(struct evdev *dev, uint16_t type, int *old, const int
 void evdev_report_leds(struct evdev *dev, unsigned int mask)
 {
     int old[3], now[3], i;
+    uint32_t flags;
 
     if (!dev || !(dev->flags & EVDEV_KEYBOARD)) {
         return;
@@ -1064,7 +1141,23 @@ void evdev_report_leds(struct evdev *dev, unsigned int mask)
         now[i] = (int)(mask >> i) & 1;
     }
     report_changes(dev, EV_LED, old, now, 3);
-    dev->leds = mask & 7u;
+    flags = spin_lock_irqsave(&evdev_lock);
+    dev->leds = (dev->leds & ~7u) | (mask & 7u);
+    spin_unlock_irqrestore(&evdev_lock, flags);
+}
+
+unsigned int evdev_leds_lit(struct evdev *dev)
+{
+    unsigned int lit;
+    uint32_t flags;
+
+    if (!dev) {
+        return 0;
+    }
+    flags = spin_lock_irqsave(&evdev_lock);
+    lit = dev->leds;
+    spin_unlock_irqrestore(&evdev_lock, flags);
+    return lit;
 }
 
 void evdev_report_repeat(struct evdev *dev, int delay_ms, int period_ms)
@@ -1276,16 +1369,34 @@ short evdev_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 }
 
 /**
- * Copy the string `s` to the user's `arg`, its terminator among it, cut to
- * `len` bytes as Linux cuts it, without a terminator. Returns the bytes
- * copied, -ENOENT for no string, or -EFAULT.
+ * Copy the text `which`, TEXT_*, of `dev` to the user's `arg`, its
+ * terminator among it, cut to `len` bytes as Linux cuts it, without a
+ * terminator. The text is copied out of the device under the evdev lock
+ * first, so that an unplug during the user copy cannot change it. Returns
+ * the bytes copied, -ENOENT for a text never given, -ENODEV for a device
+ * gone, or -EFAULT.
  */
-static int32_t string_out(uintptr_t arg, uint32_t len, const char *s)
+static int32_t string_out(struct evdev *dev, unsigned int which, uintptr_t arg, uint32_t len)
 {
-    uint32_t n;
+    char s[EVDEV_NAME_MAX];
+    uint32_t n, flags;
+    int32_t rc = 0;
 
-    if (!s) {
-        return -ENOENT;
+    flags = spin_lock_irqsave(&evdev_lock);
+    if (dev->gone) {
+        rc = -ENODEV;
+    } else if (!(dev->texts & which)) {
+        rc = -ENOENT;
+    } else {
+        copy_text(s,
+                  which == TEXT_NAME   ? dev->name
+                  : which == TEXT_PHYS ? dev->phys
+                                       : dev->uniq,
+                  sizeof(s));
+    }
+    spin_unlock_irqrestore(&evdev_lock, flags);
+    if (rc < 0) {
+        return rc;
     }
     n = (uint32_t)k_strlen(s) + 1;
     if (n > len) {
@@ -1522,8 +1633,12 @@ static int type_bytes(const struct evdev *dev, uint32_t type, uint8_t *out)
     k_memset(out, 0, EVDEV_KEY_BYTES);
     switch (type) {
     case 0:
-        out[0] =
-            (uint8_t)(1u << EV_SYN | 1u << EV_KEY | ((dev->flags & EVDEV_SCAN) ? 1u << EV_MSC : 0));
+        out[0] = (uint8_t)(1u << EV_SYN | ((dev->flags & EVDEV_SCAN) ? 1u << EV_MSC : 0));
+        for (i = 0; i < sizeof(dev->keys); i++) {
+            if (dev->keys[i]) {
+                out[0] |= 1u << EV_KEY;
+            }
+        }
         for (i = 0; i < sizeof(dev->rel); i++) {
             if (dev->rel[i]) {
                 out[0] |= 1u << EV_REL;
@@ -1571,11 +1686,36 @@ static int type_bytes(const struct evdev *dev, uint32_t type, uint8_t *out)
 }
 
 /**
+ * Light or put out LED `code` of `dev` as a program wrote it, as Linux's
+ * input core changes `dev->led`: an LED the device lacks, or one already
+ * so, is dropped; a change goes to the opens and stays for EVIOCGLED and
+ * for the driver, which reads it with `evdev_leds_lit`.
+ */
+static void led_written(struct evdev *dev, uint16_t code, int32_t value)
+{
+    unsigned int bit = code < LED_CNT ? 1u << code : 0;
+    uint32_t flags;
+    int changed, grabbed;
+
+    flags = spin_lock_irqsave(&evdev_lock);
+    changed = (dev->ledbits & bit) && ((dev->leds & bit) != 0) != (value != 0);
+    if (changed) {
+        dev->leds ^= bit;
+    }
+    spin_unlock_irqrestore(&evdev_lock, flags);
+    if (changed) {
+        report(dev, EV_LED, code, value != 0, &grabbed);
+    }
+}
+
+/**
  * Inject the event `type`, `code`, `value` a program wrote to `dev`, as
  * Linux's input_inject_event: an event of a type the device lacks is
- * dropped; a keyboard's EV_LED and EV_REP go to the LEDs and the repeat
- * every keyboard shares (`input_written`), whose change each keyboard's
- * opens get; any other event takes a driver's path (`evdev_report`), and
+ * dropped; a keyboard's Num, Caps and Scroll Lock LEDs and its EV_REP go to
+ * the LEDs and the repeat every keyboard shares (`input_written`), whose
+ * change each keyboard's opens get; any other LED the device has is lit or
+ * put out on it alone (`led_written`); any other event takes a driver's
+ * path (`evdev_report`), and
  * one that goes out to the opens with no grab held goes on as Linux's input
  * core gives an injected event to its other handlers: a keyboard's key to
  * the console (`input_written`), a key of another device the console takes
@@ -1595,6 +1735,10 @@ static void inject(struct evdev *dev, uint16_t type, uint16_t code, int32_t valu
     pointer = !keyboard && !dev->handler && bit_on(dev->rel, REL_X);
     spin_unlock_irqrestore(&evdev_lock, flags);
     if (type >= EV_CNT || !bit_on(types, type)) {
+        return;
+    }
+    if (type == EV_LED && !(keyboard && code <= LED_SCROLLL)) {
+        led_written(dev, code, value);
         return;
     }
     if (type == EV_LED || type == EV_REP) {
@@ -1662,19 +1806,6 @@ static int32_t type_bits(const struct evdev *dev, uint32_t type, uintptr_t arg, 
     return n < 0 ? -EINVAL : bits_out(arg, len, bits, (uint32_t)n);
 }
 
-/** Copy the string `s`, or "" for NULL, into `out` of EVDEV_TEXT_MAX
- * bytes, cut to fit. */
-static void copy_text(char *out, const char *s)
-{
-    int i = 0;
-
-    while (s && s[i] && i < EVDEV_TEXT_MAX - 1) {
-        out[i] = s[i];
-        i++;
-    }
-    out[i] = '\0';
-}
-
 /** Store the bits of `type` of `dev` in `out`, of `cap` bytes, as
  * `type_bytes` gives them; the evdev lock is held. */
 static void type_copy(const struct evdev *dev, uint32_t type, uint8_t *out, uint32_t cap)
@@ -1700,8 +1831,10 @@ int evdev_snapshot(int n, struct evdev_desc *out)
     present = dev->used && !dev->gone;
     if (present) {
         out->gen = dev->gen;
-        copy_text(out->name, dev->name);
-        copy_text(out->phys, dev->phys);
+        copy_text(out->name, dev->name, sizeof(out->name));
+        copy_text(out->phys, dev->phys, sizeof(out->phys));
+        copy_text(out->uniq, dev->uniq, sizeof(out->uniq));
+        out->has_uniq = (dev->texts & TEXT_UNIQ) != 0;
         k_memcpy(out->id, dev->id, sizeof(out->id));
         type_copy(dev, 0, out->ev, sizeof(out->ev));
         type_copy(dev, EV_KEY, out->key, sizeof(out->key));
@@ -1834,11 +1967,11 @@ static int32_t read_ioctl(struct evdev_client *c, uint32_t nr, uintptr_t arg, ui
     }
     switch (nr) {
     case NR_GNAME:
-        return string_out(arg, len, dev->name);
+        return string_out(dev, TEXT_NAME, arg, len);
     case NR_GPHYS:
-        return string_out(arg, len, dev->phys);
+        return string_out(dev, TEXT_PHYS, arg, len);
     case NR_GUNIQ:
-        return string_out(arg, len, NULL);
+        return string_out(dev, TEXT_UNIQ, arg, len);
     case NR_GPROP:
         return bits_out(arg, len, dev->props, BITS_BYTES(INPUT_PROP_CNT));
     case NR_GMTSLOTS:
@@ -1853,6 +1986,7 @@ static int32_t read_ioctl(struct evdev_client *c, uint32_t nr, uintptr_t arg, ui
         k_memset(leds, 0, sizeof(leds));
         flags = spin_lock_irqsave(&evdev_lock);
         leds[0] = (uint8_t)dev->leds;
+        leds[1] = (uint8_t)(dev->leds >> 8);
         flush_type(c, EV_LED);
         spin_unlock_irqrestore(&evdev_lock, flags);
         return bits_out(arg, len, leds, BITS_BYTES(LED_CNT));
@@ -1928,11 +2062,189 @@ static int32_t repeat_ioctl(const struct evdev *dev, uint32_t request, uintptr_t
     return 0;
 }
 
+/* Linux's struct input_keymap_entry, EVIOCGKEYCODE_V2's argument. */
+struct keymap_v2 {
+    uint8_t flags; /* INPUT_KEYMAP_BY_INDEX, 1: by `index` */
+    uint8_t len;   /* the bytes of `scancode` given */
+    uint16_t index;
+    uint32_t keycode;
+    uint8_t scancode[32];
+};
+
+/**
+ * Read the entry the user's EVIOCGKEYCODE or EVIOCSKEYCODE at `arg` names
+ * into `ke`: the legacy two unsigned ints, a scan code and a key code, or a
+ * `struct keymap_v2` when `v2`, whose scan code of 1, 2 or 4 bytes is read
+ * as Linux's input_scancode_to_scalar reads it. Returns 0, -EFAULT, or
+ * -EINVAL for a scan code of another length.
+ */
+static int32_t keymap_in(uintptr_t arg, int v2, struct keymap_v2 *u, struct evdev_keymap_entry *ke)
+{
+    unsigned int legacy[2];
+
+    k_memset(ke, 0, sizeof(*ke));
+    if (!v2) {
+        if (copy_from_user(legacy, (const void __user *)arg, sizeof(legacy)) != 0) {
+            return -EFAULT;
+        }
+        ke->scancode = legacy[0];
+        ke->keycode = legacy[1] > 0xFFFFu ? 0xFFFFu : (uint16_t)legacy[1];
+        return 0;
+    }
+    if (copy_from_user(u, (const void __user *)arg, sizeof(*u)) != 0) {
+        return -EFAULT;
+    }
+    if (u->len > sizeof(u->scancode)) {
+        return -EINVAL;
+    }
+    ke->by_index = u->flags & 1u;
+    ke->index = u->index;
+    ke->keycode = u->keycode > 0xFFFFu ? 0xFFFFu : (uint16_t)u->keycode;
+    if (ke->by_index) {
+        return 0;
+    }
+    if (u->len == 1) {
+        ke->scancode = u->scancode[0];
+    } else if (u->len == 2) {
+        ke->scancode = (uint32_t)u->scancode[0] | (uint32_t)u->scancode[1] << 8;
+    } else if (u->len == 4) {
+        ke->scancode = (uint32_t)u->scancode[0] | (uint32_t)u->scancode[1] << 8 |
+                       (uint32_t)u->scancode[2] << 16 | (uint32_t)u->scancode[3] << 24;
+    } else {
+        return -EINVAL;
+    }
+    return 0;
+}
+
+/**
+ * Give the entry `ke` its key code in the keymap of `dev`, as Linux's
+ * input_set_keycode: the new code becomes a key the device has, KEY_RESERVED
+ * never, and the old one stops being one unless another entry has it, a
+ * press of it held released first: a keyboard's through input.c, so that
+ * its held keys, modifiers, repeat and the console see the release, another
+ * device's straight to its readers. The evdev lock is not held.
+ */
+static int32_t keymap_set(struct evdev *dev, const struct evdev_keymap_entry *ke)
+{
+    uint16_t old = 0;
+    uint32_t flags;
+    int32_t rc;
+    int release = 0;
+
+    if (ke->keycode > KEY_MAX) {
+        return -EINVAL;
+    }
+    flags = spin_lock_irqsave(&evdev_lock);
+    rc = dev->gone          ? -ENODEV
+         : !dev->keymap.set ? -EINVAL
+                            : dev->keymap.set(dev->keymap.ctx, ke, &old);
+    if (rc == 0) {
+        set_bit(dev->keys, ke->keycode);
+        release =
+            old != ke->keycode && !dev->keymap.maps(dev->keymap.ctx, old) && bit_on(dev->down, old);
+    }
+    spin_unlock_irqrestore(&evdev_lock, flags);
+    if (release && !((dev->flags & EVDEV_KEYBOARD) && input_keyboard_release(dev, old))) {
+        evdev_report(dev, EV_KEY, old, 0);
+        evdev_report(dev, EV_SYN, SYN_REPORT, 0);
+    }
+    flags = spin_lock_irqsave(&evdev_lock);
+    if (rc == 0 && old != ke->keycode && !dev->gone && !dev->keymap.maps(dev->keymap.ctx, old)) {
+        dev->keys[old >> 3] &= (uint8_t)~(1u << (old & 7));
+    }
+    dev->keys[0] &= (uint8_t)~1u; /* KEY_RESERVED */
+    if (rc == 0 && old != ke->keycode) {
+        change_count++;
+    }
+    spin_unlock_irqrestore(&evdev_lock, flags);
+    if (rc == 0 && old != ke->keycode) {
+        wq_wake_all(&change_wq);
+    }
+    return rc;
+}
+
+/**
+ * EVIOCGKEYCODE and EVIOCSKEYCODE, and their _V2 forms, over the keymap of
+ * `dev`, as Linux's evdev answers them: the legacy get writes the key code
+ * after the scan code, and the _V2 get the whole entry, with a scan code of
+ * 4 bytes. -EINVAL for a device without a keymap or an entry it has not.
+ */
+static int32_t keycode_ioctl(struct evdev *dev, uint32_t request, uintptr_t arg)
+{
+    struct evdev_keymap_entry ke;
+    struct keymap_v2 u;
+    int v2 = IOC_SIZE(request) == sizeof(u);
+    uint32_t flags;
+    int32_t rc;
+
+    if (!v2 && IOC_SIZE(request) != 2 * sizeof(unsigned int)) {
+        return -EINVAL;
+    }
+    rc = keymap_in(arg, v2, &u, &ke);
+    if (rc != 0) {
+        return rc;
+    }
+    if (IOC_DIR(request) == IOC_WRITE) {
+        return keymap_set(dev, &ke);
+    }
+    flags = spin_lock_irqsave(&evdev_lock);
+    rc = dev->gone ? -ENODEV : !dev->keymap.get ? -EINVAL : dev->keymap.get(dev->keymap.ctx, &ke);
+    spin_unlock_irqrestore(&evdev_lock, flags);
+    if (rc != 0) {
+        return rc;
+    }
+    if (!v2) {
+        unsigned int code = ke.keycode;
+
+        return copy_to_user((void __user *)(arg + sizeof(unsigned int)), &code, sizeof(code)) != 0
+                   ? -EFAULT
+                   : 0;
+    }
+    u.keycode = ke.keycode;
+    u.index = (uint16_t)ke.index;
+    u.len = 4;
+    u.scancode[0] = (uint8_t)ke.scancode;
+    u.scancode[1] = (uint8_t)(ke.scancode >> 8);
+    u.scancode[2] = (uint8_t)(ke.scancode >> 16);
+    u.scancode[3] = (uint8_t)(ke.scancode >> 24);
+    return copy_to_user((void __user *)arg, &u, sizeof(u)) != 0 ? -EFAULT : 0;
+}
+
+/**
+ * The force feedback calls of a device without force feedback, which none
+ * here has, as Linux answers them: EVIOCGEFFECTS gives 0 effects, EVIOCRMFF
+ * is -ENOSYS, and EVIOCSFF -ENOSYS once its struct ff_effect, of 48 bytes
+ * on x86-64 and 44 on i686 and to an i386 program, has been read, -EFAULT
+ * when it could not be. Returns 1 for another request.
+ */
+static int32_t ff_ioctl(uint32_t request, uintptr_t arg)
+{
+    uint8_t effect[48];
+    uint32_t size = in_compat_syscall() || sizeof(void *) == 4 ? 44u : 48u;
+    int zero = 0;
+
+    if (request == EVIOCGEFFECTS) {
+        return copy_to_user((void __user *)arg, &zero, sizeof(zero)) != 0 ? -EFAULT : 0;
+    }
+    if (request == EVIOCRMFF) {
+        return -ENOSYS;
+    }
+    if (IOC_DIR(request) == IOC_WRITE && IOC_TYPE(request) == 'E' && IOC_NR(request) == NR_SFF) {
+        if (IOC_SIZE(request) != size ||
+            copy_from_user(effect, (const void __user *)arg, size) != 0) {
+            return -EFAULT;
+        }
+        return -ENOSYS;
+    }
+    return 1;
+}
+
 int32_t evdev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     struct evdev_client *c = (struct evdev_client *)e->priv;
     struct evdev *dev = c->dev;
     int version = EV_VERSION;
+    int32_t rc;
 
     if (dead(c)) {
         return -ENODEV;
@@ -1960,6 +2272,13 @@ int32_t evdev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     }
     if (IOC_TYPE(request) != 'E') {
         return -EINVAL;
+    }
+    if (IOC_NR(request) == NR_KEYCODE && IOC_DIR(request) != 0) {
+        return keycode_ioctl(dev, request, arg);
+    }
+    rc = ff_ioctl(request, arg);
+    if (rc != 1) {
+        return rc;
     }
     if (IOC_DIR(request) == IOC_READ) {
         return read_ioctl(c, IOC_NR(request), arg, IOC_SIZE(request));

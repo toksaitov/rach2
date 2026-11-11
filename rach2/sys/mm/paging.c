@@ -5,6 +5,7 @@
 
 #include "../arch/arch.h"
 #include "../cmdline.h"
+#include "../fpu.h"
 #include "../klog.h"
 #include "paging.h"
 #include "kheap.h"
@@ -31,6 +32,9 @@ page_dir_t *_kernel_dir;
 
 uint32_t *_frames;
 size_t _frames_number;
+/* One bit per frame: a private anonymous page, kept across fork and COW.
+ * Reserved beside the reference table and changed under frame_lock. */
+static uint8_t *_frame_anon;
 /* The frames of the window, below HARD_MEMORY_LIMIT, which
  * `alloc_kernel_frame` gives out: frames whose physical address a device can
  * be given. */
@@ -40,6 +44,8 @@ static size_t _managed_frames;
 static size_t _free_frames; /* words of the table that are 0, kept by every writer */
 
 static void frame_take(uintptr_t frame);
+static void frame_make_anon(uintptr_t phys);
+static int frame_is_anon(uintptr_t phys);
 /* Where the next scan of the window for a free frame starts: no frame of
  * the window from `_user_frames_start` up to it is free. A scan from the
  * bottom of a million-frame table for every page would cost the table's
@@ -160,7 +166,7 @@ void init_paging(struct frame_map *map)
     _frames_number = map->top_frame ? (size_t)map->top_frame : (HARD_MEMORY_LIMIT / PAGE_SIZE);
     _window_frames = _frames_number < HARD_MEMORY_LIMIT / PAGE_SIZE ? _frames_number
                                                                     : HARD_MEMORY_LIMIT / PAGE_SIZE;
-    table_bytes = _frames_number * sizeof(uint32_t);
+    table_bytes = _frames_number * sizeof(uint32_t) + (_frames_number + 7u) / 8u;
     _frames = mmu_frame_table(map, table_bytes);
     if (_frames == NULL) {
         k_panic("init_paging: no reserved memory for the frame table");
@@ -181,6 +187,8 @@ void init_paging(struct frame_map *map)
             k_panic("init_paging: the frame table splits more ranges than the map keeps");
         }
     }
+    _frame_anon = (uint8_t *)(_frames + _frames_number);
+    k_memset(_frame_anon, 0, (_frames_number + 7u) / 8u);
     if (map->top_frame == 0) {
         k_memset(_frames, 0, table_bytes);
     } else {
@@ -253,6 +261,10 @@ void frame_take_boot(uintptr_t frame)
     }
 }
 
+/* Whether the entry `e` maps a page a read brought in zeroed that nothing
+ * has stored into since (PTE_ZEROFILL): Linux's zero page. */
+#define PTE_IS_ZERO(e) (((e) & (pte_t)(PTE_ZEROFILL | PTE_DIRTY)) == (pte_t)PTE_ZEROFILL)
+
 static int cow_fault(struct mm *mm, uintptr_t addr);
 static int page_private(struct mm *mm, uintptr_t addr, int writable);
 static uint32_t frame_maps(uintptr_t frame);
@@ -313,8 +325,9 @@ static void fault_count(int major)
 
 /**
  * Back a page of a region that maps a file: a frame filled from the file and
- * mapped once it is full, writable when the region is. The mapping is
- * private: a store changes the frame, never the file. The fault counts as
+ * mapped once it is full. A read maps it copy-on-write; a store marks it
+ * anonymous and maps it writable. The mapping is private: a store changes
+ * the frame, never the file. The fault counts as
  * major when the fill read the page through the file system.
  *
  * The fill may sleep in the disk. The file is held from before the fill, so
@@ -326,8 +339,10 @@ static void fault_count(int major)
  * gives. 1 with the page mapped, 0 when no frame could be had or the read
  * failed, -1 to resolve again.
  */
-static int file_fault(page_dir_t *dir, vm_space_t *vm, const vma_t *vma, uintptr_t addr)
+static int file_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int write)
 {
+    page_dir_t *dir = mm->dir;
+    vm_space_t *vm = &mm->vm;
     struct vm_file *f = vma->file;
     uintptr_t page = addr & ~(PAGE_SIZE - 1);
     uint32_t pgoff = vma->pgoff + (uint32_t)((page - vma->start) / PAGE_SIZE);
@@ -348,9 +363,12 @@ static int file_fault(page_dir_t *dir, vm_space_t *vm, const vma_t *vma, uintptr
         rc = -1;
     }
     vm_file_put(f);
-    if (rc == 1 && map_user_frame(dir, page, phys,
-                                  PTE_P | PTE_U | ((prot & VM_PROT_WRITE) ? PTE_W : 0) |
-                                      paging_noexec(prot)) == 0) {
+    if (rc == 1 && write) {
+        frame_make_anon(phys);
+    }
+    if (rc == 1 &&
+        map_user_frame(dir, page, phys,
+                       PTE_P | PTE_U | (write ? PTE_W : PTE_COW) | paging_prot_bits(prot)) == 0) {
         fault_count(filled > 0);
         return 1;
     }
@@ -399,7 +417,7 @@ static int shared_fault(struct mm *mm, const vma_t *vma, uintptr_t addr, int wri
     if (rc == 1 &&
         map_user_frame(dir, page, phys,
                        PTE_P | PTE_U | (private ? PTE_COW : ((prot & VM_PROT_WRITE) ? PTE_W : 0)) |
-                           paging_noexec(prot)) == 0) {
+                           paging_prot_bits(prot)) == 0) {
         fault_count(got > 0);
         return private && write ? cow_fault(mm, page) : 1;
     }
@@ -426,7 +444,9 @@ static pte_t device_cache(uint32_t prot)
  * `page` may sleep, so the file is held across it and the region is looked
  * up again after, as `shared_fault` does. 1 with the page mapped; 0 when the
  * object has no page there, with `bus_fault` set for the fault handler's
- * SIGBUS, or when no page table could be had; -1 to resolve again.
+ * SIGBUS, when it cannot give the page yet, with `fault_retry` set for the
+ * handler's return to user mode, or when no page table could be had; -1 to
+ * resolve again.
  */
 static int device_fault(page_dir_t *dir, vm_space_t *vm, const vma_t *vma, uintptr_t addr)
 {
@@ -448,13 +468,17 @@ static int device_fault(page_dir_t *dir, vm_space_t *vm, const vma_t *vma, uintp
     vm_file_put(f);
     if (got != 0) {
         if (current_proc) {
-            current_proc->bus_fault = 1;
+            if (got > 0) {
+                current_proc->fault_retry = 1;
+            } else {
+                current_proc->bus_fault = 1;
+            }
         }
         return 0;
     }
     if (map_user_frame(dir, page, phys,
-                       PTE_P | PTE_U | ((prot & VM_PROT_WRITE) ? PTE_W : 0) | paging_noexec(prot) |
-                           device_cache(prot)) != 0) {
+                       PTE_P | PTE_U | ((prot & VM_PROT_WRITE) ? PTE_W : 0) |
+                           paging_prot_bits(prot) | device_cache(prot)) != 0) {
         return 0;
     }
     frame_ref(phys);
@@ -469,6 +493,27 @@ static int region_allows(const vma_t *vma, int write)
 {
     return (vma->prot & (write ? VM_PROT_WRITE : VM_PROT_READ)) != 0 &&
            !(vma->prot & VM_PROT_GUARD);
+}
+
+/**
+ * Whether the running thread's PKRU lets it make a data access, a `write`
+ * or a read, to the pages of the region `vma` of the address space `mm`,
+ * as Linux's arch_vma_access_permitted asks: the keys count for the
+ * thread's own accesses, its faults and the copies and pins the kernel
+ * makes for it, and not for another address space, which ptrace,
+ * /proc/PID/mem and process_vm_readv reach through `paging_access` and
+ * which is always allowed. Always 1 with the keys off.
+ */
+static int pkey_allows(const struct mm *mm, const vma_t *vma, int write)
+{
+    uint32_t key, pkru;
+
+    if (!fpu_pkeys() || !current_proc || mm != current_proc->mm || !vma) {
+        return 1;
+    }
+    key = VM_PROT_KEY(vma->prot);
+    pkru = fpu_pkru();
+    return !(pkru & PKRU_AD(key)) && !(write && (pkru & PKRU_WD(key)));
 }
 
 /**
@@ -539,7 +584,7 @@ static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t a
         }
         if (vma->file) {
             return vma->file->share ? shared_fault(mm, vma, addr, write)
-                                    : file_fault(dir, vm, vma, addr);
+                                    : file_fault(mm, vma, addr, write);
         }
     }
 
@@ -548,10 +593,11 @@ static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t a
     if (phys == 0) {
         return 0;
     }
+    frame_make_anon(phys);
     if (paging_zero_frame(phys) != 0 ||
         map_user_frame(dir, addr, phys,
                        PTE_P | PTE_U | ((prot & VM_PROT_WRITE) ? PTE_W : 0) |
-                           paging_noexec(prot)) != 0) {
+                           (write ? 0 : PTE_ZEROFILL) | paging_prot_bits(prot)) != 0) {
         free_frame(phys);
         return 0;
     }
@@ -581,7 +627,10 @@ static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t a
  * or a mapping's, or a page of a device object, which the object gives
  * (`device_fault`) or, gone, answers with SIGBUS. An
  * anonymous one gets a zeroed frame, read-only in the PTE when its region
- * is, so a later write faults; a grown stack page stays writable. A file's
+ * is, so a later write faults; a grown stack page stays writable. One a
+ * read brings in is marked PTE_ZEROFILL, and stands for Linux's base zero page
+ * until a store sets its dirty bit or the kernel stores into its frame
+ * (`page_private`, `cow_fault`, a pin). A file's
  * page is read into its frame, which may sleep, and when the regions
  * changed meanwhile the resolution runs again (`vm_resolve_once`), so
  * success always means a page that is present and allows the access.
@@ -618,10 +667,17 @@ int mem_lock_room(unsigned long have, unsigned long pages)
     return have <= limit && pages <= limit - have;
 }
 
-/** `vm_resolve_in` for the current process's address space. */
+/** `vm_resolve_in` for the current process's address space, for a data
+ * access the thread's protection keys must allow (`pkey_allows`): a copy,
+ * a pre-fault or a populate. */
 static int vm_resolve(uintptr_t addr, int write)
 {
-    return vm_resolve_in(current_proc->mm, addr, write, current_proc->rlim[RLIM_AS].cur);
+    struct mm *mm = current_proc->mm;
+
+    if (!pkey_allows(mm, vm_find(&mm->vm, addr), write)) {
+        return 0;
+    }
+    return vm_resolve_in(mm, addr, write, current_proc->rlim[RLIM_AS].cur);
 }
 
 /** Whether every page of [start, end) is present in `mm` and allows the
@@ -633,8 +689,8 @@ static int range_ready(struct mm *mm, uintptr_t start, uintptr_t end, int write)
     for (page = start & ~(PAGE_SIZE - 1); page < end; page += PAGE_SIZE) {
         const vma_t *vma = vm_find(&mm->vm, page);
 
-        if (!vma || !region_allows(vma, write) || !pte_present(mm->dir, page) ||
-            (write && !pte_writable(mm->dir, page))) {
+        if (!vma || !region_allows(vma, write) || !pkey_allows(mm, vma, write) ||
+            !pte_present(mm->dir, page) || (write && !pte_writable(mm->dir, page))) {
             return 0;
         }
     }
@@ -703,8 +759,9 @@ int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
  * A region that is private and writable has its pages brought in for a write,
  * which gives each its own frame now, as Linux's populate breaks the sharing
  * of copy-on-write pages; any other for a read, so that a shared page is not
- * made dirty for nothing. A region with no access, a guard or device memory
- * is passed over, as Linux's populate passes a VM_IO region over. Each
+ * made dirty for nothing. A region with no access, a guard, device memory
+ * or memfd_secret's is passed over, as Linux's populate passes over a VM_IO
+ * region and one its get_user_pages refuses. Each
  * page brought in counts as a fault (`fault_count`), as Linux counts its
  * populate's.
  */
@@ -719,7 +776,8 @@ int vm_populate(uintptr_t start, uintptr_t end)
         const vma_t *vma = vm_find(&current_proc->mm->vm, page);
         int write;
 
-        if (!vma || !(vma->prot & VM_PROT_READ) || (vma->prot & (VM_PROT_IO | VM_PROT_GUARD))) {
+        if (!vma || !(vma->prot & VM_PROT_READ) ||
+            (vma->prot & (VM_PROT_IO | VM_PROT_GUARD | VM_PROT_SECRET))) {
             continue;
         }
         write = (vma->prot & VM_PROT_WRITE) && vma->type != VM_SHARED;
@@ -730,12 +788,45 @@ int vm_populate(uintptr_t start, uintptr_t end)
     return 0;
 }
 
-/** Whether the region allows the access and, with `io`, device memory. */
-static int pin_allows(struct mm *mm, uintptr_t page, int write, int io)
+/** Whether a read pin may take the page at `page` of the region `vma` of
+ * `mm`: always in a region mapped with PROT_READ, and in one without it
+ * (VM_PROT_NOREAD) only a page present and not the zero page, as Linux's
+ * get_user_pages_fast takes such a page from its entry, and never with
+ * `slow`, as the slow path and a remote pin refuse a region without
+ * VM_READ. */
+static int pin_read_allows(struct mm *mm, const vma_t *vma, uintptr_t page, int slow)
+{
+    pte_t *e;
+
+    if (VM_READABLE(vma->prot)) {
+        return 1;
+    }
+    if (slow) {
+        return 0;
+    }
+    e = user_pte(mm->dir, page);
+    return e && (*e & PTE_P) && !PTE_IS_ZERO(*e);
+}
+
+/** Whether the region allows the access of a pin with `flags`, PIN_WRITE
+ * for a write, and with PIN_IO device memory; a region of memfd_secret and
+ * the vDSO's data page never do, as Linux's get_user_pages refuses both,
+ * and a read of a region mapped without PROT_READ needs its page there
+ * already, and is refused with PIN_SLOW (`pin_read_allows`). */
+static int pin_allows(struct mm *mm, uintptr_t page, uint32_t flags)
 {
     const vma_t *vma = vm_find(&mm->vm, page);
+    int write = (flags & PIN_WRITE) != 0;
 
-    return vma && (io || !(vma->prot & VM_PROT_IO)) && region_allows(vma, write);
+    return vma && ((flags & PIN_IO) || !(vma->prot & VM_PROT_IO)) &&
+           !(vma->prot & (VM_PROT_SECRET | VM_PROT_VVAR)) && region_allows(vma, write) &&
+           (write || pin_read_allows(mm, vma, page, (flags & PIN_SLOW) != 0)) &&
+           pkey_allows(mm, vma, write);
+}
+
+int paging_pin_allows(struct mm *mm, uintptr_t addr, int write)
+{
+    return pin_allows(mm, addr & ~(uintptr_t)(PAGE_SIZE - 1), write ? PIN_WRITE : 0u);
 }
 
 /** Resolve a pin's page, preserving the caller's pending SIGBUS detail. */
@@ -763,8 +854,8 @@ static int pin_resolve(struct mm *mm, uintptr_t page, int write, uintptr_t as_li
  * by a fork or as a file's page, is given a frame of its own with its
  * rights (`page_private`), so that a later write by the process reaches the
  * frame the device has, as Linux unshares a page it pins, and the frame is
- * pinned. With `io`, device pages outside the allocator are kept without
- * pins; `ram_pages` counts only the RAM frames that were pinned.
+ * pinned. With PIN_IO in `flags`, device pages outside the allocator are
+ * kept without pins; `ram_pages` counts only the RAM frames that were pinned.
  */
 static int pin_range(struct mm *mm, uintptr_t start, uintptr_t end, uint32_t flags,
                      uintptr_t *frames, uint32_t *ram_pages)
@@ -772,17 +863,17 @@ static int pin_range(struct mm *mm, uintptr_t start, uintptr_t end, uint32_t fla
     uintptr_t as_limit = current_proc ? current_proc->rlim[RLIM_AS].cur : RLIM_INFINITY;
     uintptr_t page;
     uint32_t i = 0, ram = 0;
-    int write = (flags & PIN_WRITE) != 0, io = (flags & PIN_IO) != 0;
+    int write = (flags & PIN_WRITE) != 0;
     int rc = -ENOMEM;
 
     do {
         for (page = start; page < end; page += PAGE_SIZE) {
-            if (!pin_allows(mm, page, write, io)) {
+            if (!pin_allows(mm, page, flags)) {
                 return -EFAULT;
             }
             rc = pin_resolve(mm, page, write, as_limit);
             if (rc != 0) {
-                return pin_allows(mm, page, write, io) ? rc : -EFAULT;
+                return pin_allows(mm, page, flags) ? rc : -EFAULT;
             }
         }
     } while (!range_ready(mm, start, end, write));
@@ -791,7 +882,7 @@ static int pin_range(struct mm *mm, uintptr_t start, uintptr_t end, uint32_t fla
         const vma_t *vma = vm_find(&mm->vm, page);
         pte_t *e = user_pte(mm->dir, page);
 
-        if (!pin_allows(mm, page, write, io)) {
+        if (!pin_allows(mm, page, flags)) {
             break;
         }
         if (vma->prot & VM_PROT_IO) {
@@ -804,6 +895,7 @@ static int pin_range(struct mm *mm, uintptr_t start, uintptr_t end, uint32_t fla
             frames[i] = phys;
             continue;
         }
+        *e &= ~(pte_t)PTE_ZEROFILL;
         if (vma->type != VM_SHARED &&
             ((*e & PTE_COW) || frame_maps(PTE_ADDR(*e) / PAGE_SIZE) > 1) &&
             page_private(mm, page, (vma->prot & VM_PROT_WRITE) != 0) != 0) {
@@ -825,17 +917,18 @@ static int pin_range(struct mm *mm, uintptr_t start, uintptr_t end, uint32_t fla
     return rc;
 }
 
-int paging_pin_range(struct mm *mm, uintptr_t start, uintptr_t end, int write, uintptr_t *frames)
+int paging_pin_range(struct mm *mm, uintptr_t start, uintptr_t end, uint32_t flags,
+                     uintptr_t *frames)
 {
     uint32_t ram;
 
-    return pin_range(mm, start, end, write ? PIN_WRITE : 0u, frames, &ram);
+    return pin_range(mm, start, end, flags & ~PIN_IO, frames, &ram);
 }
 
-int paging_dma_range(struct mm *mm, uintptr_t start, uintptr_t end, int write, uintptr_t *frames,
-                     uint32_t *ram_pages)
+int paging_dma_range(struct mm *mm, uintptr_t start, uintptr_t end, uint32_t flags,
+                     uintptr_t *frames, uint32_t *ram_pages)
 {
-    return pin_range(mm, start, end, PIN_IO | (write ? PIN_WRITE : 0u), frames, ram_pages);
+    return pin_range(mm, start, end, PIN_IO | flags, frames, ram_pages);
 }
 
 /**
@@ -869,7 +962,8 @@ static int cow_fault(struct mm *mm, uintptr_t addr)
     frame = old_phys / PAGE_SIZE;
 
     if (frame >= _frames_number || frame_maps(frame) <= 1) {
-        *e = (pte & ~(pte_t)PTE_COW) | PTE_W;
+        frame_make_anon(old_phys);
+        *e = (pte & ~(pte_t)(PTE_COW | PTE_ZEROFILL)) | PTE_W;
         paging_flush_dir(dir, addr);
         return 1;
     }
@@ -884,7 +978,8 @@ static int cow_fault(struct mm *mm, uintptr_t addr)
     }
     addr &= ~(uintptr_t)(PAGE_SIZE - 1);
     mmn_notify(mm, MMN_COW, addr, addr + PAGE_SIZE);
-    *e = (pte_t)new_phys | PTE_P | PTE_W | PTE_U | (pte & PTE_NOEXEC);
+    frame_make_anon(new_phys);
+    *e = (pte_t)new_phys | PTE_P | PTE_W | PTE_U | (pte & (PTE_NOEXEC | PTE_PKEY));
     paging_flush_dir(dir, addr);
     frame_unref(old_phys);
     return 1;
@@ -932,7 +1027,8 @@ static int page_private(struct mm *mm, uintptr_t addr, int writable)
         addr &= ~(uintptr_t)(PAGE_SIZE - 1);
         mmn_notify(mm, MMN_COW, addr, addr + PAGE_SIZE);
     }
-    *e = (pte_t)new_phys | (pte & PTE_FLAGS & ~(pte_t)PTE_COW);
+    frame_make_anon(new_phys);
+    *e = (pte_t)new_phys | (pte & PTE_FLAGS & ~(pte_t)(PTE_COW | PTE_ZEROFILL));
     paging_flush_dir(dir, addr);
     if (new_phys != old_phys) {
         frame_unref(old_phys);
@@ -940,11 +1036,30 @@ static int page_private(struct mm *mm, uintptr_t addr, int writable)
     return 0;
 }
 
+/** `access_page` for the device region `vma`, whose page tables may not
+ * reach its bytes: through its object's `access`, as Linux's
+ * __access_remote_vm calls the region's, with the file held across it,
+ * since it may sleep. 0, -ENOMEM, or -EIO for any other refusal. */
+static int access_device(const vma_t *vma, uintptr_t addr, uint8_t *p, uint32_t len, int write)
+{
+    struct vm_file *f = vma->file;
+    int rc;
+
+    vm_file_get(f);
+    rc = vm_device_access(f, ((uint64_t)vma->pgoff << PAGE_SHIFT) + (uint64_t)(addr - vma->start),
+                          p, len, write);
+    vm_file_put(f);
+    return rc == 0 ? 0 : (rc == -ENOMEM ? -ENOMEM : -EIO);
+}
+
 /** One page's part of `paging_access`: `len` bytes at `addr`, within one
- * page, to or from `p`; 0, -EIO or -ENOMEM as `paging_access` says. The
- * resolution and, for a write, the balance of memory before a copy may
- * sleep, so the region is looked up again after them, and the page must
- * still be present in a region that allows some access. */
+ * page, to or from `p`; 0, -EIO or -ENOMEM as `paging_access` says. A
+ * device region's bytes go through `access_device`, and a region of
+ * memfd_secret and the vDSO's data page are -EIO, as Linux's
+ * get_user_pages refuses both. The resolution and, for a write, the
+ * balance of memory before a copy may sleep, so the region is looked up
+ * again after them, and the page must still be present in a region that
+ * allows some access. */
 static int access_page(struct mm *mm, uintptr_t addr, uint8_t *p, uint32_t len, int write)
 {
     const vma_t *vma = vm_find(&mm->vm, addr);
@@ -952,7 +1067,13 @@ static int access_page(struct mm *mm, uintptr_t addr, uint8_t *p, uint32_t len, 
 
     if (addr < USER_ADDR_MIN || addr >= USER_ADDR_MAX || vma == NULL ||
         !(vma->prot & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC)) ||
-        (vma->prot & (VM_PROT_IO | VM_PROT_GUARD))) {
+        (vma->prot & (VM_PROT_GUARD | VM_PROT_SECRET | VM_PROT_VVAR))) {
+        return -EIO;
+    }
+    if (vm_device_object(vma->file)) {
+        return access_device(vma, addr, p, len, write);
+    }
+    if (vma->prot & VM_PROT_IO) {
         return -EIO;
     }
     if (!pte_present(mm->dir, addr) && !vm_resolve_in(mm, addr, 0, (uintptr_t)RLIM_INFINITY)) {
@@ -963,7 +1084,8 @@ static int access_page(struct mm *mm, uintptr_t addr, uint8_t *p, uint32_t len, 
     }
     vma = vm_find(&mm->vm, addr);
     if (vma == NULL || !(vma->prot & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC)) ||
-        (vma->prot & (VM_PROT_IO | VM_PROT_GUARD)) || !pte_present(mm->dir, addr)) {
+        (vma->prot & (VM_PROT_IO | VM_PROT_GUARD | VM_PROT_SECRET | VM_PROT_VVAR)) ||
+        !pte_present(mm->dir, addr)) {
         return -EIO;
     }
     if (write &&
@@ -1020,15 +1142,38 @@ static int fetch_refused(uintptr_t addr, const isr_params_t *p)
 }
 
 /**
+ * The protection key that refuses the current thread's user fault `params`
+ * at `addr`, a `write` or a read, or -1 when none does: the key of the
+ * region that holds the address, when the error code says a key refused the
+ * access or the thread's PKRU refuses it to the region, as Linux's
+ * access_error asks before the region's own protection. An instruction
+ * fetch is never refused by a key.
+ */
+static int fault_key(const isr_params_t *params, uintptr_t addr, int write)
+{
+    const vma_t *vma;
+
+    if (FAULT_EXEC(params) || !fpu_pkeys()) {
+        return -1;
+    }
+    vma = vm_find(&current_proc->mm->vm, addr);
+    if (!vma || (!FAULT_PK(params) && pkey_allows(current_proc->mm, vma, write))) {
+        return -1;
+    }
+    return (int)VM_PROT_KEY(vma->prot);
+}
+
+/**
  * Signal the current process for its user fault `params` at `addr` that no
  * resolution made legal, a `write` or a read: with `bus`, SIGBUS with
- * BUS_ADRERR, for a device region whose object had no page there; else SIGSEGV,
- * SEGV_ACCERR when a region holds the address and SEGV_MAPERR when none does or
- * a guard does, as Linux answers a guard's fault. Either is forced as Linux
- * forces it, and the death is logged only when no handler and no tracer will
- * see a SIGSEGV.
+ * BUS_ADRERR, for a device region whose object had no page there; with a
+ * `key` of 0 or more, which refused it, SIGSEGV with SEGV_PKUERR and the key
+ * in `si_pkey`; else SIGSEGV, SEGV_ACCERR when a region holds the address
+ * and SEGV_MAPERR when none does or a guard does, as Linux answers a guard's
+ * fault. Each is forced as Linux forces it, and the death is logged only
+ * when no handler and no tracer will see a SIGSEGV.
  */
-static void fault_signal(const isr_params_t *params, uintptr_t addr, int write, int bus)
+static void fault_signal(const isr_params_t *params, uintptr_t addr, int write, int bus, int key)
 {
     struct k_siginfo info;
     int signo = bus ? SIGBUS : SIGSEGV;
@@ -1036,6 +1181,9 @@ static void fault_signal(const isr_params_t *params, uintptr_t addr, int write, 
     k_memset(&info, 0, sizeof(info));
     if (bus) {
         info.code = BUS_ADRERR;
+    } else if (key >= 0) {
+        info.code = SEGV_PKUERR;
+        info.pkey = (uint32_t)key;
     } else {
         const vma_t *vma = vm_find(&current_proc->mm->vm, addr);
 
@@ -1054,14 +1202,68 @@ static void fault_signal(const isr_params_t *params, uintptr_t addr, int write, 
     }
 }
 
+#ifdef FRAME_FP
+/* How many callers a kernel fault's record names. */
+#define FAULT_CALLERS 16
+
+/**
+ * Log the return addresses of the kernel frames that led to a fault in
+ * kernel mode, by the frame-pointer chain from `fp`, so that a fault in a
+ * shared helper such as k_strlen names its callers. Only links that climb
+ * the running thread's kernel stack are followed, so a broken chain ends
+ * the record and never faults again.
+ */
+static void fault_callers(uintptr_t fp)
+{
+    uintptr_t top, bottom;
+    int depth;
+
+    if (!current_proc || current_proc->kernel_stack < KERNEL_STACK_SIZE) {
+        return;
+    }
+    top = current_proc->kernel_stack;
+    bottom = top - KERNEL_STACK_SIZE;
+    for (depth = 0; depth < FAULT_CALLERS; depth++) {
+        const uintptr_t *frame = (const uintptr_t *)fp;
+
+        if (fp < bottom || fp > top - 2 * sizeof(uintptr_t) || fp % sizeof(uintptr_t) != 0) {
+            return;
+        }
+        klog(KLOG_CRIT, "vm", "fault: called from 0x%lX", (unsigned long)frame[1]);
+        if (frame[0] <= fp) {
+            return;
+        }
+        fp = frame[0];
+    }
+}
+#endif
+
+/**
+ * Panic at once for a fault while the panic reads the running process
+ * (`k_panic_reading`), before the handler reads that process's record,
+ * which may be what the fault is about; return otherwise.
+ */
+static void panic_if_reading(const isr_params_t *params, uintptr_t fault_address)
+{
+    if (k_panic_reading()) {
+        k_panic_note_fault("page fault", (uintptr_t)FRAME_PC(params), (long)params->error_code);
+        k_panic_note_address(fault_address);
+        k_panic("page fault: in the panic's read of the process");
+    }
+}
+
 /**
  * Resolve a page fault, or end what caused it.
  *
- * Tried in order. Any fault at a user-space address of a live user process
- * goes to `vm_resolve`, but an instruction fetch from a region without
- * execute (`fetch_refused`); the test is of the address and not of the
- * processor's mode, so that a kernel touch of a user page not yet backed
- * resolves too. A write to a page shared by a fork reaches `cow_fault`
+ * Tried in order. A fault while the panic reads the running process
+ * panics at once (`panic_if_reading`). Any fault at a user-space address of
+ * a live user process goes to `vm_resolve_in`, but an instruction fetch
+ * from a region without
+ * execute (`fetch_refused`) and a data access that the thread's protection
+ * keys refuse (`fault_key`), which no resolution makes legal and which is
+ * SIGSEGV with SEGV_PKUERR and the key; the test is of the address and not
+ * of the processor's mode, so that a kernel touch of a user page not yet
+ * backed resolves too. A write to a page shared by a fork reaches `cow_fault`
  * through it, and only once the region's protection allows the write: a
  * region mprotect made read-only keeps its copy-on-write pages read-only. A
  * supervisor fault inside the page-cache window is filled by `pc_fault`,
@@ -1083,7 +1285,9 @@ static void fault_signal(const isr_params_t *params, uintptr_t addr, int write, 
  * the stop; the death is logged only when no handler and no tracer will see
  * the signal.
  *
- * What is left panics: the usercopy helpers return -EFAULT before the
+ * Every panic here, the page-cache window's among them, follows the fault's
+ * note for the report (`k_panic_note_fault`). What is left panics: the
+ * usercopy helpers return -EFAULT before the
  * kernel touches a bad user pointer, so a kernel-mode fault here, or one
  * with no user context, is a kernel bug. One in the guard page below the
  * running thread's kernel stack is that stack running out, and the panic
@@ -1094,9 +1298,10 @@ static void fault_signal(const isr_params_t *params, uintptr_t addr, int write, 
 static void _page_fault_handler(isr_params_t *params)
 {
     uintptr_t fault_address;
-    int write, user_mode, have_user_proc, in_user_range, pid;
+    int write, user_mode, have_user_proc, in_user_range, pid, key = -1;
 
     fault_address = arch_fault_address();
+    panic_if_reading(params, fault_address);
 
     write = FAULT_WRITE(params);
     user_mode = FAULT_USER(params);
@@ -1106,11 +1311,20 @@ static void _page_fault_handler(isr_params_t *params)
     if (have_user_proc && in_user_range) {
         current_proc->frame_refused = 0;
         current_proc->bus_fault = 0;
-        if (!fetch_refused(fault_address, params) && vm_resolve(fault_address, write)) {
+        current_proc->fault_retry = 0;
+        key = fault_key(params, fault_address, write);
+        if (key < 0 && !fetch_refused(fault_address, params) &&
+            vm_resolve_in(current_proc->mm, fault_address, write,
+                          current_proc->rlim[RLIM_AS].cur)) {
             return; /* page mapped; iret retries the faulting instruction */
+        }
+        if (user_mode && current_proc->fault_retry) {
+            return; /* the signals are handled, then the instruction runs again */
         }
     }
 
+    k_panic_note_fault("page fault", (uintptr_t)FRAME_PC(params), (long)params->error_code);
+    k_panic_note_address(fault_address);
     if (!user_mode && fault_address >= PCWIN_BASE &&
         fault_address < PCWIN_BASE + pc_window_size()) {
         if (!current_proc) {
@@ -1134,7 +1348,8 @@ static void _page_fault_handler(isr_params_t *params)
     }
 
     if (user_mode && have_user_proc) {
-        fault_signal(params, fault_address, write, in_user_range && current_proc->bus_fault);
+        fault_signal(params, fault_address, write, in_user_range && current_proc->bus_fault,
+                     in_user_range ? key : -1);
         return;
     }
 
@@ -1151,6 +1366,9 @@ static void _page_fault_handler(isr_params_t *params)
     klog(KLOG_CRIT, "vm", "fault: in kernel mode at 0x%lX (err 0x%X), pc 0x%lX",
          (unsigned long)fault_address, (uint32_t)params->error_code,
          (unsigned long)FRAME_PC(params));
+#ifdef FRAME_FP
+    fault_callers((uintptr_t)FRAME_FP(params));
+#endif
 
     k_panic("Unrecoverable error: page fault while in kernel mode.");
 }
@@ -1291,6 +1509,31 @@ uintptr_t mmio_map(uint64_t phys, size_t size, pte_t cache)
     smp_kernel_mapping_changed();
 
     return KVA_MMIO + first * PAGE_SIZE + (uintptr_t)(phys - start_page);
+}
+
+uintptr_t mmio_map_frames(const uintptr_t *frames, uintptr_t count, pte_t cache)
+{
+    uintptr_t first, i, va;
+
+    if (count == 0 || count > MMIO_PAGES) {
+        klog(KLOG_ERR, "vm", "map_mmio: bad list of %lu frames", (unsigned long)count);
+        return 0;
+    }
+    first = mmio_find(count, 1, 0);
+    if (first >= MMIO_PAGES) {
+        klog(KLOG_ERR, "vm", "map_mmio: no run of %lu pages free in the MMIO region",
+             (unsigned long)count);
+        return 0;
+    }
+    mmio_mark(first, count, 1);
+    va = KVA_MMIO + first * PAGE_SIZE;
+    for (i = 0; i < count; i++) {
+        *kernel_pte(va + i * PAGE_SIZE) =
+            (pte_t)(frames[i] & ~(uintptr_t)(PAGE_SIZE - 1)) | PTE_P | PTE_W | PTE_NOEXEC | cache;
+    }
+    arch_space_load(arch_space_root());
+    smp_kernel_mapping_changed();
+    return va;
 }
 
 void mmio_unmap(uintptr_t va, size_t size)
@@ -1509,6 +1752,29 @@ static void frame_take(uintptr_t frame)
         }
     }
     _frames[frame] = 1;
+    _frame_anon[frame / 8u] &= (uint8_t)~(1u << (frame % 8u));
+}
+
+/** Mark an allocated frame as anonymous before publishing a private copy.
+ * The caller owns a reference and holds the big lock. */
+static void frame_make_anon(uintptr_t phys)
+{
+    uintptr_t frame = phys / PAGE_SIZE;
+    uint32_t flags = spin_lock_irqsave(&frame_lock);
+
+    if (frame < _frames_number && _frames[frame] && _frames[frame] < FRAME_REF_MAX) {
+        _frame_anon[frame / 8u] |= (uint8_t)(1u << (frame % 8u));
+    }
+    spin_unlock_irqrestore(&frame_lock, flags);
+}
+
+/** Whether a mapped frame is anonymous, under the big lock. Its mark lasts
+ * until reuse, independent of each mapping's hardware dirty bit. */
+static int frame_is_anon(uintptr_t phys)
+{
+    uintptr_t frame = phys / PAGE_SIZE;
+
+    return frame < _frames_number && (_frame_anon[frame / 8u] & (1u << (frame % 8u))) != 0;
 }
 
 /**
@@ -1578,6 +1844,32 @@ int paging_frame_is_device(uintptr_t phys)
     return frame >= _frames_number || _frames[frame] >= FRAME_REF_MAX;
 }
 
+uintptr_t paging_user_ram_frame(struct mm *mm, uintptr_t va)
+{
+    const vma_t *vma;
+    pte_t *e;
+    uintptr_t phys;
+
+    if (!mm->dir) {
+        return 0;
+    }
+    vma = vm_find(&mm->vm, va);
+    if (!vma || !region_allows(vma, 1) ||
+        (vma->prot & (VM_PROT_IO | VM_PROT_GUARD | VM_PROT_SECRET))) {
+        return 0;
+    }
+    e = user_pte(mm->dir, va);
+    if (!e || (*e & (PTE_P | PTE_W)) != (PTE_P | PTE_W) || (*e & PTE_COW)) {
+        return 0;
+    }
+    phys = PTE_ADDR(*e);
+    if (paging_frame_is_device(phys) ||
+        (vma->type != VM_SHARED && frame_maps(phys / PAGE_SIZE) > 1)) {
+        return 0;
+    }
+    return phys;
+}
+
 uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t va)
 {
     pte_t *e = user_pte(dir, va);
@@ -1606,12 +1898,51 @@ static pte_t *user_span(page_dir_t *dir, uintptr_t va, uintptr_t end, uintptr_t 
     return table;
 }
 
-void paging_user_count(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned long *present,
-                       unsigned long *dirty)
+int paging_user_page(page_dir_t *dir, uintptr_t va)
+{
+    pte_t *e = user_pte(dir, va);
+
+    if (!e || !(*e & PTE_P)) {
+        return PAGING_PAGE_NONE;
+    }
+    if (PTE_IS_ZERO(*e)) {
+        return PAGING_PAGE_ZERO;
+    }
+    if (paging_frame_is_device(PTE_ADDR(*e))) {
+        return PAGING_PAGE_DEVICE;
+    }
+    return PAGING_PAGE_FRAME;
+}
+
+void paging_user_frames(page_dir_t *dir, uintptr_t start, uintptr_t end,
+                        struct paging_frame_counts *counts)
 {
     uintptr_t va, next;
 
-    *present = *dirty = 0;
+    k_memset(counts, 0, sizeof(*counts));
+    for (va = start; va < end; va = next) {
+        pte_t *table = user_span(dir, va, end, &next);
+
+        for (; table && va < next; va += PAGE_SIZE) {
+            pte_t e = table[MMU_INDEX(va)];
+
+            if (!(e & PTE_P) || PTE_IS_ZERO(e) || paging_frame_is_device(PTE_ADDR(e))) {
+                continue;
+            }
+            counts->frames++;
+            counts->dirty += (e & PTE_DIRTY) != 0;
+            counts->pinned += frame_pinned(PTE_ADDR(e)) != 0;
+            counts->anon += frame_is_anon(PTE_ADDR(e));
+        }
+    }
+}
+
+void paging_user_count(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned long *present,
+                       unsigned long *dirty, unsigned long *anon)
+{
+    uintptr_t va, next;
+
+    *present = *dirty = *anon = 0;
     for (va = start; va < end; va = next) {
         pte_t *table = user_span(dir, va, end, &next);
 
@@ -1621,6 +1952,7 @@ void paging_user_count(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned
             if (e & PTE_P) {
                 (*present)++;
                 *dirty += (e & PTE_DIRTY) != 0;
+                *anon += frame_is_anon(PTE_ADDR(e));
             }
         }
     }
@@ -1730,14 +2062,17 @@ void paging_set_exec(page_dir_t *dir, uintptr_t addr, bool exec)
     paging_flush_dir(dir, addr);
 }
 
-pte_t paging_noexec(uint32_t prot)
+pte_t paging_prot_bits(uint32_t prot)
 {
-    pte_t bit = PTE_NOEXEC;
+    pte_t bits = PTE_NOEXEC;
 
     if (prot & VM_PROT_EXEC) {
-        bit = 0;
+        bits = 0;
     }
-    return bit;
+#if PTE_PKEY_SHIFT
+    bits |= ((pte_t)VM_PROT_KEY(prot) << PTE_PKEY_SHIFT) & (pte_t)PTE_PKEY;
+#endif
+    return bits;
 }
 
 void paging_flush_tlb(uintptr_t addr)
@@ -1937,6 +2272,7 @@ int map_user_frame(page_dir_t *dir, uintptr_t virt, uintptr_t phys, pte_t flags)
 
     old = table[MMU_INDEX(virt)];
     table[MMU_INDEX(virt)] = PTE_ADDR((pte_t)phys) | (flags & (pte_t)PTE_FLAGS);
+    mm_resident_add(dir, ((flags & PTE_P) != 0) - ((old & PTE_P) != 0));
     /* x86 caches no translation of an entry that is not present. */
     if (old & PTE_P) {
         paging_flush_dir(dir, virt);
@@ -2018,8 +2354,10 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
         return 0;
     }
 
+    frame_make_anon(phys_addr);
     old = table[MMU_INDEX(virt_addr)];
     table[MMU_INDEX(virt_addr)] = (pte_t)phys_addr | PTE_P | PTE_W | PTE_U;
+    mm_resident_add(dir, 1 - ((old & PTE_P) != 0));
     if (old & PTE_P) {
         paging_flush_dir(dir, virt_addr);
     }
@@ -2040,6 +2378,7 @@ void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end)
 {
     struct flush_batch b;
     uintptr_t addr, next, lo, hi;
+    long gone = 0;
 
     if (!dir) {
         return;
@@ -2054,9 +2393,11 @@ void unmap_user_range(page_dir_t *dir, uintptr_t start, uintptr_t end)
             if (*e & PTE_P) {
                 *e = PTE_ADDR(*e) | PTE_NONE;
                 batch_add(&b, addr);
+                gone++;
             }
         }
     }
+    mm_resident_add(dir, -gone);
     lo = b.lo;
     hi = b.hi;
     batch_flush(&b);
@@ -2118,6 +2459,7 @@ int paging_move_range(page_dir_t *dir, uintptr_t from, uintptr_t to, uintptr_t l
     uintptr_t addr, next, end = from + len;
     struct flush_batch moved, replaced;
     pte_t *table;
+    long gone = 0;
 
     for (addr = from; addr < end; addr = next) {
         for (table = user_span(dir, addr, end, &next); table && addr < next; addr += PAGE_SIZE) {
@@ -2137,6 +2479,7 @@ int paging_move_range(page_dir_t *dir, uintptr_t from, uintptr_t to, uintptr_t l
 
                 if (*dst & PTE_P) {
                     batch_add(&replaced, to + (addr - from));
+                    gone++;
                 }
                 *dst = *e;
                 if (*e & PTE_P) {
@@ -2148,6 +2491,7 @@ int paging_move_range(page_dir_t *dir, uintptr_t from, uintptr_t to, uintptr_t l
     }
     batch_flush(&moved);
     batch_flush(&replaced);
+    mm_resident_add(dir, -gone);
     return 0;
 }
 
@@ -2166,7 +2510,7 @@ static void protect_page(struct flush_batch *b, pte_t *e, uintptr_t addr, uint32
     if (!(prot & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC))) {
         pte = (pte & ~(pte_t)(PTE_W | PTE_U)) | PTE_NONE;
     } else {
-        pte = (pte & ~(pte_t)(PTE_NONE | PTE_NOEXEC)) | PTE_U | paging_noexec(prot);
+        pte = (pte & ~(pte_t)(PTE_NONE | PTE_NOEXEC | PTE_PKEY)) | PTE_U | paging_prot_bits(prot);
         frame = PTE_ADDR(pte) / PAGE_SIZE;
         if (!(prot & VM_PROT_WRITE)) {
             pte &= ~(pte_t)PTE_W;
@@ -2206,7 +2550,8 @@ void paging_protect_range(page_dir_t *dir, uintptr_t start, uintptr_t end, uint3
  * copy. A page is given only when it is present, user or PROT_NONE, and
  * names a frame other than 0. A writable private page is made read-only and
  * copy-on-write in the parent too, so that the first write on either side
- * faults into `cow_fault`. A private page pinned for a device (`frame_pin`)
+ * faults into `cow_fault`; its dirty bit is kept in the child. A private
+ * page pinned for a device (`frame_pin`)
  * stays the parent's as it is, and the child gets a copy with the same
  * rights, as Linux copies a page that may be pinned at fork: a write by the
  * parent would otherwise move the parent to a copy and leave the device
@@ -2228,6 +2573,9 @@ static int fork_copy_page(struct flush_batch *b, page_dir_t *child_dir, pte_t *e
         if (copy == 0) {
             return -1;
         }
+        if (frame_is_anon(parent_phys)) {
+            frame_make_anon(copy);
+        }
         if (paging_copy_frame(copy, parent_phys) != 0 ||
             map_user_frame(child_dir, va, copy, pte & PTE_FLAGS) != 0) {
             free_frame(copy);
@@ -2244,7 +2592,8 @@ static int fork_copy_page(struct flush_batch *b, page_dir_t *child_dir, pte_t *e
     }
     if (pte & PTE_W) {
         if (map_user_frame(child_dir, va, parent_phys,
-                           PTE_P | PTE_U | PTE_COW | (pte & PTE_NOEXEC)) != 0) {
+                           PTE_P | PTE_U | PTE_COW | (pte & (PTE_NOEXEC | PTE_PKEY | PTE_DIRTY)) |
+                               (PTE_IS_ZERO(pte) ? PTE_ZEROFILL : 0)) != 0) {
             return -1;
         }
         *e = (pte & ~(pte_t)PTE_W) | PTE_COW;
@@ -2278,8 +2627,8 @@ int paging_fork_copy(struct mm *from, page_dir_t *child_dir)
     for (region = vm_first(&from->vm); region && rc == 0; region = vm_next(region)) {
         uintptr_t va, next;
 
-        if (region->prot & VM_PROT_DONTFORK) {
-            continue;
+        if (region->prot & (VM_PROT_DONTFORK | VM_PROT_WIPEONFORK)) {
+            continue; /* a wiped region's child faults in zero pages */
         }
         if (region->type != VM_SHARED && (region->prot & VM_PROT_WRITE)) {
             mmn_notify(from, MMN_PROTECT, region->start, region->end);

@@ -7,12 +7,16 @@
 #        corpus.sh selftests LIST
 #
 # LIST is unit-tests.list or selftests.list of this directory: a test a line,
-# its name and EXPECT, `pass`, `skip`, `fail` or `excluded`. Each test whose
-# EXPECT is not `excluded` runs, in the order of the list:
+# its name and EXPECT, `pass`, `skip`, `fail` or `excluded`, or FLAG?A:B for a
+# test whose result is the processor's: A where the `flags` of /proc/cpuinfo
+# have FLAG, or where FLAG is `kvm_cap_vm_tsc_control` and /dev/kvm answers
+# KVM_CAP_VM_TSC_CONTROL with a value above 0, which perl asks it, and B
+# otherwise. Each test whose EXPECT is not `excluded` runs, in the order of
+# the list:
 #
 # * `unit`: kvm-unit-tests' run_tests.sh, from a copy of /opt/kvm-unit-tests,
-#   with ACCEL `kvm,kernel-irqchip=split`, since Rach2's KVM has only the
-#   split interrupt controller, and TIMEOUT 0, so that no test is judged by
+#   with ACCEL `kvm,kernel-irqchip=split`, as in the Linux reference,
+#   and TIMEOUT 0, so that no test is judged by
 #   the clock. A test passes on its PASS line and skips on its SKIP line.
 # * `selftests`: each program of /opt/kvm-selftests, run in a directory of
 #   its own; exit 0 is a pass and 4, kselftest's code, a skip.
@@ -50,11 +54,31 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/kvm-corpus.XXXXXX") || exit 1
 
+# The list with each EXPECT that names a flag settled by this processor's.
+flags=$(awk -F: '$1 ~ /^flags[ \t]*$/ { print $2; exit }' /proc/cpuinfo 2> /dev/null)
+# KVM_CHECK_EXTENSION is _IO(0xAE, 3); KVM_CAP_VM_TSC_CONTROL is 214. Perl's
+# ioctl gives "0 but true" for 0 and undef for an error, both 0 as numbers.
+if perl -e 'open(my $f, "<", "/dev/kvm") or exit 1;
+        exit !(ioctl($f, 0xAE03, 214) + 0)' 2> /dev/null; then
+    flags="$flags kvm_cap_vm_tsc_control"
+fi
+awk -v flags=" $flags " '
+    !/^#/ && NF >= 2 {
+        q = index($2, "?")
+        if (q) {
+            rest = substr($2, q + 1)
+            c = index(rest, ":")
+            has = index(flags, " " substr($2, 1, q - 1) " ")
+            $2 = has ? substr(rest, 1, c - 1) : substr(rest, c + 1)
+        }
+        print
+    }' "$list" > "$work/list"
+
 # The tests that run, in the list's order, with what each must give.
-awk '!/^#/ && NF >= 2 && $2 != "excluded" { print $1, $2 }' "$list" > "$work/run"
-awk '!/^#/ && NF >= 2 && $2 == "excluded" {
-    r = $0; sub(/^[^ ]+ [^ ]+ [^ ]+ ?/, "", r); print "kvm-corpus: " $1 ": excluded: " r }' "$list"
-excluded=$(awk '!/^#/ && NF >= 2 && $2 == "excluded"' "$list" | wc -l | tr -d ' ')
+awk '$2 != "excluded" { print $1, $2 }' "$work/list" > "$work/run"
+awk '$2 == "excluded" {
+    r = $0; sub(/^[^ ]+ [^ ]+ [^ ]+ ?/, "", r); print "kvm-corpus: " $1 ": excluded: " r }' "$work/list"
+excluded=$(awk '$2 == "excluded"' "$work/list" | wc -l | tr -d ' ')
 
 # PMU expectations follow the machine that runs the corpus. AMD has no
 # legacy PMU presence bit, so its unit test fails when the host has none;

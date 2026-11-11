@@ -33,16 +33,21 @@ uint32_t i915_gem_object_truncate(struct drm_i915_gem_object *obj)
 
 /**
  * Whether reclaim may purge `obj` now, as Linux's can_release_pages for a
- * purgeable object: its own pages, DONTNEED, idle, and no pin of its pages
- * but its bindings', none of which is pinned.
+ * purgeable object: its own pages, DONTNEED, idle, not exported, and no pin
+ * of its pages but its bindings', none of which is pinned. An exported
+ * object is kept because another device's import maps its frames, which
+ * `page` lends without a pin; Linux's attachment pins the pages instead
+ * (i915_gem_dmabuf_attach), and `dma_buf` stays set while any import holds
+ * the dma-buf.
  */
 static int purgeable(const struct drm_i915_gem_object *obj)
 {
     const struct i915_vma *v;
     uint32_t bound = 0;
 
-    if (obj->madv != I915_MADV_DONTNEED || obj->base.import || i915_gem_object_is_userptr(obj) ||
-        !i915_gem_object_has_pages(obj) || i915_gem_object_is_active(obj)) {
+    if (obj->madv != I915_MADV_DONTNEED || obj->base.import || obj->base.dma_buf ||
+        i915_gem_object_is_userptr(obj) || !i915_gem_object_has_pages(obj) ||
+        i915_gem_object_is_active(obj)) {
         return 0;
     }
     for (v = obj->vmas; v; v = v->obj_next) {

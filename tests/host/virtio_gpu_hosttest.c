@@ -25,8 +25,11 @@
  * driver's ioctls; a buffer's last reference, which unrefs its resource
  * and frees its pages once the host answers; virtio-vga, which removes the
  * firmware's framebuffer from its memory BARs; a device with no scanout,
- * which has no KMS; and an unplug, which fails the commands still out with
- * ENODEV and leaves nothing allocated once the last reference goes.
+ * which has no KMS; an unplug, which fails the commands still out with
+ * ENODEV and leaves nothing allocated once the last reference goes; and a
+ * reset over a transport whose backing is its own heap, which zaps an
+ * object no one exported and gives its frames back, and leaves an exported
+ * object its frames until it is freed.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -334,6 +337,34 @@ int32_t sync_file_create(struct dma_fence *fence, const char *name)
 
 #endif
 
+/** No descriptor table: no descriptor can be reserved. */
+int fd_alloc(fd_table_t *table)
+{
+    (void)table;
+    return -EMFILE;
+}
+
+/** Never reached, since no descriptor can be reserved. */
+struct sync_file *sync_file_new(struct dma_fence *fence, const char *name)
+{
+    (void)fence;
+    (void)name;
+    return NULL;
+}
+
+/** Never reached, as sync_file_new. */
+void sync_file_drop(struct sync_file *s)
+{
+    (void)s;
+}
+
+/** Never reached, as sync_file_new. */
+void sync_file_attach(int32_t fd, struct sync_file *s)
+{
+    (void)fd;
+    (void)s;
+}
+
 /** Nothing to free. */
 int fd_free(fd_table_t *table, int fd)
 {
@@ -606,6 +637,12 @@ uintptr_t drm_gem_shmem_page(struct drm_gem_shmem_object *obj, uint32_t pgoff)
     return sh->leaves[0][pgoff];
 }
 
+/** A model object's page at `pgoff`, 0 for one not given yet. */
+uintptr_t shmem_resident(const struct shmem *sh, uint32_t pgoff)
+{
+    return sh->leaves && pgoff < sh->npages ? sh->leaves[0][pgoff] : 0;
+}
+
 /** Free a model object's pages. */
 void shmem_free(struct shmem *sh)
 {
@@ -734,7 +771,8 @@ void drm_dev_unplug(struct drm_device *d)
 }
 #endif
 
-static const struct dma_fence_ops model_fence_ops = {fence_driver, fence_timeline, NULL, NULL};
+static const struct dma_fence_ops model_fence_ops = {fence_driver, fence_timeline, NULL,
+                                                     NULL,         NULL,           NULL};
 
 /** The first unsignalled fence of `resv`, held, or a signalled one. */
 struct dma_fence *dma_resv_snapshot(struct dma_resv *resv, int write)
@@ -1069,6 +1107,72 @@ static uint32_t exec_scanout(const struct virtio_gpu_set_scanout *s)
     return VIRTIO_GPU_RESP_OK_NODATA;
 }
 
+/* ---- page lists: the model's transport has none, so the driver never
+ * asks for one; these stand in for the transport's and the kernel's ---- */
+
+int virtio_map_pages(struct virtio_dev *d, const struct virtio_run *runs, uint32_t n,
+                     void (*revoke)(void *owner), void *owner, struct virtio_map **out)
+{
+    (void)d;
+    (void)runs;
+    (void)n;
+    (void)revoke;
+    (void)owner;
+    *out = NULL;
+    return -ENODEV;
+}
+
+uintptr_t virtio_map_frame(struct virtio_dev *d, struct virtio_map *m, uint64_t i)
+{
+    (void)d;
+    (void)m;
+    (void)i;
+    return 0;
+}
+
+void virtio_map_free(struct virtio_dev *d, struct virtio_map *m)
+{
+    (void)d;
+    (void)m;
+}
+
+int vgs_check_pages(const struct vgs_pages *p, uint32_t bytes, uint64_t total, uint64_t first,
+                    uint64_t *pages)
+{
+    (void)p;
+    (void)bytes;
+    (void)total;
+    (void)first;
+    (void)pages;
+    return VGS_E_PAGES;
+}
+
+int vgs_check_run(const struct vgs_run *r, uint64_t left)
+{
+    (void)r;
+    (void)left;
+    return VGS_E_PAGES;
+}
+
+static const void *zapped; /* the object of the last zap */
+static int zaps;
+
+/** Count a zap of an object's mappings, the model having none to remove. */
+void paging_zap_device(const void *obj, uint32_t pgoff, uint32_t count)
+{
+    (void)pgoff;
+    (void)count;
+    zapped = obj;
+    zaps++;
+}
+
+/** The core's zap of an object's mappings and its importers': the model
+ * has no mappings of a process. */
+void drm_gem_object_zap(struct drm_gem_object *obj)
+{
+    paging_zap_device(obj, 0, (uint32_t)(obj->size >> PAGE_SHIFT));
+}
+
 #ifdef VGPU_3D_TEST
 #include "vgpu3d_model.h"
 #endif
@@ -1214,6 +1318,53 @@ int virtqueue_reap(struct virtqueue *vq)
     return deliver(mq(vq));
 }
 
+int virtqueue_chain_fits(const struct virtqueue *vq, const struct virtio_sg *sg, unsigned out,
+                         unsigned in)
+{
+    (void)vq;
+    (void)sg;
+    return out + in <= VIRTIO_GPU_CMD_SGS + 64u;
+}
+
+int virtio_backing_fill(struct virtio_dev *d, struct shmem *sh, uint64_t bytes)
+{
+    (void)d;
+    (void)sh;
+    (void)bytes;
+    return 0;
+}
+
+static int backing_releases; /* backings given back while each still had pages */
+
+/** Count a backing given back to the transport. */
+void virtio_backing_release(struct virtio_dev *d, struct shmem *sh)
+{
+    (void)d;
+    backing_releases += sh->leaves != NULL;
+}
+
+/** The table's hook that marks a transport whose backing is its own heap,
+ * as the shared region's is; the driver calls virtio_backing_release. */
+static void heap_backing_release(struct virtio_dev *d, struct shmem *sh)
+{
+    (void)d;
+    (void)sh;
+}
+
+static const struct virtio_ops heap_ops = {.name = "heap", .backing_release = heap_backing_release};
+
+int virtio_dma_addr(struct virtio_dev *d, uintptr_t phys, uint64_t *addr)
+{
+    (void)d;
+    *addr = (uint64_t)phys;
+    return 0;
+}
+
+void virtio_put(struct virtio_dev *d)
+{
+    (void)d;
+}
+
 int32_t virtio_init(struct virtio_dev *d, uint64_t wanted, uint16_t nqueues)
 {
     CHECK(nqueues == 2, "virtio-gpu has two queues");
@@ -1244,10 +1395,11 @@ int virtio_queue_setup(struct virtio_dev *d, uint16_t index, virtqueue_done_t do
     return 0;
 }
 
-void virtio_ready(struct virtio_dev *d)
+int virtio_ready(struct virtio_dev *d)
 {
     (void)d;
     gpu.ready = 1;
+    return 0;
 }
 
 void virtio_teardown(struct virtio_dev *d)
@@ -1966,6 +2118,49 @@ static void row_unplug(void)
     CHECK(released > 0, "the last reference releases the device");
 }
 
+/** A reset over a transport whose backing is its own heap: an object no
+ * one exported is zapped before its frames go back, and an exported one,
+ * whose frames an importer such as i915 may hold in its translations,
+ * keeps them until it is freed. */
+static void row_reset_heap(void)
+{
+    struct virtio_gpu_object *a, *b;
+    uint32_t ha, hb;
+    uintptr_t pa;
+    int buf; /* the dma-buf's place, which the model never reads */
+
+    unbind();
+    model_reset();
+    gpu.dev.ops = &heap_ops;
+    CHECK(bind() == 1, "a bind over a heap");
+    a = dumb(64, 64, &ha);
+    b = dumb(64, 64, &hb);
+    CHECK(a && b, "two buffers over the heap");
+    if (!a || !b) {
+        unbind();
+        gpu.dev.ops = NULL;
+        return;
+    }
+    pa = shmem_resident(&a->shmem.pages, 0);
+    CHECK(pa != 0 && shmem_resident(&b->shmem.pages, 0) != 0, "both have their pages");
+    a->shmem.base.dma_buf = (struct dma_buf *)&buf;
+    drm_gem_object_get(&a->shmem.base); /* the dma-buf's */
+    zaps = 0;
+    zapped = NULL;
+    backing_releases = 0;
+    unbind(); /* `dumb` left one reference of each for the program */
+    CHECK(zaps == 1 && zapped == &b->shmem.base && backing_releases == 1 &&
+              shmem_resident(&b->shmem.pages, 0) == 0,
+          "the reset zaps the object no one exported and gives its frames back");
+    CHECK(shmem_resident(&a->shmem.pages, 0) == pa, "the exported object keeps its frames");
+    a->shmem.base.dma_buf = NULL;
+    drm_gem_object_put(&a->shmem.base);
+    drm_gem_object_put(&a->shmem.base);
+    drm_gem_object_put(&b->shmem.base);
+    CHECK(backing_releases == 2, "the exported object's frames go back when it is freed");
+    gpu.dev.ops = NULL;
+}
+
 int main(void)
 {
     cpu_table[0].current = &self;
@@ -1987,6 +2182,7 @@ int main(void)
     row_vga();
     row_no_scanout();
     row_unplug();
+    row_reset_heap();
     CHECK(allocations == 0, "nothing is left allocated");
     CHECK(pages_held == 0, "no page is left held");
     CHECK(irq_depth == 0, "every lock is given back");

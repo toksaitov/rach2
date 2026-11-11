@@ -1,0 +1,24 @@
+BOOT_IMAGE=/run2/vmlinuz root=PARTUUID=f640712e-b236-4c5a-b7d8-1b149d598ec0 ro ds=nocloud modprobe.blacklist=ath9k,snd_hda_intel panic=10 intel_iommu=off
+6.12.115+deb13.1-amd64
+libgl1-mesa-dri:amd64	25.0.7-2+deb13u1
+libvirglrenderer1:amd64	1.1.0-2
+mesa-vulkan-drivers:amd64	25.0.7-2+deb13u1
+qemu-system-modules-opengl	1:10.0.13+ds-0+deb13u1
+qemu-system-x86	1:10.0.13+ds-0+deb13u1
+virgl-server	1.1.0-2
+crw-rw---- 1 root kvm  10, 232 Nov 11 10:30 /dev/kvm
+-rwxr-xr-x 1 root root 1218768 Nov 10  2024 /usr/libexec/virgl_render_server
+
+/dev/dri:
+total 0
+drwxr-xr-x 2 root root         80 Nov 11 10:30 by-path
+crw-rw---- 1 root video  226,   0 Nov 11 10:30 card0
+crw-rw---- 1 root render 226, 128 Nov 11 10:30 renderD128
+always within_size advise [never] deny force
+gfxstream_vk_icd.json
+intel_hasvk_icd.json
+intel_icd.json
+lvp_icd.json
+nouveau_icd.json
+radeon_icd.json
+virtio_icd.json

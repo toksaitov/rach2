@@ -146,6 +146,13 @@ void netconsole_putc(char c)
     }
 }
 
+/** No ramoops region here: the console zone takes nothing. */
+void pstore_console_write(const char *text, uint32_t n)
+{
+    (void)text;
+    (void)n;
+}
+
 /* The stubs the destinations resolve to. The colour setter takes the screen
  * driver's own enumeration, so its header comes first and the definition
  * follows the declaration it is standing in for. */

@@ -15,6 +15,7 @@
  */
 #include "arch/x86_64/sigframe32.c"
 #include "arch/x86_64/ptrace.c"
+#include "arch/x86_64/ia32_core.c"
 #include "lib/kstring.h"
 
 extern int printf(const char *format, ...);
@@ -32,6 +33,8 @@ static int failures;
 #define USER_BASE 0x40000000ul
 #define USER_LEN  0x10000ul
 static uint8_t user[USER_LEN];
+static uintptr_t memory_base = USER_BASE;
+static int ldt_loaded;
 
 /* The model's selectors, MSRs and floating-point calls. */
 static unsigned int fs_sel, gs_sel, ds_sel, es_sel;
@@ -55,10 +58,10 @@ static void check(int ok, const char *row)
 /** The model's byte at user address `a` for `n` bytes, or NULL. */
 static uint8_t *at(uintptr_t a, size_t n)
 {
-    if (a < USER_BASE || a + n > USER_BASE + USER_LEN || a + n < a) {
+    if (a < memory_base || a + n > memory_base + USER_LEN || a + n < a) {
         return NULL;
     }
-    return user + (a - USER_BASE);
+    return user + (a - memory_base);
 }
 
 int copy_from_user(void *dst, const void __user *src, size_t n)
@@ -166,6 +169,8 @@ void x86_64_es_load(unsigned int sel)
 unsigned int x86_64_lar(unsigned int sel)
 {
     switch (sel) {
+    case 15:
+        return ldt_loaded ? 0x00C0F300u : 0;
     case GDT_USER_DATA:
         return 0x00C0F300u;
     case GDT_USER_CODE32:
@@ -175,6 +180,13 @@ unsigned int x86_64_lar(unsigned int sel)
     default:
         return 0;
     }
+}
+
+/** Publish the modeled LDT before a non-faulting selector check. */
+void ldt_switch(const struct mm *mm)
+{
+    (void)mm;
+    ldt_loaded = 1;
 }
 
 uintptr_t fpu_frame32_place(uintptr_t sp)
@@ -220,9 +232,9 @@ void fpu_reset(void)
 void fpu_env32_get(const void *area, uint8_t *env, uint32_t cs, uint32_t ds)
 {
     (void)area;
-    (void)cs;
-    (void)ds;
     k_memset(env, 0, FPU_ENV_SIZE);
+    k_memcpy(env + 16, &cs, sizeof(cs));
+    k_memcpy(env + 24, &ds, sizeof(ds));
 }
 
 void fpu_env32_set(void *area, const uint8_t *env)
@@ -323,11 +335,10 @@ uint32_t core_note_bytes(uint32_t descsz)
 
 void core_note_put(uint8_t **p, const char *name, uint32_t type, const void *desc, uint32_t descsz)
 {
-    (void)p;
     (void)name;
     (void)type;
-    (void)desc;
-    (void)descsz;
+    k_memcpy(*p, desc, descsz);
+    *p += descsz;
 }
 
 int tls_desc_valid(const struct user_desc *u)
@@ -346,17 +357,34 @@ int tls_entry_get(const struct process *t, uint32_t entry, struct user_desc *u)
 
 int tls_entry_set(struct process *t, uint32_t entry, const struct user_desc *u)
 {
+    t->regs.tls[entry - GDT_TLS_MIN] = u->base_addr;
+    return 0;
+}
+
+/** No active TLS note in this model. */
+uint32_t ia32_tls_get(const process_t *t, struct user_desc *u)
+{
     (void)t;
-    (void)entry;
     (void)u;
     return 0;
 }
 
+/* The model's LDT: entry N of LDT_MODEL_ENTRIES has the base
+ * LDT_MODEL_BASE + N, and a selector past them none. */
+#define LDT_MODEL_ENTRIES 16u
+#define LDT_MODEL_BASE    0x1D70000u
+
+/** A TLS entry's base as `tls_entry_set` stored it, or the model LDT's. */
 uintptr_t tls_selector_base(const struct process *t, unsigned int sel)
 {
-    (void)t;
-    (void)sel;
-    return 0;
+    unsigned int entry = sel >> 3;
+
+    if ((sel & 4u) != 0) {
+        return entry < LDT_MODEL_ENTRIES ? LDT_MODEL_BASE + entry : 0;
+    }
+    return entry >= GDT_TLS_MIN && entry <= GDT_TLS_MAX
+               ? (uintptr_t)t->regs.tls[entry - GDT_TLS_MIN]
+               : 0;
 }
 
 /* A size or offset and Linux's value of it. */
@@ -507,6 +535,8 @@ static void run_siginfo(void)
  * EIP 0x08049100 with the stack at `sp`. */
 static void setup(isr_params_t *tf, uintptr_t sp)
 {
+    memory_base = USER_BASE;
+    ldt_loaded = 0;
     k_memset(&proc, 0, sizeof(proc));
     k_memset(tf, 0, sizeof(*tf));
     k_memset(user, 0, sizeof(user));
@@ -650,10 +680,59 @@ static void run_stacks(void)
               word_at(tf.rsp + 144 + 16) == 0x4000u,
           "uc_stack as sigaltstack read it where the signal came");
 
-    setup(&tf, 0xFFFFFF00u);
+    setup(&tf, LOW_4G + 0x1000u);
+    memory_base = LOW_4G - USER_LEN / 2u;
     sa.flags = SA_SIGINFO | SA_RESTORER;
-    check(ia32_sigframe_setup(&tf, SIGUSR1, &sa, &info, 0) == -1 && tf.rsp == 0xFFFFFF00u,
-          "a frame that would reach 4 GiB is refused");
+    check(ia32_sigframe_setup(&tf, SIGUSR1, &sa, &info, 0) == -1 && fpu_puts == 0,
+          "a frame above 4 GiB is refused before the modeled memory accepts it");
+    setup(&tf, LOW_4G + 512u + 64u);
+    memory_base = LOW_4G - USER_LEN / 2u;
+    check(fpu_frame32_place(tf.rsp) < LOW_4G &&
+              fpu_frame32_place(tf.rsp) + fpu_frame32_bytes() > LOW_4G &&
+              ia32_sigframe_setup(&tf, SIGUSR1, &sa, &info, 0) == -1 && fpu_puts == 0,
+          "a frame whose floating-point state starts below 4 GiB and ends above it is refused");
+    setup(&tf, 0xFFFFFF00u);
+    memory_base = LOW_4G - USER_LEN / 2u;
+    check(ia32_sigframe_setup(&tf, SIGUSR1, &sa, &info, 0) == 0 && tf.rsp < LOW_4G,
+          "a frame ending below 4 GiB is accepted");
+    memory_base = USER_BASE;
+}
+
+/** A non-flat stack uses the legacy restorer stack under Linux's conditions. */
+static void run_legacy_stack(void)
+{
+    isr_params_t tf;
+    struct k_sigaction sa;
+    struct k_siginfo info;
+
+    setup(&tf, 0x2000u);
+    tf.ss = 15;
+    proc.altstack_sp = USER_BASE + 0xA000u;
+    proc.altstack_size = 0x4000u;
+    proc.altstack_on = 1;
+    k_memset(&sa, 0, sizeof(sa));
+    k_memset(&info, 0, sizeof(info));
+    sa.handler = 0x08049000u;
+    sa.restorer = USER_BASE + 0xD000u;
+    sa.flags = SA_SIGINFO;
+    vdso_rt = 0x0F7F0400u;
+    check(ia32_sigframe_setup(&tf, SIGUSR1, &sa, &info, 0) == 0 && tf.rsp > USER_BASE + 0xA000u &&
+              tf.rsp < USER_BASE + 0xD000u && word_at(tf.rsp) == vdso_rt,
+          "the LDT stack switches to sa_restorer, below the alternate stack's top, and returns "
+          "through the vDSO");
+    check(!ldt_loaded && seg_from_frame(15) == 15 && ldt_loaded,
+          "the data selector check loads a newly published LDT before lar");
+    tf.rsp = 0x2000u;
+    tf.ss = 15;
+    sa.restorer = USER_BASE + 0x9000u;
+    check(ia32_sigframe_setup(&tf, SIGUSR1, &sa, &info, 0) == -1,
+          "an sa_restorer stack below the alternate stack is refused");
+    tf.rsp = 0x2000u;
+    tf.ss = 15;
+    sa.restorer = USER_BASE + 0xD000u;
+    sa.flags |= SA_RESTORER;
+    check(ia32_sigframe_setup(&tf, SIGUSR1, &sa, &info, 0) == -1,
+          "SA_RESTORER makes its pointer code rather than a legacy stack");
 }
 
 /** An i386 tracer's registers: user_regs_struct32 from PTRACE_GETREGS and
@@ -710,6 +789,66 @@ static void run_ptrace(void)
           "a 64-bit tracee's NT_PRSTATUS is user_regs_struct");
 }
 
+/** Ptrace writes SS, refreshes both bases when its TLS set or a TLS entry
+ * changes, at each RPL of the selector, and takes a selector's low 16 bits. */
+static void run_ptrace_writes(void)
+{
+    struct user_desc u;
+    uint8_t notes[FPU_ENV_SIZE + FX_SIZE], *next = notes;
+    uint32_t word;
+    unsigned int rpl;
+
+    check(regs32_set(&tracee, R32_SS, 15) == 0 && tracee_frame.ss == 15 &&
+              regs32_set(&tracee, R32_SS, 0) == -EIO && tracee_frame.ss == 15,
+          "ptrace saves an LDT stack selector and refuses a null one");
+    check(regs32_set(&tracee, R32_COUNT, 0) == -EIO &&
+              regset32_set(&tracee, NT_PRSTATUS, notes, R32_COUNT * 4u + 4u) == -EINVAL,
+          "an oversized register set cannot index past the i386 register map");
+    k_memset(&u, 0, sizeof(u));
+    for (rpl = 0; rpl < 4; rpl++) {
+        u.base_addr = 0x321000u + rpl;
+        tracee.regs.fs_sel = tracee.regs.gs_sel = (uint16_t)((GDT_TLS_MIN << 3) | rpl);
+        tracee.tls_base = tracee.regs.gs_base = 0xBADu;
+        check(regset32_set(&tracee, NT_386_TLS, (const uint8_t *)&u, sizeof(u)) == 0 &&
+                  tracee.tls_base == u.base_addr && tracee.regs.gs_base == u.base_addr,
+              "NT_386_TLS updates the saved FS and GS bases of a TLS selector at each RPL");
+        u.base_addr = 0x654000u + rpl;
+        k_memcpy(at(USER_BASE + 0x200u, sizeof(u)), &u, sizeof(u));
+        tracee.tls_base = tracee.regs.gs_base = 0xBADu;
+        check(arch_ptrace(&tracee, 2, PTRACE_SET_THREAD_AREA, GDT_TLS_MIN, USER_BASE + 0x200u) ==
+                      0 &&
+                  tracee.tls_base == u.base_addr && tracee.regs.gs_base == u.base_addr,
+              "PTRACE_SET_THREAD_AREA updates the saved FS and GS bases at each RPL");
+    }
+    tracee.tls_base = tracee.regs.gs_base = 0xBADu;
+    check(regs32_set(&tracee, R32_FS, 0x0001000Fu) == 0 && tracee.regs.fs_sel == 0x000Fu &&
+              tracee.tls_base == LDT_MODEL_BASE + 1u,
+          "a FS write with upper bits stores 16 bits and takes LDT entry 1's base");
+    check(regs32_set(&tracee, R32_GS, 0x00010063u) == 0 && tracee.regs.gs_sel == 0x0063u &&
+              tracee.regs.gs_base == tracee.regs.tls[0],
+          "a GS write with upper bits stores 16 bits and takes TLS entry 12's base");
+    tracee_frame.cs = 15;
+    tracee.regs.ds_sel = 23;
+    ia32_core_fp_notes(&next, &tracee);
+    k_memcpy(&word, notes + 16, sizeof(word));
+    check(word == 15, "the i386 core x87 note uses the tracee's code selector");
+    k_memcpy(&word, notes + 24, sizeof(word));
+    check(word == 23 && next == notes + sizeof(notes),
+          "the i386 core x87 note uses the tracee's data selector");
+}
+
+/** PKRU with the keys off, which the host test's frames carry. */
+uint32_t fpu_pkru(void)
+{
+    return 0;
+}
+
+/** Writing PKRU does nothing with the keys off. */
+void fpu_pkru_set(uint32_t pkru)
+{
+    (void)pkru;
+}
+
 int main(void)
 {
     run_layout();
@@ -717,7 +856,9 @@ int main(void)
     run_rt_frame();
     run_plain_frame();
     run_stacks();
+    run_legacy_stack();
     run_ptrace();
+    run_ptrace_writes();
     if (failures) {
         printf("ia32-signal-hosttest: %d failures\n", failures);
         return failures > 255 ? 255 : failures;

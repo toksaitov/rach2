@@ -1,3 +1,7 @@
 chromium
 chromium-headless-shell
 firefox-esr
+# Chromium's ANGLE loads libpci.so.3 at run time, with no ELF dependency, for
+# the GPU's PCI identity, which chooses its driver workarounds and blocklist
+# entries; without it chrome://gpu reports vendor and device 0x0000.
+libpci3

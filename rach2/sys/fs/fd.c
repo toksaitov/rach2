@@ -225,6 +225,22 @@ void fd_ofd_unref(struct open_file *ofd)
                 }
                 vfs_desc_close(mnt, node, handle);
             }
+            if (ofd->dev_mnt) {
+                struct vfs_mount *mnt = ofd->dev_mnt;
+                void *node = ofd->dev_node;
+
+                ofd->dev_mnt = NULL;
+                ofd->dev_node = NULL;
+                vfs_desc_close(mnt, node, NULL);
+            }
+            if (ofd->synth_mnt) {
+                struct vfs_ref ref;
+
+                ref.mnt = ofd->synth_mnt;
+                ref.node = ref.mnt->root;
+                ofd->synth_mnt = NULL;
+                vfs_desc_close(ref.mnt, ref.node, NULL);
+            }
             while (*link && *link != rec) {
                 link = &(*link)->next;
             }
@@ -502,7 +518,7 @@ int fd_table_reach(fd_table_t *table, int fd)
     return fd_table_grow(table, fd + 1);
 }
 
-int fd_init_stdio(fd_table_t *table)
+int fd_init_stdio(fd_table_t *table, uint32_t hangups)
 {
     int i;
 
@@ -519,6 +535,7 @@ int fd_init_stdio(fd_table_t *table)
             }
             return -1;
         }
+        ofd->tty_hangups = hangups;
         table->entries[i].type = FD_TYPE_CONSOLE;
         table->entries[i].node = NULL;
         table->entries[i].sock = NULL;

@@ -2,6 +2,7 @@
 #include "dmabuf.h"
 #include "../mm/kheap.h"
 #include "../lib/kerrno.h"
+#include "../lib/kirq.h"
 #include "../lib/kstring.h"
 #include "../rtc.h"
 #include "../timer.h"
@@ -62,12 +63,27 @@ void dma_fence_set_error(struct dma_fence *f, int32_t error)
         f->error = error;
 }
 
-/** Stamp completion, detach each callback before calling it, and wake all. */
+/** Stamp completion, run each callback and wake all.
+ * The mark is made and every callback runs with interrupts masked, as
+ * Linux's dma_fence_signal runs them under the fence's lock with
+ * interrupts off: a callback may free the owner of another callback that
+ * has been taken off the list but not yet called, and an interrupt that
+ * signalled another fence in that window could do so. Once the mark is
+ * made, dma_fence_add_callback refuses. Each callback stays on the list,
+ * where dma_fence_remove_callback can find it, until it is taken off to
+ * be called. The callbacks run in the signaller's context and must not
+ * sleep. */
 int32_t dma_fence_signal(struct dma_fence *f)
 {
     struct dma_fence_cb *cb;
-    if (!f || f->signaled)
+    uint32_t flags;
+    if (!f)
         return -EINVAL;
+    flags = kirq_save();
+    if (f->signaled) {
+        kirq_restore(flags);
+        return -EINVAL;
+    }
     dma_fence_get(f);
     f->signaled = 1;
     f->timestamp_ns = dma_fence_now();
@@ -76,22 +92,56 @@ int32_t dma_fence_signal(struct dma_fence *f)
         cb->next = NULL;
         cb->func(f, cb);
     }
+    kirq_restore(flags);
     wq_wake_all(&f->wq);
     dma_fence_put(f);
     return 0;
 }
 
-/** Enable a driver's completion interrupt once, allowing synchronous signal. */
+/** Answer from the mark, or from the fence's `signaled`, signalling it when
+ * that says it may be, as Linux's dma_fence_is_signaled; enables nothing. */
 int dma_fence_is_signaled(struct dma_fence *f)
 {
-    if (!f)
+    if (!f || f->signaled)
         return 1;
-    if (!f->signaled && !f->signaling_enabled) {
-        f->signaling_enabled = 1;
-        if (f->ops && f->ops->enable_signaling && !f->ops->enable_signaling(f) && !f->signaled)
-            dma_fence_signal(f);
+    if (f->ops && f->ops->signaled && f->ops->signaled(f)) {
+        (void)dma_fence_signal(f);
+        return 1;
     }
-    return f->signaled;
+    return 0;
+}
+
+/** Mark the fence listened and run its `enable_signaling` the first time,
+ * signalling the fence when that returns 0, as Linux's
+ * __dma_fence_enable_signaling (dma-fence.c:579-601). Returns 1 while the
+ * fence is unsignalled. The caller masks interrupts, as Linux holds the
+ * fence's lock with them off (dma-fence.c:615-617, 657-667): an interrupt
+ * between the test and the mark could enter the same fence's setup, and
+ * both would run the hook, which arms an array's children twice. */
+static int enable_masked(struct dma_fence *f)
+{
+    int was_set = f->listened;
+    f->listened = 1;
+    if (f->signaled)
+        return 0;
+    if (!was_set && f->ops && f->ops->enable_signaling && !f->ops->enable_signaling(f)) {
+        if (!f->signaled)
+            (void)dma_fence_signal(f);
+        return 0;
+    }
+    return !f->signaled;
+}
+
+/** Enable signalling with interrupts masked, as Linux's
+ * dma_fence_enable_sw_signaling (dma-fence.c:611-618). */
+void dma_fence_enable_sw_signaling(struct dma_fence *f)
+{
+    uint32_t flags;
+    if (!f)
+        return;
+    flags = kirq_save();
+    (void)enable_masked(f);
+    kirq_restore(flags);
 }
 
 /** Report completion or the producer's error. */
@@ -100,15 +150,26 @@ int32_t dma_fence_status(struct dma_fence *f)
     return dma_fence_is_signaled(f) ? (f && f->error ? f->error : 1) : 0;
 }
 
-/** Add a callback unless completion has already happened. */
+/** Add a callback unless completion has already happened: 0, or -ENOENT
+ * when it has. Signalling is enabled and the callback linked in one step
+ * with interrupts masked, as Linux's dma_fence_add_callback does under the
+ * fence's lock (dma-fence.c:657-667), so that a signal from an interrupt
+ * either finds the callback or comes first. */
 int32_t dma_fence_add_callback(struct dma_fence *f, struct dma_fence_cb *cb,
                                void (*func)(struct dma_fence *, struct dma_fence_cb *))
 {
+    uint32_t flags;
     if (dma_fence_is_signaled(f))
         return -ENOENT;
+    flags = kirq_save();
+    if (!enable_masked(f)) {
+        kirq_restore(flags);
+        return -ENOENT;
+    }
     cb->func = func;
     cb->next = f->cbs;
     f->cbs = cb;
+    kirq_restore(flags);
     return 0;
 }
 
@@ -116,15 +177,19 @@ int32_t dma_fence_add_callback(struct dma_fence *f, struct dma_fence_cb *cb,
 int dma_fence_remove_callback(struct dma_fence *f, struct dma_fence_cb *cb)
 {
     struct dma_fence_cb **p;
+    uint32_t flags;
     if (!f)
         return 0;
+    flags = kirq_save();
     for (p = &f->cbs; *p; p = &(*p)->next) {
         if (*p == cb) {
             *p = cb->next;
             cb->next = NULL;
+            kirq_restore(flags);
             return 1;
         }
     }
+    kirq_restore(flags);
     return 0;
 }
 
@@ -140,8 +205,31 @@ static int fence_ready(void *arg)
     return dma_fence_is_signaled(w->fence) || (w->deadline >= 0 && dma_fence_now() >= w->deadline);
 }
 
-/** Wait with a reference held, restoring the thread's previous timer. */
+/** Enable the fence and hand it to its own wait or the default one, as
+ * Linux's dma_fence_wait_timeout (dma-fence.c:512-518), with a reference
+ * held across the wait. */
 int32_t dma_fence_wait_until(struct dma_fence *f, int intr, int64_t deadline_ns)
+{
+    int32_t rc;
+    if (dma_fence_is_signaled(f))
+        return 0;
+    if (deadline_ns >= 0 && dma_fence_now() >= deadline_ns)
+        return -ETIME;
+    dma_fence_get(f);
+    dma_fence_enable_sw_signaling(f);
+    if (f->signaled)
+        rc = 0;
+    else if (f->ops && f->ops->wait)
+        rc = f->ops->wait(f, intr, deadline_ns);
+    else
+        rc = dma_fence_default_wait(f, intr, deadline_ns);
+    dma_fence_put(f);
+    return rc;
+}
+
+/** Sleep on the fence's queue with a reference held, restoring the
+ * thread's previous timer. */
+int32_t dma_fence_default_wait(struct dma_fence *f, int intr, int64_t deadline_ns)
 {
     struct fence_wait w;
     uint64_t saved, delta;
@@ -155,6 +243,7 @@ int32_t dma_fence_wait_until(struct dma_fence *f, int intr, int64_t deadline_ns)
         return -EINVAL;
     w.fence = dma_fence_get(f);
     w.deadline = deadline_ns;
+    dma_fence_enable_sw_signaling(f);
     saved = current_proc->wakeup_tick;
     if (deadline_ns >= 0) {
         left = deadline_ns - dma_fence_now();
@@ -181,7 +270,8 @@ struct array_cb {
 };
 struct fence_array {
     struct dma_fence base;
-    uint32_t count, pending;
+    uint32_t count;
+    uint32_t pending; /* fences not yet signalled, counted once armed */
     struct dma_fence **fences;
     struct array_cb *callbacks;
 };
@@ -200,7 +290,19 @@ static void array_release(struct dma_fence *f)
     kfree(a);
 }
 
-static const struct dma_fence_ops array_ops = {NULL, NULL, NULL, array_release};
+/** An array's driver name, Linux's dma-fence-array's. */
+static const char *array_driver_name(struct dma_fence *f)
+{
+    (void)f;
+    return "dma_fence_array";
+}
+
+/** An array's timeline name, Linux's dma-fence-array's. */
+static const char *array_timeline_name(struct dma_fence *f)
+{
+    (void)f;
+    return "unbound";
+}
 
 /** Carry a child's error and complete the array after its last child. */
 static void array_done(struct dma_fence *f, struct dma_fence_cb *cb)
@@ -212,6 +314,47 @@ static void array_done(struct dma_fence *f, struct dma_fence_cb *cb)
         dma_fence_signal(&a->base);
 }
 
+/**
+ * Add a callback to each fence of the array, the first time its signal is
+ * asked for, as Linux's dma_fence_array_enable_signaling
+ * (dma-fence-array.c:70-87): an array made and only queried, or dropped,
+ * enables none of its fences. Returns 1; the last fence found signalled
+ * signals the array.
+ */
+static int array_enable_signaling(struct dma_fence *f)
+{
+    struct fence_array *a = (struct fence_array *)f;
+    uint32_t i;
+    a->pending = a->count;
+    for (i = 0; i < a->count; i++) {
+        a->callbacks[i].array = a;
+        if (dma_fence_add_callback(a->fences[i], &a->callbacks[i].cb, array_done))
+            array_done(a->fences[i], &a->callbacks[i].cb);
+    }
+    return 1;
+}
+
+/** Whether every fence of an array not yet enabled has signalled, carrying
+ * the first error, as Linux's dma_fence_array_signaled; an enabled array
+ * is signalled by its callbacks. */
+static int array_signaled(struct dma_fence *f)
+{
+    struct fence_array *a = (struct fence_array *)f;
+    uint32_t i;
+    if (f->listened)
+        return 0;
+    for (i = 0; i < a->count; i++)
+        if (!dma_fence_is_signaled(a->fences[i]))
+            return 0;
+    for (i = 0; i < a->count && !f->error; i++)
+        dma_fence_set_error(f, a->fences[i]->error);
+    return 1;
+}
+
+static const struct dma_fence_ops array_ops = {array_driver_name,      array_timeline_name,
+                                               array_enable_signaling, array_release,
+                                               array_signaled,         NULL};
+
 static const struct dma_fence_ops chain_ops;
 
 /** Return a fence's chain record, or NULL for any other fence. */
@@ -220,51 +363,110 @@ struct dma_fence_chain *to_dma_fence_chain(struct dma_fence *f)
     return f && f->ops == &chain_ops ? (struct dma_fence_chain *)f : NULL;
 }
 
-/**
- * Walk the leaves of `f` in the order of Linux's dma_fence_unwrap: a
- * chain's own fence, then the fence of each earlier point not yet
- * signalled, or `f` alone, each array among them by its fences. Count them
- * in `*count` and return the borrowed leaf `index`, or NULL past the end.
- * Changes nothing but what a signalled test enables; does not sleep.
- */
-static struct dma_fence *unwrap(struct dma_fence *f, uint32_t index, uint32_t *count)
+/** The fence a point of a walk stands for: a chain's own fence, or the
+ * point itself when it is no chain. */
+static struct dma_fence *unwrap_contained(struct dma_fence *node)
 {
-    struct dma_fence_chain *c;
-    struct dma_fence *node, *leaf, *found = NULL;
-    uint32_t n = 0, k;
-    for (node = f; node; node = c ? c->prev : NULL) {
-        c = to_dma_fence_chain(node);
-        leaf = c ? c->fence : node;
-        if (node != f && dma_fence_is_signaled(leaf))
-            continue;
-        k = leaf->ops == &array_ops ? ((struct fence_array *)leaf)->count : 1;
-        if (!found && index >= n && index - n < k)
-            found =
-                leaf->ops == &array_ops ? ((struct fence_array *)leaf)->fences[index - n] : leaf;
-        n += k;
+    struct dma_fence_chain *c = to_dma_fence_chain(node);
+    return c ? c->fence : node;
+}
+
+/** Move the walk to the nearest earlier point whose fence has not
+ * signalled, or to the end, giving back the reference to the point it
+ * leaves. The signalled points passed stay in the chain: Linux's
+ * dma_fence_unwrap_next steps with dma_fence_chain_walk, which unlinks
+ * each by cmpxchg on `prev` and puts it (dma-fence-chain.c:50-72), as
+ * Rach2's dma_fence_chain_walk does for the syncobjs. */
+static void unwrap_step(struct dma_fence_unwrap *cursor)
+{
+    struct dma_fence_chain *c = to_dma_fence_chain(cursor->chain);
+    struct dma_fence *prev = c ? c->prev : NULL;
+    while (prev && dma_fence_is_signaled(unwrap_contained(prev))) {
+        c = to_dma_fence_chain(prev);
+        prev = c ? c->prev : NULL;
     }
-    *count = n;
-    return found;
+    dma_fence_get(prev);
+    dma_fence_put(cursor->chain);
+    cursor->chain = prev;
+    cursor->array = NULL;
+    cursor->index = 0;
+}
+
+/** The first leaf of the walk's point, an array's first fence or the
+ * point's own, or NULL at the end. */
+static struct dma_fence *unwrap_point(struct dma_fence_unwrap *cursor)
+{
+    struct dma_fence *f;
+    while (cursor->chain) {
+        f = unwrap_contained(cursor->chain);
+        cursor->index = 0;
+        if (f->ops != &array_ops) {
+            cursor->array = NULL;
+            return f;
+        }
+        cursor->array = f;
+        if (((struct fence_array *)f)->count)
+            return ((struct fence_array *)f)->fences[0];
+        unwrap_step(cursor);
+    }
+    return NULL;
+}
+
+/** Begin a walk at `head`, as Linux's dma_fence_unwrap_first. */
+struct dma_fence *dma_fence_unwrap_first(struct dma_fence *head, struct dma_fence_unwrap *cursor)
+{
+    cursor->chain = dma_fence_get(head);
+    cursor->array = NULL;
+    cursor->index = 0;
+    return unwrap_point(cursor);
+}
+
+/** Go on with a walk, as Linux's dma_fence_unwrap_next. */
+struct dma_fence *dma_fence_unwrap_next(struct dma_fence_unwrap *cursor)
+{
+    struct fence_array *a = (struct fence_array *)cursor->array;
+    if (a && ++cursor->index < a->count)
+        return a->fences[cursor->index];
+    if (!cursor->chain)
+        return NULL;
+    unwrap_step(cursor);
+    return unwrap_point(cursor);
+}
+
+/** Give back the point a walk left before its end holds. */
+void dma_fence_unwrap_end(struct dma_fence_unwrap *cursor)
+{
+    dma_fence_put(cursor->chain);
+    cursor->chain = NULL;
+    cursor->array = NULL;
 }
 
 /** Count the leaves that Linux's dma_fence_unwrap visits. */
 uint32_t dma_fence_count(struct dma_fence *f)
 {
-    uint32_t n;
-    unwrap(f, 0, &n);
+    struct dma_fence_unwrap u;
+    struct dma_fence *leaf;
+    uint32_t n = 0;
+    for (leaf = dma_fence_unwrap_first(f, &u); leaf; leaf = dma_fence_unwrap_next(&u))
+        n++;
     return n;
 }
 
 /** Return a borrowed leaf in unwrap order. */
 struct dma_fence *dma_fence_at(struct dma_fence *f, uint32_t index)
 {
-    uint32_t n;
-    return unwrap(f, index, &n);
+    struct dma_fence_unwrap u;
+    struct dma_fence *leaf;
+    for (leaf = dma_fence_unwrap_first(f, &u); leaf && index; leaf = dma_fence_unwrap_next(&u))
+        index--;
+    dma_fence_unwrap_end(&u);
+    return leaf;
 }
 
 /** Build an all-of fence, flattening nested merges and duplicate contexts. */
 struct dma_fence *dma_fence_merge(struct dma_fence **fences, uint32_t count)
 {
+    struct dma_fence_unwrap u;
     struct fence_array *a;
     struct dma_fence *f;
     uint32_t i, j, k, total = 0;
@@ -288,9 +490,11 @@ struct dma_fence *dma_fence_merge(struct dma_fence **fences, uint32_t count)
             return NULL;
         }
     }
+    /* One walk of each fence, since a leaf that signals between two
+     * lookups by index would move the later ones; a walk finds no more
+     * leaves than the count before it. */
     for (i = 0; i < count; i++)
-        for (j = 0; j < dma_fence_count(fences[i]); j++) {
-            f = dma_fence_at(fences[i], j);
+        for (f = dma_fence_unwrap_first(fences[i], &u); f; f = dma_fence_unwrap_next(&u)) {
             for (k = 0; k < a->count; k++)
                 if (a->fences[k]->context == f->context)
                     break;
@@ -298,8 +502,10 @@ struct dma_fence *dma_fence_merge(struct dma_fence **fences, uint32_t count)
                 if ((int64_t)(f->seqno - a->fences[k]->seqno) <= 0)
                     continue;
                 dma_fence_put(a->fences[k]);
-            } else
+            } else if (a->count < total)
                 a->count++;
+            else
+                continue;
             a->fences[k] = dma_fence_get(f);
         }
     if (a->count < 2) {
@@ -312,14 +518,6 @@ struct dma_fence *dma_fence_merge(struct dma_fence **fences, uint32_t count)
         array_release(&a->base);
         return f;
     }
-    a->pending = a->count;
-    for (i = 0; i < a->count; i++) {
-        a->callbacks[i].array = a;
-        if (dma_fence_add_callback(a->fences[i], &a->callbacks[i].cb, array_done))
-            array_done(a->fences[i], &a->callbacks[i].cb);
-    }
-    if (!a->count)
-        dma_fence_signal(&a->base);
     return &a->base;
 }
 
@@ -328,6 +526,7 @@ struct dma_fence *dma_fence_merge(struct dma_fence **fences, uint32_t count)
  * the newest completion time when nothing is left. */
 struct dma_fence *dma_fence_unwrap_merge(struct dma_fence **fences, uint32_t count)
 {
+    struct dma_fence_unwrap u;
     struct dma_fence **leaves, *f, *out;
     uint32_t i, j, n = 0, total = 0;
     int64_t timestamp = 0;
@@ -343,11 +542,11 @@ struct dma_fence *dma_fence_unwrap_merge(struct dma_fence **fences, uint32_t cou
     if (!leaves)
         return NULL;
     for (i = 0; i < count; i++)
-        for (j = 0; j < dma_fence_count(fences[i]); j++) {
-            f = dma_fence_at(fences[i], j);
-            if (!dma_fence_is_signaled(f))
-                leaves[n++] = f;
-            else if (f->timestamp_ns > timestamp)
+        for (f = dma_fence_unwrap_first(fences[i], &u); f; f = dma_fence_unwrap_next(&u)) {
+            if (!dma_fence_is_signaled(f)) {
+                if (n < total)
+                    leaves[n++] = f;
+            } else if (f->timestamp_ns > timestamp)
                 timestamp = f->timestamp_ns;
         }
     out = dma_fence_merge(leaves, n);
@@ -366,14 +565,15 @@ int64_t dma_fence_deadline(struct dma_fence *f)
 /** Pass a deadline hint to all children without changing completion. */
 void dma_fence_set_deadline(struct dma_fence *f, int64_t deadline)
 {
-    uint32_t i;
+    struct dma_fence_unwrap u;
+    struct dma_fence *leaf;
     if (!f)
         return;
     if (deadline < f->deadline_ns)
         f->deadline_ns = deadline;
     if (f->ops == &array_ops || f->ops == &chain_ops)
-        for (i = 0; i < dma_fence_count(f); i++)
-            dma_fence_set_deadline(dma_fence_at(f, i), deadline);
+        for (leaf = dma_fence_unwrap_first(f, &u); leaf; leaf = dma_fence_unwrap_next(&u))
+            dma_fence_set_deadline(leaf, deadline);
 }
 
 /* ------------------------------------------------------------------------
@@ -434,6 +634,20 @@ static int chain_enable_signaling(struct dma_fence *f)
     return chain_arm((struct dma_fence_chain *)f);
 }
 
+/** Whether the fence of the point and of each earlier one has signalled,
+ * as Linux's dma_fence_chain_signaled, without arming the chain. */
+static int chain_signaled(struct dma_fence *f)
+{
+    struct dma_fence_chain *p;
+    struct dma_fence *node;
+    for (node = f; node; node = p ? p->prev : NULL) {
+        p = to_dma_fence_chain(node);
+        if (!dma_fence_is_signaled(p ? p->fence : node))
+            return 0;
+    }
+    return 1;
+}
+
 /** Release a point and, without recursion, each earlier point it held last. */
 static void chain_release(struct dma_fence *f)
 {
@@ -453,8 +667,9 @@ static void chain_release(struct dma_fence *f)
     kfree(c);
 }
 
-static const struct dma_fence_ops chain_ops = {chain_driver_name, chain_timeline_name,
-                                               chain_enable_signaling, chain_release};
+static const struct dma_fence_ops chain_ops = {chain_driver_name,      chain_timeline_name,
+                                               chain_enable_signaling, chain_release,
+                                               chain_signaled,         NULL};
 
 /** Allocate a chain record for dma_fence_chain_init. */
 struct dma_fence_chain *dma_fence_chain_alloc(void)
@@ -533,7 +748,7 @@ static const char *stub_name(struct dma_fence *f)
     return "stub";
 }
 
-static const struct dma_fence_ops stub_ops = {stub_name, stub_name, NULL, NULL};
+static const struct dma_fence_ops stub_ops = {stub_name, stub_name, NULL, NULL, NULL, NULL};
 
 /** Return a reference to the shared signalled stub, made at first use. */
 struct dma_fence *dma_fence_get_stub(void)

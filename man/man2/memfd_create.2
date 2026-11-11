@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd November 11, 2026
 .Dt MEMFD_CREATE 2
 .Os
 .Sh NAME
@@ -65,10 +65,15 @@ or
 .Xr ftruncate 2
 to a smaller size.
 .It Dv F_SEAL_GROW
-Refuse a truncation to a larger size and a write that would pass the
-end; such a write fails whole, with nothing written, and so does a
+Refuse a truncation to a larger size, and cut a write that would pass
+the end to the whole 2 MiB-aligned chunks before it, as Linux 6.12 with
+transparent huge pages writes shmem in chunks of its 2 MiB folios; a
 .Xr writev 2
-whose elements together would pass the end.
+or
+.Xr pwritev 2
+is cut the same way, its elements taken as one run of bytes.
+A write with no whole chunk before the end fails with nothing written,
+so on a file under 2 MiB any write past the end does.
 .It Dv F_SEAL_WRITE , F_SEAL_FUTURE_WRITE
 Refuse a
 .Xr write 2 ,
@@ -93,7 +98,9 @@ Every tmpfs file supports the seal commands, and one made by
 .Xr open 2
 starts with
 .Dv F_SEAL_SEAL ;
-a file of any other type answers them with
+a file of any other type, and one of
+.Xr memfd_secret 2 ,
+answers them with
 .Er EINVAL .
 .Pp
 The i386 system call number is 356.
@@ -138,6 +145,7 @@ an open file description.
 .El
 .Sh SEE ALSO
 .Xr fcntl 2 ,
+.Xr memfd_secret 2 ,
 .Xr mount 2 ,
 .Xr truncate 2 ,
 .Xr proc 5

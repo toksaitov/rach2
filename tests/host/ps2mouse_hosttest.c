@@ -33,7 +33,9 @@
  * at every return. The handler's rows read the packets it reports, of three
  * bytes and of each wheel's four. The probes for a Synaptics, an ALPS and an
  * Elantech touchpad, which synaptics_hosttest.c, alps_hosttest.c and
- * elantech_hosttest.c test against touchpads, find none here.
+ * elantech_hosttest.c test against touchpads, find none here, and the
+ * model answers neither a ThinkingMouse's rates nor a Genius mouse's
+ * status request as those mice do, so their probes find none either.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  */
@@ -67,7 +69,7 @@ static int fails;
 /* The model 8042: the bytes waiting in its output buffer, first at
  * `model_head`, the reads of its ports, and every port write in order. */
 #define MODEL_BYTES  16
-#define MODEL_WRITES 96
+#define MODEL_WRITES 160
 static uint8_t model_status[MODEL_BYTES];
 static uint8_t model_data[MODEL_BYTES];
 static int model_head;
@@ -348,6 +350,12 @@ void klog(int level, const char *subsystem, const char *format, ...)
     }
 }
 
+/** The relative-mode probe sees the same modeled device. */
+int synaptics_init_relative(void)
+{
+    return synaptics_init();
+}
+
 /** No Synaptics touchpad answers. */
 int synaptics_init(void)
 {
@@ -363,6 +371,9 @@ int synaptics_byte(uint8_t data)
 
 /* The rest of synaptics.h and trackpoint.h, which a bring-up without a
  * touchpad never calls; trackpoint_hosttest.c tests them. */
+void synaptics_packet_restart(void)
+{}
+
 int synaptics_packet_start(void)
 {
     return 1;
@@ -401,6 +412,22 @@ int synaptics_reconnect(void)
 void synaptics_disconnect(void)
 {}
 
+unsigned int synaptics_relative_caps(void)
+{
+    return 0;
+}
+
+uint16_t synaptics_model(void)
+{
+    return 0;
+}
+
+int synaptics_sysfs_add(int dir)
+{
+    (void)dir;
+    return 0;
+}
+
 int trackpoint_detect(const struct ps2io *io)
 {
     (void)io;
@@ -435,16 +462,90 @@ int trackpoint_sysfs_add(int dir)
     return 0;
 }
 
+/** No sysfs tree is published by this model. */
+void evdev_sysfs_serio_remove(int port)
+{
+    (void)port;
+}
+
+void evdev_sysfs_serio_add(int port)
+{
+    (void)port;
+}
+
+/** This model has no competing command caller. */
+int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    (void)wq;
+    return cond(arg) ? 0 : -EINTR;
+}
+
 void evdev_sysfs_serio_files(int port, int (*add)(int dir))
 {
     (void)port;
     (void)add;
 }
 
+void evdev_sysfs_serio_driver(int port, int (*add)(int dir))
+{
+    (void)port;
+    (void)add;
+}
+
+int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg)
+{
+    (void)parent;
+    (void)attr;
+    (void)obj;
+    (void)arg;
+    return 0;
+}
+
+unsigned int synaptics_set_rate(unsigned int rate)
+{
+    return rate;
+}
+
+unsigned int elantech_set_rate(unsigned int rate)
+{
+    return rate;
+}
+
+int elantech_packet_size(void)
+{
+    return 6;
+}
+
+int elantech_sysfs_add(int dir)
+{
+    (void)dir;
+    return 0;
+}
+
+int alps_poll(uint8_t badbyte, uint8_t *buf)
+{
+    (void)badbyte;
+    (void)buf;
+    return -1;
+}
+
+void evdev_set_capability(struct evdev *dev, uint16_t type, uint16_t code)
+{
+    (void)dev;
+    (void)type;
+    (void)code;
+}
+
 void evdev_set_prop(struct evdev *dev, unsigned int prop)
 {
     (void)dev;
     (void)prop;
+}
+
+void evdev_set_version(struct evdev *dev, uint16_t version)
+{
+    (void)dev;
+    (void)version;
 }
 
 void evdev_unregister(struct evdev *dev)
@@ -497,6 +598,9 @@ int elantech_byte(uint8_t data)
 
 /* The rest of elantech.h, which a port without an Elantech pad never
  * calls; elantech_hosttest.c tests it. */
+void elantech_packet_restart(void)
+{}
+
 int elantech_packet_start(void)
 {
     return 1;
@@ -519,6 +623,14 @@ int alps_byte(uint8_t data)
 
 /* The rest of alps.h, which a port without an ALPS pad never calls;
  * alps_hosttest.c tests it. */
+void alps_packet_restart(void)
+{}
+
+int alps_reset_after(void)
+{
+    return 12;
+}
+
 int alps_packet_start(void)
 {
     return 1;
@@ -538,18 +650,38 @@ const char *alps_mouse_name(const char *proto)
     return proto;
 }
 
-/** Record the event device registered; its pointer is never followed. */
-struct evdev *mouse_register(const char *name, const char *phys, uint16_t bustype, uint16_t vendor,
-                             uint16_t product, unsigned int caps)
+/** Reserve an event device; its pointer is never followed by the model. */
+struct evdev *evdev_reserve(void)
 {
+    return (struct evdev *)&mouse_registrations;
+}
+
+/** Record the identity of the registered device. */
+struct evdev *evdev_register_reserved(struct evdev *dev, const char *name, uint16_t bustype,
+                                      uint16_t vendor, uint16_t product, const uint8_t *keys)
+{
+    (void)dev;
+    (void)keys;
     mouse_registrations++;
     registered_name = name;
-    registered_phys = phys;
     registered_bus = bustype;
     registered_vendor = vendor;
     registered_product = product;
-    registered_caps = caps;
     return (struct evdev *)&mouse_registrations;
+}
+
+/** Record the mouse's path and capabilities. */
+void mouse_configure(struct evdev *dev, const char *phys, unsigned int caps)
+{
+    (void)dev;
+    registered_phys = phys;
+    registered_caps = caps;
+}
+
+/** The command lock never has another caller in this model. */
+void wq_wake_all(wait_queue_t *wq)
+{
+    (void)wq;
 }
 
 /** Record the packet reported, and count it. */
@@ -639,12 +771,24 @@ static void handler_rows(void)
     CHECK("a byte without bit 3 is read", interrupt(MOUSE_BYTE, 0x02) == 1);
     CHECK("a first byte without bit 3 is dropped", packet_index == 0);
 
-    /* A packet whose X movement overflowed. */
-    interrupt(MOUSE_BYTE, 0x48);
+    /* A packet whose X movement overflowed, read as Linux's
+     * psmouse_report_standard_motion reads it, its overflow bit not looked
+     * at. */
+    interrupt(MOUSE_BYTE, 0x49);
     interrupt(MOUSE_BYTE, 0x10);
     interrupt(MOUSE_BYTE, 0x10);
-    CHECK("a packet with an overflow bit is dropped", reports == 1);
-    CHECK("a dropped packet starts the next at byte 0", packet_index == 0);
+    CHECK("a packet with an overflow bit is reported as Linux reports it",
+          reports == 2 && reported_buttons == MOUSE_LEFT && reported_dx == 16 &&
+              reported_dy == -16);
+    CHECK("it starts the next at byte 0", packet_index == 0);
+
+    /* Bytes of 0 with their sign bits set, which Linux reads as no
+     * movement. */
+    interrupt(MOUSE_BYTE, 0x38);
+    interrupt(MOUSE_BYTE, 0x00);
+    interrupt(MOUSE_BYTE, 0x00);
+    CHECK("a movement byte of 0 is no movement whatever its sign bit",
+          reports == 3 && reported_buttons == 0 && reported_dx == 0 && reported_dy == 0);
 
     CHECK("the handler writes no port", port_writes == 0);
 }
@@ -781,10 +925,35 @@ static void expect_knock(uint8_t a, uint8_t b, uint8_t c)
     expect_mouse(0xF2, 1);
 }
 
+/** Expect the probes of psmouse's order that come before the knocks: a
+ * Kensington ThinkingMouse's rates and ID, then a Genius mouse's
+ * resolution, three 1:1 scalings and status request. */
+static void expect_extensions(void)
+{
+    static const uint8_t thinking[9] = {20, 60, 40, 20, 20, 60, 40, 20, 20};
+    int i;
+
+    expect_mouse(0xF3, 1);
+    expect_mouse(10, 1);
+    expect_mouse(0xE8, 1);
+    expect_mouse(0, 1);
+    for (i = 0; i < 9; i++) {
+        expect_mouse(0xF3, 1);
+        expect_mouse(thinking[i], 1);
+    }
+    expect_mouse(0xF2, 1);
+    expect_mouse(0xE8, 1);
+    expect_mouse(3, 1);
+    expect_mouse(0xE6, 3);
+    expect_mouse(0xE9, 1);
+}
+
 /** Expect a plain mouse's protocol found and its settings made: the
- * IntelliMouse's knock unanswered, then rate 100, resolution 3 and 1:1. */
+ * probes before the knocks, the IntelliMouse's knock unanswered, then rate
+ * 100, resolution 3 and 1:1. */
 static void expect_plain(void)
 {
+    expect_extensions();
     expect_knock(200, 100, 80);
     expect_mouse(0xF3, 1);
     expect_mouse(100, 1);
@@ -935,6 +1104,7 @@ static void bringup_wheel_rows(void)
     expect_controller();
     expect_mouse(0xFF, 1);
     expect_mouse(0xF6, 1);
+    expect_extensions();
     expect_knock(200, 100, 80);
     expect_knock(200, 200, 80);
     expect_mouse(0xF3, 1);
@@ -958,6 +1128,7 @@ static void bringup_wheel_rows(void)
     expect_controller();
     expect_mouse(0xFF, 1);
     expect_mouse(0xF6, 1);
+    expect_extensions();
     expect_knock(200, 100, 80);
     expect_knock(200, 200, 80);
     expect_mouse(0xF3, 1);

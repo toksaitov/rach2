@@ -1,0 +1,1 @@
+desktop: result: weston 91 as desktop ; Using Pixman renderer; mode 1366x768@60.0, preferred, current, 62.9 MHz

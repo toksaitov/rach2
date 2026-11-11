@@ -563,17 +563,6 @@ static int intel_edp_get_modes(struct drm_connector *connector)
     return n + intel_panel_get_modes(i915, connector);
 }
 
-/** Linux's intel_cpu_transcoder_mode_valid: a transcoder's least blanking,
- * and no hsync at the end of the active area. */
-static int32_t transcoder_mode_valid(const struct drm_mode_modeinfo *m)
-{
-    if (m->hdisplay < 64 || m->htotal < m->hdisplay + 32u || m->vtotal < m->vdisplay + 5u ||
-        m->hsync_start == m->hdisplay) {
-        return -EINVAL;
-    }
-    return 0;
-}
-
 /** The link's most rate and lanes now, Linux's intel_dp_max_link_rate and
  * intel_dp_max_lane_count. */
 static void link_max(const struct intel_dp *dp, uint32_t *rate, uint32_t *lanes)
@@ -593,7 +582,7 @@ static int32_t intel_edp_mode_valid(struct drm_connector *connector,
     const struct drm_mode_modeinfo *fixed;
     uint32_t clock = mode->clock, rate, lanes;
 
-    if (transcoder_mode_valid(mode) != 0 || (mode->flags & DRM_MODE_FLAG_DBLCLK) ||
+    if (intel_cpu_transcoder_mode_valid(mode) != 0 || (mode->flags & DRM_MODE_FLAG_DBLCLK) ||
         mode->clock < 10000u) {
         return -EINVAL;
     }
@@ -987,7 +976,7 @@ static int32_t intel_dp_ext_mode_valid(struct drm_connector *connector,
     struct intel_dp *dp = ext_dp(connector);
     uint32_t rate, lanes;
 
-    if (transcoder_mode_valid(mode) != 0 || (mode->flags & DRM_MODE_FLAG_DBLCLK) ||
+    if (intel_cpu_transcoder_mode_valid(mode) != 0 || (mode->flags & DRM_MODE_FLAG_DBLCLK) ||
         mode->clock < 10000u || mode->clock > intel_max_dotclock(dp->i915)) {
         return -EINVAL;
     }

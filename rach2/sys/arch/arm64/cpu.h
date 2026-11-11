@@ -41,9 +41,15 @@ typedef uint64_t phys_addr_t;
  * bytes, which a restart rewinds the return address over. */
 #define SYSCALL_INSN_LEN 4u
 
-#define FRAME_PC(p)   ((p)->pc)
-#define FRAME_SP(p)   ((p)->sp)
-#define FRAME_USER(p) (((p)->pstate & 0xFu) == 0u)
+/* restart_syscall's number, arm64's 128. */
+#define SC_RESTART_NR(p) 128u
+
+#define FRAME_PC(p)      ((p)->pc)
+#define FRAME_SP(p)      ((p)->sp)
+#define FRAME_USER(p)    (((p)->pstate & 0xFu) == 0u)
+/* Whether the frame is a system call's entry: an `svc` from AArch64,
+ * ESR_EL1's class 0x15. */
+#define FRAME_SYSCALL(p) (((p)->error_code >> 26) == 0x15u)
 
 #define PAGE_SHIFT 12
 #define PAGE_SIZE  0x1000
@@ -60,6 +66,10 @@ typedef uint64_t pte_t;
 #define PTE_COW           0x020u
 #define PTE_NONE          0x040u
 #define PTE_NOEXEC        0x080u
+#define PTE_ZEROFILL      0x100u
+/* No protection keys. */
+#define PTE_PKEY          0u
+#define PTE_PKEY_SHIFT    0
 #define PTE_FLAGS         0xFFFu
 #define PTE_ADDR(e)       ((e) & ~(pte_t)PTE_FLAGS)
 
@@ -102,6 +112,7 @@ void mmio_write32(uintptr_t a, uint32_t v);
 #define FAULT_USER(p)     FRAME_USER(p)
 /* An instruction abort from EL0, ESR_EL1's class 0x20. */
 #define FAULT_EXEC(p)     (((p)->error_code >> 26) == 0x20u)
+#define FAULT_PK(p)       ((void)(p), 0)
 
 #define USER_ADDR_MIN 0x0000000000010000UL
 #define USER_ADDR_MAX 0x0001000000000000UL

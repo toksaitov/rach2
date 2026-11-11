@@ -18,6 +18,9 @@ gawk
 bison
 flex
 m4
+autoreconf
+llvm-dlltool
+ld.lld
 perl
 python3
 makeinfo

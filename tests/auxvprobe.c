@@ -180,7 +180,7 @@ static const char *const entry_reg_names[ENTRY_REGS] = {
     "r9",  "r10", "r11", "r12", "r13", "r14", "r15",
 };
 
-__asm__(".text\n"
+__asm__(".pushsection .text\n"
         ".globl _start\n"
         "_start:\n"
         "    movq %rax, entry_regs(%rip)\n"
@@ -202,7 +202,8 @@ __asm__(".text\n"
         "    movq %rsp, %rdi\n"
         "    andq $-16, %rsp\n"
         "    call probe_main\n"
-        "    hlt\n");
+        "    hlt\n"
+        ".popsection\n");
 #else
 #define ENTRY_REGS 7
 unsigned long entry_regs[ENTRY_REGS];
@@ -210,7 +211,7 @@ static const char *const entry_reg_names[ENTRY_REGS] = {
     "eax", "ebx", "ecx", "edx", "esi", "edi", "ebp",
 };
 
-__asm__(".text\n"
+__asm__(".pushsection .text\n"
         ".globl _start\n"
         "_start:\n"
         "    movl %eax, entry_regs\n"
@@ -222,7 +223,8 @@ __asm__(".text\n"
         "    movl %ebp, entry_regs+24\n"
         "    mov %esp, %eax\n"
         "    push %eax\n"
-        "    call probe_main\n");
+        "    call probe_main\n"
+        ".popsection\n");
 #endif
 
 /** Count a failure for each register of `entry_regs` that is not 0. */

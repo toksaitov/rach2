@@ -11,7 +11,9 @@
  * The thread's address space must go at its end, once, after its futex words,
  * which are in it, and before its files and the publication of its death, as
  * Linux's exit_mm drops it before the zombie can be reaped, and the processor
- * must go on in the kernel's directory.
+ * must go on in the kernel's directory. What closing the files put on the
+ * loopback ring is delivered once, with interrupts off, before the
+ * directories go and the death is published.
  */
 #define WAIT_QUEUE_HOSTTEST
 #include "proc/wait_queue.c"
@@ -133,6 +135,42 @@ void proc_fs_put(process_t *p)
 static int vfork_released;
 static int thread_released;
 
+/* Whether the substitute `kirq_save` has interrupts off, and the loopback
+ * drains the cleanup ran. */
+static int irq_off;
+static int loop_drained;
+
+/** Turn interrupts off, as the kernel's bracket does. */
+uint32_t kirq_save(void)
+{
+    uint32_t was = (uint32_t)!irq_off;
+
+    irq_off = 1;
+    return was;
+}
+
+/** Put interrupts back as `kirq_save` found them. */
+void kirq_restore(uint32_t flags)
+{
+    irq_off = flags ? 0 : 1;
+}
+
+/** The ring holds what closing the files sent, a FIN or a reset. */
+int ip_loop_pending(void)
+{
+    return 1;
+}
+
+/** Check that the ring is delivered once, with interrupts off, after the
+ * files close and before death is published. */
+void ip_loop_drain_from(int from)
+{
+    CHECK(from == IP_LOOP_FROM_CALL && irq_off, "the ring is delivered with interrupts off");
+    CHECK(closed && !cwd_released && child.state != PROC_ZOMBIE,
+          "the ring is delivered after the files close and before death is published");
+    loop_drained++;
+}
+
 /** No row traces the child or has it trace another. */
 void ptrace_exit_notify(process_t *p)
 {
@@ -246,7 +284,7 @@ static void run_case(int files, int directory, int has_parent, int32_t status, i
     cwd_wait = directory;
     with_parent = has_parent;
     closed = cwd_released = root_released = adopted = notified = switches = vfork_released = 0;
-    thread_released = dropped = 0;
+    thread_released = dropped = loop_drained = irq_off = 0;
     loaded = 0;
     _kernel_dir = &kernel_dir;
     child.pid = 42;
@@ -279,6 +317,8 @@ static void run_case(int files, int directory, int has_parent, int32_t status, i
     CHECK(child.in_syscall, "remaining teardown cannot be preempted");
     CHECK(notified == (has_parent && !quiet), "the parent is notified once");
     CHECK(vfork_released == 1, "a vfork parent is let go once");
+    CHECK(loop_drained == 1 && !irq_off,
+          "the loopback ring is delivered once and interrupts are back on");
     CHECK(parent.state == (has_parent ? PROC_READY : PROC_BLOCKED),
           "a blocked parent becomes ready");
     CHECK(!wq_active(&lock_wait), "cleanup leaves no waiter");

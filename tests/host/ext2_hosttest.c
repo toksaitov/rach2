@@ -3208,6 +3208,21 @@ static void order_row(void)
     order_row_under(64, 0, 1035);
 }
 
+/** Count a pending pair without fetching or draining a disk block. */
+static void cache_pending_pair(void *node)
+{
+    struct vfs_cachestat cs;
+    uint64_t waits = current_proc->disk_waits;
+    int writes = writes_made;
+
+    memset(&cs, 0, sizeof(cs));
+    OPS->cachestat(&mnt, node, 1, 2, &cs);
+    check(cs.cache == 2 && cs.dirty == 2,
+          "cachestat counts both pending data pages as cached and dirty");
+    check(current_proc->disk_waits == waits && writes_made == writes,
+          "cachestat performs no disk request and drains no pending write");
+}
+
 /**
  * Keep a description open across calls under a cache of `buffers` buffers,
  * and check that the writes it collects reach the device only when
@@ -3258,6 +3273,7 @@ static void batch_rows_under(uint32_t buffers)
               OPS->write(&mnt, handle, want + 8192, 4096, 8192) == 4096,
           "two direct-block appends are accepted");
     check(writes_made == 0, "cross-call append collection writes no blocks");
+    cache_pending_pair(node);
     check(OPS->read(&mnt, handle, abuf, 12288, 0) == 12288 && memcmp(abuf, want, 12288) == 0,
           "pending appends read their full size and bytes");
     OPS->release(&mnt, handle);
@@ -3298,6 +3314,120 @@ static void batch_rows_under(uint32_t buffers)
     check(unmount_rw() == 0, "the cross-call count volume unmounts");
     bcache_set_limit(0);
     check(e2fsck_clean(wimg), "the cross-call count volume is clean");
+}
+
+/** A one-terabyte sparse file visits only its allocated map branches.
+ * Pending data is counted before sync; a cold map is never fetched. */
+static void cache_sparse_row(void)
+{
+    struct vfs_cachestat cs;
+    void *node, *handle = NULL;
+    uint64_t waits, visits;
+    int rc;
+
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    check(mount_rw() == 0, "the sparse cache volume mounts");
+    node = make_file(mnt.root, "sparse-cache", &rc);
+    check(node && OPS->open(&mnt, node, 2, &handle) == 0, "the sparse cache file opens");
+    if (!node || !handle) {
+        return;
+    }
+    check(OPS->write(&mnt, handle, "x", 1, (1ull << 40) - 1u) == 1,
+          "the sparse file has one page at one terabyte");
+    memset(&cs, 0, sizeof(cs));
+    waits = current_proc->disk_waits;
+    visits = bcache_stat_visits();
+    OPS->cachestat(&mnt, node, 0, 0xFFFFFFFFu, &cs);
+    check(cs.cache == 1 && cs.dirty == 1, "the pending sparse page counts once and dirty");
+    check(current_proc->disk_waits == waits && bcache_stat_visits() - visits < 16384,
+          "the sparse query reads no disk and visits no logical-hole range");
+    check(OPS->fsync(&mnt, handle) == 0, "the sparse file syncs before cache eviction");
+    bcache_invalidate(&dev);
+    memset(&cs, 0, sizeof(cs));
+    waits = current_proc->disk_waits;
+    OPS->cachestat(&mnt, node, 0, 0xFFFFFFFFu, &cs);
+    check(cs.cache == 0 && cs.dirty == 0 && current_proc->disk_waits == waits,
+          "a cold sparse map is not read merely to count pages");
+    OPS->release(&mnt, handle);
+    OPS->put(&mnt, node);
+    check(unmount_rw() == 0 && e2fsck_clean(wimg), "the sparse cache volume stays clean");
+}
+
+/* The cache block of the pointer block `cache_partial_row` holds busy at
+ * the walk's first service point, and the buffer once held. */
+static uint64_t partial_pointer;
+static struct bbuf *partial_held;
+
+/** Hold the pointer block's buffer, as writeback would, at the first
+ * service point only. */
+static void hold_partial_pointer(void)
+{
+    if (!partial_held) {
+        partial_held = bcache_get(&dev, partial_pointer);
+    }
+}
+
+/**
+ * On a 1 KiB volume, a page whose pointer block becomes busy part way
+ * through it does not count. A 32 KiB file, which debugfs writes since the
+ * driver mounts the volume read-only, has eight pages; its single indirect
+ * block maps blocks 12 to 31, so page 3 is blocks 12 to 15. The walk's
+ * sixteenth step, the service point, comes before block 14, and holding
+ * the pointer block there leaves block 15 unread: pages 0 to 2 count, and
+ * page 3 does not.
+ */
+static void cache_partial_row(void)
+{
+    static unsigned char data[32 * 1024];
+    struct vfs_cachestat cs;
+    char cmd[700];
+    uint64_t ind[1];
+    void *node, *f;
+    int rc;
+
+    memset(data, 0x5a, sizeof(data));
+    f = fopen(fix_path("partial.bin"), "wb");
+    check(f && fwrite(data, 1, sizeof(data), f) == sizeof(data), "the 32 KiB file is staged");
+    if (f) {
+        fclose(f);
+    }
+    wbytes = build_image(wimg, 1024, 128, PROFILE, 16, "tree");
+    snprintf(cmd, sizeof cmd, "write %s partial-cache", fix_path("partial.bin"));
+    check(ext2_fixture_debugfs(wimg, cmd, 1, 0), "debugfs writes the file on the 1 KiB volume");
+    check(debugfs_numbers("stat /partial-cache", "(IND):", ind, 1) == 1,
+          "debugfs names the file's indirect block");
+    partial_pointer = (ind[0] << 10) / BCACHE_BLOCK_BYTES;
+    use_image(wimg, wbytes);
+    check(mount_image() == 0, "the partial-page cache volume mounts");
+    node = walk("/partial-cache", &rc);
+    check(node != 0, "the partial-page cache file is found");
+    if (!node) {
+        unmount_image();
+        return;
+    }
+    check(read_at(node, abuf, sizeof(data), 0) == (int)sizeof(data) &&
+              memcmp(abuf, data, sizeof(data)) == 0,
+          "the file reads back whole and its blocks are cached");
+    memset(&cs, 0, sizeof(cs));
+    OPS->cachestat(&mnt, node, 0, 0xFFFFFFFFu, &cs);
+    check(cs.cache == 8 && cs.dirty == 0, "all eight pages of the read file count, clean");
+    partial_held = 0;
+    service_pause = hold_partial_pointer;
+    memset(&cs, 0, sizeof(cs));
+    OPS->cachestat(&mnt, node, 0, 0xFFFFFFFFu, &cs);
+    service_pause = 0;
+    check(partial_held != 0, "the walk reached its service point inside the indirect block");
+    check(cs.cache == 3, "a page whose pointer block went busy part way through does not count");
+    if (cs.cache != 3) {
+        printf("  cache %lu\n", (unsigned long)cs.cache);
+    }
+    if (partial_held) {
+        bcache_release(partial_held);
+        partial_held = 0;
+    }
+    OPS->put(&mnt, node);
+    unmount_image();
 }
 
 /**
@@ -3822,6 +3952,8 @@ static void batch_rows(void)
     batch_loss_row();
     batch_rows_under(16);
     batch_rows_under(512);
+    cache_sparse_row();
+    cache_partial_row();
     order_row_under(16, 1, 11);
     order_row_under(16, 1, 1035);
     order_row_under(16, 1, 2059);
@@ -5124,22 +5256,42 @@ static void hardlink_check_rows(void)
     printf("ext2-hardlinks: checked 600 exact two-name pairs and rejected the bad count\n");
 }
 
+/** The timestamp rows, with 128-byte and with 256-byte inodes. */
+static void time_rows(void)
+{
+    time_row(128, PROFILE);
+    time_row(256, PROFILE_LARGE);
+}
+
+/* The options that run some rows alone, each with the rows it runs. */
+static const struct {
+    const char *option;
+    void (*rows)(void);
+} only_rows[] = {
+    {"--hardlinks-only", hardlink_check_rows},
+    {"--node-only", node_rows},
+    {"--fsync-only", fsync_rows},
+    {"--order-only", writeback_order_rows},
+    {"--pairs-only", pair_rows},
+    {"--service-only", service_rows},
+    {"--times-only", time_rows},
+    {"--cache-partial-only", cache_partial_row},
+    {"--xattr-only", xattr_rows},
+};
+
 /**
  * Make the native fixture tree using the prepared independent tools,
  * and run the rows: the reads at 4 KiB blocks with 128- and 256-byte inodes
  * and at 2 KiB, the 1 KiB levels, the failures, the write sequences, the
  * order rows, the writer's failures, the dirty volumes, the matrix and the
- * batch rows, the node rows and the fsync rows. `--times-only` runs only
- * timestamps; `--hardlinks-only` runs only the hard-link check rows;
- * `--node-only`, `--fsync-only` and `--service-only` run only those rows;
- * `--xattr-only` runs the user attribute and interruption rows alone.
- * `--capture-only` checks independent tool
- * output capture alone. Returns 0,
- * and calls `fix_passed`, when every row passed.
+ * batch rows, the node rows and the fsync rows. An option of `only_rows`
+ * runs its rows alone; `--capture-only` checks independent tool output
+ * capture alone. Returns 0, and calls `fix_passed`, when every row passed.
  */
 int main(int argc, char **argv)
 {
     uint64_t bytes;
+    unsigned i;
 
     if (argc == 3 && streq(argv[1], "-fn") && streq(argv[2], "--capture-child"))
         return ext2_fixture_capture_child();
@@ -5151,45 +5303,11 @@ int main(int argc, char **argv)
         goto finish;
     build_tree();
 
-    if (argc == 2 && streq(argv[1], "--hardlinks-only")) {
-        hardlink_check_rows();
-        goto finish;
-    }
-
-    if (argc == 2 && streq(argv[1], "--node-only")) {
-        node_rows();
-        goto finish;
-    }
-
-    if (argc == 2 && streq(argv[1], "--fsync-only")) {
-        fsync_rows();
-        goto finish;
-    }
-
-    if (argc == 2 && streq(argv[1], "--order-only")) {
-        writeback_order_rows();
-        goto finish;
-    }
-
-    if (argc == 2 && streq(argv[1], "--pairs-only")) {
-        pair_rows();
-        goto finish;
-    }
-
-    if (argc == 2 && streq(argv[1], "--service-only")) {
-        service_rows();
-        goto finish;
-    }
-
-    if (argc == 2 && streq(argv[1], "--times-only")) {
-        time_row(128, PROFILE);
-        time_row(256, PROFILE_LARGE);
-        goto finish;
-    }
-
-    if (argc == 2 && streq(argv[1], "--xattr-only")) {
-        xattr_rows();
-        goto finish;
+    for (i = 0; argc == 2 && i < sizeof(only_rows) / sizeof(only_rows[0]); i++) {
+        if (streq(argv[1], only_rows[i].option)) {
+            only_rows[i].rows();
+            goto finish;
+        }
     }
 
     bytes = build_image(fix_path("a.ext2"), 4096, 128, PROFILE, 16, "tree");
@@ -5203,8 +5321,7 @@ int main(int argc, char **argv)
     refusal_rows();
     executable_path_row();
     write_rows();
-    time_row(128, PROFILE);
-    time_row(256, PROFILE_LARGE);
+    time_rows();
     order_row();
     refusal_write_rows();
     dirty_rows();

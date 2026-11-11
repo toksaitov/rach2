@@ -24,7 +24,7 @@ Two systems run on the same kernel:
 Three lists give the detail:
 
 * [The programs](man/programs.md) of both systems, with their versions and manual pages.
-* [The system calls](rach2/syscalls.md), 284 on i686 and 261 on x86-64, with their numbers and pages.
+* [The system calls](rach2/syscalls.md), with their numbers and pages for both kernels and the compat table.
 * [The hardware](rach2/hardware.md) the kernel drives, and the machines it is tested on.
 
 ## Status

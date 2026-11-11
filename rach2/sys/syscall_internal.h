@@ -97,10 +97,12 @@ long ksys_truncate(const char __user *upath, long long length);
 /**
  * The core of pread64(2) in every form: `count` bytes of `fd` at `pos` into
  * `buf`, leaving the descriptor's own offset where it was; `pio_entry` has what
- * it refuses. Returns the bytes read, 0 at the end of the file and for a
- * `count` of 0, whose descriptor is still checked, or a negative errno.
+ * it refuses. The original range, signed count and end position are checked
+ * before USER_RW_MAX limits the transfer. Returns the bytes read, 0 at the
+ * end of the file and for a `count` of 0, whose descriptor is still checked,
+ * or a negative errno.
  */
-long ksys_pread64(int fd, char __user *buf, uint32_t count, long long pos);
+long ksys_pread64(int fd, char __user *buf, size_t count, long long pos);
 
 /**
  * The core of pwrite64(2) in every form: pread64's, with the buffer written
@@ -110,7 +112,7 @@ long ksys_pread64(int fd, char __user *buf, uint32_t count, long long pos);
  * A device is written as pread64 reads it. Returns the bytes written, 0 for a
  * `count` of 0, whose descriptor is still checked, or a negative errno.
  */
-long ksys_pwrite64(int fd, const char __user *buf, uint32_t count, long long pos);
+long ksys_pwrite64(int fd, const char __user *buf, size_t count, long long pos);
 
 /**
  * The core of fadvise64 in every form: check one advice of posix_fadvise(3) and
@@ -163,6 +165,13 @@ struct kernel_iovec {
  * caller's layout: an i386 call's iovec on the x86-64 kernel is two 32-bit
  * words. 0, or -EFAULT. */
 int iov_fetch(struct kernel_iovec *iov, uintptr_t uvec, uint32_t i);
+
+/** Check the `count` elements of the caller's vector at `uvec` as Linux's
+ * __import_iovec does: their total, cut at MAX_RW_COUNT, or -EINVAL for a
+ * negative length and -EFAULT for a range outside user space; with
+ * `prefault` 0 or 1 each buffer is also faulted in for reading or writing.
+ * With `iov` not NULL, it gets the elements, cut. It may sleep. */
+long iov_import(struct kernel_iovec *iov, uintptr_t uvec, int count, int prefault);
 
 /* Linux's `struct user_msghdr`, which sendmsg(2) and recvmsg(2) take. */
 struct kernel_msghdr {
@@ -268,6 +277,15 @@ uint32_t sock_tstamp_put(uint8_t bits, int64_t sec, int32_t nsec, int *type, uin
  */
 int32_t socket_gettstamp(const struct socket *sock, uint32_t request, uintptr_t arg, int *handled);
 
+/**
+ * Return `rc`, the result of a send on a TCP stream, after posting SIGPIPE
+ * to the calling thread when it is -EPIPE and `post` is set, as Linux's
+ * sk_stream_error does for send, sendmsg, write and sendfile: `post` is
+ * clear for MSG_NOSIGNAL, and for a vector's element after one that sent,
+ * since Linux's send returns what it sent with no signal.
+ */
+int32_t sock_stream_sent(int32_t rc, int post);
+
 /* Format: the vectors readv, writev and sendmsg accept, the Linux IOV_MAX. */
 #define IOV_MAX_LOCAL 1024
 
@@ -358,6 +376,19 @@ int fd_node_check(fd_entry_t *entry);
 /** Non-zero when the caller has appropriate privilege (`proc_privileged`). */
 int cred_privileged(void);
 
+/** Non-zero when the caller has privilege over files, which goes by its
+ * file-system user id (`proc_fs_privileged`): what lets it pass a file's
+ * permission bits, act as a file's owner, keep set-id bits across a write,
+ * make a device node and change the immutable and append-only flags. */
+int cred_fs_privileged(void);
+
+/**
+ * Whether the caller may give `p` the nice value `nice`, as Linux's
+ * can_nice: with privilege, or when `p`'s soft RLIMIT_NICE is at least
+ * 20 less `nice`. The caller checks only a value below `p`'s present one.
+ */
+int proc_nice_allowed(const process_t *p, int32_t nice);
+
 /**
  * Drop the set-id bits a modification must not leave standing on the KRFFS root
  * node `node`: a write or a truncation by a caller without privilege, or a
@@ -424,6 +455,8 @@ long sys_pivot_root(isr_params_t *params);
 long sys_open(isr_params_t *params);
 
 long sys_openat(isr_params_t *params);
+
+long sys_openat2(isr_params_t *params);
 
 long sys_close(isr_params_t *params);
 
@@ -501,17 +534,26 @@ long sys_pread64(isr_params_t *params);
 
 long sys_pwrite64(isr_params_t *params);
 
+/** sync_file_range(2) with its range whole: checks the descriptor, the
+ * flags, the range and the file's kind, then flushes its data; may sleep. */
+long ksys_sync_file_range(int fd, int64_t off, int64_t len, uint32_t flags);
+long sys_sync_file_range(isr_params_t *params);
+long sys_preadv2(isr_params_t *params);
+long sys_pwritev2(isr_params_t *params);
+
 long sys_preadv(isr_params_t *params);
 
 long sys_pwritev(isr_params_t *params);
 
 /**
- * Fill the `iovcnt` buffers of the user's iovec array at `iov_user` from one
- * datagram of the socket `entry` is open on, for readv(2) and recvmsg(2),
- * waiting for one unless the description has O_NONBLOCK. Returns the bytes
- * copied, or a negative errno from the wait: -EAGAIN when no datagram waits
- * under O_NONBLOCK, -EINTR, or the socket's pending error, which the call
- * takes.
+ * Fill the `iovcnt` buffers of the copied vector `iov`, which iov_import has
+ * checked and cut, from one datagram of the socket `entry` is open on, for
+ * readv(2) and recvmsg(2), waiting for one unless the description has
+ * O_NONBLOCK. Returns the bytes copied, or a negative errno from the wait:
+ * -EAGAIN when no datagram waits under O_NONBLOCK, -EINTR, or the socket's
+ * pending error, which the call takes; or -EFAULT when any copy of the
+ * datagram fails, as Linux's udp_recvmsg fails at any element
+ * (net/ipv4/udp.c:1932-1949), the datagram consumed, or kept with `peek`.
  *
  * A datagram is a message, so it is taken once and copied out in pieces: the
  * buffers are filled in order until the datagram runs out, and what is left
@@ -522,8 +564,29 @@ long sys_pwritev(isr_params_t *params);
  * NULL, are given the datagram's sender, and `whole` its length, which is more
  * than the bytes copied when the buffers took less, for MSG_TRUNC.
  */
-int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, net_addr_t *src_ip,
-                    uint16_t *src_port, int peek, int32_t *whole);
+int32_t readv_dgram(fd_entry_t *entry, const struct kernel_iovec *iov, int iovcnt,
+                    net_addr_t *src_ip, uint16_t *src_port, int peek, int32_t *whole);
+
+/**
+ * Read the stream socket of `entry` into the `iovlen` buffers of the copied
+ * vector `iov`, which iov_import has checked and cut, as Linux's
+ * tcp_recvmsg reads an iov_iter, for readv(2), recv(2), recvfrom(2) and
+ * recvmsg(2): it waits for a byte unless MSG_DONTWAIT in `flags` or
+ * O_NONBLOCK, then takes the bytes queued, as many as the buffers hold,
+ * filling them in order, one receive buffer at a time; with MSG_WAITALL it
+ * waits on until the buffers are full, the input ends, an error comes or a
+ * signal, and returns what it took. With MSG_PEEK the bytes stay queued. A
+ * vector of no bytes waits for input too, as Linux 6.12's
+ * tcp_recvmsg_locked and sock_rcvlowat do, and takes nothing. Returns the
+ * bytes read, 0 at the end of input or for a vector of no bytes with input
+ * ready, or -errno as recv(2): -EAGAIN, -ENOTCONN, -ECONNRESET, -EINTR, or
+ * -EFAULT when the destination of the first receive buffer cannot be
+ * written, which stays queued; one that cannot be written after another was
+ * taken stays queued and ends the call with the bytes taken. Holds the
+ * socket's `recv_lock` but while it waits for data, so the bytes it returns
+ * are adjacent in the stream. May sleep.
+ */
+int32_t stream_readv(fd_entry_t *entry, const struct kernel_iovec *iov, uint32_t iovlen, int flags);
 
 long sys_readv(isr_params_t *params);
 
@@ -587,6 +650,19 @@ long sys_statfs64(isr_params_t *params);
 
 long sys_fstatfs64(isr_params_t *params);
 
+/**
+ * The free blocks and free inodes of the mounted file system whose device
+ * number, in the encoding stat(2) gives st_dev, is `dev`: the core of
+ * ustat(2) on both ABIs. 0, or -EINVAL when no active mount has that
+ * number, or the error of the file system's statfs. A bind mount is not a
+ * file system of its own; a type that counts neither gives 0 for both.
+ */
+int ksys_ustat_counts(uint32_t dev, uint64_t *bfree, uint64_t *ffree);
+
+long sys_ustat(isr_params_t *params);
+
+long sys_sysfs(isr_params_t *params);
+
 long sys_fstat64(isr_params_t *params);
 
 long sys_fstatat64(isr_params_t *params);
@@ -637,6 +713,7 @@ long sys_fcntl64(isr_params_t *params);
 long sys_flock(isr_params_t *params);
 
 long sys_memfd_create(isr_params_t *params);
+long sys_memfd_secret(isr_params_t *params);
 
 long sys_splice(isr_params_t *params);
 
@@ -723,6 +800,27 @@ struct kernel_timespec {
     long tv_nsec;
 };
 
+/**
+ * The body of nanosleep, which the native handler and the i386 one share:
+ * sleep for `req`, which the handler read, or NULL when it could not be
+ * read, and with a signal's remainder written to `urem`, 0 for none, as two
+ * 64-bit words with `wide`, else two 32-bit words. A signal that runs no
+ * handler resumes the sleep to its first deadline through restart_syscall,
+ * as Linux does. Returns 0, -EINTR, -EINVAL, or -EFAULT.
+ */
+long nanosleep_core(const struct kernel_timespec *req, uintptr_t urem, int wide);
+
+/**
+ * The body of clock_nanosleep, as `nanosleep_core` is nanosleep's: the
+ * clock `clk`, the `flags`, of which TIMER_ABSTIME counts, the request
+ * read, or NULL, and the remainder's address and width. The clock is
+ * judged before the request, as Linux judges it. A relative sleep resumes
+ * to its first deadline after a signal that runs no handler, and an
+ * absolute one restarts.
+ */
+long clock_nanosleep_core(int32_t clk, unsigned long flags, const struct kernel_timespec *req,
+                          uintptr_t urem, int wide);
+
 /*
  * The cores of the signal calls, which the native handlers in
  * syscall_proc.c and the i386 ones in arch/x86_64/ia32_signal.c share; each
@@ -792,6 +890,10 @@ void get_current_time(int64_t *seconds, int64_t *nanoseconds);
 long sys_utimensat(isr_params_t *params);
 long sys_utimensat_time64(isr_params_t *params);
 
+/** Read i386 directory records into the user buffer, under the directory
+ * lock. With `old`, ignore `count` and return one old readdir record. */
+long ksys_getdents32(int fd, uintptr_t buf, uint32_t count, int old);
+
 long sys_getdents64(isr_params_t *params);
 
 long sys_getuid(isr_params_t *params);
@@ -833,6 +935,14 @@ long sys_sigreturn(isr_params_t *tf);
 int pgrp_in_session(int pgid, int sid);
 
 struct tty *fd_tty(fd_entry_t *e);
+
+/** Whether `e` is a description of a terminal that a vhangup(2) since its
+ * open has hung up (`tty_vhangup`): its reads give 0, its writes EIO, its
+ * ioctls but FIONBIO EIO, or ENOTTY for TIOCSPGRP, and poll every event,
+ * as Linux's `hung_up_tty_fops` answer. */
+int fd_tty_hung(fd_entry_t *e);
+
+long sys_vhangup(isr_params_t *params);
 
 int user_access_ok(uintptr_t addr, size_t len);
 
@@ -930,6 +1040,16 @@ long sys_setresuid(isr_params_t *params);
 
 long sys_setresgid(isr_params_t *params);
 
+/* The file-system ids: setfsuid and setfsgid return the previous id and
+ * have no error. The 16-bit forms are i386's calls 138 and 139. */
+long sys_setfsuid(isr_params_t *params);
+
+long sys_setfsgid(isr_params_t *params);
+
+long sys_setfsuid16(isr_params_t *params);
+
+long sys_setfsgid16(isr_params_t *params);
+
 long sys_getresuid(isr_params_t *params);
 
 long sys_getresgid(isr_params_t *params);
@@ -960,6 +1080,18 @@ long sys_mprotect(isr_params_t *params);
 long sys_mremap(isr_params_t *params);
 
 long sys_madvise(isr_params_t *params);
+
+long sys_mseal(isr_params_t *params);
+
+long sys_cachestat(isr_params_t *params);
+
+long sys_pkey_mprotect(isr_params_t *params);
+
+long sys_pkey_alloc(isr_params_t *params);
+
+long sys_pkey_free(isr_params_t *params);
+
+long sys_map_shadow_stack(isr_params_t *params);
 
 long sys_msync(isr_params_t *params);
 
@@ -997,6 +1129,10 @@ long sys_sched_getscheduler(isr_params_t *params);
 
 long sys_sched_getparam(isr_params_t *params);
 
+long sys_sched_setattr(isr_params_t *params);
+
+long sys_sched_getattr(isr_params_t *params);
+
 long sys_sched_get_priority_max(isr_params_t *params);
 
 long sys_sched_get_priority_min(isr_params_t *params);
@@ -1032,9 +1168,11 @@ long mmap_shm(struct open_file *ofd, uintptr_t addr, uintptr_t len, uint32_t acc
               char *path);
 
 /** Unmap the System V attachment at `addr`: the regions from it on that map
- * the pages `sh` from the segment's start, within `size` bytes. -EINVAL
- * when no such region begins at `addr`, or -ENOMEM if removing the regions
- * fails. */
+ * the pages `sh` from the segment's start, within `size` bytes, but those
+ * mseal sealed, which stay, as Linux's shmdt unmaps each region and ignores
+ * a sealed one's EPERM. 0 when a region went; -EINVAL when no such region
+ * begins at `addr`, -EPERM when every one is sealed, or -ENOMEM if removing
+ * the first region fails. */
 int32_t munmap_shm(uintptr_t addr, const struct shmem *sh, size_t size);
 
 /** How many attachments the pages `sh` have, each address space's regions
@@ -1061,6 +1199,7 @@ long sys_gettimeofday(isr_params_t *params);
 long sys_time(isr_params_t *params);
 long sys_ioctl(isr_params_t *params);
 long sys_nanosleep(isr_params_t *params);
+long sys_restart_syscall(isr_params_t *params);
 long sys_reboot(isr_params_t *params);
 long sys_set_tid_address(isr_params_t *params);
 long sys_setdomainname(isr_params_t *params);

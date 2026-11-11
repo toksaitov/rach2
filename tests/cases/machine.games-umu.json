@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.games-umu",
+  "summary": "GE-Proton's Wine through rach2-game --umu, umu-launcher and the Steam Linux Runtime's container under Xwayland on virgl: the runtime unpacked once with its updates off, the direct route's Proton settings, Linux's pixels and no refused call in pressure-vessel's log that Linux's lacks",
+  "cases": [
+    {
+      "case_id": "machine.games-umu.umu",
+      "behavior": "rach2-game --umu unpacks the root's Steam Linux Runtime once and runs the 64-bit Direct3D 9 probe through umu-launcher in pressure-vessel's container: the probe reads back Linux's pixels, Proton's log in the container has the direct route's options, fsync and OpenGL renderer, the GL probe draws on virgl through the container's /dev/dri, Wine's tone through the container's PulseAudio socket is recorded through the audio loopback as it is directly, the container has the session bus, the second start fetches and unpacks nothing, and pressure-vessel's log holds no refused call that the stored Linux reference's lacks",
+      "units": ["tests/system/games/run.py", "vendor/gnu/games/rach2-game.sh", "umu-launcher 1.4.4", "Steam Linux Runtime 4.0", "pressure-vessel", "GE-Proton11-12", "Weston", "Xwayland", "Mesa's virgl", "PulseAudio", "D-Bus"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"row": "umu", "reference": "tests/system/games/ref/linux.json"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "games_scenario", "stdin": null, "role": "ordinary", "privileges": "the runner runs as the desktop account, an ordinary user in the render group", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "the runner ends its Wine server and Weston, reaps them and removes its private prefixes, runtime copy, caches and logs on every exit; libetude-case stops QEMU and removes passed overlays, keeping failed overlays and the runner's logs"},
+      "steps": [{"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, the virgl display and HDA with the audio loopback, log in as root and open the guest command channel"}, {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "mount the probes' disk read-only and run the umu row as the desktop account through the guest channel, under a headless Weston of its own on GL with Xwayland, a D-Bus session bus and PulseAudio on OSS"}],
+      "machines": [{"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "games-payload", "base": "games-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2", "rach2.audio.loopback", "rach2.trace=enosys"], "display": "virgl", "audio": "hda", "audio_backend": "none"}, "console": "serial", "qmp": true, "helper": false}],
+      "services": [],
+      "assertions": [{"assertion_id": "row", "checks": "the runtime is unpacked on the first start alone, the probe exits 0 through umu and directly, its CRC-32 equals the stored Linux value, both Proton logs list the same options with wow64 and wined3d, fsync and the OpenGL renderer, the GL probe's renderer is virgl with Linux's CRC-32, the tone probe exits 0 through umu and directly with at least 20 whole 50 ms windows of 440 Hz recorded and at most a fifth as many whole windows at another frequency, pressure-vessel's environment in the container has PULSE_SERVER and DBUS_SESSION_BUS_ADDRESS, pressure-vessel's log has no refused call but those in the stored Linux reference's umu_refused, and the runner prints GAMESROW OK umu", "source": "scenario"}],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 1320000000, "ceiling_us": 3960000000}, "gap": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 2700000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 4000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [{"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false}, {"name": "kernel", "node": "rach2/kernel", "per_architecture": true}, {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true}, {"name": "games-data", "node": "tests/system/games/data.ext2", "per_architecture": false}, {"name": "games_scenario", "node": "tests/cases/machine/games_scenario", "per_architecture": false}],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the row needs QEMU's virgl display, the HDA loopback and the Steam Linux Runtime's container, and compares with the Debian guest in the same QEMU"}
+    }
+  ]
+}

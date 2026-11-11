@@ -706,13 +706,14 @@ static int32_t crc_data_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return n;
 }
 
-/** crc/data's poll, Linux's crtc_crc_poll: readable while an entry waits. */
+/** crc/data's poll, Linux's crtc_crc_poll: POLLIN and POLLRDNORM while an
+ * entry waits. */
 static short crc_data_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     struct drm_crtc *crtc = (struct drm_crtc *)e->priv;
 
     *wq = &crtc->crc.wait;
-    return (short)(events & (drm_crtc_crc_ready(crtc) ? POLLIN : 0));
+    return (short)(events & (drm_crtc_crc_ready(crtc) ? POLLIN | POLLRDNORM : 0));
 }
 
 /** crc/data's last close: stop the source. */
@@ -922,6 +923,13 @@ static int32_t make_files(struct drm_device *dev)
         rc = rc ? rc : debugfs_create_text(path, 0444u, &state_ops, dev);
     }
     for (i = 0; rc == 0 && i < mc->num_crtc && i < DRM_MAX_CRTCS; i++) {
+        indexed_path(path, dev, "crtc", i, NULL);
+        rc = debugfs_create_dir(path, NULL, NULL);
+        /* Linux's drm_debugfs_crtc_crc_add: CRC files only with CRCs. */
+        if (rc != 0 || !mc->crtcs[i]->funcs->set_crc_source ||
+            !mc->crtcs[i]->funcs->verify_crc_source) {
+            continue;
+        }
         indexed_path(path, dev, "crtc", i, "crc/control");
         rc = debugfs_create_text(path, 0644u, &crc_control_ops, mc->crtcs[i]);
         indexed_path(path, dev, "crtc", i, "crc/data");

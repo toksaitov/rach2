@@ -439,9 +439,12 @@ where its stack's top is;
 .Xr mmap 2
 and
 .Xr mremap 2
-place mappings, and the kernel the interpreter, below
+first seek mappings below
 .Ad 0xF7FFE000 ,
-128 MiB under the stack, and fail with
+128 MiB under the stack, then search the whole free range below the
+stack's growth window and its 1 MiB guard gap.
+The kernel places the interpreter below the same initial mapping base.
+The calls fail with
 .Er ENOMEM
 for a fixed address past the end; a position-independent program goes at
 .Ad 0x00400000 .

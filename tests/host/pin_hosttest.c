@@ -19,11 +19,19 @@
  * in and pins their frames, charged to VmPin; a pin past RLIMIT_MEMLOCK,
  * of an empty, wrapping or unmapped range, or a write pin of a read-only
  * one, is refused and pins nothing, and a privileged process has no limit;
+ * a read pin of a region without PROT_READ takes only a page there already,
+ * and none with PIN_SLOW;
  * a pin of an object's frames refuses a frame the allocator does not count;
+ * the frame KVM shares with another program (`paging_user_ram_frame`) is
+ * given for a writable private page and refused for a memfd_secret page and
+ * for every page once the address space has ended, its directory gone;
  * a fork copies a pinned private page for the child, and a pin of a page
  * shared copy-on-write makes it the parent's own first; an unmap of a
  * pinned page and the end of the address space tell the holder once and
- * drop the frames and the charge, while a pin charged to no one stays.
+ * drop the frames and the charge, while a pin charged to no one stays;
+ * a pin of RAM whose holder keeps it past the end loses only its charge,
+ * and holds each shared mapping of a disk file its range meets until
+ * unpin.
  * Device pages accepted by VFIO carry no RAM charge; mixed ranges,
  * protection, revocation and cleanup preserve that distinction.
  * mlock's regions split and merge, count in VmLck, lose their lock in a
@@ -153,7 +161,9 @@ static void on_release(struct pin *pin, void *owner)
 }
 
 static uint32_t holder_count;
-static const struct pin_holder holder = {on_release, &holder_count};
+static const struct pin_holder holder = {on_release, &holder_count, 0};
+/* VFIO's holder, whose pins of RAM outlive the end of the address space. */
+static const struct pin_holder keeper = {on_release, &holder_count, PIN_KEEP_PAST_END};
 
 /** Make A unprivileged with RLIMIT_MEMLOCK `pages` pages, or privileged
  * with no limit when `pages` is 0xFFFFFFFF. */
@@ -256,6 +266,33 @@ static void frame_rows(void)
     memlock(0xFFFFFFFFu);
 }
 
+/** The frame of a page for another program to map: given for an ordinary
+ * writable page, refused for a memfd_secret page and once the address space
+ * has ended, as mm_put leaves it with no directory. */
+static void ram_frame_rows(void)
+{
+    uintptr_t plain = VA + 64 * P, secret = VA + 68 * P;
+    struct mm ended;
+
+    check(vm_insert(&mm_a.vm, plain, plain + P, RW, VM_ANON) == 0 &&
+              vm_insert(&mm_a.vm, secret, secret + P, RW | VM_PROT_SECRET, VM_ANON) == 0,
+          "an ordinary and a secret region are made");
+    check(vm_resolve_in(&mm_a, plain, 1, ~(uintptr_t)0) == 1 &&
+              vm_resolve_in(&mm_a, secret, 1, ~(uintptr_t)0) == 1 &&
+              (pte_of(&dir_a, secret) & (PTE_P | PTE_W)) == (PTE_P | PTE_W),
+          "a page of each is in and writable");
+    check(paging_user_ram_frame(&mm_a, plain) != 0 &&
+              paging_user_ram_frame(&mm_a, plain) == PTE_ADDR(pte_of(&dir_a, plain)),
+          "the ordinary page's frame is given");
+    check(paging_user_ram_frame(&mm_a, secret) == 0, "the secret page's frame is refused");
+    ended = mm_a;
+    ended.dir = NULL;
+    check(paging_user_ram_frame(&ended, plain) == 0,
+          "no frame is given once the address space has ended");
+    vm_remove(&mm_a.vm, plain, secret + P);
+    unmap_user_range(&dir_a, plain, secret + P);
+}
+
 /** A fork copies a pinned private page for the child; a pin of a page
  * shared copy-on-write makes it the parent's own first. */
 static void fork_rows(void)
@@ -329,6 +366,128 @@ static void release_rows(void)
           "unpin gives the rest back and tells no one");
 }
 
+/** A pin of RAM whose holder keeps it past the end of the address space,
+ * VFIO's, loses only its charge there: the holder hears nothing, the frame
+ * stays pinned after its mapping goes, and unpin frees it. */
+static void keep_rows(void)
+{
+    struct pin *p;
+    uintptr_t f;
+    uint32_t before = released;
+
+    check(pin_user(&mm_b, VA, P, PIN_IO | PIN_WRITE, &keeper, &p) == 0 && mm_b.pinned == 1 &&
+              pin_ram_count(p) == 1,
+          "a keeping pin of B's RAM page, charged to B");
+    f = pin_phys(p, 0);
+    mmn_release(&mm_b);
+    check(pin_live(p) && pin_phys(p, 0) == f && released == before && mm_b.pinned == 0 &&
+              mm_b.notify == NULL,
+          "the end of B leaves the keeping pin live, untold, and drops B's charge");
+    unmap_user_range(&dir_b, VA, VA + P);
+    check(frame_word(f) == FRAME_PIN_BIAS, "the frame stays pinned once B's mapping goes");
+    unpin(p);
+    check(frame_word(f) == 0 && mm_b.pinned == 0 && released == before,
+          "unpin frees the frame and charges no one");
+}
+
+/* A shared mapping of a disk file, as filemap_disk_shared makes one: the
+ * file's two pages in memory are its own while a reference to it lasts, and
+ * its release frees them. */
+static struct {
+    struct vm_file vf;
+    uintptr_t page[2];
+    int releases;
+} disk;
+
+/** Lend page `pgoff` of the file in memory. */
+static int disk_share(struct vm_file *f, uint32_t pgoff, uintptr_t *phys)
+{
+    (void)f;
+    frame_ref(disk.page[pgoff]);
+    *phys = disk.page[pgoff];
+    return 0;
+}
+
+/** The last reference went: the file's pages in memory go with it. */
+static void disk_release(struct vm_file *f)
+{
+    (void)f;
+    disk.releases++;
+    free_frame(disk.page[0]);
+    free_frame(disk.page[1]);
+}
+
+/** The model's mapping is the one shared mapping of a disk file. */
+int filemap_disk_pages(const struct vm_file *f)
+{
+    return f == &disk.vf;
+}
+
+/** A keeping pin holds each shared mapping of a disk file its range meets,
+ * once, so that the file's pages, the frames pinned among them, stay the
+ * file's after the end of the address space and its regions; an unmap or
+ * unpin lets the mapping go, and vm_file_reap after the last unpin releases
+ * it. A long-term write pin of the writable mapping is refused. */
+static void file_keep_rows(void)
+{
+    uintptr_t addr = VA + 40 * P;
+    struct pin *p, *q;
+    uint32_t before = released, pinned;
+    uint32_t w;
+
+    memlock(0xFFFFFFFFu);
+    disk.vf.refs = 1;
+    disk.vf.share = disk_share;
+    disk.vf.release = disk_release;
+    disk.page[0] = alloc_user_frame();
+    disk.page[1] = alloc_user_frame();
+    check(disk.page[0] && disk.page[1] &&
+              vm_insert_file(&mm_b.vm, addr, addr + P, RW, VM_SHARED, &disk.vf, 0) == 0 &&
+              vm_insert_file(&mm_b.vm, addr + P, addr + 2 * P, VM_PROT_READ, VM_SHARED, &disk.vf,
+                             1) == 0,
+          "two regions of B map the file's two pages");
+    vm_file_put(&disk.vf);
+    check(pin_user(&mm_b, addr, P, PIN_IO, &holder, &q) == 0 && disk.vf.refs == 2,
+          "a pin that does not keep holds no mapping");
+    unpin(q);
+    check(pin_user(&mm_b, addr, P, PIN_IO, &keeper, &q) == 0 && disk.vf.refs == 3,
+          "a keeping pin holds the mapping");
+    mmn_notify(&mm_b, MMN_UNMAP, addr, addr + P);
+    check(!pin_live(q) && disk.vf.refs == 2 && released == before + 1,
+          "an unmap takes the pin back and lets the mapping go");
+    unpin(q);
+    w = frame_word(disk.page[0]);
+    pinned = mm_b.pinned;
+    check(pin_user(&mm_b, addr, P, PIN_IO | PIN_WRITE | PIN_LONGTERM, &keeper, &q) == -EFAULT &&
+              disk.vf.refs == 2 && frame_word(disk.page[0]) == w && mm_b.pinned == pinned,
+          "a long-term write pin of a writable shared mapping of a disk file is EFAULT");
+    check(pin_user(&mm_b, addr, P, PIN_IO | PIN_LONGTERM, &keeper, &q) == 0 && disk.vf.refs == 3,
+          "a long-term read pin of it is taken");
+    unpin(q);
+    check(pin_user(&mm_b, addr, P, PIN_IO | PIN_WRITE, &keeper, &q) == 0,
+          "a write pin of it that is not long-term is taken");
+    unpin(q);
+    check(pin_user(&mm_b, addr, 2 * P, PIN_IO, &keeper, &p) == 0 && disk.vf.refs == 3 &&
+              pin_phys(p, 0) == disk.page[0] && pin_phys(p, 1) == disk.page[1],
+          "a keeping pin of both regions holds the mapping once");
+    mmn_release(&mm_b);
+    check(pin_live(p) && disk.vf.refs == 3 && released == before + 1,
+          "the end of B leaves the keeping pin live with the mapping held");
+    vm_remove(&mm_b.vm, addr, addr + 2 * P);
+    unmap_user_range(&dir_b, addr, addr + 2 * P);
+    vm_file_reap();
+    check(disk.releases == 0 && disk.vf.refs == 1 &&
+              frame_word(disk.page[0]) == 1 + FRAME_PIN_BIAS &&
+              frame_word(disk.page[1]) == 1 + FRAME_PIN_BIAS,
+          "the file's pages stay the file's and pinned once B's regions go");
+    unpin(p);
+    check(disk.releases == 0 && disk.vf.refs == 0,
+          "unpin drops the last hold and leaves the release to vm_file_reap");
+    vm_file_reap();
+    check(disk.releases == 1 && frame_word(disk.page[0]) == 0 && frame_word(disk.page[1]) == 0,
+          "vm_file_reap then releases the mapping and frees its pages");
+}
+
 /* A BAR mapped into user space; no RAM frame backs its normal address. */
 static struct {
     uintptr_t phys;
@@ -387,10 +546,10 @@ static void io_lifetime(uintptr_t addr, uintptr_t phys, vma_t *vma)
     mmn_notify(&mm_a, MMN_UNMAP, addr, addr + P);
     check(!pin_live(p) && released == before + 2, "unmap drops the BAR pin once");
     unpin(p);
-    check(pin_user(&mm_a, addr, P, PIN_IO, &holder, &p) == 0, "a BAR pin before exit");
+    check(pin_user(&mm_a, addr, P, PIN_IO, &keeper, &p) == 0, "a keeping BAR pin before exit");
     mmn_release(&mm_a);
     check(!pin_live(p) && released == before + 3 && mm_a.pinned == 0,
-          "exit drops the BAR pin without subtracting a RAM charge");
+          "exit drops a BAR pin, kept or not, without subtracting a RAM charge");
     unpin(p);
     vm_remove(&mm_a.vm, addr, addr + 2 * P);
     unmap_user_range(&dir_a, addr, addr + 2 * P);
@@ -652,18 +811,57 @@ static void mmio_unaligned_rows(void)
 {}
 #endif
 
+/** The protection keys are off in the host test, as on a processor without
+ * them. */
+int fpu_pkeys(void)
+{
+    return 0;
+}
+
+/** PKRU with the keys off. */
+uint32_t fpu_pkru(void)
+{
+    return 0;
+}
+
+/** A read pin of a region mapped without PROT_READ takes a page that is
+ * there already, as Linux's fast path does, and is refused one that is not
+ * and, with PIN_SLOW, one that is, as its slow path refuses the region. */
+static void noread_rows(void)
+{
+    uintptr_t addr = VA + 20 * P;
+    struct pin *p;
+
+    memlock(0xFFFFFFFFu);
+    check(vm_insert(&mm_a.vm, addr, addr + 2 * P, RW | VM_PROT_NOREAD, VM_ANON) == 0,
+          "a region with write and without PROT_READ is made");
+    check(pin_user(&mm_a, addr + P, P, 0, &holder, &p) == -EFAULT && pte_of(&dir_a, addr + P) == 0,
+          "a read pin of its page not yet there is refused and brings nothing in");
+    check(pin_user(&mm_a, addr, P, PIN_WRITE, &holder, &p) == 0, "a write pin brings its page in");
+    unpin(p);
+    check(pin_user(&mm_a, addr, P, PIN_SLOW, &holder, &p) == -EFAULT,
+          "with PIN_SLOW a read pin of the page there is refused");
+    check(pin_user(&mm_a, addr, P, 0, &holder, &p) == 0 && pin_phys(p, 0) != 0,
+          "without PIN_SLOW a read pin of the page there is made");
+    unpin(p);
+}
+
 /** Run every row; 0 when each passes, 1 otherwise. */
 int main(void)
 {
     model_start(NAME);
     pin_rows();
     frame_rows();
+    ram_frame_rows();
     fork_rows();
     release_rows();
+    keep_rows();
+    file_keep_rows();
     io_rows();
     lock_rows();
     stack_rows();
     mmio_rows();
     mmio_unaligned_rows();
+    noread_rows();
     return model_end();
 }

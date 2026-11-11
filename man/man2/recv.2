@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 11, 2026
 .Dt RECV 2
 .Os
 .Sh NAME
@@ -30,7 +30,10 @@ bytes from socket
 .Fa fd
 to
 .Fa buf .
-A stream receive returns available bytes and may return less than requested.
+A stream receive returns available bytes and may return less than
+requested, unless
+.Dv MSG_WAITALL
+is set.
 After a peer's FIN, buffered data is returned before end of input.
 A datagram receive takes one message and discards bytes beyond the
 buffer capacity.
@@ -71,9 +74,12 @@ makes the call return the datagram's whole length, even when its buffers
 took less, as Linux does; netlink's programs ask it with
 .Dv MSG_PEEK
 and no buffer to learn how large a buffer to give.
-Other flag bits are ignored:
 .Dv MSG_WAITALL
-does not wait to fill the buffer.
+makes a stream receive wait until its buffers are full, as Linux's does;
+it returns less at the end of input, on an error or a signal, which ends
+the wait with the bytes already taken, or when nonblocking and no more has
+come.
+A datagram socket ignores it, and other flag bits are ignored.
 .Pp
 A datagram socket queues what it receives within its receive budget,
 .Dv SO_RCVBUF ,
@@ -128,9 +134,27 @@ If receiving the data fails, no source address or length is written.
 .Pp
 A receive that waits checks the data buffer again when the wait ends,
 since another thread may have unmapped it meanwhile.
-A buffer that can no longer be written fails the call with
-.Er EFAULT ,
-and the datagram or the stream bytes stay queued for the next receive.
+On a datagram socket,
+.Fn recv
+and
+.Fn recvfrom
+fail with
+.Er EFAULT
+when the buffer can no longer be written, and the datagram stays queued
+for the next receive;
+.Fn recvmsg
+checks its buffers as it copies into them, and fails with the datagram
+taken, as described below.
+On a stream, the buffer is checked at the start only to end in user space,
+as Linux's import_ubuf checks it, so the wait,
+.Er EAGAIN
+and the end of input come before any page of it is touched; then each
+receive buffer of the connection is checked before it is copied, and one
+whose destination cannot be written stays queued, as described below.
+A
+.Fn recv
+of 8192 bytes whose second page cannot be written thus returns the bytes
+queued that the first page holds, as on Linux.
 .Pp
 An IPv4 socket returns a 16-byte
 .Vt sockaddr_in
@@ -185,16 +209,78 @@ of 32-bit words, and the call
 .Vt struct __kernel_timespec
 of 64-bit words instead, the high word of its nanoseconds ignored.
 .Pp
+On a TCP stream,
+.Fn recvmsg
+reads as
+.Fn recv
+does, with
+.Dv MSG_DONTWAIT ,
+.Dv O_NONBLOCK ,
+.Dv MSG_PEEK
+and
+.Dv MSG_WAITALL
+honoured, and fills the buffers of
+.Fa msg Ns ->msg_iov
+in order, as one receive into their concatenation: it waits for input as
+.Fn recv
+would, then takes what has come, as much as the buffers hold.
+With
+.Dv MSG_PEEK
+nothing is taken.
+The bytes are taken one receive buffer of the connection at a time, as
+Linux's tcp_recvmsg takes the buffers of its receive queue: each segment
+that arrived in order is one, and so are the bytes a filled hole releases
+at once; a new one joins the last only when the kernel's table of them
+would take more memory than the connection's receive ring, as Linux joins
+its buffers once their overhead passes the receive buffer.
+A receive holds the socket's receive lock while it brings in a
+destination, and gives it up only to wait for data, as Linux does, so the
+bytes one call returns are adjacent in the stream even when another thread
+reads the same socket.
+Linux joins an in-order segment to the last buffer of its queue whenever
+its tcp_try_coalesce can, which depends on how the two buffers are laid
+out and shared, so it may keep fewer: where Rach2 returns the buffers
+before a destination that cannot be written, Linux may fail the read with
+.Er EFAULT .
+When the destination of a buffer, as much of it as the vector takes,
+cannot be written, or lies outside user space, the buffer stays queued
+whole and the call returns the bytes of the buffers before it, or fails
+with
+.Er EFAULT
+when there are none.
+.Fn recv ,
+.Fn recvfrom
+and
+.Xr readv 2
+read a stream the same way.
+The vector list is copied once, so a buffer that overlaps it cannot
+replace a later destination.
+With no vectors, or only zero-length buffers, the call waits for input
+too, or returns
+.Er EAGAIN
+when nonblocking and no input is ready.
+It returns zero when input arrives or ends, leaving any bytes queued.
+No address and no control data are written:
+.Fa msg Ns ->msg_namelen
+and
+.Fa msg Ns ->msg_controllen
+are set to zero, and
+.Fa msg Ns ->msg_flags
+holds only
+.Dv MSG_CMSG_CLOEXEC
+when the call passed it, as on Linux.
+QEMU reads its socket channels, its monitor over TCP among them, this way.
+.Pp
 Among Internet and packet sockets,
 .Fn recvmsg
-takes
+also takes
 .Dv SOCK_DGRAM
 and
 .Dv SOCK_RAW
-sockets, packet sockets included, and rejects stream sockets and the
-raw descriptor of
+sockets, packet sockets included, and rejects the raw descriptor of
 .Dv IPPROTO_RAW
-that takes only ioctls; the rest of this section describes those.
+that takes only ioctls; the rest of this section describes the datagram
+and raw sockets.
 On an
 .Dv AF_UNIX
 socket of any type it receives data, the sender's name and the control
@@ -216,7 +302,11 @@ and
 .Fa msg Ns ->msg_iovlen
 describe up to 1024 buffers, filled in order from exactly one datagram.
 Any remainder beyond their capacity is discarded.
-Each nonempty buffer must have at most 2147483647 bytes.
+A buffer's length that is negative as a signed size, which for a 32-bit
+program is one past 2147483647, gives
+.Er EINVAL ,
+and the buffers' total is cut at 0x7ffff000, as Linux's import_iovec
+cuts it, for a stream socket as for a datagram one.
 A list with no capacity still consumes a datagram, unless
 .Dv MSG_PEEK
 is set, which leaves it queued as for
@@ -231,9 +321,22 @@ the address is truncated.
 It receives zero when
 .Va msg_name
 is null.
-The message header, vector entries, nonempty data buffers, and the
-portion of the address buffer to be written are checked before input
-is consumed.
+The message header, the vector entries, the portion of the address buffer
+to be written and, on a socket that asked for control messages, the control
+buffer are checked before input is consumed.
+The data buffers are checked only to lie below the top of user space, as
+Linux's import_iovec checks them, and are written as the datagram is copied
+into them: a buffer the datagram reaches that cannot be written fails the
+call with
+.Er EFAULT
+and the datagram taken, unless
+.Dv MSG_PEEK
+leaves it queued, as Linux's udp_recvmsg drops it; a buffer the datagram
+does not reach is not touched, so that a call on an empty socket with
+.Dv MSG_DONTWAIT
+returns
+.Er EAGAIN
+whatever its buffers.
 .Pp
 A UDP, raw or packet socket, or an AF_UNIX one as
 .Xr unix 7
@@ -275,7 +378,9 @@ is set to zero, and
 .Fa msg Ns ->msg_flags
 is
 .Dv MSG_TRUNC
-when the datagram was longer than the buffers and zero otherwise.
+when the datagram was longer than the buffers and zero otherwise, with
+.Dv MSG_CMSG_CLOEXEC
+added when the call passed it.
 .Pp
 An AF_INET6 UDP or raw socket that asked for them with
 .Dv IPV6_RECVPKTINFO ,
@@ -399,22 +504,19 @@ The socketcall arguments, data buffers, message header, vector list,
 or address buffers cannot be accessed as required, or
 .Fn recvfrom
 was given an address and a null length pointer.
-For recv and recvfrom, a length exceeding 2147483647 also gives this error;
-recvmsg gives it for an individual buffer exceeding that size.
 .It Er EINTR
 A signal interrupted the wait.
 .It Er EINVAL
 .Fa msg Ns ->msg_iovlen
-exceeds 1024.
+exceeds 1024, or a buffer's length is negative as a signed size.
 .It Er ENETUNREACH
 A stream connection timed out while its local address was gone.
 .It Er ENOTSOCK
 .Fa fd
 does not refer to a socket.
 .It Er EOPNOTSUPP
-An ioctl-only socket was passed to kernel operation 10 or to recvfrom, or an IPv4 socket other than
-.Dv SOCK_DGRAM
-was passed to recvmsg.
+An ioctl-only socket was passed to kernel operation 10, to recvfrom or
+to recvmsg.
 .It Er ENOTCONN
 The stream is listening, or has no TCP control block and has not been shut down.
 .It Er ETIMEDOUT

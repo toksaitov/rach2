@@ -125,8 +125,9 @@ struct mm;
  * read-only page is shared as it is, and a write to it still faults; a page
  * of a shared region keeps its rights in both, so that a store is seen by
  * both. A region marked VM_PROT_DONTFORK is passed over, since the child
- * does not get it (`vm_copy`). Returns 0, or -1 when a page table of the
- * child cannot be had.
+ * does not get it (`vm_copy`). VM_PROT_WIPEONFORK regions are passed over
+ * too, so the child faults in zero pages of its own. Returns 0, or -1 when
+ * a page table of the child cannot be had.
  */
 int paging_fork_copy(struct mm *from, page_dir_t *child);
 
@@ -167,9 +168,10 @@ void paging_set_writable(page_dir_t *dir, uintptr_t addr, bool writable);
  */
 void paging_set_exec(page_dir_t *dir, uintptr_t addr, bool exec);
 
-/** The PTE_NOEXEC of a user page of a region with the protection `prot`
- * (VM_PROT_*): the bit when the region has no VM_PROT_EXEC, else 0. */
-pte_t paging_noexec(uint32_t prot);
+/** The bits of a user page's entry that a region with the protection `prot`
+ * (VM_PROT_*) gives it beside its access: PTE_NOEXEC when the region has no
+ * VM_PROT_EXEC, and its protection key (VM_PROT_KEY) in PTE_PKEY. */
+pte_t paging_prot_bits(uint32_t prot);
 
 /** Drop the translation of `addr` in the running processor's directory
  * wherever a processor has it (`paging_flush_dir`). */
@@ -403,6 +405,18 @@ uintptr_t map_mmio_typed(uintptr_t phys_addr, size_t size, pte_t cache);
 uintptr_t mmio_map(uint64_t phys, size_t size, pte_t cache);
 
 /**
+ * Map the `count` frames of `frames`, in order and each a page, into one
+ * window of the kernel's MMIO region with the cache bits `cache`, 0 for
+ * write-back, and return its kernel address; 0, with a record, when
+ * `count` is 0 or no free run of the region holds it. The frames need not be
+ * adjacent: this is how a driver reaches a buffer of scattered pages, such
+ * as the shared memory a memfd holds, as one range. The caller keeps its
+ * references to the frames while the window is mapped, and gives the window
+ * to `mmio_unmap` with `count` pages. Under the big kernel lock.
+ */
+uintptr_t mmio_map_frames(const uintptr_t *frames, uintptr_t count, pte_t cache);
+
+/**
  * Unmap the window `mmio_map` returned at `va` for `size` bytes, the same
  * size it was given, and give its room back to the region; every processor
  * drops its translations before it next takes the big lock. Nothing for a
@@ -476,12 +490,53 @@ uintptr_t paging_virt_to_phys(uintptr_t va);
  * page is not present. */
 uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t va);
 
+/* What `paging_user_page` finds at an address. */
+#define PAGING_PAGE_NONE   0 /* no page */
+#define PAGING_PAGE_ZERO   1 /* a page a read brought in zeroed, never stored into */
+#define PAGING_PAGE_DEVICE 2 /* a frame the allocator does not count */
+#define PAGING_PAGE_FRAME  3 /* a page of memory */
+
+/** What `dir` maps the user address `va` to, a PAGING_PAGE_ value. A page a
+ * read brought in zeroed and nothing has stored into since is told apart,
+ * since Linux maps its zero page there, which belongs to no node. */
+int paging_user_page(page_dir_t *dir, uintptr_t va);
+
+/* Counts of resident RAM pages in a user range; device and zero pages are
+ * excluded. Anonymous ownership is independent of the dirty bit. */
+struct paging_frame_counts {
+    unsigned long frames;
+    unsigned long dirty;
+    unsigned long pinned;
+    unsigned long anon;
+};
+
+/** Count the pages paging_user_page calls PAGING_PAGE_FRAME in [start, end)
+ * of `dir` into `counts`, including dirty, pinned and anonymous subsets.
+ * Pass absent tables as paging_user_count does. */
+void paging_user_frames(page_dir_t *dir, uintptr_t start, uintptr_t end,
+                        struct paging_frame_counts *counts);
+
+struct mm;
+
+/**
+ * The frame of the RAM page `mm` maps at the user address `va`, for a
+ * mapping of it into another program that writes it, as KVM gives a
+ * guest's page to the transport over memory shared with the VM: present,
+ * writable and not copy-on-write in a writable region that is neither a
+ * device's, a guard nor memfd_secret's, a frame the allocator counts, and,
+ * in a private region, mapped by no other address space. 0 for any other
+ * page, and for every page once `mm` has ended (`mm->dir` NULL). It brings
+ * nothing in and does not sleep.
+ */
+uintptr_t paging_user_ram_frame(struct mm *mm, uintptr_t va);
+
 /** Count the present pages of the user range [start, end) of `dir` into
- * `*present`, and of them those the processor marked dirty into `*dirty`,
+ * `*present`, those the processor marked dirty into `*dirty`, and those
+ * whose frames are marked anonymous into `*anon`,
  * passing a span of absent tables in one step (`mmu_user_skip`), so that a
  * large region with few pages costs few steps. */
 void paging_user_count(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned long *present,
-                       unsigned long *dirty);
+                       unsigned long *dirty, unsigned long *anon);
 
 struct mm;
 
@@ -491,9 +546,10 @@ struct mm;
  * brought in as a fault would bring them, and a write reaches a read-only
  * private page, a breakpoint in the program's text, through a copy of its
  * own, as Linux's FOLL_FORCE does. An address outside user space, a page of
- * no region, of a PROT_NONE one, of a guard or of device memory, a page that
- * cannot be backed, and a page of a read-only shared region for a write are
- * -EIO.
+ * no region, of a PROT_NONE one, of a guard, of device memory, of
+ * memfd_secret or of the vDSO's data page, [vvar], a page that cannot be
+ * backed, and a page of a read-only shared region for a write are -EIO, as
+ * Linux's get_user_pages refuses them.
  * Returns 0, -EIO, or -ENOMEM when no temporary mapping was free. It may
  * sleep, bringing a page in or releasing a file a region let go of
  * meanwhile, and looks each page up again after a sleep.

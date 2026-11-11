@@ -59,14 +59,24 @@ const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
     } while (0)
 
 /** The resident count of the page tables, which this model has none of: 0
- * pages present and 0 dirty. */
+ * pages present, dirty or anonymous. */
 void paging_user_count(page_dir_t *dir, uintptr_t start, uintptr_t end, unsigned long *present,
-                       unsigned long *dirty)
+                       unsigned long *dirty, unsigned long *anon)
 {
     (void)dir;
     (void)start;
     (void)end;
-    *present = *dirty = 0;
+    *present = *dirty = *anon = 0;
+}
+
+/** The frames of the page tables, which this model has none of. */
+void paging_user_frames(page_dir_t *dir, uintptr_t start, uintptr_t end,
+                        struct paging_frame_counts *counts)
+{
+    (void)dir;
+    (void)start;
+    (void)end;
+    k_memset(counts, 0, sizeof(*counts));
 }
 
 /** The kernel's allocator, from the C library, zeroed. */

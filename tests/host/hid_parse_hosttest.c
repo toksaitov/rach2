@@ -56,6 +56,9 @@ struct evdev {
     int pending;  /* events since the last SYN_REPORT */
     int keyboard; /* attached to the input layer as a keyboard */
     int gone;
+    char uniq[64];
+    unsigned int lit; /* the LEDs a program lit, for evdev_leds_lit */
+    struct evdev_keymap km;
 };
 
 #define MAX_DEVS 16
@@ -114,6 +117,24 @@ void evdev_describe(struct evdev *dev, const char *phys, unsigned int flags)
 {
     dev->phys = phys;
     dev->flags = flags;
+}
+
+/** Keep the keymap of `dev`. */
+void evdev_set_keymap(struct evdev *dev, const struct evdev_keymap *km)
+{
+    dev->km = *km;
+}
+
+/** Keep the serial of `dev`. */
+void evdev_set_uniq(struct evdev *dev, const char *uniq)
+{
+    snprintf(dev->uniq, sizeof(dev->uniq), "%s", uniq ? uniq : "");
+}
+
+/** The LEDs a row lit on `dev`. */
+unsigned int evdev_leds_lit(struct evdev *dev)
+{
+    return dev ? dev->lit : 0;
 }
 
 /** Keep the version of `dev`. */
@@ -330,6 +351,12 @@ static const uint8_t media_keyboard[] = {
     0x19, 0x81, 0x29, 0x82, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x02, 0x81,
     0x02, 0x95, 0x06, 0x81, 0x01, 0xc0};
 
+/* A Consumer Control with Num, Caps and Scroll Lock LEDs and no keys:
+ * an event device that is not a keyboard. */
+static const uint8_t lamp[] = {0x05, 0x0c, 0x09, 0x01, 0xa1, 0x01, 0x05, 0x08, 0x19,
+                               0x01, 0x29, 0x03, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01,
+                               0x95, 0x03, 0x91, 0x02, 0x95, 0x05, 0x91, 0x01, 0xc0};
+
 /* A keyboard and a mouse in one device, two input devices. */
 static const uint8_t combo[] = {
     0x05, 0x01, 0x09, 0x06, 0xa1, 0x01, 0x85, 0x01, 0x05, 0x07, 0x19, 0x04, 0x29, 0x05, 0x15, 0x00,
@@ -356,6 +383,41 @@ static const uint8_t vendor_only[] = {0x06, 0x00, 0xff, 0x09, 0x01, 0xa1, 0x01,
                                       0x75, 0x08, 0x95, 0x08, 0x81, 0x02, 0xc0};
 
 /* ---- the rows ---- */
+
+/* A gamepad of four buttons, a hat switch of eight directions with a null
+ * state, X and Y, and the D-pad's four usages: byte 0 the buttons and the
+ * hat, bytes 1 and 2 the axes, byte 3 the D-pad. */
+static const uint8_t gamepad[] = {
+    0x05, 0x01, 0x09, 0x05, 0xa1, 0x01, 0x05, 0x09, 0x19, 0x01, 0x29, 0x04, 0x15, 0x00, 0x25, 0x01,
+    0x75, 0x01, 0x95, 0x04, 0x81, 0x02, 0x05, 0x01, 0x09, 0x39, 0x15, 0x00, 0x25, 0x07, 0x75, 0x04,
+    0x95, 0x01, 0x81, 0x42, 0x09, 0x30, 0x09, 0x31, 0x15, 0x00, 0x26, 0xff, 0x00, 0x75, 0x08, 0x95,
+    0x02, 0x81, 0x02, 0x09, 0x90, 0x09, 0x91, 0x09, 0x92, 0x09, 0x93, 0x15, 0x00, 0x25, 0x01, 0x75,
+    0x01, 0x95, 0x04, 0x81, 0x02, 0x75, 0x04, 0x95, 0x01, 0x81, 0x03, 0xc0};
+
+/* Gamepads whose hat switch has a range of 0 to 0xFFFFFFFF, which Linux
+ * stores backwards, and of INT32_MIN to INT32_MAX, which Linux's 16-bit
+ * hat_min and hat_max keep as 0 and -1, so that it takes each for an axis:
+ * one byte of buttons, then the hat's four bytes. */
+static const uint8_t hat_backwards[] = {0x05, 0x01, 0x09, 0x05, 0xa1, 0x01, 0x05, 0x09, 0x19, 0x01,
+                                        0x29, 0x08, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x08,
+                                        0x81, 0x02, 0x05, 0x01, 0x09, 0x39, 0x15, 0x00, 0x27, 0xff,
+                                        0xff, 0xff, 0xff, 0x75, 0x20, 0x95, 0x01, 0x81, 0x02, 0xc0};
+static const uint8_t hat_widest[] = {
+    0x05, 0x01, 0x09, 0x05, 0xa1, 0x01, 0x05, 0x09, 0x19, 0x01, 0x29, 0x08, 0x17, 0x00, 0x00, 0x00,
+    0x80, 0x25, 0x01, 0x75, 0x01, 0x95, 0x08, 0x81, 0x02, 0x05, 0x01, 0x09, 0x39, 0x17, 0x00, 0x00,
+    0x00, 0x80, 0x27, 0xff, 0xff, 0xff, 0x7f, 0x75, 0x20, 0x95, 0x01, 0x81, 0x02, 0xc0};
+
+/* A gamepad with two bytes of the Generic Device Controls page: Battery
+ * Strength, then usage 0x21, which Linux takes for an unknown axis. */
+static const uint8_t controls[] = {0x05, 0x01, 0x09, 0x05, 0xa1, 0x01, 0x05, 0x06,
+                                   0x09, 0x20, 0x09, 0x21, 0x15, 0x00, 0x26, 0xff,
+                                   0x00, 0x75, 0x08, 0x95, 0x02, 0x81, 0x02, 0xc0};
+
+/* Linux's ABS_HAT0X, ABS_HAT0Y and ABS_MISC, which hid_input.c defines for
+ * itself. */
+#define TEST_HAT0X 0x10
+#define TEST_HAT0Y 0x11
+#define TEST_MISC  0x28
 
 static int fails;
 
@@ -772,6 +834,7 @@ static void rows_map_mouse(void)
 }
 
 static void rows_keyboard_leds(struct hid_dev *hid);
+static void rows_keyboard_keymap(struct hid_dev *hid, struct evdev *d);
 
 /** QEMU's keyboard as an event device, and its keys. */
 static void rows_map_keyboard(void)
@@ -813,8 +876,40 @@ static void rows_map_keyboard(void)
     feed(hid, none, sizeof(none));
     CHECK("keyboard: then all up: B and A",
           nseen == 6 && is(1, EV_KEY, KEY_B, 0) && is(4, EV_KEY, KEY_A, 0));
+    rows_keyboard_keymap(hid, d);
     rows_keyboard_leds(hid);
     drop(hid);
+}
+
+/** The keymap of QEMU's keyboard `hid`, whose event device is `d`: its
+ * usages are its scan codes, as hid-input numbers them. */
+static void rows_keyboard_keymap(struct hid_dev *hid, struct evdev *d)
+{
+    static const uint8_t shift_a[] = {0x02, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00};
+    static const uint8_t none[8] = {0};
+    struct evdev_keymap_entry ke;
+    uint16_t old = 0;
+
+    memset(&ke, 0, sizeof(ke));
+    ke.scancode = 0x70004;
+    CHECK("keymap: usage 0x70004 is KEY_A", d->km.get(d->km.ctx, &ke) == 0 && ke.keycode == KEY_A);
+    ke.by_index = 1;
+    ke.index = 0;
+    CHECK("keymap: the first entry is the first modifier, Left Control",
+          d->km.get(d->km.ctx, &ke) == 0 && ke.scancode == 0x700e0 && ke.keycode == KEY_LEFTCTRL);
+    ke.by_index = 0;
+    ke.scancode = 0x70004;
+    ke.keycode = KEY_B;
+    CHECK("keymap: usage 0x70004 is set to KEY_B, and no usage is KEY_A",
+          d->km.set(d->km.ctx, &ke, &old) == 0 && old == KEY_A && !d->km.maps(d->km.ctx, KEY_A) &&
+              d->km.maps(d->km.ctx, KEY_B));
+    feed(hid, shift_a, sizeof(shift_a));
+    CHECK("keymap: and the A key reports KEY_B", is(4, EV_KEY, KEY_B, 1));
+    feed(hid, none, sizeof(none));
+    ke.keycode = KEY_A;
+    d->km.set(d->km.ctx, &ke, &old);
+    ke.scancode = 0x12345;
+    CHECK("keymap: a usage the device has not is -EINVAL", d->km.get(d->km.ctx, &ke) == -EINVAL);
 }
 
 /** The output reports of QEMU's keyboard, `hid`. */
@@ -827,9 +922,14 @@ static void rows_keyboard_leds(struct hid_dev *hid)
           hidinput_led_report(hid, (1u << LED_NUML) | (1u << LED_CAPSL), out, sizeof(out),
                               &value) == 1 &&
               out[0] == 0x03 && value == 0x0200);
-    CHECK("keyboard: Kana is bit 4",
+    CHECK("keyboard: the console's Kana bit is not sent",
           hidinput_led_report(hid, 1u << LED_KANA, out, sizeof(out), &value) == 1 &&
-              out[0] == 0x10);
+              out[0] == 0x00);
+    hid->inputs[0].dev->lit = 1u << LED_CAPSL | 1u << LED_KANA;
+    CHECK("keyboard: a program's Kana LED is bit 4, Caps Lock the console's",
+          hidinput_led_report(hid, 1u << LED_NUML, out, sizeof(out), &value) == 1 &&
+              out[0] == 0x11);
+    hid->inputs[0].dev->lit = 0;
     CHECK("keyboard: no multiplier report",
           hidinput_multiplier_report(hid, out, sizeof(out), &value) == -1);
 }
@@ -881,11 +981,12 @@ static void rows_map_media(void)
     drop(hid);
 }
 
-/** Applications that make two event devices, and none. */
+/** Applications that make two event devices, one and none. */
 static void rows_map_apps(void)
 {
     struct hid_dev *hid;
-    int inputs;
+    uint8_t out[8];
+    int inputs, value = 0;
 
     ndevs = 0;
     hid = connect(combo, sizeof(combo), "ACME Combo", &inputs);
@@ -908,6 +1009,18 @@ static void rows_map_apps(void)
     ndevs = 0;
     hid = connect(vendor_only, sizeof(vendor_only), "ACME Gadget", &inputs);
     CHECK("vendor: a vendor application makes no event device", inputs == -1 && ndevs == 0);
+    drop(hid);
+
+    ndevs = 0;
+    hid = connect(lamp, sizeof(lamp), "ACME Lamp", &inputs);
+    CHECK("lamp: three lock LEDs and no keys make an event device that is not a keyboard",
+          inputs == 1 && ndevs == 1 && !devs[0].keyboard);
+    hid->inputs[0].dev->lit = 1u << LED_CAPSL;
+    CHECK("lamp: its LEDs are those a program lit, not the console's locks",
+          hidinput_led_report(hid, (1u << LED_NUML) | (1u << LED_SCROLLL), out, sizeof(out),
+                              &value) == 1 &&
+              out[0] == 0x02 && value == 0x0200);
+    hid->inputs[0].dev->lit = 0;
     drop(hid);
 }
 
@@ -940,6 +1053,84 @@ static void rows_multiplier(void)
     drop(hid);
 }
 
+/** Whether an event seen is `type`, `code`, `value`. */
+static int saw(unsigned type, unsigned code, int32_t value)
+{
+    int i;
+
+    for (i = 0; i < nseen; i++) {
+        if (is(i, type, code, value)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** A gamepad's hat switch and D-pad, and hat switches of degenerate
+ * ranges. */
+static void rows_gamepad(void)
+{
+    static const uint8_t up[] = {0x00, 0x80, 0x80, 0x00};
+    static const uint8_t right[] = {0x20, 0x80, 0x80, 0x00};
+    static const uint8_t centred[] = {0x80, 0x80, 0x80, 0x00};
+    static const uint8_t dpad_up[] = {0x80, 0x80, 0x80, 0x01};
+    static const uint8_t zero[] = {0x00, 0x00, 0x00, 0x00, 0x00};
+    static const uint8_t three[] = {0x00, 0x03, 0x00, 0x00, 0x00};
+    struct hid_dev *hid;
+    struct evdev *d;
+    int inputs;
+
+    ndevs = 0;
+    hid = connect(gamepad, sizeof(gamepad), "ACME Pad", &inputs);
+    d = &devs[0];
+    CHECK("gamepad: one event device with ABS_HAT0X and ABS_HAT0Y over -1 to 1",
+          inputs == 1 && bit(d->abs, TEST_HAT0X) && bit(d->abs, TEST_HAT0Y) &&
+              d->absmin[TEST_HAT0X] == -1 && d->absmax[TEST_HAT0X] == 1 &&
+              d->absmin[TEST_HAT0Y] == -1 && d->absmax[TEST_HAT0Y] == 1);
+    CHECK("gamepad: the D-pad's usages map to nothing, as Linux 6.12's SystemControl case "
+          "ignores 0x90 to 0x9f before its D-pad case",
+          count_bits(d->abs, 8) == 4);
+    feed(hid, up, sizeof(up));
+    CHECK("gamepad: hat 0 is up", saw(EV_ABS, TEST_HAT0Y, -1) && !saw(EV_ABS, TEST_HAT0X, 1));
+    feed(hid, right, sizeof(right));
+    CHECK("gamepad: hat 2 is right", saw(EV_ABS, TEST_HAT0X, 1) && saw(EV_ABS, TEST_HAT0Y, 0));
+    feed(hid, centred, sizeof(centred));
+    CHECK("gamepad: the null state 8 is centred", saw(EV_ABS, TEST_HAT0X, 0));
+    feed(hid, dpad_up, sizeof(dpad_up));
+    CHECK("gamepad: a D-pad press gives nothing", nseen == 0);
+    drop(hid);
+
+    ndevs = 0;
+    hid = connect(hat_backwards, sizeof(hat_backwards), "ACME Backwards", &inputs);
+    d = &devs[0];
+    CHECK("hat 0 to 0xFFFFFFFF: an axis, as Linux's hat_min < hat_max makes it",
+          inputs == 1 && bit(d->abs, TEST_HAT0X) && !bit(d->abs, TEST_HAT0Y));
+    feed(hid, zero, sizeof(zero));
+    feed(hid, three, sizeof(three));
+    CHECK("hat 0 to 0xFFFFFFFF: its values are reported as they come, with no division",
+          saw(EV_ABS, TEST_HAT0X, 3));
+    drop(hid);
+
+    ndevs = 0;
+    hid = connect(hat_widest, sizeof(hat_widest), "ACME Widest", &inputs);
+    d = &devs[0];
+    CHECK("hat INT32_MIN to INT32_MAX: an axis, as Linux's 16-bit hat_min 0 and hat_max -1 make it",
+          inputs == 1 && bit(d->abs, TEST_HAT0X) && !bit(d->abs, TEST_HAT0Y));
+    feed(hid, zero, sizeof(zero));
+    feed(hid, three, sizeof(three));
+    CHECK("hat INT32_MIN to INT32_MAX: its values are reported with no division",
+          saw(EV_ABS, TEST_HAT0X, 3));
+    drop(hid);
+
+    ndevs = 0;
+    hid = connect(controls, sizeof(controls), "ACME Controls", &inputs);
+    d = &devs[0];
+    CHECK(
+        "device controls: usage 0x21 is ABS_MISC and Battery Strength nothing, as Linux maps them",
+        inputs == 1 && bit(d->abs, TEST_MISC) && count_bits(d->abs, 8) == 1);
+    drop(hid);
+}
+
 /** Run the rows. */
 int main(void)
 {
@@ -954,6 +1145,7 @@ int main(void)
     rows_map_media();
     rows_map_apps();
     rows_multiplier();
+    rows_gamepad();
     if (fails) {
         printf("hid_parse_hosttest: %d failed\n", fails);
         return 1;

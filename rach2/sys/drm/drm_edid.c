@@ -858,7 +858,9 @@ int drm_cvt_mode(int hdisplay, int vdisplay, int vrefresh, int reduced, int inte
 /**
  * The GTF mode of `hdisplay` by `vdisplay` at `vrefresh` Hz into `m` with
  * the curve's parameters M, 2C, K and 2J, Linux's drm_gtf_mode_complex
- * with its integer arithmetic. 0 for a size of 0.
+ * with its integer arithmetic. 0 for a size of 0, or for a curve whose
+ * blanking duty cycle reaches 100%, such as an EDID's secondary curve with
+ * K 0 and 2J 200.
  */
 static int gtf_mode_complex(int hdisplay, int vdisplay, int vrefresh, int interlaced, int margins,
                             int gtf_m, int gtf_2c, int gtf_k, int gtf_2j,
@@ -890,6 +892,11 @@ static int gtf_mode_complex(int hdisplay, int vdisplay, int vrefresh, int interl
     total_active_pixels = hdisplay_rnd + 2u * (unsigned int)left_margin;
     /* Linux's int product M' * 1000000 wraps as this unsigned one does. */
     ideal_duty_cycle = c_prime * 1000u - (m_prime * 1000000u) / hfreq_est;
+    /* A blanking of the whole line or more leaves nothing to show; Linux
+     * divides by zero at 100%. */
+    if (ideal_duty_cycle >= 100000u) {
+        return 0;
+    }
     hblank = total_active_pixels * ideal_duty_cycle / (100000u - ideal_duty_cycle);
     hblank = (hblank + 8u) / 16u * 16u;
     total_pixels = total_active_pixels + hblank;
@@ -1171,7 +1178,13 @@ static void do_detailed(struct edid_parse *p, const uint8_t *d, void *closure)
     *preferred = 0;
 }
 
-/** Linux's do_cvt_mode and drm_cvt_modes: the CVT 3-byte codes. */
+/**
+ * Linux's do_cvt_mode and drm_cvt_modes: the CVT 3-byte codes, read from
+ * byte 6 of the descriptor, after its version at byte 5, as E-EDID 1.4
+ * lays them out. Linux reads them from byte 5, its `cvt[0]` after three
+ * bytes of header, so each of its codes starts one byte early; that fault
+ * is recorded in dev-log/76-display/upstream.md and not copied here.
+ */
 static void do_cvt(struct edid_parse *p, const uint8_t *d, void *closure)
 {
     static const int rates[] = {60, 85, 75, 60, 50};

@@ -18,18 +18,15 @@
 #include "../../proc/process.h"
 #include "../../proc/ptrace.h"
 #include "../../proc/rseq.h"
+#include "../../proc/sched.h"
 #include "../../proc/smp.h"
+#include "../../timer.h"
 #include "debugreg.h"
 #if !defined(__x86_64__)
 #include "../i686/tss.h"
 #endif
 
 #include "../../../kernel.h"
-
-/* The scheduler's switch from an interrupt handler (proc/sched.h), which
- * lets a process a device's interrupt woke run. */
-extern void sched_preempt(void);
-extern int sched_tick_waits(void);
 
 #if defined(__x86_64__)
 /* The resumption of a faulting load of a selector, and the LDT loaded on a
@@ -87,6 +84,7 @@ static uint16_t lines_pci;
  * x86_64/isr_handler.s call; x86-64's exceptions and interrupts reach the
  * first two through `x86_64_route` (x86_64/idt.c). */
 void _isr_router(isr_params_t *params);
+void isr_router_locked(isr_params_t *params);
 
 void _irq_router(isr_params_t *params);
 
@@ -135,6 +133,14 @@ static const char *const _exception_names[32] = {"divide error",
                                                  "reserved",
                                                  "reserved",
                                                  "reserved"};
+
+/** Whether the processor pushes an error code for exception `vector`: the
+ * double fault, the TSS, segment, stack, protection and page faults, the
+ * alignment check and the control protection exception. */
+static int _has_error_code(uint32_t vector)
+{
+    return vector == 8 || (vector >= 10 && vector <= 14) || vector == 17 || vector == 21;
+}
 
 /** The si_code of the floating-point exception an FPU status names, as
  * Linux reports it: invalid operation, then division by zero, overflow,
@@ -301,6 +307,8 @@ static void _exception_handler(isr_params_t *params)
     klog(KLOG_CRIT, "isr", "kernel exception: %s (vector %d, err 0x%x, eip 0x%x)", name,
          params->vector, params->error_code, params->eip);
 #endif
+    k_panic_note_fault(name, (uintptr_t)FRAME_PC(params),
+                       _has_error_code(params->vector) ? (long)params->error_code : PANIC_NO_ERROR);
     k_panic("unrecoverable CPU exception in kernel mode");
 }
 
@@ -311,13 +319,23 @@ static void _exception_handler(isr_params_t *params)
  * may be posted here, and the panic begins before the record is written,
  * so that the console's lock, which the interrupted code may hold, is not
  * taken (`k_panic_begin`).
+ *
+ * An NMI that another processor's stop sent, to a processor that did not
+ * take the interprocessor interrupt, is the stop, and this processor leaves
+ * VMX or SVM operation and halts (`smp_stop_nmi`), as Linux's
+ * `smp_stop_nmi_callback` does.
  */
 static void _hardware_fault_handler(isr_params_t *params)
 {
+    if (params->vector == 2 && smp_stop_nmi()) {
+        return;
+    }
     k_panic_begin();
     klog_deliver_directly();
     klog(KLOG_CRIT, "isr", "hardware fault: %s (vector %d, pc 0x%lx)",
          _exception_names[params->vector], (int)params->vector, (unsigned long)FRAME_PC(params));
+    k_panic_note_fault(_exception_names[params->vector], (uintptr_t)FRAME_PC(params),
+                       PANIC_NO_ERROR);
     k_panic("the machine reported a fault");
 }
 
@@ -344,6 +362,8 @@ static void _double_fault_handler(isr_params_t *params)
 
     k_panic_begin();
     klog_deliver_directly();
+    k_panic_note_fault("double fault", (uintptr_t)params->rip, PANIC_NO_ERROR);
+    k_panic_note_address(cr2);
     pid = kstack_overrun_pid(cr2);
     if (pid >= 0) {
         klog(KLOG_CRIT, "isr",
@@ -385,6 +405,8 @@ void isr_double_fault(void)
     __asm__ __volatile__("mov %%cr2, %0" : "=r"(cr2));
     k_panic_begin();
     klog_deliver_directly();
+    k_panic_note_fault("double fault", (uintptr_t)kernel_tss[arch_cpu_id()].eip, PANIC_NO_ERROR);
+    k_panic_note_address(cr2);
     pid = kstack_overrun_pid(cr2);
     if (pid >= 0) {
         klog(KLOG_CRIT, "isr",
@@ -641,6 +663,12 @@ void _isr_router(isr_params_t *params)
 {
     user_entry(params);
     bkl_enter();
+    isr_router_locked(params);
+}
+
+/** Dispatch a saved frame with the big lock held; isr_leave releases it. */
+void isr_router_locked(isr_params_t *params)
+{
     bkl_note_entry((uint32_t)params->vector,
                    params->vector == SYSCALL_ENTRY ? (int32_t)SC_NR(params) : -1);
 #ifdef DEBUG
@@ -687,6 +715,7 @@ void isr_leave(isr_params_t *params)
     if (FRAME_USER(params)) {
         rseq_return(params);
         debugreg_resume();
+        waketime_return();
     }
     bkl_exit();
 }
@@ -695,6 +724,13 @@ void isr_leave(isr_params_t *params)
  * Take a local vector, without the big lock: the interprocessor interrupt,
  * whose request is in this processor's record (`smp_ipi`), and the APIC's
  * spurious vector, which needs no end-of-interrupt.
+ *
+ * An interprocessor interrupt that finds user mode with a requested
+ * reschedule or its thread's rseq marked takes the big lock after its end
+ * of interrupt. It takes the switch, then returns through `isr_leave`, so
+ * that a move updates the rseq area and a barrier aborts its section before
+ * user code resumes. An interrupt in kernel mode leaves the request for
+ * the system call's next scheduling point.
  */
 void isr_local_router(isr_params_t *params)
 {
@@ -702,9 +738,40 @@ void isr_local_router(isr_params_t *params)
     if (params->vector == IPI_VECTOR) {
         smp_ipi();
         lapic_eoi();
+        if (FRAME_USER(params) && current_proc &&
+            (current_proc->need_resched || current_proc->rseq_notify)) {
+            bkl_enter();
+            sched_take_preempt();
+            isr_leave(params);
+        }
         return;
     }
     lapic_spurious();
+}
+
+/* The boot processor's ticks in a row that found the big lock held and
+ * ended without it, and the count at which its tick waits for the lock all
+ * the same, so that its periodic work (`timer_handler`, kernel.c) runs at
+ * most this many ticks late. */
+static uint32_t boot_ticks_skipped;
+#define BOOT_TICK_SKIPS 4u
+
+/**
+ * Whether a tick that found the big lock held by another processor must
+ * wait for it: when `sched_tick_waits` says a process queued here has
+ * waited long enough, and on the boot processor also when no reference
+ * keeps the clock, since its tick alone counts the clock then, or when its
+ * last BOOT_TICK_SKIPS - 1 ticks ended without the lock. Interrupts are
+ * off.
+ */
+static int tick_waits(void)
+{
+    int waits = sched_tick_waits();
+
+    if (arch_cpu_id() != 0) {
+        return waits;
+    }
+    return waits || !timer_tick_shared() || ++boot_ticks_skipped >= BOOT_TICK_SKIPS;
 }
 
 /**
@@ -751,17 +818,23 @@ static void irq_dispatch(isr_params_t *params)
  * disk's caller that slept for its command would get one command a
  * scheduler round. The tick's own handler makes its switch itself.
  *
- * The tick of a processor past the first charges the tick and switches, and
- * makes the timer pass only when the boot processor's is late (kernel.c);
- * when another processor holds the big lock it does none of these:
- * it is ended and counted on this processor's record and returns, and the
- * next tick that finds the lock free charges the ticks since
- * (`sched_account_tick`). Waiting for the lock would take from this
+ * A tick that finds another processor holding the big lock does nothing
+ * else: it is ended and counted on this processor's record and returns, and
+ * the next tick that takes the lock charges the ticks since
+ * (`sched_account_tick`) and, on the boot processor, counts them from the
+ * reference (`timer_tick_clock`). Waiting for the lock would take from this
  * processor's user code all the time the holder keeps it, such as the sound
- * mix's, which converts a channel's rate in the device's interrupt. It does
- * wait once `sched_tick_waits` says that a process on this processor's queue
- * has waited long enough: with the lock always held no tick would end the
- * running process's slice, and a busy processor does not steal.
+ * mix's, which converts a channel's rate in the device's interrupt; and
+ * once the waits pass a tick, the next tick is pending at the return to user
+ * mode and comes before the user code's next instruction, which then makes
+ * no progress at all while other processors keep the lock busy. A tick
+ * waits for the lock only when `tick_waits` says so: a process on this
+ * processor's queue has waited long enough, since with the lock always held
+ * no tick would end the running process's slice, and a busy processor does
+ * not steal; or the boot processor's periodic work has waited enough
+ * ticks, or only its tick keeps the clock. Meanwhile the timer pass that
+ * wakes the sleepers is made by whichever processor's tick has the lock
+ * (`timer_pass_late`, kernel.c).
  *
  * An interrupt that ended a halt, which it knows by the frame's address,
  * resumes with interrupts off. Otherwise a tick already pending at the
@@ -772,21 +845,33 @@ static void irq_dispatch(isr_params_t *params)
 void _irq_router(isr_params_t *params)
 {
     struct percpu *cpu = this_cpu();
+    uint32_t wake_irq = params->vector == IRQ_VECTOR(0) ? waketime_clock() : 0;
 
     user_entry(params);
     if (FRAME_PC(params) == (unsigned long)arch_idle_resume) {
         FRAME_IRQ_OFF(params);
     }
-    if (params->vector != IRQ_VECTOR(0) || arch_cpu_id() == 0) {
+    if (params->vector != IRQ_VECTOR(0)) {
         bkl_enter();
     } else if (!bkl_try_enter()) {
-        if (!sched_tick_waits()) {
-            lapic_eoi();
+        if (!tick_waits()) {
+            if (lines_apic || arch_cpu_id() != 0) {
+                lapic_eoi();
+            } else {
+                reset_master_pic();
+            }
             cpu->ticks_unlocked++;
             cpu->tick_unlocked = 1;
             return;
         }
         bkl_enter();
+    }
+    if (params->vector == IRQ_VECTOR(0)) {
+        if (arch_cpu_id() == 0) {
+            boot_ticks_skipped = 0;
+        }
+        cpu->wake_irq_start = wake_irq;
+        cpu->wake_irq_locked = waketime_clock();
     }
     bkl_note_entry((uint32_t)params->vector, -1);
 #if defined(__x86_64__)

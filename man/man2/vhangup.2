@@ -1,0 +1,148 @@
+.Dd November 11, 2026
+.Dt VHANGUP 2
+.Os
+.Sh NAME
+.Nm vhangup
+.Nd hang up the controlling terminal
+.Sh SYNOPSIS
+.In unistd.h
+.Ft int
+.Fn vhangup void
+.Sh DESCRIPTION
+.Fn vhangup
+hangs up the caller's controlling terminal, the console or a
+pseudo-terminal's slave, as if the line had dropped.
+A program such as
+.Xr login 1
+or a getty calls it before it opens the terminal again for a new user, so
+that no process of the old session keeps a working descriptor of it.
+.Pp
+The hangup does these things:
+.Bl -bullet
+.It
+It posts
+.Dv SIGHUP
+and then
+.Dv SIGCONT
+to the leader of the session the terminal controls.
+A caller that is that leader and does not want to end ignores
+.Dv SIGHUP
+first.
+.It
+It takes the terminal from that session: no process has it as its
+controlling terminal any longer, and it has no foreground process group.
+.It
+It discards input not yet read and leaves a pseudo-terminal's master no
+packet status pending, as Linux does.
+It discards all of the slave's output that the master has not read, which
+is one of the two answers Linux gives: Linux frees only the output still
+in the master's flip buffers and keeps what has already reached the
+master's read buffer, which the master then reads.
+A writer of the slave that waits for room when the hangup comes returns
+the count it wrote.
+It gives the terminal the termios a new terminal has, as Linux resets a
+pseudo-terminal's and a virtual console's:
+.Dv ICRNL
+and
+.Dv IUTF8
+input,
+.Dv OPOST
+and
+.Dv ONLCR
+output, 38400 baud with
+.Dv CS8 ,
+.Dv CREAD
+and
+.Dv HUPCL ,
+.Dv ISIG
+and
+.Dv ICANON
+with
+.Dv ECHO ,
+.Dv ECHOE ,
+.Dv ECHOK
+and
+.Dv ECHOCTL ,
+the usual control characters and
+.Dv VMIN
+1.
+.It
+It hangs up every open file description of the terminal, the caller's
+own among them.
+A read of a hung-up description returns 0, a write fails with
+.Er EIO ,
+an
+.Xr ioctl 2
+fails with
+.Er EIO ,
+or
+.Er ENOTTY
+for
+.Dv TIOCSPGRP ,
+though
+.Dv FIONBIO
+works, and
+.Xr poll 2
+reports
+.Dv POLLIN ,
+.Dv POLLOUT ,
+.Dv POLLERR
+and
+.Dv POLLHUP
+at once.
+A read that is waiting when the hangup comes returns 0.
+A description shared by
+.Xr dup 2
+or
+.Xr fork 2
+is the same description, and is hung up too.
+.El
+.Pp
+A description opened after the hangup works as any other.
+A session leader with no controlling terminal that opens the terminal
+again, without
+.Dv O_NOCTTY ,
+makes it its controlling terminal.
+.Ss System call numbers
+The call is 111 on i386 and 153 on x86-64.
+The x86-64 kernel has it for a program that enters it by
+.Ql int $0x80
+too, as
+.Xr ia32 7
+describes.
+.Sh RETURN VALUES
+.Rv -std vhangup
+A caller with no controlling terminal gets 0, and nothing is hung up.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/vhangprobe.c
+opens a pseudo-terminal, makes its slave the controlling terminal of a
+new session, turns its echo off, blocks
+.Dv SIGHUP
+and
+.Dv SIGCONT ,
+fills the master's ring through a writer that then waits for room, and
+calls
+.Fn vhangup .
+It checks that both signals are left pending, the old descriptor's read,
+write, ioctl and poll, that the session has no controlling terminal, that
+a new open of the slave works and has the default termios, that a process
+of another user gets
+.Er EPERM ,
+that the waiting writer returns the count it wrote, and that the master
+in packet mode has no status pending and at most a prefix of the output
+left to read.
+.Sh ERRORS
+.Bl -tag -width Er
+.It Bq Er EPERM
+The caller lacks
+.Dv CAP_SYS_TTY_CONFIG
+in the first user namespace.
+.El
+.Sh SEE ALSO
+.Xr ioctl 2 ,
+.Xr setsid 2 ,
+.Xr console 4
+.Sh STANDARDS
+The call is Linux's, and its rules are those of Linux 6.12's
+.Fn tty_vhangup_self .

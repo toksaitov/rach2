@@ -21,7 +21,12 @@ The highest level.
 .It Pa brightness
 The level set, from 0 to
 .Pa max_brightness ;
-root sets it with a write of a decimal number.
+root sets it with a write of a number, read as Linux's
+.Fn kstrtoul
+reads it with base 0: decimal, octal after a leading 0, or hexadecimal
+after
+.Ql 0x ,
+with one newline at most after it.
 0 is as dark as the hardware goes, which may be dark enough to read
 nothing on the screen.
 .It Pa actual_brightness
@@ -117,6 +122,8 @@ that is not a level from 0 to
 or of
 .Pa bl_power
 that is not 0 or 4.
+.It Bq Er ERANGE
+A write of a number that an unsigned long cannot hold.
 .It Bq Er EACCES
 A write by a user other than root.
 .El

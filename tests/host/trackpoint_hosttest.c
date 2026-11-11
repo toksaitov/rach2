@@ -12,9 +12,10 @@
  * and the guest behind it, with the event devices read as a program reads
  * them (evdev.c).
  *
- * host-deps: rach2/sys/evdev.c rach2/sys/mouse.c
+ * host-deps: rach2/sys/evdev.c rach2/sys/mouse.c rach2/sys/arch/x86/smbios.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/park_host.c
  *
  * The driver's files are included whole, so that their static state is
  * reachable. The model touchpad answers as the Lenovo's of
@@ -56,6 +57,10 @@ int printf(const char *format, ...);
 int sprintf(char *s, const char *format, ...);
 int strcmp(const char *a, const char *b);
 
+int park_run(void (*fn)(void));
+int park_resume(void);
+void park(void);
+
 static int fails;
 
 #define CHECK(what, cond)                                \
@@ -94,6 +99,7 @@ static uint8_t ctl_next;
  * resolutions since the last other command make, and their count; its mode
  * byte, gesture mode and reporting; and every byte it took. */
 static int dev_plain;
+static int dev_tp; /* the auxiliary device is the TrackPoint itself */
 static int dev_wheel;
 static uint32_t pad_caps;
 static uint32_t pad_ext;
@@ -155,10 +161,13 @@ static int warnings;
 static const char *last_warning;
 static const char *last_info;
 
-/* The files a driver added to a serio port: the function it gave, and
- * each file `sysfs_add_attr` was asked for. */
+/* The files a driver added to a serio port: the function a protocol gave,
+ * the driver's own and the times the driver's were bound, and each file
+ * `sysfs_add_attr` was asked for. */
 static int (*files_add)(int dir);
 static int files_port;
+static int (*driver_add)(int dir);
+static int driver_binds;
 #define ATTRS_MAX 32
 static struct {
     int parent;
@@ -203,6 +212,10 @@ static void put24(uint32_t v)
  * packet. */
 static void pt_put(uint8_t b)
 {
+    if (dev_tp) {
+        model_put(b);
+        return;
+    }
     model_put(0x84);
     model_put(b);
     model_put(0x00);
@@ -311,6 +324,11 @@ static void guest_command(uint8_t b)
     case 0xF2:
         pt_put(guest_id);
         break;
+    case 0xE9: /* the status, which no Synaptics identify reads as a pad's */
+        pt_put(guest_reporting ? 0x20 : 0x00);
+        pt_put(0x02);
+        pt_put(0x64);
+        break;
     case 0xFF:
         pt_put(0xAA);
         pt_put(0x00);
@@ -416,6 +434,10 @@ static void dev_take(uint8_t b)
     n_took++;
     if ((ctl_config & 0x20) != 0) {
         return; /* its clock is off */
+    }
+    if (dev_tp) {
+        guest_take(b);
+        return;
     }
     if (arg_for) {
         cmd = arg_for;
@@ -567,6 +589,14 @@ int alps_byte(uint8_t data)
 
 /* The rest of alps.h, which a port without an ALPS pad never calls;
  * alps_hosttest.c tests it. */
+void alps_packet_restart(void)
+{}
+
+int alps_reset_after(void)
+{
+    return 12;
+}
+
 int alps_packet_start(void)
 {
     return 1;
@@ -595,6 +625,9 @@ int elantech_byte(uint8_t data)
 }
 
 /* The rest of elantech.h, which these rows never call. */
+void elantech_packet_restart(void)
+{}
+
 int elantech_packet_start(void)
 {
     return 1;
@@ -614,10 +647,62 @@ void k_udelay(uint32_t usec)
     (void)usec;
 }
 
+/** No sysfs tree is published by this model. */
+void evdev_sysfs_serio_remove(int port)
+{
+    (void)port;
+}
+
+void evdev_sysfs_serio_add(int port)
+{
+    (void)port;
+}
+
+/** Sleep a competing callback on its own stack until the command is free. */
+int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    (void)wq;
+    while (!cond(arg)) {
+        park();
+    }
+    return 0;
+}
+
 void evdev_sysfs_serio_files(int port, int (*add)(int dir))
 {
     files_port = port;
     files_add = add;
+}
+
+void evdev_sysfs_serio_driver(int port, int (*add)(int dir))
+{
+    if (port == EVDEV_SERIO_PASS_THROUGH) {
+        driver_add = add;
+        driver_binds += add != NULL;
+    }
+}
+
+unsigned int elantech_set_rate(unsigned int rate)
+{
+    return rate;
+}
+
+int elantech_packet_size(void)
+{
+    return 6;
+}
+
+int elantech_sysfs_add(int dir)
+{
+    (void)dir;
+    return 0;
+}
+
+int alps_poll(uint8_t badbyte, uint8_t *buf)
+{
+    (void)badbyte;
+    (void)buf;
+    return -1;
 }
 
 /** Record the file asked for; its handle is its place in the record. */
@@ -666,6 +751,14 @@ void input_get_repeat(int *delay_ms, int *period_ms)
 {
     *delay_ms = 250;
     *period_ms = 33;
+}
+
+/** No keyboard here takes its keys through input.c. */
+int input_keyboard_release(struct evdev *dev, unsigned int keycode)
+{
+    (void)dev;
+    (void)keycode;
+    return 0;
 }
 
 void input_set_repeat(int delay_ms, int period_ms)
@@ -914,6 +1007,7 @@ static void model_reset(void)
     ctl_config = FIRMWARE_CONFIG;
     ctl_next = 0;
     dev_plain = 0;
+    dev_tp = 0;
     dev_wheel = 0;
     pad_caps = 0xd00123;
     pad_ext = 0x840300;
@@ -950,6 +1044,8 @@ static void model_reset(void)
     last_info = 0;
     files_add = 0;
     files_port = -1;
+    driver_add = 0;
+    driver_binds = 0;
     n_attrs = 0;
 }
 
@@ -989,13 +1085,17 @@ static void irq_byte(uint8_t b)
     irq_bytes(&b, 1);
 }
 
+/* The bytes of the next `pad_packet` that reach the handler, fewer than
+ * six for a row that cuts the packet short. */
+static int pad_cut = 6;
+
 /**
  * Run IRQ 12 for a packet of the touchpad's own of the new absolute form,
  * as Linux's `synaptics_parse_hw_state` reads it: the place, pressure and
  * width, with no button of byte 0's; `flip` the bits of byte 3
  * that differ from byte 0's, 0x01 for a clickpad's click and 0x02 for the
  * extra buttons; and `extra` the extra buttons' bits, the low two in byte
- * 4 and the next two in byte 5.
+ * 4 and the next two in byte 5. Only the first `pad_cut` bytes are sent.
  */
 static void pad_packet(int x, int y, int z, int w, uint8_t flip, uint8_t extra)
 {
@@ -1008,7 +1108,7 @@ static void pad_packet(int x, int y, int z, int w, uint8_t flip, uint8_t extra)
     p[2] = (uint8_t)z;
     p[4] = (uint8_t)((x & 0xfc) | (extra & 0x03));
     p[5] = (uint8_t)((y & 0xfc) | ((extra >> 2) & 0x03));
-    irq_bytes(p, 6);
+    irq_bytes(p, pad_cut);
 }
 
 /** Run IRQ 12 for a pass-through packet carrying the guest's packet
@@ -1577,6 +1677,8 @@ static void kind_files(int kind, int n)
 
     sprintf(what, "%s: its files are given to the pass-through port", v);
     CHECK(what, files_port == EVDEV_SERIO_PASS_THROUGH && files_add == trackpoint_sysfs_add);
+    sprintf(what, "%s: beside psmouse's, which are the port's driver's", v);
+    CHECK(what, driver_add == guest_files);
     n_attrs = 0;
     ok = trackpoint_sysfs_add(7) == 0;
     if (kind == TP_VARIANT_IBM) {
@@ -1752,6 +1854,7 @@ static void mouse_rows(void)
           n >= 0 && strcmp(desc.name, "PS/2 Generic Mouse") == 0 && desc.id[2] == 1 &&
               has_bit(desc.key, BTN_MIDDLE) && !has_bit(desc.prop, INPUT_PROP_POINTING_STICK));
     CHECK("it has no files of its own", files_port == EVDEV_SERIO_PASS_THROUGH && files_add == 0);
+    CHECK("but psmouse's", driver_add == guest_files);
     CHECK("three-byte packets", (pad_mode & MODE_FOUR_BYTE) == 0);
 
     model_reset();
@@ -1806,6 +1909,7 @@ static void packet_rows(void)
         {EV_KEY, BTN_LEFT, 0}, {EV_KEY, BTN_RIGHT, 1}, {EV_SYN, SYN_REPORT, 0}};
     static const struct event middle[] = {
         {EV_KEY, BTN_RIGHT, 0}, {EV_KEY, BTN_MIDDLE, 1}, {EV_SYN, SYN_REPORT, 0}};
+    struct mouse_packet queued[16];
     int n;
 
     model_reset();
@@ -1840,6 +1944,14 @@ static void packet_rows(void)
           got_events(left, 2));
     take(&pad_w);
     CHECK("and not on the pad", key_value(BTN_LEFT) != 1 && key_value(BTN_0) < 0);
+    while (mouse_read_packets(queued, 16) > 0) {
+    }
+    pad_packet(3000, 3000, 50, 8, 0x02, 0x01);
+    take(&guest_w);
+    CHECK("the same buttons in the pad's next packet, a touch, report nothing on the stick",
+          n_got == 0);
+    n = mouse_read_packets(queued, 16);
+    CHECK("and the mouse queue has the pad's packet alone", n == 1 && queued[0].buttons == 0);
     guest_packet(0x08, 0x03, 0x00, 0x00);
     take(&guest_w);
     CHECK("the stick's next packet holds it", got_events(held, 2));
@@ -1923,6 +2035,64 @@ static void file_rows(void)
     guest_forget();
     CHECK("with no stick a write fails", store_file("sensitivity", "100", 3) == -ENODEV);
     CHECK("and sends nothing", n_took == 0 && n_gtook == 0);
+}
+
+/* A write of the stick's sensitivity that waits for the command lock, and
+ * what it returned. */
+static int parked_attr;
+static int32_t parked_result;
+
+/** Enter the saved file's write, whose command wait parks it. */
+static void parked_write(void)
+{
+    parked_result = attr_made[parked_attr].store(NULL, attr_made[parked_attr].arg, "100", 3);
+}
+
+/** A write of the stick's sensitivity parked behind a write of serio2's
+ * `protocol` that switches the guest to PS/2: the switch takes the stick's
+ * files away and keeps psmouse's, and the write fails with ENODEV and sends
+ * the guest nothing, as Linux's `trackpoint_disconnect` removes the
+ * stick's files under the switch. */
+static void parked_rows(void)
+{
+    uint8_t ram, kept;
+    int done, binds;
+
+    model_reset();
+    pad_caps |= PAD_PASS_THROUGH;
+    guest_kind = GUEST_TP;
+    CHECK("the parked row brings a pad and its stick up", bring_up() == 0 && guest.active);
+    n_attrs = 0;
+    (void)trackpoint_sysfs_add(7);
+    parked_attr = attr_named("sensitivity");
+    if (parked_attr < 0) {
+        CHECK("the stick has a sensitivity file", 0);
+        return;
+    }
+    binds = driver_binds;
+    kept = value[attr_made[parked_attr].arg];
+    parked_result = 0;
+    CHECK("a change of the guest takes the command lock",
+          ps2mouse_guest_change_begin() == &synaptics_pt);
+    done = park_run(parked_write);
+    CHECK("the stick's write waits for it", done == 0 && cmd_busy);
+    CHECK("bare switches the guest to PS/2",
+          guest_set_protocol("bare", 4) == 0 && guest.protocol == PROTO_PS2 && guest.active);
+    CHECK("which takes the stick's files away and keeps psmouse's",
+          files_add == 0 && driver_add == guest_files && driver_binds == binds);
+    ps2mouse_guest_change_end();
+    ram = tp_ram[0x4A];
+    n_took = 0;
+    n_gtook = 0;
+    if (!done) {
+        CHECK("the waiting write returns", park_resume() == 1);
+    }
+    CHECK("with ENODEV", parked_result == -ENODEV);
+    CHECK("sending the pad and the guest nothing", n_took == 0 && n_gtook == 0);
+    CHECK("and changing no value",
+          value[attr_made[parked_attr].arg] == kept && tp_ram[0x4A] == ram);
+    CHECK("the pad and the guest report with the lock free",
+          !cmd_busy && state == STATE_ACTIVE && pad_reporting && guest_reporting);
 }
 
 /** The reconnect after five bad packets in a row, as Linux's psmouse
@@ -2226,6 +2396,103 @@ static void guest_change_rows(void)
     CHECK("every byte is read", model_count == 0);
 }
 
+/** A write to a stick's file that begins in the middle of the pad's
+ * packet: the bytes after it start a packet, as Linux's
+ * `__psmouse_set_state` makes them. */
+static void midpacket_rows(void)
+{
+    model_reset();
+    pad_caps |= PAD_PASS_THROUGH;
+    guest_kind = GUEST_TP;
+    CHECK("a pad with an IBM stick is brought up", bring_up() == 0);
+    n_attrs = 0;
+    (void)trackpoint_sysfs_add(7);
+    watch(&guest_w, node_of("synaptics-pt/serio0/input0"));
+    watch(&pad_w, node_of("isa0060/serio1/input0"));
+    pad_cut = 4;
+    pad_packet(3000, 3000, 50, 8, 0, 0);
+    pad_cut = 6;
+    CHECK("four bytes of the pad's packet come", pktcnt == 4);
+    CHECK("a write to sensitivity in the packet's middle",
+          store_file("sensitivity", "100", 3) == 3 && tp_ram[0x4A] == 100);
+    CHECK("drops the packet under way", pktcnt == 0 && bad_in_a_row == 0);
+    pad_packet(3000, 3000, 50, 8, 0, 0);
+    take(&guest_w);
+    CHECK("the stick gets no packet made of the write's replies", n_got == 0);
+    take(&pad_w);
+    CHECK("and the pad's next packet is read whole", pktcnt == 0 && key_value(BTN_TOUCH) == 1);
+    CHECK("with no packet counted bad", bad_in_a_row == 0 && model_count == 0);
+}
+
+/** A TrackPoint alone on the auxiliary port, as Linux's
+ * `psmouse_extensions` finds one after the touchpads' probes. */
+static void port_rows(void)
+{
+    static const struct event move[] = {
+        {EV_KEY, BTN_LEFT, 1}, {EV_REL, REL_X, 5}, {EV_REL, REL_Y, 5}, {EV_SYN, SYN_REPORT, 0}};
+    struct evdev *dev;
+    int n, i;
+
+    model_reset();
+    dev_tp = 1;
+    guest_kind = GUEST_TP;
+    CHECK("a TrackPoint alone on the port is brought up", bring_up() == 0);
+    CHECK("as a TrackPoint, no touchpad", touchpad == 0 && protocol == PROTO_TRACKPOINT);
+    n = node_of("isa0060/serio1/input0");
+    CHECK("its device is \"TPPS/2 IBM TrackPoint\" at isa0060/serio1/input0",
+          n >= 0 && strcmp(desc.name, "TPPS/2 IBM TrackPoint") == 0);
+    CHECK("bus i8042, vendor 2, product 10, Linux's PSMOUSE_TRACKPOINT",
+          n >= 0 && desc.id[0] == EVDEV_BUS_I8042 && desc.id[1] == 0x0002 && desc.id[2] == 10);
+    CHECK("a pointer and a pointing stick, with a middle button",
+          n >= 0 && has_bit(desc.prop, INPUT_PROP_POINTER) &&
+              has_bit(desc.prop, INPUT_PROP_POINTING_STICK) && has_bit(desc.key, BTN_MIDDLE));
+    CHECK("its files are given to the port, serio1",
+          files_port == 1 && files_add == trackpoint_sysfs_add);
+    CHECK("it reports at Linux's rate", guest_reporting && n_gtook >= 6 &&
+                                            gtook[n_gtook - 6] == 0xF3 &&
+                                            gtook[n_gtook - 5] == 100);
+    watch(&guest_w, n);
+    irq_byte(0x29);
+    irq_byte(0x05);
+    irq_byte(0xFB);
+    take(&guest_w);
+    CHECK("its packet: left, 5 right and 5 toward the user", got_events(move, 4));
+
+    n_attrs = 0;
+    (void)trackpoint_sysfs_add(7);
+    n_gtook = 0;
+    CHECK("a write of 200 to sensitivity takes its count",
+          store_file("sensitivity", "200", 3) == 3);
+    n_want = 0;
+    expect(0xF5);
+    expect_tp_write(0x4A, 200);
+    expect(0xF4);
+    CHECK("the stick disabled, the value written, the stick enabled", guest_took_expected());
+    CHECK("and the stick has it", tp_ram[0x4A] == 200 && guest_reporting);
+
+    dev = mouse_dev;
+    for (i = 0; i < 5; i++) {
+        irq_byte(0x00);
+    }
+    CHECK("five bytes out of form ask for a reconnect",
+          state == STATE_IGNORE && reconnect_wanted == RECONNECT_PORT);
+    n_gtook = 0;
+    ps2mouse_reconnect();
+    n_want = 0;
+    expect(0xE1);
+    expect(0xE2);
+    expect(0x7F);
+    expect_tp_write(0x4A, 200);
+    expect_n(initialize_activate, 6);
+    CHECK("the reconnect is Linux's trackpoint_reconnect: ID, reset, the setting not at its "
+          "power-on value, then the rate, resolution, scaling and reporting",
+          guest_took_expected());
+    CHECK("the stick keeps its device and its setting",
+          mouse_dev == dev && tp_ram[0x4A] == 200 && state == STATE_ACTIVE && guest_reporting);
+    CHECK("every byte is read", model_count == 0);
+    dev_tp = 0;
+}
+
 /** A stick of a newer kind after its pad's reconnect. */
 static void newer_kind_reconnect_rows(void)
 {
@@ -2250,8 +2517,45 @@ static void newer_kind_reconnect_rows(void)
           guest_took_expected() && guest.active);
 }
 
+/** No table is mapped: the SMBIOS reader reads the row's from memory. */
+uintptr_t map_mmio(uintptr_t phys, size_t size)
+{
+    (void)phys;
+    (void)size;
+    return 0;
+}
+
+/* The SMBIOS table a row gives, of System Information alone. */
+static uint8_t smbios_table[256];
+
+/** Give the SMBIOS reader a table whose System Information, type 1, names
+ * the manufacturer `maker`, the product `product` and its `version`, or,
+ * when `maker` is NULL, a table of no structure but its end. */
+static void set_system(const char *maker, const char *product, const char *version)
+{
+    static const uint8_t end[6] = {127, 4, 0, 0, 0, 0};
+    static const uint8_t header[8] = {1, 8, 0, 1, 1, 2, 3, 0};
+    const char *const strings[3] = {maker, product, version};
+    unsigned int n = 0, i, k;
+
+    if (maker) {
+        k_memcpy(smbios_table, header, sizeof(header));
+        n = sizeof(header);
+        for (k = 0; k < 3; k++) {
+            for (i = 0; strings[k][i]; i++) {
+                smbios_table[n++] = (uint8_t)strings[k][i];
+            }
+            smbios_table[n++] = 0;
+        }
+        smbios_table[n++] = 0;
+    }
+    k_memcpy(smbios_table + n, end, sizeof(end));
+    smbios_set_table(smbios_table, n + (unsigned int)sizeof(end));
+}
+
 int main(void)
 {
+    set_system(NULL, NULL, NULL);
     pnp_rows();
     min_max_rows();
     topbutton_rows();
@@ -2263,6 +2567,7 @@ int main(void)
     mouse_rows();
     packet_rows();
     file_rows();
+    parked_rows();
     reset_rows();
     late_pad_rows();
     announce_rows();
@@ -2270,6 +2575,8 @@ int main(void)
     guest_reconnect_rows();
     guest_change_rows();
     newer_kind_reconnect_rows();
+    midpacket_rows();
+    port_rows();
     model_reset();
     if (fails) {
         printf("trackpoint-test: %d failures\n", fails);

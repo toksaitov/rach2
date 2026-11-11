@@ -1,0 +1,5 @@
+adapter: Mesa Intel(R) HD Graphics 4400 (HSW GT2) driver igdumdim32.dll vendor 0x8086 device 0x0a16
+CreateDevice: hr=0x00000000
+caps: vs 3.0 ps 3.0 texture memory 1536 MiB
+center 255 128 0 255 corner 0 0 128 255 draw OK
+D3D9 OK

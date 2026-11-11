@@ -222,6 +222,19 @@ int32_t i915_hw_fault(struct i915_hw *hw, int point);
  */
 int32_t i915_hw_mmio_init(struct i915_hw *hw, uint64_t phys, uint32_t size);
 
+/**
+ * Cut `hw` off from its device, which the driver has given up or lost:
+ * from now on every register and every entry of the GTT reads all ones
+ * and takes no write, whatever of the driver still holds `hw`. The
+ * backend's own memory and mappings stay until their owner gives them
+ * back.
+ */
+void i915_hw_gone(struct i915_hw *hw);
+
+/** Whether `hw` is the MMIO backend, whose `priv` is the mapping of the
+ * registers and whose `gsm` the mapping of the GTT's entries. */
+int i915_hw_is_mmio(const struct i915_hw *hw);
+
 /*
  * The aperture, BAR 2 (i915_aperture.c): the first `size` bytes of the
  * global GTT as the processor sees them, through the fences, at the

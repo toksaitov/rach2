@@ -75,6 +75,10 @@ and
 flags with those bits from the integer argument.
 Ignore other bits, including the access mode and
 .Dv O_CLOEXEC .
+A change of
+.Dv O_APPEND
+on an append-only file fails with
+.Er EPERM .
 .It Dv F_SETLK , F_SETLK64
 Set or remove the record lock the pointed-to
 .Vt struct flock
@@ -131,12 +135,33 @@ is open on.
 .It Dv F_GETPIPE_SZ
 Return the capacity of the pipe or FIFO
 .Fa fd
-is an end of, which is 4096 bytes.
-Linux's is 65536 bytes unless
-.Dv F_SETPIPE_SZ
-changes it; here
-.Dv F_SETPIPE_SZ
-is unsupported and the capacity is fixed.
+is an end of, 65536 bytes for a new pipe, as on Linux.
+A new pipe made by a caller without privilege has at most
+.Pa /proc/sys/fs/pipe-max-size ,
+and 8192 bytes once the pages of the pipes of the caller's real user, with
+the new pipe's, would pass
+.Pa /proc/sys/fs/pipe-user-pages-soft ,
+16384 at boot; none at all once they would pass
+.Pa /proc/sys/fs/pipe-user-pages-hard ,
+0 at boot, which is no limit, as on Linux.
+.It Dv F_SETPIPE_SZ
+Give the pipe or FIFO
+.Fa fd
+is an end of a capacity of at least
+.Fa arg
+bytes, rounded up to a power of two of a page or more, keeping the bytes
+it holds in a new buffer allocated now, and return the capacity given.
+A caller without privilege may not grow a pipe past
+.Pa /proc/sys/fs/pipe-max-size ,
+1048576 bytes at boot, nor so that the pages of the pipes of the real user
+that made it, each pipe's whole capacity counted, would pass
+.Pa /proc/sys/fs/pipe-user-pages-soft ,
+16384 at boot, or
+.Pa /proc/sys/fs/pipe-user-pages-hard ,
+0 at boot, which is no limit, as on Linux.
+A shrink is taken even from a user past either.
+GNU cat asks for 524288 bytes before it copies through
+.Xr splice 2 .
 .El
 .Pp
 Every other command is refused with
@@ -306,6 +331,8 @@ return the requested flags,
 .Dv F_GET_SEALS
 the seals and
 .Dv F_GETPIPE_SZ
+and
+.Dv F_SETPIPE_SZ
 the capacity.
 The other supported commands return 0.
 When a set lock command fails, no lock has changed, but for one whose
@@ -355,12 +382,28 @@ and checks that the new descriptor's flag is clear.
 .Bl -tag -width "[EOVERFLOW]"
 .It Bq Er EAGAIN
 A set lock command met a conflicting lock.
+.It Bq Er EBUSY
+.Dv F_SETPIPE_SZ
+asked for fewer pages than the page buffers that hold the pipe's bytes,
+however few bytes they hold, as Linux counts them: a write's first
+.Fa count
+mod 4096 bytes join the newest buffer when it takes writes and they fit in
+its page after the bytes it holds, and the rest take a page each;
+.Xr vmsplice 2
+and a
+.Xr splice 2
+from a file take a buffer for each page of the source, a splice or a
+.Xr tee 2
+from a pipe one for each of its buffers, and a write joins only a buffer
+a splice moved whole from another pipe's writes.
 .It Bq Er EBADF
 .Fa fd
 is not an open descriptor, was opened with
 .Dv O_PATH
 and the command is not one it takes,
 .Dv F_GETPIPE_SZ
+or
+.Dv F_SETPIPE_SZ
 was given a descriptor that is no end of a pipe, or a read lock was
 asked for on a descriptor not open for reading or a write lock on one
 not open for writing.
@@ -386,8 +429,11 @@ is none of the three, its range begins before byte 0, or
 .Dv F_GETLK
 asked about
 .Dv F_UNLCK ;
-or an open file description lock command has a nonzero
-.Va l_pid .
+an open file description lock command has a nonzero
+.Va l_pid ;
+or
+.Dv F_SETPIPE_SZ
+asked for more than 2^31 bytes.
 .It Bq Er EIO
 A lock command's
 .Va l_whence
@@ -401,6 +447,8 @@ the limit.
 .It Bq Er ENOLCK
 The kernel heap has no room for a lock.
 .It Bq Er ENOMEM
+.Dv F_SETPIPE_SZ
+found the kernel heap with no room for the new buffer.
 A duplication command found the kernel heap with no room for a larger
 descriptor table, as on Linux, or for the open file description it makes
 for the new descriptor and drops at once to share the old one's, which
@@ -408,7 +456,15 @@ Linux does not make.
 .It Bq Er EPERM
 .Dv F_ADD_SEALS
 was given a descriptor not open for writing, or the file has
-.Dv F_SEAL_SEAL .
+.Dv F_SEAL_SEAL ;
+or
+.Dv F_SETFL
+would change
+.Dv O_APPEND
+of an append-only file; or
+.Dv F_SETPIPE_SZ
+would grow a pipe past one of the three limits its entry names, for a
+caller without privilege.
 .It Bq Er EOVERFLOW
 A lock's range passes the largest offset, or
 .Dv F_GETLK

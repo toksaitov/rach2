@@ -40,6 +40,8 @@
 #define BLOB_MEM_GUEST  1u
 #define BLOB_MEM_HOST3D 2u
 
+#define BLOB_FLAG_USE_MAPPABLE 1u
+
 /* The commands' bodies after their header, as virtio_gpu.h lays them out. */
 struct c_create_2d {
     uint32_t resource_id, format, width, height;
@@ -95,6 +97,10 @@ struct c_submit {
 struct c_blob {
     uint32_t resource_id, blob_mem, blob_flags, nr_entries;
     uint64_t blob_id, size;
+};
+struct c_map_blob {
+    uint32_t resource_id, padding;
+    uint64_t offset;
 };
 
 /* Copy n bytes at offset off of the region, checked before, to private dst. */
@@ -155,9 +161,7 @@ static void publish(struct vd *d, uint32_t state, uint32_t err)
 static void res_clear(struct vd_res *r)
 {
     free(r->iov);
-    r->iov = 0;
-    r->niov = 0;
-    r->blob = 0;
+    memset(r, 0, sizeof(*r));
 }
 
 /**
@@ -398,6 +402,9 @@ static int cmd_unref(struct vd *d, const uint8_t *body)
     }
     if (r->iov != 0 && !r->blob) {
         d->ops->detach(d->cookie, c.resource_id);
+    }
+    if (r->pinned) {
+        d->ops->unpin(d->cookie, c.resource_id);
     }
     d->ops->unref(d->cookie, c.resource_id);
     res_clear(r);
@@ -739,6 +746,112 @@ static int cmd_create_blob(struct vd *d, const struct vd_hdr *h, const uint8_t *
     d->res[o - d->obj].iov = iov;
     d->res[o - d->obj].niov = c.nr_entries;
     d->res[o - d->obj].blob = 1;
+    d->res[o - d->obj].mem = c.blob_mem;
+    d->res[o - d->obj].flags = c.blob_flags;
+    d->res[o - d->obj].size = c.size;
+    return 0;
+}
+
+/** Check that the renderer's runs of a page list lie within the `left`
+ * pages asked for; 0 or VD_RESP_ERR_UNSPEC. */
+static int runs_fit(const struct vd_pages *q, uint64_t left)
+{
+    uint32_t i;
+
+    if (q->count == 0 || q->count > q->max) {
+        return VD_RESP_ERR_UNSPEC;
+    }
+    for (i = 0; i < q->count; i++) {
+        if (vgs_check_run(&q->runs[i], left) != VGS_OK) {
+            return VD_RESP_ERR_UNSPEC;
+        }
+        left -= q->runs[i].pages;
+    }
+    return 0;
+}
+
+/**
+ * RESOURCE_MAP_BLOB under VGS_TF_PAGES: the page list of a mappable HOST3D
+ * blob from the page `offset` names, as many runs as the chain's writable
+ * bytes hold after the header and the `struct vgs_pages`, written to resp.
+ * The renderer pins the blob at its first answer. Returns the answer's
+ * length; *type is RESP_OK_MAP_INFO or the error.
+ */
+static uint32_t cmd_map_blob(struct vd *d, const uint8_t *body, uint8_t *resp, uint32_t *type)
+{
+    uint32_t room = d->room < VD_RESP_MAX ? d->room : VD_RESP_MAX;
+    struct vgs_pages p;
+    struct c_map_blob c;
+    struct vd_pages q;
+    struct vd_res *r;
+    int err;
+
+    memcpy(&c, body, sizeof(c));
+    *type = VD_RESP_ERR_PARAMETER;
+    if ((d->drv.transport_features & VGS_TF_PAGES) == 0 || d->ops->pages == 0) {
+        *type = VD_RESP_ERR_UNSPEC;
+        return sizeof(struct vd_hdr);
+    }
+    if ((r = find_res(d, c.resource_id, 0)) == 0) {
+        *type = VD_RESP_ERR_RESOURCE_ID;
+        return sizeof(struct vd_hdr);
+    }
+    memset(&p, 0, sizeof(p));
+    p.total = (r->size + VGS_PAGE - 1) / VGS_PAGE;
+    p.first = c.offset;
+    if (!r->blob || r->mem != BLOB_MEM_HOST3D || (r->flags & BLOB_FLAG_USE_MAPPABLE) == 0 ||
+        p.first >= p.total || room < VGS_PAGES_OFF + sizeof(struct vgs_run)) {
+        return sizeof(struct vd_hdr);
+    }
+    memset(&q, 0, sizeof(q));
+    q.id = c.resource_id;
+    q.epoch = d->drv.epoch;
+    q.size = r->size;
+    q.first = p.first;
+    q.max = (room - VGS_PAGES_OFF) / sizeof(struct vgs_run);
+    if ((q.runs = calloc(q.max, sizeof(*q.runs))) == 0) {
+        *type = VD_RESP_ERR_OUT_OF_MEMORY;
+        return sizeof(struct vd_hdr);
+    }
+    err = d->ops->pages(d->cookie, &q);
+    if (err == 0) {
+        r->pinned = 1;
+        err = runs_fit(&q, p.total - p.first);
+    }
+    if (err == 0) {
+        p.map_info = q.map_info;
+        p.count = q.count;
+        memcpy(resp + sizeof(struct vd_hdr), &p, sizeof(p));
+        memcpy(resp + VGS_PAGES_OFF, q.runs, (size_t)q.count * sizeof(*q.runs));
+        d->n.maps++;
+    }
+    free(q.runs);
+    *type = err == 0 ? VD_RESP_OK_MAP_INFO : (uint32_t)err;
+    return err == 0 ? VGS_PAGES_OFF + q.count * (uint32_t)sizeof(struct vgs_run)
+                    : (uint32_t)sizeof(struct vd_hdr);
+}
+
+/** RESOURCE_UNMAP_BLOB under VGS_TF_PAGES: let go of the blob's pin. */
+static int cmd_unmap_blob(struct vd *d, const uint8_t *body)
+{
+    struct c_resource c;
+    struct vd_res *r;
+
+    memcpy(&c, body, sizeof(c));
+    if ((d->drv.transport_features & VGS_TF_PAGES) == 0 || d->ops->unpin == 0) {
+        return VD_RESP_ERR_UNSPEC;
+    }
+    if ((r = find_res(d, c.resource_id, 0)) == 0) {
+        return VD_RESP_ERR_RESOURCE_ID;
+    }
+    if (!r->blob) {
+        return VD_RESP_ERR_PARAMETER;
+    }
+    if (r->pinned) {
+        d->ops->unpin(d->cookie, c.resource_id);
+        r->pinned = 0;
+        d->n.unmaps++;
+    }
     return 0;
 }
 
@@ -755,6 +868,7 @@ static long body_size(uint32_t type)
     case CMD_RESOURCE_DETACH_BACKING:
     case CMD_CTX_ATTACH_RESOURCE:
     case CMD_CTX_DETACH_RESOURCE:
+    case CMD_RESOURCE_UNMAP_BLOB:
         return sizeof(struct c_resource);
     case CMD_SET_SCANOUT:
         return sizeof(struct c_set_scanout);
@@ -781,6 +895,8 @@ static long body_size(uint32_t type)
         return sizeof(struct c_submit);
     case CMD_RESOURCE_CREATE_BLOB:
         return sizeof(struct c_blob);
+    case CMD_RESOURCE_MAP_BLOB:
+        return sizeof(struct c_map_blob);
     default:
         return -1;
     }
@@ -836,6 +952,9 @@ static uint32_t run_nodata(struct vd *d, const struct vd_hdr *h, uint8_t *body, 
     case CMD_RESOURCE_CREATE_BLOB:
         err = cmd_create_blob(d, h, body, blen);
         break;
+    case CMD_RESOURCE_UNMAP_BLOB:
+        err = cmd_unmap_blob(d, body);
+        break;
     default:
         err = VD_RESP_ERR_UNSPEC;
         break;
@@ -879,6 +998,8 @@ static uint32_t execute(struct vd *d, uint32_t rlen, uint32_t *type)
         len = cmd_edid(d, body, d->resp);
         *type = VD_RESP_OK_EDID;
         break;
+    case CMD_RESOURCE_MAP_BLOB:
+        return cmd_map_blob(d, body, d->resp, type);
     default:
         *type = run_nodata(d, &h, body, blen);
         return sizeof(struct vd_hdr);
@@ -1060,6 +1181,7 @@ static int serve(struct vd *d, uint32_t qi)
             region_get(d, c.seg[i].addr, d->cmd + off, c.seg[i].len);
             off += c.seg[i].len;
         }
+        d->room = c.wbytes;
         d->last[qi]++;
         d->n.commands++;
         if (qi != VGS_QUEUE_CONTROL) {

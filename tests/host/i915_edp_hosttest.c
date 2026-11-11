@@ -7,6 +7,7 @@
  * host-deps: rach2/sys/drm/i915/i915_irq.c rach2/sys/drm/i915/i915_hw.c
  * host-deps: tests/host/i915_model.c rach2/sys/display/backlight.c
  * host-deps: rach2/sys/display/intelbl.c rach2/sys/lib/kstring.c
+ * host-deps: rach2/sys/lib/kstd.c
  * host-deps: rach2/sys/lib/kctypes.c tests/host/compat/spinlock_host.c
  * host-deps: rach2/sys/drm/i915/intel_bios.c rach2/sys/drm/i915/i915_power.c
  * host-inputs: tests/fixtures/lenovo-gpu/i915_vbt.bin
@@ -158,6 +159,7 @@ void drm_gem_object_init(struct drm_device *dev, struct drm_gem_object *obj, uin
                          const struct drm_gem_object_funcs *funcs)
 {
     obj->dev = dev;
+    obj->resv = &obj->resv_own;
     obj->size = size;
     obj->funcs = funcs;
     obj->refs = 1;
@@ -172,11 +174,13 @@ const struct drm_gem_object_funcs i915_gem_object_funcs;
 static struct drm_i915_gem_object bo[NBO];
 static struct i915_vma bo_vma[NBO];
 
-int32_t i915_gem_object_pin_to_display(struct drm_i915_gem_object *obj, uint32_t align,
+int32_t i915_gem_object_pin_to_display(struct drm_i915_gem_object *obj,
+                                       const struct i915_remap_info *remap, uint32_t align,
                                        struct i915_vma **vma)
 {
     struct i915_vma *v = &bo_vma[obj - bo];
 
+    (void)remap;
     (void)align;
     if (!obj->vmas) {
         v->obj = obj;
@@ -806,6 +810,31 @@ static void row_pps_order(void)
     intel_pps_on(&gpu);
     CHECK(p->up_at - p->down_at >= 500000u, "pps: an off and on at once still waits the cycle");
     CHECK(gpu.hw.timeouts == 0, "pps: no wait timed out");
+}
+
+/* ---- RPS's waitboost and interactive mode, which the driver calls ---- */
+
+/* The requests' fences, i915_gem.c's, which no flip here waits on. */
+const struct dma_fence_ops i915_fence_ops = {0, 0, 0, 0, 0, 0};
+
+/** Whether the chip has begun `rq`; no request runs here, so only once
+ * it has signalled. */
+int i915_request_started(const struct i915_request *rq)
+{
+    return rq->fence.base.signaled;
+}
+
+/** The waitboost, RPS's, which no row here measures. */
+void i915_rps_boost(struct i915_request *rq)
+{
+    (void)rq;
+}
+
+/** A page flip pending or done, which RPS counts; no row here reads it. */
+void i915_rps_mark_interactive(struct drm_i915_private *i915, int on)
+{
+    (void)i915;
+    (void)on;
 }
 
 int main(void)

@@ -4,9 +4,14 @@
  * `xsaveprobe` checks first what `cpuid` and XCR0 say: OSXSAVE is set
  * exactly where XSAVE is reported, and XGETBV's XCR0 names x87 and SSE, AVX
  * where `cpuid` reports it, AVX-512's three components where `cpuid`
- * reports AVX512F and leaf 0xD lists them, and nothing else. Then, where
- * the kernel enabled AVX, the YMM registers, YMM0 to YMM7 or to YMM15 on
- * x86-64, hold values whose upper halves are not zero, and:
+ * reports AVX512F and leaf 0xD lists them, PKRU where the kernel is
+ * x86-64's and `cpuid` reports PKU and leaf 0xD lists it, with OSPKE then
+ * set, and nothing else. The x86-64 kernel turns the keys on for i386
+ * programs too, and the i686 kernel turns none on; the kernel's
+ * architecture is the one ETUDE_KERNEL in the environment names, or the
+ * program's own where it is unset. Then, where the kernel enabled AVX, the
+ * YMM registers, YMM0 to YMM7 or to YMM15 on x86-64, hold values whose
+ * upper halves are not zero, and:
  *
  * * a forked child finds the parent's values, and parent and child each
  *   keep their own across 300 ms of yields, sleeps and preemption;
@@ -601,9 +606,10 @@ static void decide(int noxsave)
 
 /**
  * The checks of `cpuid` and XCR0: OSXSAVE is set exactly where the kernel
- * saves with XSAVE, and then XCR0 and leaf 0xD's image size.
+ * saves with XSAVE, and then XCR0 and leaf 0xD's image size. PKRU is
+ * expected only where `x86_64_kernel` says the kernel is x86-64's.
  */
-static void run_cpuid(void)
+static void run_cpuid(int x86_64_kernel)
 {
     unsigned r1[4], r7[4], rd[4], r[4];
     int osxsave, avx512;
@@ -638,8 +644,14 @@ static void run_cpuid(void)
             want_xcr0 |= 0xE0u;
         }
     }
+    if (x86_64_kernel && ((r7[2] >> 3) & 1u) && (rd[0] & 0x200u)) {
+        want_xcr0 |= 0x200u;
+    }
     if (xcr0_lo != want_xcr0 || xcr0_hi != 0) {
-        fail("XCR0 is not x87, SSE, and AVX and AVX-512 where the processor has them");
+        fail("XCR0 is not x87, SSE, and AVX, AVX-512 and PKRU where the processor has them");
+    }
+    if (((r7[2] >> 4) & 1u) != ((want_xcr0 >> 9) & 1u)) {
+        fail("cpuid's OSPKE does not say whether XCR0 has PKRU");
     }
     report_held();
     xstate_size = rd[1];
@@ -654,6 +666,9 @@ static void run_cpuid(void)
     puts(xcr0_lo & 0xE0u ? "xsaveprobe: cpuid: OSXSAVE, XCR0 has x87, SSE, AVX and AVX-512"
                          : (use_avx ? "xsaveprobe: cpuid: OSXSAVE, XCR0 has x87, SSE and AVX"
                                     : "xsaveprobe: cpuid: OSXSAVE, XCR0 has x87 and SSE"));
+    if (xcr0_lo & 0x200u) {
+        puts("xsaveprobe: cpuid: OSPKE, XCR0 has PKRU");
+    }
 }
 
 /** The switches row: a forked child finds the parent's values, and parent
@@ -1099,6 +1114,27 @@ static void run_ptrace_without(void)
     resume(pid, "the traced child did not end");
 }
 
+/** Whether the kernel is x86-64's: as ETUDE_KERNEL in the environment
+ * `envp` names it, or where it is unset, whether the probe is. */
+static int kernel_x86_64(char **envp)
+{
+    static const char name[] = "ETUDE_KERNEL=";
+    int i, n;
+
+    for (i = 0; envp[i] != 0; i++) {
+        for (n = 0; name[n] != '\0' && envp[i][n] == name[n]; n++) {
+        }
+        if (name[n] == '\0') {
+            return envp[i][n] == 'x';
+        }
+    }
+#if defined __x86_64__
+    return 1;
+#else
+    return 0;
+#endif
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
@@ -1122,7 +1158,7 @@ void probe_main(unsigned long *sp)
     }
     report_begin(report_case(argv + argc + 1, "guest.default.xsaveprobe"));
     decide(noxsave);
-    run_cpuid();
+    run_cpuid(kernel_x86_64(argv + argc + 1));
     if (!use_xsave) {
         run_ptrace_without();
         report_held();

@@ -1,9 +1,10 @@
-"""Run a browser's HTTPS pages, diagnostics, WebGPU or recovery acceptance."""
+"""Run a browser's HTTPS pages, diagnostics, GPU, WebGPU or recovery acceptance."""
 import contextlib
 import http.server
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import shutil
 import socket
@@ -17,6 +18,8 @@ from protocol import CDP, Marionette
 
 HERE = Path(__file__).resolve().parent
 PAYLOAD = b"rach2-file-acceptance\n"
+# The renderer Crocus names on the HD 4400, in Mesa's renderer string.
+CROCUS = "Mesa Intel(R) HD Graphics 4400 (HSW GT2)"
 
 
 def save(path, value):
@@ -124,7 +127,11 @@ class Browser:
                         "--remote-debugging-port=0", "--user-data-dir=" + str(profile),
                         "--disable-background-networking", "--disable-hang-monitor",
                         "--disable-background-timer-throttling", "--disable-renderer-backgrounding",
-                        "--autoplay-policy=no-user-gesture-required", "--ignore-gpu-blocklist"]
+                        "--autoplay-policy=no-user-gesture-required"]
+                # The GPU profile keeps Chromium's blocklist. Software
+                # WebGL and the Lenovo's hasvk WebGPU probe lift it.
+                if self.mode != "gpu":
+                    args += ["--ignore-gpu-blocklist"]
                 if self.mode == "webgpu":
                     args += ["--enable-unsafe-webgpu", "--use-webgpu-adapter=swiftshader"]
                 elif self.mode.startswith("webgpu-venus"):
@@ -145,23 +152,27 @@ class Browser:
                          "browser.startup.homepage_override.mstone": "ignore",
                          "browser.aboutwelcome.enabled": False, "media.autoplay.default": 0,
                          "media.autoplay.block-webaudio": False, "media.cubeb.backend": "pulse",
-                         "webgl.force-enabled": True, "dom.max_script_run_time": 0,
+                         "dom.max_script_run_time": 0,
                          "dom.max_chrome_script_run_time": 0,
                          "browser.download.folderList": 2, "browser.download.dir": str(self.downloads),
                          "browser.download.useDownloadDir": True,
                          "browser.helperApps.neverAsk.saveToDisk": "text/plain",
                          "browser.sessionstore.resume_from_crash": False,
                          "dom.events.testing.asyncClipboard": True}
+                # The GPU profile keeps Firefox's own choice of WebGL and
+                # WebRender, as Debian runs it; llvmpipe needs WebGL forced.
+                if self.mode != "gpu":
+                    prefs["webgl.force-enabled"] = True
                 (profile / "user.js").write_text("".join(
                     "user_pref(%s, %s);\n" % (json.dumps(k), json.dumps(v))
                     for k, v in prefs.items()))
+            env = dict(os.environ, MOZ_ENABLE_WAYLAND="1")
             save(self.out / "switches.json", {"argv": args, "prefs": prefs,
                  "version": subprocess.check_output([args[0], "--version"], text=True).strip(),
                  "certificate": "ephemeral local HTTPS certificate accepted by automation",
-                 "environment": {k: v for k, v in os.environ.items() if k.startswith(
+                 "environment": {k: v for k, v in env.items() if k.startswith(
                      ("MOZ_", "LP_", "MESA_", "GRAPHICS_", "WAYLAND_", "XDG_", "PULSE_", "VK_"))}})
             self.log = (self.out / "browser.log").open("w")
-            env = dict(os.environ, MOZ_ENABLE_WAYLAND="1")
             self.child = subprocess.Popen(args, env=env, stdout=self.log, stderr=self.log,
                                           start_new_session=True)
             if self.name == "chromium":
@@ -299,8 +310,13 @@ def pages(b, url):
     return result
 
 
-def diagnostics(b, url):
-    """Read the browsers' own sandbox diagnostics and each Chromium child's kernel state."""
+def diagnostics(b, url, ready="Sandboxed"):
+    """Read the browsers' own sandbox diagnostics and each Chromium child's kernel state.
+
+    chrome://gpu is read once its text holds READY. Its sandbox line comes
+    with the page, but Dawn's adapter list comes later, so a case that judges
+    Dawn passes "Vulkan backend", which that list has and the page lacks.
+    """
     b.navigate(url + "/page.html")
     b.script("storage()")
     b.script("draw()")
@@ -321,7 +337,59 @@ def diagnostics(b, url):
     result["chrome://sandbox"] = b.until(lambda: b.script("document.body.innerText"))
     b.navigate("chrome://gpu/")
     text = """(() => { const read = root => Array.from(root.querySelectorAll('*')).filter(e => e.shadowRoot).map(e => e.shadowRoot.textContent + read(e.shadowRoot)).join('\\n'); return document.body.innerText + read(document); })()"""
-    result["chrome://gpu"] = b.until(lambda: (lambda s: s if "Sandboxed" in s else None)(b.script(text)))
+    result["chrome://gpu"] = b.until(lambda: (lambda s: s if "Sandboxed" in s and ready in s else None)(b.script(text)))
+    return result
+
+
+def rows(text, names):
+    """Return the first line of each named row of an about:support table's text."""
+    found = {}
+    for line in text.splitlines():
+        name, _, value = line.partition("\t")
+        if name.strip() in names and name.strip() not in found:
+            found[name.strip()] = value.strip()
+    return found
+
+
+def gpu(b, url):
+    """Read the renderer each GPU path names, its diagnostics and each process's sandbox.
+
+    The renderer is named from WebGL's unmasked renderer, from Chromium's
+    chrome://gpu, whose GPU0 line gives the PCI identity ANGLE read for the
+    GPU process's device, and from Firefox's about:support. Pixels are read and kept, not judged here,
+    since the fault backend draws none; browsers-gpu.sh judges them on the
+    machine.
+    """
+    b.navigate(url + "/page.html")
+    result = {"webgl": b.script("draw()")}
+    result.update(diagnostics(b, url))
+    if b.name == "firefox":
+        # The Graphics section is filled in after the page loads.
+        text = b.until(lambda: (lambda s: s if s and "Compositing\t" in s else None)(
+            b.script("document.body.innerText")))
+        result["graphics"] = rows(text, ("Compositing", "Description", "Vendor ID", "Device ID",
+                                         "Driver Vendor", "Driver Version", "WebGL 1 Driver Renderer",
+                                         "WebGL 2 Driver Renderer", "Window Protocol"))
+        save(b.out / "partial.json", result)
+        graphics = result["graphics"]
+        assert graphics.get("Compositing") == "WebRender", graphics
+        assert "crocus" in graphics.get("Driver Vendor", ""), graphics
+        assert graphics.get("Device ID") == "0x0a16", graphics
+        assert "llvmpipe" not in json.dumps(result["webgl"]).lower(), result["webgl"]
+        return result
+    # The page's text runs its table's rows and list items together.
+    text = result["chrome://gpu"]
+    found = re.search(r"GL_RENDERER\s*:\s*(.*?\))(?:GL_VERSION|\n)", text)
+    result["gl_renderer"] = found[1] if found else None
+    found = re.search(r"\bWebGL: ([^*\n]*)", text)
+    result["webgl_status"] = found[1].strip() if found else None
+    found = re.search(r"GPU0\s*:\s*VENDOR=\s*(0x[0-9a-f]+).*?DEVICE=\s*(0x[0-9a-f]+)", text)
+    result["gpu0"] = list(found.groups()) if found else None
+    save(b.out / "partial.json", result)
+    assert result["gl_renderer"] and CROCUS in result["gl_renderer"], result["gl_renderer"]
+    assert CROCUS in result["webgl"]["renderer"], result["webgl"]
+    assert result["webgl_status"] == "Hardware accelerated", result["webgl_status"]
+    assert result["gpu0"] == ["0x8086", "0x0a16"], result["gpu0"]
     return result
 
 
@@ -393,6 +461,45 @@ def webgpu_venus(b, url):
     return result
 
 
+def webgpu_hasvk(b, url):
+    """Read hasvk's compute and pixels, capture the panel, then read the sandboxes.
+
+    The caller supplies a DRM Weston with its screenshot protocol enabled.
+    Only the blocklist switch is lifted, as in the Lenovo's Linux reference.
+    """
+    assert b.name == "chromium"
+    with (b.out / "vulkaninfo.err").open("w") as err:
+        vulkan = subprocess.check_output(["vulkaninfo", "--summary"], text=True, stderr=err)
+    (b.out / "vulkaninfo.out").write_text(vulkan)
+    assert "HD Graphics 4400" in vulkan and "llvmpipe" not in vulkan, vulkan
+    assert re.search(r"apiVersion\s*=\s*1\.2\.", vulkan), "hasvk is not at its default API version"
+    b.navigate(url + "/page.html")
+    result = {"readback": b.script("""(async () => {
+        const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter || adapter.info.vendor !== 'intel' ||
+            adapter.info.architecture !== 'gen-7' || adapter.info.isFallbackAdapter)
+            throw Error('no native Intel gen-7 adapter');
+        return await gpu(adapter);
+    })()""")}
+    save(b.out / "partial.json", result)
+    got = result["readback"]
+    assert got["words"] == 1024 and got["errors"] == 0 and got["pixel"] == [255, 128, 0, 255], got
+    b.navigate(url + "/hasvk.html")
+    result["picture"] = b.until(lambda: b.script("window.result || null"))
+    save(b.out / "partial.json", result)
+    assert result["picture"]["ok"], result["picture"]
+    shots = b.work / "shots"
+    shots.mkdir()
+    with (b.out / "screenshooter.log").open("w") as log:
+        subprocess.run(["weston-screenshooter"], cwd=shots, stdout=log, stderr=log, check=True)
+    pictures = list(shots.glob("*.png"))
+    assert len(pictures) == 1, "screenshooter did not capture one panel"
+    shutil.copyfile(pictures[0], b.out / "panel.png")
+    save(b.out / "gpu-info.json", b.client.call("SystemInfo.getInfo"))
+    result.update(diagnostics(b, url, "Vulkan backend"))
+    return result
+
+
 def sound(b, url):
     """Play three tabs together until the loopback reader has its counted samples."""
     result = []
@@ -423,12 +530,16 @@ def main():
                 result = pages(b, url)
             elif mode == "sandbox":
                 result = diagnostics(b, url)
+            elif mode == "gpu":
+                result = gpu(b, url)
             elif mode == "recovery":
                 result = recovery(b, url)
             elif mode == "webgpu":
                 result = webgpu(b, url)
             elif mode in ("webgpu-venus", "webgpu-venus-native"):
                 result = webgpu_venus(b, url)
+            elif mode == "webgpu-hasvk":
+                result = webgpu_hasvk(b, url)
             elif mode == "sound":
                 result = sound(b, url)
             else:

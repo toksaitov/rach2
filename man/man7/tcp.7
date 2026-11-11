@@ -1,4 +1,4 @@
-.Dd November 2, 2026
+.Dd November 11, 2026
 .Dt TCP 7
 .Os
 .Sh NAME
@@ -33,11 +33,16 @@ and
 end them.
 .Xr connect 2
 gives the retransmission timeout, the handshake's give-up and the resets.
+A send during the handshake waits for its end, or fails with
+.Er EAGAIN
+on a nonblocking socket, as
+.Xr send 2
+says.
 .Ss Keepalive
 A connection with
 .Dv SO_KEEPALIVE
-set, nothing queued and nothing unacknowledged that has received nothing
-for
+set, nothing queued and nothing unacknowledged that has received neither
+an acceptable acknowledgement nor data in order for
 .Dv TCP_KEEPIDLE
 seconds is sent a probe: one byte the peer has had already, at the
 sequence number before the oldest unacknowledged one, which a peer that is
@@ -49,27 +54,40 @@ seconds, and when
 probes have gone unanswered the peer is sent a reset and the connection
 ends with
 .Er ETIMEDOUT .
-Any segment received answers the probes.
+Only a segment that passes the checks of
+.Sx Segments refused
+and acknowledges something from the oldest unacknowledged byte to the
+next to be sent answers the probes, as on Linux.
+A segment refused there, one with an older acknowledgement, and one
+outside the receive window answer none; in-order data with an older
+acknowledgement, or a new FIN on bytes received before, restarts the
+idle time but keeps the count of probes.
 The defaults, 7200 seconds, 75 seconds and 9 probes, are those of
 .Pa /proc/sys/net/ipv4/tcp_keepalive_time ,
 .Pa tcp_keepalive_intvl
 and
 .Pa tcp_keepalive_probes ;
 a socket's own values replace them, and a new value applies at once,
-measured from the last segment received.
+measured from the last acknowledgement or data that restarted the idle
+time.
 A connection
 .Xr accept 2
 gives takes the listener's settings.
 A probe from the peer, a segment with no data below the next sequence
-number expected, is answered with an acknowledgement.
+number expected, is answered with an acknowledgement, as any segment
+outside the receive window is; see
+.Sx Segments refused .
 .Ss Give-up
 A connection whose data or FIN goes unacknowledged is given up with
 .Er ETIMEDOUT
 when Linux would give it up with
 .Pa /proc/sys/net/ipv4/tcp_retries2
 of 15: after the time 16 timeouts take when the first is 200 milliseconds
-and each doubles up to 120 seconds, 924.6 seconds, counted from the sending
-of what the first timeout found unacknowledged.
+and each doubles up to 120 seconds, 924.6 seconds, counted, as on Linux,
+from the first retransmission of the loss, a fast retransmission or a
+timeout's, until an acknowledgement ends the recovery.
+The first timeout since data was last acknowledged never gives a
+connection up.
 This side's own timeout doubles only up to 60 seconds, so it sends more
 retransmissions in that time than Linux does.
 A connection whose local address goes, by a change of address or its
@@ -80,14 +98,106 @@ Given up first, it reports
 .Er ENETUNREACH
 in place of
 .Er ETIMEDOUT .
+A peer window that stays closed over data waiting to be sent, with
+nothing in flight, is probed with an acknowledgement of no data below the
+oldest byte unacknowledged, at the timeout, doubled after each probe up to
+120 seconds; once
+.Pa tcp_retries2
+probes in a row have gone unanswered, the connection is given up with
+.Er ETIMEDOUT ,
+counted in TCPAbortOnTimeout, as on Linux: 924.6 seconds after the window
+closed when the timeout is 200 milliseconds.
+A peer that answers each probe with its window still closed keeps the
+connection open.
+A window closed over data in flight is probed at each retransmission
+timeout instead, which then counts in no TCPTimeouts and lowers no segment
+size, by sending up to a segment of the oldest data unacknowledged past the
+closed window, counted in TCPRetransSegs, which a peer whose window has
+opened takes; the connection is given up only once no acknowledgement
+inside the data sent, a duplicate among them, in a segment inside the
+window this side offers, has been received for 240 seconds before a
+timeout and the probes have lasted as long, as on Linux.
+Data that starts at or past the right edge of the window this side
+offered, a closed window's included, is dropped and acknowledged.
 .Dv TCP_USER_TIMEOUT ,
-a count of milliseconds, replaces that time, in the handshake as well, and
-ends the keepalive's probing that long after the last segment received;
-0 restores the default.
+a count of milliseconds, replaces that time, in the handshake as well,
+ends the keepalive's probing that long after the last acknowledgement or
+data that restarted its idle time,
+and ends a closed window's probing that long after its first probe,
+answered or not, or over data in flight, just past that long after the
+loss's first retransmission, as Linux does; 0 restores the default.
+When the first probe over data in flight is that first retransmission,
+it gives up at once if that long has passed since the oldest data
+unacknowledged was first sent, as on Linux.
 A frame the card refuses is kept and sent again at the next tick; a
 connection whose every frame the card has refused for 30 seconds, with
 nothing sent between, is given up, but the wait does not run while the card
 reports its link down, so a cable out for a minute ends nothing.
+.Ss Segments refused
+After the handshake and before
+.Dv TIME_WAIT ,
+a connection judges each segment before it takes anything from it, as
+Linux does.
+One without the ACK flag is dropped.
+One outside the receive window, which ends before the data this side last
+acknowledged or starts past the right edge of the window it offered, is
+dropped and answered with an acknowledgement of what was received: one
+carrying data or a FIN each time, and one without, as a peer's keepalive
+probe is, at most once in 500 milliseconds, as Linux's
+.Pa tcp_invalid_ratelimit
+has it, so that two ends that each find the other's segments stale do
+not answer each other for ever.
+Its acknowledgement and window are not taken.
+A SYN draws a challenge acknowledgement, which a true peer answers with a
+segment this side accepts (RFC 5961, section 4).
+An acknowledgement below the oldest unacknowledged byte by more than the
+largest window the peer has offered or the bytes it has acknowledged,
+whichever is less, drops the segment with a challenge in every state
+(RFC 5961, section 5); the bytes acknowledged count this side's SYN only on
+an active open, as on Linux.
+An older acknowledgement nearer is taken without its window.
+Only then is an acknowledgement at or past the oldest unacknowledged byte
+judged against the data sent: one of data never sent drops the segment,
+with a challenge after the peer's FIN or this side's.
+A segment with data or a FIN that the peer sent again after it was taken
+whole, because this side's acknowledgement was lost, is acknowledged and
+counted in DelayedACKLost, from the handshake's end to
+.Dv LAST_ACK ,
+but in
+.Dv CLOSING
+and
+.Dv LAST_ACK
+not when it acknowledges this side's FIN, which ends the connection first;
+.Dv TIME_WAIT
+acknowledges only a FIN sent again and counts nothing.
+After the peer's FIN, a segment whose data runs past that FIN ends the
+connection as an accepted reset does and is answered with a reset,
+counted in TCPAbortOnData, as on Linux.
+Before the peer's FIN, once this side's FIN is sent or queued after the
+program's last close or a shutdown of both halves, data or a FIN past
+what was received, which no program will read, ends the connection the
+same way (RFC 1122, section 4.2.2.13); data and a FIN sent again are
+acknowledged.
+A close with received data the program has not read sends a reset in
+place of the FIN and ends the connection, counted in TCPAbortOnClose, as
+on Linux.
+Until a passive open's handshake ends, the peer's SYN sent again is
+answered with this side's SYN-ACK, an acknowledgement of another number
+with a reset, a segment outside the window offered with an
+acknowledgement, at most once in 500 milliseconds when it has a SYN or
+neither data nor a FIN, and a SYN at another number with a reset that
+ends the handshake.
+Until a simultaneous open's handshake ends, a SYN draws a challenge
+acknowledgement, but for the peer's SYN-ACK, a segment outside the
+receive window a duplicate acknowledgement, and an acknowledgement of a
+number other than this side's SYN or the one past it a reset; one of the
+SYN's own number ends the handshake and leaves the SYN unacknowledged, to
+be sent again as the SYN-ACK, as on Linux.
+The acknowledgement that ends either handshake brings any data and FIN it
+carries, which are taken at once.
+Challenge acknowledgements share the limit of 500 milliseconds.
+.Xr connect 2
+gives the resets.
 .Ss Black holes
 A path that drops segments larger than some size without reporting it, a
 black hole, is detected as RFC 4821 and Linux's
@@ -138,9 +248,16 @@ takes.
 .Pa /proc/net/netstat
 counts in its
 .Ql TcpExt:
-line the retransmission timeouts, TCPTimeouts; the connections a timeout
-ended, TCPAbortOnTimeout; the keepalive probes sent, TCPKeepAlive; and the
-probes of a larger segment lost and taken, TCPMTUPFail and TCPMTUPSuccess.
+line the segments of data received again whole, DelayedACKLost; the
+retransmission timeouts, TCPTimeouts; the connections ended by data no
+program will read, TCPAbortOnData, those a close with data unread ended,
+TCPAbortOnClose, and those a timeout ended, TCPAbortOnTimeout; the challenge acknowledgements sent, TCPChallengeACK,
+and the SYNs that drew one, TCPSYNChallenge; the answers of a handshake
+not yet ended held back by the limit, TCPACKSkippedSynRecv, those to a
+segment outside the window, TCPACKSkippedSeq, and the challenges held
+back, TCPACKSkippedChallenge; the keepalive probes sent,
+TCPKeepAlive; and the probes of a larger segment lost and taken,
+TCPMTUPFail and TCPMTUPSuccess.
 .Pa /proc/net/snmp
 counts the segments and the connections ended; see
 .Xr proc 5 .

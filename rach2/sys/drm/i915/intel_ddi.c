@@ -420,7 +420,7 @@ void intel_ddi_post_disable(struct drm_i915_private *i915, struct intel_crtc *cr
     struct intel_dp *dp;
     uint32_t conf, ctl;
 
-    drm_crtc_vblank_off(&crtc->base);
+    intel_crtc_vblank_off(crtc);
     /* Linux's intel_disable_transcoder. */
     conf = i915_read(hw, TRANSCONF(cfg->trans));
     if (conf & TRANSCONF_ENABLE) {

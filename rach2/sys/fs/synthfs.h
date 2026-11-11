@@ -165,6 +165,15 @@ const char *synth_ns_name(int kind);
 #define SYNTH_PROC_NETWIRELESS 65
 /* /proc/fs/lockwait, the record of the sleeping locks (fs/sleeplock.h). */
 #define SYNTH_PROC_LOCKWAIT    66
+/* /proc/<pid>/numa_maps, each region's memory policy and pages by node. */
+#define SYNTH_PROC_NUMA_MAPS   67
+/* /proc/<pid>/syscall and wchan, the call and the function a thread sleeps
+ * in. */
+#define SYNTH_PROC_SYSCALL     68
+#define SYNTH_PROC_WCHAN       69
+/* /proc/<pid>/schedstat, the thread's run time, its wait for a processor
+ * and its switches onto one. */
+#define SYNTH_PROC_SCHEDSTAT   70
 
 /* The pid of /proc/self and /dev/fd, which procfs takes as the caller's
  * (`procfs_resolve_pid`). */
@@ -211,6 +220,24 @@ struct vpath {
 int synth_classify(const char *path, struct vpath *vp);
 
 /*
+ * The owner the last lookup gave a node of /proc whose Linux inode keeps
+ * it, held by each descriptor open on that node (`procfs_owner_keep`): a
+ * file of /proc/<pid> outside its net directory, a descriptor's fdinfo
+ * file, a process's fd, fdinfo or task directory, or its exe, cwd, root,
+ * descriptor or namespace link. Linux sets the owner
+ * when a lookup makes or revalidates the inode, and the inode's getattr and
+ * permission read it as it is.
+ */
+struct synth_owner {
+    int kept;     /* 1 while on procfs's list of kept owners */
+    int node[4];  /* kind, file or descriptor, process or
+                     thread, and a thread's process or 0 */
+    uint32_t uid; /* the owner the last lookup gave the node */
+    uint32_t gid;
+    struct synth_owner *next; /* the next kept owner */
+};
+
+/*
  * The record from the heap that the `priv` of a descriptor open on a
  * synthetic directory points at, since its coordinates do not fit in the
  * pointer: the directory's kind, its process's pid and, for a thread's
@@ -224,6 +251,8 @@ struct synth_dir {
     int pid;
     int used; /* 1 from its allocation; nothing reads it */
     int tid;
+    struct synth_owner own; /* a /proc/PID/fd, fdinfo or task directory's
+                               owner, which fstat and fchdir read */
 };
 
 /**
@@ -274,54 +303,65 @@ int synth_dev_dir_find(const char *name, int len);
 int synth_sys_count(void);
 /* The entries of kernel/hostname and domainname, whose texts are the names
  * of the moment, which procfs reads, and not the table's. */
-#define SYNTH_SYS_HOSTNAME           11
-#define SYNTH_SYS_DOMAINNAME         12
+#define SYNTH_SYS_HOSTNAME             11
+#define SYNTH_SYS_DOMAINNAME           12
 /* The entry of net/ipv4/ip_forward, which takes a write of 0. */
-#define SYNTH_SYS_IP_FORWARD         22
+#define SYNTH_SYS_IP_FORWARD           22
 /* The entries of fs/inotify's max_queued_events, max_user_instances and
  * max_user_watches, of vm/max_map_count, of kernel/overflowgid and
  * overflowuid, and of kernel/random's boot_id and uuid, whose values procfs
  * reads from the variables of their owners or makes. */
-#define SYNTH_SYS_INOTIFY_QUEUED     3
-#define SYNTH_SYS_INOTIFY_INSTANCES  4
-#define SYNTH_SYS_INOTIFY_WATCHES    5
-#define SYNTH_SYS_MAX_MAP_COUNT      32
-#define SYNTH_SYS_OVERFLOWGID        33
-#define SYNTH_SYS_OVERFLOWUID        34
-#define SYNTH_SYS_BOOT_ID            36
-#define SYNTH_SYS_UUID               37
+#define SYNTH_SYS_INOTIFY_QUEUED       3
+#define SYNTH_SYS_INOTIFY_INSTANCES    4
+#define SYNTH_SYS_INOTIFY_WATCHES      5
+#define SYNTH_SYS_MAX_MAP_COUNT        32
+#define SYNTH_SYS_OVERFLOWGID          33
+#define SYNTH_SYS_OVERFLOWUID          34
+#define SYNTH_SYS_BOOT_ID              36
+#define SYNTH_SYS_UUID                 37
 /* The entries of fs/nr_open, fs/file-max and fs/file-nr, and of
  * kernel/randomize_va_space, whose values procfs reads from fs/fd.h's and
  * mm/vm.h's variables; file-nr alone takes no write. */
-#define SYNTH_SYS_NR_OPEN            38
-#define SYNTH_SYS_FILE_MAX           39
-#define SYNTH_SYS_FILE_NR            40
-#define SYNTH_SYS_RANDOMIZE_VA_SPACE 41
+#define SYNTH_SYS_NR_OPEN              38
+#define SYNTH_SYS_FILE_MAX             39
+#define SYNTH_SYS_FILE_NR              40
+#define SYNTH_SYS_RANDOMIZE_VA_SPACE   41
 /* net/ipv6/conf, the directory of IPv6's settings, which holds those of
  * all interfaces, of the default for a new one, and of each interface the
  * caller sees, `lo`, the cards' and the radios', one directory for each of
  * the SYNTH_IPV6_IFACES slots an interface holds while it is there
  * (`netdev_slot`, NETDEV_MAX + 1 of them); and the files of each, in this
  * order, which procfs reads and writes through nd6.h. */
-#define SYNTH_SYS_IPV6_CONF          43
-#define SYNTH_IPV6_IFACES            5
-#define SYNTH_IPV6_DIRS              (2 + SYNTH_IPV6_IFACES)
-#define SYNTH_IPV6_ACCEPT_RA         0
-#define SYNTH_IPV6_AUTOCONF          1
-#define SYNTH_IPV6_DISABLE           2
-#define SYNTH_IPV6_FORWARDING        3
-#define SYNTH_IPV6_RA_DEFRTR_METRIC  4
-#define SYNTH_IPV6_STABLE_SECRET     5
-#define SYNTH_IPV6_USE_TEMPADDR      6
-#define SYNTH_IPV6_KEYS              7
+#define SYNTH_SYS_IPV6_CONF            43
+#define SYNTH_IPV6_IFACES              5
+#define SYNTH_IPV6_DIRS                (2 + SYNTH_IPV6_IFACES)
+#define SYNTH_IPV6_ACCEPT_RA           0
+#define SYNTH_IPV6_AUTOCONF            1
+#define SYNTH_IPV6_DISABLE             2
+#define SYNTH_IPV6_FORWARDING          3
+#define SYNTH_IPV6_RA_DEFRTR_METRIC    4
+#define SYNTH_IPV6_STABLE_SECRET       5
+#define SYNTH_IPV6_USE_TEMPADDR        6
+#define SYNTH_IPV6_KEYS                7
 /* The entries of net/ipv4's tcp_keepalive_time, tcp_keepalive_intvl,
  * tcp_keepalive_probes, tcp_mtu_probing and tcp_retries2, in that order,
  * whose values procfs reads from tcp.h's variables. */
-#define SYNTH_SYS_TCP_KEEPALIVE_TIME 44
-#define SYNTH_SYS_TCP_RETRIES2       48
+#define SYNTH_SYS_TCP_KEEPALIVE_TIME   44
+#define SYNTH_SYS_TCP_RETRIES2         48
 /* The entry of user/max_mnt_namespaces, whose value is the limit of the
  * reader's user namespace, which procfs reads and writes through ns.h. */
-#define SYNTH_SYS_MAX_MNT_NAMESPACES 53
+#define SYNTH_SYS_MAX_MNT_NAMESPACES   53
+/* The entry of fs/pipe-max-size, whose value procfs reads from and writes
+ * to ipc/pipe.h's `pipe_max_size`. */
+#define SYNTH_SYS_PIPE_MAX_SIZE        54
+/* The entries of fs/pipe-user-pages-hard and fs/pipe-user-pages-soft, whose
+ * values are ipc/pipe.h's `pipe_user_pages_hard` and `_soft`. */
+#define SYNTH_SYS_PIPE_USER_PAGES_HARD 55
+#define SYNTH_SYS_PIPE_USER_PAGES_SOFT 56
+/* The entries of kernel/panic and kernel/panic_on_oops, whose values are
+ * panic.h's `panic_timeout` and `panic_on_oops`. */
+#define SYNTH_SYS_PANIC                57
+#define SYNTH_SYS_PANIC_ON_OOPS        58
 /**
  * Whether `entry` is under net/ipv6/conf: 1 with the name of its directory
  * in `*dir`, `all`, `default` or an interface's, and in `*key` the
@@ -443,10 +483,15 @@ const char *synth_sysvipc_name(int origin);
  * as dmi.h's DMI_ fields, and modalias follows them. */
 #define SYSFS_DMI_ID          57
 #define SYSFS_DMI_MODALIAS    22
+#define SYSFS_KERNEL_MM       58 /* /sys/kernel/mm */
+#define SYSFS_THP             59 /* /sys/kernel/mm/transparent_hugepage */
+#define SYSFS_THP_PMD_SIZE    3  /* its hpage_pmd_size, the one read-only file */
 
 /* The `procfile` of each file of a PCI function's directory, by Linux's
  * names (`sysfs_pci_attr`); 1 has no file, since 1 + 1 is the inode number
- * of the function's link. boot_vga is there only for a VGA function. */
+ * of the function's link. boot_vga is there only for a VGA function and a
+ * resourceN file only for a BAR with a length; resourceN_wc also needs a
+ * prefetchable memory BAR and write-combining (`sysfs_pci_attr_present`). */
 #define SYSFS_PCI_UEVENT           0
 #define SYSFS_PCI_VENDOR           3
 #define SYSFS_PCI_DEVICE_ID        4
@@ -455,7 +500,13 @@ const char *synth_sysvipc_name(int origin);
 #define SYSFS_PCI_CLASS            7
 #define SYSFS_PCI_REVISION         8
 #define SYSFS_PCI_BOOT_VGA         9
-#define SYSFS_PCI_ATTRS            10
+#define SYSFS_PCI_RESOURCE         10
+/* resource0 to resource5, and resource0_wc to resource5_wc, as Linux's
+ * pci_create_resource_files makes them. */
+#define SYSFS_PCI_RESOURCE0        11
+#define SYSFS_PCI_BARS             6
+#define SYSFS_PCI_RESOURCE0_WC     17
+#define SYSFS_PCI_ATTRS            23
 
 /** The name of the file `attr` of a PCI function's directory, or NULL for a
  * number with none. */
@@ -512,8 +563,8 @@ int sysfs_attr_uevent(int node, int attr);
 
 /** Whether the attribute `attr` of `node` takes a privileged write:
  * rtc0's wakealarm, /sys/power's state, a backlight's brightness and
- * bl_power, a radio switch's soft and state, and a device's uevent
- * (`sysfs_attr_uevent`). */
+ * bl_power, a radio switch's soft and state, a device's uevent
+ * (`sysfs_attr_uevent`), and each transparent-hugepage policy file. */
 int sysfs_attr_writable(int node, int attr);
 
 /** The interfaces' part, in procfs.c: the index of the interface named by

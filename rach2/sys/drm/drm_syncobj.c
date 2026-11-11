@@ -345,6 +345,10 @@ int32_t drm_syncobj_find_fence(struct drm_file *file, uint32_t handle, uint64_t 
     int32_t rc;
 
     *fence = NULL;
+    if (flags & ~(uint32_t)DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT) {
+        drm_syncobj_put(s);
+        return -EINVAL;
+    }
     if (!s) {
         return -ENOENT;
     }
@@ -863,7 +867,8 @@ int32_t drm_syncobj_transfer_ioctl(struct drm_device *dev, void *data, struct dr
 
 /** The wait of SYNCOBJ_WAIT and SYNCOBJ_TIMELINE_WAIT, whose flags,
  * timeout and hint `a` holds: the syncobjs of `count` handles at the user
- * address `handles`, at the points at `points`, or 0 for none. */
+ * address `handles`, at the points at `points`, or 0 for none. No handles
+ * is 0 at once, as Linux. */
 static int32_t wait_ioctl(struct drm_file *file, struct array_wait *a, uint64_t handles,
                           uint64_t points)
 {
@@ -871,7 +876,7 @@ static int32_t wait_ioctl(struct drm_file *file, struct array_wait *a, uint64_t 
     int32_t rc;
 
     if (a->count == 0) {
-        return -EINVAL;
+        return 0;
     }
     rc = array_find(file, handles, a->count, &a->objs);
     if (rc) {
@@ -1066,13 +1071,10 @@ int32_t drm_syncobj_timeline_signal_ioctl(struct drm_device *dev, void *data, st
         return -ENOMEM;
     }
     stub = dma_fence_get_stub();
+    /* Linux chains every point, 0 too, which keeps the object a timeline. */
     for (i = 0; i < n; i++) {
-        if (points[i]) {
-            drm_syncobj_add_point(objs[i], chains[i], stub, points[i]);
-            chains[i] = NULL;
-        } else {
-            drm_syncobj_replace_fence(objs[i], stub);
-        }
+        drm_syncobj_add_point(objs[i], chains[i], stub, points[i]);
+        chains[i] = NULL;
     }
     dma_fence_put(stub);
     for (i = 0; i < n; i++) {

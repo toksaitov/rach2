@@ -1187,10 +1187,12 @@ static int irq_on = 1;
 static int ports_with_irq_on;
 static isr_handler_t registered_handler;
 static int warnings;
+static int debug_messages;
 static const char *last_warning;
 static const char *last_info;
 static int waits;
 static uint32_t waited_us;
+static int waits_irq_on; /* those made with interrupts on */
 
 /** Put `data` in the output buffer behind what waits there. */
 static void model_put(uint8_t data)
@@ -1519,14 +1521,48 @@ void k_udelay(uint32_t usec)
 {
     waits++;
     waited_us += usec;
+    if (irq_on) {
+        waits_irq_on++;
+    }
+}
+
+/** No sysfs tree is published by this model. */
+void evdev_sysfs_serio_remove(int port)
+{
+    (void)port;
+}
+
+/** This model has no competing command caller. */
+int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    (void)wq;
+    return cond(arg) ? 0 : -EINTR;
 }
 
 /* What the guest of a Synaptics pad's pass-through port needs, which an
  * Elantech pad never calls; trackpoint_hosttest.c tests it. */
+void evdev_sysfs_serio_add(int port)
+{
+    (void)port;
+}
+
 void evdev_sysfs_serio_files(int port, int (*add)(int dir))
 {
     (void)port;
     (void)add;
+}
+
+void evdev_sysfs_serio_driver(int port, int (*add)(int dir))
+{
+    (void)port;
+    (void)add;
+}
+
+int alps_poll(uint8_t badbyte, uint8_t *buf)
+{
+    (void)badbyte;
+    (void)buf;
+    return -1;
 }
 
 int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg)
@@ -1555,6 +1591,8 @@ void klog(int level, const char *subsystem, const char *format, ...)
         last_warning = format;
     } else if (level == KLOG_INFO) {
         last_info = format;
+    } else if (level == KLOG_DEBUG) {
+        debug_messages++;
     }
 }
 
@@ -1578,6 +1616,14 @@ int alps_byte(uint8_t data)
 
 /* The rest of alps.h, which a port without an ALPS pad never calls;
  * alps_hosttest.c tests it. */
+void alps_packet_restart(void)
+{}
+
+int alps_reset_after(void)
+{
+    return 12;
+}
+
 int alps_packet_start(void)
 {
     return 1;
@@ -1633,6 +1679,14 @@ void input_get_repeat(int *delay_ms, int *period_ms)
 {
     *delay_ms = 250;
     *period_ms = 33;
+}
+
+/** No keyboard here takes its keys through input.c. */
+int input_keyboard_release(struct evdev *dev, unsigned int keycode)
+{
+    (void)dev;
+    (void)keycode;
+    return 0;
 }
 
 void input_set_repeat(int delay_ms, int period_ms)
@@ -1875,6 +1929,7 @@ static void model_reset(int kind, int p)
     last_info = 0;
     waits = 0;
     waited_us = 0;
+    waits_irq_on = 0;
     etd_pktcnt = 0;
     etd_sync_losses = 0;
     k_memset(etd_mt, 0, sizeof(etd_mt));
@@ -1932,17 +1987,28 @@ static void expect_custom(const uint8_t *seq, int n, uint8_t end)
     expect(end);
 }
 
-/** Expect the bring-up's start, the reset and the defaults, the Synaptics
+/** Expect the bring-up's start, the reset and the defaults, a Kensington
+ * ThinkingMouse's rates and ID, which psmouse tries first, the Synaptics
  * knock, which an Elantech pad does not answer as a Synaptics pad, and the
  * Elantech magic knock with its firmware query, Linux's
  * `elantech_detect`. */
 static void expect_start(void)
 {
+    static const uint8_t thinking[9] = {20, 60, 40, 20, 20, 60, 40, 20, 20};
     int i;
 
     n_want = 0;
     expect(0xFF);
     expect(0xF6);
+    expect(0xF3);
+    expect(10);
+    expect(0xE8);
+    expect(0x00);
+    for (i = 0; i < 9; i++) {
+        expect(0xF3);
+        expect(thinking[i]);
+    }
+    expect(0xF2);
     for (i = 0; i < 4; i++) {
         expect(0xE8);
         expect(0x00);
@@ -2321,8 +2387,41 @@ static void packet_rows(void)
     }
 }
 
+/** Debug level 1 logs discarded cursor and stick packets, and dumps an
+ * unexpected stick packet once at both levels 1 and 2. */
+static void logging_rows(void)
+{
+    static const uint8_t jump[4] = {0x58, 0x00, 0x64, 0x64};
+    static const uint8_t range[6] = {0x14, 0x00, 0x80, 0x26, 0x80, 0x07};
+    static const uint8_t unknown[6] = {0x10, 0x00, 0x00, 0x16, 0x05, 0xfd};
+    int i, level;
+
+    CHECK("the jumpy pad comes up for its debug row", bring_up(V1_JUMPY));
+    etd_info.debug = 1;
+    debug_messages = 0;
+    for (i = 0; i < 4; i++) {
+        irq_byte(jump[i]);
+    }
+    CHECK("debug 1 logs a discarded jumpy-cursor packet", debug_messages == 1);
+    CHECK("the stick comes up for its debug row", bring_up(V3_STICK));
+    debug_messages = 0;
+    for (i = 0; i < 6; i++) {
+        irq_byte(range[i]);
+    }
+    CHECK("debug 1 logs an out-of-range stick packet", debug_messages == 1);
+    for (level = 0; level <= 2; level++) {
+        etd_info.debug = (uint8_t)level;
+        debug_messages = 0;
+        for (i = 0; i < 6; i++) {
+            irq_byte(unknown[i]);
+        }
+        CHECK("an unexpected stick packet is dumped once when debug is nonzero",
+              debug_messages == (level != 0));
+    }
+}
+
 /** The pointer of the mouse device moves with the stick, and a byte after
- * a pause starts a packet again. */
+ * a pause queues a resync and a failed poll reconnects the pad. */
 static void stream_rows(void)
 {
     static const uint8_t stick[6] = {0x21, 0x80, 0x00, 0x16, 0x05, 0xfd};
@@ -2343,10 +2442,19 @@ static void stream_rows(void)
     irq_byte(stick[0]);
     irq_byte(stick[1]);
     kernel_ticks += MS_TO_TICKS(600);
+    irq_byte(0);
+    CHECK("a pause inside the pad's packet queues a resync",
+          state == STATE_RESYNC && (reconnect_wanted & RESYNC_PORT));
+    ps2mouse_resync();
+    CHECK("the unanswered poll queues a reconnect",
+          state == STATE_IGNORE && (reconnect_wanted & RECONNECT_PORT));
+    ps2mouse_reconnect();
+    CHECK("the pad reports after reconnect", state == STATE_ACTIVE);
+
     for (i = 0; i < 6; i++) {
         irq_byte(finger[i]);
     }
-    CHECK("a packet broken off by a pause is dropped", etd_sync_losses == 1 && etd_pktcnt == 0);
+    CHECK("the interrupted packet stays discarded", etd_sync_losses == 0 && etd_pktcnt == 0);
     CHECK("the packet after the pause is read whole, a finger at 700",
           open_named(PAD, "ETPS/2 Elantech Touchpad") == 0 &&
               evdev_get_abs(etd_pad, ABS_X, &a) == 0 && a.value == 700);
@@ -2451,6 +2559,8 @@ static void reconnect_mouse_rows(void)
  * mice, as Linux's psmouse sets them up. */
 static void fallback_rows(void)
 {
+    uint64_t ticks_before;
+
     model_reset(KIND_LOGITECH, V4_CLICKPAD);
     CHECK("a mouse that answers the knock comes up", init_mouse() == 0);
     CHECK("its version, a rate, says it is no Elantech pad", touchpad == 0 && etd_pad == NULL);
@@ -2472,11 +2582,17 @@ static void fallback_rows(void)
     CHECK("as a mouse", touchpad == -TOUCHPAD_ELANTECH && etd_pad == NULL && etd_tp == NULL);
     CHECK("each command of the write tried three times, half a second apart",
           waits == 2 && waited_us == 1000000);
+    CHECK("with interrupts on while it waits, so that the ticks run", waits_irq_on == 2);
     CHECK("the refusal is logged",
           last_warning && strcmp(last_warning, "mode: the registers would not set") == 0);
     CHECK("it is reset and named PS/2 Elantech Touchpad",
           open_named(PAD, "PS/2 Elantech Touchpad") == 0 && reporting);
     CHECK("the failed setup touches no port with interrupts on", ports_with_irq_on == 0);
+    refuse_reg = -1;
+    reconnect_wanted = RECONNECT_PORT;
+    ps2mouse_reconnect();
+    CHECK("reconnect retries absolute mode after the refused register write",
+          touchpad == TOUCHPAD_ELANTECH && etd_pad && etd_tp && !mouse_dev && reporting);
 
     model_reset(KIND_PAD, V1_ROCKER);
     no_abs_bit = 1;
@@ -2490,6 +2606,16 @@ static void fallback_rows(void)
     CHECK("the read back tried again after three tries of half a second and two seconds",
           waits == 3 && waited_us == 3000000);
     CHECK("its registers are set", regs[0x10] == 0x54);
+    CHECK("each wait with interrupts on", waits_irq_on == 3 && irq_on);
+
+    drop_reads = 9;
+    waits = 0;
+    ticks_before = kernel_ticks;
+    reconnect_wanted = RECONNECT_PORT;
+    ps2mouse_reconnect();
+    CHECK("at its reconnect kpsmoused sleeps the same waits, as Linux's msleep does",
+          touchpad == TOUCHPAD_ELANTECH && waits == 0 &&
+              kernel_ticks - ticks_before == MS_TO_TICKS(3000) && regs[0x10] == 0x54);
 }
 
 int main(void)
@@ -2498,6 +2624,7 @@ int main(void)
     firmware_rows();
     capability_rows();
     packet_rows();
+    logging_rows();
     stream_rows();
     fallback_rows();
     reconnect_rows();

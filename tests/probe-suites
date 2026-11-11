@@ -52,6 +52,7 @@ musl/saltnoent noentropy
 musl/keygennoent noentropy
 musl/smpmusl smp
 musl/punchmusl punch
+musl/pagecachemusl large
 musl/clockloadmusl clock
 musl/textbusymusl textbusy
 musl/bindholdmusl textbusy
@@ -61,10 +62,12 @@ blankprobe screen
 musl/vdsomusl vdso
 musl/audioclientsmusl audio
 watchdogprobe watchdog
+pstoreprobe watchdog
 udmabufprobe dmabuf
 fenceprobe dmabuf
 drmfuzz dmabuf
 vgpuprobe vgpu
+vgshmprobe bed-shm
 i915gemprobe i915fake
 gpucompatprobe gpucompat
 i915execprobe i915fake
@@ -72,3 +75,4 @@ i915resetprobe i915fake
 mixprobe ia32
 ldtprobe ia32
 drmcompatprobe ia32
+musl/wakelatmusl wakelat

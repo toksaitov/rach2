@@ -18,8 +18,15 @@
 
 #include "smbios.h"
 #include "board.h"
+#include "efirt.h"
 #include "itco.h"
+#include "smpboot.h"
 #include "../../cmdline.h"
+#ifndef RACH2_HOSTTEST
+#include "../arch.h"
+#include "../../panic.h"
+#include "../../udelay.h"
+#endif
 
 /* The chipset reset control port. Bit 1 selects a hard reset and bit 2 is the
  * trigger, which acts on a transition from 0 to 1, so it takes two writes. */
@@ -198,7 +205,7 @@ static int firmware_takes_smi_reset(void)
  *
  * The first is the FADT's reset register, where the FADT says it has one:
  * the way ACPI defines, the register and the value the firmware publishes,
- * written in whatever space it gives. The other three ports are fixed, not
+ * written by `acpi_reset_write`. The other three ports are fixed, not
  * discovered, and the asymmetry with the power-off above is deliberate: that
  * one derives an address, and a wrong address would put a sleep word into a
  * live device, so it refuses unless it knows the address is right. Each of
@@ -238,11 +245,7 @@ static void power_reset(void)
     if (a->reset_supported && method++ >= skip) {
         klog(KLOG_INFO, "reboot", "acpi: writing 0x%x to the reset register",
              (unsigned)a->reset_value);
-        if (a->reset_reg.space == ACPI_SPACE_IO && a->reset_reg.address <= 0xFFFFu) {
-            outb((uint16_t)a->reset_reg.address, a->reset_value);
-        } else {
-            (void)acpi_gas_write(&a->reset_reg, a->reset_value);
-        }
+        acpi_reset_write(a);
         power_reset_settle();
     }
 
@@ -274,6 +277,265 @@ static void power_reset(void)
 /* A host test runs the requests above without ACPICA and the stop, whose
  * `cli` and `hlt` it can neither assemble on every host nor run. */
 #ifndef RACH2_HOSTTEST
+
+/* The methods of Linux's `reboot=` (include/linux/reboot.h, `reboot_type`),
+ * by the letters it reads: the FADT's reset register, the keyboard
+ * controller, EFI's ResetSystem, the BIOS's restart, port 0xCF9 forced and
+ * as Linux's PCI probe allows it, and a triple fault. */
+#define REBOOT_ACPI     'a'
+#define REBOOT_KBD      'k'
+#define REBOOT_EFI      'e'
+#define REBOOT_BIOS     'b'
+#define REBOOT_CF9      'p'
+#define REBOOT_CF9_SAFE 'q'
+#define REBOOT_TRIPLE   't'
+
+/* The BIOS data area's reset flag, which the BIOS reads at its next start:
+ * 0x1234 skips the memory test, a warm start. */
+#define BIOS_RESET_FLAG_PHYS 0x472u
+#define BIOS_RESET_WARM      0x1234u
+
+/* What `reboot=` gave: the method to start from, and the reset's warmth,
+ * for every restart and for a panic's, where -1 is none given. */
+struct reboot_options {
+    char type;
+    int warm;
+    int panic_warm;
+};
+
+/**
+ * Read every `reboot=` of the boot line into `*o`, in order, as Linux's
+ * `reboot_setup` reads each (kernel/reboot.c): a list split by commas, each
+ * item judged by its first letter after an optional `panic_`, which makes a
+ * mode the panic's alone. `w` is warm, and `c`, `h`, `g` and `s` without a
+ * processor number are modes that are not warm; `s` with a number names the
+ * processor to restart on, which a panic does not move to, and is passed
+ * over; `a`, `k`, `t`, `e`, `b` and `p` name the method; `f`, which spares a
+ * restart its shutdown, has no meaning here, where the caller shuts down;
+ * any other letter is passed over, as Linux passes it over.
+ */
+static void reboot_read(struct reboot_options *o)
+{
+    char value[64];
+    const char *p;
+    int nth, *mode;
+
+    o->type = REBOOT_ACPI;
+    o->warm = 0;
+    o->panic_warm = -1;
+    for (nth = 0; kcmdline_value_nth("reboot", nth, value, (unsigned int)sizeof(value)); nth++) {
+        for (p = value; *p != '\0';) {
+            mode = &o->warm;
+            if (p[0] == 'p' && p[1] == 'a' && p[2] == 'n' && p[3] == 'i' && p[4] == 'c' &&
+                p[5] == '_') {
+                mode = &o->panic_warm;
+                p += 6;
+            }
+            switch (*p) {
+            case 'w':
+                *mode = 1;
+                break;
+            case 'c':
+            case 'h':
+            case 'g':
+                *mode = 0;
+                break;
+            case 's':
+                p += p[1] == 'm' && p[2] == 'p' ? 3 : 1;
+                if (*p < '0' || *p > '9') {
+                    *mode = 0;
+                }
+                break;
+            case 'a':
+            case 'k':
+            case 't':
+            case 'e':
+            case 'b':
+            case 'p':
+                o->type = *p;
+                break;
+            default:
+                break;
+            }
+            while (*p != '\0' && *p != ',') {
+                p++;
+            }
+            if (*p == ',') {
+                p++;
+            }
+        }
+    }
+}
+
+/* CMOS's index port, whose bit 7 masks the NMI, and its data port; and the
+ * shutdown status byte, which a BIOS reads at its start, 0 for a reset. */
+#define CMOS_INDEX_PORT      0x70
+#define CMOS_DATA_PORT       0x71
+#define CMOS_NMI_OFF         0x80u
+#define CMOS_SHUTDOWN_STATUS 0x0Fu
+
+/**
+ * Restart through the BIOS, as Linux's `machine_real_restart(MRR_BIOS)`
+ * does (arch/x86/kernel/reboot.c:97-131): CMOS's shutdown status set to 0,
+ * a proper reset, with the NMI masked by the same write, then the jump to
+ * the BIOS's reset entry in real mode (`smpboot_bios_restart`). Returns
+ * only when that page below 1 MiB is not free; nothing is written then.
+ */
+static void reboot_bios(void)
+{
+    if (!smpboot_bios_restart_ready()) {
+        return;
+    }
+    outb(CMOS_INDEX_PORT, (uint8_t)(CMOS_NMI_OFF | CMOS_SHUTDOWN_STATUS));
+    outb(CMOS_DATA_PORT, 0x00);
+    smpboot_bios_restart();
+}
+
+/** Log `what`, the method about to be tried, the first time it is tried;
+ * `tried` holds a bit for each letter already logged. */
+static void reboot_say(uint32_t *tried, char type, const char *what)
+{
+    uint32_t bit = 1u << (type - 'a');
+
+    if ((*tried & bit) == 0) {
+        *tried |= bit;
+        klog(KLOG_INFO, "reboot", "emergency: %s", what);
+    }
+}
+
+/**
+ * Write the FADT's reset value to its reset register, as Linux's
+ * `acpi_reboot` does (drivers/acpi/reboot.c:36-82): only where the FADT,
+ * revision 2 or later, says it has one (`reset_supported`), a byte in I/O
+ * or PCI space as `acpi_reset_write` says, and then wait 15 ms, which some
+ * machines take to act before the next method could race them.
+ */
+static void reboot_acpi(void)
+{
+    const struct acpi_info *a = acpi_get();
+
+    if (!a->reset_supported) {
+        return;
+    }
+    acpi_reset_write(a);
+    k_udelay(15000);
+}
+
+/**
+ * Wait, as Linux's `kb_wait` does, until the keyboard controller's input
+ * buffer is empty, or 0x10000 reads 2 us apart have found it full.
+ */
+static void reboot_kb_wait(void)
+{
+    int i;
+
+    for (i = 0; i < 0x10000; i++) {
+        if ((inb(KBC_STATUS_PORT) & KBC_INPUT_FULL) == 0) {
+            break;
+        }
+        k_udelay(2);
+    }
+}
+
+/**
+ * Load an empty interrupt table and raise a breakpoint: the processor finds
+ * no gate for it, nor for the faults that follow, and shuts down, which a PC
+ * turns into a reset. The ten zero bytes are a limit of 0 and a base of 0 in
+ * the form either `lidt` reads, six bytes on i686 and ten on x86-64.
+ */
+static void reboot_triple_fault(void)
+{
+    static const uint16_t no_idt[5];
+
+    __asm__ __volatile__("lidt (%0)\n\tint3" : : "r"(no_idt) : "memory");
+}
+
+/**
+ * The loop of Linux's `native_machine_emergency_restart`, method by method,
+ * as power.h describes it. Linux tries 0xCF9 in its default order only once
+ * its PCI probe has found configuration mechanism 1 or 2
+ * (arch/x86/pci/direct.c, `port_cf9_safe`); this kernel reaches PCI through
+ * mechanism 1 or the MCFG window on every PC it runs on (pciconf.c), so the
+ * port is safe here from the start. The warm reset's value at 0xCF9 is 0x06,
+ * a cold one's 0x0E, whose bit 3 asks the chipset to cycle the power too,
+ * with the register's other bits kept, as Linux writes them.
+ */
+static void reboot_linux(void)
+{
+    struct reboot_options o;
+    char type, first;
+    int attempt = 0, i, warm;
+    uint32_t tried = 0;
+    uint8_t code, cf9;
+
+    reboot_read(&o);
+    warm = k_panicking() && o.panic_warm >= 0 ? o.panic_warm : o.warm;
+    *(volatile uint16_t *)phys_to_virt(BIOS_RESET_FLAG_PHYS) =
+        (uint16_t)(warm ? BIOS_RESET_WARM : 0u);
+    type = first = o.type;
+    for (;;) {
+        switch (type) {
+        case REBOOT_ACPI:
+            reboot_say(&tried, type,
+                       acpi_get()->reset_supported ? "acpi reset register"
+                                                   : "acpi: the fadt has no reset register");
+            reboot_acpi();
+            type = REBOOT_KBD;
+            break;
+        case REBOOT_KBD:
+            reboot_say(&tried, type, "keyboard controller");
+            for (i = 0; i < 10; i++) {
+                reboot_kb_wait();
+                k_udelay(50);
+                outb(KBC_COMMAND_PORT, KBC_PULSE_RESET);
+                k_udelay(50);
+            }
+            if (attempt == 0 && first == REBOOT_ACPI) {
+                attempt = 1;
+                type = REBOOT_ACPI;
+            } else {
+                type = REBOOT_EFI;
+            }
+            break;
+        case REBOOT_EFI:
+            reboot_say(&tried, type, efirt_absent() ? efirt_absent() : "efi resetsystem");
+            efirt_reset(warm);
+            type = REBOOT_BIOS;
+            break;
+        case REBOOT_BIOS:
+            reboot_say(&tried, type,
+                       smpboot_bios_restart_ready() ? "bios restart"
+                                                    : "bios: the page below 1 mib is not free");
+            reboot_bios();
+            type = REBOOT_CF9_SAFE;
+            break;
+        case REBOOT_CF9:
+        case REBOOT_CF9_SAFE:
+            reboot_say(&tried, REBOOT_CF9, "port 0xcf9");
+            code = (uint8_t)(warm ? 0x06u : 0x0Eu);
+            cf9 = (uint8_t)(inb(RESET_CONTROL_PORT) & ~code);
+            outb(RESET_CONTROL_PORT, (uint8_t)(cf9 | 0x02u));
+            k_udelay(50);
+            outb(RESET_CONTROL_PORT, (uint8_t)(cf9 | code));
+            k_udelay(50);
+            type = REBOOT_TRIPLE;
+            break;
+        default:
+            reboot_say(&tried, REBOOT_TRIPLE, "triple fault");
+            reboot_triple_fault();
+            type = REBOOT_KBD;
+            break;
+        }
+    }
+}
+
+void power_emergency_restart(void)
+{
+    arch_irq_disable();
+    reboot_linux();
+    for (;;) {
+    }
+}
 
 void power_prepare(int how)
 {
@@ -337,6 +599,9 @@ void power_stop(int how)
         power_acpi_s5();
         power_board_off();
     } else if (how == POWER_RESTART) {
+        if (kcmdline_count("reboot") > 0) {
+            reboot_linux();
+        }
         power_reset();
     }
     klog(KLOG_INFO, "halt", "system halted");

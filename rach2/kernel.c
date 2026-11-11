@@ -29,6 +29,7 @@
 #include "sys/block/mbr.h"
 #include "sys/block/loop.h"
 #include "sys/fs/devfs.h"
+#include "sys/fs/procfs.h"
 #include "sys/fs/vfs.h"
 #include "sys/fs/ext2.h"
 #include "sys/proc/process.h"
@@ -48,6 +49,7 @@
 #include "sys/fs/krffs.h"
 #include "sys/timer.h"
 #include "sys/platform.h"
+#include "sys/pstore/pstore.h"
 #include "sys/boot.h"
 #include "sys/latency.h"
 #include "sys/input.h"
@@ -288,7 +290,8 @@ static void timer_wake_pass(void)
  * Whether this processor, not the boot one, whose tick has the big lock,
  * should make the timer pass: the tick count has not moved over two of its
  * ticks, so the boot processor's pass is a tick or more late, as when its
- * tick waits for the lock that a long call on this processor holds; and a
+ * tick found the lock held, by a long call on this processor or another,
+ * and ended without it (`_irq_router`, arch/x86/isr.c); and a
  * reference keeps the clock, so that any processor may count the tick
  * (`timer_tick_shared`), whose count then comes from the reference and not
  * from this processor's ticks. Linux's timers fire from whichever
@@ -3929,12 +3932,15 @@ static void start_audio(void)
 
 /**
  * Start the network unless `rach2.nonet` is given: the wired card, the
- * network console with `rach2.netconsole`, then the simulated radios and
- * the ath9k card, which needs the wireless registry, logging what each start
- * found.
+ * network console's targets with `netconsole=` and its frames with
+ * `rach2.netconsole`, then the simulated radios and the ath9k card, which
+ * needs the wireless registry, logging what each start found. Of several
+ * `netconsole=`, the last is read, as Linux's `option_setup` keeps the last
+ * one it is called with (drivers/net/netconsole.c).
  */
 static void start_network(void)
 {
+    static char targets[BOOT_CMDLINE_MAX];
     int radios;
 
     if (kcmdline_has("rach2.nonet")) {
@@ -3944,7 +3950,11 @@ static void start_network(void)
     klog(KLOG_INFO, "net", "started");
     if (init_network()) {
         klog(KLOG_INFO, "net", "ready: %s", net_status());
-        if (kcmdline_has("rach2.netconsole")) {
+        if (kcmdline_count("netconsole") > 0 &&
+            kcmdline_value_nth("netconsole", kcmdline_count("netconsole") - 1, targets,
+                               sizeof(targets))) {
+            (void)netconsole_setup(targets, kcmdline_has("rach2.netconsole"));
+        } else if (kcmdline_has("rach2.netconsole")) {
             netconsole_enable();
         }
         net_print_info();
@@ -3974,7 +3984,9 @@ static void start_network(void)
  * read it, and the panic's record goes to the port and netconsole. The
  * command line is taken next (`kcmdline_capture`), from the boot record's own
  * copy of the loader's string, before the first boot option is read; a line
- * too long to keep whole is logged as cut (`capture_cmdline`).
+ * too long to keep whole is logged as cut (`capture_cmdline`). `panic=` and
+ * `oops=panic` are read at once (`k_panic_setup`), so that a panic from then
+ * on resets as they ask; one before halts.
  * `rach2.loglevel=N` sets how much of the log the screen shows; the ring and
  * the port keep every record, and a boot being brought up wants all of them
  * on the screen, since the screen is then the only instrument there is.
@@ -4074,6 +4086,7 @@ void kernel_main(const struct boot_info *boot)
     }
 
     capture_cmdline(boot->cmdline);
+    k_panic_setup();
 
     {
         char level[8];
@@ -4126,6 +4139,7 @@ void kernel_main(const struct boot_info *boot)
             }
         }
         platform_memory_reserve(&map);
+        ramoops_reserve(&map, boot);
         init_paging(&map);
         guard_boot_stack();
         map_modules();
@@ -4144,10 +4158,12 @@ void kernel_main(const struct boot_info *boot)
         }
     }
     klog(KLOG_DEBUG, "boot", "paging: ready");
+    ramoops_init();
 
     init_pagecache();
     klog(KLOG_DEBUG, "boot", "page cache: ready");
     init_filecache();
+    procfs_thp_boot();
 
     platform_firmware_init(boot);
 
@@ -4325,6 +4341,7 @@ void kernel_main(const struct boot_info *boot)
     start_network();
 
     drm_start();
+    pstore_start();
 #if defined(__x86_64__)
     kvm_start();
     vfio_start();

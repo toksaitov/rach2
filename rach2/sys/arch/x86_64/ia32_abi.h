@@ -166,6 +166,14 @@ struct ia32_statfs64 {
     uint32_t f_spare[4];
 };
 
+/* compat_ustat, of ustat: 32-bit counts, 20 bytes. */
+struct ia32_ustat {
+    int32_t f_tfree;
+    uint32_t f_tinode;
+    char f_fname[6];
+    char f_fpack[6];
+};
+
 /* compat_flock, of fcntl's F_GETLK, F_SETLK and F_SETLKW: 32-bit offsets. */
 struct ia32_flock {
     int16_t l_type;

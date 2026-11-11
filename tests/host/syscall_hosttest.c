@@ -1,12 +1,13 @@
 /**
  * Host test of system calls of syscall.c and syscall_net.c: a connect whose
- * handshake ended, a datagram a full queue lost, the clocks past 2^32 ticks
- * and their resolutions, and the sleeps and the interval timer, with their
- * deadlines, masks, remainders, clamps and checks of arguments.
+ * handshake ended, a datagram a full queue lost, a stream's sendmsg and the
+ * SIGPIPE it posts, the clocks past 2^32 ticks and their resolutions, and
+ * the sleeps and the interval timer, with their deadlines, masks,
+ * remainders, clamps and checks of arguments.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/network/socket/address.c rach2/sys/network/ip6/addr6.c
- * host-deps: rach2/sys/tick.c
+ * host-deps: rach2/sys/tick.c tests/host/compat/kheap_host.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
  *
  * The system calls no row makes are declared static before the sources are
@@ -18,6 +19,8 @@
 #include "fs/fd.h"
 struct tty;
 static struct tty *fd_tty(fd_entry_t *entry);
+static int fd_tty_hung(fd_entry_t *e);
+static long sys_vhangup(isr_params_t *params);
 static void init_syscall(void);
 static int32_t raw_seek_resolve(uint64_t cur, uint64_t size, long long delta, int whence,
                                 uint64_t *out);
@@ -65,6 +68,9 @@ static long sys_socket(isr_params_t *params);
 static long sys_socketpair(isr_params_t *params);
 struct kernel_msghdr;
 struct kernel_cmsghdr;
+struct kernel_iovec;
+static int32_t stream_readv(struct fd_entry *entry, const struct kernel_iovec *iov, uint32_t iovlen,
+                            int flags);
 static int socketcall_nargs(int call);
 static int32_t socket_call(int call, unsigned long *args);
 static long sys_recvmmsg_time64(isr_params_t *params);
@@ -109,6 +115,15 @@ struct netdev *socket_iface6(const struct socket *s, int ifindex)
 {
     (void)s;
     return ifindex > 0 ? netdev_at(ifindex - 1) : NULL;
+}
+
+static int sigpipes; /* the SIGPIPEs posted to the caller */
+
+/** Count a SIGPIPE posted to the caller, the one signal a row posts. */
+void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
+{
+    (void)info;
+    sigpipes += t == &proc && signo == SIGPIPE;
 }
 
 /** No row sets an option of a netlink socket, which this refuses. */
@@ -1501,6 +1516,227 @@ static void queue_full(void)
     CHECK(dgram_sent(-EMSGSIZE, 8) == -EMSGSIZE, "a raw datagram too long is an error");
 }
 
+/** No row's descriptor is the query descriptor. */
+int sock_is_query(const struct socket *s)
+{
+    (void)s;
+    return 0;
+}
+
+/** Nothing: a row's socket is not freed. */
+void socket_ref(struct socket *s)
+{
+    (void)s;
+}
+
+/** Nothing: a row's socket is not freed. */
+void socket_unref(struct socket *s)
+{
+    (void)s;
+}
+
+/** No row sends on a netlink socket: -EINVAL. */
+int32_t netlink_send_to(struct socket *s, const uint8_t *buf, uint32_t len,
+                        const struct nl_dest *dst)
+{
+    (void)s;
+    (void)buf;
+    (void)len;
+    (void)dst;
+    CHECK(0, "no row sends on a netlink socket");
+    return -EINVAL;
+}
+
+/** No address is the machine's own: no row sends on a raw IPv6 socket. */
+int net_addr_local(net_addr_t a)
+{
+    (void)a;
+    return 0;
+}
+
+/** No row sends an IPv6 datagram: -EINVAL. */
+int ip6_tx_whole(const uint8_t *dg, uint32_t len, const uint8_t *dst, int ifindex)
+{
+    (void)dg;
+    (void)len;
+    (void)dst;
+    (void)ifindex;
+    CHECK(0, "no row sends an IPv6 datagram");
+    return -EINVAL;
+}
+
+/** No row sends an ICMPv6 message: -EINVAL. */
+int icmp6_send_opts(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t *msg, uint16_t len,
+                    uint8_t hlim, int opts)
+{
+    (void)src;
+    (void)dst;
+    (void)ifindex;
+    (void)msg;
+    (void)len;
+    (void)hlim;
+    (void)opts;
+    CHECK(0, "no row sends an ICMPv6 message");
+    return -EINVAL;
+}
+
+/** No row sends on a raw IPv6 socket: its hop limit is never asked. */
+uint8_t socket_hops6(const struct socket *s, const uint8_t *dst, int ifindex)
+{
+    (void)s;
+    (void)dst;
+    (void)ifindex;
+    return 64;
+}
+
+/** No row sends on a raw socket: -EINVAL. */
+int raw_echo_stamp(struct socket *s, uint8_t *msg, int len, uint8_t request)
+{
+    (void)s;
+    (void)msg;
+    (void)len;
+    (void)request;
+    CHECK(0, "no row sends on a raw socket");
+    return -EINVAL;
+}
+
+/** No row sends on a raw socket: its checksum is never asked. */
+uint16_t ip_checksum(const uint8_t *buf, uint16_t len)
+{
+    (void)buf;
+    (void)len;
+    return 0;
+}
+
+/** Store `value` big-endian at `p`. */
+void write16be(uint8_t *p, uint16_t value)
+{
+    p[0] = (uint8_t)(value >> 8);
+    p[1] = (uint8_t)value;
+}
+
+/** No row sends on a raw socket: -EINVAL. */
+int ip_tx_opts(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen,
+               uint8_t ttl, int pmtudisc, int ifindex)
+{
+    (void)src;
+    (void)dst_ip;
+    (void)proto;
+    (void)payload;
+    (void)plen;
+    (void)ttl;
+    (void)pmtudisc;
+    (void)ifindex;
+    CHECK(0, "no row sends on a raw socket");
+    return -EINVAL;
+}
+
+/** Nothing: no row sends an ICMP message. */
+void icmp_count_out(uint8_t type)
+{
+    (void)type;
+}
+
+/** No row sends on a packet socket: -EINVAL. */
+int packet_send(struct socket *s, int ifindex, const uint8_t *dst_mac, uint16_t ethertype,
+                const uint8_t *data, uint16_t len)
+{
+    (void)s;
+    (void)ifindex;
+    (void)dst_mac;
+    (void)ethertype;
+    (void)data;
+    (void)len;
+    CHECK(0, "no row sends on a packet socket");
+    return -EINVAL;
+}
+
+/* What `socket_tcp_send` answers to the calls of a row, the bytes sent or
+ * -errno, and the calls made. */
+static int32_t stream_answer[2];
+static int stream_sends;
+
+/** Answer the row's next call from `stream_answer`, no more than `len`
+ * bytes, and -EPIPE past its two. */
+int socket_tcp_send(struct socket *s, const uint8_t *buf, int len, int nonblock)
+{
+    int32_t answer;
+
+    (void)s;
+    (void)buf;
+    (void)nonblock;
+    if (stream_sends >= 2) {
+        return -EPIPE;
+    }
+    answer = stream_answer[stream_sends++];
+    return answer > len ? len : answer;
+}
+
+/** Read element `i` of the vector at the offset `uvec` of user memory, in
+ * the host's layout: 0, or -EFAULT outside it. */
+int iov_fetch(struct kernel_iovec *iov, uintptr_t uvec, uint32_t i)
+{
+    return copy_from_user(iov, (const void __user *)(uvec + i * sizeof(*iov)), sizeof(*iov)) != 0
+               ? -EFAULT
+               : 0;
+}
+
+/** Put a vector of `n` elements of the lengths `lens` at offset 512 of user
+ * memory, each element's bytes at a place of its own past offset 600. */
+static void stream_vector(const unsigned long *lens, uint32_t n)
+{
+    struct kernel_iovec v;
+    uint32_t i;
+
+    for (i = 0; i < n; i++) {
+        v.iov_base = 600 + 64 * i;
+        v.iov_len = lens[i];
+        k_memcpy(user + 512 + i * sizeof(v), &v, sizeof(v));
+    }
+}
+
+/**
+ * A stream's sendmsg posts SIGPIPE only for an error it returns, as
+ * Linux's tcp_sendmsg returns what it copied and sk_stream_error posts the
+ * signal: a vector whose first element goes and whose second fails with
+ * EPIPE returns the first's count with no signal; one whose first fails
+ * posts it, but under MSG_NOSIGNAL; and a vector with no byte, of empty
+ * elements or of none, is a send of 0 bytes, which fails after a shutdown
+ * as any send does, with the signal.
+ */
+static void stream_sendmsg(void)
+{
+    static const unsigned long two[2] = {4, 4}, empty[2] = {0, 0};
+
+    sock.type = SOCK_STREAM;
+    entry.type = FD_TYPE_SOCKET;
+    entry.sock = &sock;
+    entry.ofd = &description;
+    description.status_flags = 0;
+    stream_vector(two, 2);
+    stream_answer[0] = 4;
+    stream_answer[1] = -EPIPE;
+    stream_sends = 0;
+    sigpipes = 0;
+    CHECK(sendmsg_stream(3, 512, 2, 0) == 4 && stream_sends == 2 && sigpipes == 0,
+          "a sendmsg whose second element fails returns the first's count with no SIGPIPE");
+    stream_answer[0] = -EPIPE;
+    stream_sends = 0;
+    CHECK(sendmsg_stream(3, 512, 2, 0) == -EPIPE && sigpipes == 1,
+          "a sendmsg whose first element fails with EPIPE posts SIGPIPE");
+    stream_sends = 0;
+    CHECK(sendmsg_stream(3, 512, 2, MSG_NOSIGNAL) == -EPIPE && sigpipes == 1,
+          "and one under MSG_NOSIGNAL posts none");
+    stream_vector(empty, 2);
+    stream_sends = 0;
+    CHECK(sendmsg_stream(3, 512, 2, 0) == -EPIPE && stream_sends == 1 && sigpipes == 2,
+          "a sendmsg of empty elements after a shutdown is EPIPE, with SIGPIPE");
+    stream_sends = 0;
+    CHECK(sendmsg_stream(3, 512, 0, MSG_NOSIGNAL) == -EPIPE && stream_sends == 1 && sigpipes == 2,
+          "and one of no element under MSG_NOSIGNAL is EPIPE with none");
+    entry.sock = NULL;
+}
+
 int main(void)
 {
     proc.tg = &group;
@@ -1517,9 +1753,10 @@ int main(void)
     sleep_races();
     sleep_held_clock();
     timer_first_expiry();
+    stream_sendmsg();
     if (failures)
         return 1;
-    printf("syscall-test: pass: connect, datagram, clocks, sleeps and timer\n");
+    printf("syscall-test: pass: connect, datagram, sendmsg, clocks, sleeps and timer\n");
     return 0;
 }
 

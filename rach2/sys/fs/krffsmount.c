@@ -746,18 +746,19 @@ static int made_errno(int rc)
     return rc == KRFFS_ENOSPACE ? -ENOSPC : -EIO;
 }
 
-/** The owner a node is made with: the caller's effective user id, which the
- * core writes before the node's name, and root's when there is no caller. */
+/** The owner a node is made with: the caller's file-system user id, which
+ * the core writes before the node's name, and root's when there is no
+ * caller. */
 static uint32_t maker_uid(void)
 {
-    return current_proc ? current_proc->euid : 0;
+    return current_proc ? proc_fsuid(current_proc) : 0;
 }
 
 /**
  * The group a node made in `dir` has, in `*gid`, and the set-group-ID bit a
  * directory made there takes, in `*bit`, as Linux's `inode_init_owner` gives
  * them: a set-group-ID directory's group and its bit, or else the caller's
- * effective group id, root's when there is no caller, and no bit. The root
+ * file-system group id, root's when there is no caller, and no bit. The root
  * directory's mode is the format's, which has no set-group-ID bit. 0, or
  * -EIO when the directory's header cannot be read.
  */
@@ -766,7 +767,7 @@ static int maker_gid(struct vfs_mount *mnt, void *dir, uint32_t *gid, uint32_t *
     uint64_t at = offset_of(mnt, dir);
     krffs_node_t head;
 
-    *gid = current_proc ? current_proc->egid : 0;
+    *gid = current_proc ? proc_fsgid(current_proc) : 0;
     *bit = 0;
     if (at == 0) {
         return 0;
@@ -1264,6 +1265,7 @@ static const struct vfs_ops krffs_volume_ops = {
     0, /* unlock_node */
     0, /* shutdown */
     0, /* xattr */
+    0, /* cachestat */
 };
 
 /**

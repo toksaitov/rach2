@@ -1,0 +1,435 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.bed-forward",
+  "summary": "The testbed's forward direction: a Debian guest of Debian's QEMU on the x86-64 GNU root draws on Rach2's GPU through QEMU's own virtio-gpu on Rach2's render node, virgl and then Venus with blobs, and checks its pictures inside the guest; the guest's processor is QEMU's emulator, since the cases' machine is itself a guest of KVM; the runner is bed/forward/forward.sh, the scenes bed/forward/scene.sh and the scenario tests/cases/machine/bedforward_scenario.c",
+  "cases": [
+    {
+      "case_id": "machine.bed-forward.virgl",
+      "behavior": "A Debian guest of QEMU on Rach2, on virtio-vga-gl with egl-headless on Rach2's render node, draws a triangle through virgl whose checksum, taken of the pixels read back inside the guest, is its llvmpipe's, and glmark2's build scene validates there against glmark2's own reference, its frames a second recorded",
+      "units": [
+        "bed/forward/forward.sh",
+        "bed/forward/scene.sh",
+        "bed/fixture/triangle.c",
+        "Debian's QEMU in the GNU root, its virtio-gpu-gl device and egl-headless display",
+        "virglrenderer on Mesa's virgl driver",
+        "the virtio-gpu driver's render node",
+        "QEMU's emulator, user network and snapshot drive on Rach2",
+        "bed/forward/Readme.md",
+        "tests/cases/machine/bedforward_scenario.c"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "runner": "forward.sh",
+          "scene": "scene.sh virgl"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "bedforward_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "the runner runs as root in the guest, which opens the render node and the Debian guest's disk, and mounts the data disk",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the machine and removes the overlays, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only forward data disk and an overlay of the Debian guest's disk after it, with rach2.root=ext2 and the virgl display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "make /tmp/bed and copy there from the read-only forward data disk the runner, the guest's key and the scenes"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run forward.sh -a tcg virgl as root through the framed guest channel: it boots the Debian guest from a snapshot of the third disk in QEMU's emulator with virtio-vga-gl on egl-headless and Rach2's render node, waits for the guest's SSH server, copies the scenes in, runs scene.sh virgl as the guest's user, copies its output out and powers the guest off"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the runner's output, the guest's console, QEMU's messages and the scene's logs, as the evidence out.tar.gz"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "forward-payload",
+                "base": "forward-data",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "guest-disk",
+                "base": "guest-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 8,
+            "memory_bytes": 12884901888,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2"
+            ],
+            "display": "virgl"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "drawn",
+          "checks": "forward.sh exits 0 and prints bed-forward: result: pass: virgl, the guest's renderer being virgl, the triangle's checksum on it equal to its llvmpipe's, and glmark2's build scene validated with a rate",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 4
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 8000,
+        "cpu_ceiling_millis": 8000,
+        "memory_bytes": 13958643712,
+        "disk_bytes": 17179869184,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "gnu-image",
+          "node": "images/gnu-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "forward-data",
+          "node": "tests/cases/bed-forward/forward.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "guest-image",
+          "node": "tests/cases/bed-forward/guest.qcow2",
+          "per_architecture": false
+        },
+        {
+          "name": "bedforward_scenario",
+          "node": "tests/cases/machine/bedforward_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the case draws on the GPU that QEMU's virgl profile gives Rach2, with the inner guest in QEMU's emulator; the Lenovo's run of forward.sh, under Rach2's KVM on its own GPU, is task 83-2b's"
+      }
+    },
+    {
+      "case_id": "machine.bed-forward.venus",
+      "behavior": "A Debian guest of QEMU on Rach2, on virtio-vga-gl with Venus, blobs and a shared memory backend, presents vkcube through Venus to a Weston of its own on the guest's card, and the 300th and 345th frames, read back inside the guest, have the Debian reference guest's checksums on the testing PC's lavapipe; the rate of the first 300 presents is recorded",
+      "units": [
+        "bed/forward/forward.sh",
+        "bed/forward/scene.sh",
+        "tests/graphics/runners/vkcube.sh",
+        "tests/graphics/runners/vkhold.c",
+        "tests/graphics/runners/frame.py",
+        "Debian's QEMU in the GNU root, its virtio-gpu-gl device with Venus and blobs",
+        "virglrenderer's render server, Debian's virgl-server, on Mesa 26.1.6's Venus driver",
+        "the virtio-gpu driver's blobs, PRIME and mappings",
+        "QEMU's emulator, user network and snapshot drive on Rach2",
+        "bed/forward/Readme.md",
+        "tests/cases/machine/bedforward_scenario.c"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "runner": "forward.sh",
+          "scene": "scene.sh venus"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "bedforward_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "the runner runs as root in the guest, which opens the render node and the Debian guest's disk, and mounts the data disk",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the machine and removes the overlays, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot an overlay of the GNU system's disk on AHCI, with the read-only forward data disk and an overlay of the Debian guest's disk after it, with rach2.root=ext2 and the venus display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+        },
+        {
+          "step_id": "stage",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "make /tmp/bed and copy there from the read-only forward data disk the runner, the guest's key and the scenes"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run forward.sh -a tcg venus as root through the framed guest channel: it boots the Debian guest from a snapshot of the third disk in QEMU's emulator with virtio-vga-gl, venus=on, blob=on, a host-visible window and the guest's memory a shared memfd, on egl-headless and Rach2's render node, with Venus's ICD alone for virglrenderer's render server, waits for the guest's SSH server, copies the scenes in, runs scene.sh venus as the guest's user, copies its output out and powers the guest off"
+        },
+        {
+          "step_id": "collect",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "fetch the runner's output, the guest's console, QEMU's messages and the scene's logs, as the evidence out.tar.gz"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "forward-payload",
+                "base": "forward-data",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "guest-disk",
+                "base": "guest-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 8,
+            "memory_bytes": 12884901888,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2"
+            ],
+            "display": "venus"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "drawn",
+          "checks": "forward.sh exits 0 and prints bed-forward: result: pass: venus, the guest's Vulkan device being Venus and vkcube's 300th and 345th frames, read back inside the guest, having the checksums of tests/graphics/ref/venus-wsl/vkcube/frames.out",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 4
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 8000,
+        "cpu_ceiling_millis": 8000,
+        "memory_bytes": 13958643712,
+        "disk_bytes": 17179869184,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "gnu-image",
+          "node": "images/gnu-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "forward-data",
+          "node": "tests/cases/bed-forward/forward.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "guest-image",
+          "node": "tests/cases/bed-forward/guest.qcow2",
+          "per_architecture": false
+        },
+        {
+          "name": "bedforward_scenario",
+          "node": "tests/cases/machine/bedforward_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the case draws through Venus over the testing PC's lavapipe, which QEMU's venus profile gives Rach2, with the inner guest in QEMU's emulator; the Lenovo's run of forward.sh, under Rach2's KVM on its own GPU, is task 83-2b's"
+      }
+    }
+  ]
+}

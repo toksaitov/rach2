@@ -1,0 +1,102 @@
+.Dd November 11, 2026
+.Dt CACHESTAT 2
+.Os
+.Sh NAME
+.Nm cachestat
+.Nd count the pages of a file in memory
+.Sh SYNOPSIS
+.In sys/syscall.h
+.In unistd.h
+.Ft int
+.Fo syscall
+.Fa SYS_cachestat
+.Fa "unsigned int fd"
+.Fa "struct cachestat_range *range"
+.Fa "struct cachestat *cstat"
+.Fa "unsigned int flags"
+.Fc
+.Sh DESCRIPTION
+.Fn cachestat
+counts the pages of the file
+.Fa fd
+is open on that are in memory, as Linux's call does, and stores the
+counts in
+.Fa cstat .
+Both records are those of Linux, of 64-bit fields alone, and have the
+same layout for an i386 program:
+.Bd -literal -offset indent
+struct cachestat_range {
+	uint64_t off;	/* first byte */
+	uint64_t len;	/* bytes; 0 reaches to the end */
+};
+
+struct cachestat {
+	uint64_t nr_cache;
+	uint64_t nr_dirty;
+	uint64_t nr_writeback;
+	uint64_t nr_evicted;
+	uint64_t nr_recently_evicted;
+};
+.Ed
+.Pp
+The range covers the pages from the one holding byte
+.Fa off
+to the one holding its last byte, and stops at the end of the file.
+.Va nr_cache
+counts those in memory and
+.Va nr_dirty
+those of them not yet written back.
+A tmpfs or memfd page, a page of
+.Xr memfd_secret 2
+included, is in memory once allocated and counts as clean, as on Linux:
+shmem's dirty folio bit does not set the page-cache dirty tag this call counts.
+An ext2 page counts when its resident block map leads to allocated blocks
+all held in the buffer cache or pending write batch; it is dirty when one
+of those blocks waits to be written.
+Holes and uncached map branches are skipped, and no disk read is made.
+Long walks allow other kernel work to run.
+Rach2 keeps no record of pages it has dropped, and writes a block back
+without a state between dirty and clean, so
+.Va nr_writeback ,
+.Va nr_evicted
+and
+.Va nr_recently_evicted
+are always 0.
+What is not a file of a mounted file system, a pipe or a socket among
+them, counts no page.
+.Pp
+The caller must have
+.Fa fd
+open for writing, own the file, be privileged, or be allowed to write
+the file by its mode, as Linux 6.12's stable kernels require.
+.Fa flags
+must be 0.
+.Sh RETURN VALUES
+0 on success.
+On failure -1 is returned with
+.Va errno
+set; the kernel returns the negative error number.
+.Sh ERRORS
+The checks run in this order, as on Linux.
+.Bl -tag -width "[EFAULT]"
+.It Bq Er EBADF
+.Fa fd
+is not open, or is open with
+.Dv O_PATH .
+.It Bq Er EFAULT
+.Fa range
+cannot be read.
+.It Bq Er EPERM
+The caller may not count the file's pages, as above.
+.It Bq Er EINVAL
+.Fa flags
+is not 0.
+.It Bq Er EFAULT
+.Fa cstat
+cannot be written.
+.El
+.Sh SEE ALSO
+.Xr madvise 2 ,
+.Xr mincore 2
+.Sh STANDARDS
+Linux 6.5 added the call.

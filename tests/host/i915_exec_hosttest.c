@@ -21,8 +21,11 @@
  * driver's ioctls that Mesa's Crocus and hasvk call, against Linux's
  * numbers, and the sync files of an image's dma-buf (78-11a.2); the
  * command parser's shadow and trampoline on the call's path (78-8b), and
- * the objects held until the request retires; a ring that refuses the
- * commands.
+ * the objects held until the request retires, their bindings kept while
+ * the object is busy (78-5c); a batch whose breadcrumb is written before
+ * its interrupt is taken, idle to WAIT and BUSY with the GT left awake
+ * (80-61); the unbind wait's signal asked for before its spin (80-72.1); a
+ * ring that refuses the commands.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -154,10 +157,22 @@ uint32_t i915_ggtt_pte_encode(uint64_t addr, int cache)
            (cache != I915_CACHE_NONE ? HSW_WB_LLC_AGE3 : 0);
 }
 
+static void ring_release(int i);
+
+/* The engine whose held ring the next delay lets run, as the chip that
+ * finishes a request during a wait's spin; -1 for none. */
+static int release_in_delay = -1;
+
 void i915_delay_us(struct i915_hw *hw, uint32_t us)
 {
+    int i = release_in_delay;
+
     (void)hw;
     now_ns += (int64_t)us * 1000;
+    if (i >= 0) {
+        release_in_delay = -1;
+        ring_release(i);
+    }
 }
 
 int32_t i915_wait_for(struct i915_hw *hw, const char *what, uint32_t reg, uint32_t mask,
@@ -297,12 +312,16 @@ static uint32_t gtt_load(struct chip *c, uint32_t addr)
 }
 
 /** The dwords of the command whose first is `dw`, as the chip parses
- * them: MI commands below 0x10 are one, the others and the 2D and 3D
- * commands carry their length less two. */
+ * them: MI commands below 0x10 are one and the others carry their length
+ * less two in their low six bits, except MI_LOAD_REGISTER_IMM's eight.
+ * MI_FLUSH_DW has the video ring's MI_INVALIDATE_BSD above its six length
+ * bits; the 2D and 3D commands carry their length in their low byte. */
 static uint32_t command_dwords(uint32_t dw)
 {
-    if ((dw >> 29) == 0 && ((dw >> 23) & 0x3fu) < 0x10u) {
-        return 1;
+    if ((dw >> 29) == 0) {
+        return MI_OPCODE(dw) < 0x10u    ? 1u
+               : MI_OPCODE(dw) == 0x22u ? (dw & 0xffu) + 2u
+                                        : MI_LENGTH(dw);
     }
     return (dw & 0xffu) + 2u;
 }
@@ -388,7 +407,7 @@ static void command_run(struct chip *c, int idx, const uint32_t *d)
  * its head to the tail, unless it is hung. */
 static void ring_write(struct chip *c, uint32_t reg, uint32_t value)
 {
-    uint32_t d[128], head, start, size, n, k;
+    uint32_t d[257], head, start, size, n, k;
     int i;
 
     for (i = 0; i < I915_NUM_ENGINES; i++) {
@@ -403,7 +422,7 @@ static void ring_write(struct chip *c, uint32_t reg, uint32_t value)
         while (head != value) {
             d[0] = gtt_load(c, start + head);
             n = command_dwords(d[0]);
-            for (k = 1; k < n && k < 128u; k++) {
+            for (k = 1; k < n; k++) {
                 d[k] = gtt_load(c, start + ((head + 4u * k) & (size - 1u)));
             }
             command_run(c, i, d);
@@ -427,6 +446,22 @@ static void idle(void)
         }
     }
     i915_retire_requests(dev_a);
+}
+
+/** Hold the ring of engine `i` still, so that the requests it is given
+ * stay running until `ring_release`. */
+static void ring_hold(int i)
+{
+    ring_hung[i] = 1;
+}
+
+/** Let the ring of engine `i` run what it was given while it was held. */
+static void ring_release(int i)
+{
+    struct i915_engine *e = &dev_a->gt.engine[i];
+
+    ring_hung[i] = 0;
+    ring_write(&chip_a, RING_TAIL(e->mmio_base), chip_a.regs[RING_TAIL(e->mmio_base) / 4]);
 }
 
 /** Run the submission worker until it moves nothing. */
@@ -583,9 +618,11 @@ static void rings(void)
                   (MI_BATCH_BUFFER_START | MI_BATCH_PPGTT_HSW | MI_BATCH_NON_SECURE_HSW) &&
               starts[0].addr == (uint32_t)offset_of(b),
           "rings: RENDER starts the batch on rcs0, unprivileged through the PPGTT bit");
-    CHECK(i915_gem_object_is_active(obj) && (obj->read_domains & I915_GEM_GPU_DOMAINS) &&
-              !obj->write_domain,
+    CHECK(obj->base.resv->nreads == 1 && obj->base.resv->reads[0]->ops == &i915_fence_ops &&
+              (obj->read_domains & I915_GEM_GPU_DOMAINS) && !obj->write_domain,
           "rings: the request's fence on the object, read by the GPU");
+    CHECK(!i915_gem_object_is_active(obj) && dev_a->gt.engine[I915_RCS0].requests,
+          "rings: idle once the breadcrumb is written, before the interrupt, as Linux's");
     idle();
     CHECK(!i915_gem_object_is_active(obj) && !dev_a->gt.engine[I915_RCS0].requests,
           "rings: retired once the interrupt is taken");
@@ -706,6 +743,49 @@ static void store_batch(uint32_t b, struct drm_i915_gem_relocation_entry *r, uin
     r->presumed_offset = 0xdead0000u;
     r->read_domains = I915_GEM_DOMAIN_RENDER;
     r->write_domain = I915_GEM_DOMAIN_RENDER;
+}
+
+/**
+ * 78-5c: a program that closes its objects while their batch runs leaves
+ * them to the request, which keeps their bindings and pages until the chip
+ * is past it and it retires, as Linux's active bindings keep an object;
+ * a binding of a busy object is not undone meanwhile.
+ */
+static void lifetime(void)
+{
+    uint32_t t = create(&file_a, 8192), b = create(&file_a, 4096);
+    struct drm_i915_gem_relocation_entry r;
+    struct drm_i915_gem_exec_object2 o[2];
+    struct drm_i915_gem_execbuffer2 a;
+    struct drm_i915_gem_object *obj = object(&file_a, t);
+    struct i915_vma *v;
+    uint64_t ts, bs;
+    uintptr_t frame;
+
+    store_batch(b, &r, t, 0x100);
+    entry_init(&o[0], t);
+    entry_init(&o[1], b);
+    o[1].relocation_count = 1;
+    o[1].relocs_ptr = (uintptr_t)&r;
+    args_init(&a, o, 2, I915_EXEC_RENDER);
+    ring_hold(I915_RCS0);
+    CHECK(execbuf(&a) == 0, "lifetime: the call passes");
+    ts = offset_of(t);
+    bs = offset_of(b);
+    frame = (uintptr_t)chip_a.gtt[ts >> 12];
+    close_handle(&file_a, t);
+    close_handle(&file_a, b);
+    v = eb_binding(obj);
+    CHECK(i915_gem_object_is_active(obj) && v && v->start == ts && frame != 0 &&
+              (uintptr_t)chip_a.gtt[ts >> 12] == frame && chip_a.gtt[bs >> 12] != 0,
+          "lifetime: closed while the request runs, both keep their bindings");
+    CHECK(v && i915_vma_unbind(v) == -EBUSY && i915_gem_object_unbind(obj) == -EAGAIN &&
+              chip_a.gtt[ts >> 12] != 0,
+          "lifetime: a busy object's binding is not undone");
+    ring_release(I915_RCS0);
+    idle();
+    CHECK(chip_a.gtt[ts >> 12] == 0 && chip_a.gtt[bs >> 12] == 0,
+          "lifetime: both freed and unbound once the request retires");
 }
 
 /**
@@ -861,8 +941,10 @@ static void fences(void)
     CHECK(execbuf(&a) == 0 && (a.rsvd2 & 0xffffffffu) == 0x1234, "fences: FENCE_OUT");
     out_fd = (int32_t)(a.rsvd2 >> 32);
     out = sync_fence(out_fd);
-    CHECK(out && out->ops == &i915_fence_ops && !dma_fence_is_signaled(out),
-          "fences: the out-fence is the request's, not signalled");
+    CHECK(out && out->ops == &i915_fence_ops && !out->signaled,
+          "fences: the out-fence is the request's, not yet signalled");
+    CHECK(out && dma_fence_is_signaled(out) && !out->listened,
+          "fences: asked once its breadcrumb is written, before the interrupt, it has signalled");
     idle();
     CHECK(dma_fence_is_signaled(out) && !out->error, "fences: signalled once it retires");
     (void)fd_free(self.fds, out_fd);
@@ -1049,7 +1131,7 @@ static void timeline_points(uint32_t tl)
     CHECK(execbuf(&a) == 0 && nstarts == 1 && newest_point(tl) == 1,
           "timeline: SIGNAL at point 1 adds the point");
     p = syncobj_fence(tl);
-    CHECK(p && to_dma_fence_chain(p)->fence->ops == &i915_fence_ops && !dma_fence_is_signaled(p),
+    CHECK(p && to_dma_fence_chain(p)->fence->ops == &i915_fence_ops && !p->signaled,
           "timeline: whose fence is the request's");
     idle();
     CHECK(dma_fence_is_signaled(syncobj_fence(tl)), "timeline: the point signals as it retires");
@@ -1286,7 +1368,8 @@ static void wsi_sync_files(void)
     CHECK(e && e->ops->ioctl(e, DMA_BUF_IOCTL_EXPORT_SYNC_FILE, (uintptr_t)&ex) == 0 && ex.fd >= 0,
           "wsi: EXPORT_SYNC_FILE for a reader");
     got = sync_fence(ex.fd);
-    CHECK(got && !dma_fence_is_signaled(got), "wsi: its fence waits for the batch");
+    CHECK(got && got->ops == &i915_fence_ops && !got->signaled,
+          "wsi: its fence is the batch's request");
     idle();
     CHECK(got && dma_fence_is_signaled(got), "wsi: and signals as it retires");
     (void)fd_free(self.fds, ex.fd);
@@ -1406,6 +1489,77 @@ static void parser(void)
 }
 
 /**
+ * 80-61: GEM_WAIT on a batch whose breadcrumb is written, before its
+ * interrupt is taken: a wait of 0 finds the object idle, and a wait
+ * returns at once without asking for the signal, so the request's
+ * retirement leaves the engine held for the retire worker's pass, as
+ * Linux's i915_fence_signaled answers (i915_request.c:88-91,
+ * gem/i915_gem_wait.c:24-25).
+ */
+static void wait_before_interrupt(void)
+{
+    uint32_t b = batch_end();
+    struct drm_i915_gem_object *obj = object(&file_a, b);
+    struct drm_i915_gem_wait w;
+    struct dma_fence *f;
+    int p = parks;
+
+    nstarts = 0;
+    CHECK(exec1(b, I915_EXEC_RENDER) == 0 && nstarts == 1 && obj->base.resv->nreads == 1,
+          "early: a batch run, its interrupt not taken");
+    f = dma_fence_get(obj->base.resv->reads[0]);
+    k_memset(&w, 0, sizeof(w));
+    w.bo_handle = b;
+    CHECK(i915_gem_wait_ioctl(&dev_a->drm, &w, &file_a) == 0 && f->signaled,
+          "early: a wait of 0 finds the object idle");
+    w.timeout_ns = -1;
+    CHECK(i915_gem_wait_ioctl(&dev_a->drm, &w, &file_a) == 0 && !f->listened,
+          "early: a wait returns at once, the signal not asked for");
+    idle();
+    CHECK(!dev_a->gt.engine[I915_RCS0].requests && dev_a->gt.engine[I915_RCS0].unretired &&
+              dev_a->gt.awake && parks == p,
+          "early: retired at the interrupt, the engine held and the GT awake");
+    dma_fence_put(f);
+    close_handle(&file_a, b);
+}
+
+/**
+ * 80-72.1: the unbind wait asks for the signal of a running batch before
+ * it spins, as Linux's i915_active_wait enables its fences
+ * (i915_active.c:559-571, 589-620), so a last request the chip finishes
+ * during the spin lets its engine go and the GT parks
+ * (gt/intel_breadcrumbs.c:220-235).
+ */
+static void unbind_wait_spin(void)
+{
+    uint32_t b = batch_end();
+    struct drm_i915_gem_object *obj = object(&file_a, b);
+    struct i915_engine *rcs = &dev_a->gt.engine[I915_RCS0];
+    struct dma_fence *f = 0;
+    int p;
+
+    /* The earlier rows' engines retired and the GT parked. */
+    idle();
+    i915_gt_retire_requests(dev_a);
+    p = parks;
+    ring_hold(I915_RCS0);
+    CHECK(exec1(b, I915_EXEC_RENDER) == 0 && obj->base.resv->nreads == 1,
+          "unbind: a batch running, the engine's last");
+    if (obj->base.resv->nreads == 1) {
+        f = dma_fence_get(obj->base.resv->reads[0]);
+    }
+    release_in_delay = I915_RCS0;
+    CHECK(f && !f->signaled && i915_gem_object_wait_idle(obj, 1) == 0 && release_in_delay < 0,
+          "unbind: the wait returns once the chip finishes the batch during its spin");
+    CHECK(f && f->listened && f->signaled && !rcs->requests && !rcs->unretired &&
+              !dev_a->gt.awake && parks == p + 1,
+          "unbind: its signal asked for first, the engine let go and the GT parked");
+    release_in_delay = -1;
+    dma_fence_put(f);
+    close_handle(&file_a, b);
+}
+
+/**
  * GEN7_SOL_RESET zeroes the four stream output offsets before the render
  * batch; on the blitter it fails, the request added without its batch.
  * A ring that refuses the commands fails the call with EIO.
@@ -1435,6 +1589,47 @@ static void sol_and_faults(void)
     close_handle(&file_a, b);
 }
 
+/** The longest LRI fills its eight-bit length and the model's command
+ * buffer; the ring must reach the interrupt after all 128 register writes. */
+static void long_lri(void)
+{
+    struct i915_engine *e = &dev_a->gt.engine[I915_RCS0];
+    uint32_t *cs = i915_ring_begin(e, dev_a, 258), i;
+
+    CHECK(cs != NULL, "lri: room for 128 register writes and an interrupt");
+    if (!cs) {
+        return;
+    }
+    cs[0] = MI_LOAD_REGISTER_IMM(128);
+    for (i = 0; i < 128; i++) {
+        cs[1 + 2 * i] = GEN7_SO_WRITE_OFFSET(0);
+        cs[2 + 2 * i] = i + 1;
+    }
+    cs[257] = MI_USER_INTERRUPT;
+    irq_pending = 0;
+    i915_ring_advance(e, dev_a);
+    CHECK(chip_a.regs[GEN7_SO_WRITE_OFFSET(0) / 4] == 128 && (irq_pending & e->irq_bit) &&
+              (chip_a.regs[RING_HEAD(e->mmio_base) / 4] & HEAD_ADDR) == e->tail,
+          "lri: the last register written and the following interrupt reached");
+    chip_a.regs[GEN7_SO_WRITE_OFFSET(0) / 4] = 0;
+    idle();
+}
+
+/** Run the request, submission and ring-model rows. */
+/* ---- RPS's waitboost and interactive mode, which the driver calls ---- */
+
+/** The waitboost, RPS's, which no row here measures. */
+void i915_rps_boost(struct i915_request *rq)
+{
+    (void)rq;
+}
+
+/** A request retires: no request here is boosted, so RPS counts nothing. */
+void i915_rps_retire(struct i915_request *rq)
+{
+    (void)rq;
+}
+
 int main(void)
 {
     uint32_t tl;
@@ -1447,6 +1642,7 @@ int main(void)
     chip_write_hook = ring_write;
     CHECK(i915_gt_init(dev_a) == 0, "setup: the rings start");
     CHECK(i915_driver_open(&dev_a->drm, &file_a) == 0, "setup: the file opened");
+    long_lri();
     rings();
     /* The PPGTT's tables, made as buffers are bound, stay with the rings. */
     before = allocations - (int)dev_a->gt.ppgtt.tables;
@@ -1461,7 +1657,10 @@ int main(void)
     trace();
     wsi_sync_files();
     parser();
+    wait_before_interrupt();
+    unbind_wait_spin();
     sol_and_faults();
+    lifetime();
     idle();
     drm_syncobj_release(&file_a);
     CHECK(allocations - (int)dev_a->gt.ppgtt.tables == before,

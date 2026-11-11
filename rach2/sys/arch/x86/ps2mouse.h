@@ -8,10 +8,12 @@
  * three bytes, or four with a wheel, which it reports through its event
  * device and the mouse queue (../../mouse.h), or a Synaptics touchpad's
  * packets, which synaptics.h reads, or an Elantech touchpad's, which
- * elantech.h reads. Behind a Synaptics touchpad's pass-through port may be
- * a second device, a pointing stick or a mouse, the guest, which is found
- * and reported here as Linux's psmouse finds and reports the device of a
- * serio port of type SERIO_PS_PSTHRU.
+ * elantech.h reads, or an ALPS touchpad's, which alps.h reads. Behind a
+ * Synaptics touchpad's pass-through port may be a second device, a pointing
+ * stick or a mouse, the guest, which is found and reported here as Linux's
+ * psmouse finds and reports the device of a serio port of type
+ * SERIO_PS_PSTHRU. Each port has Linux's psmouse files, `protocol`, `rate`,
+ * `resolution`, `resetafter` and `resync_time`.
  */
 
 /**
@@ -24,6 +26,18 @@
  * once, at boot, from `platform_mouse_init`.
  */
 int init_mouse(void);
+
+struct evdev;
+
+/**
+ * Register the port's main input device with `name`, the psmouse protocol
+ * number `product` and EVDEV_KEY_BYTES of `keys`. During a protocol switch
+ * this consumes its reserved device and cannot fail. At boot or reconnect
+ * it returns NULL when every slot is taken. Only the main device uses
+ * this call; a pad's stick registers separately. Called inside the command
+ * lock or during bring-up, before the main device reports.
+ */
+struct evdev *ps2mouse_register(const char *name, uint16_t product, const uint8_t *keys);
 
 /* The reply by which the mouse acknowledges a command or its argument. */
 #define PS2MOUSE_ACK 0xFA
@@ -72,7 +86,9 @@ int ps2io_command(const struct ps2io *io, uint8_t cmd, const uint8_t *param, int
  * 12 handler leaves the auxiliary device's bytes in the 8042 for the
  * caller's commands, as Linux's psmouse leaves them to `ps2_command` while
  * its state is PSMOUSE_CMD_MODE. One run at a time: a second caller waits
- * for the first to end.
+ * for the first to end. The packet under way, the driver's and the
+ * mouse's, is dropped, as it is again at the run's end, as Linux's
+ * `__psmouse_set_state` drops it.
  */
 void ps2mouse_cmd_begin(void);
 
@@ -117,28 +133,91 @@ int ps2mouse_guest_packet_size(void);
 void ps2mouse_guest_buttons(uint8_t buttons);
 
 /**
- * Begin a change of the guest's settings, as Linux's
+ * Begin a change of a TrackPoint's settings, as Linux's
  * `psmouse_attr_set_helper` begins one: a run of commands, the touchpad and
- * then the guest disabled. Returns the guest's line, or NULL, having begun
- * nothing, when no guest reports. Process context.
+ * then the guest disabled, or the port's device alone when it is the
+ * TrackPoint. Returns the stick's line, or NULL, having begun nothing, when
+ * no guest reports and the port's device is no TrackPoint, or when the
+ * stick the file was made for was unbound, or its protocol replaced, while
+ * the call waited for the command lock. Process context.
  */
 const struct ps2io *ps2mouse_guest_change_begin(void);
 
 /** End the change `ps2mouse_guest_change_begin` began: the guest and then
- * the touchpad enabled again, and the run ended. */
+ * the touchpad enabled again, or the port's TrackPoint, and the run
+ * ended. */
 void ps2mouse_guest_change_end(void);
 
 /** Sleep `ms` milliseconds, as Linux's `ssleep` and `msleep` let a
- * command run wait for a device. Process context; the host tests move the
- * tick instead. */
+ * command run wait for a device: in a run of commands, the caller sleeps;
+ * during `init_mouse`, whose process cannot sleep, it waits with
+ * interrupts on, so that the ticks run. The host tests move the tick
+ * instead. */
 void ps2mouse_msleep(unsigned int ms);
 
 /**
+ * Linux's `psmouse_set_rate` on the auxiliary port: the highest of the
+ * rates 200, 100, 80, 60, 40, 20, 10 and 0 that is not above `rate`, sent,
+ * a refusal ignored. Returns the rate sent, which the caller keeps as the
+ * port's. Inside a run of commands, or during the bring-up.
+ */
+unsigned int ps2mouse_set_rate(unsigned int rate);
+
+/**
+ * Linux's `psmouse_initialize` on the auxiliary port: the port's rate
+ * through `set_rate`, the protocol's own, or `ps2mouse_set_rate` for NULL,
+ * then its resolution and 1:1 scaling, keeping the rate and resolution
+ * sent as the port's, which its `rate` and `resolution` files show. Called
+ * by a protocol's set-up and reconnect, inside a run of commands or during
+ * the bring-up.
+ */
+void ps2mouse_initialize(unsigned int (*set_rate)(unsigned int));
+
+/** The auxiliary port's rate, which a protocol's set-up reads, and its
+ * setting to `rate`, as Linux's touchpads set `psmouse->rate`. */
+unsigned int ps2mouse_port_rate(void);
+void ps2mouse_port_rate_set(unsigned int rate);
+
+/**
+ * Begin a change through a file of the auxiliary port, as Linux's
+ * `psmouse_attr_set_helper` begins one: a run of commands, and the device
+ * disabled. Returns 0, or -ENODEV, having begun nothing, while the port
+ * waits for its reconnect. Process context; it may sleep.
+ */
+int ps2mouse_change_begin(void);
+
+/** End the change `ps2mouse_change_begin` began, whose result is `rc`: the
+ * device enabled again unless `rc` is -ENODEV, and the run ended. */
+void ps2mouse_change_end(int rc);
+
+/**
+ * Parse the `len` bytes at `buf` as Linux's `kstrtouint` and `kstrtou8`
+ * do: an optional '+', in base 16 an optional "0x", digits of `base`, 10
+ * or 16, and an optional newline, nothing after. Returns 0 with the value
+ * in `*out`, -EINVAL for text that is no number, or -ERANGE for one above
+ * `max`.
+ */
+int ps2mouse_parse_uint(const char *buf, uint32_t len, unsigned int base, uint32_t max,
+                        uint32_t *out);
+
+/**
+ * Resync what the handler asked kpsmoused to, as Linux's `psmouse_resync`
+ * does: the port's device after a pause of half a second inside a mouse's
+ * packet or a first byte after `resync_time` seconds idle, or the guest
+ * after its idle time; each is disabled, polled for a packet, which must
+ * have its protocol's form, and enabled again, and one that fails is
+ * reconnected. A resync a change of the port overtook is not done. The
+ * work of kpsmoused, in process context; the host tests call it directly.
+ */
+void ps2mouse_resync(void);
+
+/**
  * Make the kernel thread kpsmoused, which reconnects a touchpad or mouse
- * that sent five packets out of form in a row, and a device that announced
- * itself anew with 0xAA 0x00 after a reset of its own, as Linux's psmouse
- * asks `serio_reconnect` to. Called once, when the first program starts; a
- * reconnect asked before then waits for the thread.
+ * that sent `resetafter` packets out of form in a row, and a device that
+ * announced itself anew with 0xAA 0x00 after a reset of its own, as Linux's
+ * psmouse asks `serio_reconnect` to, and resyncs one as `ps2mouse_resync`
+ * says. Called once, when the first program starts; a reconnect asked
+ * before then waits for the thread.
  */
 void ps2mouse_thread_start(void);
 

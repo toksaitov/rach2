@@ -988,10 +988,19 @@ int acpi_gas_read(const struct acpi_gas *g, uint32_t *value)
         /* Bus 0: device in bits 32 to 47, function 16 to 31, offset 0 to 15. */
         uint8_t dev = (uint8_t)((g->address >> 32) & 0x1Fu);
         uint8_t fn = (uint8_t)((g->address >> 16) & 0x7u);
-        uint8_t off = (uint8_t)(g->address & 0xFFu);
+        uint16_t off = (uint16_t)(g->address & 0xFFFFu);
+        uint32_t dword;
 
-        if (bytes == 1) {
-            *value = pci_read_config8(0, dev, fn, off);
+        if (off > 0xFFFu) {
+            return -1;
+        }
+        if (off > 0xFFu) {
+            dword = pci_read_config32_ext(0, dev, fn, (uint16_t)(off & 0xFFCu));
+            *value = bytes == 4   ? dword
+                     : bytes == 2 ? (dword >> ((off & 2u) * 8u)) & 0xFFFFu
+                                  : (dword >> ((off & 3u) * 8u)) & 0xFFu;
+        } else if (bytes == 1) {
+            *value = pci_read_config8(0, dev, fn, (uint8_t)off);
         } else if (bytes == 2) {
             *value = pci_read_config16(0, dev, fn, (uint8_t)(off & 0xFEu));
         } else {
@@ -1041,18 +1050,49 @@ int acpi_gas_write(const struct acpi_gas *g, uint32_t value)
     case ACPI_SPACE_PCI: {
         uint8_t dev = (uint8_t)((g->address >> 32) & 0x1Fu);
         uint8_t fn = (uint8_t)((g->address >> 16) & 0x7u);
-        uint8_t off = (uint8_t)(g->address & 0xFFu);
+        uint16_t off = (uint16_t)(g->address & 0xFFFFu);
 
+        if (off > 0xFFFu) {
+            return -1;
+        }
         if (bytes == 1) {
-            pci_write_config8(0, dev, fn, off, (uint8_t)value);
+            pci_write_config8_ext(0, dev, fn, off, (uint8_t)value);
         } else if (bytes == 2) {
-            pci_write_config16(0, dev, fn, (uint8_t)(off & 0xFEu), (uint16_t)value);
+            pci_write_config16_ext(0, dev, fn, (uint16_t)(off & 0xFFEu), (uint16_t)value);
         } else {
-            pci_write_config32(0, dev, fn, (uint8_t)(off & 0xFCu), value);
+            pci_write_config32_ext(0, dev, fn, (uint16_t)(off & 0xFFCu), value);
         }
         return 0;
     }
     default:
         return -1;
+    }
+}
+
+void acpi_reset_write(const struct acpi_info *a)
+{
+    const struct acpi_gas *g = &a->reset_reg;
+
+    if (!a->reset_supported) {
+        return;
+    }
+    switch (g->space) {
+    case ACPI_SPACE_IO:
+        if (g->address <= 0xFFFFu) {
+            outb((uint16_t)g->address, a->reset_value);
+        }
+        break;
+    case ACPI_SPACE_MEMORY:
+        (void)acpi_gas_write(g, a->reset_value);
+        break;
+    case ACPI_SPACE_PCI:
+        if ((g->address & 0xFFFFu) <= 0xFFFu) {
+            pci_write_config8_ext(0, (uint8_t)((g->address >> 32) & 0x1Fu),
+                                  (uint8_t)((g->address >> 16) & 0x7u),
+                                  (uint16_t)(g->address & 0xFFFu), a->reset_value);
+        }
+        break;
+    default:
+        break;
     }
 }

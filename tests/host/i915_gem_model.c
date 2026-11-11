@@ -14,6 +14,7 @@
 #include "dmabuf/fence.c"
 #include "dmabuf/dmabuf.c"
 #include "drm/i915/i915_gem.c"
+#include "drm/i915/i915_user_extensions.c"
 #include "drm/i915/i915_vma.c"
 #include "drm/i915/i915_gem_tiling.c"
 #include "drm/i915/i915_gem_mman.c"
@@ -67,18 +68,22 @@ NOT_HERE(i915_gem_context_getparam_ioctl)
 NOT_HERE(i915_gem_context_setparam_ioctl)
 NOT_HERE(i915_gem_context_reset_stats_ioctl)
 NOT_HERE(i915_gem_execbuffer2_ioctl)
+NOT_HERE(i915_gem_throttle_ioctl)
 
 /* The GPU's idling, which eviction waits for when only busy bindings are
  * left: `idle_signals`, a fence a row names, signals, as its request would
- * retire. `idle_waits` counts the waits. */
+ * retire. `idle_waits` counts the waits; with `idle_intr` set a signal is
+ * pending, and a wait that takes one ends at once with -EINTR. */
 static struct dma_fence *idle_signals;
-static int idle_waits;
+static int idle_waits, idle_intr;
 
 int32_t i915_gt_wait_for_idle(struct drm_i915_private *i915, int intr)
 {
     (void)i915;
-    (void)intr;
     idle_waits++;
+    if (intr && idle_intr) {
+        return -EINTR;
+    }
     if (idle_signals) {
         dma_fence_signal(idle_signals);
         idle_signals = 0;
@@ -491,8 +496,18 @@ uint32_t mem_reclaim(void)
     return got;
 }
 
+/* Run once at the next balance, as another thread would run while reclaim
+ * sleeps in writeback. */
+static void (*balance_sleep)(void);
+
 void mem_balance(void)
 {
+    void (*hook)(void) = balance_sleep;
+
+    balance_sleep = 0;
+    if (hook) {
+        hook();
+    }
     if (frame_limit && frame_limit - frames_live < frame_limit / 16) {
         (void)mem_reclaim();
     }
@@ -605,6 +620,11 @@ int user_range_ok(uintptr_t addr, size_t len)
     return addr >= 4096 && addr + len >= addr;
 }
 
+int user_span_ok(uintptr_t addr, size_t len)
+{
+    return addr + len >= addr;
+}
+
 int copy_from_user(void *dst, const void __user *src, size_t n)
 {
     if ((uintptr_t)src < 4096) {
@@ -671,7 +691,8 @@ void *vm_device_object(const struct vm_file *f)
     return f == &device_file ? (void *)&device_file : 0;
 }
 
-int paging_pin_range(struct mm *mm, uintptr_t start, uintptr_t end, int write, uintptr_t *frames)
+int paging_pin_range(struct mm *mm, uintptr_t start, uintptr_t end, uint32_t flags,
+                     uintptr_t *frames)
 {
     uintptr_t page;
     uint32_t i = 0;
@@ -680,7 +701,8 @@ int paging_pin_range(struct mm *mm, uintptr_t start, uintptr_t end, int write, u
     for (page = start; page < end; page += 4096u) {
         const vma_t *r = vm_find(&mm->vm, page);
 
-        if (!r || vm_device_object(r->file) || (write && !(r->prot & VM_PROT_WRITE))) {
+        if (!r || vm_device_object(r->file) ||
+            ((flags & PIN_WRITE) && !(r->prot & VM_PROT_WRITE))) {
             return -EFAULT;
         }
     }
@@ -802,6 +824,19 @@ int32_t sync_file_create(struct dma_fence *fence, const char *name)
     return -ENOMEM;
 }
 
+/** No sync file can be made, as sync_file_create. */
+int32_t sync_file_copy_out(struct dma_fence *fence, const char *name, void __user *dst, void *src,
+                           uint32_t len, int32_t *fd_at)
+{
+    (void)fence;
+    (void)name;
+    (void)dst;
+    (void)src;
+    (void)len;
+    (void)fd_at;
+    return -ENOMEM;
+}
+
 struct dma_fence *sync_file_get_fence(int32_t fd)
 {
     (void)fd;
@@ -867,6 +902,16 @@ void paging_zap_device(const void *obj, uint32_t pgoff, uint32_t count)
     zap_pgoff = pgoff;
     zap_count = count;
     zaps++;
+}
+
+/** What the mapping `vma`'s `page` gives for its page `page`: 0, -1 for
+ * SIGBUS or 1 to run the access again. */
+static int fault_code(vma_t *vma, uint32_t page)
+{
+    struct region *r = (struct region *)vma->file;
+    uintptr_t phys = 0;
+
+    return r->ops->page(r->obj, vma->pgoff + page, &phys);
 }
 
 /** Fault page `page` of the mapping `vma`: its address, or NULL for

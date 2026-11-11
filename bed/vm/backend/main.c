@@ -250,7 +250,7 @@ static void ring(void *cookie, uint32_t peer, uint32_t vector)
 /* The options. */
 struct opts {
     const char *module, *vfio, *file, *card, *gbm;
-    int direct, writeback, venus, probe, once, verbose;
+    int direct, writeback, venus, probe, once, verbose, nopages;
     long peer;
 };
 
@@ -258,7 +258,7 @@ struct opts {
 static void usage(void)
 {
     fprintf(stderr, "usage: vgpu-backend [-m NODE | -V BDF | -f FILE] [-k CARD] [-g DEV] "
-                    "[-d] [-w] [-x | -I] [-p PEER] [-1] [-v]\n");
+                    "[-d] [-w] [-x | -I] [-P] [-p PEER] [-1] [-v]\n");
     exit(2);
 }
 
@@ -271,7 +271,7 @@ static void options(int argc, char **argv, struct opts *o)
     o->module = "/dev/vgpushm0";
     o->venus = 1;
     o->peer = -1;
-    while ((c = getopt(argc, argv, "m:V:f:k:g:dwxIp:1v")) != -1) {
+    while ((c = getopt(argc, argv, "m:V:f:k:g:dwxIPp:1v")) != -1) {
         switch (c) {
         case 'm':
             o->module = optarg;
@@ -299,6 +299,9 @@ static void options(int argc, char **argv, struct opts *o)
             break;
         case 'I':
             o->probe = 1;
+            break;
+        case 'P':
+            o->nopages = 1;
             break;
         case 'p':
             o->peer = strtol(optarg, 0, 0);
@@ -332,6 +335,11 @@ static void make_offer(struct vd_offer *f, const struct src *s, const struct opt
         f->features |= 1ULL << VD_F_EDID;
     }
     f->transport_features = s->efd[0] >= 0 ? VGS_TF_DOORBELL : 0;
+    /* Page lists need the module, which pins blobs, and Rach2 finds the VM
+       by its doorbell. */
+    if (s->dev >= 0 && s->efd[0] >= 0 && !o->nopages) {
+        f->transport_features |= VGS_TF_PAGES;
+    }
     f->peer = o->peer >= 0 ? (uint32_t)o->peer : s->peer <= 0xffff ? s->peer : 1;
     f->num_scanouts = 1;
     f->num_capsets = vr_capsets(r);
@@ -346,8 +354,9 @@ static int drain(int fd)
 }
 
 /** Print what the run did, one `backend: result:` line. */
-static void report(struct vd *d, struct src *s, struct kms *k)
+static void report(struct vd *d, struct src *s, struct vr *r, struct kms *k)
 {
+    const struct vr_pin_counts *pc = vr_pin_counts(r);
     struct vgpushm_counts mc;
 
     fprintf(stderr,
@@ -358,11 +367,23 @@ static void report(struct vd *d, struct src *s, struct kms *k)
             (unsigned long long)d->n.completed, (unsigned long long)d->n.notified,
             (unsigned long long)d->n.faults, (unsigned long long)s->wakes[0],
             (unsigned long long)s->wakes[1], (unsigned long long)s->polled);
+    fprintf(stderr,
+            "backend: result: maps %llu, unmaps %llu, pinned %llu, refused %llu, "
+            "unpinned %llu\n",
+            (unsigned long long)d->n.maps, (unsigned long long)d->n.unmaps,
+            (unsigned long long)pc->pinned, (unsigned long long)pc->refused,
+            (unsigned long long)pc->unpinned);
     if (s->dev >= 0 && ioctl(s->dev, VGPUSHM_IOC_COUNTS, &mc) == 0) {
         fprintf(stderr, "backend: result: module irqs %llu+%llu, signals %llu+%llu, rings %llu\n",
                 (unsigned long long)mc.irqs[0], (unsigned long long)mc.irqs[1],
                 (unsigned long long)mc.signals[0], (unsigned long long)mc.signals[1],
                 (unsigned long long)mc.rings);
+        fprintf(stderr,
+                "backend: result: module pins %llu, pinned %llu, kept %llu, made %llu, "
+                "refused %llu\n",
+                (unsigned long long)mc.pins, (unsigned long long)mc.pinned,
+                (unsigned long long)mc.kept, (unsigned long long)mc.made,
+                (unsigned long long)mc.refused);
     }
     if (k) {
         const struct kms_counts *n = kms_counts(k);
@@ -472,6 +493,7 @@ int main(int argc, char **argv)
     }
     vr_set_kms(r, k);
     vr_set_probe(r, o.probe);
+    vr_set_module(r, s.dev);
     make_offer(&off, &s, &o, r, k && kms_edid(k, dev.resp, &(uint32_t){0}) == 0);
     if (vd_init(&dev, s.base, s.size, &off, &vr_ops, r) != 0) {
         die("the offer breaks the transport's rules", 0);
@@ -479,12 +501,13 @@ int main(int argc, char **argv)
     dev.ring = ring;
     dev.ring_cookie = &s;
     dev.verbose = o.verbose;
-    fprintf(stderr, "backend: serving %llu bytes as peer %u, %s, %u capsets, %s\n",
+    fprintf(stderr, "backend: serving %llu bytes as peer %u, %s%s, %u capsets, %s\n",
             (unsigned long long)s.size, (unsigned)off.peer,
-            off.transport_features ? "doorbells" : "polling", (unsigned)off.num_capsets,
+            off.transport_features ? "doorbells" : "polling",
+            off.transport_features & VGS_TF_PAGES ? ", page lists" : "", (unsigned)off.num_capsets,
             k ? "on the display" : "no display");
     serve(&dev, &s, r, o.once);
-    report(&dev, &s, k);
+    report(&dev, &s, r, k);
     kms_close(k);
     vd_fini(&dev);
     return 0;

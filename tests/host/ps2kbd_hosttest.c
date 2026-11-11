@@ -115,6 +115,13 @@ void input_keyboard_attach(struct input_keyboard *kb, const char *name, const ch
     (void)product;
 }
 
+/** No keymap: `input_set1_event` sees the raw codes. */
+void input_keyboard_set1_keymap(struct input_keyboard *kb, uint16_t *map)
+{
+    (void)kb;
+    (void)map;
+}
+
 /** The kernel's translation is the only one here. */
 uintptr_t paging_enter_kernel(void)
 {

@@ -81,7 +81,6 @@ typedef __SIZE_TYPE__ size_t;
 #define SYS_RECVFROM          45
 #define SYS_SENDMSG           46
 #define SYS_RECVMSG           47
-#define SYS_RECVMMSG          299
 #define SYS_SHUTDOWN          48
 #define SYS_BIND              49
 #define SYS_LISTEN            50
@@ -146,11 +145,18 @@ typedef __SIZE_TYPE__ size_t;
 #define SYS_SETRESGID         119
 #define SYS_GETRESGID         120
 #define SYS_GETPGID           121
+#define SYS_SETFSUID          122
+#define SYS_SETFSGID          123
 #define SYS_GETSID            124
+#define SYS_CAPSET            126
+#define SYS_RT_SIGPENDING     127
 #define SYS_SIGALTSTACK       131
 #define SYS_MKNOD             133
+#define SYS_USTAT             136
 #define SYS_STATFS            137
 #define SYS_FSTATFS           138
+#define SYS_SYSFS             139
+#define SYS_VHANGUP           153
 #define SYS_ARCH_PRCTL        158
 #define SYS_SETRLIMIT         160
 #define SYS_CHROOT            161
@@ -181,13 +187,20 @@ typedef __SIZE_TYPE__ size_t;
 #define SYS_FACCESSAT         269
 #define SYS_PSELECT6          270
 #define SYS_PPOLL             271
+#define SYS_SPLICE            275
+#define SYS_TEE               276
+#define SYS_VMSPLICE          278
 #define SYS_UTIMENSAT         280
 #define SYS_ACCEPT4           288
 #define SYS_DUP3              292
 #define SYS_PIPE2             293
+#define SYS_PWRITEV           296
+#define SYS_RECVMMSG          299
 #define SYS_PRLIMIT64         302
 #define SYS_SYNCFS            306
 #define SYS_GETRANDOM         318
+#define SYS_PWRITEV2          328
+#define SYS_OPENAT2           437
 
 /* Offsets in x86-64's struct stat, 144 bytes. */
 #define KSTAT_SIZE       144
@@ -273,14 +286,15 @@ static __inline__ long syscall0(long n)
  * address to `probe_main` in RDI with the stack aligned as a call expects.
  */
 #define PROBE_SP_ENTRY              \
-    __asm__(".text\n"               \
+    __asm__(".pushsection .text\n"  \
             ".globl _start\n"       \
             "_start:\n"             \
             "    xorq %rbp, %rbp\n" \
             "    movq %rsp, %rdi\n" \
             "    andq $-16, %rsp\n" \
             "    call probe_main\n" \
-            "    hlt\n")
+            "    hlt\n"             \
+            ".popsection\n")
 
 /*
  * The attribute of a probe's `_start` written in C: the kernel enters it with
@@ -291,10 +305,11 @@ static __inline__ long syscall0(long n)
 
 /* A signal restorer for SA_RESTORER, named `name`: rt_sigreturn. */
 #define PROBE_RT_RESTORER(name)              \
-    __asm__(".text\n"                        \
+    __asm__(".pushsection .text\n"           \
             ".globl " #name "\n" #name ":\n" \
             "    movq $15, %rax\n"           \
-            "    syscall\n")
+            "    syscall\n"                  \
+            ".popsection\n")
 
 #else
 
@@ -333,6 +348,7 @@ static __inline__ long syscall0(long n)
 #define SYS_SETPGID           57
 #define SYS_UMASK             60
 #define SYS_CHROOT            61
+#define SYS_USTAT             62
 #define SYS_DUP2              63
 #define SYS_GETPPID           64
 #define SYS_GETPGRP           65
@@ -348,6 +364,7 @@ static __inline__ long syscall0(long n)
 #define SYS_SYSLOG            103
 #define SYS_SETITIMER         104
 #define SYS_GETITIMER         105
+#define SYS_VHANGUP           111
 #define SYS_WAIT4             114
 #define SYS_SYSINFO           116
 #define SYS_FSYNC             118
@@ -356,8 +373,9 @@ static __inline__ long syscall0(long n)
 #define SYS_MPROTECT          125
 #define SYS_GETPGID           132
 #define SYS_FCHDIR            133
-#define SYS_FLOCK             143
+#define SYS_SYSFS             135
 #define SYS_SELECT            142
+#define SYS_FLOCK             143
 #define SYS_READV             145
 #define SYS_WRITEV            146
 #define SYS_GETSID            147
@@ -368,8 +386,10 @@ static __inline__ long syscall0(long n)
 #define SYS_RT_SIGRETURN      173
 #define SYS_RT_SIGACTION      174
 #define SYS_RT_SIGPROCMASK    175
+#define SYS_RT_SIGPENDING     176
 #define SYS_PREAD64           180
 #define SYS_GETCWD            183
+#define SYS_CAPSET            185
 #define SYS_SIGALTSTACK       186
 #define SYS_VFORK             190
 #define SYS_GETRLIMIT         191
@@ -393,6 +413,8 @@ static __inline__ long syscall0(long n)
 #define SYS_CHOWN             212
 #define SYS_SETUID            213
 #define SYS_SETGID            214
+#define SYS_SETFSUID          215
+#define SYS_SETFSGID          216
 #define SYS_GETDENTS64        220
 #define SYS_FCNTL             221
 #define SYS_GETTID            224
@@ -417,9 +439,14 @@ static __inline__ long syscall0(long n)
 #define SYS_FACCESSAT         307
 #define SYS_PSELECT6          308
 #define SYS_PPOLL             309
+#define SYS_SPLICE            313
+#define SYS_TEE               315
+#define SYS_VMSPLICE          316
 #define SYS_UTIMENSAT         320
 #define SYS_DUP3              330
 #define SYS_PIPE2             331
+#define SYS_PWRITEV           334
+#define SYS_RECVMMSG          337
 #define SYS_PRLIMIT64         340
 #define SYS_SYNCFS            344
 #define SYS_GETRANDOM         355
@@ -437,14 +464,17 @@ static __inline__ long syscall0(long n)
 #define SYS_SENDMSG           370
 #define SYS_RECVFROM          371
 #define SYS_RECVMSG           372
-#define SYS_RECVMMSG          337
-#define SYS_RECVMMSG_TIME64   417
 #define SYS_SHUTDOWN          373
+#define SYS_PWRITEV2          379
+#define SYS_RECVMMSG_TIME64   417
+#define SYS_OPENAT2           437
 
 /* The calls only i386 has, and the narrower calls of the old names. */
+#define SYS_SOCKETCALL        102
 #define SYS_OLDSTAT           106
 #define SYS_OLDLSTAT          107
-#define SYS_SOCKETCALL        102
+#define SYS_SETFSUID16        138
+#define SYS_SETFSGID16        139
 #define SYS_LLSEEK            140
 #define SYS_MMAP2             192
 #define SYS_TRUNCATE64        193
@@ -559,22 +589,28 @@ static __inline__ long syscall6(long n, long a, long b, long c, long d, long e, 
  * `_start` with ESP at argc, and the stub passes that address to
  * `probe_main` as its argument on the stack.
  */
-#define PROBE_SP_ENTRY             \
-    __asm__(".globl _start\n"      \
-            "_start:\n"            \
-            "    mov %esp, %eax\n" \
-            "    push %eax\n"      \
-            "    call probe_main\n")
+#define PROBE_SP_ENTRY              \
+    __asm__(".pushsection .text\n"  \
+            ".globl _start\n"       \
+            "_start:\n"             \
+            "    mov %esp, %eax\n"  \
+            "    push %eax\n"       \
+            "    call probe_main\n" \
+            ".popsection\n")
 
 /* The attribute of a probe's `_start` written in C, which i386 enters with
  * the alignment it needs. */
 #define PROBE_START
 
-/* A signal restorer for SA_RESTORER, named `name`: rt_sigreturn. */
+/* A signal restorer for SA_RESTORER, named `name`: rt_sigreturn. It goes in
+ * .text, since the data sections are not executable where NX is on, as on
+ * the x86-64 kernel. */
 #define PROBE_RT_RESTORER(name)              \
-    __asm__(".globl " #name "\n" #name ":\n" \
+    __asm__(".pushsection .text\n"           \
+            ".globl " #name "\n" #name ":\n" \
             "    movl $173, %eax\n"          \
-            "    int $0x80\n")
+            "    int $0x80\n"                \
+            ".popsection\n")
 
 #endif
 

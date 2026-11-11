@@ -1,0 +1,11 @@
+# guest.txt: the Debian package of the assignment guest's own GRUB, in the
+# format of vendor/gnu/sources.txt: a name, the version, the URL and the
+# SHA-256. mkguest.sh fetches it with vendor/gnu/debian/fetch_asset.sh.
+#
+# It is from the snapshot the KVM suite's guest comes from,
+# 20260927T082144Z (tests/kvm/guests/debian.txt), and the digest is the one
+# that snapshot's trixie Packages index lists, the index whose SHA-256 the
+# signed InRelease gives. The package has GRUB's x86_64-efi images as Debian
+# builds them before signing; grubx64.efi is the one a Debian installation
+# boots, with its modules inside and the prefix /EFI/debian.
+debian-guest-grub-efi 2.12-9+deb13u2 https://snapshot.debian.org/archive/debian/20260927T082144Z/pool/main/g/grub2/grub-efi-amd64-unsigned_2.12-9+deb13u2_amd64.deb f30a4ab589f70af74bea89df37f538ad2faa7c6c41b2e7fa3b54a8fb81bf4193

@@ -1,0 +1,149 @@
+.Dd November 11, 2026
+.Dt PKEY_ALLOC 2
+.Os
+.Sh NAME
+.Nm pkey_alloc ,
+.Nm pkey_free ,
+.Nm pkey_mprotect
+.Nd allocate, free and assign memory protection keys
+.Sh SYNOPSIS
+.In sys/mman.h
+.Ft int
+.Fn pkey_alloc "unsigned int flags" "unsigned int access_rights"
+.Ft int
+.Fn pkey_free "int pkey"
+.Ft int
+.Fn pkey_mprotect "void *addr" "size_t len" "int prot" "int pkey"
+.Sh DESCRIPTION
+These calls manage the protection keys of an address space, which
+.Xr pkeys 7
+describes: the x86-64 kernel turns the keys on where the processor has
+them, and a program sees the OSPKE bit of CPUID leaf 7 set.
+.Pp
+.Fn pkey_alloc
+allocates the lowest free key from 0 to 15 and writes
+.Fa access_rights
+for it into the calling thread's PKRU:
+.Dv PKEY_DISABLE_ACCESS
+(1) denies every data access to the pages of the key, and
+.Dv PKEY_DISABLE_WRITE
+(2) denies writes to them.
+Other threads keep their own PKRU.
+.Fa flags
+must be 0.
+.Pp
+.Fn pkey_free
+frees a key that
+.Fn pkey_alloc
+gave, or key 0, which every address space starts with allocated;
+once freed, key 0 is the first that
+.Fn pkey_alloc
+gives again, as on Linux.
+Pages that still carry the key keep it; a later
+.Fn pkey_alloc
+may give it again, and its new rights then apply to them.
+.Pp
+.Fn pkey_mprotect
+is
+.Xr mprotect 2
+that also gives the pages of the range the key
+.Fa pkey ,
+which must be allocated.
+With
+.Fa pkey
+-1 it is
+.Fn mprotect
+itself: the pages keep their keys.
+The key is kept through a split or merge of the mapping, by
+.Xr mremap 2 ,
+and by the child of
+.Xr fork 2 ,
+which inherits the allocated keys and the parent's PKRU.
+.Xr execve 2
+frees every key but 0 and starts the program with PKRU 0x55555554.
+.Pp
+.Xr mprotect 2
+or
+.Xr mmap 2
+with
+.Dv PROT_EXEC
+alone gives the pages the execute-only key, which the kernel allocates once
+for the address space and denies all data access in PKRU, so that the
+pages run but cannot be read.
+.Fn pkey_alloc
+passes it over, and
+.Fn pkey_free
+and
+.Fn pkey_mprotect
+refuse it.
+A later
+.Fn mprotect
+with any other protection moves such pages back to key 0.
+.Pp
+Without the processor's keys, on x86-64 and as Linux answers there,
+.Fn pkey_alloc
+fails with
+.Er ENOSPC ,
+.Fn pkey_free
+with
+.Er EINVAL
+for every key, and
+.Fn pkey_mprotect
+is
+.Fn mprotect
+with key -1 and fails with
+.Er EINVAL
+for any other key once the range is checked.
+Linux builds the three calls on x86-64 alone: the i686 kernel has no
+entry for them and answers
+.Er ENOSYS .
+The x86-64 kernel answers an i386 program as it answers a 64-bit one,
+with the keys on where they are on.
+.Sh RETURN VALUES
+.Fn pkey_alloc
+returns the key.
+.Fn pkey_free
+and
+.Fn pkey_mprotect
+return 0.
+On an error each returns -1 with
+.Va errno
+set; the kernel returns the negative error number.
+.Sh ERRORS
+.Bl -tag -width "[ENOSPC]"
+.It Bq Er EINVAL
+.Fn pkey_alloc
+was given a flag, or a right other than the two.
+.Fn pkey_free
+or
+.Fn pkey_mprotect
+was given a key that is not allocated, the execute-only key, or a key
+outside 0 to 15 other than -1 for
+.Fn pkey_mprotect .
+.Fn pkey_mprotect
+was given an address that is not page-aligned, or a protection
+.Fn mprotect
+refuses.
+.It Bq Er ENOMEM
+.Fn pkey_mprotect
+was given a range that wraps or that is not all mapped.
+.It Bq Er ENOSPC
+.Fn pkey_alloc
+has no free key.
+.It Bq Er ENOSYS
+The kernel is the i686 one.
+.El
+.Pp
+.Fn pkey_mprotect
+checks in Linux's order: the address's alignment, an empty range, which
+returns 0 at once, a range that wraps, the protection and the key, then the
+mapping.
+It fails otherwise as
+.Xr mprotect 2
+does.
+.Sh SEE ALSO
+.Xr mmap 2 ,
+.Xr mprotect 2 ,
+.Xr mseal 2 ,
+.Xr sigaction 2 ,
+.Xr pkeys 7

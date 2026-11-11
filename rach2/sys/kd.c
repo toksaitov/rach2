@@ -654,6 +654,26 @@ int kd_translates(void)
     return kd_mode_translates(kd_visible_mode());
 }
 
+void kd_scroll_lock(int stopped)
+{
+    uint32_t flags;
+    unsigned int old, now;
+
+    kd_init();
+    flags = spin_lock_irqsave(&kd_lock);
+    old = kd_kb.ledflags;
+    if (stopped) {
+        kd_kb.ledflags |= KM_LED_SCROLL;
+    } else {
+        kd_kb.ledflags &= ~(unsigned int)KM_LED_SCROLL;
+    }
+    now = kd_kb.ledflags;
+    spin_unlock_irqrestore(&kd_lock, flags);
+    if (now != old && kd_leds == KD_LEDS_FOLLOW) {
+        input_set_leds(kd_leds_lit());
+    }
+}
+
 void kd_raw_code(uint8_t code)
 {
     if (kd_mode == K_RAW) {
@@ -736,6 +756,10 @@ static unsigned int kd_encode(const struct keymap *map, const struct keymap_resu
  */
 static int kd_console_key(unsigned int keycode, const struct keymap_result *res)
 {
+    if (res->kind == KM_RESULT_SPECIAL && res->key == KM_HOLD) {
+        tty_console_hold();
+        return 1;
+    }
     if (res->kind == KM_RESULT_SPECIAL && res->key == KM_SCROLLBACK) {
         k_scrollback_page_up();
         return 1;

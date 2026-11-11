@@ -1,0 +1,48 @@
+# webgl-virgl.omit: the WebGL pages that the virgl cases leave out, `BROWSER
+# PATH` a line, as webgl.sh -x takes them, in both guests alike.
+#
+# Firefox gives each WebGL context a GL context of its own, and under virgl
+# each is one of the host's; it frees them only when its collector runs.
+# These five pages make 17 to 54 contexts each, and after them the testing
+# PC's QEMU holds 240 and fails to make another, which ends it
+# (dev-log/77-vgpu/upstream.md). Chromium shares a few contexts among all
+# its pages and runs them.
+firefox conformance/context/context-creation-and-destruction.html
+firefox conformance/context/context-creation.html
+firefox conformance/context/context-eviction-with-garbage-collection.html
+firefox conformance/context/context-release-upon-reload.html
+firefox conformance/context/context-release-with-workers.html
+#
+# Chromium's upload of an ImageBitmap into an RGB9_E5 texture makes the
+# host's Direct3D 12 driver remove its device, as a copy into RGB9_E5 does
+# (dev-log/77-vgpu/upstream.md), and QEMU ends soon after. The first 24
+# pages are those uploads; Chromium's uploads into RGB9_E5 from a canvas,
+# an image, image data, an SVG image, a video or a WebGL canvas pass. The
+# last page makes and samples a texture of each format and removes the
+# device in Chromium too, and passes without its RGB9_E5 texture. Firefox
+# runs all 25.
+chromium conformance2/textures/image_bitmap_from_image_data/tex-2d-rgb9_e5-rgb-half_float.html
+chromium conformance2/textures/image_bitmap_from_image_data/tex-2d-rgb9_e5-rgb-float.html
+chromium conformance2/textures/image_bitmap_from_image_data/tex-3d-rgb9_e5-rgb-half_float.html
+chromium conformance2/textures/image_bitmap_from_image_data/tex-3d-rgb9_e5-rgb-float.html
+chromium conformance2/textures/image_bitmap_from_image/tex-2d-rgb9_e5-rgb-half_float.html
+chromium conformance2/textures/image_bitmap_from_image/tex-2d-rgb9_e5-rgb-float.html
+chromium conformance2/textures/image_bitmap_from_image/tex-3d-rgb9_e5-rgb-half_float.html
+chromium conformance2/textures/image_bitmap_from_image/tex-3d-rgb9_e5-rgb-float.html
+chromium conformance2/textures/image_bitmap_from_video/tex-2d-rgb9_e5-rgb-half_float.html
+chromium conformance2/textures/image_bitmap_from_video/tex-2d-rgb9_e5-rgb-float.html
+chromium conformance2/textures/image_bitmap_from_video/tex-3d-rgb9_e5-rgb-half_float.html
+chromium conformance2/textures/image_bitmap_from_video/tex-3d-rgb9_e5-rgb-float.html
+chromium conformance2/textures/image_bitmap_from_canvas/tex-2d-rgb9_e5-rgb-half_float.html
+chromium conformance2/textures/image_bitmap_from_canvas/tex-2d-rgb9_e5-rgb-float.html
+chromium conformance2/textures/image_bitmap_from_canvas/tex-3d-rgb9_e5-rgb-half_float.html
+chromium conformance2/textures/image_bitmap_from_canvas/tex-3d-rgb9_e5-rgb-float.html
+chromium conformance2/textures/image_bitmap_from_blob/tex-2d-rgb9_e5-rgb-half_float.html
+chromium conformance2/textures/image_bitmap_from_blob/tex-2d-rgb9_e5-rgb-float.html
+chromium conformance2/textures/image_bitmap_from_blob/tex-3d-rgb9_e5-rgb-half_float.html
+chromium conformance2/textures/image_bitmap_from_blob/tex-3d-rgb9_e5-rgb-float.html
+chromium conformance2/textures/image_bitmap_from_image_bitmap/tex-2d-rgb9_e5-rgb-half_float.html
+chromium conformance2/textures/image_bitmap_from_image_bitmap/tex-2d-rgb9_e5-rgb-float.html
+chromium conformance2/textures/image_bitmap_from_image_bitmap/tex-3d-rgb9_e5-rgb-half_float.html
+chromium conformance2/textures/image_bitmap_from_image_bitmap/tex-3d-rgb9_e5-rgb-float.html
+chromium conformance2/uniforms/incompatible-texture-type-for-sampler.html

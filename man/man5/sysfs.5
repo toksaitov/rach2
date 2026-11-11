@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 11, 2026
 .Dt SYSFS 5
 .Os
 .Sh NAME
@@ -34,11 +34,11 @@ the panel's backlights under
 and the sleep states under
 .Pa /sys/power .
 Any user may read it; root writes the files of mode 0644.
-A write of more than 31 bytes to one of the fixed files is
-.Er EINVAL
-and changes nothing; a
+A file is given the first 4096 bytes of a write at most, as Linux's
+kernfs gives a page, so a longer write is taken in part, and parses them
+with its own limits; the arguments a
 .Pa uevent
-takes up to 256 bytes, and a driver's own file up to 4096.
+write gives its uevent fill at most 256 bytes.
 .Bl -tag -width Ds
 .It Pa /sys/bus/pci/devices/0000:BB:DD.F
 A symbolic link for each PCI function, named by its bus, device and
@@ -49,6 +49,8 @@ The functions are listed in the order of bus, device and function.
 The function's variables, one
 .Ql NAME=value
 a line:
+.Ql DRIVER ,
+the driver bound to it, first and only while one is;
 .Ql PCI_CLASS ,
 the 24-bit class code in uppercase hexadecimal, at least four digits;
 .Ql PCI_ID
@@ -75,6 +77,58 @@ for the first VGA function in bus order that decodes memory and I/O, the
 one the firmware's display ran on, as Linux's VGA arbiter takes it, and
 .Ql 0
 for the others.
+.It Pa /sys/devices/pci0000:00/0000:BB:DD.F/resource
+The function's resources, as Linux's pci-sysfs.c writes them: a line for
+each of its six BARs, its expansion ROM and the six resources of SR-IOV,
+and for a bridge four more for its windows, each
+.Ql 0x%016llx 0x%016llx 0x%016llx :
+the first and last address the resource decodes and Linux's
+.Dv IORESOURCE_
+flags.
+A BAR's size is the one the kernel found when it listed the function at
+boot, before any driver started it, with decoding off while it wrote each
+BAR; its address and type are read at the time of the read.
+A resource the function lacks, the upper half of a 64-bit BAR, the SR-IOV
+resources and a bridge's windows are lines of zeros, and so is every line
+of a function a driver reports.
+libpciaccess reads a BAR's size from this file.
+.It Pa /sys/devices/pci0000:00/0000:BB:DD.F/resource0 No to Pa resource5
+One for each BAR the function has with a length, as Linux's pci-sysfs.c
+makes them, root's with mode 0600 and as long as the BAR.
+A process opens one when its file-system user id is 0, or with
+.Dv CAP_DAC_OVERRIDE ,
+or to read with
+.Dv CAP_DAC_READ_SEARCH ;
+so root opens none after
+.Xr setfsuid 2
+has taken that id from it.
+A read or write is clipped to the file: at or past its end a read
+returns 0 and a write fails with
+.Er EFBIG .
+A memory BAR's file has no read or write, which fail with
+.Er EIO ,
+and
+.Xr mmap 2
+maps its pages, shared and uncached, from the page offset, refusing a
+range past the BAR's end and a private mapping with
+.Er EINVAL .
+An I/O BAR's file reads and writes one port of the BAR at the file's
+offset, 1, 2 or 4 bytes at a time after the clipping, little-endian,
+refusing another width with
+.Er EINVAL ,
+so that 4 bytes asked for 2 before the end are one 2-byte access;
+it is not mapped, as on x86 Linux, and
+.Xr mmap 2
+fails with
+.Er ENODEV .
+libpciaccess maps a BAR through its file, as IGT maps the GPU's
+registers.
+.It Pa /sys/devices/pci0000:00/0000:BB:DD.F/resource0_wc No to Pa resource5_wc
+One for each prefetchable memory BAR when the page attribute table
+provides write-combining, as on x86 Linux with PAT enabled.
+It has the same mode, length and mapping bounds as
+.Pa resourceN ,
+but maps the pages write-combining instead of uncached.
 .It Pa /sys/devices/pci0000:00/0000:BB:DD.F/subsystem
 A link to the bus,
 .Pa ../../../bus/pci .
@@ -84,7 +138,9 @@ bytes when the ECAM window of the MCFG reaches the function's extended
 space, else 256, each dword read as the function answers it at the time
 of the read; to a process without privilege only the first 64, the
 header, since a few devices act on a read of their other registers.
-A privileged caller may open it for writing.
+A process opens it for writing when its file-system user id is 0 or
+with
+.Dv CAP_DAC_OVERRIDE .
 Writes stop at the end of the function's configuration space and use
 accesses of their own width, so a byte or word write does not rewrite
 adjacent status bits.
@@ -112,8 +168,50 @@ clear it; a longer name is
 .Er EINVAL .
 .It Pa /sys/bus/pci/devices/0000:BB:DD.F/driver
 A link to
-.Pa /sys/bus/pci/drivers/vfio-pci
-while the function is bound to it.
+.Pa /sys/bus/pci/drivers/NAME
+while the function is bound to the driver
+.Ar NAME ,
+such as
+.Ql i915
+or
+.Ql vfio-pci ,
+whose directory has a link back to the function by its name, as on
+Linux.
+libudev reads a device's driver from this link.
+.It Pa /sys/bus/pci/drivers/i915/{bind,unbind}
+Write-only, mode 0200; the directory is there once the Intel graphics
+driver has bound a device, under
+.Ql rach2.i915
+or
+.Ql rach2.i915fake .
+A function's name written to
+.Pa unbind
+releases the device for another driver, vfio-pci above all: its display
+goes off, the GPU is reset, its interrupts and bus mastering go off, and
+programs that have the card open get
+.Er ENODEV
+from it, as after an unplug.
+The write is
+.Er ENODEV
+for a name the driver has no device of,
+.Er EBUSY
+while a program sleeps in a read or write through the aperture, and
+.Er ETIMEDOUT
+when the GPU does not reset; the device then stays bound.
+A name written to
+.Pa bind
+resets the function, waits out its panel's power cycle and binds it as
+at boot.
+It is
+.Er ENODEV
+for a name no function has, a function the driver does not drive, or one
+whose
+.Pa driver_override
+names another driver,
+.Er EBUSY
+while a driver holds the function, and otherwise the error of the reset
+or of the bind, which leaves the function without a driver.
+The directory has a link, named as the function, to each function bound.
 .It Pa /sys/bus/pci/drivers/vfio-pci/{bind,unbind}
 Write-only, mode 0200.
 A function's name written to
@@ -188,8 +286,9 @@ its bus and the controller's slot for it, three decimal digits each; and
 .Ql DEVTYPE=usb_device .
 A write of an action sends that uevent.
 .It Pa /sys/devices/usb/B-P[.P...]/B-P[.P...]:C.I
-The interface of a USB keyboard or mouse, by its configuration value C
-and its number I, made with its input device and linked from
+Each human-interface interface of a USB keyboard or mouse that has an
+input device, by its configuration value C and its number I, made with
+its first input device and linked from
 .Pa /sys/bus/usb/devices :
 .Pa bInterfaceNumber ,
 .Pa bAlternateSetting ,
@@ -350,6 +449,29 @@ variables,
 .Ql MODALIAS
 and, for a port with PNP IDs,
 .Ql SERIO_FIRMWARE_ID .
+The mouse's port and the pass-through port have psmouse's files, mode
+0644:
+.Pa protocol ,
+.Pa rate ,
+.Pa resolution ,
+.Pa resetafter
+and
+.Pa resync_time .
+Their meanings and the protocol names are in
+.Xr input 4 .
+An Elantech pad's port has its registers and settings beside, as Linux's
+elantech.c makes them, mode 0644:
+.Pa reg_07 ,
+.Pa reg_10 ,
+.Pa reg_11 ,
+.Pa reg_20
+to
+.Pa reg_26 ,
+.Pa debug ,
+.Pa paritycheck
+and
+.Pa crc_enabled ,
+each a byte in hexadecimal.
 A TrackPoint's port has its settings beside, as Linux's trackpoint.c makes
 them, mode 0644:
 .Pa sensitivity ,
@@ -385,7 +507,8 @@ A link for each input device,
 and for its event device,
 .Pa eventN ,
 to its directory.
-An input device's N is the lowest free from 0, as Linux numbers them;
+An input device's N counts up from 0 and is not used again after the
+device goes, as Linux numbers them;
 an event device's is the N of
 .Pa /dev/input/eventN
 .Pq Xr input 4 .
@@ -400,7 +523,8 @@ and
 .Pa phys ,
 the strings of EVIOCGNAME and EVIOCGPHYS;
 .Pa uniq ,
-empty, since no driver gives a serial number;
+the serial string of a USB device in the report protocol, the string of
+EVIOCGUNIQ, and empty for any other device;
 .Pa properties
 and
 .Pa capabilities/ev ,
@@ -435,9 +559,10 @@ link to its parent, but under
 and its
 .Pa uevent :
 .Ql PRODUCT ,
-.Ql NAME
-and
+.Ql NAME ,
 .Ql PHYS
+and
+.Ql UNIQ
 when it has them,
 .Ql PROP ,
 .Ql EV ,
@@ -466,9 +591,17 @@ and a
 link to the input device.
 .It Pa /sys/dev/char/13:M
 A link for each event device, by its numbers, to its directory.
+.It Pa /sys/kernel/mm/transparent_hugepage
+The transparent huge-page policy and page-directory mapping size.
 .It Pa /sys/kernel/debug
 The directory where the kernel mounts debugfs; see
 .Xr debugfs 5 .
+.It Pa /sys/fs/pstore
+With the
+.Cm ramoops.
+options, the directory where the kernel mounts the records the last boot
+left; see
+.Xr pstore 5 .
 .It Pa /sys/kernel/uevent_seqnum
 The number of the last uevent sent.
 .It Pa /sys/module/kvm/parameters
@@ -585,14 +718,26 @@ its seconds since 1970;
 .Pa hctosys ,
 1, since the boot set the system's time from it; and
 .Pa wakealarm ,
-the wake alarm in seconds since 1970, empty when none is set, which takes a
+the wake alarm in seconds since 1970 while it is enabled, empty while it is
+not, which takes a
 write of seconds since 1970, of
 .Ql + Ns Ar N
 for
 .Ar N
-seconds from now, or of 0 to clear it, and a new time while one is set is
-.Er EBUSY ,
-as on Linux.
+seconds from now, or of
+.Ql += Ns Ar N
+to move the alarm set
+.Ar N
+seconds later, the number read as Linux's kstrtos64 reads it with base 0,
+with one newline at most after it.
+A time after now sets the alarm, and a new time while one is set is
+.Er EBUSY ;
+a push with none set, or to a time before 1970, is
+.Er EINVAL ,
+and a push to a time not after now raises the alarm at once; any other
+time, such as 0, disables it, as on Linux.
+The alarm comes once, and then reads empty and takes a new time; see
+.Xr rtc 4 .
 .It Pa /sys/class/rtc/rtc0/device/power/wakeup
 .Ql enabled :
 the clock's alarm may wake the machine.
@@ -616,7 +761,8 @@ still says what root wrote; and
 .Pa type ,
 .Ql raw ,
 a level of the hardware's own.
-Another value is
+A write is a number as Linux's kstrtoul reads it with base 0, with one
+newline at most after it; another value, or other text after it, is
 .Er EINVAL .
 See
 .Xr backlight 4 .
@@ -755,7 +901,10 @@ its distance from itself.
 .It Pa /sys/devices/system/clocksource/clocksource0
 .Pa current_clocksource ,
 the counter that keeps the clock, by Linux's name:
-.Ql tsc ,
+.Ql tsc
+while the clock is read from the time-stamp counter, as the x86-64
+.Xr vdso 7
+reads it,
 .Ql hpet ,
 .Ql acpi_pm ,
 or
@@ -941,6 +1090,9 @@ and
 with
 .Ql HOTPLUG=1
 on the card when its outputs change.
+A USB interface goes after every input device below it has sent its own
+.Ql remove ,
+as on Linux.
 A message is
 .Ql ACTION@DEVPATH
 and the variables
@@ -982,6 +1134,58 @@ Another word, a UUID of another length or a word without
 .Ql =
 is
 .Er EINVAL .
+.Pp
+The files under
+.Pa /sys/kernel/mm/transparent_hugepage
+are Linux 6.12's, as it boots with the transparent huge-page policy
+.Ql never :
+.Pa enabled
+reads
+.Ql always madvise [never] ,
+.Pa defrag
+.Ql always defer defer+madvise [madvise] never ,
+.Pa shmem_enabled
+.Ql always within_size advise [never] deny force ,
+and
+.Pa use_zero_page
+and
+.Pa shrink_underused
+read 1.
+With less than 512 MiB of memory, as Linux leaves them then,
+.Pa defrag
+reads
+.Ql always defer defer+madvise madvise [never]
+and
+.Pa use_zero_page
+0.
+.Pa hpage_pmd_size
+is the page-directory mapping size in bytes, 2097152 on x86-64 and
+4194304 on i686, and is read-only.
+The other five take root's write as Linux parses it, of which the first
+4096 bytes reach the parser, as on Linux; an empty write returns 0 and
+changes nothing:
+.Pa enabled
+and
+.Pa defrag
+one of their words, with at most one newline after it;
+.Pa shmem_enabled
+one of its words in at most 15 bytes, of which a final newline is dropped;
+.Pa use_zero_page
+0 or 1, with an optional
+.Ql +
+and newline, and
+.Er ERANGE
+for a number too large for an unsigned long, or for digits past 64 bits
+whatever follows them; and
+.Pa shrink_underused
+a boolean as Linux's
+.Fn kstrtobool
+reads its first letters.
+Anything else is
+.Er EINVAL
+and changes nothing.
+A written policy reads back, but no page is ever huge: memory is mapped
+in 4 KiB pages under every policy, which each of Linux's permits.
 .Sh LIMITS
 Linux's tree has much more: the other device classes, the attribute files
 beside a USB device's
@@ -1006,6 +1210,12 @@ and its counter cannot be changed.
 Linux lists the HPET and the ACPI PM timer when the machine has both;
 here only the one the kernel found is listed.
 A DMI string is cut at 63 bytes.
+.Pa /sys/kernel/mm/transparent_hugepage
+has no
+.Pa khugepaged
+directory and no
+.Pa hugepages- Ns Ar N Ns Pa kB
+directories of the sizes Linux's multi-size huge pages add.
 .Pa /sys/dev/char
 lists only the DRM nodes and the event devices.
 A virtio-gpu card's
@@ -1110,8 +1320,16 @@ The platform devices.
 The IOMMU groups.
 .It Pa /sys/bus/pci/drivers/vfio-pci
 The vfio-pci driver's files.
+.It Pa /sys/bus/pci/drivers/i915
+The Intel graphics driver's files.
+.It Pa /sys/kernel/mm/transparent_hugepage
+The transparent huge-page policy and page-directory mapping size.
 .It Pa /sys/kernel/debug
 Where debugfs is mounted.
+.It Pa /sys/fs/pstore
+Where pstore is mounted, with the
+.Cm ramoops.
+options.
 .It Pa /sys/kernel/uevent_seqnum
 The number of the last uevent.
 .It Pa /sys/module
@@ -1134,4 +1352,5 @@ MODALIAS=pci:v00008086d00000A04sv000017AAsd00003978bc06sc00i00
 .Xr vfio 4 ,
 .Xr debugfs 5 ,
 .Xr proc 5 ,
+.Xr pstore 5 ,
 .Xr netlink 7

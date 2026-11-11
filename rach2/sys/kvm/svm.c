@@ -3,6 +3,7 @@
 #include "kvm.h"
 
 #include "../arch/arch.h"
+#include "../arch/x86/debugreg.h"
 #include "../arch/x86/kcpu.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
@@ -28,8 +29,10 @@
 #define MSR_LSTAR             0xC0000082u
 #define MSR_CSTAR             0xC0000083u
 #define MSR_SYSCALL_MASK      0xC0000084u
+#define MSR_FS_BASE           0xC0000100u
 #define MSR_KERNEL_GS_BASE    0xC0000102u
 #define MSR_TSC_AUX           0xC0000103u
+#define MSR_TSC_RATIO         0xC0000104u
 #define MSR_VM_CR             0xC0010114u
 #define MSR_VM_HSAVE_PA       0xC0010117u
 
@@ -37,10 +40,17 @@
 #define VM_CR_SVMDIS 0x10u
 
 /* Leaf 0x8000000A's EDX: nested paging, the next RIP saved at an exit,
- * and the flush of one ASID's translations. */
+ * the TSC ratio MSR, and the flush of one ASID's translations. */
 #define SVM_FEAT_NP          (1u << 0)
 #define SVM_FEAT_NRIPS       (1u << 3)
+#define SVM_FEAT_TSCRATE     (1u << 4)
 #define SVM_FEAT_FLUSHBYASID (1u << 6)
+
+/* The TSC ratio MSR, which scales the TSC a guest reads and no other: 8
+ * bits of integer over 32 of fraction, so 1 and the largest are these. */
+#define TSC_RATIO_BITS 32u
+#define TSC_RATIO_ONE  (1ull << TSC_RATIO_BITS)
+#define TSC_RATIO_MAX  0xFFFFFFFFFFull
 
 /* A segment as the VMCB keeps it: the attributes are the descriptor's
  * bits 8 to 15 and 20 to 23, packed into 12 bits. */
@@ -313,6 +323,7 @@ static struct {
     uint32_t max_asid; /* the highest ASID, one less than leaf 0x8000000A's count */
     int nrips;         /* the exit saves the next RIP */
     int flushbyasid;   /* TLB_FLUSH_ONE is offered */
+    int tscrate;       /* the TSC ratio MSR is there */
     int rdtscp;        /* the host has RDTSCP, and so TSC_AUX */
     uint64_t host_mce; /* the host's CR4.MCE, which the guest's CR4 keeps */
 } caps;
@@ -320,7 +331,8 @@ static struct {
 /* Each processor's host save area, which VM_HSAVE_PA names, made at the
  * first VM; whether EFER.SVME and VM_HSAVE_PA are set there; whether a
  * run is inside its section, for the panic hook; its ASIDs, handed out
- * from `asid_next` in the generation `asid_gen`; and its TSC_AUX. */
+ * from `asid_next` in the generation `asid_gen`; its TSC_AUX; and the TSC
+ * ratio its MSR holds. */
 static void *hsave[NR_CPUS];
 static uint64_t hsave_pa[NR_CPUS];
 static volatile int svm_live[NR_CPUS];
@@ -328,14 +340,12 @@ static volatile int svm_in_run[NR_CPUS];
 static uint32_t asid_next[NR_CPUS];
 static uint32_t asid_gen[NR_CPUS];
 static uint64_t host_aux[NR_CPUS];
+static uint64_t tsc_ratio[NR_CPUS];
 
-/* The I/O permission map, every port intercepted, and the MSR permission
- * map, every MSR intercepted but FS_BASE, GS_BASE and KERNEL_GS_BASE,
- * which VMLOAD and VMSAVE move with the VMCB; every vCPU shares both. */
+/* The I/O permission map, every port intercepted, which every vCPU
+ * shares; each has its own MSR permission map (`svm_msr_filter_changed`). */
 static uint8_t *iopm;
 static uintptr_t iopm_pa;
-static uint8_t *msrpm;
-static uintptr_t msrpm_pa;
 
 /* ---- a vCPU's share ---- */
 
@@ -353,6 +363,8 @@ struct svm_vcpu {
     void *host; /* the page VMSAVE keeps the host's FS, GS, TR and MSRs in */
     uint64_t host_pa;
     void *host_fpu;
+    uint8_t *msrpm; /* every MSR intercepted but those `svm_msr_filter_changed` passes */
+    uintptr_t msrpm_pa;
     int built;         /* the VMCB's lasting fields are written */
     int cpu;           /* the processor whose ASID it holds, or -1 */
     uint32_t asid_gen; /* the generation of its ASID there */
@@ -397,7 +409,7 @@ static uint64_t dr7_of(const struct kvm_vcpu *v)
 /** CR8 of `v`: the in-kernel APIC's TPR, or the record's without one. */
 static uint64_t get_cr8(struct kvm_vcpu *v)
 {
-    return v->vm->irqchip == KVM_IRQCHIP_SPLIT ? kvm_lapic_cr8(v) : v->sregs.cr8;
+    return v->vm->irqchip != KVM_IRQCHIP_NONE ? kvm_lapic_cr8(v) : v->sregs.cr8;
 }
 
 /* ---- the processor's instructions ---- */
@@ -593,12 +605,15 @@ static void seg_read(const struct vmcb_seg *d, struct kvm_segment *s)
     s->padding = 0;
 }
 
-/** CR0 as the processor runs the guest under it: never CD or NW, as
- * Linux's KVM_X86_QUIRK_CD_NW_CLEARED leaves them, since nested paging
- * gives the memory types. */
-static uint64_t hw_cr0(uint64_t cr0)
+/** `v`'s CR0 as the processor runs the guest under it: without CD and NW
+ * under KVM_X86_QUIRK_CD_NW_CLEARED, since nested paging gives the memory
+ * types, and the guest's own once the quirk is turned off, as Linux's
+ * svm_set_cr0 has it. */
+static uint64_t hw_cr0(const struct kvm_vcpu *v)
 {
-    return cr0 & ~(CR0_CD | CR0_NW);
+    uint64_t cr0 = v->sregs.cr0;
+
+    return KVM_QUIRK(v->vm, KVM_X86_QUIRK_CD_NW_CLEARED) ? cr0 & ~(CR0_CD | CR0_NW) : cr0;
 }
 
 /** The intercepts of the control registers: CR0's reads and writes while
@@ -609,7 +624,7 @@ static uint32_t cr_intercepts(const struct kvm_vcpu *v)
 {
     uint32_t i = (1u << 4) | (1u << (16 + 4)) | (1u << (16 + 8));
 
-    if (hw_cr0(v->sregs.cr0) != v->sregs.cr0) {
+    if (hw_cr0(v) != v->sregs.cr0) {
         i |= 1u | (1u << 16);
     }
     return i;
@@ -637,7 +652,7 @@ static uint64_t table_msr(struct kvm_vcpu *v, uint32_t index)
 {
     uint64_t value = 0;
 
-    if (kvm_msr_get(v, index, &value) != 0) {
+    if (kvm_msr_get(v, index, &value, 1) != 0) {
         return 0;
     }
     return value;
@@ -662,17 +677,22 @@ static void vmcb_build(struct kvm_vcpu *v)
     c->intercept_dr = 0x00FF00FFu;
     /* #DB and #AC always, so that a guest cannot hold the processor in an
      * endless loop of either, as Linux keeps them since CVE-2015-8104 and
-     * CVE-2015-5307; #MC, which is the host's. */
-    c->intercept_exc = (1u << DB_VECTOR) | (1u << AC_VECTOR) | (1u << MC_VECTOR);
+     * CVE-2015-5307; #UD, for the instructions emulate.c runs after one;
+     * #MC, which is the host's. */
+    c->intercept_exc =
+        (1u << DB_VECTOR) | (1u << UD_VECTOR) | (1u << AC_VECTOR) | (1u << MC_VECTOR);
     c->intercept3 = INTERCEPT3_INTR | INTERCEPT3_NMI | INTERCEPT3_SMI | INTERCEPT3_RDPMC |
                     INTERCEPT3_CPUID | INTERCEPT3_RSM | INTERCEPT3_INVD | INTERCEPT3_HLT |
                     INTERCEPT3_INVLPGA | INTERCEPT3_IOIO | INTERCEPT3_MSR | INTERCEPT3_TASK |
                     INTERCEPT3_SHUTDOWN;
+    if (v->hlt_in_guest) {
+        c->intercept3 &= ~INTERCEPT3_HLT;
+    }
     c->intercept4 = INTERCEPT4_VMRUN | INTERCEPT4_VMMCALL | INTERCEPT4_VMLOAD | INTERCEPT4_VMSAVE |
                     INTERCEPT4_STGI | INTERCEPT4_CLGI | INTERCEPT4_SKINIT | INTERCEPT4_WBINVD |
                     INTERCEPT4_MONITOR | INTERCEPT4_MWAIT | INTERCEPT4_XSETBV | INTERCEPT4_RDPRU;
     c->iopm_pa = iopm_pa;
-    c->msrpm_pa = msrpm_pa;
+    c->msrpm_pa = s->msrpm_pa;
     c->int_ctl = INT_CTL_V_INTR_MASKING;
     c->nested_ctl = NESTED_CTL_NP;
     s->built = 1;
@@ -803,12 +823,15 @@ static void entry_fields(struct kvm_vcpu *v)
     struct vmcb_save *g = &s->vmcb->s;
     uint64_t rflags = v->regs.rflags;
 
-    if (v->vm->irqchip != KVM_IRQCHIP_SPLIT) {
+    if (v->vm->irqchip == KVM_IRQCHIP_NONE) {
         s->want_vintr = v->run->request_interrupt_window &&
                         (s->inj || !(v->regs.rflags & RFLAGS_IF) || v->events.interrupt.shadow);
     }
     c->event_inj = s->inj;
     c->event_inj_err = s->inj_err;
+    if ((s->inj & EV_VALID) && EV_TYPE(s->inj) == EV_INTR) {
+        v->irq_counts[EV_VECTOR(s->inj)][KVM_VEC_INJECT]++;
+    }
     if (caps.nrips && (s->inj & EV_VALID) &&
         (EV_TYPE(s->inj) == EV_SOFT ||
          (EV_TYPE(s->inj) == EV_EXCEPTION &&
@@ -829,7 +852,7 @@ static void entry_fields(struct kvm_vcpu *v)
     c->intercept_cr = cr_intercepts(v);
     c->nested_cr3 = kvm_tdp_root(v->vm);
     c->clean = 0;
-    g->cr0 = hw_cr0(v->sregs.cr0);
+    g->cr0 = hw_cr0(v);
     g->cr3 = v->sregs.cr3;
     g->cr4 = v->sregs.cr4 | caps.host_mce;
     g->efer = v->sregs.efer | GEFER_SVME;
@@ -863,7 +886,7 @@ static void dr_load(struct kvm_vcpu *v, uint64_t *host_dr7, uint64_t host_db[4])
     struct svm_vcpu *s = sv(v);
     int i, hw = debugging(v, KVM_GUESTDBG_USE_HW_BP);
 
-    *host_dr7 = hw_read_dr(7);
+    *host_dr7 = debugreg_loaded() ? hw_read_dr(7) : DR7_ONE;
     s->guest_dr = (dr7_of(v) & DR7_ENABLES) != 0;
     if (!s->guest_dr) {
         return;
@@ -995,7 +1018,7 @@ static void after_run(struct kvm_vcpu *v)
 static int svm_enter(struct kvm_vcpu *v)
 {
     struct svm_vcpu *s = sv(v);
-    uint64_t host_dr7 = 0, host_db[4] = {0, 0, 0, 0};
+    uint64_t host_dr7 = 0, host_db[4] = {0, 0, 0, 0}, ratio;
     int cpu = (int)arch_cpu_id(), tlb;
 
     if (v->emul.resume) {
@@ -1012,6 +1035,10 @@ static int svm_enter(struct kvm_vcpu *v)
         if (caps.rdtscp) {
             host_aux[cpu] = msr_read(MSR_TSC_AUX);
         }
+        if (caps.tscrate) {
+            msr_write(MSR_TSC_RATIO, TSC_RATIO_ONE);
+            tsc_ratio[cpu] = TSC_RATIO_ONE;
+        }
         svm_live[cpu] = 1;
     }
 #endif
@@ -1027,6 +1054,11 @@ static int svm_enter(struct kvm_vcpu *v)
     dr_load(v, &host_dr7, host_db);
     if (caps.rdtscp && s->tsc_aux != host_aux[cpu]) {
         msr_write(MSR_TSC_AUX, s->tsc_aux);
+    }
+    ratio = v->tsc_ratio ? v->tsc_ratio : TSC_RATIO_ONE;
+    if (caps.tscrate && ratio != tsc_ratio[cpu]) {
+        msr_write(MSR_TSC_RATIO, ratio);
+        tsc_ratio[cpu] = ratio;
     }
     svm_in_run[cpu] = 1;
     kvm_pmu_svm_enter(v);
@@ -1389,12 +1421,13 @@ static int sys_decode(struct kvm_vcpu *v, struct sys_insn *d)
     return 0;
 }
 
+static void exit_info(const struct kvm_vcpu *v, uint64_t info[5]);
+
 /** An instruction the backend could not read: the internal error of
  * Linux's handle_emulation_failure at CPL 0 and #UD above it, as for MMIO,
  * with the exit's code, qualifications and event. */
 static void emulation_failed(struct kvm_vcpu *v, const struct sys_insn *d)
 {
-    struct svm_exit *e = &sv(v)->ex;
     uint64_t info[5];
 
     if (kvm_emul_cpl(v) > 0) {
@@ -1402,11 +1435,7 @@ static void emulation_failed(struct kvm_vcpu *v, const struct sys_insn *d)
         v->exit.kind = KVM_X_AGAIN;
         return;
     }
-    info[0] = e->code;
-    info[1] = e->info1;
-    info[2] = e->info2;
-    info[3] = e->int_info;
-    info[4] = e->int_err;
+    exit_info(v, info);
     v->exit.kind = KVM_X_INTERNAL;
     kvm_decode_fail(&v->exit.internal, d ? d->bytes : NULL, d ? d->n : 0, info);
 }
@@ -1524,6 +1553,9 @@ static void complete_events(struct kvm_vcpu *v)
         v->events.interrupt.injected = 1;
         v->events.interrupt.nr = (uint8_t)vec;
         v->events.interrupt.soft = (uint8_t)(type == EV_SOFT);
+        if (type == EV_INTR) {
+            v->irq_counts[vec & 0xFFu][KVM_VEC_SAVE]++;
+        }
         break;
     default:
         break;
@@ -1615,7 +1647,7 @@ static int set_cr8(struct kvm_vcpu *v, uint64_t val)
         gp(v);
         return -1;
     }
-    if (v->vm->irqchip == KVM_IRQCHIP_SPLIT) {
+    if (v->vm->irqchip != KVM_IRQCHIP_NONE) {
         kvm_lapic_set_cr8(v, val);
     } else {
         v->sregs.cr8 = val;
@@ -1767,7 +1799,21 @@ static int exit_dr(struct kvm_vcpu *v)
         }
         dr += 2;
     }
-    if (v->debugregs.dr7 & DR7_GD) {
+    if (dr7_of(v) & DR7_GD) {
+        /* The exit comes before DR7.GD's trap, which is made here: the
+         * caller's, while it sets the breakpoints, as a debug exit, and
+         * the guest's own as its #DB, as Linux's handle_dr. */
+        if (debugging(v, KVM_GUESTDBG_USE_HW_BP)) {
+            struct kvm_run_debug *dbg = &v->exit.debug;
+
+            v->exit.kind = KVM_X_DEBUG;
+            k_memset(dbg, 0, sizeof(*dbg));
+            dbg->exception = DB_VECTOR;
+            dbg->pc = v->sregs.cs.base + v->regs.rip;
+            dbg->dr6 = DR6_BD | DR6_FIXED;
+            dbg->dr7 = dr7_of(v);
+            return 0;
+        }
         v->debugregs.dr6 = (v->debugregs.dr6 & ~0xFull) | DR6_BD | DR6_FIXED;
         v->debugregs.dr7 &= ~DR7_GD;
         v->dirty |= KVM_PART_DEBUG;
@@ -1883,50 +1929,68 @@ static void kgs_sync(struct kvm_vcpu *v)
     struct svm_vcpu *s = sv(v);
 
     if (!s->kgs_table) {
-        (void)kvm_msr_set(v, MSR_KERNEL_GS_BASE, s->vmcb->s.kernel_gs_base);
+        (void)kvm_msr_set(v, MSR_KERNEL_GS_BASE, s->vmcb->s.kernel_gs_base, 1);
         s->kgs_table = 1;
     }
 }
 
-/** RDMSR and WRMSR, by EXITINFO1: EFER and DEBUGCTL here, the rest through
- * `kvm_emul_msr`; #GP for an MSR neither knows or a value they refuse, as
- * Linux's default without ignore_msrs. */
-static int exit_msr(struct kvm_vcpu *v)
+/** The guest's RDMSR or WRMSR of `index`, by `write`, with `*value` its
+ * EDX:EAX: EFER and DEBUGCTL here, the rest through `kvm_emul_msr`. 0, with
+ * a read's value in `*value`, or a KVM_MSR_* failure. */
+static int msr_access(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value)
 {
-    struct svm_vcpu *s = sv(v);
-    int write = (s->ex.info1 & 1u) != 0, r;
-    uint32_t index = (uint32_t)v->regs.rcx;
-    uint64_t value = (v->regs.rax & 0xFFFFFFFFull) | (v->regs.rdx << 32);
-
-    v->exit.kind = KVM_X_AGAIN;
-    if (write) {
-        kgs_sync(v);
-    }
     switch (index) {
     case MSR_EFER:
         if (write) {
-            r = set_efer(v, value);
-        } else {
-            value = v->sregs.efer;
-            r = 0;
+            return set_efer(v, *value);
         }
-        break;
+        *value = v->sregs.efer;
+        return 0;
     case MSR_IA32_DEBUGCTL:
         /* No LBR and no BTF, which Linux drops with a note; any other bit
          * is #GP. */
         if (write) {
-            value &= ~(DEBUGCTL_LBR | DEBUGCTL_BTF);
-            r = value ? -1 : 0;
-        } else {
-            value = s->debugctl;
-            r = 0;
+            return (*value & ~(DEBUGCTL_LBR | DEBUGCTL_BTF)) ? KVM_MSR_INVAL : 0;
         }
-        break;
+        *value = sv(v)->debugctl;
+        return 0;
     default:
-        r = kvm_emul_msr(v, index, write, &value);
-        break;
+        return kvm_emul_msr(v, index, write, value);
     }
+}
+
+/** RDMSR and WRMSR, by EXITINFO1, as Linux's kvm_emulate_rdmsr and
+ * kvm_emulate_wrmsr: an access KVM_X86_SET_MSR_FILTER denies fails at
+ * once, any other is `msr_access`'s. A failure goes to the caller when
+ * KVM_CAP_X86_USER_SPACE_MSR asked for its reason, and is #GP otherwise,
+ * as Linux's default without ignore_msrs. */
+static int exit_msr(struct kvm_vcpu *v)
+{
+    int write = (sv(v)->ex.info1 & 1u) != 0, r;
+    uint32_t index = (uint32_t)v->regs.rcx, len;
+    uint64_t value = (v->regs.rax & 0xFFFFFFFFull) | (v->regs.rdx << 32);
+
+    v->exit.kind = KVM_X_AGAIN;
+    if (index - MSR_FS_BASE < 3u && kvm_msr_allowed(v, index, write)) {
+        /* The map predates the filter, and KVM_REQ_MSR_FILTER brings it up
+         * to date before the instruction runs again. */
+        return 0;
+    }
+    if (write) {
+        kgs_sync(v);
+    }
+    r = kvm_msr_allowed(v, index, write) ? msr_access(v, index, write, &value) : KVM_MSR_FILTERED;
     if (r != 0) {
+        /* The caller's answer skips the instruction, whose length is
+         * decoded only for an exit the caller takes, as Linux's
+         * kvm_msr_user_space raises #GP before any decode. */
+        if (kvm_msr_user_reason(v, r)) {
+            len = insn_len(v);
+            if (len != 0) {
+                (void)kvm_msr_user_exit(v, index, write, value, r, len);
+            }
+            return 0;
+        }
         gp(v);
         return 0;
     }
@@ -1958,6 +2022,22 @@ static int exit_vmmcall(struct kvm_vcpu *v)
     return 0;
 }
 
+/** The exit's numbers for an internal error's report, as Linux's
+ * svm_get_exit_info gives them: the code, EXITINFO1 and EXITINFO2, and
+ * the event under delivery with its error code, 0 unless the event is
+ * valid and has one. */
+static void exit_info(const struct kvm_vcpu *v, uint64_t info[5])
+{
+    const struct svm_exit *e = &sv(v)->ex;
+    uint32_t coded = EV_VALID | EV_ERR;
+
+    info[0] = e->code;
+    info[1] = e->info1;
+    info[2] = e->info2;
+    info[3] = e->int_info;
+    info[4] = (e->int_info & coded) == coded ? e->int_err : 0;
+}
+
 /** A nested page fault: EXITINFO2's guest-physical address, which
  * `kvm_tdp_fault` maps, or an access to a frame no slot holds, MMIO, which
  * emulate.c carries out. */
@@ -1975,58 +2055,41 @@ static int exit_npf(struct kvm_vcpu *v)
         v->exit.kind = KVM_X_AGAIN;
         return 0;
     }
-    info[0] = e->code;
-    info[1] = e->info1;
-    info[2] = e->info2;
-    info[3] = e->int_info;
-    info[4] = e->int_err;
-    return kvm_emul_mmio(v, e->info2, info);
-}
-
-/** Fold a #DB's bits, which the processor left in the VMCB's DR6, into the
- * guest's DR6, as Linux's kvm_deliver_exception_payload: the breakpoint
- * bits replaced, the bits active low cleared where the event cleared them,
- * and bit 12 never set. */
-static void db_payload(struct kvm_vcpu *v)
-{
-    uint64_t payload = sv(v)->vmcb->s.dr6 ^ DR6_ACTIVE_LOW;
-    uint64_t dr6 = v->debugregs.dr6;
-
-    dr6 &= ~0xFull;
-    dr6 |= DR6_ACTIVE_LOW;
-    dr6 |= payload;
-    dr6 ^= payload & DR6_ACTIVE_LOW;
-    dr6 &= ~(1ull << 12);
-    v->debugregs.dr6 = dr6;
-    v->dirty |= KVM_PART_DEBUG;
+    exit_info(v, info);
+    return kvm_emul_mmio(v, info);
 }
 
 /**
  * An exception's intercept: the host's machine check, which `enter` passed
- * on; #AC given back to the guest; the #DB of the NMI window's step, which
- * ends it; the #DB or #BP the caller's debugging takes, which goes to the
- * caller as KVM_EXIT_DEBUG with the address, DR6 and DR7, as Linux's
- * db_interception and bp_interception give it; and the guest's own #DB,
- * given back with its bits in DR6.
+ * on; #AC given back to the guest; #UD, whose instruction emulate.c runs
+ * when it is one Linux's emulator runs after a #UD, as Linux's
+ * ud_interception; the #DB of the NMI window's step, which ends it; the
+ * #DB or #BP the caller's debugging takes, which goes to the caller as
+ * KVM_EXIT_DEBUG with the address, DR6 and DR7, as Linux's db_interception
+ * and bp_interception give it; and the guest's own #DB, given back with
+ * its bits, which the processor left in the VMCB's DR6, in the guest's.
  */
 static int exit_exception(struct kvm_vcpu *v, uint32_t vec)
 {
     struct svm_vcpu *s = sv(v);
     struct kvm_run_debug *d = &v->exit.debug;
+    uint64_t info[5];
     int caller;
 
     v->exit.kind = KVM_X_AGAIN;
     switch (vec) {
     case MC_VECTOR:
         return 0;
+    case UD_VECTOR:
+        exit_info(v, info);
+        return kvm_emul_ud(v, info);
     case AC_VECTOR:
         kvm_queue_exception(v, AC_VECTOR, 1, 0);
         return 0;
     case DB_VECTOR:
         caller = debugging(v, KVM_GUESTDBG_SINGLESTEP | KVM_GUESTDBG_USE_HW_BP);
         if (!caller && !s->nmi_ss) {
-            db_payload(v);
-            kvm_queue_exception(v, DB_VECTOR, 0, 0);
+            kvm_queue_db(v, s->vmcb->s.dr6 ^ DR6_ACTIVE_LOW);
             return 0;
         }
         if (s->nmi_ss) {
@@ -2130,21 +2193,29 @@ static int exit_insn(struct kvm_vcpu *v, uint64_t code)
 {
     switch (code) {
     case EXIT_CPUID:
-        kvm_emul_cpuid(v);
-        (void)skip(v);
+        if (kvm_emul_cpuid(v) == 0) {
+            (void)skip(v);
+        }
         return 1;
     case EXIT_HLT:
         if (skip(v)) {
             v->exit.kind = KVM_X_HLT;
         }
         return 1;
-    case EXIT_INVD:
     case EXIT_MONITOR:
     case EXIT_MWAIT:
     case EXIT_MWAIT_COND:
-        /* INVD as a no-op, as Linux's kvm_emulate_invd; MONITOR and MWAIT
-         * as no-ops, as Linux's KVM_X86_QUIRK_MWAIT_NEVER_UD_FAULTS does by
-         * default. */
+        /* MONITOR and MWAIT as no-ops, as Linux's kvm_emulate_monitor_mwait:
+         * #UD only with KVM_X86_QUIRK_MWAIT_NEVER_UD_FAULTS turned off, for a
+         * guest whose CPUID lacks MWAIT. */
+        if (!KVM_QUIRK(v->vm, KVM_X86_QUIRK_MWAIT_NEVER_UD_FAULTS) && !kvm_msr_guest_mwait(v)) {
+            kvm_queue_exception(v, UD_VECTOR, 0, 0);
+            return 1;
+        }
+        (void)skip(v);
+        return 1;
+    case EXIT_INVD:
+        /* A no-op, as Linux's kvm_emulate_invd. */
         (void)skip(v);
         return 1;
     case EXIT_WBINVD:
@@ -2223,6 +2294,8 @@ static int exit_code(struct kvm_vcpu *v)
     }
     switch (code) {
     case EXIT_INTR:
+        v->at_boundary = 1;
+        return 0;
     case EXIT_NMI:
     case EXIT_SMI:
     case EXIT_INIT:
@@ -2441,7 +2514,7 @@ static void svm_inject(struct kvm_vcpu *v)
 {
     struct svm_vcpu *s = sv(v);
     uint32_t info = 0;
-    int split = v->vm->irqchip == KVM_IRQCHIP_SPLIT;
+    int split = v->vm->irqchip != KVM_IRQCHIP_NONE;
     /* No new NMI or interrupt while the caller's KVM_GUESTDBG_BLOCKIRQ
      * holds them, as Linux's kvm_check_and_inject_events. */
     int block = debugging(v, KVM_GUESTDBG_BLOCKIRQ);
@@ -2498,7 +2571,8 @@ static int32_t svm_check_extension(long cap)
 }
 
 /** The backend's share of a new VM: the host save areas of the processors
- * and the permission maps, made at the first VM and kept. 0 or -ENOMEM. */
+ * and the I/O permission map, made at the first VM and kept. 0 or
+ * -ENOMEM. */
 static int svm_vm_init(struct kvm_vm *vm)
 {
     uintptr_t pa;
@@ -2510,15 +2584,6 @@ static int svm_vm_init(struct kvm_vm *vm)
         if (!iopm) {
             return -ENOMEM;
         }
-    }
-    if (!msrpm) {
-        msrpm = kvm_map_pages(2, &msrpm_pa);
-        if (!msrpm) {
-            return -ENOMEM;
-        }
-        /* MSRs 0xC0000000 to 0xC0001FFF from byte 2048, two bits each, the
-         * read's then the write's: FS_BASE, GS_BASE and KERNEL_GS_BASE. */
-        msrpm[2048 + (0x100 * 2) / 8] &= (uint8_t)~0x3Fu;
     }
     for (i = 0; i < ncpu && i < NR_CPUS; i++) {
         if (hsave[i]) {
@@ -2534,8 +2599,28 @@ static int svm_vm_init(struct kvm_vm *vm)
     return 0;
 }
 
+/**
+ * Have the guest of `v` reach FS_BASE, GS_BASE and KERNEL_GS_BASE, which
+ * VMLOAD and VMSAVE move with the VMCB, directly but for the accesses
+ * KVM_X86_SET_MSR_FILTER denies, which exit, as Linux's
+ * svm_msr_filter_changed. The MSRs from 0xC0000000 have two bits each from
+ * byte 2048 of the map, the read's then the write's.
+ */
+static void svm_msr_filter_changed(struct kvm_vcpu *v)
+{
+    uint8_t *b = sv(v)->msrpm + 2048 + (0x100 * 2) / 8;
+    uint8_t bits = 0;
+    uint32_t i;
+
+    for (i = 0; i < 3u; i++) {
+        bits |= (uint8_t)((kvm_msr_allowed(v, MSR_FS_BASE + i, 0) ? 0u : 1u) << (2u * i));
+        bits |= (uint8_t)((kvm_msr_allowed(v, MSR_FS_BASE + i, 1) ? 0u : 2u) << (2u * i));
+    }
+    *b = (uint8_t)((*b & ~0x3Fu) | bits);
+}
+
 /** Make the backend's share of `v`: the VMCB, the page of the host's
- * state, and the host's FPU area. 0 or -ENOMEM. */
+ * state, the MSR permission map and the host's FPU area. 0 or -ENOMEM. */
 static int svm_vcpu_init(struct kvm_vcpu *v)
 {
     struct svm_vcpu *s = kzalloc(sizeof(*s));
@@ -2549,12 +2634,14 @@ static int svm_vcpu_init(struct kvm_vcpu *v)
     s->vmcb_pa = pa;
     s->host = kalloc_pages(1, &pa);
     s->host_pa = pa;
+    s->msrpm = kvm_map_pages(2, &s->msrpm_pa);
     s->host_fpu = fpu_area_alloc();
-    if (!s->vmcb || !s->host || !s->host_fpu) {
+    if (!s->vmcb || !s->host || !s->msrpm || !s->host_fpu) {
         return -ENOMEM;
     }
     k_memset(s->vmcb, 0, 4096);
     k_memset(s->host, 0, 4096);
+    svm_msr_filter_changed(v);
     s->cpu = -1;
     s->kgs_table = 1;
     return 0;
@@ -2573,6 +2660,9 @@ static void svm_vcpu_free(struct kvm_vcpu *v)
     }
     if (s->host) {
         kfree_pages(s->host, 1);
+    }
+    if (s->msrpm) {
+        kfree_pages(s->msrpm, 2);
     }
     fpu_area_free(s->host_fpu);
     kfree(s);
@@ -2601,8 +2691,8 @@ static void svm_panic(void)
 /**
  * Whether the processor has SVM as this backend needs it and the firmware
  * left it on: SVM in leaf 0x80000001, VM_CR's SVMDIS clear, nested paging,
- * and at least two ASIDs. NRIPS and the flush by ASID are taken where they
- * are. 1 or 0.
+ * and at least two ASIDs. NRIPS, the flush by ASID and the TSC ratio are
+ * taken where they are. 1 or 0.
  */
 static int svm_probe(void)
 {
@@ -2629,11 +2719,30 @@ static int svm_probe(void)
     caps.max_asid = b - 1u;
     caps.nrips = (d & SVM_FEAT_NRIPS) != 0;
     caps.flushbyasid = (d & SVM_FEAT_FLUSHBYASID) != 0;
+    caps.tscrate = (d & SVM_FEAT_TSCRATE) != 0;
 #ifndef RACH2_HOSTTEST
     caps.host_mce = hw_read_cr4() & CR4_MCE;
 #endif
     k_panic_hook = svm_panic;
     return 1;
+}
+
+/** `kvm_backend`'s tsc_scaling: the TSC ratio MSR's largest value and its
+ * 32 bits of fraction, or 0 on a processor without the MSR. */
+static uint64_t svm_tsc_scaling(uint32_t *frac_bits)
+{
+    *frac_bits = TSC_RATIO_BITS;
+    return caps.tscrate ? TSC_RATIO_MAX : 0;
+}
+
+/** `kvm_backend`'s xsaves: whether the host may use XSAVES
+ * (`kcpu_xsaves_usable`), since a guest with XSAVE runs it where the host
+ * has it, which KVM_GET_SUPPORTED_CPUID then offers, as Linux's
+ * svm_vcpu_after_set_cpuid has it; Linux's host lacks it on a Zen 1 or 2
+ * without Erratum 1386's fixed microcode. */
+static int svm_xsaves(void)
+{
+    return kcpu_xsaves_usable();
 }
 
 /** The bits of a memory type in a 4 KiB leaf: PCD and PWT for UC, PWT for
@@ -2648,6 +2757,9 @@ static uint64_t svm_cache(int type, int ignore_guest_pat)
 static const struct kvm_tdp_format svm_tdp = {
     0x1u, 0x1u, 0x2u, 0, 1ull << 63, 0x4u, 0x80u, 0x000FFFFFFFFFF000ull, 0x20u, 0x40u, svm_cache};
 
-const struct kvm_backend kvm_svm = {
-    "svm",    svm_probe,    svm_vm_init, NULL,       svm_vcpu_init,       svm_vcpu_free, svm_enter,
-    svm_exit, svm_complete, svm_save,    svm_inject, svm_check_extension, &svm_tdp};
+const struct kvm_backend kvm_svm = {"svm",     svm_probe,       svm_vm_init,
+                                    NULL,      svm_vcpu_init,   svm_vcpu_free,
+                                    svm_enter, svm_exit,        svm_complete,
+                                    svm_save,  svm_inject,      svm_check_extension,
+                                    &svm_tdp,  svm_tsc_scaling, svm_msr_filter_changed,
+                                    svm_xsaves};

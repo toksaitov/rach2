@@ -9,6 +9,7 @@
 #include "paging.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
+#include "../proc/sched.h"
 
 /* The most pages a file in memory has, SHMEM_MAX_SIZE of them. */
 #define SHMEM_MAX_PAGES ((uint32_t)(SHMEM_MAX_SIZE / PAGE_SIZE))
@@ -64,12 +65,25 @@ static uintptr_t *slot(struct shmem *sh, uint32_t i, int make)
     return &sh->leaves[leaf][i % SHMEM_LEAF];
 }
 
+int shmem_quota_full(const struct shmem *sh)
+{
+    const struct shmem_quota *q = sh->quota;
+
+    if (!q) {
+        return 0;
+    }
+    if (q->cap) {
+        return q->used >= q->cap();
+    }
+    return q->limit && q->used >= q->limit;
+}
+
 /** Count a frame the table takes: 1, or 0 when the quota has no room for
  * it. */
 static int take_page(struct shmem *sh)
 {
     if (sh->quota) {
-        if (sh->quota->limit && sh->quota->used >= sh->quota->limit) {
+        if (shmem_quota_full(sh)) {
             return 0;
         }
         sh->quota->used++;
@@ -242,6 +256,35 @@ uintptr_t shmem_resident(const struct shmem *sh, uint32_t pgoff)
     return sh->leaves[leaf][pgoff % SHMEM_LEAF];
 }
 
+uint64_t shmem_count(const struct shmem *sh, uint32_t first, uint32_t last)
+{
+    uint32_t leaf = first / SHMEM_LEAF;
+    uint32_t end = last / SHMEM_LEAF;
+    uint64_t count = 0;
+    uint32_t work = 0;
+
+    for (; leaf <= end && leaf < sh->nleaves; leaf++) {
+        const uintptr_t *frames = sh->leaves[leaf];
+        uint32_t from = leaf == first / SHMEM_LEAF ? first % SHMEM_LEAF : 0;
+        uint32_t to = leaf == end ? last % SHMEM_LEAF : SHMEM_LEAF - 1;
+        uint32_t i;
+
+        if (frames) {
+            for (i = from; i <= to; i++) {
+                count += frames[i] != 0;
+            }
+            work += SHMEM_LEAF;
+        } else {
+            work++;
+        }
+        if (work >= SHMEM_LEAF) {
+            sched_service_point();
+            work = 0;
+        }
+    }
+    return count;
+}
+
 uintptr_t shmem_adopt(struct shmem *sh, uint32_t pgoff, uintptr_t phys)
 {
     uintptr_t *e = slot(sh, pgoff, 1);
@@ -314,9 +357,15 @@ void shmem_punch(struct shmem *sh, uint64_t off, uint64_t len)
 
 void shmem_free(struct shmem *sh)
 {
+    struct shmem_policy *n;
+
     shmem_truncate(sh, 0);
     kfree(sh->leaves);
     sh->leaves = NULL;
     sh->nleaves = 0;
     sh->npages = 0;
+    while ((n = sh->policies) != NULL) {
+        sh->policies = n->next;
+        kfree(n);
+    }
 }

@@ -548,10 +548,12 @@ uint8_t *core_notes(int signo, uint32_t *size)
 
 /** The bytes of region `r` the file has: all of a readable region, none of
  * one that is not, as Linux leaves a PROT_NONE reservation out, and none of
- * device memory, which Linux leaves out too. */
+ * device memory or of memfd_secret's, which Linux leaves out too. */
 static uintptr_t region_file_size(const struct core_region *r)
 {
-    return (r->prot & VM_PROT_READ) && !(r->prot & VM_PROT_IO) ? r->end - r->start : 0u;
+    return (r->prot & VM_PROT_READ) && !(r->prot & (VM_PROT_IO | VM_PROT_SECRET))
+               ? r->end - r->start
+               : 0u;
 }
 
 /**
@@ -649,7 +651,7 @@ static void load_write(struct core_out *o, const struct core_elf *f, const struc
     uint8_t phdr[CORE_HDR_MAX];
     uint32_t flags = 0;
 
-    if (r->prot & VM_PROT_READ) {
+    if (VM_READABLE(r->prot)) {
         flags |= PF_R;
     }
     if (r->prot & VM_PROT_WRITE) {

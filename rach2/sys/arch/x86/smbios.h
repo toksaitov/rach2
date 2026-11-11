@@ -58,6 +58,11 @@ int smbios_vendor_is(const char *prefix);
  */
 int smbios_system_is(const char *maker, const char *name);
 
+/** Whether the DMI field `field`, one of dmi.h's numbers, holds `sub`, as
+ * Linux's `DMI_MATCH` of that field matches it; a field the table does not
+ * hold, or holds empty, matches nothing. */
+int smbios_field_has(int field, const char *sub);
+
 /**
  * Read the structures at `at`, `len` bytes of them, rather than scanning for
  * an anchor; for a host test.

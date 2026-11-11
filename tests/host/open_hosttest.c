@@ -39,9 +39,14 @@
  * - a seek of a /proc file's or /dev/bootlog's description while a read or
  *   a write of it sleeps, and the log's seeks past the offsets they can
  *   return;
+ * - an open of /proc/PID/fd/N for a device opened through a device node of
+ *   a mounted type while another thread closes descriptor N, the device's
+ *   last;
  * - the release of the last holder of a file of the KRFFS root that lost
  *   its name, by each path a descriptor or a file mapping ends on, while
  *   another process's allocation on the root runs in the reclaim's sleep;
+ * - a read of a disk file whose pages a shared mapping holds in memory
+ *   when no temporary mapping is free for one of them;
  * - on a model type that sets `file_locked`, with the node locks of
  *   rach2/sys/fs/nodelock.c, the order of the locks a create, an unlink,
  *   an rmdir and a rename in one directory and between two take, and a
@@ -72,8 +77,8 @@ static void fd_holds_release(void);
 static long sys_ftruncate(isr_params_t *params);
 static long ksys_ftruncate(int fd, long long length);
 static long ksys_truncate(const char __user *upath, long long length);
-static long ksys_pread64(int fd, char __user *buf, uint32_t count, long long pos);
-static long ksys_pwrite64(int fd, const char __user *buf, uint32_t count, long long pos);
+static long ksys_pread64(int fd, char __user *buf, size_t count, long long pos);
+static long ksys_pwrite64(int fd, const char __user *buf, size_t count, long long pos);
 static long ksys_fadvise64(int fd, long long len, uint32_t advice);
 static long ksys_fallocate(int fd, uint32_t mode, uint64_t offset, uint64_t len);
 static long sys_write(isr_params_t *params);
@@ -101,6 +106,7 @@ static long sys_mount(isr_params_t *params);
 static long sys_umount2(isr_params_t *params);
 static long sys_open(isr_params_t *params);
 static long sys_openat(isr_params_t *params);
+static long sys_openat2(isr_params_t *params);
 static long sys_close(isr_params_t *params);
 static long sys_fsync(isr_params_t *params);
 static long sys_fdatasync(isr_params_t *params);
@@ -113,8 +119,9 @@ static long sys_pread64(isr_params_t *params);
 static long sys_pwrite64(isr_params_t *params);
 static long sys_preadv(isr_params_t *params);
 static long sys_pwritev(isr_params_t *params);
-static int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, net_addr_t *src_ip,
-                           uint16_t *src_port, int peek, int32_t *whole);
+struct kernel_iovec;
+static int32_t readv_dgram(fd_entry_t *entry, const struct kernel_iovec *iov, int iovcnt,
+                           net_addr_t *src_ip, uint16_t *src_port, int peek, int32_t *whole);
 static long sys_readv(isr_params_t *params);
 static long sys_dup(isr_params_t *params);
 static long sys_dup2(isr_params_t *params);
@@ -133,6 +140,9 @@ static long sys_statfs(isr_params_t *params);
 static long sys_fstatfs(isr_params_t *params);
 static long sys_statfs64(isr_params_t *params);
 static long sys_fstatfs64(isr_params_t *params);
+static int ksys_ustat_counts(uint32_t dev, uint64_t *bfree, uint64_t *ffree);
+static long sys_ustat(isr_params_t *params);
+static long sys_sysfs(isr_params_t *params);
 static long sys_fstat64(isr_params_t *params);
 static long sys_fstatat64(isr_params_t *params);
 static long sys_access(isr_params_t *params);
@@ -165,10 +175,17 @@ static long sys_renameat2(isr_params_t *params);
 static void get_current_time(int64_t *seconds, int64_t *nanoseconds);
 static long sys_utimensat(isr_params_t *params);
 static long sys_utimensat_time64(isr_params_t *params);
+static long ksys_getdents32(int fd, uintptr_t buf, uint32_t count, int old);
+static long ksys_sync_file_range(int fd, int64_t off, int64_t len, uint32_t flags);
+static long sys_sync_file_range(isr_params_t *params);
+static long sys_preadv2(isr_params_t *params);
+static long sys_pwritev2(isr_params_t *params);
 static long sys_getdents64(isr_params_t *params);
 static long sys_dup3(isr_params_t *params);
 static long sys_statx(isr_params_t *params);
 static long sys_memfd_create(isr_params_t *params);
+static long sys_memfd_secret(isr_params_t *params);
+static long sys_cachestat(isr_params_t *params);
 static long sys_flock(isr_params_t *params);
 static long sys_close_range(isr_params_t *params);
 static int32_t fs_core_file(int signo, unsigned long limit);
@@ -322,6 +339,15 @@ static int reclaiming, reclaim_parked, extents_taken, extents_in_reclaim;
 
 /* The model of a type that sets `file_locked`, defined before `main`. */
 static struct vfs_mount fl_mount;
+/* The device row: a serialised mounted type, as tmpfs is, whose node
+ * `dev_inode` is a character device, the holds of that node and the
+ * operations entered on its mount that are not given back yet, the closes
+ * of the device, and what runs while the device's open sleeps. */
+static const struct vfs_ops dev_vfs_ops = {0};
+static const struct vfs_type dev_type = {"devnode", 0, &dev_vfs_ops, 1, 0};
+static struct vfs_mount dev_mount;
+static int dev_inode, dev_holds, dev_enters, dev_closes;
+static void (*in_dev_open)(void);
 static int fl_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **found);
 static int fl_getattr(struct vfs_mount *mnt, void *at, struct vfs_stat *st);
 static int fl_resolve(const char *path, int flags, struct vfs_ref *out, char *leaf,
@@ -440,6 +466,14 @@ int user_buffer_ok(uintptr_t addr, size_t len, int write)
     return 1;
 }
 
+/** Whether a range ends in user space, which in the model every range does. */
+int user_span_ok(uintptr_t addr, size_t len)
+{
+    (void)addr;
+    (void)len;
+    return 1;
+}
+
 /** Take a path page from the model's four; every one must come back. */
 char *path_buf_get(void)
 {
@@ -541,21 +575,28 @@ int32_t fifo_attach(struct fd_entry *e, const void *mnt, uint64_t ino, int flags
     return -ENXIO;
 }
 
-/** Fail the row: no row opens a device node. */
+/** The device row's /dev name, "dri/card0"; any other row fails. */
 const char *devfs_name_of(int block, uint32_t rdev)
 {
     (void)block;
     (void)rdev;
-    check(0, "unexpected device node open");
-    return 0;
+    check(in_dev_open != 0, "unexpected device node open");
+    return "dri/card0";
 }
 
-/** Fail the row: no row opens a device by name. */
+/** The device row's open of its device, which sleeps, running what the row
+ * has happen meanwhile, and then finds the device gone: -ENXIO. Any other
+ * row fails. */
 int devfs_open(const char *name, int flags)
 {
-    (void)name;
+    void (*meanwhile)(void) = in_dev_open;
+
     (void)flags;
-    check(0, "unexpected device open");
+    check(meanwhile && __builtin_strcmp(name, "dri/card0") == 0, "unexpected device open");
+    in_dev_open = 0;
+    if (meanwhile) {
+        meanwhile();
+    }
     return -ENXIO;
 }
 
@@ -709,14 +750,36 @@ struct vfs_mount *vfs_root_mount(void)
     return &mount;
 }
 
+/* The resident-read row (`resident_unmapped`): set while it runs, the two
+ * pages a shared mapping of its disk file holds in memory, the page
+ * `kmap_temp` finds no free slot for, and the references its reads hold. */
+static int resident_row;
+static uint8_t resident_pages[2][PAGE_SIZE];
+static uintptr_t resident_fail;
+static int resident_refs;
+
 /** Report an accessible regular file with set-id bits, or in the mkdir rows
  * the directory a name is made in. A read the mount's lock does not cover
  * may sleep for the disk, and the call queued for the row, a write that
  * moves the file, runs then. */
 int vfs_getattr(struct vfs_mount *mnt, void *at, struct vfs_stat *st)
 {
+    if (resident_row) {
+        check(mnt == &mount && at == &node, "a resident read sizes the file it reads");
+        k_memset(st, 0, sizeof(*st));
+        st->mode = 0100644;
+        st->size = sizeof(resident_pages);
+        return 0;
+    }
     if (mnt == &fl_mount) {
         return fl_getattr(mnt, at, st);
+    }
+    if (mnt == &dev_mount) {
+        check(at == &dev_inode, "a device's reopen checks the node it was opened through");
+        k_memset(st, 0, sizeof(*st));
+        st->mode = 020666;
+        st->rdev = 0xE200;
+        return 0;
     }
     if (ns_depth == 0) {
         run_waiting();
@@ -809,8 +872,22 @@ int filecache_read(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys)
 }
 
 /** No change counted. */
-uint32_t filecache_epoch(void)
+uint32_t filecache_epoch(struct vfs_mount *mnt, void *node)
 {
+    (void)mnt;
+    (void)node;
+    return 0;
+}
+
+/** Keep no file, so that read(2) goes to the file system. */
+int filecache_file_read(struct open_file *ofd, char __user *buf, uint32_t count, uint64_t offset,
+                        int32_t *got)
+{
+    (void)ofd;
+    (void)buf;
+    (void)count;
+    (void)offset;
+    (void)got;
     return 0;
 }
 
@@ -837,6 +914,10 @@ int vfs_truncate(struct vfs_mount *mnt, void *at, uint64_t size)
     return truncate_error;
 }
 
+/** Count nothing: no walk here runs scoped. */
+void vfs_tree_changed(void)
+{}
+
 /** Release a successfully opened handle, never more than were opened. */
 void vfs_release(struct vfs_mount *mnt, void *at)
 {
@@ -848,6 +929,11 @@ void vfs_release(struct vfs_mount *mnt, void *at)
 void vfs_ref_release(struct vfs_ref *ref)
 {
     if (ref->mnt == &fl_mount) {
+        return;
+    }
+    if (ref->mnt == &dev_mount) {
+        dev_holds--;
+        dev_enters--;
         return;
     }
     check(ref->mnt == &mount, "failed open releases resolution");
@@ -864,7 +950,10 @@ void vfs_desc_open(struct vfs_mount *mnt)
 /** Record completion of the resolution's mount operation. */
 void vfs_leave(struct vfs_mount *mnt)
 {
-    (void)mnt;
+    if (mnt == &dev_mount) {
+        dev_enters--;
+        return;
+    }
     leaves++;
 }
 
@@ -873,6 +962,12 @@ void vfs_leave(struct vfs_mount *mnt)
  * descriptions open nothing on the root, and have nothing to close. */
 void vfs_desc_close(struct vfs_mount *mnt, void *at, void *opened)
 {
+    if (mnt == &dev_mount) {
+        check(at == &dev_inode && !opened, "a device's description keeps its node only");
+        dev_holds--;
+        refs--;
+        return;
+    }
     if (orphan_ofd) {
         return;
     }
@@ -894,10 +989,14 @@ int unix_inflight_holds(const void *node)
     return 0;
 }
 
-/** No row reads, shares or cuts the pages of a mapping. */
+/** Map a page of the resident-read row, the address being the page's, or
+ * none for `resident_fail`; no other row reads, shares or cuts the pages of
+ * a mapping. */
 void *kmap_temp(uintptr_t phys)
 {
-    (void)phys;
+    if (resident_row) {
+        return phys == resident_fail ? NULL : (void *)phys;
+    }
     check(0, "unexpected read of a mapping's page");
     return NULL;
 }
@@ -943,12 +1042,15 @@ void *kmalloc(size_t size)
     return kzalloc(size);
 }
 
-/** The shared mappings of disk files, which no row makes: a row's mapping
- * is private, and no page of a shared one is resident. */
+/** The pages of a shared mapping of a disk file in memory: the
+ * resident-read row's two, and none in any other row, whose mappings are
+ * private. */
 uintptr_t shmem_resident(const struct shmem *sh, uint32_t pgoff)
 {
     (void)sh;
-    (void)pgoff;
+    if (resident_row && pgoff < 2) {
+        return (uintptr_t)resident_pages[pgoff];
+    }
     return 0;
 }
 
@@ -978,18 +1080,22 @@ uintptr_t alloc_user_frame(void)
     return 0;
 }
 
-/** Fail the row: no shared page gains a reference. */
+/** Count a reference to a page of the resident-read row; fail any other
+ * row, where no shared page gains one. */
 void frame_ref(uintptr_t phys)
 {
     (void)phys;
-    check(0, "unexpected reference to a shared page");
+    check(resident_row, "unexpected reference to a shared page");
+    resident_refs++;
 }
 
-/** Fail the row: no shared page is freed. */
+/** Drop a reference to a page of the resident-read row; fail any other
+ * row, where no shared page is freed. */
 void free_frame(uintptr_t phys)
 {
     (void)phys;
-    check(0, "unexpected free of a shared page");
+    check(resident_row, "unexpected free of a shared page");
+    resident_refs--;
 }
 
 /** Fail the row: no row holds a mapping. */
@@ -1029,6 +1135,13 @@ int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t
     (void)offset;
     check(0, "unexpected write of a mapped file");
     return -EIO;
+}
+
+/** A quota with room, since no row maps a shared page. */
+int shmem_quota_full(const struct shmem *sh)
+{
+    (void)sh;
+    return 0;
 }
 
 /** Fail the row: no shared page is mapped. */
@@ -1393,6 +1506,23 @@ int sysfs_pci_is_vga(int key)
     (void)key;
     return 0;
 }
+
+/** No PCI function of /sys exists, so none has a BAR. */
+uint64_t sysfs_pci_bar_size(int key, int bar)
+{
+    (void)key;
+    (void)bar;
+    return 0;
+}
+
+/** No PCI function of /sys exists, so it has none of its files. */
+int sysfs_pci_attr_present(int key, int attr)
+{
+    (void)key;
+    (void)attr;
+    return 0;
+}
+
 /** No descriptor is of /proc/sys. */
 int procfs_fd_is_sys(struct fd_entry *e)
 {
@@ -1424,6 +1554,13 @@ int devfs_lseek_zero(struct fd_entry *e)
 {
     (void)e;
     check(0, "unexpected device seek");
+    return 0;
+}
+
+/** No row opens /dev/mem: 0. */
+int devfs_fd_is_mem(struct fd_entry *e)
+{
+    (void)e;
     return 0;
 }
 
@@ -1717,6 +1854,17 @@ uint32_t procfs_ino_pid(int pid)
     return 0;
 }
 
+/** Fail the row: no row's path is of /proc. */
+int procfs_pid_owner(int pid, uint32_t mode, uint32_t *uid, uint32_t *gid)
+{
+    (void)pid;
+    (void)mode;
+    (void)uid;
+    (void)gid;
+    check(0, "unexpected /proc lookup");
+    return -ENOENT;
+}
+
 /** Find the model process for a followed /proc/PID/fd link. */
 process_t *get_process(uint32_t pid)
 {
@@ -1731,6 +1879,25 @@ int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid)
     (void)gid;
     check(0, "unexpected /proc lookup");
     return -ENOENT;
+}
+
+/** No descriptor is of /proc, so a lookup has no owner to set. */
+void procfs_lookup_owner(const struct vpath *vp)
+{
+    (void)vp;
+}
+
+/** No descriptor is of /proc, so an open keeps no owner. */
+void procfs_owner_keep(struct synth_owner *o, const struct vpath *vp)
+{
+    (void)o;
+    (void)vp;
+}
+
+/** No descriptor is of /proc, so a close has no kept owner to drop. */
+void procfs_owner_drop(struct synth_owner *o)
+{
+    (void)o;
 }
 
 /** No descriptor is of /proc: -1. */
@@ -1856,18 +2023,27 @@ int vfs_node_path(struct vfs_mount *mnt, void *at, char *out, uint32_t cap)
     return -ENOENT;
 }
 
-/** Fail the row: no row enters a process's root. */
+/** Count an operation on the device row's mount; fail any other row, which
+ * enters no process's root. */
 int vfs_enter(struct vfs_mount *mnt)
 {
-    (void)mnt;
+    if (mnt == &dev_mount) {
+        dev_enters++;
+        return 0;
+    }
     check(0, "unexpected entry to a process's root");
     return -EBUSY;
 }
 
-/** Fail the row: no row holds a process's root. */
+/** Count a hold of the device row's node; fail any other row, which holds no
+ * process's root. */
 void vfs_ref_hold(const struct vfs_ref *r)
 {
-    (void)r;
+    if (r->mnt == &dev_mount) {
+        check(r->node == &dev_inode, "a hold of the device's node");
+        dev_holds++;
+        return;
+    }
     check(0, "unexpected hold of a process's root");
 }
 
@@ -3108,8 +3284,8 @@ static void offset_seek_waits(void)
         parked_on = 0;
         sharer_seek = 0;
         sharer_call = cases[i].seek;
-        moved_bytes =
-            cases[i].writing ? write_ops(e, buf, sizeof(buf)) : read_ops(e, buf, sizeof(buf));
+        moved_bytes = cases[i].writing ? write_ops(e, buf, sizeof(buf), sizeof(buf))
+                                       : read_ops(e, buf, sizeof(buf), sizeof(buf));
         check(moved_bytes == 32, "the transfer moves its 32 bytes");
         check(sharer_parked, cases[i].waits);
         if (sharer_parked) {
@@ -3174,6 +3350,60 @@ static void log_seek_range(void)
     rc = sys_lseek(&params);
     check(rc == 0x2000 && e->ofd->offset == 0x2000,
           "an lseek to the end of /dev/bootlog gives the ring's length");
+    row_end();
+}
+
+/** The close of the device row's device, its description's last. */
+static void dev_close(fd_entry_t *e)
+{
+    (void)e;
+    dev_closes++;
+}
+
+static const struct file_ops dev_ops = {.close = dev_close};
+
+/** The close the caller's other thread makes of the device row's
+ * descriptor 0 while the reopen's open of the device sleeps. */
+static void dev_desc_close(void)
+{
+    check(close_fd(0) == 0, "the close of the device's descriptor");
+}
+
+/**
+ * An open of /proc/PID/fd/0 for a device opened through a device node of a
+ * serialised mounted type, as tmpfs is, whose open of the device sleeps
+ * while the caller's other thread closes descriptor 0, the description's
+ * last: the close runs the device's close, since the reopen holds the node
+ * and its mount and not the description, and the reopen gives back its
+ * holds and its entry to the mount when it ends.
+ */
+static void device_reopen_closed(void)
+{
+    fd_entry_t *e;
+    int32_t rc;
+
+    row_begin();
+    dev_mount.type = &dev_type;
+    dev_holds = dev_enters = dev_closes = 0;
+    proc.rlim[RLIM_NOFILE].cur = FD_TABLE_LIMIT;
+    check(fd_alloc(proc.fds) == 0, "the device row's descriptor");
+    e = &proc.fds->entries[0];
+    e->type = FD_TYPE_DEVICE;
+    e->ops = &dev_ops;
+    e->flags = FD_FLAG_READ | FD_FLAG_WRITE;
+    e->ofd->dev_mnt = &dev_mount;
+    e->ofd->dev_node = &dev_inode;
+    dev_holds = 1;
+    refs++;
+    in_dev_open = dev_desc_close;
+    rc = proc_fd_reopen_device(e, 2 /* O_RDWR */);
+    check(rc == -ENXIO && !in_dev_open, "the reopen opens the device, which is gone");
+    check(proc.fds->entries[0].type == FD_TYPE_NONE, "the device's descriptor is closed");
+    check(dev_closes == 1,
+          "a close of a device's last descriptor while a reopen of it sleeps closes the device");
+    check(dev_holds == 0 && dev_enters == 0 && ns_depth == 0,
+          "the reopen gives back its holds of the device's node and its mount");
+    in_dev_open = 0;
     row_end();
 }
 
@@ -3867,6 +4097,46 @@ static void file_locked_mount_rmdir(void)
     fl_row_end("M L5 L30 M rmdir oW30 U30 U5 oL30 oU30 ", "the mount waits for the victim's lock");
 }
 
+/**
+ * A read of a disk file whose two pages a shared mapping holds in memory,
+ * with stores not written back, when `kmap_temp` has no free slot for a
+ * page: the read returns the pages before that page, or -ENOMEM when it is
+ * the first, and never reads the file's stale bytes in its place, as
+ * Linux's filemap_read fails rather than read around a folio it has.
+ */
+static void resident_unmapped(void)
+{
+    static struct dshare ds;
+    static char out[2 * PAGE_SIZE];
+    struct open_file ofd;
+
+    k_memset(&ofd, 0, sizeof(ofd));
+    ofd.vmnt = &mount;
+    ofd.vnode = &node;
+    ofd.ino = 77;
+    ds.mnt = &mount;
+    ds.ino = 77;
+    ds.sh.npages = 2;
+    k_memset(resident_pages[0], 'a', PAGE_SIZE);
+    k_memset(resident_pages[1], 'b', PAGE_SIZE);
+    dshares = &ds;
+    resident_row = 1;
+
+    resident_fail = (uintptr_t)resident_pages[1];
+    k_memset(out, 0, sizeof(out));
+    check(file_read_locked(&ofd, (char __user *)out, sizeof(out), 0) == PAGE_SIZE &&
+              out[0] == 'a' && out[PAGE_SIZE - 1] == 'a' && out[PAGE_SIZE] == 0,
+          "a resident read returns the page before the one it cannot map");
+    resident_fail = (uintptr_t)resident_pages[0];
+    check(file_read_locked(&ofd, (char __user *)out, sizeof(out), 0) == -ENOMEM,
+          "a resident read of a first page it cannot map fails with ENOMEM");
+    check(resident_refs == 0, "a resident read lets every page's reference go");
+
+    resident_row = 0;
+    resident_fail = 0;
+    dshares = NULL;
+}
+
 int main(void)
 {
     mount.type = &mounted_type;
@@ -3893,10 +4163,12 @@ int main(void)
     lock_keys();
     offset_seek_waits();
     log_seek_range();
+    device_reopen_closed();
     orphan_reclaims();
     mapping_reclaims();
     file_locked_orders();
     file_locked_mount_rmdir();
+    resident_unmapped();
     if (!failures) {
         printf("open-hosttest: result: pass: mounted truncation, loop handles and root removals\n");
     }

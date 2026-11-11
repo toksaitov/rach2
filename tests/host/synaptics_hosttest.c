@@ -5,7 +5,7 @@
  * behind it, with the event device read as a program reads it (evdev.c)
  * and the mouse device's packets (mouse.c).
  *
- * host-deps: rach2/sys/evdev.c rach2/sys/mouse.c
+ * host-deps: rach2/sys/evdev.c rach2/sys/mouse.c rach2/sys/arch/x86/smbios.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
  *
@@ -90,6 +90,8 @@ static uint8_t arg_for;
 static uint8_t special;
 static int res_count;
 static uint8_t pad_mode;
+static int modes_set;      /* the mode bytes set since the model's reset */
+static uint8_t first_mode; /* the first of them */
 static int agm_on;
 static uint8_t dev_res;
 static uint8_t dev_rate;
@@ -204,6 +206,9 @@ static void dev_take(uint8_t b)
         model_put(0xFA);
         if (dev_kind == KIND_PAD && res_count >= 4 && b == 0x14) {
             pad_mode = special;
+            if (modes_set++ == 0) {
+                first_mode = special;
+            }
         } else if (dev_kind == KIND_PAD && res_count >= 4 && b == 0xC8) {
             agm_on = 1;
         } else {
@@ -328,6 +333,9 @@ int elantech_byte(uint8_t data)
 
 /* The rest of elantech.h, which a port without an Elantech pad never
  * calls; elantech_hosttest.c tests it. */
+void elantech_packet_restart(void)
+{}
+
 int elantech_packet_start(void)
 {
     return 1;
@@ -367,6 +375,14 @@ int alps_byte(uint8_t data)
 
 /* The rest of alps.h, which a port without an ALPS pad never calls;
  * alps_hosttest.c tests it. */
+void alps_packet_restart(void)
+{}
+
+int alps_reset_after(void)
+{
+    return 12;
+}
+
 int alps_packet_start(void)
 {
     return 1;
@@ -412,10 +428,57 @@ void k_udelay(uint32_t usec)
     (void)usec;
 }
 
+/** No sysfs tree is published by this model. */
+void evdev_sysfs_serio_remove(int port)
+{
+    (void)port;
+}
+
+void evdev_sysfs_serio_add(int port)
+{
+    (void)port;
+}
+
+/** This model has no competing command caller. */
+int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    (void)wq;
+    return cond(arg) ? 0 : -EINTR;
+}
+
 void evdev_sysfs_serio_files(int port, int (*add)(int dir))
 {
     (void)port;
     (void)add;
+}
+
+void evdev_sysfs_serio_driver(int port, int (*add)(int dir))
+{
+    (void)port;
+    (void)add;
+}
+
+unsigned int elantech_set_rate(unsigned int rate)
+{
+    return rate;
+}
+
+int elantech_packet_size(void)
+{
+    return 6;
+}
+
+int elantech_sysfs_add(int dir)
+{
+    (void)dir;
+    return 0;
+}
+
+int alps_poll(uint8_t badbyte, uint8_t *buf)
+{
+    (void)badbyte;
+    (void)buf;
+    return -1;
 }
 
 int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg)
@@ -448,6 +511,14 @@ void input_get_repeat(int *delay_ms, int *period_ms)
 {
     *delay_ms = 250;
     *period_ms = 33;
+}
+
+/** No keyboard here takes its keys through input.c. */
+int input_keyboard_release(struct evdev *dev, unsigned int keycode)
+{
+    (void)dev;
+    (void)keycode;
+    return 0;
 }
 
 void input_set_repeat(int delay_ms, int period_ms)
@@ -613,6 +684,8 @@ static void model_reset(int kind)
     special = 0;
     res_count = 0;
     pad_mode = 0;
+    modes_set = 0;
+    first_mode = 0;
     agm_on = 0;
     dev_res = 2;
     dev_rate = 100;
@@ -670,15 +743,26 @@ static void expect_mode(uint8_t m)
     expect(0x14);
 }
 
-/** Expect the bring-up's start, the reset and the defaults, and the
+/** Expect the bring-up's start, the reset and the defaults, a Kensington
+ * ThinkingMouse's rates and ID, which psmouse tries first, and the
  * Synaptics knock, Linux's `synaptics_detect`. */
 static void expect_start(void)
 {
+    static const uint8_t thinking[9] = {20, 60, 40, 20, 20, 60, 40, 20, 20};
     int i;
 
     n_want = 0;
     expect(0xFF);
     expect(0xF6);
+    expect(0xF3);
+    expect(10);
+    expect(0xE8);
+    expect(0x00);
+    for (i = 0; i < 9; i++) {
+        expect(0xF3);
+        expect(thinking[i]);
+    }
+    expect(0xF2);
     for (i = 0; i < 4; i++) {
         expect(0xE8);
         expect(0x00);
@@ -964,8 +1048,17 @@ static void packet_rows(void)
     irq_byte(0x00);
     irq_byte(0x14);
     kernel_ticks += MS_TO_TICKS(600);
+    irq_byte(0);
+    CHECK("a pause inside the pad's packet queues a resync",
+          state == STATE_RESYNC && (reconnect_wanted & RESYNC_PORT));
+    ps2mouse_resync();
+    CHECK("the unanswered poll queues a reconnect",
+          state == STATE_IGNORE && (reconnect_wanted & RECONNECT_PORT));
+    ps2mouse_reconnect();
+    CHECK("the pad reports after reconnect", state == STATE_ACTIVE);
+
     send_packet(2000, 2000, 40, 8, 0, 0);
-    CHECK("a packet broken off by a pause is dropped", sync_losses == 2);
+    CHECK("the driver does not count the pause as a malformed packet", sync_losses == 1);
     CHECK("the packet after it is read, a new contact in slot 0",
           take() > 0 && got_events(again, 12));
 }
@@ -1054,7 +1147,14 @@ static void fallback_rows(void)
     CHECK("a plain mouse's bring-up succeeds", init_mouse() == 0);
     CHECK("a plain mouse is no touchpad", touchpad == 0 && pad == NULL);
     expect_start();
-    expect(0xF3); /* the IntelliMouse's knock follows */
+    expect(0xE8); /* a Genius mouse's resolution, scalings and status */
+    expect(0x03);
+    expect(0xE6);
+    expect(0xE6);
+    expect(0xE6);
+    expect(0xE9);
+    expect(0xE1); /* the TrackPoint's read-ID, then the IntelliMouse's knock */
+    expect(0xF3);
     CHECK("a plain mouse is knocked as Linux's psmouse knocks", took_expected(n_want));
     CHECK("it is PS/2 Generic Mouse",
           open_pad() == 0 && evdev_ioctl(&open_e, EVIOCGNAME(64), (uintptr_t)name) > 0 &&
@@ -1090,9 +1190,67 @@ static void fallback_rows(void)
     model_reset(KIND_PAD);
 }
 
+/** No table is mapped: the SMBIOS reader reads the row's from memory. */
+uintptr_t map_mmio(uintptr_t phys, size_t size)
+{
+    (void)phys;
+    (void)size;
+    return 0;
+}
+
+/* The SMBIOS table a row gives, of System Information alone. */
+static uint8_t smbios_table[256];
+
+/** Give the SMBIOS reader a table whose System Information, type 1, names
+ * the manufacturer `maker`, the product `product` and its `version`, or,
+ * when `maker` is NULL, a table of no structure but its end. */
+static void set_system(const char *maker, const char *product, const char *version)
+{
+    static const uint8_t end[6] = {127, 4, 0, 0, 0, 0};
+    static const uint8_t header[8] = {1, 8, 0, 1, 1, 2, 3, 0};
+    const char *const strings[3] = {maker, product, version};
+    unsigned int n = 0, i, k;
+
+    if (maker) {
+        k_memcpy(smbios_table, header, sizeof(header));
+        n = sizeof(header);
+        for (k = 0; k < 3; k++) {
+            for (i = 0; strings[k][i]; i++) {
+                smbios_table[n++] = (uint8_t)strings[k][i];
+            }
+            smbios_table[n++] = 0;
+        }
+        smbios_table[n++] = 0;
+    }
+    k_memcpy(smbios_table + n, end, sizeof(end));
+    smbios_set_table(smbios_table, n + (unsigned int)sizeof(end));
+}
+
+/** A Toshiba of Linux's `toshiba_dmi_table`, whose pad reports at 40
+ * packets a second, and a Toshiba that is none. */
+static void toshiba_rows(void)
+{
+    model_reset(KIND_PAD);
+    set_system("TOSHIBA", "Satellite A200", "PSAE0E");
+    CHECK("a Satellite's touchpad is brought up", init_mouse() == 0 && touchpad == 1);
+    CHECK("its mode is set at 80 packets a second, then at psmouse's 40",
+          modes_set >= 2 && first_mode == 0xC5 && pad_mode == 0x85 && ps2mouse_port_rate() == 40 &&
+              reporting);
+    synaptics_reconnect();
+    CHECK("and its reconnect keeps 40", pad_mode == 0x85);
+
+    model_reset(KIND_PAD);
+    set_system("TOSHIBA", "Portable PC", "Version 2.0");
+    CHECK("a Portable PC of another version keeps 80",
+          init_mouse() == 0 && pad_mode == 0xC5 && ps2mouse_port_rate() == 80);
+    set_system(NULL, NULL, NULL);
+}
+
 int main(void)
 {
+    set_system(NULL, NULL, NULL);
     bringup_rows();
+    toshiba_rows();
     capability_rows();
     packet_rows();
     mouse_rows();

@@ -7,6 +7,19 @@
 
 #include "process.h"
 
+/* The scheduling policies, Linux's numbers. FIFO and RR run by their
+ * real-time priority, above every other thread; OTHER, BATCH and IDLE take
+ * their turns among the ordinary threads, and so does DEADLINE, which has
+ * no class of its own (syscall_proc.c). EXT is defined so that a call about
+ * it answers as a Linux without sched_ext does. */
+#define SCHED_OTHER    0
+#define SCHED_FIFO     1
+#define SCHED_RR       2
+#define SCHED_BATCH    3
+#define SCHED_IDLE     5
+#define SCHED_DEADLINE 6
+#define SCHED_EXT      7
+
 /** Effective real-time priority, including a PI futex's donation. */
 static __inline__ unsigned int sched_priority(const process_t *p)
 {
@@ -62,9 +75,12 @@ void sched_make_ready(process_t *p);
 /**
  * Bind `p` to the processors of `mask`, of which one is started at least,
  * as sched_setaffinity(2) asks. A ready process on the queue of a processor
- * outside the set moves to one inside it; a process running on one outside
- * it leaves at that processor's next selection (`schedule`), which for the
- * caller is now.
+ * outside the set moves to one inside it. A running process leaves before
+ * this returns: the caller switches now, and a remote process is asked to
+ * switch and waited for without signals ending the wait. A newer mask
+ * permitting its current processor also ends the wait. The big lock is
+ * held on entry and return; the call may sleep and the target may end
+ * meanwhile, so its caller must not use `p` afterwards without a new lookup.
  */
 void sched_set_affinity(process_t *p, uint64_t mask);
 
@@ -96,6 +112,12 @@ void sched_service_point(void);
 
 /** Remove `p` from its ready list before it is freed; the big lock is held. */
 void sched_forget(process_t *p);
+
+/** With `hold` set, add each queued thread's wait so far to its `run_delay`
+ * and count no wait until called with `hold` clear, which starts each
+ * queued thread's wait again: a suspend to idle's bounds, as Linux's frozen
+ * tasks leave their run queues and their sched_info stops. */
+void sched_hold_waits(int hold);
 
 /** Read selection attempts (index 0) or ready entries examined (1), modulo
  * 2^32. Other indices return zero. The caller holds the big lock. */

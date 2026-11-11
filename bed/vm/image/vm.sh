@@ -5,6 +5,7 @@
 #
 #   vm.sh prepare [-n]
 #   vm.sh check [-V] [-c CPUS] [-m MIB]
+#   vm.sh rach2 [-o RAW]
 #
 # `prepare` makes the prepared image, an overlay of the cloud image that
 # tests/graphics/debian-ref/image pins, which debian-ref.sh fetches and
@@ -29,6 +30,14 @@
 # frame was scanned out directly once, and the doorbells woke both sides.
 # With -V the backend takes the device through vfio-pci under QEMU's
 # intel-iommu in place of the module.
+#
+# `rach2` makes rach2.qcow2 beside the prepared image, an overlay of it that
+# Rach2 boots under its own KVM (tests/cases/machine.bed-shm.json): the
+# tree's module and backend built in the VM and installed, and a service
+# that at each boot loads the module and runs the backend surfaceless on
+# the ivshmem device, `bed-vm: ` before each of its lines on the console.
+# With -o it also writes the image whole as the raw disk RAW, the form
+# etude's overlays take as their base.
 #
 # The images and the account's key are in BED_VM_CACHE, by default
 # build/cache/bed-vm of the clone whose worktree this is, so that its
@@ -280,7 +289,7 @@ check()
         echo "snapshot $(pin snapshot)"
         echo "device $([ "$vfio" = 1 ] && echo vfio-pci || echo vgpushm)"
     } | sed 's/^/bed-vm: record: /' >&2
-    (cd "$tree" && tar cf - bed/vm/module bed/vm/backend bed/shm/vgpushm.h) |
+    (cd "$tree" && tar cf - bed/vm/module bed/vm/backend rach2/sys/virtio/vgpushm.h) |
         vm 'rm -rf bed && tar xf -'
     guest "$vfio" > "$work/guest.sh"
     status=0
@@ -300,11 +309,105 @@ check()
     echo "bed-vm: result: the VM drew and showed the peer's frames"
 }
 
+# The VM's part of `rach2`, as a script for its sh: build the module and the
+# backend from the tree's copy in ~/bed, install them, and enable the
+# service that runs the backend at each boot. Under Rach2's KVM on the
+# testing PC the VM runs three hypervisors deep, where each exit crosses
+# them all and the guest runs some ten times slower than systemd's defaults
+# allow for: so it waits on no clock to start a unit or find a device, has
+# no service watchdogs, keeps its console quiet but for errors, whose every
+# byte is an exit to QEMU, and loads no AppArmor profiles.
+baked()
+{
+    cat <<'GUEST'
+set -eu
+cd ~
+sudo mkdir -p /etc/systemd/system.conf.d /etc/default/grub.d
+printf '[Manager]\nDefaultTimeoutStartSec=infinity\nDefaultDeviceTimeoutSec=infinity\n' |
+    sudo tee /etc/systemd/system.conf.d/rach2.conf > /dev/null
+printf '%s\n' 'GRUB_TIMEOUT=0' \
+    'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT quiet loglevel=3 apparmor=0 systemd.service_watchdogs=0"' |
+    sudo tee /etc/default/grub.d/99-rach2.cfg > /dev/null
+sudo update-grub
+make -s -C bed/vm/module
+make -s -C bed/vm/backend
+sudo install -m 644 bed/vm/module/vgpushm.ko /usr/local/lib/vgpushm.ko
+sudo install -m 755 bed/vm/backend/vgpu-backend /usr/local/sbin/vgpu-backend
+sudo tee /usr/local/sbin/bed-vm-backend > /dev/null <<'RUN'
+#!/bin/sh
+# bed-vm-backend: serve the ivshmem device to Rach2 until the VM stops.
+insmod /usr/local/lib/vgpushm.ko || exit 1
+LIBGL_ALWAYS_SOFTWARE=1 /usr/local/sbin/vgpu-backend -v 2>&1 | sed -u 's/^/bed-vm: /' > /dev/ttyS0
+RUN
+sudo chmod 755 /usr/local/sbin/bed-vm-backend
+sudo tee /etc/systemd/system/bed-vm-backend.service > /dev/null <<'UNIT'
+[Unit]
+Description=Serve Rach2's virtio-gpu from the ivshmem device
+After=bed-vm-ready.service
+ConditionPathExists=/sys/bus/pci/devices
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/bed-vm-backend
+[Install]
+WantedBy=multi-user.target
+UNIT
+sudo systemctl enable bed-vm-backend.service
+GUEST
+}
+
+rach2()
+{
+    raw=''
+    while getopts o: o; do
+        case $o in
+            o) raw=$OPTARG ;;
+            *) exit 2 ;;
+        esac
+    done
+    [ -f "$prepared" ] || die "no prepared image; run vm.sh prepare"
+    [ "$(cat "$prepared.key" 2>/dev/null)" = "$(seedkey)" ] ||
+        die "the prepared image is not the one this tree's seed makes; run vm.sh prepare"
+    mkdir -p "$tree/build/tmp"
+    work=$(mktemp -d "${TMPDIR:-$tree/build/tmp}/bed-vm.XXXXXX")
+    qemu=''
+    trap 'kill "$qemu" 2>/dev/null || true; rm -rf "$work" ${raw:+"$raw.tmp"}' EXIT
+    qemu-img create -q -f qcow2 -F qcow2 -b "$prepared" "$work/rach2.qcow2"
+    port=$(free_port)
+    machine 4 4096 "$work/rach2.qcow2"
+    # shellcheck disable=SC2086 # words
+    qemu-system-x86_64 $words -serial file:"$work/console.log" -monitor none &
+    qemu=$!
+    watch "$qemu" "$work/console.log" 'bed-vm: ready' 300 ||
+        die "the VM is not ready: $(tr -d '\r' < "$work/console.log" | tail -n 5)"
+    opts="-i $key -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+    tries=0
+    until vm true 2>/dev/null </dev/null; do
+        tries=$((tries + 1))
+        [ "$tries" -lt 60 ] || die "SSH did not answer in 60 tries"
+        sleep 1
+    done
+    (cd "$tree" && tar cf - bed/vm/module bed/vm/backend rach2/sys/virtio/vgpushm.h) |
+        vm 'rm -rf bed && tar xf -'
+    baked > "$work/baked.sh"
+    vm 'sh -s' < "$work/baked.sh" || die "result: the backend did not build"
+    vm 'sudo systemctl poweroff' </dev/null >/dev/null 2>&1 || true
+    watch "$qemu" "$work/console.log" 'reboot: Power down' 120 || kill "$qemu" 2>/dev/null || true
+    wait "$qemu" 2>/dev/null || true
+    qemu=
+    mv "$work/rach2.qcow2" "$cache/rach2.qcow2"
+    if [ -n "$raw" ]; then
+        qemu-img convert -O raw "$cache/rach2.qcow2" "$raw.tmp"
+        mv "$raw.tmp" "$raw"
+    fi
+    echo "bed-vm: result: made $cache/rach2.qcow2${raw:+ and $raw}"
+}
+
 case ${1:-} in
     prepare) shift; prepare "$@" ;;
     check) shift; check "$@" ;;
+    rach2) shift; rach2 "$@" ;;
     *)
-        echo "usage: vm.sh prepare [-n] | check [-V] [-c CPUS] [-m MIB]" >&2
+        echo "usage: vm.sh prepare [-n] | check [-V] [-c CPUS] [-m MIB] | rach2 [-o RAW]" >&2
         exit 2
         ;;
 esac

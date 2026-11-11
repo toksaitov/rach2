@@ -1,18 +1,20 @@
 /**
  * procfs_hosttest.c: the files rach2/sys/fs/procfs.c makes: the stat text
  * and its allocation, /proc/uptime, the CPU times of a process and of a
- * thread, task ids, descriptor links, /proc/PID/mem, /proc/PID/exe, the
- * paths of /proc/PID/maps, a read of a process's arguments while the process
- * is reaped, oom_score_adj, the cache, NUMA, clock source and DMI files of
- * /sys, and the /sys entries and uevents of a DRM device
- * and of a driver's own attributes, links and PCI identity, and those of
- * a PS/2 keyboard and a USB mouse (evdev_sysfs.c).
+ * thread, task ids, the syscall, wchan and schedstat files, descriptor links,
+ * /proc/PID/mem, /proc/PID/exe, the paths of /proc/PID/maps, a read of a
+ * process's arguments while the process is reaped, oom_score_adj, the
+ * cache, NUMA, clock source and DMI files of /sys, and the /sys entries
+ * and uevents of a DRM device and of a driver's own attributes, links, PCI
+ * identity and resources, a PCI function's resourceN files, and those of a
+ * PS/2 keyboard and a USB mouse (evdev_sysfs.c).
  *
  * host-deps: tests/host/compat/vm_iter_host.c
  * host-deps: rach2/sys/fs/sysfs.c rach2/sys/drm/drm_sysfs.c
  * host-deps: rach2/sys/evdev_sysfs.c
  * host-deps: rach2/sys/fs/name.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/lib/kstd.c
  * host-deps: rach2/sys/tick.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
  *
@@ -29,6 +31,7 @@ struct vfs_name;
 struct vfs_mount;
 static struct vfs_name *procfs_exe_entry(int pid);
 static int procfs_resolve_pid(int pid);
+static int procfs_filesystem_at(int idx, const char **name);
 static int procfs_resolve_id(const struct vpath *vp);
 static int procfs_open(const struct vpath *vp, int flags);
 static int procfs_readlink_fd(int pid, int fd, char *buf, int cap);
@@ -58,6 +61,7 @@ static uint32_t procfs_ino_nettcp(void);
 static uint32_t procfs_fd_ino(struct fd_entry *e);
 static uint32_t procfs_ino_pid(int pid);
 static uint32_t procfs_task_links(int pid);
+static int procfs_pid_owner(int pid, uint32_t mode, uint32_t *uid, uint32_t *gid);
 static int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid);
 static int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid);
 static int procfs_fd_writable(struct fd_entry *e);
@@ -143,30 +147,88 @@ struct wlan *wlan_by_index(unsigned index)
     return NULL;
 }
 
-/** The frame allocator is absent from this model. */
+/* The frames the model's allocator manages, which only the THP boot rows
+ * set. */
+static size_t model_frames;
+
+/** The frame allocator is absent from this model: its count is the rows'. */
 size_t frame_total_count(void)
 {
-    return 0;
+    return model_frames;
 }
 
-/** The clock is absent from this model. */
+/* The clock, which only the wakealarm rows start: whether it reads, the
+ * seconds since 1970 it reads, the alarm set, -1 for none, and the alarms
+ * that came. */
+static int clock_up, clock_came;
+static int64_t clock_now, clock_alarm = -1;
+
+/** The clock reads only while a row has it up. */
 int rtc_read_clock(rtc_time_t *out)
 {
     (void)out;
-    return -EIO;
+    return clock_up ? 0 : -EIO;
 }
 
-/** No successful clock read supplies a date for conversion. */
+/** The seconds the clock reads. */
 int64_t rtc_seconds_of(const rtc_time_t *t)
 {
     (void)t;
+    return clock_now;
+}
+
+/** The alarm set, -1 for none. */
+int64_t devfs_rtc_wakealarm(void)
+{
+    return clock_alarm;
+}
+
+/** Set the alarm, raise it at once for a time not after now, or clear it
+ * for a negative `at`, as devfs's does; -EIO while the clock is down. */
+int32_t devfs_rtc_set_wakealarm(int64_t at)
+{
+    if (!clock_up) {
+        return -EIO;
+    }
+    clock_came += at >= 0 && at <= clock_now;
+    clock_alarm = at < 0 || at <= clock_now ? -1 : at;
     return 0;
 }
 
-/** No RTC wake alarm is armed. */
-int64_t devfs_rtc_wakealarm(void)
+/** No attribute the rows write sends a uevent. */
+int sysfs_attr_uevent(int node, int attr)
 {
-    return -1;
+    (void)node;
+    (void)attr;
+    return 0;
+}
+
+/* The length of the text the last backlight or radio switch store was
+ * given, which the rows read. */
+static int stored_len;
+
+/** A backlight's store: the length kept, and the text read as the real
+ * one reads it, by `k_strtoul`. */
+int backlight_store(int i, int attr, const char *text, int len)
+{
+    unsigned long n;
+
+    (void)i;
+    (void)attr;
+    stored_len = len;
+    return k_strtoul(text, len < 0 ? 0 : (size_t)len, &n);
+}
+
+/** A radio switch's store, kept and read as a backlight's. */
+int rfkill_store(int index, int attr, const char *text, int len)
+{
+    return backlight_store(index, attr, text, len);
+}
+
+/** No row writes /sys/power/state. */
+int suspend_to_idle(void)
+{
+    return -EIO;
 }
 
 /** Each model processor has its own core in package zero. */
@@ -252,10 +314,19 @@ int netdev_seen_count(void)
     return netdev_count();
 }
 
-/** The attribute files of a /sys directory: the statistics of an interface,
- * named as in synthfs.c, and none other. */
+/** The fixed attributes used by these rows, as synthfs.c numbers them. */
 const char *sysfs_attr(int node, int n)
 {
+    int count = node == SYSFS_THP            ? 6
+                : node == SYSFS_NODE         ? 5
+                : node == SYSFS_NODE0        ? 3
+                : node == SYSFS_CLOCKSOURCE0 ? 2
+                : node == SYSFS_DMI_ID       ? 23
+                                             : 0;
+
+    if (n >= 0 && n < count) {
+        return "attribute";
+    }
     return node == SYSFS_NET_STATS && n >= 0 && n < 10 ? "statistic" : 0;
 }
 
@@ -357,6 +428,16 @@ process_t *get_process(uint32_t pid)
         return reading;
     }
     return pid == 7 ? &process : NULL;
+}
+
+/* The user frame of every thread in the syscall and wchan rows. */
+static isr_params_t user_frame;
+
+/** The frame of thread `t`'s entry to the kernel: `user_frame` for all. */
+isr_params_t *proc_user_frame(const process_t *t)
+{
+    (void)t;
+    return &user_frame;
 }
 
 /** The process the PID `pid` names, its kernel id in the first PID
@@ -527,10 +608,17 @@ int copy_to_user(void __user *dst, const void *src, size_t n)
     return 0;
 }
 
-/** Copy from the caller's buffer, which is host memory. Returns 0. */
+/* Bytes a row makes unreadable to copy_from_user, [fault_from, fault_end),
+ * or none while fault_from is NULL. */
+static const char *fault_from, *fault_end;
+
+/** Copy from the caller's buffer, which is host memory. Returns 0, or
+ * -EFAULT for NULL or a range that reaches the unreadable bytes. */
 int copy_from_user(void *dst, const void __user *src, size_t n)
 {
-    if (!src) {
+    const char *from = (const char __force *)src;
+
+    if (!src || (fault_from && n > 0 && from < fault_end && from + n > fault_from)) {
         return -EFAULT;
     }
     k_memcpy(dst, (const void __force *)src, n);
@@ -541,6 +629,15 @@ int copy_from_user(void *dst, const void __user *src, size_t n)
 int fd_table_cap(const fd_table_t *t)
 {
     return t ? t->cap : 0;
+}
+
+/** Whether descriptor `fd` of `t` is open and not closing, as fd.c has it. */
+int fd_is_valid(fd_table_t *t, int fd)
+{
+    if (!t || fd < 0 || fd >= t->cap) {
+        return 0;
+    }
+    return t->entries[fd].type != FD_TYPE_NONE && !(t->entries[fd].flags & FD_FLAG_CLOSING);
 }
 
 /** The link rows use a pipe end, which names no device, terminal, socket,
@@ -773,6 +870,13 @@ krffs_node_t *krffs_resolve(const char *path)
 
 const struct vfs_type vfs_tmpfs_type = {0};
 
+/** Whether a node is memfd_secret's, which no row's is: 0. */
+int tmpfs_secret(void *node)
+{
+    (void)node;
+    return 0;
+}
+
 /** The name of a memfd, which no row's node is: NULL. */
 const char *tmpfs_label(void *node)
 {
@@ -952,6 +1056,118 @@ uint8_t pci_read_config8(uint8_t bus, uint8_t device, uint8_t function, uint8_t 
     return (uint8_t)pci_read_config32(bus, device, function, offset);
 }
 
+/* The owner pci_owner gives every function: NULL, or a driver that shows
+ * itself bound, as vfio-pci does, which a row sets. */
+static const char *pci_owner_name;
+
+const char *pci_owner(uint8_t bus, uint8_t devfn)
+{
+    (void)bus;
+    (void)devfn;
+    return pci_owner_name;
+}
+
+/* While set, the virtio display also has an I/O BAR 2 of 32 ports. */
+static int pci_io_bar;
+static int pci_no_prefetch, pci_no_wc;
+
+/** The model's PAT provides write-combining unless a row disables it. */
+pte_t arch_pte_wc(void)
+{
+    return pci_no_wc ? PTE_NOCACHE : PTE_WC;
+}
+
+/** The resources of the virtio display: a prefetchable BAR 0 of 8 MiB and
+ * a 64-bit BAR 4 of 16 KiB, as pci.c gives them from the walk's sizes, and
+ * BAR 2 while `pci_io_bar` is set. */
+void pci_resource(uint8_t bus, uint8_t device, uint8_t function, int i, struct pci_resource *r)
+{
+    r->start = 0;
+    r->end = 0;
+    r->flags = 0;
+    if (bus != 0 || device != 4 || function != 0) {
+        return;
+    }
+    if (i == 0) {
+        r->start = 0xFE000000u;
+        r->end = 0xFE7FFFFFu;
+        r->flags = 0x42208u;
+    } else if (i == 4) {
+        r->start = 0xFE800000u;
+        r->end = 0xFE803FFFu;
+        r->flags = 0x14220Cu;
+    } else if (i == 2 && pci_io_bar) {
+        r->start = 0xC000u;
+        r->end = 0xC01Fu;
+        r->flags = 0x40101u;
+    }
+    if (pci_no_prefetch) {
+        r->flags &= ~PCI_IORESOURCE_PREFETCH;
+    }
+}
+
+/* The last port access of the resourceN rows: its port, width and value,
+ * and the value a read returns, the port's number with its width above. */
+static uint32_t port_at, port_width, port_value;
+
+uint8_t pci_io_read8(uint16_t port)
+{
+    port_at = port;
+    port_width = 1;
+    return (uint8_t)port;
+}
+
+uint16_t pci_io_read16(uint16_t port)
+{
+    port_at = port;
+    port_width = 2;
+    return (uint16_t)(0x2000u | port);
+}
+
+uint32_t pci_io_read32(uint16_t port)
+{
+    port_at = port;
+    port_width = 4;
+    return 0x40000000u | port;
+}
+
+void pci_io_write8(uint16_t port, uint8_t value)
+{
+    port_at = port;
+    port_width = 1;
+    port_value = value;
+}
+
+void pci_io_write16(uint16_t port, uint16_t value)
+{
+    port_at = port;
+    port_width = 2;
+    port_value = value;
+}
+
+void pci_io_write32(uint16_t port, uint32_t value)
+{
+    port_at = port;
+    port_width = 4;
+    port_value = value;
+}
+
+/* What the last `vm_device_map` was given, and its result. */
+static const struct vm_device_ops *mapped_ops;
+static void *mapped_obj;
+static uint32_t mapped_cache;
+
+int vm_device_map(vma_t *vma, const struct vm_device_ops *ops, void *obj, uint32_t cache)
+{
+    if (vma->type != VM_SHARED) {
+        return -EINVAL;
+    }
+    mapped_ops = ops;
+    mapped_obj = obj;
+    mapped_cache = cache;
+    return 0;
+}
+
 /** The bus has no function to list. */
 bool pci_nth(int nth, pci_device_t *out)
 {
@@ -982,6 +1198,12 @@ int usb_core_row(int index, struct usb_sys_row *row)
     row->ifsubclass = 1;
     row->ifprotocol = 2;
     return 0;
+}
+
+/** The mouse's interface 0 as `usb_core_row` gives it, and no other. */
+int usb_core_interface(int index, int ifnum, struct usb_sys_row *row)
+{
+    return ifnum == 0 || ifnum == -1 ? usb_core_row(index, row) : -1;
 }
 
 /* The event devices the input rows register, by slot, and whether each is
@@ -1158,6 +1380,167 @@ static void thread_times(void)
     process.utime = process.stime = thread.utime = thread.stime = 0;
 }
 
+/** Whether the syscall file of `pid`, or its wchan file when `wchan`,
+ * reads `want`. */
+static int pid_file_reads(int pid, int wchan, const char *want)
+{
+    struct procfs_text text;
+    int len, ok;
+
+    procfs_text_init(&text);
+    len = wchan ? procfs_gen_wchan(&text, pid) : procfs_gen_syscall(&text, pid);
+    ok = len == (int)__builtin_strlen(want) && text.buf &&
+         __builtin_memcmp(text.buf, want, (unsigned long)len) == 0;
+    if (!ok) {
+        printf("procfs-hosttest: /proc/%d/%s read '%.*s'\n", pid, wchan ? "wchan" : "syscall",
+               len > 0 ? len : 0, text.buf ? text.buf : "");
+    }
+    kfree(text.buf);
+    return ok;
+}
+
+/** Whether /proc/`pid`/schedstat reads `want`. */
+static int schedstat_reads(int pid, const char *want)
+{
+    struct procfs_text text;
+    int len, ok;
+
+    procfs_text_init(&text);
+    len = procfs_gen_schedstat(&text, pid);
+    ok = len == (int)__builtin_strlen(want) && text.buf &&
+         __builtin_memcmp(text.buf, want, (unsigned long)len) == 0;
+    if (!ok) {
+        printf("procfs-hosttest: /proc/%d/schedstat read '%.*s'\n", pid, len > 0 ? len : 0,
+               text.buf ? text.buf : "");
+    }
+    kfree(text.buf);
+    return ok;
+}
+
+/** /proc/PID/schedstat: a thread's own time on a processor in ns, its wait
+ * on the run queues in ns and its switches onto a processor, as Linux's
+ * proc_pid_schedstat, which the selftest steal_time reads; the leader's
+ * file is the leader's, not the group's. */
+static void schedstat_rows(void)
+{
+    struct procfs_text text;
+
+    thread.utime = 2;
+    thread.stime = 3;
+    thread.run_delay = 123456789;
+    thread.pcount = 42;
+    process.run_delay = 1000;
+    process.pcount = 1;
+    check(schedstat_reads(9, "5000000 123456789 42\n"),
+          "a thread's schedstat is its run time, its run_delay and its pcount");
+    check(schedstat_reads(7, "0 1000 1\n"), "and the leader's is its own");
+    procfs_text_init(&text);
+    check(procfs_gen_schedstat(&text, 5) == -ENOENT, "a process that is not there has none");
+    kfree(text.buf);
+    thread.utime = thread.stime = 0;
+    thread.run_delay = process.run_delay = 0;
+    thread.pcount = process.pcount = 0;
+}
+
+/**
+ * /proc/PID/syscall and wchan: a thread blocked in a call shows the call's
+ * number as a tracer left it, its six arguments, its stack and instruction
+ * pointers, and the name its wait recorded; one blocked in a fault, or past
+ * a handler's return, -1 and the two pointers; a ready thread "running" and
+ * 0; a stopped one its stop's function; a kernel thread call 0 with every
+ * field 0x0, an exiting thread past its address space its call, and an
+ * ended one -1 with no pointers; and a caller that may not read the process
+ * EPERM and 0.
+ */
+static void syscall_wchan_rows(void)
+{
+    process.pid = 7;
+    thread.pid = 9;
+    thread.tg = &group;
+    thread.state = PROC_BLOCKED;
+    thread.space_root = 0x1000;
+    thread.orig_nr = 3;
+    thread.wchan = "pipe_read";
+    user_frame.vector = 0x80;
+#ifdef RACH2_HOST_X86_64
+    user_frame.error_code = SC_ENTRY_IA32;
+    user_frame.rbx = 4;
+    user_frame.rcx = 0x804a000u;
+    user_frame.rdx = 0x100;
+    user_frame.rbp = 0xbffff000u;
+#else
+    user_frame.ebx = 4;
+    user_frame.ecx = 0x804a000u;
+    user_frame.edx = 0x100;
+    user_frame.ebp = 0xbffff000u;
+#endif
+    FRAME_SP(&user_frame) = 0xbfffefd0u;
+    FRAME_PC(&user_frame) = 0x8048123u;
+    check(pid_file_reads(9, 0, "3 0x4 0x804a000 0x100 0x0 0x0 0xbffff000 0xbfffefd0 0x8048123\n"),
+          "a thread blocked in read shows the call, its arguments and its pointers");
+    check(pid_file_reads(9, 1, "pipe_read"), "its wchan names its wait, with no newline");
+    user_frame.vector = 14;
+    check(pid_file_reads(9, 0, "-1 0xbfffefd0 0x8048123\n"),
+          "a thread blocked in a page fault shows -1 and its pointers");
+    user_frame.vector = 0x80;
+    thread.orig_nr = -1;
+    check(pid_file_reads(9, 0, "-1 0xbfffefd0 0x8048123\n"),
+          "a thread past a handler's return shows -1 and its pointers");
+    thread.orig_nr = -2;
+    thread.state = PROC_STOPPED;
+    check(pid_file_reads(9, 0, "-2 0xbfffefd0 0x8048123\n"),
+          "a thread stopped at a call a tracer made -2 shows -2 and its pointers alone");
+    thread.orig_nr = 240;
+    check(pid_file_reads(9, 0, "240 0x4 0x804a000 0x100 0x0 0x0 0xbffff000 0xbfffefd0 0x8048123\n"),
+          "a stopped thread shows the call it stopped in");
+    check(pid_file_reads(9, 1, "do_signal_stop"), "a job-control stop is do_signal_stop");
+    thread.ptrace_status = 0x137f;
+    check(pid_file_reads(9, 1, "ptrace_stop"), "a ptrace stop is ptrace_stop");
+    thread.ptrace_status = 0;
+    thread.state = PROC_READY;
+    check(pid_file_reads(9, 0, "running\n"), "a ready thread is running");
+    check(pid_file_reads(9, 1, "0"), "a ready thread has no wchan");
+    thread.state = PROC_BLOCKED;
+    thread.space_root = 0;
+    check(pid_file_reads(9, 0, "0 0x0 0x0 0x0 0x0 0x0 0x0 0x0 0x0\n"),
+          "a kernel thread shows call 0 and zero fields, as Linux's zeroed frame gives");
+    thread.in_syscall = 1;
+    check(pid_file_reads(9, 0, "240 0x4 0x804a000 0x100 0x0 0x0 0xbffff000 0xbfffefd0 0x8048123\n"),
+          "an exiting thread past its address space shows its call");
+    thread.in_syscall = 0;
+    thread.state = PROC_ZOMBIE;
+    check(pid_file_reads(9, 0, "-1 0x0 0x0\n"), "an ended thread has no user frame");
+    thread.state = PROC_BLOCKED;
+    thread.space_root = 0x1000;
+    stranger.pid = 11;
+    stranger.tg = &other_group;
+    stranger.state = PROC_BLOCKED;
+    stranger.space_root = 0x1000;
+    stranger.wchan = "futex_wait_queue";
+    stranger.ruid = 2000;
+    stranger.euid = 2000;
+    process.ruid = 1000;
+    process.euid = 1000;
+    {
+        struct procfs_text text;
+
+        procfs_text_init(&text);
+        check(procfs_gen_syscall(&text, 11) == -EPERM,
+              "another user's process refuses its syscall file's text with EPERM");
+        kfree(text.buf);
+    }
+    check(pid_file_reads(11, 1, "0"), "another user's process reads 0 from wchan");
+    process.ruid = process.euid = 0;
+    check(pid_file_reads(11, 1, "futex_wait_queue"), "a privileged caller reads its wchan");
+    stranger.ruid = stranger.euid = 0;
+    stranger.state = PROC_READY;
+    stranger.space_root = 0;
+    thread.state = PROC_READY;
+    thread.space_root = 0;
+    thread.orig_nr = 0;
+    k_memset(&user_frame, 0, sizeof(user_frame));
+}
+
 /** A path under a task directory needs its process and a thread of it,
  * which is what the path shows. */
 static void task_ids(void)
@@ -1185,6 +1568,42 @@ static void task_ids(void)
     thread.state = PROC_ZOMBIE;
     check(procfs_resolve_id(&vp) == -1, "an ended thread other than the leader is no task");
     thread.state = PROC_READY;
+}
+
+/** A process's 0555 directories keep its effective IDs in every dumpable
+ * state and after its address space is gone. Other nodes belong to root
+ * while the space is absent or not dumpable. */
+static void task_owners(void)
+{
+    struct mm *saved_mm = process.mm;
+    uint32_t saved_uid = process.euid, saved_gid = process.egid;
+    uint32_t saved_dumpable = space.dumpable, uid, gid;
+    int dumpable;
+
+    process.euid = 1000;
+    process.egid = 1001;
+    process.mm = &space;
+    for (dumpable = 0; dumpable <= 2; dumpable++) {
+        space.dumpable = (uint32_t)dumpable;
+        check(procfs_pid_owner(7, 0040555u, &uid, &gid) == 0 && uid == 1000 && gid == 1001,
+              "a public process directory keeps its effective IDs");
+        check(procfs_pid_owner(7, 0040500u, &uid, &gid) == 0 &&
+                  uid == (dumpable == 1 ? 1000u : 0u) && gid == (dumpable == 1 ? 1001u : 0u),
+              "a private process directory has the dumpable owner");
+        check(procfs_oom_owner(7, &uid, &gid) == 0 && uid == (dumpable == 1 ? 1000u : 0u) &&
+                  gid == (dumpable == 1 ? 1001u : 0u),
+              "a process file has the dumpable owner");
+    }
+    process.mm = NULL;
+    check(procfs_pid_owner(7, 0040555u, &uid, &gid) == 0 && uid == 1000 && gid == 1001,
+          "a public directory keeps its owner after the address space is gone");
+    check(procfs_oom_owner(7, &uid, &gid) == 0 && uid == 0 && gid == 0,
+          "a file belongs to root after the address space is gone");
+    check(procfs_pid_owner(99, 0040555u, &uid, &gid) == -ENOENT, "a missing process has no owner");
+    process.mm = saved_mm;
+    process.euid = saved_uid;
+    process.egid = saved_gid;
+    space.dumpable = saved_dumpable;
 }
 
 /** An open descriptor has its link, and one a close has marked, whose
@@ -1496,6 +1915,134 @@ static void image_paths(void)
     check(maps_path(&space, &r) == interp_path, "one above it is the dynamic linker's");
 }
 
+/* Stand-ins for the vDSO's two files, for the VmFlags rows. */
+static struct vm_file vdso_text_file, vdso_vvar_file;
+
+/** The maps name of a stand-in of the vDSO's files, and NULL for any other
+ * file. */
+const char *vdso_region_name(const struct vm_file *f)
+{
+    return f == &vdso_text_file ? "[vdso]" : f == &vdso_vvar_file ? "[vvar]" : NULL;
+}
+
+/** Whether `f` is the stand-in of the vDSO's data page. */
+int vdso_is_data(const struct vm_file *f)
+{
+    return f == &vdso_vvar_file;
+}
+
+/** Compare the VmFlags of a region of `type` and `prot` that maps `file`
+ * with `want`, including Linux's bit order. */
+static void smaps_flags_row(vm_type_t type, uint32_t prot, struct vm_file *file, const char *want)
+{
+    struct procfs_text t;
+    vma_t r;
+
+    k_memset(&r, 0, sizeof(r));
+    r.type = type;
+    r.prot = prot;
+    r.file = file;
+    procfs_text_init(&t);
+    ap_smaps_flags(&t, &r);
+    check(!t.nomem && t.buf && t.len == (int)__builtin_strlen(want) &&
+              __builtin_memcmp(t.buf, want, (size_t)t.len) == 0,
+          want);
+    kfree(t.buf);
+}
+
+/** Possible access respects the region's restrictions; a shared mapping
+ * that may not be made writable is ms but not sh, whether it is VM_SHARED
+ * or served as a private one; the stack and the heap are charged, and a
+ * MAP_NORESERVE mapping is not; device mappings cannot grow or enter a core;
+ * the vDSO's pages have the flags of Linux's special mappings; and each
+ * flag appears in Linux's order. */
+static void smaps_flags_rows(void)
+{
+    smaps_flags_row(VM_ANON, 0, NULL, "VmFlags: mr mw me\n");
+    smaps_flags_row(VM_STACK, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_ACCOUNT, NULL,
+                    "VmFlags: rd wr mr mw me gd ac\n");
+    smaps_flags_row(VM_HEAP, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_ACCOUNT | VM_PROT_LOCKONFAULT,
+                    NULL, "VmFlags: rd wr mr mw me lf ac\n");
+    smaps_flags_row(VM_ANON, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_NORESERVE | VM_PROT_WIPEONFORK,
+                    NULL, "VmFlags: rd wr mr mw me nr wf\n");
+    smaps_flags_row(VM_SHARED, VM_PROT_READ, NULL, "VmFlags: rd sh mr mw me ms\n");
+    smaps_flags_row(VM_SHARED, VM_PROT_READ | VM_PROT_NOWRITE, NULL, "VmFlags: rd mr me ms\n");
+    smaps_flags_row(VM_FILE, VM_PROT_READ | VM_PROT_NOWRITE, NULL, "VmFlags: rd mr me ms\n");
+    smaps_flags_row(VM_FILE, VM_PROT_READ, NULL, "VmFlags: rd mr mw me\n");
+    smaps_flags_row(VM_SHARED, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_IO | VM_PROT_DONTFORK, NULL,
+                    "VmFlags: rd wr sh mr mw me ms pf io dc de dd\n");
+    smaps_flags_row(VM_SHARED, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_SECRET | VM_PROT_LOCKED, NULL,
+                    "VmFlags: rd wr sh mr mw ms lo dd\n");
+    smaps_flags_row(VM_ANON,
+                    VM_PROT_READ | VM_PROT_LOCKED | VM_PROT_LOCKONFAULT | VM_PROT_WIPEONFORK |
+                        VM_PROT_SEALED,
+                    NULL, "VmFlags: rd mr mw me lo lf wf sl\n");
+    smaps_flags_row(VM_FILE, VM_PROT_READ | VM_PROT_EXEC, &vdso_text_file,
+                    "VmFlags: rd ex mr mw me de\n");
+    smaps_flags_row(VM_SHARED, VM_PROT_READ | VM_PROT_NOWRITE, &vdso_vvar_file,
+                    "VmFlags: rd mr pf io de dd\n");
+}
+
+/* A file of no file system for the maps rows, which `filemap_ofd` gives
+ * no description, so that its identity is "00:00 0". */
+static char maps_file_path[] = "/mnt/f";
+static struct vm_file maps_file = {1, 0, 0, 0, maps_file_path, 0, 0};
+
+/** No region of the maps rows maps a file of the page cache. */
+const struct open_file *filemap_ofd(const struct vm_file *f)
+{
+    (void)f;
+    return NULL;
+}
+
+/** The mount table the identity of a maps line searches, empty here. */
+int vfs_mount_slots(void)
+{
+    return 0;
+}
+
+/** No entry of the empty mount table. */
+struct vfs_mount *vfs_mount_at(int idx)
+{
+    (void)idx;
+    return NULL;
+}
+
+/** Compare the first 22 bytes of the maps line of a region of `type` and
+ * `prot` that maps `file`, the range, the rights and the p or s, with
+ * `want`. */
+static void maps_line_row(vm_type_t type, uint32_t prot, struct vm_file *file, const char *want)
+{
+    struct procfs_text t;
+    vma_t r;
+
+    k_memset(&space, 0, sizeof(space));
+    k_memset(&r, 0, sizeof(r));
+    r.start = 0x40000000u;
+    r.end = 0x40001000u;
+    r.type = type;
+    r.prot = prot;
+    r.file = file;
+    procfs_text_init(&t);
+    ap_maps_line(&t, &space, &r);
+    check(!t.nomem && t.buf && t.len > 22 && __builtin_memcmp(t.buf, want, 22) == 0, want);
+    kfree(t.buf);
+}
+
+/** The maps line's s column is Linux's VM_MAYSHARE: s for a shared region
+ * and for a read-only shared mapping served as a private one, VM_FILE with
+ * VM_PROT_NOWRITE, and p for a private mapping of a file and for both of
+ * the vDSO's regions, as Linux maps them private. */
+static void maps_shared_rows(void)
+{
+    maps_line_row(VM_SHARED, VM_PROT_READ | VM_PROT_WRITE, &maps_file, "40000000-40001000 rw-s");
+    maps_line_row(VM_FILE, VM_PROT_READ | VM_PROT_NOWRITE, &maps_file, "40000000-40001000 r--s");
+    maps_line_row(VM_FILE, VM_PROT_READ, &maps_file, "40000000-40001000 r--p");
+    maps_line_row(VM_FILE, VM_PROT_READ | VM_PROT_EXEC, &vdso_text_file, "40000000-40001000 r-xp");
+    maps_line_row(VM_SHARED, VM_PROT_READ | VM_PROT_NOWRITE, &vdso_vvar_file,
+                  "40000000-40001000 r--p");
+}
+
 /* The descriptor the oom_score_adj rows read and write, on process 7. */
 static struct procfs_file oom_file;
 static struct open_file oom_desc;
@@ -1774,6 +2321,252 @@ static void system_rows(void)
     check(sys_text(SYSFS_DMI_ID, 0, SYSFS_DMI_MODALIAS, out, (int)sizeof(out)) > 0 &&
               eq(out, "dmi:bvnSeaBIOS:br0.0:svnQEMU:pnStandardPC(i440FX+PIIX,1996):ct1:\n"),
           "modalias, as Linux's dmi-id.c makes it");
+}
+
+/** Write the `count` bytes at `text` to the THP attribute `attr` through
+ * its descriptor's write; the call's answer. */
+static int32_t thp_write(int attr, const char *text, uint32_t count)
+{
+    struct procfs_file file;
+    fd_entry_t entry;
+
+    k_memset(&file, 0, sizeof(file));
+    k_memset(&entry, 0, sizeof(entry));
+    file.origin_file = SYNTH_SYS_UEVENT;
+    file.origin_task = SYSFS_THP << 8 | attr;
+    entry.priv = &file;
+    return procfs_sysattr_write(&entry, (const char __user *)text, count);
+}
+
+/** Whether the THP attribute `attr` reads `want`. */
+static int thp_reads(int attr, const char *want)
+{
+    char out[128];
+
+    return sys_text(SYSFS_THP, 0, attr, out, sizeof(out)) > 0 && eq(out, want);
+}
+
+/**
+ * Writes to the THP files longer than the other attributes' buffer reach
+ * the stores whole up to a page, as Linux's kernfs gives them: 32 zeroes
+ * to use_zero_page, kstrtobool's long words to shrink_underused, and a
+ * write past a page, whose first PAGE_SIZE bytes alone are parsed and
+ * taken. Each store's own limit stays: shmem_enabled refuses 16 bytes. An
+ * empty write is 0, with no store called.
+ */
+static void thp_long_writes(void)
+{
+    static char text[PAGE_SIZE + 4];
+
+    k_memset(text, '0', 32);
+    check(thp_write(2, text, 32) == 32 && thp_reads(2, "0\n"),
+          "use_zero_page takes 32 zeroes, as Linux's kstrtoul");
+    k_memset(text, 'o', 40);
+    text[0] = 'n';
+    check(thp_write(5, text, 40) == 40 && thp_reads(5, "0\n"),
+          "shrink_underused takes a 40-byte word kstrtobool reads as no");
+    text[0] = 'Y';
+    check(thp_write(5, text, 40) == 40 && thp_reads(5, "1\n"), "and one it reads as yes");
+    k_memset(text, '0', PAGE_SIZE - 1);
+    k_memcpy(text + PAGE_SIZE - 1, "1xyz", 4);
+    check(thp_write(2, text, PAGE_SIZE + 3) == (int32_t)PAGE_SIZE && thp_reads(2, "1\n"),
+          "a write past a page gives the store its first page, which it takes");
+    k_memcpy(text, "never          \n", 16);
+    check(thp_write(4, text, 16) == -EINVAL, "shmem_enabled still refuses 16 bytes");
+    check(thp_write(2, text, 0) == 0 && thp_reads(2, "1\n"),
+          "an empty write is 0 and reaches no store, as Linux's sysfs_kf_write");
+    k_memset(text, 0, sizeof(text));
+}
+
+/** Write the `count` bytes at `text` to attribute `attr` of the /sys
+ * directory `node` of device 0 through its descriptor's write; the call's
+ * answer. */
+static int32_t sysattr_write(int node, int attr, const char *text, uint32_t count)
+{
+    struct procfs_file file;
+    fd_entry_t entry;
+
+    k_memset(&file, 0, sizeof(file));
+    k_memset(&entry, 0, sizeof(entry));
+    file.origin_task = node << 8 | attr;
+    entry.priv = &file;
+    return procfs_sysattr_write(&entry, (const char __user *)text, count);
+}
+
+/**
+ * A backlight's and a radio switch's numbers reach their stores through
+ * the writer whole, with the count written, as Linux gives the buffer to
+ * kstrtoul: one newline is taken, and a space or a second newline after
+ * the number is EINVAL.
+ */
+static void sysattr_number_writes(void)
+{
+    check(sysattr_write(SYSFS_BACKLIGHT, BACKLIGHT_BRIGHTNESS, "1\n", 2) == 2 && stored_len == 2,
+          "a backlight's brightness takes a number and its newline, given whole");
+    check(sysattr_write(SYSFS_BACKLIGHT, BACKLIGHT_BRIGHTNESS, "0x1 ", 4) == -EINVAL &&
+              stored_len == 4,
+          "and refuses one with a space after it, as Linux's kstrtoul");
+    check(sysattr_write(SYSFS_BACKLIGHT, BACKLIGHT_POWER, "+1\n\n", 4) == -EINVAL &&
+              stored_len == 4,
+          "bl_power refuses a number with two newlines");
+    check(sysattr_write(SYSFS_BACKLIGHT, BACKLIGHT_BRIGHTNESS,
+                        "0000000000000000000000000000000000000001\n", 41) == 41 &&
+              stored_len == 41,
+          "a backlight's brightness takes 41 bytes whole, past the old 31-byte buffer");
+    check(sysattr_write(SYSFS_RFKILL, RFKILL_ATTR_SOFT, "0\n", 2) == 2 && stored_len == 2,
+          "a radio switch's soft takes a number and its newline");
+    check(sysattr_write(SYSFS_RFKILL, RFKILL_ATTR_STATE, "1 \n", 3) == -EINVAL && stored_len == 3,
+          "and state refuses one with a space before its newline");
+}
+
+/** Write the text `text` whole to rtc0's wakealarm; the call's answer. */
+static int32_t wakealarm_write(const char *text)
+{
+    return sysattr_write(SYSFS_RTC0, 5, text, (uint32_t)__builtin_strlen(text));
+}
+
+/**
+ * rtc0's wakealarm takes what Linux's wakealarm_store takes: the clock
+ * read first, then seconds since 1970, `+N` from now or `+=N` to push a
+ * set alarm, read as kstrtos64 with base 0, with Linux's errors.
+ */
+static void wakealarm_writes(void)
+{
+    check(wakealarm_write("+60") == -EIO, "wakealarm: a clock that does not read is EIO");
+    clock_up = 1;
+    clock_now = 1000000;
+    clock_alarm = -1;
+    check(wakealarm_write("+60\n") == 4 && clock_alarm == 1000060,
+          "wakealarm: +N sets the alarm N seconds from now");
+    check(wakealarm_write("1000100") == -EBUSY && clock_alarm == 1000060,
+          "wakealarm: a new time while one is set is EBUSY");
+    check(wakealarm_write("+=0x3c") == 6 && clock_alarm == 1000120,
+          "wakealarm: +=N pushes the alarm set, its number in hexadecimal");
+    check(wakealarm_write("+=-1000121") == -EINVAL && clock_alarm == 1000120 && !clock_came,
+          "wakealarm: a push to before 1970 is EINVAL and keeps the alarm, as Linux's "
+          "rtc_valid_tm");
+    check(wakealarm_write("+=-120") == 6 && clock_alarm == -1 && clock_came == 1,
+          "wakealarm: a push to a time not after now raises the alarm at once");
+    check(wakealarm_write("+60") == 3 && clock_alarm == 1000060,
+          "wakealarm: and then takes a new one");
+    check(wakealarm_write("0") == 1 && clock_alarm == -1, "wakealarm: 0 clears it");
+    check(wakealarm_write("+=5") == -EINVAL && clock_alarm == -1,
+          "wakealarm: a push with none set is EINVAL");
+    check(wakealarm_write("1000000abc") == -EINVAL && clock_alarm == -1,
+          "wakealarm: junk after the number is EINVAL");
+    check(wakealarm_write("1000060 ") == -EINVAL && clock_alarm == -1,
+          "wakealarm: so is a space after it");
+    check(wakealarm_write("99999999999999999999") == -ERANGE && clock_alarm == -1,
+          "wakealarm: a number past 64 bits is ERANGE");
+    check(wakealarm_write("+0x3c") == 5 && clock_alarm == 1000060,
+          "wakealarm: +N in hexadecimal sets it");
+    check(wakealarm_write("999") == 3 && clock_alarm == -1,
+          "wakealarm: a time past clears it, as any time not after now");
+    check(wakealarm_write("-5") == 2 && clock_alarm == -1, "wakealarm: as a negative one does");
+    clock_up = 0;
+    clock_now = 0;
+    clock_alarm = -1;
+    clock_came = 0;
+}
+
+/** Read the THP files at Linux 6.12's defaults with the policy never, and
+ * write each policy as Linux's stores parse it. */
+static void thp_rows(void)
+{
+    static const char *const expected[] = {"always madvise [never]\n",
+                                           "always defer defer+madvise [madvise] never\n",
+                                           "1\n",
+#if ELF_CLASS == 2
+                                           "2097152\n",
+#else
+                                           "4194304\n",
+#endif
+                                           "always within_size advise [never] deny force\n",
+                                           "1\n"};
+    static const struct {
+        int attr;
+        const char *text;
+        int32_t rc;
+        const char *after;
+    } writes[] = {
+        {0, "always\n", 7, "[always] madvise never\n"},
+        {0, "madvise", 7, "always [madvise] never\n"},
+        {0, "never ", -EINVAL, "always [madvise] never\n"},
+        {0, "never\n\n", -EINVAL, "always [madvise] never\n"},
+        {1, "defer+madvise\n", 14, "always defer [defer+madvise] madvise never\n"},
+        {1, "defer", 5, "always [defer] defer+madvise madvise never\n"},
+        {1, "sometimes", -EINVAL, "always [defer] defer+madvise madvise never\n"},
+        {2, "+0\n", 3, "0\n"},
+        {2, "2", -EINVAL, "0\n"},
+        {2, "0001", 4, "1\n"},
+        {2, "x", -EINVAL, "1\n"},
+        {2, "", -EINVAL, "1\n"},
+#if ELF_CLASS == 2
+        {2, "18446744073709551616", -ERANGE, "1\n"},
+        {2, "18446744073709551616x", -ERANGE, "1\n"},
+        {2, "18446744073709551615", -EINVAL, "1\n"},
+#else
+        {2, "4294967296", -ERANGE, "1\n"},
+        {2, "4294967296x", -EINVAL, "1\n"},
+        {2, "4294967295", -EINVAL, "1\n"},
+#endif
+        {2, "99999999999999999999x", -ERANGE, "1\n"},
+        {3, "1", -EINVAL, 0},
+        {4, "within_size\n", 12, "always [within_size] advise never deny force\n"},
+        {4, "force", 5, "always within_size advise never deny [force]\n"},
+        {4, "never\n\n", -EINVAL, "always within_size advise never deny [force]\n"},
+        {4, "never           \n", -EINVAL, "always within_size advise never deny [force]\n"},
+        {4, "deny", 4, "always within_size advise never [deny] force\n"},
+        {5, "off", 3, "0\n"},
+        {5, "yes please", 10, "1\n"},
+        {5, "F", 1, "0\n"},
+        {5, "on", 2, "1\n"},
+        {5, "o", -EINVAL, "1\n"},
+        {5, "maybe", -EINVAL, "1\n"},
+    };
+    char out[128];
+    char text[32];
+    int i;
+
+    for (i = 0; i < (int)(sizeof(expected) / sizeof(expected[0])); i++) {
+        check(sys_text(SYSFS_THP, 0, i, out, sizeof(out)) > 0 && eq(out, expected[i]),
+              "THP attribute at Linux's default in Linux's format");
+    }
+    check(sys_text(SYSFS_THP, 0, 6, out, sizeof(out)) == -ENOENT,
+          "no attribute past the THP files");
+    for (i = 0; i < (int)(sizeof(writes) / sizeof(writes[0])); i++) {
+        uint32_t n = (uint32_t)__builtin_strlen(writes[i].text);
+
+        k_memset(text, 0, sizeof(text));
+        k_memcpy(text, writes[i].text, n);
+        check(thp_store(writes[i].attr, text, n) == writes[i].rc,
+              "THP store takes and refuses what Linux's does");
+        check(!writes[i].after || (sys_text(SYSFS_THP, 0, writes[i].attr, out, sizeof(out)) > 0 &&
+                                   eq(out, writes[i].after)),
+              "THP file reads back the stored policy");
+    }
+    thp_long_writes();
+    sysattr_number_writes();
+    wakealarm_writes();
+    thp_enabled = 2;
+    thp_defrag = 3;
+    thp_shmem = 1;
+    thp_zero_page = 1;
+    thp_shrink_underused = 1;
+    model_frames = (512u << 20) / PAGE_SIZE;
+    procfs_thp_boot();
+    check(thp_reads(1, "always defer defer+madvise [madvise] never\n") && thp_reads(2, "1\n"),
+          "with 512 MiB the THP defaults are Linux's");
+    model_frames--;
+    procfs_thp_boot();
+    check(
+        thp_reads(0, "always madvise [never]\n") &&
+            thp_reads(1, "always defer defer+madvise madvise [never]\n") && thp_reads(2, "0\n") &&
+            thp_reads(4, "always within_size advise [never] deny force\n") && thp_reads(5, "1\n"),
+        "under 512 MiB defrag is never and use_zero_page 0, as Linux's hugepage_init leaves them");
+    model_frames = 0;
+    thp_defrag = 3;
+    thp_zero_page = 1;
 }
 
 /** The entry below `dir` named `name`. */
@@ -2133,6 +2926,254 @@ static void pci_config_rows(void)
     procfs_close(e);
 }
 
+/** Open the resourceN file `attr` of function 0x20 with `flags` into
+ * descriptor 0 as the rows' caller: the open's result. */
+static int bar_file_open(int attr, int flags)
+{
+    struct vpath vp;
+    fd_entry_t *e = &entries[0];
+
+    k_memset(&vp, 0, sizeof(vp));
+    vp.kind = VNODE_SYS_FILE;
+    vp.sysent = SYSFS_PCI_DEVICE;
+    vp.procfile = attr;
+    vp.syskey = 0x20;
+    process.fds = &table;
+    table.entries = entries;
+    table.cap = 1;
+    k_memset(e, 0, sizeof(*e));
+    k_memset(&mem_ofd, 0, sizeof(mem_ofd));
+    e->ofd = &mem_ofd;
+    return procfs_open_pcibar(&vp, flags);
+}
+
+/** Map `pages` pages of descriptor 0 from the page `pgoff`, shared. */
+static int bar_file_map(uint32_t pgoff, uint32_t pages)
+{
+    vma_t v;
+
+    k_memset(&v, 0, sizeof(v));
+    v.end = (uintptr_t)pages * PAGE_SIZE;
+    v.type = VM_SHARED;
+    v.pgoff = pgoff;
+    mapped_ops = NULL;
+    return procfs_pcibar_mmap(&entries[0], &v);
+}
+
+/** Every file, directory and bus link has a distinct inode, within one
+ * function, beside its neighbor and at the last PCI function's key. */
+static void pci_inode_rows(void)
+{
+    static const int keys[] = {0, 1, 0xFFFF};
+    uint32_t inodes[3 * (SYSFS_PCI_ATTRS + 1)], ino;
+    int key, file, n = 0, i, ok = 1;
+
+    for (key = 0; key < 3; key++) {
+        for (file = 0; file <= SYSFS_PCI_ATTRS; file++) {
+            ino = sysfs_ino(SYSFS_PCI_DEVICE, keys[key], file);
+            for (i = 0; i < n; i++) {
+                ok = ok && ino != inodes[i];
+            }
+            inodes[n++] = ino;
+        }
+    }
+    check(ok, "PCI directories, bus links and all resource aliases have distinct inodes");
+}
+
+/** Which resourceN files a function has, one for each BAR with a length,
+ * each as long as its BAR, and that root alone opens them. */
+static void pci_bar_file_rows(void)
+{
+    check(sysfs_pci_attr_present(0x20, SYSFS_PCI_RESOURCE0) &&
+              sysfs_pci_attr_present(0x20, SYSFS_PCI_RESOURCE0 + 4) &&
+              !sysfs_pci_attr_present(0x20, SYSFS_PCI_RESOURCE0 + 1) &&
+              !sysfs_pci_attr_present(0x20, SYSFS_PCI_RESOURCE0 + 5) &&
+              !sysfs_pci_attr_present(0x28, SYSFS_PCI_RESOURCE0) &&
+              sysfs_pci_attr_present(0x20, SYSFS_PCI_CONFIG),
+          "a function has resource0 and resource4, its BARs with a length, and no others");
+    check(sysfs_pci_bar_size(0x20, 0) == 0x800000u && sysfs_pci_bar_size(0x20, 4) == 0x4000u &&
+              sysfs_pci_bar_size(0x20, 6) == 0,
+          "and each is as long as its BAR");
+    process.euid = 1000;
+    check(bar_file_open(SYSFS_PCI_RESOURCE0, 0) == -EACCES,
+          "an unprivileged caller opens no resource file, even to read");
+    process.euid = 0;
+    process.fsuid = 1000;
+    process.fs_own = PROC_FSUID_OWN | PROC_FSCAPS_OFF;
+    check(bar_file_open(SYSFS_PCI_RESOURCE0, 0) == -EACCES,
+          "nor root once setfsuid(1000) takes its file-system id and with it CAP_DAC_OVERRIDE");
+    process.fs_own = 0;
+    process.cap_lost[0] = 0xFFFFFFFFu;
+    process.cap_lost[1] = CAP_HIGH_WORD;
+    check(bar_file_open(SYSFS_PCI_RESOURCE0, 2) == 0,
+          "but uid 0 opens it as its owner with every capability dropped");
+    procfs_close(&entries[0]);
+    process.cap_lost[0] = process.cap_lost[1] = 0;
+    process.euid = 1000;
+    process.fsuid = 0;
+    process.fs_own = PROC_FSUID_OWN;
+    check(bar_file_open(SYSFS_PCI_RESOURCE0, 1) == 0,
+          "and so does a user whose file-system id is root's");
+    procfs_close(&entries[0]);
+    process.euid = 0;
+    process.fsuid = 0;
+    process.fs_own = 0;
+    check(bar_file_open(SYSFS_PCI_RESOURCE0 + 1, 2) == -ENOENT, "nor anyone a BAR without one");
+}
+
+/**
+ * A memory BAR's resourceN file, as IGT's register access maps BAR 0
+ * through libpciaccess: mapped shared and uncached, page by page at the
+ * address the BAR holds, within its length, with no read or write.
+ */
+static void pci_bar_mem_rows(void)
+{
+    fd_entry_t *e = &entries[0];
+    uintptr_t phys = 0;
+    char got[4], put[2] = {0x34, 0x12};
+    vma_t v;
+
+    check(bar_file_open(SYSFS_PCI_RESOURCE0, 2 | PROCFS_O_CLOEXEC) == 0 &&
+              e->ops == &procfs_pcibar_ops &&
+              e->flags == (FD_FLAG_READ | FD_FLAG_WRITE | FD_FLAG_CLOEXEC),
+          "root opens resource0 for reading and writing, close-on-exec");
+    check(procfs_pcibar_read(e, got, 4) == -EIO && procfs_pcibar_write(e, put, 2) == -EIO,
+          "a memory BAR has no read or write");
+    check(bar_file_map(0, 512) == 0 && mapped_ops == &pcibar_vm_ops && mapped_cache == VM_PROT_UC,
+          "2 MiB of BAR 0 map shared and uncached, as IGT maps the registers");
+    check(mapped_ops && mapped_ops->page(mapped_obj, 1, &phys) == 0 && phys == 0xFE001000u &&
+              mapped_ops->page(mapped_obj, 2047, &phys) == 0 && phys == 0xFE7FF000u &&
+              mapped_ops->page(mapped_obj, 2048, &phys) == -1,
+          "a page of the mapping is the BAR's page, and past the BAR's end is none");
+    check(bar_file_map(2047, 2) == -EINVAL && bar_file_map(2048, 1) == -EINVAL &&
+              bar_file_map(2047, 1) == 0,
+          "a range past the BAR's end is refused, as pci_mmap_fits refuses it");
+    k_memset(&v, 0, sizeof(v));
+    v.end = PAGE_SIZE;
+    v.type = VM_FILE;
+    check(procfs_pcibar_mmap(e, &v) == -EINVAL, "and so is a private mapping");
+    procfs_close(e);
+    check(bar_file_open(SYSFS_PCI_RESOURCE0 + 4, 0) == 0 && bar_file_map(0, 4) == 0 &&
+              mapped_ops->page(mapped_obj, 3, &phys) == 0 && phys == 0xFE803000u,
+          "the 64-bit BAR 4 maps its four pages");
+    procfs_close(e);
+}
+
+/** Prefetchable BARs have write-combining aliases only while PAT supplies
+ * that type; the aliases keep the BAR's address, bounds and access rules. */
+static void pci_bar_wc_rows(void)
+{
+    fd_entry_t *e = &entries[0];
+    uintptr_t phys = 0;
+
+    check(sysfs_pci_attr_present(0x20, SYSFS_PCI_RESOURCE0_WC) &&
+              sysfs_pci_attr_present(0x20, SYSFS_PCI_RESOURCE0_WC + 4) &&
+              !sysfs_pci_attr_present(0x20, SYSFS_PCI_RESOURCE0_WC + 1) &&
+              !sysfs_pci_attr_present(0x28, SYSFS_PCI_RESOURCE0_WC),
+          "prefetchable memory BARs alone have resourceN_wc files");
+    pci_no_prefetch = 1;
+    check(!sysfs_pci_attr_present(0x20, SYSFS_PCI_RESOURCE0_WC) &&
+              sysfs_pci_attr_present(0x20, SYSFS_PCI_RESOURCE0),
+          "a memory BAR without prefetch has only its uncached file");
+    pci_no_prefetch = 0;
+    pci_no_wc = 1;
+    check(!sysfs_pci_attr_present(0x20, SYSFS_PCI_RESOURCE0_WC) &&
+              bar_file_open(SYSFS_PCI_RESOURCE0_WC, 2) == -ENOENT &&
+              sysfs_pci_attr_present(0x20, SYSFS_PCI_RESOURCE0),
+          "without PAT write-combining, only the uncached file exists");
+    pci_no_wc = 0;
+    process.euid = 1000;
+    check(bar_file_open(SYSFS_PCI_RESOURCE0_WC, 0) == -EACCES,
+          "an unprivileged caller cannot open the write-combining alias");
+    process.euid = 0;
+    check(bar_file_open(SYSFS_PCI_RESOURCE0_WC, 2) == 0 && bar_file_map(1, 512) == 0 &&
+              mapped_cache == VM_PROT_WC && mapped_ops == &pcibar_vm_ops &&
+              mapped_ops->page(mapped_obj, 1, &phys) == 0 && phys == 0xFE001000u,
+          "resource0_wc maps BAR 0's pages write-combining");
+    check(bar_file_map(2047, 2) == -EINVAL && bar_file_map(2047, 1) == 0,
+          "the write-combining alias keeps the BAR's bounds");
+    procfs_close(e);
+    check(bar_file_open(SYSFS_PCI_RESOURCE0_WC + 4, 0) == 0 && bar_file_map(0, 4) == 0 &&
+              mapped_cache == VM_PROT_WC && mapped_ops->page(mapped_obj, 3, &phys) == 0 &&
+              phys == 0xFE803000u,
+          "resource4_wc names the 64-bit BAR 4");
+    procfs_close(e);
+    pci_io_bar = 1;
+    check(!sysfs_pci_attr_present(0x20, SYSFS_PCI_RESOURCE0_WC + 2) &&
+              bar_file_open(SYSFS_PCI_RESOURCE0_WC + 2, 0) == -ENOENT,
+          "an I/O BAR has no write-combining alias");
+    pci_io_bar = 0;
+}
+
+/** An I/O BAR's resourceN file: read and written a port at a time, 1, 2 or
+ * 4 bytes, within the BAR, and not mapped, as on x86 Linux. */
+static void pci_bar_io_rows(void)
+{
+    fd_entry_t *e = &entries[0];
+    char got[4], put[2] = {0x34, 0x12};
+
+    pci_io_bar = 1;
+    check(sysfs_pci_attr_present(0x20, SYSFS_PCI_RESOURCE0 + 2) &&
+              bar_file_open(SYSFS_PCI_RESOURCE0 + 2, 2) == 0,
+          "an I/O BAR has its resource file");
+    e->ofd->offset = 0x10;
+    check(procfs_pcibar_read(e, got, 4) == 4 && port_at == 0xC010u && port_width == 4 &&
+              (uint8_t)got[0] == 0x10 && (uint8_t)got[1] == 0xC0 && got[2] == 0 &&
+              (uint8_t)got[3] == 0x40 && e->ofd->offset == 0x14,
+          "a read of 4 bytes is one dword from the BAR's port at the offset, little-endian");
+    e->ofd->offset = 0x4;
+    check(procfs_pcibar_write(e, put, 2) == 2 && port_at == 0xC004u && port_width == 2 &&
+              port_value == 0x1234u && e->ofd->offset == 0x6,
+          "a write of 2 bytes is one word to its port");
+    e->ofd->offset = 0x10;
+    check(procfs_pcibar_read(e, got, 3) == -EINVAL && procfs_pcibar_read(e, got, 8) == -EINVAL &&
+              e->ofd->offset == 0x10,
+          "a width other than 1, 2 or 4 within the BAR is refused");
+    check(bar_file_map(0, 1) == -ENODEV, "and an I/O BAR is not mapped, as on x86");
+    procfs_close(e);
+    pci_io_bar = 0;
+}
+
+/** An I/O BAR's resourceN file clips an access to the file before it
+ * judges the width, as Linux's sysfs does before pci_resource_io. */
+static void pci_bar_clip_rows(void)
+{
+    fd_entry_t *e = &entries[0];
+    char got[4], put[4] = {0x34, 0x12, 0, 0};
+
+    pci_io_bar = 1;
+    check(bar_file_open(SYSFS_PCI_RESOURCE0 + 2, 2) == 0, "root opens the I/O BAR's file");
+    e->ofd->offset = 0x1E;
+    check(procfs_pcibar_read(e, got, 4) == 2 && port_at == 0xC01Eu && port_width == 2 &&
+              e->ofd->offset == 0x20,
+          "a read of 4 bytes 2 before the BAR's end is clipped to one word, as sysfs clips it");
+    e->ofd->offset = 0x1D;
+    check(procfs_pcibar_read(e, got, 4) == -EINVAL,
+          "and one clipped to 3 bytes is refused, as pci_resource_io refuses it");
+    e->ofd->offset = 0x1F;
+    check(procfs_pcibar_write(e, put, 4) == 1 && port_at == 0xC01Fu && port_width == 1 &&
+              port_value == 0x34u,
+          "a write of 4 bytes 1 before the end is clipped to its first byte");
+    e->ofd->offset = 0x1F;
+    port_at = 0;
+    fault_from = put + 1;
+    fault_end = put + sizeof(put);
+    check(procfs_pcibar_write(e, put, 4) == -EFAULT && port_at == 0 && e->ofd->offset == 0x1F,
+          "but one whose last 3 bytes cannot be read is -EFAULT with no port written, as "
+          "kernfs copies the whole count before sysfs clips it");
+    fault_from = fault_end = NULL;
+    e->ofd->offset = 0x20;
+    check(procfs_pcibar_read(e, got, 4) == 0 && procfs_pcibar_write(e, put, 2) == -EFBIG &&
+              procfs_pcibar_write(e, put, 0) == -EFBIG && e->ofd->offset == 0x20,
+          "at the end a read gives 0 and a write -EFBIG");
+    e->ofd->offset = 0x4;
+    check(procfs_pcibar_read(e, got, 0) == 0 && procfs_pcibar_write(e, put, 0) == 0 &&
+              e->ofd->offset == 0x4,
+          "and an access of no bytes within the BAR moves nothing");
+    procfs_close(e);
+    pci_io_bar = 0;
+}
+
 /**
  * A write of a PCI function's uevent sends that action with the function's
  * variables, as udev's coldplug writes it: a bare action carries
@@ -2256,6 +3297,27 @@ static void sysfs_reg_rows(void)
               __builtin_memcmp(t.buf, "1\n", 2) == 0,
           "and its boot_vga");
     t.len = 0;
+    check(procfs_gen_pciresource(&t, 0xA0) == 13 * 57 &&
+              __builtin_memcmp(t.buf, "0x0000000000000000 0x0000000000000000 0x0000000000000000\n",
+                               57) == 0 &&
+              __builtin_memcmp(t.buf + 12 * 57,
+                               "0x0000000000000000 0x0000000000000000 0x0000000000000000\n",
+                               57) == 0,
+          "and a resource file of 13 empty lines, since it has no BARs");
+    t.len = 0;
+    check(procfs_gen_pciresource(&t, 0x20) == 13 * 57 &&
+              __builtin_memcmp(t.buf, "0x00000000fe000000 0x00000000fe7fffff 0x0000000000042208\n",
+                               57) == 0 &&
+              __builtin_memcmp(t.buf + 4 * 57,
+                               "0x00000000fe800000 0x00000000fe803fff 0x000000000014220c\n",
+                               57) == 0 &&
+              __builtin_memcmp(t.buf + 5 * 57,
+                               "0x0000000000000000 0x0000000000000000 0x0000000000000000\n",
+                               57) == 0,
+          "a real function's resource file has its BARs in Linux's format, a line each");
+    t.len = 0;
+    check(procfs_gen_pciresource(&t, 0x28) == -ENOENT, "and a function not there has none");
+    t.len = 0;
     check(procfs_gen_uevent(&t, SYSFS_PCI_DEVICE, 0xA0) > 0 && t.buf &&
               __builtin_strstr(t.buf, "PCI_ID=8086:0A16\n") &&
               __builtin_strstr(t.buf, "PCI_SLOT_NAME=0000:00:14.0\n"),
@@ -2263,6 +3325,58 @@ static void sysfs_reg_rows(void)
     kfree(t.buf);
     sysfs_pci_virtual_remove(0xA0);
     check(!sysfs_device_exists(SYSFS_PCI_DEVICE, 0xA0), "a withdrawn function is gone");
+}
+
+/** Whether the uevent of the PCI function `key` begins with `first`. */
+static int pci_uevent_begins(int key, const char *first)
+{
+    struct procfs_text t;
+    int ok;
+
+    procfs_text_init(&t);
+    ok = procfs_gen_uevent(&t, SYSFS_PCI_DEVICE, key) > 0 && t.buf &&
+         __builtin_strncmp(t.buf, first, __builtin_strlen(first)) == 0;
+    kfree(t.buf);
+    return ok;
+}
+
+/** A function shown bound to a driver of the kernel, as Linux's driver
+ * core shows it: the driver's directory and the two links, DRIVER= first
+ * in the uevent, and all of it gone when it is unbound. */
+static void sysfs_bound_rows(void)
+{
+    int dev, drivers, dir, link;
+    const char *d;
+
+    check(sysfs_pci_bind(0x20, "virtio-pci") == 0 && sysfs_pci_bind(0x20, "virtio-pci") == 0 &&
+              sysfs_pci_bind(0x20, "bochs-drm") == -EBUSY,
+          "bound: a function is shown bound to one driver");
+    d = sysfs_pci_driver(0x20);
+    check(d && __builtin_strcmp(d, "virtio-pci") == 0 && !sysfs_pci_driver(0x28),
+          "bound: its driver is named, and an unbound function has none");
+    dev = sysfs_anchor(SYSFS_PCI_DEVICE, 0x20);
+    link = sysfs_node_child(dev, "driver", 6);
+    check(link > 0 && link_reads(link, "../../../bus/pci/drivers/virtio-pci"),
+          "bound: the function's driver link names the driver's directory");
+    drivers = sysfs_node_child(sysfs_anchor(SYSFS_BUS_PCI, 0), "drivers", 7);
+    dir = drivers > 0 ? sysfs_node_child(drivers, "virtio-pci", 10) : 0;
+    link = dir > 0 ? sysfs_node_child(dir, "0000:00:04.0", 12) : 0;
+    check(link > 0 && link_reads(link, "../../../../devices/pci0000:00/0000:00:04.0"),
+          "bound: and the driver's directory links back to the function by its address");
+    check(pci_uevent_begins(0x20, "DRIVER=virtio-pci\nPCI_CLASS="),
+          "bound: the uevent names the driver first, as Linux's");
+    sysfs_pci_unbind(0x20);
+    check(!sysfs_pci_driver(0x20) && sysfs_node_child(dev, "driver", 6) <= 0 &&
+              sysfs_node_child(dir, "0000:00:04.0", 12) <= 0 &&
+              pci_uevent_begins(0x20, "PCI_CLASS="),
+          "bound: unbound, both links and DRIVER= are gone");
+    pci_owner_name = "vfio-pci";
+    check(pci_uevent_begins(0x20, "DRIVER=vfio-pci\n"),
+          "bound: a function vfio-pci holds names it in its uevent");
+    pci_owner_name = PCI_OWNER_KERNEL;
+    check(pci_uevent_begins(0x20, "PCI_CLASS="),
+          "bound: one the kernel holds unnamed names no driver");
+    pci_owner_name = 0;
 }
 
 /** Whether the uevents sent since `from` hold the bytes of `text`. */
@@ -2474,8 +3588,10 @@ static void input_file_rows(void)
 
 /**
  * A mouse unplugged sends "remove" for its event node, itself and its
- * interface and leaves nothing of them; plugged again it is input1 again,
- * the lowest number free. A device with every key has its keys cut from
+ * interface and leaves nothing of them; plugged again it is input2, since
+ * Linux never numbers two input devices alike. Two input devices on one
+ * interface each send their "remove" before the interface sends its own.
+ * A device with every key has its keys cut from
  * its uevent's modalias, ended by "+,", so that the uevent fits in 2048
  * bytes, while its modalias file has them all.
  */
@@ -2505,8 +3621,9 @@ static void input_change_rows(void)
     usb_mouse_in = 1;
     evdev_sysfs_sync();
     in_mouse = child(child(child(sysfs_anchor_find(SYSFS_USB_DEVICE, 1 << 20), "1-1:1.0"), "input"),
-                     "input1");
-    check(in_mouse > 0 && child(in_class, "input1") > 0, "plugged again it is input1 again");
+                     "input2");
+    check(in_mouse > 0 && child(in_class, "input2") > 0 && !child(in_class, "input1"),
+          "plugged again it is input2, a number not used before");
     k_memset(&input_devs[2], 0, sizeof(input_devs[2]));
     input_devs[2].gen = 300;
     k_strncpy(input_devs[2].name, "every key", EVDEV_TEXT_MAX);
@@ -2518,20 +3635,244 @@ static void input_change_rows(void)
     mark = uevents_len;
     sent = uevents_sent;
     evdev_sysfs_sync();
-    h = child(child(child(sysfs_anchor_find(SYSFS_DEVICES, 0), "virtual"), "input"), "input2");
+    h = child(child(child(sysfs_anchor_find(SYSFS_DEVICES, 0), "virtual"), "input"), "input3");
     check(uevents_sent == sent + 2 && h > 0 &&
-              uevent_has(mark, 0, "DEVPATH=/devices/virtual/input/input2") &&
+              uevent_has(mark, 0, "DEVPATH=/devices/virtual/input/input3") &&
               sent_has(mark, ",+,ramlsfw"),
           "a device with no parent is virtual, and its uevent's modalias is cut to fit");
     check(reg_text(child(h, "modalias"), text, (int)sizeof(text)) > 2048 &&
               __builtin_strstr(text, ",2FE,ramlsfw\n"),
           "while its modalias file names every key");
-    input_present[0] = input_present[1] = input_present[2] = 0;
-    usb_mouse_in = 0;
+    input_devs[3] = input_devs[1];
+    input_devs[3].gen = 400;
+    k_strncpy(input_devs[3].name, "USB HIDBP Mouse Consumer Control", EVDEV_NAME_MAX);
+    input_present[3] = 1;
     evdev_sysfs_sync();
-    check(!child(in_class, "input0") && !child(in_class, "input2") &&
+    check(
+        child(child(child(child(sysfs_anchor_find(SYSFS_USB_DEVICE, 1 << 20), "1-1:1.0"), "input"),
+                    "input4"),
+              "event3") > 0,
+        "a second input device on the interface is input4, below the same interface");
+    input_present[1] = input_present[3] = 0;
+    usb_mouse_in = 0;
+    mark = uevents_len;
+    sent = uevents_sent;
+    evdev_sysfs_sync();
+    check(uevents_sent == sent + 5 &&
+              __builtin_strcmp(uevents + mark,
+                               "remove@/devices/usb/1-1/1-1:1.0/input/input2/event1") == 0 &&
+              uevent_has(mark, 1, "DEVPATH=/devices/usb/1-1/1-1:1.0/input/input2") &&
+              uevent_has(mark, 2, "DEVPATH=/devices/usb/1-1/1-1:1.0/input/input4/event3") &&
+              uevent_has(mark, 3, "DEVPATH=/devices/usb/1-1/1-1:1.0/input/input4") &&
+              uevent_has(mark, 4, "DEVPATH=/devices/usb/1-1/1-1:1.0"),
+          "unplugged, each sends remove for its event node and itself, and the interface last");
+    check(!child(sysfs_anchor_find(SYSFS_USB_LINKS, 0), "1-1:1.0") && !child(in_class, "input4"),
+          "and nothing of them is left");
+    input_present[0] = input_present[2] = 0;
+    evdev_sysfs_sync();
+    check(!child(in_class, "input0") && !child(in_class, "input3") &&
               sysfs_node_count(in_class) == 0 && !child(in_serio, "input"),
           "every device gone, /sys/class/input is empty and the port keeps no input");
+}
+
+/* Count each installation of the child port's driver and protocol files. */
+static int guest_driver_calls, guest_protocol_calls;
+
+/** The text of a fixture attribute on a pass-through port. */
+static int32_t show_guest_file(void *obj, int arg, char *buf, uint32_t cap)
+{
+    (void)obj;
+    (void)arg;
+    if (cap >= 3) {
+        k_memcpy(buf, "1\n", 3);
+    }
+    return 2;
+}
+
+/** Install a driver's protocol selector on the child port. */
+static int add_guest_driver(int dir)
+{
+    static const struct sysfs_attr attr = {"protocol", 0444u, show_guest_file, NULL};
+
+    guest_driver_calls++;
+    return sysfs_add_attr(dir, &attr, NULL, 0) < 0 ? -ENOMEM : 0;
+}
+
+/** Install a protocol's setting on the child port. */
+static int add_guest_protocol(int dir)
+{
+    static const struct sysfs_attr attr = {"sensitivity", 0444u, show_guest_file, NULL};
+
+    guest_protocol_calls++;
+    return sysfs_add_attr(dir, &attr, NULL, 0) < 0 ? -ENOMEM : 0;
+}
+
+/* A protocol can request a whole file table, or one entry too many. */
+static int protocol_file_count;
+
+/** Add numbered settings to exercise the real replacement table. */
+static int add_numbered_protocol(int dir)
+{
+    struct sysfs_attr attr = {NULL, 0444u, show_guest_file, NULL};
+    char name[16];
+    int i;
+
+    for (i = 0; i < protocol_file_count; i++) {
+        __builtin_snprintf(name, sizeof(name), "setting%d", i);
+        attr.name = name;
+        if (sysfs_add_attr(dir, &attr, NULL, 0) < 0) {
+            return -ENOMEM;
+        }
+    }
+    return 0;
+}
+
+/** Replace the auxiliary port's protocol files through the real registry,
+ * preserving the port's other files and removing a failed oversized set. */
+static void input_protocol_rows(void)
+{
+    int dir, old, base, i, all;
+    char name[16];
+
+    dir = child(child(sysfs_anchor_find(SYSFS_PLATFORM, 0), "i8042"), "serio1");
+    check(dir > 0, "the auxiliary port exists before replacing its protocol files");
+    base = sysfs_node_count(dir);
+    evdev_sysfs_serio_files(1, add_guest_protocol);
+    old = child(dir, "sensitivity");
+    check(old > 0 && reg_is(old, "1\n") && sysfs_node_count(dir) == base + 1,
+          "the real auxiliary port lists its first protocol's file");
+    protocol_file_count = 24;
+    evdev_sysfs_serio_files(1, add_numbered_protocol);
+    all = 1;
+    for (i = 0; i < 24; i++) {
+        __builtin_snprintf(name, sizeof(name), "setting%d", i);
+        if (!reg_is(child(dir, name), "1\n")) {
+            all = 0;
+        }
+    }
+    check(!child(dir, "sensitivity") && !sysfs_node_kind(old) && all &&
+              sysfs_node_count(dir) == base + 24,
+          "replacement removes the old file and lists all 24 new settings");
+    protocol_file_count = 25;
+    evdev_sysfs_serio_files(1, add_numbered_protocol);
+    check(sysfs_node_count(dir) == base && !child(dir, "setting24"),
+          "a rejected oversized set leaves none of its files behind");
+    evdev_sysfs_serio_files(1, add_guest_protocol);
+    check(reg_is(child(dir, "sensitivity"), "1\n"),
+          "a protocol's files can be installed after the oversized set failed");
+    evdev_sysfs_serio_files(1, NULL);
+    check(sysfs_node_count(dir) == base && child(dir, "description") > 0,
+          "removing protocol files preserves the port's own files");
+}
+
+/** Make the pass-through port with no device below it, as a pad whose
+ * port has no guest has it, through the real registry: a guest bound later
+ * goes below it, and it outlives the guest until it is removed. The pad's
+ * device, input_devs[0], is published. */
+static void input_unbound_port_rows(void)
+{
+    struct evdev_desc *guest = &input_devs[1];
+    int parent, bus, dir;
+
+    parent = child(child(sysfs_anchor_find(SYSFS_PLATFORM, 0), "i8042"), "serio1");
+    bus = child(child(sysfs_anchor_find(SYSFS_BUS, 0), "serio"), "devices");
+    evdev_sysfs_serio_add(EVDEV_SERIO_PASS_THROUGH);
+    dir = child(parent, "serio2");
+    check(dir > 0 && child(dir, "description") > 0 &&
+              sysfs_node_target(child(bus, "serio2")) == dir,
+          "a port asked for without a device is made at once below serio1");
+    guest->gen++;
+    input_present[1] = 1;
+    evdev_sysfs_serio_files(EVDEV_SERIO_PASS_THROUGH, add_guest_protocol);
+    evdev_sysfs_sync();
+    check(child(parent, "serio2") == dir && child(in_class, "event1") > 0 &&
+              reg_is(child(dir, "sensitivity"), "1\n"),
+          "a guest bound later goes below the same port");
+    input_present[1] = 0;
+    evdev_sysfs_serio_files(EVDEV_SERIO_PASS_THROUGH, NULL);
+    evdev_sysfs_sync();
+    check(child(parent, "serio2") == dir && !child(in_class, "event1") &&
+              !child(dir, "sensitivity"),
+          "the port stays when its guest and the guest's files go");
+    evdev_sysfs_serio_remove(EVDEV_SERIO_PASS_THROUGH);
+    evdev_sysfs_sync();
+    check(!child(parent, "serio2") && !child(bus, "serio2"),
+          "its removal ends the request, and a sync does not make it again");
+}
+
+/** Publish, remove and recreate a pass-through port through the real
+ * sysfs registry, including its input and bus links and its callbacks, and
+ * make one with no device below it (`input_unbound_port_rows`). */
+static void input_guest_rows(void)
+{
+    struct evdev_desc *pad = &input_devs[0], *guest = &input_devs[1];
+    int parent, dir, bus, file, link, event, mark, sent, installed;
+    char text[16];
+
+    k_memset(input_devs, 0, sizeof(input_devs));
+    pad->gen = 200;
+    pad->id[0] = EVDEV_BUS_I8042;
+    k_strncpy(pad->name, "SynPS/2 Synaptics TouchPad", EVDEV_TEXT_MAX);
+    k_strncpy(pad->phys, "isa0060/serio1/input0", EVDEV_TEXT_MAX);
+    *guest = *pad;
+    guest->gen = 201;
+    k_strncpy(guest->name, "TPPS/2 IBM TrackPoint", EVDEV_TEXT_MAX);
+    k_strncpy(guest->phys, "synaptics-pt/serio0/input0", EVDEV_TEXT_MAX);
+    input_present[0] = input_present[1] = 1;
+    evdev_sysfs_serio_driver(EVDEV_SERIO_PASS_THROUGH, add_guest_driver);
+    evdev_sysfs_serio_files(EVDEV_SERIO_PASS_THROUGH, add_guest_protocol);
+    evdev_sysfs_sync();
+    parent = child(child(sysfs_anchor_find(SYSFS_PLATFORM, 0), "i8042"), "serio1");
+    bus = child(child(sysfs_anchor_find(SYSFS_BUS, 0), "serio"), "devices");
+    dir = child(parent, "serio2");
+    file = child(dir, "sensitivity");
+    link = child(bus, "serio2");
+    event = child(in_class, "event1");
+    check(dir > 0 && reg_is(child(dir, "protocol"), "1\n") && reg_is(file, "1\n") &&
+              sysfs_node_target(link) == dir && event > 0 && guest_driver_calls == 1 &&
+              guest_protocol_calls == 1,
+          "a pass-through port has its real directories, files and bus link");
+    input_present[1] = 0;
+    mark = (int)uevents_len;
+    sent = uevents_sent;
+    evdev_sysfs_serio_remove(EVDEV_SERIO_PASS_THROUGH);
+    check(!child(parent, "serio2") && !child(bus, "serio2") && !child(in_class, "event1") &&
+              !sysfs_node_kind(event) && !sysfs_node_kind(link) &&
+              sysfs_node_show(file, text, sizeof(text)) == -ENOENT,
+          "removing the guest withdraws its input links, serio parent, bus link and files");
+    check(uevents_sent == sent + 3 && uevent_has((uint32_t)mark, 0, "ACTION=remove") &&
+              uevent_has((uint32_t)mark, 1, "ACTION=remove") &&
+              uevent_has((uint32_t)mark, 2, "DEVPATH=/devices/platform/i8042/serio1/serio2"),
+          "the input event and input device are removed before their serio port");
+    evdev_sysfs_sync();
+    check(child(in_class, "event0") > 0 && !child(parent, "serio2"),
+          "a later sync keeps the pad and does not recreate the absent guest");
+
+    guest->gen++;
+    input_present[1] = 1;
+    installed = guest_driver_calls + guest_protocol_calls;
+    evdev_sysfs_sync();
+    dir = child(parent, "serio2");
+    check(dir > 0 && !child(dir, "protocol") && !child(dir, "sensitivity") &&
+              guest_driver_calls + guest_protocol_calls == installed,
+          "recreation without a binding cannot call callbacks of the removed port");
+    input_present[1] = 0;
+    evdev_sysfs_serio_remove(EVDEV_SERIO_PASS_THROUGH);
+    guest->gen++;
+    input_present[1] = 1;
+    evdev_sysfs_serio_driver(EVDEV_SERIO_PASS_THROUGH, add_guest_driver);
+    evdev_sysfs_serio_files(EVDEV_SERIO_PASS_THROUGH, add_guest_protocol);
+    evdev_sysfs_sync();
+    dir = child(parent, "serio2");
+    check(reg_is(child(dir, "protocol"), "1\n") && reg_is(child(dir, "sensitivity"), "1\n") &&
+              sysfs_node_target(child(bus, "serio2")) == dir && guest_driver_calls == 2 &&
+              guest_protocol_calls == 2,
+          "a new binding recreates the child port with its current callbacks and link");
+    input_present[1] = 0;
+    evdev_sysfs_serio_remove(EVDEV_SERIO_PASS_THROUGH);
+    input_unbound_port_rows();
+    input_present[0] = 0;
+    evdev_sysfs_sync();
 }
 
 int main(int argc, char **argv)
@@ -2544,12 +3885,18 @@ int main(int argc, char **argv)
     group.leader = &process;
     group.live = 1;
     k_memcpy(process.comm, "test", 5);
+    if (argc == 2 && __builtin_strcmp(argv[1], "--thp-only") == 0) {
+        thp_rows();
+        printf("procfs-hosttest: thp: %s\n", failures ? "fail" : "pass");
+        return failures != 0;
+    }
     if (argc == 2 && __builtin_strcmp(argv[1], "--pci-config-only") == 0) {
         pci_config_rows();
         printf("procfs-hosttest: pci config: %s\n", failures ? "fail" : "pass");
         return failures != 0;
     }
     procfs_text_init(&text);
+    thp_rows();
     refuse = 1;
     len = procfs_gen_stat(&text, 7, 1);
     check(len == 0 && text.nomem && !text.buf && allocations > 0,
@@ -2575,11 +3922,16 @@ int main(int argc, char **argv)
     netdev_rows();
     descriptor_links();
     task_ids();
+    task_owners();
+    syscall_wchan_rows();
+    schedstat_rows();
     mem_descriptor();
     exe_links();
     exe_chroot();
     exe_entries();
     image_paths();
+    smaps_flags_rows();
+    maps_shared_rows();
     reaped_during_read();
     system_rows();
     oom_values();
@@ -2591,18 +3943,29 @@ int main(int argc, char **argv)
     drm_event_rows();
     drm_ident_rows();
     pci_config_rows();
+    pci_inode_rows();
+    pci_bar_file_rows();
+    pci_bar_mem_rows();
+    pci_bar_wc_rows();
+    pci_bar_io_rows();
+    pci_bar_clip_rows();
     pci_uevent_rows();
     sysfs_reg_rows();
+    sysfs_bound_rows();
     input_publish_rows();
     input_file_rows();
     input_change_rows();
+    input_guest_rows();
+    input_protocol_rows();
     if (!failures) {
         printf("procfs-hosttest: result: pass: stat allocation failure and times, descriptor "
                "links, task ids, the mem descriptor's counts, the exe link, a read of a reaped "
                "process's arguments, oom_score_adj, the paths of the maps, the uptime idle "
                "sum, an interface's counts, a DRM device's /sys entries and uevents, and a "
-               "driver's attribute, link and PCI identity, writes of a PCI function's uevent, and "
-               "an input device's /sys entries, capability masks and uevents\n");
+               "driver's attribute, link and PCI identity, a PCI function's BARs mapped and read "
+               "through its resource files, writes of a PCI function's uevent, and an input "
+               "device's /sys entries, capability masks and uevents, and the syscall and wchan "
+               "files of blocked, stopped and running threads\n");
     }
     return failures != 0;
 }

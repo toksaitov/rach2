@@ -41,6 +41,9 @@ static int vector_queries[256];
 static int irq_queries[16];
 /* The modelled EFLAGS; 0x200 (IF) is set while interrupts are enabled. */
 static uint32_t irq_flags;
+/* The milliseconds the pump has passed to the controllers and to the core. */
+static uint32_t advanced_ms;
+static uint32_t stepped_ms;
 static int fails;
 
 #define CHECK(what, condition)                                  \
@@ -116,6 +119,9 @@ void kirq_restore(uint32_t flags)
 {
     irq_flags = flags;
 }
+
+/* The tick count `usb_poll` reads, which only the gap row moves. */
+volatile uint64_t kernel_ticks;
 
 /** Return 0: no row reads the clock. */
 uint32_t timer_now_us(void)
@@ -239,11 +245,11 @@ void xhci_stop(struct xhci_ctrl *hc)
     (void)hc;
 }
 
-/** Do nothing: the model has no clock. */
+/** Count the milliseconds passed on: the model has no clock of its own. */
 void xhci_advance(struct xhci_ctrl *hc, uint32_t elapsed_ms)
 {
     (void)hc;
-    (void)elapsed_ms;
+    advanced_ms += elapsed_ms;
 }
 
 /** Take and return the controller's waiting events. */
@@ -261,10 +267,11 @@ int xhci_interrupt_take(struct xhci_ctrl *hc)
     return xhci_events(hc);
 }
 
-/** Make `late_vector` pending, as a message that arrives during the step. */
+/** Count the milliseconds passed on, and make `late_vector` pending, as a
+ * message that arrives during the step. */
 void usb_core_step(uint32_t elapsed_ms)
 {
-    (void)elapsed_ms;
+    stepped_ms += elapsed_ms;
     if (late_vector >= 0) {
         pending_vector = late_vector;
     }
@@ -447,8 +454,9 @@ static void check_sources(void)
  * no local APIC, messages and a line mixed in both orders, and one source
  * whose enable failed, which must not be asked about and whose vector is
  * given back for the next controller to take; then a message that becomes
- * pending only during the pump's step, and a controller polled with no
- * interrupt configured. Return 1 when a row failed.
+ * pending only during the pump's step, a controller polled with no
+ * interrupt configured, and a poll after a gap of five ticks, which passes
+ * their milliseconds on. Return 1 when a row failed.
  */
 int main(void)
 {
@@ -508,6 +516,13 @@ int main(void)
     controllers[0].events = 1;
     usb_poll();
     CHECK("polling without configured interrupts does not count", usb_fallback_count() == 0);
+
+    reset(1);
+    advanced_ms = stepped_ms = 0;
+    kernel_ticks += 5;
+    usb_poll();
+    CHECK("a poll after a gap of five ticks passes their milliseconds on",
+          advanced_ms == 5u * (1000u / TICK_HZ) && stepped_ms == 5u * (1000u / TICK_HZ));
 
     if (fails) {
         return 1;

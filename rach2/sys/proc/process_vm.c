@@ -1,21 +1,28 @@
 /*
- * process_vm.c: process_vm_readv(2) and process_vm_writev(2), copies between
- * the caller's memory and another process's, as Linux 6.12's
- * mm/process_vm_access.c makes them: under ptrace's rules for attaching,
- * without the force a tracer's access has, so that a page the target may not
- * read or write is refused. strace reads a traced program's strings with
- * them.
+ * process_vm.c: the calls that reach another process's memory.
+ * process_vm_readv(2) and process_vm_writev(2) copy between the caller's
+ * memory and another process's, as Linux 6.12's mm/process_vm_access.c
+ * makes them: under ptrace's rules for attaching, without the force a
+ * tracer's access has, so that a page the target may not read or write is
+ * refused. strace reads a traced program's strings with them.
+ * process_madvise(2) gives advice about another process's memory through a
+ * pidfd, and process_mrelease(2) frees the memory of a process that is
+ * dying, as Linux 6.12's mm/madvise.c and mm/oom_kill.c do.
  */
 
 #include "process_vm.h"
 
 #include "ns.h"
 #include "percpu.h"
+#include "pidfd.h"
 #include "process.h"
+#include "tgroup.h"
 #include "../arch/arch.h"
 #include "../lib/kerrno.h"
+#include "../lib/ksignal.h"
 #include "../mm/kheap.h"
 #include "../mm/mm.h"
+#include "../mm/notify.h"
 #include "../mm/paging.h"
 #include "../mm/usercopy.h"
 #include "../mm/vm.h"
@@ -134,9 +141,11 @@ static int pvm_may_access(const process_t *t)
  * Move `n` bytes, within one page on each side, between the caller's `laddr`
  * and `raddr` of `mm`: a read into the caller with `write` 0, a write into
  * `mm` otherwise. The remote page must lie in a region that allows the
- * access itself, since the copy has no tracer's force; one that does not,
- * and one `paging_access` cannot reach, a guard or device memory, are
- * -EFAULT, as is a fault in the caller's buffer. 0 or -errno.
+ * access itself, since the copy has no tracer's force, a read PROT_READ
+ * (`VM_READABLE`), as Linux's get_user_pages asks VM_READ; one that does not,
+ * and one `paging_access` cannot reach, a guard, device memory, a mapping
+ * of memfd_secret or the vDSO's data page, are -EFAULT, as is a fault in
+ * the caller's buffer. 0 or -errno.
  */
 static int32_t pvm_move(struct mm *mm, uintptr_t laddr, uintptr_t raddr, uint32_t n, int write)
 {
@@ -144,7 +153,7 @@ static int32_t pvm_move(struct mm *mm, uintptr_t laddr, uintptr_t raddr, uint32_
     unsigned char buf[PVM_CHUNK];
     int32_t rc;
 
-    if (!vma || !(vma->prot & (write ? VM_PROT_WRITE : VM_PROT_READ))) {
+    if (!vma || !(write ? (vma->prot & VM_PROT_WRITE) != 0 : VM_READABLE(vma->prot))) {
         return -EFAULT;
     }
     if (write) {
@@ -278,4 +287,211 @@ long sys_process_vm_readv(isr_params_t *params)
 long sys_process_vm_writev(isr_params_t *params)
 {
     return process_vm_rw(params, 1);
+}
+
+/* The advice process_madvise takes, Linux 6.12's
+ * process_madvise_behavior_valid: none that discards a page. */
+#define PMADV_WILLNEED 3
+#define PMADV_COLD     20
+#define PMADV_PAGEOUT  21
+#define PMADV_COLLAPSE 25
+
+/**
+ * Whether the caller may read the memory of `t`, as Linux's mm_access with
+ * PTRACE_MODE_READ_FSCREDS allows it: its own address space or thread
+ * group, a privileged caller, or a caller whose file system user and group
+ * IDs are each of `t`'s three, with
+ * `t` dumpable and not privileged. Yama's rule binds an attach alone, not
+ * this.
+ */
+static int pvm_may_read(const process_t *t)
+{
+    if (t->mm == current_proc->mm || t->tg == current_proc->tg || proc_privileged(current_proc)) {
+        return 1;
+    }
+    return proc_fsuid(current_proc) == t->ruid && proc_fsuid(current_proc) == t->euid &&
+           proc_fsuid(current_proc) == t->suid && proc_fsgid(current_proc) == t->rgid &&
+           proc_fsgid(current_proc) == t->egid && proc_fsgid(current_proc) == t->sgid &&
+           t->mm->dumpable && !proc_privileged(t);
+}
+
+/**
+ * The advice `advice` over the `len` bytes at `start` of `mm`, as Linux's
+ * do_madvise judges it for process_madvise: an unaligned start, a length
+ * that rounds up to 0 or a range that wraps is -EINVAL, an empty range 0, a
+ * page in no region -ENOMEM, and a region the advice may not touch
+ * (`madvise_refused`) -EINVAL. None of the four advice kinds changes
+ * anything here, there being no swap and no huge pages of user memory.
+ */
+static long pvm_advise(struct mm *mm, uintptr_t start, uintptr_t len, uint32_t advice)
+{
+    uintptr_t end;
+
+    if ((start & (PAGE_SIZE - 1u)) != 0) {
+        return -EINVAL;
+    }
+    end = start + ((len + PAGE_SIZE - 1u) & ~(uintptr_t)(PAGE_SIZE - 1u));
+    if ((len != 0 && end == start) || end < start) {
+        return -EINVAL;
+    }
+    if (end == start) {
+        return 0;
+    }
+    if (vm_covered(&mm->vm, start, end) != end - start) {
+        return -ENOMEM;
+    }
+    return madvise_refused(&mm->vm, start, end, advice) ? -EINVAL : 0;
+}
+
+/**
+ * process_madvise(pidfd, iovec, vlen, advice, flags), in Linux 6.12's order
+ * of checks: flags other than 0 are -EINVAL; the vector is read and checked
+ * as readv's (`pvm_import`, `pvm_local_total`); a descriptor that is no
+ * pidfd is -EBADF and a process reaped -ESRCH; advice other than
+ * MADV_WILLNEED, MADV_COLD, MADV_PAGEOUT and MADV_COLLAPSE is -EINVAL; a
+ * process without an address space -ESRCH, one the caller may not read
+ * (`pvm_may_read`) -EACCES, and another process's space without privilege,
+ * Linux's CAP_SYS_NICE, -EPERM. The buffers are advised in order until one
+ * fails; the answer is the bytes advised, or the failure when none were.
+ */
+long sys_process_madvise(isr_params_t *params)
+{
+    struct pvm_vec *v = NULL;
+    unsigned long cnt = SC_ARG(params, 2);
+    uint32_t advice = (uint32_t)SC_ARG(params, 3);
+    unsigned long i;
+    process_t *t;
+    struct mm *mm;
+    long rc, done = 0;
+
+    if ((uint32_t)SC_ARG(params, 4) != 0) {
+        return -EINVAL;
+    }
+    rc = pvm_import(SC_ARG(params, 1), cnt, &v);
+    if (rc == 0) {
+        rc = pvm_local_total(v, cnt);
+    }
+    if (rc < 0) {
+        kfree(v);
+        return rc;
+    }
+    rc = pidfd_lookup((int)SC_ARG(params, 0), &t, NULL);
+    if (rc == 0 && !t) {
+        rc = -ESRCH;
+    } else if (rc == 0 && advice != PMADV_WILLNEED && advice != PMADV_COLD &&
+               advice != PMADV_PAGEOUT && advice != PMADV_COLLAPSE) {
+        rc = -EINVAL;
+    }
+    mm = rc == 0 && t ? t->mm : NULL;
+    if (rc == 0 && !mm) {
+        rc = -ESRCH;
+    } else if (rc == 0 && !pvm_may_read(t)) {
+        rc = -EACCES;
+    } else if (rc == 0 && mm != current_proc->mm && !proc_privileged(current_proc)) {
+        rc = -EPERM;
+    }
+    for (i = 0; rc == 0 && i < cnt; i++) {
+        rc = pvm_advise(mm, v[i].base, v[i].len, advice);
+        if (rc == 0) {
+            done += (long)v[i].len;
+        }
+    }
+    kfree(v);
+    return done > 0 ? done : rc;
+}
+
+/** Whether the thread group `tg` is dying and will free its memory, as
+ * Linux's __task_will_free_mem: not while its core is written; once the
+ * group is exiting or has a pending SIGKILL, even during exec. A thread's
+ * pending SIGKILL also counts, as Linux's complete_signal makes it fatal to
+ * the group; during exec only the exec'ing thread's does, since the
+ * SIGKILLs exec posts to the other threads end them without ending the
+ * process. */
+static int pvm_dying(const struct tgroup *tg)
+{
+    const process_t *p;
+
+    if (tg->core_dumping) {
+        return 0;
+    }
+    if (tg->exiting || (tg->pending & KSIG_BIT(SIGKILL))) {
+        return 1;
+    }
+    for (p = proc_list; p; p = p->next) {
+        if (p->tg == tg && (!tg->exec_task || p == tg->exec_task) &&
+            (p->sig_pending & KSIG_BIT(SIGKILL))) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Free the pages of `mm` that no one else needs once its users end, as
+ * Linux's __oom_reap_task_mm: those of every region but shared memory,
+ * whose pages the memory keeps, and device memory, which is the device's.
+ * The ranges drivers registered hear of it first (MMN_DROP), and a later
+ * touch by a dying thread finds a page as after MADV_DONTNEED.
+ */
+static void pvm_reap(struct mm *mm)
+{
+    const vma_t *r;
+
+    for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
+        if (r->type != VM_SHARED && !(r->prot & VM_PROT_IO)) {
+            mmn_notify(mm, MMN_DROP, r->start, r->end);
+            unmap_user_range(mm->dir, r->start, r->end);
+        }
+    }
+    mm->reaped = 1;
+}
+
+/**
+ * process_mrelease(pidfd, flags), as Linux 6.12 answers it: flags other
+ * than 0 are -EINVAL; a descriptor that is no pidfd -EBADF; a process
+ * reaped, or with no thread left that has an address space, -ESRCH. The
+ * space of a dying process (`pvm_dying`), of which every other process
+ * that shares it is dying too, has its private pages freed (`pvm_reap`)
+ * and the answer is 0, as it is again once they are; a process that is
+ * not dying, or that shares its space with one that is not, is -EINVAL.
+ */
+long sys_process_mrelease(isr_params_t *params)
+{
+    const process_t *p;
+    process_t *t;
+    struct mm *mm = NULL;
+    int32_t rc;
+    int dying;
+
+    if ((uint32_t)SC_ARG(params, 1) != 0) {
+        return -EINVAL;
+    }
+    rc = pidfd_lookup((int)SC_ARG(params, 0), &t, NULL);
+    if (rc != 0) {
+        return rc;
+    }
+    for (p = proc_list; t && p && !mm; p = p->next) {
+        if (p->tg == t->tg && p->state != PROC_ZOMBIE) {
+            mm = p->mm;
+        }
+    }
+    if (!mm) {
+        return -ESRCH;
+    }
+    dying = !mm->reaped && pvm_dying(t->tg);
+    for (p = proc_list; dying && p; p = p->next) {
+        if (p->mm == mm && p->tg != t->tg && p->state != PROC_ZOMBIE && !pvm_dying(p->tg)) {
+            dying = 0;
+        }
+    }
+    if (!dying) {
+        return mm->reaped ? 0 : -EINVAL;
+    }
+    if (!mm_get_live(mm)) {
+        return 0;
+    }
+    pvm_reap(mm);
+    mm_put(mm);
+    vm_file_reap();
+    return 0;
 }

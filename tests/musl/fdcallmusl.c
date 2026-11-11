@@ -21,8 +21,17 @@
  *
  * /dev/fd/N and /proc/self/fd/N open what descriptor N is open on: a pipe's
  * read end opened by its link reads what the pipe's writer wrote, as bash's
- * process substitution reads it, and a file opened by its link starts a
- * description of its own at offset 0; /dev/stdin is descriptor 0's file.
+ * process substitution reads it, a file opened by its link starts a
+ * description of its own at offset 0, and so does a device, whose new
+ * description may have more access and other status flags than the first,
+ * as a DRM program's second file of one device needs; /dev/stdin is
+ * descriptor 0's file. A device opened through a node of its own, one of
+ * /dev/null's numbers with mode 0600 on a private tmpfs, since the KRFFS root
+ * the test image boots makes no device node, is opened again by the node's
+ * mode, as Linux follows the descriptor's path: uid 1000, which inherits the
+ * descriptor, is refused with EACCES though /dev/null is 0666, and root
+ * opens it again once the node has lost its name. User 1000 is the NEW of
+ * 1000 when a native run gives `ids=OLD:NEW,...` (tests/native/Readme.md).
  *
  * Prints `FDCALLMUSL OK` and exits 0 on success, and prints
  * `FDCALLMUSL FAIL (detail)` and exits 1 otherwise.
@@ -33,15 +42,24 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/mount.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/sysmacros.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "../probe_args.h"
 
 /* The file and the directory the time rows make and remove. */
 #define FILE_PATH "/fdcall.tmp"
 #define DIR_PATH  "/fdcalldir"
+/* The private tmpfs the node rows mount, without MS_NODEV, since KRFFS
+ * makes no device node and /dev/shm and /tmp are nodev, and their node. */
+#define NODE_MNT  "/fdcall.mnt"
+#define NODE_PATH NODE_MNT "/null"
 
 /* An instant with a nanosecond part, so a store that drops it shows. */
 #define WHEN_SEC  1786712707L
@@ -369,6 +387,16 @@ static int fd_link_rows(void)
     }
     close(g);
     close(f);
+    f = open("/dev/null", O_RDONLY);
+    snprintf(path, sizeof(path), "/proc/self/fd/%d", f);
+    g = open(path, O_RDWR | O_NONBLOCK);
+    if (f < 0 || g < 0 || (fcntl(f, F_GETFL) & (O_ACCMODE | O_NONBLOCK)) != O_RDONLY ||
+        (fcntl(g, F_GETFL) & (O_ACCMODE | O_NONBLOCK)) != (O_RDWR | O_NONBLOCK) ||
+        write(g, "x", 1) != 1) {
+        return fail("a device opened by /proc/self/fd/N was not a description of its own");
+    }
+    close(g);
+    close(f);
     if (stat("/dev/stdin", &a) != 0 || fstat(0, &b) != 0 || a.st_ino != b.st_ino ||
         a.st_rdev != b.st_rdev || stat("/dev/fd", &a) != 0 || !S_ISDIR(a.st_mode)) {
         return fail("/dev/stdin is not descriptor 0's file, or /dev/fd no directory");
@@ -376,14 +404,82 @@ static int fd_link_rows(void)
     return 0;
 }
 
-int main(void)
+/**
+ * Remove the node rows' node and the tmpfs under it, whichever of them is
+ * there.
+ */
+static void node_cleanup(void)
 {
-    int rc = stat_rows();
+    unlink(NODE_PATH);
+    umount2(NODE_MNT, 0);
+    rmdir(NODE_MNT);
+}
+
+/**
+ * Check that /proc/self/fd/N of a device opened through a device node of a
+ * tmpfs mounted without MS_NODEV checks that node's mode, not /dev's, and
+ * still opens the device once the node is unlinked. The caller removes the
+ * node and the mount (`node_cleanup`). Returns 0, or 1 once the failure is
+ * reported.
+ */
+static int node_link_rows(void)
+{
+    char path[32];
+    int f, g, status = -1;
+    pid_t pid;
+
+    if (mkdir(NODE_MNT, 0755) != 0 || mount("tmpfs", NODE_MNT, "tmpfs", 0, NULL) != 0) {
+        return fail("could not mount a tmpfs for a device node");
+    }
+    if (mknod(NODE_PATH, S_IFCHR | 0600, makedev(1, 3)) != 0 || chmod(NODE_PATH, 0600) != 0) {
+        return fail("could not make a node of /dev/null's numbers");
+    }
+    f = open(NODE_PATH, O_RDONLY);
+    if (f < 0) {
+        return fail("root could not open its node of /dev/null");
+    }
+    snprintf(path, sizeof(path), "/proc/self/fd/%d", f);
+    pid = fork();
+    if (pid == 0) {
+        if (setuid((uid_t)probe_id(1000)) != 0) {
+            _exit(2);
+        }
+        g = open(path, O_RDONLY);
+        _exit(g < 0 && errno == EACCES ? 0 : 1);
+    }
+    if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        close(f);
+        return fail("uid 1000 opened a 0600 node's device again by /proc/self/fd/N");
+    }
+    unlink(NODE_PATH);
+    g = open(path, O_WRONLY);
+    if (g < 0 || write(g, "x", 1) != 1) {
+        if (g >= 0) {
+            close(g);
+        }
+        close(f);
+        return fail("root could not open an unlinked node's device by /proc/self/fd/N");
+    }
+    close(g);
+    close(f);
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    int rc;
     int fd;
 
+    probe_args(argc, argv);
+    rc = stat_rows();
     if (rc == 0) {
         rc = fd_link_rows();
     }
+    if (rc == 0) {
+        rc = node_link_rows();
+    }
+    node_cleanup();
     unlink(FILE_PATH);
     rmdir(DIR_PATH);
     if (rc == 0) {

@@ -9,7 +9,9 @@
  * chars are recognized for signal delivery. Output is post-processed
  * (OPOST/ONLCR). Echo and output bytes leave through a caller sink, so
  * nothing here touches kernel I/O; the kernel points the sink at the console
- * or a pty's master ring, the host test at a buffer.
+ * or a pty's master ring, the host test at a buffer. Under IXON, VSTOP and
+ * VSTART stop and restart output, and echo waits in a ring while it is
+ * stopped.
  */
 
 #include "n_tty.h"
@@ -72,6 +74,7 @@ void n_tty_flush(struct n_tty *t)
 int n_tty_set_termios(struct n_tty *t, const struct ktermios *tio)
 {
     int was_canon = (t->tio.c_lflag & ICANON) != 0;
+    int was_ixon = (t->tio.c_iflag & IXON) != 0;
     int i;
 
     for (i = 0; i < (int)sizeof(struct ktermios); i++) {
@@ -84,6 +87,9 @@ int n_tty_set_termios(struct n_tty *t, const struct ktermios *tio)
         }
         t->counters.partial_moved += (unsigned int)t->line_len;
         t->line_len = 0;
+    }
+    if (was_ixon && !(t->tio.c_iflag & IXON)) {
+        n_tty_start(t);
     }
     return n_tty_readable(t);
 }
@@ -121,23 +127,98 @@ void n_tty_output(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx)
     out(ctx, c);
 }
 
+void n_tty_hold_echo(struct n_tty *t, unsigned char c)
+{
+    if (t->echo_tail - t->echo_head == N_TTY_ECHO_MAX) {
+        t->echo_head++;
+    }
+    t->echo_buf[t->echo_tail & (N_TTY_ECHO_MAX - 1)] = c;
+    t->echo_tail++;
+}
+
+/** Give the echo byte `c` to `out`, or hold it behind the echo already held
+ * or, with `hold` nonzero or output stopped, for later; drop it while
+ * `echo_muted` is set. */
+static void put_echo(struct n_tty *t, n_tty_out_fn out, void *ctx, unsigned char c, int hold)
+{
+    if (t->echo_muted) {
+        return;
+    }
+    if (hold || t->stopped || t->echo_tail != t->echo_head) {
+        n_tty_hold_echo(t, c);
+    } else {
+        out(ctx, c);
+    }
+}
+
+/** Emit the echo byte `c` through output processing, as `n_tty_output`
+ * maps output, by way of `put_echo`. */
+static void echo_post(struct n_tty *t, n_tty_out_fn out, void *ctx, unsigned char c, int hold)
+{
+    if (t->tio.c_oflag & OPOST) {
+        if (c == '\n' && (t->tio.c_oflag & ONLCR)) {
+            put_echo(t, out, ctx, '\r', hold);
+            put_echo(t, out, ctx, '\n', hold);
+            return;
+        }
+        if (c == '\r' && (t->tio.c_oflag & OCRNL)) {
+            put_echo(t, out, ctx, '\n', hold);
+            return;
+        }
+    }
+    put_echo(t, out, ctx, c, hold);
+}
+
 /**
- * Echo an input byte through output processing.
+ * Echo an input byte through output processing, held with `hold` nonzero.
  *
  * A control char is rendered as `^X` when ECHOCTL is set. A no-op unless ECHO
  * is on.
  */
-static void echo(struct n_tty *t, n_tty_out_fn out, void *ctx, unsigned char c)
+static void echo(struct n_tty *t, n_tty_out_fn out, void *ctx, unsigned char c, int hold)
 {
     if (!(t->tio.c_lflag & ECHO)) {
         return;
     }
     if (c < 0x20 && c != '\n' && c != '\t' && (t->tio.c_lflag & ECHOCTL)) {
-        n_tty_output(t, '^', out, ctx);
-        n_tty_output(t, (unsigned char)(c | 0x40), out, ctx);
+        echo_post(t, out, ctx, '^', hold);
+        echo_post(t, out, ctx, (unsigned char)(c | 0x40), hold);
     } else {
-        n_tty_output(t, c, out, ctx);
+        echo_post(t, out, ctx, c, hold);
     }
+}
+
+int n_tty_echo_flush(struct n_tty *t, n_tty_out_fn out, void *ctx, unsigned int max)
+{
+    int n = 0;
+
+    if (t->stopped) {
+        return 0;
+    }
+    while (t->echo_head != t->echo_tail && (unsigned int)n < max) {
+        out(ctx, t->echo_buf[t->echo_head & (N_TTY_ECHO_MAX - 1)]);
+        t->echo_head++;
+        n++;
+    }
+    return n;
+}
+
+int n_tty_stop(struct n_tty *t)
+{
+    if (t->stopped) {
+        return 0;
+    }
+    t->stopped = 1;
+    return 1;
+}
+
+int n_tty_start(struct n_tty *t)
+{
+    if (!t->stopped || t->tco_stopped) {
+        return 0;
+    }
+    t->stopped = 0;
+    return 1;
 }
 
 /* canonical-mode line editing */
@@ -210,9 +291,9 @@ static void erase_one(struct n_tty *t, n_tty_out_fn out, void *ctx)
     t->line_len = start;
     if ((t->tio.c_lflag & ECHO) && (t->tio.c_lflag & ECHOE)) {
         while (cells-- > 0) {
-            out(ctx, '\b');
-            out(ctx, ' ');
-            out(ctx, '\b');
+            put_echo(t, out, ctx, '\b', 0);
+            put_echo(t, out, ctx, ' ', 0);
+            put_echo(t, out, ctx, '\b', 0);
         }
     }
 }
@@ -256,27 +337,35 @@ static void commit_line(struct n_tty *t)
     t->line_len = 0;
 }
 
+void n_tty_default_termios(struct ktermios *tio)
+{
+    int i;
+
+    tio->c_iflag = ICRNL | IXON | IUTF8;
+    tio->c_oflag = OPOST | ONLCR;
+    tio->c_cflag = B38400 | CS8 | CREAD | HUPCL;
+    tio->c_lflag = ISIG | ICANON | ECHO | ECHOE | ECHOK | ECHOCTL;
+    tio->c_line = 0;
+    for (i = 0; i < KNCCS; i++) {
+        tio->c_cc[i] = 0;
+    }
+    tio->c_cc[VINTR] = 3;     /* ^C */
+    tio->c_cc[VQUIT] = 28;    /* ^\ */
+    tio->c_cc[VERASE] = 0177; /* DEL */
+    tio->c_cc[VKILL] = 21;    /* ^U */
+    tio->c_cc[VEOF] = 4;      /* ^D */
+    tio->c_cc[VSTART] = 021;  /* ^Q */
+    tio->c_cc[VSTOP] = 023;   /* ^S */
+    tio->c_cc[VSUSP] = 26;    /* ^Z */
+    tio->c_cc[VWERASE] = 23;  /* ^W */
+    tio->c_cc[VMIN] = 1;
+}
+
 void n_tty_init(struct n_tty *t)
 {
     int i;
 
-    t->tio.c_iflag = ICRNL | IUTF8;
-    t->tio.c_oflag = OPOST | ONLCR;
-    t->tio.c_cflag = B38400 | CS8 | CREAD | HUPCL;
-    t->tio.c_lflag = ISIG | ICANON | ECHO | ECHOE | ECHOK | ECHOCTL;
-    t->tio.c_line = 0;
-    for (i = 0; i < KNCCS; i++) {
-        t->tio.c_cc[i] = 0;
-    }
-    t->tio.c_cc[VINTR] = 3;     /* ^C */
-    t->tio.c_cc[VQUIT] = 28;    /* ^\ */
-    t->tio.c_cc[VERASE] = 0177; /* DEL */
-    t->tio.c_cc[VKILL] = 21;    /* ^U */
-    t->tio.c_cc[VEOF] = 4;      /* ^D */
-    t->tio.c_cc[VSUSP] = 26;    /* ^Z */
-    t->tio.c_cc[VWERASE] = 23;  /* ^W */
-    t->tio.c_cc[VMIN] = 1;
-
+    n_tty_default_termios(&t->tio);
     t->line_len = 0;
     t->rq_head = 0;
     t->rq_tail = 0;
@@ -286,87 +375,168 @@ void n_tty_init(struct n_tty *t)
         ((unsigned char *)&t->counters)[i] = 0;
     }
     t->eof_pos = 0;
+    t->stopped = 0;
+    t->tco_stopped = 0;
+    t->echo_head = 0;
+    t->echo_tail = 0;
+    t->echo_muted = 0;
 }
 
-void n_tty_receive(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx, int *signo)
+/** Whether `c` is the VSTART or VSTOP of `t`, a disabled (zero) one
+ * matching nothing. */
+static int flow_char(const struct n_tty *t, unsigned char c)
+{
+    return (t->tio.c_cc[VSTART] && c == t->tio.c_cc[VSTART]) ||
+           (t->tio.c_cc[VSTOP] && c == t->tio.c_cc[VSTOP]);
+}
+
+/** Restart output for VSTART and stop it for VSTOP, `c` being one of them;
+ * VSTART wins when both are `c`, as in Linux's
+ * n_tty_receive_char_flow_ctrl. Returns nonzero when `stopped` changed. */
+static int flow_act(struct n_tty *t, unsigned char c)
+{
+    if (t->tio.c_cc[VSTART] && c == t->tio.c_cc[VSTART]) {
+        return n_tty_start(t);
+    }
+    return n_tty_stop(t);
+}
+
+int n_tty_lookahead(struct n_tty *t, unsigned char c)
+{
+    if (t->tio.c_iflag & ISTRIP) {
+        c = (unsigned char)(c & 0x7f);
+    }
+    if (!(t->tio.c_iflag & IXON) || !flow_char(t, c)) {
+        return 0;
+    }
+    return flow_act(t, c);
+}
+
+/** The signal `c` raises under ISIG, an NTTY_SIG* code, or 0. */
+static int signal_of(const struct n_tty *t, unsigned char c)
+{
+    const struct ktermios *tio = &t->tio;
+
+    if (!(tio->c_lflag & ISIG)) {
+        return 0;
+    }
+    if (tio->c_cc[VINTR] && c == tio->c_cc[VINTR]) {
+        return NTTY_SIGINT;
+    }
+    if (tio->c_cc[VQUIT] && c == tio->c_cc[VQUIT]) {
+        return NTTY_SIGQUIT;
+    }
+    if (tio->c_cc[VSUSP] && c == tio->c_cc[VSUSP]) {
+        return NTTY_SIGTSTP;
+    }
+    return 0;
+}
+
+/** Edit the canonical line with the input byte `c`: ERASE, WERASE and KILL
+ * remove characters, VEOF commits the line or marks end of file, a newline or
+ * VEOL commits it with its terminator, and any other byte joins it while it
+ * has room. */
+static void receive_canon(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx)
 {
     struct ktermios *tio = &t->tio;
 
-    *signo = 0;
+    if (tio->c_cc[VERASE] && c == tio->c_cc[VERASE]) {
+        erase_one(t, out, ctx);
+    } else if (tio->c_cc[VWERASE] && c == tio->c_cc[VWERASE]) {
+        erase_word(t, out, ctx);
+    } else if (tio->c_cc[VKILL] && c == tio->c_cc[VKILL]) {
+        erase_line(t, out, ctx);
+    } else if (tio->c_cc[VEOF] && c == tio->c_cc[VEOF]) {
+        if (t->line_len > 0) {
+            commit_line(t);
+        } else if (!t->eof) {
+            t->eof = 1;
+            t->eof_pos = t->rq_tail;
+        }
+    } else if (c == '\n' || (tio->c_cc[VEOL] && c == tio->c_cc[VEOL])) {
+        echo(t, out, ctx, c, 0);
+        if (t->line_len < N_TTY_LINE_MAX) {
+            t->line[t->line_len++] = c;
+        }
+        commit_line(t);
+    } else if (t->line_len < N_TTY_LINE_MAX - 1) {
+        t->line[t->line_len++] = c;
+        echo(t, out, ctx, c, 0);
+        if ((unsigned int)t->line_len > t->counters.line_max) {
+            t->counters.line_max = (unsigned int)t->line_len;
+        }
+    } else {
+        t->counters.line_drops++;
+    }
+}
+
+/** Act on the signal character `c`, which raises `signo`: without NOFLSH
+ * discard the unread input and the echo held, and hold its own echo for the
+ * caller's flush of the output; under IXON restart output, as Linux's
+ * n_tty_receive_signal_char. */
+static void receive_signal(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx)
+{
+    int flush = !(t->tio.c_lflag & NOFLSH);
+
+    if (flush) {
+        n_tty_flush(t);
+        t->echo_head = t->echo_tail;
+    }
+    if (t->tio.c_iflag & IXON) {
+        n_tty_start(t);
+    }
+    echo(t, out, ctx, c, flush);
+}
+
+/** `n_tty_receive`, with `looked` nonzero for a byte `n_tty_lookahead` has
+ * seen, whose VSTOP or VSTART has acted already. */
+static void receive(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx, int *signo,
+                    int looked)
+{
+    struct ktermios *tio = &t->tio;
 
     if (tio->c_iflag & ISTRIP) {
         c = (unsigned char)(c & 0x7f);
     }
-    if (c == '\r') {
-        if (tio->c_iflag & IGNCR) {
-            return;
-        }
-        if (tio->c_iflag & ICRNL) {
-            c = '\n';
-        }
-    } else if (c == '\n') {
-        if (tio->c_iflag & INLCR) {
-            c = '\r';
-        }
-    }
-
-    if (tio->c_lflag & ISIG) {
-        if ((tio->c_cc[VINTR] && c == tio->c_cc[VINTR]) ||
-            (tio->c_cc[VQUIT] && c == tio->c_cc[VQUIT]) ||
-            (tio->c_cc[VSUSP] && c == tio->c_cc[VSUSP])) {
-            echo(t, out, ctx, c);
-            n_tty_flush(t);
-            *signo = (c == tio->c_cc[VINTR])   ? NTTY_SIGINT
-                     : (c == tio->c_cc[VQUIT]) ? NTTY_SIGQUIT
-                                               : NTTY_SIGTSTP;
-            return;
-        }
-    }
-
-    if (tio->c_lflag & ICANON) {
-        if (tio->c_cc[VERASE] && c == tio->c_cc[VERASE]) {
-            erase_one(t, out, ctx);
-            return;
-        }
-        if (tio->c_cc[VWERASE] && c == tio->c_cc[VWERASE]) {
-            erase_word(t, out, ctx);
-            return;
-        }
-        if (tio->c_cc[VKILL] && c == tio->c_cc[VKILL]) {
-            erase_line(t, out, ctx);
-            return;
-        }
-        if (tio->c_cc[VEOF] && c == tio->c_cc[VEOF]) {
-            if (t->line_len > 0) {
-                commit_line(t);
-            } else if (!t->eof) {
-                t->eof = 1;
-                t->eof_pos = t->rq_tail;
-            }
-            return;
-        }
-        if (c == '\n' || (tio->c_cc[VEOL] && c == tio->c_cc[VEOL])) {
-            echo(t, out, ctx, c);
-            if (t->line_len < N_TTY_LINE_MAX) {
-                t->line[t->line_len++] = c;
-            }
-            commit_line(t);
-            return;
-        }
-        if (t->line_len < N_TTY_LINE_MAX - 1) {
-            t->line[t->line_len++] = c;
-            echo(t, out, ctx, c);
-            if ((unsigned int)t->line_len > t->counters.line_max) {
-                t->counters.line_max = (unsigned int)t->line_len;
-            }
-        } else {
-            t->counters.line_drops++;
+    *signo = 0;
+    if ((tio->c_iflag & IXON) && flow_char(t, c)) {
+        if (!looked) {
+            flow_act(t, c);
         }
         return;
     }
-
+    *signo = signal_of(t, c);
+    if (*signo != 0) {
+        receive_signal(t, c, out, ctx);
+        return;
+    }
+    if (t->stopped && !t->tco_stopped && (tio->c_iflag & IXON) && (tio->c_iflag & IXANY)) {
+        n_tty_start(t);
+    }
+    if (c == '\r' && (tio->c_iflag & IGNCR)) {
+        return;
+    }
+    if (c == '\r' && (tio->c_iflag & ICRNL)) {
+        c = '\n';
+    } else if (c == '\n' && (tio->c_iflag & INLCR)) {
+        c = '\r';
+    }
+    if (tio->c_lflag & ICANON) {
+        receive_canon(t, c, out, ctx);
+        return;
+    }
     rq_push(t, c);
-    echo(t, out, ctx, c);
+    echo(t, out, ctx, c, 0);
+}
+
+void n_tty_receive(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx, int *signo)
+{
+    receive(t, c, out, ctx, signo, 0);
+}
+
+void n_tty_receive_looked(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx, int *signo)
+{
+    receive(t, c, out, ctx, signo, 1);
 }
 
 int n_tty_readable(const struct n_tty *t)

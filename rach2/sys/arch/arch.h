@@ -40,6 +40,9 @@
  *   FRAME_USER(p)          whether the entry came from user mode
  *   SYSCALL_INSN_LEN       the bytes of the instruction a system call is
  *                          made by, which a restart rewinds over
+ *   SC_RESTART_NR(p)       the number of restart_syscall in the table of the
+ *                          call in `p`, which a restart through the
+ *                          thread's restart block makes
  *   PAGE_SIZE, PAGE_SHIFT  the page the kernel maps
  *   USER_ADDR_MIN, USER_ADDR_MAX  the range a program may map
  *   ELF_CLASS, ELF_MACHINE the programs the kernel loads
@@ -55,11 +58,13 @@
  *   pte_t, PTE_*, MMU_TABLE_ENTRIES  a page table entry, its bits, and the
  *                          entries of a leaf table (mm/paging.h);
  *                          PTE_NOEXEC forbids instruction fetches from a
- *                          user page, or is 0 where the processor cannot
+ *                          user page, or is 0 where the processor cannot;
+ *                          PTE_PKEY holds a page's protection key from bit
+ *                          PTE_PKEY_SHIFT, or is 0 where there are none
  *   HARD_MEMORY_LIMIT, KVA_*  the kernel's own layout
- *   PAGE_FAULT_VECTOR, FAULT_WRITE(p), FAULT_USER(p), FAULT_EXEC(p)  the
- *                          page fault: a write, from user mode, an
- *                          instruction fetch
+ *   PAGE_FAULT_VECTOR, FAULT_WRITE(p), FAULT_USER(p), FAULT_EXEC(p),
+ *   FAULT_PK(p)            the page fault: a write, from user mode, an
+ *                          instruction fetch, a protection key's refusal
  *   arch_cpu_id()          the running processor's index in the
  *                          per-processor table (proc/percpu.h)
  *   IRQ_VECTOR(line)       the vector a platform interrupt line arrives on
@@ -121,6 +126,11 @@ void arch_stop(void) K_NORETURN;
 /** Tell the processor the caller is spinning on a value another agent will
  * change. */
 void arch_relax(void);
+
+/** Serialize this processor: the instructions before finish, and those
+ * after are fetched again, so code another processor wrote runs as
+ * written, as Linux's sync_core. */
+void arch_sync_core(void);
 
 /** Store `value` at `*p` and return what was there, as one step no other
  * processor's access comes between, and as a full barrier: no load or store
@@ -254,10 +264,11 @@ uint32_t ia32_core_fp_size(void);
  * program at `*p`, with `core_note_put`, and step past them. */
 void ia32_core_fp_notes(uint8_t **p, const struct process *t);
 
-/** Whether `fn`, a compat handler, waits for a signal or a deadline as the
- * x86-64 calls the dispatcher never restarts do, so that the i386 call it
- * answers with the arguments in `params` is not restarted either
- * (x86_64/ia32_time.c). */
+/** Whether `fn`, a compat handler of its own, answers a call Linux gives
+ * EINTR in every case, as the x86-64 calls the dispatcher never restarts
+ * (`syscall_restartable`), so that the i386 call it answers with the
+ * arguments in `params` is not restarted either: rt_sigtimedwait,
+ * epoll_pwait2 and the two returns from a handler (x86_64/ia32_time.c). */
 int ia32_never_restarts(syscall_fn_t fn, const isr_params_t *params);
 
 /*
@@ -280,8 +291,9 @@ struct kernel_cmsghdr;
  * lengths zero-extended; 0 or -EFAULT. */
 int ia32_msghdr_get(struct kernel_msghdr *h, uintptr_t u);
 
-/** Write what a receive gives back of `h`, its name's length, its control
- * length and its flags, into the i386 msghdr at `u`; 0 or -EFAULT. */
+/** Write what a receive gives back of `h`, its name's length when it has a
+ * name buffer, its control length and its flags, into the i386 msghdr at
+ * `u`; 0 or -EFAULT. */
 int ia32_msghdr_put(uintptr_t u, const struct kernel_msghdr *h);
 
 /** Read the i386 control message header at `at` into `h`; 0 or -EFAULT. */

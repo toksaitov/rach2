@@ -1,0 +1,6 @@
+build/x86_64/rach2/kernel rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial2654/root-61194a495c3378d2.img rach2.slot=trialroot rach2.trace=enosys
+/dev/loop0 / ext2 rw,relatime 0 0
+/dev/disk0p6 /data ext2 rw 0 0
+total 12417592
+drwxrwxr-x 4 1007 1007        4096 Nov 10 23:38 probes
+-rw-rw-r-- 1 1007 1007 25769803776 Nov 10 23:38 root-61194a495c3378d2.img

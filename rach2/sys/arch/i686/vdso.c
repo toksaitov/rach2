@@ -25,6 +25,14 @@ int vclock_read(int real, int coarse, int64_t *sec, int64_t *nsec)
     return 0;
 }
 
+int vclock_read_cycles(int real, uint64_t *ns, uint64_t *cycles)
+{
+    (void)real;
+    (void)ns;
+    (void)cycles;
+    return 0;
+}
+
 void vclock_set_offset(int64_t sec, int32_t nsec)
 {
     (void)sec;

@@ -89,3 +89,58 @@ The format and index are in [../upstream.md](../upstream.md).
 * Rach2: nothing to work around; the driver and the test follow Linux's code.
 * Status: unreported.
 * Next: check master's `alps.rst`, which was not read, then send a documentation patch that corrects the count, the version 6 layout, the APD 2 title and the BY6 bit.
+
+## Linux divides by zero for a version 5 ALPS pad of one Y electrode
+
+* Project: Linux 6.12, `drivers/input/mouse/alps.c` at the tag `v6.12` (SHA-256 f7e52165edc72a9cb5af764eca26af78cf494a33ce4f1825f9de96b3ec234294).
+* Fails: `alps_dolphin_get_device_area` takes the pad's Y electrodes as 1 plus the high nibble of its register's third byte (`alps.c:2641`) and stores them in `priv->y_bits` without a check (`alps.c:2643`). A nibble of 0 gives `y_bits` 1, and `alps_process_bitmap` then divides by `2 * (priv->y_bits - 1)`, which is 0 (`alps.c:435`, `443`, `451` and `459`), in the interrupt handler, on the first two-finger packet with both bitmaps set. The answer must come from a faulty or unusual pad.
+* Found: 2026-11-10, on the testing host's WSL, milestone 76, by the review of the graphics stack at 9671f1c18, which found the same arithmetic in Rach2's port; task 3394 read Linux's code to confirm it.
+* Reproduction: not run. A version 5 pad, E7 report 73 03 50, whose register 0x0033 reads with a high nibble of 0, then a two-finger touch.
+* Evidence: the row "a version 5 pad of one Y electrode is not driven as ALPS" of `tests/host/alps_hosttest.c`, which feeds the register 0x0f.
+* Rach2: `rach2/sys/arch/x86/alps.c`'s `dolphin_get_device_area` refuses a pad of fewer than two Y electrodes, in task 3394's commit.
+* Status: unreported.
+* Next: check master's `alps.c`, which was not read, then send a patch that has `alps_dolphin_get_device_area` return an error for fewer than two electrodes on either axis.
+
+## Linux's hid-input never reaches its D-pad case
+
+* Project: Linux 6.12, `drivers/hid/hid-input.c` at the tag `v6.12` (SHA-256 31f38838949d853a932735f2c6d76b4344b445f5d8550fd067c3a3cf88291ef9).
+* Fails: in `hidinput_configure_usage`'s generic desktop case, the test `(usage->hid & 0xf0) == 0x90` for SystemControl (`hid-input.c:813`) comes before the same test for the D-pad (`hid-input.c:847`). The first block maps 0x9b to KEY_DO_NOT_DISTURB and sends every other usage from 0x90 to 0x9f to `ignore`, so the D-pad block, which would give D-pad Up, Down, Right and Left (0x90 to 0x93) their `hat_dir` on ABS_HAT0X, never runs. A gamepad that reports its D-pad with these usages gives no hat events.
+* Found: 2026-11-10, on the testing host's WSL, milestone 76, by task 3394, which read Linux's code to answer a review finding that Rach2 maps the D-pad to nothing.
+* Reproduction: not run. Plug in a gamepad whose report descriptor has generic desktop usages 0x90 to 0x93 as buttons, press the D-pad and read its event device with `evtest`: no ABS_HAT0X or ABS_HAT0Y event comes.
+* Evidence: the row "gamepad: a D-pad press gives nothing" of `tests/host/hid_parse_hosttest.c`, which feeds such a descriptor.
+* Rach2: `rach2/sys/usb/hid_input.c`'s `map_system` does as Linux does and maps the D-pad to nothing.
+* Status: unreported.
+* Next: check master's `hid-input.c`, which was not read, then ask on the linux-input list whether the SystemControl block should leave 0x90 to 0x93 to the D-pad block below it.
+
+## Linux divides by zero for a GTF curve whose blanking duty cycle is 100%
+
+* Project: Linux 6.12, `drivers/gpu/drm/drm_modes.c` at the tag `v6.12` (SHA-256 bbd8079eebc846aefb3c9f54f47d1162f96f85d1f2413ab4aca596b4fb8b9d97).
+* Fails: `drm_gtf_mode_complex` divides by `100000 - ideal_duty_cycle` (`drm_modes.c:971-972`), and `ideal_duty_cycle` is `GTF_C_PRIME * 1000 - GTF_M_PRIME * 1000000 / hfreq_est`, both from the EDID's secondary GTF curve. A range descriptor with byte 10 = 2 (secondary curve), K (byte 16) = 0 and 2J (byte 17) = 200 gives M' 0 and C' 100, so the divisor is 0. `drm_gtf2_mode` reaches it for every mode above the curve's break, which byte 12 = 0 puts at 0 kHz, so a crafted or broken monitor, or a write to debugfs `edid_override`, divides by zero in the kernel.
+* Found: 2026-11-10, on the testing host's WSL, milestone 76, by task 3394, which answered a review finding against Rach2's copy of the function in `rach2/sys/drm/drm_edid.c`.
+* Reproduction: not run on Linux. Give a connector an EDID 1.3 whose range descriptor is as above, through debugfs `edid_override`, and probe it.
+* Evidence: the row "GTF at a 100% duty cycle: no mode" of `tests/host/drm_edid_hosttest.c`, which divides by zero under UBSan without Rach2's check.
+* Rach2: `rach2/sys/drm/drm_edid.c`'s `gtf_mode_complex` makes no mode when the duty cycle reaches 100%, in task 3394's commit.
+* Status: unreported.
+* Next: check master's `drm_modes.c`, which could not be fetched, then send a patch that has `drm_gtf_mode_complex` return NULL for a duty cycle of 100% or more.
+
+## Linux reads an EDID's CVT 3-byte codes one byte early
+
+* Project: Linux 6.12, `include/drm/drm_edid.h` at the tag `v6.12` (SHA-256 be7f3d00c6e89583213f866c010ee41ef777f0cc6af32ca45758d81cefe88fb3) and `drivers/gpu/drm/drm_edid.c` (SHA-256 1d042133c26d43abff917cd2dd3d0bf7694baa2188e84326e03161381dc1d9f8); master's `drm_edid.h` of 2026-11-10 (SHA-256 c2f4cd96a5683a31f9cfb182b4215955409615cabb719a8ba7d4ab1882f6eb4a) and `drm_edid.c` (SHA-256 85dbe1d5f088949a97c4e07fb484df17527ef971ab2431053595ebb42dbd4552) have the same code.
+* Fails: `struct detailed_non_pixel` (`drm_edid.h:158-171`) puts `data.cvt[0]` at byte 5 of the descriptor, after `pad1`, `type` and `pad2`, and `drm_cvt_modes` (`drm_edid.c:4004-4007`) reads the four codes from there. E-EDID 1.4's CVT 3-byte descriptor (tag 0xF8) has its version, 01h, at byte 5 and the codes at bytes 6 to 17, so each code Linux reads takes the byte before it: the first code's lines come from the version byte.
+* Found: 2026-11-10, on the testing host's WSL, milestone 76, by task 3394, which answered a review finding that Rach2 reads the codes from byte 6.
+* Reproduction: not run on Linux. Give a connector an EDID with a CVT 3-byte descriptor holding one code for 1920x1080 at 60 Hz and read its modes: Linux's list lacks that mode and may hold another.
+* Evidence: the byte layout above is the E-EDID 1.4 standard's as Rach2's `do_cvt` reads it; the standard's text is not kept in the repository.
+* Rach2: `rach2/sys/drm/drm_edid.c`'s `do_cvt` reads from byte 6, and its comment says why, in task 3394's commit.
+* Status: unreported, draft.
+* Next: confirm the layout against the VESA E-EDID 1.4 text and with a real monitor's descriptor, then send a patch that adds the version byte before `cvt[4]`.
+
+## Linux's Elantech register files answer a write the pad refused as done
+
+* Project: Linux 6.12.115, `drivers/input/mouse/elantech.c` from the pinned source tarball, kept in `build/research/linux-6.12.115-full` on the Mac (file SHA-256 8c422056eeb241b5cc7b1d8929324371fd8a7a57d662153ff9b6ac36d80b22bb).
+* Fails: `elantech_set_int_attr` (`elantech.c:1288-1315`) keeps the value only when `elantech_write_reg` succeeds, but returns `count` either way, so a write to `reg_07` to `reg_26` that the pad refused or did not answer reports success to the writer; only the kernel log's "failed to write register" says otherwise. `elantech_show_int_attr` (`elantech.c:1271-1283`) prints a failed read as `sprintf("0x%02x\n", -1)`, "0xffffffff", in place of an error.
+* Found: 2026-11-11, on the Mac, milestone 76, by task 3455, which gave Rach2's Elantech pad these files as elantech.c has them.
+* Reproduction: not run on Linux. On an Elantech pad, write a register while the pad leaves its register commands unanswered, for example with its port held by another command, and check the write's return value: it is the byte count.
+* Evidence: the rows "a write the pad refuses is still taken whole, as elantech.c answers it" and "a register read while the port waits for its reconnect fails" of `tests/host/psmouse_attr_hosttest.c`.
+* Rach2: `rach2/sys/arch/x86/elantech.c`'s `store_etd` and `show_etd` do as Linux does, so that programs see the same answers, in task 3455's commit.
+* Status: unreported.
+* Next: check master's `elantech.c`, then send a patch that returns -EIO from `elantech_set_int_attr` and `elantech_show_int_attr` when the register access fails.

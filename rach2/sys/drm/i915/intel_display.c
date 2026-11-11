@@ -60,9 +60,9 @@ static uint32_t port_clock(struct drm_i915_private *i915, uint32_t sel)
 {
     switch (sel & PORT_CLK_SEL_MASK) {
     case PORT_CLK_SEL_WRPLL1:
-        return intel_dpll_wrpll_freq(rd(i915, WRPLL_CTL(0)));
+        return intel_dpll_wrpll_freq(i915, rd(i915, WRPLL_CTL(0)));
     case PORT_CLK_SEL_WRPLL2:
-        return intel_dpll_wrpll_freq(rd(i915, WRPLL_CTL(1)));
+        return intel_dpll_wrpll_freq(i915, rd(i915, WRPLL_CTL(1)));
     case PORT_CLK_SEL_SPLL:
         return intel_dpll_spll_freq(rd(i915, SPLL_CTL));
     case PORT_CLK_SEL_LCPLL_810:
@@ -90,6 +90,28 @@ static int edp_input_pipe(uint32_t ddi)
     default:
         return -1;
     }
+}
+
+/**
+ * The dot clock in kHz of a pipe read out into `out`, Linux's
+ * intel_crtc_dotclock: M/N of the link's symbol clock for DisplayPort
+ * (`dp`), 0 without an N; for HDMI and DVI the TMDS clock, scaled to 8
+ * bits a colour to the nearest kHz for deep colour on an HDMI sink,
+ * divided by the pixel multiplier.
+ */
+static uint32_t dotclock(const struct intel_pipe_readout *out, int dp)
+{
+    uint32_t clock;
+
+    if (dp) {
+        return out->link_n != 0
+                   ? (uint32_t)drm_div64((uint64_t)out->link_m * out->port_clock + out->link_n - 1u,
+                                         out->link_n)
+                   : 0;
+    }
+    clock = out->bpp > 24 && out->has_hdmi_sink ? (out->port_clock * 24u + out->bpp / 2u) / out->bpp
+                                                : out->port_clock;
+    return clock / out->pixel_multiplier;
 }
 
 /** Read transcoder `t`'s timings into `m`, each field plus one, as Linux's
@@ -175,19 +197,7 @@ void intel_pipe_readout(struct drm_i915_private *i915, int pipe, struct intel_pi
     out->data_n = rd(i915, PIPE_DATA_N1(t)) & DATA_LINK_M_N_MASK;
     out->link_m = rd(i915, PIPE_LINK_M1(t)) & DATA_LINK_M_N_MASK;
     out->link_n = rd(i915, PIPE_LINK_N1(t)) & DATA_LINK_M_N_MASK;
-    /* Linux's ddi_dotclock_get: M/N of the link's symbol clock for
-     * DisplayPort; for HDMI and DVI the TMDS clock at 8 bits a colour,
-     * divided by the pixel multiplier. */
-    if (mode_sel == TRANS_DDI_MODE_SELECT_DP_SST) {
-        if (out->link_n != 0) {
-            m->clock = (uint32_t)drm_div64(
-                (uint64_t)out->link_m * out->port_clock + out->link_n - 1u, out->link_n);
-        }
-    } else {
-        m->clock = out->bpp != 24 && out->has_hdmi_sink ? out->port_clock * 24u / out->bpp
-                                                        : out->port_clock;
-        m->clock /= out->pixel_multiplier;
-    }
+    m->clock = dotclock(out, mode_sel == TRANS_DDI_MODE_SELECT_DP_SST);
     m->type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED;
     m->vrefresh = drm_mode_vrefresh(m);
     drm_mode_set_name(m);
@@ -277,17 +287,40 @@ uint32_t intel_fb_ggtt(const struct drm_framebuffer *fb)
         return 0;
     }
     for (vma = ((const struct drm_i915_gem_object *)fb->obj[0])->vmas; vma; vma = vma->obj_next) {
-        if (vma->view_pages == 0 && vma->mappable && vma->pin_count > 0) {
+        if (vma->view_pages == 0 && vma->pin_count > 0) {
             return (uint32_t)vma->start;
         }
     }
     return 0;
 }
 
-/** Pin `fb` for scanout: its binding in `*vma`, NULL for the firmware's.
- * 0, -EINVAL for an object of another device, or the binding's error. */
-static int32_t fb_pin(struct drm_framebuffer *fb, struct i915_vma **vma)
+uint32_t intel_fb_ggtt_remapped(const struct drm_framebuffer *fb,
+                                const struct i915_remap_info *remap)
 {
+    const struct i915_vma *vma;
+
+    if (fb->obj[0]->funcs != &i915_gem_object_funcs) {
+        return 0;
+    }
+    for (vma = ((const struct drm_i915_gem_object *)fb->obj[0])->vmas; vma; vma = vma->obj_next) {
+        if (vma->pin_count > 0 && vma->remap.width == remap->width &&
+            vma->remap.height == remap->height && vma->remap.offset == remap->offset &&
+            vma->remap.src_stride == remap->src_stride) {
+            return (uint32_t)vma->start;
+        }
+    }
+    return 0;
+}
+
+/** Pin the framebuffer of the plane state `ps` for scanout, through the
+ * remapped view the plane reads when it needs one (`intel_plane_remap`):
+ * its binding in `*vma`, NULL for the firmware's. 0, -EINVAL for an object
+ * of another device, or the binding's error. */
+static int32_t fb_pin(const struct drm_plane_state *ps, struct i915_vma **vma)
+{
+    struct drm_framebuffer *fb = ps->fb;
+    struct i915_remap_info remap;
+
     *vma = NULL;
     if (fb_is_firmware(fb)) {
         return 0;
@@ -296,6 +329,7 @@ static int32_t fb_pin(struct drm_framebuffer *fb, struct i915_vma **vma)
         return -EINVAL;
     }
     return i915_gem_object_pin_to_display((struct drm_i915_gem_object *)fb->obj[0],
+                                          intel_plane_remap(ps, &remap) ? &remap : NULL,
                                           INTEL_SCANOUT_ALIGN, vma);
 }
 
@@ -331,31 +365,168 @@ static struct intel_crtc *plane_slot(struct drm_i915_private *i915, const struct
     return NULL;
 }
 
+static void wait_next_vblank(struct drm_i915_private *i915, int pipe);
+
+/** Whether the frame count `a` is past `b`, across the counter's wrap. */
+static int frame_past(uint32_t a, uint32_t b)
+{
+    return (int32_t)(a - b) > 0;
+}
+
+/**
+ * Make `next` plane `slot`'s scanout on `c` after a commit that wrote it
+ * between the frame counts `from` and `to`, and let go what the chip reads
+ * no more. After a stall the flip before latched, so what the plane showed
+ * before it goes. A legacy cursor update has no stall, and its write only
+ * arms the plane for the next vblank, as Linux unpins the old cursor from
+ * a vblank work: with no vblank from the start of the plane's last write
+ * to the end of this one, what it shows was never latched and goes, while
+ * what it showed before is still read and stays. Otherwise what it shows
+ * may have latched and is kept until the next update, and what it showed
+ * before goes, after the next vblank when none came since the last write
+ * ended. May sleep.
+ */
+static void scanout_rotate(struct intel_crtc *c, int slot, struct intel_scanout next, uint32_t from,
+                           uint32_t to, int nostall)
+{
+    if (nostall && c->cfg.active) {
+        if (from == c->shown_from[slot] && to == from) {
+            scanout_put(&c->shown[slot]);
+            c->shown[slot] = next;
+            c->shown_to[slot] = to;
+            return;
+        }
+        if (!frame_past(from, c->shown_to[slot])) {
+            wait_next_vblank(c->i915, c->pipe);
+        }
+    }
+    scanout_put(&c->parked[slot]);
+    c->parked[slot] = c->shown[slot];
+    c->shown[slot] = next;
+    c->shown_from[slot] = from;
+    c->shown_to[slot] = to;
+}
+
+/** Boost at the next vblank of `c` the request that draws `ps`'s
+ * framebuffer, as Linux's intel_prepare_plane_fb boosts the plane's fence:
+ * the flip's in-fence when it has one, which the core's implicit fencing
+ * has not yet replaced, or else its object's pending write. A fence that is
+ * not an i915 request is not boosted. */
+static void flip_boost(struct intel_crtc *c, const struct drm_plane_state *ps)
+{
+    struct drm_framebuffer *fb = ps->fb;
+    struct dma_fence *f = ps->fence;
+
+    if (!f) {
+        if (fb_is_firmware(fb) || fb->obj[0]->funcs != &i915_gem_object_funcs) {
+            return;
+        }
+        f = fb->obj[0]->resv->write;
+    }
+    if (f && !dma_fence_is_signaled(f)) {
+        intel_crtc_boost_after_vblank(c, f);
+    }
+}
+
+/**
+ * Boost the request `fence` is when the chip has not begun it, at the
+ * moment the core says a deferred commit's tail would wait for it, for
+ * `mode_config.commit_fence_wait`: Linux's intel_atomic_commit_fence_wait
+ * waits with dma_fence_wait_timeout, which reaches i915_fence_wait, and
+ * its i915_request_wait_timeout boosts such a request after the spin,
+ * which it skips (i915_request.c:2030-2047). Nothing for another driver's
+ * fence or a merge, which Linux waits for in dma_fence_default_wait.
+ * Interrupts masked.
+ */
+static void commit_fence_wait(struct drm_device *dev, struct dma_fence *fence)
+{
+    struct i915_request *rq = (struct i915_request *)fence;
+
+    (void)dev;
+    if (fence->ops == &i915_fence_ops && !i915_request_started(rq)) {
+        i915_rps_boost(rq);
+    }
+}
+
+/**
+ * Hand the commit's mark in RPS's interactive count to the pipes of
+ * `pipes` whose flip is pending: one mark for the commit, in a free slot
+ * of `rps_marks`, which the last of those pipes lets go once its flip
+ * ends, as Linux's intel_cleanup_plane_fb lets the commit's mark go after
+ * its flips (state->rps_interactive). A commit that failed (`err`), waited
+ * for its flips, or has no event to wait for leaves no mark; a pipe that
+ * still holds an older commit's mark keeps that one.
+ */
+static void interactive_handover(struct drm_i915_private *i915, uint32_t pipes, int32_t err)
+{
+    struct intel_display *d = &i915->display;
+    uint32_t flags = kirq_save();
+    int pipe, slot;
+
+    /* A flip the core ended with no vblank, on a pipe a queued commit
+     * turned off, lets its mark go here. */
+    for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
+        intel_crtc_interactive_end(&d->crtc[pipe]);
+    }
+    for (slot = 0; slot < I915_NUM_PIPES && d->rps_marks[slot]; slot++) {
+    }
+    for (pipe = 0; err == 0 && slot < I915_NUM_PIPES && pipe < I915_NUM_PIPES; pipe++) {
+        struct intel_crtc *c = &d->crtc[pipe];
+
+        if ((pipes & (1u << pipe)) && c->base.flip_pending && !c->rps_mark) {
+            c->rps_mark = (uint8_t)(slot + 1);
+            d->rps_marks[slot] |= (uint8_t)(1u << pipe);
+        }
+    }
+    if (slot < I915_NUM_PIPES && d->rps_marks[slot]) {
+        i915_rps_mark_interactive(i915, 1);
+    }
+    kirq_restore(flags);
+    i915_rps_mark_interactive(i915, 0);
+}
+
 int32_t intel_atomic_commit(struct drm_device *dev, struct drm_atomic_state *state, int nonblock)
 {
     struct drm_i915_private *i915 = to_i915(dev);
     struct i915_vma *pinned[DRM_MAX_PLANES];
     struct drm_framebuffer *fbs[DRM_MAX_PLANES];
     struct drm_plane *planes[DRM_MAX_PLANES];
+    uint32_t from[DRM_MAX_PLANES], pipes = 0;
     int32_t err = 0;
     int i, slot = 0;
 
     for (i = 0; i < DRM_MAX_PLANES; i++) {
         struct drm_plane_state *ps = state->planes_new[i];
+        struct intel_crtc *c = ps ? plane_slot(i915, ps->plane, &slot) : NULL;
 
         pinned[i] = NULL;
         fbs[i] = NULL;
         planes[i] = ps ? ps->plane : NULL;
+        from[i] = c ? intel_get_vblank_counter(&c->base) : 0;
         if (ps && ps->fb && err == 0) {
-            err = fb_pin(ps->fb, &pinned[i]);
+            err = fb_pin(ps, &pinned[i]);
             if (err == 0) {
                 fbs[i] = ps->fb;
                 drm_framebuffer_get(fbs[i]);
+                /* Linux's legacy cursor update neither marks nor boosts. */
+                if (c && !state->legacy_cursor_update) {
+                    pipes |= 1u << c->pipe;
+                    flip_boost(c, ps);
+                }
             }
         }
     }
+    /* Page flips are interactive, as Linux's prepare_fb marks them: high
+     * power's shorter interval while the commit waits and its flip is
+     * pending. */
+    if (pipes) {
+        i915_rps_mark_interactive(i915, 1);
+    }
     if (err == 0) {
         err = drm_atomic_helper_commit(dev, state, nonblock);
+    }
+    if (pipes) {
+        interactive_handover(i915, pipes, err);
     }
     for (i = 0; i < DRM_MAX_PLANES; i++) {
         struct intel_crtc *c = planes[i] ? plane_slot(i915, planes[i], &slot) : NULL;
@@ -367,11 +538,8 @@ int32_t intel_atomic_commit(struct drm_device *dev, struct drm_atomic_state *sta
             scanout_put(&next);
             continue;
         }
-        /* The commit's stall let the flip before this one latch, so what
-         * the plane showed then is read no more. */
-        scanout_put(&c->parked[slot]);
-        c->parked[slot] = c->shown[slot];
-        c->shown[slot] = next;
+        scanout_rotate(c, slot, next, from[i], intel_get_vblank_counter(&c->base),
+                       state->legacy_cursor_update);
     }
     return err;
 }
@@ -404,6 +572,24 @@ static struct drm_connector *crtc_connector(struct intel_crtc *c, struct drm_ato
     }
     *conn = NULL;
     return NULL;
+}
+
+/** How many connectors `state` routes to pipe `c`, their states in
+ * `state` or their states now. */
+static uint32_t crtc_connectors(struct intel_crtc *c, struct drm_atomic_state *state)
+{
+    struct drm_mode_config *mc = &c->i915->drm.mode_config;
+    uint32_t i, n = 0;
+
+    for (i = 0; i < mc->num_connector; i++) {
+        const struct drm_connector_state *cs = state->connectors_new[mc->connectors[i]->index];
+
+        if (!cs) {
+            cs = mc->connectors[i]->state;
+        }
+        n += cs && cs->crtc == &c->base;
+    }
+    return n;
 }
 
 /** The DDI port of B to D whose connector `connector` is, or NULL. */
@@ -457,7 +643,9 @@ static int32_t compute_config(struct intel_crtc *c, const struct drm_crtc_state 
         return 0;
     }
     connector = crtc_connector(c, state, &conn);
-    if (!connector) {
+    if (!connector || crtc_connectors(c, state) > 1) {
+        /* A DDI encoder clones with none, as Linux's encoder->cloneable
+         * of 0: its "rejecting invalid cloning configuration". */
         return -EINVAL;
     }
     cfg->active = cs->active != 0;
@@ -520,9 +708,20 @@ static int32_t intel_crtc_check(struct drm_crtc *crtc, struct drm_atomic_state *
     return modeset || !cfg.active ? 0 : intel_wm_intermediate(&c->wm_optimal, &wm);
 }
 
+int32_t intel_cpu_transcoder_mode_valid(const struct drm_mode_modeinfo *m)
+{
+    if (m->hdisplay < 64 || m->htotal < m->hdisplay + 32u || m->vtotal < m->vdisplay + 5u ||
+        m->hsync_start == m->hdisplay) {
+        return -EINVAL;
+    }
+    return 0;
+}
+
 /** The modes a pipe drives, Linux's intel_mode_valid for Haswell: no
  * vertical scan, skew, composite sync or the like, a clock the CD clock
- * takes, and the transcoder's sizes. */
+ * takes, and the transcoder's sizes. The transcoder's least blanking and
+ * front porch are the connectors' to check, in the modes they list, as
+ * Linux checks them only in its encoders' mode_valid. */
 static int32_t intel_crtc_mode_valid(struct drm_crtc *crtc, const struct drm_mode_modeinfo *m)
 {
     struct drm_i915_private *i915 = to_intel_crtc(crtc)->i915;
@@ -549,14 +748,15 @@ static void intel_crtc_enable(struct drm_crtc *crtc, struct drm_atomic_state *st
     (void)state;
 }
 
-/** Turn a plane's registers off and arm the change for the next vblank. */
+/** Turn a plane's registers off and arm the change for the next vblank;
+ * the primary plane keeps the pipe's bits of its control. */
 static void plane_off(struct intel_crtc *c, int slot)
 {
     struct i915_hw *hw = &c->i915->hw;
 
     switch (slot) {
     case INTEL_PLANE_PRIMARY:
-        i915_write(hw, DSPCNTR(c->pipe), 0);
+        i915_write(hw, DSPCNTR(c->pipe), intel_plane_ctl_crtc(c));
         i915_write(hw, DSPSURF(c->pipe), 0);
         break;
     case INTEL_PLANE_SPRITE:
@@ -646,7 +846,9 @@ static void configure_transcoder(struct intel_crtc *c, const struct intel_crtc_c
  * ilk_csc_matrix_limited_range through ilk_update_pipe_csc. */
 static void write_csc_limited(struct i915_hw *hw, int pipe)
 {
-    /* (235 - 16) / 255 in 1.12, and 16 / 255 of full scale. */
+    /* A gain of 219/256, exponent 0 and a 12-bit fraction, and an offset
+     * of 16/256 of full scale: Linux's ILK_CSC_COEFF_LIMITED_RANGE and
+     * ILK_CSC_POSTOFF_LIMITED_RANGE. */
     const uint32_t coeff = (235u - 16u) << 4, postoff = 16u << 4;
 
     i915_write(hw, PIPE_CSC_PREOFF_HI(pipe), 0);
@@ -1028,12 +1230,14 @@ int32_t intel_display_commit_pipe(struct intel_crtc *c)
     struct drm_crtc_state *cs;
     int32_t rc;
 
+    drm_modeset_lock_nointr(dev);
     /* A blocking commit waits for a pending flip, which the worker this
-     * runs in may be the one to finish. */
+     * runs in may be the one to finish; tested under the lock, so that no
+     * flip is queued between the test and the commit. */
     if (c->base.flip_pending) {
+        drm_modeset_unlock(dev);
         return -EBUSY;
     }
-    drm_modeset_lock_nointr(dev);
     state = drm_atomic_state_alloc(dev);
     cs = state ? drm_atomic_get_crtc_state(state, &c->base) : NULL;
     rc = cs ? 0 : -ENOMEM;
@@ -1196,15 +1400,17 @@ static void adopt(struct drm_i915_private *i915, struct intel_crtc *c)
     struct drm_mode_modeinfo mode = c->hw.mode;
     struct drm_framebuffer *fb;
 
-    adopt_config(i915, c);
     /* Linux's intel_crtc_readout_derived_state: the mode a user set is
-     * the panel's timings at the pipe's source size. */
-    mode.hdisplay = (uint16_t)c->cfg.src_w;
-    mode.vdisplay = (uint16_t)c->cfg.src_h;
+     * the panel's timings at the pipe's source size. The configuration,
+     * which takes the power well's reference and the PLL, is taken only
+     * once the state holds the mode. */
+    mode.hdisplay = (uint16_t)c->hw.src_w;
+    mode.vdisplay = (uint16_t)c->hw.src_h;
     drm_mode_set_name(&mode);
     if (drm_atomic_set_mode_for_crtc(cs, &mode) != 0) {
         return;
     }
+    adopt_config(i915, c);
     cs->active = 1;
     /* Linux's intel_sanitize_fifo_underrun_reporting: an active pipe
      * starts with its underruns unreported, until its first commit. */
@@ -1343,6 +1549,31 @@ static int32_t ports_init(struct drm_i915_private *i915)
     return 0;
 }
 
+/**
+ * Write the display's registers of Linux's hsw_init_clock_gating and
+ * lpt_init_clock_gating, which it writes once, at load:
+ * WaFbcAsynchFlipDisableFbcQueue, WaPsrDPAMaskVBlankInSRD and, on each
+ * pipe, WaPsrDPRSUnmaskVBlankInSRD; on a low-power PCH, which a ULT or
+ * ULX part has, the partition level's gating off; and
+ * WADPOClockGatingDisable. The GT's registers of those functions are
+ * `i915_gt_init`'s.
+ */
+static void hsw_display_clock_gating(struct drm_i915_private *i915)
+{
+    struct i915_hw *hw = &i915->hw;
+    int pipe;
+
+    (void)i915_rmw(hw, CHICKEN_PIPESL_1(0), 0, HSW_FBCQ_DIS);
+    (void)i915_rmw(hw, CHICKEN_PAR1_1, 0, HSW_MASK_VBL_TO_PIPE_IN_SRD);
+    for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
+        (void)i915_rmw(hw, CHICKEN_PIPESL_1(pipe), 0, HSW_UNMASK_VBL_TO_REGS_IN_SRD);
+    }
+    if (i915->id && (i915->id->ult || i915->id->ulx)) {
+        (void)i915_rmw(hw, SOUTH_DSPCLK_GATE_D, 0, PCH_LP_PARTITION_LEVEL_DISABLE);
+    }
+    (void)i915_rmw(hw, TRANS_CHICKEN1(0), 0, TRANS_CHICKEN1_DP0UNIT_GC_DISABLE);
+}
+
 int32_t intel_display_init(struct drm_i915_private *i915)
 {
     struct intel_display *d = &i915->display;
@@ -1353,17 +1584,23 @@ int32_t intel_display_init(struct drm_i915_private *i915)
     int pipe;
 
     d->bl_index = -1;
+    /* The PLLs first, as Linux's intel_shared_dpll_init comes before its
+     * readout: a WRPLL's port clock needs the non-SSC reference. */
+    intel_dpll_init(i915);
+    hsw_display_clock_gating(i915);
     intel_display_readout(i915);
     err = drm_mode_config_init(dev);
     if (err != 0) {
         return err;
     }
     d->ready = 1;
-    /* Linux's intel_mode_config_init for display 7. */
+    /* Linux's intel_mode_config_init for display 7 and up, the render
+     * engine's largest surface; the planes' checks bound what they scan
+     * out of it. */
     mc->min_width = 0;
     mc->min_height = 0;
-    mc->max_width = 8192;
-    mc->max_height = 8192;
+    mc->max_width = 16384;
+    mc->max_height = 16384;
     mc->cursor_width = 256;
     mc->cursor_height = 256;
     mc->preferred_depth = 24;
@@ -1374,10 +1611,11 @@ int32_t intel_display_init(struct drm_i915_private *i915)
     mc->atomic_commit = intel_atomic_commit;
     mc->fb_create = intel_fb_create;
     mc->fb_destroy = intel_fb_destroy;
+    mc->commit_fence_wait = commit_fence_wait;
+    mc->commit_fence_timeout_ms = I915_FENCE_TIMEOUT_MS;
     intel_cdclk_init(i915);
     intel_wm_init(i915);
     intel_gmbus_setup(i915);
-    intel_dpll_init(i915);
     for (pipe = 0; pipe < I915_NUM_PIPES; pipe++) {
         struct intel_crtc *c = &d->crtc[pipe];
 

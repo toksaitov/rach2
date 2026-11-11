@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 11, 2026
 .Dt POLL 2
 .Os
 .Sh NAME
@@ -53,6 +53,9 @@ Accepted, but no descriptor reports this condition.
 An error condition exists.
 .It Dv POLLHUP
 A peer has closed or hung up.
+.It Dv POLLRDHUP
+A stream socket's receiving half is shut: its peer sent the end of
+input, or the socket was shut down for reading.
 .It Dv POLLNVAL
 The descriptor is invalid or was opened with
 .Dv O_PATH .
@@ -99,15 +102,28 @@ a write through a read-only descriptor fails with
 .Pp
 Datagram and protocol-bearing raw sockets are readable when a packet is
 queued and are always writable.
-A connected stream is readable with buffered data or a received FIN.
+A connected TCP stream reports as Linux's does.
+It is readable with buffered data, and readable with requested
+.Dv POLLRDHUP
+once its receiving half is shut, by the peer's FIN or by
+.Dv SHUT_RD .
 It is writable in the established or close-wait state while its send
-buffer has space.
+buffer has space, and once its sending half is shut by
+.Dv SHUT_WR ,
+since a send then fails at once.
 A pending connection error reports
 .Dv POLLERR
 and requested
 .Dv POLLOUT .
-A closed stream reports
-.Dv POLLHUP .
+A stream with both halves shut, or whose connection has ended, reports
+.Dv POLLHUP
+and is readable and writable.
+A stream with no connection, never connected or disconnected by a
+.Xr shutdown 2
+in its handshake, reports
+.Dv POLLHUP
+and requested
+.Dv POLLOUT .
 An ioctl-only socket reports
 .Dv POLLERR
 immediately.
@@ -159,10 +175,21 @@ When a signal ends the wait, its handler runs under
 and the previous mask comes back when the handler returns; otherwise the
 previous mask comes back as the call returns.
 If no entry is ready, a pending signal that is neither blocked nor
-ignored gives
-.Er EINTR ;
-.Dv SA_RESTART
-does not restart the call, as on Linux.
+ignored ends the wait.
+A handler makes the call fail with
+.Er EINTR
+whatever its flags, as on Linux.
+A signal that runs no handler, as a stop and a continue, restarts it, as
+Linux does:
+.Nm poll
+through
+.Xr restart_syscall 2 ,
+with the array and the deadline fixed at the first call, and
+.Nm ppoll
+with the time left, which, as on Linux, it writes back to a nonzero
+timeout as it returns, as
+.Xr select 2
+describes.
 .Pp
 The i386 system call numbers are 168 for
 .Nm poll

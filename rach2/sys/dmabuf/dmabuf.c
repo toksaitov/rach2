@@ -130,7 +130,27 @@ static void buf_ready(struct dma_fence *f, struct dma_fence_cb *cb)
     wq_wake_all(&b->wq);
 }
 
-/** Poll snapshots of the reservation, arming callbacks before sleeping. */
+/**
+ * Add the poll callback to the first leaf of a snapshot that accepts it,
+ * as Linux's dma_buf_poll_add_cb (dma-buf.c:234-251): one leaf is
+ * listened for, and the next only when the program polls again, so that
+ * a poll arms no other producer's signal. Returns that leaf with a
+ * reference, or NULL when every leaf has signalled.
+ */
+static struct dma_fence *buf_poll_add_cb(struct dma_fence *snapshot, struct dma_buf_poll_cb *cb)
+{
+    struct dma_fence_unwrap u;
+    struct dma_fence *leaf;
+    for (leaf = dma_fence_unwrap_first(snapshot, &u); leaf; leaf = dma_fence_unwrap_next(&u))
+        if (!dma_fence_add_callback(leaf, &cb->cb, buf_ready)) {
+            dma_fence_get(leaf);
+            dma_fence_unwrap_end(&u);
+            return leaf;
+        }
+    return NULL;
+}
+
+/** Poll snapshots of the reservation, arming a callback before sleeping. */
 static short buf_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     struct dma_buf *b = e->priv;
@@ -149,9 +169,10 @@ static short buf_poll(fd_entry_t *e, short events, struct wait_queue **wq)
         }
         dma_fence_remove_callback(b->poll_fences[i], &b->poll_cb[i].cb);
         dma_fence_put(b->poll_fences[i]);
-        b->poll_fences[i] = f;
         b->poll_cb[i].buf = b;
-        if (dma_fence_add_callback(f, &b->poll_cb[i].cb, buf_ready))
+        b->poll_fences[i] = buf_poll_add_cb(f, &b->poll_cb[i]);
+        dma_fence_put(f);
+        if (!b->poll_fences[i])
             mask |= i ? 4 : 1;
     }
     return mask;
@@ -168,33 +189,40 @@ static int64_t buf_seek(fd_entry_t *e, int64_t offset, int whence)
     return whence == 2 ? (int64_t)b->size : 0;
 }
 
-/** Map through the exporter after checking the exported extent. */
+/** Map through the exporter after checking the exported extent; EINVAL
+ * for an exporter without mmap or a range past the buffer, as Linux. */
 static int32_t buf_mmap(fd_entry_t *e, vma_t *vma)
 {
     struct dma_buf *b = e->priv;
     uint64_t off = (uint64_t)vma->pgoff << 12;
-    if (off > b->size || vma->end - vma->start > b->size - off)
+    if (!b->ops->mmap || off > b->size || vma->end - vma->start > b->size - off)
         return -EINVAL;
-    return b->ops->mmap ? b->ops->mmap(b, vma) : -ENODEV;
+    return b->ops->mmap(b, vma);
 }
 
-/** Wait on a reservation snapshot, then give the exporter CPU access. */
+/**
+ * Give the exporter CPU access, then, at the start, wait on a reservation
+ * snapshot, as Linux's dma_buf_begin_cpu_access and dma_buf_end_cpu_access
+ * (dma-buf.c:1415-1423, 1450-1451). The exporter's hook comes first so that
+ * it can wait its own way: i915's spins on and boosts its requests, and the
+ * wait after it then finds them done. Returns the hook's error without
+ * waiting, else the wait's.
+ */
 static int32_t buf_sync(struct dma_buf *b, uint64_t flags)
 {
     struct dma_fence *f;
     int32_t rc;
     if ((flags & ~((uint64_t)DMA_BUF_SYNC_VALID_FLAGS_MASK)) || !(flags & DMA_BUF_SYNC_RW))
         return -EINVAL;
-    if (!(flags & DMA_BUF_SYNC_END)) {
-        f = dma_resv_snapshot(b->resv, (flags & DMA_BUF_SYNC_WRITE) != 0);
-        if (!f)
-            return -ENOMEM;
-        rc = dma_fence_wait_until(f, 1, -1);
-        dma_fence_put(f);
-        if (rc)
-            return rc;
-    }
-    return b->ops->cpu_access ? b->ops->cpu_access(b, flags) : 0;
+    rc = b->ops->cpu_access ? b->ops->cpu_access(b, flags) : 0;
+    if (rc || (flags & DMA_BUF_SYNC_END))
+        return rc;
+    f = dma_resv_snapshot(b->resv, (flags & DMA_BUF_SYNC_WRITE) != 0);
+    if (!f)
+        return -ENOMEM;
+    rc = dma_fence_wait_until(f, 1, -1);
+    dma_fence_put(f);
+    return rc;
 }
 
 /** Check sync-file import or export access flags. */
@@ -225,7 +253,7 @@ static int32_t buf_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
                 return 0;
             }
         }
-        return -ENAMETOOLONG;
+        return -EINVAL; /* Linux's strndup_user */
     }
     if (request == DMA_BUF_IOCTL_SYNC) {
         if (copy_from_user(&sync, (void __user *)arg, sizeof(sync)))
@@ -251,16 +279,9 @@ static int32_t buf_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     f = dma_resv_snapshot(b->resv, (data.flags & DMA_BUF_SYNC_WRITE) != 0);
     if (!f)
         return -ENOMEM;
-    rc = sync_file_create(f, "dmabuf");
+    rc = sync_file_copy_out(f, NULL, (void __user *)arg, &data, sizeof(data), &data.fd);
     dma_fence_put(f);
-    if (rc < 0)
-        return rc;
-    data.fd = rc;
-    if (copy_to_user((void __user *)arg, &data, sizeof(data))) {
-        fd_free(current_proc->fds, rc);
-        return -EFAULT;
-    }
-    return 0;
+    return rc;
 }
 
 /** Drop the descriptor's buffer reference. */

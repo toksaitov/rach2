@@ -128,6 +128,9 @@ struct open_file {
      * all three through `vfs_desc_close`, so the file system sees one release
      * for each open. `vmnt` is NULL for every other kind of description. */
     struct vfs_mount *vmnt;
+    /* The held mount of a synthetic node opened by path, for NO_XDEV when
+     * /proc/PID/fd follows this description; NULL on anonymous objects. */
+    struct vfs_mount *synth_mnt;
     void *vnode;
     void *fhandle;
     /* With `vmnt`, the inode number the file had when it was opened, or for
@@ -154,6 +157,14 @@ struct open_file {
      * from a new description the heap gives the same address after its
      * last close; an epoll registration keeps both. */
     uint32_t serial;
+    /* For a device opened through a device node of tmpfs or ext2, the only
+     * types that make one, that node and its mount, held as an O_PATH
+     * description holds its own: what an open of /proc/PID/fd/N checks and
+     * opens again, as Linux follows the descriptor's path. The type's hold
+     * keeps the node after an unlink. NULL for every other description.
+     * The last unref gives back both. */
+    struct vfs_mount *dev_mnt;
+    void *dev_node;
     /* A write or executable reservation, taken before an open may sleep.
      * The resolver holds this node until the description takes ownership. */
     struct vfs_mount *access_mnt;
@@ -172,6 +183,10 @@ struct open_file {
     uint32_t watch_flags;
     uint64_t parent_ino;
     char *leaf;
+    /* For a description of a terminal, the console or a pty's slave, the
+     * terminal's count of vhangups when it was opened; a later vhangup
+     * leaves it hung up (`tty_desc_hung`). */
+    uint32_t tty_hangups;
 };
 
 /* An open(2) made the description, which reports its open and close, and
@@ -300,10 +315,11 @@ int fd_table_reach(fd_table_t *table, int fd);
  * for reading and writing with a description of its own, as Linux gives init
  * `/dev/console` opened O_RDWR on all three: a program may write through its
  * standard input, as tmux's server draws through the terminal its client
- * passes it. Returns 0, or -1 with nothing left open when the heap has no
- * room.
+ * passes it. `hangups` is the console's count of vhangups now, which each
+ * description records (`tty_hangups`). Returns 0, or -1 with nothing left
+ * open when the heap has no room.
  */
-int fd_init_stdio(fd_table_t *table);
+int fd_init_stdio(fd_table_t *table, uint32_t hangups);
 
 /**
  * Reserve the lowest free descriptor, growing the table up to the caller's

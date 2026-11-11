@@ -1,0 +1,17 @@
+run: bed-forward: machine.bed-forward.virgl: starting
+@etude 1 begin machine.bed-forward.virgl
+@etude 1 progress stage 1
+@etude 1 progress stage 2
+@etude 1 assert drawn pass
+bed-forward: start: qemu-system-x86_64 -accel tcg -cpu max -smp 4 -m 4096 -device virtio-vga-gl,edid=on,xres=1280,yres=800 -display egl-headless,rendernode=/dev/dri/renderD128
+bed-forward: guest: SSH answered after 66 s
+bed-forward: triangle: llvmpipe f0b3cd1d6d2e2625, virgl (virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER))) f0b3cd1d6d2e2625
+bed-forward: glmark2: virgl (virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER)))
+bed-forward: glmark2: [build:use-vbo=true] at 1280x800: validation Success, 52 frames a second
+bed-forward: result: pass: virgl: triangle f0b3cd1d6d2e2625 on virgl (virgl (D3D12 (NVIDIA GeForce RTX 4080 SUPER))); glmark2 [build:use-vbo=true] validated at 52 frames a second
+@etude 1 progress stage 3
+@etude 1 progress stage 4
+@etude 1 end 1
+etude check: result: unchanged: 6 files
+etude run: result: ran: 1 suites, 1 passed
+run: bed-forward: PASS in 125s

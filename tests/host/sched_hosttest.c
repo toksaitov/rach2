@@ -2,7 +2,8 @@
  * Host test of the scheduler's selection and the wait queue's wakeups,
  * proc/sched.c and proc/wait_queue.c, with no switch of the processor.
  *
- * host-deps:
+ * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-cflags: -DRACH2_HOST_CPU
  *
  * The interrupt flag, the floating-point saves and the switch of stacks are
  * the test's; the selection, the process states, the wake marks and the
@@ -11,7 +12,9 @@
  */
 
 #include "proc/sched.c"
+#include "compat/waketime_none.h"
 #include "proc/wait_queue.c"
+#include "proc/rseq.c"
 
 extern int dprintf(int fd, const char *format, ...);
 
@@ -19,6 +22,7 @@ process_t *proc_list;
 struct percpu cpu_table[NR_CPUS];
 process_t *proc_idle;
 volatile uint64_t kernel_ticks;
+unsigned int host_cpu;
 
 /** A spin's pause, which the host does not need. */
 void arch_relax(void)
@@ -29,6 +33,9 @@ static uint8_t areas[7][16];
 static uint32_t irq_flags;
 static unsigned switches;
 static int failures;
+static int affinity_step;
+static unsigned int affinity_kicks;
+static uint32_t rseq_area[8];
 
 #define CHECK(test, message)                                     \
     do {                                                         \
@@ -37,6 +44,16 @@ static int failures;
             failures++;                                          \
         }                                                        \
     } while (0)
+
+/* The modeled monotonic clock in nanoseconds, which the rows move. */
+static uint64_t clock_ns;
+
+/** Read the modeled monotonic clock, which only the rows move. */
+void rtc_monotonic(int64_t *sec, int64_t *ns)
+{
+    *sec = (int64_t)(clock_ns / 1000000000u);
+    *ns = (int64_t)(clock_ns % 1000000000u);
+}
 
 /** Timer list membership is checked by process_timer_hosttest. */
 void proc_timer_update(process_t *p)
@@ -101,8 +118,37 @@ void fpu_restore(const void *area)
     CHECK(area != current_proc->fpu, "restore belongs to incoming process");
 }
 
-/** Mark nothing: no row registers an rseq area. */
-void rseq_preempt(process_t *p)
+/** Copy a modeled user area without faults. */
+int copy_from_user(void *to, const void __user *from, size_t size)
+{
+    k_memcpy(to, from, size);
+    return 0;
+}
+
+/** Copy an rseq update into the modeled user area. */
+int copy_to_user(void __user *to, const void *from, size_t size)
+{
+    k_memcpy(to, from, size);
+    return 0;
+}
+
+/** No valid area should force a signal. */
+void signal_force(process_t *p, int signo, const struct k_siginfo *info)
+{
+    (void)p;
+    (void)signo;
+    (void)info;
+    CHECK(0, "rseq forced a signal");
+}
+
+/** No row has a pending signal to deliver. */
+void deliver_signals(isr_params_t *params)
+{
+    (void)params;
+}
+
+/** No process registers for the sync-core barrier in the host model. */
+void membarrier_switch(const struct process *p)
 {
     (void)p;
 }
@@ -120,10 +166,38 @@ void arch_debug_switch(struct process *old, const struct process *next)
 void switch_context(process_t *old, process_t *next)
 {
     CHECK(!irq_flags, "switch with interrupts on");
-    CHECK(old->state != PROC_RUNNING, "outgoing process still running");
+    CHECK(old == this_cpu()->idle || old->state != PROC_RUNNING, "outgoing process still running");
     CHECK(next == current_proc && next->state == PROC_RUNNING, "incoming state");
     CHECK(!next->woken, "wake mark survived selection");
     switches++;
+    if (affinity_step && old == &procs[0]) {
+        int step = affinity_step;
+
+        affinity_step = 0;
+        CHECK(old->state == PROC_BLOCKED && affinity_waits != NULL,
+              "remote affinity waits for the running target");
+        CHECK(procs[1].need_resched && affinity_kicks != 0,
+              "remote affinity requests and kicks a switch");
+        if (step == 2) {
+            sched_set_affinity(&procs[1], 3);
+        } else {
+            host_cpu = 1;
+            if (step == 3) {
+                procs[1].state = PROC_ZOMBIE;
+            }
+            sched_take_preempt();
+            CHECK(cpu_table[1].current != &procs[1], "target left the forbidden processor");
+            if (step == 3) {
+                sched_forget(&procs[1]);
+                k_memset(&procs[1], 0, sizeof(procs[1]));
+            }
+            host_cpu = 0;
+        }
+        CHECK(affinity_waits == NULL && old->state == PROC_READY,
+              "completion drops the task pointer and wakes the caller");
+        schedule();
+        CHECK(current_proc == old, "affinity caller resumes");
+    }
 }
 
 /** One processor: the run queues' lock is the interrupt flag alone. */
@@ -168,10 +242,12 @@ void bkl_take(int depth)
 void bkl_yield(void)
 {}
 
-/** Nothing: there is no other processor to wake. */
+/** Count a request to the remote processor, which the switch model services. */
 void smp_kick(int cpu)
 {
-    (void)cpu;
+    if (cpu == 1) {
+        affinity_kicks++;
+    }
 }
 
 /** Nothing: no row runs the idle task's loop. */
@@ -203,6 +279,8 @@ static void setup(void)
     unsigned i;
     unsigned char *bytes = (unsigned char *)procs;
 
+    host_cpu = 0;
+    k_memset(cpu_table, 0, sizeof(cpu_table));
     for (i = 0; i < sizeof(procs); i++) {
         bytes[i] = 0;
     }
@@ -226,6 +304,55 @@ static void setup(void)
         sched_make_ready(&procs[i]);
     }
     sched_enable();
+}
+
+/** Force remote affinity completion, supersession and exit, then consume
+ * the moved thread's rseq notification on its new processor. */
+static void affinity_rows(void)
+{
+    isr_params_t frame;
+    int step;
+    unsigned int i;
+
+    for (step = 1; step <= 3; step++) {
+        setup();
+        for (i = 1; i < 7; i++) {
+            sched_forget(&procs[i]);
+        }
+        cpu_table[0].idle = &procs[2];
+        cpu_table[1].idle = &procs[3];
+        cpu_table[1].current = &procs[1];
+        cpu_table[1].online = 1;
+        procs[0].affinity = 1;
+        procs[1].state = PROC_RUNNING;
+        procs[1].cpu = procs[3].cpu = 1;
+        procs[2].state = procs[3].state = PROC_READY;
+        k_memset(rseq_area, 0, sizeof(rseq_area));
+        rseq_area[0] = rseq_area[1] = 1;
+        procs[1].rseq = (uintptr_t)rseq_area;
+        affinity_kicks = 0;
+        affinity_step = step;
+        sched_set_affinity(&procs[1], 1);
+        CHECK(!affinity_step && current_proc == &procs[0] && !affinity_waits,
+              "affinity returns after completion with no wait left");
+        if (step == 1) {
+            CHECK(procs[1].rseq_notify && (procs[1].rseq_event & RSEQ_EVENT_MIGRATE),
+                  "moving a task marks rseq for the return");
+            procs[0].state = PROC_BLOCKED;
+            schedule();
+            CHECK(current_proc == &procs[1], "moved thread runs on the allowed processor");
+            k_memset(&frame, 0, sizeof(frame));
+            FRAME_PC(&frame) = 0x4000;
+            rseq_return(&frame);
+            CHECK(rseq_area[0] == host_cpu && rseq_area[1] == host_cpu && rseq_area[5] == 0 &&
+                      rseq_area[6] == host_cpu && !procs[1].rseq_notify,
+                  "rseq CPU numbers and mm_cid follow the move");
+        } else if (step == 2) {
+            CHECK(cpu_table[1].current == &procs[1] && procs[1].affinity == 3,
+                  "a newer mask allowing the current processor completes the wait");
+        }
+    }
+    setup();
 }
 
 /** Block `p` on a queue and wake it with `wq_wake_all`, as a device's
@@ -409,6 +536,35 @@ static void accounting(void)
 }
 
 /**
+ * The load average's sample keeps the period's phase when the call that
+ * makes it comes late, as the boot processor's does after ticks that found
+ * the big lock held, and a gap of three periods folds three samples.
+ */
+static void load_phase(void)
+{
+    uint32_t active, total, avg, i;
+    uint64_t want;
+
+    load_tick = (uint32_t)kernel_ticks;
+    load_wait = 10;
+    kernel_ticks += 12;
+    sched_load_tick();
+    CHECK(load_wait == LOAD_FREQ - 2, "a sample two ticks late leaves the next two ticks sooner");
+    sched_task_counts(&active, &total);
+    active *= LOAD_ONE;
+    load_avg[0] = 3u * LOAD_ONE;
+    avg = load_avg[0];
+    for (i = 0; i < 3; i++) {
+        want = (uint64_t)avg * load_decay[0] + (uint64_t)active * (LOAD_ONE - load_decay[0]);
+        avg = (uint32_t)((want + (active >= avg ? LOAD_ONE - 1u : 0u)) >> SCHED_LOAD_SHIFT);
+    }
+    kernel_ticks += load_wait + 2u * LOAD_FREQ;
+    sched_load_tick();
+    CHECK(load_avg[0] + 2u >= avg && load_avg[0] <= avg + 2u && load_wait == LOAD_FREQ,
+          "a gap of three periods folds three samples and keeps the phase");
+}
+
+/**
  * The machine is idle when every processor online is halted in an idle
  * wait: one that runs makes it busy, and one that is not online does not
  * count, whatever its marker says.
@@ -511,23 +667,159 @@ static void migration(void)
     init_sched();
 }
 
-/** Run every row; 0 when each passes, 1 otherwise. */
-int main(void)
+/**
+ * A thread made ready while the scheduler is on is credited, when it is
+ * selected, with its whole wait on the run queue in nanoseconds, as Linux's
+ * sched_info, and each switch onto a processor counts in pcount: a wait of
+ * 2^32 + 10^6 microseconds, past any 32-bit count of microseconds, counts
+ * whole; a wait begun before the scheduler is on counts nothing; a move to
+ * another processor's queue keeps the wait, which counts whole when an idle
+ * processor steals the thread; and a suspend's hold adds the wait so far,
+ * counts none while it lasts, and starts each queued thread's wait again.
+ */
+static void run_delay(void)
 {
+    const uint64_t wait = ((uint64_t)1 << 32) * 1000u + 1000000000u;
+    unsigned int i;
+
+    clock_ns = (uint64_t)7 * 1000000000u + 123u;
+    setup();
+    wake(&procs[6]);
+    clock_ns += wait;
+    schedule();
+    CHECK(current_proc == &procs[6] && procs[6].run_delay == wait && procs[6].pcount == 1,
+          "a wait past 2^32 microseconds counts whole in run_delay");
+    clock_ns += 5000u;
+    schedule();
+    CHECK(current_proc == &procs[1] && procs[1].run_delay == 0 && procs[1].pcount == 1,
+          "a wait begun before the scheduler was on counts nothing");
+
+    setup();
+    cpu_table[1].online = 1;
+    cpu_table[1].current = cpu_table[1].idle = NULL;
+    wake(&procs[4]);
+    clock_ns += 1000u;
+    for (i = 1; i < 7; i++) {
+        sched_set_affinity(&procs[i], 2);
+    }
+    clock_ns += 2000u;
+    sched_set_affinity(&procs[4], 3);
+    current_proc->state = PROC_BLOCKED;
+    schedule();
+    CHECK(current_proc == &procs[4] && procs[4].run_delay == 3000u && procs[4].pcount == 1,
+          "a wait moved to another queue counts whole when an idle processor steals it");
+    cpu_table[1].online = 0;
+    init_sched();
+
+    setup();
+    wake(&procs[6]);
+    clock_ns += 1000u;
+    sched_hold_waits(1);
+    CHECK(procs[6].run_delay == 1000u && !procs[6].run_queued,
+          "a suspend's hold adds the wait so far and ends it");
+    clock_ns += 1000000000u;
+    sched_hold_waits(0);
+    clock_ns += 500u;
+    schedule();
+    CHECK(current_proc == &procs[6] && procs[6].run_delay == 1500u,
+          "the suspend counts nothing and the wait starts again at its end");
+    clock_ns += 700u;
+    schedule();
+    CHECK(current_proc == &procs[1] && procs[1].run_delay == 1200u,
+          "every queued thread's wait starts at the suspend's end");
+    clock_ns = 0;
+}
+
+/* The calls of the `sched_out` that `sched_out_rows` gives its threads. */
+static int out_calls;
+static void *out_arg;
+
+/** Count a call of a thread's `sched_out`, which comes with interrupts
+ * off, the run queues' lock in this model, while the thread is current. */
+static void count_out(void *arg)
+{
+    CHECK(!irq_flags, "sched_out with interrupts on");
+    CHECK(arg == current_proc, "sched_out after the thread stopped being current");
+    out_calls++;
+    out_arg = arg;
+}
+
+/**
+ * A thread's `sched_out` is called at a switch away from it that leaves it
+ * able to run, and only then: not when selection keeps a SCHED_FIFO thread
+ * over ordinary or equal ones, once when a SCHED_RR thread gives way to an
+ * equal one, and not when a thread blocks.
+ */
+static void sched_out_rows(void)
+{
+    unsigned long nivcsw;
+
+    setup();
+    out_calls = 0;
+    out_arg = NULL;
+    procs[0].sched_out = count_out;
+    procs[0].sched_out_arg = &procs[0];
+    current_proc->in_syscall = 1;
+    current_proc->sched_policy = SCHED_FIFO;
+    current_proc->rt_priority = 10;
+    current_proc->need_resched = 1;
+    irq_flags = 0;
+    sched_take_preempt();
+    CHECK(current_proc == &procs[0] && !switches && !out_calls,
+          "a real-time thread kept over ordinary ones is not switched out, nor told so");
+    procs[3].sched_policy = SCHED_FIFO;
+    procs[3].rt_priority = 10;
+    sched_priority_changed(&procs[3]);
+    current_proc->need_resched = 1;
+    sched_take_preempt();
+    CHECK(current_proc == &procs[0] && !switches && !out_calls,
+          "a SCHED_FIFO thread kept over an equal one is not told either");
+    current_proc->sched_policy = SCHED_RR;
+    current_proc->need_resched = 1;
+    nivcsw = procs[0].nivcsw;
+    sched_take_preempt();
+    CHECK(current_proc == &procs[3] && switches == 1 && out_calls == 1 && out_arg == &procs[0] &&
+              procs[0].nivcsw == nivcsw + 1,
+          "a SCHED_RR thread that gives way to an equal one is told once, at the switch");
+    procs[3].sched_out = count_out;
+    procs[3].sched_out_arg = &procs[3];
+    procs[3].state = PROC_BLOCKED;
+    schedule();
+    CHECK(current_proc != &procs[3] && switches == 2 && out_calls == 1,
+          "a thread that blocks is switched out without being told");
+    procs[0].sched_out = NULL;
+    procs[3].sched_out = NULL;
+    procs[0].in_syscall = 0;
+}
+
+/** Run every row; 0 when each passes, 1 otherwise. */
+int main(int argc, char **argv)
+{
+    if (argc == 2 && __builtin_strcmp(argv[1], "--affinity-only") == 0) {
+        affinity_rows();
+        dprintf(1, "sched-hosttest: affinity: %s\n", failures ? "fail" : "pass");
+        return failures != 0;
+    }
     tick_waits();
     priority();
     fairness();
     states();
     lifecycle();
+    sched_out_rows();
     accounting();
+    load_phase();
     all_idle();
     ready_lists();
     migration();
+    run_delay();
+    affinity_rows();
     if (failures) {
         return 1;
     }
-    dprintf(1, "sched-hosttest: result: pass: priority, fairness, states, lifecycle, accounting, "
-               "idle machine, ready lists, migration\n");
+    dprintf(1, "sched-hosttest: result: pass: priority, fairness, states, lifecycle, preempt due, "
+               "accounting, "
+               "load phase, "
+               "idle machine, ready lists, migration, run delay\n");
     return 0;
 }
 

@@ -34,14 +34,14 @@ krffs/stageimage.krffs.c:stage_tree lines 120 one procedure over a file format, 
 
 rach2/kernel.c:check_strings nesting 6 a parser over an external format, one check per field in the format's order
 rach2/kernel.c:kernel_main complexity 55 the boot sequence, in the order the hardware requires
-rach2/kernel.c:kernel_main lines 325 the boot sequence, in the order the hardware requires
+rach2/kernel.c:kernel_main lines 328 the boot sequence, in the order the hardware requires
 rach2/kernel.c:process_command complexity 122 a dispatcher, one arm per command, read as a table
 rach2/kernel.c:process_command lines 408 a dispatcher, one arm per command, read as a table
 rach2/kernel.c:process_command nesting 6 a dispatcher, one arm per command, read as a table
 rach2/kernel.c:root_spec_matches complexity 31 a parser over an external format, one check per field in the format's order
 rach2/kernel.c:boot_stack params 7 the parameters are the parts of one new image's stack: its space, arguments, environment, image and auxiliary vector
 
-rach2/sys/arch/i686/systab.c:arch_syscall_init lines 306 a table, one entry per system call number
+rach2/sys/arch/i686/systab.c:arch_syscall_init lines 337 a table, one entry per system call number
 
 rach2/sys/arch/x86_64/ia32_fs.c:ia32_native params 10 the parameters are the six registers of one x86-64 call, its handler and the kernel buffer it may reach
 
@@ -51,7 +51,7 @@ rach2/sys/arch/x86_64/ia32_systab.c:ia32_syscall_init lines 452 a table, one ent
 
 rach2/sys/arch/x86_64/mmu.c:free_user_pages nesting 5 a walk over the four levels of the page tables, each page's case inside it
 
-rach2/sys/arch/x86_64/systab.c:arch_syscall_init lines 281 a table, one entry per system call number
+rach2/sys/arch/x86_64/systab.c:arch_syscall_init lines 311 a table, one entry per system call number
 
 rach2/sys/arch/x86_64/vdso.c:section params 11 the parameters are the fields of one ELF section header, in the header's order
 rach2/sys/arch/x86_64/vdso32.c:section params 11 the parameters are the fields of one ELF section header, in the header's order
@@ -153,15 +153,14 @@ rach2/sys/fs/krffs.c:krffs_resize_at complexity 27 one file system operation ove
 rach2/sys/fs/krffs.c:krffs_walk_err complexity 27 one file system operation over the on-disk format, each step a rule of the format
 
 rach2/sys/fs/procfs.c:procfs_kind_name complexity 32 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/procfs.c:procfs_open complexity 64 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_sysctl_write complexity 29 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_gen_text complexity 35 a dispatcher, one arm per command, read as a table
 
 rach2/sys/fs/synthfs.c:synth_classify_pid complexity 26 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/synthfs.c:synth_sys_path complexity 30 a dispatcher, one arm per command, read as a table
 
-rach2/sys/fs/vfs.c:resolve_path complexity 80 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/vfs.c:resolve_path lines 268 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/vfs.c:resolve_path complexity 90 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/vfs.c:resolve_path lines 308 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/vfs.c:resolve_path nesting 5 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/vfs.c:resolve_path params 7 the parameters are one level's cursor in a recursive walk
 rach2/sys/fs/vfs.c:walk_rest_link params 7 the parameters are walk_link's six and the start of the part of the path handed over
@@ -219,8 +218,7 @@ rach2/sys/network/socket/netlink.c:neigh_dump complexity 26 a dump, one test for
 rach2/sys/network/socket/netlink.c:watch_compare complexity 27 a comparison of two states, one test for each kind of change
 
 rach2/sys/network/tcp/tcp.c:tcp_send_rst_unmatched params 8 the parameters are the fields of one packet or descriptor; a struct for them would be filled and unpacked once
-rach2/sys/network/tcp/tcp.c:tcp_tick complexity 28 a state machine, one arm per state, read as a table
-rach2/sys/network/tcp/tcp.c:tcp_rx_addr lines 361 a state machine, one arm per state, read as a table
+rach2/sys/network/tcp/tcp.c:tcp_rx_addr lines 349 a state machine, one arm per state, read as a table
 rach2/sys/network/tcp/tcp.c:tcp_rx_addr nesting 6 a state machine, one arm per state, read as a table
 rach2/sys/network/tcp/tcp.c:tcp_rx_addr complexity 91 a state machine, one arm per state, read as a table
 
@@ -249,20 +247,15 @@ rach2/sys/arch/x86/cmos.c:rtc_decode complexity 31 a parser over an external for
 
 
 rach2/sys/syscall.c:ktimex_adjust complexity 27 one arm per mode of adjtimex, in the order Linux applies them
-rach2/sys/syscall.c:tty_common_ioctl lines 109 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall.c:tty_common_ioctl lines 111 a dispatcher, one arm per command, read as a table
 
-rach2/sys/syscall_fs.c:do_readlink complexity 33 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:fstat_fill_attrs complexity 40 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_fs.c:fstat_fill_attrs lines 125 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:readv_dgram params 7 the parameters are the parts of one receive's answer; a struct for them would be filled and unpacked once
 rach2/sys/syscall_fs.c:synth_dirent_at complexity 33 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:synth_dirent_at lines 142 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:synth_stat lines 268 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:sys_fcntl64 lines 111 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:sys_readv complexity 29 one system call's contract, its checks in the order the manual page lists the errors
+rach2/sys/syscall_fs.c:synth_stat_node lines 252 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall_fs.c:sys_fcntl64 lines 112 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:utimes_node complexity 42 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_fs.c:synth_stat complexity 32 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:readv_dgram complexity 26 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:copy_from_file params 8 the parameters are one copy's two ends, its count, whether it may wait and its buffer, as splice and copy_file_range give them
 rach2/sys/syscall_fs.c:copy_from_pipe params 7 the parameters are one copy's two ends, its count, whether it may wait and its buffer, as splice and copy_file_range give them
 rach2/sys/syscall_fs.c:sys_splice complexity 36 one system call's contract, its checks in the order the manual page lists the errors
@@ -272,7 +265,7 @@ rach2/sys/syscall_net.c:do_connect complexity 32 one system call's contract, its
 rach2/sys/syscall_net.c:do_getsockopt complexity 51 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_net.c:do_recvfrom complexity 29 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_recvmsg complexity 41 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_net.c:do_sendmsg complexity 41 one system call's contract, its checks in the order the manual page lists the errors
+rach2/sys/syscall_net.c:do_sendmsg complexity 34 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_setsockopt complexity 67 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_net.c:socket_kind complexity 37 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_net.c:raw6_sendto complexity 31 one system call's contract, its checks in the order the manual page lists the errors
@@ -281,14 +274,10 @@ rach2/sys/syscall_net.c:do_sendto_opt params 7 one system call's contract, its c
 rach2/sys/syscall_net.c:do_sendto_opt complexity 36 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_setsockopt lines 133 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_net.c:put_cmsg params 8 the parameters are the fields of one message; a struct for them would be filled and unpacked once
-rach2/sys/syscall_net.c:do_recvmsg lines 105 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_net.c:do_sendmsg lines 105 one system call's contract, its checks in the order the manual page lists the errors
 
 rach2/sys/syscall_proc.c:exec_shebang complexity 30 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_proc.c:do_fork lines 107 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_proc.c:clone_with params 8 the parameters are the arguments of clone or clone3, passed through
-
-rach2/sys/tty/n_tty.c:n_tty_receive complexity 33 a state machine, one arm per state, read as a table
 
 rach2/sys/usb/core.c:step_device complexity 78 a state machine, one arm per state, read as a table
 rach2/sys/usb/core.c:step_device lines 404 a state machine, one arm per state, read as a table
@@ -372,7 +361,7 @@ tests/host/acpi_hosttest.c:qemu_q35_rows complexity 28 a test's rows, each a cas
 
 tests/host/ahci_hosttest.c:main lines 147 a test's rows, each a case, read as one table
 
-tests/host/ata_hosttest.c:main lines 129 a test's rows, each a case, read as one table
+tests/host/ata_hosttest.c:main lines 130 a test's rows, each a case, read as one table
 
 tests/host/bcache_hosttest.c:main complexity 120 a test's rows, each a case, read as one table
 tests/host/bcache_hosttest.c:main lines 607 a test's rows, each a case, read as one table
@@ -447,7 +436,7 @@ tests/host/i915_ctx_hosttest.c:row_requests lines 133 a test's rows, each a case
 
 tests/host/i915_reset_hosttest.c:row_engine_reset complexity 33 a test's rows, each a case, read as one table
 
-tests/host/kd_hosttest.c:translating lines 101 a test's rows, each a case, read as one table
+tests/host/kd_hosttest.c:translating lines 102 a test's rows, each a case, read as one table
 
 tests/host/kheap_hosttest.c:main lines 114 a test's rows, each a case, read as one table
 
@@ -540,7 +529,7 @@ tests/host/partition_hosttest.c:main lines 165 a test's rows, each a case, read 
 tests/host/pcimsi_hosttest.c:main complexity 37 a test's rows, each a case, read as one table
 tests/host/pcimsi_hosttest.c:main lines 167 a test's rows, each a case, read as one table
 
-tests/host/pipe_ring_hosttest.c:main lines 103 a test's rows, each a case, read as one table
+tests/host/pipe_ring_hosttest.c:main lines 104 a test's rows, each a case, read as one table
 
 tests/host/poll_select_hosttest.c:main lines 183 a test's rows, each a case, read as one table
 
@@ -567,15 +556,17 @@ tests/host/rtc_hosttest.c:main lines 169 a test's rows, each a case, read as one
 tests/host/rtl8168_hosttest.c:main complexity 99 a test's rows, each a case, read as one table
 tests/host/rtl8168_hosttest.c:main lines 692 a test's rows, each a case, read as one table
 
-tests/host/synthfs_hosttest.c:main complexity 41 a test's rows, each a case, read as one table
+tests/host/synthfs_hosttest.c:main complexity 43 a test's rows, each a case, read as one table
 
+tests/host/syscall_hosttest.c:icmp6_send_opts params 7 a stub of the kernel's, whose parameters are the fields of one packet
+tests/host/syscall_hosttest.c:ip_tx_opts params 8 a stub of the kernel's, whose parameters are the fields of one packet
 tests/host/syscall_hosttest.c:clock_ids complexity 32 a test's rows, each a case, read as one table
 tests/host/syscall_hosttest.c:clock_sleeps lines 104 a test's rows, each a case, read as one table
 
 tests/host/tables_hosttest.c:main complexity 32 a test's rows, each a case, read as one table
 
 tests/host/tcp_hosttest.c:main complexity 141 a test's rows, each a case, read as one table
-tests/host/tcp_hosttest.c:main lines 693 a test's rows, each a case, read as one table
+tests/host/tcp_hosttest.c:main lines 701 a test's rows, each a case, read as one table
 tests/host/tcp_hosttest.c:main nesting 5 a test's rows, each a case, read as one table
 tests/host/tcp_hosttest.c:rx params 8 a test's rows, each a case, read as one table
 
@@ -703,7 +694,6 @@ tests/musl/ptracemusl.c:memory_and_registers complexity 32 a test's rows, each a
 tests/musl/pwauthmusl.c:check_fork complexity 28 a test's rows, each a case, read as one table
 tests/musl/pwauthmusl.c:check_prompt lines 106 a test's rows, each a case, read as one table
 
-tests/musl/readvmusl.c:check_datagram lines 111 a test's rows, each a case, read as one table
 
 tests/musl/sandboxmusl.c:sandbox complexity 45 a test's rows, each a case, read as one table
 
@@ -785,6 +775,8 @@ tests/usbprobe.c:probe_main complexity 31 a probe, one sequence of steps in the 
 
 tests/vfsprobe.c:probe_main complexity 102 a probe, one sequence of steps in the order the log records them
 tests/vfsprobe.c:probe_main lines 273 a probe, one sequence of steps in the order the log records them
+
+tests/wow64probe.c:int80_6 params 7 the i386 syscall number and its six register arguments
 
 tools/etude/guest/guest.c:load_invocation complexity 60 a parser over an external format, one check per field in the format's order
 

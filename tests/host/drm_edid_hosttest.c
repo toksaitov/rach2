@@ -408,6 +408,19 @@ static void row_disconnected(void)
     device_fini();
 }
 
+/** A GTF curve whose blanking duty cycle is 100%, from an EDID's secondary
+ * curve with K 0 and 2J 200, makes no mode instead of dividing by zero;
+ * the default curve still makes 1024x768. */
+static void row_gtf_full_blank(void)
+{
+    struct drm_mode_modeinfo m;
+
+    CHECK(gtf_mode_complex(1024, 768, 60, 0, 0, 0, 0, 0, 200, &m) == 0,
+          "GTF at a 100% duty cycle: no mode");
+    CHECK(gtf_mode(1024, 768, 60, &m) == 1 && m.hdisplay == 1024 && m.htotal == 1344,
+          "GTF's default curve: 1024x768, 1344 pixels a line");
+}
+
 /** Run the rows. */
 int main(void)
 {
@@ -424,6 +437,7 @@ int main(void)
     row_header();
     row_new_blob();
     row_disconnected();
+    row_gtf_full_blank();
     CHECK(allocations == base, "every allocation freed");
     if (failures) {
         return 1;

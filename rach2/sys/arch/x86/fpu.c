@@ -18,12 +18,14 @@
 #define CR4_OSFXSR     0x00000200u
 #define CR4_OSXMMEXCPT 0x00000400u
 #define CR4_OSXSAVE    0x00040000u
+#define CR4_PKE        0x00400000u
 
 #define CPUID_EDX_FXSR     (1u << 24)
 #define CPUID_EDX_SSE      (1u << 25)
 #define CPUID_ECX_XSAVE    (1u << 26)
 #define CPUID_ECX_AVX      (1u << 28)
 #define CPUID7_EBX_AVX512F (1u << 16)
+#define CPUID7_ECX_PKU     (1u << 3)
 
 /* The leaf of `cpuid` that describes the XSAVE components: subleaf 0 has
  * the ones the processor supports, and subleaf i the size and the offset of
@@ -31,13 +33,17 @@
 #define CPUID_XSTATE 0xDu
 
 /* The XSAVE components by their bits in XCR0 and XSTATE_BV: x87, SSE, the
- * upper halves of the YMM registers, and AVX-512's opmask registers, upper
- * halves of ZMM0 to ZMM15, and ZMM16 to ZMM31. */
+ * upper halves of the YMM registers, AVX-512's opmask registers, upper
+ * halves of ZMM0 to ZMM15, and ZMM16 to ZMM31, and PKRU, whose four bytes
+ * and four of padding are the protection keys' rights (../../fpu.h). Bit 8
+ * is a supervisor component, which XCR0 never names. */
 #define XFEATURE_X87     0x01u
 #define XFEATURE_SSE     0x02u
 #define XFEATURE_YMM     0x04u
 #define XFEATURES_AVX512 0xE0u
-#define XFEATURE_COUNT   8
+#define XFEATURE_PKRU    0x200u
+#define XFEATURE_PKRU_NR 9
+#define XFEATURE_COUNT   10
 
 /* Byte offsets in the `fxsave` image, which is also the XSAVE image's
  * legacy part: the x87 environment, MXCSR, the x87 and XMM registers, the
@@ -84,12 +90,14 @@
 /* The state a process starts with: written once at boot from the unit
  * itself, after `fninit` and, with XSAVE, an `xrstor` of an empty header,
  * so the tag word, the opcode, the pointers and the extended components are
- * whatever the processor makes them and not a guess. */
+ * whatever the processor makes them and not a guess; but PKRU, which is
+ * PKRU_INIT, as Linux's init_fpstate has it. */
 static uint8_t initial_state[FPU_AREA_MAX] __attribute__((aligned(64)));
 static int use_fxsr;
 static int have_sse;       /* MXCSR and the XMM registers exist and are enabled */
 static int use_xsave;      /* the area is the XSAVE image of `xfeatures` */
 static uint64_t xfeatures; /* XCR0 */
+static int use_pkeys;      /* CR4.PKE is set and XCR0 has PKRU: x86-64 alone */
 static uint32_t area_size = FX_SIZE;
 static uint32_t mxcsr_mask = 0xFFBFu; /* what `fxsave` reports, or the default */
 /* Each XSAVE component's size and offset, from leaf 0xD. */
@@ -270,6 +278,10 @@ int fpu_xstate_set(void *area, const uint8_t *in)
     for (i = 2; i < XFEATURE_COUNT; i++) {
         if ((bv >> i) & 1u) {
             k_memcpy(a + comp_offset[i], in + comp_offset[i], comp_size[i]);
+        } else if ((xfeatures >> i) & 1u) {
+            /* The initial configuration, which for PKRU is 0 and not the
+             * PKRU_INIT the initial state holds. */
+            k_memset(a + comp_offset[i], 0, comp_size[i]);
         }
     }
     put64(a + XSAVE_HDR, bv);
@@ -548,15 +560,19 @@ uint32_t fpu_frame_uc_flags(void)
  * word and the magic word of `struct _fpstate_32`, or none: the legacy part
  * with the reserved bytes zero and the software bytes Linux writes, the
  * header with x87 and SSE marked in use, the extended part, and
- * FP_XSTATE_MAGIC2 after it. `head` may be NULL when `prefix` is 0. 0, or
- * -1 when the stack cannot be written.
+ * FP_XSTATE_MAGIC2 after it. With the protection keys on, PKRU is marked in
+ * use too and holds the area's value, 0 where the area has it in its
+ * initial configuration, so that sigreturn gives the interrupted code its
+ * rights back, as Linux's `update_pkru_in_sigframe` writes it. `head` may
+ * be NULL when `prefix` is 0. 0, or -1 when the stack cannot be written.
  */
 static int frame_put_xsave(uintptr_t fp, const void *area, const uint8_t *head, uint32_t prefix)
 {
     const uint8_t *a = area;
     uint8_t buf[LX_PREFIX + XSAVE_EXT];
     uint8_t *img = buf + prefix;
-    uint8_t magic2[4];
+    uint8_t magic2[4], pkru[4];
+    uint32_t pkru_at = comp_offset[XFEATURE_PKRU_NR];
 
     if (prefix != 0) {
         k_memcpy(buf, head, prefix);
@@ -564,12 +580,17 @@ static int frame_put_xsave(uintptr_t fp, const void *area, const uint8_t *head, 
     k_memcpy(img, a, XSAVE_EXT);
     k_memset(img + FX_PAD, 0, FX_SW - FX_PAD);
     sw_bytes_put(img + FX_SW, prefix);
-    put64(img + XSAVE_HDR, get64(img + XSAVE_HDR) | XFEATURE_X87 | XFEATURE_SSE);
+    put64(img + XSAVE_HDR,
+          get64(img + XSAVE_HDR) | XFEATURE_X87 | XFEATURE_SSE | (use_pkeys ? XFEATURE_PKRU : 0u));
     put32(magic2, FP_XSTATE_MAGIC2);
+    put32(pkru, (get64(a + XSAVE_HDR) & XFEATURE_PKRU) ? get32(a + pkru_at) : 0u);
     if (copy_to_user((void __user *)fp, buf, prefix + XSAVE_EXT) != 0 ||
         copy_to_user((void __user *)(fp + prefix + XSAVE_EXT), a + XSAVE_EXT,
                      area_size - XSAVE_EXT) != 0 ||
         copy_to_user((void __user *)(fp + prefix + area_size), magic2, sizeof(magic2)) != 0) {
+        return -1;
+    }
+    if (use_pkeys && copy_to_user((void __user *)(fp + prefix + pkru_at), pkru, 4) != 0) {
         return -1;
     }
     return 0;
@@ -824,13 +845,15 @@ static void xcr0_write(uint64_t v)
 
 /**
  * The components to save, as Linux takes them: x87 and SSE; AVX where
- * `cpuid` reports it and leaf 0xD lists it; and AVX-512's three where leaf
- * 0xD lists all three and `cpuid` reports AVX512F. A group joins only while
+ * `cpuid` reports it and leaf 0xD lists it; AVX-512's three where leaf
+ * 0xD lists all three and `cpuid` reports AVX512F; and on x86-64 PKRU where
+ * `cpuid` reports PKU and leaf 0xD lists it, as Linux builds the keys for
+ * x86-64 alone and offers them only with XSAVE. A group joins only while
  * the image still fits FPU_AREA_MAX. 0 when leaf 0xD lacks x87 or SSE.
  */
 static uint64_t xstate_choose(int avx)
 {
-    uint32_t lo = 0, hi = 0, ebx7 = 0;
+    uint32_t lo = 0, hi = 0, ebx7 = 0, ecx7 = 0;
     uint64_t supported, mask = XFEATURE_X87 | XFEATURE_SSE;
     int i;
 
@@ -844,7 +867,7 @@ static uint64_t xstate_choose(int avx)
             kcpu_id_sub(CPUID_XSTATE, (uint32_t)i, &comp_size[i], &comp_offset[i], 0, 0);
         }
     }
-    kcpu_id_sub(7, 0, 0, &ebx7, 0, 0);
+    kcpu_id_sub(7, 0, 0, &ebx7, &ecx7, 0);
     if (avx && (supported & XFEATURE_YMM) && xstate_end(mask | XFEATURE_YMM) <= FPU_AREA_MAX) {
         mask |= XFEATURE_YMM;
     }
@@ -853,12 +876,22 @@ static uint64_t xstate_choose(int avx)
         xstate_end(mask | XFEATURES_AVX512) <= FPU_AREA_MAX) {
         mask |= XFEATURES_AVX512;
     }
+#if defined(FPU_X86_64)
+    if ((ecx7 & CPUID7_ECX_PKU) && (supported & XFEATURE_PKRU) &&
+        xstate_end(mask | XFEATURE_PKRU) <= FPU_AREA_MAX) {
+        mask |= XFEATURE_PKRU;
+    }
+#else
+    (void)ecx7;
+#endif
     return mask;
 }
 
 /** The loader's CR4 is not promised either way, so each of its bits is set
  * where the state it enables is saved and cleared where it is not, which
- * makes an instruction whose registers would leak an invalid opcode. */
+ * makes an instruction whose registers would leak an invalid opcode: so
+ * CR4.PKE, which makes `rdpkru` and `wrpkru` run and the keys of the page
+ * tables count, goes with PKRU in XCR0. */
 void fpu_cpu_setup(void)
 {
     uintptr_t cr0, cr4;
@@ -867,12 +900,15 @@ void fpu_cpu_setup(void)
     cr0 = (cr0 | CR0_MP | CR0_NE) & ~(uintptr_t)(CR0_EM | CR0_TS);
     __asm__ __volatile__("mov %0, %%cr0" : : "r"(cr0));
     __asm__ __volatile__("mov %%cr4, %0" : "=r"(cr4));
-    cr4 &= ~(uintptr_t)(CR4_OSFXSR | CR4_OSXMMEXCPT | CR4_OSXSAVE);
+    cr4 &= ~(uintptr_t)(CR4_OSFXSR | CR4_OSXMMEXCPT | CR4_OSXSAVE | CR4_PKE);
     if (have_sse) {
         cr4 |= CR4_OSFXSR | CR4_OSXMMEXCPT;
     }
     if (use_xsave) {
         cr4 |= CR4_OSXSAVE;
+    }
+    if (use_pkeys) {
+        cr4 |= CR4_PKE;
     }
     __asm__ __volatile__("mov %0, %%cr4" : : "r"(cr4));
     if (use_xsave) {
@@ -913,6 +949,7 @@ void fpu_init(void)
     }
     if (use_xsave) {
         area_size = xstate_end(xfeatures);
+        use_pkeys = (xfeatures & XFEATURE_PKRU) != 0;
     }
     fpu_cpu_setup();
 
@@ -937,11 +974,48 @@ void fpu_init(void)
     }
     if (use_xsave) {
         load_state(initial_state);
+        fpu_pkru_set(PKRU_INIT);
         save_state(initial_state);
     }
-    klog(KLOG_DEBUG, "fpu", "fxsr: %s, sse: %s, xsave: %s, xcr0: 0x%x, area: %d bytes",
+    klog(KLOG_DEBUG, "fpu", "fxsr: %s, sse: %s, xsave: %s, xcr0: 0x%x, area: %d bytes, pkeys: %s",
          use_fxsr ? "on" : "off", have_sse ? "on" : "off", use_xsave ? "on" : "off",
-         (unsigned)xfeatures, (int)area_size);
+         (unsigned)xfeatures, (int)area_size, use_pkeys ? "on" : "off");
+}
+
+/* `rdpkru` and `wrpkru` as bytes, which take ECX, and for the write EDX,
+ * as 0, and fault without CR4.PKE. */
+#if defined(FPU_X86_64)
+#define RDPKRU ".byte 0x0f, 0x01, 0xee"
+#define WRPKRU ".byte 0x0f, 0x01, 0xef"
+#endif
+
+int fpu_pkeys(void)
+{
+    return use_pkeys;
+}
+
+uint32_t fpu_pkru(void)
+{
+#if defined(FPU_X86_64)
+    uint32_t pkru, edx;
+
+    if (use_pkeys) {
+        __asm__ __volatile__(RDPKRU : "=a"(pkru), "=d"(edx) : "c"(0u));
+        return pkru;
+    }
+#endif
+    return 0;
+}
+
+void fpu_pkru_set(uint32_t pkru)
+{
+#if defined(FPU_X86_64)
+    if (use_pkeys) {
+        __asm__ __volatile__(WRPKRU : : "a"(pkru), "c"(0u), "d"(0u) : "memory");
+    }
+#else
+    (void)pkru;
+#endif
 }
 
 void fpu_save(void *area)

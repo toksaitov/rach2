@@ -16,6 +16,7 @@
  * `fd_ofd_repoint` has updated the description.
  */
 #include "fs/vfs.h"
+#include "compat/waketime_none.h"
 #include "lib/kerrno.h"
 #include "mm/kheap.h"
 #include "proc/process.c"
@@ -27,6 +28,12 @@ extern int printf(const char *format, ...);
 extern void exit(int status);
 volatile uint32_t init_pid;
 volatile uint64_t kernel_ticks;
+
+/** The console's count of vhangups: none in the model. */
+uint32_t tty_console_vhangups(void)
+{
+    return 0;
+}
 
 /** The tick count as the kernel reads it whole: the model's `kernel_ticks`. */
 uint64_t tick_count(void)
@@ -289,12 +296,12 @@ static void stdio_allocations(void)
     fd_table_t table = {0};
     int fail, i, j;
 
-    check(fd_init_stdio(0) == -1, "stdio rejects a missing table");
-    check(fd_init_stdio(&table) == -1, "stdio rejects an unallocated table");
+    check(fd_init_stdio(0, 0) == -1, "stdio rejects a missing table");
+    check(fd_init_stdio(&table, 0) == -1, "stdio rejects an unallocated table");
     for (fail = 0; fail < 3; fail++) {
         check(fd_table_init(&table) == 0, "stdio table allocation");
         fail_after = fail;
-        check(fd_init_stdio(&table) == -1, "stdio reports allocation failure");
+        check(fd_init_stdio(&table, 0) == -1, "stdio reports allocation failure");
         fail_after = -1;
         check(allocations == 1, "stdio releases partial allocations");
         for (i = FD_STDIN; i <= FD_STDERR; i++) {
@@ -304,7 +311,7 @@ static void stdio_allocations(void)
                   "stdio failure leaves an empty table");
             fd_free(&table, i);
         }
-        check(fd_init_stdio(&table) == 0, "stdio retry succeeds");
+        check(fd_init_stdio(&table, 0) == 0, "stdio retry succeeds");
         check(allocations == 4, "stdio allocates three descriptions");
         for (i = FD_STDIN; i <= FD_STDERR; i++) {
             fd_entry_t *e = &table.entries[i];

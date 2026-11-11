@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 11, 2026
 .Dt PROC 5
 .Os
 .Sh NAME
@@ -248,7 +248,14 @@ the last-level cache's,
 .Li apicid ,
 .Li cpuid level ,
 .Li flags ,
-the feature bits by Linux's names,
+the feature bits by Linux's names, among them
+.Li pku
+where the processor has protection keys,
+.Li ospke
+where the kernel turned them on, and
+.Li xsaves
+except on an AMD Zen 1 or Zen 2 without the microcode that fixes its
+Erratum 1386, as Linux,
 .Li clflush size
 and
 .Li address sizes ,
@@ -552,10 +559,16 @@ processor without 1 GiB pages.
 .Li Buffers
 and
 .Li Cached
-give resident buffer-cache memory and the memory of the page caches, the
-disk window's and the copies of file pages kept between mappings.
+give resident buffer-cache memory and the memory of the page caches: the
+disk window's, and the file page cache's, the pages of ext2 files that
+.Xr read 2 ,
+exec and private mappings read, kept while memory is free.
 .Li MemAvailable
 is free memory plus both caches.
+.Li SwapCached
+is
+.Ql 0 kB ,
+since nothing is swapped.
 These values have the suffix
 .Ql kB
 and are in kibibytes.
@@ -869,7 +882,7 @@ has RtoAlgorithm 1, the retransmission bounds in milliseconds, MaxConn -1
 for no fixed limit, the connects and accepted handshakes, the handshakes and
 open connections a reset or a timeout ended, CurrEstab, the connections
 ESTABLISHED or in CLOSE_WAIT, and the segments received, sent, retransmitted
-and dropped as malformed, and the resets sent.
+and dropped as malformed or as a SYN in ESTABLISHED, and the resets sent.
 .Ql Udp:
 counts the IPv4 datagrams delivered, those for a port no socket has, the
 malformed ones, those with a bad checksum and those a full queue dropped
@@ -884,10 +897,17 @@ Of the
 counters Linux has, a line of names and a line of values for those this
 kernel keeps, in Linux's order, which
 .Xr nstat 8
-reads by name: TCPTimeouts, the retransmission timeouts; TCPAbortOnTimeout,
-the connections a timeout ended; TCPKeepAlive, the keepalive probes sent;
-and TCPMTUPFail and TCPMTUPSuccess, the probes of a larger segment lost and
-taken, as
+reads by name: DelayedACKLost, the segments of data received again whole;
+TCPTimeouts, the retransmission timeouts; TCPAbortOnData, the
+connections ended by data no program will read, past the peer's FIN or
+after this side's close; TCPAbortOnClose, those a close with data unread
+ended; TCPAbortOnTimeout, those a timeout ended; TCPChallengeACK and TCPSYNChallenge, the
+challenge acknowledgements sent and the SYNs that drew one;
+TCPACKSkippedSynRecv, TCPACKSkippedSeq and TCPACKSkippedChallenge, the
+answers of a handshake not yet ended, those to segments outside the
+window and the challenges the rate limit held back;
+TCPKeepAlive, the keepalive probes sent; and TCPMTUPFail and
+TCPMTUPSuccess, the probes of a larger segment lost and taken, as
 .Xr tcp 7
 describes them.
 The counters start at zero at boot and wrap at 2^32.
@@ -954,6 +974,25 @@ write up to that sets;
 the open files, 0 and
 .Pa fs/file-max ,
 separated by tabs;
+.Pa fs/pipe-max-size ,
+1048576, the largest capacity
+.Dv F_SETPIPE_SZ
+of
+.Xr fcntl 2
+gives a caller without privilege and the most a new pipe of one has,
+which a write of a number up to 2147483648 sets, rounded up to a power of
+two of 4096 or more, as Linux rounds it;
+.Pa fs/pipe-user-pages-soft ,
+16384, the pages the pipes of one real user may hold, each pipe's whole
+capacity counted, before a new pipe of a caller without privilege gets
+8192 bytes and
+.Dv F_SETPIPE_SZ
+refuses it a growth with
+.Er EPERM ;
+.Pa fs/pipe-user-pages-hard ,
+0, the pages past which such a caller's new pipe fails and its growth is
+refused, none while 0;
+both take any unsigned long written with no sign, as on Linux;
 .Pa fs/mqueue/msg_default
 and
 .Pa msg_max ,
@@ -1022,6 +1061,20 @@ moves nothing; a write from 0 to 2 sets it for the next exec;
 40, the highest capability Linux 6.12 numbers,
 .Dv CAP_CHECKPOINT_RESTORE ,
 which libcap reads to bound its sets;
+.Pa kernel/panic ,
+what a panic does once its record is out, as Linux's
+.Va panic_timeout :
+0 halts the machine; a number of seconds above 0 keeps the panic's
+report on the screen that long, counting down, and then resets the
+machine; one below 0 resets it at once.
+.Ql panic= Ns Ar N
+on the boot line sets it, 30 without, and a write of any int sets it;
+.Pa kernel/panic_on_oops ,
+1 with
+.Ql oops=panic
+on the boot line and 0 without, which a write of any int sets; an
+exception the kernel takes in its own code panics whatever the value, as
+Linux's oops does with it set;
 .Pa crypto/fips_enabled ,
 0, since the kernel is not in FIPS mode, which libgcrypt and OpenSSL read;
 .Pa user/max_mnt_namespaces ,
@@ -1169,7 +1222,8 @@ Passes over the active timer list since boot, modulo 2^32.
 .It Li timer_passes_late
 Timer passes since boot that a processor other than the boot processor made
 because the boot processor's tick had not made one over two of its own
-ticks, as while that tick waits for the big lock, modulo 2^32.
+ticks, as when that tick finds the big lock held by another processor and
+ends without it, modulo 2^32.
 .It Li tlb_shootdowns , tlb_shootdown_ipis
 Requests since boot that had another processor drop user translations after
 a change of page table entries, and the interprocessor interrupts they sent,
@@ -1197,6 +1251,15 @@ A call the vDSO answers is not counted.
 Live KVM virtual machines, virtual processors, memory slots, guest-physical
 table pages and run-page mapping objects, on x86-64.
 A fork shares a mapping object; the last reference releases it.
+.It Li kvm_gpa_maps , kvm_gpa_map_pages
+Live maps of a guest's pages into a program of the host, and the frames
+they hold, on x86-64: the blobs of a VM's memory that the shared-memory
+GPU transport maps from the VM's own pages
+.Pq Xr vgpu-shm 4 .
+.It Li kvm_ioeventfd_signals , kvm_irqfd_raises
+Guest writes that an ioeventfd took, and MSIs that an irqfd raised, since
+boot, modulo 2^32, on x86-64: the work KVM did for a guest without an exit
+to its caller.
 These counts include objects retained by mappings after their descriptors close
 .Pq Xr kvm 4 .
 .It Li kvm_exits
@@ -1231,6 +1294,21 @@ Sum and longest acquisition of the big kernel lock, in microseconds since
 boot, measured by the processor's time-stamp counter.
 These include time when a hypervisor stopped a waiting processor.
 They are zero when no invariant counter was calibrated.
+.It Li bkl_wait_max_holds
+Outer holds completed between the start of the longest acquisition and its
+success, modulo 2^32, including a hold already in progress at its start.
+The count belongs to the same acquisition as
+.Li bkl_wait_max_us .
+It counts releases, including an idle drop, rather than distinct processors.
+.It Li bkl_wait_max_hold
+The last 32 of those completed holds, or all when fewer, oldest first:
+entry vector, system call number (\-1 for none), and full hold time in
+microseconds, as for
+.Li bkl_hold_max_entry
+and
+.Li bkl_hold_max_us .
+A hold already in progress when the acquisition began includes time before
+the wait, so these times need not sum to the acquisition time.
 .It Li bkl_hold_max_us
 Longest hold of the big kernel lock, from its take to its release, in
 microseconds since boot, measured by the same counter.
@@ -1242,7 +1320,8 @@ thread or a take again after an idle halt, and its system call number, or
 The oldest hold of the big kernel lock that an interrupt on the holding
 processor has found, in microseconds since its take, and in hexadecimal the
 kernel instruction that interrupt stopped, followed by up to seven return
-addresses of its callers.
+addresses of its callers, read from the interrupted thread's kernel stack
+alone.
 A hold that keeps interrupts off is sampled only where it turns them on.
 .It Li bkl_hold_max_mark
 Five lines, one for each of 1, 2, 4, 8 and 16 seconds: the mark, then the
@@ -1313,7 +1392,8 @@ Datagrams delivered by the timer tick's loopback drain.
 .It Li loopback_delivered_idle
 Datagrams delivered by the idle wait's loopback drain.
 .It Li loopback_delivered_call
-Datagrams delivered by the loopback drain at system call exit.
+Datagrams delivered by the loopback drain at system call exit, and at the
+end of a thread, once its descriptors are closed.
 .It Li loopback_left_idle
 Datagrams a timer tick found on the loopback ring while every processor was
 halted in an idle wait.
@@ -1415,15 +1495,62 @@ gives them, in the form
 where Linux's line has the builder and the compiler after the release and
 the build's date after the version, which this kernel does not record.
 .It Pa /proc/PID
-A process's directory, and each file and link in it,
-belongs to the process's effective user and group IDs while the process
-is dumpable, and to root otherwise, as on Linux;
+A process's world-readable and executable directories, mode 0555,
+belong to its effective user and group IDs even when it is not dumpable.
+Its other directories, files and links belong to those IDs while the
+process is dumpable, and to root otherwise, as on Linux;
 .Xr ps 1
 and
 .Xr top 1
-read a process's user from the directory's owner, and
+read a process's user from the directory's owner.
+A
+.Xr stat 2
+of a path works the owner out afresh, while a file, a link, a descriptor's
+.Pa fdinfo
+file, and the
+.Pa fd ,
+.Pa fdinfo
+and
+.Pa task
+directories keep the owner the last lookup of their path gave them, as a
+Linux inode does: an
 .Xr fstat 2
-of a descriptor open on one of the files reports the same owner.
+of a descriptor open on one, an
+.Dv O_PATH
+one among them, reports the owner its open found, or a later
+.Xr stat 2
+of the same path, so a descriptor opened before
+.Dv PR_SET_DUMPABLE
+reports root until a path reaches the node again, and it keeps that owner
+after the process exits or changes its IDs.
+An
+.Xr fchdir 2
+into
+.Pa fd
+is judged by that owner.
+A walk through
+.Pa fd ,
+.Pa fdinfo
+or
+.Pa task
+updates that directory's retained owner before looking up the next
+component, even when that next component is missing.
+Listing
+.Pa /dev
+does not update the owner of
+.Pa /proc/self/fd .
+An
+.Dv O_PATH | O_NOFOLLOW
+descriptor on
+.Pa exe ,
+.Pa cwd ,
+.Pa root ,
+a descriptor link or a namespace link keeps the link's owner by the same
+rule.
+The process's directory and its
+.Pa ns
+directory work their owner out at each
+.Xr fstat 2 .
 The directories of
 .Pa /proc
 are the processes the reader's PID namespace has, named by their numbers
@@ -1497,9 +1624,41 @@ At most the first 128 KiB of them are read, so a longer list ends inside
 a string, without that string's NUL, and a page the address space cannot
 read ends it early.
 .It Pa /proc/PID/fd/N
-The directory, of mode 0500, and each link in it are
+The directory has mode 0500 and is owned by the process's effective IDs
+while it is dumpable and by root otherwise.
+Its size, as
+.Xr stat 2
+and
+.Xr fstat 2
+report it, is the number of descriptors the process has open, 0 for a
+zombie, and an
+.Xr fstat 2
+or
+.Xr statx 2
+of a descriptor open on it fails with
+.Er ENOENT
+once the process is gone, as Linux's
+.Fn proc_fd_getattr
+does.
+An open of it for reading, and a change of the working directory into it
+by
+.Xr chdir 2
+or
+.Fn fchdir ,
+are judged by that mode and owner, whatever the caller's groups, with a
+thread of the process always let in, as Linux's
+.Fn proc_fd_permission
+judges them; any other caller but a privileged one gets
+.Er EACCES .
+An open with
+.Dv O_PATH ,
+which reads nothing, succeeds for anyone, as Linux's does.
+An
+.Xr lstat 2
+of a link in it takes only that check, as on Linux; reading a link, and
+following it, are
 .Er EACCES
-to a caller that may not read
+as well to a caller that may not read
 .Pa environ .
 A symbolic link for each open descriptor N, whose target names what the
 descriptor is open on: a file by its path now, from the reader's root, as
@@ -1538,7 +1697,14 @@ exec, as Chromium does, closes them all.
 A followed link reports the descriptor's attributes.
 An open of the link follows it: a file or a directory is opened again,
 with the checks of an open by name and a description of its own, even
-when it has lost its name; a pipe, a socket, a terminal or a device gets
+when it has lost its name; so is a device, whose driver opens it again,
+so that a second DRM file of one card is a file of its own, after the
+mode, owner and group of the node it was opened through are checked for
+the access asked for: its entry in
+.Pa /dev ,
+or a device node of another file system, even one that has lost its
+name, as Linux follows the descriptor's path; a pipe, a socket or a
+terminal gets
 the descriptor's own description, shared as
 .Xr dup 2
 shares it, when the descriptor has the access asked for, and the open is
@@ -1648,11 +1814,9 @@ keeps, the process has none: the link reads as an empty string on a file
 system other than the KRFFS root, and as
 .Ql " (deleted)"
 alone for a file of the KRFFS root whose name has been removed.
-Reading the link, or going through it, needs a thread of the process, a
-privileged caller, one whose effective user ID is 0 and which kept its
-capabilities
-.Pq see Xr capget 2 ,
-or the process's real user ID and a process that is not privileged.
+Reading the link, or going through it, needs what
+.Pa environ
+needs past its mode.
 An
 .Xr lstat 2
 of the link itself needs none of these, as on Linux; the link is absent
@@ -1809,8 +1973,8 @@ for a shared one, and from column 73 the file the region maps,
 .Ql [vvar]
 and
 .Ql [vdso]
-for the vDSO's data page and library on x86-64, private and never
-writable
+for the vDSO's data page and library on x86-64, both private, the data
+page never writable and the library copied on a write
 .Pq Xr vdso 7 ,
 the program for the segments of its image, or the dynamic linker the
 program names for the segments of the linker's.
@@ -1838,38 +2002,152 @@ Each region's
 line, followed by lines of a name, a colon and a size in kilobytes, as
 Linux writes them: Size, KernelPageSize and MMUPageSize, Rss, Pss,
 Shared_Clean, Shared_Dirty, Private_Clean, Private_Dirty, Referenced,
-Anonymous, Swap, SwapPss and Locked, and a VmFlags line of
+Anonymous, Swap, SwapPss and Locked; where the protection keys are on, a
+ProtectionKey line with the region's key, a plain number
+.Pq see Xr pkeys 7 ;
+and a VmFlags line of
 .Ql rd ,
 .Ql wr ,
 .Ql ex ,
-.Ql sh ,
+.Ql sh
+for a shared region that may be made writable,
+.Ql mr ,
+.Ql mw
+unless the region may not be made writable,
+.Ql me
+unless the region maps
+.Xr memfd_secret 2 ,
+.Ql ms
+for every shared region, one of a file opened without write among them,
 .Ql gd ,
-.Ql lo
-for a locked region,
-.Ql io
-and
 .Ql pf
 for a mapping of a device object,
+.Ql lo
+for a locked region,
+.Ql io ,
+again for a mapping of a device object,
 .Ql dc
 for a range
 .Xr madvise 2 Ns 's
 .Dv MADV_DONTFORK
-marked, and
+marked,
+.Ql de
+for a mapping of a device object, which cannot grow,
 .Ql lf
 for a region locked on fault
-.Pq see Xr mlock 2 .
+.Pq see Xr mlock 2 ,
+.Ql ac
+for one counted as committed memory: the stack, the heap, a writable
+segment of the program, and a private mapping that was writable when
+.Xr mmap 2
+made it or that
+.Xr mprotect 2
+first made writable, even after it stops being writable, except anonymous
+memory of which no page was written while it, or the region it was split
+from, held it, which
+.Xr mprotect 2
+uncounts when it takes write away and changes the protection,
+.Ql nr
+for a mapping made with
+.Dv MAP_NORESERVE ,
+which is never counted,
+.Ql wf
+for a range
+.Dv MADV_WIPEONFORK
+marked,
+.Ql dd
+for a mapping of a device object or
+.Xr memfd_secret 2 ,
+which a core file leaves out, and
+.Ql sl
+for a region
+.Xr mseal 2
+sealed, in that order, the order of Linux's flag bits.
+The vDSO's pages have the flags Linux's special mappings have:
+.Ql mr mw me de
+for [vdso] and
+.Ql mr pf io de dd
+for [vvar], after their access.
 Rss counts the region's pages in memory, clean or dirty by the page
 table's dirty bit and shared only in a shared region.
-Anonymous counts every page of a private region of no file, and the
-dirty pages of a private region read from a file, which Linux has copied
-from the file; gdb's gcore leaves the other regions of a file out of a
-core.
+Anonymous counts every page of a private region of no file, and each
+page of a private file region once a write, or a private copy of the
+page, has made its frame anonymous; gdb's gcore leaves a file region
+with no such page out of a core.
+The frame keeps this classification across fork and copy-on-write,
+independently of the page-table dirty bit.
 The kernel does not count the processes that map a page, so Pss is Rss.
 Swap and SwapPss read 0, and Locked is Rss for a locked region and 0
 for another.
 BusyBox's
 .Xr pmap 1
 and smemcap read it.
+.It Pa /proc/PID/numa_maps
+A line for each region, as Linux writes it on a machine of one memory
+node: the region's start in hexadecimal; the memory policy that governs
+it; what it maps, which is
+.Ql file=
+and the path
+.Pa maps
+gives it, with a newline, a tab, a space and
+.Ql =
+written in octal, as
+.Ql \e012 ,
+.Ql \e011 ,
+.Ql \e040
+and
+.Ql \e075 ,
+or
+.Ql heap
+or
+.Ql stack ,
+or nothing for anonymous memory; and, for a region with pages of memory,
+their counts:
+.Ql anon=
+the anonymous ones,
+.Ql dirty=
+those written,
+.Ql mapped=
+all of them when they are neither all anonymous nor all written,
+.Ql N0=
+those on node 0, which is all of them, and
+.Ql kernelpagesize_kB=4 .
+The policy is the one
+.Xr mbind 2
+gave the region's first page, written as Linux names it:
+.Ql default ,
+.Ql prefer ,
+.Ql bind ,
+.Ql interleave ,
+.Ql local ,
+.Ql prefer (many)
+or
+.Ql weighted interleave ,
+then
+.Ql =static ,
+.Ql =relative
+or
+.Ql =balancing
+for a mode flag, and
+.Ql :0
+for a policy with nodes.
+A region
+.Xr mbind 2
+gave no policy shows the policy
+.Xr set_mempolicy 2
+gave the thread read.
+A page that was only read is Linux's zero page and is not counted, nor is
+device memory.
+Linux's
+.Ql mapmax=
+and
+.Ql active=
+are not written, since the kernel counts no mappings of a page and keeps
+no active list.
+The file needs what
+.Pa maps
+needs.
+numastat reads it.
 .It Pa /proc/PID/status
 Lines of a name, a colon, a tab and a value:
 Name, Umask, State, Tgid, Pid, PPid, TracerPid, Uid and Gid (real,
@@ -1878,7 +2156,10 @@ VmPeak to VmSwap in kilobytes, of which VmLck is the size of the regions
 locked by
 .Xr mlock 2
 and VmPin the pages drivers pinned for devices and charged to the
-process, Threads, the signal sets SigPnd, ShdPnd,
+process, VmHWM the most the process has had resident, and RssAnon,
+RssFile and RssShmem the parts of VmRSS that are the process's own
+pages, a file's, and those of a file in memory or of shared anonymous
+memory, Threads, the signal sets SigPnd, ShdPnd,
 SigBlk, SigIgn and SigCgt in hexadecimal, the capability sets,
 NoNewPrivs, Seccomp and Seccomp_filters, the thread's seccomp mode and
 the number of its filters
@@ -1892,9 +2173,32 @@ reports them, as a mask in words of 32 bits and as a list of ranges, and
 voluntary_ctxt_switches and nonvoluntary_ctxt_switches, the times the
 scheduler switched away from the thread while it slept or was stopped,
 and while it could still run.
+.Pp
+Rach2 also reports, for every thread, TimedWakeCount, the thread's
+completed timed wakes, and TimedWakeLast, TimedWakeWorst and
+TimedWakeSum, the last wake, the wake with the longest total delay, and
+the sums of all completed wakes.
+A wake is completed at the thread's return to user mode, so a kernel
+thread's lines stay 0.
+Each of the latter three has eight microsecond columns:
+expiry to the servicing timer interrupt, that interrupt's wait for the
+big kernel lock after expiry, remaining timer work, run-queue wait,
+running toward the return to user mode, blocked again before that return,
+the queued CPU's waits for the big lock, and the returning thread's waits
+for the big lock.
+The last two are subsets of the queue and return columns.
+Only the first six are added for the total.
+The record ends just before the final register restore and return to
+user mode, and begins at the rounded deadline tick, after the wait is armed.
+The count and individual times wrap at 2^32; sums have 64 bits.
+A stage must be shorter than about 35 minutes.
+These fields start empty in a new thread and also appear in its
+.Pa /proc/PID/task/TID/status .
+.Pp
 CapPrm and CapEff are the capabilities the thread holds, those it has not
-given up when its effective user ID is 0, and none otherwise
-.Pq see Xr capget 2 ;
+given up when its effective user ID is 0, and none otherwise, with the
+capabilities of file access in CapEff by the file-system user ID
+.Pq see Xr capget 2 and Xr setfsuid 2 ;
 CapBnd is the bounding set, which
 .Dv PR_CAPBSET_DROP
 of
@@ -1924,6 +2228,97 @@ processes, the open files and the address space, have the process's
 values, and the others are unlimited, as
 .Xr prlimit64 2
 reports them.
+.It Pa /proc/PID/syscall
+The system call the thread is in, in Linux's form: its number, its six
+arguments, and the user stack and instruction pointers, all but the number
+in hexadecimal with
+.Ql 0x ;
+the number and the two pointers alone when the number is negative, and
+.Ql -1
+and the two pointers when the thread entered the kernel by a fault or an
+interrupt;
+.Ql running
+when it is ready or on a processor;
+.Ql 0
+with every other field
+.Ql 0x0
+for a sleeping kernel thread; and
+.Ql -1 0x0 0x0
+for an ended leader.
+The number is the one a tracer left, and an i386 call on x86-64 has i386's
+number and arguments.
+The text is made at the first
+.Xr read 2 ,
+so the caller's own thread shows that read.
+The file has mode 0400, which an open checks as for
+.Pa environ ,
+and is
+.Er EACCES
+to a caller that is not its owner; a read by a caller that lacks what
+.Pa environ
+needs past its mode is
+.Er EPERM ,
+as on Linux.
+.It Pa /proc/PID/wchan
+The name of the kernel function the thread sleeps in, with no newline, or
+.Ql 0
+when it runs, is ready to, has ended, or the caller lacks what
+.Pa environ
+needs past its mode.
+A wait names itself with Linux's function where Linux has one:
+.Ql pipe_read ,
+.Ql pipe_write ,
+.Ql pipe_wait_writable
+for
+.Xr vmsplice 2 ,
+.Ql wait_for_partner ,
+.Ql futex_wait_queue ,
+.Ql futex_wait_multiple ,
+.Ql futex_lock_pi ,
+.Ql do_wait ,
+.Ql hrtimer_nanosleep ,
+.Ql do_cpu_nanosleep ,
+for a sleep resumed after a stop
+.Ql do_syscall_64 ,
+or
+.Ql do_int80_emulation
+for an i386 program, on the x86-64 kernel and
+.Ql __do_sys_restart_syscall
+on the i686 kernel,
+.Ql syslog_print ,
+.Ql do_sys_poll ,
+.Ql do_select ,
+.Ql ep_poll ,
+.Ql sigsuspend ,
+.Ql do_sigtimedwait ,
+.Ql __do_sys_pause ,
+and
+.Ql do_signal_stop
+or
+.Ql ptrace_stop
+for a stopped thread.
+A thread in
+.Xr pause 2
+reads
+.Ql __do_sys_pause
+whichever ABI made the call: Linux's entries of both ABIs are aliases of
+that function, and its symbol table lists it first of the three.
+Any other wait reads as Rach2's
+.Ql wq_wait_event ,
+.Ql wq_wait_event_nointr
+or
+.Ql wq_wait_event_idle .
+.It Pa /proc/PID/schedstat
+Three numbers on one line, as Linux prints the thread's scheduler
+statistics: its time on a processor in nanoseconds, counted here in the
+timer's ticks of user and system time; the nanoseconds it waited ready on a
+run queue for a processor, to the microsecond; and the times it was
+switched onto a processor.
+The file of a process is its leader's, and the file under
+.Pa task
+a thread's own.
+.Xr kvm 4
+adds the second number's growth to a guest's steal time.
 .It Pa /proc/PID/fdinfo
 A file for each open descriptor, named by its number, beginning with two lines:
 .Ql pos: ,
@@ -1959,17 +2354,47 @@ For a dma-buf with a name set by
 .Dv DMA_BUF_SET_NAME ,
 .Ql name:
 gives that name.
+On x86-64, a KVM VM's descriptor,
+.Ql anon_inode:kvm-vm ,
+adds
+.Ql kvm_irqchip: ,
+the interrupt controller in the kernel,
+.Ql kernel ,
+.Ql split
+or
+.Ql none ,
+then a
+.Ql kvm_ioapic_pin:
+line for each pin of the kernel's I/O APIC with a count, the pin and its
+inputs raised, coalesced into an interrupt still pending, held by the
+entry's mask or remote IRR, delivered, and delivered to no APIC, and a
+.Ql kvm_vcpu_vector:
+line for each vector of each vCPU with a count, the vCPU's index, the
+vector and its interrupts accepted into IRR, dropped by a disabled APIC,
+acknowledged into ISR, injected at an entry, saved from an exit that cut
+their delivery off, and ended by an EOI; one taken from the PIC is ended
+at the PIC and counts no EOI.
+The counts are Rach2's own, not Linux's, and wrap at 2^32.
 Linux adds lines of each kind of file.
-Another user's is
-.Er EACCES ,
-as
-.Pa /proc/PID/fd
-is.
+It is
+.Er EACCES
+to a caller that may not read
+.Pa environ ,
+and a change of the working directory into it through a descriptor opened
+before the process ended is
+.Er ESRCH .
 .Xr chroot 2
 to it gives the caller a root that holds nothing, the empty root of a
 file system no path reaches.
 .It Pa /proc/PID/ns
-A directory of six links,
+A directory of mode 0511, owned by the process's effective IDs while it
+is dumpable and by root otherwise, which an open for reading checks as
+the mode says, so that a caller other than its owner and root gets
+.Er EACCES ,
+the process itself among them once it is not dumpable;
+.Dv O_PATH
+opens it for anyone.
+It has six links,
 .Pa user ,
 .Pa pid ,
 .Pa mnt ,
@@ -2025,28 +2450,37 @@ The environment strings of the initial stack, each ended by a NUL, at
 most their first 128 KiB, cut as
 .Pa cmdline
 is.
-It,
+It and
 .Pa auxv
-and the
+have mode 0400: only the owner, or a caller with privilege over files, may
+open them.
+Past the mode, they, the
 .Pa exe
-link need a thread of the process, a privileged caller, or the process's
-real user ID and a process that is not privileged; Linux asks more, the
-process's three user and group IDs and a dumpable process.
+link and the other files that say so need what Linux's ptrace check with
+.Dv PTRACE_MODE_FSCREDS
+needs: a thread of the process, a privileged caller, one whose effective
+user ID is 0 and which kept its capabilities
+.Pq see Xr capget 2 ,
+or one whose file-system user and group IDs are each of the process's
+three user and group IDs, while the process is dumpable and not
+privileged.
 .It Pa /proc/PID/mem
 The process's memory, read and written at the descriptor's offset, which
 is the address, as GDB uses it through
 .Xr pread 2
 and
 .Xr pwrite 2 .
-An address no region allows is
+An address no region allows, or one in the vDSO's data page,
+.Li [vvar] ,
+is
 .Er EIO ,
 and a write reaches read-only program text, as a tracer's does.
 A transfer that runs into such an address returns the bytes it did
 before it, as on Linux, and moves the offset past them.
-Opening it needs a thread of the process, a privileged caller, or the
-process's real user ID and a dumpable process that is not privileged;
-Linux compares the caller's file-system IDs with every user and group ID
-of the process.
+The file has mode 0600, and opening it needs the owner's access or
+privilege over files, and then what
+.Pa environ
+needs.
 The descriptor reaches the address space the open found while anything
 runs in it, a thread of the process or another process that shares it
 with

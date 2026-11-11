@@ -1,4 +1,4 @@
-.Dd November 3, 2026
+.Dd November 11, 2026
 .Dt CONNECT 2
 .Os
 .Sh NAME
@@ -84,16 +84,32 @@ A failed blocking handshake returns
 including a handshake that timed out.
 The pending socket error distinguishes a timeout
 .Pq Er ETIMEDOUT
-from a reset during active open
+from a reset of the SYN
 .Pq Er ECONNREFUSED .
-During the active open a reset counts only when it acknowledges the SYN,
-its acknowledgement number being the SYN's sequence number plus one;
+While the SYN is unanswered a reset counts only when it acknowledges the
+SYN, its acknowledgement number being the SYN's sequence number plus one;
 any other reset is ignored.
-After establishment a reset at the next expected sequence number records
-.Er ECONNRESET .
-A reset elsewhere in the receive window is answered with an
-acknowledgement and leaves the connection open, since the true peer
-answers that acknowledgement with a reset at the expected number;
+After the peer's own SYN, and after establishment, a reset at the next
+expected sequence number records
+.Er ECONNRESET ,
+and so does one at the right edge of the rightmost block of out-of-order
+data this side acknowledges selectively.
+After the peer's FIN, in the close-wait, closing and last-ack states, one
+at the number before the next expected, the FIN's own, is taken too, as
+Linux's
+.Fn tcp_reset_check
+takes it; in the close-wait state a reset records
+.Er EPIPE
+in place of
+.Er ECONNRESET ,
+as Linux's
+.Fn tcp_reset
+records it.
+A reset elsewhere in the receive window, with data or without, is
+answered with an acknowledgement, at most one in 500 milliseconds, after
+the peer's SYN as after establishment, and leaves the
+connection open, since the true peer answers that acknowledgement with a
+reset at the expected number;
 a reset outside the window is ignored.
 This is RFC 5961, section 3.2.
 These pending errors are reported by
@@ -197,6 +213,11 @@ A TCP handshake is already in progress in
 is not an open descriptor.
 .It Bq Er ECONNREFUSED
 The blocking TCP handshake ended without an established connection.
+.It Bq Er ECONNRESET
+Another thread's
+.Xr shutdown 2
+disconnected the socket while its blocking handshake waited in
+.Dv SYN_SENT .
 .It Bq Er EFAULT
 The address, or the socketcall argument array, cannot be read from user memory.
 .It Bq Er EINPROGRESS
@@ -228,6 +249,7 @@ or is neither a supported datagram nor stream socket.
 .Xr bind 2 ,
 .Xr getsockopt 2 ,
 .Xr poll 2 ,
+.Xr shutdown 2 ,
 .Xr socket 2 ,
 .Xr socketcall 2 ,
 .Xr ipv6 7 ,

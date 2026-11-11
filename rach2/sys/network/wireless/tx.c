@@ -586,12 +586,15 @@ enum frame_class { FRAME_OTHER, FRAME_TCP_DATA, FRAME_TCP_ACK };
 /**
  * Class Ethernet frame `frame` of `len` bytes. A TCP segment of more than one
  * byte with neither SYN, FIN nor reset is FRAME_TCP_DATA: TCP keeps it and
- * sends it again at once. One with no data and those flags clear is
- * FRAME_TCP_ACK: TCP sends a fresh one on its next tick. Anything else is
- * FRAME_OTHER: a keepalive or zero-window probe, one byte long, whose sender
- * ignores a refusal, a SYN, a FIN or a reset, sent again only after a
- * timeout, and every other protocol. The lengths come from the IP header,
- * since an Ethernet frame may be padded.
+ * sends it again at once, except a probe of a window closed over data in
+ * flight, which goes again at the next retransmission timeout. One with no
+ * data and those flags clear is FRAME_TCP_ACK: TCP sends a fresh one on its
+ * next tick, except a probe of a window closed with nothing in flight,
+ * which goes again after TCP_RESOURCE_PROBE_TICKS, 500 ms. Anything else is
+ * FRAME_OTHER: a keepalive probe, one byte long, whose sender ignores a
+ * refusal, a SYN, a FIN or a reset, sent again only after a timeout, and
+ * every other protocol. The lengths come from the IP header, since an
+ * Ethernet frame may be padded.
  */
 static enum frame_class frame_class(const uint8_t *frame, unsigned len)
 {

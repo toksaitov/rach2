@@ -37,9 +37,12 @@ def interrupted(signum, _frame):
 LOST = b'"The explorer process failed to start."'
 STALL = "dxgi.c:8040: Test marked todo: d3d10: test 2: Got unexpected present count 1, expected 2."
 # Each Vulkan device's ICDs and the Linux references taken on it, of the
-# x86-64 programs and of the i386 ones.
+# x86-64 programs and of the i386 ones. `host` is the machine's own GPU
+# through the system's drivers, on the X display the caller gives, with no
+# reference: a probe there passes on its own pixels.
 ADAPTERS = {"lavapipe": ("lvp_icd*.json", "linux.json", "linux32.json"),
-            "venus": ("venus_icd*.json", "venus.json", "venus32.json")}
+            "venus": ("venus_icd*.json", "venus.json", "venus32.json"),
+            "host": (None, None, None)}
 # Each mode of an i386 probe, Proton's WoW64 or its default, and the Unix
 # half of Wine that its process must have: WoW64 runs an i386 program in an
 # x86-64 process of the x86-64 Wine, the default in an i386 one of the i386
@@ -215,14 +218,16 @@ def main():
     """Run FAMILY ROW in OUT and compare each unit with the recorded Linux outcomes.
 
     -a names the Vulkan device, lavapipe (the default) or venus, whose ICD
-    alone the loader sees and whose Linux reference judges the row. A probe's
-    ROW is [PATH/]N[-MODE]: the Direct3D N probe on the Wine path PATH, its
-    x86-64 build, or with MODE its i386 build in that mode of MODES, judged
-    by the adapter's reference of i386 programs, which must have the row.
-    -R runs the row with no reference and records each unit, as the
-    references are taken; it fails only when a unit cannot be run.
+    alone the loader sees and whose Linux reference judges the row, or host,
+    which runs a probe on the system's drivers and the X display DISPLAY
+    names, as on the Lenovo's GPU through Xwayland. A probe's ROW is
+    [PATH/]N[-MODE]: the Direct3D N probe on the Wine path PATH, its x86-64
+    build, or with MODE its i386 build in that mode of MODES, judged by the
+    adapter's reference of i386 programs, which must have the row. -R runs
+    the row with no reference and records each unit, as the references are
+    taken; it fails only when a unit cannot be run.
     """
-    usage = "usage: run.py [-a lavapipe|venus] [-R] probe|wine|vkd3d|private ROW OUT"
+    usage = "usage: run.py [-a lavapipe|venus|host] [-R] probe|wine|vkd3d|private ROW OUT"
     try:
         opts, args = getopt.getopt(sys.argv[1:], "a:R")
     except getopt.GetoptError:
@@ -240,6 +245,8 @@ def main():
     mode = row.rpartition("/")[2].partition("-")[2] if family == "probe" else ""
     if mode and mode not in MODES:
         raise SystemExit(usage)
+    if adapter == "host" and (family != "probe" or not os.environ.get("DISPLAY")):
+        raise SystemExit("d3d: the host adapter runs a probe on the display DISPLAY names")
     if os.geteuid() == 0:
         raise SystemExit("d3d: run as an ordinary user")
     out = Path(output).resolve()
@@ -257,12 +264,13 @@ def main():
     pattern, reference64, reference32 = ADAPTERS[adapter]
     reference = reference32 if mode else reference64
     tests = list(json.loads((HERE / "ref" / "linux.json").read_text())["vkd3d"])
-    ref = {} if record else json.loads((HERE / "ref" / reference).read_text())
+    ref = {} if record or reference is None else json.loads((HERE / "ref" / reference).read_text())
     env = os.environ.copy()
     for key in ("PROBE_HOLD", "PROTON_USE_WINED3D", "VKD3D_TEST_FILTER", "VKD3D_TEST_EXCLUDE", "VKD3D_TEST_MATCH", "VKD3D_FEATURE_LEVEL", "VKD3D_SHADER_MODEL"):
         env.pop(key, None)
-    env.update(GALLIUM_DRIVER="llvmpipe", LIBGL_ALWAYS_SOFTWARE="1",
-               WINEDEBUG="-all,err+all,warn+winstation", DXVK_LOG_LEVEL="info", VKD3D_DEBUG="info",
+    if adapter != "host":
+        env.update(GALLIUM_DRIVER="llvmpipe", LIBGL_ALWAYS_SOFTWARE="1")
+    env.update(WINEDEBUG="-all,err+all,warn+winstation", DXVK_LOG_LEVEL="info", VKD3D_DEBUG="info",
                MESA_VK_IGNORE_CONFORMANCE_WARNING="1", PROTON_USE_WOW64="1",
                SteamGameId="2693", DXVK_LOG_PATH=str(out),
                PROTON_LOG="0" if family == "wine" else "1",
@@ -270,18 +278,19 @@ def main():
     if mode == "i386":
         # Proton's default mode runs an i386 program on its i386 Wine.
         del env["PROTON_USE_WOW64"]
-    icds = sorted(Path("/usr/share/vulkan/icd.d").glob(pattern))
-    files = [p for p in icds if "i686" not in p.name]
-    if len(files) != 1:
-        raise SystemExit("d3d: expected one x86-64 %s ICD" % adapter)
-    if mode == "i386":
-        # The i386 loader passes over the x86-64 ICD and loads the i686 one;
-        # lavapipe has none, its ICD naming its library for both.
-        files += [p for p in icds if "i686" in p.name]
-        if len(files) > 2:
-            raise SystemExit("d3d: expected one i686 %s ICD at most" % adapter)
-    env["VK_DRIVER_FILES"] = ":".join(str(p) for p in files)
-    env["VK_ICD_FILENAMES"] = env["VK_DRIVER_FILES"]
+    if pattern:
+        icds = sorted(Path("/usr/share/vulkan/icd.d").glob(pattern))
+        files = [p for p in icds if "i686" not in p.name]
+        if len(files) != 1:
+            raise SystemExit("d3d: expected one x86-64 %s ICD" % adapter)
+        if mode == "i386":
+            # The i386 loader passes over the x86-64 ICD and loads the i686
+            # one; lavapipe has none, its ICD naming its library for both.
+            files += [p for p in icds if "i686" in p.name]
+            if len(files) > 2:
+                raise SystemExit("d3d: expected one i686 %s ICD at most" % adapter)
+        env["VK_DRIVER_FILES"] = ":".join(str(p) for p in files)
+        env["VK_ICD_FILENAMES"] = env["VK_DRIVER_FILES"]
     env.pop("MESA_VK_WSI_DEBUG", None)
     if adapter == "venus":
         # Mesa's X11 WSI presents a GPU's images only over DRI3, which Xvfb
@@ -300,24 +309,26 @@ def main():
         env["STEAM_COMPAT_DATA_PATH"] = str(work / "compat")
         (work / "steam").mkdir()
         (work / "compat").mkdir()
-        rd, wr = os.pipe()
-        try:
-            xenv = env.copy()
-            xenv["LD_LIBRARY_PATH"] = str(HERE / "xvfb/lib")
-            with (out / "xvfb.log").open("wb") as log:
-                xvfb = subprocess.Popen([str(HERE / "xvfb/Xvfb"), "-displayfd", str(wr), "-noreset",
-                                         "-screen", "0", "1280x800x24", "-nolisten", "tcp"],
-                                        pass_fds=(wr,), stdout=log, stderr=log, env=xenv)
-            os.close(wr)
-            wr = None
-            with os.fdopen(rd) as ready:
-                display = ready.readline().strip()
-            if not display.isdigit():
-                raise RuntimeError("Xvfb did not announce a display")
-            env["DISPLAY"] = ":" + display
-        finally:
-            if wr is not None:
+        # The host adapter draws on the caller's display; the others on Xvfb.
+        if adapter != "host":
+            rd, wr = os.pipe()
+            try:
+                xenv = env.copy()
+                xenv["LD_LIBRARY_PATH"] = str(HERE / "xvfb/lib")
+                with (out / "xvfb.log").open("wb") as log:
+                    xvfb = subprocess.Popen([str(HERE / "xvfb/Xvfb"), "-displayfd", str(wr), "-noreset",
+                                             "-screen", "0", "1280x800x24", "-nolisten", "tcp"],
+                                            pass_fds=(wr,), stdout=log, stderr=log, env=xenv)
                 os.close(wr)
+                wr = None
+                with os.fdopen(rd) as ready:
+                    display = ready.readline().strip()
+                if not display.isdigit():
+                    raise RuntimeError("Xvfb did not announce a display")
+                env["DISPLAY"] = ":" + display
+            finally:
+                if wr is not None:
+                    os.close(wr)
         cpus = int(env.get("GRAPHICS_CPUS", os.cpu_count()))
         env["LP_NUM_THREADS"] = "0" if family == "wine" else str(cpus)
         context = {
@@ -325,7 +336,8 @@ def main():
             "adapter": adapter, "mode": mode or None, "reference": None if record else reference,
             "environment": {k: v for k, v in env.items() if k.startswith((
                 "VK", "DXVK", "PROTON", "LP_", "MESA_", "GALLIUM", "GRAPHICS"))},
-            "display": "Xvfb -noreset 1280x800x24", "cache": "empty private directory",
+            "display": ("the caller's " + env["DISPLAY"] if adapter == "host" else
+                        "Xvfb -noreset 1280x800x24"), "cache": "empty private directory",
             "iommu": Path("/proc/cmdline").read_text(),
         }
         (out / "environment.json").write_text(json.dumps(context, indent=2) + "\n")

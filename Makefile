@@ -568,6 +568,11 @@ ask-the-sub-make:
 
 $(KERNEL): ask-the-sub-make
 	@$(MAKE) --no-print-directory -C rach2
+# The same link writes kernel.debug, the kernel with every symbol, which a
+# case that reads symbols names among its prepared files. The sub-make
+# repairs a missing debug file before it releases either output's consumers.
+$(KERNEL).debug: $(KERNEL)
+	@test -f $@
 $(ARCH_BUILD)/ish/ish: ask-the-sub-make
 	@$(MAKE) --no-print-directory -C ish
 # An image's dependency file names the shell by its absolute path
@@ -913,6 +918,7 @@ LIFECYCLE_SCENARIOS = build/tests/cases/machine/acpi_scenario \
                       build/tests/cases/machine/memory_scenario \
                       build/tests/cases/machine/mixerkept_scenario \
                       build/tests/cases/machine/mount_scenario \
+                      build/tests/cases/machine/panic_scenario \
                       build/tests/cases/machine/parts_scenario \
                       build/tests/cases/machine/punch_scenario \
                       build/tests/cases/machine/reset_scenario \
@@ -970,7 +976,9 @@ $(PROBE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 # disks and the development tools' scenario, which log in and type at the
 # console as they do.
 NET_SCENARIOS = build/tests/cases/machine/d3d_scenario build/tests/cases/machine/games_scenario \
+                build/tests/cases/machine/bedforward_scenario \
                 build/tests/cases/machine/browser_scenario \
+                build/tests/cases/machine/gameswm_scenario \
                 build/tests/cases/machine/desktop_scenario \
                 build/tests/cases/machine/i915fake_scenario \
                 build/tests/cases/machine/diskdiag_scenario \
@@ -981,6 +989,8 @@ NET_SCENARIOS = build/tests/cases/machine/d3d_scenario build/tests/cases/machine
                 build/tests/cases/machine/graphics_scenario \
                 build/tests/cases/machine/keyboard_scenario \
                 build/tests/cases/machine/kvm_scenario \
+                build/tests/cases/machine/bed_vtest_scenario \
+                build/tests/cases/machine/bed_shm_scenario \
                 build/tests/cases/machine/assign_scenario \
                 build/tests/cases/machine/menu_scenario \
                 build/tests/cases/machine/seabios_scenario \
@@ -1391,11 +1401,11 @@ musl-programs: $(LIBC_STAMP)
 # status; `make test` runs the style checks, the host tests and the core
 # tier, which includes that suite. It is the RAM root of the suites that boot
 # it, and loopdevprobe copies a 4 MiB image onto it, so it keeps 5 MiB free:
-# 16 MiB, including sox_ng, of which the tree takes 9.7 MiB on i686 and
-# 10.0 MiB on x86-64.
+# 17 MiB, including sox_ng, of which the tree takes 10.7 MiB on i686 and
+# 11.0 MiB on x86-64.
 $(TEST_IMAGE): $(DEMO_CREDS) krffs/manifests/test.manifest $(MANIFEST_DEPS_test) $(IMAGE_TOOLS) | preflight krffs rach2 tests musl-programs utils ish tools/etude/guest \
               check-dropbearmulti sox_ng kbd
-	$(MKIMAGE) krffs/manifests/test.manifest $@ 16 5120
+	$(MKIMAGE) krffs/manifests/test.manifest $@ 17 5120
 
 # The disk of etude's cases that boot a KRFFS root on disk, such as those of
 # tests/cases/guest.stress.json: 64 MiB with a KRFFS partition of 48, of which
@@ -1414,10 +1424,11 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 # The os-real image: the BusyBox shell and tools, the Dropbear SSH server and
 # client, TinyCC and pdpmake, sox_ng, the Wi-Fi station and iw, Doom, the
 # manual, the sources under /src, and an /etc and /root tree. The image is
-# 33 MiB on i686 and 34 on x86-64, of which the tree with Doom's WAD takes
-# 31.5 MiB on i686 and 33.4 on x86-64, whose programs are larger; wpa_supplicant
+# 35 MiB on i686 and 37 on x86-64, of which the tree with Doom's WAD takes
+# 32.9 MiB on i686 and 34.9 on x86-64, whose programs are larger; wpa_supplicant
 # and its tools take 3.3 MiB and 4.4 of that, and the small /bin/sh launcher
-# keeps one copy of BusyBox beside sox_ng.
+# keeps one copy of BusyBox beside sox_ng. Each size leaves 1.6 MiB beyond the
+# free space the build requires, below, for the sources under /src to grow.
 # ACPICA's core is staged as an archive of 0.45 MiB to keep the tree small
 # (vendor/acpica/build_acpica.sh).
 # The image is the root the running system writes, /tmp among it, so the build
@@ -1430,12 +1441,12 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 # and the frames whose address a device is given, which alloc_kernel_frame
 # takes from the window's top for the block requests, the page cache and the
 # drivers' buffers; the kernel stacks and the heap come from above the window
-# first. Booted by QEMU with 128 MiB, the kernel ends at 7.3 MiB on i686 and
-# 8.2 MiB on x86-64, the module follows it to 40.3 MiB and 42.2 MiB, the
-# boot's tables take 1.2 MiB and 0.6 MiB, and 22.5 MiB and 21.2 MiB are left
+# first. Booted by QEMU with 128 MiB, the kernel ends at 7.8 MiB on i686 and
+# 9.1 MiB on x86-64, the module follows it to 42.8 MiB and 46.1 MiB, the
+# boot's tables take 1.2 MiB and 0.5 MiB, and 20.0 MiB and 17.4 MiB are left
 # for those frames. On i686 the frame table, 4 bytes for each 4 KiB frame
 # below the top of usable memory, is among the boot's tables, so a machine
-# with 4 GiB takes 3 MiB more of the window and leaves 19.5 MiB; the module
+# with 4 GiB takes 3 MiB more of the window and leaves 17.0 MiB; the module
 # is kept well below the window for that reason. The manual's aliases are a
 # table and not files, since the RAM root and a KRFFS disk walk every node on
 # a lookup and hundreds of alias files would make the self-build suite five
@@ -1443,9 +1454,9 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 # gen_demo_password.sh the account passwords and /etc/shadow, each when
 # absent; the check targets require each vendored binary it stages.
 ifeq ($(ARCH),x86_64)
-OS_REAL_MIB = 34
+OS_REAL_MIB = 37
 else
-OS_REAL_MIB = 33
+OS_REAL_MIB = 35
 endif
 OS_REAL_FREE_KIB = 512
 OS_REAL_WAD_KIB = 4100
@@ -1573,9 +1584,11 @@ os-real-disk: krffs rach2 $(MANIFEST_PARTS_os_real)
 
 # `make rach2-sealed-disk`: the disk the installer writes to a machine and the
 # machine boots from. Its geometry is a contract the builder checks against the
-# built image: a 64 MiB FAT32 boot partition at 1 MiB, at 4 KiB clusters (one
-# sector per cluster puts a 64 MiB volume past both of bootslot's bounds), a
-# 64 MiB recovery partition after it whose kernel and RAM image GRUB reaches
+# built image: a 64 MiB FAT32 boot partition at 1 MiB, the EFI system
+# partition of its GUID table, at one sector per cluster, about 130000
+# clusters, which UEFI firmware needs and bootslot's bounds take, with the two
+# 16 MiB kernel slots; a 64 MiB recovery partition after it, at 4 KiB
+# clusters, whose kernel and RAM image GRUB reaches
 # when partition 1 cannot be read at all, and the ext2 root, 1 GiB at 130 MiB,
 # the same manifest as an ext2 volume, which the candidate and the fallback
 # entries both boot. The image is 1155 MiB. Its recovery partition carries the
@@ -1600,6 +1613,11 @@ SEALED_ADDRESS ?= 192.168.0.105
 SEALED_MASK ?= 255.255.255.0
 SEALED_PREFIX ?= 24
 SEALED_GATEWAY ?= 192.168.0.1
+# ramoops's region on the Lenovo, a megabyte at 1 GiB in its usable RAM, so
+# that a panic's record and the last boot's log survive a warm reset into the
+# next boot's /sys/fs/pstore (pstore(5)).
+SEALED_RAMOOPS ?= ramoops.mem_address=0x40000000 ramoops.mem_size=0x100000 \
+                  ramoops.record_size=0x10000 ramoops.console_size=0x10000 ramoops.ecc=1
 SEALED_DISK = $(IMAGES_DIR)/rach2-sealed$(RECOVERY_KEY_TAG).disk
 
 # The file systems in files a fresh disk carries in /demo, one of each kind
@@ -1683,7 +1701,7 @@ $(SEALED_DISK): $(KERNEL) $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(SEALED_EXT2) \
 	RACH2_DISK_BOOT_MB=64 \
 	RACH2_DISK_CLUSTER=8 \
 	RACH2_DISK_RECOVERY_MB=64 \
-	RACH2_DISK_APPEND="rach2.disk=ahci rach2.netconsole rach2.console=term" \
+	RACH2_DISK_APPEND="rach2.disk=ahci rach2.netconsole rach2.console=term $(SEALED_RAMOOPS)" \
 	RACH2_DISK_DHCP_APPEND="rach2.ip=none" \
 	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \

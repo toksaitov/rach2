@@ -1,0 +1,47 @@
+The Debian 13 guest on the virgl profile, 8 CPUs and 8192 MiB, ran
+chunks of 250 pages of the WebGL 2.0.1 conformance suite in Chromium
+156.0.8078.79 under Weston's GL renderer, as `webgl.sh -g` does, one guest
+at a time, with no other guest drawing on the GPU.
+
+Chunk 9, pages 2250 to 2499, with each page's start and result streamed to
+the host and QEMU 10.2.1's lines as they came; the pages before 2434 all
+passed, the RGB9_E5 pages of svg_image, video and webgl_canvas among them:
+
+    start 2432 conformance2/textures/image_bitmap_from_image_data/tex-2d-r11f_g11f_b10f-rgb-half_float.html
+    result 2432 pass conformance2/textures/image_bitmap_from_image_data/tex-2d-r11f_g11f_b10f-rgb-half_float.html
+    start 2433 conformance2/textures/image_bitmap_from_image_data/tex-2d-r11f_g11f_b10f-rgb-float.html
+    result 2433 pass conformance2/textures/image_bitmap_from_image_data/tex-2d-r11f_g11f_b10f-rgb-float.html
+    start 2434 conformance2/textures/image_bitmap_from_image_data/tex-2d-rgb9_e5-rgb-half_float.html
+    D3D12: Removing Device.
+    vrend_check_no_error: context error reported 5 "chromium" Unknown 1281
+    context 5 failed to dispatch COPY_TRANSFER3D: 22
+    vrend_decode_ctx_submit_cmd: context error reported 5 "chromium" Illegal command buffer 917549
+    result 2434 fail conformance2/textures/image_bitmap_from_image_data/tex-2d-rgb9_e5-rgb-half_float.html
+    start 2435 conformance2/textures/image_bitmap_from_image_data/tex-2d-rgb9_e5-rgb-float.html
+    result 2435 fail conformance2/textures/image_bitmap_from_image_data/tex-2d-rgb9_e5-rgb-float.html
+    start 2436 conformance2/textures/image_bitmap_from_image_data/tex-2d-rgb16f-rgb-half_float.html
+    result 2436 fail conformance2/textures/image_bitmap_from_image_data/tex-2d-rgb16f-rgb-half_float.html
+
+Every page after 2434 failed, and QEMU ended after the browser's last page,
+before any page of the next browser. Each chunk run whole in a guest of its
+own, three tries each, before these pages were left out:
+
+    chunk 9:  QEMU ended after 310, 312 and 320 s; "D3D12: Removing Device."
+    chunk 10: QEMU ended after 90, 88 and 86 s
+    chunk 11: QEMU ended after 55, 55 and 56 s, after virglrenderer's
+              "context error reported 5 "chromium" Unknown 1285", GL_OUT_OF_MEMORY
+
+Chunk 10 holds the RGB9_E5 pages of image_bitmap_from_image,
+image_bitmap_from_video, image_bitmap_from_canvas and image_bitmap_from_blob,
+and chunk 11 those of image_bitmap_from_image_bitmap alone.
+
+With those 24 pages left out, chunk 11 ended QEMU in three tries of three,
+after 36 s each, "D3D12: Removing Device.". Streamed, the page started last
+with no result was 2842, conformance2/uniforms/incompatible-texture-type-for-sampler.html,
+which makes a texture of each of 63 internal formats and samples it. Alone:
+
+    the page as the suite has it:           "D3D12: Removing Device.", QEMU ended
+    the page without its RGB9_E5 entry
+    (the line t[gl.RGB9_E5] removed):       pass, 5374 subtests passed, 0 failed
+
+Firefox passes the whole page, 5468 subtests.

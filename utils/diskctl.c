@@ -269,7 +269,8 @@ static int named_data(const unsigned char *e)
  * The last sector of the free run that starts at `start` in `table`, which
  * must lie in no used entry: the sector before the next entry's first, or
  * the last sector the table may use once its backup is at the disk's end.
- * Returns 0 when `start` lies in a used entry or past that sector.
+ * Returns 0 when `start` lies below the first usable sector, in a used
+ * entry or past the last usable sector.
  */
 static unsigned long long free_run_end(unsigned long long start)
 {
@@ -278,7 +279,7 @@ static unsigned long long free_run_end(unsigned long long start)
     unsigned char *e;
     uint32_t i;
 
-    if (start > end) {
+    if (start < gptdisk_le64(table.header + 40) || start > end) {
         return 0;
     }
     for (i = 1; i <= table.entries; i++) {
@@ -302,7 +303,8 @@ static unsigned long long free_run_end(unsigned long long start)
  * mebibyte, to the end of their run, with a new random unique GUID; write
  * both copies and have the table read again. Returns 0, or 1 having said why
  * not: the disk has no GUID table, the entry is used by another partition,
- * or the run is shorter than a mebibyte.
+ * the rounded start overflows or lies below the first usable sector, or
+ * the run is shorter than a mebibyte.
  */
 static int make_data(int fd, const char *path, const char *text)
 {
@@ -337,7 +339,15 @@ static int make_data(int fd, const char *path, const char *text)
         fprintf(stderr, "diskctl: %s: %s is not a sector number\n", path, text);
         return 1;
     }
+    if (start > ~0ULL - 2047) {
+        fprintf(stderr, "diskctl: %s: sector %s overflows when rounded up\n", path, text);
+        return 1;
+    }
     start = (start + 2047) / 2048 * 2048;
+    if (start < gptdisk_le64(table.header + 40)) {
+        fprintf(stderr, "diskctl: %s: sector %llu is below the first usable sector\n", path, start);
+        return 1;
+    }
     end = free_run_end(start);
     if (end < start + 2047) {
         fprintf(stderr, "diskctl: %s: there is not a mebibyte free from sector %llu\n", path,

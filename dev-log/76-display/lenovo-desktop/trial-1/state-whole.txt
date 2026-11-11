@@ -1,0 +1,100 @@
+== cmdline
+rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial/root-07a02ae529bdd3ea.img rach2.slot=trialroot rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.disk=ahci rach2.netconsole rach2.ip=none rach2.console=term intel_iommu=off intremap=off
+== bootctl
+bootctl: candidate: first sector 11848, 8192 sectors in 8192 clusters, 4194304 bytes
+bootctl: fallback: first sector 2053, 8192 sectors in 8192 clusters, 4194304 bytes
+bootctl: fallback: runs: 2053+4096 20040+4096
+bootctl: grubenv: first sector 10275, 2 sectors in 2 clusters, 1024 bytes
+bootctl: boot.cfg: first sector 10259, 16 sectors in 16 clusters, 8192 bytes
+bootctl: saved_entry: fallback
+bootctl: next_entry: empty (a trial was consumed)
+bootctl: trial root: GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial/root-07a02ae529bdd3ea.img
+bootctl: booted: trialroot, the candidate's kernel on a root image
+== root
+/dev/loop0 / ext2 rw,relatime 0 0
+/dev/disk0p6 /data ext2 rw 0 0
+== drm
+/sys/class/drm/card0-Unknown-1 status connected enabled enabled modes 1366x768 
+by-path
+card0
+== kernel
+[    0.000000] console: framebuffer: 1366x768, 32 bits a pixel; the font at 2x, 85x24 cells
+[    0.000000] console: font: drawn: code page 437 box drawing with Cyrillic
+[    0.000000] i915: stolen: reserving [mem 0xaba00000-0xaf9fffff], 0 KiB of it usable memory
+[    0.025000] console: blank: after 600 seconds without input
+[    0.158000] vtd: dmar: host address width 39, flags 0x1
+[    0.158000] vtd: dmar: unit at 0xfed90000, segment 0, flags 0x0
+[    0.158000] vtd: dmar: device 0:2.0
+[    0.158000] vtd: dmar: unit at 0xfed91000, segment 0, flags 0x1
+[    0.158000] vtd: dmar: ioapic id 2 at f0:1f.0
+[    0.158000] vtd: dmar: hpet id 0 at f0:f.0
+[    0.158000] vtd: dmar: reserved region 0xaae11000 to 0xaae30fff
+[    0.158000] vtd: dmar: reserved region 0xab800000 to 0xaf9fffff
+[    0.158000] vtd: dmar0: at 0xfed90000, version 1.0, cap 0xc0000020660462, ecap 0xf0101a
+[    0.164000] vtd: dmar0: status 0x0
+[    0.170000] vtd: dmar1: at 0xfed91000, version 1.0, cap 0xd2008020660462, ecap 0xf010da
+[    0.177000] vtd: dmar1: status 0x0
+[    0.183000] vtd: off by intel_iommu=off intremap=off: 2 units read
+[    0.190000] synaptics: found: touchpad model 1, fw 8.1, id 0x1e2b1, caps 0xd00123/0x840300/0x2a800/0x0, board id 2848, fw id 1581875
+[    5.120000] netconsole: broadcast, ethertype 0x88b5, boot id 0x1aa63539, 0 frames, 5671 characters dropped
+[    5.159000] drm: start
+[    5.165000] i915: 00:02.0: 0a16 left to the firmware's framebuffer; rach2.i915 binds it
+[    5.173000] drm: simpledrm: card0
+[    5.179000] console: card0: the firmware's framebuffer
+[    5.186000] fbdrm: registered: simpledrm 1366x768, XR24, pitch 5504, at 0xb0000000, card 0
+[    5.657000] input: sysfs: worker: kinputd is pid 5
+[   11.808000] console: card0: handed to a master, the keyboard off
+== session
+44
+        44 root     /bin/bash /usr/libexec/rach2-desktop
+        52 root     /usr/lib/systemd/systemd-udevd --resolve-names=early
+        93 root     seatd -g seat
+       100 desktop  dbus-run-session -- /usr/libexec/rach2-session --bus
+       102 desktop  /bin/bash /usr/libexec/rach2-session --bus
+       103 desktop  pulseaudio -n --daemonize=no --use-pid-file=no --exit-idle-time=-1 --disallow-exit --file=/etc/pulse/rach2.pa
+       105 desktop  weston --backend=drm --renderer=pixman --socket=wayland-0 --config=/etc/xdg/weston/weston.ini
+== services
+00:00:00.000 [INFO] [seatd/seat.c:50] Created seat seat0
+00:00:00.000 [INFO] [seatd/seatd.c:194] seatd started
+[14:45:03.248] weston 14.0.2
+               Bug reports to: https://gitlab.freedesktop.org/wayland/weston/issues/
+[14:45:03.249] Command line: weston --backend=drm --renderer=pixman --socket=wayland-0 --config=/etc/xdg/weston/weston.ini
+[14:45:03.251] Using config file '/etc/xdg/weston/weston.ini'
+[14:45:03.256] Output repaint window is 7 ms maximum.
+[14:45:03.257] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/drm-backend.so'
+[14:45:03.299] initializing drm backend
+[14:45:03.299] Trying libseat launcher...
+00:00:01.294 [INFO] [seatd/server.c:145] New client connected (pid: 105, uid: 1001, gid: 1001)
+00:00:01.295 [INFO] [seatd/seat.c:239] Added client 0 to seat0
+00:00:01.295 [INFO] [seatd/seat.c:563] Opened client 0 on seat0
+[14:45:03.301] [libseat/libseat.c:62] Seat opened with backend 'seatd'
+[14:45:03.301] [libseat/backend/seatd.c:212] Enabling seat
+[14:45:03.302] libseat: session control granted
+[14:45:03.311] DRM: supports atomic modesetting
+[14:45:03.311] DRM: supports GBM modifiers
+[14:45:03.311] DRM: does not support Atomic async page flip
+[14:45:03.311] DRM: supports picture aspect ratio
+[14:45:03.312] Using Pixman renderer
+[14:45:03.590] DRM: head 'Unknown-1' found, connector 35 is connected, EDID make 'unknown', model 'unknown', serial ''
+               Supported EOTF modes: SDR
+               Supported colorimetry modes: default
+[14:45:03.590] Registered plugin API 'weston_drm_output_api_v1' of size 40
+[14:45:03.591] Registered plugin API 'weston_drm_virtual_output_api_v2' of size 48
+[14:45:03.593] Output 'Unknown-1' attempts EOTF mode SDR and colorimetry mode default.
+[14:45:03.593] Output 'Unknown-1' using color profile: stock sRGB color profile
+[14:45:03.596] DRM: output Unknown-1 uses shadow framebuffer.
+[14:45:03.596] Output Unknown-1 (crtc 33) video modes:
+               1366x768@60.0, preferred, current, 62.9 MHz
+[14:45:03.596] associating input device event0 with output Unknown-1 (none by udev)
+[14:45:03.596] associating input device event5 with output Unknown-1 (none by udev)
+[14:45:03.596] associating input device event6 with output Unknown-1 (none by udev)
+[14:45:03.596] associating input device event7 with output Unknown-1 (none by udev)
+[14:45:03.596] associating input device event1 with output Unknown-1 (none by udev)
+[14:45:03.596] associating input device event2 with output Unknown-1 (none by udev)
+[14:45:03.596] associating input device event3 with output Unknown-1 (none by udev)
+[14:45:03.596] associating input device event4 with output Unknown-1 (none by udev)
+[14:45:03.596] Output 'Unknown-1' enabled with head(s) Unknown-1
+[14:45:03.597] Loading module '/usr/lib/x86_64-linux-gnu/weston/kiosk-shell.so'
+[14:45:03.608] Loading module '/usr/lib/x86_64-linux-gnu/libweston-14/xwayland.so'
+[14:45:03.752] Registered plugin API 'weston_xwayland_v3' of size 32
+[14:45:03.752] Registered plugin API 'weston_xwayland_surface_v2' of size 24

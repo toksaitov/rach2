@@ -11,7 +11,7 @@
       "architectures": ["x86_64"],
       "workload": {"arguments": ["clock=tsc"], "inputs": {}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.tscreliable"]}},
-      "execution": {"program": "vdsomusl", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "none", "cleanup": "nothing to remove"},
+      "execution": {"program": "vdsomusl", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "nothing to remove"},
       "assertions": [
         {"assertion_id": "absent", "checks": "on the i686 kernel an image has no AT_SYSINFO_EHDR, and maps names neither [vvar] nor [vdso]", "source": "program"},
         {"assertion_id": "auxv", "checks": "AT_SYSINFO_EHDR gives the ELF header of a shared object of the program's class and machine, x86-64's or for an i686 program i386's", "source": "program"},
@@ -22,10 +22,12 @@
         {"assertion_id": "resolution", "checks": "the vDSO's clock_getres gives what the system call gives for clocks 0 to 7, and its clock_gettime and clock_getres give -EINVAL for clock 12", "source": "program"},
         {"assertion_id": "getcpu", "checks": "pinned to each processor in turn, the vDSO's getcpu and sched_getcpu give that processor, on node 0", "source": "program"},
         {"assertion_id": "ordered", "checks": "a million monotonic readings through the vDSO on one processor, and two thousand on each processor in turn, never go back", "source": "program"},
+        {"assertion_id": "write", "checks": "a child's mprotect makes [vdso] rwxp, a store there does not fault and its clock_gettime works, another child's write through /proc/self/mem reads back with the page still r-xp, and the parent's vDSO is unchanged, as Linux copies the page on a write", "source": "program"},
+        {"assertion_id": "vvar", "checks": "a read of [vvar] through /proc/self/mem and a tracer's PTRACE_PEEKDATA of a tracee's [vvar] give EIO, process_vm_readv of it and a vmsplice of a byte of it into a pipe EFAULT, and mprotect of it with PROT_EXEC EACCES, as on Linux, whose get_user_pages refuses the region", "source": "program"},
         {"assertion_id": "calls", "checks": "100,000 calls of clock_gettime, gettimeofday and time through musl raise /proc/stat's clock_calls by fewer than 1,000", "source": "program"}
       ],
       "branches": [
-        {"group_id": "kernel", "decided_by": "report", "alternatives": [{"alternative_id": "i686", "when": null, "assertions": ["absent"]}, {"alternative_id": "x86-64", "when": null, "assertions": ["auxv", "maps", "symbols", "agree", "resolution", "getcpu", "ordered"]}]}
+        {"group_id": "kernel", "decided_by": "report", "alternatives": [{"alternative_id": "i686", "when": null, "assertions": ["absent"]}, {"alternative_id": "x86-64", "when": null, "assertions": ["auxv", "maps", "symbols", "agree", "resolution", "getcpu", "ordered", "write", "vvar"]}]}
       ],
       "termination": {"end": "exited", "value": 0},
       "progress": [],
@@ -48,7 +50,7 @@
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": ["clock=syscall"], "inputs": {}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.notsc"]}},
-      "execution": {"program": "vdsomusl", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "none", "cleanup": "nothing to remove"},
+      "execution": {"program": "vdsomusl", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "nothing to remove"},
       "assertions": [
         {"assertion_id": "absent", "checks": "on the i686 kernel an image has no AT_SYSINFO_EHDR, and maps names neither [vvar] nor [vdso]", "source": "program"},
         {"assertion_id": "auxv", "checks": "AT_SYSINFO_EHDR gives the ELF header of a shared object of the program's class and machine, x86-64's or for an i686 program i386's", "source": "program"},
@@ -59,10 +61,12 @@
         {"assertion_id": "resolution", "checks": "the vDSO's clock_getres gives what the system call gives for clocks 0 to 7, and its clock_gettime and clock_getres give -EINVAL for clock 12", "source": "program"},
         {"assertion_id": "getcpu", "checks": "pinned to each processor in turn, the vDSO's getcpu and sched_getcpu give that processor, on node 0", "source": "program"},
         {"assertion_id": "ordered", "checks": "a million monotonic readings through the vDSO on one processor, and two thousand on each processor in turn, never go back", "source": "program"},
+        {"assertion_id": "write", "checks": "a child's mprotect makes [vdso] rwxp, a store there does not fault and its clock_gettime works, another child's write through /proc/self/mem reads back with the page still r-xp, and the parent's vDSO is unchanged, as Linux copies the page on a write", "source": "program"},
+        {"assertion_id": "vvar", "checks": "a read of [vvar] through /proc/self/mem and a tracer's PTRACE_PEEKDATA of a tracee's [vvar] give EIO, process_vm_readv of it and a vmsplice of a byte of it into a pipe EFAULT, and mprotect of it with PROT_EXEC EACCES, as on Linux, whose get_user_pages refuses the region", "source": "program"},
         {"assertion_id": "calls", "checks": "100,000 calls of clock_gettime, gettimeofday and time through musl raise /proc/stat's clock_calls by at least 100,000", "source": "program"}
       ],
       "branches": [
-        {"group_id": "kernel", "decided_by": "report", "alternatives": [{"alternative_id": "i686", "when": null, "assertions": ["absent"]}, {"alternative_id": "x86-64", "when": null, "assertions": ["auxv", "maps", "symbols", "agree", "resolution", "getcpu", "ordered"]}]}
+        {"group_id": "kernel", "decided_by": "report", "alternatives": [{"alternative_id": "i686", "when": null, "assertions": ["absent"]}, {"alternative_id": "x86-64", "when": null, "assertions": ["auxv", "maps", "symbols", "agree", "resolution", "getcpu", "ordered", "write", "vvar"]}]}
       ],
       "termination": {"end": "exited", "value": 0},
       "progress": [],

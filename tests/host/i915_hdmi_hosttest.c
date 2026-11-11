@@ -6,6 +6,7 @@
  * host-deps: rach2/sys/drm/i915/i915_irq.c rach2/sys/drm/i915/i915_hw.c
  * host-deps: tests/host/i915_model.c rach2/sys/display/backlight.c
  * host-deps: rach2/sys/display/intelbl.c rach2/sys/lib/kstring.c
+ * host-deps: rach2/sys/lib/kstd.c
  * host-deps: rach2/sys/lib/kctypes.c tests/host/compat/spinlock_host.c
  * host-deps: rach2/sys/drm/i915/intel_bios.c rach2/sys/drm/i915/i915_power.c
  * host-inputs: tests/fixtures/lenovo-gpu/i915_vbt.bin
@@ -145,6 +146,7 @@ void drm_gem_object_init(struct drm_device *dev, struct drm_gem_object *obj, uin
                          const struct drm_gem_object_funcs *funcs)
 {
     obj->dev = dev;
+    obj->resv = &obj->resv_own;
     obj->size = size;
     obj->funcs = funcs;
     obj->refs = 1;
@@ -162,11 +164,13 @@ static struct i915_vma bo_vma[NBO];
 /** The GGTT address the pin binds object `i` at. */
 #define BO_GGTT(i) (0x01000000u + (uint32_t)(i) * 0x02000000u)
 
-int32_t i915_gem_object_pin_to_display(struct drm_i915_gem_object *obj, uint32_t align,
+int32_t i915_gem_object_pin_to_display(struct drm_i915_gem_object *obj,
+                                       const struct i915_remap_info *remap, uint32_t align,
                                        struct i915_vma **vma)
 {
     struct i915_vma *v = &bo_vma[obj - bo];
 
+    (void)remap;
     (void)align;
     if (!obj->vmas) {
         v->obj = obj;
@@ -437,6 +441,7 @@ static uint32_t bo_new(int i, uint64_t size)
     bo[i].base.dev = &gpu.drm;
     bo[i].base.size = size;
     bo[i].base.funcs = &i915_gem_object_funcs;
+    bo[i].base.resv = &bo[i].base.resv_own;
     bo[i].base.refs = 1;
     bo[i].tiling = I915_TILING_NONE;
     CHECK(drm_gem_handle_create(&fa, &bo[i].base, &h) == 0, "a handle is made");
@@ -672,19 +677,45 @@ static void row_dpll(void)
 
         intel_dpll_calc_wrpll(w->clock * 1000u, &r2, &n2, &p);
         if (r2 != w->r2 || n2 != w->n2 || p != w->p ||
-            intel_dpll_wrpll_freq(wrpll_value(r2, n2, p)) != w->freq) {
+            intel_dpll_wrpll_freq(&gpu, wrpll_value(r2, n2, p)) != w->freq) {
             printf("wrpll %u kHz: r2 %u n2 %u p %u freq %u\n", (unsigned)w->clock, (unsigned)r2,
                    (unsigned)n2, (unsigned)p,
-                   (unsigned)intel_dpll_wrpll_freq(wrpll_value(r2, n2, p)));
+                   (unsigned)intel_dpll_wrpll_freq(&gpu, wrpll_value(r2, n2, p)));
             bad++;
         }
     }
     CHECK(bad == 0, "dpll: each WRPLL's dividers and frequency as Linux's");
-    CHECK(intel_dpll_spll_compute(270000) ==
-                  (SPLL_PLL_ENABLE | SPLL_FREQ_1350MHz | SPLL_REF_MUXED_SSC) &&
-              intel_dpll_spll_freq(intel_dpll_spll_compute(270000)) == 270000 &&
-              intel_dpll_spll_compute(162000) == 0,
-          "dpll: the SPLL at 1.35 GHz for 2.7 Gb/s alone");
+    CHECK(intel_dpll_spll_freq(SPLL_PLL_ENABLE | SPLL_FREQ_1350MHz | SPLL_REF_MUXED_SSC) ==
+                  270000 &&
+              intel_dpll_spll_freq(SPLL_PLL_ENABLE | SPLL_FREQ_810MHz) == 162000,
+          "dpll: the SPLL's link clock as Linux's");
+}
+
+/** The WRPLL's special reference: the SSC on a ULT part, and on another
+ * the non-SSC reference of 24 MHz that FUSE_STRAP3 selects, as Linux's
+ * hsw_update_dpll_ref_clks reads it. */
+static void row_dpll_ref(void)
+{
+    static const struct i915_id desktop_id = {0x0412, 0, 0, NULL};
+    struct intel_dpll saved[INTEL_NUM_DPLLS];
+    uint32_t v = WRPLL_PLL_ENABLE | WRPLL_REF_SPECIAL_HSW | WRPLL_DIVIDER_REFERENCE(20) |
+                 WRPLL_DIVIDER_FEEDBACK(22) | WRPLL_DIVIDER_POST(2);
+    uint32_t fuse = i915_model_peek(&model, FUSE_STRAP3);
+    uint32_t ult, nssc;
+
+    memcpy(saved, disp->dpll, sizeof(saved));
+    i915_model_poke(&model, FUSE_STRAP3, fuse | HSW_REF_CLK_SELECT);
+    intel_dpll_init(&gpu);
+    ult = intel_dpll_wrpll_freq(&gpu, v);
+    gpu.id = &desktop_id;
+    nssc = intel_dpll_wrpll_freq(&gpu, v);
+    gpu.id = &lenovo_id;
+    i915_model_poke(&model, FUSE_STRAP3, fuse);
+    intel_dpll_init(&gpu);
+    memcpy(disp->dpll, saved, sizeof(saved));
+    CHECK(ult == (135000u * 22u / 10u) / (2u * 20u) * 2u &&
+              nssc == (24000u * 22u / 10u) / (2u * 20u) * 2u,
+          "dpll: the special reference is the SSC on ULT, the fused 24 MHz on another");
 }
 
 /* ---- 78-10c.2 and .5: HDMI and hotplug ---- */
@@ -733,7 +764,14 @@ static void row_hdmi_set(void)
     CHECK(find_mode(hdmi, 1920, 1080, 60, &m), "hdmi: the 1080p mode");
     fb_b = fb_new(1, 1920, 1080);
     log_text[0] = 0;
+    model.nlog = 0;
+    model.log_lost = 0;
     CHECK(fb_b && setcrtc(1, hdmi, &m, fb_b) == 0, "hdmi: SETCRTC of 1080p on pipe B");
+    CHECK(model.log_lost == 0 &&
+              i915_model_find_write(&model, DSPCNTR(1), DISP_PIPE_CSC_ENABLE, 0) >= 0 &&
+              (reg(DSPCNTR(1)) & (DISP_ENABLE | DISP_PIPE_CSC_ENABLE)) ==
+                  (DISP_ENABLE | DISP_PIPE_CSC_ENABLE),
+          "hdmi: the plane, off and on, keeps the pipe's colour space conversion");
     CHECK(reg(WRPLL_CTL(0)) == wrpll_value(20, 33, 6) &&
               reg(PORT_CLK_SEL(INTEL_PORT_B)) == PORT_CLK_SEL_WRPLL1 &&
               disp->dpll[DPLL_ID_WRPLL1].active == (1u << 1),
@@ -769,6 +807,56 @@ static void row_hdmi_set(void)
           "hdmi: the log's line");
     frame();
     frame();
+}
+
+/** Pipe B's mode read back at other depths, as Linux's
+ * intel_crtc_dotclock: the TMDS clock alone at 6 bits a colour, and at 10
+ * bits from a TMDS clock of 267156 kHz the dot clock rounded to the
+ * nearest kHz, 213725. */
+static void row_hdmi_dotclock(void)
+{
+    struct intel_pipe_readout hw;
+    uint32_t func = i915_model_peek(&model, TRANS_DDI_FUNC_CTL(1));
+    uint32_t wrpll = i915_model_peek(&model, WRPLL_CTL(0));
+    uint32_t six, ten;
+
+    i915_model_poke(&model, TRANS_DDI_FUNC_CTL(1), (func & ~TRANS_DDI_BPC_MASK) | TRANS_DDI_BPC_6);
+    intel_pipe_readout(&gpu, 1, &hw);
+    six = hw.mode.clock;
+    i915_model_poke(&model, TRANS_DDI_FUNC_CTL(1), (func & ~TRANS_DDI_BPC_MASK) | TRANS_DDI_BPC_10);
+    i915_model_poke(&model, WRPLL_CTL(0), wrpll_value(95, 94, 2));
+    intel_pipe_readout(&gpu, 1, &hw);
+    ten = hw.mode.clock;
+    i915_model_poke(&model, TRANS_DDI_FUNC_CTL(1), func);
+    i915_model_poke(&model, WRPLL_CTL(0), wrpll);
+    CHECK(six == 148500 && ten == 213725,
+          "hdmi: the dot clock read back at 6 and 10 bits a colour as Linux's");
+}
+
+/** Two connectors routed to one pipe, HDMI B and HDMI C: refused, since a
+ * DDI encoder clones with none, as Linux's "rejecting invalid cloning
+ * configuration"; pipe B keeps HDMI B alone. */
+static void row_hdmi_clone(void)
+{
+    struct drm_connector *hdmi = &disp->ddi[0].hdmi_connector;
+    uint32_t conns[2];
+    struct drm_mode_crtc c;
+    struct drm_mode_modeinfo m;
+
+    CHECK(find_mode(hdmi, 1920, 1080, 60, &m), "clone: the 1080p mode");
+    conns[0] = hdmi->base.id;
+    conns[1] = disp->ddi[1].hdmi_connector.base.id;
+    k_memset(&c, 0, sizeof(c));
+    c.crtc_id = disp->crtc[1].base.base.id;
+    c.fb_id = fb_b;
+    c.mode_valid = 1;
+    c.mode = m;
+    c.set_connectors_ptr = UPTR(conns);
+    c.count_connectors = 2;
+    CHECK(drm_mode_setcrtc(&gpu.drm, &c, &fa) == -EINVAL &&
+              disp->ddi[1].hdmi_connector.state->crtc == 0 &&
+              hdmi->state->crtc == &disp->crtc[1].base,
+          "clone: HDMI B and HDMI C on pipe B refused, pipe B left on HDMI B");
 }
 
 /**
@@ -946,6 +1034,31 @@ static void row_fini(void)
           "fini: every scanout unpinned");
 }
 
+/* ---- RPS's waitboost and interactive mode, which the driver calls ---- */
+
+/* The requests' fences, i915_gem.c's, which no flip here waits on. */
+const struct dma_fence_ops i915_fence_ops = {0, 0, 0, 0, 0, 0};
+
+/** Whether the chip has begun `rq`; no request runs here, so only once
+ * it has signalled. */
+int i915_request_started(const struct i915_request *rq)
+{
+    return rq->fence.base.signaled;
+}
+
+/** The waitboost, RPS's, which no row here measures. */
+void i915_rps_boost(struct i915_request *rq)
+{
+    (void)rq;
+}
+
+/** A page flip pending or done, which RPS counts; no row here reads it. */
+void i915_rps_mark_interactive(struct drm_i915_private *i915, int on)
+{
+    (void)i915;
+    (void)on;
+}
+
 int main(void)
 {
     model_start("i915-hdmi-test");
@@ -956,8 +1069,11 @@ int main(void)
     row_ports();
     row_gmbus();
     row_dpll();
+    row_dpll_ref();
     row_hdmi_plug();
     row_hdmi_set();
+    row_hdmi_dotclock();
+    row_hdmi_clone();
     row_hotplug();
     row_dp();
     row_inject();

@@ -1,5 +1,6 @@
 /* A small KVM guest that exercises SVM entry, memory faults and intercepts. */
 
+#define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
@@ -7,11 +8,13 @@
 #include <sched.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/reboot.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 /* The hosted integer types supply the kernel ABI header's fixed widths. */
@@ -521,6 +524,107 @@ static int leak_rows(void)
     return result;
 }
 
+/** Pin the calling process to one processor. */
+static int pin(int cpu)
+{
+    cpu_set_t set;
+
+    CPU_ZERO(&set);
+    CPU_SET(cpu, &set);
+    return sched_setaffinity(0, sizeof(set), &set);
+}
+
+/** Restore one FXSAVE image for ever: each FXRSTOR loads the x87 status. */
+static void fpu_child(int cpu)
+{
+    static unsigned char area[512] __attribute__((aligned(16)));
+
+    if (pin(cpu) != 0)
+        _exit(1);
+    __asm__ volatile("fxsave %0" : "=m"(area));
+    for (;;)
+        __asm__ volatile("fxrstor %0" : : "m"(area));
+}
+
+/**
+ * Run a guest that reads its data slot and exits to port 0x10 without end,
+ * on processor `cpu`, while a child restores x87 state on the other, for
+ * `seconds`; fail on the first exit that is not the read's value, and
+ * when the child has ended before the run does, as one that could not pin
+ * itself does, having loaded no x87 state.
+ *
+ * Under QEMU's multi-threaded TCG an x87 status load on any processor clears
+ * IGNNE in processor 0's hflags2 by a plain read and write, which can undo
+ * the nested-paging flag that processor 0's VMRUN sets meanwhile.
+ */
+static int race_rows(struct guest *g, unsigned int seconds, int cpu)
+{
+    static const unsigned char loop[] = {0xA0, 0x00, 0x20, 0xE6, 0x10, 0xEB, 0xF9};
+    struct sigaction action;
+    struct kvm_regs regs;
+    unsigned long exits = 0;
+    pid_t child;
+    int status, result = 0;
+    time_t end;
+
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = wake_guest;
+    if (sigaction(SIGALRM, &action, NULL) != 0)
+        return fail("race alarm");
+    child = fork();
+    if (child < 0)
+        return fail("race fork");
+    if (child == 0)
+        fpu_child(cpu == 0 ? 1 : 0);
+    if (pin(cpu) != 0) {
+        result = fail("race affinity");
+        goto out;
+    }
+    g->mem[2u * PAGE] = 0x5A;
+    memcpy(g->mem + PAGE, loop, sizeof(loop));
+    memset(&regs, 0, sizeof(regs));
+    regs.rip = PAGE;
+    regs.rflags = 2;
+    if (ioctl(g->cpu, KVM_SET_REGS, &regs) != 0) {
+        result = fail("race registers");
+        goto out;
+    }
+    end = time(NULL) + (time_t)seconds;
+    while (time(NULL) < end) {
+        alarm(10);
+        if (ioctl(g->cpu, KVM_RUN, 0) != 0) {
+            fprintf(stderr, "svm-entry: race: fail: no exit for 10 s after %lu exits: errno %d\n",
+                    exits, errno);
+            result = -1;
+            break;
+        }
+        if (g->run->exit_reason != KVM_EXIT_IO || g->run->u.io.port != 0x10 ||
+            ((unsigned char *)g->run)[g->run->u.io.data_offset] != 0x5A) {
+            fprintf(stderr,
+                    "svm-entry: race: fail: exit %u, port %u, value 0x%02x after %lu exits\n",
+                    g->run->exit_reason, g->run->u.io.port,
+                    ((unsigned char *)g->run)[g->run->u.io.data_offset], exits);
+            result = -1;
+            break;
+        }
+        exits++;
+    }
+    alarm(0);
+    if (waitpid(child, &status, WNOHANG) != 0) {
+        child = -1;
+        if (result == 0)
+            result = fail("race child ended");
+    }
+    if (result == 0)
+        printf("svm-entry: race: pass: %lu exits in %u s on processor %d\n", exits, seconds, cpu);
+out:
+    if (child > 0) {
+        kill(child, SIGKILL);
+        waitpid(child, &status, 0);
+    }
+    return result;
+}
+
 /** Run the small guest; as PID 1, power off after reporting its result. */
 int main(int argc, char **argv)
 {
@@ -528,6 +632,13 @@ int main(int argc, char **argv)
     struct resources before, after;
     int result;
 
+    if (argc == 4 && strcmp(argv[1], "race") == 0) {
+        result = open_guest(&g);
+        if (result == 0)
+            result = race_rows(&g, (unsigned int)atoi(argv[2]), atoi(argv[3]));
+        close_guest(&g);
+        return result == 0 ? 0 : 1;
+    }
     if (resources_read(&before) != 0)
         return 1;
     result = open_guest(&g);

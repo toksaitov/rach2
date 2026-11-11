@@ -1,4 +1,4 @@
-.Dd October 15, 2026
+.Dd November 11, 2026
 .Dt SIGACTION 2
 .Os
 .Sh NAME
@@ -18,7 +18,8 @@
 .Nm signal ,
 .Nm sgetmask ,
 .Nm ssetmask ,
-.Nm pause
+.Nm pause ,
+.Nm restart_syscall
 .Nd control signal dispositions and masks
 .Sh SYNOPSIS
 .In signal.h
@@ -137,21 +138,63 @@ An ignored signal does not interrupt a blocking wait.
 A caught, stopping, or terminating signal that is not blocked can
 interrupt a wait;
 an operation that has transferred data may return a partial count.
-A system call interrupted before it transferred anything is restarted
-when no handler runs, as after a stop and a continue, and when the
-handler that runs has
-.Dv SA_RESTART ;
-otherwise it fails with
-.Er EINTR .
-The calls that wait for a signal or a deadline are never restarted:
-.Fn pause ,
-.Fn sigsuspend ,
-.Fn nanosleep ,
-.Fn clock_nanosleep ,
-.Fn poll ,
-.Fn ppoll ,
+A system call a signal interrupted before it transferred anything goes
+on as Linux's restart code for it says.
+When no handler runs, as after a stop and a continue, or when the signal
+that woke the call is ignored by the time it is taken, the call is
+restarted.
+A call resumed through
+.Nm restart_syscall
+keeps its first deadline.
 .Fn select ,
-.Fn pselect ,
+.Fn pselect
+and
+.Fn ppoll
+restart with the remainder written before the stop, so the time stopped
+is added to their first deadline.
+When a handler runs, most calls are restarted only under
+.Dv SA_RESTART
+and otherwise fail with
+.Er EINTR .
+.Pp
+The calls that wait for a signal or a deadline fail with
+.Er EINTR
+after a handler, whatever its flags, but are restarted when no handler
+runs:
+.Fn pause
+and
+.Fn sigsuspend
+with their own arguments,
+.Fn clock_nanosleep
+for a time with
+.Dv TIMER_ABSTIME
+the same,
+.Fn select ,
+.Fn pselect
+and
+.Fn ppoll
+with the time left that they write back to their timeout, and the System V
+message calls
+.Fn msgsnd
+and
+.Fn msgrcv
+with their own arguments, as Linux's
+.Er ERESTARTNOHAND
+does.
+.Fn nanosleep ,
+.Fn clock_nanosleep
+for an interval,
+.Fn poll
+and a
+.Xr futex 2
+wait with a timeout go on through
+.Nm restart_syscall
+to the deadline fixed at the first call, as Linux's
+.Er ERESTART_RESTARTBLOCK
+does.
+The calls that Linux gives
+.Er EINTR
+in every case are never restarted:
 .Fn epoll_wait ,
 .Fn epoll_pwait ,
 .Fn epoll_pwait2 ,
@@ -161,15 +204,29 @@ which
 .Fn sigwaitinfo
 and
 .Fn sigtimedwait
-make, and an ordinary
-.Xr futex 2
-wait with a timeout,
-nor are the System V calls that wait for a semaphore or a message:
-.Fn semop ,
-.Fn semtimedop ,
-.Fn msgsnd
+make, and the System V semaphore calls
+.Fn semop
 and
-.Fn msgrcv .
+.Fn semtimedop .
+.Pp
+.Nm restart_syscall
+resumes the call a signal that ran no handler cut short, which the kernel
+makes in its place: a tracer sees it at the entry stop of the restart, and
+the interrupted call leaves
+.Er ERESTART_RESTARTBLOCK ,
+516, in the result register at its exit stop, as on Linux.
+The other restart codes,
+.Er ERESTARTSYS ,
+.Er ERESTARTNOINTR
+and
+.Er ERESTARTNOHAND ,
+512 to 514, show there for the calls they stand for, and a tracer that
+puts another result there cancels the restart.
+A program never receives them.
+Called directly, or after a handler returned,
+.Nm restart_syscall
+has nothing to resume and fails with
+.Er EINTR .
 .Pp
 PI futex acquisition restarts after a handler even without
 .Dv SA_RESTART ,
@@ -373,6 +430,13 @@ A child made by
 inherits the stack, and
 .Xr execve 2
 removes it.
+.Pp
+.Xr execve 2
+gives each caught signal its default action and leaves each ignored one
+ignored, and every action loses its flags, restorer and mask, as on
+Linux, so that
+.Fn rt_sigaction
+then reports them as zero.
 .Ss System call interface
 Musl's
 .Vt sigset_t
@@ -421,6 +485,8 @@ EBX points to the new
 and ECX to the old one; either may be null.
 .It Nm pause No (29)
 No arguments.
+.It Nm restart_syscall No (0)
+No arguments; x86-64's number is 219.
 .It Nm sigreturn No (119)
 Musl's plain-handler restorer pops the signal argument before issuing
 the call.
@@ -638,6 +704,16 @@ information.
 takes a blocked signal with
 .Fn sigtimedwait
 and times out with nothing pending.
+.Pa tests/restartprobe.c
+stops and continues a child in each call that waits, sends it ignored
+signals, and interrupts it with a handler with and without
+.Dv SA_RESTART ;
+it checks each result against Linux's, that a timed call that goes on ends
+at its first deadline, that
+.Nm restart_syscall
+made directly returns
+.Er EINTR ,
+and what a tracer reads at the stops of a restart.
 .Sh ERRORS
 .Bl -tag -width "[EINVAL]"
 .It Bq Er EFAULT

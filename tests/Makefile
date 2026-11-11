@@ -33,11 +33,11 @@ MUSL_POST    = $(MUSL_PREFIX)/lib/libc.a $(MUSL_LIBGCC) $(MUSL_PREFIX)/lib/crtn.
 PROGS = hello forktest shelltest dirtest stattest usbprobe mouseprobe intrprobe keylatprobe evprobe \
         rmtest mvtest lstest stdintest dup2test \
         pingtest packetprobe rawprobe frag6probe netifprobe dgramprobe udptest tcptest sockettest dnstest auxvprobe \
-        tlsprobe ldtprobe fsbaseprobe wow64probe pure64probe futexvprobe mixprobe errnoprobe vmprobe mmapdevprobe udmabufprobe fenceprobe vgpuprobe i915gemprobe i915execprobe i915resetprobe drmprobe drmcompatprobe gpucompatprobe drmfuzz sysdrmprobe hotplugprobe vmfault forkro cowregrant \
-        usercopyfault fdstale dirgrow dirprobe unlinkdirprobe pathcanon timeprobe sigprobe credprobe ownprobe permprobe trapprobe ofdprobe \
+        tlsprobe ldtprobe fsbaseprobe wow64probe pure64probe futexvprobe futex2probe schedattrprobe membarrierprobe mixprobe errnoprobe vmprobe mmapdevprobe udmabufprobe fenceprobe vgpuprobe vgshmprobe i915gemprobe i915execprobe i915resetprobe drmprobe drmcompatprobe gpucompatprobe drmfuzz sysdrmprobe hotplugprobe vmfault forkro cowregrant \
+        usercopyfault fdstale dirgrow dirprobe unlinkdirprobe pathcanon timeprobe sigprobe credprobe ownprobe permprobe fsidprobe oldfsprobe openat2probe trapprobe ofdprobe \
         waitprobe exitprobe pipeprobe pollprobe devprobe ttyprobe jobprobe miscprobe \
-        ptyprobe rngprobe orphanprobe loopprobe zombieprobe survivorprobe procprobe suidprobe suidhelper sudoprobe modeprobe searchprobe stickyprobe blockprobe bootprobe persistprobe stressprobe winprobe dirtyprobe rebootprobe lagprobe fpuprobe xsaveprobe memprobe poolprobe vfsprobe mountprobe fatwriteprobe usbdiskprobe ext2probe krffsprobe loopdevprobe bootlogprobe lockwaitprobe \
-        idreport fdfull diskfull oomprobe limitprobe limitsprobe loadprobe conloadprobe partsprobe busprobe ahciprobe bigfileprobe blankprobe lenovoacpi watchdogprobe \
+        ptyprobe vhangprobe ttyflowprobe rngprobe orphanprobe loopprobe zombieprobe survivorprobe procprobe suidprobe suidhelper sudoprobe modeprobe searchprobe stickyprobe blockprobe bootprobe persistprobe stressprobe winprobe dirtyprobe rebootprobe lagprobe fpuprobe xsaveprobe memprobe poolprobe vfsprobe mountprobe fatwriteprobe usbdiskprobe ext2probe krffsprobe loopdevprobe bootlogprobe lockwaitprobe \
+        idreport fdfull diskfull oomprobe limitprobe limitsprobe numaprobe restartprobe loadprobe conloadprobe partsprobe busprobe ahciprobe bigfileprobe blankprobe lenovoacpi watchdogprobe pstoreprobe \
         drmcapture
 
 # The probes of an interface only i386 has, built for i686 alone: tlsprobe
@@ -71,14 +71,16 @@ TARGETS = $(addprefix $(BUILD)/, $(PROGS))
 # The i386 builds the x86-64 test image stages under /ia32, for the cases
 # that run an i386 program beside an x86-64 one on the x86-64 kernel:
 # mixprobe's i386 roles. The x86-64 compiler makes them with -m32, which a
-# probe can use, since it links no libgcc; they go to $(BUILD)/ia32/.
+# probe can use, since it links no libgcc, and the linker is told the i386
+# emulation, which Homebrew's compiler does not pass on for -m32; they go
+# to $(BUILD)/ia32/.
 IA32_PROGS = mixprobe
 ifeq ($(ARCH),x86_64)
 IA32_TARGETS = $(addprefix $(BUILD)/ia32/, $(IA32_PROGS))
 TARGETS += $(IA32_TARGETS)
 endif
-IA32_CFLAGS = -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -Wl,--build-id=none \
-              $(DEPFLAGS) $(EXTRA)
+IA32_CFLAGS = -m32 -Wl,-m,elf_i386 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 \
+              -Wl,--build-id=none $(DEPFLAGS) $(EXTRA)
 
 # The configuration fingerprint (mk/fingerprint.mk): a changed flag or a
 # reinstalled compiler rebuilds every probe. The purge names only this
@@ -97,7 +99,7 @@ $(TARGETS): $(CONFIG)
 # headers it includes in the .d that -MF names, so a changed header rebuilds it.
 $(BUILD)/%: %.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(if $(filter udmabufprobe fenceprobe vgpuprobe i915gemprobe i915execprobe i915resetprobe gpucompatprobe,$*),$(UDMABUF_CFLAGS)) -MF $(BUILD)/$*.d -o $@ $<
+	$(CC) $(CFLAGS) $(if $(filter udmabufprobe fenceprobe vgpuprobe vgshmprobe i915gemprobe i915execprobe i915resetprobe gpucompatprobe,$*),$(UDMABUF_CFLAGS)) -MF $(BUILD)/$*.d -o $@ $<
 
 # An i386 build, from the same source as the probe of its name.
 $(BUILD)/ia32/%: %.c

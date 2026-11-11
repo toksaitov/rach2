@@ -42,12 +42,16 @@ gnu|qemu,ssh,scp,sftp,python3|full|gnu-test*|4096
 webgl|qemu|full||8192|x86_64
 video|qemu,qemu-img,ssh,scp,ssh-keygen,xorriso,curl,sha256sum|full||8192|x86_64
 igt|qemu|full||4096|x86_64
-assign|qemu,mke2fs,ar,xz,curl,zstd|full||4096|x86_64
+assign|qemu,mke2fs,ar,xz,curl,zstd,mformat,mmd,mcopy|full||4096|x86_64
 kvm|qemu,mke2fs,ar,xz,curl|full||6144|x86_64
+bed-vtest|qemu,qemu-img,xorriso,curl,sha256sum,sha512sum,python3,mke2fs|full||8192|x86_64
+bed-forward|qemu,qemu-img,mke2fs,ssh,scp,ssh-keygen,xorriso,curl,sha256sum|full||12288|x86_64
+bed-shm|qemu,qemu-img,mke2fs,ssh,ssh-keygen,xorriso,curl,sha256sum|full||6144|x86_64
 modetest|qemu|full||2048
 piglit|qemu|full||8192|x86_64
 glmark2|qemu|full||8192|x86_64
 venus|qemu,mke2fs|full||8192|x86_64
+virgl|qemu,mke2fs|full||8192|x86_64
 vkpresent|qemu,mke2fs|full||8192|x86_64
 webgpu|qemu,mke2fs|full||8192|x86_64
 games-native|qemu|full||8192|x86_64
@@ -75,7 +79,7 @@ fdlock|qemu|full
 grow|qemu,mke2fs,e2fsck,qemu-img,xorriso|full||512
 drill|qemu,ssh,gzip,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 account|qemu|full
-large|qemu,mke2fs,e2fsck,mformat,hdiutil+newfs_exfat/mkfs.exfat+fsck.exfat|full
+large|qemu,mke2fs,e2fsck,mformat,hdiutil+newfs_exfat/mkfs.exfat+fsck.exfat|full||1536
 punch|qemu,mke2fs,debugfs,e2fsck|full||512
 ext2stop|qemu,mke2fs,e2fsck|full||256
 usb|qemu|core
@@ -143,6 +147,7 @@ dmabuf|qemu|core||512
 socket|qemu|core
 bootorder|qemu,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 reset|qemu|core
+panic|qemu|core
 netconsole-e1000|qemu|full
 audio|qemu|core
 input|qemu|core
@@ -165,7 +170,10 @@ d3d-wine|qemu,mke2fs|full||17408|x86_64
 d3d-vkd3d|qemu,mke2fs|full||17408|x86_64
 d3dvenus|qemu,mke2fs|full||17408|x86_64
 games-wine|qemu,mke2fs|full||8192|x86_64
+games-wm|qemu,mke2fs|full||8192|x86_64
+games-umu|qemu,mke2fs|full||8192|x86_64
 desktop|qemu,python3|full|desktop-test*|4096|
 vgpu|qemu|full||256
 browser|qemu|full|browser-test*|8192|x86_64
 gpucompat|qemu|full||640|i686
+wakelat|qemu|full||512|i686,x86_64|

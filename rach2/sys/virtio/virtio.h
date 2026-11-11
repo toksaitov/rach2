@@ -11,6 +11,8 @@
 #include "../lib/kint.h"
 #include "../lib/spinlock.h"
 
+struct shmem;
+
 /*
  * Every structure the device reads or writes is little-endian (virtio 1.2,
  * 1.4). Rach2's processors are little-endian, so the fields below are read
@@ -117,7 +119,8 @@ struct virtio_sg {
 
 /*
  * A split virtqueue. The ring memory comes from the transport's
- * `dma_alloc`, in one piece of `ring_bytes`; the record is the core's.
+ * `ring_alloc`, or its `dma_alloc` without one, in one piece of
+ * `ring_bytes`; the record is the core's.
  * `lock` guards the descriptors, the shadow fields and `token`, and is
  * taken with interrupts off, since `virtqueue_reap` runs in a handler.
  */
@@ -138,18 +141,33 @@ struct virtqueue {
     volatile struct virtq_desc *indirect; /* the tables, or NULL */
     uint64_t indirect_addr;
     uint32_t indirect_free;         /* a bit for each free table */
+    uint16_t max_chain;             /* descriptors one chain may hold; the transport's */
+    uint32_t max_bytes;             /* bytes one chain may carry each way, 0 for any */
     uint16_t free_head;             /* the first free descriptor */
     uint16_t nfree;                 /* free descriptors */
     uint16_t avail_idx;             /* the driver's ring index as last published */
     uint16_t last_used;             /* the device's ring index as last reaped */
     void *token[VIRTQ_MAX_SIZE];    /* by head; NULL for a free head */
+    uint32_t inlen[VIRTQ_MAX_SIZE]; /* bytes the device may write into a head's chain */
     uint16_t chain[VIRTQ_MAX_SIZE]; /* descriptors a head's chain holds */
+    uint16_t next[VIRTQ_MAX_SIZE];  /* the free list's and chains' links: the
+                                     * device's table is written, never read */
     int8_t table[VIRTQ_MAX_SIZE];   /* a head's indirect table, or -1 */
     virtqueue_done_t done;
     void *priv; /* the driver's */
     uint32_t added, completed;
     struct spinlock lock;
 };
+
+/* A run of a device's own memory, as a device that maps its buffers from
+ * its pages reports one (`map_pages`): the first page's address as the
+ * device addresses its memory, page-aligned, and the pages. */
+struct virtio_run {
+    uint64_t addr;
+    uint64_t pages;
+};
+
+struct virtio_map;
 
 /*
  * A transport's operations on its device. virtio-pci is the first
@@ -160,7 +178,8 @@ struct virtqueue {
  * context and may not be called from a handler.
  *
  * get_status, set_status: the device status byte. A write of 0 resets.
- * get_features: the 64 feature bits the device offers.
+ * get_features: the 64 feature bits the device offers; a transport with no
+ *     device to offer them adds FAILED to the status.
  * set_features: the bits the driver accepts.
  * config_generation: a count the device changes whenever its configuration
  *     changes, read before and after a read of several fields.
@@ -171,18 +190,55 @@ struct virtqueue {
  *     has no such queue.
  * queue_enable: give the device `vq`'s size, addresses and vector, which
  *     the transport sets in `vq->vector`, and enable it; 0 or -errno.
- *     `vq->notify` is the transport's to fill.
+ *     `vq->notify` is the transport's to fill, and so are `vq->max_chain`
+ *     and `vq->max_bytes` for a device that bounds a chain, which the core
+ *     sets to the queue's size and 0 before the call.
  * notify: tell the device queue `vq` has new buffers. A handler may call it.
  * irq_setup: prepare interrupts for `nqueues` queues, numbered 0 up, before
  *     they are set up, with every message held; 0 or -errno.
  * irq_start: let the interrupts through, once the queues are set up.
  * irq_release: stop the interrupts and give back what irq_setup took.
  * dma_alloc: zeroed memory the device can read and write by one address,
- *     at most a page, page-aligned, with that address in `*addr`; NULL when
- *     none. A larger buffer is a list of pieces.
- * dma_free: give back what dma_alloc gave, with its `bytes`.
+ *     at most a page, or `d->dma_max` bytes where the transport sets it,
+ *     page-aligned, with that address in `*addr`; NULL when none. A larger
+ *     buffer is a list of pieces.
+ * dma_free: give back what dma_alloc gave, with its `bytes`; where
+ *     `d->dma_max` is set, any whole pages of it, each given back once.
  * shm_region: shared memory region `id` (virtio 1.2, 2.10) as the device
  *     exposes it, its physical address and length; 0, or -ENOENT.
+ *
+ * The rest are optional, for a transport whose device reaches only memory
+ * the transport gives it, as one over a single shared region does; NULL
+ * keeps what virtio-pci does.
+ *
+ * ring_alloc: the memory of queue `index`'s rings, as dma_alloc gives it;
+ *     NULL takes it from dma_alloc. dma_free gives it back.
+ * backing_fill: give the pages of `sh`, `bytes` long and none given yet,
+ *     frames the device reaches, zeroed; 0, or -ENOMEM when the transport
+ *     has no room. NULL: a driver's pages come from anywhere, as they are
+ *     first asked for.
+ * backing_release: give back what backing_fill took for `sh`, once the
+ *     device no longer reads it and before the pages are freed; nothing for
+ *     pages it did not give.
+ * dma_addr: the address by which the device reaches the frame at physical
+ *     `phys`, in `*addr`; 0, or -EFAULT for a frame it cannot reach. NULL:
+ *     the physical address.
+ * put: the driver has let go of `d` for good, after its removal (below);
+ *     the transport may free its record.
+ *
+ * The last three are for a device whose buffers live in its own memory and
+ * reach the driver as lists of its pages, not through a shared memory
+ * region, as the shared region's VM gives them (VGS_TF_PAGES); a transport
+ * without them leaves all three NULL, and `pages` clear.
+ *
+ * map_pages: hold the frames behind `n` runs of the device's memory, in
+ *     order: 0 with the map in `*out`, or -EINVAL,
+ *     -EFAULT for memory that cannot be shared, -ENODEV, -ENOMEM. When the
+ *     transport must take the frames back before map_free, as when the
+ *     device's memory changes or its VM ends, it first calls
+ *     `revoke(owner)`, which stops every use of them and does not sleep.
+ * map_frame: the frame of page `i` of `m`, or 0 once it is taken back.
+ * map_free: let go of `m`, without its `revoke`, once nothing uses it.
  */
 struct virtio_ops {
     const char *name;
@@ -202,6 +258,15 @@ struct virtio_ops {
     void *(*dma_alloc)(struct virtio_dev *d, uint32_t bytes, uint64_t *addr);
     void (*dma_free)(struct virtio_dev *d, void *p, uint32_t bytes);
     int (*shm_region)(struct virtio_dev *d, uint8_t id, uint64_t *addr, uint64_t *len);
+    void *(*ring_alloc)(struct virtio_dev *d, uint16_t index, uint32_t bytes, uint64_t *addr);
+    int (*backing_fill)(struct virtio_dev *d, struct shmem *sh, uint64_t bytes);
+    void (*backing_release)(struct virtio_dev *d, struct shmem *sh);
+    int (*dma_addr)(struct virtio_dev *d, uintptr_t phys, uint64_t *addr);
+    void (*put)(struct virtio_dev *d);
+    int (*map_pages)(struct virtio_dev *d, const struct virtio_run *runs, uint32_t n,
+                     void (*revoke)(void *owner), void *owner, struct virtio_map **out);
+    uintptr_t (*map_frame)(struct virtio_map *m, uint64_t i);
+    void (*map_free)(struct virtio_map *m);
 };
 
 /*
@@ -219,7 +284,17 @@ struct virtio_dev {
     /* Called on a configuration change, from the interrupt handler, as
      * Linux's config_changed is; NULL ignores it. */
     void (*config_changed)(struct virtio_dev *d);
+    /* Called by a transport whose device can go away, in process context,
+     * when it has gone for good: the driver stops using it, unplugs what it
+     * made over it and later calls virtio_put. NULL ignores it. */
+    void (*removed)(struct virtio_dev *d);
     void *priv; /* the driver's */
+    /* The most bytes one dma_alloc gives, in whole pages that follow each
+     * other in the device's addresses; 0 for one page, as on virtio-pci. */
+    uint32_t dma_max;
+    /* The device maps its buffers from its own pages (`map_pages`), as
+     * the transport and the device have agreed; set by the transport. */
+    int pages;
     struct virtqueue *queues[VIRTIO_MAX_QUEUES];
     uint32_t config_events;
 };
@@ -248,7 +323,8 @@ int virtio_reset(struct virtio_dev *d);
  * VIRTIO_F_ORDER_PLATFORM). Then prepare interrupts for `nqueues` queues.
  *
  * @return 0 with `d->features` set; -ETIMEDOUT when the reset did not
- *         finish, -ENODEV for a device without VIRTIO_F_VERSION_1, -EIO
+ *         finish, -ENODEV for a device without VIRTIO_F_VERSION_1 or one
+ *         the transport marked FAILED while offering its features, -EIO
  *         when it refused the features, -EINVAL for more than
  *         VIRTIO_MAX_QUEUES queues, or the transport's error from its
  *         interrupts. On an error the status has FAILED set where the
@@ -270,8 +346,13 @@ int virtio_has(const struct virtio_dev *d, unsigned bit);
 int virtio_queue_setup(struct virtio_dev *d, uint16_t index, virtqueue_done_t done, void *priv,
                        struct virtqueue **out);
 
-/** Let the interrupts through and set DRIVER_OK: the device is live. */
-void virtio_ready(struct virtio_dev *d);
+/**
+ * Let the interrupts through and set DRIVER_OK: the device is live.
+ *
+ * @return 0, or -EIO when the device answers with FAILED or NEEDS_RESET,
+ *         as a transport whose device checks the driver's setup then does.
+ */
+int virtio_ready(struct virtio_dev *d);
 
 /**
  * Reset `d`, stop its interrupts, and free its queues. Memory the device
@@ -301,17 +382,53 @@ void virtio_dma_free(struct virtio_dev *d, void *p, uint32_t bytes);
 /** Shared memory region `id`, through the transport; see `shm_region`. */
 int virtio_shm_region(struct virtio_dev *d, uint8_t id, uint64_t *addr, uint64_t *len);
 
+/** Give `sh`'s pages from memory the device reaches; see `backing_fill`.
+ * 0 at once on a transport without the operation. */
+int virtio_backing_fill(struct virtio_dev *d, struct shmem *sh, uint64_t bytes);
+
+/** Give back what virtio_backing_fill took; see `backing_release`. */
+void virtio_backing_release(struct virtio_dev *d, struct shmem *sh);
+
+/** The device's address of the frame at `phys`; see `dma_addr`. */
+int virtio_dma_addr(struct virtio_dev *d, uintptr_t phys, uint64_t *addr);
+
+/** Hold the frames behind runs of the device's memory; see `map_pages`.
+ * -ENODEV on a transport without it. Under the big lock; does not sleep. */
+int virtio_map_pages(struct virtio_dev *d, const struct virtio_run *runs, uint32_t n,
+                     void (*revoke)(void *owner), void *owner, struct virtio_map **out);
+
+/** The frame of page `i` of a map; see `map_frame`. */
+uintptr_t virtio_map_frame(struct virtio_dev *d, struct virtio_map *m, uint64_t i);
+
+/** Let go of a map; see `map_free`. NULL is ignored. */
+void virtio_map_free(struct virtio_dev *d, struct virtio_map *m);
+
+/** The driver lets go of a removed device; see `put`. */
+void virtio_put(struct virtio_dev *d);
+
+/**
+ * Whether a buffer of `out` segments the device reads and `in` it writes,
+ * in `sg`, fits one chain of `vq`: no more descriptors than `max_chain` and
+ * no more bytes each way than `max_bytes`, once adjacent segments of the
+ * same way are one descriptor, as virtqueue_add makes them.
+ */
+int virtqueue_chain_fits(const struct virtqueue *vq, const struct virtio_sg *sg, unsigned out,
+                         unsigned in);
+
 /**
  * Offer a buffer of `out` segments the device reads followed by `in`
  * segments it writes, all in `sg`, with `token`, which `done` is given back.
  * The buffer is published at once; virtqueue_kick tells the device.
+ * Segments of the same way that are adjacent in the device's addresses go
+ * in one descriptor.
  *
  * A chain goes into the queue's descriptors when enough are free, and into
  * an indirect table when they are not, the feature was negotiated and a
  * table is free and long enough.
  *
- * @return 0; -EINVAL for no segments or a NULL token; -ENOSPC when it fits
- *         neither way now, and a completion will make room.
+ * @return 0; -EINVAL for no segments or a NULL token; -E2BIG for a buffer
+ *         that does not fit one chain (virtqueue_chain_fits); -ENOSPC when
+ *         it fits neither way now, and a completion will make room.
  */
 int virtqueue_add(struct virtqueue *vq, const struct virtio_sg *sg, unsigned out, unsigned in,
                   void *token);
@@ -365,5 +482,14 @@ int virtio_pci_find(uint16_t id, int nth, struct virtio_dev **out);
 /** The PCI function of `d`, for a driver that needs its class or BARs, or
  * NULL for a device of another transport. */
 const pci_device_t *virtio_pci_function(const struct virtio_dev *d);
+
+/*
+ * The shared-memory transport (shmem.c).
+ */
+
+/** Register /dev/vgpu-shm, through which ivshmemd(8) attaches a region
+ * shared with a VM whose device serves virtio-gpu (vgpu-shm(4)); 0 or the
+ * registration's error. Called once from drm_start. */
+int32_t vgpu_shm_start(void);
 
 #endif /* _VIRTIO_H_ */

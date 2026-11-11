@@ -1,6 +1,7 @@
 /*
  * cpuid.c: the CPUID KVM offers a guest, from the host's with what KVM
- * cannot give a guest taken out, and the lookups of a vCPU's CPUID.
+ * cannot give a guest taken out and KVM's own leaves added, and the lookups
+ * of a vCPU's CPUID.
  */
 
 #include "kvm.h"
@@ -9,12 +10,26 @@
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 
-/* The XCR0 components the kernel saves, and so can give a guest: x87, SSE,
- * AVX and AVX-512's three (arch/x86/fpu.h). */
+/* The XCR0 components a guest may have: x87, SSE, AVX and AVX-512's three
+ * (arch/x86/fpu.h). Not PKRU, which the kernel saves for its own threads:
+ * a guest is offered no PKU, may not set CR4.PKE, and so never changes
+ * PKRU, which keeps through a run the value the guest's image loads, and
+ * the host's comes back with the rest of its state after the run
+ * (vmx.c's and svm.c's `fpu_store`). */
 #define XCR0_KERNEL 0xE7ull
 
 #define XFEATURE_YMM    0x4ull
 #define XFEATURE_AVX512 0xE0ull
+
+/* Leaf 0xD, subleaf 1, EAX: XSAVEOPT, XSAVEC and XGETBV1, offered where
+ * the host has them, and XSAVES, offered where the backend's `xsaves` also
+ * allows it. A guest has XSAVES with IA32_XSS at 0, its only value
+ * (msr.c), as Linux 6.12 offers it with no supervisor state; the host's
+ * IA32_XSS, which the kernel never writes, is 0 too, so neither is
+ * switched around a run. */
+#define XSAVE_D1_EAX    0x7u
+#define XSAVE_D1_XSAVEC 0x2u
+#define XSAVE_D1_XSAVES 0x8u
 
 /*
  * The bits of each leaf a guest may have where the host has them, as
@@ -39,8 +54,9 @@
 /* Leaf 7, subleaf 0. EBX: as Linux, less SGX, MPX and Intel PT. ECX:
  * AVX512VBMI, UMIP, VBMI2, GFNI, VAES, VPCLMULQDQ, VNNI, BITALG,
  * VPOPCNTDQ, RDPID, BUS_LOCK_DETECT, CLDEMOTE, MOVDIRI and MOVDIR64B; not
- * PKU, whose PKRU state the kernel does not save, nor LA57 before the
- * guest-physical tables have five levels, nor WAITPKG or SGX_LC. EDX: the
+ * PKU, since a guest's XCR0 may not name PKRU (XCR0_KERNEL), nor LA57
+ * before the guest-physical tables have five levels, nor WAITPKG or
+ * SGX_LC. EDX: the
  * AVX-512 and string extensions, MD_CLEAR, SERIALIZE and TSXLDTRK; not
  * the speculation controls or ARCH_CAPABILITIES, whose MSRs are not
  * offered, nor AMX, whose state the kernel does not save. */
@@ -62,6 +78,17 @@
 #define LX1_EDX     0xEFD3FBFFu
 #define LX1_ECX_AVX 0x00010800u /* XOP, FMA4 */
 
+/* KVM's signature in the EBX, ECX and EDX of KVM_CPUID_SIGNATURE,
+ * "KVMKVMKVM\0\0\0". */
+#define KVM_SIG_EBX 0x4B4D564Bu
+#define KVM_SIG_ECX 0x564B4D56u
+#define KVM_SIG_EDX 0x0000004Du
+
+/* The hypervisor leaves' bases Linux searches for a signature: 0x40000000
+ * and each 0x100 above it to 0x4000FF00. */
+#define HV_BASE_FIRST 0x40000000u
+#define HV_BASE_LAST  0x4000FF00u
+
 /** The host's CPUID of `leaf` and `sub` into `e`, with its identity. */
 static void host_leaf(struct kvm_cpuid_entry2 *e, uint32_t leaf, uint32_t sub, uint32_t flags)
 {
@@ -72,29 +99,42 @@ static void host_leaf(struct kvm_cpuid_entry2 *e, uint32_t leaf, uint32_t sub, u
     kcpu_id_sub(leaf, sub, &e->eax, &e->ebx, &e->ecx, &e->edx);
 }
 
+/* The host's answer to `kvm_xcr0_supported` once `xcr0_known` is set. A
+ * CPUID traps to the hypervisor beneath a nested host, and each entry asks
+ * twice. Two processors that ask first store the same answer. */
+static volatile uint64_t xcr0_host;
+static volatile int xcr0_known;
+
 uint64_t kvm_xcr0_supported(void)
 {
     uint32_t a = 0, b = 0, c = 0, d = 0;
+    uint64_t mask = 0;
 
-    kcpu_id(1, &a, &b, &c, &d);
-    if (!(c & (1u << 26))) {
-        return 0;
+    if (xcr0_known) {
+        return xcr0_host;
     }
-    kcpu_id_sub(0xD, 0, &a, &b, &c, &d);
-    return ((uint64_t)a | ((uint64_t)d << 32)) & XCR0_KERNEL;
+    kcpu_id(1, &a, &b, &c, &d);
+    if (c & (1u << 26)) {
+        kcpu_id_sub(0xD, 0, &a, &b, &c, &d);
+        mask = ((uint64_t)a | ((uint64_t)d << 32)) & XCR0_KERNEL;
+    }
+    xcr0_host = mask;
+    xcr0_known = 1;
+    return mask;
 }
 
-/** The XSAVE area's bytes for the components `xcr0`, as the standard
- * form places them: the end of the last one, 576 at least. */
-static uint32_t xsave_size(uint64_t xcr0)
+uint32_t kvm_xsave_size(uint64_t features, int compacted)
 {
-    uint32_t a, b, c, d, size = 576, i;
+    uint32_t a, b, c, d, size = 576, off, i;
 
     for (i = 2; i < 64; i++) {
-        if ((xcr0 >> i) & 1u) {
+        if ((features >> i) & 1u) {
+            /* EAX the size, EBX the standard form's offset, ECX bit 1
+             * the compacted form's alignment to 64 bytes. */
             kcpu_id_sub(0xD, i, &a, &b, &c, &d);
-            if (a + b > size) {
-                size = a + b;
+            off = !compacted ? b : (c & 0x2u) ? (size + 63u) & ~63u : size;
+            if (off + a > size) {
+                size = off + a;
             }
         }
     }
@@ -150,12 +190,15 @@ static int filter(struct kvm_cpuid_entry2 *e, uint64_t xcr0)
         if (e->index == 0) {
             e->eax = (uint32_t)xcr0;
             e->edx = (uint32_t)(xcr0 >> 32);
-            e->ebx = e->ecx = xsave_size(xcr0);
+            e->ebx = e->ecx = kvm_xsave_size(xcr0, 0);
             return 1;
         }
         if (e->index == 1) {
-            e->eax &= 0x7u; /* XSAVEOPT, XSAVEC, XGETBV1; no XSAVES */
-            e->ebx = e->ecx = e->edx = 0;
+            e->eax &= XSAVE_D1_EAX |
+                      (kvm_backend && kvm_backend->xsaves && kvm_backend->xsaves() ? XSAVE_D1_XSAVES
+                                                                                   : 0u);
+            e->ebx = (e->eax & (XSAVE_D1_XSAVEC | XSAVE_D1_XSAVES)) ? kvm_xsave_size(xcr0, 1) : 0u;
+            e->ecx = e->edx = 0; /* IA32_XSS names no component */
             return 1;
         }
         return (xcr0 >> e->index) & 1u;
@@ -230,6 +273,67 @@ static int indexed(uint32_t leaf, uint32_t *n)
     }
 }
 
+uint32_t kvm_pv_supported(void)
+{
+    uint32_t f = (1u << KVM_FEATURE_NOP_IO_DELAY) | (1u << KVM_FEATURE_STEAL_TIME) |
+                 (1u << KVM_FEATURE_PV_UNHALT) | (1u << KVM_FEATURE_PV_SEND_IPI) |
+                 (1u << KVM_FEATURE_POLL_CONTROL) | (1u << KVM_FEATURE_PV_SCHED_YIELD);
+
+    /* Without the TSC's rate no kvmclock can be written, and a guest that
+     * enabled one would read a clock that never moves. */
+    if (kvm_tsc_khz() != 0) {
+        f |= (1u << KVM_FEATURE_CLOCKSOURCE) | (1u << KVM_FEATURE_CLOCKSOURCE2) |
+             (1u << KVM_FEATURE_CLOCKSOURCE_STABLE_BIT);
+    }
+    return f;
+}
+
+/** Append KVM's two leaves to `out`, which holds `*count` of `max`, as
+ * Linux's KVM_GET_SUPPORTED_CPUID gives them: 0, or -E2BIG. */
+static int32_t kvm_leaves(struct kvm_cpuid_entry2 *out, uint32_t *count, uint32_t max)
+{
+    struct kvm_cpuid_entry2 e;
+
+    if (*count + 2u > max) {
+        return -E2BIG;
+    }
+    k_memset(&e, 0, sizeof(e));
+    e.function = KVM_CPUID_SIGNATURE;
+    e.eax = KVM_CPUID_FEATURES;
+    e.ebx = KVM_SIG_EBX;
+    e.ecx = KVM_SIG_ECX;
+    e.edx = KVM_SIG_EDX;
+    out[(*count)++] = e;
+    k_memset(&e, 0, sizeof(e));
+    e.function = KVM_CPUID_FEATURES;
+    e.eax = kvm_pv_supported();
+    out[(*count)++] = e;
+    return 0;
+}
+
+int32_t kvm_cpuid_emulated(struct kvm_cpuid_entry2 *out, uint32_t max)
+{
+    uint32_t a = 0, b = 0, c = 0, d = 0;
+
+    if (max < 3u) {
+        return -E2BIG;
+    }
+    k_memset(out, 0, 3u * sizeof(*out));
+    out[0].eax = 7;
+    out[1].function = 1;
+    out[1].ecx = 1u << 22;
+    out[2].function = 7;
+    out[2].flags = KVM_CPUID_FLAG_SIGNIFCANT_INDEX;
+    kcpu_id(0x80000000u, &a, &b, &c, &d);
+    if (a >= 0x80000001u) {
+        kcpu_id(0x80000001u, &a, &b, &c, &d);
+        if ((d >> 27) & 1u) {
+            out[2].ecx = 1u << 22;
+        }
+    }
+    return 3;
+}
+
 int32_t kvm_cpuid_supported(struct kvm_cpuid_entry2 *out, uint32_t max)
 {
     uint64_t xcr0 = kvm_xcr0_supported();
@@ -272,7 +376,27 @@ int32_t kvm_cpuid_supported(struct kvm_cpuid_entry2 *out, uint32_t max)
             }
         }
     }
+    if (kvm_leaves(out, &count, max) != 0) {
+        return -E2BIG;
+    }
     return (int32_t)count;
+}
+
+int kvm_cpuid_host_has(uint32_t function, int reg, int bit)
+{
+    uint32_t top = 0, b = 0, c = 0, d = 0, r;
+    struct kvm_cpuid_entry2 e;
+
+    kcpu_id(function & 0x80000000u, &top, &b, &c, &d);
+    if (function > top) {
+        return 0;
+    }
+    host_leaf(&e, function, 0, 0);
+    if (!filter(&e, kvm_xcr0_supported())) {
+        return 0;
+    }
+    r = reg == 0 ? e.eax : reg == 1 ? e.ebx : reg == 2 ? e.ecx : e.edx;
+    return (r >> bit) & 1u;
 }
 
 const struct kvm_cpuid_entry2 *kvm_cpuid_find(const struct kvm_vcpu *v, uint32_t function,
@@ -301,4 +425,63 @@ uint64_t kvm_xcr0_guest(const struct kvm_vcpu *v)
     }
     xcr0 = (uint64_t)e->eax | ((uint64_t)e->edx << 32);
     return (xcr0 & kvm_xcr0_supported()) | 0x1u;
+}
+
+void kvm_cpuid_xsave_sizes(const struct kvm_vcpu *v, struct kvm_cpuid_entry2 *e, uint32_t n)
+{
+    uint32_t i;
+
+    for (i = 0; i < n; i++) {
+        if (e[i].function != 0xDu) {
+            continue;
+        }
+        if (e[i].index == 0) {
+            e[i].ebx = kvm_xsave_size(v->xcr0, 0);
+        } else if (e[i].index == 1 && (e[i].eax & (XSAVE_D1_XSAVEC | XSAVE_D1_XSAVES))) {
+            e[i].ebx = kvm_xsave_size(v->xcr0, 1);
+        }
+    }
+}
+
+/** The entry of `v`'s CPUID for `function` that a caller may change,
+ * subleaf 0 or the only one, or NULL. */
+static struct kvm_cpuid_entry2 *entry_of(struct kvm_vcpu *v, uint32_t function)
+{
+    uint32_t i;
+
+    for (i = 0; i < v->cpuid_nent; i++) {
+        if (v->cpuid[i].function == function) {
+            return &v->cpuid[i];
+        }
+    }
+    return NULL;
+}
+
+void kvm_pv_cpuid_update(struct kvm_vcpu *v, int set)
+{
+    struct kvm_cpuid_entry2 *sig, *feat;
+    uint32_t base;
+
+    for (base = HV_BASE_FIRST; base <= HV_BASE_LAST; base += 0x100u) {
+        sig = entry_of(v, base);
+        if (sig && sig->ebx == KVM_SIG_EBX && sig->ecx == KVM_SIG_ECX && sig->edx == KVM_SIG_EDX) {
+            break;
+        }
+    }
+    if (base > HV_BASE_LAST) {
+        return;
+    }
+    feat = entry_of(v, base | KVM_CPUID_FEATURES);
+    if (!feat) {
+        return;
+    }
+    if (set && (v->vm->disable_exits & KVM_X86_DISABLE_EXITS_HLT)) {
+        feat->eax &= ~(1u << KVM_FEATURE_PV_UNHALT);
+    }
+    v->pv_features = feat->eax;
+}
+
+int kvm_pv_has(const struct kvm_vcpu *v, int bit)
+{
+    return !v->pv_enforce || ((v->pv_features >> bit) & 1u) != 0;
 }

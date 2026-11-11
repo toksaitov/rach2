@@ -32,6 +32,7 @@
 #include "../serial.h"
 #include "../rtc.h"
 #include "../lib/kirq.h"
+#include "../lib/spinlock.h"
 #include "../irq.h"
 #include "../proc/suspend.h"
 #include "../proc/wait_queue.h"
@@ -1180,7 +1181,7 @@ static void dev_mem_put(void *obj)
     (void)obj;
 }
 
-static const struct vm_device_ops dev_mem_vm_ops = {dev_mem_page, dev_mem_put};
+static const struct vm_device_ops dev_mem_vm_ops = {dev_mem_page, dev_mem_put, NULL};
 
 /**
  * mmap of /dev/mem: a shared mapping of the frames from the page offset,
@@ -1331,16 +1332,20 @@ static const struct file_ops screenlog_ops = {
  * else as Linux answers; a time outside 2000 to 2099, which the clock's two
  * year digits cannot hold, is -EINVAL.
  *
- * Its alarm, which `rtcwake` sets, is a time of day the clock raises IRQ 8
- * at: RTC_ALM_SET and RTC_ALM_READ set and read the time of day,
- * RTC_AIE_ON and RTC_AIE_OFF enable and disable its interrupt, and
- * RTC_WKALM_SET and RTC_WKALM_RD set and read a date and time with the
- * interrupt's state in a `struct rtc_wkalrm`, which as on Linux without a
- * day alarm must lie within a day ahead, and not in the past. A read waits
- * for an alarm and gives an unsigned long, as Linux's: the alarms since the
- * last read in the bits above the low eight, with RTC_AF and RTC_IRQF. An
- * alarm is a wake event of a suspend to idle (`suspend_wake`). The clock's
- * update and periodic interrupts are not given: RTC_UIE_ON is -ENOTTY.
+ * Its alarm, which `rtcwake` sets, is a date and time, as Linux's rtc core
+ * keeps it, which the clock, holding a time of day, raises IRQ 8 at:
+ * RTC_WKALM_SET and RTC_WKALM_RD set and read the date and time with
+ * whether the alarm is enabled in a `struct rtc_wkalrm`; RTC_ALM_SET sets
+ * a time of day for the next day it falls on, disabled, and RTC_ALM_READ
+ * reads the date and time; RTC_AIE_ON and RTC_AIE_OFF enable and disable
+ * the alarm. An enabled alarm must lie within a day ahead, as on Linux
+ * without a day alarm; one not after now comes at once. An alarm comes
+ * once, which disables it and keeps its time. A read waits for an alarm and
+ * gives an unsigned long, as Linux's: the alarms since the last read, which
+ * a set does not clear, in the bits above the low eight, with RTC_AF and
+ * RTC_IRQF. An alarm is a wake event of a suspend to idle (`suspend_wake`).
+ * The clock's update and periodic interrupts are not given: RTC_UIE_ON is
+ * -ENOTTY.
  */
 #define RTC_AIE_ON    0x7001u
 #define RTC_AIE_OFF   0x7002u
@@ -1353,24 +1358,64 @@ static const struct file_ops screenlog_ops = {
 #define RTC_AF        0x20u
 #define RTC_IRQF      0x80u
 
-/* The alarm's state: the interrupts since the last read, and the date and
- * time RTC_WKALM_SET last set, -1 for none, which RTC_WKALM_RD gives back
- * and /sys/class/rtc/rtc0/wakealarm reads. */
+/* The alarm's state, as Linux's aie_timer keeps it: the date and time it is
+ * for, which a set changes and nothing else, so that RTC_WKALM_RD and
+ * RTC_ALM_READ give it back after it has come; whether it is enabled, set
+ * and not yet come; and the interrupts since the last read. Until the
+ * first use takes the clock's own alarm (`rtc_wake_ready`), the time is
+ * none. */
 static wait_queue_t rtc_wq;
 static volatile uint32_t rtc_alarms;
-static int64_t rtc_wake_at = -1;
+static rtc_time_t rtc_wake;
+static volatile int rtc_wake_on;
+static int rtc_wake_ready;
 static int rtc_irq_ready; /* the alarm interrupt is attached (`rtc_irq_setup`) */
+/* Protects `rtc_alarms` and `rtc_wake_on` against the alarm interrupt, which
+ * may come on another processor. */
+static struct spinlock rtc_alarm_lock = SPINLOCK_INIT;
 
-/** The clock's alarm interrupt: an alarm counted, its readers woken, and a
- * suspend to idle ended. */
+/* How `rtc_alarm_came` judges an alarm: due by the clock, whatever its state;
+ * due by the clock and still enabled; or raised by the clock's interrupt,
+ * whose status C must show the alarm's flag. */
+#define RTC_CAME_DUE    0
+#define RTC_CAME_ARMED  1
+#define RTC_CAME_RAISED 2
+
+/** Count an alarm that has come, which ends it, wake its readers and end
+ * a suspend to idle. The alarm is one-shot, as Linux's aie_timer, whose
+ * expiry disables it and keeps its time (drivers/rtc/interface.c:951-955),
+ * and the clock's driver turns the interrupt off at the first alarm
+ * (rtc-cmos.c:731-733). With RTC_CAME_ARMED or RTC_CAME_RAISED, only an
+ * alarm still enabled comes, as Linux's rtc_timer_do_work expires only a
+ * timer still queued (interface.c:947-955), so that the interrupt and a
+ * second reading of the clock that both find it due count it once. The
+ * interrupt reads status C inside `rtc_alarm_lock`, so that no set or
+ * disable on another processor comes between that read and the test of the
+ * alarm's state: a flag left by an alarm that a set has since replaced is
+ * cleared by the set's own read of status C, or read here before the set
+ * begins, and never counts as the new alarm. Any context. */
+static void rtc_alarm_came(int how)
+{
+    uint32_t flags = spin_lock_irqsave(&rtc_alarm_lock);
+    int came = how == RTC_CAME_RAISED ? rtc_alarm_ack() : 1;
+
+    if (!came || (how != RTC_CAME_DUE && !rtc_wake_on)) {
+        spin_unlock_irqrestore(&rtc_alarm_lock, flags);
+        return;
+    }
+    rtc_alarm_interrupts(0);
+    rtc_wake_on = 0;
+    rtc_alarms++;
+    spin_unlock_irqrestore(&rtc_alarm_lock, flags);
+    wq_wake_all(&rtc_wq);
+    suspend_wake();
+}
+
+/** The clock's alarm interrupt: an alarm that may have come. */
 static void rtc_alarm_irq(isr_params_t *params)
 {
     (void)params;
-    if (rtc_alarm_ack()) {
-        rtc_alarms++;
-        wq_wake_all(&rtc_wq);
-        suspend_wake();
-    }
+    rtc_alarm_came(RTC_CAME_RAISED);
 }
 
 /** Take the clock's alarm interrupt, once. */
@@ -1383,8 +1428,125 @@ static void rtc_irq_setup(void)
     }
 }
 
+/**
+ * Take the clock's alarm as the alarm's time on the first use, as Linux
+ * does when it registers the clock: the clock's time of day, a field the
+ * clock does not hold taken from now, with today's date, or tomorrow's when
+ * it is not after now (drivers/rtc/interface.c:292-340), and disabled, its
+ * interrupt off (rtc-cmos.c:1066). 0, or -EIO when the clock cannot be
+ * read.
+ */
+static int32_t rtc_wake_setup(void)
+{
+    rtc_time_t now, t;
+
+    rtc_irq_setup();
+    if (rtc_wake_ready) {
+        return 0;
+    }
+    if (rtc_read_clock(&now) != 0) {
+        return -EIO;
+    }
+    t = now;
+    rtc_alarm_read(&t);
+    if (t.second < 0 || t.second > 59) {
+        t.second = now.second;
+    }
+    if (t.minute < 0 || t.minute > 59) {
+        t.minute = now.minute;
+    }
+    if (t.hour < 0 || t.hour > 23) {
+        t.hour = now.hour;
+    }
+    if (rtc_seconds_of(&t) <= rtc_seconds_of(&now)) {
+        rtc_time_of_seconds(rtc_seconds_of(&t) + 86400, &t);
+    }
+    rtc_alarm_interrupts(0);
+    rtc_wake = t;
+    rtc_wake_on = 0;
+    rtc_wake_ready = 1;
+    return 0;
+}
+
+/** Disable the alarm, its interrupt off, keeping its time, as Linux's
+ * rtc_timer_remove of the last timer (drivers/rtc/interface.c:897-907). */
+static void rtc_wake_disable(void)
+{
+    uint32_t flags = spin_lock_irqsave(&rtc_alarm_lock);
+
+    rtc_alarm_interrupts(0);
+    rtc_wake_on = 0;
+    spin_unlock_irqrestore(&rtc_alarm_lock, flags);
+}
+
+/**
+ * Enable the alarm for its time, as Linux's rtc_timer_enqueue does: a time
+ * not after now raises it at once (drivers/rtc/interface.c:428-429 and
+ * 858-861), and one more than a day less a second ahead, which the CMOS
+ * clock without a day alarm cannot hold, is -EINVAL and leaves it disabled
+ * (rtc-cmos.c:413-423, interface.c:862-866). An alarm due within a second
+ * reads the clock again once it is armed, as Linux's __rtc_set_alarm
+ * (interface.c:459-466), since the clock may have reached it between the
+ * first reading and the write, and then the CMOS alarm would match only a
+ * day later; one that has become due comes. The alarms not yet read are
+ * kept, as Linux clears them only at open and read (drivers/rtc/dev.c:34,
+ * 158-159). 0, -EINVAL, or -EIO when the clock cannot be read, which leaves
+ * the alarm disabled (interface.c:862-866).
+ */
+static int32_t rtc_wake_enable(void)
+{
+    rtc_time_t now;
+    int64_t at = rtc_seconds_of(&rtc_wake), now_s;
+    uint32_t flags;
+
+    if (rtc_read_clock(&now) != 0) {
+        return -EIO;
+    }
+    now_s = rtc_seconds_of(&now);
+    if (at <= now_s) {
+        rtc_alarm_came(RTC_CAME_DUE);
+        return 0;
+    }
+    if (at - now_s > 86400 - 1) {
+        rtc_wake_disable();
+        return -EINVAL;
+    }
+    flags = spin_lock_irqsave(&rtc_alarm_lock);
+    rtc_alarm_interrupts(0);
+    rtc_alarm_write(&rtc_wake);
+    rtc_wake_on = 1;
+    rtc_alarm_interrupts(1);
+    spin_unlock_irqrestore(&rtc_alarm_lock, flags);
+    if (at - now_s <= 1) {
+        if (rtc_read_clock(&now) != 0) {
+            rtc_wake_disable();
+            return -EIO;
+        }
+        if (rtc_seconds_of(&now) >= at) {
+            rtc_alarm_came(RTC_CAME_ARMED);
+        }
+    }
+    return 0;
+}
+
+/**
+ * Set the alarm to `t`, a valid date and time, enabled or not, as Linux's
+ * rtc_set_alarm: an enabled alarm is disabled first, the time is kept
+ * whatever comes of enabling it, and then it is enabled when `enabled`
+ * says (drivers/rtc/interface.c:494-508). 0, or the error of
+ * `rtc_wake_enable`.
+ */
+static int32_t rtc_wake_set(const rtc_time_t *t, int enabled)
+{
+    rtc_irq_setup();
+    rtc_wake_disable();
+    rtc_wake = *t;
+    rtc_wake_ready = 1;
+    return enabled ? rtc_wake_enable() : 0;
+}
+
 /** The wait condition of a read: an alarm has come since the last read. */
-static int rtc_alarm_came(void *arg)
+static int rtc_alarm_pending(void *arg)
 {
     (void)arg;
     return rtc_alarms != 0;
@@ -1411,14 +1573,14 @@ static int32_t dev_rtc_read(fd_entry_t *e, char __user *buf, uint32_t count)
         if (e->ofd->status_flags & OFD_NONBLOCK) {
             return -EAGAIN;
         }
-        if (wq_wait_event(&rtc_wq, rtc_alarm_came, NULL) < 0) {
+        if (wq_wait_event(&rtc_wq, rtc_alarm_pending, NULL) < 0) {
             return -EINTR;
         }
     }
-    flags = kirq_save();
+    flags = spin_lock_irqsave(&rtc_alarm_lock);
     data = (unsigned long)rtc_alarms << 8 | RTC_AF | RTC_IRQF;
     rtc_alarms = 0;
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&rtc_alarm_lock, flags);
     if (count == sizeof(word)) {
         word = (uint32_t)data;
         return copy_to_user(buf, &word, sizeof(word)) != 0 ? -EFAULT : (int32_t)sizeof(word);
@@ -1438,40 +1600,43 @@ static short dev_rtc_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 
 int64_t devfs_rtc_wakealarm(void)
 {
-    return rtc_wake_at;
+    return rtc_wake_on ? rtc_seconds_of(&rtc_wake) : -1;
 }
 
 int32_t devfs_rtc_set_wakealarm(int64_t at)
 {
     rtc_time_t now, t;
-    int64_t now_s;
 
-    rtc_irq_setup();
     if (at < 0) {
-        rtc_alarm_interrupts(0);
-        rtc_wake_at = -1;
-        return 0;
+        /* Linux's wakealarm_store disables the alarm with a time five
+         * minutes ahead (drivers/rtc/sysfs.c:203-209). */
+        if (rtc_read_clock(&now) != 0) {
+            return -EIO;
+        }
+        rtc_time_of_seconds(rtc_seconds_of(&now) + 300, &t);
+        return rtc_wake_set(&t, 0);
     }
-    if (rtc_read_clock(&now) != 0) {
-        return -EIO;
+    if (rtc_time_of_seconds(at, &t) != 0) {
+        return -EINVAL; /* a year rtc_valid_tm refuses (drivers/rtc/lib.c:163-164) */
     }
-    now_s = rtc_seconds_of(&now);
-    if (at <= now_s) {
-        return -ETIME;
-    }
-    if (at - now_s > 86400) {
-        return -EINVAL; /* a time of day: no further than a day ahead */
-    }
-    rtc_time_of_seconds((uint32_t)at, &t);
-    rtc_alarm_interrupts(0);
-    rtc_alarm_write(&t);
-    rtc_alarms = 0;
-    rtc_wake_at = at;
-    rtc_alarm_interrupts(1);
-    return 0;
+    return rtc_wake_set(&t, 1);
 }
 
-/** The Linux `struct rtc_time` `tm` as a time of the clock's calendar. */
+/** Whether the Linux `struct rtc_time` `tm` is a valid date and time from
+ * 1970, as Linux's rtc_valid_tm decides (drivers/rtc/lib.c:161-172), which
+ * every alarm set passes before it changes anything. */
+static int rtc_tm_valid(const int32_t *tm)
+{
+    if (tm[5] < 70 || tm[5] > 0x7fffffffL - 1900 || (uint32_t)tm[4] >= 12 || tm[3] < 1 ||
+        tm[3] > rtc_days_in_month(tm[5] + 1900, tm[4] + 1) || (uint32_t)tm[2] >= 24 ||
+        (uint32_t)tm[1] >= 60 || (uint32_t)tm[0] >= 60) {
+        return 0;
+    }
+    return 1;
+}
+
+/** The Linux `struct rtc_time` `tm`, a valid one (`rtc_tm_valid`), as a
+ * time of the clock's calendar. */
 static void rtc_from_tm(const int32_t *tm, rtc_time_t *t)
 {
     t->second = tm[0];
@@ -1496,26 +1661,27 @@ static void rtc_to_tm(const rtc_time_t *t, int32_t *tm)
 }
 
 /** RTC_WKALM_SET and RTC_WKALM_RD's `struct rtc_wkalrm` at `arg`: whether
- * the alarm is enabled, whether it has come, and its date and time. With no
- * wake alarm set, a read gives the clock's alarm with today's date, and is
- * -EIO when the clock cannot be read. A set is -EACCES for a caller that is
- * not privileged; 0, -EFAULT, or the error of `devfs_rtc_set_wakealarm`. */
+ * the alarm is enabled, `pending`, which a read gives as 0, and its date and
+ * time, which a read gives back after the alarm has come, as Linux's
+ * rtc_read_alarm (drivers/rtc/interface.c:398-401). A set is
+ * -EACCES for a caller that is not privileged and -EINVAL for a date and
+ * time `rtc_tm_valid` refuses, which leaves the alarm as it was. 0,
+ * -EFAULT, -EIO when the clock cannot be read, or the error of
+ * `rtc_wake_set`. */
 static int32_t dev_rtc_wkalarm(uint32_t request, uintptr_t arg)
 {
     uint8_t w[40];
     rtc_time_t t;
-    int32_t tm[9];
+    int32_t tm[9], rc;
 
     if (request == RTC_WKALM_RD) {
-        if (rtc_wake_at >= 0) {
-            rtc_time_of_seconds((uint32_t)rtc_wake_at, &t);
-        } else if (rtc_read_clock(&t) != 0) {
-            return -EIO;
+        rc = rtc_wake_setup();
+        if (rc != 0) {
+            return rc;
         }
         k_memset(w, 0, sizeof(w));
-        w[0] = (uint8_t)rtc_alarm_read(&t);
-        w[1] = rtc_alarms != 0;
-        rtc_to_tm(&t, tm);
+        w[0] = (uint8_t)(rtc_wake_on != 0);
+        rtc_to_tm(&rtc_wake, tm);
         k_memcpy(w + 4, tm, sizeof(tm));
         return copy_to_user((void __user *)arg, w, sizeof(w)) != 0 ? -EFAULT : 0;
     }
@@ -1526,11 +1692,11 @@ static int32_t dev_rtc_wkalarm(uint32_t request, uintptr_t arg)
         return -EFAULT;
     }
     k_memcpy(tm, w + 4, sizeof(tm));
-    rtc_from_tm(tm, &t);
-    if (!w[0]) {
-        return devfs_rtc_set_wakealarm(-1);
+    if (!rtc_tm_valid(tm)) {
+        return -EINVAL;
     }
-    return devfs_rtc_set_wakealarm(rtc_seconds_of(&t));
+    rtc_from_tm(tm, &t);
+    return rtc_wake_set(&t, w[0] != 0);
 }
 
 /** write of /dev/rtc0: -EINVAL, as Linux's has no write. */
@@ -1542,42 +1708,64 @@ static int32_t dev_rtc_write(fd_entry_t *e, const char __user *buf, uint32_t cou
     return -EINVAL;
 }
 
-/** RTC_ALM_READ, RTC_ALM_SET, RTC_AIE_ON and RTC_AIE_OFF: the alarm's time
- * of day, read with today's date, or set, and its interrupt on or off, the
- * last three for a privileged caller. 0, -EIO when the clock cannot be read,
- * -EACCES, -EFAULT, or -EINVAL for a time of day out of range. */
+/**
+ * RTC_ALM_READ, RTC_ALM_SET, RTC_AIE_ON and RTC_AIE_OFF, as Linux's
+ * rtc_dev_ioctl: a read gives the alarm's date and time; a set takes a time
+ * of day for today, or tomorrow when it is before now, and leaves the alarm
+ * disabled (drivers/rtc/dev.c:268-318); RTC_AIE_ON enables the alarm, which
+ * comes at once when its time is not after now (dev.c:347-349,
+ * interface.c:557-559), and RTC_AIE_OFF disables it. The last three are a
+ * privileged caller's. 0, -EIO when the clock cannot be read, -EACCES,
+ * -EFAULT, -EINVAL for a time of day out of range, or the error of
+ * `rtc_wake_enable`.
+ */
 static int32_t dev_rtc_alarm(uint32_t request, uintptr_t arg)
 {
-    int32_t tm[9];
-    rtc_time_t t;
+    int32_t tm[9], rc;
+    rtc_time_t now, t;
 
     if (request == RTC_ALM_READ) {
-        if (rtc_read_clock(&t) != 0) {
-            return -EIO;
+        rc = rtc_wake_setup();
+        if (rc != 0) {
+            return rc;
         }
-        rtc_alarm_read(&t);
-        rtc_to_tm(&t, tm);
+        rtc_to_tm(&rtc_wake, tm);
         return copy_to_user((void __user *)arg, tm, sizeof(tm)) != 0 ? -EFAULT : 0;
     }
     if (!proc_privileged(current_proc)) {
         return -EACCES;
     }
-    rtc_irq_setup();
-    if (request != RTC_ALM_SET) {
-        rtc_alarm_interrupts(request == RTC_AIE_ON);
+    rc = rtc_wake_setup();
+    if (rc != 0) {
+        return rc;
+    }
+    if (request == RTC_AIE_ON) {
+        return rtc_wake_on ? 0 : rtc_wake_enable();
+    }
+    if (request == RTC_AIE_OFF) {
+        rtc_wake_disable();
         return 0;
     }
     if (copy_from_user(tm, (const void __user *)arg, sizeof(tm)) != 0) {
         return -EFAULT;
     }
-    if (tm[0] < 0 || tm[0] > 59 || tm[1] < 0 || tm[1] > 59 || tm[2] < 0 || tm[2] > 23) {
+    if (rtc_read_clock(&now) != 0) {
+        return -EIO;
+    }
+    tm[3] = now.day;
+    tm[4] = now.month - 1;
+    tm[5] = now.year - 1900;
+    if (!rtc_tm_valid(tm)) {
         return -EINVAL;
     }
-    t.second = tm[0];
-    t.minute = tm[1];
-    t.hour = tm[2];
-    rtc_alarm_write(&t);
-    return 0;
+    rtc_from_tm(tm, &t);
+    if (rtc_seconds_of(&t) < rtc_seconds_of(&now)) {
+        rtc_time_of_seconds(rtc_seconds_of(&now) + 86400, &now);
+        t.day = now.day;
+        t.month = now.month;
+        t.year = now.year;
+    }
+    return rtc_wake_set(&t, 0);
 }
 
 /** The ioctls of /dev/rtc0 named before its request numbers; -ENOTTY for
@@ -2384,6 +2572,7 @@ int devfs_open(const char *name, int flags)
         e->type = FD_TYPE_CONSOLE;
         e->ops = NULL;
         e->priv = NULL;
+        e->ofd->tty_hangups = console_tty.vhangups;
     }
 
     if ((flags & 3) == 1) {
@@ -3040,6 +3229,11 @@ int devfs_fd_is_raw(struct fd_entry *e)
     dev = e->dev;
     return dev->ops == &bootpart_ops || dev->ops == &grubcore_ops || dev->ops == &diskwin_ops ||
            dev->ops == &mem_ops || dev->ops == &loop_ops;
+}
+
+int devfs_fd_is_mem(struct fd_entry *e)
+{
+    return e && e->type == FD_TYPE_DEVICE && e->dev && e->dev->ops == &mem_ops;
 }
 
 int devfs_fd_raw_size(struct fd_entry *e, uint64_t *size)

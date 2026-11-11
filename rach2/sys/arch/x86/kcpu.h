@@ -44,4 +44,10 @@ int kcpu_rdmsr_safe(uint32_t msr, uint64_t *value);
 int kcpu_wrmsr_safe(uint32_t msr, uint64_t value);
 #endif
 
+/** Whether XSAVES may be used (xsaves.c): leaf 0xD subleaf 1 reports it,
+ * and the part is not an AMD Zen 1 or Zen 2, family 0x17, whose XSAVES
+ * malfunctions by Erratum 1386, unless its model, stepping and microcode
+ * revision are the fixed ones Linux 6.12's `fix_erratum_1386` names. */
+int kcpu_xsaves_usable(void);
+
 #endif /* _KCPU_H_ */

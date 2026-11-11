@@ -34,7 +34,7 @@ struct dma_buf {
     struct dma_resv *resv;
     struct dma_resv own;
     wait_queue_t wq;
-    struct dma_fence *poll_fences[2];
+    struct dma_fence *poll_fences[2]; /* leaf each poll listens on, or NULL */
     struct dma_buf_poll_cb poll_cb[2];
 };
 
@@ -72,9 +72,37 @@ struct dma_fence *dma_fence_unwrap_merge(struct dma_fence **fences, uint32_t cou
 /** Number of leaf fences in Linux's dma_fence_unwrap order, and the
  * borrowed leaf at index, or NULL: an array's fences, a chain's own fence
  * and those of its earlier points not yet signalled, or the fence itself.
- * The leaves stay put only until the caller sleeps. */
+ * Each call walks the leaves afresh, and an earlier point that signals
+ * between two calls, which an interrupt may make it do, leaves the list
+ * and moves the later leaves down: a caller that visits every leaf walks
+ * them with a `struct dma_fence_unwrap` instead. */
 uint32_t dma_fence_count(struct dma_fence *fence);
 struct dma_fence *dma_fence_at(struct dma_fence *fence, uint32_t index);
+
+/*
+ * A walk over the leaves of a fence in the order of dma_fence_count, as
+ * Linux's struct dma_fence_unwrap and dma_fence_unwrap_for_each: each
+ * leaf is visited once, whatever signals meanwhile, and an earlier point
+ * whose fence has signalled when the walk reaches it is passed over.
+ * `chain` is the point the walk is at, with a reference, so that the
+ * leaf it returned stays while the caller sleeps; `array` is the point's
+ * fence when that is an array, borrowed from the point, and `index` the
+ * array's fence returned last.
+ */
+struct dma_fence_unwrap {
+    struct dma_fence *chain;
+    struct dma_fence *array;
+    uint32_t index;
+};
+/** Begin the walk over the leaves of `head`, a fence or NULL: the first
+ * leaf, borrowed from the walk, or NULL when there is none. */
+struct dma_fence *dma_fence_unwrap_first(struct dma_fence *head, struct dma_fence_unwrap *cursor);
+/** The next leaf, borrowed from the walk, or NULL at the end, where the
+ * walk has let go of what it held. Does not sleep. */
+struct dma_fence *dma_fence_unwrap_next(struct dma_fence_unwrap *cursor);
+/** Let go of what a walk left before its end holds; nothing after the
+ * end. */
+void dma_fence_unwrap_end(struct dma_fence_unwrap *cursor);
 /** Status: 0 active, 1 completed, or the negative producer error. */
 int32_t dma_fence_status(struct dma_fence *fence);
 /** CLOCK_MONOTONIC in nanoseconds, under the big kernel lock. */
@@ -82,6 +110,26 @@ int64_t dma_fence_now(void);
 /** Install a close-on-exec sync file with its own fence reference.
  * Return its descriptor or -errno. name may be NULL. */
 int32_t sync_file_create(struct dma_fence *fence, const char *name);
+struct sync_file;
+/** A sync file of `fence` with a reference of its own, that no descriptor
+ * holds yet; NULL for no memory. `name` is the user's name for it, which
+ * only MERGE gives; NULL or empty names it from its fence, as Linux's
+ * sync_file_get_name. */
+struct sync_file *sync_file_new(struct dma_fence *fence, const char *name);
+/** Free `s`, made by sync_file_new and never attached, and its fence
+ * reference; nothing for NULL. */
+void sync_file_drop(struct sync_file *s);
+/** Make `fd`, a descriptor of the caller's that `fd_alloc` reserved and
+ * gave no type, the close-on-exec descriptor of `s`, which it then owns.
+ * Does not fail, so that a call can attach after work it cannot undo. */
+void sync_file_attach(int32_t fd, struct sync_file *s);
+/** Give the caller a sync file of `fence`, as Linux's ioctls do: reserve
+ * a descriptor, put it in `*fd_at`, which lies in the `len` bytes at `src`,
+ * make the file, copy those bytes to `dst`, and only then attach it, so
+ * that a failure leaves no descriptor and no file. 0, -EINVAL, -EMFILE,
+ * -ENOMEM or -EFAULT. */
+int32_t sync_file_copy_out(struct dma_fence *fence, const char *name, void __user *dst, void *src,
+                           uint32_t len, int32_t *fd_at);
 /** Make `fd`, a descriptor of the caller's that `fd_alloc` reserved and
  * gave no type, a close-on-exec sync file of `fence` with a reference of
  * its own, so that a call reserves the descriptor before the work whose

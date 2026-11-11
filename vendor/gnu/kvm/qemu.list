@@ -6,3 +6,8 @@ qemu-system-modules-opengl
 qemu-utils
 seabios
 ovmf
+# virglrenderer's render server, the process QEMU's virtio-gpu starts for a
+# device with venus=on: libvirglrenderer1, which QEMU links, runs
+# /usr/libexec/virgl_render_server, and no package of the closure depends on
+# the one that has it.
+virgl-server

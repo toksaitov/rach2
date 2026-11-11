@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 11, 2026
 .Dt READ 2
 .Os
 .Sh NAME
@@ -31,25 +31,74 @@ A successful call may return fewer bytes than requested; a count past
 0x7ffff000, Linux's
 .Dv MAX_RW_COUNT ,
 reads at most that many, so that the count returned is never negative.
-A zero-length read checks that the descriptor exists, then returns zero
-without inspecting the buffer or checking the descriptor's read mode;
+The descriptor is checked first, then the range with the original count:
+an overflowing range or one past the top of user memory is
+.Er EFAULT .
+On the i686 kernel, a count negative as the kernel's signed size is
+.Er EINVAL
+after that range check, before the transfer is limited.
+An i386 call on x86-64 uses the kernel's 64-bit signed size for this check.
+Then a read at the open file description's offset whose end would pass
+the signed 64-bit range is
+.Er EINVAL ,
+as Linux's rw_verify_area has it, with the original count; a stream,
+which has no offset, a directory, and
+.Pa /proc/ Ns Ar pid Ns Pa /mem
+and
+.Pa /dev/mem ,
+whose offsets are unsigned, are never refused for it.
+A zero-length read checks the descriptor as a longer one does, that it
+exists, is open for reading, is open on an object with a read method and
+is no directory, and that the buffer does not pass the top of user
+memory, then returns zero without touching the buffer;
 an eventfd and a timerfd, which read whole eight-byte counts, refuse it
 with
 .Er EINVAL ,
 as Linux does, while
 .Fn readv
 of zero bytes returns zero for them, as Linux's does.
+A buffer that cannot be written, a null pointer among them, is found only
+by the object's copy, since Linux checks no more than that the range lies
+in user space: a pipe or a socket at its end of input returns zero, and an
+empty one under
+.Dv O_NONBLOCK
+gives
+.Er EAGAIN ,
+before it would copy, and a pipe or a stream socket whose copy fails keeps
+its bytes queued; only the console and the mouse refuse a null buffer
+first.
 .Pp
 Regular files are read at the open file description's offset.
 A positive result advances that offset by the number of bytes read.
+A file of a mounted file system is read up to the first page of the
+buffer that cannot be written, and the bytes before it are returned, as
+Linux's copy stops at its first fault; a buffer whose first page cannot
+be written gives
+.Er EFAULT
+only when the file has a byte to read at the offset, and zero when it
+has none, as on Linux; the file's read decides, so an mqueue file, whose
+size is its queue's bytes, ends where its status line does.
 Descriptors shared through duplication or fork share the offset.
-Directories cannot be read with these calls: a nonzero read returns
-.Er EBADF .
+Directories cannot be read with these calls: a read of any count returns
+.Er EISDIR ,
+after
+.Er EFAULT
+for a buffer that passes the top of user memory, of no bytes too, as on
+Linux.
 Use
 .Xr getdents64 2
 to read directory entries.
 .Pp
-A pipe read returns the available bytes, up to the requested count.
+A pipe read waits only before its first byte, then returns the bytes
+buffered, up to the requested count: each of the pipe's page buffers whole,
+or as much of one as the count takes.
+It holds the pipe from its start to its return, except while it waits for
+bytes, as Linux holds the pipe's lock, so the bytes it returns are adjacent
+in the stream even when a page of the buffer must be brought in.
+A page that cannot be written ends it with the bytes of the buffers before
+it, or
+.Er EFAULT ,
+and every byte of its own buffer stays queued.
 An empty pipe waits while a writer remains open and returns zero after
 the last writer closes.
 The console and pseudoterminal slaves use the terminal line discipline:
@@ -67,7 +116,8 @@ is ignored or blocked.
 .Pp
 A background process reading its controlling terminal receives
 .Dv SIGTTIN .
-If that signal is blocked or ignored, the read fails with
+If that signal is blocked or ignored, or the process group is orphaned,
+the read fails with
 .Er EIO .
 A read of
 .Pa /fb
@@ -126,33 +176,101 @@ struct iovec {
 .Ed
 .Pp
 Buffers are filled in order; zero-length entries are skipped.
-The count must be between 0 and 1024, and the sum of the lengths must
-not exceed 2147483647.
-The kernel checks the whole vector list and write access to every
-nonempty destination before taking input.
-An invalid destination therefore fails before consuming input.
-A list requesting no bytes still checks the descriptor and returns zero
-only if it exists.
+The count must be between 0 and 1024, and no length may be negative as a
+signed size, which for a 32-bit program is one past 2147483647.
+The total is cut at 0x7ffff000, as one read's count is, and the buffer
+that crosses it is filled only up to it.
+The kernel copies the list once, as Linux does, and checks every length
+first, then that every range lies in user space; the copy serves the whole
+call, so a buffer that overwrites a later entry of the caller's list does
+not move that entry's destination.
+A destination that cannot be written is found by the copy.
+A file, a device or a
+.Pa /proc
+file is read up to the first page that cannot be written, and the bytes
+before it are returned, as Linux's read stops at the first fault of its
+copy.
+A first destination of which no byte can be written goes to the object's
+read whole, and the object answers before its copy fails:
+.Pa /dev/null
+returns zero, an empty device under
+.Dv O_NONBLOCK
+gives
+.Er EAGAIN ,
+and one with bytes to give
+.Er EFAULT ;
+a file of a mounted file system gives
+.Er EFAULT
+only after the check of the list's end at the offset and when the file has
+a byte to read at the offset, and returns zero when it has none, as on
+Linux.
+A pipe and a socket answer the wait, the end of input and
+.Er EAGAIN
+before any copy, so a list whose first buffer cannot be written reads zero
+from an ended pipe.
+A pipe then copies each of its page buffers whole, or as much of one as
+the list takes, or not at all: a page that cannot be written ends the call
+with the bytes of the buffers before it, or
+.Er EFAULT ,
+and every byte of its own buffer stays queued, as Linux's
+.Fn pipe_read
+leaves it.
+A stream socket takes its bytes one receive buffer of the connection at a
+time, as
+.Xr recv 2
+describes: a buffer whose destination cannot be written, or lies outside
+user space, stays queued whole and ends the call with the bytes of the
+buffers before it, or
+.Er EFAULT .
+An AF_UNIX stream socket copies its messages in order: a page that cannot
+be written ends the call with the bytes of the messages before it, or
+.Er EFAULT ,
+and the message it was copying stays queued, as Linux's
+.Fn unix_stream_read_generic
+leaves it.
+A datagram socket, of the network or AF_UNIX, gives
+.Er EFAULT
+when any copy of the datagram fails, and the datagram is consumed.
+The descriptor is checked before the list, as for
+.Fn read ,
+so a list requesting no bytes returns zero only from a descriptor that
+exists and is open for reading on an object with a read method, a
+directory among them.
 .Pp
 The first nonempty buffer uses an ordinary read, which may wait.
 For a regular file, reading continues through successive buffers until
-a short read or error.
-For a pipe, stream socket, device, or
+a short read or error, with the open file description held across the
+buffers, as Linux holds its position lock, so that a seek through a
+descriptor that shares it comes before the call or after it, never
+between two buffers; the end of the whole list at the offset is checked
+under that hold.
+A page of an ext2 file that a mapping holds in memory is read from that
+page, as Linux reads its page cache, so a read sees a shared mapping's
+stores before they are written back, and a buffer sees what an earlier
+buffer of the same call stored into a mapping of the file.
+A pipe and a stream socket are read as one read of the whole list, which
+waits only for its first byte and takes what is queued, as much as the
+buffers hold.
+An AF_UNIX socket of any type is one receive into the whole list, as
+Linux's socket read gives the list to the socket's
+.Fn recvmsg :
+a stream socket reads across its messages, and a datagram or
+sequenced-packet socket takes one message across the buffers and leaves
+the next queued, however much room is left.
+For a device or a
 .Pa /proc
 file, later buffers are read only while the descriptor reports read
 readiness; a device that reports it immediately, a disk among them, can
 still sleep in the read itself.
 A terminal is read only once, into the first nonempty buffer.
 .Pp
-For a
-.Dv SOCK_DGRAM
-socket, exactly one message is taken into a kernel buffer before it is
-scattered across the destinations.
+For a datagram, raw or packet socket of the network, exactly one message is
+taken into a kernel buffer before it is scattered across the destinations
+of the copied list; an AF_UNIX one copies its message straight into them.
 Bytes beyond the combined capacity are discarded.
-If a destination overwrites the caller's own vector list, later copies
-are checked again; a failed copy stops the transfer and returns the
-number already copied.
-The consumed message is not restored.
+A failed copy gives
+.Er EFAULT ,
+and the consumed message is not restored.
 .Pp
 Musl's buffered input uses
 .Fn readv
@@ -180,10 +298,20 @@ and
 are among them, which Linux reads.
 A descriptor not open for reading returns
 .Er EBADF ,
-an end past the signed 64-bit range
+a buffer range past the top of user memory
+.Er EFAULT ,
+a count negative as the kernel's signed size or an end past the signed 64-bit range
 .Er EINVAL ,
 and a directory
 .Er EISDIR .
+The end check passes
+.Pa /proc/ Ns Ar pid Ns Pa /mem
+and
+.Pa /dev/mem ,
+whose offsets are unsigned.
+The range, count and end checks use the original request before
+.Dv MAX_RW_COUNT
+limits the transfer, including for a count of zero.
 .Pp
 A regular file, a raw disk window,
 .Pa /dev/bootlog
@@ -203,14 +331,21 @@ A zero count returns zero once the descriptor has passed these checks.
 The i386 system call numbers are 3 for
 .Nm read ,
 145 for
-.Nm readv
-and 180 for
+.Nm readv ,
+180 for
 .Nm pread64 ,
 which takes the descriptor, the buffer and the count in EBX, ECX and
-EDX, and the offset's low and high 32 bits in ESI and EDI.
+EDX, and the offset's low and high 32 bits in ESI and EDI,
+333 for
+.Nm preadv ,
+whose offset is in the fourth and fifth arguments, low word first, and
+378 for
+.Nm preadv2 ,
+which adds flags in the sixth.
 Musl's and GNU libc's
 .Fn pread
-are this call.
+are
+.Nm pread64 .
 .Pp
 On x86-64 the numbers are 0 for
 .Nm read ,
@@ -218,9 +353,12 @@ On x86-64 the numbers are 0 for
 .Nm readv ,
 17 for
 .Nm pread64 ,
-which takes the offset whole in R10, and 295 for
-.Nm preadv ,
-which i386 does not have here.
+which takes the offset whole in R10, 295 for
+.Nm preadv
+and 327 for
+.Nm preadv2 ,
+each with the offset whole in its fourth argument and its fifth, the
+offset's high half, not read, as on Linux.
 .Fn preadv
 reads the buffers of
 .Fa iov
@@ -228,12 +366,16 @@ as
 .Fn pread
 reads one, each at the place the ones before it reached, from
 .Fa offset ,
-and leaves the descriptor's offset where it was; the vector is checked
-whole, as
+and leaves the descriptor's offset where it was; the offset and the
+descriptor are checked first, as
+.Fn pread
+checks them, then the vector, as
 .Fn readv
-checks it, before a byte is read, and a short read ends the call.
-The offset's high half, the call's fifth argument, is not read, as on
-Linux, since the fourth holds the whole of it.
+checks it, and a short read ends the call.
+A file of a mounted file system is read under one hold of the open file
+description, as
+.Fn readv
+reads it.
 .Pp
 The x86-64 kernel runs, for a program that enters it by
 .Ql int $0x80 ,
@@ -241,22 +383,49 @@ which
 .Xr ia32 7
 describes, i386's
 .Nm readv
-(145), whose vector is of 32-bit addresses and lengths;
+(145), whose vector is of 32-bit addresses and lengths, and i386's
 .Nm preadv
-(333), whose offset is in the fourth and fifth arguments, low word first;
-and
+(333) and
 .Nm preadv2
-(378), which adds flags in the sixth.
+(378), with i386's arguments.
+.Pp
 .Nm preadv2
 reads as
 .Nm readv
-at offset -1, takes
+at offset -1 and as
+.Nm preadv
+at another.
+It checks the descriptor before the vector and flags, as Linux does: a descriptor
+that is not open is
+.Er EBADF
+whatever the flags.
+It then imports the vector, returning
+.Er EFAULT
+for an unreadable list and
+.Er EINVAL
+for an excessive count or a negative signed length.
+A vector of no bytes returns zero before flags are checked.
+The data pages are touched only after the flags have been accepted.
+Both forms take
 .Dv RWF_HIPRI ,
-.Dv RWF_DSYNC
+.Dv RWF_DSYNC ,
+.Dv RWF_SYNC ,
+.Dv RWF_APPEND
 and
-.Dv RWF_SYNC
-and refuses another flag with
+.Dv RWF_NOAPPEND ,
+which a read ignores but on an
+.Dv O_APPEND
+descriptor of an append-only file, where it is
+.Er EPERM ,
+and refuse another flag with
 .Er EOPNOTSUPP .
+Combining
+.Dv RWF_APPEND
+and
+.Dv RWF_NOAPPEND
+is
+.Er EINVAL
+for a nonempty vector.
 .Sh RETURN VALUES
 On success, these functions return the number of bytes read.
 Zero denotes end of a file or stream, a zero-length request, an empty
@@ -280,25 +449,27 @@ It requires a return of 12 and the contents
 and
 .Ql CCCC
 in that order.
-It also checks pipe and datagram reads and that an invalid later buffer
-leaves input queued.
+It also checks pipe and datagram reads, that an invalid later buffer
+leaves a pipe's input queued and fails a datagram with
+.Er EFAULT ,
+and that a datagram written over the caller's list does not move a later
+destination.
 .Pa tests/musl/preadmusl.c
 reads a file at offsets with
 .Fn pread
 and checks that the descriptor's offset does not move, and that a pipe,
 a socket and a terminal return
 .Er ESPIPE .
-On x86-64 it reads 2, 0 and 4 bytes from offset 13 with
-.Fn preadv ,
-requires 6 and the bytes in turn, and on i686 requires
-.Er ENOSYS .
+It reads 2, 0 and 4 bytes from offset 13 with
+.Fn preadv
+and requires 6 and the bytes in turn.
 .Sh ERRORS
 .Bl -tag -width ECONNREFUSED
 .It Er EAGAIN
 A nonblocking input would have to wait.
 .It Er EBADF
-The descriptor is invalid, is not open for reading, has no read
-operation, refers to a directory, or was opened with
+The descriptor is invalid, is not open for reading, is of a kind with no
+read, or was opened with
 .Dv O_PATH .
 .It Er ECONNREFUSED
 A stream connection was refused.
@@ -314,10 +485,21 @@ An ext2 read requires a block beyond the file system's addressing limit.
 A signal interrupted a wait, or a background terminal read posted
 .Dv SIGTTIN .
 .It Er EINVAL
-The vector count is outside 0 through 1024, the total vector length
-exceeds 2147483647, a file system has no read operation, or
+The vector count is outside 0 through 1024, a vector length is negative
+as a signed size, a native i686 read or pread count is negative as the kernel's
+signed size after its address range passes, a file system has no read
+operation, the object the
+descriptor is open on, such as an epoll set, has no read method, as on
+Linux, or
 .Fn pread
-was given a negative offset or an end past the signed 64-bit range.
+was given a negative offset.
+A read at the description's offset or at that of
+.Fn pread
+would end past the signed 64-bit range, computed with the original count
+before the transfer is limited, on a file other than
+.Pa /proc/ Ns Ar pid Ns Pa /mem
+and
+.Pa /dev/mem .
 A boot window,
 .Pa /dev/bootpart
 or
@@ -331,21 +513,42 @@ A file system or device read failed, a device was removed, or the
 random device has no usable seed.
 A background terminal read also gives this error when
 .Dv SIGTTIN
-is blocked or ignored.
+is blocked or ignored, or its process group is orphaned.
 .It Er EISDIR
+The descriptor is open on a directory, as on Linux, whose entries
+.Xr getdents64 2
+reads.
+.Fn read
+and
 .Fn pread
-was given a descriptor on a directory.
+give it for a count of zero too;
+.Fn readv
+and
+.Fn preadv
+give it only for a vector with bytes, and return zero for one without.
 .It Er ENETUNREACH
 A stream connection timed out while its local address was gone.
+.It Er ENOMEM
+A page of the file that a mapping holds in memory could not be given a
+temporary kernel mapping, which on i686 has 1024 slots; the bytes of the
+pages before it are returned instead when there are any.
 .It Er ENOTCONN
 The stream socket is not connected and has not been shut down.
 .It Er ENXIO
 A boot window is not present; a removed disk's node gives
 .Er EIO .
 .It Er EOPNOTSUPP
-The descriptor is an ioctl-only socket.
+The descriptor is an ioctl-only socket, or
+.Nm preadv2
+was given a flag it does not take.
 .It Er EPERM
-A loop device node was read directly.
+A loop device node was read directly, or
+.Fn preadv2
+was given
+.Dv RWF_NOAPPEND
+on an
+.Dv O_APPEND
+descriptor of an append-only file.
 .It Er ESPIPE
 .Fn pread
 was given a descriptor that cannot seek.

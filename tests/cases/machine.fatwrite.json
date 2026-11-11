@@ -208,7 +208,7 @@
     },
     {
       "case_id": "machine.fatwrite.writers",
-      "behavior": "two writers and a sync at once on FAT32 under the lag device, on a fresh copy of the disk, each file whole and the volume consistent",
+      "behavior": "two writers, two appenders to one file and a sync at once on FAT32 under the lag device, on a fresh copy of the disk, each file whole and the volume consistent",
       "units": ["fatwrite"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
@@ -254,7 +254,7 @@
       "assertions": [
         {
           "assertion_id": "writers",
-          "checks": "lagprobe writers exits 0 after LAGPROBE OK: two children write a file each while the parent syncs the volume twenty times, every sync returns 0, each file reads back as its own bytes, and the volume unmounts",
+          "checks": "lagprobe writers exits 0 after LAGPROBE OK: two children write a file each and two more append to one file through opens of their own, one on an O_APPEND description by writev, pwritev at offset 0 and pwritev2 at offset 0 in turn, the positioned writes leaving the shared offset where it was, and one by pwritev2 with RWF_APPEND on a description without O_APPEND, each record in two elements, while the parent syncs the volume twenty times; every sync returns 0, each written file reads back as its own bytes, the appended one holds all sixteen records of each appender whole, and the volume unmounts",
           "source": "scenario"
         },
         {
@@ -304,7 +304,7 @@
         },
         {
           "kind": "injected_delay",
-          "where": "tests/lagprobe.c:376",
+          "where": "tests/lagprobe.c:381",
           "assumes": "sleep_ms, through which the parent spaces its syncs 30 ms apart across the writers' run, as the stimulus; the probe judges each file's bytes and every sync's result, never elapsed time",
           "uncertainty_us": null
         }

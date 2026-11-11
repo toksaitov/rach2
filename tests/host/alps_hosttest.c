@@ -568,6 +568,12 @@ static int warned(const char *text)
     return 0;
 }
 
+/** The relative-mode probe sees the same modeled device. */
+int synaptics_init_relative(void)
+{
+    return synaptics_init();
+}
+
 /** The Synaptics probe, which runs before ALPS's: the row's answer. */
 int synaptics_init(void)
 {
@@ -583,6 +589,9 @@ int synaptics_byte(uint8_t data)
 
 /* The rest of synaptics.h and trackpoint.h, which a port without a
  * Synaptics pad never calls; trackpoint_hosttest.c tests them. */
+void synaptics_packet_restart(void)
+{}
+
 int synaptics_packet_start(void)
 {
     return 1;
@@ -621,10 +630,37 @@ int synaptics_reconnect(void)
 void synaptics_disconnect(void)
 {}
 
+unsigned int synaptics_relative_caps(void)
+{
+    return 0;
+}
+
+uint16_t synaptics_model(void)
+{
+    return 0;
+}
+
+int synaptics_sysfs_add(int dir)
+{
+    (void)dir;
+    return 0;
+}
+
+/* The kind the stub's TrackPoint answered, 0 for none. */
+static uint8_t tp_kind;
+
+/** The TrackPoint's read-ID alone, which the CS19 answers as ALPS's
+ * stick; trackpoint_hosttest.c tests the rest of the set-up. */
 int trackpoint_detect(const struct ps2io *io)
 {
-    (void)io;
-    return -1;
+    uint8_t id[2] = {0, 0};
+
+    tp_kind = 0;
+    if (ps2io_command(io, 0xE1, 0, 0, id, 2) < 0 || id[0] < 1 || id[0] > 6) {
+        return -1;
+    }
+    tp_kind = id[0];
+    return 0;
 }
 
 int trackpoint_identify(const struct ps2io *io)
@@ -635,7 +671,7 @@ int trackpoint_identify(const struct ps2io *io)
 
 const char *trackpoint_vendor(void)
 {
-    return "";
+    return tp_kind == 2 ? "ALPS" : "";
 }
 
 int trackpoint_buttons(void)
@@ -655,10 +691,64 @@ int trackpoint_sysfs_add(int dir)
     return 0;
 }
 
+/** No sysfs tree is published by this model. */
+void evdev_sysfs_serio_remove(int port)
+{
+    (void)port;
+}
+
+void evdev_sysfs_serio_add(int port)
+{
+    (void)port;
+}
+
+/** This model has no competing command caller. */
+int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    (void)wq;
+    return cond(arg) ? 0 : -EINTR;
+}
+
 void evdev_sysfs_serio_files(int port, int (*add)(int dir))
 {
     (void)port;
     (void)add;
+}
+
+void evdev_sysfs_serio_driver(int port, int (*add)(int dir))
+{
+    (void)port;
+    (void)add;
+}
+
+int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg)
+{
+    (void)parent;
+    (void)attr;
+    (void)obj;
+    (void)arg;
+    return 0;
+}
+
+unsigned int synaptics_set_rate(unsigned int rate)
+{
+    return rate;
+}
+
+unsigned int elantech_set_rate(unsigned int rate)
+{
+    return rate;
+}
+
+int elantech_packet_size(void)
+{
+    return 6;
+}
+
+int elantech_sysfs_add(int dir)
+{
+    (void)dir;
+    return 0;
 }
 
 /** The 10 ms a pass-through probe waits, which no ALPS row reaches. */
@@ -683,6 +773,9 @@ int elantech_byte(uint8_t data)
 
 /* The rest of elantech.h, which a port without an Elantech pad never
  * calls; elantech_hosttest.c tests it. */
+void elantech_packet_restart(void)
+{}
+
 int elantech_packet_start(void)
 {
     return 1;
@@ -771,6 +864,14 @@ void input_get_repeat(int *delay_ms, int *period_ms)
 {
     *delay_ms = 250;
     *period_ms = 33;
+}
+
+/** No keyboard here takes its keys through input.c. */
+int input_keyboard_release(struct evdev *dev, unsigned int keycode)
+{
+    (void)dev;
+    (void)keycode;
+    return 0;
 }
 
 void input_set_repeat(int delay_ms, int period_ms)
@@ -973,7 +1074,6 @@ static void model_reset(int kind)
     packet_index = 0;
     bare_failed = 0;
     rejected_stick = 0;
-    sync_losses = 0;
     pktcnt = 0;
     out_of_sync = 0;
     flush_armed = 0;
@@ -1473,6 +1573,10 @@ static void v5_v6_setup_rows(void)
           priv.proto_version == PROTO_V5 && priv.x_bits == 23 && priv.y_bits == 12 &&
               priv.x_max == 1408 && priv.y_max == 704);
 
+    v5_setup();
+    regs[0x0033] = 0x0f; /* 8 + 15 X electrodes, 1 + 0 Y */
+    CHECK("a version 5 pad of one Y electrode is not driven as ALPS", bring_up() == 0 && alps == 0);
+
     v6_setup();
     CHECK("a version 6 pad is brought up", bring_up() == 0 && alps == 1);
     CHECK("it is version 6, a DualPoint without pressure",
@@ -1536,6 +1640,7 @@ static void left_alone_rows(void)
     static const uint8_t v9_e7[3] = {0x73, 0x03, 0xc8};
     static const uint8_t v9_ec[3] = {0x73, 0x01, 0x0a};
     static const uint8_t cs19_e7[3] = {0x20, 0x02, 0x0e};
+    uint8_t props[8] = {0};
 
     alps_model(v9_e7, v9_ec, 3);
     CHECK("a version 9 pad is left to the PS/2 driver", bring_up() == 0 && alps == 0);
@@ -1544,8 +1649,19 @@ static void left_alone_rows(void)
 
     alps_model(cs19_e7, v9_ec, 0);
     cs19 = 1;
-    CHECK("the CS19 stick is left to the PS/2 driver", bring_up() == 0 && alps == 0 && pad == 0);
+    CHECK("the CS19 stick is left to the TrackPoint driver",
+          bring_up() == 0 && alps == 0 && pad == 0 && protocol == PROTO_TRACKPOINT);
+    CHECK("which names it as Linux's does, a pointing stick",
+          open_named(&n_bare, "TPPS/2 ALPS TrackPoint") &&
+              evdev_ioctl(&n_bare.e, EVIOCGPROP(8), (uintptr_t)props) > 0 &&
+              (props[0] & (1u << INPUT_PROP_POINTING_STICK)));
+    close_node(&n_bare);
 }
+
+/* The bytes of psmouse's ThinkingMouse probe, which comes first, and of a
+ * plain mouse's probes up to its knock. */
+#define THINKING 23
+#define TRIAL    53
 
 /** A plain mouse, a Synaptics pad, a pad whose set-up fails, and a pad
  * that answers the reports with a rate of 10. */
@@ -1554,20 +1670,26 @@ static void probe_rows(void)
     static const uint8_t v1[3] = {0x33, 0x02, 0x0a};
     static const uint8_t v2[3] = {0x20, 0x02, 0x0e};
     static const uint8_t ec[3] = {0x00, 0x00, 0x00};
-    static const uint8_t trial[23] = {0xFF, 0xF6, 0xF6, 0xE8, 0x00, 0xE6, 0xE6, 0xE6,
-                                      0xE9, 0xE8, 0x00, 0xE7, 0xE7, 0xE7, 0xE9, 0xE8,
-                                      0x00, 0xEC, 0xEC, 0xEC, 0xE9, 0xEA, 0xF3};
+    /* The reset and defaults, a ThinkingMouse's rates and ID, the three
+     * reports, a Genius mouse's status, a TrackPoint's ID, the knock. */
+    static const uint8_t trial[TRIAL] = {
+        0xFF, 0xF6, 0xF3, 0x0A, 0xE8, 0x00, 0xF3, 20,   0xF3, 60,   0xF3, 40,   0xF3, 20,
+        0xF3, 20,   0xF3, 60,   0xF3, 40,   0xF3, 20,   0xF3, 20,   0xF2, 0xF6, 0xE8, 0x00,
+        0xE6, 0xE6, 0xE6, 0xE9, 0xE8, 0x00, 0xE7, 0xE7, 0xE7, 0xE9, 0xE8, 0x00, 0xEC, 0xEC,
+        0xEC, 0xE9, 0xEA, 0xE8, 0x03, 0xE6, 0xE6, 0xE6, 0xE9, 0xE1, 0xF3};
     char name[64];
     int i;
 
     model_reset(KIND_PLAIN);
     CHECK("a plain mouse's bring-up succeeds", bring_up() == 0);
-    for (i = 0; i < 23 && i < n_took; i++) {
+    for (i = 0; i < TRIAL && i < n_took; i++) {
         if (took[i] != trial[i]) {
             break;
         }
     }
-    CHECK("it is asked the three reports, and then knocked as a wheel mouse", i == 23);
+    CHECK("it is asked the three reports, a Genius mouse's status and a TrackPoint's ID, and "
+          "then knocked as a wheel mouse",
+          i == TRIAL);
     CHECK("it is no ALPS pad", alps == 0 && pad == 0 && stick == 0);
     CHECK("and is asked for an Elantech pad after", elantech_asked == 1);
     CHECK("it is PS/2 Generic Mouse", open_named(&n_pad, "PS/2 Generic Mouse"));
@@ -1575,7 +1697,7 @@ static void probe_rows(void)
     alps_model(v1, ec, 0);
     synaptics_answer = -1;
     CHECK("a pad that answered Synaptics's knock is brought up", bring_up() == 0);
-    CHECK("and is not asked ALPS's reports", alps == 0 && n_took < 20 && pad == 0);
+    CHECK("and is not asked ALPS's reports", alps == 0 && n_took < THINKING + 20 && pad == 0);
     CHECK("nor Elantech's", elantech_asked == 0);
 
     alps_model(v1, ec, 0);
@@ -1798,9 +1920,17 @@ static void v1_packet_rows(void)
     CHECK("the packet after it is read", reads(&n_pad, after_ev, NEV(after_ev)) && !out_of_sync);
     send(after, 3);
     kernel_ticks += MS_TO_TICKS(600);
+    irq_byte(0);
+    CHECK("a pause inside the pad's packet queues a resync",
+          state == STATE_RESYNC && (reconnect_wanted & RESYNC_PORT));
+    ps2mouse_resync();
+    CHECK("the unanswered poll queues a reconnect",
+          state == STATE_IGNORE && (reconnect_wanted & RECONNECT_PORT));
+    ps2mouse_reconnect();
+    CHECK("the pad reports after reconnect", state == STATE_ACTIVE);
+
     send(paused, 6);
-    CHECK("a packet a pause cuts is dropped, and the next read",
-          sync_losses == 1 && reads(&n_pad, paused_ev, NEV(paused_ev)));
+    CHECK("the packet after the reconnect is read", reads(&n_pad, paused_ev, NEV(paused_ev)));
 
     send(ps2, 3);
     CHECK("a mouse's packet on the external port registers PS/2 ALPS Mouse",
@@ -2303,16 +2433,17 @@ static void reconnect_pad(void)
  * `psmouse_initialize` and the enable. */
 static int took_reconnect(void)
 {
-    /* The reset and defaults, the trial identification and the CS19
-     * check's 0xE1, which the reconnect does not send. */
-    int skip = 3 + 19 + 1;
+    /* The reset and defaults, a ThinkingMouse's rates and ID, the trial
+     * identification and the CS19 check's 0xE1, which the reconnect does
+     * not send. */
+    int skip = 3 + THINKING + 19 + 1;
 
     n_want = 0;
     expect_n(bringup_took + skip, n_bringup_took - skip);
     return took_expected();
 }
 
-/** A version 3 DualPoint reconnected after five packets out of form in a
+/** A version 3 DualPoint reconnected after twelve bytes out of form in a
  * row and after its announcement, keeping its event devices, as Linux's
  * psmouse and `alps_reconnect` do; and probed anew when no ALPS pad
  * answers in its place. */
@@ -2332,15 +2463,20 @@ static void reconnect_rows(void)
     for (i = 0; i < 4; i++) {
         irq_byte(0x00);
     }
-    CHECK("four first bytes out of form are four bad packets",
+    CHECK("four first bytes out of form are four bad bytes",
           bad_in_a_row == 4 && state == STATE_ACTIVE && !reconnect_wanted);
     send(one, 6);
     CHECK("a whole packet ends the count", bad_in_a_row == 0);
-    for (i = 0; i < 5; i++) {
+    for (i = 0; i < 11; i++) {
         irq_byte(0x00);
     }
-    CHECK("the fifth in a row stops the port and asks for a reconnect",
-          state == STATE_IGNORE && reconnect_wanted == RECONNECT_PORT);
+    CHECK("eleven bad bytes, one short of two packets' worth, leave the port as it is",
+          bad_in_a_row == 11 && state == STATE_ACTIVE && !reconnect_wanted);
+    irq_byte(0x00);
+    CHECK("the twelfth, Linux's resetafter of twice the packet's size, stops the port and "
+          "asks for a reconnect, counting bytes in its warning",
+          state == STATE_IGNORE && reconnect_wanted == RECONNECT_PORT &&
+              warned("bad bytes in a row"));
     reconnect_pad();
     CHECK("the pad is reconnected with Linux's commands, in Linux's order", took_reconnect());
     CHECK("it is in absolute mode again and reports",
@@ -2356,7 +2492,7 @@ static void reconnect_rows(void)
     reconnect_pad();
     CHECK("which sends the same commands", took_reconnect() && pad == pad_dev);
 
-    for (i = 0; i < 5; i++) {
+    for (i = 0; i < 12; i++) {
         irq_byte(0x00);
     }
     dev_kind = KIND_PLAIN;

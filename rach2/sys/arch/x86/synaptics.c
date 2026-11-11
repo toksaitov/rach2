@@ -35,8 +35,12 @@
 
 #include "i8042.h"
 #include "ps2mouse.h"
+#include "smbios.h"
+#include "../../dmi.h"
 #include "../../evdev.h"
+#include "../../fs/sysfs.h"
 #include "../../klog.h"
+#include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
 #include "../../mouse.h"
 #include "../../timer.h"
@@ -226,25 +230,26 @@ struct hw_state {
 };
 
 static struct synaptics_info info;
-static uint8_t mode;           /* the mode byte set */
-static int pkt_type;           /* PKT_* */
-static int is_forcepad;        /* the PNP ID names a ForcePad */
-static int press;              /* a ForcePad's single finger presses */
-static int report_press;       /* and has pressed long enough to click */
-static uint32_t press_start;   /* the tick its press began */
-static struct evdev *pad;      /* the event device */
-static struct hw_state agm;    /* the second finger, from the last AGM packet */
-static unsigned int agm_count; /* the fingers an AGM contact packet counted */
-static int scroll;             /* the middle button's scroll, in steps */
+static uint8_t mode;            /* the mode byte set */
+static int absolute;            /* the mode is absolute, not relative */
+static int disable_gesture;     /* the mode turns the pad's own gestures off */
+static int relative;            /* the pad is set up in relative mode */
+static unsigned int generation; /* relative set-ups, which a callback names */
+static int pkt_type;            /* PKT_* */
+static int is_forcepad;         /* the PNP ID names a ForcePad */
+static int press;               /* a ForcePad's single finger presses */
+static int report_press;        /* and has pressed long enough to click */
+static uint32_t press_start;    /* the tick its press began */
+static struct evdev *pad;       /* the event device */
+static struct hw_state agm;     /* the second finger, from the last AGM packet */
+static unsigned int agm_count;  /* the fingers an AGM contact packet counted */
+static int scroll;              /* the middle button's scroll, in steps */
 
-/* The packet being assembled: its bytes, how many have come, and the tick
- * of the last. */
+/* The packet being assembled: its bytes and how many have come. */
 static uint8_t packet[6];
 static int pktcnt;
-static uint32_t last_tick;
 
-/* The packets dropped for a byte out of form or a pause, which psmouse
- * logs as lost synchronization. */
+/* Packets dropped for a byte out of form. */
 static unsigned int sync_losses;
 
 /** Send `cmd` and return 0 when the touchpad acknowledged it, -1 when not. */
@@ -489,17 +494,29 @@ static int has_multifinger(void)
     return CAP_MULTIFINGER(info.capabilities) || has_agm();
 }
 
+/** Whether the machine is one of Linux's `toshiba_dmi_table`. */
+static int impaired_toshiba_kbc(void)
+{
+    return smbios_system_is("TOSHIBA", "Satellite") || smbios_system_is("TOSHIBA", "dynabook") ||
+           smbios_system_is("TOSHIBA", "PORTEGE M300") ||
+           (smbios_system_is("TOSHIBA", "Portable PC") &&
+            smbios_field_has(DMI_PRODUCT_VERSION, "Version 1.0"));
+}
+
 /**
- * Set the mode as Linux's `synaptics_set_mode` and `synaptics_set_rate` do
- * for the rate of 100 psmouse asks: absolute mode, gestures off on
- * firmware 4 and later, 80 packets a second, W mode when the pad has the
- * extended capabilities; then the advanced gesture mode of a pad that has
- * it.
+ * Set the mode as Linux's `synaptics_set_mode` does for the port's rate:
+ * absolute mode when `absolute` says, the pad's gestures off when
+ * `disable_gesture` says, 80 packets a second for a rate of 80 or more and
+ * 40 below, W mode when the pad has the extended capabilities; then, in
+ * absolute mode, the advanced gesture mode of a pad that has it.
  */
 static int set_mode(void)
 {
-    mode = MODE_ABSOLUTE | MODE_HIGH_RATE;
-    if (ID_MAJOR(info.identity) >= 4) {
+    mode = ps2mouse_port_rate() >= 80 ? MODE_HIGH_RATE : 0;
+    if (absolute) {
+        mode |= MODE_ABSOLUTE;
+    }
+    if (disable_gesture) {
         mode |= MODE_DISABLE_GESTURE;
     }
     if (CAP_EXTENDED(info.capabilities)) {
@@ -508,10 +525,29 @@ static int set_mode(void)
     if (mode_cmd(mode) < 0) {
         return -1;
     }
-    if (has_agm() && (sliced(QUE_MODEL) < 0 || command_arg(CMD_SET_RATE, RATE_AGM) < 0)) {
+    if (absolute && has_agm() &&
+        (sliced(QUE_MODEL) < 0 || command_arg(CMD_SET_RATE, RATE_AGM) < 0)) {
         return -1;
     }
     return 0;
+}
+
+/** The model's sensor and low byte, which Linux gives the pad's event
+ * device as its version in either mode. */
+static uint16_t model_version(void)
+{
+    return (uint16_t)(((info.model_id & 0x00ff0000u) >> 8) | (info.model_id & 0x000000ffu));
+}
+
+/** Limit the port's rate to 40 on one of Linux's Toshibas, whose 8042
+ * cannot take a Synaptics pad's packets at the full rate. */
+static void toshiba_quirk(void)
+{
+    if (ps2mouse_port_rate() >= 80 && impaired_toshiba_kbc()) {
+        klog(KLOG_INFO, "synaptics", "quirk: Toshiba %s detected, limiting rate to 40pps",
+             dmi_field(DMI_PRODUCT_NAME));
+        ps2mouse_port_rate_set(40);
+    }
 }
 
 /** The limits of the position axes `x_code` and `y_code`, Linux's
@@ -539,15 +575,12 @@ static int register_pad(void)
     unsigned int i;
 
     k_memset(keys, 0, sizeof(keys));
-    pad = evdev_register("SynPS/2 Synaptics TouchPad", EVDEV_BUS_I8042, PSMOUSE_VENDOR,
-                         PSMOUSE_SYNAPTICS, keys);
+    pad = ps2mouse_register("SynPS/2 Synaptics TouchPad", PSMOUSE_SYNAPTICS, keys);
     if (!pad) {
         return -1;
     }
     evdev_describe(pad, "isa0060/serio1/input0", 0);
-    /* The model's sensor and low byte, which Linux gives as the version. */
-    evdev_set_version(
-        pad, (uint16_t)(((info.model_id & 0x00ff0000u) >> 8) | (info.model_id & 0x000000ffu)));
+    evdev_set_version(pad, model_version());
     evdev_set_prop(pad, INPUT_PROP_POINTER);
     evdev_set_capability(pad, EV_KEY, BTN_LEFT);
     if (!CAP_CLICKPAD(info.ext_cap_0c)) {
@@ -601,20 +634,158 @@ static int register_pad(void)
     return 0;
 }
 
+unsigned int synaptics_set_rate(unsigned int rate)
+{
+    if (rate >= 80) {
+        mode |= MODE_HIGH_RATE;
+    } else {
+        mode &= (uint8_t)~MODE_HIGH_RATE;
+    }
+    mode_cmd(mode);
+    return rate >= 80 ? 80 : 40;
+}
+
 /** The rate, resolution and scaling that Linux's `psmouse_initialize` sets
- * on the pad: the mode byte again for the rate of 100, which keeps 80
- * packets a second, 200 dpi and 1:1. */
+ * on the pad: the mode byte again for the port's rate, through
+ * `synaptics_set_rate`, then the port's resolution and 1:1. */
 static void initialize(void)
 {
-    mode_cmd(mode);
-    command_arg(CMD_SET_RES, 3);
-    command(CMD_SET_SCALE11);
+    ps2mouse_initialize(synaptics_set_rate);
+}
+
+int synaptics_init_relative(void)
+{
+    uint8_t reply[2];
+
+    relative = 0;
+    if (detect() < 0) {
+        return 0;
+    }
+    if (command(CMD_RESET) == 0) {
+        receive(reply, 2);
+    }
+    if (query_hardware(&info) < 0) {
+        klog(KLOG_WARN, "synaptics", "query: the touchpad did not answer");
+        return -1;
+    }
+    apply_quirks();
+    absolute = 0;
+    disable_gesture = ID_MAJOR(info.identity) >= 4;
+    if (set_mode() < 0) {
+        klog(KLOG_WARN, "synaptics", "mode: the touchpad refused relative mode");
+        return -1;
+    }
+    klog(KLOG_INFO, "synaptics",
+         "found: touchpad model %u, fw %u.%u, id 0x%x, caps 0x%x/0x%x/0x%x/0x%x, board id "
+         "%u, fw id %u, relative mode",
+         ID_MODEL(info.identity), ID_MAJOR(info.identity), ID_MINOR(info.identity), info.model_id,
+         info.capabilities, info.ext_cap, info.ext_cap_0c, info.ext_cap_10, info.board_id,
+         info.firmware_id);
+    toshiba_quirk();
+    relative = 1;
+    generation++;
+    pktcnt = 0;
+    return 1;
+}
+
+unsigned int synaptics_relative_caps(void)
+{
+    if (CAP_CLICKPAD(info.ext_cap_0c)) {
+        return MOUSE_NO_RIGHT | MOUSE_NO_MIDDLE;
+    }
+    return CAP_MIDDLE_BUTTON(info.capabilities) ? 0 : MOUSE_NO_MIDDLE;
+}
+
+uint16_t synaptics_model(void)
+{
+    return model_version();
+}
+
+/** The `disable_gesture` file of a pad in relative mode, as Linux's
+ * `synaptics_show_disable_gesture` writes it: "1" or "0" and a newline;
+ * -ENODEV for a callback of an earlier set-up. */
+static int32_t show_disable_gesture(void *obj, int arg, char *buf, uint32_t cap)
+{
+    (void)arg;
+    if ((uintptr_t)obj != generation || !relative) {
+        return -ENODEV;
+    }
+    if (cap > 0) {
+        buf[0] = disable_gesture ? '1' : '0';
+    }
+    if (cap > 1) {
+        buf[1] = '\n';
+    }
+    return 2;
+}
+
+/**
+ * A write of `disable_gesture`, Linux's `synaptics_set_disable_gesture`
+ * inside `psmouse_attr_set_helper`'s change: 0 or 1 as `kstrtouint` reads
+ * it, the mode byte sent again with the gesture bit when it changes.
+ * Returns `len`, -EINVAL for any other text, -ERANGE, -EIO when the pad
+ * refused the mode, or -ENODEV for a callback of an earlier set-up or
+ * while the port waits for its reconnect.
+ */
+static int32_t store_disable_gesture(void *obj, int arg, const char *buf, uint32_t len)
+{
+    uint32_t n, v = 0;
+    int rc;
+
+    (void)arg;
+    if ((uintptr_t)obj != generation || !relative) {
+        return -ENODEV;
+    }
+    for (n = 0; n < len && buf[n]; n++) { /* Linux's store reads a string */
+    }
+    rc = ps2mouse_change_begin();
+    if (rc < 0) {
+        return rc;
+    }
+    if ((uintptr_t)obj != generation || !relative) {
+        ps2mouse_change_end(0);
+        return -ENODEV;
+    }
+    rc = ps2mouse_parse_uint(buf, n, 10, 0xFFFFFFFFu, &v);
+    if (rc == 0 && v > 1) {
+        rc = -EINVAL;
+    }
+    if (rc == 0 && (int)v != disable_gesture) {
+        disable_gesture = (int)v;
+        if (v) {
+            mode |= MODE_DISABLE_GESTURE;
+        } else {
+            mode &= (uint8_t)~MODE_DISABLE_GESTURE;
+        }
+        if (mode_cmd(mode) < 0) {
+            rc = -EIO;
+        }
+    }
+    ps2mouse_change_end(rc);
+    return rc < 0 ? rc : (int32_t)len;
+}
+
+int synaptics_sysfs_add(int dir)
+{
+    struct sysfs_attr attr;
+    int h;
+
+    if (!relative || ID_MAJOR(info.identity) < 4) {
+        return 0;
+    }
+    attr.name = "disable_gesture";
+    attr.mode = 0644u;
+    attr.show = show_disable_gesture;
+    attr.store = store_disable_gesture;
+    h = sysfs_add_attr(dir, &attr, (void *)(uintptr_t)generation, 0);
+    return h < 0 ? h : 0;
 }
 
 int synaptics_init(void)
 {
     uint8_t reply[2];
 
+    relative = 0;
     if (detect() < 0) {
         return 0;
     }
@@ -624,7 +795,7 @@ int synaptics_init(void)
     }
     if (query_hardware(&info) < 0) {
         klog(KLOG_WARN, "synaptics", "query: the touchpad did not answer");
-        goto relative;
+        goto fallback;
     }
     is_forcepad = i8042_matches_pnp_id(I8042_AUX_PORT, forcepad_pnp_ids);
     if (CAP_INTERTOUCH(info.ext_cap_0c) && !is_forcepad) {
@@ -638,9 +809,11 @@ int synaptics_init(void)
     }
     apply_quirks();
     press = report_press = 0;
+    absolute = 1;
+    disable_gesture = ID_MAJOR(info.identity) >= 4;
     if (set_mode() < 0) {
         klog(KLOG_WARN, "synaptics", "mode: the touchpad refused absolute mode");
-        goto relative;
+        goto fallback;
     }
     pkt_type = MODEL_NEWABS(info.model_id) ? PKT_NEWABS : PKT_OLDABS;
     klog(KLOG_INFO, "synaptics",
@@ -651,14 +824,15 @@ int synaptics_init(void)
          info.firmware_id);
     if (register_pad() < 0) {
         klog(KLOG_WARN, "synaptics", "register: no event device for the touchpad");
-        goto relative;
+        goto fallback;
     }
+    toshiba_quirk();
     initialize();
     mouse_attach_touchpad(pad);
     pktcnt = 0;
     return 1;
 
-relative:
+fallback:
     if (pad) {
         evdev_unregister(pad);
         pad = 0;
@@ -1057,15 +1231,13 @@ int synaptics_packet_start(void)
     return pktcnt == 0;
 }
 
+void synaptics_packet_restart(void)
+{
+    pktcnt = 0;
+}
+
 int synaptics_byte(uint8_t data)
 {
-    uint32_t now = (uint32_t)kernel_ticks;
-
-    if (pktcnt && now - last_tick > MS_TO_TICKS(500)) {
-        sync_losses++;
-        pktcnt = 0;
-    }
-    last_tick = now;
     packet[pktcnt++] = data;
     if (pktcnt < 6) {
         if (!valid_byte(pktcnt - 1, pkt_type)) {
@@ -1089,7 +1261,7 @@ int synaptics_byte(uint8_t data)
 
 int synaptics_has_pass_through(void)
 {
-    return pad && CAP_PASS_THROUGH(info.capabilities);
+    return (pad || relative) && CAP_PASS_THROUGH(info.capabilities);
 }
 
 /**
@@ -1185,6 +1357,10 @@ void synaptics_disconnect(void)
     if (pad) {
         evdev_unregister(pad);
         pad = 0;
+        mode_cmd(0); /* Linux's synaptics_reset: relative mode, gestures on */
+    } else if (relative) {
+        mode_cmd(0);
     }
+    relative = 0;
     pktcnt = 0;
 }

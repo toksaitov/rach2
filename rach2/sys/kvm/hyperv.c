@@ -350,23 +350,10 @@ static uint64_t mul_hi(uint64_t a, uint64_t b)
     return a1 * b1 + (p01 >> 32) + (p10 >> 32) + (mid >> 32);
 }
 
-/** The host's TSC in hertz, at the rate the kernel measured, or 0 when it
- * measured none. */
-static uint64_t tsc_hz(void)
-{
-    return (uint64_t)timer_calibrate() * TICK_HZ;
-}
-
 /** The guest's TSC of `v` now. */
 static uint64_t guest_tsc(const struct kvm_vcpu *v)
 {
-    return arch_cycles() + (uint64_t)v->tsc_offset;
-}
-
-/** The guest's kvmclock of `vm` in ns now. */
-static uint64_t kvmclock_ns(const struct kvm_vm *vm)
-{
-    return kvm_host_ns() + (uint64_t)vm->clock_offset;
+    return kvm_tsc_read(v);
 }
 
 /** HV_MSR_TIME_REF_COUNT of `vm`, in 100 ns, as Linux's
@@ -377,7 +364,7 @@ static uint64_t ref_counter(const struct kvm_vm *vm)
     const struct hv_vm *h = hvm_of(vm);
 
     if (!h || h->tsc_status != TSC_SET || vm->nr_vcpus == 0) {
-        return kvmclock_ns(vm) / 100u;
+        return kvm_clock_ns(vm) / 100u;
     }
     return mul_hi(guest_tsc(vm->vcpus[0]), h->tsc_scale) + (uint64_t)h->tsc_offset;
 }
@@ -441,13 +428,16 @@ static void tsc_page_setup(struct kvm_vcpu *v)
     if (kvm_guest_phys_rw(v, gpa, page, 4, 1) != 0) {
         goto broken;
     }
-    hz = tsc_hz();
+    if (v->vm->nr_vcpus == 0) {
+        goto broken;
+    }
+    hz = kvm_tsc_hz(v->vm->vcpus[0]);
     h->tsc_scale = tsc_scale(hz);
-    if (h->tsc_scale == 0 || v->vm->nr_vcpus == 0) {
+    if (h->tsc_scale == 0) {
         goto broken;
     }
     tsc = guest_tsc(v->vm->vcpus[0]);
-    ns = kvmclock_ns(v->vm);
+    ns = kvm_clock_ns(v->vm);
     h->tsc_offset = (int64_t)(ns / 100u - mul_hi(tsc, h->tsc_scale));
     k_memcpy(page + 8, &h->tsc_scale, 8);
     k_memcpy(page + 16, &h->tsc_offset, 8);
@@ -1326,8 +1316,9 @@ static int msr_vcpu(struct kvm_vcpu *v, uint32_t msr, int write, uint64_t *value
         if (write) {
             return host ? 0 : -1;
         }
-        /* The APIC timer counts at 1 GHz, one ns a bus cycle. */
-        *value = msr == HV_MSR_TSC_FREQUENCY ? tsc_hz() / 1000u * 1000u : 1000000000ull;
+        /* The APIC timer counts a bus cycle of the VM's `apic_bus_ns`. */
+        *value = msr == HV_MSR_TSC_FREQUENCY ? (uint64_t)v->tsc_khz * 1000u
+                                             : 1000000000ull / v->vm->apic_bus_ns;
         return 0;
     default:
         return -1;
@@ -1439,7 +1430,7 @@ int32_t kvm_hv_get_cpuid(struct kvm_vcpu *v, uintptr_t arg)
         HV_CPUID_SYNDBG_PLATFORM, HV_CPUID_NESTED};
     struct kvm_cpuid_entry2 ent[10];
     struct kvm_cpuid2 head;
-    int apic = !v || v->vm->irqchip == KVM_IRQCHIP_SPLIT;
+    int apic = !v || v->vm->irqchip != KVM_IRQCHIP_NONE;
     uint32_t i;
 
     if (copy_from_user(&head, (const void __user *)arg, sizeof(head)) != 0) {
@@ -1529,7 +1520,7 @@ int32_t kvm_hv_enable_cap(struct kvm_vcpu *v, const struct kvm_enable_cap *cap)
         }
         /* fall through */
     case KVM_CAP_HYPERV_SYNIC:
-        if (v->vm->irqchip != KVM_IRQCHIP_SPLIT) {
+        if (v->vm->irqchip == KVM_IRQCHIP_NONE) {
             return -EINVAL;
         }
         if (hv_init(v) != 0) {
@@ -1847,7 +1838,7 @@ static uint64_t hc_send_ipi(struct kvm_vcpu *v, struct hcall *hc)
     uint32_t vector, i;
     int all;
 
-    if (hc_form_bad(hc) || v->vm->irqchip != KVM_IRQCHIP_SPLIT) {
+    if (hc_form_bad(hc) || v->vm->irqchip == KVM_IRQCHIP_NONE) {
         return HV_STATUS_INVALID_INPUT;
     }
     k_memset(banks, 0, sizeof(banks));

@@ -3,7 +3,9 @@
  * trial on the Lenovo, 78-4b, run whole against the host model of its HD
  * 4400 as the firmware leaves it: the bind under rach2.i915 alone, the
  * trial's first boot, and under rach2.i915 and rach2.i915.firstlight, its
- * second.
+ * second; and the bind of 78-5c's trial, under rach2.i915 and
+ * rach2.i915.disable_display, which leaves the display and the firmware's
+ * framebuffer device alone.
  *
  * host-deps: rach2/sys/drm/i915/i915_hw.c tests/host/i915_model.c
  * host-deps: rach2/sys/drm/i915/i915_uncore.c rach2/sys/drm/i915/i915_power.c
@@ -95,7 +97,11 @@ static int fails;
 /* ---- the kernel around the driver ---- */
 
 static struct i915_model *bus; /* the chip on the bus, or NULL */
-static int opt_i915, opt_firstlight;
+static int opt_i915, opt_firstlight, opt_nodisplay;
+
+/* The calls of the display's bring-up: the display made, and the
+ * firmware's framebuffer device removed over the aperture. */
+static int display_inits, aperture_removes;
 static int irq_on, irq_depth;
 static struct drm_device *last_registered;
 static int vectors;
@@ -132,7 +138,8 @@ static int logged(const char *text)
 int kcmdline_has(const char *flag)
 {
     return (opt_i915 && strcmp(flag, "rach2.i915") == 0) ||
-           (opt_firstlight && strcmp(flag, "rach2.i915.firstlight") == 0);
+           (opt_firstlight && strcmp(flag, "rach2.i915.firstlight") == 0) ||
+           (opt_nodisplay && strcmp(flag, "rach2.i915.disable_display") == 0);
 }
 
 /** The fake chip, which i915_fake_hosttest.c tests: no command line here
@@ -549,6 +556,7 @@ void register_isr_handler(uint8_t vector, isr_handler_t h, const char *name)
 int32_t intel_display_init(struct drm_i915_private *i915)
 {
     (void)i915;
+    display_inits++;
     return 0;
 }
 
@@ -567,6 +575,7 @@ int32_t drm_aperture_remove_conflicting(uint64_t base, uint64_t size, const char
     (void)base;
     (void)size;
     (void)name;
+    aperture_removes++;
     return 0;
 }
 
@@ -615,6 +624,11 @@ void i915_gem_unplug(struct drm_i915_private *i915)
     (void)i915;
 }
 
+void i915_debugfs_register(struct drm_i915_private *i915)
+{
+    (void)i915;
+}
+
 void i915_gem_shrinker_register(struct drm_i915_private *i915)
 {
     (void)i915;
@@ -625,7 +639,14 @@ void i915_gem_shrinker_unregister(struct drm_i915_private *i915)
     (void)i915;
 }
 
-void i915_debugfs_register(struct drm_i915_private *i915)
+/* The release and the bring-up through /sys, i915_handoff.c, which
+ * i915_handoff_hosttest.c tests; no row here unbinds the driver. */
+void i915_handoff_bound(struct drm_i915_private *i915)
+{
+    (void)i915;
+}
+
+void i915_handoff_unbound(struct drm_i915_private *i915)
 {
     (void)i915;
 }
@@ -736,9 +757,12 @@ static void on_delay(struct i915_model *m)
  * video enhancement engines, inside their rings' registers too; and
  * the swizzle of tiles, in the display's arbiter, the GT's tile control
  * and ARB_MODE, as Linux's intel_gt_init_swizzling sets it on the
- * Lenovo, whose firmware's surface is linear; and the PPGTT's caching, as
- * Linux's gen7_ppgtt_enable sets it. The fence registers, which the bind
- * clears, are `write_ok`'s. */
+ * Lenovo, whose firmware's surface is linear; the PPGTT's caching, as
+ * Linux's gen7_ppgtt_enable sets it; and the GT's workarounds and the
+ * render engine's, as Linux's hsw_gt_workarounds_init and
+ * rcs_engine_wa_init list them, with the message channel's register of
+ * hsw_init_clock_gating. The fence registers, which the bind clears, are
+ * `write_ok`'s. */
 static const uint32_t writes_ok[] = {GEN6_PCODE_MAILBOX,
                                      GEN6_PCODE_DATA,
                                      GEN6_PCODE_DATA1,
@@ -791,7 +815,14 @@ static const uint32_t writes_ok[] = {GEN6_PCODE_MAILBOX,
                                      TILECTL,
                                      ARB_MODE,
                                      GAM_ECOCHK,
-                                     GAC_ECO_BITS};
+                                     GAC_ECO_BITS,
+                                     HSW_SCRATCH1,
+                                     HSW_ROW_CHICKEN3,
+                                     CACHE_MODE_0_GEN7,
+                                     CACHE_MODE_1,
+                                     GEN7_GT_MODE,
+                                     HSW_HALF_SLICE_CHICKEN3,
+                                     GEN7_SQ_CHICKEN_MBCUNIT_CONFIG};
 
 /** Whether `reg`, written, belongs to what the bind may write: the GT's
  * forcewake, the fence registers, the four rings and their status page
@@ -906,12 +937,48 @@ static void fresh(struct i915_model *m, struct i915_hw *hw, int firstlight, int 
     fw_maps = fw_unmaps = 0;
 }
 
+/** Whether the bind made the display, or under rach2.i915.disable_display
+ * left it and the firmware's framebuffer device alone. */
+static void check_display_bind(int nodisplay)
+{
+    if (nodisplay) {
+        CHECK("display: left alone under rach2.i915.disable_display",
+              display_inits == 0 && aperture_removes == 0 &&
+                  !(last_registered->features & (DRIVER_MODESET | DRIVER_ATOMIC)) &&
+                  (last_registered->features & DRIVER_RENDER) &&
+                  logged("display: disabled by rach2.i915.disable_display"));
+    } else {
+        CHECK("display: the firmware's device removed, then the display made",
+              display_inits == 1 && aperture_removes == 1 &&
+                  (last_registered->features & DRIVER_MODESET));
+    }
+}
+
+/** Whether first light ran as its option says: ok, its interrupt taken or
+ * latched and its page given back, which leaves each ring's status page
+ * and four pages and the PPGTT's scratch table, or nothing run without the
+ * option. */
+static void check_light(struct drm_i915_private *i915, struct i915_model_ring *rcs, int firstlight,
+                        int interrupts)
+{
+    if (firstlight) {
+        CHECK("light: ok, the interrupt taken or latched",
+              logged("first light: ok: rcs0 wrote 0x1915f157") &&
+                  logged(interrupts ? "user interrupt taken" : "user interrupt latched"));
+        CHECK("light: the value page given back",
+              i915->gt.engine[I915_RCS0].irq_refs == 0 && pages_live == I915_NUM_ENGINES * 5 + 1);
+    } else {
+        CHECK("bind: no first light without its option",
+              !logged("first light") && rcs->executed == 0 && i915->gt.engine[I915_RCS0].tail == 0);
+    }
+}
+
 /**
  * Bind the driver to a fresh model of the Lenovo's chip with the boot
  * options of one of the trial's boots, the processor's interrupts on or
  * off, and check what the trial must leave as it was.
  */
-static void run(int firstlight, int interrupts)
+static void run(int firstlight, int interrupts, int nodisplay)
 {
     struct i915_model m;
     struct drm_i915_private *i915;
@@ -919,6 +986,8 @@ static void run(int firstlight, int interrupts)
     struct i915_model_ring *rcs, *bcs;
 
     fresh(&m, &hw, firstlight, interrupts);
+    opt_nodisplay = nodisplay;
+    display_inits = aperture_removes = 0;
     CHECK("bind: the driver binds", i915_driver_bind(&m.pci, &hw) == 0 && last_registered);
     if (last_registered) {
         i915 = to_i915(last_registered);
@@ -935,21 +1004,12 @@ static void run(int firstlight, int interrupts)
         CHECK("bind: the VBT from the OpRegion's mailbox 4, three outputs",
               fw_maps == 1 && i915->vbt.present && i915->vbt.version == LENOVO_VBT_VERSION &&
                   i915->vbt.nencoders == 3 && logged("VBT in mailbox 4"));
+        check_display_bind(nodisplay);
         check_display(&m, i915);
         check_interrupts(&m);
         CHECK("gpu: no memory reached but the driver's pages", !rcs->faulted && !bcs->faulted);
         CHECK("gpu: nothing run on the blitter", bcs->executed == 0);
-        if (firstlight) {
-            CHECK("light: ok, the interrupt taken or latched",
-                  logged("first light: ok: rcs0 wrote 0x1915f157") &&
-                      logged(interrupts ? "user interrupt taken" : "user interrupt latched"));
-            CHECK("light: the value page given back",
-                  i915->gt.engine[I915_RCS0].irq_refs == 0 && pages_live == 10);
-        } else {
-            CHECK("bind: no first light without its option",
-                  !logged("first light") && rcs->executed == 0 &&
-                      i915->gt.engine[I915_RCS0].tail == 0);
-        }
+        check_light(i915, rcs, firstlight, interrupts);
         i915_unplug(last_registered);
         drm_dev_put(last_registered);
         last_registered = 0;
@@ -962,10 +1022,12 @@ static void run(int firstlight, int interrupts)
 
 int main(void)
 {
-    run(0, 1);
-    run(0, 0);
-    run(1, 1);
-    run(1, 0);
+    run(0, 1, 0);
+    run(0, 0, 0);
+    run(1, 1, 0);
+    run(1, 0, 0);
+    run(0, 1, 1);
+    run(0, 0, 1);
     if (fails) {
         printf("i915-trial-test: %d failed\n", fails);
         return 1;

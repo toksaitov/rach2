@@ -65,7 +65,9 @@ static void irq_restore(uint32_t flags)
  * readable descriptor, so poll(stdout, POLLOUT) never drains serial input,
  * and POLLOUT for any descriptor, as a terminal answers on Linux whatever
  * the descriptor's mode, so that a caller polling a read-only one for output
- * is not left waiting; its write is then EBADF.
+ * is not left waiting; its write is then EBADF. A description of the console
+ * opened before a vhangup(2) answers TTY_HUNG_POLL whatever was asked, as
+ * Linux's hung_up_tty_poll does.
  */
 short poll_fd(fd_entry_t *e, short events, struct wait_queue **wq)
 {
@@ -79,6 +81,9 @@ short poll_fd(fd_entry_t *e, short events, struct wait_queue **wq)
     }
     if (e->type == FD_TYPE_FILE || e->type == FD_TYPE_DIR) {
         return (short)(events & (POLLIN | POLLOUT));
+    }
+    if (e->type == FD_TYPE_CONSOLE && e->ofd && tty_desc_hung(&console_tty, e->ofd->tty_hangups)) {
+        return (short)TTY_HUNG_POLL;
     }
     if (e->type == FD_TYPE_CONSOLE) {
         short want = 0;
@@ -242,7 +247,7 @@ static int deadline_passed(struct poll_deadline *d)
  * wait sleeps on (`epoll_waits_let_go`); the process looks at the arrays
  * again only with the big lock, which that close holds.
  */
-int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d)
+int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d, const char *wchan)
 {
     struct wait_queue **wqs;
     struct wq_waiter *recs;
@@ -289,6 +294,7 @@ int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d)
         if (d->set) {
             current_proc->wakeup_tick = d->tick ? d->tick : 1;
         }
+        current_proc->wchan = wchan;
         current_proc->state = PROC_BLOCKED;
         irq_restore(flags);
 
@@ -340,23 +346,55 @@ static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, struct poll_deadlin
     do {
         p.room = p.grow;
         p.grow = 0;
-        rc = poll_wait(scan_pollfds, &p, p.room, d);
+        rc = poll_wait(scan_pollfds, &p, p.room, d, sel ? "do_select" : "do_sys_poll");
     } while (rc > 0 && p.grow != 0);
     return rc;
 }
 
+/* The largest second a deadline holds, at which Linux's
+ * timespec64_add_safe stops. */
+#define DEADLINE_SEC_MAX ((int64_t)(((uint64_t)1 << 63) - 1u))
+
 /** In `d`, the end of a wait of `sec` seconds and `nsec` nanoseconds that
  * begins now, by time since boot (`rtc_monotonic`). It is read before the
  * tick (`tick_deadline`), so that without a lost tick the clock has reached
- * the end by the deadline tick. */
+ * the end by the deadline tick. An end past the largest second stops
+ * there, as Linux's does. */
 static void deadline_end(struct poll_deadline *d, long sec, long nsec)
 {
     rtc_monotonic(&d->sec, &d->nsec);
+    if ((int64_t)sec > DEADLINE_SEC_MAX - 1 - d->sec) {
+        d->sec = DEADLINE_SEC_MAX;
+        d->nsec = 0;
+        return;
+    }
     d->sec += sec;
     d->nsec += nsec;
     if (d->nsec >= 1000000000L) {
         d->nsec -= 1000000000L;
         d->sec++;
+    }
+}
+
+/**
+ * The time left until the end of `d` by time since boot, none when it has
+ * passed, in `*sec` and `*nsec`: what Linux's select, pselect6 and ppoll
+ * write back to the caller's timeout (poll_select_finish).
+ */
+static void deadline_left(const struct poll_deadline *d, int64_t *sec, int64_t *nsec)
+{
+    int64_t now_sec, now_nsec;
+
+    rtc_monotonic(&now_sec, &now_nsec);
+    *sec = d->sec - now_sec;
+    *nsec = d->nsec - now_nsec;
+    if (*nsec < 0) {
+        *nsec += 1000000000L;
+        (*sec)--;
+    }
+    if (*sec < 0) {
+        *sec = 0;
+        *nsec = 0;
     }
 }
 
@@ -393,17 +431,6 @@ void poll_ms_deadline(int timeout_ms, struct poll_deadline *d)
     d->tick = tick_deadline(tick_span(timeout_ms / 1000, 0), (uint32_t)(timeout_ms % 1000) * 1000u);
 }
 
-/**
- * Whether the timeval `tv` is one the select calls take: seconds not
- * negative and microseconds from 0 to 999999. They refuse another with
- * -EINVAL, as Linux does, and the range keeps the conversions below free of
- * signed overflow.
- */
-static int tv_valid(const struct poll_timeval *tv)
-{
-    return tv->tv_sec >= 0 && tv->tv_usec >= 0 && tv->tv_usec < 1000000;
-}
-
 /** Whether the timespec `ts` is one ppoll and pselect6 take: seconds not
  * negative and nanoseconds from 0 to 999999999. */
 static int ts_valid(const struct poll_timespec *ts)
@@ -412,44 +439,99 @@ static int ts_valid(const struct poll_timespec *ts)
 }
 
 /**
- * The timeval `tv` as a timeout in milliseconds for `poll_ms_deadline`,
- * rounded up. Seconds past 2147482 give 2147483647 milliseconds, about 24.8
- * days, so the product cannot overflow, and negative seconds give 0, a poll
- * that does not wait. A timeval thus always gives a finite timeout; only a
- * null one waits without end.
- */
-static int tv_to_ms(const struct poll_timeval *tv)
-{
-    if (tv->tv_sec < 0) {
-        return 0;
-    }
-    if (tv->tv_sec > 2147482) {
-        return 0x7FFFFFFF;
-    }
-    return (int)(tv->tv_sec * 1000 + (tv->tv_usec + 999) / 1000);
-}
-
-/**
  * In `d`, the deadline of the timespec `ts`: the first tick at or after its
  * end (`tick_deadline`), and its end by time since boot; none for a NULL
- * `ts`. A timeout of 2^40 seconds or more, which `tick_span` cuts, ends at
- * its tick alone.
+ * `ts`. A timeout of 2^40 seconds or more, which `tick_span` cuts, reaches
+ * its tick only after that span.
  */
 static void ts_deadline(const struct poll_timespec *ts, struct poll_deadline *d)
 {
-    int64_t sec;
-
     d->set = ts != NULL;
     if (!d->set) {
         return;
     }
-    sec = ts->tv_sec;
-    d->sec = 0;
-    d->nsec = 0;
-    if (sec < ((int64_t)1 << 40)) {
-        deadline_end(d, ts->tv_sec, ts->tv_nsec);
-    }
+    deadline_end(d, ts->tv_sec, ts->tv_nsec);
     d->tick = tick_deadline(tick_span(ts->tv_sec, 0), ((uint32_t)ts->tv_nsec + 999u) / 1000u);
+}
+
+/** Normalize `tv` to seconds and microseconds, as Linux's select does,
+ * and put its deadline in `d`, or none for a NULL `tv`. Return 0, or
+ * -EINVAL if the normalized seconds or fraction are negative. The sum
+ * wraps in the caller's native long width without signed overflow. */
+static int tv_deadline(struct poll_timeval *tv, struct poll_deadline *d)
+{
+    struct poll_timespec ts;
+
+    if (!tv) {
+        ts_deadline(NULL, d);
+        return 0;
+    }
+    ts.tv_sec = (long)((unsigned long)tv->tv_sec + (unsigned long)(tv->tv_usec / 1000000L));
+    ts.tv_nsec = (tv->tv_usec % 1000000L) * 1000L;
+    if (!ts_valid(&ts)) {
+        return -EINVAL;
+    }
+    tv->tv_sec = ts.tv_sec;
+    tv->tv_usec %= 1000000L;
+    ts_deadline(&ts, d);
+    return 0;
+}
+
+/* Linux's personality flag that keeps select's and ppoll's timeout as the
+ * caller gave it. */
+#define STICKY_TIMEOUTS 0x4000000u
+
+/* The form of a timeval and of a timespec of longs, the native calls'. */
+#define LEFT_LONGS (sizeof(long) > 4u ? POLL_LEFT_WIDE : 0)
+#define LEFT_TV    (POLL_LEFT_USEC | LEFT_LONGS)
+
+/** Write `sec` seconds and `nsec` nanoseconds to the timeout at `ut`, in
+ * the form `form`, POLL_LEFT_ bits; 0 or -EFAULT. */
+static int poll_put_left(uintptr_t ut, int form, int64_t sec, int64_t nsec)
+{
+    void __user *u = (void __user *)ut;
+    /* Under a second, so 32 bits divide it, with no libgcc on i686. */
+    int64_t part = (form & POLL_LEFT_USEC) ? (int32_t)nsec / 1000 : nsec;
+
+    if (form & POLL_LEFT_WIDE) {
+        int64_t w[2];
+
+        w[0] = sec;
+        w[1] = part;
+        return copy_to_user(u, w, sizeof(w)) != 0 ? -EFAULT : 0;
+    } else {
+        int32_t w[2];
+
+        w[0] = (int32_t)sec;
+        w[1] = (int32_t)part;
+        return copy_to_user(u, w, sizeof(w)) != 0 ? -EFAULT : 0;
+    }
+}
+
+int32_t poll_left_out(int32_t ret, uintptr_t ut, int form, int zero, int64_t sec, int64_t nsec)
+{
+    if (!ut || zero) {
+        return ret;
+    }
+    if ((current_proc->persona & STICKY_TIMEOUTS) != 0 || poll_put_left(ut, form, sec, nsec) != 0) {
+        if (ret == -EINTR && current_proc->restart_kind == RESTART_NOHAND) {
+            current_proc->restart_kind = RESTART_NONE;
+        }
+    }
+    return ret;
+}
+
+int32_t poll_finish(int32_t ret, uintptr_t ut, const struct poll_deadline *d, int form, int zero)
+{
+    int64_t sec = 0, nsec = 0;
+
+    if (ret == -EINTR) {
+        current_proc->restart_kind = RESTART_NOHAND;
+    }
+    if (ut && !zero) {
+        deadline_left(d, &sec, &nsec);
+    }
+    return poll_left_out(ret, ut, form, zero, sec, nsec);
 }
 
 /** The body of poll and ppoll: the `nfds` entries at `ufds` waited on until
@@ -487,14 +569,61 @@ static int32_t poll_common(uintptr_t ufds, uint32_t nfds, struct poll_deadline *
     return ready;
 }
 
+static long poll_restart(struct isr_params *params);
+
+/**
+ * File a poll a signal cut short, its result `ret`, for its restart, as
+ * Linux's poll does: the array, its count and the deadline `d` go into the
+ * thread's restart block, and the call stands for ERESTART_RESTARTBLOCK,
+ * which a signal that runs no handler restarts through restart_syscall
+ * (`poll_restart`), to the same deadline, and a handler ends with EINTR.
+ */
+static int32_t poll_filed(int32_t ret, uintptr_t ufds, uint32_t nfds, const struct poll_deadline *d)
+{
+    struct restart_block *b = &current_proc->restart;
+
+    if (ret == -EINTR) {
+        b->fn = poll_restart;
+        b->uaddr = ufds;
+        b->val = nfds;
+        b->timed = (uint8_t)(d->set != 0);
+        b->tick = d->tick;
+        b->sec = d->sec;
+        b->nsec = d->nsec;
+        current_proc->restart_kind = RESTART_BLOCK;
+    }
+    return ret;
+}
+
+/** The resumption of a poll a signal that ran no handler cut short
+ * (restart_syscall): the array the block keeps, to the deadline it keeps,
+ * filed again for a further signal, as Linux's do_restart_poll does. */
+static long poll_restart(struct isr_params *params)
+{
+    const struct restart_block *b = &current_proc->restart;
+    struct poll_deadline d;
+    uintptr_t ufds = b->uaddr;
+    uint32_t nfds = b->val;
+
+    (void)params;
+    d.set = b->timed;
+    d.tick = b->tick;
+    d.sec = b->sec;
+    d.nsec = b->nsec;
+    return poll_filed(poll_common(ufds, nfds, &d), ufds, nfds, &d);
+}
+
 long sys_poll(struct isr_params *params)
 {
     uintptr_t ufds = SC_ARG(params, 0);
     uint32_t nfds = (uint32_t)SC_ARG(params, 1);
     struct poll_deadline d;
 
+    if (!current_proc) {
+        return -ESRCH;
+    }
     poll_ms_deadline((int)SC_ARG(params, 2), &d);
-    return poll_common(ufds, nfds, &d);
+    return poll_filed(poll_common(ufds, nfds, &d), ufds, nfds, &d);
 }
 
 /**
@@ -540,6 +669,8 @@ long sys_ppoll(struct isr_params *params)
     struct poll_timespec ts;
     struct poll_deadline d;
 
+    ts.tv_sec = 0;
+    ts.tv_nsec = 0;
     if (uts) {
         if (copy_from_user(&ts, (const void __user *)uts, sizeof(ts)) != 0) {
             return -EFAULT;
@@ -561,7 +692,8 @@ long sys_ppoll(struct isr_params *params)
             return rc;
         }
     }
-    return poll_mask_done(poll_common(ufds, nfds, &d));
+    return poll_finish(poll_mask_done(poll_common(ufds, nfds, &d)), uts, &d, LEFT_LONGS,
+                       ts.tv_sec == 0 && ts.tv_nsec == 0);
 }
 
 /**
@@ -676,18 +808,18 @@ long sys__newselect(struct isr_params *params)
     struct poll_timeval tv;
     struct poll_deadline d;
 
+    tv.tv_sec = 0;
+    tv.tv_usec = 0;
     if (utv) {
         if (copy_from_user(&tv, (const void __user *)utv, sizeof(tv)) != 0) {
             return -EFAULT;
         }
-        if (!tv_valid(&tv)) {
-            return -EINVAL;
-        }
-        poll_ms_deadline(tv_to_ms(&tv), &d);
-    } else {
-        poll_ms_deadline(-1, &d);
     }
-    return select_common(nfds, ur, uw, ue, &d);
+    if (tv_deadline(utv ? &tv : NULL, &d) != 0) {
+        return -EINVAL;
+    }
+    return poll_finish(select_common(nfds, ur, uw, ue, &d), utv, &d, LEFT_TV,
+                       tv.tv_sec == 0 && tv.tv_usec == 0);
 }
 
 long sys_select(struct isr_params *params)
@@ -703,18 +835,18 @@ long sys_select(struct isr_params *params)
         struct poll_timeval tv;
         struct poll_deadline d;
 
+        tv.tv_sec = 0;
+        tv.tv_usec = 0;
         if (a[4]) {
             if (copy_from_user(&tv, (const void __user *)a[4], sizeof(tv)) != 0) {
                 return -EFAULT;
             }
-            if (!tv_valid(&tv)) {
-                return -EINVAL;
-            }
-            poll_ms_deadline(tv_to_ms(&tv), &d);
-        } else {
-            poll_ms_deadline(-1, &d);
         }
-        return select_common((int)a[0], a[1], a[2], a[3], &d);
+        if (tv_deadline(a[4] ? &tv : NULL, &d) != 0) {
+            return -EINVAL;
+        }
+        return poll_finish(select_common((int)a[0], a[1], a[2], a[3], &d), a[4], &d, LEFT_TV,
+                           tv.tv_sec == 0 && tv.tv_usec == 0);
     }
 }
 
@@ -741,6 +873,8 @@ long sys_pselect6(struct isr_params *params)
         copy_from_user(&sigarg, (const void __user *)SC_ARG(params, 5), sizeof(sigarg)) != 0) {
         return -EFAULT;
     }
+    ts.tv_sec = 0;
+    ts.tv_nsec = 0;
     if (uts) {
         if (copy_from_user(&ts, (const void __user *)uts, sizeof(ts)) != 0) {
             return -EFAULT;
@@ -759,5 +893,6 @@ long sys_pselect6(struct isr_params *params)
             return rc;
         }
     }
-    return poll_mask_done(select_common(nfds, ur, uw, ue, &d));
+    return poll_finish(poll_mask_done(select_common(nfds, ur, uw, ue, &d)), uts, &d, LEFT_LONGS,
+                       ts.tv_sec == 0 && ts.tv_nsec == 0);
 }

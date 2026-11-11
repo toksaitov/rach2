@@ -159,16 +159,17 @@ void arch_regs_get(const process_t *t, unsigned long *r)
 
 /**
  * Set the DS, ES, FS or GS selector, by `i`, of the stopped thread `t` to
- * `sel`, which the switch in loads, before the bases. The selector must be
+ * the low 16 bits of `value`, as Linux's `set_segment_reg` takes them, the
+ * selector the switch in loads before the bases. The selector must be
  * null, at RPL 0 or 3, a user code or data selector, the selector at RPL 3
  * of one of the thread's TLS entries that holds a descriptor, or any of the
  * LDT at RPL 3, which the switch loads as null if it does not load. Linux
  * takes any selector at RPL 3; one of the GDT outside these would load a
  * kernel segment or the TSS. Returns 0, or -EIO.
  */
-static int sel_set(process_t *t, int i, unsigned long sel)
+static int sel_set(process_t *t, int i, unsigned long value)
 {
-    unsigned long entry = sel >> 3;
+    unsigned long sel = value & 0xFFFFu, entry = sel >> 3;
     int tls = (sel & 7u) == 3u && entry >= GDT_TLS_MIN && entry <= GDT_TLS_MAX &&
               t->regs.tls[entry - GDT_TLS_MIN] != 0;
 
@@ -196,8 +197,7 @@ static int sel_set(process_t *t, int i, unsigned long sel)
  * Set the user register `i` of the stopped thread `t` to `v`, as Linux's
  * `putreg` does: the flags only where a program may change them, a base
  * only to a user address, CS to the user's 64-bit or 32-bit code selector
- * and SS to its data selector, since a return to user mode with any other
- * would fault in the kernel (isr_exit guards the address), and DS, ES,
+ * and SS to a nonzero selector at RPL 3, and DS, ES,
  * FS and GS only to a selector `sel_set` takes. An orig_rax of -1 stops an
  * interrupted system call from being restarted; it is kept in 32 bits, as
  * the system call number is. Returns 0, or -EIO.
@@ -254,9 +254,6 @@ static int regs_set(process_t *t, int i, unsigned long v)
         break;
     case R_ORIG_RAX:
         t->orig_nr = (int32_t)v;
-        if ((int32_t)v == -1) {
-            t->restart_nr = 0;
-        }
         break;
     case R_RIP:
         tf->rip = v;
@@ -274,9 +271,10 @@ static int regs_set(process_t *t, int i, unsigned long v)
         tf->rsp = v;
         break;
     case R_SS:
-        if ((v & 0xFFFFu) != GDT_USER_DATA) {
+        if ((v & 3u) != 3u) {
             return -EIO;
         }
+        tf->ss = v & 0xFFFFu;
         break;
     case R_FS_BASE:
     case R_GS_BASE:
@@ -332,15 +330,21 @@ static void regs32_get(const process_t *t, uint32_t *r)
 /** Set word `i` of `t`'s `user_regs_struct32` to `v`, zero-extended into
  * its register as Linux's `putreg32` does, and through `regs_set`'s
  * checks; FS and GS also take the base their new selector gives, as an
- * i386 tracer on Linux expects. 0, or -EIO. */
+ * i386 tracer on Linux expects, read from the 16 bits `sel_set` stored,
+ * as Linux's `x86_fsgsbase_read_task` reads them. 0, or -EIO. */
 static int regs32_set(process_t *t, int i, uint32_t v)
 {
-    int rc = regs_set(t, r32_native[i], v);
+    int rc;
+
+    if (i < 0 || i >= R32_COUNT) {
+        return -EIO;
+    }
+    rc = regs_set(t, r32_native[i], v);
 
     if (rc == 0 && i == R32_FS) {
-        t->tls_base = tls_selector_base(t, v);
+        t->tls_base = tls_selector_base(t, t->regs.fs_sel);
     } else if (rc == 0 && i == R32_GS) {
-        t->regs.gs_base = tls_selector_base(t, v);
+        t->regs.gs_base = tls_selector_base(t, t->regs.gs_sel);
     }
     return rc;
 }
@@ -506,13 +510,13 @@ static int fp32_access(uint32_t pid, process_t *t, uintptr_t data, int set)
  * 14, of `t`, the thread `pid`, as the `user_desc` at `data`, as Linux's
  * `do_get_thread_area` and `do_set_thread_area` take it from a tracer: a
  * write takes the descriptor set_thread_area takes, and FS or GS holding
- * the entry's selector take its base. -EIO for an entry negative as an
- * int, -EINVAL for another entry or a descriptor refused, -EFAULT, -ESRCH.
+ * the entry's selector, at any RPL, take its base. -EIO for an entry
+ * negative as an int, -EINVAL for another entry or a descriptor refused,
+ * -EFAULT, -ESRCH.
  */
 static int tls_access(uint32_t pid, process_t *t, unsigned long idx, uintptr_t data, int set)
 {
     struct user_desc u;
-    unsigned int sel = ((unsigned int)idx << 3) | 3u;
     int rc;
 
     if ((int)idx < 0) {
@@ -533,10 +537,10 @@ static int tls_access(uint32_t pid, process_t *t, unsigned long idx, uintptr_t d
         return -ESRCH;
     }
     rc = tls_entry_set(t, (uint32_t)idx, &u);
-    if (rc == 0 && t->regs.fs_sel == sel) {
+    if (rc == 0 && TLS_SEL_NAMES(t->regs.fs_sel, idx)) {
         t->tls_base = u.base_addr;
     }
-    if (rc == 0 && t->regs.gs_sel == sel) {
+    if (rc == 0 && TLS_SEL_NAMES(t->regs.gs_sel, idx)) {
         t->regs.gs_base = u.base_addr;
     }
     return rc;
@@ -613,6 +617,9 @@ static long regset32_set(process_t *t, unsigned long type, const uint8_t *in, ui
 
     switch (type) {
     case NT_PRSTATUS:
+        if (len > R32_COUNT * 4u || len % 4u != 0) {
+            return -EINVAL;
+        }
         return regs32_set_all(t, in, len);
     case NT_PRFPREG:
         if (len != FPU_ENV_SIZE) {
@@ -626,6 +633,9 @@ static long regset32_set(process_t *t, unsigned long type, const uint8_t *in, ui
         }
         return fpu_fx_set(t->fpu, in) == 0 ? 0 : -EINVAL;
     case NT_386_TLS:
+        if (len > sizeof(u) || len % USER_DESC_SIZE != 0) {
+            return -EINVAL;
+        }
         k_memcpy(u, in, len);
         for (i = 0; i < len / USER_DESC_SIZE; i++) {
             if (!tls_desc_valid(&u[i])) {
@@ -634,6 +644,12 @@ static long regset32_set(process_t *t, unsigned long type, const uint8_t *in, ui
         }
         for (i = 0; i < len / USER_DESC_SIZE; i++) {
             tls_entry_set(t, (uint32_t)(GDT_TLS_MIN + i), &u[i]);
+            if (TLS_SEL_NAMES(t->regs.fs_sel, GDT_TLS_MIN + i)) {
+                t->tls_base = tls_selector_base(t, t->regs.fs_sel);
+            }
+            if (TLS_SEL_NAMES(t->regs.gs_sel, GDT_TLS_MIN + i)) {
+                t->regs.gs_base = tls_selector_base(t, t->regs.gs_sel);
+            }
         }
         return 0;
     default:

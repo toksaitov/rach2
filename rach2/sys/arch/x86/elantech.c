@@ -29,11 +29,12 @@
 #include "ps2mouse.h"
 #include "smbios.h"
 #include "../../evdev.h"
+#include "../../fs/sysfs.h"
 #include "../../klog.h"
+#include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
 #include "../../mouse.h"
 #include "../../timer.h"
-#include "../../udelay.h"
 
 /* The mouse commands the pad's requests are made of. */
 #define CMD_SET_SCALE11 0xE6
@@ -69,6 +70,7 @@
 /* Version 1's register 0x10 bit of absolute mode, and the capabilities'
  * bit of a rocker switch. */
 #define R10_ABSOLUTE_MODE 0x04
+#define R11_4_BYTE_MODE   0x02
 #define CAP_HAS_ROCKER    0x04
 
 /* The ranges of the versions that do not give theirs: version 1's from an
@@ -126,7 +128,13 @@ struct elantech_info {
     uint32_t bus;
     int jumpy_cursor;
     int reports_pressure;
-    int crc_enabled;
+    /* The three that files of the port show and set, a byte each as in
+     * Linux: messages (1) and each packet logged too (2 and above); the
+     * check of version 1's parity and version 2's constant bits; and the
+     * CRC form of version 3's and 4's packets. */
+    uint8_t debug;
+    uint8_t paritycheck;
+    uint8_t crc_enabled;
     int set_hw_resolution;
     int has_trackpoint;
     int has_middle_button;
@@ -139,21 +147,31 @@ struct finger_pos {
 };
 
 static struct elantech_info etd_info;
-static uint8_t etd_reg_07;    /* version 4's mode, written again after a rate */
-static struct evdev *etd_pad; /* the touchpad's event device */
-static struct evdev *etd_tp;  /* the pointing stick's, or NULL */
+
+/* The registers that files of the port show and set, Linux's reg_07 to
+ * reg_26: the value last written or read. Register 0x07 is version 4's
+ * mode, which firmware 0x381f17 loses at a change of rate. */
+static const uint8_t etd_reg_numbers[] = {0x07, 0x10, 0x11, 0x20, 0x21,
+                                          0x22, 0x23, 0x24, 0x25, 0x26};
+#define ETD_REGS ((int)sizeof(etd_reg_numbers))
+#define REG_07   0
+#define REG_10   1
+#define REG_11   2
+#define REG_21   4
+static uint8_t etd_regs[ETD_REGS];
+
+static struct evdev *etd_pad;   /* the touchpad's event device */
+static struct evdev *etd_tp;    /* the pointing stick's, or NULL */
+static uint32_t etd_generation; /* changes when a protocol's callbacks expire */
 static unsigned int etd_single_finger_reports;
 static struct finger_pos etd_mt[MAX_FINGERS];
 
-/* The packet being assembled: its bytes, how many have come, its size and
- * the tick of the last. */
+/* The packet being assembled: its bytes, how many have come and its size. */
 static uint8_t etd_packet[6];
 static int etd_pktcnt;
 static int etd_pktsize;
-static uint32_t etd_last_tick;
 
-/* The packets dropped for constant bits or parity out of form or for a
- * pause, which psmouse logs as lost synchronization. */
+/* Packets dropped for constant bits or parity out of form. */
 static unsigned int etd_sync_losses;
 
 /** Send `cmd` and return 0 when the pad acknowledged it, -1 when not, as
@@ -191,7 +209,11 @@ static int etd_ps2_command(uint8_t *param, uint8_t cmd)
 
     for (tries = 0; tries < COMMAND_TRIES; tries++) {
         if (tries > 0) {
-            k_udelay(COMMAND_DELAY * 1000u);
+            if (etd_info.debug) {
+                klog(KLOG_DEBUG, "elantech", "command: 0x%02x again (%d)", cmd,
+                     COMMAND_TRIES - tries);
+            }
+            ps2mouse_msleep(COMMAND_DELAY);
         }
         if ((param ? etd_getinfo(param) : etd_command(cmd)) == 0) {
             return 0;
@@ -412,7 +434,10 @@ static int etd_set_properties(struct elantech_info *info)
     if (info->hw_version > 1 && info->fw_version >= 0x020800u) {
         info->reports_pressure = 1;
     }
-    info->crc_enabled = (info->fw_version & 0x4000u) == 0x4000u || etd_dmi_force_crc_enabled();
+    info->paritycheck = 1;
+    info->debug = (uint8_t)(info->hw_version > 1);
+    info->crc_enabled =
+        (uint8_t)((info->fw_version & 0x4000u) == 0x4000u || etd_dmi_force_crc_enabled());
     /* A Gigabyte U2442's version 3 pad fails when bits 3 and 1 of register
      * 0x10 are set. */
     info->set_hw_resolution = !smbios_system_is("GIGABYTE", "U2442");
@@ -618,19 +643,27 @@ static int etd_set_absolute_mode(void)
 
     switch (etd_info.hw_version) {
     case 1:
-        rc = etd_write_reg(0x10, 0x16) || etd_write_reg(0x11, 0x8f) ? -1 : 0;
+        etd_regs[REG_10] = 0x16;
+        etd_regs[REG_11] = 0x8f;
+        rc =
+            etd_write_reg(0x10, etd_regs[REG_10]) || etd_write_reg(0x11, etd_regs[REG_11]) ? -1 : 0;
         break;
     case 2:
-        rc = etd_write_reg(0x10, 0x54) || etd_write_reg(0x11, 0x88) || etd_write_reg(0x21, 0x60)
+        etd_regs[REG_10] = 0x54;
+        etd_regs[REG_11] = 0x88;
+        etd_regs[REG_21] = 0x60;
+        rc = etd_write_reg(0x10, etd_regs[REG_10]) || etd_write_reg(0x11, etd_regs[REG_11]) ||
+                     etd_write_reg(0x21, etd_regs[REG_21])
                  ? -1
                  : 0;
         break;
     case 3:
-        rc = etd_write_reg(0x10, etd_info.set_hw_resolution ? 0x0b : 0x01);
+        etd_regs[REG_10] = etd_info.set_hw_resolution ? 0x0b : 0x01;
+        rc = etd_write_reg(0x10, etd_regs[REG_10]);
         break;
     default:
-        etd_reg_07 = 0x01;
-        rc = etd_write_reg(0x07, etd_reg_07);
+        etd_regs[REG_07] = 0x01;
+        rc = etd_write_reg(0x07, etd_regs[REG_07]);
         goto done;
     }
     if (rc == 0) {
@@ -639,7 +672,10 @@ static int etd_set_absolute_mode(void)
             if (rc == 0 || --tries <= 0) {
                 break;
             }
-            k_udelay(READ_BACK_DELAY * 1000u);
+            if (etd_info.debug) {
+                klog(KLOG_DEBUG, "elantech", "mode: read back again (%d)", tries);
+            }
+            ps2mouse_msleep(READ_BACK_DELAY);
         }
         if (rc == 0 && etd_info.hw_version == 1 && !(val & R10_ABSOLUTE_MODE)) {
             klog(KLOG_WARN, "elantech", "mode: the touchpad refuses absolute mode");
@@ -672,8 +708,7 @@ static int etd_register_pad(void)
     int buttonpad = info->hw_version >= 3 && etd_is_buttonpad();
 
     k_memset(keys, 0, sizeof(keys));
-    etd_pad = evdev_register("ETPS/2 Elantech Touchpad", EVDEV_BUS_I8042, PSMOUSE_VENDOR,
-                             PSMOUSE_ELANTECH, keys);
+    etd_pad = ps2mouse_register("ETPS/2 Elantech Touchpad", PSMOUSE_ELANTECH, keys);
     if (!etd_pad) {
         return -1;
     }
@@ -801,21 +836,21 @@ static void etd_reset(void)
     }
 }
 
-/** Linux's `psmouse_initialize` with the pad's own `set_rate`: 100 reports
- * a second, then this firmware's mode again, which a rate clears; 200 dpi
- * and 1:1 scaling. */
+unsigned int elantech_set_rate(unsigned int rate)
+{
+    rate = ps2mouse_set_rate(rate);
+    if (etd_info.fw_version == 0x381f17u && etd_write_reg(0x07, etd_regs[REG_07]) < 0) {
+        klog(KLOG_ERR, "elantech", "rate: register 0x07 would not take its mode again");
+    }
+    return rate;
+}
+
+/** Linux's `psmouse_initialize` with the pad's own `set_rate`: the port's
+ * rate, then this firmware's mode again, which a rate clears; the port's
+ * resolution and 1:1 scaling. */
 static void etd_initialize(void)
 {
-    if (etd_command(CMD_SET_RATE) == 0) {
-        etd_command(100);
-    }
-    if (etd_info.fw_version == 0x381f17u) {
-        etd_write_reg(0x07, etd_reg_07);
-    }
-    if (etd_command(CMD_SET_RES) == 0) {
-        etd_command(3);
-    }
-    etd_command(CMD_SET_SCALE11);
+    ps2mouse_initialize(elantech_set_rate);
 }
 
 int elantech_init(void)
@@ -892,6 +927,19 @@ static void etd_report_buttons(struct evdev *dev, uint8_t b)
     evdev_report(dev, EV_KEY, BTN_RIGHT, (b & 0x02) != 0);
 }
 
+/** Log the packet, as Linux's `elantech_packet_dump`. */
+static void etd_dump(void)
+{
+    const uint8_t *p = etd_packet;
+
+    if (etd_pktsize == 4) {
+        klog(KLOG_DEBUG, "elantech", "packet: %02x %02x %02x %02x", p[0], p[1], p[2], p[3]);
+    } else {
+        klog(KLOG_DEBUG, "elantech", "packet: %02x %02x %02x %02x %02x %02x", p[0], p[1], p[2],
+             p[3], p[4], p[5]);
+    }
+}
+
 /** Report a version 1 packet, Linux's `elantech_report_absolute_v1`. */
 static void etd_report_v1(void)
 {
@@ -908,6 +956,9 @@ static void etd_report_v1(void)
             etd_single_finger_reports = 0;
         } else if (etd_single_finger_reports < 2) {
             etd_single_finger_reports++;
+            if (etd_info.debug) {
+                klog(KLOG_DEBUG, "elantech", "packet: discarding a jumpy-cursor report");
+            }
             return;
         }
     }
@@ -1045,6 +1096,9 @@ static void etd_report_trackpoint(void)
     case 0x26800010u:
     case 0x36808000u:
         if (p[4] == 0x80 || p[5] == 0x80 || p[1] >> 7 == p[4] >> 7 || p[2] >> 7 == p[5] >> 7) {
+            if (etd_info.debug) {
+                klog(KLOG_DEBUG, "elantech", "packet: discarding a stick report out of range");
+            }
             return;
         }
         if (!etd_tp) {
@@ -1061,6 +1115,9 @@ static void etd_report_trackpoint(void)
         }
         break;
     default:
+        if (etd_info.debug == 1) {
+            etd_dump();
+        }
         break;
     }
 }
@@ -1320,6 +1377,7 @@ int elantech_reconnect(void)
 
 void elantech_disconnect(void)
 {
+    etd_generation++;
     if (etd_pad) {
         evdev_unregister(etd_pad);
         etd_pad = 0;
@@ -1336,15 +1394,23 @@ int elantech_packet_start(void)
     return etd_pktcnt == 0;
 }
 
+void elantech_packet_restart(void)
+{
+    etd_pktcnt = 0;
+}
+
 /** Check and report a whole packet, Linux's `elantech_process_byte`.
  * Returns -1 for a packet out of form, which is dropped. */
 static int etd_process_packet(void)
 {
     int type;
 
+    if (etd_info.debug > 1) {
+        etd_dump();
+    }
     switch (etd_info.hw_version) {
     case 1:
-        if (!etd_check_v1()) {
+        if (etd_info.paritycheck && !etd_check_v1()) {
             return -1;
         }
         etd_report_v1();
@@ -1353,7 +1419,7 @@ static int etd_process_packet(void)
         if (etd_debounce(0x84)) {
             break;
         }
-        if (!etd_check_v2()) {
+        if (etd_info.paritycheck && !etd_check_v2()) {
             return -1;
         }
         etd_report_v2();
@@ -1390,13 +1456,6 @@ static int etd_process_packet(void)
 
 int elantech_byte(uint8_t data)
 {
-    uint32_t now = (uint32_t)kernel_ticks;
-
-    if (etd_pktcnt && now - etd_last_tick > MS_TO_TICKS(500)) {
-        etd_sync_losses++;
-        etd_pktcnt = 0;
-    }
-    etd_last_tick = now;
     etd_packet[etd_pktcnt++] = data;
     if (etd_pktcnt < etd_pktsize) {
         return ELANTECH_GOOD;
@@ -1407,4 +1466,136 @@ int elantech_byte(uint8_t data)
         return ELANTECH_BAD;
     }
     return ELANTECH_FULL;
+}
+
+int elantech_packet_size(void)
+{
+    return etd_pktsize;
+}
+
+/* The files of the port, in Linux's order: the registers, then the three
+ * settings of `etd_info`. */
+static const char *const etd_file_names[] = {
+    "reg_07", "reg_10", "reg_11", "reg_20", "reg_21",      "reg_22",     "reg_23",
+    "reg_24", "reg_25", "reg_26", "debug",  "paritycheck", "crc_enabled"};
+#define ETD_FILES ((int)(sizeof(etd_file_names) / sizeof(etd_file_names[0])))
+
+/** The setting of `etd_info` that file `arg`, past the registers, holds. */
+static uint8_t *etd_setting(int arg)
+{
+    return arg == ETD_REGS       ? &etd_info.debug
+           : arg == ETD_REGS + 1 ? &etd_info.paritycheck
+                                 : &etd_info.crc_enabled;
+}
+
+/**
+ * A file of the pad, as Linux's `elantech_show_int_attr` writes it: a
+ * register read from the pad, or a setting, as "0x" and two hex digits and
+ * a newline; a register that does not read is "0xffffffff", Linux's -1.
+ * The read runs with the pad disabled, as a write's does; an expired
+ * callback returns -ENODEV after a protocol switch.
+ */
+static int32_t show_etd(void *obj, int arg, char *buf, uint32_t cap)
+{
+    static const char hex[] = "0123456789abcdef";
+    char text[12];
+    uint8_t v;
+    int rc;
+
+    if ((uintptr_t)obj != etd_generation || !etd_pad) {
+        return -ENODEV;
+    }
+    if (arg < ETD_REGS) {
+        rc = ps2mouse_change_begin();
+        if ((uintptr_t)obj != etd_generation || !etd_pad) {
+            if (rc == 0) {
+                ps2mouse_change_end(0);
+            }
+            return -ENODEV;
+        }
+        if (rc == 0) {
+            rc = etd_read_reg(etd_reg_numbers[arg], &etd_regs[arg]);
+            ps2mouse_change_end(rc);
+        }
+        if (rc != 0) {
+            k_memcpy(text, "0xffffffff", 11);
+            goto out;
+        }
+        v = etd_regs[arg];
+    } else {
+        v = *etd_setting(arg);
+    }
+    text[0] = '0';
+    text[1] = 'x';
+    text[2] = hex[v >> 4];
+    text[3] = hex[v & 15];
+    text[4] = 0;
+out:
+    rc = (int)k_strlen(text);
+    text[rc++] = '\n';
+    k_memcpy(buf, text, (uint32_t)rc < cap ? (uint32_t)rc : cap);
+    return rc;
+}
+
+/**
+ * Take a write of a file of the pad, as Linux's `elantech_set_int_attr`:
+ * a byte in hex, which a register takes on the pad and keeps when the pad
+ * took it, version 1 with absolute mode and four-byte packets forced on,
+ * and a setting takes as it is. The write is answered whole whether or not
+ * the pad took it, as Linux answers it. An expired callback returns
+ * -ENODEV without accessing the new protocol.
+ */
+static int32_t store_etd(void *obj, int arg, const char *buf, uint32_t len)
+{
+    uint32_t n, v = 0;
+    uint8_t reg;
+    int rc;
+
+    if ((uintptr_t)obj != etd_generation || !etd_pad) {
+        return -ENODEV;
+    }
+    for (n = 0; n < len && buf[n]; n++) { /* Linux's store reads a string */
+    }
+    rc = ps2mouse_change_begin();
+    if (rc < 0) {
+        return rc;
+    }
+    if ((uintptr_t)obj != etd_generation || !etd_pad) {
+        ps2mouse_change_end(0);
+        return -ENODEV;
+    }
+    rc = ps2mouse_parse_uint(buf, n, 16, 255, &v);
+    if (rc == 0 && arg < ETD_REGS) {
+        reg = etd_reg_numbers[arg];
+        if (etd_info.hw_version == 1 && reg == 0x10) {
+            v |= R10_ABSOLUTE_MODE;
+        } else if (etd_info.hw_version == 1 && reg == 0x11) {
+            v |= R11_4_BYTE_MODE;
+        }
+        if (etd_write_reg(reg, (uint8_t)v) == 0) {
+            etd_regs[arg] = (uint8_t)v;
+        }
+    } else if (rc == 0) {
+        *etd_setting(arg) = (uint8_t)v;
+    }
+    ps2mouse_change_end(rc);
+    return rc < 0 ? rc : (int32_t)len;
+}
+
+int elantech_sysfs_add(int dir)
+{
+    struct sysfs_attr attr;
+    int i, h;
+
+    for (i = 0; i < ETD_FILES; i++) {
+        attr.name = etd_file_names[i];
+        attr.mode = 0644u;
+        attr.show = show_etd;
+        attr.store = store_etd;
+        h = sysfs_add_attr(dir, &attr, (void *)(uintptr_t)etd_generation, i);
+        if (h < 0) {
+            return h;
+        }
+    }
+    return 0;
 }

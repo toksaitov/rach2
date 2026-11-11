@@ -12,6 +12,7 @@
 #define _FILEMAP_H_
 
 #include "../lib/kint.h"
+#include "../lib/kuser.h"
 #include "../fs/fd.h"
 #include "vm.h"
 
@@ -45,6 +46,11 @@ struct shmem *filemap_shmem(const struct vm_file *f);
  * region object that is not a mapped file. */
 const struct open_file *filemap_ofd(const struct vm_file *f);
 
+/** Whether the pages `f` maps are memory's own, with no file on a disk
+ * behind them: a tmpfs file's, a memfd's, shared anonymous memory's. Linux
+ * counts such pages in a process's RssShmem, and a disk file's in RssFile. */
+int filemap_in_memory(const struct vm_file *f);
+
 /**
  * The same for a shared mapping of a file on a disk: the mapping maps the
  * file's pages in memory, which every shared mapping of the file maps, read
@@ -54,6 +60,12 @@ const struct open_file *filemap_ofd(const struct vm_file *f);
  * when the heap has no room.
  */
 struct vm_file *filemap_disk_shared(const fd_entry_t *e);
+
+/** Whether `f` is a shared mapping of a file on a disk, as
+ * `filemap_disk_shared` made it, whose reference keeps the file's pages in
+ * memory and the copy of its descriptor; 0 for NULL and any other file.
+ * A long-term pin holds it so (mm/pin.c). */
+int filemap_disk_pages(const struct vm_file *f);
 
 /** Whether the file `ino` of `mnt` has resident pages for any private or
  * shared mapping, which descriptor writes must update. */
@@ -76,10 +88,21 @@ void filemap_disk_written(const struct vfs_mount *mnt, uint64_t ino, uint64_t of
  * `filemap_file_truncated` may sleep.
  */
 
-/** Before a read of `len` bytes at `off` of the file `ino` of `mnt`, write
- * back the pages in memory the read covers, so that it sees their stores;
- * 0 or the first failed write's error. */
-int filemap_file_reading(const struct vfs_mount *mnt, uint64_t ino, uint64_t off, uint32_t len);
+/**
+ * Copy up to `count` bytes at `off` of the file `ino` of `mnt` to the user
+ * buffer `dst` from the page in memory that holds `off`, as Linux's
+ * filemap_read copies the page cache's folio, so that a read sees the
+ * stores of shared mappings without writing them back. The copy stays
+ * within that page; the caller has cut `count` at the file's end. Returns
+ * the bytes copied; 0 when the page is not in memory, and the caller then
+ * reads the file; -ENOMEM when the page is in memory but no temporary
+ * mapping is free, since the file may lack the mappings' stores and its
+ * bytes would be stale, as Linux's filemap_read fails rather than read
+ * around a folio it has; or -EFAULT when the buffer cannot be written. A
+ * reference on the page is held across the copy, which may sleep.
+ */
+int32_t filemap_read_resident(const struct vfs_mount *mnt, uint64_t ino, uint64_t off,
+                              char __user *dst, uint32_t count);
 
 /** After a write of `len` bytes at `off` through `e`, put the bytes, read
  * back from the file, into the pages in memory the write covers, so that

@@ -24,7 +24,12 @@
  * reads only the function it returns. A second model has one root and a bus
  * numbered below its bridge. The third has more functions than the list's
  * first array holds, so the list moves to the heap, and then the heap is
- * refused.
+ * refused. The last has BARs that decode what a row gives them, as a
+ * device's do, a host bridge, a graphics function with 64-bit, I/O and
+ * unused BARs and a ROM, a BAR of 8 GiB and a bridge with its ROM at 0x38,
+ * and the rows check the sizes the walk finds, the resources pci_resource
+ * gives as Linux's /sys shows them, and the decoding the walk turns off
+ * while it sizes a BAR and puts back.
  */
 
 #include "../../rach2/sys/pci.c"
@@ -49,6 +54,12 @@ struct func {
     int bus, dev, fn, ghost;
     unsigned char space[256];
     long reads; /* reads of the data port while the function was addressed */
+    /* With `masked` set, a dword write changes only the bits of `wmask`
+     * for its dword, as a BAR's address bits above its size; without it
+     * every bit is written. */
+    int masked;
+    unsigned int wmask[64];
+    int decoding_writes; /* BAR writes made while the function decoded */
 };
 
 static struct func funcs[MAX_FUNCS];
@@ -64,6 +75,21 @@ static void model_reset(void)
     memset(bus_reads, 0, sizeof(bus_reads));
     nfuncs = 0;
     all_reads = 0;
+}
+
+/** Whether `off` of `f`'s space is a BAR's or its ROM's register. */
+static int bar_reg(const struct func *f, int off)
+{
+    int header = f->space[0x0E] & 0x7F;
+
+    return (off >= 0x10 && off < (header == 0 ? 0x28 : 0x18)) || off == (header == 0 ? 0x30 : 0x38);
+}
+
+/** The dword at `off` of `f`'s space. */
+static unsigned int get32(const struct func *f, int off)
+{
+    return (unsigned int)f->space[off] | (unsigned int)f->space[off + 1] << 8 |
+           (unsigned int)f->space[off + 2] << 16 | (unsigned int)f->space[off + 3] << 24;
 }
 
 /** Put a dword at `off` of `f`'s space. */
@@ -139,7 +165,15 @@ void outd(unsigned short port, unsigned int value)
     }
     f = addressed();
     if (port == 0xCFC && f) {
-        put32(f, (int)(address_port & 0xFC), value);
+        int off = (int)(address_port & 0xFC);
+
+        if (f->masked) {
+            if (bar_reg(f, off) && (f->space[0x04] & 3) != 0) {
+                f->decoding_writes++;
+            }
+            value = (get32(f, off) & ~f->wmask[off / 4]) | (value & f->wmask[off / 4]);
+        }
+        put32(f, off, value);
     }
 }
 
@@ -178,11 +212,16 @@ unsigned char inb(unsigned short port)
     return 0xFF;
 }
 
-/** Ignore a halfword write: no row writes one. */
+/** Take a halfword write to the data port, the command register's. */
 void outw(unsigned short port, unsigned short value)
 {
-    (void)port;
-    (void)value;
+    struct func *f = addressed();
+    int off = (int)(address_port & 0xFC) + (port - 0xCFC);
+
+    if (f && port >= 0xCFC && port <= 0xCFE) {
+        f->space[off] = (unsigned char)value;
+        f->space[off + 1] = (unsigned char)(value >> 8);
+    }
 }
 
 /** Return all ones, as an absent port reads. */
@@ -399,7 +438,8 @@ static void walk_rows(void)
     model_bridges();
     (void)pci_list_count();
     walk_reads = all_reads;
-    check(walk_reads <= 8 * 32 + 255 + NEXPECTED * 4 + 7,
+    /* Sizing six BARs and a ROM takes 21 reads more. */
+    check(walk_reads <= 8 * 32 + 255 + NEXPECTED * (4 + 21) + 7,
           "the walk reads the slots of eight buses and each function's header once");
     check(pci_list_len == NEXPECTED, "the walk lists each function once");
 
@@ -557,6 +597,97 @@ static void heap_rows(void)
     list_forget();
 }
 
+/** Give `f`'s BAR or ROM register at `off` the value `v`, of which the bits
+ * of `wmask` take a write. */
+static void model_bar(struct func *f, int off, unsigned int v, unsigned int wmask)
+{
+    f->masked = 1;
+    put32(f, off, v);
+    f->wmask[off / 4] = wmask;
+}
+
+/** Whether resource `i` of bus 0's device `dev` is `start` to `end` with
+ * `flags`, printing it when it is not. */
+static int res_is(int dev, int i, unsigned long long start, unsigned long long end,
+                  unsigned int flags)
+{
+    struct pci_resource r;
+
+    pci_resource(0, (uint8_t)dev, 0, i, &r);
+    if (r.start == start && r.end == end && r.flags == flags) {
+        return 1;
+    }
+    printf("pciwalk_hosttest: 0:%d.0 resource %d: 0x%llx 0x%llx 0x%x\n", dev, i,
+           (unsigned long long)r.start, (unsigned long long)r.end, r.flags);
+    return 0;
+}
+
+/**
+ * The walk sizes each function's BARs and ROM as Linux's pci_read_bases,
+ * with decoding off but on a host bridge, and pci_resource gives them as
+ * Linux's /sys/bus/pci/devices/F/resource shows the Lenovo's graphics
+ * function: start, end and IORESOURCE_ flags.
+ */
+static void size_rows(void)
+{
+    struct func *host, *gfx, *big, *bridge;
+    struct pci_resource r;
+    int ok;
+
+    model_reset();
+    host = model_add(0, 0, 0, 0x0A048086u, 0x0600u, 0x00);
+    model_bar(host, 0x10, 0xFED10000u, 0xFFFF0000u);
+    host->space[0x04] = 0x06;
+    bridge = model_bridge(0, 1, 0, 0x01, 1, 1);
+    model_bar(bridge, 0x10, 0xF7F00000u, 0xFFFFC000u);
+    model_bar(bridge, 0x38, 0xF7E00001u, 0xFFFFF801u);
+    bridge->space[0x04] = 0x07;
+    gfx = model_add(0, 2, 0, 0x0A168086u, 0x0300u, 0x00);
+    model_bar(gfx, 0x10, 0xF0000004u, 0xFFC00000u);
+    model_bar(gfx, 0x14, 0, 0xFFFFFFFFu);
+    model_bar(gfx, 0x18, 0xE000000Cu, 0xF0000000u);
+    model_bar(gfx, 0x1C, 0, 0xFFFFFFFFu);
+    model_bar(gfx, 0x20, 0x0000F001u, 0xFFFFFFC0u);
+    model_bar(gfx, 0x24, 0, 0);
+    model_bar(gfx, 0x30, 0, 0xFFFE0001u);
+    gfx->space[0x04] = 0x07;
+    big = model_add(0, 3, 0, 0x15338086u, 0x0200u, 0x00);
+    model_bar(big, 0x10, 0x00000004u, 0);
+    model_bar(big, 0x14, 0x00000002u, 0xFFFFFFFEu);
+    big->space[0x04] = 0x02;
+    list_forget();
+    (void)pci_list_count();
+
+    check(res_is(2, 0, 0xF0000000ull, 0xF03FFFFFull, 0x140204u) && res_is(2, 1, 0, 0, 0) &&
+              res_is(2, 2, 0xE0000000ull, 0xEFFFFFFFull, 0x14220Cu) && res_is(2, 3, 0, 0, 0),
+          "a 64-bit BAR of 4 MiB and a prefetchable one of 256 MiB, as Linux shows them");
+    check(res_is(2, 4, 0xF000ull, 0xF03Full, 0x40101u),
+          "an I/O BAR of 64 bytes, its address bits above 0xFFFF taken as unused");
+    check(res_is(2, 5, 0, 0, 0), "a BAR that decodes nothing has no resource");
+    check(res_is(2, PCI_ROM_RESOURCE, 0, 0x1FFFFull, 0x46200u),
+          "a ROM of 128 KiB not yet placed, disabled, from 0");
+    check(res_is(3, 0, 0x200000000ull, 0x3FFFFFFFFull, 0x140204u),
+          "a 64-bit BAR of 8 GiB, sized by its upper half");
+    check(res_is(1, 0, 0xF7F00000ull, 0xF7F03FFFull, 0x40200u) &&
+              res_is(1, PCI_ROM_RESOURCE, 0xF7E00000ull, 0xF7E007FFull, 0x46201u),
+          "a bridge's BAR, and its enabled ROM of 2 KiB at 0x38");
+    check(res_is(0, 0, 0xFED10000ull, 0xFED1FFFFull, 0x40200u), "a host bridge's BAR of 64 KiB");
+    ok = get32(gfx, 0x10) == 0xF0000004u && get32(gfx, 0x14) == 0 &&
+         get32(gfx, 0x18) == 0xE000000Cu && get32(gfx, 0x20) == 0x0000F001u &&
+         get32(gfx, 0x30) == 0 && get32(big, 0x14) == 2 && get32(bridge, 0x38) == 0xF7E00001u;
+    check(ok, "every BAR and ROM holds its value again after the walk");
+    check(gfx->decoding_writes == 0 && big->decoding_writes == 0 && bridge->decoding_writes == 0 &&
+              gfx->space[0x04] == 0x07 && big->space[0x04] == 0x02 && bridge->space[0x04] == 0x07,
+          "decoding is off while each BAR is sized, and as it was after");
+    check(host->decoding_writes > 0 && host->space[0x04] == 0x06,
+          "a host bridge keeps decoding, as Linux's quirk_mmio_always_on");
+    pci_resource(0, 9, 0, 0, &r);
+    check(r.start == 0 && r.end == 0 && r.flags == 0, "a function the walk did not list has none");
+    pci_resource(0, 2, 0, PCI_RESOURCES, &r);
+    check(r.start == 0 && r.end == 0 && r.flags == 0, "nor a resource past the ROM");
+    list_forget();
+}
+
 /** Run the rows. */
 /** 0: no row maps a window of a BAR (pci_bar_map). */
 uintptr_t mmio_map(uint64_t phys, size_t size, pte_t cache)
@@ -581,6 +712,7 @@ int main(void)
     fresh_rows();
     low_rows();
     heap_rows();
+    size_rows();
     if (fails) {
         printf("pciwalk_hosttest: %d failed\n", fails);
         return 1;

@@ -1,0 +1,394 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.bed-vtest",
+  "summary": "The testbed's first rung (bed/Readme.md): Mesa's virpipe on the x86-64 GNU root draws a triangle through vtestrelay to virglrenderer's vtest server in a Debian guest that the root's QEMU boots, under QEMU's TCG and under Rach2's KVM, and the picture is checked against llvmpipe's; the runner is bed/fixture/vtest-rach2.sh and the scenario tests/cases/machine/bed_vtest_scenario.c",
+  "cases": [
+    {
+      "case_id": "machine.bed-vtest.triangle",
+      "behavior": "A triangle drawn on Rach2 with virpipe through vtestrelay to the vtest server of a Debian guest under QEMU's TCG in the GNU root equals Rach2's llvmpipe triangle",
+      "units": [
+        "bed/fixture/vtest-rach2.sh",
+        "bed/fixture/triangle.c",
+        "bed/vtestrelay.c",
+        "bed/fixture/vtest-guest.sh",
+        "Debian's QEMU and Mesa in the GNU root",
+        "tests/cases/machine/bed_vtest_scenario.c"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "runner": "vtest-rach2.sh",
+          "accelerator": "tcg"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "bed_vtest_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "the runner runs as root in the guest, which mounts the data disk and, under KVM, opens /dev/kvm",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and no display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+        },
+        {
+          "step_id": "mount",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "mount the read-only bed-vtest data disk, with the vtest server guest's images, triangle.c and the runner, at /tmp/bed-vtest"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run vtest-rach2.sh -a tcg, which draws the triangle on llvmpipe, boots the vtest server guest in the root's QEMU under QEMU's TCG, draws it with virpipe through vtestrelay and compares the two"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "bed-vtest-payload",
+                "base": "bed-vtest-data",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 2,
+            "memory_bytes": 4294967296,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2"
+            ],
+            "display": "none"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "pixels",
+          "checks": "vtest-rach2.sh exits 0 and prints vtest-rach2: result: pass: the triangle drawn with virpipe through the relay renders on virgl, every pixel is the triangle's color or the texel under it, and its checksum equals the llvmpipe triangle's on Rach2",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 3
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 2000,
+        "memory_bytes": 5368709120,
+        "disk_bytes": 8589934592,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "gnu-image",
+          "node": "images/gnu-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "bed-vtest-data",
+          "node": "tests/cases/bed-vtest/bed-vtest.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "bed_vtest_scenario",
+          "node": "tests/cases/machine/bed_vtest_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the case boots the GNU root in QEMU, whose own QEMU runs the vtest guest under TCG; on the Mac Rach2 itself runs under TCG, so the guest's whole Debian boot would be emulated twice, and the case runs on Linux alone"
+      }
+    },
+    {
+      "case_id": "machine.bed-vtest.triangle-kvm",
+      "behavior": "A triangle drawn on Rach2 with virpipe through vtestrelay to the vtest server of a Debian guest under Rach2's KVM equals Rach2's llvmpipe triangle",
+      "units": [
+        "bed/fixture/vtest-rach2.sh",
+        "bed/fixture/triangle.c",
+        "bed/vtestrelay.c",
+        "bed/fixture/vtest-guest.sh",
+        "rach2/sys/kvm/svm.c",
+        "Debian's QEMU and Mesa in the GNU root",
+        "tests/cases/machine/bed_vtest_scenario.c"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "runner": "vtest-rach2.sh",
+          "accelerator": "kvm"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "bed_vtest_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "the runner runs as root in the guest, which mounts the data disk and, under KVM, opens /dev/kvm",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and no display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"
+        },
+        {
+          "step_id": "mount",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "mount the read-only bed-vtest data disk, with the vtest server guest's images, triangle.c and the runner, at /tmp/bed-vtest"
+        },
+        {
+          "step_id": "run",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run vtest-rach2.sh -a kvm, which draws the triangle on llvmpipe, boots the vtest server guest in the root's QEMU under Rach2's KVM, draws it with virpipe through vtestrelay and compares the two"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              },
+              {
+                "name": "bed-vtest-payload",
+                "base": "bed-vtest-data",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max-svm",
+            "processors": 2,
+            "memory_bytes": 4294967296,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.root=ext2"
+            ],
+            "display": "none"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "pixels",
+          "checks": "vtest-rach2.sh exits 0 and prints vtest-rach2: result: pass: the triangle drawn with virpipe through the relay renders on virgl, every pixel is the triangle's color or the texel under it, and its checksum equals the llvmpipe triangle's on Rach2",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 3
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 3600000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 1800000000,
+            "ceiling_us": 3600000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 2000,
+        "memory_bytes": 5368709120,
+        "disk_bytes": 8589934592,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "gnu-image",
+          "node": "images/gnu-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "bed-vtest-data",
+          "node": "tests/cases/bed-vtest/bed-vtest.ext2",
+          "per_architecture": false
+        },
+        {
+          "name": "bed_vtest_scenario",
+          "node": "tests/cases/machine/bed_vtest_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the case runs the vtest guest under Rach2's SVM, which the max-svm processor profile gives Rach2 under the run's accelerator; on the Mac Rach2 itself runs under TCG, so the guest's whole Debian boot would be emulated twice, and the case runs on Linux alone; the Lenovo has VMX"
+      }
+    }
+  ]
+}

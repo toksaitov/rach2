@@ -361,7 +361,7 @@ int32_t vgpu_execbuffer_ioctl(struct drm_device *dev, void *data, struct drm_fil
         }
     }
     if (a->flags & VIRTGPU_EXECBUF_FENCE_FD_OUT) {
-        fd = sync_file_create(cmd->fence, "virtio_gpu");
+        fd = sync_file_create(cmd->fence, NULL);
         if (fd < 0) {
             rc = fd;
             goto out;

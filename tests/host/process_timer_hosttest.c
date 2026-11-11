@@ -26,6 +26,7 @@
  * `proc_alarm_at` gives a tick past 2^32 whole.
  */
 #include "lib/kint.h"
+#include "compat/waketime_none.h"
 struct process;
 static int proc_in_syscall(void);
 static void init_proc(void);

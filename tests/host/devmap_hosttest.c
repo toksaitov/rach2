@@ -28,7 +28,8 @@
  * reference goes with the last region, once; a zap unmaps a range of an
  * object's pages in every address space and no other object's, after which
  * a moved page faults in at its new frame and a revoked one raises SIGBUS
- * with BUS_ADRERR at the address, from the page fault handler.
+ * with BUS_ADRERR at the address, from the page fault handler; and
+ * paging_access reaches a device region through its object's `access`.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -188,6 +189,13 @@ void smp_tlb_shootdown(const struct page_dir *dir, uintptr_t start, uintptr_t en
 void smp_kernel_mapping_changed(void)
 {}
 
+/** Nothing: the test has no address space that counts its resident pages. */
+void mm_resident_add(const struct page_dir *dir, long pages)
+{
+    (void)dir;
+    (void)pages;
+}
+
 /** Nothing. */
 void arch_tlb_flush_page(uintptr_t va)
 {
@@ -240,6 +248,26 @@ void k_panic(const char *str)
 {
     printf("devmap-hosttest: panic: %s\n", str);
     exit(1);
+}
+
+/** Nothing: the fault's note is for the panic's report, which no row reads. */
+void k_panic_note_fault(const char *name, uintptr_t ip, long error)
+{
+    (void)name;
+    (void)ip;
+    (void)error;
+}
+
+/** Nothing, as `k_panic_note_fault`. */
+void k_panic_note_address(uintptr_t address)
+{
+    (void)address;
+}
+
+/** No panic reads a process here. */
+int k_panic_reading(void)
+{
+    return 0;
 }
 
 /* The last signal the fault handler sent. */
@@ -385,6 +413,9 @@ struct obj {
     int refs;                   /* references the mappings hold */
     int puts;                   /* `put` calls */
     int revoked;
+    int busy;           /* `page` answers 1, to run the access again */
+    uint64_t access_at; /* the offset of the last `access` */
+    int accesses;       /* `access` calls */
 };
 
 /** The object's page `pgoff`, or -1 past its end or once revoked. */
@@ -394,6 +425,9 @@ static int obj_page(void *o, uint32_t pgoff, uintptr_t *phys)
 
     if (ob->revoked || pgoff >= OBJ_PAGES) {
         return -1;
+    }
+    if (ob->busy) {
+        return 1;
     }
     *phys = ob->frame[pgoff];
     return 0;
@@ -408,7 +442,24 @@ static void obj_put(void *o)
     ob->puts++;
 }
 
-static const struct vm_device_ops obj_ops = {obj_page, obj_put};
+/** ptrace's reach into the object: a read gives 0x5a, a write is counted;
+ * the device range refuses with -ENXIO. */
+static int obj_access(void *o, uint64_t offset, void *buf, uint32_t len, int write)
+{
+    struct obj *ob = o;
+
+    ob->access_at = offset;
+    ob->accesses++;
+    if (ob->revoked) {
+        return -ENXIO;
+    }
+    if (!write) {
+        k_memset(buf, 0x5a, len);
+    }
+    return 0;
+}
+
+static const struct vm_device_ops obj_ops = {obj_page, obj_put, obj_access};
 
 static struct obj dev_obj, ram_obj;
 
@@ -517,6 +568,34 @@ static void fault_rows(void)
 }
 
 /**
+ * paging_access, ptrace's and /proc/PID/mem's reach, goes through the
+ * object's `access` at the byte of the object, a page at a time, and its
+ * error is EIO.
+ */
+static void access_rows(void)
+{
+    uint8_t buf[16];
+    uint32_t i;
+    int ok = 1;
+
+    k_memset(buf, 0, sizeof(buf));
+    check(paging_access(&mm_a, VA_RAM + 2 * PAGE_SIZE + 8, buf, 8, 0) == 0 &&
+              ram_obj.accesses == 1 && ram_obj.access_at == 2 * PAGE_SIZE + 8,
+          "a peek at a device region asks its object at the byte of the object");
+    for (i = 0; i < 8; i++) {
+        ok &= buf[i] == 0x5a;
+    }
+    check(ok && buf[8] == 0, "the peek gives the object's bytes");
+    check(paging_access(&mm_a, VA_RAM + PAGE_SIZE - 4, buf, 8, 1) == 0 && ram_obj.accesses == 3 &&
+              ram_obj.access_at == PAGE_SIZE,
+          "a poke across a page asks once a page");
+    dev_obj.revoked = 1;
+    check(paging_access(&mm_a, VA_DEV, buf, 4, 0) == -EIO && dev_obj.accesses == 1,
+          "the object's refusal is EIO");
+    dev_obj.revoked = 0;
+}
+
+/**
  * Fork shares the pages and the file, and leaves out a region marked
  * MADV_DONTFORK; munmap drops what the child had.
  */
@@ -605,6 +684,18 @@ static void zap_rows(void)
     _page_fault_handler(&params);
     check(sent_signo == SIGSEGV && sent_info.code == SEGV_MAPERR,
           "a touch outside every region still raises SIGSEGV");
+    ram_obj.busy = 1;
+    paging_zap_device(&ram_obj, 0, OBJ_PAGES);
+    params.error_code = 0x4; /* a read, from user mode, of a page not present */
+    fault_cr2 = VA_RAM + 0x20;
+    sent_signo = 0;
+    _page_fault_handler(&params);
+    check(sent_signo == 0 && proc_a.fault_retry && !proc_a.bus_fault && pte_of(&dir_a, VA_RAM) == 0,
+          "an object that cannot give the page yet: no signal, nothing mapped, the access to run "
+          "again");
+    check(vm_resolve_in(&mm_a, VA_RAM, 0, ~(uintptr_t)0) == 0,
+          "and the kernel's own resolution of it fails");
+    ram_obj.busy = 0;
 }
 
 /** munmap and exit drop the last references, and the object's goes once. */
@@ -630,6 +721,19 @@ static void exit_rows(void)
           "every counted frame is back to the object's own reference");
 }
 
+/** The protection keys are off in the host test, as on a processor without
+ * them. */
+int fpu_pkeys(void)
+{
+    return 0;
+}
+
+/** PKRU with the keys off. */
+uint32_t fpu_pkru(void)
+{
+    return 0;
+}
+
 /** Run every row; 0 when each passes, 1 otherwise. */
 int main(void)
 {
@@ -637,6 +741,7 @@ int main(void)
 
     _frames = calloc(FRAMES, sizeof(uint32_t));
     _frames_number = FRAMES;
+    _frame_anon = calloc((FRAMES + 7u) / 8u, 1);
     for (i = 0; i < OBJ_PAGES; i++) {
         dev_obj.frame[i] = (uintptr_t)(DEV_FRAME + i) * PAGE_SIZE;
         ram_obj.frame[i] = (uintptr_t)(RAM_FRAME0 + i) * PAGE_SIZE;
@@ -654,6 +759,7 @@ int main(void)
     _kernel_dir = &dir_a;
 
     fault_rows();
+    access_rows();
     fork_rows();
     zap_rows();
     exit_rows();
@@ -661,6 +767,7 @@ int main(void)
     dir_free(&dir_b);
     vm_free(&mm_a.vm);
     vm_free(&mm_b.vm);
+    free(_frame_anon);
     free(_frames);
 
     if (fails) {

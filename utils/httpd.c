@@ -56,10 +56,12 @@ static int sys_gettimeofday(struct timeval *tv)
 {
     return gettimeofday(tv, 0);
 }
-/** send(2) with no flags, with the count as an int. */
+/** send(2) with MSG_NOSIGNAL, with the count as an int: a client that
+ * closed early ends the page's write with EPIPE, not the server with
+ * SIGPIPE. */
 static int sys_send(int fd, const void *b, size_t n)
 {
-    return (int)send(fd, b, n, 0);
+    return (int)send(fd, b, n, MSG_NOSIGNAL);
 }
 /** recv(2) with no flags, with the count as an int. */
 static int sys_recv(int fd, void *b, size_t n)

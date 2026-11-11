@@ -23,7 +23,11 @@
  * forgotten until the next place, or, on a device whose framebuffers are
  * flushed, drawn through a shadow whose damaged rows a flush copies and
  * commits; the firmware's device is taken back with
- * its CRTC off and the console on the loader's framebuffer; and every
+ * its CRTC off and the console on the loader's framebuffer; a loader's
+ * framebuffer that goes with its device is forgotten once and not drawn on
+ * again, and the next device is set at once; a master that comes while
+ * the console waits for the commit lock keeps the screen; a device that
+ * leaves while the console's commit sleeps leaves it no buffer; and every
  * allocation and reference is given back.
  *
  * Returns 0 when every row passes, 1 otherwise.
@@ -233,6 +237,7 @@ static struct drm_mode_config *mc = &dev.mode_config;
 /* The video memory the dumb buffers' `vmap` gives, by object. */
 static uint8_t vram[MAX_GEM][16];
 static int next_gem, dumb_creates, intrude, unmapped, plane_updates;
+static int leave_in_update; /* the device leaves in the next plane update */
 
 /* The pages behind every buffer, as the `page` hook gives them: 4 MiB,
  * room for the largest buffer of the rows. */
@@ -325,12 +330,17 @@ static int32_t fake_plane_check(struct drm_plane *plane, struct drm_atomic_state
     return 0;
 }
 
-/** Count the plane's updates, which a flush is. */
+/** Count the plane's updates, which a flush is. With `leave_in_update`
+ * set, the device leaves meanwhile, as it may while a commit sleeps. */
 static void fake_plane_update(struct drm_plane *plane, struct drm_atomic_state *state)
 {
     (void)plane;
     (void)state;
     plane_updates++;
+    if (leave_in_update) {
+        leave_in_update = 0;
+        drm_client_dev_unregister(&dev);
+    }
 }
 
 static const struct drm_plane_funcs plane_funcs = {fake_plane_check, fake_plane_update, NULL};
@@ -581,6 +591,94 @@ static void row_firmware(void)
     CHECK(dev.refs == 0, "the device is let go");
 }
 
+/** The loader's framebuffer goes with its device while a master holds
+ * the device and the console is still on that screen: the console forgets
+ * it once, is not put back on it when the device leaves, and is set on
+ * the next device at once, where it keeps a buffer of its own. */
+static void row_screen_gone(void)
+{
+    int d, f, a, c = dumb_creates;
+
+    firmware = 0;
+    drm_client_dev_register(&dev);
+    open_as_self(&fa);
+    d = detaches;
+    f = forgets;
+    a = attaches;
+    CHECK(con.dev == &dev && con.handed && !con.on_buffer && !con.lost && dumb_creates == c,
+          "a native device under a master, the console still on the loader's screen");
+    drm_client_boot_screen_gone();
+    drm_client_boot_screen_gone();
+    CHECK(con.lost && detaches == d + 1 && forgets == f + 1,
+          "the console forgets the loader's framebuffer, once");
+    drm_client_dev_unregister(&dev);
+    CHECK(attaches == a && detaches == d + 1,
+          "the device leaves: the console is not put back on the screen that went");
+    drm_mode_file_release(&fa);
+    drm_master_release(&fa);
+    drm_client_dev_register(&dev);
+    CHECK(attaches == a + 1 && attached_base != NULL && dumb_creates == c + 1 && crtc_mode() &&
+              con.on_buffer && !con.lost,
+          "the next device gets the console's mode at once");
+    d = detaches;
+    drm_client_boot_screen_gone();
+    CHECK(detaches == d && con.on_buffer && !con.lost, "a console on a buffer of its own keeps it");
+    drm_client_dev_unregister(&dev);
+    CHECK(dev.refs == 0, "the device is let go");
+}
+
+/** While the console waits for the commit lock, a master comes and the
+ * lock is let go. */
+static void lock_wait_master(wq_cond_fn cond, void *arg)
+{
+    (void)cond;
+    (void)arg;
+    model_wait = NULL;
+    open_as_self(&fc);
+    dev.commit_held = 0;
+}
+
+/** A master that comes while the console waits for the commit lock to
+ * take the screen back keeps it: the console commits nothing. */
+static void row_late_master(void)
+{
+    int a, p, c;
+
+    drm_client_dev_register(&dev);
+    open_as_self(&fa);
+    a = attaches;
+    p = plane_updates;
+    c = dumb_creates;
+    dev.commit_held = 1;
+    model_wait = lock_wait_master;
+    drm_mode_file_release(&fa);
+    drm_master_release(&fa);
+    CHECK(dev.master == &fc && con.handed && !dev.commit_held, "the newcomer holds the screen");
+    CHECK(plane_updates == p && dumb_creates == c && attaches == a,
+          "the console neither commits nor draws over the newcomer");
+    drm_mode_file_release(&fc);
+    drm_master_release(&fc);
+    CHECK(!con.handed && attaches == a + 1, "the newcomer's exit gives it back");
+}
+
+/** The device leaves while the console's commit on the buffer it has
+ * sleeps: the console keeps no buffer of it, and the next register makes
+ * its own. */
+static void row_leave_in_commit(void)
+{
+    int c = dumb_creates;
+
+    CHECK(con.dev == &dev && con.fb && !con.handed, "the console has the screen");
+    leave_in_update = 1;
+    drm_client_dev_hotplug(&dev);
+    CHECK(!leave_in_update && !con.dev && !con.fb && !con.obj && dev.refs == 0,
+          "the device leaves in the commit, and the console keeps no buffer");
+    drm_client_dev_register(&dev);
+    CHECK(con.fb && con.on_buffer && dumb_creates == c + 1, "the next register makes its own");
+    drm_client_dev_unregister(&dev);
+    CHECK(dev.refs == 0, "the device is let go");
+}
+
 /** Run the rows. */
 int main(void)
 {
@@ -609,6 +707,9 @@ int main(void)
     row_unmapped();
     row_shadow();
     row_firmware();
+    row_screen_gone();
+    row_late_master();
+    row_leave_in_commit();
     drm_mode_config_cleanup(&dev);
     CHECK(allocations == base, "every allocation freed");
     for (i = 0; i < MAX_GEM; i++) {

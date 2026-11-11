@@ -29,6 +29,7 @@
 #include "../../proc/ns.h"
 #include "../../proc/kcmp.h"
 #include "../../proc/rseq.h"
+#include "../../proc/membarrier.h"
 #include "../../proc/process_vm.h"
 #include "../../mm/mempolicy.h"
 #include "../../proc/pidfd.h"
@@ -86,12 +87,17 @@
 
 void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *params))
 {
+    table[SYS_RESTART_SYSCALL] = sys_restart_syscall;
     table[SYS_EXIT] = sys_exit;
     table[SYS_FORK] = sys_fork;
     table[SYS_READ] = sys_read;
     table[SYS_WRITE] = sys_write;
     table[SYS_PREAD64] = sys_ia32_pread64;
     table[SYS_PWRITE64] = sys_ia32_pwrite64;
+    table[SYS_PREADV] = sys_preadv;
+    table[SYS_PWRITEV] = sys_pwritev;
+    table[SYS_PREADV2] = sys_preadv2;
+    table[SYS_PWRITEV2] = sys_pwritev2;
     table[SYS_OPEN] = sys_open;
     table[SYS_CLOSE] = sys_close;
     table[SYS_WAITPID] = sys_waitpid;
@@ -125,6 +131,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_RENAMEAT] = sys_renameat;
     table[SYS_RENAMEAT2] = sys_renameat2;
     table[SYS_IOCTL] = sys_ioctl;
+    table[SYS_VHANGUP] = sys_vhangup;
     table[SYS_DUP] = sys_dup;
     table[SYS_DUP2] = sys_dup2;
     table[SYS_PIPE] = sys_pipe;
@@ -146,11 +153,14 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_FSTAT64] = sys_fstat64;
     table[SYS_STATFS64] = sys_statfs64;
     table[SYS_FSTATFS64] = sys_fstatfs64;
+    table[SYS_USTAT] = sys_ustat;
+    table[SYS_SYSFS] = sys_sysfs;
     table[SYS_FSTATAT64] = sys_fstatat64;
     table[SYS_STATX] = sys_statx;
     table[SYS_NAME_TO_HANDLE_AT] = sys_name_to_handle_at;
     table[SYS_OPEN_BY_HANDLE_AT] = sys_open_by_handle_at;
     table[SYS_OPENAT] = sys_openat;
+    table[SYS_OPENAT2] = sys_openat2;
     table[SYS_READLINK] = sys_readlink;
     table[SYS_READLINKAT] = sys_readlinkat;
     table[SYS_ACCESS] = sys_access;
@@ -160,6 +170,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_FCNTL64] = sys_fcntl64;
     table[SYS_FLOCK] = sys_flock;
     table[SYS_MEMFD_CREATE] = sys_memfd_create;
+    table[SYS_MEMFD_SECRET] = sys_memfd_secret;
     table[SYS_SENDFILE] = sys_sendfile32;
     table[SYS_SENDFILE64] = sys_sendfile;
     table[SYS_SPLICE] = sys_splice;
@@ -175,7 +186,14 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_RSEQ] = sys_rseq;
     table[SYS_PROCESS_VM_READV] = sys_process_vm_readv;
     table[SYS_PROCESS_VM_WRITEV] = sys_process_vm_writev;
+    table[SYS_PROCESS_MADVISE] = sys_process_madvise;
+    table[SYS_PROCESS_MRELEASE] = sys_process_mrelease;
     table[SYS_GET_MEMPOLICY] = sys_get_mempolicy;
+    table[SYS_MBIND] = sys_mbind;
+    table[SYS_SET_MEMPOLICY] = sys_set_mempolicy;
+    table[SYS_MIGRATE_PAGES] = sys_migrate_pages;
+    table[SYS_MOVE_PAGES] = sys_move_pages;
+    table[SYS_SET_MEMPOLICY_HOME_NODE] = sys_set_mempolicy_home_node;
     table[SYS_GETDENTS64] = sys_getdents64;
     table[SYS_UTIMENSAT] = sys_utimensat;
     table[SYS_UTIMENSAT_TIME64] = sys_utimensat_time64;
@@ -248,6 +266,9 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_SCHED_GET_PRIORITY_MAX] = sys_sched_get_priority_max;
     table[SYS_SCHED_GET_PRIORITY_MIN] = sys_sched_get_priority_min;
     table[SYS_SCHED_RR_GET_INTERVAL] = sys_sched_rr_get_interval;
+    table[SYS_SCHED_SETATTR] = sys_sched_setattr;
+    table[SYS_SCHED_GETATTR] = sys_sched_getattr;
+    table[SYS_MEMBARRIER] = sys_membarrier;
     table[SYS_SCHED_SETAFFINITY] = sys_sched_setaffinity;
     table[SYS_SCHED_GETAFFINITY] = sys_sched_getaffinity;
     table[SYS_PRCTL] = sys_prctl;
@@ -307,15 +328,21 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_UMOUNT2] = sys_umount2;
     table[SYS_PIVOT_ROOT] = sys_pivot_root;
     table[SYS_FDATASYNC] = sys_fdatasync;
+    table[SYS_SYNC_FILE_RANGE] = sys_ia32_sync_file_range;
     table[SYS_LINK] = sys_link;
     table[SYS_LINKAT] = sys_linkat;
     table[SYS_SYMLINK] = sys_symlink;
     table[SYS_SYMLINKAT] = sys_symlinkat;
-    /* No 16-bit set-id numbers: their ids and their "keep" differ (sysnr.h). */
+    /* No 16-bit numbers of the four below: their ids and their "keep" differ
+     * (sysnr.h). setfsuid and setfsgid have both forms. */
     table[SYS_SETREUID32] = sys_setreuid;
     table[SYS_SETREGID32] = sys_setregid;
     table[SYS_SETRESUID32] = sys_setresuid;
     table[SYS_SETRESGID32] = sys_setresgid;
+    table[SYS_SETFSUID] = sys_setfsuid16;
+    table[SYS_SETFSGID] = sys_setfsgid16;
+    table[SYS_SETFSUID32] = sys_setfsuid;
+    table[SYS_SETFSGID32] = sys_setfsgid;
     table[SYS_CHMOD] = sys_chmod;
     table[SYS_FCHMODAT] = sys_fchmodat;
     table[SYS_FCHMOD] = sys_fchmod;
@@ -343,6 +370,9 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_SET_ROBUST_LIST] = sys_set_robust_list;
     table[SYS_GET_ROBUST_LIST] = sys_get_robust_list;
     table[SYS_FUTEX_WAITV] = sys_futex_waitv;
+    table[SYS_FUTEX_WAKE] = sys_futex_wake;
+    table[SYS_FUTEX_WAIT] = sys_futex_wait;
+    table[SYS_FUTEX_REQUEUE] = sys_futex_requeue;
     table[SYS_FCHMODAT2] = sys_fchmodat2;
     table[SYS_EXIT_GROUP] = sys_exit_group;
     table[SYS_SOCKET] = sys_socket;
@@ -366,6 +396,8 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_MSYNC] = sys_msync;
     table[SYS_MREMAP] = sys_mremap;
     table[SYS_MADVISE] = sys_madvise;
+    table[SYS_MSEAL] = sys_mseal;
+    table[SYS_CACHESTAT] = sys_cachestat;
     table[SYS_EVENTFD] = sys_eventfd;
     table[SYS_EVENTFD2] = sys_eventfd2;
     table[SYS_INOTIFY_INIT] = sys_inotify_init;

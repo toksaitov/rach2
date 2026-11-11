@@ -46,6 +46,7 @@ struct evdev;
 #define EV_SND        0x12
 #define EV_REP        0x14
 #define EV_FF         0x15
+#define EV_PWR        0x16
 #define EV_CNT        0x20
 #define SYN_REPORT    0
 #define SYN_CONFIG    1
@@ -165,8 +166,9 @@ struct input_absinfo {
 
 /**
  * Register an input device and give it the lowest free node. `name` is the
- * text EVIOCGNAME gives, such as "AT Translated Set 2 keyboard", kept by
- * its pointer; `bustype`, `vendor` and `product` are what EVIOCGID gives;
+ * text EVIOCGNAME gives, such as "AT Translated Set 2 keyboard", copied
+ * and cut to EVDEV_NAME_MAX bytes, so that the caller may free it;
+ * `bustype`, `vendor` and `product` are what EVIOCGID gives;
  * `keys`, of EVDEV_KEY_BYTES bytes, has a bit set for each key code the
  * device can report, and is copied. Any context: the devices are a static
  * table, under a spinlock taken with interrupts off. Returns the device, or
@@ -176,12 +178,34 @@ struct evdev *evdev_register(const char *name, uint16_t bustype, uint16_t vendor
                              const uint8_t *keys);
 
 /**
+ * Reserve the lowest free device slot without publishing a node. Any
+ * context. Returns NULL when every slot is taken. The caller owns the
+ * reservation until `evdev_register_reserved` publishes it or
+ * `evdev_unregister` releases it.
+ */
+struct evdev *evdev_reserve(void);
+
+/**
+ * Register the unused reservation `dev` with `evdev_register`'s arguments.
+ * A reserved device cannot fail; NULL asks to reserve a slot now and can
+ * return NULL. Any context. The caller must not use a live device here.
+ */
+struct evdev *evdev_register_reserved(struct evdev *dev, const char *name, uint16_t bustype,
+                                      uint16_t vendor, uint16_t product, const uint8_t *keys);
+
+/**
  * Give `dev` the text EVIOCGPHYS gives, such as "isa0060/serio0/input0",
- * kept by its pointer, and `flags`, EVDEV_SCAN and EVDEV_KEYBOARD, the
- * event types beyond EV_KEY that EVIOCGBIT says it reports. Called once,
- * after `evdev_register`. A NULL `dev` is ignored.
+ * copied and cut to EVDEV_TEXT_MAX bytes, and `flags`, EVDEV_SCAN and
+ * EVDEV_KEYBOARD, the event types beyond EV_KEY that EVIOCGBIT says it
+ * reports. Called once, after `evdev_register`. A NULL `dev` is ignored.
  */
 void evdev_describe(struct evdev *dev, const char *phys, unsigned int flags);
+
+/** Give `dev` the serial EVIOCGUNIQ, its `uniq` file and its uevent's
+ * UNIQ give, copied and cut to EVDEV_TEXT_MAX bytes; "" is a serial too,
+ * as Linux's USB HID gives a device without one. Until it is given,
+ * EVIOCGUNIQ answers -ENOENT. A NULL `dev` is ignored. */
+void evdev_set_uniq(struct evdev *dev, const char *uniq);
 
 /** Give `dev` the version EVIOCGID gives, 0 until set. A NULL `dev` is
  * ignored. */
@@ -297,6 +321,40 @@ typedef void (*evdev_handler_t)(struct evdev *dev, uint16_t type, uint16_t code,
  */
 void evdev_set_handler(struct evdev *dev, evdev_handler_t fn);
 
+/* One entry of a device's keymap, as Linux's struct input_keymap_entry
+ * names it: the entry's place in the map, its scan code, its key code, and
+ * whether the entry is asked for by its place rather than its scan code. */
+struct evdev_keymap_entry {
+    uint32_t index;
+    uint32_t scancode;
+    uint16_t keycode;
+    int by_index;
+};
+
+/*
+ * A device's keymap, which EVIOCGKEYCODE and EVIOCSKEYCODE read and change,
+ * as a driver's getkeycode and setkeycode serve Linux's: `get` fills in the
+ * entry `ke` names, by its scan code or its place, with its place, scan
+ * code and key code; `set` gives that entry `ke->keycode`, storing the key
+ * code it had in `*old`; `maps` says whether any entry has key code `code`.
+ * Each of the first two returns 0, or -EINVAL for no such entry. They are
+ * called with the evdev lock held, so that the device cannot go meanwhile,
+ * and may neither sleep nor report.
+ */
+struct evdev_keymap {
+    int (*get)(void *ctx, struct evdev_keymap_entry *ke);
+    int (*set)(void *ctx, const struct evdev_keymap_entry *ke, uint16_t *old);
+    int (*maps)(void *ctx, uint16_t code);
+    void *ctx;
+};
+
+/**
+ * Give `dev` the keymap `km`, copied, for EVIOCGKEYCODE and EVIOCSKEYCODE;
+ * a device without one answers them -EINVAL, as Linux's input core answers
+ * for a device with no key code table. A NULL `dev` is ignored.
+ */
+void evdev_set_keymap(struct evdev *dev, const struct evdev_keymap *km);
+
 /**
  * Take `dev` away: its node goes from /dev/input, a reader of an open of it
  * is woken and gets -ENODEV, and its slot is free for another device once
@@ -345,12 +403,21 @@ int evdev_key_down(struct evdev *dev, uint16_t code);
 void evdev_report_key(struct evdev *dev, uint32_t scan, uint16_t code, int down);
 
 /**
- * Light the LEDs of the keyboard `dev`, `mask` a bit 1 << LED_* for each LED
- * on: an EV_LED event for each LED that changes, then SYN_REPORT, as Linux's
- * evdev reports the console's LEDs; EVIOCGLED gives the mask. Any context.
+ * Light the Num, Caps and Scroll Lock LEDs of the keyboard `dev`, `mask` a
+ * bit 1 << LED_* for each LED on: an EV_LED event for each that changes,
+ * then SYN_REPORT, as Linux's evdev reports the console's LEDs; EVIOCGLED
+ * gives them, and the device's other LEDs are left as they are. Any context.
  * A NULL `dev` or one that is not a keyboard is ignored.
  */
 void evdev_report_leds(struct evdev *dev, unsigned int mask);
+
+/**
+ * The LEDs lit on `dev`, a bit 1 << LED_* each, as EVIOCGLED gives them: a
+ * keyboard's Num, Caps and Scroll Lock as the console has them, and any
+ * other LED the device has as a program last wrote it with EV_LED, for
+ * its driver to show. 0 for a NULL `dev`. Any context.
+ */
+unsigned int evdev_leds_lit(struct evdev *dev);
 
 /**
  * Give the keyboard `dev` the repeat's times in milliseconds: an EV_REP
@@ -429,9 +496,11 @@ void evdev_close(fd_entry_t *e);
  * the table after each change and brings /sys in line with it.
  */
 
-/* The bytes of a description's texts, with the NUL, and of a set of bits
- * of `n` codes in whole 64-bit words, which EVIOCGBIT's longs fit on both
- * ABIs. */
+/* The bytes of a device's name and of its other texts, with the NUL, the
+ * name's as long as a USB HID device's (HID_NAME_MAX), and of a set of
+ * bits of `n` codes in whole 64-bit words, which EVIOCGBIT's longs fit on
+ * both ABIs. */
+#define EVDEV_NAME_MAX      128
 #define EVDEV_TEXT_MAX      64
 #define EVDEV_BITS_BYTES(n) ((((n) + 63) / 64) * 8)
 
@@ -440,8 +509,10 @@ void evdev_close(fd_entry_t *e);
  * and those EVIOCGPROP gives. */
 struct evdev_desc {
     uint32_t gen; /* the registration's number, new at each `evdev_register` */
-    char name[EVDEV_TEXT_MAX];
+    char name[EVDEV_NAME_MAX];
     char phys[EVDEV_TEXT_MAX]; /* "" for none */
+    char uniq[EVDEV_TEXT_MAX]; /* "" for none or an empty serial */
+    int has_uniq;              /* a serial, perhaps empty, was given */
     uint16_t id[4];            /* bustype, vendor, product, version */
     uint8_t ev[EVDEV_BITS_BYTES(EV_CNT)];
     uint8_t key[EVDEV_KEY_BYTES];
@@ -459,18 +530,21 @@ struct evdev_desc {
  * slot with no device, or one whose device has gone. Any context. */
 int evdev_snapshot(int n, struct evdev_desc *out);
 
-/** The count of registrations and unregistrations so far; a worker that
- * has seen a count sleeps on `evdev_change_queue` until it moves. */
+/** The count of registrations, unregistrations and keymap changes so far;
+ * a worker that has seen a count sleeps on `evdev_change_queue` until it
+ * moves. */
 uint32_t evdev_changes(void);
 
-/** The wait queue every registration and unregistration wakes. */
+/** The wait queue every change `evdev_changes` counts wakes. */
 struct wait_queue *evdev_change_queue(void);
 
 /**
  * Bring /sys in line with the devices registered: add the directories of
  * each new device, /sys/class/input/inputN and its eventN with their links
- * and parents, and send their "add" uevents, and send "remove" for each
- * device that has gone and take its entries away. Under the big lock, in
+ * and parents, and send their "add" uevents, in the order the devices
+ * registered; send "remove" for each device that has gone and take its
+ * entries away; and renew the description, its key capabilities among
+ * them, that the files of each device still here show. Under the big lock, in
  * process context, since sysfs.h's entries take heap. Defined in
  * evdev_sysfs.c.
  */
@@ -486,11 +560,45 @@ void evdev_sysfs_sync(void);
 void evdev_sysfs_serio_firmware_id(int port, const char *id);
 
 /**
+ * Remove serio port `port`, its bus link, files and callbacks, after its
+ * event devices have been unregistered. Withdraw their published entries
+ * first, then send the port's remove uevent. Removing serio1 also removes
+ * its pass-through port. A later registration makes the port again. Under
+ * the big lock, in process context, as `evdev_sysfs_sync`.
+ */
+void evdev_sysfs_serio_remove(int port);
+
+/**
+ * Make serio port `port` with no event device below it, as Linux's serio
+ * core registers a port before any driver binds: at once when its parent,
+ * serio1 for the pass-through port, is in /sys, else at the sync that
+ * makes the parent. It stays until `evdev_sysfs_serio_remove`. Under the
+ * big lock, in process context, as `evdev_sysfs_sync`, or before /sys is
+ * started. Defined in evdev_sysfs.c.
+ */
+void evdev_sysfs_serio_add(int port);
+
+/**
  * Have `add` put a driver's own files below the directory of the serio
- * port `port` when /sys makes it, as Linux's psmouse adds a protocol's
- * attributes to its port: `add` gets the directory and returns 0 or
- * -errno. NULL for none. Called by the driver when it binds, before the
- * device's event device is published. Defined in evdev_sysfs.c.
+ * port `port`, where they stay while the driver is bound, across changes
+ * of protocol, as Linux's driver core adds a driver's `dev_groups` to the
+ * port it binds and removes them when it unbinds: `add` gets the directory
+ * and returns 0 or -errno. NULL for none, as the driver unbinds. Before
+ * /sys makes the directory, the call only keeps `add` for it; after, it
+ * removes the files the last `add` made and calls `add` at once, under the
+ * big lock in process context. Defined in evdev_sysfs.c.
+ */
+void evdev_sysfs_serio_driver(int port, int (*add)(int dir));
+
+/**
+ * Have `add` put a protocol's files below the directory of the serio port
+ * `port`, as Linux's psmouse adds a protocol's attributes to its port, in
+ * place of the files the port's protocol had: `add` gets the directory and
+ * returns 0 or -errno. NULL for none. Called by the driver when a protocol
+ * binds, as the bring-up or a reconnect finds it or a write to `protocol`
+ * sets it. Before /sys makes the directory, the call only keeps `add` for
+ * it; after, it removes the files the last `add` made and calls `add` at
+ * once, under the big lock in process context. Defined in evdev_sysfs.c.
  */
 void evdev_sysfs_serio_files(int port, int (*add)(int dir));
 

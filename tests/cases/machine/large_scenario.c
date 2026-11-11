@@ -1,8 +1,9 @@
 /*
  * large_scenario.c: the scenario of machine.large, a file of 256 MiB on ext2
- * and on exFAT, a mebibyte astride the 4 GiB line of a sparse ext2 file and
- * a write past each format's limit refused by name, on volumes that the
- * independent tools make in an empty AHCI disk and check after the machine.
+ * and on exFAT, a mebibyte astride the 4 GiB line of a sparse ext2 file, a
+ * write past each format's limit refused by name, and an ext2 file read
+ * twice through the file page cache, on volumes that the independent tools
+ * make in an empty AHCI disk and check after the machine.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,6 +24,10 @@ static const char disk[] = "large";
 #define FAT_OFFSET  "12885950464"
 #define FAT_SECTORS "131072"
 
+/* The size of the small ext2 volume that case `cache` makes where the FAT32
+ * one would start, for the row that changes a volume while it is unmounted. */
+#define SMALL_SIZE "16M"
+
 /* The features of the ext2 volume: sparse superblocks, large files, file
  * types in directory entries and the resize inode, and none of the later
  * ones. */
@@ -32,6 +37,10 @@ static char ext2_features[] = "sparse_super,large_file,filetype,^dir_index,resiz
 
 /* The size of the file that the write and the verify take, in MiB. */
 #define FILE_MIB "256"
+
+/* The size of the file that case `cache` reads twice, in MiB: more than the
+ * buffer cache keeps, half the kernel's heap of 256 MiB. */
+#define CACHE_MIB "256"
 
 /* The room for the disk's path with a suffix that names an offset in it. */
 #define PATH_LEN 4200
@@ -114,11 +123,11 @@ static int host(struct lc *l, char *argv[], const char *output, char *why, size_
 
 /**
  * Write the disk's MBR, its identity and three partitions, into the empty
- * disk `path`, and make the case's volume in one of them with `argv`.
- * Assertion `volume` holds when both exit 0; otherwise the scenario cannot go
- * on.
+ * disk `path`, and make the case's volume in one of them with `argv`, and a
+ * second with `more` unless it is NULL. Assertion `volume` holds when each
+ * exits 0; otherwise the scenario cannot go on.
  */
-static void volume(struct lc *l, char *path, char *argv[], const char *output)
+static void volume(struct lc *l, char *path, char *argv[], const char *output, char *more[])
 {
     char *table[] = {"mkmbr",
                      "--lba",
@@ -134,7 +143,8 @@ static void volume(struct lc *l, char *path, char *argv[], const char *output)
 
     if (!lc_step(l, "volume"))
         return;
-    made = host(l, table, "mkmbr", why, sizeof(why)) && host(l, argv, output, why, sizeof(why));
+    made = host(l, table, "mkmbr", why, sizeof(why)) && host(l, argv, output, why, sizeof(why)) &&
+           (more == NULL || host(l, more, "mke2fs-small", why, sizeof(why)));
     if (!l->stopped)
         lc_assert(l, "volume", made, why);
     if (!made)
@@ -255,14 +265,12 @@ static void check(struct lc *l, struct etude_case_machine *m, char *argv[])
 }
 
 /**
- * Run case `ext2`: the volume made by mke2fs; the file written, and read
- * back in a second boot; a mebibyte written astride the 4 GiB line of a
- * sparse file; a write past the file limit for 4096-byte blocks; and
- * `e2fsck -fn` on the volume after the machine.
+ * Write the disk's table into the empty disk `path` and make the ext2 volume
+ * in its first partition with mke2fs, in step `volume`, and with `small` a
+ * second of SMALL_SIZE at the start of the third partition.
  */
-static void ext2(struct lc *l)
+static void ext2_volume(struct lc *l, char *path, int small)
 {
-    char *path = disk_path(l), at_offset[PATH_LEN];
     char *make[] = {"mke2fs",
                     "-q",
                     "-F",
@@ -279,6 +287,35 @@ static void ext2(struct lc *l)
                     path,
                     EXT2_SIZE,
                     NULL};
+    char *more[] = {"mke2fs",
+                    "-q",
+                    "-F",
+                    "-t",
+                    "ext2",
+                    "-b",
+                    "4096",
+                    "-I",
+                    "128",
+                    "-O",
+                    ext2_features,
+                    "-E",
+                    "offset=" FAT_OFFSET,
+                    path,
+                    SMALL_SIZE,
+                    NULL};
+
+    volume(l, path, make, "mke2fs", small ? more : NULL);
+}
+
+/**
+ * Run case `ext2`: the volume made by mke2fs; the file written, and read
+ * back in a second boot; a mebibyte written astride the 4 GiB line of a
+ * sparse file; a write past the file limit for 4096-byte blocks; and
+ * `e2fsck -fn` on the volume after the machine.
+ */
+static void ext2(struct lc *l)
+{
+    char *path = disk_path(l), at_offset[PATH_LEN];
     char *fsck[] = {"e2fsck", "-fn", at_offset, NULL};
     struct etude_case_machine *m;
     uint64_t at;
@@ -287,7 +324,7 @@ static void ext2(struct lc *l)
     if (path == NULL)
         return;
     snprintf(at_offset, sizeof(at_offset), "%s?offset=" EXT2_OFFSET, path);
-    volume(l, path, make, "mke2fs");
+    ext2_volume(l, path, 0);
     write_file(l, "/dev/disk0p1", "ext2");
     if ((m = verify(l, "/dev/disk0p1", "ext2", &at)) == NULL)
         return;
@@ -298,6 +335,51 @@ static void ext2(struct lc *l)
           "ext2: write: offset 2095103 MiB is past the file limit of 2095103 MiB for 4096-byte "
           "blocks",
           &at);
+    check(l, m, fsck);
+}
+
+/**
+ * Run case `cache`: the volume made by mke2fs, and a small one in the third
+ * partition; pagecachemusl at the debug shell of machine `cache`, which
+ * reads a file of CACHE_MIB MiB twice and requires the second read to take
+ * nothing from the disks, then changes a small file every way there is
+ * between two reads, a change to the small volume while it is unmounted
+ * among them, and requires the second read to see the change; and `e2fsck
+ * -fn` on the large volume after the machine.
+ * Assertion `cache-exit` holds when the kernel's record of the program's
+ * exit gives status 0, and `cache-ok` when it says PAGECACHEMUSL OK and
+ * never PAGECACHEMUSL FAIL. Its line of counts is printed for a person.
+ */
+static void cache(struct lc *l)
+{
+    char *path = disk_path(l), at_offset[PATH_LEN], why[200];
+    char *fsck[] = {"e2fsck", "-fn", at_offset, NULL};
+    struct etude_case_machine *m;
+    const char *failed, *counts;
+    uint64_t at;
+    char *w;
+
+    if (path == NULL)
+        return;
+    snprintf(at_offset, sizeof(at_offset), "%s?offset=" EXT2_OFFSET, path);
+    ext2_volume(l, path, 1);
+    if ((m = lc_shell(l, "cache", "cache", &at)) == NULL)
+        return;
+    w = lc_run(l, m, "cache", "exec /musl/pagecachemusl /dev/disk0p1 " CACHE_MIB " /dev/disk0p3\r",
+               &at, "cache-exit");
+    if (w == NULL)
+        return;
+    failed = strstr(w, "PAGECACHEMUSL FAIL");
+    if (failed != NULL)
+        snprintf(why, sizeof(why), "the program says %.*s", (int)strcspn(failed, "\r\n"), failed);
+    else
+        snprintf(why, sizeof(why), "the program never says PAGECACHEMUSL OK");
+    lc_assert(l, "cache-ok", failed == NULL && strstr(w, "PAGECACHEMUSL OK") != NULL, why);
+    if ((counts = strstr(w, "pagecachemusl: twice: ")) != NULL)
+        printf("large: cache: %.*s\n", (int)strcspn(counts, "\r\n"), counts);
+    free(w);
+    if (!lc_wait(l, m, "Type 'help'", &at, NULL) || !lc_wait(l, m, "\n> ", &at, NULL))
+        return;
     check(l, m, fsck);
 }
 
@@ -317,7 +399,7 @@ static void exfat(struct lc *l)
 
     if (path == NULL)
         return;
-    volume(l, path, make, "fstool-mkfs");
+    volume(l, path, make, "fstool-mkfs", NULL);
     write_file(l, "/dev/disk0p2", "exfat");
     if ((m = verify(l, "/dev/disk0p2", "exfat", &at)) == NULL)
         return;
@@ -341,7 +423,7 @@ static void fat32(struct lc *l)
     if (path == NULL)
         return;
     snprintf(at_offset, sizeof(at_offset), "%s@@" FAT_OFFSET, path);
-    volume(l, path, make, "mformat");
+    volume(l, path, make, "mformat", NULL);
     if ((m = lc_shell(l, "boot", "fixture", &at)) == NULL)
         return;
     limit(l, m, "fixture", "/dev/disk0p3 vfat 4294967295",
@@ -359,6 +441,7 @@ int etude_scenario(struct etude_case *c)
                                             "fsck",      NULL};
     static const char *const fat32_ids[] = {"volume", "limit-exit", "limit-ok", "limit-named",
                                             NULL};
+    static const char *const cache_ids[] = {"volume", "cache-exit", "cache-ok", "fsck", NULL};
     const char *name = case_name(c);
     struct lc l;
 
@@ -371,6 +454,9 @@ int etude_scenario(struct etude_case *c)
     } else if (strcmp(name, "fat32") == 0) {
         lc_begin(&l, c, fat32_ids);
         fat32(&l);
+    } else if (strcmp(name, "cache") == 0) {
+        lc_begin(&l, c, cache_ids);
+        cache(&l);
     } else {
         return 1;
     }

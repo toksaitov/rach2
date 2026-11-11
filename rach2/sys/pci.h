@@ -358,6 +358,40 @@ void pci_enable_memory_space(pci_device_t *dev);
  * line. */
 void pci_enable_interrupts(pci_device_t *dev);
 
+/* A function's resources as Linux numbers them: BARs 0 to 5, then its
+ * expansion ROM. */
+#define PCI_ROM_RESOURCE 6
+#define PCI_RESOURCES    7
+
+/* Linux's IORESOURCE_ flags, which /sys's `resource` file shows. */
+#define PCI_IORESOURCE_IO        0x00000100u
+#define PCI_IORESOURCE_MEM       0x00000200u
+#define PCI_IORESOURCE_PREFETCH  0x00002000u
+#define PCI_IORESOURCE_READONLY  0x00004000u
+#define PCI_IORESOURCE_SIZEALIGN 0x00040000u
+#define PCI_IORESOURCE_MEM_64    0x00100000u
+
+/** One resource of a function: the addresses it decodes, `start` to `end`
+ * inclusive, and Linux's flags for it; all 0 for one it lacks. */
+struct pci_resource {
+    uint64_t start;
+    uint64_t end;
+    uint32_t flags;
+};
+
+/**
+ * Resource `i` (0 to PCI_RESOURCES - 1) of the function at bus:device.
+ * function into `*r`, as Linux's pci_read_bases decodes it: the size the
+ * walk found when it listed the function, and the address and type the
+ * BAR holds now, the upper half of a 64-bit BAR taken with it and its own
+ * slot left empty. The flags are the BAR's low bits with IORESOURCE_IO or
+ * IORESOURCE_MEM, IORESOURCE_PREFETCH and IORESOURCE_MEM_64 as they apply,
+ * and IORESOURCE_SIZEALIGN; the ROM's are its enable bit with
+ * IORESOURCE_MEM, IORESOURCE_PREFETCH and IORESOURCE_READONLY. A function
+ * the walk did not list, and a resource it lacks, give all 0.
+ */
+void pci_resource(uint8_t bus, uint8_t device, uint8_t function, int i, struct pci_resource *r);
+
 /** Recover a BAR's base address by masking off its type bits. */
 uint32_t pci_bar_address(uint32_t bar);
 

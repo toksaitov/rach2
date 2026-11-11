@@ -211,7 +211,7 @@ static void dev_put(void *obj)
     (void)obj;
 }
 
-static const struct vm_device_ops dev_ops = {dev_page, dev_put};
+static const struct vm_device_ops dev_ops = {dev_page, dev_put, NULL};
 
 /** A fork's write-protection, a write's copy and a device's taking back of
  * its pages are told. */
@@ -375,6 +375,19 @@ static void shrinker_rows(void)
     for (i = 0; i < n; i++) {
         free_frame(taken[i]);
     }
+}
+
+/** The protection keys are off in the host test, as on a processor without
+ * them. */
+int fpu_pkeys(void)
+{
+    return 0;
+}
+
+/** PKRU with the keys off. */
+uint32_t fpu_pkru(void)
+{
+    return 0;
 }
 
 /** Run every row; 0 when each passes, 1 otherwise. */

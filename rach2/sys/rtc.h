@@ -74,6 +74,14 @@ int64_t rtc_boot_epoch(void);
 void rtc_offset(int64_t *seconds, int32_t *nanoseconds);
 
 /**
+ * The real time to the last tick, read with no lock and no wait, for a
+ * panic: a processor stopped while it held the real-time lock or wrote the
+ * tick would stop a reader that took either. A change made on another
+ * processor during the read can tear it by that change.
+ */
+void rtc_realtime_unlocked(int64_t *seconds, int32_t *microseconds);
+
+/**
  * The real time now, in seconds since 1970 and nanoseconds within the
  * second: the anchor's time, the time since it to the timer's place within
  * the tick, and the step `rtc_set_realtime` made. While the clock runs from
@@ -122,18 +130,23 @@ void rtc_set_realtime(int64_t seconds, int32_t nanoseconds);
 
 /**
  * Read the machine's clock now, as the boot reads it: two samples that agree,
- * decoded, with interrupts off while each pair is read. 0 with `*out`
+ * decoded, with interrupts off and the clock's ports locked against other
+ * processors while each pair is read. 0 with `*out`
  * filled, or -1 when the clock cannot be read or holds no time.
  */
 int rtc_read_clock(rtc_time_t *out);
 
-/** The day of the week of `*t`, 0 for Sunday, and of the year, from 0. */
+/** The day of the week of `*t`, 0 for Sunday, and of the year, from 0, for
+ * a valid date from 1970. */
 void rtc_week_and_year_day(const rtc_time_t *t, int32_t *weekday, int32_t *yearday);
 
-/** `*t` for `seconds` since 1970 in UTC, the calendar the clock keeps. */
-void rtc_time_of_seconds(uint32_t seconds, rtc_time_t *t);
+/** `*t` for `seconds` since 1970 in UTC, the calendar the clock keeps: 0,
+ * or -1 for a time before 1970 or with a year past 2^31 - 1, which leaves
+ * `*t` unchanged. */
+int rtc_time_of_seconds(int64_t seconds, rtc_time_t *t);
 
-/** The seconds since 1970 of `*t`, a time from 1970 in UTC. */
+/** The seconds since 1970 of `*t`, a valid time from 1970 in UTC, whose
+ * year may be any to 2^31 - 1. */
 int64_t rtc_seconds_of(const rtc_time_t *t);
 
 /**
@@ -154,7 +167,9 @@ int rtc_write_clock(const rtc_time_t *t);
  * whether its interrupt is enabled; `rtc_alarm_interrupts` enables or
  * disables the interrupt; and `rtc_alarm_ack`, which the interrupt's handler
  * calls, lets the clock raise the next (on a PC, by reading status register
- * C) and returns whether the alarm was what raised it.
+ * C) and returns whether the alarm was what raised it. Each holds the lock
+ * on the clock's ports through its accesses, so any processor may call them,
+ * in any context.
  */
 void rtc_alarm_write(const rtc_time_t *t);
 int rtc_alarm_read(rtc_time_t *t);

@@ -326,6 +326,16 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "drmcon",
+          "checks": "tests/host/drmcon_hosttest.c runs the console as a DRM client over the master role and mode setting, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "drmcon64",
+          "checks": "tests/host/drmcon64_hosttest.c runs the console's DRM client rows with x86-64 kernel structures under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "ia32_fs",
           "checks": "tests/host/ia32_fs_hosttest.c checks the i386 stat, statfs, dirent, flock, iovec, time, sigevent and select structures of the x86-64 kernel's compat calls and the joining of split 64-bit arguments against Linux 6.12 under ASan and UBSan",
           "source": "scenario"
@@ -617,7 +627,7 @@
         },
         {
           "assertion_id": "i915_reset",
-          "checks": "tests/host/i915_reset_hosttest.c hangs the Intel graphics driver's render ring on the HD 4400's host model, whose GEN6_GDRST resets the rings: the heartbeat finding a stuck request between Linux's 5 and 7.5 s, from the worker and from a wait, the engine reset through its domain with the guilty payload skipped, the requests behind it run and the error state kept, the whole GPU reset when the domain sticks with the other ring's request innocent, a wedge when nothing resets and the reset that ends it, and the guilty context banned after Linux's count, a context that is not recoverable at once, an unbannable one never, a file refused at a score of 9, and GET_RESET_STATS counting each, under ASan and UBSan and exits 0",
+          "checks": "tests/host/i915_reset_hosttest.c hangs the Intel graphics driver's render ring on the HD 4400's host model, whose GEN6_GDRST resets the rings: the heartbeat finding a stuck request between Linux's 5 and 7.5 s, from the worker and from a wait, the engine reset through its domain with the guilty payload skipped, the requests behind it run and the error state kept, the whole GPU reset when the domain sticks with the other ring's request innocent, the GT's and the render engine's workarounds written at the bind and again after each reset, a wedge when nothing resets and the reset that ends it, and the guilty context banned after Linux's count, a context that is not recoverable at once, an unbannable one never, a file refused at a score of 9, and GET_RESET_STATS counting each, under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {
@@ -633,6 +643,11 @@
         {
           "assertion_id": "i915_trial",
           "checks": "tests/host/i915_trial_hosttest.c binds the Intel graphics driver to the HD 4400's host model as the Lenovo's firmware leaves it, without and with first light, and finds no wait at its bound, no display register or framebuffer GTT entry written, the power well kept, no memory reached but the driver's own and every interrupt source masked, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "i915_handoff",
+          "checks": "tests/host/i915_handoff_hosttest.c releases the Intel graphics driver's HD 4400 through /sys/bus/pci/drivers/i915/unbind and brings it up again through bind on the host model, start to finish: the display down in Linux's order and the GPU reset before the rings' pages go back, every interrupt masked, the message and bus mastering off, the function without an owner, the console told its screen has gone, the backlight on a stand-in that writes no register and a record a program still holds cut off from the chip; the release refused while a program holds an aperture window or the GPU will not reset, and the bring-up while vfio-pci has the function, its driver_override names another driver or the function's reset fails; then the function, left as a guest's driver would leave it, reset once before any access, the panel's power cycle waited out, the driver bound with nothing adopted and no entry of the guest's in the GTT, and a full mode set of the panel by SETCRTC with the link trained and frames counted, twice over, with no wait at its bound and every allocation given back, under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {
@@ -671,6 +686,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "vdso32",
+          "checks": "tests/host/vdso32_hosttest.c checks that both fast i386 entries hold one big lock before the saved-EBP user copy, on success and EFAULT",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "ia32_signal",
           "checks": "tests/host/ia32_signal_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
@@ -702,7 +722,7 @@
         },
         {
           "assertion_id": "itco",
-          "checks": "tests/host/itco_hosttest.c checks the TCO register sequence, two-stage expiry and watchdog file ABI under ASan and UBSan and exits 0",
+          "checks": "tests/host/itco_hosttest.c checks the TCO register sequence, two-stage expiry, watchdog file ABI, nowayout and the kernel's feed before an open under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {
@@ -806,6 +826,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "kvm_gpamap",
+          "checks": "tests/host/kvm_gpamap_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "kvm_pmu",
           "checks": "tests/host/kvm_pmu_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
@@ -813,6 +838,21 @@
         {
           "assertion_id": "kvm_slots",
           "checks": "tests/host/kvm_slots_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "kvm_svm",
+          "checks": "tests/host/kvm_svm_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "kvm_vfio",
+          "checks": "tests/host/kvm_vfio_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "kvm_vmx",
+          "checks": "tests/host/kvm_vmx_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {
@@ -1076,6 +1116,21 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "psmouse_attr",
+          "checks": "tests/host/psmouse_attr_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "psmouse_synaptics",
+          "checks": "tests/host/psmouse_synaptics_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "pstore",
+          "checks": "tests/host/pstore_hosttest.c checks ramoops's Reed-Solomon code, a persistent RAM zone's header, wrap and second-boot copy, and the parity's mending under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "ptrace",
           "checks": "tests/host/ptrace_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
@@ -1176,6 +1231,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "serial",
+          "checks": "tests/host/serial_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "sha256",
           "checks": "tests/host/sha256_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
@@ -1268,6 +1328,11 @@
         {
           "assertion_id": "timercal",
           "checks": "tests/host/timercal_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "cycleus",
+          "checks": "tests/host/cycleus_hosttest.c converts the lock counters' cycles to microseconds as native division does, under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {
@@ -1376,6 +1441,21 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "vgpublob",
+          "checks": "tests/host/vgpublob_hosttest.c runs virtio-gpu's blob, context-init and ring rows over the 3D model under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "vgpublob64",
+          "checks": "tests/host/vgpublob64_hosttest.c runs the blob, context-init and ring rows with x86-64 kernel structures under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "vgpushm",
+          "checks": "tests/host/vgpushm_hosttest.c runs the virtio transport over a shared region against a model of the VM's device through the virtio core and checks the layout, the handshake, the queues in the ring area and their bounds, a round trip, merged and refused chains, a full region that gives ENOMEM, backing from the heap, the doorbells' hooks, the control node's report, a lost device, a refused setup and the detach under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "virtio_gpu",
           "checks": "tests/host/virtio_gpu_hosttest.c binds the virtio GPU driver to a model of QEMU's device and checks the commands and their fences, the EDID and DMT modes, the scanout, damage, scattered backing, a full queue, error and missing answers, the cursor, a display change, the driver's ioctls, a buffer's release and the unplug under ASan and UBSan",
           "source": "scenario"
@@ -1383,6 +1463,11 @@
         {
           "assertion_id": "virtio_gpu64",
           "checks": "tests/host/virtio_gpu64_hosttest.c runs the virtio GPU rows with x86-64 kernel structures under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "virtio_pci_shm",
+          "checks": "tests/host/virtio_pci_shm_hosttest.c reads virtio-pci's shared memory capabilities from a model of two functions under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {
@@ -1468,6 +1553,11 @@
         {
           "assertion_id": "xhci",
           "checks": "tests/host/xhci_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "xsaves",
+          "checks": "tests/host/xsaves_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
         }
       ],
@@ -4399,7 +4489,7 @@
       "behavior": "the x86-64 kernel built with IA32=0 links and has none of the i386 ABI's symbols that the default kernel has, and both keep the x86-64 calls of the descriptor tables and the entry that refuses a `syscall` from 32-bit code",
       "units": [
         "host",
-        "`tests/cases/host/pure64check.c`: the symbol tables of build/x86_64/rach2-pure64/kernel and build/x86_64/rach2/kernel"
+        "`tests/cases/host/pure64check.c`: the symbol tables of build/x86_64/rach2-pure64/kernel.debug and build/x86_64/rach2/kernel.debug"
       ],
       "domain": "host",
       "architectures": [
@@ -4482,12 +4572,12 @@
         },
         {
           "name": "pure64-kernel",
-          "node": "rach2-pure64/kernel",
+          "node": "rach2-pure64/kernel.debug",
           "per_architecture": true
         },
         {
           "name": "kernel",
-          "node": "rach2/kernel",
+          "node": "rach2/kernel.debug",
           "per_architecture": true
         }
       ],

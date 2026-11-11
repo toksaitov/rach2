@@ -112,6 +112,8 @@
 
 #define TCFLSH 0x540B /* Flush input and/or output queues */
 
+#define TCXONC 0x540A /* Stop or restart output or input: tcflow(3) */
+
 #define FIONREAD 0x541B /* Bytes available to read */
 
 #define FIONBIO 0x5421 /* Set or clear O_NONBLOCK */
@@ -952,7 +954,7 @@ static void ntp_rtc_sync(void)
     if (sec < 946684800 || sec > 4102444799LL) {
         return; /* the CMOS clock's century: 2000 to 2099 */
     }
-    rtc_time_of_seconds((uint32_t)sec, &t);
+    rtc_time_of_seconds(sec, &t);
     if (rtc_write_clock(&t) == 0) {
         last = tick_count() + 1u;
     }
@@ -1110,31 +1112,79 @@ long sys_clock_getres(isr_params_t *params)
 }
 
 /**
- * End a sleep a signal cut short before its deadline, the tick `target`: the
- * process runs again, the kernel counts the sleep, and `urem`, when there is
- * one, gets the time left to that tick, less how far into the tick in
- * progress the timer is (`rtc_tick_phase`).
+ * Write the remainder `rem` of a sleep a signal cut short where the call
+ * asked for it, which the thread's restart block keeps (`restart.urem`), as
+ * Linux's restart_block keeps rmtp: two 64-bit words with `restart.wide`,
+ * else two 32-bit words, so a 32-bit program's call on the x86-64 kernel
+ * gets its own layout. Nothing for no address. Returns 0, or -EFAULT when
+ * the remainder cannot be written.
  */
-static int32_t nanosleep_interrupted(struct kernel_timespec __user *urem, uint64_t target)
+static int32_t sleep_rem_put(const struct kernel_timespec *rem)
+{
+    const struct restart_block *b = &current_proc->restart;
+    void __user *u = (void __user *)b->urem;
+
+    if (!b->urem) {
+        return 0;
+    }
+    if (b->wide) {
+        int64_t w[2];
+
+        w[0] = rem->tv_sec;
+        w[1] = rem->tv_nsec;
+        return copy_to_user(u, w, sizeof(w)) != 0 ? -EFAULT : 0;
+    } else {
+        int32_t w[2];
+
+        w[0] = (int32_t)rem->tv_sec;
+        w[1] = (int32_t)rem->tv_nsec;
+        return copy_to_user(u, w, sizeof(w)) != 0 ? -EFAULT : 0;
+    }
+}
+
+/**
+ * Begin a sleep call: nothing for restart_syscall to resume, as Linux's
+ * nanosleep and clock_nanosleep clear it at their entry, and the remainder,
+ * when a signal cuts the sleep short, goes to `urem`, 0 for none, as two
+ * 64-bit words with `wide`, else two 32-bit words.
+ */
+static void sleep_begin(uintptr_t urem, int wide)
+{
+    current_proc->restart.fn = NULL;
+    current_proc->restart.urem = urem;
+    current_proc->restart.wide = (uint8_t)(wide != 0);
+}
+
+/**
+ * End a sleep a signal cut short before its deadline, the tick `target`: the
+ * process runs again, the kernel counts the sleep, and with `rem` the time
+ * left to that tick, less how far into the tick in progress the timer is
+ * (`rtc_tick_phase`), goes where the call asked (`sleep_rem_put`). Returns
+ * -EINTR, or -EFAULT when the remainder cannot be written, as Linux
+ * answers.
+ */
+static int32_t nanosleep_interrupted(int rem, uint64_t target)
 {
     current_proc->wakeup_tick = 0;
     current_proc->state = PROC_RUNNING;
     process_count_sleep_cut_short();
-    if (urem) {
-        struct kernel_timespec rem;
+    if (rem) {
+        struct kernel_timespec left;
         uint64_t now;
         uint32_t phase_ns, rest;
         int32_t ns;
 
         rtc_tick_phase(&now, &phase_ns);
-        rem.tv_sec = (long)tick_div(target > now ? target - now : 0u, TICK_HZ, &rest);
+        left.tv_sec = (long)tick_div(target > now ? target - now : 0u, TICK_HZ, &rest);
         ns = (int32_t)(rest * TICK_NS) - (int32_t)phase_ns;
-        if (ns < 0 && rem.tv_sec > 0) {
-            rem.tv_sec--;
+        if (ns < 0 && left.tv_sec > 0) {
+            left.tv_sec--;
             ns += 1000000000;
         }
-        rem.tv_nsec = ns > 0 ? ns : 0;
-        (void)copy_to_user(urem, &rem, sizeof(rem));
+        left.tv_nsec = ns > 0 ? ns : 0;
+        if (sleep_rem_put(&left) != 0) {
+            return -EFAULT;
+        }
     }
     return -EINTR;
 }
@@ -1152,10 +1202,14 @@ static int32_t nanosleep_interrupted(struct kernel_timespec __user *urem, uint64
  * Once the deadline tick has come the sleep is over, and the call returns 0
  * whether or not a signal is pending. A signal the process acts on, found
  * pending before then, ends the sleep through `nanosleep_interrupted`, which
- * writes `urem` when it is not NULL and returns -EINTR; a wake by one it does
- * not act on sends it back to sleep with the deadline stored again.
+ * with `rem` writes the remainder and returns -EINTR, or -EFAULT when the
+ * write fails; a wake by one it does not act on sends it back to sleep with
+ * the deadline stored again.
+ *
+ * `wchan` names the sleep for /proc/PID/wchan as Linux's wchan names the
+ * caller's: the first function on Linux's stack that is not `__sched`.
  */
-static int32_t sleep_until(uint64_t target, struct kernel_timespec __user *urem)
+static int32_t sleep_until(uint64_t target, int rem, const char *wchan)
 {
     for (;;) {
         uint32_t flags = kirq_save();
@@ -1166,10 +1220,11 @@ static int32_t sleep_until(uint64_t target, struct kernel_timespec __user *urem)
         }
         if (signal_pending()) {
             kirq_restore(flags);
-            return nanosleep_interrupted(urem, target);
+            return nanosleep_interrupted(rem, target);
         }
         /* 0 means not sleeping, so a deadline of 0 is stored as 1. */
         current_proc->wakeup_tick = target != 0 ? target : 1u;
+        current_proc->wchan = wchan;
         current_proc->state = PROC_BLOCKED;
         kirq_restore(flags);
         schedule(); /* yield to any other READY process; the timer wakes us */
@@ -1224,9 +1279,11 @@ static int time_reached(enum kclock_kind kind, const struct kernel_timespec *whe
  * tick, so a time the clock has reached returns at once, before the deadline
  * is rounded up to a tick. The tick count and the time since boot are read
  * as one reading (`tick_now`), since the tick changes both. Returns 0, or
- * -EINTR when a signal the process acts on comes first.
+ * -EINTR when a signal the process acts on comes first. `wchan` names the
+ * sleep, as for `sleep_until`.
  */
-static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_timespec *when)
+static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_timespec *when,
+                                const char *wchan)
 {
     uint32_t seconds32, ticks32;
     uint64_t now, base, due;
@@ -1247,7 +1304,61 @@ static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_times
     if (due <= now) {
         return 0;
     }
-    return sleep_until(base + (due - now), NULL);
+    return sleep_until(base + (due - now), 0, wchan);
+}
+
+static long sleep_resume(isr_params_t *params);
+
+/**
+ * Sleep to the tick `target` and then, unless `end` has no seconds and no
+ * nanoseconds, until time since boot reaches `end`, the deadline
+ * `sleep_for` fixed. A signal's remainder is the time left to `target`,
+ * and once that tick has come the time left until the clock reaches `end`.
+ *
+ * When a signal cuts the sleep short, the deadline goes into the thread's
+ * restart block and the call stands for Linux's ERESTART_RESTARTBLOCK: a
+ * signal that runs no handler, as a stop and a continue, restarts it
+ * through restart_syscall (`sleep_resume`), which sleeps on to this same
+ * deadline, and a handler gives the caller EINTR and the remainder. `wchan`
+ * names the sleep, as for `sleep_until`.
+ */
+static int32_t sleep_to(uint64_t target, const struct kernel_timespec *end, const char *wchan)
+{
+    struct restart_block *b = &current_proc->restart;
+    int64_t sec, nsec;
+    int32_t rc;
+
+    rc = sleep_until(target, 1, wchan);
+    if (rc == 0 && (end->tv_sec != 0 || end->tv_nsec != 0)) {
+        rc = sleep_until_time(KCLOCK_MONO, end, wchan);
+        if (rc != 0) {
+            struct kernel_timespec rem;
+
+            rtc_monotonic(&sec, &nsec);
+            rem.tv_sec = (long)(end->tv_sec - sec);
+            rem.tv_nsec = end->tv_nsec - (long)nsec;
+            if (rem.tv_nsec < 0) {
+                rem.tv_sec--;
+                rem.tv_nsec += 1000000000L;
+            }
+            if (rem.tv_sec < 0) {
+                rem.tv_sec = 0;
+                rem.tv_nsec = 0;
+            }
+            if (sleep_rem_put(&rem) != 0) {
+                return -EFAULT;
+            }
+        }
+    }
+    if (rc == -EINTR) {
+        b->fn = sleep_resume;
+        b->tick = target;
+        b->sec = end->tv_sec;
+        b->nsec = end->tv_nsec;
+        b->flags = 0;
+        current_proc->restart_kind = RESTART_BLOCK;
+    }
+    return rc;
 }
 
 /**
@@ -1265,95 +1376,43 @@ static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_times
  * clock showed it had lasted `req`. A sleep that `tick_span` cuts ends at
  * its tick.
  *
- * A signal's remainder, written to `urem`, is the time left to the deadline
- * tick, so a caller that sleeps again for the remainder ends at the first
- * sleep's deadline, and later by the time it takes to call again; once that
- * tick has come, it is the time left until the clock reaches the end.
+ * A zero interval blocks until the next tick, as Linux arms a timer even
+ * for a zero relative sleep; a caller can give a woken thread time to run.
+ *
+ * A signal's remainder is the time left to the deadline tick, so a caller
+ * that sleeps again for the remainder ends at the first sleep's deadline,
+ * and later by the time it takes to call again; once that tick has come, it
+ * is the time left until the clock reaches the end. A remainder that cannot
+ * be written makes the call -EFAULT, and a sleep that completes writes none.
+ * A signal that runs no handler resumes the sleep to the same deadline
+ * (`sleep_to`).
  */
-static int32_t sleep_for(const struct kernel_timespec *req, struct kernel_timespec __user *urem)
+static int32_t sleep_for(const struct kernel_timespec *req)
 {
     struct kernel_timespec end;
     uint64_t now, ticks;
     uint32_t phase_ns, us;
     int64_t sec, nsec, asked = req->tv_sec;
-    int32_t rc;
 
+    end.tv_sec = 0;
+    end.tv_nsec = 0;
+    /* Linux's do_nanosleep is __sched, so wchan shows its caller. */
     if (req->tv_sec == 0 && req->tv_nsec == 0) {
-        return 0;
+        return sleep_to(tick_count() + 1u, &end, "hrtimer_nanosleep");
     }
     rtc_monotonic(&sec, &nsec);
     rtc_tick_phase(&now, &phase_ns);
     us = phase_ns / 1000u + ((uint32_t)req->tv_nsec + 999u) / 1000u;
     ticks = tick_span(req->tv_sec, 0) + (us + (TICK_US - 1u)) / TICK_US;
-    rc = sleep_until(now + ticks, urem);
-    if (rc != 0 || asked >= ((int64_t)1 << 40)) {
-        return rc;
-    }
-    end.tv_sec = (long)(sec + req->tv_sec);
-    end.tv_nsec = (long)nsec + req->tv_nsec;
-    if (end.tv_nsec >= 1000000000L) {
-        end.tv_sec++;
-        end.tv_nsec -= 1000000000L;
-    }
-    rc = sleep_until_time(KCLOCK_MONO, &end);
-    if (rc != 0 && urem) {
-        struct kernel_timespec rem;
-
-        rtc_monotonic(&sec, &nsec);
-        rem.tv_sec = (long)(end.tv_sec - sec);
-        rem.tv_nsec = end.tv_nsec - (long)nsec;
-        if (rem.tv_nsec < 0) {
-            rem.tv_sec--;
-            rem.tv_nsec += 1000000000L;
-        }
-        if (rem.tv_sec < 0) {
-            rem.tv_sec = 0;
-            rem.tv_nsec = 0;
-        }
-        (void)copy_to_user(urem, &rem, sizeof(rem));
-    }
-    return rc;
-}
-
-/**
- * Block-and-schedule sleep (nanosleep, 32-bit timespec).
- *
- * Its arguments are const struct timespec* req and struct timespec* rem
- * (optional). Sleeps to the first tick at or after the interval's end through
- * `sleep_for`, which has the rules of the deadline, the signals and the
- * remainder. rem is written as zero on normal completion.
- */
-long sys_nanosleep(isr_params_t *params)
-{
-    const struct kernel_timespec __user *ureq =
-        (const struct kernel_timespec __user *)SC_ARG(params, 0);
-    struct kernel_timespec __user *urem = (struct kernel_timespec __user *)SC_ARG(params, 1);
-    struct kernel_timespec req;
-    int32_t rc;
-
-    if (!current_proc || !ureq) {
-        return -EFAULT;
-    }
-    if (copy_from_user(&req, ureq, sizeof(req)) != 0) {
-        return -EFAULT;
-    }
-    if (!timespec_valid(&req)) {
-        return -EINVAL;
-    }
-    rc = sleep_for(&req, urem);
-    if (rc != 0) {
-        return rc;
-    }
-
-    if (urem) {
-        struct kernel_timespec zero;
-        zero.tv_sec = 0;
-        zero.tv_nsec = 0;
-        if (copy_to_user(urem, &zero, sizeof(zero)) != 0) {
-            return -EFAULT;
+    if (asked < ((int64_t)1 << 40)) {
+        end.tv_sec = (long)(sec + req->tv_sec);
+        end.tv_nsec = (long)nsec + req->tv_nsec;
+        if (end.tv_nsec >= 1000000000L) {
+            end.tv_sec++;
+            end.tv_nsec -= 1000000000L;
         }
     }
-    return 0;
+    return sleep_to(now + ticks, &end, "hrtimer_nanosleep");
 }
 
 /**
@@ -1365,10 +1424,11 @@ long sys_nanosleep(isr_params_t *params)
  * the caller's process lives, whose time the clock counts. The caller's
  * clock with no other thread does not advance while it sleeps, and neither
  * does a reaped process's, so the wait for either ends only at a signal. A
- * relative sleep's remainder is the ticks still due at the last reading.
- * Returns 0, or -EINTR.
+ * relative sleep's remainder, with `rem`, is the ticks still due at the
+ * last reading. Returns 0, -EINTR, or -EFAULT when the remainder cannot be
+ * written.
  */
-static int32_t sleep_until_cpu(int32_t clk, uint64_t due, struct kernel_timespec __user *urem)
+static int32_t sleep_until_cpu(int32_t clk, uint64_t due, int rem)
 {
     uint64_t now = 0;
 
@@ -1386,19 +1446,165 @@ static int32_t sleep_until_cpu(int32_t clk, uint64_t due, struct kernel_timespec
                 wait = 1;
             }
         }
-        rc = sleep_until(tick_count() + wait, NULL);
+        rc = sleep_until(tick_count() + wait, 0, "do_cpu_nanosleep");
         if (rc != 0) {
-            if (urem) {
-                struct kernel_timespec rem;
+            if (rem) {
+                struct kernel_timespec left;
                 uint32_t rest;
 
-                rem.tv_sec = (long)tick_div(due - now, TICK_HZ, &rest);
-                rem.tv_nsec = (long)(rest * TICK_NS);
-                (void)copy_to_user(urem, &rem, sizeof(rem));
+                left.tv_sec = (long)tick_div(due - now, TICK_HZ, &rest);
+                left.tv_nsec = (long)(rest * TICK_NS);
+                if (sleep_rem_put(&left) != 0) {
+                    return -EFAULT;
+                }
             }
             return rc;
         }
     }
+}
+
+/**
+ * Sleep on the CPU clock `clk` until it reads `due` ticks, a relative
+ * sleep's end, as `sleep_until_cpu` does, writing the remainder. A signal
+ * that cuts it short leaves the end in the restart block, and one that runs
+ * no handler resumes the sleep to it (`sleep_resume`), as Linux's
+ * posix_cpu_nsleep_restart does.
+ */
+static int32_t sleep_cpu_for(int32_t clk, uint64_t due)
+{
+    struct restart_block *b = &current_proc->restart;
+    int32_t rc = sleep_until_cpu(clk, due, 1);
+
+    if (rc == -EINTR) {
+        b->fn = sleep_resume;
+        b->tick = due;
+        b->flags = clk;
+        b->sec = -1;
+        current_proc->restart_kind = RESTART_BLOCK;
+    }
+    return rc;
+}
+
+/**
+ * The name /proc/PID/wchan gives a sleep that restart_syscall resumed: the
+ * first of Linux's frames under it that is not `__sched`, which
+ * hrtimer_nanosleep_restart and do_nanosleep are. Linux's x86-64 kernel, built
+ * for ORC without frame pointers, reaches hrtimer_nanosleep_restart by tail
+ * calls from its entry, `do_syscall_64` for a call of its own ABI and
+ * `do_int80_emulation` for an i386 call by int 0x80, which Debian's 6.12.115
+ * shows. The native name goes by the kernel's architecture, with the i386
+ * ABI built or not, since Linux's native entry is the same without
+ * CONFIG_IA32_EMULATION. Its i386 kernel keeps frame pointers and so every
+ * frame, and the first is `__do_sys_restart_syscall`, which
+ * `__ia32_sys_restart_syscall` aliases and kallsyms lists first.
+ */
+static const char *sleep_resume_wchan(void)
+{
+#if defined(__x86_64__)
+    return in_compat_syscall() ? "do_int80_emulation" : "do_syscall_64";
+#else
+    return "__do_sys_restart_syscall";
+#endif
+}
+
+/**
+ * The resumption of a relative sleep a signal that ran no handler cut short
+ * (restart_syscall): on to the deadline the restart block keeps, with the
+ * remainder where the first call asked for it, and the block kept for a
+ * further signal, as Linux's hrtimer_nanosleep_restart keeps it. A CPU
+ * clock's sleep is marked by seconds of -1.
+ */
+static long sleep_resume(isr_params_t *params)
+{
+    struct restart_block *b = &current_proc->restart;
+    struct kernel_timespec end;
+
+    (void)params;
+    if (b->sec == -1) {
+        return sleep_cpu_for(b->flags, b->tick);
+    }
+    end.tv_sec = (long)b->sec;
+    end.tv_nsec = (long)b->nsec;
+    return sleep_to(b->tick, &end, sleep_resume_wchan());
+}
+
+long nanosleep_core(const struct kernel_timespec *req, uintptr_t urem, int wide)
+{
+    if (!current_proc || !req) {
+        return -EFAULT;
+    }
+    if (!timespec_valid(req)) {
+        return -EINVAL;
+    }
+    sleep_begin(urem, wide);
+    return sleep_for(req);
+}
+
+/**
+ * Block-and-schedule sleep (nanosleep, 32-bit timespec).
+ *
+ * Its arguments are const struct timespec* req and struct timespec* rem
+ * (optional). Sleeps to the first tick at or after the interval's end through
+ * `sleep_for`, which has the rules of the deadline, the signals and the
+ * remainder: rem is written only when a signal cuts the sleep short, as
+ * Linux writes it, and a rem that cannot be written is then -EFAULT.
+ */
+long sys_nanosleep(isr_params_t *params)
+{
+    const struct kernel_timespec __user *ureq =
+        (const struct kernel_timespec __user *)SC_ARG(params, 0);
+    struct kernel_timespec req;
+    int ok = ureq && copy_from_user(&req, ureq, sizeof(req)) == 0;
+
+    return nanosleep_core(ok ? &req : NULL, SC_ARG(params, 1), sizeof(long) > 4u);
+}
+
+long clock_nanosleep_core(int32_t clk, unsigned long flags, const struct kernel_timespec *req,
+                          uintptr_t urem, int wide)
+{
+    int absolute = (flags & TIMER_ABSTIME) != 0;
+    struct kclock c;
+    int32_t rc;
+
+    if (clk > CLOCK_BOOTTIME) {
+        return -EINVAL;
+    }
+    if (clk == CLOCK_THREAD_CPUTIME_ID || clk == CLOCK_MONOTONIC_RAW ||
+        clk == CLOCK_REALTIME_COARSE || clk == CLOCK_MONOTONIC_COARSE) {
+        return -EOPNOTSUPP;
+    }
+    if (!current_proc || !req) {
+        return -EFAULT;
+    }
+    if (!timespec_valid(req)) {
+        return -EINVAL;
+    }
+    if (clk < 0 && ((uint32_t)clk & CPUCLOCK_PERTHREAD)) {
+        return -EINVAL;
+    }
+    rc = clock_resolve(clk, &c);
+    if (rc != 0) {
+        return rc;
+    }
+    sleep_begin(absolute ? 0 : urem, wide);
+    if (c.kind == KCLOCK_CPU) {
+        uint64_t due = timespec_ticks(req);
+
+        if (absolute) {
+            rc = sleep_until_cpu(clk, due, 0);
+        } else {
+            return sleep_cpu_for(clk, due + clock_cpu_ticks(&c));
+        }
+    } else if (!absolute) {
+        return sleep_for(req);
+    } else {
+        rc = sleep_until_time(c.kind, req, "hrtimer_nanosleep");
+    }
+    if (rc == -EINTR) {
+        /* An absolute sleep restarts with its own arguments. */
+        current_proc->restart_kind = RESTART_NOHAND;
+    }
+    return rc;
 }
 
 /**
@@ -1407,8 +1613,8 @@ static int32_t sleep_until_cpu(int32_t clk, uint64_t due, struct kernel_timespec
  *
  * Its arguments are clockid, flags, const struct timespec *req and struct
  * timespec *rem. Flags 0 makes `req` an interval, which sleeps as `nanosleep`
- * does except that nothing is written to `rem` on completion; TIMER_ABSTIME
- * makes it a time of the clock, reached as `sleep_until_time` or
+ * does; TIMER_ABSTIME makes it a time of the clock, reached as
+ * `sleep_until_time` or
  * `sleep_until_cpu` describe, and returns at once for a time already past.
  * Other flag bits are ignored, as Linux ignores them, and `rem` is written only
  * for an interval a signal cut short.
@@ -1422,53 +1628,20 @@ static int32_t sleep_until_cpu(int32_t clk, uint64_t due, struct kernel_timespec
  * signal. The order of the checks is Linux's: the clock, then the request
  * (-EFAULT, then -EINVAL for a negative second or nanoseconds past a
  * second), then a CPU clock by id.
+ *
+ * A signal that runs no handler resumes an interval to its first deadline
+ * (`sleep_to`, `sleep_cpu_for`) and restarts an absolute sleep, as Linux
+ * does; a handler gives EINTR either way.
  */
 long sys_clock_nanosleep(isr_params_t *params)
 {
-    int32_t clk = (int32_t)SC_ARG(params, 0);
-    int absolute = (SC_ARG(params, 1) & TIMER_ABSTIME) != 0;
     const struct kernel_timespec __user *ureq =
         (const struct kernel_timespec __user *)SC_ARG(params, 2);
-    struct kernel_timespec __user *urem = (struct kernel_timespec __user *)SC_ARG(params, 3);
     struct kernel_timespec req;
-    struct kclock c;
-    int32_t rc;
+    int ok = ureq && copy_from_user(&req, ureq, sizeof(req)) == 0;
 
-    if (clk > CLOCK_BOOTTIME) {
-        return -EINVAL;
-    }
-    if (clk == CLOCK_THREAD_CPUTIME_ID || clk == CLOCK_MONOTONIC_RAW ||
-        clk == CLOCK_REALTIME_COARSE || clk == CLOCK_MONOTONIC_COARSE) {
-        return -EOPNOTSUPP;
-    }
-    if (!current_proc || !ureq || copy_from_user(&req, ureq, sizeof(req)) != 0) {
-        return -EFAULT;
-    }
-    if (!timespec_valid(&req)) {
-        return -EINVAL;
-    }
-    if (absolute) {
-        urem = NULL;
-    }
-    if (clk < 0 && ((uint32_t)clk & CPUCLOCK_PERTHREAD)) {
-        return -EINVAL;
-    }
-    rc = clock_resolve(clk, &c);
-    if (rc != 0) {
-        return rc;
-    }
-    if (c.kind == KCLOCK_CPU) {
-        uint64_t due = timespec_ticks(&req);
-
-        if (!absolute) {
-            due += clock_cpu_ticks(&c);
-        }
-        return sleep_until_cpu(clk, due, urem);
-    }
-    if (!absolute) {
-        return sleep_for(&req, urem);
-    }
-    return sleep_until_time(c.kind, &req);
+    return clock_nanosleep_core((int32_t)SC_ARG(params, 0), SC_ARG(params, 1), ok ? &req : NULL,
+                                SC_ARG(params, 3), sizeof(long) > 4u);
 }
 
 /* setitimer's timers: of real time, and of the process's processor time
@@ -1761,6 +1934,41 @@ int pgrp_in_session(int pgid, int sid)
     return 0;
 }
 
+/** Whether a thread, process group or session still holds the kernel PID
+ * `pid`, zombies included, as Linux's find_vpid finds a number until its
+ * last task detaches. A terminal's foreground group alone does not hold
+ * the number in that lookup. The caller holds the big kernel lock. */
+static int tty_pid_exists(uint32_t pid)
+{
+    const process_t *p;
+
+    if (!pid) {
+        return 0;
+    }
+    for (p = proc_list; p; p = p->next) {
+        if (p->pid == pid || p->tgid == pid || p->pgid == pid || p->sid == pid) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** The session of a group, or of the thread whose PID is `pid` if no group
+ * has that number, as Linux's session_of_pgrp permits for TIOCSPGRP.
+ * Returns zero when neither exists. The caller holds the big kernel lock. */
+static uint32_t tty_pgrp_session(uint32_t pid)
+{
+    const process_t *p;
+
+    for (p = proc_list; p; p = p->next) {
+        if (p->pgid == pid) {
+            return p->sid;
+        }
+    }
+    p = get_process(pid);
+    return p ? p->sid : 0;
+}
+
 /* The termios2 of TCGETS2 and the TCSETS2 family: the kernel termios, then
  * the input and output speeds. GNU libc uses these for tcgetattr, tcsetattr
  * and isatty. */
@@ -1852,6 +2060,7 @@ static int tty_request(uint32_t request)
     case TCSETSW2:
     case TCSETSF2:
     case TCFLSH:
+    case TCXONC:
     case TIOCGWINSZ:
     case TIOCSWINSZ:
     case TIOCGPGRP:
@@ -1899,6 +2108,62 @@ struct tty *fd_tty(fd_entry_t *e)
     return NULL;
 }
 
+int fd_tty_hung(fd_entry_t *e)
+{
+    struct tty *t = fd_tty(e);
+
+    return t && e->ofd && tty_desc_hung(t, e->ofd->tty_hangups);
+}
+
+/**
+ * TCFLSH on the console or a pty slave: `which` 0 (TCIFLUSH) discards the
+ * unread input, 1 (TCOFLUSH) the output, 2 (TCIOFLUSH) both; anything else is
+ * -EINVAL. The console writes its output at once, so it has none to discard;
+ * a slave's `flush` discards the output its master has not read and tells a
+ * master in packet mode of each flush (`TTY_FLUSH_*`), as Linux's
+ * tty_perform_flush does through n_tty_flush_buffer and pty_flush_buffer.
+ */
+static int32_t tty_flush_at(struct tty *t, uintptr_t which)
+{
+    if (which > 2) {
+        return -EINVAL;
+    }
+    if (which != 1) {
+        tty_flush_input(t);
+    }
+    if (t->flush) {
+        t->flush(t, (which != 1 ? TTY_FLUSH_IN : 0) | (which != 0 ? TTY_FLUSH_OUT : 0));
+    }
+    return 0;
+}
+
+/**
+ * The job-control check (`tty_job_check`, SIGTTOU) of a terminal request that
+ * changes `t`, as Linux's tty_check_change: TCSETS and its kin, TCFLSH,
+ * TCXONC and TIOCSPGRP, whose EIO for an orphaned group Linux's tiocspgrp
+ * turns into ENOTTY. Returns 0 for any other request.
+ */
+static int32_t tty_job_gate(struct tty *t, uint32_t request)
+{
+    int rc;
+
+    switch (request) {
+    case TCSETS:
+    case TCSETSW:
+    case TCSETSF:
+    case TCSETS2:
+    case TCSETSW2:
+    case TCSETSF2:
+    case TCFLSH:
+    case TCXONC:
+    case TIOCSPGRP:
+        rc = tty_job_check(t, SIGTTOU);
+        return request == TIOCSPGRP && rc == -EIO ? -ENOTTY : rc;
+    default:
+        return 0;
+    }
+}
+
 /**
  * The terminal ioctls of the tty `t`.
  *
@@ -1912,13 +2177,20 @@ struct tty *fd_tty(fd_entry_t *e)
  * unread input. FIONREAD gives the bytes a read would return at once, a
  * complete cooked line or the queued count in raw mode, with a pending EOF
  * counted as 0; `tty_inq` drains the input source first, so input that has
- * just arrived is counted. TCFLSH's TCIFLUSH (0) and TCIOFLUSH (2) drop the
- * input; there is no output queue, so TCOFLUSH (1) does nothing.
+ * just arrived is counted. TCFLSH discards the queues (`tty_flush_at`), and
+ * TCXONC stops and restarts output or sends VSTOP and VSTART (`tty_tcflow`).
+ *
+ * A process of a background group of the session the terminal controls is
+ * stopped with SIGTTOU before TCSETS and its kin, TCFLSH, TCXONC and
+ * TIOCSPGRP, unless it blocks or ignores the signal (`tty_job_check`), as
+ * Linux's tty_check_change; an orphaned group's call is EIO, and its
+ * TIOCSPGRP ENOTTY, as Linux's tiocspgrp turns that EIO.
  *
  * TIOCSPGRP needs the caller's session to be the one the terminal controls,
- * checked before the argument, as on Linux (-ENOTTY), and a group in that
- * session (`pgrp_in_session`, -EPERM). TIOCSCTTY lets a session leader take
- * a terminal no other session controls, with the caller's group in the
+ * and a group in that session, or a thread in it when the number names no
+ * group (`tty_pgrp_session`, -EPERM). A negative number is EINVAL; one no
+ * thread, group or session holds is ESRCH. TIOCSCTTY lets a session leader
+ * take a terminal no other session controls, with the caller's group in the
  * foreground; `tty_make_sole_ctty` publishes the session and the group and
  * drops every other terminal the session controlled, the console and any
  * other pty, in one step with interrupts off, so the console's drain in
@@ -1928,7 +2200,12 @@ struct tty *fd_tty(fd_entry_t *e)
  */
 static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uintptr_t arg, int *handled)
 {
+    int32_t rc = tty_job_gate(t, request);
+
     *handled = 1;
+    if (rc != 0) {
+        return rc;
+    }
     switch (request) {
     case TCGETS:
     case TCGETS2:
@@ -1955,13 +2232,10 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uintptr_t arg, 
         return tty_set_termios_at(t, request, arg);
 
     case TCFLSH:
-        if (arg > 2) {
-            return -EINVAL;
-        }
-        if (arg == 0 || arg == 2) {
-            tty_flush_input(t);
-        }
-        return 0;
+        return tty_flush_at(t, arg);
+
+    case TCXONC:
+        return arg > TTY_TCION ? -EINVAL : tty_tcflow(t, (int)arg);
 
     case TIOCGWINSZ:
         if (!arg) {
@@ -2000,17 +2274,17 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uintptr_t arg, 
         if (copy_from_user(&pgrp, (const void __user *)arg, sizeof(pgrp)) != 0) {
             return -EFAULT;
         }
+        if (pgrp < 0) {
+            return -EINVAL;
+        }
         if (t->sid == 0 || (int)current_proc->sid != t->sid) {
             return -ENOTTY;
         }
-        if (pgrp <= 0) {
-            return -EINVAL;
-        }
         pgrp = (int)pid_named((uint32_t)pgrp);
-        if (pgrp == 0) {
+        if (!tty_pid_exists((uint32_t)pgrp)) {
             return -ESRCH;
         }
-        if (!pgrp_in_session(pgrp, t->sid)) {
+        if (tty_pgrp_session((uint32_t)pgrp) != (uint32_t)t->sid) {
             return -EPERM;
         }
         t->fg_pgid = pgrp;
@@ -2173,6 +2447,31 @@ static int32_t console_ioctl(uint32_t request, uintptr_t arg)
 }
 
 /**
+ * vhangup(2): hang up the caller's controlling terminal as Linux's
+ * `tty_vhangup_self` does (`tty_vhangup`), which needs CAP_SYS_TTY_CONFIG
+ * in the first user namespace. 0, also for a caller with no controlling
+ * terminal, or -EPERM. The caller's own descriptors of the terminal are hung
+ * up with the rest, so a getty or a login opens it again.
+ */
+long sys_vhangup(isr_params_t *params)
+{
+    struct tty *t;
+
+    (void)params;
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    if (current_proc->userns || !cap_holds(current_proc, CAP_SYS_TTY_CONFIG)) {
+        return -EPERM;
+    }
+    t = tty_session_tty((int)current_proc->sid);
+    if (t) {
+        tty_vhangup(t);
+    }
+    return 0;
+}
+
+/**
  * Device control (ioctl(2)).
  *
  * Its arguments are fd, request and arg. Returns 0, the request's result, or
@@ -2182,7 +2481,8 @@ static int32_t console_ioctl(uint32_t request, uintptr_t arg)
  * The descriptor is checked first, so a bad one is -EBADF whatever the
  * request, `ioctl(-1, TCGETS)` included, and an O_PATH one is -EBADF to every
  * request, as on Linux. The requests then go, in order, to: FIONBIO, which
- * every descriptor answers (`fd_ioctl_nbio`); FS_IOC_GETFLAGS and the other
+ * every descriptor answers (`fd_ioctl_nbio`); a hung-up terminal description,
+ * which answers -EIO, or -ENOTTY to TIOCSPGRP; FS_IOC_GETFLAGS and the other
  * file attribute requests (`fs_flags_ioctl`); FICLONE and FICLONERANGE
  * (`fs_clone_ioctl`); SIOCGSTAMP and SIOCGSTAMPNS on an Internet or packet
  * socket (`socket_gettstamp`); the interface requests of
@@ -2216,6 +2516,9 @@ long ioctl_fd(int fd_num, uint32_t request, uintptr_t arg)
     }
     if (request == FIONBIO) {
         return fd_ioctl_nbio(entry, arg);
+    }
+    if (fd_tty_hung(entry)) {
+        return request == TIOCSPGRP ? -ENOTTY : -EIO;
     }
     {
         int handled;
@@ -2582,7 +2885,7 @@ long sys_syslog(isr_params_t *params)
             return 0;
         }
         while ((syslog_read_at = klog_clamp(syslog_read_at)) == klog_written()) {
-            if (sleep_until(tick_count() + MS_TO_TICKS(100), NULL) != 0) {
+            if (sleep_until(tick_count() + MS_TO_TICKS(100), 0, "syslog_print") != 0) {
                 return -EINTR;
             }
         }
@@ -2729,17 +3032,20 @@ static int ioctl_restartable(const isr_params_t *params)
 
 /**
  * Whether the call the handler `fn` answers, with the arguments in `params`,
- * which a signal interrupted with EINTR, may be restarted, by a signal no
- * handler takes or by a handler with SA_RESTART. The calls that are not are
- * the ones Linux never restarts after a handler, which wait for a signal or
- * for a deadline, a timed futex wait among them (`futex_restartable`), or
- * for a System V semaphore or queue, those through ipc(2) among them
- * (`sysv_ipc_restartable`); an ioctl of KVM's, by either ABI
- * (`ioctl_restartable`); and
- * the two returns from a handler, whose result register is the interrupted
- * call's. The call is told by its handler, since
- * its number differs between the architectures; an i386 call on the x86-64
- * kernel by its compat handler, which `ia32_never_restarts` judges.
+ * which a signal interrupted with EINTR and which set no restart kind of
+ * its own, stands for Linux's ERESTARTSYS, which a signal no handler takes
+ * or a handler with SA_RESTART restarts. The calls that do not are the ones
+ * Linux gives EINTR in every case: those that wait for a signal or for
+ * events, rt_sigtimedwait and the epoll waits, the System V semaphore
+ * waits, those through ipc(2) among them (`sysv_ipc_restartable`), an ioctl
+ * of KVM's, by either ABI (`ioctl_restartable`), restart_syscall with
+ * nothing to resume, and the two returns from a handler, whose result
+ * register is the interrupted call's. The call is told by its handler,
+ * since its number differs between the architectures; an i386 call on the
+ * x86-64 kernel by its compat handler, which `ia32_never_restarts` judges.
+ * The calls Linux restarts otherwise, the sleeps, pause, the sigsuspends,
+ * the poll and select calls, the System V queue waits and the futex waits,
+ * set their kind (`restart_kind`).
  */
 static int syscall_restartable(syscall_fn_t fn, const isr_params_t *params)
 {
@@ -2751,9 +3057,6 @@ static int syscall_restartable(syscall_fn_t fn, const isr_params_t *params)
         return ioctl_restartable(params);
     }
 #endif
-    if (fn == sys_futex) {
-        return futex_restartable(params);
-    }
     if (fn == sys_ipc) {
         return sysv_ipc_restartable(params);
     }
@@ -2762,12 +3065,67 @@ static int syscall_restartable(syscall_fn_t fn, const isr_params_t *params)
         return 0;
     }
 #endif
-    return fn != sys_pause && fn != sys_select && fn != sys_sigreturn && fn != sys__newselect &&
-           fn != sys_nanosleep && fn != sys_poll && fn != sys_rt_sigreturn &&
-           fn != sys_rt_sigtimedwait && fn != sys_rt_sigsuspend && fn != sys_epoll_wait &&
-           fn != sys_clock_nanosleep && fn != sys_pselect6 && fn != sys_ppoll &&
-           fn != sys_epoll_pwait && fn != sys_epoll_pwait2 && fn != sys_semop &&
-           fn != sys_semtimedop_time64 && fn != sys_msgsnd && fn != sys_msgrcv;
+    return fn != sys_sigreturn && fn != sys_rt_sigreturn && fn != sys_restart_syscall &&
+           fn != sys_rt_sigtimedwait && fn != sys_epoll_wait && fn != sys_epoll_pwait &&
+           fn != sys_epoll_pwait2 && fn != sys_semop && fn != sys_semtimedop_time64;
+}
+
+/** The code of Linux's for the restart kind `kind` (`restart_kind`), as a
+ * tracer reads it in the result register: -ERESTARTSYS and the rest, or
+ * -EINTR for RESTART_NONE. */
+static long restart_code(int kind)
+{
+    switch (kind) {
+    case RESTART_SYS:
+        return -ERESTARTSYS;
+    case RESTART_NOINTR:
+        return -ERESTARTNOINTR;
+    case RESTART_NOHAND:
+        return -ERESTARTNOHAND;
+    case RESTART_BLOCK:
+        return -ERESTART_RESTARTBLOCK;
+    default:
+        return -EINTR;
+    }
+}
+
+/**
+ * restart_syscall(2): resume the call the thread's restart block holds,
+ * which `deliver_signals` makes after a signal that ran no handler cut short
+ * a call Linux restarts through its block (RESTART_BLOCK). With nothing to
+ * resume it returns -EINTR, as Linux's do_no_restart_syscall does; a handler
+ * clears the block when it returns (`signal_return`), and each resuming
+ * handler that Linux's clears clears it.
+ */
+long sys_restart_syscall(isr_params_t *params)
+{
+    long (*fn)(struct isr_params *);
+
+    if (!current_proc || !current_proc->restart.fn) {
+        return -EINTR;
+    }
+    fn = current_proc->restart.fn;
+    return fn(params);
+}
+
+/**
+ * Translate the -EINTR of handler `fn` into Linux's restart code, as the
+ * kind the handler set says, or as `syscall_restartable` says for a handler
+ * that set none, and mark the thread (`restart_due`) when it makes one.
+ * Keep other results, and those of a call the dispatcher did not run (a
+ * NULL `fn`). Signal delivery decides whether to restart from the registers
+ * after the tracer's stops.
+ */
+static long restart_result(const isr_params_t *params, syscall_fn_t fn, long ret)
+{
+    if (ret != -EINTR || !fn) {
+        return ret;
+    }
+    if (current_proc->restart_kind == RESTART_SYS && !syscall_restartable(fn, params)) {
+        current_proc->restart_kind = RESTART_NONE;
+    }
+    current_proc->restart_due = current_proc->restart_kind != RESTART_NONE;
+    return restart_code(current_proc->restart_kind);
 }
 
 /**
@@ -2842,19 +3200,25 @@ static void syscall_missing(uint32_t syscall_num, int compat)
  * The thread's seccomp filters then judge the call the tracer left, as
  * Linux runs them after the stop, and may answer it without running it.
  *
- * Whether `deliver_signals` restarts a call a signal interrupted, on this
- * return, is recorded in `restart_nr` before the exit stop, so a tracer
- * there cancels the restart with -1 in orig_nr, and with a result other
- * than EINTR.
+ * An interrupted call's result is translated into Linux's restart code
+ * before the exit stop, or left as -EINTR for a call Linux never restarts.
+ * The code stays in the result register through the signal-delivery stop.
+ * `deliver_signals` then reads it and orig_nr to decide the restart, so a
+ * tracer's changes at either stop apply. The translation counts as signal
+ * work there even when another thread took the signal meanwhile, as Linux
+ * keeps TIF_SIGPENDING until get_signal runs; a code a tracer writes into
+ * a call that was not interrupted, with no other signal work, reaches the
+ * program unchanged, as on Linux.
  *
- * At the exit the datagrams the call put on the loopback ring are delivered,
- * rather than only at the next tick, so a local transfer is not paced at a
- * ring a tick. The threshold is three datagrams of the ring's 64
- * (`ip_loop_crowded`): one or two are left to the timer, which lets the two
- * crossing SYNs of a simultaneous open both be queued before either is
- * delivered. The sender's own frames are gone by then, so no delivery runs
- * under them. Interrupts are off, the drain does not run inside itself, and
- * it takes at most four times the ring's slots in one run; what is left is
+ * At the exit whatever the loopback ring holds is delivered, a lone
+ * datagram too, so that a receive that follows the call finds what it sent,
+ * as on Linux 6.12.115, where loopback_xmit queues the datagram for the
+ * softirq (drivers/net/loopback.c:69-92) and the sender's local_bh_enable
+ * runs that softirq before the send returns (kernel/softirq.c:402-407). A
+ * receive that follows the sender's return therefore needs no drain of its
+ * own. The sender's own frames are gone by then, so no delivery runs under
+ * them. Interrupts are off, the drain does not run inside itself, and it
+ * takes at most four times the ring's slots in one run; what is left is
  * taken by the next call's exit or by the timer.
  */
 static void _syscall_handler(isr_params_t *params)
@@ -2887,7 +3251,8 @@ static void _syscall_handler(isr_params_t *params)
         }
     }
     if (current_proc) {
-        current_proc->restart_always = 0;
+        current_proc->restart_kind = RESTART_SYS;
+        current_proc->restart_due = 0;
     }
     if (skip) {
         ret = (long)SC_RET(params);
@@ -2899,19 +3264,12 @@ static void _syscall_handler(isr_params_t *params)
 
     fd_holds_release();
     if (current_proc) {
-        current_proc->restart_nr = 0;
-        if (!skip && ret == -EINTR && syscall_num < size && table[syscall_num] &&
-            syscall_restartable(table[syscall_num], params)) {
-            current_proc->restart_nr = syscall_num + 1u;
-        }
+        ret = restart_result(params, !skip && syscall_num < size ? table[syscall_num] : NULL, ret);
     }
     if (current_proc && (current_proc->ptrace & (PT_SYSCALL | PT_STEP))) {
         SC_RET(params) = (unsigned long)ret;
         ptrace_syscall_stop(params, syscall_num, 1);
         ret = (long)SC_RET(params);
-        if (ret != -EINTR) {
-            current_proc->restart_nr = 0;
-        }
     }
 
     arch_irq_disable();
@@ -2919,7 +3277,7 @@ static void _syscall_handler(isr_params_t *params)
     if (current_proc) {
         current_proc->in_syscall = 0;
     }
-    if (ip_loop_crowded()) {
+    if (ip_loop_pending()) {
         ip_loop_drain_from(IP_LOOP_FROM_CALL);
     }
     sched_take_preempt();

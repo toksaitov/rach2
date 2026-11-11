@@ -17,6 +17,7 @@
 #include "fs/synthfs.h"
 #include "fs/sysfs.h"
 #include "lib/kerrno.h"
+#include "lib/kstring.h"
 #include "mm/kheap.h"
 #include "rfkill.h"
 #include "dmi.h"
@@ -252,6 +253,13 @@ static void sys_tree(void)
     CHECK(synth_classify("sys/bus/pci/devices/0000:00:1f.2/vendor", &vp) == VNODE_SYS_FILE &&
           vp.procfile == SYSFS_PCI_VENDOR);
     CHECK(synth_classify("sys/bus/pci/devices/0000:00:1f.2/vendors", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/bus/pci/devices/0000:00:1f.2/resource0_wc", &vp) == VNODE_SYS_FILE &&
+          vp.procfile == SYSFS_PCI_RESOURCE0_WC);
+    CHECK(synth_classify("sys/devices/pci0000:00/0000:00:1f.2/resource5_wc", &vp) ==
+              VNODE_SYS_FILE &&
+          vp.procfile == SYSFS_PCI_RESOURCE0_WC + 5);
+    CHECK(synth_classify("sys/bus/pci/devices/0000:00:1f.2/resource6_wc", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/bus/pci/devices/0000:00:1f.2/resource0_wc/x", &vp) == VNODE_ENOTDIR);
 }
 
 /** Check radio attributes and both routes to the driver link. */
@@ -754,6 +762,41 @@ static void sys_registry(void)
 }
 
 /**
+ * The registry past the table's first 512 slots: 1500 attributes below one
+ * directory, each reached by name and by path, a handle taken before the
+ * table grew still naming its entry, and all gone with the directory.
+ */
+static void sys_registry_grows(void)
+{
+    static const struct sysfs_attr attr = {"a", 0444u, 0, 0};
+    struct sysfs_attr a = attr;
+    struct vpath vp;
+    char name[8];
+    int dir = sysfs_add_dir(sysfs_anchor(SYSFS_KERNEL, 0), "many"), h[1500], i, ok = 1;
+
+    CHECK(dir > 0);
+    for (i = 0; i < 1500; i++) {
+        name[0] = 'a';
+        name[1] = (char)('0' + i / 1000);
+        name[2] = (char)('0' + i / 100 % 10);
+        name[3] = (char)('0' + i / 10 % 10);
+        name[4] = (char)('0' + i % 10);
+        name[5] = '\0';
+        a.name = name;
+        h[i] = sysfs_add_attr(dir, &a, 0, i);
+        ok = ok && h[i] > 0 && sysfs_node_child(dir, name, 5) == h[i];
+    }
+    CHECK(ok && sysfs_node_count(dir) == 1500);
+    CHECK(sysfs_node_kind(dir) == SYSFS_NODE_DIR && eq(sysfs_node_name(h[0]), "a0000") &&
+          eq(sysfs_node_name(h[1499]), "a1499"));
+    CHECK(synth_classify("sys/kernel/many/a1234", &vp) == VNODE_SYS_FILE &&
+          vp.sysent == SYSFS_REG && vp.syskey == h[1234]);
+    sysfs_remove(dir);
+    CHECK(sysfs_node_kind(dir) == 0 && sysfs_node_kind(h[0]) == 0 && sysfs_node_kind(h[1499]) == 0);
+    CHECK(synth_classify("sys/kernel/many/a1234", &vp) == VNODE_ENOENT);
+}
+
+/**
  * VFIO's paths: /dev/vfio, its container and group nodes as devices of
  * the directory, and the entries VFIO adds to /sys through the registry,
  * as rach2/sys/vfio/group.c adds them: a group below
@@ -808,7 +851,37 @@ static void vfio_paths(void)
           synth_classify("sys/bus/pci/devices/0000:00:02.0/iommu_group", &vp) == VNODE_ENOENT);
 }
 
-int main(void)
+/** Classify the THP directory, its files, which of them root may write,
+ * and paths past a file. */
+static void thp_rows(void)
+{
+    static const char *const names[] = {"enabled",        "defrag",        "use_zero_page",
+                                        "hpage_pmd_size", "shmem_enabled", "shrink_underused"};
+    struct vpath vp;
+    char path[128];
+    unsigned int i;
+
+    CHECK(synth_classify("sys/kernel/mm", &vp) == VNODE_SYS_DIR && vp.sysent == SYSFS_KERNEL_MM);
+    CHECK(synth_classify("sys/kernel/mm/transparent_hugepage", &vp) == VNODE_SYS_DIR &&
+          vp.sysent == SYSFS_THP);
+    synth_sys_path(SYSFS_THP, 0, path, sizeof(path));
+    CHECK(eq(path, "/sys/kernel/mm/transparent_hugepage"));
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        static const char prefix[] = "sys/kernel/mm/transparent_hugepage/";
+
+        k_memcpy(path, prefix, sizeof(prefix) - 1);
+        k_memcpy(path + sizeof(prefix) - 1, names[i], k_strlen(names[i]) + 1);
+        CHECK(synth_classify(path, &vp) == VNODE_SYS_FILE && vp.sysent == SYSFS_THP &&
+              vp.procfile == (int)i && eq(sysfs_attr(SYSFS_THP, (int)i), names[i]));
+        CHECK(sysfs_attr_writable(vp.sysent, vp.procfile) == (i != SYSFS_THP_PMD_SIZE));
+    }
+    CHECK(sysfs_attr(SYSFS_THP, 6) == 0);
+    CHECK(synth_classify("sys/kernel/mm/transparent_hugepage/missing", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/kernel/mm/transparent_hugepage/enabled/more", &vp) == VNODE_ENOTDIR);
+}
+
+/** Ordinary paths stay in the root file system. */
+static void root_paths(void)
 {
     struct vpath vp;
 
@@ -817,6 +890,18 @@ int main(void)
     CHECK(synth_classify("etc/passwd", &vp) == VNODE_KRFFS);
     CHECK(synth_classify("devices/x", &vp) == VNODE_KRFFS);
     CHECK(synth_classify("proconsul", &vp) == VNODE_KRFFS);
+}
+
+/** Run the classifier's rows. */
+int main(int argc, char **argv)
+{
+    struct vpath vp;
+
+    thp_rows();
+    if (argc == 2 && eq(argv[1], "--thp-only")) {
+        return fails != 0;
+    }
+    root_paths();
 
     CHECK(synth_classify("dev", &vp) == VNODE_DEV_DIR);
     CHECK(synth_classify("dev/null", &vp) == VNODE_DEV && eq(vp.name, "null"));
@@ -895,6 +980,7 @@ int main(void)
     sys_tree();
     sys_later();
     sys_registry();
+    sys_registry_grows();
     sys_class();
     sys_wireless();
     sys_rfkill();

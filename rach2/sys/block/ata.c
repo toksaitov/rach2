@@ -210,6 +210,7 @@ struct ata_channel {
     uint32_t irqs;           /* interrupts taken on this channel */
     int owner;               /* 1 while a caller owns the channel */
     int sleepers;            /* callers asleep for a command, for the tick's count */
+    uint32_t sleep_from;     /* `ata_clock` when `sleepers` last rose from 0 */
     int error_seen; /* a caller without the channel found ERR or DF, which are the owner's */
     uint16_t bm;    /* the bus master's first port, or 0 for none */
     /* The descriptor, aligned to its size, and the bounce buffer, aligned
@@ -220,7 +221,8 @@ struct ata_channel {
 };
 
 /* A sleeping wait: the channel, what the status must show (`ATA_WANT_`),
-   the channel's `ticks` when the wait began, and its answer, 0 or `-EIO`. */
+   the channel's clock (`ata_clock`) when the wait began, and its answer, 0
+   or `-EIO`. */
 struct ata_wait {
     struct ata_channel *ch;
     int want;
@@ -246,9 +248,17 @@ struct ata_drive {
     block_device_t dev;
 };
 
-static struct ata_channel channels[2] = {
-    {0x1F0, 0x3F6, "primary", ATA_IRQ_PRIMARY, {0}, 0, 0, 0, 0, 0, 0, {0, 0, 0}, {0}},
-    {0x170, 0x376, "secondary", ATA_IRQ_SECONDARY, {0}, 0, 0, 0, 0, 0, 0, {0, 0, 0}, {0}}};
+static uint32_t ata_seen; /* `kernel_ticks` at `ata_tick`'s last call */
+/* Zero until `ata_init` gives each channel its legacy ports, name and line:
+   an initializer would put the bounce buffers in .data, and their 128 KiB of
+   zeros, with the padding their alignment takes, in the kernel file. */
+static struct ata_channel channels[2];
+static const struct {
+    uint16_t io, ctrl;
+    const char *name;
+    uint8_t irq;
+} ata_legacy[2] = {{0x1F0, 0x3F6, "primary", ATA_IRQ_PRIMARY},
+                   {0x170, 0x376, "secondary", ATA_IRQ_SECONDARY}};
 static struct ata_drive drives[4];
 
 static int ata_read(block_device_t *device, uint64_t lba, uint32_t count, void *buffer);
@@ -404,8 +414,42 @@ static void ata_release(struct ata_channel *ch)
     wq_wake_all(&ch->wq);
 }
 
+/**
+ * The clock of channel `ch` as it stands now: its `ticks` and the ticks
+ * `kernel_ticks` has counted since `ata_tick` last ran, which a boot
+ * processor's tick that found the big lock held left out. Interrupts are
+ * masked across the three reads, since the tick, which a timer interrupt
+ * runs on this processor inside the big lock, would otherwise mix one
+ * call's `ticks` with the next call's `ata_seen`; a caller that publishes
+ * what it read masks them across both.
+ */
+static uint32_t ata_clock(const struct ata_channel *ch)
+{
+    uint32_t flags = kirq_save();
+    uint32_t now = ch->ticks + ((uint32_t)kernel_ticks - ata_seen);
+
+    kirq_restore(flags);
+    return now;
+}
+
+/**
+ * Interrupts masked. Count toward `disk-wait-ticks` the ticks the last
+ * sleeper of channel `ch`, waking now, slept since `ata_tick` last counted
+ * them: from the later of `sleep_from` and that call to the clock now,
+ * which the next call, finding no sleeper, would leave out.
+ */
+static void ata_count_rest(const struct ata_channel *ch)
+{
+    uint32_t from = (int32_t)(ch->sleep_from - ch->ticks) > 0 ? ch->sleep_from : ch->ticks;
+    uint32_t now = ata_clock(ch);
+
+    if ((int32_t)(now - from) > 0) {
+        block_count_wait_ticks(now - from);
+    }
+}
+
 /** The sleeping wait's condition: the status says the wait is over, or the
- * tick says it has lasted long enough to be a drive that never answers. */
+ * clock says it has lasted long enough to be a drive that never answers. */
 static int ata_wait_cond(void *arg)
 {
     struct ata_wait *w = arg;
@@ -413,7 +457,7 @@ static int ata_wait_cond(void *arg)
     if (ata_status_done(w->ch, w->want, &w->rc)) {
         return 1;
     }
-    if (w->ch->ticks - w->t0 > ATA_WAIT_TICKS) {
+    if ((int32_t)(ata_clock(w->ch) - w->t0) > (int32_t)ATA_WAIT_TICKS) {
         klog(KLOG_WARN, "ata", "%s: no answer in %d ticks: status 0x%X, bus master 0x%X, want %d",
              w->ch->name, (int)ATA_WAIT_TICKS, (unsigned)ata_io->in8(w->ch->io + ATA_REG_STATUS),
              w->ch->bm ? (unsigned)ata_io->in8(w->ch->bm + ATA_BM_STATUS) : 0u, w->want);
@@ -456,6 +500,7 @@ static void ata_pause(void)
 static int ata_wait_for(struct ata_channel *ch, int want)
 {
     struct ata_wait w;
+    uint32_t flags;
     int spin, rc;
 
     for (spin = 0; spin < ATA_SPIN_BEFORE_SLEEP; spin++) {
@@ -484,11 +529,19 @@ static int ata_wait_for(struct ata_channel *ch, int want)
     }
     w.ch = ch;
     w.want = want;
-    w.t0 = ch->ticks;
     w.rc = -EIO;
-    ch->sleepers++;
+    flags = kirq_save();
+    w.t0 = ata_clock(ch);
+    if (ch->sleepers++ == 0) {
+        ch->sleep_from = w.t0;
+    }
+    kirq_restore(flags);
     wq_wait_event_nointr(&ch->wq, ata_wait_cond, &w);
-    ch->sleepers--;
+    flags = kirq_save();
+    if (--ch->sleepers == 0) {
+        ata_count_rest(ch);
+    }
+    kirq_restore(flags);
     ata_count_wait();
     return w.rc;
 }
@@ -549,21 +602,31 @@ static void ata_irq(isr_params_t *params)
  * the drive never raised, the first sector of a write among them. A channel
  * with sleepers counts toward `disk-wait-ticks` of `/proc/disk` here, since
  * this driver's transfers take no request of the block layer, which counts
- * the ticks its requests wait.
+ * the ticks its requests wait. Both count the ticks since the last call,
+ * since the boot processor's tick does not call this on every tick
+ * (`tick_waits`, isr.c), but no more than have passed since the channel's
+ * sleepers began (`sleep_from`); the last sleeper to wake counts the ticks
+ * since this call (`ata_count_rest`).
  */
 void ata_tick(void)
 {
+    uint32_t now = (uint32_t)kernel_ticks, passed = now - ata_seen;
     int c;
 
     for (c = 0; c < 2; c++) {
-        if (channels[c].sleepers > 0) {
-            block_count_wait_tick();
+        struct ata_channel *ch = &channels[c];
+        int32_t slept;
+
+        ch->ticks += passed;
+        slept = (int32_t)(ch->ticks - ch->sleep_from);
+        if (ch->sleepers > 0 && slept > 0) {
+            block_count_wait_ticks((uint32_t)slept < passed ? (uint32_t)slept : passed);
         }
     }
+    ata_seen = now;
     for (c = 0; c < 2; c++) {
         struct ata_channel *ch = &channels[c];
 
-        ch->ticks++;
         if (wq_active(&ch->wq)) {
             wq_wake_all(&ch->wq);
         }
@@ -977,6 +1040,10 @@ static int same_drive(const uint16_t *a, const uint16_t *b)
 }
 
 /**
+ * Give each channel its ports, name and interrupt line, legacy or native,
+ * and register the drives that answer IDENTIFY. Returns 0 when one was
+ * found, -1 otherwise. Nothing reads a channel's ports before this.
+ *
  * `rach2.atapio` keeps a drive on the data port, so its transfers move with
  * interrupts off rather than through the bus master. A caller can still
  * sleep then, for the channel and for the cache flush that follows a write.
@@ -986,6 +1053,12 @@ int ata_init(void)
     static uint16_t identify[4][ATA_WORDS_PER_SECTOR];
     int c, s, found = 0;
 
+    for (c = 0; c < 2; c++) {
+        channels[c].io = ata_legacy[c].io;
+        channels[c].ctrl = ata_legacy[c].ctrl;
+        channels[c].name = ata_legacy[c].name;
+        channels[c].irq = ata_legacy[c].irq;
+    }
     ata_native_ports();
     for (c = 0; c < 2; c++) {
         struct ata_channel *ch = &channels[c];

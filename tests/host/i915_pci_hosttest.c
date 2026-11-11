@@ -167,15 +167,18 @@ uintptr_t map_mmio_typed(uintptr_t phys_addr, size_t size, pte_t cache)
 }
 
 /* The firmware's memory, the OpRegion at ASLS and the option ROM's
- * shadow, which this test does not give: each map is counted and fails. */
-static int fw_maps;
+ * shadow, which this test does not give: each map is counted and fails.
+ * `aperture_maps` counts those of the aperture, BAR 2, among them. */
+static int fw_maps, aperture_maps;
 
 uintptr_t mmio_map(uint64_t phys, size_t size, pte_t cache)
 {
-    (void)phys;
     (void)size;
     (void)cache;
     fw_maps++;
+    if (phys >= LENOVO_GPU_BAR2 && phys < (uint64_t)LENOVO_GPU_BAR2 + LENOVO_GPU_BAR2_SIZE) {
+        aperture_maps++;
+    }
     return 0;
 }
 
@@ -213,8 +216,15 @@ void kirq_restore(uint32_t flags)
     (void)flags;
 }
 
+/* Set, the next frame is refused. */
+static int frame_refused;
+
 uintptr_t alloc_frame(void)
 {
+    if (frame_refused) {
+        frame_refused = 0;
+        return 0;
+    }
     frames++;
     return 0x12345000u;
 }
@@ -499,6 +509,18 @@ void i915_debugfs_register(struct drm_i915_private *i915)
     (void)i915;
 }
 
+/* The release and the bring-up through /sys, i915_handoff.c, which
+ * i915_handoff_hosttest.c tests; no row here unbinds the driver. */
+void i915_handoff_bound(struct drm_i915_private *i915)
+{
+    (void)i915;
+}
+
+void i915_handoff_unbound(struct drm_i915_private *i915)
+{
+    (void)i915;
+}
+
 /* The contexts and requests, i915_gem_context.c and i915_request.c, which
  * the bind reaches only through the DRM core's hooks and the unplug. */
 int32_t i915_driver_open(struct drm_device *dev, struct drm_file *file)
@@ -547,6 +569,9 @@ void drm_dev_put(struct drm_device *dev)
 static void fresh(struct i915_model *m)
 {
     CHECK("the model is made", i915_model_init(m) == 0);
+    /* The bind writes the GTT's 524288 entries, which would fill the log
+     * before the registers this test checks. */
+    m->quiet_gtt = 1;
     bus = m;
     msi_ready = 1;
     msi_refuse = 0;
@@ -556,6 +581,7 @@ static void fresh(struct i915_model *m)
     registered = released = 0;
     last_registered = 0;
     maps = 0;
+    aperture_maps = 0;
     udelays = 0;
     frames = frames_freed = 0;
     cmdline_i915 = 0;
@@ -678,14 +704,21 @@ static const uint32_t banks[][5] = {
  */
 static void check_masks(struct i915_model *m)
 {
-    uint32_t posting = 0, reads = 0, i;
+    uint32_t others = 0, i, j;
     long base = -1;
 
+    /* Before the base, only the posting reads of the masks and identities
+     * the bind writes. */
     for (i = 0; i < m->nlog && base < 0; i++) {
         if (m->log[i].reg == FPGA_DBG) {
             base = (long)i;
         } else if (m->log[i].op == I915_MODEL_READ) {
-            reads++;
+            for (j = 0; j < (uint32_t)(sizeof(banks) / sizeof(banks[0])); j++) {
+                if (m->log[i].reg == banks[j][0] || m->log[i].reg == banks[j][2]) {
+                    break;
+                }
+            }
+            others += j == (uint32_t)(sizeof(banks) / sizeof(banks[0]));
         }
     }
     CHECK("bind: the base after the masks", base > at(m, SERR_INT, 0xffffffffu));
@@ -701,15 +734,13 @@ static void check_masks(struct i915_model *m)
               i915_model_peek(m, banks[i][0]) == 0xffffffffu &&
                   i915_model_peek(m, banks[i][1]) == banks[i][3]);
         CHECK("bind: each source masked before the message", msi_enabled_at > clear);
-        posting += i915_model_count(m, I915_MODEL_READ, banks[i][0]) +
-                   i915_model_count(m, I915_MODEL_READ, banks[i][2]);
     }
     CHECK("bind: the error interrupt cleared", at(m, GEN7_ERR_INT, 0xffffffffu) < msi_enabled_at);
     CHECK("bind: the self refresh's masked and cleared",
           at(m, EDP_PSR_IMR, 0xffffffffu) < msi_enabled_at &&
               at(m, EDP_PSR_IIR, 0xffffffffu) < msi_enabled_at);
     CHECK("bind: the south errors cleared", at(m, SERR_INT, 0xffffffffu) < msi_enabled_at);
-    CHECK("bind: no register read before the base but by the posting reads", reads == posting);
+    CHECK("bind: no register read before the base but by the posting reads", others == 0);
 }
 
 /** Check the configuration words the bind of `m` read and wrote. */
@@ -898,6 +929,28 @@ static void row_register_fails(void)
     done(&m);
 }
 
+/** A bind whose GTT gets no scratch page lets the display power well's
+ * reference go, leaves the command word as found and maps no window of
+ * the aperture. */
+static void row_gtt_fails(void)
+{
+    struct i915_model m;
+    uint32_t command;
+
+    fresh(&m);
+    m.config[PCI_COMMAND] = 0x01; /* I/O only */
+    m.config[PCI_COMMAND + 1] = 0x00;
+    command = i915_model_config(&m, PCI_COMMAND, 2);
+    frame_refused = 1;
+    CHECK("gtt fails: ENOMEM", i915_driver_bind(&m.pci, &m.hw) == -ENOMEM);
+    CHECK("gtt fails: the driver's request for the power well dropped",
+          (i915_read(&m.hw, HSW_PWR_WELL_CTL2) & HSW_PWR_WELL_CTL_REQ(HSW_PW_CTL_IDX_GLOBAL)) == 0);
+    CHECK("gtt fails: the command word as found", i915_model_config(&m, PCI_COMMAND, 2) == command);
+    CHECK("gtt fails: no window of the aperture mapped", aperture_maps == 0);
+    CHECK("gtt fails: no frame kept, no record released", frames == 0 && released == 0);
+    done(&m);
+}
+
 /* What the wait rows' hook does: set `reg`'s `bit` once the clock reaches
  * `when`. */
 static uint32_t hook_reg, hook_bit;
@@ -1035,6 +1088,7 @@ int main(void)
     row_refusals();
     row_no_messages();
     row_register_fails();
+    row_gtt_fails();
     row_boundary();
     free(map_buffer);
     free(gsm_buffer);

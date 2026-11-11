@@ -262,6 +262,17 @@ struct i915_irq {
  * request. `reserved` is the bytes `i915_ring_begin` leaves free for the
  * breadcrumb of the request being built.
  *
+ * Parking. `unretired` is set by each new request and cleared once Linux
+ * would have retired every request of the engine, which on Haswell's ring
+ * submission, one timeline an engine, is when the last request signals to
+ * a listener or when the retire worker, once a second, finds it complete;
+ * the GT parks only when no engine has it set (i915_request.c).
+ * `building` is set from a request's creation to its publication on
+ * `requests`, as Linux holds the timeline's mutex from i915_request_create
+ * to i915_request_add: while it is set the engine's last request is not
+ * the last of its timeline, and neither its signal nor the retire worker
+ * clears `unretired`. Both change under `lock`.
+ *
  * Hang detection and reset (i915_hangcheck.c, i915_reset.c). `hw_tail` is
  * what RING_TAIL was last given, the end of what the chip may run, which a
  * reset gives it again. `hc_armed` is set by a heartbeat that found the
@@ -315,6 +326,8 @@ struct i915_engine {
     struct i915_request *queued;
     uint8_t kick;
     uint32_t hw_tail;
+    uint8_t unretired;
+    uint8_t building;
     uint8_t hc_armed;
     uint32_t hc_seqno;
     uint32_t hc_acthd;
@@ -370,9 +383,13 @@ struct i915_ppgtt {
  * switch write; and `default_state`, the render ring's context image as a
  * fresh context left it with Linux's context workarounds, which every new
  * context starts from (Linux's engine->default_state). `ctx_ready` is set
- * once they are made. `awake` is set while any engine has requests, the
- * GT unparked. `wedged` is set when the GPU cannot run work, and new
- * requests and contexts fail with -EIO, as Linux's wedged GT;
+ * once they are made. `awake` is set from a request made with the GT
+ * parked until the GT parks again, once no engine has a request or one
+ * Linux would not yet have retired; `retire_next` is the tick of the next
+ * pass of the retire worker while it is awake, as Linux's retire_work
+ * runs on the first whole second after a second on (i915_request.c).
+ * `wedged` is set when the GPU cannot run work, and new requests and
+ * contexts fail with -EIO, as Linux's wedged GT;
  * `wedged_terminal` says no reset may undo it, as when the default state
  * could not be recorded or the device is gone. `reset_count` counts the
  * whole GPU's resets, which GET_RESET_STATS gives, and
@@ -401,7 +418,9 @@ struct i915_gt {
     uint8_t wedged_terminal;
     uint32_t reset_count;
     uint32_t reset_engine_count[I915_NUM_ENGINES];
+    uint32_t wa_lost; /* workarounds the chip did not keep, since the bind */
     uint64_t hc_next;
+    uint64_t retire_next;
     struct i915_gpu_error *error;
     uint8_t submit_listed;
     struct drm_i915_private *submit_next;
@@ -473,8 +492,18 @@ struct i915_rc6 {
  * holds the events the interrupt latched and the deferred work has yet to
  * take, under the interrupt mask's lock. `enabled` is set once RPS runs,
  * `active` while the GT is unparked, `interrupts` once the up and down
- * interrupts drive it. `lock` is the frequency lock of i915.h's order,
- * over the rest. `work_runs` counts the events the work acted on.
+ * interrupts drive it. `boost_queued` says a waitboost or a new boost
+ * frequency asked for the work, Linux's queue_work of rps_work, under the
+ * interrupt mask's lock with `pm_iir`. `lock` is the frequency lock of
+ * i915.h's order, over the rest. `work_runs` counts the events the work
+ * acted on.
+ *
+ * The waitboost, Linux's: `num_waiters` counts the requests boosted that
+ * have yet to retire, each marked by its `boosted`, and while any is
+ * there the work asks for `boost_freq` at least, up to `max_freq`;
+ * `boosts` counts the boosts that found RPS active, as Linux's debug
+ * count. `interactive` counts the page flips pending, Linux's
+ * power.interactive, which hold the power mode at high power.
  */
 struct i915_rps {
     struct spinlock lock;
@@ -497,9 +526,13 @@ struct i915_rps {
     uint32_t pm_intrmsk_mbz;
     uint32_t pm_iir;
     uint32_t work_runs;
+    int num_waiters;
+    int interactive;
+    uint32_t boosts;
     uint8_t enabled;
     uint8_t active;
     uint8_t interrupts;
+    uint8_t boost_queued;
 };
 
 /*
@@ -547,23 +580,43 @@ struct i915_fence_reg {
 
 /* What `i915_vma_pin` is asked: the binding inside the aperture, from the
  * top of the space down, no eviction to make room, and, with eviction, no
- * wait for the GPU (Linux's PIN_NONBLOCK) or a wait no signal ends, which
- * a page fault asks, since it cannot be restarted. `i915_vma_pin_args`
- * adds a binding at the offset it names (PIN_OFFSET_FIXED) or above it
- * (PIN_OFFSET_BIAS). */
+ * wait for the GPU (Linux's PIN_NONBLOCK); a wait takes a signal.
+ * `i915_vma_pin_args` adds a binding at the offset it names
+ * (PIN_OFFSET_FIXED) or above it (PIN_OFFSET_BIAS). */
 #define I915_PIN_MAPPABLE     0x1u
 #define I915_PIN_HIGH         0x2u
 #define I915_PIN_NOEVICT      0x4u
 #define I915_PIN_NONBLOCK     0x8u
 #define I915_PIN_OFFSET_FIXED 0x10u
 #define I915_PIN_OFFSET_BIAS  0x20u
-#define I915_PIN_NOINTR       0x40u
+
+/*
+ * A remapped view of an object, Linux's intel_remapped_plane_info for a
+ * single colour plane: `height` rows of `width` pages each, row r the
+ * `width` pages from page `offset` + r * `src_stride` of the object, laid
+ * one after another, so that the view's stride is `width` pages, as
+ * Linux's dst_stride on Haswell. A plane whose framebuffer's stride passes
+ * its limit scans out only its source rectangle through one. A `width` of
+ * 0 names no remapped view.
+ */
+struct i915_remap_info {
+    uint32_t offset;
+    uint32_t width;
+    uint32_t height;
+    uint32_t src_stride;
+};
+
+/* The page of the object that page `k` of the remapped view `r` maps. */
+#define I915_REMAP_PAGE(r, k) \
+    ((r)->offset + ((k) / (r)->width) * (r)->src_stride + (k) % (r)->width)
 
 /*
  * A binding of an object, or of a part of it, into the global GTT, Linux's
  * i915_vma. The view is the whole object when `view_pages` is 0, or the
  * `view_pages` pages from `view_offset`, a partial view, which a GTT map
- * of an object too large for the aperture binds a piece at a time. It lies
+ * of an object too large for the aperture binds a piece at a time, or,
+ * when `remap.width` is not 0, the remapped view `remap` of `view_pages`
+ * pages, which a plane scans out and nothing maps or fences. It lies
  * at [start, start + node_size) of the GTT, whose first `size` bytes map
  * the view's pages; `node_size` is the fence's size for a tiled object
  * inside the aperture, so that a fence covers it. `mappable` is set when
@@ -585,6 +638,7 @@ struct i915_vma {
     uint64_t size;
     uint32_t view_offset;
     uint32_t view_pages;
+    struct i915_remap_info remap;
     uint32_t pin_count;
     uint32_t fence_size;
     uint32_t fence_alignment;
@@ -607,7 +661,8 @@ struct i915_vma {
 
 /*
  * The part of an object of GEM_USERPTR (i915_gem_userptr.c): `ptr` is the
- * first byte of the program's memory it stands for, never 0, and `range`
+ * first byte of the program's memory it stands for, which may be 0, `set`
+ * marks the object as one of GEM_USERPTR, and `range`
  * is registered on that address space from the object's making, so that a
  * change to the pages there revokes the object's bindings and drops the
  * frames it pinned. `stale` is set when that happened while a binding was
@@ -616,6 +671,7 @@ struct i915_vma {
 struct i915_userptr {
     uintptr_t ptr;
     struct mmn_range range;
+    uint8_t set;
     uint8_t stale;
 };
 
@@ -665,7 +721,7 @@ struct drm_i915_gem_object {
 };
 
 /* Whether `obj` was made by GEM_USERPTR. */
-#define i915_gem_object_is_userptr(obj) ((obj)->userptr.ptr != 0)
+#define i915_gem_object_is_userptr(obj) ((obj)->userptr.set != 0)
 
 /*
  * A fence of the driver's own, which work on one of its engines signals:
@@ -677,6 +733,10 @@ struct i915_fence {
     uint16_t uabi_class;
 };
 
+/* The ops of a request's fence, i915_request.c's, Linux's i915_fence_ops:
+ * `signaled` reads the breadcrumb, `enable_signaling` signals a request
+ * already past it at once, and `wait` is `i915_request_wait`'s, which
+ * boosts. */
 extern const struct dma_fence_ops i915_fence_ops;
 
 /* The device's shrinker: reclaim's record first, so that reclaim's
@@ -874,7 +934,7 @@ struct intel_dp {
     uint32_t dfp_max_bpc, dfp_max_dotclock, dfp_min_tmds, dfp_max_tmds;
 };
 
-/* ---- The external outputs (78-10c) ---- */
+/* ---- The external outputs, DDI B to D ---- */
 
 /* What a pipe drives, Linux's INTEL_OUTPUT_ types of a DDI port. */
 #define INTEL_OUTPUT_NONE 0
@@ -1082,8 +1142,8 @@ struct intel_hotplug {
 };
 
 /*
- * What a pipe is set to (the outputs' compute_config and the fitter),
- * Linux's part of intel_crtc_state that 78-10b and 78-10c drive:
+ * What a pipe is set to, Linux's part of intel_crtc_state that the
+ * outputs' compute_config and the fitter set:
  * `active`; the output, `output` INTEL_OUTPUT_, on DDI `port` through
  * transcoder `trans`, the eDP transcoder for eDP and the pipe's own for
  * the rest; the timings in `mode` with the pixel clock in kHz, the pipe's
@@ -1166,11 +1226,19 @@ struct intel_wm_values {
  * where the firmware put it. A plane keeps two, what it shows and what it
  * showed before, which the hardware may read until the flip that replaced
  * it latches; that one is let go at the plane's next update, which comes
- * only after the flip (drm_atomic_helper_commit's stall).
+ * only after the flip (drm_atomic_helper_commit's stall), or, for a legacy
+ * cursor update, which has no stall, once a vblank has passed.
  */
 struct intel_scanout {
     struct drm_framebuffer *fb;
     struct i915_vma *vma;
+};
+
+/** A request a pipe boosts at its next vblank, Linux's wait_rps_boost:
+ * `rq` holds a fence reference, and the entry a vblank reference. */
+struct intel_boost {
+    struct intel_boost *next;
+    struct i915_request *rq;
 };
 
 /*
@@ -1190,11 +1258,20 @@ struct intel_scanout {
  * PIPE_CRC_RES_HSW as the error interrupt read it at the pipe's CRC done,
  * which latches a frame's CRC after its vblank, under the interrupt
  * mask's lock. `shown` and
- * `parked` are each plane's scanouts (`struct intel_scanout`).
+ * `parked` are each plane's scanouts (`struct intel_scanout`), and
+ * `shown_from` and `shown_to` the frame counts read before and after the
+ * commit that wrote `shown`, by which a commit without a stall, a legacy
+ * cursor update, tells whether the chip may still read `parked`.
  * `planes_on` has bit INTEL_PLANE_ for each plane the hardware shows.
  * `underrun_off` says its FIFO underruns are not reported, Linux's
  * cpu_fifo_underrun_disabled, and `inherited` that it shows what the
- * firmware lit, with no commit of its own yet.
+ * firmware lit, with no commit of its own yet. `boosts` lists, under the
+ * interrupts' masking, the requests drawing flips that the next vblank
+ * boosts if the chip has not begun them, one entry for each call of
+ * `intel_crtc_boost_after_vblank`, Linux's wait_rps_boost;
+ * `rps_mark` is 1 more than the slot of the display's `rps_marks` whose
+ * commit's interactive mark of RPS (`i915_rps_mark_interactive`) the pipe
+ * holds until its pending flip ends, 0 for none.
  */
 struct intel_crtc {
     struct drm_crtc base;
@@ -1219,43 +1296,51 @@ struct intel_crtc {
     uint8_t inherited;
     struct intel_scanout shown[INTEL_NUM_PLANES];
     struct intel_scanout parked[INTEL_NUM_PLANES];
+    uint32_t shown_from[INTEL_NUM_PLANES], shown_to[INTEL_NUM_PLANES];
+    struct intel_boost *boosts;
+    uint8_t rps_mark;
 };
 
 /*
  * The device's display. `crtc` are the pipes A to C, `encoder` DDI A and
- * `connector` its eDP panel, `dp` the panel, and `ddi` DDI B to D, by
- * port less one. `gmbus` are the PCH's GMBUS pins, by pin, and `dpll` the
- * PLLs, by DPLL_ID_. `hotplug` is the ports' hotplug. `pps` is the sequencer's
- * readout. `cdclk` is the CD clock in kHz and `max_cdclk` the most it
- * may be, both read at init (intel_cdclk.c). `wm_latency` are the memory
- * latencies of the watermark levels, level 0 in 0.1 us and the rest in
- * 0.5 us, and `wm_hw` the watermark registers as written.
- * `fw_taken` says the firmware's framebuffer was made a framebuffer of the
- * device, whose object lies at `fw_ggtt` in the GGTT. `de_iir` holds the
- * display engine's events the interrupt latched and the deferred work has
- * yet to take, `underruns` a bit for each pipe whose FIFO underrun it
- * has yet to log, and `crc_done` a bit for each pipe whose CRC (its
- * `crc_res`) it has yet to enter, all under the interrupt mask's lock.
- * `bl` is the panel's PWM, `bl_index` its backlight's index or -1, and
- * `bl_want_on` what the backlight class last asked of its switch, which
- * holds only while the sequencer's backlight enable is on with the
- * panel's pipe (`bl_pipe_on`). `bl_enabled` says the PWM is on, as the
+ * `connector` its eDP panel, `dp` the panel, and `ddi` DDI B to D, by port less
+ * one. `gmbus` are the PCH's GMBUS pins, by pin, and `dpll` the PLLs, by
+ * DPLL_ID_, with `dpll_nssc` the non-SSC reference in kHz of a non-ULT part, 24
+ * or 135 MHz as FUSE_STRAP3 says. `hotplug` is the ports' hotplug. `pps` is the
+ * sequencer's readout. `cdclk` is the CD clock in kHz and `max_cdclk` the most
+ * it may be, both read at init (intel_cdclk.c). `wm_latency` are the memory
+ * latencies of the watermark levels, level 0 in 0.1 us and the rest in 0.5 us,
+ * and `wm_hw` the watermark registers as written. `fw_taken` says the
+ * firmware's framebuffer was made a framebuffer of the device, whose object
+ * lies at `fw_ggtt` in the GGTT. `de_iir` holds the display engine's events the
+ * interrupt latched and the deferred work has yet to take, `underruns` a bit
+ * for each pipe whose FIFO underrun it has yet to log, and `crc_done` a bit for
+ * each pipe whose CRC (its `crc_res`) it has yet to enter, all under the
+ * interrupt mask's lock. `bl` is the panel's PWM, `bl_index` its backlight's
+ * index or -1, and `bl_want_on` what the backlight class last asked of its
+ * switch, which holds only while the sequencer's backlight enable is on with
+ * the panel's pipe (`bl_pipe_on`). `bl_enabled` says the PWM is on, as the
  * pipe's enable leaves it, `bl_level` is the PWM's level it shows then,
- * `bl_min` the least the VBT allows, `bl_dark` says the class asked for
- * its level 0, which Linux shows by turning the backlight off, and
- * `bl_alt` says the PCH counts the PWM in its coarse steps
- * (LPT_PWM_GRANULARITY). `vga_off` says the VGA plane has been turned off.
- * `ready` is set once the device's mode configuration is made, which its
- * release frees.
+ * `bl_min` the least the VBT allows, `bl_dark` says the class asked for its
+ * level 0, which Linux shows by turning the backlight off, and `bl_alt` says
+ * the PCH counts the PWM in its coarse steps (LPT_PWM_GRANULARITY). `vga_off`
+ * says the VGA plane has been turned off. `rps_marks` are the interactive
+ * marks of the commits whose flips are pending, one a commit as Linux's
+ * state->rps_interactive, each a bit for every pipe that holds it, 0 when
+ * the slot is free; a pipe holds one at most, so a slot is always free for
+ * a commit, under the interrupts' masking. `ready` is set once the device's
+ * mode configuration is made, which its release frees.
  */
 struct intel_display {
     struct intel_crtc crtc[I915_NUM_PIPES];
+    uint8_t rps_marks[I915_NUM_PIPES];
     struct drm_encoder encoder;
     struct drm_connector connector;
     struct intel_dp dp;
     struct intel_ddi_port ddi[3];
     struct intel_gmbus gmbus[GMBUS_NUM_PINS];
     struct intel_dpll dpll[INTEL_NUM_DPLLS];
+    uint32_t dpll_nssc;
     struct intel_hotplug hotplug;
     struct intel_pps_readout pps;
     uint32_t cdclk, max_cdclk;
@@ -1376,6 +1461,25 @@ const struct i915_id *i915_id_lookup(uint16_t device_id);
 int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw);
 
 /**
+ * Bind one function the id table names, through the MMIO backend: function
+ * 0 only, as Linux, since early chips had a second function with the same
+ * id; BAR 0 must be set. Its registers are mapped here, and given back on
+ * an error.
+ *
+ * @return 0, -ENODEV for another function, -ENXIO without BAR 0, -ENOMEM
+ *         when the registers cannot be mapped, or the bind's error.
+ */
+int32_t i915_pci_probe(const pci_device_t *pdev);
+
+/**
+ * Give back what the MMIO backend mapped for `hw`, the registers and the
+ * GTT's entries, and cut `hw` off from the device (`i915_hw_gone`): for a
+ * bind that failed, a device released to another owner, and a record's
+ * end. Another backend is only cut off. Calling it again does nothing.
+ */
+void i915_pci_unmap(struct i915_hw *hw);
+
+/**
  * Find the OpRegion through ASLS and decode the VBT it holds, or the option
  * ROM's when it holds none, as Linux's intel_opregion_setup and
  * intel_bios_init do; Linux's defaults stand in when neither has one.
@@ -1395,6 +1499,15 @@ void i915_bios_setup(struct drm_i915_private *i915, uint16_t command);
  * @return how many were bound, or -ENODEV for none.
  */
 int32_t i915_fake_probe(void);
+
+/**
+ * Bind the fake chip to `pdev`, an `edu` function, as the probe does for
+ * each: for the bring-up of one the driver released (i915_handoff.c).
+ *
+ * @return 0, -ENODEV for a function that is no `edu` device, -ENOMEM, or
+ *         the bind's error.
+ */
+int32_t i915_fake_bind(const pci_device_t *pdev);
 
 /* ---- i915_uncore.c ---- */
 
@@ -1614,6 +1727,17 @@ void i915_irq_handle(struct drm_i915_private *i915);
  */
 int32_t i915_gt_init(struct drm_i915_private *i915);
 
+/**
+ * Write the GT's state that a reset of the whole GPU loses, as Linux's
+ * intel_gt_init_hw does on Haswell before the rings start, at the bind and
+ * after such a reset: the hash mask of a part with eDRAM, the predicate's
+ * second result for the slices the part has, and the GT's workarounds
+ * (hsw_gt_workarounds_init), each read back as Linux verifies it. The
+ * swizzle and the PPGTT's caching are `i915_gem_restore_fences`'s and
+ * `i915_ppgtt_enable_ring`'s. Under forcewake.
+ */
+void i915_gt_init_hw(struct drm_i915_private *i915);
+
 /** Stop every ring, unregister its interrupt, clear its GTT entries and
  * free its pages, then the PPGTT; for the unplug and a failed bind. */
 void i915_gt_fini(struct drm_i915_private *i915);
@@ -1697,11 +1821,13 @@ int32_t i915_engine_wait(struct drm_i915_private *i915, struct i915_engine *engi
 
 /**
  * Start `engine`'s ring again with the chip to run from `head` to `tail`,
- * as Linux's xcs_resume after a reset: stopped and emptied, the status
- * page's address written and the TLB flushed, the ring's start and the
- * PPGTT's registers, enabled empty at `head` with RING_VALID waited for,
- * STOP_RING cleared, and then `tail` given. Every interrupt of the ring
- * is masked in its RING_IMR. Under forcewake.
+ * as Linux's intel_engine_resume and xcs_resume after a reset: the render
+ * engine's workarounds written (rcs_engine_wa_init) and read back, the
+ * ring stopped and emptied, the status page's address written and the TLB
+ * flushed, the ring's start and the PPGTT's registers, enabled empty at
+ * `head` with RING_VALID waited for, STOP_RING cleared, and then `tail`
+ * given. Every interrupt of the ring is masked in its RING_IMR. Under
+ * forcewake.
  *
  * @return 0, or -EIO when the ring would not stop or start, its registers
  *         logged.
@@ -1900,11 +2026,13 @@ void i915_rps_unpark(struct drm_i915_private *i915);
 void i915_rps_park(struct drm_i915_private *i915);
 
 /**
- * Act on the up and down interrupts the handler latched, as Linux's
- * rps_work: step the frequency up or down, or to RPe or RPn on the down
- * timeout, within the softlimits, then unmask the events again. Runs as
- * the interrupt's `deferred` work, with no lock of the driver held, and
- * may be called from anywhere else; it takes the frequency lock.
+ * Act on the up and down interrupts the handler latched and on a waitboost
+ * queued, as Linux's rps_work: with waiters, to `boost_freq` at least and
+ * held there, up to `max_freq`; otherwise step the frequency up or down,
+ * or to RPe or RPn on the down timeout, within the softlimits; then
+ * unmask the events again. Runs as the interrupt's `deferred` work, with
+ * no lock of the driver held, and may be called from anywhere else; it
+ * takes the frequency lock.
  */
 void i915_rps_work(struct drm_i915_private *i915);
 
@@ -1933,9 +2061,33 @@ uint32_t i915_rps_read_actual_mhz(struct drm_i915_private *i915);
 int32_t i915_rps_set_max_mhz(struct drm_i915_private *i915, uint32_t val);
 int32_t i915_rps_set_min_mhz(struct drm_i915_private *i915, uint32_t val);
 
-/** Set the boost frequency, gt_boost_freq_mhz, `val` in MHz: 0, or
- * -EINVAL outside [min_freq, max_freq]. */
+/** Set the boost frequency, gt_boost_freq_mhz, `val` in MHz, and run the
+ * work again for the waiters while it changes, as Linux's
+ * rps_set_boost_freq: 0, or -EINVAL outside [min_freq, max_freq]. */
 int32_t i915_rps_set_boost_mhz(struct drm_i915_private *i915, uint32_t val);
+
+/**
+ * Boost the GT's clock for a client waiting on `rq`, as Linux's
+ * intel_rps_boost: nothing for a request signalled or boosted already;
+ * otherwise `rq` is marked and counted a waiter until it retires, and the
+ * first waiter, while RPS is active and asks for less than `boost_freq`,
+ * runs the work, which asks for `boost_freq`. The callers boost only a
+ * request the chip has not begun (`i915_request_started`). Any context
+ * where the work may run: no lock of the driver held.
+ */
+void i915_rps_boost(struct i915_request *rq);
+
+/** `rq` retires: its waitboost, if any, is no longer counted, and none
+ * asked after is, as Linux's i915_request_retire. Any context. */
+void i915_rps_retire(struct i915_request *rq);
+
+/**
+ * Count a page flip pending, with `on`, or one done, as Linux's
+ * intel_rps_mark_interactive: while any is pending the power mode is high
+ * power, with its shorter evaluation interval, and the first switches to
+ * it at once while RPS is active. Any context; takes the frequency lock.
+ */
+void i915_rps_mark_interactive(struct drm_i915_private *i915, int on);
 
 /**
  * Add the device's /sys files below its card's directory, as Linux's
@@ -1969,7 +2121,7 @@ int32_t i915_firstlight_run(struct drm_i915_private *i915);
 extern const struct drm_gem_object_funcs i915_gem_object_funcs;
 
 /* The driver's own ioctls, for the DRM core. */
-#define I915_NUM_IOCTLS 26
+#define I915_NUM_IOCTLS 28
 extern const struct drm_ioctl_desc i915_ioctls[I915_NUM_IOCTLS];
 
 /**
@@ -1979,7 +2131,9 @@ extern const struct drm_ioctl_desc i915_ioctls[I915_NUM_IOCTLS];
  * more after a failure; an import's are its dma-buf's; a userptr object's
  * are the program's (`i915_gem_userptr_get_pages`). The physical addresses
  * stay in `obj->frames` until the object goes or is purged. An object
- * without pages whose `madv` is not WILLNEED has none to give.
+ * without pages whose `madv` is not WILLNEED has none to give. Reclaim and
+ * the userptr's pin may sleep, so both look again after it: a caller that
+ * finds the pages given meanwhile counts one more pin on them.
  *
  * @return 0; -ENOMEM; -EFAULT when a page cannot be had or the object is
  *         purgeable or purged; -ENODEV once the device is gone; or the
@@ -1997,6 +2151,18 @@ int i915_gem_object_has_pages(const struct drm_i915_gem_object *obj);
 /** Whether a fence of the object's reservation has not signalled, so that
  * the GPU may still read or write its pages. */
 int i915_gem_object_is_active(const struct drm_i915_gem_object *obj);
+
+/**
+ * Wait until no fence of the object's reservation is busy, so that the GPU
+ * no longer reads or writes its pages, for ever, as Linux's i915_vma_sync;
+ * with `intr` a signal ends the wait. Each busy fence's signal is asked
+ * for before the first wait, as Linux's i915_active_wait enables its
+ * fences, so that a last request done during the wait's spin lets its
+ * engine go. Allocates nothing.
+ *
+ * @return 0, or -EINTR with `intr`.
+ */
+int32_t i915_gem_object_wait_idle(struct drm_i915_gem_object *obj, int intr);
 
 /** The physical address of the object's page `pgoff`, a shmem page given
  * on the first touch; 0 past its end or when none can be had. */
@@ -2027,7 +2193,11 @@ void i915_gem_object_put(struct drm_i915_gem_object *obj);
 /**
  * Wait for the object's writers, or with `all` for its readers too, for
  * `timeout_ns`, for ever when it is negative, as Linux's
- * i915_gem_object_wait.
+ * i915_gem_object_wait, after a waitboost for each of their requests the
+ * chip has not begun, timeout 0 too. Each request is waited for through
+ * `i915_request_wait`, each other fence through `dma_fence_wait_until`, and
+ * a merge of them by its fences one at a time; a timeout of 0 asks for no
+ * signal.
  *
  * @return 0, -ETIME when one is busy at the timeout (at once for 0),
  *         -EINTR for a signal, or -ENOMEM.
@@ -2096,6 +2266,7 @@ int32_t i915_gem_object_set_cache_level(struct drm_i915_gem_object *obj, int lev
 /* The ioctls, as Linux's of the same names; each one's comment is at its
  * definition. */
 int32_t i915_gem_create_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
+int32_t i915_gem_create_ext_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t i915_gem_pread_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t i915_gem_pwrite_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t i915_gem_set_domain_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
@@ -2186,7 +2357,9 @@ void i915_ggtt_release(struct drm_i915_private *i915, uint64_t offset);
 /**
  * Bind the object's view of `view_pages` pages from `view_offset`, or the
  * whole object for 0, into the global GTT and pin the binding, as Linux's
- * i915_gem_object_ggtt_pin: a binding that exists is reused unless it is
+ * i915_gem_object_ggtt_pin. A partial view may cover the whole object, a
+ * binding apart from the normal view's, as Linux's I915_GTT_VIEW_PARTIAL.
+ * A binding that exists is reused unless it is
  * outside the aperture with I915_PIN_MAPPABLE or not aligned to `align`,
  * when it is undone first. With I915_PIN_MAPPABLE the binding is sized
  * and aligned for a fence of the object's tiling. In `*out`.
@@ -2197,6 +2370,19 @@ void i915_ggtt_release(struct drm_i915_private *i915, uint64_t offset);
  */
 int32_t i915_vma_pin(struct drm_i915_gem_object *obj, uint32_t view_offset, uint32_t view_pages,
                      uint32_t flags, uint32_t align, struct i915_vma **out);
+
+/**
+ * Bind the remapped view `remap` of the object into the global GTT and pin
+ * the binding, as Linux's i915_gem_object_ggtt_pin with an
+ * I915_GTT_VIEW_REMAPPED view: page k of the binding maps the object's page
+ * I915_REMAP_PAGE(remap, k). A binding of the same view is reused, as
+ * `i915_vma_pin` reuses one. In `*out`.
+ *
+ * @return 0; -EINVAL for an empty view, a row wider than `src_stride` or
+ *         a view past the object; or `i915_vma_pin`'s errors.
+ */
+int32_t i915_vma_pin_remapped(struct drm_i915_gem_object *obj, const struct i915_remap_info *remap,
+                              uint32_t flags, uint32_t align, struct i915_vma **out);
 
 /*
  * Where `i915_vma_pin_args` binds a whole object: `flags` are I915_PIN_*,
@@ -2242,17 +2428,22 @@ void i915_vma_flush_writes(struct i915_vma *vma);
 /**
  * Undo a binding, as Linux's __i915_vma_unbind: programs' maps revoked,
  * writes flushed, its fence let go, its entries cleared and its record
- * freed.
+ * freed. A binding whose object the GPU may still use is kept, since its
+ * entries and pages must stay until the work is done: a caller that may
+ * sleep waits with `i915_gem_object_wait_idle` first, where Linux's
+ * unbind waits itself. Never sleeps.
  *
- * @return 0, or -EAGAIN while it is pinned.
+ * @return 0, -EAGAIN while it is pinned, or -EBUSY while its object is
+ *         active.
  */
 int32_t i915_vma_unbind(struct i915_vma *vma);
 
-/** Undo every binding of the object: 0, or -EAGAIN when one is pinned. */
+/** Undo every binding of the object: 0, or -EAGAIN when one is pinned or
+ * the object is active. */
 int32_t i915_gem_object_unbind(struct drm_i915_gem_object *obj);
 
 /** The object's binding inside the aperture that maps page `pgoff`, or
- * NULL. */
+ * NULL; a remapped view is never one. */
 struct i915_vma *i915_vma_for_page(struct drm_i915_gem_object *obj, uint32_t pgoff);
 
 /** Recompute what a fence needs of the binding after its object's tiling
@@ -2356,7 +2547,8 @@ void i915_gem_shrinker_unregister(struct drm_i915_private *i915);
  *
  * @return 0; -EFAULT for another address space, one that has ended, or a
  *         page outside the program's memory or without write access;
- *         -EAGAIN while stale frames are still pinned; or -ENOMEM.
+ *         -EAGAIN while stale frames are still pinned; -EINTR for a signal
+ *         while the GPU finishes with the stale frames; or -ENOMEM.
  */
 int32_t i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj);
 
@@ -2480,6 +2672,21 @@ int32_t intel_atomic_commit(struct drm_device *dev, struct drm_atomic_state *sta
  * pin bound: the scanout's base, without the framebuffer's offset. */
 uint32_t intel_fb_ggtt(const struct drm_framebuffer *fb);
 
+/** The GGTT address of the remapped view `remap` of `fb`'s object, which
+ * its plane's pin bound, or 0 when no pinned binding of it is there. */
+uint32_t intel_fb_ggtt_remapped(const struct drm_framebuffer *fb,
+                                const struct i915_remap_info *remap);
+
+/**
+ * Whether the primary or sprite plane state `ps` scans out through a
+ * remapped view, as Linux's intel_plane_needs_remap asks: it is visible,
+ * its framebuffer's object is the driver's, its stride passes the plane's
+ * limit and its layout can be remapped (X tiles, or linear at a stride of
+ * whole pages). 1 with the view in `*remap`, or 0 with `remap->width` 0.
+ * The plane's check has computed `ps`'s source rectangle.
+ */
+int intel_plane_remap(const struct drm_plane_state *ps, struct i915_remap_info *remap);
+
 /**
  * Check a new framebuffer of an object of the driver against the object's
  * layout, Linux's intel_fb_bo_framebuffer_init and intel_fill_fb_info: a
@@ -2508,6 +2715,12 @@ int32_t intel_planes_init(struct intel_crtc *crtc);
 
 /** Make the cursor plane of `crtc`, as `intel_planes_init` does. */
 int32_t intel_cursor_init(struct intel_crtc *crtc);
+
+/** The bits of the primary plane's DSPCNTR that set the pipe and not the
+ * plane, Linux's i9xx_plane_ctl_crtc: the pipe's colour space conversion
+ * when it makes limited range RGB. A disabled plane keeps them, since
+ * they also act on the pipe's background. */
+uint32_t intel_plane_ctl_crtc(const struct intel_crtc *crtc);
 
 /*
  * The watermarks (intel_wm.c), Linux's i9xx_wm.c for Haswell.
@@ -2587,18 +2800,42 @@ int intel_crtc_get_vblank_timestamp(struct drm_crtc *crtc, int64_t *time_ns, int
  */
 int32_t intel_vblank_init(struct drm_i915_private *i915);
 
-/** Unhook them, with every held event sent. */
+/** Unhook them, with every held event sent and every boost after a vblank
+ * dropped. */
 void intel_vblank_fini(struct drm_i915_private *i915);
 
 /** Send `crtc`'s held event now, as a pipe that goes off does, with
- * interrupts off. */
+ * interrupts off; the pipe's interactive mark goes once no flip is
+ * pending. */
 void intel_crtc_send_event(struct intel_crtc *crtc);
+
+/** Let `c` go of its commit's interactive mark once its flip is no longer
+ * pending, and the mark go with the last of the commit's pipes, as Linux's
+ * intel_cleanup_plane_fb after the commit's flips. Interrupts masked. */
+void intel_crtc_interactive_end(struct intel_crtc *c);
+
+/** Turn `c`'s vblanks off as its pipe goes off (`drm_crtc_vblank_off`),
+ * and end its pending boosts as Linux's drm_crtc_vblank_off wakes their
+ * waits: each request the chip has not begun is boosted and let go with
+ * its vblank reference, as do_rps_boost does. Process context. */
+void intel_crtc_vblank_off(struct intel_crtc *c);
+
+/**
+ * Boost the GT's clock at the next vblank of `c` for `fence`, the request
+ * drawing a flip, if the chip has not begun it by then, as Linux's
+ * intel_display_rps_boost_after_vblank: nothing for a fence of another
+ * driver or a merge, a pipe whose vblanks cannot be had, or when no memory
+ * is left. Each call adds its own entry, so a later commit on the plane
+ * leaves a pending flip's boost in place. Process context; may be called
+ * with interrupts on.
+ */
+void intel_crtc_boost_after_vblank(struct intel_crtc *c, struct dma_fence *fence);
 
 /**
  * The display's deferred interrupt work, `irq.deferred_display`: each
- * pipe's vblank counted by the DRM core, the events whose frame has come
- * sent, and the CRC of each frame entered. In the interrupt, after the
- * mask's lock is let go.
+ * pipe's vblank counted by the DRM core, its flips' requests boosted, the
+ * events whose frame has come sent, and the CRC of each frame entered. In
+ * the interrupt, after the mask's lock is let go.
  */
 void intel_display_irq_work(struct drm_i915_private *i915);
 
@@ -2850,9 +3087,11 @@ void intel_dpll_init(struct drm_i915_private *i915);
 void intel_dpll_calc_wrpll(uint32_t clock, uint32_t *r2, uint32_t *n2, uint32_t *p);
 
 /** The clock in kHz of symbol clock a WRPLL_CTL value `wrpll` gives,
- * Linux's hsw_ddi_wrpll_get_freq on a ULT part: the LCPLL's 2.7 GHz or
- * the PCH's 135 MHz SSC as reference; 0 for another reference. */
-uint32_t intel_dpll_wrpll_freq(uint32_t wrpll);
+ * Linux's hsw_ddi_wrpll_get_freq: the LCPLL's 2.7 GHz, the PCH's 135 MHz
+ * SSC, or for WRPLL_REF_SPECIAL_HSW the SSC on a ULT part and the
+ * non-SSC reference intel_dpll_init read (`dpll_nssc`) on another; 0 for
+ * another reference. */
+uint32_t intel_dpll_wrpll_freq(const struct drm_i915_private *i915, uint32_t wrpll);
 
 /** The clock in kHz an SPLL_CTL value `spll` gives, Linux's
  * hsw_ddi_spll_get_freq; 0 for a frequency it does not name. */
@@ -2873,11 +3112,6 @@ void intel_dpll_plan_init(struct drm_i915_private *i915, uint32_t leaving,
  */
 int32_t intel_dpll_compute(struct drm_i915_private *i915, struct intel_dpll_plan *plan, int pipe,
                            struct intel_crtc_config *cfg);
-
-/** The SPLL_CTL value of a link of `port_clock` kHz, Linux's
- * hsw_ddi_spll_compute_dpll: 1350 MHz from the muxed SSC, the one rate
- * it takes; 0 for another rate. */
-uint32_t intel_dpll_spll_compute(uint32_t port_clock);
 
 /** Read out pipe `pipe`'s PLL from the clock select `sel` of its port into
  * `cfg`: the PLL, its value and the link's clock, and count the pipe on
@@ -3079,6 +3313,12 @@ const struct drm_mode_modeinfo *intel_panel_fixed_mode(struct drm_i915_private *
  * intel_panel_mode_valid, else -EINVAL. */
 int32_t intel_panel_mode_valid(struct drm_i915_private *i915, const struct drm_mode_modeinfo *mode);
 
+/** Linux's intel_cpu_transcoder_mode_valid for display version 5 and up: 0
+ * for a mode of at least 64 pixels across with 32 of horizontal blanking,
+ * 5 lines of vertical blanking and an hsync after the active area, else
+ * -EINVAL. */
+int32_t intel_cpu_transcoder_mode_valid(const struct drm_mode_modeinfo *m);
+
 /** Replace the user's `mode` with the fixed mode that drives it, Linux's
  * intel_panel_compute_config: 0, or -EINVAL for a rate more than a hertz
  * from the panel's. */
@@ -3107,9 +3347,20 @@ void ilk_pfit_enable(struct drm_i915_private *i915, int pipe, const struct intel
 /** Turn it off when `cfg` had it on, Linux's ilk_pfit_disable. */
 void ilk_pfit_disable(struct drm_i915_private *i915, int pipe, const struct intel_crtc_config *cfg);
 
-/** The CRC hooks of the CRTCs (i915_display_debugfs.c). */
+/**
+ * Start the CRC source `name` on `crtc`, or stop it for NULL or "none",
+ * Linux's intel_crtc_set_crc_source (i915_display_debugfs.c). Sleeps: it
+ * takes the commit lock for the eDP pipe's fitter workaround. 0, -EINVAL
+ * for a source Haswell does not have, or -EIO for a pipe that is off.
+ */
 int32_t intel_crtc_set_crc_source(struct drm_crtc *crtc, const char *name);
+
+/** Whether `name` is a source of `crtc`: 0 with `*values_cnt` the values
+ * a frame gives, 5, or -EINVAL. Does not sleep. */
 int32_t intel_crtc_verify_crc_source(struct drm_crtc *crtc, const char *name, uint32_t *values_cnt);
+
+/** Linux's names of the CRC sources, `*count` of them, in its order; a
+ * static table. */
 const char *const *intel_crtc_get_crc_sources(struct drm_crtc *crtc, uint32_t *count);
 
 /** Enter `crc`, the CRC the error interrupt read at `crtc`'s CRC done,
@@ -3152,12 +3403,16 @@ int32_t i915_gem_dumb_create(struct drm_file *file, struct drm_device *dev,
 
 /**
  * Get the object ready to scan out, as Linux's
- * i915_gem_object_pin_to_display_plane: its caching off, bound inside the
- * aperture at a multiple of `align`, and its processor cache flushed. The
- * binding in `*vma`, pinned, which `i915_vma_unpin` lets go. 0 or the
- * binding's error.
+ * i915_gem_object_pin_to_display_plane: its caching off, its view bound
+ * at a multiple of `align`, and its processor cache flushed. The view is
+ * the whole object for a NULL `remap`, bound inside the aperture when
+ * room there needs no wait and anywhere in the GTT otherwise, as Linux
+ * binds it on a chip without a GMCH, or the remapped view `remap`,
+ * anywhere. The binding in `*vma`, pinned, which
+ * `i915_vma_unpin` lets go. 0 or the binding's error.
  */
-int32_t i915_gem_object_pin_to_display(struct drm_i915_gem_object *obj, uint32_t align,
+int32_t i915_gem_object_pin_to_display(struct drm_i915_gem_object *obj,
+                                       const struct i915_remap_info *remap, uint32_t align,
                                        struct i915_vma **vma);
 
 /** Flush the processor's cache of bytes [start, end) of the object, for
@@ -3324,6 +3579,14 @@ struct i915_file {
  * `hold`, when set, is what its batch needs until it retires: the objects
  * of its call and the parser's shadow, which `hold->release` lets go once
  * the chip is past it, as Linux's request keeps its vmas active.
+ *
+ * Signalling. `signaling` is Linux's I915_FENCE_FLAG_SIGNAL: its signal
+ * was asked for before its breadcrumb was written, so the first signal or
+ * retirement that finds it complete hands its engine to retirement when it
+ * is the engine's last, and clears it. A request already complete when its
+ * signal is asked for signals at once instead, without it. It is set with
+ * interrupts masked, by the fence's `enable_signaling`, and cleared under
+ * its engine's `lock`.
  */
 struct i915_await;
 
@@ -3351,11 +3614,15 @@ struct i915_request {
     uint8_t was_valid;
     uint8_t added;
     uint8_t submitted;
+    uint8_t boosted; /* Linux's I915_FENCE_FLAG_BOOST, under the frequency lock */
+    uint8_t signaling;
+    uint16_t waiters; /* i915_request_wait's callers waiting for it */
     uint32_t awaits;
     struct i915_await *await_list;
     struct i915_await *exec_waiters;
     struct i915_request *next; /* the engine's, oldest first */
     struct i915_request_hold *hold;
+    int64_t added_ns; /* dma_fence_now() when it was added, for THROTTLE */
 };
 
 /*
@@ -3368,6 +3635,7 @@ struct i915_await {
     struct dma_fence_cb cb; /* first, so that the callback finds its record */
     struct i915_request *rq;
     struct dma_fence *fence;
+    uint64_t deadline; /* the tick a wait for another driver's fence ends, or 0 */
     struct i915_request *src;
     struct i915_await *next;
     struct i915_await *exec_next;
@@ -3389,6 +3657,11 @@ typedef int32_t (*i915_ext_fn)(uintptr_t ext, void *data);
  *         or an unknown name; -EFAULT; or a handler's error.
  */
 int32_t i915_user_extensions(uint64_t ext, const i915_ext_fn *tbl, uint32_t count, void *data);
+
+/** 0 when the `size` bytes, at most 8, at the user address `at` are zero;
+ * -EINVAL when not; -EFAULT when they cannot be read. Linux's
+ * check_user_mbz. */
+int32_t i915_check_user_mbz(uintptr_t at, size_t size);
 
 /** The driver's open hook: the file's state and its default context, 0.
  * 0 or -ENOMEM. */
@@ -3442,6 +3715,7 @@ int32_t i915_gem_context_getparam_ioctl(struct drm_device *dev, void *data, stru
 int32_t i915_gem_context_setparam_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t i915_gem_context_reset_stats_ioctl(struct drm_device *dev, void *data,
                                            struct drm_file *file);
+int32_t i915_gem_throttle_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t i915_getparam_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t i915_query_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t i915_reg_read_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
@@ -3498,15 +3772,34 @@ int32_t i915_request_add(struct i915_request *rq);
 /** Whether the chip has written the request's breadcrumb. */
 int i915_request_completed(const struct i915_request *rq);
 
+/** Whether the chip has begun the request: it has signalled, or its engine
+ * has passed the request before it, as Linux's i915_request_started. */
+int i915_request_started(const struct i915_request *rq);
+
+/* What `i915_request_wait` is asked, Linux's: that a signal ends the wait,
+ * and that a request the chip has not begun is boosted first. */
+#define I915_WAIT_INTERRUPTIBLE 1u
+#define I915_WAIT_PRIORITY      2u
+
+/* Linux's CONFIG_DRM_I915_FENCE_TIMEOUT, i915_fence_timeout: how long a
+ * request waits for another driver's fence before it runs without it, its
+ * fence's error -ETIMEDOUT, and how long a commit waits for each plane's
+ * fence before it programs the planes regardless. */
+#define I915_FENCE_TIMEOUT_MS 10000u
+
 /**
  * Wait for the request for `timeout_ns`, for ever when it is negative, as
- * Linux's i915_request_wait; the breadcrumb is read again at each second
- * and at the timeout, in case an interrupt was lost.
+ * Linux's i915_request_wait_timeout; the breadcrumb is read again at each
+ * second and at the timeout, in case an interrupt was lost. A request the
+ * chip has begun is polled for 8 us first, and one done by then is not
+ * listened for; otherwise, with I915_WAIT_PRIORITY in `flags`, a request
+ * the chip has not begun is boosted, and the wait asks for its signal,
+ * which retires the engine at the signal when it is the engine's last.
  *
  * @return 0 once it completed, -ETIME at the timeout (at once for 0), or
- *         -EINTR for a signal when `intr` is set.
+ *         -EINTR for a signal with I915_WAIT_INTERRUPTIBLE.
  */
-int32_t i915_request_wait(struct i915_request *rq, int intr, int64_t timeout_ns);
+int32_t i915_request_wait(struct i915_request *rq, uint32_t flags, int64_t timeout_ns);
 
 /** Drop a reference to a request. */
 void i915_request_put(struct i915_request *rq);
@@ -3534,15 +3827,32 @@ int32_t i915_request_await_fence(struct i915_request *rq, struct dma_fence *fenc
  */
 int32_t i915_gt_wait_for_idle(struct drm_i915_private *i915, int intr);
 
+/**
+ * The newest request of the state `ce` that has not completed and was
+ * added at or before `before`, a dma_fence_now() time, with a reference,
+ * or NULL: what THROTTLE waits for on that state, as Linux's walk of the
+ * context's timeline. Does not sleep.
+ */
+struct i915_request *i915_request_throttle_target(struct intel_context *ce, int64_t before);
+
 /** Give the chip each request whose last fence signalled outside the big
- * kernel lock, on every device: the submission worker's work, which a host
- * test calls itself. Returns the engines it moved. */
+ * kernel lock, on every device, then run the retire worker's pass where it
+ * is due or a last request signalled to a listener: the submission
+ * worker's work, which a host test calls itself. Returns the engines it
+ * moved. */
 int i915_submit_work(void);
 
 /** Retire every request whose breadcrumb the chip has written, oldest
- * first on each engine, and park the GT once every engine is idle, as
- * Linux's intel_gt_retire_requests. */
+ * first on each engine, and park the GT once no engine has a request on
+ * its list, one being built, or one Linux would not yet have retired
+ * (`unretired`). */
 void i915_retire_requests(struct drm_i915_private *i915);
+
+/** Retire every completed request as Linux's intel_gt_retire_requests
+ * does, all of an engine's once its last request is complete, and park the
+ * GT when that leaves every engine idle: the retire worker's pass, and
+ * what a wait for the GT's idle and debugfs's DROP_RETIRE do. */
+void i915_gt_retire_requests(struct drm_i915_private *i915);
 
 /** The device is unplugged: every request not completed fails with -EIO,
  * all retire, and the GT's own states, scratch page and default state go.
@@ -3558,7 +3868,9 @@ void i915_request_set_error_once(struct i915_request *rq, int32_t err);
 void i915_request_skip(struct i915_request *rq);
 
 /** Every request of every engine fails with -EIO, its fence signalled,
- * and retires, as Linux's reset_cancel when the GPU is wedged. */
+ * and retires, as Linux's reset_cancel when the GPU is wedged; the
+ * commands and switches of those the chip was never given are taken back
+ * first, so that each ring's tail and state are again what the chip has. */
 void i915_requests_cancel(struct drm_i915_private *i915);
 
 /*
@@ -3625,8 +3937,20 @@ void i915_reset_gt(struct drm_i915_private *i915, uint32_t stalled_mask, const c
  * with -EIO until a reset succeeds. */
 void i915_gt_set_wedged(struct drm_i915_private *i915);
 
-/* The requests of an engine the error state keeps, and the ring's dwords
- * at its head. */
+/**
+ * Stop every ring by force and reset the whole GPU, leaving the rings
+ * stopped, as Linux's intel_engines_release does before a driver gives the
+ * rings' pages back, so that the chip no longer reads them: the forced
+ * stop of each running ring, then the full domain of GEN6_GDRST, tried
+ * four times. The requests the chip had not completed are lost; the caller
+ * fails them (`i915_requests_unplug`). Does not sleep.
+ *
+ * @return 0; -EIO without forcewake; -ETIMEDOUT when the GPU did not
+ *         reset, which wedges it, as a failed reset does.
+ */
+int32_t i915_gt_quiesce(struct drm_i915_private *i915);
+
+/* The most incomplete requests of an engine the error state keeps. */
 #define I915_ERROR_REQUESTS 8
 
 /* The subslices of Haswell GT2's one slice, whose sampler and row
@@ -3703,7 +4027,8 @@ struct i915_gpu_error {
 
 /**
  * Capture the GPU's state now, as Linux's i915_gpu_coredump, with the
- * engines of `engine_mask` marked hung and `reason` kept, but no message
+ * engines of `engine_mask` that have an incomplete request on the chip
+ * marked hung and `reason` kept, but no message
  * made and nothing kept by the device. The caller owns the state and
  * frees it with `kfree`.
  *
@@ -3748,5 +4073,25 @@ void i915_gem_context_mark_innocent(struct intel_context *ce);
  * device is registered; the files go with its directories at the unplug.
  */
 void i915_debugfs_register(struct drm_i915_private *i915);
+
+/* ---- i915_handoff.c ---- */
+
+/*
+ * The release of a bound device to another driver and its bring-up again
+ * from a reset, through /sys/bus/pci/drivers/i915/unbind and bind, which
+ * i915_handoff.c tells whole. The bind and the unplug tell it of each
+ * device that comes and goes.
+ */
+
+/** A device is bound and registered: make the driver's directory of /sys
+ * if it is not there, and show the driver on the function as Linux's
+ * driver core does (`sysfs_pci_bind`): its `driver` link, the directory's
+ * link to it and DRIVER= in its uevent, which libudev, IGT's device scan
+ * and Mesa's loader read. From the bind, under the big lock. */
+void i915_handoff_bound(struct drm_i915_private *i915);
+
+/** A device is unplugged: take that binding away. Nothing for a device
+ * `i915_handoff_bound` was not told of. */
+void i915_handoff_unbound(struct drm_i915_private *i915);
 
 #endif /* _I915_H_ */

@@ -21,10 +21,11 @@
  * GETFB and GETFB2 by privilege, RMFB, CLOSEFB and the lowest free ID
  * (76-5a.4); atomic commits refused without ALLOW_MODESET, tested,
  * committed with an event, refused for bad flags, objects, properties and
- * coordinates, waited on an in-fence, and NONBLOCK (76-5a.2); SETCRTC,
- * SETPLANE, the cursor, PAGE_FLIP, DIRTYFB, DPMS through OBJ_SETPROPERTY
- * and SETPROPERTY, and SETGAMMA, each as a commit (76-5a.3); and a file's
- * release, which takes its framebuffer off the screen and frees its blobs.
+ * coordinates, waited on an in-fence or the framebuffer's pending write,
+ * and NONBLOCK (76-5a.2); SETCRTC, SETPLANE, the cursor, PAGE_FLIP,
+ * DIRTYFB, DPMS through OBJ_SETPROPERTY and SETPROPERTY, and SETGAMMA, each
+ * as a commit (76-5a.3); and a file's release, which takes its framebuffer
+ * off the screen and frees its blobs.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -406,7 +407,7 @@ static void row_blobs(void)
     CHECK(drm_mode_getblob_ioctl(&dev, &g, &fc) == 0 && !strcmp(out, bytes),
           "GETPROPBLOB's bytes, to any file");
     CHECK(blob_destroy(&fc, id) == -EPERM, "DESTROYPROPBLOB by another file: EPERM");
-    CHECK(blob_destroy(&fb_, id + 100) == -EINVAL, "DESTROYPROPBLOB of no blob: EINVAL");
+    CHECK(blob_destroy(&fb_, id + 100) == -ENOENT, "DESTROYPROPBLOB of no blob: ENOENT");
     CHECK(blob_destroy(&fb_, id) == 0, "DESTROYPROPBLOB by its owner");
     CHECK(drm_mode_getblob_ioctl(&dev, &g, &fc) == -ENOENT, "a destroyed blob: ENOENT");
 }
@@ -444,6 +445,49 @@ static int32_t rmfb(struct drm_file *file, uint32_t id)
 }
 
 static uint32_t fb_main, fb_other, fb_565, h_main, h_other, h_cursor;
+
+static uint32_t race_fb; /* the framebuffer race_rmfb removes */
+
+/** Another thread of the file removes `race_fb` during a copy. */
+static void race_rmfb(void)
+{
+    CHECK(rmfb(&fa, race_fb) == 0, "RMFB during the copy");
+}
+
+/** A probe during a copy replaces the HDMI connector's modes. */
+static void race_probe(void)
+{
+    CHECK(drm_helper_probe_single_connector_modes(&hdmi, 4096, 4096) == 1,
+          "a probe during the copy");
+}
+
+/** GETRESOURCES and GETCONNECTOR gather what they report before copying
+ * it out, since the list they walk may change while a copy sleeps. */
+static void row_copy_races(void)
+{
+    struct drm_mode_card_res r;
+    struct drm_mode_get_connector c;
+    struct drm_mode_modeinfo modes[2];
+    uint32_t ids[8], first;
+
+    first = addfb2(h_cursor, 64, 64, DRM_FORMAT_XRGB8888, 64 * 4, 0);
+    race_fb = addfb2(h_cursor, 64, 64, DRM_FORMAT_XRGB8888, 64 * 4, 0);
+    k_memset(&r, 0, sizeof(r));
+    r.fb_id_ptr = UPTR(ids);
+    r.count_fbs = 8;
+    copy_hook = race_rmfb;
+    CHECK(drm_mode_getresources(&dev, &r, &fa) == 0 && ids[0] == race_fb && ids[1] == first,
+          "GETRESOURCES gives the IDs it found, newest first");
+    CHECK(rmfb(&fa, first) == 0 && rmfb(&fa, race_fb) == -ENOENT, "the RMFB took effect");
+    k_memset(&c, 0, sizeof(c));
+    c.connector_id = hdmi.base.id;
+    c.modes_ptr = UPTR(modes);
+    c.count_modes = 2;
+    copy_hook = race_probe;
+    CHECK(drm_mode_getconnector(&dev, &c, &fa) == 0 && c.count_modes == 1 &&
+              modes[0].hdisplay == 1366,
+          "GETCONNECTOR gives the modes it found");
+}
 
 /** The IN_FORMATS blob: three formats, and each modifier with all three. */
 static void row_in_formats(void)
@@ -675,24 +719,34 @@ static void row_atomic_refusals(uint32_t mode_id)
     CHECK(reserved == 0 && fence_refs == 0, "no refusal kept an event or a fence");
 }
 
-/** Flips on the lit panel: one waited on an in-fence, a NONBLOCK one with
- * its event, then ACTIVE off refused without ALLOW_MODESET, and off. */
+/** Flips on the lit panel: one waited on an in-fence, which overrules the
+ * framebuffer's pending write, a NONBLOCK one with its event, waited on
+ * its framebuffer's pending write as Linux's prepare_fb has it, then ACTIVE
+ * off refused without ALLOW_MODESET, and off. */
 static void row_atomic_flips(void)
 {
+    static struct dma_fence render; /* a render job's write, held by the objects */
     struct req r;
 
+    gem[1].resv->write = &render;
     k_memset(&r, 0, sizeof(r));
     req_add(&r, &primary0.base, mc->prop_fb_id, fb_other);
     req_add(&r, &primary0.base, mc->prop_in_fence_fd, 5);
     CHECK(req_commit(&fa, &r, 0, 0) == 0, "a flip with an in-fence");
-    CHECK(fence_waits == 1 && fence_refs == 0, "the fence waited and dropped");
+    CHECK(fence_waits == 1 && fence_waited == &in_fence && fence_refs == 0,
+          "the in-fence alone waited and dropped");
     CHECK(primary0.state->fb->base.id == fb_other && enables == 1 && updates == 2,
           "the flip shows the other framebuffer without a modeset");
+    gem[1].resv->write = NULL;
+    gem[0].resv->write = &render;
     k_memset(&r, 0, sizeof(r));
     req_add(&r, &primary0.base, mc->prop_fb_id, fb_main);
     CHECK(req_commit(&fa, &r, DRM_MODE_ATOMIC_NONBLOCK | DRM_MODE_PAGE_FLIP_EVENT, 78) == 0 &&
               nsent == 2 && sent[1].user_data == 78 && primary0.state->fb->base.id == fb_main,
           "a NONBLOCK flip completes with its event");
+    CHECK(fence_waits == 2 && fence_waited == &render && fence_refs == 0,
+          "the flip without an in-fence waited for the framebuffer's pending write");
+    gem[0].resv->write = NULL;
     k_memset(&r, 0, sizeof(r));
     req_add(&r, &crtc0.base, mc->prop_active, 0);
     CHECK(req_commit(&fa, &r, 0, 0) == -EINVAL, "ACTIVE off without ALLOW_MODESET: EINVAL");
@@ -1033,6 +1087,7 @@ int main(void)
     row_connectors();
     row_blobs();
     row_framebuffers();
+    row_copy_races();
     row_atomic();
     row_setcrtc();
     row_setplane();

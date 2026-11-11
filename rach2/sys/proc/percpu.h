@@ -49,6 +49,7 @@ struct percpu {
     volatile uintptr_t tlb_page;                /* a user page, or CPU_TLB_ALL */
     volatile uintptr_t tlb_end;                 /* the end of the pages from `tlb_page` */
     volatile unsigned int stop_request;         /* stop for good */
+    volatile unsigned int barrier_request;      /* pass a barrier: SMP_BARRIER_ */
     volatile unsigned int stopped;              /* it took the stop: no more writes */
     const struct page_dir *volatile space_drop; /* a `space` to give up for the kernel's */
     volatile int space_stale;                   /* reload `space`: a shootdown skipped it */
@@ -64,6 +65,11 @@ struct percpu {
     uint64_t bkl_since;                         /* cycle count when it last took the big lock */
     uint32_t bkl_vector;                        /* the vector of the entry that holds it, or 0 */
     int32_t bkl_nr;                             /* that entry's system call number, or -1 */
+    volatile uint32_t wake_bkl_start;           /* current lock wait's clock, microseconds */
+    volatile uint32_t wake_bkl_waiting;         /* published after start, cleared under the lock */
+    uint32_t wake_bkl_total;                    /* completed lock waits, microseconds modulo 2^32 */
+    uint32_t wake_irq_start;  /* latest serviced timer interrupt before its lock */
+    uint32_t wake_irq_locked; /* the same interrupt after taking its lock */
 };
 
 extern struct percpu cpu_table[NR_CPUS];

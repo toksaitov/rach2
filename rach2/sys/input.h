@@ -43,8 +43,13 @@ struct input_keyboard {
     uint8_t prefix;                /* set 1: 0xE0 or 0xE1 when that came last, else 0 */
     uint8_t skip;                  /* set 1: Pause's byte after E1 is still to come */
     uint8_t down[INPUT_KEY_BYTES]; /* the keys it holds, a bit for each key code */
+    uint16_t *keymap;              /* set 1: each scan code's key code, or NULL */
     struct input_keyboard *next;   /* the keyboards attached */
 };
+
+/* The entries of a set-1 keymap, as Linux's atkbd has: the scan code, 0x80
+ * set after 0xE0, indexes it, and the upper half is never reached. */
+#define INPUT_SET1_KEYMAP 512
 
 /* The modifiers `input_modifiers` gives, a bit for each side. */
 #define INPUT_MOD_SHIFTL 0x01u /* KEY_LEFTSHIFT */
@@ -85,6 +90,17 @@ void input_keyboard_attach_dev(struct input_keyboard *kb, struct evdev *dev);
 void input_keyboard_detach(struct input_keyboard *kb);
 
 /**
+ * Release `keycode` on the keyboard whose event device is `dev`, as a key's
+ * release from the hardware goes: the held keys, the modifiers, the repeat,
+ * the event device and the console all see it. EVIOCSKEYCODE calls it when
+ * a held key's code leaves the keymap, as Linux's input_set_keycode passes
+ * that release to every handler. Returns 1 when the release went out, 0
+ * when no attached keyboard has `dev` or it does not hold the key. Any
+ * context; the evdev lock is not held.
+ */
+int input_keyboard_release(struct evdev *dev, unsigned int keycode);
+
+/**
  * Take one key of `kb`, in interrupt context or from the tick: `keycode` is
  * Linux's key code and `down` nonzero for a press, 0 for a release; `scan`
  * is the code the keyboard sent, which the event device reports as MSC_SCAN.
@@ -101,13 +117,23 @@ void input_key_event(struct input_keyboard *kb, uint32_t scan, unsigned int keyc
 /**
  * Give the PS/2 keyboard `kb` one set-1 code, in interrupt context: a prefix
  * is kept for the code after it, and a key's code goes to `input_key_event`
- * with Linux's key code `set1_keycode` gives and with MSC_SCAN the code with
- * its release bit clear and 0x80 set after E0, as Linux's keyboard driver
- * reports it. Pause's E1 1D 45 is the extended 0x45, KEY_PAUSE. The shifts a
- * keyboard wraps a cursor key in, E0 2A and E0 36, and the controller's own
- * bytes, 0x00, 0xFA, 0xFE and 0xFF, are not keys.
+ * with the key code its keymap gives, or `set1_keycode` without one, and
+ * with MSC_SCAN the code with its release bit clear and 0x80 set after E0,
+ * as Linux's keyboard driver reports it. Pause's E1 1D 45 is the extended
+ * 0x45, KEY_PAUSE. The shifts a keyboard wraps a cursor key in, E0 2A and
+ * E0 36, and the controller's own bytes, 0x00, 0xFA, 0xFE and 0xFF, are not
+ * keys.
  */
 void input_set1_event(struct input_keyboard *kb, uint8_t code);
+
+/**
+ * Give the attached keyboard `kb`, whose bytes are set 1, the keymap `map`
+ * of INPUT_SET1_KEYMAP entries, filled here with the key codes
+ * `set1_keycode` gives, so that EVIOCSKEYCODE can change what a scan code
+ * reports, as Linux's atkbd keeps its keycode table; `input_set1_event`
+ * reads it from then on. The caller owns `map` while `kb` is attached.
+ */
+void input_keyboard_set1_keymap(struct input_keyboard *kb, uint16_t *map);
 
 /**
  * Store in `out`, of 3 bytes, the set-1 bytes a PS/2 keyboard sends for the

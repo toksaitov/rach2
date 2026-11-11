@@ -413,6 +413,17 @@ int32_t virtio_gpu_probe(void)
     return -ENODEV;
 }
 
+int32_t vgem_probe(void)
+{
+    return -ENODEV;
+}
+
+/** No region is shared with a VM here. */
+int32_t vgpu_shm_start(void)
+{
+    return 0;
+}
+
 int32_t udmabuf_start(void)
 {
     return 0;
@@ -518,6 +529,14 @@ void input_get_repeat(int *delay_ms, int *period_ms)
 {
     *delay_ms = repeat_delay;
     *period_ms = repeat_period;
+}
+
+/** No keyboard here takes its keys through input.c. */
+int input_keyboard_release(struct evdev *dev, unsigned int keycode)
+{
+    (void)dev;
+    (void)keycode;
+    return 0;
 }
 
 void input_set_repeat(int delay_ms, int period_ms)

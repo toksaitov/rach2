@@ -47,6 +47,14 @@ struct dcache_counts {
 int dcache_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node);
 
 /**
+ * `dcache_lookup` for a walk with RESOLVE_CACHED, which may not wait for a
+ * device: -EAGAIN when the cache has no entry for `name` on a type that keeps
+ * its names there, or when the type does not and stands on a device; the
+ * type's lookup otherwise, as for "." and "..".
+ */
+int dcache_lookup_cached(struct vfs_mount *mnt, void *dir, const char *name, void **node);
+
+/**
  * Forget the entry `name` of `dir` on `mnt`, a mount's base, around a
  * mutator that adds, removes or replaces the name, whether or not it
  * succeeded. It also turns away every lookup under way, whose answer may

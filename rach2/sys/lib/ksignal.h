@@ -85,6 +85,7 @@
 #define FPE_FLTINV     7
 #define SEGV_MAPERR    1
 #define SEGV_ACCERR    2
+#define SEGV_PKUERR    4
 #define BUS_ADRALN     1
 #define TRAP_BRKPT     1
 #define TRAP_TRACE     2
@@ -101,9 +102,10 @@
  * handler receives: `si_code`, the sender's pid and uid, a child's status,
  * a fault's address, the word a timer or a queued signal carries
  * (`si_value`, which on i386 is where a child's status is, and is kept in
- * `status` as well), and `si_errno`, which only SIGSYS from a seccomp
- * filter sets. One record per signal number, like the pending bit: the
- * first instance's record stays until the signal is delivered.
+ * `status` as well), `si_errno`, which only SIGSYS from a seccomp filter
+ * sets, and the protection key of a fault one refused. One record per
+ * signal number, like the pending bit: the first instance's record stays
+ * until the signal is delivered.
  */
 struct k_siginfo {
     int32_t code;
@@ -113,6 +115,7 @@ struct k_siginfo {
     uintptr_t addr;
     uintptr_t value;
     int32_t err;
+    uint32_t pkey; /* the protection key of a SIGSEGV with SEGV_PKUERR */
 };
 
 /*

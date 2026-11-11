@@ -115,6 +115,13 @@
 #define FAKE_RP_STATE_CAP 0x00040414u
 #define FAKE_PCODE_DDCC   0x00000a00u
 
+/* MCH_SSKPD's memory latencies as the Lenovo's pcode leaves them (Linux's
+ * i915_pri_wm_latency: 20, 4, 36, 90 and 160). With none the watermarks'
+ * check passes no commit, as on Linux, the one that turns every pipe off
+ * at the driver's release among them. */
+#define FAKE_SSKPD_LO (90u << 20 | 36u << 12 | 4u << 4)
+#define FAKE_SSKPD_HI (20u << 24 | 160u)
+
 /* The GT FIFO's free entries, always. */
 #define FAKE_FIFO_ENTRIES 64u
 
@@ -1079,7 +1086,7 @@ static int fake_word(const char *s, uint32_t n, const char *w)
     uint32_t i;
 
     for (i = 0; i < n; i++) {
-        if (w[i] != s[i]) {
+        if (w[i] == '\0' || w[i] != s[i]) {
             return 0;
         }
     }
@@ -1346,6 +1353,8 @@ static struct i915_fake *i915_fake_create(struct i915_hw *hw)
     }
     R(f, GEN6_RP_STATE_CAP) = FAKE_RP_STATE_CAP;
     R(f, GEN6_RPSTAT1) = ((FAKE_RP_STATE_CAP >> 16) & 0xffu) << HSW_CAGF_SHIFT;
+    R(f, MCH_SSKPD) = FAKE_SSKPD_LO;
+    R(f, MCH_SSKPD_HI) = FAKE_SSKPD_HI;
     fake_reset(f, GEN6_GRDOM_FULL);
     f->light = 1;
     hw->ops = &fake_ops;
@@ -1359,32 +1368,47 @@ static struct i915_fake *i915_fake_create(struct i915_hw *hw)
     return f;
 }
 
+int32_t i915_fake_bind(const pci_device_t *pdev)
+{
+    struct i915_hw hw;
+    struct i915_fake *f;
+    int32_t err;
+
+    if (pdev->vendor_id != FAKE_EDU_VENDOR || pdev->device_id != FAKE_EDU_DEVICE) {
+        return -ENODEV;
+    }
+    f = i915_fake_create(&hw);
+    if (!f) {
+        klog(KLOG_ERR, "i915", "fake: no memory for the registers");
+        return -ENOMEM;
+    }
+    f->pdev = *pdev;
+    f->raise = fake_raise_edu;
+    klog(KLOG_INFO, "i915", "fake: %02x:%02x.%x: edu stands in for 8086:0a16", (unsigned)pdev->bus,
+         (unsigned)pdev->device, (unsigned)pdev->function);
+    err = i915_driver_bind(pdev, &hw);
+    if (err < 0) {
+        klog(KLOG_ERR, "i915", "fake: %02x:%02x.%x: error %d", (unsigned)pdev->bus,
+             (unsigned)pdev->device, (unsigned)pdev->function, (int)err);
+        i915_fake_free(f);
+    }
+    return err;
+}
+
 int32_t i915_fake_probe(void)
 {
     pci_device_t pdev;
-    struct i915_hw hw;
-    struct i915_fake *f;
     int32_t err, bound = 0;
     int nth;
 
     for (nth = 0; pci_find_nth_by_id(FAKE_EDU_VENDOR, FAKE_EDU_DEVICE, nth, &pdev); nth++) {
-        f = i915_fake_create(&hw);
-        if (!f) {
-            klog(KLOG_ERR, "i915", "fake: no memory for the registers");
+        err = i915_fake_bind(&pdev);
+        if (err == -ENOMEM) {
             break;
         }
-        f->pdev = pdev;
-        f->raise = fake_raise_edu;
-        klog(KLOG_INFO, "i915", "fake: %02x:%02x.%x: edu stands in for 8086:0a16",
-             (unsigned)pdev.bus, (unsigned)pdev.device, (unsigned)pdev.function);
-        err = i915_driver_bind(&pdev, &hw);
-        if (err < 0) {
-            klog(KLOG_ERR, "i915", "fake: %02x:%02x.%x: error %d", (unsigned)pdev.bus,
-                 (unsigned)pdev.device, (unsigned)pdev.function, (int)err);
-            i915_fake_free(f);
-            continue;
+        if (err == 0) {
+            bound++;
         }
-        bound++;
     }
     if (nth == 0) {
         klog(KLOG_ERR, "i915", "fake: no edu device to stand on; QEMU's -device edu gives one");

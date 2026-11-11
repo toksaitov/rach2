@@ -7,7 +7,9 @@
  * whole UTF-8 character under IUTF8 rubbed out by its width, and
  * the rules by which VEOF and a newline end a line), raw mode's VMIN and
  * VTIME, the
- * recognition of ISIG's control characters, and the OPOST and ONLCR mapping
+ * recognition of ISIG's control characters with NOFLSH, IXON's VSTOP and
+ * VSTART with IXANY, the look ahead and the echo held while output is
+ * stopped, and the OPOST and ONLCR mapping
  * of output have no hardware under them, and every console read goes
  * through them, so they run natively here under ASan and UBSan with the echo
  * and the output kept in a buffer instead of a screen. Exits with the count
@@ -67,11 +69,14 @@ static int cap_is(const struct cap *cp, const char *expect, int n)
     return 1;
 }
 
-/** Feed one byte; the signal the discipline recognized, or 0. */
+/** Feed one byte and then give the echo held to the sink, as the terminal
+ * layer does after it flushes its output; the signal the discipline
+ * recognized, or 0. */
 static int feed(struct n_tty *t, struct cap *cp, unsigned char c)
 {
     int signo = -1;
     n_tty_receive(t, c, sink, cp, &signo);
+    n_tty_echo_flush(t, sink, cp, ~0u);
     return signo;
 }
 
@@ -99,6 +104,23 @@ static void expect_line(struct n_tty *t, const char *expected, int count, const 
     }
     dprintf(2, "n-tty-test: fail: %s\n", detail);
     fails++;
+}
+
+/** Initialization enables echo even when the storage was nonzero. */
+static void init_echo(void)
+{
+    struct n_tty t;
+    struct cap cp;
+    unsigned int i;
+
+    for (i = 0; i < sizeof(t); i++) {
+        ((unsigned char *)&t)[i] = 0xa5;
+    }
+    n_tty_init(&t);
+    cap_reset(&cp);
+    CHECK(t.echo_muted == 0);
+    CHECK(feed(&t, &cp, 'a') == 0);
+    CHECK(cap_is(&cp, "a", 1));
 }
 
 /** Preserve VEOL bytes and queued boundaries across termios changes. */
@@ -353,6 +375,177 @@ static void utf8_erase(void)
     }
 }
 
+/** The bytes the read queue holds, read out into `buf` of `size`. */
+static int drain(struct n_tty *t, unsigned char *buf, int size)
+{
+    return n_tty_read(t, buf, size);
+}
+
+/**
+ * IXON and IXANY, as Linux 6.12's n_tty has them: the defaults, VSTOP and
+ * VSTART consumed, a stop that holds the echo and the start that gives it
+ * out, a disabled character, ISTRIP before the test, VSTART winning when both
+ * are one byte, IXANY, and a signal character that restarts output.
+ */
+static void flow_control(void)
+{
+    struct n_tty t;
+    struct cap cp;
+    unsigned char buf[16];
+
+    n_tty_init(&t);
+    cap_reset(&cp);
+    CHECK((t.tio.c_iflag & IXON) && !(t.tio.c_iflag & (IXANY | IXOFF)));
+    CHECK(t.tio.c_cc[VSTART] == 021 && t.tio.c_cc[VSTOP] == 023);
+    CHECK(!(t.tio.c_lflag & NOFLSH));
+
+    /* VSTOP stops, holds the echo, and reaches no reader; VSTART restarts. */
+    CHECK(feed(&t, &cp, 023) == 0 && t.stopped && cp.len == 0);
+    feed_str(&t, &cp, "ab");
+    CHECK(cp.len == 0 && t.echo_tail - t.echo_head == 2); /* held */
+    CHECK(feed(&t, &cp, 021) == 0 && !t.stopped);
+    CHECK(cap_is(&cp, "ab", 2)); /* the held echo comes out */
+    feed(&t, &cp, '\n');
+    CHECK(drain(&t, buf, sizeof(buf)) == 3 && buf[0] == 'a' && buf[2] == '\n');
+
+    /* A disabled VSTOP never matches a NUL; ISTRIP applies first. */
+    n_tty_init(&t);
+    t.tio.c_cc[VSTOP] = 0;
+    feed(&t, &cp, 0);
+    CHECK(!t.stopped && t.line_len == 1);
+    n_tty_init(&t);
+    t.tio.c_iflag |= ISTRIP;
+    feed(&t, &cp, 0223); /* 0x93 stripped is ^S */
+    CHECK(t.stopped && t.line_len == 0);
+
+    /* When VSTART and VSTOP are one byte, it restarts. */
+    n_tty_init(&t);
+    t.tio.c_cc[VSTART] = t.tio.c_cc[VSTOP] = 023;
+    t.stopped = 1;
+    feed(&t, &cp, 023);
+    CHECK(!t.stopped);
+
+    /* IXANY: any byte restarts and is input as well; without it, none. */
+    n_tty_init(&t);
+    feed(&t, &cp, 023);
+    feed(&t, &cp, 'x');
+    CHECK(t.stopped && t.line_len == 1);
+    t.tio.c_iflag |= IXANY;
+    feed(&t, &cp, 'y');
+    CHECK(!t.stopped && t.line_len == 2);
+
+    /* A signal character under IXON restarts output; its echo follows. */
+    n_tty_init(&t);
+    cap_reset(&cp);
+    feed(&t, &cp, 023);
+    feed_str(&t, &cp, "zz");
+    CHECK(feed(&t, &cp, t.tio.c_cc[VINTR]) == NTTY_SIGINT && !t.stopped);
+    CHECK(cap_is(&cp, "^C", 2)); /* the held "zz" was flushed with the input */
+}
+
+/**
+ * TCOOFF's stop that neither VSTART, IXANY nor a signal character ends, the
+ * look ahead and the byte fed after it, IXON turned off, and a signal
+ * character under NOFLSH that keeps the input and echoes in its turn, as
+ * Linux 6.12's n_tty has them.
+ */
+static void flow_stops(void)
+{
+    struct n_tty t;
+    struct ktermios tio;
+    struct cap cp;
+
+    cap_reset(&cp);
+    /* TCOOFF's stop: neither VSTART, IXANY nor a signal character ends it. */
+    n_tty_init(&t);
+    t.tio.c_iflag |= IXANY;
+    t.tco_stopped = 1;
+    CHECK(n_tty_stop(&t) == 1);
+    feed(&t, &cp, 021);
+    feed(&t, &cp, 'q');
+    feed(&t, &cp, t.tio.c_cc[VINTR]);
+    CHECK(t.stopped && n_tty_start(&t) == 0);
+    t.tco_stopped = 0;
+    CHECK(n_tty_start(&t) == 1 && !t.stopped);
+
+    /* The look ahead acts now, and the byte fed after it does not again. */
+    n_tty_init(&t);
+    CHECK(n_tty_lookahead(&t, 023) == 1 && t.stopped);
+    CHECK(n_tty_lookahead(&t, 'k') == 0);
+    CHECK(n_tty_start(&t) == 1);
+    {
+        int signo;
+
+        n_tty_receive_looked(&t, 023, sink, &cp, &signo);
+        CHECK(!t.stopped && signo == 0 && t.line_len == 0);
+    }
+    t.tio.c_iflag &= ~(unsigned int)IXON;
+    CHECK(n_tty_lookahead(&t, 023) == 0 && !t.stopped);
+
+    /* Turning IXON off restarts a VSTOP's stop, not TCOOFF's. */
+    n_tty_init(&t);
+    feed(&t, &cp, 023);
+    tio = t.tio;
+    tio.c_iflag &= ~(unsigned int)IXON;
+    n_tty_set_termios(&t, &tio);
+    CHECK(!t.stopped);
+    feed(&t, &cp, 023); /* now input */
+    CHECK(!t.stopped && t.line_len == 1);
+
+    /* NOFLSH: the signal keeps the input, and its echo is not held. */
+    n_tty_init(&t);
+    cap_reset(&cp);
+    t.tio.c_lflag |= NOFLSH;
+    feed_str(&t, &cp, "old\npart");
+    cap_reset(&cp);
+    {
+        int signo;
+
+        n_tty_receive(&t, t.tio.c_cc[VINTR], sink, &cp, &signo);
+        CHECK(signo == NTTY_SIGINT && cap_is(&cp, "^C", 2));
+    }
+    CHECK(t.line_len == 4 && n_tty_inq(&t) == 4);
+    /* Without NOFLSH the signal's echo waits for the caller's flush. */
+    t.tio.c_lflag &= ~(unsigned int)NOFLSH;
+    cap_reset(&cp);
+    {
+        int signo;
+
+        n_tty_receive(&t, t.tio.c_cc[VINTR], sink, &cp, &signo);
+        CHECK(signo == NTTY_SIGINT && cp.len == 0 && n_tty_inq(&t) == 0 && t.line_len == 0);
+    }
+    CHECK(n_tty_echo_flush(&t, sink, &cp, ~0u) == 2 && cap_is(&cp, "^C", 2));
+
+    /* The echo held goes out at most `max` bytes at a time, the rest held;
+     * a byte fed muted holds no echo, even behind a full buffer, whose
+     * oldest byte stays. */
+    n_tty_init(&t);
+    cap_reset(&cp);
+    feed(&t, &cp, 023);
+    feed_str(&t, &cp, "abc");
+    CHECK(n_tty_start(&t) == 1);
+    CHECK(n_tty_echo_flush(&t, sink, &cp, 2) == 2 && cap_is(&cp, "ab", 2));
+    CHECK(t.echo_tail - t.echo_head == 1);
+    {
+        int k, signo;
+
+        t.echo_muted = 1;
+        n_tty_receive(&t, 'd', sink, &cp, &signo);
+        t.echo_muted = 0;
+        CHECK(t.echo_tail - t.echo_head == 1 && cp.len == 2);
+        CHECK(n_tty_echo_flush(&t, sink, &cp, ~0u) == 1 && cap_is(&cp, "abc", 3));
+        feed(&t, &cp, 023);
+        for (k = 0; k < N_TTY_ECHO_MAX; k++) {
+            n_tty_hold_echo(&t, (unsigned char)('a' + k % 26));
+        }
+        t.echo_muted = 1;
+        n_tty_receive(&t, 'z', sink, &cp, &signo);
+        t.echo_muted = 0;
+        CHECK(t.echo_tail - t.echo_head == N_TTY_ECHO_MAX &&
+              t.echo_buf[t.echo_head & (N_TTY_ECHO_MAX - 1)] == 'a');
+    }
+}
+
 /**
  * Run the rows; the count of failures, at most 255.
  *
@@ -389,6 +582,7 @@ int main(void)
     unsigned char buf[512];
     int n, i;
 
+    init_echo();
     default_cflag();
     utf8_erase();
     veol_lines();
@@ -776,6 +970,8 @@ int main(void)
     CHECK(n_tty_read(&t, buf, sizeof(buf)) == 0); /* then persistent EOF */
 
     long_line();
+    flow_control();
+    flow_stops();
 
     return fails > 255 ? 255 : fails;
 }

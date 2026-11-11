@@ -87,6 +87,9 @@ uint64_t tick_count(void)
 #define RTC_SECONDS_PER_HOUR   3600
 #define RTC_SECONDS_PER_MINUTE 60
 #define RTC_EPOCH_YEAR         1970
+/* The Gregorian calendar repeats every 400 years, of 146097 days. */
+#define RTC_CYCLE_YEARS        400
+#define RTC_CYCLE_DAYS         146097
 
 /* The tick's rate (TICK_HZ in timer.h), and its length. */
 #define RTC_TICKS_PER_SECOND     TICK_HZ
@@ -183,13 +186,27 @@ void rtc_offset(int64_t *seconds, int32_t *nanoseconds)
     spin_unlock_irqrestore(&rtc_realtime_lock, flags);
 }
 
-void rtc_week_and_year_day(const rtc_time_t *t, int32_t *weekday, int32_t *yearday)
+/** The days from 1970-01-01 to January 1 of `year`, a full year from 1970,
+ * as whole 400-year cycles in `*cycles` and the days within the cycle,
+ * which is returned. Each cycle has 146097 days, a whole number of weeks,
+ * so the days within it give the day of the week; and splitting off the
+ * cycles bounds the loop at 400 years whatever the year. A year before
+ * 1970 counts as 1970. */
+static int32_t rtc_days_to_year(int32_t year, int32_t *cycles)
 {
     int32_t days = 0, each;
 
-    for (each = RTC_EPOCH_YEAR; each < t->year; each++) {
+    *cycles = year > RTC_EPOCH_YEAR ? (year - RTC_EPOCH_YEAR) / RTC_CYCLE_YEARS : 0;
+    for (each = RTC_EPOCH_YEAR + *cycles * RTC_CYCLE_YEARS; each < year; each++) {
         days += rtc_is_leap(each) ? 366 : 365;
     }
+    return days;
+}
+
+void rtc_week_and_year_day(const rtc_time_t *t, int32_t *weekday, int32_t *yearday)
+{
+    int32_t cycles, days = rtc_days_to_year(t->year, &cycles), each;
+
     *yearday = t->day - 1;
     for (each = 1; each < t->month; each++) {
         *yearday += rtc_days_in_month(t->year, each);
@@ -199,34 +216,75 @@ void rtc_week_and_year_day(const rtc_time_t *t, int32_t *weekday, int32_t *yeard
 
 int64_t rtc_seconds_of(const rtc_time_t *t)
 {
-    int32_t weekday, yearday, year;
-    int64_t days = 0;
+    int32_t weekday, yearday, cycles, days = rtc_days_to_year(t->year, &cycles);
 
-    for (year = RTC_EPOCH_YEAR; year < t->year; year++) {
-        days += rtc_is_leap(year) ? 366 : 365;
-    }
     rtc_week_and_year_day(t, &weekday, &yearday);
-    return (days + yearday) * 86400 + t->hour * 3600 + t->minute * 60 + t->second;
+    return ((int64_t)cycles * RTC_CYCLE_DAYS + days + yearday) * RTC_SECONDS_PER_DAY +
+           t->hour * RTC_SECONDS_PER_HOUR + t->minute * RTC_SECONDS_PER_MINUTE + t->second;
 }
 
-void rtc_time_of_seconds(uint32_t seconds, rtc_time_t *t)
+/**
+ * The whole 400-year cycles are taken off by long division, one bit of the
+ * quotient at a time, since i686 has no 64-bit divide without libgcc; the
+ * quotient is below 2^30 for any `seconds` up to 2^63. What is left is
+ * under a cycle, and the years of it are counted from 1970, whose leap
+ * years fall as those of the same place in any cycle.
+ */
+int rtc_time_of_seconds(int64_t seconds, rtc_time_t *t)
 {
-    uint32_t days = seconds / 86400u, rest = seconds % 86400u, len;
+    const uint64_t cycle = (uint64_t)RTC_CYCLE_DAYS * RTC_SECONDS_PER_DAY;
+    uint64_t rest = (uint64_t)seconds, len;
+    uint32_t cycles = 0, days, part;
+    int32_t year = RTC_EPOCH_YEAR;
+    int bit;
 
-    t->year = RTC_EPOCH_YEAR;
-    while (days >= (len = rtc_is_leap(t->year) ? 366u : 365u)) {
-        days -= len;
-        t->year++;
+    if (seconds < 0) {
+        return -1;
     }
+    for (bit = 30; bit >= 0; bit--) {
+        if (rest >= cycle << bit) {
+            rest -= cycle << bit;
+            cycles |= (uint32_t)1 << bit;
+        }
+    }
+    while (rest >= (len = (uint64_t)(rtc_is_leap(year) ? 366 : 365) * RTC_SECONDS_PER_DAY)) {
+        rest -= len;
+        year++;
+    }
+    if (cycles > (uint32_t)(0x7fffffffL - year) / RTC_CYCLE_YEARS) {
+        return -1;
+    }
+    part = (uint32_t)rest;
+    days = part / RTC_SECONDS_PER_DAY;
+    part %= RTC_SECONDS_PER_DAY;
     t->month = 1;
-    while (days >= (len = (uint32_t)rtc_days_in_month(t->year, t->month))) {
-        days -= len;
+    while (days >= (uint32_t)rtc_days_in_month(year, t->month)) {
+        days -= (uint32_t)rtc_days_in_month(year, t->month);
         t->month++;
     }
+    t->year = year + (int32_t)cycles * RTC_CYCLE_YEARS;
     t->day = (int32_t)days + 1;
-    t->hour = (int32_t)(rest / 3600u);
-    t->minute = (int32_t)(rest / 60u % 60u);
-    t->second = (int32_t)(rest % 60u);
+    t->hour = (int32_t)(part / RTC_SECONDS_PER_HOUR);
+    t->minute = (int32_t)(part / RTC_SECONDS_PER_MINUTE % 60u);
+    t->second = (int32_t)(part % 60u);
+    return 0;
+}
+
+void rtc_realtime_unlocked(int64_t *seconds, int32_t *microseconds)
+{
+    int64_t sec;
+    int32_t nsec;
+    uint32_t us = kernel_second_ticks * TICK_US;
+
+    rtc_offset_locked(&sec, &nsec);
+    sec += kernel_uptime_seconds;
+    us += (uint32_t)nsec / 1000u;
+    while (us >= 1000000u) {
+        us -= 1000000u;
+        sec++;
+    }
+    *seconds = sec;
+    *microseconds = (int32_t)us;
 }
 
 int rtc_is_anchored(void)

@@ -138,6 +138,24 @@ uint32_t timer_calibrate(void)
     return tsc_per_tick;
 }
 
+/* pvclock.c's guest TSC and its rate, which no vCPU here has scaled. */
+uint64_t kvm_tsc_read(const struct kvm_vcpu *v)
+{
+    return arch_cycles() + (uint64_t)v->tsc_offset;
+}
+
+uint64_t kvm_tsc_hz(const struct kvm_vcpu *v)
+{
+    (void)v;
+    return (uint64_t)tsc_per_tick * TICK_HZ;
+}
+
+/* The kvmclock with no master clock, as pvclock.c reads it. */
+uint64_t kvm_clock_ns(const struct kvm_vm *vm)
+{
+    return kvm_host_ns() + (uint64_t)vm->clock_offset;
+}
+
 /* The backends: only their addresses count. */
 const struct kvm_backend kvm_svm, kvm_vmx;
 const struct kvm_backend *kvm_backend = &kvm_vmx;
@@ -286,6 +304,7 @@ static void vm_make(int none)
 
     k_memset(&vm, 0, sizeof(vm));
     vm.irqchip = none ? 0 : KVM_IRQCHIP_SPLIT;
+    vm.apic_bus_ns = KVM_APIC_BUS_NS_DEFAULT;
     vm.clock_offset = 123456789;
     for (i = 0; i < NV; i++) {
         k_memset(&vcpus[i], 0, sizeof(vcpus[i]));
@@ -296,6 +315,7 @@ static void vm_make(int none)
         vcpus[i].xsave = xsaves[i];
         vcpus[i].sregs.cr0 = 1;
         vcpus[i].tsc_offset = 1000 * (i + 1);
+        vcpus[i].tsc_khz = 2400000u;
         vm.vcpus[i] = &vcpus[i];
     }
     vm.nr_vcpus = NV;
@@ -516,7 +536,7 @@ static void vp_index_rows(struct kvm_vcpu *v)
     int r;
 
     CHECK(wr(v, HV_MSR_VP_INDEX, 1, 0) == -1, "#GP for the guest's write of the VP index");
-    CHECK(wr(v, HV_MSR_VP_INDEX, 64, 1) == -1, "a VP index past the vCPUs refused");
+    CHECK(wr(v, HV_MSR_VP_INDEX, KVM_MAX_VCPUS, 1) == -1, "a VP index past the vCPUs refused");
     CHECK(wr(&vcpus[1], HV_MSR_VP_INDEX, 7, 1) == 0 && rd(&vcpus[1], HV_MSR_VP_INDEX, 0, &r) == 7 &&
               vcpu_by_vpidx(&vm, 7) == &vcpus[1] && vcpu_by_vpidx(&vm, 1) == NULL,
           "the caller sets a VP index");
@@ -590,6 +610,14 @@ static void crash_rows(struct kvm_vcpu *v)
           "the TSC and APIC frequencies");
     CHECK(wr(v, HV_MSR_TSC_FREQUENCY, 1, 0) == -1 && wr(v, HV_MSR_APIC_FREQUENCY, 1, 1) == 0,
           "the frequencies are read-only, the caller's write ignored");
+    vcpus[1].tsc_khz = 3100000u;
+    vm.apic_bus_ns = 4;
+    CHECK(rd(&vcpus[1], HV_MSR_TSC_FREQUENCY, 0, &r) == 3100000000ull &&
+              rd(v, HV_MSR_TSC_FREQUENCY, 0, &r) == 2400000000ull &&
+              rd(v, HV_MSR_APIC_FREQUENCY, 0, &r) == 250000000ull,
+          "each vCPU's TSC rate, not the host's, and the VM's bus cycle");
+    vcpus[1].tsc_khz = 2400000u;
+    vm.apic_bus_ns = KVM_APIC_BUS_NS_DEFAULT;
 
     ok = 1;
     for (i = 0; i < 5; i++) {

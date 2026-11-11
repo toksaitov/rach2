@@ -32,13 +32,13 @@ static void prime_release(struct dma_buf *buf)
     drm_gem_object_put(obj);
 }
 
-/** Give an importer a borrowed frame, or 0 after device loss or failure. */
+/** Give an importer a borrowed frame, or 0 on failure. The exporter's
+ * `page` decides whether its frames outlive its device's loss. */
 static uintptr_t prime_page(struct dma_buf *buf, uint32_t pgoff)
 {
     struct drm_gem_object *obj = buf->priv;
 
-    if (obj->dev->unplugged || (uint64_t)pgoff >= obj->size >> PAGE_SHIFT || !obj->funcs ||
-        !obj->funcs->page) {
+    if ((uint64_t)pgoff >= obj->size >> PAGE_SHIFT || !obj->funcs || !obj->funcs->page) {
         return 0;
     }
     return obj->funcs->page(obj, pgoff);

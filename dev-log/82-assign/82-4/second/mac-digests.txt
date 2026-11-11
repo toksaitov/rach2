@@ -1,0 +1,13 @@
+# The Mac's build at 054199bc4: 9fdd0982e with 617693620, a85abbe3d,
+# 41b043996, 96a51a37b, f72e24d2b and 2125666ec picked onto it in order.
+0d83e734f734c39aff26e5c97f309c0c0b7eb260fd504d52436489bf95d1ffd2  kernel (4102968 bytes)
+d0d8391db2ec705bd21ac7cbcf5f4e7f8b485832502396037565e39f92c808ce  bootctl
+6a275ea9b090e6b689e11b5fe807d3af9b16df31174427f9a95ec7d22b8b4694  vfiomusl
+2bc9f2906a6c3194f26531eeedadeef62173049bf67c2919170029673004c20d  check.sh
+09d9b979e985a902816b48a8483f21ede2f1c1d6eb279fea128cc9cfa80e2125  crcmodes (the first run's)
+3b2fa39fc7efa1c3514c8480d45ff2507bf8e928b0b4eadc462cc60f6dae3c89  guest.sh (the probe and the stalled run)
+bf9fd697d695635e5c00de089db1915f847dc1264a28a8c025726e8b93ba0a9a  gpu.sh (the probe, the runs and the kill)
+# 2e3225877's guest.sh, from the second glmark2 run on:
+ae1370e6fb7e37ebeedd59236cb6eb04fe68a7628136915117281724260127a0  guest.sh
+# e2d516d01's gpu.sh, for the UEFI probe:
+2f2a0cb845ebb7dc249e0be7d4b36e19fd4dc36b1ceda18187fd052d19c7b9ca  gpu.sh

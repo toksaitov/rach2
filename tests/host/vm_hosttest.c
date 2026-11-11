@@ -8,11 +8,15 @@
  * overlapping range; the search by address and the test of overlap; the
  * four cases of munmap (full cover, left trim, right trim, middle split);
  * the growth of a stack; node allocation past what it starts with; the
- * merging of neighbours; mprotect's splits and merges, and its failure for
- * a gap and for write to a region that may never be written, which keeps
- * that mark; the search for a free range; the bytes a range covers; and the
- * file a region maps: its pages through splits and merges, its references,
- * and its release, which waits for vm_file_reap after the last one goes.
+ * merging of neighbours; mprotect's splits and merges, the charge
+ * (VM_PROT_ACCOUNT) a private region takes when mprotect first makes it
+ * writable and keeps after once a page of it was written (`anon`), or
+ * loses when anonymous memory never written stops being writable, `anon`
+ * through splits, merges and a fork's copy, and its failure for a gap and
+ * for write to a region that may never be written, which keeps that mark;
+ * the search for a free range; the bytes a range covers; and the file a
+ * region maps: its pages through splits and merges, its references, and its
+ * release, which waits for vm_file_reap after the last one goes.
  */
 
 #include "mm/vm.h"
@@ -149,10 +153,11 @@ static void file_rows(void)
     vm_space_t m = {0};
     vm_space_t c = {0};
     struct vm_file file = {1, no_fill, NULL, count_release};
+    const uint32_t ro = VM_PROT_READ | VM_PROT_ACCOUNT; /* a segment once writable */
     vma_t *lo, *hi;
 
     released = 0;
-    CHECK(vm_insert_file(&m, 0x40000, 0x48000, VM_PROT_READ, VM_DATA, &file, 3) == 0);
+    CHECK(vm_insert_file(&m, 0x40000, 0x48000, ro, VM_DATA, &file, 3) == 0);
     CHECK(file.refs == 2);
     CHECK(vm_protect(&m, 0x42000, 0x44000, VM_PROT_READ | VM_PROT_WRITE) == 0);
     CHECK(m.count == 3 && file.refs == 4);
@@ -169,10 +174,10 @@ static void file_rows(void)
     hi = vm_find(&m, 0x43000);
     CHECK(hi != NULL && hi->pgoff == 6);
     /* Page 4 at 0x41000 does not join the region above, at page 6. */
-    CHECK(vm_insert_file(&m, 0x41000, 0x42000, VM_PROT_READ, VM_DATA, &file, 4) == 0);
+    CHECK(vm_insert_file(&m, 0x41000, 0x42000, ro, VM_DATA, &file, 4) == 0);
     CHECK(m.count == 2 && region_at(&m, 0)->end == 0x42000);
     /* Page 9 at 0x42000 continues neither neighbour and stays apart. */
-    CHECK(vm_insert_file(&m, 0x42000, 0x43000, VM_PROT_READ, VM_DATA, &file, 9) == 0);
+    CHECK(vm_insert_file(&m, 0x42000, 0x43000, ro, VM_DATA, &file, 9) == 0);
     CHECK(m.count == 3 && region_at(&m, 1)->start == 0x42000 && region_at(&m, 1)->end == 0x43000 &&
           region_at(&m, 1)->pgoff == 9 && file.refs == 4);
     CHECK(vm_remove(&m, 0x42000, 0x43000) == 0 && m.count == 2 && file.refs == 3);
@@ -267,7 +272,7 @@ static void tree_rows(void)
     for (i = 256; i > 0; i--) {
         j = i - 1;
         at = 0x100000u + j * 4 * PG;
-        CHECK(vm_insert(&vm, at, at + 3 * PG, VM_PROT_READ, VM_ANON) == 0);
+        CHECK(vm_insert(&vm, at, at + 3 * PG, VM_PROT_READ | VM_PROT_ACCOUNT, VM_ANON) == 0);
         saved[j] = vm_find(&vm, at);
         present[j] = 1;
         tree_check(&vm);
@@ -283,7 +288,7 @@ static void tree_rows(void)
         CHECK(vm_remove(&vm, at + PG, at + 2 * PG) == 0);
         CHECK(vm_find(&vm, at + PG) == NULL);
         tree_check(&vm);
-        CHECK(vm_insert(&vm, at + PG, at + 2 * PG, VM_PROT_READ, VM_ANON) == 0);
+        CHECK(vm_insert(&vm, at + PG, at + 2 * PG, VM_PROT_READ | VM_PROT_ACCOUNT, VM_ANON) == 0);
         tree_check(&vm);
     }
     for (i = 0; i < 256; i++) {
@@ -343,6 +348,109 @@ static void limit_rows(void)
     CHECK(vm_remove(&vm, 0x101000u, 0x102000u) == 0);
     tree_check(&vm);
     vm_free(&vm);
+}
+
+/**
+ * Check that mprotect without write drops the charge of anonymous memory no
+ * page of which was written, as Linux's mprotect_fixup drops VM_ACCOUNT from
+ * an anonymous region with no anon_vma, and that making it writable charges
+ * it again; a split, a merge and a fork's copy keep `anon`, but not a copy of
+ * a VM_PROT_WIPEONFORK region, whose charge an mprotect that leaves its
+ * protection as it was keeps, as mprotect_fixup returns first then.
+ */
+static void run_account_drop(void)
+{
+    const uint32_t rw = VM_PROT_READ | VM_PROT_WRITE | VM_PROT_ACCOUNT;
+    vm_space_t p = {0}, c = {0};
+    vma_t *r;
+
+    vm_init(&p);
+    CHECK(vm_insert(&p, 0x70000, 0x74000, rw, VM_ANON) == 0);
+    CHECK(vm_protect(&p, 0x71000, 0x72000, VM_PROT_READ) == 0);
+    r = vm_find(&p, 0x71000);
+    CHECK(p.count == 3 && r != NULL && r->end == 0x72000 && r->prot == VM_PROT_READ);
+    CHECK(vm_protect(&p, 0x71000, 0x72000, VM_PROT_READ | VM_PROT_WRITE) == 0);
+    CHECK(p.count == 1 && region_at(&p, 0)->prot == rw);
+    CHECK(vm_protect(&p, 0x70000, 0x74000, VM_PROT_READ) == 0);
+    CHECK(p.count == 1 && region_at(&p, 0)->prot == VM_PROT_READ);
+    CHECK(vm_protect(&p, 0x70000, 0x74000, VM_PROT_READ | VM_PROT_WRITE) == 0);
+    region_at(&p, 0)->anon = 1;
+    CHECK(vm_protect(&p, 0x71000, 0x72000, VM_PROT_READ) == 0);
+    r = vm_find(&p, 0x71000);
+    CHECK(p.count == 3 && r != NULL && r->anon && r->prot == (VM_PROT_READ | VM_PROT_ACCOUNT));
+    CHECK(vm_find(&p, 0x73000)->anon);
+    CHECK(vm_protect(&p, 0x71000, 0x72000, VM_PROT_READ | VM_PROT_WRITE) == 0);
+    CHECK(p.count == 1 && region_at(&p, 0)->anon && region_at(&p, 0)->prot == rw);
+    CHECK(vm_insert(&p, 0x74000, 0x75000, rw, VM_ANON) == 0);
+    CHECK(p.count == 1 && region_at(&p, 0)->end == 0x75000 && region_at(&p, 0)->anon);
+    CHECK(vm_insert(&p, 0x76000, 0x77000, rw, VM_HEAP) == 0);
+    CHECK(vm_protect(&p, 0x76000, 0x77000, 0) == 0);
+    CHECK(vm_find(&p, 0x76000)->prot == 0);
+    CHECK(vm_insert(&p, 0x7A000, 0x7B000, rw | VM_PROT_WIPEONFORK, VM_ANON) == 0);
+    vm_find(&p, 0x7A000)->anon = 1;
+    CHECK(vm_protect(&p, 0x7A000, 0x7B000, VM_PROT_READ) == 0);
+    CHECK(vm_find(&p, 0x7A000)->prot & VM_PROT_ACCOUNT);
+    CHECK(vm_copy(&c, &p) == 0 && c.count == p.count);
+    CHECK(vm_find(&c, 0x70000)->anon && !vm_find(&c, 0x7A000)->anon);
+    CHECK(vm_protect(&c, 0x7A000, 0x7B000, VM_PROT_READ) == 0);
+    CHECK(vm_find(&c, 0x7A000)->prot & VM_PROT_ACCOUNT);
+    vm_free(&c);
+    vm_free(&p);
+}
+
+/**
+ * Check the free range `vm_find_free` finds and a hole it uses again, the
+ * fallback of `vm_find_mmap` to a gap across the top-down search's base, and
+ * the gap a growing stack leaves above another mapping. The guard below the
+ * stack's limit that `mmap_place` and `mmap_free` keep is checked in the
+ * guest, by tests/vmprobe.c.
+ */
+static void run_mapping_edges(void)
+{
+    /* The free range. */
+    {
+        vm_space_t f = {0};
+
+        vm_init(&f);
+        CHECK(vm_find_free(&f, 2 * PG, 0x10000, 0x20000) == 0x1E000);
+        CHECK(vm_insert(&f, 0x1C000, 0x20000, VM_PROT_READ, VM_ANON) == 0);
+        CHECK(vm_insert(&f, 0x14000, 0x18000, VM_PROT_READ, VM_HEAP) == 0);
+        CHECK(vm_find_free(&f, 2 * PG, 0x10000, 0x20000) == 0x1A000);
+        CHECK(vm_find_free(&f, 5 * PG, 0x10000, 0x20000) == 0);
+        CHECK(vm_find_free(&f, 4 * PG, 0x10000, 0x20000) == 0x18000);
+        CHECK(vm_insert(&f, 0x18000, 0x19000, VM_PROT_READ, VM_ANON) == 0);
+        CHECK(vm_find_free(&f, 4 * PG, 0x10000, 0x20000) == 0x10000);
+        CHECK(vm_remove(&f, 0x18000, 0x19000) == 0);
+        CHECK(vm_remove(&f, 0x1D000, 0x1F000) == 0);
+        CHECK(vm_find_free(&f, 2 * PG, 0x19000, 0x20000) == 0x1D000);
+        CHECK(vm_covered(&f, 0x13000, 0x1E000) == 4 * PG + PG);
+        vm_free(&f);
+    }
+
+    /* The fallback must find a gap crossing the top-down search's base. */
+    {
+        vm_space_t f = {0};
+
+        vm_init(&f);
+        CHECK(vm_insert(&f, 0x10000, 0x18000, VM_PROT_READ, VM_ANON) == 0);
+        CHECK(vm_insert(&f, 0x20000, 0x28000, VM_PROT_READ, VM_ANON) == 0);
+        CHECK(vm_find_mmap(&f, 8 * PG, 0x10000, 0x1C000, 0x28000) == 0x18000);
+        CHECK(vm_find_mmap(&f, 9 * PG, 0x10000, 0x1C000, 0x28000) == 0);
+        vm_free(&f);
+    }
+
+    /* Stack growth leaves Linux's 256-page gap above another mapping. */
+    {
+        vm_space_t s = {0};
+
+        vm_init(&s);
+        s.stack_limit = 0x10000;
+        CHECK(vm_insert(&s, 0x10000, 0x20000, VM_PROT_READ, VM_ANON) == 0);
+        CHECK(vm_insert(&s, 0x200000, 0x201000, VM_PROT_READ | VM_PROT_WRITE, VM_STACK) == 0);
+        CHECK(vm_grow_stack(&s, 0x20000 + VM_STACK_GUARD_GAP - PG, 0xFFFFFFFFu) == 0);
+        CHECK(vm_grow_stack(&s, 0x20000 + VM_STACK_GUARD_GAP, 0xFFFFFFFFu) == 1);
+        vm_free(&s);
+    }
 }
 
 /**
@@ -524,54 +632,53 @@ int main(void)
         vm_free(&m);
     }
 
-    /* mprotect. */
+    /* mprotect: a private region with a page written (`anon`) keeps its
+     * charge (VM_PROT_ACCOUNT) as it stops and starts being writable, so its
+     * pieces join again; one first made writable by mprotect takes it. */
     {
         vm_space_t p = {0};
+        const uint32_t ro = VM_PROT_READ | VM_PROT_ACCOUNT;
         vma_t *r;
 
         vm_init(&p);
-        CHECK(vm_insert(&p, 0x50000, 0x58000, VM_PROT_READ | VM_PROT_WRITE, VM_ANON) == 0);
+        CHECK(vm_insert(&p, 0x50000, 0x58000, ro | VM_PROT_WRITE, VM_ANON) == 0);
+        vm_find(&p, 0x50000)->anon = 1;
         CHECK(vm_protect(&p, 0x52000, 0x54000, VM_PROT_READ) == 0);
         CHECK(p.count == 3);
         r = vm_find(&p, 0x52000);
-        CHECK(r != NULL && r->start == 0x52000 && r->end == 0x54000 && r->prot == VM_PROT_READ);
+        CHECK(r != NULL && r->start == 0x52000 && r->end == 0x54000 && r->prot == ro);
         r = vm_find(&p, 0x54000);
-        CHECK(r != NULL && r->start == 0x54000 && r->prot == (VM_PROT_READ | VM_PROT_WRITE));
+        CHECK(r != NULL && r->start == 0x54000 && r->prot == (ro | VM_PROT_WRITE));
         CHECK(vm_protect(&p, 0x52000, 0x54000, VM_PROT_READ | VM_PROT_WRITE) == 0);
         CHECK(p.count == 1 && region_at(&p, 0)->start == 0x50000 &&
               region_at(&p, 0)->end == 0x58000);
         CHECK(vm_protect(&p, 0x57000, 0x58000, 0) == 0);
-        CHECK(vm_insert(&p, 0x58000, 0x5A000, VM_PROT_READ, VM_ANON) == 0);
+        CHECK(vm_insert(&p, 0x58000, 0x5A000, ro, VM_ANON) == 0);
+        vm_find(&p, 0x58000)->anon = 1;
         CHECK(vm_protect(&p, 0x56000, 0x59000, VM_PROT_READ) == 0);
         r = vm_find(&p, 0x56000);
-        CHECK(r != NULL && r->start == 0x56000 && r->end == 0x5A000 && r->prot == VM_PROT_READ);
+        CHECK(r != NULL && r->start == 0x56000 && r->end == 0x5A000 && r->prot == ro);
         CHECK(vm_insert(&p, 0x5B000, 0x5C000, VM_PROT_READ, VM_ANON) == 0);
         CHECK(vm_protect(&p, 0x59000, 0x5C000, 0) == -1); /* 0x5A000 is a gap */
         r = vm_find(&p, 0x59000);
-        CHECK(r != NULL && r->prot == VM_PROT_READ);
+        CHECK(r != NULL && r->prot == ro);
         CHECK(vm_protect(&p, 0x40000, 0x41000, 0) == -1); /* nothing mapped */
+        CHECK(vm_protect(&p, 0x5B000, 0x5C000, VM_PROT_WRITE) == 0);
+        r = vm_find(&p, 0x5B000);
+        CHECK(r != NULL && r->prot == (VM_PROT_WRITE | VM_PROT_ACCOUNT));
+        CHECK(vm_insert(&p, 0x60000, 0x61000, VM_PROT_NORESERVE, VM_ANON) == 0);
+        CHECK(vm_insert(&p, 0x62000, 0x63000, VM_PROT_READ, VM_SHARED) == 0);
+        CHECK(vm_protect(&p, 0x60000, 0x61000, VM_PROT_WRITE) == 0);
+        CHECK(vm_protect(&p, 0x62000, 0x63000, VM_PROT_WRITE) == 0);
+        r = vm_find(&p, 0x60000);
+        CHECK(r != NULL && r->prot == (VM_PROT_WRITE | VM_PROT_NORESERVE));
+        r = vm_find(&p, 0x62000);
+        CHECK(r != NULL && r->prot == VM_PROT_WRITE);
         vm_free(&p);
     }
 
-    /* The free range. */
-    {
-        vm_space_t f = {0};
-
-        vm_init(&f);
-        CHECK(vm_find_free(&f, 2 * PG, 0x10000, 0x20000) == 0x1E000);
-        CHECK(vm_insert(&f, 0x1C000, 0x20000, VM_PROT_READ, VM_ANON) == 0);
-        CHECK(vm_insert(&f, 0x14000, 0x18000, VM_PROT_READ, VM_HEAP) == 0);
-        CHECK(vm_find_free(&f, 2 * PG, 0x10000, 0x20000) == 0x1A000);
-        CHECK(vm_find_free(&f, 5 * PG, 0x10000, 0x20000) == 0);
-        CHECK(vm_find_free(&f, 4 * PG, 0x10000, 0x20000) == 0x18000);
-        CHECK(vm_insert(&f, 0x18000, 0x19000, VM_PROT_READ, VM_ANON) == 0);
-        CHECK(vm_find_free(&f, 4 * PG, 0x10000, 0x20000) == 0x10000);
-        CHECK(vm_remove(&f, 0x18000, 0x19000) == 0);
-        CHECK(vm_remove(&f, 0x1D000, 0x1F000) == 0);
-        CHECK(vm_find_free(&f, 2 * PG, 0x19000, 0x20000) == 0x1D000);
-        CHECK(vm_covered(&f, 0x13000, 0x1E000) == 4 * PG + PG);
-        vm_free(&f);
-    }
+    run_account_drop();
+    run_mapping_edges();
 
     {
         vm_space_t f = {0};

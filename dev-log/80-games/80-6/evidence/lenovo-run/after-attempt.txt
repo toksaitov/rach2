@@ -1,0 +1,13 @@
+bootctl: candidate: first sector 11848, 8192 sectors in 8192 clusters, 4194304 bytes
+bootctl: fallback: first sector 2053, 8192 sectors in 8192 clusters, 4194304 bytes
+bootctl: fallback: runs: 2053+4096 20040+4096
+bootctl: grubenv: first sector 10275, 2 sectors in 2 clusters, 1024 bytes
+bootctl: boot.cfg: first sector 10259, 16 sectors in 16 clusters, 8192 bytes
+bootctl: saved_entry: fallback
+bootctl: next_entry: empty (a trial was consumed)
+bootctl: trial root: GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial2653/root-2961387c696576a3.img
+bootctl: booted: trialroot, the candidate's kernel on a root image
+rach2.rootimage=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial2653/root-2961387c696576a3.img rach2.slot=trialroot rach2.boot=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,1 rach2.disk=ahci rach2.netconsole rach2.ip=none rach2.console=term intel_iommu=off intremap=off rach2.trace=enosys
+ 18:01:24 up 9 min,  0 users,  load average: 0.81, 1.96, 1.16
+hda ready 1 playing 0
+vol 1:1

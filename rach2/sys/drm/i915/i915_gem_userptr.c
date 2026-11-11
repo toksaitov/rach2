@@ -40,8 +40,10 @@ void i915_gem_userptr_put_pages(struct drm_i915_gem_object *obj)
  * copy-on-write break, a page dropped, or the end of the address space.
  * The bindings are revoked first, as Linux's did before the pages went: an
  * unpinned one is undone, and a pinned one is pointed at the scratch page
- * until its last pin goes. Then the frames are let go, or, while a pin
- * still holds them, marked stale, to go with its last. Does not sleep.
+ * until its last pin goes. A binding the GPU still uses keeps its entries,
+ * and with them the frames, until the work is done, as Linux keeps the
+ * pinned pages of a busy object. Then the frames are let go, or, while a
+ * pin still holds them, marked stale, to go with its last. Does not sleep.
  */
 static void userptr_invalidate(struct mmn_range *r, int event, uintptr_t start, uintptr_t end)
 {
@@ -82,8 +84,13 @@ int32_t i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
     int tries, err;
 
     if (obj->userptr.stale) {
-        /* The unpinned bindings of the old frames go, and with the last
-         * pin the frames; a pinned binding keeps them. */
+        /* The unpinned bindings of the old frames go once the GPU is done
+         * with them, and with the last pin the frames; a pinned binding
+         * keeps them. */
+        err = i915_gem_object_wait_idle(obj, 1);
+        if (err != 0) {
+            return err;
+        }
         (void)i915_gem_object_unbind(obj);
         if (obj->userptr.stale) {
             return -EAGAIN;
@@ -98,10 +105,23 @@ int32_t i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
     }
     for (tries = 0; tries < USERPTR_PIN_TRIES; tries++) {
         seq = obj->userptr.range.seq;
-        err = paging_pin_range(obj->userptr.range.mm, start, end, 1, frames);
+        err = paging_pin_range(obj->userptr.range.mm, start, end, PIN_WRITE, frames);
         if (err != 0) {
             kfree(frames);
             return err;
+        }
+        if (seq == obj->userptr.range.seq && obj->frames) {
+            /* Another caller pinned the range while this one slept: its
+             * frames serve, unless a change has made them stale since. */
+            for (i = 0; i < n; i++) {
+                frame_unpin(frames[i]);
+            }
+            kfree(frames);
+            if (obj->userptr.stale) {
+                return -EAGAIN;
+            }
+            obj->pages_pin_count++;
+            return 0;
         }
         if (seq == obj->userptr.range.seq) {
             obj->frames = frames;
@@ -151,10 +171,12 @@ static int32_t probe_range(struct mm *mm, uintptr_t addr, uintptr_t len)
  * caller's memory, cached in the LLC, with a handle. ENODEV on a part
  * without an LLC; EINVAL for an unknown flag, no bytes, or a pointer or
  * size not of whole pages; E2BIG for a size past what an object holds;
- * EFAULT for a range outside user space, or with PROBE one not wholly in
- * memory with pages; ENODEV for UNSYNCHRONIZED, which Linux 6.12 refuses
- * to everyone, and for READ_ONLY, since Haswell's GTT has no read-only
- * entries (Linux's has_read_only); ENOMEM. Its pages are pinned when it is
+ * EFAULT for a range that ends past user space, Linux's access_ok, which
+ * passes a pointer of 0 that the pin at the object's first use refuses, or
+ * with PROBE one not wholly in memory with pages; ENODEV for
+ * UNSYNCHRONIZED, which Linux 6.12 refuses to everyone, and for READ_ONLY,
+ * since Haswell's GTT has no read-only entries (Linux's has_read_only);
+ * ENOMEM. Its pages are pinned when it is
  * first used, by the address space that made it alone. PRIME does not
  * export it, as Linux's i915_gem_userptr_dmabuf_export.
  */
@@ -173,7 +195,7 @@ int32_t i915_gem_userptr_ioctl(struct drm_device *dev, void *data, struct drm_fi
         ~(I915_USERPTR_READ_ONLY | I915_USERPTR_UNSYNCHRONIZED | I915_USERPTR_PROBE)) {
         return -EINVAL;
     }
-    if (args->user_size > (uint64_t)(size_t)-1) {
+    if (args->user_size > SHMEM_MAX_SIZE || args->user_size > (uint64_t)(size_t)-1) {
         return -E2BIG;
     }
     if (!args->user_size) {
@@ -183,7 +205,7 @@ int32_t i915_gem_userptr_ioctl(struct drm_device *dev, void *data, struct drm_fi
         return -EINVAL;
     }
     if (args->user_ptr > (uintptr_t)-1 ||
-        !user_range_ok((uintptr_t)args->user_ptr, (size_t)args->user_size) || !mm) {
+        !user_span_ok((uintptr_t)args->user_ptr, (size_t)args->user_size) || !mm) {
         return -EFAULT;
     }
     if (args->flags & (I915_USERPTR_UNSYNCHRONIZED | I915_USERPTR_READ_ONLY)) {
@@ -200,6 +222,7 @@ int32_t i915_gem_userptr_ioctl(struct drm_device *dev, void *data, struct drm_fi
         return -ENOMEM;
     }
     obj->userptr.ptr = (uintptr_t)args->user_ptr;
+    obj->userptr.set = 1;
     obj->base.no_export = 1;
     mmn_register(mm, &obj->userptr.range, obj->userptr.ptr,
                  obj->userptr.ptr + (uintptr_t)args->user_size, &userptr_mmn_ops, obj);

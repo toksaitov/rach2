@@ -1284,4 +1284,29 @@ struct udmabuf_create_list {
 #define UDMABUF_CREATE      UAPI_IOW('u', 0x42, struct udmabuf_create)
 #define UDMABUF_CREATE_LIST UAPI_IOW('u', 0x43, struct udmabuf_create_list)
 
+/* ------------------------------------------------------------------------
+ * vgem: vgem_drm.h
+ */
+
+#define VGEM_FENCE_WRITE 0x1
+
+/* VGEM_FENCE_ATTACH: a fence on buffer `handle`, a writer's with
+ * VGEM_FENCE_WRITE and a reader's without; its id comes back in
+ * `out_fence`. */
+struct drm_vgem_fence_attach {
+    uint32_t handle;
+    uint32_t flags;
+    uint32_t out_fence;
+    uint32_t pad;
+};
+
+/* VGEM_FENCE_SIGNAL: signal fence `fence`; `flags` is 0. */
+struct drm_vgem_fence_signal {
+    uint32_t fence;
+    uint32_t flags;
+};
+
+#define DRM_IOCTL_VGEM_FENCE_ATTACH DRM_IOWR(DRM_COMMAND_BASE + 0x1, struct drm_vgem_fence_attach)
+#define DRM_IOCTL_VGEM_FENCE_SIGNAL DRM_IOW(DRM_COMMAND_BASE + 0x2, struct drm_vgem_fence_signal)
+
 #endif /* _DRM_UAPI_H_ */

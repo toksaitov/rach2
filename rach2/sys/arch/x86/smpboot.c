@@ -148,6 +148,36 @@ static uint32_t trampoline_root(void)
 #endif
 }
 
+int smpboot_bios_restart_ready(void)
+{
+    return trampoline_free;
+}
+
+/* CR4's global pages and process-context identifiers: clearing PGE drops
+ * every global translation, and PCIDE set would make the restart's clearing
+ * of CR0.PG fault, as Linux's `load_trampoline_pgtable` says. */
+#define CR4_PGE   0x00000080u
+#define CR4_PCIDE 0x00020000u
+
+void smpboot_bios_restart(void)
+{
+    uintptr_t root, cr4;
+
+    if (!trampoline_free) {
+        return;
+    }
+    k_memcpy(phys_to_virt(TRAMPOLINE_PHYS), bios_restart,
+             (size_t)((uintptr_t)bios_restart_end - (uintptr_t)bios_restart));
+    root = trampoline_root();
+    cr4 = read_cr4() & ~(uintptr_t)(CR4_PGE | CR4_PCIDE);
+    __asm__ __volatile__("mov %0, %%cr4\n\t"
+                         "mov %1, %%cr3\n\t"
+                         "jmp *%2"
+                         :
+                         : "r"(cr4), "r"(root), "r"((uintptr_t)TRAMPOLINE_PHYS)
+                         : "memory");
+}
+
 /**
  * The boot processor is index 0, and the MADT's other enabled processors
  * follow in its order. Each refusal leaves the machine on one processor, or
@@ -302,4 +332,9 @@ uint32_t smpboot_apic_id(int cpu)
 void platform_cpu_ipi(int cpu)
 {
     lapic_send_ipi(cpu_apic[cpu], IPI_VECTOR);
+}
+
+void platform_cpu_nmi(int cpu)
+{
+    lapic_send_nmi(cpu_apic[cpu]);
 }

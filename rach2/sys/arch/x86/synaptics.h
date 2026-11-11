@@ -10,7 +10,9 @@
  * and moves the mouse device's pointer as Linux's mousedev does. The quirks
  * Linux chooses by the PS/2 mouse's PNP ID apply, and a pad with a
  * pass-through port carries the packets of the device behind it, which
- * ps2mouse.c reports.
+ * ps2mouse.c reports. The protocol SynRelPS/2 sets the pad up in its
+ * relative mode instead, whose three-byte packets ps2mouse.c reports as a
+ * mouse's.
  */
 
 #include "../../lib/kint.h"
@@ -37,6 +39,41 @@ struct ps2io;
  */
 int synaptics_init(void);
 
+/**
+ * Set a Synaptics pad up in relative mode, as Linux's
+ * `synaptics_init_relative` does: the knock, the reset and the queries, the
+ * quirks of its coordinates, and the mode byte `synaptics_init` sends but
+ * without absolute mode or the advanced gestures, which leaves the pad
+ * sending a mouse's three-byte packets; then the Toshiba quirk's rate. The
+ * caller registers the relative event device, with the buttons of
+ * `synaptics_relative_caps` and the version `synaptics_model`, gives it
+ * the rate through `synaptics_set_rate`, and adds `synaptics_sysfs_add`'s
+ * file. Returns 1 when the pad is set up, 0 when no Synaptics pad
+ * answered, or -1 when a query or the mode failed. Inside a run of
+ * commands, or during the bring-up.
+ */
+int synaptics_init_relative(void);
+
+/** The buttons a pad set up by `synaptics_init_relative` lacks, as Linux's
+ * `set_input_params` gives them: MOUSE_NO_RIGHT and MOUSE_NO_MIDDLE for a
+ * ClickPad, which reports the left button alone, and MOUSE_NO_MIDDLE for
+ * a pad without the middle button's capability. */
+unsigned int synaptics_relative_caps(void);
+
+/** The pad's model as Linux encodes it for its event device's version:
+ * the model ID's sensor byte and low byte. */
+uint16_t synaptics_model(void);
+
+/**
+ * Add the `disable_gesture` file of a pad in relative mode with firmware 4
+ * or later to the directory `dir`, serio1's, as Linux's synaptics.c makes
+ * it: it reads 1 while the mode byte turns the pad's own tap gestures off,
+ * and a write of 0 or 1 sends the mode again with that bit. A callback of
+ * an earlier set-up returns -ENODEV. Returns 0 or the -errno of
+ * `sysfs_add_attr`.
+ */
+int synaptics_sysfs_add(int dir);
+
 /* What `synaptics_byte` made of a byte, Linux's `psmouse_ret_t`. */
 #define SYNAPTICS_BAD  -1 /* it broke the packet's form */
 #define SYNAPTICS_GOOD 0  /* the packet goes on */
@@ -56,8 +93,14 @@ int synaptics_byte(uint8_t data);
  * looks for a device's announcement. */
 int synaptics_packet_start(void);
 
-/** Whether the pad set up has a pass-through port, Linux's
- * SYN_CAP_PASS_THROUGH, on which `synaptics_pt` reaches the guest. */
+/** Drop the packet under way, as Linux's `__psmouse_set_state` does at
+ * each change of the port's state: when a run of commands begins and ends.
+ * In interrupt context or with interrupts off. */
+void synaptics_packet_restart(void);
+
+/** Whether the pad set up, in either mode, has a pass-through port,
+ * Linux's SYN_CAP_PASS_THROUGH, on which `synaptics_pt` reaches the guest
+ * in absolute mode. */
 int synaptics_has_pass_through(void);
 
 /**
@@ -83,7 +126,21 @@ void synaptics_pt_activate(int packet_size);
  */
 int synaptics_reconnect(void);
 
-/** Remove the pad's event device, before the port is probed anew. */
+/**
+ * Remove the pad's event device and put the pad back in relative mode with
+ * gestures on, as Linux's `synaptics_disconnect` does through
+ * `synaptics_reset`, before the port is probed anew or switched to another
+ * protocol. Inside a run of commands.
+ */
 void synaptics_disconnect(void);
+
+/**
+ * Linux's `synaptics_set_rate`, the pad's own for psmouse: the mode's bit
+ * of 80 packets a second set for a `rate` of 80 or more and cleared below,
+ * and the mode sent. Returns the rate the pad reports at, 80 or 40, which
+ * the caller keeps as the port's. Inside a run of commands, or during the
+ * bring-up.
+ */
+unsigned int synaptics_set_rate(unsigned int rate);
 
 #endif /* _SYNAPTICS_H_ */

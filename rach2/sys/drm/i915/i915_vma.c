@@ -261,8 +261,9 @@ void i915_vma_update_fenceable(struct i915_vma *vma)
 
 /** Write the entries of `vma`'s view at the object's cache level in the
  * global GTT and, at the same offset, in the aliasing PPGTT, which every
- * context's batches see, as Linux's aliasing_gtt_bind_vma: 0, or
- * `i915_ggtt_insert`'s or `i915_ppgtt_insert`'s error. */
+ * context's batches see, as Linux's aliasing_gtt_bind_vma; a remapped
+ * view's pages are its rows', as Linux's intel_remap_pages lists them. 0,
+ * or `i915_ggtt_insert`'s or `i915_ppgtt_insert`'s error. */
 static int32_t vma_bind(struct drm_i915_private *i915, struct i915_vma *vma)
 {
     struct drm_i915_gem_object *obj = vma->obj;
@@ -275,7 +276,10 @@ static int32_t vma_bind(struct drm_i915_private *i915, struct i915_vma *vma)
         uint64_t at = vma->start + ((uint64_t)done << PAGE_SHIFT);
 
         for (i = 0; i < k; i++) {
-            chunk[i] = obj->frames[vma->view_offset + done + i];
+            uint32_t k_at = done + i;
+
+            chunk[i] = obj->frames[vma->remap.width ? I915_REMAP_PAGE(&vma->remap, k_at)
+                                                    : vma->view_offset + k_at];
         }
         err = i915_ggtt_insert(i915, at, chunk, k, obj->cache_level);
         if (err == 0) {
@@ -298,15 +302,29 @@ static int32_t vma_bind(struct drm_i915_private *i915, struct i915_vma *vma)
     return 0;
 }
 
+/** Whether the remapped views `a` and `b` are one, NULL being none. */
+static int remap_same(const struct i915_remap_info *a, const struct i915_remap_info *b)
+{
+    uint32_t aw = a ? a->width : 0, bw = b ? b->width : 0;
+
+    if (aw == 0 || bw == 0) {
+        return aw == bw;
+    }
+    return a->offset == b->offset && a->width == b->width && a->height == b->height &&
+           a->src_stride == b->src_stride;
+}
+
 /** The binding of `obj`'s view of `view_pages` pages from `view_offset`, 0
- * pages for the whole object, or NULL. */
+ * pages for the whole object, or of the remapped view `remap` when it is
+ * not NULL; or NULL. */
 static struct i915_vma *vma_lookup(struct drm_i915_gem_object *obj, uint32_t view_offset,
-                                   uint32_t view_pages)
+                                   uint32_t view_pages, const struct i915_remap_info *remap)
 {
     struct i915_vma *v;
 
     for (v = obj->vmas; v; v = v->obj_next) {
-        if (v->view_offset == view_offset && v->view_pages == view_pages) {
+        if (v->view_offset == view_offset && v->view_pages == view_pages &&
+            remap_same(&v->remap, remap)) {
             return v;
         }
     }
@@ -314,22 +332,66 @@ static struct i915_vma *vma_lookup(struct drm_i915_gem_object *obj, uint32_t vie
 }
 
 /**
- * The binding of the view that `i915_vma_pin` may reuse, in `*out`, or NULL
+ * Before a binding that does not serve is undone, wait for the GPU to
+ * finish with its object, as Linux's unbind does in i915_vma_sync: 0 when
+ * the caller may look again, -ENOSPC under I915_PIN_NONBLOCK, or -EINTR
+ * for a signal.
+ */
+static int32_t vma_wait_idle(struct drm_i915_gem_object *obj, uint32_t flags)
+{
+    if (flags & I915_PIN_NONBLOCK) {
+        return -ENOSPC;
+    }
+    return i915_gem_object_wait_idle(obj, 1);
+}
+
+/*
+ * What `vma_create` makes: the view, partial or remapped, the I915_PIN_
+ * flags, the alignment, a power of two of at least a page, the least size
+ * of the node, and the lowest offset, or with I915_PIN_OFFSET_FIXED the
+ * offset.
+ */
+struct vma_place {
+    uint32_t view_offset;
+    uint32_t view_pages;
+    struct i915_remap_info remap;
+    uint32_t flags;
+    uint64_t align;
+    uint64_t size;
+    uint64_t offset;
+};
+
+/**
+ * The binding of the view `p` names, partial or remapped, that
+ * `i915_vma_pin` may reuse, in `*out`, or NULL
  * once a binding that does not serve is undone: one on the scratch page
  * since a userptr object's pages changed, one outside the aperture when it
- * is asked for, or one not aligned to `align`. 0; -EAGAIN when the first
- * kind is held, -ENOSPC when another is.
+ * is asked for, or one not aligned to `p`'s alignment. An unpinned one that
+ * the GPU still uses is waited for first and looked up again, since the
+ * wait sleeps. 0; -EAGAIN when the first kind is held, -ENOSPC when another
+ * is; or the wait's error.
  */
-static int32_t vma_existing(struct drm_i915_gem_object *obj, uint32_t view_offset,
-                            uint32_t view_pages, uint32_t flags, uint32_t align,
+static int32_t vma_existing(struct drm_i915_gem_object *obj, const struct vma_place *p,
                             struct i915_vma **out)
 {
-    struct i915_vma *vma = vma_lookup(obj, view_offset, view_pages);
+    struct i915_vma *vma =
+        vma_lookup(obj, p->view_offset, p->view_pages, p->remap.width ? &p->remap : 0);
+    uint32_t flags = p->flags;
+    uint64_t align = p->align;
     int32_t err;
 
     *out = 0;
     if (!vma) {
         return 0;
+    }
+    if ((obj->userptr.stale || ((flags & I915_PIN_MAPPABLE) && !vma->mappable) ||
+         (vma->start & (align - 1))) &&
+        vma->pin_count == 0 && i915_gem_object_is_active(obj)) {
+        err = vma_wait_idle(obj, flags);
+        if (err != 0) {
+            return err;
+        }
+        return vma_existing(obj, p, out);
     }
     if (obj->userptr.stale) {
         /* Its entries map the scratch page since the program's pages
@@ -344,20 +406,6 @@ static int32_t vma_existing(struct drm_i915_gem_object *obj, uint32_t view_offse
     *out = vma;
     return 0;
 }
-
-/*
- * What `vma_create` makes: the view, the I915_PIN_ flags, the alignment, a
- * power of two of at least a page, the least size of the node, and the
- * lowest offset, or with I915_PIN_OFFSET_FIXED the offset.
- */
-struct vma_place {
-    uint32_t view_offset;
-    uint32_t view_pages;
-    uint32_t flags;
-    uint64_t align;
-    uint64_t size;
-    uint64_t offset;
-};
 
 /**
  * A new binding of the view `p` names, pinned, in `*out`: the object's
@@ -381,6 +429,7 @@ static int32_t vma_create(struct drm_i915_gem_object *obj, const struct vma_plac
     vma->obj = obj;
     vma->view_offset = p->view_offset;
     vma->view_pages = p->view_pages;
+    vma->remap = p->remap;
     vma->size = size = (uint64_t)(p->view_pages ? p->view_pages : pages) << PAGE_SHIFT;
     vma->fence_size = i915_gem_fence_size(i915, (uint32_t)size, obj->tiling, obj->stride);
     vma->fence_alignment = i915_gem_fence_alignment(i915, obj->tiling);
@@ -401,7 +450,7 @@ static int32_t vma_create(struct drm_i915_gem_object *obj, const struct vma_plac
         } else {
             err = ggtt_room(i915, vma->node_size, align, p->offset, p->flags, &vma->start);
         }
-        if (err == 0 && vma_lookup(obj, p->view_offset, p->view_pages)) {
+        if (err == 0 && vma_lookup(obj, p->view_offset, p->view_pages, &p->remap)) {
             err = 1;
         }
         if (err == 0) {
@@ -425,16 +474,38 @@ static int32_t vma_create(struct drm_i915_gem_object *obj, const struct vma_plac
     return 0;
 }
 
-int32_t i915_vma_pin(struct drm_i915_gem_object *obj, uint32_t view_offset, uint32_t view_pages,
-                     uint32_t flags, uint32_t align, struct i915_vma **out)
+/** Pin the binding of the view `p` names, reused or made, in `*out`: 0,
+ * or the errors of `vma_existing` and `vma_create`. */
+static int32_t vma_pin_place(struct drm_i915_gem_object *obj, const struct vma_place *p,
+                             struct i915_vma **out)
 {
     struct drm_i915_private *i915 = to_i915(obj->base.dev);
-    uint32_t pages = (uint32_t)(obj->base.size >> PAGE_SHIFT);
-    struct vma_place p;
     struct i915_vma *vma;
     int32_t err;
 
-    if (view_pages && ((uint64_t)view_offset + view_pages > pages || view_pages == pages)) {
+    do {
+        err = vma_existing(obj, p, &vma);
+        if (err != 0) {
+            return err;
+        }
+        if (vma) {
+            vma->pin_count++;
+            lru_bump(i915, vma);
+            *out = vma;
+            return 0;
+        }
+        err = vma_create(obj, p, out);
+    } while (err == 1);
+    return err;
+}
+
+int32_t i915_vma_pin(struct drm_i915_gem_object *obj, uint32_t view_offset, uint32_t view_pages,
+                     uint32_t flags, uint32_t align, struct i915_vma **out)
+{
+    uint32_t pages = (uint32_t)(obj->base.size >> PAGE_SHIFT);
+    struct vma_place p;
+
+    if (view_pages && (uint64_t)view_offset + view_pages > pages) {
         return -EINVAL;
     }
     if (align < I915_GTT_PAGE_SIZE) {
@@ -445,22 +516,31 @@ int32_t i915_vma_pin(struct drm_i915_gem_object *obj, uint32_t view_offset, uint
     p.view_pages = view_pages;
     p.flags = flags & ~(I915_PIN_OFFSET_FIXED | I915_PIN_OFFSET_BIAS);
     p.align = align;
-    do {
-        err = vma_existing(obj, view_offset, view_pages, flags, align, &vma);
-        if (err != 0) {
-            return err;
-        }
-        if (vma) {
-            vma->pin_count++;
-            lru_bump(i915, vma);
-            *out = vma;
-            return 0;
-        }
-        err = vma_create(obj, &p, out);
-    } while (err == 1);
-    return err;
+    return vma_pin_place(obj, &p, out);
 }
 
+int32_t i915_vma_pin_remapped(struct drm_i915_gem_object *obj, const struct i915_remap_info *remap,
+                              uint32_t flags, uint32_t align, struct i915_vma **out)
+{
+    uint32_t pages = (uint32_t)(obj->base.size >> PAGE_SHIFT);
+    struct vma_place p;
+
+    if (remap->width == 0 || remap->height == 0 || remap->width > remap->src_stride ||
+        (uint64_t)remap->offset + (uint64_t)(remap->height - 1u) * remap->src_stride +
+                remap->width >
+            pages) {
+        return -EINVAL;
+    }
+    if (align < I915_GTT_PAGE_SIZE) {
+        align = I915_GTT_PAGE_SIZE;
+    }
+    k_memset(&p, 0, sizeof(p));
+    p.view_pages = remap->width * remap->height;
+    p.remap = *remap;
+    p.flags = flags & ~(I915_PIN_OFFSET_FIXED | I915_PIN_OFFSET_BIAS);
+    p.align = align;
+    return vma_pin_place(obj, &p, out);
+}
 /** Whether `vma` serves what `a` asks with its alignment `align`, as
  * Linux's i915_vma_misplaced and eb_vma_misplaced ask the other way. */
 static int vma_placed(const struct i915_vma *vma, const struct i915_pin_args *a, uint64_t align)
@@ -498,7 +578,16 @@ int32_t i915_vma_pin_args(struct drm_i915_gem_object *obj, const struct i915_pin
     p.size = a->size;
     p.offset = (a->flags & (I915_PIN_OFFSET_FIXED | I915_PIN_OFFSET_BIAS)) ? a->offset : 0;
     do {
-        vma = vma_lookup(obj, 0, 0);
+        vma = vma_lookup(obj, 0, 0, 0);
+        if (vma && (obj->userptr.stale || !vma_placed(vma, a, align)) && vma->pin_count == 0 &&
+            i915_gem_object_is_active(obj)) {
+            err = vma_wait_idle(obj, a->flags);
+            if (err != 0) {
+                return err;
+            }
+            err = 1; /* look again, since the wait slept */
+            continue;
+        }
         if (vma && (obj->userptr.stale || !vma_placed(vma, a, align))) {
             /* Misplaced, or on the scratch page since a userptr object's
              * pages changed: undone, unless held. */
@@ -567,6 +656,9 @@ int32_t i915_vma_unbind(struct i915_vma *vma)
     if (vma->pin_count) {
         return -EAGAIN;
     }
+    if (i915_gem_object_is_active(obj)) {
+        return -EBUSY;
+    }
     /* As Linux's __i915_vma_evict: programs fault again, the writes through
      * the aperture reach memory, and only then is the fence let go. */
     i915_vma_revoke_mmap(vma);
@@ -609,7 +701,8 @@ struct i915_vma *i915_vma_for_page(struct drm_i915_gem_object *obj, uint32_t pgo
     for (v = obj->vmas; v; v = v->obj_next) {
         uint32_t n = (uint32_t)(v->size >> PAGE_SHIFT);
 
-        if (v->mappable && pgoff >= v->view_offset && pgoff - v->view_offset < n) {
+        if (v->mappable && !v->remap.width && pgoff >= v->view_offset &&
+            pgoff - v->view_offset < n) {
             return v;
         }
     }

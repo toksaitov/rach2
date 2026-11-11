@@ -138,12 +138,13 @@ int rfkill_phy(int index);
 int rfkill_show(int index, int attr, char *out, int cap);
 
 /**
- * Write the `len` bytes at `text`, without a final newline, to attribute
- * `attr` of switch `index`: `soft` takes 0 or 1, `state` takes 0, which
- * blocks, or 1, which unblocks, as Linux's do. Process context under the
- * kernel lock; the caller has checked privilege. Returns 0, -ENOENT for no
- * such switch, -EINVAL for another attribute or value, or the error of the
- * owner's `set_block`.
+ * Write the `len` bytes at `text`, a number as Linux's kstrtoul reads it
+ * with base 0 (`k_strtoul`), to attribute `attr` of switch `index`: `soft`
+ * takes 0 or 1, `state` takes 0, which blocks, or 1, which unblocks, as
+ * Linux's do. Process context under the kernel lock; the caller has
+ * checked privilege. Returns 0, -ENOENT for no such switch, -EINVAL for
+ * another attribute or value, -ERANGE for a number past an unsigned long,
+ * or the error of the owner's `set_block`.
  */
 int rfkill_store(int index, int attr, const char *text, int len);
 

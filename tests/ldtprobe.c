@@ -239,7 +239,7 @@ static void data_desc(u32 base, u32 limit, u32 *lo, u32 *hi)
  * caller put in EBX, ECX and EDX, which clears its own segment, and its
  * return from the kernel faults.
  */
-__asm__(".text\n"
+__asm__(".pushsection .text\n"
         "ldt_target:\n"
         "    xorl %ecx, %ecx\n"
         "    movw %cs, %cx\n"
@@ -249,7 +249,8 @@ __asm__(".text\n"
         "ldt_clear_self:\n"
         "    movl $123, %eax\n"
         "    int $0x80\n"
-        "    lret\n");
+        "    lret\n"
+        ".popsection\n");
 extern char ldt_target[], ldt_clear_self[];
 
 /** Call `fn` far through the selector `sel`: getpid's result, with the CS

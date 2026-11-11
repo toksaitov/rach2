@@ -10,8 +10,12 @@
 # account for, refusing a file the root already has; then it refuses the root
 # when a library that a program or library of the layer needs is in none of
 # the root's library directories, since nothing resolved the layer's
-# libraries against the root. On x86-64 it adds the Proton launcher and the
-# native games' replays, and on a root with /usr/games puts it on the path.
+# libraries against the root. On x86-64 it adds the Proton launcher as
+# /usr/bin/rach2-game, Crysis's installer as /usr/bin/crysis.sh with its
+# checksum manifests in /usr/share/rach2/crysis, umu-launcher with the Steam
+# Linux Runtime's archive and the native games' replays; on a root with
+# /usr/games it puts that directory on the path. With
+# GNU_WESTON 1 it puts the rebuilt Weston in place of the desktop closure's.
 #
 
 install_debian games
@@ -50,11 +54,25 @@ if [ -d "$TREE/usr/games" ]; then
 fi
 
 if [ "$RACH2_ARCH" = x86_64 ]; then
-    if [ -e "$TREE/usr/bin/rach2-game" ] || [ -L "$TREE/usr/bin/rach2-game" ]; then
-        echo 'gnu: games: /usr/bin/rach2-game already exists' >&2
+    for command in rach2-game crysis.sh; do
+        if [ -e "$TREE/usr/bin/$command" ] || [ -L "$TREE/usr/bin/$command" ]; then
+            echo "gnu: games: /usr/bin/$command already exists" >&2
+            exit 1
+        fi
+    done
+    install -m 0755 "$DIR/games/rach2-game.sh" "$TREE/usr/bin/rach2-game"
+    install -m 0755 "$DIR/games/crysis.sh" "$TREE/usr/bin/crysis.sh"
+    mkdir -p "$TREE/usr/share/rach2/crysis"
+    install -m 0644 "$DIR/games/game.sha256" "$DIR/games/crysis-installers.sha256" \
+        "$TREE/usr/share/rach2/crysis/"
+    # umu-launcher under /opt/umu, with the runtime's archive that
+    # rach2-game --umu unpacks for each user, and its command in the path.
+    install_part umu
+    if [ -e "$TREE/usr/bin/umu-run" ] || [ -L "$TREE/usr/bin/umu-run" ]; then
+        echo 'gnu: games: /usr/bin/umu-run already exists' >&2
         exit 1
     fi
-    install -m 0755 "$DIR/games/rach2-game.sh" "$TREE/usr/bin/rach2-game"
+    ln -s ../../opt/umu/umu-run "$TREE/usr/bin/umu-run"
     # The native games' fixed replays, which the games-native suite and the
     # Lenovo's runs play.
     if [ -e "$TREE/usr/share/games/rach2" ] || [ -L "$TREE/usr/share/games/rach2" ]; then
@@ -64,4 +82,29 @@ if [ "$RACH2_ARCH" = x86_64 ]; then
     mkdir -p "$TREE/usr/share/games/rach2"
     cp -R "$DIR/games/replays" "$TREE/usr/share/games/rach2/replays"
     chmod -R u=rwX,go=rX "$TREE/usr/share/games/rach2"
+fi
+
+# The rebuilt Weston (Readme.md, Weston): every file the desktop closure's
+# weston and libweston-14-0 installed goes, so that the weston part, built
+# from the same source package with Rach2's patches, comes in whole.
+if [ "${GNU_WESTON:-}" = 1 ]; then
+    for p in weston libweston-14-0; do
+        list="$OUT/work/debian/desktop/files/$p"
+        if [ ! -f "$list" ]; then
+            echo "gnu: games: refused: the desktop closure has no $p, which the weston part replaces" >&2
+            exit 1
+        fi
+        while read -r path; do
+            f="$TREE/${path#./}"
+            if [ -L "$f" ] || [ -f "$f" ]; then
+                rm "$f"
+            fi
+        done < "$list"
+    done
+    install_part weston
+    # weston's own library is in its RUNPATH, usr/lib/MULTIARCH/weston.
+    needs "the rebuilt weston" "$TREE/usr/bin/weston" lib usr/lib "usr/lib/$GNU_MULTIARCH" \
+        "usr/lib/$GNU_MULTIARCH/weston"
+    needs "the rebuilt libweston" "$TREE/usr/lib/$GNU_MULTIARCH/libweston-14.so.0.0.2" \
+        lib usr/lib "usr/lib/$GNU_MULTIARCH"
 fi

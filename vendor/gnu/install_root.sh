@@ -34,13 +34,20 @@
 #   va        the video layer's Debian closure, libva, Intel's i965 VA
 #             driver and vainfo (debian/Readme.md)
 #   games     the games layer's Debian closure, which games/install_games.sh
-#             installs (games/Readme.md)
+#             installs (games/Readme.md), on x86-64 /usr/bin/rach2-game,
+#             /usr/bin/crysis.sh with /usr/share/rach2/crysis, umu-launcher
+#             and the Steam Linux Runtime's archive under /opt/umu, and, when
+#             GNU_WESTON is 1, on x86-64, the rebuilt Weston of weston/ in
+#             place of the desktop closure's
 #   kvm       Debian's QEMU and the tests under /opt/kvm-unit-tests and
 #             /opt/kvm-selftests, which kvm/install_kvm.sh installs on x86-64
-#             (kvm/Readme.md)
+#             (kvm/Readme.md), and /usr/sbin/ivshmemd, the ivshmem server of
+#             the GPU test bed (bed/shm/Readme.md), built here
 #   agents    the packages of the agents layer that GNU_AGENTS lists, each as
 #             fetch_agents.sh staged it, on x86-64 only
 #
+# It builds the framed WebSocket fixture as /etude-wsclient and the
+# testbed's vtest relay as /usr/bin/vtestrelay with the layer's compiler.
 # Then it makes /usr/local and its directories, links
 # /usr/bin/chromium-headless-shell, in place of Debian's script, to the
 # browser, and links /bin/bash, /bin/sh, /bin/apropos, /bin/whatis,
@@ -116,6 +123,10 @@ if [ "${GNU_I386:-}" = 1 ]; then
         echo "gnu: install: no i386 layer in $OUT; run make ARCH=x86_64 gnu-i386" >&2
         exit 1
     fi
+fi
+if [ "${GNU_WESTON:-}" = 1 ] && [ ! -d "$OUT/weston" ]; then
+    echo "gnu: install: no $OUT/weston; run make ARCH=x86_64 gnu-weston" >&2
+    exit 1
 fi
 if [ "${GNU_VK_GL_CTS:-}" = 1 ] && [ ! -d "$OUT/vk-gl-cts" ]; then
     echo "gnu: install: no $OUT/vk-gl-cts; run make ARCH=x86_64 gnu-vk-gl-cts" >&2
@@ -282,6 +293,8 @@ fi
 make --no-print-directory -C "$REPO" -f tests/cases/host/products.mk \
     CC="$OUT/cross/bin/$GNU_TARGET-gcc --sysroot=$OUT/root" \
     PREFIX="$TREE" "$TREE/etude-wsclient"
+# The testbed's vtest relay (bed/Readme.md), with the same compiler.
+"$OUT/cross/bin/$GNU_TARGET-gcc" --sysroot="$OUT/root" -O2 -o "$TREE/usr/bin/vtestrelay" "$REPO/bed/vtestrelay.c"
 # The runtime's libstdc++.so.6 is a copy of the cross compiler's library,
 # and the native compiler has the same library of the same GCC with the links
 # and archives a link against it needs, so its copy replaces the runtime's.
@@ -302,7 +315,9 @@ fi
 # SKIP does not name and no earlier such layer installed. A package an earlier
 # layer of the build's architecture installed is left out of a later one when
 # its version is the same and refused when it is not; WORK/debian.packages
-# lists each package and version those layers installed.
+# lists each package and version those layers installed. A later layer's
+# package that the i386 layer installed at the same version, which
+# WORK/i386.packages lists, shares its files with it as above.
 install_debian()
 {
     meta="$OUT/work/debian/$1"
@@ -504,6 +519,7 @@ fi
 
 . "$DIR/games/install_games.sh"
 . "$DIR/kvm/install_kvm.sh"
+"$OUT/cross/bin/$GNU_TARGET-gcc" --sysroot="$OUT/root" -std=c99 -O2 -o "$TREE/usr/sbin/ivshmemd" "$REPO/bed/ivshmemd.c"
 
 for name in ${GNU_AGENTS:-}; do
     install_part "agents/$name"

@@ -1,4 +1,4 @@
-.Dd November 10, 2026
+.Dd November 11, 2026
 .Dt BRK 2
 .Os
 .Sh NAME
@@ -257,7 +257,7 @@ or exit.
 shows the mapping shared, with the path of the descriptor, and
 .Pa /proc/ Ns Ar pid Ns Pa /smaps
 gives its
-.Ql io pf
+.Ql pf io
 flags.
 .El
 .Pp
@@ -276,6 +276,16 @@ private writable mapping each with a frame of its own, as a write would,
 and the others as a read would, and stops at the first page no memory can
 be had for, leaving the rest to their first touch.
 A device object's pages are always mapped at their first touch.
+.Pp
+.Dv MAP_NORESERVE
+reserves nothing, and nothing else does, since the kernel keeps no commit
+count; it marks the mapping
+.Ql nr
+and never
+.Ql ac
+in the VmFlags of
+.Pa /proc/PID/smaps ,
+as Linux's default overcommit policy does.
 .Pp
 Shared memory, anonymous, a file on tmpfs or the pages in memory of a file
 on ext2, has pages up to 16 TiB less a page, the most a file in memory
@@ -300,14 +310,14 @@ a range already in use is refused.
 Otherwise
 .Fa addr ,
 rounded down to its page, is used when its range is free and ends below
-the stack's growth limit, and without such a hint the kernel takes the
+the stack's growth limit by at least 256 pages, and without such a hint the kernel takes the
 highest free range below
 .Ql 0xB0000000
 on i686 or
 .Ql 0x00007F0000000000
 on x86-64, down to the bottom of user space, below the heap's top as well,
-and when none is free there, the highest free range between that base and
-the stack's growth limit, so the ranges
+and when none is free there, the lowest free range over the whole space
+below the same stack gap, including a range crossing that base, so the ranges
 .Fn munmap
 frees are used again.
 .Pp
@@ -344,6 +354,20 @@ Write permission also grants read permission, since an x86 page table has no wri
 .Dv PROT_NONE
 (zero) denies access.
 Execute permission also grants read permission.
+A mapping made or changed with write or execute but without
+.Dv PROT_READ
+is still marked unreadable, as Linux keeps it without
+.Dv VM_READ :
+.Pa /proc/PID/maps
+shows no
+.Ql r ,
+.Xr process_vm_readv 2
+cannot read it, and
+.Xr vmsplice 2
+takes a page of it only while the page is present in the mapping and is
+not the shared zero page: an anonymous page once the process has written
+it, and a page of a file once any access has brought it in, a read
+through the mapping among them, which its write permission grants.
 On i686, whose page tables have no execute bit, it is not checked
 separately from read on a fault; on x86-64 a page mapped without
 .Dv PROT_EXEC
@@ -366,6 +390,22 @@ on x86-64.
 The call removes, trims or splits overlapping VMAs and frees their
 resident frames in the range.
 Unmapped pages and pages never accessed require no frame release.
+A range that meets a mapping
+.Xr mseal 2
+sealed is refused with
+.Er EPERM
+and nothing is unmapped; so is a
+.Dv MAP_FIXED
+mapping over one, a
+.Fn brk
+that would shrink the heap through one, which leaves the break as it is,
+and an
+.Fn mremap
+of one or with
+.Dv MREMAP_FIXED
+onto one.
+.Xr shmdt 2
+of a sealed attachment leaves it and returns 0, as on Linux.
 .Ss Protection
 .Fn mprotect ,
 kernel call 125, gives the range beginning at the page-aligned
@@ -399,7 +439,45 @@ served as a private one, may never be made writable:
 refuses write over a range that reaches one with
 .Er EACCES ,
 as Linux does.
-The whole range is checked before anything changes.
+So is execute over a mapping of
+.Xr memfd_secret 2 .
+.Pp
+The call fails with
+.Er ENOMEM ,
+changing nothing, when no mapping holds the first page of the range.
+Otherwise it changes the mappings one after another, as Linux does, and
+the first that cannot change stops it: a page no mapping holds with
+.Er ENOMEM ,
+a mapping that refuses the rights asked with
+.Er EACCES ,
+and a mapping
+.Xr mseal 2
+sealed with
+.Er EPERM ,
+or
+.Er EACCES
+when its allowed rights require that error first.
+The mappings and resident pages before the stop keep the new protection
+and notify their users before the error is returned.
+.Pp
+.Fn mprotect
+also accepts
+.Dv PROT_SEM
+(0x8), which means nothing on x86, and
+.Dv PROT_GROWSDOWN
+(0x01000000), which moves the start of the range down to that of the
+mapping holding it, as glibc asks to make the stack executable; that
+mapping must be the main stack, and any other is refused with
+.Er EINVAL .
+.Dv PROT_GROWSUP
+(0x02000000), and the two together, are refused with
+.Er EINVAL ,
+since no x86 mapping grows up.
+With
+.Dv PROT_EXEC
+alone, where the processor has protection keys, the range takes the
+execute-only key, which is allocated only once the range is known to
+begin in a mapping.
 .Ss Resizing and advice
 .Fn mremap ,
 kernel call 163, resizes the mapping at the page-aligned
@@ -447,6 +525,22 @@ Either splits a mapping the range cuts, as
 .Fn mprotect
 does.
 .Pp
+.Dv MADV_WIPEONFORK
+(18) marks the range so that a child that
+.Xr fork 2
+makes after it gets the mapping without its pages: the child reads zeros
+there, as on Linux, and keeps the mark for its own children.
+It takes only anonymous private memory, of
+.Dv MAP_ANONYMOUS ,
+the heap or the stack, and refuses the rest.
+.Dv MADV_KEEPONFORK
+(19) clears the mark.
+.Pa /proc/ Ns Ar pid Ns Pa /smaps
+gives a marked mapping the
+.Ql wf
+flag.
+Either splits a mapping the range cuts.
+.Pp
 .Dv MADV_GUARD_INSTALL
 (102), which Linux 6.13 added and glibc 2.44 uses for the guard
 below each new thread's stack, makes the range a guard region: its pages
@@ -482,13 +576,31 @@ does, so a guard shows in
 .Pa /proc/ Ns Ar pid Ns Pa /maps
 as an area of its own with the protection it was cut with.
 .Pp
+Over a sealed mapping of anonymous private memory without write, the
+advice that would discard its pages,
+.Dv MADV_DONTNEED ,
+.Dv MADV_DONTNEED_LOCKED ,
+.Dv MADV_FREE ,
+.Dv MADV_DONTFORK ,
+.Dv MADV_WIPEONFORK
+and, as Linux 6.13 adds,
+.Dv MADV_GUARD_INSTALL ,
+stops with
+.Er EPERM ,
+the mappings below it in the range advised first, as on Linux.
+.Pp
 Any other advice Linux defines from
 .Dv MADV_NORMAL
 (0) to
 .Dv MADV_COLLAPSE
 (25) is accepted and changes nothing, except
 .Dv MADV_REMOVE ,
-which is refused.
+which is refused, and
+.Dv MADV_COLD
+(20) and
+.Dv MADV_PAGEOUT
+(21), which are refused over a locked mapping and a device object's, as
+Linux refuses them.
 So is every other number: Linux defines none from 5 to 7, and its
 .Dv MADV_HWPOISON
 (100) and
@@ -527,7 +639,13 @@ The range is rounded out to whole pages and must be covered by mappings,
 with
 .Er ENOMEM
 for a gap.
-A region of device memory is passed over.
+A region of device memory is passed over, and so is one of
+.Xr memfd_secret 2 ,
+on which
+.Fn mlock
+and
+.Fn mlock2
+then fail as that page says.
 .Fn mlockall ,
 call 152, locks every region with
 .Dv MCL_CURRENT ,
@@ -693,7 +811,9 @@ has an unknown bit;
 with
 .Dv MAP_FIXED ,
 .Fa addr
-is not page-aligned.
+is not page-aligned; or the mapping of a file of
+.Xr memfd_secret 2
+is private.
 For
 .Fn mprotect ,
 .Fa addr
@@ -726,7 +846,11 @@ an advice it does not accept, as above, or
 .Dv MADV_FREE
 or
 .Dv MADV_DOFORK
-over a device object's mapping, or
+over a device object's mapping,
+.Dv MADV_COLD
+or
+.Dv MADV_PAGEOUT
+over a locked mapping or a device object's, or
 .Dv MADV_GUARD_INSTALL
 or
 .Dv MADV_GUARD_REMOVE
@@ -753,7 +877,9 @@ A mapping of a file or a device object whose descriptor is not open for
 reading, or a writable shared one whose descriptor is not open for
 writing;
 .Fn mprotect
-asking write of a shared mapping of a file that may never be written.
+asking write of a shared mapping of a file that may never be written, or
+execute of a mapping of
+.Xr memfd_secret 2 .
 .It Er EBUSY
 A shared mapping, through a descriptor open for writing, of a file a loop
 device stands on.
@@ -793,6 +919,14 @@ range lies outside user space, or its split cannot obtain its entries;
 cannot grow a mapping in place without
 .Dv MREMAP_MAYMOVE ,
 or finds no free range.
+.Fn mlock
+and
+.Fn mlock2
+without
+.Dv MLOCK_ONFAULT
+meet a mapping of
+.Xr memfd_secret 2 ,
+whose pages Linux cannot bring in for them, after locking the range.
 Musl also rejects mapping lengths at least
 .Dv PTRDIFF_MAX
 and every public
@@ -807,12 +941,18 @@ memory do.
 .It Er EPERM
 A device object refuses the caller or the range, as
 .Pa /dev/mem
-refuses a caller without privilege and a frame of RAM.
+refuses a caller without privilege and a frame of RAM; the range meets
+a sealed mapping, as above; or an
+.Fn mmap
+of a file of
+.Xr memfd_secret 2
+asks for execute.
 .It Er ESRCH
 The kernel has no current process.
 .El
 .Sh SEE ALSO
 .Xr fork 2 ,
+.Xr mseal 2 ,
 .Xr open 2 ,
 .Xr prlimit64 2 ,
 .Xr mem 4 ,

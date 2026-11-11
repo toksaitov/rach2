@@ -1,0 +1,11 @@
+# The pinned source package of the rebuilt Weston: Debian trixie's weston
+# 14.0.2-1, the version desktop.list installs, from the snapshot of
+# 2026-09-27T08:21:44Z that the desktop layer's fetcher reads
+# (vendor/gnu/debian/fetch_debs.sh). Each line gives a name, version, URL and
+# SHA-256, in the format of ../../sources.txt; build_weston.sh fetches and
+# checks each with ../../debian/fetch_asset.sh. The digests of the archives
+# are those the .dsc lists.
+weston-dsc 14.0.2-1 https://snapshot.debian.org/archive/debian/20260927T082144Z/pool/main/w/weston/weston_14.0.2-1.dsc 7c06118894b6274212f68e61c138a87ccbb869a5d3835aaa543570c004f8ec65
+weston-orig 14.0.2 https://snapshot.debian.org/archive/debian/20260927T082144Z/pool/main/w/weston/weston_14.0.2.orig.tar.xz b47216b3530da76d02a3a1acbf1846a9cd41d24caa86448f9c46f78f20b6e0ac
+weston-orig-asc 14.0.2 https://snapshot.debian.org/archive/debian/20260927T082144Z/pool/main/w/weston/weston_14.0.2.orig.tar.xz.asc a6bf2a435f9a629667c867e7983ed7d0ba88353e44354fdab708e5ea862d4ec6
+weston-debian 14.0.2-1 https://snapshot.debian.org/archive/debian/20260927T082144Z/pool/main/w/weston/weston_14.0.2-1.debian.tar.xz f447cbea007d795d3d375c2ced9ce8a9e4ff8cdbc757fd8d028912d986197c3b

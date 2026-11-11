@@ -131,26 +131,51 @@ all : $(KERNEL_BIN)
 # tools/inspect/elfcheck, built with the host compiler by the top-level
 # Makefile before each link, so a changed checker is rebuilt first.
 #
-# The kernel every loader reads has no debug sections or local symbols, to
-# fit the 4 MiB kernel slot of a boot partition (tools/image/mkdisk_grub.sh).
-# The complete linked file stays beside it as `kernel.debug`, which debug.sh
-# loads into GDB. Both keep the global symbols the checker and `nm` read.
-# The rule names this file among its inputs, so a change to how the kernel is
-# made makes it again.
+# The kernel every loader reads has no debug sections and no symbols but
+# `_start` and `_end`, which the checker compares with the entry and the image
+# end. The debug sections are more than half of the linked file. The linked
+# file with every symbol and the debug sections is kept beside the kernel as
+# `kernel.debug`, which debug.sh loads into GDB and which `nm` and the symbol
+# checks read. No loader reads the symbol table, which lies in no loaded
+# segment, so the two files load the same bytes. A kernel larger than a boot
+# partition's kernel slot fails the link here, since no disk could take it.
+# The slot's size is BOOTSLOT_SLOT_BYTES in utils/bootslot.h, its one home,
+# which the recipe reads from the header's define line; the rule names the
+# header and this file among its inputs, so a change to either makes the
+# kernel again.
+KERNEL_SLOT_HEADER = ../utils/bootslot.h
 ELFCHECK = ../build/tools/inspect/elfcheck
 # The checker takes the profile from the file: an ELF32 kernel loaded where
 # its headers say, or the ELF64 x86-64 kernel loaded through the a.out
 # kludge, whose copy must put every byte where the kernel is linked.
 KERNEL_CHECK = $(ELFCHECK) --kernel
 
-$(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS) $(ACPICA_OBJECTS) $(LINKER_SCRIPT).ld Makefile
+# Both outputs come from the kernel's link. A missing debug file forces
+# that producer before any consumer of either file can run, and the old
+# kernel stays published until the replacement has passed the link checks.
+ifeq ($(wildcard $(KERNEL_BIN).debug),)
+.PHONY: missing-kernel-debug
+$(KERNEL_BIN): missing-kernel-debug
+endif
+
+$(KERNEL_BIN).debug: $(KERNEL_BIN)
+	@test -f $@
+
+$(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS) $(ACPICA_OBJECTS) $(LINKER_SCRIPT).ld Makefile \
+                $(KERNEL_SLOT_HEADER)
 	@mkdir -p $(dir $@)
 	@$(MAKE) --no-print-directory -C .. build/tools/inspect/elfcheck
 	@tmp="$@.tmp.$$$$"; trap 'rm -f "$$tmp" "$$tmp.debug"' EXIT; \
 	echo '$(LD) $(LDFLAGS) -o $@.debug ...'; \
 	$(LD) $(LDFLAGS) -o "$$tmp.debug" $(ASM_OBJECTS) $(C_OBJECTS) $(ACPICA_OBJECTS) && \
-	$(CROSS_OBJCOPY) --strip-debug --discard-all "$$tmp.debug" "$$tmp" && \
+	$(CROSS_OBJCOPY) --strip-all --keep-symbol=_start --keep-symbol=_end "$$tmp.debug" "$$tmp" && \
 	$(KERNEL_CHECK) "$$tmp" && \
+	size=$$(($$(wc -c < "$$tmp"))) && \
+	slot=$$(sed -n 's/^.define BOOTSLOT_SLOT_BYTES  *\([0-9][0-9]*\).*/\1/p' $(KERNEL_SLOT_HEADER)) && \
+	{ [ -n "$$slot" ] || \
+	  { echo "rach2: kernel: $(KERNEL_SLOT_HEADER) defines no BOOTSLOT_SLOT_BYTES" >&2; exit 1; }; } && \
+	{ [ "$$size" -le "$$slot" ] || \
+	  { echo "rach2: kernel: $$size bytes do not fit the $$slot-byte kernel slot" >&2; exit 1; }; } && \
 	mv "$$tmp.debug" $@.debug && \
 	mv "$$tmp" $@
 
@@ -174,7 +199,26 @@ $(ASM_OBJECTS) : $(BUILD)/%.o : %.s
 
 $(C_OBJECTS) : $(BUILD)/%.o : %.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -o $@ -c $<
+	$(CC) $(CFLAGS) $(if $(filter $(PANIC_OBJECT),$@),-DRACH2_HEAD_H='"$(abspath $(HEAD_H))"') -o $@ -c $<
+
+# The commit the kernel is built from, which the panic's report names
+# (sys/panic.c): the head's first twelve digits, and a `+` after them when
+# the kernel's sources or the shared makefiles differ from it. The file is
+# written only when that changes, so that a new commit compiles panic.c
+# alone again and links the kernel again; the flag that names the file is
+# panic.c's alone, so that the configuration's fingerprint stays as it is.
+# It waits for the fingerprint, whose purge of the tree would remove it.
+HEAD_H = $(BUILD)/head.h
+PANIC_OBJECT = $(BUILD)/sys/panic.o
+$(PANIC_OBJECT) : $(HEAD_H)
+$(HEAD_H) : $(CONFIG) FORCE
+	@mkdir -p $(dir $@); \
+	head=$$(git rev-parse --short=12 HEAD 2>/dev/null) || head=unknown; \
+	if [ "$$head" != unknown ] && ! git diff --quiet HEAD -- . ../mk 2>/dev/null; then \
+	    head="$$head+"; \
+	fi; \
+	new="#define RACH2_HEAD \"$$head\""; \
+	[ "$$new" = "$$(cat $@ 2>/dev/null)" ] || printf '%s\n' "$$new" > $@
 
 # The extraction runs when the tarball, the patch or the script is newer than
 # its stamp, and leaves the tree alone when its stamp names the same three;

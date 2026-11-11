@@ -81,6 +81,9 @@ int virtio_init(struct virtio_dev *d, uint64_t wanted, uint16_t nqueues)
     virtio_status_add(d, VIRTIO_STATUS_ACKNOWLEDGE);
     virtio_status_add(d, VIRTIO_STATUS_DRIVER);
     offered = d->ops->get_features(d);
+    if (d->ops->get_status(d) & VIRTIO_STATUS_FAILED) {
+        return -ENODEV; /* the transport has no device to offer, and has said why */
+    }
     if (!(offered & VIRTIO_BIT(VIRTIO_F_VERSION_1))) {
         klog(KLOG_WARN, "virtio", "refused: %s: a legacy device, without VERSION_1", d->name);
         return virtio_fail(d, -ENODEV);
@@ -172,7 +175,8 @@ int virtio_queue_setup(struct virtio_dev *d, uint16_t index, virtqueue_done_t do
     vq->done = done;
     vq->priv = priv;
     vq->ring_bytes = virtqueue_layout(size, &avail_off, &used_off);
-    vq->ring_mem = d->ops->dma_alloc(d, vq->ring_bytes, &vq->desc_addr);
+    vq->ring_mem = d->ops->ring_alloc ? d->ops->ring_alloc(d, index, vq->ring_bytes, &vq->desc_addr)
+                                      : d->ops->dma_alloc(d, vq->ring_bytes, &vq->desc_addr);
     if (!vq->ring_mem) {
         kfree(vq);
         return -ENOMEM;
@@ -192,11 +196,13 @@ int virtio_queue_setup(struct virtio_dev *d, uint16_t index, virtqueue_done_t do
         }
     }
     for (i = 0; i < size; i++) {
-        vq->desc[i].next = (uint16_t)(i + 1u);
+        vq->next[i] = (uint16_t)(i + 1u);
         vq->table[i] = -1;
     }
     vq->free_head = 0;
     vq->nfree = size;
+    vq->max_chain = size;
+    vq->max_bytes = 0;
     r = d->ops->queue_enable(d, vq);
     if (r != 0) {
         virtqueue_free(d, vq, 1);
@@ -209,10 +215,15 @@ int virtio_queue_setup(struct virtio_dev *d, uint16_t index, virtqueue_done_t do
     return 0;
 }
 
-void virtio_ready(struct virtio_dev *d)
+int virtio_ready(struct virtio_dev *d)
 {
     d->ops->irq_start(d);
     virtio_status_add(d, VIRTIO_STATUS_DRIVER_OK);
+    if (d->ops->get_status(d) & (VIRTIO_STATUS_FAILED | VIRTIO_STATUS_NEEDS_RESET)) {
+        klog(KLOG_WARN, "virtio", "refused: %s: the device did not take DRIVER_OK", d->name);
+        return -EIO;
+    }
+    return 0;
 }
 
 void virtio_teardown(struct virtio_dev *d)
@@ -268,16 +279,120 @@ int virtio_shm_region(struct virtio_dev *d, uint8_t id, uint64_t *addr, uint64_t
     return d->ops->shm_region(d, id, addr, len);
 }
 
-/** Fill descriptor `dd` from segment `k` of a buffer of `total`, the first
- * `out` of them read by the device; `next` is linked when one follows. */
-static void virtqueue_fill(volatile struct virtq_desc *dd, const struct virtio_sg *sg, unsigned k,
-                           unsigned out, unsigned total, uint16_t next)
+int virtio_backing_fill(struct virtio_dev *d, struct shmem *sh, uint64_t bytes)
 {
-    uint16_t flags = k >= out ? VIRTQ_DESC_F_WRITE : 0;
+    return d->ops->backing_fill ? d->ops->backing_fill(d, sh, bytes) : 0;
+}
 
-    dd->addr = sg[k].addr;
-    dd->len = sg[k].len;
-    if (k + 1u < total) {
+void virtio_backing_release(struct virtio_dev *d, struct shmem *sh)
+{
+    if (d->ops->backing_release) {
+        d->ops->backing_release(d, sh);
+    }
+}
+
+int virtio_map_pages(struct virtio_dev *d, const struct virtio_run *runs, uint32_t n,
+                     void (*revoke)(void *owner), void *owner, struct virtio_map **out)
+{
+    *out = NULL;
+    if (!d->pages || !d->ops->map_pages) {
+        return -ENODEV;
+    }
+    return d->ops->map_pages(d, runs, n, revoke, owner, out);
+}
+
+uintptr_t virtio_map_frame(struct virtio_dev *d, struct virtio_map *m, uint64_t i)
+{
+    return m && d->ops->map_frame ? d->ops->map_frame(m, i) : 0;
+}
+
+void virtio_map_free(struct virtio_dev *d, struct virtio_map *m)
+{
+    if (m && d->ops->map_free) {
+        d->ops->map_free(m);
+    }
+}
+
+int virtio_dma_addr(struct virtio_dev *d, uintptr_t phys, uint64_t *addr)
+{
+    if (d->ops->dma_addr) {
+        return d->ops->dma_addr(d, phys, addr);
+    }
+    *addr = (uint64_t)phys;
+    return 0;
+}
+
+void virtio_put(struct virtio_dev *d)
+{
+    if (d->ops->put) {
+        d->ops->put(d);
+    }
+}
+
+/**
+ * The run of segments of `sg` from `k` that one descriptor holds: those of
+ * the same way, the first `out` read by the device, whose device addresses
+ * follow each other, while the length stays within 32 bits. Returns the
+ * index after the run, with its length in `*len`.
+ */
+static unsigned virtqueue_run(const struct virtio_sg *sg, unsigned k, unsigned out, unsigned total,
+                              uint32_t *len)
+{
+    uint64_t end = sg[k].addr + sg[k].len;
+    uint32_t n = sg[k].len;
+    unsigned j = k + 1u;
+
+    while (j < total && (j < out) == (k < out) && sg[j].addr == end &&
+           sg[j].len <= 0xFFFFFFFFu - n) {
+        n += sg[j].len;
+        end += sg[j].len;
+        j++;
+    }
+    *len = n;
+    return j;
+}
+
+/** The descriptors a buffer takes once its runs are merged, with the bytes
+ * of its longest way in `*most`. */
+static unsigned virtqueue_descs(const struct virtio_sg *sg, unsigned out, unsigned total,
+                                uint64_t *most)
+{
+    uint64_t bytes[2];
+    unsigned k = 0, n = 0;
+    uint32_t len;
+
+    bytes[0] = bytes[1] = 0;
+    while (k < total) {
+        int way = k >= out;
+
+        k = virtqueue_run(sg, k, out, total, &len);
+        bytes[way] += len;
+        n++;
+    }
+    *most = bytes[0] > bytes[1] ? bytes[0] : bytes[1];
+    return n;
+}
+
+int virtqueue_chain_fits(const struct virtqueue *vq, const struct virtio_sg *sg, unsigned out,
+                         unsigned in)
+{
+    uint64_t most;
+    unsigned n = virtqueue_descs(sg, out, out + in, &most);
+
+    return n <= vq->max_chain && (vq->max_bytes == 0 || most <= vq->max_bytes);
+}
+
+/** Fill descriptor `dd` with the run of `len` bytes from the segment `seg`,
+ * which the device writes when `write` is set; `next` is linked when
+ * another run follows, which `more` says. */
+static void virtqueue_fill(volatile struct virtq_desc *dd, const struct virtio_sg *seg, int write,
+                           uint32_t len, int more, uint16_t next)
+{
+    uint16_t flags = write ? VIRTQ_DESC_F_WRITE : 0;
+
+    dd->addr = seg->addr;
+    dd->len = len;
+    if (more) {
         flags |= VIRTQ_DESC_F_NEXT;
         dd->next = next;
     }
@@ -287,32 +402,38 @@ static void virtqueue_fill(volatile struct virtq_desc *dd, const struct virtio_s
 int virtqueue_add(struct virtqueue *vq, const struct virtio_sg *sg, unsigned out, unsigned in,
                   void *token)
 {
-    unsigned total = out + in, k;
+    unsigned total = out + in, descs, k, j, d;
     uint16_t head, i, slot;
-    uint32_t flags;
+    uint32_t flags, len;
+    uint64_t most;
     int t;
 
     if (total == 0 || !token) {
         return -EINVAL;
     }
+    descs = virtqueue_descs(sg, out, total, &most);
+    if (descs > vq->max_chain || (vq->max_bytes != 0 && most > vq->max_bytes)) {
+        return -E2BIG;
+    }
     flags = spin_lock_irqsave(&vq->lock);
     head = vq->free_head;
-    if (total <= vq->nfree) {
+    if (descs <= vq->nfree) {
         i = head;
-        for (k = 0; k < total; k++) {
-            uint16_t next = vq->desc[i].next;
+        for (k = 0; k < total; k = j) {
+            uint16_t next = vq->next[i];
 
-            virtqueue_fill(&vq->desc[i], sg, k, out, total, next);
-            if (k + 1u < total) {
+            j = virtqueue_run(sg, k, out, total, &len);
+            virtqueue_fill(&vq->desc[i], &sg[k], k >= out, len, j < total, next);
+            if (j < total) {
                 i = next;
             }
         }
-        vq->free_head = vq->desc[i].next;
-        vq->nfree = (uint16_t)(vq->nfree - total);
-        vq->chain[head] = (uint16_t)total;
+        vq->free_head = vq->next[i];
+        vq->nfree = (uint16_t)(vq->nfree - descs);
+        vq->chain[head] = (uint16_t)descs;
         vq->table[head] = -1;
     } else if (vq->indirect && vq->indirect_free != 0 && vq->nfree > 0 &&
-               total <= VIRTQ_INDIRECT_LEN) {
+               descs <= VIRTQ_INDIRECT_LEN) {
         volatile struct virtq_desc *tbl;
 
         t = 0;
@@ -321,13 +442,16 @@ int virtqueue_add(struct virtqueue *vq, const struct virtio_sg *sg, unsigned out
         }
         vq->indirect_free &= ~(1u << t);
         tbl = vq->indirect + t * VIRTQ_INDIRECT_LEN;
-        for (k = 0; k < total; k++) {
-            virtqueue_fill(&tbl[k], sg, k, out, total, (uint16_t)(k + 1u));
+        d = 0;
+        for (k = 0; k < total; k = j) {
+            j = virtqueue_run(sg, k, out, total, &len);
+            virtqueue_fill(&tbl[d], &sg[k], k >= out, len, j < total, (uint16_t)(d + 1u));
+            d++;
         }
-        vq->free_head = vq->desc[head].next;
+        vq->free_head = vq->next[head];
         vq->desc[head].addr =
             vq->indirect_addr + (uint64_t)t * VIRTQ_INDIRECT_LEN * sizeof(struct virtq_desc);
-        vq->desc[head].len = (uint32_t)(total * sizeof(struct virtq_desc));
+        vq->desc[head].len = (uint32_t)(descs * sizeof(struct virtq_desc));
         vq->desc[head].flags = VIRTQ_DESC_F_INDIRECT;
         vq->nfree--;
         vq->chain[head] = 1;
@@ -337,6 +461,10 @@ int virtqueue_add(struct virtqueue *vq, const struct virtio_sg *sg, unsigned out
         return -ENOSPC;
     }
     vq->token[head] = token;
+    vq->inlen[head] = 0;
+    for (k = out; k < total; k++) {
+        vq->inlen[head] += sg[k].len;
+    }
     slot = (uint16_t)(vq->avail_idx & (vq->size - 1u));
     vq->avail[2 + slot] = head;
     arch_dma_fence(); /* the chain and its ring entry before the index */
@@ -366,10 +494,10 @@ static void virtqueue_release(struct virtqueue *vq, uint16_t head)
         vq->table[head] = -1;
     } else {
         for (k = 1; k < vq->chain[head]; k++) {
-            last = vq->desc[last].next;
+            last = vq->next[last];
         }
     }
-    vq->desc[last].next = vq->free_head;
+    vq->next[last] = vq->free_head;
     vq->free_head = head;
     vq->nfree = (uint16_t)(vq->nfree + vq->chain[head]);
     vq->chain[head] = 0;
@@ -385,7 +513,7 @@ int virtqueue_reap(struct virtqueue *vq)
     spin_unlock_irqrestore(&vq->lock, flags);
     for (;;) {
         uint16_t used_idx;
-        uint32_t id, len;
+        uint32_t id, len, over;
         void *token;
 
         flags = spin_lock_irqsave(&vq->lock);
@@ -417,9 +545,15 @@ int virtqueue_reap(struct virtqueue *vq)
             continue;
         }
         token = vq->token[id];
+        over = vq->inlen[id];
         virtqueue_release(vq, (uint16_t)id);
         vq->completed++;
         spin_unlock_irqrestore(&vq->lock, flags);
+        if (len > over) {
+            klog(KLOG_ERR, "virtio", "queue: %s: %d: the device wrote %u bytes into head %d of %u",
+                 vq->dev->name, vq->index, (unsigned)len, (int)id, (unsigned)over);
+            len = over;
+        }
         if (vq->done) {
             vq->done(vq, token, len);
         }

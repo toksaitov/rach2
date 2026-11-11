@@ -38,6 +38,7 @@
 #include "../../proc/ns.h"
 #include "../../proc/kcmp.h"
 #include "../../proc/rseq.h"
+#include "../../proc/membarrier.h"
 #include "../../proc/process_vm.h"
 #include "../../mm/mempolicy.h"
 #include "../../proc/pidfd.h"
@@ -99,7 +100,7 @@
  * the table first, so a NULL row only says so. */
 void ia32_syscall_init(syscall_fn_t *table)
 {
-    table[SYS_RESTART_SYSCALL] = NULL;
+    table[SYS_RESTART_SYSCALL] = sys_restart_syscall;
     table[SYS_EXIT] = sys_exit;
     table[SYS_FORK] = sys_fork;
     table[SYS_READ] = sys_read;
@@ -210,7 +211,7 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_FSTAT] = compat_sys_newfstat;
     table[SYS_OLDUNAME] = compat_sys_uname;
     table[SYS_IOPL] = NULL;
-    table[SYS_VHANGUP] = NULL;
+    table[SYS_VHANGUP] = sys_vhangup;
     table[SYS_IDLE] = NULL;
     table[SYS_VM86OLD] = NULL;
     table[SYS_WAIT4] = sys_wait4;
@@ -234,11 +235,11 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_GETPGID] = sys_getpgid;
     table[SYS_FCHDIR] = sys_fchdir;
     table[SYS_BDFLUSH] = NULL;
-    table[SYS_SYSFS] = NULL;
+    table[SYS_SYSFS] = sys_sysfs;
     table[SYS_PERSONALITY] = sys_personality;
     table[SYS_AFS_SYSCALL] = NULL;
-    table[SYS_SETFSUID] = compat_sys_setfsuid16;
-    table[SYS_SETFSGID] = compat_sys_setfsgid16;
+    table[SYS_SETFSUID] = sys_setfsuid16;
+    table[SYS_SETFSGID] = sys_setfsgid16;
     table[SYS_LLSEEK] = sys__llseek;
     table[SYS_GETDENTS] = compat_sys_getdents;
     table[SYS_NEWSELECT] = compat_sys_select;
@@ -314,8 +315,8 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_CHOWN32] = sys_chown;
     table[SYS_SETUID32] = sys_setuid;
     table[SYS_SETGID32] = sys_setgid;
-    table[SYS_SETFSUID32] = NULL;
-    table[SYS_SETFSGID32] = NULL;
+    table[SYS_SETFSUID32] = sys_setfsuid;
+    table[SYS_SETFSGID32] = sys_setfsgid;
     table[SYS_PIVOT_ROOT] = sys_pivot_root;
     table[SYS_MINCORE] = sys_mincore;
     table[SYS_MADVISE] = sys_madvise;
@@ -370,9 +371,9 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_UTIMES] = compat_sys_utimes_time32;
     table[SYS_FADVISE64_64] = compat_sys_ia32_fadvise64_64;
     table[SYS_VSERVER] = NULL;
-    table[SYS_MBIND] = NULL;
+    table[SYS_MBIND] = sys_mbind;
     table[SYS_GET_MEMPOLICY] = sys_get_mempolicy;
-    table[SYS_SET_MEMPOLICY] = NULL;
+    table[SYS_SET_MEMPOLICY] = sys_set_mempolicy;
     table[SYS_MQ_OPEN] = sys_mq_open;
     table[SYS_MQ_UNLINK] = sys_mq_unlink;
     table[SYS_MQ_TIMEDSEND] = sys_mq_timedsend;
@@ -389,7 +390,7 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_INOTIFY_INIT] = sys_inotify_init;
     table[SYS_INOTIFY_ADD_WATCH] = sys_inotify_add_watch;
     table[SYS_INOTIFY_RM_WATCH] = sys_inotify_rm_watch;
-    table[SYS_MIGRATE_PAGES] = NULL;
+    table[SYS_MIGRATE_PAGES] = sys_migrate_pages;
     table[SYS_OPENAT] = sys_openat;
     table[SYS_MKDIRAT] = sys_mkdirat;
     table[SYS_MKNODAT] = sys_mknodat;
@@ -412,7 +413,7 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_SYNC_FILE_RANGE] = compat_sys_ia32_sync_file_range;
     table[SYS_TEE] = sys_tee;
     table[SYS_VMSPLICE] = sys_vmsplice;
-    table[SYS_MOVE_PAGES] = NULL;
+    table[SYS_MOVE_PAGES] = sys_move_pages;
     table[SYS_GETCPU] = sys_getcpu;
     table[SYS_EPOLL_PWAIT] = sys_epoll_pwait;
     table[SYS_UTIMENSAT] = compat_sys_utimensat_time32;
@@ -446,8 +447,8 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_PROCESS_VM_WRITEV] = sys_process_vm_writev;
     table[SYS_KCMP] = sys_kcmp;
     table[SYS_FINIT_MODULE] = NULL;
-    table[SYS_SCHED_SETATTR] = NULL;
-    table[SYS_SCHED_GETATTR] = NULL;
+    table[SYS_SCHED_SETATTR] = sys_sched_setattr;
+    table[SYS_SCHED_GETATTR] = sys_sched_getattr;
     table[SYS_RENAMEAT2] = sys_renameat2;
     table[SYS_SECCOMP] = sys_seccomp;
     table[SYS_GETRANDOM] = sys_getrandom;
@@ -470,14 +471,14 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_RECVMSG] = sys_recvmsg;
     table[SYS_SHUTDOWN] = sys_shutdown;
     table[SYS_USERFAULTFD] = NULL;
-    table[SYS_MEMBARRIER] = NULL;
+    table[SYS_MEMBARRIER] = sys_membarrier;
     table[SYS_MLOCK2] = sys_mlock2;
     table[SYS_COPY_FILE_RANGE] = sys_copy_file_range;
     table[SYS_PREADV2] = compat_sys_preadv2;
     table[SYS_PWRITEV2] = compat_sys_pwritev2;
-    table[SYS_PKEY_MPROTECT] = NULL;
-    table[SYS_PKEY_ALLOC] = NULL;
-    table[SYS_PKEY_FREE] = NULL;
+    table[SYS_PKEY_MPROTECT] = sys_pkey_mprotect;
+    table[SYS_PKEY_ALLOC] = sys_pkey_alloc;
+    table[SYS_PKEY_FREE] = sys_pkey_free;
     table[SYS_STATX] = sys_statx;
     table[SYS_ARCH_PRCTL] = compat_sys_arch_prctl;
     table[SYS_IO_PGETEVENTS] = compat_sys_io_pgetevents;
@@ -525,32 +526,32 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_PIDFD_OPEN] = sys_pidfd_open;
     table[SYS_CLONE3] = sys_clone3;
     table[SYS_CLOSE_RANGE] = sys_close_range;
-    table[SYS_OPENAT2] = NULL;
+    table[SYS_OPENAT2] = sys_openat2;
     table[SYS_PIDFD_GETFD] = sys_pidfd_getfd;
     table[SYS_FACCESSAT2] = sys_faccessat2;
-    table[SYS_PROCESS_MADVISE] = NULL;
+    table[SYS_PROCESS_MADVISE] = sys_process_madvise;
     table[SYS_EPOLL_PWAIT2] = compat_sys_epoll_pwait2;
     table[SYS_MOUNT_SETATTR] = NULL;
     table[SYS_QUOTACTL_FD] = NULL;
     table[SYS_LANDLOCK_CREATE_RULESET] = NULL;
     table[SYS_LANDLOCK_ADD_RULE] = NULL;
     table[SYS_LANDLOCK_RESTRICT_SELF] = NULL;
-    table[SYS_MEMFD_SECRET] = NULL;
-    table[SYS_PROCESS_MRELEASE] = NULL;
+    table[SYS_MEMFD_SECRET] = sys_memfd_secret;
+    table[SYS_PROCESS_MRELEASE] = sys_process_mrelease;
     table[SYS_FUTEX_WAITV] = sys_futex_waitv;
-    table[SYS_SET_MEMPOLICY_HOME_NODE] = NULL;
-    table[SYS_CACHESTAT] = NULL;
+    table[SYS_SET_MEMPOLICY_HOME_NODE] = sys_set_mempolicy_home_node;
+    table[SYS_CACHESTAT] = sys_cachestat;
     table[SYS_FCHMODAT2] = sys_fchmodat2;
-    table[SYS_MAP_SHADOW_STACK] = NULL;
-    table[SYS_FUTEX_WAKE] = NULL;
-    table[SYS_FUTEX_WAIT] = NULL;
-    table[SYS_FUTEX_REQUEUE] = NULL;
+    table[SYS_MAP_SHADOW_STACK] = sys_map_shadow_stack;
+    table[SYS_FUTEX_WAKE] = sys_futex_wake;
+    table[SYS_FUTEX_WAIT] = sys_futex_wait;
+    table[SYS_FUTEX_REQUEUE] = sys_futex_requeue;
     table[SYS_STATMOUNT] = NULL;
     table[SYS_LISTMOUNT] = NULL;
     table[SYS_LSM_GET_SELF_ATTR] = NULL;
     table[SYS_LSM_SET_SELF_ATTR] = NULL;
     table[SYS_LSM_LIST_MODULES] = NULL;
-    table[SYS_MSEAL] = NULL;
+    table[SYS_MSEAL] = sys_mseal;
 }
 
 #endif /* RACH2_IA32 */

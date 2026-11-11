@@ -21,19 +21,36 @@
 #define PS2_STATUS_INPUT_FULL  0x02 /* the controller has not taken the last write */
 #define PS2_STATUS_MOUSE_DATA  0x20 /* the waiting byte is the mouse's */
 
-/* How many reads of the status a wait makes before it gives up. */
-#define PS2_TIMEOUT 100000
+/* How many reads of the status a wait makes before it gives up, and how long
+ * it lasts at most by the clock, Linux's 10000 waits of 50 us
+ * (I8042_CTL_TIMEOUT): under a hypervisor each read is an exit, and
+ * PS2_TIMEOUT of them took 42 s at the third level. */
+#define PS2_TIMEOUT    100000
+#define PS2_TIMEOUT_US 500000u
+
+/** The clock at the start of a wait of the status, for `ps2_wait_over`. */
+uint32_t ps2_wait_begin(void);
+
+/**
+ * Whether a wait of the status begun at `start` (`ps2_wait_begin`) is over
+ * after `reads` reads: PS2_TIMEOUT of them, or PS2_TIMEOUT_US by the clock,
+ * which is read every 64 reads. A host test's model has no clock and ends by
+ * the reads alone.
+ */
+int ps2_wait_over(uint32_t start, int reads);
 
 /**
  * Spin until the controller's input buffer is empty, ready for a byte.
- * Returns 0 when it is, -1 after PS2_TIMEOUT reads of the status. For the
- * bring-up, which runs with interrupts off and may wait.
+ * Returns 0 when it is, -1 after PS2_TIMEOUT reads of the status or
+ * PS2_TIMEOUT_US. For the bring-up, which runs with interrupts off and may
+ * wait.
  */
 int ps2_wait_input(void);
 
 /**
  * Spin until the controller's output buffer has a byte, of either device.
- * Returns 0 when it has, -1 after PS2_TIMEOUT reads of the status.
+ * Returns 0 when it has, -1 after PS2_TIMEOUT reads of the status or
+ * PS2_TIMEOUT_US.
  */
 int ps2_wait_output(void);
 

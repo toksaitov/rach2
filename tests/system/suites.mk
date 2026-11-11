@@ -392,9 +392,11 @@ $(GRUB_CASE_DISK): $(DEMO_CREDS) tools/image/mkdisk_grub.sh $(KERNEL) $(GRUB_TES
 	RACH2_DISK_RECOVERY_MB=8 \
 	    sh tools/image/mkdisk_grub.sh $(KERNEL) $@
 # `tests/run watchdog`: version 2 TCO expiry on q35, observed as QMP's
-# watchdog run state, and gfxtool's refusal of std-vga before MMIO.
+# watchdog run state, a panic's record kept by ramoops across the reset the
+# TCO makes, and gfxtool's refusal of std-vga before MMIO.
 WATCHDOG_IMAGE = $(ARCH_CASE_DIR)/watchdog/watchdog.krffs
 $(WATCHDOG_IMAGE): krffs/manifests/watchdog.manifest $(ARCH_BUILD)/tests/watchdogprobe \
+                   $(ARCH_BUILD)/tests/pstoreprobe \
                    $(ARCH_BUILD)/utils/sbin/gfxtool $(IMAGE_TOOLS) | krffs
 	$(MKIMAGE) krffs/manifests/watchdog.manifest $@ 4
 
@@ -410,7 +412,9 @@ $(WATCHDOG_IMAGE): krffs/manifests/watchdog.manifest $(ARCH_BUILD)/tests/watchdo
 # bindings, a userptr object and pressure past memory to ENOMEM,
 # i915execprobe's batches complete, relocate and fail by each fault, and
 # i915resetprobe's hung batch is reset with its context alone charged, the
-# batch behind it run, and the context banned at its third hang. The cases
+# batch behind it run, and the context banned at its third hang, after
+# which the driver's debugfs files and the card's error state are read and
+# written. The cases
 # are tests/cases/machine.i915fake.json; the first boots gnu-test.disk.
 
 $(ARCH_BUILD)/utils/sbin/gfxtool: utils/gfxtool.c utils/programs.mk $(LIBC_STAMP)
@@ -669,7 +673,8 @@ $(SERVICELOG_ROOT_DISK): tests/system/mkrootdisk.sh tools/setup/e2fsprogs_path.s
 # `tests/run keyboard`: the console's keyboard through the keymap, with kbd's
 # tools, on QEMU's PS/2 keyboard and on its USB keyboard. Its cases are in
 # tests/cases/machine.keyboard.json, which etude runs, and have no target here.
-# `tests/run netconsole`: the kernel log on the wire, the cases of
+# `tests/run netconsole`: the kernel log on the wire, in broadcast frames and
+# in UDP datagrams to a target of netconsole=, the cases of
 # tests/cases/machine.netconsole.json.
 # `tests/run e1000`: the network path on the other emulated card, and the probe
 # order that decides which card a machine with more than one of them gets, the
@@ -688,6 +693,11 @@ $(SERVICELOG_ROOT_DISK): tests/system/mkrootdisk.sh tools/setup/e2fsprogs_path.s
 # most of the machine first, and each case of tests/cases/machine.reset.json
 # boots the kernel and the test image with the ones before it left out, so
 # that each must still restart the machine.
+# `tests/run panic`: a panic that resets the machine as panic= and reboot=
+# ask. Each case of tests/cases/machine.panic.json runs a kernel stack out at
+# boot with panic=5, or -1, and one reboot= method, and the kernel must say
+# when it resets and then reset the machine by that method alone. The case
+# of EFI's ResetSystem boots a disk of its own by OVMF, below.
 # `tests/run diskdiag`: a disk read without being mounted and without being
 # written. It is the case of tests/cases/machine.diskdiag.json, which etude
 # runs, and has no target here: the ordinary kernel mounting a copy of the
@@ -1014,6 +1024,15 @@ build/tests/cases/gnu/sed.tar.xz: vendor/gnu/fetch.sh vendor/gnu/sources.txt
 # the guest and judged against the Debian reference guest's checksums, its
 # rate recorded beside the Debian guest's, as the case of
 # tests/cases/machine.vkpresent.json.
+# `tests/run virgl`: OpenGL on virgl over the testing PC's GPU on the GNU
+# root under the virgl profile: the renderer eglinfo and glxinfo name;
+# piglit's quick profile within OpenGL 4.2 and ES 3.1, every 200th test and
+# the list whole in sixteen parts; dEQP-GLES2, GLES3 and GLES31, every 200th
+# case of each and each whole in two or four parts; the WebGL conformance
+# suite in Chromium and Firefox ESR in chunks of 250 pages; each test, case
+# and page judged against the Debian reference guest's stored result; and the
+# reset of the virtio-gpu device under GL programs and Weston, as the Debian
+# guest sees it, as the cases of tests/cases/machine.virgl.json.
 # `tests/run games-native`: SuperTuxKart's profile race and 0 A.D.'s visual
 # replay, the fixed replays the games layer installs, in a small form of
 # 640x400, a race of 10 s to its end and the match for 10 s after its loading
@@ -1022,21 +1041,23 @@ build/tests/cases/gnu/sed.tar.xz: vendor/gnu/fetch.sh vendor/gnu/sources.txt
 # tests/cases/machine.games-native.json; their reference is Linux's run of
 # the same replays on the Lenovo, not the Debian guest's.
 # Etude runs them all with graphics_scenario (tests/graphics/Readme.md). Each
-# machine has graphics.ext2, the runners, the IGT list, the dEQP lists, the
-# guest's environment and the references, as a read-only data disk, and a
-# video case clips.ext2, the clips of clips.tar, which debian.sh makes in the
-# Debian guest when this clone's cache does not hold the clips that
-# clips.sha256 pins; modetest's drmcapture goes over the guest channel, which
-# carries some 137 bytes a frame, too slow for the 35 MB of clips. common.sh
-# writes the host's half of each record, and venus-lost.sh kills the render
-# server of the device loss case's QEMU.
-GRAPHICS_LISTS = igt-76.list deqp-vk-venus-smoke.txt deqp-vk-lavapipe.txt.gz deqp-vk-lavapipe.flakes
+# machine has graphics.ext2, the runners, the IGT list, the piglit and dEQP
+# lists, the guest's environment and the references, as a read-only data
+# disk, and a video case clips.ext2, the clips of clips.tar, which debian.sh
+# makes in the Debian guest when this clone's cache does not hold the clips
+# that clips.sha256 pins; modetest's drmcapture goes over the guest channel,
+# which carries some 137 bytes a frame, too slow for the 35 MB of clips.
+# common.sh writes the host's half of each record, and venus-lost.sh kills
+# the render server of the device loss case's QEMU.
+GRAPHICS_LISTS = igt-76.list deqp-vk-venus-smoke.txt deqp-vk-lavapipe.txt.gz deqp-vk-lavapipe.flakes \
+                 piglit-virgl.txt.gz piglit-virgl.flakes deqp-gles-virgl.txt.gz
+GRAPHICS_REFS = ref/debian ref/venus-wsl ref/virgl-wsl
 GRAPHICS_FILES = $(wildcard tests/graphics/runners/*) tests/graphics/guest-env.sh \
                  $(addprefix tests/graphics/,$(GRAPHICS_LISTS)) \
-                 $(shell find tests/graphics/ref/debian tests/graphics/ref/venus-wsl -type f 2>/dev/null)
+                 $(shell find $(addprefix tests/graphics/,$(GRAPHICS_REFS)) -type f 2>/dev/null)
 build/tests/cases/graphics/graphics.tar: $(GRAPHICS_FILES)
 	@mkdir -p $(@D)
-	tar -cf $@.tmp -C tests/graphics runners guest-env.sh $(GRAPHICS_LISTS) ref/debian ref/venus-wsl
+	tar -cf $@.tmp -C tests/graphics runners guest-env.sh $(GRAPHICS_LISTS) $(GRAPHICS_REFS)
 	mv $@.tmp $@
 build/tests/cases/graphics/common.sh: tests/graphics/runners/common.sh
 	@mkdir -p $(@D)
@@ -1119,6 +1140,105 @@ build/tests/cases/kvm/kvm.ext2: build/tests/cases/kvm/kvm.tar
 	E2FSPROGS_FAKE_TIME=1 mke2fs -q -t ext2 -F -b 4096 -O none,filetype,sparse_super,large_file \
 	    -d "$$work" $@.tmp $${kib}k; \
 	mv $@.tmp $@
+
+# `tests/run bed-vtest`: the testbed's first rung (bed/Readme.md), Mesa's
+# virpipe on the x86-64 GNU root drawing a triangle through vtestrelay to the
+# vtest server of a Debian guest that the root's QEMU boots, under QEMU's TCG
+# and under Rach2's KVM, as the cases of tests/cases/machine.bed-vtest.json,
+# which bed_vtest_scenario runs. Each machine has bed-vtest.ext2 as a
+# read-only data disk: the guest's cloud image and prepared image, the
+# triangle's source and the runner, which bed/fixture/vtest-guest.sh stages,
+# preparing the guest first when its inputs changed. The cloud image, 419 MiB,
+# and the snapshot's packages are downloaded once into the main clone's
+# build/cache.
+BED_VTEST_FILES = bed/fixture/vtest-guest.sh bed/fixture/vtest-rach2.sh bed/fixture/triangle.c \
+                  bed/fixture/setup.sh.in bed/fixture/packages bed/fixture/user-data.in \
+                  bed/fixture/meta-data bed/fixture/network-config tests/graphics/debian-ref/image
+build/tests/cases/bed-vtest/bed-vtest.ext2: $(BED_VTEST_FILES)
+	@set -e; work=; \
+	trap '[ -z "$$work" ] || rm -rf "$$work"; rm -f "$@.tmp"' EXIT; \
+	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; \
+	mkdir -p $(@D) build/tmp; work=$$(mktemp -d build/tmp/bed-vtest-disk.XXXXXX); \
+	sh bed/fixture/vtest-guest.sh stage "$$work/disk"; \
+	kib=$$(($$(ls -ln "$$work/disk" | awk '{ n += $$5 } END { print n }') / 1024 * 5 / 4 + 8192)); \
+	. tools/setup/e2fsprogs_path.sh; \
+	E2FSPROGS_FAKE_TIME=1 mke2fs -q -t ext2 -F -b 4096 -O none,filetype,sparse_super,large_file \
+	    -d "$$work/disk" $@.tmp $${kib}k; \
+	mv $@.tmp $@
+
+# `tests/run bed-forward`: the testbed's forward direction, a Debian guest of
+# QEMU on the x86-64 GNU root drawing on Rach2's GPU through QEMU's own
+# virtio-gpu, virgl and then Venus with blobs, as the cases of
+# tests/cases/machine.bed-forward.json, which bedforward_scenario runs
+# (bed/forward/Readme.md). Each machine has forward.ext2, the runner, the
+# guest's key and guest.tar, the scenes with the graphics runners they use,
+# as a read-only data disk, and a disk whose base is guest.qcow2, the Debian
+# reference guest's prepared image, which bed/forward/guest.sh writes whole.
+# That script prepares the reference guest first where this clone's cache has
+# none, a download of some 440 MiB and a few minutes of apt.
+BED_FORWARD_DIR = build/tests/cases/bed-forward
+BED_FORWARD_RUNNERS = $(addprefix tests/graphics/runners/,vkcube.sh common.sh vkhold.c frame.py)
+BED_FORWARD_SCENES = bed/forward/scene.sh bed/fixture/triangle.c tests/graphics/guest-env.sh \
+                     tests/graphics/ref/venus-wsl/vkcube/frames.out $(BED_FORWARD_RUNNERS)
+$(BED_FORWARD_DIR)/guest.qcow2: bed/forward/guest.sh vendor/gnu/debian/venus.list \
+                                $(addprefix tests/graphics/debian-ref/,debian-ref.sh image packages \
+                                    setup.sh.in user-data.in meta-data network-config)
+	sh bed/forward/guest.sh $@ $(BED_FORWARD_DIR)/id_ed25519
+$(BED_FORWARD_DIR)/id_ed25519: $(BED_FORWARD_DIR)/guest.qcow2
+$(BED_FORWARD_DIR)/guest.tar: $(BED_FORWARD_SCENES)
+	@set -e; work=; \
+	trap '[ -z "$$work" ] || rm -rf "$$work"; rm -f "$@.tmp"' EXIT; \
+	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; \
+	mkdir -p build/tmp $(BED_FORWARD_DIR); work=$$(mktemp -d build/tmp/bed-forward.XXXXXX); \
+	mkdir -p "$$work/runners"; \
+	cp bed/forward/scene.sh bed/fixture/triangle.c tests/graphics/guest-env.sh "$$work/"; \
+	cp tests/graphics/ref/venus-wsl/vkcube/frames.out "$$work/vkcube.ref"; \
+	cp $(BED_FORWARD_RUNNERS) "$$work/runners/"; \
+	tar -cf $@.tmp -C "$$work" .; \
+	mv $@.tmp $@
+$(BED_FORWARD_DIR)/forward.ext2: bed/forward/forward.sh $(BED_FORWARD_DIR)/guest.tar $(BED_FORWARD_DIR)/id_ed25519
+	@set -e; work=; \
+	trap '[ -z "$$work" ] || rm -rf "$$work"; rm -f "$@.tmp"' EXIT; \
+	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; \
+	mkdir -p build/tmp; work=$$(mktemp -d build/tmp/bed-forward.XXXXXX); \
+	cp -p bed/forward/forward.sh $(BED_FORWARD_DIR)/guest.tar $(BED_FORWARD_DIR)/id_ed25519 "$$work/"; \
+	. tools/setup/e2fsprogs_path.sh; \
+	E2FSPROGS_FAKE_TIME=1 mke2fs -q -t ext2 -F -b 4096 -O none,filetype,sparse_super,large_file \
+	    -d "$$work" $@.tmp 8192k; \
+	mv $@.tmp $@
+
+# `tests/run bed-shm`: Rach2's virtio-gpu over the region it shares with
+# the test bed's VM, on the x86-64 GNU root under host-svm, as the case of
+# tests/cases/machine.bed-shm.json, which bed_shm_scenario runs
+# (tests/kvm/Readme.md). The machine has bed-shm.ext2, the runner and the
+# probe and nocopy.c, as a read-only data disk, and vm.disk, the VM that
+# `bed/vm/image/vm.sh rach2` makes over the prepared image, raw for etude's
+# overlay. The prepared image is the clone's build/cache/bed-vm, which
+# `vm.sh prepare` makes when it is missing or stale: a download of the
+# pinned Debian cloud image and its packages, and a boot under the host's
+# KVM.
+# With ARCH=x86_64 the probe is the top Makefile's, which stages it.
+BED_SHM_PROBE = build/x86_64/tests/vgshmprobe
+ifneq ($(ARCH),x86_64)
+$(BED_SHM_PROBE): ask-the-sub-make
+	@$(MAKE) --no-print-directory -C tests ARCH=x86_64 ../$(BED_SHM_PROBE)
+endif
+build/tests/cases/bed-shm/bed-shm.ext2: tests/kvm/bed-shm.sh tests/kvm/nocopy.c $(BED_SHM_PROBE)
+	@set -e; work=; \
+	trap '[ -z "$$work" ] || rm -rf "$$work"; rm -f "$@.tmp"' EXIT; \
+	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; \
+	mkdir -p $(@D) build/tmp; work=$$(mktemp -d build/tmp/bed-shm-disk.XXXXXX); \
+	cp tests/kvm/bed-shm.sh tests/kvm/nocopy.c $(BED_SHM_PROBE) "$$work"/; \
+	. tools/setup/e2fsprogs_path.sh; \
+	E2FSPROGS_FAKE_TIME=1 mke2fs -q -t ext2 -F -b 4096 -O none,filetype,sparse_super,large_file \
+	    -d "$$work" $@.tmp 8192k; \
+	mv $@.tmp $@
+BED_VM_FILES = $(wildcard bed/vm/image/* bed/vm/module/* bed/vm/backend/*) \
+               rach2/sys/virtio/vgpushm.h tests/graphics/debian-ref/image
+build/tests/cases/bed-shm/vm.disk: $(BED_VM_FILES)
+	@mkdir -p $(@D)
+	sh bed/vm/image/vm.sh prepare -n
+	sh bed/vm/image/vm.sh rach2 -o $@
 
 # `tests/run codexapi`: OpenAI's Responses protocol in the C fake API
 # service, proved against the pinned upstream Codex in a fresh home on an
@@ -1396,6 +1516,18 @@ $(ARCH_CASE_DIR)/termconsole/disk.img: $(KERNEL) $(INSTALLER_EXT2) tools/image/m
 	RACH2_DISK_EXT2_MB=64 \
 	RACH2_DISK_EXT2_IMAGE=$(INSTALLER_EXT2) \
 	RACH2_DISK_APPEND=rach2.console=term \
+	    sh tools/image/mkdisk_grub.sh $(KERNEL) $@
+# `tests/run panic`'s case of EFI's ResetSystem, machine.panic.uefi: a GPT
+# disk as the disk builder makes one for a machine, booted by OVMF, whose
+# menu runs a kernel stack out at boot with panic=5 reboot=e, which no other
+# test disk carries.
+$(ARCH_CASE_DIR)/panic/efi-disk.img: $(KERNEL) $(INSTALLER_EXT2) tools/image/mkdisk_grub.sh \
+                                     $(DISK_TOOLS) $(GRUB_FILES) | rach2
+	@mkdir -p $(@D)
+	RACH2_DISK_RECOVERY_MB=8 \
+	RACH2_DISK_EXT2_MB=64 \
+	RACH2_DISK_EXT2_IMAGE=$(INSTALLER_EXT2) \
+	RACH2_DISK_APPEND="rach2.stackoverrun=fork panic=5 reboot=e" \
 	    sh tools/image/mkdisk_grub.sh $(KERNEL) $@
 # `tests/run usbdisk`: a flash drive as a disk, the cases of
 # tests/cases/machine.usbdisk.json: sticks with an MBR, a GUID table and no
@@ -1682,6 +1814,9 @@ harness-kernel: $(HARNESS_KERNEL)
 PURE64_KERNEL = $(ARCH_BUILD)/rach2-pure64/kernel
 $(PURE64_KERNEL): ask-the-sub-make
 	@$(MAKE) --no-print-directory -C rach2 COMPONENT=rach2-pure64 IA32=0
+# Its kernel.debug, as $(KERNEL).debug is made in the root Makefile.
+$(PURE64_KERNEL).debug: $(PURE64_KERNEL)
+	@test -f $@
 pure64-kernel: $(PURE64_KERNEL)
 # `tests/run stress`: an on-disk KRFFS larger than the page cache. It is the
 # case of tests/cases/guest.stress.json, which etude runs, and has no target
@@ -1768,7 +1903,10 @@ $(BUS_ROOTS): $(ARCH_CASE_DIR)/bus/%.disk: krffs/manifests/disk-test.manifest \
 # `tests/run large`: a file of 256 MiB on ext2 and on exFAT, written, read
 # back after a remount, sought, sized, truncated, appended and shared between
 # two descriptors, a mebibyte written astride the 4 GiB line of a sparse ext2
-# file, and a write past each format's limit refused by name. They are the
+# file, a write past each format's limit refused by name, and an ext2 file of
+# 256 MiB read twice with no disk read the second time, and a small file
+# changed every way a file can be between two reads that each see the
+# change. They are the
 # machine cases of tests/cases/machine.large.json, which etude runs, and have
 # no target here. The exFAT volume comes from the host's own formatter.
 # `tests/run punch`: large files freed on an ext2 volume beside allocation,
@@ -1919,7 +2057,19 @@ include tests/graphics/d3d/rules.mk
 # on virgl: a new prefix with WineD3D's video memory set, GL and Direct3D 9
 # pixels, 64-bit and 32-bit, against the Debian guest's in the same QEMU, and
 # the preloader's reserved ranges against Linux's maps.
+# `tests/run games-wm`: in the boot session's Weston on kiosk-shell, xplace's
+# and Wine's fullscreen windows placed, focused, scaled and dumped through
+# QMP, raw motion under a confining grab, Wine's tone through the loopback
+# and DirectInput's devices; the same payload, with wm.py.
 include tests/system/games/rules.mk
+
+# `tests/run games-umu`: the Wine probes' 64-bit Direct3D 9 program through
+# rach2-game --umu, umu-launcher and the Steam Linux Runtime's container: the
+# runtime unpacked once with its updates off, the direct route's Proton
+# settings, Linux's pixels, the GL probe on virgl, Wine's tone through the
+# container's PulseAudio socket recorded through the HDA loopback, the session
+# bus, and no refused call in pressure-vessel's log that the stored Linux
+# reference's lacks. It reads the payload games-wine makes.
 
 # `tests/run desktop`: an ordinary headless Weston session at boot, input
 # discovery, and browser and ALSA tones measured through OSS loopback; Weston
@@ -1944,7 +2094,9 @@ build/tests/graphics/desktop.py: tests/graphics/desktop.py
 # `tests/run webgpu`: Chromium adapter answers on Venus, compared with Debian.
 
 # `tests/run browser`: HTTPS pages, browser sandbox diagnostics, WebGPU,
-# concurrent sound, GPU recovery, and the fixed WebGL and video comparisons.
+# concurrent sound, GPU recovery, the fixed WebGL and video comparisons, and
+# the accelerated browsers' checks on the fake i915 chip, which also read the
+# Direct3D payload's disk.
 BROWSER_TEST_EXT2 = $(IMAGES_DIR)/browser-test.ext2
 BROWSER_TEST_DISK = $(IMAGES_DIR)/browser-test.disk
 $(BROWSER_TEST_EXT2): $(GNU_IMAGE_DEPS) $(GNU_ROOT_MANIFEST_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) | $(GNU_IMAGE_ORDER)
@@ -1959,7 +2111,7 @@ $(BROWSER_TEST_DISK): $(BROWSER_TEST_EXT2) $(MKMBR)
 	$(MKMBR) --lba $@.tmp 2048:$$((mib * 2048)):83 > /dev/null
 	mv $@.tmp $@
 BROWSER_FILES = $(wildcard tests/graphics/browser/*) $(GRAPHICS_FILES) \
-                $(wildcard tests/graphics/browser/ref/*/*)
+                $(wildcard tests/graphics/browser/ref/*/*) $(wildcard tests/graphics/lenovo/*)
 build/tests/cases/browser/seat.so: tests/graphics/browser/seat.c tests/graphics/browser/seat-build.sh
 	sh tests/graphics/browser/seat-build.sh $@
 build/tests/cases/browser/files.tar.gz: $(BROWSER_FILES) build/tests/cases/browser/seat.so
@@ -2000,19 +2152,25 @@ build/tests/cases/gnu/pi-futex.c: tests/musl/pifutexmusl.c
 	cp $< $@
 
 # `tests/run assign`: a NIC assigned to a Debian guest through VT-d and VFIO,
-# DMA and MSI isolation under host traffic, and release after a killed guest.
+# DMA and MSI isolation under host traffic, release after a killed guest, and
+# the Intel driver's function given to a guest and taken back.
 ASSIGN_DIR = build/tests/cases/assign
 $(ASSIGN_DIR)/initrd: tests/assign/mkguest.sh tests/assign/guest-init \
+                      tests/assign/grub.cfg tests/assign/guest.txt \
                       tests/kvm/guests/debian.txt build/tools/wifi/mkcpio $(SHA256TOOL)
 	sh tests/assign/mkguest.sh $(@D)
+# The guest's own disk comes with its initramfs, from the same script.
+$(ASSIGN_DIR)/grub.img: $(ASSIGN_DIR)/initrd
+	@test -f $@ || sh tests/assign/mkguest.sh $(@D)
 $(ASSIGN_DIR)/edu: tests/assign/edu.c rach2/sys/vfio/vfio_abi.h $(LIBC_STAMP)
 	@mkdir -p $(@D) build/tmp
 	TMPDIR=$(CURDIR)/build/tmp RACH2_ARCH=x86_64 vendor/musl/muslgcc -O2 -Wall -Wextra -Werror \
 	    -static -Wl,-z,noexecstack $< -o $@
-$(ASSIGN_DIR)/assign.tar: tests/assign/run.sh $(ASSIGN_DIR)/initrd $(ASSIGN_DIR)/edu \
+$(ASSIGN_DIR)/assign.tar: tests/assign/run.sh tests/assign/gpu.sh $(ASSIGN_DIR)/initrd \
+                        $(ASSIGN_DIR)/grub.img $(ASSIGN_DIR)/edu \
                         $(KVM_GUEST_DIR)/vmlinuz tests/kvm/kvm-boot.sh
-	tar -cf $@.tmp -C tests assign/run.sh kvm/kvm-boot.sh \
-	    -C $(CURDIR)/$(ASSIGN_DIR)/.. assign/initrd assign/edu \
+	tar -cf $@.tmp -C tests assign/run.sh assign/gpu.sh kvm/kvm-boot.sh \
+	    -C $(CURDIR)/$(ASSIGN_DIR)/.. assign/initrd assign/grub.img assign/edu \
 	    -C $(CURDIR)/build/kvm/guests/debian vmlinuz
 	mv $@.tmp $@
 $(ASSIGN_DIR)/assign.ext2: $(ASSIGN_DIR)/assign.tar
@@ -2044,3 +2202,6 @@ $(ASSIGN_DISK): $(ASSIGN_ROOT) $(MKMBR)
 	dd if=$< of=$@.tmp bs=1048576 seek=1 conv=notrunc,sparse 2>/dev/null; \
 	$(MKMBR) --lba --id 82274701 $@.tmp 2048:$$((mib * 2048)):83; \
 	mv $@.tmp $@
+
+# `tests/run wakelat`: measure six timed waits under idle, user, system-call
+# and mixed load on four CPUs, with the timer, queue and lock counts.

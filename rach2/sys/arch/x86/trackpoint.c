@@ -1,6 +1,7 @@
 /*
- * trackpoint.c: a TrackPoint behind a touchpad's pass-through port, found,
- * set up and adjusted as Linux 6.12's trackpoint.c does (trackpoint.h).
+ * trackpoint.c: a TrackPoint behind a touchpad's pass-through port or alone
+ * on the auxiliary port, found, set up and adjusted as Linux 6.12's
+ * trackpoint.c does (trackpoint.h).
  *
  * The stick takes the PS/2 mouse's commands and two of its own: read-ID,
  * 0xE1, answered by its kind and firmware, and 0xE2, followed by an
