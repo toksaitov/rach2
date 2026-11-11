@@ -448,6 +448,7 @@ static void buffer_cases(void)
     CHECK(!dma_resv_add_fence(b->resv, w, 1), "install writer");
     CHECK(!dma_resv_add_fence(b->resv, r, 0), "install reader");
     CHECK(!e->ops->poll(e, 5, &q) && q == &b->wq, "buffer waits on implicit fences");
+    CHECK(w->listened && !r->listened, "poll listens on the first pending leaf alone");
     snap = dma_resv_snapshot(b->resv, 1);
     CHECK(dma_fence_count(snap) == 2, "write waits for readers too");
     dma_fence_put(snap);
