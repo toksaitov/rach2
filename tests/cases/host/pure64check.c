@@ -1,6 +1,8 @@
 /*
  * pure64check.c: host.host.pure64, the x86-64 kernel built without the i386
- * ABI (`make IA32=0`), read from its symbol table beside the default kernel's.
+ * ABI (`make IA32=0`), read from the symbol table of its kernel.debug beside
+ * the default kernel's, since the kernel the loaders boot keeps no symbols but
+ * `_start` and `_end`.
  */
 #include "native.h"
 
@@ -86,8 +88,8 @@ int main(void)
 
     if (native_begin(&test, "host.host.pure64"))
         return 2;
-    native_tool(&test, pure, "x86_64/rach2-pure64/kernel");
-    native_tool(&test, full, "x86_64/rach2/kernel");
+    native_tool(&test, pure, "x86_64/rach2-pure64/kernel.debug");
+    native_tool(&test, full, "x86_64/rach2/kernel.debug");
     p = native_read(pure, &psize);
     k = native_read(full, &ksize);
     native_assert(&test, "linked",

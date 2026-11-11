@@ -1777,6 +1777,10 @@ harness-kernel: $(HARNESS_KERNEL)
 PURE64_KERNEL = $(ARCH_BUILD)/rach2-pure64/kernel
 $(PURE64_KERNEL): ask-the-sub-make
 	@$(MAKE) --no-print-directory -C rach2 COMPONENT=rach2-pure64 IA32=0
+# Its kernel.debug, as $(KERNEL).debug is made in the root Makefile.
+$(PURE64_KERNEL).debug: $(PURE64_KERNEL)
+	@test -f $@ || { rm -f $(PURE64_KERNEL) && \
+	    $(MAKE) --no-print-directory -C rach2 COMPONENT=rach2-pure64 IA32=0; }
 pure64-kernel: $(PURE64_KERNEL)
 # `tests/run stress`: an on-disk KRFFS larger than the page cache. It is the
 # case of tests/cases/guest.stress.json, which etude runs, and has no target
