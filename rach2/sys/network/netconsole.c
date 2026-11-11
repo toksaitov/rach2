@@ -104,9 +104,13 @@ static int nc_held;    /* the last drain stopped: no link or a refused frame */
 static const uint8_t nc_broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 /* How long a link must have been up before a drain sends on it. The
- * Lenovo's RTL8168 counted no transmit error for the boot log it sent the
- * moment its link came up, yet none of it reached the Mac, while every
- * record sent from 0.8 s later on did. The ring holds the records
+ * Lenovo's RTL8168 counted every frame of the boot log it sent the moment
+ * its link came up as sent, in its own tally (TxOK) as in the driver's
+ * count, yet none reached the Mac, while every record sent from 0.85 s
+ * later on did, and the same drain sent 2 s after the link came up arrived
+ * whole: what is sent at once is lost past the card, where no driver can
+ * see it. Linux 6.12 waits for carrier and no longer (`netpoll_setup`,
+ * net/core/netpoll.c), and would lose it too. The ring holds the records
  * meanwhile. */
 #define NC_LINK_SETTLE_MS 2000
 static uint32_t nc_settle_ticks = MS_TO_TICKS(NC_LINK_SETTLE_MS);
