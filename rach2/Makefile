@@ -150,6 +150,17 @@ ELFCHECK = ../build/tools/inspect/elfcheck
 # kludge, whose copy must put every byte where the kernel is linked.
 KERNEL_CHECK = $(ELFCHECK) --kernel
 
+# Both outputs come from the kernel's link. A missing debug file forces
+# that producer before any consumer of either file can run, and the old
+# kernel stays published until the replacement has passed the link checks.
+ifeq ($(wildcard $(KERNEL_BIN).debug),)
+.PHONY: missing-kernel-debug
+$(KERNEL_BIN): missing-kernel-debug
+endif
+
+$(KERNEL_BIN).debug: $(KERNEL_BIN)
+	@test -f $@
+
 $(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS) $(ACPICA_OBJECTS) $(LINKER_SCRIPT).ld Makefile
 	@mkdir -p $(dir $@)
 	@$(MAKE) --no-print-directory -C .. build/tools/inspect/elfcheck

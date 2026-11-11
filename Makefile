@@ -569,10 +569,10 @@ ask-the-sub-make:
 $(KERNEL): ask-the-sub-make
 	@$(MAKE) --no-print-directory -C rach2
 # The same link writes kernel.debug, the kernel with every symbol, which a
-# case that reads symbols names among its prepared files. When it is gone the
-# kernel goes too, so that the sub-make links both again.
+# case that reads symbols names among its prepared files. The sub-make
+# repairs a missing debug file before it releases either output's consumers.
 $(KERNEL).debug: $(KERNEL)
-	@test -f $@ || { rm -f $(KERNEL) && $(MAKE) --no-print-directory -C rach2; }
+	@test -f $@
 $(ARCH_BUILD)/ish/ish: ask-the-sub-make
 	@$(MAKE) --no-print-directory -C ish
 # An image's dependency file names the shell by its absolute path
