@@ -402,7 +402,10 @@ static int32_t get_info(struct vfio_container *c, uintptr_t arg)
  * space (PIN_KEEP_PAST_END), device pages and all, until the container's
  * release, after the device's own release at the close of its descriptor
  * has reset it, so that no unmap or IOTLB invalidation reaches the domain
- * while the device runs, as Linux's type1 (vfio_iommu_type1.c:2589). */
+ * while the device runs, as Linux's type1, which takes them in
+ * vfio_iommu_type1_detach_group (vfio_iommu_type1.c:2455, :2508 in
+ * 6.12.115), called from vfio_group_detach_container (container.c:480)
+ * after the device's release. */
 static void dma_released(struct pin *pin, void *owner)
 {
     struct vfio_dma *dma = (struct vfio_dma *)owner;
