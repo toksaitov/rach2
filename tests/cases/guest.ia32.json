@@ -125,9 +125,9 @@
       "units": ["ia32", "musl/lockstressmusl"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "workload": {"arguments": ["-C", "/dev/shm"], "inputs": {}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 4, "memory_bytes": 536870912, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.vgem"]}},
-      "execution": {"program": "lockstressmusl", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the program joins its threads, reaps every child and removes the file and directory it made in its working directory"},
+      "execution": {"program": "lockstressmusl", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the program joins its threads, reaps every child and removes the file and directory it made in /dev/shm"},
       "assertions": [
         {"assertion_id": "switch", "checks": "pairs of threads, one for each processor and at least two, pass 2000 counts each way through a futex word with FUTEX_WAIT and FUTEX_WAKE and then through two pipes, each side seeing every count in order", "source": "program"},
         {"assertion_id": "poll", "checks": "a reader polls 64 pipes, and then waits on them in an epoll set, while a writer on each other processor writes 2000 bytes into them; every byte arrives once, from the pipe it was written to, poll and epoll give POLLIN alone, and a pipe given as readable reads at least a byte", "source": "program"},

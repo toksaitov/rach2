@@ -9,9 +9,10 @@
  * Every mode runs once, in the order below, or those -m names. -n
  * multiplies each mode's rounds (1 by default), and -t runs the modes again
  * until SECONDS have passed, at least once each. -C names the directory of
- * the share and stat modes' files, "." by default. The threads are pinned
- * to the processors online in turn, so that on more than one each race
- * crosses processors. The modes, each an assertion:
+ * the share and stat modes' files, "." by default; Rach2 maps a file shared
+ * and writable on tmpfs and ext2 alone, so its case gives /dev/shm. The
+ * threads are pinned to the processors online in turn, so that on more than
+ * one each race crosses processors. The modes, each an assertion:
  *
  *   switch   pairs of threads on two processors pass a count through a
  *            futex word and through a pipe, each seeing every value in
@@ -23,10 +24,13 @@
  *   close    a thread blocked in a read of a pipe, or in a write of 256 KiB
  *            to a full one, has its descriptor closed, or another file
  *            put in its place by dup2, from another processor; the call
- *            ends as Linux's does (fs/file.c, filp_close leaves the file to
- *            the call that holds it): the read gets the byte of the file it
- *            began on, the write writes all of it, and a call that began
- *            after the close fails with EBADF;
+ *            ends as Linux's does, since it holds the file by its own
+ *            reference (fdget_pos, fs/read_write.c:703), which close and
+ *            dup2 leave (fs/open.c:1558-1583, fs/file.c:1205-1248): the
+ *            read gets the byte of the file it began on and the write
+ *            writes all of it, a call that began after fails with EBADF or
+ *            uses the new file, and a write to a pipe left with no reader
+ *            is EPIPE (fs/pipe.c:457-461);
  *   unmap    two processes at once unmap and map again a region that their
  *            threads on the other processors read; a read gives a value of
  *            the mapping it read or a later one, never an earlier one or
@@ -47,16 +51,20 @@
  *            with its own status; threads exit while the parent joins them;
  *   requeue  two threads requeue the waiters of two futex words onto each
  *            other with FUTEX_CMP_REQUEUE while the waiters wait with
- *            timeouts of 1 to 3 ms; every call gives one of Linux's
- *            answers and every waiter returns;
- *   stat     threads on every processor fstatat and openat 16 warmed files
- *            and read them, each seeing the inode, size and data it had;
+ *            timeouts of 1 to 3 ms; every requeue gives a count or EAGAIN
+ *            (kernel/futex/requeue.c:483-485), every wait 0, ETIMEDOUT,
+ *            EAGAIN or EINTR, and every waiter returns;
+ *   stat     threads on every processor make newfstatat, fstatat64 on
+ *            i386, and openat of 16 warmed files and read them, each seeing
+ *            the inode, size and data it had;
  *   drm      on vgem, a submitter attaches and signals write fences while
  *            two threads attach read fences, which are EBUSY while a write
- *            fence is pending, and poll the buffer's dma-buf; with no
- *            fence the dma-buf is readable and writable, and a write fence
- *            leaves it neither until it is signalled. Not run without a
- *            vgem device, which the kernel makes with rach2.vgem.
+ *            fence is pending, and a write fence while any is
+ *            (drivers/gpu/drm/vgem/vgem_fence.c:154-158), and poll the
+ *            buffer's dma-buf; with no fence the dma-buf is readable and
+ *            writable, and a write fence leaves it neither until it is
+ *            signalled (drivers/dma-buf/dma-buf.c:253-321). Not run without
+ *            a vgem device, which the kernel makes with rach2.vgem.
  *
  * A CALL of -u is a system call by name in this program's ABI, a number as
  * syscall:N, an entry vector as vector:N, an ioctl request as ioctl:0xN, or
@@ -263,6 +271,12 @@ static void on_fault(int sig, siginfo_t *si, void *uc)
         siglongjmp(*guard_jb, sig);
     }
     signal(sig, SIG_DFL);
+}
+
+/** Do nothing: SIGUSR1, without SA_RESTART, ends the call it interrupts. */
+static void on_wake(int sig)
+{
+    (void)sig;
 }
 
 /** Start `n` threads of `fn`, each given its index; 0, or -1 with those
@@ -691,8 +705,14 @@ static void *cl_closer(void *arg)
             if (close(cl_fd) != 0) {
                 fail("close: %s", strerror(errno));
             }
-        } else if (dup2(cl_other, cl_fd) != cl_fd) {
-            fail("dup2: %s", strerror(errno));
+        } else if (syscall(SYS_dup2, cl_other, cl_fd) != cl_fd) {
+            /* Linux replaces a descriptor another thread's call holds
+             * (fs/file.c:1205-1248); a refusal is closed over, so that the
+             * round still ends. The call is made directly, since musl's
+             * dup2 makes it again for as long as it is EBUSY. */
+            fail("dup2 onto the descriptor of a %s in another thread: %s",
+                 cl_variant < 2 ? "read" : "write", strerror(errno));
+            close(cl_fd);
         }
         pthread_barrier_wait(&cl_two);
         pthread_barrier_wait(&cl_three);
@@ -845,6 +865,12 @@ static void mode_close(void)
         pthread_barrier_wait(&cl_three);
         pthread_barrier_wait(&cl_two);
         cl_finish(&r);
+        /* A pipe left with no reader, or drained to its end, has no call
+         * asleep on it on Linux; one still asleep is woken by the signal,
+         * which ends it with EINTR or a short count. */
+        if (cl_variant >= 2 || r.wrote == -1) {
+            pthread_kill(t[0], SIGUSR1);
+        }
         pthread_barrier_wait(&cl_three);
         if (!cl_linux(&r)) {
             fail("%s round %ld: the call gave %ld (%s), byte %u, write %d, %ld bytes drained of "
@@ -1781,8 +1807,8 @@ static uint32_t dr_handle;
 static long dr_rounds, dr_attached[3], dr_busy[3], dr_polls;
 
 /** Open the first primary DRM node whose driver is vgem, since a render
- * node refuses MODE_CREATE_DUMB (drm_ioctl.c, no DRM_RENDER_ALLOW); its
- * descriptor or -1. */
+ * node refuses MODE_CREATE_DUMB, which has no DRM_RENDER_ALLOW
+ * (drivers/gpu/drm/drm_ioctl.c:636); its descriptor or -1. */
 static int dr_open(void)
 {
     struct drm_version v;
@@ -2149,8 +2175,10 @@ static int calls_judge(void)
             dc = (c->calls[1] - c->calls[0]) & 0xffffffffull;
             dh = (c->holds[1] - c->holds[0]) & 0xffffffffull;
         }
-        printf("lockstressmusl: calls: %s (%s %lu): %llu calls, %llu holds\n", c->arg, c->kind,
-               c->number, dc, dh);
+        printf(strcmp(c->kind, "ioctl") == 0
+                   ? "lockstressmusl: calls: %s (%s %#lx): %llu calls, %llu holds\n"
+                   : "lockstressmusl: calls: %s (%s %lu): %llu calls, %llu holds\n",
+               c->arg, c->kind, c->number, dc, dh);
         if (why[0] == '\0' && dc == 0) {
             snprintf(why, sizeof(why), "%s was not called", c->arg);
         } else if (why[0] == '\0' && dh != 0) {
@@ -2350,6 +2378,9 @@ int main(int argc, char **argv)
     sa.sa_flags = SA_SIGINFO | SA_NODEFER;
     sigaction(SIGSEGV, &sa, NULL);
     sigaction(SIGBUS, &sa, NULL);
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = on_wake;
+    sigaction(SIGUSR1, &sa, NULL);
     signal(SIGPIPE, SIG_IGN);
     setvbuf(stdout, NULL, _IOLBF, 0);
 
