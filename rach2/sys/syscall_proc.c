@@ -4242,6 +4242,14 @@ static enum ksig_default ksig_default_action(int signo)
     }
 }
 
+/** Whether `handler` ignores `signo`, explicitly or by its default, as
+ * Linux 6.12.115's sig_handler_ignored (kernel/signal.c:75-80). */
+static int sig_handler_ignored(uintptr_t handler, int signo)
+{
+    return handler == KSIG_IGN ||
+           (handler == KSIG_DFL && ksig_default_action(signo) == KSIG_DEFAULT_IGNORE);
+}
+
 /** The 64-bit sa_mask the user installed (two 32-bit words, signals 1..64). */
 static uint64_t sigact_mask(const struct k_sigaction *sa)
 {
@@ -4267,15 +4275,33 @@ static void sig_irq_restore(uint32_t flags)
 /* The stop signals, which SIGCONT cancels and which cancel SIGCONT. */
 #define SIG_STOPS (KSIG_BIT(SIGSTOP) | KSIG_BIT(SIGTSTP) | KSIG_BIT(SIGTTIN) | KSIG_BIT(SIGTTOU))
 
-/** Make `t` runnable if it sleeps, clearing its timed wake: an
+/** Mark signal work for `t` alone for the unblocked signals in `bits`, as
+ * Linux 6.12.115's signal_wake_up_state marks TIF_SIGPENDING
+ * (kernel/signal.c:759-773).
+ * A wake for a blocked signal, for a signalfd poll, marks no work.
+ * Make `t` runnable if it sleeps, clearing its timed wake: an
  * interruptible wait then calls `signal_pending` to learn whether to end
  * with -EINTR, and any wait that goes on arms its own deadline again. */
-static void sig_wake(process_t *t)
+static void sig_wake(process_t *t, uint64_t bits)
 {
+    if (t && (bits & ~t->sig_blocked) != 0) {
+        t->sig_woken = 1;
+    }
     if (t && t->state == PROC_BLOCKED) {
         t->wakeup_tick = 0;
         sched_make_ready(t);
     }
+}
+
+/** Recompute the current thread's signal-work flag with interrupts off,
+ * as Linux 6.12.115's recalc_sigpending (kernel/signal.c:157-178). No
+ * other thread's flag is cleared, even when this one took its signal. */
+static void sig_recalc(void)
+{
+    process_t *self = current_proc;
+
+    self->sig_woken = ((self->sig_pending | self->tg->pending) & ~self->sig_blocked) != 0 ||
+                      (self->tg->stop && !self->stop_seen) || (self->ptrace & PT_INTERRUPT);
 }
 
 /** Clear the signals `bits` from the process of `target` and from each of
@@ -4390,8 +4416,8 @@ static void sig_retarget(const process_t *self, uint64_t moved)
 
     for (t = proc_list; t && moved != 0; t = t->next) {
         if (t != self && t->tg == self->tg && sig_wants(t, moved)) {
+            sig_wake(t, moved);
             moved &= t->sig_blocked;
-            sig_wake(t);
         }
     }
 }
@@ -4415,6 +4441,7 @@ void signal_set_blocked(uint64_t mask)
     moved = self->tg->pending & mask & ~self->sig_blocked;
     self->sig_blocked = mask;
     sig_retarget(self, moved);
+    sig_recalc();
     sig_irq_restore(flags);
 }
 
@@ -4435,9 +4462,11 @@ void signal_exit_begin(void)
  * Linux 6.12.115's `wants_signal` (kernel/signal.c:977-993), which decides
  * whether a signal ends the process at its post: `t` does not block it and
  * has not ended or begun to end, and either the signal is SIGKILL, or `t` is
- * not stopped and is running on a processor or has no other signal pending
- * that it does not block. A thread asleep with a signal pending already
- * takes that one first, and its handler may change what `signo` does.
+ * not stopped and is running on a processor or has no signal work of its
+ * own: its unblocked pending set and its wake flag, not every signal in the
+ * process's set. The caller tests this before posting the new signal.
+ * A thread asleep with signal work already takes that first, and its
+ * handler may change what `signo` does.
  */
 static int sig_wants_now(const process_t *t, int signo)
 {
@@ -4451,8 +4480,7 @@ static int sig_wants_now(const process_t *t, int signo)
         return 1;
     }
     return t->state != PROC_STOPPED &&
-           (t->state == PROC_RUNNING ||
-            ((t->sig_pending | t->tg->pending) & ~t->sig_blocked & ~bit) == 0);
+           (t->state == PROC_RUNNING || (!t->sig_woken && (t->sig_pending & ~t->sig_blocked) == 0));
 }
 
 /**
@@ -4493,7 +4521,7 @@ static process_t *sig_fatal_taker(process_t *target, int signo, int whole)
  * signal that dumps core is left to the thread that takes it, which writes
  * the core before the others end. An init (`unkillable`) ends only by
  * SIGKILL here: Linux leaves this test out (kernel/signal.c:1034-1037), so
- * that a signal one of init's threads blocks, which `sig_init_drops` lets
+ * that a signal one of init's threads blocks, which `sig_ignored` lets
  * through, ends init when another thread does not block it, and the
  * system's init panics.
  */
@@ -4529,14 +4557,15 @@ static void sig_post_own(process_t *t, int signo, const struct k_siginfo *info)
     if (signo == SIGKILL && t->state == PROC_STOPPED) {
         sched_make_ready(t);
     }
-    sig_wake(t);
+    sig_wake(t, KSIG_BIT(signo));
     sig_irq_restore(f);
 }
 
 /**
  * Finish posting `signo` to `target` once it is pending, with interrupts
- * off: wake `taker`, or, when the signal ends the process (`sig_fatal_now`
- * of `sig_fatal_taker`'s thread, `whole` for a signal sent to the process),
+ * off: wake a thread, or, when the signal ends the process (`sig_fatal_now`
+ * of `taker`, chosen before the post by `sig_fatal_taker`, `whole` for a
+ * signal sent to the process),
  * begin the process's end, as Linux 6.12.115's `complete_signal` does
  * (kernel/signal.c:1044-1056). The process will end with the wait status of
  * a death by `signo`, and every thread is sent SIGKILL and woken, so that a
@@ -4547,8 +4576,12 @@ static void sig_post_own(process_t *t, int signo, const struct k_siginfo *info)
  */
 static void sig_complete(process_t *target, process_t *taker, int signo, int whole)
 {
-    if (!sig_fatal_now(target, sig_fatal_taker(target, signo, whole), signo)) {
-        sig_wake(taker);
+    if (!sig_fatal_now(target, taker, signo)) {
+        if (taker) {
+            sig_wake(taker, KSIG_BIT(signo));
+        } else if (whole) {
+            sig_wake(sig_taker(target, signo), 0);
+        }
         return;
     }
     sig_group_end(target->tg, signo, 1);
@@ -4573,17 +4606,18 @@ static int sig_forced(const process_t *t, const struct k_siginfo *info)
 }
 
 /**
- * Whether an init drops the signal `signo` with the siginfo `info`, sent to
+ * Whether the signal `signo` with the siginfo `info` is ignored by
  * its thread `t`, as Linux 6.12.115's `sig_ignored` and `sig_task_ignored`
  * judge it (kernel/signal.c:82-123): a signal `t` blocks or waits for stays
  * pending, since its disposition may change before it is taken, and so does
  * one a tracer would see, any but SIGKILL; otherwise the system's real init
- * drops SIGKILL and SIGSTOP, and an init (`unkillable`) drops a signal left
+ * drops SIGKILL and SIGSTOP, an init (`unkillable`) drops a signal left
  * at its default, unless it is SIGKILL or SIGSTOP and forced (`sig_forced`).
+ * Any process drops an ignored disposition, explicit or default.
  * An init under the debug shell, which a probe or a rescue shell runs as,
  * is an ordinary process, as its end returns to the shell.
  */
-static int sig_init_drops(const process_t *t, int signo, const struct k_siginfo *info)
+static int sig_ignored(const process_t *t, int signo, const struct k_siginfo *info)
 {
     int kernel_only = signo == SIGKILL || signo == SIGSTOP;
 
@@ -4596,8 +4630,11 @@ static int sig_init_drops(const process_t *t, int signo, const struct k_siginfo 
     if (kernel_only && t->tgid == init_pid && !debug_shell_is_home) {
         return 1;
     }
-    return t->tg->unkillable && t->tg->action[signo].handler == KSIG_DFL &&
-           !(kernel_only && sig_forced(t, info));
+    if (t->tg->unkillable && t->tg->action[signo].handler == KSIG_DFL &&
+        !(kernel_only && sig_forced(t, info))) {
+        return 1;
+    }
+    return sig_handler_ignored(t->tg->action[signo].handler, signo);
 }
 
 /**
@@ -4606,10 +4643,11 @@ static int sig_init_drops(const process_t *t, int signo, const struct k_siginfo 
  * `prepare_signal` (kernel/signal.c:902-967): its job-control effect
  * (`sig_job_control`), and whether it is set pending at all. A process
  * whose end has begun drops it, with no effect, unless it is SIGKILL and
- * the process is writing its core, which the SIGKILL stops. An init drops
- * one it is protected from (`sig_init_drops`), and SIGKILL then wakes no
- * stopped thread. Returns 1 when the signal is to be set pending, 0 when it
- * is dropped.
+ * the process is writing its core, which the SIGKILL stops. An ignored
+ * signal is dropped (`sig_ignored`), with the blocked, waiting and tracing
+ * exceptions; an init also drops signals it is protected from. A dropped
+ * SIGKILL wakes no stopped thread. Returns 1 when the signal is to be set
+ * pending, 0 when it is dropped.
  */
 static int sig_prepare(process_t *target, int signo, const struct k_siginfo *info)
 {
@@ -4619,7 +4657,7 @@ static int sig_prepare(process_t *target, int signo, const struct k_siginfo *inf
     if (signo != SIGKILL) {
         sig_job_control(target, signo);
     }
-    if (sig_init_drops(target, signo, info)) {
+    if (sig_ignored(target, signo, info)) {
         return 0;
     }
     if (signo == SIGKILL) {
@@ -4642,6 +4680,7 @@ static int sig_prepare(process_t *target, int signo, const struct k_siginfo *inf
 void signal_post_info(process_t *target, int signo, const struct k_siginfo *info)
 {
     struct tgroup *tg;
+    process_t *taker;
     uint32_t f;
 
     if (!target || signo < 1 || signo > KSIG_MAX || target->state == PROC_UNUSED) {
@@ -4652,12 +4691,11 @@ void signal_post_info(process_t *target, int signo, const struct k_siginfo *info
         return;
     }
     f = sig_irq_save();
-    if (sig_prepare(target, signo, info)) {
-        if (!(tg->pending & KSIG_BIT(signo))) {
-            tg->info[signo] = *info;
-        }
+    if (sig_prepare(target, signo, info) && !(tg->pending & KSIG_BIT(signo))) {
+        taker = sig_fatal_taker(target, signo, 1);
+        tg->info[signo] = *info;
         tg->pending |= KSIG_BIT(signo);
-        sig_complete(target, sig_taker(target, signo), signo, 1);
+        sig_complete(target, taker, signo, 1);
     }
     sig_irq_restore(f);
 }
@@ -4672,14 +4710,16 @@ void signal_post_info(process_t *target, int signo, const struct k_siginfo *info
 void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
 {
     uint32_t f;
+    process_t *taker;
 
     if (!t || signo < 1 || signo > KSIG_MAX || t->state == PROC_ZOMBIE || t->state == PROC_UNUSED) {
         return;
     }
     f = sig_irq_save();
-    if (sig_prepare(t, signo, info)) {
+    if (sig_prepare(t, signo, info) && !(t->sig_pending & KSIG_BIT(signo))) {
+        taker = sig_fatal_taker(t, signo, 0);
         sig_post_own(t, signo, info);
-        sig_complete(t, sig_wants(t, KSIG_BIT(signo)) ? t : NULL, signo, 0);
+        sig_complete(t, taker, signo, 0);
     }
     sig_irq_restore(f);
 }
@@ -5261,7 +5301,7 @@ long signal_action(int signo, const struct k_sigaction *act, struct k_sigaction 
             current_proc->sigacts[signo].flags |= SA_IA32_ABI;
         }
 #endif
-        if (act->handler == KSIG_IGN) {
+        if (sig_handler_ignored(act->handler, signo)) {
             uint32_t f = sig_irq_save();
             sig_discard(current_proc, KSIG_BIT(signo));
             sig_irq_restore(f);
@@ -5734,6 +5774,7 @@ static int sig_dequeue(uint64_t wanted, struct k_siginfo *info)
         current_proc->tg->pending &= ~KSIG_BIT(signo);
         *info = current_proc->tg->info[signo];
     }
+    sig_recalc();
     sig_irq_restore(flags);
     return signo;
 }
@@ -5780,7 +5821,7 @@ static void sig_take_kill(void)
  * ignore it, stop the process (`sig_group_stop`), or end the process, with
  * a core file for a signal that dumps core (`terminate_current_process`),
  * which does not return. An init (`unkillable`) passes over the default
- * action of any signal but SIGKILL and SIGSTOP, one `sig_init_drops` let
+ * action of any signal but SIGKILL and SIGSTOP, one `sig_ignored` let
  * through because the thread blocked it or was traced, as Linux 6.12.115's
  * `get_signal` does (kernel/signal.c:2857-2868).
  */
@@ -5862,6 +5903,7 @@ void deliver_signals(isr_params_t *tf)
         }
         deliverable = sig_pending_now() & ~current_proc->sig_blocked;
         if (deliverable == 0) {
+            sig_recalc();
             break;
         }
         if (deliverable & KSIG_BIT(SIGKILL)) {
