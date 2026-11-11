@@ -4,10 +4,10 @@
  * with the processors each boot has; `preempt` and `usermode` run the debug
  * shell's preemption test and ring-3 payload on two; `nmi` raises an NMI on
  * both of two, which stops the machine as a fault of the machine, and
- * `exception` runs an invalid opcode in the kernel, each read on the screen
- * after its panic; and `build` compiles the ish sources four times over on
- * the installed system with four, and checks that every processor's user
- * ticks grew.
+ * `exception` runs an invalid opcode in the kernel, each with panic=0 and
+ * its report read on the screen after its panic; and `build` compiles the
+ * ish sources four times over on the installed system with four, and checks
+ * that every processor's user ticks grew.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -192,64 +192,55 @@ static int read_screen(struct lc *l, struct etude_case_machine *m, char *cells)
 
 /** The lines of one panic on the screen and in the log. */
 struct panic_text {
-    const char *cause;  /* the report's text up to its address */
-    const char *reason; /* what follows `panic: stopped: ` */
-    const char *report; /* the report as the log has it */
+    const char *fault;  /* the report's line that names the fault */
+    const char *reason; /* the panic's reason, after `panic: ` */
+    const char *report; /* the fault's record as the log has it */
 };
 
-static const struct panic_text nmi_text = {"isr: hardware fault: non-maskable interrupt (vector 2,",
-                                           "the machine reported a fault", "hardware fault: "};
-static const struct panic_text exception_text = {"isr: kernel exception: invalid opcode (vector 6,",
-                                                 "unrecoverable CPU exception",
+static const struct panic_text nmi_text = {"non-maskable interrupt", "the machine reported a fault",
+                                           "hardware fault: "};
+static const struct panic_text exception_text = {"invalid opcode", "unrecoverable CPU exception",
                                                  "kernel exception: "};
 
 /**
- * Find in `record`, before `end`, the address a fault's record gives: the
- * field `rip`, `eip` or `pc` and a hex value of at least one digit.
- * @return the field, or NULL when the record has none.
+ * Find in `cells` the panic report's line `ip 0x` and a hex digit after it,
+ * the instruction the fault was raised at. @return the line, or NULL when
+ * the screen has none.
  */
-static const char *fault_address(const char *record, const char *end)
+static const char *report_ip(const char *cells)
 {
-    static const char *const fields[] = {" rip 0x", " eip 0x", " pc 0x"};
-    const char *at;
-    size_t i;
-    char digit;
+    const char *at = strstr(cells, "ip 0x");
 
-    for (i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
-        at = strstr(record, fields[i]);
-        if (at == NULL || at >= end)
-            continue;
-        digit = at[strlen(fields[i])];
-        if (digit != '\0' && strchr("0123456789abcdef", digit) != NULL)
-            return at;
-    }
-    return NULL;
+    if (at == NULL || at[5] == '\0' || strchr("0123456789abcdef", at[5]) == NULL)
+        return NULL;
+    return at;
 }
 
 /**
- * End a panicked machine: read its screen, as `panic_screen` says, while it
- * still runs, quit it, and report `one-report` and `one-panic`, that no second
- * `report` follows byte `reported` and no second panic byte `panicked`.
+ * End a panicked machine: read its screen while it still runs, quit it, and
+ * report `one-report` and `one-panic`, that no second `report` follows byte
+ * `reported` and no second panic byte `panicked`. The screen holds the
+ * panic's short report: the instruction pointer, the fault's name after it,
+ * and `panic: ` with the reason last.
  */
 static void read_panic_then_quit(struct lc *l, struct etude_case_machine *m,
                                  const struct panic_text *t, uint64_t reported, uint64_t panicked)
 {
-    const char *cause = t->cause, *reason = t->reason, *report = t->report;
+    const char *reason = t->reason, *report = t->report;
     char cells[SCREEN_CELLS + 1], detail[SCREEN_CELLS + 64];
-    const char *at, *stopped = NULL, *pc = NULL;
+    const char *ip, *name = NULL, *stopped = NULL;
 
     if (!read_screen(l, m, cells))
         return;
-    at = strstr(cells, cause);
-    if (at != NULL) {
-        at += strlen(cause);
-        stopped = strstr(at, "panic: stopped: ");
-        pc = fault_address(at, stopped != NULL ? stopped : at + strlen(at));
-    }
+    ip = report_ip(cells);
+    if (ip != NULL)
+        name = strstr(ip, t->fault);
+    if (name != NULL)
+        stopped = strstr(name, "panic: ");
     snprintf(detail, sizeof(detail), "the screen has: %s", cells);
-    lc_assert(l, "screen-cause", at != NULL && pc != NULL, detail);
+    lc_assert(l, "screen-cause", name != NULL, detail);
     lc_assert(l, "screen-stopped",
-              stopped != NULL && strncmp(stopped + 16, reason, strlen(reason)) == 0, detail);
+              stopped != NULL && strncmp(stopped + 7, reason, strlen(reason)) == 0, detail);
     if (lc_quit(l, m, NULL)) {
         lc_find(l, m, "one-report", report, reported, 0);
         lc_find(l, m, "one-panic", "panic: stopped: ", panicked, 0);
