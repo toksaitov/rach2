@@ -86,17 +86,21 @@ struct intel_context *intel_context_get(struct intel_context *ce)
     return ce;
 }
 
-/** Unmap and free a state's image; for the last reference. */
+/** Unmap and free a state's image; for the last reference, under the GEM
+ * lock, which keeps the GTT. */
 static void intel_context_image_free(struct intel_context *ce)
 {
     struct drm_i915_private *i915 = ce->i915;
     uint64_t size = (uint64_t)I915_HSW_CXT_PAGES * I915_GTT_PAGE_SIZE;
+    int taken;
 
     if (!ce->image) {
         return;
     }
+    taken = i915_gem_lock(i915);
     (void)i915_ggtt_clear_range(i915, ce->image_ggtt, size);
     i915_ggtt_release(i915, ce->image_ggtt);
+    i915_gem_unlock(i915, taken);
     kfree_pages(ce->image, I915_HSW_CXT_PAGES);
     ce->image = 0;
 }
@@ -1071,16 +1075,19 @@ void i915_driver_postclose(struct drm_device *dev, struct drm_file *file)
 {
     struct i915_file *fp = file_priv(file);
     struct i915_gem_context *ctx;
+    int taken;
 
     if (!fp) {
         return;
     }
+    taken = i915_gem_lock(to_i915(dev));
     while ((ctx = fp->contexts) != 0) {
         fp->contexts = ctx->next;
         ctx->next = 0;
         context_close(ctx);
     }
     i915_retire_requests(to_i915(dev));
+    i915_gem_unlock(to_i915(dev), taken);
     kfree(fp);
     file->driver_priv = 0;
 }

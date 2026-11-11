@@ -182,15 +182,31 @@ static int32_t check_surface(const struct drm_plane_state *ps)
     return 0;
 }
 
+static int32_t fb_attach(struct drm_framebuffer *fb, struct drm_i915_gem_object *obj);
+
+/* The object's tiling and `fb_refs` are read and changed under the GEM
+ * lock, as SET_TILING changes them. */
 int32_t intel_fb_create(struct drm_device *dev, struct drm_framebuffer *fb)
 {
     struct drm_i915_gem_object *obj = (struct drm_i915_gem_object *)fb->obj[0];
-    uint32_t rows;
+    int32_t rc;
+    int taken;
 
-    (void)dev;
     if (!obj || obj->base.funcs != &i915_gem_object_funcs) {
         return 0;
     }
+    taken = i915_gem_lock(to_i915(dev));
+    rc = fb_attach(fb, obj);
+    i915_gem_unlock(to_i915(dev), taken);
+    return rc;
+}
+
+/** The checks of `intel_fb_create` of `fb` on `obj`, and its count on the
+ * object, under the GEM lock: 0 or -EINVAL. */
+static int32_t fb_attach(struct drm_framebuffer *fb, struct drm_i915_gem_object *obj)
+{
+    uint32_t rows;
+
     if (fb->flags & DRM_MODE_FB_MODIFIERS) {
         /* The planes take linear and X tiles alone, so the core let no
          * other modifier through. */
@@ -223,8 +239,12 @@ void intel_fb_destroy(struct drm_framebuffer *fb)
 {
     struct drm_i915_gem_object *obj = (struct drm_i915_gem_object *)fb->obj[0];
 
+    int taken;
+
     if (obj && obj->base.funcs == &i915_gem_object_funcs) {
+        taken = i915_gem_lock(to_i915(obj->base.dev));
         obj->fb_refs--;
+        i915_gem_unlock(to_i915(obj->base.dev), taken);
     }
 }
 

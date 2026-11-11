@@ -25,14 +25,32 @@
  * wait, goes through the device's `hw` (i915_hw.h); no file maps BAR 0 or
  * reads it by address but i915_hw.c.
  *
- * Locking. Everything runs under the big kernel lock, as sys/drm/drm.h
- * says, and the order of the locks the driver takes beside it, outermost
- * first, is: a DRM device's `commit_lock`; the driver's locks of objects
- * and contexts, which may sleep; then the locks of the hardware, which a
- * holder takes with interrupts off and never sleeps under: the frequency
- * lock of RPS, then the register lock of forcewake and of any read and
- * write the interrupt handler also makes, then the interrupt mask's. The
- * interrupt handler takes only the hardware locks.
+ * Locking. The GEM lock, `gem.lock`, a sleeping lock as Linux's
+ * struct_mutex was before its object locks, keeps the buffer state whole
+ * on every processor: the GTT and its bindings, the PPGTT, the fence
+ * registers, each object's pages, domains, tiling and bindings, eviction,
+ * and the build of a request from its creation to its add. Whatever
+ * reaches that state takes it with `i915_gem_lock`, which a holder may
+ * call again, as an object's free, a fault on a mapping or reclaim does
+ * under a call that holds it: each ioctl row of a buffer, EXECBUFFER2
+ * between its copies in and out, an object's free and hooks, a fault,
+ * the display's pins, retirement, the heartbeat and reset, debugfs, a
+ * file's release and the unplug. Every wait for the GPU or a fence lets
+ * it go for the sleep and takes it back after (`i915_gem_lock_drop`), as
+ * the big lock goes at every sleep, so that what a waiter waits on, the
+ * heartbeat's reset among it, never waits on the waiter; so a holder looks
+ * again after a wait at what it found before. Reclaim only tries it, as
+ * Linux's shrinker only tries its locks. The engines' requests, rings and
+ * submission are under each engine's `lock`.
+ *
+ * The order, outermost first: the big lock; a DRM device's `commit_lock`;
+ * the GEM lock, then a context list's lock and the other locks of objects
+ * and contexts, which may sleep; a reservation's lock; then the locks of
+ * the hardware, which a holder takes with interrupts off and never sleeps
+ * under: an engine's lock, the frequency lock of RPS, then the register
+ * lock of forcewake and of any read and write the interrupt handler also
+ * makes, then the interrupt mask's. The interrupt handler takes only the
+ * hardware locks.
  *
  * Interrupts. Every source is masked and its enable cleared before the
  * device's message is enabled, and a source is unmasked only once the
@@ -682,6 +700,11 @@ struct i915_userptr {
     struct mmn_range range;
     uint8_t set;
     uint8_t stale;
+    /* On the device's `userptr_pending` while an invalidation that found
+     * the GEM lock held waits for its holder; both under `userptr_lock`.
+     * The free takes it off after the range's unregister. */
+    uint8_t pending;
+    struct drm_i915_gem_object *pending_next;
 };
 
 /*
@@ -774,6 +797,11 @@ struct i915_shrinker {
  * purged.
  */
 struct i915_gem {
+    struct mutex lock; /* the GEM lock of the Locking rule above */
+    /* The userptr objects whose invalidation waits for the GEM lock's
+     * holder (i915_gem_userptr.c), and the spinlock over that list. */
+    struct drm_i915_gem_object *userptr_pending;
+    struct spinlock userptr_lock;
     struct i915_vma *bound;
     struct i915_vma *lru_head;
     struct i915_vma *lru_tail;
@@ -2549,6 +2577,20 @@ uint32_t i915_gem_object_truncate(struct drm_i915_gem_object *obj);
  * Does not sleep. Returns the frames freed.
  */
 uint32_t i915_gem_shrink(struct drm_i915_private *i915, uint32_t want);
+
+/** Take the GEM lock (the Locking rule above) unless the caller holds it
+ * already: whether it was taken, for `i915_gem_unlock`. May sleep. */
+int i915_gem_lock(struct drm_i915_private *i915);
+/** Give back the GEM lock `i915_gem_lock` took when `taken` says so,
+ * after the userptr invalidations that waited for it. */
+void i915_gem_unlock(struct drm_i915_private *i915, int taken);
+/** Revoke the bindings and frames of each userptr object whose
+ * invalidation found the GEM lock held, with the lock held. */
+void i915_gem_userptr_flush(struct drm_i915_private *i915);
+/** Let go of the GEM lock for a wait when the caller holds it: whether it
+ * did, for `i915_gem_lock_retake`, which takes it back after the wait. */
+int i915_gem_lock_drop(struct drm_i915_private *i915);
+void i915_gem_lock_retake(struct drm_i915_private *i915, int dropped);
 
 /* Which objects `i915_gem_shrink_flags` purges, Linux's I915_SHRINK_
  * bits: those with no binding, and those with bindings, undone first. */

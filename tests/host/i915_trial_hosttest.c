@@ -21,6 +21,8 @@
  * host-deps: rach2/sys/drm/i915/intel_bios.c
  * host-deps: rach2/sys/drm/i915/intel_opregion.c
  * host-deps: rach2/sys/drm/i915/i915_aperture.c rach2/sys/drm/i915/i915_fence.c
+ * host-deps: tests/host/compat/i915_gem_lock_host.c
+ * host-deps: tests/host/compat/mutex_none.c
  * host-inputs: tests/fixtures/lenovo-gpu/i915_opregion.bin
  *
  * i915_pci.c is included whole, and the driver is bound through

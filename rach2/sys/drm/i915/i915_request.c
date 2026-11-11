@@ -252,12 +252,16 @@ void i915_request_set_error_once(struct i915_request *rq, int32_t err)
  * Linux's __i915_request_submit fails one whose context may not run, a
  * request whose fence holds an error keeps only its breadcrumb, and the
  * requests that waited to see one given to the chip are told. Under the
- * big kernel lock.
+ * engine's lock, held throughout, so that the worker and an add on
+ * another processor give the chip their requests one after the other and
+ * RING_TAIL never moves back, as Linux's i915_request_submit holds the
+ * engine's sched_engine lock (i915_request.c:604-612, 697-707).
  */
 static void engine_submit(struct drm_i915_private *i915, struct i915_engine *e)
 {
     struct i915_request *first, *last = 0, *rq;
     struct i915_await *w, *next;
+    uint32_t elock = spin_lock_irqsave(&e->lock);
     uint32_t flags = spin_lock_irqsave(&submit_lock);
 
     first = e->queued;
@@ -268,6 +272,7 @@ static void engine_submit(struct drm_i915_private *i915, struct i915_engine *e)
     }
     spin_unlock_irqrestore(&submit_lock, flags);
     if (!last) {
+        spin_unlock_irqrestore(&e->lock, elock);
         return;
     }
     for (rq = first;; rq = rq->next) {
@@ -292,6 +297,7 @@ static void engine_submit(struct drm_i915_private *i915, struct i915_engine *e)
     arch_dma_fence();
     i915_uncore_write(i915, RING_TAIL(e->mmio_base), last->tail);
     e->hw_tail = last->tail;
+    spin_unlock_irqrestore(&e->lock, elock);
 }
 
 int i915_submit_work(void)
@@ -852,10 +858,12 @@ static void engine_retire(struct drm_i915_private *i915, struct i915_engine *e, 
     }
 }
 
+/* Under the GEM lock, since a request's release lets go of its objects
+ * and their bindings. */
 void i915_retire_requests(struct drm_i915_private *i915)
 {
     struct i915_gt *gt = &i915->gt;
-    int i, held = 0;
+    int i, held = 0, taken = i915_gem_lock(i915);
 
     for (i = 0; i < I915_NUM_ENGINES; i++) {
         engine_retire(i915, &gt->engine[i], 0);
@@ -864,6 +872,7 @@ void i915_retire_requests(struct drm_i915_private *i915)
     if (gt->awake && !held) {
         gt_park(i915);
     }
+    i915_gem_unlock(i915, taken);
 }
 
 void i915_gt_retire_requests(struct drm_i915_private *i915)
@@ -1183,6 +1192,7 @@ static int32_t request_new(struct intel_context *ce, struct i915_request **out)
     uint32_t flags;
     int32_t err;
 
+    lockdep_assert_held(&i915->gem.lock);
     err = intel_context_pin_image(ce);
     if (err < 0) {
         return err;
@@ -1248,6 +1258,7 @@ int32_t i915_request_add(struct i915_request *rq)
     struct i915_engine *e = rq->engine;
     uint32_t *cs, flags, i, n;
 
+    lockdep_assert_held(&i915->gem.lock);
     e->reserved = 0;
     rq->postfix = e->tail;
     rq->emitted = rtc_ticks_now();
@@ -1353,13 +1364,17 @@ int32_t i915_request_wait(struct i915_request *rq, uint32_t flags, int64_t timeo
 {
     struct drm_i915_private *i915 = rq->i915;
     struct i915_engine *e = rq->engine;
-    int intr = (flags & I915_WAIT_INTERRUPTIBLE) != 0;
+    int intr = (flags & I915_WAIT_INTERRUPTIBLE) != 0, dropped;
     int64_t deadline, slice, now;
     int32_t err = 0;
+    uint32_t irq;
 
     if (!i915_request_completed(rq) && timeout_ns == 0) {
         return -ETIME;
     }
+    /* The wait never holds the GEM lock, which the heartbeat's reset and
+     * the retirement it waits on take (i915.h's Locking rule). */
+    dropped = i915_gem_lock_drop(i915);
     deadline = timeout_ns < 0 ? -1 : dma_fence_now() + timeout_ns;
     /* Linux's optimistic spin (i915_request.c:2030-2032): a request the
      * chip has begun is polled before the wait asks for its signal, and
@@ -1375,7 +1390,9 @@ int32_t i915_request_wait(struct i915_request *rq, uint32_t flags, int64_t timeo
         }
         dma_fence_enable_sw_signaling(&rq->fence.base);
     }
+    irq = spin_lock_irqsave(&e->lock);
     rq->waiters++;
+    spin_unlock_irqrestore(&e->lock, irq);
     while (!i915_request_completed(rq)) {
         now = dma_fence_now();
         if (deadline >= 0 && now >= deadline) {
@@ -1405,7 +1422,10 @@ int32_t i915_request_wait(struct i915_request *rq, uint32_t flags, int64_t timeo
         i915_request_signal(i915, e);
         (void)i915_hangcheck(i915);
     }
+    irq = spin_lock_irqsave(&e->lock);
     rq->waiters--;
+    spin_unlock_irqrestore(&e->lock, irq);
+    i915_gem_lock_retake(i915, dropped);
     if (err == 0) {
         i915_retire_requests(i915);
     }

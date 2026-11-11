@@ -31,6 +31,9 @@ static void mmo_vm_put(void *data)
     i915_gem_object_put(mmo_object((struct i915_mmap_offset *)data));
 }
 
+static int mmo_access(struct drm_i915_gem_object *obj, uint64_t offset, uint8_t *b, uint32_t len,
+                      int write);
+
 /**
  * The `access` of every mapping of an object, for ptrace and
  * /proc/PID/mem, as Linux's vm_access: `len` bytes at the byte `offset`
@@ -43,9 +46,8 @@ static void mmo_vm_put(void *data)
 static int mmo_vm_access(void *data, uint64_t offset, void *buf, uint32_t len, int write)
 {
     struct drm_i915_gem_object *obj = mmo_object((struct i915_mmap_offset *)data);
-    uint8_t *b = (uint8_t *)buf;
-    struct i915_vma *v;
-    uint32_t done = 0;
+    struct drm_i915_private *i915 = to_i915(obj->base.dev);
+    int rc, taken;
 
     if (offset > obj->base.size || len > obj->base.size - offset) {
         return -EINVAL;
@@ -53,6 +55,19 @@ static int mmo_vm_access(void *data, uint64_t offset, void *buf, uint32_t len, i
     if (obj->base.dev->unplugged || obj->base.import || i915_gem_object_is_userptr(obj)) {
         return -ENODEV;
     }
+    taken = i915_gem_lock(i915);
+    rc = mmo_access(obj, offset, (uint8_t *)buf, len, write);
+    i915_gem_unlock(i915, taken);
+    return rc;
+}
+
+/** The copy of `mmo_vm_access`, under the GEM lock. */
+static int mmo_access(struct drm_i915_gem_object *obj, uint64_t offset, uint8_t *b, uint32_t len,
+                      int write)
+{
+    struct i915_vma *v;
+    uint32_t done = 0;
+
     for (v = obj->vmas; v; v = v->obj_next) {
         i915_vma_flush_writes(v);
     }
@@ -92,12 +107,16 @@ static int mmo_vm_access(void *data, uint64_t offset, void *buf, uint32_t len, i
 static int cpu_vm_page(void *data, uint32_t pgoff, uintptr_t *phys)
 {
     struct drm_i915_gem_object *obj = mmo_object((struct i915_mmap_offset *)data);
+    struct drm_i915_private *i915 = to_i915(obj->base.dev);
     uintptr_t p;
+    int taken;
 
     if (obj->base.dev->unplugged) {
         return -1;
     }
+    taken = i915_gem_lock(i915);
     p = i915_gem_object_frame(obj, pgoff);
+    i915_gem_unlock(i915, taken);
     if (!p) {
         return -1;
     }
@@ -197,12 +216,15 @@ static int gtt_vm_page(void *data, uint32_t pgoff, uintptr_t *phys)
     struct drm_i915_private *i915 = to_i915(obj->base.dev);
     struct i915_vma *vma;
     int32_t err;
+    int taken;
 
     if (obj->base.dev->unplugged || (uint64_t)pgoff >= obj->base.size >> PAGE_SHIFT) {
         return -1;
     }
+    taken = i915_gem_lock(i915);
     err = gtt_fault_pin(obj, pgoff, &vma);
     if (err != 0) {
+        i915_gem_unlock(i915, taken);
         return gtt_fault_error(err);
     }
     err = i915_vma_pin_fence(vma);
@@ -222,6 +244,7 @@ static int gtt_vm_page(void *data, uint32_t pgoff, uintptr_t *phys)
         i915_vma_unpin_fence(vma);
     }
     i915_vma_unpin(vma);
+    i915_gem_unlock(i915, taken);
     return err == 0 ? 0 : gtt_fault_error(err);
 }
 
