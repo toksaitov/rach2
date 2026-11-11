@@ -1,0 +1,41 @@
+image: /srv/run2/step11/guest.qcow2
+virtual size: 24 GiB (25769803776 bytes)
+disk size: 281 MiB
+backing file: /srv/run2/step10/guest.qcow2
+image: /srv/run2/step10/guest.qcow2
+virtual size: 24 GiB (25769803776 bytes)
+disk size: 4.03 GiB
+backing file: /srv/run2/step10/img/debian-13-generic-amd64.qcow2
+image: /srv/run2/step10/img/debian-13-generic-amd64.qcow2
+virtual size: 3 GiB (3221225472 bytes)
+disk size: 418 MiB
+prep: copy: the guest's disk into /t2666/g82/guest.qcow2
+prep: install: g82 in the copy
+prep: guest: Debian 13.7
+glmark2-es2-wayland	2023.01+dfsg-2
+glmark2-wayland	2023.01+dfsg-2
+libgl1-mesa-dri:amd64	25.0.7-2+deb13u1
+seatd	0.9.1-1
+weston	14.0.2-1
+No errors were found on the image.
+77712/393216 = 19.76% allocated, 0.00% fragmented, 0.00% compressed clusters
+Image end offset: 5094768640
+4a51b641e025001e9d8bbd3811d04b67701708c81057fdf95a5c0cfae2dae89e  guest.qcow2
+96758c40859c94163e5cf81399a107d679e984e251cb4e13aba4e7d92f5d14f2  vmlinuz
+6e3bc1618db3c812244621b063c1a6cab04c4279a62e7ecb99407c401419525b  initrd.img
+af7118cd4f4ff5a26cdc4e171558af7210997586cc365706ff87a5052e087faa  seed.img
+total 5028764
+-rw-r--r-- 1 root root 5094768640 Nov 11 05:52 guest.qcow2
+-rw-r--r-- 1 root root   37146995 Nov 11 05:52 initrd.img
+-rw-r--r-- 1 root root     376832 Nov 11 05:52 seed.img
+-rw-r--r-- 1 root root   12167104 Nov 11 05:52 vmlinuz
+Filesystem     1K-blocks     Used Available Use% Mounted on
+/dev/sda6      142771084 48586780  87014208  36% /mnt/t2666-p6
+e2fsck 1.47.2 (1-Jan-2025)
+Pass 1: Checking inodes, blocks, and sizes
+Pass 2: Checking directory structure
+Pass 3: Checking directory connectivity
+Pass 4: Checking reference counts
+Pass 5: Checking group summary information
+Rach2_data: 4965/2242560 files (1.0% non-contiguous), 12304420/35850496 blocks
+prep: result: pass
