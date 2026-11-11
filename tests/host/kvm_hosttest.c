@@ -1217,6 +1217,18 @@ static void startup_caps(int vm)
     CHECK(dev(KVM_CHECK_EXTENSION, KVM_CAP_SPLIT_IRQCHIP) == 1, "the split irqchip is offered");
 }
 
+/** How many of the MSRs `first` to `last` the list of `n` names holds. */
+static int list_holds(const uint32_t *list, uint32_t n, uint32_t first, uint32_t last)
+{
+    uint32_t i;
+    int found = 0;
+
+    for (i = 0; i < n; i++) {
+        found += list[i] >= first && list[i] <= last;
+    }
+    return found;
+}
+
 /** kvm_get_supported_msrs: the index list, its count first, which starts
  * QEMU's list of MSRs to put; then the feature MSRs. */
 static void startup_msr_lists(void)
@@ -1246,6 +1258,8 @@ static void startup_msr_lists(void)
     CHECK(steal, "and MSR_KVM_STEAL_TIME");
     CHECK(kvm_backend == &kvm_vmx && debugctl,
           "VMX's index list names IA32_DEBUGCTL, as Linux's msrs_to_save_base");
+    CHECK(!list_holds(MSR_INDICES, nmsrs, 0x1DB, 0x1DE),
+          "but not the last-branch MSRs, which the Intel host does not read");
     kvm_backend = &kvm_svm;
     list = kvm_msr_list(0, &nmsrs);
     kvm_backend = &kvm_vmx;
@@ -1254,6 +1268,8 @@ static void startup_msr_lists(void)
         debugctl |= list[i] == 0x1D9;
     }
     CHECK(debugctl, "and so does SVM's, which answers it as svm_get_msr without lbrv");
+    CHECK(list_holds(list, nmsrs, 0x1DB, 0x1DE) == 4,
+          "with LASTBRANCHFROMIP to LASTINTTOIP beside it, as Linux's msrs_to_save_base");
     buf.list.nmsrs = 4;
     r = dev(KVM_GET_MSR_FEATURE_INDEX_LIST, (uintptr_t)&buf);
     CHECK(r == 0 && buf.list.nmsrs == 2 && MSR_INDICES[0] == 0x8B && MSR_INDICES[1] == 0x345,
@@ -2587,6 +2603,38 @@ static void feature_msr_rows(void)
     fdclose(vm);
 }
 
+/** SVM's IA32_DEBUGCTL and last-branch MSRs, as the caller reaches them:
+ * Linux's SVM without lbrv reads each as 0, takes and ignores any write
+ * of DEBUGCTL, and takes only the caller's 0 of the others
+ * (arch/x86/kvm/svm/svm.c:2966-2980, 3223-3227 and 3259-3290; x86.c:
+ * 508-518). The vCPU is VMX's fake one, read with the backend SVM's and
+ * the PMU started again for it. */
+static void svm_debugctl_rows(void)
+{
+    int vm, fd;
+    uint64_t value = 1;
+
+    vm = dev(KVM_CREATE_VM, 0);
+    fd = fdio(vm, KVM_CREATE_VCPU, 0);
+    kvm_backend = &kvm_svm;
+    kvm_pmu_start();
+    CHECK(get_msr(fd, 0x1D9, &value) == 1 && value == 0, "SVM's DEBUGCTL reads 0");
+    CHECK(set_msr(fd, 0x1D9, 0x3Full) == 1 && set_msr(fd, 0x1D9, 1ull << 40) == 1,
+          "and takes any write, LBR, BTF, bits 5:2 and a reserved bit alike");
+    value = 1;
+    CHECK(get_msr(fd, 0x1D9, &value) == 1 && value == 0, "which it ignores");
+    value = 1;
+    CHECK(get_msr(fd, 0x1DB, &value) == 1 && value == 0 && get_msr(fd, 0x1DE, &value) == 1 &&
+              value == 0,
+          "LASTBRANCHFROMIP and LASTINTTOIP read 0");
+    CHECK(set_msr(fd, 0x1DC, 0) == 1 && set_msr(fd, 0x1DD, 0x1000) == 0,
+          "and take the caller's 0 alone");
+    kvm_backend = &kvm_vmx;
+    kvm_pmu_start();
+    fdclose(fd);
+    fdclose(vm);
+}
+
 /** /dev/kvm's attribute KVM_X86_XCOMP_GUEST_SUPP, as amx_test reads it,
  * and the debugging capabilities. */
 static void attr_rows(void)
@@ -3357,6 +3405,7 @@ static void selftest_rows(void)
     cr4_rows();
     vm_cap_rows();
     feature_msr_rows();
+    svm_debugctl_rows();
     mce_hwcr_rows();
     xsaves_rows();
     user_msr_rows();
