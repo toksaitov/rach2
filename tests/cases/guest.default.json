@@ -5949,7 +5949,7 @@
         {"assertion_id": "full-not-writable", "checks": "the full FIFO's write fails with EAGAIN and it does not poll writable", "source": "program"},
         {"assertion_id": "reader-setup", "checks": "the pipe and its nonblocking end for the reading child are set up", "source": "program"},
         {"assertion_id": "reading-child", "checks": "the child that reads from the FIFO saw the parent asleep in poll and exited 0", "source": "program"},
-        {"assertion_id": "poll-wake", "checks": "the child's read woke the parent's poll for output, which has no timeout", "source": "program"},
+        {"assertion_id": "poll-wake", "checks": "the child's read of a page, which frees a buffer's slot, woke the parent's poll for output, which has no timeout", "source": "program"},
         {"assertion_id": "no-early-hangup", "checks": "a new nonblocking reader does not report hangup before a writer opens", "source": "program"},
         {"assertion_id": "empty-not-ready", "checks": "an empty FIFO with a writer does not poll ready", "source": "program"},
         {"assertion_id": "hangup", "checks": "the reader reports hangup after a writer opened and closed", "source": "program"},
