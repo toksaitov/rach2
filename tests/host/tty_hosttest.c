@@ -1637,6 +1637,44 @@ static void master_write_lock(void)
           "a failed user copy releases the master write lock");
 }
 
+/** Release a preceding writer only after a flow character has waited. */
+static void master_flow_unlock(void)
+{
+    CHECK(n_tty_inq(&pair.slave.ldisc) == 0,
+          "a master flow character does not enter while another write holds the lock");
+    master_unlock_action();
+}
+
+/** TCIOFF and TCION wait for a writer even on a nonblocking master, and
+ * an interrupted wait neither feeds a byte nor releases that writer's lock. */
+static void master_flow_lock(void)
+{
+    unsigned long action;
+    char out;
+
+    for (action = TTY_TCIOFF; action <= TTY_TCION; action++) {
+        setup_pair();
+        pair.slave.ldisc.tio.c_iflag &= ~(unsigned int)IXON;
+        nonblocking_ofd.status_flags = OFD_NONBLOCK;
+        master.ofd = &nonblocking_ofd;
+        pair.m_writing = 1;
+        scheduled_action = master_flow_unlock;
+        wake_detail = "completing a master write wakes a flow character's sender";
+        CHECK(ptm_ioctl(&master, TCXONC, action) == 0 && switches == 1 && !pair.m_writing,
+              "a nonblocking master's flow ioctl waits for and releases the write lock");
+        CHECK(pts_read(&slave, &out, 1) == 1 && out == (action == TTY_TCIOFF ? 023 : 021),
+              "the flow character follows the preceding master write");
+        pair.m_writing = 1;
+        pending_signal = 1;
+        CHECK(ptm_ioctl(&master, TCXONC, action) == -EINTR && pair.m_writing &&
+                  n_tty_inq(&pair.slave.ldisc) == 0,
+              "an interrupted flow ioctl leaves the preceding write and input alone");
+        pending_signal = 0;
+        pair.m_writing = 0;
+        scheduled_action = NULL;
+    }
+}
+
 /** Try a competing write while the second vector buffer's copy sleeps. */
 static void vector_compete(void)
 {
@@ -1815,6 +1853,7 @@ int main(void)
     lookahead_interrupted();
     master_write_lock();
     master_write_vector();
+    master_flow_lock();
     job_check();
     console_tcioff();
     read_claims_nothing();
