@@ -998,8 +998,8 @@ With 0x04 a guest counter's overflow raises an NMI in the host while the
 counters' local APIC entry is unmasked, which KVM acknowledges and claims.
 .Pa /sys/module/kvm_intel/parameters/pmu_placed ,
 read-only, gives the physical counters the last entry gave the guest's
-counters, in hex: bit n is general counter n, and bit 32 + j fixed
-counter j.
+counters, in hex, 0 when it gave none: bit n is general counter n, and
+bit 32 + j fixed counter j.
 .Sh FILES
 .Bl -tag -width /sys/module/kvm/parameters
 .It Pa /dev/kvm
