@@ -90,10 +90,19 @@ struct net_mib {
     uint32_t tcp_in_errs; /* a bad length, header length or checksum */
     uint32_t tcp_out_rsts;
     /* The TcpExt counts of /proc/net/netstat, as Linux names them: the
-     * retransmission timeouts, the connections they ended, the keepalive
-     * probes sent, and the probes of a larger segment lost and taken. */
+     * segments of data received again whole (DelayedACKLost), the
+     * retransmission timeouts, the connections they ended, the challenge
+     * acknowledgements of RFC 5961 sent, the SYNs challenged, the
+     * acknowledgements of a segment outside the receive window and the
+     * challenges held back by TCP_INVALID_RATELIMIT, the keepalive probes
+     * sent, and the probes of a larger segment lost and taken. */
+    uint32_t tcp_delayed_ack_lost;
     uint32_t tcp_timeouts;
     uint32_t tcp_abort_on_timeout;
+    uint32_t tcp_challenge_ack;
+    uint32_t tcp_syn_challenge;
+    uint32_t tcp_ack_skipped_seq;
+    uint32_t tcp_ack_skipped_challenge;
     uint32_t tcp_keepalive;
     uint32_t tcp_mtup_fail;
     uint32_t tcp_mtup_success;
