@@ -1857,9 +1857,14 @@ struct drm_device {
 void drm_start(void);
 
 /** Fill a new device for `driver`, with one reference, the caller's, and
- * the driver's features; every other member is zero, and the driver sets
- * `unique`, `pci` and its own before it registers. Registers nothing. */
+ * the driver's features; its spinlocks are made and every other member is
+ * zero, and the driver sets `unique`, `pci` and its own before it registers.
+ * Registers nothing. */
 void drm_dev_init(struct drm_device *dev, const struct drm_driver *driver);
+/** Make the spinlocks of a new file's two handle tables, a class for each,
+ * as Linux's drm_gem_open and drm_syncobj_open make `table_lock` and
+ * `syncobj_table_lock`. */
+void drm_file_locks_init(struct drm_file *file);
 /** Register the device under the lowest free card index: its card node,
  * and its render node when it has DRIVER_RENDER, through the devfs
  * registry, with GET_UNIQUE's name made from `pci` or the driver's name
