@@ -301,6 +301,15 @@ void pci_write_config8_ext(uint8_t bus, uint8_t device, uint8_t function, uint16
     cfg_write(device, function, offset, value, 8);
 }
 
+static int ecam_bus0 = 1; /* whether an ECAM window covers bus 0 */
+
+/** Whether the extended accessors reach past offset 255: `ecam_bus0`. */
+int pci_config_ext_reaches(uint8_t bus)
+{
+    (void)bus;
+    return ecam_bus0;
+}
+
 /* ---- tables made here ---- */
 
 /** Store the low 16 bits of `v` at `p`, little-endian. */
@@ -930,6 +939,11 @@ static void pci_read_rows(void)
     g.address = 0x1F00030046ull;
     CHECK(acpi_gas_read(&g, &v) == 0 && v == 0xA01F,
           "a two-byte PCI read takes the word at its offset");
+    g.address = 0x1F00030146ull;
+    ecam_bus0 = 0;
+    CHECK(acpi_gas_read(&g, &v) == -1 && acpi_gas_write(&g, 1) == -1,
+          "a PCI register past offset 255 with no ECAM window on bus 0 is refused");
+    ecam_bus0 = 1;
 }
 
 /** The kernel's windows on physical memory: once all are made, a read of a

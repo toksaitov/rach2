@@ -254,14 +254,17 @@ const struct acpi_info *acpi_get(void);
  * width: an I/O port, memory, or PCI configuration space of bus 0. A PCI
  * register of 2 or 4 bytes is read at its offset rounded down to that
  * width, as `acpi_gas_write` writes it. 0, or -1 for a register this kernel
- * cannot reach.
+ * cannot reach: a PCI offset past 255 with no ECAM window on bus 0 among
+ * them, as Linux's `raw_pci_read` refuses one with -EINVAL
+ * (arch/x86/pci/common.c:40-48, direct.c:102-105).
  */
 int acpi_gas_read(const struct acpi_gas *g, uint32_t *value);
 
 /** Write `value` to the register `g` describes, in its own space and
  * width: 0, or -1 for a register this kernel cannot reach. A PCI register's
  * offset is its address's low 16 bits, and one past 255 goes through the
- * function's extended configuration space. */
+ * function's extended configuration space, which needs an ECAM window on
+ * bus 0, as Linux's `raw_pci_write` (arch/x86/pci/common.c:50-58). */
 int acpi_gas_write(const struct acpi_gas *g, uint32_t value);
 
 /**
