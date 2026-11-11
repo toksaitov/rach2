@@ -22,6 +22,8 @@ extern int printf(const char *fmt, ...);
    from the host's stdint may be included alongside them. */
 #include "../../rach2/sys/network/netconsole.h"
 #include "../../rach2/sys/network/driver/netdev.h"
+#include "../../rach2/sys/network/ip6/ip6.h"
+#include "../../rach2/sys/mm/kheap.h"
 
 /* ------------------------------------------------------------------ */
 /* The stubs netconsole links against.                                 */
@@ -203,6 +205,59 @@ uint16_t ip_checksum(const uint8_t *buf, uint16_t len)
         sum = (sum & 0xFFFF) + (sum >> 16);
     }
     return (uint16_t)(~sum & 0xFFFF);
+}
+
+/* The targets of netconsole= are left to the QEMU runs, which put a real
+ * card and a host socket at the two ends; these rows drive the frames, and
+ * these stubs only satisfy the target code's links. */
+
+/** Allocate nothing: no row reads a netconsole= value. */
+void *kzalloc(size_t size)
+{
+    (void)size;
+    return 0;
+}
+
+/** Free nothing, since kzalloc gave nothing. */
+void kfree(void *p)
+{
+    (void)p;
+}
+
+/** No interface has a name here. */
+struct netdev *netdev_by_name(const char *name)
+{
+    (void)name;
+    return 0;
+}
+
+/** No interface is listed here. */
+struct netdev *netdev_at(int n)
+{
+    (void)n;
+    return 0;
+}
+
+/** There is no `lo` here. */
+struct netdev *netdev_loopback(void)
+{
+    return 0;
+}
+
+/** Refuse every IPv6 address. */
+int ip6_parse(const char *s, uint32_t len, uint8_t *out)
+{
+    (void)s;
+    (void)len;
+    (void)out;
+    return -1;
+}
+
+/** Format every IPv6 address as nothing. */
+void ip6_format(const uint8_t *a, char *out)
+{
+    (void)a;
+    out[0] = '\0';
 }
 
 #include "../../rach2/sys/network/netconsole.c"
