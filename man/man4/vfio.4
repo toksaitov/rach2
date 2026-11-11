@@ -134,8 +134,17 @@ it fails with
 over a mapping, and with
 .Er ENOSPC
 at 65535 mappings.
-When the program unmaps the pinned memory, or its address space ends, the
-device can no longer reach those pages.
+A mapping with
+.Dv VFIO_DMA_MAP_FLAG_WRITE
+of a writable shared mapping of a file on a disk fails with
+.Er EFAULT ,
+as on Linux, since the file's write-back would never see the device's
+stores.
+When the program unmaps the pinned memory the device can no longer reach
+those pages.
+When its address space ends, a mapping of RAM stays, with its pages, until
+its unmap or the container's release, as on Linux, while one with device
+pages goes.
 A mapping containing device pages also loses its DMA access before a
 protection change or the device revokes its pages.
 .Dv VFIO_IOMMU_UNMAP_DMA

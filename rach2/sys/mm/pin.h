@@ -23,10 +23,11 @@
  * frames stay the device's until `unpin`. Such a pin also holds each
  * shared mapping of a disk file its range meets, from the pin to `unpin`,
  * so that the file's pages in memory, the frames pinned among them, stay
- * the file's after the last region mapping it goes: a write(2) of the file
- * reaches them, and the mapping's release at `unpin` writes them back, as
- * Linux's pin holds a page cache folio. Every call is made under the big
- * kernel lock.
+ * the file's after the last region mapping it goes and a write(2) of the
+ * file reaches them, as Linux's pin holds a page cache folio. `unpin` only
+ * drops the hold; the mapping's release, which writes back what the
+ * process stored in its pages and may sleep, waits for `vm_file_reap`.
+ * Every call is made under the big kernel lock.
  */
 #ifndef _PIN_H_
 #define _PIN_H_
@@ -38,14 +39,19 @@ struct pin;
 
 /* A flag of `pin_user`: the device writes the pages, which the range must
  * allow, so each is brought in for a write. */
-#define PIN_WRITE 0x1u
+#define PIN_WRITE    0x1u
 /* Permit device pages outside the frame allocator, as VFIO's PFN mappings.
  * They count neither in VmPin nor against RLIMIT_MEMLOCK. */
-#define PIN_IO    0x2u
+#define PIN_IO       0x2u
 /* A pin Linux makes remotely or by get_user_pages' slow path, as VFIO's
  * pin_user_pages_remote: a region mapped without PROT_READ refuses it a
  * read whatever its page, with no fast path to take a present one. */
-#define PIN_SLOW  0x4u
+#define PIN_SLOW     0x4u
+/* A long-term pin, as Linux's FOLL_LONGTERM, VFIO's: a write pin of a
+ * writable shared mapping of a disk file is refused with -EFAULT, since
+ * writeback finds the file's dirty pages by their table entries and would
+ * never see a device's stores, as Linux's writable_file_mapping_allowed. */
+#define PIN_LONGTERM 0x8u
 
 /* A flag of `pin_holder`: the end of the address space leaves a pin of RAM
  * alone live, with its frames, and drops only the charge, as Linux's VFIO
@@ -79,8 +85,9 @@ struct pin_holder {
  * with PIN_KEEP_PAST_END the pin holds the shared mappings of disk files
  * the range meets, as above. May sleep. 0 with the record in `*out`;
  * -EINVAL for an empty or wrapping range; -EFAULT for a page outside user
- * space, in no region, of device memory without PIN_IO or without the
- * access; -ENOMEM past RLIMIT_MEMLOCK, as Linux's account_locked_vm
+ * space, in no region, of device memory without PIN_IO, without the access,
+ * or of a writable shared mapping of a disk file for a write pin with
+ * PIN_LONGTERM; -ENOMEM past RLIMIT_MEMLOCK, as Linux's account_locked_vm
  * answers, or when memory runs out. On an error
  * nothing is pinned. With PIN_IO, device pages outside the frame allocator
  * are also accepted without a RAM pin or charge; a device revocation or
@@ -105,8 +112,10 @@ int pin_frames(struct mm *mm, const uintptr_t *frames, uint32_t count,
                const struct pin_holder *holder, struct pin **out);
 
 /** Drop what `pin` still holds, its frames, its charge and its files, and
- * free the record; NULL is ignored. May sleep when the pin held a mapping
- * of a disk file, whose release writes the file's pages back. */
+ * free the record; NULL is ignored. Does not sleep: a file whose last
+ * reference the pin held waits on the list `vm_file_reap` empties, which a
+ * holder of PIN_KEEP_PAST_END runs once it no longer uses anything a sleep
+ * could let another thread change or free. */
 void unpin(struct pin *pin);
 
 /** Whether `pin` still holds its frames: 1 until an unmap or the end of

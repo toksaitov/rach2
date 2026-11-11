@@ -426,12 +426,14 @@ int filemap_disk_pages(const struct vm_file *f)
 /** A keeping pin holds each shared mapping of a disk file its range meets,
  * once, so that the file's pages, the frames pinned among them, stay the
  * file's after the end of the address space and its regions; an unmap or
- * unpin lets the mapping go, and unpin releases it last. */
+ * unpin lets the mapping go, and vm_file_reap after the last unpin releases
+ * it. A long-term write pin of the writable mapping is refused. */
 static void file_keep_rows(void)
 {
     uintptr_t addr = VA + 40 * P;
     struct pin *p, *q;
-    uint32_t before = released;
+    uint32_t before = released, pinned;
+    uint32_t w;
 
     memlock(0xFFFFFFFFu);
     disk.vf.refs = 1;
@@ -454,6 +456,17 @@ static void file_keep_rows(void)
     check(!pin_live(q) && disk.vf.refs == 2 && released == before + 1,
           "an unmap takes the pin back and lets the mapping go");
     unpin(q);
+    w = frame_word(disk.page[0]);
+    pinned = mm_b.pinned;
+    check(pin_user(&mm_b, addr, P, PIN_IO | PIN_WRITE | PIN_LONGTERM, &keeper, &q) == -EFAULT &&
+              disk.vf.refs == 2 && frame_word(disk.page[0]) == w && mm_b.pinned == pinned,
+          "a long-term write pin of a writable shared mapping of a disk file is EFAULT");
+    check(pin_user(&mm_b, addr, P, PIN_IO | PIN_LONGTERM, &keeper, &q) == 0 && disk.vf.refs == 3,
+          "a long-term read pin of it is taken");
+    unpin(q);
+    check(pin_user(&mm_b, addr, P, PIN_IO | PIN_WRITE, &keeper, &q) == 0,
+          "a write pin of it that is not long-term is taken");
+    unpin(q);
     check(pin_user(&mm_b, addr, 2 * P, PIN_IO, &keeper, &p) == 0 && disk.vf.refs == 3 &&
               pin_phys(p, 0) == disk.page[0] && pin_phys(p, 1) == disk.page[1],
           "a keeping pin of both regions holds the mapping once");
@@ -468,8 +481,11 @@ static void file_keep_rows(void)
               frame_word(disk.page[1]) == 1 + FRAME_PIN_BIAS,
           "the file's pages stay the file's and pinned once B's regions go");
     unpin(p);
+    check(disk.releases == 0 && disk.vf.refs == 0,
+          "unpin drops the last hold and leaves the release to vm_file_reap");
+    vm_file_reap();
     check(disk.releases == 1 && frame_word(disk.page[0]) == 0 && frame_word(disk.page[1]) == 0,
-          "unpin releases the mapping and frees its pages");
+          "vm_file_reap then releases the mapping and frees its pages");
 }
 
 /* A BAR mapped into user space; no RAM frame backs its normal address. */
