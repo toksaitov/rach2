@@ -14,6 +14,7 @@
 #include "../lib/kirq.h"
 #include "../timer.h"
 #include "../udelay.h"
+#include "../watchdog.h"
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
 #include "../mm/paging.h"
@@ -101,10 +102,10 @@ struct bkl_tick_count {
 };
 static struct bkl_tick_count bkl_ticks[BKL_TICK_ROWS];
 static const char *const bkl_tick_names[BKL_TICK_ROWS] = {
-    "entry",        "clock",         "account",  "wake",    "hda",     "netdev",  "ath9k",
-    "tcp",          "ip_frag",       "ip6",      "netlink", "ip_loop", "usb",     "input",
-    "block_lag",    "block_request", "platform", "vkms",    "speaker", "console", "ap_account",
-    "ap_late_pass", "return",        "switch",   "nested"};
+    "entry",      "clock",        "account",       "wake",     "hda",     "netdev",  "netconsole",
+    "ath9k",      "tcp",          "ip_frag",       "ip6",      "netlink", "ip_loop", "usb",
+    "input",      "block_lag",    "block_request", "platform", "vkms",    "speaker", "console",
+    "ap_account", "ap_late_pass", "return",        "switch",   "nested"};
 
 /* The probes an open-addressed table makes before it gives up. */
 #define BKL_PROBES 32
@@ -771,10 +772,14 @@ static void smp_stop_here(struct percpu *cpu)
  * was asked to drop, since the sender frees the page once it sees the word
  * clear. A barrier request is answered by the locked exchange that clears
  * it, a full barrier, after a serializing instruction when it asks for one.
+ * A turn of a wait with interrupts off is also the watchdog's
+ * (`watchdog_wait`).
  */
 void smp_service(void)
 {
     struct percpu *cpu = this_cpu();
+
+    watchdog_wait();
 
     if (cpu->stop_request) {
         smp_stop_here(cpu);

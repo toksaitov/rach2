@@ -127,6 +127,7 @@ static void setup(void)
     watchdog.boot_feed = 1;
     watchdog.hz = 5;
     watchdog.feed_left = watchdog.open_left = 0;
+    watchdog.threaded = watchdog.feed_due = 0;
     bad_user = NULL;
 }
 
@@ -201,9 +202,16 @@ int32_t devfs_node_register(struct devfs_node *node)
     return 0;
 }
 /** No command line here: the rows set the options' fields. */
-int kcmdline_value(const char *key, char *out, unsigned int outlen)
+int kcmdline_count(const char *key)
 {
     (void)key;
+    return 0;
+}
+/** No command line here. */
+int kcmdline_value_nth(const char *key, int nth, char *out, unsigned int outlen)
+{
+    (void)key;
+    (void)nth;
     (void)out;
     (void)outlen;
     return 0;
@@ -215,7 +223,7 @@ int kcmdline_has(const char *flag)
     return 0;
 }
 /** No command line here. */
-int kcmdline_bool(const char *key, int dflt)
+int kcmdline_param_bool(const char *key, int dflt)
 {
     (void)key;
     return dflt;
@@ -227,6 +235,69 @@ int k_strtoll(const char *text, size_t len, long long *out)
     (void)len;
     *out = 0;
     return -1;
+}
+/** No thread is made here: the rows call `itco_feed_work` for watchdogd. */
+uintptr_t kstack_alloc(void)
+{
+    return 0;
+}
+/** No thread is made here. */
+void kstack_free(uintptr_t top)
+{
+    (void)top;
+}
+/** No thread is made here. */
+process_t *alloc_process(void)
+{
+    return NULL;
+}
+/** No thread is made here. */
+void proc_set_comm(process_t *p, const char *path)
+{
+    (void)p;
+    (void)path;
+}
+/** No thread is made here. */
+void setup_process_stack(process_t *proc, void (*entry_point)(void))
+{
+    (void)proc;
+    (void)entry_point;
+}
+/** No thread is made here. */
+void sched_make_ready(process_t *p)
+{
+    (void)p;
+}
+/** The rows set `threaded` themselves. */
+int sched_is_enabled(void)
+{
+    return 0;
+}
+/** No interrupts here. */
+uint32_t kirq_save(void)
+{
+    return 0;
+}
+/** No interrupts here. */
+void kirq_restore(uint32_t flags)
+{
+    (void)flags;
+}
+/** No interrupts here. */
+void arch_irq_enable(void)
+{}
+/** watchdogd never runs here. */
+int wq_wait_event_idle(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    (void)wq;
+    (void)cond;
+    (void)arg;
+    return 0;
+}
+/** watchdogd never runs here. */
+void wq_wake_all(wait_queue_t *wq)
+{
+    (void)wq;
 }
 /** Diagnostics have no side effect in the model. */
 void klog(int level, const char *subsystem, const char *format, ...)
@@ -305,17 +376,27 @@ static void trial(void)
 }
 
 /** Run `seconds` of the kernel's tick at 5 a second, the model's 0.6 s
- * tick every third. */
-static void run(unsigned seconds)
+ * tick every third, and watchdogd after each tick when `threads` is
+ * nonzero. */
+static void run_threads(unsigned seconds, int threads)
 {
     unsigned i;
 
     for (i = 1; i <= seconds * 5u; i++) {
         itco_feed_tick(&watchdog);
+        if (threads) {
+            itco_feed_work(&watchdog);
+        }
         if (i % 3u == 0) {
             advance(&model, 1);
         }
     }
+}
+
+/** Run `seconds` of the tick and of watchdogd. */
+static void run(unsigned seconds)
+{
+    run_threads(seconds, 1);
 }
 
 /** A timer the kernel starts at boot with a 5 s heartbeat: fed by the
@@ -358,6 +439,39 @@ static void boot(void)
     CHECK(model.resets == 1);
 }
 
+/** With watchdogd running, the tick only leaves it each feed: the timer
+ * lives while the thread runs, and is reset two expiries after the thread
+ * stops though the tick goes on, as after a hang with interrupts on. A feed
+ * left due when a program opens the device is not done. */
+static void threaded(void)
+{
+    unsigned at;
+
+    setup();
+    watchdog.threaded = 1;
+    CHECK(itco_attach(&watchdog, 5) == 0 && itco_boot_arm(&watchdog) == 0);
+    at = model.writes;
+    itco_feed_tick(&watchdog);
+    CHECK(watchdog.feed_due && model.writes == at);
+    itco_feed_work(&watchdog);
+    CHECK(!watchdog.feed_due && model.writes == at + 1 && model.regs[at] == TCO_RLD);
+    run(60);
+    CHECK(model.resets == 0 && model.stage == 0);
+    run_threads(5, 0);
+    CHECK(model.resets == 0);
+    run_threads(6, 0);
+    CHECK(model.resets == 1);
+
+    setup();
+    watchdog.threaded = 1;
+    CHECK(itco_attach(&watchdog, 5) == 0 && itco_boot_arm(&watchdog) == 0);
+    itco_feed_tick(&watchdog);
+    CHECK(itco_open(NULL, NULL, 0) == 0 && watchdog.feed_due);
+    at = model.writes;
+    itco_feed_work(&watchdog);
+    CHECK(!watchdog.feed_due && model.writes == at);
+}
+
 /** The open deadline, watchdog.open_timeout: fed until a timeout before it,
  * then reset; an open before it ends it. */
 static void deadline(void)
@@ -386,7 +500,8 @@ static void deadline(void)
 /** nowayout refuses a magic close and DISABLECARD with -EBUSY and leaves
  * the timer running, fed once at the close, as watchdog_stop and
  * watchdog_release do; a heartbeat out of range takes 30 s; a timer that
- * firmware left counting toward a reset is kept running and fed. */
+ * firmware left counting is kept running and fed, NO_REBOOT cleared if it
+ * was set, as iTCO_wdt_probe does. */
 static void options(void)
 {
     int value = 1;
@@ -413,6 +528,16 @@ static void options(void)
     CHECK(!(model.words[TCO1_CNT / 2] & TCO_HALT) && !(model.gcs & TCO_NO_REBOOT));
     run(60);
     CHECK(model.resets == 0);
+
+    setup();
+    model.words[TCO1_CNT / 2] = 0x100;
+    model.left = 3;
+    CHECK(itco_attach(&watchdog, 5) == 0 && watchdog.hw_running);
+    CHECK(!(model.words[TCO1_CNT / 2] & TCO_HALT) && model.gcs == 0x12340000);
+    run(60);
+    CHECK(model.resets == 0);
+    advance(&model, 16);
+    CHECK(model.resets == 1);
 }
 
 /** Check actual writes, expiry, failures, exclusive open and the ioctl ABI. */
@@ -488,6 +613,7 @@ int main(void)
     halted();
     trial();
     boot();
+    threaded();
     deadline();
     options();
     setup();
@@ -495,8 +621,8 @@ int main(void)
     CHECK(itco_attach(&watchdog, 30) == -EIO && model.writes == 0);
     setup();
     model.locked = 1;
-    CHECK(itco_attach(&watchdog, 30) == 0);
-    CHECK(itco_open(NULL, NULL, 0) == -EIO && !watchdog.opened);
+    CHECK(itco_attach(&watchdog, 30) == -ENODEV);
+    CHECK(model.writes == 1 && model.regs[0] == 0x3410);
     CHECK(model.words[TCO1_CNT / 2] & TCO_HALT);
     setup();
     model.stuck_timer = 1;

@@ -7,7 +7,10 @@
 
 #include "irq.h"
 
+#include "arch/arch.h"
 #include "lib/kint.h"
+
+struct process;
 
 /*
  * arch/x86/platform.c defines these for a PC, with the processors' start in
@@ -90,8 +93,8 @@ void platform_firmware_start(void);
 
 /**
  * Make the platform's kernel threads, on a PC ACPICA's, the wireless
- * worker's and the PS/2 mouse's, once the first program has its pid, so
- * that init is process 1.
+ * worker's, the PS/2 mouse's and the TCO watchdog's, once the first program
+ * has its pid, so that init is process 1.
  */
 void platform_threads_start(void);
 
@@ -132,9 +135,75 @@ int platform_cpu_start(int cpu, uintptr_t stack_top, void (*entry)(int cpu));
  * `smp_ipi` (proc/smp.h). */
 void platform_cpu_ipi(int cpu);
 
-/** Send processor `cpu` a non-maskable interrupt, for a stop it did not take
- * by the interprocessor interrupt (`smp_stop_others`); its handler is
- * arch/x86/isr.c's, which takes the stop (`smp_stop_nmi`). */
+/** Send processor `cpu` a non-maskable interrupt, which reaches it with its
+ * interrupts off: the watchdog's backtrace request (watchdog.c) and the
+ * panic's stop of a processor that did not take the interprocessor
+ * interrupt (`smp_stop_others`). */
 void platform_cpu_nmi(int cpu);
+
+/*
+ * The lockup detectors' part of the machine (watchdog.c), which
+ * arch/x86/pmu.c and nmiwd.c define for a PC: the hard-lockup detector's
+ * source of NMIs, a performance counter of unhalted core cycles that raises
+ * one each `watchdog_thresh` seconds, as Linux's perf event for the NMI
+ * watchdog does, and what the reports read of the processor and its frames.
+ */
+
+/**
+ * Find the counter, once, on the boot processor: an architectural
+ * performance monitor of version 1 or later with the core-cycles event
+ * (`cpuid` leaf 0xA), or AMD's core counters (leaf 0x80000001, ECX bit
+ * 23), seen to count. 1 when there is one; 0 when there is none, as under
+ * QEMU's emulator or a hypervisor that gives no PMU, and the detector falls
+ * back to the buddy check. The result is logged.
+ */
+int platform_pmu_probe(void);
+
+/**
+ * Program this processor's counter to raise an NMI after each `cycles`
+ * unhalted core cycles, its local APIC's counter entry an NMI; called on
+ * the processor itself, with interrupts off. A period wider than the
+ * counter's writable width is counted in parts (`platform_pmu_overflow`).
+ */
+void platform_pmu_enable(uint64_t cycles);
+
+/** Stop this processor's counter and mask its APIC entry. */
+void platform_pmu_disable(void);
+
+/**
+ * In the NMI handler: 1 when this processor's counter raised the NMI, which
+ * it acknowledges, loads again and unmasks; 0 otherwise, for an NMI of
+ * another source. `*due` is set to 1 when the whole period passed, 0 when a
+ * part of a wide one did.
+ */
+int platform_pmu_overflow(int *due);
+
+/** The processor's clock in cycles a second, as Linux's `cpu_khz` gives it
+ * times 1000: the TSC's measured rate, which on Intel's processors since
+ * Nehalem is the nominal clock, measured by `platform_pmu_probe` with or
+ * without a counter; 0 before it. */
+uint64_t platform_cpu_hz(void);
+
+/**
+ * Log the registers of the frame `p` at level `level` under `subsystem`, in
+ * Linux's `show_regs` layout, and the return addresses of its frames: the
+ * kernel has no symbol table, so the call trace gives addresses, which
+ * `addr2line -e` of the kernel's image names.
+ */
+void platform_show_regs(const char *subsystem, int level, const isr_params_t *p);
+
+/** Whether the frame `p` interrupted a processor halted in its idle wait,
+ * at the instruction after the halt, as Linux's `cpu_in_idle` asks of the
+ * interrupted address. */
+int platform_frame_idle(const isr_params_t *p);
+
+/** Log the return addresses of the caller's frames, from its frame pointer
+ * up its thread's kernel stack, as Linux's `dump_stack` does where no
+ * interrupted frame is at hand. */
+void platform_show_stack(const char *subsystem, int level);
+
+/** The instruction and frame pointer at which the blocked thread `t` is
+ * stopped in its switch away, from what the switch saved on its stack. */
+void platform_blocked_frame(const struct process *t, uintptr_t *pc, uintptr_t *fp);
 
 #endif /* _PLATFORM_H_ */

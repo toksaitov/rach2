@@ -27,6 +27,9 @@
  * blocking commit that waits for the queued one ahead of it (76-5b.3);
  * a driver's bound on the wait for each in-fence, i915's 10 s, past which
  * a nonblocking and a blocking flip flip without it (80-72.2);
+ * two planes' independent fences listened to in order, with the second
+ * engine finishing first, each wait's own timeout and no later wait after
+ * a timeout, even if the first signals before the worker runs (80-78);
  * connector forcing, the EDID override, and the CRC files' source,
  * entries, lines and overflow (76-5b.4); and an unplug that sends what is
  * queued with -ENODEV on its fences. Every allocation is given back.
@@ -77,7 +80,7 @@ static struct open_file descriptions[64];
  * that runs. */
 static int timer_on[2], timer_starts[2], timer_stops[2], enable_rc;
 static int force_calls, conn1_no_edid;
-static uint32_t shown[16];
+static uint32_t shown[64];
 static int nshown;
 static const char *crc_running;
 static uint32_t crc_frame;
@@ -187,7 +190,7 @@ static int32_t crc_set(struct drm_crtc *c, const char *name)
 static void plane_update(struct drm_plane *plane, struct drm_atomic_state *state)
 {
     (void)state;
-    if (nshown < 16) {
+    if (nshown < (int)(sizeof(shown) / sizeof(shown[0]))) {
         shown[nshown++] = plane->state->fb ? plane->state->fb->base.id : 0;
     }
 }
@@ -681,18 +684,21 @@ static int32_t fd_status(int32_t fd)
  * wait for (`commit_fence_wait`), the last of them in `tail_wait`. */
 static int tail_waits;
 static struct dma_fence *tail_wait;
+/* A signaller holding the driver's interrupt and engine locks. */
+static int plane_irq_held;
 
 /** The driver's `commit_fence_wait`, counted. */
 static void count_tail_wait(struct drm_device *d, struct dma_fence *fence)
 {
     (void)d;
+    CHECK(!plane_irq_held, "planes: the wait hook runs outside the driver's interrupt locks");
     tail_waits++;
     tail_wait = fence;
 }
 
 /** A nonblocking flip on a late in-fence flips, signals its out-fence and
  * sends its event only after the fence, and tells the driver of the fence
- * its tail would wait for once, as it is queued; a blocking flip waits for
+ * its tail waits for once, from the worker; a blocking flip waits for
  * its fence; a blocking commit waits for the queued one ahead of it. */
 static void row_fences(void)
 {
@@ -716,9 +722,11 @@ static void row_fences(void)
     tail_waits = 0;
     CHECK(req_commit(&r, DRM_MODE_ATOMIC_NONBLOCK | DRM_MODE_PAGE_FLIP_EVENT, 41) == 0,
           "a nonblocking flip on an in-fence that has not signalled");
+    CHECK(tail_waits == 0, "queuing leaves the fence wait to the worker");
+    CHECK(drm_atomic_commit_work() == 0, "the worker starts the deferred wait in process context");
     in = sync_file_get_fence(in_fd);
     CHECK(tail_waits == 1 && tail_wait == in,
-          "the driver is told of the in-fence its tail would wait for, as it is queued");
+          "the driver is told of the in-fence its tail waits for");
     dma_fence_put(in);
     CHECK(out_fd >= 0 && out_fd != 77 && fd_status(out_fd) == 0, "its out-fence, pending");
     k_memset(&info, 0, sizeof(info));
@@ -878,6 +886,189 @@ static void row_fence_timeout(void)
     mc->commit_fence_timeout_ms = 0;
     sw_close(&timeline);
     CHECK(!works, "timeout: no commit left queued");
+}
+
+/* An independent engine's completion, visible without enabling its
+ * signal; complete_on_enable models completion during callback setup. */
+struct plane_fence {
+    struct dma_fence base;
+    int done, complete_on_enable, enables;
+};
+
+/** Read the engine's completion without listening for it. */
+static int plane_fence_signaled(struct dma_fence *fence)
+{
+    return ((struct plane_fence *)fence)->done;
+}
+
+/** Count enabling the engine's signal; zero if it completes meanwhile. */
+static int plane_fence_enable(struct dma_fence *fence)
+{
+    struct plane_fence *f = (struct plane_fence *)fence;
+
+    CHECK(!plane_irq_held, "planes: listening begins outside the driver's interrupt locks");
+    f->enables++;
+    if (f->complete_on_enable) {
+        f->done = 1;
+    }
+    return !f->done;
+}
+
+/** The row owns the fence's storage. */
+static void plane_fence_release(struct dma_fence *fence)
+{
+    (void)fence;
+}
+
+static const struct dma_fence_ops plane_fence_ops = {
+    NULL, NULL, plane_fence_enable, plane_fence_release, plane_fence_signaled, NULL};
+
+/** Signal an engine's completion while its interrupt locks are held. */
+static void plane_fence_signal(struct plane_fence *f)
+{
+    f->done = 1;
+    plane_irq_held = 1;
+    CHECK(dma_fence_signal(&f->base) == 0, "planes: the engine signals");
+    plane_irq_held = 0;
+}
+
+/* The fences and descriptors of one two-plane commit. */
+struct plane_wait_case {
+    struct plane_fence f[2];
+    int32_t fd[2];
+    int shown;
+    uint64_t deadline;
+};
+
+/** Queue two planes, then let the worker begin the first fence wait. */
+static void plane_wait_begin(struct plane_wait_case *c, uint32_t timeout_ms)
+{
+    struct req r;
+    int i;
+
+    k_memset(c, 0, sizeof(*c));
+    for (i = 0; i < 2; i++) {
+        dma_fence_init(&c->f[i].base, &plane_fence_ops, dma_fence_context_alloc(1), 1);
+        c->fd[i] = sync_file_create(&c->f[i].base, "plane");
+        CHECK(c->fd[i] >= 0, "planes: an independent engine's fence exported");
+    }
+    mc->commit_fence_timeout_ms = timeout_ms;
+    tail_waits = 0;
+    c->shown = nshown;
+    req_flip(&r, 0, fb_a);
+    req_add(&r, &primary[0].base, mc->prop_in_fence_fd, (uint64_t)c->fd[0]);
+    req_add(&r, &primary[1].base, mc->prop_fb_id, fb_b);
+    req_add(&r, &primary[1].base, mc->prop_in_fence_fd, (uint64_t)c->fd[1]);
+    CHECK(req_commit(&r, DRM_MODE_ATOMIC_NONBLOCK, 0) == 0 && works && tail_waits == 0 &&
+              !c->f[0].base.listened && !c->f[1].base.listened,
+          "planes: queuing leaves both waits to the worker");
+    CHECK(drm_atomic_commit_work() == 0, "planes: the worker begins the first wait");
+    CHECK(c->f[0].base.listened && c->f[0].enables == 1 && c->f[0].base.cbs &&
+              !c->f[1].base.listened && !c->f[1].enables && !c->f[1].base.cbs && tail_waits == 1 &&
+              tail_wait == &c->f[0].base,
+          "planes: only the first engine is listened to and handed to the wait hook");
+    c->deadline = works ? works->deadline : 0;
+}
+
+/** Check a finished commit and give back its descriptors and fence holds. */
+static void plane_wait_end(struct plane_wait_case *c)
+{
+    int i;
+
+    CHECK(!works && nshown == c->shown + 2 && !c->f[0].base.cbs && !c->f[1].base.cbs,
+          "planes: both planes programmed with no work or callback left");
+    tick();
+    CHECK(!crtc[0].flip_pending && !crtc[1].flip_pending,
+          "planes: both flips end at their vblanks");
+    for (i = 0; i < 2; i++) {
+        fd_free(&table, c->fd[i]);
+        CHECK(c->f[i].base.refs == 1, "planes: only the row's fence reference remains");
+        dma_fence_put(&c->f[i].base);
+    }
+}
+
+/** A timeout ends both waits whether the first signal precedes or follows
+ * the worker. No next-plane hook runs under the signaller's locks. */
+static void plane_wait_timeout(int signal_first)
+{
+    struct plane_wait_case c;
+
+    plane_wait_begin(&c, 10000);
+    model_now_ns = (int64_t)c.deadline * 1000000ll;
+    if (signal_first) {
+        plane_fence_signal(&c.f[0]);
+    }
+    CHECK(drm_atomic_commit_work() == 1 && !c.f[0].base.cbs,
+          "planes: timeout removes the current callback and finishes the commit");
+    if (!signal_first) {
+        plane_fence_signal(&c.f[0]);
+    }
+    CHECK(!c.f[1].base.listened && !c.f[1].enables && !c.f[1].base.cbs && tail_waits == 1,
+          "planes: a signal after timeout never arms or boosts the second fence");
+    plane_wait_end(&c);
+}
+
+/** Each pending plane gets a full wait, including when the worker resumes
+ * after a deadline whose fence completed in time; zero has no timeout. */
+static void plane_wait_next(uint32_t timeout_ms, int delayed_worker)
+{
+    struct plane_wait_case c;
+
+    plane_wait_begin(&c, timeout_ms);
+    model_now_ns += 5000000000ll;
+    plane_fence_signal(&c.f[0]);
+    CHECK(!c.f[1].base.listened && !c.f[1].enables && tail_waits == 1,
+          "planes: the callback leaves the next wait to process context");
+    if (delayed_worker) {
+        model_now_ns = (int64_t)(c.deadline + 1) * 1000000ll;
+    }
+    CHECK(drm_atomic_commit_work() == 0 && c.f[1].base.listened && c.f[1].enables == 1 &&
+              c.f[1].base.cbs && tail_waits == 2 && tail_wait == &c.f[1].base && works &&
+              works->deadline == (timeout_ms ? rtc_ticks_now() + MS_TO_TICKS(timeout_ms) + 1u : 0),
+          "planes: the second pending fence gets its callback, boost and full timeout");
+    if (timeout_ms && !delayed_worker) {
+        model_now_ns = (int64_t)c.deadline * 1000000ll;
+        CHECK(drm_atomic_commit_work() == 0 && nshown == c.shown,
+              "planes: the first wait's deadline does not end the second wait");
+    }
+    plane_fence_signal(&c.f[1]);
+    CHECK(drm_atomic_commit_work() == 1, "planes: the worker finishes after the second fence");
+    plane_wait_end(&c);
+}
+
+/** Two independent engines finish in either order; only the current
+ * plane is listened to, from process context, and timeout stops the waits. */
+static void row_plane_fences(void)
+{
+    struct plane_wait_case c;
+
+    mc->commit_fence_wait = count_tail_wait;
+    plane_wait_begin(&c, 10000);
+    c.f[1].done = 1;
+    CHECK(drm_atomic_commit_work() == 0 && nshown == c.shown && !c.f[1].base.listened &&
+              !c.f[1].base.signaled && !c.f[1].base.cbs,
+          "planes: the second engine finishes first without listening or a flip");
+    plane_fence_signal(&c.f[0]);
+    CHECK(drm_atomic_commit_work() == 1 && c.f[1].base.signaled && !c.f[1].base.listened &&
+              !c.f[1].enables && !c.f[1].base.cbs && tail_waits == 1,
+          "planes: the completed second fence needs no callback or wait boost");
+    plane_wait_end(&c);
+
+    plane_wait_next(10000, 0);
+    plane_wait_next(10000, 1);
+    plane_wait_next(0, 0);
+    plane_wait_timeout(1);
+    plane_wait_timeout(0);
+
+    plane_wait_begin(&c, 10000);
+    c.f[1].complete_on_enable = 1;
+    plane_fence_signal(&c.f[0]);
+    CHECK(drm_atomic_commit_work() == 1 && c.f[1].base.signaled && c.f[1].enables == 1 &&
+              !c.f[1].base.cbs && tail_waits == 1,
+          "planes: completion during callback setup leaves no wait or boost");
+    plane_wait_end(&c);
+    mc->commit_fence_wait = NULL;
+    mc->commit_fence_timeout_ms = 0;
 }
 
 /* The OUT_FENCE_PTR target of row_out_fence_fault. */
@@ -1070,6 +1261,7 @@ int main(void)
     row_fences();
     row_queued_off();
     row_fence_timeout();
+    row_plane_fences();
     row_out_fence_fault();
     row_force();
     row_edid_override();

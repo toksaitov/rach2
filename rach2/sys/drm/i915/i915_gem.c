@@ -199,7 +199,7 @@ int32_t i915_gem_object_wait_idle(struct drm_i915_gem_object *obj, int intr)
     uint32_t i;
     int32_t err;
 
-    /* Every fence of now armed before any wait, as Linux's unbind; one
+    /* Every fence busy now is armed before any wait, as Linux's unbind; one
      * added while the wait sleeps is waited for but not armed. */
     if (fence_busy(r->write)) {
         object_fence_arm(r->write);

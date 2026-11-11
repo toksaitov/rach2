@@ -153,6 +153,10 @@ void platform_cpu_ipi(int cpu)
     }
 }
 
+/** The host model has no watchdog. */
+void watchdog_wait(void)
+{}
+
 /* The processors the platform has, and the entry of the one the late row
  * starts, which reaches its first C only after the boot's wait. */
 static int cpu_count = 1;

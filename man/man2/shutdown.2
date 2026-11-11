@@ -3,20 +3,15 @@
 .Os
 .Sh NAME
 .Nm shutdown
-.Nd shut down a connected stream socket
+.Nd shut down part of a full-duplex connection
 .Sh SYNOPSIS
 .In sys/socket.h
 .Ft int
 .Fn shutdown "int fd" "int how"
 .Sh DESCRIPTION
 .Fn shutdown
-operates on the TCP socket
-.Fa fd ,
-connected or still connecting.
-A listener, an unconnected socket, and a datagram socket cannot be
-shut down.
-A stream has a connection for this purpose after its handshake has
-completed, through each later closing state, until its connection ends.
+operates on a TCP socket, connected, connecting or listening, and on a
+UDP or ICMP datagram socket, judging each as Linux's inet_shutdown does.
 The socket keeps its connection until its close, which finishes the
 connection's close.
 .Pp
@@ -58,6 +53,11 @@ such as
 sends its request and reads the answer.
 In a later closing state, whose FIN is on its way already, nothing
 else changes.
+In the second handshake state of a simultaneous open,
+.Dv SYN_RCVD ,
+no FIN is sent, then or when the handshake ends, as on Linux, and a
+send waits for the handshake and then fails with
+.Er EPIPE .
 .It Dv SHUT_RDWR
 Value 2.
 Both: the FIN goes after the queued output, a read returns the bytes
@@ -81,6 +81,49 @@ blocked on it returns
 .Er ECONNRESET ,
 which is otherwise the socket's pending error, a local port the attempt
 chose is given back, and the socket may connect again.
+.Pp
+A listener shut with
+.Dv SHUT_RD
+or
+.Dv SHUT_RDWR
+stops listening, as on Linux: each connection waiting to be accepted is
+ended with a reset, so its peer reads
+.Er ECONNRESET ,
+the handshakes in progress are dropped, an
+.Xr accept 2
+blocked on the socket returns
+.Er EINVAL ,
+and the socket may listen again.
+.Dv SHUT_WR
+alone leaves a listener as it is.
+.Pp
+A TCP socket whose connection has ended, by a reset, by a timeout or
+in the time-wait state, takes the halves but returns
+.Er ENOTCONN ,
+as Linux's closed socket does, and sends nothing.
+.Pp
+A UDP or ICMP datagram socket records the halves shut, and every
+waiter is woken.
+With the receiving half shut, a blocking receive returns the
+datagrams still queued and then 0, with no sender, where one that does
+not wait fails with
+.Er EAGAIN ,
+as on Linux, and
+.Xr poll 2
+reports
+.Dv POLLIN
+and
+.Dv POLLRDHUP ,
+with both halves shut
+.Dv POLLHUP
+too.
+Datagrams are still taken, and a send still goes.
+A socket with no peer set by
+.Xr connect 2
+returns
+.Er ENOTCONN
+after taking the halves, as Linux does, so that a thread blocked in its
+receive can still be stopped.
 .Pp
 When the socket is closed with received data still unread, the
 connection ends with a reset in place of the FIN, counted in
@@ -115,6 +158,12 @@ read the request and its end.
 shuts a client whose peer has closed with
 .Dv SHUT_WR
 and checks that a blocking and a nonblocking read return zero.
+The host tests
+.Pa tests/host/tcp_reset_hosttest.c
+and
+.Pa tests/host/socket_wake_hosttest.c
+check a listener's shutdown, the states judged, a read and a send after
+a reset and a datagram socket's receive and poll.
 .Sh ERRORS
 .Bl -tag -width "[EOPNOTSUPP]"
 .It Bq Er EBADF
@@ -128,14 +177,15 @@ argument array cannot be read.
 .Fa how
 is not 0, 1, or 2.
 .It Bq Er ENOTCONN
-The socket is not a connected or connecting stream, including a
-listener, a datagram socket, a socket in the second handshake state of
-a simultaneous open, or one whose connection has ended.
+The socket is a stream that never connected or whose connection has
+ended, or a datagram socket with no peer; the last two still take the
+halves.
 .It Bq Er ENOTSOCK
 .Fa fd
 does not refer to a socket.
 .It Bq Er EOPNOTSUPP
-The socket is a raw socket.
+The socket is a raw, packet or netlink socket, as Linux's
+sock_no_shutdown answers.
 .El
 .Sh SEE ALSO
 .Xr connect 2 ,

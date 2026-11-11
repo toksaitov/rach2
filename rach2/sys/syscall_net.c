@@ -500,6 +500,24 @@ static void inet_endpoint_out(uint8_t *sa, uint16_t family, net_addr_t addr, uin
 }
 
 /**
+ * Build the sender of a datagram receive in `sa`, as `inet_endpoint_out`
+ * does, or, for a receive that a shutdown ended with no datagram, whose
+ * `addr` the receive left with family 0, set the address's length `*len`
+ * and the bytes to copy `*give` to 0, as Linux's recvfrom and recvmsg give
+ * msg_namelen 0 when udp_recvmsg names no sender.
+ */
+static void inet_sender_out(uint8_t *sa, uint16_t family, net_addr_t addr, uint16_t port,
+                            uint32_t *len, uint32_t *give)
+{
+    if (addr.family == 0) {
+        *len = 0;
+        *give = 0;
+        return;
+    }
+    inet_endpoint_out(sa, family, addr, port);
+}
+
+/**
  * Write an Internet source/peer sockaddr back to a caller's (addr, addrlen)
  * pair.
  *
@@ -1492,7 +1510,7 @@ static int32_t do_recvfrom(int fd, uintptr_t buf_ptr, int len, int flags, uintpt
                            uintptr_t salen_ptr)
 {
     fd_entry_t *entry;
-    net_addr_t src_ip = net_addr4(0);
+    net_addr_t src_ip;
     uint16_t src_port = 0;
     uint32_t addr_len = 0;
     uint32_t addr_give = 0;
@@ -1502,6 +1520,7 @@ static int32_t do_recvfrom(int fd, uintptr_t buf_ptr, int len, int flags, uintpt
     int peek = (flags & MSG_PEEK) != 0;
     int how = (peek ? SOCK_RECV_PEEK : 0) | ((flags & MSG_TRUNC) ? SOCK_RECV_TRUNC : 0);
 
+    k_memset(&src_ip, 0, sizeof(src_ip));
     if (len < 0 || !user_span_ok(buf_ptr, (uint32_t)len)) {
         return -EFAULT;
     }
@@ -1561,7 +1580,7 @@ static int32_t do_recvfrom(int fd, uintptr_t buf_ptr, int len, int flags, uintpt
                 addr_give = 0;
             }
         } else {
-            inet_endpoint_out(sa, entry->sock->family, src_ip, src_port);
+            inet_sender_out(sa, entry->sock->family, src_ip, src_port, &addr_len, &addr_give);
         }
         if (addr_give > 0 && copy_to_user((void __user *)sa_ptr, sa, addr_give) != 0) {
             return -EFAULT;
@@ -1654,7 +1673,7 @@ static int32_t connect_wait(struct socket *sock)
 static int accept_ready(void *arg)
 {
     struct socket *sock = (struct socket *)arg;
-    return sock->accept_head != sock->accept_tail;
+    return !sock->listening || sock->accept_head != sock->accept_tail;
 }
 
 /**
@@ -1889,9 +1908,15 @@ static int32_t do_listen(int fd, int backlog)
  * -EAGAIN on a non-blocking listener), give a new descriptor for it the
  * creation flags `flags`, and report the peer address. A flag other than
  * SOCK_CLOEXEC and SOCK_NONBLOCK is EINVAL. Raw sockets return EOPNOTSUPP;
- * other sockets must be listening streams.
+ * other sockets must be listening streams. A listener stopped by
+ * shutdown(2) while the call waits fails it with EINVAL, as Linux's
+ * inet_csk_wait_for_connect ends once the socket leaves TCP_LISTEN
+ * (net/ipv4/inet_connection_sock.c:631-633 in 6.12.115).
  *
- * The descriptor is reserved before the connection is dequeued, so a caller
+ * The descriptor is reserved before the connection is dequeued, under
+ * `net_lock` with the listener checked again, so a sharer that took the
+ * connection or stopped the listener meanwhile sends the call back to wait
+ * or fail, and a caller
  * with none free leaves it queued, and gets its socket only after the
  * address is copied out: the copy can sleep, and a thread sharing the table
  * must find nothing it could use or close. A copy that fails frees the slot
@@ -1923,24 +1948,35 @@ static int32_t do_accept(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr, uint32_t
         return -EINVAL;
     }
 
-    if (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK) &&
-        listen_sock->accept_head == listen_sock->accept_tail) {
-        return -EAGAIN;
-    }
+    for (;;) {
+        uint32_t held;
+        int rc;
 
-    {
-        int rc = wq_wait_event(&listen_sock->waiters, accept_ready, listen_sock);
+        if (!listen_sock->listening) {
+            return -EINVAL;
+        }
+        if (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK) &&
+            listen_sock->accept_head == listen_sock->accept_tail) {
+            return -EAGAIN;
+        }
+        rc = wq_wait_event(&listen_sock->waiters, accept_ready, listen_sock);
         if (rc < 0) {
             return rc;
         }
+        new_fd = fd_alloc(current_proc->fds);
+        if (new_fd < 0) {
+            return new_fd;
+        }
+        held = net_lock();
+        if (listen_sock->listening && listen_sock->accept_head != listen_sock->accept_tail) {
+            conn_sock = listen_sock->accept_queue[listen_sock->accept_head];
+            listen_sock->accept_head = (listen_sock->accept_head + 1) & (SOCK_ACCEPT_BACKLOG - 1);
+            net_unlock(held);
+            break;
+        }
+        net_unlock(held);
+        fd_free(current_proc->fds, new_fd);
     }
-
-    new_fd = fd_alloc(current_proc->fds);
-    if (new_fd < 0) {
-        return new_fd;
-    }
-    conn_sock = listen_sock->accept_queue[listen_sock->accept_head];
-    listen_sock->accept_head = (listen_sock->accept_head + 1) & (SOCK_ACCEPT_BACKLOG - 1);
 
     if ((sa_ptr && !salen_ptr) ||
         copy_sockaddr_to_user(sa_ptr, salen_ptr, conn_sock->remote_port, conn_sock->remote_ip,
@@ -2183,43 +2219,53 @@ static int32_t do_getpeername(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr)
 
 /**
  * shutdown(how): SHUT_RD(0)/SHUT_WR(1)/SHUT_RDWR(2), as Linux's
- * inet_shutdown (`tcp_shutdown`). SHUT_WR closes the sending half: the FIN
- * goes after the queued data, a later send is EPIPE, and the peer's data
- * and FIN still reach the reader, as `nc` needs when it has sent its input
- * and reads the answer. SHUT_RD closes the receiving half: a read gives the
- * bytes buffered and then the end of input without waiting, and poll
- * reports POLLIN and POLLRDHUP; data past rcv_nxt once this side's FIN has
- * gone ends the connection with a reset. SHUT_RDWR does both. The socket
- * keeps its connection until its close. A connection still in SYN_SENT is
- * disconnected and records ECONNRESET. Returns 0, -EINVAL for another
- * `how`, -ENOTCONN or -EOPNOTSUPP.
+ * inet_shutdown. A stream is judged by `tcp_shutdown`. SHUT_WR closes the
+ * sending half: the FIN goes after the queued data, a later send is EPIPE,
+ * and the peer's data and FIN still reach the reader, as `nc` needs when it
+ * has sent its input and reads the answer. SHUT_RD closes the receiving
+ * half: a read gives the bytes buffered and then the end of input without
+ * waiting, and poll reports POLLIN and POLLRDHUP; data past rcv_nxt once
+ * this side's FIN has gone ends the connection with a reset. SHUT_RDWR does
+ * both. The socket keeps its connection until its close. A connection still
+ * in SYN_SENT is disconnected and records ECONNRESET, and a listener shut
+ * for receiving stops listening. A UDP or ICMP datagram socket takes the
+ * flags, which end a blocking receive with 0 and show in poll, and the call
+ * is ENOTCONN when the socket has no peer, as Linux's TCP_CLOSE case
+ * (net/ipv4/af_inet.c:915-924 in 6.12.115). A packet or netlink socket is
+ * EOPNOTSUPP, as their sock_no_shutdown answers. Returns 0, -EINVAL for
+ * another `how`, -ENOTCONN or -EOPNOTSUPP.
  *
- * Only a connected or connecting stream socket can be shut down: not a
- * listener, which would free its LISTEN TCB and stop accepting without a
- * word, nor an unconnected or a UDP socket. A sharer asleep in `recv`,
- * `send` or `connect` is woken to judge the socket again.
+ * Every waiter is woken to judge the socket again, after a failure too, as
+ * Linux calls sk_state_change whatever the outcome: a sharer asleep in
+ * `recv`, `send`, `connect` or `accept`, and a poller.
  */
 static int32_t do_shutdown(int fd, int how)
 {
     fd_entry_t *entry = fd_get(current_proc->fds, fd);
+    struct socket *sock;
     int rc;
 
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return not_a_socket(entry);
     }
-    if (entry->sock->type == SOCK_RAW) {
+    sock = entry->sock;
+    if (sock->type == SOCK_RAW || sock->family == AF_PACKET || sock->family == AF_NETLINK) {
         return -EOPNOTSUPP;
     }
     if (how < SHUT_RD || how > SHUT_RDWR) {
         return -EINVAL;
     }
-    if (entry->sock->type != SOCK_STREAM) {
-        return -ENOTCONN;
+    if (sock->type == SOCK_STREAM) {
+        rc = tcp_shutdown(sock, how != SHUT_WR, how != SHUT_RD);
+    } else {
+        uint32_t held = net_lock();
+
+        sock->shutdown |=
+            (how != SHUT_WR ? SOCK_RCV_SHUTDOWN : 0) | (how != SHUT_RD ? SOCK_SEND_SHUTDOWN : 0);
+        net_unlock(held);
+        rc = sock->connected ? 0 : -ENOTCONN;
     }
-    rc = tcp_shutdown(entry->sock, how != SHUT_WR, how != SHUT_RD);
-    if (rc == 0) {
-        wq_wake_all(&entry->sock->waiters);
-    }
+    wq_wake_all(&sock->waiters);
     return rc;
 }
 
@@ -3804,11 +3850,12 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
     uintptr_t name_ptr;
     uint32_t namelen;
     uint32_t addr_len, addr_give;
-    net_addr_t src_ip = net_addr4(0);
+    net_addr_t src_ip;
     uint16_t src_port = 0;
     int32_t taken;
     int32_t whole = 0;
 
+    k_memset(&src_ip, 0, sizeof(src_ip));
     if (msghdr_get(&hdr, msg_ptr) != 0) {
         return -EFAULT;
     }
@@ -3861,7 +3908,7 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
                 addr_give = 0;
             }
         } else {
-            inet_endpoint_out(sa, entry->sock->family, src_ip, src_port);
+            inet_sender_out(sa, entry->sock->family, src_ip, src_port, &addr_len, &addr_give);
         }
         if (addr_give > 0 && copy_to_user((void __user *)name_ptr, sa, addr_give) != 0) {
             return -EFAULT;

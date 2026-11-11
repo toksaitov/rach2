@@ -103,6 +103,10 @@ void kirq_restore(uint32_t flags)
 void arch_idle_masked(void)
 {}
 
+/** Nothing: the host model has no lockup detector. */
+void watchdog_sched(void)
+{}
+
 /** Format the record into `record` as the suite receives it, and count it. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {

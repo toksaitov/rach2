@@ -593,25 +593,26 @@ int tcp_send(struct socket *sock, const uint8_t *buf, int len);
 void tcp_close(struct socket *sock);
 
 /**
- * Shut down the connection of `sock` as shutdown(2) asks: `rd` sets the
- * socket's SOCK_RCV_SHUTDOWN, `wr` its SOCK_SEND_SHUTDOWN and sends the
- * FIN after the queued data (`tcp_shutdown_send`). The block stays
- * attached until the socket's close. A connection still in SYN_SENT is
- * disconnected instead: its block is freed, nothing is sent, and the
- * socket records ECONNRESET and may connect again. Returns 0, or -ENOTCONN
- * for a socket with no connection, a listener, or one in CLOSED or
- * SYN_RCVD. Takes `net_lock` itself.
+ * Shut down `sock`, a stream socket, as shutdown(2) asks: `rd` sets the
+ * socket's SOCK_RCV_SHUTDOWN, `wr` its SOCK_SEND_SHUTDOWN, and a send
+ * shutdown from ESTABLISHED or CLOSE_WAIT sends the FIN after the queued
+ * data. The block stays attached until the socket's close. A connection
+ * still in SYN_SENT is disconnected instead: its block is freed, nothing
+ * is sent, and the socket records ECONNRESET and may connect again. A
+ * listener shut for receiving stops listening, its queued connections
+ * reset. Returns 0, or -ENOTCONN for a socket with no connection, or one
+ * whose block is CLOSED or in TIME_WAIT, which still takes the flags.
+ * Takes `net_lock` itself.
  */
 int tcp_shutdown(struct socket *sock, int rd, int wr);
 
 /**
- * Close the sending half of the connection, as shutdown(SHUT_WR) asks: the
- * queued data goes out and a FIN after it, and the socket stays attached, so
- * the peer's data and its FIN still reach the reader, until the socket's
- * close. A connection not in ESTABLISHED or CLOSE_WAIT is left as it is.
- * Takes `net_lock` itself.
+ * End the connection of `sock`, queued on a closing or stopped listener and
+ * never accepted, as Linux's tcp_disconnect ends it: with a reset from a
+ * synchronized state, whether or not its data was read, and its block
+ * freed, leaving `sock` with none. Takes `net_lock` itself.
  */
-void tcp_shutdown_send(struct socket *sock);
+void tcp_forget_queued(struct socket *sock);
 
 /** Whether `sock`, a stream socket that is not listening, has a connection
  * in ESTABLISHED or a later state, the closing states included. */

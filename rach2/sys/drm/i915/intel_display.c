@@ -436,7 +436,8 @@ static void flip_boost(struct intel_crtc *c, const struct drm_plane_state *ps)
  * its i915_request_wait_timeout boosts such a request after the spin,
  * which it skips (i915_request.c:2030-2047). Nothing for another driver's
  * fence or a merge, which Linux waits for in dma_fence_default_wait.
- * Interrupts masked.
+ * Process context without the driver's interrupt or engine locks,
+ * interrupts masked.
  */
 static void commit_fence_wait(struct drm_device *dev, struct dma_fence *fence)
 {

@@ -62,18 +62,21 @@ static int next_token(const char **p, const char **start, size_t *len)
     return 1;
 }
 
-/** Whether `tok` of length `len` is `key` followed by `=`. */
-static int token_has_key(const char *tok, size_t len, const char *key, size_t klen)
+/** Whether the first `klen` bytes of `tok` are `key`'s. */
+static int token_is(const char *tok, const char *key, size_t klen)
 {
     size_t i;
 
-    if (len < klen + 1 || tok[klen] != '=') {
-        return 0;
-    }
     for (i = 0; i < klen && tok[i] == key[i]; i++) {
         /* match each byte of the token against the key */
     }
     return i == klen;
+}
+
+/** Whether `tok` of length `len` is `key` followed by `=`. */
+static int token_has_key(const char *tok, size_t len, const char *key, size_t klen)
+{
+    return len >= klen + 1 && tok[klen] == '=' && token_is(tok, key, klen);
 }
 
 int kcmdline_value(const char *key, char *out, unsigned int outlen)
@@ -115,7 +118,11 @@ int kcmdline_value_nth(const char *key, int nth, char *out, unsigned int outlen)
     return 0;
 }
 
-int kcmdline_bool(const char *key, int dflt)
+/**
+ * The boolean option `key`, as `kcmdline_bool` reads it; a bare `key` token
+ * is true when `bare` is nonzero, and is ignored otherwise.
+ */
+static int cmdline_bool(const char *key, int dflt, int bare)
 {
     size_t klen = k_strlen(key);
     const char *p = kcmdline;
@@ -126,6 +133,10 @@ int kcmdline_bool(const char *key, int dflt)
     while (next_token(&p, &tok, &len)) {
         char c0, c1;
 
+        if (bare && len == klen && token_is(tok, key, klen)) {
+            value = 1;
+            continue;
+        }
         if (!token_has_key(tok, len, key, klen)) {
             continue;
         }
@@ -159,6 +170,16 @@ int kcmdline_bool(const char *key, int dflt)
         }
     }
     return value;
+}
+
+int kcmdline_bool(const char *key, int dflt)
+{
+    return cmdline_bool(key, dflt, 0);
+}
+
+int kcmdline_param_bool(const char *key, int dflt)
+{
+    return cmdline_bool(key, dflt, 1);
 }
 
 int kcmdline_count(const char *key)

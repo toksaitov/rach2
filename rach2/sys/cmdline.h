@@ -66,6 +66,13 @@ int kcmdline_value_nth(const char *key, int nth, char *out, unsigned int outlen)
  */
 int kcmdline_bool(const char *key, int dflt);
 
+/**
+ * The boolean module parameter `key`, read as `kcmdline_bool` reads it,
+ * except that a bare `key` token is true, as Linux's param_set_bool takes
+ * it: "No equals means set" (Linux 6.12, kernel/params.c:312 to 319).
+ */
+int kcmdline_param_bool(const char *key, int dflt);
+
 /** How many `key=` tokens the line has. */
 int kcmdline_count(const char *key);
 

@@ -6832,7 +6832,9 @@ static int32_t dgram_spread(const struct kernel_iovec *iov, int iovcnt, const ui
  * reader may run then: the datagram is already off the queue, so the two
  * cannot copy one datagram and consume two, and the sender reported is this
  * datagram's. A datagram gone between the wait and the hold counts as one of
- * no bytes.
+ * no bytes. A blocking receive on a socket shut for receiving with nothing
+ * queued returns 0 and names no sender, as Linux's udp_recvmsg returns 0
+ * with no address there.
  *
  * The buffers' lengths are summed before the hold, and only as much of the
  * datagram as they take is copied: into READV_DGRAM_STACK bytes on the
@@ -6882,6 +6884,12 @@ int32_t readv_dgram(fd_entry_t *entry, const struct kernel_iovec *iov, int iovcn
 
         if (rc < 0) {
             return rc;
+        }
+        if (rc == SOCK_RECV_SHUT) {
+            if (whole) {
+                *whole = 0;
+            }
+            return 0;
         }
     }
 

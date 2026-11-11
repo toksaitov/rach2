@@ -21,6 +21,7 @@
 #include "../../proc/sched.h"
 #include "../../proc/smp.h"
 #include "../../timer.h"
+#include "../../watchdog.h"
 #include "debugreg.h"
 #if defined(__x86_64__)
 #include "../x86_64/sysnr.h"
@@ -318,19 +319,18 @@ static void _exception_handler(isr_params_t *params)
 /**
  * The NMI, vector 2, or the machine check, vector 18, which report a fault
  * of the machine and not of what was running: print it and stop, in user
- * mode as in kernel mode. The paranoid router holds no lock, so no signal
- * may be posted here, and the panic begins before the record is written,
- * so that the console's lock, which the interrupted code may hold, is not
- * taken (`k_panic_begin`).
- *
- * An NMI that another processor's stop sent, to a processor that did not
- * take the interprocessor interrupt, is the stop, and this processor leaves
- * VMX or SVM operation and halts (`smp_stop_nmi`), as Linux's
- * `smp_stop_nmi_callback` does.
+ * mode as in kernel mode. An NMI the watchdog sent or raised, a backtrace
+ * request or its counter's overflow, is the watchdog's (`watchdog_nmi`), and
+ * returns; so is the NMI of another processor's stop, which this processor
+ * takes there, leaving VMX or SVM operation and halting (`smp_stop_nmi`), as
+ * Linux's `smp_stop_nmi_callback` does. The paranoid router holds no lock,
+ * so no signal may be posted here, and the panic begins before the record
+ * is written, so that the console's lock, which the interrupted code may
+ * hold, is not taken (`k_panic_begin`).
  */
 static void _hardware_fault_handler(isr_params_t *params)
 {
-    if (params->vector == 2 && smp_stop_nmi()) {
+    if (params->vector == 2 && watchdog_nmi(params)) {
         return;
     }
     k_panic_begin();
@@ -657,10 +657,41 @@ static void user_entry(const isr_params_t *params)
 }
 
 /**
+ * Panic at once for an exception taken while the panic reads the running
+ * process (`k_panic_reading`), before the router takes the big lock;
+ * return otherwise. Interrupts are off through the panic, so the exception
+ * is the read's own, and the panic that follows reports the first one
+ * again (`k_panic`). The panic may run without the lock, from
+ * `_hardware_fault_handler` or a double fault, and a processor it stopped
+ * may hold the lock for good, so taking it here could spin for ever and
+ * the second report, the countdown and the restart would never come.
+ * Linux's oops path takes no lock a halted processor can hold: a fault in
+ * an oops re-enters it under `die_lock`, which its owner passes through
+ * (arch/x86/kernel/dumpstack.c:351-373), and a kernel fault with page
+ * faults disabled takes no mmap lock (arch/x86/mm/fault.c:1270-1273).
+ */
+static void panic_if_reading(const isr_params_t *params)
+{
+    const char *name;
+
+    if (!k_panic_reading()) {
+        return;
+    }
+    name = params->vector < 32 ? _exception_names[params->vector] : "unknown";
+    k_panic_note_fault(name, (uintptr_t)FRAME_PC(params),
+                       _has_error_code(params->vector) ? (long)params->error_code : PANIC_NO_ERROR);
+    if (params->vector == 14) {
+        k_panic_note_address(arch_fault_address());
+    }
+    k_panic("exception in the panic's read of the process");
+}
+
+/**
  * Take the big lock and run the handler chain of a processor exception or
  * a system call; `isr_leave` gives the lock back. `params` is the saved
  * register frame, so that a handler can change the saved registers, a
- * system call's result for one.
+ * system call's result for one. An exception during the panic's read of
+ * the process panics before the lock is taken (`panic_if_reading`).
  */
 void _isr_router(isr_params_t *params)
 {
@@ -675,6 +706,7 @@ void _isr_router(isr_params_t *params)
         is_ioctl = !SC_COMPAT(params) && nr == SYS_IOCTL;
         cmd = (uint32_t)SC_ARG(params, 1);
     }
+    panic_if_reading(params);
     bkl_enter();
     if (is_ioctl) {
         ioctl = bkl_note_ioctl(cmd);
@@ -855,6 +887,10 @@ static void irq_dispatch(isr_params_t *params)
  * wakes the sleepers is made by whichever processor's tick has the lock
  * (`timer_pass_late`, kernel.c).
  *
+ * Every tick runs the lockup detectors' part first (`watchdog_tick`), with
+ * or without the lock, since a processor locked up with interrupts off may
+ * hold it for good.
+ *
  * An interrupt that ended a halt, which it knows by the frame's address,
  * resumes with interrupts off. Otherwise a tick already pending at the
  * `iret`, which a wait for the big lock longer than a tick makes likely,
@@ -869,6 +905,9 @@ void _irq_router(isr_params_t *params)
     user_entry(params);
     if (FRAME_PC(params) == (unsigned long)arch_idle_resume) {
         FRAME_IRQ_OFF(params);
+    }
+    if (params->vector == IRQ_VECTOR(0)) {
+        watchdog_tick(params);
     }
     if (params->vector != IRQ_VECTOR(0)) {
         bkl_enter();

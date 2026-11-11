@@ -69,8 +69,9 @@ void lapic_init_ap(void);
  */
 void lapic_send_ipi(uint32_t target, uint8_t vector);
 
-/** Send that processor a non-maskable interrupt, which reaches it with its
- * interrupts off. */
+/** Send that processor a non-maskable interrupt, which no masking of its
+ * own holds back: the watchdog's backtrace request and the panic's stop of
+ * a processor that keeps interrupts off. */
 void lapic_send_nmi(uint32_t target);
 
 /** Send that processor INIT, which holds it waiting for a startup message. */
@@ -125,6 +126,13 @@ int lapic_requested(uint8_t vector);
 
 /** Write local-vector entry `LINT0` (`lint` 0) or `LINT1` (`lint` 1). */
 void lapic_set_lint(int lint, uint32_t entry);
+
+/** Write this processor's performance-counter entry, which an overflowing
+ * counter raises: `LAPIC_LVT_NMI` for the hard-lockup detector
+ * (arch/x86/pmu.c), `LAPIC_LVT_MASKED` to quiet it. The processor sets
+ * the entry's mask when it delivers the interrupt, so the handler writes it
+ * again. Nothing while the APIC is not enabled. */
+void lapic_set_lvtpc(uint32_t entry);
 
 /** Raise `vector` on this processor by an interprocessor interrupt to
  * itself, as a device's message would: for an edge an I/O APIC input could

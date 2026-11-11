@@ -74,7 +74,8 @@ void k_panic_begin(void);
  * instruction it was raised at; and `error`, its error code, or
  * PANIC_NO_ERROR for an exception that has none. `k_panic_note_address`
  * adds the address it was about, CR2 for a page fault. From the handler,
- * with interrupts off, before `k_panic`. The note is the calling
+ * with interrupts off, just before `k_panic` and only on a path that
+ * panics, since nothing clears the note. The note is the calling
  * processor's, and the report shows the owner's alone.
  */
 void k_panic_note_fault(const char *name, uintptr_t ip, long error);

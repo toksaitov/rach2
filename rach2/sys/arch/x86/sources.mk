@@ -42,6 +42,8 @@ PC_C_SRC = sys/arch/x86/boot.c \
     sys/arch/x86/power.c \
     sys/arch/x86/apicdiag.c \
     sys/arch/x86/lapic.c \
+    sys/arch/x86/nmiwd.c \
+    sys/arch/x86/pmu.c \
     sys/arch/x86/acpi.c \
     sys/arch/x86/ioapic.c \
     sys/arch/x86/refclock.c \

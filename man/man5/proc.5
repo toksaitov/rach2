@@ -1037,6 +1037,31 @@ from 1;
 the name a core file always has here, as
 .Xr core 5
 says;
+the lockup detectors' settings, which a write within each one's range
+sets:
+.Pa kernel/watchdog ,
+.Pa kernel/soft_watchdog
+and
+.Pa kernel/nmi_watchdog ,
+1,
+.Pa kernel/watchdog_thresh ,
+10,
+.Pa kernel/softlockup_panic ,
+.Pa kernel/hardlockup_panic ,
+.Pa kernel/hung_task_panic
+and the three
+.Pa kernel/*_all_cpu_backtrace ,
+0,
+.Pa kernel/hung_task_timeout_secs ,
+120,
+.Pa kernel/hung_task_check_interval_secs ,
+0,
+.Pa kernel/hung_task_check_count ,
+2147483647, and
+.Pa kernel/hung_task_warnings ,
+10, as
+.Xr lockup 7
+describes;
 .Pa kernel/hostname
 and
 .Pa kernel/domainname ,

@@ -186,6 +186,7 @@ the time charged to the process and the load average,
 the sleepers and timers whose time has come, and the periodic services
 .Ql hda ,
 .Ql netdev ,
+.Ql netconsole ,
 .Ql ath9k ,
 .Ql tcp ,
 .Ql ip_frag ,
@@ -227,6 +228,29 @@ charges to vector 32.
 The microseconds are 0 without an invariant time-stamp counter; the cycles
 are not.
 A write of anything zeroes the counts.
+.It Pa test_lockup
+Mode 0600.
+Reads
+.Ql soft hard hung ,
+the kinds a write takes.
+A write of
+.Ql soft SECONDS
+or
+.Ql hard SECONDS
+spins in the write with interrupts on or off, and
+.Ql hung SECONDS
+sleeps in it in the state D, for 1 to 600 seconds, so that the lockup
+detectors of
+.Xr lockup 7
+report it; the write returns when the lockup ends.
+Another text fails with
+.Er EINVAL ,
+and a second
+.Ql hung
+while one sleeps with
+.Er EBUSY .
+Linux has no such file; its lib/test_lockup.c is a module that takes the
+same choices as parameters.
 .It Pa dri
 The display devices' files, one directory for each device registered with
 the DRM core, as Linux 6.12 makes them.
@@ -564,4 +588,5 @@ bochs-drm dev=0000:00:02.0 unique=0000:00:02.0
 .Xr sysfs 5 ,
 .Xr dma-buf 7 ,
 .Xr drm-kms 7 ,
+.Xr lockup 7 ,
 .Xr mount 8

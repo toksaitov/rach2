@@ -80,6 +80,10 @@ void kirq_restore(uint32_t flags)
 void arch_idle_masked(void)
 {}
 
+/** Nothing: the host model has no lockup detector. */
+void watchdog_sched(void)
+{}
+
 /** Nothing: no process arms a timer of processor time, which would post a
  * signal. */
 void signal_post(process_t *target, int signo)

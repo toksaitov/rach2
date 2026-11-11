@@ -198,7 +198,7 @@
           "step_id": "crash",
           "stage": "execute",
           "machine": "q35",
-          "does": "boot with ramoops's region and rach2.itco.arm at a 5 s heartbeat, sleep 15 s in a program to show the kernel feeds the TCO, panic the kernel from the debug shell, let the unfed TCO reset the guest, read the record on the second boot and remove it; end QEMU through QMP quit"
+          "does": "boot with ramoops's region, rach2.itco.arm at a 5 s heartbeat and panic=0, so that the panic halts and only the TCO can reset the guest, sleep 15 s in a program to show the kernel feeds the TCO, panic the kernel from the debug shell, let the unfed TCO reset the guest, read the record on the second boot and remove it; end QEMU through QMP quit"
         }
       ],
       "machines": [
@@ -222,7 +222,8 @@
               "ramoops.console_size=0x10000",
               "ramoops.ecc=1",
               "rach2.itco.arm",
-              "iTCO_wdt.heartbeat=5"
+              "iTCO_wdt.heartbeat=5",
+              "panic=0"
             ],
             "machine": "q35"
           },
@@ -250,7 +251,7 @@
         },
         {
           "assertion_id": "reset",
-          "checks": "the guest boots again after the panic, reset by the TCO the stopped tick no longer fed, and ramoops records dmesg-ramoops-0 found",
+          "checks": "the guest boots again after the panic, which under panic=0 counts down to no restart of its own, reset by the TCO the stopped tick no longer fed, and ramoops records dmesg-ramoops-0 found",
           "source": "scenario"
         },
         {
