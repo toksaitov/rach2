@@ -1423,9 +1423,10 @@ static int read_unwritable_prefix(int fd, char *pages)
            got[0] == 'c' && offset_is(fd, 3);
 }
 
-/** Whether, with "12345" in the pipe `p`, a readv of five bytes and then of
- * `hole`, an unmapped page, returns 5, and with "67" written after, a readv
- * into `hole` is EFAULT and leaves both bytes queued. */
+/** Whether, with "12345" in the pipe `p` and "67" written after it, which
+ * joins its buffer, a readv of five bytes and then of `hole`, an unmapped
+ * page, is EFAULT and leaves all seven bytes queued, and a readv of five
+ * bytes alone then cuts the buffer, returning "12345" and leaving "67". */
 static int readv_pipe_prefix(const int *p, char *hole)
 {
     struct iovec v[2];
@@ -1435,27 +1436,30 @@ static int readv_pipe_prefix(const int *p, char *hole)
     v[0].iov_len = 5;
     v[1].iov_base = hole;
     v[1].iov_len = 5;
-    if (readv(p[0], v, 2) != 5 || memcmp(got, "12345", 5) != 0 || write(p[1], "67", 2) != 2) {
+    if (write(p[1], "67", 2) != 2 || !refused(readv(p[0], v, 2), EFAULT)) {
         return 0;
     }
-    v[0].iov_base = hole;
-    return refused(readv(p[0], v, 1), EFAULT) && read(p[0], got, sizeof(got)) == 2 &&
-           memcmp(got, "67", 2) == 0;
+    return readv(p[0], v, 1) == 5 && memcmp(got, "12345", 5) == 0 &&
+           read(p[0], got, sizeof(got)) == 2 && memcmp(got, "67", 2) == 0;
 }
 
 /**
  * Check reads whose buffers the caller cannot all write, as Linux's read and
- * readv check only that their ranges lie in user space and stop at the first
- * fault of their copy (`read_unwritable_end`, `read_unwritable_prefix`,
- * `readv_pipe_prefix`). Of a pipe, Linux's pipe_read copies each of its page
- * buffers whole or not at all. Returns 0, or 1 once the failure is reported.
+ * readv check only that their ranges lie in user space and find a bad page
+ * in their copy. A file's read stops at the first fault with the bytes
+ * before it (`read_unwritable_end`, `read_unwritable_prefix`); Linux's
+ * pipe_read copies each of its page buffers whole, or as much of one as the
+ * vector takes, or not at all, so a fault in a buffer leaves every byte of
+ * it queued (`readv_pipe_prefix`). Returns 0, or 1 once the failure is
+ * reported.
  */
 static int read_fault_rows(void)
 {
     static const char *const why[] = {
         "a read into an unmapped buffer is not 0 at the end, EINVAL past LLONG_MAX or EFAULT",
         "a read that runs into an unmapped page does not return the bytes before it",
-        "a readv of a pipe into an unmapped buffer does not keep the bytes before it"};
+        "a readv of a pipe into an unmapped buffer does not keep its buffer, or a readv does not "
+        "cut one"};
     char *pages = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     int fd = -1, p[2] = {-1, -1}, row, ok = 0;
     const char *error = "make the file, the pipe and the unmapped page";

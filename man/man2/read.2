@@ -160,20 +160,38 @@ The count must be between 0 and 1024, and no length may be negative as a
 signed size, which for a 32-bit program is one past 2147483647.
 The total is cut at 0x7ffff000, as one read's count is, and the buffer
 that crosses it is filled only up to it.
-The kernel checks every length first, then that every range lies in user
-space.
-It then brings each destination in for writing and keeps those before the
-first page that cannot be written: the read ends there with the bytes
-before it, as Linux's read stops at the first fault of its copy, and the
-input past it stays queued.
-When the first destination cannot be written, the call gives
+The kernel copies the list once, as Linux does, and checks every length
+first, then that every range lies in user space; the copy serves the whole
+call, so a buffer that overwrites a later entry of the caller's list does
+not move that entry's destination.
+A destination that cannot be written is found by the copy.
+A file, a device or a
+.Pa /proc
+file is read up to the first page that cannot be written, and the bytes
+before it are returned, as Linux's read stops at the first fault of its
+copy; when the first destination cannot be written the call gives
 .Er EFAULT ,
 but for a file of a mounted file system only after the check of the
 list's end at the offset and when the offset is short of the file's end;
 at or past it the call returns zero, as on Linux.
+A pipe and a stream socket answer the wait, the end of input and
+.Er EAGAIN
+before any copy, so a list whose first buffer cannot be written reads zero
+from an ended pipe.
+A pipe then copies each of its page buffers whole, or as much of one as
+the list takes, or not at all: a page that cannot be written ends the call
+with the bytes of the buffers before it, or
+.Er EFAULT ,
+and every byte of its own buffer stays queued, as Linux's
+.Fn pipe_read
+leaves it.
+A stream socket takes the bytes queued as one segment: a page that cannot
+be written gives
+.Er EFAULT
+with every byte left queued.
 A datagram socket gives
 .Er EFAULT
-when the datagram's first copy fails, and the datagram is consumed.
+when any copy of the datagram fails, and the datagram is consumed.
 The descriptor is checked before the list, as for
 .Fn read ,
 so a list requesting no bytes returns zero only from a descriptor that
@@ -191,22 +209,23 @@ A page of an ext2 file that a mapping holds in memory is read from that
 page, as Linux reads its page cache, so a read sees a shared mapping's
 stores before they are written back, and a buffer sees what an earlier
 buffer of the same call stored into a mapping of the file.
-For a pipe, stream socket, device, or
+A pipe and a stream socket are read as one read of the whole list, which
+waits only for its first byte and takes what is queued, as much as the
+buffers hold.
+For a device or a
 .Pa /proc
 file, later buffers are read only while the descriptor reports read
 readiness; a device that reports it immediately, a disk among them, can
 still sleep in the read itself.
 A terminal is read only once, into the first nonempty buffer.
 .Pp
-For a
-.Dv SOCK_DGRAM
-socket, exactly one message is taken into a kernel buffer before it is
-scattered across the destinations.
+For a datagram, raw or packet socket, exactly one message is taken into a
+kernel buffer before it is scattered across the destinations of the copied
+list.
 Bytes beyond the combined capacity are discarded.
-If a destination overwrites the caller's own vector list, later copies
-are checked again; a failed copy stops the transfer and returns the
-number already copied.
-The consumed message is not restored.
+A failed copy gives
+.Er EFAULT ,
+and the consumed message is not restored.
 .Pp
 Musl's buffered input uses
 .Fn readv
@@ -385,8 +404,11 @@ It requires a return of 12 and the contents
 and
 .Ql CCCC
 in that order.
-It also checks pipe and datagram reads and that an invalid later buffer
-leaves input queued.
+It also checks pipe and datagram reads, that an invalid later buffer
+leaves a pipe's input queued and fails a datagram with
+.Er EFAULT ,
+and that a datagram written over the caller's list does not move a later
+destination.
 .Pa tests/musl/preadmusl.c
 reads a file at offsets with
 .Fn pread

@@ -566,6 +566,9 @@ int socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len, int peek);
 /** Copy queued stream bytes from `off` past the next unread one, leaving
  * them queued; 0 when there are none. */
 int socket_tcp_peek_at(struct socket *sock, uint32_t off, uint8_t *buf, int len);
+/** The stream bytes queued for a read of `sock`, which a read takes without
+ * waiting; 0 for a socket with no connection or a listener. */
+uint32_t socket_tcp_queued(const struct socket *sock);
 /** Wake every waiter of `sock` on the peer's FIN or the connection's end. */
 void socket_tcp_fin(struct socket *sock);
 

@@ -943,6 +943,13 @@ int socket_tcp_peek_at(struct socket *sock, uint32_t off, uint8_t *buf, int len)
     return (int)copy_len;
 }
 
+uint32_t socket_tcp_queued(const struct socket *sock)
+{
+    if (!sock || !sock->tcb || sock->tcb->state == TCP_LISTEN)
+        return 0;
+    return sock->tcb->recv_tail - sock->tcb->recv_head;
+}
+
 void socket_tcp_fin(struct socket *sock)
 {
     if (!sock)

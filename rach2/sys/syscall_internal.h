@@ -546,13 +546,14 @@ long sys_preadv(isr_params_t *params);
 long sys_pwritev(isr_params_t *params);
 
 /**
- * Fill the `iovcnt` buffers of the user's iovec array at `iov_user` from one
- * datagram of the socket `entry` is open on, for readv(2) and recvmsg(2),
- * waiting for one unless the description has O_NONBLOCK. Returns the bytes
- * copied, or a negative errno from the wait: -EAGAIN when no datagram waits
- * under O_NONBLOCK, -EINTR, or the socket's pending error, which the call
- * takes; or -EFAULT when the first copy of a datagram fails, the datagram
- * consumed.
+ * Fill the `iovcnt` buffers of the copied vector `iov`, which iov_import has
+ * checked and cut, from one datagram of the socket `entry` is open on, for
+ * readv(2) and recvmsg(2), waiting for one unless the description has
+ * O_NONBLOCK. Returns the bytes copied, or a negative errno from the wait:
+ * -EAGAIN when no datagram waits under O_NONBLOCK, -EINTR, or the socket's
+ * pending error, which the call takes; or -EFAULT when any copy of the
+ * datagram fails, as Linux's udp_recvmsg fails at any element
+ * (net/ipv4/udp.c:1932-1949), the datagram consumed, or kept with `peek`.
  *
  * A datagram is a message, so it is taken once and copied out in pieces: the
  * buffers are filled in order until the datagram runs out, and what is left
@@ -563,8 +564,23 @@ long sys_pwritev(isr_params_t *params);
  * NULL, are given the datagram's sender, and `whole` its length, which is more
  * than the bytes copied when the buffers took less, for MSG_TRUNC.
  */
-int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, net_addr_t *src_ip,
-                    uint16_t *src_port, int peek, int32_t *whole);
+int32_t readv_dgram(fd_entry_t *entry, const struct kernel_iovec *iov, int iovcnt,
+                    net_addr_t *src_ip, uint16_t *src_port, int peek, int32_t *whole);
+
+/**
+ * Read the stream socket of `entry` into the `iovlen` buffers of the copied
+ * vector `iov`, which iov_import has checked and cut, as Linux's
+ * tcp_recvmsg reads an iov_iter, for readv(2) and recvmsg(2): it waits for a
+ * byte unless MSG_DONTWAIT in `flags` or O_NONBLOCK, then takes the bytes
+ * queued, as many as the buffers hold, filling them in order. With MSG_PEEK
+ * the bytes stay queued. A vector of no bytes waits for input too, as Linux
+ * 6.12's tcp_recvmsg_locked and sock_rcvlowat do, and takes nothing.
+ * Returns the bytes read, 0 at the end of input or for a vector of no bytes
+ * with input ready, or -errno as recv(2): -EAGAIN, -ENOTCONN, -ECONNRESET,
+ * -EINTR, or -EFAULT, with every byte left queued, when a destination of
+ * the bytes cannot be written. May sleep.
+ */
+int32_t stream_readv(fd_entry_t *entry, const struct kernel_iovec *iov, uint32_t iovlen, int flags);
 
 long sys_readv(isr_params_t *params);
 

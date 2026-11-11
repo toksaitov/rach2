@@ -68,6 +68,9 @@ static long sys_socket(isr_params_t *params);
 static long sys_socketpair(isr_params_t *params);
 struct kernel_msghdr;
 struct kernel_cmsghdr;
+struct kernel_iovec;
+static int32_t stream_readv(struct fd_entry *entry, const struct kernel_iovec *iov, uint32_t iovlen,
+                            int flags);
 static int socketcall_nargs(int call);
 static int32_t socket_call(int call, unsigned long *args);
 static long sys_recvmmsg_time64(isr_params_t *params);
