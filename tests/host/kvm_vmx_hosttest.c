@@ -323,11 +323,6 @@ int signal_pending(void)
 void sched_take_preempt(void)
 {}
 
-int sched_preempt_due(void)
-{
-    return 0;
-}
-
 void signal_set_blocked(uint64_t mask)
 {
     current_proc->sig_blocked = mask;
@@ -549,6 +544,16 @@ int32_t kvm_tdp_pre_fault(struct kvm_vm *vm, struct kvm_pre_fault_memory *range)
 }
 
 /** A frame of the slot is mapped; any other is MMIO. */
+/** No thread here is switched away, so the steal time is never marked. */
+int kvm_tdp_write_nofault(struct kvm_vm *vm, uint64_t gpa, const void *buf, uint32_t n)
+{
+    (void)vm;
+    (void)gpa;
+    (void)buf;
+    (void)n;
+    return 1;
+}
+
 int kvm_tdp_fault(struct kvm_vm *vm, uint64_t gfn, int write)
 {
     struct kvm_slot_view s;

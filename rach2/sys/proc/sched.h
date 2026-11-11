@@ -105,13 +105,6 @@ void sched_preempt(void);
  * interrupts off, at the call's exit and from `sched_service_point`. */
 void sched_take_preempt(void);
 
-/** Whether `sched_take_preempt` would now switch to another thread: the
- * current one is asked to switch and the selection's own rules would leave
- * it, for a queued thread that may run here and that a real-time current
- * thread does not outrank, or for its affinity or a suspend. The current
- * thread is inside a system call, so its processor stays. */
-int sched_preempt_due(void);
-
 /** Inside a long system call, between two of its pieces, with nothing half
  * done, take the switch the tick asked for without waiting for the call's
  * exit. The process is still inside its call when it runs again. */

@@ -770,6 +770,15 @@ static int32_t run_begin(struct kvm_vcpu *v)
     return run->immediate_exit ? -EINTR : 1;
 }
 
+/** The `sched_out` of a vCPU's thread across KVM_RUN, as Linux's
+ * kvm_sched_out with `wants_to_run`: `arg` is the vCPU, which a switch
+ * away while its thread can still run marks preempted
+ * (`kvm_steal_preempted`). Under the run queues' lock; does not sleep. */
+static void vcpu_sched_out(void *arg)
+{
+    kvm_steal_preempted((struct kvm_vcpu *)arg);
+}
+
 /**
  * KVM_RUN's loop, as Linux's kvm_arch_vcpu_ioctl_run and vcpu_run: begin
  * with `run_begin`, then enter until an exit the caller answers, a signal,
@@ -785,8 +794,8 @@ static int32_t run_begin(struct kvm_vcpu *v)
  * `sched_service_point` would whenever a thread is queued: a guest exits
  * thousands of times a second, and giving the processor away at each exit
  * cost the vCPU up to a slice each time. The steal time says preempted
- * only when that switch goes to another thread (`sched_preempt_due`), as
- * Linux's kvm_sched_out marks a vCPU only on a real switch away from it.
+ * when that switch, or any other that leaves the thread able to run, goes
+ * to another thread (`vcpu_sched_out`).
  * Returns 0 with `exit_reason` set,
  * -EINTR with it KVM_EXIT_INTR for a signal or a kick, or -errno.
  */
@@ -802,9 +811,6 @@ static int32_t run_loop(struct kvm_vcpu *v)
         return r;
     }
     for (;;) {
-        if (sched_preempt_due()) {
-            kvm_steal_preempted(v);
-        }
         flags = kirq_save();
         sched_take_preempt();
         kirq_restore(flags);
@@ -900,7 +906,10 @@ static int32_t vcpu_run(struct kvm_vcpu *v, uintptr_t arg)
     } else {
         r = sync_take(v);
         if (r == 0) {
+            current_proc->sched_out_arg = v;
+            current_proc->sched_out = vcpu_sched_out;
             r = run_loop(v);
+            current_proc->sched_out = NULL;
         }
     }
     if (v->has_sigmask) {

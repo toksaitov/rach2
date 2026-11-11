@@ -564,6 +564,11 @@ static int sched_prepare_old(process_t *old, struct percpu *cpu, int me)
  * entered for the first time skips the restore: a forked child takes its
  * IF from iret, and a kernel thread's entry enables interrupts itself.
  *
+ * A switch away from a process that could still run calls its `sched_out`
+ * in the same hold of the run queues' lock as the selection, so that what
+ * it marks is true of the switch made: KVM's steal time says a vCPU was
+ * preempted exactly when it was, as Linux's kvm_sched_out says it.
+ *
  * The big lock stays held across the switch, so no other processor sees
  * the outgoing process before its registers are saved; the depth this
  * processor had in it goes with the outgoing process, and the incoming one
@@ -630,6 +635,9 @@ void schedule(void)
     if (old != cpu->idle) {
         if (old->state == PROC_READY) {
             old->nivcsw++;
+            if (old->sched_out) {
+                old->sched_out(old->sched_out_arg);
+            }
         } else {
             old->nvcsw++;
         }
@@ -713,50 +721,6 @@ void sched_take_preempt(void)
         current_proc->need_resched = 0;
         schedule();
     }
-}
-
-/**
- * Whether a selection on processor `me` now would leave `old`, its running
- * current thread, by `sched_prepare_old`'s and `sched_select`'s rules,
- * changing no queue: `old` must move for its affinity or a suspend, or a
- * queued thread may run here and `sched_keeps` does not keep `old` over it.
- * A running thread steals from no other queue. sched_lock is held.
- */
-static int sched_switch_due(int me, const process_t *old)
-{
-    const process_t *p;
-    const process_t *next;
-
-    if (cpu_table[me].idle && (!((old->affinity >> me) & 1u) || !suspend_lets_run(old))) {
-        return 1;
-    }
-    next = sched_find_rt(me);
-    if (sched_keeps(old, next)) {
-        return 0;
-    }
-    if (next) {
-        return 1;
-    }
-    for (p = run_queues[me].head; p; p = p->ready_next) {
-        if (sched_may_run(p, me)) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-int sched_preempt_due(void)
-{
-    uint32_t held;
-    int due;
-
-    if (!current_proc || !current_proc->need_resched || current_proc == this_cpu()->idle) {
-        return 0;
-    }
-    held = spin_lock_irqsave(&sched_lock);
-    due = sched_switch_due((int)arch_cpu_id(), current_proc);
-    spin_unlock_irqrestore(&sched_lock, held);
-    return due;
 }
 
 /**

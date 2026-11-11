@@ -570,6 +570,40 @@ int kvm_tdp_fault(struct kvm_vm *vm, uint64_t gfn, int write)
     return map(vm, t, gfn, 1, leaf_entry(vm, phys, writable, 0, paging_frame_is_device(phys)));
 }
 
+/**
+ * The caller's page is read from its tables and written through the
+ * kernel's map of the frame, so nothing can fault. A page not yet stored
+ * into (no PTE_DIRTY) is refused with the rest, since this write would not
+ * set the bit: the zero page's rules and the counts of dirty pages read it.
+ */
+int kvm_tdp_write_nofault(struct kvm_vm *vm, uint64_t gpa, const void *buf, uint32_t n)
+{
+    struct mm *mm = kvm_vm_mm(vm);
+    struct kvm_slot_view s;
+    const vma_t *r;
+    uint64_t i;
+    pte_t pte;
+
+    if (n == 0 || (gpa & 0xFFFu) + n > 4096u || !mm || !current_proc || current_proc->mm != mm ||
+        !kvm_slot_find(vm, gpa >> 12, &s) || (s.flags & KVM_MEM_READONLY)) {
+        return 1;
+    }
+    r = vm_find(&mm->vm, (uintptr_t)s.hva);
+    if (!r || (r->prot & VM_PROT_SECRET)) {
+        return 1;
+    }
+    pte = host_pte(mm, (uintptr_t)s.hva);
+    if (!host_ok(pte, 1) || !(pte & PTE_DIRTY) || paging_frame_is_device(PTE_ADDR(pte))) {
+        return 1;
+    }
+    k_memcpy((uint8_t *)phys_to_virt(PTE_ADDR(pte)) + (gpa & 0xFFFu), buf, n);
+    if (s.dirty) {
+        i = (gpa >> 12) - s.base_gfn;
+        s.dirty[i / 64u] |= 1ull << (i % 64u);
+    }
+    return 0;
+}
+
 int32_t kvm_tdp_pre_fault(struct kvm_vm *vm, struct kvm_pre_fault_memory *range)
 {
     uint64_t size = range->size, step;

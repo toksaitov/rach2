@@ -708,8 +708,8 @@ void kvm_steal_preempted(struct kvm_vcpu *v)
     if (!(v->st_msr & KVM_MSR_ENABLED) || v->st_preempted) {
         return;
     }
-    if (kvm_guest_phys_rw(v, (v->st_msr & KVM_STEAL_VALID_BITS) + ST_PREEMPTED, &preempted, 1, 1) ==
-        0) {
+    if (kvm_tdp_write_nofault(v->vm, (v->st_msr & KVM_STEAL_VALID_BITS) + ST_PREEMPTED, &preempted,
+                              1) == 0) {
         v->st_preempted = 1;
     }
 }

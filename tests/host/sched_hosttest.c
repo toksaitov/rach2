@@ -730,46 +730,66 @@ static void run_delay(void)
     clock_ns = 0;
 }
 
-/**
- * `sched_preempt_due` follows selection's rules: with a switch asked, an
- * ordinary queued thread makes one due for an ordinary caller and none for
- * a SCHED_FIFO caller, which the call's exit then keeps; a queued thread of
- * a higher real-time priority makes one due, one of an equal priority only
- * for a SCHED_RR caller; records of threads that blocked make none.
- */
-static void preempt_due(void)
+/* The calls of the `sched_out` that `sched_out_rows` gives its threads. */
+static int out_calls;
+static void *out_arg;
+
+/** Count a call of a thread's `sched_out`, which comes with interrupts
+ * off, the run queues' lock in this model, while the thread is current. */
+static void count_out(void *arg)
 {
-    unsigned i;
+    CHECK(!irq_flags, "sched_out with interrupts on");
+    CHECK(arg == current_proc, "sched_out after the thread stopped being current");
+    out_calls++;
+    out_arg = arg;
+}
+
+/**
+ * A thread's `sched_out` is called at a switch away from it that leaves it
+ * able to run, and only then: not when selection keeps a SCHED_FIFO thread
+ * over ordinary or equal ones, once when a SCHED_RR thread gives way to an
+ * equal one, and not when a thread blocks.
+ */
+static void sched_out_rows(void)
+{
+    unsigned long nivcsw;
 
     setup();
+    out_calls = 0;
+    out_arg = NULL;
+    procs[0].sched_out = count_out;
+    procs[0].sched_out_arg = &procs[0];
     current_proc->in_syscall = 1;
-    CHECK(!sched_preempt_due(), "no switch asked: none due");
-    current_proc->need_resched = 1;
-    CHECK(sched_preempt_due(), "ordinary caller, ordinary thread queued: switch due");
     current_proc->sched_policy = SCHED_FIFO;
     current_proc->rt_priority = 10;
-    CHECK(!sched_preempt_due(), "real-time caller, ordinary threads queued: none due");
+    current_proc->need_resched = 1;
     irq_flags = 0;
     sched_take_preempt();
-    CHECK(current_proc == &procs[0] && !switches, "the call's exit keeps the real-time caller");
-    current_proc->need_resched = 1;
+    CHECK(current_proc == &procs[0] && !switches && !out_calls,
+          "a real-time thread kept over ordinary ones is not switched out, nor told so");
     procs[3].sched_policy = SCHED_FIFO;
-    procs[3].rt_priority = 20;
-    sched_priority_changed(&procs[3]);
-    CHECK(sched_preempt_due(), "higher real-time thread queued: switch due");
     procs[3].rt_priority = 10;
     sched_priority_changed(&procs[3]);
-    CHECK(!sched_preempt_due(), "equal real-time thread, SCHED_FIFO caller: none due");
+    current_proc->need_resched = 1;
+    sched_take_preempt();
+    CHECK(current_proc == &procs[0] && !switches && !out_calls,
+          "a SCHED_FIFO thread kept over an equal one is not told either");
     current_proc->sched_policy = SCHED_RR;
-    CHECK(sched_preempt_due(), "equal real-time thread, SCHED_RR caller: switch due");
-    current_proc->sched_policy = SCHED_OTHER;
-    current_proc->rt_priority = 0;
-    for (i = 1; i < 7; i++) {
-        procs[i].state = PROC_BLOCKED;
-    }
-    CHECK(!sched_preempt_due(), "only blocked threads' records queued: none due");
-    current_proc->need_resched = 0;
-    current_proc->in_syscall = 0;
+    current_proc->need_resched = 1;
+    nivcsw = procs[0].nivcsw;
+    sched_take_preempt();
+    CHECK(current_proc == &procs[3] && switches == 1 && out_calls == 1 && out_arg == &procs[0] &&
+              procs[0].nivcsw == nivcsw + 1,
+          "a SCHED_RR thread that gives way to an equal one is told once, at the switch");
+    procs[3].sched_out = count_out;
+    procs[3].sched_out_arg = &procs[3];
+    procs[3].state = PROC_BLOCKED;
+    schedule();
+    CHECK(current_proc != &procs[3] && switches == 2 && out_calls == 1,
+          "a thread that blocks is switched out without being told");
+    procs[0].sched_out = NULL;
+    procs[3].sched_out = NULL;
+    procs[0].in_syscall = 0;
 }
 
 /** Run every row; 0 when each passes, 1 otherwise. */
@@ -785,7 +805,7 @@ int main(int argc, char **argv)
     fairness();
     states();
     lifecycle();
-    preempt_due();
+    sched_out_rows();
     accounting();
     load_phase();
     all_idle();
