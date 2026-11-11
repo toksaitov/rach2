@@ -6,6 +6,7 @@
  * writes, and a full queue.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/lib/kstd.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
  *
  * `rfkill.c` is included whole, so that the test sees its open list. A user
