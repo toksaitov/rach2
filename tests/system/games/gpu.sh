@@ -26,6 +26,15 @@ shift $((OPTIND - 1))
 [ "$(id -u)" -eq 0 ] || { echo 'gpu: run as root' >&2; exit 2; }
 here=$(cd "$(dirname "$0")" && pwd)
 out=$1
+# The row runs in OUT, so LINUX and PROTON are made absolute from here.
+case $linux in
+    '' | /*) ;;
+    *) linux=$(pwd)/$linux ;;
+esac
+case $proton in
+    '' | /*) ;;
+    *) proton=$(pwd)/$proton ;;
+esac
 made=
 home=
 trap '[ -z "$made" ] || rm -f /opt/proton
