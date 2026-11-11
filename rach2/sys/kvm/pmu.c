@@ -1997,10 +1997,13 @@ void kvm_pmu_vmx_exit(struct kvm_vcpu *v, const struct kvm_pmu_msr *guest, int r
  * Claim an NMI a guest counter raised, as `watchdog_guest_nmi` on a host
  * with Intel's global status: acknowledge the overflow of each counter the
  * host does not hold, which only guests run, in IA32_PERF_GLOBAL_OVF_CTRL,
- * and return 1 when there was one, as Linux's perf handler acknowledges
- * every set bit and counts each as handled (arch/x86/events/intel/
- * core.c:3126-3131 and 3190). The guest's overflow itself was counted by
- * the exit (`accumulate`), which delivers its PMI before the next entry.
+ * and return how many there were, as Linux's perf handler acknowledges
+ * every set bit, counts each as handled (arch/x86/events/intel/
+ * core.c:3126-3129 and 3190) and returns the count (events/core.c:
+ * 1749-1754), so that a count above one lets the NMI handler swallow the
+ * NMI a second overflow latched (kernel/nmi.c:404-405). The guest's
+ * overflow itself was counted by the exit (`accumulate`), which delivers
+ * its PMI before the next entry.
  * The counter's APIC entry, which the delivery masked, is unmasked by the
  * hard-lockup detector's handler after this while its counter runs, and
  * stays masked otherwise. Only the counters' MSRs are read: an NMI may come
@@ -2008,7 +2011,8 @@ void kvm_pmu_vmx_exit(struct kvm_vcpu *v, const struct kvm_pmu_msr *guest, int r
  */
 int kvm_pmu_nmi(void)
 {
-    uint64_t status, held, fixed = 0;
+    uint64_t status, held, fixed = 0, bits;
+    int n = 0;
 
     if (!pmu_pmi || !kvm_pmu_global()) {
         return 0;
@@ -2026,5 +2030,8 @@ int kvm_pmu_nmi(void)
         return 0;
     }
     pmu_write(GLOBAL_OVF, status);
-    return 1;
+    for (bits = status; bits; bits &= bits - 1u) {
+        n++;
+    }
+    return n;
 }

@@ -102,9 +102,9 @@ int32_t kvm_pmu_steps_store(void *obj, int arg, const char *buf, uint32_t len);
 int32_t kvm_pmu_placed_show(void *obj, int arg, char *buf, uint32_t cap);
 
 /** From the NMI handler (`watchdog_guest_nmi`): acknowledge the overflow
- * of each counter the host does not hold, which only a guest runs. 1 when
- * there was one, which claims the NMI; 0 before any entry has set a
- * physical PMI bit. */
+ * of each counter the host does not hold, which only a guest runs. The
+ * number of those overflows, each a handled source of the NMI; 0 before
+ * any entry has set a physical PMI bit. */
 int kvm_pmu_nmi(void);
 
 /** Whether the host has usable performance counters. */
