@@ -1,0 +1,296 @@
+samples 103090, lost 13
+entry 37660 36.5% ioctl 0x40406469
+entry 6709 6.5% syscall 0
+entry 5005 4.9% syscall 271
+entry 4968 4.8% ioctl 0xc00c6466
+entry 4925 4.8% syscall 202
+entry 4609 4.5% vector 14
+entry 4593 4.5% syscall 232
+entry 3244 3.1% ioctl 0xc0086457
+entry 3087 3.0% syscall 39
+entry 2929 2.8% kernel 0
+entry 2654 2.6% syscall 1
+entry 2601 2.5% syscall 9
+entry 1992 1.9% ioctl 0xc03864bc
+entry 1986 1.9% syscall 262
+entry 1728 1.7% ioctl 0xc00864c0
+entry 1710 1.7% syscall 257
+entry 1345 1.3% syscall 56
+entry 932 0.9% syscall 59
+entry 858 0.8% ioctl 0x8010500c
+entry 725 0.7% syscall 7
+entry 649 0.6% syscall 13
+entry 628 0.6% syscall 46
+entry 595 0.6% syscall 3
+entry 578 0.6% syscall 14
+entry 546 0.5% ioctl 0x8010500d
+entry 490 0.5% ioctl 0xc00864bf
+entry 481 0.5% syscall 230
+entry 457 0.4% syscall 47
+entry 454 0.4% syscall 286
+entry 398 0.4% syscall 231
+entry 364 0.4% syscall 10
+entry 361 0.4% syscall 5
+entry 262 0.3% ioctl 0x80044dfe
+entry 241 0.2% syscall 61
+entry 194 0.2% syscall 162
+entry 188 0.2% syscall 8
+entry 187 0.2% ioctl 0x400c645f
+entry 162 0.2% syscall 72
+entry 162 0.2% syscall 273
+entry 146 0.1% syscall 318
+entry 127 0.1% syscall 21
+entry 121 0.1% syscall 12
+entry 84 0.1% syscall 217
+entry 81 0.1% syscall 73
+entry 74 0.1% syscall 107
+entry 70 0.1% syscall 104
+entry 66 0.1% syscall 108
+entry 65 0.1% syscall 102
+entry 58 0.1% syscall 33
+entry 38 0.0% syscall 15
+entry 36 0.0% ioctl 0xc02864c3
+entry 32 0.0% syscall 302
+entry 29 0.0% syscall 128
+entry 29 0.0% ioctl 0xc018643a
+entry 28 0.0% syscall 158
+entry 27 0.0% syscall 218
+entry 27 0.0% ioctl 0x40086409
+entry 25 0.0% syscall 334
+entry 23 0.0% syscall 293
+entry 20 0.0% ioctl 0xc0106461
+entry 18 0.0% syscall 270
+entry 18 0.0% ioctl 0xc010645b
+entry 13 0.0% syscall 28
+entry 12 0.0% syscall 275
+entry 11 0.0% syscall 221
+entry 9 0.0% ioctl 0xc0206464
+entry 9 0.0% ioctl 0x8913
+entry 8 0.0% syscall 89
+entry 8 0.0% syscall 83
+entry 8 0.0% syscall 11
+entry 8 0.0% ioctl 0xc06864b8
+entry 7 0.0% syscall 87
+entry 7 0.0% syscall 263
+entry 5 0.0% syscall 41
+entry 5 0.0% ioctl 0x5413
+entry 5 0.0% ioctl 0x540f
+entry 4 0.0% syscall 80
+entry 4 0.0% ioctl 0x802c542a
+entry 3 0.0% syscall 55
+entry 3 0.0% syscall 52
+entry 3 0.0% syscall 35
+entry 3 0.0% syscall 20
+entry 3 0.0% syscall 115
+entry 3 0.0% syscall 103
+entry 3 0.0% ioctl 0xc00c642e
+entry 3 0.0% ioctl 0x80045017
+entry 2 0.0% syscall 44
+entry 2 0.0% syscall 326
+entry 2 0.0% syscall 32
+entry 2 0.0% syscall 285
+entry 2 0.0% syscall 117
+entry 2 0.0% syscall 111
+entry 2 0.0% ioctl 0xc0044d00
+entry 2 0.0% ioctl 0x8933
+entry 1 0.0% syscall 77
+entry 1 0.0% syscall 62
+entry 1 0.0% syscall 54
+entry 1 0.0% syscall 51
+entry 1 0.0% syscall 45
+entry 1 0.0% syscall 436
+entry 1 0.0% syscall 38
+entry 1 0.0% syscall 2
+entry 1 0.0% syscall 195
+entry 1 0.0% syscall 157
+entry 1 0.0% syscall 116
+entry 1 0.0% syscall 112
+entry 1 0.0% syscall 110
+entry 1 0.0% ioctl 0x80044dff
+entry 1 0.0% ioctl 0x5411
+
+ioctl 0x40406469: 37660 samples
+function 24311 64.6% kirq_restore
+function 1467 3.9% find_cmd
+function 744 2.0% i915_cmd_parser
+function 653 1.7% arch_fill_words
+function 411 1.1% arch_irq_enable
+function 378 1.0% cursor_at
+function 366 1.0% cursor_get
+function 338 0.9% drm_gem_object_get
+function 323 0.9% drm_handle_find
+function 322 0.9% eb_binding
+function 320 0.8% k_memset
+function 319 0.8% i915_ggtt_find
+function 312 0.8% dma_resv_add_fence
+function 299 0.8% shmem_truncate
+function 283 0.8% i915_vma_pin_args
+function 269 0.7% check_cmd
+function 257 0.7% kmalloc
+function 248 0.7% render_length_mask
+function 234 0.6% cmd_bucket
+function 225 0.6% cmd_desc_is
+path 14878 39.5% kirq_restore <- spin_unlock_irqrestore <- pages_or_null <- kalloc_pages
+path 5527 14.7% kirq_restore <- spin_unlock_irqrestore <- alloc_user_frame <- page_at
+path 1389 3.7% find_cmd <- i915_cmd_parser <- eb_parse <- eb_do
+path 742 2.0% i915_cmd_parser <- eb_parse <- eb_do <- i915_gem_execbuffer2_ioctl
+path 635 1.7% kirq_restore <- spin_unlock_irqrestore <- kmalloc <- kzalloc
+path 494 1.3% kirq_restore <- dma_fence_signal <- dma_fence_merge <- dma_resv_snapshot
+path 411 1.1% arch_irq_enable <- _syscall_handler <- _dispatch <- isr_router_locked
+path 387 1.0% kirq_restore <- spin_unlock_irqrestore <- kfree <- array_release
+path 357 0.9% kirq_restore <- spin_unlock_irqrestore <- kmalloc <- i915_gem_execbuffer2_ioctl
+path 321 0.9% eb_binding <- eb_pin_first <- eb_reserve <- eb_do
+path 312 0.8% i915_ggtt_find <- ggtt_room <- vma_create <- vma_pin_place
+path 312 0.8% drm_handle_find <- drm_gem_object_lookup <- i915_gem_object_lookup <- eb_lookup
+path 310 0.8% dma_resv_add_fence <- eb_move_to_gpu <- eb_submit <- eb_do
+path 308 0.8% cursor_get <- i915_cmd_parser <- eb_parse <- eb_do
+path 298 0.8% shmem_truncate <- shmem_free <- i915_gem_object_free <- drm_gem_object_put
+path 280 0.7% cursor_at <- cursor_get <- i915_cmd_parser <- eb_parse
+path 278 0.7% i915_vma_pin_args <- eb_pin_first <- eb_reserve <- eb_do
+path 252 0.7% drm_gem_object_get <- drm_gem_object_lookup <- i915_gem_object_lookup <- eb_lookup
+path 226 0.6% kirq_restore <- spin_unlock_irqrestore <- kmalloc <- dma_resv_snapshot
+path 225 0.6% check_cmd <- i915_cmd_parser <- eb_parse <- eb_do
+path 223 0.6% kirq_restore <- irq_restore <- wq_wake <- wq_wake_all
+path 216 0.6% kirq_restore <- spin_unlock_irqrestore <- kfree <- dma_resv_snapshot
+path 214 0.6% i915_gem_object_flush_write_domain <- i915_gem_object_flush_for_gpu <- eb_move_to_gpu <- eb_submit
+path 210 0.6% render_length_mask <- find_cmd <- i915_cmd_parser <- eb_parse
+path 193 0.5% kirq_restore <- spin_unlock_irqrestore <- kfree <- dma_fence_put
+path 193 0.5% cmd_bucket <- find_cmd <- i915_cmd_parser <- eb_parse
+path 187 0.5% arch_copy_words <- k_memcpy <- copy_batch <- i915_cmd_parser
+path 184 0.5% eb_move_to_gpu <- eb_submit <- eb_do <- i915_gem_execbuffer2_ioctl
+path 178 0.5% cmd_desc_is <- i915_cmd_parser <- eb_parse <- eb_do
+path 167 0.4% dma_fence_merge <- dma_resv_snapshot <- eb_move_to_gpu <- eb_submit
+path 156 0.4% cmd_index_of <- find_cmd <- i915_cmd_parser <- eb_parse
+path 143 0.4% drm_gem_object_put <- i915_gem_object_put <- eb_hold_release <- request_put_hold
+path 141 0.4% arch_fill_words <- k_memset <- kzalloc <- dma_fence_merge
+path 139 0.4% kmalloc <- kzalloc <- dma_fence_merge <- dma_resv_snapshot
+path 122 0.3% kirq_restore <- spin_unlock_irqrestore <- i915_forcewake_get <- i915_uncore_read
+path 114 0.3% arch_fill_words <- k_memset <- dma_fence_init <- dma_fence_merge
+path 111 0.3% k_memset <- kzalloc <- dma_fence_merge <- dma_resv_snapshot
+path 110 0.3% arch_fill_words <- k_memset <- kzalloc <- slot
+path 105 0.3% arch_fill_words <- k_memset <- paging_zero_frame <- page_at
+path 102 0.3% i915_vma_unpin <- eb_unpin <- eb_release <- i915_gem_execbuffer2_ioctl
+
+syscall 9: 2601 samples
+function 913 35.1% kirq_restore
+function 531 20.4% arch_irq_enable
+function 81 3.1% dshare_of
+function 72 2.8% data_block_ok
+function 68 2.6% k_memcpy
+function 61 2.3% is_power
+function 61 2.3% arch_cpu_id
+function 56 2.2% arch_copy_words
+function 52 2.0% le32
+function 48 1.8% read_bytes
+function 44 1.7% dir_scan_in
+function 35 1.3% index_find
+function 34 1.3% held_list
+function 30 1.2% read_data
+function 29 1.1% inode_table_blocks
+function 28 1.1% caller_pid
+function 27 1.0% get
+function 26 1.0% plan_caller
+function 21 0.8% writeback_find
+function 21 0.8% bucket_of
+path 647 24.9% kirq_restore <- spin_unlock_irqrestore <- pages_or_null <- kalloc_pages
+path 531 20.4% arch_irq_enable <- _syscall_handler <- _dispatch <- isr_router_locked
+path 170 6.5% kirq_restore <- irq_restore <- wq_wake <- wq_wake_all
+path 79 3.0% dshare_of <- filemap_disk_shared <- filemap_private <- mmap_file
+path 70 2.7% data_block_ok <- block_at <- read_data <- dir_bytes
+path 59 2.3% is_power <- has_super <- data_block_ok <- block_at
+path 49 1.9% arch_copy_words <- k_memcpy <- read_bytes <- read_data
+path 48 1.8% read_bytes <- read_data <- dir_bytes <- dir_scan_in
+path 44 1.7% k_memcpy <- read_bytes <- read_data <- dir_bytes
+path 40 1.5% le32 <- data_block_ok <- block_at <- read_data
+path 34 1.3% index_find <- get <- bcache_get <- volume_get
+path 33 1.3% dir_scan_in <- dir_scan <- dir_name_of <- ext2_path
+path 29 1.1% kirq_restore <- timer_now_us <- sleep_lock_take <- node_lock
+path 28 1.1% read_data <- dir_bytes <- dir_scan_in <- dir_scan
+path 27 1.0% inode_table_blocks <- data_block_ok <- block_at <- read_data
+path 23 0.9% plan_caller <- volume_get <- read_bytes <- read_data
+path 21 0.8% get <- bcache_get <- volume_get <- read_bytes
+path 19 0.7% bcache_release <- read_bytes <- read_data <- dir_bytes
+path 17 0.7% writeback_find <- read_bytes <- read_data <- dir_bytes
+path 17 0.7% bucket_of <- index_find <- get <- bcache_get
+path 16 0.6% volume_get <- read_bytes <- read_data <- dir_bytes
+path 16 0.6% unhold <- bcache_release <- read_bytes <- read_data
+path 16 0.6% lru_del <- bcache_release <- read_bytes <- read_data
+path 16 0.6% kirq_restore <- spin_unlock_irqrestore <- kfree <- fd_path_copy
+path 15 0.6% k_memcpy <- dir_bytes <- dir_scan_in <- dir_lookup
+path 15 0.6% check_hold_rules <- get <- bcache_get <- volume_get
+path 15 0.6% block_at <- read_data <- dir_bytes <- dir_scan_in
+path 13 0.5% held_list <- check_hold_rules <- get <- bcache_get
+path 13 0.5% caller_pid <- hold <- get <- bcache_get
+path 13 0.5% caller_pid <- bcache_release <- read_bytes <- read_data
+path 11 0.4% held_list <- hold <- get <- bcache_get
+path 10 0.4% wq_wake <- wq_wake_all <- bcache_release <- read_bytes
+path 10 0.4% kirq_restore <- timer_now_us <- sleep_lock_take <- vfs_ns_lock
+path 10 0.4% kirq_restore <- spin_unlock_irqrestore <- kfree <- procfs_file_target
+path 10 0.4% gd_blocks <- data_block_ok <- block_at <- read_data
+path 10 0.4% arch_cpu_id <- hold <- get <- bcache_get
+path 9 0.3% lru_add_tail <- bcache_release <- read_bytes <- read_data
+path 9 0.3% kirq_restore <- spin_unlock_irqrestore <- kfree <- window_close
+path 9 0.3% hold <- get <- bcache_get <- volume_get
+path 9 0.3% dir_scan_in <- dir_lookup <- ext2_lookup <- name_still_present
+
+syscall 262: 1986 samples
+function 424 21.3% kirq_restore
+function 311 15.7% arch_irq_enable
+function 92 4.6% arch_copy_words
+function 87 4.4% resolve_path
+function 55 2.8% mount_covering
+function 51 2.6% ext2_getattr
+function 48 2.4% arch_cpu_id
+function 42 2.1% hash_of
+function 36 1.8% arch_fill_words
+function 35 1.8% k_memcpy
+function 34 1.7% find
+function 33 1.7% kmalloc
+function 33 1.7% in_groups
+function 31 1.6% mount_named_at
+function 27 1.4% vm_lower
+function 23 1.2% k_memset
+function 22 1.1% table_for
+function 21 1.1% may_search
+function 19 1.0% link_target
+function 18 0.9% toward_cwd
+path 311 15.7% arch_irq_enable <- _syscall_handler <- _dispatch <- isr_router_locked
+path 159 8.0% kirq_restore <- spin_unlock_irqrestore <- pages_or_null <- kalloc_pages
+path 133 6.7% kirq_restore <- timer_now_us <- sleep_lock_take <- node_lock
+path 87 4.4% resolve_path <- vfs_resolve <- fstatat_path <- stat_at
+path 86 4.3% arch_copy_words <- k_memcpy <- read_bytes <- read_data
+path 69 3.5% kirq_restore <- spin_unlock_irqrestore <- kfree <- window_close
+path 54 2.7% mount_covering <- walk_cross <- walk_record_cross <- resolve_path
+path 42 2.1% hash_of <- dcache_lookup <- walk_lookup <- resolve_path
+path 33 1.7% kmalloc <- window_open <- dir_lookup <- ext2_lookup
+path 33 1.7% find <- dcache_lookup <- walk_lookup <- resolve_path
+path 32 1.6% in_groups <- may_search <- resolve_path <- vfs_resolve
+path 31 1.6% kirq_restore <- irq_restore <- wq_wake <- wq_wake_all
+path 30 1.5% mount_named_at <- mount_named <- resolve_path <- vfs_resolve
+path 25 1.3% ext2_getattr <- resolve_path <- vfs_resolve <- fstatat_path
+path 21 1.1% may_search <- resolve_path <- vfs_resolve <- fstatat_path
+path 21 1.1% ext2_getattr <- may_search <- resolve_path <- vfs_resolve
+path 20 1.0% kirq_restore <- spin_unlock_irqrestore <- alloc_user_frame <- file_fault
+path 19 1.0% link_target <- ext2_readlink <- walk_link <- resolve_path
+path 19 1.0% k_memcpy <- resolve_path <- vfs_resolve <- fstatat_path
+path 17 0.9% toward_cwd <- resolve_path <- vfs_resolve <- fstatat_path
+path 17 0.9% table_for <- mmu_user_table <- user_pte <- pte_present
+path 17 0.9% strncpy_from_user <- copy_path_at <- path_from_user_dir <- stat_at
+path 15 0.8% vm_lower <- vm_find <- vm_resolve <- vm_prefault_range
+path 15 0.8% vfs_mount_at <- vfs_fill_stat64 <- fstatat_path <- stat_at
+path 14 0.7% vfs_ref_put <- ref_move_node <- walk_record_move <- resolve_path
+path 14 0.7% canonicalize_abs <- copy_path_at <- path_from_user_dir <- stat_at
+path 13 0.7% vfs_fill_stat64 <- fstatat_path <- stat_at <- sys_fstatat64
+path 13 0.7% dcache_lookup <- walk_lookup <- resolve_path <- vfs_resolve
+path 12 0.6% arch_fill_words <- k_memset <- ext2_getattr <- may_search
+path 11 0.6% ext2_hold <- dcache_lookup <- walk_lookup <- resolve_path
+path 10 0.5% read_bytes <- read_data <- dir_bytes <- dir_scan_in
+path 10 0.5% k_strlen <- toward_cwd <- resolve_path <- vfs_resolve
+path 10 0.5% dir_scan_in <- dir_lookup <- ext2_lookup <- dcache_lookup
+path 10 0.5% data_block_ok <- block_at <- read_data <- dir_bytes
+path 9 0.5% vm_lower <- vm_find <- range_ready <- vm_prefault_range
+path 9 0.5% le32 <- data_block_ok <- block_at <- read_data
+path 9 0.5% k_memset <- ext2_getattr <- resolve_path <- vfs_resolve
+path 9 0.5% k_memcpy <- read_bytes <- read_data <- dir_bytes
+path 9 0.5% fstatat_path <- stat_at <- sys_fstatat64 <- _syscall_handler
+path 8 0.4% _syscall_handler <- _dispatch <- isr_router_locked <- _isr_router
