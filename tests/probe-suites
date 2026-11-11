@@ -75,4 +75,5 @@ i915resetprobe i915fake
 mixprobe ia32
 ldtprobe ia32
 drmcompatprobe ia32
+musl/lockstressmusl ia32
 musl/wakelatmusl wakelat
