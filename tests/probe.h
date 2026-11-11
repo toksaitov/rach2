@@ -286,14 +286,15 @@ static __inline__ long syscall0(long n)
  * address to `probe_main` in RDI with the stack aligned as a call expects.
  */
 #define PROBE_SP_ENTRY              \
-    __asm__(".text\n"               \
+    __asm__(".pushsection .text\n"  \
             ".globl _start\n"       \
             "_start:\n"             \
             "    xorq %rbp, %rbp\n" \
             "    movq %rsp, %rdi\n" \
             "    andq $-16, %rsp\n" \
             "    call probe_main\n" \
-            "    hlt\n")
+            "    hlt\n"             \
+            ".popsection\n")
 
 /*
  * The attribute of a probe's `_start` written in C: the kernel enters it with
@@ -304,10 +305,11 @@ static __inline__ long syscall0(long n)
 
 /* A signal restorer for SA_RESTORER, named `name`: rt_sigreturn. */
 #define PROBE_RT_RESTORER(name)              \
-    __asm__(".text\n"                        \
+    __asm__(".pushsection .text\n"           \
             ".globl " #name "\n" #name ":\n" \
             "    movq $15, %rax\n"           \
-            "    syscall\n")
+            "    syscall\n"                  \
+            ".popsection\n")
 
 #else
 
@@ -587,13 +589,14 @@ static __inline__ long syscall6(long n, long a, long b, long c, long d, long e, 
  * `_start` with ESP at argc, and the stub passes that address to
  * `probe_main` as its argument on the stack.
  */
-#define PROBE_SP_ENTRY             \
-    __asm__(".text\n"              \
-            ".globl _start\n"      \
-            "_start:\n"            \
-            "    mov %esp, %eax\n" \
-            "    push %eax\n"      \
-            "    call probe_main\n")
+#define PROBE_SP_ENTRY              \
+    __asm__(".pushsection .text\n"  \
+            ".globl _start\n"       \
+            "_start:\n"             \
+            "    mov %esp, %eax\n"  \
+            "    push %eax\n"       \
+            "    call probe_main\n" \
+            ".popsection\n")
 
 /* The attribute of a probe's `_start` written in C, which i386 enters with
  * the alignment it needs. */
@@ -603,10 +606,11 @@ static __inline__ long syscall6(long n, long a, long b, long c, long d, long e, 
  * .text, since the data sections are not executable where NX is on, as on
  * the x86-64 kernel. */
 #define PROBE_RT_RESTORER(name)              \
-    __asm__(".text\n"                        \
+    __asm__(".pushsection .text\n"           \
             ".globl " #name "\n" #name ":\n" \
             "    movl $173, %eax\n"          \
-            "    int $0x80\n")
+            "    int $0x80\n"                \
+            ".popsection\n")
 
 #endif
 
