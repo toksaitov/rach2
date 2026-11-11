@@ -822,12 +822,14 @@ static pid_t sleeper(int *fd)
 /** In an isolated caller whose file-system IDs alone are the target's, its
  * real and effective ones another user's, require EPERM at CAP_SYS_NICE:
  * a kernel that judged the access by real or effective IDs would refuse it
- * first with EACCES. Reap the target on every path; 0 on success, or 1 on a
- * setup or result failure. */
+ * first with EACCES. The target waits on a pipe and ends when the caller
+ * closes it, since the caller, no longer root and none of the target's
+ * users, may not kill it, as Linux's kill_ok_by_cred refuses; it is reaped
+ * on every path. 0 on success, or 1 on a setup or result failure. */
 static int madvise_fsids(void)
 {
     uid_t uid = (uid_t)probe_id(1000), other = (uid_t)probe_id(1001);
-    int ready[2], fd = -1, ok = 0;
+    int ready[2], hold[2], fd = -1, ok = 0;
     char byte;
     pid_t pid;
     long rc;
@@ -835,19 +837,26 @@ static int madvise_fsids(void)
     if (pipe(ready) != 0) {
         return 1;
     }
+    if (pipe(hold) != 0) {
+        close(ready[0]);
+        close(ready[1]);
+        return 1;
+    }
     pid = fork();
     if (pid == 0) {
         close(ready[0]);
+        close(hold[1]);
         if (setgid((gid_t)uid) != 0 || setuid(uid) != 0 || prctl(PR_SET_DUMPABLE, 1) != 0 ||
             write(ready[1], "r", 1) != 1) {
             _exit(2);
         }
         close(ready[1]);
-        for (;;) {
-            pause();
+        while (read(hold[0], &byte, 1) != 0) {
         }
+        _exit(0);
     }
     close(ready[1]);
+    close(hold[0]);
     if (pid <= 0 || read(ready[0], &byte, 1) != 1) {
         goto out;
     }
@@ -865,14 +874,12 @@ static int madvise_fsids(void)
     ok = rc == -1 && errno == EPERM;
 out:
     close(ready[0]);
+    close(hold[1]);
     if (fd >= 0) {
         close(fd);
     }
-    if (pid > 0) {
-        kill(pid, SIGKILL);
-        if (reap(pid) < 0) {
-            ok = 0;
-        }
+    if (pid > 0 && reap(pid) < 0) {
+        ok = 0;
     }
     return ok ? 0 : 1;
 }
