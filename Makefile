@@ -951,7 +951,7 @@ $(LIFECYCLE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 	    -Itools/etude/posix -Iutils
 # The selfbuild scenario pads the kernel to the slot utils/bootslot.h sets.
 build/tests/cases/machine/selfbuild_scenario: utils/bootslot.h
-$(DISK_SCENARIOS):build/tests/cases/machine/%: tests/cases/machine/%.c \
+$(DISK_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
                    tests/cases/machine/fileio.c tests/cases/machine/fileio.h \
                    tools/image/host_io.h \
                    $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
