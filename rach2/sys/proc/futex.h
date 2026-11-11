@@ -10,7 +10,8 @@
 #include "../lib/kint.h"
 #include "../irq.h"
 
-/** Recompute PI donations after a base priority change, under the big lock. */
+/** Recompute PI donations after a base priority change, under the big lock
+ * and no futex bucket's lock. */
 void futex_pi_recalculate(void);
 
 /**
