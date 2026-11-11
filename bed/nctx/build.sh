@@ -18,6 +18,9 @@
 #   build.sh rehearse   83-6b's session.sh all in a new overlay of the
 #                       prepared image, which has no i915, with
 #                       nctx-alone.qcow2 as its second disk
+#   build.sh reverse    build the shared-memory backend and module in an
+#                       overlay of nctx-alone.qcow2; export a standalone
+#                       reverse.qcow2, its kernel and its initrd
 #   build.sh all        all of the above, in that order
 #
 # The tarballs, the builds (mesa-nctx.tar.xz, virglrenderer-nctx.tar.xz and
@@ -244,6 +247,35 @@ rehearse()
     return "$status"
 }
 
+# reverse: build the VM that serves the reversed native-context path.
+# The standalone base and its SSH key are also the inputs kept on the Mac
+# for the Linux reference; no product image is changed.
+reverse()
+{
+    session
+    [ -f "$cache/nctx-alone.qcow2" ] || die "no nctx-alone.qcow2; run build.sh alone"
+    [ ! -f "$cache/id_ed25519" ] || key=$cache/id_ed25519
+    qemu-img create -q -f qcow2 -F qcow2 -b "$cache/nctx-alone.qcow2" "$work/reverse.qcow2"
+    boot "$work/reverse.qcow2"
+    echo "nctx: building the reversed VM; console in $work/console.log"
+    put "$here/reverse-vm.sh" "$here/pins" "$work/snapshot"
+    # shellcheck disable=SC2086 # opts are words
+    (cd "$tree" && tar cf - bed/vm/module bed/vm/backend rach2/sys/virtio/vgpushm.h) |
+        ssh $opts -p "$port" gfx@127.0.0.1 'mkdir -p nctx/build/source && tar xf - -C nctx/build/source'
+    in_guest 'sudo sh reverse-vm.sh prepare build/source'
+    for name in vmlinuz initrd.img; do
+        # shellcheck disable=SC2086 # opts are words
+        ssh $opts -p "$port" gfx@127.0.0.1 "sudo cat /$name" < /dev/null > "$cache/reverse-$name.part"
+        mv "$cache/reverse-$name.part" "$cache/reverse-$name"
+    done
+    halt
+    qemu-img convert -O qcow2 "$work/reverse.qcow2" "$cache/reverse.qcow2.part"
+    mv "$cache/reverse.qcow2.part" "$cache/reverse.qcow2"
+    (cd "$cache" && sha256sum reverse.qcow2 reverse-vmlinuz reverse-initrd.img mesa-nctx.tar.xz \
+        > reverse.sha256)
+    echo "nctx: result: $cache/reverse.qcow2, reverse-vmlinuz, reverse-initrd.img and reverse.sha256"
+}
+
 case ${1:-} in
     fetch) fetch ;;
     mesa) build mesa mesa "$(basename "$(pin mesa_url)")" ;;
@@ -254,6 +286,7 @@ case ${1:-} in
     run) shift; variant "$*" ;;
     alone) alone ;;
     rehearse) rehearse ;;
+    reverse) reverse ;;
     all)
         fetch
         (build mesa mesa "$(basename "$(pin mesa_url)")")
@@ -263,7 +296,7 @@ case ${1:-} in
         variant 'sh guest.sh check'
         ;;
     *)
-        echo "usage: build.sh fetch | mesa | virgl | qemu | image | check | run CMD | alone | rehearse | all" >&2
+        echo "usage: build.sh fetch | mesa | virgl | qemu | image | check | run CMD | alone | rehearse | reverse | all" >&2
         exit 2
         ;;
 esac

@@ -1,10 +1,11 @@
 /*
- * nctxcheck: the native-context checks of the bed's Linux reference, run in
- * a guest of the bed's QEMU on GL ES 3 through EGL's surfaceless platform.
+ * nctxcheck: the native-context checks of the bed, on Linux or Rach2,
+ * using GL ES 3 through EGL without a window.
  * It links only libc and libdl; EGL and GL come from libEGL.so.1 by
  * eglGetProcAddress, so the guest needs no development headers.
  *
  *   nctxcheck info               the EGL and GL strings and the device
+ *   nctxcheck capset NODE        the virtio-gpu capset mask at NODE
  *   nctxcheck triangle           an orange triangle over navy, pixels read
  *   nctxcheck pressure MIB       textures of 16 MiB up to MIB, each drawn
  *                                into, then read back in reverse order
@@ -19,16 +20,20 @@
  * Each prints `nctxcheck: NAME: ...` lines and a last line
  * `nctxcheck: NAME: result: pass` or `... fail: WHY`; the exit status is 0
  * on a pass, 1 on a failure and 2 on bad usage.
+ * NCTX_RENDER_NODE selects an EGL device by its render node; without it
+ * the surfaceless platform chooses the device as in the Linux reference.
  */
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 
 typedef void *EGLDisplay;
@@ -64,6 +69,7 @@ typedef uint64_t GLuint64;
 #define EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY 0x31BD
 #define EGL_LOSE_CONTEXT_ON_RESET                      0x31BF
 #define EGL_PLATFORM_SURFACELESS_MESA                  0x31DD
+#define EGL_PLATFORM_DEVICE_EXT                        0x313F
 #define EGL_DEVICE_EXT                                 0x322C
 #define EGL_DRM_DEVICE_FILE_EXT                        0x3233
 #define EGL_DRM_RENDER_NODE_FILE_EXT                   0x3377
@@ -118,6 +124,7 @@ static EGLBoolean (*eglMakeCurrent_)(EGLDisplay, void *, void *, EGLContext);
 static EGLBoolean (*eglDestroyContext_)(EGLDisplay, EGLContext);
 static EGLint (*eglGetError_)(void);
 static EGLBoolean (*eglQueryDisplayAttribEXT_)(EGLDisplay, EGLint, EGLAttrib *);
+static EGLBoolean (*eglQueryDevicesEXT_)(EGLint, EGLDeviceEXT *, EGLint *);
 static const char *(*eglQueryDeviceStringEXT_)(EGLDeviceEXT, EGLint);
 static EGLSync (*eglCreateSync_)(EGLDisplay, EGLenum, const EGLAttrib *);
 static EGLint (*eglClientWaitSync_)(EGLDisplay, EGLSync, EGLint, EGLTime);
@@ -247,6 +254,7 @@ static int resolve(void)
     NEED(eglDestroySync_, "eglDestroySync");
     /* Extensions: absent ones are reported by the check that needs them. */
     *(void **)&eglQueryDisplayAttribEXT_ = load("eglQueryDisplayAttribEXT");
+    *(void **)&eglQueryDevicesEXT_ = load("eglQueryDevicesEXT");
     *(void **)&eglQueryDeviceStringEXT_ = load("eglQueryDeviceStringEXT");
     *(void **)&eglDupNativeFenceFDANDROID_ = load("eglDupNativeFenceFDANDROID");
     NEED(glGetString_, "glGetString");
@@ -300,16 +308,45 @@ static int resolve(void)
     return 0;
 }
 
-/** display - initialize the surfaceless display once; 0, or -1. */
+/**
+ * Initialize the display, selecting NCTX_RENDER_NODE when set.
+ * Returns 0, or -1 when the device is absent or EGL cannot use it.
+ */
 static int display(void)
 {
     EGLint major, minor;
+    const char *node = getenv("NCTX_RENDER_NODE");
 
     if (dpy)
         return 0;
-    dpy = eglGetPlatformDisplay_(EGL_PLATFORM_SURFACELESS_MESA, NULL, NULL);
+    if (node) {
+        EGLDeviceEXT *devices;
+        EGLint n = 0, i;
+
+        if (!eglQueryDevicesEXT_ || !eglQueryDeviceStringEXT_ ||
+            !eglQueryDevicesEXT_(0, NULL, &n) || n <= 0)
+            return -1;
+        devices = calloc((size_t)n, sizeof(*devices));
+        if (!devices)
+            return -1;
+        if (eglQueryDevicesEXT_(n, devices, &n)) {
+            for (i = 0; i < n; i++) {
+                const char *name =
+                    eglQueryDeviceStringEXT_(devices[i], EGL_DRM_RENDER_NODE_FILE_EXT);
+
+                if (name && !strcmp(name, node)) {
+                    dpy = eglGetPlatformDisplay_(EGL_PLATFORM_DEVICE_EXT, devices[i], NULL);
+                    break;
+                }
+            }
+        }
+        free(devices);
+    } else {
+        dpy = eglGetPlatformDisplay_(EGL_PLATFORM_SURFACELESS_MESA, NULL, NULL);
+    }
     if (!dpy || !eglInitialize_(dpy, &major, &minor)) {
-        fprintf(stderr, "nctxcheck: no surfaceless display: egl error 0x%x\n", eglGetError_());
+        fprintf(stderr, "nctxcheck: no display for %s: egl error 0x%x\n",
+                node ? node : "surfaceless", eglGetError_());
         dpy = NULL;
         return -1;
     }
@@ -856,6 +893,34 @@ static int hang(int loops)
     return pass();
 }
 
+/**
+ * Print the supported capset mask of the virtio-gpu render node.
+ * Uses Linux's VIRTGPU_GETPARAM ABI, with no graphics library needed.
+ * Returns 0 on success and 1 when the node or the query fails.
+ */
+static int capset(const char *node)
+{
+    struct getparam {
+        uint64_t param, value;
+    } p;
+    uint64_t mask = 0;
+    int fd = open(node, O_RDWR | O_CLOEXEC);
+
+    if (fd < 0)
+        return fail("cannot open the render node");
+    p.param = 7; /* VIRTGPU_PARAM_SUPPORTED_CAPSET_IDs */
+    p.value = (uintptr_t)&mask;
+    if (ioctl(fd, _IOWR('d', 0x43, struct getparam), &p) < 0) {
+        close(fd);
+        return fail("VIRTGPU_GETPARAM refused the capset query");
+    }
+    close(fd);
+    printf("nctxcheck: capset: node %s, mask 0x%llx, DRM native context %s\n", node,
+           (unsigned long long)mask, mask & (1u << 6) ? "present" : "absent");
+    return pass();
+}
+
+/** Run the named check; return its result or 2 for a usage error. */
 int main(int argc, char **argv)
 {
     int arg = argc > 2 ? atoi(argv[2]) : 0;
@@ -864,6 +929,11 @@ int main(int argc, char **argv)
     if (argc < 2)
         goto usage;
     check = argv[1];
+    if (!strcmp(check, "capset")) {
+        if (argc != 3)
+            goto usage;
+        return capset(argv[2]);
+    }
     if (resolve())
         return fail("entry points missing");
     if (!strcmp(check, "info"))
@@ -879,7 +949,7 @@ int main(int argc, char **argv)
     if (!strcmp(check, "hang") && arg > 0)
         return hang(arg);
 usage:
-    fprintf(stderr, "usage: nctxcheck info | triangle | pressure MIB | submit N | "
+    fprintf(stderr, "usage: nctxcheck info | capset NODE | triangle | pressure MIB | submit N | "
                     "fence | hang LOOPS\n");
     return 2;
 }

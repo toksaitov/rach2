@@ -10,7 +10,7 @@ LDLIBS += $(shell pkg-config --libs virglrenderer libdrm vulkan)
 OBJS = main.o device.o virgl.o kms.o vkprobe.o
 
 vgpu-backend: $(OBJS)
-	$(CC) $(CFLAGS) -o $@ $(OBJS) $(LDLIBS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LDLIBS)
 
 $(OBJS): backend.h vgpudev.h ../../../rach2/sys/virtio/vgpushm.h ../module/vgpushm_uapi.h
 

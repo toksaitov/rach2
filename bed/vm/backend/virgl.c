@@ -22,6 +22,7 @@
 #define CAPSET_VIRGL  1u
 #define CAPSET_VIRGL2 2u
 #define CAPSET_VENUS  4u
+#define CAPSET_DRM    6u
 
 /* virglrenderer's flag for a resource whose first row is the top one. */
 #define RESOURCE_Y_0_TOP 1u
@@ -42,7 +43,7 @@ struct vr {
     struct vd *dev;
     struct kms *kms;
     int gbm_fd; /* the DRM device virglrenderer's GBM allocates on, or -1 */
-    uint32_t capset[3];
+    uint32_t capset[4];
     uint32_t ncapsets;
     uint32_t venus[VENUS_CTXS]; /* live Venus contexts' ids, 0 when free */
     int probe;                  /* import each resource a Venus context takes into Vulkan */
@@ -94,11 +95,13 @@ static void log_line(enum virgl_log_level_flags level, const char *message, void
  * Start virglrenderer with EGL: on GBM over gbm_fd when it is a DRM
  * device, so that resources it allocates there export as dma-bufs, or
  * surfaceless when gbm_fd is -1; with Venus through the render server
- * when venus is set. Returns the renderer, or 0 when virglrenderer fails.
+ * when venus is set and the DRM renderer when native is set. Native
+ * context requires a build of virglrenderer with a driver for the GPU.
+ * Returns the renderer, or 0 when virglrenderer fails.
  */
-struct vr *vr_init(struct vd *dev, int gbm_fd, int venus, int verbose)
+struct vr *vr_init(struct vd *dev, int gbm_fd, int venus, int native, int verbose)
 {
-    static const uint32_t ids[] = {CAPSET_VIRGL, CAPSET_VIRGL2, CAPSET_VENUS};
+    static const uint32_t ids[] = {CAPSET_VIRGL, CAPSET_VIRGL2, CAPSET_VENUS, CAPSET_DRM};
     struct vr *r = calloc(1, sizeof(*r));
     int flags = VIRGL_RENDERER_USE_EGL | VIRGL_RENDERER_THREAD_SYNC, err;
     uint32_t i, ver, size;
@@ -116,6 +119,15 @@ struct vr *vr_init(struct vd *dev, int gbm_fd, int venus, int verbose)
     if (venus) {
         flags |= VIRGL_RENDERER_VENUS | VIRGL_RENDERER_RENDER_SERVER;
     }
+    if (native) {
+#ifdef VIRGL_RENDERER_DRM
+        flags |= VIRGL_RENDERER_DRM;
+#else
+        fprintf(stderr, "backend: native context needs virglrenderer with DRM support\n");
+        free(r);
+        return 0;
+#endif
+    }
     virgl_set_log_callback(log_line, 0, 0);
     callbacks.version = 3;
     callbacks.write_fence = write_fence;
@@ -130,8 +142,11 @@ struct vr *vr_init(struct vd *dev, int gbm_fd, int venus, int verbose)
         virgl_renderer_get_cap_set(ids[i], &ver, &size);
         /* Venus reports version 0; QEMU too takes a capset by its size.
            virglrenderer sizes Venus's capset even when Venus is off. */
-        if (size > 0 && (ids[i] != CAPSET_VENUS || venus)) {
+        if (size > 0 && (ids[i] != CAPSET_VENUS || venus) && (ids[i] != CAPSET_DRM || native)) {
             r->capset[r->ncapsets++] = ids[i];
+            if (verbose) {
+                fprintf(stderr, "backend: capset: id %u, version %u, size %u\n", ids[i], ver, size);
+            }
         }
     }
     return r;

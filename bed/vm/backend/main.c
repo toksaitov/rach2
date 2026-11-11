@@ -250,7 +250,7 @@ static void ring(void *cookie, uint32_t peer, uint32_t vector)
 /* The options. */
 struct opts {
     const char *module, *vfio, *file, *card, *gbm;
-    int direct, writeback, venus, probe, once, verbose, nopages;
+    int direct, writeback, venus, probe, once, verbose, nopages, native;
     long peer;
 };
 
@@ -258,7 +258,7 @@ struct opts {
 static void usage(void)
 {
     fprintf(stderr, "usage: vgpu-backend [-m NODE | -V BDF | -f FILE] [-k CARD] [-g DEV] "
-                    "[-d] [-w] [-x | -I] [-P] [-p PEER] [-1] [-v]\n");
+                    "[-d] [-w] [-x | -I] [-N] [-P] [-p PEER] [-1] [-v]\n");
     exit(2);
 }
 
@@ -271,7 +271,7 @@ static void options(int argc, char **argv, struct opts *o)
     o->module = "/dev/vgpushm0";
     o->venus = 1;
     o->peer = -1;
-    while ((c = getopt(argc, argv, "m:V:f:k:g:dwxIPp:1v")) != -1) {
+    while ((c = getopt(argc, argv, "m:V:f:k:g:dwxINPp:1v")) != -1) {
         switch (c) {
         case 'm':
             o->module = optarg;
@@ -302,6 +302,9 @@ static void options(int argc, char **argv, struct opts *o)
             break;
         case 'P':
             o->nopages = 1;
+            break;
+        case 'N':
+            o->native = 1;
             break;
         case 'p':
             o->peer = strtol(optarg, 0, 0);
@@ -485,7 +488,7 @@ int main(int argc, char **argv)
     if ((o.gbm || o.card) && gbm < 0) {
         die("cannot open the GBM device", o.gbm ? o.gbm : o.card);
     }
-    if ((r = vr_init(&dev, gbm, o.venus, o.verbose)) == 0) {
+    if ((r = vr_init(&dev, gbm, o.venus, o.native, o.verbose)) == 0) {
         return 1;
     }
     if (o.card && (k = kms_open(card, o.card, r, o.direct, o.writeback)) == 0) {
