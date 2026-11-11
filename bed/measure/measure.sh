@@ -374,6 +374,12 @@ stop_copy()
     copy_pid=''
 }
 
+# stop_scene: end the scene's half, TERM and after 15 seconds KILL, without
+# waiting for it. Under -u the half is USER's own shell, after the execs of
+# setsid and BusyBox's su, which USER may trace; a traced child's end goes to
+# its tracer, and the parent's wait passes over it until the tracer collects
+# it (kernel/exit.c:1476-1484 of 6.12.115), so a wait could block. As with
+# stop_copy, this shell's reaper takes the half once the shell exits.
 # shellcheck disable=SC2317 # the traps call it
 stop_scene()
 {
@@ -389,7 +395,6 @@ stop_scene()
     done
     if kill -0 "$term" 2>/dev/null; then kill -KILL "$term" 2>/dev/null || true; fi
     kill -KILL "-$scene_pid" 2>/dev/null || true
-    wait "$scene_pid" 2>/dev/null || true
     scene_pid=''
 }
 trap 'stop_copy; stop_scene' EXIT
